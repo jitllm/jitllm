@@ -48,6 +48,11 @@ type Device struct {
 	// operations in the same order write its same bits; a driver free to
 	// contract them (SPIR-V's, MSL's) is not.
 	ExactArith bool
+	// Matrix, where set, is the collective tile (rows, columns, depth) the
+	// device multiplies binary16 operands into a float32 accumulator in,
+	// staged in workgroup memory and carried across a loop (ir's tile ops):
+	// a reduction over several rows runs there (Matrix, the pass).
+	Matrix [3]int
 }
 
 // warp is the threads a combine by lane shuffles takes whole on d: its
@@ -87,6 +92,9 @@ type Context struct {
 	unsignedDot, exactDiv bool
 	// split is the run's expressions formed a map a term.
 	split *exprSplit
+	// matrix is a step of rows the device's matrix unit runs a projection
+	// over (Device.Matrix): its weight decoded, its input float.
+	matrix bool
 	// Rotaries is the part's segment's rotaries, each a table of the step,
 	// the first named the model's RotaryBase'th (tableName).
 	Rotaries   []graph.Rotary
@@ -162,7 +170,7 @@ func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device, sp *e
 // device d, the device's int8 form at the step's window.
 func (r *Registry) context(g *graph.Graph, k PartKind, f map[jlm.Role]jlm.Type, rots []graph.Rotary, s Step, d Device) *Context {
 	c := &Context{Graph: g, Part: k, Formats: f, Step: s, Int8: r.Profiles[d.Kind].Int8, Rotaries: rots, exactDiv: d.ExactDiv,
-		formed: map[graph.ValueID]bool{}}
+		formed: map[graph.ValueID]bool{}, matrix: d.Matrix[0] > 0 && s.Rows >= d.Matrix[0]}
 	if q := c.Int8; q != nil && s.ActWindow > 0 && s.ActWindow != q.Window {
 		w := *q
 		w.Window = s.ActWindow

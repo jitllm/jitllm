@@ -179,6 +179,9 @@ type Loop struct {
 	Uniform bool
 	// Of, where a split set it, is 1 + the loop this one takes trips of.
 	Of int
+	// StepsLast makes its folds' steps after its stores in each trip: a
+	// trip that stages workgroup memory and reads it behind a barrier.
+	StepsLast bool
 }
 
 // Cursor is pointer Ptr of buffer Buf advanced Elems elements a trip: 0 the
@@ -355,6 +358,14 @@ const (
 	OpWidenHalf
 	// OpDot4U is OpDot4 with A's bytes unsigned.
 	OpDot4U
+	// OpTileLoad is the collective tile Tile of workgroup buffer Buf at
+	// element offset A, row stride B, column-major where Imm is 1; At is 1 +
+	// the loop whose trip it reads in. OpTileSplat is a tile every element
+	// of which is A; OpTileMMA is A times B plus C, over tiles. A tile is
+	// read only by a tile op, a tile store or a tile fold.
+	OpTileLoad
+	OpTileSplat
+	OpTileMMA
 	numOps
 )
 
@@ -392,6 +403,8 @@ type Node struct {
 	// copied aside where it is read after a later one is made; a Share of
 	// -1 is a load of a resident word made where it is read.
 	Hint, Share int
+	// Tile, where set, is the collective tile the value is.
+	Tile *ir.TileType
 }
 
 // Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or
@@ -412,6 +425,11 @@ type Store struct {
 	Copy int
 	// Narrow stores the value's low 128 bits.
 	Narrow bool
+	// Tile stores the collective tile Val at element offset Ix, row stride
+	// node Stride, column-major where Col is set.
+	Tile   bool
+	Stride int
+	Col    bool
 }
 
 func (n *Kernel) add(nd Node) int {
@@ -479,7 +497,8 @@ func (n *Kernel) Elements() int {
 
 var opNames = [numOps]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "unpack", "upper", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy", "dot4", "widenhalf", "dot4u"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "unpack", "upper", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy", "dot4", "widenhalf", "dot4u",
+	"tileload", "tilesplat", "tilemma"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

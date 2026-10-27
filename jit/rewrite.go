@@ -33,6 +33,9 @@ func (n *Kernel) storeArgs(s *Store) []*int {
 	for i := range s.Ax {
 		out = append(out, &s.Ax[i])
 	}
+	if s.Tile {
+		out = append(out, &s.Stride)
+	}
 	return out
 }
 
@@ -65,9 +68,9 @@ func arity(op Op) int {
 	switch op {
 	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam, OpLength, OpSpan, OpLanes:
 		return 0
-	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum, OpHMax, OpHMin, OpHalf, OpRoundI32, OpDupEven, OpDupOdd, OpSwapPairs, OpCopy, OpUpper, OpWidenHalf:
+	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum, OpHMax, OpHMin, OpHalf, OpRoundI32, OpDupEven, OpDupOdd, OpSwapPairs, OpCopy, OpUpper, OpWidenHalf, OpTileSplat:
 		return 1
-	case OpFma, OpSelect, OpDot4, OpDot4U:
+	case OpFma, OpSelect, OpDot4, OpDot4U, OpTileMMA:
 		return 3
 	}
 	return 2
@@ -94,7 +97,7 @@ func (n *Kernel) Varies(i, c int) bool {
 		if (nd.Op == OpIter || nd.Op == OpFold) && n.within(nd.At, c) {
 			return true
 		}
-		if nd.Op == OpLoad && nd.At > 0 && n.within(nd.At-1, c) {
+		if (nd.Op == OpLoad || nd.Op == OpTileLoad) && nd.At > 0 && n.within(nd.At-1, c) {
 			return true
 		}
 		if nd.Op == OpFold {

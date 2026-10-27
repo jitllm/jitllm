@@ -224,6 +224,9 @@ func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 		return nil, o.err
 	}
 	ownedDevices.Add(1)
+	if opts.CUDATarget != "" {
+		o.d.Target = opts.CUDATarget
+	}
 	return &cudaDev{d: o.d, reqs: reqs, owner: o.tid, posted: opts.CUDAPosted, maxRegs: opts.CUDAMaxRegs}, nil
 }
 

@@ -33,10 +33,21 @@ type voltaTileCase struct {
 // lane holds and no other. Main's staged tile GEMM then runs at sm_70 too.
 func TestVoltaTilesMatchTheReference(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
-	if len(devs) == 0 {
-		t.Skip("no GPU backend on this host")
+	d, err := backend.OpenCUDAWith(0, backend.Opts{CUDATarget: "sm_70"})
+	if err != nil {
+		t.Skipf("no CUDA device: %v", err)
 	}
+	defer d.Close()
+	// A card below sm_70 has no m8n8k4 to run what was built for it.
+	pk, err := kernels.MMAVoltaProbe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe, err := d.Compile(pk)
+	if err != nil {
+		t.Skipf("%s: no sm_70 matrix instruction: %v", d.API(), err)
+	}
+	probe.Close()
 	var cases []voltaTileCase
 	for _, m := range []int{8, 16, 24, 32} {
 		for _, n := range []int{8, 16, 24} {
@@ -47,54 +58,31 @@ func TestVoltaTilesMatchTheReference(t *testing.T) {
 			}
 		}
 	}
-	ran := 0
-	for _, d := range devs {
-		defer d.Close()
-		prev, ok := backend.ForceCUDATarget(d, "sm_70")
-		if !ok || smNumber(prev) < 70 {
-			if ok {
-				backend.ForceCUDATarget(d, prev)
-			}
-			continue
-		}
-		t.Logf("%s: was %s, lowered for sm_70", d.API(), prev)
-		for _, c := range cases {
-			voltaTileCaseRun(t, d, c)
-			ran++
-		}
-		g := 0
-		for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q8_0, kernels.Q6_K} {
-			for _, sh := range gemmTileCases[:3] {
-				sub, _, _, _ := kernels.Layout(q)
-				tl := sh.tl
-				tl.KB = max(tl.KB*32/sub, 1)
-				s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Bias: sh.bias}
-				kk, err := kernels.GemmTile(s, tl)
-				if err != nil {
-					t.Fatalf("%v %+v: %v", q, sh, err)
-				}
-				kern, err := d.Compile(kk)
-				if err != nil {
-					t.Fatalf("%s sm_70 gemmtile %v: %v", d.API(), q, err)
-				}
-				mma70Case(t, d, kern, s, fmt.Sprintf("gemmtile sm_70 %v %+v", q, tl),
-					kernels.GemmTileGroups(s, tl), tl.Threads(), true)
-				kern.Close()
-				g++
-			}
-		}
-		t.Logf("%s: %d tile cases and %d staged GEMMs at sm_70", d.API(), len(cases), g)
-		backend.ForceCUDATarget(d, prev)
+	for _, c := range cases {
+		voltaTileCaseRun(t, d, c)
 	}
-	if ran == 0 {
-		t.Skip("no CUDA device of sm_70 or later")
+	g := 0
+	for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q8_0, kernels.Q6_K} {
+		for _, sh := range gemmTileCases[:3] {
+			sub, _, _, _ := kernels.Layout(q)
+			tl := sh.tl
+			tl.KB = max(tl.KB*32/sub, 1)
+			s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Bias: sh.bias}
+			kk, err := kernels.GemmTile(s, tl)
+			if err != nil {
+				t.Fatalf("%v %+v: %v", q, sh, err)
+			}
+			kern, err := d.Compile(kk)
+			if err != nil {
+				t.Fatalf("%s sm_70 gemmtile %v: %v", d.API(), q, err)
+			}
+			mma70Case(t, d, kern, s, fmt.Sprintf("gemmtile sm_70 %v %+v", q, tl),
+				kernels.GemmTileGroups(s, tl), tl.Threads(), true)
+			kern.Close()
+			g++
+		}
 	}
-}
-
-func smNumber(target string) int {
-	var n int
-	fmt.Sscanf(target, "sm_%d", &n)
-	return n
+	t.Logf("%s at sm_70: %d tile cases and %d staged GEMMs", d.API(), len(cases), g)
 }
 
 // voltaTileKernel builds c's kernel. Every view's stride is its minor extent

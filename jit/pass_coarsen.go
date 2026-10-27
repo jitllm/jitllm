@@ -32,7 +32,7 @@ func (c Coarsen) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			continue
 		}
 		var host *Kernel
-		if i > 0 && out[i-1].Work && out[i-1].Part == out[i].Part {
+		if i > 0 && out[i-1].Work && out[i-1].Kind != PrimMatrix && out[i-1].Part == out[i].Part {
 			host = out[i-1]
 		}
 		m, ok := Coarsen{Unit: unit}.form(out[i:i+n], host, d, true)

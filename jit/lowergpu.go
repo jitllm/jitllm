@@ -162,9 +162,7 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 		case st.Barrier:
 			b.Barrier()
 		default:
-			ix, v := e.storeIndex(st), e.get(st.Val)
-			b.Store(e.params[st.Buf], ix, v, 0)
-			e.stored[si] = true
+			e.store(si, st)
 		}
 	}
 	for si, st := range n.Stores {
@@ -335,6 +333,13 @@ func (e *lowerer) get(i int) ir.Value {
 	case OpAdd, OpSub, OpMul, OpDiv, OpRem, OpMin, OpMax, OpShl, OpShr, OpAnd, OpXor, OpOr:
 		x, y := e.get(nd.A), e.get(nd.B)
 		v = binary(b, nd.Op, nd.Type, x, y)
+	case OpTileLoad:
+		v = b.TileLoad(*nd.Tile, e.params[nd.Buf], e.get(nd.A), e.get(nd.B), nd.Imm != 0)
+	case OpTileSplat:
+		v = b.TileSplat(*nd.Tile, e.get(nd.A))
+	case OpTileMMA:
+		x, y, z := e.get(nd.A), e.get(nd.B), e.get(nd.C)
+		v = b.TileMMA(x, y, z)
 	default:
 		e.fail("node %d: op %d", i, nd.Op)
 		return 0
@@ -357,6 +362,19 @@ func (e *lowerer) flatten(bf int, ax []int) ir.Value {
 		ix = b.Add(ir.U32, b.Mul(ir.U32, ix, b.Const(ir.U32, int64(sh[d]))), e.get(ax[d]))
 	}
 	return ix
+}
+
+// store is store si where the lowerer stands: a value at its index, or a
+// collective tile at its view.
+func (e *lowerer) store(si int, st Store) {
+	b := e.b
+	if st.Tile {
+		b.TileStore(e.params[st.Buf], e.get(st.Ix), e.get(st.Stride), e.get(st.Val), st.Col)
+	} else {
+		ix, v := e.storeIndex(st), e.get(st.Val)
+		b.Store(e.params[st.Buf], ix, v, 0)
+	}
+	e.stored[si] = true
 }
 
 func (e *lowerer) storeIndex(st Store) ir.Value {
@@ -559,13 +577,19 @@ func (e *lowerer) lowerLoop(c int) {
 	it := b.Phi(ir.U32, start)
 	e.iter[c] = it
 	for j, f := range folds {
+		if n.Nodes[f].Tile != nil {
+			e.phi[f] = b.TilePhi(inits[j])
+			continue
+		}
 		e.phi[f] = b.Phi(n.Nodes[f].Type, inits[j])
 	}
 	e.open = append(e.open, c)
 	saved := append([]ir.Value(nil), e.val...)
 	steps := make([]ir.Value, len(folds))
 	for j, f := range folds {
-		steps[j] = e.get(n.Nodes[f].A)
+		if !l.StepsLast {
+			steps[j] = e.get(n.Nodes[f].A)
+		}
 	}
 	for si, st := range n.Stores {
 		switch {
@@ -582,9 +606,12 @@ func (e *lowerer) lowerLoop(c int) {
 				b.Barrier()
 			}
 		default:
-			ix, v := e.storeIndex(st), e.get(st.Val)
-			b.Store(e.params[st.Buf], ix, v, 0)
-			e.stored[si] = true
+			e.store(si, st)
+		}
+	}
+	if l.StepsLast {
+		for j, f := range folds {
+			steps[j] = e.get(n.Nodes[f].A)
 		}
 	}
 	for j, f := range folds {

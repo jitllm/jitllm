@@ -461,6 +461,10 @@ type Opts struct {
 	// 0 leaving ptxas its own choice. It exists to force a spill: the
 	// register gate is run against it to show it fires.
 	CUDAMaxRegs int
+	// CUDATarget, where set, is the PTX target a CUDA device's kernels are
+	// built for in place of its compute capability's: a card runs PTX built
+	// for an older one, so a later card runs an older card's lowering.
+	CUDATarget string
 	// Metal is the Metal context's compile and wait choices.
 	Metal metal.Opts
 	// HIP is where ROCm is looked for. Zero searches the default places.

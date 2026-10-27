@@ -16,6 +16,9 @@ const (
 	PrimScatter
 	PrimScan
 	PrimLayout
+	// PrimMatrix is a reduction formed on the device's matrix unit (Matrix):
+	// tiles staged in workgroup memory, its sums in collective tiles.
+	PrimMatrix
 )
 
 type OperandKind uint8

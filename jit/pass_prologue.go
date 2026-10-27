@@ -85,7 +85,7 @@ func (p Prologue) readers(ks []*Kernel, i int, d Device) int {
 // fits says producer pr runs in kernel c's workgroups: a producer with no
 // facts about its space, the kernel the two make within Words.
 func (p Prologue) fits(pr, c *Kernel, d Device) bool {
-	if !c.Work || c.Group <= 0 || pr.Positions != nil || pr.Heads != nil || pr.Quarter != nil || pr.Rows != 0 || pr.Clamp != 0 ||
+	if !c.Work || c.Group <= 0 || c.Kind == PrimMatrix || pr.Positions != nil || pr.Heads != nil || pr.Quarter != nil || pr.Rows != 0 || pr.Clamp != 0 ||
 		pr.Seq != nil || len(pr.Args) > 0 || len(pr.Ptrs) > 0 || pr.Part != c.Part || pr.Of != c.Of {
 		return false
 	}

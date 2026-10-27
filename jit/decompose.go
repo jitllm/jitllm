@@ -154,6 +154,11 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, err
 	}
 	codes := c.Graph.Values[o.In[0]].Elem == graph.ElemI8
+	if c.matrix && !codes && wo.Format != jlm.TypeF32 {
+		if p, err := decomposeMatVecDecoded(w.Rows, w.K, wo, c.value(o.In[0]), c.value(o.Out[0]), c.Step.Rows); err == nil {
+			return []Prim{p}, nil
+		}
+	}
 	switch wo.Format {
 	case jlm.TypeF32:
 	case jlm.TypeQ8:

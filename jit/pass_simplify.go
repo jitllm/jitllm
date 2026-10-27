@@ -106,6 +106,9 @@ func (k *Kernel) cse() bool {
 			ops = append(ops, o)
 		}
 		key := fmt.Sprint(nd.Op, nd.Type, ops, nd.At, nd.Buf, nd.Imm)
+		if nd.Tile != nil {
+			key += fmt.Sprint(*nd.Tile)
+		}
 		if nd.Op == OpConst || nd.Op == OpCoord || nd.Op == OpParam || nd.Op == OpLength || nd.Op == OpSpan {
 			key = fmt.Sprint(nd.Op, nd.Type, nd.A, nd.Imm)
 		}
