@@ -9345,17 +9345,18 @@ row where the composer's reads two.
   8m15, 8m25, 7m38 before), and a lone run's step on the joint arm makes no
   engine allocation (TestDecodeDoesNotAllocate's step-solo, Llama-3.2-1B on
   a 3050 Ti, CUDA and Vulkan, the default tier and the four composed arms).
-- **A prompt the composer is not asked for runs the tier's prefill
-  attention.** The composed build (ComposedStep) never readied the tier's
-  prefill attention, so every prompt chunk it leaves to the tier ran the
-  decode plan's paged attention: on Qwen3-30B-A3B over two V100s 158 ms of
-  a 1024-token prompt's 397 ms of kernels, against the prefill kernel's 24
-  ms. One helper (rowsKind) now decides what a call of rows asks of the
-  composer, for the block loop and for promptDeclines alike. Composed
-  prompts on Qwen3-30B-A3B (V100, CUDA, one request at a time, cache off,
-  16 rounds, A/A 0.995-1.011): 3569, 4740 and 4685 tok/s at 512, 1024 and
-  2051 tokens against main's 3589, 4745 and 4691 (2856, 3040 and 2413
-  before). The composer's own prompt forms (ComposedPrompt) stay off by
-  default, so these prompts run the tier's kernels. Gate:
+- **The composed build does not compose prompts: they run main's tier.**
+  The composed build's default (ComposedStep) is the embedding, tables,
+  blocks, head and sampler; ComposedPrompt is off, so every prompt chunk
+  runs the tier's own prefill (its GEMMs and attention, family branches
+  included). The tier had been running those chunks on its decode plan's
+  paged attention (158 ms of a 1024-token Qwen3-30B-A3B prompt's 397 ms of
+  kernels, two V100s); 0df01475 has it run its prefill attention instead
+  (24 ms), so the composed build's prompts read as main's (3569, 4740 and
+  4685 tok/s at 512, 1024 and 2051 tokens against 3589, 4745 and 4691).
+  That is main's path measured against itself, not the composer: the
+  composer's own prompt forms are 5.1x slower than the tier's prefill on
+  a lone 960-token prompt, having no tensor-core form on sm_70 (the m8n8k4
+  layout is not lowered in jit/ptx/tile.go). Gate:
   TestComposedStepPromptRunsPrefillAttention (56 launches; 28 on the old
   code).
