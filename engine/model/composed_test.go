@@ -203,9 +203,7 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 // mistral3 and Llama 4 are served against the host with each feature taken
 // out (TestC6ServesComposed, TestSynthLlama4ServesComposed). LFM2-1.2B serves
 // every arm on Vulkan (median 0.974 of the tier's distance) and reads 1.503 on
-// CUDA, past the 1.5 band: open. Jamba-reasoning-3B's poisoned arm moved
-// because its int8 forms raced (Parts, now fixed: it decodes bit-identically
-// on both backends); its band on the V100 is to be read again.
+// CUDA, past the 1.5 band: open.
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
@@ -216,7 +214,7 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
 	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
 	"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-dbrx.gguf", "synth-llama4.gguf", "synth-mistral3.gguf",
-	"synth-mistral3-af.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf", "jamba/jamba-reasoning-3b-Q4_K_M.gguf"}
+	"synth-mistral3-af.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf"}
 
 // mixtureModels are the mixtures the front end states whole and the serving
 // gate does not run: tiny-qwen3moe, whose eight-wide rows the tier cannot
@@ -316,11 +314,17 @@ var promptModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Smo
 // prompts too (promptModels): a chunk's rows the scan's. A selective update
 // with one decay a head beside attention and an MLP (granite-4.0-h, and
 // Falcon-H1's mixer beside its attention in one block) and the gated short
-// convolution beside attention (LFM2), and Mamba-1's per-channel update
-// alone (mamba-130m), its output written apart from x (apartModels).
+// convolution beside attention (LFM2), Mamba-1's per-channel update alone
+// (mamba-130m) and beside attention (Jamba), and Mamba-2's mixer layers
+// beside attention and MLP layers (Nemotron-Nano-9B-v2), a block with no
+// MLP written apart from x (apartModels). Open: falcon-mamba-7B reads 0.029
+// at its worst on CUDA against 4 times the tier's 0.00291 (Vulkan 1.007 at
+// the median, in band); mamba-codestral's composed logits, and its float
+// reference's, are not finite at step 13 and every sixth step after.
 var ssmServed = []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
 	"granite/granite-4.0-h-1b-Q4_K_M.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
-	"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf", "mamba/mamba-130m-hf.Q8_0.gguf"}
+	"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf", "mamba/mamba-130m-hf.Q8_0.gguf",
+	"jamba/jamba-reasoning-3b-Q4_K_M.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf"}
 
 func init() {
 	servedModels = append(servedModels, ssmServed...)

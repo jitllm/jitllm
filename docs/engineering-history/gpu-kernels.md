@@ -9136,6 +9136,12 @@ row where the composer's reads two.
   granite-4.0-h-1b (CUDA median 1.066, Vulkan 0.940, its Vulkan head
   served) and mamba-130m (1.048 and 0.985; the tier itself sits 98.9 from
   the float reference at its worst on CUDA) pass every serving arm and are
-  served; synth-nemotronhmoe-q8 serves but its gate cannot discriminate
+  served, and so do Jamba-reasoning-3B (1.254 and 1.093, no longer moved
+  by poison) and Nemotron-Nano-9B-v2 (1.431 and 1.040). Open:
+  LFM2-1.2B still reads 1.503 on CUDA (Vulkan 0.974); falcon-mamba-7B
+  reads 0.029 at its worst on CUDA against 4 times the tier's 0.00291;
+  mamba-codestral's composed logits and its float reference are not finite
+  at step 13 and every sixth step after (the tier's are finite); and
+  synth-nemotronhmoe-q8 serves but its gate cannot discriminate
   (one position off 2.6, ten times the arm's worst 0.574 wanted), and stays
   in the over-input gate alone.
