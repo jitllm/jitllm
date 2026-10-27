@@ -61,8 +61,8 @@ func (p Parts) joins(group []*Kernel, n *Kernel) bool {
 // workgroup: its memory, an exchange, a combine over its threads or a
 // shuffle between its lanes, or a barrier. In a wider launch a part's
 // surplus threads are clamped to its last element, and a combine among them
-// stores another value there than its own threads do (RULE 13): Mamba-1's
-// int8 forms of 1536 channels beside a state copy 24576 wide raced so.
+// stores another value there than its own threads do (RULE 13): an int8
+// form of 1536 channels beside a state copy 24576 wide raced so.
 func shares(k *Kernel) bool {
 	for _, b := range k.Bufs {
 		if b.Kind == BufShared {
