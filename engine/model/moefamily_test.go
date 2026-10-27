@@ -353,10 +353,15 @@ func routerSwap(sigmoid bool) func(*Model) func() {
 // front end both read: the selection bias, the group limit, the
 // renormalisation, the routed scale, the shared expert's gate, and the
 // number of experts chosen one fewer. A model whose blocks the front end
-// refuses runs none of them composed, so it has none.
+// refuses runs none of them composed, so it has none, and nor does one whose
+// every block is a dense lead (synth-deepseek-yarn's three): no router runs.
 func routerViolations(m *Model) []c6Violation {
 	c := m.Cfg
-	if !c.MoE() || coveredBlocks(m) != c.NLayer {
+	routes := false
+	for li := range c.NLayer {
+		routes = routes || c.MoEAt(li)
+	}
+	if !routes || coveredBlocks(m) != c.NLayer {
 		return nil
 	}
 	var vs []c6Violation
