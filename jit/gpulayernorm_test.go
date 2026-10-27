@@ -31,7 +31,8 @@ func gpuDevice(d backend.Device) jit.Device {
 	if m, ok := d.(backend.MultiprocessorDevice); ok {
 		units = m.Multiprocessors()
 	}
-	return jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, ExactDiv: kernels.DivExact(d.API())}
+	return jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, ExactDiv: kernels.DivExact(d.API()),
+		ExactArith: kernels.Gate2Exact(d.API())}
 }
 
 // writesInput reports whether the formed kernels write the graph's input

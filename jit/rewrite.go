@@ -333,7 +333,7 @@ func (k *Kernel) compact() {
 			}
 		}
 	}
-	for _, x := range []int{k.Rows, k.Clamp} {
+	for _, x := range []int{k.Rows, k.Clamp, k.TileBase, k.TileLast, k.TileFirst} {
 		if x > 0 {
 			walk(x - 1)
 		}
@@ -398,6 +398,7 @@ func (k *Kernel) compact() {
 		l.Count, l.Span, l.Elem, l.End = re(l.Count), re(l.Span), re(l.Elem), re(l.End)
 	}
 	k.Rows, k.Clamp = re(k.Rows), re(k.Clamp)
+	k.TileBase, k.TileLast, k.TileFirst = re(k.TileBase), re(k.TileLast), re(k.TileFirst)
 	for i := range k.Bufs {
 		k.Bufs[i].Base, k.Bufs[i].Offset = re(k.Bufs[i].Base), re(k.Bufs[i].Offset)
 		for j := range k.Bufs[i].Dims {

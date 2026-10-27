@@ -157,3 +157,16 @@ func (c *Code) LiveGroups(rows int) int {
 	g := max(c.LiveGroup, 1)
 	return (units*c.LiveInner + g - 1) / g
 }
+
+// RunsAt reports whether a call of rows rows launches the code: a form for
+// few rows (Few) only at a call of at most Few, its tiled form (Many) only at
+// a call of more; a call of 0 rows runs the form's capacity.
+func (c *Code) RunsAt(rows int) bool {
+	switch {
+	case c.Few > 0:
+		return rows > 0 && rows <= c.Few
+	case c.Many > 0:
+		return rows <= 0 || rows > c.Many
+	}
+	return true
+}

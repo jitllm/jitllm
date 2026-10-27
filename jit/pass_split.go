@@ -1,6 +1,10 @@
 package jit
 
-import "github.com/jitllm/jitllm/jit/ir"
+import (
+	"slices"
+
+	"github.com/jitllm/jitllm/jit/ir"
+)
 
 // Split cuts a sum over a loop into contiguous segments, each element's
 // segments threads of their own writing partial planes, and a combine that
@@ -14,12 +18,21 @@ import "github.com/jitllm/jitllm/jit/ir"
 // instead one workgroup's (main's GroupSplit): 32 rows by the segments,
 // 128 to 1024 threads, each segment's sum through workgroup memory and the
 // row written whole, with no partial planes and no combine. Where Matrix is
-// set it cuts only a sum over a weight matrix -- a projection's.
+// set it cuts only a sum over a weight matrix -- a projection's. A form of a
+// capacity whose threads each sum a tile of rows is always cut within a
+// workgroup, by the segments one unit of its rows takes (groupSplitRows).
 type Split struct {
 	Slots, Max, Block int
 	Parts             int
 	Group, Matrix     bool
-	Kinds             []PrimKind
+	// Few, where set, forms beside a tiled kernel's split (groupSplitRows)
+	// its untiled form, each row's sums cut and combined in the tiled one's
+	// order, launched in its place at a call of at most Few rows: a row
+	// computed alone rather than with the tile's copies of it. Only on a
+	// device whose float arithmetic rounds every operation alone
+	// (Device.ExactArith), where the two kernels write a row's same bits.
+	Few   int
+	Kinds []PrimKind
 }
 
 func (Split) Name() string { return "split" }
@@ -29,6 +42,12 @@ func (s Split) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 }
 
 func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
+	if s.Parts == 0 && n.Tile > 1 && n.Capacity > 0 && !n.Work && covers(s.Kinds, n.Kind) && (!s.Matrix || readsMatrix(n)) {
+		if gs, ok := s.groupSplitRows(n, d); ok {
+			return gs, true, nil
+		}
+		return nil, false, nil
+	}
 	c, f, term, st, ok := splittable(n)
 	if !ok || n.Work || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
 		return nil, false, nil
@@ -160,6 +179,233 @@ func groupSplit(n *Kernel, c, f, term, st, S int) (*Kernel, bool) {
 	final.Val = sum
 	g.Stores = append(g.Stores, final)
 	return g, true
+}
+
+// splitShared is the workgroup memory, in words, a split of a tile of rows
+// holds its partial sums in: within every device's 48 KiB with room beside.
+const splitShared = 8 << 10
+
+// groupSplitRows is groupSplit for a form of a capacity whose threads each
+// sum a tile of rows (RowTiles, Kernel.Tile): its stores each a sum over one
+// loop. The segments are those one unit of the leading axis alone would
+// take -- the unit's elements by S -- so a call of one row runs as many
+// threads as a form of one row, and a row's sum is cut alike whatever the
+// capacity or the call's rows. A workgroup is S segments of rpg elements of
+// one unit: each thread's partials of every row of its tile to workgroup
+// memory, a barrier, and then thread (s, e) sums the segments of element e's
+// rows s, s+S, ... in order and stores them -- a row past the call's the
+// call's last, its sum from that row's partials, so no row's value depends
+// on which of the tile's copies of it a driver computed. The launch keeps
+// the leading axis (Space: units, then the unit's workgroups), so a call
+// holds its rows' units whole (CallRows).
+func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
+	T := n.Tile
+	if T < 2 || len(n.Stores) != T || n.TileFirst == 0 || n.TileBase == 0 {
+		return nil, false
+	}
+	c, _, _, ok := rowsSplittable(n)
+	if !ok {
+		return nil, false
+	}
+	slots := s.Slots
+	if slots == 0 {
+		slots = d.Slots
+	}
+	K, U := n.Loops[c].Trip, n.Space[0]
+	E := n.Elements() / U
+	S := 1
+	for S < s.Max && E*S < 2*slots && K%(s.Block*S*2) == 0 && min(max(32*S*2, 128), 1024)*T <= splitShared {
+		S *= 2
+	}
+	g, ok := splitTile(n, S)
+	if !ok {
+		return nil, false
+	}
+	if s.Few == 0 || !d.ExactArith {
+		return []*Kernel{g}, true
+	}
+	u, ok := untiled(n)
+	if !ok {
+		return []*Kernel{g}, true
+	}
+	f, ok := splitTile(u, S)
+	if !ok {
+		return []*Kernel{g}, true
+	}
+	g.Many, f.Few = s.Few, s.Few
+	f.Name = n.Name + ".few.group"
+	return []*Kernel{g, f}, true
+}
+
+// untiled is a tiled kernel n (RowTiles) whose threads each sum one row: its
+// first row's stores alone, the tile's first row the leading coordinate, the
+// leading axis the rows before tiling. A row's sum is the tiled kernel's
+// row's, node for node.
+func untiled(n *Kernel) (*Kernel, bool) {
+	base := n.Nodes[n.TileBase-1]
+	if n.TileRows == 0 || base.Op != OpMul || n.Nodes[base.A].Op != OpCoord || n.Nodes[base.A].A != 0 {
+		return nil, false
+	}
+	m := n.clone()
+	m.redirect(n.TileBase-1, base.A, -1)
+	m.Stores = m.Stores[:len(n.Stores)/n.Tile]
+	m.Space[0] = n.TileRows
+	m.Tile, m.TileBase, m.TileRows = 1, base.A+1, 0
+	m.compact()
+	return m, true
+}
+
+// splitTile is n, whose threads each sum a tile of n.Tile rows (one where
+// untiled), split in S segments within a workgroup (groupSplitRows).
+func splitTile(n *Kernel, S int) (*Kernel, bool) {
+	T := n.Tile
+	if len(n.Stores) != T || n.TileFirst == 0 || n.TileBase == 0 {
+		return nil, false
+	}
+	c, folds, terms, ok := rowsSplittable(n)
+	if !ok {
+		return nil, false
+	}
+	K, U := n.Loops[c].Trip, n.Space[0]
+	E := n.Elements() / U
+	G := min(max(32*S, 128), 1024)
+	if S == 1 || G%S != 0 || E%(G/S) != 0 || K%S != 0 || G*T > splitShared {
+		return nil, false
+	}
+	rpg := G / S
+	first := n.TileFirst - 1
+	dep := make([]bool, len(n.Nodes))
+	for changed := true; changed; {
+		changed = false
+		for i := range n.Nodes {
+			if dep[i] {
+				continue
+			}
+			d := i == first
+			for _, a := range n.Operands(&n.Nodes[i]) {
+				d = d || dep[*a]
+			}
+			if d {
+				dep[i], changed = true, true
+			}
+		}
+	}
+	g := n.clone()
+	g.Name = n.Name + ".group"
+	g.Work, g.Group, g.Space = true, G, []int{U, E / rpg}
+	g.Tile, g.TileBase, g.TileLast, g.TileFirst, g.TileRows = 0, 0, 0, 0, 0
+	I := ir.U32
+	var old []int
+	for i, nd := range n.Nodes {
+		if nd.Op == OpCoord && nd.A > 0 {
+			old = append(old, i)
+		}
+	}
+	tid := g.add(Node{Op: OpThread, Type: I})
+	seg := g.bin(OpDiv, I, tid, g.u32(rpg))
+	rl := g.bin(OpRem, I, tid, g.u32(rpg))
+	e := g.bin(OpAdd, I, g.bin(OpMul, I, g.add(Node{Op: OpCoord, A: 1, Type: I}), g.u32(rpg)), rl)
+	coords := g.decode(e, n.Space[1:])
+	for _, i := range old {
+		a := n.Nodes[i].A - 1
+		g.redirect(i, coords[a], coords[a])
+	}
+	g.Loops[c].Trip = K / S
+	if it := g.iterOf(c); it >= 0 {
+		k := g.bin(OpAdd, I, g.bin(OpMul, I, seg, g.u32(K/S)), it)
+		g.redirect(it, k, k)
+	}
+	t := n.Nodes[folds[0]].Type
+	for _, f := range folds {
+		if n.Nodes[f].Type != t {
+			return nil, false
+		}
+	}
+	store0 := g.Stores[0]
+	sh := g.buf(Buf{Kind: BufShared, Elem: t, Size: G * T})
+	lead := g.add(Node{Op: OpLess, Type: ir.Pred, A: seg, B: g.u32(1)})
+	g.Stores = nil
+	for j, f := range folds {
+		val := f
+		if terms[j] >= 0 {
+			val = g.bin(OpAdd, t, f, g.add(Node{Op: OpSelect, Type: t, A: lead, B: terms[j], C: g.add(Node{Op: OpConst, Type: t})}))
+		}
+		g.Stores = append(g.Stores, Store{Buf: sh, Ix: g.bin(OpAdd, I, tid, g.u32(j*G)), Val: val, At: -1})
+	}
+	g.Stores = append(g.Stores, Store{Barrier: true, At: -1})
+	for k := 0; k*S < T; k++ {
+		jj := g.bin(OpMin, I, g.bin(OpAdd, I, seg, g.u32(k*S)), g.u32(T-1))
+		if n.TileLast > 0 {
+			jj = g.bin(OpMin, I, jj, g.bin(OpSub, I, n.TileLast-1, first))
+		}
+		at := g.bin(OpAdd, I, g.bin(OpMul, I, jj, g.u32(G)), rl)
+		sum := -1
+		for i := range S {
+			x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: g.bin(OpAdd, I, at, g.u32(i*rpg))})
+			if sum < 0 {
+				sum = x
+				continue
+			}
+			sum = g.bin(OpAdd, t, sum, x)
+		}
+		row := g.bin(OpAdd, I, n.TileBase-1, jj)
+		if n.TileLast > 0 {
+			row = g.bin(OpMin, I, row, n.TileLast-1)
+		}
+		leaf := func(i int, _ Node) (int, bool) {
+			switch {
+			case i == first:
+				return row, true
+			case i < len(dep) && !dep[i]:
+				return i, true
+			}
+			return 0, false
+		}
+		st := store0
+		st.Val = sum
+		if store0.Ax == nil {
+			st.Ix = copyInto(g, g, store0.Ix, leaf)
+		} else {
+			st.Ax = make([]int, len(store0.Ax))
+			for a, x := range store0.Ax {
+				st.Ax[a] = copyInto(g, g, x, leaf)
+			}
+		}
+		g.Stores = append(g.Stores, st)
+	}
+	return g, true
+}
+
+// rowsSplittable finds each store's sum in a kernel whose stores are each a
+// sum over one top-level loop, alone or with a term beside it the loop does
+// not change (-1 for none): a tile of rows' sums (RowTiles).
+func rowsSplittable(n *Kernel) (c int, folds, terms []int, ok bool) {
+	c = -1
+	for _, st := range n.Stores {
+		if st.At != -1 || st.Barrier || st.Run {
+			return 0, nil, nil, false
+		}
+		f, term := st.Val, -1
+		if v := n.Nodes[f]; v.Op == OpAdd {
+			switch {
+			case n.Nodes[v.A].Op == OpFold:
+				f, term = v.A, v.B
+			case n.Nodes[v.B].Op == OpFold:
+				f, term = v.B, v.A
+			}
+		}
+		nd := n.Nodes[f]
+		if nd.Op != OpFold || n.Loops[nd.At].Parent != -1 || c >= 0 && nd.At != c || !n.sumFold(f) ||
+			term >= 0 && n.Varies(term, nd.At) || slices.Contains(folds, f) {
+			return 0, nil, nil, false
+		}
+		c = nd.At
+		folds, terms = append(folds, f), append(terms, term)
+	}
+	if c < 0 || len(n.foldsOf(c)) != len(folds) {
+		return 0, nil, nil, false
+	}
+	return c, folds, terms, true
 }
 
 // splittable finds the element's sum: a top-level loop with one fold, a sum,

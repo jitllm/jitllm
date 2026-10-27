@@ -63,6 +63,10 @@ type Code struct {
 	// workgroup. A call of fewer rows launches LiveGroups.
 	Live, LiveUnits, LiveInner, LiveGroup int
 	Work                                  bool
+	// Few, where set, is a code launched in place of the code before it at
+	// a call of at most Few rows; Many, where set, one launched only at a
+	// call of more than Many rows (Kernel.Few, Kernel.Many).
+	Few, Many int
 	// Args is a host call's argument words.
 	Args []CallArg
 	// Calls is a host kernel's calls' space, the outermost first: the
@@ -323,7 +327,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			errs = append(errs, fmt.Errorf("jit: lowering %s: %w", k.Name, err))
 			continue
 		}
-		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work}
+		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work, Few: k.Few, Many: k.Many}
 		if l.CPU != nil && !k.Work && k.Group <= 0 {
 			c.Calls = append([]int(nil), k.Space...)
 		}

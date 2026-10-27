@@ -58,9 +58,11 @@ func sibling(run []*Kernel, k *Kernel) bool {
 }
 
 // joinable says k can be one share of a launch: a workgroup an element,
-// nothing a fact about its space, every store at the element.
+// nothing a fact about its space, every store at the element. A form of a
+// capacity's kernel holds a call's rows by its leading axis (CallRows), which
+// a share of one launch would lose.
 func joinable(k *Kernel) bool {
-	if !k.Work || k.Group <= 0 || k.Positions != nil || k.Heads != nil || k.Quarter != nil || k.Rows != 0 || k.Clamp != 0 ||
+	if !k.Work || k.Group <= 0 || k.Capacity > 0 || k.Positions != nil || k.Heads != nil || k.Quarter != nil || k.Rows != 0 || k.Clamp != 0 ||
 		k.Seq != nil || len(k.Args) > 0 || len(k.Ptrs) > 0 {
 		return false
 	}

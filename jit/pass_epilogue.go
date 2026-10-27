@@ -16,7 +16,8 @@ func (p Epilogue) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	out := append([]*Kernel(nil), ks...)
 	for i := 0; i+1 < len(out); i++ {
 		w, m := out[i], out[i+1]
-		if !w.Work || m.Work || m.Kind != PrimMap || len(m.Loops) != 0 || m.Part != w.Part || len(w.Stores) == 0 {
+		if !w.Work || m.Work || m.Kind != PrimMap || len(m.Loops) != 0 || m.Part != w.Part || len(w.Stores) == 0 ||
+			w.Few > 0 || w.Many > 0 || lastSteps(w) > 1 {
 			continue
 		}
 		last := w.Stores[len(w.Stores)-1]
@@ -60,6 +61,17 @@ func (p Epilogue) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		out = append(out[:i+1], out[i+2:]...)
 	}
 	return out, nil
+}
+
+// lastSteps is the stores of k after its last barrier: more than one where
+// each of its threads writes several rows (groupSplitRows), of which the map
+// would see only the last.
+func lastSteps(k *Kernel) int {
+	n := 0
+	for i := len(k.Stores) - 1; i >= 0 && !k.Stores[i].Barrier; i-- {
+		n++
+	}
+	return n
 }
 
 // readsOwn reports whether map m reads o, and only at its own coordinates.

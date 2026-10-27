@@ -193,7 +193,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Formats: sl.formats,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
 		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
-			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API())},
+			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API())},
 		History: sl.history,
 	})
 }
@@ -252,7 +252,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 	}
 	for ci, c := range codes {
 		geom := jit.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
-			LiveGroup: c.LiveGroup, Work: c.Work}
+			LiveGroup: c.LiveGroup, Work: c.Work, Few: c.Few, Many: c.Many}
 		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom})
 		var args []partArg
 		for _, bd := range c.Binds {
@@ -373,6 +373,9 @@ func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf
 	f, sl := sv.f, &sv.sl
 	for i := range f.codes {
 		fc, bufs := &f.codes[i], sv.args[i]
+		if !fc.geom.RunsAt(sv.rows) {
+			continue
+		}
 		for j, a := range f.args[i] {
 			var b backend.Buf
 			switch a.kind {

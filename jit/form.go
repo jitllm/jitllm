@@ -60,6 +60,24 @@ func (r *Registry) Form(req Request) (Key, []Code, error) {
 }
 
 func (r *Registry) form(req Request) ([]Code, error) {
+	ks, err := r.formKernels(req)
+	if err != nil {
+		return nil, err
+	}
+	codes, err := r.Lower(ks, req.Device)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Code, len(codes))
+	for i, c := range codes {
+		out[i] = c.Code
+	}
+	return out, nil
+}
+
+// formKernels is a request's final IR: its ops decomposed and generated, the
+// device's passes run.
+func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 	prof, ok := r.Profiles[req.Device.Kind]
 	if !ok {
 		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
@@ -91,17 +109,8 @@ func (r *Registry) form(req Request) ([]Code, error) {
 		if err != nil {
 			return nil, err
 		}
-		break
+		return ks, nil
 	}
-	codes, err := r.Lower(ks, req.Device)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Code, len(codes))
-	for i, c := range codes {
-		out[i] = c.Code
-	}
-	return out, nil
 }
 
 // slice names a request's graph by its ops, for an error.

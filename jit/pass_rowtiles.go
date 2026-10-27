@@ -144,5 +144,6 @@ func tileRows(k *Kernel, t int) *Kernel {
 		m.redirect(c, first, first)
 	}
 	m.Name = k.Name + ".tiled"
+	m.Tile, m.TileBase, m.TileLast, m.TileFirst, m.TileRows = t, base+1, last+1, first+1, R
 	return m
 }

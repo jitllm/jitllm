@@ -43,6 +43,11 @@ type Device struct {
 	// IEEE 754 states it: a CPU's, PTX's div.rn. The int8 form's scale and
 	// inverse are divisions there, and made exact in integers where not.
 	ExactDiv bool
+	// ExactArith is a device whose lowering rounds every float operation
+	// alone (PTX's .rn), so two kernels computing a value by the same
+	// operations in the same order write its same bits; a driver free to
+	// contract them (SPIR-V's, MSL's) is not.
+	ExactArith bool
 }
 
 // warp is the threads a combine by lane shuffles takes whole on d: its

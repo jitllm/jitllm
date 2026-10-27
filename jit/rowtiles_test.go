@@ -6,7 +6,6 @@ import (
 	"math"
 	"math/rand"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -42,10 +41,12 @@ func ffnBlock(embd, ffn int) *graph.Graph {
 // of CUDA's statement and one of Vulkan's: from 128 rows on the largest
 // kernel's op count stays within 1% (an address constant's form, a tail's
 // guard), from two rows on every projection is tiled, and no kernel passes
-// 1,000 ops. At one row nothing is tiled. With the pass off the projections
-// run a row a thread, at eight times the workgroups or more: the gate sees it.
+// 1,000 ops. At one row nothing is tiled. On the device whose arithmetic is
+// exact each tiled projection has its form for few rows beside it, and on
+// the other none. With the pass off every row loads the weight itself, at
+// eight times the weight loads a row or more: the gate sees it.
 func TestRowTilesHoldTheOps(t *testing.T) {
-	cuda := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true}
+	cuda := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, ExactArith: true}
 	formats := func(typ jlm.Type) map[jlm.Role]jlm.Type {
 		return map[jlm.Role]jlm.Type{jlm.RoleFFNGate: typ, jlm.RoleFFNUp: typ, jlm.RoleFFNDown: typ, jlm.RoleFFNNorm: jlm.TypeF32}
 	}
@@ -64,18 +65,27 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 					if err != nil {
 						t.Fatalf("%s at %d rows: %v", name, R, err)
 					}
-					largest, tiled := 0, 0
+					largest, tiled, few := 0, 0, 0
 					for _, c := range codes {
 						largest = max(largest, len(c.GPU.Ops))
-						if slices.Contains(c.Passes, "rowtiles") {
+						switch {
+						case c.Few > 0:
+							few++
+						case slices.Contains(c.Passes, "rowtiles"):
 							tiled++
 						}
+					}
+					fewWant := 0
+					if R > 1 && d.ExactArith {
+						fewWant = 3
 					}
 					switch {
 					case R == 1 && tiled != 0:
 						t.Fatalf("%s: %d kernels tiled at one row", name, tiled)
 					case R > 1 && tiled != 3:
 						t.Fatalf("%s at %d rows: %d of 3 projections tiled", name, R, tiled)
+					case few != fewWant:
+						t.Fatalf("%s at %d rows: %d forms for few rows, want %d", name, R, few, fewWant)
 					case largest > 1000:
 						t.Fatalf("%s at %d rows: a kernel of %d ops", name, R, largest)
 					}
@@ -90,31 +100,36 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 			}
 		}
 	}
-	groups := func(off bool) int {
-		reg := jit.Default().WithoutInt8(jit.DeviceGPU)
-		if off {
-			p := reg.Profiles[jit.DeviceGPU]
-			p.Off = map[string]bool{"rowtiles": true}
-			reg.Profiles[jit.DeviceGPU] = p
-		}
-		_, codes, err := reg.Form(jit.Request{Graph: ffnBlock(2048, 8192), Formats: formats(jlm.TypeQ4S),
-			Step: jit.Step{Rows: 32, Page: 64, Keys: 1, ActWindow: 32}, Device: cuda})
-		if err != nil {
-			t.Fatal(err)
-		}
-		n := 0
-		for _, c := range codes {
-			if strings.HasPrefix(c.Name, "reduce") {
-				n += c.Groups
+	// What the pass saves is the weight's loads: a tile's rows read each
+	// word once. With it off every row loads the weight itself, and the
+	// projections' loads a row grow by the tile's rows: eight times or more.
+	for _, d := range []jit.Device{cuda, {Kind: jit.DeviceGPU, Lanes: 32}} {
+		for _, float := range []bool{false, true} {
+			loads := func(off bool) int {
+				reg := jit.Default()
+				if float {
+					reg = reg.WithoutInt8(jit.DeviceGPU)
+				}
+				if off {
+					p := reg.Profiles[jit.DeviceGPU]
+					p.Off = map[string]bool{"rowtiles": true}
+					reg.Profiles[jit.DeviceGPU] = p
+				}
+				n, err := jit.WeightLoads(reg, jit.Request{Graph: ffnBlock(2048, 8192), Formats: formats(jlm.TypeQ4S),
+					Step: jit.Step{Rows: 32, Page: 64, Keys: 1, ActWindow: 32}, Device: d})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return n / 32
 			}
+			on, off := loads(false), loads(true)
+			if on == 0 || off < 8*on {
+				t.Fatalf("units %d/float %v: the weight loads a row at 32 rows are %d with the pass and %d without: the gate cannot see it",
+					d.Units, float, on, off)
+			}
+			t.Logf("units %d/float %v: the weight loads a row at 32 rows, %d with the pass and %d without", d.Units, float, on, off)
 		}
-		return n
 	}
-	on, off := groups(false), groups(true)
-	if off < 8*on {
-		t.Fatalf("without the pass the float form reductions launch %d workgroups at 32 rows, with it %d: the gate cannot see it", off, on)
-	}
-	t.Logf("the float form's reductions at 32 rows launch %d workgroups with the pass and %d without", on, off)
 	// The device's registers size the tile: a V100's 32 a thread hold the
 	// sixteen rows a device stating none takes, and four hold two.
 	sized := map[int]int{}
@@ -165,8 +180,11 @@ func tiledWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []
 // present, over a float matrix and every packed format of the served
 // models, with int8 and with float activations, and runs the one form at
 // every count of rows a call may state -- 1, 3, 7, 31, 33, 100, 511 and 512,
-// the rows past them poisoned -- each row held to the oracle and every word
-// past the call's rows, to the capacity and the guard after it, untouched.
+// the rows past them poisoned -- each row held to the oracle and bit for bit
+// to its value in a call of the capacity's rows (a call of few rows runs the
+// form for few rows where the device's arithmetic is exact, and one must),
+// and every word past the call's rows, to the capacity and the guard after
+// it, untouched.
 // The decode form runs its one row the same way. Three violations must
 // fail: the weight's words moved by one, the input's rows moved by one, and
 // a call stating one row more than its input holds (the threads past the
@@ -184,7 +202,7 @@ func TestComposedGPURowTiles(t *testing.T) {
 		t.Run(d.API(), func(t *testing.T) {
 			dev := gpuDevice(d)
 			rng := rand.New(rand.NewSource(43))
-			ran, tiledRan := 0, 0
+			ran, tiledRan, fewRan := 0, 0, 0
 			for _, typ := range tiledFormats {
 				jt, ok := jlm.TypeOf(typ)
 				q, qok := kernels.QuantOf(typ)
@@ -269,11 +287,28 @@ func TestComposedGPURowTiles(t *testing.T) {
 							}
 							return res[:L*n], clean
 						}
+						few := 0
+						for _, c := range formed {
+							few = max(few, c.Few)
+						}
+						if few == 0 && dev.ExactArith && R > 1 {
+							t.Fatalf("%s: no form for few rows on a device whose arithmetic is exact", name)
+						}
+						full, _ := run(R, R, x, planes)
 						for _, L := range calls {
 							if L > R {
 								continue
 							}
 							got, clean := run(L, L, x, planes)
+							for i, v := range got {
+								if math.Float32bits(v) != math.Float32bits(full[i]) {
+									t.Fatalf("%s: a call of %d rows writes row %d's element %d as %08x, a call of %d rows as %08x",
+										name, L, i/n, i%n, math.Float32bits(v), R, math.Float32bits(full[i]))
+								}
+							}
+							if R > 1 && L <= few {
+								fewRan++
+							}
 							if !clean {
 								t.Fatalf("%s: a call of %d rows wrote past them", name, L)
 							}
@@ -305,7 +340,10 @@ func TestComposedGPURowTiles(t *testing.T) {
 					}
 				}
 			}
-			t.Logf("%s: %d calls right against the oracle, %d of them tiled, every violation seen", d.API(), ran, tiledRan)
+			if dev.ExactArith && fewRan == 0 {
+				t.Fatalf("%s: no call ran a form for few rows", d.API())
+			}
+			t.Logf("%s: %d calls right against the oracle and bit for bit against the capacity's call, %d of them tiled, %d on the form for few rows, every violation seen", d.API(), ran, tiledRan, fewRan)
 		})
 	}
 }
