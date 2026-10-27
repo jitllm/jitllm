@@ -16,6 +16,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // A part of a model the composer serves in the tier's own submission: a
@@ -110,6 +111,8 @@ type partCode struct {
 	k             backend.Kernel
 	groups, width int
 	geom          jit.Code
+	// matrix is a kernel formed on the device's matrix unit.
+	matrix bool
 }
 
 // partInst is one lane's instance of a form: the form's own buffers and
@@ -193,9 +196,28 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Formats: sl.formats,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
 		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
-			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API())},
+			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
+			Matrix: g.composedMatrix()},
 		History: sl.history,
 	})
+}
+
+// composedMatrix is the binary16 tile the composer forms a step of rows on
+// (jit.Device.Matrix), asked of the device once by compiling a probe
+// (backend.LowersTile): none where it does not lower one staged in
+// workgroup memory and carried across a loop.
+func (g *devTier) composedMatrix() [3]int {
+	s := backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32}
+	if g.matrixCap == 0 {
+		g.matrixCap = -1
+		if ok, _ := backend.LowersTile(g.dev, s); ok {
+			g.matrixCap = 1
+		}
+	}
+	if g.matrixCap < 0 {
+		return [3]int{}
+	}
+	return [3]int{s.M, s.N, s.K}
 }
 
 // composedLanes is the subgroup the composer forms for: the device's lanes,
@@ -253,7 +275,8 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 	for ci, c := range codes {
 		geom := jit.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
 			LiveGroup: c.LiveGroup, Work: c.Work, Few: c.Few, Many: c.Many}
-		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom})
+		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom,
+			matrix: slices.Contains(c.Passes, "matrix")})
 		var args []partArg
 		for _, bd := range c.Binds {
 			o := bd.Operand
@@ -368,9 +391,10 @@ func (in *partInst) free() {
 
 // launch binds the form's kernels to the caller's inputs and outputs, the
 // lane's instance inst and the part's weights, vectors and tables, and
-// launches them in order.
-func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf) error {
+// launches them in order: how many of them were formed on the matrix unit.
+func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf) (int, error) {
 	f, sl := sv.f, &sv.sl
+	matrix := 0
 	for i := range f.codes {
 		fc, bufs := &f.codes[i], sv.args[i]
 		if !fc.geom.RunsAt(sv.rows) {
@@ -395,7 +419,7 @@ func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf
 				}
 			}
 			if b == nil {
-				return fmt.Errorf("the composer's kernel %d reads %v, which the call site does not hold", i, a.role)
+				return matrix, fmt.Errorf("the composer's kernel %d reads %v, which the call site does not hold", i, a.role)
 			}
 			bufs[j] = b
 		}
@@ -404,10 +428,13 @@ func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf
 			groups = fc.geom.LiveGroups(sv.rows)
 		}
 		if err := lc.issue(fc.k, groups, fc.width, bufs...); err != nil {
-			return err
+			return matrix, err
+		}
+		if fc.matrix {
+			matrix++
 		}
 	}
-	return nil
+	return matrix, nil
 }
 
 // compileCodes compiles each code's GPU kernel: side by side, on as many
@@ -645,9 +672,9 @@ const (
 	// written apart from x (servedCopy). Config.Composed takes no such bit:
 	// a block the composer serves asks for one where it needs it.
 	PartCopy Parts = 1 << partCopy
-	// ComposedStep is every part of a one-row step: its input row, tables,
-	// blocks, head and token.
-	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedHead | ComposedSample
+	// ComposedStep is every part of a step: its input rows, tables, blocks
+	// (a prompt chunk's among them), head and token.
+	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedPrompt | ComposedHead | ComposedSample
 )
 
 // partDecline is why a decode step's or a prompt chunk's composed part is
@@ -703,6 +730,18 @@ func (s Stats) ServedPart(k Parts) (served, declined, unasked int) {
 		}
 	}
 	return served, declined, unasked
+}
+
+// MatrixPart is how many launches of the parts of k ran a kernel formed on
+// the device's matrix unit (Stats.MatrixLaunches).
+func (s Stats) MatrixPart(k Parts) int {
+	n := 0
+	for i := range s.MatrixLaunches {
+		if k&(1<<i) != 0 {
+			n += s.MatrixLaunches[i]
+		}
+	}
+	return n
 }
 
 // ReplayedPart is how many steps a recording replayed the parts of k in
@@ -879,10 +918,12 @@ func (sv *servedPart) run(g *devTier, lc *launcher, inst *partInst, in, out []ba
 func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind partKind, in, out []backend.Buf) error {
 	copy(sv.in[:sv.n], in)
 	copy(sv.out[:sv.m], out)
-	if err := sv.launch(lc, inst, sv.in[:sv.n], sv.out[:sv.m]); err != nil {
+	matrix, err := sv.launch(lc, inst, sv.in[:sv.n], sv.out[:sv.m])
+	if err != nil {
 		return err
 	}
 	g.PartsServed[kind]++
+	g.MatrixLaunches[kind] += matrix
 	return nil
 }
 

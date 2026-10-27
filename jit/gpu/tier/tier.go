@@ -755,6 +755,10 @@ type Stats struct {
 	// submission, by part (Config.Composed): the steps emitted, not those a
 	// recording replayed.
 	PartsServed [numParts]int
+	// MatrixLaunches counts the launches of composed kernels formed on the
+	// device's matrix unit (jit.Matrix), by part, emitted as PartsServed is:
+	// what of a part ran on the unit, not what was formed for it.
+	MatrixLaunches [numParts]int
 	// ComposedLanes is the subgroup the composer formed the served parts for
 	// (Config.ComposedLanes, else the device's lanes): the selection check of
 	// a gate that narrows it.
@@ -1385,6 +1389,7 @@ func (s *Stats) add(o Stats) {
 	}
 	for i := range s.PartsServed {
 		s.PartsServed[i] += o.PartsServed[i]
+		s.MatrixLaunches[i] += o.MatrixLaunches[i]
 		s.PartsDeclined[i] += o.PartsDeclined[i]
 		s.PartsUnasked[i] += o.PartsUnasked[i]
 		s.PartsReplayed[i] += o.PartsReplayed[i]
@@ -2255,6 +2260,8 @@ type devShared struct {
 	tileTallCap int8
 	// tileF32Cap is tileF32's probe, in tileCap's terms.
 	tileF32Cap int8
+	// matrixCap is composedMatrix's probe, in tileCap's terms.
+	matrixCap int8
 	// voltaMoE is the grouped tensor-core mixture's probe (voltaOn): 0 not yet
 	// asked, 1 this device runs it, -1 it does not.
 	voltaMoE int8

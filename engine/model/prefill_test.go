@@ -181,7 +181,14 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 	if hs, hd, _ := st.ServedPart(tier.ComposedHead); parts&tier.ComposedHead != 0 && (hs == 0 || hd != 0) {
 		t.Fatalf("the composer served the head %d times and declined it %d (%s)", hs, hd, declinesOf(st))
 	}
-	t.Logf("the composer served %d block steps of the prompt, the tier's kernels %d blocks a step", np, len(keep))
+	// A device whose matrix unit takes the composer's tiles runs the
+	// prompt's projections there.
+	mx := st.MatrixPart(tier.ComposedPrompt)
+	if strings.HasPrefix(dev, "cuda") && mx == 0 {
+		t.Fatalf("%s: the prompt's %d composed block steps ran no kernel on the matrix unit", dev, np)
+	}
+	t.Logf("the composer served %d block steps of the prompt (%d launches on the matrix unit), the tier's kernels %d blocks a step",
+		np, mx, len(keep))
 }
 
 // prefillVsForward compares Prefill against a Forward loop. exact demands bit
