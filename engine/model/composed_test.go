@@ -286,6 +286,15 @@ func declinesOf(st tier.Stats) string {
 	return strings.Join(out, "; ")
 }
 
+// bandSeen are the served models whose arm sits too far from the tier for
+// one position off to read ten times it, so the gate holds one position off
+// to the band instead and demands it leave: synth-nemotronhmoe-q8, a random
+// hybrid whose router sits near a tie at its 12th step, where CUDA's arm
+// reads 0.574 from CUDA's tier (Vulkan's 0.00017) and one position off 2.6;
+// against the float reference the arm reads a median 1.014 of the tier's
+// distance and 0.708 at its worst, where the tier's own backends reach 0.71.
+var bandSeen = []string{"synth-nemotronhmoe-q8.gguf"}
+
 // composedResidue is what the tier still launches of its own on a one-row
 // step whose tables, blocks and head the composer serves: nothing.
 var composedResidue []string
@@ -316,15 +325,20 @@ var promptModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Smo
 // Falcon-H1's mixer beside its attention in one block) and the gated short
 // convolution beside attention (LFM2), Mamba-1's per-channel update alone
 // (mamba-130m) and beside attention (Jamba), and Mamba-2's mixer layers
-// beside attention and MLP layers (Nemotron-Nano-9B-v2), a block with no
-// MLP written apart from x (apartModels). Open: falcon-mamba-7B reads 0.029
-// at its worst on CUDA against 4 times the tier's 0.00291 (Vulkan 1.007 at
-// the median, in band); mamba-codestral's composed logits, and its float
-// reference's, are not finite at step 13 and every sixth step after.
+// beside attention and MLP layers (Nemotron-Nano-9B-v2), alone
+// (mamba-codestral) and beside a mixture (synth-nemotronhmoe-q8), a block
+// with no MLP written apart from x (apartModels). falcon-mamba-7B serves
+// apart and is not here: its Vulkan arm reads 0.029 at its worst against 4
+// times the tier's 0.00291 (median 0.959), one step 30 times its neighbours.
+// The step is sensitive, not a block: on CUDA, with the first 48, the last
+// 32, the first 32, the first 16 and all 64 blocks composed, the 132nd step
+// reads 0.0236, 0.0184, 0.0015, 0.0006 and 0.0007 from the float reference
+// (the tier 0.00066), tracking no block and no depth.
 var ssmServed = []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
 	"granite/granite-4.0-h-1b-Q4_K_M.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
 	"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf", "mamba/mamba-130m-hf.Q8_0.gguf",
-	"jamba/jamba-reasoning-3b-Q4_K_M.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf"}
+	"jamba/jamba-reasoning-3b-Q4_K_M.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
+	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "synth-nemotronhmoe-q8.gguf"}
 
 func init() {
 	servedModels = append(servedModels, ssmServed...)
@@ -404,6 +418,39 @@ func TestComposedBlocksServeApart(t *testing.T) {
 	}
 }
 
+// trainedToks are n teacher-forced ids after the prompt ids, each the first
+// id at or after (ids[i]*7 + i) whose embedding row stores something: a row
+// of zeros is a token the model never trained (mamba-codestral's Q4_K_M has
+// 277 such rows, 19 and every sixth id after among them), and through a gated
+// mixer it zeroes every block's output -- silu of a zero gate -- so every
+// arm's logits are exactly zero and no distance between them is defined.
+func trainedToks(t *testing.T, m *Model, ids []int32, n int) ([]int32, int) {
+	t.Helper()
+	row := make([]float32, m.embd.k)
+	nonzero := func(v float32) bool { return v != 0 }
+	toks, moved := make([]int32, n), 0
+	for i := range toks {
+		id := (int(ids[i%len(ids)])*7 + i) % m.Vocab.Size()
+		for tries := 0; ; tries++ {
+			if err := m.embedRow(row, id); err != nil {
+				t.Fatal(err)
+			}
+			if slices.ContainsFunc(row, nonzero) {
+				break
+			}
+			if tries == m.Vocab.Size() {
+				t.Fatal("no id stores an embedding")
+			}
+			if tries == 0 {
+				moved++
+			}
+			id = (id + 1) % m.Vocab.Size()
+		}
+		toks[i] = int32(id)
+	}
+	return toks, moved
+}
+
 // TestComposedBlocksServe decodes dense models with each block served whole
 // by the composer from its graph (the model's front end's, from the
 // container), the prompt's blocks at the chunk's rows (promptModels), and
@@ -470,9 +517,9 @@ func TestComposedBlocksServe(t *testing.T) {
 			} else if w > 0 {
 				t.Logf("the window of %d cuts nothing in the model's context of %d", w, c)
 			}
-			toks := make([]int32, n)
-			for i := range toks {
-				toks[i] = int32((int(ids[i%len(ids)])*7 + i) % m.Vocab.Size())
+			toks, moved := trainedToks(t, m, ids, n)
+			if moved > 0 {
+				t.Logf("%d teacher-forced ids store no embedding and took the next id that does", moved)
 			}
 			// The tier and the float reference on every device first: the
 			// spread of the tier's own backends is the band each arm is held to.
@@ -617,7 +664,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								for i := 1; i < len(want); i++ {
 									off = max(off, logitNMSE(got[i], want[i-1]))
 								}
-								if !(off > max(1e-9, 10*worst)) {
+								if !(off > max(1e-9, 10*worst)) && !slices.Contains(bandSeen, file) {
 									t.Errorf("one position off the logits are within %.3g of the tier's, where the arm's worst is %.3g (step %d): the comparison cannot see a wrong part", off, worst, worstAt)
 								}
 								// Step 0 is the prompt's last row. Where the prompt is
@@ -653,6 +700,22 @@ func TestComposedBlocksServe(t *testing.T) {
 									}
 									t.Logf("composed %s against the float reference: median ratio to the tier's distance %.3f (range %.3f..%.3f), worst %.3g against the tier's %.3g here and %.3g on its widest backend",
 										a.name, med, ratios[0], ratios[len(ratios)-1], worstGot, worstTier, widest[g])
+								}
+								if slices.Contains(bandSeen, file) {
+									var ratios []float64
+									worstOff := 0.0
+									for i := max(first, 1); i < len(ref); i++ {
+										eg := logitNMSE(got[i-1], ref[i])
+										ratios = append(ratios, eg/logitNMSE(want[i], ref[i]))
+										worstOff = max(worstOff, eg)
+									}
+									slices.Sort(ratios)
+									med := ratios[len(ratios)/2]
+									if med <= bandRatio && worstOff <= bandWorst*widest[g] {
+										t.Errorf("one position off the composed %s is %.3g at the median of the tier's distance and %.3g at its worst, inside the band (%.1f and %.1fx of %.3g): the gate cannot see a wrong part",
+											a.name, med, worstOff, bandRatio, bandWorst, widest[g])
+									}
+									t.Logf("one position off the composed %s: median ratio %.3g, worst %.3g against the band's %.3g", a.name, med, worstOff, bandWorst*widest[g])
 								}
 								t.Logf("composed %s: %d part steps served, worst NMSE from the tier %.3g, one position off %.3g", a.name, served, worst, off)
 								// A part the composer serves wrong must fall outside the
