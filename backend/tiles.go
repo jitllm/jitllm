@@ -1,6 +1,9 @@
 package backend
 
-import "github.com/jitllm/jitllm/jit/ir"
+import (
+	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/jit/ptx"
+)
 
 // TileShape is one collective multiply-accumulate: an M x K by K x N product
 // of Elem operands into an Acc accumulator.
@@ -16,8 +19,8 @@ type TileShape struct {
 // It is the capability question the tier asks before it builds a tile kernel,
 // in place of asking for a backend by name: Metal lowers 8x8 tiles to
 // simdgroup_matrix, PTX lowers any f16 tile whose sides are multiples of 8 to
-// mma.sync (sm_75 and later), and Vulkan lowers the shapes the device
-// enumerated. The probe is compiled, never launched; asking costs a compile,
+// mma.sync (sm_70 and later; see TileQuadPairs), and Vulkan lowers the shapes
+// the device enumerated. The probe is compiled, never launched; asking costs a compile,
 // so a caller keeps the answer for the device it holds.
 func LowersTile(d Device, s TileShape) (bool, string) {
 	k, err := tileProbe(s)
@@ -30,6 +33,15 @@ func LowersTile(d Device, s TileShape) (bool, string) {
 	}
 	kern.Close()
 	return true, ""
+}
+
+// TileQuadPairs reports whether d lowers the collective tiles in sm_70's
+// quad-pair layout (jit/ptx/tile.go): one m8n8k4 a pair, four pairs a warp
+// each on its own 4 of k, so a tile multiplies at the unit's full rate only
+// where its k is a multiple of 16, and a k of 8 runs half the pairs on zeros.
+func TileQuadPairs(d Device) bool {
+	c, ok := d.(*cudaDev)
+	return ok && ptx.QuadPairTiles(c.d.Target)
 }
 
 // tileProbe is the smallest kernel with every part of a staged tile GEMM: A

@@ -72,7 +72,7 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 	var tl *tileLower
 	for _, o := range k.Ops {
 		if o.Tile != nil {
-			tl = &tileLower{b: &b, sm: sm, regs: map[ir.Value][]Reg{}, shared: shared}
+			tl = &tileLower{b: &b, sm: sm, regs: map[ir.Value][]Reg{}, shared: shared, volta: voltaSM(sm)}
 			tl.prologue()
 			break
 		}

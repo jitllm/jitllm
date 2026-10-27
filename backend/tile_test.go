@@ -51,10 +51,10 @@ func TestTileMatchesReference(t *testing.T) {
 			}
 			kern, err := d.Compile(kk)
 			if err != nil {
-				// A decline is expected for most (backend, shape) pairs: ptx
-				// has no cooperative-matrix lowering (its matrix op is OpMMA),
-				// and spirv and msl refuse shapes their device does not
-				// enumerate. The count below stops an all-declined run passing.
+				// A decline is expected for many (backend, shape) pairs: ptx
+				// refuses an int8 tile, and spirv and msl refuse shapes their
+				// device does not enumerate. The count below stops an
+				// all-declined run passing.
 				t.Logf("%s %dx%dx%d %s: declined: %v", d.API(), c.m, c.n, c.k, c.elem, err)
 				continue
 			}

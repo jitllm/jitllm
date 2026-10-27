@@ -16,7 +16,8 @@ import (
 
 // TestTileKernelsAssemble lowers the shipped collective-tile kernels
 // (kernels.GemmTile, its grouped form, kernels.FlashPrefillTile) to PTX at
-// sm_75 and sm_86 and assembles them with ptxas, and to MSL. They are not in
+// sm_70 (the quad-pair m8n8k4 layout), sm_75 and sm_86 and assembles them with
+// ptxas, and to MSL. They are not in
 // all() because SPIR-V does not lower a tile carried across a loop or staged
 // in workgroup memory, which both need; the backend gates run them on the
 // devices that do.
@@ -52,9 +53,9 @@ func TestTileKernelsAssemble(t *testing.T) {
 			if _, err := msl.Emit(k); err != nil {
 				t.Fatalf("msl: %v", err)
 			}
-			for _, sm := range []string{"sm_75", "sm_86"} {
+			for _, sm := range []string{"sm_70", "sm_75", "sm_86"} {
 				src, err := ptx.Lower(k, sm)
-				if strings.HasPrefix(name, "flashtile") && sm == "sm_75" {
+				if strings.HasPrefix(name, "flashtile") && sm != "sm_86" {
 					// float32 operands are three tf32 products, sm_80 on.
 					if err == nil {
 						t.Fatalf("ptx %s lowered float32 operands", sm)

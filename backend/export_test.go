@@ -32,6 +32,19 @@ func init() {
 	}
 }
 
+// ForceCUDATarget sets a CUDA device's PTX target, returning the one it
+// replaced, and false for any other device: a card runs PTX built for an
+// older target, so a later card runs an older target's lowering.
+func ForceCUDATarget(d Device, target string) (string, bool) {
+	c, ok := d.(*cudaDev)
+	if !ok {
+		return "", false
+	}
+	prev := c.d.Target
+	c.d.Target = target
+	return prev, true
+}
+
 // VulkanGroups reports a Vulkan device's workgroups per dispatch and how many
 // dispatches it has recorded, and false for any other device. The count is the
 // selection check for a split launch: a split and an unsplit launch leave the

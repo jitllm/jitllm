@@ -33,10 +33,27 @@ import (
 // upgrade is ldmatrix for a shared view whose rows the kernel asserts are
 // 16-byte aligned.
 //
-// The matrix instructions are sm_75 (m16n8k8) and sm_80 (m16n8k16). sm_70's
-// only one is the quad-pair m8n8k4 (ir.MMAVolta()), whose fragments are not
-// these, so a tile kernel is refused there. Only f16 operands with an f32
-// accumulator are lowered: s8 tiles and f32 operands are refused by name.
+// The matrix instructions are sm_75 (m16n8k8) and sm_80 (m16n8k16). Only f16
+// operands with an f32 accumulator are lowered below sm_80: s8 tiles, and f32
+// operands there, are refused by name.
+//
+// sm_70 and sm_72 have one instruction, m8n8k4 (ir.MMAVolta()): each of the
+// warp's four quad-pairs (lanes 4q..4q+3 and 16+4q..16+4q+3) multiplies its
+// own 8x4 by 4x8. Its fragments are not m16n8's, so there the tile is laid out
+// by k: quad-pair q holds k-chunks 4s+q (four elements of k each) of every
+// atom, s counting 16 of k, and lane p of the pair (p = (lane&3) + 4(lane>>4))
+// holds an A atom's row p and a B atom's column p:
+//
+//	A (M x K, f16)   row 8i+p, k 16s+4q .. 16s+4q+3, two f16x2
+//	B (K x N, f16)   k 16s+4q .. 16s+4q+3, column 8j+p, two f16x2
+//	C (M x N, f32)   atom (i, j)'s eight at m8n8k4's D places, the quad-pair's
+//	                 partial sum: the tile is the sum over the four pairs
+//
+// so a TileMMA is one m8n8k4 an atom and 16 of k, every quad-pair adding its
+// own chunks' products, and nothing moves between them until a store sums
+// the four (two butterfly shuffles) and pair q writes registers 2q and 2q+1.
+// A loaded or splat accumulator is held the same way, pair q holding those two
+// and zeros. A k of 8 past the last 16 leaves pairs 2 and 3 zeros.
 
 // tileLower holds the per-kernel state the tile ops share.
 type tileLower struct {
@@ -48,7 +65,23 @@ type tileLower struct {
 	zeroF  Reg // an f32 zero, the missing half of an 8-row accumulator
 	regs   map[ir.Value][]Reg
 	shared []bool
+	// volta is sm_70's quad-pair layout: q the lane's pair, p its row (A) or
+	// column (B), q4 4q, dr and dc accumulator 0's row and column, qIs[n]
+	// q == n and q2 q < 2.
+	volta  bool
+	q, p   Reg
+	q4     Reg
+	dr, dc Reg
+	qIs    [4]Reg
+	q2     Reg
 }
+
+// voltaSM reports whether sm's matrix instruction is m8n8k4 alone.
+func voltaSM(sm int) bool { return sm >= 70 && sm < 75 }
+
+// QuadPairTiles reports whether target lowers the collective tiles in the
+// quad-pair layout.
+func QuadPairTiles(target string) bool { return voltaSM(smOf(target)) }
 
 // smOf parses "sm_86" as 86, or 0.
 func smOf(target string) int {
@@ -58,9 +91,8 @@ func smOf(target string) int {
 
 // tileSupported is the lowering's refusal for a tile type, nil if it lowers.
 func tileSupported(t ir.TileType, sm int) error {
-	if sm < 75 {
-		return fmt.Errorf("ptx: no collective tile below sm_75 (this is sm_%d): mma.sync's "+
-			"m16n8 fragments start there, and sm_70's m8n8k4 is the quad-pair layout ir.OpMMA carries", sm)
+	if sm < 70 {
+		return fmt.Errorf("ptx: no collective tile below sm_70 (this is sm_%d): mma.sync starts there", sm)
 	}
 	switch {
 	case t.Use == ir.TileAcc && t.Elem == ir.TileF32:
@@ -90,11 +122,46 @@ func (tl *tileLower) prologue() {
 	b.Op("mov.b32 %v,0;", tl.zeroH)
 	tl.zeroF = b.Reg(F32)
 	b.Op("mov.f32 %v,0f00000000;", tl.zeroF)
+	if !tl.volta {
+		return
+	}
+	tl.q = b.Reg(B32)
+	b.Op("bfe.u32 %v,%v,2,2;", tl.q, lane)
+	tl.q4 = b.Reg(B32)
+	b.Op("shl.b32 %v,%v,2;", tl.q4, tl.q)
+	hi := b.Reg(B32)
+	b.Op("shr.u32 %v,%v,4;", hi, lane)
+	b.Op("shl.b32 %v,%v,2;", hi, hi)
+	tl.p = b.Reg(B32)
+	b.Op("add.u32 %v,%v,%v;", tl.p, tl.t1, hi)
+	tl.dr = b.Reg(B32)
+	b.Op("and.b32 %v,%v,1;", tl.dr, lane)
+	b.Op("add.u32 %v,%v,%v;", tl.dr, tl.dr, hi)
+	tl.dc = b.Reg(B32)
+	b.Op("and.b32 %v,%v,2;", tl.dc, lane)
+	for n := range tl.qIs {
+		tl.qIs[n] = b.Reg(Pred)
+		b.Op("setp.eq.u32 %v,%v,%d;", tl.qIs[n], tl.q, n)
+	}
+	tl.q2 = b.Reg(Pred)
+	b.Op("setp.lt.u32 %v,%v,2;", tl.q2, tl.q)
 }
 
+// slots is how many 16s of k a Volta operand of k elements holds.
+func slots(k int) int { return (k + 15) / 16 }
+
 // count is how many registers a lane holds of a tile.
-func count(t ir.TileType) int {
+func (tl *tileLower) count(t ir.TileType) int {
 	n := (t.Rows / 8) * (t.Cols / 8)
+	if tl.volta {
+		switch t.Use {
+		case ir.TileA:
+			return 2 * (t.Rows / 8) * slots(t.Cols)
+		case ir.TileB:
+			return 2 * slots(t.Rows) * (t.Cols / 8)
+		}
+		return 8 * n
+	}
 	if t.Elem == ir.TileF32 {
 		return 2 * n
 	}
@@ -103,7 +170,7 @@ func count(t ir.TileType) int {
 
 // fresh allocates a tile's registers.
 func (tl *tileLower) fresh(t ir.TileType) []Reg {
-	rs := make([]Reg, count(t))
+	rs := make([]Reg, tl.count(t))
 	for i := range rs {
 		if t.Elem == ir.TileF32 {
 			rs[i] = tl.b.Reg(F32)
@@ -146,6 +213,9 @@ func (tl *tileLower) element(t ir.TileType, i, j, e int) (rowL Reg, rowC int, co
 // is at offset + r*stride + c, or offset + c*stride + r column-major, counted
 // in the tile's components.
 func (tl *tileLower) access(o ir.Op, base Reg, offset, stride Reg, store []Reg) []Reg {
+	if tl.volta {
+		return tl.voltaAccess(o, base, offset, stride, store)
+	}
 	b := tl.b
 	t := *o.Tile
 	esz := t.Elem.Bytes()
@@ -222,9 +292,178 @@ func (tl *tileLower) access(o ir.Op, base Reg, offset, stride Reg, store []Reg) 
 	return out
 }
 
+// voltaElem is a Volta tile's register n: the constant parts of its elements'
+// row and column (two elements a register of an f16 tile, the column's next
+// for the second), and the predicate a lane holds it under, nil for every lane.
+type voltaElem struct {
+	row, col int
+	pred     *Reg
+}
+
+// voltaElems lists a Volta tile's registers in the order count allocates them.
+func (tl *tileLower) voltaElems(t ir.TileType) []voltaElem {
+	var out []voltaElem
+	part := func(k, s int) *Reg {
+		if 16*s+16 > k {
+			return &tl.q2
+		}
+		return nil
+	}
+	switch t.Use {
+	case ir.TileA:
+		for i := 0; i < t.Rows/8; i++ {
+			for s := 0; s < slots(t.Cols); s++ {
+				for h := 0; h < 2; h++ {
+					out = append(out, voltaElem{8 * i, 16*s + 2*h, part(t.Cols, s)})
+				}
+			}
+		}
+	case ir.TileB:
+		for s := 0; s < slots(t.Rows); s++ {
+			for j := 0; j < t.Cols/8; j++ {
+				for h := 0; h < 2; h++ {
+					out = append(out, voltaElem{16*s + 2*h, 8 * j, part(t.Rows, s)})
+				}
+			}
+		}
+	default:
+		for i := 0; i < t.Rows/8; i++ {
+			for j := 0; j < t.Cols/8; j++ {
+				for x := 0; x < 8; x++ {
+					out = append(out, voltaElem{8*i + 2*((x>>1)&1), 8*j + (x & 1) + 4*(x>>2), &tl.qIs[x>>1]})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// voltaAccess is access in the quad-pair layout. A register some lanes do not
+// hold is loaded under its predicate (zero elsewhere) and stored under it; an
+// accumulator is summed over the four pairs before it is stored.
+func (tl *tileLower) voltaAccess(o ir.Op, base Reg, offset, stride Reg, store []Reg) []Reg {
+	b := tl.b
+	t := *o.Tile
+	esz := t.Elem.Bytes()
+	col := ir.ColMajor(o)
+	sp := space(tl.shared[o.Args[0]])
+
+	// An f16 element's second half is the next k: A's next column, B's next row.
+	rowL, colL := tl.dr, tl.dc
+	switch t.Use {
+	case ir.TileA:
+		rowL, colL = tl.p, tl.q4
+	case ir.TileB:
+		rowL, colL = tl.q4, tl.p
+	}
+	majL, minL := rowL, colL
+	if col {
+		majL, minL = colL, rowL
+	}
+	lanePart := b.Reg(B32)
+	b.Op("mad.lo.u32 %v,%v,%v,%v;", lanePart, majL, stride, offset)
+	b.Op("add.u32 %v,%v,%v;", lanePart, lanePart, minL)
+	addrs := map[int]Reg{}
+	at := func(r, c int) (Reg, int) {
+		maj, mn := r, c
+		if col {
+			maj, mn = c, r
+		}
+		a, ok := addrs[maj]
+		if !ok {
+			idx := b.Reg(B32)
+			b.Op("mad.lo.u32 %v,%v,%d,%v;", idx, stride, maj, lanePart)
+			a = b.Reg(B64)
+			b.Op("mad.wide.u32 %v,%v,%d,%v;", a, idx, esz, base)
+			addrs[maj] = a
+		}
+		return a, mn * esz
+	}
+	guard := func(p *Reg) string {
+		if p == nil {
+			return ""
+		}
+		return "@" + p.String() + " "
+	}
+
+	if store != nil && t.Use == ir.TileAcc {
+		sum := make([]Reg, len(store))
+		for n, r := range store {
+			s, x := r, b.Reg(F32)
+			for _, m := range []int{4, 8} {
+				b.Op("shfl.sync.bfly.b32 %v,%v,%d,31,-1;", x, s, m)
+				y := b.Reg(F32)
+				b.Op("add.rn.f32 %v,%v,%v;", y, s, x)
+				s = y
+			}
+			sum[n] = s
+		}
+		store = sum
+	}
+	var out []Reg
+	if store == nil {
+		out = tl.fresh(t)
+	}
+	for n, el := range tl.voltaElems(t) {
+		g := guard(el.pred)
+		if t.Elem == ir.TileF32 {
+			a, off := at(el.row, el.col)
+			if store != nil {
+				b.Op("%sst.%s.f32 [%v+%d],%v;", g, sp, a, off, store[n])
+				continue
+			}
+			if el.pred != nil {
+				b.Op("mov.f32 %v,0f00000000;", out[n])
+			}
+			b.Op("%sld.%s.f32 %v,[%v+%d];", g, sp, out[n], a, off)
+			continue
+		}
+		r2, c2 := el.row, el.col+1
+		if t.Use == ir.TileB {
+			r2, c2 = el.row+1, el.col
+		}
+		a0, off0 := at(el.row, el.col)
+		a1, off1 := at(r2, c2)
+		h0, h1 := b.Reg(B16), b.Reg(B16)
+		if store != nil {
+			b.Op("mov.b32 {%v,%v},%v;", h0, h1, store[n])
+			b.Op("%sst.%s.b16 [%v+%d],%v;", g, sp, a0, off0, h0)
+			b.Op("%sst.%s.b16 [%v+%d],%v;", g, sp, a1, off1, h1)
+			continue
+		}
+		if el.pred != nil {
+			b.Op("mov.b32 %v,0;", out[n])
+		}
+		b.Op("%sld.%s.b16 %v,[%v+%d];", g, sp, h0, a0, off0)
+		b.Op("%sld.%s.b16 %v,[%v+%d];", g, sp, h1, a1, off1)
+		b.Op("%smov.b32 %v,{%v,%v};", g, out[n], h0, h1)
+	}
+	return out
+}
+
 // splat is a tile every element of which is the f32 value v.
 func (tl *tileLower) splat(t ir.TileType, v Reg) []Reg {
 	b := tl.b
+	if tl.volta {
+		out := tl.fresh(t)
+		h := b.Reg(B16)
+		w := b.Reg(B32)
+		if t.Elem != ir.TileF32 {
+			b.Op("cvt.rn.f16.f32 %v,%v;", h, v)
+			b.Op("mov.b32 %v,{%v,%v};", w, h, h)
+		}
+		for n, el := range tl.voltaElems(t) {
+			switch {
+			case t.Elem == ir.TileF32:
+				b.Op("selp.f32 %v,%v,0f00000000,%v;", out[n], v, *el.pred)
+			case el.pred != nil:
+				b.Op("selp.b32 %v,%v,0,%v;", out[n], w, *el.pred)
+			default:
+				b.Op("mov.b32 %v,%v;", out[n], w)
+			}
+		}
+		return out
+	}
 	out := tl.fresh(t)
 	if t.Elem == ir.TileF32 {
 		for _, r := range out {
@@ -244,6 +483,9 @@ func (tl *tileLower) splat(t ir.TileType, v Reg) []Reg {
 func (tl *tileLower) mma(ta, tb, tc ir.TileType, a, bb, c []Reg) []Reg {
 	if ta.Elem == ir.TileF32 {
 		return tl.mma32(ta, tb, a, bb, c)
+	}
+	if tl.volta {
+		return tl.voltaMMA(ta, tb, a, bb, c)
 	}
 	b := tl.b
 	mA, kA, nB := ta.Rows/8, ta.Cols/8, tb.Cols/8
@@ -289,6 +531,46 @@ func (tl *tileLower) mma(ta, tb, tc ir.TileType, a, bb, c []Reg) []Reg {
 		}
 	}
 	return d
+}
+
+// voltaMMA is mma in the quad-pair layout: an m8n8k4 an atom of D and 16 of
+// k, each pair adding its own chunk's products into its partial sums.
+func (tl *tileLower) voltaMMA(ta, tb ir.TileType, a, bb, c []Reg) []Reg {
+	b := tl.b
+	mA, nB, ks := ta.Rows/8, tb.Cols/8, slots(ta.Cols)
+	d := make([]Reg, len(c))
+	copy(d, c)
+	for i := 0; i < mA; i++ {
+		for j := 0; j < nB; j++ {
+			acc := d[(i*nB+j)*8 : (i*nB+j)*8+8]
+			for s := 0; s < ks; s++ {
+				out := make([]Reg, 8)
+				for x := range out {
+					out[x] = b.Reg(F32)
+				}
+				ai, bi := (i*ks+s)*2, (s*nB+j)*2
+				b.Op("mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 %s,{%v,%v},{%v,%v},%s;",
+					regList(out), a[ai], a[ai+1], bb[bi], bb[bi+1], regList(acc))
+				acc = out
+			}
+			copy(d[(i*nB+j)*8:], acc)
+		}
+	}
+	return d
+}
+
+// regList is registers as an operand vector, {r0,r1,...}.
+func regList(rs []Reg) string {
+	var s strings.Builder
+	s.WriteByte('{')
+	for i, r := range rs {
+		if i > 0 {
+			s.WriteByte(',')
+		}
+		s.WriteString(r.String())
+	}
+	s.WriteByte('}')
+	return s.String()
 }
 
 // mma32 is mma over float32 operands: each product is three tf32 ones

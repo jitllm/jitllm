@@ -339,15 +339,17 @@ func (g *devTier) tileMoE() bool {
 // tilesOK reports whether this device lowers the collective tile ops at the
 // 8x8 binary16 shape GemmTile and FlashPrefillTile multiply in -- Metal's
 // simdgroup_matrix, mma.sync on sm_75 and later -- asked once by compiling a
-// probe (backend.LowersTile) instead of naming a backend. It is false once a
-// built tile kernel has been refused (tileOff).
+// probe (backend.LowersTile) instead of naming a backend. A device lowering
+// them in sm_70's quad-pairs (backend.TileQuadPairs) runs these kernels' k of
+// 8 on half its pairs, and GemmVolta is its staged GEMM: it is not asked. It
+// is false once a built tile kernel has been refused (tileOff).
 func (g *devTier) tilesOK() bool {
 	if g.tileCap == 0 {
 		g.tileCap = -1
 		// A device that does not lower them is not a refusal (TileWhy is
 		// what a device said about a kernel it was asked to build): it is
 		// simply not asked.
-		if ok, _ := backend.LowersTile(g.dev, backend.TileShape{M: 8, N: 8, K: 8, Elem: ir.TileF16, Acc: ir.TileF32}); ok {
+		if ok, _ := backend.LowersTile(g.dev, backend.TileShape{M: 8, N: 8, K: 8, Elem: ir.TileF16, Acc: ir.TileF32}); ok && !backend.TileQuadPairs(g.dev) {
 			g.tileCap = 1
 		}
 	}
