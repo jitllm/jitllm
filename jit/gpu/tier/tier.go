@@ -2015,6 +2015,10 @@ type devShared struct {
 	// notComposedWhy is composedBlock's reason for each block and width it
 	// found not the composer's, formatted once.
 	notComposedWhy map[[2]int]string
+	// promptWhy is why promptServed last found a block's prompt form not
+	// the composer's where the block serves: no room, or a form that does
+	// not write over its input.
+	promptWhy partDecline
 	// stages is the rows stages running here, under the GPU's stageMu, and
 	// stageMu is held by the one running (GPU.stageBegin).
 	stages  int

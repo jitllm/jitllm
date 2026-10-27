@@ -50,6 +50,7 @@ const (
 	DeclineExperts
 	DeclineBidir
 	DeclineSessions
+	DeclineOverInput
 	NumDeclines
 )
 
@@ -95,6 +96,7 @@ var declineNames = [NumDeclines]string{
 	DeclineBidir:         "a run of rows attending both ways",
 	DeclineSessions:      "a row whose history the CPU's form does not bound (another model's session, or past its keys)",
 	DeclineISA:           "a CPU the composer's CPU lowering does not emit for (x86-64 below AVX2, FMA and F16C, or arm64)",
+	DeclineOverInput:     "a form whose kernel writing the block's output over its input reads that input",
 }
 
 func (d Decline) String() string {

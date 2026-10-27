@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -324,6 +325,78 @@ var ssmServed = []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-35
 func init() {
 	servedModels = append(servedModels, ssmServed...)
 	promptModels = append(promptModels, ssmServed...)
+}
+
+// overInputModels are the state-space checkpoints whose blocks with no MLP
+// the cards decline by name (DeclineOverInput): the block's last kernel adds
+// the projection to x and writes the output, which the tier binds over x,
+// and a kernel reading x where it writes is not written over it -- its
+// surplus threads are clamped to the last element and the lanes storing an
+// element read it, some after another's store (RULE 13). Served in place,
+// mamba-130m parted from its float reference by 3.3 times the tier's
+// distance and changed under poisoned buffers, falcon-mamba-7B by 80,
+// mamba-codestral went non-finite at its 103rd step, and Nemotron-Nano-9B-v2
+// changed under poisoned buffers.
+var overInputModels = []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
+	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf"}
+
+// TestComposedBlocksDeclineOverInput decodes each overInputModels checkpoint
+// with every block and the head asked of the composer on every device: the
+// blocks whose form would read x where it writes over it are declined by
+// that name and run the tier's kernels, the rest served, every block step
+// counted one or the other, and the logits finite and unchanged under
+// poisoned buffers.
+func TestComposedBlocksDeclineOverInput(t *testing.T) {
+	ran := 0
+	for _, file := range overInputModels {
+		t.Run(file, func(t *testing.T) {
+			path := testmodels.Path(file)
+			if _, err := os.Stat(fixtureSource(path)); err != nil {
+				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
+			}
+			m, err := Open(jlmOf(t, path), noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			ids := m.Vocab.Encode("The capital of France is", true)
+			toks := make([]int32, 24)
+			for i := range toks {
+				toks[i] = int32((int(ids[i%len(ids)])*7 + i) % m.Vocab.Size())
+			}
+			for _, dev := range stepDevices() {
+				t.Run(dev, func(t *testing.T) {
+					parts := tier.ComposedBlock | tier.ComposedHead
+					got, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
+					served, declined, _ := st.ServedPart(tier.ComposedBlock)
+					over := st.BlockDeclines[jit.DeclineOverInput]
+					if over == 0 {
+						t.Fatalf("no block declined as written over its input (%s): the gate selected nothing", declinesOf(st))
+					}
+					if served+declined != len(toks)*m.Cfg.NLayer || declined != over {
+						t.Fatalf("%d block steps served and %d declined (%d over the input) of %d: %s",
+							served, declined, over, len(toks)*m.Cfg.NLayer, declinesOf(st))
+					}
+					poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
+					for i := range got {
+						for _, v := range got[i] {
+							if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+								t.Fatalf("step %d: the logits are not finite", i)
+							}
+						}
+						if !slices.Equal(poisoned[i], got[i]) {
+							t.Fatalf("step %d: with every buffer poisoned the logits change: a kernel reads what nothing wrote", i)
+						}
+					}
+					t.Logf("%d block steps served, %d declined over the input", served, over)
+					ran++
+				})
+			}
+		})
+	}
+	if ran == 0 {
+		t.Fatal("no arm ran")
+	}
 }
 
 // TestComposedBlocksServe decodes dense models with each block served whole

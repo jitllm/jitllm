@@ -8,7 +8,6 @@ package jit
 import (
 	"errors"
 	"fmt"
-	"slices"
 )
 
 // Step is the shape of one step the engine runs: rows a step, the history's
@@ -76,39 +75,6 @@ type Code struct {
 	TileMajor bool
 }
 
-// atElement is each output every live load of buffer bi is at the element
-// of (Binding.AtElement), none where bi is not read.
-func (k *Kernel) atElement(bi int, live map[int]bool) []Operand {
-	b := k.Bufs[bi]
-	if b.Kind != BufIn {
-		return nil
-	}
-	var loads []Node
-	for i := range live {
-		if nd := k.Nodes[i]; nd.Op == OpLoad && nd.Buf == bi {
-			loads = append(loads, nd)
-		}
-	}
-	if len(loads) == 0 {
-		return nil
-	}
-	var out []Operand
-	for _, st := range k.Stores {
-		ob := k.Bufs[st.Buf]
-		if st.Barrier || st.Run || ob.Kind != BufOut || ob.Elem != b.Elem || !sameShape(ob.Shape, b.Shape) || slices.Contains(out, ob.Operand) {
-			continue
-		}
-		at := true
-		for _, nd := range loads {
-			at = at && (nd.Ax != nil && st.Ax != nil && sameInts(nd.Ax, st.Ax) || nd.Ax == nil && st.Ax == nil && nd.A == st.Ix)
-		}
-		if at {
-			out = append(out, ob.Operand)
-		}
-	}
-	return out
-}
-
 // Writes reports whether the kernel writes operand o.
 func (c *Code) Writes(o Operand) bool {
 	for _, b := range c.Binds {
@@ -158,10 +124,6 @@ type Binding struct {
 	// Read is whether a live load of the kernel reads it: a binding a
 	// rewrite left unread is still bound, and is no reader of its storage.
 	Read bool
-	// AtElement is each output every live load of it is at the element
-	// of: a store of the output, of its shape and type, at the load's
-	// coordinates. Such an output may take its storage.
-	AtElement []Operand
 }
 
 // PartPlan is one part of the model on its device: its kernels in launch
@@ -424,8 +386,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 		}
 		for bi, b := range k.Bufs {
 			if b.Kind != BufShared {
-				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut && written[bi], Bytes: b.bytes(), Words: b.Words, Read: read[bi],
-					AtElement: k.atElement(bi, live)})
+				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut && written[bi], Bytes: b.bytes(), Words: b.Words, Read: read[bi]})
 			}
 		}
 		codes = append(codes, PartCode{Code: c, Part: k.Of})

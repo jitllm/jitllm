@@ -15,7 +15,8 @@ import (
 // read at each row's position, and HunyuanOCR's XD-RoPE.
 var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
 	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
-	"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf"}
+	"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
+	"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf"}
 
 // TestComposedCPUBlocksServe runs each model's blocks on the CPU three ways,
 // teacher-forced on one token sequence: on main's kernels, on what the
@@ -125,11 +126,18 @@ func cpuBand(t *testing.T, want, got, ctl [][]float32) (med, worst, widest float
 	return ratios[len(ratios)/2], worst, widest
 }
 
+// cpuTokens is the greedy sequence of n tokens from the model's BOS, or
+// token 1 where it states none: a token the model never trained on may
+// carry a row of zeros (Falcon-H1's >>ABSTRACT<<, token 1), whose logits
+// are zero on every arm and every distance from them 0/0.
 func cpuTokens(t *testing.T, m *Model, n int) []int32 {
 	t.Helper()
 	s := m.NewState(n + 1)
 	defer s.Close()
 	toks := []int32{1}
+	if m.Vocab != nil && m.Vocab.BOS >= 0 {
+		toks[0] = int32(m.Vocab.BOS)
+	}
 	for len(toks) < n {
 		lg, err := s.Forward(toks[len(toks)-1])
 		if err != nil {

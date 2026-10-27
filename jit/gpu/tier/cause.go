@@ -42,14 +42,19 @@ func (g *devTier) compile(k *ir.Kernel) (backend.Kernel, error) {
 	return c, nil
 }
 
-// buildFailed records a form or a lowering that did not build and returns it
-// named.
-func (g *devTier) buildFailed(err error) error {
+// noteFormCause records a form or a lowering that did not build.
+func (g *devTier) noteFormCause() {
 	if formFaultedAsDevice() {
 		g.noteCause(nn.FailFault)
 	} else {
 		g.noteCause(nn.FailBuild)
 	}
+}
+
+// buildFailed records a form or a lowering that did not build and returns it
+// named.
+func (g *devTier) buildFailed(err error) error {
+	g.noteFormCause()
 	if nn.IsBuildError(err) {
 		return err
 	}

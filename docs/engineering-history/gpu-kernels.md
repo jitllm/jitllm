@@ -9030,3 +9030,49 @@ row where the composer's reads two.
   mamba-130m in band: a card form of these widths (B and C 16 rows, dt's
   rank 160 or 48) is the suspect. LFM2-1.2B reads 1.503 against the 1.5
   band on CUDA (0.974 on Vulkan).
+- **A kernel that reads x where it writes the output is not written over
+  x.** The state-space blocks with no MLP (mamba-130m, falcon-mamba-7B,
+  mamba-codestral, Nemotron-H's mixer-only blocks) end in one kernel that
+  adds the projection to x and writes the output, and the tier binds the
+  output over x. The tier had taken such a form in place where the kernel
+  reads x only at the elements it writes (the AtElement binding); that is a
+  RULE 13 read of a buffer written in the same phase: a launch clamps its
+  surplus threads to the last element, and every lane storing an element
+  loads it, some after another lane's store, so the residual is added
+  twice. At the fixtures' widths the projection splits into parts and a
+  combine (x read before the first write) and the gates stayed green; at
+  mamba-130m's (768 over 1536) the form is one reduce+reduce.group+map of
+  24 groups that reads x and writes the output, which is what parted
+  mamba-130m from its float reference by 3.3 times the tier's distance and
+  moved it under poisoned buffers on the V100. The rule is back to x read
+  before the first kernel writing the output; a block whose form is not is
+  declined by name (DeclineOverInput) at decode and at a prompt's rows, its
+  tier kernels readied, and the AtElement binding is gone. The delta rule's
+  scan, the window convolution and the scan mixer's float matvecs were
+  held to the oracle at the real widths first and are right there (1536 and
+  5120 heads of one 16-wide state row, 8 key heads of 128, 1536 and 6144
+  channels of 4 taps, 16 rows of 1536 and 5120, 1536 rows of 48, 5120 of
+  160, worst 9e-6). Falcon-H1-0.5B's CPU control was not NaN: token 1, the
+  gate's first token, is >>ABSTRACT<<, whose embedding row is zeros, so
+  every arm's logits are zero and every distance 0/0; the gate now starts
+  from the model's BOS, and the CPU serves Falcon-H1-0.5B at 1.019 of
+  main's spread (mamba-130m 0.466), each violation leaving the band. Gates:
+  TestAKernelReadingXWhereItWritesIsNotInPlace (9 forms reading x in the
+  writer refused, 3 reading it before written over it; with the rule at
+  lastRead <= firstWrite it fails), TestBindingsSayWhatACodeReadsAndWrites,
+  TestComposedGPURecurrentRuns and TestComposedGPUScanWidths (PTX and
+  SPIR-V), and on the laptop's sm_86 TestComposedBlocksDeclineOverInput
+  (mamba-130m: 576 of 576 block steps declined over the input, the logits
+  finite and unchanged under poisoned buffers), TestDecodeDoesNotAllocate
+  on synth-mamba1, -mamba2 and -nemotronh (whose ragged steps had been
+  refused for the in-place read on sm_86, and on the V100 had formatted a
+  cached form failure every step, 335 allocations a step on Falcon-H1-0.5B:
+  servedFor now states that error once), TestComposedBlocksServe
+  on LFM2-350M (median 1.205) and TestComposedCPUBlocksServe. Falcon-H1-0.5B,
+  served on the V100, reads 0.248 at its worst on sm_86 against a bound of
+  0.156 (median 1.08), and its composed prompt there fails a launch
+  (cuLaunchKernel invalid argument): open. Open: serving those
+  blocks needs an output apart from x and a copy back (one more launch
+  each); Jamba-reasoning-3B (every block has an MLP, so not this) and
+  LFM2-1.2B's 1.503 on CUDA (its arm sits 0.142 from the float reference
+  on both backends at its worst; CUDA's tier 0.091, Vulkan's 0.109).

@@ -2,7 +2,6 @@ package jit
 
 import (
 	"fmt"
-	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -15,12 +14,9 @@ import (
 // and at eight, over float and Q8_0 weights, at several widths -- the add a
 // projection's epilogue, a kernel of its own, or a split's parts into
 // planes and their combine. A binding a code holds but does not read or
-// write says so (Binding.Read, Writes), and an input read only at the
-// elements an output is written at names it (Binding.AtElement): over the
-// mixer's output some form reads x in the code writing the output, at its
-// element, and names it (the output may take x's storage), and over x
-// itself (float, so the projection reads x, not its int8 codes) no code
-// reading x at every element names the output.
+// write says so (Binding.Read, Writes): no code writes x, some forms read it
+// before the code writing the output and some in it, which the tier does
+// not write over x (partForm.inPlace).
 func TestBindingsSayWhatACodeReadsAndWrites(t *testing.T) {
 	form := func(t *testing.T, dev Device, d, k, rows int, ty jlm.Type, mixed bool) (graph.ValueID, graph.ValueID, []Code) {
 		b := graph.New()
@@ -39,7 +35,7 @@ func TestBindingsSayWhatACodeReadsAndWrites(t *testing.T) {
 		}
 		return x, y, codes
 	}
-	before, named, apart, refused := 0, 0, 0, 0
+	before, writer := 0, 0
 	for _, dev := range []Device{{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 1}} {
 		for _, sh := range [][2]int{{64, 64}, {768, 1536}, {2048, 512}} {
 			for _, rows := range []int{1, 8} {
@@ -48,39 +44,37 @@ func TestBindingsSayWhatACodeReadsAndWrites(t *testing.T) {
 						name := fmt.Sprintf("lanes %d %dx%d rows %d %v mixed %v", dev.Lanes, sh[0], sh[1], rows, ty, mixed)
 						x, y, codes := form(t, dev, sh[0], sh[1], rows, ty, mixed)
 						is := func(o Operand, v graph.ValueID) bool { return o.Kind == OperandValue && o.Value == v }
-						lastRead, firstWrite, atWrite := -1, len(codes), false
+						lastRead, firstWrite := -1, len(codes)
 						for i, c := range codes {
 							for _, bd := range c.Binds {
 								if is(bd.Operand, x) && bd.Read {
 									lastRead = i
-									atWrite = slices.ContainsFunc(bd.AtElement, func(o Operand) bool { return is(o, y) })
 								}
 								if is(bd.Operand, y) && bd.Writes {
 									firstWrite = min(firstWrite, i)
+								}
+								if is(bd.Operand, x) && bd.Writes {
+									t.Fatalf("%s: %s writes x, which no op of the graph writes", name, c.Name)
 								}
 							}
 						}
 						switch {
 						case firstWrite == len(codes):
 							t.Fatalf("%s: no code writes the output", name)
-						case mixed && lastRead < firstWrite:
+						case lastRead < 0:
+							t.Fatalf("%s: no code reads x", name)
+						case lastRead < firstWrite:
 							before++
-						case mixed && lastRead == firstWrite && atWrite:
-							named++
-						case mixed:
-							apart++
-						case ty == jlm.TypeF32 && lastRead == firstWrite && atWrite:
-							t.Fatalf("%s: the code writing the output reads float x at every element, and names the output", name)
-						case ty == jlm.TypeF32 && lastRead == firstWrite:
-							refused++
+						case lastRead == firstWrite:
+							writer++
 						}
 					}
 				}
 			}
 		}
 	}
-	if named == 0 || refused == 0 {
-		t.Fatalf("x read in the writer at its element in %d forms, at every element in %d: each must be asked", named, refused)
+	if before == 0 || writer == 0 {
+		t.Fatalf("x read before the output's writer in %d forms, in it in %d: each must be asked", before, writer)
 	}
-	t.Logf("over the mixer the output takes x's storage in %d forms reading x before it, %d reading it at its element, and not in %d; over x the writer reads every element in %d", before, named, apart, refused)
+	t.Logf("x read before the kernel writing the output in %d forms, in it in %d", before, writer)
 }

@@ -107,10 +107,6 @@ type partCode struct {
 	k             backend.Kernel
 	groups, width int
 	geom          jit.Code
-	// atElem is each input and output of the form (partIn's and partOut's
-	// i) the code reads the input only at the elements it writes the
-	// output at (jit.Binding.AtElement).
-	atElem [][2]int
 }
 
 // partInst is one lane's instance of a form: the form's own buffers and
@@ -295,16 +291,8 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 				return nil, fmt.Errorf("%s binds %+v, which the part's call site does not provide", c.Name, o)
 			}
 		}
-		pc := &f.codes[len(f.codes)-1]
 		for j, bd := range c.Binds {
 			args[j].read, args[j].writes = bd.Read, bd.Writes
-			for _, o := range bd.AtElement {
-				for jj, ob := range c.Binds {
-					if args[j].kind == partIn && args[jj].kind == partOut && ob.Operand == o {
-						pc.atElem = append(pc.atElem, [2]int{args[j].i, args[jj].i})
-					}
-				}
-			}
 		}
 		f.args = append(f.args, args)
 	}
@@ -680,6 +668,7 @@ const (
 	partExperts     = jit.DeclineExperts
 	partRecurrent   = jit.DeclineRecurrent
 	partNoWeight    = jit.DeclineNoWeight
+	partOverInput   = jit.DeclineOverInput
 	numPartDeclines = jit.NumDeclines
 )
 
@@ -747,6 +736,14 @@ type servedPart struct {
 // formed: the capture is abandoned and the step issued unrecorded.
 var errServedCold = errors.New("tier: a served part forms outside a capture")
 
+// errFormedEarlier marks a part whose form failed at an earlier step
+// (servedFor), its error stated once.
+var errFormedEarlier = errors.New("did not form earlier")
+
+// errOverInput is a block's form that cannot write its output over its
+// input (partForm.inPlace): the block is declined (partOverInput).
+var errOverInput = errors.New("tier: the composed block reads x in or after the kernel writing its output over it")
+
 // servedFor is the lane's served part of key sk, built by build on its
 // first step and formed through the composer's one keyed cache, its form the
 // device's and its instance the lane's. A submission beside other sessions'
@@ -755,7 +752,9 @@ var errServedCold = errors.New("tier: a served part forms outside a capture")
 func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*servedPart, error) {
 	if sv, ok := g.served[sk]; ok {
 		if sv == nil {
-			return nil, g.buildFailed(fmt.Errorf("the composed %s did not form earlier: %w", partNames[sk.kind], g.formErr[sk]))
+			// Asked again every step: the error stated once, at the failure.
+			g.noteFormCause()
+			return nil, g.formErr[sk]
 		}
 		return sv, nil
 	}
@@ -771,7 +770,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		if g.formErr == nil {
 			g.formErr = map[servedKey]error{}
 		}
-		g.formErr[sk] = err
+		g.formErr[sk] = fmt.Errorf("the composed %s %w: %w", partNames[sk.kind], errFormedEarlier, err)
 		g.LastErr = err.Error()
 		return err
 	}
@@ -1311,8 +1310,10 @@ func attendWindow(gr *graph.Graph) (int, bool) {
 }
 
 // inPlace says the form may write output out over input in: every kernel
-// that reads in launches before the first that writes out, but the first
-// where it reads in only at the elements it writes out at.
+// that reads in launches before the first that writes out. One kernel that
+// reads in at the elements it writes out at is not enough: a launch clamps
+// its surplus threads to the last element, and every lane storing an
+// element may store before another lane reads it, adding twice (RULE 13).
 func (f *partForm) inPlace(in, out int) bool {
 	lastRead, firstWrite := -1, len(f.codes)
 	for i, args := range f.args {
@@ -1325,7 +1326,7 @@ func (f *partForm) inPlace(in, out int) bool {
 			}
 		}
 	}
-	return lastRead < firstWrite || lastRead == firstWrite && slices.Contains(f.codes[lastRead].atElem, [2]int{in, out})
+	return lastRead < firstWrite
 }
 
 // roleWeight is the block's matrix its graph binds under role, nil for one
@@ -1625,7 +1626,7 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 		return nil, nil, err
 	}
 	if !sv.f.inPlace(0, 0) {
-		return nil, nil, fmt.Errorf("tier: the composed block %d reads x after writing its output over it", li)
+		return nil, nil, errOverInput
 	}
 	if R == 1 {
 		return sv, sv.inst, nil
@@ -1711,6 +1712,7 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 // the scratch's instance of it held, both made here where they are not,
 // outside the submission. Callers hold g.mu.
 func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
+	g.promptWhy = partNoRoom
 	if bb.rows < 2 || bb.pkv == nil || g.kvp == nil || !g.rowsForms(bb) ||
 		g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
 		return false
@@ -1722,7 +1724,14 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.dRows, bb.p.MaxSeq,
 		g.kvp.p, bb.rows)
 	if err != nil {
-		g.LastErr = "the composed prompt block: " + err.Error()
+		// A form that failed earlier was named then (servedFor).
+		if !errors.Is(err, errFormedEarlier) {
+			g.LastErr = "the composed prompt block: " + err.Error()
+		}
+		return false
+	}
+	if !sv.f.inPlace(0, 0) {
+		g.LastErr, g.promptWhy = errOverInput.Error(), partOverInput
 		return false
 	}
 	return g.promptInst(bb, sv.f) != nil
@@ -1756,7 +1765,7 @@ func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int) (bool, error) {
 		tier = true
 		why := g.blockServes(l, li, &bs.p, bs, false, true)
 		if why == partServes {
-			why = partNoRoom
+			why = g.promptWhy
 		}
 		if err := g.declineTwins(l, li, bs, why); err != nil {
 			return true, err

@@ -8514,18 +8514,24 @@ func (g *devTier) layersSession(s backend.Session) {
 			var inst *partInst
 			if asked && why == partServes {
 				var serr error
-				if sv, inst, serr = g.servedStep(bs, l, li, p, R); serr != nil {
+				sv, inst, serr = g.servedStep(bs, l, li, p, R)
+				switch {
+				case serr == errOverInput:
+					sv, inst, why = nil, nil, partOverInput
+				case serr != nil:
 					if err == nil {
 						err = serr
 					}
 					continue
 				}
-				if l.linear && !g.bindRec(sv, bs, sid, l) {
+				switch {
+				case why != partServes:
+				case l.linear && !g.bindRec(sv, bs, sid, l):
 					inst, why = nil, partRecurrent
-				} else if inst == nil {
+				case inst == nil:
 					why = partNoRoom
 				}
-				if R > 1 {
+				if R > 1 && sv != nil {
 					sv.rows = nrow
 				}
 			}

@@ -246,6 +246,9 @@ func recurrentRuns(t *testing.T, d backend.Device, dev jit.Device) {
 		{h: 6, kh: 3, dk: 33, dv: 2, tiled: true},
 		{h: 4, kh: 2, dk: 16, dv: 8, additive: true},
 		{h: 40, kh: 1, dk: 16, dv: 1, chans: true, additive: true},
+		{h: 1536, kh: 1, dk: 16, dv: 1, chans: true, additive: true},
+		{h: 5120, kh: 1, dk: 16, dv: 1, chans: true, additive: true},
+		{h: 32, kh: 8, dk: 128, dv: 8, additive: true},
 	} {
 		g := deltaGraphOf(s)
 		fr, err := formRec(d, dev, g, R, map[jlm.Role]jlm.Type{})
@@ -277,7 +280,7 @@ func recurrentRuns(t *testing.T, d backend.Device, dev jit.Device) {
 		}
 		fr.close()
 	}
-	for _, sh := range [][2]int{{2, 3}, {4, 7}, {4, 33}, {3, 64}, {5, 9}} {
+	for _, sh := range [][2]int{{2, 3}, {4, 7}, {4, 33}, {3, 64}, {5, 9}, {4, 1536}, {4, 6144}} {
 		T, C := sh[0], sh[1]
 		b := graph.New()
 		x := b.In("x", C)
@@ -575,4 +578,56 @@ func runConv(fr *recRun, g *graph.Graph, T, C, n int, runs recRuns, chained bool
 		}
 	}
 	return worst, nil
+}
+
+// TestComposedGPUScanWidths forms the selective scan's float matvecs at a
+// real checkpoint's widths on every GPU device present -- B and C's 16 rows
+// off a channel row of 1536 and 5120, dt's bottleneck of 48 and 160 back to
+// the channels -- and holds each to the oracle's compensated dot.
+func TestComposedGPUScanWidths(t *testing.T) {
+	testlock.GPU(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Fatal("no GPU backend on this host: the gate runs on one")
+	}
+	rng := rand.New(rand.NewSource(5))
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			for _, sh := range [][2]int{{16, 1536}, {48, 1536}, {1536, 48}, {16, 5120}, {160, 5120}, {5120, 160}, {16, 128}} {
+				rows, k := sh[0], sh[1]
+				b := graph.New()
+				x := b.In("x", k)
+				b.Out(b.MatVec(x, jlm.RoleSSMXB, rows))
+				fr, err := formRec(d, gpuDevice(d), b.G, 1, map[jlm.Role]jlm.Type{jlm.RoleSSMXB: jlm.TypeF32})
+				if err != nil {
+					t.Fatalf("%dx%d: %v", rows, k, err)
+				}
+				xs, ws := make([]float32, k), make([]float32, rows*k)
+				for i := range xs {
+					xs[i] = float32(rng.NormFloat64())
+				}
+				for i := range ws {
+					ws[i] = float32(rng.NormFloat64() * 0.05)
+				}
+				fr.vals = map[graph.ValueID][]uint32{b.G.In[0]: f32w(xs), b.G.Out[0]: poisoned(rows)}
+				fr.wts = map[jlm.Role][]uint32{jlm.RoleSSMXB: f32w(ws)}
+				if err := fr.launch(); err != nil {
+					fr.close()
+					t.Fatalf("%dx%d: %v", rows, k, err)
+				}
+				got := wf32(fr.vals[b.G.Out[0]])
+				fr.close()
+				worst := 0.0
+				for r := range rows {
+					want := oracle.Dot32(ws[r*k:(r+1)*k], xs)
+					worst = max(worst, math.Abs(float64(got[r]-want)))
+				}
+				t.Logf("%d rows of %d: worst %.3g, %d kernels", rows, k, worst, len(fr.codes))
+				if !(worst < 1e-3) {
+					t.Errorf("%d rows of %d: the composed matvec is %.3g from the oracle", rows, k, worst)
+				}
+			}
+		})
+	}
 }
