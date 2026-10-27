@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/jitllm/jitllm/engine/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -188,5 +189,25 @@ func TestAnSSEErrorFrameIsNamedAndTyped(t *testing.T) {
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "text/event-stream" || w.Header().Get("X-Accel-Buffering") != "no" {
 		t.Fatalf("headers %v: a proxy that buffers defeats the flush", w.Header())
+	}
+}
+
+// TestValidTextMarshals: a completion cut inside a character (its token
+// limit, a lone byte token) reaches the wire, which refuses invalid UTF-8;
+// validText makes it marshal and leaves valid text alone. The cut text
+// itself is the violation.
+func TestValidTextMarshals(t *testing.T) {
+	cut := "caf\xc3"
+	if _, err := proto.Marshal(&v1.CompleteResponse{Text: cut}); err == nil {
+		t.Fatal("a text cut inside a character marshalled: the violation proves nothing")
+	}
+	if _, err := proto.Marshal(&v1.CompleteResponse{Text: validText(cut)}); err != nil {
+		t.Fatalf("validText(%q) = %q does not marshal: %v", cut, validText(cut), err)
+	}
+	if got := validText("caf\u00e9"); got != "caf\u00e9" {
+		t.Fatalf("validText changed valid text: %q", got)
+	}
+	if ev := pbEvent(Event{Kind: EventToken, Token: &Token{Text: cut}}); ev.GetToken().GetText() != validText(cut) {
+		t.Fatalf("a token event carries %q", ev.GetToken().GetText())
 	}
 }

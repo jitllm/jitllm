@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"strings"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 
@@ -93,6 +95,7 @@ func (s *InferenceService) Complete(ctx context.Context, req *connect.Request[v1
 		if len(run.cs[i].calls) > 0 {
 			c.Text = run.cs[i].content
 		}
+		c.Text = validText(c.Text)
 		out.Choices = append(out.Choices, c)
 	}
 	first := out.Choices[0]
@@ -108,13 +111,25 @@ func (s *InferenceService) Cancel(ctx context.Context, req *connect.Request[v1.C
 	return connect.NewResponse(&v1.CancelResponse{WasGenerating: was}), nil
 }
 
+// validText is s as a protobuf string may carry it: a completion's bytes are
+// the tokens', and a reply cut at its token limit -- or a model emitting a
+// lone byte token -- ends inside a UTF-8 sequence, which the wire refuses to
+// marshal. Each invalid byte becomes U+FFFD, as the JSON surfaces' encoder
+// writes it.
+func validText(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "\uFFFD")
+}
+
 func pbEvent(ev Event) *v1.GenerateResponse {
 	switch ev.Kind {
 	case EventStarted:
 		return &v1.GenerateResponse{Event: &v1.GenerateResponse_Started{Started: pbStarted(ev.Started)}}
 	case EventToken:
 		return &v1.GenerateResponse{Event: &v1.GenerateResponse_Token{Token: &v1.GenerateToken{
-			TokenId: ev.Token.ID, Text: ev.Token.Text, Index: int32(ev.Token.Index),
+			TokenId: ev.Token.ID, Text: validText(ev.Token.Text), Index: int32(ev.Token.Index),
 		}}}
 	default:
 		return &v1.GenerateResponse{Event: &v1.GenerateResponse_Finished{Finished: pbFinished(ev.Finished)}}

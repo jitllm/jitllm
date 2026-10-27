@@ -2,10 +2,12 @@ package server
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jitllm/jitllm/internal/testdevices"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -194,4 +196,220 @@ func (gl *groupedLoad) run(t *testing.T, groups int, serial bool) groupedResult 
 	r.groupRounds = lp.stats.groupRounds.Load() - rounds0
 	r.overlaps = gl.lm.gpuTier().Stats().StageOverlaps - overlaps0
 	return r
+}
+
+// TestDecodeGroupsHoldUnderLoad: a model split over two devices serves conc
+// requests at once, prompts long enough to page history alternating with
+// short ones, once with one decode group and once with the groups on (the
+// loop's own count where the steps are one kernel for every row count, two
+// forced elsewhere). Each arm runs the requests two ways: in waves of conc
+// admitted together (holdGates), whose schedule is the same in both arms, so
+// every request's tokens must be the ones it decodes with one group wherever
+// the steps are one kernel for every row count; and as a closed loop of conc
+// clients, each sending its next request as its last ends, as a server under
+// load sees them, where when a request arrives moves which rows share its
+// prompt's steps, so its tokens may part at a near tie and only its answer is
+// required. Every request answers in full, the groups ran grouped steps, and
+// the devices serve a request after each arm.
+//
+// JITLLM_SERVER_GROUP_LOAD is conc,reqs,long,short,gen (default
+// 16,2,3072,384,64, the prompts cut to the model's context).
+func TestDecodeGroupsHoldUnderLoad(t *testing.T) {
+	devs := testdevices.Take(t, 2, "cuda:0,vulkan:1")
+	conc, reqs, long, short, gen := 16, 2, 3072, 384, 64
+	if v := os.Getenv("JITLLM_SERVER_GROUP_LOAD"); v != "" {
+		if _, err := fmt.Sscanf(v, "%d,%d,%d,%d,%d", &conc, &reqs, &long, &short, &gen); err != nil {
+			t.Fatalf("JITLLM_SERVER_GROUP_LOAD=%q: want conc,reqs,long,short,gen: %v", v, err)
+		}
+	}
+	eachBatchModel(t, func(t *testing.T, name string) {
+		gl := loadUnderLoad(t, name, devs, conc, long+gen+1)
+		c := gl.lm.m.Cfg
+		long := min(long, int(c.NCtx)-gen-1)
+		short := min(short, long/2)
+		vocab := uint32(min(c.NVocab-1, 20000))
+		prompt := func(i int) []int32 {
+			n := short
+			if i%2 == 0 {
+				n = long
+			}
+			p := make([]int32, n)
+			x := uint32(i)*2654435761 + 1
+			for j := range p {
+				x ^= x << 13
+				x ^= x >> 17
+				x ^= x << 5
+				p[j] = 1 + int32(x%vocab)
+			}
+			return p
+		}
+		lp := gl.lm.loop
+		invariant := gl.lm.gpuTier().RowsComposed()
+		t.Logf("%d requests at once, %d each way, prompts of %d and %d tokens, %d out; steps one kernel for every row count: %v",
+			conc, reqs, long, short, gen, invariant)
+		one := func(i int) completion {
+			return complete(gl.c, &v1.GenerateRequest{ModelId: "dev", Prompt: ids(prompt(i)...),
+				MaxTokens: int32(gen), IgnoreEos: true})
+		}
+		answers := func(what string, out []completion) [][]int32 {
+			got := make([][]int32, len(out))
+			failed := 0
+			for i, o := range out {
+				switch {
+				case o.err != nil:
+					t.Errorf("%s, request %d: %v", what, i, o.err)
+					failed++
+				case len(o.ids) != gen:
+					t.Errorf("%s, request %d: %d tokens, want %d", what, i, len(o.ids), gen)
+					failed++
+				}
+				got[i] = o.ids
+			}
+			if failed > 0 {
+				t.Fatalf("%s: %d of %d requests failed", what, failed, len(out))
+			}
+			// The devices still serve: a fault a step met leaves them unable to.
+			if o := complete(gl.c, &v1.GenerateRequest{ModelId: "dev", Prompt: ids(prompt(1)...), MaxTokens: 4}); o.err != nil {
+				t.Fatalf("%s: a request after it: %v", what, o.err)
+			}
+			return got
+		}
+		arm := func(groups int) (waves, loop [][]int32, steps int64) {
+			lp.groupsCfg = groups
+			steps0 := lp.stats.groupSteps.Load()
+			s0, t0 := gl.lm.gpuTier().Stats(), time.Now()
+			defer func() {
+				s1 := gl.lm.gpuTier().Stats()
+				t.Logf("groups %d: %s; captures %d, formed at a step %d, lanes %d (waited %d), KV grows %d, evictions %d, page-ins %d, stage overlaps %d",
+					groups, time.Since(t0).Round(time.Millisecond), s1.Captures-s0.Captures, s1.FormedAtStep-s0.FormedAtStep,
+					s1.Lanes, s1.LanesWaited-s0.LanesWaited, s1.KVGrows-s0.KVGrows, s1.KVEvictions-s0.KVEvictions,
+					s1.PageIns-s0.PageIns, s1.StageOverlaps-s0.StageOverlaps)
+			}()
+			out := make([]completion, conc*reqs)
+			for w := range reqs {
+				release := holdGates(t, gl.e, gl.lm)
+				var wg sync.WaitGroup
+				for k := range conc {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						out[w*conc+k] = one(w*conc + k)
+					}()
+				}
+				waitFor(t, "every request to wait for a row", func() bool { return waitingFor(lp) == conc })
+				release()
+				wg.Wait()
+			}
+			waves = answers(fmt.Sprintf("groups %d in waves", groups), out)
+			out = make([]completion, conc*reqs)
+			var wg sync.WaitGroup
+			for k := range conc {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for w := range reqs {
+						out[k*reqs+w] = one(k*reqs + w)
+					}
+				}()
+			}
+			wg.Wait()
+			loop = answers(fmt.Sprintf("groups %d in a closed loop", groups), out)
+			return waves, loop, lp.stats.groupSteps.Load() - steps0
+		}
+		oneW, oneL, oneSteps := arm(1)
+		if oneSteps != 0 {
+			t.Fatalf("one group ran %d grouped step(s)", oneSteps)
+		}
+		groups := 0
+		if !invariant {
+			groups = 2
+		}
+		if v := os.Getenv("JITLLM_SERVER_GROUP_COUNT"); v != "" {
+			if _, err := fmt.Sscanf(v, "%d", &groups); err != nil {
+				t.Fatalf("JITLLM_SERVER_GROUP_COUNT=%q: %v", v, err)
+			}
+		}
+		gotW, gotL, steps := arm(groups)
+		if steps == 0 {
+			t.Fatal("the groups arm ran no grouped step")
+		}
+		parted := func(got, want [][]int32, hold bool) int {
+			n := 0
+			for i := range got {
+				if slices.Equal(got[i], want[i]) {
+					continue
+				}
+				n++
+				j := 0
+				for j < gen && got[i][j] == want[i][j] {
+					j++
+				}
+				if !hold {
+					continue
+				}
+				// A step's attention plan follows its rows' longest history
+				// (pagedKeys), so a group's reduction can differ from one
+				// group's at a near tie: the host, in neither arm, says
+				// whether the two tokens were one.
+				if gap := hostGap(t, gl.lm.m, prompt(i), got[i][:j], got[i][j], want[i][j]); gap > tieMargin {
+					t.Errorf("request %d parts at token %d, %.3f apart on the host: %v in groups, %v in one group",
+						i, j, gap, got[i][j:], want[i][j:])
+				} else {
+					t.Logf("request %d parts at token %d, a tie on the host (%.3f)", i, j, gap)
+				}
+			}
+			return n
+		}
+		t.Logf("%d grouped steps; requests parting from one group's tokens: %d of %d in waves, %d of %d in a closed loop",
+			steps, parted(gotW, oneW, invariant), len(gotW), parted(gotL, oneL, false), len(gotL))
+	})
+}
+
+// loadUnderLoad loads name over devs as jitllmd does, its first half of
+// blocks on devs[0] and the rest on devs[1] (JITLLM_SERVER_GROUP_PLACEMENT
+// names another placement, "auto" the devices' own), every step that can be
+// joint joint, room for conc sessions of maxSeq positions, and requires a
+// session's blocks on both devices.
+func loadUnderLoad(t *testing.T, name string, devs []string, conc, maxSeq int) *groupedLoad {
+	t.Helper()
+	path := modelPath(t, name)
+	o := LoadOptions{Path: path, ModelID: "dev", DeviceIDs: devs, Sessions: conc + 1}
+	switch p := os.Getenv("JITLLM_SERVER_GROUP_PLACEMENT"); p {
+	case "auto":
+	case "":
+		probe := New(Config{Version: "test", NoMemCache: true})
+		lm, err := probe.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: devs})
+		if err != nil {
+			probe.Close()
+			t.Fatalf("loading %s onto %s: %v", name, strings.Join(devs, ","), err)
+		}
+		nb := lm.m.Cfg.NLayer
+		probe.Close()
+		o.Placement = fmt.Sprintf("0-%d=%s,%d-%d=%s", nb/2-1, devs[0], nb/2, nb-1, devs[1])
+		o.PlacementStrict = true
+	default:
+		o.Placement, o.PlacementStrict = p, true
+	}
+	e := New(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: maxSeq, JointSteps: JointAlways,
+		MaxBatchRows: conc, NoOrchestrate: true})
+	t.Cleanup(e.Close)
+	lm, err := e.LoadModel(o)
+	if err != nil {
+		t.Fatalf("loading %s onto %s (%q): %v", name, strings.Join(devs, ","), o.Placement, err)
+	}
+	if lm.loop == nil {
+		t.Fatal("a model loaded onto devices has no step loop")
+	}
+	s, err := e.CreateSession(SessionOptions{ModelID: lm.id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	why, d := s.st.StepRefusal(), lm.gpuTier().PipelineDepth()
+	if err := e.CloseSession(s.id); err != nil {
+		t.Fatal(err)
+	}
+	if why != nil || d != 2 {
+		t.Fatalf("a session's blocks are on %d device(s), want 2 (%q), and its step refusal is %v", d, o.Placement, why)
+	}
+	return &groupedLoad{e: e, lm: lm, c: serveEngine(t, e), n: conc}
 }

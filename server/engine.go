@@ -89,8 +89,9 @@ type Config struct {
 	// decoding rows into when its blocks are on several cards, each group
 	// stepping on its own so the groups fill the cards' pipeline
 	// (batchgroups.go): 0 one group per card holding blocks where the device's
-	// steps are one kernel for every row count, and one group elsewhere; 1 one
-	// group (every decoding row in each step); n at most n.
+	// steps are one kernel for every row count and the groups measure faster
+	// per row token than one group, one group elsewhere; 1 one group (every
+	// decoding row in each step); n at most n.
 	DecodeGroups int
 
 	// ROCm is the ROCm library directory the AMD backend loads from, or empty

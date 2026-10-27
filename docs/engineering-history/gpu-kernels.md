@@ -8916,3 +8916,33 @@ row where the composer's reads two.
   whole, a windowed layer's history). Llama 4's q8 fixture fails the host's
   node-affine allocation arm on the two-socket box (no region ran
   node-affine), a main-path gap left out of the principle lists.
+- **Decode groups under load: a refused group waits for the others, the
+  loop's own count is measured, and a reply cut inside a character
+  marshals.** TestDecodeGroupsHoldUnderLoad serves sixteen requests at
+  once over two devices, prompts of 3072 and 384 tokens alternating, in
+  waves admitted together (tokens held to one group's, a parting allowed
+  only at a host tie under the batch suite's 0.5) and as a closed loop
+  (answers only: under one group alone, two runs of the loop part on 6 of
+  16 stories15M requests, since when a request arrives moves its prompt's
+  step company). On the V100s (Qwen3-30B-A3B Q4_K_M, cards 0 and 7) the
+  head before this ran no grouped step at all under that load and took
+  12m60s against one group's 6m09s, with 2504 KV grows and 231 evictions
+  against 785 and 31: groupCount asks GPU.RowsComposed every iteration,
+  which walks every block's composed prompt instance. Its one-group arm
+  first failed on "string field contains invalid UTF-8": a completion
+  cut at its token limit ends inside a character, which the protobuf
+  wire refuses (validText now writes U+FFFD, as the JSON encoder does).
+  A group whose step the device refused ran its rows alone -- the
+  one-at-a-time path, which is no rows stage -- beside the other groups'
+  stages; it now lands once no group steps. The ab-30b-head A/B's ITL
+  loss at 2 and 4 requests (3.71x, 1.94x) is the arm, not the overlap:
+  one group runs those row counts as the one-at-a-time path (24 and 49 ms,
+  about c x 11.3), while every group's step is the joint arm, lone rows
+  included, which costs about four Forwards at one row on this mixture.
+  The loop's own count is now a measured choice against one group
+  (groupChoice, the joint choice's ABBA probe, one group the incumbent).
+  Open: on stories15M, 9 of 32 wave requests part from one group at host
+  ties (0.003-0.19): a step's attention plan follows its rows' longest
+  history (pagedKeys), so the groups are not bit-identical to one group
+  once prompts differ in length; the illegal memory access of the A/B
+  (-sessions and -max-batch 128) was not reproduced by the gate.

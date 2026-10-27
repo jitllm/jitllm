@@ -32,6 +32,14 @@ import (
 // so there the loop does not group by itself: a row's tokens would move with
 // the rows that share its step. A count the caller forces groups anyway.
 //
+// Where it may, the loop still groups only where groups measure faster per
+// row token than one group (groupChoice, the joint choice's ABBA probe with
+// one group the incumbent): one group runs the measured arm of its own,
+// often the one-at-a-time path at a few rows, while a group's step is always
+// the joint arm, which on a mixture costs several Forwards at one row
+// (Qwen3-30B-A3B on two V100s: 90 ms a token in two groups of one row, where
+// one group read 24).
+//
 // Only decoding is grouped. Admission, the room check and a prompt's chunks
 // stay the loop's, one per model: a request waiting for a row, a prompting
 // row, a move a session asked for, a refused step or the loop stopping ends
@@ -47,6 +55,8 @@ type decGroup struct {
 	out   [][]float32
 	err   error
 	t0    time.Time
+	// steps is how many steps the group took in this round.
+	steps int
 	// start hands the worker a step; it is closed with the loop.
 	start chan struct{}
 }
@@ -99,6 +109,36 @@ func (lp *stepLoop) groupCount() int {
 	return min(n, decoding)
 }
 
+// grouping says whether an iteration's rows decoding rows step in decode groups,
+// given groupCount found more than one: a count the caller forced
+// always does, and the loop's own count only where the measured choice
+// (groupChoice) found groups faster per row token than one group, its
+// incumbent -- a group's step on the tier can cost more than its share of one
+// group's (a mixture's joint step at one row against the one-at-a-time path),
+// and groups must not cost a request its speed.
+func (lp *stepLoop) grouping(rows int) bool {
+	if lp.groupsCfg > 1 {
+		return true
+	}
+	return !lp.groupChoice.pick(rows)
+}
+
+// decodeGroupedTimed is decodeGrouped for the loop's own count, timed for
+// groupChoice: while its row count is probed, each group takes a choice's run
+// of steps (jointRun) and the time per row token is what it observes.
+func (lp *stepLoop) decodeGroupedTimed(n, rows int) {
+	limit := 0
+	if lp.groupsCfg <= 1 && !lp.groupChoice.settled(rows) {
+		limit = jointRun
+	}
+	r0, t0 := lp.stats.rowsStepped.Load(), time.Now()
+	lp.decodeGrouped(n, limit)
+	if stepped := lp.stats.rowsStepped.Load() - r0; stepped > 0 && lp.groupsCfg <= 1 {
+		// observe takes a step's time and divides it by its rows.
+		lp.groupChoice.observe(rows, false, time.Since(t0)*time.Duration(rows)/time.Duration(stepped))
+	}
+}
+
 // admissionWaits reports a request waiting that the loop could admit now --
 // a free row -- or by parking a row (a fairness level above 0).
 func (lp *stepLoop) admissionWaits() bool {
@@ -117,9 +157,9 @@ func (s *Session) movePending() bool {
 }
 
 // decodeGrouped deals the decoding rows round robin into n groups and steps
-// each on its own until something ends grouped decoding, then lets every
-// group land.
-func (lp *stepLoop) decodeGrouped(n int) {
+// each on its own until something ends grouped decoding, or each took limit
+// steps (0 for no limit), then lets every group land.
+func (lp *stepLoop) decodeGrouped(n, limit int) {
 	if lp.landed == nil {
 		lp.landed = make(chan *decGroup, model.MaxStepRows)
 	}
@@ -138,6 +178,7 @@ func (lp *stepLoop) decodeGrouped(n int) {
 	lp.stats.groupRounds.Add(1)
 	busy, drain := 0, false
 	for _, g := range gs {
+		g.steps = 0
 		if lp.launch(g) {
 			busy++
 		}
@@ -145,12 +186,24 @@ func (lp *stepLoop) decodeGrouped(n int) {
 	for busy > 0 {
 		g := <-lp.landed
 		busy--
+		if g.err != nil && !g.advanced() {
+			// Its rows run alone, which is the one-at-a-time path, once no
+			// other group's step is on the devices.
+			lp.refusedGroups = append(lp.refusedGroups, g)
+			drain = true
+			continue
+		}
 		lp.land(g)
 		drain = drain || lp.groupsDrain(g)
-		if !drain && lp.launch(g) {
+		if !drain && (limit == 0 || g.steps < limit) && lp.launch(g) {
 			busy++
 		}
 	}
+	for _, g := range lp.refusedGroups {
+		lp.land(g)
+	}
+	clear(lp.refusedGroups)
+	lp.refusedGroups = lp.refusedGroups[:0]
 	lp.post.wait()
 	for _, g := range gs {
 		clear(g.rows)
@@ -186,6 +239,7 @@ func (lp *stepLoop) launch(g *decGroup) bool {
 	lp.stats.maxRows.Store(max(lp.stats.maxRows.Load(), int32(len(units))))
 	lp.stats.maxSessions.Store(max(lp.stats.maxSessions.Load(), int32(len(units))))
 	g.t0 = time.Now()
+	g.steps++
 	if lp.serialGroups {
 		g.out, g.err = model.StepJoint(g.runs)
 		lp.landed <- g
@@ -197,18 +251,16 @@ func (lp *stepLoop) launch(g *decGroup) bool {
 
 // land moves g's rows on by the step its worker ran. A step the device
 // refused before any row advanced runs its rows alone, as stepJoint's does,
-// and the refusal ends grouped decoding until the rows change.
+// and the refusal ends grouped decoding until the rows change. Alone a row
+// runs the one-at-a-time path, which is no rows stage (tier.GPU.stageBegin),
+// so decodeGrouped lands such a group only once no other group steps.
 func (lp *stepLoop) land(g *decGroup) {
 	defer func() {
 		clear(g.runs)
 		g.runs, g.out, g.err = g.runs[:0], nil, nil
 	}()
 	if g.err != nil {
-		advanced := false
-		for _, u := range g.units {
-			advanced = advanced || u.r.s.st.RecurrenceAdvanced()
-		}
-		if advanced {
+		if g.advanced() {
 			for _, u := range g.units {
 				lp.finish(u.r, FinishError, "", g.err)
 			}
@@ -239,6 +291,17 @@ func (lp *stepLoop) land(g *decGroup) {
 	for i, u := range g.units {
 		lp.ran(u, g.out[i])
 	}
+}
+
+// advanced reports whether a row of g's failed step advanced its recurrent
+// state, so running its tokens again would apply them twice.
+func (g *decGroup) advanced() bool {
+	for _, u := range g.units {
+		if u.r.s.st.RecurrenceAdvanced() {
+			return true
+		}
+	}
+	return false
 }
 
 // groupsDrain reports that grouped decoding ends: no group starts again once

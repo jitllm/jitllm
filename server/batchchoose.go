@@ -184,6 +184,18 @@ func median(v []time.Duration) time.Duration {
 	return v[len(v)/2]
 }
 
+// settled reports whether the choice for a step of n rows stands, rather
+// than being probed.
+func (c *jointChoice) settled(n int) bool {
+	if c.mode != JointMeasured {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	a := c.per[c.bucket(n)]
+	return a != nil && a.settled
+}
+
 // probed is the steps run so far while their bucket was probing.
 func (c *jointChoice) probed() int {
 	c.mu.Lock()

@@ -80,6 +80,10 @@ type stepLoop struct {
 	// choice says, per row count, whether a decode step runs joint or one
 	// session after another (batchchoose.go).
 	choice *jointChoice
+	// groupChoice says, per decoding row count, whether the loop's own decode
+	// groups (Config.DecodeGroups 0) step those rows or one group does: the
+	// same measured choice, one group its incumbent (batchgroups.go).
+	groupChoice *jointChoice
 
 	// budget is how many prompt tokens a step carries beside decoding rows
 	// (stepBudget).
@@ -133,12 +137,14 @@ type stepLoop struct {
 
 	// groupsCfg is Config.DecodeGroups; groups the decode groups' long-lived
 	// workers, made as a model first needs them, and landed where each tells
-	// the loop its step is done (batchgroups.go). serialGroups, false but in
-	// a gate's violation, runs the groups' steps one after another.
-	groupsCfg    int
-	groups       []*decGroup
-	landed       chan *decGroup
-	serialGroups bool
+	// the loop its step is done (batchgroups.go); refusedGroups those whose
+	// step the device refused, held until no group steps. serialGroups, false
+	// but in a gate's violation, runs the groups' steps one after another.
+	groupsCfg     int
+	groups        []*decGroup
+	landed        chan *decGroup
+	refusedGroups []*decGroup
+	serialGroups  bool
 
 	stats batchCounters
 }
@@ -217,6 +223,7 @@ func newStepLoop(e *Engine, lm *LoadedModel) *stepLoop {
 		width:       batchWidth(e.cfg.MaxBatchRows),
 		promptChunk: e.cfg.PromptChunk,
 		choice:      newJointChoice(e.cfg.JointSteps),
+		groupChoice: newJointChoice(JointMeasured),
 		budget:      newStepBudget(e.cfg.StepPromptTokens, e.cfg.PromptChunk, e.cfg.StepCost),
 		fair:        fairLevel(e.cfg.Fairness),
 		groupsCfg:   e.cfg.DecodeGroups,
@@ -666,9 +673,12 @@ func (lp *stepLoop) iterate() {
 			r.s.serveMove(false)
 		}
 	}
+	grouped := 0
 	if n := lp.groupCount(); n > 1 {
-		lp.decodeGrouped(n)
-		return
+		if grouped = len(lp.rows); lp.grouping(grouped) {
+			lp.decodeGroupedTimed(n, grouped)
+			return
+		}
 	}
 	units := lp.decodeUnits()
 	decoding := len(units)
@@ -717,6 +727,9 @@ func (lp *stepLoop) iterate() {
 	lp.budget.observe(decoding, prompt, d)
 	if decoding > 0 {
 		lp.stepNs = ewma(lp.stepNs, float64(d))
+	}
+	if grouped > 0 {
+		lp.groupChoice.observe(grouped, true, d)
 	}
 	lp.post.wait()
 	lp.sealPrompts()
