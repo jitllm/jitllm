@@ -23,7 +23,7 @@ import (
 // turn. Every arm runs on one load, so the device's tuners chose once for all
 // of them.
 //
-// The loop groups by itself (DecodeGroups 0) only where the tier's steps are
+// The loop groups by itself (DecodeGroups -1) only where the tier's steps are
 // one kernel for every row count (tier.GPU.RowsComposed); elsewhere the arm
 // must not group at all, and the forced arms, whose tokens then move with
 // their step's rows, log where they part instead of holding them equal.
@@ -44,6 +44,11 @@ func TestBatchDecodeGroupsKeepTheTokens(t *testing.T) {
 		if one.groupSteps != 0 {
 			t.Fatalf("one group ran %d grouped step(s)", one.groupSteps)
 		}
+		// The default groups nothing until the load gate passes
+		// (TestDecodeGroupsHoldUnderLoad).
+		if d := gl.run(t, 0, false); d.groupSteps != 0 {
+			t.Fatalf("the default ran %d grouped step(s)", d.groupSteps)
+		}
 		invariant := gl.lm.gpuTier().RowsComposed()
 		t.Logf("the steps are one kernel for every row count: %v", invariant)
 		for _, arm := range []struct {
@@ -51,14 +56,14 @@ func TestBatchDecodeGroupsKeepTheTokens(t *testing.T) {
 			groups int
 			serial bool
 		}{
-			{"a group per card", 0, false},
+			{"a group per card", -1, false},
 			{"two groups forced", 2, false},
 			{"a group per row", n, false},
 			{"groups forced serial", 2, true},
 		} {
 			t.Run(arm.what, func(t *testing.T) {
 				got := gl.run(t, arm.groups, arm.serial)
-				if arm.groups == 0 && !invariant {
+				if arm.groups < 0 && !invariant {
 					if got.groupSteps != 0 {
 						t.Fatalf("%d grouped step(s) on steps whose kernels follow the row count", got.groupSteps)
 					}
@@ -320,7 +325,7 @@ func TestDecodeGroupsHoldUnderLoad(t *testing.T) {
 		if oneSteps != 0 {
 			t.Fatalf("one group ran %d grouped step(s)", oneSteps)
 		}
-		groups := 0
+		groups := -1
 		if !invariant {
 			groups = 2
 		}

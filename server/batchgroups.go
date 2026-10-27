@@ -71,10 +71,11 @@ func (lp *stepLoop) groupWorker(g *decGroup) {
 }
 
 // groupCount is how many groups this iteration's decoding rows step in: 1,
-// today's one joint step, unless every row is decoding on a model whose
-// blocks are on several cards and nothing waits for the loop.
+// today's one joint step, unless the loop was asked to group (Config.DecodeGroups
+// -1 or above 1), every row is decoding on a model whose blocks are on several
+// cards and nothing waits for the loop.
 func (lp *stepLoop) groupCount() int {
-	if lp.groupsCfg == 1 || (lp.refused && lp.refusedFor == lp.shape) {
+	if lp.groupsCfg == 0 || lp.groupsCfg == 1 || (lp.refused && lp.refusedFor == lp.shape) {
 		return 1
 	}
 	gpu := lp.lm.gpuTier()

@@ -88,10 +88,11 @@ type Config struct {
 	// DecodeGroups is how many groups the step loop splits a model's
 	// decoding rows into when its blocks are on several cards, each group
 	// stepping on its own so the groups fill the cards' pipeline
-	// (batchgroups.go): 0 one group per card holding blocks where the device's
-	// steps are one kernel for every row count and the groups measure faster
-	// per row token than one group, one group elsewhere; 1 one group (every
-	// decoding row in each step); n at most n.
+	// (batchgroups.go): 0 or 1 one group (every decoding row in each step);
+	// -1 one group per card holding blocks where the device's steps are one
+	// kernel for every row count and the groups measure faster per row token
+	// than one group, one group elsewhere; n at most n. One group is the
+	// default until TestDecodeGroupsHoldUnderLoad passes on two cards.
 	DecodeGroups int
 
 	// ROCm is the ROCm library directory the AMD backend loads from, or empty
