@@ -217,7 +217,8 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	for S < s.Max && E*S < 2*slots && K%(s.Block*S*2) == 0 && min(max(32*S*2, 128), 1024)*T <= splitShared {
 		S *= 2
 	}
-	g, ok := splitTile(n, S)
+	G := min(max(32*S, 128), 1024)
+	g, ok := splitTile(n, S, G)
 	if !ok {
 		return nil, false
 	}
@@ -228,7 +229,7 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	if !ok {
 		return []*Kernel{g}, true
 	}
-	f, ok := splitTile(u, S)
+	f, ok := splitTile(u, S, fewGroup(G, S, E, d))
 	if !ok {
 		return []*Kernel{g}, true
 	}
@@ -255,9 +256,22 @@ func untiled(n *Kernel) (*Kernel, bool) {
 	return m, true
 }
 
+// fewGroup is the workgroup of a form for few rows: the tiled form's G
+// threads, halved while a row's E elements fill fewer workgroups than the
+// device has multiprocessors, down to one warp. Its segments stay S, so a
+// row's sums are the tiled form's; only how many elements a workgroup holds
+// moves.
+func fewGroup(G, S, E int, d Device) int {
+	for d.Units > 0 && E*S/G < d.Units && G/2 >= 32 && G/2 >= S && E%(G/2/S) == 0 {
+		G /= 2
+	}
+	return G
+}
+
 // splitTile is n, whose threads each sum a tile of n.Tile rows (one where
-// untiled), split in S segments within a workgroup (groupSplitRows).
-func splitTile(n *Kernel, S int) (*Kernel, bool) {
+// untiled), split in S segments within a workgroup of G threads
+// (groupSplitRows).
+func splitTile(n *Kernel, S, G int) (*Kernel, bool) {
 	T := n.Tile
 	if len(n.Stores) != T || n.TileFirst == 0 || n.TileBase == 0 {
 		return nil, false
@@ -268,7 +282,6 @@ func splitTile(n *Kernel, S int) (*Kernel, bool) {
 	}
 	K, U := n.Loops[c].Trip, n.Space[0]
 	E := n.Elements() / U
-	G := min(max(32*S, 128), 1024)
 	if S == 1 || G%S != 0 || E%(G/S) != 0 || K%S != 0 || G*T > splitShared {
 		return nil, false
 	}
