@@ -2637,6 +2637,11 @@ func (d *devTier) stats() Stats {
 		}
 	}
 	s.ScratchBytes, s.ReservedPrompt, s.ReservedStep = d.scratch, d.promptW, d.stepW
+	// Where the composer runs a ragged step in the reserved width, the step's
+	// reservation is that width, its per-row logits with it (reserveScratch).
+	if bb := d.bbs[d.promptW]; d.stepW == 0 && d.StepRows > 0 && bb != nil && bb.ragLogits != nil {
+		s.ReservedStep = d.promptW
+	}
 	s.TowerRows = d.visCap
 	s.Allocated, s.RoundingBytes = uint64(d.allocated()), d.rounding
 	s.BlockForms = append([]int(nil), d.blockForms...)

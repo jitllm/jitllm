@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // One physical device enumerated by two backends is one device. Counting a
@@ -271,13 +272,13 @@ func TestAnExplicitVulkanSpecStillOpensVulkan(t *testing.T) {
 	}
 	idx := -1
 	for _, in := range infos {
-		if in.Compute && !in.Software {
+		if in.Compute && !in.Software && testdevices.Has(t, "vulkan", in.Index) {
 			idx = in.Index
 			break
 		}
 	}
 	if idx < 0 {
-		t.Skip("every Vulkan device here is a software rasteriser or has no compute queue")
+		t.Skip("every Vulkan device here the selection allows is a software rasteriser or has no compute queue")
 	}
 	spec := fmt.Sprintf("vulkan:%d", idx)
 	es, err := ParseDevices(spec)

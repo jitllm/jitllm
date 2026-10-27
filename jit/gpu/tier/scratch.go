@@ -307,9 +307,14 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 	// Where the composer serves a ragged step's rows, they run in the
 	// reserved width at the step's own count (rowsComposed): the server's
 	// step width is a floor on it, not a scratch and a form of its own.
+	// Its per-row logits are the reserved width's too, reserved with it, as
+	// the tier's own step width reserves them: asked for at the first step
+	// they come from a card the blocks filled.
+	rowsHead := false
 	if g.Composed&ComposedBlock != 0 && !g.ComposedWidths {
 		if g.StepRows > 0 {
 			want = max(want, roundUp(min(g.StepRows, batchWidth), 8))
+			rowsHead = true
 		}
 	} else if sw := g.stepRows(); sw > 0 && g.stepW != sw {
 		if g.prepBatch(sw) && g.reserveRowsHead(g.bbs[sw], p) && g.reservePaged(g.bbs[sw]) && g.room(need) {
@@ -324,7 +329,7 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 		return
 	}
 	for w := want; w >= batchGrain; w = w / 2 / batchGrain * batchGrain {
-		if g.prepBatch(w) && g.reservePaged(g.bbs[w]) && g.room(need) {
+		if g.prepBatch(w) && g.reservePaged(g.bbs[w]) && (!rowsHead || g.reserveRowsHead(g.bbs[w], p)) && g.room(need) {
 			g.promptW = w
 			return
 		}
