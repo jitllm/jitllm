@@ -648,6 +648,17 @@ func (c *Config) LayerKind(i int) jlm.LayerKind {
 // Hybrid reports whether any layer is recurrent.
 func (c *Config) Hybrid() bool { return len(c.LayerKinds) != 0 }
 
+// Attends reports whether any layer attends: none does in plain Mamba, whose
+// one placeholder head is as wide as the embedding.
+func (c *Config) Attends() bool {
+	for i := range c.NLayer {
+		if c.LayerKind(i).Attends() {
+			return true
+		}
+	}
+	return false
+}
+
 // ChanDecay reports that the linear blocks run Kimi Delta Attention rather
 // than qwen3next's gated delta rule: the state decays at a rate per channel
 // instead of one per head, and both gates come off a low-rank bottleneck. It is

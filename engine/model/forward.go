@@ -1271,6 +1271,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		// Gemma 4's; the block's own geometry is planFor's.
 		GeomSplit: c.GeomSplit(), HeadDimSWA: c.HeadDimSWA, NKVHeadSWA: c.NKVHeadSWA,
 		NRotSWA: c.NRotSWA, VNorm: c.VNorm,
+		NoAttention: !c.Attends(),
 	}
 	s.plan, s.ldCand = p, ld
 	hi := s.hi

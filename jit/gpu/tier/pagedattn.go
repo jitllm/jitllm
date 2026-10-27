@@ -487,6 +487,13 @@ func (g *devTier) pagedBuild(bs *blockScratch, plan kernels.DecodePlan) (*pagedV
 	}
 	s := plan.Shape
 	v := &pagedVariant{plan: plan}
+	// No block attends: the placeholder head is the embedding's width
+	// (falcon-mamba-7B's 4096, which FlashDecodeKV's PTX does not compile at),
+	// and nothing launches the variant.
+	if bs.p.NoAttention {
+		pg.vars[plan] = v
+		return v, nil
+	}
 	fail := func(err error) (*pagedVariant, error) {
 		v.close()
 		return nil, fmt.Errorf("paged attention (%s, %d split(s)): %w", plan.Path, s.Splits, err)

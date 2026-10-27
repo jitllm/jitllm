@@ -1113,6 +1113,9 @@ type LayerPlan struct {
 	// mixer layer): it ends at the first residual add, and its FFN weights,
 	// norm and kernels are absent.
 	NoFFN bool
+	// NoAttention says no block of the model attends (plain Mamba): its
+	// attention geometry is a placeholder, and a device builds no attention.
+	NoAttention bool
 }
 
 // RecurrentPlan is a linear-attention block's geometry. Every field is zero for
