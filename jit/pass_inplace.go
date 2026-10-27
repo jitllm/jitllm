@@ -2,11 +2,12 @@ package jit
 
 // InPlace stores a value not already over its own input over an input the
 // kernel reads at the element it writes, of the same shape and type, that nothing reads after: no later
-// kernel, and no later loop of this one nor this loop at another element.
-// The output takes the input's storage, in the kernel and in every later
-// kernel that reads it, each head's copy of it too. In a graph whose inputs
-// and outputs are apart (Request.Apart), an output keeps its own storage
-// and no value takes an input's: each is its caller's buffer.
+// kernel, and no later loop of this one nor this loop at another element;
+// a graph's output only a graph input's. The output takes the input's storage,
+// in the kernel and in every later kernel that reads it, each head's copy of it
+// too. In a graph whose inputs and outputs are apart (Request.Apart), an output
+// keeps its own storage and no value takes an input's: each is its caller's
+// buffer.
 type InPlace struct{}
 
 func (InPlace) Name() string { return "inplace" }
@@ -36,6 +37,13 @@ func (p InPlace) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 					continue
 				}
 				if k.Apart && b.Operand.Kind == OperandValue && !writtenBy(out[:i], b.Operand) && !k.writes(b.Operand) {
+					continue
+				}
+				// A graph's output is stored where its caller binds it: it
+				// takes only an input's storage, which the call site may bind
+				// to the same place (a block's residual), never a value the
+				// form made (a head's logits after its projection).
+				if ob.Operand.Out && (b.Operand.Temp || !callerHeld(out, b.Operand)) {
 					continue
 				}
 				if !readLater(out[i+1:], b.Operand) && (len(k.Stores) == 1 || !k.readsAfter(b.Operand, st)) {
@@ -127,6 +135,21 @@ func readLater(ks []*Kernel, o Operand) bool {
 			if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand == o {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// callerHeld reports whether operand o is the caller's: the first kernel of
+// ks to touch it reads it, so no kernel made it.
+func callerHeld(ks []*Kernel, o Operand) bool {
+	for _, k := range ks {
+		one := []*Kernel{k}
+		if readLater(one, o) {
+			return true
+		}
+		if writtenBy(one, o) {
+			return false
 		}
 	}
 	return false
