@@ -316,6 +316,7 @@ func (e *Engine) pool(lm *LoadedModel, st *model.State) bool {
 	}
 	st.SetPrefillInterrupt(nil)
 	st.Reset()
+	st.GiveBackHistory()
 	// The store is attached per request (useStore); an idle State holds none.
 	st.SetKVStore(nil)
 	st.SetCacheKey("")

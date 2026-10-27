@@ -3554,6 +3554,24 @@ func (s *State) lowPos() int {
 // SeqPos is row i's position. For a single-sequence session it is Pos().
 func (s *State) SeqPos(i int) int { return s.bpos[i] }
 
+// GiveBackHistory gives the pages a reset State still holds on its devices
+// back to their pools: Reset only rewinds the position, and its next prompt
+// releases them as it starts writing. An idle State -- a server's pooled one
+// -- holding a finished request's history keeps that room from every other
+// session: a scheduler admitting by the devices' free room (tier.GPU.KVRoom)
+// then admitted one row at a time once a round of requests had ended
+// (Qwen3-30B-A3B over two V100s at 64 requests: 105 rows a step in the first
+// round, 5 in the next). A State that has run since its Reset keeps its
+// history.
+func (s *State) GiveBackHistory() {
+	if s.pos != 0 || s.nseq != 1 || s.ld == nil {
+		return
+	}
+	if t, ok := s.ld.(nn.KVTrimmer); ok {
+		t.TrimKV(0)
+	}
+}
+
 // Reset clears the session without reallocating.
 //
 // It clears the pages and, on a hybrid, the recurrent summary, not only the
