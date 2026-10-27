@@ -9165,8 +9165,11 @@ row where the composer's reads two.
   1.503 on CUDA is no block's either: the composed arm sits 0.142/0.143 from
   the float reference on both backends, CUDA's tier closer (0.091 against
   Vulkan's 0.109), and composing 4, 8, 12 and 16 leading blocks reads 1.282,
-  1.434, 1.505 and 1.503 (open; main's CUDA matvecs fuse their Fma, SPIR-V
-  does not). TestSSMFamiliesOnEveryDevice's three red fixtures were gates
+  1.434, 1.505 and 1.503; shadowed on the tier's own input every composed
+  block sits at most 2.9e-04 from the tier where the tier sits 5.7e-04 to
+  2.6e-03 from the float reference, alike on both backends: amplification
+  of a rounding a tenth of the tier's own, still past the band (open).
+  TestSSMFamiliesOnEveryDevice's three red fixtures were gates
   that reached main alone: synth-lfm2moe's selection bias and router score
   and Mamba-1's dt/B/C norms were taken out of the model's layers and
   config, which the front end does not read; with the container restated

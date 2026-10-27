@@ -208,9 +208,11 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 // tier that sits closer (0.091, Vulkan's 0.109). No block carries it: with
 // the first 4, 8, 12 and 16 blocks composed CUDA reads 1.282, 1.434, 1.505
 // and 1.503, the last 4, 8 and 12 1.278, 1.215 and 1.186, the head alone
-// 1.000. Main's CUDA matvecs lower their Fma to fma.rn, Vulkan's to a
-// multiply and an add; whether the composed forms lose that on CUDA is the
-// next thing to measure.
+// 1.000. Shadowed on the tier's own input, every composed block sits at most
+// 2.9e-04 from the tier's output (two of them to 5e-13) where the tier
+// sits 5.7e-04 to 2.6e-03 from the float reference, alike on both
+// backends: a rounding a tenth of the tier's own, amplified through the
+// sixteen blocks to a trajectory CUDA's tier happens to keep closer.
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
