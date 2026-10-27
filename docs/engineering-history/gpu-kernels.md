@@ -9208,9 +9208,14 @@ row where the composer's reads two.
   long-prompt room (gpt-oss-20b on one V100, TestLongPromptHasHistoryRoom):
   two 2051-token prompts at once are refused where main's path serves them,
   budget used 14781 MiB against 12255 at a reserved width of 64 rows against
-  512 (Stats.ComposedBytes counts the instances): the instances already
-  narrowed the reserved width to 64 rows and leave the pool 176 MiB where
+  512 (Stats.ComposedBytes: 2415 MiB of composed instances, with the
+  reserved width already narrowed to 64 rows), and the pool 176 MiB where
   main's grows to 468, and a prompt mid-prefill has no written page to
   evict, so two at once find none. At 128 rows and 129 sessions (stories15M,
   laptop) every request answers in every arm, and groups part from one group
-  in 23 of 128 waves where one group parts from itself in 25.
+  in 23 of 128 waves where one group parts from itself in 25. On
+  Qwen3-30B-A3B over two V100s (16 requests, prompts of 3072 and 384, 64
+  out) groups part in 13 of 32 waves and one group from itself in 13 of 32,
+  the same requests, ten of them at the same token and host gap (request 10
+  in the "23341 2529" loop request 24 fell into before): the parting MP1b
+  read as a groups fault is the schedule's path switch.
