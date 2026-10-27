@@ -18,12 +18,8 @@ func init() {
 	}
 	ssmFamilyViolations["synth-lfm2moe"] = func(device bool) []c6Violation {
 		return append(lfm2Violations(device),
-			c6Violation{"no selection bias", func(m *Model) func() {
-				return eachLayer(m, func(l *layer) { l.expProbsB = nil })
-			}},
-			c6Violation{"softmax for the sigmoid router", func(m *Model) func() {
-				return cfgMut(m, func(c *Config) { c.ExpertSigmoid = false })
-			}})
+			c6Violation{"no selection bias", noSelectionBias},
+			c6Violation{"softmax for the sigmoid router", routerSwap(false)})
 	}
 	// The mixture pages under TestSSMFamiliesPageWithTheSameAnswer.
 	principleFixtures = append(principleFixtures, "synth-lfm2.gguf")

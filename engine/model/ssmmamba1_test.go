@@ -1,6 +1,10 @@
 package model
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // Mamba-1 (jlm.LayerMamba1) on the Mamba-2 harness (ssmfamily_test.go): plain
 // Mamba, FalconMamba and Jamba, each built by its own transformers class
@@ -109,7 +113,9 @@ var mamba1Violations = []c6Violation{
 // ones, FalconMamba's of ones).
 var mamba1NormViolations = []c6Violation{
 	{"no dt/B/C norms", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) { l.ssmDtNorm, l.ssmBNorm, l.ssmCNorm = nil, nil, nil })
+		undoL := eachLayer(m, func(l *layer) { l.ssmDtNorm, l.ssmBNorm, l.ssmCNorm = nil, nil, nil })
+		undoR := dropStored(m, jlm.RoleSSMDtNorm, jlm.RoleSSMBNorm, jlm.RoleSSMCNorm)
+		return func() { undoR(); undoL() }
 	}},
 }
 
