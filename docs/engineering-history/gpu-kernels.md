@@ -9145,3 +9145,35 @@ row where the composer's reads two.
   synth-nemotronhmoe-q8 serves but its gate cannot discriminate
   (one position off 2.6, ten times the arm's worst 0.574 wanted), and stays
   in the over-input gate alone.
+- **Zero embeddings, violations that reached main alone, and no decline over
+  the input.** mamba-codestral's "non-finite" logits at step 13 and every
+  sixth after were exactly zero in every arm (tier, float reference and
+  composed): the serving gate's ids 19, 25, 31, ... are among the 277 rows
+  of its Q4_K_M embedding that store zeros, and silu of a zero gate zeroes
+  every Mamba-2 block's output, so the distance read 0/0. The gate's ids now
+  take the next id with a stored row (19 of 140 moved); codestral serves at
+  a median 1.048 of the tier's distance on CUDA and 0.961 on Vulkan.
+  synth-nemotronhmoe-q8's CUDA arm sits 0.574 from CUDA's tier at a router
+  near-tie, so one position off (2.6) cannot be ten times it; the gate holds
+  one position off to the band for it (bandSeen) and it leaves (a median
+  1850 to 2220 of the tier's distance); served at 1.014 and 1.000.
+  falcon-mamba-7B's Vulkan excursion (0.029 at one step against 4 x
+  0.00291) is a sensitive step, not a block: composing the first 48, the
+  last 32, the first 32, the first 16 and all 64 blocks moves the 132nd
+  step on CUDA to 0.0236, 0.0184, 0.0015, 0.0006 and 0.0007 (the tier
+  0.00066); it serves apart and stays out of the served list. LFM2-1.2B's
+  1.503 on CUDA is no block's either: the composed arm sits 0.142/0.143 from
+  the float reference on both backends, CUDA's tier closer (0.091 against
+  Vulkan's 0.109), and composing 4, 8, 12 and 16 leading blocks reads 1.282,
+  1.434, 1.505 and 1.503 (open; main's CUDA matvecs fuse their Fma, SPIR-V
+  does not). TestSSMFamiliesOnEveryDevice's three red fixtures were gates
+  that reached main alone: synth-lfm2moe's selection bias and router score
+  and Mamba-1's dt/B/C norms were taken out of the model's layers and
+  config, which the front end does not read; with the container restated
+  every violation is seen (0.556 to 2.55). DeclineOverInput is gone: no
+  container states a block wider than a row (every way to Covered passes
+  the front end's Streams check, TestFrontRefusesSeveralStreams), and the
+  shadow arm runs a form written apart into bs.h and its copy over its
+  input (mamba-130m shadowed, none declined). The CPU head's hidden output
+  is stored where the State binds it (Request.Apart, at 1 and 64 rows);
+  formed without Apart the norm's rows go over x.

@@ -203,7 +203,14 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 // mistral3 and Llama 4 are served against the host with each feature taken
 // out (TestC6ServesComposed, TestSynthLlama4ServesComposed). LFM2-1.2B serves
 // every arm on Vulkan (median 0.974 of the tier's distance) and reads 1.503 on
-// CUDA, past the 1.5 band: open.
+// CUDA, past the 1.5 band: open. The composed arm sits as far from the float
+// reference on both backends (0.142 and 0.143 at its worst); it is CUDA's
+// tier that sits closer (0.091, Vulkan's 0.109). No block carries it: with
+// the first 4, 8, 12 and 16 blocks composed CUDA reads 1.282, 1.434, 1.505
+// and 1.503, the last 4, 8 and 12 1.278, 1.215 and 1.186, the head alone
+// 1.000. Main's CUDA matvecs lower their Fma to fma.rn, Vulkan's to a
+// multiply and an add; whether the composed forms lose that on CUDA is the
+// next thing to measure.
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
