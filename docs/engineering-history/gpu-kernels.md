@@ -9070,12 +9070,13 @@ row where the composer's reads two.
   servedFor now states that error once), TestComposedBlocksServe
   on LFM2-350M (median 1.205) and TestComposedCPUBlocksServe. Falcon-H1-0.5B,
   served on the V100, reads 0.248 at its worst on sm_86 against a bound of
-  0.156 (median 1.08), and its composed prompt there fails a launch
-  (cuLaunchKernel invalid argument): open. Open: serving those
+  0.156 (median 1.08), held to the one backend there. Open: serving those
   blocks needs an output apart from x and a copy back (one more launch
   each); Jamba-reasoning-3B (every block has an MLP, so not this) and
-  LFM2-1.2B's 1.503 on CUDA (its arm sits 0.142 from the float reference
-  on both backends at its worst; CUDA's tier 0.091, Vulkan's 0.109).
+  LFM2-1.2B's 1.503 on the V100's CUDA (its arm sits 0.142-0.146 from the
+  float reference at its worst on every backend; the V100's CUDA tier 0.091,
+  sm_86's 0.052, Vulkan's 0.109: the arm's int8 step against a tighter CUDA
+  tier; on sm_86 it serves every arm at 1.405 and 0.974).
 - **A prologue's budget counts the group sums' arrays.** Falcon-H1's scan
   at the reserved width (512 rows) ran its step map inside its workgroups
   (Prologue) with a workgroup array of 12288 words, exactly the 12<<10
