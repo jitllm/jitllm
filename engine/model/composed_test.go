@@ -336,9 +336,12 @@ func init() {
 // mamba-130m parted from its float reference by 3.3 times the tier's
 // distance and changed under poisoned buffers, falcon-mamba-7B by 80,
 // mamba-codestral went non-finite at its 103rd step, and Nemotron-Nano-9B-v2
-// changed under poisoned buffers.
+// changed under poisoned buffers. synth-nemotronhmoe-q8, Nemotron-H's
+// mixture fixture, declines its mixer-only block the same way (a quarter of
+// its block steps; it had served in band but could not discriminate).
 var overInputModels = []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
-	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf"}
+	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
+	"synth-nemotronhmoe-q8.gguf"}
 
 // TestComposedBlocksDeclineOverInput decodes each overInputModels checkpoint
 // with every block and the head asked of the composer on every device: the
