@@ -9056,7 +9056,10 @@ row where the composer's reads two.
   gate's first token, is >>ABSTRACT<<, whose embedding row is zeros, so
   every arm's logits are zero and every distance 0/0; the gate now starts
   from the model's BOS, and the CPU serves Falcon-H1-0.5B at 1.019 of
-  main's spread (mamba-130m 0.466), each violation leaving the band. Gates:
+  main's spread (mamba-130m 0.466), each violation leaving the band; from
+  its BOS granite-4.0-h-350m's composed CPU parts from main entirely (1641
+  times main's spread, argmax 0 of 80, where from token 1 it read 0.47):
+  open, and the gate stays red on it. Gates:
   TestAKernelReadingXWhereItWritesIsNotInPlace (9 forms reading x in the
   writer refused, 3 reading it before written over it; with the rule at
   lastRead <= firstWrite it fails), TestBindingsSayWhatACodeReadsAndWrites,
