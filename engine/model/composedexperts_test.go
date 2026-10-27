@@ -3,6 +3,8 @@ package model
 import (
 	"math"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -18,7 +20,15 @@ import (
 var pagedExpertModels = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
 	"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "synth-ernie45moe-hf" + q8Suffix,
 	"synth-hunyuanmoe-hf" + q8Suffix, "synth-dots1-hf" + q8Suffix, "synth-deepseek" + q8Suffix,
-	"synth-deepseek-lite" + q8Suffix, "synth-llama4-q8.gguf", "synth-gptoss.gguf"}
+	"synth-deepseek-lite" + q8Suffix, "synth-gptoss.gguf"}
+
+// plainBankModels are the mixtures whose streamed banks the tier keeps plain
+// whatever cache is stated (cacheSlotsFor): gpt-oss's experts carry biases,
+// which the tier's own kernels index by the selection a cache rewrites as
+// slots. Their pages are the compact bank's, re-read every token. Llama 4's
+// top-1 mixture is not here: the tier streams no selection of one expert to
+// a card (it runs it on the host).
+var plainBankModels = []string{"synth-gptoss.gguf"}
 
 // TestComposedExpertPagesServe serves each mixture's blocks composed with
 // its routed banks in pages on the card (tier.Config.StreamExperts): every
@@ -33,8 +43,10 @@ var pagedExpertModels = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-09
 // read from the wrong expert, or an eviction not re-read, it must not.
 func TestComposedExpertPagesServe(t *testing.T) {
 	models := pagedExpertModels
-	if name := os.Getenv("JITLLM_PAGED_EXPERTS"); name != "" {
-		models = append(models, name)
+	// JITLLM_PAGED_EXPERTS adds checkpoints past one card of 16 GiB,
+	// comma-separated (docs/testing.md).
+	if names := os.Getenv("JITLLM_PAGED_EXPERTS"); names != "" {
+		models = append(models, strings.Split(names, ",")...)
 	}
 	ran := 0
 	for _, file := range models {
@@ -100,7 +112,10 @@ func TestComposedExpertPagesServe(t *testing.T) {
 						name   string
 						slots  int
 						budget bool
-					}{{"compact", -1, false}, {"cache", slots, false}, {"cache under one page", slots, true}} {
+					}{{"compact", -1, false}, {"compact under one page", -1, true}, {"cache", slots, false}, {"cache under one page", slots, true}} {
+						if arm.slots > 0 && slices.Contains(plainBankModels, file) {
+							continue
+						}
 						t.Run(arm.name, func(t *testing.T) {
 							got, st, pageIns := decode(t, arm.budget, stream(arm.slots))
 							served, declined, _ := st.ServedPart(tier.ComposedBlock)

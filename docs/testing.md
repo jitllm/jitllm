@@ -177,6 +177,7 @@ sweep by name and are never resolved.
 | `JITLLM_SERVER_BATCH_MODELS` | `server.TestBatch*` | comma-separated `.jlm` names or paths, each run beside the default | `stories15M-q8_0.jlm` only |
 | `JITLLM_TOOL_MODELS` | `server.TestToolChoiceForcesACall` | comma-separated `.jlm` names, in place of the default | `Qwen3-0.6B-Q8_0.jlm` and `Llama-3.2-1B-Instruct-Q4_K_M.jlm`; also run with Qwen3.5-0.8B-f16, DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M and gpt-oss-20b-Q4_K_M |
 | `JITLLM_STEP_MIXTURE` | `model.TestStepAcrossSessionsMixture*` | comma-separated names or paths | Qwen3-MoE-4x0.6B and olmoe; a card that cannot place every block skips |
+| `JITLLM_PAGED_EXPERTS` | `model.TestComposedExpertPagesServe` | comma-separated names or paths, each run beside the default | the router families' Q8_0 fixtures, Qwen3-MoE-4x0.6B and olmoe |
 | `JITLLM_ALLOC_MODELS` | `model.TestDecodeDoesNotAllocate` | comma-separated names or paths, each run beside the default | Llama-3.2-1B, olmoe and Qwen3.5-0.8B only |
 | `JITLLM_SLOW` | several `model` sweeps | `1` admits models over 2 GiB | small models only |
 | `JITLLM_MOVE_REPLY_MODEL` | `server.TestAMoveLandsBetweenTwoTokensOfAReply` | a `.jlm` whose reply outlasts its move's preparation | `Llama-3.2-1B-Instruct-Q4_K_M.jlm` |
