@@ -1123,7 +1123,44 @@ func (g *GPU) PipelineDepth() int {
 // row count (groupMV up to four rows, the tiles above it, a split by the
 // width), so there a row's logits move with its step's company. The server's
 // decode groups split a step's rows on their own only where this holds.
+//
+// The answer is walked once a placement: it is kept until a device's
+// placement generation moves (devTier.placeGen: a block placed or released,
+// the reserved width, a composed instance or the head), and a false one also
+// until a device may have gained room (RoomGen), where an instance that did
+// not fit may now.
 func (g *GPU) RowsComposed() bool {
+	g.mu.Lock()
+	at := rowsComposedAt{n: len(g.devs), head: g.head, set: true}
+	for _, d := range g.devs {
+		at.gen += d.placeGen.Load()
+		at.room += d.roomGen.Load()
+	}
+	if c := g.rowsComp; c.set && c.gen == at.gen && c.n == at.n && c.head == at.head && (c.ok || c.room == at.room) {
+		g.mu.Unlock()
+		return c.ok
+	}
+	g.mu.Unlock()
+	at.ok = g.rowsComposedWalk()
+	g.mu.Lock()
+	g.rowsComp = at
+	g.rowsWalks++
+	g.mu.Unlock()
+	return at.ok
+}
+
+// rowsComposedAt is a RowsComposed answer and the generations it was walked
+// at.
+type rowsComposedAt struct {
+	gen, room uint64
+	n         int
+	head      *devTier
+	ok, set   bool
+}
+
+// rowsComposedWalk is RowsComposed's walk over every placed block and the
+// head.
+func (g *GPU) rowsComposedWalk() bool {
 	placed := false
 	for i := 0; ; i++ {
 		d := g.dev(i)

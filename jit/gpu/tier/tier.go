@@ -713,6 +713,9 @@ type Stats struct {
 	// ScratchBytes is the part of BudgetUsed the device's own buffers hold:
 	// the block scratches and the staging (scratch.go).
 	ScratchBytes uint64
+	// ComposedBytes is the part of BudgetUsed the composed parts' instances
+	// hold: their scratch, a prompt part's at its rows and key bound.
+	ComposedBytes uint64
 	// Allocated is what the device's buffers hold by the backend's own count
 	// (backend.AllocCounter), 0 where it keeps none, and RoundingBytes the
 	// part of BudgetUsed that is the driver's page rounding of them.
@@ -1147,6 +1150,9 @@ type Stats struct {
 	// decode groups -- kept several cards working at once rather than one
 	// after another.
 	StageOverlaps int
+	// RowsComposedWalks counts the walks GPU.RowsComposed made over every
+	// placed block: one a placement, not one an ask.
+	RowsComposedWalks int
 	// SubsBeside counts submissions that started while another was in flight
 	// on the device (beginSub): the selection check that sessions stepped at
 	// once rather than one after another.
@@ -1428,6 +1434,7 @@ func (s *Stats) add(o Stats) {
 	s.KVPoolBytes += o.KVPoolBytes
 	s.BudgetUsed += o.BudgetUsed
 	s.ScratchBytes += o.ScratchBytes
+	s.ComposedBytes += o.ComposedBytes
 	s.Allocated += o.Allocated
 	s.RoundingBytes += o.RoundingBytes
 	s.ReservedPrompt = max(s.ReservedPrompt, o.ReservedPrompt)
@@ -1821,6 +1828,13 @@ type devShared struct {
 	// layerGen counts blocks placed and released, so work that depends only
 	// on which blocks are here can tell it is still current (prepBatch).
 	layerGen uint64
+	// placeGen moves with layerGen and whenever the reserved width, a
+	// composed prompt instance or the head changes: what GPU.RowsComposed's
+	// answer rests on, read without the lock.
+	placeGen atomic.Uint64
+	// instBytes is what the composed parts' instances charge
+	// (Stats.ComposedBytes).
+	instBytes uint64
 	// tabPend are page-table writes waiting for flushTabs (kvpool.go).
 	tabPend []tabWrite
 	// autoStream holds the blocks placed with their routed experts off the
@@ -2275,6 +2289,11 @@ type GPU struct {
 	// devs is every device, in the order they were opened (AddDevices
 	// appends).
 	devs []*devTier
+	// rowsComp is RowsComposed's last answer and what it rested on: the
+	// devices' placement generations, their count and the head's device.
+	// Under mu, as is rowsWalks, the walks it made (Stats.RowsComposedWalks).
+	rowsComp  rowsComposedAt
+	rowsWalks int
 	// spreadAll steers a plan over every device rather than the fewest that
 	// hold it: streamed blocks, whose caches take what the bases leave
 	// (planShares). Under mu.
@@ -2534,6 +2553,9 @@ func (g *GPU) Stats() Stats {
 	for _, d := range g.devs {
 		s.add(d.stats())
 	}
+	g.mu.Lock()
+	s.RowsComposedWalks = g.rowsWalks
+	g.mu.Unlock()
 	return s
 }
 
@@ -2627,6 +2649,7 @@ func (d *devTier) stats() Stats {
 		s.KVPoolBytes = d.kvp.charged()
 	}
 	s.BudgetUsed = d.used
+	s.ComposedBytes = d.instBytes
 	for _, l := range d.layers {
 		if l != nil && l.stream != nil && l.stream.cached() && l.stream.plain[2] != nil {
 			for _, r := range [3]*resident{l.gate, l.up, l.down} {

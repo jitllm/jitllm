@@ -572,6 +572,7 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 	}
 	g.layers[li] = l
 	g.layerGen++
+	g.placeGen.Add(1)
 	g.convN++
 	g.trim()
 	return true

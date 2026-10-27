@@ -335,6 +335,7 @@ func (g *devTier) instance(f *partForm) (*partInst, error) {
 	}
 	in.bytes = n
 	g.charge(n)
+	g.instBytes += n
 	return in, nil
 }
 
@@ -474,6 +475,7 @@ func (g *devTier) dropPart(sv *servedPart) {
 	if in := sv.inst; in != nil {
 		in.free()
 		g.refund(in.bytes)
+		g.instBytes -= in.bytes
 		in.bytes = 0
 	}
 	if sv.f.refs--; sv.f.refs == 0 {
@@ -506,6 +508,7 @@ func (g *devTier) promptInst(bs *blockScratch, f *partForm) *partInst {
 		bs.prompt = map[*partForm]*partInst{}
 	}
 	bs.prompt[f] = in
+	g.placeGen.Add(1)
 	return in
 }
 
@@ -515,7 +518,9 @@ func (g *devTier) dropPromptInst(bs *blockScratch, f *partForm) {
 	if in := bs.prompt[f]; in != nil {
 		in.free()
 		g.refund(in.bytes)
+		g.instBytes -= in.bytes
 		delete(bs.prompt, f)
+		g.placeGen.Add(1)
 	}
 }
 

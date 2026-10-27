@@ -85,8 +85,15 @@ func TestBatchDecodeGroupsKeepTheTokens(t *testing.T) {
 				if got.groupSteps == 0 {
 					t.Fatalf("no grouped step ran: %+v", got)
 				}
-				t.Logf("%d grouped steps in %d round(s), %d stage overlap(s) (one group: %d)",
-					got.groupSteps, got.groupRounds, got.overlaps, one.overlaps)
+				t.Logf("%d grouped steps in %d round(s), %d stage overlap(s) (one group: %d), %d walk(s) of the blocks",
+					got.groupSteps, got.groupRounds, got.overlaps, one.overlaps, got.walks)
+				// The loop asks RowsComposed every iteration; the tier walks
+				// the blocks once a placement (a composed instance made at
+				// the arm's first step moves it once more).
+				if arm.groups < 0 && got.walks > 2 {
+					t.Fatalf("RowsComposed walked the blocks %d times in an arm of %d rounds: once a placement, not once an ask",
+						got.walks, got.groupRounds)
+				}
 				if arm.serial {
 					if got.overlaps != 0 {
 						t.Fatalf("groups stepped one after another, yet %d stage(s) overlapped", got.overlaps)
@@ -118,6 +125,8 @@ type groupedResult struct {
 	ids                     [][]int32
 	groupSteps, groupRounds int64
 	overlaps                int
+	// walks is how many times the arm's RowsComposed asks walked the blocks.
+	walks int
 }
 
 // loadGrouped loads name with its first half of blocks on devs[0] and the
@@ -169,7 +178,8 @@ func (gl *groupedLoad) run(t *testing.T, groups int, serial bool) groupedResult 
 	// requests below wake it.
 	lp.groupsCfg, lp.serialGroups = groups, serial
 	steps0, rounds0 := lp.stats.groupSteps.Load(), lp.stats.groupRounds.Load()
-	overlaps0 := gl.lm.gpuTier().Stats().StageOverlaps
+	s0 := gl.lm.gpuTier().Stats()
+	overlaps0, walks0 := s0.StageOverlaps, s0.RowsComposedWalks
 	release := holdGates(t, gl.e, gl.lm)
 	out := make([]completion, gl.n)
 	var wg sync.WaitGroup
@@ -199,7 +209,8 @@ func (gl *groupedLoad) run(t *testing.T, groups int, serial bool) groupedResult 
 	}
 	r.groupSteps = lp.stats.groupSteps.Load() - steps0
 	r.groupRounds = lp.stats.groupRounds.Load() - rounds0
-	r.overlaps = gl.lm.gpuTier().Stats().StageOverlaps - overlaps0
+	s1 := gl.lm.gpuTier().Stats()
+	r.overlaps, r.walks = s1.StageOverlaps-overlaps0, s1.RowsComposedWalks-walks0
 	return r
 }
 
@@ -215,7 +226,12 @@ func (gl *groupedLoad) run(t *testing.T, groups int, serial bool) groupedResult 
 // load sees them, where when a request arrives moves which rows share its
 // prompt's steps, so its tokens may part at a near tie and only its answer is
 // required. Every request answers in full, the groups ran grouped steps, and
-// the devices serve a request after each arm.
+// the devices serve a request after each arm. One group runs again after the
+// groups, and its waves must repeat the first's token for token: the
+// comparison holds the groups to one group only where one group repeats
+// itself. Nothing parts at a margin: a joint step's rows are their own
+// (TestStepRowsAreTheirOwn), so any parting fails, the host's gap at it
+// logged.
 //
 // JITLLM_SERVER_GROUP_LOAD is conc,reqs,long,short,gen (default
 // 16,2,3072,384,64, the prompts cut to the model's context).
@@ -338,7 +354,10 @@ func TestDecodeGroupsHoldUnderLoad(t *testing.T) {
 		if steps == 0 {
 			t.Fatal("the groups arm ran no grouped step")
 		}
-		parted := func(got, want [][]int32, hold bool) int {
+		// The one-group arm again: the comparison holds groups to it only if
+		// one group repeats itself, token for token.
+		againW, _, _ := arm(1)
+		parted := func(what string, got, want [][]int32, hold bool) int {
 			n := 0
 			for i := range got {
 				if slices.Equal(got[i], want[i]) {
@@ -349,24 +368,16 @@ func TestDecodeGroupsHoldUnderLoad(t *testing.T) {
 				for j < gen && got[i][j] == want[i][j] {
 					j++
 				}
-				if !hold {
-					continue
-				}
-				// A step's attention plan follows its rows' longest history
-				// (pagedKeys), so a group's reduction can differ from one
-				// group's at a near tie: the host, in neither arm, says
-				// whether the two tokens were one.
-				if gap := hostGap(t, gl.lm.m, prompt(i), got[i][:j], got[i][j], want[i][j]); gap > tieMargin {
-					t.Errorf("request %d parts at token %d, %.3f apart on the host: %v in groups, %v in one group",
-						i, j, gap, got[i][j:], want[i][j:])
-				} else {
-					t.Logf("request %d parts at token %d, a tie on the host (%.3f)", i, j, gap)
+				if hold {
+					t.Errorf("%s: request %d parts at token %d (%.3f apart on the host): %v, %v in one group",
+						what, i, j, hostGap(t, gl.lm.m, prompt(i), want[i][:j], got[i][j], want[i][j]), got[i][j:], want[i][j:])
 				}
 			}
 			return n
 		}
-		t.Logf("%d grouped steps; requests parting from one group's tokens: %d of %d in waves, %d of %d in a closed loop",
-			steps, parted(gotW, oneW, invariant), len(gotW), parted(gotL, oneL, false), len(gotL))
+		aa := parted("one group twice", againW, oneW, true)
+		t.Logf("%d grouped steps; requests parting from one group's tokens: %d of %d in waves, %d of %d in a closed loop; one group twice: %d",
+			steps, parted("groups in waves", gotW, oneW, invariant), len(gotW), parted("", gotL, oneL, false), len(gotL), aa)
 	})
 }
 

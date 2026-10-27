@@ -4407,6 +4407,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	g.layers[li] = l
 	g.layerGen++
+	g.placeGen.Add(1)
 	// A non-causal block's batched twins are built here, not lazily: every
 	// call over it is batched, and a Compile from inside layersOnce would post
 	// to the backend goroutine that is blocked running the session -- a
@@ -6468,6 +6469,7 @@ func (g *devTier) dropHeadScratch(bs *blockScratch) {
 		}
 	}
 	bs.head = nil
+	g.placeGen.Add(1)
 	g.freeAltNorms()
 }
 
@@ -6475,6 +6477,7 @@ func (g *devTier) dropHeadScratch(bs *blockScratch) {
 func (g *devTier) PrepHead(h *nn.Head) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	defer g.placeGen.Add(1)
 	g.dropGraph()
 	bs := g.bs
 	if bs == nil || h == nil {
@@ -10993,6 +10996,7 @@ func (g *devTier) releaseBlock(li int) {
 	}
 	delete(g.layers, li)
 	g.layerGen++
+	g.placeGen.Add(1)
 }
 
 // afterRelease is what every release ends with. Callers hold g.mu.

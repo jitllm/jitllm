@@ -156,6 +156,7 @@ func (g *devTier) dropBatch(w int) {
 	}
 	if g.promptW == w {
 		g.promptW = 0
+		g.placeGen.Add(1)
 	}
 	if g.stepW == w {
 		g.stepW = 0
@@ -331,6 +332,7 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 	for w := want; w >= batchGrain; w = w / 2 / batchGrain * batchGrain {
 		if g.prepBatch(w) && g.reservePaged(g.bbs[w]) && (!rowsHead || g.reserveRowsHead(g.bbs[w], p)) && g.room(need) {
 			g.promptW = w
+			g.placeGen.Add(1)
 			return
 		}
 		if w != g.stepW {
@@ -565,6 +567,7 @@ func (g *devTier) fitReserved() {
 			break
 		}
 		g.promptW = w
+		g.placeGen.Add(1)
 		g.promptForms(g.bbs[w])
 	}
 	g.ReservedRows = g.promptW

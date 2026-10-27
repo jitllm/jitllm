@@ -642,6 +642,7 @@ func (g *devTier) retuneDecode() {
 	// The blocks' matvecs may have been rewritten: a scratch's walk keyed on
 	// layerGen (prepBatch, prepRagged) finds their twins again.
 	g.layerGen++
+	g.placeGen.Add(1)
 }
 
 // splitMax is the widest split the tuner offers a shape of rows output rows.
