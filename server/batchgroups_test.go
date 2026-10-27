@@ -407,7 +407,7 @@ func loadUnderLoad(t *testing.T, name string, devs []string, conc, maxSeq int) *
 		o.Placement, o.PlacementStrict = p, true
 	}
 	e := New(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: maxSeq, JointSteps: JointAlways,
-		MaxBatchRows: conc, NoOrchestrate: true})
+		MaxBatchRows: conc, NoOrchestrate: true, MaxQueue: -1})
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(o)
 	if err != nil {
