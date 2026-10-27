@@ -366,20 +366,30 @@ func TestComposedCPUHead(t *testing.T) {
 }
 
 // TestCPUHeadStoresItsOutputs forms the head with each op after the
-// projection on the CPU, int8 and float, and holds every output of the graph
-// to a kernel that stores it where its caller binds it: a logit scale's map
-// stored over the projection's own buffer left granite's logits unwritten.
+// projection on the CPU, int8 and float, at one row and at the rows head's
+// 64, as the State asks for it (Request.Apart: its inputs and outputs the
+// caller's own buffers), and holds every output of the graph to a kernel
+// that stores it where its caller binds it: a logit scale's map stored over
+// the projection's own buffer left granite's logits unwritten, and the
+// norm's rows a decision model's row taps read (Head.Hidden) are an output
+// of their own. Formed without Apart the norm's rows go over x, the graph's
+// input, and no kernel stores the hidden output where its caller binds it.
 func TestCPUHeadStoresItsOutputs(t *testing.T) {
 	dev := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
 	for _, shape := range [][2]int{{headEmbd, headVocab}, {1024, 4096}} {
 		for _, spec := range []graph.Head{
 			{NEmbd: shape[0], NVocab: shape[1], Eps: headEps, Output: jlm.RoleOutput, Scale: 8},
 			{NEmbd: shape[0], NVocab: shape[1], Eps: headEps, Output: jlm.RoleOutput, Softcap: 30},
+			{NEmbd: shape[0], NVocab: shape[1], Eps: headEps, Output: jlm.RoleOutput, Hidden: true},
+			{NEmbd: shape[0], NVocab: shape[1], Eps: headEps, Output: jlm.RoleOutput, Scale: 8, Hidden: true},
 		} {
-			for _, r := range []*Registry{Default(), Default().WithoutInt8(DeviceCPU)} {
+			for _, rc := range []struct {
+				r    *Registry
+				rows int
+			}{{Default(), 1}, {Default().WithoutInt8(DeviceCPU), 1}, {Default(), 64}, {Default().WithoutInt8(DeviceCPU), 64}} {
 				g := spec.Build()
-				_, codes, err := r.Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jlm.TypeQ8, jlm.RoleOutputNorm: jlm.TypeF32},
-					Step: Step{Rows: 1, Page: 1, Keys: 1, ActWindow: 32}, Device: dev})
+				_, codes, err := rc.r.Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jlm.TypeQ8, jlm.RoleOutputNorm: jlm.TypeF32},
+					Step: Step{Rows: rc.rows, Page: 1, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
 				if err != nil {
 					t.Fatalf("%+v: %v", spec, err)
 				}
@@ -391,8 +401,8 @@ func TestCPUHeadStoresItsOutputs(t *testing.T) {
 						}
 					}
 					if !stored {
-						t.Errorf("%dx%d scale %g softcap %g hidden %v: no kernel stores output %d (%s); the head forms into:\n%s",
-							shape[0], shape[1], spec.Scale, spec.Softcap, spec.Hidden, v, g.Values[v].Name, describeCodes(codes))
+						t.Errorf("%dx%d at %d rows, scale %g softcap %g hidden %v: no kernel stores output %d (%s); the head forms into:\n%s",
+							shape[0], shape[1], rc.rows, spec.Scale, spec.Softcap, spec.Hidden, v, g.Values[v].Name, describeCodes(codes))
 					}
 				}
 			}
