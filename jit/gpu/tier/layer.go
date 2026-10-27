@@ -7562,7 +7562,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		tierRuns := true
 		if R > 1 {
 			var e error
-			if tierRuns, e = g.promptDeclines(bs, lo, hi); e != nil {
+			_, asks := g.rowsKind(R, rag != nil)
+			if tierRuns, e = g.promptDeclines(bs, lo, hi, asks); e != nil {
 				return refuse("%v", e)
 			}
 		}
@@ -8500,14 +8501,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			// each row at its own position and history (its descriptor):
 			// its blocks are asked as decode's, at the step's rows, and a
 			// prompt's ragged rows as the prompt's.
-			kind := partBlock
-			if (R > 1 || g.prompt) && (rag == nil || g.prompt) && g.Composed&ComposedPrompt != 0 {
-				kind = partPrompt
-			}
+			kind, asks := g.rowsKind(R, rag != nil)
 			asked, why := g.Composed&(1<<kind) != 0, partServes
 			switch {
 			case !asked:
-			case kind == partBlock && (g.prompt || rag == nil && R != 1):
+			case !asks:
 				g.PartsUnasked[partBlock]++
 				asked = false
 			default:

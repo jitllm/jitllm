@@ -1806,19 +1806,24 @@ func (g *devTier) promptHeld(l *layer, li int, bb *blockScratch) bool {
 
 // promptDeclines readies, before a prompt call's submission at bs's rows,
 // every block of [lo, hi) whose prompt the composer does not serve at this
-// call: the tier's own kernels the placement left it (declineTwins). It
-// reports whether any block of the range runs them. Callers hold g.mu,
+// call: the tier's own kernels the placement left it (declineTwins); where
+// the call asks nothing of the composer (rowsKind), every block. It reports
+// whether any block of the range runs them. Callers hold g.mu,
 // outside any submission.
-func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int) (bool, error) {
+func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int, asks bool) (bool, error) {
 	tier := false
 	for li := lo; li < hi; li++ {
 		l := g.layers[li]
-		if l == nil || !l.ok || g.promptServed(l, li, bs) {
+		if l == nil || !l.ok || asks && g.promptServed(l, li, bs) {
 			continue
 		}
 		tier = true
 		why := g.blockServes(l, li, &bs.p, bs, false, true)
-		if why == partServes {
+		switch {
+		case why != partServes:
+		case !asks:
+			why = partCaller
+		default:
 			why = g.promptWhy
 		}
 		if err := g.declineTwins(l, li, bs, why); err != nil {
@@ -1826,6 +1831,18 @@ func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int) (bool, error) {
 		}
 	}
 	return tier, nil
+}
+
+// rowsKind is the part a call of R rows asks of the composer for its
+// blocks, and whether it asks: a prompt's chunk, or with ComposedPrompt a
+// call of rows that is not a ragged step, is ComposedPrompt's; a ragged
+// decode step's rows and a one-row step are ComposedBlock's; a prompt
+// without ComposedPrompt asks nothing, its blocks the tier's.
+func (g *devTier) rowsKind(R int, rag bool) (partKind, bool) {
+	if (R > 1 || g.prompt) && (!rag || g.prompt) && g.Composed&ComposedPrompt != 0 {
+		return partPrompt, true
+	}
+	return partBlock, g.Composed&ComposedBlock != 0 && !g.prompt && (rag || R == 1)
 }
 
 // declineTwins compiles block li's own batched kernels at bs's rows, which
