@@ -1441,6 +1441,7 @@ func (s *Stats) add(o Stats) {
 	s.TowerRows = max(s.TowerRows, o.TowerRows)
 	s.ReservedStep = max(s.ReservedStep, o.ReservedStep)
 	s.RowsSteps += o.RowsSteps
+	s.RowsComposedWalks += o.RowsComposedWalks
 	s.RowsPadded += o.RowsPadded
 	s.ScratchRefused += o.ScratchRefused
 	s.PromptSplits += o.PromptSplits

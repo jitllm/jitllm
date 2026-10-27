@@ -22,7 +22,8 @@ import (
 // in the first round, then 35 with every request alone).
 //
 // JITLLM_SERVER_CURVE is conc,reqs,prompt,gen,rounds (default
-// 64,2,512,128,3, the prompt cut to the model's context);
+// 64,2,512,128,3; the output cut to half the model's context and the prompt
+// to what is left);
 // JITLLM_TEST_DEVICES names the devices, every one of them used.
 func TestBatchKeepsBatchingRoundAfterRound(t *testing.T) {
 	conc, reqs, plen, gen, rounds := 64, 2, 512, 128, 3
@@ -44,7 +45,12 @@ func TestBatchKeepsBatchingRoundAfterRound(t *testing.T) {
 		}
 		c := serveEngine(t, e)
 		cfg := lm.m.Cfg
-		plen := min(plen, int(cfg.NCtx)-gen-1)
+		ctx := int(cfg.NCtx)
+		if ctx <= 0 {
+			ctx = 4608
+		}
+		gen := min(gen, ctx/2)
+		plen := min(plen, ctx-gen-1)
 		vocab := uint32(min(cfg.NVocab-1, 20000))
 		prompt := func(i int) []int32 {
 			p := make([]int32, plen)
