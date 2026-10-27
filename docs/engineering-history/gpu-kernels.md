@@ -9180,3 +9180,37 @@ row where the composer's reads two.
   input (mamba-130m shadowed, none declined). The CPU head's hidden output
   is stored where the State binds it (Request.Apart, at 1 and 64 rows);
   formed without Apart the norm's rows go over x.
+- **A pooled State gives its history back; RowsComposed walks once a
+  placement; a joint step's rows are their own, the one-at-a-time path is
+  not.** A server's idle pooled State kept a finished request's pages on the
+  card (Reset rewinds the position only), and admission, which prices by the
+  devices' free room, then admitted a row at a time from a load's second
+  round: Qwen3-30B-A3B over two V100s (main's path, 64 clients, 512-token
+  prompts, 128 out) stepped 104.8 rows a step in the first round and 5.0 in
+  the next, 8189 waits for history room, KV held 8592 MiB with no request
+  running (TestBatchKeepsBatchingRoundAfterRound). The pool now trims a
+  reset State's device history (State.GiveBackHistory). GPU.RowsComposed,
+  which the step loop asks every iteration, keeps its walk until a device's
+  placement generation moves (Stats.RowsComposedWalks: 0 walks in the
+  grouped arms on the laptop, 9 in 5 rounds with the cache off). Decode
+  groups stay off: TestStepRowsAreTheirOwn holds a joint step's rows bit for
+  bit whatever shares the step (prompts beside prompts, beside a 900-token
+  history, chunks of 20, 7 and 1; stories15M and Qwen3-0.6B on the laptop,
+  Qwen3-30B-A3B on two V100s), so pagedKeys is not what moved the load
+  gate's tokens on the composed path; the one-at-a-time path is: Prefill's
+  and Forward's logits sit 0.46-0.87 of a logit from the joint arm's on
+  Qwen3-30B-A3B (0.23-0.30 on Qwen3-0.6B), and the loop puts a row there
+  whenever it steps alone. The load gate now runs one group twice with no
+  tie margin: on stories15M one group parts from itself in 8 of 32 waves,
+  one at token 0, so groups cannot be held to it until every path a row
+  takes is the joint arm's arithmetic -- and the joint arm at one row costs
+  88 ms a step on Qwen3-30B-A3B where Forward costs 12. The composed path's
+  long-prompt room (gpt-oss-20b on one V100, TestLongPromptHasHistoryRoom):
+  two 2051-token prompts at once are refused where main's path serves them,
+  budget used 14781 MiB against 12255 at a reserved width of 64 rows against
+  512 (Stats.ComposedBytes counts the instances): the instances already
+  narrowed the reserved width to 64 rows and leave the pool 176 MiB where
+  main's grows to 468, and a prompt mid-prefill has no written page to
+  evict, so two at once find none. At 128 rows and 129 sessions (stories15M,
+  laptop) every request answers in every arm, and groups part from one group
+  in 23 of 128 waves where one group parts from itself in 25.
