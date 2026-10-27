@@ -121,6 +121,42 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 	}
 }
 
+// TestFrontRefusesSeveralStreams holds every block of each model whose
+// residual is several streams (AltUp, hyper-connections, residual attention)
+// to a named refusal and no graph: every way to Covered passes a Streams
+// check, so the tier never meets a block output wider than a row, which its
+// copy over x (servedCopy) cannot hold. Where the block reaches that check
+// the refusal is UncoveredStreams by name.
+func TestFrontRefusesSeveralStreams(t *testing.T) {
+	byStreams := 0
+	for _, file := range []string{"synth-gemma3n.gguf", "synth-deepseek4.gguf", "synth-kimik3.gguf", "synth-qwen4exp.gguf"} {
+		t.Run(file, func(t *testing.T) {
+			m := frontModel(t, file)
+			if m.Cfg.Streams() < 2 {
+				t.Fatalf("%d residual streams: the fixture does not select the shape", m.Cfg.Streams())
+			}
+			streams := 0
+			for li := range m.Cfg.NLayer {
+				why := m.Uncovered(li)
+				if why == Covered || m.Composing().BlockGraph(li) != nil {
+					t.Fatalf("block %d of %d streams has a graph", li, m.Cfg.Streams())
+				}
+				if !namedReason(why) {
+					t.Fatalf("block %d is refused by %q, which is not a named reason", li, why)
+				}
+				if why == UncoveredStreams {
+					streams++
+				}
+			}
+			t.Logf("%d streams: %d of %d blocks refused for them, the rest earlier", m.Cfg.Streams(), streams, m.Cfg.NLayer)
+			byStreams += streams
+		})
+	}
+	if byStreams == 0 {
+		t.Fatal("no block is refused for its streams: the gate selects nothing")
+	}
+}
+
 // rotaryTables is how many of parts are a rotary's table.
 func rotaryTables(parts []jit.Part) int {
 	n := 0

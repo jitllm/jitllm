@@ -8515,11 +8515,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if asked && why == partServes {
 				var serr error
 				sv, inst, cp, serr = g.servedStep(bs, l, li, p, R)
-				switch {
-				case serr == errOverInput || cp != nil && kind == partBlock && R == 1 && g.shadowing():
-					// The shadow arm runs a form on its own copy of x, in place.
-					sv, inst, cp, why = nil, nil, nil, partOverInput
-				case serr != nil:
+				if serr != nil {
 					if err == nil {
 						err = serr
 					}
@@ -8562,7 +8558,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if inst != nil && kind == partBlock && R == 1 && g.shadowing() {
 				// The form runs beside the tier's kernels, which go on to run
 				// the block below and serve.
-				if serr := g.shadowBegin(lc, bs, sv, l, li, &sh); err == nil {
+				if serr := g.shadowBegin(lc, bs, sv, cp, l, li, &sh); err == nil {
 					err = serr
 				}
 			} else if inst != nil {

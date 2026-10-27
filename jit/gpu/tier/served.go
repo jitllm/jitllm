@@ -675,7 +675,6 @@ const (
 	partExperts     = jit.DeclineExperts
 	partRecurrent   = jit.DeclineRecurrent
 	partNoWeight    = jit.DeclineNoWeight
-	partOverInput   = jit.DeclineOverInput
 	numPartDeclines = jit.NumDeclines
 )
 
@@ -746,10 +745,6 @@ var errServedCold = errors.New("tier: a served part forms outside a capture")
 // errFormedEarlier marks a part whose form failed at an earlier step
 // (servedFor), its error stated once.
 var errFormedEarlier = errors.New("did not form earlier")
-
-// errOverInput is a block's form that cannot write its output over its
-// input (partForm.inPlace): the block is declined (partOverInput).
-var errOverInput = errors.New("tier: the composed block reads x in or after the kernel writing its output over it")
 
 // servedFor is the lane's served part of key sk, built by build on its
 // first step and formed through the composer's one keyed cache, its form the
@@ -1648,12 +1643,14 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 
 // servedCopy is the copy of a block's output from bs.h over x at a step of
 // rows, formed through the composer like any other part, for a form that
-// cannot write its output over x (partForm.inPlace). errOverInput where bs.h
-// cannot hold the output: a residual of several streams, wider than a row.
+// cannot write its output over x (partForm.inPlace). bs.h holds a row of
+// every step's rows: a residual of several streams, wider than a row, has no
+// block graph (the front end refuses it, UncoveredStreams), so it never
+// reaches here.
 func (g *devTier) servedCopy(bs *blockScratch, rows int) (*servedPart, error) {
 	w := bs.p.ResidW()
 	if w != bs.p.NEmbd || rows > bs.rows {
-		return nil, errOverInput
+		return nil, fmt.Errorf("tier: a block output of %d rows of %d apart from x, where the scratch holds %d of %d", rows, w, bs.rows, bs.p.NEmbd)
 	}
 	gr := g.copyGraphs[w]
 	if gr == nil {
@@ -1777,7 +1774,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	}
 	if !sv.f.inPlace(0, 0) {
 		if _, err := g.servedCopy(bb, bb.rows); err != nil {
-			g.LastErr, g.promptWhy = err.Error(), partOverInput
+			g.LastErr = "the composed prompt block's copy: " + err.Error()
 			return false
 		}
 	}

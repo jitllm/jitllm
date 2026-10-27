@@ -17,9 +17,11 @@ import (
 // shadowModels are the served checkpoints the shadow gate runs, each a block
 // the others do not share: a llama, a qwen3 with a norm over q and k, a gemma
 // with a scaled embedding and a GELU gate, an OLMo 2 with its norms after the
-// sublayers.
+// sublayers, and mamba-130m, whose blocks' forms read x where they write the
+// output, so the form writes apart and its copy goes over the shadow's input
+// (apartModels).
 var shadowModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "gemma-2b.gguf",
-	"newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf"}
+	"newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf", "mamba/mamba-130m-hf.Q8_0.gguf"}
 
 // shadowRun is a teacher-forced decode on a tier whose composer shadows the
 // blocks (Config.ComposedShadow).
@@ -381,8 +383,26 @@ func TestComposedShadowHoldsEveryBlock(t *testing.T) {
 					}
 				})
 			}
-			k := nb / 2
+			applied := 0
 			for _, f := range shadowFaults {
+				// The block rewritten is the middle one, or the first after it
+				// with what the rewrite changes; a model none of whose blocks
+				// has it (an attention fault on a model that never attends)
+				// names it and runs the others.
+				k := -1
+				for j := range nb {
+					li := (nb/2 + j) % nb
+					if restore := rewriteBlock(t, m, li, f.apply); restore != nil {
+						restore()
+						k = li
+						break
+					}
+				}
+				if k < 0 {
+					t.Logf("no block has anything for %q to change", f.name)
+					continue
+				}
+				applied++
 				for _, dev := range devs {
 					t.Run(fmt.Sprintf("%s/block %d: %s", dev, k, f.name), func(t *testing.T) {
 						restore := rewriteBlock(t, m, k, f.apply)
@@ -448,6 +468,9 @@ func TestComposedShadowHoldsEveryBlock(t *testing.T) {
 						ran++
 					})
 				}
+			}
+			if applied == 0 {
+				t.Fatal("no block has anything for any rewrite to change: the fault arms select nothing")
 			}
 		})
 	}
