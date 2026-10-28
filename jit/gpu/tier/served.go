@@ -2520,6 +2520,13 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 				"rows.win": rowsW, "q.off": qOff, "rows.n": calls},
 			history: poolHistory(geom),
 			keys:    keys, page: page, seqs: seqs, paged: paged}
+		if readsPlanes(l.graph) {
+			pl := g.blockPlanes()
+			if pl == nil {
+				return sl, fmt.Errorf("the composed block %d turns by the rotary's planes, which the tier holds none of", li)
+			}
+			sl.tables["rope.planes"] = pl
+		}
 		if l.linear && l.pool != nil {
 			t := sl.tables
 			// The shared form holds one half, stepped in place (bindRec).
@@ -2571,5 +2578,26 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 	if l.linear {
 		t["rec.rows"] = rec
 	}
+	if _, ok := t["rope.planes"]; ok {
+		t["rope.planes"] = g.blockPlanes()
+	}
 	return sv, nil
+}
+
+// readsPlanes reports whether a form of g reads the rotary's planes: a
+// pooled selection turning its blocks, or a rotary at positions of its own.
+func readsPlanes(g *graph.Graph) bool {
+	return slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
+		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0 || o.Kind == graph.OpRope && o.Attr.Shift > 0
+	})
+}
+
+// blockPlanes is the model's rotary planes a block's form reads ("rope.planes"):
+// the global table's, nil where the tier holds none.
+func (g *devTier) blockPlanes() backend.Buf {
+	if g.bs == nil {
+		return nil
+	}
+	_, pl, _ := g.tableBinds(g.bs, 0)
+	return pl
 }

@@ -2,6 +2,7 @@ package model
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,8 +19,9 @@ import (
 // as ops, the input rows' copies and the head's mix composed too,
 // teacher-forced on the fixture's ids against main's kernels within 1e-5.
 // The blocks the front end does not state are declined by name and counted:
-// the attention blocks select their keys by QSA (UncoveredSelect) and the
-// n-gram block (UncoveredNGram). Each piece of the hyper-connection taken out
+// the n-gram block (UncoveredNGram); the attention blocks select their keys
+// by QSA's pooled blocks (graph.Attrs.Pooled), stated. Each piece of the
+// hyper-connection or of QSA's selection taken out
 // of the composed statement alone (q4eComposedViolations), the input rows'
 // streams past the first left empty, and stream 1 read for stream 2 where
 // the head's mix reads them, moves the logits past 100 times the clean worst and
@@ -135,15 +137,28 @@ func q4ePrompt(t *testing.T, m *Model, ids []int32, n int, composed bool) [][]fl
 	if !composed {
 		return out
 	}
+	// A stated attention block with routed experts runs a step of several rows on
+	// main's kernels, declined by name (cpuCompose): the prompt's one call.
+	moe := 0
+	for li := range m.Cfg.NLayer {
+		if m.Uncovered(li) == Covered && m.Cfg.MoEAt(li) && !m.Cfg.LayerKind(li).Recurrent() {
+			moe++
+		}
+	}
 	for i, k := range declined {
-		if jit.Decline(i) != jit.DeclineNoGraph && k > 0 {
+		if jit.Decline(i) != jit.DeclineNoGraph && k > 0 && (jit.Decline(i) != jit.DeclineExpertsRows || k != moe) {
 			t.Errorf("%d block steps declined: %s (%v)", k, jit.DeclineName(i), s.CPUFormErr())
 		}
+	}
+	if declined[jit.DeclineExpertsRows] != moe {
+		t.Errorf("%d prompt steps declined for routed experts at several rows, want one each of the %d stated attention blocks with experts",
+			declined[jit.DeclineExpertsRows], moe)
 	}
 	if served == 0 {
 		t.Fatal("no block step of the prompt served")
 	}
-	t.Logf("a prompt of %d: %d block steps served, %d declined for no graph", n, served, declined[jit.DeclineNoGraph])
+	t.Logf("a prompt of %d: %d block steps served, %d declined for no graph, %d for routed experts at several rows",
+		n, served, declined[jit.DeclineNoGraph], declined[jit.DeclineExpertsRows])
 	return out
 }
 
@@ -223,6 +238,22 @@ func q4eComposedViolations(t *testing.T) []c6Violation {
 	named := func(g *graph.Graph, o *graph.Op, name string) bool {
 		return len(o.Out) > 0 && strings.HasPrefix(g.Values[o.Out[0]].Name, name)
 	}
+	// qsa breaks each QSA block's pooled selection (graph.Attrs.Pooled) by
+	// f, the blocks with none left as they are.
+	qsa := func(name string, f func(o *graph.Op)) c6Violation {
+		return c6Violation{name, func(m *Model) func() {
+			return m.rewriteEveryBlock(t, func(g *graph.Graph) *graph.Graph {
+				i := slices.IndexFunc(g.Ops, func(o graph.Op) bool { return o.Kind == graph.OpSelect && o.Attr.Pooled })
+				if i < 0 {
+					return g
+				}
+				out := *g
+				out.Ops = slices.Clone(g.Ops)
+				f(&out.Ops[i])
+				return &out
+			})
+		}}
+	}
 	return []c6Violation{
 		at("the streams mixed by their plain mean", func(g *graph.Graph, o *graph.Op) bool {
 			if o.Kind != graph.OpExpr || !named(g, o, "hc.gate") {
@@ -252,6 +283,11 @@ func q4eComposedViolations(t *testing.T) []c6Violation {
 			o.Attr.Const = 1
 			return true
 		}),
+		qsa("QSA's blocks not turned at their first positions", func(o *graph.Op) { o.Attr.NRot = 0 }),
+		qsa("QSA's blocks scored by their best key, not their pooled key", func(o *graph.Op) {
+			o.Attr.Pooled, o.Attr.NRot, o.Weight = false, 0, nil
+		}),
+		qsa("QSA keeping one block fewer", func(o *graph.Op) { o.Attr.TopK-- }),
 	}
 }
 
@@ -309,7 +345,7 @@ func (m *Model) rewriteCollapse(t *testing.T, rewrite func(*graph.Graph) *graph.
 // as views of the step's residual, each sublayer's gated mix and placement,
 // the delta rule's state read at slots carrying the n-gram tail, every
 // stated block step served and every other declined for having no graph
-// (QSA and the n-gram block), within 1e-5 of the host's logits. Each piece
+// (the n-gram block), within 1e-5 of the host's logits. Each piece
 // of the hyper-connection taken out of the statement (q4eComposedViolations)
 // moves them past 100 times the clean worst and past 1e-4.
 func TestQwen4ExpServesComposed(t *testing.T) {

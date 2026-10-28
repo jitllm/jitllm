@@ -10735,3 +10735,16 @@ row where the composer's reads two.
   composed now passes on cuda:0 and vulkan: decode 4.6e-12 and 4.9e-12,
   72 composed block steps of 24, no decline; prefill 3.6e-08 and 3.2e-13,
   no part formed at a step; each violation 0.045 to 1.36.
+- QSA stated (front.go): the indexer's raw key one more kv head of the row
+  padded to the head with zeros, its value zero, the query head-normed and
+  turned, and the selection the pooled OpSelect. The rotary's planes are
+  bound for a block that reads them on the CPU (cpuArgPlanes) and on the
+  cards (blockPlanes). A model with a tower keeps UncoveredSelect for
+  QSA: a picture's rotary marks are not read by the block-start turn.
+  synth-qwen4exp and its ragged twin serve blocks 0, 1 and 3 (the n-gram
+  block declined for no graph): on the CPU device 4.9e-12 and 2.2e-12
+  from main over 32 steps, a prompt of 28 and its decode 3.4e-12 and
+  6.2e-13 (the experts' blocks' prompt rows declined by name, one each);
+  on cuda:0 and vulkan 87 block steps served, 29 declined for no graph,
+  2.9e-11 to 4.2e-11. Three QSA violations move it 0.19 to 0.88 on every
+  device: the blocks not turned, scored by their best key, one fewer kept.

@@ -400,7 +400,9 @@ func (m *Model) uncovered(li int) Uncovered {
 	switch {
 	case c.NRotAt(li) != c.NRot && !(m.ropeSWA != nil && c.SWA(li)) || !c.MLA() && c.HeadDimV != c.HeadDim || !m.sharesGeometry(li):
 		return UncoveredGeometry
-	case c.IdxHeads != 0 && (c.QSARatio != 0 || len(c.CompKinds) != 0):
+	// A picture moves the rotary of the positions after it (marks), which a
+	// pooled selection turning blocks at their first positions does not read.
+	case c.IdxHeads != 0 && (c.QSARatio != 0 && m.tower != nil || len(c.CompKinds) != 0):
 		return UncoveredSelect
 	case c.Streams() > 1 && !c.statesStreams():
 		return UncoveredStreams
@@ -804,6 +806,45 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		k, v = join("k.row", k, ik), join("v.row", v, mapRow(b, "v.pad", graph.Attrs{Fn: graph.MapMul}, nil, id, ik))
 	}
+	// QSA caches its indexer's raw key as one more kv head, padded to the
+	// head with zeros and its value zero, and selects blocks of positions by
+	// their pooled keys (graph.Attrs.Pooled) for every head at once.
+	pooled := c.QSAAt(li) && has(jlm.RoleIdxK)
+	var qsa graph.Attrs
+	if pooled {
+		id := c.IdxHeadDim
+		if id > hd || shared || c.QSARatio <= 0 || c.IdxTopK < c.QSARatio {
+			return nil, UncoveredUnverified, fmt.Errorf("a pooled selection of %d heads of %d over kv heads of %d, blocks of %d keeping %d (shared %v)",
+				c.IdxHeads, id, hd, c.QSARatio, c.IdxTopK, shared)
+		}
+		zeros := func(name string, w int) graph.ValueID {
+			cut := b.Emit(graph.OpSlice, []graph.ValueID{q}, []graph.Result{{Name: name + ".cut", Width: w}}, nil,
+				graph.Attrs{HeadDim: b.G.Values[q].Width, Width: w}, nil, nil)[0]
+			return mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, nil, w, cut)
+		}
+		parts := []graph.ValueID{k, matvec(n, jlm.RoleIdxK, id)}
+		if id < hd {
+			parts = append(parts, zeros("idx.k.pad", hd-id))
+		}
+		rowW = kvDim + hd
+		k = b.Emit(graph.OpConcat, parts, []graph.Result{{Name: "k.row", Width: rowW}}, nil, graph.Attrs{}, nil, nil)[0]
+		v = b.Emit(graph.OpConcat, []graph.ValueID{v, zeros("v.pad", hd)}, []graph.Result{{Name: "v.row", Width: rowW}}, nil, graph.Attrs{}, nil, nil)[0]
+		iq = b.HeadNorm(matvec(n, jlm.RoleIdxQ, c.IdxHeads*id), jlm.RoleIdxQNorm, id, c.RMSEps)
+		qsa = graph.Attrs{NHead: c.IdxHeads, NKVHead: 1, HeadDim: id, Offset: kvDim, Width: rowW, Span: c.QSARatio,
+			TopK: c.IdxTopK / c.QSARatio, Fn: graph.MapMax, Eps: c.RMSEps}
+		if c.RopeAt(li) {
+			r := m.ropeAt(li)
+			layout := graph.RopeNorm
+			if c.RopeNeox {
+				layout = graph.RopeNeox
+			}
+			qsa.NRot, qsa.Base, qsa.Layout, qsa.Freqs, qsa.Mscale = r.NRot, r.Base, layout, len(r.Freqs) > 0, r.Scale
+			qsa.Sections, qsa.Interleaved = m.ropeAxes(r)
+			iq = b.Emit(graph.OpRope, []graph.ValueID{iq}, []graph.Result{{Name: "idx.q.rope", Width: c.IdxHeads * id}}, nil,
+				graph.Attrs{HeadDim: id, NRot: qsa.NRot, Base: qsa.Base, Layout: layout, Freqs: qsa.Freqs, Mscale: qsa.Mscale,
+					Sections: qsa.Sections, Interleaved: qsa.Interleaved}, nil, nil)[0]
+		}
+	}
 	hist := graph.SharedHistory(c.KVSource(li))
 	if !shared {
 		hist = graph.StateRef{Name: "kv", Version: b.KVAppend(k, v, 0)}
@@ -821,6 +862,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		a.Width = rowW
 		sel := b.Select(iq, hist, graph.Attrs{NHead: c.IdxHeads, NKVHead: c.IdxHeads, HeadDim: c.IdxHeadDim, Offset: kvDim, Width: rowW,
 			Span: c.IdxBlock, TopK: c.IdxTopK, Local: c.IdxLocal})
+		att = b.AttendSelected(q, hist, sel, a, stored(jlm.RoleAttnSinks)...)
+	} else if pooled {
+		a.Width = rowW
+		sel := b.SelectPooled(iq, hist, qsa, jlm.RoleIdxKNorm)
 		att = b.AttendSelected(q, hist, sel, a, stored(jlm.RoleAttnSinks)...)
 	} else {
 		att = b.AttendOf(q, hist, a, stored(jlm.RoleAttnSinks)...)

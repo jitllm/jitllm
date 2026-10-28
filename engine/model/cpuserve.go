@@ -79,6 +79,9 @@ const (
 	// its positions (cpuBound.pos).
 	cpuArgRequest
 	cpuArgPos
+	// cpuArgPlanes is the block's rotary planes (nn.Rope.TabPlanes), which
+	// a kernel turning at positions of its own reads (cpuForms.planes).
+	cpuArgPlanes
 )
 
 // cpuArg is one call word: its byte field in cpu.Args and where its value
@@ -191,6 +194,9 @@ type cpuForms struct {
 	reg32 *jit.Registry
 	m     map[jit.Key]*cpuBlockForm
 	err   map[jit.Key]error
+	// planes is each block's rotary planes where a form of it reads them
+	// (cpuArgPlanes), set once under mu before the block's first call.
+	planes [][]float32
 }
 
 func (c *cpuForms) close() {
@@ -1175,6 +1181,8 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			p = unsafe.Pointer(&s.cpuRoleVector(b.li, b.l, ar.role)[0])
 		case cpuArgRope:
 			p = unsafe.Pointer(&b.cs[0])
+		case cpuArgPlanes:
+			p = unsafe.Pointer(&s.m.cpuForms.planes[b.li][0])
 		case cpuArgKeys:
 			p = unsafe.Pointer(&b.kv.arena.k[0])
 		case cpuArgValues:
@@ -1505,7 +1513,38 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 		Step:    jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: 32, Seqs: max(s.nseq, 1)},
 		History: jit.History{ValuesInKeys: pg.latent},
 		Device:  composedCPUDevice(workers)}
-	return m.cpuFormOf(req, &gr, rows, false, s.kvl.fmt == cpu.KVF32)
+	fm, err := m.cpuFormOf(req, &gr, rows, false, s.kvl.fmt == cpu.KVF32)
+	if err == nil && readsPlanes(g) && !m.cpuPlanes(li) {
+		return nil, cpuDeclineError{jit.DeclineTable, fmt.Errorf("block %d turns by a rotary with no planes", li)}
+	}
+	return fm, err
+}
+
+// readsPlanes reports whether a form of g reads the rotary's planes: a
+// pooled selection turning its blocks, or a rotary at positions of its own.
+func readsPlanes(g *graph.Graph) bool {
+	return slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
+		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0 || o.Kind == graph.OpRope && o.Attr.Shift > 0
+	})
+}
+
+// cpuPlanes sets block li's rotary planes (cpuArgPlanes) where they are not,
+// and reports whether the block has them.
+func (m *Model) cpuPlanes(li int) bool {
+	c := &m.cpuForms
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.planes == nil {
+		c.planes = make([][]float32, len(m.layers))
+	}
+	if li >= len(c.planes) {
+		return false
+	}
+	if c.planes[li] == nil {
+		r := m.ropeAt(li)
+		c.planes[li] = r.TabPlanes(r.NRot / 2)
+	}
+	return len(c.planes[li]) > 0
 }
 
 // cpuFormOf is req's form on the CPU, mapped once for the model by its Key.
@@ -1694,6 +1733,8 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 				switch o.Name {
 				case "rope.cs":
 					ar.src = cpuArgRope
+				case "rope.planes":
+					ar.src = cpuArgPlanes
 				case "kv.k":
 					ar.src = cpuArgKeys
 				case "kv.v":
