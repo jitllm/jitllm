@@ -164,6 +164,8 @@ type Result struct {
 	Name  string
 	Width int
 	Elem  Elem
+	// Rows is Value.Rows.
+	Rows int
 }
 
 // Emit is one op of kind over in, binding w, with attributes a, reading and
@@ -173,7 +175,7 @@ func (s *Builder) Emit(kind OpKind, in []ValueID, outs []Result, w []Binding, a 
 	ids := make([]ValueID, len(outs))
 	for i, r := range outs {
 		ids[i] = s.value(r.Name, r.Width)
-		s.G.Values[ids[i]].Elem = r.Elem
+		s.G.Values[ids[i]].Elem, s.G.Values[ids[i]].Rows = r.Elem, r.Rows
 	}
 	s.G.op(Op{Kind: kind, In: in, Out: ids, Weight: w, Attr: a, Reads: reads, Writes: writes})
 	return ids

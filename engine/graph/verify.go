@@ -82,6 +82,25 @@ func Verify(g *Graph, f Facts) error {
 				defined[id] = true
 			}
 		}
+		// An op's values are rows of one grid; a strided convolution makes
+		// its output's grid, which it states.
+		rows := func(id ValueID) int {
+			if valid(id) {
+				return g.Values[id].Rows
+			}
+			return 0
+		}
+		strided := o.Kind == OpConv && o.Attr.Stride > 1
+		for j, id := range o.Out {
+			if r := rows(id); strided && j == 0 && r < 1 {
+				bad("%s: a strided convolution's %%%s states no rows", at, g.Values[id].Name)
+			}
+		}
+		for _, id := range append(slices.Clone(o.In), o.Out...) {
+			if !strided && len(o.In) > 0 && rows(id) != rows(o.In[0]) {
+				bad("%s: %%%s is of %d rows, %%%s of %d", at, g.Values[id].Name, rows(id), g.Values[o.In[0]].Name, rows(o.In[0]))
+			}
+		}
 		for _, r := range o.Reads {
 			if state[r.Name] != r.Version {
 				bad("%s: reads %s@%d where %s@%d is in force", at, r.Name, r.Version, r.Name, state[r.Name])

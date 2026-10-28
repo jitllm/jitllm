@@ -57,6 +57,7 @@ func TestVerifierHoldsTheStructure(t *testing.T) {
 		{"a weight bound at another shape", "stored", func(g *Graph, f Facts) { f.Inventory[jlm.RoleFFNDown] = Shape{K: 8, Rows: 16} }},
 		{"a norm's scale wider than its row", "a scale of", func(g *Graph, f Facts) { g.Ops[0].Weight[0].K = 16; f.Inventory[jlm.RoleAttnNorm] = Shape{K: 16} }},
 		{"an output never written", "never written", func(g *Graph, f Facts) { g.Out = append(g.Out, ValueID(len(g.Values))) }},
+		{"a value of another grid's rows", "rows", func(g *Graph, f Facts) { g.Values[g.Ops[1].Out[0]].Rows = 3 }},
 	} {
 		g, f := block(8, 16)
 		c.break_(g, f)

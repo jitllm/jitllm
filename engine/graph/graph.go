@@ -82,7 +82,13 @@ const (
 	// OpConv is a depthwise convolution of In[0] over the call's rows: each
 	// channel's Taps taps (Weight[0], Taps rows of the width: tap-major),
 	// centred, the rows past
-	// either end zero.
+	// either end zero. Where GridW is set the call's rows are a picture's
+	// grid, GridW rows a grid row, and the taps a Taps x Taps square
+	// (Weight[0] Taps*Taps rows of the width, row ky*Taps+kx), centred,
+	// zero past the grid's edges: a depthwise convolution at SAME
+	// padding. Where Stride is above one the output is the grid that
+	// stride takes, ceil(H/Stride) x ceil(GridW/Stride) rows (its value's
+	// Rows), padded as TensorFlow pads, the smaller half first.
 	OpConv
 	// OpAffine is In[0] times a per-channel scale plus a shift (Weight[0],
 	// Weight[1]): a BatchNorm folded at conversion.
@@ -293,6 +299,9 @@ type Value struct {
 	Name  string
 	Width int
 	Elem  Elem
+	// Rows, where set, is the value's own count of rows, a grid's that a
+	// strided op made from the step's; 0 is the step's rows.
+	Rows int
 }
 
 // Elem is a value's element type.
@@ -413,6 +422,9 @@ type Attrs struct {
 	// Alpha is OpAdd's scale on its second input: x + Alpha*y; 0 is one.
 	Alpha float64
 	Taps  int
+	// GridW is OpConv's grid width: the rows a grid row holds; Stride its
+	// step over the grid, 0 and 1 alike.
+	GridW, Stride int
 	// Positional makes OpEmbed index its table by the row's position.
 	Positional bool
 	// Pooling is OpPool's: a jlm.Pooling.

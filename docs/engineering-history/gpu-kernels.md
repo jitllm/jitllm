@@ -10517,3 +10517,21 @@ row where the composer's reads two.
   block" violation leaves no plain activation for the per-layer input, and
   the device gate crashed there; the block is now refused by name
   (UncoveredAct) under that violation.
+- A depthwise convolution over a picture's grid is an op: graph.OpConv
+  with GridW, its k x k filter tap-major as the container stores it, at a
+  stride where Stride is set. A stride-2 output is a grid of rows of its own
+  (graph.Value.Rows; Verify holds every other op to one grid's rows, and
+  the composer refuses any op but the convolution over such a value by
+  name). The taps are summed a row of the square at most three a map, since
+  a row of five over a vector loop held more than the registers. Taps that
+  never land on the grid are dropped, and every tap is read by its index, so
+  the output never takes the input's storage while other trips still read
+  it. A Temp scratch with no element type read back as the wrong storage:
+  NMSE 0.5 to 1.1. Words known at a grid of one row or column (a loop of one
+  trip) are constants through Unsigned's sign flips. TestComposedCPUGridConv
+  and TestComposedGPUGridConv (ptx and spirv on the V100) hold 16 grids to
+  the oracle's float64 convolution: ragged sides and channels, one row,
+  one column, 3x3 and 5x5, and stride 2 over even and odd sides. The CPU is
+  within 1e-12 and the cards within 1e-10, and a transposed filter parts.
+  MobileNet-V5's blocks are not stated yet: the tower front end declines
+  them by name (UncoveredKind).

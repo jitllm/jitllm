@@ -444,3 +444,31 @@ func Clamp32(dst, src []float32, lo, hi float32) {
 		dst[i] = float32(math.Max(math.Min(float64(v), float64(hi)), float64(lo)))
 	}
 }
+
+// DWConv32 is a depthwise convolution of src, an h x w grid of rows of c
+// channels, by filt's k x k taps (tap-major: tap ky*k+kx's row of c) at
+// stride st, TensorFlow's SAME padding (the output ceil(h/st) x
+// ceil(w/st), padded by (out-1)*st + k - in, the smaller half first), zero
+// past the grid's edges, accumulated in float64 and written to dst:
+// MobileNet's depthwise convolution.
+func DWConv32(dst, src []float32, h, w, c, k, st int, filt []float32) {
+	ho, wo := (h+st-1)/st, (w+st-1)/st
+	py, px := max((ho-1)*st+k-h, 0)/2, max((wo-1)*st+k-w, 0)/2
+	for y := range ho {
+		for x := range wo {
+			for ch := range c {
+				var acc float64
+				for ky := range k {
+					for kx := range k {
+						yy, xx := y*st+ky-py, x*st+kx-px
+						if yy < 0 || yy >= h || xx < 0 || xx >= w {
+							continue
+						}
+						acc += float64(src[(yy*w+xx)*c+ch]) * float64(filt[(ky*k+kx)*c+ch])
+					}
+				}
+				dst[(y*wo+x)*c+ch] = float32(acc)
+			}
+		}
+	}
+}

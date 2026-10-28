@@ -225,6 +225,17 @@ func (r *Registry) context(g *graph.Graph, k PartKind, f map[jlm.Role]jlm.Type, 
 	return c
 }
 
+// gridRows reports whether op o reads or writes a value of rows of its own
+// (graph.Value.Rows).
+func gridRows(g *graph.Graph, o graph.Op) bool {
+	for _, v := range append(slices.Clone(o.In), o.Out...) {
+		if g.Values[v].Rows > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // decomposeOps is every op of c's graph as primitives, owned by part of.
 func (r *Registry) decomposeOps(c *Context, of int) ([]Prim, error) {
 	var prims []Prim
@@ -232,6 +243,12 @@ func (r *Registry) decomposeOps(c *Context, of int) ([]Prim, error) {
 		d, ok := r.Decompositions[o.Kind]
 		if !ok {
 			return nil, fmt.Errorf("op %d (%s) has no decomposition", i, o.Kind)
+		}
+		if o.Kind != graph.OpConv && gridRows(c.Graph, o) {
+			// Decompositions read the step's rows; a convolution's, which
+			// reads each value's own (Context.rows), is the one that
+			// states a grid of other rows yet.
+			return nil, fmt.Errorf("op %d (%s) over a grid of rows of its own", i, o.Kind)
 		}
 		ps, err := d(o, c)
 		if err != nil {

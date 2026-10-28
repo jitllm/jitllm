@@ -146,7 +146,7 @@ func (l *loneOp) run(x []float32, n, guard int, vecs map[jlm.Role][]float32) (re
 				args[i] = in
 			case o.Kind == jit.OperandValue && o.Value == 1:
 				args[i] = out
-			case o.Kind == jit.OperandVector:
+			case o.Kind == jit.OperandVector || o.Kind == jit.OperandWeight && o.Format == jlm.TypeF32:
 				b, ok := vec[o.Role]
 				if !ok {
 					v := vecs[o.Role]

@@ -407,9 +407,26 @@ func (k *Kernel) foldDecided() bool {
 				k.Nodes[i] = Node{Op: OpAnd, Type: ir.U32, A: a, B: k.u32(1<<n - 1)}
 				changed = true
 			}
+		case OpXor, OpOr:
+			if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && nd.Type == ir.U32 {
+				v := uint32(ca.Imm) ^ uint32(cb.Imm)
+				if nd.Op == OpOr {
+					v = uint32(ca.Imm) | uint32(cb.Imm)
+				}
+				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(v)}
+				changed = true
+			}
 		case OpLess:
 			if it := k.Nodes[a]; it.Op == OpIter && k.countOf(b) == it.At || k.belowEnd(a, b) {
 				k.Nodes[i] = Node{Op: OpConst, Type: ir.Pred, Imm: 1}
+				changed = true
+			} else if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && ca.Type == ir.U32 && cb.Type == ir.U32 {
+				// Two words known here: a grid of one row's bounds.
+				v := int64(0)
+				if uint32(ca.Imm) < uint32(cb.Imm) {
+					v = 1
+				}
+				k.Nodes[i] = Node{Op: OpConst, Type: ir.Pred, Imm: v}
 				changed = true
 			}
 		case OpSelect:

@@ -38,6 +38,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpPool:         decomposePool,
 		graph.OpTakeRows:     decomposeTakeRows,
 		graph.OpRowConv:      decomposeRowConv,
+		graph.OpConv:         decomposeConv,
 		graph.OpPatchify:     decomposePatchify,
 		graph.OpRegroup:      decomposeRegroup,
 		graph.OpLeadRow:      decomposeLeadRow,
@@ -69,7 +70,14 @@ func (c *Context) value(v graph.ValueID) Operand {
 
 func (c *Context) width(v graph.ValueID) int { return c.Graph.Values[v].Width }
 
-func (c *Context) rows(v graph.ValueID) []int { return []int{c.Step.Rows, c.width(v)} }
+// rows is value v's shape: its rows (the step's, or its grid's where it
+// states them, graph.Value.Rows) and its width.
+func (c *Context) rows(v graph.ValueID) []int {
+	if r := c.Graph.Values[v].Rows; r > 0 {
+		return []int{r, c.width(v)}
+	}
+	return []int{c.Step.Rows, c.width(v)}
+}
 
 func (c *Context) weight(w graph.Binding) (Operand, error) {
 	f, ok := c.Formats[w.Role]
