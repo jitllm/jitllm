@@ -102,14 +102,16 @@ func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 	dIn, sIn := []Operand{qs, words}, []Operand{dot, ds, scales}
 	dExt := map[int]int{0: nwd * rows, 1: R * nwd}
 	sExt := map[int]int{1: nb * half, 2: R * (c.width(v)/q.Window + ns)}
+	var pick *Pick
 	if len(o.In) == 2 {
 		dIn, sIn = append(dIn, c.value(o.In[1])), append(sIn, c.value(o.In[1]))
 		dExt[2], sExt[3] = R*P, R*P
+		pick = &Pick{Rows: P, Of: rows}
 	}
 	return append(prims,
 		Prim{Kind: PrimReduce, Shape: []int{R, P, nb, q8Words}, In: dIn, Out: dot, Combine: OpAdd, Type: I, Expr: d.e,
-			Facts: Facts{Extents: dExt}},
+			Facts: Facts{Extents: dExt, Pick: pick}},
 		Prim{Kind: PrimReduce, Shape: []int{R, P, nb}, In: sIn, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: s.e,
-			Facts: Facts{Extents: sExt}},
+			Facts: Facts{Extents: sExt, Pick: pick}},
 	), nil
 }

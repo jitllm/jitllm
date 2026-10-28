@@ -34,6 +34,8 @@ type Kernel struct {
 	// the model's part the kernel belongs to.
 	// Least is the primitive's Facts.Least.
 	Least float32
+	// Pick is the primitive's Facts.Pick.
+	Pick *Pick
 	// Quarter is the primitive's Facts.Quarter, as nodes.
 	Quarter   *Quarter
 	Positions *Positions

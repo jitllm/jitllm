@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"strings"
 	"testing"
 
@@ -86,6 +87,13 @@ func runGraph(d backend.Device, codes []jit.Code, kerns []backend.Kernel, in, ou
 // capacity.
 func runGraphRows(d backend.Device, codes []jit.Code, kerns []backend.Kernel, in, out graph.ValueID, x []float32, n, guard int,
 	planes [3][]uint32, rows int) (res []float32, tail []uint32, err error) {
+	return runGraphRowsWith(d, codes, kerns, in, out, x, n, guard, planes, rows, nil)
+}
+
+// runGraphRowsWith is runGraphRows with the graph's other inputs' words,
+// each followed by guard poisoned words.
+func runGraphRowsWith(d backend.Device, codes []jit.Code, kerns []backend.Kernel, in, out graph.ValueID, x []float32, n, guard int,
+	planes [3][]uint32, rows int, inputs map[graph.ValueID][]uint32) (res []float32, tail []uint32, err error) {
 	var bufs []backend.Buf
 	defer func() {
 		for _, b := range bufs {
@@ -138,6 +146,15 @@ func runGraphRows(d backend.Device, codes []jit.Code, kerns []backend.Kernel, in
 				args[i] = inBuf
 			case o.Kind == jit.OperandValue && o.Value == out:
 				args[i] = outBuf
+			case o.Kind == jit.OperandValue && inputs[o.Value] != nil:
+				b, ok := own[o]
+				if !ok {
+					if b, err = alloc(append(slices.Clone(inputs[o.Value]), poisoned(guard)...)); err != nil {
+						return nil, nil, err
+					}
+					own[o] = b
+				}
+				args[i] = b
 			case o.Kind == jit.OperandWeight && o.Region >= 0 && o.Region < 3 && len(planes[o.Region]) > 0:
 				b, ok := own[o]
 				if !ok {

@@ -186,6 +186,14 @@ type Facts struct {
 	// Least, where set, is a value every element the primitive stores is at
 	// least.
 	Least float32
+	// Pick, where set, says the primitive's elements are rows a selection
+	// names of a matrix's: its sums are cut as the form over every row's.
+	Pick *Pick
+}
+
+// Pick is a selection of Rows of a matrix's Of rows, along an element axis.
+type Pick struct {
+	Rows, Of int
 }
 
 // Quarter is an angle Sum + Rest in quarter turns reduced: Turn its nearest

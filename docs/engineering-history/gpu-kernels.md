@@ -9680,3 +9680,19 @@ row where the composer's reads two.
   page-table Prefetch now leaves PrimMatrix kernels alone, and the
   weighted sums' fold steps, which the lowering now makes as a trip
   starts, add the block before rather than the trip's own.
+- **A picked row is the whole head's row to the bit.** The composed head
+  over the picked rows (graph.Head.Pick) and the whole head cut one Q8_0 sum
+  two ways: the split passes chose the segments by the form's own output
+  count, so on a V100 the whole head of 65536 rows summed each row in two
+  segments of 32 blocks and the 512 picked rows in 32 segments of two. A
+  selection's primitives now state the matrix it picks from (jit.Pick, set
+  by the row-selected Q8_0 matvec), and Split decides its segments by the
+  form over every row (Kernel.cutElements); the whole head's form is
+  unchanged by construction (no Pick, the same elements). On a random Q8_0
+  head of 4096 to 131072 rows of 2048, all 512 picked rows equal the whole
+  head's bit for bit on ptx and spirv (V100 and RTX 3050 Ti); with the cut
+  by the selection's own count 408 to 439 of them part, and uncut where the
+  whole head is cut 400 to 427 part (TestComposedGPUPickedRowsAreTheRows).
+  TestDecisionOnEveryDevice/lev passes its equality (the picked labels
+  answer the row's) on a V100's CUDA and Vulkan in both builds, where it
+  read 1e-6 in a probability.

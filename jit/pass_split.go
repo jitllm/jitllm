@@ -57,7 +57,7 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	if !ok || n.Work || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
 		return nil, false, nil
 	}
-	T, E := n.Loops[c].Trip, n.Elements()
+	T, E := n.Loops[c].Trip, n.cutElements()
 	slots := s.Slots
 	if slots == 0 {
 		slots = d.Slots
@@ -137,6 +137,18 @@ func segmentAxis(n *Kernel) int {
 		return 1
 	}
 	return 0
+}
+
+// cutElements is the elements a split of n's sums is decided by: its own,
+// or where its elements are rows a selection picks (Kernel.Pick), the form's
+// over every row, so a picked row's sum is cut as the whole form cuts it and
+// is that row's value to the bit.
+func (n *Kernel) cutElements() int {
+	e := n.Elements()
+	if p := n.Pick; p != nil && p.Rows > 0 && e%p.Rows == 0 {
+		return e / p.Rows * p.Of
+	}
+	return e
 }
 
 // groupSplit is n's sum over loop c in S segments within one workgroup:
