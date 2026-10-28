@@ -151,10 +151,7 @@ func (p *Pool) Unfuse() {
 	c.fz.tag++
 	c.fz.word.Store(c.fz.tag << fwShift)
 	c.wakeParked(len(c.parked))
-	joined := int64(c.gate.Or(gateClosed) & gateCount)
-	for c.left.Load() != joined {
-		runtime.Gosched()
-	}
+	joinWait(&c.left, int64(c.gate.Or(gateClosed)&gateCount))
 	c.fz.ahead = nil
 	c.fz.owner.Store(nil)
 	if p.crew != nil {
@@ -214,7 +211,7 @@ func (c *Pool) phase(j job, part int) {
 		a.Ahead(c.fz.owner.Load(), 0, limit, tag)
 	}
 	for spins := 0; c.fz.done.Load() != int64(n); spins++ {
-		if spins&63 == 63 {
+		if spins&1023 == 1023 {
 			runtime.Gosched()
 		}
 	}

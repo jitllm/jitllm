@@ -448,6 +448,18 @@ func (p *Pool) await(id int, seen uint64) (uint64, bool) {
 
 func (p *Pool) alive() bool { return !p.stopped.Load() }
 
+// joinWait spins until left reaches joined. A yield wakes an idle P, and
+// the runtime starts an OS thread for it where none is idle, seven heap
+// objects a thread (runtime.newm), so the wait yields every 1024 passes
+// alone: enough for a host whose workers outnumber its Ps.
+func joinWait(left *atomic.Int64, joined int64) {
+	for spins := 1; left.Load() != joined; spins++ {
+		if spins&1023 == 0 {
+			runtime.Gosched()
+		}
+	}
+}
+
 // drain claims chunks until the work is gone. Dynamic claiming, never a static
 // split: the P/E throughput ratio differs by kernel, so a slower core simply
 // claims fewer chunks.
@@ -739,10 +751,7 @@ func (p *Pool) publish(j job, part int) {
 	p.run(0)
 	// No chunk is left to claim, so a worker that has not joined has nothing
 	// to do: close the gate and wait for the ones that did.
-	joined := int64(p.gate.Or(gateClosed) & gateCount)
-	for p.left.Load() != joined {
-		runtime.Gosched()
-	}
+	joinWait(&p.left, int64(p.gate.Or(gateClosed)&gateCount))
 }
 
 // Close stops the workers. It is idempotent and safe to call from any
