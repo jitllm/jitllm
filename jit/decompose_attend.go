@@ -94,7 +94,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	hs := history{a: a, pageSize: pg}
 	position, held, page := hs.position, hs.held, hs.page
 	rng := func(axis int) Facts {
-		return Facts{Range: hs.span(axis), Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D},
+		return Facts{Range: hs.span(axis), Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs},
 			Extents: map[int]int{1: R * rowWords, 2: c.pages()}}
 	}
 
@@ -186,7 +186,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		{Kind: PrimMap, Shape: keys, In: tables(scores, maxes), Out: weights, Expr: wx.e, Facts: rng(2)},
 		{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: sum},
 		{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, g.Values), Out: values, Expr: vx.e, Facts: rng(3)},
-		{Kind: PrimMap, Shape: dims, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}},
+		{Kind: PrimMap, Shape: dims, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs}}},
 	}
 }
 

@@ -208,6 +208,9 @@ type Range struct {
 // Heads is attention's geometry: rows, query heads, key heads, head width.
 type Heads struct {
 	Rows, Query, Key, Dim int
+	// Seqs is the step's sequences the rows are of (Step.Seqs): 1 where
+	// every row is one sequence's.
+	Seqs int
 }
 
 // outShape is a primitive's output space.

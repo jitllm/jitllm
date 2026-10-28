@@ -15,6 +15,7 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
 	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // attendRowsCase is an attention a gate forms at a prompt chunk's rows: its
@@ -33,7 +34,10 @@ type attendRowsCase struct {
 // start, or from its window's where the attention slides, with a sink a head
 // where it carries them, held row by row to the definition over the history
 // as the pools hold it. The form must run its partitions in order (the
-// running pass), and its scratch is counted at a key bound far past the live
+// running pass), or where the device's matrix unit is stated and the rows
+// share their first position, run on the unit (the flash pass), every
+// device whose backend lowers a tile in both arms, which a CUDA device must;
+// its scratch is counted at a key bound far past the live
 // positions: no binding a kernel reads or writes may hold more than four
 // words a row, head and dimension, where a [rows, heads, keys] buffer at the
 // bound is sixty-four of them. Two violations must fail: every row's first
@@ -57,15 +61,33 @@ func TestComposedGPUAttendRows(t *testing.T) {
 		{64, 8, 64, 0, true},
 		{12, 4, 64, 16, false},
 	}
+	matrices, cuda := 0, false
 	for _, d := range devs {
-		for _, c := range cases {
-			name := fmt.Sprintf("%s/%dq%dkv%dd/window%d/sinks%v", d.API(), c.heads, c.kvh, c.dim, c.window, c.sinks)
-			t.Run(name, func(t *testing.T) { gpuAttendRows(t, d, c) })
+		cuda = cuda || d.API() == "ptx"
+		tile, _ := backend.LowersTile(d, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32})
+		for _, matrix := range []bool{false, true} {
+			if matrix && !tile {
+				continue
+			}
+			for _, c := range cases {
+				if matrix {
+					matrices++
+				}
+				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v", d.API(), matrix, c.heads, c.kvh, c.dim, c.window, c.sinks)
+				t.Run(name, func(t *testing.T) { gpuAttendRows(t, d, c, matrix) })
+			}
 		}
+	}
+	if cuda && matrices == 0 {
+		t.Error("no device lowers a matrix tile, a CUDA device among them: the gate did not run the matrix unit's form")
 	}
 }
 
-func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase) {
+// gpuAttendRows is one case on d, the device's matrix unit stated where
+// matrix is: an attention whose rows share their first position then
+// forms on it (the flash pass), its blocks of positions run in order,
+// and any other the split's running form.
+func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool) {
 	const page, p0, R, capRows, keys = 64, 2100, 37, 64, 64 * 64
 	b := graph.New()
 	n := b.KVAppend(b.In("k", c.kvh*c.dim), b.In("v", c.kvh*c.dim), 0)
@@ -78,16 +100,22 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase) {
 		Window: c.window}, sinks...))
 	g := b.G
 	dev := gpuDevice(d)
+	if matrix {
+		dev.Matrix = [3]int{16, 16, 16}
+	}
 	_, codes, err := jit.Default().Form(jit.Request{Graph: g, Step: jit.Step{Rows: capRows, Page: page, Keys: keys, Seqs: 1},
 		Device: dev, History: jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var scratch int64
-	running := 0
+	running, flash := 0, 0
 	for _, cd := range codes {
 		if slices.Contains(cd.Passes, "running") {
 			running++
+		}
+		if slices.Contains(cd.Passes, "flash") {
+			flash++
 		}
 		for _, bd := range cd.Binds {
 			if bd.Operand.Kind != jit.OperandScratch || !bd.Read && !bd.Writes {
@@ -100,8 +128,11 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase) {
 			}
 		}
 	}
-	if running != 1 {
-		t.Errorf("%d kernels run the partitions in order: the gate did not select the running form", running)
+	switch {
+	case matrix && c.window == 0 && (flash != 1 || running != 0):
+		t.Errorf("%d kernels run on the matrix unit and %d the partitions in order: the gate did not select the matrix unit's form", flash, running)
+	case (!matrix || c.window > 0) && (running != 1 || flash != 0):
+		t.Errorf("%d kernels run the partitions in order and %d on the matrix unit: the gate did not select the running form", running, flash)
 	}
 	t.Logf("%d kernels, the largest scratch the attention reads or writes %d bytes (a [rows, heads, keys] buffer is %d)",
 		len(codes), scratch, 4*capRows*c.heads*keys)

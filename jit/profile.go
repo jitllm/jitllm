@@ -12,6 +12,7 @@ func gpuProfile() Profile {
 	return Profile{Int8: &Int8Form{Window: 32, Word: 4, Sums: 16}, Passes: []Pass{
 		Offsets{Table: tableQOff},
 		RunLengths{Grain: 128, Align: 32},
+		Flash{Rows: 64, Keys: 32, Shared: 48 << 10},
 		SplitRange{Pad: 32, Copies: 32, Work: mainWorkgroups},
 		WorkFuse{Work: mainWorkgroups},
 		HeadGroups{Work: mainWorkgroups},

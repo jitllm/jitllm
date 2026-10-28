@@ -187,8 +187,14 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 	if strings.HasPrefix(dev, "cuda") && mx == 0 {
 		t.Fatalf("%s: the prompt's %d composed block steps ran no kernel on the matrix unit", dev, np)
 	}
-	t.Logf("the composer served %d block steps of the prompt (%d launches on the matrix unit), the tier's kernels %d blocks a step",
-		np, mx, len(keep))
+	// And the prompt's attention, where a block's rows share their first
+	// position: every block's of these models but a sliding window's.
+	at := st.AttendPart(tier.ComposedPrompt)
+	if strings.HasPrefix(dev, "cuda") && at == 0 {
+		t.Fatalf("%s: the prompt's %d composed block steps ran no attention on the matrix unit", dev, np)
+	}
+	t.Logf("the composer served %d block steps of the prompt (%d launches on the matrix unit, %d of them attentions), the tier's kernels %d blocks a step",
+		np, mx+at, at, len(keep))
 }
 
 // prefillVsForward compares Prefill against a Forward loop. exact demands bit

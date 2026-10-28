@@ -759,6 +759,9 @@ type Stats struct {
 	// device's matrix unit (jit.Matrix), by part, emitted as PartsServed is:
 	// what of a part ran on the unit, not what was formed for it.
 	MatrixLaunches [numParts]int
+	// AttendLaunches counts, as MatrixLaunches, the launches of a part's
+	// attention formed on the matrix unit (jit.Flash).
+	AttendLaunches [numParts]int
 	// ComposedLanes is the subgroup the composer formed the served parts for
 	// (Config.ComposedLanes, else the device's lanes): the selection check of
 	// a gate that narrows it.
@@ -1390,6 +1393,7 @@ func (s *Stats) add(o Stats) {
 	for i := range s.PartsServed {
 		s.PartsServed[i] += o.PartsServed[i]
 		s.MatrixLaunches[i] += o.MatrixLaunches[i]
+		s.AttendLaunches[i] += o.AttendLaunches[i]
 		s.PartsDeclined[i] += o.PartsDeclined[i]
 		s.PartsUnasked[i] += o.PartsUnasked[i]
 		s.PartsReplayed[i] += o.PartsReplayed[i]

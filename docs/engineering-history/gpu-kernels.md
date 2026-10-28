@@ -9631,3 +9631,52 @@ row where the composer's reads two.
   is smaller than a global one's, where the old fault's slot lies past it,
   and a run of the gate on E2B crashed the Go runtime in the collector
   after its page and row faults.
+- **An attention over one sequence's rows runs on the matrix unit (the
+  flash pass).** Where a prompt chunk's rows are one sequence's in
+  position order (jit.Step.Seqs, Heads.Seqs: a prompt call, or a ragged
+  step whose rows are one run, ragStep.oneSequence) and the device states
+  its matrix tile, jit.Flash forms the decomposed attention chain -- the
+  chain SplitRange already matched, now one function both read
+  (rangeChain) -- as one kernel: a workgroup takes 64 rows of the
+  sequence and a head, 32 positions a block up to its last live row's
+  end, read from the descriptors at run time; the position factors of a
+  block are staged once for every row of the tile, the dots and the
+  exponentials' weighted sums are tile products, two threads a row keep
+  the running maximum and sum, and the weighted sums stay in registers,
+  rescaled by exp of the old maximum less the new. Every operand the
+  history or the rows hold as float32 is staged as its binary16 rounding
+  and what that leaves, the dots three tile products and the weighted
+  sums two, so the form keeps the attend gate's float32 band (1e-8): its
+  worst row reads 1.8e-12 on the laptop's sm_86 and 2.3e-12 on the V100's
+  sm_70 (the running form 2.1e-13); dropping the leftovers' products reads
+  1.1e-7 and fails. No buffer
+  holds a row's scores and the split's partial and merge are gone (three
+  kernels a block become one). A window's rows (rows.win), a start that
+  is not the descriptor's own, a head over 16 rows a warp's tile, or a
+  device with no tile keeps the running form; the tier forms both where a
+  ragged step's width can mix sequences (promptServed) and counts the
+  attentions run on the unit (Stats.AttendLaunches), which
+  TestPrefillMatchesForward/device holds above zero on CUDA (16 of 16
+  composed block steps on Llama-3.2-1B, 40 of gemma-3-1b's 260, its
+  global layers). Measured on a V100 (CUDA, sm_70), Llama-3.2-1B-Instruct
+  Q4_K_M, jitllm speed with JITLLM_CUDA_KERNEL_TIMING: the composed
+  prompt's attention went from 13.2 to 2.7 ms at 512 tokens and from
+  221.6 to 29.3 ms at 2048 (main's flashprefill: 1.5 and 17.8 ms), the
+  prompt's kernels from 65.4 to 54.6 ms and from 430 to 236 ms (main: 22.6
+  and 104 ms). The whole composed prompt against the base, jitllm speed a
+  process an arm alternating for six rounds, host threads on the card's
+  node: 0.844 / 0.770 / 0.581 of the base's time at 512 / 1024 / 2048
+  tokens (IQR/median 0.013 / 0.014 / 0.009; the A/A pass beside it read
+  1.018 / 0.997 / 1.004, IQR/median at most 0.028), 57.1 / 138.5 / 268.1
+  ms against 67.7 / 178.6 / 460.5. What is left is the projections: 47.6 ms of the 54.6 at
+  512 and 191 of the 236 at 2048, against main's GemmVolta 17.4 and 72.7
+  ms. The prompt is GPU-bound: the server's time to first token reads
+  within 2.6 ms of the kernels' sum at 512, with no host read or form
+  inside the prompt. On the matrix kernel of 123cbc14 the prompt's kernels
+  read 47.5 -> 37.0 ms at 512 and 357 -> 169 ms at 2048 (main 22.4 and
+  99.9): the projections 29.8 and 119 ms with their halves kernels (main's
+  GemmVolta about 17 and 68), the attention 2.9 and 33.4 ms (main 1.5 and
+  17.0). The attention lost a little there (2.7 and 29.3 before): the
+  page-table Prefetch now leaves PrimMatrix kernels alone, and the
+  weighted sums' fold steps, which the lowering now makes as a trip
+  starts, add the block before rather than the trip's own.

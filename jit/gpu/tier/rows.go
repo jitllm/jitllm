@@ -40,6 +40,21 @@ type ragStep struct {
 	again bool
 }
 
+// oneSequence reports whether the step's rows are one sequence's, in
+// position order.
+func (r *ragStep) oneSequence() bool {
+	for i := range r.pos {
+		if i == 0 {
+			continue
+		}
+		if r.pos[i] <= r.pos[i-1] || r.sid != nil && r.sid[i] != r.sid[0] ||
+			r.seqLen > 0 && (r.slot[i]-r.pos[i])/r.seqLen != (r.slot[0]-r.pos[0])/r.seqLen {
+			return false
+		}
+	}
+	return true
+}
+
 // LayersRows runs one step for len(pos) rows, every block and the head, and
 // fills head.Tokens with each row's greedy token and, with head.RowLogits, reads
 // each row's logits into head.Logits (see nn.RowsDevice). The rows may be

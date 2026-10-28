@@ -48,48 +48,11 @@ type member struct {
 }
 
 func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
-	var mem []member
-	for _, k := range ch {
-		p := k.Positions
-		if p == nil || k.Heads == nil || len(k.Stores) != 1 || p.Align <= 1 {
-			break
-		}
-		mem = append(mem, member{k: k, axis: p.Axis, loop: p.Loop, out: k.Bufs[k.Stores[0].Buf].Operand})
-	}
-	if len(mem) == 0 || len(mem) == len(ch) {
+	c, ok := rangeChain(ch)
+	if !ok {
 		return 0, nil, false
 	}
-	last := ch[len(mem)]
-	if last.Kind != PrimMap || len(last.Loops) != 0 || len(last.Stores) != 1 {
-		return 0, nil, false
-	}
-	var mx, wt, sm, vl *member
-	for i := range mem {
-		m := &mem[i]
-		if f, ok := m.k.fold(); ok && m.loop >= 0 && m.k.Nodes[m.k.Nodes[f].A].Op == OpMax {
-			mx = m
-		}
-	}
-	if mx == nil {
-		return 0, nil, false
-	}
-	for i := range mem {
-		m := &mem[i]
-		f, isFold := m.k.fold()
-		switch {
-		case m.loop < 0 && m.k.reads(mx.out) && hasNode(m.k, OpExp):
-			wt = m
-		case wt != nil && isFold && m.loop >= 0 && m.k.reads(wt.out) && last.reads(m.out) && m.k.sumFold(f):
-			if len(m.k.Space) == len(last.Space) {
-				vl = m
-			} else {
-				sm = m
-			}
-		}
-	}
-	if wt == nil || sm == nil || vl == nil {
-		return 0, nil, false
-	}
+	mem, mx, sm, vl, last := c.mem, c.mx, c.sm, c.vl, c.last
 	h := *mx.k.Heads
 	C := mx.k.Loops[mx.loop].Trip
 	g := s.Work.geometry(h, d.Lanes)

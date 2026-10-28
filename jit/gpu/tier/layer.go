@@ -8552,7 +8552,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			var inst *partInst
 			if asked && why == partServes {
 				var serr error
-				sv, inst, cp, serr = g.servedStep(bs, l, li, p, R)
+				sv, inst, cp, serr = g.servedStep(bs, l, li, p, R, rag == nil || rag.oneSequence())
 				if serr != nil {
 					if err == nil {
 						err = serr

@@ -77,6 +77,9 @@ type composedPart struct {
 	// key bound and page.
 	history    jit.History
 	keys, page int
+	// seqs is the sequences a step's rows are of (jit.Step.Seqs): 1 for a
+	// form of one sequence's rows in position order, 0 for a row each.
+	seqs int
 	// paged is each bank a streamed block holds in pages and the sheets it
 	// holds of it (layer.paged), nil for banks held whole.
 	paged map[jlm.Role]int
@@ -123,8 +126,8 @@ type partCode struct {
 	geom          jit.Code
 	// matrix is a kernel formed on the device's matrix unit: one the
 	// matrix pass formed whose tiles it multiplies, not the kernel that
-	// writes its rows' factor for it.
-	matrix bool
+	// writes its rows' factor for it. attend is an attention formed there.
+	matrix, attend bool
 }
 
 // partInst is one lane's instance of a form: the form's own buffers and
@@ -216,7 +219,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Part:    sl.part,
 		Formats: sl.formats,
 		Paged:   sl.paged,
-		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
+		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin, Seqs: sl.seqs},
 		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
 			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
 			Matrix: g.composedMatrix(), Shared: sharedPerUnit(g.dev)},
@@ -298,7 +301,8 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 		geom := jit.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
 			LiveGroup: c.LiveGroup, Work: c.Work, Few: c.Few, Many: c.Many}
 		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom,
-			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA })})
+			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA }),
+			attend: slices.Contains(c.Passes, "flash")})
 		var args []partArg
 		for _, bd := range c.Binds {
 			o := bd.Operand
@@ -480,14 +484,18 @@ func (in *partInst) free() {
 // launch binds the form's kernels to the caller's inputs and outputs, the
 // lane's instance inst and the part's weights, vectors and tables, and
 // launches them in order: how many of them were formed on the matrix unit.
-func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf) (int, error) {
+func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf) (unitLaunches, error) {
 	return sv.launchCodes(lc, inst, in, out, 0, len(sv.f.codes))
 }
 
+// unitLaunches is the launches of a form's kernels on the matrix unit: of
+// its matrices, and of its attentions.
+type unitLaunches struct{ matrix, attend int }
+
 // launchCodes is launch of the form's codes [lo, hi).
-func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backend.Buf, lo, hi int) (int, error) {
+func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backend.Buf, lo, hi int) (unitLaunches, error) {
 	f, sl := sv.f, &sv.sl
-	matrix := 0
+	var matrix unitLaunches
 	for i := lo; i < hi; i++ {
 		fc, bufs := &f.codes[i], sv.args[i]
 		if !fc.geom.RunsAt(sv.rows) {
@@ -524,7 +532,10 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 			return matrix, err
 		}
 		if fc.matrix {
-			matrix++
+			matrix.matrix++
+		}
+		if fc.attend {
+			matrix.attend++
 		}
 	}
 	return matrix, nil
@@ -827,6 +838,18 @@ func (s Stats) ServedPart(k Parts) (served, declined, unasked int) {
 	return served, declined, unasked
 }
 
+// AttendPart is how many launches of the parts of k ran an attention formed
+// on the device's matrix unit (Stats.AttendLaunches).
+func (s Stats) AttendPart(k Parts) int {
+	n := 0
+	for i := range s.AttendLaunches {
+		if k&(1<<i) != 0 {
+			n += s.AttendLaunches[i]
+		}
+	}
+	return n
+}
+
 // MatrixPart is how many launches of the parts of k ran a kernel formed on
 // the device's matrix unit (Stats.MatrixLaunches).
 func (s Stats) MatrixPart(k Parts) int {
@@ -866,6 +889,7 @@ type servedKey struct {
 	// held is the sheets a streamed block holds of its banks in pages, 0
 	// where they are whole.
 	held int
+	seqs int
 }
 
 // partIO is the most inputs, and the most outputs, a served part binds: a
@@ -1028,7 +1052,8 @@ func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind partK
 		return err
 	}
 	g.PartsServed[kind]++
-	g.MatrixLaunches[kind] += matrix
+	g.MatrixLaunches[kind] += matrix.matrix
+	g.AttendLaunches[kind] += matrix.attend
 	return nil
 }
 
@@ -1098,7 +1123,8 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 		return err
 	}
 	g.PartsServed[kind]++
-	g.MatrixLaunches[kind] += m0 + m1
+	g.MatrixLaunches[kind] += m0.matrix + m1.matrix
+	g.AttendLaunches[kind] += m0.attend + m1.attend
 	return nil
 }
 
@@ -1916,7 +1942,7 @@ func (l *layer) windowHeld(li int, p *nn.LayerPlan) bool {
 // A form that reads x in the kernel writing its output is written apart, in
 // bs.h, and copied over x after (servedCopy): cp is that copy, nil where the
 // form writes over x.
-func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan, R int) (sv *servedPart, inst *partInst, cp *servedPart, err error) {
+func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan, R int, one bool) (sv *servedPart, inst *partInst, cp *servedPart, err error) {
 	rcs := bs.cs
 	if bs.csSWA != nil && p.LocalRope(li) {
 		rcs = bs.csSWA
@@ -1925,7 +1951,8 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	if R > 1 {
 		qOff = bs.roff
 	}
-	sv, err = g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R)
+	sv, err = g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R,
+		rowSeqs(R, one))
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1997,7 +2024,7 @@ func (g *devTier) prewarmComposedBlock(li int) {
 			rcs = bs.csSWA
 		}
 		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
-			g.kvp.p, 1)
+			g.kvp.p, 1, 0)
 		if err != nil {
 			g.LastErr = "the composed block: " + err.Error()
 			return
@@ -2064,22 +2091,43 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	if bb.csSWA != nil && bb.p.LocalRope(li) {
 		rcs = bb.csSWA
 	}
-	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.dRows, bb.p.MaxSeq,
-		g.kvp.p, bb.rows)
-	if err != nil {
-		// A form that failed earlier was named then (servedFor).
-		if !errors.Is(err, errFormedEarlier) {
-			g.LastErr = "the composed prompt block: " + err.Error()
+	// A call's rows are one sequence's in position order (a prompt's
+	// chunk), or at the ragged step's width any sequences': a form each,
+	// both formed here.
+	for _, seqs := range [...]int{1, 0} {
+		if seqs == 0 && (g.stepW <= 0 || bb.rows != g.stepW) {
+			continue
 		}
-		return false
-	}
-	if !sv.f.inPlace(0, 0) {
-		if _, err := g.servedCopy(bb, bb.rows); err != nil {
-			g.LastErr = "the composed prompt block's copy: " + err.Error()
+		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.dRows,
+			bb.p.MaxSeq, g.kvp.p, bb.rows, seqs)
+		if err != nil {
+			// A form that failed earlier was named then (servedFor).
+			if !errors.Is(err, errFormedEarlier) {
+				g.LastErr = "the composed prompt block: " + err.Error()
+			}
+			return false
+		}
+		if !sv.f.inPlace(0, 0) {
+			if _, err := g.servedCopy(bb, bb.rows); err != nil {
+				g.LastErr = "the composed prompt block's copy: " + err.Error()
+				return false
+			}
+		}
+		if g.promptInst(bb, sv.f) == nil {
 			return false
 		}
 	}
-	return g.promptInst(bb, sv.f) != nil
+	return true
+}
+
+// rowSeqs is the sequences a call of R rows is of as its form states them
+// (jit.Step.Seqs): 1 where its rows are one sequence's in position order,
+// else 0, a row each.
+func rowSeqs(R int, one bool) int {
+	if R > 1 && one {
+		return 1
+	}
+	return 0
 }
 
 // promptHeld reports whether a placement leaves block li's own batched
@@ -2295,7 +2343,7 @@ func poolHistory(k kvGeom) jit.History {
 // live positions need, a count it reads at run time (jit.Trips), so the
 // session's capacity is its key bound and no position compiles a form. A
 // prompt chunk's form is its width's, as the tier's kernels are.
-func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R int) (*servedPart, error) {
+func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R, seqs int) (*servedPart, error) {
 	keys := keyBound(maxSeq)
 	kind := partBlock
 	if R > 1 {
@@ -2309,7 +2357,7 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 		kk, kv, tab, geom = pl.k, pl.v, pl.tab, pl.geom
 	}
 	paged := l.paged()
-	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla}
+	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs}
 	for _, n := range paged {
 		sk.held = max(sk.held, n)
 	}
@@ -2324,7 +2372,7 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": kk, "kv.v": kv, "pages": tab, "rows": rows,
 				"rows.win": rowsW, "q.off": qOff, "rows.n": calls},
 			history: poolHistory(geom),
-			keys:    keys, page: page, paged: paged}
+			keys:    keys, page: page, seqs: seqs, paged: paged}
 		if l.linear && l.pool != nil {
 			t := sl.tables
 			// The shared form holds one half, stepped in place (bindRec).
