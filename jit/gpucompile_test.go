@@ -13,8 +13,8 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // residentKB is this process's resident set.
