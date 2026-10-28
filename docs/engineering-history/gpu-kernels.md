@@ -10094,3 +10094,61 @@ row where the composer's reads two.
   kernel (`cpu.EmitPackedMatVecFusedAhead`) reads the same planes at about
   41 GB/s: it takes each scale sub-block over all of a call's rows, a few
   sequential streams, and adds the scaled sum into `Out` once a sub-block.
+- **The matrix kernel's codes decoded two a word, its index bounded, its
+  staged words read sixteen bytes a load: 1.22/1.13/0.95 of GemmVolta.**
+  On the V100 (CUDA, sm_70, 512 rows, BenchmarkComposedMatrix, q/o Q4_K,
+  gate/up Q4_K, down Q6_K, median of per-round ratios, each change A/B
+  interleaved twice against its parent, an A/A of the base within 0.01)
+  from 1.34-1.35/1.26-1.27/1.11-1.12: `HalfPairs` (after the profile's last
+  pass, on a device that states `Device.HalfPairs`, PTX alone) decodes two
+  stage words whose four elements are one scale times a code plus one bias,
+  the second word's codes the first's bit fields sixteen bits higher in the
+  same words: each field masked for two elements at once into 1024's
+  binary16 exponent, less 1024 (and the code's offset where the bias is the
+  scale times it, Q6_K's 32), one fma.f16x2 by the scale and the bias, the
+  pairs dealt back into the words' order -- 615 -> 591 instructions a
+  warp-trip on Q4_K, 603 -> 545 on Q6_K, 1.27-1.28/1.22/1.09-1.10, worst NMSE
+  2.3e-7 against the gate's 2e-6 (the earlier pair decode masked each code
+  alone and kept 603). Affine's `bounded` (matrix kernels) drops a term a
+  shift or mask cannot see by its bound, not only a constant: (x+y)>>n is
+  x>>n for x a multiple of 2^n and y at most 2^n-1, (x+y)&(2^n-1) is
+  y&(2^n-1), a mask over a value its bound keeps under it is the value, and
+  (a*C)>>n is a*(C>>n): 541/494 instructions, neutral alone
+  (1.25-1.29/1.20/1.11-1.12). The GPU lowering reads four aligned 32-bit
+  loads of a scratch buffer at one index (equal by structure, so a load
+  carried a trip ahead groups too) as one ld.global.v4 on a device that
+  states `Device.VectorLoads` (PTX): a scratch binding is an allocation of
+  its own (the tier's `Alloc`), never bound at an offset. The staged
+  binary16 words of the row factor go from 8 to 2 loads a thread a trip and
+  the probe from 1.27-1.29/1.20-1.21/1.11 to 1.22-1.23/1.13/0.95: Q6_K's
+  down projection is faster than GemmVolta. Instruction counts alone do not
+  predict q/o (two of its three changes cut instructions and moved it 0 to
+  +1%); the memory instructions do. The V100's counters are not readable
+  (nvprof and ncu: ERR_NVGPUCTRPERM; nvprof's trace sees no kernel the goffi
+  launches), so stalls are inferred from SASS (`nvdisasm`) and timing.
+  Measured and not kept: pairing each four elements' codes crosswise (the
+  first with the third, the halves kernel writing the row's words the same
+  way) ends the re-pairing (576/528 instructions) and reads 1.32-1.33/
+  1.15-1.16/1.12-1.13 -- the halves kernel's own time unchanged (31-36 us,
+  timed alone now), the matrix kernel slower on the two shapes of 128
+  workgroups; tiles over the paired decode and bounded index: 128x128x64 2x4
+  (254 registers, no spill) 1.29-1.30/1.20/1.02 and with the vector loads
+  1.22-1.23/1.11/1.00; 128x128x32 over 4x2 warps 1.24/1.17/1.02 and with
+  them 1.16/1.11/1.06 (128x128x64 over 4x2: 1.79/1.78/1.29);
+  128x64x32 2x2 two a unit 1.46/1.40/1.20; 128x64x64 1.98/2.00/1.84 (spills).
+  No tile is best on every shape: q/o reads best over 4x2 warps, down over
+  2x4 at depth 32, gate/up at depth 64 -- a choice per shape for a tuner,
+  not a profile constant. PM3 in one pass (servers, main, the base 88d345c6
+  and the head one after another, each an A/A within 0.4%, composed prompt rate
+  over main's at 512/1024/2048): Llama-3.2-1B (card 7) 0.483/0.409/0.291 ->
+  0.510/0.428/0.300, Llama-3.1-8B (card 7) 0.544/0.444/0.321 ->
+  0.586/0.472/0.335, gpt-oss-20b (cards 6 and 7) 0.401/0.499/0.492 ->
+  0.420/0.519/0.508 (MXFP4's codes are a table's, which the pair decode
+  does not take: the vector loads and the bounded index), Qwen3-30B-A3B
+  (cards 6 and 7) 0.415/0.348/0.251 -> 0.442/0.364/0.258. Each 16-token
+  answer of the head is the base's but Llama-3.1-8B's, which parts from
+  main's and the base's after ten tokens (". Question: what did the
+  committee ask each" against ". The committee reviewed the quarterly"):
+  the binary16 scale the pair decode rounds to moves a near tie there
+  (TestComposedGPUMatrix and TestComposedGPUExperts at worst 2.3e-7,
+  TestComposedBlocksServe's bands, all pass).
