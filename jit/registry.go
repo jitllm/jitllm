@@ -113,6 +113,10 @@ type Context struct {
 	// next where they lie further apart than they pack.
 	Strides map[jlm.Role]int
 	formed  map[graph.ValueID]bool
+	// grouped holds the groupings of a selection's pairs by expert formed
+	// (expertGrouped), by their scratch's name: the projections a
+	// selection routes share one.
+	grouped map[string]bool
 }
 
 // blockPart is the part of block li, for a block part's decomposition: the
@@ -179,7 +183,7 @@ func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device, sp *e
 // device d, the device's int8 form at the step's window.
 func (r *Registry) context(g *graph.Graph, k PartKind, f map[jlm.Role]jlm.Type, rots []graph.Rotary, s Step, d Device) *Context {
 	c := &Context{Graph: g, Part: k, Formats: f, Step: s, Int8: r.Profiles[d.Kind].Int8, Rotaries: rots, exactDiv: d.ExactDiv,
-		formed: map[graph.ValueID]bool{}, matrix: d.Matrix[0] > 0 && s.Rows >= d.Matrix[0]}
+		formed: map[graph.ValueID]bool{}, grouped: map[string]bool{}, matrix: d.Matrix[0] > 0 && s.Rows >= d.Matrix[0]}
 	if q := c.Int8; q != nil && s.ActWindow > 0 && s.ActWindow != q.Window {
 		w := *q
 		w.Window = s.ActWindow

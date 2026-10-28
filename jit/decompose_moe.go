@@ -402,13 +402,18 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 	W := (P-1)*stride + K
 	U, F := ir.U32, ir.F32
 	name := c.value(o.Out[0]).Name
+	sel := c.value(o.In[1])
+	sel.Elem = U
+	// The grouping is the selection's, of its experts, pairs and rows: the
+	// projections the selection routes read one.
+	of := fmt.Sprintf("%s.group%dx%dx%d", sel.Name, E, P, R)
 	word := func(n string) Operand {
-		return Operand{Kind: OperandScratch, Name: name + "." + n, Elem: U, Temp: true}
+		return Operand{Kind: OperandScratch, Name: of + "." + n, Elem: U}
 	}
 	count, start, rank, table, block := word("count"), word("start"), word("rank"), word("table"), word("block")
 	grouped := Operand{Kind: OperandScratch, Name: name + ".grouped", Temp: true}
-	sel := c.value(o.In[1])
-	sel.Elem = U
+	formed := c.grouped[of]
+	c.grouped[of] = true
 	less := func(x *exprs, a, b int) int { return x.op(OpLess, ir.Pred, a, b) }
 	// same is 1 where words a and b are equal, else 0.
 	same := func(x *exprs, a, b int) int {
@@ -446,49 +451,51 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 	}
 
 	var prims []Prim
-	{
-		var x exprs
-		e, s := x.coord(0), x.coord(1)
-		k := key(&x, s)
-		same(&x, k, e)
-		in, f := keyed()
-		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E, Q}, In: in, Out: count, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
-	}
-	{
-		var x exprs
-		e, f := x.coord(0), x.coord(1)
-		run := x.op(OpAnd, U, x.op(OpAdd, U, x.at(0, []int{E}, f), x.u(uint32(G-1))), x.u(^uint32(G-1)))
-		x.sel(U, less(&x, f, e), run, x.u(0))
-		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E + 1, E}, In: []Operand{count}, Out: start, Combine: OpAdd, Type: U, Expr: x.e})
-	}
-	{
-		var x exprs
-		s, t := x.coord(0), x.coord(1)
-		ks, kt := key(&x, s), key(&x, t)
-		eq := same(&x, ks, kt)
-		x.sel(U, less(&x, t, s), eq, x.u(0))
-		in, f := keyed()
-		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{Q, Q}, In: in, Out: rank, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
-	}
-	{
-		var x exprs
-		s := x.coord(0)
-		k := key(&x, s)
-		in, f := keyed()
-		in = append(in, start, rank)
-		f.Extents[2], f.Extents[3] = E+1, Q
-		ix := x.sel(U, less(&x, k, x.u(uint32(E))), x.op(OpAdd, U, x.load(2, k), x.load(3, s)), x.u(uint32(most)))
-		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{Q}, In: in, Expr: x.e, Facts: f,
-			Stores: []PrimStore{{Out: table, Index: ix, Value: s, Extent: most + 1}}})
-	}
-	{
-		var x exprs
-		b, e := x.coord(0), x.coord(1)
-		used := x.op(OpSub, U, x.op(OpShr, U, x.load(0, x.u(uint32(E))), x.u(uint32(bitsOf(G)))), x.u(1))
-		first := x.op(OpShl, U, x.op(OpMin, U, b, used), x.u(uint32(bitsOf(G))))
-		x.sel(U, less(&x, first, x.load(0, x.op(OpAdd, U, e, x.u(1)))), x.u(0), x.u(1))
-		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{most / G, E}, In: []Operand{start}, Out: block, Combine: OpAdd, Type: U,
-			Expr: x.e, Facts: Facts{Extents: map[int]int{0: E + 1}}})
+	if !formed {
+		{
+			var x exprs
+			e, s := x.coord(0), x.coord(1)
+			k := key(&x, s)
+			same(&x, k, e)
+			in, f := keyed()
+			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E, Q}, In: in, Out: count, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
+		}
+		{
+			var x exprs
+			e, f := x.coord(0), x.coord(1)
+			run := x.op(OpAnd, U, x.op(OpAdd, U, x.at(0, []int{E}, f), x.u(uint32(G-1))), x.u(^uint32(G-1)))
+			x.sel(U, less(&x, f, e), run, x.u(0))
+			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E + 1, E}, In: []Operand{count}, Out: start, Combine: OpAdd, Type: U, Expr: x.e})
+		}
+		{
+			var x exprs
+			s, t := x.coord(0), x.coord(1)
+			ks, kt := key(&x, s), key(&x, t)
+			eq := same(&x, ks, kt)
+			x.sel(U, less(&x, t, s), eq, x.u(0))
+			in, f := keyed()
+			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{Q, Q}, In: in, Out: rank, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
+		}
+		{
+			var x exprs
+			s := x.coord(0)
+			k := key(&x, s)
+			in, f := keyed()
+			in = append(in, start, rank)
+			f.Extents[2], f.Extents[3] = E+1, Q
+			ix := x.sel(U, less(&x, k, x.u(uint32(E))), x.op(OpAdd, U, x.load(2, k), x.load(3, s)), x.u(uint32(most)))
+			prims = append(prims, Prim{Kind: PrimMap, Shape: []int{Q}, In: in, Expr: x.e, Facts: f,
+				Stores: []PrimStore{{Out: table, Index: ix, Value: s, Extent: most + 1}}})
+		}
+		{
+			var x exprs
+			b, e := x.coord(0), x.coord(1)
+			used := x.op(OpSub, U, x.op(OpShr, U, x.load(0, x.u(uint32(E))), x.u(uint32(bitsOf(G)))), x.u(1))
+			first := x.op(OpShl, U, x.op(OpMin, U, b, used), x.u(uint32(bitsOf(G))))
+			x.sel(U, less(&x, first, x.load(0, x.op(OpAdd, U, e, x.u(1)))), x.u(0), x.u(1))
+			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{most / G, E}, In: []Operand{start}, Out: block, Combine: OpAdd, Type: U,
+				Expr: x.e, Facts: Facts{Extents: map[int]int{0: E + 1}}})
+		}
 	}
 	{
 		var x exprs
