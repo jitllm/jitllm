@@ -9427,5 +9427,14 @@ row where the composer's reads two.
   retained scratch after its first run against a 6.10 GB budget, so the arm
   after it on the same card placed 8 of 32 blocks and the gate indexed an
   empty answer; the arm states a second gigabyte and fails by name. The
-  composed picked-rows head and the whole head's gather part by 1e-6 on lev
-  (two reduction orders of one Q8_0 sum): open, the gate's equality stands.
+  composed picked-rows head and the whole head's gather part by 1e-6 in a
+  probability on lev (V100, ptx), and the gate's equality (the picked labels
+  answer the row's bit for bit) does not hold in a build that composes the
+  prompts: the two forms are two orders of one Q8_0 sum (their output counts
+  differ, and the passes cut the reduction by the count, jit/pass_split.go;
+  which pass moves the bits is not isolated), and on a random Q8_0 head of 4096 to 131072
+  rows 45 to 54 of 64 picked rows differ from the whole matvec's row in the
+  last bits, worst 6.1e-5 of a logit, on ptx and spirv alike. That is
+  forms differing, not a wrong kernel (the answers sit 0.0456 from the host
+  with either, and a pick one label off moves them 0.69); the gate is left
+  as it was and the arm stays red until its equality is decided.
