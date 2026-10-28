@@ -188,7 +188,9 @@ func TestComposedExpertPagesServe(t *testing.T) {
 // mid-sequence and back, composed: the logits are the unmoved control's in
 // the band of the two backends, every block step served and none declined,
 // and the moved blocks fill their pages from the host's pager on the card
-// they land on.
+// they land on. The prompt goes through the decode path in both runs, as
+// TestStreamedPromptIsTheSameInASecondSession's does: the control's, a model's
+// first, would be a chunk with its streamed experts on the host.
 func TestComposedExpertPagesMove(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
 		// The tier's own kernels too: the moves are the tier's, whoever
@@ -201,7 +203,7 @@ func TestComposedExpertPagesMove(t *testing.T) {
 						t.Fatalf("%d streamed placements and %d fills: the banks were not in pages", st.StreamBlocks, st.StreamFills)
 					}
 					t.Logf("%d streamed placements, %d fills from pages", st.StreamBlocks, st.StreamFills)
-				}, WithExperts("card"), WithStreamTrial(false))
+				}, WithExperts("card"), WithStreamTrial(false), WithPrefillForwardRows(16))
 			})
 		}
 	}
