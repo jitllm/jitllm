@@ -562,9 +562,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								name = "no graph/" + a.name
 							}
 							t.Run(name, func(t *testing.T) {
-								// ComposedStep asks for the prompt too; the arm asks for it
-								// only of promptModels, whose prompt blocks the gate holds.
-								parts := a.parts&^tier.ComposedPrompt | prompt
+								parts := a.parts | prompt
 								got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false)
 								// Every form was built at the placement or PrepHead.
 								if st.FormedAtStep != 0 {
@@ -621,17 +619,17 @@ func TestComposedBlocksServe(t *testing.T) {
 									}
 									t.Logf("composed %s: %d input rows gathered, %d declined, the prompt's %d (%s)", a.name, ne, de, np, declinesOf(st))
 								}
-								// Every step's head, and the prompt's once where the prompt
-								// is asked.
+								// Every step's head, and the prompt's once where the arm
+								// asks the prompt (a whole step does).
 								wantHeads := len(toks)
-								if prompt != 0 {
+								if parts&tier.ComposedPrompt != 0 {
 									wantHeads++
 								}
 								heads, headDeclined, headUnasked := st.ServedPart(tier.ComposedHead)
 								if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
 									heads+replayed != wantHeads {
 									t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps and the prompt (%d asked); %d declined, %d unasked, %d folds, %d capture(s)",
-										heads+replayed, replayed, len(toks), prompt, headDeclined, headUnasked, st.HeadFolds, st.Captures)
+										heads+replayed, replayed, len(toks), parts&tier.ComposedPrompt, headDeclined, headUnasked, st.HeadFolds, st.Captures)
 								}
 								if noGraph {
 									t.Logf("composed %s: the tier's own launches on the steps it served: %v", a.name, census)
@@ -649,7 +647,7 @@ func TestComposedBlocksServe(t *testing.T) {
 											nb, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 									}
 									if nh, _, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && nh != wantHeads {
-										t.Fatalf("the composer served the head %d times in %d steps and the prompt (%d asked)", nh, len(toks), prompt)
+										t.Fatalf("the composer served the head %d times in %d steps and the prompt (%d asked)", nh, len(toks), parts&tier.ComposedPrompt)
 									}
 								}
 								// The prompt's every block step served, in whole chunks.
@@ -687,9 +685,13 @@ func TestComposedBlocksServe(t *testing.T) {
 								// tier's backends' over the decoded steps alone.
 								// The prompt's input rows, where the composer gathers
 								// them, are the same rows as the tier's and the CPU's.
+								// A whole step asks the prompt of a model whose
+								// reference does not (not in promptModels): its first
+								// logits are the composed head's over the prompt, which
+								// neither reference ran, and are not compared.
 								first := 0
 								if prompt == 0 {
-									if !slices.Equal(got[0], want[0]) || !slices.Equal(ref[0], want[0]) {
+									if parts&tier.ComposedPrompt == 0 && (!slices.Equal(got[0], want[0]) || !slices.Equal(ref[0], want[0])) {
 										t.Fatalf("the prompt is not served, yet its logits differ from the tier's: the composed setting reached the prompt")
 									}
 									first = 1
