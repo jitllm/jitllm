@@ -10628,3 +10628,40 @@ row where the composer's reads two.
   and 0.347x main (IQR 5.6%, 3.6%; main 830 tok/s = 8.8 GB/s = 14% of the
   61 GB/s wall); Kimi-K3-0.40B Q8_0 A/A 0.9927 and 0.9971, composed 0.464x
   and 0.472x (main 190 tok/s), its prompt's mixture blocks declined by name.
+- A mixture's prompt and batched steps on the CPU device. The CPU device
+  declined every mixture block's rows (DeclineExpertsRows), so every MoE
+  prompt ran main's path. The rows' form now forms for a mixture block
+  through the composer's existing OpExpertMatVec lowering, each row over its
+  own picks; each call of 64 rows runs its codes to the selection, holds the
+  experts its rows pick once each through the pager's own fault path and
+  LRU (ensureExperts, shared with decode), then runs the codes that read the
+  banks. Three CPU lowering gaps closed on the way: a spilling binding took
+  the registers held back for loops nested past the two counters from the
+  spare pool before marking the counters used, so a four-deep nest found no
+  counter free, and the red zone's 15 spill slots did not hold a two-token
+  int8 Q4_K bank (16 more slots below the vector temporaries;
+  TestComposedCPUExpertPages now demands all 40 whole-bank arms form, 34
+  did, on AVX2 and on the SSE tier); a kernel writing a second output where
+  the convention puts a pair's second head's was refused (Gemma 4's
+  mixture norms at 64 rows); a loop's iteration read only by a store got no
+  register (Ling 2.0's blocks, 224 of 672 decode steps served before).
+  TestComposedCPUExpertPromptsServe holds thirteen mixtures (Qwen3-MOE
+  4x0.6B, the glm4moe, qwen2moe, ernie45moe, hunyuanmoe and dots1 fixtures,
+  Llama 4, dbrx, gpt-oss's MXFP4 banks, phimoe, Gemma 4's mixture, Ling 2.0,
+  MiniMax-M2) to main on a prompt of 72 rows, its decode and a batch of
+  three sequences: every block step served, 0.000-1.087 of main's spread at
+  the median (float mixtures 2.3e-11..1.3e-7 from main), bit for bit under
+  a one-page budget (Qwen3-MOE 1888 page-ins against 140 resident); another
+  expert's page held moves the prompt rows 0.24-1.8, a row given another
+  row's picks 1.1e-4..0.53, each row's first pick's weight dropped
+  0.30-2.7. The composed host decode of the mixtures and a warm 33-row
+  chunk of Qwen3-MOE allocate nothing. Rate, Qwen3-MOE-4x0.6B Q4_K_M, a
+  512-token prompt, one E5-2680 v4 socket's 12 cores under numactl
+  --membind=0, dev/bench TestComposedCPUPrefillAB, two passes: A/A 1.0008
+  and 1.0078 (IQR 0.5%, 0.6%), composed 0.2797x and 0.2789x main (IQR
+  0.5%, 0.7%), main 386 tok/s, composed 108 tok/s; Qwen3-0.6B Q8_0 dense on
+  the same harness reads 0.593x, so the banks cost the mixture about half
+  again: each row reads its picks' sheets apart where main's GEMM reads an
+  expert once for its rows. The cards' per-expert grouping (expertGrouped)
+  does not form on the CPU yet (its grouped reduce at 8-row groups runs out
+  of vector registers): that is the lever.
