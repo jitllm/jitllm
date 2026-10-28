@@ -9589,4 +9589,8 @@ row where the composer's reads two.
   gate pins the path (`WithPrefillForwardRows`) and holds three sessions
   to the first bit for bit. (4) The eviction gates squeezed a budget the
   pool had already grown past: the prewarm covers the gate's 449 positions
-  (112 pages on a 3050 Ti), so nothing streamed; they open without it.
+  (112 pages on a 3050 Ti), so nothing streamed; they open without it. The
+  prefill-stream gate's budget of half the model left a plain build on the
+  3050 Ti no slot (363 MB charged of 401 MB, a block 39 MB: 0 page-ins);
+  it takes the least room, in blocks, at which the prompt pages in (the
+  plain build one block, 26 page-ins; the composed build none, 8192).
