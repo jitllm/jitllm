@@ -261,9 +261,16 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						// head, so the arm states the budget it needs: the weights,
 						// an eighth over for the head (a decision head is held as
 						// f32) and a gigabyte of slack. A machine that really lacks
-						// that much memory still skips, naming the bytes.
+						// that much memory still skips, naming the bytes. A build
+						// that composes the prompts by default keeps their scratch
+						// resident past the first run (lev: 6.49 GB held against a
+						// 6.10 GB limit), where the arms after it place the same
+						// blocks again, so it states a second gigabyte.
 						need := m.WeightBytes()
 						need += need/8 + 1<<30
+						if composedByDefault {
+							need += 1 << 30
+						}
 						g := open(tier.WithBudget(need), tier.WithHostBudget(need))
 						t.Logf("every-block budget %d bytes", need)
 						defer g.Close()
@@ -272,6 +279,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						if placed != nb {
 							cardTooSmall(t, why, "%s held %d of %d blocks in the every-block arm", spec, placed, nb)
 						}
+						t.Logf("after the first run %+v", g.Budgets())
 						worst := decisionDiff(t, host, got)
 						t.Logf("every block on %s: worst difference from the host %.5f", spec, worst)
 						if worst > tol {
@@ -314,14 +322,21 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 							if n := g.Stats().PickRows; n == 0 {
 								t.Fatalf("%d prompts picked on %s, none by the picked rows' projection", picked, spec)
 							}
-							row, _, _, rowPicked := decideOn(t, m, g, -1, all, "no-pick")
+							row, rowN, rowWhy, rowPicked := decideOn(t, m, g, -1, all, "no-pick")
+							if row == nil {
+								t.Fatalf("the no-pick arm held %d of %d blocks on %s (%s) with %+v", rowN, nb, spec, rowWhy, g.Budgets())
+							}
+							t.Logf("after the no-pick run %+v", g.Budgets())
 							if rowPicked != 0 {
 								t.Fatalf("the no-pick arm picked %d prompts", rowPicked)
 							}
 							if w := decisionDiff(t, got, row); w != 0 {
 								t.Errorf("the picked labels answer %.6f from the row's on the same device", w)
 							}
-							off, _, _, _ := decideOn(t, m, g, -1, all, "pick-off-by-one")
+							off, offN, offWhy, _ := decideOn(t, m, g, -1, all, "pick-off-by-one")
+							if off == nil {
+								t.Fatalf("the pick-off-by-one arm held %d of %d blocks on %s (%s)", offN, nb, spec, offWhy)
+							}
 							seen := decisionDiff(t, got, off)
 							t.Logf("%d prompts picked on %s; picked one past each label, the answers move %.5f", picked, spec, seen)
 							if seen <= tol {

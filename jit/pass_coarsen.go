@@ -789,6 +789,25 @@ func (k *coarse) term(n *Kernel, coords []int, j int) int {
 	return k.termAt(n, coords, k.m.u32(j))
 }
 
+// maxChainNodes is the most nodes a chain's kernel holds before the chain is
+// left unformed: its terms are unrolled, so a long reduction in a thread
+// multiplies its expression (a sampler's candidates over a 65536-entry
+// vocabulary were 8 million nodes, 3 s and 1 GB, and over 131072 entries
+// did not finish). The members then run as the kernels they are.
+const maxChainNodes = 1 << 20
+
+// over reports whether the chain has grown past maxChainNodes, leaving it
+// unformed (k.err).
+func (k *coarse) over() bool {
+	if len(k.m.Nodes) <= maxChainNodes {
+		return false
+	}
+	if k.err == nil {
+		k.err = fmt.Errorf("a chain of more than %d nodes", maxChainNodes)
+	}
+	return true
+}
+
 // reduce is reduction n's output: within the thread where its terms are,
 // else the thread's partial exchanged over its group of threads.
 func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
@@ -801,9 +820,15 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 	if firstTerm(n) == 0 {
 		start = m.add(n.Nodes[n.Nodes[f].B])
 	}
+	if k.over() {
+		return m.u32(0)
+	}
 	if g <= U {
 		acc := start
 		for j := 0; j < K; j++ {
+			if k.over() {
+				return m.u32(0)
+			}
 			v := k.term(n, coords, j)
 			if acc < 0 {
 				acc = v
@@ -837,6 +862,9 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 	j0 := m.bin(OpMul, ir.U32, m.bin(OpRem, ir.U32, k.u, m.u32(slots)), m.u32(count))
 	acc := start
 	for c := 0; c < count; c++ {
+		if k.over() {
+			return m.u32(0)
+		}
 		jj := j0
 		if c > 0 {
 			jj = m.bin(OpAdd, ir.U32, j0, m.u32(c))

@@ -48,17 +48,16 @@ func TestComposedCPUMatVec(t *testing.T) {
 				t.Fatalf("%v: %v", typ, err)
 			}
 			host := uint64(cpu.CPU().ISA())
-			arms := []struct {
-				name string
-				r    *Registry
-				isa  uint64
-			}{{"float", Default().WithoutInt8(DeviceCPU), host}, {"int8", withCPUInt8(), host}}
+			type cpuArm struct {
+				name      string
+				r         *Registry
+				isa       uint64
+				inexactDv bool
+			}
+			arms := []cpuArm{{"float", Default().WithoutInt8(DeviceCPU), host, false}, {"int8", withCPUInt8(), host, false},
+				{"int8 inexact division", withCPUInt8(), host, true}}
 			if vnni := uint64(x86.ISAVNNI); host&vnni != 0 {
-				arms = append(arms, struct {
-					name string
-					r    *Registry
-					isa  uint64
-				}{"int8 without vnni", withCPUInt8(), host &^ vnni})
+				arms = append(arms, cpuArm{"int8 without vnni", withCPUInt8(), host &^ vnni, false})
 			}
 			for _, arm := range arms {
 				for _, at := range []struct{ tokens, slots int }{{1, 1}, {4, 1}, {1, 6}} {
@@ -86,7 +85,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 						Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
 						Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
 						Step:    Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32},
-						Device:  Device{Kind: DeviceCPU, Slots: at.slots, Lanes: 8, ISA: arm.isa, ExactDiv: true},
+						Device:  Device{Kind: DeviceCPU, Slots: at.slots, Lanes: 8, ISA: arm.isa, ExactDiv: !arm.inexactDv},
 					})
 					if err != nil {
 						unformed[name] = err.Error()

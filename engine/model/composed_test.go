@@ -595,9 +595,10 @@ func TestComposedBlocksServe(t *testing.T) {
 								}
 								// Every step writes every table the plan states.
 								if a.parts&tier.ComposedTable != 0 {
-									nt, _, _ := st.ServedPart(tier.ComposedTable)
+									nt, _, tableUnasked := st.ServedPart(tier.ComposedTable)
 									if replayed := st.ReplayedPart(tier.ComposedTable); nt+replayed != len(toks)*composedTables(m) {
-										t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps of %d tables", nt+replayed, replayed, len(toks), composedTables(m))
+										t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps of %d tables; %d capture(s), %d unasked, last error %q",
+											nt+replayed, replayed, len(toks), composedTables(m), st.Captures, tableUnasked, st.LastErr)
 									}
 								}
 								// Every step's input row gathered by the composer, from

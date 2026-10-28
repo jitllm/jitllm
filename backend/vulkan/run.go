@@ -258,6 +258,10 @@ type Kernel struct {
 	set    DescSet
 	nbuf   int
 	name   []byte
+	// What Compile's create-infos reach through uintptr fields; see Compile.
+	pr  pushRange
+	req reqSizeCI
+	ps  poolSize
 }
 
 // kernName is the entry point this kernel was compiled for, without its
@@ -313,15 +317,15 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 		k.Close()
 		return nil, err
 	}
-	lay := k.layout
+	// What a create-info reaches through a uintptr field lives in k, on the
+	// heap: a goroutine's stack moves (it grows, and shrinks at a collection),
+	// and the move rewrites a pointer but not a uintptr, which would be left
+	// naming the stack it came from while the driver reads it.
 	// One push constant, the CTAID base spirv.Emit declares; see dispatch.
-	pr := pushRange{stages: stageCompute, size: groupBaseBytes}
-	pl := pipeLayoutCI{sType: stPipeLayoutCI, nSets: 1, pSets: uintptr(up(&lay)),
-		nPush: 1, pPush: uintptr(up(&pr))}
+	k.pr = pushRange{stages: stageCompute, size: groupBaseBytes}
+	pl := pipeLayoutCI{sType: stPipeLayoutCI, nSets: 1, pSets: uintptr(up(&k.layout)),
+		nPush: 1, pPush: uintptr(up(&k.pr))}
 	err := check(vkCreatePipelineLayout(c.dev, up(&pl), nil, up(&k.plyt)), "vkCreatePipelineLayout")
-	// lay and pr are reached through uintptr fields, which keep nothing alive.
-	runtime.KeepAlive(lay)
-	runtime.KeepAlive(pr)
 	if err != nil {
 		k.Close()
 		return nil, err
@@ -331,26 +335,24 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 	cp := computeCI{sType: stComputePipeCI, layout: uint64(k.plyt), baseIdx: -1,
 		stage: stageCI{sType: stPipeShaderCI, stage: stageCompute,
 			module: uint64(k.mod), pName: uintptr(up(&k.name[0]))}}
-	req := reqSizeCI{sType: stReqSizeCI, size: uint32(lanes)}
+	k.req = reqSizeCI{sType: stReqSizeCI, size: uint32(lanes)}
 	if lanes > 0 && c.sg.CanPin() {
-		cp.stage.pNext = uintptr(up(&req))
+		cp.stage.pNext = uintptr(up(&k.req))
 		cp.stage.flags |= pipeStageRequireFullSubgroups
 	}
 	err = check(vkCreateComputePipelines(c.dev, 0, 1, up(&cp), nil, up(&k.pipe)), "vkCreateComputePipelines")
-	// req is reachable only through a uintptr pNext, which is not a reference.
-	runtime.KeepAlive(req)
 	if err != nil {
 		k.Close()
 		return nil, err
 	}
 
-	ps := poolSize{kind: descStorageBuffer, count: uint32(nbuf)}
-	dp := descPoolCI{sType: stDescPoolCI, maxSets: 1, nSizes: 1, pSizes: uintptr(up(&ps))}
+	k.ps = poolSize{kind: descStorageBuffer, count: uint32(nbuf)}
+	dp := descPoolCI{sType: stDescPoolCI, maxSets: 1, nSizes: 1, pSizes: uintptr(up(&k.ps))}
 	if err := check(vkCreateDescriptorPool(c.dev, up(&dp), nil, up(&k.pool)), "vkCreateDescriptorPool"); err != nil {
 		k.Close()
 		return nil, err
 	}
-	da := descSetAI{sType: stDescSetAlloc, pool: uint64(k.pool), n: 1, pSets: uintptr(up(&lay))}
+	da := descSetAI{sType: stDescSetAlloc, pool: uint64(k.pool), n: 1, pSets: uintptr(up(&k.layout))}
 	if err := check(vkAllocateDescriptorSets(c.dev, up(&da), up(&k.set)), "vkAllocateDescriptorSets"); err != nil {
 		k.Close()
 		return nil, err
@@ -638,8 +640,8 @@ func (b *Batch) Commit() error {
 func (r *rec) allocSet(layout DescLayout) (DescSet, error) {
 	c := r.c
 	if r.bpool == 0 {
-		ps := poolSize{kind: descStorageBuffer, count: batchSets * batchBufs}
-		dp := descPoolCI{sType: stDescPoolCI, maxSets: batchSets, nSizes: 1, pSizes: uintptr(up(&ps))}
+		r.scr.ps = poolSize{kind: descStorageBuffer, count: batchSets * batchBufs}
+		dp := descPoolCI{sType: stDescPoolCI, maxSets: batchSets, nSizes: 1, pSizes: uintptr(up(&r.scr.ps))}
 		if err := check(vkCreateDescriptorPool(c.dev, up(&dp), nil, up(&r.bpool)), "vkCreateDescriptorPool"); err != nil {
 			return 0, err
 		}
@@ -744,6 +746,7 @@ type ctxScratch struct {
 	region        bufCopy
 	lay           DescLayout
 	da            descSetAI
+	ps            poolSize
 	set, bindSet  DescSet
 	mb            memBarrier
 	base, oneBase uint32 // a dispatch's pushed group base (Ctx.dispatch)

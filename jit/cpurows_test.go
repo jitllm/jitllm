@@ -108,9 +108,12 @@ func TestComposedCPURowsMatVec(t *testing.T) {
 		}
 		planes := [3][]uint32{qs, d, sc}
 		for _, arm := range []struct {
-			name string
-			r    *Registry
-		}{{"float", Default().WithoutInt8(DeviceCPU)}, {"int8", withCPUInt8()}} {
+			name  string
+			r     *Registry
+			exact bool
+		}{{"float", Default().WithoutInt8(DeviceCPU), true}, {"int8", withCPUInt8(), true}, {"int8 inexact division", withCPUInt8(), false}} {
+			dev := cpuDevice()
+			dev.ExactDiv = arm.exact
 			for _, p := range []int{1, 3, 8, 17, 64} {
 				name := fmt.Sprintf("%v/%s/%d ids", typ, arm.name, p)
 				b := graph.New()
@@ -120,7 +123,7 @@ func TestComposedCPURowsMatVec(t *testing.T) {
 				b.Out(b.Emit(graph.OpMatVec, []graph.ValueID{x, ids}, []graph.Result{{Name: "picked", Width: p}},
 					[]graph.Binding{{Role: jlm.RoleOutput, K: k, Rows: rows}}, graph.Attrs{}, nil, nil)[0])
 				_, codes, err := arm.r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
-					Step: Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32}, Device: cpuDevice()})
+					Step: Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}

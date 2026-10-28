@@ -9395,3 +9395,37 @@ row where the composer's reads two.
   whole: 261 of 1392 block steps of Qwen3-30B-A3B on a V100), the CPU's
   rows form over banks (`DeclineExpertsRows`), and a top-1 mixture, which
   the tier never streams to a card.
+- **A device without exact division forms the int8 codes map on the CPU, a
+  chain too long to unroll is left unformed, and a Vulkan pipeline's
+  create-info reaches nothing on a goroutine's stack.** (1) A CPU device
+  stating `ExactDiv: false` failed to form the int8 quantizer: the scale's
+  quotient was an integer division of lanes ("div of integer lanes"), and the
+  correctly rounded reciprocal one map past the vector registers ("register
+  pressure at node 27"). The quotient is now 2m plus floor(2m/127) through a
+  float estimate one under at worst and one remainder correction (all 2^23
+  mantissas right), and the reciprocal is three maps (the Newton step, the
+  four candidates tested, the pick). TestComposedCPURowsMatVec and
+  TestComposedCPUMatVec carry an "int8 inexact division" arm (180 row-selected
+  matvecs, 240 matvecs, all held to the oracle); the same arm failed to form
+  before. (2) The sampler's candidates over a 131072-entry vocabulary on
+  an inexact-division GPU (the laptop's Intel vulkan:1 beside cuda:0, Apertus's
+  head) never finished forming: Coarsen unrolled a 131072-term reduction in a
+  thread, 7,976,810 nodes at 65536 (3.2 s, 1 GB) and more than 3.3 GB in
+  nine seconds at 131072, which the 8 GB cap throttled into a test that read
+  as a hang (TestBlocksMoveBetweenDevices/synth-apertus/step). A chain past
+  2^20 nodes is left unformed by name now (0.66 s and 0.86 s, its members
+  running as the kernels they are); SampleCases holds 65536 and 131072 too
+  (40 cases bit for bit on the CPU, ptx and spirv). (3) vulkan.Ctx.Compile
+  handed the driver four structs by a uintptr field (the push range, the
+  required-subgroup-size info, the pool size, the layout handle) that lived
+  on the compiling goroutine's stack, which moves when it grows or shrinks
+  and rewrites pointers, not uintptrs: composed TestDecodeDoesNotAllocate
+  died after 955 subtests in vkCreateComputePipelines (SIGSEGV, address 0,
+  on a compile goroutine). They live in the Kernel now (`-gcflags=-m` moved
+  the other create-infos to the heap and not these). (4) A decision model's
+  every-block arm in a build that composes the prompts holds 6.49 GB of
+  retained scratch after its first run against a 6.10 GB budget, so the arm
+  after it on the same card placed 8 of 32 blocks and the gate indexed an
+  empty answer; the arm states a second gigabyte and fails by name. The
+  composed picked-rows head and the whole head's gather part by 1e-6 on lev
+  (two reduction orders of one Q8_0 sum): open, the gate's equality stands.

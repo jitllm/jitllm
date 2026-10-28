@@ -29,7 +29,7 @@ type SampleCase struct {
 func SampleCases() []SampleCase {
 	rng := rand.New(rand.NewSource(77))
 	var cs []SampleCase
-	for _, sh := range []struct{ v, k, b int }{{37, 7, 16}, {300, 40, 32}, {1531, 40, 32}, {4099, 256, 256}, {51200, 256, 256}, {151936, 256, 256}} {
+	for _, sh := range []struct{ v, k, b int }{{37, 7, 16}, {300, 40, 32}, {1531, 40, 32}, {4099, 256, 256}, {51200, 256, 256}, {65536, 256, 256}, {131072, 256, 256}, {151936, 256, 256}} {
 		for _, h := range []int{0, 1, 5, sh.b / 2, sh.b} {
 			l := make([]float32, sh.v)
 			for i := range l {

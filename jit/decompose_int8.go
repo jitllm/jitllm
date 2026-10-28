@@ -10,6 +10,20 @@ func (x *exprs) abs(a int) int {
 	return x.un(OpBitcast, ir.F32, x.op(OpAnd, ir.U32, x.un(OpBitcast, ir.U32, a), x.u(0x7fffffff)))
 }
 
+// mant256Over127 is m*256/127 floored, for a mantissa m of 24 bits: 2m plus
+// floor(2m/127), the quotient taken through a float estimate (2m is exact in
+// one) one under at worst and corrected by its remainder, so no lane divides
+// integers.
+func (x *exprs) mant256Over127(m int) int {
+	U, F := ir.U32, ir.F32
+	m2 := x.op(OpShl, U, m, x.u(1))
+	est := x.op(OpSub, F, x.op(OpMul, F, x.un(OpCvtF32, F, x.un(OpBitcast, ir.I32, m2)), x.f(1.0/127)), x.f(0.5))
+	t := x.un(OpBitcast, U, x.un(OpCvtI32, ir.I32, est))
+	r := x.op(OpSub, U, m2, x.op(OpMul, U, t, x.u(127)))
+	t = x.op(OpAdd, U, t, x.sel(U, x.op(OpLess, ir.Pred, x.u(126), r), x.u(1), x.u(0)))
+	return x.op(OpAdd, U, m2, t)
+}
+
 // scale is amax/127 correctly rounded: the mantissa's quotient in integers
 // where the exponent allows it, the float division where it does not.
 func (x *exprs) scale(amax int) int {
@@ -17,7 +31,7 @@ func (x *exprs) scale(amax int) int {
 	b := x.un(OpBitcast, U, amax)
 	e := x.op(OpShr, U, b, x.u(23))
 	m := x.op(OpAdd, U, x.op(OpAnd, U, b, x.u(0x7fffff)), x.u(0x800000))
-	q := x.op(OpDiv, U, x.op(OpShl, U, m, x.u(8)), x.u(127))
+	q := x.mant256Over127(m)
 	sh := x.op(OpAdd, U, x.op(OpShr, U, q, x.u(25)), x.u(1))
 	half := x.op(OpShl, U, x.u(1), x.op(OpSub, U, sh, x.u(1)))
 	mask := x.op(OpSub, U, x.op(OpShl, U, half, x.u(1)), x.u(1))
@@ -35,6 +49,13 @@ func (x *exprs) scale(amax int) int {
 // it in integers where every exponent allows, zero where d is not positive.
 func (x *exprs) inverse(amax, d int) int {
 	v, pos := x.nearestRecip(d, x.op(OpDiv, ir.F32, x.f(127), amax))
+	return x.sel(ir.F32, pos, v, x.f(0))
+}
+
+// inverseOf is inverse from the refined estimate r of 127/amax: the
+// candidates' test alone, for a device that holds it a map apart.
+func (x *exprs) inverseOf(d, r, rank int) int {
+	v, pos := x.recipPick(d, r, rank)
 	return x.sel(ir.F32, pos, v, x.f(0))
 }
 
@@ -67,15 +88,30 @@ func (x *exprs) round(a int) int {
 // r refined once by Newton, then the four candidates below it tested in
 // integers where every exponent allows, r where one does not; pos is d > 0.
 func (x *exprs) nearestRecip(d, r int) (v, pos int) {
-	U, F := ir.U32, ir.F32
-	r = x.op(OpAdd, F, r, x.op(OpMul, F, r, x.op(OpSub, F, x.f(1), x.op(OpMul, F, d, r))))
-	pos = x.op(OpLess, ir.Pred, x.f(0), d)
+	return x.nearestRecipRefined(d, x.refine(d, r))
+}
+
+// refine is r, an estimate of 1/d, refined once by Newton.
+func (x *exprs) refine(d, r int) int {
+	F := ir.F32
+	return x.op(OpAdd, F, r, x.op(OpMul, F, r, x.op(OpSub, F, x.f(1), x.op(OpMul, F, d, r))))
+}
+
+// nearestRecipRefined is nearestRecip from an estimate already refined.
+func (x *exprs) nearestRecipRefined(d, r int) (v, pos int) {
+	return x.recipPick(d, r, x.recipRank(d, r))
+}
+
+// recipRank is the bits of the candidate below r's, plus the number of the
+// four candidates from it up that lie below the true reciprocal of d, tested
+// in integers.
+func (x *exprs) recipRank(d, r int) int {
+	U := ir.U32
 	ob, db := x.un(OpBitcast, U, x.f(1)), x.un(OpBitcast, U, d)
 	oe, de := x.op(OpShr, U, ob, x.u(23)), x.op(OpShr, U, db, x.u(23))
 	om := x.op(OpAdd, U, x.op(OpAnd, U, ob, x.u(0x7fffff)), x.u(0x800000))
 	dm := x.op(OpAdd, U, x.op(OpAnd, U, db, x.u(0x7fffff)), x.u(0x800000))
-	rb := x.un(OpBitcast, U, r)
-	base := x.op(OpSub, U, rb, x.u(2))
+	base := x.op(OpSub, U, x.un(OpBitcast, U, r), x.u(2))
 	acc := base
 	for k := uint32(0); k < 4; k++ {
 		c := x.op(OpAdd, U, base, x.u(k))
@@ -84,6 +120,17 @@ func (x *exprs) nearestRecip(d, r int) (v, pos int) {
 		diff := x.op(OpSub, U, x.op(OpSub, U, x.op(OpShl, U, om, sh), x.op(OpMul, U, cm, dm)), x.u(1))
 		acc = x.op(OpAdd, U, acc, x.sel(U, x.op(OpLess, ir.Pred, diff, x.u(0x7fffffff)), x.u(1), x.u(0)))
 	}
+	return acc
+}
+
+// recipPick is the reciprocal recipRank's acc names where every exponent
+// allows, r where one does not; pos is d > 0.
+func (x *exprs) recipPick(d, r, acc int) (v, pos int) {
+	U, F := ir.U32, ir.F32
+	pos = x.op(OpLess, ir.Pred, x.f(0), d)
+	oe := x.op(OpShr, U, x.un(OpBitcast, U, x.f(1)), x.u(23))
+	de := x.op(OpShr, U, x.un(OpBitcast, U, d), x.u(23))
+	rb := x.un(OpBitcast, U, r)
 	okO := x.op(OpLess, ir.Pred, x.op(OpSub, U, oe, x.u(1)), x.u(254))
 	okD := x.op(OpLess, ir.Pred, x.op(OpSub, U, de, x.u(1)), x.u(254))
 	okR := x.op(OpLess, ir.Pred, x.op(OpSub, U, x.op(OpShr, U, rb, x.u(23)), x.u(2)), x.u(252))
@@ -130,11 +177,27 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	}
 	dix := flat(&d, d.coord(0), d.coord(1), nw)
 
+	ext := R * (nw + ns)
+	facts := Facts{Extents: map[int]int{1: ext}}
 	var r exprs
+	var refined []Prim
+	pick := []Operand{amax, scales}
 	if dd := r.load(1, flat(&r, r.coord(0), r.coord(1), nw)); c.exactDiv {
 		r.sel(F, r.op(OpLess, ir.Pred, r.f(0), dd), r.op(OpDiv, F, r.f(1), dd), r.f(0))
 	} else {
-		r.inverse(r.at(0, win, r.coord(0), r.coord(1)), dd)
+		// The correctly rounded reciprocal in three maps, the estimate
+		// refined, the candidates tested and the pick made, each within the
+		// vector registers of a device that holds them.
+		var n, m exprs
+		est, rank := temp("est", F), temp("rank", U)
+		n.refine(n.load(1, flat(&n, n.coord(0), n.coord(1), nw)), n.op(OpDiv, F, n.f(127), n.at(0, win, n.coord(0), n.coord(1))))
+		m.recipRank(m.load(1, flat(&m, m.coord(0), m.coord(1), nw)), m.at(0, win, m.coord(0), m.coord(1)))
+		refined = []Prim{
+			{Kind: PrimMap, Shape: win, In: []Operand{amax, scales}, Out: est, Expr: n.e, Facts: facts},
+			{Kind: PrimMap, Shape: win, In: []Operand{est, scales}, Out: rank, Expr: m.e, Facts: facts},
+		}
+		r.inverseOf(dd, r.at(0, win, r.coord(0), r.coord(1)), r.at(2, win, r.coord(0), r.coord(1)))
+		pick = []Operand{est, scales, rank}
 	}
 
 	var k exprs
@@ -142,13 +205,15 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	half := k.un(OpBitcast, F, k.op(OpAdd, U, k.op(OpAnd, U, k.un(OpBitcast, U, t), k.u(0x80000000)), k.u(0x3f000000)))
 	k.un(OpCvtI32, I, k.op(OpAdd, F, t, half))
 
-	ext := R * (nw + ns)
-	return append([]Prim{
+	ps := []Prim{
 		{Kind: PrimReduce, Shape: []int{R, nw, ww}, In: []Operand{x}, Out: amax, Combine: OpMax, Expr: a.e},
 		{Kind: PrimMap, Shape: win, In: []Operand{amax}, Expr: d.e, Stores: []PrimStore{{Out: scales, Index: dix, Value: ds, Extent: ext}}},
-		{Kind: PrimMap, Shape: win, In: []Operand{amax, scales}, Out: inv, Expr: r.e, Facts: Facts{Extents: map[int]int{1: ext}}},
-		{Kind: PrimMap, Shape: sh, In: []Operand{x, inv}, Out: codes, Expr: k.e},
-	}, c.int8Pack(v, codes, false, nw)...)
+	}
+	ps = append(ps, refined...)
+	ps = append(ps,
+		Prim{Kind: PrimMap, Shape: win, In: pick, Out: inv, Expr: r.e, Facts: facts},
+		Prim{Kind: PrimMap, Shape: sh, In: []Operand{x, inv}, Out: codes, Expr: k.e})
+	return append(ps, c.int8Pack(v, codes, false, nw)...)
 }
 
 // int8Codes is the int8 form of value v, a row of codes the graph states
