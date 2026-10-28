@@ -16,9 +16,11 @@ import (
 // read at each row's position, HunyuanOCR's XD-RoPE, and Gemma 4 E2B's per-layer
 // inputs and blocks reading an earlier block's history. Gemma 3n E2B is
 // not here: its clean arm is in the band (median 0.634, worst 9.1e-4 where
-// main's control reaches 1.5e-3), but the key-row violation cannot leave
-// it -- its attention over 80 steps is its row's own key's, so attending
-// to that key alone in every block moves the logits 6.5e-4.
+// main's control reaches 1.5e-3), the page fault and the new key written a
+// row early leave it, but the key-row violation stays in it even dropping
+// the step's own row (median 0.655, worst 1.25e-3): over 80 steps its
+// attention reads nearly the same value from any of its rows (attending to
+// its own key alone in every block moves the logits 6.5e-4).
 var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
 	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
 	"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
@@ -36,8 +38,9 @@ var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "
 // the median step no further from main than bandRatio times the control, at
 // the worst no further than bandWorst times the control's worst. Every
 // step's head is the CPU's composed head. Each violation -- the first
-// history page pointed at another slot, the first key row moved by one, the
-// head reading another row than the residual -- must leave the band.
+// history page pointed at another slot, the first and the newest key rows
+// moved by one, the new key written a row early, the head reading another
+// row than the residual -- must leave the band.
 func TestComposedCPUBlocksServe(t *testing.T) {
 	const steps, page = 80, 32
 	for _, file := range cpuServedModels {
@@ -99,7 +102,7 @@ func cpuFaultsOf(t *testing.T, m *Model) []cpuFault {
 		}
 	}
 	if attends {
-		fs = append(fs, cpuFaultPage, cpuFaultRow)
+		fs = append(fs, cpuFaultPage, cpuFaultRow, cpuFaultWrite)
 	}
 	if rec > 1 {
 		fs = append(fs, cpuFaultRec)

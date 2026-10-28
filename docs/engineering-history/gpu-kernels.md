@@ -10535,3 +10535,12 @@ row where the composer's reads two.
   within 1e-12 and the cards within 1e-10, and a transposed filter parts.
   MobileNet-V5's blocks are not stated yet: the tower front end declines
   them by name (UncoveredKind).
+- The CPU serving gate's key-row violation drops the step's newest row as
+  well as its first (past its second row), and the new key written a row
+  early is a violation of its own (cpuFaultWrite). On the V100 box's CPU
+  over 80 steps, each of the 11 served models leaves the band under both
+  (median ratios: key row 4.8 to 3438, write early 1.5 to 3414). Gemma 3n
+  E2B sees the page fault (median 1.77, worst 0.0111) and the write
+  (worst 7.1e-3 against the control's 1.5e-3) but not the key row, even
+  without its own row (median 0.655, worst 1.25e-3): its attention reads
+  nearly the same value from any row. It stays out of cpuServedModels.

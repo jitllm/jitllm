@@ -280,7 +280,9 @@ const (
 	// step only renames the pages, and keys carry their rotation, so a swap
 	// of written pages only reorders them.
 	cpuFaultPage
-	// cpuFaultRow moves the first key row a step attends by one.
+	// cpuFaultRow moves the first key row a step attends by one, and past
+	// its second row the last by one: the step reads neither its first row
+	// nor its newest, the one a block attending mostly to itself reads.
 	cpuFaultRow
 	// cpuFaultRec binds every linear block to the recurrent state and
 	// window of the first: each steps a summary that is not its own.
@@ -307,6 +309,9 @@ const (
 	// pass over none of its codes: each call's rows read only the keys of
 	// the calls before them and their own.
 	cpuFaultKeysFirst
+	// cpuFaultWrite writes a step's new key and value at the row before its
+	// own, its own row left as the history held it.
+	cpuFaultWrite
 )
 
 // A bidirectional run's passes (cpuState.stashing).
@@ -388,6 +393,23 @@ func composedCPUDevice(workers int) jit.Device {
 	return jit.Device{Kind: jit.DeviceCPU, Slots: max(workers, 1), Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
 }
 
+// cpuFaultRowWords applies the State's key-row fault to one row's
+// descriptor (first key, end, write row), the step's first row left whole.
+func (s *State) cpuFaultRowWords(t []uint32) {
+	if t[3] == 0 {
+		return
+	}
+	switch s.cpu.fault {
+	case cpuFaultRow:
+		t[1]++
+		if t[2] > t[1]+1 {
+			t[2]--
+		}
+	case cpuFaultWrite:
+		t[3]--
+	}
+}
+
 // cpuStep runs block li on the CPU the composer's way, or says why not. The
 // residual is s.x; the rotary table cs.
 func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
@@ -419,10 +441,8 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 	switch s.cpu.fault {
 	case cpuFaultPage:
 		b.pages = s.cpuFaultTable(pg, pos+1)
-	case cpuFaultRow:
-		if pos > 0 {
-			s.cpu.rows[1]++
-		}
+	case cpuFaultRow, cpuFaultWrite:
+		s.cpuFaultRowWords(s.cpu.rows[:])
 	}
 	if err := s.cpuForm(b, cb.f, li); err != nil {
 		return jit.DeclineServes, err
@@ -876,9 +896,7 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, codes []cpuCode,
 			end = max(end, p+1)
 			t := s.cpu.rowsTab[i*4 : i*4+4]
 			t[0], t[1], t[2], t[3] = uint32(seq[r0+i]*slots), uint32(st), uint32(e), uint32(p)
-			if s.cpu.fault == cpuFaultRow && p > 0 {
-				t[1]++
-			}
+			s.cpuFaultRowWords(t)
 		}
 		bx, bstride := x[r0*d:], stride
 		var bside []float32
