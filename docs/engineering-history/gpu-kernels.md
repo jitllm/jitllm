@@ -10376,11 +10376,17 @@ row where the composer's reads two.
   band; TestGreedyMatchesLlamaCpp and its SSE twin agree with llama.cpp
   b10825 on Qwen3-0.6B 19/20 teacher-forced (one 0.021 tie) and on the
   fixtures 20/20; TestBatchMatchesForward's and TestPrefillMatchesForward's
-  composed arms serve every block step (NMSE 3.4e-14, 5.6e-4). Decode,
-  Qwen3-0.6B Q8_0 on the second Atom (4 cores, a foreign test on one),
-  dev/bench TestComposedCPUAB, A/A 0.9952 (IQR 2.8%): composed 0.488x
-  main's SSE tier (IQR 2.9%), main 5.1 tok/s = 3.3 GB/s = 28% of the
-  11.5 GB/s wall, composed 2.6 tok/s. The int8 dot's step is a broadcast of
+  composed arms serve every block step (NMSE 3.4e-14, 5.6e-4);
+  TestCPUComposesOnce holds the census on stories15M, Qwen3-0.6B (prompts
+  to 2000), Ministral-3-3B and seven fixtures (its relocation arm needs a
+  card); the composed host decode allocates nothing over 64 tokens on
+  Llama-3.2-1B, Qwen3-0.6B, Qwen3.5-0.8B, mamba-130m, granite-4.0-h-350m
+  and Falcon-H1-0.5B. Decode, Qwen3-0.6B Q8_0 on the second Atom (4 cores,
+  a foreign test on one), dev/bench TestComposedCPUAB, two passes: A/A
+  0.9948 and 0.9959 (IQR 1.7%, 1.6%), composed 0.660x and 0.664x main's SSE
+  tier (IQR 4.3%, 2.8%), main 5.2 tok/s = 3.3 GB/s = 29% of the 11.4 GB/s
+  wall, composed 3.5 tok/s (before the fused decode region and the
+  zero-addend dot, 0.488x). The int8 dot's step is a broadcast of
   four activation bytes, a load, a sign, a magnitude, two multiply-adds and
   an add a four-row vector with a register spill each step, and a binary16
   scale widened in software a block: speed is the shared passes' work.
