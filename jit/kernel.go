@@ -81,6 +81,9 @@ type Kernel struct {
 	// TileMajor is a kernel whose calls over a step's rows and a weight's
 	// tiles (Workers) run every row of a tile before the next tile.
 	TileMajor bool
+	// Running, where SplitRange set it, is a split whose partitions one
+	// workgroup runs in order (Running, the pass).
+	Running *RunningSplit
 	// Seq, where a schedule set it, is the kernel as a sequence: each node,
 	// store and loop in the order the code runs them.
 	Seq []Entry

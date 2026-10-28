@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -31,10 +32,12 @@ type attendRowsCase struct {
 // page and crossing into the next: each row attends causally from the history's
 // start, or from its window's where the attention slides, with a sink a head
 // where it carries them, held row by row to the definition over the history
-// as the pools hold it. Its scratch is counted at a key bound far past the
-// live positions: no binding a kernel reads or writes may hold a [rows,
-// heads, keys] buffer at the bound. Two violations must fail: every row's
-// first attended position moved by one, and the sinks zeroed.
+// as the pools hold it. The form must run its partitions in order (the
+// running pass), and its scratch is counted at a key bound far past the live
+// positions: no binding a kernel reads or writes may hold more than four
+// words a row, head and dimension, where a [rows, heads, keys] buffer at the
+// bound is sixty-four of them. Two violations must fail: every row's first
+// attended position moved by one, and the sinks zeroed.
 func TestComposedGPUAttendRows(t *testing.T) {
 	testlock.GPU(t)
 	devs := backend.Open()
@@ -81,16 +84,24 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase) {
 		t.Fatal(err)
 	}
 	var scratch int64
+	running := 0
 	for _, cd := range codes {
+		if slices.Contains(cd.Passes, "running") {
+			running++
+		}
 		for _, bd := range cd.Binds {
 			if bd.Operand.Kind != jit.OperandScratch || !bd.Read && !bd.Writes {
 				continue
 			}
 			scratch = max(scratch, bd.Bytes)
-			if bd.Bytes >= int64(4*capRows*c.heads*keys) {
-				t.Errorf("%s binds %s of %d bytes: a [rows, heads, keys] buffer at the key bound", cd.Name, bd.Operand.Name, bd.Bytes)
+			if bd.Bytes > int64(4*4*capRows*c.heads*c.dim) {
+				t.Errorf("%s binds %s of %d bytes: more than four words a row, head and dimension at a key bound of %d",
+					cd.Name, bd.Operand.Name, bd.Bytes, keys)
 			}
 		}
+	}
+	if running != 1 {
+		t.Errorf("%d kernels run the partitions in order: the gate did not select the running form", running)
 	}
 	t.Logf("%d kernels, the largest scratch the attention reads or writes %d bytes (a [rows, heads, keys] buffer is %d)",
 		len(codes), scratch, 4*capRows*c.heads*keys)
@@ -202,9 +213,8 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase) {
 	got := run(0, sinkv)
 	// A device whose lowering rounds every operation alone is held to
 	// float32's band; a driver free to contract and approximate (SPIR-V's)
-	// to a wider one: the V100's Vulkan driver reads 1.4e-7 here on the
-	// attention seam-wip formed before the sink change too, the laptop's
-	// 3e-14.
+	// to a wider one: the V100's Vulkan driver reads 1.4e-7 on the form
+	// before the running pass as after it, the laptop's 3e-14.
 	band := 1e-8
 	if !dev.ExactArith {
 		band = 1e-6

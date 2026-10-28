@@ -55,3 +55,11 @@ func (w Workgroups) splits(g workGeom, h Heads, keys, slots int) int {
 	sq := 1 << int(math.Round(math.Log2(math.Sqrt(max(1, float64(keys)/float64(w.PerSplit))))))
 	return max(1, floor, min(sq, capped))
 }
+
+// sequential reports whether a step's partitions are better one
+// workgroup's, run in order: its rows' and heads' workgroups alone keep
+// SlotThreads threads a slot of the device, so its partitions are there for
+// the positions a workgroup's plane holds and not for the device's slots.
+func (w Workgroups) sequential(g workGeom, h Heads, slots int) bool {
+	return w.SlotThreads*max(1, h.Rows)*h.Query/g.group >= slots
+}

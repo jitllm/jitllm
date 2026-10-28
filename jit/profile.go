@@ -52,6 +52,7 @@ func gpuProfile() Profile {
 		Prologue{Words: 12 << 10},
 		CallRows{},
 		Affine{},
+		Running{},
 	}}
 }
 

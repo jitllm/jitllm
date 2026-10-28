@@ -106,7 +106,15 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 	for i := range mem {
 		split[mem[i].out] = &mem[i]
 	}
-	sp := splitter{S: S, J: J, split: split}
+	// Partitions one workgroup runs in order leave one partial a row and
+	// head, the running one (Running), and take a chunk each: a row whose
+	// span the first holds leaves the rest empty.
+	var run *RunningSplit
+	slots := S
+	if S > 1 && s.Work.sequential(g, h, d.Slots) {
+		run, slots = &RunningSplit{Part: part, Stride: stride, Copies: s.Copies}, 1
+	}
+	sp := splitter{S: S, J: J, split: split, chunked: run != nil}
 	var ns []*Kernel
 	for i := range mem {
 		m := &mem[i]
@@ -118,16 +126,20 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 			st := &k.Stores[0]
 			coords := k.coordNodes()
 			rh := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, coords[0], k.u32(h.Query)), coords[1])
-			ix := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, rh, k.u32(S)), coords[3]),
-				k.u32(stride)), coords[2])
-			st.Ax, st.Ix = nil, ix
-			st.Buf = k.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: part, Extent: h.Rows * h.Query * S * stride})
+			slot := k.bin(OpMul, ir.U32, rh, k.u32(slots))
+			if run == nil {
+				slot = k.bin(OpAdd, ir.U32, slot, coords[3])
+			}
+			st.Ax, st.Ix = nil, k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, slot, k.u32(stride)), coords[2])
+			st.Buf = k.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: part, Extent: h.Rows * h.Query * slots * stride})
 		}
+		k.Running = run
 		ns = append(ns, k)
 	}
-	cp, mg := s.copies(h, S, stride, part, mx.out, sm.out), s.merge(last, h, S, stride, part, vl.out, sm.out, mx.out)
+	cp, mg := s.copies(h, S, slots, stride, part, mx.out, sm.out), s.merge(last, h, slots, stride, part, vl.out, sm.out, mx.out)
 	cp.Part, cp.Of, mg.Of = last.Part, last.Of, last.Of
 	cp.Capacity, mg.Capacity = last.Capacity, last.Capacity
+	cp.Running = run
 	ns = append(ns, cp, mg)
 	return len(mem) + 1, ns, true
 }
@@ -153,6 +165,9 @@ func (k *Kernel) coordNodes() []int {
 type splitter struct {
 	S, J  int
 	split map[Operand]*member
+	// chunked is a split whose partitions are a chunk of positions each
+	// rather than a share of the span.
+	chunked bool
 }
 
 // partition is member m over the partitions: the range's coordinate a
@@ -261,7 +276,8 @@ func (sp splitter) relayout(q *member, ax []int, isKey func(int) bool, part, j i
 
 // bounds is a partition's first position, the first past it, and the
 // range's aligned start: the live span from the aligned start, a
-// partition's share of it rounded up to the alignment.
+// partition's share of it rounded up to the alignment, or where the split
+// is chunked a chunk of it.
 func (sp splitter) bounds(k *Kernel, pos *Positions, part int) (lo, hi, base int) {
 	U, A := ir.U32, pos.Align
 	first, end := pos.First, pos.End
@@ -270,14 +286,18 @@ func (sp splitter) bounds(k *Kernel, pos *Positions, part int) (lo, hi, base int
 		B: k.bin(OpSub, U, end, base), C: k.u32(0)})
 	share := k.bin(OpDiv, U, k.bin(OpAdd, U, span, k.u32(sp.S-1)), k.u32(sp.S))
 	per := k.bin(OpMul, U, k.bin(OpDiv, U, k.bin(OpAdd, U, share, k.u32(A-1)), k.u32(A)), k.u32(A))
+	if sp.chunked {
+		per = k.u32(sp.J)
+	}
 	lo = k.bin(OpMin, U, end, k.bin(OpAdd, U, base, k.bin(OpMul, U, part, per)))
 	hi = k.bin(OpMin, U, end, k.bin(OpAdd, U, lo, per))
 	return lo, hi, base
 }
 
 // copies is each partition's maximum and sum into the partial, Copies times
-// each.
-func (s SplitRange) copies(h Heads, S, stride int, part, maxes, sums Operand) *Kernel {
+// each: into its own of slots slots a row and head, or where there is one
+// slot (Running) the one its workgroup combines from.
+func (s SplitRange) copies(h Heads, S, slots, stride int, part, maxes, sums Operand) *Kernel {
 	U := ir.U32
 	k := &Kernel{Name: "map", Kind: PrimMap, Space: []int{h.Rows, h.Query, S, s.Copies}, Heads: &h}
 	c := k.coordNodes()
@@ -285,11 +305,14 @@ func (s SplitRange) copies(h Heads, S, stride int, part, maxes, sums Operand) *K
 	heads := []int{h.Rows, h.Query, S}
 	mb := k.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: maxes, Shape: heads})
 	lb := k.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: sums, Shape: heads})
-	pb := k.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: part, Extent: h.Rows * h.Query * S * stride})
+	pb := k.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: part, Extent: h.Rows * h.Query * slots * stride})
 	rh := k.bin(OpAdd, U, k.bin(OpMul, U, c[0], k.u32(h.Query)), c[1])
+	slot := k.bin(OpMul, U, rh, k.u32(slots))
+	if slots == S {
+		slot = k.bin(OpAdd, U, slot, c[2])
+	}
 	at := func(off int) int {
-		return k.bin(OpAdd, U, k.bin(OpAdd, U, k.bin(OpMul, U, k.bin(OpAdd, U, k.bin(OpMul, U, rh, k.u32(S)), c[2]), k.u32(stride)),
-			k.u32(off)), c[3])
+		return k.bin(OpAdd, U, k.bin(OpAdd, U, k.bin(OpMul, U, slot, k.u32(stride)), k.u32(off)), c[3])
 	}
 	mv := k.add(Node{Op: OpLoad, Type: ir.F32, Buf: mb, Ax: []int{c[0], c[1], c[2]}})
 	lv := k.add(Node{Op: OpLoad, Type: ir.F32, Buf: lb, Ax: []int{c[0], c[1], c[2]}})
