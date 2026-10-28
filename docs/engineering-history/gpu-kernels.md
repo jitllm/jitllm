@@ -10058,3 +10058,39 @@ row where the composer's reads two.
   blocks (a 2-D depthwise convolution over a picture's grid needs the CPU
   lowering's integer division of a row by the grid width, packed, which it
   has not), and the resampler itself, which is a projector.
+- The composed CPU decode runs inside main's fused pool region
+  (`sched.Pool.Fuse`, `State.fuseRun` before `cpuStep` in place of an
+  `unfuse`): Llama-3.2-1B's token is one region, not 129. Consecutive pool
+  kernels that share no buffer one of them writes (the call site's binding:
+  the residual stream, an own buffer, a table) run in one phase, their calls
+  one space (`cpuBlockForm.joinPhases`, decode forms): q, k and v join, gate
+  and up join, and a token runs 81 phases against main's 82. A kernel of one
+  call stays on the caller, in no phase (joining those took a token to 177
+  phases). Without VNNI, where no register holds the byte dots' ones, the
+  prologue stores them below the shift count's word and `vpmaddwd` reads
+  them from there: the Q4_K kernel's `vpcmpeqw` went from 128 to 1 (the dead
+  store before each broadcast was already gone). `Workers` takes, among cuts
+  that leave the busiest worker the same rows, the most up to four calls a
+  worker: the head went from 12 calls of 10688 rows (one a worker) to 48.
+  Violations: joining dependent kernels makes `TestComposedCPUBlocksServe`
+  return NaN, and ones read from an unwritten slot fail
+  `TestComposedCPUMatVec` at NMSE 1e8. Rows on an idle E5-2680 v4
+  (`TestComposedCPUAB`, node 0's 14 cores, n=20, main's A/A 0.99-1.02 at
+  IQR/median 0.018-0.06): base 0.6145-0.6252 in six passes; these changes
+  0.6496, 0.6715 and 0.6567. That is unresolved, because the composed arm's
+  own IQR/median is 0.12-0.17 on the idle box. Yet one model alone in a
+  process (`TestComposedCPUProfile`, which now prints a token's time
+  spread) holds a composed token to p10 27.6, median 28.2 and p90 29.7 ms
+  (main 18.0, 19.4 and 20.5). So the spread belongs to the interleaved
+  harness, with both models in one process, not to the composed token.
+  Not kept: `Ahead`'s distance (2 trips
+  is best on a 32768x4096 weight: one core 2.2-2.9 GB/s, 12 threads 20-24
+  GB/s at 0, 2, 4, 8, 12 and 16 trips) and claiming the calls that share a
+  line together (a call's 16 rows already read whole 64-byte lines), and
+  calls of at least 64 rows (`Workers{Rows: 64}`: 11.5-27 GB/s against
+  16 rows' 11-30 at decode's shapes on 14 cores). What
+  limits the matvecs is the walk. A call takes its 16 rows down all of K, a
+  line from each word's plane, every line a new DRAM row. Main's fused
+  kernel (`cpu.EmitPackedMatVecFusedAhead`) reads the same planes at about
+  41 GB/s: it takes each scale sub-block over all of a call's rows, a few
+  sequential streams, and adds the scaled sum into `Out` once a sub-block.
