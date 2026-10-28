@@ -112,21 +112,24 @@ type exprSplit struct {
 	terms map[exprAt]bool
 	whole map[int][]exprSize
 	// unfused is the parts formed with their kernels joined to none,
-	// unjammed those formed with each row a call of its own (RowJam),
+	// unjammed the times a part's jammed form was refused, each halving
+	// its rows a call (RowJam),
 	// unpaired those formed with each head a call of its own (HeadPairs),
 	// unwide those formed with no loop's rows across lanes (Jam),
 	// uncursored those formed indexing their buffers (Cursors).
-	unfused, unjammed, unpaired, unwide, uncursored map[int]bool
+	unfused, unpaired, unwide, uncursored map[int]bool
+	unjammed                              map[int]int
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]bool{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}}
 }
 
 // splitRefused forms a part whose refused kernel ran several rows a call
-// with a row a call, one whose refused kernel ran two heads a call with a
-// head a call, and one whose refused kernel jammed a loop's rows across
-// lanes with none; else one whose refused kernel walked its addresses
+// with half the rows a call, and nothing else; else one whose refused
+// kernel ran two heads a call with a head a call, and one whose refused
+// kernel jammed a loop's rows across lanes with none; else one whose
+// refused kernel walked its addresses
 // indexing them; else a map a term the largest expression formed whole
 // in each part of the kernels refused, or a part with none left unfused,
 // reporting whether it changed a part.
@@ -140,9 +143,11 @@ func (sp *exprSplit) splitRefused(err error) bool {
 	}
 	more := false
 	for _, of := range pe.Jammed {
-		if !sp.unjammed[of] {
-			sp.unjammed[of], more = true, true
-		}
+		sp.unjammed[of]++
+		more = true
+	}
+	if more {
+		return true
 	}
 	for _, of := range pe.Paired {
 		if !sp.unpaired[of] {

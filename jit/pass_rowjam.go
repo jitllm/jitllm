@@ -9,7 +9,8 @@ import "github.com/jitllm/jitllm/jit/ir"
 // weight's values, so a call decodes a tile of the weight once for N rows.
 // A call of rows rows runs the units they reach (Code.LiveUnitsOf); a
 // unit's rows past them read and write rows of the form's capacity no live
-// row reads.
+// row reads. A part whose jammed form the registers refused runs half the
+// rows a call for each refusal (Kernel.Unjam).
 type RowJam struct {
 	N int
 }
@@ -18,7 +19,8 @@ func (RowJam) Name() string { return "rowjam" }
 
 func (p RowJam) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
-		if p.N < 2 || k.Unjammed || !k.TileMajor || k.Calls != 2 || len(k.Space) < 3 || k.Capacity != k.Space[0] || k.Space[0]%p.N != 0 || k.writesWhatItReads() {
+		n := p.N >> k.Unjam
+		if n < 2 || !k.TileMajor || k.Calls != 2 || len(k.Space) < 3 || k.Capacity != k.Space[0] || k.Space[0]%n != 0 || k.writesWhatItReads() {
 			return nil, false, nil
 		}
 		m := k.clone()
@@ -37,12 +39,12 @@ func (p RowJam) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			return nil, false, nil
 		}
 		U := ir.U32
-		base := m.bin(OpMul, U, coord, m.u32(p.N))
+		base := m.bin(OpMul, U, coord, m.u32(n))
 		m.redirect(coord, base, base)
-		m.Space[0] /= p.N
-		m.Jam = p.N
+		m.Space[0] /= n
+		m.Jam = n
 		stores := append([]Store(nil), m.Stores...)
-		for j := 1; j < p.N; j++ {
+		for j := 1; j < n; j++ {
 			r := replica{k: m, sub: map[int]int{base: m.bin(OpAdd, U, base, m.u32(j))}, memo: map[int]int{}}
 			for _, s := range stores {
 				if s.Barrier || s.Run || !m.storeReaches(&r, s) {

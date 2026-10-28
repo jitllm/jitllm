@@ -50,9 +50,10 @@ type Kernel struct {
 	// expression left to split: Fuse joins it to nothing.
 	Unfused bool
 	// Jam is the rows a call of the kernel runs where RowJam set it;
-	// Unjammed a kernel of a part whose jammed form the registers refused.
-	Jam      int
-	Unjammed bool
+	// Unjam is the times a part's jammed form the registers refused, each
+	// halving the rows a call RowJam runs.
+	Jam   int
+	Unjam int
 	// Unpaired is a kernel of a part whose form of a pair of heads a call
 	// (HeadPairs) the registers refused, Unwide one whose form jamming a
 	// loop's rows across lanes (Jam) they refused, Uncursored one whose
