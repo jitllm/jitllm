@@ -127,6 +127,11 @@ type cpuBlockForm struct {
 	own  []int
 	// consts is an own buffer's constant words, by its index.
 	consts map[int][]uint32
+	// keysEnd is the codes up to the last that writes the history: a
+	// bidirectional run of more rows than a call runs them over every row
+	// first (cpuRowsRun). keysX says one of them writes the residual.
+	keysEnd int
+	keysX   bool
 	// A form over banks in the host's expert pages runs in two halves
 	// (cpuForm): its codes before split, up to the selection, then the rest,
 	// which read the banks once the selected experts' pages are resident
@@ -600,29 +605,34 @@ func (s *State) cpuFaultTable(pg *kvPages, end int) []uint32 {
 // cpuRowsRun runs block li's rows' form f over the rows of x, their history
 // the State's, a call of at most f's capacity at a time. A bidirectional
 // run (bidir.go) counts its rows' keys to its end; where the step takes
-// more calls than one, a first pass over a copy of the rows writes every
-// row's keys, its outputs dropped and each row reading only the keys
-// before it, and the second reads them all.
+// more calls than one, the form's codes through its last history write
+// (keysEnd) first run over every row, each reading only the keys before
+// it, so that every call's rows then read all of them. Where those codes
+// write the residual too they run over a copy of it.
 func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int) {
 	runs := s.runsAt(li) && s.bidirIn(pos[0], len(pos))
 	if runs && len(pos) > f.rows {
-		w, ns := len(pos)*s.c.NEmbd, s.c.Streams()
-		if len(s.cpu.runX) < w*ns {
-			s.cpu.runX = make([]float32, w*ns)
+		kx, kstride := x, stride
+		if f.keysX {
+			w, ns := len(pos)*s.c.NEmbd, s.c.Streams()
+			if len(s.cpu.runX) < w*ns {
+				s.cpu.runX = make([]float32, w*ns)
+			}
+			for k := range ns {
+				copy(s.cpu.runX[k*w:(k+1)*w], x[k*stride:k*stride+w])
+			}
+			kx, kstride = s.cpu.runX[:w*ns], w
 		}
-		for k := range ns {
-			copy(s.cpu.runX[k*w:(k+1)*w], x[k*stride:k*stride+w])
-		}
-		s.cpuRowsCalls(li, l, f, s.cpu.runX[:w*ns], w, side, cs, nrot, seq, pos, false)
+		s.cpuRowsCalls(li, l, f, f.codes[:f.keysEnd], kx, kstride, side, cs, nrot, seq, pos, false)
 	}
-	s.cpuRowsCalls(li, l, f, x, stride, side, cs, nrot, seq, pos, runs)
+	s.cpuRowsCalls(li, l, f, f.codes, x, stride, side, cs, nrot, seq, pos, runs)
 }
 
 // cpuRowsCalls is cpuRowsRun's calls, each row's keys counted to its run's
 // end where runs is set; x is the rows' residual, stream-major, stride
 // elements from one stream to the next; side is the rows' per-layer inputs,
 // nil for a model of none.
-func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int, runs bool) {
+func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, codes []cpuCode, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int, runs bool) {
 	n := len(pos)
 	pg := &s.kv.layers[s.c.KVSource(li)]
 	d, ns, pw := s.c.NEmbd, s.c.Streams(), s.c.pleWidth()
@@ -676,8 +686,8 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, x []float32, str
 		*b = cpuBound{li: li, l: l, own: s.cpuOwn(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
 			kv: pg, pages: s.cpuFaultTable(pg, end), side: bside}
 		s.cpu.call[0] = uint32(k)
-		for i := range f.codes {
-			s.cpuCall(b, &f.codes[i])
+		for i := range codes {
+			s.cpuCall(b, &codes[i])
 		}
 		if staged {
 			for j := range ns {
@@ -1269,6 +1279,9 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 		}
 		bytes := map[jit.Operand]int64{}
 		for _, bd := range c.Binds {
+			if o := bd.Operand; bd.Writes && o.Kind == jit.OperandTable && (o.Name == "kv.k" || o.Name == "kv.v") {
+				f.keysEnd = ci + 1
+			}
 			if o := bd.Operand; o.Kind == jit.OperandValue {
 				if k := streamIn(gr, o.Value); k >= 0 && bd.Read {
 					cc.reads |= 1 << k
@@ -1387,6 +1400,9 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 		}
 		cc.code = code
 		f.codes = append(f.codes, cc)
+	}
+	for _, cc := range f.codes[:f.keysEnd] {
+		f.keysX = f.keysX || cc.writes != 0
 	}
 	if !apart && !f.inPlace() {
 		f.close()
