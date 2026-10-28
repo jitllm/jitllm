@@ -73,6 +73,7 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 	for _, o := range k.Ops {
 		if o.Tile != nil {
 			tl = &tileLower{b: &b, sm: sm, regs: map[ir.Value][]Reg{}, shared: shared, volta: voltaSM(sm)}
+			tl.pairs = tl.volta && pairsFit(k)
 			tl.prologue()
 			break
 		}

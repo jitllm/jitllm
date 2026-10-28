@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/jit/ptx"
 )
 
 // voltaTileCase is one TestVoltaTilesMatchTheReference kernel: D = A*B + C
@@ -50,7 +52,7 @@ func TestVoltaTilesMatchTheReference(t *testing.T) {
 	probe.Close()
 	var cases []voltaTileCase
 	for _, m := range []int{8, 16, 24, 32} {
-		for _, n := range []int{8, 16, 24} {
+		for _, n := range []int{8, 16, 24, 32} {
 			for _, k := range []int{8, 16, 24, 48} {
 				i := len(cases)
 				cases = append(cases, voltaTileCase{m: m, n: n, k: k,
@@ -58,8 +60,30 @@ func TestVoltaTilesMatchTheReference(t *testing.T) {
 			}
 		}
 	}
+	pairs := 0
 	for _, c := range cases {
+		// A kernel whose tiles are all in sixteens takes the output-split
+		// layout, whose store sums nothing across the pairs; any other the
+		// k-split, whose store does.
+		kk, _, err := voltaTileKernel(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src, err := ptx.Lower(kk, "sm_70")
+		if err != nil {
+			t.Fatal(err)
+		}
+		split := c.m%16 == 0 && c.n%16 == 0
+		if strings.Contains(src, "shfl.sync") == split {
+			t.Fatalf("%+v: output-split %v, yet the store's shuffles say otherwise", c, split)
+		}
+		if split {
+			pairs++
+		}
 		voltaTileCaseRun(t, d, c)
+	}
+	if pairs == 0 || pairs == len(cases) {
+		t.Fatalf("%d of %d cases took the output-split layout: the gate holds one layout only", pairs, len(cases))
 	}
 	g := 0
 	for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q8_0, kernels.Q6_K} {
@@ -82,7 +106,7 @@ func TestVoltaTilesMatchTheReference(t *testing.T) {
 			g++
 		}
 	}
-	t.Logf("%s at sm_70: %d tile cases and %d staged GEMMs", d.API(), len(cases), g)
+	t.Logf("%s at sm_70: %d tile cases (%d output-split) and %d staged GEMMs", d.API(), len(cases), pairs, g)
 }
 
 // voltaTileKernel builds c's kernel. Every view's stride is its minor extent

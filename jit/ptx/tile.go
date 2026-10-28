@@ -54,6 +54,20 @@ import (
 // the four (two butterfly shuffles) and pair q writes registers 2q and 2q+1.
 // A loaded or splat accumulator is held the same way, pair q holding those two
 // and zeros. A k of 8 past the last 16 leaves pairs 2 and 3 zeros.
+//
+// Where every tile of the kernel has its rows and columns (an operand's
+// outer side) in sixteens, the pairs split the output instead: block (i, j)
+// of 16 x 16 is four atoms, pair q taking atom (q>>1, q&1), so with
+// qr = 8(q>>1) and qc = 8(q&1)
+//
+//	A (M x K, f16)   row 16i+qr+p, k 4s .. 4s+3, two f16x2 a block and 4 of k
+//	B (K x N, f16)   k 4s .. 4s+3, column 16j+qc+p, two f16x2
+//	C (M x N, f32)   block (i, j)'s pair atom, eight at m8n8k4's D places
+//
+// and a TileMMA is one m8n8k4 a block and 4 of k. A pair's operands are
+// another's too (the pairs of one row of atoms read one A), but the
+// accumulator is a quarter of the k-split's and is the tile itself: a store
+// writes it as it is.
 
 // tileLower holds the per-kernel state the tile ops share.
 type tileLower struct {
@@ -74,6 +88,29 @@ type tileLower struct {
 	dr, dc Reg
 	qIs    [4]Reg
 	q2     Reg
+	// pairs is the output-split layout: pA and pB the A row and B column a
+	// lane holds of a block, aR and aC its accumulator 0's, zero a zero
+	// lane part.
+	pairs          bool
+	pA, pB, aR, aC Reg
+	zero           Reg
+}
+
+// pairsFit reports whether every tile of k has its outer sides in sixteens,
+// the output-split layout's blocks.
+func pairsFit(k *ir.Kernel) bool {
+	for _, o := range k.Ops {
+		t := o.Tile
+		if t == nil {
+			continue
+		}
+		switch {
+		case t.Use == ir.TileA && t.Rows%16 != 0, t.Use == ir.TileB && t.Cols%16 != 0,
+			t.Use == ir.TileAcc && (t.Rows%16 != 0 || t.Cols%16 != 0):
+			return false
+		}
+	}
+	return true
 }
 
 // voltaSM reports whether sm's matrix instruction is m8n8k4 alone.
@@ -145,6 +182,20 @@ func (tl *tileLower) prologue() {
 	}
 	tl.q2 = b.Reg(Pred)
 	b.Op("setp.lt.u32 %v,%v,2;", tl.q2, tl.q)
+	if !tl.pairs {
+		return
+	}
+	qr, qc := b.Reg(B32), b.Reg(B32)
+	b.Op("and.b32 %v,%v,2;", qr, tl.q)
+	b.Op("shl.b32 %v,%v,2;", qr, qr)
+	b.Op("and.b32 %v,%v,1;", qc, tl.q)
+	b.Op("shl.b32 %v,%v,3;", qc, qc)
+	tl.pA, tl.pB, tl.aR, tl.aC, tl.zero = b.Reg(B32), b.Reg(B32), b.Reg(B32), b.Reg(B32), b.Reg(B32)
+	b.Op("add.u32 %v,%v,%v;", tl.pA, tl.p, qr)
+	b.Op("add.u32 %v,%v,%v;", tl.pB, tl.p, qc)
+	b.Op("add.u32 %v,%v,%v;", tl.aR, tl.dr, qr)
+	b.Op("add.u32 %v,%v,%v;", tl.aC, tl.dc, qc)
+	b.Op("mov.u32 %v,0;", tl.zero)
 }
 
 // slots is how many 16s of k a Volta operand of k elements holds.
@@ -153,6 +204,15 @@ func slots(k int) int { return (k + 15) / 16 }
 // count is how many registers a lane holds of a tile.
 func (tl *tileLower) count(t ir.TileType) int {
 	n := (t.Rows / 8) * (t.Cols / 8)
+	if tl.pairs {
+		switch t.Use {
+		case ir.TileA:
+			return 2 * (t.Rows / 16) * (t.Cols / 4)
+		case ir.TileB:
+			return 2 * (t.Rows / 4) * (t.Cols / 16)
+		}
+		return 8 * (t.Rows / 16) * (t.Cols / 16)
+	}
 	if tl.volta {
 		switch t.Use {
 		case ir.TileA:
@@ -303,6 +363,35 @@ type voltaElem struct {
 // voltaElems lists a Volta tile's registers in the order count allocates them.
 func (tl *tileLower) voltaElems(t ir.TileType) []voltaElem {
 	var out []voltaElem
+	if tl.pairs {
+		switch t.Use {
+		case ir.TileA:
+			for i := 0; i < t.Rows/16; i++ {
+				for s := 0; s < t.Cols/4; s++ {
+					for h := 0; h < 2; h++ {
+						out = append(out, voltaElem{16 * i, 4*s + 2*h, nil})
+					}
+				}
+			}
+		case ir.TileB:
+			for s := 0; s < t.Rows/4; s++ {
+				for j := 0; j < t.Cols/16; j++ {
+					for h := 0; h < 2; h++ {
+						out = append(out, voltaElem{4*s + 2*h, 16 * j, nil})
+					}
+				}
+			}
+		default:
+			for i := 0; i < t.Rows/16; i++ {
+				for j := 0; j < t.Cols/16; j++ {
+					for x := 0; x < 8; x++ {
+						out = append(out, voltaElem{16*i + 2*((x>>1)&1), 16*j + (x & 1) + 4*(x>>2), nil})
+					}
+				}
+			}
+		}
+		return out
+	}
 	part := func(k, s int) *Reg {
 		if 16*s+16 > k {
 			return &tl.q2
@@ -350,10 +439,16 @@ func (tl *tileLower) voltaAccess(o ir.Op, base Reg, offset, stride Reg, store []
 
 	// An f16 element's second half is the next k: A's next column, B's next row.
 	rowL, colL := tl.dr, tl.dc
-	switch t.Use {
-	case ir.TileA:
+	switch {
+	case tl.pairs && t.Use == ir.TileA:
+		rowL, colL = tl.pA, tl.zero
+	case tl.pairs && t.Use == ir.TileB:
+		rowL, colL = tl.zero, tl.pB
+	case tl.pairs:
+		rowL, colL = tl.aR, tl.aC
+	case t.Use == ir.TileA:
 		rowL, colL = tl.p, tl.q4
-	case ir.TileB:
+	case t.Use == ir.TileB:
 		rowL, colL = tl.q4, tl.p
 	}
 	majL, minL := rowL, colL
@@ -386,7 +481,7 @@ func (tl *tileLower) voltaAccess(o ir.Op, base Reg, offset, stride Reg, store []
 		return "@" + p.String() + " "
 	}
 
-	if store != nil && t.Use == ir.TileAcc {
+	if store != nil && t.Use == ir.TileAcc && !tl.pairs {
 		sum := make([]Reg, len(store))
 		for n, r := range store {
 			s, x := r, b.Reg(F32)
@@ -454,6 +549,8 @@ func (tl *tileLower) splat(t ir.TileType, v Reg) []Reg {
 		}
 		for n, el := range tl.voltaElems(t) {
 			switch {
+			case t.Elem == ir.TileF32 && el.pred == nil:
+				b.Op("mov.f32 %v,%v;", out[n], v)
 			case t.Elem == ir.TileF32:
 				b.Op("selp.f32 %v,%v,0f00000000,%v;", out[n], v, *el.pred)
 			case el.pred != nil:
@@ -537,6 +634,28 @@ func (tl *tileLower) mma(ta, tb, tc ir.TileType, a, bb, c []Reg) []Reg {
 // k, each pair adding its own chunk's products into its partial sums.
 func (tl *tileLower) voltaMMA(ta, tb ir.TileType, a, bb, c []Reg) []Reg {
 	b := tl.b
+	if tl.pairs {
+		mi, nj, ks := ta.Rows/16, tb.Cols/16, ta.Cols/4
+		d := make([]Reg, len(c))
+		copy(d, c)
+		for i := 0; i < mi; i++ {
+			for j := 0; j < nj; j++ {
+				acc := d[(i*nj+j)*8 : (i*nj+j)*8+8]
+				for s := 0; s < ks; s++ {
+					out := make([]Reg, 8)
+					for x := range out {
+						out[x] = b.Reg(F32)
+					}
+					ai, bi := (i*ks+s)*2, (s*nj+j)*2
+					b.Op("mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 %s,{%v,%v},{%v,%v},%s;",
+						regList(out), a[ai], a[ai+1], bb[bi], bb[bi+1], regList(acc))
+					acc = out
+				}
+				copy(d[(i*nj+j)*8:], acc)
+			}
+		}
+		return d
+	}
 	mA, nB, ks := ta.Rows/8, tb.Cols/8, slots(ta.Cols)
 	d := make([]Reg, len(c))
 	copy(d, c)
