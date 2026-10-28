@@ -18,6 +18,19 @@ type Profile struct {
 	ScanLoops bool
 	Passes    []Pass
 	Off       map[string]bool
+	// Narrow, where set, is the passes of a device whose stated ISA lacks
+	// any of Wide's bits: on x86, a host without AVX2, FMA and F16C forms
+	// its kernels four floats a vector.
+	Narrow []Pass
+	Wide   uint64
+}
+
+// on is the profile p forms by on device d.
+func (p Profile) on(d Device) Profile {
+	if p.Narrow != nil && d.ISA != 0 && d.ISA&p.Wide != p.Wide {
+		p.Passes, p.Narrow = p.Narrow, nil
+	}
+	return p
 }
 
 // Int8Form is the int8 form a device keeps of a block's contraction inputs

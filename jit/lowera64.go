@@ -50,9 +50,11 @@ const (
 )
 
 // HostCPULowers reports whether the composer's CPU lowering runs on this
-// host: arm64's, or x86's on a host at the AVX2 tier.
+// host: arm64's, or x86's on a host at the AVX2 tier or at the SSE tier
+// below it (SSE4.1 and SSSE3: the narrow passes in the legacy encodings).
 func HostCPULowers() bool {
-	return runtime.GOARCH == "arm64" || cpu.CPU().ISA()&cpu.ISATierAVX2 == cpu.ISATierAVX2
+	isa := cpu.CPU().ISA()
+	return runtime.GOARCH == "arm64" || isa&cpu.ISATierAVX2 == cpu.ISATierAVX2 || isa&cpu.ISATierSSE == cpu.ISATierSSE
 }
 
 func lowerA64(k *Kernel, d Device) (lw Lowered, err error) {

@@ -3,10 +3,11 @@
 package cpu
 
 import (
-	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/ssegate"
 )
 
 // The SSE tier's VEX-leak gate: every family's kernel gates call
@@ -23,164 +24,22 @@ import (
 // push, pop or call (RSP must be identical on every path), and no write to R14
 // (Go's g), RBP (callee-saved and not saved by callKernel) or RSP.
 
-// sseMnemonicISA classifies every mnemonic an SSE-tier kernel may contain by
-// the extension that carries it; 0 is base x86-64 (the GP instructions). An
-// unclassified mnemonic is a gate failure, so an instruction nobody thought
-// about cannot pass by default -- add it here with its extension.
-var sseMnemonicISA = func() map[string]ISA {
-	m := map[string]ISA{}
-	add := func(isa ISA, names string) {
-		for _, n := range strings.Fields(names) {
-			m[n] = isa
-		}
-	}
-	add(0, `mov movabs movzx movsx movsxd add sub and or xor inc dec neg not test cmp
-		lea imul div shl shr sar sal rol ror jmp je jne jz jnz ja jae jb jbe jg jge jl jle
-		js jns ret nop prefetcht0 prefetcht1 prefetcht2 prefetchnta
-		cmove cmovne cmovz cmovnz cmova cmovae cmovb cmovbe cmovg cmovge cmovl cmovle`)
-	add(ISASSE2, `movaps movups movss movd movq movdqu movdqa movhlps movlhps movmskps pmovmskb
-		addps subps mulps divps maxps minps andps andnps orps xorps unpcklps unpckhps shufps
-		sqrtps rcpps rsqrtps cmpeqps cmpltps cmpleps cmpunordps cmpneqps cmpnltps cmpnleps cmpordps
-		addss subss mulss divss maxss minss sqrtss cvtss2sd cvtsd2ss ucomiss comiss
-		addpd subpd mulpd divpd
-		cvtdq2ps cvtps2dq cvttps2dq cvtps2pd cvtpd2ps cvtsi2ss cvttss2si cvtss2si
-		paddb paddw paddd paddq psubb psubw psubd psubq pmullw pmulhw pmulhuw pmuludq pmaddwd
-		pand pandn por pxor pcmpeqb pcmpeqw pcmpeqd pcmpgtb pcmpgtw pcmpgtd
-		packsswb packssdw packuswb punpcklbw punpcklwd punpckldq punpcklqdq
-		punpckhbw punpckhwd punpckhdq punpckhqdq pminub pmaxub pminsw pmaxsw pavgb pavgw psadbw
-		pshufd pshuflw pshufhw psrlw psrld psrlq psraw psrad psllw pslld psllq psrldq pslldq
-		pinsrw pextrw lfence sfence mfence`)
-	add(ISASSE3, `haddps hsubps addsubps movsldup movshdup movddup lddqu`)
-	add(ISASSSE3, `pshufb phaddw phaddd phsubw phsubd pmaddubsw psignb psignw psignd pmulhrsw
-		pabsb pabsw pabsd palignr`)
-	add(ISASSE41, `pmovsxbw pmovsxbd pmovsxbq pmovsxwd pmovsxwq pmovsxdq
-		pmovzxbw pmovzxbd pmovzxbq pmovzxwd pmovzxwq pmovzxdq
-		pmulld pmuldq pcmpeqq packusdw pminsb pminsd pminuw pminud pmaxsb pmaxsd pmaxuw pmaxud
-		ptest pblendvb blendvps blendps pblendw insertps extractps pinsrb pinsrd pinsrq
-		pextrb pextrd pextrq roundps roundss roundpd dpps`)
-	add(ISASSE42, `pcmpgtq crc32`)
-	add(ISAPOPCNT, `popcnt`)
-	return m
-}()
-
-// sseGateProblems returns every way code fails to be a legal SSE-tier kernel.
-// It returns rather than failing, so the gate's own self-test can run it
-// against violations.
+// sseGateProblems returns every way code fails to be a legal SSE-tier
+// kernel (internal/ssegate, shared with the composer's x86 tests).
 func sseGateProblems(t testing.TB, name string, code []byte) []string {
-	t.Helper()
-	var bad []string
-	add := func(f string, a ...any) { bad = append(bad, fmt.Sprintf(f, a...)) }
-
-	declared, ok := KernelISA(code)
-	if !ok {
-		add("no ISA declaration at code[0] (DeclareISA): Map would treat it as an AVX2 kernel")
-	}
-	if declared&(ISAAVX2|ISAFMA|ISAF16C|ISAVNNI) != 0 {
-		add("declares %v: an SSE-tier kernel may not need any VEX extension", declared)
-	}
-	ins := disasmWide(t, t.TempDir(), name, code)
-	if len(ins) == 0 {
-		add("objdump found no instructions")
-	}
-	for i, in := range ins {
-		where := fmt.Sprintf("insn %d (% x) %q", i, in.bytes, in.text)
-		if strings.HasPrefix(in.text, "(bad)") {
-			add("%s: objdump cannot decode it", where)
-			continue
-		}
-		// The opcode's first byte, past legacy prefixes and REX.
-		j := 0
-		for j < len(in.bytes) && isLegacyPrefix(in.bytes[j]) {
-			j++
-		}
-		if j < len(in.bytes) && in.bytes[j]&0xF0 == 0x40 {
-			j++
-		}
-		if j < len(in.bytes) {
-			switch in.bytes[j] {
-			case 0xC4, 0xC5:
-				add("%s: VEX-encoded -- faults on a host with no AVX", where)
-			case 0x62:
-				add("%s: EVEX-encoded -- faults on a host with no AVX-512", where)
-			}
-		}
-		fields := strings.Fields(in.text)
-		mn := fields[0]
-		ops := strings.Join(fields[1:], " ")
-		if strings.HasPrefix(mn, "v") {
-			add("%s: a VEX mnemonic", where)
-		}
-		if strings.Contains(ops, "ymm") || strings.Contains(ops, "zmm") {
-			add("%s: a 256/512-bit register", where)
-		}
-		switch mn {
-		case "push", "pop", "call", "enter", "leave", "pushf", "popf", "pushfq", "popfq":
-			add("%s: moves RSP; the trampoline requires RSP identical on every path", where)
-			continue
-		}
-		if strings.HasPrefix(mn, "rex") || mn == "data16" || mn == "addr32" || mn == "lock" || mn == "rep" {
-			add("%s: a stray prefix objdump could not attach to an instruction", where)
-			continue
-		}
-		isa, known := sseMnemonicISA[mn]
-		if mn == "pextrw" && strings.Contains(ops, "PTR") {
-			isa = ISASSE41 // the memory-destination form is SSE4.1's
-		}
-		if !known {
-			add("%s: unclassified mnemonic %q -- add it to sseMnemonicISA with its extension", where, mn)
-		} else if isa&^declared != 0 {
-			add("%s: needs %v, which the kernel did not declare (%v)", where, isa, declared)
-		}
-		if dst := strings.SplitN(ops, ",", 2)[0]; writesFirstOperand(mn) && !strings.Contains(dst, "[") {
-			switch dst {
-			case "r14", "r14d", "r14w", "r14b", "rbp", "ebp", "bp", "bpl", "rsp", "esp", "sp", "spl":
-				add("%s: writes %s (R14 is Go's g; RBP is not saved by callKernel; RSP must not move)", where, dst)
-			}
-		}
-	}
-	if len(ins) > 0 && ok {
-		if first := ins[0]; len(first.bytes) != ISAMarkerLen || !strings.HasPrefix(first.text, "nop") {
-			add("the first instruction is %q (% x), not the ISA declaration's NOP", first.text, first.bytes)
-		}
-	}
-	return bad
-}
-
-// isLegacyPrefix reports the one-byte prefixes that may precede an opcode.
-func isLegacyPrefix(b byte) bool {
-	switch b {
-	case 0x66, 0x67, 0xF0, 0xF2, 0xF3, 0x2E, 0x36, 0x3E, 0x26, 0x64, 0x65:
-		return true
-	}
-	return false
+	return ssegate.Problems(t, name, code)
 }
 
 // writesFirstOperand is false for the instructions whose first operand is
 // only read.
-func writesFirstOperand(mn string) bool {
-	switch mn {
-	case "cmp", "test", "ptest", "ucomiss", "comiss", "prefetcht0", "prefetcht1",
-		"prefetcht2", "prefetchnta", "jmp", "ret", "nop":
-		return false
-	}
-	return !strings.HasPrefix(mn, "j")
-}
+func writesFirstOperand(mn string) bool { return ssegate.WritesFirstOperand(mn) }
 
 // requireSSEKernel fails t for every problem sseGateProblems finds in code.
 // Every SSE-tier family gate calls it on every kernel it builds, at every
 // shape it tests.
-//
-// Where objdump is missing it logs and returns rather than skipping, so the
-// calling gate's execution half still runs on a host without objdump.
 func requireSSEKernel(t testing.TB, name string, code []byte) {
 	t.Helper()
-	if _, err := exec.LookPath("objdump"); err != nil {
-		t.Logf("%s: objdump not installed -- the VEX-leak half of this gate did not run here", name)
-		return
-	}
-	for _, p := range sseGateProblems(t, name, code) {
-		t.Errorf("%s: %s", name, p)
-	}
+	ssegate.Require(t, name, code)
 }
 
 // TestVEXGateCatchesItsViolations runs the gate against each thing it exists

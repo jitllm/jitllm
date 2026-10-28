@@ -218,6 +218,7 @@ func (r *Registry) Kernels(f Model, run []PartPlan, first int, s Step) ([]*Kerne
 	if !ok {
 		return nil, fmt.Errorf("jit: no profile for %s", run[0].Device.Kind)
 	}
+	prof = prof.on(run[0].Device)
 	sp := newExprSplit()
 	for {
 		ks, errs, err := r.generated(f, run, first, s, sp)

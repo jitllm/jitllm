@@ -156,7 +156,7 @@ func runCPUTables(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32,
 		if c.CPU == nil {
 			return fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		code, err := cpu.Map(c.CPU)
+		code, err := mapComposed(c.CPU)
 		if err != nil {
 			return fmt.Errorf("mapping %s: %w", c.Name, err)
 		}

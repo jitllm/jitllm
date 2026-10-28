@@ -30,10 +30,14 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if d.ISA != 0 {
 		e.a.DeclareISA(e.isa)
 	}
-	if r := x86.Reg(k.Ones - 1); k.Ones > 0 {
+	e.sse = sseNarrow(e.isa)
+	if r := x86.Reg(k.Ones - 1); k.Ones > 0 && e.sse {
+		e.a.PCMPEQW(r, r, r)
+		e.a.PSRLW(r, r, 15)
+	} else if k.Ones > 0 {
 		e.a.VPCMPEQW(r, r, r)
 		e.a.VPSRLW(r, r, 15)
-	} else if e.isa&x86.ISAVNNI == 0 && k.byteDots() {
+	} else if !e.sse && e.isa&x86.ISAVNNI == 0 && k.byteDots() {
 		// No register holds the byte dots' ones: they are read from the
 		// red zone, made once while every vector register is free.
 		e.a.VPCMPEQW(x86.Y0, x86.Y0, x86.Y0)
@@ -48,12 +52,20 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 		switch en.Kind {
 		case EntryNode:
 			e.cur = en.I
-			e.node(en.I)
+			if e.sse {
+				e.nodeSSE(en.I)
+			} else {
+				e.node(en.I)
+			}
 			if s := k.Nodes[en.I].Spill; s > 0 && k.Nodes[en.I].Reg > 0 {
 				e.a.MOVStore(spillSlot(s), x86.Reg(k.Nodes[en.I].Reg-1))
 			}
 		case EntryStore:
-			e.store(en.I)
+			if e.sse {
+				e.storeSSE(en.I)
+			} else {
+				e.store(en.I)
+			}
 		case EntryLoop:
 			e.enter(en.I)
 		case EntryEnd:
@@ -69,7 +81,9 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if e.err != nil {
 		return Lowered{}, fmt.Errorf("the x86 lowering of %s: %w", k.Name, e.err)
 	}
-	e.a.VZEROUPPER()
+	if !e.sse {
+		e.a.VZEROUPPER()
+	}
 	e.a.RET()
 	code, err := e.a.Bytes()
 	if err != nil {
@@ -91,8 +105,10 @@ type x86Lowerer struct {
 	// cur is the node being made, -1 between nodes; reloads counts the
 	// spilled reads, which take the reload registers in turn.
 	cur, reloads int
-	// isa is the instruction sets the host executes.
+	// isa is the instruction sets the host executes; sse, that they hold
+	// no AVX2, so the kernel is made in the legacy encodings.
 	isa x86.ISA
+	sse bool
 }
 
 // shiftCount is the red-zone word a vector shift by a general register's
@@ -171,7 +187,11 @@ func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 func (e *x86Lowerer) laneAddr(b, ix, ptr int) x86.Mem {
 	k, a := e.k, e.a
 	r := reloadReg
-	a.VMOVDFromX(r, e.reg(ix))
+	if e.sse {
+		a.MOVDFromX(r, e.reg(ix))
+	} else {
+		a.VMOVDFromX(r, e.reg(ix))
+	}
 	a.SHLimm(r, byte(bits.TrailingZeros(uint(ElemBytes(k.Bufs[b])))))
 	switch {
 	case ptr > 0 && k.Ptrs[ptr-1].Reg == 0 && k.Ptrs[ptr-1].Spill > 0:

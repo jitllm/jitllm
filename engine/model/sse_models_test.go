@@ -4,10 +4,10 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -201,11 +201,12 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	return a
 }
 
-// ssemComposedDeclines is the SSE gate's composed CPU arm: the composer's
-// CPU lowering emits AVX2, so on the SSE tier every block step is declined
-// by that name, before any form is mapped, and the decode is the SSE arm's
-// to the bit (forced).
-func ssemComposedDeclines(t *testing.T, path string, ids []int32, forced [][]float32, opts ...Option) {
+// ssemComposedServes is the SSE gate's composed CPU arm: the composer forms
+// every block for the CPU four floats a vector in the legacy encodings, so on
+// the SSE tier every block step is served, none declined by the ISA, no AVX2
+// kernel is mapped, and the teacher-forced logits are held to the SSE arm's
+// (forced) within band at every position.
+func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float32, band float64, opts ...Option) {
 	t.Helper()
 	m, err := Open(path, append(opts, WithComposedCPU(true))...)
 	if err != nil {
@@ -215,23 +216,46 @@ func ssemComposedDeclines(t *testing.T, path string, ids []int32, forced [][]flo
 	before := cpu.MappedByTier()
 	s := m.NewState(len(ids) + 1)
 	defer s.Close()
+	var worst float64
 	for pos, id := range ids {
 		l, err := s.Forward(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(l, forced[pos]) {
-			t.Fatalf("pos %d: the composed CPU's declined decode is not the SSE arm's", pos)
+		d := ssemMaxAbs(l, forced[pos])
+		if !(d <= band) {
+			t.Fatalf("pos %d: the composed CPU's logits are %.4f from the SSE arm's (band %.4f)", pos, d, band)
 		}
+		worst = math.Max(worst, d)
 	}
-	if d := cpu.MappedByTier()[cpu.TierAVX2] - before[cpu.TierAVX2]; d != 0 {
+	after := cpu.MappedByTier()
+	if d := after[cpu.TierAVX2] - before[cpu.TierAVX2]; d != 0 {
 		t.Fatalf("the composed CPU mapped %d AVX2 kernels on the SSE tier", d)
 	}
-	served, declined := s.CPUBlockSteps()
-	if want := len(ids) * m.Cfg.NLayer; served != 0 || declined[jit.DeclineISA] != want {
-		t.Fatalf("on the SSE tier the composed CPU served %d block steps and declined %d by %q, want 0 and %d",
-			served, declined[jit.DeclineISA], jit.DeclineISA, want)
+	if after[cpu.TierSSE] == before[cpu.TierSSE] {
+		t.Fatal("the composed CPU mapped no SSE-tier kernel")
 	}
+	served, declined := s.CPUBlockSteps()
+	if declined[jit.DeclineISA] != 0 || served == 0 {
+		t.Fatalf("on the SSE tier the composed CPU served %d block steps and declined %d by %q", served, declined[jit.DeclineISA], jit.DeclineISA)
+	}
+	if err := s.CPUFormErr(); err != nil {
+		t.Errorf("forming for the CPU on the SSE tier: %v", err)
+	}
+	var named []string
+	for d, n := range declined {
+		if n > 0 {
+			named = append(named, fmt.Sprintf("%d by %q", n, jit.Decline(d)))
+		}
+	}
+	// In a composed build the SSE arm is itself the composer's, so the
+	// comparison with main's SSE kernels is the default build's.
+	arm := "main's SSE kernels"
+	if jit.ComposedByDefault {
+		arm = "the composed build's own SSE arm"
+	}
+	t.Logf("composed CPU on the SSE tier: %d of %d block steps served, declined %v; worst max|dlogit| %.4g against %s (band %.4f)",
+		served, len(ids)*m.Cfg.NLayer, named, worst, arm, band)
 }
 
 func ssemMaxAbs(a, b []float32) float64 {
@@ -326,7 +350,7 @@ func TestEveryModelRunsSSE(t *testing.T) {
 			if after[cpu.TierSSE] == before[cpu.TierSSE] {
 				t.Fatal("the SSE arm mapped no SSE-tier kernel -- it ran nothing it claims to")
 			}
-			ssemComposedDeclines(t, path, ids, got.forced, f32, split)
+			ssemComposedServes(t, path, ids, got.forced, band, f32, split)
 
 			for pos, l := range got.forced {
 				for _, v := range l {

@@ -61,8 +61,40 @@ func gpuProfile() Profile {
 	}}
 }
 
-// cpuProfile is main's passes on the host.
+// cpuProfile is main's passes on the host, and on a host without AVX2,
+// FMA and F16C its narrow passes.
 func cpuProfile() Profile {
+	p := cpuWideProfile()
+	p.Narrow, p.Wide = cpuNarrow(p.Passes), uint64(x86.ISATierAVX2)
+	return p
+}
+
+// cpuNarrow is passes four floats a vector: no fused multiply-add to make,
+// so a product keeps a register of its own, and a history narrowed in
+// software, which keeps no NaN's payload. A State holding an f32 cache, as
+// main's SSE tier ships, forms without Halves (Registry.WithoutHalves).
+func cpuNarrow(passes []Pass) []Pass {
+	var n []Pass
+	for _, ps := range passes {
+		switch q := ps.(type) {
+		case FMA:
+			continue
+		case Jam:
+			q.Lanes = 4
+			ps = q
+		case Vectorize:
+			q.Lanes, q.Quads = 4, false
+			ps = q
+		case Halves:
+			q.KeepsPayload = false
+			ps = q
+		}
+		n = append(n, ps)
+	}
+	return n
+}
+
+func cpuWideProfile() Profile {
 	return Profile{Int8: &Int8Form{Window: 32, Word: 4, Sums: 16, UnsignedDot: uint64(x86.ISAVNNI)}, ScanLoops: true, Passes: []Pass{
 		RowCalls{},
 		Quarters{Regs: []int{4, 6, 7, 8, 10, 12, 9, 15}},

@@ -168,10 +168,14 @@ func (r *Registry) WithoutHalves(kind DeviceKind) *Registry {
 	fr := *r
 	fr.Profiles = maps.Clone(r.Profiles)
 	p := fr.Profiles[kind]
-	p.Passes = slices.DeleteFunc(slices.Clone(p.Passes), func(x Pass) bool {
+	halves := func(x Pass) bool {
 		_, ok := x.(Halves)
 		return ok
-	})
+	}
+	p.Passes = slices.DeleteFunc(slices.Clone(p.Passes), halves)
+	if p.Narrow != nil {
+		p.Narrow = slices.DeleteFunc(slices.Clone(p.Narrow), halves)
+	}
 	fr.Profiles[kind] = p
 	return &fr
 }

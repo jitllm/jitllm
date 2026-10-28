@@ -96,7 +96,7 @@ var declineNames = [NumDeclines]string{
 	DeclineSessions:      "a row whose history the CPU's form does not bound (another model's session, or past its keys)",
 	DeclineExpertsHost:   "routed experts run on another device (a hybrid block's, on the host)",
 	DeclineExpertsRows:   "routed experts in pages at a step of several rows",
-	DeclineISA:           "a CPU the composer's CPU lowering does not emit for (x86-64 below AVX2, FMA and F16C, or arm64)",
+	DeclineISA:           "a CPU the composer's CPU lowering does not emit for (x86-64 below SSE4.1 and SSSE3)",
 }
 
 func (d Decline) String() string {

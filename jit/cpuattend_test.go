@@ -30,7 +30,7 @@ func runCPUCalls(codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
 		if c.CPU == nil {
 			return fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		code, err := cpu.Map(c.CPU)
+		code, err := mapComposed(c.CPU)
 		if err != nil {
 			return err
 		}

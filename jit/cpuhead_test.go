@@ -128,7 +128,7 @@ func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWei
 		if c.CPU == nil {
 			return nil, fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		code, err := cpu.Map(c.CPU)
+		code, err := mapComposed(c.CPU)
 		if err != nil {
 			return nil, fmt.Errorf("mapping %s: %w", c.Name, err)
 		}

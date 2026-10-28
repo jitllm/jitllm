@@ -597,6 +597,13 @@ func (a *Buf) SHRCL(dst Reg) {
 	a.modrmReg(Reg(5), dst)
 }
 
+// SARCL is dst >>= CL, arithmetic, on 64 bits.
+func (a *Buf) SARCL(dst Reg) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0xD3)
+	a.modrmReg(Reg(7), dst)
+}
+
 // SHLCL is dst <<= CL on 64 bits.
 func (a *Buf) SHLCL(dst Reg) {
 	a.rex(true, Y0, noIndex, dst)

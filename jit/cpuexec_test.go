@@ -3,13 +3,15 @@ package jit
 import (
 	bin "encoding/binary"
 	"fmt"
-	"github.com/jitllm/jitllm/jit/x86"
 	"math"
 	"math/rand"
 	"runtime"
 	"slices"
+	"sync"
 	"testing"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/jit/x86"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -152,6 +154,27 @@ func dealtOverWorkers(codes []Code) bool {
 	return false
 }
 
+// sseKernels is every kernel the gates mapped in the legacy SSE encodings,
+// for the VEX-leak gate to read back.
+var sseKernels struct {
+	sync.Mutex
+	codes map[string]bool
+}
+
+// mapComposed is cpu.Map, keeping each SSE-declared kernel for the VEX-leak
+// gate.
+func mapComposed(code []byte) (*cpu.Code, error) {
+	if need, ok := x86.KernelISA(code); ok && need&x86.ISAAVX2 == 0 {
+		sseKernels.Lock()
+		if sseKernels.codes == nil {
+			sseKernels.codes = map[string]bool{}
+		}
+		sseKernels.codes[string(code)] = true
+		sseKernels.Unlock()
+	}
+	return cpu.Map(code)
+}
+
 // runCPU runs codes in order on the CPU: the row x, an output of n floats,
 // a weight's planes, the composer's scratch and constant blocks, each where
 // its call words say.
@@ -178,7 +201,7 @@ func runCPUBound(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[
 		if c.CPU == nil {
 			return nil, fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		code, err := cpu.Map(c.CPU)
+		code, err := mapComposed(c.CPU)
 		if err != nil {
 			return nil, fmt.Errorf("mapping %s: %w", c.Name, err)
 		}

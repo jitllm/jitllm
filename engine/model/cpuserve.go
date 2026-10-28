@@ -1310,7 +1310,7 @@ func (s *State) cpuSideOff(li int) int {
 // the State's arena.
 func (s *State) cpuTowerWhy(g *graph.Graph) jit.Decline {
 	switch {
-	case cpu.CPU().ISA()&cpu.ISATierAVX2 != cpu.ISATierAVX2:
+	case !jit.HostCPULowers():
 		return jit.DeclineISA
 	case g == nil:
 		return jit.DeclineNoGraph

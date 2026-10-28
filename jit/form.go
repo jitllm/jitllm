@@ -90,6 +90,7 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 	if !ok {
 		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
 	}
+	prof = prof.on(req.Device)
 	sp := newExprSplit()
 	var ks []*Kernel
 	for {
