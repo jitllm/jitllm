@@ -40,10 +40,10 @@ type Device struct {
 	// sms is CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT and coop whether the
 	// device takes a cooperative launch (CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH);
 	// see Module.Resident.
-	sms  int
+	sms int
 	// sharedSM is CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR.
 	sharedSM int
-	coop bool
+	coop     bool
 	// threadRegs is CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR over
 	// its most resident threads, 0 where the driver would not say. See
 	// ThreadRegisters.
