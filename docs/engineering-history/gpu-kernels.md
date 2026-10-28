@@ -9827,11 +9827,15 @@ row where the composer's reads two.
   qemu as a Cortex-A72 (no dotprod) every one passes too; five mutants
   (SDOT on one half, the widened dot's pair sum, FMLS for FMLA, the lane
   sum's halves, the wide store's upper half) each fail them.
-  TestComposedCPUBlocksServe passes on ten of the eleven CPU-served models
-  (median ratio 0.000 to 1.064 of main's spread, every violation out of
-  the band); Gemma 4 E2B is served and in the band (1.091) but its page
-  violation leaves the logits unchanged, so it is not in the gate's green
-  set on arm64 until that violation reaches it. TestCPUComposesOnce passes
+  TestComposedCPUBlocksServe passes on all eleven CPU-served models
+  (median ratio 0.000 to 1.091 of main's spread, every violation out of
+  the band). Gemma 4 E2B's page violation had never reached it on any
+  host: the violation pointed the one shared table's first page at the
+  last slot every layer's arena holds, and E2B's sliding layers (pages of
+  their 512-position window) hold one, so it pointed nowhere and the
+  logits did not move. It now points each layer at the last slot of its
+  own arena (cpuFaultTable), and moves E2B 8.9 times main's spread at the
+  median. TestCPUComposesOnce passes
   on all ten models, its relocation to Metal and back included, and the
   composed TestDecodeDoesNotAllocate host arm passes on Llama-3.2-1B and
   Qwen3.5-0.8B. Decode on the M4 (decode on the four P cores), interleaved,

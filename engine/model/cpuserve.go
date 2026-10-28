@@ -164,8 +164,10 @@ type cpuState struct {
 	declined [jit.NumDeclines]int
 	formErr  error
 	pages    []uint32
-	rows     [4]uint32
-	zero     []uint32
+	// fpages is pages under cpuFaultPage (cpuFaultTable).
+	fpages []uint32
+	rows   [4]uint32
+	zero   []uint32
 	// rowsTab is a call's rows' descriptors at the rows' form, call its
 	// "rows.n" word, and rseq and rpos a step's rows' sequences and
 	// positions.
@@ -212,13 +214,11 @@ type cpuFault uint8
 
 const (
 	cpuFaultNone cpuFault = iota
-	// cpuFaultPage points the history's first page at the last slot every
-	// layer's arena holds once the first page is full: its positions read
-	// another page's (or nothing). The table is every layer's, so a slot one
-	// arena holds and another does not (a sliding layer's beside a global
-	// one's) would write past the smaller. A table permuted from the first step only renames the
-	// pages, and keys carry their rotation, so a swap of written pages
-	// only reorders them.
+	// cpuFaultPage points a layer's first page at the last slot its own
+	// arena holds once that page is full (cpuFaultTable): its positions
+	// read another page's (or nothing). A table permuted from the first
+	// step only renames the pages, and keys carry their rotation, so a swap
+	// of written pages only reorders them.
 	cpuFaultPage
 	// cpuFaultRow moves the first key row a step attends by one.
 	cpuFaultRow
@@ -331,9 +331,7 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 	s.cpu.call[0] = 1
 	switch s.cpu.fault {
 	case cpuFaultPage:
-		if n := s.cpuFaultSlots(); n > 2 && pg.p > 0 && pos == pg.p+pg.p/4 {
-			s.cpu.pages[0] = s.cpu.pages[n-1]
-		}
+		b.pages = s.cpuFaultTable(pg, pos+1)
 	case cpuFaultRow:
 		if pos > 0 {
 			s.cpu.rows[1]++
@@ -567,22 +565,27 @@ func (s *State) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
 	if why := s.cpuReadable(hl, start, end-1); why != jit.DeclineServes {
 		return why
 	}
-	if n := s.cpuFaultSlots(); s.cpu.fault == cpuFaultPage && n > 2 && end > pg.p+pg.p/4 {
-		s.cpu.pages[0] = s.cpu.pages[n-1]
-	}
 	return jit.DeclineServes
 }
 
-// cpuFaultSlots is the page table's entries every layer's arena holds:
-// cpuFaultPage's reach.
-func (s *State) cpuFaultSlots() int {
-	n := len(s.cpu.pages)
-	for li := range s.kv.layers {
-		if pg := &s.kv.layers[li]; pg.arena != nil {
-			n = min(n, pg.arenaSlots()*max(s.nseq, 1))
-		}
+// cpuFaultTable is the page table a step of the layer whose pages pg
+// holds reads, its rows' history ending before end: under cpuFaultPage,
+// once the layer's first page is full, a table whose first page is the last
+// slot the layer's own arena holds, where that arena holds more than two --
+// its positions read another page's (or nothing). Each layer is pointed at
+// a slot its own arena holds, so a model whose arenas differ (a sliding
+// layer's beside a global one's) is reached.
+func (s *State) cpuFaultTable(pg *kvPages, end int) []uint32 {
+	n := pg.arenaSlots() * max(s.nseq, 1)
+	if s.cpu.fault != cpuFaultPage || n <= 2 || n > len(s.cpu.pages) || pg.p == 0 || end <= pg.p+pg.p/4 {
+		return s.cpu.pages
 	}
-	return n
+	if len(s.cpu.fpages) != len(s.cpu.pages) {
+		s.cpu.fpages = make([]uint32, len(s.cpu.pages))
+	}
+	copy(s.cpu.fpages, s.cpu.pages)
+	s.cpu.fpages[0] = s.cpu.pages[n-1]
+	return s.cpu.fpages
 }
 
 // cpuRowsRun runs block li's rows' form f over the rows of x, their history
@@ -662,7 +665,7 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, x []float32, str
 			bside = bside[so:]
 		}
 		*b = cpuBound{li: li, l: l, own: s.cpuOwn(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
-			kv: pg, pages: s.cpu.pages, side: bside}
+			kv: pg, pages: s.cpuFaultTable(pg, end), side: bside}
 		s.cpu.call[0] = uint32(k)
 		for i := range f.codes {
 			s.cpuCall(b, &f.codes[i])
