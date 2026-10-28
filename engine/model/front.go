@@ -67,7 +67,7 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredAct:        "an activation the container does not state, or not over the block's operands",
 	UncoveredPooling:    "a pooled head (an embedding model's)",
 	UncoveredEmbedRows:  "input rows beyond the token's row, a scale and a position table",
-	UncoveredClamp:      "linears clipped to stored bounds",
+	UncoveredClamp:      "linears clamped to stored bounds",
 	UncoveredUnbound:    "stored tensors its graph does not bind",
 	UncoveredUnverified: "a graph that does not verify",
 }
