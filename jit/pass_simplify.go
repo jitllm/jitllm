@@ -167,6 +167,9 @@ func (k *Kernel) redirectMany(same map[int]int) {
 	}
 	next(&k.Rows)
 	next(&k.Clamp)
+	next(&k.TileBase)
+	next(&k.TileLast)
+	next(&k.TileFirst)
 	for i := range k.Bufs {
 		next(&k.Bufs[i].Base)
 		next(&k.Bufs[i].Offset)
@@ -212,6 +215,9 @@ func (k *Kernel) redirectAll(from, to int) {
 	}
 	re(&k.Rows)
 	re(&k.Clamp)
+	re(&k.TileBase)
+	re(&k.TileLast)
+	re(&k.TileFirst)
 	for i := range k.Bufs {
 		re(&k.Bufs[i].Base)
 		re(&k.Bufs[i].Offset)

@@ -167,3 +167,75 @@ func decomposeConv(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	return prims, nil
 }
+
+// decomposeUnfold is each output row of the input's grid as the window of
+// rows around it (graph.OpUnfold), one map over the output's rows and
+// width: element j of row r is channel j%C of tap j/C's row, the row that
+// tap reaches from r's grid position times the stride, less the padding
+// before the grid (TensorFlow's SAME, as decomposeConv pads); zero where
+// that row lies past the grid or j past the taps. An offset below zero
+// wraps above the side, unsigned, so one comparison tests both edges.
+func decomposeUnfold(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 {
+		return nil, fmt.Errorf("an unfold of %d operands", len(o.In))
+	}
+	U := ir.U32
+	sh, osh := c.rows(o.In[0]), c.rows(o.Out[0])
+	R, C, T, s, W := sh[0], sh[1], o.Attr.Taps, max(1, o.Attr.Stride), o.Attr.GridW
+	if W < 1 {
+		return nil, fmt.Errorf("an unfold over a line of rows: only a grid's is formed")
+	}
+	H := R / W
+	Ho, Wo := (H+s-1)/s, (W+s-1)/s
+	padY, padX := max((Ho-1)*s+T-H, 0)/2, max((Wo-1)*s+T-W, 0)/2
+	switch {
+	case T < 1 || T%2 == 0:
+		return nil, fmt.Errorf("an unfold of %d taps: a centred one is odd", T)
+	case H*W != R:
+		return nil, fmt.Errorf("an unfold over %d rows, not a whole grid %d wide", R, W)
+	case osh[0] != Ho*Wo || osh[1] < T*T*C:
+		return nil, fmt.Errorf("an unfold of a %dx%d grid by %dx%d at stride %d into %d rows of %d", H, W, T, T, s, osh[0], osh[1])
+	}
+	var x exprs
+	r, j := x.coord(0), x.coord(1)
+	y, xc := r, r
+	switch {
+	case Ho > 1 && Wo > 1:
+		y = x.op(OpDiv, U, r, x.u(uint32(Wo)))
+		xc = x.op(OpSub, U, r, x.op(OpMul, U, y, x.u(uint32(Wo))))
+	case Ho == 1 && Wo == 1:
+		y, xc = x.u(0), x.u(0)
+	case Wo == 1:
+		xc = x.u(0)
+	case Ho == 1:
+		y = x.u(0)
+	}
+	tap, ch := j, x.u(0)
+	if C > 1 {
+		tap = x.op(OpDiv, U, j, x.u(uint32(C)))
+		ch = x.op(OpSub, U, j, x.op(OpMul, U, tap, x.u(uint32(C))))
+	}
+	ky := x.op(OpDiv, U, tap, x.u(uint32(T)))
+	kx := x.op(OpSub, U, tap, x.op(OpMul, U, ky, x.u(uint32(T))))
+	// at is a coordinate times the stride plus a tap less the padding.
+	at := func(p, k, pad int) int {
+		if s > 1 {
+			p = x.op(OpMul, U, p, x.u(uint32(s)))
+		}
+		p = x.op(OpAdd, U, p, k)
+		if pad > 0 {
+			p = x.op(OpSub, U, p, x.u(uint32(pad)))
+		}
+		return p
+	}
+	iy, ix := at(y, ky, padY), at(xc, kx, padX)
+	row := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpMin, U, iy, x.u(uint32(H-1))), x.u(uint32(W))), x.op(OpMin, U, ix, x.u(uint32(W-1))))
+	v := x.load(0, x.op(OpAdd, U, x.op(OpMul, U, row, x.u(uint32(C))), ch))
+	v = x.sel(ir.F32, x.op(OpLess, ir.Pred, ix, x.u(uint32(W))), v, x.f(0))
+	v = x.sel(ir.F32, x.op(OpLess, ir.Pred, iy, x.u(uint32(H))), v, x.f(0))
+	if osh[1] > T*T*C {
+		v = x.sel(ir.F32, x.op(OpLess, ir.Pred, j, x.u(uint32(T*T*C))), v, x.f(0))
+	}
+	return []Prim{{Kind: PrimMap, Shape: osh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e,
+		Facts: Facts{Extents: map[int]int{0: R * C}}}}, nil
+}

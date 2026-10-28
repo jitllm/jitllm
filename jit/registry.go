@@ -236,6 +236,30 @@ func gridRows(g *graph.Graph, o graph.Op) bool {
 	return false
 }
 
+// gridRowsOf is the rows of the grid op o's values state.
+func gridRowsOf(g *graph.Graph, o graph.Op) int {
+	for _, v := range append(slices.Clone(o.In), o.Out...) {
+		if r := g.Values[v].Rows; r > 0 {
+			return r
+		}
+	}
+	return 0
+}
+
+// gridRowWise reports whether op o computes each row of its output from
+// that row of its inputs alone, so that it runs over a grid of rows of its
+// own as over the step's: the kinds a gate holds over a strided grid
+// (TestComposedCPUGridRows, TestComposedGPUGridRows).
+func gridRowWise(o graph.Op) bool {
+	switch o.Kind {
+	case graph.OpNorm, graph.OpAdd, graph.OpExpr:
+		return true
+	case graph.OpMatVec:
+		return len(o.In) == 1
+	}
+	return false
+}
+
 // decomposeOps is every op of c's graph as primitives, owned by part of.
 func (r *Registry) decomposeOps(c *Context, of int) ([]Prim, error) {
 	var prims []Prim
@@ -244,13 +268,20 @@ func (r *Registry) decomposeOps(c *Context, of int) ([]Prim, error) {
 		if !ok {
 			return nil, fmt.Errorf("op %d (%s) has no decomposition", i, o.Kind)
 		}
-		if o.Kind != graph.OpConv && gridRows(c.Graph, o) {
-			// Decompositions read the step's rows; a convolution's, which
-			// reads each value's own (Context.rows), is the one that
-			// states a grid of other rows yet.
-			return nil, fmt.Errorf("op %d (%s) over a grid of rows of its own", i, o.Kind)
+		oc := c
+		if o.Kind != graph.OpConv && o.Kind != graph.OpUnfold && gridRows(c.Graph, o) {
+			// A row-wise op over a grid of rows of its own runs at that
+			// grid's rows (Verify holds its every value to one grid): the
+			// step's rows are the grid's for its decomposition. An op that
+			// reads rows across values of other grids is not formed.
+			if !gridRowWise(o) {
+				return nil, fmt.Errorf("op %d (%s) over a grid of rows of its own", i, o.Kind)
+			}
+			g := *c
+			g.Step.Rows = gridRowsOf(c.Graph, o)
+			oc = &g
 		}
-		ps, err := d(o, c)
+		ps, err := d(o, oc)
 		if err != nil {
 			return nil, fmt.Errorf("op %d (%s): %w", i, o.Kind, err)
 		}

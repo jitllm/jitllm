@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/cpu"
 )
 
@@ -137,7 +138,31 @@ func runCPUValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32,
 // runCPUTables is runCPUValues with the step's tables by name, each read
 // and written in place.
 func runCPUTables(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32, tables map[string][]uint32) error {
-	const guard = 16
+	return runCPUGridValues(codes, g, vals, planes, tables, nil, nil)
+}
+
+// runCPUGridValues is runCPUTables over values of several rows, value v
+// rowsOf(v) rows of its width (one where rowsOf is nil), and each weight
+// and vector a matrix of byRole binds by its role, its words as the
+// format the request named lays them. A value's guard past it holds the
+// widest value's most rows, so a form run at more rows than a value holds
+// writes its guard and not the process's memory.
+func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32, tables map[string][]uint32,
+	rowsOf func(graph.ValueID) int, byRole map[jlm.Role][]uint32) error {
+	guard := 16
+	if rowsOf != nil {
+		w, r := 0, 0
+		for v := range g.Values {
+			w, r = max(w, g.Values[v].Width), max(r, rowsOf(graph.ValueID(v)))
+		}
+		guard += w * r
+	}
+	extent := func(v graph.ValueID) int {
+		if rowsOf == nil {
+			return g.Values[v].Width
+		}
+		return g.Values[v].Width * rowsOf(v)
+	}
 	nan := math.Float32bits(float32(math.NaN()))
 	poison := func(n int) []uint32 {
 		w := make([]uint32, n)
@@ -183,9 +208,11 @@ func runCPUTables(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32,
 				words = append([]uint32(nil), a.Words...)
 			case o.Kind == OperandValue:
 				if store[o.Value] == nil {
-					store[o.Value] = poison(g.Values[o.Value].Width + guard)
+					store[o.Value] = poison(extent(o.Value) + guard)
 				}
 				words = store[o.Value]
+			case (o.Kind == OperandWeight || o.Kind == OperandVector) && len(byRole[o.Role]) > 0:
+				words = byRole[o.Role]
 			case o.Kind == OperandWeight && o.Region >= 0 && o.Region < 3 && len(planes[o.Region]) > 0:
 				words = planes[o.Region]
 			case o.Kind == OperandTable && len(tables[o.Name]) > 0:
@@ -263,7 +290,7 @@ func runCPUTables(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32,
 		}
 	}
 	for v, w := range store {
-		n := g.Values[v].Width
+		n := extent(v)
 		for i, x := range w[n:] {
 			if x != nan {
 				return fmt.Errorf("value %s: word %#x written %d past its end", g.Values[v].Name, x, i)

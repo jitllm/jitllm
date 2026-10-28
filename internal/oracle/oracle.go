@@ -472,3 +472,32 @@ func DWConv32(dst, src []float32, h, w, c, k, st int, filt []float32) {
 		}
 	}
 }
+
+// Conv32 is a full convolution of src, an h x w grid of rows of c channels,
+// by wt's cout filters of k x k taps (filter o's row kp wide, tap ky*k+kx's
+// c channels at (ky*k+kx)*c, the rest past k*k*c unread) at stride st,
+// padded as DWConv32 pads, accumulated in float64 and written to dst:
+// MobileNet's full convolution.
+func Conv32(dst, src []float32, h, w, c, k, st int, wt []float32, cout, kp int) {
+	ho, wo := (h+st-1)/st, (w+st-1)/st
+	py, px := max((ho-1)*st+k-h, 0)/2, max((wo-1)*st+k-w, 0)/2
+	for y := range ho {
+		for x := range wo {
+			for o := range cout {
+				var acc float64
+				for ky := range k {
+					for kx := range k {
+						yy, xx := y*st+ky-py, x*st+kx-px
+						if yy < 0 || yy >= h || xx < 0 || xx >= w {
+							continue
+						}
+						for ch := range c {
+							acc += float64(src[(yy*w+xx)*c+ch]) * float64(wt[o*kp+(ky*k+kx)*c+ch])
+						}
+					}
+				}
+				dst[(y*wo+x)*cout+o] = float32(acc)
+			}
+		}
+	}
+}

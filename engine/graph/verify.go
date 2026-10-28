@@ -90,7 +90,7 @@ func Verify(g *Graph, f Facts) error {
 			}
 			return 0
 		}
-		strided := o.Kind == OpConv && o.Attr.Stride > 1
+		strided := (o.Kind == OpConv || o.Kind == OpUnfold) && o.Attr.Stride > 1
 		for j, id := range o.Out {
 			if r := rows(id); strided && j == 0 && r < 1 {
 				bad("%s: a strided convolution's %%%s states no rows", at, g.Values[id].Name)
@@ -213,6 +213,11 @@ func Verify(g *Graph, f Facts) error {
 		case OpKVAppend:
 			if len(o.Writes) == 1 && o.Writes[0].Name == EntHistory && (len(o.In) != 2 || o.In[0] != o.In[1]) {
 				bad("%s: an entry whose value is not its key", at)
+			}
+		case OpUnfold:
+			if t := o.Attr.Taps; len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || o.Attr.GridW < 1 || t < 1 || t%2 == 0 ||
+				width(o.Out[0]) < t*t*width(o.In[0]) {
+				bad("%s: a %dx%d window over a grid %d wide of rows of %d into %d", at, t, t, o.Attr.GridW, width(o.In[0]), width(o.Out[0]))
 			}
 		case OpPosition:
 			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || o.Attr.Offset < 0 || o.Attr.Span < 0 {

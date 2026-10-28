@@ -263,10 +263,17 @@ const (
 	// the next position's predecessors, the token's id plus one then the
 	// window's first n-2. A primitive.
 	OpNGramHash
+	// OpUnfold is each output row of In[0]'s grid (GridW rows a grid row)
+	// as the Taps x Taps window of rows around it at SAME padding, at
+	// Stride as OpConv takes it (Out[0] that grid's rows): tap ky*Taps+kx's
+	// row of In[0]'s width at element (ky*Taps+kx)*width, zero past the
+	// grid's edges and past Taps*Taps rows to Out[0]'s width. A full
+	// convolution is OpMatVec over it.
+	OpUnfold
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash", "unfold"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -555,7 +562,17 @@ func (g *Graph) value(name string, width int) ValueID {
 	return ValueID(len(g.Values) - 1)
 }
 
-func (g *Graph) op(o Op) { g.Ops = append(g.Ops, o) }
+// op appends o, an output stating no rows over its first input's grid.
+func (g *Graph) op(o Op) {
+	if len(o.In) > 0 {
+		for _, v := range o.Out {
+			if g.Values[v].Rows == 0 {
+				g.Values[v].Rows = g.Values[o.In[0]].Rows
+			}
+		}
+	}
+	g.Ops = append(g.Ops, o)
+}
 
 // String is the graph in the illustrative form docs/design/composer.md uses.
 func (g *Graph) String() string {
