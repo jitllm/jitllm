@@ -583,7 +583,9 @@ func (k *Kernel) broadcastInto(c int) {
 			ops := k.Operands(&k.Nodes[i])
 			for j := range ops {
 				x := *ops[j]
-				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 || k.Nodes[x].Op == OpBroadcast {
+				// A byte dot's words made outside the loop are every lane's.
+				word := k.Nodes[i].Op.byteDot() && j < 2 && k.Nodes[x].Type != ir.F32
+				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 && !word || k.Nodes[x].Op == OpBroadcast {
 					continue
 				}
 				if xn := k.Nodes[x]; xn.Op == OpFold && xn.At == c {
@@ -595,7 +597,7 @@ func (k *Kernel) broadcastInto(c int) {
 				}
 				b, ok := made[x]
 				if !ok {
-					b = k.add(Node{Op: OpBroadcast, Type: ir.F32, A: x})
+					b = k.add(Node{Op: OpBroadcast, Type: k.Nodes[x].Type, A: x})
 					made[x] = b
 					// The append may have moved the nodes: the operands are
 					// fields of the new copy of this one.

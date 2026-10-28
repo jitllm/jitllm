@@ -116,20 +116,22 @@ type exprSplit struct {
 	// its rows a call (RowJam),
 	// unpaired those formed with each head a call of its own (HeadPairs),
 	// unwide those formed with no loop's rows across lanes (Jam),
-	// uncursored those formed indexing their buffers (Cursors).
-	unfused, unpaired, unwide, uncursored map[int]bool
-	unjammed                              map[int]int
+	// uncursored those formed indexing their buffers (Cursors), unstreamed
+	// those formed walking each row group through every sub-block (Streams).
+	unfused, unpaired, unwide, uncursored, unstreamed map[int]bool
+	unjammed                                          map[int]int
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}, unstreamed: map[int]bool{}}
 }
 
-// splitRefused forms a part whose refused kernel ran several rows a call
-// with half the rows a call, and nothing else; else one whose refused
-// kernel ran two heads a call with a head a call, and one whose refused
-// kernel jammed a loop's rows across lanes with none; else one whose
-// refused kernel walked its addresses
+// splitRefused forms a part whose refused kernel walked a weight's planes
+// along the rows (Streams) without that walk; else one whose refused kernel
+// ran several rows a call with half the rows a call, and nothing else; else
+// one whose refused kernel ran two heads a call with a head a call, and one
+// whose refused kernel jammed a loop's rows across lanes with none; else one
+// whose refused kernel walked its addresses
 // indexing them; else a map a term the largest expression formed whole
 // in each part of the kernels refused, or a part with none left unfused,
 // reporting whether it changed a part.
@@ -142,6 +144,14 @@ func (sp *exprSplit) splitRefused(err error) bool {
 		return false
 	}
 	more := false
+	for _, of := range pe.Streamed {
+		if !sp.unstreamed[of] {
+			sp.unstreamed[of], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
 	for _, of := range pe.Jammed {
 		sp.unjammed[of]++
 		more = true

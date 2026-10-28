@@ -100,7 +100,10 @@ type PressureError struct {
 	// (HeadPairs), Wide those it jammed a loop's rows across lanes in
 	// (Jam), Cursored those whose loops walked its addresses (Cursors).
 	Jammed, Paired, Wide, Cursored []int
-	Err                            error
+	// Streamed is the parts of Parts a refused kernel walked along the
+	// rows a sub-block at a time in (Streams).
+	Streamed []int
+	Err      error
 }
 
 func (e *PressureError) Error() string { return e.Err.Error() }
@@ -126,6 +129,9 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			if k.wide() {
 				refused.Wide = append(refused.Wide, k.Of)
+			}
+			if k.streamed() {
+				refused.Streamed = append(refused.Streamed, k.Of)
 			}
 			if k.cursored() {
 				refused.Cursored = append(refused.Cursored, k.Of)
@@ -2199,8 +2205,6 @@ func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 	}
 }
 
-// zeroOperand reports whether float zero node i is an operand the code
-// computes with, not only a sum's start.
 // carried is the operand of nd a result may take the register of: a
 // multiply-add's or byte dot's addend, else the first operand of an
 // operation the lowering makes in place of its first; -1 for others.
@@ -2255,6 +2259,8 @@ func (k *Kernel) dotZero(i int) bool {
 	return read
 }
 
+// zeroOperand reports whether float zero node i is an operand the code
+// computes with or a store writes, not only a sum's start.
 func (k *Kernel) zeroOperand(i int) bool {
 	for j, nd := range k.Nodes {
 		if nd.Op == OpFold {
@@ -2264,6 +2270,11 @@ func (k *Kernel) zeroOperand(i int) bool {
 			if *a == i && j != i {
 				return true
 			}
+		}
+	}
+	for _, s := range k.Stores {
+		if !s.Barrier && !s.Run && s.Val == i {
+			return true
 		}
 	}
 	return false

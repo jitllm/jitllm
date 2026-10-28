@@ -4,7 +4,7 @@ import "slices"
 
 // Ahead asks for a weight's lines Trips trips of their loop before the trip
 // that reads them, on a device whose code runs a call at a time: each load
-// of a weight at a constant offset from a pointer a register holds, whose
+// of a weight at a constant offset from a pointer a register or the red zone holds, whose
 // loop's cursor moves it at least Min bytes a trip and whose trip's loads
 // through that pointer are lines apart -- strides the hardware prefetchers
 // do not follow -- is preceded by a prefetch of its address that many trips
@@ -12,6 +12,9 @@ import "slices"
 // nothing and reads only the pointer its load reads at the same place.
 type Ahead struct {
 	Trips, Min int
+	// Outer is the trips of the loop around a stream of rows (Streams) a
+	// prefetch asks ahead: each of its trips is a sub-block of every row.
+	Outer int
 }
 
 // AheadLine is a sequence entry's prefetch: node Load's address Bytes on.
@@ -99,7 +102,7 @@ func (p Ahead) ahead(k *Kernel, i int, hs []int) (int, bool) {
 		return 0, false
 	}
 	switch {
-	case nd.Ptr > 0 && k.Ptrs[nd.Ptr-1].Reg > 0, nd.Ptr == 0 && k.Bufs[nd.Buf].Reg > 0:
+	case nd.Ptr > 0 && (k.Ptrs[nd.Ptr-1].Reg > 0 || k.Ptrs[nd.Ptr-1].Spill > 0), nd.Ptr == 0 && k.Bufs[nd.Buf].Reg > 0:
 	default:
 		return 0, false
 	}
@@ -112,11 +115,34 @@ func (p Ahead) ahead(k *Kernel, i int, hs []int) (int, bool) {
 			continue
 		}
 		step := cu.Elems * ElemBytes(k.Bufs[nd.Buf])
-		b := p.Trips * step
+		trips := p.Trips
+		if step < p.Min && cu.Take && cu.Ptr > 0 {
+			// A copy each trip of the loop around takes afresh, moving
+			// little a trip: the loop around moves the address (Streams'
+			// rows within a sub-block), and the line Outer of its trips on
+			// is the one to ask for.
+			step, trips = k.outerStep(c, nd.Buf), p.Outer
+		}
+		b := trips * step
 		if step < p.Min || b > 1<<30 {
 			return 0, false
 		}
 		return b, true
 	}
 	return 0, false
+}
+
+// outerStep is the bytes the loop around loop c moves buffer b's address a
+// trip, 0 for none.
+func (k *Kernel) outerStep(c, b int) int {
+	o := k.Loops[c].Parent
+	if o < 0 {
+		return 0
+	}
+	for _, cu := range k.Loops[o].Cursors {
+		if cu.Buf == b && cu.Ptr == 0 {
+			return cu.Elems * ElemBytes(k.Bufs[b])
+		}
+	}
+	return 0
 }

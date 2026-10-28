@@ -514,6 +514,8 @@ func (k *Kernel) removeLoop(c int) {
 	}
 	re := func(x int) int {
 		switch {
+		case x == c && parent > c:
+			return parent - 1
 		case x == c:
 			return parent
 		case x > c:
@@ -540,8 +542,11 @@ func (k *Kernel) removeLoop(c int) {
 	}
 	k.Loops = append(k.Loops[:c:c], k.Loops[c+1:]...)
 	for i := range k.Nodes {
-		if op := k.Nodes[i].Op; op == OpIter || op == OpFold {
-			k.Nodes[i].At = re(k.Nodes[i].At)
+		switch nd := &k.Nodes[i]; {
+		case nd.Op == OpIter || nd.Op == OpFold:
+			nd.At = re(nd.At)
+		case (nd.Op == OpLoad || nd.Op == OpTileLoad) && nd.At > 0:
+			nd.At = re(nd.At-1) + 1
 		}
 	}
 	for i := range k.Stores {

@@ -106,7 +106,7 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 			if err != nil {
 				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
 			}
-			k.Part, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored = req.Part, sp.unfused[k.Of], sp.unjammed[k.Of], sp.unpaired[k.Of], sp.unwide[k.Of], sp.uncursored[k.Of]
+			k.Part, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored, k.Unstreamed = req.Part, sp.unfused[k.Of], sp.unjammed[k.Of], sp.unpaired[k.Of], sp.unwide[k.Of], sp.uncursored[k.Of], sp.unstreamed[k.Of]
 			k.Apart = req.Apart
 			k.Own = k.ownWrites()
 			k.Capacity = liveOf(p, req.Step, req.Device)
