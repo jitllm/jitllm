@@ -112,7 +112,11 @@ func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ..
 	t.Logf("the front end states %d of %d blocks (refused: %v): the composer ran %d block steps in %d steps, declined %d for no graph",
 		covered, placed, refused, ran, steps, declined[composedNoGraph])
 	if formed != 0 {
-		t.Errorf("%d composed part(s) formed at a step", formed)
+		var errs []string
+		for _, g := range gs {
+			errs = append(errs, g.Err())
+		}
+		t.Errorf("%d composed part(s) formed at a step: %q", formed, errs)
 	}
 	if want := steps * covered; ran != want {
 		t.Errorf("the composer ran %d block steps, want %d: %d steps of the %d blocks it states", ran, want, steps, covered)

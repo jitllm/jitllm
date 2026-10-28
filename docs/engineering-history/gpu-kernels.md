@@ -10726,3 +10726,12 @@ row where the composer's reads two.
   own position's angles part); the attention over both 9.4e-14 (HCA) and
   9.8e-14 (CSA, four of ten entries kept), the window alone 0.22 to
   0.36, the sinks dropped 0.013, every entry read 0.38.
+- A prompt call over no blocks (the head alone, after the blocks ran in
+  calls of their own: MiniMax-M3's dense lead block, its MSA blocks, then
+  its head) runs in the reserved width (promptComposed): before, it was
+  not composed (no block in range), so it built an exact 32-row width and
+  formed every placed block's prompt part there at the step, which the
+  counted gate refused (4 parts formed at a step). TestMiniMaxM3OnEveryDevice
+  composed now passes on cuda:0 and vulkan: decode 4.6e-12 and 4.9e-12,
+  72 composed block steps of 24, no decline; prefill 3.6e-08 and 3.2e-13,
+  no part formed at a step; each violation 0.045 to 1.36.

@@ -247,6 +247,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 				if !st.HeadOnDevice() {
 					return nil, "the head stayed on the host: " + gpu.Err()
 				}
+				t.Logf("placed: %d reserved rows (%s)", gpu.Stats().ReservedRows, gpu.Err())
 				got := run(st)
 				if n := st.GPULayers(); n != nl {
 					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())

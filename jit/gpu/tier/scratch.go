@@ -458,8 +458,13 @@ func (g *devTier) batchFor(w int) int {
 // serves every block's prompt there (promptServed), so no width is built,
 // formed or compiled for the call's length, and a call longer than the
 // reserved width runs in chunks of it. A block that is not served is named
-// in LastErr. Callers hold g.mu, outside any submission.
+// in LastErr. A call over no blocks (the head alone, after the blocks ran
+// in calls of their own) forms no block: it runs in the reserved width
+// where the device holds one. Callers hold g.mu, outside any submission.
 func (g *devTier) promptComposed(lo, hi int) bool {
+	if lo >= hi {
+		return g.reservedFor(ComposedPrompt) != nil
+	}
 	return g.rangeComposed(lo, hi, ComposedPrompt, true)
 }
 
