@@ -320,11 +320,16 @@ func cpuServed(t *testing.T, s *State, what string, want int, composed bool) {
 // row each of four sequences, each run through every block (cpuRows), and
 // the whole warm chunk (Prefill) and the whole warm step (ForwardBatch)
 // around them, must make no engine heap allocation, by the decode gate's
-// attribution (countAllocs).
+// attribution (countAllocs): on the dense models and a mixture, whose calls
+// hold the experts their rows pick.
 func TestComposedCPURowsDoNotAllocate(t *testing.T) {
+	files := []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf"}
 	for _, tc := range cpuRowsModels {
-		t.Run(tc.file, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(tc.file)), noTune, WithComposedCPU(true))
+		files = append(files, tc.file)
+	}
+	for _, file := range files {
+		t.Run(file, func(t *testing.T) {
+			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune, WithComposedCPU(true))
 			if err != nil {
 				t.Fatal(err)
 			}

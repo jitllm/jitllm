@@ -105,26 +105,10 @@ func TestGemma4ServesComposedOnCPU(t *testing.T) {
 			worst := worstFrom(want, cpuLogits(t, m, toks, cpuFaultNone, true))
 			n := len(toks) - 4
 			pworst := 0.0
-			if m.Cfg.NExpert != 0 {
-				// The CPU device forms a mixture's block for one row a step
-				// (cpuExpertModels): a prompt's chunk is declined by that
-				// name at every block, counted here, until it forms rows.
-				s := m.NewState(n + 1)
-				if _, err := s.Prefill(toks[:n]); err != nil {
-					t.Fatal(err)
-				}
-				_, declined := s.CPUBlockSteps()
-				s.Close()
-				t.Logf("a prompt of %d: %d block steps declined (%s)", n, declined[jit.DeclineExpertsRows], jit.DeclineName(int(jit.DeclineExpertsRows)))
-				if declined[jit.DeclineExpertsRows] < m.Cfg.NLayer {
-					t.Fatalf("a prompt of %d: %d block steps declined by name, want every block's: the gap moved", n, declined[jit.DeclineExpertsRows])
-				}
-			} else {
-				pw := cpuPrompt(t, ref, toks, n, 4, cpuFaultNone, false)
-				pg := cpuPrompt(t, m, toks, n, 4, cpuFaultNone, true)
-				for i := range pw {
-					pworst = max(pworst, logitNMSE(pg[i], pw[i]))
-				}
+			pw := cpuPrompt(t, ref, toks, n, 4, cpuFaultNone, false)
+			pg := cpuPrompt(t, m, toks, n, 4, cpuFaultNone, true)
+			for i := range pw {
+				pworst = max(pworst, logitNMSE(pg[i], pw[i]))
 			}
 			t.Logf("the composed CPU from main: decode %.3g over %d steps, a prompt of %d and its decode %.3g", worst, len(toks), n, pworst)
 			if !(worst < bound) || !(pworst < bound) {

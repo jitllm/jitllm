@@ -53,30 +53,35 @@ func TestPrefillMatchesForward(t *testing.T) {
 	t.Run("composed-cpu", func(t *testing.T) {
 		nn.ResetForTest()
 		defer nn.ResetForTest()
-		// A model the composer serves every block of on the CPU
+		// Models the composer serves every block of on the CPU
 		// (cpuServedModels), not the bench model, which may be one it
-		// declines by name.
-		m, err := Open(jlmOf(t, testmodels.Path("Qwen3-0.6B-Q8_0.gguf")), noTune, WithComposedCPU(true))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer m.Close()
-		var states []*State
-		prefillVsForwardModel(t, m, false, 0, func(s *State) { states = append(states, s) })
-		served := 0
-		for _, s := range states {
-			n, d := s.CPUBlockSteps()
-			served += n
-			for i, k := range d {
-				if k > 0 {
-					t.Errorf("%d block steps declined: %s (%v)", k, jit.DeclineName(i), s.CPUFormErr())
+		// declines by name, and the mixtures, whose prompts' calls hold the
+		// experts their rows pick.
+		for _, file := range append([]string{"Qwen3-0.6B-Q8_0.gguf"}, cpuMixtureRowsModels...) {
+			t.Run(file, func(t *testing.T) {
+				m, err := Open(jlmOf(t, testmodels.Path(file)), noTune, WithComposedCPU(true))
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
+				defer m.Close()
+				var states []*State
+				prefillVsForwardModel(t, m, false, 0, func(s *State) { states = append(states, s) })
+				served := 0
+				for _, s := range states {
+					n, d := s.CPUBlockSteps()
+					served += n
+					for i, k := range d {
+						if k > 0 {
+							t.Errorf("%d block steps declined: %s (%v)", k, jit.DeclineName(i), s.CPUFormErr())
+						}
+					}
+				}
+				if served == 0 || len(states) == 0 {
+					t.Fatalf("the composed CPU served %d block steps over %d sessions: this arm ran nothing", served, len(states))
+				}
+				t.Logf("composed CPU: %d block steps served over %d sessions, the prompts' and the decodes'", served, len(states))
+			})
 		}
-		if served == 0 || len(states) == 0 {
-			t.Fatalf("the composed CPU served %d block steps over %d sessions: this arm ran nothing", served, len(states))
-		}
-		t.Logf("composed CPU: %d block steps served over %d sessions, the prompts' and the decodes'", served, len(states))
 	})
 	// On each device, both sessions on one tier: the tier's own kernels; the
 	// composer serving the decode's blocks, the prompt's at the chunk's rows

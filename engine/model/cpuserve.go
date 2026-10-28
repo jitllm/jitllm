@@ -169,8 +169,11 @@ type cpuBlockForm struct {
 	// A form over banks in the host's expert pages runs in two halves
 	// (cpuForm): its codes before split, up to the selection, then the rest,
 	// which read the banks once the selected experts' pages are resident
-	// and held. sel is the own buffer holding the selection, of selN words.
-	split, sel, selN int
+	// and held. sel is the own buffer holding the selection, of selN words,
+	// and wsel the picks' weights' (weightsOf), -1 where none holds them,
+	// read by the codes wreads.
+	split, sel, selN, wsel int
+	wreads                 []int
 }
 
 func (f *cpuBlockForm) close() {
@@ -232,9 +235,10 @@ type cpuState struct {
 	// rows' form, recStepped those it stepped a row at a time.
 	recWhole, recStepped int
 	rseq, rpos           []int
-	// sel is a step's selection as the pager's fault path takes it
-	// (cpuForm).
-	sel []int32
+	// sel is a call's experts as the pager's fault path takes them, picked
+	// marking those already in it, by expert (cpuExperts).
+	sel    []int32
+	picked []bool
 	// banks is each block's routed banks' planes in the host's expert
 	// pages, by bank (gate, up, down) and plane (jlm.File.BankView), set at
 	// the block's composition.
@@ -312,6 +316,11 @@ const (
 	// cpuFaultWrite writes a step's new key and value at the row before its
 	// own, its own row left as the history held it.
 	cpuFaultWrite
+	// cpuFaultPicks gives a call's first row the second's picks, read with
+	// its own weights.
+	cpuFaultPicks
+	// cpuFaultWeight drops each row's first pick's weight (weightsOf).
+	cpuFaultWeight
 )
 
 // A bidirectional run's passes (cpuState.stashing).
@@ -466,15 +475,14 @@ func (s *State) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int
 		return why, nil
 	}
 	cs, nrot := s.cpuTable(li, cs, csSWA)
-	s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, s.bple, cs, nrot, seq, pos)
-	return jit.DeclineServes, nil
+	return jit.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, s.bple, cs, nrot, seq, pos)
 }
 
 // cpuTowerRows runs tower block li on the CPU the composer's way over the
 // picture's n rows in s.bx, one run of rows attending both ways (bidir.go),
 // or says why not. Its history is the State's arena page, lent to the block
 // for its run.
-func (s *State) cpuTowerRows(li int, l *layer, n int) jit.Decline {
+func (s *State) cpuTowerRows(li int, l *layer, n int) (jit.Decline, error) {
 	v := s.vis
 	var wins []nn.KeyRun
 	if s.visWindowed(li) {
@@ -493,13 +501,13 @@ func (s *State) cpuTowerRows(li int, l *layer, n int) jit.Decline {
 // each window a run its rows attend inside; cs is the rows' rotary table,
 // nrot wide. Its history is the segment's arena (ncArena), lent to the
 // block for its run.
-func (s *State) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, wins []nn.KeyRun) jit.Decline {
+func (s *State) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, wins []nn.KeyRun) (jit.Decline, error) {
 	f, why := s.cpuRowsForm(li, l)
 	if why != jit.DeclineServes {
-		return why
+		return why, nil
 	}
 	if n > f.keys {
-		return jit.DeclineSessions
+		return jit.DeclineSessions, nil
 	}
 	s.cpuPages(1)
 	a := s.nc()
@@ -512,9 +520,9 @@ func (s *State) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, n
 		s.bidir = runs
 	}
 	seq, pos := s.cpuRowsOf(0, 0, n)
-	s.cpuRowsRun(li, l, f, x, n*s.c.NEmbd, nil, cs, nrot, seq, pos)
+	err := s.cpuRowsRun(li, l, f, x, n*s.c.NEmbd, nil, cs, nrot, seq, pos)
 	s.bidir, s.cpu.runWindows = nil, false
-	return jit.DeclineServes
+	return jit.DeclineServes, err
 }
 
 // cpuTable is the rotary table of a step's rows block li reads and its
@@ -538,18 +546,20 @@ func (s *State) cpuTable(li int, cs, csSWA []float32) ([]float32, int) {
 func (s *State) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, nlogit int) (jit.Decline, error) {
 	cs, nrot := s.cpuTable(li, cs, csSWA)
 	n := len(pos)
-	if why := s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, n, false); why != jit.DeclineServes {
-		return why, nil
+	why, err := s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, n, false)
+	if why != jit.DeclineServes || err != nil {
+		return why, err
 	}
-	s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, nlogit, n, true)
-	s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, nlogit, true)
-	return jit.DeclineServes, nil
+	if why, err = s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, nlogit, n, true); err != nil {
+		return why, err
+	}
+	return s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, nlogit, true)
 }
 
 // cpuOwnerRuns makes ready (run unset) or runs block li over the rows
 // [lo, hi) of a step across sessions, a run of one session's consecutive
 // rows at a time, on that session's form.
-func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, lo, hi int, run bool) jit.Decline {
+func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, lo, hi int, run bool) (jit.Decline, error) {
 	d, pw := s.c.NEmbd, s.c.pleWidth()
 	for a := lo; a < hi; {
 		o, b := s.rowOwn[a], a+1
@@ -557,24 +567,26 @@ func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, p
 			b++
 		}
 		if o.m != s.m || !o.m.opt.composedCPU {
-			return jit.DeclineSessions
+			return jit.DeclineSessions, nil
 		}
 		f, why := o.cpuRowsForm(li, l)
 		if why != jit.DeclineServes {
-			return why
+			return why, nil
 		}
 		if run {
 			var side []float32
 			if pw != 0 {
 				side = s.bple[a*pw:]
 			}
-			o.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b])
+			if err := o.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
+				return jit.DeclineServes, err
+			}
 		} else if why := o.cpuRowsReady(li, f, pos[a:b]); why != jit.DeclineServes {
-			return why
+			return why, nil
 		}
 		a = b
 	}
-	return jit.DeclineServes
+	return jit.DeclineServes, nil
 }
 
 // cpuRecRows runs linear block li over the n rows of x, or says why not:
@@ -593,11 +605,11 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 		return why, nil
 	}
 	if f := s.cpuRecWhole(li, l, cb, seq, pos, order, base); f != nil {
-		why := s.cpuRecRun(li, l, f, x, cs, seq, pos, base, p0)
-		if why == jit.DeclineServes {
+		why, err := s.cpuRecRun(li, l, f, x, cs, seq, pos, base, p0)
+		if why == jit.DeclineServes && err == nil {
 			s.cpu.recWhole++
 		}
-		return why, nil
+		return why, err
 	}
 	if len(pos) > 1 {
 		s.cpu.recStepped++
@@ -684,9 +696,9 @@ func (s *State) cpuRecWhole(li int, l *layer, cb *cpuBlock, seq, pos, order []in
 // call at most f's rows; a prompt's (base its first row in the prompt, p0
 // its first position) end a call at each restore point inside them and seal
 // it there.
-func (s *State) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, seq, pos []int, base, p0 int) jit.Decline {
+func (s *State) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, seq, pos []int, base, p0 int) (jit.Decline, error) {
 	if why := s.cpuRowsReady(li, f, pos); why != jit.DeclineServes {
-		return why
+		return why, nil
 	}
 	n, d, nrot, pw := len(pos), s.c.NEmbd, s.c.RopeW(), s.c.pleWidth()
 	if s.cpu.fault == cpuFaultChunk && base > 0 {
@@ -707,13 +719,15 @@ func (s *State) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, se
 		if pw != 0 && side != nil {
 			side = side[a*pw:]
 		}
-		s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b])
+		if err := s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
+			return jit.DeclineServes, err
+		}
 		if base >= 0 {
 			s.recRowPoint(li, seq[a], p0+b)
 		}
 		a = b
 	}
-	return jit.DeclineServes
+	return jit.DeclineServes, nil
 }
 
 // cpuRecDesc is the run descriptor (kernels.RunDescWords' layout) of a
@@ -832,7 +846,7 @@ func (s *State) cpuFaultTable(pg *kvPages, end int) []uint32 {
 // (keysEnd) first run over every row, each reading only the keys before
 // it, so that every call's rows then read all of them. Where those codes
 // write the residual too they run over a copy of it.
-func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int) {
+func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int) error {
 	runs := s.runsAt(li) && s.bidirIn(pos[0], len(pos))
 	if runs && len(pos) > f.rows {
 		keys := f.keysEnd
@@ -840,13 +854,15 @@ func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, strid
 			keys = 0
 		}
 		s.cpu.stashing = stashSave
-		s.cpuRowsCalls(li, l, f, f.codes[:keys], x, stride, side, cs, nrot, seq, pos, true)
+		err := s.cpuRowsCalls(li, l, f, 0, keys, x, stride, side, cs, nrot, seq, pos, true)
 		s.cpu.stashing = stashLoad
-		s.cpuRowsCalls(li, l, f, f.codes[keys:], x, stride, side, cs, nrot, seq, pos, true)
+		if err == nil {
+			err = s.cpuRowsCalls(li, l, f, keys, len(f.codes), x, stride, side, cs, nrot, seq, pos, true)
+		}
 		s.cpu.stashing = stashNone
-		return
+		return err
 	}
-	s.cpuRowsCalls(li, l, f, f.codes, x, stride, side, cs, nrot, seq, pos, runs)
+	return s.cpuRowsCalls(li, l, f, 0, len(f.codes), x, stride, side, cs, nrot, seq, pos, runs)
 }
 
 // cpuStash saves (stashSave) or restores (stashLoad) call c's values form
@@ -870,11 +886,13 @@ func (s *State) cpuStash(f *cpuBlockForm, own [][]uint32, c int) {
 	}
 }
 
-// cpuRowsCalls is cpuRowsRun's calls, each row's keys counted to its run's
-// end where runs is set; x is the rows' residual, stream-major, stride
-// elements from one stream to the next; side is the rows' per-layer inputs,
-// nil for a model of none.
-func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, codes []cpuCode, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int, runs bool) {
+// cpuRowsCalls is cpuRowsRun's calls of f's codes [lo, hi), each row's keys
+// counted to its run's end where runs is set; x is the rows' residual,
+// stream-major, stride elements from one stream to the next; side is the
+// rows' per-layer inputs, nil for a model of none. A form over banks
+// (cpuBlockForm.split) holds the experts each call's rows pick, from its
+// selection to the call's end (cpuExperts).
+func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int, runs bool) error {
 	n := len(pos)
 	pg := &s.kv.layers[s.c.KVSource(li)]
 	d, ns, pw := s.c.NEmbd, s.c.Streams(), s.c.pleWidth()
@@ -936,9 +954,24 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, codes []cpuCode,
 		if s.cpu.stashing == stashLoad {
 			s.cpuStash(f, b.own, r0/f.rows)
 		}
-		for i := range codes {
-			s.cpuCall(b, &codes[i])
+		for i := lo; i < hi; i++ {
+			if i == f.split && f.split > 0 {
+				if err := s.cpuExperts(b, f, li, k); err != nil {
+					s.expHold.release()
+					return err
+				}
+			}
+			if s.cpu.fault == cpuFaultWeight && slices.Contains(f.wreads, i) {
+				// Each row's first pick weighted by zero where a kernel
+				// reads the weights.
+				w := f.selN / f.rows
+				for r := range k {
+					b.own[f.wsel][r*w] = 0
+				}
+			}
+			s.cpuCall(b, &f.codes[i])
 		}
+		s.expHold.release()
 		if rec {
 			// The runs' windows over their slots.
 			L := s.dg.convStateLen()
@@ -960,6 +993,7 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, codes []cpuCode,
 	if pg.p > 0 && end > pg.written {
 		pg.written = end
 	}
+	return nil
 }
 
 // cpuRowsOf is the sequences and positions of a chunk's n rows of slot
@@ -1276,9 +1310,7 @@ func (s *State) cpuCompose(li int) {
 		return
 	}
 	cb.f = f
-	if s.c.MoEAt(li) {
-		cb.rowsWhy = jit.DeclineExpertsRows
-	} else if cb.rows, err = s.m.formCPUBlock(s, li, cb, cpuRowsCap); err != nil {
+	if cb.rows, err = s.m.formCPUBlock(s, li, cb, cpuRowsCap); err != nil {
 		cb.rowsWhy = s.cpuFormDecline(err)
 	}
 	s.cpu.composed[li]++
@@ -1518,7 +1550,9 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 	if apart && len(gr.In)+len(gr.Out) > cpuIO {
 		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), cpuIO)
 	}
-	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows, sel: -1}
+	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows, sel: -1, wsel: -1}
+	selV, wsV := selOf(gr), weightsOf(gr)
+	wOwn := map[graph.ValueID]int{}
 	type ownUse struct{ code, own int }
 	var wrote, read []ownUse
 	// A kernel's constant block is its own: two kernels' blocks may share a
@@ -1642,8 +1676,13 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 				ar.src = cpuArgSide
 			case o.Kind == jit.OperandValue:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, max(gr.Values[o.Value].Width, int(bytes[o]/4))+a.Offset, nil)
-				if o.Value == selOf(gr) {
+				switch o.Value {
+				case selV:
 					f.sel = ar.i
+				default:
+					if slices.Contains(wsV, o.Value) {
+						wOwn[o.Value] = ar.i
+					}
 				}
 			case o.Kind == jit.OperandScratch:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, int(bytes[o]/4)+a.Offset+1, nil)
@@ -1739,6 +1778,18 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 		}
 		cc.code = code
 		f.codes = append(f.codes, cc)
+	}
+	// The weights as the first of their values a kernel reads.
+	for _, v := range wsV {
+		own, ok := wOwn[v]
+		for _, r := range read {
+			if ok && r.own == own && !slices.Contains(f.wreads, r.code) {
+				f.wsel, f.wreads = own, append(f.wreads, r.code)
+			}
+		}
+		if f.wsel >= 0 {
+			break
+		}
 	}
 	for _, cc := range f.codes[:f.keysEnd] {
 		f.keysX = f.keysX || cc.writes != 0
@@ -1872,6 +1923,42 @@ func selOf(gr *graph.Graph) graph.ValueID {
 	return -1
 }
 
+// weightsOf is the picks' weights gr's banks' outputs are multiplied by,
+// then the values of their width each is an elementwise map of, back to the
+// first that is not: nil for a graph that weights none.
+func weightsOf(gr *graph.Graph) []graph.ValueID {
+	bank := map[graph.ValueID]bool{}
+	made := map[graph.ValueID]int{}
+	w := graph.ValueID(-1)
+	for i, o := range gr.Ops {
+		for _, v := range o.Out {
+			made[v] = i
+		}
+		if o.Kind == graph.OpExpertMatVec && len(o.In) == 2 && len(o.Weight) > 0 && jlm.ExpertBank(o.Weight[0].Role) {
+			bank[o.Out[0]] = true
+		}
+		if w >= 0 || o.Kind != graph.OpMap || o.Attr.Fn != graph.MapMul || len(o.In) != 2 {
+			continue
+		}
+		switch {
+		case bank[o.In[0]]:
+			w = o.In[1]
+		case bank[o.In[1]]:
+			w = o.In[0]
+		}
+	}
+	var ws []graph.ValueID
+	for w >= 0 && len(ws) < len(gr.Ops) {
+		ws = append(ws, w)
+		i, ok := made[w]
+		if o := gr.Ops[i]; !ok || o.Kind != graph.OpMap || len(o.In) == 0 || gr.Values[o.In[0]].Width != gr.Values[w].Width {
+			break
+		}
+		w = gr.Ops[i].In[0]
+	}
+	return ws
+}
+
 // bankHalves finds where a form over banks is cut (cpuBlockForm.split): at
 // its first code that binds a bank, with the selection written by a code
 // before it.
@@ -1959,25 +2046,68 @@ func (s *State) cpuForm(b *cpuBound, f *cpuBlockForm, li int) error {
 		return nil
 	}
 	s.cpuCalls(b, f.codes[:f.split])
-	s.cpu.sel = s.cpu.sel[:0]
-	for _, x := range b.own[f.sel][:f.selN] {
-		s.cpu.sel = append(s.cpu.sel, int32(x))
-	}
-	if s.cpu.fault == cpuFaultExpert {
-		// Another expert's page made resident and held than the first the
-		// kernels read.
-		s.cpu.sel[0] = (s.cpu.sel[0] + 1) % int32(s.c.NExpert)
-	}
-	err := s.m.ensureExperts(li, s.cpu.sel, &s.expHold)
+	err := s.cpuExperts(b, f, li, 1)
 	defer s.expHold.release()
 	if err != nil {
 		return err
 	}
 	if !s.rowsOfChunk {
-		s.res.touch(li, s.c.NExpert, s.cpu.sel)
 		s.hot.add(li, s.cpu.sel)
 	}
 	s.cpuCalls(b, f.codes[f.split:])
+	return nil
+}
+
+// cpuExperts makes the experts the n rows of a call of form f select
+// (cpuBlockForm.sel, a row's picks after another's) resident and held until
+// s.expHold's release, each once however many rows pick it -- the pager's
+// own fault path (ensureExperts), each read from the file where the budget
+// evicted it -- and counts them resident as main's mixture does. s.cpu.sel
+// is the experts held, in the order the rows first pick them.
+func (s *State) cpuExperts(b *cpuBound, f *cpuBlockForm, li, n int) error {
+	k := f.selN / max(f.rows, 1)
+	picks := b.own[f.sel][:n*k]
+	ne := s.c.NExpert
+	if s.cpu.fault == cpuFaultPicks && n > 1 {
+		// The first row given the second's picks, with its own weights.
+		copy(picks[:k], picks[k:2*k])
+	}
+	if len(s.cpu.picked) < ne {
+		s.cpu.picked = make([]bool, ne)
+	}
+	s.cpu.sel = s.cpu.sel[:0]
+	for _, x := range picks {
+		if int(x) >= ne {
+			// No page: ensureExperts names it.
+			s.cpu.sel = append(s.cpu.sel, int32(x))
+		} else if !s.cpu.picked[x] {
+			s.cpu.picked[x] = true
+			s.cpu.sel = append(s.cpu.sel, int32(x))
+		}
+	}
+	other := int32(-1)
+	if s.cpu.fault == cpuFaultExpert {
+		// Another expert's page made resident and held than the first the
+		// kernels read: one no row picks, where there is one.
+		e := s.cpu.sel[0]
+		for j := 1; j < ne && other < 0; j++ {
+			if x := (e + int32(j)) % int32(ne); !s.cpu.picked[x] {
+				other = x
+			}
+		}
+	}
+	for _, x := range s.cpu.sel {
+		if int(x) < ne {
+			s.cpu.picked[x] = false
+		}
+	}
+	if other >= 0 {
+		s.cpu.sel[0] = other
+	}
+	if err := s.m.ensureExperts(li, s.cpu.sel, &s.expHold); err != nil {
+		return err
+	}
+	s.res.touch(li, ne, s.cpu.sel)
 	return nil
 }
 

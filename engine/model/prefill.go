@@ -1310,7 +1310,10 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 	if m.opt.composedCPU {
 		why := jit.DeclineBidir
 		if s.vis != nil {
-			why = s.cpuTowerRows(li, l, n)
+			var err error
+			if why, err = s.cpuTowerRows(li, l, n); err != nil {
+				return err
+			}
 		} else if !bidir || !c.LayerKind(li).Recurrent() {
 			// A non-causal decoder's chunk (an embedding run's) is one run
 			// of rows attending both ways; a symmetric window its graph

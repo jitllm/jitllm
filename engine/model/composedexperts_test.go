@@ -2,6 +2,7 @@ package model
 
 import (
 	"math"
+	"math/rand"
 	"os"
 	"slices"
 	"strings"
@@ -308,6 +309,143 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 				t.Fatalf("with another expert's page held the logits are %.3e from the resident run's: the gate cannot see it", far)
 			}
 			t.Logf("%d page-ins under one page against %d resident, every logit identical; the wrong page held moves them %.3e", pagedIn, residentIn, far)
+		})
+	}
+}
+
+// cpuExpertPromptModels are the mixtures whose prompts and batched steps
+// TestComposedCPUExpertPromptsServe holds on the CPU device: cpuExpertModels
+// and Gemma 4's mixture beside its dense MLP. JITLLM_PAGED_EXPERTS adds more.
+var cpuExpertPromptModels = append(slices.Clone(cpuExpertModels), "synth-gemma4-moe.gguf")
+
+// cpuMixtureRowsModels are the mixtures whose prompts TestPrefillMatchesForward
+// and whose batched steps TestBatchMatchesForward hold on the composed CPU:
+// qwen3moe's float fixture and a checkpoint, Gemma 4's mixture beside its
+// dense MLP, phimoe's sparsemixer and gpt-oss's MXFP4 banks.
+var cpuMixtureRowsModels = []string{"tiny-qwen3moe-f32.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-gemma4-moe.gguf",
+	"synth-phimoe.gguf", "synth-gptoss.gguf"}
+
+// TestComposedCPUExpertPromptsServe runs each mixture's prompts and batched
+// steps on the CPU device composed: a prompt of more rows than a call of
+// the rows' form holds and its decode, and a batch of three sequences, each
+// prompted into its own slot and stepped together. Every call holds the
+// experts its rows pick, each once (cpuExperts), every block step served
+// and none declined, the logits within main's own spread (or, for a float
+// mixture, within f32's reduction order); under a one-page budget the
+// experts are evicted and read again mid-prompt and every logit is the
+// resident run's bit for bit. Each violation -- another expert's page held
+// than one a row reads, a row given another row's picks, each row's first
+// pick's weight dropped -- moves the prompt's logits.
+func TestComposedCPUExpertPromptsServe(t *testing.T) {
+	const page, pn, decode = 32, 72, 4
+	names := cpuExpertPromptModels
+	if extra := os.Getenv("JITLLM_PAGED_EXPERTS"); extra != "" {
+		names = append(names, strings.Split(extra, ",")...)
+	}
+	for _, file := range names {
+		t.Run(file, func(t *testing.T) {
+			path := jlmOf(t, testmodels.Path(file))
+			open := func(opts ...Option) *Model {
+				t.Helper()
+				m, err := Open(path, append([]Option{noTune}, opts...)...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				m.setKVPageForTest(page)
+				return m
+			}
+			ref := open()
+			defer ref.Close()
+			// Tokens spread over the vocabulary: a random fixture's greedy
+			// tokens repeat, and rows of one token pick one set of experts.
+			v := ref.Cfg.NVocab
+			rng := rand.New(rand.NewSource(7))
+			ids := make([]int32, 140)
+			for i := range ids {
+				ids[i] = int32(v/8 + rng.Intn(v/2-v/8))
+			}
+			prompts := [][]int32{ids[:7], ids[10:43], ids[50 : pn+50]}
+			steps := ids[pn+50 : pn+50+decode]
+			// The prompt's last row and each batched sequence's prompt row:
+			// logits the prompt's rows' form alone made.
+			promptRows := []int{0}
+			for i := range prompts {
+				promptRows = append(promptRows, 1+decode+i*(1+decode))
+			}
+			prompt := func(m *Model, f cpuFault, composed bool) [][]float32 {
+				t.Helper()
+				out := cpuPrompt(t, m, ids, pn, decode, f, composed)
+				return append(out, cpuBatch(t, m, prompts, steps, f, composed)...)
+			}
+			want := prompt(ref, cpuFaultNone, false)
+			ctlm := open(WithJITOptions(nn.WithActWindow(cpuControlWindow)))
+			ctl := prompt(ctlm, cpuFaultNone, false)
+			ctlm.Close()
+			run := func(f cpuFault, opts ...Option) ([][]float32, int64) {
+				t.Helper()
+				m := open(append([]Option{WithComposedCPU(true)}, opts...)...)
+				defer m.Close()
+				got := prompt(m, f, true)
+				_, in, _ := m.PageStats()
+				return got, in
+			}
+			got, residentIn := run(cpuFaultNone)
+			float := true
+			for i := range ctl {
+				float = float && slices.Equal(ctl[i], want[i])
+			}
+			if float {
+				// A float mixture quantizes nothing and main's control is main:
+				// the rows' form is held to main within the float prompts'
+				// bound (TestGemma4ServesComposedOnCPU's), its reduction order
+				// over a call's rows not main's.
+				const floatBound = 1e-5
+				worst := 0.0
+				for i := range want {
+					worst = max(worst, logitNMSE(got[i], want[i]))
+				}
+				t.Logf("prompts of %d rows and a batch: the composed CPU's float mixture is %.3g from main at the worst", pn, worst)
+				if math.IsNaN(worst) || !(worst < floatBound) {
+					t.Fatalf("the composed CPU's float mixture's prompts are %.3g from main (bound %g)", worst, floatBound)
+				}
+			} else {
+				med, worst, widest := cpuBand(t, want, got, ctl)
+				t.Logf("prompts of %d rows and a batch: %.3f of main's spread at the median, worst NMSE %.3g where main's control reaches %.3g",
+					pn, med, worst, widest)
+				if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
+					t.Fatalf("the composed CPU's mixture prompts leave main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+						med, bandRatio, worst, bandWorst, widest)
+				}
+			}
+			paged, pagedIn := run(cpuFaultNone, WithPageBudget(1))
+			if pagedIn <= residentIn {
+				t.Fatalf("a one-page budget took %d page-ins against %d resident: nothing paged", pagedIn, residentIn)
+			}
+			for i := range got {
+				if !slices.Equal(paged[i], got[i]) {
+					t.Fatalf("row %d: under a one-page budget the composed logits differ from the resident run's (NMSE %.3e)", i, nmseF32(got[i], paged[i]))
+				}
+			}
+			t.Logf("%d page-ins under one page against %d resident, every logit identical", pagedIn, residentIn)
+			for _, v := range []struct {
+				name string
+				f    cpuFault
+				opts []Option
+			}{
+				{"another expert's page held", cpuFaultExpert, []Option{WithPageBudget(1)}},
+				{"a row given another row's picks", cpuFaultPicks, nil},
+				{"each row's first pick's weight dropped", cpuFaultWeight, nil},
+			} {
+				bad, _ := run(v.f, v.opts...)
+				far := 0.0
+				for _, i := range promptRows {
+					far = max(far, logitNMSE(got[i], bad[i]))
+				}
+				t.Logf("violation %q: the prompts' rows move %.3e", v.name, far)
+				if !(far > 1e-6) && !math.IsNaN(far) {
+					t.Errorf("%s: the prompts' logits move %.3e: the gate cannot see it", v.name, far)
+				}
+			}
 		})
 	}
 }

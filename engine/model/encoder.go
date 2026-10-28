@@ -349,11 +349,17 @@ func (e *Embedder) encode(ids []int32) error {
 		if err := m.encBlockPageIn(li); err != nil {
 			return err
 		}
-		if e.cpuRuns(li) && e.cpuRun(li, n, x, cs) {
-			if e.afterBlock != nil {
-				e.afterBlock(li, x)
+		if e.cpuRuns(li) {
+			ok, err := e.cpuRun(li, n, x, cs)
+			if err != nil {
+				return err
 			}
-			continue
+			if ok {
+				if e.afterBlock != nil {
+					e.afterBlock(li, x)
+				}
+				continue
+			}
 		}
 		b := &enc.blocks[li]
 		q, k, v := e.q[:n*d], e.k[:n*d], e.v[:n*d]
@@ -821,14 +827,14 @@ func (e *Embedder) cpuRuns(li int) bool {
 
 // cpuRun runs encoder block li over x's n rows on the composer's CPU
 // device, cs the rows' rotary table, reporting whether it served the
-// block; a decline is counted by name, and the block runs on the
-// Embedder's kernels.
-func (e *Embedder) cpuRun(li, n int, x, cs []float32) bool {
+// block, or the error its step met; a decline is counted by name, and the
+// block runs on the Embedder's kernels.
+func (e *Embedder) cpuRun(li, n int, x, cs []float32) (bool, error) {
 	s := e.seg
 	l := &e.m.layers[li]
 	if !s.lendNC(li) {
 		s.cpu.declined[jit.DeclinePageOut]++
-		return false
+		return false, nil
 	}
 	nrot := 0
 	if cs != nil {
@@ -839,14 +845,16 @@ func (e *Embedder) cpuRun(li, n int, x, cs []float32) bool {
 	if len(e.seqs) > 0 {
 		wins = e.seqs
 	}
-	why := s.cpuRunRows(li, l, x, n, cs, nrot, wins)
+	why, err := s.cpuRunRows(li, l, x, n, cs, nrot, wins)
 	s.unlend(li)
-	if why != jit.DeclineServes {
-		s.cpu.declined[why]++
-		return false
+	if err != nil || why != jit.DeclineServes {
+		if err == nil {
+			s.cpu.declined[why]++
+		}
+		return false, err
 	}
 	s.cpu.served++
-	return true
+	return true, nil
 }
 
 // cpuDecline counts encoder block li as declined by the composer's CPU

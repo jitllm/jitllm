@@ -135,7 +135,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			})
 			// The CPU's blocks on what the composer forms for it, on the models
 			// it serves there: every block step of the window served.
-			if slices.Contains(cpuServedModels, name) {
+			if slices.Contains(cpuServedModels, name) || slices.Contains(cpuExpertAllocModels, name) {
 				t.Run("host-composed", func(t *testing.T) {
 					mc, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false), WithComposedCPU(true))
 					if err != nil {
@@ -279,6 +279,12 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 		})
 	}
 }
+
+// cpuExpertAllocModels are the mixtures of the gate's list whose decode the
+// composed CPU arm measures, each block's banks read in the host's expert
+// pages (TestComposedCPUExpertPagesServe).
+var cpuExpertAllocModels = []string{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "synth-glm4moe.gguf", "synth-qwen2moe.gguf",
+	"synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-gemma4-moe.gguf", "synth-phimoe.gguf"}
 
 // composedAllocModels are the models whose composed step the gate measures:
 // a dense model, a latent attention model whose every block the front end
