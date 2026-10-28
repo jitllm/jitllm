@@ -17,8 +17,9 @@ import (
 // output's decoded to binary16 pairs, a thread eight consecutive elements
 // of a row at a time, so the elements of one packed word share its load and
 // its scales once Affine has proved the shared address (headroom); a row of
-// the stage is padded by four elements, which puts the sixteen rows a
-// fragment load reads in different banks. The stage is two: trip t
+// the stage is padded, A's so that a fragment's run of eight elements is
+// one aligned access, and so that the rows a fragment load reads fall in
+// different banks. The stage is two: trip t
 // multiplies one while it fills the other with trip t+1's factors, whose
 // words Prefetch has loaded a trip before, and one barrier ends the trip.
 // Each warp multiplies its share of the block in the device's tiles into
@@ -263,15 +264,19 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 	shared := func(name string, e ir.Type, n int) int {
 		return m.buf(Buf{Kind: BufShared, Elem: e, Size: n, Operand: Operand{Kind: OperandScratch, Name: k.Name + "." + name}})
 	}
-	// SK is a staged row's elements, padded; G the elements a thread stages
-	// at a time.
-	const pad, G = 4, 8
-	SK := KC + pad
+	// SKA and SKB are a staged row's elements of A and of B, padded; G the
+	// elements a thread stages at a time. A's rows start eight elements
+	// apart, so a lane's run of eight is one access, and the rows one
+	// access of its fragment reads fall in different banks; B's start four
+	// apart, which keeps the rows n and n+8 a fragment load reads together
+	// in different banks.
+	const G = 8
+	SKA, SKB := KC+8, KC+4
 	// A stage holds A's rows, then B's at bAt words; the array holds two,
 	// trip t multiplying stage t&1 while it fills the other with trip
 	// t+1's factors, and after the trips the sums.
-	bAt := TR * SK / 2
-	half := bAt + TN*SK/2
+	bAt := TR * SKA / 2
+	half := bAt + TN*SKB/2
 	st := shared("stage", U, max(2*half, WR*tm*TN))
 	if units := max(d.Units, 1); p.Resident*m.Group <= d.Slots/units && (d.Shared == 0 || p.Resident*4*m.Bufs[st].Size <= d.Shared) {
 		m.Resident = p.Resident
@@ -310,6 +315,10 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 	hb.Kind, hb.Shape, hb.Extent = BufIn, nil, R*W
 	hw := m.buf(hb)
 	stage := func(l, kc, into, rows, axis, base, most, factor int) {
+		SK := SKA
+		if axis == 1 {
+			SK = SKB
+		}
 		n := rows * KC / G
 		for j := 0; j*m.Group < n; j++ {
 			w := m.bin(OpAdd, U, thread, m.u32(j*m.Group))
@@ -321,8 +330,8 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 			c := m.bin(OpMin, U, m.bin(OpAdd, U, base, row), most)
 			kg := m.bin(OpAdd, U, kc, m.bin(OpMul, U, g, m.u32(G)))
 			word := m.bin(OpAdd, U, m.bin(OpMul, U, row, m.u32(SK/2)), m.bin(OpAdd, U, m.bin(OpMul, U, g, m.u32(G/2)), into))
-			elem := func(at int) int {
-				return m.un(OpHalf, U, copyInto(m, k, factor, func(i int, nd Node) (int, bool) {
+			copyAt := func(x, at int) int {
+				return copyInto(m, k, x, func(i int, nd Node) (int, bool) {
 					switch {
 					case nd.Op == OpCoord && nd.A == axis:
 						return c, true
@@ -334,8 +343,9 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 						return at, true
 					}
 					return 0, false
-				}))
+				})
 			}
+			elem := func(at int) int { return m.un(OpHalf, U, copyAt(factor, at)) }
 			if axis == 0 {
 				at := m.bin(OpAdd, U, m.bin(OpMul, U, c, m.u32(W)), m.bin(OpShr, U, kg, m.u32(1)))
 				for e := 0; e < G/2; e++ {
@@ -386,24 +396,24 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 		return m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpAdd, U, base, m.u32(i*unit)), m.u32(stride)), m.u32(s))
 	}
 	// A staged view's rows start four elements apart and its offsets are
-	// multiples of four: aligned.
+	// multiples of four, A's of eight: aligned, A's to eight.
 	tile := func(t ir.TileType, off int, col bool) int {
-		imm := int64(2)
+		imm, sk := int64(2|4), SKA
 		if col {
-			imm |= 1
+			imm, sk = 2|1, SKB
 		}
-		return m.add(Node{Op: OpTileLoad, Type: ir.Void, Buf: st, A: off, B: m.u32(SK), Imm: imm, At: P + 1, Tile: &t})
+		return m.add(Node{Op: OpTileLoad, Type: ir.Void, Buf: st, A: off, B: m.u32(sk), Imm: imm, At: P + 1, Tile: &t})
 	}
 	a := make([][]int, mi)
 	for i := range a {
 		for s := 0; s < ks; s++ {
-			a[i] = append(a[i], tile(aT, m.bin(OpAdd, U, at(wr0, i, tm, SK, s*tk), from), false))
+			a[i] = append(a[i], tile(aT, m.bin(OpAdd, U, at(wr0, i, tm, SKA, s*tk), from), false))
 		}
 	}
 	b := make([][]int, nj)
 	for j := range b {
 		for s := 0; s < ks; s++ {
-			b[j] = append(b[j], tile(bT, m.bin(OpAdd, U, at(wn0, j, tn, SK, s*tk), m.bin(OpAdd, U, from, m.u32(2*bAt))), true))
+			b[j] = append(b[j], tile(bT, m.bin(OpAdd, U, at(wn0, j, tn, SKB, s*tk), m.bin(OpAdd, U, from, m.u32(2*bAt))), true))
 		}
 	}
 	zero := m.add(Node{Op: OpTileSplat, Type: ir.Void, A: m.f32(0), Tile: &cT})

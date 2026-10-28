@@ -509,9 +509,39 @@ func (tl *tileLower) voltaAccess(o ir.Op, base Reg, offset, stride Reg, store []
 	// then four consecutive halves, read in one access of an aligned view.
 	vec := store == nil && ir.Aligned(o) && t.Elem == ir.TileF16 && (t.Use == ir.TileA) != col
 	els := tl.voltaElems(t)
+	// In the quad-pair layout a lane's run of four k and the next four are
+	// eight consecutive halves: over a view aligned to eight, one access.
+	wide := map[int]int{}
+	if vec && tl.pairs && ir.Aligned8(o) {
+		key := func(el voltaElem) [2]int {
+			if col {
+				return [2]int{el.col, el.row}
+			}
+			return [2]int{el.row, el.col}
+		}
+		of := map[[2]int]int{}
+		for n := 0; n+1 < len(els); n += 2 {
+			of[key(els[n])] = n
+		}
+		for n := 0; n+1 < len(els); n += 2 {
+			if k := key(els[n]); k[1]%8 == 0 {
+				if m, ok := of[[2]int{k[0], k[1] + 4}]; ok {
+					wide[n], wide[m] = m, -1
+				}
+			}
+		}
+	}
 	for n := 0; n < len(els); n++ {
 		el := els[n]
 		g := guard(el.pred)
+		if m, ok := wide[n]; ok {
+			if m >= 0 {
+				a, off := at(el.row, el.col)
+				b.Op("ld.%s.v4.b32 {%v,%v,%v,%v},[%v+%d];", sp, out[n], out[n+1], out[m], out[m+1], a, off)
+			}
+			n++
+			continue
+		}
 		if vec && n%2 == 0 && n+1 < len(els) {
 			a, off := at(el.row, el.col)
 			if el.pred != nil {

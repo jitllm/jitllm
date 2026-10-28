@@ -365,7 +365,8 @@ const (
 	OpDot4U
 	// OpTileLoad is the collective tile Tile of workgroup buffer Buf at
 	// element offset A, row stride B, column-major where Imm's bit 0 is set
-	// and over a view stated aligned (ir.TileLoadAligned) where bit 1 is; At
+	// and over a view stated aligned (ir.TileLoadAligned) where bit 1 is, to
+	// eight components (ir.TileLoadAligned8) where bit 2 is as well; At
 	// is 1 + the loop whose trip it reads in. OpTileSplat is a tile every element
 	// of which is A; OpTileMMA is A times B plus C, over tiles. A tile is
 	// read only by a tile op, a tile store or a tile fold.

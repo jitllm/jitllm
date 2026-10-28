@@ -356,7 +356,9 @@ func (e *lowerer) get(i int) ir.Value {
 		x, y := e.get(nd.A), e.get(nd.B)
 		v = binary(b, nd.Op, nd.Type, x, y)
 	case OpTileLoad:
-		if nd.Imm&2 != 0 {
+		if nd.Imm&4 != 0 {
+			v = b.TileLoadAligned8(*nd.Tile, e.params[nd.Buf], e.get(nd.A), e.get(nd.B), nd.Imm&1 != 0)
+		} else if nd.Imm&2 != 0 {
 			v = b.TileLoadAligned(*nd.Tile, e.params[nd.Buf], e.get(nd.A), e.get(nd.B), nd.Imm&1 != 0)
 		} else {
 			v = b.TileLoad(*nd.Tile, e.params[nd.Buf], e.get(nd.A), e.get(nd.B), nd.Imm&1 != 0)
