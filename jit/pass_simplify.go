@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/jitllm/jitllm/jit/ir"
@@ -268,11 +269,18 @@ func (k *Kernel) foldDecided() bool {
 	}
 	for i := range k.Nodes {
 		nd := k.Nodes[i]
-		if nd.Type == ir.F32 && nd.Op != OpSelect && nd.Op != OpBitcast {
+		if nd.Type == ir.F32 && nd.Op != OpSelect && nd.Op != OpBitcast && nd.Op != OpCvtF32 {
 			continue
 		}
 		a, b := nd.A, nd.B
 		switch nd.Op {
+		case OpCvtF32:
+			// A word known here, an iteration of a loop of one trip among
+			// them, is the float it converts to.
+			if c := k.Nodes[a]; c.Op == OpConst && (c.Type == ir.I32 || uint32(c.Imm) < 1<<31) {
+				k.Nodes[i] = Node{Op: OpConst, Type: ir.F32, Imm: int64(math.Float32bits(float32(int32(uint32(c.Imm)))))}
+				changed = true
+			}
 		case OpAdd:
 			if k.isConst(b, 0) {
 				to(i, a)

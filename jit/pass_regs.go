@@ -910,15 +910,19 @@ func (k *Kernel) VectorWords() map[int]bool {
 	}
 	vec := k.vectorized()
 	var hs []int
+	var addr map[int]bool
 	if vec {
 		hs = k.Homes()
+		// A word a jammed loop loads for an address (a page's index) is
+		// the row's own, read by the general registers.
+		addr = k.addressNodes()
 	}
 	for i := range k.Nodes {
 		nd := &k.Nodes[i]
 		switch {
 		case nd.Op == OpLanes || nd.Op == OpBroadcast && nd.Type != ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32:
 			set(i)
-		case vec && nd.Op == OpLoad && nd.Type != ir.F32 && !k.Bufs[nd.Buf].Half && i < len(hs) && hs[i] >= 0 && k.Loops[hs[i]].Lanes > 0:
+		case vec && nd.Op == OpLoad && nd.Type != ir.F32 && !k.Bufs[nd.Buf].Half && i < len(hs) && hs[i] >= 0 && (k.Loops[hs[i]].Lanes > 0 || k.Loops[hs[i]].Wide > 0 && !addr[i]):
 			// A word a vector loop loads is a lane's each.
 			set(i)
 		case vec && (nd.Op == OpCvtF32 || nd.Op == OpWidenHalf || nd.Op == OpBitcast && nd.Type == ir.F32):
@@ -1196,6 +1200,10 @@ func (b *binder86) vectors() error {
 			continue
 		}
 		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpConst && k.Nodes[e.I].Type != ir.F32 {
+			continue
+		}
+		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpFold && !k.needsVector(e.I) {
+			// A sum of words a general register holds (gprs).
 			continue
 		}
 		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpFold {

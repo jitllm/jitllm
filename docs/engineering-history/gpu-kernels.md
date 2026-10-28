@@ -10390,3 +10390,21 @@ row where the composer's reads two.
   four activation bytes, a load, a sign, a magnitude, two multiply-adds and
   an add a four-row vector with a register spill each step, and a binary16
   scale widened in software a block: speed is the shared passes' work.
+- Five miscompiles in the composer's passes, each a wrong value or a
+  fault with no error. The x86 register binding gave every sum a vector
+  register, even one gprs had put in a general register. The lowering then
+  counted in the general register with the vector's number, RAX for the
+  first: a count of words read down a column faulted on its address
+  (jit.TestComposedCPUWordSums). Words a jammed loop loads across lanes were
+  not vector words, so a jammed integer sum counted lane 0 alone. A sum read
+  in another sum's step had its readers placed after its loop (Homes), and
+  Order ran its step before them, unless the pair matched the carried-choice
+  pattern. Unsigned's sign flips and a broadcast mask break that pattern,
+  so an integer maximum carrying a float kept place 0. A float of a known
+  word (a loop of one trip's iteration) had no register. Induction stepped
+  a vector loop's lanes by one vector a trip where an unrolled trip covers
+  several. With the lanes remade for a value that is also an address
+  (3acc904c's), that still left the top-k selection's prefix counts wrong
+  in 42984 to 134135 of a row's elements at blocks of 64 and 128
+  (jit.TestComposedCPULanesAsData). Each fix, reverted alone, fails its
+  gate.

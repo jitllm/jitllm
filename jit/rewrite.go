@@ -561,8 +561,13 @@ func (n *Kernel) Homes() []int {
 				return r == 2
 			}
 			known[i] = 1
-			if n.Nodes[i].Op == OpFold {
-				return false
+			if x := n.Nodes[i]; x.Op == OpFold {
+				// Another sum of the loop, read in this one's step, is read
+				// as it runs: what reads it is made in the trip too.
+				if x.At == nd.At {
+					known[i] = 2
+				}
+				return known[i] == 2
 			}
 			var buf [3]int
 			for _, a := range n.args(i, &buf) {

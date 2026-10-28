@@ -347,7 +347,9 @@ func (o *orderer) scope(c int) {
 		}
 	}
 	for _, f := range k.foldsOf(c) {
-		if !carried[f] {
+		// A sum a general register holds is stepped in its register, with
+		// no copy aside for a read after the step: its other reads go first.
+		if !carried[f] && (k.Nodes[f].Type == ir.F32 || o.words[f]) {
 			continue
 		}
 		step := k.Nodes[f].A
@@ -388,7 +390,11 @@ func (o *orderer) scope(c int) {
 		}
 	}
 	o.lockstep(steps, c)
-	for f := range o.after {
+	// A sum still waiting steps once the trip's other reads of it are made.
+	for _, f := range slices.Sorted(maps.Keys(o.after)) {
+		for _, r := range o.after[f] {
+			o.need(r, c)
+		}
 		o.need(k.Nodes[f].A, c)
 	}
 	o.after, o.scopeOf = outer, scope

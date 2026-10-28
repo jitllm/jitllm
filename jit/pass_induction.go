@@ -49,7 +49,7 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			start, step := m.add(Node{Op: OpConst, Type: ir.I32}), int64(1)
 			switch {
 			case l.Lanes > 0:
-				start, step = m.add(Node{Op: OpLanes, Type: ir.I32, Imm: int64(l.Lanes)}), int64(l.Lanes)
+				start, step = m.add(Node{Op: OpLanes, Type: ir.I32, Imm: int64(l.Lanes)}), int64(l.Lanes*max(1, l.Copies))
 			case from != it:
 				start = v
 			}
