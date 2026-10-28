@@ -10212,3 +10212,44 @@ row where the composer's reads two.
   on Llama-3.2-1B and Qwen3.5-0.8B, TestComposedExpertPagesMoveToTheCPU, the
   recurrent gates, and TestResetClearsTheRecurrentSummary, which had been
   linux-only and CPU-only and now runs on every test device.
+- **A composed prompt's attention runs on every core.** A CPU kernel that
+  wrote a scratch ran its calls one after another, so a prompt's scores and
+  softmax and each projection's int8 form ran on one core while the
+  projections ran on all of them. Decomposed at 512 tokens on the E5-2680 v4's
+  node 1 (14 cores, WithProfile, the composed kernels' own time):
+  attention's dots were 22% of Llama-3.2-1B Q4_K_M's prompt and 42% of
+  Qwen3-0.6B Q8_0's (14.8 ms a launch, as long as one thread takes), the
+  weighted values another 9% of Qwen's. A kernel's calls now run on the
+  pool where every address of the scratch they write moves along every
+  call axis past the axes inside it and the code reaches no more than
+  the calls' slices (engine/model/cpuserve.go, callsOwnScratch); other
+  scratches keep their calls in order. The weighted values (d outer, the
+  history's positions inner) ran one vector of a head a trip, each
+  position's page found again for every 8 lanes; Jam now strip-mines 4
+  vectors a trip where the inner loop is the kernel's positions loop
+  (Jam.Positions): the kernel alone at Qwen3's shape, 64 rows after 448
+  positions, 60.5 -> 25.0 ms on one thread. And a RowJam form the registers
+  refuse is formed again at half the rows a call with its lanes kept
+  (Kernel.Unjam), where before it also lost Jam's lanes (Q8_0 at 4 rows a
+  call fell to a scalar 567-byte kernel at 1.9 GMAC/s; it now keeps the
+  2-row form at 18). Speed, interleaved, n=20, the same node 1, prefill at
+  512: Llama-3.2-1B 0.1548 -> 0.2365 of main (57.5 -> 90.9 tok/s against
+  main's 366-384; A/A 1.0106 and 0.9908, IQR/median 0.043 and 0.030);
+  Qwen3-0.6B 0.1875 -> 0.5818 (64.7 -> 229.2 tok/s against 338-394; A/A
+  0.9913 and 0.9805, IQR/median 0.050 and 0.018). After it the prompt is
+  its projections: 72% of Llama's composed time in its six Q4_K/Q6_K rows
+  matvecs, 52% of Qwen's in its five largest. The rows form runs about 0.5 instructions a
+  multiply-add where main's GEMM runs about 0.14: a call's two rows each
+  load and decode the weight's words and their sub-block scales again
+  (Jam copies a row's tree per store, and weight loads are not merged;
+  merging them is refused by the registers, since Order writes one row's
+  super-block whole before the next), and the activation-side combine
+  spills its indices. RowJam at 4 rows reads +17% on Q4_K and +12% on Q6_K
+  alone but forms in minutes, and is not taken. Gates on node 1: the
+  serving gate on Qwen3-0.6B and Llama-3.2-1B, TestComposedCPURowsServe and
+  TestComposedCPURowsDoNotAllocate on Qwen3-0.6B, the prefill gate's
+  composed-cpu arm, TestCPUComposesOnce on Qwen3-0.6B and the composed
+  decode allocation arm on Llama-3.2-1B; with two calls made to write one
+  slice, TestComposedCPURowsServe leaves the band at a median 2361 times
+  main's spread and the prefill gate fails, where the serving gate, decode
+  alone, does not see it.
