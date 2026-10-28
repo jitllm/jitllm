@@ -1,6 +1,8 @@
 package jit
 
 import (
+	"fmt"
+
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -45,6 +47,9 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	if d.Matrix[0] == 0 {
 		return ks, nil
 	}
+	// made is the halves kernels formed, by what they compute: projections
+	// of one row factor (q, k and v of one normed input) read one.
+	made := map[string]Buf{}
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		f, ok := p.bilinear(k, d)
 		if !ok {
@@ -63,7 +68,7 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				return nil, false, nil
 			}
 		}
-		return q.form(k, d, f), true, nil
+		return q.form(k, d, f, made), true, nil
 	})
 }
 
@@ -253,7 +258,7 @@ func halves(k *Kernel, f bilinear) (*Kernel, Buf) {
 
 // form is k as the matrix unit's workgroups, the factor of its row
 // written as binary16 pairs first.
-func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
+func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Kernel {
 	U, F := ir.U32, ir.F32
 	tm, tn, tk := d.Matrix[0], d.Matrix[1], d.Matrix[2]
 	TR, TN, KC := p.Rows, p.Cols, f.depth
@@ -314,6 +319,12 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 	// are its own, not a loop's, so what a trip's shares load is a value of
 	// the trip a later pass can load a trip ahead.
 	h, hb := halves(k, f)
+	sig := h.computes()
+	if b, ok := made[sig]; ok {
+		h, hb = nil, b
+	} else {
+		made[sig] = hb
+	}
 	W := k.Loops[0].Trip / 2
 	hb.Kind, hb.Shape, hb.Extent = BufIn, nil, R*W
 	hw := m.buf(hb)
@@ -474,5 +485,20 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 			m.Stores = append(m.Stores, c)
 		}
 	}
+	if h == nil {
+		return []*Kernel{m}
+	}
 	return []*Kernel{h, m}
+}
+
+// computes is what a halves kernel writes, its output aside: its space and
+// rows, its nodes and the operands it reads.
+func (h *Kernel) computes() string {
+	in := make([]Operand, 0, len(h.Bufs))
+	for i, b := range h.Bufs {
+		if i != h.Stores[0].Buf {
+			in = append(in, b.Operand)
+		}
+	}
+	return fmt.Sprint(h.Space, h.Rows, h.Capacity, h.Part, h.Apart, h.Of, h.Nodes, in)
 }
