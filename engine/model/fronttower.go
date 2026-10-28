@@ -298,7 +298,8 @@ func towerFormat(l *layer, r jlm.Role) (jlm.Type, bool) {
 var towerProjRead = [...]jlm.Role{
 	jlm.RoleVPatchEmbd, jlm.RoleVPatchBias, jlm.RoleVClassEmbd, jlm.RoleVPosEmbd, jlm.RoleVPreNorm,
 	jlm.RoleVPreNormBias, jlm.RoleVPostNorm, jlm.RoleVPostNormBias, jlm.RoleVProj, jlm.RoleVProjBias,
-	jlm.RoleVProj2, jlm.RoleVProj2Bias, jlm.RoleVProjNorm, jlm.RoleVProjNormBias,
+	jlm.RoleVProj2, jlm.RoleVProj2Bias, jlm.RoleVProj3, jlm.RoleVProjNorm, jlm.RoleVProjNormBias, jlm.RoleVProjInNorm,
+	jlm.RoleVProjInNormBias, jlm.RoleVStdBias, jlm.RoleVStdScale,
 }
 
 // towerProj is the tower's projector as graphs of generic ops over the
@@ -330,13 +331,15 @@ func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
 	switch {
 	case t.projW.e == nil:
 		return p, UncoveredUnbound, fmt.Errorf("the tower holds no projector matrix")
-	case t.projW.kp != 0 || t.projW2.kp != 0:
+	case t.projW.kp != 0 || t.projW2.kp != 0 || t.projW3.kp != 0:
 		return p, UncoveredGeometry, fmt.Errorf("a projector matrix packed past its width")
 	case t.projReadsPastLastBlock():
 		return p, UncoveredUnbound, fmt.Errorf("the projector reads rows past its last block's")
 	}
 	E, S := c.NEmbd, max(c.Scale, 1)
-	p.pool = S > 1 && c.projK() == E
+	// A projector whose matrix reads one patch's width over merged rows
+	// pools them.
+	p.pool = S > 1 && t.projW.k == E
 	if len(t.projNorm) != 0 && !p.pool && !t.projNormOn() {
 		return p, UncoveredUnbound, fmt.Errorf("a projector norm before the patches merge")
 	}
@@ -344,8 +347,12 @@ func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
 	if t.projW2.e != nil {
 		inv[jlm.RoleVProj2] = graph.Shape{K: t.projW2.k, Rows: t.projW2.rows}
 	}
+	if t.projW3.e != nil {
+		inv[jlm.RoleVProj3] = graph.Shape{K: t.projW3.k, Rows: t.projW3.rows}
+	}
 	for _, v := range []towerVec{{jlm.RoleVProjBias, t.projB}, {jlm.RoleVProjNorm, t.projNorm},
-		{jlm.RoleVProjNormBias, t.projNormB}, {jlm.RoleVProj2Bias, t.projB2}} {
+		{jlm.RoleVProjNormBias, t.projNormB}, {jlm.RoleVProj2Bias, t.projB2}, {jlm.RoleVProjInNorm, t.projInNorm},
+		{jlm.RoleVProjInNormBias, t.projInNormB}, {jlm.RoleVStdBias, t.stdBias()}, {jlm.RoleVStdScale, t.stdScale()}} {
 		if len(v.V) != 0 {
 			inv[v.Role] = graph.Shape{K: len(v.V)}
 		}
@@ -361,9 +368,25 @@ func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
 		}
 		return nil
 	}
+	// A LayerNorm over each patch before the patches merge, where the
+	// container holds one: in the regroup's graph, or the projector's where
+	// nothing regroups.
+	inNorm := has(jlm.RoleVProjInNorm) && c.fault != faultNoPatchNorm
+	switch {
+	case inNorm && !has(jlm.RoleVProjInNormBias):
+		return p, UncoveredUnbound, fmt.Errorf("a norm over each patch before the merge with no bias, its kind unstated")
+	case inNorm && c.WinPattern > 0:
+		return p, UncoveredUnbound, fmt.Errorf("a norm over each patch before a merge of window-ordered rows")
+	}
+	patchNorm := func(b *graph.Builder, x graph.ValueID) graph.ValueID {
+		return b.LayerNorm(x, jlm.RoleVProjInNorm, c.projInEps(), jlm.RoleVProjInNormBias)
+	}
 	if S > 1 {
 		b := graph.NewBlock(-1)
 		x := b.In("patches", E)
+		if inNorm {
+			x = patchNorm(b, x)
+		}
 		b.Out(b.Emit(graph.OpTakeRows, []graph.ValueID{x}, []graph.Result{{Name: "grouped", Width: E}}, nil, graph.Attrs{}, nil, nil)[0])
 		if err := graph.Verify(b.G, f); err != nil {
 			return p, UncoveredUnverified, fmt.Errorf("the projector's regroup does not verify: %w", err)
@@ -373,6 +396,9 @@ func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
 	build := func(unwindow bool) (*graph.Graph, Uncovered, error) {
 		b := graph.NewBlock(-1)
 		x := b.In("merged", E*S*S)
+		if inNorm && S == 1 {
+			x = patchNorm(b, x)
+		}
 		switch {
 		case p.pool:
 			acc := sliceRow(b, "slot", x, 0, E)
@@ -382,15 +408,39 @@ func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
 				}
 				acc = mapRow(b, "pooled", graph.Attrs{Fn: graph.MapMul, Const: 1 / float64(S*S)}, nil, E, acc)
 			}
-			if has(jlm.RoleVProjNorm) {
+			if sc := t.poolScale(); sc != 1 {
+				acc = mapRow(b, "pooled.scaled", graph.Attrs{Fn: graph.MapMul, Const: float64(sc)}, nil, E, acc)
+			}
+			// The standardisation, (x - bias) * scale, where the container
+			// holds it.
+			switch {
+			case has(jlm.RoleVStdBias) != has(jlm.RoleVStdScale):
+				return nil, UncoveredUnbound, fmt.Errorf("a standardisation of the pooled rows with one of its two vectors")
+			case has(jlm.RoleVStdBias):
+				acc = mapRow(b, "std.centred", graph.Attrs{Fn: graph.MapSub}, []graph.Binding{{Role: jlm.RoleVStdBias, K: E}}, E, acc)
+				acc = mapRow(b, "std.scaled", graph.Attrs{Fn: graph.MapMul}, []graph.Binding{{Role: jlm.RoleVStdScale, K: E}}, E, acc)
+			}
+			switch {
+			case has(jlm.RoleVProjNorm):
 				acc = b.Norm(acc, jlm.RoleVProjNorm, c.projEps())
+			case t.poolNormUnweighted():
+				acc = b.Emit(graph.OpHeadNorm, []graph.ValueID{acc}, []graph.Result{{Name: "pooled.normed", Width: E}}, nil,
+					graph.Attrs{Eps: c.Eps, HeadDim: E}, nil, nil)[0]
 			}
 			x = acc
 		case has(jlm.RoleVProjNorm) && t.projNormOn():
 			x = b.LayerNorm(x, jlm.RoleVProjNorm, c.projEps(), stored(jlm.RoleVProjNormBias)...)
 		}
+		// The matrices in turn, the activation between each two.
 		h := b.MatVec(x, jlm.RoleVProj, t.projW.rows, stored(jlm.RoleVProjBias)...)
-		if t.projW2.e != nil {
+		for _, m := range []struct {
+			w    *tensor
+			r    jlm.Role
+			bias []jlm.Role
+		}{{&t.projW2, jlm.RoleVProj2, stored(jlm.RoleVProj2Bias)}, {&t.projW3, jlm.RoleVProj3, nil}} {
+			if m.w.e == nil {
+				break
+			}
 			var e jlm.ExprBuilder
 			if t.projAct() == nn.ActGELUErf {
 				e.GELUErf(jlm.Operand(0))
@@ -398,11 +448,11 @@ func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
 				e.GELUTanh(jlm.Operand(0))
 			}
 			act := jlm.Expr{Terms: e.T}
-			a, err := b.Stated("proj.act", &act, []graph.ValueID{h}, t.projW.rows, f)
+			a, err := b.Stated("proj.act", &act, []graph.ValueID{h}, b.G.Values[h].Width, f)
 			if err != nil {
 				return nil, UncoveredAct, fmt.Errorf("the projector's activation: %w", err)
 			}
-			h = b.MatVec(a, jlm.RoleVProj2, t.projW2.rows, stored(jlm.RoleVProj2Bias)...)
+			h = b.MatVec(a, m.r, m.w.rows, m.bias...)
 		}
 		if unwindow {
 			h = b.Emit(graph.OpTakeRows, []graph.ValueID{h}, []graph.Result{{Name: "unwindowed", Width: c.ProjDim}}, nil, graph.Attrs{}, nil, nil)[0]
@@ -426,6 +476,34 @@ func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
 	return p, Covered, nil
 }
 
+// posResample is the tower's position-table resample as OpPosResample
+// states it: its taps (posFilter) and its coordinate chain (axisChain),
+// aligned corners or half-pixel centres; an error for another chain, and
+// for the bicubic taps, whose sixteen table rows' indices the CPU's form
+// does not fit in its general registers.
+func (c TowerConfig) posResample() (graph.Attrs, error) {
+	a := graph.Attrs{Span: c.PosSide}
+	f := c.posFilter()
+	switch f {
+	case nn.AxisBilinear:
+		a.Filter = graph.FilterBilinear
+	case nn.AxisLinear:
+		a.Filter = graph.FilterLinear
+	default:
+		return a, fmt.Errorf("a position table resampled bicubic")
+	}
+	side := float32(c.PosSide)
+	switch c.axisChain(2, f) {
+	case [9]float32{0, side - 1, 1, 1, 0, 0, 1, 0, 1}:
+		a.Chain = graph.ChainAligned
+	case [9]float32{0.5, side / 2, 1, 1, -0.5, 0, 1, 0, 1}:
+		a.Chain = graph.ChainHalfPixel
+	default:
+		return a, fmt.Errorf("a position table resampled by a coordinate chain no op states")
+	}
+	return a, nil
+}
+
 // sliceRow is width elements of each row of v from off.
 func sliceRow(b *graph.Builder, name string, v graph.ValueID, off, width int) graph.ValueID {
 	return b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: name, Width: width}}, nil,
@@ -444,9 +522,7 @@ func (m *Model) towerEntryOf() (*graph.Graph, Uncovered, error) {
 	t := m.tower
 	c := t.Cfg
 	switch {
-	case c.CLSLast || t.opt.towerCLSLast:
-		return nil, UncoveredEmbedRows, fmt.Errorf("a class row after the patches")
-	case t.posW != nil && (c.PosSide > 0 || c.PosAxis > 0 || t.posPerGrid()):
+	case t.posW != nil && t.posPerGrid():
 		return nil, UncoveredEmbedRows, fmt.Errorf("a position table read past each row's own row")
 	case t.embdNorm != nil || t.mn != nil:
 		return nil, UncoveredEmbedRows, fmt.Errorf("a patch embedding past one matrix over the patch")
@@ -468,6 +544,13 @@ func (m *Model) towerEntryOf() (*graph.Graph, Uncovered, error) {
 	if t.posW != nil {
 		inv[jlm.RoleVPosEmbd] = graph.Shape{K: E, Rows: len(t.posW) / E}
 	}
+	var resample graph.Attrs
+	if t.posW != nil && c.PosSide > 0 {
+		var err error
+		if resample, err = c.posResample(); err != nil {
+			return nil, UncoveredEmbedRows, err
+		}
+	}
 	f := graph.Facts{Inventory: inv}
 	has := func(r jlm.Role) bool {
 		_, ok := inv[r]
@@ -479,8 +562,9 @@ func (m *Model) towerEntryOf() (*graph.Graph, Uncovered, error) {
 		}
 		return nil
 	}
+	clsLast := c.CLSLast || t.opt.towerCLSLast
 	lead := 0
-	if c.CLS {
+	if c.CLS && !clsLast {
 		lead = 1
 	}
 	b := graph.NewBlock(-1)
@@ -488,13 +572,24 @@ func (m *Model) towerEntryOf() (*graph.Graph, Uncovered, error) {
 	x := b.Emit(graph.OpPatchify, []graph.ValueID{px}, []graph.Result{{Name: "patches", Width: kw}}, nil,
 		graph.Attrs{Span: P, Offset: lead}, nil, nil)[0]
 	x = b.MatVec(x, jlm.RoleVPatchEmbd, E, stored(jlm.RoleVPatchBias)...)
-	if c.CLS {
+	switch {
+	case c.CLS && clsLast:
+		x = b.Emit(graph.OpTailRow, []graph.ValueID{x}, []graph.Result{{Name: "class", Width: E}},
+			[]graph.Binding{{Role: jlm.RoleVClassEmbd, K: E}}, graph.Attrs{}, nil, nil)[0]
+	case c.CLS:
 		x = b.Emit(graph.OpLeadRow, []graph.ValueID{x}, []graph.Result{{Name: "class", Width: E}},
 			[]graph.Binding{{Role: jlm.RoleVClassEmbd, K: E}}, graph.Attrs{Offset: 1}, nil, nil)[0]
 	}
-	if t.posW != nil {
-		pos := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: E}},
-			[]graph.Binding{{Role: jlm.RoleVPosEmbd, K: E, Rows: len(t.posW) / E}}, graph.Attrs{Positional: true}, nil, nil)[0]
+	tab := []graph.Binding{{Role: jlm.RoleVPosEmbd, K: E, Rows: len(t.posW) / E}}
+	switch {
+	case t.posW != nil && c.PosSide > 0 && c.fault != faultNoPosLerp:
+		resample.Offset = lead
+		x = b.Add(x, b.Emit(graph.OpPosResample, nil, []graph.Result{{Name: "pos", Width: E}}, tab, resample, nil, nil)[0])
+	case t.posW != nil && c.PosAxis > 0:
+		x = b.Add(x, b.Emit(graph.OpPosAxes, nil, []graph.Result{{Name: "pos", Width: E}}, tab,
+			graph.Attrs{Span: c.PosAxis, Offset: lead}, nil, nil)[0])
+	case t.posW != nil:
+		pos := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: E}}, tab, graph.Attrs{Positional: true}, nil, nil)[0]
 		x = b.Add(x, pos)
 	}
 	if has(jlm.RoleVPreNorm) {

@@ -2091,6 +2091,8 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &s.cpu.proj.posW
 		case s.vis != nil && r == jlm.RoleVProj2:
 			return &s.vis.t.projW2
+		case s.vis != nil && r == jlm.RoleVProj3:
+			return &s.vis.t.projW3
 		case r == jlm.RoleEmbdDense1:
 			return &m.dense1
 		case r == jlm.RoleEmbdDense2:
@@ -2240,6 +2242,14 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 			return t.projNorm
 		case jlm.RoleVProjNormBias:
 			return t.projNormB
+		case jlm.RoleVProjInNorm:
+			return t.projInNorm
+		case jlm.RoleVProjInNormBias:
+			return t.projInNormB
+		case jlm.RoleVStdBias:
+			return t.stdBias()
+		case jlm.RoleVStdScale:
+			return t.stdScale()
 		}
 		return nil
 	}

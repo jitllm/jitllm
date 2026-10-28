@@ -153,8 +153,8 @@ const (
 	// faultKimiAxes turns MoonViT's even pairs by the row and odd by the
 	// column.
 	faultKimiAxes
-	// faultKimiNoPreNorm skips Kimi-VL's projector LayerNorm over each patch.
-	faultKimiNoPreNorm
+	// faultNoPatchNorm skips Kimi-VL's projector LayerNorm over each patch.
+	faultNoPatchNorm
 	// faultHyNoNewline puts each merged row's last unit where HunyuanVL's
 	// newline row goes.
 	faultHyNoNewline
@@ -233,10 +233,14 @@ func (c TowerConfig) projK() int {
 	return c.NEmbd * c.Scale * c.Scale
 }
 
-// projEps is the projector norm's epsilon. InternVL's is torch's LayerNorm
+// projInEps is the epsilon of a norm over each patch before the patches
+// merge: Kimi-VL's nn.LayerNorm, constructed without one. projEps is the
+// projector norm's epsilon. InternVL's is torch's LayerNorm
 // default, 1e-5, not the tower's 1e-6: the reference constructs it without
 // one, and llama.cpp hardcodes the same; LFM2-VL's nn.LayerNorm is the same
 // default. gemma3's soft_emb_norm takes the tower's.
+func (c TowerConfig) projInEps() float64 { return 1e-5 }
+
 func (c TowerConfig) projEps() float64 {
 	if c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 {
 		return 1e-5
@@ -314,6 +318,9 @@ type Tower struct {
 	// projNorm is the norm a projector applies before its first matrix:
 	// gemma3's RMSNorm (no bias) and InternVL's LayerNorm (with projNormB).
 	projNorm, projNormB []float32
+	// projInNorm and projInNormB are a LayerNorm over each patch before the
+	// patches merge (Kimi-VL's), nil where the projector has none.
+	projInNorm, projInNormB []float32
 	// rs is MiniCPM-V's resampler, in place of projW, or nil.
 	rs *resampler
 	// mergeW is Mistral 3's patch merger, NEmbd*Scale^2 -> NEmbd, between the
@@ -1196,6 +1203,8 @@ func (s *State) Encode(px []float32) ([]float32, error) {
 		return nil, fmt.Errorf("model: Encode on a State that is not the vision segment's (State.Vision)")
 	}
 	defer s.m.enterPager()()
+	// An encode is a burst of regions: its workers park at its end.
+	defer s.jit.Rest()
 	return s.encode(px)
 }
 
@@ -1596,6 +1605,11 @@ func (s *State) encodeFinish() ([]float32, error) {
 	if v.beforeProj != nil {
 		v.beforeProj(patches)
 	}
+	// A projector with rows of its own -- a learned query set, a merger
+	// with its own rows -- is declined by name (towerProjOf), counted here.
+	if t.rs != nil || t.glm != nil || t.hy != nil {
+		s.cpuProjDeclined()
+	}
 	if t.rs != nil {
 		if err := s.resample(v.out, patches, p.gh, p.gw); err != nil {
 			return nil, err
@@ -1801,8 +1815,8 @@ func (s *State) project(patches []float32) ([]float32, error) {
 	// is a grouping that needs no copy at all.
 	src := patches
 	// Kimi-VL's LayerNorm over each patch, before the shuffle.
-	if c.Kind == jlm.ProjKimiVL && c.fault != faultKimiNoPreNorm {
-		s.normRows(patches, patches, t.projNorm, t.projNormB, c.NEmbd, gh*gw, true, 1e-5,
+	if t.projInNorm != nil && c.fault != faultNoPatchNorm {
+		s.normRows(patches, patches, t.projInNorm, t.projInNormB, c.NEmbd, gh*gw, true, c.projInEps(),
 			s.rowChunk(gh*gw, c.NEmbd))
 	}
 	switch {

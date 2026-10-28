@@ -10336,9 +10336,10 @@ row where the composer's reads two.
   (DIV now, RAX and RDX kept below the red zone), a remainder by a
   constant with no third register, and a float converted from a general
   register written to lane 0 alone, so a row's index compared in every
-  lane masked the others with garbage. A select of floats whose mask is a
-  general register's integer compare still reads a general register as a
-  vector one; the row masks compare the row as a float. A picture of more
+  lane masked the others with garbage. The row masks compare the row's
+  index as an integer: the Splats pass broadcasts a general register's
+  compare to the vectors a select reads it in, and the patch and class-row
+  gates read the unmasked row (0.25 for -0.5) without it. A picture of more
   rows than a CPU call now runs the codes through the last history write
   once over every row, the values the rest read kept per call, so no code
   runs twice (no first pass: 0.50 to 1.08 from the clean encode).
@@ -10567,3 +10568,32 @@ row where the composer's reads two.
   (160 runs, no graph: UncoveredNonCausal), logits 2.84e-5 (bound 3e-4),
   its head's rows made causal 0.92. The type rows, the scorer and the
   cards for these blocks stay main's.
+- A warm encode allocated on the V100 host (TestWarmImageEncodeDoesNotAllocate:
+  pixtral 22 to 62, phi4 14 to 58, by run) and never on the Xeon. A
+  MemProfileRate=64 profile put the 112-byte objects in sched.Pool.await:
+  the runtime's waiter records (sudogs), two a parked worker for a select
+  over quit and its start channel. The runtime empties its shared cache of
+  them at every collection and a P's at a GOMAXPROCS change (AllocsPerRun
+  sets one), so the first parks after either allocated them again, one per
+  worker of 27. A worker now parks on its start channel alone (Close sends
+  on it), and an encode ends with Pool.Rest, which parks every worker at
+  once, so none parks later inside the next measured call: pixtral, phi4
+  and SmolVLM read 0 at count 3, an allocation planted in Encode reads 1.
+  A picture's entry and projector on a card (tier.ComposedRows) now form
+  where the tower's blocks are placed (PrepRows, at the offer), not at the
+  first encode: TestComposedTowerOnDevice holds Stats.FormedPart(ComposedRows)
+  to 0, and reads 3 with the prewarm taken out. The front end states four
+  more of the families' rows: Kimi-VL's projector (a LayerNorm over each
+  patch before the regroup, where the container holds RoleVProjInNorm;
+  1.1e-9 from main's, the norm dropped 0.195, the slots swapped 0.906),
+  Gemma 4's (the pool's scale, the standardisation and an unweighted
+  RMSNorm; a pool decided by a matrix reading one patch's width; a grid its
+  scale does not divide keeps each axis's whole groups), Llama 4's (a
+  third matrix after an activation) and its class row after the patches
+  (OpTailRow, 1.4e-13), Gemma 4's table of two axes (OpPosAxes), and the
+  position table resampled to the grid, bilinear or linear (OpPosResample:
+  Qwen3-VL, Qwen3.5, HunyuanVL). Its taps' indices are now integer ratios
+  in general registers and its sum separable, which the CPU's registers
+  needed; the bicubic's sixteen indices still do not fit them, so Kimi-VL's
+  and GLM-4.1V's entries are declined by name. arm64 divides by a register
+  (UDIV), which the patch gather needed to form there.

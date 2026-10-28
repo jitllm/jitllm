@@ -1848,6 +1848,8 @@ func (s *State) offerRange(lo, hi int) {
 	if adm == nil {
 		adm = ld
 	}
+	// A picture's entry and projector form where the tower's blocks land.
+	defer s.prepPicRows()
 	// Each placed block gives its host pages back and the next block's land
 	// in the same frames; once the range is offered nothing will take the rest,
 	// so they go back to the OS (jlm.File.TrimFree).

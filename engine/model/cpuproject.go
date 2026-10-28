@@ -96,7 +96,7 @@ func (s *State) picRowsParts() *picRows {
 	for _, m := range []struct {
 		r jlm.Role
 		t *tensor
-	}{{jlm.RoleVPatchEmbd, &t.patchW}, {jlm.RoleVProj, &t.projW}, {jlm.RoleVProj2, &t.projW2}} {
+	}{{jlm.RoleVPatchEmbd, &t.patchW}, {jlm.RoleVProj, &t.projW}, {jlm.RoleVProj2, &t.projW2}, {jlm.RoleVProj3, &t.projW3}} {
 		if m.t.e != nil {
 			w[m.r] = wt(*m.t)
 		}
@@ -107,7 +107,9 @@ func (s *State) picRowsParts() *picRows {
 	}
 	for _, x := range []towerVec{{jlm.RoleVPatchBias, t.patchB}, {jlm.RoleVClassEmbd, t.clsW}, {jlm.RoleVPreNorm, t.preLnW},
 		{jlm.RoleVPreNormBias, t.preLnB}, {jlm.RoleVProjBias, t.projB}, {jlm.RoleVProj2Bias, t.projB2},
-		{jlm.RoleVProjNorm, t.projNorm}, {jlm.RoleVProjNormBias, t.projNormB}} {
+		{jlm.RoleVProjNorm, t.projNorm}, {jlm.RoleVProjNormBias, t.projNormB},
+		{jlm.RoleVProjInNorm, t.projInNorm}, {jlm.RoleVProjInNormBias, t.projInNormB},
+		{jlm.RoleVStdBias, t.stdBias()}, {jlm.RoleVStdScale, t.stdScale()}} {
 		if len(x.V) != 0 {
 			v[x.Role] = x.V
 		}
@@ -120,14 +122,20 @@ func (s *State) picRowsParts() *picRows {
 	}
 	fg := s.m.frontGraphs()
 	tp, why := fg.towerProj, fg.towerProjWhy
-	if c.fault == towerFaultPoolCorner {
-		tp, why, _ = s.m.towerProjOf(true)
+	// A tower under a fault states its graphs again: a fault is a rewrite
+	// of them.
+	if c.fault != towerFaultNone {
+		tp, why, _ = s.m.towerProjOf(c.fault == towerFaultPoolCorner)
 	}
 	S := max(c.Scale, 1)
 	patches := c.MaxSeq()
 	merged := max(c.MaxTokens(), (patches+S*S-1)/(S*S))
-	if fg.towerEntryWhy == Covered {
-		pr.entry = part(fg.towerEntry, patches)
+	eg, ewhy := fg.towerEntry, fg.towerEntryWhy
+	if c.fault != towerFaultNone {
+		eg, ewhy, _ = s.m.towerEntryOf()
+	}
+	if ewhy == Covered {
+		pr.entry = part(eg, patches)
 	}
 	if why == Covered {
 		pr.group, pr.proj, pr.win = part(tp.group, patches), part(tp.proj, merged), part(tp.win, merged)
@@ -145,6 +153,28 @@ func (s *State) cardRows(li int) nn.PictureRowsDevice {
 	}
 	rd, _ := s.ld.(nn.PictureRowsDevice)
 	return rd
+}
+
+// prepPicRows forms a vision State's entry and projector on the card
+// holding its tower's first or last block, at the placement that put it
+// there.
+func (s *State) prepPicRows() {
+	if s.vis == nil {
+		return
+	}
+	rd := s.cardRows(s.lo)
+	if rd == nil {
+		rd = s.cardRows(s.hi - 1)
+	}
+	if rd == nil {
+		return
+	}
+	pr := s.picRowsParts()
+	for _, p := range [...]*nn.RowsPart{pr.entry, pr.group, pr.proj, pr.win} {
+		if p != nil {
+			rd.PrepRows(p)
+		}
+	}
 }
 
 // CPUEntrySteps is CPUProjectorSteps for the rows entering the tower.
@@ -264,8 +294,9 @@ func (s *State) entryWords(n, first int) {
 	np := gh * gw
 	st.pos[0] = uint32(n)
 	for r := range n {
+		// A class row after the patches reads its own row.
 		at := r
-		if r >= first {
+		if r >= first && r-first < np {
 			p := s.patchAt(r - first)
 			if s.cpu.fault == cpuFaultEntryRows {
 				p = (p + 1) % np
@@ -341,7 +372,9 @@ func (s *State) cpuProject(patches []float32) ([]float32, jit.Decline) {
 	c := v.t.Cfg
 	gh, gw := s.patchGrid()
 	S := max(c.Scale, 1)
-	np, nt := gh*gw, gh*gw/(S*S)
+	// The merged grid is each axis's whole groups: a pool over a grid its
+	// scale does not divide drops the remainder, as main's does.
+	np, nt := gh*gw, (gh/S)*(gw/S)
 	// A picture in the window order holds each group in consecutive rows.
 	windowed := v.ord != nil
 	if out, ok := s.cardProject(patches, np, nt, windowed); ok {
@@ -367,7 +400,7 @@ func (s *State) cpuProject(patches []float32) ([]float32, jit.Decline) {
 			why = s.cpuWeights(f, -1, nil)
 		}
 	}
-	if why == jit.DeclineServes && (nt*S*S != np || group != nil && np > group.rows || nt > proj.rows) {
+	if why == jit.DeclineServes && (windowed && nt*S*S != np || group != nil && np > group.rows || nt > proj.rows) {
 		why = jit.DeclineNoRoom
 	}
 	if why != jit.DeclineServes {
@@ -388,6 +421,18 @@ func (s *State) cpuProject(patches []float32) ([]float32, jit.Decline) {
 	return out, jit.DeclineServes
 }
 
+// cpuProjDeclined counts a picture whose projector the composed CPU path
+// declines before cpuProject is asked: the reason its forms hold.
+func (s *State) cpuProjDeclined() {
+	if !s.m.opt.composedCPU || s.cpu.args == nil {
+		return
+	}
+	_, why := s.cpu.proj.proj.formOf()
+	if why != jit.DeclineServes {
+		s.cpu.proj.declined[why]++
+	}
+}
+
 // projWords writes the projector's request: the grid's width, then each
 // merged row's patches where the rows are in raster order (merged row g's
 // slot dy*S+dx the patch at (gy*S+dy, gx*S+dx)), or each raster merged
@@ -398,7 +443,7 @@ func (s *State) projWords(gh, gw int, windowed bool) {
 	v := s.vis
 	c := v.t.Cfg
 	S := max(c.Scale, 1)
-	nt := gh * gw / (S * S)
+	nt := (gh / S) * (gw / S)
 	st.req[jit.RequestGrid] = uint32(gw)
 	if S == 1 {
 		return
@@ -430,6 +475,9 @@ func (s *State) projWords(gh, gw int, windowed bool) {
 			}
 		}
 	}
+	// The patches no whole group holds are regrouped from patch 0 and never
+	// read.
+	clear(st.req[jit.RequestRows+nt*S*S : jit.RequestRows+gh*gw])
 }
 
 // cardProject is cpuProject on the card holding the tower's last block,
@@ -450,7 +498,7 @@ func (s *State) cardProject(patches []float32, np, nt int, windowed bool) ([]flo
 	if S == 1 {
 		group = nil
 	}
-	if proj == nil || S > 1 && !windowed && group == nil || nt*S*S != np || nt > proj.Rows || np > c.MaxSeq() {
+	if proj == nil || S > 1 && !windowed && group == nil || windowed && nt*S*S != np || nt > proj.Rows || np > c.MaxSeq() {
 		return nil, false
 	}
 	gh, gw := s.patchGrid()

@@ -55,7 +55,7 @@ func kimiTowerGate(t *testing.T, tw *Tower, g *qvlGolden, clean float64) {
 		{"the row on the even pairs", nil, faultKimiAxes, false},
 		{"the table resampled bilinear", nil, faultBilinearTable, false},
 		{"the table read unresampled", nil, faultNoPosLerp, false},
-		{"no LayerNorm over each patch", nil, faultKimiNoPreNorm, false},
+		{"no LayerNorm over each patch", nil, faultNoPatchNorm, false},
 		{"the merge group transposed", nil, towerFaultShuffleSwap, false},
 	} {
 		// The pairing is the segment's (tw.cfg), as the host and the device
@@ -238,7 +238,7 @@ func TestKimiVLRealTowerMatchesMoonshot(t *testing.T) {
 	if math.IsNaN(a8) || a8 > kimiRealBound {
 		t.Fatalf("the real tower reads %.3e against Moonshot's (bound %.0e)", a8, kimiRealBound)
 	}
-	tw.Cfg.fault = faultKimiNoPreNorm
+	tw.Cfg.fault = faultNoPatchNorm
 	bad, _ := nmse32(g.Image.EmbdA8, encode(nil))
 	tw.Cfg.fault = towerFaultNone
 	t.Logf("no per-patch LayerNorm (the violation): %.3e", bad)

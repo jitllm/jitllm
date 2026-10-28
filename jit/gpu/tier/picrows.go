@@ -66,6 +66,58 @@ func (s *gpuSession) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, ou
 	return s.g.runRows(s.sid, p, live, req, pos, in, out)
 }
 
+// PrepRows forms p on the card holding the highest block, its tensors and
+// a call's buffers held: at a placement, so no picture forms it.
+func (g *GPU) PrepRows(p *nn.RowsPart) bool {
+	return g.prepRows(0, p)
+}
+
+// prepRows is PrepRows in session sid's view of the card.
+func (g *GPU) prepRows(sid uint64, p *nn.RowsPart) bool {
+	g.mu.Lock()
+	d := g.tail()
+	g.mu.Unlock()
+	if d == nil {
+		return false
+	}
+	v := d.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	return v.PrepRows(p)
+}
+
+// PrepRows is GPU.PrepRows under this session's device locks.
+func (s *gpuSession) PrepRows(p *nn.RowsPart) bool {
+	defer s.leave(s.enter())
+	return s.g.prepRows(s.sid, p)
+}
+
+// PrepRows is GPU.PrepRows on this card.
+func (g *devTier) PrepRows(p *nn.RowsPart) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.Composed&ComposedRows == 0 {
+		return false
+	}
+	defer g.scratchWin().close()
+	was := g.prewarming
+	g.prewarming = true
+	defer func() { g.prewarming = was }()
+	if _, err := g.servedRows(p); err != nil {
+		g.LastErr = "the composed picture rows: " + err.Error()
+		return false
+	}
+	gr := p.Graph
+	inW, outW := gr.Values[gr.In[0]].Width, gr.Values[gr.Out[0]].Width
+	if err := g.rowsBufs(4*p.Rows*inW, 4*p.Rows*outW, 4*(jit.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
+		g.LastErr = "the composed picture rows: " + err.Error()
+		return false
+	}
+	return true
+}
+
 // RunRows is GPU.RunRows on this card.
 func (g *devTier) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, out []float32) bool {
 	g.mu.Lock()
@@ -167,6 +219,11 @@ func (g *devTier) rowsBufs(in, out, req, pos int) error {
 // servedRows is p's form on the card, its weights and vectors held.
 func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 	rs := &g.rows
+	sk := servedKey{kind: partRows, graph: p.Graph, rows: p.Rows}
+	if sv := g.served[sk]; sv != nil && rs.req != nil {
+		sv.sl.tables["request"], sv.sl.tables["rope.pos"] = rs.req, rs.pos
+		return sv, nil
+	}
 	formats := map[jlm.Role]jlm.Type{}
 	weights := map[jlm.Role]*resident{}
 	vectors := map[jlm.Role]backend.Buf{}
@@ -195,7 +252,6 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 	if err := g.rowsBufs(4, 4, 4*(jit.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
 		return nil, err
 	}
-	sk := servedKey{kind: partRows, graph: p.Graph, rows: p.Rows}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		return composedPart{kind: partRows, graph: p.Graph, formats: formats, weights: weights, vectors: vectors, apart: true,
 			tables: map[string]backend.Buf{"request": rs.req, "rope.pos": rs.pos}}, nil

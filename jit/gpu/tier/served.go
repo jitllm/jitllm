@@ -866,6 +866,18 @@ func (s Stats) ServedPart(k Parts) (served, declined, unasked int) {
 	return served, declined, unasked
 }
 
+// FormedPart is how many of the parts of k formed at a step rather than
+// at a placement (Stats.FormedAtStepParts).
+func (s Stats) FormedPart(k Parts) int {
+	n := 0
+	for i := range s.FormedAtStepParts {
+		if k&(1<<i) != 0 {
+			n += s.FormedAtStepParts[i]
+		}
+	}
+	return n
+}
+
 // AttendPart is how many launches of the parts of k ran an attention formed
 // on the device's matrix unit (Stats.AttendLaunches).
 func (s Stats) AttendPart(k Parts) int {
@@ -983,6 +995,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	if !g.prewarming {
 		g.FormedAtStep++
+		g.FormedAtStepParts[sk.kind]++
 		g.LastErr = fmt.Sprintf("the composed %s formed at %d rows outside a placement", partNames[sk.kind], sk.rows)
 	}
 	if g.composer == nil {

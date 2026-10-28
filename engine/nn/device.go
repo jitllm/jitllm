@@ -75,8 +75,12 @@ type RowsPart struct {
 // PictureRowsDevice runs a RowsPart over live rows: in the graph's input
 // rows, out its output's, req the request's words and pos the positions'
 // (each nil where the graph reads none); false where the device does not.
+// PrepRows forms p and holds its tensors and a call's buffers, at
+// placement, so no picture forms it; false where the device does not
+// serve it.
 type PictureRowsDevice interface {
 	RunRows(p *RowsPart, live int, req, pos []uint32, in, out []float32) bool
+	PrepRows(p *RowsPart) bool
 }
 
 // Packed is a weight already in the device layout: three spans of a jlm

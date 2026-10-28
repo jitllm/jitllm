@@ -249,7 +249,10 @@ func TestComposedTowerOnCPU(t *testing.T) {
 // that the list still names.
 func TestTowerCensus(t *testing.T) {
 	declines := towerDeclines()
-	for _, f := range towerFamilies() {
+	// HunyuanVL's merger returns before the projector the others share: it
+	// is counted here, its projector declined by name.
+	hy := towerFamily{"hunyuanvl", func(t *testing.T) (*Model, *Tower) { m, _ := openQVL(t, "synth-hunyuanvl"); return m, m.Tower() }}
+	for _, f := range append(towerFamilies(), hy) {
 		t.Run(f.name, func(t *testing.T) {
 			m, tw := f.open(t)
 			defer m.Close()
@@ -286,17 +289,15 @@ func TestTowerCensus(t *testing.T) {
 // picture's rows, which only shrinks.
 func towerDeclines() map[string][2]bool {
 	return map[string][2]bool{
-		"qwen3vl":  {true, true},
-		"qwen35vl": {true, false},
-		"glm4v":    {true, true},
-		"kimivl":   {true, true},
-		"minicpmv": {false, true},
-		"pixtral":  {false, true},
-		"llama4":   {true, true},
-		"gemma4":   {true, true},
-		"phi4":     {true, false},
-		"gemma3n":  {true, true},
-		"lfm2":     {true, false},
+		"qwen3vl":   {false, true},
+		"glm4v":     {true, true},
+		"kimivl":    {true, false},
+		"hunyuanvl": {false, true},
+		"minicpmv":  {false, true},
+		"pixtral":   {false, true},
+		"phi4":      {true, false},
+		"gemma3n":   {true, true},
+		"lfm2":      {true, false},
 	}
 }
 
@@ -360,8 +361,11 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			}
 			ce, cp, miss := all.CardRowsSteps()
 			rs, rd, _ := g.Stats().ServedPart(tier.ComposedRows)
-			t.Logf("%s: the card served the entry of %d pictures and the projector of %d, %d parts missed; %d picture-row parts served, %d declined (%s)",
-				spec, ce, cp, miss, rs, rd, g.Err())
+			t.Logf("%s: the card served the entry of %d pictures and the projector of %d, %d parts missed; %d picture-row parts served, %d declined; %d picture-row parts and %d parts in all formed at the encode (%s)",
+				spec, ce, cp, miss, rs, rd, st.FormedPart(tier.ComposedRows), st.FormedAtStep, g.Err())
+			if n := st.FormedPart(tier.ComposedRows); n != 0 {
+				t.Fatalf("%s: %d picture-row parts formed at the encode, not at the placement (%s)", spec, n, g.Err())
+			}
 			_, ewhy, _ := m.towerEntryOf()
 			_, pwhy, _ := m.towerProjOf(false)
 			if ce != statedRows(ewhy) && !bucketDeclined(c, ce, 1) || cp != statedRows(pwhy) || miss != 0 {
@@ -392,7 +396,7 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			case cp == 0:
 			case c.WinPattern > 0:
 				vio("the merged rows left in the window order", func(*State) { qwenNoUnwindow = true }, func() { qwenNoUnwindow = false })
-			case c.Scale > 1 && c.projK() == c.NEmbd:
+			case c.Scale > 1 && tw.projW.k == c.NEmbd:
 				tw.Cfg.fault = towerFaultPoolCorner
 				vio("the pool reads a group's first patch alone", func(*State) {}, func() { tw.Cfg.fault = towerFaultNone })
 			case c.Scale > 1:
@@ -615,7 +619,7 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 			case c.WinPattern > 0:
 				vio, qwenNoUnwindow = "the merged rows left in the window order", true
 				defer func() { qwenNoUnwindow = false }()
-			case c.Scale > 1 && c.projK() == c.NEmbd:
+			case c.Scale > 1 && tw.projW.k == c.NEmbd:
 				vio, tw.Cfg.fault = "the pool reads a group's first patch alone", towerFaultPoolCorner
 			case c.Scale > 1:
 				vio, tw.Cfg.fault = "the regroup's slots swapped", towerFaultShuffleSwap
@@ -629,6 +633,16 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 			t.Logf("violation (%s): NMSE %.3e", vio, nb)
 			if !(nb > 1e-4) {
 				t.Fatalf("the gate cannot see %s: NMSE %.3e", vio, nb)
+			}
+			if tw.projInNorm != nil {
+				tw.Cfg.fault = faultNoPatchNorm
+				bad := project(tw, true)
+				tw.Cfg.fault = towerFaultNone
+				nb, _ := nmseOf(bad, want)
+				t.Logf("violation (no norm over each patch before the merge): NMSE %.3e", nb)
+				if !(nb > 1e-4) {
+					t.Fatalf("the gate cannot see the norm before the merge dropped: NMSE %.3e", nb)
+				}
 			}
 		})
 	}

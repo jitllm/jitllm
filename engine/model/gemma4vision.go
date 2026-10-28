@@ -101,6 +101,34 @@ type gemma4Head struct {
 	ones []float32
 }
 
+// poolScale is what a pooled row is multiplied by: Gemma 4's sqrt(NEmbd),
+// 1 for every other pool.
+func (t *Tower) poolScale() float32 {
+	if t.g4 != nil {
+		return t.g4.scale
+	}
+	return 1
+}
+
+// poolNormUnweighted says the pooled rows take an RMSNorm with no weight.
+func (t *Tower) poolNormUnweighted() bool { return t.g4 != nil }
+
+// stdBias and stdScale are the pooled rows' standardisation, nil where
+// there is none.
+func (t *Tower) stdBias() []float32 {
+	if t.g4 != nil {
+		return t.g4.bias
+	}
+	return nil
+}
+
+func (t *Tower) stdScale() []float32 {
+	if t.g4 != nil {
+		return t.g4.std
+	}
+	return nil
+}
+
 // loadGemma4V reads the head: the projection and the standardisation.
 func (t *Tower) loadGemma4V(f *jlm.File, get func(jlm.Role, int32) (tensor, error),
 	vec func(jlm.Role, int32) ([]float32, error)) error {
@@ -191,9 +219,9 @@ const (
 	clampSlots
 )
 
-// gemma4NoPool takes each group's first patch, and gemma4RowFirst turns the
-// first half of a head by the patch's row: gates' violations.
-var gemma4NoPool, gemma4RowFirst bool
+// gemma4RowFirst turns the first half of a head by the patch's row: a
+// gate's violation.
+var gemma4RowFirst bool
 
 // projectGemma4V is the head over a picture's patch rows: the Scale x Scale
 // average pool over the grid, sqrt(NEmbd) and the standardisation, an
@@ -217,14 +245,14 @@ func (s *State) projectGemma4V(patches []float32) ([]float32, error) {
 			clear(dst)
 			for dy := 0; dy < sc; dy++ {
 				for dx := 0; dx < sc; dx++ {
-					if gemma4NoPool && (dy|dx) != 0 {
+					if c.fault == towerFaultPoolCorner && (dy|dx) != 0 {
 						continue
 					}
 					p := (gy*sc+dy)*gw + gx*sc + dx
 					nn.Axpy32JIT(dst, patches[p*E:(p+1)*E], 1)
 				}
 			}
-			if !gemma4NoPool {
+			if c.fault != towerFaultPoolCorner {
 				nn.Scale32JIT(dst, inv)
 			}
 			nn.Scale32JIT(dst, h.scale)

@@ -795,6 +795,8 @@ type Stats struct {
 	// FormedAtStep counts the parts formed at a step rather than at a
 	// placement or PrepHead: a form a step met first, built inside it.
 	FormedAtStep int
+	// FormedAtStepParts is FormedAtStep by part (FormedPart).
+	FormedAtStepParts [numParts]int
 	// BlockForms counts, by block, the times a device formed the block's
 	// served one-row part (servedFor): the composer's keyed form, compiled
 	// once per Key and shared by blocks of one structure, with the block's
@@ -1407,6 +1409,9 @@ func (s *Stats) add(o Stats) {
 		s.DeclineBuilt[i] += o.DeclineBuilt[i]
 	}
 	s.FormedAtStep += o.FormedAtStep
+	for i := range s.FormedAtStepParts {
+		s.FormedAtStepParts[i] += o.FormedAtStepParts[i]
+	}
 	if n := len(o.BlockForms); n > len(s.BlockForms) {
 		s.BlockForms = append(s.BlockForms, make([]int, n-len(s.BlockForms))...)
 	}

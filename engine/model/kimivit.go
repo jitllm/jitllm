@@ -61,15 +61,15 @@ func (t *Tower) loadKimiVL(vec func(jlm.Role, int32) ([]float32, error)) error {
 		return fmt.Errorf("model: OpenTower: a kimivl tower needs its final LayerNorm (v.post_ln)")
 	}
 	var err error
-	if t.projNorm, err = vec(jlm.RoleVProjInNorm, jlm.DenseBlock); err != nil {
+	if t.projInNorm, err = vec(jlm.RoleVProjInNorm, jlm.DenseBlock); err != nil {
 		return err
 	}
-	if t.projNormB, err = vec(jlm.RoleVProjInNormBias, jlm.DenseBlock); err != nil {
+	if t.projInNormB, err = vec(jlm.RoleVProjInNormBias, jlm.DenseBlock); err != nil {
 		return err
 	}
-	if len(t.projNorm) != c.NEmbd || len(t.projNormB) != c.NEmbd {
+	if len(t.projInNorm) != c.NEmbd || len(t.projInNormB) != c.NEmbd {
 		return fmt.Errorf("model: OpenTower: the projector's LayerNorm is %d and %d floats, want %d",
-			len(t.projNorm), len(t.projNormB), c.NEmbd)
+			len(t.projInNorm), len(t.projInNormB), c.NEmbd)
 	}
 	return nil
 }

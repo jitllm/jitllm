@@ -102,16 +102,7 @@ func (s *State) posLerp(x []float32, gh, gw, n int) {
 	v := s.vis
 	c := v.t.Cfg
 	E, side := c.NEmbd, c.PosSide
-	// Bilinear reads 2x2 table rows per patch, the bicubics 4x4. HunyuanVL's
-	// is bilinear without aligned corners.
-	f := nn.AxisBilinear
-	switch {
-	case c.fault == faultBilinearTable:
-	case c.Kind == jlm.ProjHunyuanVL:
-		f = nn.AxisLinear
-	case c.PosBicubic:
-		f = nn.AxisCubic
-	}
+	f := c.posFilter()
 	per := nn.AxisTapCount(f)
 	taps, np := per*per, gh*gw
 	if v.lerpAt != [3]int{gh, gw, int(f)} || c.fault == faultNoPosLerp {
@@ -155,6 +146,20 @@ func (s *State) posLerp(x []float32, gh, gw, n int) {
 	j.op, j.dst, j.src, j.b, j.w, j.idx, j.dim, j.side, j.gw = rowLerp, v.lerpTab, x, v.t.posW, v.lerpW, v.lerpI, E,
 		taps, np
 	s.rowRun(n, s.rowChunk(n, taps*E))
+}
+
+// posFilter is the taps of the position table's resample: bilinear reads
+// 2x2 table rows per patch, the bicubics 4x4. HunyuanVL's is bilinear
+// without aligned corners.
+func (c TowerConfig) posFilter() nn.AxisFilter {
+	switch {
+	case c.fault == faultBilinearTable:
+	case c.Kind == jlm.ProjHunyuanVL:
+		return nn.AxisLinear
+	case c.PosBicubic:
+		return nn.AxisCubic
+	}
+	return nn.AxisBilinear
 }
 
 // axisChain is this tower's position-table resample on one axis of size

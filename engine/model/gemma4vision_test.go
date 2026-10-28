@@ -191,8 +191,8 @@ func gemma4TowerMatchesTransformers(t *testing.T, opts ...Option) {
 			return func() { gemma4ClampFault = false }
 		}, false},
 		{"no pool (each group's first patch)", func() func() {
-			gemma4NoPool = true
-			return func() { gemma4NoPool = false }
+			tw.Cfg.fault = towerFaultPoolCorner
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}, false},
 		{"no standardisation", func() func() {
 			b, s := tw.g4.bias, tw.g4.std
