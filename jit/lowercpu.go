@@ -601,7 +601,7 @@ func (e *x86Lowerer) node(i int) {
 		} else {
 			a.VADDPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 		}
-	case OpSub, OpDiv, OpMin, OpMax:
+	case OpSub, OpDiv, OpRem, OpMin, OpMax:
 		if e.gpr(i) {
 			e.integer(i)
 			return
@@ -687,6 +687,9 @@ func (e *x86Lowerer) node(i int) {
 				a.MOVSXD(src, src)
 			}
 			a.VCVTSI2SS(e.reg(i), e.reg(i), src)
+			// The convert writes lane 0; a float is every lane's, as a
+			// vector op reads it (a row's index compared in every lane).
+			a.VBROADCASTSSReg(e.reg(i), e.reg(i))
 			return
 		}
 		a.VCVTDQ2PS(e.reg(i), e.reg(nd.A))
@@ -862,7 +865,8 @@ func (e *x86Lowerer) divConst(op Op, dst, src x86.Reg, c uint32) {
 		return
 	}
 	if op == OpRem && dst == src || dst == reloadReg || src == reloadReg {
-		e.fail("no general-register form of %s by %d here: the dividend's, the result's and the reload register are not three", op, c)
+		// No third register for the multiply: DIV by the constant.
+		e.divReg(op, dst, src, reloadReg, c)
 		return
 	}
 	l := bits.Len32(c - 1)
@@ -886,6 +890,63 @@ func (e *x86Lowerer) divConst(op Op, dst, src x86.Reg, c uint32) {
 		a.ADDQ(t, src)
 		a.MOVQ(dst, t)
 	}
+}
+
+// divSave is the two words below the red zone that RAX and RDX are kept in
+// across a division by a register, which reads and writes them.
+var divSave = [2]x86.Mem{x86.At(x86.RSP, -136), x86.At(x86.RSP, -144)}
+
+// divReg is dst = x / y, or x % y, for 32-bit unsigned x and y in
+// registers, or by the constant c where it is not 0: DIV of RDX:RAX by the
+// divisor in the reload register, RAX and RDX kept in divSave around it, an
+// operand they held read from there. A zero divisor gives all ones and the
+// dividend, which DIV would fault on.
+func (e *x86Lowerer) divReg(op Op, dst, x, y x86.Reg, c uint32) {
+	a := e.a
+	a.MOVStore(divSave[0], x86.RAX)
+	a.MOVStore(divSave[1], x86.RDX)
+	load := func(to, r x86.Reg) {
+		switch r {
+		case x86.RAX:
+			a.MOVLLoad(to, divSave[0])
+		case x86.RDX:
+			a.MOVLLoad(to, divSave[1])
+		default:
+			a.MOVL(to, r)
+		}
+	}
+	switch {
+	case c != 0:
+		load(x86.RAX, x)
+		a.MOVLimm(reloadReg, c)
+	case x == reloadReg:
+		load(x86.RAX, x)
+		if y != reloadReg {
+			load(reloadReg, y)
+		}
+	default:
+		load(reloadReg, y)
+		load(x86.RAX, x)
+	}
+	zero, done := a.Label(), a.Label()
+	a.TESTQ(reloadReg, reloadReg)
+	a.JZ(zero)
+	a.XORQ(x86.RDX, x86.RDX)
+	a.DIVQ(reloadReg)
+	a.TESTQ(reloadReg, reloadReg)
+	a.JNZ(done)
+	a.Bind(zero)
+	a.MOVL(x86.RDX, x86.RAX)
+	a.MOVLimm(x86.RAX, ^uint32(0))
+	a.Bind(done)
+	if op == OpDiv {
+		a.MOVQ(reloadReg, x86.RAX)
+	} else {
+		a.MOVQ(reloadReg, x86.RDX)
+	}
+	a.MOVLoad(x86.RAX, divSave[0])
+	a.MOVLoad(x86.RDX, divSave[1])
+	a.MOVQ(dst, reloadReg)
 }
 
 // gpr reports whether node i is held in a general register: an integer a
@@ -1033,6 +1094,10 @@ func (e *x86Lowerer) integer(i int) {
 			if nd.Op == OpShl {
 				a.MOVL(dst, dst)
 			}
+			return
+		}
+		if (nd.Op == OpDiv || nd.Op == OpRem) && nd.Type == ir.U32 {
+			e.divReg(nd.Op, dst, x, y, 0)
 			return
 		}
 		switch nd.Op {

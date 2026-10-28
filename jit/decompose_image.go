@@ -40,10 +40,17 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	v := x.at(0, ish, at, x.op(OpRem, U, pix, x.u(PW)))
 	v = x.sel(F, x.op(OpLess, ir.Pred, col, x.u(PW)), v, x.f(0))
 	if lead > 0 {
-		x.sel(F, x.op(OpLess, ir.Pred, row, u(lead)), x.f(0), v)
+		x.sel(F, rowBefore(&x, row, lead), x.f(0), v)
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), tableRequest, tablePos}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R, 2: R + 1}}}}, nil
+}
+
+// rowBefore is the mask of row r lying before row n, compared as floats:
+// a float select masks vector registers, and the CPU's compare of a row's
+// index alone is a general register's.
+func rowBefore(x *exprs, r, n int) int {
+	return x.op(OpLess, ir.Pred, x.un(OpCvtF32, ir.F32, r), x.f(float32(n)))
 }
 
 // decomposeFold is each Span consecutive rows as one: output row g is
@@ -99,7 +106,7 @@ func decomposeLeadRow(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	r, i := x.coord(0), x.coord(1)
 	in, lead := x.at(0, sh, r, i), x.at(1, []int{sh[1]}, i)
-	x.sel(ir.F32, x.op(OpLess, ir.Pred, r, x.u(uint32(o.Attr.Offset))), lead, in)
+	x.sel(ir.F32, rowBefore(&x, r, o.Attr.Offset), lead, in)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
 		Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
