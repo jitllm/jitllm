@@ -17,6 +17,10 @@ import (
 	"github.com/jitllm/jitllm/jit"
 )
 
+// heldKB is the growth of the resident set over the side-by-side compiles
+// that reads as kernels held.
+const heldKB = 512 << 10
+
 // residentKB is this process's resident set.
 func residentKB() int {
 	b, err := os.ReadFile("/proc/self/statm")
@@ -36,7 +40,10 @@ func residentKB() int {
 // read after its stack grew. Before the fix the same loop died in the
 // driver (SIGSEGV, 1080 rounds of four goroutines) or held 8 GB and never
 // returned (sixteen goroutines); after it, 193 rounds of sixteen and 1043
-// of four made no error and held 322 MB.
+// of four made no error and held 322 MB. What the rounds hold is the growth
+// of the resident set over them: what earlier tests left resident is not
+// the compiles'. On an RTX 3050 Ti, 125 rounds grew it 26 MB, and the same
+// loop keeping every kernel it compiled grew it 1012 MB in 55.
 func TestComposedGPUCompilesSideBySide(t *testing.T) {
 	testlock.GPU(t)
 	ran := 0
@@ -68,7 +75,8 @@ func TestComposedGPUCompilesSideBySide(t *testing.T) {
 		deadline := time.Now().Add(10 * time.Second)
 		rounds, failed := 0, 0
 		var mu sync.Mutex
-		for time.Now().Before(deadline) && residentKB() < 3<<20 {
+		base := residentKB()
+		for time.Now().Before(deadline) && residentKB()-base < heldKB {
 			var wg sync.WaitGroup
 			for range 8 {
 				wg.Add(1)
@@ -94,10 +102,11 @@ func TestComposedGPUCompilesSideBySide(t *testing.T) {
 		if failed > 0 {
 			t.Errorf("%s: %d compiles failed in %d rounds", d.Name(), failed, rounds)
 		}
-		if kb := residentKB(); kb >= 3<<20 {
-			t.Errorf("%s: %d MB resident after %d rounds: the compiles hold memory", d.Name(), kb>>10, rounds)
+		if kb := residentKB() - base; kb >= heldKB {
+			t.Errorf("%s: %d MB more resident after %d rounds: the compiles hold memory", d.Name(), kb>>10, rounds)
 		}
-		t.Logf("%s: %d rounds of eight goroutines compiled %d kernels each, %d failed, %d MB resident", d.Name(), rounds, len(codes), failed, residentKB()>>10)
+		t.Logf("%s: %d rounds of eight goroutines compiled %d kernels each, %d failed, %d MB more resident (%d MB before)",
+			d.Name(), rounds, len(codes), failed, (residentKB()-base)>>10, base>>10)
 	}
 	if ran == 0 {
 		t.Fatal("no SPIR-V device on this host: the gate runs on one")
