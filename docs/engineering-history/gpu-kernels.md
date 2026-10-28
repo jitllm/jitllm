@@ -10314,3 +10314,31 @@ row where the composer's reads two.
   the restart, the latent norm, the MLA gate, the decay bound, the latent
   norm's epsilon, and the activation. The head's mix and the input rows
   stay the host's, refused by name (UncoveredStreams).
+- A tower's entry rows and its projector are graphs of generic ops
+  (towerEntryOf: the patch gather, the patch matrix and its bias, the class
+  row, each row's position-table row, the norm before block 0;
+  towerProjOf: the patches regrouped by the request's row names, the
+  pool's mean and RMSNorm, the merged row's LayerNorm, the matrices and the
+  activation, the window order put back), decided by the tensors the
+  container holds and declined by name where it holds one no graph binds.
+  The CPU forms them at the vision State's placement, a card runs them as
+  tier.ComposedRows (picrows.go). On the V100 host the CPU serves SmolVLM,
+  llava, Qwen2-VL and Qwen2.5-VL whole (entry, every block, projector:
+  2.6e-7, 7.2e-8, 5.2e-8 and 7.3e-14 after block 0; 1.1e-3, 1.1e-3,
+  1.1e-4, 1.2e-4 for the encode), cuda:0 and vulkan:0 those four and
+  Gemma 3 (encode 1.1e-3 to 5.8e-3); the projector alone is 3.7e-13 to
+  1.1e-8 from main's, and the composed arms of
+  TestProjectorMatchesTransformers read 6.2e-5 (Gemma 3) and 6.3e-5
+  (InternVL) against transformers, as main's do. Each violation is seen: a
+  patch row gathered from the next patch (0.08 to 1.4), the regroup's slots
+  swapped, the pool's corner, the window order left in place. Three CPU
+  lowering faults stood behind the patch gather: no division by a register
+  (DIV now, RAX and RDX kept below the red zone), a remainder by a
+  constant with no third register, and a float converted from a general
+  register written to lane 0 alone, so a row's index compared in every
+  lane masked the others with garbage. A select of floats whose mask is a
+  general register's integer compare still reads a general register as a
+  vector one; the row masks compare the row as a float. A picture of more
+  rows than a CPU call now runs the codes through the last history write
+  once over every row, the values the rest read kept per call, so no code
+  runs twice (no first pass: 0.50 to 1.08 from the clean encode).

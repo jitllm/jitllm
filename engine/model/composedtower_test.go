@@ -655,7 +655,11 @@ func TestComposedPictureRowsEveryFamily(t *testing.T) {
 				ps, pd = s.CPUProjectorSteps()
 				s.Close()
 			}
-			if ew == Covered {
+			// A bucketed table names its rows by the grid: where they are not
+			// the grid's own rows the entry is declined by name.
+			if ew == Covered && es == 0 && c.PosBuckets > 0 && ed[jit.DeclineNoTable] == 1 {
+				t.Logf("entry: declined, %s: a %d-bucket table over this grid", jit.DeclineName(int(jit.DeclineNoTable)), c.PosBuckets)
+			} else if ew == Covered {
 				nm, worst := nmseOf(gotE, wantE)
 				t.Logf("entry: served %d, NMSE %.3e, max|d| %.4g", es, nm, worst)
 				if es != 1 || !(nm < 1e-5) {
