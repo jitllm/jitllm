@@ -8102,6 +8102,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		g.launchTo.psess = persistSession{}
 		return
 	}
+	g.injectedPanic()
 	a := &g.sub
 	// The session the submission runs for, carried in its recording's key.
 	sid := a.key.sid

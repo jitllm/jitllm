@@ -12,6 +12,10 @@ func faultAt() []int { return nil }
 
 func (g *devTier) injectedFail() bool { return false }
 
+func faultPanicAt() []int { return nil }
+
+func (g *devTier) injectedPanic() {}
+
 func pagedFaulted(string) bool { return false }
 
 func recFaulted(string) bool { return false }

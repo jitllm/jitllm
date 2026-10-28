@@ -647,6 +647,8 @@ type Config struct {
 	// failAt and the per-device calls counter are always zero unless built with
 	// -tags jitllmfault.
 	failAt []int
+	// panicAt is failAt for a panic inside a submission.
+	panicAt []int
 	// FillFirst places blocks on the first device until it is full, then the
 	// next, instead of spreading a model that fits across the devices in
 	// proportion to their budgets (GPU.PlanBlocks). The spread leaves each card
@@ -2190,6 +2192,8 @@ type devShared struct {
 	// calls is the fault-injection counter; always zero unless built with
 	// -tags jitllmfault.
 	calls int
+	// subCalls counts the submissions for panicAt.
+	subCalls int
 
 	// The whole-block path: layers uploaded by PrepLayer, run in the scratch
 	// of a lane (devsess.go), which a call holds for its whole run. The map is keyed by the
@@ -2448,12 +2452,13 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	}
 	o.apply()
 	cfg := &Config{
-		kb:     o.kb,
-		tiles:  tilesFor(o.kb),
-		center: o.kern,
-		mvMin:  mvMinBytes(o.kb),
-		failAt: faultAt(),
-		stage:  NewPool("host stage", 0),
+		kb:      o.kb,
+		tiles:   tilesFor(o.kb),
+		center:  o.kern,
+		mvMin:   mvMinBytes(o.kb),
+		failAt:  faultAt(),
+		panicAt: faultPanicAt(),
+		stage:   NewPool("host stage", 0),
 		// Always built, budgeted at zero: the structure exists from load, and
 		// the budget decides whether anything is retained. At zero (the
 		// default) Pack declines immediately.

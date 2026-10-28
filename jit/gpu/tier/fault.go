@@ -62,6 +62,38 @@ func (g *devTier) injectedFail() bool {
 	return false
 }
 
+// faultPanicAt is JITLLM_DEVICE_PANIC_AT: the ordinals of the submissions
+// that panic inside the backend's session, as a served step's bug would.
+func faultPanicAt() []int {
+	v := os.Getenv("JITLLM_DEVICE_PANIC_AT")
+	if v == "" {
+		return nil
+	}
+	var at []int
+	for _, f := range strings.Split(v, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(f))
+		if err != nil || n <= 0 {
+			return nil
+		}
+		at = append(at, n)
+	}
+	fmt.Fprintf(os.Stderr, "jitllm: FAULT INJECTION ARMED (jitllmfault build): submission(s) %v will panic\n", at)
+	return at
+}
+
+// injectedPanic panics where this submission is one panicAt names.
+func (g *devTier) injectedPanic() {
+	if len(g.panicAt) == 0 {
+		return
+	}
+	g.subCalls++
+	for _, n := range g.panicAt {
+		if g.subCalls == n {
+			panic(fmt.Sprintf("injected panic in submission %d (JITLLM_DEVICE_PANIC_AT)", n))
+		}
+	}
+}
+
 // formFault is a rewrite of the composer's registry: the decomposition of one
 // op kind is replaced by one that fails, so every part holding that op fails
 // to form, as a kernel the composer cannot build would. Nothing in a kernel is

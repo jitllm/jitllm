@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -399,7 +400,21 @@ func (g *devTier) ran(s backend.Session) {
 		g.ranBeside.Add(1)
 	}
 	defer g.onDev.Add(-1)
+	defer g.recoverSub()
 	g.runF(s)
+}
+
+// recoverSub ends a submission that panicked as one that failed: its error
+// is the submission's, which the step returns, and the backend's session
+// and the submission's ticket end as after any other, so a quiesce does
+// not wait on it.
+func (g *devTier) recoverSub() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	g.launchTo.psess = persistSession{}
+	g.sub.err = fmt.Errorf("tier: the submission panicked: %v", r)
 }
 
 // sessQueue makes the session's queue if the device has them and it has not
