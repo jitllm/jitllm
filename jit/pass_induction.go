@@ -26,6 +26,7 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			l := k.Loops[c]
 			from, data := it, k.dataReaders(it, live, addr)
+			mixed := k.mixedReaders(it, live, addr)
 			v, cont := vec[l.Of-1]
 			if l.Lanes == 0 && l.Of > 0 && cont {
 				for d, nd := range k.Nodes {
@@ -36,7 +37,10 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 					}
 				}
 			}
-			if len(data) == 0 {
+			if l.Lanes == 0 || from != it {
+				mixed = nil
+			}
+			if len(data) == 0 && len(mixed) == 0 {
 				continue
 			}
 			if m == nil {
@@ -54,6 +58,37 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				for _, a := range m.Operands(&m.Nodes[r]) {
 					if *a == from {
 						*a = f
+					}
+				}
+			}
+			// A value computed from the iteration that also feeds an address
+			// keeps the iteration there and reads the lanes' where it is data:
+			// its chain from the iteration is made again over the fold.
+			made := map[int]int{it: f}
+			var over func(i int) int
+			over = func(i int) int {
+				if j, ok := made[i]; ok {
+					return j
+				}
+				if !k.readsNode(i, it) {
+					return i
+				}
+				nd := m.Nodes[i]
+				for _, a := range m.Operands(&nd) {
+					*a = over(*a)
+				}
+				made[i] = m.add(nd)
+				return made[i]
+			}
+			for _, r := range mixed {
+				if r.store {
+					m.Stores[r.at].Val = over(m.Stores[r.at].Val)
+					continue
+				}
+				nd := &m.Nodes[r.at]
+				for _, a := range m.Operands(nd) {
+					if *a != it && addr[*a] && k.readsNode(*a, it) {
+						*a = over(*a)
 					}
 				}
 			}
@@ -147,6 +182,37 @@ func (k *Kernel) readsNode(i, x int) bool {
 		}
 	}
 	return false
+}
+
+// mixedReader is a data reader of a value that also feeds an address: node
+// at, or where store is set the value Stores[at] writes.
+type mixedReader struct {
+	at    int
+	store bool
+}
+
+// mixedReaders is what reads, as data, a value computed from node i that
+// feeds an address: a live node that is not a load and feeds no address,
+// and a store's value, the iteration itself among those.
+func (k *Kernel) mixedReaders(i int, live, addr map[int]bool) []mixedReader {
+	var out []mixedReader
+	for j, nd := range k.Nodes {
+		if !live[j] || nd.Op == OpLoad || addr[j] {
+			continue
+		}
+		for _, a := range k.Operands(&nd) {
+			if *a != i && addr[*a] && k.readsNode(*a, i) {
+				out = append(out, mixedReader{at: j})
+				break
+			}
+		}
+	}
+	for j, st := range k.Stores {
+		if !st.Barrier && !st.Run && (st.Val == i || addr[st.Val] && k.readsNode(st.Val, i)) {
+			out = append(out, mixedReader{at: j, store: true})
+		}
+	}
+	return out
 }
 
 // dataReaders is the live nodes that read node i as data: not a load, and

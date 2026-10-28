@@ -170,3 +170,42 @@ func TestVerifierHoldsAMapsWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifierHoldsASelection verifies an attention over a selection of its
+// own history's keys, then each violation of a selection's structure.
+func TestVerifierHoldsASelection(t *testing.T) {
+	build := func(a Attrs, cut func(g *Graph)) error {
+		b := NewBlock(0)
+		k := b.In("k", 48)
+		h := StateRef{Name: "kv", Version: b.KVAppend(k, k, 0)}
+		sel := b.Select(b.In("iq", 32), h, a, b.In("iw", 2))
+		b.Out(b.AttendSelected(b.In("q", 64), h, sel, Attrs{NHead: 4, NKVHead: 2, HeadDim: 16, Width: 48}))
+		if cut != nil {
+			cut(b.G)
+		}
+		return Verify(b.G, Facts{})
+	}
+	good := Attrs{NHead: 2, NKVHead: 2, HeadDim: 16, Offset: 32, Width: 48, Span: 4, TopK: 2, Local: 1}
+	if err := build(good, nil); err != nil {
+		t.Fatalf("a correct selection is refused: %v", err)
+	}
+	for _, c := range []struct {
+		name, want string
+		a          func(a *Attrs)
+		cut        func(g *Graph)
+	}{
+		{"a key past the row", "a key of", func(a *Attrs) { a.Offset = 40 }, nil},
+		{"groups that do not divide the heads", "groups", func(a *Attrs) { a.NKVHead = 3 }, nil},
+		{"no block", "blocks of", func(a *Attrs) { a.Span = 0 }, nil},
+		{"weights of another count", "weights", func(a *Attrs) {}, func(g *Graph) { g.Values[g.Ops[1].In[1]].Width = 3 }},
+		{"a selection over another history", "its own history", func(a *Attrs) {},
+			func(g *Graph) { g.Ops[len(g.Ops)-1].Reads[0] = SharedHistory(0) }},
+	} {
+		a := good
+		c.a(&a)
+		err := build(a, c.cut)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Verify said %v, want an error naming %q", c.name, err, c.want)
+		}
+	}
+}

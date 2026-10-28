@@ -112,8 +112,10 @@ type CallArg struct {
 	// Coord, where set, is 1 + the axis of Calls whose coordinate the word
 	// is, set for each call.
 	Coord int
-	// Per, where set, is the elements, of Elem bytes, the address moves a
-	// unit of each axis of Calls' coordinate: a call's rows (Workers).
+	// Per, where set, is the elements the address moves a unit of each
+	// axis of Calls' coordinate: a call's rows (Workers). Elem, where set,
+	// is the bytes of the elements Offset and Per count (a binary16
+	// history's two); four where it is not.
 	Per  []int
 	Elem int
 }
@@ -346,7 +348,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 				ca := CallArg{Field: a.Field, Operand: b.Operand, Words: b.Words, Word: b.Word > 0}
 				if b.Offset > 0 {
 					if nd := k.Nodes[b.Offset-1]; nd.Op == OpConst {
-						ca.Offset = int(nd.Imm)
+						ca.Offset, ca.Elem = int(nd.Imm), ElemBytes(b)
 					} else if c, per, ok := k.callOffset(b.Offset - 1); ok && l.CPU != nil {
 						ca.Offset, ca.Per, ca.Elem = c, per, ElemBytes(b)
 					} else {

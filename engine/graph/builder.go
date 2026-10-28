@@ -126,6 +126,23 @@ func (s *Builder) AttendOf(q ValueID, h StateRef, a Attrs, sinks ...jlm.Role) Va
 	return y
 }
 
+// Select is OpSelect's selection over the history h, of q's heads and
+// a's groups, block, budget and key, scaling each head's score by w's
+// element where w is given.
+func (s *Builder) Select(q ValueID, h StateRef, a Attrs, w ...ValueID) ValueID {
+	y := s.value("select", a.NKVHead)
+	s.G.op(Op{Kind: OpSelect, In: append([]ValueID{q}, w...), Out: []ValueID{y}, Reads: []StateRef{h}, Attr: a})
+	return y
+}
+
+// AttendSelected is AttendOf over the positions selection sel keeps.
+func (s *Builder) AttendSelected(q ValueID, h StateRef, sel ValueID, a Attrs, sinks ...jlm.Role) ValueID {
+	y := s.AttendOf(q, h, a, sinks...)
+	o := &s.G.Ops[len(s.G.Ops)-1]
+	o.In = append(o.In, sel)
+	return y
+}
+
 // CrossAttend is q's cross-attention over history h as other rows left
 // it, h a version this graph does not append to: each row attends, both
 // ways, the span of h its row's descriptor names (a resampler's learned

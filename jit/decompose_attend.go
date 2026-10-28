@@ -3,6 +3,7 @@ package jit
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,12 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
 	kw := a.NKVHead * a.HeadDim
+	if a.Width != 0 {
+		if a.Width < kw {
+			return nil, fmt.Errorf("an attention of %d heads of %d over history rows of %d", a.NKVHead, a.HeadDim, a.Width)
+		}
+		kw = a.Width
+	}
 	values, vl := c.History.values()
 	for _, l := range []Pool{c.History.Keys, vl} {
 		if err := l.check(kw); err != nil {
@@ -45,8 +52,12 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	g := attendGeom{D: a.HeadDim, KW: kw, Keys: c.History.Keys.operand(tableKeys), Values: values, ValuePool: vl}
 	if len(o.In) == 2 {
 		// A block selection: the positions each kv group's mask keeps.
+		sel := c.producer(o.In[1])
+		if sel == nil || sel.Kind != graph.OpSelect || a.NHead%sel.Attr.NKVHead != 0 || a.Window != 0 || a.Bidir {
+			return nil, fmt.Errorf("an attention of %d heads, window %d, over a selection that is not its own history's", a.NHead, a.Window)
+		}
 		m := maskOf(c, o.In[1])
-		g.Mask, g.MaskGroups = &m, a.NKVHead
+		g.Mask, g.MaskGroups = &m, sel.Attr.NKVHead
 	}
 	// A block sharing another's history (the state kv@N) reads block N's
 	// pools as it left them.
@@ -261,6 +272,16 @@ func (hs history) page(x *exprs, t int) (pid, off int) {
 	U := ir.U32
 	pid = x.load(2, x.op(OpAdd, U, hs.row(x, rowTab), x.op(OpDiv, U, t, x.u(uint32(hs.pageSize)))))
 	return pid, x.op(OpRem, U, t, x.u(uint32(hs.pageSize)))
+}
+
+// producer is the op of the graph that writes v, nil for none.
+func (c *Context) producer(v graph.ValueID) *graph.Op {
+	for i := range c.Graph.Ops {
+		if slices.Contains(c.Graph.Ops[i].Out, v) {
+			return &c.Graph.Ops[i]
+		}
+	}
+	return nil
 }
 
 // maskOf is the keep mask value sel names, which an attention reads: one a

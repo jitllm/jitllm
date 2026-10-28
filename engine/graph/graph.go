@@ -47,7 +47,8 @@ const (
 	// Where Bidir, each row attends the span its row's descriptor names;
 	// over a version the graph does not write (Builder.CrossAttend) the rows
 	// are queries over keys and values other rows appended: a
-	// cross-attention.
+	// cross-attention. With In[1], an OpSelect's Out[0], each group of its
+	// query heads attends the positions the selection keeps for it alone.
 	OpAttend
 	// OpAdd is In[0] + In[1].
 	OpAdd
@@ -203,10 +204,24 @@ const (
 	// key is written at, plus Offset and in whole Spans where Span > 1 (an
 	// integer division), as a float: Out[0] one element a row. A primitive.
 	OpPosition
+	// OpSelect is a selection of the history's positions, which an OpAttend
+	// reading Out[0] as its In[1] attends alone: each of NHead query heads of
+	// In[0] (HeadDim wide) dots every position's key the row attends, the
+	// HeadDim elements at Offset of a history key row Width wide; a head's
+	// score passes Fn against Const where Fn is set (MapMax against 0 a
+	// ReLU), is scaled by In[1]'s element for the head where given, and
+	// each of NKVHead groups of NHead/NKVHead heads sums its heads' scores.
+	// A group ranks the blocks of Span positions from the history's first,
+	// a block by its best position, equal scores to the lower block, and
+	// keeps TopK of them: the Local blocks ending at the row's own, then the
+	// best of the rest -- every block where there are at most TopK. Out[0]
+	// (one a group) is the positions each group keeps. A primitive over the
+	// history, as OpAttend is.
+	OpSelect
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -419,8 +434,12 @@ type Attrs struct {
 	Bound float64
 	// Offset and Width are OpSlice's; Offset is the leading rows of
 	// OpPatchify, OpLeadRow and OpDropRows too, and both are the window of
-	// OpMap's bound vector.
+	// OpMap's bound vector. Width is an OpAttend's history row where it is
+	// wider than the heads it reads (its first), and OpSelect's, Offset
+	// where OpSelect's key starts in it.
 	Offset, Width int
+	// Local is OpSelect's blocks kept ending at the row's own.
+	Local int
 	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
 	// OpTopK, OpRank, OpTile): the function, the order a reduction runs in, the
 	// group a reduction, top-k or rank runs over (0: the row), a constant

@@ -181,6 +181,29 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || o.Attr.Offset < 0 || o.Attr.Span < 0 {
 				bad("%s: %d inputs into %d outputs, offset %d and span %d", at, len(o.In), len(o.Out), o.Attr.Offset, o.Attr.Span)
 			}
+		case OpSelect:
+			a := o.Attr
+			switch {
+			case len(o.In) < 1 || len(o.In) > 2 || len(o.Out) != 1 || len(o.Reads) != 1:
+				bad("%s: %d inputs, %d outputs and %d histories", at, len(o.In), len(o.Out), len(o.Reads))
+			case a.NHead < 1 || a.NKVHead < 1 || a.NHead%a.NKVHead != 0 || a.HeadDim < 1 || a.Span < 1 || a.TopK < 1 || a.Local < 0:
+				bad("%s: %d heads in %d groups of %d, blocks of %d, %d kept, %d local", at, a.NHead, a.NKVHead, a.HeadDim, a.Span, a.TopK, a.Local)
+			case a.Offset < 0 || a.Offset+a.HeadDim > a.Width:
+				bad("%s: a key of %d at %d in a row of %d", at, a.HeadDim, a.Offset, a.Width)
+			case width(o.In[0]) != a.NHead*a.HeadDim || len(o.In) == 2 && width(o.In[1]) != a.NHead:
+				bad("%s: a query of %d and %d weights over %d heads of %d", at, width(o.In[0]), len(o.In)-1, a.NHead, a.HeadDim)
+			case width(o.Out[0]) != a.NKVHead || g.Values[o.Out[0]].Elem != ElemF32:
+				bad("%s: a selection of %d over %d groups", at, width(o.Out[0]), a.NKVHead)
+			}
+		case OpAttend:
+			if len(o.In) == 2 {
+				if p := producer(g, o.In[1]); p == nil || p.Kind != OpSelect || o.Attr.NHead%p.Attr.NKVHead != 0 || len(p.Reads) != 1 || len(o.Reads) != 1 || p.Reads[0] != o.Reads[0] {
+					bad("%s: a selection that is not one of its own history's groups", at)
+				}
+			}
+			if a := o.Attr; a.Width != 0 && a.Width < a.NKVHead*a.HeadDim {
+				bad("%s: a history row of %d under %d heads of %d", at, a.Width, a.NKVHead, a.HeadDim)
+			}
 		case OpDeltaRule:
 			a := o.Attr
 			switch {
@@ -215,6 +238,16 @@ func Verify(g *Graph, f Facts) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// producer is the op that writes v, nil for none.
+func producer(g *Graph, v ValueID) *Op {
+	for i := range g.Ops {
+		if slices.Contains(g.Ops[i].Out, v) {
+			return &g.Ops[i]
+		}
+	}
+	return nil
 }
 
 // Unbound is every tensor role f's inventory stores that no op of g binds,
