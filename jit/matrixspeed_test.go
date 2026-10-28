@@ -4,7 +4,11 @@ import (
 	"encoding/binary"
 	"math"
 	"math/rand"
+	"os"
+	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,135 +64,174 @@ func BenchmarkComposedMatrix(t *testing.B) {
 			if len(sc) == 0 {
 				sc = []uint32{0}
 			}
-			b := graph.New()
-			in := b.In("x", sh.k)
-			out := b.MatVec(in, jlm.RoleFFNUp, sh.n)
-			b.Out(out)
-			_, codes, err := jit.Default().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleFFNUp: jt},
-				Step: jit.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
-			if err != nil {
-				t.Fatal(err)
-			}
-			op, err := compileLone(d, codes)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var bufs []backend.Buf
-			up := func(words []uint32) backend.Buf {
-				bf, err := d.Alloc(max(4*len(words), 4))
+			for _, mx := range matrixConfigs(t) {
+				reg := jit.Default()
+				if mx.Rows != 0 {
+					p := reg.Profiles[jit.DeviceGPU]
+					p.Passes = slices.Clone(p.Passes)
+					for i, ps := range p.Passes {
+						if _, ok := ps.(jit.Matrix); ok {
+							p.Passes[i] = mx
+						}
+					}
+					reg.Profiles[jit.DeviceGPU] = p
+				}
+				b := graph.New()
+				in := b.In("x", sh.k)
+				out := b.MatVec(in, jlm.RoleFFNUp, sh.n)
+				b.Out(out)
+				_, codes, err := reg.Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleFFNUp: jt},
+					Step: jit.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
 				if err != nil {
 					t.Fatal(err)
 				}
-				p := make([]byte, 4*len(words))
-				for i, v := range words {
-					binary.LittleEndian.PutUint32(p[4*i:], v)
+				op, err := compileLone(d, codes)
+				if err != nil {
+					t.Errorf("%v %s: %v", mx, sh.what, err)
+					continue
 				}
-				if len(p) > 0 {
-					if err := bf.Write(p); err != nil {
+				var bufs []backend.Buf
+				up := func(words []uint32) backend.Buf {
+					bf, err := d.Alloc(max(4*len(words), 4))
+					if err != nil {
 						t.Fatal(err)
 					}
-				}
-				bufs = append(bufs, bf)
-				return bf
-			}
-			x := make([]uint32, R*sh.k)
-			for i := range x {
-				x[i] = math.Float32bits(float32(rng.NormFloat64()))
-			}
-			planes := [3]backend.Buf{up(qs), up(dw), up(sc)}
-			xBuf, outBuf := up(x), up(make([]uint32, R*sh.n))
-			own := map[jit.Operand]backend.Buf{}
-			args := make([][]backend.Buf, len(codes))
-			for ci, c := range codes {
-				for _, bd := range c.Binds {
-					o := bd.Operand
-					var bf backend.Buf
-					switch {
-					case o.Kind == jit.OperandValue && o.Value == in:
-						bf = xBuf
-					case o.Kind == jit.OperandValue && o.Value == out:
-						bf = outBuf
-					case o.Kind == jit.OperandWeight:
-						bf = planes[o.Region]
-					case o.Kind == jit.OperandTable && o.Name == "rows.n":
-						bf = up([]uint32{R})
-					default:
-						if bf = own[o]; bf == nil {
-							w := bd.Words
-							if w == nil {
-								w = make([]uint32, max(bd.Bytes, 4)/4)
-							}
-							bf = up(w)
-							own[o] = bf
+					p := make([]byte, 4*len(words))
+					for i, v := range words {
+						binary.LittleEndian.PutUint32(p[4*i:], v)
+					}
+					if len(p) > 0 {
+						if err := bf.Write(p); err != nil {
+							t.Fatal(err)
 						}
 					}
-					args[ci] = append(args[ci], bf)
+					bufs = append(bufs, bf)
+					return bf
 				}
-			}
-			composed := func() {
+				x := make([]uint32, R*sh.k)
+				for i := range x {
+					x[i] = math.Float32bits(float32(rng.NormFloat64()))
+				}
+				planes := [3]backend.Buf{up(qs), up(dw), up(sc)}
+				xBuf, outBuf := up(x), up(make([]uint32, R*sh.n))
+				own := map[jit.Operand]backend.Buf{}
+				args := make([][]backend.Buf, len(codes))
 				for ci, c := range codes {
-					if err := op.kerns[ci].Launch(c.LiveGroups(R), c.GPU.Group[0], args[ci]...); err != nil {
+					for _, bd := range c.Binds {
+						o := bd.Operand
+						var bf backend.Buf
+						switch {
+						case o.Kind == jit.OperandValue && o.Value == in:
+							bf = xBuf
+						case o.Kind == jit.OperandValue && o.Value == out:
+							bf = outBuf
+						case o.Kind == jit.OperandWeight:
+							bf = planes[o.Region]
+						case o.Kind == jit.OperandTable && o.Name == "rows.n":
+							bf = up([]uint32{R})
+						default:
+							if bf = own[o]; bf == nil {
+								w := bd.Words
+								if w == nil {
+									w = make([]uint32, max(bd.Bytes, 4)/4)
+								}
+								bf = up(w)
+								own[o] = bf
+							}
+						}
+						args[ci] = append(args[ci], bf)
+					}
+				}
+				composed := func() {
+					for ci, c := range codes {
+						if err := op.kerns[ci].Launch(c.LiveGroups(R), c.GPU.Group[0], args[ci]...); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				tl := kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}
+				sub, _, _, _ := kernels.Layout(q)
+				tl.KB = max(32/sub, 1)
+				s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.n, NTok: R}
+				mk, err := kernels.GemmVolta(s, tl)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mainKern, err := d.Compile(mk)
+				if err != nil {
+					t.Fatal(err)
+				}
+				act16 := up(make([]uint32, R*sh.k/2))
+				mainOut := up(make([]uint32, R*sh.n))
+				mainArm := func() {
+					if err := mainKern.Launch(kernels.GemmVoltaGroups(s, tl), tl.Threads(), planes[0], planes[1], planes[2], act16, mainOut); err != nil {
 						t.Fatal(err)
 					}
 				}
-			}
-			tl := kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}
-			sub, _, _, _ := kernels.Layout(q)
-			tl.KB = max(32/sub, 1)
-			s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.n, NTok: R}
-			mk, err := kernels.GemmVolta(s, tl)
-			if err != nil {
-				t.Fatal(err)
-			}
-			mainKern, err := d.Compile(mk)
-			if err != nil {
-				t.Fatal(err)
-			}
-			act16 := up(make([]uint32, R*sh.k/2))
-			mainOut := up(make([]uint32, R*sh.n))
-			mainArm := func() {
-				if err := mainKern.Launch(kernels.GemmVoltaGroups(s, tl), tl.Threads(), planes[0], planes[1], planes[2], act16, mainOut); err != nil {
-					t.Fatal(err)
+				sync := func() { outBuf.Read(make([]byte, 4)) }
+				time1 := func(f func()) float64 {
+					sync()
+					t0 := time.Now()
+					for range reps {
+						f()
+					}
+					sync()
+					return float64(time.Since(t0).Microseconds()) / reps
 				}
-			}
-			sync := func() { outBuf.Read(make([]byte, 4)) }
-			time1 := func(f func()) float64 {
-				sync()
-				t0 := time.Now()
-				for range reps {
-					f()
+				composed()
+				mainArm()
+				var cu, mu, ratio []float64
+				for range rounds {
+					c, m := time1(composed), time1(mainArm)
+					cu, mu, ratio = append(cu, c), append(mu, m), append(ratio, c/m)
 				}
-				sync()
-				return float64(time.Since(t0).Microseconds()) / reps
-			}
-			composed()
-			mainArm()
-			var cu, mu, ratio []float64
-			for range rounds {
-				c, m := time1(composed), time1(mainArm)
-				cu, mu, ratio = append(cu, c), append(mu, m), append(ratio, c/m)
-			}
-			med := func(v []float64) float64 {
-				s := append([]float64(nil), v...)
-				sort.Float64s(s)
-				return s[len(s)/2]
-			}
-			flop := 2 * float64(R) * float64(sh.n) * float64(sh.k)
-			if r, ok := backend.KernelResourcesOf(op.kerns[0]); ok {
-				t.Logf("%s %s: composed %d workgroups of %d, regs %d, spill %d, shared %d, resident %d", d.Name(), sh.what,
-					codes[0].LiveGroups(R), codes[0].GPU.Group[0], r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
-			}
-			if r, ok := backend.KernelResourcesOf(mainKern); ok {
-				t.Logf("%s %s: main %d workgroups of %d, regs %d, spill %d, shared %d, resident %d", d.Name(), sh.what,
-					kernels.GemmVoltaGroups(s, tl), tl.Threads(), r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
-			}
-			t.Logf("%s %-8s %v %5dx%-5d rows %d: composed %8.1f us (%5.1f TFLOP/s, %d kernels), main %8.1f us (%5.1f TFLOP/s), composed/main %.2f",
-				d.Name(), sh.what, sh.typ, sh.n, sh.k, R, med(cu), flop/med(cu)/1e6, len(codes), med(mu), flop/med(mu)/1e6, med(ratio))
-			mainKern.Close()
-			op.close()
-			for _, bf := range bufs {
-				bf.Free()
+				med := func(v []float64) float64 {
+					s := append([]float64(nil), v...)
+					sort.Float64s(s)
+					return s[len(s)/2]
+				}
+				flop := 2 * float64(R) * float64(sh.n) * float64(sh.k)
+				if r, ok := backend.KernelResourcesOf(op.kerns[len(codes)-1]); ok {
+					t.Logf("%s %s: composed %d workgroups of %d, regs %d, spill %d, shared %d, resident %d", d.Name(), sh.what,
+						codes[len(codes)-1].LiveGroups(R), codes[len(codes)-1].GPU.Group[0], r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
+				}
+				if r, ok := backend.KernelResourcesOf(mainKern); ok {
+					t.Logf("%s %s: main %d workgroups of %d, regs %d, spill %d, shared %d, resident %d", d.Name(), sh.what,
+						kernels.GemmVoltaGroups(s, tl), tl.Threads(), r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
+				}
+				t.Logf("%s %v %-8s %v %5dx%-5d rows %d: composed %8.1f us (%5.1f TFLOP/s, %d kernels), main %8.1f us (%5.1f TFLOP/s), composed/main %.2f",
+					d.Name(), mx, sh.what, sh.typ, sh.n, sh.k, R, med(cu), flop/med(cu)/1e6, len(codes), med(mu), flop/med(mu)/1e6, med(ratio))
+				mainKern.Close()
+				op.close()
+				for _, bf := range bufs {
+					bf.Free()
+				}
 			}
 		}
 	}
+}
+
+// matrixConfigs is the matrix forms the probe times: JITLLM_MATRIX_SHAPES,
+// a comma list of ROWSxCOLSxDEPTH:WRxWN:RESIDENT, or the profile's alone.
+func matrixConfigs(t testing.TB) []jit.Matrix {
+	env := os.Getenv("JITLLM_MATRIX_SHAPES")
+	if env == "" {
+		return []jit.Matrix{{}}
+	}
+	var out []jit.Matrix
+	for _, f := range strings.Split(env, ",") {
+		var v []int
+		for _, x := range strings.FieldsFunc(f, func(r rune) bool { return r == 'x' || r == ':' }) {
+			n, err := strconv.Atoi(x)
+			if err != nil {
+				t.Fatalf("JITLLM_MATRIX_SHAPES %q: %v", f, err)
+			}
+			v = append(v, n)
+		}
+		if len(v) != 6 {
+			t.Fatalf("JITLLM_MATRIX_SHAPES %q: want ROWSxCOLSxDEPTH:WRxWN:RESIDENT", f)
+		}
+		out = append(out, jit.Matrix{Rows: v[0], Cols: v[1], Depth: v[2], Warps: [2]int{v[3], v[4]}, Resident: v[5]})
+	}
+	return out
 }

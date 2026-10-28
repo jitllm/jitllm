@@ -121,7 +121,9 @@ type partCode struct {
 	k             backend.Kernel
 	groups, width int
 	geom          jit.Code
-	// matrix is a kernel formed on the device's matrix unit.
+	// matrix is a kernel formed on the device's matrix unit: one the
+	// matrix pass formed whose tiles it multiplies, not the kernel that
+	// writes its rows' factor for it.
 	matrix bool
 }
 
@@ -296,7 +298,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 		geom := jit.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
 			LiveGroup: c.LiveGroup, Work: c.Work, Few: c.Few, Many: c.Many}
 		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom,
-			matrix: slices.Contains(c.Passes, "matrix")})
+			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA })})
 		var args []partArg
 		for _, bd := range c.Binds {
 			o := bd.Operand

@@ -1,6 +1,10 @@
 package jit
 
-import "github.com/jitllm/jitllm/jit/ir"
+import (
+	"slices"
+
+	"github.com/jitllm/jitllm/jit/ir"
+)
 
 // Affine simplifies the index arithmetic of a kernel's loads, exact in the
 // u32 ring: equal nodes merged, the arithmetic of constants done, constants
@@ -8,8 +12,12 @@ import "github.com/jitllm/jitllm/jit/ir"
 // folded, so the unrolled steps of a walk share one address and differ by a
 // constant, and a load of a+c reads a at c past it, the constant the
 // access's immediate offset: a workgroup's partials read as one register
-// and a displacement each, not an address each.
-type Affine struct{}
+// and a displacement each, not an address each. In a kernel of a kind in
+// Weights, loads of one weight word merge too, so the elements a word packs
+// share its load and the arithmetic of its scales.
+type Affine struct {
+	Weights []PrimKind
+}
 
 func (Affine) Name() string { return "affine" }
 
@@ -17,8 +25,9 @@ func (p Affine) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		m := k.clone()
 		changed := false
+		weights := slices.Contains(p.Weights, k.Kind)
 		for {
-			step := m.cse()
+			step := m.cse(weights)
 			step = m.foldConstants() || step
 			step = m.powersOfTwo() || step
 			step = m.headroom() || step
@@ -125,10 +134,14 @@ func (k *Kernel) aligned() bool {
 // headroom drops the c of x+c that a shift or a mask cannot see, exactly in
 // the u32 ring: where x is a multiple of 2^m by its structure and c is below
 // 2^m, x+c is x|c, so (x+c)>>n is x>>n for n at least m, and (x+c)&(2^n-1)
-// is (x&(2^n-1))+c; x&(2^n-1) is 0 for x a multiple of 2^n. The elements of
-// one word reached at x plus each place then read the word at one address.
+// is (x&(2^n-1))+c; x&(2^n-1) is 0 for x a multiple of 2^n. Where x is a
+// multiple of 2^n itself, (x+c)&(2^n-1) is c&(2^n-1) whatever c, and
+// (x+c)>>n is (x>>n)+(c>>n) where x+c stays below 2^32 by x's bound. The
+// elements of one word reached at x plus each place then read the word at
+// one address, and the words past it at constants from it.
 func (k *Kernel) headroom() bool {
 	changed := false
+	bound := map[int]uint64{}
 	for i := range k.Nodes {
 		nd := k.Nodes[i]
 		if nd.Type != ir.U32 || nd.Op != OpShr && nd.Op != OpAnd || k.Nodes[nd.B].Op != OpConst {
@@ -142,6 +155,16 @@ func (k *Kernel) headroom() bool {
 		}
 		x, c, ok := k.addConst(nd.A)
 		if !ok || c == 0 {
+			continue
+		}
+		if nd.Op == OpAnd && b&(b+1) == 0 && b != ^uint32(0) && k.divisibleBy(x, b+1) {
+			k.Nodes[i] = Node{Op: OpConst, Type: ir.U32, Imm: int64(c & b)}
+			changed = true
+			continue
+		}
+		if nd.Op == OpShr && b > 0 && b < 32 && c>>b > 0 && k.divisibleBy(x, 1<<b) && k.below(x, bound)+uint64(c) < 1<<32 {
+			k.Nodes[i] = Node{Op: OpAdd, Type: ir.U32, A: k.bin(OpShr, ir.U32, x, nd.B), B: k.u32(int(c >> b))}
+			changed = true
 			continue
 		}
 		n := uint32(32)
@@ -333,6 +356,69 @@ func (k *Kernel) constantsOutward() bool {
 		}
 	}
 	return changed
+}
+
+// below is a bound node i's u32 value stays at or under by its structure:
+// its constants, its loops' trips, the space and the workgroup; 2^32-1
+// where the structure states none. memo holds the bounds found.
+func (k *Kernel) below(i int, memo map[int]uint64) uint64 {
+	const top = 1<<32 - 1
+	if v, ok := memo[i]; ok {
+		return v
+	}
+	memo[i] = top
+	nd := k.Nodes[i]
+	v := uint64(top)
+	cst := func(j int) (uint64, bool) {
+		c := k.Nodes[j]
+		return uint64(uint32(c.Imm)), c.Op == OpConst && c.Type == ir.U32
+	}
+	if nd.Type == ir.U32 {
+		switch nd.Op {
+		case OpConst:
+			v = uint64(uint32(nd.Imm))
+		case OpIter:
+			if l := k.Loops[nd.At]; l.Count == 0 && l.Trip > 0 {
+				v = uint64(l.Trip - 1)
+			}
+		case OpCoord:
+			if nd.A < len(k.Space) && k.Space[nd.A] > 0 {
+				v = uint64(k.Space[nd.A] - 1)
+			}
+		case OpThread:
+			if k.Group > 0 {
+				v = uint64(k.Group - 1)
+			}
+		case OpAdd:
+			v = min(k.below(nd.A, memo)+k.below(nd.B, memo), top)
+		case OpMul:
+			if a, b := k.below(nd.A, memo), k.below(nd.B, memo); a == 0 || b == 0 || a <= top/b {
+				v = a * b
+			}
+		case OpAnd:
+			v = min(k.below(nd.A, memo), k.below(nd.B, memo))
+		case OpMin:
+			v = min(k.below(nd.A, memo), k.below(nd.B, memo))
+		case OpRem:
+			if c, ok := cst(nd.B); ok && c > 0 {
+				v = min(k.below(nd.A, memo), c-1)
+			}
+		case OpDiv:
+			if c, ok := cst(nd.B); ok && c > 0 {
+				v = k.below(nd.A, memo) / c
+			}
+		case OpShr:
+			if c, ok := cst(nd.B); ok && c < 32 {
+				v = k.below(nd.A, memo) >> c
+			}
+		case OpShl:
+			if c, ok := cst(nd.B); ok && c < 32 && k.below(nd.A, memo)<<c <= top {
+				v = k.below(nd.A, memo) << c
+			}
+		}
+	}
+	memo[i] = v
+	return v
 }
 
 // divisibleBy reports whether node i is a multiple of m by its structure.

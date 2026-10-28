@@ -67,6 +67,9 @@ type Kernel struct {
 	Capacity int
 	// RowsHeld is set where a pass held the kernel to the call's rows.
 	RowsHeld bool
+	// Resident, where a pass set it, is how many of the kernel's
+	// workgroups each of the device's units is to hold at once.
+	Resident int
 	// Tile, where RowTiles set it, is the rows a thread of the kernel sums,
 	// its stores one a row; TileBase and TileLast are 1 + the nodes of the
 	// tile's first row and of the last row the call states (0 for none), and
@@ -182,9 +185,6 @@ type Loop struct {
 	Uniform bool
 	// Of, where a split set it, is 1 + the loop this one takes trips of.
 	Of int
-	// StepsLast makes its folds' steps after its stores in each trip: a
-	// trip that stages workgroup memory and reads it behind a barrier.
-	StepsLast bool
 }
 
 // Cursor is pointer Ptr of buffer Buf advanced Elems elements a trip: 0 the

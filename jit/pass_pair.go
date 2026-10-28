@@ -59,7 +59,7 @@ func (p HeadPairs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 		}
 		for {
-			step := m.cse()
+			step := m.cse(false)
 			step = m.foldDecided() || step
 			if !step {
 				break

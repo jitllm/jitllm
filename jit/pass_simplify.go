@@ -37,7 +37,7 @@ func (p Simplify) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		changed := false
 		for {
-			step := m.cse()
+			step := m.cse(false)
 			step = m.foldDecided() || step
 			step = m.dropUnitLoops() || step
 			step = m.dropEmptyLoops() || step
@@ -75,8 +75,9 @@ func (k *Kernel) constLast() bool {
 
 // cse merges each node into the first node equal to it: the same op, type,
 // operands and immediate, a load only of a buffer the kernel does not
-// store.
-func (k *Kernel) cse() bool {
+// store, and of a weight only where weights is set: a streamed weight's
+// load held across a body is a register a jam needs.
+func (k *Kernel) cse(weights bool) bool {
 	stored := map[Operand]bool{}
 	for _, s := range k.Stores {
 		if !s.Barrier && !s.Run {
@@ -91,7 +92,7 @@ func (k *Kernel) cse() bool {
 		case OpFold, OpExchange, OpShuffle, OpGroupSum, OpGroupMax:
 			continue
 		case OpLoad:
-			if stored[k.Bufs[nd.Buf].Operand] || k.Bufs[nd.Buf].Operand.Kind == OperandWeight {
+			if stored[k.Bufs[nd.Buf].Operand] || !weights && k.Bufs[nd.Buf].Operand.Kind == OperandWeight {
 				continue
 			}
 		}

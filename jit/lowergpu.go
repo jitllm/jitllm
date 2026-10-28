@@ -23,6 +23,9 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 	k, err := e.run()
 	if err == nil {
 		k.Resident = resident(n, d)
+		if n.Resident > 0 {
+			k.Resident = n.Resident
+		}
 	}
 	if err == nil {
 		// Held to the IR's invariants where it is formed, not first where a
@@ -608,10 +611,14 @@ func (e *lowerer) lowerLoop(c int) {
 	}
 	e.open = append(e.open, c)
 	saved := append([]ir.Value(nil), e.val...)
+	// The steps of values first, then of tiles: a load carried a trip
+	// ahead is in flight while the trip's tiles multiply.
 	steps := make([]ir.Value, len(folds))
-	for j, f := range folds {
-		if !l.StepsLast {
-			steps[j] = e.get(n.Nodes[f].A)
+	for _, tiles := range []bool{false, true} {
+		for j, f := range folds {
+			if (n.Nodes[f].Tile != nil) == tiles {
+				steps[j] = e.get(n.Nodes[f].A)
+			}
 		}
 	}
 	for si, st := range n.Stores {
@@ -630,11 +637,6 @@ func (e *lowerer) lowerLoop(c int) {
 			}
 		default:
 			e.store(si, st)
-		}
-	}
-	if l.StepsLast {
-		for j, f := range folds {
-			steps[j] = e.get(n.Nodes[f].A)
 		}
 	}
 	for j, f := range folds {

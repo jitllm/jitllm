@@ -9,23 +9,33 @@ import (
 // (Device.Matrix): a reduction of one loop whose term is the product of a
 // factor of the row and the reduced coordinate alone -- a projection's
 // input -- and a factor of the output and the reduced coordinate alone -- its
-// decoded weight. A workgroup of Warps[0]*Warps[1] warps takes Rows rows by
-// Cols outputs. Each trip stages Depth elements of k of both factors in
-// workgroup memory as binary16 pairs, behind a barrier, a thread eight
-// consecutive elements of a row at a time, so the elements of one packed
-// word share its load and its scales once Affine has proved the shared
-// address (headroom); a row of the stage is padded by four elements, which
-// puts the sixteen rows a fragment load reads in different banks. Each warp multiplies
-// its share of the block in the device's tiles into float32 accumulators
-// carried across the trips; and the block's sums pass through workgroup
-// memory -- the stage's own, behind a barrier -- to the kernel's own stores,
-// an element a thread. A row past the
-// call's (Kernel.Capacity) or the step's, and an output past the last, is
-// the last one's, so the kernel reads and writes nothing the step does not
-// state. A weight held as float32 is left as it is: binary16 would round it.
+// decoded weight. The row's factor is written first as binary16 pairs by a
+// kernel of its own (halves), rounded once rather than once a workgroup of
+// outputs. A workgroup of Warps[0]*Warps[1] warps takes Rows rows by Cols
+// outputs. Each trip stages Depth elements of k of both factors in
+// workgroup memory, the row's as the words it was written in and the
+// output's decoded to binary16 pairs, a thread eight consecutive elements
+// of a row at a time, so the elements of one packed word share its load and
+// its scales once Affine has proved the shared address (headroom); a row of
+// the stage is padded by four elements, which puts the sixteen rows a
+// fragment load reads in different banks. The stage is two: trip t
+// multiplies one while it fills the other with trip t+1's factors, whose
+// words Prefetch has loaded a trip before, and one barrier ends the trip.
+// Each warp multiplies its share of the block in the device's tiles into
+// float32 accumulators carried across the trips; and the block's sums pass
+// through workgroup memory -- the stage's own, a row of every warp's tiles
+// at a time, behind barriers -- to the kernel's own stores, an element a
+// thread. A row past the call's (Kernel.Capacity) or the step's, and an
+// output past the last, is the last one's, so the kernel reads and writes
+// nothing the step does not state. A weight held as float32 is left as it
+// is: binary16 would round it.
+//
+// Resident is how many workgroups a unit is to hold at once, where their
+// threads and workgroup memory fit it: one's barrier is another's issue.
 type Matrix struct {
 	Rows, Cols, Depth int
 	Warps             [2]int
+	Resident          int
 }
 
 func (Matrix) Name() string { return "matrix" }
@@ -39,7 +49,7 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if !ok {
 			return nil, false, nil
 		}
-		return []*Kernel{p.form(k, d, f)}, true, nil
+		return p.form(k, d, f), true, nil
 	})
 }
 
@@ -140,8 +150,41 @@ func (k *Kernel) readsFloatWeight(i int) bool {
 	return reach[i]
 }
 
-// form is k as the matrix unit's workgroups.
-func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
+// halves is a kernel writing the factor of the row of k as binary16 pairs,
+// a word of a row a thread, into a buffer of R rows of K/2 words, and that
+// buffer: the factor is rounded once, not once a workgroup of outputs, and a
+// trip stages it as words.
+func halves(k *Kernel, f bilinear) (*Kernel, Buf) {
+	U := ir.U32
+	R, W := k.Space[0], k.Loops[0].Trip/2
+	// Named by what k stores, as a split names its planes: two
+	// projections of one form hold their own.
+	out := k.Bufs[k.Stores[0].Buf].Operand
+	b := Buf{Kind: BufOut, Elem: U, Shape: []int{R, W},
+		Operand: Operand{Kind: OperandScratch, Name: out.Name + ".halves", Elem: U, Temp: true, Of: out.Of}}
+	h := &Kernel{Name: k.Name + ".halves", Kind: PrimMap, Space: []int{R, W}, Part: k.Part, Apart: k.Apart, Of: k.Of, Capacity: k.Capacity}
+	r := h.add(Node{Op: OpCoord, A: 0, Type: U})
+	w := h.add(Node{Op: OpCoord, A: 1, Type: U})
+	elem := func(at int) int {
+		return h.un(OpHalf, U, copyInto(h, k, f.row, func(i int, nd Node) (int, bool) {
+			switch {
+			case nd.Op == OpCoord && nd.A == 0:
+				return r, true
+			case nd.Op == OpIter && nd.At == 0:
+				return at, true
+			}
+			return 0, false
+		}))
+	}
+	e := h.bin(OpMul, U, w, h.u32(2))
+	val := h.bin(OpOr, U, elem(e), h.bin(OpShl, U, elem(h.bin(OpAdd, U, e, h.u32(1))), h.u32(16)))
+	h.Stores = append(h.Stores, Store{Buf: h.buf(b), Val: val, At: -1, Ax: []int{r, w}})
+	return h, b
+}
+
+// form is k as the matrix unit's workgroups, the factor of its row
+// written as binary16 pairs first.
+func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 	U, F := ir.U32, ir.F32
 	tm, tn, tk := d.Matrix[0], d.Matrix[1], d.Matrix[2]
 	TR, TN, KC := p.Rows, p.Cols, f.depth
@@ -159,10 +202,15 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	// at a time.
 	const pad, G = 4, 8
 	SK := KC + pad
-	// One array holds the stage of A, then B's at bAt words, and after the
-	// trips the sums.
+	// A stage holds A's rows, then B's at bAt words; the array holds two,
+	// trip t multiplying stage t&1 while it fills the other with trip
+	// t+1's factors, and after the trips the sums.
 	bAt := TR * SK / 2
-	st := shared("stage", U, max(bAt+TN*SK/2, TR*TN))
+	half := bAt + TN*SK/2
+	st := shared("stage", U, max(2*half, WR*tm*TN))
+	if units := max(d.Units, 1); p.Resident*m.Group <= d.Slots/units && (d.Shared == 0 || p.Resident*4*m.Bufs[st].Size <= d.Shared) {
+		m.Resident = p.Resident
+	}
 
 	last := m.u32(R - 1)
 	if k.Capacity > 0 {
@@ -171,7 +219,8 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	lastOut := m.u32(N - 1)
 	r0 := m.bin(OpMul, U, m.add(Node{Op: OpCoord, A: 0, Type: U}), m.u32(TR))
 	n0 := m.bin(OpMul, U, m.add(Node{Op: OpCoord, A: 1, Type: U}), m.u32(TN))
-	warp := m.bin(OpShr, U, m.add(Node{Op: OpThread, Type: U}), m.u32(5))
+	thread := m.add(Node{Op: OpThread, Type: U})
+	warp := m.bin(OpShr, U, thread, m.u32(5))
 	wr0 := m.bin(OpMul, U, m.bin(OpDiv, U, warp, m.u32(WN)), m.u32(TR/WR))
 	wn0 := m.bin(OpMul, U, m.bin(OpRem, U, warp, m.u32(WN)), m.u32(TN/WN))
 	// spread is a loop dealing n trips over the workgroup, and its trip,
@@ -186,40 +235,72 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 		return l, it
 	}
 
-	P := m.loop(k.Loops[0].Trip/KC, -1)
-	m.Loops[P].Uniform, m.Loops[P].StepsLast = true, true
-	kc0 := m.bin(OpMul, U, m.add(Node{Op: OpIter, At: P, Type: U}), m.u32(KC))
-	m.Stores = append(m.Stores, Store{Barrier: true, At: P})
-	// stage is buf's rows of factor at coordinate axis base + the row, held
-	// to most: a trip G elements of k, binary16 pairs a word.
-	stage := func(at0, rows, axis, base, most, factor int) {
-		l, w := spread(rows*KC/G, P)
-		row := m.bin(OpDiv, U, w, m.u32(KC/G))
-		g := m.bin(OpRem, U, w, m.u32(KC/G))
-		c := m.bin(OpMin, U, m.bin(OpAdd, U, base, row), most)
-		kg := m.bin(OpAdd, U, kc0, m.bin(OpMul, U, g, m.u32(G)))
-		word := m.bin(OpAdd, U, m.bin(OpMul, U, row, m.u32(SK/2)), m.bin(OpAdd, U, m.bin(OpMul, U, g, m.u32(G/2)), m.u32(at0)))
-		elem := func(at int) int {
-			return m.un(OpHalf, U, copyInto(m, k, factor, func(i int, nd Node) (int, bool) {
-				switch {
-				case nd.Op == OpCoord && nd.A == axis:
-					return c, true
-				case nd.Op == OpIter && nd.At == 0:
-					return at, true
+	// stage stores, at loop l, the rows of factor at coordinate axis base +
+	// the row, held to most, from element kc of k into the stage at word
+	// into: G elements a share, binary16 pairs a word. A thread's shares
+	// are its own, not a loop's, so what a trip's shares load is a value of
+	// the trip a later pass can load a trip ahead.
+	h, hb := halves(k, f)
+	W := k.Loops[0].Trip / 2
+	hb.Kind, hb.Shape, hb.Extent = BufIn, nil, R*W
+	hw := m.buf(hb)
+	stage := func(l, kc, into, rows, axis, base, most, factor int) {
+		n := rows * KC / G
+		for j := 0; j*m.Group < n; j++ {
+			w := m.bin(OpAdd, U, thread, m.u32(j*m.Group))
+			if (j+1)*m.Group > n {
+				w = m.bin(OpMin, U, w, m.u32(n-1))
+			}
+			row := m.bin(OpDiv, U, w, m.u32(KC/G))
+			g := m.bin(OpRem, U, w, m.u32(KC/G))
+			c := m.bin(OpMin, U, m.bin(OpAdd, U, base, row), most)
+			kg := m.bin(OpAdd, U, kc, m.bin(OpMul, U, g, m.u32(G)))
+			word := m.bin(OpAdd, U, m.bin(OpMul, U, row, m.u32(SK/2)), m.bin(OpAdd, U, m.bin(OpMul, U, g, m.u32(G/2)), into))
+			elem := func(at int) int {
+				return m.un(OpHalf, U, copyInto(m, k, factor, func(i int, nd Node) (int, bool) {
+					switch {
+					case nd.Op == OpCoord && nd.A == axis:
+						return c, true
+					case nd.Op == OpIter && nd.At == 0:
+						return at, true
+					}
+					return 0, false
+				}))
+			}
+			if axis == 0 {
+				at := m.bin(OpAdd, U, m.bin(OpMul, U, c, m.u32(W)), m.bin(OpShr, U, kg, m.u32(1)))
+				for e := 0; e < G/2; e++ {
+					v := m.add(Node{Op: OpLoad, Type: U, Buf: hw, A: m.bin(OpAdd, U, at, m.u32(e))})
+					m.Stores = append(m.Stores, Store{Buf: st, Ix: m.bin(OpAdd, U, word, m.u32(e)), Val: v, At: l})
 				}
-				return 0, false
-			}))
-		}
-		for e := 0; e < G; e += 2 {
-			lo := elem(m.bin(OpAdd, U, kg, m.u32(e)))
-			hi := m.bin(OpShl, U, elem(m.bin(OpAdd, U, kg, m.u32(e+1))), m.u32(16))
-			ix := m.bin(OpAdd, U, word, m.u32(e/2))
-			m.Stores = append(m.Stores, Store{Buf: st, Ix: ix, Val: m.bin(OpOr, U, lo, hi), At: l})
+				continue
+			}
+			for e := 0; e < G; e += 2 {
+				lo := elem(kg)
+				if e > 0 {
+					lo = elem(m.bin(OpAdd, U, kg, m.u32(e)))
+				}
+				hi := m.bin(OpShl, U, elem(m.bin(OpAdd, U, kg, m.u32(e+1))), m.u32(16))
+				ix := m.bin(OpAdd, U, word, m.u32(e/2))
+				m.Stores = append(m.Stores, Store{Buf: st, Ix: ix, Val: m.bin(OpOr, U, lo, hi), At: l})
+			}
 		}
 	}
-	stage(0, TR, 0, r0, last, f.row)
-	stage(bAt, TN, 1, n0, lastOut, f.out)
+	T := k.Loops[0].Trip / KC
+	stage(-1, m.u32(0), m.u32(0), TR, 0, r0, last, f.row)
+	stage(-1, m.u32(0), m.u32(bAt), TN, 1, n0, lastOut, f.out)
+	m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
+	P := m.loop(T, -1)
+	m.Loops[P].Uniform = true
+	it := m.add(Node{Op: OpIter, At: P, Type: U})
+	next := m.bin(OpAdd, U, it, m.u32(1))
+	kn := m.bin(OpMul, U, m.bin(OpMin, U, next, m.u32(T-1)), m.u32(KC))
+	into := m.bin(OpMul, U, m.bin(OpAnd, U, next, m.u32(1)), m.u32(half))
+	stage(P, kn, into, TR, 0, r0, last, f.row)
+	stage(P, kn, m.bin(OpAdd, U, into, m.u32(bAt)), TN, 1, n0, lastOut, f.out)
 	m.Stores = append(m.Stores, Store{Barrier: true, At: P})
+	// from is the stage trip t multiplies, in binary16 elements.
+	from := m.bin(OpMul, U, m.bin(OpAnd, U, it, m.u32(1)), m.u32(2*half))
 
 	aT := ir.TileType{Rows: tm, Cols: tk, Elem: ir.TileF16, Use: ir.TileA}
 	bT := ir.TileType{Rows: tk, Cols: tn, Elem: ir.TileF16, Use: ir.TileB}
@@ -240,19 +321,18 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	a := make([][]int, mi)
 	for i := range a {
 		for s := 0; s < ks; s++ {
-			a[i] = append(a[i], tile(aT, at(wr0, i, tm, SK, s*tk), false))
+			a[i] = append(a[i], tile(aT, m.bin(OpAdd, U, at(wr0, i, tm, SK, s*tk), from), false))
 		}
 	}
 	b := make([][]int, nj)
 	for j := range b {
 		for s := 0; s < ks; s++ {
-			b[j] = append(b[j], tile(bT, m.bin(OpAdd, U, at(wn0, j, tn, SK, s*tk), m.u32(2*bAt)), true))
+			b[j] = append(b[j], tile(bT, m.bin(OpAdd, U, at(wn0, j, tn, SK, s*tk), m.bin(OpAdd, U, from, m.u32(2*bAt))), true))
 		}
 	}
 	zero := m.add(Node{Op: OpTileSplat, Type: ir.Void, A: m.f32(0), Tile: &cT})
-	// The sums overwrite the stage the last trip's products read.
-	m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
-	for i := 0; i < mi; i++ {
+	sums := make([][]int, mi)
+	for i := range sums {
 		for j := 0; j < nj; j++ {
 			fold := m.add(Node{Op: OpFold, Type: ir.Void, At: P, B: zero, Tile: &cT})
 			acc := fold
@@ -260,39 +340,50 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 				acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: a[i][s], B: b[j][s], C: acc, Tile: &cT})
 			}
 			m.Nodes[fold].A = acc
-			off := m.bin(OpAdd, U, at(wr0, i, tm, TN, 0), m.bin(OpAdd, U, wn0, m.u32(j*tn)))
-			m.Stores = append(m.Stores, Store{Buf: st, Ix: off, Val: fold, At: -1, Tile: true, Stride: m.u32(TN)})
+			sums[i] = append(sums[i], fold)
 		}
 	}
-	m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
-
-	E, e := spread(TR*TN, -1)
-	r := m.bin(OpMin, U, m.bin(OpAdd, U, r0, m.bin(OpDiv, U, e, m.u32(TN))), last)
-	n := m.bin(OpMin, U, m.bin(OpAdd, U, n0, m.bin(OpRem, U, e, m.u32(TN))), lastOut)
-	sum := m.add(Node{Op: OpLoad, Type: F, Buf: st, A: e})
-	leaf := func(i int, nd Node) (int, bool) {
-		switch {
-		case i == f.fold:
-			return sum, true
-		case nd.Op == OpCoord && nd.A == 0:
-			return r, true
-		case nd.Op == OpCoord && nd.A == 1:
-			return n, true
+	// The sums pass through the stage a row of tiles at a time: every
+	// warp's i-th, WR*tm rows of the block, behind a barrier, then the
+	// kernel's own stores an element a thread.
+	wq := m.bin(OpDiv, U, warp, m.u32(WN))
+	for i := 0; i < mi; i++ {
+		m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
+		for j := 0; j < nj; j++ {
+			off := m.bin(OpAdd, U, m.bin(OpMul, U, wq, m.u32(tm*TN)), m.bin(OpAdd, U, wn0, m.u32(j*tn)))
+			m.Stores = append(m.Stores, Store{Buf: st, Ix: off, Val: sums[i][j], At: -1, Tile: true, Stride: m.u32(TN)})
 		}
-		return 0, false
+		m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
+		E, e := spread(WR*tm*TN, -1)
+		lr := m.bin(OpDiv, U, e, m.u32(TN))
+		row := m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpDiv, U, lr, m.u32(tm)), m.u32(TR/WR)), m.bin(OpAdd, U, m.bin(OpRem, U, lr, m.u32(tm)), m.u32(i*tm)))
+		r := m.bin(OpMin, U, m.bin(OpAdd, U, r0, row), last)
+		n := m.bin(OpMin, U, m.bin(OpAdd, U, n0, m.bin(OpRem, U, e, m.u32(TN))), lastOut)
+		sum := m.add(Node{Op: OpLoad, Type: F, Buf: st, A: e})
+		leaf := func(i int, nd Node) (int, bool) {
+			switch {
+			case i == f.fold:
+				return sum, true
+			case nd.Op == OpCoord && nd.A == 0:
+				return r, true
+			case nd.Op == OpCoord && nd.A == 1:
+				return n, true
+			}
+			return 0, false
+		}
+		for _, s := range k.Stores {
+			c := s
+			c.At = E
+			c.Val = copyInto(m, k, s.Val, leaf)
+			if s.Ax == nil {
+				c.Ix = copyInto(m, k, s.Ix, leaf)
+			}
+			c.Ax = make([]int, len(s.Ax))
+			for x, ax := range s.Ax {
+				c.Ax[x] = copyInto(m, k, ax, leaf)
+			}
+			m.Stores = append(m.Stores, c)
+		}
 	}
-	for _, s := range k.Stores {
-		c := s
-		c.At = E
-		c.Val = copyInto(m, k, s.Val, leaf)
-		if s.Ax == nil {
-			c.Ix = copyInto(m, k, s.Ix, leaf)
-		}
-		c.Ax = make([]int, len(s.Ax))
-		for x, ax := range s.Ax {
-			c.Ax[x] = copyInto(m, k, ax, leaf)
-		}
-		m.Stores = append(m.Stores, c)
-	}
-	return m
+	return []*Kernel{h, m}
 }
