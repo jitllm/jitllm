@@ -309,8 +309,9 @@ func readDeviceUUID(p PhysDevice, apiVer uint32) ([uuidSize]byte, bool) {
 	if apiVer < apiVersion11 {
 		return zero, false
 	}
-	id := idProps{sType: stPhysDevIDProps}
-	p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(&id))}
+	id := onHeap[idProps]()
+	id.sType = stPhysDevIDProps
+	p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(id))}
 	vkGetPhysicalDeviceProperties2(p, up(&p2))
 	out := id.deviceUUID
 	// id is reachable only through a uintptr pNext, which is not a reference.
@@ -415,11 +416,13 @@ func (c *Ctx) Mem() (free, total uint64, err error) {
 		return 0, total, fmt.Errorf("%s does not support %s, so free memory is unknown (heap %d is %.2f GiB)",
 			c.name, extMemoryBudget, h, float64(total)/(1<<30))
 	}
-	var b memBudgetEXT
-	b.sType = stMemBudgetEXT
+	c.memq.Lock()
+	defer c.memq.Unlock()
+	b := &c.memq.b
+	*b = memBudgetEXT{sType: stMemBudgetEXT}
 	var p2 memProps2
 	p2.sType = stPhysDevMemProps2
-	p2.pNext = uintptr(up(&b))
+	p2.pNext = uintptr(up(b))
 	vkGetPhysicalDeviceMemoryProperties2(c.phys, up(&p2))
 
 	// The budget query returns the core properties too; take the heap size from
@@ -430,8 +433,5 @@ func (c *Ctx) Mem() (free, total uint64, err error) {
 	if b.usage[h] < b.budget[h] {
 		free = b.budget[h] - b.usage[h]
 	}
-	// b is reachable only through a uintptr in p2.pNext, which is not a
-	// reference; Open does the same for appInfo.
-	runtime.KeepAlive(b)
 	return free, total, nil
 }

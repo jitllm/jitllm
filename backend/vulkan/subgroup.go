@@ -159,12 +159,12 @@ func readSubgroups(p PhysDevice, apiVer uint32, control bool) Subgroups {
 	if apiVer < apiVersion11 {
 		return Subgroups{}
 	}
-	sg := subgroupProps{sType: stSubgroupProps}
-	sc := sizeCtlProps{sType: stSizeCtlProps}
+	sg, sc := onHeap[subgroupProps](), onHeap[sizeCtlProps]()
+	sg.sType, sc.sType = stSubgroupProps, stSizeCtlProps
 	if control {
-		sg.pNext = uintptr(up(&sc))
+		sg.pNext = uintptr(up(sc))
 	}
-	p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(&sg))}
+	p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(sg))}
 	vkGetPhysicalDeviceProperties2(p, up(&p2))
 
 	out := Subgroups{Size: sg.size, Stages: sg.stages, Ops: sg.ops, Control: control}

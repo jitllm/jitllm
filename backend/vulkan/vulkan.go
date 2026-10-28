@@ -219,6 +219,12 @@ type Ctx struct {
 	// dispatches counts vkCmdDispatch recorded; see Dispatches.
 	dispatches atomic.Uint64
 	budget     bool // VK_EXT_memory_budget is supported and enabled
+	// memq is Mem's budget struct, which the driver fills through a pNext
+	// uintptr: on the heap with the Ctx, one caller at a time.
+	memq struct {
+		sync.Mutex
+		b memBudgetEXT
+	}
 	// tiles reports that VK_KHR_cooperative_matrix is present and every feature
 	// the tile kernels' SPIR-V declares was enabled at vkCreateDevice. Both,
 	// because a driver may run the kernel either way and only compute the right
@@ -261,6 +267,14 @@ func Orphans() []string {
 	defer orphans.Unlock()
 	return append([]string(nil), orphans.names...)
 }
+
+// onHeap is a new zero T on the heap. A struct the driver reaches through a
+// uintptr field (a pNext chain, a create info's array) must not live on a
+// goroutine stack: the stack is copied when it grows, at any call before the
+// driver reads it, and a uintptr is not moved with it.
+//
+//go:noinline
+func onHeap[T any]() *T { return new(T) }
 
 func cstr(s string) (uintptr, []byte) {
 	b := append([]byte(s), 0)
@@ -337,9 +351,9 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 	}
 	hostAlign := uint64(0)
 	if hasHostMem && pick.apiVer >= apiVersion11 {
-		var hp extMemHostProps
+		hp := onHeap[extMemHostProps]()
 		hp.sType = stExtMemHostProps
-		p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(&hp))}
+		p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(hp))}
 		vkGetPhysicalDeviceProperties2(c.phys, up(&p2))
 		hostAlign = hp.minAlign
 		runtime.KeepAlive(hp)
@@ -379,11 +393,12 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		prios[i] = 1
 	}
 	c.pins = append(c.pins, prios)
-	qci := queueCI{sType: stDeviceQueueCI, family: c.family, count: uint32(nq), prio: uintptr(up(&prios[0]))}
-	df := dotFeat{sType: stDotProdFeat, on: 1}
-	sc := sizeCtlFeat{sType: stSizeCtlFeat, control: 1, full: 1}
-	dci := deviceCI{sType: stDeviceCI, pNext: uintptr(up(&df)),
-		nQueues: 1, pQueues: uintptr(up(&qci))}
+	qci, df, sc := onHeap[queueCI](), onHeap[dotFeat](), onHeap[sizeCtlFeat]()
+	*qci = queueCI{sType: stDeviceQueueCI, family: c.family, count: uint32(nq), prio: uintptr(up(&prios[0]))}
+	*df = dotFeat{sType: stDotProdFeat, on: 1}
+	*sc = sizeCtlFeat{sType: stSizeCtlFeat, control: 1, full: 1}
+	dci := deviceCI{sType: stDeviceCI, pNext: uintptr(up(df)),
+		nQueues: 1, pQueues: uintptr(up(qci))}
 	var exts []uintptr
 	if c.tiles {
 		extPtr, extBuf := cstr(extCooperativeMatrix)
@@ -405,7 +420,7 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		extPtr, extBuf := cstr(extSubgroupSizeControl)
 		c.pins = append(c.pins, extBuf)
 		exts = append(exts, extPtr)
-		df.pNext = uintptr(up(&sc))
+		df.pNext = uintptr(up(sc))
 		tail = &sc.pNext
 		c.sg.Enabled = true
 	}
@@ -421,6 +436,7 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		c.Close()
 		return nil, err
 	}
+	runtime.KeepAlive(qci)
 	runtime.KeepAlive(df)
 	runtime.KeepAlive(sc)
 	runtime.KeepAlive(tf)
@@ -476,9 +492,10 @@ var proc struct {
 func instance() (Instance, error) {
 	proc.Do(func() {
 		namePtr, nameBuf := cstr("jitllm")
-		ai := appInfo{sType: stAppInfo, pName: namePtr, pEngine: namePtr,
+		ai := onHeap[appInfo]()
+		*ai = appInfo{sType: stAppInfo, pName: namePtr, pEngine: namePtr,
 			apiVer: 1<<22 | 3<<12} // 1.3: shaderIntegerDotProduct is core
-		ici := instanceCI{sType: stInstanceCI, pApp: uintptr(up(&ai))}
+		ici := instanceCI{sType: stInstanceCI, pApp: uintptr(up(ai))}
 		proc.err = check(vkCreateInstance(up(&ici), nil, up(&proc.inst)), "vkCreateInstance")
 		runtime.KeepAlive(ai)
 		runtime.KeepAlive(nameBuf)

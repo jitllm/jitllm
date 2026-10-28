@@ -9696,3 +9696,22 @@ row where the composer's reads two.
   TestDecisionOnEveryDevice/lev passes its equality (the picked labels
   answer the row's) on a V100's CUDA and Vulkan in both builds, where it
   read 1e-6 in a probability.
+- **No struct the Vulkan driver reads through a uintptr lives on a stack.**
+  After Compile's fix, the same shape stood at nine more sites: the pNext
+  chains of the subgroup, UUID, core-count, host-memory and memory-budget
+  queries, the device's queue, dot-product and subgroup-size create infos,
+  the application info, and the import's external-memory structs. Each was
+  a local whose address went into another struct's uintptr field, so a
+  stack copy on the way into the driver (any call that grows the stack, the
+  FFI wrapper's included) left the field pointing at the old stack. They
+  are on the heap now (vulkan.onHeap, at open and at an import), and
+  Mem's budget struct is the Ctx's, under its own lock, so a budget read
+  allocates nothing. CUDA and Metal hold no such field. The escape
+  analysis gains twelve heap allocations, all at device open or an import,
+  against the base, which kept every one of them on the stack. The
+  side-by-side compile gate passes (V100: 75 rounds of eight goroutines, 0
+  failed, 412 MB; RTX 3050 Ti: 280 rounds, 260 MB), and the composed
+  TestDecodeDoesNotAllocate on Vulkan passes on the laptop for every model
+  but the Gemma 4 fixtures, whose composed head at a step of 3 rows wants
+  2.68 GB of buffers the 4 GB card does not hold, and on a V100 for those
+  (vulkan:2, every subtest).

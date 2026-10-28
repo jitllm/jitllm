@@ -723,8 +723,9 @@ func (c *Ctx) Import(p unsafe.Pointer, n int) (*Buf, error) {
 	}
 
 	b := &Buf{c: c, n: n}
-	emb := extMemBufCI{sType: stExtMemBufferCI, handles: handleTypeHostAlloc}
-	bci := bufferCI{sType: stBufferCI, pNext: uintptr(up(&emb)), size: uint64(n),
+	emb := onHeap[extMemBufCI]()
+	*emb = extMemBufCI{sType: stExtMemBufferCI, handles: handleTypeHostAlloc}
+	bci := bufferCI{sType: stBufferCI, pNext: uintptr(up(emb)), size: uint64(n),
 		usage: usageStorageBuffer | usageTransferSrc | usageTransferDst}
 	if err := check(vkCreateBuffer(c.dev, up(&bci), nil, up(&b.buf)), "vkCreateBuffer"); err != nil {
 		return nil, err
@@ -748,8 +749,9 @@ func (c *Ctx) Import(p unsafe.Pointer, n int) (*Buf, error) {
 		return nil, fmt.Errorf("%w (buffer types %#x, host-pointer types %#x)",
 			err, req.typeBits, props.typeBits)
 	}
-	imp := importHostPtrInfo{sType: stImportMemHostPtr, handleType: handleTypeHostAlloc, p: uintptr(p)}
-	ma := memAlloc{sType: stMemAllocInfo, pNext: uintptr(up(&imp)), size: uint64(n), typeIdx: idx}
+	imp := onHeap[importHostPtrInfo]()
+	*imp = importHostPtrInfo{sType: stImportMemHostPtr, handleType: handleTypeHostAlloc, p: uintptr(p)}
+	ma := memAlloc{sType: stMemAllocInfo, pNext: uintptr(up(imp)), size: uint64(n), typeIdx: idx}
 	if err := check(vkAllocateMemory(c.dev, up(&ma), nil, up(&b.mem)), "vkAllocateMemory (imported host pointer)"); err != nil {
 		vkDestroyBuffer(c.dev, b.buf, nil)
 		return nil, err

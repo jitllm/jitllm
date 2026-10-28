@@ -59,9 +59,9 @@ func readCores(p PhysDevice, apiVer uint32) (cores int, from string, regs int) {
 		return 0, "", 0
 	}
 	if ok, err := hasExtension(p, extSMBuiltins); err == nil && ok {
-		var sp smBuiltinsProps
+		sp := onHeap[smBuiltinsProps]()
 		sp.sType = stSMBuiltinsProps
-		p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(&sp))}
+		p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(sp))}
 		vkGetPhysicalDeviceProperties2(p, up(&p2))
 		runtime.KeepAlive(sp)
 		if sp.smCount > 0 {
@@ -69,9 +69,9 @@ func readCores(p PhysDevice, apiVer uint32) (cores int, from string, regs int) {
 		}
 	}
 	if ok, err := hasExtension(p, extAMDCoreProps); err == nil && ok {
-		var ap amdCoreProps
+		ap := onHeap[amdCoreProps]()
 		ap.sType = stAMDCoreProps
-		p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(&ap))}
+		p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(ap))}
 		vkGetPhysicalDeviceProperties2(p, up(&p2))
 		runtime.KeepAlive(ap)
 		if n := ap.shaderEngineCount * ap.shaderArraysPerEngine * ap.computeUnitsPerShaderArr; n > 0 {
