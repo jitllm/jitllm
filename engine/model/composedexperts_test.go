@@ -116,6 +116,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 						t.Logf("the card holds no whole banks for %d block steps (%s): the compact bank in pages is the reference", d, declinesOf(whole))
 						want, _, _ = decode(t, false, stream(-1))
 					}
+					resident := map[int]int64{}
 					for _, arm := range []struct {
 						name   string
 						slots  int
@@ -152,8 +153,10 @@ func TestComposedExpertPagesServe(t *testing.T) {
 							}
 							t.Logf("%d block steps served from pages, %d fills, cache %d hits %d misses, %d host page-ins: worst NMSE %.3e against the whole banks",
 								served, st.StreamFills, st.StreamCacheHits, st.StreamCacheMisses, pageIns, worst)
-							if arm.budget && pageIns <= int64(moe*nExp) {
-								t.Fatalf("a one-page budget took %d page-ins for %d experts' pages: the host evicted nothing", pageIns, moe*nExp)
+							if !arm.budget {
+								resident[arm.slots] = pageIns
+							} else if pageIns <= resident[arm.slots] {
+								t.Fatalf("a one-page budget took %d page-ins against %d resident: the host evicted nothing", pageIns, resident[arm.slots])
 							}
 							if arm.budget {
 								return
@@ -188,15 +191,19 @@ func TestComposedExpertPagesServe(t *testing.T) {
 // they land on.
 func TestComposedExpertPagesMove(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
-		t.Run(name, func(t *testing.T) {
-			path := jlmOf(t, testmodels.Path(name))
-			blocksMoveBetweenDevicesWith(t, path, moveWhole, tier.ComposedBlock, func(st tier.Stats) {
-				if st.StreamFills == 0 || st.StreamBlocks == 0 {
-					t.Fatalf("%d streamed placements and %d fills: the banks were not in pages", st.StreamBlocks, st.StreamFills)
-				}
-				t.Logf("%d streamed placements, %d fills from pages", st.StreamBlocks, st.StreamFills)
-			}, WithExperts("card"), WithStreamTrial(false))
-		})
+		// The tier's own kernels too: the moves are the tier's, whoever
+		// runs the blocks.
+		for _, parts := range []tier.Parts{0, tier.ComposedBlock} {
+			t.Run(composedArm(name, parts), func(t *testing.T) {
+				path := jlmOf(t, testmodels.Path(name))
+				blocksMoveBetweenDevicesWith(t, path, moveWhole, parts, func(st tier.Stats) {
+					if st.StreamFills == 0 || st.StreamBlocks == 0 {
+						t.Fatalf("%d streamed placements and %d fills: the banks were not in pages", st.StreamBlocks, st.StreamFills)
+					}
+					t.Logf("%d streamed placements, %d fills from pages", st.StreamBlocks, st.StreamFills)
+				}, WithExperts("card"), WithStreamTrial(false))
+			})
+		}
 	}
 }
 
