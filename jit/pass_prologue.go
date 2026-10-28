@@ -232,14 +232,20 @@ func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 			}
 		}
 	}
-	bufOf := make([]int, len(pr.Bufs))
+	// A value the graph hands back is stored whole as well: every workgroup
+	// makes the same words, and the caller reads them past every kernel.
+	bufOf, heldOf := make([]int, len(pr.Bufs)), make([]int, len(pr.Bufs))
 	for i, b := range pr.Bufs {
+		heldOf[i] = -1
+		if b.Kind == BufOut && b.Operand.Out {
+			heldOf[i] = k.bufLike(b)
+		}
 		switch {
 		case b.Kind == BufOut:
 			if at, ok := shared[b.Operand]; ok {
 				bufOf[i] = at
 			} else {
-				bufOf[i] = -1
+				bufOf[i] = heldOf[i]
 			}
 		case b.Kind == BufShared:
 			bufOf[i] = k.buf(b)
@@ -350,6 +356,7 @@ func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 		if !st.Barrier && bufOf[st.Buf] < 0 {
 			continue
 		}
+		held := !st.Barrier && heldOf[st.Buf] >= 0 && heldOf[st.Buf] != bufOf[st.Buf]
 		// The producer's own last barrier is the one the pass puts after it.
 		if st.Barrier && st.At == -1 && si == len(pr.Stores)-1 {
 			continue
@@ -373,6 +380,11 @@ func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 			}
 		}
 		first = append(first, ns)
+		if held {
+			whole := ns
+			whole.Buf, whole.Ax = heldOf[st.Buf], slices.Clone(ns.Ax)
+			first = append(first, whole)
+		}
 	}
 	// What the producer wrote is seen by every thread before the kernel's
 	// own body reads it.

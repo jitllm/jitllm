@@ -82,16 +82,17 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	}
 	out := n.Bufs[n.Stores[st].Buf].Operand
 	planes := Operand{Kind: OperandScratch, Name: out.Name + ".planes", Of: out.Of}
-	shape := append([]int{S}, n.Space...)
+	at := segmentAxis(n)
+	shape := slices.Insert(slices.Clone(n.Space), at, S)
 	p := n.clone()
 	p.Name = n.Name + ".part"
 	p.Space = shape
 	for i := range p.Nodes {
-		if p.Nodes[i].Op == OpCoord {
+		if p.Nodes[i].Op == OpCoord && p.Nodes[i].A >= at {
 			p.Nodes[i].A++
 		}
 	}
-	seg := p.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
+	seg := p.add(Node{Op: OpCoord, A: at, Type: ir.U32})
 	p.Loops[c].Trip = T / S
 	if it := p.iterOf(c); it >= 0 {
 		k := p.bin(OpAdd, ir.U32, p.bin(OpMul, ir.U32, seg, p.u32(T/S)), it)
@@ -107,10 +108,11 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		first := p.add(Node{Op: OpLess, Type: ir.Pred, A: seg, B: p.u32(1)})
 		val = p.bin(OpAdd, t, f, p.add(Node{Op: OpSelect, Type: t, A: first, B: term, C: zero(p)}))
 	}
-	ax := append([]int{seg}, p.Stores[st].Ax...)
+	ax := slices.Insert(slices.Clone(p.Stores[st].Ax), at, seg)
 	p.Stores[st] = Store{Buf: b, Val: val, At: -1, Ax: ax}
 
-	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Apart: n.Apart, Of: n.Of}
+	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Apart: n.Apart, Of: n.Of,
+		Capacity: n.Capacity}
 	coords := make([]int, len(m.Space))
 	for i := range coords {
 		coords[i] = m.add(Node{Op: OpCoord, A: i, Type: ir.U32})
@@ -120,10 +122,21 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	l := m.loop(S, -1)
 	it := m.add(Node{Op: OpIter, At: l, Type: ir.U32})
 	acc := m.add(Node{Op: OpFold, At: l, Type: t, B: zero(m)})
-	x := m.add(Node{Op: OpLoad, Type: t, Buf: in, Ax: append([]int{it}, coords...)})
+	x := m.add(Node{Op: OpLoad, Type: t, Buf: in, Ax: slices.Insert(slices.Clone(coords), at, it)})
 	m.Nodes[acc].A = m.bin(OpAdd, t, acc, x)
 	m.Stores = append(m.Stores, Store{Buf: ob, Val: acc, At: -1, Ax: coords})
 	return []*Kernel{p, m}, true, nil
+}
+
+// segmentAxis is the axis a cut's segments take in a kernel's space: the
+// front, or behind the leading axis of a form of a capacity, which stays the
+// step's rows for the passes after (CallRows holds a call to the rows of the
+// leading axis).
+func segmentAxis(n *Kernel) int {
+	if n.Capacity > 0 && len(n.Space) > 0 {
+		return 1
+	}
+	return 0
 }
 
 // groupSplit is n's sum over loop c in S segments within one workgroup:

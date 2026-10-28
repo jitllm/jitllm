@@ -2,6 +2,7 @@ package jit
 
 import (
 	"math"
+	"slices"
 
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -46,17 +47,18 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 	vout, cout := n.Bufs[vst.Buf].Operand, n.Bufs[cst.Buf].Operand
 	vplanes := Operand{Kind: OperandScratch, Name: n.Name + "." + vout.Name + ".planes", Of: vout.Of}
 	cplanes := Operand{Kind: OperandScratch, Name: n.Name + "." + cout.Name + ".planes", Of: cout.Of, Elem: ct}
-	shape := append([]int{S}, n.Space...)
+	at := segmentAxis(n)
+	shape := slices.Insert(slices.Clone(n.Space), at, S)
 
 	p := n.clone()
 	p.Name = n.Name + ".part"
 	p.Space = shape
 	for i := range p.Nodes {
-		if p.Nodes[i].Op == OpCoord {
+		if p.Nodes[i].Op == OpCoord && p.Nodes[i].A >= at {
 			p.Nodes[i].A++
 		}
 	}
-	seg := p.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
+	seg := p.add(Node{Op: OpCoord, A: at, Type: ir.U32})
 	p.Loops[c].Trip = T / S
 	if it := p.iterOf(c); it >= 0 {
 		k := p.bin(OpAdd, ir.U32, p.bin(OpMul, ir.U32, seg, p.u32(T/S)), it)
@@ -64,10 +66,11 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 	}
 	vb := p.buf(Buf{Kind: BufOut, Elem: vt, Operand: vplanes, Shape: shape})
 	cb := p.buf(Buf{Kind: BufOut, Elem: ct, Operand: cplanes, Shape: shape})
-	p.Stores[vs] = Store{Buf: vb, Val: ext, At: -1, Ax: append([]int{seg}, vst.Ax...)}
-	p.Stores[cs] = Store{Buf: cb, Val: car, At: -1, Ax: append([]int{seg}, cst.Ax...)}
+	p.Stores[vs] = Store{Buf: vb, Val: ext, At: -1, Ax: slices.Insert(slices.Clone(vst.Ax), at, seg)}
+	p.Stores[cs] = Store{Buf: cb, Val: car, At: -1, Ax: slices.Insert(slices.Clone(cst.Ax), at, seg)}
 
-	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Apart: n.Apart, Of: n.Of}
+	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Apart: n.Apart, Of: n.Of,
+		Capacity: n.Capacity}
 	coords := make([]int, len(m.Space))
 	for i := range coords {
 		coords[i] = m.add(Node{Op: OpCoord, A: i, Type: ir.U32})
@@ -76,9 +79,9 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 	cin := m.buf(Buf{Kind: BufIn, Elem: ct, Operand: cplanes, Shape: shape})
 	l := m.loop(S, -1)
 	it := m.add(Node{Op: OpIter, At: l, Type: ir.U32})
-	at := append([]int{it}, coords...)
-	x := m.add(Node{Op: OpLoad, Type: vt, Buf: vin, Ax: at})
-	y := m.add(Node{Op: OpLoad, Type: ct, Buf: cin, Ax: append([]int(nil), at...)})
+	idx := slices.Insert(slices.Clone(coords), at, it)
+	x := m.add(Node{Op: OpLoad, Type: vt, Buf: vin, Ax: idx})
+	y := m.add(Node{Op: OpLoad, Type: ct, Buf: cin, Ax: slices.Clone(idx)})
 	acc := m.add(Node{Op: OpFold, At: l, Type: vt, B: m.f32(math.Float32bits(float32(math.Inf(-1))))})
 	m.Nodes[acc].A = m.bin(OpMax, vt, x, acc)
 	carried := m.add(Node{Op: OpFold, At: l, Type: ct, B: m.add(Node{Op: OpConst, Type: ct})})
