@@ -9804,3 +9804,38 @@ row where the composer's reads two.
   main's word for word. The gpt-oss rows PX recorded (0.051) and its server
   four times its CLI do not reproduce at the base: its server reads 276 ms a
   512-token prompt, its CLI 278 ms of kernels.
+- **The composer's CPU lowering has an arm64 target.** jit/lowercpu.go
+  lowered through jit/x86 only, so an arm64 host's CPU device ran no
+  composed block. The CPU profile is unchanged: each of its sixteen
+  eight-lane vector registers is a NEON pair (lanes 0-3 in V2r, 4-7 in
+  V2r+1) and each general register an X register, the argument block in X0
+  as trampoline_arm64.s passes it, so every pass and the binder serve both
+  targets. Each node is lowered from the composer's IR through jit/cpu's A64
+  encoder, which gains the instructions it emits (a64ops.go, pinned to
+  llvm-mc's words); no second assembler and no main kernel. An operation
+  within 128-bit lanes is its NEON operation on both halves, one that clears
+  an x86 register's upper half clears V2r+1, and a temporary the binder gave
+  no register is a pair register saved below SP around its use. A byte dot
+  is SDOT where the device states FEAT_DotProd (cpu.ISADotProd, the bit an
+  arm64 host's ISA carries) and SMULL/ADDP/SADALP where it does not. The
+  CPU also serves an f32 history now (Registry.WithoutHalves: the profile
+  without the Halves pass), the arm64 default cache, which every block
+  declined before; and the per-worker words grow to a prefill pool wider
+  than the decode pool, which on the M4 (P+E for a prompt) indexed past
+  them. On the M4: every jit CPU gate passes (TestComposedCPUMatVec 240
+  formed and right, the 60 int8 arms without dotprod among them), and under
+  qemu as a Cortex-A72 (no dotprod) every one passes too; five mutants
+  (SDOT on one half, the widened dot's pair sum, FMLS for FMLA, the lane
+  sum's halves, the wide store's upper half) each fail them.
+  TestComposedCPUBlocksServe passes on ten of the eleven CPU-served models
+  (median ratio 0.000 to 1.064 of main's spread, every violation out of
+  the band); Gemma 4 E2B is served and in the band (1.091) but its page
+  violation leaves the logits unchanged, so it is not in the gate's green
+  set on arm64 until that violation reaches it. TestCPUComposesOnce passes
+  on all ten models, its relocation to Metal and back included, and the
+  composed TestDecodeDoesNotAllocate host arm passes on Llama-3.2-1B and
+  Qwen3.5-0.8B. Decode on the M4 (decode on the four P cores), interleaved,
+  A/A 0.9998 and 1.0007: Llama-3.2-1B Q4_K_M composed 22.5 and 22.8 tok/s
+  against main's 79.7 and 79.8 (0.282x, 0.286x; 803 MB a token, main at 87%
+  and composed at 25% of the 73.4 GB/s wall). Qwen3-0.6B Q8_0's A/A read
+  0.964 and 0.962 (IQR/median 0.005) twice, so the harness refused it.
