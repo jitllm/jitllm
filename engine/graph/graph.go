@@ -250,10 +250,23 @@ const (
 	// then its own Span's second halves. Out[0] is one row of HeadDim. A
 	// primitive over the history, as OpAttend is: a compressor's entry.
 	OpColPool
+	// OpNGramHash is each row's n-gram table rows from its window In[0]
+	// (u32, n words: the row's token, then its n-1 predecessors nearest
+	// first, each its id plus one, zero for none). A predecessor that is
+	// none, or where Reset at or past one whose id is the end of sequence
+	// (Words[0]), reads as that id; the token itself is read as it is. With
+	// c the window's ids and m the n multipliers (Words[1:1+n]), head
+	// h = (g-2)*Span+k of the g-grams (g from 2 to n, k below Span) reads
+	// row (c0*m0 ^ c1*m1 ^ ... ^ c(g-1)*m(g-1)) mod voc[h] + off[h],
+	// unsigned 64-bit wrapping, off[h] and voc[h] Words[1+n+2h] and
+	// Words[2+n+2h]: Out[0] (u32, (n-1)*Span) the rows, Out[1] (u32, n-1)
+	// the next position's predecessors, the token's id plus one then the
+	// window's first n-2. A primitive.
+	OpNGramHash
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -506,6 +519,10 @@ type Attrs struct {
 	Order Order
 	Span  int
 	Const float64
+	// Words are OpNGramHash's constants, Reset its cut at an end of
+	// sequence.
+	Words []uint64
+	Reset bool
 	// Exact asks a MapDiv, an OpMap's or an OpExpr term's, for the IEEE
 	// quotient where the device's own division is not correctly rounded;
 	// without it a division takes the device's, within the gates' band like

@@ -10847,3 +10847,36 @@ row where the composer's reads two.
   worst 0.0455 and 0.0498 from the host, as before). TestComposedRowsServe
   passes on both; with every borrowed buffer aliased to one, its ragged
   rows read token 0 everywhere (18.8 apart on the host).
+- The input rows of a model whose streams are expanded (predicted or
+  copied) are stated over every stream: the embedding, each stream past
+  the first from it (Gemma 3n's projected and magnitude-matched, DeepSeek
+  V4's and Qwen3.8-Flash-Next's copies) and the per-layer inputs, one graph
+  whose outputs the card binds as the stream-major residual's views and its
+  per-layer input buffer (embedOuts); the expansion's and per-layer tables
+  are held at no block's slot (nn.Head.Streams). A prompt chunk's rows,
+  which the host fills a stream at a time, are declined by name
+  (DeclineEmbedStreams). A call of the head alone hands the card every
+  stream, which the composer's form of the front end's collapse reduces to
+  the row the head reads, copied over the first stream so the tier's own
+  head and the composer's read it alike (collapse.go, nn.Head.Collapse);
+  the host collapses only where the card refuses the call. On the V100 box
+  (cuda:0, vulkan:2) TestStreamRowsServeOnTheCard serves every decode
+  step's input rows, collapse and head: synth-deepseek4 at 1.5e-10 and
+  2.1e-10 (29 rows, 30 collapses, 29 heads), synth-gemma3n with its blocks
+  at 7.0e-9 and 5.7e-11 (9 rows, 10 collapses and heads, 90 block steps).
+  The streams past the first written empty move them 2.43 and 0.157, a
+  stream read twice where the collapse reads them 0.111 and 0.0698, the
+  gather a token off 2.39 and 2.44, Gemma 3n's per-layer inputs empty
+  0.664. TestDecodeDoesNotAllocate passes on both.
+- The n-gram hash is an op (graph.OpNGramHash): a window of ids in, each
+  head's table row and the next predecessors out. The composer states its
+  64-bit arithmetic in words of 32 bits: each product as four limbs of 16
+  bits, a column at a time, xored, then reduced by the head's vocabulary
+  from the top a few bits at a time; equality is a difference's bits and a
+  choice a product by it. One map holding a gram's whole product refused
+  the CPU's registers; a map a gram's limbs and a map a head fit.
+  TestComposedCPUNGramHash and TestComposedGPUNGramHash (ptx and spirv on
+  the V100) hold eight shapes, 40 windows each at a decode step's row, to
+  the 64-bit reference word for word; the reset ignored parts 94 windows
+  and a head dropped 240. A form of 40 rows wrote past its outputs on the
+  CPU (the runner's guard words): open, the op is gated at one row.

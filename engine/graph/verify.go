@@ -218,6 +218,19 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || o.Attr.Offset < 0 || o.Attr.Span < 0 {
 				bad("%s: %d inputs into %d outputs, offset %d and span %d", at, len(o.In), len(o.Out), o.Attr.Offset, o.Attr.Span)
 			}
+		case OpNGramHash:
+			n, per := 0, o.Attr.Span
+			if len(o.In) == 1 {
+				n = width(o.In[0])
+			}
+			switch {
+			case len(o.In) != 1 || len(o.Out) != 2 || n < 2 || per < 1 || len(o.Attr.Words) != 1+n+2*(n-1)*per:
+				bad("%s: %d inputs into %d outputs, a window of %d, %d heads a gram, %d constants", at, len(o.In), len(o.Out), n, per, len(o.Attr.Words))
+			case width(o.Out[0]) != (n-1)*per || width(o.Out[1]) != n-1:
+				bad("%s: %d rows and %d predecessors from a window of %d", at, width(o.Out[0]), width(o.Out[1]), n)
+			case g.Values[o.In[0]].Elem != ElemU32 || g.Values[o.Out[0]].Elem != ElemU32 || g.Values[o.Out[1]].Elem != ElemU32:
+				bad("%s: a window, rows and predecessors not of indices", at)
+			}
 		case OpSelect:
 			a := o.Attr
 			switch {
