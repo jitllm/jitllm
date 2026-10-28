@@ -267,13 +267,14 @@ func TestLFM2RealMatchesTransformers(t *testing.T) {
 				}
 			}
 
-			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec))
+			for _, arm := range towerArms() {
+				spec := arm.spec
+				gpu, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
 				if err != nil || gpu == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
 				}
-				t.Run(spec, func(t *testing.T) {
+				t.Run(arm.String(), func(t *testing.T) {
 					defer gpu.Close()
 					s := tw.testState()
 					defer s.Close()
@@ -281,7 +282,12 @@ func TestLFM2RealMatchesTransformers(t *testing.T) {
 					if n := s.GPUBlocks(); n != c.NLayer {
 						t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, gpu.Err())
 					}
-					_, _, got, _ := lfm2Encode(t, tw, s, path)
+					_, _, pcs, err := tw.LFM2Pieces(decodeImage(t, path))
+					if err != nil {
+						t.Fatal(err)
+					}
+					var got []float32
+					arm.served(t, gpu, c.NLayer*len(pcs), func() { _, _, got, _ = lfm2Encode(t, tw, s, path) })
 					dn, _ := nmseOf(got, emb)
 					tn, _ := nmse32(wantEmb, got)
 					t.Logf("%s, all %d blocks: NMSE %.3e against the host, %.3e against transformers",

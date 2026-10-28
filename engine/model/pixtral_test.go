@@ -356,14 +356,15 @@ func TestPixtralOnDeviceMatchesHost(t *testing.T) {
 	want := encode(host)
 	host.Close()
 	ran := 0
-	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
+	for _, arm := range towerArms() {
+		spec := arm.spec
+		gpu, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
-		t.Run(spec, func(t *testing.T) {
+		t.Run(arm.String(), func(t *testing.T) {
 			defer gpu.Close()
 			s := tw.testState()
 			defer s.Close()
@@ -371,7 +372,8 @@ func TestPixtralOnDeviceMatchesHost(t *testing.T) {
 			if n := s.GPUBlocks(); n != tw.Cfg.NLayer {
 				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, tw.Cfg.NLayer, gpu.Err())
 			}
-			got := encode(s)
+			var got []float32
+			arm.served(t, gpu, tw.Cfg.NLayer, func() { got = encode(s) })
 			nm, worst := nmseOf(got, want)
 			t.Logf("%s, all %d blocks: NMSE %.3e, max|d| %.4f against the host", spec, tw.Cfg.NLayer, nm, worst)
 			if math.IsNaN(nm) || math.IsInf(nm, 0) || nm > 1e-3 {

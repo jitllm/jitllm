@@ -10020,3 +10020,41 @@ row where the composer's reads two.
   2.27). Its composed decode reads 4.8e-13 from the host on cuda:0 and
   5.7e-13 on vulkan, every block step composed. Its router violations reach
   the composed arm through the restated container.
+- Every tower family the front end states runs composed in its own device
+  gate: TestInternVLTowerOnDevice, TestJanusOnDeviceMatchesHost,
+  TestPixtralOnDeviceMatchesHost, TestLlama4OnDeviceMatchesHost,
+  TestPhi4TowerOnDeviceMatchesHost, TestRotaryTowerOnDeviceMatchesHost (the
+  Qwen-VL fixtures, GLM-4.1V), TestKimiVLTowerOnDeviceMatchesHost,
+  TestGemma4OnDeviceMatchesHost, TestMiniCPMVOnDeviceMatchesHost and
+  LFM2-VL's take a `/composed` arm per device (towerArms: ComposedStep
+  against Composed 0), each encode's composed tower block runs counted and
+  no decline allowed; TestQwenTowerMatchesTransformers and
+  TestGemma4TowerMatchesTransformers take a `composed-cpu` arm held to
+  transformers at the family's bound, every violation restated to the
+  composer (restateTower: the front end states the graphs again from the
+  configuration as it stands). Two statements were missing: MoonViT's
+  rotary takes its axes pair by pair in a cycle (graph.Attrs.Cycle and
+  CycleAxes, each cycle at its first pair's frequency; the composer builds
+  no table over one and refuses it by name), and Gemma 4's clipped linears
+  are OpClamp against the block's stored pairs (jlm.RoleVClamp, bound on
+  the CPU device and the cards; its kernel gate exact against
+  oracle.Clamp32 at ragged widths, CPU 240 cases, ptx and spirv 135 each,
+  the table read one word over seen). A cross-attention is OpAttend under
+  Bidir over a history its graph does not write (Builder.CrossAttend):
+  held to the definition from 1 query over 1 key to 64 over 300 at head
+  widths 128, 72 and 48, CPU 15 of 15, ptx and spirv 30 of 30 at up to
+  5.6e-14, a span cut by a key either end seen. TestComposedTowerOnDevice
+  runs all 17 stated towers on cuda:0 and vulkan of a V100, each held to
+  its family gate's whole-encode bound (1e-2 where that gate holds the
+  device to transformers on its own picture) and set beside the tier's
+  own kernels on the same picture: Qwen2.5-VL 5.04e-3 composed against
+  5.04e-3, Janus 1.718e-2 against 1.714e-2 (its bound 2e-2), llava 2.4e-3
+  against 8.8e-4; after one block the composer's binary16 matrix forms
+  take main's binary16 bound (Llama 4 1.4e-4 under 5e-4, 6 composed matrix
+  launches). The composed CPU's warm-encode check counts the engine's
+  allocations apart from the runtime's per-P caches (countAllocs, the
+  decode gate's): a process-wide count read 0 to 23 for the same Qwen3-VL
+  encode from one run to the next. Not stated yet: Gemma 3n's MobileNet-V5
+  blocks (a 2-D depthwise convolution over a picture's grid needs the CPU
+  lowering's integer division of a row by the grid width, packed, which it
+  has not), and the resampler itself, which is a projector.

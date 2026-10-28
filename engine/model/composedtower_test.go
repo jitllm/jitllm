@@ -1,7 +1,11 @@
 package model
 
 import (
+	"math"
 	"testing"
+
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
@@ -93,18 +97,19 @@ func composedTowerOnCPU(t *testing.T, open func(testing.TB, ...Option) (*Model, 
 		t.Fatalf("the composed CPU's encode is NMSE %.3e from main's (bound 1e-2)", nmse)
 	}
 
-	// A warm encode on the composed CPU allocates nothing
-	// (TestWarmImageEncodeDoesNotAllocate's measure).
+	// A warm encode on the composed CPU allocates nothing: the engine's
+	// allocations, told from the runtime's per-P caches as the decode gate
+	// tells them (countAllocs). A process-wide count read 0 to 23 for the
+	// same encode, from one run to the next.
 	s.vis.afterBlock = nil
-	allocs := testing.AllocsPerRun(1, func() {
+	encode := func() {
 		if _, err := s.Encode(px); err != nil {
 			t.Fatal(err)
 		}
-	})
-	t.Logf("a warm composed encode makes %.1f allocations", allocs)
-	if allocs != 0 {
-		t.Fatalf("a warm composed encode made %.1f heap allocations", allocs)
 	}
+	encode()
+	r0 := m.PagerReads()
+	allocVerdict(t, "a warm composed encode", countAllocs(encode), 1, m.PagerReads()-r0, 0)
 
 	// The violation: the rows attend causally, not both ways.
 	s.vis.causalFault = true
@@ -136,21 +141,55 @@ func qvlOpener(name string) func(testing.TB, ...Option) (*Model, *Tower) {
 	}
 }
 
-// composedTower is a tower the composed gates run: its name and how it
-// opens.
+// towerOf is open's model and its tower, for an opener that returns the
+// model beside its golden.
+func towerOf[G any](open func(testing.TB, ...Option) (*Model, G)) func(testing.TB, ...Option) (*Model, *Tower) {
+	return func(tb testing.TB, opts ...Option) (*Model, *Tower) {
+		m, _ := open(tb, opts...)
+		return m, m.Tower()
+	}
+}
+
+// towerOfModel is open's model and its tower.
+func towerOfModel(open func(testing.TB, ...Option) *Model) func(testing.TB, ...Option) (*Model, *Tower) {
+	return func(tb testing.TB, opts ...Option) (*Model, *Tower) {
+		m := open(tb, opts...)
+		return m, m.Tower()
+	}
+}
+
+// composedTower is a tower the composed gates run: its name, how it opens,
+// and the bound a whole encode of the gate's picture on a device is held to
+// against the host's: its family's device gate's where that gate holds the
+// tier's encode against the host's (main's tier is held to the same), 1e-2
+// where it holds it against transformers' at towerBound on its own picture.
 type composedTower struct {
-	name string
-	open func(testing.TB, ...Option) (*Model, *Tower)
+	name  string
+	open  func(testing.TB, ...Option) (*Model, *Tower)
+	bound float64
 }
 
 // composedTowers is the towers the composed gates run on every device.
 func composedTowers() []composedTower {
 	return []composedTower{
-		{"SmolVLM", openTower},
-		{"llava", openLlava},
-		{"Qwen2-VL", qvlOpener("synth-qwen2vl")},
-		{"Qwen2.5-VL", qvlOpener("synth-qwen25vl")},
-		{"gemma3", openGemma3},
+		{"SmolVLM", openTower, 1e-2},
+		{"llava", openLlava, 1e-2},
+		{"Qwen2-VL", qvlOpener("synth-qwen2vl"), 1e-2},
+		{"Qwen2.5-VL", qvlOpener("synth-qwen25vl"), 1e-2},
+		{"gemma3", openGemma3, 1e-2},
+		{"Qwen3-VL", qvlOpener("synth-qwen3vl"), 1e-2},
+		{"Qwen3.5", qvlOpener("synth-qwen35vl"), 1e-2},
+		{"GLM-4.1V", qvlOpener("synth-glm4v"), 1e-2},
+		{"InternVL", openInternVL, 1e-2},
+		{"Janus", towerOfModel(openJanus), 2e-2},
+		{"MiniCPM-V", towerOfModel(openMiniCPMV), 1e-2},
+		{"Pixtral", towerOf(openPixtral), 1e-3},
+		{"Llama4", towerOf(openLlama4V), 1e-3},
+		{"Phi-4", towerOf(openPhi4VFixture), 1e-3},
+		{"Kimi-VL", qvlOpener("synth-kimivl"), 1e-2},
+		{"HunyuanVL", qvlOpener("synth-hunyuanvl"), 1e-2},
+		{"Gemma4", towerOf(openGemma4V), 1e-3},
+		{"LFM2-VL", towerOfModel(openD1VL), 1e-2},
 	}
 }
 
@@ -196,7 +235,7 @@ const towerParts = composedParts | tier.ComposedTower
 // blocks, no decline -- the whole encode held to main's host at the device
 // arm's whole-tower bound (towerOnDevices), and one block placed, held to the
 // host after it at the one-block bound.
-func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tower)) {
+func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tower), bound float64) {
 	m, tw := open(t, noTune)
 	defer m.Close()
 	c := tw.Cfg
@@ -238,9 +277,10 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 					served-s0, c.NLayer, declined, nonZero(st.BlockDeclines[:]), g.Err())
 			}
 			nm, worst := nmseOf(got, want)
-			t.Logf("%s, all %d blocks composed: projector output NMSE %.3e, max|d| %.4g", spec, c.NLayer, nm, worst)
-			if !(nm < 1e-2) {
-				t.Errorf("%s: the composed tower's encode reads NMSE %.3e against the host (bound 1e-2)", spec, nm)
+			t.Logf("%s, all %d blocks composed: projector output NMSE %.3e, max|d| %.4g; the tier's own kernels on the same picture %.3e",
+				spec, c.NLayer, nm, worst, tierTowerNMSE(t, tw, spec, px, want))
+			if !(nm < bound) {
+				t.Errorf("%s: the composed tower's encode reads NMSE %.3e against the host (bound %.0e)", spec, nm, bound)
 			}
 
 			defer func(was int) { tw.opt.towerGPULayers = was }(tw.opt.towerGPULayers)
@@ -251,16 +291,20 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			if one.GPUBlocks() != 1 {
 				t.Fatalf("asked for 1 device block, got %d", one.GPUBlocks())
 			}
+			// The block's binary16 matrix forms -- the composer's, as main's
+			// binary16 GEMMs on its own tier -- take the binary16 bound.
+			mx := g.Stats().MatrixPart(tier.ComposedTower)
 			got0, _ := towerEncodeAt(t, one, px)
+			mx = g.Stats().MatrixPart(tier.ComposedTower) - mx
 			nm0, worst0 := nmseOf(got0, want0)
-			bound := 5e-5
-			if st := g.Stats(); st.VoltaGemm+st.GemmF16 > 0 || spec == "metal" {
-				bound = 5e-4
+			bound0 := 5e-5
+			if st := g.Stats(); st.VoltaGemm+st.GemmF16 > 0 || mx > 0 || spec == "metal" {
+				bound0 = 5e-4
 			}
-			t.Logf("%s, after block 0 composed: NMSE %.3e, max|d| %.4g (bound %.0e; tower chunk %d, %d phase calls)", spec, nm0, worst0, bound,
-				g.TowerChunk(), g.Stats().TowerPhases)
-			if !(nm0 < bound) {
-				t.Fatalf("%s: NMSE %.3e after ONE composed block (bound %.0e)", spec, nm0, bound)
+			t.Logf("%s, after block 0 composed: NMSE %.3e, max|d| %.4g (bound %.0e; %d binary16 tier GEMMs, %d composed matrix launches; tower chunk %d, %d phase calls)",
+				spec, nm0, worst0, bound0, g.Stats().VoltaGemm+g.Stats().GemmF16, mx, g.TowerChunk(), g.Stats().TowerPhases)
+			if !(nm0 < bound0) {
+				t.Fatalf("%s: NMSE %.3e after ONE composed block (bound %.0e)", spec, nm0, bound0)
 			}
 		})
 	}
@@ -269,12 +313,138 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 	}
 }
 
+// tierTowerNMSE is the whole encode of px with every block of tw on spec
+// run by the tier's own kernels, against want: what the composed arm's
+// reading is set beside.
+func tierTowerNMSE(t *testing.T, tw *Tower, spec string, px, want []float32) float64 {
+	t.Helper()
+	g, err := tier.OpenWith(tier.WithDevices(spec), composedOpt(0))
+	if err != nil || g == nil {
+		t.Fatalf("%s: %v", spec, err)
+	}
+	defer g.Close()
+	s := tw.testState()
+	defer s.Close()
+	s.SetDevice(g)
+	if n := s.GPUBlocks(); n != tw.Cfg.NLayer {
+		t.Fatalf("%s took %d of %d tower blocks on its own kernels (%s)", spec, n, tw.Cfg.NLayer, g.Err())
+	}
+	_, got := towerEncode(t, s, px)
+	nm, _ := nmseOf(got, want)
+	return nm
+}
+
 // TestComposedTowerOnDevice runs the device arm over the towers the tier
 // serves (tier.ComposedTower), Gemma 3's SigLIP among them: its 4096 rows
 // of 1152 are the flattened space whose live elements once wrapped 32 bits
 // (jit.TestComposedGPUAttendBidirRows).
 func TestComposedTowerOnDevice(t *testing.T) {
 	for _, f := range composedTowers() {
-		t.Run(f.name, func(t *testing.T) { composedTowerOnDevices(t, f.open) })
+		t.Run(f.name, func(t *testing.T) { composedTowerOnDevices(t, f.open, f.bound) })
+	}
+}
+
+// towerArm is one arm of a tower family's device gate: a device, its blocks
+// on the tier's own kernels or served by the composer (tier.ComposedStep,
+// tower blocks among its parts).
+type towerArm struct {
+	spec     string
+	composed bool
+}
+
+// towerArms is each device's two arms.
+func towerArms() []towerArm {
+	var out []towerArm
+	for _, spec := range stepDevices() {
+		out = append(out, towerArm{spec, false}, towerArm{spec, true})
+	}
+	return out
+}
+
+func (a towerArm) String() string {
+	if a.composed {
+		return a.spec + "/composed"
+	}
+	return a.spec
+}
+
+// option is the tier option that asks for the arm's parts.
+func (a towerArm) option() tier.Option {
+	if a.composed {
+		return composedOpt(tier.ComposedStep)
+	}
+	return composedOpt(0)
+}
+
+// served runs encode and, in a composed arm, holds g's composer to having
+// served runs tower block runs in it and declined none: a composed arm whose
+// blocks ran on the tier's own kernels is no pass.
+func (a towerArm) served(t *testing.T, g *tier.GPU, runs int, encode func()) {
+	t.Helper()
+	s0, d0, _ := g.Stats().ServedPart(tier.ComposedTower)
+	encode()
+	if !a.composed {
+		return
+	}
+	st := g.Stats()
+	s1, d1, u := st.ServedPart(tier.ComposedTower)
+	t.Logf("%s: %d tower block runs served by the composer, %d declined %v, %d unasked", a, s1-s0, d1-d0,
+		nonZero(st.BlockDeclines[:]), u)
+	if s1-s0 != runs || d1 != d0 {
+		t.Fatalf("%s: the composer served %d of %d tower block runs, declined %d %v (%s)", a, s1-s0, runs, d1-d0,
+			nonZero(st.BlockDeclines[:]), g.Err())
+	}
+}
+
+// TestTowerRopeAxesAreStated holds the front end's statement of a tower's
+// rotary axes to its runs: contiguous runs as sections, MoonViT's
+// alternating pairs as a cycle at each cycle's first pair's frequency, and
+// runs it cannot state -- a cycle at another frequency, an axis coming back
+// out of turn -- refused.
+func TestTowerRopeAxesAreStated(t *testing.T) {
+	kimi := TowerConfig{Kind: jlm.ProjKimiVL, HeadDim: 8}.kimiRope()
+	a, ok := towerRopeAxes(kimi)
+	if !ok || a.Cycle != 2 || a.CycleAxes != [4]uint8{1, 0} || a.Sections != [4]int{} {
+		t.Fatalf("MoonViT's rotary stated as %+v (%v), want a cycle of axes 1, 0", a, ok)
+	}
+	pix := TowerConfig{Kind: jlm.ProjPixtral, HeadDim: 8}.pixtralRope()
+	if a, ok := towerRopeAxes(pix); !ok || a.Cycle != 0 || a.Sections != [4]int{2, 2} {
+		t.Fatalf("Pixtral's rotary stated as %+v (%v), want sections 2, 2", a, ok)
+	}
+	off := TowerConfig{Kind: jlm.ProjKimiVL, HeadDim: 8}.kimiRope()
+	off.Runs[2].Freq++
+	if a, ok := towerRopeAxes(off); ok {
+		t.Fatalf("a cycle whose third pair turns at another frequency stated as %+v", a)
+	}
+	back := nn.Rope{NRot: 8, Runs: []nn.RopeRun{{Pairs: 1, Axis: 0}, {Pairs: 1, Axis: 1}, {Pairs: 1, Axis: 1, Freq: 2}, {Pairs: 1, Axis: 0, Freq: 2}}}
+	if a, ok := towerRopeAxes(back); ok {
+		t.Fatalf("axes 0, 1, 1, 0 stated as %+v", a)
+	}
+}
+
+// restateTower has the front end state m's tower blocks again, from the
+// tower's configuration as it now stands: a violation that changes a tower's
+// configuration reaches the composer through the graphs it states.
+func (m *Model) restateTower() {
+	m.front.mu.Lock()
+	m.front.restated++
+	m.front.mu.Unlock()
+}
+
+// unclampTower stores tw's clipped linears' bounds as infinite until the
+// returned undo: the bounds a clamp reads, on every path, no longer clip.
+func unclampTower(tw *Tower) func() {
+	var was [][]float32
+	for i := range tw.Cfg.NLayer {
+		l := &tw.model.layers[tw.base+i]
+		was = append(was, append([]float32(nil), l.clamp...))
+		for j := range l.clamp {
+			l.clamp[j] = float32(math.Inf(2*(j%2) - 1))
+		}
+	}
+	return func() {
+		for i := range tw.Cfg.NLayer {
+			copy(tw.model.layers[tw.base+i].clamp, was[i])
+		}
 	}
 }

@@ -265,14 +265,15 @@ func TestLlama4OnDeviceMatchesHost(t *testing.T) {
 	_, _, ps := l4vPieces(t, tw, g)
 	want := l4vEncode(t, tw, ps)
 	ran := 0
-	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
+	for _, arm := range towerArms() {
+		spec := arm.spec
+		gpu, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
-		t.Run(spec, func(t *testing.T) {
+		t.Run(arm.String(), func(t *testing.T) {
 			defer gpu.Close()
 			s := tw.testState()
 			defer s.Close()
@@ -281,13 +282,7 @@ func TestLlama4OnDeviceMatchesHost(t *testing.T) {
 				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, tw.Cfg.NLayer, gpu.Err())
 			}
 			var got []float32
-			for _, p := range ps {
-				e, err := s.Encode(p.Pixels)
-				if err != nil {
-					t.Fatal(err)
-				}
-				got = append(got, e...)
-			}
+			arm.served(t, gpu, tw.Cfg.NLayer*len(ps), func() { got = l4vEncodeOn(t, s, ps) })
 			nm, worst := nmseOf(got, want)
 			t.Logf("%s, all %d blocks: NMSE %.3e, max|d| %.4f against the host", spec, tw.Cfg.NLayer, nm, worst)
 			if math.IsNaN(nm) || math.IsInf(nm, 0) || nm > 1e-3 {

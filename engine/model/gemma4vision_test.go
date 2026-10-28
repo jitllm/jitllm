@@ -83,8 +83,22 @@ func g4vPixels(g *g4vGolden, patch int) []float32 {
 
 func g4vEncode(t *testing.T, tw *Tower, g *g4vGolden) []float32 {
 	t.Helper()
+	out, _ := g4vEncodeServed(t, tw, g)
+	return out
+}
+
+// g4vEncodeServed is g4vEncode and the tower block runs the composed CPU
+// served in it, failing on a decline.
+func g4vEncodeServed(t *testing.T, tw *Tower, g *g4vGolden) ([]float32, int) {
+	t.Helper()
+	tw.model.restateTower()
 	s := tw.testState()
 	defer s.Close()
+	defer func() {
+		if _, d := s.CPUBlockSteps(); len(nonZero(d[:])) != 0 {
+			t.Fatalf("the composed CPU declined %v (form error %v)", nonZero(d[:]), s.CPUFormErr())
+		}
+	}()
 	px, err := s.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +107,8 @@ func g4vEncode(t *testing.T, tw *Tower, g *g4vGolden) []float32 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return append([]float32(nil), out...)
+	served, _ := s.CPUBlockSteps()
+	return append([]float32(nil), out...), served
 }
 
 // TestGemma4PreprocessMatchesTheProcessor holds the picture to transformers'
@@ -128,12 +143,27 @@ func TestGemma4PreprocessMatchesTheProcessor(t *testing.T) {
 // TestGemma4TowerMatchesTransformers holds the head's rows to transformers'
 // tower and embedder at the engine's arithmetic, with the clipped linears'
 // bounds binding on a tenth of every matrix's values; each piece of the
-// family's taken out moves it far past the bound.
+// family's taken out moves it far past the bound. Its composed arm runs the
+// tower on the composed CPU, every block served, each encode's graphs stated
+// from the configuration as it stands (restateTower) and the clamps' violation
+// stored in the bounds.
 func TestGemma4TowerMatchesTransformers(t *testing.T) {
-	m, g := openGemma4V(t)
+	gemma4TowerMatchesTransformers(t)
+	t.Run("composed-cpu", func(t *testing.T) { gemma4TowerMatchesTransformers(t, WithComposedCPU(true)) })
+}
+
+func gemma4TowerMatchesTransformers(t *testing.T, opts ...Option) {
+	m, g := openGemma4V(t, opts...)
 	defer m.Close()
 	tw := m.Tower()
-	got := g4vEncode(t, tw, g)
+	composed := len(opts) > 0
+	got, served := g4vEncodeServed(t, tw, g)
+	if composed {
+		t.Logf("composed CPU: %d tower block runs served", served)
+		if served != tw.Cfg.NLayer {
+			t.Fatalf("the composed CPU served %d of the tower's %d blocks", served, tw.Cfg.NLayer)
+		}
+	}
 	if len(got) != len(g.Image.EmbdA8) {
 		t.Fatalf("%d values, transformers' %d", len(got), len(g.Image.EmbdA8))
 	}
@@ -154,6 +184,9 @@ func TestGemma4TowerMatchesTransformers(t *testing.T) {
 		weak bool
 	}{
 		{"no clamps", func() func() {
+			if composed {
+				return unclampTower(tw)
+			}
 			gemma4ClampFault = true
 			return func() { gemma4ClampFault = false }
 		}, false},
@@ -332,14 +365,15 @@ func TestGemma4OnDeviceMatchesHost(t *testing.T) {
 	tw := m.Tower()
 	want := g4vEncode(t, tw, g)
 	ran := 0
-	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
+	for _, arm := range towerArms() {
+		spec := arm.spec
+		gpu, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
-		t.Run(spec, func(t *testing.T) {
+		t.Run(arm.String(), func(t *testing.T) {
 			defer gpu.Close()
 			s := tw.testState()
 			defer s.Close()
@@ -358,7 +392,9 @@ func TestGemma4OnDeviceMatchesHost(t *testing.T) {
 				}
 				return append([]float32(nil), out...)
 			}
-			nm, worst := nmseOf(enc(), want)
+			var got []float32
+			arm.served(t, gpu, tw.Cfg.NLayer, func() { got = enc() })
+			nm, worst := nmseOf(got, want)
 			t.Logf("%s, all %d blocks: NMSE %.3e, max|d| %.4f against the host", spec, tw.Cfg.NLayer, nm, worst)
 			if math.IsNaN(nm) || math.IsInf(nm, 0) || nm > 1e-3 {
 				t.Fatalf("%s: the tower on the device reads NMSE %.3e against the host", spec, nm)

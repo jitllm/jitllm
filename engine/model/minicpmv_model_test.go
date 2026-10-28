@@ -376,14 +376,15 @@ func TestMiniCPMVOnDeviceMatchesHost(t *testing.T) {
 	hv, he := encode(host)
 	host.Close()
 	ran := 0
-	for _, spec := range stepDevices() {
-		gd, err := tier.OpenWith(tier.WithDevices(spec))
+	for _, arm := range towerArms() {
+		spec := arm.spec
+		gd, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
 		if err != nil || gd == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
-		t.Run(spec, func(t *testing.T) {
+		t.Run(arm.String(), func(t *testing.T) {
 			defer gd.Close()
 			s := tw.testState()
 			defer s.Close()
@@ -391,7 +392,8 @@ func TestMiniCPMVOnDeviceMatchesHost(t *testing.T) {
 			if s.GPUBlocks() != c.NLayer {
 				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, s.GPUBlocks(), c.NLayer, gd.Err())
 			}
-			dv, de := encode(s)
+			var dv, de []float32
+			arm.served(t, gd, c.NLayer, func() { dv, de = encode(s) })
 			nv := visNMSE(t, "tower", dv, hv)
 			ne := visNMSE(t, "embeddings", de, he)
 			t.Logf("%s, %d of %d blocks on the device, a %dx%d grid: tower NMSE %.3e, embeddings %.3e",
@@ -425,7 +427,9 @@ func TestMiniCPMVOnDeviceMatchesHost(t *testing.T) {
 			one := tw.testState()
 			defer one.Close()
 			one.SetDevice(gd)
-			n0 := visNMSE(t, "block 0", after0(one), h0)
+			var one0 []float32
+			arm.served(t, gd, 1, func() { one0 = after0(one) })
+			n0 := visNMSE(t, "block 0", one0, h0)
 			t.Logf("%s, one block placed: NMSE %.3e after it", spec, n0)
 			if n0 > 5e-5 {
 				t.Fatalf("%s: NMSE %.3e after one block -- the device is not running this block's graph", spec, n0)

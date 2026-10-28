@@ -36,6 +36,9 @@ func nmse32(want, got []float32) (float64, float64) {
 // tw, after mut (nil for none) has had its say over the state.
 func qvlEncode(t *testing.T, tw *Tower, g *qvlGolden, mut func(*State)) ([]float32, ImageGrid) {
 	t.Helper()
+	// A violation's configuration reaches the composer through the graphs
+	// the front end states from it.
+	tw.model.restateTower()
 	ts := tw.testState()
 	defer ts.Close()
 	px, err := ts.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
@@ -67,86 +70,101 @@ const towerBound = 2e-3
 // merger's put-back into raster order.
 func TestQwenTowerMatchesTransformers(t *testing.T) {
 	for _, name := range towerFixtures() {
-		t.Run(name, func(t *testing.T) {
-			m, g := openQVL(t, name)
-			defer m.Close()
-			tw := m.Tower()
-			if tw == nil {
-				t.Fatal("the fixture's container carries no tower")
+		t.Run(name, func(t *testing.T) { qwenTowerMatchesTransformers(t, name) })
+		t.Run(name+"/composed-cpu", func(t *testing.T) { qwenTowerMatchesTransformers(t, name, WithComposedCPU(true)) })
+	}
+}
+
+// qwenTowerMatchesTransformers is TestQwenTowerMatchesTransformers' gate
+// over fixture name opened with opts; on the composed CPU (WithComposedCPU)
+// every tower block of the encode served by the composer, none declined.
+func qwenTowerMatchesTransformers(t *testing.T, name string, opts ...Option) {
+	m, g := openQVL(t, name, opts...)
+	defer m.Close()
+	tw := m.Tower()
+	if tw == nil {
+		t.Fatal("the fixture's container carries no tower")
+	}
+	var cs *State
+	got, grid := qvlEncode(t, tw, g, func(s *State) { cs = s })
+	if len(opts) > 0 {
+		served, declined := cs.CPUBlockSteps()
+		t.Logf("composed CPU: %d tower block runs served, declines %v (form error %v)", served, nonZero(declined[:]), cs.CPUFormErr())
+		if served != tw.Cfg.NLayer || len(nonZero(declined[:])) != 0 {
+			t.Fatalf("the composed CPU served %d of the tower's %d blocks (declines %v, form error %v)",
+				served, tw.Cfg.NLayer, nonZero(declined[:]), cs.CPUFormErr())
+		}
+	}
+	if grid != g.grid() {
+		t.Fatalf("the tower's grid is %v, transformers' %v", grid, g.grid())
+	}
+	clean, worst := nmse32(g.Image.EmbdA8, got)
+	f32, _ := nmse32(g.Image.Embd, got)
+	q8, _ := nmse32(g.Image.Embd, g.Image.EmbdA8)
+	t.Logf("%d rows of %d: NMSE %.3e, max|d| %.4f against transformers at the engine's int8 "+
+		"(%.3e against its f32 tower, where the int8 alone moves transformers by %.3e)",
+		grid.Rows(), tw.Cfg.ProjDim, clean, worst, f32, q8)
+	if math.IsNaN(clean) || clean > towerBound {
+		t.Fatalf("the tower's output is not transformers': NMSE %.3e (bound %.0e)", clean, towerBound)
+	}
+	if len(tw.Cfg.Deep) > 0 {
+		qwen3TowerGate(t, tw, g, got, clean)
+		return
+	}
+	if tw.glm != nil {
+		glmTowerGate(t, tw, g, clean)
+		return
+	}
+	if tw.Cfg.Kind == jlm.ProjKimiVL {
+		kimiTowerGate(t, tw, g, clean)
+		return
+	}
+	if tw.Cfg.Kind == jlm.ProjHunyuanVL {
+		hyTowerGate(t, tw, g, clean)
+		return
+	}
+	if !tw.Cfg.RMS {
+		return
+	}
+	for _, v := range []struct {
+		name string
+		mut  func(*State)
+		cfg  func(c *TowerConfig) func()
+	}{
+		{"no 2-D rotary", func(s *State) {
+			gh, gw := s.patchGrid()
+			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
+			for i := 0; i < len(s.vis.ropeSC); i += 2 {
+				s.vis.ropeSC[i] = 1
 			}
-			got, grid := qvlEncode(t, tw, g, nil)
-			if grid != g.grid() {
-				t.Fatalf("the tower's grid is %v, transformers' %v", grid, g.grid())
-			}
-			clean, worst := nmse32(g.Image.EmbdA8, got)
-			f32, _ := nmse32(g.Image.Embd, got)
-			q8, _ := nmse32(g.Image.Embd, g.Image.EmbdA8)
-			t.Logf("%d rows of %d: NMSE %.3e, max|d| %.4f against transformers at the engine's int8 "+
-				"(%.3e against its f32 tower, where the int8 alone moves transformers by %.3e)",
-				grid.Rows(), tw.Cfg.ProjDim, clean, worst, f32, q8)
-			if math.IsNaN(clean) || clean > towerBound {
-				t.Fatalf("the tower's output is not transformers': NMSE %.3e (bound %.0e)", clean, towerBound)
-			}
-			if len(tw.Cfg.Deep) > 0 {
-				qwen3TowerGate(t, tw, g, got, clean)
-				return
-			}
-			if tw.glm != nil {
-				glmTowerGate(t, tw, g, clean)
-				return
-			}
-			if tw.Cfg.Kind == jlm.ProjKimiVL {
-				kimiTowerGate(t, tw, g, clean)
-				return
-			}
-			if tw.Cfg.Kind == jlm.ProjHunyuanVL {
-				hyTowerGate(t, tw, g, clean)
-				return
-			}
-			if !tw.Cfg.RMS {
-				return
-			}
-			for _, v := range []struct {
-				name string
-				mut  func(*State)
-				cfg  func(c *TowerConfig) func()
-			}{
-				{"no 2-D rotary", func(s *State) {
-					gh, gw := s.patchGrid()
-					s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
-					for i := 0; i < len(s.vis.ropeSC); i += 2 {
-						s.vis.ropeSC[i] = 1
-					}
-					s.vis.ropeAt = [2]int{gh, gw}
-				}, nil},
-				{"full attention where windowed", nil, func(c *TowerConfig) func() {
-					was := c.WinPattern
-					c.WinPattern = 1
-					return func() { c.WinPattern = was }
-				}},
-				{"the wrong window partition (half the window)", nil, func(c *TowerConfig) func() {
-					was := c.WinSize
-					c.WinSize /= 2
-					return func() { c.WinSize = was }
-				}},
-				{"the merged rows left in window order", nil, func(c *TowerConfig) func() {
-					qwenNoUnwindow = true
-					return func() { qwenNoUnwindow = false }
-				}},
-			} {
-				undo := func() {}
-				if v.cfg != nil {
-					undo = v.cfg(&tw.Cfg)
-				}
-				bad, _ := qvlEncode(t, tw, g, v.mut)
-				undo()
-				nb, _ := nmse32(g.Image.EmbdA8, bad)
-				t.Logf("violation %q: NMSE %.3e", v.name, nb)
-				if !(nb > 10*towerBound) {
-					t.Errorf("%s reads %.3e against a clean %.3e: the gate cannot see it", v.name, nb, clean)
-				}
-			}
-		})
+			s.vis.ropeAt = [2]int{gh, gw}
+		}, nil},
+		{"full attention where windowed", nil, func(c *TowerConfig) func() {
+			was := c.WinPattern
+			c.WinPattern = 1
+			return func() { c.WinPattern = was }
+		}},
+		{"the wrong window partition (half the window)", nil, func(c *TowerConfig) func() {
+			was := c.WinSize
+			c.WinSize /= 2
+			return func() { c.WinSize = was }
+		}},
+		{"the merged rows left in window order", nil, func(c *TowerConfig) func() {
+			qwenNoUnwindow = true
+			return func() { qwenNoUnwindow = false }
+		}},
+	} {
+		undo := func() {}
+		if v.cfg != nil {
+			undo = v.cfg(&tw.Cfg)
+		}
+		bad, _ := qvlEncode(t, tw, g, v.mut)
+		undo()
+		nb, _ := nmse32(g.Image.EmbdA8, bad)
+		t.Logf("violation %q: NMSE %.3e", v.name, nb)
+		if !(nb > 10*towerBound) {
+			t.Errorf("%s reads %.3e against a clean %.3e: the gate cannot see it", v.name, nb, clean)
+		}
 	}
 }
 

@@ -62,7 +62,8 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 	defer func(was int) { tw.opt.towerGPULayers = was }(tw.opt.towerGPULayers)
 
 	ran := 0
-	for _, spec := range stepDevices() {
+	for _, arm := range towerArms() {
+		spec := arm.spec
 		// Kimi-VL's tower is the chunked attention's gate. The device's set is
 		// sized to the picture, and the fixture's picture's planes fit any
 		// budget a card would pick, so the gate takes the budget below one
@@ -72,7 +73,7 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 			cfg = func(cf *tier.Config) { cf.VisionPlaneBudget = 1 }
 		}
 		open := func() *tier.GPU {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
+			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg), arm.option())
 			if err != nil || gpu == nil {
 				return nil
 			}
@@ -84,7 +85,7 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 			continue
 		}
 		ran++
-		t.Run(spec, func(t *testing.T) {
+		t.Run(arm.String(), func(t *testing.T) {
 			defer gpu.Close()
 			// The whole tower on the device.
 			tw.opt.towerGPULayers = -1
@@ -94,7 +95,8 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, all.GPUBlocks(), c.NLayer, gpu.Err())
 			}
 			chunks := gpu.Stats().VisionAttnChunks
-			_, gotAll := encode(all)
+			var gotAll []float32
+			arm.served(t, gpu, c.NLayer, func() { _, gotAll = encode(all) })
 			all.Close()
 			whole, _ := nmse32(want, gotAll)
 			if math.IsNaN(whole) || whole > towerBound {
@@ -103,8 +105,9 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 			// Over the score-plane budget the attention goes in chunks
 			// (tier.visionChunk), held to the host by the bound above; the
 			// rule's rows that no chunk divides, Kimi-VL's 5108, are
-			// TestVisionAttentionAlwaysChunksOverBudget's.
-			if c.Kind == jlm.ProjKimiVL && gpu.Stats().VisionAttnChunks == chunks {
+			// TestVisionAttentionAlwaysChunksOverBudget's. The budget is the
+			// tier's kernels'; the composer forms its own attention.
+			if c.Kind == jlm.ProjKimiVL && !arm.composed && gpu.Stats().VisionAttnChunks == chunks {
 				t.Fatalf("%s: over the plane budget, the tower ran its attention whole", spec)
 			}
 
@@ -112,7 +115,8 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 			s := tw.testState()
 			s.SetDevice(gpu)
 			uploads := gpu.Stats().RopeTableUploads
-			got0, _ := encode(s)
+			var got0 []float32
+			arm.served(t, gpu, 1, func() { got0, _ = encode(s) })
 			s.Close()
 			if gpu.Stats().RopeTableUploads == uploads {
 				t.Fatal("the device took no rotary table for the tower's block: it did not rotate")
@@ -135,9 +139,13 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 				defer gv.Close()
 				v := tw.testState()
 				defer v.Close()
+				// The composer forms the block from the graph the front end
+				// states of the configuration placed (restateTower).
 				setup()
+				tw.model.restateTower()
 				v.SetDevice(gv)
 				undo()
+				tw.model.restateTower()
 				if v.GPUBlocks() == 0 {
 					t.Fatalf("%s: the violation placed no block", what)
 				}

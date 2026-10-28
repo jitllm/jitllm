@@ -144,14 +144,15 @@ func TestJanusOnDeviceMatchesHost(t *testing.T) {
 	want = append([]float32(nil), want...)
 	host.Close()
 	ran := 0
-	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+	for _, arm := range towerArms() {
+		spec := arm.spec
+		g, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
-		t.Run(spec, func(t *testing.T) {
+		t.Run(arm.String(), func(t *testing.T) {
 			defer g.Close()
 			s := tw.testState()
 			defer s.Close()
@@ -159,10 +160,14 @@ func TestJanusOnDeviceMatchesHost(t *testing.T) {
 			if s.GPUBlocks() != c.NLayer {
 				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, s.GPUBlocks(), c.NLayer, g.Err())
 			}
-			got, err := s.Encode(px)
-			if err != nil {
-				t.Fatal(err)
-			}
+			var got []float32
+			arm.served(t, g, c.NLayer, func() {
+				e, err := s.Encode(px)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = append([]float32(nil), e...)
+			})
 			n := visNMSE(t, "embeddings", got, want)
 			// One block alone, where both tiers' int8 roundings have not yet
 			// compounded: the bound that sees a wrong graph (vision_test.go's).
@@ -186,7 +191,9 @@ func TestJanusOnDeviceMatchesHost(t *testing.T) {
 			one := tw.testState()
 			defer one.Close()
 			one.SetDevice(g)
-			n0 := visNMSE(t, "block 0", after0(one), h0)
+			var one0 []float32
+			arm.served(t, g, 1, func() { one0 = after0(one) })
+			n0 := visNMSE(t, "block 0", one0, h0)
 			t.Logf("%s, every block placed: NMSE %.3e against the host; after one block %.3e", spec, n, n0)
 			// Metal reads ~4e-5 after one block where CUDA reads ~1e-6: its matvec
 			// rounds the activation its own way, as sm_70's does (vision_test.go).

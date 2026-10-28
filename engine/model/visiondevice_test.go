@@ -51,14 +51,15 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 	host.Close()
 
 	ran := 0
-	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+	for _, arm := range towerArms() {
+		spec := arm.spec
+		g, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
-		t.Run(spec, func(t *testing.T) {
+		t.Run(arm.String(), func(t *testing.T) {
 			defer g.Close()
 			// Every block, and the whole tower's output. A card whose free
 			// memory does not hold the tower resident takes it paged: the
@@ -81,7 +82,8 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 				t.Logf("%s held %d of %d tower blocks resident (%s): the tower streams through it", spec, n, c.NLayer, why)
 			}
 			s0 := g.Stats().Submits
-			_, gotAll := encode(all)
+			var gotAll []float32
+			arm.served(t, g, c.NLayer, func() { _, gotAll = encode(all) })
 			if g.Stats().Submits == s0 {
 				t.Fatalf("%s: the encode submitted nothing to the device: the tower ran on the host", spec)
 			}
@@ -111,8 +113,10 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 			if s.GPUBlocks() != 1 {
 				t.Fatalf("asked for 1 device block, got %d", s.GPUBlocks())
 			}
-			s1 := g.Stats().Submits
-			got0, _ := encode(s)
+			s1, mx := g.Stats().Submits, g.Stats().MatrixPart(tier.ComposedTower)
+			var got0 []float32
+			arm.served(t, g, 1, func() { got0, _ = encode(s) })
+			mx = g.Stats().MatrixPart(tier.ComposedTower) - mx
 			if g.Stats().Submits == s1 {
 				t.Fatalf("%s: block 0's encode submitted nothing to the device", spec)
 			}
@@ -122,7 +126,8 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 				t.Fatalf("NMSE %v on %s: the comparison is degenerate", nm, spec)
 			}
 			bound := 5e-5
-			if st := g.Stats(); st.VoltaGemm+st.GemmF16 > 0 {
+			// The composer's binary16 matrix forms take main's binary16 bound.
+			if st := g.Stats(); st.VoltaGemm+st.GemmF16 > 0 || mx > 0 {
 				bound = 5e-4
 			}
 			if nm > bound {
