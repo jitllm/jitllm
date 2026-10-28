@@ -781,14 +781,11 @@ const (
 	// a block the composer serves asks for one where it needs it.
 	PartCopy Parts = 1 << partCopy
 	// ComposedTower serves a non-causal call's blocks whole from their
-	// graphs: a vision tower's, over a picture's rows (towerserve.go). Not
-	// in ComposedStep yet: Gemma 3's SigLIP at 4096 rows reads NMSE 4.1
-	// after one composed block on CUDA and Vulkan, where every tower of
-	// 1600 rows or fewer agrees with the host.
+	// graphs: a vision tower's, over a picture's rows (towerserve.go).
 	ComposedTower Parts = 1 << partTower
 	// ComposedStep is every part of a step: its input rows, tables, blocks
-	// (a prompt chunk's among them), head and token.
-	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedPrompt | ComposedHead | ComposedSample
+	// (a prompt chunk's and a picture's among them), head and token.
+	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedPrompt | ComposedTower | ComposedHead | ComposedSample
 )
 
 // partDecline is why a decode step's or a prompt chunk's composed part is

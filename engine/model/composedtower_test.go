@@ -136,17 +136,26 @@ func qvlOpener(name string) func(testing.TB, ...Option) (*Model, *Tower) {
 	}
 }
 
-func TestComposedTowerOnCPU(t *testing.T) {
-	for _, f := range []struct {
-		name string
-		open func(testing.TB, ...Option) (*Model, *Tower)
-	}{
+// composedTower is a tower the composed gates run: its name and how it
+// opens.
+type composedTower struct {
+	name string
+	open func(testing.TB, ...Option) (*Model, *Tower)
+}
+
+// composedTowers is the towers the composed gates run on every device.
+func composedTowers() []composedTower {
+	return []composedTower{
 		{"SmolVLM", openTower},
 		{"llava", openLlava},
 		{"Qwen2-VL", qvlOpener("synth-qwen2vl")},
-		{"gemma3", openGemma3},
 		{"Qwen2.5-VL", qvlOpener("synth-qwen25vl")},
-	} {
+		{"gemma3", openGemma3},
+	}
+}
+
+func TestComposedTowerOnCPU(t *testing.T) {
+	for _, f := range composedTowers() {
 		t.Run(f.name, func(t *testing.T) { composedTowerOnCPU(t, f.open) })
 	}
 }
@@ -261,19 +270,11 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 }
 
 // TestComposedTowerOnDevice runs the device arm over the towers the tier
-// serves (tier.ComposedTower). Gemma 3's SigLIP is not among them: at its
-// 4096 rows one composed block reads NMSE 4.1 from the host on CUDA and
-// Vulkan, where it is 1.3e-6 on the CPU device.
+// serves (tier.ComposedTower), Gemma 3's SigLIP among them: its 4096 rows
+// of 1152 are the flattened space whose live elements once wrapped 32 bits
+// (jit.TestComposedGPUAttendBidirRows).
 func TestComposedTowerOnDevice(t *testing.T) {
-	for _, f := range []struct {
-		name string
-		open func(testing.TB, ...Option) (*Model, *Tower)
-	}{
-		{"SmolVLM", openTower},
-		{"llava", openLlava},
-		{"Qwen2-VL", qvlOpener("synth-qwen2vl")},
-		{"Qwen2.5-VL", qvlOpener("synth-qwen25vl")},
-	} {
+	for _, f := range composedTowers() {
 		t.Run(f.name, func(t *testing.T) { composedTowerOnDevices(t, f.open) })
 	}
 }
