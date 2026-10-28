@@ -9449,3 +9449,42 @@ row where the composer's reads two.
   forms differing, not a wrong kernel (the answers sit 0.0456 from the host
   with either, and a pick one label off moves them 0.69); the gate is left
   as it was and the arm stays red until its equality is decided.
+- **An attention with sinks keeps the split form; a split's partitions can
+  run in order.** The composed build's prompts run the composer's own forms
+  since e73e0496. gpt-oss-20b's attention took its sinks into the maximum
+  by a map between the keys' max and the weights. That map broke the chain
+  SplitRange and WorkFuse recognise, so every sink attention ran as eight
+  kernels over [rows, heads, keys] buffers at the key bound: 604 MB apiece
+  at 512 rows and 4608 keys, three of them live. Now the max is the keys'
+  alone and exp(sink - max) joins the sum in the normalising map, which the
+  merge reads at the partitions' greatest max. The same attention is then 3
+  kernels with a 50 MB partial. The reduction join also moved before
+  Prefetch (pm1's e2000410), so MXFP4 expert dots no longer write their
+  int32 sub-block sums at a step's rows. Composed gpt-oss-20b then holds
+  every block on one V100: 13.06 GiB, against 14.33 GiB with 17 blocks on
+  the host. Its prompt went from 29.9 to 144, 143 and 141 tok/s at 512, 1024
+  and 2051 tokens (httpbench, card 6, A/A 1.000 within 0.001). Main reads
+  4633, 4700 and 4397 tok/s on the same card, so the composer is still 32x
+  slower, and nvprof does not see where the 14.6 s of a 2051-token prompt
+  goes (the host's read waits 708 ms a submission). Where the rows'
+  workgroups alone fill the device (Workgroups.sequential), the partitions
+  are a chunk of positions each and one workgroup runs them in order
+  (Running, the pass). The partial each one stores goes to workgroup
+  memory and is combined into a running max, sum and weighted sums, kept
+  in two slots that alternate by trip. The partial then holds one slot a
+  row and head (16.8 MB for gpt-oss at 512 rows, the same at any key
+  bound), and decode keeps its parallel split. Llama-3.2-1B's composed
+  prompt reads 140.8, 304.6 and 748.1 ms against 141.1, 305.3 and 732.2
+  before. That is +2.2% at 2047 tokens, from servers run one after the
+  other, not interleaved, so it is unresolved. Gate:
+  TestComposedGPUAttendRows: 37 live rows of a 64-row form from position
+  2100, sliding and sink cases, ptx (sm_86, sm_70) and SPIR-V. It holds
+  the attention to the definition at NMSE 1e-8 where the lowering rounds
+  every operation and 1e-6 elsewhere: the V100's Vulkan driver reads
+  1.4e-7 on seam-wip's form too, the laptop's 3e-14. It fails with the
+  first position moved, the sinks zeroed or the combine's partial weight
+  forced to one (NMSE 0.14-0.41), and on seam-wip every sink case fails on
+  the scratch. The alone-on-the-box baseline (D42): c3848f05 on card 6 with
+  its host threads on node 0 reads 361 ms a 1024-token gpt-oss prompt
+  composed and 214 ms on main, as recorded. PM1's 5.2 s ran pinned to node
+  1 beside s43's CPU sets, and alone on node 0 the gap is gone.
