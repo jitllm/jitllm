@@ -9360,3 +9360,38 @@ row where the composer's reads two.
   layout is not lowered in jit/ptx/tile.go). Gate:
   TestComposedStepPromptRunsPrefillAttention (56 launches; 28 on the old
   code).
+- **A mixture's routed experts are served composed from pages, on the cards
+  and on the CPU device.** The composer's expert matvec reads a bank held in
+  pages through a table of the step (`jit.Request.Paged`: each expert's
+  sheet of the held bank, bounded by the sheets held) and a bank whose
+  sheets lie a page apart at that stride (`Request.Strides`). On a card a
+  streamed block (`Config.StreamExperts`, the tier's compact bank or its
+  expert cache) runs its form in two halves (`servedPart.pagedRun`): the
+  codes up to the selection, the selection read back, the tier's own fill
+  from the host's pager, the table written (the cache's slot map), the codes
+  that read the bank. On the CPU device the pager keeps each expert page's
+  frame at that page's place in one reservation of the file's expert array
+  (`format/jlm/exparena.go`: committed on page-in, `MADV_DONTNEED` on
+  eviction, the budget, LRU and fault path the pager's own), so a bank is
+  one view at the expert page's stride (`File.BankView`), and the form's
+  second half runs once `ensureExperts` holds the selection's pages.
+  Composed against whole banks the pages read bit for bit (NMSE 0) on CUDA
+  and Vulkan, the 3050 Ti and a V100, for Qwen3-MoE-4x0.6B, OLMoE,
+  DeepSeek-V2-Lite and the Q8_0 fixtures of glm4moe, qwen2moe, ernie4.5-moe,
+  hunyuan-moe, dots1, DeepSeek-V3 and V3-lite and gpt-oss, a compact bank,
+  a cache of a quarter of the experts (OLMoE on the V100: 2092 hits, 1620
+  misses) and both under a one-page host budget (3728 page-ins against 816);
+  a page read from the wrong expert and an eviction not re-read each fail
+  it (TestComposedExpertPagesServe). On the CPU the composed mixtures sit
+  0.000 to 0.703 of main's int8 spread from main at the median, dbrx's float
+  banks 1.55e-10, and a one-page budget gives the resident logits bit for
+  bit with 240 to 3360 page-ins (TestComposedCPUExpertPagesServe). Moved
+  card to card and card to CPU and back mid-sequence, the logits stay in
+  the devices' band (TestComposedExpertPagesMove,
+  TestComposedExpertPagesMoveToTheCPU). Left by name: a streamed block at a
+  step of several rows (`DeclineExpertsRows`: its union of experts is not
+  in a compact bank), a hybrid block's experts on the host
+  (`DeclineExpertsHost`, the tier's default for a block no card holds
+  whole: 261 of 1392 block steps of Qwen3-30B-A3B on a V100), the CPU's
+  rows form over banks (`DeclineExpertsRows`), and a top-1 mixture, which
+  the tier never streams to a card.
