@@ -1,9 +1,11 @@
 package model
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -33,12 +35,23 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Half the model: the head and a few blocks resident, the rest home.
-	spec := testdevices.Like(t, "cuda:0") + "=" + strconv.FormatUint(probe.WeightBytes()/2, 10)
+	probeLayers := probe.Cfg.NLayer
 	// Three device chunks and part of a fourth: auto measures the first two.
 	n := 3*nn.MaxDevicePrefillChunk + nn.MaxDevicePrefillChunk/2
 	prompt := probe.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog, and then it runs. ", n/10), true)[:n]
 	const gen = 8
+	// Half the model and a few blocks' room: the head and a few blocks resident,
+	// the rest home, and the slots a streamed block pages through. The budget
+	// is the card's whole charge, scratch and KV pool with the weights, so how
+	// many blocks stay is the build's and the card's: a 3050 Ti's plain build
+	// charged 363 MB of 401 MB at half the model and left no slot for a 39 MB
+	// block. The gate takes the least room, in blocks, at which the prompt
+	// streams.
+	specFor := func(room uint64) string {
+		return testdevices.Like(t, "cuda:0") + "=" +
+			strconv.FormatUint(probe.WeightBytes()/2+room*probe.WeightBytes()/uint64(probeLayers), 10)
+	}
+	spec := specFor(0)
 	host := probe.NewState(len(prompt) + gen + 1)
 	want := []([]float32){}
 	lg, err := host.Prefill(prompt)
@@ -58,7 +71,17 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 	host.Close()
 	probe.Close()
 
-	run := func(t *testing.T, mode PrefillStream) (*State, *tier.GPU, int, [][]float32) {
+	// run returns why, not an error, where the budget did not leave the
+	// configuration the gate tests: no blocks left on the host or none on
+	// the card. done frees the arm.
+	type arm struct {
+		st       *State
+		g        *tier.GPU
+		resident int
+		got      [][]float32
+		done     func()
+	}
+	run := func(t *testing.T, mode PrefillStream) (a arm, why string) {
 		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
@@ -69,13 +92,15 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := m.NewState(len(prompt) + gen + 1)
-		t.Cleanup(func() { st.Close(); g.Close(); m.Close() })
+		var once sync.Once
+		done := func() { once.Do(func() { st.Close(); g.Close(); m.Close() }) }
+		t.Cleanup(done)
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
 		}
 		resident := st.devCount()
 		if resident == 0 || resident == m.Cfg.NLayer {
-			t.Fatalf("%d of %d blocks resident: the card does not leave blocks on the host, so nothing "+
+			return arm{done: done}, fmt.Sprintf("%d of %d blocks resident: the card does not leave blocks on the host, so nothing "+
 				"could stream", resident, m.Cfg.NLayer)
 		}
 		lg, err := st.Prefill(prompt)
@@ -96,7 +121,7 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 			}
 			got = append(got, append([]float32(nil), lg...))
 		}
-		return st, g, resident, got
+		return arm{st, g, resident, got, done}, ""
 	}
 	check := func(t *testing.T, got [][]float32) {
 		t.Helper()
@@ -108,31 +133,54 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 	}
 
 	t.Run("on", func(t *testing.T) {
-		st, g, resident, got := run(t, PrefillStreamOn)
-		if s, k := st.PrefillStreams(); s != 1 || k != 0 {
-			t.Fatalf("%d prompt(s) streamed, %d kept on the host: the forced stream did not run", s, k)
+		const rooms = 4
+		var a arm
+		for room := uint64(0); ; room++ {
+			spec = specFor(room)
+			var why string
+			if a, why = run(t, PrefillStreamOn); why == "" {
+				if s, k := a.st.PrefillStreams(); s != 1 || k != 0 {
+					why = fmt.Sprintf("%d prompt(s) streamed, %d kept on the host: the forced stream did not run", s, k)
+				} else if ps := a.g.Stats(); ps.PageIns == 0 {
+					why = fmt.Sprintf("no page-in: nothing streamed through the card (%d of %d blocks resident, %d after; "+
+						"budget %d of %d used; page-outs %d, relocations %d, %q)", a.resident, probeLayers, a.st.devCount(),
+						a.g.Bytes(), a.g.Budgets()[0].Limit, ps.PageOuts, a.st.Relocations(), a.g.Err())
+				}
+			}
+			if why == "" {
+				t.Logf("a card of %s: half the model and %d block(s) of room", spec, room)
+				break
+			}
+			a.done()
+			t.Logf("%s: %s", spec, why)
+			if room == rooms-1 {
+				t.Fatalf("no budget from half the model to %d blocks more streamed the prompt", rooms-1)
+			}
 		}
-		if ps := g.Stats(); ps.PageIns == 0 {
-			t.Fatal("no page-in: nothing streamed through the card")
-		}
-		check(t, got)
+		check(t, a.got)
 		t.Logf("%d blocks resident, the rest streamed for a %d-token prompt: %d page-ins, back to %d after",
-			resident, len(prompt), g.Stats().PageIns, st.devCount())
+			a.resident, len(prompt), a.g.Stats().PageIns, a.st.devCount())
 	})
 	t.Run("off", func(t *testing.T) {
-		st, _, _, got := run(t, PrefillStreamOff)
-		if s, k := st.PrefillStreams(); s != 0 || k != 0 {
+		a, why := run(t, PrefillStreamOff)
+		if why != "" {
+			t.Fatal(why)
+		}
+		if s, k := a.st.PrefillStreams(); s != 0 || k != 0 {
 			t.Fatalf("forced off, %d prompt(s) streamed and %d measured", s, k)
 		}
-		check(t, got)
+		check(t, a.got)
 	})
 	t.Run("auto", func(t *testing.T) {
-		st, _, _, got := run(t, PrefillStreamAuto)
-		s, k := st.PrefillStreams()
+		a, why := run(t, PrefillStreamAuto)
+		if why != "" {
+			t.Fatal(why)
+		}
+		s, k := a.st.PrefillStreams()
 		if s+k != 1 {
 			t.Fatalf("auto took %d decision(s) on one prompt (%d streamed, %d kept)", s+k, s, k)
 		}
-		check(t, got)
+		check(t, a.got)
 		t.Logf("auto: streamed %d, kept on the host %d", s, k)
 	})
 }
