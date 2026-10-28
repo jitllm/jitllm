@@ -9505,10 +9505,20 @@ row where the composer's reads two.
   for per-layer embeddings, 4 for a shared history and both input rows
   refused, to every block and the input rows stated. On the CPU device
   every block step of both serves, decode and a prompt of 8 with its
-  decode, at 1.1e-10 and 6.6e-10 NMSE from main; the violations (each
-  block's per-layer gate the next block's, the sliding reader on an
-  earlier source, the post-norm unweighted) read 1.16, 0.256, 0.141 and
-  1.40, 0.083, 0.106. A front end reading the model without its per-layer
+  decode, at 1.1e-10 and 6.6e-10 NMSE from main; the violations (the
+  per-layer inputs' norm unweighted, the sliding reader on an earlier
+  source, the block's post-norm unweighted) read 0.090, 0.256, 0.141 and
+  0.072, 0.083, 0.106. Each block given the next block's gate read 1.16
+  and 1.40 on the CPU, but places no block on CUDA, so the card arms
+  cannot run it. On a V100, CUDA and Vulkan, every decode block step of
+  both serves at 7.1e-12 and 6.6e-12 (5.0e-12 and 5.6e-12 ragged) NMSE
+  from the host, the prompt's block steps all served, and the three
+  violations read as on the CPU. Real Gemma 4 E2B states every block and
+  its input rows as ops and forms for CPU and GPU (the census). Each
+  block's slice of the per-layer inputs is an offset in its form, so no
+  two blocks of such a model share one: E2B composes a form a block where its
+  geometries would give a handful, the upgrade an offset the call site
+  binds. A front end reading the model without its per-layer
   embeddings refuses it by the unbound gate, and one reading a reader as a
   writer by the keys it does not store. The device holds no per-layer
   table, so a card declines the input rows of such a model by name
