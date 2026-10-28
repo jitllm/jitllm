@@ -9756,3 +9756,51 @@ row where the composer's reads two.
   into sequential partitions, jit/pass_splitrange.go, the first suspect;
   scoping the combine's shared loads to the partition loop did not move
   it). The projectors and the entry rows stay main's generated kernels.
+- **The matrix kernel at 1.11-1.34 of GemmVolta over a 128x128 tile, a
+  selection's grouping shared, and shared memory past 48 KiB.** On the V100
+  (card 7, CUDA, sm_70, 512 rows, BenchmarkComposedMatrix, both composed
+  kernels over GemmVolta, median of per-round ratios, an A/A within 0.01)
+  from 1.50/1.45/1.25 (q/o Q4_K, gate/up Q4_K, down Q6_K): A's staged rows
+  padded to eight elements, so a lane's eight elements of an A fragment are
+  one ld.shared.v4 (`ir.TileLoadAligned8`), B's kept at four, 1.50/1.34/1.21
+  (both at eight read 1.62/1.52/1.33: a B fragment load reads rows n and n+8
+  together, which a sixteen-byte-aligned row shares banks across); then the
+  profile's tile 128x128x32 over 2x4 warps, one workgroup a unit,
+  1.34/1.26/1.11 (615 instructions a warp-trip against 664; 128x128 over 2x2
+  warps spilled). Measured and not kept: the weight's codes decoded two a
+  word in binary16 pairs (sub and fma on f16x2; 603 instructions, mixed
+  1.30/1.29/1.09 against 1.34/1.26/1.11, and Q4_K's worst NMSE 1.3e-7 to
+  2.1e-7); the next trip's loads after the stage's stores, which ends the
+  22 register moves a trip (581 instructions) and reads 1.61/1.53/1.36: one
+  trip does not cover the loads; loads two trips ahead 1.36/1.30/1.20 (a
+  chain of folds is right only when each fold is made before the one it
+  takes, lowergpu setting the phis in order); 128x128x64 and 256x64x32,
+  which compile now, 1.50/1.38/1.21 and 1.62/1.47/1.34; halving a dense
+  workgroup until its count reaches the units, neutral (Llama-3.1-8B's
+  prompt matrix kernels 164.6 against 165.3 ms). A mixture's selection is
+  grouped once for the projections it routes (named by the selection,
+  `Context.grouped`; TestExpertGroupingIsShared), a pair's rank is counted by
+  blocks of 64 pairs, not over every pair before it (Qwen3-30B-A3B's grouping
+  kernels 6.06 -> 4.96 ms a 512-token prompt), and a grouped projection's
+  workgroup keeps the profile's 128 outputs over half the warps, two a unit:
+  gpt-oss-20b's composed prompt (CLI, JITLLM_CUDA_KERNEL_TIMING) 157.2 ->
+  140.2 ms of matrix kernels, 278.1 -> 261.2 ms of all. A run padded to 32
+  rows where an expert averages 32 pairs read Qwen3-30B-A3B's matrix kernels
+  127.8 -> 157.7 ms (each block reads its expert's weight again) and is not
+  kept. Projections of one row factor (q, k and v of one normed input; gate
+  and up) read one halves kernel's words, keyed by what it computes
+  (TestProjectionsOfOneRowShareTheirHalves): Llama-3.1-8B's halves kernels
+  5.90 -> 3.90 ms a 512-token prompt, 224 -> 128 launches. A kernel whose
+  shared arrays pass 48 KiB lowers them into dynamic shared memory the CUDA
+  backend opts it into (`ptx.DynamicShared`,
+  `cuda.Module.SetDynamicShared`; TestSharedPastTheStaticLimit, which
+  overlapped arrays fail). PM3 in one pass (servers, card 7, Qwen3-30B-A3B
+  on 6 and 7, main, the base 123cbc14 and the head one after another, each
+  an A/A within 0.4%, composed prompt rate over main's at 512/1024/2048):
+  Llama-3.2-1B 0.479/0.404/0.287 -> 0.483/0.409/0.289, Llama-3.1-8B
+  0.493/0.412/0.306 -> 0.535/0.440/0.320, gpt-oss-20b 0.398/0.378/0.333 ->
+  0.412/0.389/0.339, Qwen3-30B-A3B 0.384/0.325/0.237 -> 0.401/0.339/0.246
+  (the head before the shared halves); every composed 16-token answer is
+  main's word for word. The gpt-oss rows PX recorded (0.051) and its server
+  four times its CLI do not reproduce at the base: its server reads 276 ms a
+  512-token prompt, its CLI 278 ms of kernels.
