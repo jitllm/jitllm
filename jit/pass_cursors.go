@@ -1,6 +1,11 @@
 package jit
 
-import "slices"
+import (
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+)
 
 // Cursors replaces a loop's indexing of a buffer by an address the loop
 // advances. Each access becomes a constant displacement from a pointer: the
@@ -28,6 +33,20 @@ func (p Cursors) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			if newCursorer(m, a.Buf).run() {
 				changed = true
+				continue
+			}
+			// A buffer read at several strides walks a copy of its address
+			// for each.
+			if groups := strideGroups(m, a.Buf); len(groups) > 1 {
+				t, ok := m.clone(), true
+				for _, g := range groups {
+					cu := newCursorer(t, a.Buf)
+					cu.only, cu.copied = g, true
+					ok = ok && cu.run()
+				}
+				if ok {
+					m, changed = t, true
+				}
 			}
 		}
 		if !changed {
@@ -65,6 +84,63 @@ type cursorer struct {
 	disp   map[int]int64
 	ptr    map[int]int
 	cursor map[int]Cursor
+	// only, where set, is the accesses the cursorer lays (accessID), and
+	// copied walks them on a copy of the address rather than the address.
+	only   map[int]bool
+	copied bool
+}
+
+// accessID names a load by its node and a store by its index.
+func accessID(node, store int) int {
+	if node >= 0 {
+		return node
+	}
+	return -1 - store
+}
+
+// strideGroups is the accesses of buffer b's address grouped by how the
+// iteration of each loop moves their index.
+func strideGroups(k *Kernel, b int) []map[int]bool {
+	g := newAlg(k)
+	live := k.Live()
+	base := k.Bufs[b].Base
+	var keys []string
+	groups := map[string]map[int]bool{}
+	add := func(id, ix int) {
+		var key strings.Builder
+		for c := range k.Loops {
+			if it := k.iterOf(c); it >= 0 {
+				w, _ := g.coef(g.of(ix), g.id(atom{node: it}))
+				ms := slices.Sorted(maps.Keys(w))
+				fmt.Fprintf(&key, "%d:", c)
+				for _, m := range ms {
+					fmt.Fprintf(&key, "%s=%d,", m, w[m])
+				}
+				key.WriteByte(';')
+			}
+		}
+		s := key.String()
+		if groups[s] == nil {
+			groups[s] = map[int]bool{}
+			keys = append(keys, s)
+		}
+		groups[s][id] = true
+	}
+	for i, nd := range k.Nodes {
+		if nd.Op == OpLoad && live[i] && k.Bufs[nd.Buf].Base == base {
+			add(accessID(i, -1), nd.A)
+		}
+	}
+	for i, s := range k.Stores {
+		if !s.Barrier && !s.Run && k.Bufs[s.Buf].Base == base {
+			add(accessID(-1, i), s.Ix)
+		}
+	}
+	out := make([]map[int]bool, len(keys))
+	for i, s := range keys {
+		out[i] = groups[s]
+	}
+	return out
 }
 
 func newCursorer(k *Kernel, b int) *cursorer {
@@ -76,12 +152,12 @@ func (cu *cursorer) run() bool {
 	live := k.Live()
 	hs := k.Homes()
 	for i, nd := range k.Nodes {
-		if nd.Op == OpLoad && live[i] && k.Bufs[nd.Buf].Base == cu.base {
+		if nd.Op == OpLoad && live[i] && k.Bufs[nd.Buf].Base == cu.base && (cu.only == nil || cu.only[accessID(i, -1)]) {
 			cu.as = append(cu.as, cAccess{access: access{node: i, store: -1}, home: hs[i], ix: cu.g.of(nd.A)})
 		}
 	}
 	for i, s := range k.Stores {
-		if !s.Barrier && !s.Run && k.Bufs[s.Buf].Base == cu.base {
+		if !s.Barrier && !s.Run && k.Bufs[s.Buf].Base == cu.base && (cu.only == nil || cu.only[accessID(-1, i)]) {
 			cu.as = append(cu.as, cAccess{access: access{node: -1, store: i}, home: s.At, ix: cu.g.of(s.Ix)})
 		}
 	}
@@ -95,7 +171,11 @@ func (cu *cursorer) run() bool {
 		ix[i] = cu.as[i].ix
 	}
 	ptrs := len(k.Ptrs)
-	if _, ok := cu.walk(-1, 0, false, lin{}, all, ix); !ok {
+	start := 0
+	if cu.copied {
+		start = cu.newPtr()
+	}
+	if _, ok := cu.walk(-1, start, cu.copied, lin{}, all, ix); !ok {
 		k.Ptrs = k.Ptrs[:ptrs]
 		return false
 	}
