@@ -10187,3 +10187,28 @@ row where the composer's reads two.
   the loop's, an unrolled copy's iteration is the lanes' plus its vectors,
   and the rule that a difference of small words is small is gone
   (TestComposedCPUAttend holds; with the readers outside, 0.198).
+- **Metal serves the composer's blocks, its matrix tile among them.**
+  Metal states maxThreadgroupMemoryLength (32 KiB on the M4) as
+  jit.Device.Shared, and the workgroup geometry leaves the attention plane
+  what is left beside the combines, Bind's per-trip sums and the running
+  partials: the stage kernels had declared 34816 to 39424 bytes, which the
+  driver refused, and a kernel past the device is now refused by name where
+  it lowers (TestFormsHoldTheDevicesWorkgroupMemory). msl lowers a tile past
+  8x8 as a struct of 8x8 simdgroup matrices, so LowersTile's 16x16x16 probe
+  compiles and the flash and matrix passes form on Metal; a load or store
+  whose type is not its buffer's moves the bits (as_type), where MSL had
+  converted a float read of a uint threadgroup word by value (the flash
+  form's rows at NMSE 4.6e21), and the matrix pass halves its rows until the
+  stage fits (38912 bytes at 128 rows). Two faults every backend had: the
+  mixed-sequence prompt form is formed at placement wherever a ragged step
+  runs (the scheduler's batch formed it after the placement on all eight
+  census models, CUDA included), and a form's scratch is sized by the widest
+  code that binds it (sized by the first, a later code overran it: with the
+  second form's instance beside it, stories15M's composed arms sat 7.98 from
+  the tier against 0.093). On the M4, Metal: TestComposedBlocksServe passes
+  on Llama-3.2-1B, Qwen3-0.6B, SmolLM2-360M, stories15M, gemma-3-1b,
+  Qwen3-MOE-4x0.6B, synth-gptoss and Qwen3.5-0.8B, TestPlacementComposesOnce
+  on all eight models (one card), the composed TestDecodeDoesNotAllocate arms
+  on Llama-3.2-1B and Qwen3.5-0.8B, TestComposedExpertPagesMoveToTheCPU, the
+  recurrent gates, and TestResetClearsTheRecurrentSummary, which had been
+  linux-only and CPU-only and now runs on every test device.
