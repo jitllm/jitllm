@@ -14,7 +14,8 @@ import (
 // access's immediate offset: a workgroup's partials read as one register
 // and a displacement each, not an address each. In a kernel of a kind in
 // Weights, loads of one weight word merge too, so the elements a word packs
-// share its load and the arithmetic of its scales.
+// share its load and the arithmetic of its scales, and a term a shift or a
+// mask cannot see by its bound is dropped (bounded).
 type Affine struct {
 	Weights []PrimKind
 }
@@ -31,6 +32,9 @@ func (p Affine) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			step = m.foldConstants() || step
 			step = m.powersOfTwo() || step
 			step = m.headroom() || step
+			if weights {
+				step = m.bounded() || step
+			}
 			step = m.constantsOutward() || step
 			if !step {
 				break
@@ -189,6 +193,72 @@ func (k *Kernel) headroom() bool {
 			k.Nodes[i] = Node{Op: OpAdd, Type: ir.U32, A: k.bin(OpAnd, ir.U32, x, nd.B), B: k.u32(int(c))}
 		}
 		changed = true
+	}
+	return changed
+}
+
+// bounded drops what a shift or a mask by 2^n cannot see, exactly in the
+// u32 ring, where a term is a multiple of 2^n by its structure and the
+// other stays below 2^n by its bound rather than by being a constant: x+y
+// is then x|y, so (x+y)>>n is x>>n, and (x+y)&(2^n-1) is y&(2^n-1) whatever
+// y. A mask 2^n-1 of a value its bound keeps at or under it is the value,
+// and (a*C)>>n is a*(C>>n) for C a multiple of 2^n where a's bound keeps
+// a*C below 2^32. An index of a trip and a thread's place in it then reads
+// as the trip's and the place's apart.
+func (k *Kernel) bounded() bool {
+	changed := false
+	bound := map[int]uint64{}
+	for i := range k.Nodes {
+		nd := k.Nodes[i]
+		c := k.Nodes[nd.B]
+		if nd.Type != ir.U32 || nd.Op != OpShr && nd.Op != OpAnd || c.Op != OpConst || c.Type != ir.U32 {
+			continue
+		}
+		b := uint32(c.Imm)
+		n := b
+		if nd.Op == OpAnd {
+			if b&(b+1) != 0 || b == ^uint32(0) {
+				continue
+			}
+			n = uint32(bitsOf(int(b) + 1))
+		} else if b == 0 || b > 31 {
+			continue
+		}
+		low := uint64(1)<<n - 1
+		if nd.Op == OpAnd && k.below(nd.A, bound) <= low {
+			k.Nodes[i] = Node{Op: OpAdd, Type: ir.U32, A: nd.A, B: k.u32(0)}
+			changed = true
+			continue
+		}
+		a := k.Nodes[nd.A]
+		switch {
+		case a.Op == OpAdd && a.Type == ir.U32:
+			for _, xy := range [][2]int{{a.A, a.B}, {a.B, a.A}} {
+				x, y := xy[0], xy[1]
+				if k.Nodes[y].Op == OpConst || !k.divisibleBy(x, 1<<n) {
+					continue
+				}
+				if nd.Op == OpAnd {
+					k.Nodes[i].A = y
+				} else if k.below(y, bound) <= low && k.below(x, bound)+k.below(y, bound) < 1<<32 {
+					k.Nodes[i].A = x
+				} else {
+					continue
+				}
+				changed = true
+				break
+			}
+		case a.Op == OpMul && a.Type == ir.U32 && nd.Op == OpShr:
+			for _, xc := range [][2]int{{a.A, a.B}, {a.B, a.A}} {
+				x, C := xc[0], k.Nodes[xc[1]]
+				if C.Op != OpConst || C.Type != ir.U32 || uint32(C.Imm)&uint32(low) != 0 || k.below(x, bound)*uint64(uint32(C.Imm)) >= 1<<32 {
+					continue
+				}
+				k.Nodes[i] = Node{Op: OpMul, Type: ir.U32, A: x, B: k.u32(int(uint32(C.Imm) >> n))}
+				changed = true
+				break
+			}
+		}
 	}
 	return changed
 }
