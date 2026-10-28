@@ -10418,3 +10418,47 @@ row where the composer's reads two.
   against the integer form's 70-90 ms in the same pass. TestComposedCPUSampleTopK
   and TestComposedGPUSampleTopK hold all 40 cases bit for bit, on the
   V100's ptx and spirv as well.
+- **A prompt's jammed rows decode the weight once.** RowJam's two rows a
+  call shared the weight's words before Periods, which unrolls a block's
+  sub-blocks, copied each sum's step with a memo of its own: every row got
+  its own loads and decode of the words and scales (WeightLoads, 64x2048 at
+  8 rows a step, no VNNI: Q4_K 46592 words a launch at two rows a call, as
+  many as at one). A period's steps now share one memo (Kernel.copyMemo),
+  and Order steps the sums of a loop together where their steps are chains
+  of one length that read a computed value alike (orderer.lockstep,
+  orderer.together): each operand place made side by side, so a decoded
+  weight vector is read by both rows' byte dots as soon as it is made and
+  the registers hold the jam. Written one row after another, a row held its
+  eight decoded vectors across its sub-block and the binder refused the jam
+  outright on Q4_0, Q5_0, Q5_1, TQ2_0, TQ2_F32 and MXFP4 (one row a call,
+  no lanes); those now run two rows a call, Jam's lanes kept (MXFP4 none
+  either way), and form faster (Q4_0 162 -> 36 ms, Q4_K 1.9 s -> 0.34 s).
+  A buffer read at several strides (the int8 form's scales and sums in one
+  scratch) walks a copy of its address for each stride (strideGroups)
+  instead of an index the general registers spill. Q4_K's rows kernel at
+  K=2048: 4211 -> 2687 instructions, 555 -> 110 red-zone accesses; Q6_K
+  1672 -> 1306; Q8_0 unchanged (it shared already); Q4_0 257 at one row a
+  call -> 345 at two. The Xeon D-2123IT, one core, 64 rows of 2048x2048,
+  interleaved, median of 5: Q4_K 9.62 -> 12.28 GMAC/s, Q6_K 7.38 -> 9.61,
+  Q8_0 14.7 either way; a second pass beside a test run, Q4_0 12.06 ->
+  17.62. Decode: the Q4_K kernel 2175 -> 1929 instructions, Q6_K and Q8_0
+  byte-identical. Prompt at 512 on the E5-2680 v4's node 1
+  (TestComposedCPUPrefillAB, n=20, A/A 1.0135 and 1.0003): Llama-3.2-1B
+  Q4_K_M 0.2390 -> 0.3039 of main (92.8 -> 116.6 tok/s against main's
+  385-389); Qwen3-0.6B Q8_0 0.5969 -> 0.5947 (its code unchanged). Tried
+  and not taken: loading a period's scale word (Operand.Region 1) once a
+  trip read Llama 0.3210 (against 0.2425 in the same pass) and Q4_K 13.38
+  GMAC/s, but the registers refuse it on Q5_K, which then fell to one row a
+  call with no lanes, or with a retry flag kept two rows but formed in 10.7
+  s against 0.5. Four rows a call stays refused on Q4_K: a period's tail
+  holds four sums, four accumulators and four resident constants, past
+  sixteen vector registers. The prompt attention's dots still recompute a
+  key's page address with every operand spilled: its general registers are
+  all taken by the loop's cursors, and the key's address is not affine (a
+  page table load), so no cursor walks it. Gates:
+  TestCPURowJamReadsTheWeightOnce (two rows a call load half the words of
+  one on eleven packed types; eight rows halve to two with Jam's lanes
+  kept, and with Jam off that check parts; it failed the scale-word merge
+  on Q5_K); Llama-3.2-1B and stories15M-q4_0 join cpuRowsModels, so
+  TestComposedCPURowsServe and TestComposedCPURowsDoNotAllocate hold a
+  K-quant's and a Q4_0 prompt.
