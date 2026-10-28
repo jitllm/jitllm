@@ -1311,13 +1311,22 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 		why := jit.DeclineBidir
 		if s.vis != nil {
 			why = s.cpuTowerRows(li, l, n)
-		} else if !bidir {
+		} else if !bidir || !c.LayerKind(li).Recurrent() {
+			// A non-causal decoder's chunk (an embedding run's) is one run
+			// of rows attending both ways; a symmetric window its graph
+			// states clips it per row (graph.Attrs.Bidir).
+			if bidir {
+				s.bidir = append(s.bidir[:0], nn.KeyRun{Lo: p0, Hi: p0 + n})
+			}
 			seq, pos := s.cpuRowsOf(slot, p0, n)
 			var err error
 			if c.LayerKind(li).Recurrent() {
 				why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos, nil, base, p0)
 			} else {
 				why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], s.bcs, s.bcsSWA, seq, pos)
+			}
+			if bidir {
+				s.bidir = s.bidir[:0]
 			}
 			if err != nil {
 				return err

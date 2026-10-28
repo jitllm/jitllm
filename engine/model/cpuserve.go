@@ -65,6 +65,9 @@ const (
 	cpuArgRecConv
 	cpuArgRecConvOut
 	cpuArgRecRows
+	// cpuArgPoolPos is the positions table a pooled readout reads its live
+	// count from (cpupool.go).
+	cpuArgPoolPos
 	// cpuArgIO is an input or output of a graph whose output is not its
 	// input (the head's, the sampler's): the bound buffer of that place,
 	// the inputs' then the outputs' (cpuBound.io).
@@ -263,6 +266,7 @@ type cpuState struct {
 	head    cpuHeadState
 	streams cpuStreamsState
 	proj    cpuProjState
+	pool    cpuPoolState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -449,6 +453,25 @@ func (s *State) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int
 // or says why not. Its history is the State's arena page, lent to the block
 // for its run.
 func (s *State) cpuTowerRows(li int, l *layer, n int) jit.Decline {
+	v := s.vis
+	var wins []nn.KeyRun
+	if s.visWindowed(li) {
+		v.winRuns = v.winRuns[:0]
+		for w := 0; w+1 < len(v.segs); w += 2 {
+			v.winRuns = append(v.winRuns, nn.KeyRun{Lo: v.segs[w], Hi: v.segs[w+1]})
+		}
+		wins = v.winRuns
+	}
+	cs, nrot := s.cpuTable(li, s.bcs, nil)
+	return s.cpuRunRows(li, l, s.bx[:n*s.c.ResidW()], n, cs, nrot, wins)
+}
+
+// cpuRunRows runs non-causal block li on the CPU the composer's way over
+// the n rows of x, one run attending both ways or, where wins is not nil,
+// each window a run its rows attend inside; cs is the rows' rotary table,
+// nrot wide. Its history is the segment's arena (ncArena), lent to the
+// block for its run.
+func (s *State) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, wins []nn.KeyRun) jit.Decline {
 	f, why := s.cpuRowsForm(li, l)
 	if why != jit.DeclineServes {
 		return why
@@ -457,22 +480,17 @@ func (s *State) cpuTowerRows(li int, l *layer, n int) jit.Decline {
 		return jit.DeclineSessions
 	}
 	s.cpuPages(1)
-	v := s.vis
-	v.run[0] = nn.KeyRun{Lo: 0, Hi: n}
-	runs := v.run[:]
-	if s.visWindowed(li) {
-		v.winRuns = v.winRuns[:0]
-		for w := 0; w+1 < len(v.segs); w += 2 {
-			v.winRuns = append(v.winRuns, nn.KeyRun{Lo: v.segs[w], Hi: v.segs[w+1]})
-		}
-		runs, s.cpu.runWindows = v.winRuns, true
+	a := s.nc()
+	a.run[0] = nn.KeyRun{Lo: 0, Hi: n}
+	runs := a.run[:]
+	if wins != nil {
+		runs, s.cpu.runWindows = wins, true
 	}
-	if !v.causalFault {
+	if !a.causalFault {
 		s.bidir = runs
 	}
 	seq, pos := s.cpuRowsOf(0, 0, n)
-	cs, nrot := s.cpuTable(li, s.bcs, nil)
-	s.cpuRowsRun(li, l, f, s.bx[:n*s.c.ResidW()], n*s.c.NEmbd, nil, cs, nrot, seq, pos)
+	s.cpuRowsRun(li, l, f, x, n*s.c.NEmbd, nil, cs, nrot, seq, pos)
 	s.bidir, s.cpu.runWindows = nil, false
 	return jit.DeclineServes
 }
@@ -978,7 +996,7 @@ func (s *State) cpuWeights(f *cpuBlockForm, li int, l *layer) jit.Decline {
 					}
 					continue
 				}
-				w := s.cpuRoleWeight(l, a.role)
+				w := s.cpuRoleWeight(li, l, a.role)
 				if w == nil || w.packed == nil && len(w.data) == 0 {
 					return jit.DeclineNoWeight
 				}
@@ -986,7 +1004,7 @@ func (s *State) cpuWeights(f *cpuBlockForm, li int, l *layer) jit.Decline {
 					return jit.DeclineCutWeight
 				}
 			case cpuArgVector:
-				if len(s.cpuRoleVector(l, a.role)) == 0 {
+				if len(s.cpuRoleVector(li, l, a.role)) == 0 {
 					return jit.DeclineNoWeight
 				}
 			}
@@ -1091,14 +1109,14 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 				p = s.cpu.banks[b.li][ar.role-jlm.RoleExpGateBank][ar.region]
 				break
 			}
-			w := s.cpuRoleWeight(b.l, ar.role)
+			w := s.cpuRoleWeight(b.li, b.l, ar.role)
 			if w.packed == nil {
 				p = unsafe.Pointer(&w.data[0])
 			} else {
 				p = unsafe.Pointer(&[3][]byte{w.packed.QS, w.packed.D, w.packed.SC}[ar.region][0])
 			}
 		case cpuArgVector:
-			p = unsafe.Pointer(&s.cpuRoleVector(b.l, ar.role)[0])
+			p = unsafe.Pointer(&s.cpuRoleVector(b.li, b.l, ar.role)[0])
 		case cpuArgRope:
 			p = unsafe.Pointer(&b.cs[0])
 		case cpuArgKeys:
@@ -1120,6 +1138,8 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			if b.rec != nil {
 				p = unsafe.Pointer(&s.cpu.convOut[0])
 			}
+		case cpuArgPoolPos:
+			p = unsafe.Pointer(&s.cpu.pool.pos[0])
 		case cpuArgRecRows:
 			p = unsafe.Pointer(&s.cpu.recRows[0])
 			if b.rec != nil {
@@ -1192,12 +1212,18 @@ func (s *State) cpuPlace() {
 			s.cpuCompose(li)
 		}
 	}
-	if s.vis != nil {
-		s.cpuPlaceProjector()
+	if s.nc() != nil {
+		if s.vis != nil {
+			s.cpuPlaceProjector()
+		}
+		if s.enc != nil {
+			s.cpuPlacePool()
+		}
 		return
 	}
 	s.cpuPlaceHead()
 	s.cpuPlaceStreams()
+	s.cpuPlacePool()
 }
 
 // cpuRelocated follows block li onto the CPU, composed for it there, or off
@@ -1292,7 +1318,7 @@ func (s *State) cpuWhy(li int) jit.Decline {
 	g := s.m.Composing().BlockGraph(li)
 	// A block sharing another's history reads its source's pages.
 	pg := &s.kv.layers[c.KVSource(li)]
-	if s.vis != nil {
+	if s.nc() != nil {
 		return s.cpuTowerWhy(g)
 	}
 	switch {
@@ -1362,10 +1388,10 @@ func (s *State) cpuSideOff(li int) int {
 	return 0
 }
 
-// cpuTowerWhy is cpuWhy for a block of a picture's segment: its history is
-// the block's run's own, written and read inside the one call over the
-// picture's rows (lend), so no other path reads its format, and its page is
-// the State's arena.
+// cpuTowerWhy is cpuWhy for a block of a non-causal segment (a tower's or an
+// encoder's): its history is the block's run's own, written and read inside
+// the one call over the segment's rows (lendNC), so no other path reads its
+// format, and its page is the State's arena.
 func (s *State) cpuTowerWhy(g *graph.Graph) jit.Decline {
 	switch {
 	case !jit.HostCPULowers():
@@ -1374,7 +1400,7 @@ func (s *State) cpuTowerWhy(g *graph.Graph) jit.Decline {
 		return jit.DeclineNoGraph
 	case len(g.Out) != 1 || len(g.In) != 1:
 		return jit.DeclineFeeds
-	case s.vis.arena == nil:
+	case s.nc().arena == nil:
 		return jit.DeclinePageOut
 	}
 	return jit.DeclineServes
@@ -1416,8 +1442,8 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	}
 	pg := &s.kv.layers[li]
 	page := max(pg.p, 1)
-	if s.vis != nil {
-		page = s.vis.page
+	if a := s.nc(); a != nil {
+		page = a.page
 	}
 	workers := 1
 	if s.jit != nil {
@@ -1633,7 +1659,12 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 				case "request":
 					ar.src = cpuArgRequest
 				case "rope.pos":
+					// A pooled readout reads its live count (cpuPoolState), any
+					// other graph its rows' positions (cpuBound.pos).
 					ar.src = cpuArgPos
+					if slices.ContainsFunc(gr.Ops, func(o graph.Op) bool { return o.Kind == graph.OpPool }) {
+						ar.src = cpuArgPoolPos
+					}
 				default:
 					f.close()
 					return nil, cpuDeclineError{jit.DeclineTable, fmt.Errorf("%s reads the table %s", c.Name, o.Name)}
@@ -2018,9 +2049,10 @@ func streamIn(gr *graph.Graph, v graph.ValueID) int {
 	return -1
 }
 
-// cpuRoleWeight is block l's matrix of role r, nil for one it does not hold;
-// with no block, the head's.
-func (s *State) cpuRoleWeight(l *layer, r jlm.Role) *tensor {
+// cpuRoleWeight is block li's (l's) matrix of role r, nil for one it does
+// not hold; with no block, the head's. An encoder segment's blocks hold
+// theirs in the encoder (encRoleWeight).
+func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 	if l == nil {
 		switch m := s.m; {
 		case r == jlm.RoleOutput || r == jlm.RoleTokenEmbd:
@@ -2037,8 +2069,15 @@ func (s *State) cpuRoleWeight(l *layer, r jlm.Role) *tensor {
 			return &s.cpu.proj.posW
 		case s.vis != nil && r == jlm.RoleVProj2:
 			return &s.vis.t.projW2
+		case r == jlm.RoleEmbdDense1:
+			return &m.dense1
+		case r == jlm.RoleEmbdDense2:
+			return &m.dense2
 		}
 		return nil
+	}
+	if s.enc != nil {
+		return s.m.encRoleWeight(li, r)
 	}
 	switch r {
 	case jlm.RoleAttnQ:
@@ -2108,9 +2147,9 @@ func (s *State) cpuRoleWeight(l *layer, r jlm.Role) *tensor {
 	return nil
 }
 
-// cpuRoleVector is block l's vector of role r, nil for one it does not
-// hold; with no block, the head's.
-func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
+// cpuRoleVector is block li's (l's) vector of role r, nil for one it does
+// not hold; with no block, the head's.
+func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 	if l == nil {
 		switch r {
 		case jlm.RoleOutputNorm:
@@ -2142,6 +2181,9 @@ func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
 			return t.projNormB
 		}
 		return nil
+	}
+	if s.enc != nil {
+		return s.m.encRoleVector(li, r)
 	}
 	switch r {
 	case jlm.RoleAttnNorm:

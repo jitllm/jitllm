@@ -112,6 +112,10 @@ func (m *Model) NewEmbedder() (*Embedder, error) {
 		e.st, e.jit = st, st.jit
 	} else if err := e.encoderJIT(); err != nil {
 		return nil, err
+	} else if m.opt.composedCPU {
+		// The blocks the composer runs on the CPU device run through the
+		// encoder's segment, as a device's do.
+		e.seg = m.encState(e.jit)
 	}
 	e.ones = make([]float32, c.NEmbd)
 	for i := range e.ones {
@@ -302,11 +306,19 @@ func (e *Embedder) Embed(ids []int32) ([]float32, error) {
 		rows = e.x[:len(ids)*d]
 	default:
 		var err error
-		if rows, err = e.st.embedPrefill(ids, e.pooled); err != nil {
+		var unit bool
+		if rows, unit, err = e.st.embedPrefill(ids, e.pooled); err != nil {
 			return nil, err
+		}
+		if unit {
+			return e.pooled, nil
 		}
 	}
 	out := e.pooled
+	if e.m.enc != nil && e.seg != nil && e.seg.nc() != nil && e.seg.cpuPool(rows, len(ids), out) {
+		// The composer's readout: pooled and scaled to unit length.
+		return out, nil
+	}
 	if e.m.enc != nil {
 		e.pool(out, rows, len(ids))
 	}

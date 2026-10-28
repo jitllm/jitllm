@@ -1063,10 +1063,7 @@ func (s *State) Close() error {
 		s.lend(s.lo)
 	}
 	s.m.kvPool.put(s.kv)
-	if s.vis != nil && s.vis.arena != nil {
-		s.vis.arena.unmap()
-		s.vis.arena = nil
-	}
+	s.unmapNC()
 	// The blocks this State ran on the host no longer need their pages for
 	// it. Close may be called twice; cpuHeld makes the second a no-op.
 	if s.cpuHeld {

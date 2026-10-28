@@ -1823,6 +1823,20 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.mvg.bias
 	case jlm.RoleVClamp:
 		return l.clampB
+	case jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias:
+		// A post-norm block's norm over x + attention is the one the tier
+		// holds as its MLP's (nn.LayerPlan.PostResidNorm).
+		if l.nResid == nil {
+			return nil
+		}
+		if r == jlm.RoleAttnOutNorm {
+			return l.nFFN
+		}
+		return l.nFFNB
+	case jlm.RoleLayerOutNorm:
+		return l.nResid
+	case jlm.RoleLayerOutNormBias:
+		return l.nResidB
 	case jlm.RoleAttnSinks:
 		return l.sinks
 	case jlm.RoleAttnSubNorm:

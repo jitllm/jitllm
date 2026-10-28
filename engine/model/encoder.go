@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -208,9 +209,16 @@ func buildEncoder(c *jlm.File, m *Model) error {
 			return fmt.Errorf("model: %s carries a position table and a rotary; one of them is not this graph", cfg.Arch)
 		}
 		enc.rope = &nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: cfg.RopeNeox, Scale: 1}
+		// The rotary the front end states the blocks' by (Model.ropeAt).
+		m.rope = *enc.rope
 	} else if enc.pos, err = get(jlm.RolePosEmbd, jlm.DenseBlock); err != nil {
 		return err
 	}
+	// What the blocks below are, stated where the front end reads it: their
+	// norms are LayerNorms, and where the positions are a learned table
+	// added to the input rows, no block turns a rotary.
+	cfg.LayerNorm = true
+	cfg.NoPosEnc = enc.rope == nil
 	enc.blocks = make([]encBlock, cfg.NLayer)
 	for i := range enc.blocks {
 		b, bi := &enc.blocks[i], int32(i)
@@ -340,6 +348,12 @@ func (e *Embedder) encode(ids []int32) error {
 		}
 		if err := m.encBlockPageIn(li); err != nil {
 			return err
+		}
+		if e.cpuRuns(li) && e.cpuRun(li, n, x, cs) {
+			if e.afterBlock != nil {
+				e.afterBlock(li, x)
+			}
+			continue
 		}
 		b := &enc.blocks[li]
 		q, k, v := e.q[:n*d], e.k[:n*d], e.v[:n*d]
@@ -655,4 +669,109 @@ func loadDenseHeads(c *jlm.File, m *Model) error {
 			m.dense1.rows, m.dense1.k, m.dense2.rows, m.dense2.k, m.Cfg.NEmbd)
 	}
 	return nil
+}
+
+// encRoleWeight is encoder block li's matrix its graph binds under role r,
+// nil for one it does not hold: a BERT-shaped block's (encBlock).
+func (m *Model) encRoleWeight(li int, r jlm.Role) *tensor {
+	enc := m.enc
+	if enc.mb != nil {
+		return nil
+	}
+	if li < 0 || li >= len(enc.blocks) {
+		return nil
+	}
+	b := &enc.blocks[li]
+	switch r {
+	case jlm.RoleAttnQ:
+		return &b.wq
+	case jlm.RoleAttnK:
+		return &b.wk
+	case jlm.RoleAttnV:
+		return &b.wv
+	case jlm.RoleAttnOut:
+		return &b.wo
+	case jlm.RoleFFNUp:
+		return &b.up
+	case jlm.RoleFFNDown:
+		return &b.down
+	case jlm.RoleFFNGate:
+		if b.gate.e != nil {
+			return &b.gate
+		}
+	}
+	return nil
+}
+
+// encRoleVector is encoder block li's vector its graph binds under role r,
+// nil for one it does not hold.
+func (m *Model) encRoleVector(li int, r jlm.Role) []float32 {
+	enc := m.enc
+	if enc.mb != nil {
+		return nil
+	}
+	if li < 0 || li >= len(enc.blocks) {
+		return nil
+	}
+	b := &enc.blocks[li]
+	switch r {
+	case jlm.RoleAttnQBias:
+		return b.bq
+	case jlm.RoleAttnKBias:
+		return b.bk
+	case jlm.RoleAttnVBias:
+		return b.bv
+	case jlm.RoleAttnOutBias:
+		return b.bo
+	case jlm.RoleFFNUpBias:
+		return b.bUp
+	case jlm.RoleFFNDownBias:
+		return b.bDown
+	case jlm.RoleAttnOutNorm:
+		return b.ln1W
+	case jlm.RoleAttnOutNormBias:
+		return b.ln1B
+	case jlm.RoleLayerOutNorm:
+		return b.ln2W
+	case jlm.RoleLayerOutNormBias:
+		return b.ln2B
+	}
+	return nil
+}
+
+// cpuRuns reports whether encoder block li runs on the composer's CPU
+// device: the Embedder's segment composed it there (WithComposedCPU).
+func (e *Embedder) cpuRuns(li int) bool {
+	s := e.seg
+	return s != nil && s.nc() != nil && s.nc().arena != nil && !s.devAt(li)
+}
+
+// cpuRun runs encoder block li over x's n rows on the composer's CPU
+// device, cs the rows' rotary table, reporting whether it served the
+// block; a decline is counted by name, and the block runs on the
+// Embedder's kernels.
+func (e *Embedder) cpuRun(li, n int, x, cs []float32) bool {
+	s := e.seg
+	l := &e.m.layers[li]
+	if !s.lendNC(li) {
+		s.cpu.declined[jit.DeclinePageOut]++
+		return false
+	}
+	nrot := 0
+	if cs != nil {
+		nrot = s.c.NRot
+	}
+	// Packed sequences are runs each attending inside itself.
+	var wins []nn.KeyRun
+	if len(e.seqs) > 0 {
+		wins = e.seqs
+	}
+	why := s.cpuRunRows(li, l, x, n, cs, nrot, wins)
+	s.unlend(li)
+	if why != jit.DeclineServes {
+		s.cpu.declined[why]++
+		return false
+	}
+	s.cpu.served++
+	return true
 }

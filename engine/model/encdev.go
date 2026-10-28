@@ -31,6 +31,9 @@ type encRun struct {
 	violation string
 	// audio says the segment is an audio tower's blocks (audiodev.go).
 	audio bool
+	// ncArena is where the composer runs the segment's CPU blocks
+	// (WithComposedCPU).
+	ncArena
 }
 
 // encBlocks is how many blocks an encoder's segment holds: the encoder's, and
@@ -67,12 +70,22 @@ func (m *Model) encState(j *nn.JIT) *State {
 	s.jit = j
 	// The segment keeps no history: a non-causal block's keys live one call
 	// deep, on the device. The cache is the shape every State has, empty.
-	s.kvl = kvLayout{maxSeq: 1, nKV: c.NKVHead, headDim: c.HeadDim}
-	s.kv = newKVCacheRange(c, nextCacheID(), 1, s.kvl, nil, align(1, kvKeyTile), s.lo, s.hi)
+	keys := 1
+	if m.opt.composedCPU {
+		// Where the composer runs blocks on the CPU, their keys live one
+		// block deep in the segment's arena (ncArena): one page of the rows.
+		keys = n
+	}
+	s.kvl = kvLayout{maxSeq: keys, nKV: c.NKVHead, headDim: c.HeadDim}
+	s.kv = newKVCacheRange(c, nextCacheID(), 1, s.kvl, nil, align(keys, kvKeyTile), s.lo, s.hi)
 	s.attnG = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, s.kvl.Stride(), cpu.KVF32)
 	s.attnL = s.attnG
 	s.attStride = attStride(1)
 	s.memBudget = sched.MemBudget()
+	if m.opt.composedCPU {
+		s.mapNC()
+		s.cpuPlace()
+	}
 	return s
 }
 
@@ -311,6 +324,8 @@ func (s *State) encPlan(li int) *nn.LayerPlan {
 	// attention reads the block input as it is.
 	p.PostResidNorm, p.NoPreNorm = true, true
 	p.Act, p.UngatedFFN = nn.ActGELU, true
+	// The block as ops (front.go): what a device serving it whole forms.
+	p.Graph = m.Composing().BlockGraph(li)
 	if enc.swiglu {
 		p.Act, p.UngatedFFN = nn.ActSiLU, false
 		p.NRot, p.RopeNeox = c.NRot, c.RopeNeox

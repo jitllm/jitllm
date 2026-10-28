@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // A decoder embedding model -- qwen3-embedding, EmbeddingGemma -- is the
@@ -24,8 +25,11 @@ type embedMode struct {
 	pool  jlm.Pooling
 	total int       // positions in the sequence
 	out   []float32 // NEmbd: the pooled vector, before any dense head
-	row   []float32 // NEmbd scratch for one normed row
-	wins  []nn.KeyRun
+	// unit says out is the composer's readout (cpuPool): through the dense
+	// heads and at unit length.
+	unit bool
+	row  []float32 // NEmbd scratch for one normed row
+	wins []nn.KeyRun
 }
 
 // collect folds a chunk's final rows into the pooled vector. It runs once per
@@ -35,6 +39,9 @@ func (e *embedMode) collect(s *State, base, n int) {
 	// A mode with no vector pools nothing: a decision head (Clef's) takes
 	// every row through the State's rowTap instead.
 	if e.out == nil {
+		return
+	}
+	if e.composed(s, base, n) {
 		return
 	}
 	c, m := s.c, s.m
@@ -58,6 +65,37 @@ func (e *embedMode) collect(s *State, base, n int) {
 			nn.Axpy32JIT(e.out, norm(i), inv)
 		}
 	}
+}
+
+// composed reads the readout from a chunk's n rows from position base on
+// the CPU the composer's way (cpuPool), where the State composed it, and
+// reports whether the chunk is done with: the readout served (unit, the
+// vector at unit length), or a chunk that holds no row it reads. A mean
+// over several chunks is declined by name (DeclinePrefill) and pooled by
+// main's.
+func (e *embedMode) composed(s *State, base, n int) bool {
+	if !s.cpuHeadOn() || !s.cpu.pool.form.composed {
+		return false
+	}
+	switch e.pool {
+	case jlm.PoolLast:
+		if base+n != e.total {
+			return true
+		}
+	case jlm.PoolCLS:
+		if base != 0 {
+			return true
+		}
+	default:
+		if n != e.total {
+			if base == 0 {
+				s.cpu.pool.declined[jit.DeclinePrefill]++
+			}
+			return false
+		}
+	}
+	e.unit = s.cpuPool(s.bx[:n*s.c.NEmbd], n, e.out)
+	return e.unit
 }
 
 // symmetricWindow is a bidirectional sliding window: the keys within window/2
@@ -111,11 +149,12 @@ func (s *State) embedTell(n int) bool {
 }
 
 // embedPrefill runs ids from position zero and leaves the pooled, normed (but
-// not yet L2-normalised) vector in out.
-func (s *State) embedPrefill(ids []int32, out []float32) ([]float32, error) {
+// not yet L2-normalised) vector in out, or, unit, the composer's readout
+// through the dense heads at unit length.
+func (s *State) embedPrefill(ids []int32, out []float32) (_ []float32, unit bool, _ error) {
 	c := s.c
 	if len(ids) > s.maxSeq {
-		return nil, fmt.Errorf("model: %d tokens, and this session holds %d", len(ids), s.maxSeq)
+		return nil, false, fmt.Errorf("model: %d tokens, and this session holds %d", len(ids), s.maxSeq)
 	}
 	s.Reset()
 	for i := range out {
@@ -125,9 +164,9 @@ func (s *State) embedPrefill(ids []int32, out []float32) ([]float32, error) {
 		row: make([]float32, c.NEmbd)}
 	defer func() { s.emb = nil }()
 	if _, err := s.Prefill(ids); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return out, nil
+	return out, s.emb.unit, nil
 }
 
 // denseHeads applies an embedding model's projection heads to the pooled

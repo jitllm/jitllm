@@ -10253,3 +10253,44 @@ row where the composer's reads two.
   slice, TestComposedCPURowsServe leaves the band at a median 2361 times
   main's spread and the prefill gate fails, where the serving gate, decode
   alone, does not see it.
+- The BERT-family encoders (bert, nomic-bert) are the composer's on the CPU
+  device and the cards. The front end states a non-causal block as a causal
+  one with its attention both ways (graph.Attrs.Bidir) and a post-norm
+  block's norms after each residual add (the stored attn_out_norm and
+  layer_out_norm); the encoder's loader states what its blocks are (their
+  norms LayerNorms, no rotary where the positions are a learned table). A
+  non-causal block whose rotary the model does not hold (ModernBERT's two
+  bases) or whose mixer is recurrent (d1-omni's centred convolutions) stays
+  UncoveredNonCausal. On the CPU device (WithComposedCPU) the Embedder's
+  segment State runs each block over the sequence's rows as one run, its
+  history the segment's arena (ncArena, shared with the tower's); on a card
+  the tier serves the segment's non-causal call (tier.ComposedTower,
+  towerserve.go) as a tower's. On a V100 host's CPU, held to main's
+  encoder: all-minilm-l6, mxbai-embed-large, nomic-embed-text and
+  snowflake-arctic-embed-22m serve every block of every text (36, 144, 84,
+  36 runs, no decline), 3.2e-9..1.4e-7 NMSE after one block, worst cosine
+  0.99999987 to main's vector, a warm embed 0 allocations against main's
+  6-24; the rows made causal read 2.8e-2..7.4e-2. On cuda:0 and vulkan:2
+  every block is served: 1.3e-8..3.8e-8 (CUDA) and 1.4e-13..1.7e-13 (Vulkan)
+  after one block, worst cosine 0.99999963 for the whole encoder.
+- An embedding model's readout is ops (Model.poolGraph): the output norm
+  where the model stores one, graph.OpPool (CLS, last or mean over the live
+  rows, the count the positions table's first word), the dense heads where
+  stored, and the unit length as an RMS norm of no weight times
+  1/sqrt(width) with main's 1e-12 floor. The CPU device serves it
+  (cpupool.go), composed once at the segment's or the State's rows: an
+  encoder's after its blocks, a decoder's (qwen3-embedding, EmbeddingGemma)
+  from the chunk holding the row it reads; a mean over several chunks is
+  declined by name (DeclinePrefill) and pooled by main's. A non-causal
+  decoder's chunk (EmbeddingGemma's) now runs its blocks on the composed CPU
+  as one run both ways, the symmetric window the graph's. On the V100 host
+  CPU every readout of every text is served: the encoders at worst cosine
+  0.99999987 to main's; EmbeddingGemma, its 168 block runs composed too,
+  0.99999997 through its two dense heads (its rows made causal 0.57);
+  qwen3-embedding 0.99999995 from its F16 file and 0.99951 from its Q8_0
+  (the composed blocks' int8 activations; the reference gate's 0.999 for a
+  quantized file holds against llama.cpp); the other pooling reads
+  0.19..0.95. The
+  readout stays on the CPU device where the blocks run on a card; the
+  cards serve no pooled part yet, and the input rows (BERT's token types,
+  UncoveredEmbedRows) stay main's.

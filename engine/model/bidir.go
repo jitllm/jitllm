@@ -1,6 +1,10 @@
 package model
 
-import "github.com/jitllm/jitllm/engine/nn"
+import (
+	"math/bits"
+
+	"github.com/jitllm/jitllm/engine/nn"
+)
 
 // Bidirectional runs inside a causal prompt: Gemma 3's reference masks an
 // image's tokens so they see each other in both directions, while every other
@@ -77,4 +81,66 @@ func (s *State) bidirTell(p0, n int) bool {
 		return true
 	}
 	return ok && kd.SetKeyRuns(s.bidir, nil)
+}
+
+// ncArena is a non-causal segment's history on the CPU device
+// (WithComposedCPU), a tower's or an encoder's: its keys live one block
+// deep, so every block borrows the one page in turn (lendNC), the pool its
+// form addresses (kvArena).
+type ncArena struct {
+	arena *kvArena
+	// page is the arena's page, the segment's rows rounded up to a power of
+	// two: the composer's page arithmetic is shifts on the CPU (AVX2 has no
+	// packed integer division).
+	page int
+	// run is the one run of a composed CPU block's rows (cpuRunRows);
+	// causalFault, a gate's violation, leaves the rows causal.
+	run         [1]nn.KeyRun
+	causalFault bool
+}
+
+// nc is the State's non-causal segment's arena, nil for a State of none.
+func (s *State) nc() *ncArena {
+	switch {
+	case s.vis != nil:
+		return &s.vis.ncArena
+	case s.enc != nil:
+		return &s.enc.ncArena
+	}
+	return nil
+}
+
+// mapNC maps the arena of a segment State whose first block's page holds
+// its rows.
+func (s *State) mapNC() {
+	a, pg := s.nc(), &s.kv.layers[s.lo]
+	if pg.p == 0 {
+		return
+	}
+	a.page = 1 << bits.Len(uint(pg.p-1))
+	var err error
+	if a.arena, err = mapKVArena(a.page*(pg.pp/pg.p), 1, false); err != nil {
+		s.cpu.formErr = err
+	}
+}
+
+// lendNC hands the segment's arena to block li for its run, reporting
+// whether the State has one.
+func (s *State) lendNC(li int) bool {
+	a, pg := s.nc(), &s.kv.layers[li]
+	if a == nil || a.arena == nil || pg.p == 0 {
+		return false
+	}
+	pg.extend(0)
+	pg.arena = a.arena
+	pg.k[0], pg.v[0] = a.arena.k[:pg.pp], a.arena.v[:pg.pp]
+	return true
+}
+
+// unmapNC releases the segment's arena.
+func (s *State) unmapNC() {
+	if a := s.nc(); a != nil && a.arena != nil {
+		a.arena.unmap()
+		a.arena = nil
+	}
 }

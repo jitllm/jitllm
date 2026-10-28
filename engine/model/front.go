@@ -133,11 +133,16 @@ type frontSet struct {
 	// pick is the label pick over the logits, pickHead the head projecting
 	// the picked rows alone.
 	pick, pickHead *graph.Graph
-	headWhy        Uncovered
-	embedWhy       Uncovered
-	headErr        error
-	embedErr       error
-	key            frontKey
+	// pool is an embedding model's readout (poolGraph), nil where the model
+	// pools nothing or the front end states no graph (poolWhy).
+	pool     *graph.Graph
+	poolWhy  Uncovered
+	poolErr  error
+	headWhy  Uncovered
+	embedWhy Uncovered
+	headErr  error
+	embedErr error
+	key      frontKey
 }
 
 // frontKey is what a set's graphs were built from beside the container.
@@ -154,10 +159,11 @@ type headKey struct {
 	softcap    float32
 	scale, eps float64
 	layerNorm  bool
+	pool       jlm.Pooling
 }
 
 func headKeyOf(c *Config) headKey {
-	return headKey{softcap: c.FinalSoftcap, scale: c.LogitScale, eps: c.RMSEps, layerNorm: c.LayerNorm}
+	return headKey{softcap: c.FinalSoftcap, scale: c.LogitScale, eps: c.RMSEps, layerNorm: c.LayerNorm, pool: c.Pooling}
 }
 
 // ropeKey is what the front end reads of a rotary.
@@ -305,6 +311,7 @@ func (m *Model) frontGraphs() *frontSet {
 	s.collapse, cerr = m.streamCollapseGraph()
 	s.streamsErr = errors.Join(eerr, cerr)
 	s.embed, s.embedWhy, s.embedErr = m.embedGraph()
+	s.pool, s.poolWhy, s.poolErr = m.poolGraph()
 	for i, r := range (composing{m.container, m}).Rotaries() {
 		var t *graph.Graph
 		if r.NRot > 0 {
@@ -383,7 +390,9 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredStreams
 	case c.RopeAt(li) && !m.ropeAxesStated(m.ropeAt(li)):
 		return UncoveredRopeAxes
-	case c.NonCausal:
+	case c.NonCausal && c.RopeAt(li) && m.ropeAt(li).NRot == 0:
+		// A non-causal block turned by a rotary the model's does not hold
+		// (an encoder's of its own bases).
 		return UncoveredNonCausal
 	case c.AttnTempScale != 0 && (c.AttnTempOffs < 0 || c.AttnTempOffs != math.Trunc(c.AttnTempOffs)):
 		return UncoveredTemp
@@ -400,7 +409,8 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 	switch {
 	case c.Streams() > 1 && !c.predictsStreams():
 		return UncoveredStreams
-	case c.NonCausal:
+	case c.NonCausal && c.mixerAt(li) != mixNone:
+		// A recurrent or convolution mixer reading both ways.
 		return UncoveredNonCausal
 	case c.NGramAt(li):
 		return UncoveredNGram
@@ -746,7 +756,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if scale == 0 {
 		scale = 1 / math.Sqrt(float64(hd))
 	}
-	a := graph.Attrs{NHead: c.NHead, NKVHead: nkv, HeadDim: hd, Scale: scale, Softcap: float64(c.AttnSoftcap)}
+	a := graph.Attrs{NHead: c.NHead, NKVHead: nkv, HeadDim: hd, Scale: scale, Softcap: float64(c.AttnSoftcap), Bidir: c.NonCausal}
 	if c.SWA(li) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
@@ -767,12 +777,23 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	stored func(jlm.Role) []jlm.Role, has func(jlm.Role) bool, st *streams, side ...graph.ValueID) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	d, nffn := c.NEmbd, c.NFFNAt(li)
+	// A post-norm block (BERT's) normalises each sublayer's sum after its
+	// residual add, where it stores the norm.
+	postResid := func(v graph.ValueID, r, bias jlm.Role) graph.ValueID {
+		if !has(r) {
+			return v
+		}
+		if c.LayerNorm {
+			return b.LayerNorm(v, r, c.RMSEps, stored(bias)...)
+		}
+		return b.Norm(v, r, c.RMSEps)
+	}
 	att = norm(att, jlm.RoleAttnSubNorm)
 	proj := matvec(att, out, d, stored(jlm.RoleAttnOutBias)...)
 	for _, s := range side {
 		proj = b.Add(proj, s)
 	}
-	x2 := resid(x, norm(proj, jlm.RolePostAttnNorm))
+	x2 := postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	if st != nil && st.side != 0 {
 		x2 = mapRow(b, "joined", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt2}, nil, d, b.Add(x2, st.side))
 	}
@@ -820,7 +841,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	if st != nil {
 		return m.corrected(b, f, li, st, resid(x2, norm(ffn, jlm.RolePostFFNNorm)), has)
 	}
-	y, why, err := m.perLayer(b, f, li, resid(x2, norm(ffn, jlm.RolePostFFNNorm)))
+	y, why, err := m.perLayer(b, f, li, postResid(resid(x2, norm(ffn, jlm.RolePostFFNNorm)), jlm.RoleLayerOutNorm, jlm.RoleLayerOutNormBias))
 	if err != nil {
 		return nil, why, err
 	}
@@ -1179,6 +1200,56 @@ func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, er
 		return nil, UncoveredUnverified, fmt.Errorf("the head's graph does not verify: %w", err)
 	}
 	return g, Covered, nil
+}
+
+// poolGraph is an embedding model's readout as ops: its last residual's
+// rows through the output norm where the model stores one (a decoder's),
+// the live rows pooled as the container says (graph.OpPool: the first row,
+// the last, or their mean), projected by the dense heads where it stores
+// them, then scaled to unit length -- an RMS norm of no weight over the row
+// and 1/sqrt(width), sentence-transformers' 1e-12 floor on the norm taken
+// per element as main's (Embedder.normalize).
+func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
+	c := m.Cfg
+	if c.Pooling == jlm.PoolNone {
+		return nil, Covered, nil
+	}
+	all, _ := m.inventory(jlm.DenseBlock)
+	inv := map[jlm.Role]graph.Shape{}
+	has := func(r jlm.Role) bool {
+		s, ok := all.Inventory[r]
+		if ok {
+			inv[r] = s
+		}
+		return ok
+	}
+	d := c.NEmbd
+	b := graph.NewBlock(int(jlm.DenseBlock))
+	x := b.In("x", d)
+	if has(jlm.RoleOutputNorm) {
+		if c.LayerNorm {
+			var bias []jlm.Role
+			if has(jlm.RoleOutputNormBias) {
+				bias = append(bias, jlm.RoleOutputNormBias)
+			}
+			x = b.LayerNorm(x, jlm.RoleOutputNorm, c.RMSEps, bias...)
+		} else {
+			x = b.Norm(x, jlm.RoleOutputNorm, c.RMSEps)
+		}
+	}
+	p := b.Emit(graph.OpPool, []graph.ValueID{x}, []graph.Result{{Name: "pooled", Width: d}}, nil,
+		graph.Attrs{Pooling: uint8(c.Pooling)}, nil, nil)[0]
+	w := d
+	for _, r := range [...]jlm.Role{jlm.RoleEmbdDense1, jlm.RoleEmbdDense2} {
+		if has(r) {
+			w = inv[r].Rows
+			p = b.MatVec(p, r, w)
+		}
+	}
+	n := b.Emit(graph.OpHeadNorm, []graph.ValueID{p}, []graph.Result{{Name: "rms", Width: w}}, nil,
+		graph.Attrs{Eps: 1e-24 / float64(w), HeadDim: w}, nil, nil)[0]
+	b.Out(mapRow(b, "unit", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(w))}, nil, w, n))
+	return verified(b, graph.Facts{Inventory: inv})
 }
 
 // pickHeadGraph is the head projecting the rows of nn.PickMax ids alone,

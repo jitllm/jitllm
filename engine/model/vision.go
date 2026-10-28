@@ -3,7 +3,6 @@ package model
 import (
 	"fmt"
 	"math"
-	"math/bits"
 
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
@@ -978,16 +977,10 @@ type visRun struct {
 	// block's keys are read only inside that block, so each block borrows the
 	// pair for its run and hands it on (lend, unlend).
 	kp, vp []float32
-	// arena is the pair where the composer runs this State's CPU blocks
-	// (WithComposedCPU): one page of the picture, in place of kp and vp,
-	// that a block's form addresses as its pool (kvArena).
-	arena *kvArena
-	page  int
-	// run is the one run of a composed CPU block's rows (cpuTowerRows);
-	// causalFault, a gate's violation, leaves the rows causal.
-	run         [1]nn.KeyRun
-	causalFault bool
-	gather      []float32
+	// ncArena is where the composer runs this State's CPU blocks
+	// (WithComposedCPU): one page of the picture, in place of kp and vp.
+	ncArena
+	gather []float32
 	// px2 is the encode in progress's second frame (a video's temporal pair,
 	// Picture.Pixels2), nil for a still picture; gather2 and pair are its
 	// gathered difference from the first frame and that difference's rows.
@@ -1143,16 +1136,7 @@ func (t *Tower) newState(j *nn.JIT, owned bool) *State {
 	}
 	s.memBudget = sched.MemBudget()
 	if m.opt.composedCPU {
-		if pg := &s.kv.layers[s.lo]; pg.p > 0 {
-			// The composer's page arithmetic is shifts on the CPU: AVX2 has
-			// no packed integer division, so the arena's page is the
-			// picture's page rounded up to a power of two.
-			v.page = 1 << bits.Len(uint(pg.p-1))
-			var err error
-			if v.arena, err = mapKVArena(v.page*(pg.pp/pg.p), 1, false); err != nil {
-				s.cpu.formErr = err
-			}
-		}
+		s.mapNC()
 		s.cpuPlace()
 	}
 	return s
@@ -1166,12 +1150,10 @@ func (s *State) lend(li int) {
 	if pg.p == 0 {
 		return
 	}
-	pg.extend(0)
-	if v.arena != nil {
-		pg.arena = v.arena
-		pg.k[0], pg.v[0] = v.arena.k[:pg.pp], v.arena.v[:pg.pp]
+	if s.lendNC(li) {
 		return
 	}
+	pg.extend(0)
 	if v.kp == nil {
 		v.kp, v.vp = s.m.kvPool.get(pg.pp), s.m.kvPool.get(pg.pp)
 	}
