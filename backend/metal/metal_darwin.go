@@ -325,6 +325,15 @@ func (c *Ctx) Mem() (free, total uint64, err error) {
 // the two.
 func (c *Ctx) UnifiedMemory() bool { return c.unified }
 
+// MaxThreadgroupMemory is -maxThreadgroupMemoryLength: the bytes of
+// threadgroup memory one threadgroup may declare.
+func (c *Ctx) MaxThreadgroupMemory() int {
+	if c.dev == 0 {
+		return 0
+	}
+	return int(sendU64(c.dev, sel("maxThreadgroupMemoryLength")))
+}
+
 // MaxBuffer is -maxBufferLength: the largest buffer this device will create.
 func (c *Ctx) MaxBuffer() uint64 {
 	if c.dev == 0 {

@@ -68,8 +68,18 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				return nil, false, nil
 			}
 		}
+		if d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, d.Matrix[0], q.Warps[0]) > d.Shared {
+			return nil, false, nil
+		}
 		return q.form(k, d, f, made), true, nil
 	})
+}
+
+// matrixStage is the words of a matrix workgroup's stage: two stages of
+// TR rows of A and TN of B at a depth of KC, padded (form), or after the
+// trips the sums, WR warps' tm rows of TN.
+func matrixStage(TR, TN, KC, tm, WR int) int {
+	return max(2*(TR*(KC+8)/2+TN*(KC+4)/2), WR*tm*TN)
 }
 
 // bilinear is a reduction's parts the matrix unit takes: its sum, its
@@ -285,7 +295,7 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	// t+1's factors, and after the trips the sums.
 	bAt := TR * SKA / 2
 	half := bAt + TN*SKB/2
-	st := shared("stage", U, max(2*half, WR*tm*TN))
+	st := shared("stage", U, matrixStage(TR, TN, KC, tm, WR))
 	if units := max(d.Units, 1); p.Resident*m.Group <= d.Slots/units && (d.Shared == 0 || p.Resident*4*m.Bufs[st].Size <= d.Shared) {
 		m.Resident = p.Resident
 	}

@@ -17,7 +17,7 @@ func (p HeadGroups) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if !k.Work || k.Heads == nil || len(k.Space) != 3 {
 			return nil, false, nil
 		}
-		G := p.Work.geometry(*k.Heads, d.Lanes).group
+		G := p.Work.geometry(*k.Heads, d).group
 		if G < 2 || k.Space[1]%G != 0 {
 			return nil, false, nil
 		}

@@ -14,12 +14,11 @@ import (
 // partition's share of the live span rounded up to the range's alignment,
 // at most a workgroup's chunk; the live end the partition's. The partitions'
 // maxima, sums and weighted sums go into a partial, the weighted sums padded
-// to Pad then Copies copies of the maximum and of the sum; the division
+// to Work.Pad then Work.Copies copies of the maximum and of the sum; the division
 // becomes the split's combine, each partition weighted by exp of its
 // maximum less the greatest.
 type SplitRange struct {
-	Pad, Copies int
-	Work        Workgroups
+	Work Workgroups
 }
 
 func (SplitRange) Name() string { return "splitrange" }
@@ -55,14 +54,14 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 	mem, mx, sm, vl, last := c.mem, c.mx, c.sm, c.vl, c.last
 	h := *mx.k.Heads
 	C := mx.k.Loops[mx.loop].Trip
-	g := s.Work.geometry(h, d.Lanes)
+	g := s.Work.geometry(h, d)
 	S := s.Work.splits(g, h, C, d.Slots)
 	if S < 1 {
 		return 0, nil, false
 	}
 	J := g.chunk
 	D := h.Dim
-	stride := (D+s.Pad-1)/s.Pad*s.Pad + 2*s.Copies
+	stride := s.Work.stride(D)
 	no := last.Bufs[last.Stores[0].Buf].Operand
 	part := Operand{Kind: OperandScratch, Name: no.Name + ".part", Of: no.Of}
 	split := map[Operand]*member{}
@@ -75,7 +74,7 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 	var run *RunningSplit
 	slots := S
 	if S > 1 && s.Work.sequential(g, h, d.Slots) {
-		run, slots = &RunningSplit{Part: part, Stride: stride, Copies: s.Copies}, 1
+		run, slots = &RunningSplit{Part: part, Stride: stride, Copies: s.Work.Copies}, 1
 	}
 	sp := splitter{S: S, J: J, split: split, chunked: run != nil}
 	var ns []*Kernel
@@ -262,7 +261,7 @@ func (sp splitter) bounds(k *Kernel, pos *Positions, part int) (lo, hi, base int
 // slot (Running) the one its workgroup combines from.
 func (s SplitRange) copies(h Heads, S, slots, stride int, part, maxes, sums Operand) *Kernel {
 	U := ir.U32
-	k := &Kernel{Name: "map", Kind: PrimMap, Space: []int{h.Rows, h.Query, S, s.Copies}, Heads: &h}
+	k := &Kernel{Name: "map", Kind: PrimMap, Space: []int{h.Rows, h.Query, S, s.Work.Copies}, Heads: &h}
 	c := k.coordNodes()
 	k.Positions = &Positions{Axis: -1, Loop: -1, Part: c[2] + 1}
 	heads := []int{h.Rows, h.Query, S}
@@ -279,7 +278,7 @@ func (s SplitRange) copies(h Heads, S, slots, stride int, part, maxes, sums Oper
 	}
 	mv := k.add(Node{Op: OpLoad, Type: ir.F32, Buf: mb, Ax: []int{c[0], c[1], c[2]}})
 	lv := k.add(Node{Op: OpLoad, Type: ir.F32, Buf: lb, Ax: []int{c[0], c[1], c[2]}})
-	k.Stores = []Store{{Buf: pb, Ix: at(stride - 2*s.Copies), Val: mv, At: -1}, {Buf: pb, Ix: at(stride - s.Copies), Val: lv, At: -1}}
+	k.Stores = []Store{{Buf: pb, Ix: at(stride - 2*s.Work.Copies), Val: mv, At: -1}, {Buf: pb, Ix: at(stride - s.Work.Copies), Val: lv, At: -1}}
 	return k
 }
 
@@ -298,8 +297,8 @@ func (s SplitRange) merge(last *Kernel, h Heads, S, stride int, part, values, su
 	big := k.f32(math.Float32bits(math.Float32frombits(0xff7fffff)))
 	maxv, sumsv := make([]int, S), make([]int, S)
 	for p := 0; p < S; p++ {
-		maxv[p] = k.load(pb, at(p, stride-2*s.Copies))
-		sumsv[p] = k.load(pb, at(p, stride-s.Copies))
+		maxv[p] = k.load(pb, at(p, stride-2*s.Work.Copies))
+		sumsv[p] = k.load(pb, at(p, stride-s.Work.Copies))
 		big = k.bin(OpMax, F, big, maxv[p])
 	}
 	L, N := k.f32(0), k.f32(0)

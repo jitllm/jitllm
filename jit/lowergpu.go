@@ -19,6 +19,9 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 	if n.Group <= 0 {
 		return Lowered{}, fmt.Errorf("no workgroup: the profile binds none")
 	}
+	if s := sharedBytes(n); d.Shared > 0 && s > d.Shared {
+		return Lowered{}, fmt.Errorf("%s holds %d bytes of workgroup memory, past the device's %d", n.Name, s, d.Shared)
+	}
 	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison, lanes: d.Lanes}
 	if d.VectorLoads {
 		e.vectorGroups()

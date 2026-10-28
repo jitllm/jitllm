@@ -13,7 +13,7 @@ func gpuProfile() Profile {
 		Offsets{Table: tableQOff},
 		RunLengths{Grain: 128, Align: 32},
 		Flash{Rows: 64, Keys: 32, Shared: 48 << 10},
-		SplitRange{Pad: 32, Copies: 32, Work: mainWorkgroups},
+		SplitRange{Work: mainWorkgroups},
 		WorkFuse{Work: mainWorkgroups},
 		HeadGroups{Work: mainWorkgroups},
 		Forward{},
@@ -170,4 +170,4 @@ func mainTableArgs() ArgFields {
 }
 
 // mainWorkgroups is main's layout of a range's partitions over workgroups.
-var mainWorkgroups = Workgroups{MinWarps: 4, MaxWarps: 8, Shared: 32 << 10, GroupDims: 96, Chunk: 2048, SlotThreads: 1280, PerSplit: 8}
+var mainWorkgroups = Workgroups{MinWarps: 4, MaxWarps: 8, Shared: 32 << 10, GroupDims: 96, Chunk: 2048, SlotThreads: 1280, PerSplit: 8, Pad: 32, Copies: 32}

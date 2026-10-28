@@ -49,7 +49,7 @@ func partAxis(k *Kernel) int {
 
 func (w WorkFuse) fuse(ms []*Kernel, d Device) *Kernel {
 	h := *ms[0].Heads
-	g := w.Work.geometry(h, d.Lanes)
+	g := w.Work.geometry(h, d)
 	pa := partAxis(ms[0])
 	k := &Kernel{Name: "stage", Kind: PrimReduce, Work: true, Group: g.warps * d.Lanes, Heads: &h, Part: ms[0].Part, Of: ms[0].Of,
 		Space: []int{ms[0].Space[0], ms[0].Space[1], ms[0].Space[pa]}, Capacity: ms[0].Capacity, Running: ms[0].Running}

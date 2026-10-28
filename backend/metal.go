@@ -89,6 +89,11 @@ func (m *mtlDev) API() string  { return "msl" }
 func (m *mtlDev) Slots() int { return 0 }
 
 func (m *mtlDev) Multiprocessors() int { return metal.GPUCores() }
+
+// SharedPerMultiprocessor is -maxThreadgroupMemoryLength, the one figure
+// Metal states: what a threadgroup may declare. It stands for what a core
+// holds for its resident threadgroups, so never more than a core holds.
+func (m *mtlDev) SharedPerMultiprocessor() int { return m.c.MaxThreadgroupMemory() }
 func (m *mtlDev) Close() {
 	m.c.Close()
 	m.release(&ownedDevices)
