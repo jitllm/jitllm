@@ -9,8 +9,11 @@ import "github.com/jitllm/jitllm/jit/ir"
 // tile, each row its own sum and store. T is the device's statement alone:
 // the most rows, a power of two, whose sums and terms, rowRegs registers a
 // row, fit the registers a thread holds at the device's most resident
-// threads (Rows rows where the device states no registers), and no more
-// than the form's rows. The kernel's ops grow with T, never with the step's
+// threads (Rows rows where the device states no registers), no more than
+// the form's rows, and past two no more than leave every unit four warps
+// of threads: a router's 32 outputs over 512 rows in tiles of 16 were
+// 1024 threads, eight workgroups on a V100's 80 units (gpt-oss-20b's,
+// 92.9 ms of a 2048-token prompt against main's 12.7). The kernel's ops grow with T, never with the step's
 // rows, and a call's rows need not fill the last tile: its rows past the
 // call's (Kernel.Capacity) or the step's are guarded, each the last row's copy,
 // so they read and write nothing the rows before them do not. A kernel of
@@ -59,8 +62,12 @@ func (p RowTiles) tile(k *Kernel, d Device) int {
 	if d.Regs > 0 {
 		most = d.Regs / rowRegs
 	}
+	// More rows a thread share more of the weight's loads but leave fewer
+	// threads: past the first two, a tile doubles only while the threads
+	// left give every unit four warps.
+	inner := k.Elements() / k.Space[0]
 	t := 1
-	for 2*t <= most && 2*t <= k.Space[0] {
+	for 2*t <= most && 2*t <= k.Space[0] && (t < 2 || d.Units == 0 || k.Space[0]/(2*t)*inner >= 4*d.Units*max(d.Lanes, 1)) {
 		t *= 2
 	}
 	return t

@@ -262,7 +262,12 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 		u.Name = n.Name + ".few"
 		return []*Kernel{g, u}, true
 	}
+	// A workgroup's segments hold whole elements of one unit: fewer
+	// elements than a 128-thread workgroup's share take a narrower one.
 	G := min(max(32*S, 128), 1024)
+	for G > 32*S && E%(G/S) != 0 {
+		G /= 2
+	}
 	g, ok := splitTile(n, S, G)
 	if !ok {
 		return nil, false
