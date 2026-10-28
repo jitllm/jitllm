@@ -43,6 +43,9 @@ func TestGemma4ServesComposed(t *testing.T) {
 					served, _, _ := st.ServedPart(tier.ComposedTable)
 					declined := st.StepDeclines[jit.DeclineNoTable]
 					t.Logf("%s: the step's tables served %d times, declined %d times (no table graph)", dev, served, declined)
+					nb, db, _ := st.ServedPart(tier.ComposedBlock)
+					np, dp, up := st.ServedPart(tier.ComposedPrompt)
+					t.Logf("%s: block steps served %d, declined %d; the prompt's %d served, %d declined, %d unasked (%s)", dev, nb, db, np, dp, up, declinesOf(st))
 					if served != 0 || declined == 0 {
 						t.Fatalf("the step's tables served %d times and declined %d times by name: the gap moved", served, declined)
 					}

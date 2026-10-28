@@ -224,7 +224,7 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
 	"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-dbrx.gguf", "synth-llama4.gguf", "synth-mistral3.gguf",
 	"synth-mistral3-af.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-wide.gguf",
-	"synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf"}
+	"synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf"}
 
 // mixtureModels are the mixtures the front end states whole and the serving
 // gate does not run: tiny-qwen3moe, whose eight-wide rows the tier cannot

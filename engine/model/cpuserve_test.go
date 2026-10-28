@@ -12,11 +12,12 @@ import (
 
 // cpuServedModels are the models whose every block the composer serves on
 // the CPU at decode: Ministral-3-3B among them, the attention temperature
-// read at each row's position, and HunyuanOCR's XD-RoPE.
+// read at each row's position, HunyuanOCR's XD-RoPE, and Gemma 4 E2B's per-layer
+// inputs and blocks reading an earlier block's history.
 var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
 	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
 	"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
-	"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf"}
+	"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf"}
 
 // TestComposedCPUBlocksServe runs each model's blocks on the CPU three ways,
 // teacher-forced on one token sequence: on main's kernels, on what the
