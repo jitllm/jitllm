@@ -405,3 +405,50 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamedPromptIsTheSameInASecondSession prefills one prompt in two
+// sessions one after the other on one card, every mixture block's experts
+// sent to the card (WithExperts("card")): the second session starts with
+// the first's experts in the card's caches, and its logits must be the
+// first's bit for bit, on the tier's kernels and composed.
+func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
+	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
+		for _, dev := range stepDevices() {
+			for _, parts := range []tier.Parts{0, tier.ComposedBlock} {
+				t.Run(composedArm(name, parts)+"/"+dev, func(t *testing.T) {
+					g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
+					if err != nil || g == nil {
+						noDevice(t, dev, err)
+					}
+					defer g.Close()
+					m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts("card"), WithStreamTrial(false))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer m.Close()
+					prompt := m.Vocab.Encode("The capital of France is a city that", true)
+					var out [2][]float32
+					for i := range out {
+						st := m.NewState(len(prompt) + 2)
+						st.SetDeviceFallback(false)
+						if err := st.SetDevice(g); err != nil {
+							t.Fatal(err)
+						}
+						lg, err := st.Prefill(prompt)
+						if err != nil {
+							t.Fatal(err)
+						}
+						out[i] = slices.Clone(lg)
+						st.Close()
+					}
+					if g.Stats().StreamBlocks == 0 {
+						t.Fatal("no block was streamed: the configuration under test was not selected")
+					}
+					if !slices.Equal(out[0], out[1]) {
+						t.Fatalf("the second session's prompt is %.3e from the first's", logitNMSE(out[0], out[1]))
+					}
+				})
+			}
+		}
+	}
+}
