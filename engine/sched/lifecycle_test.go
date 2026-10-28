@@ -8,8 +8,6 @@ import (
 )
 
 // TestCloseIsIdempotent: a second Close must not panic.
-//
-// Without the CompareAndSwap guard, `close(p.quit)` on a closed channel panics.
 func TestCloseIsIdempotent(t *testing.T) {
 	p := New(DecodeCores())
 	p.Close()
@@ -61,5 +59,29 @@ func TestClosedPoolCountsTheRegionAsSerial(t *testing.T) {
 	par, ser := p.Regions()
 	if par != 0 || ser != 1 {
 		t.Fatalf("Regions() = (%d parallel, %d serial), want (0, 1)", par, ser)
+	}
+}
+
+// TestRestParksEveryWorker: Rest returns with every worker parked, long
+// before a spin budget of a second would have run out; workers that ignore
+// it read as a Rest that waited out its bound.
+func TestRestParksEveryWorker(t *testing.T) {
+	p := New(DecodeCores(), WithSpin(time.Second))
+	defer p.Close()
+	if len(p.parked) == 0 {
+		t.Fatal("a pool with no workers proves nothing")
+	}
+	p.Do(4096, 1, func(int, int, int) {})
+	start := time.Now()
+	p.Rest()
+	took := time.Since(start)
+	for i := range p.parked {
+		if !p.parked[i].Load() {
+			t.Fatalf("worker %d still spins after Rest (%v)", i, took)
+		}
+	}
+	t.Logf("%d workers parked in %v", len(p.parked), took)
+	if took > 500*time.Millisecond {
+		t.Fatalf("Rest took %v: the workers spun out their budget", took)
 	}
 }

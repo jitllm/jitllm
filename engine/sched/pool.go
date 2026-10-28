@@ -163,7 +163,6 @@ type Pool struct {
 
 	cpus  []int
 	start []chan struct{} // parking fallback, one per spawned worker
-	quit  chan struct{}
 	j     job
 	next  atomic.Int64
 	// limit is p.j.limit, published before the sequence bump so a worker can
@@ -183,7 +182,10 @@ type Pool struct {
 	// every wait; spinDef is the pool's own budget, which SetSpinning restores.
 	spin    atomic.Int64
 	spinDef time.Duration
-	part    atomic.Int64 // participants that drain; <= len(cpus)
+	// rest is the sequence Rest was called at, plus one: a worker spinning
+	// for no newer region parks.
+	rest atomic.Uint64
+	part atomic.Int64 // participants that drain; <= len(cpus)
 
 	// NUMA, set only by WithNUMA on a host of two or more nodes: cpuNode maps
 	// a CPU to its node index (into NUMANodes()), nodeSet is each node's CPUs,
@@ -253,7 +255,6 @@ func New(cpus []int, opts ...Option) *Pool {
 		cpus:   cpus,
 		start:  make([]chan struct{}, len(cpus)-1),
 		parked: make([]atomic.Bool, len(cpus)-1),
-		quit:   make(chan struct{}),
 	}
 	p.spinDef = spinBudget(cfg)
 	p.part.Store(int64(len(cpus)))
@@ -417,6 +418,9 @@ func (p *Pool) await(id int, seen uint64) (uint64, bool) {
 				return s, p.alive()
 			}
 			if n&1023 == 1023 {
+				if p.rest.Load() == seen+1 {
+					break
+				}
 				now := time.Now().UnixNano()
 				if deadline == 0 {
 					deadline = now + p.spin.Load()
@@ -434,11 +438,12 @@ func (p *Pool) await(id int, seen uint64) (uint64, bool) {
 			}
 			return s, p.alive()
 		}
-		select {
-		case <-p.quit:
-			return 0, false
-		case <-p.start[id]:
-		}
+		// A receive on start alone, which Close sends on: a select over
+		// quit too held two sudogs a parked worker, and the runtime frees
+		// its spare sudogs at each collection, so a region after one
+		// allocated them again (TestWarmImageEncodeDoesNotAllocate on a
+		// host of 27 workers).
+		<-p.start[id]
 		p.parked[id].Store(false)
 		if !p.alive() {
 			return 0, false
@@ -768,14 +773,40 @@ func (p *Pool) Close() {
 		return
 	}
 	if !p.stopped.CompareAndSwap(false, true) {
-		return // already closed; quit is already closed too
+		return // already closed
 	}
 	p.seq.Add(1)
-	close(p.quit)
 	for i := range p.start {
 		select {
 		case p.start[i] <- struct{}{}:
 		default:
+		}
+	}
+}
+
+// Rest parks the workers now rather than at the end of their spin, and
+// returns once each has parked or the spin budget has passed: for a caller
+// ending a burst of regions -- a picture's encode -- whose next region is
+// not imminent. A worker blocks holding the runtime's waiter record
+// (sudog); one parking later, after the runtime emptied its cache of them
+// (each collection empties the shared one, a GOMAXPROCS change a P's),
+// allocates a new one.
+func (p *Pool) Rest() {
+	if p == nil {
+		return
+	}
+	w := p.w()
+	if w.stopped.Load() || len(w.parked) == 0 {
+		return
+	}
+	w.rest.Store(w.seq.Load() + 1)
+	until := time.Now().Add(2*w.spinDef + time.Millisecond)
+	for i := range w.parked {
+		for !w.parked[i].Load() {
+			if time.Now().After(until) {
+				return
+			}
+			runtime.Gosched()
 		}
 	}
 }

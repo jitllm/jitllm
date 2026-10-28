@@ -286,12 +286,11 @@ func (c *Pool) awaitPhase(id int, seen uint64) uint64 {
 			}
 			return w
 		}
-		select {
-		case <-c.quit:
-			c.parked[pid].Store(false)
-			return c.fz.word.Load()
-		case <-c.start[pid]:
-		}
+		// One channel, as await parks: Close wakes it through start.
+		<-c.start[pid]
 		c.parked[pid].Store(false)
+		if !c.alive() {
+			return c.fz.word.Load()
+		}
 	}
 }
