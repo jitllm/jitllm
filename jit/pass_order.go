@@ -381,15 +381,209 @@ func (o *orderer) scope(c int) {
 			}
 		}
 	}
+	var steps []int
 	for _, f := range k.foldsOf(c) {
 		if _, wait := o.after[f]; !wait {
-			o.need(k.Nodes[f].A, c)
+			steps = append(steps, f)
 		}
 	}
+	o.lockstep(steps, c)
 	for f := range o.after {
 		o.need(k.Nodes[f].A, c)
 	}
 	o.after, o.scopeOf = outer, scope
+}
+
+// lockstep makes the steps of folds homed in loop c. Where each step is a
+// chain of the same length through its fold -- a sum stepped once for each
+// position of a period (Periods) -- and the chains read a value they
+// compute alike, the chains advance link by link together: what a position
+// computes for every sum is made and read by each before the next
+// position's, rather than held across one sum's whole chain.
+func (o *orderer) lockstep(folds []int, c int) {
+	k := o.k
+	chains := make([][]int, len(folds))
+	ok := len(folds) > 1
+	for x, f := range folds {
+		if !ok {
+			break
+		}
+		chains[x] = o.chain(f, c)
+		ok = len(chains[x]) > 1 && len(chains[x]) == len(chains[0])
+	}
+	if ok && o.shareComputed(folds, c) {
+		xs := make([]int, len(chains))
+		for l := range chains[0] {
+			for x, ch := range chains {
+				xs[x] = ch[l]
+			}
+			o.together(xs, c)
+		}
+	}
+	for _, f := range folds {
+		o.need(k.Nodes[f].A, c)
+	}
+}
+
+// together makes nodes xs, the same operation at one place of several
+// sums' steps, side by side: their operands at each place made together
+// first, in the order need makes the first's, so a value they share is read
+// by each as soon as it is made. Nodes that are not the same operation are
+// made one after another.
+func (o *orderer) together(xs []int, c int) {
+	k := o.k
+	same, alike := true, true
+	x0 := k.Nodes[xs[0]]
+	for _, x := range xs {
+		nd := k.Nodes[x]
+		same = same && x == xs[0]
+		alike = alike && !o.done[x] && o.inLoop(x, c) && nd.Op == x0.Op && nd.Type == x0.Type && nd.Imm == x0.Imm && nd.At == x0.At && nd.Op != OpZip && nd.Op != OpUnpack && arity(nd.Op) > 0
+	}
+	if same || !alike {
+		for _, x := range xs {
+			o.need(x, c)
+		}
+		return
+	}
+	nds := make([]Node, len(xs))
+	ops := make([][]*int, len(xs))
+	for j, x := range xs {
+		nds[j] = k.Nodes[x]
+		ops[j] = k.Operands(&nds[j])
+	}
+	place := func(p *int) int {
+		for q, a := range ops[0] {
+			if a == p {
+				return q
+			}
+		}
+		return -1
+	}
+	at := func(q int) []int {
+		ys := make([]int, len(xs))
+		for j := range xs {
+			if q >= len(ops[j]) {
+				return nil
+			}
+			ys[j] = *ops[j][q]
+		}
+		return ys
+	}
+	for _, a := range k.evalArgs(&nds[0], map[int]int{}, o.made) {
+		if ys := at(place(a)); ys != nil && !o.leaves(ys) {
+			o.together(ys, c)
+		}
+	}
+	for _, x := range xs {
+		o.need(x, c)
+	}
+}
+
+// leaves reports whether nodes xs, not all one node, are each a load or a
+// broadcast of one: each is made just before what reads it.
+func (o *orderer) leaves(xs []int) bool {
+	k := o.k
+	differ := false
+	for _, x := range xs {
+		nd := k.Nodes[x]
+		if nd.Op == OpBroadcast {
+			nd = k.Nodes[nd.A]
+		}
+		if nd.Op != OpLoad {
+			return false
+		}
+		differ = differ || x != xs[0]
+	}
+	return differ
+}
+
+// inLoop reports whether node i is a value of loop c the orderer has yet
+// to make, other than a fold.
+func (o *orderer) inLoop(i, c int) bool {
+	h, ok := o.home[i]
+	return ok && h == c && o.k.Nodes[i].Op != OpFold && !o.done[i]
+}
+
+// chain is fold f's step as the nodes from the one reading f to the step,
+// each the one operand of the next that reaches f; nil where a node reads f
+// through two operands.
+func (o *orderer) chain(f, c int) []int {
+	k := o.k
+	reach := map[int]bool{}
+	var reaches func(i int) bool
+	reaches = func(i int) bool {
+		if i == f {
+			return true
+		}
+		if v, ok := reach[i]; ok {
+			return v
+		}
+		reach[i] = false
+		if !o.inLoop(i, c) {
+			return false
+		}
+		for _, a := range k.Operands(&k.Nodes[i]) {
+			if reaches(*a) {
+				reach[i] = true
+				return true
+			}
+		}
+		return false
+	}
+	var out []int
+	for x := k.Nodes[f].A; x != f; {
+		if !reaches(x) {
+			return nil
+		}
+		out = append(out, x)
+		next := -1
+		for _, a := range k.Operands(&k.Nodes[x]) {
+			if reaches(*a) {
+				if next >= 0 && next != *a {
+					return nil
+				}
+				next = *a
+			}
+		}
+		x = next
+	}
+	slices.Reverse(out)
+	return out
+}
+
+// shareComputed reports whether two of the folds' steps, homed in loop c,
+// read one computed value: not a load, a broadcast of one or a constant.
+func (o *orderer) shareComputed(folds []int, c int) bool {
+	k := o.k
+	owner := map[int]int{}
+	for x, f := range folds {
+		seen := map[int]bool{}
+		var walk func(i int) bool
+		walk = func(i int) bool {
+			if seen[i] || !o.inLoop(i, c) {
+				return false
+			}
+			seen[i] = true
+			nd := k.Nodes[i]
+			leaf := nd.Op == OpLoad || nd.Op == OpConst || nd.Op == OpParam || nd.Op == OpIter || nd.Op == OpBroadcast && k.Nodes[nd.A].Op == OpLoad
+			if !leaf {
+				if w, ok := owner[i]; ok && w != x {
+					return true
+				}
+				owner[i] = x
+			}
+			for _, a := range k.Operands(&nd) {
+				if walk(*a) {
+					return true
+				}
+			}
+			return false
+		}
+		if walk(k.Nodes[f].A) {
+			return true
+		}
+	}
+	return false
 }
 
 // reads reports whether loop d's code reads node i: a node homed in d or a

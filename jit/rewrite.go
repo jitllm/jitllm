@@ -152,7 +152,12 @@ func (n *Kernel) within(h, c int) bool {
 // copyOf is node i with each node in sub replaced: the nodes that read a
 // replaced one copied, the rest shared.
 func (n *Kernel) copyOf(i int, sub map[int]int) int {
-	memo := map[int]int{}
+	return n.copyMemo(i, sub, map[int]int{})
+}
+
+// copyMemo is copyOf with the copies made kept in memo, so copies of other
+// nodes under the same sub share them.
+func (n *Kernel) copyMemo(i int, sub, memo map[int]int) int {
 	var walk func(i int) int
 	walk = func(i int) int {
 		if v, ok := sub[i]; ok {

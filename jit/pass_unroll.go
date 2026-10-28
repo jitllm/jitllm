@@ -94,7 +94,8 @@ func (k *Kernel) unrollFull(c, f int) {
 }
 
 // unrollBy runs loop c u trips a trip: each fold stepped once for each, in
-// order, the trip's position it*u+j.
+// order, the trip's position it*u+j, the folds' steps at one position
+// sharing what they compute alike.
 func (k *Kernel) unrollBy(c, u int) {
 	its := k.itersOf(c)
 	it := k.add(Node{Op: OpIter, At: c, Type: ir.U32})
@@ -113,8 +114,9 @@ func (k *Kernel) unrollBy(c, u int) {
 		for i, f := range folds {
 			sub[f] = last[i]
 		}
+		memo := map[int]int{}
 		for i := range folds {
-			last[i] = k.copyFolded(steps[i], sub)
+			last[i] = k.copyMemo(steps[i], sub, memo)
 		}
 	}
 	for i, f := range folds {
