@@ -1309,7 +1309,9 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 	l := &m.layers[li]
 	if m.opt.composedCPU {
 		why := jit.DeclineBidir
-		if !bidir {
+		if s.vis != nil {
+			why = s.cpuTowerRows(li, l, n)
+		} else if !bidir {
 			seq, pos := s.cpuRowsOf(slot, p0, n)
 			var err error
 			if c.LayerKind(li).Recurrent() {

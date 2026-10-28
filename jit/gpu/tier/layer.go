@@ -200,6 +200,9 @@ type layer struct {
 	// handed (nn.LayerPlan.Windowed, SetKeyRuns). Per block: the scratch's
 	// plan is its first block's, and Qwen2.5-VL's blocks alternate.
 	windowed bool
+	// picPool is the device's transient pair as the pool a composed
+	// non-causal block reads it through (towerStep).
+	picPool kvLayerPool
 	// A non-causal block's own MLP and rotary, which may differ from the
 	// first block's the set was built from: an encoder's decision head
 	// (Laya's) is an ungated ReLU MLP wider than the encoder's gated GELU,
@@ -2345,6 +2348,12 @@ type blockScratch struct {
 	// rows reads as the rows it runs (jit.CallRows); headCalls the rows a
 	// call's head over rows projects.
 	calls, headCalls backend.Buf
+	// pics is a non-causal scratch's rows' descriptors (kernels.PRowWords
+	// each) where the composer serves its blocks (towerStep), and picsW
+	// the same rows each attending its window of the call; picStage and
+	// picStageW are their bytes as a call stages them.
+	pics, picsW         backend.Buf
+	picStage, picStageW []byte
 	// instNoRoom says a composed instance at the scratch's rows did not fit
 	// the budget (promptInst): the reserved width narrows (fitReserved).
 	instNoRoom bool
@@ -5007,6 +5016,12 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	al(&bs.n, (rows+1)*4)
 	al(&bs.calls, 4)
 	al(&bs.headCalls, 4)
+	if p.NonCausal && p.Graph != nil && g.Composed&ComposedTower != 0 {
+		al(&bs.pics, rows*kernels.PRowWords*4)
+		al(&bs.picsW, rows*kernels.PRowWords*4)
+		bs.picStage = make([]byte, rows*kernels.PRowWords*4)
+		bs.picStageW = make([]byte, rows*kernels.PRowWords*4)
+	}
 	al(&bs.koff, rows*4)
 	al(&bs.kpos, rows*4)
 	al(&bs.roff, rows*4)
@@ -8537,6 +8552,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			// prompt's ragged rows as the prompt's.
 			kind, asks := g.rowsKind(R, rag != nil)
 			asked, why := g.Composed&(1<<kind) != 0, partServes
+			// A non-causal call is a picture's rows, one run: its blocks are
+			// asked whole where the composer serves towers, at the call's rows.
+			if l.nonCausal {
+				kind, asked, asks = partTower, g.Composed&ComposedTower != 0, true
+			}
 			switch {
 			case !asked:
 			case !asks:
@@ -10652,6 +10672,10 @@ func (g *devTier) layersSession(s backend.Session) {
 	if bs.calls != nil && R > 1 {
 		binary.LittleEndian.PutUint32(g.subBytes.calls[:], uint32(nrow))
 		w(bs.calls, g.subBytes.calls[:])
+	}
+	if bs.pics != nil {
+		w(bs.pics, bs.picDesc(pos, nrow, g.ncPhase, g.ncKeys))
+		w(bs.picsW, bs.picWinDesc(pos, nrow, g.ncPhase, g.ncKeys, g.winRuns, g.winPerRow))
 	}
 	if bs.headCalls != nil && R > 1 && ragHead > 0 {
 		hr := ragHead

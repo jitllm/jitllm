@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
@@ -187,6 +188,10 @@ type cpuState struct {
 	// runX is a copy of a step's rows whose keys a first pass writes, where
 	// a bidirectional run takes more calls than one (cpuRowsRun).
 	runX []float32
+	// runWindows says each run of the State's (bidir) is a window its rows
+	// attend inside, none of the positions before it: a tower's windowed
+	// block's (cpuTowerRows).
+	runWindows bool
 	// own is each form's own buffers, by form: blocks of one form run one
 	// after another, so they share them.
 	own map[*cpuBlockForm][][]uint32
@@ -356,6 +361,39 @@ func (s *State) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int
 	cs, nrot := s.cpuTable(li, cs, csSWA)
 	s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, s.bple, cs, nrot, seq, pos)
 	return jit.DeclineServes, nil
+}
+
+// cpuTowerRows runs tower block li on the CPU the composer's way over the
+// picture's n rows in s.bx, one run of rows attending both ways (bidir.go),
+// or says why not. Its history is the State's arena page, lent to the block
+// for its run.
+func (s *State) cpuTowerRows(li int, l *layer, n int) jit.Decline {
+	f, why := s.cpuRowsForm(li, l)
+	if why != jit.DeclineServes {
+		return why
+	}
+	if n > f.keys {
+		return jit.DeclineSessions
+	}
+	s.cpuPages(1)
+	v := s.vis
+	v.run[0] = nn.KeyRun{Lo: 0, Hi: n}
+	runs := v.run[:]
+	if s.visWindowed(li) {
+		v.winRuns = v.winRuns[:0]
+		for w := 0; w+1 < len(v.segs); w += 2 {
+			v.winRuns = append(v.winRuns, nn.KeyRun{Lo: v.segs[w], Hi: v.segs[w+1]})
+		}
+		runs, s.cpu.runWindows = v.winRuns, true
+	}
+	if !v.causalFault {
+		s.bidir = runs
+	}
+	seq, pos := s.cpuRowsOf(0, 0, n)
+	cs, nrot := s.cpuTable(li, s.bcs, nil)
+	s.cpuRowsRun(li, l, f, s.bx[:n*s.c.ResidW()], n*s.c.NEmbd, nil, cs, nrot, seq, pos)
+	s.bidir, s.cpu.runWindows = nil, false
+	return jit.DeclineServes
 }
 
 // cpuTable is the rotary table of a step's rows block li reads and its
@@ -582,13 +620,16 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, x []float32, str
 		k := min(f.rows, n-r0)
 		for i := range k {
 			p := pos[r0+i]
-			e := p + 1
+			e, st := p+1, pg.keyStart(p)
 			if runs {
 				e = max(e, s.bidirEnd(p))
+				if s.cpu.runWindows {
+					st = max(st, s.bidirStart(p))
+				}
 			}
 			end = max(end, p+1)
 			t := s.cpu.rowsTab[i*4 : i*4+4]
-			t[0], t[1], t[2], t[3] = uint32(seq[r0+i]*slots), uint32(pg.keyStart(p)), uint32(e), uint32(p)
+			t[0], t[1], t[2], t[3] = uint32(seq[r0+i]*slots), uint32(st), uint32(e), uint32(p)
 			if s.cpu.fault == cpuFaultRow && p > 0 {
 				t[1]++
 			}
@@ -853,8 +894,10 @@ func (s *State) cpuPlace() {
 	if !s.m.opt.composedCPU {
 		return
 	}
-	s.cpu.blocks = make([]*cpuBlock, s.c.NLayer)
-	s.cpu.composed = make([]int, s.c.NLayer)
+	// A segment's blocks are past the text model's in the one block space.
+	n := max(s.c.NLayer, s.hi)
+	s.cpu.blocks = make([]*cpuBlock, n)
+	s.cpu.composed = make([]int, n)
 	w := 1
 	if s.jit != nil {
 		w = s.jit.Workers()
@@ -862,10 +905,13 @@ func (s *State) cpuPlace() {
 	s.cpu.args = make([]cpu.Args, max(w, 1))
 	s.cpu.run.fn = s.cpu.run.region
 	s.cpu.zero = make([]uint32, 4)
-	for li := s.lo; li < min(s.hi, s.c.NLayer); li++ {
+	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
 			s.cpuCompose(li)
 		}
+	}
+	if s.vis != nil {
+		return
 	}
 	s.cpuPlaceHead()
 }
@@ -964,6 +1010,9 @@ func (s *State) cpuWhy(li int) jit.Decline {
 	g := s.m.Composing().BlockGraph(li)
 	// A block sharing another's history reads its source's pages.
 	pg := &s.kv.layers[c.KVSource(li)]
+	if s.vis != nil {
+		return s.cpuTowerWhy(g)
+	}
 	switch {
 	case cpu.CPU().ISA()&cpu.ISATierAVX2 != cpu.ISATierAVX2:
 		return jit.DeclineISA
@@ -1030,6 +1079,24 @@ func (s *State) cpuSideOff(li int) int {
 	return 0
 }
 
+// cpuTowerWhy is cpuWhy for a block of a picture's segment: its history is
+// the block's run's own, written and read inside the one call over the
+// picture's rows (lend), so no other path reads its format, and its page is
+// the State's arena.
+func (s *State) cpuTowerWhy(g *graph.Graph) jit.Decline {
+	switch {
+	case cpu.CPU().ISA()&cpu.ISATierAVX2 != cpu.ISATierAVX2:
+		return jit.DeclineISA
+	case g == nil:
+		return jit.DeclineNoGraph
+	case len(g.Out) != 1 || len(g.In) != 1:
+		return jit.DeclineFeeds
+	case s.vis.arena == nil:
+		return jit.DeclinePageOut
+	}
+	return jit.DeclineServes
+}
+
 // cpuDeclineError is a form the CPU device refuses by a named reason.
 type cpuDeclineError struct {
 	why jit.Decline
@@ -1053,6 +1120,12 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	f := m.Composing()
 	for _, o := range g.Ops {
 		for _, w := range o.Weight {
+			if m.towerAt(li) >= 0 {
+				if t, ok := towerFormat(&m.layers[li], w.Role); ok {
+					formats[w.Role] = t
+				}
+				continue
+			}
 			if e, ok := f.Find(w.Role, int32(li), -1); ok {
 				formats[w.Role] = e.Type
 			}
@@ -1060,6 +1133,9 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	}
 	pg := &s.kv.layers[li]
 	page := max(pg.p, 1)
+	if s.vis != nil {
+		page = s.vis.page
+	}
 	workers := 1
 	if s.jit != nil {
 		workers = s.jit.Workers()
@@ -1562,6 +1638,8 @@ func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
 		return l.upB
 	case jlm.RoleFFNDownBias:
 		return l.downB
+	case jlm.RoleVFFNGateBias:
+		return l.gateB
 	case jlm.RoleAttnSinks:
 		return l.sinks
 	case jlm.RoleRouterBias:

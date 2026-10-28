@@ -33,25 +33,42 @@ func (s *kvPages) useArena(maxSeq int) error {
 			return nil
 		}
 	}
-	slots := (maxSeq + s.p - 1) / s.p
-	n := 4 * s.pp * slots
-	a := &kvArena{slots: slots}
-	var err error
-	if a.kb, _, err = kernels.MapOffHeap(n); err != nil {
+	a, err := mapKVArena(s.pp, (maxSeq+s.p-1)/s.p, s.latent)
+	if err != nil {
 		return err
-	}
-	a.k = unsafe.Slice((*float32)(unsafe.Pointer(&a.kb[0])), s.pp*slots)
-	if s.latent {
-		a.vb, a.v = a.kb, a.k
-	} else {
-		if a.vb, _, err = kernels.MapOffHeap(n); err != nil {
-			kernels.UnmapOffHeap(a.kb)
-			return err
-		}
-		a.v = unsafe.Slice((*float32)(unsafe.Pointer(&a.vb[0])), s.pp*slots)
 	}
 	s.arena = a
 	return nil
+}
+
+// mapKVArena is an arena of slots pages of pp floats each, its keys and its
+// values -- one span where latent, MLA's value the key's prefix.
+func mapKVArena(pp, slots int, latent bool) (*kvArena, error) {
+	n := 4 * pp * slots
+	a := &kvArena{slots: slots}
+	var err error
+	if a.kb, _, err = kernels.MapOffHeap(n); err != nil {
+		return nil, err
+	}
+	a.k = unsafe.Slice((*float32)(unsafe.Pointer(&a.kb[0])), pp*slots)
+	if latent {
+		a.vb, a.v = a.kb, a.k
+		return a, nil
+	}
+	if a.vb, _, err = kernels.MapOffHeap(n); err != nil {
+		kernels.UnmapOffHeap(a.kb)
+		return nil, err
+	}
+	a.v = unsafe.Slice((*float32)(unsafe.Pointer(&a.vb[0])), pp*slots)
+	return a, nil
+}
+
+// unmap returns the arena's memory, a's two spans once each.
+func (a *kvArena) unmap() {
+	kernels.UnmapOffHeap(a.kb)
+	if &a.vb[0] != &a.kb[0] {
+		kernels.UnmapOffHeap(a.vb)
+	}
 }
 
 // arenaSlot is page n's slots of the arena, the key's and the value's, nil
@@ -99,10 +116,7 @@ func (s *kvPages) unmapArena() {
 			s.k[n], s.v[n] = nil, nil
 		}
 	}
-	kernels.UnmapOffHeap(a.kb)
-	if !s.latent {
-		kernels.UnmapOffHeap(a.vb)
-	}
+	a.unmap()
 	s.arena = nil
 }
 

@@ -9715,3 +9715,44 @@ row where the composer's reads two.
   but the Gemma 4 fixtures, whose composed head at a step of 3 rows wants
   2.68 GB of buffers the 4 GB card does not hold, and on a V100 for those
   (vulkan:2, every subtest).
+- **Tower blocks composed on the CPU device and the cards.** The front end
+  states each vision tower block as ops (engine/model/fronttower.go): its
+  norms, biased projections, the 2-D rotary over the rows' table, a
+  bidirectional attention (graph.Attrs.Bidir, RowWindows on a windowed
+  block), and the MLP under the activation the tower's flags state
+  (jlm.Vision.Activation, through the expression builder convert shares).
+  Its tensors bind by the role each plays in the loaded block. A tower
+  block it cannot state is named: Gemma 4's clipped linears
+  (UncoveredClamp), Kimi-VL's rotary axes, Gemma 3n's convolution blocks.
+  The census over every projector family's fixture states SmolVLM 12/12,
+  llava 23/23, Gemma 3 27/27, InternVL 24/24, Qwen2-VL 3/3, Qwen2.5-VL 4/4,
+  Qwen3-VL and Qwen3.5 4/4, GLM-4V 3/3, MiniCPM-V 27/27, Janus 24/24,
+  Pixtral, Llama 4 and Phi-4 all; Kimi-VL, Gemma 4 and Gemma 3n none. On
+  the CPU device (WithComposedCPU) a picture's rows run as one bidirectional
+  run (bidir.go's runs, a windowed block's windows as runs), the history the
+  State's arena page, rounded to a power of two because AVX2 has no packed
+  integer division and llava's 577-row page had no x86 form of rem.u32. On
+  a V100 host's CPU, held to main's host tower: SmolVLM 12/12 blocks served,
+  4.9e-6 after one block and 1.1e-3 for the encode, llava 23/23 at 3.7e-7
+  and 9.5e-4, Gemma 3 27/27 at 1.3e-6 and 1.2e-3, Qwen2-VL 3/3 at 1.8e-5
+  and 3.0e-4, Qwen2.5-VL (windows) 4/4 at 3.3e-5 and 1.8e-3; a warm encode
+  allocates nothing; the rows made causal read 6.8e-2, 1.5e-3, 0.12 and
+  0.45. On a card the tier
+  serves a non-causal call's blocks when asked (tier.ComposedTower,
+  towerserve.go): the rows' descriptors over the device's one transient
+  pair as a page of the block's pool geometry, the windows the call staged
+  as rows.win, a row-chunked set's phases as the descriptors' ends; a block
+  without the rows' table, a window its graph states or a form the
+  composer does not make is declined by name. On cuda:0 and vulkan:0 every
+  block is served: SmolVLM, llava, Qwen2-VL and Qwen2.5-VL (windows) read
+  1.4e-7..2.4e-4 after one block (5e-5, or 5e-4 on the binary16 matrix
+  path) and 1.2e-4..5.0e-3 for the encode (1e-2); the rows made causal
+  ("piccausal") read 6.8e-2 against 6.0e-5 and 1.4e-7. A relocation
+  mid-encode under a two-page budget, 4 blocks composed on the card and 8
+  on the CPU, is bit-identical to the same placement from the start.
+  ComposedTower is not in ComposedStep: Gemma 3's SigLIP at 4096 rows reads
+  NMSE 4.1 after one composed block on both card backends, where every
+  tower of 1600 rows or fewer agrees (the attention past 2048 keys splits
+  into sequential partitions, jit/pass_splitrange.go, the first suspect;
+  scoping the combine's shared loads to the partition loop did not move
+  it). The projectors and the entry rows stay main's generated kernels.

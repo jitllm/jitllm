@@ -22,6 +22,17 @@ func (s *State) bidirEnd(pos int) int {
 	return 0
 }
 
+// bidirStart is the start of the run holding position pos, 0 when pos is
+// in none.
+func (s *State) bidirStart(pos int) int {
+	for _, r := range s.bidir {
+		if pos >= r.Lo && pos < r.Hi {
+			return r.Lo
+		}
+	}
+	return 0
+}
+
 // runsAt reports whether block li's attention honours the State's runs:
 // every block's, or the sliding blocks' alone where the model's image rows
 // see each other on those (Config.BidirSWA).

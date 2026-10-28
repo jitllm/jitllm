@@ -14,53 +14,17 @@ import (
 // (operand 1); an ungated one's of its up alone.
 
 // expr builds an expression term by term; each method is a term's value.
-type expr struct{ t []jlm.Term }
+type expr struct{ jlm.ExprBuilder }
 
-func (e *expr) fn(f jlm.Fn, args ...jlm.Arg) jlm.Arg {
-	var t jlm.Term
-	t.Fn = f
-	copy(t.Args[:], args)
-	e.t = append(e.t, t)
-	return jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(len(e.t) - 1)}
-}
+func operand(i uint32) jlm.Arg { return jlm.Operand(i) }
 
-// sum is a over the whole row, one value a row.
-func (e *expr) sum(a jlm.Arg) jlm.Arg {
-	e.t = append(e.t, jlm.Term{Fn: jlm.FnAdd, Reduce: true, Tree: true, Args: [3]jlm.Arg{a}})
-	return jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(len(e.t) - 1)}
-}
-
-func operand(i uint32) jlm.Arg { return jlm.Arg{Kind: jlm.ArgIn, Index: i} }
-
-func num(v float32) jlm.Arg { return jlm.Arg{Kind: jlm.ArgConst, Value: v} }
+func num(v float32) jlm.Arg { return jlm.Num(v) }
 
 func storedAt(r jlm.Role, i uint32) jlm.Arg { return jlm.Arg{Kind: jlm.ArgStored, Role: r, Index: i} }
 
-func (e *expr) silu(a jlm.Arg) jlm.Arg {
-	return e.fn(jlm.FnDiv, a, e.fn(jlm.FnAdd, num(1), e.fn(jlm.FnExp, e.fn(jlm.FnSub, num(0), a))))
-}
-
-// geluTanh is 0.5 a (1 + tanh(sqrt(2/pi) (a + 0.044715 a^3))).
-func (e *expr) geluTanh(a jlm.Arg) jlm.Arg {
-	cube := e.fn(jlm.FnMul, num(0.044715), e.fn(jlm.FnMul, a, e.fn(jlm.FnMul, a, a)))
-	th := e.fn(jlm.FnTanh, e.fn(jlm.FnMul, num(0.7978845608028654), e.fn(jlm.FnAdd, a, cube)))
-	return e.fn(jlm.FnMul, e.fn(jlm.FnMul, num(0.5), a), e.fn(jlm.FnAdd, num(1), th))
-}
-
-// geluErf is 0.5 a (1 + erf(a / sqrt(2))).
-func (e *expr) geluErf(a jlm.Arg) jlm.Arg {
-	erf := e.fn(jlm.FnErf, e.fn(jlm.FnMul, a, num(0.70710678118654752)))
-	return e.fn(jlm.FnMul, e.fn(jlm.FnMul, num(0.5), a), e.fn(jlm.FnAdd, num(1), erf))
-}
-
 func (e *expr) relu2(a jlm.Arg) jlm.Arg {
-	r := e.fn(jlm.FnMax, a, num(0))
-	return e.fn(jlm.FnMul, r, r)
-}
-
-// quickGELU is a sigma(1.702 a).
-func (e *expr) quickGELU(a jlm.Arg) jlm.Arg {
-	return e.fn(jlm.FnDiv, a, e.fn(jlm.FnAdd, num(1), e.fn(jlm.FnExp, e.fn(jlm.FnSub, num(0), e.fn(jlm.FnMul, num(1.702), a)))))
+	r := e.Fn(jlm.FnMax, a, num(0))
+	return e.Fn(jlm.FnMul, r, r)
 }
 
 // xielu is Apertus's xIELU from the four numbers each block stores
@@ -70,9 +34,9 @@ func (e *expr) quickGELU(a jlm.Arg) jlm.Arg {
 //	a <= 0:  (expm1(min(a, eps)) - a)*alpha_n + beta*a
 func (e *expr) xielu(a jlm.Arg) jlm.Arg {
 	alphaP, alphaN, beta, eps := storedAt(jlm.RoleXIELU, 0), storedAt(jlm.RoleXIELU, 1), storedAt(jlm.RoleXIELU, 2), storedAt(jlm.RoleXIELU, 3)
-	neg := e.fn(jlm.FnMul, e.fn(jlm.FnSub, e.fn(jlm.FnExpm1, e.fn(jlm.FnMin, a, eps)), a), alphaN)
-	pos := e.fn(jlm.FnMul, e.fn(jlm.FnMul, a, alphaP), a)
-	return e.fn(jlm.FnAdd, e.fn(jlm.FnWhere, a, pos, neg), e.fn(jlm.FnMul, a, beta))
+	neg := e.Fn(jlm.FnMul, e.Fn(jlm.FnSub, e.Fn(jlm.FnExpm1, e.Fn(jlm.FnMin, a, eps)), a), alphaN)
+	pos := e.Fn(jlm.FnMul, e.Fn(jlm.FnMul, a, alphaP), a)
+	return e.Fn(jlm.FnAdd, e.Fn(jlm.FnWhere, a, pos, neg), e.Fn(jlm.FnMul, a, beta))
 }
 
 // gaussTopK is Gemma 3n's sparse gate: what lies std standard deviations
@@ -80,19 +44,19 @@ func (e *expr) xielu(a jlm.Arg) jlm.Arg {
 // width (torch's std, unbiased=False).
 func (e *expr) gaussTopK(a jlm.Arg, std float32) jlm.Arg {
 	width := jlm.Arg{Kind: jlm.ArgWidth}
-	mean := e.fn(jlm.FnDiv, e.sum(a), width)
-	d := e.fn(jlm.FnSub, a, mean)
-	sd := e.fn(jlm.FnSqrt, e.fn(jlm.FnDiv, e.sum(e.fn(jlm.FnMul, d, d)), width))
-	return e.fn(jlm.FnMax, e.fn(jlm.FnSub, a, e.fn(jlm.FnFma, sd, num(std), mean)), num(0))
+	mean := e.Fn(jlm.FnDiv, e.Sum(a), width)
+	d := e.Fn(jlm.FnSub, a, mean)
+	sd := e.Fn(jlm.FnSqrt, e.Fn(jlm.FnDiv, e.Sum(e.Fn(jlm.FnMul, d, d)), width))
+	return e.Fn(jlm.FnMax, e.Fn(jlm.FnSub, a, e.Fn(jlm.FnFma, sd, num(std), mean)), num(0))
 }
 
 func (e *expr) clamp(a jlm.Arg, lim float32) jlm.Arg {
-	return e.fn(jlm.FnMax, e.fn(jlm.FnMin, a, num(lim)), num(-lim))
+	return e.Fn(jlm.FnMax, e.Fn(jlm.FnMin, a, num(lim)), num(-lim))
 }
 
 // bounded is c tanh(a/c), Kimi-K3's situ bound.
 func (e *expr) bounded(a jlm.Arg, c float32) jlm.Arg {
-	return e.fn(jlm.FnMul, num(c), e.fn(jlm.FnTanh, e.fn(jlm.FnMul, num(1/c), a)))
+	return e.Fn(jlm.FnMul, num(c), e.Fn(jlm.FnTanh, e.Fn(jlm.FnMul, num(1/c), a)))
 }
 
 // Activation is the FFN activation the converter states for block li of a
@@ -104,34 +68,34 @@ func Activation(c *jlm.Config, li int, gated bool) (jlm.Expr, error) {
 	switch {
 	case c.Flags2.Has(jlm.Flag2SwiGLUClamp):
 		// DeepSeek V4: silu(min(gate, 10)) * clamp(up, -10, 10).
-		e.fn(jlm.FnMul, e.silu(e.fn(jlm.FnMin, g, num(10))), e.clamp(u, 10))
+		e.Fn(jlm.FnMul, e.SiLU(e.Fn(jlm.FnMin, g, num(10))), e.clamp(u, 10))
 	case c.Flags.Has(jlm.FlagSwiGLUOAI):
 		// gpt-oss: quickGELU(min(gate, 7)) * (clamp(up, -7, 7) + 1).
-		e.fn(jlm.FnMul, e.quickGELU(e.fn(jlm.FnMin, g, num(7))), e.fn(jlm.FnAdd, e.clamp(u, 7), num(1)))
+		e.Fn(jlm.FnMul, e.QuickGELU(e.Fn(jlm.FnMin, g, num(7))), e.Fn(jlm.FnAdd, e.clamp(u, 7), num(1)))
 	case c.SituBeta != 0 || c.SituLinearBeta != 0:
-		e.fn(jlm.FnMul, e.fn(jlm.FnMul, e.bounded(g, c.SituBeta), e.fn(jlm.FnSigmoid, g)), e.bounded(u, c.SituLinearBeta))
+		e.Fn(jlm.FnMul, e.Fn(jlm.FnMul, e.bounded(g, c.SituBeta), e.Fn(jlm.FnSigmoid, g)), e.bounded(u, c.SituLinearBeta))
 	case c.Flags.Has(jlm.FlagReLU2):
 		unary = e.relu2
 	case c.Arch == jlm.ArchModernBERT:
-		unary = e.geluErf
+		unary = e.GELUErf
 	case c.Flags.Has(jlm.FlagGELU) && c.SparseStd != 0 && li < int(c.NSparse):
-		unary = func(a jlm.Arg) jlm.Arg { return e.geluTanh(e.gaussTopK(a, c.SparseStd)) }
+		unary = func(a jlm.Arg) jlm.Arg { return e.GELUTanh(e.gaussTopK(a, c.SparseStd)) }
 	case c.Flags.Has(jlm.FlagGELU):
-		unary = e.geluTanh
+		unary = e.GELUTanh
 	case c.Arch == jlm.ArchApertus:
 		unary = e.xielu
 	default:
-		unary = e.silu
+		unary = e.SiLU
 	}
 	switch {
 	case unary == nil && !gated:
 		return jlm.Expr{}, fmt.Errorf("convert: block %d's activation is a gated one, and the block stores no gate", li)
 	case unary != nil && gated:
-		e.fn(jlm.FnMul, unary(g), u)
+		e.Fn(jlm.FnMul, unary(g), u)
 	case unary != nil:
 		unary(g)
 	}
-	x := jlm.Expr{Terms: e.t}
+	x := jlm.Expr{Terms: e.T}
 	return x, x.Valid()
 }
 
@@ -236,17 +200,17 @@ func RouterScore(c *jlm.Config) jlm.Expr {
 	x := operand(0)
 	switch {
 	case c.Flags2.Has(jlm.Flag2ExpertSqrtSoftplus):
-		e.fn(jlm.FnSqrt, e.fn(jlm.FnSoftplus, x))
+		e.Fn(jlm.FnSqrt, e.Fn(jlm.FnSoftplus, x))
 	case c.Flags.Has(jlm.FlagExpertSigmoid):
-		e.fn(jlm.FnSigmoid, x)
+		e.Fn(jlm.FnSigmoid, x)
 	default:
 		// softmax over the experts: exp(x - max x), over its sum.
-		m := jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(len(e.t))}
-		e.t = append(e.t, jlm.Term{Fn: jlm.FnMax, Reduce: true, Args: [3]jlm.Arg{x}})
-		ex := e.fn(jlm.FnExp, e.fn(jlm.FnSub, x, m))
-		s := jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(len(e.t))}
-		e.t = append(e.t, jlm.Term{Fn: jlm.FnAdd, Reduce: true, Args: [3]jlm.Arg{ex}})
-		e.fn(jlm.FnDiv, ex, s)
+		m := jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(len(e.T))}
+		e.T = append(e.T, jlm.Term{Fn: jlm.FnMax, Reduce: true, Args: [3]jlm.Arg{x}})
+		ex := e.Fn(jlm.FnExp, e.Fn(jlm.FnSub, x, m))
+		s := jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(len(e.T))}
+		e.T = append(e.T, jlm.Term{Fn: jlm.FnAdd, Reduce: true, Args: [3]jlm.Arg{ex}})
+		e.Fn(jlm.FnDiv, ex, s)
 	}
-	return jlm.Expr{Terms: e.t}
+	return jlm.Expr{Terms: e.T}
 }

@@ -167,6 +167,8 @@ func recFaulted(f string) bool { return recFault == f }
 //	"nowin"    a ragged step's windowed or chunked layers attend every key
 //	"ragtab"   a ragged step's run-table prefill reads its rows' keys through
 //	          the decode descriptors, where those rows are empty
+//	"piccausal" a composed non-causal block's rows attend causally: each
+//	           row's descriptor ends at itself (picDesc)
 var rowsFault string
 
 // SetRowsFault arms one violation for the calls after it; "" disarms.

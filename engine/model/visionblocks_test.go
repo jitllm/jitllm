@@ -434,13 +434,22 @@ func TestTowerEncodeResumesAcrossARelocation(t *testing.T) {
 			return m, m.Tower()
 		}},
 	} {
-		t.Run(f.name, func(t *testing.T) { towerResumesAcrossARelocation(t, f.open) })
+		t.Run(f.name, func(t *testing.T) { towerResumesAcrossARelocation(t, f.open, false) })
 	}
+	// The composed arm: the composer serves the tower's blocks on the
+	// device and on the CPU (fronttower.go), each counted.
+	t.Run("smolvlm/composed", func(t *testing.T) { towerResumesAcrossARelocation(t, openTower, true) })
 }
 
-func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, opts ...Option) (*Model, *Tower)) {
+func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, opts ...Option) (*Model, *Tower), composed bool) {
 	const k = 4
-	m0, tw0 := openTower(t)
+	var mopt []Option
+	topt := []tier.Option{}
+	if composed {
+		mopt = append(mopt, WithComposedCPU(true))
+		topt = append(topt, composedOpt(towerParts))
+	}
+	m0, tw0 := openTower(t, mopt...)
 	base := int(m0.container.H.NBlocks)
 	budget := 2 * m0.container.PageBytes(base)
 	px := rainbow(tw0.Cfg.ImageSz)
@@ -448,13 +457,13 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 	m0.Close()
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(tier.WithDevices(spec))
+			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, topt...)...)
 			if err != nil || g == nil {
 				t.Skipf("%s: not present (%v)", spec, err)
 			}
 			defer g.Close()
 			// From the start: the first k blocks on the device, the rest home.
-			ma, twa := openTower(t, WithTowerGPULayers(k), WithPageBudget(budget))
+			ma, twa := openTower(t, append([]Option{WithTowerGPULayers(k), WithPageBudget(budget)}, mopt...)...)
 			sa := twa.testState()
 			if err := sa.SetDevice(g); err != nil {
 				t.Fatal(err)
@@ -472,7 +481,7 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 
 			// Relocated in the middle: every block on the device, k of them
 			// run, the device detached, the rest run at home.
-			mb, twb := openTower(t, WithPageBudget(budget))
+			mb, twb := openTower(t, append([]Option{WithPageBudget(budget)}, mopt...)...)
 			defer mb.Close()
 			sb := twb.testState()
 			defer sb.Close()
@@ -483,12 +492,14 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 				t.Skipf("%s placed %d tower blocks: the relocation needs more than %d", spec, sb.GPUBlocks(), k)
 			}
 			side := twb.Cfg.ImageSz / twb.Cfg.PatchSz
+			s0, _, _ := g.Stats().ServedPart(tier.ComposedTower)
 			if err := sb.encodeBegin(px, side, side); err != nil {
 				t.Fatal(err)
 			}
 			if done, err := sb.encodeBlocks(k); err != nil || done {
 				t.Fatalf("the first step: done %v, %v", done, err)
 			}
+			s1, _, _ := g.Stats().ServedPart(tier.ComposedTower)
 			if err := sb.SetDevice(nil); err != nil {
 				t.Fatal(err)
 			}
@@ -497,6 +508,16 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 			}
 			if done, err := sb.encodeBlocks(0); err != nil || !done {
 				t.Fatalf("the second step: done %v, %v", done, err)
+			}
+			if composed {
+				served, declined := sb.CPUBlockSteps()
+				s2, _, _ := g.Stats().ServedPart(tier.ComposedTower)
+				t.Logf("%s: the composer served %d tower blocks on the device before the move, %d on the CPU after it (declines %v)",
+					spec, s1-s0, served, nonZero(declined[:]))
+				if s1-s0 != k || s2 != s1 || served != n-k {
+					t.Fatalf("%s: the composer served %d device blocks before the move and %d after, %d on the CPU; want %d, 0 and %d (declines %v, %s)",
+						spec, s1-s0, s2-s1, served, k, n-k, nonZero(declined[:]), g.Err())
+				}
 			}
 			got, err := sb.encodeFinish()
 			if err != nil {

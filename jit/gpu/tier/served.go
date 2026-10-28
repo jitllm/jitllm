@@ -53,11 +53,15 @@ const (
 	// partCopy is a block's output, written apart from x where its form
 	// reads x in the kernel writing it, copied over x (graph.Copy).
 	partCopy
+	// partTower is a non-causal call's block whole: a picture's rows, one
+	// run (towerserve.go).
+	partTower
 	numParts
 )
 
 var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block",
-	partRope: "table", partSample: "sample", partEmbed: "input rows", partEmbedRows: "prompt input rows", partCopy: "copy"}
+	partRope: "table", partSample: "sample", partEmbed: "input rows", partEmbedRows: "prompt input rows", partCopy: "copy",
+	partTower: "tower block"}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
@@ -776,6 +780,12 @@ const (
 	// written apart from x (servedCopy). Config.Composed takes no such bit:
 	// a block the composer serves asks for one where it needs it.
 	PartCopy Parts = 1 << partCopy
+	// ComposedTower serves a non-causal call's blocks whole from their
+	// graphs: a vision tower's, over a picture's rows (towerserve.go). Not
+	// in ComposedStep yet: Gemma 3's SigLIP at 4096 rows reads NMSE 4.1
+	// after one composed block on CUDA and Vulkan, where every tower of
+	// 1600 rows or fewer agrees with the host.
+	ComposedTower Parts = 1 << partTower
 	// ComposedStep is every part of a step: its input rows, tables, blocks
 	// (a prompt chunk's among them), head and token.
 	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedPrompt | ComposedHead | ComposedSample
@@ -1790,6 +1800,9 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.mvu.bias
 	case jlm.RoleFFNDownBias:
 		return l.mvd.bias
+	case jlm.RoleVFFNGateBias:
+		// A tower's gated MLP's gate bias, which no text role names.
+		return l.mvg.bias
 	case jlm.RoleAttnSinks:
 		return l.sinks
 	case jlm.RoleAttnSubNorm:
@@ -1878,6 +1891,8 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partFeeds
 	case l.linear && !l.withAttn:
 		return partServes
+	case l.nonCausal:
+		return g.towerServes(l, li, p, bs)
 	case pk == nil || g.kvp == nil || g.kvp.layers[l.kvSrc] == nil:
 		// A block sharing another's history reads its source's pool.
 		return partNoPool
@@ -1943,6 +1958,9 @@ func (l *layer) windowHeld(li int, p *nn.LayerPlan) bool {
 // bs.h, and copied over x after (servedCopy): cp is that copy, nil where the
 // form writes over x.
 func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan, R int, one bool) (sv *servedPart, inst *partInst, cp *servedPart, err error) {
+	if l.nonCausal {
+		return g.towerStep(bs, l, li, p, R)
+	}
 	rcs := bs.cs
 	if bs.csSWA != nil && p.LocalRope(li) {
 		rcs = bs.csSWA

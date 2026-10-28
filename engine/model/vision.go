@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"math"
+	"math/bits"
 
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
@@ -976,7 +977,16 @@ type visRun struct {
 	// block's keys are read only inside that block, so each block borrows the
 	// pair for its run and hands it on (lend, unlend).
 	kp, vp []float32
-	gather []float32
+	// arena is the pair where the composer runs this State's CPU blocks
+	// (WithComposedCPU): one page of the picture, in place of kp and vp,
+	// that a block's form addresses as its pool (kvArena).
+	arena *kvArena
+	page  int
+	// run is the one run of a composed CPU block's rows (cpuTowerRows);
+	// causalFault, a gate's violation, leaves the rows causal.
+	run         [1]nn.KeyRun
+	causalFault bool
+	gather      []float32
 	// px2 is the encode in progress's second frame (a video's temporal pair,
 	// Picture.Pixels2), nil for a still picture; gather2 and pair are its
 	// gathered difference from the first frame and that difference's rows.
@@ -1131,20 +1141,39 @@ func (t *Tower) newState(j *nn.JIT, owned bool) *State {
 		v.hyLines = make([]float32, tc.MaxTokens()*h.lineWidth)
 	}
 	s.memBudget = sched.MemBudget()
+	if m.opt.composedCPU {
+		if pg := &s.kv.layers[s.lo]; pg.p > 0 {
+			// The composer's page arithmetic is shifts on the CPU: AVX2 has
+			// no packed integer division, so the arena's page is the
+			// picture's page rounded up to a power of two.
+			v.page = 1 << bits.Len(uint(pg.p-1))
+			var err error
+			if v.arena, err = mapKVArena(v.page*(pg.pp/pg.p), 1, false); err != nil {
+				s.cpu.formErr = err
+			}
+		}
+		s.cpuPlace()
+	}
 	return s
 }
 
 // lend hands the transient K/V pair to block li for its run: the page every
-// vision block writes and reads in turn, allocated once per State.
+// vision block writes and reads in turn, allocated once per State -- the
+// arena's, where the State has one, so a composed block addresses it.
 func (s *State) lend(li int) {
 	v, pg := s.vis, &s.kv.layers[li]
 	if pg.p == 0 {
 		return
 	}
+	pg.extend(0)
+	if v.arena != nil {
+		pg.arena = v.arena
+		pg.k[0], pg.v[0] = v.arena.k[:pg.pp], v.arena.v[:pg.pp]
+		return
+	}
 	if v.kp == nil {
 		v.kp, v.vp = s.m.kvPool.get(pg.pp), s.m.kvPool.get(pg.pp)
 	}
-	pg.extend(0)
 	pg.k[0], pg.v[0] = v.kp, v.vp
 }
 
@@ -1153,15 +1182,19 @@ func (s *State) unlend(li int) {
 	if pg := &s.kv.layers[li]; len(pg.k) > 0 {
 		pg.k[0], pg.v[0] = nil, nil
 		pg.written = 0
+		pg.arena = nil
 	}
 }
 
 // visWindowed reports whether vision block li attends inside windows: every
 // block but each WinPattern'th (llama.cpp: full when (il+1) % n_wa_pattern ==
 // 0), counted from the segment's first block.
-func (s *State) visWindowed(li int) bool {
-	p := s.vis.t.Cfg.WinPattern
-	return p > 0 && (li-s.lo+1)%p != 0
+func (s *State) visWindowed(li int) bool { return s.vis.t.Cfg.windowedAt(li - s.lo) }
+
+// windowedAt reports whether tower block i attends inside windows.
+func (c TowerConfig) windowedAt(i int) bool {
+	p := c.WinPattern
+	return p > 0 && (i+1)%p != 0
 }
 
 // Encode turns a preprocessed image into the embeddings the language model
@@ -2038,6 +2071,9 @@ func (s *State) visPlan(li int) *nn.LayerPlan {
 	if s.m.kpadViolation {
 		plan.KPad = 0
 	}
+	// The block as ops (fronttower.go): what a device serving it whole
+	// forms; nil where the front end states none.
+	plan.Graph = s.m.Composing().BlockGraph(li)
 	// A 2-D rotary tower turns the whole head, NEOX-paired, by the per-patch
 	// table EncodeGrid hands Layers (visRope).
 	if tc.Rope {

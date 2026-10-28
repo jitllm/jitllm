@@ -42,6 +42,7 @@ const (
 	UncoveredAct
 	UncoveredPooling
 	UncoveredEmbedRows
+	UncoveredClamp
 	UncoveredUnbound
 	UncoveredUnverified
 	numUncovered
@@ -65,6 +66,7 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredAct:        "an activation the container does not state, or not over the block's operands",
 	UncoveredPooling:    "a pooled head (an embedding model's)",
 	UncoveredEmbedRows:  "input rows beyond the token's row, a scale and a position table",
+	UncoveredClamp:      "linears clipped to stored bounds",
 	UncoveredUnbound:    "stored tensors its graph does not bind",
 	UncoveredUnverified: "a graph that does not verify",
 }
@@ -92,9 +94,14 @@ type frontState struct {
 // frontSet is the graphs one statement of the model builds, and the
 // statement.
 type frontSet struct {
-	blocks      []*graph.Graph
-	why         []Uncovered
-	errs        []error
+	blocks []*graph.Graph
+	why    []Uncovered
+	errs   []error
+	// tower, towerWhy and towerErrs are the vision tower's blocks', vision
+	// block i at i: block base+i of the model's block space.
+	tower       []*graph.Graph
+	towerWhy    []Uncovered
+	towerErrs   []error
 	head, embed *graph.Graph
 	// headHidden is head writing the norm's rows too (nn.Head.HiddenGraph).
 	headHidden *graph.Graph
@@ -167,10 +174,23 @@ func (m *Model) Composing() jit.Model { return composing{m.container, m} }
 
 func (c composing) BlockGraph(li int) *graph.Graph {
 	f := c.m.frontGraphs()
+	if i := c.m.towerAt(li); i >= 0 {
+		return f.tower[i]
+	}
 	if li < 0 || li >= len(f.blocks) {
 		return nil
 	}
 	return f.blocks[li]
+}
+
+// towerAt is block li's index among the vision tower's blocks, -1 for a
+// block that is not the tower's.
+func (m *Model) towerAt(li int) int {
+	t := m.tower
+	if t == nil || li < t.base || li >= t.base+t.Cfg.NLayer {
+		return -1
+	}
+	return li - t.base
 }
 
 func (c composing) Blocks() int { return c.m.Cfg.NLayer }
@@ -228,6 +248,9 @@ func (m *Model) uncoveredAt(li int) (Uncovered, error) {
 		return f.embedWhy, f.embedErr
 	case li >= 0 && li < len(f.why):
 		return f.why[li], f.errs[li]
+	case m.towerAt(li) >= 0:
+		i := m.towerAt(li)
+		return f.towerWhy[i], f.towerErrs[i]
 	}
 	return UncoveredUnverified, fmt.Errorf("no block %d", li)
 }
@@ -244,6 +267,13 @@ func (m *Model) frontGraphs() *frontSet {
 	s := &frontSet{key: k, blocks: make([]*graph.Graph, n), why: make([]Uncovered, n), errs: make([]error, n)}
 	for li := range n {
 		s.blocks[li], s.why[li], s.errs[li] = m.blockGraph(li)
+	}
+	if t := m.tower; t != nil {
+		nv := t.Cfg.NLayer
+		s.tower, s.towerWhy, s.towerErrs = make([]*graph.Graph, nv), make([]Uncovered, nv), make([]error, nv)
+		for i := range nv {
+			s.tower[i], s.towerWhy[i], s.towerErrs[i] = m.towerGraph(t.base + i)
+		}
 	}
 	s.head, s.headWhy, s.headErr = m.headGraph(false)
 	if s.head != nil {
