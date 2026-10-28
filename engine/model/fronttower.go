@@ -446,9 +446,9 @@ func (m *Model) towerEntryOf() (*graph.Graph, Uncovered, error) {
 	switch {
 	case c.CLSLast || t.opt.towerCLSLast:
 		return nil, UncoveredEmbedRows, fmt.Errorf("a class row after the patches")
-	case t.posW != nil && (c.PosSide > 0 || c.PosAxis > 0 || c.Kind == jlm.ProjPhi4 || c.Kind == jlm.ProjLFM2):
+	case t.posW != nil && (c.PosSide > 0 || c.PosAxis > 0 || t.posPerGrid()):
 		return nil, UncoveredEmbedRows, fmt.Errorf("a position table read past each row's own row")
-	case t.embdNorm != nil || c.Kind == jlm.ProjGemma3nV:
+	case t.embdNorm != nil || t.mn != nil:
 		return nil, UncoveredEmbedRows, fmt.Errorf("a patch embedding past one matrix over the patch")
 	}
 	E, P := c.NEmbd, c.PatchSz

@@ -1395,7 +1395,7 @@ func (s *State) entryRows(px []float32, gh, gw, n, first, cls int) error {
 		}
 		rows := v.posRows[:n]
 		table := t.posW
-		if c.Kind == jlm.ProjPhi4 || c.Kind == jlm.ProjLFM2 {
+		if t.posPerGrid() {
 			table = s.phi4Table(gh, gw)
 		}
 		if c.PosAxis > 0 {
@@ -1897,6 +1897,13 @@ func (t *Tower) projNormOn() bool {
 // with rows of its own.
 func (t *Tower) projReadsPastLastBlock() bool {
 	return len(t.Cfg.Deep) > 0 || t.rs != nil || t.glm != nil || t.hy != nil
+}
+
+// posPerGrid says the learned position table is resized to each picture's
+// grid before its rows are read (phi4Table): Phi-4's and LFM2-VL's.
+func (t *Tower) posPerGrid() bool {
+	c := t.Cfg
+	return c.Kind == jlm.ProjPhi4 || c.Kind == jlm.ProjLFM2
 }
 
 // projAct is the activation between the projector's two matrices.
