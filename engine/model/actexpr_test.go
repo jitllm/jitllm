@@ -68,14 +68,28 @@ func statedViolations(m *Model) []c6Violation {
 	}
 	var vs []c6Violation
 	if consts {
-		vs = append(vs, c6Violation{"the stated activation's first constant moved", statedMut(func(t *jlm.Term) bool {
-			for j := range t.Args {
-				if t.Args[j].Kind == jlm.ArgConst {
-					t.Args[j].Value++
-					return true
+		// A bound (a min's or a max's constant) moves nothing a fixture's
+		// values never reach -- a clamped SwiGLU's 7 -- so the constant moved
+		// is the first one no bound holds, the first of all where every one is
+		// a bound.
+		vs = append(vs, c6Violation{"the stated activation's first constant moved", statedExprMut(func(ts []jlm.Term) {
+			at := func(bounds bool) bool {
+				for k := range ts {
+					if !bounds && (ts[k].Fn == jlm.FnMin || ts[k].Fn == jlm.FnMax) {
+						continue
+					}
+					for j := range ts[k].Args {
+						if ts[k].Args[j].Kind == jlm.ArgConst {
+							ts[k].Args[j].Value++
+							return true
+						}
+					}
 				}
+				return false
 			}
-			return false
+			if !at(false) {
+				at(true)
+			}
 		})})
 	}
 	if wheres {
@@ -132,17 +146,24 @@ func actSwap(k nn.ActKind) func(*Model) func() {
 // statedMut runs f over each stated activation's terms, a copy, until it
 // changes one, and has the front end state the blocks again.
 func statedMut(f func(*jlm.Term) bool) func(*Model) func() {
+	return statedExprMut(func(ts []jlm.Term) {
+		for k := range ts {
+			if f(&ts[k]) {
+				break
+			}
+		}
+	})
+}
+
+// statedExprMut is statedMut with f given each stated expression's terms.
+func statedExprMut(f func([]jlm.Term)) func(*Model) func() {
 	return func(m *Model) func() {
 		c := m.container.Config()
 		was := c.Acts
 		acts := make([]jlm.Expr, len(was))
 		for i, e := range was {
 			acts[i].Terms = slices.Clone(e.Terms)
-			for k := range acts[i].Terms {
-				if f(&acts[i].Terms[k]) {
-					break
-				}
-			}
+			f(acts[i].Terms)
 		}
 		c.Acts = acts
 		undo := m.restate(func(map[jlm.Role]graph.Shape) {})
