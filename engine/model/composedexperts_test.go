@@ -213,13 +213,15 @@ func TestComposedExpertPagesMove(t *testing.T) {
 // cpuExpertModels are the mixtures whose blocks the composer serves on the
 // CPU device with their banks read in the host's expert pages
 // (TestComposedCPUExpertPagesServe): the router families' fixtures, Llama
-// 4's input-weighted top-1, dbrx's clamped float banks and phimoe's
-// sparsemixer (its weights a stated softmax per pick) among them, and a
-// checkpoint, and DeepSeek's mixtures beside latent attention: V3's grouped
-// sigmoid router and V2's softmax one.
+// 4's input-weighted top-1, dbrx's clamped float banks, phimoe's
+// sparsemixer (its weights a stated softmax per pick), Ling 2.0's grouped
+// sigmoid router and MiniMax-M2's among them, a checkpoint, and DeepSeek's
+// mixtures beside latent attention: V3's grouped sigmoid router and V2's
+// softmax one.
 var cpuExpertModels = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix,
 	"synth-ernie45moe-hf" + q8Suffix, "synth-hunyuanmoe-hf" + q8Suffix, "synth-dots1-hf" + q8Suffix,
 	"synth-llama4-q8.gguf", "synth-dbrx.gguf", "synth-gptoss.gguf", "synth-phimoe.gguf",
+	"synth-bailingmoe2.gguf", "synth-minimaxm2.gguf",
 	"synth-deepseek" + q8Suffix, "synth-deepseek-lite" + q8Suffix}
 
 // TestComposedCPUExpertPagesServe runs each mixture's blocks on the CPU
