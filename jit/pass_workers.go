@@ -24,7 +24,7 @@ func (Workers) Name() string { return "workers" }
 func (p Workers) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		rows := k.RowsHeld && k.Calls == 1 && k.Heads == nil && len(k.Space) >= 2
-		if k.Work || k.Group > 0 || k.Heads != nil || k.Calls > 0 && !rows || len(k.Space) == 0 || len(k.Loops) == 0 || !k.readsWeight() {
+		if k.Work || k.Group > 0 || k.Heads != nil || k.Calls > 0 && !rows || len(k.Space) == 0 || len(k.Loops) == 0 || !k.readsWeight() && k.Kind != PrimScan {
 			return nil, false, nil
 		}
 		a := len(k.Space) - 1
@@ -32,6 +32,10 @@ func (p Workers) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		switch {
 		case rows:
 			parts = tileParts(k.Space[a], max(p.Rows, 1), p.Tile)
+		case k.Kind == PrimScan:
+			// A scan's state row a call: its rows' steps are the call's
+			// loops, with no loop over state rows around them.
+			parts = k.Space[a]
 		case d.Slots > 1:
 			parts = workerParts(k.Space[a], d.Slots, max(p.Rows, 1))
 		}

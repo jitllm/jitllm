@@ -10152,3 +10152,38 @@ row where the composer's reads two.
   the binary16 scale the pair decode rounds to moves a near tie there
   (TestComposedGPUMatrix and TestComposedGPUExperts at worst 2.3e-7,
   TestComposedBlocksServe's bands, all pass).
+- **A linear block's prompt rows run whole on the composed CPU (D17), and
+  the CPU attention's flipped bound (D10).** The scan (PrimScan) had no CPU
+  form, so a linear block stepped its prompt a row at a time on its form of
+  one row. A device whose element is a thread with memory beside it
+  (Profile.ScanLoops, the CPU) forms the scan as generateScanLoops: an
+  element a state row, its components loops (a sum over them a fold of a
+  loop of its own, the update's store in its loop), the step's rows one
+  loop over the run descriptor's order list, the state kept where it is
+  written (a run's first row reading its start there, Scan.From), the calls
+  the state rows (Workers deals a scan's rows a call each; Code.Scan runs
+  every call whatever the call's rows). The engine runs a linear block's
+  rows on its rows' form where the step's rows are its own State's and each
+  sequence's stand in order (cpuRecWhole), a call ending at each restore
+  point, the run descriptor built per call (cpuRecDesc), the convolution's
+  windows written apart and copied over the runs' slots (its runs past the
+  step's write a window again from the window read). Counted:
+  CPURecSteps. On a V100 host's CPU (node 0), prompts of 5, 33 and 602
+  rows and four decode steps, every linear block's step of several rows
+  whole and none a row at a time, held to main within main's spread
+  (TestComposedCPURecurrentPromptsServe): Qwen3.5-0.8B 0.50-0.67 of the
+  spread at the median, mamba-130m 0.12-3.6 (worst 0.037 against four
+  times the control's 0.0093), LFM2-350M 0.95-1.05, granite-4.0-h-350m
+  0.41-0.99, Falcon-H1-0.5B 1.18-1.32; the state dropped at each chunk
+  and every block on the first's state read 9.4-2620 times. Faults the
+  forms reached, fixed: x86 division by a constant
+  whose round-up multiplier passes 2^31 (sign-extended), a general
+  register's compare mask read as a vector, a call coordinate moved out of
+  an index whose rest falls below zero. D10's second miscompute: Induction
+  carries an iteration read as data as a sum, and Homes placed that sum's
+  readers outside its loop, so the orderer emitted the loop early and a
+  loop-invariant bound inside vector loop 0, unmade for the tail when the
+  vector loop ran no trip; the sum is marked Running and its readers are
+  the loop's, an unrolled copy's iteration is the lanes' plus its vectors,
+  and the rule that a difference of small words is small is gone
+  (TestComposedCPUAttend holds; with the readers outside, 0.198).

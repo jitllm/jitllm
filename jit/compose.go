@@ -77,6 +77,10 @@ type Code struct {
 	// (Workers): its calls are best run every live row of a tile, then the
 	// next tile, so a tile is read from memory once for the step's rows.
 	TileMajor bool
+	// Scan is a scan's code: its calls are its state's rows, each stepping
+	// the rows of the call its run descriptor names, whatever the call's
+	// rows.
+	Scan bool
 }
 
 // Writes reports whether the kernel writes operand o.
@@ -327,7 +331,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			errs = append(errs, fmt.Errorf("jit: lowering %s: %w", k.Name, err))
 			continue
 		}
-		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work, Few: k.Few, Many: k.Many}
+		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work, Few: k.Few, Many: k.Many, Scan: k.Kind == PrimScan}
 		if l.CPU != nil && !k.Work && k.Group <= 0 {
 			c.Calls = append([]int(nil), k.Space...)
 		}

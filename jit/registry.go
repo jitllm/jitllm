@@ -101,6 +101,8 @@ type Context struct {
 	// operand (Int8Form.UnsignedDot), exactDiv whether its division is
 	// correctly rounded (Device.ExactDiv).
 	unsignedDot, exactDiv bool
+	// scanLoops is Profile.ScanLoops.
+	scanLoops bool
 	// split is the run's expressions formed a map a term.
 	split *exprSplit
 	// matrix is a step of rows the device's matrix unit runs a projection
@@ -206,7 +208,8 @@ func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device, sp *e
 // device d, the device's int8 form at the step's window.
 func (r *Registry) context(g *graph.Graph, k PartKind, f map[jlm.Role]jlm.Type, rots []graph.Rotary, s Step, d Device) *Context {
 	c := &Context{Graph: g, Part: k, Formats: f, Step: s, Int8: r.Profiles[d.Kind].Int8, Rotaries: rots, exactDiv: d.ExactDiv,
-		formed: map[graph.ValueID]bool{}, grouped: map[string]bool{}, matrix: d.Matrix[0] > 0 && s.Rows >= d.Matrix[0]}
+		formed: map[graph.ValueID]bool{}, grouped: map[string]bool{}, matrix: d.Matrix[0] > 0 && s.Rows >= d.Matrix[0],
+		scanLoops: r.Profiles[d.Kind].ScanLoops}
 	if q := c.Int8; q != nil && s.ActWindow > 0 && s.ActWindow != q.Window {
 		w := *q
 		w.Window = s.ActWindow

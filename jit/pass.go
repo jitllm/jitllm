@@ -12,9 +12,12 @@ type Pass interface {
 // Profile is a device's choices: what its parts' decompositions carry, and
 // its passes in order, any of them turned off by name.
 type Profile struct {
-	Int8   *Int8Form
-	Passes []Pass
-	Off    map[string]bool
+	Int8 *Int8Form
+	// ScanLoops steps a scan's state row in memory, its components loops
+	// (generateScanLoops), where a device's element is one thread.
+	ScanLoops bool
+	Passes    []Pass
+	Off       map[string]bool
 }
 
 // Int8Form is the int8 form a device keeps of a block's contraction inputs

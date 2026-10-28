@@ -155,6 +155,10 @@ type Scan struct {
 	Init, Next    int
 	Final         Operand
 	Index, Extent int
+	// Loops is the device's form of it (Profile.ScanLoops): the state read
+	// where it is written, a run's start at the node From of that table.
+	Loops bool
+	From  int
 }
 
 type Start uint8

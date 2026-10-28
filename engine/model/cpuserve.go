@@ -31,6 +31,10 @@ func (s *State) CPUBlockSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.served, s.cpu.declined
 }
 
+// CPURecSteps is how many steps of several rows the CPU's linear blocks
+// ran whole on their rows' form, and how many they stepped a row at a time.
+func (s *State) CPURecSteps() (whole, stepped int) { return s.cpu.recWhole, s.cpu.recStepped }
+
 // CPUFormErr is the first error the composer gave forming a block of this
 // State's model for the CPU, nil for none.
 func (s *State) CPUFormErr() error { return s.cpu.formErr }
@@ -54,9 +58,12 @@ const (
 	// cpuArgRecState and cpuArgRecConv are a linear block's recurrent states
 	// and its convolution's windows, a slot a sequence, read and written in
 	// place; cpuArgRecRows the call's recurrent descriptor, which names the
-	// call's sequence's slot.
+	// call's sequence's slot. cpuArgRecConvOut is where a call's windows are
+	// written: in place for a row, apart for a step of several (its runs
+	// past the step's write a run's window again from the window read).
 	cpuArgRecState
 	cpuArgRecConv
+	cpuArgRecConvOut
 	cpuArgRecRows
 	// cpuArgIO is an input or output of a graph whose output is not its
 	// input (the head's, the sampler's): the bound buffer of that place,
@@ -201,8 +208,19 @@ type cpuState struct {
 	call    [4]uint32
 	// recRows is a linear block's call's recurrent descriptor: one row, the
 	// slot it reads and the slot it writes, its sequence's.
-	recRows    [3]uint32
-	rseq, rpos []int
+	recRows [3]uint32
+	// recDesc is a call of the rows' form's run descriptor (cpuRecDesc),
+	// lastPos each sequence's last position a step's rows reach
+	// (cpuRecWhole).
+	recDesc []uint32
+	lastPos []int
+	// convOut is a step of several rows' convolution windows, written apart
+	// and copied over the runs' slots after the call.
+	convOut []float32
+	// recWhole counts the steps of several rows a linear block ran on its
+	// rows' form, recStepped those it stepped a row at a time.
+	recWhole, recStepped int
+	rseq, rpos           []int
 	// sel is a step's selection as the pager's fault path takes it
 	// (cpuForm).
 	sel []int32
@@ -318,6 +336,8 @@ type cpuBound struct {
 	// and recOf the State that holds them.
 	recLi int
 	recOf *State
+	// rec, where set, is the call's run descriptor in place of recRows.
+	rec []uint32
 	// side is the bound rows' per-layer inputs, a row each (cpuArgSide).
 	side []float32
 	// io is the buffers of a graph apart from its residual (cpuArgIO), its
@@ -489,18 +509,30 @@ func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, p
 	return jit.DeclineServes
 }
 
-// cpuRecRows runs linear block li over the n rows of x on its form of one
-// row, a row at a time in order (each row's index; 0.. where order is nil),
-// each stepping its own sequence's recurrent state -- its owner's, as
-// rowOwner names it -- or says why not: the recurrence is sequential, and
-// the form of a row is the block's whole step. A prompt's rows (base its
-// first row in the prompt, p0 its first position; base -1 for none) keep
-// each row's summary as main's row loop does: the speculative rows'
-// snapshot and the restore points.
+// cpuRecRows runs linear block li over the n rows of x, or says why not:
+// on its rows' form, the scan stepping each sequence's rows in order, where
+// the step's rows of each sequence stand in order and all are this State's
+// (cpuRecWhole); else on its form of one row, a row at a time in order
+// (each row's index; 0.. where order is nil), each stepping its own
+// sequence's recurrent state -- its owner's, as rowOwner names it. A
+// prompt's rows (base its first row in the prompt, p0 its first position;
+// base -1 for none) keep each row's summary as main's row loop does: the
+// speculative rows' snapshot, which takes the row at a time, and the
+// restore points, where the rows' form ends a call.
 func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []int, base, p0 int) (jit.Decline, error) {
 	cb, why := s.cpuBlockOf(li)
 	if why != jit.DeclineServes {
 		return why, nil
+	}
+	if f := s.cpuRecWhole(li, l, cb, seq, pos, order, base); f != nil {
+		why := s.cpuRecRun(li, l, f, x, cs, seq, pos, base, p0)
+		if why == jit.DeclineServes {
+			s.cpu.recWhole++
+		}
+		return why, nil
+	}
+	if len(pos) > 1 {
+		s.cpu.recStepped++
 	}
 	if why := s.cpuWeights(cb.f, li, l); why != jit.DeclineServes {
 		return why, nil
@@ -544,6 +576,108 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 		}
 	}
 	return jit.DeclineServes, nil
+}
+
+// cpuRecWhole is block li's rows' form where the step's rows run on it
+// whole: several rows, all this State's, in causal order, each sequence's
+// rows in order of position, and no speculative snapshot to take after
+// each row; nil where not.
+func (s *State) cpuRecWhole(li int, l *layer, cb *cpuBlock, seq, pos, order []int, base int) *cpuBlockForm {
+	if len(pos) < 2 || cb.rows == nil || len(s.rowOwn) > 0 || base >= 0 && s.rows != nil {
+		return nil
+	}
+	for i, r := range order {
+		if r != i {
+			return nil
+		}
+	}
+	if len(s.cpu.lastPos) < max(s.nseq, 1) {
+		s.cpu.lastPos = make([]int, max(s.nseq, 1))
+	}
+	last := s.cpu.lastPos[:max(s.nseq, 1)]
+	for i := range last {
+		last[i] = -1
+	}
+	for i, q := range seq {
+		if q < 0 || q >= len(last) || pos[i] <= last[q] {
+			return nil
+		}
+		last[q] = pos[i]
+	}
+	if s.cpuWeights(cb.rows, li, l) != jit.DeclineServes {
+		return nil
+	}
+	return cb.rows
+}
+
+// cpuRecRun runs linear block li's rows' form f over the step's rows, a
+// call at most f's rows; a prompt's (base its first row in the prompt, p0
+// its first position) end a call at each restore point inside them and seal
+// it there.
+func (s *State) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, seq, pos []int, base, p0 int) jit.Decline {
+	if why := s.cpuRowsReady(li, f, pos); why != jit.DeclineServes {
+		return why
+	}
+	n, d, nrot, pw := len(pos), s.c.NEmbd, s.c.RopeW(), s.c.pleWidth()
+	if s.cpu.fault == cpuFaultChunk && base > 0 {
+		slot := seq[0]
+		clear(s.rstate[li][slot*s.dg.stateStride():][:s.dg.stateStride()])
+		clear(s.rconv[li][slot*s.dg.convStateLen():][:s.dg.convStateLen()])
+	}
+	points := base >= 0 && s.recPointsOn()
+	for a := 0; a < n; {
+		b := n
+		for e := a + 1; points && e < n; e++ {
+			if s.recPoint(p0 + e) {
+				b = e
+				break
+			}
+		}
+		side := s.bple
+		if pw != 0 && side != nil {
+			side = side[a*pw:]
+		}
+		s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b])
+		if base >= 0 {
+			s.recRowPoint(li, seq[a], p0+b)
+		}
+		a = b
+	}
+	return jit.DeclineServes
+}
+
+// cpuRecDesc is the run descriptor (kernels.RunDescWords' layout) of a
+// call's rows of sequences seq: a run a sequence, its rows in the call's
+// order, its slot read and written the sequence's; the entries past the
+// runs repeat the last.
+func (s *State) cpuRecDesc(seq []int) []uint32 {
+	k := len(seq)
+	if len(s.cpu.recDesc) < 1+7*k {
+		s.cpu.recDesc = make([]uint32, 1+7*max(k, cpuRowsCap))
+	}
+	w := s.cpu.recDesc[:1+7*k]
+	w[0] = uint32(k)
+	at, runs := 0, 0
+	for i, q := range seq {
+		if slices.Contains(seq[:i], q) {
+			continue
+		}
+		start := at
+		for r := i; r < k; r++ {
+			if seq[r] == q {
+				w[1+4*k+at], w[1+5*k+r], w[1+6*k+r] = uint32(r), uint32(at), uint32(runs)
+				at++
+			}
+		}
+		w[1+2*runs], w[2+2*runs] = uint32(q), uint32(q)
+		w[1+2*k+2*runs], w[2+2*k+2*runs] = uint32(start), uint32(at-start)
+		runs++
+	}
+	for j := runs; j < k; j++ {
+		copy(w[1+2*j:3+2*j], w[2*runs-1:2*runs+1])
+		copy(w[1+2*k+2*j:3+2*k+2*j], w[2*k+2*runs-1:2*k+2*runs+1])
+	}
+	return w
 }
 
 // cpuRecLi is the block whose recurrent state block li's step binds: its
@@ -704,9 +838,25 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, codes []cpuCode,
 		}
 		*b = cpuBound{li: li, l: l, own: s.cpuOwn(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
 			kv: pg, pages: s.cpuFaultTable(pg, end), side: bside}
+		rec := s.c.LayerKind(li).Recurrent()
+		if rec {
+			b.recLi, b.recOf, b.rec = s.cpuRecLi(li), s, s.cpuRecDesc(seq[r0:r0+k])
+			if n := len(s.rconv[b.recLi]); len(s.cpu.convOut) < n {
+				s.cpu.convOut = make([]float32, n)
+			}
+		}
 		s.cpu.call[0] = uint32(k)
 		for i := range codes {
 			s.cpuCall(b, &codes[i])
+		}
+		if rec {
+			// The runs' windows over their slots.
+			L := s.dg.convStateLen()
+			for i, q := range seq[r0 : r0+k] {
+				if !slices.Contains(seq[r0:r0+i], q) {
+					copy(s.rconv[b.recLi][q*L:(q+1)*L], s.cpu.convOut[q*L:(q+1)*L])
+				}
+			}
 		}
 		if staged {
 			for j := range ns {
@@ -912,8 +1062,16 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			p = unsafe.Pointer(&b.recOf.rstate[b.recLi][0])
 		case cpuArgRecConv:
 			p = unsafe.Pointer(&b.recOf.rconv[b.recLi][0])
+		case cpuArgRecConvOut:
+			p = unsafe.Pointer(&b.recOf.rconv[b.recLi][0])
+			if b.rec != nil {
+				p = unsafe.Pointer(&s.cpu.convOut[0])
+			}
 		case cpuArgRecRows:
 			p = unsafe.Pointer(&s.cpu.recRows[0])
+			if b.rec != nil {
+				p = unsafe.Pointer(&b.rec[0])
+			}
 		case cpuArgZero:
 			p = unsafe.Pointer(&s.cpu.zero[0])
 		}
@@ -1012,9 +1170,7 @@ func (s *State) cpuCompose(li int) {
 		return
 	}
 	cb.f = f
-	if s.c.LayerKind(li).Recurrent() {
-		cb.rowsWhy = jit.DeclineRecurrent
-	} else if s.c.MoEAt(li) {
+	if s.c.MoEAt(li) {
 		cb.rowsWhy = jit.DeclineExpertsRows
 	} else if cb.rows, err = s.m.formCPUBlock(s, li, cb, cpuRowsCap); err != nil {
 		cb.rowsWhy = s.cpuFormDecline(err)
@@ -1291,10 +1447,12 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 		for _, n := range c.Calls {
 			cc.n *= n
 		}
-		if rows > 1 {
+		if rows > 1 && !c.Scan {
 			// A form of several rows runs the units of its calls' leading
 			// axis the call's rows reach: a kernel not held to them would
-			// read and write rows past the call's.
+			// read and write rows past the call's. A scan's calls are its
+			// state's rows, each reading the call's rows its descriptor
+			// names.
 			if c.Live == 0 || len(c.Calls) == 0 || c.Calls[0] != c.LiveUnits {
 				f.close()
 				return nil, fmt.Errorf("%s at %d rows: its calls %v hold no rows of a call (live %d of %d units)", c.Name, rows, c.Calls, c.Live, c.LiveUnits)
@@ -1404,8 +1562,10 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 					ar.src = cpuArgCall
 				case "rec.state", "rec.state.out":
 					ar.src = cpuArgRecState
-				case "rec.conv", "rec.conv.out":
+				case "rec.conv":
 					ar.src = cpuArgRecConv
+				case "rec.conv.out":
+					ar.src = cpuArgRecConvOut
 				case "rec.rows":
 					ar.src = cpuArgRecRows
 				case "q.off":

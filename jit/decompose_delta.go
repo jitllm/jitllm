@@ -149,16 +149,29 @@ func deltaScan(o graph.Op, c *Context, H, KH, Dk, Dv int, chanDecay bool) ([]Pri
 	N := H * Dv * Dk
 	q, k, v, decay, beta := c.value(o.In[0]), c.value(o.In[1]), c.value(o.In[2]), c.value(o.In[3]), c.value(o.In[4])
 	in := []Operand{q, k, v, decay, beta, tableRecState, tableRecRows}
+	if c.scanLoops {
+		// The state is read where it is written, each run's start in its
+		// slot read of that table.
+		in[5] = tableRecStateOut
+	}
 	const desc = 6
 	var x exprs
 	h, j, i, r, run := x.coord(0), x.coord(1), x.coord(2), x.coord(3), x.coord(4)
 	kh := x.keyHead(h, H, KH, o.Attr.Tiled)
-	place := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(Dv))), j), x.u(uint32(Dk))), i)
+	start := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(Dv))), j), x.u(uint32(Dk)))
+	place := x.op(OpAdd, U, start, i)
 	slot := func(w int) int {
 		at := x.op(OpAdd, U, x.op(OpAdd, U, run, run), x.u(uint32(w)))
-		return x.op(OpAdd, U, x.op(OpMul, U, x.load(desc, at), x.u(uint32(N))), place)
+		base := x.op(OpMul, U, x.load(desc, at), x.u(uint32(N)))
+		if c.scanLoops {
+			// The component added last: a loop of the components walks
+			// consecutive elements (Vectorize).
+			return x.op(OpAdd, U, x.op(OpAdd, U, base, start), i)
+		}
+		return x.op(OpAdd, U, base, place)
 	}
-	init := x.load(5, slot(1))
+	from := slot(1)
+	init := x.load(5, from)
 	final := slot(2)
 	g := x.at(3, []int{R, H}, r, h)
 	if chanDecay {
@@ -175,7 +188,7 @@ func deltaScan(o graph.Op, c *Context, H, KH, Dk, Dv int, chanDecay bool) ([]Pri
 	y := x.un(OpGroupSum, F, x.op(OpMul, F, next, x.at(0, []int{R, KH, Dk}, r, kh, i)))
 	return []Prim{{Kind: PrimScan, Shape: []int{H, Dv, Dk}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: c.value(o.Out[0]), Ax: []int{r, h, j}, Ext: []int{R, H, Dv}, Value: y}},
-		Scan:   &Scan{Desc: desc, Init: init, Next: next, Final: tableRecStateOut, Index: final, Extent: N},
+		Scan:   &Scan{Desc: desc, Init: init, Next: next, Final: tableRecStateOut, Index: final, Extent: N, Loops: c.scanLoops, From: from},
 		Facts:  Facts{Extents: map[int]int{5: N, desc: recDescWords(R)}}}}, nil
 }
 
