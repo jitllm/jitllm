@@ -435,6 +435,10 @@ type Node struct {
 	Hint, Share int
 	// Tile, where set, is the collective tile the value is.
 	Tile *ir.TileType
+	// Running marks a fold its loop's trips read as it runs -- an
+	// iteration carried as a sum (Induction) -- rather than once the loop
+	// is done: its readers are the loop's.
+	Running bool
 }
 
 // Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or

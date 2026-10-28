@@ -620,6 +620,9 @@ func (n *Kernel) Homes() []int {
 			var buf [3]int
 			for _, a := range n.args(i, &buf) {
 				h = inner(h, home(a))
+				if x := n.Nodes[a]; x.Op == OpFold && x.Running {
+					h = inner(h, x.At)
+				}
 			}
 		}
 		out[i] = h

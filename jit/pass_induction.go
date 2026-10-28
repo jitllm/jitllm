@@ -49,7 +49,7 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			case from != it:
 				start = v
 			}
-			f := m.add(Node{Op: OpFold, At: c, Type: ir.I32, B: start})
+			f := m.add(Node{Op: OpFold, At: c, Type: ir.I32, B: start, Running: true})
 			for _, r := range data {
 				for _, a := range m.Operands(&m.Nodes[r]) {
 					if *a == from {
@@ -64,6 +64,25 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			m.Nodes[f].A = m.bin(OpAdd, ir.I32, f, st)
 			if l.Lanes > 0 {
 				vec[c] = f
+				// An unrolled copy's iteration, the trip's plus a whole
+				// number of vectors, read as data: the lanes' plus as many.
+				for d, nd := range k.Nodes {
+					if nd.Op != OpAdd || nd.A != it || !live[d] || k.Nodes[nd.B].Op != OpConst {
+						continue
+					}
+					dr := k.dataReaders(d, live, addr)
+					if len(dr) == 0 {
+						continue
+					}
+					off := m.bin(OpAdd, ir.I32, f, m.add(Node{Op: OpConst, Type: ir.I32, Imm: k.Nodes[nd.B].Imm}))
+					for _, r := range dr {
+						for _, a := range m.Operands(&m.Nodes[r]) {
+							if *a == d {
+								*a = off
+							}
+						}
+					}
+				}
 			}
 		}
 		if m == nil {

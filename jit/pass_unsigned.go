@@ -41,9 +41,9 @@ func (p Unsigned) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 // smallWords is the integer nodes below 2^31 by construction: indices,
 // lengths, coordinates, argument words, the words of the step's tables,
-// constants below it, and what
-// sums, differences, products, shifts, minima, maxima and quotients make
-// of them.
+// constants below it, and what sums, products, shifts, minima, maxima and
+// quotients make of them. A difference is not one: it wraps past 2^31 below
+// zero.
 func (k *Kernel) smallWords() []bool {
 	small := make([]bool, len(k.Nodes))
 	for changed := true; changed; {
@@ -61,7 +61,7 @@ func (k *Kernel) smallWords() []bool {
 				s = k.Bufs[nd.Buf].Operand.Kind == OperandTable
 			case OpConst:
 				s = nd.Imm >= 0 && nd.Imm < 1<<31
-			case OpAdd, OpSub, OpMul, OpShl, OpMin, OpMax, OpDiv:
+			case OpAdd, OpMul, OpShl, OpMin, OpMax, OpDiv:
 				s = small[nd.A] && small[nd.B]
 			case OpShr, OpRem, OpAnd:
 				s = small[nd.A] || nd.Op != OpShr && small[nd.B] ||
