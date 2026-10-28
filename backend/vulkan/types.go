@@ -413,6 +413,13 @@ func (p *physProps) maxStorageBufferRange() uint32 { return uint32(p.limits[3] >
 // maxComputeSharedMemorySize. Byte 224 starts the [1] and [2] entries.
 func (p *physProps) maxComputeWorkGroupCount() uint32 { return uint32(p.limits[27] >> 32) }
 
+// minStorageBufferOffsetAlignment is VkPhysicalDeviceLimits'
+// minStorageBufferOffsetAlignment, the VkDeviceSize at byte 328 of the
+// limits: after viewportSubPixelBits (296), minMemoryMapAlignment (a size_t
+// at 304), minTexelBufferOffsetAlignment (312) and
+// minUniformBufferOffsetAlignment (320).
+func (p *physProps) minStorageBufferOffsetAlignment() uint64 { return p.limits[41] }
+
 // maxComputeSharedMemorySize is the low half of the same word, read only by
 // the layout gate: the specification's floor on it is a second witness that
 // the word is the one maxComputeWorkGroupCount is read from.

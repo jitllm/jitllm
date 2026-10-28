@@ -54,6 +54,7 @@ func (b *Buf) Imported() bool                           { return false }
 func (c *Ctx) Compile(string, string) (*Kernel, error)  { return nil, errNoMetal }
 func (b *Buf) Bytes() []byte                            { return nil }
 func (b *Buf) Free()                                    {}
+func (b *Buf) View(int, int) (*Buf, error)              { return nil, errNoMetal }
 func (k *Kernel) Launch(int, int, ...*Buf) error        { return errNoMetal }
 func (k *Kernel) Close()                                {}
 func (k *Kernel) Limits() (int, int)                    { return 0, 0 }

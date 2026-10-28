@@ -20,6 +20,30 @@ type Buf struct {
 	// allocated here. Free is the same either way (vkFreeMemory releases only
 	// the wrapper); it lets a caller tell a descriptor update from a transfer.
 	imported bool
+	// off is where a view (View) starts in its buffer's memory, in bytes;
+	// view says the buffer is another's, which Free leaves.
+	off  int
+	view bool
+}
+
+// View is n bytes of b from byte off: the same buffer, bound at off
+// (VkDescriptorBufferInfo.offset). A storage binding's offset must be a
+// multiple of the device's minStorageBufferOffsetAlignment, and one that is
+// not is refused by name. b owns the memory; the view's Free leaves it.
+func (b *Buf) View(off, n int) (*Buf, error) {
+	if off < 0 || n <= 0 || off+n > b.n {
+		return nil, fmt.Errorf("vulkan: a view of %d bytes from %d of a buffer of %d", n, off, b.n)
+	}
+	if a := b.c.storageAlign; a > 1 && uint64(b.off+off)%a != 0 {
+		return nil, fmt.Errorf("vulkan: a view at byte %d of a buffer, where %s binds storage at multiples of %d (minStorageBufferOffsetAlignment)",
+			b.off+off, b.c.Name(), a)
+	}
+	v := *b
+	v.off, v.n, v.view = b.off+off, n, true
+	if b.host != nil {
+		v.host = b.host[off : off+n]
+	}
+	return &v, nil
 }
 
 // Imported reports that this buffer ALIASES host memory the caller owns, rather
@@ -126,7 +150,7 @@ func (r *rec) writeAt(b *Buf, off int, p []byte) error {
 		return err
 	}
 	copy(st.host, p)
-	return r.copyBuf(st.buf, b.buf, 0, uint64(off), len(p))
+	return r.copyBuf(st.buf, b.buf, 0, uint64(b.off+off), len(p))
 }
 
 // Len is the buffer's size in bytes.
@@ -145,7 +169,7 @@ func (c *Ctx) Copy(dst *Buf, dstOff int, src *Buf, srcOff, n int) error {
 	if err := c.waitAll(); err != nil {
 		return err
 	}
-	return c.copyBuf(src.buf, dst.buf, uint64(srcOff), uint64(dstOff), n)
+	return c.copyBuf(src.buf, dst.buf, uint64(src.off+srcOff), uint64(dst.off+dstOff), n)
 }
 
 // Read copies the buffer back, staging if it must.
@@ -169,7 +193,7 @@ func (r *rec) read(b *Buf, p []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := r.copyBuf(b.buf, st.buf, 0, 0, len(p)); err != nil {
+	if err := r.copyBuf(b.buf, st.buf, uint64(b.off), 0, len(p)); err != nil {
 		return err
 	}
 	copy(p, st.host)
@@ -236,6 +260,9 @@ func (r *rec) submit() error {
 }
 
 func (b *Buf) Free() {
+	if b.view {
+		return
+	}
 	if b.mem != 0 {
 		vkFreeMemory(b.c.dev, b.mem, nil)
 		b.mem = 0
@@ -381,7 +408,7 @@ func (k *Kernel) Bind(bufs ...*Buf) error {
 	infos := make([]descBufInfo, len(bufs))
 	writes := make([]writeDesc, len(bufs))
 	for i, b := range bufs {
-		infos[i] = descBufInfo{buffer: uint64(b.buf), rng: ^uint64(0) /* VK_WHOLE_SIZE */}
+		infos[i] = descBufInfo{buffer: uint64(b.buf), offset: uint64(b.off), rng: ^uint64(0) /* VK_WHOLE_SIZE */}
 		writes[i] = writeDesc{sType: stWriteDescSet, dstSet: uint64(k.set), dstBind: uint32(i),
 			count: 1, kind: descStorageBuffer, pBuffer: uintptr(up(&infos[i]))}
 	}
@@ -581,7 +608,7 @@ func (b *Batch) Encode(k *Kernel, groups int, bufs ...*Buf) error {
 	x.writes = slices.Grow(x.writes[:0], len(bufs))[:len(bufs)]
 	infos, writes := x.infos, x.writes
 	for i, buf := range bufs {
-		infos[i] = descBufInfo{buffer: uint64(buf.buf), rng: ^uint64(0)}
+		infos[i] = descBufInfo{buffer: uint64(buf.buf), offset: uint64(buf.off), rng: ^uint64(0)}
 		writes[i] = writeDesc{sType: stWriteDescSet, dstSet: uint64(set), dstBind: uint32(i),
 			count: 1, kind: descStorageBuffer, pBuffer: uintptr(up(&infos[i]))}
 	}

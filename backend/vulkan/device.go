@@ -42,6 +42,9 @@ type candidate struct {
 	// maxGroups is VkPhysicalDeviceLimits.maxComputeWorkGroupCount[0]: the
 	// most workgroups one dispatch may ask for along x. See Ctx.MaxGroups.
 	maxGroups uint32
+	// storageAlign is VkPhysicalDeviceLimits.minStorageBufferOffsetAlignment:
+	// a storage binding's offset is a multiple of it. See Buf.View.
+	storageAlign uint64
 }
 
 const noFamily = ^uint32(0)
@@ -161,6 +164,7 @@ func enumerate(inst Instance) ([]candidate, error) {
 		c.uuid, c.uuidOK = readDeviceUUID(p, props.apiVer)
 		c.maxStorage = props.maxStorageBufferRange()
 		c.maxGroups = props.maxComputeWorkGroupCount()
+		c.storageAlign = props.minStorageBufferOffsetAlignment()
 
 		var nq uint32
 		vkGetPhysicalDeviceQueueFamilyProperties(p, &nq, nil)

@@ -360,6 +360,21 @@ type Buf struct {
 	// imported says host is the caller's memory, wrapped by Import rather
 	// than allocated by Metal. -release never owned those pages.
 	imported bool
+	// off is where a view (View) starts in its buffer, in bytes; view says
+	// the buffer is another's, which Free leaves.
+	off  int
+	view bool
+}
+
+// View is n bytes of b from byte off: the same buffer, bound at off
+// (setBuffer:offset:atIndex:). b owns it; the view's Free leaves it.
+func (b *Buf) View(off, n int) (*Buf, error) {
+	if off < 0 || n <= 0 || off+n > len(b.host) || off%4 != 0 {
+		return nil, fmt.Errorf("metal: a view of %d bytes from %d of a buffer of %d", n, off, len(b.host))
+	}
+	v := *b
+	v.off, v.host, v.view = b.off+off, b.host[off:off+n], true
+	return &v, nil
 }
 
 // Imported reports that this buffer ALIASES host memory the caller owns.
@@ -415,6 +430,9 @@ func (c *Ctx) Alloc(n int) (*Buf, error) {
 func (b *Buf) Bytes() []byte { return b.host }
 
 func (b *Buf) Free() {
+	if b.view {
+		return
+	}
 	// The GPU may still reference the buffer through asynchronously committed
 	// work, and an imported buffer's pages were never retained by Metal.
 	if b.c != nil {
@@ -612,13 +630,13 @@ func (b *Batch) Encode(k *Kernel, groups, width int, bufs ...*Buf) error {
 	// per-buffer setter rather than binding a prefix.
 	if len(bufs) <= len(b.ids) {
 		for i, buf := range bufs {
-			b.ids[i], b.offs[i] = buf.id, 0
+			b.ids[i], b.offs[i] = buf.id, uint64(buf.off)
 		}
 		sendBuffers(b.enc, selSetBuffers, &b.ids[0], &b.offs[0],
 			nsRange{0, uint64(len(bufs))})
 	} else {
 		for i, buf := range bufs {
-			sendBuffer(b.enc, selSetBuffer, buf.id, 0, uint64(i))
+			sendBuffer(b.enc, selSetBuffer, buf.id, uint64(buf.off), uint64(i))
 		}
 	}
 	sendDispatch(b.enc, selDispatchTG,
@@ -937,7 +955,7 @@ func (k *Kernel) Launch(groups, width int, bufs ...*Buf) error {
 	}
 	send1id(enc, sel("setComputePipelineState:"), k.pso)
 	for i, b := range bufs {
-		sendBuffer(enc, sel("setBuffer:offset:atIndex:"), b.id, 0, uint64(i))
+		sendBuffer(enc, sel("setBuffer:offset:atIndex:"), b.id, uint64(b.off), uint64(i))
 	}
 	sendDispatch(enc, sel("dispatchThreadgroups:threadsPerThreadgroup:"),
 		mtlSize{uint64(groups), 1, 1}, mtlSize{uint64(width), 1, 1})
@@ -973,7 +991,7 @@ func (c *Ctx) Copy(dst *Buf, dstOff int, src *Buf, srcOff, n int) error {
 		return fmt.Errorf("metal: blitCommandEncoder returned nil")
 	}
 	sendCopy(enc, selCopyBuf,
-		src.id, uint64(srcOff), dst.id, uint64(dstOff), uint64(n))
+		src.id, uint64(src.off+srcOff), dst.id, uint64(dst.off+dstOff), uint64(n))
 	send0(enc, selEndEncoding)
 	send0(cb, selCommit)
 	send0(cb, selWaitDone)
@@ -1011,7 +1029,7 @@ func (c *Ctx) CopyList(ops []CopyOp) error {
 			continue
 		}
 		sendCopy(enc, selCopyBuf,
-			o.Src.id, uint64(o.SrcOff), o.Dst.id, uint64(o.DstOff), uint64(o.N))
+			o.Src.id, uint64(o.Src.off+o.SrcOff), o.Dst.id, uint64(o.Dst.off+o.DstOff), uint64(o.N))
 	}
 	send0(enc, selEndEncoding)
 	send0(cb, selCommit)

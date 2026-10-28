@@ -214,6 +214,8 @@ type Ctx struct {
 	// maxComputeWorkGroupCount[0], or Config.MaxGroups where that is lower.
 	// See dispatch.
 	maxGroups uint32
+	// storageAlign is the device's minStorageBufferOffsetAlignment (Buf.View).
+	storageAlign uint64
 	// dispatches counts vkCmdDispatch recorded; see Dispatches.
 	dispatches atomic.Uint64
 	budget     bool // VK_EXT_memory_budget is supported and enabled
@@ -305,6 +307,7 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 	c.driverVer = pick.driverVer
 	c.maxStorage = pick.maxStorage
 	c.maxGroups = pick.maxGroups
+	c.storageAlign = pick.storageAlign
 	if cfg.MaxGroups > 0 && cfg.MaxGroups < c.maxGroups {
 		c.maxGroups = cfg.MaxGroups
 	}

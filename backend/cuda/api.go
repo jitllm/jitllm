@@ -378,6 +378,8 @@ type Buffer struct {
 	// host is the registered host address of an imported buffer, nil for
 	// one cuMemAlloc made. Free unregisters it and never frees the pages.
 	host unsafe.Pointer
+	// view says the memory is another buffer's (View): Free leaves it.
+	view bool
 }
 
 // Integrated reports whether the device's memory is the host's.
@@ -425,7 +427,20 @@ func (d *Device) Alloc(n int) (*Buffer, error) {
 	return b, nil
 }
 
+// View is n bytes of b from byte off: the same memory at its own device
+// address, bound where a launch binds a buffer. b owns the memory; the
+// view's Free leaves it.
+func (b *Buffer) View(off, n int) (*Buffer, error) {
+	if off < 0 || n <= 0 || uint64(off)+uint64(n) > b.n {
+		return nil, fmt.Errorf("cuda: a view of %d bytes from %d of a buffer of %d", n, off, b.n)
+	}
+	return &Buffer{p: b.p + CUdevptr(off), n: uint64(n), view: true}, nil
+}
+
 func (b *Buffer) Free() {
+	if b.view {
+		return
+	}
 	if b.host != nil {
 		cuMemHostUnregister(b.host)
 		return
