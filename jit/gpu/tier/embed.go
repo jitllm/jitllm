@@ -21,10 +21,12 @@ type embPend struct {
 	ids []int32
 	// pos is the first row's position; composed says the composer gathers
 	// the rows (ComposedEmbed), counted as kind: a decode step's or a
-	// prompt's.
+	// prompt's, from the scratch set geo current when they were promised
+	// (a model of several geometries changes sets between blocks).
 	pos      int
 	composed bool
 	kind     partKind
+	geo      geoKey
 }
 
 // same reports whether x is exactly pe's destination -- the slice the caller
@@ -71,7 +73,7 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 			return false
 		}
 		pe := &g.embBuf
-		pe.dst, pe.ids, pe.pos, pe.composed, pe.kind = dst, append(pe.ids[:0], ids...), pos, true, kind
+		pe.dst, pe.ids, pe.pos, pe.composed, pe.kind, pe.geo = dst, append(pe.ids[:0], ids...), pos, true, kind, g.geoCur
 		g.embPend = pe
 		return true
 	}
@@ -340,6 +342,10 @@ func (g *devTier) materializeLocked(pe *embPend) {
 // (a head on another card than block 0's), whose upload then moves them as
 // the residual crosses between cards. Callers hold mu.
 func (g *devTier) materializeComposed(pe *embPend) {
+	if cur := g.geoCur; pe.geo != cur {
+		g.useGeom(pe.geo)
+		defer g.useGeom(cur)
+	}
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	bs := g.bs
 	if bs == nil || bs.embedServes() != partServes || !g.embedBufs(bs) {

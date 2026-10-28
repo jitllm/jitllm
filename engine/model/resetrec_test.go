@@ -1,22 +1,51 @@
-//go:build linux
-
 package model
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jitllm/jitllm/jit/gpu/tier"
+)
 
 // TestResetClearsTheRecurrentSummary checks Reset makes a hybrid's sequence
 // fresh, forgetting the recurrent summary (a linear block's whole history) as
-// well as positions and pages. The bar is bit equality against a never-used
-// State, since the arithmetic is identical.
+// well as positions and pages, on the CPU and with every block on each test
+// device. The bar is bit equality against a never-used State on the same
+// placement, since the arithmetic is identical.
 func TestResetClearsTheRecurrentSummary(t *testing.T) {
 	m := hybridModelOpt(t, hyOpt{moe: true, layers: 8})
 	defer m.Close()
+	t.Run("cpu", func(t *testing.T) { resetCase(t, m, nil) })
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
+			if err != nil || g == nil {
+				noDevice(t, dev, err)
+			}
+			defer g.Close()
+			resetCase(t, m, g)
+		})
+	}
+}
 
+// resetCase is the gate on g's devices, or on the CPU where g is nil.
+func resetCase(t *testing.T, m *Model, g *tier.GPU) {
+	place := func(s *State) {
+		if g == nil {
+			return
+		}
+		if err := s.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		if s.GPULayers() != m.Cfg.NLayer {
+			t.Fatalf("the device took %d of %d blocks: %s", s.GPULayers(), m.Cfg.NLayer, g.Err())
+		}
+	}
 	fresh := m.NewState(64)
 	defer fresh.Close()
 	if !fresh.recurrent() {
-		t.Skip("this fixture has no recurrent blocks, so the gate proves nothing")
+		t.Fatal("this fixture has no recurrent blocks, so the gate proves nothing")
 	}
+	place(fresh)
 
 	ids := []int32{1, 2, 3, 4, 5}
 	want, err := fresh.Prefill(ids)
@@ -28,6 +57,7 @@ func TestResetClearsTheRecurrentSummary(t *testing.T) {
 	// A second state, dirtied with a DIFFERENT sequence, then reset.
 	used := m.NewState(64)
 	defer used.Close()
+	place(used)
 	if _, err := used.Prefill([]int32{7, 8, 9, 10, 11, 12}); err != nil {
 		t.Fatal(err)
 	}

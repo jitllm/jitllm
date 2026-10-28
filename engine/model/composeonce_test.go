@@ -226,6 +226,9 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 	if err := s2.SetDevice(g); err != nil {
 		t.Fatal(err)
 	}
+	if s2.GPULayers() != nl {
+		t.Fatalf("a second session's placement: the devices took %d of %d blocks: %s", s2.GPULayers(), nl, g.Err())
+	}
 	held("a second session's placement")
 	l, err := s2.Prefill(ids[:100])
 	if err != nil {

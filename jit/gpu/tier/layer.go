@@ -3024,15 +3024,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.LastErr = fmt.Sprintf("block %d: %s", li, r)
 		return false
 	}
-	// The q/k norm is launched when the block carries its weights; the plan's
-	// flag builds the kernels. The model offers the weights by the same
-	// derivation that sets the flag (jlm.QKNormOn), so a block where the two
-	// disagree is a contract violation, refused rather than run without its norm.
-	if attn := !p.NonCausal && (p.Recurrent.Conv == 0 || p.Recurrent.WithAttn); attn && p.QKNorm != (w.QNorm != nil) {
-		g.LastErr = fmt.Sprintf("block %d: the plan's q/k norm is %v and the block offers %d norm "+
-			"weights", li, p.QKNorm, len(w.QNorm))
-		return false
-	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	// A tower block the device could not take leaves nothing behind: the
@@ -3109,6 +3100,17 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			return false
 		}
 		return true
+	}
+	// The q/k norm is launched when the block carries its weights; the plan's
+	// flag builds the kernels. The model offers the weights by the same
+	// derivation that sets the flag (jlm.QKNormOn), so a block where the two
+	// disagree is a contract violation, refused rather than run without its
+	// norm. A block another session placed is offered without them, held
+	// above.
+	if attn := !p.NonCausal && (p.Recurrent.Conv == 0 || p.Recurrent.WithAttn); attn && p.QKNorm != (w.QNorm != nil) {
+		g.LastErr = fmt.Sprintf("block %d: the plan's q/k norm is %v and the block offers %d norm "+
+			"weights", li, p.QKNorm, len(w.QNorm))
+		return false
 	}
 	g.dropGraph()
 	// The KV capacity is decided before the scratch is built: bs.p is the capped

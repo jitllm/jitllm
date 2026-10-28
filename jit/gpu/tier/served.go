@@ -2130,7 +2130,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	// chunk), or at the ragged step's width any sequences': a form each,
 	// both formed here.
 	for _, seqs := range [...]int{1, 0} {
-		if seqs == 0 && (g.stepW <= 0 || bb.rows != g.stepW) {
+		if seqs == 0 && !g.raggedAt(bb) {
 			continue
 		}
 		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.dRows,
@@ -2275,8 +2275,14 @@ func (g *devTier) promptForms(bb *blockScratch) {
 // a prompt's width where the prompt is asked (ComposedPrompt), and the
 // ragged step's (Config.StepRows) where the blocks are.
 func (g *devTier) rowsForms(bb *blockScratch) bool {
-	return g.Composed&ComposedPrompt != 0 ||
-		g.Composed&ComposedBlock != 0 && bb != nil && (g.stepW > 0 && bb.rows == g.stepW || bb == g.reservedFor(ComposedBlock))
+	return g.Composed&ComposedPrompt != 0 || g.raggedAt(bb)
+}
+
+// raggedAt says the composer serves a ragged step's rows, any sequences'
+// mixed, at batched scratch bb's rows: the server's step width, or the
+// reserved width a ragged step runs in (reserveScratch).
+func (g *devTier) raggedAt(bb *blockScratch) bool {
+	return g.Composed&ComposedBlock != 0 && bb != nil && (g.stepW > 0 && bb.rows == g.stepW || bb == g.reservedFor(ComposedBlock))
 }
 
 // keyBound is a block form's key bound for a session of maxSeq positions.
