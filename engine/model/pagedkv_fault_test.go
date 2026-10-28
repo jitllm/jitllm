@@ -81,7 +81,13 @@ func TestPagedKVGateDiscriminates(t *testing.T) {
 				arm = append(arm, tier.WithConfig(func(cf *tier.Config) { cf.StagedDecode = true }))
 			}
 			if c.prefill {
-				arm = append(paged(), tier.WithConfig(func(cf *tier.Config) { cf.PrefillPass = c.pass }))
+				// A pass width is the staged form's: the one-kernel flash forms
+				// (sm_80 on) have no passes, so the arm that clips them keeps
+				// the staged form.
+				arm = append(paged(), tier.WithConfig(func(cf *tier.Config) {
+					cf.PrefillPass = c.pass
+					cf.NoFlashPrefill = c.pass > 0
+				}))
 				// The clean arm first: the same batched configuration must sit
 				// inside the band, or the violation's distance means nothing.
 				clean, st := pagedRun(t, m, seq, prompt, forced, arm)
