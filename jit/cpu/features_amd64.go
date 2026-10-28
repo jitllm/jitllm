@@ -57,6 +57,8 @@ type Features struct {
 	// instruction raises #UD. Every accessor below requires both.
 	OSAVX    bool
 	OSAVX512 bool
+	// DotProd is arm64's FEAT_DotProd: never set on an x86.
+	DotProd bool
 }
 
 // UsableAVX512 reports whether 512-bit vectors and the 32 ZMM registers can

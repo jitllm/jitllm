@@ -144,7 +144,7 @@ func cpuTokens(t *testing.T, m *Model, n int) []int32 {
 		if err != nil {
 			t.Fatal(err)
 		}
-		toks = append(toks, int32(argmaxOf(lg)))
+		toks = append(toks, int32(argmax(lg)))
 	}
 	return toks
 }
@@ -206,7 +206,7 @@ func cpuCompare(want, got [][]float32) (worst float64, agree int) {
 		if math.IsNaN(e) || e > worst || math.IsNaN(worst) {
 			worst = e
 		}
-		if argmaxOf(want[i]) == argmaxOf(got[i]) {
+		if argmax(want[i]) == argmax(got[i]) {
 			agree++
 		}
 	}

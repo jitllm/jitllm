@@ -8,7 +8,6 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // The head and the sampler on the CPU device: where no card holds the head,
@@ -100,7 +99,7 @@ func (s *State) cpuPlaceHead() {
 func (s *State) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none jit.Decline, rows int) {
 	*hf = cpuHeadForm{composed: true}
 	switch {
-	case cpu.CPU().ISA()&cpu.ISATierAVX2 != cpu.ISATierAVX2:
+	case !jit.HostCPULowers():
 		hf.why = jit.DeclineISA
 	case g == nil:
 		hf.why = none
@@ -142,7 +141,7 @@ func (m *Model) formCPUGraph(s *State, g *graph.Graph, rows int) (*cpuBlockForm,
 	}
 	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: 32},
 		Device: composedCPUDevice(workers), Apart: true}
-	return m.cpuFormOf(req, g, rows, true)
+	return m.cpuFormOf(req, g, rows, true, false)
 }
 
 // cpuHeadOn says the composed CPU path is on for this State.

@@ -31,3 +31,6 @@ func a64EmulateDot() bool { return !forceDotEncoding && !hasDotProd() }
 // HasDotProd reports FEAT_DotProd for a hardware report. It decides nothing:
 // without it the quantized kernels widen SDOT (sdotemu.go) and still run.
 func HasDotProd() bool { return hasDotProd() }
+
+// hostDotProd is FEAT_DotProd as Features states it.
+func hostDotProd() bool { return hasDotProd() }

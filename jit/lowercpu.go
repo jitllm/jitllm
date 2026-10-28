@@ -14,9 +14,14 @@ import (
 // shuffle and a permute rather than an unpack.
 type cpuLowering struct {
 	Shuffles bool
+	// Arm64 lowers to arm64 instead (lowerA64).
+	Arm64 bool
 }
 
 func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
+	if l.Arm64 {
+		return lowerA64(k, d)
+	}
 	if k.Seq == nil {
 		return Lowered{}, fmt.Errorf("the x86 lowering of %s: the kernel is not ordered", k.Name)
 	}

@@ -27,13 +27,16 @@ type Features struct {
 	AVX512VL   bool
 	OSAVX      bool
 	OSAVX512   bool
+	// DotProd is arm64's FEAT_DotProd.
+	DotProd bool
 }
 
 func (f Features) UsableAVX512() bool { return false }
 func (f Features) UsableAVX2() bool   { return false }
 
-// CPU reports an empty set: this is not an x86.
-func CPU() Features { return Features{} }
+// CPU reports no x86 unit: this is not an x86. On arm64 it states
+// FEAT_DotProd.
+func CPU() Features { return Features{DotProd: hostDotProd()} }
 
 // HostTier is TierNEON on arm64, whose A64 emitters answer to the same names
 // the AVX2 tier's do, and TierNone on an architecture with no emitter.

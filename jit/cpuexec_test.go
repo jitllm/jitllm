@@ -59,6 +59,9 @@ func TestComposedCPUMatVec(t *testing.T) {
 			if vnni := uint64(x86.ISAVNNI); host&vnni != 0 {
 				arms = append(arms, cpuArm{"int8 without vnni", withCPUInt8(), host &^ vnni, false})
 			}
+			if dp := uint64(cpu.ISADotProd); host&dp != 0 {
+				arms = append(arms, cpuArm{"int8 without dotprod", withCPUInt8(), host &^ dp, false})
+			}
 			for _, arm := range arms {
 				for _, at := range []struct{ tokens, slots int }{{1, 1}, {4, 1}, {1, 6}} {
 					if rows != 64 && at.slots == 1 {

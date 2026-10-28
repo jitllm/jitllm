@@ -140,8 +140,10 @@ func (f *cpuBlockForm) close() {
 type cpuForms struct {
 	mu  sync.Mutex
 	reg *jit.Registry
-	m   map[jit.Key]*cpuBlockForm
-	err map[jit.Key]error
+	// reg32 is reg with histories kept at f32 (jit.Registry.WithoutHalves).
+	reg32 *jit.Registry
+	m     map[jit.Key]*cpuBlockForm
+	err   map[jit.Key]error
 }
 
 func (c *cpuForms) close() {
@@ -784,6 +786,12 @@ func (s *State) cpuCall(b *cpuBound, c *cpuCode) {
 		}
 		return
 	}
+	// A prefill's pool may be wider than the decode pool the words were
+	// sized for at placement (the P and E cores'): a word block for each of
+	// its workers.
+	if w := s.jit.Workers(); len(s.cpu.args) < w {
+		s.cpu.args = append(s.cpu.args, make([]cpu.Args, w-len(s.cpu.args))...)
+	}
 	r := &s.cpu.run
 	r.s, r.b, r.c, r.live = s, b, c, live
 	s.jit.ParallelWorkers(n, 1, r.fn)
@@ -1014,7 +1022,7 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		return s.cpuTowerWhy(g)
 	}
 	switch {
-	case cpu.CPU().ISA()&cpu.ISATierAVX2 != cpu.ISATierAVX2:
+	case !jit.HostCPULowers():
 		return jit.DeclineISA
 	case g == nil:
 		return jit.DeclineNoGraph
@@ -1030,8 +1038,9 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		return jit.DeclineLatent
 	case s.kvl.headMajor:
 		return jit.DeclineHeadMajor
-	case s.kvl.fmt != cpu.KVF16:
-		// The CPU's profile keeps a history binary16 itself (jit.Halves).
+	case s.kvl.fmt != cpu.KVF16 && s.kvl.fmt != cpu.KVF32:
+		// The CPU's profile keeps a history binary16 itself (jit.Halves),
+		// or at f32 without that pass.
 		return jit.DeclineKVFormat
 	case pg.p > 0 && pg.arena == nil:
 		return jit.DeclinePageOut
@@ -1143,21 +1152,26 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	req := jit.Request{Graph: &gr, Formats: formats, Strides: m.cpuStrides(li, g),
 		Step:   jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: 32, Seqs: max(s.nseq, 1)},
 		Device: composedCPUDevice(workers)}
-	return m.cpuFormOf(req, &gr, rows, false)
+	return m.cpuFormOf(req, &gr, rows, false, s.kvl.fmt == cpu.KVF32)
 }
 
 // cpuFormOf is req's form on the CPU, mapped once for the model by its Key.
-func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart bool) (*cpuBlockForm, error) {
+func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart, f32 bool) (*cpuBlockForm, error) {
 	c := &m.cpuForms
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.reg == nil {
 		c.reg = jit.Default()
+		c.reg32 = c.reg.WithoutHalves(jit.DeviceCPU)
 	}
 	if c.m == nil {
 		c.m, c.err = map[jit.Key]*cpuBlockForm{}, map[jit.Key]error{}
 	}
-	key, codes, err := c.reg.Form(req)
+	reg := c.reg
+	if f32 {
+		reg = c.reg32
+	}
+	key, codes, err := reg.Form(req)
 	if err != nil {
 		return nil, err
 	}

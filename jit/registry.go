@@ -3,6 +3,8 @@ package jit
 import (
 	"fmt"
 	"maps"
+	"runtime"
+	"slices"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -39,8 +41,8 @@ type Device struct {
 	// Shared, where known, is the bytes of workgroup memory a unit holds for
 	// the workgroups resident on it.
 	Shared int
-	// ISA, on a CPU, is the instruction sets it executes, as jit/x86 names
-	// them (x86.ISA's bits).
+	// ISA, on a CPU, is the instruction sets it executes, as jit/cpu names
+	// them (cpu.ISA's bits): an x86's, or on arm64 FEAT_DotProd.
 	ISA uint64
 	// ExactDiv is a device whose float division is correctly rounded, as
 	// IEEE 754 states it: a CPU's, PTX's div.rn. The int8 form's scale and
@@ -151,6 +153,21 @@ func (r *Registry) WithoutInt8(kind DeviceKind) *Registry {
 	return &fr
 }
 
+// WithoutHalves is r with device kind's histories kept at f32, as a State
+// holding an f32 cache reads them: its profile without the Halves pass. It
+// shares r's cache; the profile is in the Key.
+func (r *Registry) WithoutHalves(kind DeviceKind) *Registry {
+	fr := *r
+	fr.Profiles = maps.Clone(r.Profiles)
+	p := fr.Profiles[kind]
+	p.Passes = slices.DeleteFunc(slices.Clone(p.Passes), func(x Pass) bool {
+		_, ok := x.(Halves)
+		return ok
+	})
+	fr.Profiles[kind] = p
+	return &fr
+}
+
 // PoisonWorkgroupMemory has the GPU lowering poison every workgroup array
 // at kernel start: a gate's choice, never a shipping one.
 func (r *Registry) PoisonWorkgroupMemory() {
@@ -162,7 +179,7 @@ func Default() *Registry {
 	return &Registry{
 		Decompositions: decompositions(),
 		Profiles:       map[DeviceKind]Profile{DeviceGPU: gpuProfile(), DeviceCPU: cpuProfile()},
-		Lowerings:      map[DeviceKind]Lowering{DeviceGPU: gpuLowering{}, DeviceCPU: cpuLowering{Shuffles: true}},
+		Lowerings:      map[DeviceKind]Lowering{DeviceGPU: gpuLowering{}, DeviceCPU: cpuLowering{Shuffles: true, Arm64: runtime.GOARCH == "arm64"}},
 		cache:          newFormCache(),
 	}
 }

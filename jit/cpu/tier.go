@@ -77,6 +77,9 @@ const (
 	// ISABMI2 is SHRX and SHLX: not in the AVX2 tier's floor, so a CPU
 	// with AVX2 and without BMI2 keeps the AVX2 tier's kernels.
 	ISABMI2
+	// ISADotProd is arm64's FEAT_DotProd, SDOT: the one bit of the set an
+	// arm64 host states.
+	ISADotProd
 )
 
 // ISATierSSE is the floor of the SSE tier: what every SSE-tier kernel may
@@ -91,7 +94,7 @@ const ISATierAVX2 = ISAAVX2 | ISAFMA | ISAF16C
 
 var isaNames = [...]string{
 	"sse2", "sse3", "ssse3", "sse4.1", "sse4.2", "popcnt",
-	"avx2", "fma", "f16c", "avx-vnni", "bmi2",
+	"avx2", "fma", "f16c", "avx-vnni", "bmi2", "dotprod",
 }
 
 // Names lists the extensions in the set, in a fixed order.
@@ -136,6 +139,7 @@ func (f Features) ISA() ISA {
 	set(avx && f.F16C, ISAF16C)
 	set(avx && f.AVXVNNI, ISAVNNI)
 	set(f.BMI2, ISABMI2)
+	set(f.DotProd, ISADotProd)
 	return s
 }
 

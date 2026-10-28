@@ -82,7 +82,7 @@ var declineNames = [NumDeclines]string{
 	DeclineFeeds:         "a block graph reading more than the residual and per-layer inputs the device holds",
 	DeclineRecurrent:     "a recurrent state the form does not step (a tail or a variant it does not hold, none held, or the CPU's several rows)",
 	DeclineHistoryWindow: "a windowed layer's history",
-	DeclineKVFormat:      "a history not binary16 (f32 or q8_0)",
+	DeclineKVFormat:      "a history neither binary16 nor f32 (q8_0)",
 	DeclineHeadMajor:     "a head-major history",
 	DeclineBatch:         "a step of several rows",
 	DeclinePageOut:       "a history page outside the layer's arena",
