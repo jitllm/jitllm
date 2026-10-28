@@ -140,6 +140,27 @@ func TestGemma3nTowerMatchesTransformers(t *testing.T) {
 	if math.IsNaN(clean) || clean > towerBound {
 		t.Fatalf("the rows are not transformers': NMSE %.3e (bound %.0e)", clean, towerBound)
 	}
+	// The CPU device's composed arm: every block the front end states run
+	// by the composer (frontconv.go), held to transformers' at the same
+	// bound, its blocks counted.
+	cm, _ := openGemma3nV(t, WithComposedCPU(true))
+	defer cm.Close()
+	cs := cm.Tower().testState()
+	px, err := cs.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ce, err := cs.Encode(px)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served, declined := cs.CPUBlockSteps()
+	cn, _ := nmse32(g.Image.EmbdA8, ce)
+	cs.Close()
+	t.Logf("composed CPU: %d block runs served, declines %v; NMSE %.3e against transformers", served, nonZero(declined[:]), cn)
+	if n := coveredTower(cm); served != n || n == 0 || math.IsNaN(cn) || cn > towerBound {
+		t.Fatalf("the composed CPU's rows are not transformers': %d blocks served, NMSE %.3e (bound %.0e)", served, cn, towerBound)
+	}
 	// Each piece of the family's taken out moves the rows past the bound and
 	// ten times the clean arm. (The embedder's sqrt(NEmbd) before its norm is
 	// invisible but for the norm's epsilon, so no gate can see it; it is the

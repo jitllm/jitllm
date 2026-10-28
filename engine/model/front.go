@@ -44,6 +44,7 @@ const (
 	UncoveredPooling
 	UncoveredEmbedRows
 	UncoveredClamp
+	UncoveredGridAttend
 	UncoveredUnbound
 	UncoveredUnverified
 	numUncovered
@@ -67,6 +68,7 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredPooling:    "a pooled head (an embedding model's)",
 	UncoveredEmbedRows:  "input rows beyond the token's row, a scale and a position table",
 	UncoveredClamp:      "linears clamped to stored bounds",
+	UncoveredGridAttend: "attention over keys and values of another grid than its queries'",
 	UncoveredUnbound:    "stored tensors its graph does not bind",
 	UncoveredUnverified: "a graph that does not verify",
 }

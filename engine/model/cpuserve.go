@@ -327,6 +327,9 @@ const (
 	cpuFaultPicks
 	// cpuFaultWeight drops each row's first pick's weight (weightsOf).
 	cpuFaultWeight
+	// cpuFaultFilterT binds a convolutional block's depthwise filters with
+	// their taps' rows and columns swapped.
+	cpuFaultFilterT
 )
 
 // A bidirectional run's passes (cpuState.stashing).
@@ -1308,6 +1311,10 @@ func (s *State) cpuRelocated(li int, onCPU bool) {
 func (s *State) cpuCompose(li int) {
 	cb := &cpuBlock{}
 	s.cpu.blocks[li] = cb
+	if s.m.layers[li].mn != nil {
+		s.cpuComposeConv(li, cb)
+		return
+	}
 	cb.why = s.cpuWhy(li)
 	if cb.why != jit.DeclineServes {
 		return
@@ -1513,7 +1520,7 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 		Step:    jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: 32, Seqs: max(s.nseq, 1)},
 		History: jit.History{ValuesInKeys: pg.latent},
 		Device:  composedCPUDevice(workers)}
-	fm, err := m.cpuFormOf(req, &gr, rows, false, s.kvl.fmt == cpu.KVF32)
+	fm, err := m.cpuFormOf(req, &gr, rows, false, false, s.kvl.fmt == cpu.KVF32)
 	if err == nil && readsPlanes(g) && !m.cpuPlanes(li) {
 		return nil, cpuDeclineError{jit.DeclineTable, fmt.Errorf("block %d turns by a rotary with no planes", li)}
 	}
@@ -1547,8 +1554,9 @@ func (m *Model) cpuPlanes(li int) bool {
 	return len(c.planes[li]) > 0
 }
 
-// cpuFormOf is req's form on the CPU, mapped once for the model by its Key.
-func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart, f32 bool) (*cpuBlockForm, error) {
+// cpuFormOf is req's form on the CPU, mapped once for the model by its Key;
+// whole is buildCPUForm's.
+func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart, whole, f32 bool) (*cpuBlockForm, error) {
 	c := &m.cpuForms
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1573,7 +1581,7 @@ func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart, f32
 	if err, ok := c.err[key]; ok {
 		return nil, err
 	}
-	fm, err := buildCPUForm(gr, codes, rows, apart)
+	fm, err := buildCPUForm(gr, codes, rows, apart, whole)
 	if err != nil {
 		c.err[key] = err
 		return nil, err
@@ -1585,7 +1593,9 @@ func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart, f32
 
 // buildCPUForm maps codes and plans each call word's source: the graph's
 // input and output the residual, or with apart each an io place of its own.
-func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpuBlockForm, error) {
+// A whole form is run at its rows and no fewer (a convolutional block's,
+// over its grid), so its kernels need not be held to a call's rows.
+func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool) (*cpuBlockForm, error) {
 	if apart && len(gr.In)+len(gr.Out) > cpuIO {
 		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), cpuIO)
 	}
@@ -1627,7 +1637,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 		for _, n := range c.Calls {
 			cc.n *= n
 		}
-		if rows > 1 && !c.Scan {
+		if rows > 1 && !c.Scan && !whole {
 			// A form of several rows runs the units of its calls' leading
 			// axis the call's rows reach: a kernel not held to them would
 			// read and write rows past the call's. A scan's calls are its
@@ -2283,6 +2293,14 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 	if s.enc != nil {
 		return s.m.encRoleWeight(li, r)
 	}
+	if l.mn != nil {
+		if s.cpu.fault == cpuFaultFilterT {
+			if t := l.mn.filterT(r); t != nil {
+				return t
+			}
+		}
+		return convRoleWeight(l, r)
+	}
 	switch r {
 	case jlm.RoleAttnQ:
 		return &l.wq
@@ -2454,6 +2472,9 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 	}
 	if s.enc != nil {
 		return s.m.encRoleVector(li, r)
+	}
+	if l.mn != nil {
+		return convRoleVector(l, r)
 	}
 	switch r {
 	case jlm.RoleAttnNorm:

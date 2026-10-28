@@ -73,6 +73,23 @@ func TestGemma3nRealMatchesTransformers(t *testing.T) {
 	if !(bn > 10*nm) {
 		t.Errorf("the real tower with symmetric padding reads %.3e against a clean %.3e: the gate cannot see it", bn, nm)
 	}
+	// The CPU device's composed arm on the real weights (frontconv.go).
+	cm, err := Open(jlmOfPair(t, text, proj), noTune, WithKVF16(false), WithComposedCPU(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cm.Close()
+	cs := cm.Tower().testState()
+	_, crows := encode(cs)
+	served, declined := cs.CPUBlockSteps()
+	cs.Close()
+	cn, _ := nmseOf(crows, rows)
+	ct, _ := nmse32(want, crows)
+	t.Logf("composed CPU: %d block runs served, declines %v; NMSE %.3e against main, %.3e against transformers",
+		served, nonZero(declined[:]), cn, ct)
+	if n := coveredTower(cm); served != n || n == 0 || math.IsNaN(cn) || cn > 1e-2 || ct > 3e-2 {
+		t.Fatalf("composed CPU: %d of %d stated blocks served, NMSE %.3e against main, %.3e against transformers", served, n, cn, ct)
+	}
 	ran := 0
 	for _, spec := range stepDevices() {
 		gpu, err := tier.OpenWith(tier.WithDevices(spec))

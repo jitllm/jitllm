@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
 )
 
@@ -236,6 +237,25 @@ func (s *State) mnConv(dst, src []float32, h, w, c, k, st int, wt tensor) error 
 	return nil
 }
 
+// mnHostRun runs block li of the tower on the CPU: the composer's form
+// where the composed CPU path is on and serves it, counted served or
+// declined by name, main's runner otherwise.
+func (s *State) mnHostRun(li int) error {
+	if !s.m.opt.composedCPU || s.cpu.args == nil {
+		return s.mnBlockRun(li)
+	}
+	if err := s.m.pageIn(li); err != nil {
+		return err
+	}
+	why := s.cpuConvRun(li)
+	if why == jit.DeclineServes {
+		s.cpu.served++
+		return nil
+	}
+	s.cpu.declined[why]++
+	return s.mnBlockRun(li)
+}
+
 // mnBlockRun runs block li of the tower on the host: the encode's activation
 // in, the block's output in the other half.
 func (s *State) mnBlockRun(li int) error {
@@ -335,12 +355,20 @@ func (s *State) mnBlockRun(li int) error {
 	if b.residual && mnFault != mnFaultNoResidual {
 		s.addInto(y, x)
 	}
+	s.mnHandOver(li, y)
+	return nil
+}
+
+// mnHandOver makes block li's output y, in the activation's other half,
+// the encode's activation, and keeps it where the fusion adapter reads it.
+func (s *State) mnHandOver(li int, y []float32) {
+	v := s.vis
+	r, b := v.mn, s.m.layers[li].mn
 	r.cur = 1 - r.cur
 	r.h, r.w, r.c = b.hout, b.wout, b.cout
 	if li-s.lo == v.t.mn.tapA {
-		copy(r.tapA[:nout*b.cout], y)
+		copy(r.tapA[:b.hout*b.wout*b.cout], y)
 	}
-	return nil
 }
 
 // mnDevRun runs blocks [lo, hi) of the tower on the device: the encode's

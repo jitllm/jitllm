@@ -81,6 +81,11 @@ type mnBlock struct {
 	vDown, vDownNorm []float32
 	kvK, hkv, wkv    int
 	residual         bool
+	// filt is the depthwise filters as weights (filters), for the
+	// composer's forms: dwStart, dwMid, kDown and vDown.
+	filt [4]tensor
+	// filtT is filt transposed, made at a gate's violation (filterT).
+	filtT [4]tensor
 }
 
 // mnTower is the tower's own pieces beside its blocks: the stem, the fusion
@@ -337,6 +342,7 @@ func (t *Tower) loadGemma3nV(c0 *jlm.File, get func(jlm.Role, int32) (tensor, er
 			}
 			b.residual = b.hout == h && b.wout == w && b.cout == ch
 		}
+		b.filters()
 		l.mn = b
 		h, w, ch = b.hout, b.wout, b.cout
 		mt.dw = append(mt.dw, b.dwShapes()...)

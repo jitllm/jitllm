@@ -1489,7 +1489,7 @@ func (s *State) encodeBlocks(max int) (bool, error) {
 				}
 				v.devBlocks += int64(hi - li)
 			} else {
-				if err := s.mnBlockRun(li); err != nil {
+				if err := s.mnHostRun(li); err != nil {
 					return false, err
 				}
 				v.hostBlocks++

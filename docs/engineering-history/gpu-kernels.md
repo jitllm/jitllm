@@ -10880,3 +10880,31 @@ row where the composer's reads two.
   the 64-bit reference word for word; the reset ignored parts 94 windows
   and a head dropped 240. A form of 40 rows wrote past its outputs on the
   CPU (the runner's guard words): open, the op is gated at one row.
+- MobileNet-V5's edge and inverted residual blocks are stated as ops
+  (engine/model/frontconv.go), decided by the tensors a block holds and the
+  geometry the container states for it, with no family name. A full
+  convolution is OpUnfold (each output row's window of rows, tap-major,
+  zero past the grid and to a whole quantization block) and OpMatVec over
+  it. A depthwise filter is OpConv. The matrix products, RMSNorms, stated
+  GELU and residual add over a strided grid decompose at that grid's rows,
+  and any other op over such a grid is still refused by name.
+  TestComposedCPUGridRows and TestComposedGPUGridRows hold the chain to
+  the oracle on 8 grids: the CPU within 1e-10, ptx and spirv on a V100
+  within 1e-10, and packed Q8_0 and Q4_K products in both the float and
+  the int8 forms. Each op decomposed at the input's rows instead of the
+  grid's is seen, in the chain or alone. TestComposedCPUUnfold and
+  TestComposedGPUUnfold hold the full convolution to oracle.Conv32. The
+  affine pass's merges had left a kernel's TileBase, TileLast and
+  TileFirst on the merged node, and compaction kept it alive. A tile whose
+  last row equalled another constant (a nine-row grid: 8) then merged
+  forever, and that GPU form never returned. On the CPU device, each
+  stated block is composed once at placement at its own grid's rows, as a
+  form run whole (no row-capacity calls). It runs over mnRun's two
+  activation halves, the input in one and the output into the other.
+  Gemma 3n's fixture: 51 of 84 blocks served. After block 0 the NMSE
+  against main is 9.8e-14, the worst block 2.1e-4, and the encode 1.8e-4.
+  A warm encode makes 0 engine allocations. The filters bound transposed
+  read 2.2e-2. The 33 attention blocks (keys and values a stride-2
+  downsample of the queries' grid) are declined by name
+  (UncoveredGridAttend). On the cards the blocks still run the tier's
+  convolution programs.

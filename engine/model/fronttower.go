@@ -97,7 +97,8 @@ func (m *Model) towerUncovered(li int) (Uncovered, error) {
 	t, l := m.tower, &m.layers[li]
 	switch {
 	case l.mn != nil:
-		return UncoveredKind, nil
+		_, why, err := m.convGraph(li)
+		return why, err
 	case l.clamp != nil && len(l.clamp) != 4*clampSlots:
 		return UncoveredClamp, nil
 	}
@@ -173,6 +174,9 @@ func towerRopeCycle(r nn.Rope) (a graph.Attrs, ok bool) {
 
 // towerGraph is tower block li's graph (li in the model's block space).
 func (m *Model) towerGraph(li int) (*graph.Graph, Uncovered, error) {
+	if m.layers[li].mn != nil {
+		return m.convGraph(li)
+	}
 	if why, err := m.towerUncovered(li); why != Covered {
 		return nil, why, err
 	}
