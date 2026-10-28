@@ -942,3 +942,53 @@ func TestComposedCPUHeadSheets(t *testing.T) {
 		}
 	}
 }
+
+// TestComposedCPUReduceTree holds a pairwise reduce (graph.OrderTree, a
+// stated activation's mean) to its definition: each level combines element
+// i with element i+w/2, to the bit, nothing written past the output. The violation: values whose
+// sequential sum differs from the pairwise one, which the comparison must
+// tell apart.
+func TestComposedCPUReduceTree(t *testing.T) {
+	tree := func(xs []float32, fn func(a, b float32) float32) float32 {
+		v := slices.Clone(xs)
+		for w := len(v); w > 1; w /= 2 {
+			for i := range w / 2 {
+				v[i] = fn(v[i], v[i+w/2])
+			}
+		}
+		return v[0]
+	}
+	run := func(xs []float32, fn graph.MapFn) float32 {
+		b := graph.New()
+		x := b.In("x", len(xs))
+		y := b.Emit(graph.OpReduce, []graph.ValueID{x}, []graph.Result{{Name: "y", Width: 1}}, nil,
+			graph.Attrs{Fn: fn, Order: graph.OrderTree}, nil, nil)[0]
+		b.Out(y)
+		row, back := guarded(1)
+		cpuRun(t, b.G, nil, map[graph.ValueID][]float32{x: xs, y: row})
+		checkGuard(t, "the pairwise reduce", back, 1)
+		return row[0]
+	}
+	rng := rand.New(rand.NewSource(7))
+	for _, n := range []int{1, 2, 4, 8, 16, 64, 256} {
+		xs := make([]float32, n)
+		for i := range xs {
+			xs[i] = float32(rng.NormFloat64()) * float32(math.Pow(10, float64(rng.Intn(6))))
+		}
+		if got, want := run(xs, graph.MapAdd), tree(xs, func(a, b float32) float32 { return a + b }); got != want {
+			t.Fatalf("a pairwise sum of %d is %g, want %g", n, got, want)
+		}
+		if got, want := run(xs, graph.MapMax), tree(xs, func(a, b float32) float32 { return max(a, b) }); got != want {
+			t.Fatalf("a pairwise max of %d is %g, want %g", n, got, want)
+		}
+	}
+	xs := []float32{1e8, 1, -1e8, 1}
+	seq := float32(0)
+	for _, v := range xs {
+		seq += v
+	}
+	got := run(xs, graph.MapAdd)
+	if want := tree(xs, func(a, b float32) float32 { return a + b }); got != want || got == seq {
+		t.Fatalf("the pairwise sum of %v is %g: pairwise %g, in order %g", xs, got, want, seq)
+	}
+}

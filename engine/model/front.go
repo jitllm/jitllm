@@ -331,7 +331,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredGeometry
 	case c.IdxHeads != 0:
 		return UncoveredSelect
-	case c.Streams() > 1:
+	case c.Streams() > 1 && !c.predictsStreams():
 		return UncoveredStreams
 	case c.RopeAt(li) && !m.ropeAxesStated(m.ropeAt(li)):
 		return UncoveredRopeAxes
@@ -350,7 +350,7 @@ func (m *Model) uncovered(li int) Uncovered {
 func (m *Model) uncoveredRest(li int) Uncovered {
 	c := m.Cfg
 	switch {
-	case c.Streams() > 1:
+	case c.Streams() > 1 && !c.predictsStreams():
 		return UncoveredStreams
 	case c.NonCausal:
 		return UncoveredNonCausal
@@ -516,12 +516,28 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		return y
 	}
 	x := b.In("x", d)
+	// A block over several residual streams reads each as an input of its
+	// own and runs on stream 0's prediction (frontstreams.go).
+	var st *streams
+	if c.predictsStreams() {
+		st = &streams{in: []graph.ValueID{x}}
+		for k := 1; k < c.PredStreams; k++ {
+			st.in = append(st.in, b.In(fmt.Sprintf("x.%d", k), d))
+		}
+	}
 	// A model of per-layer embeddings gives each block the row's every
 	// layer's input (the input rows' second output): the block reads its own.
 	if c.PLEDim != 0 {
 		b.In("ple", c.pleWidth())
 	}
+	if st != nil {
+		st.pred = m.predicted(b, f, st.in)
+		x = st.pred[0]
+	}
 	n := preNorm(x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
+	if st != nil && has(jlm.RoleLowRankIn) {
+		st.side = m.lowRank(b, f, n)
+	}
 	var mix graph.ValueID
 	var err error
 	switch c.mixerAt(li) {
@@ -542,7 +558,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	var side []graph.ValueID
 	if c.mixerAt(li) != mixNone {
 		if !c.LayerKind(li).Attends() {
-			return m.blockRest(b, f, li, x, n, mix, jlm.RoleSSMOut, preNorm, norm, resid, matvec, stored, has)
+			return m.blockRest(b, f, li, x, n, mix, jlm.RoleSSMOut, preNorm, norm, resid, matvec, stored, has, st)
 		}
 		side = append(side, matvec(mix, jlm.RoleSSMOut, d))
 	}
@@ -565,7 +581,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		if err != nil {
 			return nil, UncoveredUnverified, err
 		}
-		return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has, side...)
+		return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has, st, side...)
 	}
 	// A block that stores no v projection reads k's as its value, before
 	// k's norm and rotary.
@@ -690,7 +706,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)
 	}
-	return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has, side...)
+	return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has, st, side...)
 }
 
 // blockRest is block li's graph after its mixer's output att: the norm
@@ -700,7 +716,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att graph.ValueID, out jlm.Role,
 	preNorm func(graph.ValueID, jlm.Role, jlm.Role) graph.ValueID, norm func(graph.ValueID, jlm.Role) graph.ValueID,
 	resid func(graph.ValueID, graph.ValueID) graph.ValueID, matvec func(graph.ValueID, jlm.Role, int, ...jlm.Role) graph.ValueID,
-	stored func(jlm.Role) []jlm.Role, has func(jlm.Role) bool, side ...graph.ValueID) (*graph.Graph, Uncovered, error) {
+	stored func(jlm.Role) []jlm.Role, has func(jlm.Role) bool, st *streams, side ...graph.ValueID) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	d, nffn := c.NEmbd, c.NFFNAt(li)
 	att = norm(att, jlm.RoleAttnSubNorm)
@@ -709,7 +725,13 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		proj = b.Add(proj, s)
 	}
 	x2 := resid(x, norm(proj, jlm.RolePostAttnNorm))
+	if st != nil && st.side != 0 {
+		x2 = mapRow(b, "joined", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt2}, nil, d, b.Add(x2, st.side))
+	}
 	if !c.MoEAt(li) && !has(jlm.RoleFFNUp) && !has(jlm.RoleFFNDown) {
+		if st != nil {
+			return m.corrected(b, f, li, st, x2, has)
+		}
 		y, why, err := m.perLayer(b, f, li, x2)
 		if err != nil {
 			return nil, why, err
@@ -747,6 +769,9 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		h = norm(h, jlm.RoleFFNSubNorm)
 		ffn = matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
 	}
+	if st != nil {
+		return m.corrected(b, f, li, st, resid(x2, norm(ffn, jlm.RolePostFFNNorm)), has)
+	}
 	y, why, err := m.perLayer(b, f, li, resid(x2, norm(ffn, jlm.RolePostFFNNorm)))
 	if err != nil {
 		return nil, why, err
@@ -760,20 +785,30 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 // normed projection of the block's stated activation over its gate of y and
 // the block's slice of the inputs. y itself where it reads none.
 func (m *Model) perLayer(b *graph.Builder, f graph.Facts, li int, y graph.ValueID) (graph.ValueID, Uncovered, error) {
-	c := m.Cfg
-	if len(b.G.In) < 2 {
+	if m.Cfg.PLEDim == 0 {
 		return y, Covered, nil
 	}
+	o, why, err := m.perLayerOf(b, f, li, y)
+	if err != nil {
+		return 0, why, err
+	}
+	return b.Add(y, o), Covered, nil
+}
+
+// perLayerOf is the normed projection of block li's stated activation over
+// its gate of g and the block's slice of the row's per-layer inputs (the
+// graph's last input).
+func (m *Model) perLayerOf(b *graph.Builder, f graph.Facts, li int, g graph.ValueID) (graph.ValueID, Uncovered, error) {
+	c := m.Cfg
 	p := c.PLEDim
-	gate := b.MatVec(y, jlm.RolePLEGate, p)
-	in := b.Emit(graph.OpSlice, []graph.ValueID{b.G.In[1]}, []graph.Result{{Name: "ple.in", Width: p}}, nil,
+	gate := b.MatVec(g, jlm.RolePLEGate, p)
+	in := b.Emit(graph.OpSlice, []graph.ValueID{b.G.In[len(b.G.In)-1]}, []graph.Result{{Name: "ple.in", Width: p}}, nil,
 		graph.Attrs{Offset: li * p, Width: p}, nil, nil)[0]
-	h, err := b.Stated("ple.act", m.container.Config().ActAt(li), []graph.ValueID{gate, in}, p, f)
+	h, err := b.Stated("ple.act", m.plainActAt(li), []graph.ValueID{gate, in}, p, f)
 	if err != nil {
 		return 0, UncoveredAct, fmt.Errorf("the per-layer input's stated activation: %w", err)
 	}
-	o := b.Norm(b.MatVec(h, jlm.RolePLEProj, c.NEmbd), jlm.RolePLEPostNorm, c.RMSEps)
-	return b.Add(y, o), Covered, nil
+	return b.Norm(b.MatVec(h, jlm.RolePLEProj, c.NEmbd), jlm.RolePLEPostNorm, c.RMSEps), Covered, nil
 }
 
 // outScaled is the block's output y times the scalar the block stores

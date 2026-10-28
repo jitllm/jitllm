@@ -60,8 +60,8 @@ const (
 	// input (the head's, the sampler's): the bound buffer of that place,
 	// the inputs' then the outputs' (cpuBound.io).
 	cpuArgIO
-	// cpuArgSide is a block graph's second input, the rows' per-layer
-	// inputs (cpuBound.side).
+	// cpuArgSide is a block graph's input past its residual streams, the
+	// rows' per-layer inputs (cpuBound.side).
 	cpuArgSide
 )
 
@@ -77,6 +77,8 @@ type cpuArg struct {
 	off    int
 	elem   int
 	val    uint64
+	// stream is the residual stream a cpuArgX address is in.
+	stream int
 	// per is the elements the address moves a unit of each call
 	// coordinate (jit.CallArg.Per), moves whether any does.
 	per   [2]int
@@ -84,9 +86,10 @@ type cpuArg struct {
 }
 
 // cpuCode is one kernel of a form, mapped, and its call words; reads and
-// writes say it reads the block's input and writes its output.
+// writes are the residual streams whose input it reads and whose output it
+// writes, a bit a stream.
 type cpuCode struct {
-	reads, writes bool
+	reads, writes uint64
 	code          *cpu.Code
 	args          []cpuArg
 	calls         []int
@@ -202,9 +205,11 @@ type cpuFault uint8
 
 const (
 	cpuFaultNone cpuFault = iota
-	// cpuFaultPage points the history's first page at the arena's last
-	// slot once the first page is full: its positions read another page's
-	// (or nothing). A table permuted from the first step only renames the
+	// cpuFaultPage points the history's first page at the last slot every
+	// layer's arena holds once the first page is full: its positions read
+	// another page's (or nothing). The table is every layer's, so a slot one
+	// arena holds and another does not (a sliding layer's beside a global
+	// one's) would write past the smaller. A table permuted from the first step only renames the
 	// pages, and keys carry their rotation, so a swap of written pages
 	// only reorders them.
 	cpuFaultPage
@@ -232,7 +237,11 @@ type cpuBlock struct {
 	graph *graph.Graph
 	f     *cpuBlockForm
 	rows  *cpuBlockForm
-	why   jit.Decline
+	// sideOff is where the block's slice of the rows' per-layer inputs
+	// starts in each row: the call binds the side input there, so blocks
+	// that differ by their slice alone share a form.
+	sideOff int
+	why     jit.Decline
 	// rowsWhy is why the rows' form is not served, where it is not.
 	rowsWhy jit.Decline
 }
@@ -254,15 +263,17 @@ type cpuRegion struct {
 // x, their rotary tables cs and their descriptors rows, their history the
 // layer's pages kv through the page table pages.
 type cpuBound struct {
-	li    int
-	l     *layer
-	own   [][]uint32
-	cs    []float32
-	x     []float32
-	rows  []uint32
-	n     int
-	kv    *kvPages
-	pages []uint32
+	li  int
+	l   *layer
+	own [][]uint32
+	cs  []float32
+	x   []float32
+	// stride is the elements from one residual stream of x to the next.
+	stride int
+	rows   []uint32
+	n      int
+	kv     *kvPages
+	pages  []uint32
 	// recLi is the block whose recurrent states a linear block's step binds
 	// and recOf the State that holds them.
 	recLi int
@@ -300,8 +311,11 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 		}
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.x, rows: s.cpu.rows[:], n: 1, kv: pg, pages: s.cpu.pages,
+	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: s.cpu.pages,
 		recLi: s.cpuRecLi(li), recOf: s, side: s.ple}
+	if b.side != nil {
+		b.side = b.side[cb.sideOff:]
+	}
 	if why := s.cpuWeights(cb.f, li, l); why != jit.DeclineServes {
 		return why, nil
 	}
@@ -310,7 +324,7 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 	s.cpu.call[0] = 1
 	switch s.cpu.fault {
 	case cpuFaultPage:
-		if n := len(s.cpu.pages); n > 2 && pg.p > 0 && pos == pg.p+pg.p/4 {
+		if n := s.cpuFaultSlots(); n > 2 && pg.p > 0 && pos == pg.p+pg.p/4 {
 			s.cpu.pages[0] = s.cpu.pages[n-1]
 		}
 	case cpuFaultRow:
@@ -340,7 +354,7 @@ func (s *State) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int
 		return why, nil
 	}
 	cs, nrot := s.cpuTable(li, cs, csSWA)
-	s.cpuRowsRun(li, l, f, x, s.bple, cs, nrot, seq, pos)
+	s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, s.bple, cs, nrot, seq, pos)
 	return jit.DeclineServes, nil
 }
 
@@ -377,7 +391,7 @@ func (s *State) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos [
 // [lo, hi) of a step across sessions, a run of one session's consecutive
 // rows at a time, on that session's form.
 func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, lo, hi int, run bool) jit.Decline {
-	w, pw := s.c.ResidW(), s.c.pleWidth()
+	d, pw := s.c.NEmbd, s.c.pleWidth()
 	for a := lo; a < hi; {
 		o, b := s.rowOwn[a], a+1
 		for b < hi && s.rowOwn[b] == o {
@@ -395,7 +409,7 @@ func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, p
 			if pw != 0 {
 				side = s.bple[a*pw:]
 			}
-			o.cpuRowsRun(li, l, f, x[a*w:], side, cs[a*nrot:], nrot, seq[a:b], pos[a:b])
+			o.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b])
 		} else if why := o.cpuRowsReady(li, f, pos[a:b]); why != jit.DeclineServes {
 			return why
 		}
@@ -513,10 +527,22 @@ func (s *State) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
 	if why := s.cpuReadable(hl, start, end-1); why != jit.DeclineServes {
 		return why
 	}
-	if n := len(s.cpu.pages); s.cpu.fault == cpuFaultPage && n > 2 && end > pg.p+pg.p/4 {
+	if n := s.cpuFaultSlots(); s.cpu.fault == cpuFaultPage && n > 2 && end > pg.p+pg.p/4 {
 		s.cpu.pages[0] = s.cpu.pages[n-1]
 	}
 	return jit.DeclineServes
+}
+
+// cpuFaultSlots is the page table's entries every layer's arena holds:
+// cpuFaultPage's reach.
+func (s *State) cpuFaultSlots() int {
+	n := len(s.cpu.pages)
+	for li := range s.kv.layers {
+		if pg := &s.kv.layers[li]; pg.arena != nil {
+			n = min(n, pg.arenaSlots()*max(s.nseq, 1))
+		}
+	}
+	return n
 }
 
 // cpuRowsRun runs block li's rows' form f over the rows of x, their history
@@ -525,26 +551,30 @@ func (s *State) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
 // more calls than one, a first pass over a copy of the rows writes every
 // row's keys, its outputs dropped and each row reading only the keys
 // before it, and the second reads them all.
-func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x, side, cs []float32, nrot int, seq, pos []int) {
+func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int) {
 	runs := s.runsAt(li) && s.bidirIn(pos[0], len(pos))
 	if runs && len(pos) > f.rows {
-		n := len(pos) * s.c.ResidW()
-		if len(s.cpu.runX) < n {
-			s.cpu.runX = make([]float32, n)
+		w, ns := len(pos)*s.c.NEmbd, s.c.Streams()
+		if len(s.cpu.runX) < w*ns {
+			s.cpu.runX = make([]float32, w*ns)
 		}
-		copy(s.cpu.runX, x[:n])
-		s.cpuRowsCalls(li, l, f, s.cpu.runX[:n], side, cs, nrot, seq, pos, false)
+		for k := range ns {
+			copy(s.cpu.runX[k*w:(k+1)*w], x[k*stride:k*stride+w])
+		}
+		s.cpuRowsCalls(li, l, f, s.cpu.runX[:w*ns], w, side, cs, nrot, seq, pos, false)
 	}
-	s.cpuRowsCalls(li, l, f, x, side, cs, nrot, seq, pos, runs)
+	s.cpuRowsCalls(li, l, f, x, stride, side, cs, nrot, seq, pos, runs)
 }
 
 // cpuRowsCalls is cpuRowsRun's calls, each row's keys counted to its run's
-// end where runs is set; side is the rows' per-layer inputs, nil for a
-// model of none.
-func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, x, side, cs []float32, nrot int, seq, pos []int, runs bool) {
+// end where runs is set; x is the rows' residual, stream-major, stride
+// elements from one stream to the next; side is the rows' per-layer inputs,
+// nil for a model of none.
+func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int, runs bool) {
 	n := len(pos)
 	pg := &s.kv.layers[s.c.KVSource(li)]
-	w, pw := s.c.ResidW(), s.c.pleWidth()
+	d, ns, pw := s.c.NEmbd, s.c.Streams(), s.c.pleWidth()
+	so := s.cpuSideOff(li)
 	slots := max(pg.arenaSlots(), 1)
 	b := &s.cpu.bound
 	end := 0
@@ -557,24 +587,26 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, x, side, cs []fl
 				e = max(e, s.bidirEnd(p))
 			}
 			end = max(end, p+1)
-			d := s.cpu.rowsTab[i*4 : i*4+4]
-			d[0], d[1], d[2], d[3] = uint32(seq[r0+i]*slots), uint32(pg.keyStart(p)), uint32(e), uint32(p)
+			t := s.cpu.rowsTab[i*4 : i*4+4]
+			t[0], t[1], t[2], t[3] = uint32(seq[r0+i]*slots), uint32(pg.keyStart(p)), uint32(e), uint32(p)
 			if s.cpu.fault == cpuFaultRow && p > 0 {
-				d[1]++
+				t[1]++
 			}
 		}
-		bx := x[r0*w:]
+		bx, bstride := x[r0*d:], stride
 		var bside []float32
 		if side != nil {
 			bside = side[r0*pw:]
 		}
 		staged := f.unit > 1 && k%f.unit != 0
 		if staged {
-			if len(s.cpu.xpad) < f.rows*w {
-				s.cpu.xpad = make([]float32, f.rows*w)
+			if len(s.cpu.xpad) < f.rows*d*ns {
+				s.cpu.xpad = make([]float32, f.rows*d*ns)
 			}
-			copy(s.cpu.xpad, bx[:k*w])
-			bx = s.cpu.xpad
+			for j := range ns {
+				copy(s.cpu.xpad[j*f.rows*d:], bx[j*stride:j*stride+k*d])
+			}
+			bx, bstride = s.cpu.xpad, f.rows*d
 			if side != nil {
 				if len(s.cpu.sidePad) < f.rows*pw {
 					s.cpu.sidePad = make([]float32, f.rows*pw)
@@ -583,14 +615,19 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, x, side, cs []fl
 				bside = s.cpu.sidePad
 			}
 		}
-		*b = cpuBound{li: li, l: l, own: s.cpuOwn(f), cs: cs[r0*nrot:], x: bx, rows: s.cpu.rowsTab, n: k,
+		if bside != nil {
+			bside = bside[so:]
+		}
+		*b = cpuBound{li: li, l: l, own: s.cpuOwn(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
 			kv: pg, pages: s.cpu.pages, side: bside}
 		s.cpu.call[0] = uint32(k)
 		for i := range f.codes {
 			s.cpuCall(b, &f.codes[i])
 		}
 		if staged {
-			copy(x[r0*w:(r0+k)*w], s.cpu.xpad[:k*w])
+			for j := range ns {
+				copy(x[j*stride+r0*d:j*stride+(r0+k)*d], s.cpu.xpad[j*f.rows*d:j*f.rows*d+k*d])
+			}
 		}
 	}
 	if pg.p > 0 && end > pg.written {
@@ -738,7 +775,7 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			*(*uint64)(unsafe.Add(base, ar.field)) = uint64(b.own[ar.i][ar.off])
 			continue
 		case cpuArgX:
-			p = unsafe.Pointer(&b.x[0])
+			p = unsafe.Pointer(&b.x[ar.stream*b.stride])
 		case cpuArgIO:
 			p = b.io[ar.i]
 		case cpuArgSide:
@@ -932,7 +969,7 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		return jit.DeclineISA
 	case g == nil:
 		return jit.DeclineNoGraph
-	case len(g.Out) != 1 || len(g.In) > 2 || len(g.In) == 2 && (c.PLEDim == 0 || s.ple == nil):
+	case len(g.Out) != max(c.PredStreams, 1) || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && (c.PLEDim == 0 || s.ple == nil):
 		return jit.DeclineFeeds
 	case c.MoEAt(li) && !s.cpuBanksPaged(li):
 		// The forms read a bank as one view of its experts in the host's
@@ -953,6 +990,46 @@ func (s *State) cpuWhy(li int) jit.Decline {
 	return jit.DeclineServes
 }
 
+// sideAtBinding moves the offset of every slice of gr's side input (its
+// input past its residual streams) into the input's binding: where each
+// slice reads from one offset, the slices read from 0 and the offset is
+// returned for the call to bind the input at. A graph whose slices of the
+// side differ, or that reads it otherwise, keeps its offsets (0).
+func sideAtBinding(gr *graph.Graph) int {
+	if len(gr.In) != len(gr.Out)+1 {
+		return 0
+	}
+	side := gr.In[len(gr.Out)]
+	off := -1
+	for _, o := range gr.Ops {
+		if !slices.Contains(o.In, side) {
+			continue
+		}
+		if o.Kind != graph.OpSlice || o.Attr.HeadDim != 0 || off >= 0 && o.Attr.Offset != off {
+			return 0
+		}
+		off = o.Attr.Offset
+	}
+	if off <= 0 {
+		return 0
+	}
+	gr.Ops = slices.Clone(gr.Ops)
+	for i := range gr.Ops {
+		if slices.Contains(gr.Ops[i].In, side) {
+			gr.Ops[i].Attr.Offset = 0
+		}
+	}
+	return off
+}
+
+// cpuSideOff is block li's sideOff, 0 for a block not composed.
+func (s *State) cpuSideOff(li int) int {
+	if li < len(s.cpu.blocks) && s.cpu.blocks[li] != nil {
+		return s.cpu.blocks[li].sideOff
+	}
+	return 0
+}
+
 // cpuDeclineError is a form the CPU device refuses by a named reason.
 type cpuDeclineError struct {
 	why jit.Decline
@@ -971,6 +1048,7 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	cb.graph = g
 	gr := *g
 	gr.Block = 0
+	cb.sideOff = sideAtBinding(&gr)
 	formats := map[jlm.Role]jlm.Type{}
 	f := m.Composing()
 	for _, o := range g.Ops {
@@ -1078,8 +1156,12 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 		bytes := map[jit.Operand]int64{}
 		for _, bd := range c.Binds {
 			if o := bd.Operand; o.Kind == jit.OperandValue {
-				cc.reads = cc.reads || bd.Read && len(gr.In) > 0 && o.Value == gr.In[0]
-				cc.writes = cc.writes || bd.Writes && len(gr.Out) > 0 && o.Value == gr.Out[0]
+				if k := streamIn(gr, o.Value); k >= 0 && bd.Read {
+					cc.reads |= 1 << k
+				}
+				if k := slices.Index(gr.Out, o.Value); k >= 0 && bd.Writes {
+					cc.writes |= 1 << k
+				}
 			}
 			o := bd.Operand
 			o.Copy = 0
@@ -1126,10 +1208,11 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 				ar.src, ar.i = cpuArgIO, slices.Index(gr.In, o.Value)
 			case apart && o.Kind == jit.OperandValue && slices.Contains(gr.Out, o.Value):
 				ar.src, ar.i = cpuArgIO, len(gr.In)+slices.Index(gr.Out, o.Value)
-			case o.Kind == jit.OperandValue && len(gr.In) > 0 && o.Value == gr.In[0],
-				o.Kind == jit.OperandValue && len(gr.Out) > 0 && o.Value == gr.Out[0]:
-				ar.src = cpuArgX
-			case o.Kind == jit.OperandValue && len(gr.In) == 2 && o.Value == gr.In[1]:
+			case o.Kind == jit.OperandValue && streamIn(gr, o.Value) >= 0:
+				ar.src, ar.stream = cpuArgX, streamIn(gr, o.Value)
+			case o.Kind == jit.OperandValue && slices.Contains(gr.Out, o.Value):
+				ar.src, ar.stream = cpuArgX, slices.Index(gr.Out, o.Value)
+			case o.Kind == jit.OperandValue && len(gr.In) == len(gr.Out)+1 && o.Value == gr.In[len(gr.Out)]:
 				ar.src = cpuArgSide
 			case o.Kind == jit.OperandValue:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, max(gr.Values[o.Value].Width, int(bytes[o]/4))+a.Offset, nil)
@@ -1328,20 +1411,35 @@ func (s *State) cpuForm(b *cpuBound, f *cpuBlockForm, li int) error {
 	return nil
 }
 
-// inPlace says the form may write its output over its input, the
-// residual: every kernel that reads the input runs before the first that
-// writes the output.
+// inPlace says the form may write each residual stream's output over its
+// input: every kernel that reads a stream's input runs before the first
+// that writes its output.
 func (f *cpuBlockForm) inPlace() bool {
-	lastRead, firstWrite := -1, len(f.codes)
-	for i, c := range f.codes {
-		if c.reads {
-			lastRead = i
+	for k := range 64 {
+		lastRead, firstWrite := -1, len(f.codes)
+		for i, c := range f.codes {
+			if c.reads&(1<<k) != 0 {
+				lastRead = i
+			}
+			if c.writes&(1<<k) != 0 {
+				firstWrite = min(firstWrite, i)
+			}
 		}
-		if c.writes {
-			firstWrite = min(firstWrite, i)
+		if lastRead >= firstWrite {
+			return false
 		}
 	}
-	return lastRead < firstWrite
+	return true
+}
+
+// streamIn is the residual stream whose input v is in block graph gr, -1
+// for a value that is none: the graph's first inputs, one a stream it
+// writes.
+func streamIn(gr *graph.Graph, v graph.ValueID) int {
+	if k := slices.Index(gr.In, v); k < len(gr.Out) {
+		return k
+	}
+	return -1
 }
 
 // cpuRoleWeight is block l's matrix of role r, nil for one it does not hold;
@@ -1411,6 +1509,12 @@ func (s *State) cpuRoleWeight(l *layer, r jlm.Role) *tensor {
 		return &l.pleGate
 	case jlm.RolePLEProj:
 		return &l.pleProj
+	case jlm.RoleStreamRouter:
+		return &l.altRouter
+	case jlm.RoleLowRankIn:
+		return &l.laurelL
+	case jlm.RoleLowRankOut:
+		return &l.laurelR
 	}
 	return nil
 }
@@ -1498,6 +1602,16 @@ func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
 		return l.ssmCNorm
 	case jlm.RolePLEPostNorm:
 		return l.plePost
+	case jlm.RoleStreamRouterNorm:
+		return l.altRouterNorm
+	case jlm.RoleStreamPredictCoef:
+		return l.altPredT
+	case jlm.RoleStreamCorrectCoef:
+		return l.altCorrT
+	case jlm.RoleStreamCorrectScale:
+		return l.altCorrScale
+	case jlm.RoleLowRankNorm:
+		return l.laurelPost
 	}
 	return nil
 }

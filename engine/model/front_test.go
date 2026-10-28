@@ -122,14 +122,15 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 }
 
 // TestFrontRefusesSeveralStreams holds every block of each model whose
-// residual is several streams (AltUp, hyper-connections, residual attention)
-// to a named refusal and no graph: every way to Covered passes a Streams
-// check, so the tier never meets a block output wider than a row, which its
-// copy over x (servedCopy) cannot hold. Where the block reaches that check
-// the refusal is UncoveredStreams by name.
+// residual is several streams the front end does not state (hyper-connections,
+// residual attention) to a named refusal and no graph: every way to Covered
+// passes a Streams check, so the tier never meets a block of streams it
+// cannot bind. Where the block reaches that check the refusal is
+// UncoveredStreams by name. Predicted streams are stated
+// (TestGemma3nServesComposedOnCPU).
 func TestFrontRefusesSeveralStreams(t *testing.T) {
 	byStreams := 0
-	for _, file := range []string{"synth-gemma3n.gguf", "synth-deepseek4.gguf", "synth-kimik3.gguf", "synth-qwen4exp.gguf"} {
+	for _, file := range []string{"synth-deepseek4.gguf", "synth-kimik3.gguf", "synth-qwen4exp.gguf"} {
 		t.Run(file, func(t *testing.T) {
 			m := frontModel(t, file)
 			if m.Cfg.Streams() < 2 {
@@ -172,7 +173,7 @@ func rotaryTables(parts []jit.Part) int {
 // names no model family.
 func TestFrontNamesNoFamily(t *testing.T) {
 	family := regexp.MustCompile(`(?i)gemma|llama|qwen|deepseek|kimi|mistral|mixtral|granite|hunyuan|minimax|nemotron|jamba|mamba|olmo|ernie|glm|bitnet|phi[0-9]|phimoe|gpt-?oss|falcon|starcoder|command-?r|cohere|stablelm|dbrx|exaone|smollm|arcee|seed_?oss|apertus|bailing|dots1|bert|lfm|clip|altup|laurel|jlm\.Arch|\.Arch\b`)
-	for _, file := range []string{"front.go", "frontdelta.go", "frontssm.go"} {
+	for _, file := range []string{"front.go", "frontdelta.go", "frontssm.go", "frontstreams.go"} {
 		src, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
