@@ -56,10 +56,13 @@ type layer struct {
 	// per-layer gate; LAuReL's two matrices and norm; sparse says the FFN
 	// gate takes the gaussian top-k.
 	altRouter, altRouterNorm, altPredT, altCorrT, altCorrScale backend.Buf
-	laurelL, laurelR                                           *resident
-	mvLL, mvLR                                                 mv
-	nLaurel                                                    backend.Buf
-	sparse                                                     bool
+	// altRouterW is altRouter as the composer binds a matrix; it owns
+	// nothing (altRouter is freed with the block).
+	altRouterW       *resident
+	laurelL, laurelR *resident
+	mvLL, mvLR       mv
+	nLaurel          backend.Buf
+	sparse           bool
 	// kvSrc is the block whose history this one attends to: its own index, or
 	// for a KV-sharing block (nn.LayerPlan.KVShared) the source's, whose
 	// cache this block reads and never writes.
@@ -2439,7 +2442,11 @@ type blockScratch struct {
 	// staged per submission, a block's gate, its slice of the inputs, their
 	// product and the projection back. nil elsewhere.
 	pleIn, pleG, pleS, pleA, pleO backend.Buf
-	pleSlice, pleAct, pleQuant    backend.Kernel
+	// streams is, by a step's rows, each residual stream of x as a view at
+	// its offset (x is stream-major), the inputs and the outputs a block of
+	// several streams binds (servedStreams).
+	streams                    map[int][2][]backend.Buf
+	pleSlice, pleAct, pleQuant backend.Kernel
 	// Gemma 3n's AltUp and LAuReL (nn.LayerPlan.AltUp, altup.go): the
 	// router's modalities, every stream's prediction, the corrected streams,
 	// LAuReL's branch and its rank-wide middle; a sparse block's gate
@@ -6393,6 +6400,30 @@ func (g *devTier) softmaxAgreesAt(bs *blockScratch, k backend.Kernel, groups, wi
 
 // headOut is the buffer the head's answer is read from: the capped logits
 // where the model has a final softcap, the projection's own otherwise.
+// servedStreams is a block of n residual streams' inputs and outputs at a
+// step of rows: stream k of x, a view at k*rows rows of the stream-major
+// residual, each stream's input and output the same view, the per-layer
+// inputs after the inputs. Made once a step width; a warm step makes
+// nothing.
+func (bs *blockScratch) servedStreams(rows, n int) (in, out []backend.Buf, err error) {
+	if v, ok := bs.streams[rows]; ok && len(v[1]) == n {
+		return v[0], v[1], nil
+	}
+	w := rows * bs.p.NEmbd * 4
+	out = make([]backend.Buf, n)
+	for k := range out {
+		if out[k], err = backend.View(bs.x, k*w, w); err != nil {
+			return nil, nil, fmt.Errorf("tier: stream %d of a residual of %d rows: %w", k, rows, err)
+		}
+	}
+	in = append(append([]backend.Buf(nil), out...), bs.pleIn)
+	if bs.streams == nil {
+		bs.streams = map[int][2][]backend.Buf{}
+	}
+	bs.streams[rows] = [2][]backend.Buf{in, out}
+	return in, out, nil
+}
+
 func (bs *blockScratch) headOut() backend.Buf {
 	if bs.headCap != nil {
 		return bs.logitsCap
@@ -8562,7 +8593,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				continue
 			}
-			if inst != nil && kind == partBlock && R == 1 && g.shadowing() && sv.f.split == 0 {
+			if inst != nil && kind == partBlock && R == 1 && g.shadowing() && sv.f.split == 0 && len(l.graph.Out) == 1 {
 				// The form runs beside the tier's kernels, which go on to run
 				// the block below and serve.
 				if serr := g.shadowBegin(lc, bs, sv, cp, l, li, &sh); err == nil {
@@ -8573,13 +8604,25 @@ func (g *devTier) layersSession(s backend.Session) {
 				if cp != nil {
 					out = bs.h
 				}
-				// A second input is the rows' per-layer inputs (blockServes).
+				// A second input is the rows' per-layer inputs (blockServes);
+				// a block of several streams reads and writes each at its
+				// offset in x.
 				in := []backend.Buf{bs.x, bs.pleIn}
+				outs := []backend.Buf{out}
+				if len(l.graph.Out) > 1 {
+					var verr error
+					if in, outs, verr = bs.servedStreams(R, len(l.graph.Out)); verr != nil {
+						if err == nil {
+							err = verr
+						}
+						continue
+					}
+				}
 				var serr error
 				if sv.f.split > 0 {
-					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, in, []backend.Buf{out})
+					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, in, outs)
 				} else {
-					serr = sv.runAs(g, lc, inst, kind, in, []backend.Buf{out})
+					serr = sv.runAs(g, lc, inst, kind, in, outs)
 				}
 				if err == nil {
 					err = serr

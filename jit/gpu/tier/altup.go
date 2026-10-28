@@ -132,6 +132,10 @@ func (g *devTier) prepAltUp(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeight
 	up(&l.altCorrScale, w.AltCorrScale)
 	up(&l.nLaurel, w.LaurelPost)
 	up(&l.altRouter, f32of(w.AltRouter.Data[:4*s*d]))
+	// The composer reads the router as a plain float matrix (roleWeight).
+	if q, ok := quantOf(quant.F32); ok && l.altRouter != nil {
+		l.altRouterW = &resident{qs: l.altRouter, nrows: s, k: d, t: q, ok: true}
+	}
 	l.sparse = p.Sparse
 	l.auxBytes += uint64(4 * (3*d + s*s*s + s*s + s*d))
 	return ""

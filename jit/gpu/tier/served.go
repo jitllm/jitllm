@@ -868,6 +868,10 @@ type servedKey struct {
 	held int
 }
 
+// partIO is the most inputs, and the most outputs, a served part binds: a
+// block of four residual streams reads them and the rows' per-layer inputs.
+const partIO = 8
+
 // servedPart is a served part and its form, with the arguments its launch
 // binds, reused every step: its own instance, or for a prompt part none,
 // its instance its scratch's (promptInst).
@@ -876,7 +880,7 @@ type servedPart struct {
 	f       *partForm
 	inst    *partInst
 	args    [][]backend.Buf
-	in, out [4]backend.Buf
+	in, out [partIO]backend.Buf
 	n, m    int
 	// rows, where set, is the call's rows, the word its table states: a
 	// launch runs their groups, not its form's every row's.
@@ -992,6 +996,9 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 			}
 			return nil, fail(err)
 		}
+	}
+	if len(sl.graph.In) > partIO || len(sl.graph.Out) > partIO {
+		return nil, fail(fmt.Errorf("a part of %d inputs and %d outputs, past the %d a served part binds", len(sl.graph.In), len(sl.graph.Out), partIO))
 	}
 	f.refs++
 	sv := &servedPart{sl: sl, f: f, inst: in, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
@@ -1533,6 +1540,21 @@ func attendWindow(gr *graph.Graph) (int, bool) {
 // reads in at the elements it writes out at is not enough: a launch clamps
 // its surplus threads to the last element, and every lane storing an
 // element may store before another lane reads it, adding twice (RULE 13).
+// streamsInPlace says a form of n residual streams writes each stream's
+// output over its input (each stream one view of x): a form that does not
+// has no copy to run through, and is refused by name.
+func (f *partForm) streamsInPlace(n int) error {
+	if n < 2 {
+		return nil
+	}
+	for k := range n {
+		if !f.inPlace(k, k) {
+			return fmt.Errorf("tier: a block of %d residual streams writes stream %d before it last reads it", n, k)
+		}
+	}
+	return nil
+}
+
 func (f *partForm) inPlace(in, out int) bool {
 	lastRead, firstWrite := -1, len(f.codes)
 	for i, args := range f.args {
@@ -1641,6 +1663,12 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.pleGate
 	case jlm.RolePLEProj:
 		return l.pleProj
+	case jlm.RoleStreamRouter:
+		return l.altRouterW
+	case jlm.RoleLowRankIn:
+		return l.laurelL
+	case jlm.RoleLowRankOut:
+		return l.laurelR
 	}
 	return nil
 }
@@ -1780,6 +1808,16 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.m1CN
 	case jlm.RolePLEPostNorm:
 		return l.nPLE
+	case jlm.RoleStreamRouterNorm:
+		return l.altRouterNorm
+	case jlm.RoleStreamPredictCoef:
+		return l.altPredT
+	case jlm.RoleStreamCorrectCoef:
+		return l.altCorrT
+	case jlm.RoleStreamCorrectScale:
+		return l.altCorrScale
+	case jlm.RoleLowRankNorm:
+		return l.nLaurel
 	}
 	return nil
 }
@@ -1808,7 +1846,9 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partSkip
 	case l.linear && !g.recHeld(l, p, bs):
 		return partRecurrent
-	case len(l.graph.In) > 1 && (len(l.graph.In) != 2 || bs.pleIn == nil):
+	case len(l.graph.Out) != p.Streams() || len(l.graph.In) > len(l.graph.Out) && (len(l.graph.In) != len(l.graph.Out)+1 || bs.pleIn == nil):
+		// A block reads each residual stream and, past them, the rows'
+		// per-layer inputs.
 		return partFeeds
 	case l.linear && !l.withAttn:
 		return partServes
@@ -1889,6 +1929,9 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	if err := sv.f.streamsInPlace(len(l.graph.Out)); err != nil {
+		return nil, nil, nil, err
+	}
 	if !sv.f.inPlace(0, 0) {
 		if cp, err = g.servedCopy(bs, R); err != nil {
 			return nil, nil, nil, err
@@ -1903,9 +1946,8 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 // servedCopy is the copy of a block's output from bs.h over x at a step of
 // rows, formed through the composer like any other part, for a form that
 // cannot write its output over x (partForm.inPlace). bs.h holds a row of
-// every step's rows: a residual of several streams, wider than a row, has no
-// block graph (the front end refuses it, UncoveredStreams), so it never
-// reaches here.
+// every step's rows: a block of several residual streams writes each over
+// its own view of x or is refused (streamsInPlace), and never reaches here.
 func (g *devTier) servedCopy(bs *blockScratch, rows int) (*servedPart, error) {
 	w := bs.p.ResidW()
 	if w != bs.p.NEmbd || rows > bs.rows {
