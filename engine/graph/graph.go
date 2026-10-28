@@ -44,6 +44,10 @@ const (
 	// GQA by the head counts, scaled by Scale, over a Window (0: the whole
 	// history), scores capped by Softcap (0: none); an optional Weight[0]
 	// (RoleAttnSinks) is a per-head logit in the softmax's denominator.
+	// Where Bidir, each row attends the span its row's descriptor names;
+	// over a version the graph does not write (Builder.CrossAttend) the rows
+	// are queries over keys and values other rows appended: a
+	// cross-attention.
 	OpAttend
 	// OpAdd is In[0] + In[1].
 	OpAdd

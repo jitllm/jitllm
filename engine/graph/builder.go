@@ -126,6 +126,15 @@ func (s *Builder) AttendOf(q ValueID, h StateRef, a Attrs, sinks ...jlm.Role) Va
 	return y
 }
 
+// CrossAttend is q's cross-attention over history h as other rows left
+// it, h a version this graph does not append to: each row attends, both
+// ways, the span of h its row's descriptor names (a resampler's learned
+// queries over a picture's patches).
+func (s *Builder) CrossAttend(q ValueID, h StateRef, a Attrs) ValueID {
+	a.Bidir = true
+	return s.AttendOf(q, h, a)
+}
+
 // SharedHistory is block n's history as another block reads it.
 func SharedHistory(n int) StateRef { return StateRef{Name: "kv@" + strconv.Itoa(n)} }
 
