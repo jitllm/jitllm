@@ -451,12 +451,29 @@ func trainedToks(t *testing.T, m *Model, ids []int32, n int) ([]int32, int) {
 	return toks, moved
 }
 
+// crossingPrompt is the serving gate's prompt: more than one chunk of the
+// rows the arms reserve (64) and several blocks of positions of the prompt's
+// attention on the matrix unit, so its rows' running maximum and sum are
+// rescaled from block to block -- a prompt inside one block multiplies
+// every rescale by zero.
+const crossingPrompt = "The clerk counted barrels of salt on the upper floor of the old customs house, " +
+	"and the river rose every spring until the bridges were islands. The town kept its boats tied to the " +
+	"church railings, and the children learned to row before they could read. When the water finally fell, " +
+	"the merchants climbed down from their attics, opened their shutters, and argued about the price of salt " +
+	"until the next flood came. The capital of France is"
+
+// flashBlock is the positions a block of the prompt's attention on the
+// matrix unit takes (jit's gpu profile, Flash.Keys).
+const flashBlock = 32
+
 // TestComposedBlocksServe decodes dense models with each block served whole
 // by the composer from its graph (the model's front end's, from the
 // container), the prompt's blocks at the chunk's rows, and
 // the head, in main's runtime (Config.Composed), against the tier's own
 // kernels: every block placed, with and without the captured graph, the
-// prompt's last row and 140 teacher-forced steps (past the first key bound),
+// prompt's last row -- a prompt of two chunks crossing several blocks of
+// positions (crossingPrompt) -- and 140 teacher-forced steps (past the
+// first key bound),
 // and on a model whose sliding window cuts inside its context, steps past
 // the window. Each arm is held to a float reference -- the same blocks and
 // head formed with float activations, which neither the tier nor the arm
@@ -491,7 +508,10 @@ func TestComposedBlocksServe(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			ids := m.Vocab.Encode("The capital of France is", true)
+			ids := m.Vocab.Encode(crossingPrompt, true)
+			if len(ids) <= 2*flashBlock {
+				t.Fatalf("the prompt is %d tokens: it does not cross several blocks of %d positions", len(ids), flashBlock)
+			}
 			n := 140
 			// A window the context can outrun is decoded past, so it cuts:
 			// the window's last position and windowPast more.

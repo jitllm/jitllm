@@ -234,8 +234,15 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 // composedMatrix is the binary16 tile the composer forms a step of rows on
 // (jit.Device.Matrix), asked of the device once by compiling a probe
 // (backend.LowersTile): none where it does not lower one staged in
-// workgroup memory and carried across a loop.
+// workgroup memory and carried across a loop. The float reference
+// (Config.ComposedFloat) states none: the tile multiplies binary16
+// operands, and the reference is float arithmetic, not the forms it holds
+// to it -- a matrix-unit attention the reference shared would move both
+// alike, wrong or right.
 func (g *devTier) composedMatrix() [3]int {
+	if g.ComposedFloat {
+		return [3]int{}
+	}
 	s := backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32}
 	if g.matrixCap == 0 {
 		g.matrixCap = -1
