@@ -687,13 +687,20 @@ func (b *binder86) copyIn(r int) bool {
 	return false
 }
 
-// uses is how many nodes read node i.
+// uses is how many nodes and stores read node i.
 func (b *binder86) uses(i int) int {
 	n := 0
 	var buf [3]int
 	for x := range b.k.Nodes {
 		for _, a := range b.k.args(x, &buf) {
 			if a == i {
+				n++
+			}
+		}
+	}
+	for x := range b.k.Stores {
+		for _, a := range b.k.storeArgs(&b.k.Stores[x]) {
+			if *a == i {
 				n++
 			}
 		}
