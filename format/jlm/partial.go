@@ -372,7 +372,18 @@ func (f *File) claimFor(b int, spec bool) error {
 	}
 	_, size := f.pageAt(b)
 	f.makeRoom(b, size)
-	f.pages[b] = f.take(size)
+	f.pages[b] = nil
+	if f.expertPage(b) {
+		f.pages[b] = f.expFrame(b, size)
+		if f.pages[b] != nil && f.budget > 0 {
+			// An expert page takes no free frame: those beside it give way
+			// as they would to a fresh one (take).
+			f.trimFree(f.budget - min(f.budget, f.resident+size))
+		}
+	}
+	if f.pages[b] == nil {
+		f.pages[b] = f.take(size)
+	}
 	// An expert page whole on one node, the experts alternating over the
 	// nodes, so a host computing an expert where its page lives reads only
 	// local memory (nn's node-affine mixture regions).

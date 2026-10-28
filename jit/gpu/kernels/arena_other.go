@@ -25,3 +25,9 @@ func MapOffHeap(n int) (b []byte, mapped bool, err error) { return mapAligned(n)
 
 // UnmapOffHeap does nothing to a heap fallback.
 func UnmapOffHeap(b []byte) {}
+
+// ReserveOffHeap has no reservation to make here: the caller does without.
+func ReserveOffHeap(n int) ([]byte, bool, error) { return nil, false, nil }
+
+// DropOffHeap does nothing where nothing was reserved.
+func DropOffHeap(b []byte) {}

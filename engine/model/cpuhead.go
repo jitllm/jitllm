@@ -162,7 +162,7 @@ func (s *State) cpuHead(x, logits, hidden []float32) jit.Decline {
 	}
 	f, why := hf.formOf()
 	if why == jit.DeclineServes {
-		why = s.cpuWeights(f, nil)
+		why = s.cpuWeights(f, -1, nil)
 	}
 	if why != jit.DeclineServes {
 		h.declined[why]++
@@ -196,7 +196,7 @@ func (s *State) cpuHeadRows(x, logits, hidden []float32, n int) jit.Decline {
 	h := &s.cpu.head
 	f, why := h.rows.formOf()
 	if why == jit.DeclineServes {
-		why = s.cpuWeights(f, nil)
+		why = s.cpuWeights(f, -1, nil)
 	}
 	if why != jit.DeclineServes {
 		h.declined[why] += n
@@ -255,7 +255,7 @@ func (s *State) cpuPick(x []float32) jit.Decline {
 	h := &s.cpu.head
 	f, why := h.pick.formOf()
 	if why == jit.DeclineServes {
-		why = s.cpuWeights(f, nil)
+		why = s.cpuWeights(f, -1, nil)
 	}
 	if why == jit.DeclineServes && (len(s.HostPick) > len(h.pickIDs) || len(s.HostPickVals) < len(s.HostPick)) {
 		why = jit.DeclineCaller

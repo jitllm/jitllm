@@ -110,6 +110,10 @@ func (f *File) flushRecycled() {
 // unmapped at once, a heap buffer is left to the collector. Callers hold f.mu and
 // hold no span into it.
 func (f *File) release(b []byte) {
+	if f.inExp(b) {
+		f.dropExp(b)
+		return
+	}
 	f.retire(b)
 	if m, ok := f.mapped[unsafe.SliceData(b)]; ok {
 		delete(f.mapped, unsafe.SliceData(b))
@@ -164,7 +168,8 @@ func (f *File) MappedBytes() uint64 {
 	for _, m := range f.mapped {
 		n += uint64(cap(m))
 	}
-	return n
+	// The expert reservation costs only the frames it holds.
+	return n + f.expHeld
 }
 
 func (f *File) FreeBytes() uint64 {

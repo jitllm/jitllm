@@ -108,8 +108,11 @@ type Context struct {
 	History History
 	// Paged is Request.Paged: the sheets the call site holds of each bank
 	// it holds in pages.
-	Paged  map[jlm.Role]int
-	formed map[graph.ValueID]bool
+	Paged map[jlm.Role]int
+	// Strides is Request.Strides: the words from one sheet of a bank to the
+	// next where they lie further apart than they pack.
+	Strides map[jlm.Role]int
+	formed  map[graph.ValueID]bool
 }
 
 // blockPart is the part of block li, for a block part's decomposition: the

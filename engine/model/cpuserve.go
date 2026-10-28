@@ -115,6 +115,11 @@ type cpuBlockForm struct {
 	own  []int
 	// consts is an own buffer's constant words, by its index.
 	consts map[int][]uint32
+	// A form over banks in the host's expert pages runs in two halves
+	// (cpuForm): its codes before split, up to the selection, then the rest,
+	// which read the banks once the selected experts' pages are resident
+	// and held. sel is the own buffer holding the selection, of selN words.
+	split, sel, selN int
 }
 
 func (f *cpuBlockForm) close() {
@@ -161,6 +166,13 @@ type cpuState struct {
 	// slot it reads and the slot it writes, its sequence's.
 	recRows    [3]uint32
 	rseq, rpos []int
+	// sel is a step's selection as the pager's fault path takes it
+	// (cpuForm).
+	sel []int32
+	// banks is each block's routed banks' planes in the host's expert
+	// pages, by bank (gate, up, down) and plane (jlm.File.BankView), set at
+	// the block's composition.
+	banks [][3][3]unsafe.Pointer
 	// xpad is a call's residual rows where its kernels' units reach past
 	// them (cpuBlockForm.unit).
 	xpad []float32
@@ -202,6 +214,10 @@ const (
 	// cpuFaultHead binds the head's input to the State's norm row in place
 	// of the residual.
 	cpuFaultHead
+	// cpuFaultExpert makes resident and holds another expert's page than
+	// the first the selection names: a bank's sheet read where the pager
+	// holds nothing of it, or holds it evicted.
+	cpuFaultExpert
 )
 
 // cpuBlock is block li's forms on the CPU, its graph the one they were
@@ -277,7 +293,7 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 	b := &s.cpu.bound
 	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.x, rows: s.cpu.rows[:], n: 1, kv: pg, pages: s.cpu.pages,
 		recLi: s.cpuRecLi(li), recOf: s}
-	if why := s.cpuWeights(cb.f, l); why != jit.DeclineServes {
+	if why := s.cpuWeights(cb.f, li, l); why != jit.DeclineServes {
 		return why, nil
 	}
 	s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos)), uint32(pos + 1), uint32(pos)}
@@ -293,8 +309,8 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 			s.cpu.rows[1]++
 		}
 	}
-	for i := range cb.f.codes {
-		s.cpuCall(b, &cb.f.codes[i])
+	if err := s.cpuForm(b, cb.f, li); err != nil {
+		return jit.DeclineServes, err
 	}
 	if pg.p > 0 && pos+1 > pg.written {
 		pg.written = pos + 1
@@ -388,7 +404,7 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 	if why != jit.DeclineServes {
 		return why, nil
 	}
-	if why := s.cpuWeights(cb.f, l); why != jit.DeclineServes {
+	if why := s.cpuWeights(cb.f, li, l); why != jit.DeclineServes {
 		return why, nil
 	}
 	w, nrot := s.c.ResidW(), s.c.RopeW()
@@ -418,8 +434,8 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 		s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos[r])), uint32(pos[r] + 1), uint32(pos[r])}
 		s.cpu.recRows = [3]uint32{1, uint32(slot), uint32(slot)}
 		s.cpu.call[0] = 1
-		for k := range cb.f.codes {
-			s.cpuCall(b, &cb.f.codes[k])
+		if err := s.cpuForm(b, cb.f, li); err != nil {
+			return jit.DeclineServes, err
 		}
 		if pg.p > 0 && pos[r]+1 > pg.written {
 			pg.written = pos[r] + 1
@@ -456,7 +472,7 @@ func (s *State) cpuRowsForm(li int, l *layer) (*cpuBlockForm, jit.Decline) {
 	if cb.rows == nil {
 		return nil, cb.rowsWhy
 	}
-	if why := s.cpuWeights(cb.rows, l); why != jit.DeclineServes {
+	if why := s.cpuWeights(cb.rows, li, l); why != jit.DeclineServes {
 		return nil, why
 	}
 	return cb.rows, jit.DeclineServes
@@ -600,11 +616,18 @@ func (s *State) cpuReadable(li, start, pos int) jit.Decline {
 }
 
 // cpuWeights says every weight f binds is one block l holds whole.
-func (s *State) cpuWeights(f *cpuBlockForm, l *layer) jit.Decline {
+func (s *State) cpuWeights(f *cpuBlockForm, li int, l *layer) jit.Decline {
 	for i := range f.codes {
 		for _, a := range f.codes[i].args {
 			switch a.src {
 			case cpuArgWeight:
+				if jlm.ExpertBank(a.role) {
+					// A bank is read in the host's expert pages (cpuBanksPaged).
+					if li >= len(s.cpu.banks) || s.cpu.banks[li][a.role-jlm.RoleExpGateBank][a.region] == nil {
+						return jit.DeclineNoWeight
+					}
+					continue
+				}
 				w := s.cpuRoleWeight(l, a.role)
 				if w == nil || w.packed == nil && len(w.data) == 0 {
 					return jit.DeclineNoWeight
@@ -695,6 +718,10 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 		case cpuArgOwn:
 			p = unsafe.Pointer(&b.own[ar.i][0])
 		case cpuArgWeight:
+			if jlm.ExpertBank(ar.role) {
+				p = s.cpu.banks[b.li][ar.role-jlm.RoleExpGateBank][ar.region]
+				break
+			}
 			w := s.cpuRoleWeight(b.l, ar.role)
 			if w.packed == nil {
 				p = unsafe.Pointer(&w.data[0])
@@ -808,6 +835,8 @@ func (s *State) cpuCompose(li int) {
 	cb.f = f
 	if s.c.LayerKind(li).Recurrent() {
 		cb.rowsWhy = jit.DeclineRecurrent
+	} else if s.c.MoEAt(li) {
+		cb.rowsWhy = jit.DeclineExpertsRows
 	} else if cb.rows, err = s.m.formCPUBlock(s, li, cb, cpuRowsCap); err != nil {
 		cb.rowsWhy = s.cpuFormDecline(err)
 	}
@@ -876,9 +905,9 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		return jit.DeclineNoGraph
 	case len(g.In) != 1 || len(g.Out) != 1:
 		return jit.DeclineFeeds
-	case c.MoEAt(li):
-		// The host keeps every expert in a page of its own: there is no
-		// bank whole for the graph's expert matvecs to read.
+	case c.MoEAt(li) && !s.cpuBanksPaged(li):
+		// The forms read a bank as one view of its experts in the host's
+		// expert pages (jlm.File.BankView); a bank with none is not read.
 		return jit.DeclineExperts
 	case c.LayerKind(li).Recurrent() && (li >= len(s.rstate) || s.rstate[li] == nil || s.rconv[li] == nil || s.dg.tail != 0):
 		return jit.DeclineRecurrent
@@ -930,7 +959,7 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	if s.jit != nil {
 		workers = s.jit.Workers()
 	}
-	req := jit.Request{Graph: &gr, Formats: formats,
+	req := jit.Request{Graph: &gr, Formats: formats, Strides: m.cpuStrides(li, g),
 		Step:   jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: 32, Seqs: max(s.nseq, 1)},
 		Device: composedCPUDevice(workers)}
 	return m.cpuFormOf(req, &gr, rows, false)
@@ -973,7 +1002,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 	if apart && len(gr.In)+len(gr.Out) > cpuIO {
 		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), cpuIO)
 	}
-	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows}
+	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows, sel: -1}
 	// A kernel's constant block is its own: two kernels' blocks may share a
 	// name and hold different words.
 	type ownKey struct {
@@ -1075,6 +1104,9 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 				ar.src = cpuArgX
 			case o.Kind == jit.OperandValue:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, max(gr.Values[o.Value].Width, int(bytes[o]/4))+a.Offset, nil)
+				if o.Value == selOf(gr) {
+					f.sel = ar.i
+				}
 			case o.Kind == jit.OperandScratch:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, int(bytes[o]/4)+a.Offset+1, nil)
 			case o.Kind == jit.OperandWeight && o.Region >= 0 && o.Region < 3:
@@ -1134,7 +1166,137 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 		f.close()
 		return nil, fmt.Errorf("the block reads its residual after writing its output over it")
 	}
+	if err := f.bankHalves(gr, rows); err != nil {
+		f.close()
+		return nil, err
+	}
 	return f, nil
+}
+
+// selOf is the selection gr's banks are read at, -1 for a graph that reads
+// none.
+func selOf(gr *graph.Graph) graph.ValueID {
+	for _, o := range gr.Ops {
+		if o.Kind == graph.OpExpertMatVec && len(o.In) == 2 && len(o.Weight) > 0 && jlm.ExpertBank(o.Weight[0].Role) {
+			return o.In[1]
+		}
+	}
+	return -1
+}
+
+// bankHalves finds where a form over banks is cut (cpuBlockForm.split): at
+// its first code that binds a bank, with the selection written by a code
+// before it.
+func (f *cpuBlockForm) bankHalves(gr *graph.Graph, rows int) error {
+	sel := selOf(gr)
+	if sel < 0 {
+		return nil
+	}
+	f.split = -1
+	for ci, c := range f.codes {
+		for _, a := range c.args {
+			if a.src == cpuArgWeight && jlm.ExpertBank(a.role) && f.split < 0 {
+				f.split = ci
+			}
+		}
+	}
+	if f.sel < 0 || f.split <= 0 {
+		return fmt.Errorf("a form over banks with no selection of its own (%d) or no code before its banks (%d)", f.sel, f.split)
+	}
+	f.selN = rows * gr.Values[sel].Width
+	return nil
+}
+
+// cpuBanksPaged says block li's routed banks are each one view of its
+// experts in the host's expert pages (jlm.File.BankView).
+func (s *State) cpuBanksPaged(li int) bool {
+	l := &s.m.layers[li]
+	if s.m.container == nil || l.legacyExperts {
+		return false
+	}
+	if len(s.cpu.banks) < len(s.m.layers) {
+		s.cpu.banks = make([][3][3]unsafe.Pointer, len(s.m.layers))
+	}
+	for i, t := range []*tensor{&l.gate, &l.up, &l.down} {
+		if t.e == nil {
+			continue
+		}
+		planes, _, ok := s.m.container.BankView(t.e)
+		if !ok {
+			return false
+		}
+		s.cpu.banks[li][i] = planes
+	}
+	return l.up.e != nil && l.down.e != nil
+}
+
+// cpuStrides is each bank of block li's graph in the host's expert pages and
+// the words from one expert's sheet to the next's there.
+func (m *Model) cpuStrides(li int, g *graph.Graph) map[jlm.Role]int {
+	var st map[jlm.Role]int
+	for _, o := range g.Ops {
+		for _, w := range o.Weight {
+			t := m.bankTensor(li, w.Role)
+			if t == nil || t.e == nil {
+				continue
+			}
+			if _, stride, ok := m.container.BankView(t.e); ok {
+				if st == nil {
+					st = map[jlm.Role]int{}
+				}
+				st[w.Role] = int(stride / 4)
+			}
+		}
+	}
+	return st
+}
+
+// bankTensor is block li's routed bank of role r, nil for any other role.
+func (m *Model) bankTensor(li int, r jlm.Role) *tensor {
+	if li >= len(m.layers) || !jlm.ExpertBank(r) {
+		return nil
+	}
+	l := &m.layers[li]
+	return [...]*tensor{&l.gate, &l.up, &l.down}[r-jlm.RoleExpGateBank]
+}
+
+// cpuForm runs form f of block li over the step b: its codes in order, and
+// for a form over banks (cpuBlockForm.split) the selection's experts made
+// resident and held between its halves -- the pager's own fault path
+// (ensureExperts), each read from the file where the budget evicted it --
+// and counted as the host's own mixture counts them.
+func (s *State) cpuForm(b *cpuBound, f *cpuBlockForm, li int) error {
+	if f.split <= 0 {
+		for i := range f.codes {
+			s.cpuCall(b, &f.codes[i])
+		}
+		return nil
+	}
+	for i := range f.codes[:f.split] {
+		s.cpuCall(b, &f.codes[i])
+	}
+	s.cpu.sel = s.cpu.sel[:0]
+	for _, x := range b.own[f.sel][:f.selN] {
+		s.cpu.sel = append(s.cpu.sel, int32(x))
+	}
+	if s.cpu.fault == cpuFaultExpert {
+		// Another expert's page made resident and held than the first the
+		// kernels read.
+		s.cpu.sel[0] = (s.cpu.sel[0] + 1) % int32(s.c.NExpert)
+	}
+	err := s.m.ensureExperts(li, s.cpu.sel, &s.expHold)
+	defer s.expHold.release()
+	if err != nil {
+		return err
+	}
+	if !s.rowsOfChunk {
+		s.res.touch(li, s.c.NExpert, s.cpu.sel)
+		s.hot.add(li, s.cpu.sel)
+	}
+	for i := range f.codes[f.split:] {
+		s.cpuCall(b, &f.codes[f.split+i])
+	}
+	return nil
 }
 
 // inPlace says the form may write its output over its input, the
@@ -1177,6 +1339,14 @@ func (s *State) cpuRoleWeight(l *layer, r jlm.Role) *tensor {
 		return &l.up
 	case jlm.RoleFFNDown:
 		return &l.down
+	case jlm.RoleRouter:
+		return &l.router
+	case jlm.RoleShExpGate:
+		return &l.shGate
+	case jlm.RoleShExpUp:
+		return &l.shUp
+	case jlm.RoleShExpDown:
+		return &l.shDown
 	case jlm.RoleAttnQKV:
 		if l.ssmIn.rows != 0 {
 			return &l.ssmIn
@@ -1257,6 +1427,18 @@ func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
 		return l.downB
 	case jlm.RoleAttnSinks:
 		return l.sinks
+	case jlm.RoleRouterBias:
+		return l.routerB
+	case jlm.RoleExpGateBias:
+		return l.expGateB
+	case jlm.RoleExpUpBias:
+		return l.expUpB
+	case jlm.RoleExpDownBias:
+		return l.expDownB
+	case jlm.RoleExpProbsB:
+		return l.expProbsB
+	case jlm.RoleShRouter:
+		return l.shRouter
 	case jlm.RoleAttnSubNorm:
 		return l.attnSubNorm
 	case jlm.RoleFFNSubNorm:

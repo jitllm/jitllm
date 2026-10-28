@@ -113,6 +113,12 @@ type File struct {
 	// Close.
 	offHeap bool
 	mapped  map[*byte][]byte
+	// exp is the expert pages' reservation (exparena.go), nil before the
+	// first expert page-in or where there is none; expNone says there is
+	// none.
+	exp     []byte
+	expNone bool
+	expHeld uint64
 	// recycle is told the address range of every buffer whose bytes stop being
 	// the ones a caller may have copied (OnRecycle), and recycled holds those
 	// buffers until f.mu is dropped: the callback is not run under the lock.
@@ -842,7 +848,11 @@ func (f *File) unhold(i int) {
 	b := f.pages[i]
 	n := uint64(cap(b))
 	f.unspec(i)
-	f.putFree(n, b[:n])
+	if f.inExp(b) {
+		f.dropExp(b)
+	} else {
+		f.putFree(n, b[:n])
+	}
 	f.pages[i] = nil
 	f.dropFilled(i)
 	if f.resident >= n {
@@ -1080,6 +1090,7 @@ func (f *File) Close() error {
 	f.free, f.freeBytes = map[uint64][][]byte{}, 0
 	f.f, f.direct, f.dense = nil, nil, nil
 	f.unmapAll()
+	f.unmapExp()
 	closeDirect(d)
 	return h.Close()
 }

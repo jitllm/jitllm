@@ -21,6 +21,9 @@ type packed struct {
 	// words are read from, words each plane's count a sheet.
 	sheet int
 	words [3]int
+	// stride, where it is set, is the words from one sheet's start to the
+	// next's, in every plane, in place of a sheet's count (Request.Strides).
+	stride int
 }
 
 // packedOperands appends weight wo's three planes to a primitive's inputs,
@@ -73,17 +76,25 @@ func (p *packed) Float(a int) int { return p.Int(a) }
 
 func (p *packed) Word(pl jlm.Plane, i int) int {
 	if p.sheet >= 0 {
-		i = p.Add(i, p.Mul(p.sheet, p.U(uint32(p.words[pl]))))
+		step := p.words[pl]
+		if p.stride > 0 {
+			step = p.stride
+		}
+		i = p.Add(i, p.Mul(p.sheet, p.U(uint32(step))))
 	}
 	return p.x.load(p.planes[pl], i)
 }
 
-// bank makes p read sheet node sheet of a bank of sheets sheets.
-func (p *packed) bank(sheet, sheets int) {
-	p.sheet = sheet
+// bank makes p read sheet node sheet of a bank of sheets sheets, each
+// stride words from the last where stride is set.
+func (p *packed) bank(sheet, sheets, stride int) {
+	p.sheet, p.stride = sheet, stride
 	for i, pl := range p.planes {
 		if pl >= 0 {
 			p.facts.Extents[pl] = sheets * p.words[i]
+			if stride > 0 {
+				p.facts.Extents[pl] = (sheets-1)*stride + p.words[i]
+			}
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
@@ -99,14 +100,21 @@ func TestComposedExpertPagesServe(t *testing.T) {
 						_, in, _ := m.PageStats()
 						return got, st, in
 					}
-					want, whole, _ := decode(t, false)
-					if n, d, _ := whole.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
-						t.Fatalf("the whole banks served %d block steps and declined %d (%s)", n, d, declinesOf(whole))
-					}
 					stream := func(slots int) tier.Option {
 						return tier.WithConfig(func(c *tier.Config) {
 							c.StreamExperts, c.StreamCacheSlots, c.HybridExperts, c.NoHybrid = true, slots, false, true
 						})
+					}
+					want, whole, _ := decode(t, false)
+					if n, d, _ := whole.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+						if d != whole.BlockDeclines[jit.DeclineExpertsHost] {
+							t.Fatalf("the whole banks served %d block steps and declined %d (%s)", n, d, declinesOf(whole))
+						}
+						// A card that does not hold every bank whole runs some
+						// blocks' experts on the host by default: the reference is
+						// the compact bank in pages, every block served from it.
+						t.Logf("the card holds no whole banks for %d block steps (%s): the compact bank in pages is the reference", d, declinesOf(whole))
+						want, _, _ = decode(t, false, stream(-1))
 					}
 					for _, arm := range []struct {
 						name   string
@@ -188,6 +196,107 @@ func TestComposedExpertPagesMove(t *testing.T) {
 				}
 				t.Logf("%d streamed placements, %d fills from pages", st.StreamBlocks, st.StreamFills)
 			}, WithExperts("card"), WithStreamTrial(false))
+		})
+	}
+}
+
+// cpuExpertModels are the mixtures whose blocks the composer serves on the
+// CPU device with their banks read in the host's expert pages
+// (TestComposedCPUExpertPagesServe): the router families' fixtures, Llama
+// 4's input-weighted top-1 and dbrx's clamped float banks among them, and a
+// checkpoint. DeepSeek's mixtures are not here: the CPU device declines
+// their latent attention's history (jit.DeclineLatent) before their banks.
+var cpuExpertModels = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix,
+	"synth-ernie45moe-hf" + q8Suffix, "synth-hunyuanmoe-hf" + q8Suffix, "synth-dots1-hf" + q8Suffix,
+	"synth-llama4-q8.gguf", "synth-dbrx.gguf", "synth-gptoss.gguf"}
+
+// TestComposedCPUExpertPagesServe runs each mixture's blocks on the CPU
+// device composed, its banks read in the host's expert pages at a page's
+// stride, teacher-forced, against main's kernels within main's own spread
+// (TestComposedCPUBlocksServe's band): every block step served, none
+// declined. Under a one-page budget every expert page is evicted and read
+// again from the file between the steps that use it, and the composed
+// logits are the resident run's bit for bit, the page-ins counted. With the
+// pager made to hold another expert's page than the one a kernel reads, the
+// logits leave the resident run's.
+func TestComposedCPUExpertPagesServe(t *testing.T) {
+	const steps, page = 40, 32
+	names := cpuExpertModels
+	if extra := os.Getenv("JITLLM_PAGED_EXPERTS"); extra != "" {
+		names = append(names, strings.Split(extra, ",")...)
+	}
+	for _, file := range names {
+		t.Run(file, func(t *testing.T) {
+			path := jlmOf(t, testmodels.Path(file))
+			ref, err := Open(path, noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ref.Close()
+			ref.setKVPageForTest(page)
+			toks := cpuTokens(t, ref, steps)
+			want := cpuLogits(t, ref, toks, cpuFaultNone, false)
+			cm, err := Open(path, noTune, WithJITOptions(nn.WithActWindow(cpuControlWindow)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cm.Close()
+			cm.setKVPageForTest(page)
+			ctl := cpuLogits(t, cm, toks, cpuFaultNone, false)
+			run := func(f cpuFault, opts ...Option) ([][]float32, int64) {
+				m, err := Open(path, append([]Option{noTune, WithComposedCPU(true)}, opts...)...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer m.Close()
+				m.setKVPageForTest(page)
+				got := cpuLogits(t, m, toks, f, true)
+				_, in, _ := m.PageStats()
+				return got, in
+			}
+			got, residentIn := run(cpuFaultNone)
+			float := true
+			for i := range ctl {
+				float = float && slices.Equal(ctl[i], want[i])
+			}
+			if float {
+				// A float model quantizes nothing: main's control is main, and
+				// the composed CPU is held to it within f32's reduction order.
+				worst := 0.0
+				for i := range want {
+					worst = max(worst, logitNMSE(got[i], want[i]))
+				}
+				t.Logf("over %d steps the composed CPU's float mixture is %.3g from main at the worst", steps, worst)
+				if math.IsNaN(worst) || worst > 1e-9 {
+					t.Fatalf("the composed CPU's float mixture is %.3g from main", worst)
+				}
+			} else {
+				med, worst, widest := cpuBand(t, want, got, ctl)
+				t.Logf("over %d steps the composed CPU is %.3f of main's spread from main at the median, worst NMSE %.3g where main's control reaches %.3g",
+					steps, med, worst, widest)
+				if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
+					t.Fatalf("the composed CPU mixture leaves main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+						med, bandRatio, worst, bandWorst, widest)
+				}
+			}
+			paged, pagedIn := run(cpuFaultNone, WithPageBudget(1))
+			if pagedIn <= residentIn {
+				t.Fatalf("a one-page budget took %d page-ins against %d resident: nothing paged", pagedIn, residentIn)
+			}
+			for i := range got {
+				if !slices.Equal(paged[i], got[i]) {
+					t.Fatalf("step %d: under a one-page budget the composed logits differ from the resident run's (NMSE %.3e)", i, nmseF32(got[i], paged[i]))
+				}
+			}
+			bad, _ := run(cpuFaultExpert, WithPageBudget(1))
+			far := 0.0
+			for i := range got {
+				far = max(far, logitNMSE(got[i], bad[i]))
+			}
+			if !(far > 1e-6) && !math.IsNaN(far) {
+				t.Fatalf("with another expert's page held the logits are %.3e from the resident run's: the gate cannot see it", far)
+			}
+			t.Logf("%d page-ins under one page against %d resident, every logit identical; the wrong page held moves them %.3e", pagedIn, residentIn, far)
 		})
 	}
 }

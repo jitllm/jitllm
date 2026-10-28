@@ -244,13 +244,13 @@ func decomposeMatVecRows(o graph.Op, c *Context) ([]Prim, error) {
 // sheetRow is the packed weight a pair reads and the row of it: the pair's
 // sheet of a bank, its row the coordinate's, or for a row-selected matvec
 // the one matrix of the bank's sheets as rows, its row the selection's.
-func sheetRow(o graph.Op, x *exprs, wo Operand, l jlm.TypeLayout, in *[]Operand, facts *Facts, sheet, sheets, row int) (p *packed, rows, at int) {
+func sheetRow(o graph.Op, x *exprs, wo Operand, l jlm.TypeLayout, in *[]Operand, facts *Facts, sheet, sheets, stride, row int) (p *packed, rows, at int) {
 	w := o.Weight[0]
 	if pairStride(o) == 0 {
 		return packedOperands(x, wo, l, w.Sheets, w.K, in, facts), w.Sheets, sheet
 	}
 	p = packedOperands(x, wo, l, w.Rows, w.K, in, facts)
-	p.bank(sheet, sheets)
+	p.bank(sheet, sheets, stride)
 	return p, w.Rows, row
 }
 
@@ -321,7 +321,18 @@ func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error
 	// see, pair j's K from j*stride.
 	xv := x.at(0, []int{R, W}, r, x.op(OpAdd, U, x.op(OpMul, U, j, x.u(uint32(stride))), col))
 	var wv int
-	if jlm.Verbatim(wo.Format) {
+	if st := c.Strides[w.Role]; jlm.Verbatim(wo.Format) && st > 0 && pairStride(o) != 0 {
+		// Each sheet stride words from the last: the sheet's rows read
+		// from its own start.
+		width := 2
+		if wo.Format == jlm.TypeF32 {
+			width = 4
+		}
+		p := &packed{x: &x, in: &in, facts: &facts, codes: -1, sheet: sel, stride: st, planes: [3]int{len(in), -1, -1}}
+		facts.Extents[len(in)] = (held-1)*st + (rows*K*width+3)/4
+		in = append(in, wo)
+		wv = jlm.DecodeVerbatim[int](p, wo.Format, K, row, col)
+	} else if jlm.Verbatim(wo.Format) {
 		v, err := weightElement(&x, wo, held*rows, K, &in, &facts, x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row), col)
 		if err != nil {
 			return Prim{}, err
@@ -332,7 +343,7 @@ func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error
 		if !ok || K%(l.Sub*l.SuperSub) != 0 {
 			return Prim{}, fmt.Errorf("no reading rules for a bank of rows of %d", K)
 		}
-		p, dr, dw := sheetRow(o, &x, wo, l, &in, &facts, sel, held, row)
+		p, dr, dw := sheetRow(o, &x, wo, l, &in, &facts, sel, held, c.Strides[w.Role], row)
 		wv = jlm.DecodeElement[int](p, l, dr, dw, col)
 	}
 	x.op(OpMul, ir.F32, wv, xv)
@@ -369,7 +380,7 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 	in := []Operand{words}
 	facts := Facts{Extents: map[int]int{0: R * nwd}}
 	sheet, held := pageOf(o, c, &d, &in, &facts, sheetAt(o, c, &d, &in, &facts, 1, r, j))
-	p, dr, dw := sheetRow(o, &d, wo, l, &in, &facts, sheet, held, row)
+	p, dr, dw := sheetRow(o, &d, wo, l, &in, &facts, sheet, held, c.Strides[w.Role], row)
 	at := func(col int) int { return d.op(OpAdd, U, d.op(OpMul, U, j, d.u(uint32(stride))), col) }
 	per := l.Sub
 	if l.WordCodes() {
@@ -394,7 +405,7 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 	ein := []Operand{dot, scales}
 	efacts := Facts{Extents: map[int]int{0: R * P * rows * nsub, 1: R * (nw + ns)}}
 	esheet, eheld := pageOf(o, c, &e, &ein, &efacts, sheetAt(o, c, &e, &ein, &efacts, 2, er, ej))
-	ep, edr, edw := sheetRow(o, &e, wo, l, &ein, &efacts, esheet, eheld, erow)
+	ep, edr, edw := sheetRow(o, &e, wo, l, &ein, &efacts, esheet, eheld, c.Strides[w.Role], erow)
 	first := e.op(OpMul, U, es, e.u(uint32(l.Sub)))
 	_, scale, bias := jlm.DecodeParts[int](ep, l, edr, edw, first)
 	df := e.un(OpCvtF32, F, e.at(0, []int{R, P, rows, nsub}, er, ej, erow, es))

@@ -72,6 +72,22 @@ func TestComposedCPUExpertPages(t *testing.T) {
 		}
 		whole := bank([]int{0, 1, 2, 3, 4, 5, 6, 7})
 		pages := bank(slotExpert)
+		// The bank as the host's expert pages hold it: each sheet's planes
+		// a page apart, the words between them garbage.
+		stride := 7
+		for i := range packed[0] {
+			stride = max(stride, len(packed[0][i])+7)
+		}
+		var strided [3][]uint32
+		for i := range strided {
+			strided[i] = make([]uint32, E*stride)
+			for j := range strided[i] {
+				strided[i][j] = rng.Uint32()
+			}
+			for e := range E {
+				copy(strided[i][e*stride:], packed[e][i])
+			}
+		}
 		bias := make([]float32, E*rows)
 		for i := range bias {
 			bias[i] = float32(rng.NormFloat64())
@@ -131,9 +147,9 @@ func TestComposedCPUExpertPages(t *testing.T) {
 						other = slotExpert[1]
 					}
 					swapped[sels[0]], swapped[other] = swapped[other], swapped[sels[0]]
-					run := func(paged map[jlm.Role]int, planes [3][]uint32, tab []uint32) []float32 {
+					run := func(paged, strides map[jlm.Role]int, planes [3][]uint32, tab []uint32) []float32 {
 						t.Helper()
-						_, codes, err := arm.r.Form(Request{Graph: b.G, Formats: formats, Paged: paged,
+						_, codes, err := arm.r.Form(Request{Graph: b.G, Formats: formats, Paged: paged, Strides: strides,
 							Step: Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32}, Device: cpuDevice()})
 						switch {
 						case err != nil && paged == nil:
@@ -173,7 +189,7 @@ func TestComposedCPUExpertPages(t *testing.T) {
 						}
 						return unsafe.Slice((*float32)(unsafe.Pointer(&out[0])), tokens*P*rows)
 					}
-					got := run(nil, whole, nil)
+					got := run(nil, nil, whole, nil)
 					if got == nil {
 						continue
 					}
@@ -182,7 +198,7 @@ func TestComposedCPUExpertPages(t *testing.T) {
 						continue
 					}
 					pg := map[jlm.Role]int{jlm.RoleExpGateBank: held}
-					paged := run(pg, pages, table)
+					paged := run(pg, nil, pages, table)
 					if paged == nil {
 						continue
 					}
@@ -192,9 +208,23 @@ func TestComposedCPUExpertPages(t *testing.T) {
 							break
 						}
 					}
-					bad := run(pg, pages, swapped)
+					bad := run(pg, nil, pages, swapped)
 					if e := cpuNMSE(bad, got); !(e > 1e-6) {
 						t.Errorf("%s: with two experts' table words swapped the answer moved %.3e: the gate cannot see a page read from the wrong expert", name, e)
+					}
+					// The strided bank: every sheet read from its own start
+					// (a float sheet's rows by another index expression, within
+					// a rounding of the packed bank's), and with the stride a
+					// word short, not.
+					st := map[jlm.Role]int{jlm.RoleExpGateBank: stride}
+					if sv := run(nil, st, strided, nil); sv != nil {
+						if e := cpuNMSE(sv, got); math.IsNaN(e) || e > 1e-12 {
+							t.Errorf("%s: the strided bank is %.3e from the packed bank's", name, e)
+						}
+					}
+					st[jlm.RoleExpGateBank] = stride - 1
+					if sv := run(nil, st, strided, nil); sv != nil && !(cpuNMSE(sv, got) > 1e-6) && !math.IsNaN(cpuNMSE(sv, got)) {
+						t.Errorf("%s: with the stride a word short the answer moved %.3e: the gate cannot see a sheet read from its neighbour's place", name, cpuNMSE(sv, got))
 					}
 					ran++
 				}
