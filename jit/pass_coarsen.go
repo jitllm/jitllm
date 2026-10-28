@@ -300,10 +300,13 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool) (*K
 	k.local = k.m.add(Node{Op: OpLocal, Type: ir.U32, A: k.u})
 	for _, n := range members {
 		for _, s := range n.Stores {
-			if s.Barrier || s.Run || n.Bufs[s.Buf].Operand.Temp {
+			if s.Barrier || s.Run || n.Bufs[s.Buf].Operand.Temp || k.err != nil {
 				continue
 			}
 			for _, idx := range k.indices(n) {
+				if k.err != nil {
+					break
+				}
 				coords := k.m.decode(idx, n.Space)
 				v := k.produce(n, s, coords)
 				ns := Store{Buf: k.m.bufLike(n.Bufs[s.Buf]), At: k.guard}
@@ -774,6 +777,9 @@ func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
 	if v, ok := k.memo[key]; ok {
 		return v
 	}
+	if k.err != nil {
+		return 0
+	}
 	var v int
 	if n.Kind == PrimReduce {
 		v = k.reduce(n, s, coords, g)
@@ -825,7 +831,7 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 	}
 	if g <= U {
 		acc := start
-		for j := 0; j < K; j++ {
+		for j := 0; j < K && k.err == nil; j++ {
 			if k.over() {
 				return m.u32(0)
 			}
@@ -861,7 +867,7 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 	oc := m.decode(o, n.Space)
 	j0 := m.bin(OpMul, ir.U32, m.bin(OpRem, ir.U32, k.u, m.u32(slots)), m.u32(count))
 	acc := start
-	for c := 0; c < count; c++ {
+	for c := 0; c < count && k.err == nil; c++ {
 		if k.over() {
 			return m.u32(0)
 		}
