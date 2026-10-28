@@ -1729,6 +1729,18 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.laurelL
 	case jlm.RoleLowRankOut:
 		return l.laurelR
+	case jlm.RoleHCAttnDown:
+		return l.hcAD
+	case jlm.RoleHCAttnUp:
+		return l.hcAU
+	case jlm.RoleHCAttnInject:
+		return l.hcAI
+	case jlm.RoleHCFFNDown:
+		return l.hcFD
+	case jlm.RoleHCFFNUp:
+		return l.hcFU
+	case jlm.RoleHCFFNInject:
+		return l.hcFI
 	}
 	return nil
 }
@@ -1918,6 +1930,14 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 			return l.k3.resF
 		}
 		return l.k3.rnorm
+	case jlm.RoleHCAttnNorm, jlm.RoleHCFFNNorm:
+		if l.q4e == nil {
+			return nil
+		}
+		if r == jlm.RoleHCAttnNorm {
+			return l.q4e.normA
+		}
+		return l.q4e.normF
 	}
 	return nil
 }
@@ -1969,14 +1989,29 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 
 // recHeld says linear block l's recurrent state is where the composer's
 // form steps it: in the block's pool of slots of the delta rule's state
-// alone (no tail), the step's recurrent descriptor naming each run's slots
-// -- a decode's one row, a prompt chunk's rows as one run, a ragged step's
+// and any tail its graph states, the step's recurrent descriptor naming
+// each run's slots -- a decode's one row, a prompt chunk's rows as one run, a ragged step's
 // sequences a run each. A pool of two halves is read in one and written in
 // the other; a pool of one shared half is stepped in place, through the
 // composer's own descriptor (bs.cRows).
 func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch) bool {
 	return l.pool != nil && bs.dRows != nil && (l.pool.s[1] != nil || g.recShared && bs.cRows != nil) &&
-		p.Recurrent.TailLen == 0 && !l.centred && l.q4e == nil
+		!l.centred && (p.Recurrent.TailLen == 0 || tailStated(l.graph, p.Recurrent.StateLen))
+}
+
+// tailStated says graph g's delta rule reads its state at slots of n floats:
+// a tail past the rule's matrices that the graph states (graph.OpDeltaRule's
+// Span), so the composer's slot is the pool's.
+func tailStated(g *graph.Graph, n int) bool {
+	if g == nil {
+		return false
+	}
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpDeltaRule {
+			return o.Attr.Span == n
+		}
+	}
+	return false
 }
 
 // bindRec binds linear block l's step in sv to session sid's half of its

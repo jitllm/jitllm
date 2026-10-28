@@ -100,10 +100,12 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 // embedFits is why the rows of tokens ids at positions pos onwards into dst
 // are not the composer's input rows, serves where they are: each token a row
 // of the embedding, each position one of the position table's, and dst the
-// rows' width.
+// rows' width, or every stream's where the graph writes the first.
 func (bs *blockScratch) embedFits(ids []int32, pos int, dst []float32) partDecline {
 	w := bs.embW
-	if len(dst) != len(ids)*w.k {
+	// A residual of several streams, stream-major, takes the rows in its
+	// first stream, the graph's one output.
+	if n := len(ids) * w.k; len(dst) != n && (len(dst) != n*bs.p.Streams() || len(bs.embedGraph.Out) != 1) {
 		return partEmbedToken
 	}
 	for _, id := range ids {

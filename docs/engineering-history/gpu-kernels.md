@@ -10501,3 +10501,19 @@ row where the composer's reads two.
   from 2.16 to 3.3e-12 of main. The composed CPU decode of synth-qwen4exp,
   synth-kimik3 and synth-deepseek4 allocates nothing a warm token
   (testing.AllocsPerRun; main's qwen4exp decode makes 6).
+- On the cards (V100: cuda:0 and vulkan), synth-qwen4exp's block 0 serves
+  its decode steps composed: the tier binds the hyper-connections'
+  projections and norms by role, and a linear block's state with the
+  n-gram tail is the composer's when its graph states that tail
+  (OpDeltaRule's Span equal to the pool's slot). 29 of 116 block steps
+  served, the other 87 declined for no graph (QSA and the n-gram block),
+  at 4.4e-11 on cuda:0 and 4.2e-11 on vulkan; the four hyper-connection
+  violations move it 0.42 to 2.6. Kimi-K3's input rows are composed on
+  the card: the bank's rows are the running residual's alone, written into
+  the first stream of the stream-major residual; synth-kimik3 at 2.8e-10
+  and 1.0e-10 (ragged 4.3e-10, 2.2e-10), every step's input rows served,
+  the embedding doubled moving it 2.1. graph.Stated refuses a nil
+  expression where it had dereferenced it: Gemma 3n's "gaussian on every
+  block" violation leaves no plain activation for the per-layer input, and
+  the device gate crashed there; the block is now refused by name
+  (UncoveredAct) under that violation.

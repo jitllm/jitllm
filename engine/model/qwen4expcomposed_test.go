@@ -1,6 +1,7 @@
 package model
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestQwen4ExpServesComposedOnCPU runs each Qwen3.8-Flash-Next fixture on
@@ -299,5 +301,87 @@ func (m *Model) rewriteCollapse(t *testing.T, rewrite func(*graph.Graph) *graph.
 		m.front.mu.Lock()
 		m.front.set = was
 		m.front.mu.Unlock()
+	}
+}
+
+// TestQwen4ExpServesComposed holds the composer to each Qwen3.8-Flash-Next
+// fixture's stated blocks on every device present: the four streams bound
+// as views of the step's residual, each sublayer's gated mix and placement,
+// the delta rule's state read at slots carrying the n-gram tail, every
+// stated block step served and every other declined for having no graph
+// (QSA and the n-gram block), within 1e-5 of the host's logits. Each piece
+// of the hyper-connection taken out of the statement (q4eComposedViolations)
+// moves them past 100 times the clean worst and past 1e-4.
+func TestQwen4ExpServesComposed(t *testing.T) {
+	const bound, promptLen = 1e-5, 3
+	ran := 0
+	for _, fx := range q4eFixtures {
+		t.Run(fx.name, func(t *testing.T) {
+			m, g := openQ4E(t, fx.name)
+			defer m.Close()
+			if !fx.sel(m) {
+				t.Fatal("the container does not carry the fixture's graph")
+			}
+			covered := coveredBlocks(m)
+			if covered == 0 {
+				t.Fatal("no block is stated: the gate selects nothing")
+			}
+			ids := g.IDs
+			host := m.NewState(len(ids) + 1)
+			var want [][]float32
+			for _, id := range ids {
+				lg, err := host.Forward(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want = append(want, append([]float32(nil), lg...))
+			}
+			host.Close()
+			prompt, toks := ids[:promptLen], ids[promptLen:]
+			run := func(t *testing.T, dev string) float64 {
+				t.Helper()
+				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock, true, false)
+				served, declined, _ := st.ServedPart(tier.ComposedBlock)
+				if n := len(toks) * covered; served != n || declined != len(toks)*(m.Cfg.NLayer-covered) ||
+					st.BlockDeclines[jit.DeclineNoGraph] != declined {
+					t.Fatalf("%d block steps served and %d declined, want %d served and the rest declined for no graph (%s)",
+						served, declined, n, declinesOf(st))
+				}
+				if st.FormedAtStep != 0 {
+					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
+				}
+				worst := 0.0
+				for i := range got {
+					e := logitNMSE(got[i], want[promptLen-1+i])
+					if math.IsNaN(e) {
+						t.Fatalf("step %d: the logits are not finite", i)
+					}
+					worst = max(worst, e)
+				}
+				t.Logf("%s: %d block steps served, %d declined (%s), worst NMSE %.3g", dev, served, declined, declinesOf(st), worst)
+				return worst
+			}
+			for _, dev := range stepDevices() {
+				t.Run(dev, func(t *testing.T) {
+					ran++
+					worst := run(t, dev)
+					if !(worst < bound) {
+						t.Fatalf("worst logit NMSE %.3g against the host, bound %g", worst, bound)
+					}
+					for _, v := range q4eComposedViolations(t) {
+						undo := v.mut(m)
+						bad := run(t, dev)
+						undo()
+						t.Logf("violation %q: worst NMSE %.3g", v.name, bad)
+						if !(bad > 100*worst) || !(bad > 1e-4) {
+							t.Errorf("%s: the composed arm cannot see it -- worst NMSE %.3g against a clean %.3g", v.name, bad, worst)
+						}
+					}
+				})
+			}
+		})
+	}
+	if ran == 0 {
+		t.Fatal("no device on this host")
 	}
 }

@@ -21,9 +21,11 @@ import (
 // residual restarted, KDA, MLA and the latent mixture, every block step
 // served, within 1e-5 of the host's logits. Each piece taken out of the
 // statement (k3ComposedViolations) must move them past 100 times the clean
-// worst and past 1e-4. The streams' collapse before the head is the
-// host's, and the input rows and a head over every stream are refused by
-// name (UncoveredStreams).
+// worst and past 1e-4. The input rows are the composer's, the running
+// residual's alone (a block banks each checkpoint before any block reads
+// it), and the embedding doubled there moves the logits as far. The
+// streams' collapse before the head is the host's, and a head over every
+// stream is refused by name (UncoveredStreams).
 func TestKimiK3ServesComposed(t *testing.T) {
 	const bound, promptLen = 1e-5, 3
 	ran := 0
@@ -37,8 +39,8 @@ func TestKimiK3ServesComposed(t *testing.T) {
 			if c := coveredBlocks(m); c != m.Cfg.NLayer {
 				t.Fatalf("the front end states %d of %d blocks: %s (%v)", c, m.Cfg.NLayer, m.Uncovered(0), m.UncoveredErr(0))
 			}
-			if s := m.frontGraphs(); s.head != nil || s.headWhy != UncoveredStreams || s.embed != nil || s.embedWhy != UncoveredStreams {
-				t.Fatalf("the head and the input rows over several streams are %s and %s, want both refused by name", s.headWhy, s.embedWhy)
+			if s := m.frontGraphs(); s.head != nil || s.headWhy != UncoveredStreams || s.embed == nil {
+				t.Fatalf("the head over several streams is %s, want refused by name, and the input rows %s, want stated", s.headWhy, s.embedWhy)
 			}
 			ids := g.IDs
 			host := m.NewState(len(ids) + 1)
@@ -54,10 +56,14 @@ func TestKimiK3ServesComposed(t *testing.T) {
 			prompt, toks := ids[:promptLen], ids[promptLen:]
 			run := func(t *testing.T, dev string) float64 {
 				t.Helper()
-				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock, true, false)
+				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock|tier.ComposedEmbed, true, false)
 				served, declined, _ := st.ServedPart(tier.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))
+				}
+				ne, de, _ := st.ServedPart(tier.ComposedEmbed)
+				if ne += st.ReplayedPart(tier.ComposedEmbed); ne < len(toks) || de != 0 {
+					t.Fatalf("the input rows served %d times and declined %d, want every step's (%s)", ne, de, declinesOf(st))
 				}
 				if st.FormedAtStep != 0 {
 					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
@@ -80,7 +86,7 @@ func TestKimiK3ServesComposed(t *testing.T) {
 					if !(worst < bound) {
 						t.Fatalf("worst logit NMSE %.3g against the host, bound %g", worst, bound)
 					}
-					for _, v := range k3ComposedViolations(t) {
+					for _, v := range append(k3ComposedViolations(t), embedDoubled(t)) {
 						undo := v.mut(m)
 						bad := run(t, dev)
 						undo()
@@ -319,4 +325,34 @@ func addedNotRestarted(m *Model, g *graph.Graph) *graph.Graph {
 		}
 	}
 	return &out
+}
+
+// embedDoubled is the input rows' graph with each row's embedding doubled.
+func embedDoubled(t *testing.T) c6Violation {
+	return c6Violation{"the input rows doubled", func(m *Model) func() {
+		s := m.frontGraphs()
+		if s.embed == nil {
+			t.Fatal("the model states no input rows")
+		}
+		g := *s.embed
+		g.Values = slices.Clone(s.embed.Values)
+		g.Ops = slices.Clone(s.embed.Ops)
+		out := g.Out[0]
+		doubled := graph.ValueID(len(g.Values))
+		g.Values = append(g.Values, graph.Value{Name: "embd.doubled", Width: g.Values[out].Width})
+		g.Ops = append(g.Ops, graph.Op{Kind: graph.OpMap, In: []graph.ValueID{out}, Out: []graph.ValueID{doubled},
+			Attr: graph.Attrs{Fn: graph.MapMul, Const: 2}})
+		g.Out = append([]graph.ValueID{doubled}, g.Out[1:]...)
+		set := *s
+		set.embed = &g
+		m.front.mu.Lock()
+		was := m.front.set
+		m.front.set = &set
+		m.front.mu.Unlock()
+		return func() {
+			m.front.mu.Lock()
+			m.front.set = was
+			m.front.mu.Unlock()
+		}
+	}}
 }

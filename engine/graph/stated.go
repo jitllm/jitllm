@@ -12,6 +12,9 @@ import (
 // is bound at its shape in f. Every operand must be read: an expression that
 // leaves one unread does not take the operands it is given.
 func (s *Builder) Stated(name string, e *jlm.Expr, in []ValueID, width int, f Facts) (ValueID, error) {
+	if e == nil {
+		return 0, fmt.Errorf("no expression stated for %s", name)
+	}
 	if err := e.Valid(); err != nil {
 		return 0, err
 	}

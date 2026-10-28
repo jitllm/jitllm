@@ -1360,7 +1360,9 @@ func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 	f, _ := m.inventory(jlm.DenseBlock)
 	_, types := f.Inventory[jlm.RoleTokenTypes]
 	switch {
-	case c.Streams() > 1:
+	case c.Streams() > 1 && !c.mixesStreams():
+		// A bank of checkpoints reads only the running residual's rows
+		// before a block writes the rest; other streams start from them.
 		return nil, UncoveredStreams, nil
 	case types || m.hardEmbd != nil:
 		return nil, UncoveredEmbedRows, nil
