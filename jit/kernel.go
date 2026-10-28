@@ -387,6 +387,16 @@ const (
 // byteDot reports whether op is a dot of four bytes a word.
 func (op Op) byteDot() bool { return op == OpDot4 || op == OpDot4U }
 
+// byteDots reports whether the kernel holds a byte dot.
+func (k *Kernel) byteDots() bool {
+	for _, nd := range k.Nodes {
+		if nd.Op.byteDot() {
+			return true
+		}
+	}
+	return false
+}
+
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
 // A load's At, where a cursor set it, is 1 + the loop whose address it reads
 // from. Load reads Bufs[Buf] at index A, or where Ax

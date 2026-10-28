@@ -33,6 +33,12 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if r := x86.Reg(k.Ones - 1); k.Ones > 0 {
 		e.a.VPCMPEQW(r, r, r)
 		e.a.VPSRLW(r, r, 15)
+	} else if e.isa&x86.ISAVNNI == 0 && k.byteDots() {
+		// No register holds the byte dots' ones: they are read from the
+		// red zone, made once while every vector register is free.
+		e.a.VPCMPEQW(x86.Y0, x86.Y0, x86.Y0)
+		e.a.VPSRLW(x86.Y0, x86.Y0, 15)
+		e.a.VMOVDQUStore(onesSlot, x86.Y0)
 	}
 	for _, en := range k.Seq {
 		if e.err != nil {
@@ -92,6 +98,10 @@ type x86Lowerer struct {
 // shiftCount is the red-zone word a vector shift by a general register's
 // count reads it from: slot 16, which no spill takes.
 var shiftCount = x86.At(x86.RSP, -128)
+
+// onesSlot is the red zone's vector of ones words below shiftCount, where
+// no register holds the byte dots' (Kernel.Ones).
+var onesSlot = x86.At(x86.RSP, -160)
 
 // spillSlot is red-zone slot s, 1-based, below RSP.
 func spillSlot(s int) x86.Mem { return x86.At(x86.RSP, int32(-8*s)) }
@@ -366,14 +376,12 @@ func (e *x86Lowerer) node(i int) {
 		}
 		p := x86.Reg(nd.Tmp - 1)
 		a.VPMADDUBSW(p, u, t)
-		u, t = x86.Reg(nd.Tmp2-1), p
-		ones := x86.Reg(e.k.Ones - 1)
+		t = p
 		if e.k.Ones == 0 {
-			a.VPCMPEQW(u, u, u)
-			a.VPSRLW(u, u, 15)
-			ones = u
+			a.VPMADDWDMem(t, t, onesSlot)
+		} else {
+			a.VPMADDWD(t, t, x86.Reg(e.k.Ones-1))
 		}
-		a.VPMADDWD(t, t, ones)
 		a.VPADDD(e.reg(i), e.reg(nd.C), t)
 	case OpWidenHalf:
 		switch {
