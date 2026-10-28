@@ -213,6 +213,10 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: a query of %d and %d weights over %d heads of %d", at, width(o.In[0]), len(o.In)-1, a.NHead, a.HeadDim)
 			case width(o.Out[0]) != a.NKVHead || g.Values[o.Out[0]].Elem != ElemF32:
 				bad("%s: a selection of %d over %d groups", at, width(o.Out[0]), a.NKVHead)
+			case a.Pooled && (a.Local != 0 || len(o.Weight) != 1 || o.Weight[0].K != a.HeadDim || a.NRot < 0 || a.NRot%2 != 0 || a.NRot > a.HeadDim):
+				bad("%s: pooled blocks with %d local, %d norm weights, a rotary of %d over keys of %d", at, a.Local, len(o.Weight), a.NRot, a.HeadDim)
+			case !a.Pooled && len(o.Weight) != 0:
+				bad("%s: %d weights on a selection that pools no key", at, len(o.Weight))
 			}
 		case OpAttend:
 			if len(o.In) == 2 {

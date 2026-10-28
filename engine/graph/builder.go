@@ -135,6 +135,15 @@ func (s *Builder) Select(q ValueID, h StateRef, a Attrs, w ...ValueID) ValueID {
 	return y
 }
 
+// SelectPooled is Select over pooled block keys (Attrs.Pooled), each normed
+// by role norm's weight.
+func (s *Builder) SelectPooled(q ValueID, h StateRef, a Attrs, norm jlm.Role) ValueID {
+	a.Pooled = true
+	y := s.value("select", a.NKVHead)
+	s.G.op(Op{Kind: OpSelect, In: []ValueID{q}, Out: []ValueID{y}, Weight: []Binding{{Role: norm, K: a.HeadDim}}, Reads: []StateRef{h}, Attr: a})
+	return y
+}
+
 // AttendSelected is AttendOf over the positions selection sel keeps.
 func (s *Builder) AttendSelected(q ValueID, h StateRef, sel ValueID, a Attrs, sinks ...jlm.Role) ValueID {
 	y := s.AttendOf(q, h, a, sinks...)

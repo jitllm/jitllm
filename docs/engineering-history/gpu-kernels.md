@@ -10693,3 +10693,19 @@ row where the composer's reads two.
   4.9e-12 (cuda) and 5.0e-12 (vulkan), 36 block steps composed, no
   decline, each violation 1.4 to 1.8. DeepSeek V3.2's blocks on the CPU
   device stay declined by name (a latent attention's history).
+- A pooled block selection (graph.Attrs.Pooled, OpSelect): each complete
+  block of Span positions scored by one key, the mean of its keys RMS-normed
+  by a stated weight and turned at the block's first position by the
+  model's rotary (the table's angle code, ropeTurn, shared with
+  OpRopeTable), only complete blocks ranked and the incomplete one kept
+  beside TopK: QSA's selection as an op. TestComposedCPUSelectPooled holds
+  it on the CPU to main's procedure (qsa.go): NMSE 2.5e-13 to 9.8e-13,
+  the kept count exact, and three departures seen (a block pooled from its
+  first key 0.8 to 3.0, the tail ranked 0.12 to 0.18, a block turned at
+  its last position 0.5 to 1.0). A map whose load index is a select over
+  the lane's coordinate (each element reading its rotary partner) read
+  wrong values on the CPU; the turn is now a map over pairs storing both
+  elements, as OpRope's. OpRope turns NRot elements from an Offset and
+  back by the negated angle (Attrs.Inverse), DeepSeek V4's rotation back
+  of its output's tail; TestComposedCPURope holds both, the unturned
+  elements bit for bit.

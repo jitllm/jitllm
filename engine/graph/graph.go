@@ -35,7 +35,8 @@ const (
 	// it names alone, a name past W's rows read as its last.
 	OpMatVec
 	// OpRope turns each head's first NRot elements by the position, in the
-	// pair Layout, at Base.
+	// pair Layout, at Base: the NRot from Offset of the head where it is
+	// set, and back (by the negated angle) where Inverse.
 	OpRope
 	// OpKVAppend writes k and v (In[0], In[1]) as this position's row of the
 	// block's KV: it reads state version n and writes n+1.
@@ -222,9 +223,10 @@ const (
 	// A group ranks the blocks of Span positions from the history's first,
 	// a block by its best position, equal scores to the lower block, and
 	// keeps TopK of them: the Local blocks ending at the row's own, then the
-	// best of the rest -- every block where there are at most TopK. Out[0]
-	// (one a group) is the positions each group keeps. A primitive over the
-	// history, as OpAttend is.
+	// best of the rest -- every block where there are at most TopK. Pooled
+	// (Attrs.Pooled) scores a block by one key pooled from its positions'.
+	// Out[0] (one a group) is the positions each group keeps. A primitive
+	// over the history, as OpAttend is.
 	OpSelect
 	// OpTailRow is In[0] with its last live row (the step's positions'
 	// first word less one) Weight[0]'s one row: a tower's class row after
@@ -459,10 +461,20 @@ type Attrs struct {
 	// OpPatchify, OpLeadRow and OpDropRows too, and both are the window of
 	// OpMap's bound vector. Width is an OpAttend's history row where it is
 	// wider than the heads it reads (its first), and OpSelect's, Offset
-	// where OpSelect's key starts in it.
+	// where OpSelect's key starts in it, and OpRope's where each head's turned
+	// elements start.
 	Offset, Width int
 	// Local is OpSelect's blocks kept ending at the row's own.
 	Local int
+	// Pooled scores OpSelect's blocks by their pooled keys: a complete
+	// block's keys averaged, RMS-normed (Eps, Weight[0]) and turned at the
+	// block's first position by the rotary its NRot, Base, Layout, Freqs,
+	// Sections and Mscale name (none where NRot is 0). Only the complete
+	// blocks rank, TopK of them kept, and the row's incomplete block is kept
+	// beside them; Local is 0.
+	Pooled bool
+	// Inverse turns OpRope's elements back: by the negated angle.
+	Inverse bool
 	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
 	// OpTopK, OpRank, OpTile): the function, the order a reduction runs in, the
 	// group a reduction, top-k or rank runs over (0: the row), a constant

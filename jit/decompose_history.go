@@ -75,7 +75,7 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	// position axes (Sections), each pair's axis are in it. Each pair turns
 	// by one angle either way, so the rotation is the same.
 	if len(o.In) != 1 || len(o.Out) != 1 || a.HeadDim <= 0 || c.width(o.In[0])%a.HeadDim != 0 ||
-		a.NRot <= 0 || a.NRot%2 != 0 || a.NRot > a.HeadDim ||
+		a.NRot <= 0 || a.NRot%2 != 0 || a.Offset < 0 || a.Offset+a.NRot > a.HeadDim ||
 		a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox && a.Layout != graph.RopeSplit {
 		return nil, fmt.Errorf("a rotary of %d of %d, layout %d", a.NRot, a.HeadDim, a.Layout)
 	}
@@ -88,6 +88,9 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	first, step := x.op(OpMul, U, p, x.u(2)), 1
 	if a.Layout != graph.RopeNorm {
 		first, step = p, pairs
+	}
+	if a.Offset > 0 {
+		first = x.op(OpAdd, U, first, x.u(uint32(a.Offset)))
 	}
 	at := x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(hd))), first)
 	at2 := x.op(OpAdd, U, at, x.u(uint32(step)))
@@ -107,6 +110,9 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	if a.Layout == graph.RopeSplit {
 		co1, si1 = angle(x.op(OpAdd, U, p, x.u(uint32(pairs))))
 	}
+	if a.Inverse {
+		si, si1 = x.op(OpSub, F, x.f(0), si), x.op(OpSub, F, x.f(0), si1)
+	}
 	y0 := x.op(OpSub, F, x.op(OpMul, F, x0, co), x.op(OpMul, F, x1, si))
 	y1 := x.op(OpAdd, F, x.op(OpMul, F, x0, si1), x.op(OpMul, F, x1, co1))
 	out := c.value(o.Out[0])
@@ -116,14 +122,17 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: []Operand{c.value(o.In[0]), table}, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: sh, Value: y0}, {Out: out, Ax: []int{r, at2}, Ext: sh, Value: y1}}}}
-	// A partial rotary turns the first NRot of each head; the rest of the
-	// head is the input's.
-	if tail := hd - a.NRot; tail > 0 {
+	// A partial rotary turns NRot of each head from Offset; the rest of
+	// the head, before and after, is the input's.
+	for _, keep := range [][2]int{{0, a.Offset}, {a.Offset + a.NRot, hd - a.Offset - a.NRot}} {
+		if keep[1] <= 0 {
+			continue
+		}
 		var t exprs
 		tr, th, tj := t.coord(0), t.coord(1), t.coord(2)
-		ta := t.op(OpAdd, U, t.op(OpAdd, U, t.op(OpMul, U, th, t.u(uint32(hd))), t.u(uint32(a.NRot))), tj)
+		ta := t.op(OpAdd, U, t.op(OpAdd, U, t.op(OpMul, U, th, t.u(uint32(hd))), t.u(uint32(keep[0]))), tj)
 		v := t.at(0, sh, tr, ta)
-		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, W / hd, tail}, In: []Operand{c.value(o.In[0])}, Expr: t.e,
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, W / hd, keep[1]}, In: []Operand{c.value(o.In[0])}, Expr: t.e,
 			Stores: []PrimStore{{Out: out, Ax: []int{tr, ta}, Ext: sh, Value: v}}})
 	}
 	return prims, nil

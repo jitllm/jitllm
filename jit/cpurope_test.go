@@ -11,21 +11,26 @@ import (
 )
 
 // TestComposedCPURope forms OpRope on the CPU, full and partial, both
-// layouts, at one row and at a chunk of rows: each head's first NRot turned
-// in pairs by the row's angles, held to the definition, and every element
-// of the unturned tail equal to the input's, bit for bit.
+// layouts, at one row and at a chunk of rows: each head's first NRot (or
+// NRot from an Offset) turned in pairs by the row's angles, or back by them
+// where Inverse, held to the definition, and every element left unturned
+// equal to the input's, bit for bit.
 func TestComposedCPURope(t *testing.T) {
 	rng := rand.New(rand.NewSource(9))
 	ran := 0
-	for _, sh := range []struct{ heads, hd, nrot int }{{4, 128, 64}, {2, 256, 64}, {3, 64, 32}, {2, 128, 128}, {2, 80, 40}} {
+	for _, sh := range []struct {
+		heads, hd, nrot, off int
+		inv                  bool
+	}{{4, 128, 64, 0, false}, {2, 256, 64, 0, false}, {3, 64, 32, 0, false}, {2, 128, 128, 0, false}, {2, 80, 40, 0, false},
+		{2, 128, 64, 64, true}, {3, 64, 16, 8, false}, {2, 64, 64, 0, true}} {
 		for _, layout := range []graph.RopeLayout{graph.RopeNorm, graph.RopeNeox} {
 			for _, R := range []int{1, 5} {
-				name := fmt.Sprintf("%dx%d/rot%d/layout%d/rows%d", sh.heads, sh.hd, sh.nrot, layout, R)
+				name := fmt.Sprintf("%dx%d/rot%d@%d/inv%v/layout%d/rows%d", sh.heads, sh.hd, sh.nrot, sh.off, sh.inv, layout, R)
 				w := sh.heads * sh.hd
 				b := graph.New()
 				x := b.In("x", w)
 				y := b.Emit(graph.OpRope, []graph.ValueID{x}, []graph.Result{{Name: "y", Width: w}}, nil,
-					graph.Attrs{HeadDim: sh.hd, NRot: sh.nrot, Layout: layout}, nil, nil)[0]
+					graph.Attrs{HeadDim: sh.hd, NRot: sh.nrot, Layout: layout, Offset: sh.off, Inverse: sh.inv}, nil, nil)[0]
 				b.Out(y)
 				capRows := R
 				if R > 1 {
@@ -75,12 +80,16 @@ func TestComposedCPURope(t *testing.T) {
 				for r := range R {
 					for h := range sh.heads {
 						base := r*w + h*sh.hd
+						turned := base + sh.off
 						for p := range sh.nrot / 2 {
-							i0, i1 := base+2*p, base+2*p+1
+							i0, i1 := turned+2*p, turned+2*p+1
 							if layout == graph.RopeNeox {
-								i0, i1 = base+p, base+p+sh.nrot/2
+								i0, i1 = turned+p, turned+p+sh.nrot/2
 							}
 							c, s := float64(cs[r*sh.nrot+2*p]), float64(cs[r*sh.nrot+2*p+1])
+							if sh.inv {
+								s = -s
+							}
 							w0 := float64(in[i0])*c - float64(in[i1])*s
 							w1 := float64(in[i0])*s + float64(in[i1])*c
 							worst = max(worst, math.Abs(float64(out[i0])-w0), math.Abs(float64(out[i1])-w1))
@@ -89,12 +98,15 @@ func TestComposedCPURope(t *testing.T) {
 							}
 						}
 						moved := sh.nrot == sh.hd
-						for j := sh.nrot; j < sh.hd; j++ {
-							if math.Float32bits(out[base+j]) != math.Float32bits(in[base+j]) {
-								t.Fatalf("%s: row %d head %d tail element %d is %g, the input's %g", name, r, h, j, out[base+j], in[base+j])
+						for j := range sh.hd {
+							if j >= sh.off && j < sh.off+sh.nrot {
+								continue
 							}
-							// The tail moved by one element must part.
-							moved = moved || math.Float32bits(out[base+j]) != math.Float32bits(in[base+j-1])
+							if math.Float32bits(out[base+j]) != math.Float32bits(in[base+j]) {
+								t.Fatalf("%s: row %d head %d unturned element %d is %g, the input's %g", name, r, h, j, out[base+j], in[base+j])
+							}
+							// The unturned elements moved by one element must part.
+							moved = moved || j > 0 && math.Float32bits(out[base+j]) != math.Float32bits(in[base+j-1])
 						}
 						if !moved {
 							t.Fatalf("%s: the tail moved by one element matches: the gate cannot see it", name)

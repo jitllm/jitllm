@@ -67,7 +67,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Out) != 1 || o.Attr.NRot <= 0 || o.Attr.NRot%2 != 0 {
 		return nil, fmt.Errorf("a rotary table of %d", o.Attr.NRot)
 	}
-	U, F, I := ir.U32, ir.F32, ir.I32
+	U, I := ir.U32, ir.I32
 	P := o.Attr.NRot / 2
 	stride := (P + ropeLanes - 1) &^ (ropeLanes - 1)
 	R := c.Step.Rows
@@ -88,8 +88,6 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	var x exprs
 	r, p := x.coord(0), x.coord(1)
-	cw := func(w int) int { return x.load(2, x.u(uint32(w))) }
-	cf := func(w int) int { return x.un(OpBitcast, F, cw(w)) }
 	in := []Operand{tablePos, Operand{}, tableRopeKon}
 	ext := map[int]int{0: 1 + R, 1: 8*stride + 1}
 	words := map[int][]uint32{2: ropeConsts()}
@@ -123,6 +121,29 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		in = append(in, tableRequest)
 		ext[1], ext[3] = 8*stride+1+P, RequestRows+R
 	}
+	cvs, svs, quarter := ropeTurn(&x, pos, p, 1, 2, stride)
+	at := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(P))), p), x.u(2))
+	at1 := x.op(OpAdd, U, at, x.u(1))
+
+	var live exprs
+	live.load(0, live.u(0))
+	in[1] = Operand{Kind: OperandTable, Name: tablePlanes.Name + of}
+	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: in, Expr: x.e,
+		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},
+		Facts: Facts{Rows: live.e, Words: words, Extents: ext,
+			Quarter: quarter}}}, nil
+}
+
+// ropeTurn is pair p's cosine and sine at position pos, each times the
+// table's scale: the position's digits times the planes (operand planes, a
+// plane every stride words, the scale after the eighth), a range reduction
+// to a quadrant and a remainder (the Quarter it states), the remainder's
+// sine and cosine by polynomials from the constant block (operand kon),
+// swapped and signed by the quadrant.
+func ropeTurn(x *exprs, pos, p, planes, kon, stride int) (cvs, svs int, q *Quarter) {
+	U, F, I := ir.U32, ir.F32, ir.I32
+	cw := func(w int) int { return x.load(kon, x.u(uint32(w))) }
+	cf := func(w int) int { return x.un(OpBitcast, F, cw(w)) }
 	var d [ropeDigits]int
 	for i := range d {
 		v := pos
@@ -131,7 +152,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		}
 		d[i] = x.un(OpCvtF32, F, x.op(OpAnd, U, v, x.u(1<<ropeDigitBits-1)))
 	}
-	plane := func(i int) int { return x.load(1, x.op(OpAdd, U, p, x.u(uint32(i*stride)))) }
+	plane := func(i int) int { return x.load(planes, x.op(OpAdd, U, p, x.u(uint32(i*stride)))) }
 	sum := func(base int) int {
 		acc := x.op(OpMul, F, d[0], plane(base))
 		for i := 1; i < ropeDigits; i++ {
@@ -164,19 +185,9 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	sv = neg(sv, nb)
 	cv = neg(cv, x.op(OpAdd, U, nb, cw(ropeOneVec)))
-	ms := x.load(1, x.u(uint32(8*stride)))
-	at := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(P))), p), x.u(2))
-	svs := x.op(OpMul, F, sv, ms)
-	cvs := x.op(OpMul, F, cv, ms)
-	at1 := x.op(OpAdd, U, at, x.u(1))
-
-	var live exprs
-	live.load(0, live.u(0))
-	in[1] = Operand{Kind: OperandTable, Name: tablePlanes.Name + of}
-	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: in, Expr: x.e,
-		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},
-		Facts: Facts{Rows: live.e, Words: words, Extents: ext,
-			Quarter: &Quarter{Sum: s, Rest: co, Turn: n, Part: f, Bound: 1 << (ropeDigitBits + 4)}}}}, nil
+	ms := x.load(planes, x.u(uint32(8*stride)))
+	svs = x.op(OpMul, F, sv, ms)
+	return x.op(OpMul, F, cv, ms), svs, &Quarter{Sum: s, Rest: co, Turn: n, Part: f, Bound: 1 << (ropeDigitBits + 4)}
 }
 
 // ropeAxisWords is each of a table's pairs' axis as its sections assign it
