@@ -22,8 +22,9 @@ import (
 )
 
 // BenchmarkComposedMatrix times the composer's projection on the matrix unit
-// against main's staged GEMM (kernels.GemmVolta, its shipping tile) on
-// Llama-3.1-8B Q4_K_M's projection shapes at a 512-row chunk, on every CUDA
+// against main's staged GEMM (kernels.GemmVolta at the tile and k split the
+// tier ships for the shape, its partials' sum not timed) on Llama-3.1-8B
+// Q4_K_M's projection shapes at a 512-row chunk, on every CUDA
 // device, interleaved: each round launches both arms in turn, and the figure
 // is each arm's median microseconds and the median of the per-round ratios.
 // Main's arm reads binary16 activations a kernel before it wrote, which it
@@ -45,13 +46,15 @@ func BenchmarkComposedMatrix(t *testing.B) {
 		dev := gpuDevice(d)
 		dev.Matrix = [3]int{matrixTile.M, matrixTile.N, matrixTile.K}
 		for _, sh := range []struct {
-			what string
-			typ  quant.Type
-			n, k int
+			what  string
+			typ   quant.Type
+			n, k  int
+			split int
 		}{
-			{"q/o", quant.Q4_K, 4096, 4096},
-			{"gate/up", quant.Q4_K, 14336, 4096},
-			{"down", quant.Q6_K, 4096, 14336},
+			{"q/o", quant.Q4_K, 4096, 4096, 1},
+			{"k", quant.Q4_K, 1024, 4096, 2},
+			{"gate/up", quant.Q4_K, 14336, 4096, 1},
+			{"down", quant.Q6_K, 4096, 14336, 1},
 		} {
 			jt, _ := jlm.TypeOf(sh.typ)
 			q, _ := kernels.QuantOf(sh.typ)
@@ -149,20 +152,28 @@ func BenchmarkComposedMatrix(t *testing.B) {
 						}
 					}
 				}
-				tl := kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}
+				// Main's shipping tile: the first of the tier's blockings
+				// (voltaTiles) that compiles, k split where its grid is thin.
 				sub, _, _, _ := kernels.Layout(q)
-				tl.KB = max(32/sub, 1)
-				s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.n, NTok: R}
-				mk, err := kernels.GemmVolta(s, tl)
-				if err != nil {
-					t.Fatal(err)
+				s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.n, NTok: R, Split: sh.split}
+				var tl kernels.VoltaTile
+				var mainKern backend.Kernel
+				for _, c := range []kernels.VoltaTile{{MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 4, NT: 2, WM: 1, WN: 4}, {MT: 4, NT: 1, WM: 1, WN: 4}} {
+					c.KB = max(32/sub, 1)
+					mk, err := kernels.GemmVolta(s, c)
+					if err != nil {
+						continue
+					}
+					if mainKern, err = d.Compile(mk); err == nil {
+						tl = c
+						break
+					}
 				}
-				mainKern, err := d.Compile(mk)
-				if err != nil {
-					t.Fatal(err)
+				if mainKern == nil {
+					t.Fatalf("%s: no shipping tile compiles", sh.what)
 				}
 				act16 := up(make([]uint32, R*sh.k/2))
-				mainOut := up(make([]uint32, R*sh.n))
+				mainOut := up(make([]uint32, R*sh.n*max(sh.split, 1)))
 				mainArm := func() {
 					if err := mainKern.Launch(kernels.GemmVoltaGroups(s, tl), tl.Threads(), planes[0], planes[1], planes[2], act16, mainOut); err != nil {
 						t.Fatal(err)
@@ -201,8 +212,8 @@ func BenchmarkComposedMatrix(t *testing.B) {
 						codes[len(codes)-1].LiveGroups(R), codes[len(codes)-1].GPU.Group[0], r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
 				}
 				if r, ok := backend.KernelResourcesOf(mainKern); ok {
-					t.Logf("%s %s: main %d workgroups of %d, regs %d, spill %d, shared %d, resident %d", d.Name(), sh.what,
-						kernels.GemmVoltaGroups(s, tl), tl.Threads(), r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
+					t.Logf("%s %s: main %+v, %d workgroups of %d, regs %d, spill %d, shared %d, resident %d", d.Name(), sh.what,
+						tl, kernels.GemmVoltaGroups(s, tl), tl.Threads(), r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
 				}
 				t.Logf("%s %v %-8s %v %5dx%-5d rows %d: composed %8.1f us (%5.1f TFLOP/s, %d kernels, the first %.1f us), main %8.1f us (%5.1f TFLOP/s), composed/main %.2f",
 					d.Name(), mx, sh.what, sh.typ, sh.n, sh.k, R, med(cu), flop/med(cu)/1e6, len(codes), med(fu), med(mu), flop/med(mu)/1e6, med(ratio))
