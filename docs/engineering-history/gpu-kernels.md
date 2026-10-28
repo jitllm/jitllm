@@ -10549,3 +10549,21 @@ row where the composer's reads two.
   cards synth-kimilinear's composed blocks read 1.9e-11 (cuda:0) and
   1.6e-11 (vulkan) from the host and 1.96 with the gate dropped;
   synth-kimik3's 2.8e-10 and 1.0e-10 move to 2.1 (ragged 2.12).
+- Laya's ModernBERT trunk and the decision heads' blocks (Laya's,
+  d1-omni's) are the composer's on the CPU device. The ModernBERT loader
+  states its first-of-period global layer (Config.SWAGlobalFirst), its
+  LayerNorms, NEOX and both rotaries; a decision head block is stated
+  as ops (frontenc.go: pre-norm, biased, both ways, the container's head
+  count, ReLU as max(x, 0)) at block NLayer+i. A non-causal segment's
+  arena takes every block's keys whatever its kind: a causal window read
+  off Config.SWA cut a head block's keys (a head past the model's layers
+  read as a sliding one) and moved the fixture's logits by 0.045; the
+  arena is sized from the widest block that keeps keys (d1-omni's first
+  block is a convolution, which keeps none). V100 host CPU against the
+  reference: the Laya fixture 1e-6 (main 1e-6), Laya 0.026724 (main
+  0.026715, bound 0.035), every block of every encode served (80 and
+  300 runs); rows made causal read 1.13 and 5.44. d1-omni: its two head
+  blocks served each encode (20 runs), its LFM2 trunk declined by name
+  (160 runs, no graph: UncoveredNonCausal), logits 2.84e-5 (bound 3e-4),
+  its head's rows made causal 0.92. The type rows, the scorer and the
+  cards for these blocks stay main's.

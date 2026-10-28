@@ -231,6 +231,7 @@ func (e *Embedder) lfm2Encode(ids []int32, pre []float32) error {
 		if err := m.encBlockPageIn(li); err != nil {
 			return err
 		}
+		e.cpuDecline(li)
 		b := &lf.blocks[li]
 		e.rowsRMS(h, x, b.norm, n, d)
 		if b.attn {

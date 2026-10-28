@@ -243,6 +243,11 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 			return nil, err
 		}
 		m.mbBind()
+		if m.opt.composedCPU {
+			// The trunk blocks the composer runs on the CPU device run
+			// through the encoder's segment, as a device's do.
+			d.emb.seg = m.encState(d.emb.jit)
+		}
 		return d, nil
 	default:
 		return nil, fmt.Errorf("model: decision readout %v has no implementation", kind)

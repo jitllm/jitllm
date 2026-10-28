@@ -148,6 +148,9 @@ type Config struct {
 	// Neither the pattern nor the local rope base is in a GGUF, so the
 	// converter supplies them from llama.cpp's architecture knowledge.
 	SWAWindow, SWAPeriod int
+	// SWAGlobalFirst makes the first layer of each period the global one
+	// (ModernBERT's), not the last.
+	SWAGlobalFirst bool
 
 	// Logit softcapping: x = c*tanh(x/c). gemma2 caps the attention scores at
 	// 50 and the output logits at 30. Zero means none. Omitting it gives fluent
@@ -387,8 +390,12 @@ func (c *Config) AttnTemp(il, pos int) float64 {
 //
 //	is_swa_impl[il] = il % n_pattern < (n_pattern - 1)
 //
-// so at period 6 layers 0..4 are local and layer 5 is global.
+// so at period 6 layers 0..4 are local and layer 5 is global; under
+// SWAGlobalFirst layer 0 is global and 1..5 local.
 func (c *Config) SWA(il int) bool {
+	if c.SWAGlobalFirst {
+		return c.SWAWindow > 0 && c.SWAPeriod > 1 && il%c.SWAPeriod != 0
+	}
 	return c.SWAWindow > 0 && c.SWAPeriod > 0 && il%c.SWAPeriod < c.SWAPeriod-1
 }
 

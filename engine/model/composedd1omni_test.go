@@ -1,0 +1,88 @@
+package model
+
+import (
+	"math"
+	"path/filepath"
+	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit"
+)
+
+// TestComposedD1OmniOnCPU is TestD1OmniMatchesReference's composed CPU
+// arm: d1-omni's decision head blocks (Laya's) served by the composer on
+// the CPU device, its LFM2 encoder's trunk declined by name (a centred
+// convolution and a media prefix's windows the front end does not state:
+// UncoveredNonCausal, the CPU's DeclineNoGraph) and run main's, every block
+// of every encode counted one way or the other, the logits held to the
+// reference at the main gate's bound, and the head's rows made causal seen.
+func TestComposedD1OmniOnCPU(t *testing.T) {
+	m := openDecision(t, d1OmniModel, jlm.DecisionD1Omni, WithComposedCPU(true))
+	defer m.Close()
+	trunk, nb := m.enc.mb.trunk, m.encBlocks()
+	for li := range nb {
+		u := m.Uncovered(li)
+		switch {
+		case li >= trunk && u != Covered:
+			t.Fatalf("decision head block %d: %s, %v", li, u, m.UncoveredErr(li))
+		case li < trunk && u != UncoveredNonCausal:
+			t.Fatalf("trunk block %d: %s, want %s", li, u, UncoveredNonCausal)
+		}
+	}
+	d, err := m.NewDecider(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	encodes := 0
+	worst := func() float64 {
+		w := 0.0
+		for _, req := range decisionRequests {
+			g := readD1OmniGold(t, req)
+			state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
+			byID := map[string]*DecisionQuestion{}
+			for i := range qs {
+				byID[qs[i].ID] = &qs[i]
+			}
+			for _, gq := range g.Questions {
+				q := byID[gq.ID]
+				ids, markers, err := d.d1OmniSequence(state, q, d.d1OmniMaxLen())
+				if err != nil {
+					t.Fatal(err)
+				}
+				s, err := d.d1OmniForward(ids, q.Type, markers, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				encodes++
+				for j := range s {
+					if math.IsNaN(float64(s[j])) || math.IsInf(float64(s[j]), 0) {
+						t.Fatalf("%s: score %d is %v", q.ID, j, s[j])
+					}
+					w = max(w, math.Abs(float64(s[j])-gq.Logits[j]))
+				}
+			}
+		}
+		return w
+	}
+	clean := worst()
+	seg := d.emb.seg
+	served, declined := seg.CPUBlockSteps()
+	t.Logf("d1-omni: %d head block runs served on the composed CPU, declines %v (form error %v, arena %v, %d rows); worst logit difference %.2e (bound 3e-4)",
+		served, nonZero(declined[:]), seg.CPUFormErr(), seg.nc().arena != nil, seg.maxSeq, clean)
+	if served != (nb-trunk)*encodes || declined[jit.DeclineNoGraph] != trunk*encodes || len(nonZero(declined[:])) != 1 {
+		t.Fatalf("%d encodes: %d head block runs served (want %d), declines %v (want %d trunk blocks' %s)", encodes, served,
+			(nb-trunk)*encodes, nonZero(declined[:]), trunk*encodes, jit.DeclineName(int(jit.DeclineNoGraph)))
+	}
+	if clean > 3e-4 {
+		t.Errorf("worst logit difference %.2e from the reference (bound 3e-4)", clean)
+	}
+
+	seg.enc.causalFault = true
+	bad := worst()
+	seg.enc.causalFault = false
+	t.Logf("d1-omni: violation (the head's rows causal): worst logit difference %.2e", bad)
+	if !(bad > 3e-3) {
+		t.Fatalf("the gate cannot see the head's rows made causal: %.2e", bad)
+	}
+}

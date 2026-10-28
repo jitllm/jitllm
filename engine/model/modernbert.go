@@ -137,6 +137,11 @@ func buildModernBERT(c *jlm.File, m *Model, enc *encoder) error {
 	}
 	mb.ropeG = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: true, Scale: 1}
 	mb.ropeL = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBaseSWA, Neox: true, Scale: 1}
+	// What the blocks below are, stated where the front end reads it: their
+	// norms LayerNorms, the first layer of each period the global one, each
+	// turned by its kind's rotary.
+	cfg.LayerNorm, cfg.SWAGlobalFirst, cfg.RopeNeox = true, true, true
+	m.rope, m.ropeSWA = mb.ropeG, &mb.ropeL
 	mb.blocks = make([]mbBlock, cfg.NLayer)
 	mb.trunk = len(mb.blocks)
 	mb.local = func(li int) bool { return li < len(mb.blocks) && !mb.blocks[li].global }
@@ -299,6 +304,18 @@ func (e *Embedder) mbEncode(ids []int32) error {
 		if err := m.encBlockPageIn(li); err != nil {
 			return err
 		}
+		if e.cpuRuns(li) {
+			cs := e.cs[:n*c.NRot]
+			if c.SWA(li) {
+				cs = e.csL[:n*c.NRot]
+			}
+			if e.cpuRun(li, n, x, cs) {
+				if e.afterBlock != nil {
+					e.afterBlock(li, x)
+				}
+				continue
+			}
+		}
 		b := &mb.blocks[li]
 		// 1. h = LN(x) (the identity on layer 0), q k v, the rotary.
 		h := e.xb[:n*d]
@@ -454,6 +471,12 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 		}
 		if err := m.encBlockPageIn(mb.trunk + bi); err != nil {
 			return err
+		}
+		// On the composer's CPU device every row runs, gathered after the
+		// last block as a device's are.
+		if li := mb.trunk + bi; e.cpuRuns(li) && e.cpuRun(li, n, x, nil) {
+			gather = bi == len(mb.head)-1
+			continue
 		}
 		b := &mb.head[bi]
 		last := bi == len(mb.head)-1

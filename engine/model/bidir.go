@@ -110,16 +110,30 @@ func (s *State) nc() *ncArena {
 	return nil
 }
 
-// mapNC maps the arena of a segment State whose first block's page holds
-// its rows.
+// mapNC maps the arena of a segment State: one page of the segment's rows
+// at the widest key row of its blocks that keep one (a convolution block
+// keeps none).
 func (s *State) mapNC() {
-	a, pg := s.nc(), &s.kv.layers[s.lo]
-	if pg.p == 0 {
+	a := s.nc()
+	p, row := 0, 0
+	for li := s.lo; li < len(s.kv.layers); li++ {
+		if pg := &s.kv.layers[li]; pg.p > 0 {
+			p, row = max(p, pg.p), max(row, pg.pp/pg.p)
+		}
+	}
+	if p == 0 {
 		return
 	}
-	a.page = 1 << bits.Len(uint(pg.p-1))
+	a.page = 1 << bits.Len(uint(p-1))
+	// A block's keys live one run deep in the arena: its window is the
+	// run, or the symmetric one its graph states, never a causal window
+	// read off the layer's kind (a decision head's blocks are past the
+	// model's layers).
+	for li := range s.kv.layers {
+		s.kv.layers[li].win = 0
+	}
 	var err error
-	if a.arena, err = mapKVArena(a.page*(pg.pp/pg.p), 1, false); err != nil {
+	if a.arena, err = mapKVArena(a.page*row, 1, false); err != nil {
 		s.cpu.formErr = err
 	}
 }

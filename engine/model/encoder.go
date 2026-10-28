@@ -675,7 +675,45 @@ func loadDenseHeads(c *jlm.File, m *Model) error {
 // nil for one it does not hold: a BERT-shaped block's (encBlock).
 func (m *Model) encRoleWeight(li int, r jlm.Role) *tensor {
 	enc := m.enc
-	if enc.mb != nil {
+	if mb := enc.mb; mb != nil {
+		if i := li - mb.trunk; i >= 0 && i < len(mb.head) {
+			h := &mb.head[i]
+			switch r {
+			case jlm.RoleAttnQ:
+				return &h.wq
+			case jlm.RoleAttnK:
+				return &h.wk
+			case jlm.RoleAttnV:
+				return &h.wv
+			case jlm.RoleAttnOut:
+				return &h.wo
+			case jlm.RoleFFNUp:
+				return &h.up
+			case jlm.RoleFFNDown:
+				return &h.down
+			}
+			return nil
+		}
+		if enc.lf != nil || li < 0 || li >= mb.trunk {
+			return nil
+		}
+		b := &mb.blocks[li]
+		switch r {
+		case jlm.RoleAttnQ:
+			return &b.wq
+		case jlm.RoleAttnK:
+			return &b.wk
+		case jlm.RoleAttnV:
+			return &b.wv
+		case jlm.RoleAttnOut:
+			return &b.wo
+		case jlm.RoleFFNGate:
+			return &b.gate
+		case jlm.RoleFFNUp:
+			return &b.up
+		case jlm.RoleFFNDown:
+			return &b.down
+		}
 		return nil
 	}
 	if li < 0 || li >= len(enc.blocks) {
@@ -707,7 +745,42 @@ func (m *Model) encRoleWeight(li int, r jlm.Role) *tensor {
 // nil for one it does not hold.
 func (m *Model) encRoleVector(li int, r jlm.Role) []float32 {
 	enc := m.enc
-	if enc.mb != nil {
+	if mb := enc.mb; mb != nil {
+		if i := li - mb.trunk; i >= 0 && i < len(mb.head) {
+			h := &mb.head[i]
+			switch r {
+			case jlm.RoleAttnQBias:
+				return h.bq
+			case jlm.RoleAttnKBias:
+				return h.bk
+			case jlm.RoleAttnVBias:
+				return h.bv
+			case jlm.RoleAttnOutBias:
+				return h.bo
+			case jlm.RoleFFNUpBias:
+				return h.bUp
+			case jlm.RoleFFNDownBias:
+				return h.bDown
+			case jlm.RoleAttnNorm:
+				return h.ln1W
+			case jlm.RoleAttnNormBias:
+				return h.ln1B
+			case jlm.RoleFFNNorm:
+				return h.ln2W
+			case jlm.RoleFFNNormBias:
+				return h.ln2B
+			}
+			return nil
+		}
+		if enc.lf != nil || li < 0 || li >= mb.trunk {
+			return nil
+		}
+		switch r {
+		case jlm.RoleAttnNorm:
+			return mb.blocks[li].attnNorm
+		case jlm.RoleFFNNorm:
+			return mb.blocks[li].ffnNorm
+		}
 		return nil
 	}
 	if li < 0 || li >= len(enc.blocks) {
@@ -774,4 +847,19 @@ func (e *Embedder) cpuRun(li, n int, x, cs []float32) bool {
 	}
 	s.cpu.served++
 	return true
+}
+
+// cpuDecline counts encoder block li as declined by the composer's CPU
+// device, by its placement's reason, where the encoder's segment composes
+// and the encode runs the block main's way.
+func (e *Embedder) cpuDecline(li int) {
+	if !e.cpuRuns(li) {
+		return
+	}
+	s := e.seg
+	_, why := s.cpuBlockOf(li)
+	if why == jit.DeclineServes {
+		why = jit.DeclineCaller
+	}
+	s.cpu.declined[why]++
 }
