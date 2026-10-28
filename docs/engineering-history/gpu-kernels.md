@@ -9888,3 +9888,47 @@ row where the composer's reads two.
   lane (3x slower); halving the jam before unwidening forms them again at
   one vector but the retries took a Llama block's composition past 25
   minutes.
+- **The prompt's attention takes each block in its own trip, and its
+  maps and halves fold away (Recompute, Same).** The flash loop states
+  StepsLast again (jit.Loop): its fold steps are made after the trip's
+  stores, behind its last barrier, so each trip adds its own block's
+  weighted sums rather than the block before, and no step's values are
+  held across the trip. Its element indices are the thread's own
+  quotient and remainder beside constants (flashBuild.split), and equal
+  reads (a position's page) are merged once built: ptxas reads 255 -> 221
+  registers on sm_70, the workgroup memory (40604 bytes, two workgroups a
+  unit) unchanged. The page-table Prefetch given back to the flash kernel
+  alone was slower on top of this (2.50 and 27.04 ms against 2.41 and
+  26.68) and is not taken. Recompute runs a map in each map that reads
+  its output (at most two reads a reader, no chains: unbounded, a whole
+  step's form grew past 120 GB of host memory), so the norms run in the
+  halves kernels and the gated activation in the down projection's
+  halves; Same drops a kernel that is an earlier one with its scratch
+  output named apart, so q, k and v share one halves kernel and gate and
+  up another: a dense block's 23 kernels become 17. Running the residual
+  adds and the activation in the matrix kernels' output loops (Epilogue
+  over every store) cut the maps 2.35 -> 0.60 ms at 512 tokens but raised
+  the matrix kernels 27.85 -> 30.95 and was not taken. V100 card 1 (CUDA,
+  sm_70), Llama-3.2-1B-Instruct Q4_K_M, JITLLM_CUDA_KERNEL_TIMING, the
+  arms a process each, alternating, the base twice: the composed
+  prompt's kernels 36.9 -> 34.6 ms at 512 tokens and 168.5 -> 154.3 ms at
+  2048 (the base's A/A within 0.3%): attention 2.92 -> 2.42 and 33.4 ->
+  26.7 ms (main's 1.5 and 17.0), maps 2.34 -> 0.68 and 9.37 -> 2.67 ms
+  (81 -> 33 launches a 512-row chunk), halves 1.88 -> 1.56 and 7.49 ->
+  6.24 ms; the projections, 27.9 and 111.9 ms, are what is left. The
+  serving gate (TestComposedBlocksServe) now prompts a paragraph of two
+  64-row chunks and several 32-position blocks; with that alone a rescale
+  forced to 1 still passed on Llama-3.2-1B, because the float reference
+  every arm is held to was formed through the same Flash pass and moved
+  with it (the tier's distance from it rose 0.0147 -> 0.0629). The float
+  reference (Config.ComposedFloat) now states no matrix tile, and the
+  forced rescale reads 0.0654 at its worst against the band's 0.0584 and
+  fails (the arms as built: 0.00577); Recompute reading one element over
+  reads 7.76, and Same merging kernels by their space alone 7.16. Against
+  main's prompt on the same card, one binary: kernels 34.5 / 71.6 / 154.5
+  ms at 512 / 1024 / 2048 tokens against main's 22.3 / 46.3 / 99.8 (1.55
+  of main's at each); the server's time to first token, one server on the
+  card at a time, each arm an httpbench A/A (every ratio within 0.3% of
+  1, IQR/median at most 0.013) taken twice: 36.2 / 74.0 / 157.8 ms against
+  main's 23.8 / 48.6 / 102.3 (1.52 / 1.52 / 1.54). The prompt is still
+  GPU-bound; the projections are the gap.
