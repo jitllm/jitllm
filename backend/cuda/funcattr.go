@@ -1,11 +1,16 @@
 package cuda
 
-import "github.com/jitllm/jitllm/backend/ffi"
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/backend/ffi"
+)
 
 // What ptxas allocated for a loaded kernel, read back from the driver: the
 // per-kernel facts the register report and its gate are made of.
 var (
 	cuFuncGetAttribute                          func(*int32, int32, CUfunc) CUresult
+	cuFuncSetAttribute                          func(CUfunc, int32, int32) CUresult
 	cuOccupancyMaxActiveBlocksPerMultiprocessor func(*int32, CUfunc, int32, uint64) CUresult
 )
 
@@ -15,11 +20,15 @@ const (
 	funcShared     = 1 // CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES
 	funcLocal      = 3 // CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES
 	funcNumRegs    = 4 // CU_FUNC_ATTRIBUTE_NUM_REGS
+	funcMaxDynamic = 8 // CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES
 )
 
 func loadFuncAttrs(lib *ffi.Lib) {
 	if lib.Has("cuFuncGetAttribute") {
 		cuFuncGetAttribute = ffi.Fn3[CUresult, *int32, int32, CUfunc](lib, "cuFuncGetAttribute")
+	}
+	if lib.Has("cuFuncSetAttribute") {
+		cuFuncSetAttribute = ffi.Fn3[CUresult, CUfunc, int32, int32](lib, "cuFuncSetAttribute")
 	}
 	if lib.Has("cuOccupancyMaxActiveBlocksPerMultiprocessor") {
 		cuOccupancyMaxActiveBlocksPerMultiprocessor = ffi.Fn4[CUresult, *int32, CUfunc, int32, uint64](
@@ -59,7 +68,7 @@ func (m *Module) Attrs(block int) (a Attrs, ok bool) {
 	a.Shared, a.MaxThreads = get(funcShared), get(funcMaxThreads)
 	if cuOccupancyMaxActiveBlocksPerMultiprocessor != nil && block > 0 {
 		var n int32
-		if cuOccupancyMaxActiveBlocksPerMultiprocessor(&n, m.f, int32(block), 0) == 0 {
+		if cuOccupancyMaxActiveBlocksPerMultiprocessor(&n, m.f, int32(block), uint64(m.dynShared)) == 0 {
 			a.Blocks = int(n)
 		}
 	}
@@ -77,4 +86,21 @@ func (d *Device) MaxThreadsPerSM() int {
 		return 0
 	}
 	return int(v)
+}
+
+// SetDynamicShared opts m into n bytes of dynamic shared memory a launch,
+// which every launch of it then asks for: a kernel whose shared arrays are
+// past the static limit addresses them there (ptx.DynamicShared). The
+// driver refuses n past the device's opt-in limit
+// (CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN), and the error
+// says so.
+func (m *Module) SetDynamicShared(n int) error {
+	if cuFuncSetAttribute == nil {
+		return fmt.Errorf("cuda: this driver does not export cuFuncSetAttribute, so a kernel cannot ask for %d bytes of shared memory", n)
+	}
+	if err := call(cuFuncSetAttribute(m.f, funcMaxDynamic, int32(n)), "cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)"); err != nil {
+		return fmt.Errorf("%w: %d bytes of shared memory a workgroup", err, n)
+	}
+	m.dynShared = n
+	return nil
 }

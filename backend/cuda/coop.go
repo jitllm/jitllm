@@ -44,7 +44,7 @@ func (m *Module) Resident(block int) (int, error) {
 		return 0, fmt.Errorf("cuda: this device does not take a cooperative launch")
 	}
 	var n int32
-	if err := call(cuOccupancy(&n, m.f, int32(block), 0), "cuOccupancyMaxActiveBlocksPerMultiprocessor"); err != nil {
+	if err := call(cuOccupancy(&n, m.f, int32(block), uint64(m.dynShared)), "cuOccupancyMaxActiveBlocksPerMultiprocessor"); err != nil {
 		return 0, err
 	}
 	return int(n) * m.sms, nil

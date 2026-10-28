@@ -44,6 +44,13 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 			sharedAlign = 16
 		}
 	}
+	// Past the static limit the arrays are offsets into the launch's
+	// dynamic shared memory (DynamicShared).
+	dynamic := DynamicShared(k) > 0
+	dynAt := 0
+	if dynamic {
+		b.Module(".extern .shared .align 16 .b8 jitllm_dyn[];")
+	}
 
 	class := func(t ir.Type) Class {
 		switch t {
@@ -105,9 +112,17 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 			// kept in the shared space: loads and stores on it are
 			// space-qualified (see space), since a generic or global access
 			// to it assembles cleanly and reads the wrong memory.
+			r := b.Reg(B64)
+			if dynamic {
+				dynAt = sharedAt(dynAt)
+				b.Op("mov.u64 %v,jitllm_dyn;", r)
+				b.Op("add.u64 %v,%v,%d;", r, r, dynAt)
+				dynAt += int(o.Imm) * elemSize(o.Type)
+				reg[v] = r
+				break
+			}
 			nm := fmt.Sprintf("jitllm_sh%d", v)
 			b.Decl(".shared .align %d .b8 %s[%d];", max(elemSize(o.Type), sharedAlign), nm, int(o.Imm)*elemSize(o.Type))
-			r := b.Reg(B64)
 			b.Op("mov.u64 %v,%s;", r, nm)
 			reg[v] = r
 
@@ -563,6 +578,33 @@ func reduceOp(r ir.ReduceOp) string {
 		return "min"
 	}
 	return "add"
+}
+
+// staticShared is the most shared memory a kernel declares statically
+// (CUDA's 48 KiB on every architecture); past it the launch asks for
+// dynamic shared memory, which a device opts a kernel into up to its own
+// limit (CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES).
+const staticShared = 48 << 10
+
+// sharedAt is offset n rounded up to the sixteen bytes every shared array
+// is aligned to in dynamic shared memory.
+func sharedAt(n int) int { return (n + 15) &^ 15 }
+
+// DynamicShared is the bytes of dynamic shared memory a launch of k asks
+// for: its shared arrays, each aligned to sixteen bytes, where they are
+// more than staticShared, else 0 and the arrays are static.
+func DynamicShared(k *ir.Kernel) int {
+	n, all := 0, 0
+	for _, o := range k.Ops {
+		if o.Kind == ir.OpShared {
+			all += int(o.Imm) * elemSize(o.Type)
+			n = sharedAt(n) + int(o.Imm)*elemSize(o.Type)
+		}
+	}
+	if all <= staticShared {
+		return 0
+	}
+	return n
 }
 
 func elemSize(t ir.Type) int {

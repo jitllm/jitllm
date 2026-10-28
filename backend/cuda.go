@@ -1034,6 +1034,12 @@ func (c *cudaDev) Compile(k *ir.Kernel) (Kernel, error) {
 		if m, err = c.d.Load(src, k.Name); err != nil {
 			return
 		}
+		if n := ptx.DynamicShared(k); n > 0 {
+			if err = m.SetDynamicShared(n); err != nil {
+				m.Unload()
+				return
+			}
+		}
 		a, attrsOK = m.Attrs(k.Group[0])
 		if !k.GridSync() {
 			return

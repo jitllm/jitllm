@@ -523,6 +523,9 @@ type Module struct {
 	// Coop launches the module with cuLaunchCooperativeKernel, for a kernel
 	// with a grid barrier (ir.OpGridBarrier); see Resident.
 	Coop bool
+	// dynShared is the dynamic shared memory every launch asks for; see
+	// SetDynamicShared.
+	dynShared int
 }
 
 // maxArgs bounds a kernel's parameter list. The widest per-op kernel is
@@ -606,10 +609,10 @@ func (m *Module) LaunchArgs(st CUstream, grid, block int, args []unsafe.Pointer)
 		// The driver refuses a cooperative grid it cannot hold resident
 		// (CUDA_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE) rather than launching it.
 		return call(cuLaunchCooperativeKernel(m.f, uint32(grid), 1, 1, uint32(block), 1, 1,
-			0, st, unsafe.Pointer(&args[0])), "cuLaunchCooperativeKernel")
+			uint32(m.dynShared), st, unsafe.Pointer(&args[0])), "cuLaunchCooperativeKernel")
 	}
 	return call(cuLaunchKernel(m.f, uint32(grid), 1, 1, uint32(block), 1, 1,
-		0, st, unsafe.Pointer(&args[0]), nil), "cuLaunchKernel")
+		uint32(m.dynShared), st, unsafe.Pointer(&args[0]), nil), "cuLaunchKernel")
 }
 
 // Sync blocks until the device is idle.

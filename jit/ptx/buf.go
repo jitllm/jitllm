@@ -53,9 +53,17 @@ type Buf struct {
 	body strings.Builder
 	// decls holds kernel-scope declarations that must precede the body: only
 	// `.shared` arrays.
-	decls  strings.Builder
+	decls strings.Builder
+	// module holds module-scope declarations, before the entry: only the
+	// extern array of dynamic shared memory.
+	module strings.Builder
 	next   [nClass]int
 	labels int
+}
+
+// Module adds a module-scope declaration, emitted before the entry.
+func (b *Buf) Module(format string, args ...any) {
+	fmt.Fprintf(&b.module, format+"\n", args...)
 }
 
 // Decl adds a kernel-scope declaration, emitted after the .reg block and before
@@ -94,6 +102,7 @@ func (b *Buf) Bind(l string) { fmt.Fprintf(&b.body, "%s:\n", l) }
 func (b *Buf) Text(target, entry string, params []Param, group [3]int, resident int) string {
 	var s strings.Builder
 	fmt.Fprintf(&s, ".version 7.8\n.target %s\n.address_size 64\n", target)
+	s.WriteString(b.module.String())
 	fmt.Fprintf(&s, ".visible .entry %s(\n", entry)
 	for i, p := range params {
 		sep := ","
