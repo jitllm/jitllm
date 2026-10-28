@@ -1326,7 +1326,7 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		return jit.DeclineISA
 	case g == nil:
 		return jit.DeclineNoGraph
-	case len(g.Out) != max(c.PredStreams, 1) || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && (c.PLEDim == 0 || s.ple == nil):
+	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && (c.PLEDim == 0 || s.ple == nil):
 		return jit.DeclineFeeds
 	case c.MoEAt(li) && !s.cpuBanksPaged(li):
 		// The forms read a bank as one view of its experts in the host's
@@ -2102,6 +2102,10 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 		return &l.shUp
 	case jlm.RoleShExpDown:
 		return &l.shDown
+	case jlm.RoleFFNRoutedDown:
+		return &l.routedDown
+	case jlm.RoleFFNRoutedUp:
+		return &l.routedUp
 	case jlm.RoleAttnQKV:
 		if l.ssmIn.rows != 0 {
 			return &l.ssmIn
@@ -2278,6 +2282,12 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 		return l.routerNorm
 	case jlm.RoleExpScale:
 		return l.expScale
+	case jlm.RoleAttnResScore:
+		return l.resAttn
+	case jlm.RoleFFNResScore:
+		return l.resFFN
+	case jlm.RoleFFNRoutedNorm:
+		return l.routedNorm
 	}
 	return nil
 }

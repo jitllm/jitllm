@@ -178,7 +178,13 @@ func TestKimiK3OnEveryDevice(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openK3(t, fx.name)
 			defer m.Close()
-			fixtureOnEveryDeviceWithin(t, m, g, k3DevViolations, 1e-5)
+			// A composed build's blocks read the statement, which each of
+			// these takes the piece out of as well.
+			vs := k3DevViolations
+			if composedByDefault {
+				vs = k3ComposedViolations(t)
+			}
+			fixtureOnEveryDeviceWithin(t, m, g, vs, 1e-5)
 		})
 	}
 }
@@ -230,6 +236,24 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 				t.Fatal(err)
 			}
 			s2 := gpu.Stats()
+			if composedByDefault {
+				// The composer runs each block whole: the prompt's chunk one
+				// served prompt part a block, a decode token one block step a
+				// block, none declined.
+				p0, pd0, _ := s0.ServedPart(tier.ComposedPrompt)
+				p1, pd1, _ := s1.ServedPart(tier.ComposedPrompt)
+				b1, bd1, _ := s1.ServedPart(tier.ComposedBlock)
+				b2, bd2, _ := s2.ServedPart(tier.ComposedBlock)
+				t.Logf("prefill of %d: %d prompt blocks served, %d declined; a decode token: %d block steps served, %d declined",
+					len(g.IDs), p1-p0, pd1-pd0, b2-b1, bd2-bd1)
+				if p1-p0 != nl || pd1 != pd0 {
+					t.Fatalf("the prompt did not run as one composed submission of every block (%s)", declinesOf(s1))
+				}
+				if b2-b1 != nl || bd2 != bd1 {
+					t.Fatalf("a decode token did not run every block composed on the device (%s)", declinesOf(s2))
+				}
+				return
+			}
 			t.Logf("prefill of %d: %d mixes, %d latent mixtures, %d grouped, %d MLA batched; a decode "+
 				"token: %d mixes, %d latent mixtures", len(g.IDs), s1.K3Mixes-s0.K3Mixes,
 				s1.K3Latent-s0.K3Latent, s1.GroupedMoE-s0.GroupedMoE, s1.MLABatched-s0.MLABatched,

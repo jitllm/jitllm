@@ -152,6 +152,7 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 			}
 			arm := func(t *testing.T, gpu *tier.GPU) {
 				worst, flips, ties := 0.0, 0, 0
+				by := map[string]float64{}
 				for _, s := range g.Seqs {
 					ids := append(slices.Clone(s.Prompt), s.Cont[:len(s.Cont)-1]...)
 					check := func(what string, p int, lg []float32) {
@@ -165,7 +166,7 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 						if math.IsNaN(nmse) || math.IsInf(nmse, 0) {
 							t.Fatalf("%q %s pos %d: logits not finite", s.Text, what, p)
 						}
-						worst = max(worst, nmse)
+						worst, by[what] = max(worst, nmse), max(by[what], nmse)
 						if am := Greedy(lg); am != r.Argmax {
 							if r.TopV[0]-r.TopV[1] > tieMargin {
 								flips++
@@ -210,8 +211,8 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 					}
 					st.Close()
 				}
-				t.Logf("%d sequences teacher-forced, decode and prefill: worst NMSE %.3e (bound %.0e), "+
-					"%d confident argmax flips (allowed %d), %d ties", len(g.Seqs), worst, c.nmse, flips, c.flips, ties)
+				t.Logf("%d sequences teacher-forced, decode and prefill: worst NMSE %.3e (bound %.0e; by arm %v), "+
+					"%d confident argmax flips (allowed %d), %d ties", len(g.Seqs), worst, c.nmse, by, flips, c.flips, ties)
 				if worst > c.nmse || flips > c.flips {
 					t.Errorf("worst NMSE %.3e, %d flips", worst, flips)
 				}

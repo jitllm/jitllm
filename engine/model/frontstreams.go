@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -26,12 +27,104 @@ import (
 type streams struct {
 	in, pred []graph.ValueID
 	side     graph.ValueID
+	// mixed is a bank of checkpoints (mixesStreams), and bank the stream
+	// the block banks its input into, written before any stream is read
+	// (0 for none).
+	mixed bool
+	bank  graph.ValueID
 }
 
 // predictsStreams says the model's several residual streams are predicted
 // and corrected (PredStreams), and nothing else carries a stream.
 func (c *Config) predictsStreams() bool {
 	return c.PredStreams > 1 && c.Streams() == c.PredStreams && c.HCMult <= 1 && !c.ResAttn()
+}
+
+// A block over a bank of checkpoints (Config.ResAttn): stream 0 is the
+// running residual and stream 1+j checkpoint j. Each sublayer reads a
+// softmax mix of the checkpoints banked so far and the running residual,
+// each scored by its stored vector's dot with the stream RMS-normed with no
+// weight; a checkpoint block banks its input first and restarts the running
+// residual from its attention's output.
+//
+//	in_a = mix(x_1..x_nb, x_0)                     the attention's input
+//	x_0' = attn(in_a), or x_0 + attn(in_a)          a checkpoint block, or not
+//	in_f = mix(x_1..x_nb', x_0')                    with the input banked
+//	x_0'' = x_0' + ffn(in_f)
+
+// mixesStreams says the model's several residual streams are a bank of
+// checkpoints, and nothing else carries a stream.
+func (c *Config) mixesStreams() bool {
+	return c.ResAttn() && c.Streams() == c.resStreams() && c.PredStreams == 0 && c.HCMult <= 1
+}
+
+// statesStreams says the front end states the model's residual streams.
+func (c *Config) statesStreams() bool { return c.predictsStreams() || c.mixesStreams() }
+
+// bankMix is the mix of the banked rows and the running residual x: each
+// scored by the sum of role's vector times the row RMS-normed with no
+// weight, the scores' softmax weighting the rows. With no bank it is x
+// times its softmax of one, exactly x; a block that stores no score vector
+// reads x.
+func (m *Model) bankMix(b *graph.Builder, f graph.Facts, bank []graph.ValueID, x graph.ValueID, role jlm.Role) graph.ValueID {
+	sh, ok := f.Inventory[role]
+	if !ok {
+		return x
+	}
+	c := m.Cfg
+	d := c.NEmbd
+	rows := append(slices.Clone(bank), x)
+	w := []graph.Binding{{Role: role, K: sh.K, Rows: sh.Rows}}
+	reduce := func(name string, v graph.ValueID, fn graph.MapFn) graph.ValueID {
+		return b.Emit(graph.OpReduce, []graph.ValueID{v}, []graph.Result{{Name: name, Width: 1}}, nil, graph.Attrs{Fn: fn}, nil, nil)[0]
+	}
+	scores := make([]graph.ValueID, len(rows))
+	for j, v := range rows {
+		nv := b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: "bank.normed", Width: d}}, nil,
+			graph.Attrs{Eps: c.RMSEps, HeadDim: d}, nil, nil)[0]
+		scores[j] = reduce("bank.score", mapRow(b, "bank.scored", graph.Attrs{Fn: graph.MapMul}, w, d, nv), graph.MapAdd)
+	}
+	ns := len(rows)
+	sc := b.Emit(graph.OpConcat, scores, []graph.Result{{Name: "bank.scores", Width: ns}}, nil, graph.Attrs{}, nil, nil)[0]
+	ex := b.Expr("bank.exp", ns, []graph.Term{
+		{Fn: graph.MapSub, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgIn, Index: 1}}},
+		{Fn: graph.MapExp, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}}},
+	}, nil, sc, reduce("bank.max", sc, graph.MapMax))
+	p := mapRow(b, "bank.p", graph.Attrs{Fn: graph.MapDiv}, nil, ns, ex, reduce("bank.sum", ex, graph.MapAdd))
+	acc := mapRow(b, "bank.mix", graph.Attrs{Fn: graph.MapMul}, nil, d, slice1(b, "bank.pj", p, 0), rows[0])
+	for j := 1; j < ns; j++ {
+		acc = mapRow(b, "bank.mix", graph.Attrs{Fn: graph.MapFma}, nil, d, slice1(b, "bank.pj", p, j), rows[j], acc)
+	}
+	return acc
+}
+
+// bankAfter is the bank block li's FFN mixes: its attention's, with the
+// stream it banks its input into read as that input.
+func (st *streams) bankAfter(c *Config, li int) []graph.ValueID {
+	bank := slices.Clone(st.in[1 : 1+c.resBank(li, true)])
+	if k, ok := c.resCheckpoint(li); ok {
+		bank[k-1] = st.in[0]
+	}
+	return bank
+}
+
+// banked writes the block's streams: the running residual y, the banked
+// stream its input, every other stream its input itself, which no kernel
+// writes.
+func (m *Model) banked(b *graph.Builder, f graph.Facts, li int, st *streams, y graph.ValueID, has func(jlm.Role) bool) (*graph.Graph, Uncovered, error) {
+	out := slices.Clone(st.in)
+	out[0] = outScaled(b, has, y)
+	if k, ok := m.Cfg.resCheckpoint(li); ok {
+		out[k] = st.bank
+	}
+	b.Out(out...)
+	return verified(b, f)
+}
+
+// streamCopy is a row of v as a value of its own.
+func streamCopy(b *graph.Builder, v graph.ValueID) graph.ValueID {
+	w := b.G.Values[v].Width
+	return b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: "stream", Width: w}}, nil, graph.Attrs{Width: w}, nil, nil)[0]
 }
 
 // slice1 is element i of each row of v.

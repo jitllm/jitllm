@@ -386,7 +386,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredGeometry
 	case c.IdxHeads != 0:
 		return UncoveredSelect
-	case c.Streams() > 1 && !c.predictsStreams():
+	case c.Streams() > 1 && !c.statesStreams():
 		return UncoveredStreams
 	case c.RopeAt(li) && !m.ropeAxesStated(m.ropeAt(li)):
 		return UncoveredRopeAxes
@@ -407,7 +407,7 @@ func (m *Model) uncovered(li int) Uncovered {
 func (m *Model) uncoveredRest(li int) Uncovered {
 	c := m.Cfg
 	switch {
-	case c.Streams() > 1 && !c.predictsStreams():
+	case c.Streams() > 1 && !c.statesStreams():
 		return UncoveredStreams
 	case c.NonCausal && c.mixerAt(li) != mixNone:
 		// A recurrent or convolution mixer reading both ways.
@@ -419,8 +419,7 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 	case !c.MoEAt(li):
 	case len(m.container.Config().RouterScore.Terms) == 0:
 		return UncoveredRouterScore
-	case c.ExpertWeightIn && (m.stores(li, jlm.RoleExpGateBias) || m.stores(li, jlm.RoleExpUpBias)) ||
-		c.ExpertLatent != 0:
+	case c.ExpertWeightIn && (m.stores(li, jlm.RoleExpGateBias) || m.stores(li, jlm.RoleExpUpBias)):
 		return UncoveredExperts
 	}
 	return Covered
@@ -577,10 +576,13 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// A block over several residual streams reads each as an input of its
 	// own and runs on stream 0's prediction (frontstreams.go).
 	var st *streams
-	if c.predictsStreams() {
-		st = &streams{in: []graph.ValueID{x}}
-		for k := 1; k < c.PredStreams; k++ {
+	if c.statesStreams() {
+		st = &streams{in: []graph.ValueID{x}, mixed: c.mixesStreams()}
+		for k := 1; k < c.Streams(); k++ {
 			st.in = append(st.in, b.In(fmt.Sprintf("x.%d", k), d))
+		}
+		if _, ok := c.resCheckpoint(li); ok && st.mixed {
+			st.bank = streamCopy(b, x)
 		}
 	}
 	// A model of per-layer embeddings gives each block the row's every
@@ -588,11 +590,15 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.PLEDim != 0 {
 		b.In("ple", c.pleWidth())
 	}
-	if st != nil {
+	attnIn := x
+	switch {
+	case st != nil && st.mixed:
+		attnIn = m.bankMix(b, f, st.in[1:1+c.resBank(li, false)], x, jlm.RoleAttnResScore)
+	case st != nil:
 		st.pred = m.predicted(b, f, st.in)
-		x = st.pred[0]
+		x, attnIn = st.pred[0], st.pred[0]
 	}
-	n := preNorm(x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
+	n := preNorm(attnIn, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
 	if st != nil && has(jlm.RoleLowRankIn) {
 		st.side = m.lowRank(b, f, n)
 	}
@@ -794,10 +800,16 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		proj = b.Add(proj, s)
 	}
 	x2 := postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
+	if _, ok := c.resCheckpoint(li); ok && st != nil && st.mixed {
+		x2 = norm(proj, jlm.RolePostAttnNorm)
+	}
 	if st != nil && st.side != 0 {
 		x2 = mapRow(b, "joined", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt2}, nil, d, b.Add(x2, st.side))
 	}
 	if !c.MoEAt(li) && !has(jlm.RoleFFNUp) && !has(jlm.RoleFFNDown) {
+		if st != nil && st.mixed {
+			return m.banked(b, f, li, st, x2, has)
+		}
 		if st != nil {
 			return m.corrected(b, f, li, st, x2, has)
 		}
@@ -811,8 +823,11 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	// A parallel block's MLP reads the block's input: through its own norm
 	// where it stores one, through the attention's where the two share one.
 	ffnIn := x2
-	if c.Parallel {
+	switch {
+	case c.Parallel:
 		ffnIn = x
+	case st != nil && st.mixed:
+		ffnIn = m.bankMix(b, f, st.bankAfter(c, li), x2, jlm.RoleFFNResScore)
 	}
 	n2 := preNorm(ffnIn, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
 	if _, own := f.Inventory[jlm.RoleFFNNorm]; c.Parallel && !own {
@@ -837,6 +852,9 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		}
 		h = norm(h, jlm.RoleFFNSubNorm)
 		ffn = matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
+	}
+	if st != nil && st.mixed {
+		return m.banked(b, f, li, st, resid(x2, norm(ffn, jlm.RolePostFFNNorm)), has)
 	}
 	if st != nil {
 		return m.corrected(b, f, li, st, resid(x2, norm(ffn, jlm.RolePostFFNNorm)), has)
@@ -936,11 +954,21 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 	if has(jlm.RoleFFNNorm2) {
 		ein = normed(x, jlm.RoleFFNNorm2)
 	}
+	if has(jlm.RoleFFNRoutedDown) {
+		ein = b.MatVec(n, jlm.RoleFFNRoutedDown, f.Inventory[jlm.RoleFFNRoutedDown].Rows)
+	}
 	up, ok := f.Inventory[jlm.RoleExpUpBank]
 	if !ok || up.Sheets != E || E < 1 || K < 1 || K > E {
 		return 0, UncoveredUnverified, fmt.Errorf("a mixture choosing %d of %d experts over a bank of %d sheets", K, E, up.Sheets)
 	}
 	F := up.Rows
+	// A latent mixture's routed experts run at its width: their input the
+	// routed down projection of n, their weighted sum normed where stored
+	// and taken back to n_embd.
+	ew := d
+	if lat, ok := f.Inventory[jlm.RoleFFNRoutedDown]; ok {
+		ew = lat.Rows
+	}
 	mapc := func(name string, fn graph.MapFn, k float64, width int, w []graph.Binding, in ...graph.ValueID) graph.ValueID {
 		return b.Emit(graph.OpMap, in, []graph.Result{{Name: name, Width: width}}, w, graph.Attrs{Fn: fn, Const: k}, nil, nil)[0]
 	}
@@ -1031,12 +1059,12 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 		return b.Emit(graph.OpExpertMatVec, []graph.ValueID{x, sel}, []graph.Result{{Name: name, Width: K * rows}}, ws,
 			graph.Attrs{}, nil, nil)[0]
 	}
-	in := b.Emit(graph.OpTile, []graph.ValueID{ein}, []graph.Result{{Name: "experts.in", Width: K * d}}, nil, graph.Attrs{Span: d}, nil, nil)[0]
+	in := b.Emit(graph.OpTile, []graph.ValueID{ein}, []graph.Result{{Name: "experts.in", Width: K * ew}}, nil, graph.Attrs{Span: ew}, nil, nil)[0]
 	var acts []graph.ValueID
 	if has(jlm.RoleExpGateBank) {
-		acts = append(acts, bank("experts.gate", in, jlm.RoleExpGateBank, jlm.RoleExpGateBias, d, F))
+		acts = append(acts, bank("experts.gate", in, jlm.RoleExpGateBank, jlm.RoleExpGateBias, ew, F))
 	}
-	acts = append(acts, bank("experts.up", in, jlm.RoleExpUpBank, jlm.RoleExpUpBias, d, F))
+	acts = append(acts, bank("experts.up", in, jlm.RoleExpUpBank, jlm.RoleExpUpBias, ew, F))
 	// Weighted at its input, an expert's gate and up are its weight times
 	// the projections (both linear), and its down is summed at one.
 	if c.ExpertWeightIn {
@@ -1048,14 +1076,14 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 	if err != nil {
 		return 0, UncoveredAct, fmt.Errorf("the experts' stated activation: %w", err)
 	}
-	down := bank("experts.down", h, jlm.RoleExpDownBank, jlm.RoleExpDownBias, F, d)
+	down := bank("experts.down", h, jlm.RoleExpDownBank, jlm.RoleExpDownBias, F, ew)
 	if !c.ExpertWeightIn {
-		down = mapc("experts.weighted", graph.MapMul, 0, K*d, nil, down, w)
+		down = mapc("experts.weighted", graph.MapMul, 0, K*ew, nil, down, w)
 	}
 	var out graph.ValueID
 	for j := range K {
-		y := b.Emit(graph.OpSlice, []graph.ValueID{down}, []graph.Result{{Name: "experts.out", Width: d}}, nil,
-			graph.Attrs{Offset: j * d, Width: d}, nil, nil)[0]
+		y := b.Emit(graph.OpSlice, []graph.ValueID{down}, []graph.Result{{Name: "experts.out", Width: ew}}, nil,
+			graph.Attrs{Offset: j * ew, Width: ew}, nil, nil)[0]
 		if j == 0 {
 			out = y
 		} else {
@@ -1063,6 +1091,9 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 		}
 	}
 	out = normed(out, jlm.RolePostFFNNorm2)
+	if has(jlm.RoleFFNRoutedUp) {
+		out = b.MatVec(normed(out, jlm.RoleFFNRoutedNorm), jlm.RoleFFNRoutedUp, d)
+	}
 	sh, ok := f.Inventory[jlm.RoleShExpUp]
 	if !ok {
 		return out, Covered, nil

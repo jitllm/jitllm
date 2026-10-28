@@ -10294,3 +10294,23 @@ row where the composer's reads two.
   readout stays on the CPU device where the blocks run on a card; the
   cards serve no pooled part yet, and the input rows (BERT's token types,
   UncoveredEmbedRows) stay main's.
+- Kimi-K3's blocks are composed. Its residual attention is stated as a
+  bank of checkpoint streams. The running residual is stream 0 and each
+  checkpoint a stream after it, each bound as a view of the step's
+  residual. Each sublayer reads a softmax mix: the banked rows and the
+  running residual, each scored by its stored vector's dot with the row
+  RMS-normed with no weight. A checkpoint block banks its input first and
+  restarts the residual from its attention's output. Streams a block does
+  not write are its outputs as they came, so no kernel reads and writes one
+  stream. The latent mixture's experts run at the routed width: routed
+  down, the weighted sum normed and routed up, then the shared expert
+  added. All three are decided from the stored roles. The tier now binds a
+  linear block's own output gate before a latent attention's, and holds
+  K3's recurrent state for the composer, where it had excluded K3 by
+  name. Composed, synth-kimik3 serves 126 of 126 decode block steps, at
+  2.8e-10 from the host on cuda:0 and 1.0e-10 on vulkan. The ragged
+  fixture reads 4.3e-10 and 2.2e-10. Eight pieces taken out of the
+  statement move the logits by 0.0039 to 2.7: the bank, the raw scores,
+  the restart, the latent norm, the MLA gate, the decay bound, the latent
+  norm's epsilon, and the activation. The head's mix and the input rows
+  stay the host's, refused by name (UncoveredStreams).

@@ -1653,11 +1653,13 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 	case jlm.RoleAttnVB:
 		return l.wvb
 	case jlm.RoleAttnGate:
-		if l.mla {
-			return l.mlaGate
-		}
+		// A linear block of a model of latent attention gates its output
+		// by its own.
 		if l.linear {
 			return l.ssmGate
+		}
+		if l.mla {
+			return l.mlaGate
 		}
 	case jlm.RoleAttnQKV:
 		if l.withAttn {
@@ -1670,6 +1672,10 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		if l.linear {
 			return l.wq
 		}
+	case jlm.RoleFFNRoutedDown:
+		return l.routedDown
+	case jlm.RoleFFNRoutedUp:
+		return l.routedUp
 	case jlm.RoleSCB:
 		return l.ssmGate
 	case jlm.RoleSCC, jlm.RoleSSMBA:
@@ -1901,6 +1907,17 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.nRouter
 	case jlm.RoleExpScale:
 		return l.expScale
+	case jlm.RoleAttnResScore, jlm.RoleFFNResScore, jlm.RoleFFNRoutedNorm:
+		if l.k3 == nil {
+			return nil
+		}
+		switch r {
+		case jlm.RoleAttnResScore:
+			return l.k3.resA
+		case jlm.RoleFFNResScore:
+			return l.k3.resF
+		}
+		return l.k3.rnorm
 	}
 	return nil
 }
@@ -1959,7 +1976,7 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 // composer's own descriptor (bs.cRows).
 func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch) bool {
 	return l.pool != nil && bs.dRows != nil && (l.pool.s[1] != nil || g.recShared && bs.cRows != nil) &&
-		p.Recurrent.TailLen == 0 && !l.centred && l.k3 == nil && l.q4e == nil
+		p.Recurrent.TailLen == 0 && !l.centred && l.q4e == nil
 }
 
 // bindRec binds linear block l's step in sv to session sid's half of its

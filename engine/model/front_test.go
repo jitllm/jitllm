@@ -113,15 +113,15 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 }
 
 // TestFrontRefusesSeveralStreams holds every block of each model whose
-// residual is several streams the front end does not state (hyper-connections,
-// residual attention) to a named refusal and no graph: every way to Covered
-// passes a Streams check, so the tier never meets a block of streams it
-// cannot bind. Where the block reaches that check the refusal is
-// UncoveredStreams by name. Predicted streams are stated
-// (TestGemma3nServesComposedOnCPU).
+// residual is several streams the front end does not state (hyper-connections)
+// to a named refusal and no graph: every way to Covered passes a Streams
+// check, so the tier never meets a block of streams it cannot bind. Where the
+// block reaches that check the refusal is UncoveredStreams by name. Predicted
+// streams (TestGemma3nServesComposedOnCPU) and a bank of checkpoints
+// (TestKimiK3ServesComposed) are stated.
 func TestFrontRefusesSeveralStreams(t *testing.T) {
 	byStreams := 0
-	for _, file := range []string{"synth-deepseek4.gguf", "synth-kimik3.gguf", "synth-qwen4exp.gguf"} {
+	for _, file := range []string{"synth-deepseek4.gguf", "synth-qwen4exp.gguf"} {
 		t.Run(file, func(t *testing.T) {
 			m := frontModel(t, file)
 			if m.Cfg.Streams() < 2 {
