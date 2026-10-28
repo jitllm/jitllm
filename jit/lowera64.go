@@ -102,9 +102,16 @@ func (e *a64Lowerer) gp(r x86.Reg) cpu.XReg { return a64GPR[r&15] }
 func lo(r x86.Reg) cpu.VReg { return cpu.VReg(2 * r) }
 func hi(r x86.Reg) cpu.VReg { return cpu.VReg(2*r + 1) }
 
-// slot is op of register rt at red-zone slot s, 1-based, below SP.
+// slot is op of register rt at spill slot s, 1-based, below SP
+// (spillOffset): one past the unscaled offset's reach is addressed from
+// a64Imm.
 func (e *a64Lowerer) slot(op cpu.A64Access, rt uint8, s int) {
-	if !e.a.Access(op, rt, cpu.SP, int32(-8*s)) {
+	off := spillOffset(s)
+	if e.a.Access(op, rt, cpu.SP, off) {
+		return
+	}
+	e.addConstTo(a64Imm, cpu.SP, int64(off))
+	if !e.a.Access(op, rt, a64Imm, 0) {
 		e.fail("spill slot %d is out of reach", s)
 	}
 }

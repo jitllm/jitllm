@@ -119,8 +119,8 @@ var shiftCount = x86.At(x86.RSP, -128)
 // no register holds the byte dots' (Kernel.Ones).
 var onesSlot = x86.At(x86.RSP, -160)
 
-// spillSlot is red-zone slot s, 1-based, below RSP.
-func spillSlot(s int) x86.Mem { return x86.At(x86.RSP, int32(-8*s)) }
+// spillSlot is spill slot s, 1-based, below RSP (spillOffset).
+func spillSlot(s int) x86.Mem { return x86.At(x86.RSP, spillOffset(s)) }
 
 // spillRegs are the registers a spilled value is loaded into at a read
 // (Regs.Reloads in the CPU profile).

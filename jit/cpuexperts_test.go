@@ -36,7 +36,7 @@ func TestComposedCPUExpertPages(t *testing.T) {
 	for s, e := range slotExpert {
 		table[e] = uint32(s)
 	}
-	ran, unformed := 0, 0
+	ran, unformed, arms := 0, 0, 0
 	for _, typ := range []quant.Type{quant.F32, quant.Q8_0, quant.Q4_K, quant.Q6_K, quant.MXFP4} {
 		q, ok := kernels.QuantOf(typ)
 		if typ == quant.F32 {
@@ -99,6 +99,7 @@ func TestComposedCPUExpertPages(t *testing.T) {
 			for _, tokens := range []int{1, 2} {
 				for _, biased := range []bool{false, true} {
 					name := fmt.Sprintf("%v/%s/%d tokens/bias %v", typ, arm.name, tokens, biased)
+					arms++
 					b := graph.New()
 					x := b.In("x", P*K)
 					sel := b.In("sel", P)
@@ -153,9 +154,10 @@ func TestComposedCPUExpertPages(t *testing.T) {
 							Step: Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32}, Device: cpuDevice()})
 						switch {
 						case err != nil && paged == nil:
-							// The whole bank's form is the reference: one it
-							// does not form is the CPU lowering's, counted.
-							t.Logf("%s: the whole bank does not form: %v", name, err)
+							// The whole bank's form is the reference: every
+							// arm forms it, whatever the format, the int8
+							// form or the tokens hold live at once.
+							t.Errorf("%s: the whole bank does not form: %v", name, err)
 							unformed++
 							return nil
 						case err != nil:
@@ -235,4 +237,7 @@ func TestComposedCPUExpertPages(t *testing.T) {
 		t.Fatal("no paged bank ran: this gate proved nothing")
 	}
 	t.Logf("%d paged arms equal to the whole bank's; %d arms the whole bank does not form on the CPU", ran, unformed)
+	if ran != arms {
+		t.Errorf("%d of %d arms ran", ran, arms)
+	}
 }

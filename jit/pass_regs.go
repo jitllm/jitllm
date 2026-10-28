@@ -68,10 +68,24 @@ type Regs struct {
 	Reloads [2]int
 }
 
-// spillSlots is the red zone's 8-byte slots below RSP a kernel spills into:
-// all sixteen but the last, which holds a vector shift's count
-// (lowercpu.go, shiftCount).
-const spillSlots = 15
+// spillSlots is the 8-byte slots below the stack pointer a kernel spills
+// into (spillOffset): the red zone's sixteen but the last, which holds a
+// vector shift's count (lowercpu.go, shiftCount), and sixteen more below the
+// vector temporaries.
+const spillSlots = 31
+
+// spillOffset is slot s's displacement from the stack pointer. A kernel runs
+// on its caller's goroutine stack below the NOSPLIT trampoline's frame
+// (jit/cpu, callKernel), where the stack guard the caller checked leaves
+// 800 bytes to nosplit frames; the slots past the red zone's sit below the
+// lowerings' vector temporaries (onesSlot, sseSlot, a64Save) and end 440
+// bytes down.
+func spillOffset(s int) int32 {
+	if s <= 15 {
+		return int32(-8 * s)
+	}
+	return int32(-320 - 8*(s-16))
+}
 
 // ErrRegisterPressure is a kernel Regs refuses for holding more values live
 // at once than the device's registers.
@@ -302,6 +316,15 @@ func (b *binder86) lives() {
 func (b *binder86) gprs() error {
 	k, p := b.k, b.p
 	if b.spill {
+		// The reload registers, and the counters, which a spilling
+		// binding keeps for its loops rather than its values: taken first,
+		// so a register held back for a deeper loop is neither.
+		for _, r := range p.Reloads {
+			b.used[r] = true
+		}
+		for _, r := range p.Counters {
+			b.used[r] = true
+		}
 		// Loops count at once only along one nest: its depth past the two
 		// counters is what to hold back.
 		depth := 0
@@ -332,16 +355,6 @@ func (b *binder86) gprs() error {
 	// argument word, a length, a count and a buffer's address keep theirs,
 	// read through what they address rather than as values.
 	freed, valued := map[int]int{}, map[int]bool{}
-	if b.spill {
-		// The reload registers, and the counters, which a spilling
-		// binding keeps for its loops rather than its values.
-		for _, r := range p.Reloads {
-			b.used[r] = true
-		}
-		for _, r := range p.Counters {
-			b.used[r] = true
-		}
-	}
 	foldOf := map[int]int{}
 	for f, nd := range k.Nodes {
 		if nd.Op == OpFold {
