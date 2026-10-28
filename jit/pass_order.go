@@ -401,9 +401,10 @@ func (o *orderer) scope(c int) {
 }
 
 // lockstep makes the steps of folds homed in loop c. Where each step is a
-// chain of the same length through its fold -- a sum stepped once for each
-// position of a period (Periods) -- and the chains read a value they
-// compute alike, the chains advance link by link together: what a position
+// chain of the same length through its fold -- one link where a sum steps
+// once a trip, one for each position of a period (Periods) -- and the
+// chains read a value they compute alike, the chains advance link by link
+// together: what a position
 // computes for every sum is made and read by each before the next
 // position's, rather than held across one sum's whole chain.
 func (o *orderer) lockstep(folds []int, c int) {
