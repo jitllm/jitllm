@@ -386,7 +386,10 @@ func routerViolations(m *Model) []c6Violation {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
 		}})
 	}
-	if c.NExpertUsed > 1 {
+	// A sparsemixer router is a top-2 the tier's own kernels run alone
+	// (checkSparseMixer): with one fewer chosen it places no block, and its
+	// stated weight is held by the violation below instead.
+	if c.NExpertUsed > 1 && c.SparseMixer == 0 {
 		vs = append(vs, c6Violation{"router: one expert fewer chosen", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NExpertUsed-- })
 		}})
@@ -398,6 +401,16 @@ func routerViolations(m *Model) []c6Violation {
 	}
 	if stores(jlm.RoleShRouter) {
 		vs = append(vs, c6Violation{"router: the shared expert's gate dropped", noSharedGate})
+	}
+	if cc := m.container.Config(); len(cc.RouterWeight.Terms) != 0 {
+		vs = append(vs, c6Violation{"router: the stated weight replaced by the selected score", func(m *Model) func() {
+			return statedRouter(m, cc.RouterScore, jlm.Expr{})
+		}})
+	}
+	if stores(jlm.RoleExpScale) {
+		vs = append(vs, c6Violation{"router: the per-expert scale dropped", func(m *Model) func() {
+			return dropStored(m, jlm.RoleExpScale)
+		}})
 	}
 	return vs
 }

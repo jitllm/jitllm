@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // evalExpr is e over one row of each operand, in float64: the test's own
@@ -92,6 +93,13 @@ func evalExpr(t *testing.T, e *jlm.Expr, in [][]float64, stored map[jlm.Role][]f
 				out[i] = c
 				if a > 0 {
 					out[i] = b
+				}
+			case jlm.FnAbs:
+				out[i] = math.Abs(a)
+			case jlm.FnLess:
+				out[i] = 0
+				if a < b {
+					out[i] = 1
 				}
 			default:
 				t.Fatalf("no reading of %v", tm.Fn)
@@ -309,9 +317,79 @@ func TestRouterScoreIsTheReferences(t *testing.T) {
 			}
 		})
 	}
-	for _, c := range []jlm.Config{{}, {NExpert: 16, Arch: jlm.ArchPhiMoE}} {
-		if e := RouterScore(&c); len(e.Terms) != 0 {
-			t.Fatalf("%v with %d experts states a score of %d terms, want none", c.Arch, c.NExpert, len(e.Terms))
+	if e := RouterScore(&jlm.Config{}); len(e.Terms) != 0 {
+		t.Fatalf("a model with no experts states a score of %d terms, want none", len(e.Terms))
+	}
+	// Sparsemixer picks by the raw logits.
+	e := RouterScore(&jlm.Config{NExpert: 16, Arch: jlm.ArchPhiMoE})
+	x := []float64{-1.5, 0.25, 2, -0.75, 1, 0}
+	if got := evalExpr(t, &e, [][]float64{x}, nil); !slices.Equal(got, x) {
+		t.Fatalf("sparsemixer scores %v by the logits %v", got, x)
+	}
+}
+
+// TestRouterWeightIsSparsemixers evaluates the routed weight Phi-3.5-MoE's
+// configuration states, pick by pick as the front end reads it (the logits
+// with the earlier picks at -inf, and the pick's logit), against the
+// oracle's sparsemixer on rows that keep one, several and every logit in
+// each softmax; and each of the oracle's violations lands away from it.
+// Every other mixture states none.
+func TestRouterWeightIsSparsemixers(t *testing.T) {
+	if e := RouterWeight(&jlm.Config{NExpert: 16}); len(e.Terms) != 0 {
+		t.Fatalf("a softmax mixture states a weight of %d terms, want none", len(e.Terms))
+	}
+	e := RouterWeight(&jlm.Config{NExpert: 16, Arch: jlm.ArchPhiMoE})
+	if err := e.Valid(); err != nil || e.Reads() != 2 {
+		t.Fatalf("the stated weight is not an expression of the logits and the pick's: %v, %d operands", err, e.Reads())
+	}
+	weights := func(s []float32) []float32 {
+		x := make([]float64, len(s))
+		for i, v := range s {
+			x[i] = float64(v)
+		}
+		var out []float32
+		for k := range 2 {
+			pick := 0
+			for i := range x {
+				if x[i] > x[pick] {
+					pick = i
+				}
+			}
+			m := make([]float64, len(x))
+			for i := range m {
+				m[i] = x[pick]
+			}
+			out = append(out, float32(evalExpr(t, &e, [][]float64{x, m}, nil)[pick]))
+			if k == 0 {
+				x = slices.Clone(x)
+				x[pick] = math.Inf(-1)
+			}
+		}
+		return out
+	}
+	rows := [][]float32{{-1.5, 0.25, 2, -0.75, 1, 0}, {1, 0.99, 0.985, -3, 0.2, 0.989}, {0, 0, 0, 0}, {-2, -2.01, -5, -1.99},
+		{300, 299.9, 10, 299.95}, {1, 0.9801, -1, 0.5}}
+	far := map[oracle.SparseMixerFault]float64{}
+	for _, s := range rows {
+		got := weights(s)
+		want := oracle.SparseMixer(s, jlm.PhiMoEJitter, oracle.SparseMixerFaultNone).Wt
+		for k := range want {
+			if d := math.Abs(float64(got[k] - want[k])); !(d <= 1e-6) {
+				t.Fatalf("logits %v: pick %d weighs %v, the oracle %v", s, k, got[k], want[k])
+			}
+		}
+		for _, f := range []oracle.SparseMixerFault{oracle.SparseMixerFaultNoMask, oracle.SparseMixerFaultKeepFirst,
+			oracle.SparseMixerFaultRenormalised, oracle.SparseMixerFaultAbsFactor} {
+			bad := oracle.SparseMixer(s, jlm.PhiMoEJitter, f).Wt
+			for k := range bad {
+				far[f] = max(far[f], math.Abs(float64(got[k]-bad[k])))
+			}
 		}
 	}
+	for f, d := range far {
+		if !(d > 1e-3) {
+			t.Errorf("violation %d: the stated weight is %.3g from it at the farthest", f, d)
+		}
+	}
+	t.Logf("the violations land %v from the stated weight", far)
 }

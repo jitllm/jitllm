@@ -52,9 +52,8 @@ const (
 var uncoveredNames = [numUncovered]string{
 	Covered:              "covered",
 	UncoveredKind:        "a layer whose kind is not an attention block or a recurrent mixer the front end states",
-	UncoveredRouterScore: "a router whose score the container does not state, or whose weights are not the scores it selects",
-	UncoveredExperts: "routed experts weighted at their input, beside a dense MLP, in a latent of their own, " +
-		"scaled one by one or stored one matrix each",
+	UncoveredRouterScore: "a router whose score the container does not state",
+	UncoveredExperts:     "routed experts weighted at their input over biased banks, in a latent of their own, or stored one matrix each",
 	UncoveredGeometry: "a value head of another width than the key's, a layer of its own rotary width turned by the model's rotary, " +
 		"or a block reading another's history of another shape than its attention's",
 	UncoveredSelect:     "an attention indexer or sparse key selection",
@@ -404,7 +403,7 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 	case len(m.container.Config().RouterScore.Terms) == 0:
 		return UncoveredRouterScore
 	case c.ExpertWeightIn && (m.stores(li, jlm.RoleExpGateBias) || m.stores(li, jlm.RoleExpUpBias)) ||
-		c.DenseMoE || c.ExpertLatent != 0 || m.layers[li].expScale != nil:
+		c.ExpertLatent != 0:
 		return UncoveredExperts
 	}
 	return Covered
@@ -795,7 +794,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	if c.MoEAt(li) {
 		var why Uncovered
 		var err error
-		if ffn, why, err = m.mixture(b, f, li, n2, has, stored); err != nil {
+		if ffn, why, err = m.mixture(b, f, li, ffnIn, n2, has, stored); err != nil {
 			return nil, why, err
 		}
 	} else {
@@ -887,10 +886,28 @@ func verified(b *graph.Builder, f graph.Facts) (*graph.Graph, Uncovered, error) 
 // block's stated activation, and its down; the downs summed at their
 // weights. Then the shared expert where the block stores one, scaled by the
 // sigmoid of its gate's logit where it stores a gate.
-func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, n graph.ValueID, has func(jlm.Role) bool,
+// Where the block stores a router norm or an experts' pre-norm, the router
+// or the experts read the block's unnormed x through it rather than n; a
+// stored per-expert scale multiplies each selected weight last; and where
+// it stores a post-norm of the shared expert's or of the routed sum's, each
+// is normed before the two are added (a dense MLP beside the mixture).
+func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.ValueID, has func(jlm.Role) bool,
 	stored func(jlm.Role) []jlm.Role) (graph.ValueID, Uncovered, error) {
 	c := m.Cfg
 	d, E, K := c.NEmbd, c.NExpert, c.NExpertUsed
+	normed := func(v graph.ValueID, r jlm.Role) graph.ValueID {
+		if has(r) {
+			return b.Norm(v, r, c.RMSEps)
+		}
+		return v
+	}
+	rin, ein := n, n
+	if has(jlm.RoleRouterNorm) {
+		rin = normed(x, jlm.RoleRouterNorm)
+	}
+	if has(jlm.RoleFFNNorm2) {
+		ein = normed(x, jlm.RoleFFNNorm2)
+	}
 	up, ok := f.Inventory[jlm.RoleExpUpBank]
 	if !ok || up.Sheets != E || E < 1 || K < 1 || K > E {
 		return 0, UncoveredUnverified, fmt.Errorf("a mixture choosing %d of %d experts over a bank of %d sheets", K, E, up.Sheets)
@@ -913,7 +930,7 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, n graph.ValueID
 		s := f.Inventory[r]
 		return []graph.Binding{{Role: r, K: s.K, Rows: s.Rows}}
 	}
-	logits := b.MatVec(n, jlm.RoleRouter, E, stored(jlm.RoleRouterBias)...)
+	logits := b.MatVec(rin, jlm.RoleRouter, E, stored(jlm.RoleRouterBias)...)
 	score, err := b.Stated("router.score", &m.container.Config().RouterScore, []graph.ValueID{logits}, E, f)
 	if err != nil {
 		return 0, UncoveredRouterScore, fmt.Errorf("the router's stated score: %w", err)
@@ -933,12 +950,50 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, n graph.ValueID
 		choose = mapc("router.kept", graph.MapWhere, math.Inf(-1), E, nil, mapc("router.group.kept", graph.MapLess, float64(kept), g, nil, rank), choose)
 	}
 	sel, _ := topk("router", choose, K, 0, K)
-	w := b.Emit(graph.OpTake, []graph.ValueID{score, sel}, []graph.Result{{Name: "router.w", Width: K}}, nil, graph.Attrs{}, nil, nil)[0]
+	take := func(name string, v graph.ValueID) graph.ValueID {
+		return b.Emit(graph.OpTake, []graph.ValueID{v, sel}, []graph.Result{{Name: name, Width: K}}, nil, graph.Attrs{}, nil, nil)[0]
+	}
+	var w graph.ValueID
+	if rw := &m.container.Config().RouterWeight; len(rw.Terms) != 0 {
+		// Each pick's weight is the stated row over the logits with the
+		// earlier picks removed and the pick's logit, read at the pick.
+		slice1 := func(name string, v graph.ValueID, k int) graph.ValueID {
+			return b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: name, Width: 1}}, nil, graph.Attrs{Offset: k, Width: 1}, nil, nil)[0]
+		}
+		rank := b.Emit(graph.OpRank, []graph.ValueID{choose}, []graph.Result{{Name: "router.rank", Width: E, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
+		picked := take("router.picked", logits)
+		var ws []graph.ValueID
+		for k := range K {
+			rest := logits
+			if k > 0 {
+				earlier := mapc("router.earlier", graph.MapLess, float64(k), E, nil, rank)
+				rest = b.Expr("router.rest", E, []graph.Term{{Fn: graph.MapWhere, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0},
+					{Kind: graph.ArgConst, Const: math.Inf(-1)}, {Kind: graph.ArgIn, Index: 1}}}}, nil, earlier, logits)
+			}
+			row, err := b.Stated("router.weight", rw, []graph.ValueID{rest, slice1("router.pick", picked, k)}, E, f)
+			if err != nil {
+				return 0, UncoveredRouterScore, fmt.Errorf("the router's stated weight: %w", err)
+			}
+			ws = append(ws, slice1("router.w", take("router.row", row), k))
+		}
+		w = ws[0]
+		if K > 1 {
+			w = b.Emit(graph.OpConcat, ws, []graph.Result{{Name: "router.w", Width: K}}, nil, graph.Attrs{}, nil, nil)[0]
+		}
+	} else {
+		w = take("router.w", score)
+	}
 	if !c.NoExpertNorm {
 		w = mapc("router.wn", graph.MapDiv, 0, K, nil, w, mapc("router.sum", graph.MapAdd, 1e-20, 1, nil, reduce("router.wsum", w, 0, 1)))
 	}
 	if s := c.ExpertScale; s != 0 && s != 1 {
 		w = mapc("router.scaled", graph.MapMul, s, K, nil, w)
+	}
+	if has(jlm.RoleExpScale) {
+		es := b.Emit(graph.OpSlice, nil, []graph.Result{{Name: "router.expscale", Width: E}}, stored1(jlm.RoleExpScale),
+			graph.Attrs{Width: E}, nil, nil)[0]
+		es = b.Emit(graph.OpTake, []graph.ValueID{es, sel}, []graph.Result{{Name: "router.expscale.sel", Width: K}}, nil, graph.Attrs{}, nil, nil)[0]
+		w = mapc("router.expscaled", graph.MapMul, 0, K, nil, w, es)
 	}
 	bank := func(name string, x graph.ValueID, r, bias jlm.Role, k, rows int) graph.ValueID {
 		ws := []graph.Binding{{Role: r, K: k, Rows: rows, Sheets: E}}
@@ -948,7 +1003,7 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, n graph.ValueID
 		return b.Emit(graph.OpExpertMatVec, []graph.ValueID{x, sel}, []graph.Result{{Name: name, Width: K * rows}}, ws,
 			graph.Attrs{}, nil, nil)[0]
 	}
-	in := b.Emit(graph.OpTile, []graph.ValueID{n}, []graph.Result{{Name: "experts.in", Width: K * d}}, nil, graph.Attrs{Span: d}, nil, nil)[0]
+	in := b.Emit(graph.OpTile, []graph.ValueID{ein}, []graph.Result{{Name: "experts.in", Width: K * d}}, nil, graph.Attrs{Span: d}, nil, nil)[0]
 	var acts []graph.ValueID
 	if has(jlm.RoleExpGateBank) {
 		acts = append(acts, bank("experts.gate", in, jlm.RoleExpGateBank, jlm.RoleExpGateBias, d, F))
@@ -979,6 +1034,7 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, n graph.ValueID
 			out = b.Add(out, y)
 		}
 	}
+	out = normed(out, jlm.RolePostFFNNorm2)
 	sh, ok := f.Inventory[jlm.RoleShExpUp]
 	if !ok {
 		return out, Covered, nil
@@ -997,7 +1053,7 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, n graph.ValueID
 		logit := reduce("shared.logit", mapc("shared.gate", graph.MapMul, 0, d, stored1(jlm.RoleShRouter), n), 0, 1)
 		so = sigmoidMul(b, "shared.gated", logit, so)
 	}
-	return b.Add(out, so), Covered, nil
+	return b.Add(out, normed(so, jlm.RolePostFFNNorm1)), Covered, nil
 }
 
 // latentAttention is the attention of a block that projects its history

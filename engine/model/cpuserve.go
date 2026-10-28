@@ -1749,6 +1749,16 @@ func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
 		return l.altCorrScale
 	case jlm.RoleLowRankNorm:
 		return l.laurelPost
+	case jlm.RoleFFNNorm2:
+		return l.ffnNorm2
+	case jlm.RolePostFFNNorm1:
+		return l.postFFNNorm1
+	case jlm.RolePostFFNNorm2:
+		return l.postFFNNorm2
+	case jlm.RoleRouterNorm:
+		return l.routerNorm
+	case jlm.RoleExpScale:
+		return l.expScale
 	}
 	return nil
 }

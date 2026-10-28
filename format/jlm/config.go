@@ -688,6 +688,13 @@ type Config struct {
 	// no gating function's name. A fourteenth optional tail; see
 	// encodeConfig.
 	RouterScore Expr
+	// RouterWeight is a mixture's routed weight where it is not the
+	// selected score, stated in the op language over operand 0, the
+	// router's logits with the experts picked before this pick removed
+	// (-inf), and operand 1, this pick's logit: a row of every expert's, the
+	// pick's element its weight. Empty where the weights are the selected
+	// scores. A fifteenth optional tail; see encodeConfig.
+	RouterWeight Expr
 
 	Flags Flags
 }

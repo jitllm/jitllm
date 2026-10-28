@@ -129,7 +129,8 @@ func StateActivations(s *jlm.Source) error {
 // StateActivations states a source's; false for one that states them or has
 // no layers (jlm.Restate).
 func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
-	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) || c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
+	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) && len(c.RouterWeight.Terms) == len(RouterWeight(c).Terms) ||
+		c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
 		return false, nil
 	}
 	stores := func(rs ...jlm.Role) func(int) bool {
@@ -180,25 +181,31 @@ func StateGated(c *jlm.Config, gated []bool) error {
 	if len(c.Acts) == 1 {
 		c.ActLayers = nil
 	}
-	if c.RouterScore = RouterScore(c); len(c.RouterScore.Terms) != 0 {
-		return c.RouterScore.Valid()
+	c.RouterScore, c.RouterWeight = RouterScore(c), RouterWeight(c)
+	for _, e := range []*jlm.Expr{&c.RouterScore, &c.RouterWeight} {
+		if len(e.Terms) != 0 {
+			if err := e.Valid(); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
 // RouterScore is the score a mixture of config c's router gives each expert
 // from its logits (operand 0), the formula its family's reference computes:
-// what the selection ranks and the routed weights are read from. None for a
-// model with no mixture, or one whose routed weights are not the selected
-// scores (Phi-3.5-MoE's sparsemixer weighs each pick by a softmax over the
-// logits near it).
+// what the selection ranks, and the routed weights are read from where the
+// config states no RouterWeight. None for a model with no mixture.
 func RouterScore(c *jlm.Config) jlm.Expr {
-	if c.NExpert == 0 || c.Arch == jlm.ArchPhiMoE {
+	if c.NExpert == 0 {
 		return jlm.Expr{}
 	}
 	var e expr
 	x := operand(0)
 	switch {
+	case c.Arch == jlm.ArchPhiMoE:
+		// The raw logits: sparsemixer picks by them (RouterWeight).
+		e.Fn(jlm.FnMul, x, num(1))
 	case c.Flags2.Has(jlm.Flag2ExpertSqrtSoftplus):
 		e.Fn(jlm.FnSqrt, e.Fn(jlm.FnSoftplus, x))
 	case c.Flags.Has(jlm.FlagExpertSigmoid):
@@ -212,5 +219,30 @@ func RouterScore(c *jlm.Config) jlm.Expr {
 		e.T = append(e.T, jlm.Term{Fn: jlm.FnAdd, Reduce: true, Args: [3]jlm.Arg{ex}})
 		e.Fn(jlm.FnDiv, ex, s)
 	}
+	return jlm.Expr{Terms: e.T}
+}
+
+// RouterWeight is the routed weight of a mixture of config c whose weights
+// are not its selected scores, over operand 0, the logits with the earlier
+// picks removed, and operand 1, the pick's logit m: Phi-3.5-MoE's
+// sparsemixer (transformers' PhimoeTopKRouter in eval), the softmax over the
+// logits s_j kept where (m - s_j)/max(|s_j|, m) is not past twice its
+// jitter, read at the pick. None for every other model.
+func RouterWeight(c *jlm.Config) jlm.Expr {
+	if c.NExpert == 0 || c.Arch != jlm.ArchPhiMoE {
+		return jlm.Expr{}
+	}
+	return SparseMixerWeight(jlm.PhiMoEJitter)
+}
+
+// SparseMixerWeight is sparsemixer's routed weight at jitter eps
+// (RouterWeight).
+func SparseMixerWeight(eps float32) jlm.Expr {
+	var e expr
+	s, m := operand(0), operand(1)
+	ratio := e.Fn(jlm.FnDiv, e.Fn(jlm.FnSub, m, s), e.Fn(jlm.FnMax, e.Fn(jlm.FnAbs, s), m))
+	out := e.Fn(jlm.FnLess, num(float32(2*float64(eps))), ratio)
+	ex := e.Fn(jlm.FnWhere, out, num(0), e.Fn(jlm.FnExp, e.Fn(jlm.FnSub, s, m)))
+	e.Fn(jlm.FnDiv, ex, e.Sum(ex))
 	return jlm.Expr{Terms: e.T}
 }

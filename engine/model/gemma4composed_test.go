@@ -15,7 +15,7 @@ import (
 // weight, and every block's output scaled by its stored scalar; and the
 // E-models' blocks, each reading its slice of the row's per-layer inputs,
 // the last two reading an earlier block's history.
-var gemma4Composed = []string{"synth-gemma4", "synth-gemma4-kv", "synth-gemma4-wide", "synth-gemma4-e", "synth-gemma4-e-ragged"}
+var gemma4Composed = []string{"synth-gemma4", "synth-gemma4-kv", "synth-gemma4-wide", "synth-gemma4-e", "synth-gemma4-e-ragged", "synth-gemma4-moe"}
 
 // TestGemma4ServesComposed holds the composer to each of gemma4Composed's
 // blocks and head on every device present, as TestC6ServesComposed holds
@@ -104,11 +104,27 @@ func TestGemma4ServesComposedOnCPU(t *testing.T) {
 			}
 			worst := worstFrom(want, cpuLogits(t, m, toks, cpuFaultNone, true))
 			n := len(toks) - 4
-			pw := cpuPrompt(t, ref, toks, n, 4, cpuFaultNone, false)
-			pg := cpuPrompt(t, m, toks, n, 4, cpuFaultNone, true)
 			pworst := 0.0
-			for i := range pw {
-				pworst = max(pworst, logitNMSE(pg[i], pw[i]))
+			if m.Cfg.NExpert != 0 {
+				// The CPU device forms a mixture's block for one row a step
+				// (cpuExpertModels): a prompt's chunk is declined by that
+				// name at every block, counted here, until it forms rows.
+				s := m.NewState(n + 1)
+				if _, err := s.Prefill(toks[:n]); err != nil {
+					t.Fatal(err)
+				}
+				_, declined := s.CPUBlockSteps()
+				s.Close()
+				t.Logf("a prompt of %d: %d block steps declined (%s)", n, declined[jit.DeclineExpertsRows], jit.DeclineName(int(jit.DeclineExpertsRows)))
+				if declined[jit.DeclineExpertsRows] < m.Cfg.NLayer {
+					t.Fatalf("a prompt of %d: %d block steps declined by name, want every block's: the gap moved", n, declined[jit.DeclineExpertsRows])
+				}
+			} else {
+				pw := cpuPrompt(t, ref, toks, n, 4, cpuFaultNone, false)
+				pg := cpuPrompt(t, m, toks, n, 4, cpuFaultNone, true)
+				for i := range pw {
+					pworst = max(pworst, logitNMSE(pg[i], pw[i]))
+				}
 			}
 			t.Logf("the composed CPU from main: decode %.3g over %d steps, a prompt of %d and its decode %.3g", worst, len(toks), n, pworst)
 			if !(worst < bound) || !(pworst < bound) {

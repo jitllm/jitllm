@@ -1861,6 +1861,16 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.altCorrScale
 	case jlm.RoleLowRankNorm:
 		return l.nLaurel
+	case jlm.RoleFFNNorm2:
+		return l.nFFN2
+	case jlm.RolePostFFNNorm1:
+		return l.nPost1
+	case jlm.RolePostFFNNorm2:
+		return l.nPost2
+	case jlm.RoleRouterNorm:
+		return l.nRouter
+	case jlm.RoleExpScale:
+		return l.expScale
 	}
 	return nil
 }

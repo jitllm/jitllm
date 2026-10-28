@@ -187,8 +187,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// The thirteenth, the stated activations, implies the first twelve; an
 	// older reader drops it and runs the activation its flags name. The
 	// fourteenth, the router's stated score, implies the first thirteen; an
-	// older reader drops it and routes by the gating its flags name.
-	score := len(c.RouterScore.Terms) != 0
+	// older reader drops it and routes by the gating its flags name. The
+	// fifteenth, the router's stated weight, implies the first fourteen; an
+	// older reader drops it and weighs by the router its flags name.
+	weight := len(c.RouterWeight.Terms) != 0
+	score := weight || len(c.RouterScore.Terms) != 0
 	acts := score || len(c.Acts) != 0 || len(c.ActLayers) != 0
 	clef := acts || c.DecisionRouting != 0 || c.DecisionEps != 0
 	q4e := clef || c.HCLowRank != 0 || c.QSARatio != 0 || c.NGramBlock != 0
@@ -298,6 +301,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if score {
 		encodeExpr(w, &c.RouterScore)
+	}
+	if weight {
+		encodeExpr(w, &c.RouterWeight)
 	}
 	return w.b
 }
@@ -450,6 +456,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	}
 	if r.err == nil && len(r.b) > 0 {
 		decodeExpr(r, &c.RouterScore)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeExpr(r, &c.RouterWeight)
 	}
 	if r.err != nil {
 		return nil, r.err

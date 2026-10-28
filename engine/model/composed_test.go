@@ -224,12 +224,14 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
 	"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-dbrx.gguf", "synth-llama4.gguf", "synth-mistral3.gguf",
 	"synth-mistral3-af.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-wide.gguf",
-	"synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf"}
+	"synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "synth-gemma4-moe.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf"}
 
 // mixtureModels are the mixtures the front end states whole and the serving
 // gate does not run: tiny-qwen3moe, whose eight-wide rows the tier cannot
-// place (unblockedModels).
-var mixtureModels = []string{"tiny-qwen3moe-f32.gguf"}
+// place (unblockedModels), and synth-phimoe, a float fixture whose
+// sparsemixer weights each pick by a stated softmax over the logits near it
+// (TestMoEFamiliesOnEveryDevice serves it composed against the host).
+var mixtureModels = []string{"tiny-qwen3moe-f32.gguf", "synth-phimoe.gguf"}
 
 // unblockedModels are the models whose rows the tier's int8 activation
 // blocks (32 wide) do not divide: stories260K's 172-wide MLP and

@@ -10000,3 +10000,23 @@ row where the composer's reads two.
   Gemma 3 on a V100 host's CPU: 27/27 served, 1.3e-6 after one block,
   1.2e-3 for the encode, no warm allocation, causal rows 9.0e-2. The
   projectors and the entry rows are still main's generated kernels.
+- Two mixture refusals lifted. A dense MLP beside a mixture with a
+  per-expert scale (Gemma 4 26B's block) is now stated from the roles the
+  block stores, not from a flag. The router reads the residual through
+  its own norm, and so do the experts. A per-expert scale is read at each
+  pick (an input-less slice and a take). The shared expert and the routed
+  sum are each post-normed before they are added. Composed, synth-gemma4-moe
+  serves 54 of 54 block steps on cuda:0 at 6.4e-11 and on vulkan at 1.9e-11,
+  and the CPU device is 3.8e-08 from main. Its five features each move the
+  composed logits by 0.82 to 1.38. Its prompt on the CPU device is declined
+  at every block by name: experts in pages at a step of several rows.
+  Phi-3.5-MoE's sparsemixer is stated in the container (the fifteenth
+  config tail, RouterWeight). The weight is a row over the logits with the
+  earlier picks removed and the pick's own logit, read at the pick, and the
+  score selected by is the raw logits. The converter's expression matches
+  the oracle to 1e-6, and each of the oracle's four violations lands
+  0.495 to 0.731 from it. Composed, synth-phimoe is 2.7e-10 from main on
+  the CPU device over 40 steps (paged, and a wrong expert page moves it by
+  2.27). Its composed decode reads 4.8e-13 from the host on cuda:0 and
+  5.7e-13 on vulkan, every block step composed. Its router violations reach
+  the composed arm through the restated container.

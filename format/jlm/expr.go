@@ -287,5 +287,16 @@ func exprsValid(c *Config) error {
 			return fmt.Errorf("jlm: the router's score reads %d operands, not its logits alone", n)
 		}
 	}
+	if len(c.RouterWeight.Terms) != 0 {
+		if len(c.RouterScore.Terms) == 0 {
+			return fmt.Errorf("jlm: a router's weight stated with no score to select by")
+		}
+		if err := c.RouterWeight.Valid(); err != nil {
+			return fmt.Errorf("the router's weight: %w", err)
+		}
+		if n := c.RouterWeight.Reads(); n != 2 {
+			return fmt.Errorf("jlm: the router's weight reads %d operands, not the logits and the pick's", n)
+		}
+	}
 	return nil
 }

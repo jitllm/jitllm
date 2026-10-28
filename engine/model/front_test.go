@@ -98,27 +98,18 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			}
 		})
 	}
-	for _, c := range []struct {
-		file string
-		want Uncovered
-	}{
-		{"synth-phimoe.gguf", UncoveredRouterScore},
-	} {
-		t.Run(c.file, func(t *testing.T) {
-			// Every block of these models has the feature: every block is
-			// refused by its name, so a refusal that disappears fails here.
-			m := frontModel(t, c.file)
-			for li := range m.Cfg.NLayer {
-				why := m.Uncovered(li)
-				if why != c.want {
-					t.Fatalf("block %d is refused by %q, want %q", li, why, c.want)
-				}
-				if !namedReason(why) {
-					t.Fatalf("block %d is refused by %q, which is not a named reason", li, why)
-				}
+	// A mixture whose container states no score for its router (one written
+	// before scores were stated) is refused by that name at every block, so
+	// a refusal that disappears fails here.
+	t.Run("synth-phimoe.gguf/no stated score", func(t *testing.T) {
+		m := frontModel(t, "synth-phimoe.gguf")
+		defer statedRouter(m, jlm.Expr{}, jlm.Expr{})()
+		for li := range m.Cfg.NLayer {
+			if why := m.Uncovered(li); why != UncoveredRouterScore || !namedReason(why) {
+				t.Fatalf("block %d is refused by %q, want %q", li, why, UncoveredRouterScore)
 			}
-		})
-	}
+		}
+	})
 }
 
 // TestFrontRefusesSeveralStreams holds every block of each model whose

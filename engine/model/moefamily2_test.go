@@ -1,6 +1,12 @@
 package model
 
-import "math"
+import (
+	"math"
+
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // The modern text families (jlm.ArchBailingMoE2 and its siblings) join the
 // mixture-family harness: scripts/moegold.py builds each fixture with the
@@ -180,9 +186,11 @@ var moe2DevViolations = map[string][]c6Violation{
 		{"llama.cpp's router (a renormalised softmax top-2)", llamaCppPhiMoERouter},
 		{"no sparsemixer mask (a softmax over every expert)", unmaskedSoftmax},
 		{"a threshold of zero (each weight one)", mixerEps(1e-12)},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"no q/k/v/o biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv, l.bo = nil, nil, nil, nil })
+			undoL := eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv, l.bo = nil, nil, nil, nil })
+			undoR := dropStored(m, jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias, jlm.RoleAttnOutBias)
+			return func() { undoR(); undoL() }
 		}},
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 	},
@@ -191,17 +199,39 @@ var moe2DevViolations = map[string][]c6Violation{
 // llamaCppPhiMoERouter routes Phi-3.5-MoE as llama.cpp does: a softmax top-2,
 // renormalised.
 func llamaCppPhiMoERouter(m *Model) func() {
-	return cfgMut(m, func(c *Config) { c.SparseMixer, c.NoExpertNorm = 0, false })
+	undo := cfgMut(m, func(c *Config) { c.SparseMixer, c.NoExpertNorm = 0, false })
+	undoR := statedRouter(m, convert.RouterScore(&jlm.Config{NExpert: 2}), jlm.Expr{})
+	return func() { undoR(); undo() }
+}
+
+// statedRouter states the router's score and weight to the front end as a
+// container of that router states them, the mutation of main's config beside
+// it reaching the composed arm.
+func statedRouter(m *Model, score, weight jlm.Expr) func() {
+	c := m.container.Config()
+	ws, ww := c.RouterScore, c.RouterWeight
+	c.RouterScore, c.RouterWeight = score, weight
+	undo := m.restate(func(map[jlm.Role]graph.Shape) {})
+	return func() {
+		c.RouterScore, c.RouterWeight = ws, ww
+		undo()
+	}
 }
 
 // unmaskedSoftmax weights each of the two by a softmax over every expert, not
 // renormalised: sparsemixer with no mask, and both of its experts' shared
 // denominator.
 func unmaskedSoftmax(m *Model) func() {
-	return cfgMut(m, func(c *Config) { c.SparseMixer = 0 })
+	undo := cfgMut(m, func(c *Config) { c.SparseMixer = 0 })
+	undoR := statedRouter(m, convert.RouterScore(&jlm.Config{NExpert: 2}), jlm.Expr{})
+	return func() { undoR(); undo() }
 }
 
 // mixerEps runs sparsemixer at another jitter_eps.
 func mixerEps(eps float32) func(m *Model) func() {
-	return func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SparseMixer = eps }) }
+	return func(m *Model) func() {
+		undo := cfgMut(m, func(c *Config) { c.SparseMixer = eps })
+		undoR := statedRouter(m, m.container.Config().RouterScore, convert.SparseMixerWeight(eps))
+		return func() { undoR(); undo() }
+	}
 }
