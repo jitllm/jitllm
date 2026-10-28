@@ -577,7 +577,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// own and runs on stream 0's prediction (frontstreams.go).
 	var st *streams
 	if c.statesStreams() {
-		st = &streams{in: []graph.ValueID{x}, mixed: c.mixesStreams()}
+		st = &streams{in: []graph.ValueID{x}, mixed: c.mixesStreams(), gated: c.gatesStreams()}
 		for k := 1; k < c.Streams(); k++ {
 			st.in = append(st.in, b.In(fmt.Sprintf("x.%d", k), d))
 		}
@@ -594,6 +594,8 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	switch {
 	case st != nil && st.mixed:
 		attnIn = m.bankMix(b, f, st.in[1:1+c.resBank(li, false)], x, jlm.RoleAttnResScore)
+	case st != nil && st.gated:
+		attnIn, st.w = m.gatedMix(b, f, st.in, jlm.RoleHCAttnNorm, jlm.RoleHCAttnDown, jlm.RoleHCAttnUp, jlm.RoleHCAttnInject)
 	case st != nil:
 		st.pred = m.predicted(b, f, st.in)
 		x, attnIn = st.pred[0], st.pred[0]
@@ -799,7 +801,14 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	for _, s := range side {
 		proj = b.Add(proj, s)
 	}
-	x2 := postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
+	// Streams read through a gate take the sublayer's output each at its
+	// weight; x2 is then none of them.
+	var x2 graph.ValueID
+	if st != nil && st.gated {
+		st.cur = m.placed(b, st.in, st.w, norm(proj, jlm.RolePostAttnNorm))
+	} else {
+		x2 = postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
+	}
 	if _, ok := c.resCheckpoint(li); ok && st != nil && st.mixed {
 		x2 = norm(proj, jlm.RolePostAttnNorm)
 	}
@@ -807,6 +816,10 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		x2 = mapRow(b, "joined", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt2}, nil, d, b.Add(x2, st.side))
 	}
 	if !c.MoEAt(li) && !has(jlm.RoleFFNUp) && !has(jlm.RoleFFNDown) {
+		if st != nil && st.gated {
+			b.Out(st.cur...)
+			return verified(b, f)
+		}
 		if st != nil && st.mixed {
 			return m.banked(b, f, li, st, x2, has)
 		}
@@ -828,6 +841,8 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		ffnIn = x
 	case st != nil && st.mixed:
 		ffnIn = m.bankMix(b, f, st.bankAfter(c, li), x2, jlm.RoleFFNResScore)
+	case st != nil && st.gated:
+		ffnIn, st.w = m.gatedMix(b, f, st.cur, jlm.RoleHCFFNNorm, jlm.RoleHCFFNDown, jlm.RoleHCFFNUp, jlm.RoleHCFFNInject)
 	}
 	n2 := preNorm(ffnIn, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
 	if _, own := f.Inventory[jlm.RoleFFNNorm]; c.Parallel && !own {
@@ -852,6 +867,10 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		}
 		h = norm(h, jlm.RoleFFNSubNorm)
 		ffn = matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
+	}
+	if st != nil && st.gated {
+		b.Out(m.placed(b, st.cur, st.w, norm(ffn, jlm.RolePostFFNNorm))...)
+		return verified(b, f)
 	}
 	if st != nil && st.mixed {
 		return m.banked(b, f, li, st, resid(x2, norm(ffn, jlm.RolePostFFNNorm)), has)
@@ -1222,7 +1241,9 @@ func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, er
 	}
 	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, LayerNorm: c.LayerNorm,
 		NormBias: stored(jlm.RoleOutputNormBias), Output: jlm.RoleOutput, Bias: stored(jlm.RoleOutputBias),
-		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale, Hidden: hidden}
+		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale, Hidden: hidden,
+		// A collapse of the streams stands in for a norm the model does not store.
+		NoNorm: collapsed && !stored(jlm.RoleOutputNorm)}
 	if !stored(h.Output) {
 		h.Output = jlm.RoleTokenEmbd
 	}

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
@@ -195,17 +196,24 @@ func cpuLogits(t *testing.T, m *Model, toks []int32, f cpuFault, composed bool) 
 		if heads != len(toks) {
 			t.Fatalf("%d head steps served, want %d", heads, len(toks))
 		}
-		// A model of predicted streams expands every step's row and
-		// collapses it for the head on the composed CPU.
-		if m.Cfg.predictsStreams() {
+		// A model of several stated streams expands every step's row where
+		// it has an expansion and collapses it for the head on the composed
+		// CPU.
+		if m.Cfg.statesStreams() {
+			fg, graphs := m.frontGraphs(), 0
+			for _, g := range []*graph.Graph{fg.expand, fg.collapse} {
+				if g != nil {
+					graphs++
+				}
+			}
 			rows, sdecl := s.CPUStreamSteps()
 			for i, n := range sdecl {
 				if n > 0 {
 					t.Errorf("%d rows of the streams' expansion or collapse declined: %s (%v)", n, jit.DeclineName(i), s.CPUFormErr())
 				}
 			}
-			if rows != 2*len(toks) {
-				t.Fatalf("the streams' expansion and collapse served %d rows, want %d", rows, 2*len(toks))
+			if rows != graphs*len(toks) {
+				t.Fatalf("the streams' expansion and collapse served %d rows, want %d", rows, graphs*len(toks))
 			}
 		}
 	} else if served != 0 {

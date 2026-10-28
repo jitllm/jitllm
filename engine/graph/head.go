@@ -22,6 +22,9 @@ type Head struct {
 	// Hidden makes the norm's rows the graph's second output, after the
 	// logits: what a step reading the trunk's normed rows back reads.
 	Hidden bool
+	// NoNorm projects the row as it comes, where the model has no output
+	// norm (a mix of its streams stands in for it).
+	NoNorm bool
 	// Pick, where set, projects only the rows of Pick ids, the graph's
 	// second input: the logits at those ids, a decision's labels, in place of
 	// the vocabulary's. A head with a bias does not pick.
@@ -38,15 +41,17 @@ func (h *Head) Build() *Graph {
 		ids, width = b.In("pick.ids", h.Pick), h.Pick
 		b.G.Values[ids].Elem = ElemU32
 	}
-	var n ValueID
-	if h.LayerNorm {
+	n := x
+	switch {
+	case h.NoNorm:
+	case h.LayerNorm:
 		w := []Binding{{Role: jlm.RoleOutputNorm, K: h.NEmbd}}
 		if h.NormBias {
 			w = append(w, Binding{Role: jlm.RoleOutputNormBias, K: h.NEmbd})
 		}
 		n = b.Emit(OpLayerNorm, []ValueID{x}, []Result{{Name: jlm.RoleOutputNorm.String(), Width: h.NEmbd}},
 			w, Attrs{Eps: h.Eps}, nil, nil)[0]
-	} else {
+	default:
 		n = b.Norm(x, jlm.RoleOutputNorm, h.Eps)
 	}
 	var bias []jlm.Role

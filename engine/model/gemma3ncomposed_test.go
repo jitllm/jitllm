@@ -19,8 +19,9 @@ import (
 // block and on every block, the correction's scale) moving the composed
 // arm past 100 times its worst and past 1e-4. The input rows' expansion of
 // stream 0 and the head's collapse of the streams are composed too, every
-// row of them served (cpuLogits), and streams 1 and 2 swapped where they
-// are bound moves the arm as far.
+// row of them served (cpuLogits), and streams 1 and 2 swapped where the
+// expansion writes them and stream 1 read for stream 2 where the collapse
+// reads them moves the arm as far.
 func TestGemma3nServesComposedOnCPU(t *testing.T) {
 	const page, bound = 32, 1e-5
 	for _, fx := range gemma3nFixtures {
@@ -73,10 +74,10 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 					t.Errorf("%s: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", v.name, bad, worst)
 				}
 			}
-			// Streams 1 and 2 swapped where the expansion writes them and the
-			// collapse reads them.
+			// Streams 1 and 2 swapped where the expansion writes them, and
+			// stream 1 read in stream 2's place where the collapse reads them.
 			bad := worstFrom(want, cpuLogits(t, m, toks, cpuFaultStreams, true))
-			t.Logf("violation \"the streams swapped at the expansion and the collapse\": worst NMSE %.3g", bad)
+			t.Logf("violation \"the streams swapped at the expansion, one read twice at the collapse\": worst NMSE %.3g", bad)
 			if !(bad > 100*worst) || !(bad > 10*bound) {
 				t.Errorf("the streams swapped: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", bad, worst)
 			}

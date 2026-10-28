@@ -23,6 +23,10 @@ var (
 	tableRecRows     = Operand{Kind: OperandTable, Name: "rec.rows", Elem: ir.U32}
 )
 
+// slotLen is a delta rule's state floats a sequence: its n, and the tail
+// past them where the op states one (graph.OpDeltaRule's Span).
+func slotLen(o graph.Op, n int) int { return max(n, o.Attr.Span) }
+
 // recSlot is the first element of the slot the step's descriptor (operand
 // j) names at word w, of slots n elements long.
 func (x *exprs) recSlot(j, w, n int) int {
@@ -82,7 +86,7 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 	keyHead := func(x *exprs, h int) int { return x.keyHead(h, H, KH, a.Tiled) }
 	flat := func(x *exprs, desc, h, j, i int) int {
 		at := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(Dv))), j), x.u(uint32(Dk))), i)
-		return x.op(OpAdd, U, x.recSlot(desc, 1, N), at)
+		return x.op(OpAdd, U, x.recSlot(desc, 1, slotLen(o, N)), at)
 	}
 	g := func(x *exprs, at, r, h, i int) int {
 		if chanDecay {
@@ -118,7 +122,7 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 	var w exprs
 	ix := w.op(OpAdd, U, w.op(OpMul, U, w.coord(0), w.u(uint32(Dk))), w.coord(1))
 	val := w.load(0, ix)
-	to := w.op(OpAdd, U, w.recSlot(1, 2, N), ix)
+	to := w.op(OpAdd, U, w.recSlot(1, 2, slotLen(o, N)), ix)
 	desc := func(j int) Facts { return Facts{Extents: map[int]int{0: N, j: 3}} }
 	var ps []Prim
 	if a.Additive {
@@ -162,7 +166,7 @@ func deltaScan(o graph.Op, c *Context, H, KH, Dk, Dv int, chanDecay bool) ([]Pri
 	place := x.op(OpAdd, U, start, i)
 	slot := func(w int) int {
 		at := x.op(OpAdd, U, x.op(OpAdd, U, run, run), x.u(uint32(w)))
-		base := x.op(OpMul, U, x.load(desc, at), x.u(uint32(N)))
+		base := x.op(OpMul, U, x.load(desc, at), x.u(uint32(slotLen(o, N))))
 		if c.scanLoops {
 			// The component added last: a loop of the components walks
 			// consecutive elements (Vectorize).

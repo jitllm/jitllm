@@ -296,7 +296,9 @@ const (
 	// holds nothing of it, or holds it evicted.
 	cpuFaultExpert
 	// cpuFaultStreams swaps streams 1 and 2 where the input rows' expansion
-	// writes them and where the head's collapse reads them.
+	// writes them, and reads stream 1 in stream 2's place where the head's
+	// collapse reads them (a mix the same over any order of its streams sees
+	// a stream read twice).
 	cpuFaultStreams
 	// cpuFaultEntryRows gathers each patch row of the tower's entry from the
 	// patch after its own.
@@ -1332,7 +1334,7 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		// The forms read a bank as one view of its experts in the host's
 		// expert pages (jlm.File.BankView); a bank with none is not read.
 		return jit.DeclineExperts
-	case c.LayerKind(li).Recurrent() && (li >= len(s.rstate) || s.rstate[li] == nil || s.rconv[li] == nil || s.dg.tail != 0):
+	case c.LayerKind(li).Recurrent() && (li >= len(s.rstate) || s.rstate[li] == nil || s.rconv[li] == nil):
 		return jit.DeclineRecurrent
 	case pg.latent:
 		return jit.DeclineLatent
@@ -2073,6 +2075,10 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &m.dense1
 		case r == jlm.RoleEmbdDense2:
 			return &m.dense2
+		case m.q4eHead != nil && r == jlm.RoleHCHeadDown:
+			return &m.q4eHead.hc.down
+		case m.q4eHead != nil && r == jlm.RoleHCHeadUp:
+			return &m.q4eHead.hc.up
 		}
 		return nil
 	}
@@ -2148,6 +2154,22 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 	case jlm.RoleLowRankOut:
 		return &l.laurelR
 	}
+	if h := l.q4e; h != nil {
+		switch r {
+		case jlm.RoleHCAttnDown:
+			return &h.attn.down
+		case jlm.RoleHCAttnUp:
+			return &h.attn.up
+		case jlm.RoleHCAttnInject:
+			return &h.attn.inj
+		case jlm.RoleHCFFNDown:
+			return &h.ffn.down
+		case jlm.RoleHCFFNUp:
+			return &h.ffn.up
+		case jlm.RoleHCFFNInject:
+			return &h.ffn.inj
+		}
+	}
 	return nil
 }
 
@@ -2162,6 +2184,12 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 			return s.m.outNormB
 		case jlm.RoleOutputBias:
 			return s.m.outB
+		case jlm.RoleOutputResScore:
+			return s.m.resOut
+		case jlm.RoleHCHeadNorm:
+			if s.m.q4eHead != nil {
+				return s.m.q4eHead.hc.norm
+			}
 		}
 		if s.vis == nil {
 			return nil
@@ -2288,6 +2316,14 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 		return l.resFFN
 	case jlm.RoleFFNRoutedNorm:
 		return l.routedNorm
+	}
+	if h := l.q4e; h != nil {
+		switch r {
+		case jlm.RoleHCAttnNorm:
+			return h.attn.norm
+		case jlm.RoleHCFFNNorm:
+			return h.ffn.norm
+		}
 	}
 	return nil
 }

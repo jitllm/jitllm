@@ -102,7 +102,7 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 	beta := mapc("beta", graph.MapSigmoid, 0, vh, nil, braw)
 
 	o := b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, decay, beta}, []graph.Result{{Name: "delta", Width: vh * dv}}, nil,
-		graph.Attrs{NHead: vh, NKVHead: kh, HeadDim: dk, Tiled: g.tiled},
+		graph.Attrs{NHead: vh, NKVHead: kh, HeadDim: dk, Tiled: g.tiled, Span: stateSpan(c, vh*dv*dk)},
 		[]graph.StateRef{{Name: "rec.state"}}, []graph.StateRef{{Name: "rec.state", Version: 1}})[0]
 	o = b.HeadNorm(o, jlm.RoleSSMNorm, dv, c.RMSEps)
 	if g.chanDecay || c.DeltaSigmoidGate {
@@ -113,4 +113,14 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 		{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgTerm, Index: 0}}},
 		{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 1}, {Kind: graph.ArgIn, Index: 1}}},
 	}, nil, z, o), nil
+}
+
+// stateSpan is a delta rule's state floats a sequence where the block's
+// state carries a tail past the rule's n (Config.recTailLen), 0 where it is
+// the rule's alone.
+func stateSpan(c *Config, n int) int {
+	if t := c.recTailLen(); t != 0 {
+		return n + t
+	}
+	return 0
 }

@@ -197,8 +197,10 @@ const (
 	// decay (a channel's factor on its column), then S plus the outer
 	// product of (v - S k) times beta and k (v times beta where Additive),
 	// then Out[0] = S q. It reads
-	// state version n and writes n+1. A primitive with a state of its own:
-	// a linear-attention mixer's recurrence.
+	// state version n and writes n+1. Where Span is set it is the state's
+	// floats per sequence, the matrices' and a tail past them the rule
+	// neither reads nor writes. A primitive with a state of its own: a
+	// linear-attention mixer's recurrence.
 	OpDeltaRule
 	// OpPosition is each row's position in the block's history, the one its
 	// key is written at, plus Offset and in whole Spans where Span > 1 (an

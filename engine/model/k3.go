@@ -6,6 +6,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -356,6 +357,9 @@ func (s *State) k3FFNIn(li int, l *layer, x []float32, n int) ([]float32, error)
 func (s *State) k3Collapse(x []float32, n int) error {
 	c := s.m.Cfg
 	if c.k3Fault == k3FaultNoHeadMix {
+		return nil
+	}
+	if s.cpuCollapse(x, n) == jit.DeclineServes {
 		return nil
 	}
 	in, err := s.k3Mix(x, n, c.resBankFinal(), s.m.resOutT)

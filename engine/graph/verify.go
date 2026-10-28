@@ -219,6 +219,8 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: a decay of %d over %d heads of %d", at, width(o.In[3]), a.NHead, a.HeadDim)
 			case width(o.In[4]) != a.NHead:
 				bad("%s: a beta of %d over %d heads", at, width(o.In[4]), a.NHead)
+			case a.Span != 0 && a.Span < width(o.In[2])*a.HeadDim:
+				bad("%s: a state of %d floats a sequence, under its %d", at, a.Span, width(o.In[2])*a.HeadDim)
 			}
 		case OpMap:
 			if a := o.Attr; a.Width != 0 {

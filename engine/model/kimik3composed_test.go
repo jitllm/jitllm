@@ -9,6 +9,8 @@ import (
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -93,6 +95,73 @@ func TestKimiK3ServesComposed(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatal("no device on this host")
+	}
+}
+
+// TestKimiK3ServesComposedOnCPU runs each Kimi-K3 fixture on the CPU
+// device with the head's mix over the bank composed, teacher-forced on the
+// fixture's ids against main's kernels within 1e-5: every head step and
+// row of the mix served, every block step declined by name (the CPU's forms
+// hold no latent attention's history; the cards serve the blocks,
+// TestKimiK3ServesComposed). The input rows need no expansion: a block banks
+// each checkpoint before any block reads it. A checkpoint read twice where
+// the mix reads the bank (a softmax mix is the same over any order of its
+// rows, so a swap is not a violation it can see), and the mix's score vector
+// dropped, move the logits past 100 times the clean worst and past 1e-4.
+func TestKimiK3ServesComposedOnCPU(t *testing.T) {
+	const bound = 1e-5
+	for _, fx := range k3Fixtures {
+		t.Run(fx.name, func(t *testing.T) {
+			gm, g := openK3(t, fx.name)
+			ok := fx.sel(gm)
+			gm.Close()
+			if !ok {
+				t.Fatal("the container does not carry the fixture's graph")
+			}
+			path := jlmOf(t, testmodels.Path(fx.name+".gguf"))
+			ref, err := Open(path, noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ref.Close()
+			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, false, 0, 0)
+			m, err := Open(path, noTune, WithComposedCPU(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			if s := m.frontGraphs(); s.expand != nil || s.collapse == nil {
+				t.Fatal("the bank's input rows are expanded, or the head's mix over it is not stated")
+			}
+			run := func(f cpuFault) float64 {
+				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, 0, jit.DeclineLatent))
+			}
+			worst := run(cpuFaultNone)
+			t.Logf("the composed CPU head's mix from main: worst NMSE %.3g over %d steps", worst, len(g.IDs))
+			if !(worst < bound) {
+				t.Fatalf("the composed CPU is %.3g from main, bound %g", worst, bound)
+			}
+			bad := run(cpuFaultStreams)
+			t.Logf("violation \"a checkpoint read twice where the head's mix reads the bank\": worst NMSE %.3g", bad)
+			if !(bad > 100*worst) || !(bad > 1e-4) {
+				t.Errorf("a checkpoint read twice: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", bad, worst)
+			}
+			undo := m.rewriteCollapse(t, func(g *graph.Graph) *graph.Graph {
+				return rewriteOps(t, g, func(_ int, o *graph.Op) bool {
+					if o.Kind != graph.OpMap || len(o.Weight) == 0 || o.Weight[0].Role != jlm.RoleOutputResScore {
+						return false
+					}
+					*o = graph.Op{Kind: graph.OpMap, In: o.In, Out: o.Out, Attr: graph.Attrs{Fn: graph.MapMul, Const: 1}}
+					return true
+				})
+			})
+			bad = run(cpuFaultNone)
+			undo()
+			t.Logf("violation \"the mix scored without its stored vector\": worst NMSE %.3g", bad)
+			if !(bad > 100*worst) || !(bad > 1e-4) {
+				t.Errorf("the mix unscored: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", bad, worst)
+			}
+		})
 	}
 }
 

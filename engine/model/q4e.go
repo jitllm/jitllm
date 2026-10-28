@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
 )
 
@@ -392,6 +393,9 @@ func (s *State) q4eExpand(x []float32, rows int) { s.q4eExpandAt(x, rows, 0) }
 // and those are laid into the chunk instead.
 func (s *State) q4eExpandAt(x []float32, rows, base int) {
 	c := s.m.Cfg
+	if s.q4In == nil && s.cpuExpand(x, rows) == jit.DeclineServes {
+		return
+	}
 	if s.q4In != nil {
 		w, d := c.ResidW(), c.NEmbd
 		for r := 0; r < rows; r++ {
@@ -511,6 +515,8 @@ func (s *State) q4eCollapse(x []float32, n int) error {
 	hc := &s.m.q4eHead.hc
 	if s.lo >= c.NLayer {
 		hc = &s.m.layers[s.lo].q4e.head
+	} else if s.cpuCollapse(x, n) == jit.DeclineServes {
+		return nil
 	}
 	if err := s.hcMix(x, n, hc); err != nil {
 		return err

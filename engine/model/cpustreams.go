@@ -38,7 +38,7 @@ func (s *State) CPUStreamSteps() (served int, declined [jit.NumDeclines]int) {
 // the CPU at the State's placement.
 func (s *State) cpuPlaceStreams() {
 	st := &s.cpu.streams
-	if !s.c.predictsStreams() {
+	if !s.c.statesStreams() {
 		return
 	}
 	fg := s.m.frontGraphs()
@@ -80,7 +80,7 @@ func (s *State) cpuCollapse(x []float32, rows int) jit.Decline {
 		st.in = append(st.in, k)
 	}
 	if s.cpu.fault == cpuFaultStreams && len(st.in) > 3 {
-		st.in[1], st.in[2] = st.in[2], st.in[1]
+		st.in[2] = st.in[1]
 	}
 	return s.cpuStreamsRun(&st.collapse, &st.collapseRows, x, rows, true)
 }

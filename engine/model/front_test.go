@@ -117,11 +117,12 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 // to a named refusal and no graph: every way to Covered passes a Streams
 // check, so the tier never meets a block of streams it cannot bind. Where the
 // block reaches that check the refusal is UncoveredStreams by name. Predicted
-// streams (TestGemma3nServesComposedOnCPU) and a bank of checkpoints
-// (TestKimiK3ServesComposed) are stated.
+// streams (TestGemma3nServesComposedOnCPU), a bank of checkpoints
+// (TestKimiK3ServesComposed) and streams read through a low-rank gate
+// (TestQwen4ExpServesComposedOnCPU) are stated.
 func TestFrontRefusesSeveralStreams(t *testing.T) {
 	byStreams := 0
-	for _, file := range []string{"synth-deepseek4.gguf", "synth-qwen4exp.gguf"} {
+	for _, file := range []string{"synth-deepseek4.gguf"} {
 		t.Run(file, func(t *testing.T) {
 			m := frontModel(t, file)
 			if m.Cfg.Streams() < 2 {
@@ -140,12 +141,20 @@ func TestFrontRefusesSeveralStreams(t *testing.T) {
 					streams++
 				}
 			}
-			t.Logf("%d streams: %d of %d blocks refused for them, the rest earlier", m.Cfg.Streams(), streams, m.Cfg.NLayer)
+			// The head's collapse and the input rows' expansion of the
+			// Sinkhorn-mixed streams are refused for them by name.
+			for _, at := range []int{-1, -2} {
+				if why := m.Uncovered(at); why != UncoveredStreams {
+					t.Fatalf("part %d is refused by %q, want %q", at, why, UncoveredStreams)
+				}
+				streams++
+			}
+			t.Logf("%d streams: %d of %d blocks and the head and input rows refused for them, the rest earlier", m.Cfg.Streams(), streams, m.Cfg.NLayer)
 			byStreams += streams
 		})
 	}
 	if byStreams == 0 {
-		t.Fatal("no block is refused for its streams: the gate selects nothing")
+		t.Fatal("nothing is refused for its streams: the gate selects nothing")
 	}
 }
 

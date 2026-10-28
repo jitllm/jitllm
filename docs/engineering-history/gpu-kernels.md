@@ -10462,3 +10462,29 @@ row where the composer's reads two.
   on Q5_K); Llama-3.2-1B and stories15M-q4_0 join cpuRowsModels, so
   TestComposedCPURowsServe and TestComposedCPURowsDoNotAllocate hold a
   K-quant's and a Q4_0 prompt.
+- Streams read through a low-rank gate are stated as ops
+  (Qwen3.8-Flash-Next's hyper-connections, `gatesStreams`): the streams side
+  by side, each RMS-normed against its own row of the stored weight, a
+  low-rank gate (down, 1/S, SiLU, up, sigmoid) over them, the mean of the
+  gated streams the sublayer's input, and the output placed into each
+  stream at 2 sigmoid(inject/S); the input rows are S copies of the
+  embedding and the head reads its own gate's mix with no norm
+  (`graph.Head.NoNorm`). A delta rule states its state's floats a sequence
+  where the block carries a tail past them (`OpDeltaRule`'s Span, the
+  n-gram history), so a linear block of a model with a tail composes. On the
+  CPU device synth-qwen4exp serves block 0 at 4.6e-12 from main (ragged
+  1.8e-12), its input rows' copies and the head's mix every row; the
+  attention blocks wait on QSA (UncoveredSelect) and block 2 on the n-gram
+  embedding (UncoveredNGram), both declined by name and counted. The gate
+  read as its plain streams, the placement at weight one or without its
+  two, the rank unscaled, the copies left empty and a stream read twice at
+  the head move the logits 0.015 to 2.6. Kimi-K3's head mix over the bank
+  is the same bankMix the blocks state, composed on the CPU at 4.8e-14
+  (its blocks wait on a latent history on the CPU, DeclineLatent); its
+  input rows need no expansion, since a block banks each checkpoint before
+  any reads it. A softmax mix is the same over any order of its rows, so
+  the CPU's stream violation at a collapse now reads a stream twice where
+  it swapped two. DeepSeek V4's Sinkhorn-mixed streams stay refused
+  (UncoveredStreams at the head and the input rows; every block is
+  UncoveredSelect first).
+
