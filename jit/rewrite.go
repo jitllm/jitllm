@@ -63,6 +63,32 @@ func (n *Kernel) Operands(nd *Node) []*int {
 	return []*int{&nd.A, &nd.B}
 }
 
+// args is node i's operands as Operands states them, read and not
+// written: the node's own index fields, or its axes, in buf where it has
+// no axes.
+func (n *Kernel) args(i int, buf *[3]int) []int {
+	nd := &n.Nodes[i]
+	if nd.Op == OpLoad && nd.Ax != nil {
+		return nd.Ax
+	}
+	buf[0], buf[1], buf[2] = nd.A, nd.B, nd.C
+	switch {
+	case nd.Op == OpExchange && nd.C < 0:
+		return buf[:2]
+	case nd.Op == OpExchange:
+		return buf[:3]
+	}
+	switch arity(nd.Op) {
+	case 0:
+		return nil
+	case 1:
+		return buf[:1]
+	case 3:
+		return buf[:3]
+	}
+	return buf[:2]
+}
+
 // arity is how many operands an op reads, a fold its step and its start.
 func arity(op Op) int {
 	switch op {
@@ -500,30 +526,43 @@ func (n *Kernel) insertLoop(at int, l Loop) int {
 // the sum's step, and for a sum read after its loop the loop around it.
 // -1 for a node no loop changes.
 func (n *Kernel) Homes() []int {
-	step := map[int]int{}
-	for f, nd := range n.Nodes {
+	nn := len(n.Nodes)
+	// step is the loop of the sum whose step a node is made in, -1 for
+	// none; the first sum to reach a node keeps it.
+	step := make([]int, nn)
+	for i := range step {
+		step[i] = -1
+	}
+	// known is reachesFold(i, f) for the fold f being walked, each node's
+	// answer kept (0 unknown, 1 no, 2 yes): the nodes below the folds are
+	// acyclic.
+	var known []uint8
+	for f := range n.Nodes {
+		nd := &n.Nodes[f]
 		if nd.Op != OpFold {
 			continue
 		}
-		// reaches is reachesFold(i, f), each node's answer kept: the nodes
-		// below the folds are acyclic.
-		known := map[int]bool{}
+		if known == nil {
+			known = make([]uint8, nn)
+		} else {
+			clear(known)
+		}
 		var reaches func(i int) bool
 		reaches = func(i int) bool {
 			if i == f {
 				return true
 			}
-			if r, ok := known[i]; ok {
-				return r
+			if r := known[i]; r != 0 {
+				return r == 2
 			}
-			known[i] = false
-			x := n.Nodes[i]
-			if x.Op == OpFold {
+			known[i] = 1
+			if n.Nodes[i].Op == OpFold {
 				return false
 			}
-			for _, a := range n.Operands(&x) {
-				if reaches(*a) {
-					known[i] = true
+			var buf [3]int
+			for _, a := range n.args(i, &buf) {
+				if reaches(a) {
+					known[i] = 2
 					return true
 				}
 			}
@@ -531,25 +570,22 @@ func (n *Kernel) Homes() []int {
 		}
 		var walk func(i int)
 		walk = func(i int) {
-			if i == f {
+			if i == f || step[i] >= 0 {
 				return
 			}
-			if _, ok := step[i]; ok {
-				return
-			}
-			x := n.Nodes[i]
-			if x.Op == OpFold || !reaches(i) {
+			if n.Nodes[i].Op == OpFold || !reaches(i) {
 				return
 			}
 			step[i] = nd.At
-			for _, a := range n.Operands(&x) {
-				walk(*a)
+			var buf [3]int
+			for _, a := range n.args(i, &buf) {
+				walk(a)
 			}
 		}
 		walk(nd.A)
 	}
-	out := make([]int, len(n.Nodes))
-	done := make([]bool, len(n.Nodes))
+	out := make([]int, nn)
+	done := make([]bool, nn)
 	inner := func(a, b int) int {
 		switch {
 		case a < 0:
@@ -567,7 +603,7 @@ func (n *Kernel) Homes() []int {
 			return out[i]
 		}
 		done[i], out[i] = true, -1
-		nd := n.Nodes[i]
+		nd := &n.Nodes[i]
 		h := -1
 		switch {
 		case nd.Op == OpIter:
@@ -577,12 +613,13 @@ func (n *Kernel) Homes() []int {
 		case nd.Op == OpLoad && nd.At > 0:
 			h = nd.At - 1
 		}
-		if c, ok := step[i]; ok {
+		if c := step[i]; c >= 0 {
 			h = inner(h, c)
 		}
 		if nd.Op != OpFold {
-			for _, a := range n.Operands(&nd) {
-				h = inner(h, home(*a))
+			var buf [3]int
+			for _, a := range n.args(i, &buf) {
+				h = inner(h, home(a))
 			}
 		}
 		out[i] = h

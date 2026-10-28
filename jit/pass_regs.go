@@ -327,7 +327,7 @@ func (b *binder86) gprs() error {
 		}
 	}
 	direct := map[int]bool{}
-	words := k.VectorWords()
+	words := k.vectorWords()
 	// A value made in a general register frees it after its last read; an
 	// argument word, a length, a count and a buffer's address keep theirs,
 	// read through what they address rather than as values.
@@ -677,9 +677,10 @@ func (b *binder86) copyIn(r int) bool {
 // uses is how many nodes read node i.
 func (b *binder86) uses(i int) int {
 	n := 0
-	for _, nd := range b.k.Nodes {
-		for _, a := range b.k.Operands(&nd) {
-			if *a == i {
+	var buf [3]int
+	for x := range b.k.Nodes {
+		for _, a := range b.k.args(x, &buf) {
+			if a == i {
 				n++
 			}
 		}
@@ -855,6 +856,9 @@ func (k *Kernel) vectorWords() map[int]bool {
 type vectorMemo struct {
 	n     int
 	words map[int]bool
+	// vecN is the count of nodes vec was found at, plus one (0: none).
+	vecN int
+	vec  bool
 }
 
 // vectorized reports whether any loop of k runs in vector lanes, or any
@@ -862,6 +866,18 @@ type vectorMemo struct {
 // keeps its integers in general registers: an index, a weight's word and
 // what is made from them.
 func (k *Kernel) vectorized() bool {
+	m := k.vwords
+	if m == nil {
+		return k.findVectorized()
+	}
+	if m.vecN != len(k.Nodes)+1 {
+		m.vecN, m.vec = len(k.Nodes)+1, k.findVectorized()
+	}
+	return m.vec
+}
+
+// findVectorized is vectorized, found again.
+func (k *Kernel) findVectorized() bool {
 	for _, l := range k.Loops {
 		if l.Lanes > 0 || l.Wide > 0 {
 			return true
@@ -880,9 +896,16 @@ func (k *Kernel) vectorized() bool {
 // a float's bits, masks, what is made from them, what they are made of, and
 // the constants they are made with.
 func (k *Kernel) VectorWords() map[int]bool {
-	out := map[int]bool{}
+	in := make([]bool, len(k.Nodes))
+	held := 0
+	set := func(i int) {
+		if !in[i] {
+			in[i] = true
+			held++
+		}
+	}
 	data := func(i int) bool {
-		nd := k.Nodes[i]
+		nd := &k.Nodes[i]
 		return nd.Type != ir.F32 && nd.Op != OpParam && nd.Op != OpIter && nd.Op != OpLength && nd.Op != OpSpan && nd.Op != OpCoord
 	}
 	vec := k.vectorized()
@@ -890,81 +913,92 @@ func (k *Kernel) VectorWords() map[int]bool {
 	if vec {
 		hs = k.Homes()
 	}
-	for i, nd := range k.Nodes {
+	for i := range k.Nodes {
+		nd := &k.Nodes[i]
 		switch {
 		case nd.Op == OpLanes || nd.Op == OpBroadcast && nd.Type != ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32:
-			out[i] = true
+			set(i)
 		case vec && nd.Op == OpLoad && nd.Type != ir.F32 && !k.Bufs[nd.Buf].Half && i < len(hs) && hs[i] >= 0 && k.Loops[hs[i]].Lanes > 0:
 			// A word a vector loop loads is a lane's each.
-			out[i] = true
+			set(i)
 		case vec && (nd.Op == OpCvtF32 || nd.Op == OpWidenHalf || nd.Op == OpBitcast && nd.Type == ir.F32):
 			if data(nd.A) && k.Nodes[nd.A].Op != OpConst {
-				out[nd.A] = true
+				set(nd.A)
 			}
 		case nd.Op == OpBitcast || nd.Op == OpCvtI32:
 			if k.Nodes[nd.A].Type == ir.F32 {
-				out[i] = true
+				set(i)
 			}
 		}
 	}
+	var buf [3]int
 	for grew := true; grew; {
-		before := len(out)
+		before := held
 		for changed := true; changed; {
 			changed = false
 			for i := range k.Nodes {
-				if !out[i] {
+				if !in[i] {
 					continue
 				}
-				nd := k.Nodes[i]
+				nd := &k.Nodes[i]
 				// A broadcast of a computed word reads it from a general
 				// register (Splats).
 				if nd.Op == OpLoad || nd.Op == OpFold || nd.Op == OpBroadcast && nd.Type != ir.F32 {
 					continue
 				}
-				for x, a := range k.Operands(&nd) {
+				for x, a := range k.args(i, &buf) {
 					// A shift's count shifts every lane alike: it is a vector
 					// only where it is made of one.
 					if x == 1 && (nd.Op == OpShl || nd.Op == OpShr || nd.Op == OpSar) {
 						continue
 					}
 					// A compare a vector word reads is a vector compare.
-					if data(*a) && k.Nodes[*a].Op != OpConst && !out[*a] && (k.Nodes[*a].Type != ir.Pred || k.Nodes[*a].Op == OpLess) {
-						out[*a], changed = true, true
+					if data(a) && k.Nodes[a].Op != OpConst && !in[a] && (k.Nodes[a].Type != ir.Pred || k.Nodes[a].Op == OpLess) {
+						set(a)
+						changed = true
 					}
 				}
 			}
 		}
 		for changed := true; changed; {
 			changed = false
-			for i, nd := range k.Nodes {
-				if out[i] || nd.Type == ir.F32 {
+			for i := range k.Nodes {
+				nd := &k.Nodes[i]
+				if in[i] || nd.Type == ir.F32 {
 					continue
 				}
-				v := nd.Op == OpHalf || nd.Op == OpRoundI32 || (nd.Op == OpLess || nd.Op == OpEq) && (k.Nodes[nd.A].Type == ir.F32 || out[nd.A] || out[nd.B])
+				v := nd.Op == OpHalf || nd.Op == OpRoundI32 || (nd.Op == OpLess || nd.Op == OpEq) && (k.Nodes[nd.A].Type == ir.F32 || in[nd.A] || in[nd.B])
 				if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Op == OpXor || nd.Op == OpShr || nd.Op == OpShl || nd.Op == OpSar || (nd.Type == ir.I32 || nd.Type == ir.U32) && nd.Op != OpConst && nd.Op != OpLoad) {
-					for _, a := range k.Operands(&nd) {
-						v = v || out[*a]
+					for _, a := range k.args(i, &buf) {
+						v = v || in[a]
 					}
 				}
 				if !v && nd.Type == ir.I32 && nd.Op == OpFold {
 					v = true
 				}
 				if v {
-					out[i] = true
+					set(i)
 					changed = true
 				}
 			}
 		}
-		grew = len(out) > before
+		grew = held > before
 	}
-	for i, nd := range k.Nodes {
-		if !out[i] || nd.Op == OpLoad || nd.Op == OpFold {
+	for i := range k.Nodes {
+		nd := &k.Nodes[i]
+		if !in[i] || nd.Op == OpLoad || nd.Op == OpFold {
 			continue
 		}
-		for x, a := range k.Operands(&nd) {
-			if k.Nodes[*a].Op == OpConst && k.Nodes[*a].Type != ir.F32 && !(x == 1 && (nd.Op == OpShl || nd.Op == OpShr || nd.Op == OpSar)) {
-				out[*a] = true
+		for x, a := range k.args(i, &buf) {
+			if k.Nodes[a].Op == OpConst && k.Nodes[a].Type != ir.F32 && !(x == 1 && (nd.Op == OpShl || nd.Op == OpShr || nd.Op == OpSar)) {
+				set(a)
 			}
+		}
+	}
+	out := make(map[int]bool, held)
+	for i, v := range in {
+		if v {
+			out[i] = true
 		}
 	}
 	return out
@@ -982,12 +1016,19 @@ func (b *binder86) vectors() error {
 			stepOf[nd.A] = i
 		}
 	}
-	free := func(pos int, spent bool) {
-		for v, l := range b.last {
-			if _, step := stepOf[v]; step {
-				continue
+	// lastAt is the values each entry of the sequence reads for the last
+	// time, a sum's steps apart: free visits those alone.
+	lastAt := make([][]int, len(k.Seq))
+	for v := range k.Nodes {
+		if l, ok := b.last[v]; ok && l >= 0 && l < len(lastAt) {
+			if _, step := stepOf[v]; !step {
+				lastAt[l] = append(lastAt[l], v)
 			}
-			if l == pos && k.Nodes[v].Reg > 0 && k.needsVector(v) && busy[k.Nodes[v].Reg-1] {
+		}
+	}
+	free := func(pos int, spent bool) {
+		for _, v := range lastAt[pos] {
+			if k.Nodes[v].Reg > 0 && k.needsVector(v) && busy[k.Nodes[v].Reg-1] {
 				r := k.Nodes[v].Reg - 1
 				busy[r] = false
 				tag[r] = chain[v]

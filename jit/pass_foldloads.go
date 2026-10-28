@@ -71,9 +71,10 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // uses is how many nodes and stores read node i.
 func (k *Kernel) uses(i int) int {
 	n := 0
-	for _, nd := range k.Nodes {
-		for _, a := range k.Operands(&nd) {
-			if *a == i {
+	var buf [3]int
+	for x := range k.Nodes {
+		for _, a := range k.args(x, &buf) {
+			if a == i {
 				n++
 			}
 		}

@@ -129,10 +129,11 @@ func (o *orderer) isBase(i int) bool {
 // loop's last; nil for any other node.
 func (k *Kernel) madeCounts(i int) []int {
 	var tails, vectors []int
+	var buf [3]int
 	for j := range k.Nodes {
 		direct := false
-		for _, a := range k.Operands(&k.Nodes[j]) {
-			direct = direct || *a == i
+		for _, a := range k.args(j, &buf) {
+			direct = direct || a == i
 		}
 		if !direct {
 			continue
@@ -905,9 +906,10 @@ func (k *Kernel) constRuns() {
 // readCount is how many nodes and stores read node i.
 func (k *Kernel) readCount(i int) int {
 	n := 0
+	var buf [3]int
 	for j := range k.Nodes {
-		for _, a := range k.Operands(&k.Nodes[j]) {
-			if *a == i {
+		for _, a := range k.args(j, &buf) {
+			if a == i {
 				n++
 			}
 		}
