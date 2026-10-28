@@ -86,20 +86,26 @@ func tileParts(rows, unit, tile int) int {
 
 // workerParts is the calls rows rows are cut into over workers: a divisor
 // of rows leaving each call a multiple of unit rows, the one whose busiest
-// worker holds the fewest rows, the fewest calls among equals; 1 where none
-// does better than one call.
+// worker holds the fewest rows; among equals the most, up to callsAWorker a
+// worker, so the workers the pool finds free take up the calls of one the
+// OS holds off its core. 1 where none does better than one call.
 func workerParts(rows, workers, unit int) int {
 	best, cost := 1, rows
 	for parts := 2; parts*unit <= rows; parts++ {
 		if rows%parts != 0 || (rows/parts)%unit != 0 {
 			continue
 		}
-		if c := (parts + workers - 1) / workers * (rows / parts); c < cost {
+		c := (parts + workers - 1) / workers * (rows / parts)
+		if c < cost || c == cost && parts <= callsAWorker*workers {
 			best, cost = parts, c
 		}
 	}
 	return best
 }
+
+// callsAWorker is the most calls a worker's share of a weight is cut into
+// where the cut costs the busiest worker no rows.
+const callsAWorker = 4
 
 // readsWeight reports whether the kernel reads a matrix weight.
 func (k *Kernel) readsWeight() bool {
