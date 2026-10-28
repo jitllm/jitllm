@@ -136,6 +136,11 @@ func bindComgr(names []string) (*comgrAPI, error) {
 	switch {
 	case a.major < 2:
 		return nil, fmt.Errorf("hip: libamd_comgr %d.%d is older than the 2.x API this binding uses", a.major, a.minor)
+	case a.major == 2 && a.minor < 8:
+		// Measured: comgr 2.6 (ROCm 6.0, as Ubuntu packages it) refuses the
+		// LLVM IR language for every target; 2.8 (ROCm 6.3.3) is the oldest
+		// that takes it.
+		return nil, fmt.Errorf("hip: libamd_comgr %d.%d does not take LLVM IR; 2.8 (ROCm 6.3) or later is needed", a.major, a.minor)
 	case a.major == 2:
 		a.codes = comgrV2
 	case a.major == 3:
