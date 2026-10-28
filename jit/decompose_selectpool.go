@@ -18,7 +18,7 @@ type selectBounds struct{ first, end, own, lo int }
 // it, each query head's dot with it, and each group's sum of its heads'
 // scores through Fn and the weights, into best. A block a row does not hold
 // whole scores from its clamped reads; the ranking never counts it.
-func selectPooled(o graph.Op, c *Context, keys Operand, tables func(...Operand) []Operand, flat Facts, best Operand) ([]Prim, error) {
+func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(...Operand) []Operand, flat Facts, best Operand) ([]Prim, error) {
 	a := o.Attr
 	if a.NRot < 0 || a.NRot%2 != 0 || a.NRot > a.HeadDim || a.NRot > 0 && a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox {
 		return nil, fmt.Errorf("a pooled selection turned by a rotary of %d of %d, layout %d", a.NRot, a.HeadDim, a.Layout)
@@ -51,7 +51,7 @@ func selectPooled(o graph.Op, c *Context, keys Operand, tables func(...Operand) 
 	pid, off := hs.page(&px, hs.held(&px, pos, first))
 	in := px.sel(F, px.op(OpLess, ir.Pred, px.op(OpDiv, U, pos, px.u(uint32(B))), px.op(OpAdd, U, px.coord(1), px.u(1))),
 		px.sel(F, px.op(OpLess, ir.Pred, px.op(OpDiv, U, pos, px.u(uint32(B))), px.coord(1)), px.f(0), px.f(1/float32(B))), px.f(0))
-	px.op(OpMul, F, in, c.poolRead(&px, 0, c.History.Keys, a.Width, pid, off, px.op(OpAdd, U, px.coord(2), px.u(uint32(a.Offset)))))
+	px.op(OpMul, F, in, c.poolRead(&px, 0, pool, a.Width, pid, off, px.op(OpAdd, U, px.coord(2), px.u(uint32(a.Offset)))))
 
 	var sx exprs
 	mean := sx.at(0, []int{R, NB, D}, sx.coord(0), sx.coord(1), sx.coord(2))

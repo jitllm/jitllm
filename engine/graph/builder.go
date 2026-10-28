@@ -135,12 +135,44 @@ func (s *Builder) Select(q ValueID, h StateRef, a Attrs, w ...ValueID) ValueID {
 	return y
 }
 
+// EntAppend writes k as the row's entry of the entry history ("ent") at
+// version n, the slot its descriptor names, and returns the next version.
+func (s *Builder) EntAppend(k ValueID, n int) int {
+	s.G.op(Op{Kind: OpKVAppend, In: []ValueID{k, k}, Reads: []StateRef{{Name: EntHistory, Version: n}}, Writes: []StateRef{{Name: EntHistory, Version: n + 1}}})
+	return n + 1
+}
+
+// ColPool is OpColPool over the history h: a's window of Span rows, its
+// value and gate HeadDim wide at Offset and GateAt of rows Width wide.
+func (s *Builder) ColPool(h StateRef, a Attrs) ValueID {
+	y := s.value("colpool", a.HeadDim)
+	s.G.op(Op{Kind: OpColPool, Out: []ValueID{y}, Reads: []StateRef{h}, Attr: a})
+	return y
+}
+
 // SelectPooled is Select over pooled block keys (Attrs.Pooled), each normed
 // by role norm's weight.
 func (s *Builder) SelectPooled(q ValueID, h StateRef, a Attrs, norm jlm.Role) ValueID {
 	a.Pooled = true
 	y := s.value("select", a.NKVHead)
 	s.G.op(Op{Kind: OpSelect, In: []ValueID{q}, Out: []ValueID{y}, Weight: []Binding{{Role: norm, K: a.HeadDim}}, Reads: []StateRef{h}, Attr: a})
+	return y
+}
+
+// AttendTwo is q's attention over the window of the history h and the
+// entries of the entry history e under one softmax (OpAttend of two reads),
+// over the entries selection sel keeps where it is given.
+func (s *Builder) AttendTwo(q ValueID, h, e StateRef, sel *ValueID, a Attrs, sinks ...jlm.Role) ValueID {
+	var w []Binding
+	for _, r := range sinks {
+		w = append(w, Binding{Role: r, K: a.NHead})
+	}
+	in := []ValueID{q}
+	if sel != nil {
+		in = append(in, *sel)
+	}
+	y := s.value("attend", s.width(q))
+	s.G.op(Op{Kind: OpAttend, In: in, Out: []ValueID{y}, Weight: w, Reads: []StateRef{h, e}, Attr: a})
 	return y
 }
 
@@ -160,6 +192,10 @@ func (s *Builder) CrossAttend(q ValueID, h StateRef, a Attrs) ValueID {
 	a.Bidir = true
 	return s.AttendOf(q, h, a)
 }
+
+// EntHistory is a block's entry history: a second paged history, one row an
+// entry its compressor folds, its values its keys.
+const EntHistory = "ent"
 
 // SharedHistory is block n's history as another block reads it.
 func SharedHistory(n int) StateRef { return StateRef{Name: "kv@" + strconv.Itoa(n)} }

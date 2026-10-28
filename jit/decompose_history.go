@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -32,6 +33,11 @@ var (
 	tableCall   = Operand{Kind: OperandTable, Name: "rows.n", Elem: ir.U32}
 	tableKeys   = Operand{Kind: OperandTable, Name: "kv.k", PerPart: true}
 	tableValues = Operand{Kind: OperandTable, Name: "kv.v", PerPart: true}
+	// The entry history's pool, descriptors and page table
+	// (graph.EntHistory): f32 rows, values in keys.
+	tableEntKeys  = Operand{Kind: OperandTable, Name: "ent.k", PerPart: true}
+	tableEntRows  = Operand{Kind: OperandTable, Name: "ent.rows", Elem: ir.U32}
+	tableEntPages = Operand{Kind: OperandTable, Name: "ent.pages", Elem: ir.U32}
 )
 
 // rotaryTable is the step's table a rotary op turns by: the model's one
@@ -105,7 +111,22 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 		e := x.op(OpMul, U, q, x.u(2))
 		return x.at(1, cs, r, e), x.at(1, cs, r, x.op(OpAdd, U, e, x.u(1)))
 	}
-	co, si := angle(p)
+	var co, si int
+	var quarter *Quarter
+	if a.Shift > 0 {
+		// Turned at the row's history position less Shift: the angles from
+		// the planes (operands 1 and 2), the position from the row's
+		// descriptor (operand 3).
+		if a.Layout == graph.RopeSplit {
+			return nil, fmt.Errorf("a rotary of layout %d turned %d positions back", a.Layout, a.Shift)
+		}
+		stride := (pairs + ropeLanes - 1) &^ (ropeLanes - 1)
+		at := x.load(3, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(rowWrite)))
+		pos := x.op(OpSub, U, x.op(OpMax, U, at, x.u(uint32(a.Shift))), x.u(uint32(a.Shift)))
+		co, si, quarter = ropeTurn(&x, pos, p, 1, 2, stride)
+	} else {
+		co, si = angle(p)
+	}
 	co1, si1 := co, si
 	if a.Layout == graph.RopeSplit {
 		co1, si1 = angle(x.op(OpAdd, U, p, x.u(uint32(pairs))))
@@ -120,7 +141,13 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	if err != nil {
 		return nil, err
 	}
-	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: []Operand{c.value(o.In[0]), table}, Expr: x.e,
+	in, facts := []Operand{c.value(o.In[0]), table}, Facts{}
+	if a.Shift > 0 {
+		stride := (pairs + ropeLanes - 1) &^ (ropeLanes - 1)
+		in = []Operand{c.value(o.In[0]), {Kind: OperandTable, Name: tablePlanes.Name + strings.TrimPrefix(table.Name, tableAngles.Name)}, tableRopeKon, tableRows}
+		facts = Facts{Words: map[int][]uint32{2: ropeConsts()}, Extents: map[int]int{1: 8*stride + 1, 3: R * rowWords}, Quarter: quarter}
+	}
+	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: in, Expr: x.e, Facts: facts,
 		Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: sh, Value: y0}, {Out: out, Ax: []int{r, at2}, Ext: sh, Value: y1}}}}
 	// A partial rotary turns NRot of each head from Offset; the rest of
 	// the head, before and after, is the input's.
@@ -146,7 +173,14 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a history append of %d values over pages of %d", len(o.In), c.Step.Page)
 	}
 	pools := []Operand{tableKeys, tableValues}
-	if c.History.ValuesInKeys {
+	layouts := [2]Pool{c.History.Keys, c.History.Values}
+	rows, pages := tableRows, tablePages
+	if len(o.Writes) == 1 && o.Writes[0].Name == graph.EntHistory {
+		if o.In[0] != o.In[1] {
+			return nil, fmt.Errorf("an entry whose value is not its key")
+		}
+		pools, layouts, rows, pages = []Operand{tableEntKeys}, [2]Pool{}, tableEntRows, tableEntPages
+	} else if c.History.ValuesInKeys {
 		if o.In[0] != o.In[1] {
 			return nil, fmt.Errorf("a history append of a value other than its key, into a pool whose values are its keys")
 		}
@@ -164,7 +198,7 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	var prims []Prim
 	for i, pool := range pools {
-		l := [2]Pool{c.History.Keys, c.History.Values}[i]
+		l := layouts[i]
 		v := o.In[i]
 		sh := c.rows(v)
 		w := sh[1]
@@ -193,7 +227,7 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 		default:
 			val = x.at(0, sh, x.coord(0), d)
 		}
-		prims = append(prims, Prim{Kind: PrimMap, Shape: shape, In: []Operand{c.value(v), tableRows, tablePages}, Expr: x.e,
+		prims = append(prims, Prim{Kind: PrimMap, Shape: shape, In: []Operand{c.value(v), rows, pages}, Expr: x.e,
 			Facts:  Facts{Extents: map[int]int{1: c.Step.Rows * rowWords, 2: c.pages()}},
 			Stores: []PrimStore{{Out: l.operand(pool), Ax: at, Ext: ext, Value: val}}})
 	}

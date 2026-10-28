@@ -10709,3 +10709,20 @@ row where the composer's reads two.
   back by the negated angle (Attrs.Inverse), DeepSeek V4's rotation back
   of its output's tail; TestComposedCPURope holds both, the unturned
   elements bit for bit.
+- DeepSeek V4's compressed history as ops, at unit level (the blocks stay
+  declined by name, UncoveredCompressed, behind G5c's streams and hash
+  routing): an entry history (graph.EntHistory, an OpKVAppend into it, f32
+  and its values its keys, its pool, descriptors and pages the tables
+  ent.k, ent.rows and ent.pages, the row's write slot its descriptor's);
+  OpColPool, the compressor's gated column pool of the window ending at
+  the row (CSA's two halves with Overlap); OpRope turned at the row's
+  position less Shift from the rotary's planes (an entry at its window's
+  first position); OpAttend over two histories (the window and the
+  entries under one softmax with the sinks); OpSelect over the entries
+  (CSA's indexer). On the CPU, held to main's ds4.go: the pool and its
+  entry 1.7e-14 to 3.5e-13 (the window one position early 0.38 to 1.7,
+  the halves swapped 1.7 to 6.9, the gate ignored 0.46 to 1.4, and no
+  slot but the row's written); the shifted turn within 2.4e-7 (the row's
+  own position's angles part); the attention over both 9.4e-14 (HCA) and
+  9.8e-14 (CSA, four of ten entries kept), the window alone 0.22 to
+  0.36, the sinks dropped 0.013, every entry read 0.38.

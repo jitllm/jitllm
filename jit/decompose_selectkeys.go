@@ -40,10 +40,15 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a selection's score through %v", a.Fn)
 	}
 	pool := c.History.Keys
+	keys, desc, pages := pool.operand(tableKeys), tableRows, tablePages
+	if o.Reads[0].Name == graph.EntHistory {
+		// Over the entry history: its f32 pool, descriptors and pages.
+		pool = Pool{}
+		keys, desc, pages = tableEntKeys, tableEntRows, tableEntPages
+	}
 	if err := pool.check(a.Width); err != nil {
 		return nil, err
 	}
-	keys := pool.operand(tableKeys)
 	if r := o.Reads[0].Name; strings.HasPrefix(r, "kv@") {
 		n, err := strconv.Atoi(strings.TrimPrefix(r, "kv@"))
 		if err != nil || c.Graph.Block < 0 {
@@ -62,7 +67,7 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	mask := maskOf(c, o.Out[0])
 	minus := math.Float32frombits(0xff7fffff)
 	hs := history{a: a, pageSize: c.Step.Page}
-	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
+	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, pages}, ops[1:]...) }
 	ext := func() map[int]int { return map[int]int{1: R * rowWords, 2: c.pages()} }
 	rng := Facts{Range: hs.span(2), Extents: ext()}
 	rng.Extents[0] = R * H * D
@@ -118,7 +123,7 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	var scoring []Prim
 	if a.Pooled {
 		var err error
-		if scoring, err = selectPooled(o, c, keys, tables, flat, best); err != nil {
+		if scoring, err = selectPooled(o, c, pool, keys, tables, flat, best); err != nil {
 			return nil, err
 		}
 	} else {

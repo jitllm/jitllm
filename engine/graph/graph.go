@@ -50,6 +50,10 @@ const (
 	// are queries over keys and values other rows appended: a
 	// cross-attention. With In[1], an OpSelect's Out[0], each group of its
 	// query heads attends the positions the selection keeps for it alone.
+	// Reading a second history, an entry history (EntHistory, rows
+	// EntWidth wide), a row attends its window of the first and the entries
+	// its entry descriptor names under one softmax with the sinks, a
+	// selection keeping entries.
 	OpAttend
 	// OpAdd is In[0] + In[1].
 	OpAdd
@@ -237,10 +241,19 @@ const (
 	// row, the cell the row's position less Offset on a grid the request's
 	// first word wide.
 	OpPosAxes
+	// OpColPool is a gated pool of the window of Span history rows ending
+	// at the row's own position: for each of HeadDim columns, the softmax
+	// over the window's rows of their gate (the HeadDim at GateAt of the
+	// history row) weighting their value (the HeadDim at Offset), a row
+	// before the history's first left out. With Overlap each row holds two
+	// halves of 2*HeadDim and the window is the Span before's first halves,
+	// then its own Span's second halves. Out[0] is one row of HeadDim. A
+	// primitive over the history, as OpAttend is: a compressor's entry.
+	OpColPool
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -475,6 +488,16 @@ type Attrs struct {
 	Pooled bool
 	// Inverse turns OpRope's elements back: by the negated angle.
 	Inverse bool
+	// GateAt is where OpColPool's gate starts in the history row, Overlap
+	// its window of two halves.
+	GateAt  int
+	Overlap bool
+	// EntWidth is an OpAttend's entry history row (its second read).
+	EntWidth int
+	// Shift turns OpRope's elements at the row's history position less
+	// Shift, its angles from the rotary's planes (no table read): an entry
+	// turned at its window's first position.
+	Shift int
 	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
 	// OpTopK, OpRank, OpTile): the function, the order a reduction runs in, the
 	// group a reduction, top-k or rank runs over (0: the row), a constant

@@ -59,12 +59,20 @@ const (
 	// axes: the live row count, then RopeAxes words a row, axis a of row r
 	// at 1+r*RopeAxes+a.
 	SourceRopeAxisPositions
+	// SourceEntries, SourceEntRows and SourceEntPages are a part's entry
+	// history (graph.EntHistory): its pool, kept from step to step, f32, an
+	// entry's value its key; the rows' descriptors of it (their write slot
+	// the engine's: a row closing no window writes the slot of the entry it
+	// will close, which that row overwrites); its page table.
+	SourceEntries
+	SourceEntRows
+	SourceEntPages
 	numSources
 )
 
 var sourceNames = [numSources]string{"step", "weight", "input", "rows", "pages", "query offset",
 	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state", "request", "windows",
-	"rotary axis positions"}
+	"rotary axis positions", "entries", "entry rows", "entry pages"}
 
 func (s Source) String() string {
 	if s < numSources {
@@ -156,6 +164,7 @@ func (s StorageKeys) Key(o Operand) Operand {
 // tableSources is the source of each table the decompositions declare.
 var tableSources = map[string]Source{
 	tableRows.Name: SourceRows, tablePages.Name: SourcePages, tableQOff.Name: SourceQueryOffset,
+	tableEntKeys.Name: SourceEntries, tableEntRows.Name: SourceEntRows, tableEntPages.Name: SourceEntPages,
 	tablePos.Name: SourceRopePositions, tableAxisPos.Name: SourceRopeAxisPositions, tablePlanes.Name: SourceRopePlanes,
 	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableRequest.Name: SourceRequest, tableWindows.Name: SourceWindows, tableAngles.Name: SourceStep,
 	tableTokens.Name: SourceTokens,

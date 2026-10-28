@@ -18,9 +18,10 @@ type Halves struct {
 func (Halves) Name() string { return "halves" }
 
 // history reports whether o is a part's history: a table of its own that
-// is not a recurrent state ("rec."), which every device keeps at f32.
+// is not a recurrent state ("rec.") or an entry history ("ent."), which
+// every device keeps at f32.
 func (o Operand) history() bool {
-	return o.Kind == OperandTable && o.PerPart && !strings.HasPrefix(o.Name, "rec.")
+	return o.Kind == OperandTable && o.PerPart && !strings.HasPrefix(o.Name, "rec.") && !strings.HasPrefix(o.Name, "ent.")
 }
 
 func (p Halves) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
