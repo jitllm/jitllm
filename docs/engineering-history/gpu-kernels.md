@@ -9932,3 +9932,49 @@ row where the composer's reads two.
   1, IQR/median at most 0.013) taken twice: 36.2 / 74.0 / 157.8 ms against
   main's 23.8 / 48.6 / 102.3 (1.52 / 1.52 / 1.54). The prompt is still
   GPU-bound; the projections are the gap.
+- **The streams' expansion and collapse composed, a CPU form in minutes,
+  and a submission that panics fails its step.** A model of predicted
+  streams states its input rows' expansion (stream k the projection of
+  stream 0 matched to its magnitude) and its head's collapse (the mean of
+  stream 0 and each projected stream matched to it) as graphs of generic
+  ops (a square, a row sum, a floor, two roots and a quotient for the
+  magnitude); the CPU device forms them once at placement, a row's and a
+  chunk's, each stream bound at its offset in the stream-major residual,
+  the collapse writing apart before it goes over stream 0, and counts
+  every row (CPUStreamSteps). On synth-gemma3n the composed CPU reads
+  2.75e-07 (decode) and 2.94e-07 (a prompt of 8 and its decode) from main
+  with every expansion and collapse row served, and streams 1 and 2
+  swapped where they are bound read 0.093. A card's head now reads the
+  collapsed row the host hands it (the CPU head's graph), so a stream
+  model's head serves on the card, and a call of the head alone writes no
+  rotary tables (it read two a step where the gate counts one). The input
+  rows stay the host's on a card: with the head there the serving gate
+  demands the card gather them, which needs the per-layer table and the
+  expansion on the card, so gemma3n is not in servedModels yet. Forming
+  was the register binding's: free scanned every value's last read at
+  each entry of the sequence, vectorized() rescanned the nodes at each
+  question, and each operand walk copied its node to the heap (a quarter
+  of the time was the collector). Indexed and read in place, Llama-3.2-1B's
+  CPU placement takes 17.1 s where it took 55.6 s (laptop), and gemma-3n
+  E2B's 30 blocks 4 min 56 s where they took 24 min 8 s (V100 box's E5-2680
+  v4, the same probe). The CPU page fault is each block's: it binds a
+  table whose first page is its own arena's last slot where that arena
+  holds more than two, so on E2B, whose sliding layers keep one ring page,
+  it reaches the global layers (median 1.77 of main's spread, out of the
+  band) where the bound of every arena disabled it, and on Gemma 4 E2B
+  (median 17.0; its whole CPU gate 200 s on the V100 box, where its
+  placement alone took 12 min). Gemma 3n E2B stays
+  out of the CPU's served list: its clean arm is in the band (median
+  0.634, worst 9.1e-4 where main's control reaches 1.5e-3; the streams
+  swapped 1462, the head's row 2388), but the key-row violation stays in
+  it: over the gate's 80 steps its attention is its row's own key's.
+  Moving the first key row by one or to the middle of the keys reads
+  8.3e-4 and 9.3e-4 from main (medians 0.58 and 0.60 of main's spread),
+  and attending to the row's own key alone in every block moves the
+  composed logits 6.5e-4 from the clean arm. A
+  panic inside a submission is recovered in the backend's session and
+  returned as the step's error, its ticket given back: injected under
+  jitllmfault (JITLLM_DEVICE_PANIC_AT) on the prompt's and a decode
+  step's submission, the steps end and State.Close returns on CUDA and
+  Vulkan, where without the recovery Close waited in quiesce until the
+  test's timeout.
