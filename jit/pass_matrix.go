@@ -18,7 +18,8 @@ import (
 // puts the sixteen rows a fragment load reads in different banks. Each warp multiplies
 // its share of the block in the device's tiles into float32 accumulators
 // carried across the trips; and the block's sums pass through workgroup
-// memory to the kernel's own stores, an element a thread. A row past the
+// memory -- the stage's own, behind a barrier -- to the kernel's own stores,
+// an element a thread. A row past the
 // call's (Kernel.Capacity) or the step's, and an output past the last, is
 // the last one's, so the kernel reads and writes nothing the step does not
 // state. A weight held as float32 is left as it is: binary16 would round it.
@@ -158,7 +159,10 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	// at a time.
 	const pad, G = 4, 8
 	SK := KC + pad
-	as, bs, cs := shared("a16", U, TR*SK/2), shared("b16", U, TN*SK/2), shared("sums", F, TR*TN)
+	// One array holds the stage of A, then B's at bAt words, and after the
+	// trips the sums.
+	bAt := TR * SK / 2
+	st := shared("stage", U, max(bAt+TN*SK/2, TR*TN))
 
 	last := m.u32(R - 1)
 	if k.Capacity > 0 {
@@ -188,13 +192,13 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	m.Stores = append(m.Stores, Store{Barrier: true, At: P})
 	// stage is buf's rows of factor at coordinate axis base + the row, held
 	// to most: a trip G elements of k, binary16 pairs a word.
-	stage := func(buf, rows, axis, base, most, factor int) {
+	stage := func(at0, rows, axis, base, most, factor int) {
 		l, w := spread(rows*KC/G, P)
 		row := m.bin(OpDiv, U, w, m.u32(KC/G))
 		g := m.bin(OpRem, U, w, m.u32(KC/G))
 		c := m.bin(OpMin, U, m.bin(OpAdd, U, base, row), most)
 		kg := m.bin(OpAdd, U, kc0, m.bin(OpMul, U, g, m.u32(G)))
-		word := m.bin(OpAdd, U, m.bin(OpMul, U, row, m.u32(SK/2)), m.bin(OpMul, U, g, m.u32(G/2)))
+		word := m.bin(OpAdd, U, m.bin(OpMul, U, row, m.u32(SK/2)), m.bin(OpAdd, U, m.bin(OpMul, U, g, m.u32(G/2)), m.u32(at0)))
 		elem := func(at int) int {
 			return m.un(OpHalf, U, copyInto(m, k, factor, func(i int, nd Node) (int, bool) {
 				switch {
@@ -210,11 +214,11 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 			lo := elem(m.bin(OpAdd, U, kg, m.u32(e)))
 			hi := m.bin(OpShl, U, elem(m.bin(OpAdd, U, kg, m.u32(e+1))), m.u32(16))
 			ix := m.bin(OpAdd, U, word, m.u32(e/2))
-			m.Stores = append(m.Stores, Store{Buf: buf, Ix: ix, Val: m.bin(OpOr, U, lo, hi), At: l})
+			m.Stores = append(m.Stores, Store{Buf: st, Ix: ix, Val: m.bin(OpOr, U, lo, hi), At: l})
 		}
 	}
-	stage(as, TR, 0, r0, last, f.row)
-	stage(bs, TN, 1, n0, lastOut, f.out)
+	stage(0, TR, 0, r0, last, f.row)
+	stage(bAt, TN, 1, n0, lastOut, f.out)
 	m.Stores = append(m.Stores, Store{Barrier: true, At: P})
 
 	aT := ir.TileType{Rows: tm, Cols: tk, Elem: ir.TileF16, Use: ir.TileA}
@@ -226,26 +230,28 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	}
 	// A staged view's rows start four elements apart and its offsets are
 	// multiples of four: aligned.
-	tile := func(t ir.TileType, buf, off int, col bool) int {
+	tile := func(t ir.TileType, off int, col bool) int {
 		imm := int64(2)
 		if col {
 			imm |= 1
 		}
-		return m.add(Node{Op: OpTileLoad, Type: ir.Void, Buf: buf, A: off, B: m.u32(SK), Imm: imm, At: P + 1, Tile: &t})
+		return m.add(Node{Op: OpTileLoad, Type: ir.Void, Buf: st, A: off, B: m.u32(SK), Imm: imm, At: P + 1, Tile: &t})
 	}
 	a := make([][]int, mi)
 	for i := range a {
 		for s := 0; s < ks; s++ {
-			a[i] = append(a[i], tile(aT, as, at(wr0, i, tm, SK, s*tk), false))
+			a[i] = append(a[i], tile(aT, at(wr0, i, tm, SK, s*tk), false))
 		}
 	}
 	b := make([][]int, nj)
 	for j := range b {
 		for s := 0; s < ks; s++ {
-			b[j] = append(b[j], tile(bT, bs, at(wn0, j, tn, SK, s*tk), true))
+			b[j] = append(b[j], tile(bT, m.bin(OpAdd, U, at(wn0, j, tn, SK, s*tk), m.u32(2*bAt)), true))
 		}
 	}
 	zero := m.add(Node{Op: OpTileSplat, Type: ir.Void, A: m.f32(0), Tile: &cT})
+	// The sums overwrite the stage the last trip's products read.
+	m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
 	for i := 0; i < mi; i++ {
 		for j := 0; j < nj; j++ {
 			fold := m.add(Node{Op: OpFold, Type: ir.Void, At: P, B: zero, Tile: &cT})
@@ -255,7 +261,7 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 			}
 			m.Nodes[fold].A = acc
 			off := m.bin(OpAdd, U, at(wr0, i, tm, TN, 0), m.bin(OpAdd, U, wn0, m.u32(j*tn)))
-			m.Stores = append(m.Stores, Store{Buf: cs, Ix: off, Val: fold, At: -1, Tile: true, Stride: m.u32(TN)})
+			m.Stores = append(m.Stores, Store{Buf: st, Ix: off, Val: fold, At: -1, Tile: true, Stride: m.u32(TN)})
 		}
 	}
 	m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
@@ -263,7 +269,7 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	E, e := spread(TR*TN, -1)
 	r := m.bin(OpMin, U, m.bin(OpAdd, U, r0, m.bin(OpDiv, U, e, m.u32(TN))), last)
 	n := m.bin(OpMin, U, m.bin(OpAdd, U, n0, m.bin(OpRem, U, e, m.u32(TN))), lastOut)
-	sum := m.add(Node{Op: OpLoad, Type: F, Buf: cs, A: e})
+	sum := m.add(Node{Op: OpLoad, Type: F, Buf: st, A: e})
 	leaf := func(i int, nd Node) (int, bool) {
 		switch {
 		case i == f.fold:

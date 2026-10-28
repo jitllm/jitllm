@@ -41,6 +41,8 @@ type Device struct {
 	// device takes a cooperative launch (CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH);
 	// see Module.Resident.
 	sms  int
+	// sharedSM is CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR.
+	sharedSM int
 	coop bool
 	// threadRegs is CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR over
 	// its most resident threads, 0 where the driver would not say. See
@@ -69,6 +71,7 @@ const (
 	attrMaxGrid = 5  // CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X
 	attrL2      = 38 // CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE
 	attrRegsSM  = 82 // CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR
+	attrShmSM   = 81 // CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR
 
 	attrIntegrated   = 18 // CU_DEVICE_ATTRIBUTE_INTEGRATED
 	attrCanMapHost   = 19 // CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY
@@ -169,6 +172,10 @@ func openDevice(ord int) (*Device, error) {
 			if cuDeviceGetAttribute(&regs, attrRegsSM, d.dev) == 0 && regs > 0 {
 				d.threadRegs = int(regs) / int(tpm)
 			}
+			var shm int32
+			if cuDeviceGetAttribute(&shm, attrShmSM, d.dev) == 0 && shm > 0 {
+				d.sharedSM = int(shm)
+			}
 		}
 		d.sms = int(sm)
 		var coop int32
@@ -201,6 +208,11 @@ func (d *Device) Slots() int { return d.slots }
 // Multiprocessors is the device's multiprocessor count, 0 where the driver
 // would not say.
 func (d *Device) Multiprocessors() int { return d.sms }
+
+// SharedPerMultiprocessor is the workgroup memory one multiprocessor holds,
+// in bytes (CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR), 0 where
+// the driver did not say.
+func (d *Device) SharedPerMultiprocessor() int { return d.sharedSM }
 
 // ThreadRegisters is the 32-bit registers a thread holds when its
 // multiprocessor holds the most threads it can, 0 where the driver would not

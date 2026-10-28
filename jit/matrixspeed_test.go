@@ -177,6 +177,14 @@ func TestComposedMatrixSpeed(t *testing.T) {
 				return s[len(s)/2]
 			}
 			flop := 2 * float64(R) * float64(sh.n) * float64(sh.k)
+			if r, ok := backend.KernelResourcesOf(op.kerns[0]); ok {
+				t.Logf("%s %s: composed %d workgroups of %d, regs %d, spill %d, shared %d, resident %d", d.Name(), sh.what,
+					codes[0].LiveGroups(R), codes[0].GPU.Group[0], r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
+			}
+			if r, ok := backend.KernelResourcesOf(mainKern); ok {
+				t.Logf("%s %s: main %d workgroups of %d, regs %d, spill %d, shared %d, resident %d", d.Name(), sh.what,
+					kernels.GemmVoltaGroups(s, tl), tl.Threads(), r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
+			}
 			t.Logf("%s %-8s %v %5dx%-5d rows %d: composed %8.1f us (%5.1f TFLOP/s, %d kernels), main %8.1f us (%5.1f TFLOP/s), composed/main %.2f",
 				d.Name(), sh.what, sh.typ, sh.n, sh.k, R, med(cu), flop/med(cu)/1e6, len(codes), med(mu), flop/med(mu)/1e6, med(ratio))
 			mainKern.Close()

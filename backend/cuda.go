@@ -881,6 +881,8 @@ func (c *cudaDev) Slots() int { return c.d.Slots() }
 
 func (c *cudaDev) Multiprocessors() int { return c.d.Multiprocessors() }
 
+func (c *cudaDev) SharedPerMultiprocessor() int { return c.d.SharedPerMultiprocessor() }
+
 func (c *cudaDev) ThreadRegisters() int { return c.d.ThreadRegisters() }
 
 func (c *cudaDev) L2Bytes() int { return c.d.L2Bytes() }

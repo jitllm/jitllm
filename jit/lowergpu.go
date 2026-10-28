@@ -34,17 +34,36 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 
 // resident is how many of n's workgroups each of the device's units must
 // hold at once for a launch to run in one wave, where its workgroups
-// outnumber the units and that many fit one; 0 where one wave needs no bound.
+// outnumber the units and that many fit one -- their threads in its slots
+// and, where the device states it, their workgroup memory in its own; 0
+// where one wave needs no bound or cannot have one.
 func resident(n *Kernel, d Device) int {
 	g := n.groups()
 	if d.Units <= 0 || d.Slots <= 0 || n.Group <= 0 || g <= d.Units {
 		return 0
 	}
 	per := (g + d.Units - 1) / d.Units
-	if per*n.Group > d.Slots/d.Units {
+	if per*n.Group > d.Slots/d.Units || d.Shared > 0 && per*sharedBytes(n) > d.Shared {
 		return 0
 	}
 	return per
+}
+
+// sharedBytes is the workgroup memory a workgroup of n holds: its arrays,
+// and a slot a thread for each combine over the workgroup.
+func sharedBytes(n *Kernel) int {
+	b := 0
+	for _, bf := range n.Bufs {
+		if bf.Kind == BufShared {
+			b += 4 * bf.Size
+		}
+	}
+	for _, nd := range n.Nodes {
+		if nd.Op == OpGroupSum || nd.Op == OpGroupMax || nd.Op == OpExchange {
+			b += 4 * n.Group
+		}
+	}
+	return b
 }
 
 // entryName is a kernel's name as a backend's entry point can carry it:

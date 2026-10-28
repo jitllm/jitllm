@@ -31,7 +31,11 @@ func gpuDevice(d backend.Device) jit.Device {
 	if m, ok := d.(backend.MultiprocessorDevice); ok {
 		units = m.Multiprocessors()
 	}
-	return jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, ExactDiv: kernels.DivExact(d.API()),
+	shared := 0
+	if s, ok := d.(backend.SharedMemoryDevice); ok {
+		shared = s.SharedPerMultiprocessor()
+	}
+	return jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, Shared: shared, ExactDiv: kernels.DivExact(d.API()),
 		ExactArith: kernels.Gate2Exact(d.API())}
 }
 

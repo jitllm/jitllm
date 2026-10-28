@@ -173,6 +173,15 @@ func units(d backend.Device) int {
 	return 0
 }
 
+// sharedPerUnit is the workgroup memory a multiprocessor holds where its
+// backend says, else 0.
+func sharedPerUnit(d backend.Device) int {
+	if s, ok := d.(backend.SharedMemoryDevice); ok {
+		return s.SharedPerMultiprocessor()
+	}
+	return 0
+}
+
 // threadRegs is a thread's registers at the device's most resident threads
 // where its backend says, else 0.
 func threadRegs(d backend.Device) int {
@@ -197,7 +206,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
 		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
 			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
-			Matrix: g.composedMatrix()},
+			Matrix: g.composedMatrix(), Shared: sharedPerUnit(g.dev)},
 		History: sl.history,
 	})
 }

@@ -158,6 +158,10 @@ type OrdinalDevice interface{ Ordinal() int }
 // it runs workgroups on.
 type MultiprocessorDevice interface{ Multiprocessors() int }
 
+// SharedMemoryDevice is a Device that can say how many bytes of workgroup
+// memory one multiprocessor holds for the workgroups resident on it.
+type SharedMemoryDevice interface{ SharedPerMultiprocessor() int }
+
 // ConcurrentCompiler is a Device whose Compile may be called from several
 // goroutines at once, each compile running beside the others.
 type ConcurrentCompiler interface{ ConcurrentCompile() bool }
