@@ -2099,8 +2099,10 @@ type devShared struct {
 	mvTo          launchTo
 	// embTo is the composer's gather made real on its own
 	// (materializeComposed).
-	embTo     launchTo
-	embRd     embRead
+	embTo launchTo
+	embRd embRead
+	// rows is the picture rows apart from their blocks (picrows.go).
+	rows      rowsState
 	mvPart    backend.Buf
 	mvPartCap int
 	used      uint64
@@ -3032,6 +3034,7 @@ func (g *devTier) Close() {
 	g.lane0.freeSample()
 	g.closePick()
 	g.lane0.freePick()
+	g.closeRows()
 	for _, k := range g.recCopies {
 		closeKern(k)
 	}

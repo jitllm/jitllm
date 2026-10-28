@@ -56,12 +56,15 @@ const (
 	// partTower is a non-causal call's block whole: a picture's rows, one
 	// run (towerserve.go).
 	partTower
+	// partRows is a picture's rows apart from its blocks: a tower's entry
+	// or projector (picrows.go).
+	partRows
 	numParts
 )
 
 var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block",
 	partRope: "table", partSample: "sample", partEmbed: "input rows", partEmbedRows: "prompt input rows", partCopy: "copy",
-	partTower: "tower block"}
+	partTower: "tower block", partRows: "picture rows"}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
@@ -87,6 +90,9 @@ type composedPart struct {
 	// paged is each bank a streamed block holds in pages and the sheets it
 	// holds of it (layer.paged), nil for banks held whole.
 	paged map[jlm.Role]int
+	// apart says the graph's inputs and outputs are buffers of their own
+	// (jit.Request.Apart).
+	apart bool
 }
 
 // partForm is a part's kernels compiled on the device, in launch order, and
@@ -223,6 +229,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Part:    sl.part,
 		Formats: sl.formats,
 		Paged:   sl.paged,
+		Apart:   sl.apart,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin, Seqs: sl.seqs},
 		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
 			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
@@ -794,9 +801,12 @@ const (
 	// ComposedTower serves a non-causal call's blocks whole from their
 	// graphs: a vision tower's, over a picture's rows (towerserve.go).
 	ComposedTower Parts = 1 << partTower
+	// ComposedRows serves a picture's rows apart from its blocks from their
+	// graphs: a tower's entry and projector (nn.RowsPart, picrows.go).
+	ComposedRows Parts = 1 << partRows
 	// ComposedStep is every part of a step: its input rows, tables, blocks
 	// (a prompt chunk's and a picture's among them), head and token.
-	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedPrompt | ComposedTower | ComposedHead | ComposedSample
+	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedPrompt | ComposedTower | ComposedRows | ComposedHead | ComposedSample
 )
 
 // partDecline is why a decode step's or a prompt chunk's composed part is

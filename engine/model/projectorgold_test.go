@@ -26,45 +26,59 @@ func projectorRows(n, width int) []float32 {
 // which the reference itself barely notices on a picture, since after the
 // blocks neighbouring patches look alike (InternVL's 2x2 transpose moves its
 // rainbow features by NMSE 1.9e-2, inside the tower's precision) -- cannot hide.
+// Its composed arm runs the projector the composer forms for the CPU
+// (towerProjOf), counted served once a run.
 func TestProjectorMatchesTransformers(t *testing.T) {
 	for _, fam := range visionFamilies {
-		t.Run(fam.name, func(t *testing.T) {
-			m, tw := fam.open(t)
-			defer m.Close()
-			c := tw.Cfg
-			x := projectorRows(c.Patches(), c.NEmbd)
-			want := readF32(t, filepath.Join(visionGoldDir(fam.name), "projector.features.f32"))
-			run := func(f towerFault) float64 {
-				defer func(was towerFault) { tw.Cfg.fault = was }(tw.Cfg.fault)
-				tw.Cfg.fault = f
-				s := tw.testState()
-				defer s.Close()
-				// project reads its rows from the residual it is handed and
-				// writes its own scratch, so the input is a copy.
-				got, err := s.project(append([]float32(nil), x...))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(got) != len(want) {
-					t.Fatalf("%d values, transformers %d", len(got), len(want))
-				}
-				nm, _ := nmseOf(got, want)
-				return nm
+		for _, composed := range []bool{false, true} {
+			name := fam.name
+			if composed {
+				name += "/composed"
 			}
-			clean := run(towerFaultNone)
-			t.Logf("projector alone: NMSE %.3e against transformers", clean)
-			if math.IsNaN(clean) || clean > 1e-3 {
-				t.Errorf("the projector alone reads NMSE %.3e (bound 1e-3)", clean)
-			}
-			vio := towerFaultShuffleSwap
-			if fam.name == "gemma3" {
-				vio = towerFaultPoolCorner
-			}
-			v := run(vio)
-			t.Logf("violation (%d): NMSE %.3e", vio, v)
-			if v < 100*clean {
-				t.Errorf("the violation reads NMSE %.3e against a clean %.3e: the gate cannot see it", v, clean)
-			}
-		})
+			t.Run(name, func(t *testing.T) { projectorMatchesTransformers(t, fam, composed) })
+		}
+	}
+}
+
+func projectorMatchesTransformers(t *testing.T, fam visionFamily, composed bool) {
+	m, tw := fam.open(t, WithComposedCPU(composed))
+	defer m.Close()
+	c := tw.Cfg
+	x := projectorRows(c.Patches(), c.NEmbd)
+	want := readF32(t, filepath.Join(visionGoldDir(fam.name), "projector.features.f32"))
+	run := func(f towerFault) float64 {
+		defer func(was towerFault) { tw.Cfg.fault = was }(tw.Cfg.fault)
+		tw.Cfg.fault = f
+		s := tw.testState()
+		defer s.Close()
+		// project reads its rows from the residual it is handed and
+		// writes its own scratch, so the input is a copy.
+		got, err := s.project(append([]float32(nil), x...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if served, declined := s.CPUProjectorSteps(); composed && served != 1 {
+			why, werr := s.CPUProjectorUncovered()
+			t.Fatalf("the composed projector served %d of 1 (declines %v; %s %v)", served, nonZero(declined[:]), why, werr)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%d values, transformers %d", len(got), len(want))
+		}
+		nm, _ := nmseOf(got, want)
+		return nm
+	}
+	clean := run(towerFaultNone)
+	t.Logf("projector alone: NMSE %.3e against transformers", clean)
+	if math.IsNaN(clean) || clean > 1e-3 {
+		t.Errorf("the projector alone reads NMSE %.3e (bound 1e-3)", clean)
+	}
+	vio := towerFaultShuffleSwap
+	if fam.name == "gemma3" {
+		vio = towerFaultPoolCorner
+	}
+	v := run(vio)
+	t.Logf("violation (%d): NMSE %.3e", vio, v)
+	if v < 100*clean {
+		t.Errorf("the violation reads NMSE %.3e against a clean %.3e: the gate cannot see it", v, clean)
 	}
 }

@@ -86,6 +86,18 @@ func composedTowerOnCPU(t *testing.T, open func(testing.TB, ...Option) (*Model, 
 		t.Fatalf("the CPU served %d of the tower's %d blocks (declines %v, form error %v)", served, c.NLayer,
 			nonZero(declined[:]), s.CPUFormErr())
 	}
+	ps, pd := s.CPUProjectorSteps()
+	pwhy, perr := s.CPUProjectorUncovered()
+	t.Logf("composed CPU projector: %d pictures served, declines %v (%s %v)", ps, nonZero(pd[:]), pwhy, perr)
+	if ps != 1 {
+		t.Fatalf("the CPU's composed projector served %d of the encode's 1 picture (declines %v; %s %v)", ps, nonZero(pd[:]), pwhy, perr)
+	}
+	es, ed := s.CPUEntrySteps()
+	ewhy, eerr := s.CPUEntryUncovered()
+	t.Logf("composed CPU entry: %d pictures served, declines %v (%s %v)", es, nonZero(ed[:]), ewhy, eerr)
+	if es != 1 {
+		t.Fatalf("the CPU's composed entry served %d of the encode's 1 picture (declines %v; %s %v)", es, nonZero(ed[:]), ewhy, eerr)
+	}
 	nmse0, worst0 := nmseOf(got0, want0)
 	nmse, worst := nmseOf(got, want)
 	t.Logf("after block 0: NMSE %.3e, max|d| %.4g; the encode: NMSE %.3e, max|d| %.4g over %d rows",
@@ -110,6 +122,33 @@ func composedTowerOnCPU(t *testing.T, open func(testing.TB, ...Option) (*Model, 
 	encode()
 	r0 := m.PagerReads()
 	allocVerdict(t, "a warm composed encode", countAllocs(encode), 1, m.PagerReads()-r0, 0)
+
+	// The violation of the entry: each patch row gathered from the next patch.
+	s.cpu.fault = cpuFaultEntryRows
+	bade, _ := towerEncodeAt(t, s, px)
+	s.cpu.fault = cpuFaultNone
+	ne, _ := nmseOf(bade, want0)
+	t.Logf("violation (each row the next patch): NMSE %.3e after block 0", ne)
+	if !(ne > 100*nmse0) || !(ne > 5e-4) {
+		t.Fatalf("the gate cannot see the entry's rows misplaced: NMSE %.3e against a clean %.3e", ne, nmse0)
+	}
+
+	// The violation of the run's first pass: each call's rows read only the
+	// keys written before them, where the picture takes several calls.
+	if rows := len(want0) / c.NEmbd; rows > cpuRowsCap {
+		// Held to the clean composed encode, every block's: a windowed
+		// block whose windows end at a call's rows has nothing to violate.
+		s.cpu.fault = cpuFaultKeysFirst
+		_, bad := towerEncodeAt(t, s, px)
+		s.cpu.fault = cpuFaultNone
+		nb, _ := nmseOf(bad, got)
+		t.Logf("violation (no first pass over %d rows): NMSE %.3e from the clean composed encode", rows, nb)
+		if !(nb > 5e-4) {
+			t.Fatalf("the gate cannot see a run without its first pass: NMSE %.3e from the clean encode", nb)
+		}
+	} else {
+		t.Logf("%d rows run in one call: no first pass to violate", rows)
+	}
 
 	// The violation: the rows attend causally, not both ways.
 	s.vis.causalFault = true
@@ -199,8 +238,9 @@ func TestComposedTowerOnCPU(t *testing.T) {
 	}
 }
 
-// TestTowerCensus states every projector family's tower blocks through the
-// front end and names what each one it states none of lacks: the work list
+// TestTowerCensus states every projector family's tower blocks, its entry
+// and its projector through the front end and names what each one it
+// states none of lacks: the work list
 // of towers the composer does not serve yet. A graph built wrong
 // (UncoveredUnverified) fails it.
 func TestTowerCensus(t *testing.T) {
@@ -221,13 +261,22 @@ func TestTowerCensus(t *testing.T) {
 				why[k]++
 			}
 			t.Logf("%s (%s): %d tower blocks, %v", f.name, tw.Cfg.Projector, tw.Cfg.NLayer, why)
+			_, ew, ee := m.towerEntryOf()
+			_, pw, pe := m.towerProjOf(false)
+			for _, u := range []Uncovered{ew, pw} {
+				if u == UncoveredUnverified {
+					t.Errorf("the entry's or the projector's graphs do not verify: %v %v", ee, pe)
+				}
+			}
+			t.Logf("%s: entry %s %v; projector %s %v", f.name, ew, ee, pw, pe)
 		})
 	}
 }
 
 // towerParts is what a tower gate's composed arm asks of a tier: blocks,
-// the head and the tower's blocks (tier.ComposedTower).
-const towerParts = composedParts | tier.ComposedTower
+// the head, the tower's blocks (tier.ComposedTower) and its entry and
+// projector (tier.ComposedRows).
+const towerParts = composedParts | tier.ComposedTower | tier.ComposedRows
 
 // composedTowerOnDevices is the device arm of the composed tower: on each
 // device, a tier asked for towers (towerParts), every tower block placed
@@ -281,6 +330,40 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 				spec, c.NLayer, nm, worst, tierTowerNMSE(t, tw, spec, px, want))
 			if !(nm < bound) {
 				t.Errorf("%s: the composed tower's encode reads NMSE %.3e against the host (bound %.0e)", spec, nm, bound)
+			}
+			ce, cp, miss := all.CardRowsSteps()
+			rs, rd, _ := g.Stats().ServedPart(tier.ComposedRows)
+			t.Logf("%s: the card served the entry of %d pictures and the projector of %d, %d parts missed; %d picture-row parts served, %d declined (%s)",
+				spec, ce, cp, miss, rs, rd, g.Err())
+			if ce != 1 || cp != 1 || miss != 0 {
+				t.Fatalf("%s: the card served the entry of %d and the projector of %d of 1 picture, %d parts missed (%s)", spec, ce, cp, miss, g.Err())
+			}
+			// The violations of the card's picture rows, each against the clean
+			// composed encode: a patch row gathered from the next patch, then
+			// the projector's own op.
+			vio := func(name string, set func(s *State), unset func()) {
+				bs := tw.testState()
+				defer bs.Close()
+				bs.SetDevice(g)
+				set(bs)
+				_, bad := towerEncode(t, bs, px)
+				unset()
+				be, bp, _ := bs.CardRowsSteps()
+				nb, _ := nmseOf(bad, got)
+				t.Logf("%s: violation (%s): NMSE %.3e from the clean encode (card entry %d, projector %d)", spec, name, nb, be, bp)
+				if be != 1 || bp != 1 || !(nb > 1e-4) {
+					t.Fatalf("%s: the gate cannot see %s on the card: NMSE %.3e (entry %d, projector %d)", spec, name, nb, be, bp)
+				}
+			}
+			vio("each row the next patch", func(s *State) { s.cpu.fault = cpuFaultEntryRows }, func() {})
+			switch {
+			case c.WinPattern > 0:
+				vio("the merged rows left in the window order", func(*State) { qwenNoUnwindow = true }, func() { qwenNoUnwindow = false })
+			case c.Scale > 1 && c.projK() == c.NEmbd:
+				tw.Cfg.fault = towerFaultPoolCorner
+				vio("the pool reads a group's first patch alone", func(*State) {}, func() { tw.Cfg.fault = towerFaultNone })
+			case c.Scale > 1:
+				vio("the regroup's slots swapped", func(*State) { tw.Cfg.fault = towerFaultShuffleSwap }, func() { tw.Cfg.fault = towerFaultNone })
 			}
 
 			defer func(was int) { tw.opt.towerGPULayers = was }(tw.opt.towerGPULayers)
@@ -446,5 +529,153 @@ func unclampTower(tw *Tower) func() {
 		for i := range tw.Cfg.NLayer {
 			copy(tw.model.layers[tw.base+i].clamp, was[i])
 		}
+	}
+}
+
+// TestComposedProjectorOnCPU holds the projector ALONE, composed for the
+// CPU (towerProjOf), to main's on the same rows that are no picture: each
+// tower's regroup, pool, norm, matrices and activation and the window
+// order's put-back, counted served, and each family's violation of the op
+// it adds seen -- the regroup's slots swapped, the pool reading a group's
+// first patch alone, the merged rows left in the window order.
+func TestComposedProjectorOnCPU(t *testing.T) {
+	for _, f := range composedTowers() {
+		t.Run(f.name, func(t *testing.T) {
+			ref, rtw := f.open(t, noTune)
+			defer ref.Close()
+			c := rtw.Cfg
+			side := c.ImageSz / c.PatchSz
+			x := projectorRows(side*side, c.NEmbd)
+			project := func(tw *Tower, composed bool) []float32 {
+				s := tw.testState()
+				defer s.Close()
+				s.windowOrder(side, side)
+				got, err := s.project(append([]float32(nil), x...))
+				if err != nil {
+					t.Fatal(err)
+				}
+				served, declined := s.CPUProjectorSteps()
+				why, werr := s.CPUProjectorUncovered()
+				if composed && served != 1 {
+					t.Fatalf("the composed projector served %d of 1 (declines %v; %s %v)", served, nonZero(declined[:]), why, werr)
+				}
+				if !composed && served != 0 {
+					t.Fatalf("main's arm ran the composed projector")
+				}
+				return append([]float32(nil), got...)
+			}
+			want := project(rtw, false)
+			m, tw := f.open(t, noTune, WithComposedCPU(true))
+			defer m.Close()
+			got := project(tw, true)
+			nm, worst := nmseOf(got, want)
+			t.Logf("the composed projector alone: NMSE %.3e, max|d| %.4g over %d rows", nm, worst, len(want)/c.ProjDim)
+			if !(nm < 1e-6) {
+				t.Fatalf("the composed projector alone reads NMSE %.3e from main's (bound 1e-6)", nm)
+			}
+			var vio string
+			switch {
+			case c.WinPattern > 0:
+				vio, qwenNoUnwindow = "the merged rows left in the window order", true
+				defer func() { qwenNoUnwindow = false }()
+			case c.Scale > 1 && c.projK() == c.NEmbd:
+				vio, tw.Cfg.fault = "the pool reads a group's first patch alone", towerFaultPoolCorner
+			case c.Scale > 1:
+				vio, tw.Cfg.fault = "the regroup's slots swapped", towerFaultShuffleSwap
+			default:
+				t.Logf("a projector of a patch a row adds no op to violate")
+				return
+			}
+			bad := project(tw, true)
+			tw.Cfg.fault = towerFaultNone
+			nb, _ := nmseOf(bad, want)
+			t.Logf("violation (%s): NMSE %.3e", vio, nb)
+			if !(nb > 1e-4) {
+				t.Fatalf("the gate cannot see %s: NMSE %.3e", vio, nb)
+			}
+		})
+	}
+}
+
+// TestComposedPictureRowsEveryFamily holds every tower family's entry and
+// projector, where the front end states them, composed for the CPU to
+// main's on the same picture and the same rows: the entry's rows before
+// block 0, the projector's output alone, each counted served. A family
+// whose entry or projector the front end states none of is named and
+// counted declined, never served; a projector it states none of is named.
+func TestComposedPictureRowsEveryFamily(t *testing.T) {
+	for _, f := range towerFamilies() {
+		t.Run(f.name, func(t *testing.T) {
+			m, tw := f.open(t)
+			defer m.Close()
+			c := tw.Cfg
+			_, ew, ee := m.towerEntryOf()
+			_, pw, pe := m.towerProjOf(false)
+			px := rainbow(c.ImageSz)
+			entry := func() ([]float32, *State) {
+				s := tw.testState()
+				var out []float32
+				s.vis.afterBlock = func(li int, x []float32) {
+					if li == -1 && out == nil {
+						out = append([]float32(nil), x...)
+					}
+				}
+				if _, err := s.Encode(px); err != nil {
+					t.Fatal(err)
+				}
+				return out, s
+			}
+			side := c.ImageSz / c.PatchSz
+			rows := projectorRows(side*side, c.NEmbd)
+			project := func() ([]float32, *State) {
+				s := tw.testState()
+				s.windowOrder(side, side)
+				got, err := s.project(append([]float32(nil), rows...))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return append([]float32(nil), got...), s
+			}
+			wantE, s := entry()
+			s.Close()
+			var wantP, gotP []float32
+			if pw == Covered {
+				wantP, s = project()
+				s.Close()
+			}
+			defer func(was bool) { m.opt.composedCPU = was }(m.opt.composedCPU)
+			m.opt.composedCPU = true
+			gotE, s := entry()
+			es, ed := s.CPUEntrySteps()
+			s.Close()
+			var ps int
+			var pd [jit.NumDeclines]int
+			if pw == Covered {
+				gotP, s = project()
+				ps, pd = s.CPUProjectorSteps()
+				s.Close()
+			}
+			if ew == Covered {
+				nm, worst := nmseOf(gotE, wantE)
+				t.Logf("entry: served %d, NMSE %.3e, max|d| %.4g", es, nm, worst)
+				if es != 1 || !(nm < 1e-5) {
+					t.Errorf("the composed entry served %d of 1 at NMSE %.3e from main's (bound 1e-5; declines %v)", es, nm, nonZero(ed[:]))
+				}
+			} else {
+				t.Logf("entry: %s (%v), declined %v", ew, ee, nonZero(ed[:]))
+				if es != 0 {
+					t.Errorf("an entry the front end states none of was served %d times", es)
+				}
+			}
+			if pw == Covered {
+				nm, worst := nmseOf(gotP, wantP)
+				t.Logf("projector: served %d, NMSE %.3e, max|d| %.4g", ps, nm, worst)
+				if ps != 1 || !(nm < 1e-6) {
+					t.Errorf("the composed projector served %d of 1 at NMSE %.3e from main's (bound 1e-6; declines %v)", ps, nm, nonZero(pd[:]))
+				}
+			} else {
+				t.Logf("projector: %s (%v)", pw, pe)
+			}
+		})
 	}
 }

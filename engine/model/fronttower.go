@@ -291,3 +291,222 @@ func towerFormat(l *layer, r jlm.Role) (jlm.Type, bool) {
 	}
 	return 0, false
 }
+
+// towerProjRead is the model-wide vision tensors the tower's entry and its
+// projector graphs read: a container holding another is a projector they
+// do not state.
+var towerProjRead = [...]jlm.Role{
+	jlm.RoleVPatchEmbd, jlm.RoleVPatchBias, jlm.RoleVClassEmbd, jlm.RoleVPosEmbd, jlm.RoleVPreNorm,
+	jlm.RoleVPreNormBias, jlm.RoleVPostNorm, jlm.RoleVPostNormBias, jlm.RoleVProj, jlm.RoleVProjBias,
+	jlm.RoleVProj2, jlm.RoleVProj2Bias, jlm.RoleVProjNorm, jlm.RoleVProjNormBias,
+}
+
+// towerProj is the tower's projector as graphs of generic ops over the
+// patch rows (behind the tower's last norm, the class row dropped): group
+// regroups the rows of a projector reading several patches a row into
+// consecutive rows by the request's row names (OpTakeRows), nil for one
+// reading a patch a row; proj runs over the merged rows, Scale^2 patches a
+// row -- their mean and its RMSNorm where the projector reads one patch's
+// width (a pool), the merged row's LayerNorm where the tower holds one, the
+// matrices and the activation between them. win is proj over rows in the
+// window order, which holds each group already, the raster order put back
+// by the request's row names after it; nil for a tower with no windows.
+type towerProj struct {
+	group, proj, win *graph.Graph
+	pool             bool
+}
+
+// towerProjOf is the tower's projector graphs, or why it has none. corner
+// is a gate's violation: the pool reads each group's first patch alone.
+func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
+	t := m.tower
+	c := t.Cfg
+	var p towerProj
+	for _, e := range m.container.Entries() {
+		if e.Role.Vision() && e.Block == jlm.DenseBlock && !slices.Contains(towerProjRead[:], e.Role) {
+			return p, UncoveredUnbound, fmt.Errorf("the container holds %s, which the projector's graphs do not read", e.Role)
+		}
+	}
+	switch {
+	case t.projW.e == nil:
+		return p, UncoveredUnbound, fmt.Errorf("the tower holds no projector matrix")
+	case t.projW.kp != 0 || t.projW2.kp != 0:
+		return p, UncoveredGeometry, fmt.Errorf("a projector matrix packed past its width")
+	case len(c.Deep) > 0 || t.rs != nil || t.glm != nil || t.hy != nil:
+		return p, UncoveredUnbound, fmt.Errorf("the projector reads rows past its last block's")
+	}
+	E, S := c.NEmbd, max(c.Scale, 1)
+	p.pool = S > 1 && c.projK() == E
+	if len(t.projNorm) != 0 && !p.pool && !t.projNormOn() {
+		return p, UncoveredUnbound, fmt.Errorf("a projector norm before the patches merge")
+	}
+	inv := map[jlm.Role]graph.Shape{jlm.RoleVProj: {K: t.projW.k, Rows: t.projW.rows}}
+	if t.projW2.e != nil {
+		inv[jlm.RoleVProj2] = graph.Shape{K: t.projW2.k, Rows: t.projW2.rows}
+	}
+	for _, v := range []towerVec{{jlm.RoleVProjBias, t.projB}, {jlm.RoleVProjNorm, t.projNorm},
+		{jlm.RoleVProjNormBias, t.projNormB}, {jlm.RoleVProj2Bias, t.projB2}} {
+		if len(v.V) != 0 {
+			inv[v.Role] = graph.Shape{K: len(v.V)}
+		}
+	}
+	f := graph.Facts{Inventory: inv}
+	has := func(r jlm.Role) bool {
+		_, ok := inv[r]
+		return ok
+	}
+	stored := func(r jlm.Role) []jlm.Role {
+		if has(r) {
+			return []jlm.Role{r}
+		}
+		return nil
+	}
+	if S > 1 {
+		b := graph.NewBlock(-1)
+		x := b.In("patches", E)
+		b.Out(b.Emit(graph.OpTakeRows, []graph.ValueID{x}, []graph.Result{{Name: "grouped", Width: E}}, nil, graph.Attrs{}, nil, nil)[0])
+		if err := graph.Verify(b.G, f); err != nil {
+			return p, UncoveredUnverified, fmt.Errorf("the projector's regroup does not verify: %w", err)
+		}
+		p.group = b.G
+	}
+	build := func(unwindow bool) (*graph.Graph, Uncovered, error) {
+		b := graph.NewBlock(-1)
+		x := b.In("merged", E*S*S)
+		switch {
+		case p.pool:
+			acc := sliceRow(b, "slot", x, 0, E)
+			if !corner {
+				for s := 1; s < S*S; s++ {
+					acc = b.Add(acc, sliceRow(b, "slot", x, s*E, E))
+				}
+				acc = mapRow(b, "pooled", graph.Attrs{Fn: graph.MapMul, Const: 1 / float64(S*S)}, nil, E, acc)
+			}
+			if has(jlm.RoleVProjNorm) {
+				acc = b.Norm(acc, jlm.RoleVProjNorm, c.projEps())
+			}
+			x = acc
+		case has(jlm.RoleVProjNorm) && t.projNormOn():
+			x = b.LayerNorm(x, jlm.RoleVProjNorm, c.projEps(), stored(jlm.RoleVProjNormBias)...)
+		}
+		h := b.MatVec(x, jlm.RoleVProj, t.projW.rows, stored(jlm.RoleVProjBias)...)
+		if t.projW2.e != nil {
+			var e jlm.ExprBuilder
+			if t.projAct() == nn.ActGELUErf {
+				e.GELUErf(jlm.Operand(0))
+			} else {
+				e.GELUTanh(jlm.Operand(0))
+			}
+			act := jlm.Expr{Terms: e.T}
+			a, err := b.Stated("proj.act", &act, []graph.ValueID{h}, t.projW.rows, f)
+			if err != nil {
+				return nil, UncoveredAct, fmt.Errorf("the projector's activation: %w", err)
+			}
+			h = b.MatVec(a, jlm.RoleVProj2, t.projW2.rows, stored(jlm.RoleVProj2Bias)...)
+		}
+		if unwindow {
+			h = b.Emit(graph.OpTakeRows, []graph.ValueID{h}, []graph.Result{{Name: "unwindowed", Width: c.ProjDim}}, nil, graph.Attrs{}, nil, nil)[0]
+		}
+		b.Out(h)
+		if err := graph.Verify(b.G, f); err != nil {
+			return nil, UncoveredUnverified, fmt.Errorf("the projector does not verify: %w", err)
+		}
+		return b.G, Covered, nil
+	}
+	var why Uncovered
+	var err error
+	if p.proj, why, err = build(false); why != Covered {
+		return p, why, err
+	}
+	if c.WinPattern > 0 {
+		if p.win, why, err = build(true); why != Covered {
+			return p, why, err
+		}
+	}
+	return p, Covered, nil
+}
+
+// sliceRow is width elements of each row of v from off.
+func sliceRow(b *graph.Builder, name string, v graph.ValueID, off, width int) graph.ValueID {
+	return b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: name, Width: width}}, nil,
+		graph.Attrs{Offset: off, Width: width}, nil, nil)[0]
+}
+
+// towerEntryOf is the rows entering the tower's first block as a graph of
+// generic ops over the picture (its pixels a row of each patch's width,
+// [y][x][channel]): each row's patch gathered at the position the step
+// names for it (OpPatchify), the patch embedding and its bias, the class
+// row at row 0 where the tower holds one, each row's position-table row
+// read at its position, the norm before block 0; or why there is none. A
+// video's second frame (a temporal pair's second plane) is not a picture's:
+// its caller declines it.
+func (m *Model) towerEntryOf() (*graph.Graph, Uncovered, error) {
+	t := m.tower
+	c := t.Cfg
+	switch {
+	case c.CLSLast || t.opt.towerCLSLast:
+		return nil, UncoveredEmbedRows, fmt.Errorf("a class row after the patches")
+	case t.posW != nil && (c.PosSide > 0 || c.PosAxis > 0 || c.Kind == jlm.ProjPhi4 || c.Kind == jlm.ProjLFM2):
+		return nil, UncoveredEmbedRows, fmt.Errorf("a position table read past each row's own row")
+	case t.embdNorm != nil || c.Kind == jlm.ProjGemma3nV:
+		return nil, UncoveredEmbedRows, fmt.Errorf("a patch embedding past one matrix over the patch")
+	}
+	E, P := c.NEmbd, c.PatchSz
+	// The patch's row is the weight's packed width, zero past the patch
+	// (tensor.kp).
+	kw := t.patchW.k
+	if t.patchW.kp != 0 {
+		kw = t.patchW.kp
+	}
+	inv := map[jlm.Role]graph.Shape{jlm.RoleVPatchEmbd: {K: kw, Rows: t.patchW.rows}}
+	for _, v := range []towerVec{{jlm.RoleVPatchBias, t.patchB}, {jlm.RoleVClassEmbd, t.clsW},
+		{jlm.RoleVPreNorm, t.preLnW}, {jlm.RoleVPreNormBias, t.preLnB}} {
+		if len(v.V) != 0 {
+			inv[v.Role] = graph.Shape{K: len(v.V)}
+		}
+	}
+	if t.posW != nil {
+		inv[jlm.RoleVPosEmbd] = graph.Shape{K: E, Rows: len(t.posW) / E}
+	}
+	f := graph.Facts{Inventory: inv}
+	has := func(r jlm.Role) bool {
+		_, ok := inv[r]
+		return ok
+	}
+	stored := func(r jlm.Role) []jlm.Role {
+		if has(r) {
+			return []jlm.Role{r}
+		}
+		return nil
+	}
+	lead := 0
+	if c.CLS {
+		lead = 1
+	}
+	b := graph.NewBlock(-1)
+	px := b.In("pixels", 3*P*P)
+	x := b.Emit(graph.OpPatchify, []graph.ValueID{px}, []graph.Result{{Name: "patches", Width: kw}}, nil,
+		graph.Attrs{Span: P, Offset: lead}, nil, nil)[0]
+	x = b.MatVec(x, jlm.RoleVPatchEmbd, E, stored(jlm.RoleVPatchBias)...)
+	if c.CLS {
+		x = b.Emit(graph.OpLeadRow, []graph.ValueID{x}, []graph.Result{{Name: "class", Width: E}},
+			[]graph.Binding{{Role: jlm.RoleVClassEmbd, K: E}}, graph.Attrs{Offset: 1}, nil, nil)[0]
+	}
+	if t.posW != nil {
+		pos := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: E}},
+			[]graph.Binding{{Role: jlm.RoleVPosEmbd, K: E, Rows: len(t.posW) / E}}, graph.Attrs{Positional: true}, nil, nil)[0]
+		x = b.Add(x, pos)
+	}
+	if has(jlm.RoleVPreNorm) {
+		if c.RMS {
+			x = b.Norm(x, jlm.RoleVPreNorm, c.Eps)
+		} else {
+			x = b.LayerNorm(x, jlm.RoleVPreNorm, c.Eps, stored(jlm.RoleVPreNormBias)...)
+		}
+	}
+	b.Out(x)
+	if err := graph.Verify(b.G, f); err != nil {
+		return nil, UncoveredUnverified, fmt.Errorf("the tower's entry does not verify: %w", err)
+	}
+	return b.G, Covered, nil
+}

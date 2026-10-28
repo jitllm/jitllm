@@ -72,6 +72,10 @@ const (
 	// cpuArgSide is a block graph's input past its residual streams, the
 	// rows' per-layer inputs (cpuBound.side).
 	cpuArgSide
+	// cpuArgRequest is the step's request words (cpuBound.req), cpuArgPos
+	// its positions (cpuBound.pos).
+	cpuArgRequest
+	cpuArgPos
 )
 
 // cpuArg is one call word: its byte field in cpu.Args and where its value
@@ -155,6 +159,10 @@ type cpuBlockForm struct {
 	// first (cpuRowsRun). keysX says one of them writes the residual.
 	keysEnd int
 	keysX   bool
+	// cross is the own buffers codes[:keysEnd] write and the rest read:
+	// what a bidirectional run of more rows than a call holds for each
+	// call between its two passes (cpuRowsRun).
+	cross []int
 	// A form over banks in the host's expert pages runs in two halves
 	// (cpuForm): its codes before split, up to the selection, then the rest,
 	// which read the banks once the selected experts' pages are resident
@@ -233,9 +241,11 @@ type cpuState struct {
 	xpad []float32
 	// sidePad is xpad's per-layer inputs.
 	sidePad []float32
-	// runX is a copy of a step's rows whose keys a first pass writes, where
-	// a bidirectional run takes more calls than one (cpuRowsRun).
-	runX []float32
+	// stash is the values crossing a form's last history write, a call's
+	// after another, between a bidirectional run's two passes (cpuRowsRun);
+	// stashing says which pass is running.
+	stash    []uint32
+	stashing uint8
 	// runWindows says each run of the State's (bidir) is a window its rows
 	// attend inside, none of the positions before it: a tower's windowed
 	// block's (cpuTowerRows).
@@ -252,6 +262,7 @@ type cpuState struct {
 	fault   cpuFault
 	head    cpuHeadState
 	streams cpuStreamsState
+	proj    cpuProjState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -283,6 +294,20 @@ const (
 	// cpuFaultStreams swaps streams 1 and 2 where the input rows' expansion
 	// writes them and where the head's collapse reads them.
 	cpuFaultStreams
+	// cpuFaultEntryRows gathers each patch row of the tower's entry from the
+	// patch after its own.
+	cpuFaultEntryRows
+	// cpuFaultKeysFirst runs a bidirectional run of several calls' first
+	// pass over none of its codes: each call's rows read only the keys of
+	// the calls before them and their own.
+	cpuFaultKeysFirst
+)
+
+// A bidirectional run's passes (cpuState.stashing).
+const (
+	stashNone uint8 = iota
+	stashSave
+	stashLoad
 )
 
 // cpuBlock is block li's forms on the CPU, its graph the one they were
@@ -343,6 +368,9 @@ type cpuBound struct {
 	// io is the buffers of a graph apart from its residual (cpuArgIO), its
 	// inputs' then its outputs'.
 	io [cpuIO]unsafe.Pointer
+	// req is the step's request words (cpuArgRequest), pos its live rows,
+	// then a row's position (cpuArgPos).
+	req, pos []uint32
 }
 
 // cpuIO is the most inputs and outputs a graph apart from its residual
@@ -765,20 +793,39 @@ func (s *State) cpuFaultTable(pg *kvPages, end int) []uint32 {
 func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int) {
 	runs := s.runsAt(li) && s.bidirIn(pos[0], len(pos))
 	if runs && len(pos) > f.rows {
-		kx, kstride := x, stride
-		if f.keysX {
-			w, ns := len(pos)*s.c.NEmbd, s.c.Streams()
-			if len(s.cpu.runX) < w*ns {
-				s.cpu.runX = make([]float32, w*ns)
-			}
-			for k := range ns {
-				copy(s.cpu.runX[k*w:(k+1)*w], x[k*stride:k*stride+w])
-			}
-			kx, kstride = s.cpu.runX[:w*ns], w
+		keys := f.keysEnd
+		if s.cpu.fault == cpuFaultKeysFirst {
+			keys = 0
 		}
-		s.cpuRowsCalls(li, l, f, f.codes[:f.keysEnd], kx, kstride, side, cs, nrot, seq, pos, false)
+		s.cpu.stashing = stashSave
+		s.cpuRowsCalls(li, l, f, f.codes[:keys], x, stride, side, cs, nrot, seq, pos, true)
+		s.cpu.stashing = stashLoad
+		s.cpuRowsCalls(li, l, f, f.codes[keys:], x, stride, side, cs, nrot, seq, pos, true)
+		s.cpu.stashing = stashNone
+		return
 	}
 	s.cpuRowsCalls(li, l, f, f.codes, x, stride, side, cs, nrot, seq, pos, runs)
+}
+
+// cpuStash saves (stashSave) or restores (stashLoad) call c's values form
+// f's codes before keysEnd write and the rest read (cpuBlockForm.cross).
+func (s *State) cpuStash(f *cpuBlockForm, own [][]uint32, c int) {
+	at := 0
+	for _, i := range f.cross {
+		at += len(own[i]) * c
+	}
+	for _, i := range f.cross {
+		n := len(own[i])
+		if end := at + n; len(s.cpu.stash) < end {
+			s.cpu.stash = append(s.cpu.stash, make([]uint32, end-len(s.cpu.stash))...)
+		}
+		if s.cpu.stashing == stashSave {
+			copy(s.cpu.stash[at:at+n], own[i])
+		} else {
+			copy(own[i], s.cpu.stash[at:at+n])
+		}
+		at += n
+	}
 }
 
 // cpuRowsCalls is cpuRowsRun's calls, each row's keys counted to its run's
@@ -846,6 +893,9 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, codes []cpuCode,
 			}
 		}
 		s.cpu.call[0] = uint32(k)
+		if s.cpu.stashing == stashLoad {
+			s.cpuStash(f, b.own, r0/f.rows)
+		}
 		for i := range codes {
 			s.cpuCall(b, &codes[i])
 		}
@@ -857,6 +907,9 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, codes []cpuCode,
 					copy(s.rconv[b.recLi][q*L:(q+1)*L], s.cpu.convOut[q*L:(q+1)*L])
 				}
 			}
+		}
+		if s.cpu.stashing == stashSave {
+			s.cpuStash(f, b.own, r0/f.rows)
 		}
 		if staged {
 			for j := range ns {
@@ -1074,6 +1127,10 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			}
 		case cpuArgZero:
 			p = unsafe.Pointer(&s.cpu.zero[0])
+		case cpuArgRequest:
+			p = unsafe.Pointer(&b.req[0])
+		case cpuArgPos:
+			p = unsafe.Pointer(&b.pos[0])
 		}
 		off := ar.off
 		if ar.moves {
@@ -1136,6 +1193,7 @@ func (s *State) cpuPlace() {
 		}
 	}
 	if s.vis != nil {
+		s.cpuPlaceProjector()
 		return
 	}
 	s.cpuPlaceHead()
@@ -1414,6 +1472,8 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), cpuIO)
 	}
 	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows, sel: -1}
+	type ownUse struct{ code, own int }
+	var wrote, read []ownUse
 	// A kernel's constant block is its own: two kernels' blocks may share a
 	// name and hold different words.
 	type ownKey struct {
@@ -1570,6 +1630,10 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 					ar.src = cpuArgRecRows
 				case "q.off":
 					ar.src = cpuArgZero
+				case "request":
+					ar.src = cpuArgRequest
+				case "rope.pos":
+					ar.src = cpuArgPos
 				default:
 					f.close()
 					return nil, cpuDeclineError{jit.DeclineTable, fmt.Errorf("%s reads the table %s", c.Name, o.Name)}
@@ -1577,6 +1641,14 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 			default:
 				f.close()
 				return nil, fmt.Errorf("%s binds %+v, which the CPU's call site does not provide", c.Name, o)
+			}
+			if ar.src == cpuArgOwn && a.Words == nil {
+				if rw[o]&2 != 0 {
+					wrote = append(wrote, ownUse{ci, ar.i})
+				}
+				if rw[o] != 2 {
+					read = append(read, ownUse{ci, ar.i})
+				}
 			}
 			if a.Word {
 				if ar.src != cpuArgOwn {
@@ -1618,6 +1690,17 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 	}
 	for _, cc := range f.codes[:f.keysEnd] {
 		f.keysX = f.keysX || cc.writes != 0
+	}
+	for _, w := range wrote {
+		if w.code >= f.keysEnd || slices.Contains(f.cross, w.own) {
+			continue
+		}
+		for _, r := range read {
+			if r.own == w.own && r.code >= f.keysEnd {
+				f.cross = append(f.cross, w.own)
+				break
+			}
+		}
 	}
 	if !apart && !f.inPlace() {
 		f.close()
@@ -1946,6 +2029,14 @@ func (s *State) cpuRoleWeight(l *layer, r jlm.Role) *tensor {
 			return &m.altProj
 		case r >= jlm.RoleStreamCollapse1 && int(r-jlm.RoleStreamCollapse1) < len(m.altUnembd):
 			return &m.altUnembd[r-jlm.RoleStreamCollapse1]
+		case s.vis != nil && r == jlm.RoleVProj:
+			return &s.vis.t.projW
+		case s.vis != nil && r == jlm.RoleVPatchEmbd:
+			return &s.vis.t.patchW
+		case s.vis != nil && r == jlm.RoleVPosEmbd:
+			return &s.cpu.proj.posW
+		case s.vis != nil && r == jlm.RoleVProj2:
+			return &s.vis.t.projW2
 		}
 		return nil
 	}
@@ -2028,6 +2119,27 @@ func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
 			return s.m.outNormB
 		case jlm.RoleOutputBias:
 			return s.m.outB
+		}
+		if s.vis == nil {
+			return nil
+		}
+		switch t := s.vis.t; r {
+		case jlm.RoleVPatchBias:
+			return t.patchB
+		case jlm.RoleVClassEmbd:
+			return t.clsW
+		case jlm.RoleVPreNorm:
+			return t.preLnW
+		case jlm.RoleVPreNormBias:
+			return t.preLnB
+		case jlm.RoleVProjBias:
+			return t.projB
+		case jlm.RoleVProj2Bias:
+			return t.projB2
+		case jlm.RoleVProjNorm:
+			return t.projNorm
+		case jlm.RoleVProjNormBias:
+			return t.projNormB
 		}
 		return nil
 	}

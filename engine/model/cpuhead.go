@@ -97,14 +97,23 @@ func (s *State) cpuPlaceHead() {
 // cpuComposeHead composes graph g for the CPU at rows rows into hf, or
 // says why not: none where the front end states no graph.
 func (s *State) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none jit.Decline, rows int) {
+	s.cpuComposeHeadAs(hf, g, rows, nil)
+	if g == nil {
+		hf.why = none
+	}
+}
+
+// cpuComposeHeadAs is cpuComposeHead with the formats over states the
+// weights of its roles are held in, in place of the container's.
+func (s *State) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) {
 	*hf = cpuHeadForm{composed: true}
 	switch {
 	case !jit.HostCPULowers():
 		hf.why = jit.DeclineISA
 	case g == nil:
-		hf.why = none
+		hf.why = jit.DeclineNoGraph
 	default:
-		f, err := s.m.formCPUGraph(s, g, rows)
+		f, err := s.m.formCPUGraph(s, g, rows, over)
 		if err != nil {
 			hf.why = s.cpuFormDecline(err)
 			return
@@ -125,12 +134,14 @@ func (hf *cpuHeadForm) formOf() (*cpuBlockForm, jit.Decline) {
 // formCPUGraph is graph g of the model's head on the CPU at rows rows
 // through the model's keyed cache: its weights the model's own
 // (jlm.DenseBlock), its inputs and outputs buffers of their own.
-func (m *Model) formCPUGraph(s *State, g *graph.Graph, rows int) (*cpuBlockForm, error) {
+func (m *Model) formCPUGraph(s *State, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpuBlockForm, error) {
 	formats := map[jlm.Role]jlm.Type{}
 	f := m.Composing()
 	for _, o := range g.Ops {
 		for _, w := range o.Weight {
-			if e, ok := f.Find(w.Role, jlm.DenseBlock, -1); ok {
+			if t, ok := over[w.Role]; ok {
+				formats[w.Role] = t
+			} else if e, ok := f.Find(w.Role, jlm.DenseBlock, -1); ok {
 				formats[w.Role] = e.Type
 			}
 		}

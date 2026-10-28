@@ -7,6 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -1324,6 +1325,35 @@ func (s *State) encodeBegin(px []float32, gh, gw int) error {
 	s.windowOrder(gh, gw)
 	s.growVision(n)
 
+	x := s.bx[:n*E]
+	if s.cpuEntry(px, n, first) != jit.DeclineServes {
+		if err := s.entryRows(px, gh, gw, n, first, cls); err != nil {
+			return err
+		}
+	}
+	v.stage("pos_embed", x)
+	// Block -1 is the embedding: the patches with their positions, before
+	// block 0 (llama.cpp's pos_embed node, the tracer's first stop).
+	if v.afterBlock != nil {
+		v.afterBlock(-1, x)
+	}
+	// The 2-D rotary rows every block turns q and k by, on either tier.
+	if c.Rope {
+		copy(s.bcs[:n*c.HeadDim], s.visRope(n))
+	}
+	v.prog = encodeProg{on: true, n: n, first: first, next: s.lo, gh: gh, gw: gw}
+	return nil
+}
+
+// entryRows is the rows entering the tower's first block, main's way:
+// the n rows of s.bx, the patches from row first, the class row at cls.
+func (s *State) entryRows(px []float32, gh, gw, n, first, cls int) error {
+	v := s.vis
+	t, c := v.t, v.t.Cfg
+	E := c.NEmbd
+	np := gh * gw
+	pw := gw * c.PatchSz
+	x := s.bx[:n*E]
 	// 1. Patch embedding. A conv2d whose stride equals its kernel is a matmul
 	// over non-overlapping patches, so the gather is a permutation and the
 	// arithmetic is the GEMM path -- no convolution kernel anywhere.
@@ -1351,7 +1381,6 @@ func (s *State) encodeBegin(px []float32, gh, gw int) error {
 			nn.Copy32JIT(gather[r*pk+ch*P*P:r*pk+(ch+1)*P*P], P, 1, px[at+ch:], 3*pw, 3, P, P)
 		}
 	}
-	x := s.bx[:n*E]
 	s.jit.NewInput()
 	if err := s.mm(x[first*E:], t.patchW, gather, np); err != nil {
 		return err
@@ -1420,17 +1449,6 @@ func (s *State) encodeBegin(px []float32, gh, gw int) error {
 	if t.preLnW != nil {
 		s.normRows(x, x, t.preLnW, t.preLnB, E, n, !c.RMS, c.Eps, s.rowChunk(n, E))
 	}
-	v.stage("pos_embed", x)
-	// Block -1 is the embedding: the patches with their positions, before
-	// block 0 (llama.cpp's pos_embed node, the tracer's first stop).
-	if v.afterBlock != nil {
-		v.afterBlock(-1, x)
-	}
-	// The 2-D rotary rows every block turns q and k by, on either tier.
-	if c.Rope {
-		copy(s.bcs[:n*c.HeadDim], s.visRope(n))
-	}
-	v.prog = encodeProg{on: true, n: n, first: first, next: s.lo, gh: gh, gw: gw}
 	return nil
 }
 
@@ -1776,6 +1794,9 @@ func (s *State) visAttendHead(li, h, w0, w1 int, scale float32) {
 func (s *State) project(patches []float32) ([]float32, error) {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
+	if out, why := s.cpuProject(patches); why == jit.DeclineServes {
+		return out, nil
+	}
 	switch c.Kind {
 	case jlm.ProjPixtral:
 		return s.projectPixtral(patches)
@@ -1832,7 +1853,7 @@ func (s *State) project(patches []float32) ([]float32, error) {
 		src = v.grp
 		// InternVL's LayerNorm over the grouped row, before the MLP, and
 		// LFM2-VL's where its file carries one.
-		if c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil && !lfm2NoProjNorm {
+		if t.projNormOn() {
 			w := c.projK()
 			s.normRows(v.grp, v.grp, t.projNorm, t.projNormB, w, c.Tokens(), true, c.projEps(),
 				s.rowChunk(c.Tokens(), w))
@@ -1864,11 +1885,7 @@ func (s *State) project(patches []float32) ([]float32, error) {
 		return nil, err
 	}
 	s.visBiasRows(v.hid, t.projB, nt)
-	act := nn.ActGELU
-	if c.Kind == jlm.ProjLFM2 && !lfm2TanhGELU {
-		act = nn.ActGELUErf
-	}
-	s.actAll(v.hid[:nt*t.projW.rows], act)
+	s.actAll(v.hid[:nt*t.projW.rows], t.projAct())
 	s.jit.NewInput()
 	out := v.out
 	if v.ord != nil {
@@ -1883,6 +1900,22 @@ func (s *State) project(patches []float32) ([]float32, error) {
 	}
 	v.stage("out", v.out[:nt*c.ProjDim])
 	return v.out[:nt*c.ProjDim], nil
+}
+
+// projNormOn says the projector runs its LayerNorm over the merged row
+// before its first matrix: InternVL's, and LFM2-VL's where its file holds
+// one.
+func (t *Tower) projNormOn() bool {
+	c := t.Cfg
+	return c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil && !lfm2NoProjNorm
+}
+
+// projAct is the activation between the projector's two matrices.
+func (t *Tower) projAct() nn.ActKind {
+	if t.Cfg.Kind == jlm.ProjLFM2 && !lfm2TanhGELU {
+		return nn.ActGELUErf
+	}
+	return nn.ActGELU
 }
 
 // visNorm applies the tower's norm -- a LayerNorm, or an RMSNorm on a tower

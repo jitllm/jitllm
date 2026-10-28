@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -58,6 +59,24 @@ type Weight struct {
 	// dominates upload cost on a model that streams blocks every token. The
 	// spans are read-only and not owned here.
 	Packed *Packed
+}
+
+// RowsPart is a graph over a picture's rows apart from any block's
+// residual -- a vision tower's entry over the picture, its projector over
+// its last block's rows -- formed for Rows rows, and the tensors it binds
+// by role: matrices in Weights, vectors in Vectors.
+type RowsPart struct {
+	Graph   *graph.Graph
+	Rows    int
+	Weights map[jlm.Role]Weight
+	Vectors map[jlm.Role][]float32
+}
+
+// PictureRowsDevice runs a RowsPart over live rows: in the graph's input
+// rows, out its output's, req the request's words and pos the positions'
+// (each nil where the graph reads none); false where the device does not.
+type PictureRowsDevice interface {
+	RunRows(p *RowsPart, live int, req, pos []uint32, in, out []float32) bool
 }
 
 // Packed is a weight already in the device layout: three spans of a jlm

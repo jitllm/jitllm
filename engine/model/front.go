@@ -99,10 +99,15 @@ type frontSet struct {
 	errs   []error
 	// tower, towerWhy and towerErrs are the vision tower's blocks', vision
 	// block i at i: block base+i of the model's block space.
-	tower       []*graph.Graph
-	towerWhy    []Uncovered
-	towerErrs   []error
-	head, embed *graph.Graph
+	tower     []*graph.Graph
+	towerWhy  []Uncovered
+	towerErrs []error
+	// towerEntry and towerProj are the tower's entry and projector
+	// (towerEntryOf, towerProjOf), each with why the front end states none.
+	towerEntry                  *graph.Graph
+	towerProj                   towerProj
+	towerEntryWhy, towerProjWhy Uncovered
+	head, embed                 *graph.Graph
 	// headHidden is head writing the norm's rows too (nn.Head.HiddenGraph).
 	headHidden *graph.Graph
 	// cpuHead and cpuHidden are head and headHidden over the row a model of
@@ -281,6 +286,8 @@ func (m *Model) frontGraphs() *frontSet {
 		for i := range nv {
 			s.tower[i], s.towerWhy[i], s.towerErrs[i] = m.towerGraph(t.base + i)
 		}
+		s.towerEntry, s.towerEntryWhy, _ = m.towerEntryOf()
+		s.towerProj, s.towerProjWhy, _ = m.towerProjOf(false)
 	}
 	s.head, s.headWhy, s.headErr = m.headGraph(false)
 	if s.head != nil {
