@@ -469,6 +469,10 @@ func (e *x86Lowerer) dot4SSE(i int) {
 		ones = free
 	}
 	a.PMADDWD(p, p, ones)
+	if c := k.Nodes[nd.C]; c.Op == OpConst && c.Imm == 0 {
+		a.MOVAPS(e.reg(i), p)
+		return
+	}
 	a.PADDD(e.reg(i), e.reg(nd.C), p)
 }
 
