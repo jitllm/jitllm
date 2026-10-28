@@ -53,7 +53,7 @@ func (p InPlace) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				if ob.Operand.Out && (b.Operand.Temp || !callerHeld(out, b.Operand)) {
 					continue
 				}
-				if !readLater(out[i+1:], b.Operand) && (len(k.Stores) == 1 || !k.readsAfter(b.Operand, st)) {
+				if !readLater(out[i+1:], b.Operand) && (len(k.Stores) == 1 && !k.readsElsewhere(b.Operand, st) || len(k.Stores) > 1 && !k.readsAfter(b.Operand, st)) {
 					in = nd.Buf
 					break
 				}
@@ -117,6 +117,18 @@ func (k *Kernel) readsAfter(o Operand, st Store) bool {
 		case h > st.At && !k.within(h, st.At):
 			return true
 		case h >= 0 && k.within(h, st.At) && !sameInts(nd.Ax, st.Ax):
+			return true
+		}
+	}
+	return false
+}
+
+// readsElsewhere reports whether k reads operand o at another element than
+// store st writes: a NEOX rotary's partner, read while another element's
+// store may already have overwritten it.
+func (k *Kernel) readsElsewhere(o Operand, st Store) bool {
+	for _, nd := range k.Nodes {
+		if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand == o && !sameInts(nd.Ax, st.Ax) {
 			return true
 		}
 	}

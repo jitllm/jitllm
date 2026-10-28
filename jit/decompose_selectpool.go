@@ -95,29 +95,32 @@ func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(.
 				{Out: tab, Index: tx.op(OpAdd, U, at, tx.u(1)), Value: svs, Extent: 2 * NB * P}},
 			Facts: Facts{Words: map[int][]uint32{1: ropeConsts()}, Extents: map[int]int{0: 8*stride + 1}, Quarter: quarter}})
 
+		// Each element of the mean turned with its pair's partner: NEOX
+		// pairs d and d+P, NORM pairs neighbours; the first of a pair
+		// takes -sin, the second +sin, and past NRot the normed mean.
 		var rx exprs
-		rr, rb, rp := rx.coord(0), rx.coord(1), rx.coord(2)
-		first, step := rx.op(OpMul, U, rp, rx.u(2)), 1
+		rr, rb, rd := rx.coord(0), rx.coord(1), rx.coord(2)
+		turned := rx.op(OpLess, ir.Pred, rd, rx.u(uint32(a.NRot)))
+		var firstOf, partner, pair int
 		if a.Layout == graph.RopeNeox {
-			first, step = rp, P
+			firstOf = rx.op(OpLess, ir.Pred, rd, rx.u(uint32(P)))
+			partner = rx.sel(U, firstOf, rx.op(OpAdd, U, rd, rx.u(uint32(P))), rx.op(OpSub, U, rd, rx.u(uint32(P))))
+			pair = rx.sel(U, firstOf, rd, rx.op(OpSub, U, rd, rx.u(uint32(P))))
+		} else {
+			firstOf = rx.op(OpLess, ir.Pred, rx.op(OpAnd, U, rd, rx.u(1)), rx.u(1))
+			partner = rx.op(OpXor, U, rd, rx.u(1))
+			pair = rx.op(OpShr, U, rd, rx.u(1))
 		}
-		second := rx.op(OpAdd, U, first, rx.u(uint32(step)))
+		partner = rx.sel(U, turned, partner, rd)
+		pair = rx.sel(U, turned, pair, rx.u(0))
 		sh := []int{R, NB, D}
-		x0, x1 := rx.at(0, sh, rr, rb, first), rx.at(0, sh, rr, rb, second)
-		e := rx.op(OpMul, U, rx.op(OpAdd, U, rx.op(OpMul, U, rb, rx.u(uint32(P))), rp), rx.u(2))
+		x0, x1 := rx.at(0, sh, rr, rb, rd), rx.at(0, sh, rr, rb, partner)
+		e := rx.op(OpMul, U, rx.op(OpAdd, U, rx.op(OpMul, U, rb, rx.u(uint32(P))), pair), rx.u(2))
 		co, si := rx.at(1, []int{NB * P * 2}, e), rx.at(1, []int{NB * P * 2}, rx.op(OpAdd, U, e, rx.u(1)))
-		y0 := rx.op(OpSub, F, rx.op(OpMul, F, x0, co), rx.op(OpMul, F, x1, si))
-		y1 := rx.op(OpAdd, F, rx.op(OpMul, F, x0, si), rx.op(OpMul, F, x1, co))
-		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, NB, P}, In: []Operand{normed, tab}, Expr: rx.e,
-			Stores: []PrimStore{{Out: pooled, Ax: []int{rr, rb, first}, Ext: sh, Value: y0}, {Out: pooled, Ax: []int{rr, rb, second}, Ext: sh, Value: y1}}})
-		if tail := D - a.NRot; tail > 0 {
-			var lx exprs
-			lr, lb := lx.coord(0), lx.coord(1)
-			la := lx.op(OpAdd, U, lx.coord(2), lx.u(uint32(a.NRot)))
-			v := lx.at(0, sh, lr, lb, la)
-			prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, NB, tail}, In: []Operand{normed}, Expr: lx.e,
-				Stores: []PrimStore{{Out: pooled, Ax: []int{lr, lb, la}, Ext: sh, Value: v}}})
-		}
+		si = rx.sel(F, firstOf, rx.op(OpSub, F, rx.f(0), si), si)
+		y := rx.op(OpAdd, F, rx.op(OpMul, F, x0, co), rx.op(OpMul, F, x1, si))
+		rx.sel(F, turned, y, x0)
+		prims = append(prims, Prim{Kind: PrimMap, Shape: sh, In: []Operand{normed, tab}, Out: pooled, Expr: rx.e})
 	}
 
 	var dx exprs
