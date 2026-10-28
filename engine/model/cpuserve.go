@@ -1741,6 +1741,8 @@ func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
 		return l.downB
 	case jlm.RoleVFFNGateBias:
 		return l.gateB
+	case jlm.RoleVClamp:
+		return l.clamp
 	case jlm.RoleAttnSinks:
 		return l.sinks
 	case jlm.RoleRouterBias:

@@ -1807,6 +1807,8 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 	case jlm.RoleVFFNGateBias:
 		// A tower's gated MLP's gate bias, which no text role names.
 		return l.mvg.bias
+	case jlm.RoleVClamp:
+		return l.clampB
 	case jlm.RoleAttnSinks:
 		return l.sinks
 	case jlm.RoleAttnSubNorm:

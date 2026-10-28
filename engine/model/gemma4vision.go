@@ -187,6 +187,8 @@ const (
 	clampGate
 	clampUp
 	clampDown
+	// clampSlots is the clamped matrices of a block, four bounds each.
+	clampSlots
 )
 
 // gemma4NoPool takes each group's first patch, and gemma4RowFirst turns the

@@ -74,6 +74,9 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	out := Operand{Kind: OperandTable, Name: c.Graph.Values[o.Out[0]].Name}
 	of := strings.TrimPrefix(out.Name, tableAngles.Name)
 	var axes []uint32
+	if o.Attr.Cycle != 0 {
+		return nil, fmt.Errorf("a rotary table over a cycle of %d axes %v: its pairs' frequencies are its cycles' first pairs'", o.Attr.Cycle, o.Attr.CycleAxes)
+	}
 	if o.Attr.Sections != [ropeAxes]int{} {
 		if o.Attr.Grid {
 			return nil, fmt.Errorf("a rotary table of grid cells over the axes of sections %v", o.Attr.Sections)

@@ -123,8 +123,8 @@ const (
 	OpConcat
 	// OpRopeTable is a step's rotary table: for each row's position and each
 	// of NRot/2 pairs, the pair's cos and sin, Out[0] two elements a pair.
-	// Where Sections states several axes, a row has a position on each, and
-	// a pair's angle is its axis's position's.
+	// Where Sections or Cycle states several axes, a row has a position on
+	// each, and a pair's angle is its axis's position's.
 	OpRopeTable
 	// OpEmbed is a step's input rows: each row's token's row of Weight[0],
 	// the token a word of the step's own a row; where Positional, each
@@ -364,6 +364,11 @@ type Attrs struct {
 	// (OpRopeTable's, which reads them).
 	Sections    [4]int
 	Interleaved bool
+	// Cycle, where set (Sections all zero), assigns the axes pair by pair
+	// in a cycle of Cycle pairs: pair p turns by axis CycleAxes[p%Cycle], at
+	// the frequency of its cycle's first pair (p - p%Cycle).
+	Cycle     int
+	CycleAxes [4]uint8
 	// Mscale multiplies the rotary's cos and sin; 0 is one.
 	Mscale  float64
 	NHead   int

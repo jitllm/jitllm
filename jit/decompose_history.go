@@ -39,7 +39,9 @@ var (
 // telling two apart. A table turns its pairs by the position axes the op
 // states, or it is not the op's.
 func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
-	axes := func(r graph.Rotary) bool { return r.Sections == a.Sections && r.Interleaved == a.Interleaved }
+	axes := func(r graph.Rotary) bool {
+		return r.Sections == a.Sections && r.Interleaved == a.Interleaved && r.Cycle == a.Cycle && r.CycleAxes == a.CycleAxes
+	}
 	if len(c.Rotaries) <= 1 {
 		if len(c.Rotaries) == 1 && !axes(c.Rotaries[0]) {
 			return Operand{}, fmt.Errorf("a rotary over the axes of sections %v (interleaved %v), where the model's table turns by sections %v (interleaved %v)",

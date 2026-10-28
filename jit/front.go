@@ -118,7 +118,8 @@ func tableName(i int) string {
 // TableGraph is the step's table of rotary r, the model's i-th: its
 // PartTable part's graph.
 func TableGraph(r graph.Rotary, i int) *graph.Graph {
-	rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i), Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved}
+	rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i), Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
+		Cycle: r.Cycle, CycleAxes: r.CycleAxes}
 	return rt.Build()
 }
 

@@ -436,3 +436,11 @@ func RopeApply(head []float32, cs []float32, neox bool) {
 		head[i1] = float32(x0*s + x1*c)
 	}
 }
+
+// Clamp32 is each of src held to [lo, hi], written to dst: a clipped
+// linear's bound (Gemma 4's vision tower's).
+func Clamp32(dst, src []float32, lo, hi float32) {
+	for i, v := range src {
+		dst[i] = float32(math.Max(math.Min(float64(v), float64(hi)), float64(lo)))
+	}
+}
