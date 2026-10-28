@@ -347,15 +347,18 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 				f.own[i].n = max(f.own[i].n, int(bd.Bytes))
 				args = append(args, partArg{kind: partOwn, i: i})
 			case bd.Words != nil || o.Kind == jit.OperandScratch:
+				// Sized by the widest binding of the operand: a later code
+				// may reach further into it than the first.
+				n := int(max(bd.Bytes, 4*int64(len(bd.Words))))
+				if bd.Words == nil && !live[o] {
+					n = 4
+				}
 				i, ok := own[o]
 				if !ok {
-					n := int(max(bd.Bytes, 4*int64(len(bd.Words))))
-					if bd.Words == nil && !live[o] {
-						n = 4
-					}
 					i = buf(n, bd.Words)
 					own[o] = i
 				}
+				f.own[i].n = max(f.own[i].n, n)
 				args = append(args, partArg{kind: partOwn, i: i})
 			default:
 				for _, k := range kerns[ci+1:] {
