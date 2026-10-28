@@ -562,7 +562,9 @@ func TestComposedBlocksServe(t *testing.T) {
 								name = "no graph/" + a.name
 							}
 							t.Run(name, func(t *testing.T) {
-								parts := a.parts | prompt
+								// ComposedStep asks for the prompt too; the arm asks for it
+								// only of promptModels, whose prompt blocks the gate holds.
+								parts := a.parts&^tier.ComposedPrompt | prompt
 								got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false)
 								// Every form was built at the placement or PrepHead.
 								if st.FormedAtStep != 0 {
@@ -625,10 +627,11 @@ func TestComposedBlocksServe(t *testing.T) {
 								if prompt != 0 {
 									wantHeads++
 								}
-								heads, _, _ := st.ServedPart(tier.ComposedHead)
+								heads, headDeclined, headUnasked := st.ServedPart(tier.ComposedHead)
 								if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
 									heads+replayed != wantHeads {
-									t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps and the prompt (%d asked)", heads+replayed, replayed, len(toks), prompt)
+									t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps and the prompt (%d asked); %d declined, %d unasked, %d folds, %d capture(s)",
+										heads+replayed, replayed, len(toks), prompt, headDeclined, headUnasked, st.HeadFolds, st.Captures)
 								}
 								if noGraph {
 									t.Logf("composed %s: the tier's own launches on the steps it served: %v", a.name, census)
