@@ -9523,3 +9523,37 @@ row where the composer's reads two.
   writer by the keys it does not store. The device holds no per-layer
   table, so a card declines the input rows of such a model by name
   (DeclineEmbedWeight) and the host fills them.
+- **The composer's matrix kernel at 1.25-1.5 of GemmVolta, and a mixture's
+  routed experts on the matrix unit.** Without a profiler (the V100 box
+  allows none), the composed kernel was read by its SASS (ptxas and
+  nvdisasm on the laptop, `-arch=sm_70`): weight loads were already shared
+  by ptxas (merging them in Affine, `Affine.Weights`, moved neither the
+  register count nor the time), the tile shape alone moved nothing
+  (JITLLM_MATRIX_SHAPES sweeps), and what paid was the row's factor written
+  once as binary16 words by a kernel of its own (`halves`), two stages with
+  one barrier a trip and every staged word loaded a trip ahead
+  (`Prefetch.Staged`), 2x2 warps of 64x32 with two workgroups a unit
+  (`Matrix.Resident`), the sums through the stage a row of tiles at a time,
+  and Affine's `(x+c)>>n = (x>>n)+(c>>n)` for x a multiple of 2^n. On the
+  V100 (card 7, CUDA, sm_70, 512 rows, median of per-round ratios, the
+  composed arm's two kernels against GemmVolta): q/o Q4_K 2.38 -> 1.50,
+  gate/up Q4_K 2.36 -> 1.45, down Q6_K 1.95 -> 1.25; an A/A of the composed
+  form read 1.51/1.50, 1.45/1.45, 1.25/1.25. A mixture's expert matvec at a
+  chunk's rows is grouped by expert (`expertGrouped`: counts, run starts
+  padded to 64 rows, ranks, a scattered table, each block's expert) and
+  projected on the matrix unit, whose pass takes a weight read through the
+  row's block of 64 (64 rows by 128 outputs), a block past the runs (the
+  runs' end its stated live rows) running no trips. Gates: TestComposedGPUExperts
+  (Q8_0, Q4_K, Q6_K, MXFP4 against the oracle, worst NMSE 1.6e-7; the
+  experts moved by one and the next pair's reference fail it),
+  TestComposedPromptRunsOnTheMatrixUnit (Qwen3-0.6B and Qwen3-MOE-4x0.6B,
+  392 matrix launches each, NMSE 3.105e-4 and 3.159e-3 against the tier's
+  3.071e-4 and 3.124e-3). End to end (PM3's servers, one request at a
+  time, V100 card 7, Qwen3-30B-A3B on cards 6 and 7, composed prompt rate
+  over main's at 512/1024/2048 tokens): Llama-3.2-1B 0.46/0.39/0.30 (was
+  0.092), Llama-3.1-8B 0.49/0.41/0.30 (was 0.027), Qwen3-30B-A3B
+  0.38/0.32/0.25 (was 0.094), gpt-oss-20b 0.051/0.053/0.057 (was 0.0064);
+  Qwen3-30B-A3B's 16-token answer is main's word for word. Per-kernel
+  device time of gpt-oss's composed 512-token prompt in the CLI
+  (JITLLM_CUDA_KERNEL_TIMING): 175 ms matrix, 103 ms plain reductions off
+  the unit, 14 ms grouping; the server's prompt is four times the CLI's.
