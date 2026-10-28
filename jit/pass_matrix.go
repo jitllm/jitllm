@@ -76,7 +76,7 @@ type bilinear struct {
 func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
 	var f bilinear
 	tm, tn, tk := d.Matrix[0], d.Matrix[1], d.Matrix[2]
-	if k.Work || k.Group > 0 || k.Rows != 0 || k.Clamp != 0 || k.Tile != 0 || k.Positions != nil || k.Heads != nil ||
+	if k.Work || k.Group > 0 || k.Clamp != 0 || k.Tile != 0 || k.Positions != nil || k.Heads != nil ||
 		k.Quarter != nil || k.Kind != PrimReduce && k.Kind != PrimContract || len(k.Space) != 2 || len(k.Loops) != 1 ||
 		k.Space[0] < tm || p.Rows%(p.Warps[0]*tm) != 0 || p.Cols%(p.Warps[1]*tn) != 0 {
 		return f, false
@@ -225,6 +225,9 @@ func halves(k *Kernel, f bilinear) (*Kernel, Buf) {
 	b := Buf{Kind: BufOut, Elem: U, Shape: []int{R, W},
 		Operand: Operand{Kind: OperandScratch, Name: out.Name + ".halves", Elem: U, Temp: true, Of: out.Of}}
 	h := &Kernel{Name: k.Name + ".halves", Kind: PrimMap, Space: []int{R, W}, Part: k.Part, Apart: k.Apart, Of: k.Of, Capacity: k.Capacity}
+	if k.Rows > 0 {
+		h.Rows = copyInto(h, k, k.Rows-1, func(int, Node) (int, bool) { return 0, false }) + 1
+	}
 	r := h.add(Node{Op: OpCoord, A: 0, Type: U})
 	w := h.add(Node{Op: OpCoord, A: 1, Type: U})
 	elem := func(at int) int {
@@ -254,7 +257,7 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 	R, N := k.Space[0], k.Space[1]
 	m := k.clone()
 	m.Name, m.Kind = k.Name+".matrix", PrimMatrix
-	m.Nodes, m.Loops, m.Stores = nil, nil, nil
+	m.Nodes, m.Loops, m.Stores, m.Rows = nil, nil, nil, 0
 	m.Space = []int{(R + TR - 1) / TR, (N + TN - 1) / TN}
 	m.Work, m.Group = true, 32*WR*WN
 	shared := func(name string, e ir.Type, n int) int {
@@ -358,6 +361,13 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 	m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
 	P := m.loop(T, -1)
 	m.Loops[P].Uniform = true
+	if k.Rows > 0 {
+		// A workgroup whose rows are all past the live ones (Kernel.Rows)
+		// multiplies nothing: its sums are rows no one reads.
+		live := copyInto(m, k, k.Rows-1, func(int, Node) (int, bool) { return 0, false })
+		trips := m.add(Node{Op: OpSelect, Type: U, A: m.add(Node{Op: OpLess, Type: ir.Pred, A: r0, B: live}), B: m.u32(T), C: m.u32(0)})
+		m.Loops[P].Count = trips + 1
+	}
 	it := m.add(Node{Op: OpIter, At: P, Type: U})
 	next := m.bin(OpAdd, U, it, m.u32(1))
 	kn := m.bin(OpMul, U, m.bin(OpMin, U, next, m.u32(T-1)), m.u32(KC))

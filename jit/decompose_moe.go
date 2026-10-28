@@ -431,6 +431,13 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 		q := x.op(OpAdd, U, x.op(OpShl, U, x.op(OpMin, U, b, used), x.u(uint32(bitsOf(G)))), x.op(OpAnd, U, p, x.u(uint32(G-1))))
 		return x.load(at+3, x.op(OpMin, U, q, end))
 	}
+	// rowOf is the grouped row p is read at: its own, or in a block past
+	// the runs the last run's block's.
+	rowOf := func(x *exprs, p, at int) int {
+		b := x.op(OpShr, U, p, x.u(uint32(bitsOf(G))))
+		used := x.op(OpSub, U, x.op(OpShr, U, x.load(at+1, x.u(uint32(E))), x.u(uint32(bitsOf(G)))), x.u(1))
+		return x.op(OpAdd, U, x.op(OpShl, U, x.op(OpMin, U, b, used), x.u(uint32(bitsOf(G)))), x.op(OpAnd, U, p, x.u(uint32(G-1))))
+	}
 	grouping := func(at int, f *Facts) {
 		maps.Copy(f.Extents, map[int]int{at: most / G, at + 1: E + 1, at + 2: E, at + 3: most + 1})
 	}
@@ -496,6 +503,11 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 			return nil, err
 		}
 		x.op(OpMul, F, wv, xv)
+		// The runs' rows are the live ones: a block past them is read as
+		// the last run's block by the scatter.
+		var live exprs
+		live.load(2, live.u(uint32(E)))
+		facts.Rows = live.e
 		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{most, rows, K}, In: in, Out: grouped, Combine: OpAdd, Expr: x.e, Facts: facts})
 	}
 	{
@@ -504,8 +516,8 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 		in := []Operand{grouped, block, start, count, table}
 		facts := Facts{Extents: map[int]int{}}
 		grouping(1, &facts)
-		v := x.at(0, []int{most, rows}, p, row)
 		s := pairOf(&x, p, 1)
+		v := x.at(0, []int{most, rows}, rowOf(&x, p, 1), row)
 		ix := x.op(OpAdd, U, x.op(OpMul, U, s, x.u(uint32(rows))), row)
 		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{most, rows}, In: in, Expr: x.e, Facts: facts,
 			Stores: []PrimStore{{Out: out, Index: ix, Value: v, Extent: Q * rows}}})

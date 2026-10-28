@@ -71,7 +71,7 @@ func (n *Kernel) prefetchStaged() bool {
 	changed := false
 	for c, l := range n.Loops {
 		it := n.iterOf(c)
-		if it < 0 || !l.Uniform || l.Spread || l.Count != 0 || l.Trip < 2 {
+		if it < 0 || !l.Uniform || l.Spread || l.Trip < 2 {
 			continue
 		}
 		ahead := n.bin(OpMin, ir.U32, n.bin(OpAdd, ir.U32, it, n.u32(1)), n.u32(l.Trip-1))
