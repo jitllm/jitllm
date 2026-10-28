@@ -95,15 +95,15 @@ func decomposeTopKRanked(o graph.Op, c *Context) ([]Prim, error) {
 	if G == 1 && S > selectMin && K < S {
 		return decomposeTopKSelect(c, c.value(o.In[0]), sel, c.value(o.Out[1]), S, K), nil
 	}
-	return rankedPlaces(c, c.value(o.In[0]), nil, sel, c.value(o.Out[1]), G, S, K), nil
+	return rankedPlaces(c, c.value(o.In[0]), nil, sel, c.value(o.Out[1]), G, S, K, G*S), nil
 }
 
 // rankedPlaces is the K largest of each group of S of in: each element's
 // rank among its group, then each of the K places the index and the value
 // of the element ranked there, the one element of the group whose rank it
 // is. Where ids is given, an element's index is its word of ids rather than
-// its place.
-func rankedPlaces(c *Context, in Operand, ids *Operand, sel, val Operand, G, S, K int) []Prim {
+// its place. A row of in and of ids is w wide, its groups first.
+func rankedPlaces(c *Context, in Operand, ids *Operand, sel, val Operand, G, S, K, w int) []Prim {
 	U, I, F := ir.U32, ir.I32, ir.F32
 	gs := grouped{c.Step.Rows, G, S}
 	rank := Operand{Kind: OperandScratch, Name: val.Name + ".rank", Elem: I, Temp: true}
@@ -122,13 +122,13 @@ func rankedPlaces(c *Context, in Operand, ids *Operand, sel, val Operand, G, S, 
 		at(&ix, func(_, _, i int) int { return i }, U, func() int { return ix.u(0) })
 	} else {
 		ixIn = append(ixIn, *ids)
-		at(&ix, func(r, g, i int) int { return gs.at(&ix, 2, r, g, i) }, U, func() int { return ix.u(0) })
+		at(&ix, func(r, g, i int) int { return gs.atRow(&ix, 2, w, r, g, i) }, U, func() int { return ix.u(0) })
 	}
 	var vx exprs
-	at(&vx, func(r, g, i int) int { return gs.at(&vx, 0, r, g, i) }, F, func() int { return vx.f(0) })
+	at(&vx, func(r, g, i int) int { return gs.atRow(&vx, 0, w, r, g, i) }, F, func() int { return vx.f(0) })
 
 	return []Prim{
-		rankPrim(c, in, rank, G, S),
+		rankPrim(c, in, rank, G, S, w),
 		{Kind: PrimReduce, Shape: gs.shape(K, S), In: ixIn, Out: sel, Combine: OpAdd, Type: U, Expr: ix.e},
 		{Kind: PrimReduce, Shape: gs.shape(K, S), In: []Operand{in, rank}, Out: val, Combine: OpAdd, Expr: vx.e},
 	}
@@ -410,8 +410,8 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 	_, scale, bias := jlm.DecodeParts[int](ep, l, edr, edw, first)
 	df := e.un(OpCvtF32, F, e.at(0, []int{R, P, rows, nsub}, er, ej, erow, es))
 	col := e.op(OpAdd, U, e.op(OpMul, U, ej, e.u(uint32(stride))), first)
-	xs := e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw))), e.op(OpDiv, U, col, e.u(uint32(win)))))
-	sumAt := e.op(OpAdd, U, e.u(uint32(R*nw)), e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(ns))), e.op(OpDiv, U, col, e.u(uint32(q.Sums)))))
+	xs := e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw+ns))), e.op(OpDiv, U, col, e.u(uint32(win)))))
+	sumAt := e.op(OpAdd, U, e.u(uint32(nw)), e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw+ns))), e.op(OpDiv, U, col, e.u(uint32(q.Sums)))))
 	csum := e.load(1, sumAt)
 	for k := 1; k < l.Sub/q.Sums; k++ {
 		csum = e.op(OpAdd, F, csum, e.load(1, e.op(OpAdd, U, sumAt, e.u(uint32(k)))))
@@ -433,12 +433,12 @@ func decomposeRank(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	out := c.value(o.Out[0])
 	out.Elem = ir.U32
-	return []Prim{rankPrim(c, c.value(o.In[0]), out, G, S)}, nil
+	return []Prim{rankPrim(c, c.value(o.In[0]), out, G, S, G*S)}, nil
 }
 
 // rankPrim is element i's count of the j of its group with x_i < x_j, or
 // x_j == x_i and j < i.
-func rankPrim(c *Context, in, out Operand, G, S int) Prim {
+func rankPrim(c *Context, in, out Operand, G, S, w int) Prim {
 	I := out.Elem
 	if I == 0 {
 		I = ir.I32
@@ -448,7 +448,7 @@ func rankPrim(c *Context, in, out Operand, G, S int) Prim {
 	var rk exprs
 	r, g, ij := gs.coords(&rk, 2)
 	i, j := ij[0], ij[1]
-	xi, xj := gs.at(&rk, 0, r, g, i), gs.at(&rk, 0, r, g, j)
+	xi, xj := gs.atRow(&rk, 0, w, r, g, i), gs.atRow(&rk, 0, w, r, g, j)
 	before := rk.sel(I, rk.op(OpLess, ir.Pred, j, i), one(&rk), zero(&rk))
 	rk.sel(I, rk.op(OpLess, ir.Pred, xi, xj), one(&rk), rk.sel(I, rk.op(OpLess, ir.Pred, xj, xi), zero(&rk), before))
 	return Prim{Kind: PrimReduce, Shape: gs.shape(S, S), In: []Operand{in}, Out: out, Combine: OpAdd, Type: I, Expr: rk.e}
@@ -488,6 +488,14 @@ func (g grouped) at(x *exprs, j, r, grp, i int) int {
 		return x.at(j, []int{g.R, g.S}, r, i)
 	}
 	return x.at(j, []int{g.R, g.G, g.S}, r, grp, i)
+}
+
+// atRow is at for an operand whose rows are w wide.
+func (g grouped) atRow(x *exprs, j, w, r, grp, i int) int {
+	if w == g.G*g.S {
+		return g.at(x, j, r, grp, i)
+	}
+	return x.at(j, []int{g.R, w}, r, x.op(OpAdd, ir.U32, x.op(OpMul, ir.U32, grp, x.u(uint32(g.S))), i))
 }
 
 // decomposeClamp is the input held to [-Bound, Bound], or to the bounds

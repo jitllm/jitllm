@@ -148,7 +148,8 @@ func (c *Context) window(v graph.ValueID) int { return min(c.Int8.Window, c.widt
 // int8 is value v's int8 form, rows of w, as primitives: each window's
 // amax, its scale, the scale's inverse, each element's code, the codes
 // packed into words, each word's sum and the sums a Sums. The words and the
-// scales -- the windows' first, the sums' after -- are what it keeps.
+// scales are what it keeps, the scales a row's windows' and then its sums',
+// row after row (scaleRow), so its layout holds any count of rows.
 func (c *Context) int8(v graph.ValueID) []Prim {
 	q := c.Int8
 	U, F, I := ir.U32, ir.F32, ir.I32
@@ -175,14 +176,14 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	} else {
 		ds = d.scale(d.at(0, win, d.coord(0), d.coord(1)))
 	}
-	dix := flat(&d, d.coord(0), d.coord(1), nw)
+	dix := flat(&d, d.coord(0), d.coord(1), nw+ns)
 
 	ext := R * (nw + ns)
 	facts := Facts{Extents: map[int]int{1: ext}}
 	var r exprs
 	var refined []Prim
 	pick := []Operand{amax, scales}
-	if dd := r.load(1, flat(&r, r.coord(0), r.coord(1), nw)); c.exactDiv {
+	if dd := r.load(1, flat(&r, r.coord(0), r.coord(1), nw+ns)); c.exactDiv {
 		r.sel(F, r.op(OpLess, ir.Pred, r.f(0), dd), r.op(OpDiv, F, r.f(1), dd), r.f(0))
 	} else {
 		// The correctly rounded reciprocal in three maps, the estimate
@@ -190,8 +191,8 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 		// vector registers of a device that holds them.
 		var n, m exprs
 		est, rank := temp("est", F), temp("rank", U)
-		n.refine(n.load(1, flat(&n, n.coord(0), n.coord(1), nw)), n.op(OpDiv, F, n.f(127), n.at(0, win, n.coord(0), n.coord(1))))
-		m.recipRank(m.load(1, flat(&m, m.coord(0), m.coord(1), nw)), m.at(0, win, m.coord(0), m.coord(1)))
+		n.refine(n.load(1, flat(&n, n.coord(0), n.coord(1), nw+ns)), n.op(OpDiv, F, n.f(127), n.at(0, win, n.coord(0), n.coord(1))))
+		m.recipRank(m.load(1, flat(&m, m.coord(0), m.coord(1), nw+ns)), m.at(0, win, m.coord(0), m.coord(1)))
 		refined = []Prim{
 			{Kind: PrimMap, Shape: win, In: []Operand{amax, scales}, Out: est, Expr: n.e, Facts: facts},
 			{Kind: PrimMap, Shape: win, In: []Operand{est, scales}, Out: rank, Expr: m.e, Facts: facts},
@@ -222,8 +223,8 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 func (c *Context) int8Codes(v graph.ValueID) []Prim { return c.int8Pack(v, c.value(v), true, 0) }
 
 // int8Pack is the codes of value v packed Word to a word, each word's sum,
-// and the sums a Sums into its scales after the windows' nw a row: the codes
-// i32, or floats where float is set.
+// and the sums a Sums into its scales after each row's nw windows' (a row
+// nw+ns words): the codes i32, or floats where float is set.
 func (c *Context) int8Pack(v graph.ValueID, codes Operand, float bool, nw int) []Prim {
 	q := c.Int8
 	U, F, I := ir.U32, ir.F32, ir.I32
@@ -261,7 +262,7 @@ func (c *Context) int8Pack(v graph.ValueID, codes Operand, float bool, nw int) [
 	var f exprs
 	f.un(OpCvtF32, F, f.at(0, []int{R, nwd}, f.coord(0), f.op(OpAdd, U, f.op(OpMul, U, f.coord(1), f.u(uint32(per))), f.coord(2))))
 	var fi exprs
-	fi.op(OpAdd, U, fi.op(OpAdd, U, fi.op(OpMul, U, fi.coord(0), fi.u(uint32(ns))), fi.coord(1)), fi.u(uint32(R*nw)))
+	fi.op(OpAdd, U, fi.op(OpAdd, U, fi.op(OpMul, U, fi.coord(0), fi.u(uint32(nw+ns))), fi.coord(1)), fi.u(uint32(nw)))
 
 	ext := R * (nw + ns)
 	return []Prim{

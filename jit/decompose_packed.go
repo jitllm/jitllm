@@ -233,9 +233,9 @@ func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (
 	df := e.un(OpCvtF32, F, e.at(0, []int{R, rows, nsub}, er, erow, es))
 	xs := -1
 	if !codes {
-		xs = e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw))), e.op(OpDiv, U, first, e.u(uint32(win)))))
+		xs = e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw+ns))), e.op(OpDiv, U, first, e.u(uint32(win)))))
 	}
-	sumAt := e.op(OpAdd, U, e.u(uint32(R*nw)), e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(ns))), e.op(OpDiv, U, first, e.u(uint32(q.Sums)))))
+	sumAt := e.op(OpAdd, U, e.u(uint32(nw)), e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw+ns))), e.op(OpDiv, U, first, e.u(uint32(q.Sums)))))
 	csum := e.load(1, sumAt)
 	for t := 1; t < l.Sub/q.Sums; t++ {
 		csum = e.op(OpAdd, F, csum, e.load(1, e.op(OpAdd, U, sumAt, e.u(uint32(t)))))

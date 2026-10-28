@@ -83,13 +83,14 @@ func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 	word := s.load(1, at)
 	shift := s.op(OpMul, U, s.op(OpAnd, U, srow, s.u(1)), s.u(16))
 	wd := s.un(OpWidenHalf, F, s.op(OpShr, U, word, shift))
-	xd := s.load(2, s.op(OpAdd, U, s.op(OpMul, U, sr, s.u(uint32(nb))), sb))
+	nw := c.width(v) / c.window(v)
+	xd := s.load(2, s.op(OpAdd, U, s.op(OpMul, U, sr, s.u(uint32(nw+ns))), sb))
 	id := s.un(OpCvtF32, F, s.at(0, []int{R, P, nb}, sr, sp, sb))
 	if c.unsignedDot {
 		// The block's codes' sum: its Sums-wide sums after the windows'
 		// scales.
 		per := q8Block / q.Sums
-		sumAt := s.op(OpAdd, U, s.u(uint32(R*c.width(v)/c.window(v))), s.op(OpAdd, U, s.op(OpMul, U, sr, s.u(uint32(ns))), s.op(OpMul, U, sb, s.u(uint32(per)))))
+		sumAt := s.op(OpAdd, U, s.u(uint32(nw)), s.op(OpAdd, U, s.op(OpMul, U, sr, s.u(uint32(nw+ns))), s.op(OpMul, U, sb, s.u(uint32(per)))))
 		csum := s.load(2, sumAt)
 		for t := 1; t < per; t++ {
 			csum = s.op(OpAdd, F, csum, s.load(2, s.op(OpAdd, U, sumAt, s.u(uint32(t)))))
