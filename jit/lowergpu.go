@@ -368,6 +368,10 @@ func (e *lowerer) get(i int) ir.Value {
 	case OpTileMMA:
 		x, y, z := e.get(nd.A), e.get(nd.B), e.get(nd.C)
 		v = b.TileMMA(x, y, z)
+	case OpSubF16x2:
+		v = b.SubF16x2(e.get(nd.A), e.get(nd.B))
+	case OpFmaF16x2:
+		v = b.FmaF16x2(e.get(nd.A), e.get(nd.B), e.get(nd.C))
 	default:
 		e.fail("node %d: op %d", i, nd.Op)
 		return 0

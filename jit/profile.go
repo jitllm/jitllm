@@ -57,6 +57,7 @@ func gpuProfile() Profile {
 		Affine{Weights: []PrimKind{PrimMatrix}},
 		Prefetch{Staged: []PrimKind{PrimMatrix}},
 		Running{},
+		HalfPairs{Kinds: []PrimKind{PrimMatrix}},
 	}}
 }
 

@@ -395,6 +395,11 @@ func FloatSub(t Quant, k int) int {
 // driver may contract the one kernel's sums differently from the other's.
 func Gate2Exact(api string) bool { return api == "ptx" }
 
+// HalfPairs reports whether a backend's lowering runs packed binary16
+// arithmetic (ir.OpSubF16x2, ir.OpFmaF16x2): PTX's sub.rn.f16x2 and
+// fma.rn.f16x2.
+func HalfPairs(api string) bool { return api == "ptx" }
+
 // MatVec builds the decode matvec.
 //
 // One thread per row works because of the layout: weights are transposed at

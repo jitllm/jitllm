@@ -381,6 +381,11 @@ const (
 	OpTileLoad
 	OpTileSplat
 	OpTileMMA
+	// OpSubF16x2 is A less B and OpFmaF16x2 A times B plus C, each word two
+	// binary16 halves (ir.OpSubF16x2, ir.OpFmaF16x2), formed only for a
+	// device that states them (Device.HalfPairs).
+	OpSubF16x2
+	OpFmaF16x2
 	numOps
 )
 
@@ -524,7 +529,7 @@ func (n *Kernel) Elements() int {
 var opNames = [numOps]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
 	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "unpack", "upper", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy", "dot4", "widenhalf", "dot4u",
-	"tileload", "tilesplat", "tilemma"}
+	"tileload", "tilesplat", "tilemma", "subf16x2", "fmaf16x2"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {
