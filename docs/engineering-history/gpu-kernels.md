@@ -9594,3 +9594,40 @@ row where the composer's reads two.
   3050 Ti no slot (363 MB charged of 401 MB, a block 39 MB: 0 page-ins);
   it takes the least room, in blocks, at which the prompt pages in (the
   plain build one block, 26 page-ins; the composed build none, 8192).
+- **Predicted residual streams stated as ops, and buffers bound at an
+  offset.** The AltUp and LAuReL roles are named for what they do
+  (RoleStream*, RoleLowRank*, Config.PredStreams; codes and container bytes
+  unchanged). A block of S predicted streams reads each stream as an input
+  of its own and writes each as an output: the router's weights over
+  stream 0, the coefficients as windows of the stored tables weighted by
+  them, fma chains for the predictions, the block on stream 0's prediction
+  with the side branch joining the attention's residual, then the
+  correction and the per-layer input into streams 1 and up. The gaussian
+  top-k is the container's stated activation, which needed a pairwise
+  reduce (OrderTree, a map a level over powers of two); the per-layer
+  input reads the activation of a block past the sparse lead. Main's
+  stream-major residual is kept: the CPU binds stream k at its offset (a
+  stride per call), and the cards bind it through backend.View, a buffer at
+  a byte offset (CUDA's pointer plus offset, Vulkan's descriptor offset held
+  to minStorageBufferOffsetAlignment and refused by name off it, Metal's
+  setBuffer offset). The composer keeps each stream's storage its own
+  (Operand.Stream): without it the in-place pass stored stream 3's
+  prediction over stream 0's input and stream 0 read 0.086 from main. On
+  synth-gemma3n every block step serves on the CPU at 2.75e-07 (decode) and
+  2.77e-07 (a prompt of 8 and its decode) NMSE from main, and on an RTX
+  3050 Ti at 3.72e-11 (CUDA) and 1.02e-10 (Vulkan) from the host (the
+  same on a V100), every decode and prompt block served; the six
+  violations (prediction, correction, side branch, the gaussian on no block
+  and on every block, the correction's scale) read 0.090, 0.0037, 1.28, 1.36, 1.56-1.57 and
+  0.037 on every device. The input rows and the head stay the host's
+  (UncoveredStreams: the expansion and the collapse), and
+  hyper-connections and residual attention stay UncoveredStreams. A
+  block's slice of the per-layer inputs is now the side input's binding
+  offset rather than an offset in its form: Gemma 4 E2B's 35 blocks
+  compose into 22 CPU forms (decode and rows) in 12 min on a V100 box's
+  E5-2680 v4, where each block was a form of its own and G4's serving gate
+  passed 25 min unfinished. The CPU page fault of the serving gates now
+  reaches only the slots every arena holds: on E2B a sliding layer's arena
+  is smaller than a global one's, where the old fault's slot lies past it,
+  and a run of the gate on E2B crashed the Go runtime in the collector
+  after its page and row faults.
