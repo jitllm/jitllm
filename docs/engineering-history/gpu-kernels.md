@@ -9843,3 +9843,48 @@ row where the composer's reads two.
   against main's 79.7 and 79.8 (0.282x, 0.286x; 803 MB a token, main at 87%
   and composed at 25% of the 73.4 GB/s wall). Qwen3-0.6B Q8_0's A/A read
   0.964 and 0.962 (IQR/median 0.005) twice, so the harness refused it.
+- **The CPU's matvecs lost on the weight stream, not on the dot.** Decode
+  decomposed per kernel (`WithProfile` now times each composed CPU kernel,
+  `TestComposedCPUProfile`), on the V100 box's E5-2680 v4, node 0, 12 cores,
+  64 tokens after 32: Llama-3.2-1B Q4_K_M main 19.6 ms a token (51 tok/s,
+  41 GB/s, 70% of the 58.5 GB/s wall), composed 56.6 ms (0.35, 14.2 GB/s),
+  99% of it in kernels, 94% in matvecs -- the 128256-row head alone 16.1 ms
+  (28.8%, 13 GB/s), gate and up 550 us each (17 GB/s) -- and the small
+  kernels about 3 ms against main's 0.5; Qwen3-0.6B Q8_0 main 15.2 ms (88%
+  of 47.5 GB/s), composed 21.4 ms (0.71), its head 3.8 ms (18%). 129 and 225
+  pool regions a token (main 1) cost about 4 us each. Instructions retired
+  could not be counted: `perf_event_paranoid` is 4 on the laptop, the
+  homelab Xeon and the V100 box. On one core without VNNI the Q4_K kernel
+  reads 8.5 GB/s from L2, 4.7 from L3 and 2.3 from memory (Q8_0 24, 10.9,
+  3.5): the dot keeps up, the misses do not overlap. The device layout puts
+  a word of every row together, so a call's eight rows read 32 bytes a page
+  and jump a plane stride (rows x 4 bytes), which neither the L2 streamer
+  nor the stride prefetcher follows. `Ahead` (after `Regs`, CPU only)
+  prefetches each such weight load's line two trips on (`PREFETCHT0`, the
+  load's own pointer and offset plus two cursor steps), where a trip moves
+  the pointer at least 2 KB and the trip's loads through it are lines apart
+  (a run of consecutive lines is left to the streamer):
+  `TestAheadPrefetchesTheWeightStream` counts the prefetches with and
+  without VNNI and none at no trips or 16 rows. Llama-3.2-1B, the same
+  profile, one pass each: composed 72.3 ms without against 29.8 ms with
+  (main 23.6 and 17.6 in those passes: 0.33 to 0.59), the head 19.95 to
+  6.66 ms, gate and up 706 to 304 us; one trip ahead read 42.1 ms against
+  main's 29.6 (0.70) in a pass where main reached 48% of the wall, so the
+  distance is not settled. Qwen3-0.6B
+  Q8_0 is not resolved: 24.6 and 21.8 ms without, 27.4 (55% of the cores
+  busy) and 20.3 ms with. Interleaved (`TestComposedCPUAB`, n=20, the box
+  shared with the card agents), decode stayed unquotable: the composed arm's
+  IQR/median 0.13-0.34 where main's A/A held 0.04-0.10 (129 barriers a
+  token make it the arm a busy core stalls), but two passes agree: 0.4465
+  and 0.4265 before, 0.5577 and 0.5683 after (composed 29.7 against main's
+  52.8 tok/s, 47% of the 51.2 GB/s wall). Prefill at pp100 is quotable:
+  0.2115 before (74.7 against 342.0 tok/s, A/A 1.0066, IQR/median 0.057),
+  0.2356 after (79.6 against 336.6, A/A 0.9968, 0.055). Also: a load its reader takes as a memory operand
+  took a general register and a red-zone slot, and the lowering stored that
+  register after it each time (64 dead stores a trip in the Q4_K kernel, 8
+  in Q8_0's); `Regs` gives it none. Tried and not kept: strip-mining the
+  jam two vectors a trip (`Jam.Strip`) jams Q8_0 (+9% isolated) but the
+  registers refuse Q4_K and Q6_K, and the refusal unwidens them to a row a
+  lane (3x slower); halving the jam before unwidening forms them again at
+  one vector but the retries took a Llama block's composition past 25
+  minutes.
