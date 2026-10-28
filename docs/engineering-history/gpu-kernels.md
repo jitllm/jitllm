@@ -9488,3 +9488,28 @@ row where the composer's reads two.
   its host threads on node 0 reads 361 ms a 1024-token gpt-oss prompt
   composed and 214 ms on main, as recorded. PM1's 5.2 s ran pinned to node
   1 beside s43's CPU sets, and alone on node 0 the gap is gone.
+- **Per-layer embeddings and a shared history, stated as ops.** The input
+  rows' graph writes each row's per-layer inputs beside its row (the
+  per-layer table's row by the token times sqrt of a layer's width, plus
+  the scaled row's projection over sqrt of its width, normed per layer
+  slice, the sum over sqrt 2; an id past a table that stops short reads row
+  0), and every block of such a model reads them as its second input
+  (jit.Front's feed): its own slice, gated by its stated activation over
+  its gate of the residual, projected, normed and added before the output
+  scale. A block sharing another's history projects q alone and attends
+  the state kv@N, which the attention's decomposition already resolved;
+  the CPU device binds the source block's pages and the per-layer rows
+  (cpuArgSide), the tier the source's pool and its staged per-layer rows.
+  UncoveredKVShared, UncoveredPLE and the declines of a shared history are
+  gone: synth-gemma4-e and synth-gemma4-e-ragged went from 8 blocks refused
+  for per-layer embeddings, 4 for a shared history and both input rows
+  refused, to every block and the input rows stated. On the CPU device
+  every block step of both serves, decode and a prompt of 8 with its
+  decode, at 1.1e-10 and 6.6e-10 NMSE from main; the violations (each
+  block's per-layer gate the next block's, the sliding reader on an
+  earlier source, the post-norm unweighted) read 1.16, 0.256, 0.141 and
+  1.40, 0.083, 0.106. A front end reading the model without its per-layer
+  embeddings refuses it by the unbound gate, and one reading a reader as a
+  writer by the keys it does not store. The device holds no per-layer
+  table, so a card declines the input rows of such a model by name
+  (DeclineEmbedWeight) and the host fills them.

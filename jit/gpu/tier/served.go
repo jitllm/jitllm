@@ -1952,7 +1952,7 @@ func (g *devTier) prewarmComposedBlock(li int) {
 		if bs.csSWA != nil && bs.p.LocalRope(li) {
 			rcs = bs.csSWA
 		}
-		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
+		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
 			g.kvp.p, 1)
 		if err != nil {
 			g.LastErr = "the composed block: " + err.Error()
@@ -2020,7 +2020,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	if bb.csSWA != nil && bb.p.LocalRope(li) {
 		rcs = bb.csSWA
 	}
-	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.dRows, bb.p.MaxSeq,
+	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.dRows, bb.p.MaxSeq,
 		g.kvp.p, bb.rows)
 	if err != nil {
 		// A form that failed earlier was named then (servedFor).
