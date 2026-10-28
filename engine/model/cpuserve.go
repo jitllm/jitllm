@@ -1293,7 +1293,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 			o := bd.Operand
 			o.Copy = 0
 			bytes[o] = max(bytes[o], bd.Bytes)
-			if bd.Writes && bd.Operand.Kind == jit.OperandScratch {
+			if bd.Writes && bd.Operand.Kind == jit.OperandScratch && !callsOwnScratch(c, bd.Operand, bd.Bytes) {
 				cc.serial = true
 			}
 		}
@@ -1413,6 +1413,48 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 		return nil, err
 	}
 	return f, nil
+}
+
+// callsOwnScratch reports whether code c's calls each write a slice of
+// scratch o no other call writes: every address of o the code is passed
+// moves along every axis of its calls, each axis's step past the whole of
+// the axes inside it, as an operand laid out by its primitive's leading axes
+// is, and the code reaching no more of o than its calls' slices. A scratch
+// some call's address does not move along is every call's.
+func callsOwnScratch(c jit.Code, o jit.Operand, bytes int64) bool {
+	if len(c.Calls) == 0 {
+		return false
+	}
+	o.Copy = 0
+	seen := false
+	for _, a := range c.Args {
+		x := a.Operand
+		x.Copy = 0
+		if x != o {
+			continue
+		}
+		if a.Word || a.Coord > 0 || a.Length || a.Value || a.Moving || len(a.Per) != len(c.Calls) {
+			return false
+		}
+		for ax := range c.Calls {
+			inner := 1
+			if ax+1 < len(c.Calls) {
+				inner = a.Per[ax+1] * c.Calls[ax+1]
+			}
+			if a.Per[ax] <= 0 || a.Per[ax] < inner {
+				return false
+			}
+		}
+		elem := int64(4)
+		if a.Elem > 0 {
+			elem = int64(a.Elem)
+		}
+		if bytes <= 0 || bytes > int64(a.Per[0]*c.Calls[0])*elem {
+			return false
+		}
+		seen = true
+	}
+	return seen
 }
 
 // selOf is the selection gr's banks are read at, -1 for a graph that reads
