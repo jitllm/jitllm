@@ -10748,3 +10748,87 @@ row where the composer's reads two.
   on cuda:0 and vulkan 87 block steps served, 29 declined for no graph,
   2.9e-11 to 4.2e-11. Three QSA violations move it 0.19 to 0.88 on every
   device: the blocks not turned, scored by their best key, one fewer kept.
+- **The composed prompt decomposed against main's, a wide head's flash
+  form in the unit's memory, and a 128x64 matrix tile two a unit.** Where
+  the time goes, V100 card 7 (CUDA, sm_70), seam-wip 57d5c7e2, jitllm
+  speed's prompt with JITLLM_CUDA_KERNEL_TIMING, main / composed, ms:
+  Llama-3.2-1B at 512 tokens, all kernels 22.2 / 31.2, projections 17.3 /
+  24.8 (k and v 1.2 / 3.3), attention 1.4 / 2.4, maps, norms, rotary and
+  halves 3.5 / 3.8, head 0.27 / 0.27, 256 / 277 launches; at 2048, 99.3 /
+  140.9, projections 69.3 / 98.9 (k and v 4.7 / 13.3), attention 17.0 /
+  26.7, the rest 13.1 / 15.3, 1009 / 1099 launches; Llama-3.1-8B at 2048,
+  525.9 / 825.3, projections 420.6 / 581.0 (gate/up 201.7 / 280.9, q, o and
+  down 191.6 / 250.2, k and v 27.3 / 48.5), attention 54.7 / 190.9, the
+  rest 49.7 / 52.8. The servers' time to first token (PM3's flags, one
+  server on the card) reads 23.9 / 33.4, 104.3 / 145.6 and 565.5 / 839.8:
+  the server's time is its kernels' within 2 ms on the 1B and 40 ms (main)
+  and 15 ms (composed) on the 8B, so launches, gaps and host waits are not
+  the gap, the projections and the attention are. PM3's 0.51/0.43/0.30
+  (1B) and 0.59/0.47/0.34 (8B) do not reproduce at 57d5c7e2: 0.72/0.72/0.72
+  and 0.74/0.71/0.67. BenchmarkComposedMatrix had timed main's GemmVolta
+  over 2x2 warps, a tile the tier does not ship; at the shipping tile (1x4
+  warps, k split on a thin grid) main reads 1.26x faster and the
+  composer's projection is 1.57/1.48/1.40 of it (q/o, gate/up, down), the k
+  projection 2.27, not 1.22/1.13/0.95. The flash form took 32 rows a
+  workgroup on a head of 128 (two warps, 255 registers, 112 bytes
+  spilled) to stay in 48 KiB; a head too wide for half the profile's rows
+  there now searches the device's stated memory and takes 128 rows over 16
+  positions in 92 KiB (BenchmarkComposedFlash, 32 heads of 128 over 8, a
+  512-row chunk at 2048 positions: 2401-2512 -> 1440-1446 us; a head of 64
+  keeps 64 rows in 40 KiB, since 128 rows in 97 KiB read 3.6% slower in a
+  prompt). The matrix tile 128 rows by 64 outputs over 2x2 warps, two
+  workgroups a unit, reads at or under 128x128 over 2x4 on every shape
+  (q/o 1.55, k 1.69, gate/up 1.45, down 1.39 of main's shipping tile, two
+  sweeps); three a unit caps the registers and spills (1.81/1.93/1.59/1.69),
+  depth 64 over 2x2 spills too. In the prompt (kernels, three rounds
+  interleaved): 8B at 2048 823.5 -> 753.7 ms with the flash form, the tile
+  neutral (752.8); 1B 31.2 -> 29.8 ms at 512 and 141.0 -> 135.6 at 2048
+  with the tile, the flash form neutral there; gpt-oss-20b at 2048 861.6
+  -> 848.9. Servers, a second box (8 V100s, no other tenant), PM3's
+  flags, each arm a server on a card of its own, one httpbench
+  interleaving every arm round by round (8 rounds of 4), a cross-card A/A
+  first (four cards within 0.37-0.76%, IQR at most 0.009), two passes with
+  the cards rotated, time to first token over the parent's at
+  512/1024/2048: Llama-3.2-1B, the flash form 1.003/1.005/0.997 and
+  1.002/1.004/1.004, with the tile 0.961/0.964/0.955 and 0.963/0.963/0.961;
+  Llama-3.1-8B, the flash form 0.964/0.938/0.901 and 0.970/0.947/0.909,
+  with the tile 0.967/0.946/0.907 and 0.967/0.949/0.910. Main over the
+  parent in the same passes, 0.722/0.716/0.711 and 0.725/0.716/0.712 (1B),
+  0.737/0.707/0.663 and 0.711/0.684/0.641 (8B), so the composed prompt
+  rate over main's goes 0.72/0.72/0.71 -> 0.75/0.74/0.74 on the 1B and
+  0.72/0.70/0.65 -> 0.75/0.73/0.72 on the 8B. Every 1B answer is main's;
+  the 8B's parts from main's after ten tokens (". Question: what did the
+  committee ask each" against ". The committee reviewed the quarterly"),
+  the near tie PX3's head met, now under the flash form's reduction order.
+  Qwen3-30B-A3B (a server on two cards an arm, one pass): main over the
+  parent 0.565/0.541/0.483, the flash form 0.973/0.937/0.920, with the
+  tile 0.939/0.907/0.888, so 0.57/0.54/0.48 -> 0.60/0.60/0.54 of main's
+  rate; its composed answer parts from main's at the base already. A
+  composed gpt-oss-20b server on one 16 GiB card fails its first request
+  at the base ("tier: no room for another page of attention history: a
+  layer's 1 more page(s) need 1048576 bytes"), main's serves: the
+  composed form holds 14.46 GiB where main's 11.52 (jitllm speed places
+  23 of its 24 blocks). Its router, a row-tiled projection of 512 rows by
+  32 outputs over 2880, ran in tiles of 16 rows a thread on eight
+  workgroups, and groupSplitRows could not split it (a 128-thread
+  workgroup's 64 elements a segment do not divide 32): RowTiles now
+  doubles a tile past two only while the threads left give every unit
+  four warps, and a split's workgroup narrows until its segments hold
+  whole elements, so the router runs two rows a thread over 256
+  workgroups of 64: 92.9 -> 24.9 ms of a 2048-token prompt (main's 12.7),
+  the prompt's kernels 848.2 -> 780.3 ms at 2048 and 221.4 -> 203.5 at
+  512 (main's 389.1 and 100.8). gpt-oss-20b served on two cards an arm:
+  at 512 tokens main 107.6 ms, the tile's 238.1, with the router 219.9
+  (0.923 of the tile's, IQR 0.007); at 1024 both composed servers take
+  16.56 s against main's 213.3 ms, a cliff left open.
+  Left, by size: the projection's own rate (1.4-1.6 of main's shipping
+  tile on every shape at every tile tried); the 8B's attention, 115.8
+  against 54.7 ms, five products where main makes two (each float32
+  operand staged as two binary16, which TestComposedGPUAttendRows' 1e-8
+  band holds it to) and the weighted sums through workgroup memory every
+  block; k and v on a grid of 16-64 workgroups, where main splits k (q, k
+  and v as one launch would ride q's grid; Siblings refuses a capacity's
+  kernel); on gpt-oss-20b at 2048 its experts' input rows, gathered by a
+  parts kernel over 512 by 4 by 2880, 95.1 ms against main's 8.7, the
+  experts' projections at 1.58 of main's, and the sliding layers on the
+  running form (55.1 ms), the flash form refusing a window.
