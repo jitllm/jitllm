@@ -50,6 +50,7 @@ const (
 	DeclineSessions
 	DeclineExpertsHost
 	DeclineExpertsRows
+	DeclineEmbedStreams
 	NumDeclines
 )
 
@@ -94,6 +95,7 @@ var declineNames = [NumDeclines]string{
 	DeclineSessions:      "a row whose history the CPU's form does not bound (another model's session, or past its keys)",
 	DeclineExpertsHost:   "routed experts run on another device (a hybrid block's, on the host)",
 	DeclineExpertsRows:   "routed experts in pages at a step of several rows",
+	DeclineEmbedStreams:  "input rows over every residual stream into the rows of one",
 	DeclineISA:           "a CPU the composer's CPU lowering does not emit for (x86-64 below SSE4.1 and SSSE3)",
 }
 

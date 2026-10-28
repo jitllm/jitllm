@@ -2251,6 +2251,10 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return s.outW
 		case r == jlm.RoleStreamExpand && m.altProj.rows != 0:
 			return &m.altProj
+		case r == jlm.RolePLETokEmbd && m.pleTok.e != nil:
+			return &m.pleTok
+		case r == jlm.RolePLEModelProj && m.pleProj.e != nil:
+			return &m.pleProj
 		case r >= jlm.RoleStreamCollapse1 && int(r-jlm.RoleStreamCollapse1) < len(m.altUnembd):
 			return &m.altUnembd[r-jlm.RoleStreamCollapse1]
 		case s.vis != nil && r == jlm.RoleVProj:
@@ -2403,6 +2407,8 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 			return s.m.outB
 		case jlm.RoleOutputResScore:
 			return s.m.resOut
+		case jlm.RolePLEProjNorm:
+			return s.m.pleNorm
 		case jlm.RoleHCHeadNorm:
 			if s.m.q4eHead != nil {
 				return s.m.q4eHead.hc.norm

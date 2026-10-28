@@ -128,11 +128,10 @@ func gemma3nComposedViolations() []c6Violation {
 // served, decode and a prompt's rows (tier.ComposedPrompt), within the
 // device band of the host's logits, and each piece of the block taken out
 // (gemma3nComposedViolations) moving them past 100 times the clean worst and
-// past 1e-4. The streams' expansion at the input rows and their collapse
-// before the head are the host's (the CPU device's composed forms,
-// TestGemma3nServesComposedOnCPU): the input rows and a head over every
-// stream are refused by name (UncoveredStreams), and the card's head reads
-// the collapsed row.
+// past 1e-4. The input rows over every stream and the per-layer inputs, and
+// the streams' collapse before the head, are stated (a head over every
+// stream is refused by name, UncoveredStreams) and served on the card with
+// the blocks by TestStreamRowsServeOnTheCard.
 func TestGemma3nServesComposed(t *testing.T) {
 	const bound, promptLen = 1e-5, 3
 	ran := 0
@@ -146,8 +145,8 @@ func TestGemma3nServesComposed(t *testing.T) {
 			if c := coveredBlocks(m); c != m.Cfg.NLayer {
 				t.Fatalf("the front end states %d of %d blocks: %s (%v)", c, m.Cfg.NLayer, m.Uncovered(0), m.UncoveredErr(0))
 			}
-			if s := m.frontGraphs(); s.head != nil || s.headWhy != UncoveredStreams || s.embed != nil || s.embedWhy != UncoveredStreams {
-				t.Fatalf("the head and the input rows over several streams are %s and %s, want both refused by name", s.headWhy, s.embedWhy)
+			if s := m.frontGraphs(); s.head != nil || s.headWhy != UncoveredStreams || s.embed == nil || len(s.embed.Out) != m.Cfg.Streams()+1 {
+				t.Fatalf("the head over several streams is %s, want refused by name, and the input rows %s, want stated over every stream and the per-layer inputs", s.headWhy, s.embedWhy)
 			}
 			ids := g.IDs
 			host := m.NewState(len(ids) + 1)

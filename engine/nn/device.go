@@ -425,6 +425,16 @@ type Head struct {
 	// false), and PosEmbd a learned position table, zero where the model has
 	// none: the tables Embed reads beside the head.
 	TokEmbd, PosEmbd Weight
+	// Streams are the tensors the input rows bind past the embedding and the
+	// position table, for a model of several residual streams: the
+	// expansion's and the per-layer inputs' (Graph unset).
+	Streams *RowsPart
+	// Collapse is the row Graph reads from every residual stream, for a
+	// model of several, its tensors by role; nil where the front end states
+	// none. Collapses is the device's answer at PrepHead: a call of the head
+	// alone hands it every stream, which it collapses itself.
+	Collapse  *RowsPart
+	Collapses bool
 	// NoCPU says the caller did not list the CPU among the devices
 	// (model.WithCPU): a device that pages blocks takes the projection while
 	// the slots a swap needs are left, rather than only when it costs none.

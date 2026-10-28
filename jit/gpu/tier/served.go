@@ -59,12 +59,15 @@ const (
 	// partRows is a picture's rows apart from its blocks: a tower's entry
 	// or projector (picrows.go).
 	partRows
+	// partCollapse is the row a head reads from every residual stream
+	// (collapse.go).
+	partCollapse
 	numParts
 )
 
 var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block",
 	partRope: "table", partSample: "sample", partEmbed: "input rows", partEmbedRows: "prompt input rows", partCopy: "copy",
-	partTower: "tower block", partRows: "picture rows"}
+	partTower: "tower block", partRows: "picture rows", partCollapse: "streams' collapse"}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
@@ -938,6 +941,9 @@ const (
 	// ComposedRows serves a picture's rows apart from its blocks from their
 	// graphs: a tower's entry and projector (nn.RowsPart, picrows.go).
 	ComposedRows Parts = 1 << partRows
+	// CollapsedHead counts the collapse of every stream a head reads, which
+	// the composer serves where it serves the head (ComposedHead).
+	CollapsedHead Parts = 1 << partCollapse
 	// ComposedStep is every part of a step: its input rows, tables, blocks
 	// (a prompt chunk's and a picture's among them), head and token.
 	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedPrompt | ComposedTower | ComposedRows | ComposedHead | ComposedSample
@@ -949,36 +955,37 @@ const (
 type partDecline = jit.Decline
 
 const (
-	partServes      = jit.DeclineServes
-	partNoGraph     = jit.DeclineNoGraph
-	partPersist     = jit.DeclinePersist
-	partSkip        = jit.DeclineSkip
-	partNoPool      = jit.DeclineNoPool
-	partPrefill     = jit.DeclinePrefill
-	partStream      = jit.DeclineStream
-	partFeeds       = jit.DeclineFeeds
-	partWindow      = jit.DeclineWindow
-	partHeadShape   = jit.DeclineHeadShape
-	partHeadNorm    = jit.DeclineHeadNorm
-	partPick        = jit.DeclinePick
-	partCaller      = jit.DeclineCaller
-	partNoRoom      = jit.DeclineNoRoom
-	partHeadBias    = jit.DeclineHeadBias
-	partHeadOther   = jit.DeclineHeadOther
-	partNoTable     = jit.DeclineNoTable
-	partTableHeld   = jit.DeclineTableHeld
-	partNoAxes      = jit.DeclineNoAxes
-	partNoSample    = jit.DeclineNoSample
-	partNoEmbed     = jit.DeclineNoEmbed
-	partEmbedFormat = jit.DeclineEmbedFormat
-	partEmbedWeight = jit.DeclineEmbedWeight
-	partEmbedToken  = jit.DeclineEmbedToken
-	partExperts     = jit.DeclineExperts
-	partExpertsHost = jit.DeclineExpertsHost
-	partExpertsRows = jit.DeclineExpertsRows
-	partRecurrent   = jit.DeclineRecurrent
-	partNoWeight    = jit.DeclineNoWeight
-	numPartDeclines = jit.NumDeclines
+	partServes       = jit.DeclineServes
+	partNoGraph      = jit.DeclineNoGraph
+	partPersist      = jit.DeclinePersist
+	partSkip         = jit.DeclineSkip
+	partNoPool       = jit.DeclineNoPool
+	partPrefill      = jit.DeclinePrefill
+	partStream       = jit.DeclineStream
+	partFeeds        = jit.DeclineFeeds
+	partWindow       = jit.DeclineWindow
+	partHeadShape    = jit.DeclineHeadShape
+	partHeadNorm     = jit.DeclineHeadNorm
+	partPick         = jit.DeclinePick
+	partCaller       = jit.DeclineCaller
+	partNoRoom       = jit.DeclineNoRoom
+	partHeadBias     = jit.DeclineHeadBias
+	partHeadOther    = jit.DeclineHeadOther
+	partNoTable      = jit.DeclineNoTable
+	partTableHeld    = jit.DeclineTableHeld
+	partNoAxes       = jit.DeclineNoAxes
+	partNoSample     = jit.DeclineNoSample
+	partNoEmbed      = jit.DeclineNoEmbed
+	partEmbedFormat  = jit.DeclineEmbedFormat
+	partEmbedWeight  = jit.DeclineEmbedWeight
+	partEmbedToken   = jit.DeclineEmbedToken
+	partExperts      = jit.DeclineExperts
+	partExpertsHost  = jit.DeclineExpertsHost
+	partExpertsRows  = jit.DeclineExpertsRows
+	partEmbedStreams = jit.DeclineEmbedStreams
+	partRecurrent    = jit.DeclineRecurrent
+	partNoWeight     = jit.DeclineNoWeight
+	numPartDeclines  = jit.NumDeclines
 )
 
 // DeclineName is the reason a decline count is kept under, by its index in
@@ -1607,6 +1614,12 @@ func (bs *blockScratch) embedServes() partDecline {
 	}
 	for _, o := range bs.embedGraph.Ops {
 		for _, w := range o.Weight {
+			if w.Rows == 0 {
+				if bs.embSV[w.Role] == nil {
+					return partEmbedWeight
+				}
+				continue
+			}
 			r := bs.embTable(w.Role)
 			if r == nil || !r.ok {
 				return partEmbedWeight
@@ -1628,7 +1641,7 @@ func (bs *blockScratch) embTable(role jlm.Role) *resident {
 	case jlm.RolePosEmbd:
 		return bs.posW
 	}
-	return nil
+	return bs.embSW[role]
 }
 
 // servedEmbed is the input rows served at R rows: the token embedding and a
@@ -1647,8 +1660,17 @@ func (g *devTier) servedEmbed(bs *blockScratch, R int) (*servedPart, error) {
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		formats := map[jlm.Role]jlm.Type{}
 		weights := map[jlm.Role]*resident{}
+		vectors := map[jlm.Role]backend.Buf{}
 		for _, o := range gr.Ops {
 			for _, w := range o.Weight {
+				if w.Rows == 0 {
+					v := bs.embSV[w.Role]
+					if v == nil {
+						return composedPart{}, fmt.Errorf("the composed input rows read %v, which the device does not hold", w.Role)
+					}
+					formats[w.Role], vectors[w.Role] = jlm.TypeF32, v
+					continue
+				}
 				r := bs.embTable(w.Role)
 				if r == nil {
 					return composedPart{}, fmt.Errorf("the composed input rows read %v, which the device does not hold", w.Role)
@@ -1661,7 +1683,7 @@ func (g *devTier) servedEmbed(bs *blockScratch, R int) (*servedPart, error) {
 			}
 		}
 		cp := composedPart{kind: partEmbed, part: jit.PartEmbed, graph: g.embedFault(gr), formats: formats, weights: weights,
-			tables: map[string]backend.Buf{"tokens": bs.embTok}}
+			vectors: vectors, tables: map[string]backend.Buf{"tokens": bs.embTok}}
 		if bs.posW != nil {
 			cp.tables["rope.pos"] = bs.embPos
 		}
@@ -1673,6 +1695,9 @@ func (g *devTier) servedEmbed(bs *blockScratch, R int) (*servedPart, error) {
 	// Bound again every step: a rebuilt scratch holds buffers of its own.
 	for role := range sv.sl.weights {
 		sv.sl.weights[role] = bs.embTable(role)
+	}
+	for role := range sv.sl.vectors {
+		sv.sl.vectors[role] = bs.embSV[role]
 	}
 	sv.sl.tables["tokens"] = bs.embTok
 	if _, ok := sv.sl.tables["rope.pos"]; ok {
@@ -2255,17 +2280,7 @@ func (g *devTier) servedCopy(bs *blockScratch, rows int) (*servedPart, error) {
 	if w != bs.p.NEmbd || rows > bs.rows {
 		return nil, fmt.Errorf("tier: a block output of %d rows of %d apart from x, where the scratch holds %d of %d", rows, w, bs.rows, bs.p.NEmbd)
 	}
-	gr := g.copyGraphs[w]
-	if gr == nil {
-		gr = (&graph.Copy{Width: w}).Build()
-		if g.copyGraphs == nil {
-			g.copyGraphs = map[int]*graph.Graph{}
-		}
-		g.copyGraphs[w] = gr
-	}
-	return g.servedFor(servedKey{kind: partCopy, graph: gr, rows: rows}, func() (composedPart, error) {
-		return composedPart{kind: partCopy, graph: gr}, nil
-	})
+	return g.servedRowCopy(w, rows)
 }
 
 // prewarmComposed forms every placed block's part and the head's at
@@ -2556,6 +2571,18 @@ func (g *devTier) prewarmComposedHead() {
 			if _, err := g.servedSample(gr); err != nil {
 				g.LastErr = "the composed sampler's candidates or label pick: " + err.Error()
 			}
+		}
+		g.prewarming = false
+	}
+	// The collapse of every stream a call of the head alone runs, at a
+	// decode step's row.
+	if !g.NoPromptPrewarm && bs != nil && bs.collapse != nil {
+		g.prewarming = true
+		if _, err := g.servedCollapse(bs.collapse, 1); err != nil {
+			g.LastErr = "the composed streams' collapse: " + err.Error()
+		}
+		if _, err := g.servedRowCopy(bs.p.NEmbd, 1); err != nil {
+			g.LastErr = "the composed copy of the streams' collapse: " + err.Error()
 		}
 		g.prewarming = false
 	}

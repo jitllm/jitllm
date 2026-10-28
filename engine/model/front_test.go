@@ -141,17 +141,19 @@ func TestFrontRefusesSeveralStreams(t *testing.T) {
 					streams++
 				}
 			}
-			// A head and input rows over every stream are refused for them by
-			// name; the collapse to one row and the copies are the CPU's
+			// A head over every stream is refused for them by name; the
+			// input rows write every stream (TestStreamRowsServeOnTheCard),
+			// and the collapse to one row is the CPU's and the card's
 			// (TestDeepseek4ServesComposedOnCPU).
 			blocks := streams
-			for _, at := range []int{-1, -2} {
-				if why := m.Uncovered(at); why != UncoveredStreams {
-					t.Fatalf("part %d is refused by %q, want %q", at, why, UncoveredStreams)
-				}
-				streams++
+			if why := m.Uncovered(-1); why != UncoveredStreams {
+				t.Fatalf("the head is refused by %q, want %q", why, UncoveredStreams)
 			}
-			t.Logf("%d streams: %d of %d blocks refused for them, the rest earlier; the head and the input rows too", m.Cfg.Streams(), blocks, m.Cfg.NLayer)
+			streams++
+			if why, em := m.Uncovered(-2), m.frontGraphs().embed; why != Covered || em == nil || len(em.Out) != m.Cfg.Streams() {
+				t.Fatalf("the input rows are %q, want stated over every stream", why)
+			}
+			t.Logf("%d streams: %d of %d blocks refused for them, the rest earlier; the head too", m.Cfg.Streams(), blocks, m.Cfg.NLayer)
 			byStreams += streams
 		})
 	}

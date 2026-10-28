@@ -33,6 +33,11 @@ type rowsState struct {
 	lc                    launcher
 	fn                    func(backend.Session)
 	ins, outs             [1]backend.Buf
+	// coll is the row a head reads from every stream, and collOut and
+	// collIn the collapse's output and the first stream it is copied over
+	// (collapse.go).
+	coll            backend.Buf
+	collOut, collIn [1]backend.Buf
 }
 
 // RunRows runs p over a picture's live rows on the card holding the
@@ -316,7 +321,7 @@ func (g *devTier) rowsVector(v []float32) (backend.Buf, error) {
 // the residents' (freed with them).
 func (g *devTier) closeRows() {
 	rs := &g.rows
-	for _, b := range [...]*backend.Buf{&rs.in, &rs.out, &rs.req, &rs.pos} {
+	for _, b := range [...]*backend.Buf{&rs.in, &rs.out, &rs.req, &rs.pos, &rs.coll} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil

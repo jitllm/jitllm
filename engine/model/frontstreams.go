@@ -342,34 +342,46 @@ func (m *Model) magMatched(b *graph.Builder, p, r graph.ValueID) graph.ValueID {
 	return mapRow(b, "mag", graph.Attrs{Fn: graph.MapMul}, nil, d, k, p)
 }
 
+// expandsStreams says the input rows' streams past the first are made from
+// it: predicted from it, or copies of it.
+func (m *Model) expandsStreams() bool {
+	c := m.Cfg
+	return c.predictsStreams() || c.gatesStreams() || c.mixesStreamsSinkhorn()
+}
+
+// streamExpand is the input rows' streams 1 and up from stream 0, x:
+// copies of it, or its predictions matched to its magnitude.
+func (m *Model) streamExpand(b *graph.Builder, x graph.ValueID) []graph.ValueID {
+	c := m.Cfg
+	s, d := c.Streams(), c.NEmbd
+	var out []graph.ValueID
+	if c.gatesStreams() || c.mixesStreamsSinkhorn() {
+		for range s - 1 {
+			out = append(out, streamCopy(b, x))
+		}
+		return out
+	}
+	p := b.MatVec(x, jlm.RoleStreamExpand, (s-1)*d)
+	for k := 1; k < s; k++ {
+		pk := b.Emit(graph.OpSlice, []graph.ValueID{p}, []graph.Result{{Name: "expand", Width: d}}, nil,
+			graph.Attrs{Offset: (k - 1) * d, Width: d}, nil, nil)[0]
+		out = append(out, m.magMatched(b, pk, x))
+	}
+	return out
+}
+
 // streamExpandGraph is the input rows' streams 1 and up from stream 0:
 // its one input stream 0, an output a stream past it; nil where the model
 // predicts no streams and copies none. A bank of checkpoints has none: a
 // block writes each checkpoint before any block reads it.
 func (m *Model) streamExpandGraph() (*graph.Graph, error) {
-	c := m.Cfg
-	copies := c.gatesStreams() || c.mixesStreamsSinkhorn()
-	if !c.predictsStreams() && !copies {
+	if !m.expandsStreams() {
 		return nil, nil
 	}
 	f, _ := m.inventory(jlm.DenseBlock)
-	s, d := c.Streams(), c.NEmbd
 	b := graph.NewBlock(-1)
-	x := b.In("x", d)
-	var out []graph.ValueID
-	if copies {
-		for range s - 1 {
-			out = append(out, streamCopy(b, x))
-		}
-	} else {
-		p := b.MatVec(x, jlm.RoleStreamExpand, (s-1)*d)
-		for k := 1; k < s; k++ {
-			pk := b.Emit(graph.OpSlice, []graph.ValueID{p}, []graph.Result{{Name: "expand", Width: d}}, nil,
-				graph.Attrs{Offset: (k - 1) * d, Width: d}, nil, nil)[0]
-			out = append(out, m.magMatched(b, pk, x))
-		}
-	}
-	b.Out(out...)
+	x := b.In("x", m.Cfg.NEmbd)
+	b.Out(m.streamExpand(b, x)...)
 	if err := graph.Verify(b.G, f); err != nil {
 		return nil, fmt.Errorf("the streams' expansion does not verify: %w", err)
 	}

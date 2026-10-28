@@ -1481,16 +1481,18 @@ func (m *Model) perLayerInputs(b *graph.Builder, f graph.Facts, x graph.ValueID)
 
 // embedGraph is the step's input rows: each row's token's row of the
 // embedding, times the stored scale, plus its position's row where the
-// container stores a position table; then, for a model of per-layer
-// embeddings, each row's per-layer inputs, the blocks' second input.
+// container stores a position table; for a model of several streams the
+// front end expands, every stream past the first from it (streamExpand);
+// then, for a model of per-layer embeddings, each row's per-layer inputs,
+// the blocks' last input. A bank of checkpoints writes the running
+// residual's rows alone: a block writes each checkpoint before any block
+// reads it.
 func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	f, _ := m.inventory(jlm.DenseBlock)
 	_, types := f.Inventory[jlm.RoleTokenTypes]
 	switch {
-	case c.Streams() > 1 && !c.mixesStreams():
-		// A bank of checkpoints reads only the running residual's rows
-		// before a block writes the rest; other streams start from them.
+	case c.Streams() > 1 && !c.mixesStreams() && !m.expandsStreams():
 		return nil, UncoveredStreams, nil
 	case types || m.hardEmbd != nil:
 		return nil, UncoveredEmbedRows, nil
@@ -1508,6 +1510,9 @@ func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 		x = b.Add(x, pos)
 	}
 	b.Out(x)
+	if m.expandsStreams() {
+		b.Out(m.streamExpand(b, x)...)
+	}
 	if c.PLEDim != 0 {
 		b.Out(m.perLayerInputs(b, f, x))
 	}

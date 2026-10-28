@@ -1,6 +1,7 @@
 package model
 
 import (
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
@@ -14,6 +15,40 @@ import (
 // Kimi-K3's residual attention): a device runs the blocks and hands every
 // stream back, and never folds the head into them.
 func (c *Config) streamHead() bool { return c.PredStreams != 0 || c.DSV4() || c.ResAttn() || c.Q4E() }
+
+// streamsPart is the tensors graph g binds past the head's own and the
+// embedding, by role, as the CPU binds them with no block (cpuRoleWeight,
+// cpuRoleVector): a device's for the streams' expansion in the input rows
+// and their collapse before the head. nil where g is, or binds a tensor the
+// model does not hold.
+func (s *State) streamsPart(g *graph.Graph) *nn.RowsPart {
+	if g == nil {
+		return nil
+	}
+	p := &nn.RowsPart{Graph: g, Rows: 1, Weights: map[jlm.Role]nn.Weight{}, Vectors: map[jlm.Role][]float32{}}
+	for _, o := range g.Ops {
+		for _, b := range o.Weight {
+			switch b.Role {
+			case jlm.RoleOutput, jlm.RoleTokenEmbd, jlm.RolePosEmbd:
+				continue
+			}
+			if b.Rows == 0 {
+				v := s.cpuRoleVector(-1, nil, b.Role)
+				if len(v) == 0 {
+					return nil
+				}
+				p.Vectors[b.Role] = v
+				continue
+			}
+			t := s.cpuRoleWeight(-1, nil, b.Role)
+			if t == nil || t.e == nil {
+				return nil
+			}
+			p.Weights[b.Role] = wt(*t)
+		}
+	}
+	return p
+}
 
 // expandStreams fills every stream of n rows of x from its embedding in
 // stream 0.

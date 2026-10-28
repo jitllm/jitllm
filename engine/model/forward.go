@@ -1625,6 +1625,9 @@ func (s *State) newHead() *nn.Head {
 	if s.m.posEmbd.e != nil {
 		h.PosEmbd = wt(s.m.posEmbd)
 	}
+	if c.Streams() > 1 {
+		h.Streams, h.Collapse = s.streamsPart(f.embed), s.streamsPart(f.collapse)
+	}
 	// The final softcap rides the head: a tier that takes it applies the cap on
 	// the device (nn.Head.Softcap), which is what lets a gemma2 token end in
 	// the device argmax instead of a 256,000-float readback.
@@ -3710,6 +3713,11 @@ func (s *State) embedOnDevice() bool {
 	if !s.tokFill || s.ldEmbed == nil || s.head == nil || !s.head.GatherRow || s.lo != 0 || !s.devAt(0) {
 		return false
 	}
+	// Input rows that write the per-layer inputs on the device leave the
+	// host's unfilled: no block may run on the host.
+	if s.c.PLEDim != 0 && s.c.Streams() > 1 && !s.allOnDevice() {
+		return false
+	}
 	s.tok1[0] = s.tok
 	return s.ldEmbed.EmbedRows(s.tok1[:], s.pos, s.resid())
 }
@@ -4514,24 +4522,12 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		m.trace(li, "ffn_resid", s.x)
 	}
 	// AltUp's head reads the streams' mean, written into stream 0 (altup.go);
-	// DeepSeek V4's their collapse (ds4.go).
-	if c.PredStreams != 0 {
-		if err := s.altCollapse(s.xa, 1); err != nil {
-			return nil, err
-		}
-	}
-	if c.DSV4() {
-		if err := s.ds4Collapse(s.xa, 1); err != nil {
-			return nil, err
-		}
-	}
-	if c.ResAttn() {
-		if err := s.k3Collapse(s.xa, 1); err != nil {
-			return nil, err
-		}
-	}
-	if c.Q4E() {
-		if err := s.q4eCollapse(s.xa, 1); err != nil {
+	// DeepSeek V4's their collapse (ds4.go). A device that collapses the
+	// streams itself (nn.Head.Collapses) is handed them as they are, and the
+	// host collapses them only where it refuses the call.
+	devCollapse := s.head != nil && !folded && s.head.Collapses && s.rows == nil && s.lo < c.NLayer
+	if c.streamHead() && !devCollapse {
+		if err := s.collapseStreams(s.xa, 1); err != nil {
 			return nil, err
 		}
 	}
@@ -4552,6 +4548,11 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			return nil, err
 		} else if !s.fallsBack() {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
+		}
+	}
+	if devCollapse && !done {
+		if err := s.collapseStreams(s.xa, 1); err != nil {
+			return nil, err
 		}
 	}
 	// The CPU's composed head applies every stage of the head's graph.

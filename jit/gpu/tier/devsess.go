@@ -660,6 +660,8 @@ func (g *devTier) shareHead(dst, src *blockScratch) bool {
 	dst.headHidden, dst.sampleTopK, dst.pickGraph, dst.pickHead = src.headHidden, src.sampleTopK, src.pickGraph, src.pickHead
 	dst.hNorm, dst.hNormB, dst.hBias, dst.headCap = src.hNorm, src.hNormB, src.hBias, src.headCap
 	dst.headEmbeds, dst.embScale, dst.embedGraph = src.headEmbeds, src.embScale, src.embedGraph
+	dst.collapse = src.collapse
+	dst.embSW, dst.embSV = src.embSW, src.embSV
 	dst.embW, dst.posW, dst.embWhy = src.embW, src.posW, src.embWhy
 	dst.headShared = true
 	n := src.mvHead.rows

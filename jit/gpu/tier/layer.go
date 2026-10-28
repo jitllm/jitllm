@@ -14,6 +14,7 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -2298,6 +2299,15 @@ type blockScratch struct {
 	embWhy         partDecline
 	embTok, embPos backend.Buf
 	embCast        backend.Buf
+	// embOuts is the buffers a step's input rows write (embedOuts).
+	embOuts [partIO]backend.Buf
+	// embSW and embSV are the tensors the input rows bind past the token
+	// embedding and the position table (nn.Head.Streams), by role.
+	embSW map[jlm.Role]*resident
+	embSV map[jlm.Role]backend.Buf
+	// collapse is the streams' collapse a call of the head alone runs
+	// first (collapse.go), nil where the head reads one row.
+	collapse *nn.RowsPart
 	// spanK and spanOff move a batched chunk's last residual row into this
 	// (decode) scratch's x, so the output projection can ride the chunk's own
 	// submission (layersOnce's folded head). Made on first use.
@@ -6547,6 +6557,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	bs.headGraph, bs.headHidden, bs.sampleGraph, bs.embedGraph = h.Graph, h.HiddenGraph, h.Sample, h.Embed
 	bs.sampleTopK, bs.pickGraph, bs.pickHead = h.SampleTopK, h.PickGraph, h.PickHead
 	h.GatherRow = g.Composed&ComposedEmbed != 0 && h.Embed != nil
+	g.prepCollapse(bs, h)
 	// The head is the model's: a second State on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
 	// first ones, leaking both and charging the budget twice.
@@ -7880,6 +7891,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		headWhy = partPick
 	}
 	headSrv := composedHead && headWhy == partServes
+	// A head alone over every stream collapses them into the first before it
+	// (collapse.go): the caller handed them uncollapsed.
+	collapse := head != nil && lo == hi && hb.collapse != nil && p.Streams() > 1
 	ragN, ragRuns, ragHead, ragMap := 0, 0, 0, 0
 	if bs.pkv != nil {
 		// The width, and whether the decode plan runs beside it (ragAlone):
@@ -7964,6 +7978,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		fold: fold, ropeDev: ropeDev, argmax: argmax, sampleK: sampleK, samplePen: samplePen, pick: pick, ragHead: ragHead, parOK: parOK,
 		allRows: allRows, hNorm: hNorm, headWhy: headWhy, pickOnly: pickOnly,
 		pickHeadSrv: pickHeadSrv, pickSrv: pickSrv,
+		collapse:   collapse,
 		headCapped: head != nil && head.Stages&nn.HeadCap != 0,
 	}
 	if g.subFn == nil {
@@ -8083,6 +8098,8 @@ type submitArgs struct {
 	headWhy    partDecline
 	pickOnly   bool
 	headCapped bool
+	// collapse says the head reads the collapse of every stream (collapse.go).
+	collapse bool
 	// pickHeadSrv and pickSrv say the composer picks the labels: its head
 	// over the picked rows alone, or its gather over the logits.
 	pickHeadSrv, pickSrv bool
@@ -8120,6 +8137,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
 	headWhy, pickOnly, headCapped := a.headWhy, a.pickOnly, a.headCapped
 	pickHeadSrv, pickSrv := a.pickHeadSrv, a.pickSrv
+	collapse := a.collapse
 	var err error
 	direct := false
 	defer func() { a.err, a.direct = err, direct }()
@@ -10257,6 +10275,9 @@ func (g *devTier) layersSession(s backend.Session) {
 		if pendX != nil {
 			addRes(pendX, pendY, bs.x)
 		}
+		if collapse && err == nil {
+			err = g.runCollapse(lc, hb.collapse, bs, R)
+		}
 		// The head the composer serves (Config.Composed), where it is asked
 		// for this one: the step fails if it does not form. A graph that
 		// states the final softcap writes the capped logits, where the
@@ -10637,8 +10658,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.EmbedLaunches++
 		}
 		sv, serr := g.servedEmbed(g.bs, R)
+		var outs []backend.Buf
+		if serr == nil {
+			outs, serr = bs.embedOuts(g.bs.embStreams(), R)
+		}
 		if serr == nil && err == nil {
-			serr = sv.runAs(g, lc, sv.inst, pe.kind, nil, []backend.Buf{bs.x})
+			serr = sv.runAs(g, lc, sv.inst, pe.kind, nil, outs)
 		}
 		if err == nil {
 			err = serr
@@ -10654,7 +10679,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	} else {
 		w(bs.x, f32b(hx))
 	}
-	if bs.pleIn != nil {
+	// Input rows over every stream write the per-layer inputs too
+	// (embedOuts).
+	if bs.pleIn != nil && !(embedSrv && g.bs.embStreams() > 1) {
 		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
 	}
 	switch {

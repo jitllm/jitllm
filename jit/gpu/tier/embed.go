@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -100,12 +101,17 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 // embedFits is why the rows of tokens ids at positions pos onwards into dst
 // are not the composer's input rows, serves where they are: each token a row
 // of the embedding, each position one of the position table's, and dst the
-// rows' width, or every stream's where the graph writes the first.
+// rows' width, or every stream's where the graph writes the first or every
+// stream.
 func (bs *blockScratch) embedFits(ids []int32, pos int, dst []float32) partDecline {
 	w := bs.embW
-	// A residual of several streams, stream-major, takes the rows in its
-	// first stream, the graph's one output.
-	if n := len(ids) * w.k; len(dst) != n && (len(dst) != n*bs.p.Streams() || len(bs.embedGraph.Out) != 1) {
+	n, s := len(ids)*w.k, bs.embStreams()
+	switch {
+	case s > 1 && len(dst) != n*s:
+		// The streams past the first are the graph's too: the destination
+		// is the whole stream-major residual.
+		return partEmbedStreams
+	case s == 1 && len(dst) != n && len(dst) != n*bs.p.Streams():
 		return partEmbedToken
 	}
 	for _, id := range ids {
@@ -117,6 +123,38 @@ func (bs *blockScratch) embedFits(ids []int32, pos int, dst []float32) partDecli
 		return partEmbedToken
 	}
 	return partServes
+}
+
+// embStreams is how many residual streams the input rows' graph writes: its
+// outputs but the rows' per-layer inputs, its last where the plan has them.
+func (bs *blockScratch) embStreams() int {
+	n := len(bs.embedGraph.Out)
+	if bs.p.PLEWidth != 0 {
+		n--
+	}
+	return n
+}
+
+// embedOuts is the buffers input rows writing s streams write at R rows of
+// bs: x, or every stream's view of it, then the per-layer inputs where the
+// plan has them.
+func (bs *blockScratch) embedOuts(s, R int) ([]backend.Buf, error) {
+	if s <= 1 {
+		bs.embOuts[0] = bs.x
+		return bs.embOuts[:1], nil
+	}
+	in, out, err := bs.servedStreams(R, bs.p.Streams())
+	if err != nil {
+		return nil, err
+	}
+	n := copy(bs.embOuts[:], out[:s])
+	if bs.p.PLEWidth != 0 {
+		// servedStreams' inputs are the streams' views, then the per-layer
+		// inputs.
+		bs.embOuts[n] = in[len(in)-1]
+		n++
+	}
+	return bs.embOuts[:n], nil
 }
 
 // prepEmbed holds the tables the head's input rows read (nn.Head.Embed)
@@ -135,6 +173,35 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 	}
 	if len(h.PosEmbd.Data) > 0 && bs.embWhy == partServes {
 		bs.posW, bs.embWhy = g.embedTable(h.PosEmbd)
+	}
+	clear(bs.embSW)
+	clear(bs.embSV)
+	p := h.Streams
+	if p == nil || bs.embWhy != partServes {
+		return
+	}
+	// The expansion's and the per-layer inputs' tensors, held as the
+	// picture rows' are, at no block's slot.
+	if bs.embSW == nil {
+		bs.embSW, bs.embSV = map[jlm.Role]*resident{}, map[jlm.Role]backend.Buf{}
+	}
+	for role, w := range p.Weights {
+		r, err := g.rowsWeight(w)
+		if err != nil {
+			g.LastErr = fmt.Sprintf("the input rows' %v: %v", role, err)
+			bs.embWhy = partNoRoom
+			return
+		}
+		bs.embSW[role] = r
+	}
+	for role, v := range p.Vectors {
+		b, err := g.rowsVector(v)
+		if err != nil {
+			g.LastErr = fmt.Sprintf("the input rows' %v: %v", role, err)
+			bs.embWhy = partNoRoom
+			return
+		}
+		bs.embSV[role] = b
 	}
 }
 
@@ -370,6 +437,7 @@ func (g *devTier) materializeComposed(pe *embPend) {
 	}
 	rd := &g.embRd
 	rd.tok, rd.pos = g.embedWords(pe, R)
+	rd.rows = R
 	if rd.composedFn == nil {
 		rd.composedFn = g.composedSession
 	}
@@ -384,6 +452,7 @@ type embRead struct {
 	pe       *embPend
 	sv       *servedPart
 	tok, pos []byte
+	rows     int
 	err      error
 	lc       launcher
 
@@ -442,12 +511,35 @@ func (g *devTier) composedSession(s backend.Session) {
 	}
 	g.embTo.s = s
 	defer g.embTo.leave()
+	n, d := len(pe.ids), bs.embW.k
+	if ns := bs.embStreams(); ns > 1 {
+		// Every stream, through the scratch's own residual: the call that
+		// takes the rows uploads them.
+		outs, err := bs.embedOuts(ns, rd.rows)
+		if err == nil {
+			err = sv.runAs(g, &rd.lc, sv.inst, pe.kind, nil, outs)
+		}
+		for k := 0; k < ns && err == nil; k++ {
+			err = s.Read(outs[k], f32b(pe.dst[k*n*d:(k+1)*n*d]))
+		}
+		// The per-layer inputs go where the call that takes the rows
+		// writes them from (pleRows).
+		if w := n * bs.p.PLEWidth; w != 0 && err == nil {
+			if len(g.pleHost) < w {
+				err = fmt.Errorf("tier: the input rows' per-layer inputs of %d rows, where the caller holds %d floats", n, len(g.pleHost))
+			} else {
+				err = s.Read(outs[ns], f32b(g.pleHost[:w]))
+			}
+		}
+		rd.err = err
+		return
+	}
 	out := [1]backend.Buf{bs.embCast}
 	if err := sv.runAs(g, &rd.lc, sv.inst, pe.kind, nil, out[:]); err != nil {
 		rd.err = err
 		return
 	}
-	rd.err = s.Read(bs.embCast, f32b(pe.dst[:len(pe.ids)*bs.embW.k]))
+	rd.err = s.Read(bs.embCast, f32b(pe.dst[:n*d]))
 }
 
 // embIDs is the first rows entries of the id buffer: the promised ids, then
