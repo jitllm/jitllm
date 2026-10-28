@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"math"
 	"math/rand"
-	"os"
 	"sort"
 	"testing"
 	"time"
@@ -18,18 +17,16 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
-// TestComposedMatrixSpeed times the composer's projection on the matrix unit
+// BenchmarkComposedMatrix times the composer's projection on the matrix unit
 // against main's staged GEMM (kernels.GemmVolta, its shipping tile) on
 // Llama-3.1-8B Q4_K_M's projection shapes at a 512-row chunk, on every CUDA
 // device, interleaved: each round launches both arms in turn, and the figure
 // is each arm's median microseconds and the median of the per-round ratios.
 // Main's arm reads binary16 activations a kernel before it wrote, which it
-// does not time; the composer's reads the float rows. JITLLM_MATRIX_BENCH=1;
-// a probe, not a gate.
-func TestComposedMatrixSpeed(t *testing.T) {
-	if os.Getenv("JITLLM_MATRIX_BENCH") == "" {
-		t.Skip("set JITLLM_MATRIX_BENCH=1")
-	}
+// does not time; the composer's reads the float rows. It runs its own rounds:
+//
+//	go test ./jit -run '^$' -bench ComposedMatrix -benchtime 1x
+func BenchmarkComposedMatrix(t *testing.B) {
 	testlock.GPU(t)
 	const R, rounds, reps = 512, 16, 5
 	for _, d := range backend.Open() {
