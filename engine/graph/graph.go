@@ -226,10 +226,19 @@ const (
 	// (one a group) is the positions each group keeps. A primitive over the
 	// history, as OpAttend is.
 	OpSelect
+	// OpTailRow is In[0] with its last live row (the step's positions'
+	// first word less one) Weight[0]'s one row: a tower's class row after
+	// its patches.
+	OpTailRow
+	// OpPosAxes is each row's position rows of a table of two axes: of
+	// Weight[0], the row at the cell's column plus the row at Span plus its
+	// row, the cell the row's position less Offset on a grid the request's
+	// first word wide.
+	OpPosAxes
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

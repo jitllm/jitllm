@@ -52,6 +52,7 @@ func TestA64OpsMatchLLVM(t *testing.T) {
 		{"lsl x1, x2, x3", func(a *A64) { a.LSLV(X1, X2, X3) }, 0x9ac32041},
 		{"lsr x1, x2, x3", func(a *A64) { a.LSRV(X1, X2, X3) }, 0x9ac32441},
 		{"mul x1, x2, x3", func(a *A64) { a.MUL(X1, X2, X3) }, 0x9b037c41},
+		{"udiv x1, x2, x3", func(a *A64) { a.UDIV(X1, X2, X3) }, 0x9ac30841},
 		{"mvn x1, x3", func(a *A64) { a.MVN(X1, X3) }, 0xaa2303e1},
 		{"neg x1, x3", func(a *A64) { a.NEG(X1, X3) }, 0xcb0303e1},
 		{"mov w1, w3", func(a *A64) { a.MOVw(X1, X3) }, 0x2a0303e1},

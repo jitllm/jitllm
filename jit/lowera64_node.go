@@ -246,7 +246,7 @@ func (e *a64Lowerer) node(i int) {
 		a.MOVvec(hi(r), lo(r))
 	case OpMul, OpAdd, OpShr, OpAnd, OpShl:
 		e.arith(i)
-	case OpSub, OpDiv, OpMin, OpMax:
+	case OpSub, OpDiv, OpRem, OpMin, OpMax:
 		if x.gpr(i) {
 			e.integer(i)
 			return
@@ -670,6 +670,19 @@ func (e *a64Lowerer) integer(i int) {
 			a.ADDreg(dst, p, q)
 		case OpMul:
 			a.MUL(dst, p, q)
+		case OpDiv, OpRem:
+			if nd.Type != ir.U32 {
+				e.fail("node %d: no general-register form of a signed %s", i, nd.Op)
+				return
+			}
+			// u32 words held zero-extended: the 64-bit quotient is theirs.
+			a.UDIV(a64Q, p, q)
+			if nd.Op == OpDiv {
+				a.MOVreg(dst, a64Q)
+				break
+			}
+			a.MUL(a64Q, a64Q, q)
+			a.SUBreg(dst, p, a64Q)
 		case OpAnd:
 			a.ANDreg(dst, p, q)
 		case OpOr:

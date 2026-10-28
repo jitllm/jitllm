@@ -121,6 +121,9 @@ func (a *A64) LSRV(rd, rn, rm XReg)   { a.x3(0x9AC02400, rd, rn, rm) }
 // MUL is mul xd, xn, xm: the low 64 bits of the product.
 func (a *A64) MUL(rd, rn, rm XReg) { a.x3(0x9B007C00, rd, rn, rm) }
 
+// UDIV is udiv xd, xn, xm: zero where xm is zero.
+func (a *A64) UDIV(rd, rn, rm XReg) { a.x3(0x9AC00800, rd, rn, rm) }
+
 // MVN is mvn xd, xm.
 func (a *A64) MVN(rd, rm XReg) { a.x3(0xAA2003E0, rd, 0, rm) }
 

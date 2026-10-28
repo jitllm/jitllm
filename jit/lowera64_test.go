@@ -75,3 +75,28 @@ func TestA64LoweringStatesTheDevicesDot(t *testing.T) {
 		}
 	}
 }
+
+// TestA64LoweringDividesByARegister forms a picture's patch gather for an
+// arm64 CPU: the grid's width is the request's word, known only at the
+// call, so the gather divides by a register (UDIV), which arm64 once had
+// no form of and the entry did not form.
+func TestA64LoweringDividesByARegister(t *testing.T) {
+	const udivMask, udiv = 0xFFE0FC00, 0x9AC00800
+	b := graph.NewBlock(-1)
+	px := b.In("pixels", 3*14*14)
+	b.Out(b.Emit(graph.OpPatchify, []graph.ValueID{px}, []graph.Result{{Name: "patches", Width: 3 * 14 * 14}}, nil,
+		graph.Attrs{Span: 14, Offset: 1}, nil, nil)[0])
+	_, codes, err := a64Registry().Form(Request{Graph: b.G, Step: Step{Rows: 65, Page: 64, Keys: 1, ActWindow: 32},
+		Device: Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.ISADotProd), ExactDiv: true}, Apart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, c := range codes {
+		n += a64Words(c.CPU, udivMask, udiv)
+	}
+	t.Logf("%d kernels, %d UDIV", len(codes), n)
+	if n == 0 {
+		t.Fatal("the gather divides by the grid's width with no UDIV")
+	}
+}

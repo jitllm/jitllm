@@ -46,11 +46,9 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R, 2: R + 1}}}}, nil
 }
 
-// rowBefore is the mask of row r lying before row n, compared as floats:
-// a float select masks vector registers, and the CPU's compare of a row's
-// index alone is a general register's.
+// rowBefore is the mask of row r lying before row n.
 func rowBefore(x *exprs, r, n int) int {
-	return x.op(OpLess, ir.Pred, x.un(OpCvtF32, ir.F32, r), x.f(float32(n)))
+	return x.op(OpLess, ir.Pred, r, x.u(uint32(n)))
 }
 
 // decomposeFold is each Span consecutive rows as one: output row g is
@@ -109,6 +107,24 @@ func decomposeLeadRow(o graph.Op, c *Context) ([]Prim, error) {
 	x.sel(ir.F32, rowBefore(&x, r, o.Attr.Offset), lead, in)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
 		Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}
+
+// decomposeTailRow is the input with its last live row the weight's row:
+// row r takes it where r+1 is not below the step's live rows.
+func decomposeTailRow(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || o.Weight[0].K != c.width(o.In[0]) {
+		return nil, fmt.Errorf("a tail row of %d operands, %d weights", len(o.In), len(o.Weight))
+	}
+	U := ir.U32
+	sh := c.rows(o.Out[0])
+	w := o.Weight[0]
+	var x exprs
+	r, i := x.coord(0), x.coord(1)
+	in, tail := x.at(0, sh, r, i), x.at(1, []int{sh[1]}, i)
+	live := x.load(2, x.u(0))
+	x.sel(ir.F32, x.op(OpLess, ir.Pred, x.op(OpAdd, U, r, x.u(1)), live), in, tail)
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}, tablePos},
+		Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{2: sh[0] + 1}}}}, nil
 }
 
 // decomposeDropRows is the input from row Offset on.
@@ -218,6 +234,41 @@ func decomposePosResample(o graph.Op, c *Context) ([]Prim, error) {
 			}
 		}
 	}
+	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
+}
+
+// decomposePosAxes is each row's position rows of a table of two axes: the
+// row at the cell's column plus the row at Span plus the cell's row.
+func decomposePosAxes(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 1 || a.Span < 1 || o.Weight[0].Rows != 2*a.Span {
+		return nil, fmt.Errorf("a two-axis position table of %d weights over %d rows an axis", len(o.Weight), a.Span)
+	}
+	wo, err := c.weight(o.Weight[0])
+	if err != nil {
+		return nil, err
+	}
+	U := ir.U32
+	sh := c.rows(o.Out[0])
+	R, E, A := sh[0], sh[1], uint32(a.Span)
+	var x exprs
+	r, e := x.coord(0), x.coord(1)
+	in := []Operand{tablePos, tableRequest}
+	facts := Facts{Extents: map[int]int{0: R + 1, 1: RequestRows + R}}
+	lead := uint32(a.Offset)
+	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), x.u(1))
+	q := x.op(OpSub, U, x.op(OpMax, U, x.load(0, x.op(OpAdd, U, r, x.u(1))), x.u(lead)), x.u(lead))
+	col := x.op(OpMin, U, x.op(OpRem, U, q, gw), x.u(A-1))
+	row := x.op(OpAdd, U, x.op(OpMin, U, x.op(OpDiv, U, q, gw), x.u(A-1)), x.u(A))
+	cv, err := weightElement(&x, wo, 2*a.Span, E, &in, &facts, col, e)
+	if err != nil {
+		return nil, fmt.Errorf("a position table of %s: %w", wo.Format, err)
+	}
+	rv, err := weightElement(&x, wo, 2*a.Span, E, &in, &facts, row, e)
+	if err != nil {
+		return nil, fmt.Errorf("a position table of %s: %w", wo.Format, err)
+	}
+	x.op(OpAdd, ir.F32, cv, rv)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
 }
 
