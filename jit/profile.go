@@ -121,7 +121,7 @@ func cpuWideProfile() Profile {
 		FMA{},
 		FirstTerm{},
 		HalfWords{},
-		Jam{Lanes: 8, Sums: 8, Temps: map[Op]int{OpDot4: 2, OpDot4U: 2}, Spread: []int{15, 13}, Rows: 14},
+		Jam{Lanes: 8, Sums: 8, Temps: map[Op]int{OpDot4: 2, OpDot4U: 2}, Spread: []int{15, 13}, Rows: 14, Positions: 4},
 		Periods{Most: 8},
 		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}, Carry: []int{9, 10, 8}, Keep: true, Quads: true, QuadRegs: []int{13, 15, 9}},
 		InPlace{},

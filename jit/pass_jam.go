@@ -23,11 +23,13 @@ type Jam struct {
 	Lanes, Sums int
 	Temps       map[Op]int
 	// Strip is the most vectors a strip-mined trip runs, a power of two;
-	// 0 is one.
-	Strip  int
-	Walk   bool
-	Spread []int
-	Rows   int
+	// 0 is one. Positions, where it is more, is that most where the inner
+	// loop walks the paged history's positions: each position's page and
+	// place in it are found once for that many vectors.
+	Strip, Positions int
+	Walk             bool
+	Spread           []int
+	Rows             int
 }
 
 func (Jam) Name() string { return "jam" }
@@ -53,7 +55,11 @@ func (p Jam) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				// As many vectors a trip as the budget holds, a power of two
 				// so the trips that do not fill them are a mask.
 				n, strip = 1, true
-				for 2*n <= max(1, p.Strip) && 2*n*len(folds) <= budget && (l.Count > 0 || 2*n*p.Lanes <= l.Trip) {
+				most := p.Strip
+				if pos := k.Positions; pos != nil && pos.Loop == i {
+					most = max(most, p.Positions)
+				}
+				for 2*n <= max(1, most) && 2*n*len(folds) <= budget && (l.Count > 0 || 2*n*p.Lanes <= l.Trip) {
 					n *= 2
 				}
 			}
