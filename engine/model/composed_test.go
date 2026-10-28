@@ -316,21 +316,8 @@ var composedResidue []string
 // arm to a reference take them from here.
 const bandRatio, bandWorst = 1.5, 4.0
 
-// promptModels are the served models whose prompt the gate has the composer
-// serve too, at the chunk's rows (ComposedPrompt): three Q8_0 models, the
-// k-quant Llama-3.2-1B, tinyllama (Q3_K), Qwen2-1.5B and Qwen3-1.7B, whose
-// projections at a chunk's rows run in row tiles (jit.RowTiles),
-// gemma-3-1b, whose sliding layers' chunk reads the windowed descriptors,
-// and the hybrids, whose linear blocks scan the chunk's rows as one run:
-// Qwen3.5-0.8B and Kimi-Linear's fixture (Kimi Delta Attention, its decay
-// per key channel) at Q8_0.
-var promptModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf",
-	"gemma-3-1b-it-Q4_K_M.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "tinyllama-1.1b-q3_K_M.gguf",
-	"Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
-	"synth-kimilinear@q8"}
-
 // ssmServed are the state-space models served (servedModels), their
-// prompts too (promptModels): a chunk's rows the scan's. A selective update
+// prompts a chunk's rows the scan's. A selective update
 // with one decay a head beside attention and an MLP (granite-4.0-h, and
 // Falcon-H1's mixer beside its attention in one block) and the gated short
 // convolution beside attention (LFM2), Mamba-1's per-channel update alone
@@ -352,7 +339,6 @@ var ssmServed = []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-35
 
 func init() {
 	servedModels = append(servedModels, ssmServed...)
-	promptModels = append(promptModels, ssmServed...)
 }
 
 // apartModels are the state-space checkpoints whose blocks with no MLP end
@@ -463,7 +449,7 @@ func trainedToks(t *testing.T, m *Model, ids []int32, n int) ([]int32, int) {
 
 // TestComposedBlocksServe decodes dense models with each block served whole
 // by the composer from its graph (the model's front end's, from the
-// container), the prompt's blocks at the chunk's rows (promptModels), and
+// container), the prompt's blocks at the chunk's rows, and
 // the head, in main's runtime (Config.Composed), against the tier's own
 // kernels: every block placed, with and without the captured graph, the
 // prompt's last row and 140 teacher-forced steps (past the first key bound),
@@ -492,10 +478,6 @@ func TestComposedBlocksServe(t *testing.T) {
 	ran := 0
 	for _, file := range servedModels {
 		t.Run(file, func(t *testing.T) {
-			prompt := tier.Parts(0)
-			if slices.Contains(promptModels, file) {
-				prompt = tier.ComposedPrompt
-			}
 			path := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
@@ -542,7 +524,7 @@ func TestComposedBlocksServe(t *testing.T) {
 					r := &[2]tierRun{}
 					for g, noGraph := range []bool{false, true} {
 						r[g].want, _, _, _ = composedDecode(t, m, dev, ids, toks, 0, noGraph, false)
-						r[g].ref, _, _, _ = composedDecode(t, m, dev, ids, toks, tier.ComposedBlock|tier.ComposedHead|prompt, noGraph, true)
+						r[g].ref, _, _, _ = composedDecode(t, m, dev, ids, toks, tier.ComposedBlock|tier.ComposedHead|tier.ComposedPrompt, noGraph, true)
 						for i := 1; i < len(r[g].ref); i++ {
 							widest[g] = max(widest[g], logitNMSE(r[g].want[i], r[g].ref[i]))
 						}
@@ -563,7 +545,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								name = "no graph/" + a.name
 							}
 							t.Run(name, func(t *testing.T) {
-								parts := a.parts | prompt
+								parts := a.parts | tier.ComposedPrompt
 								got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false)
 								// Every form was built at the placement or PrepHead.
 								if st.FormedAtStep != 0 {
@@ -572,7 +554,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								// Every part the arm asks for served, and none declined: a
 								// head the device does not hold (it did not fit beside the
 								// blocks) is named, not demanded.
-								served, _, unasked := st.ServedPart(parts)
+								served, _, _ := st.ServedPart(parts)
 								for _, k := range []tier.Parts{tier.ComposedTable, tier.ComposedBlock, tier.ComposedHead, tier.ComposedPrompt} {
 									if parts&k == 0 {
 										continue
@@ -620,12 +602,8 @@ func TestComposedBlocksServe(t *testing.T) {
 									}
 									t.Logf("composed %s: %d input rows gathered, %d declined, the prompt's %d (%s)", a.name, ne, de, np, declinesOf(st))
 								}
-								// Every step's head, and the prompt's once where the arm
-								// asks the prompt (a whole step does).
-								wantHeads := len(toks)
-								if parts&tier.ComposedPrompt != 0 {
-									wantHeads++
-								}
+								// Every step's head, and the prompt's once.
+								wantHeads := len(toks) + 1
 								heads, headDeclined, headUnasked := st.ServedPart(tier.ComposedHead)
 								if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
 									heads+replayed != wantHeads {
@@ -652,15 +630,11 @@ func TestComposedBlocksServe(t *testing.T) {
 									}
 								}
 								// The prompt's every block step served, in whole chunks.
-								if prompt != 0 {
-									np, dp, up := st.ServedPart(tier.ComposedPrompt)
-									if np < m.Cfg.NLayer || np%m.Cfg.NLayer != 0 || dp != 0 || up != 0 {
-										t.Fatalf("the composer served %d block steps of the prompt, declined %d and was not asked for %d, where every chunk is %d blocks (%s)",
-											np, dp, up, m.Cfg.NLayer, st.LastErr)
-									}
-									t.Logf("composed %s: %d block steps of the prompt served", a.name, np)
+								if np, dp, up := st.ServedPart(tier.ComposedPrompt); np < m.Cfg.NLayer || np%m.Cfg.NLayer != 0 || dp != 0 || up != 0 {
+									t.Fatalf("the composer served %d block steps of the prompt, declined %d and was not asked for %d, where every chunk is %d blocks (%s)",
+										np, dp, up, m.Cfg.NLayer, st.LastErr)
 								} else {
-									t.Logf("composed %s: %d block steps of the prompt asked for nothing (prefill is not served)", a.name, unasked)
+									t.Logf("composed %s: %d block steps of the prompt served", a.name, np)
 								}
 								worst, worstAt := 0.0, 0
 								for i := range want {
@@ -679,24 +653,12 @@ func TestComposedBlocksServe(t *testing.T) {
 								if !(off > max(1e-9, 10*worst)) && !slices.Contains(bandSeen, file) {
 									t.Errorf("one position off the logits are within %.3g of the tier's, where the arm's worst is %.3g (step %d): the comparison cannot see a wrong part", off, worst, worstAt)
 								}
-								// Step 0 is the prompt's last row. Where the prompt is
-								// not served every arm's first logits are the tier's;
-								// where it is, they are the composer's, held to the band
-								// with every decoded step, the band's widest still the
-								// tier's backends' over the decoded steps alone.
+								// Step 0 is the prompt's last row: the composer's, held
+								// to the band with every decoded step, the band's widest
+								// still the tier's backends' over the decoded steps alone.
 								// The prompt's input rows, where the composer gathers
 								// them, are the same rows as the tier's and the CPU's.
-								// A whole step asks the prompt of a model whose
-								// reference does not (not in promptModels): its first
-								// logits are the composed head's over the prompt, which
-								// neither reference ran, and are not compared.
 								first := 0
-								if prompt == 0 {
-									if parts&tier.ComposedPrompt == 0 && (!slices.Equal(got[0], want[0]) || !slices.Equal(ref[0], want[0])) {
-										t.Fatalf("the prompt is not served, yet its logits differ from the tier's: the composed setting reached the prompt")
-									}
-									first = 1
-								}
 								{
 									var ratios []float64
 									worstTier, worstGot := 0.0, 0.0

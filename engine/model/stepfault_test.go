@@ -410,7 +410,7 @@ func TestStepAcrossSessionsDenseGateDiscriminates(t *testing.T) {
 // as one run, with every row of the chunk made its own run -- each reading
 // the state from before the chunk -- and demands the prompt's logits part
 // from the same prompt chained: the serving gate's prompt arm
-// (TestComposedBlocksServe, promptModels) can see a chunk that does not
+// (TestComposedBlocksServe) can see a chunk that does not
 // chain. Both arms must have served every block of the prompt.
 //
 //	go test -tags jitllmfault ./engine/model -run TestComposedPromptChainGateDiscriminates
