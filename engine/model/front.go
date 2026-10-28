@@ -777,7 +777,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	stored func(jlm.Role) []jlm.Role, has func(jlm.Role) bool, st *streams, side ...graph.ValueID) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	d, nffn := c.NEmbd, c.NFFNAt(li)
-	// A post-norm block (BERT's) normalises each sublayer's sum after its
+	// A post-norm block normalises each sublayer's sum after its
 	// residual add, where it stores the norm.
 	postResid := func(v graph.ValueID, r, bias jlm.Role) graph.ValueID {
 		if !has(r) {

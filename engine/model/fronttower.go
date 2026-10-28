@@ -201,7 +201,7 @@ func (m *Model) towerGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		return b.Norm(v, r, c.RMSEps)
 	}
-	// A clipped linear's input and output are held to its slot's stored
+	// A clamped linear's input and output are held to its slot's stored
 	// bounds (jlm.RoleVClamp): the input's at 4*slot, the output's at
 	// 4*slot+2.
 	clamped := has(jlm.RoleVClamp)
