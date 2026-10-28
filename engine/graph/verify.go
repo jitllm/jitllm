@@ -202,8 +202,9 @@ func Verify(g *Graph, f Facts) error {
 				switch {
 				case len(o.Weight) != 1:
 					bad("%s: a window of %d on %d bound vectors", at, a.Width, len(o.Weight))
-				case a.Width < 0 || a.Offset < 0 || a.Offset+a.Width > o.Weight[0].K:
-					bad("%s: a window of %d from %d on a vector of %d", at, a.Width, a.Offset, o.Weight[0].K)
+				case a.Width < 0 || a.Offset < 0 || a.Offset+a.Width > o.Weight[0].K*max(o.Weight[0].Rows, 1):
+					// A stored table of several rows is its elements in order.
+					bad("%s: a window of %d from %d on a vector of %d", at, a.Width, a.Offset, o.Weight[0].K*max(o.Weight[0].Rows, 1))
 				}
 			}
 		}

@@ -7,7 +7,8 @@ package jit
 // in the kernel and in every later kernel that reads it, each head's copy of it
 // too. In a graph whose inputs and outputs are apart (Request.Apart), an output
 // keeps its own storage and no value takes an input's: each is its caller's
-// buffer.
+// buffer. In a block of several residual streams (Operand.Stream) an output
+// takes only its own stream's input, and no other value a stream's.
 type InPlace struct{}
 
 func (InPlace) Name() string { return "inplace" }
@@ -37,6 +38,12 @@ func (p InPlace) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 					continue
 				}
 				if k.Apart && b.Operand.Kind == OperandValue && !writtenBy(out[:i], b.Operand) && !k.writes(b.Operand) {
+					continue
+				}
+				// Over several residual streams an output takes only its own
+				// stream's input, and no other value any stream's: the call
+				// site binds a stream's input and output as one buffer.
+				if b.Operand.Stream != ob.Operand.Stream && (ob.Operand.Out || b.Operand.Stream > 0) {
 					continue
 				}
 				// A graph's output is stored where its caller binds it: it

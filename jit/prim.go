@@ -52,6 +52,10 @@ type Operand struct {
 	// Out is a value its graph hands back: read past every kernel, so no
 	// kernel is its one reader and its store is never dropped.
 	Out bool
+	// Stream, in a block of several residual streams (a graph of several
+	// outputs), is 1 + the stream a value is the input or the output of: the
+	// call site binds stream k's input and output as one buffer.
+	Stream int
 	// Of is the model's part the operand belongs to; a table of the step
 	// belongs to none unless it is a part's own state (PerPart).
 	Of      int

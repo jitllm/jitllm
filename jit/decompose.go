@@ -53,6 +53,13 @@ func decompositions() map[graph.OpKind]Decomposition {
 
 func (c *Context) value(v graph.ValueID) Operand {
 	o := Operand{Kind: OperandValue, Value: v, Name: c.Graph.Values[v].Name, Out: slices.Contains(c.Graph.Out, v)}
+	if g := c.Graph; c.Part == PartBlock && len(g.Out) > 1 {
+		if k := slices.Index(g.Out, v); k >= 0 {
+			o.Stream = k + 1
+		} else if k := slices.Index(g.In, v); k >= 0 && k < len(g.Out) {
+			o.Stream = k + 1
+		}
+	}
 	if c.Graph.Values[v].Elem == graph.ElemU32 {
 		o.Elem = ir.U32
 	}

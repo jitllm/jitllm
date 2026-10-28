@@ -138,6 +138,21 @@ func TestVerifierHoldsAMapsWindow(t *testing.T) {
 	if g, f := build(3, 1, true); Verify(g, f) != nil {
 		t.Fatalf("the last element of the vector is refused: %v", Verify(g, f))
 	}
+	// A table of several rows is its elements in order: a window on its
+	// second row is held to the table, past it refused.
+	table := func(off int) error {
+		b := NewBlock(0)
+		x := b.In("x", 8)
+		w := []Binding{{Role: jlm.RoleXIELU, K: 4, Rows: 2}}
+		b.Out(b.Emit(OpMap, []ValueID{x}, []Result{{Name: "y", Width: 8}}, w, Attrs{Fn: MapMul, Offset: off, Width: 4}, nil, nil)[0])
+		return Verify(b.G, Facts{Inventory: map[jlm.Role]Shape{jlm.RoleXIELU: {K: 4, Rows: 2}}})
+	}
+	if err := table(4); err != nil {
+		t.Fatalf("a window on a table's second row is refused: %v", err)
+	}
+	if err := table(5); err == nil || !strings.Contains(err.Error(), "a window of") {
+		t.Errorf("a window past a table of two rows: Verify said %v", err)
+	}
 	for _, c := range []struct {
 		name       string
 		off, width int

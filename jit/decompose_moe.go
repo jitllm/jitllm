@@ -27,7 +27,7 @@ func (c *Context) groups(v graph.ValueID, span int) (W, G, S int, err error) {
 // decomposeReduce combines each group of Span elements in order from the
 // first.
 func decomposeReduce(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || o.Attr.Order != graph.OrderSeq {
+	if len(o.In) != 1 || len(o.Out) != 1 || o.Attr.Order != graph.OrderSeq && o.Attr.Order != graph.OrderTree {
 		return nil, fmt.Errorf("a reduce of %d operands in order %d", len(o.In), o.Attr.Order)
 	}
 	_, G, S, err := c.groups(o.In[0], o.Attr.Span)
@@ -47,6 +47,9 @@ func decomposeReduce(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a reduce by %v", o.Attr.Fn)
 	}
 	R := c.Step.Rows
+	if o.Attr.Order == graph.OrderTree {
+		return reduceTree(c, o, comb, G, S)
+	}
 	sh := []int{R, G, S}
 	var x exprs
 	if G == 1 {
@@ -902,4 +905,43 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 		acc = x.op(OpAdd, F, acc, x.sel(F, ok, x.op(OpMul, F, v, tap(t)), x.f(0)))
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
+}
+
+// reduceTree combines each group of S elements pairwise, a map a level: of
+// a level of w, element i of the next is element i combined with element
+// i+w/2. A group of a width not a power of two has no halves to the end,
+// and is refused by name.
+func reduceTree(c *Context, o graph.Op, comb Op, G, S int) ([]Prim, error) {
+	if S&(S-1) != 0 {
+		return nil, fmt.Errorf("a pairwise reduce over groups of %d, not a power of two", S)
+	}
+	R, U, F := c.Step.Rows, ir.U32, ir.F32
+	in := c.value(o.In[0])
+	var prims []Prim
+	for w, lvl := S, 0; w > 1 || lvl == 0; lvl++ {
+		h := max(w/2, 1)
+		out := c.value(o.Out[0])
+		if h > 1 {
+			out = Operand{Kind: OperandScratch, Name: fmt.Sprintf("%s.tree%d", c.value(o.Out[0]).Name, lvl), Temp: true}
+		}
+		var x exprs
+		r, e := x.coord(0), x.coord(1)
+		// Group g's element i is element g*h+i of the level's row of
+		// G*h, its pair g*w+i and g*w+i+h of the row before.
+		g, i := e, e
+		if G > 1 {
+			g, i = x.op(OpDiv, U, e, x.u(uint32(h))), x.op(OpRem, U, e, x.u(uint32(h)))
+		}
+		at := x.op(OpAdd, U, x.op(OpMul, U, g, x.u(uint32(w))), i)
+		if G == 1 {
+			at = x.op(OpAdd, U, x.u(0), e)
+		}
+		a := x.at(0, []int{R, G * w}, r, at)
+		if w > 1 {
+			x.op(comb, F, a, x.at(0, []int{R, G * w}, r, x.op(OpAdd, U, at, x.u(uint32(h)))))
+		}
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, G * h}, In: []Operand{in}, Out: out, Expr: x.e})
+		in, w = out, h
+	}
+	return prims, nil
 }
