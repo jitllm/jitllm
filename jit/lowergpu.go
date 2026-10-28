@@ -616,12 +616,17 @@ func (e *lowerer) lowerLoop(c int) {
 	// The steps of values first, then of tiles: a load carried a trip
 	// ahead is in flight while the trip's tiles multiply.
 	steps := make([]ir.Value, len(folds))
-	for _, tiles := range []bool{false, true} {
-		for j, f := range folds {
-			if (n.Nodes[f].Tile != nil) == tiles {
-				steps[j] = e.get(n.Nodes[f].A)
+	makeSteps := func() {
+		for _, tiles := range []bool{false, true} {
+			for j, f := range folds {
+				if (n.Nodes[f].Tile != nil) == tiles {
+					steps[j] = e.get(n.Nodes[f].A)
+				}
 			}
 		}
+	}
+	if !l.StepsLast {
+		makeSteps()
 	}
 	for si, st := range n.Stores {
 		switch {
@@ -640,6 +645,9 @@ func (e *lowerer) lowerLoop(c int) {
 		default:
 			e.store(si, st)
 		}
+	}
+	if l.StepsLast {
+		makeSteps()
 	}
 	for j, f := range folds {
 		b.SetPhi(e.phi[f], steps[j])

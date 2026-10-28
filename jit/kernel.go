@@ -190,6 +190,9 @@ type Loop struct {
 	// Uniform, where a pass set it, is a loop whose count is one value for
 	// every thread of a workgroup: a barrier in it is met by all of them.
 	Uniform bool
+	// StepsLast makes its folds' steps after its stores in each trip: a
+	// trip that stages workgroup memory and reads it behind a barrier.
+	StepsLast bool
 	// Of, where a split set it, is 1 + the loop this one takes trips of.
 	Of int
 }

@@ -324,7 +324,8 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 	if g.TR == 0 {
 		return nil, false
 	}
-	b := flashBuild{c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx}
+	b := flashBuild{c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
+		tq: map[int]int{}, tr: map[int]int{}}
 	return b.kernel(), true
 }
 
@@ -341,6 +342,7 @@ type flashBuild struct {
 	r0, rl, P, k0   int
 	first, warpRow  int
 	minus, zero     int
+	tq, tr          map[int]int
 }
 
 func (b *flashBuild) side(m *member, row, kpos, inner int, subs map[Operand]int) *flashSide {
@@ -372,15 +374,27 @@ func (b *flashBuild) load(t ir.Type, ix, at int) int {
 	return b.m.add(Node{Op: OpLoad, Type: t, Buf: b.st, A: ix, At: at + 1})
 }
 
-// deal is the thread's u-th of n elements dealt over the workgroup, a
-// surplus thread's the last.
-func (b *flashBuild) deal(u, n int) int {
-	m := b.m
-	w := m.bin(OpAdd, ir.U32, b.t, m.u32(u*m.Group))
-	if n%m.Group != 0 {
-		w = m.bin(OpMin, ir.U32, w, m.u32(n-1))
+// split is the thread's u-th of n elements dealt over the workgroup, a
+// surplus thread's the last, as its quotient and remainder by d. Where the
+// workgroup's width is a multiple of d, or d of it, they are the thread's
+// own quotient and remainder, made once, or the thread itself, beside
+// constants: what a trip reads is not a pair of registers an element.
+func (b *flashBuild) split(u, n, d int) (q, r int) {
+	U, m, G := ir.U32, b.m, b.m.Group
+	switch {
+	case n%G == 0 && G%d == 0:
+		if b.tq[d] == 0 {
+			b.tq[d], b.tr[d] = m.bin(OpDiv, U, b.t, m.u32(d))+1, m.bin(OpRem, U, b.t, m.u32(d))+1
+		}
+		return m.bin(OpAdd, U, b.tq[d]-1, m.u32(u*G/d)), b.tr[d] - 1
+	case n%G == 0 && d%G == 0:
+		return m.u32(u * G / d), m.bin(OpAdd, U, b.t, m.u32(u*G%d))
 	}
-	return w
+	w := m.bin(OpAdd, U, b.t, m.u32(u*G))
+	if n%G != 0 {
+		w = m.bin(OpMin, U, w, m.u32(n-1))
+	}
+	return m.bin(OpDiv, U, w, m.u32(d)), m.bin(OpRem, U, w, m.u32(d))
 }
 
 func (b *flashBuild) tile(t ir.TileType, off, stride int, col bool, at int) int {
@@ -415,8 +429,7 @@ func (b *flashBuild) kernel() *Kernel {
 	half := b.Dk / 2
 	n := g.TR * half
 	for u := 0; u < (n+m.Group-1)/m.Group; u++ {
-		w := b.deal(u, n)
-		rloc, dp := m.bin(OpDiv, U, w, m.u32(half)), m.bin(OpRem, U, w, m.u32(half))
+		rloc, dp := b.split(u, n, half)
 		s := b.side(b.dt, rowAt(rloc), 0, 0, nil)
 		q := func(e int) int {
 			s.inner = m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
@@ -437,7 +450,7 @@ func (b *flashBuild) kernel() *Kernel {
 	span := m.add(Node{Op: OpSelect, Type: U, A: m.add(Node{Op: OpLess, Type: ir.Pred, A: first, B: end}), B: m.bin(OpSub, U, end, first), C: m.u32(0)})
 	blocks := m.bin(OpMax, U, m.bin(OpDiv, U, m.bin(OpAdd, U, span, m.u32(g.KB-1)), m.u32(g.KB)), m.u32(1))
 	P := m.loop(1, -1)
-	m.Loops[P].Count, m.Loops[P].Uniform = blocks+1, true
+	m.Loops[P].Count, m.Loops[P].Uniform, m.Loops[P].StepsLast = blocks+1, true, true
 	b.P = P
 	kb := m.add(Node{Op: OpIter, At: P, Type: U})
 	b.k0 = m.bin(OpAdd, U, first, m.bin(OpMul, U, kb, m.u32(g.KB)))
@@ -447,6 +460,11 @@ func (b *flashBuild) kernel() *Kernel {
 	b.rowsPhase()
 	b.weighted()
 	b.output()
+	// The copies of one read -- a position's page, a row's first position --
+	// made once.
+	if m.cse(false) {
+		m.compact()
+	}
 	return m
 }
 
@@ -458,8 +476,7 @@ func (b *flashBuild) stageBlock() {
 	half := b.Dk / 2
 	n := g.KB * half
 	for u := 0; u < (n+m.Group-1)/m.Group; u++ {
-		w := b.deal(u, n)
-		key, dp := m.bin(OpRem, U, w, m.u32(g.KB)), m.bin(OpDiv, U, w, m.u32(g.KB))
+		dp, key := b.split(u, n, g.KB)
 		s := b.side(b.dt, b.rl, m.bin(OpAdd, U, b.k0, key), 0, nil)
 		k := func(e int) int {
 			s.inner = m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
@@ -473,8 +490,7 @@ func (b *flashBuild) stageBlock() {
 	vhalf := b.Dv / 2
 	n = g.KB * vhalf
 	for u := 0; u < (n+m.Group-1)/m.Group; u++ {
-		w := b.deal(u, n)
-		dp, key := m.bin(OpRem, U, w, m.u32(vhalf)), m.bin(OpDiv, U, w, m.u32(vhalf))
+		key, dp := b.split(u, n, vhalf)
 		s := b.side(b.c.vl, b.rl, m.bin(OpAdd, U, b.k0, key), 0, nil)
 		v := func(e int) int {
 			s.inner = m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
@@ -597,20 +613,20 @@ func (b *flashBuild) weighted() {
 	m.Stores = append(m.Stores, Store{Barrier: true, At: b.P})
 	n := g.TR * b.Dv
 	for u := 0; u < n/m.Group; u++ {
-		e := m.bin(OpAdd, U, b.t, m.u32(u*m.Group))
 		f := m.add(Node{Op: OpFold, Type: F, At: b.P, B: m.f32(0)})
-		m.Nodes[f].A = m.add(Node{Op: OpSelect, Type: F, A: b.first, B: m.f32(0), C: b.rescaled(f, e, b.P)})
+		m.Nodes[f].A = b.rescaled(f, u)
 	}
 }
 
-// rescaled is element e of the thread's weighted sums, f, rescaled by its
-// row's factor and the last block's added, both read from workgroup memory
-// in loop at: a trip's fold steps are made as the trip starts, so each adds
-// the block before it, and the output the last.
-func (b *flashBuild) rescaled(f, e, at int) int {
+// rescaled is the thread's u-th weighted sum, f, rescaled by its row's
+// factor and the block's added, both read from workgroup memory after the
+// trip's last barrier (the loop's StepsLast).
+func (b *flashBuild) rescaled(f, u int) int {
 	U, F, m, g := ir.U32, ir.F32, b.m, b.g
-	alpha := b.load(F, m.bin(OpAdd, U, m.bin(OpDiv, U, e, m.u32(b.Dv)), m.u32(g.sOff+2*(g.TR+1))), at)
-	return m.add(Node{Op: OpFma, Type: F, A: f, B: alpha, C: b.load(F, m.bin(OpAdd, U, e, m.u32(g.aOff)), at)})
+	rloc, dd := b.split(u, g.TR*b.Dv, b.Dv)
+	e := m.bin(OpAdd, U, m.bin(OpMul, U, rloc, m.u32(b.Dv)), dd)
+	alpha := b.load(F, m.bin(OpAdd, U, rloc, m.u32(g.sOff+2*(g.TR+1))), b.P)
+	return m.add(Node{Op: OpFma, Type: F, A: f, B: alpha, C: b.load(F, m.bin(OpAdd, U, e, m.u32(g.aOff)), b.P)})
 }
 
 // output is the normalization at each of the thread's elements: the
@@ -620,11 +636,10 @@ func (b *flashBuild) output() {
 	folds := m.foldsOf(b.P)
 	st := last.Stores[0]
 	for u, f := range folds {
-		e := m.bin(OpAdd, U, b.t, m.u32(u*m.Group))
-		rloc, dd := m.bin(OpDiv, U, e, m.u32(b.Dv)), m.bin(OpRem, U, e, m.u32(b.Dv))
+		rloc, dd := b.split(u, g.TR*b.Dv, b.Dv)
 		row := m.bin(OpMin, U, m.bin(OpAdd, U, b.r0, rloc), b.last)
 		subs := map[Operand]int{
-			b.c.vl.out: b.rescaled(f, e, -1),
+			b.c.vl.out: f,
 			b.c.sm.out: b.load(F, m.bin(OpAdd, U, rloc, m.u32(g.sOff+g.TR+1)), -1),
 			b.c.mx.out: b.load(F, m.bin(OpAdd, U, rloc, m.u32(g.sOff)), -1),
 		}
