@@ -38,7 +38,7 @@ func (s *State) CPUStreamSteps() (served int, declined [jit.NumDeclines]int) {
 // the CPU at the State's placement.
 func (s *State) cpuPlaceStreams() {
 	st := &s.cpu.streams
-	if !s.c.statesStreams() {
+	if !s.c.statesStreams() && !s.c.mixesStreamsSinkhorn() {
 		return
 	}
 	fg := s.m.frontGraphs()

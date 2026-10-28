@@ -585,7 +585,9 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 	if why := s.cpuWeights(cb.f, li, l); why != jit.DeclineServes {
 		return why, nil
 	}
-	w, nrot := s.c.ResidW(), s.c.RopeW()
+	// x is stream-major: row r's stream k at (k*rows + r)*n_embd.
+	d, nrot := s.c.NEmbd, s.c.RopeW()
+	stride := len(x) / s.c.Streams()
 	b := &s.cpu.bound
 	pg := &s.kv.layers[li]
 	for i := range pos {
@@ -604,7 +606,7 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 			clear(o.rstate[li][slot*s.dg.stateStride():][:s.dg.stateStride()])
 			clear(o.rconv[li][slot*s.dg.convStateLen():][:s.dg.convStateLen()])
 		}
-		*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), x: x[r*w:], rows: s.cpu.rows[:], n: 1, kv: &s.kv.layers[li],
+		*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1, kv: &s.kv.layers[li],
 			pages: s.cpu.pages, recLi: s.cpuRecLi(li), recOf: o}
 		if nrot > 0 {
 			b.cs = cs[r*nrot:]
@@ -2075,6 +2077,8 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &m.dense1
 		case r == jlm.RoleEmbdDense2:
 			return &m.dense2
+		case m.ds4Head != nil && r == jlm.RoleHCHeadFn:
+			return &m.ds4Head.fn
 		case m.q4eHead != nil && r == jlm.RoleHCHeadDown:
 			return &m.q4eHead.hc.down
 		case m.q4eHead != nil && r == jlm.RoleHCHeadUp:
@@ -2189,6 +2193,13 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 		case jlm.RoleHCHeadNorm:
 			if s.m.q4eHead != nil {
 				return s.m.q4eHead.hc.norm
+			}
+		case jlm.RoleHCHeadBase, jlm.RoleHCHeadScale:
+			if hd := s.m.ds4Head; hd != nil {
+				if r == jlm.RoleHCHeadBase {
+					return hd.base[:s.c.HCMult]
+				}
+				return hd.scale[:1]
 			}
 		}
 		if s.vis == nil {

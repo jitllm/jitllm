@@ -83,6 +83,37 @@ func (c *Config) gatesStreams() bool {
 	return c.HCLowRank > 0 && c.Streams() == c.HCMult && c.PredStreams == 0 && !c.ResAttn()
 }
 
+// A model whose sublayers read and write their streams through a mixer
+// Sinkhorn-normalised per row (HCMult streams, no low-rank gate): its input
+// rows are S copies of the embedding, and its head reads the streams
+// weighted by sigmoid(scale * (F norm(xs)) + base) + eps, norm an RMS norm
+// with no weight over the streams side by side. Its blocks are not stated.
+
+// mixesStreamsSinkhorn says the model's streams are mixed per row by a
+// Sinkhorn-normalised mixer, and nothing else carries a stream.
+func (c *Config) mixesStreamsSinkhorn() bool {
+	return c.HCMult > 1 && c.HCLowRank == 0 && c.Streams() == c.HCMult && c.PredStreams == 0 && !c.ResAttn()
+}
+
+// sinkhornCollapse is the head's row from the streams xs.
+func (m *Model) sinkhornCollapse(b *graph.Builder, xs []graph.ValueID) graph.ValueID {
+	c := m.Cfg
+	s, d := len(xs), c.NEmbd
+	cat := b.Emit(graph.OpConcat, xs, []graph.Result{{Name: "hc.streams", Width: s * d}}, nil, graph.Attrs{}, nil, nil)[0]
+	n := b.Emit(graph.OpHeadNorm, []graph.ValueID{cat}, []graph.Result{{Name: "hc.normed", Width: s * d}}, nil,
+		graph.Attrs{Eps: c.RMSEps, HeadDim: s * d}, nil, nil)[0]
+	pre := mapRow(b, "hc.pre.scaled", graph.Attrs{Fn: graph.MapMul, Width: 1}, []graph.Binding{{Role: jlm.RoleHCHeadScale, K: 1}}, s,
+		b.MatVec(n, jlm.RoleHCHeadFn, s))
+	pre = mapRow(b, "hc.pre.based", graph.Attrs{Fn: graph.MapAdd}, []graph.Binding{{Role: jlm.RoleHCHeadBase, K: s}}, s, pre)
+	pre = mapRow(b, "hc.pre.sig", graph.Attrs{Fn: graph.MapSigmoid}, nil, s, pre)
+	pre = mapRow(b, "hc.pre", graph.Attrs{Fn: graph.MapAdd, Const: c.HCEps}, nil, s, pre)
+	acc := mapRow(b, "hc.collapsed", graph.Attrs{Fn: graph.MapMul}, nil, d, slice1(b, "hc.prek", pre, 0), xs[0])
+	for k := 1; k < s; k++ {
+		acc = mapRow(b, "hc.collapsed", graph.Attrs{Fn: graph.MapFma}, nil, d, slice1(b, "hc.prek", pre, k), xs[k], acc)
+	}
+	return acc
+}
+
 // statesStreams says the front end states the model's residual streams.
 func (c *Config) statesStreams() bool {
 	return c.predictsStreams() || c.mixesStreams() || c.gatesStreams()
@@ -313,11 +344,12 @@ func (m *Model) magMatched(b *graph.Builder, p, r graph.ValueID) graph.ValueID {
 
 // streamExpandGraph is the input rows' streams 1 and up from stream 0:
 // its one input stream 0, an output a stream past it; nil where the model
-// predicts no streams and gates none. A bank of checkpoints has none: a
+// predicts no streams and copies none. A bank of checkpoints has none: a
 // block writes each checkpoint before any block reads it.
 func (m *Model) streamExpandGraph() (*graph.Graph, error) {
 	c := m.Cfg
-	if !c.predictsStreams() && !c.gatesStreams() {
+	copies := c.gatesStreams() || c.mixesStreamsSinkhorn()
+	if !c.predictsStreams() && !copies {
 		return nil, nil
 	}
 	f, _ := m.inventory(jlm.DenseBlock)
@@ -325,7 +357,7 @@ func (m *Model) streamExpandGraph() (*graph.Graph, error) {
 	b := graph.NewBlock(-1)
 	x := b.In("x", d)
 	var out []graph.ValueID
-	if c.gatesStreams() {
+	if copies {
 		for range s - 1 {
 			out = append(out, streamCopy(b, x))
 		}
@@ -347,10 +379,11 @@ func (m *Model) streamExpandGraph() (*graph.Graph, error) {
 // streamCollapseGraph is the row the head reads from every stream: an
 // input a stream, one output; nil where the front end states no streams.
 // A bank of checkpoints is mixed with the running residual by the head's
-// score vector, and gated streams through the head's own gate.
+// score vector, gated streams through the head's own gate, and streams a
+// Sinkhorn mixer reads by the head's collapse weights.
 func (m *Model) streamCollapseGraph() (*graph.Graph, error) {
 	c := m.Cfg
-	if !c.statesStreams() {
+	if !c.statesStreams() && !c.mixesStreamsSinkhorn() {
 		return nil, nil
 	}
 	f, _ := m.inventory(jlm.DenseBlock)
@@ -367,6 +400,8 @@ func (m *Model) streamCollapseGraph() (*graph.Graph, error) {
 	case c.gatesStreams():
 		mix, _ := m.gatedMix(b, f, xs, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp, 0)
 		b.Out(mix)
+	case c.mixesStreamsSinkhorn():
+		b.Out(m.sinkhornCollapse(b, xs))
 	default:
 		acc := xs[0]
 		for k := 1; k < s; k++ {

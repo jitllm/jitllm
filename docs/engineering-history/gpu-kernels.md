@@ -10487,4 +10487,17 @@ row where the composer's reads two.
   it swapped two. DeepSeek V4's Sinkhorn-mixed streams stay refused
   (UncoveredStreams at the head and the input rows; every block is
   UncoveredSelect first).
-
+- DeepSeek V4's input rows (copies of the embedding into every stream) and
+  its head's collapse are composed on the CPU device: the streams side by
+  side RMS-normed with no weight, the head's projection, its stored scale
+  and base, sigmoid plus HCEps, each stream weighted. synth-deepseek4 reads
+  0 from main over 32 steps with every row of both and every head step
+  served (its blocks stay UncoveredSelect); the copies left empty, the
+  weights unscaled and a stream read twice move it 2.4, 4.7e-4 and 0.11.
+  The CPU's recurrent rows taken a row at a time bound every stream at the
+  row's first (a stride of 0): a model of several streams with a linear
+  block read stream 0 for all of them in a prompt. Each stream is bound at
+  the chunk's stride now; synth-qwen4exp's prompt of 28 and its decode went
+  from 2.16 to 3.3e-12 of main. The composed CPU decode of synth-qwen4exp,
+  synth-kimik3 and synth-deepseek4 allocates nothing a warm token
+  (testing.AllocsPerRun; main's qwen4exp decode makes 6).

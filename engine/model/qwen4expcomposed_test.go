@@ -66,6 +66,18 @@ func TestQwen4ExpServesComposedOnCPU(t *testing.T) {
 			if !(worst < bound) {
 				t.Fatalf("the composed CPU is %.3g from main, bound %g", worst, bound)
 			}
+			// A prompt's rows and its decode: the stated blocks' rows served
+			// on the CPU, the others declined for having no graph.
+			n := len(toks) - 4
+			pw, pg := q4ePrompt(t, ref, toks, n, false), q4ePrompt(t, m, toks, n, true)
+			pworst := 0.0
+			for i := range pw {
+				pworst = max(pworst, logitNMSE(pg[i], pw[i]))
+			}
+			t.Logf("a prompt of %d and its decode: worst NMSE %.3g", n, pworst)
+			if !(pworst < bound) {
+				t.Fatalf("the composed CPU prompt is %.3g from main, bound %g", pworst, bound)
+			}
 			for _, v := range q4eComposedViolations(t) {
 				undo := v.mut(m)
 				bad := worstFrom(want, partCPULogits(t, m, toks, cpuFaultNone, true, covered, jit.DeclineNoGraph))
@@ -97,6 +109,40 @@ func TestQwen4ExpServesComposedOnCPU(t *testing.T) {
 			}
 		})
 	}
+}
+
+// q4ePrompt is m's logits prefilling ids[:n] and decoding four more; on the
+// composed arm some block's rows are served and every decline is for having
+// no graph.
+func q4ePrompt(t *testing.T, m *Model, ids []int32, n int, composed bool) [][]float32 {
+	t.Helper()
+	s := m.NewState(n + 5)
+	defer s.Close()
+	lg, err := s.Prefill(ids[:n])
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := [][]float32{append([]float32(nil), lg...)}
+	for i := range 4 {
+		if lg, err = s.Forward(ids[n+i]); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, append([]float32(nil), lg...))
+	}
+	served, declined := s.CPUBlockSteps()
+	if !composed {
+		return out
+	}
+	for i, k := range declined {
+		if jit.Decline(i) != jit.DeclineNoGraph && k > 0 {
+			t.Errorf("%d block steps declined: %s (%v)", k, jit.DeclineName(i), s.CPUFormErr())
+		}
+	}
+	if served == 0 {
+		t.Fatal("no block step of the prompt served")
+	}
+	t.Logf("a prompt of %d: %d block steps served, %d declined for no graph", n, served, declined[jit.DeclineNoGraph])
+	return out
 }
 
 // partCPULogits is each step's logits decoding toks; on the composed arm

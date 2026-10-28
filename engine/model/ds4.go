@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
 )
 
@@ -511,6 +512,9 @@ func (s *State) growDS4(n int) {
 
 // ds4Expand copies each row's embedding (stream 0) into the other streams.
 func (s *State) ds4Expand(x []float32, rows int) {
+	if s.cpuExpand(x, rows) == jit.DeclineServes {
+		return
+	}
 	c := s.m.Cfg
 	for r := 0; r < rows; r++ {
 		x0 := c.stream(x, 0, rows, r)
@@ -613,6 +617,9 @@ func (s *State) hcPost(x []float32, n int, y []float32) {
 func (s *State) ds4Collapse(x []float32, n int) error {
 	c, g, hd := s.m.Cfg, s.ds, s.m.ds4Head
 	h, d := c.HCMult, c.NEmbd
+	if c.ds4Fault != ds4FaultHeadMean && s.cpuCollapse(x, n) == jit.DeclineServes {
+		return nil
+	}
 	for r := 0; r < n; r++ {
 		f := g.flat[:h*d]
 		for k := 0; k < h; k++ {

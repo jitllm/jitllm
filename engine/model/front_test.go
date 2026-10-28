@@ -141,15 +141,17 @@ func TestFrontRefusesSeveralStreams(t *testing.T) {
 					streams++
 				}
 			}
-			// The head's collapse and the input rows' expansion of the
-			// Sinkhorn-mixed streams are refused for them by name.
+			// A head and input rows over every stream are refused for them by
+			// name; the collapse to one row and the copies are the CPU's
+			// (TestDeepseek4ServesComposedOnCPU).
+			blocks := streams
 			for _, at := range []int{-1, -2} {
 				if why := m.Uncovered(at); why != UncoveredStreams {
 					t.Fatalf("part %d is refused by %q, want %q", at, why, UncoveredStreams)
 				}
 				streams++
 			}
-			t.Logf("%d streams: %d of %d blocks and the head and input rows refused for them, the rest earlier", m.Cfg.Streams(), streams, m.Cfg.NLayer)
+			t.Logf("%d streams: %d of %d blocks refused for them, the rest earlier; the head and the input rows too", m.Cfg.Streams(), blocks, m.Cfg.NLayer)
 			byStreams += streams
 		})
 	}
