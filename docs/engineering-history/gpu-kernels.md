@@ -11071,3 +11071,41 @@ row where the composer's reads two.
   Probe (V100, composed/main): Llama-3.1-8B at 512 rows q/o 1.561->1.412, gate/up 1.447->1.350, down 1.385->1.211; at 2048 k/v 1.614->1.488. Servers, two card rotations (A/A 0.982-0.987, 0.999): Llama-3.1-8B 1.31-1.45 -> 1.20-1.33 over main at 512/1024/2048 (0.903-0.921 of the old tile), Qwen3-30B-A3B 0.993-0.9998.
   Fragments a k-step at a time across the accumulators cut registers 220 -> 194 but slowed the 4x2 form 12%: not kept. The token rows' 16-byte stage loads were already formed (OpLoadV).
   Left: native m8n8k4, swizzled 16-byte shared accesses, a register epilogue; Latency and Decode stay fitted until the probe measures the matrix unit's rate.
+- The composed CPU matvec walks its sub-blocks outside the call's rows
+  (`Streams`, before `Jam`). Where a loop over rows holds one loop over a
+  packed weight's sub-blocks, the sub-blocks loop carries a float sum of
+  a chain of byte dots, and every load the rows move takes consecutive
+  rows, the pass does three things. It unrolls the sub-blocks by their
+  scale period (`Periods`' `unrollBy`), so every plane is an address the
+  rows advance. It turns the rows inside, so a vector loop reads each
+  word's plane along the rows. And it holds each sum in `Out`: zeroed
+  before the first sub-block, then loaded, added and stored once a trip,
+  in the fold's order, so the result is the same to the bit.
+  `StreamWords` loads the activation's words and scales in the rows' loop
+  where they are read, since 64 broadcasts cannot live in 16 vector
+  registers. Getting it to form fixed four things the walk exposed:
+  - `Simplify.removeLoop` renumbered neither a parent past the removed
+    loop nor a load's loop (a parent cycle hung `TestComposedCPUExpertPages`).
+  - The int8 form's scales and sums move at two strides. C4k's
+    multi-stride cursor walks give each its own copy.
+  - `Vectorize` broadcasts a byte dot's words made outside the loop. Only
+    lane 0 was right without it.
+  - A stored zero takes a register.
+  A Streams form the registers refuse falls back to the jam form first,
+  through its own rung (`Unstreamed`); Q6_K takes that path. `Ahead`
+  prefetches the next sub-block for the rows' copies (`Outer: 1`).
+  Violation: a sub-block's scale applied to the next fails
+  `TestComposedCPUMatVec` 72 times. Idle E5-2680 v4 node 0, 14 workers and
+  threads, Q4_K, two interleaved passes, base / no prefetch / prefetch
+  one sub-block ahead, in GB/s:
+  - 8192x2048: 15.3, 15.3 / 17.2, 17.4 / 14.7, 15.2
+  - 2048x8192: 14.2, 14.7 / 16.7, 15.2 / 15.2, 13.8
+  - 2048x2048: 11.3, 10.5 / 13.9, 11.9 / 11.9, 10.8
+  - 128256x2048: 31.9, 24.1 / 21.3, 21.2 / 25.0, 25.5
+
+  So the prefetch takes back the walk's gain on decode's shapes, and
+  `TestAheadPrefetchesTheWeightStream` wants it. Still far from main's 41:
+  `Workers` cuts 8192 rows into 512 calls of 16, so a sub-block reads one
+  line a plane before it jumps, which is no stream. The walk pays only with
+  calls of a worker's whole share. An `Unroll` of the rows' accumulating
+  loop by 4 vectors spills (one core, 21.7 to 9.2 GB/s): not kept.
