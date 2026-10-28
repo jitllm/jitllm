@@ -9422,7 +9422,18 @@ row where the composer's reads two.
   and rewrites pointers, not uintptrs: composed TestDecodeDoesNotAllocate
   died after 955 subtests in vkCreateComputePipelines (SIGSEGV, address 0,
   on a compile goroutine). They live in the Kernel now (`-gcflags=-m` moved
-  the other create-infos to the heap and not these). (4) A decision model's
+  the other create-infos to the heap and not these), and the descriptor
+  layout's bindings and the SPIR-V bytes, also reached by a uintptr only,
+  are kept alive across their calls. TestComposedGPUCompilesSideBySide
+  (eight goroutines compiling the sampler's 52 kernels for ten seconds beside
+  a collector every 2 ms at GC percent 5) is the gate: before, the same loop
+  died in the driver after 1080 rounds of four goroutines (SIGSEGV in
+  vkCreateDescriptorPool) and held 8 GB without returning at eight and
+  sixteen; after, 1043 rounds of four, 236 of eight and 193 of sixteen on the
+  RTX 3050 Ti's Vulkan made no error and held 264 to 322 MB. The composed
+  TestDecodeDoesNotAllocate then ran whole on a V100, with the heap-held
+  structs and not yet the two KeepAlives: 878 subtests pass, none fail, no
+  SIGSEGV (the run that died had 955). (4) A decision model's
   every-block arm in a build that composes the prompts holds 6.49 GB of
   retained scratch after its first run against a 6.10 GB budget, so the arm
   after it on the same card placed 8 of 32 blocks and the gate indexed an

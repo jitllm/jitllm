@@ -304,7 +304,10 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 	}
 	k := &Kernel{c: c, nbuf: nbuf}
 	sm := shaderCI{sType: stShaderModuleCI, size: uint64(len(spv)), pCode: uintptr(up(&spv[0]))}
-	if err := check(vkCreateShaderModule(c.dev, up(&sm), nil, up(&k.mod)), "vkCreateShaderModule"); err != nil {
+	err := check(vkCreateShaderModule(c.dev, up(&sm), nil, up(&k.mod)), "vkCreateShaderModule")
+	// spv is reached only through a uintptr, which keeps nothing alive.
+	runtime.KeepAlive(spv)
+	if err != nil {
 		return nil, err
 	}
 
@@ -313,7 +316,11 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 		binds[i] = descBinding{binding: uint32(i), kind: descStorageBuffer, count: 1, stages: stageCompute}
 	}
 	dl := descLayoutCI{sType: stDescLayoutCI, nBind: uint32(nbuf), pBind: uintptr(up(&binds[0]))}
-	if err := check(vkCreateDescriptorSetLayout(c.dev, up(&dl), nil, up(&k.layout)), "vkCreateDescriptorSetLayout"); err != nil {
+	err = check(vkCreateDescriptorSetLayout(c.dev, up(&dl), nil, up(&k.layout)), "vkCreateDescriptorSetLayout")
+	// binds is reached only through a uintptr: the collector may take it
+	// while the driver reads it.
+	runtime.KeepAlive(binds)
+	if err != nil {
 		k.Close()
 		return nil, err
 	}
@@ -325,7 +332,7 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 	k.pr = pushRange{stages: stageCompute, size: groupBaseBytes}
 	pl := pipeLayoutCI{sType: stPipeLayoutCI, nSets: 1, pSets: uintptr(up(&k.layout)),
 		nPush: 1, pPush: uintptr(up(&k.pr))}
-	err := check(vkCreatePipelineLayout(c.dev, up(&pl), nil, up(&k.plyt)), "vkCreatePipelineLayout")
+	err = check(vkCreatePipelineLayout(c.dev, up(&pl), nil, up(&k.plyt)), "vkCreatePipelineLayout")
 	if err != nil {
 		k.Close()
 		return nil, err
