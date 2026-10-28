@@ -25,9 +25,12 @@ func gpuProfile() Profile {
 		Trips{},
 		Mask{},
 		Runs{},
+		// Before Prefetch: a table read carried from trip to trip is a
+		// second fold of the reduction's loop, and a reduction of more than
+		// its sum's fold joins nothing.
+		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
 		Prefetch{},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
-		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
 		Matrix{Rows: 128, Cols: 64, Depth: 32, Warps: [2]int{4, 2}},
 		RowTiles{Rows: 16},
 		Threads{Group: 128},

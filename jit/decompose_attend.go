@@ -152,7 +152,10 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	outIn := []Operand{values, sums}
 	if len(o.Weight) == 1 {
 		// A sink is one more logit a head in the denominator alone: the
-		// sum gains exp(sink - max), the max taken with the sink.
+		// sum gains exp(sink - max), the max the keys' alone, so the
+		// attention keeps the form of one without (the split's partitions
+		// and their combine). A sink past the max by more than a float's
+		// exponent makes the sum infinite and the row zero, its limit.
 		m := ox.at(2, heads, ox.coord(0), ox.coord(1))
 		l = ox.op(OpAdd, F, l, ox.un(OpExp, F, ox.op(OpSub, F, ox.at(3, []int{H}, ox.coord(1)), m)))
 		outIn = append(outIn, maxes, sinkVec(o))
@@ -175,25 +178,6 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		}
 		return tables(d)
 	}
-	maxReduce := Prim{Kind: PrimReduce, Shape: keys, In: tables(scores), Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)),
-		Expr: mx.e, Facts: rng(2)}
-	if len(o.Weight) == 1 {
-		// The keys' max first, then the max with the sink.
-		raw := tmp("keymax")
-		maxReduce.Out = raw
-		var gx exprs
-		gx.op(OpMax, F, gx.at(0, heads, gx.coord(0), gx.coord(1)), gx.at(1, []int{H}, gx.coord(1)))
-		return []Prim{
-			{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, g.Keys), Out: dots, Expr: dx.e, Facts: scored},
-			scoreMap(keys, withMask(dots), scores, sx.e, rng(2)),
-			maxReduce,
-			{Kind: PrimMap, Shape: heads, In: []Operand{raw, sinkVec(o)}, Out: maxes, Expr: gx.e},
-			{Kind: PrimMap, Shape: keys, In: tables(scores, maxes), Out: weights, Expr: wx.e, Facts: rng(2)},
-			{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: sum},
-			{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, g.Values), Out: values, Expr: vx.e, Facts: rng(3)},
-			{Kind: PrimMap, Shape: dims, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}},
-		}
-	}
 	return []Prim{
 		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, g.Keys), Out: dots, Expr: dx.e, Facts: scored},
 		scoreMap(keys, withMask(dots), scores, sx.e, rng(2)),
@@ -202,7 +186,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		{Kind: PrimMap, Shape: keys, In: tables(scores, maxes), Out: weights, Expr: wx.e, Facts: rng(2)},
 		{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: sum},
 		{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, g.Values), Out: values, Expr: vx.e, Facts: rng(3)},
-		{Kind: PrimMap, Shape: dims, In: []Operand{values, sums}, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}},
+		{Kind: PrimMap, Shape: dims, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}},
 	}
 }
 
