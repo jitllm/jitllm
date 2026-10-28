@@ -9978,3 +9978,25 @@ row where the composer's reads two.
   step's submission, the steps end and State.Close returns on CUDA and
   Vulkan, where without the recovery Close waited in quiesce until the
   test's timeout.
+- Gemma 3's SigLIP on the cards was the call's live elements wrapping 32
+  bits, not the attention's partitions: CallRows held a flattened space's
+  threads to ceil(rows*space0/live), and 4096 rows of 1152 times 4096 rows
+  is past 2^32, so the attention's merge wrote only the rows before 455
+  (before 324 at 2100 rows) and left the rest as the scratch held them.
+  The leading axis's whole rows now come apart from its remainder.
+  jit.TestComposedGPUAttendBidirRows holds a bidirectional run of 1024,
+  2100 and 4096 rows at head 72 (and 2100 at 64) to the definition on
+  ptx and spirv, in the general form and the single-sequence one: the
+  running split serves head 72, the flash form head 64, both exact on rows
+  attending both ways (1e-13 on ptx, 2.8e-7 on spirv); before the fix 42
+  of 49 sampled rows were NaN. With it Gemma 3 is served whole on cuda:0
+  and vulkan:0 (4.5e-5 and 1.2e-7 after one block, 2.4e-3 and 1.3e-3 for
+  the encode), and ComposedTower is in ComposedStep. Janus on cuda:0 reads
+  1.72e-2 for the encode composed and 1.71e-2 on main's own kernels.
+  A picture of more rows than a CPU call (64) runs first only the codes
+  through the block's last history write, over the residual itself, and
+  then the whole block; the [rows, heads, keys] scores of a CPU form at
+  the picture's 4096 rows would be a gigabyte, so the call stays at 64.
+  Gemma 3 on a V100 host's CPU: 27/27 served, 1.3e-6 after one block,
+  1.2e-3 for the encode, no warm allocation, causal rows 9.0e-2. The
+  projectors and the entry rows are still main's generated kernels.
