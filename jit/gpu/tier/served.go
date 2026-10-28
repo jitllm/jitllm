@@ -226,7 +226,8 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin, Seqs: sl.seqs},
 		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
 			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
-			Matrix: g.composedMatrix(), HalfPairs: kernels.HalfPairs(g.dev.API()), Shared: sharedPerUnit(g.dev)},
+			Matrix: g.composedMatrix(), HalfPairs: kernels.HalfPairs(g.dev.API()),
+			VectorLoads: kernels.VectorLoads(g.dev.API()), Shared: sharedPerUnit(g.dev)},
 		History: sl.history,
 	})
 }

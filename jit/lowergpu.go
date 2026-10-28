@@ -20,6 +20,9 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 		return Lowered{}, fmt.Errorf("no workgroup: the profile binds none")
 	}
 	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison, lanes: d.Lanes}
+	if d.VectorLoads {
+		e.vectorGroups()
+	}
 	k, err := e.run()
 	if err == nil {
 		k.Resident = resident(n, d)
@@ -90,7 +93,9 @@ type lowerer struct {
 	b      *ir.Builder
 	poison bool
 	// lanes is the subgroup the device guarantees (Device.Lanes).
-	lanes  int
+	lanes int
+	// vec is the loads read four words an access (vectorGroups).
+	vec    map[int]vecLoad
 	params []ir.Value
 	val    []ir.Value
 	home   []int
@@ -309,6 +314,10 @@ func (e *lowerer) get(i int) ir.Value {
 		ix := nd.A
 		if nd.Ax != nil {
 			v = b.Load(nd.Type, e.params[nd.Buf], e.flatten(nd.Buf, nd.Ax), nd.Imm)
+			break
+		}
+		if vl, ok := e.vec[i]; ok {
+			v = e.loadVector(i, vl)
 			break
 		}
 		v = b.Load(nd.Type, e.params[nd.Buf], e.get(ix), nd.Imm)

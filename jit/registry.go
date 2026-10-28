@@ -61,6 +61,9 @@ type Device struct {
 	// HalfPairs is a device whose lowering runs packed binary16 arithmetic
 	// (OpSubF16x2, OpFmaF16x2).
 	HalfPairs bool
+	// VectorLoads is a device whose lowering reads four consecutive words
+	// of a buffer in one access (ir.OpLoadV).
+	VectorLoads bool
 }
 
 // warp is the threads a combine by lane shuffles takes whole on d: its

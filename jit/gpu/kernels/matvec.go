@@ -400,6 +400,10 @@ func Gate2Exact(api string) bool { return api == "ptx" }
 // fma.rn.f16x2.
 func HalfPairs(api string) bool { return api == "ptx" }
 
+// VectorLoads reports whether a backend's lowering reads several words of
+// a buffer in one access (ir.OpLoadV): PTX's ld.global.v4.
+func VectorLoads(api string) bool { return api == "ptx" }
+
 // MatVec builds the decode matvec.
 //
 // One thread per row works because of the layout: weights are transposed at
