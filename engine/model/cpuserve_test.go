@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -14,7 +15,9 @@ import (
 // cpuServedModels are the models whose every block the composer serves on
 // the CPU at decode: Ministral-3-3B among them, the attention temperature
 // read at each row's position, HunyuanOCR's XD-RoPE, and Gemma 4 E2B's per-layer
-// inputs and blocks reading an earlier block's history. Gemma 3n E2B is
+// inputs and blocks reading an earlier block's history, and latent
+// attention: DeepSeek's fixtures (dense, V3's grouped router, V2's),
+// Kimi-Linear's beside its delta rule and Kimi-K3-0.40B. Gemma 3n E2B is
 // not here: its clean arm is in the band (median 0.634, worst 9.1e-4 where
 // main's control reaches 1.5e-3), the page fault and the new key written a
 // row early leave it, but the key-row violation stays in it even dropping
@@ -24,7 +27,9 @@ import (
 var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
 	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
 	"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
-	"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf"}
+	"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
+	"synth-deepseek-dense" + q8Suffix, "synth-deepseek" + q8Suffix, "synth-deepseek-lite" + q8Suffix,
+	"synth-kimilinear" + q8Suffix, "kimik3/Kimi-K3-0.40B.Q8_0.gguf"}
 
 // TestComposedCPUBlocksServe runs each model's blocks on the CPU three ways,
 // teacher-forced on one token sequence: on main's kernels, on what the
@@ -84,8 +89,94 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 					t.Errorf("violation %d stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", f, bm, bw)
 				}
 			}
+			for _, rw := range cpuLatentRewrites(t, m, false) {
+				var undo []func()
+				for li := range m.Cfg.NLayer {
+					if u := rewriteBlock(t, m, li, rw.rewrite); u != nil {
+						undo = append(undo, u)
+					}
+				}
+				bad := cpuLogits(t, m, toks, cpuFaultNone, true)
+				for _, u := range undo {
+					u()
+				}
+				bm, bw, _ := cpuBand(t, want, bad, ctl)
+				t.Logf("%s in %d blocks: median ratio %.3f, worst %.3g", rw.what, len(undo), bm, bw)
+				if bm <= bandRatio && bw <= bandWorst*widest {
+					t.Errorf("%s stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", rw.what, bm, bw)
+				}
+			}
 		})
 	}
+}
+
+// cpuLatentRewrite turns the key's rotary part of a latent block's cached
+// row into the latent's first NRot: the row's rotary tail not the one the
+// projection wrote.
+var cpuLatentRewrite = latentRewrite{"the cached row's rotary tail read from the latent's start", func(g *graph.Graph) bool {
+	for i, o := range g.Ops {
+		if o.Kind == graph.OpSlice && o.Attr.HeadDim == 0 && o.Attr.Offset > 0 && strings.HasPrefix(g.Values[o.Out[0]].Name, "k.pe.") {
+			g.Ops[i].Attr.Offset = 0
+			return true
+		}
+	}
+	return false
+}}
+
+// cpuLatentRewrites is the latent violations the CPU arm runs on m, none for
+// a model of no latent block: latentRewrites and cpuLatentRewrite, each
+// required to reach a block but the banks swapped where their shapes
+// differ and the rotation a pair short where no block turns by the rotary.
+// The rotation a pair short runs only on a float arm: on the int8 fixtures
+// it moves the logits 1.9e-3 and 3.8e-3, under main's own int8 spread there
+// (6.1e-3, 1e-2), where a float arm reads it orders past its clean NMSE.
+func cpuLatentRewrites(t *testing.T, m *Model, float bool) []latentRewrite {
+	t.Helper()
+	if !m.Cfg.MLA() {
+		return nil
+	}
+	reaches := func(rw latentRewrite) bool {
+		for li := range m.Cfg.NLayer {
+			if g := m.Composing().BlockGraph(li); g != nil && rw.rewrite(cloneGraph(g)) {
+				return true
+			}
+		}
+		return false
+	}
+	short := latentRewrites[1].what
+	all := append(slices.Clone(latentRewrites), cpuLatentRewrite)
+	// The rotation a pair short turns the latent query's and key's rotary
+	// parts alone: an indexer beside them turns its own.
+	all[1] = latentRewrite{short, func(g *graph.Graph) bool {
+		q, k := false, false
+		for i, o := range g.Ops {
+			if o.Kind != graph.OpRope {
+				continue
+			}
+			switch n := g.Values[o.Out[0]].Name; {
+			case strings.HasPrefix(n, "q.pe.rope."):
+				q = true
+			case strings.HasPrefix(n, "k.pe.rope."):
+				k = true
+			default:
+				continue
+			}
+			g.Ops[i].Attr.NRot -= 2
+		}
+		return q && k
+	}}
+	var rws []latentRewrite
+	for _, rw := range all {
+		switch {
+		case rw.what == short && !float:
+		case reaches(rw):
+			rws = append(rws, rw)
+		case rw.what == short && m.Cfg.NoPosEnc, rw.what == latentRewrites[2].what:
+		default:
+			t.Fatalf("%s reaches no block of a latent model: the gate cannot see it", rw.what)
+		}
+	}
+	return rws
 }
 
 // cpuFaultsOf is the violations a composed CPU gate runs on m: the

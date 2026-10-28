@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -48,6 +49,8 @@ func TestMLAOnEveryDevice(t *testing.T) {
 			if wantPlaced == 0 {
 				t.Fatalf("%s places no block at all -- this gate would prove nothing", name)
 			}
+			ran++
+			mlaCPUArm(t, src, ids, want)
 			for _, spec := range stepDevices() {
 				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || gpu == nil {
@@ -227,6 +230,57 @@ func compare(t *testing.T, want, got [][]float32) (float64, float64) {
 
 func declineList(st *State) []DeviceDecline { return st.DeviceDeclines() }
 
+// mlaCPUArm runs ids teacher-forced on the CPU device composed, from the
+// container src: every block step served and composed once, the logits
+// held to main's CPU want by the device arms' bound. Then the first key row
+// moved by one (cpuFaultRow) and each latent violation (cpuLatentRewrites)
+// must move the logits a thousand times past the clean arm's worst, that
+// worst no less than 1e-12, f32's reduction-order band: on the float
+// fixtures the clean arm reads 6e-14 and the rotation a pair short, the
+// least of them, 3.7e-7.
+func mlaCPUArm(t *testing.T, src string, ids []int32, want [][]float32) {
+	t.Helper()
+	t.Run("cpu", func(t *testing.T) {
+		m, err := Open(src, noTune, WithKVF16(false), WithComposedCPU(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		run := func(f cpuFault) [][]float32 {
+			st := m.NewState(len(ids) + 1)
+			defer st.Close()
+			st.cpu.fault = f
+			got := runIDs(t, st, ids)
+			cpuServed(t, st, "decode", len(ids)*m.Cfg.NLayer, true)
+			return got
+		}
+		worst, worstD := compare(t, want, run(cpuFaultNone))
+		t.Logf("%d blocks composed on the CPU, %d positions: worst logit NMSE %.3e, worst |dlogit| %.3f against main's CPU",
+			m.Cfg.NLayer, len(ids), worst, worstD)
+		see := func(what string, got [][]float32) {
+			bad, _ := worstOf(want, got)
+			t.Logf("%s: worst NMSE %.3e", what, bad)
+			if !(bad > 1e3*max(worst, 1e-12)) {
+				t.Errorf("%s: the CPU arm cannot see it -- worst NMSE %.3e against a clean %.3e", what, bad, worst)
+			}
+		}
+		see("the first key row moved by one", run(cpuFaultRow))
+		for _, rw := range cpuLatentRewrites(t, m, true) {
+			var undo []func()
+			for li := range m.Cfg.NLayer {
+				if u := rewriteBlock(t, m, li, rw.rewrite); u != nil {
+					undo = append(undo, u)
+				}
+			}
+			got := run(cpuFaultNone)
+			for _, u := range undo {
+				u()
+			}
+			see(rw.what, got)
+		}
+	})
+}
+
 // TestMLASeamMovesWithItsHistory moves a latent KV history across the seam in
 // both directions mid-sequence. Without MigrateKV a moved block attends over
 // the wrong cache and stays fluent. Both directions are exercised because they
@@ -235,59 +289,102 @@ func declineList(st *State) []DeviceDecline { return st.DeviceDeclines() }
 func TestMLASeamMovesWithItsHistory(t *testing.T) {
 	defer fusedRunsCheck(t, true)()
 	ids := []int32{5, 11, 23, 41, 67, 89, 101, 127}
-	m, err := Open(hfContainer(t, "synth-deepseek-dense"), noTune, WithKVF16(false))
+	src := hfContainer(t, "synth-deepseek-dense")
+	m, err := Open(src, noTune, WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
 	want := teacherForce(t, m, ids)
+	// The same container with the CPU's blocks composed: the history moves
+	// between the card's pool and the CPU device's arena.
+	mc, err := Open(src, noTune, WithKVF16(false), WithComposedCPU(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mc.Close()
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-		if err != nil || gpu == nil {
-			t.Logf("%s: not present (%v)", spec, err)
-			continue
+		for _, arm := range []struct {
+			name string
+			m    *Model
+		}{{spec, m}, {spec + "/composed-cpu", mc}} {
+			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+			if err != nil || gpu == nil {
+				t.Logf("%s: not present (%v)", spec, err)
+				continue
+			}
+			ran++
+			t.Run(arm.name, func(t *testing.T) {
+				defer gpu.Close()
+				mlaSeamMoves(t, arm.m, gpu, ids, want, arm.m == mc)
+			})
 		}
-		ran++
-		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
-			st := m.NewState(len(ids) + 1)
-			defer st.Close()
-			st.SetDeviceLayers(gpu, -1)
-			if n := st.GPULayers(); n != m.Cfg.NLayer {
-				t.Fatalf("%s took %d of %d blocks: %v", spec, n, m.Cfg.NLayer, declineList(st))
-			}
-			got := make([][]float32, len(ids))
-			// A third on the card, a third on the host, a third back on the card:
-			// the history crosses in both directions with live positions behind it.
-			a, b := len(ids)/3, 2*len(ids)/3
-			step := func(lo, hi int) {
-				for i := lo; i < hi; i++ {
-					lg, err := st.Forward(ids[i])
-					if err != nil {
-						t.Fatalf("token %d: %v", i, err)
-					}
-					got[i] = append([]float32(nil), lg...)
-				}
-			}
-			step(0, a)
-			if n := st.SetGPULayers(0); n != 0 {
-				t.Fatalf("SetGPULayers(0) left %d blocks placed", n)
-			}
-			step(a, b)
-			if n := st.SetGPULayers(m.Cfg.NLayer); n != m.Cfg.NLayer {
-				t.Fatalf("regrowing the seam took %d of %d blocks: %v",
-					n, m.Cfg.NLayer, gpu.Err())
-			}
-			step(b, len(ids))
-			worst, worstD := compare(t, want, got)
-			t.Logf("%s: %d on the card, %d on the host, %d back on the card; "+
-				"worst logit NMSE %.3e, worst |dlogit| %.3f", spec, a, b-a, len(ids)-b, worst, worstD)
-		})
 	}
 	if ran == 0 {
 		t.Skip("no device on this host")
 	}
+}
+
+// mlaSeamMoves runs ids a third on the card gpu, a third on the CPU (every
+// block step of it served composed where composed is set), and a third back
+// on the card, against want.
+func mlaSeamMoves(t *testing.T, m *Model, gpu *tier.GPU, ids []int32, want [][]float32, composed bool) {
+	t.Helper()
+	st := m.NewState(len(ids) + 1)
+	defer st.Close()
+	st.SetDeviceLayers(gpu, -1)
+	if n := st.GPULayers(); n != m.Cfg.NLayer {
+		t.Fatalf("the card took %d of %d blocks: %v", n, m.Cfg.NLayer, declineList(st))
+	}
+	got := make([][]float32, len(ids))
+	// A third on the card, a third on the CPU, a third back on the card:
+	// the history crosses in both directions with live positions behind it.
+	a, b := len(ids)/3, 2*len(ids)/3
+	step := func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			lg, err := st.Forward(ids[i])
+			if err != nil {
+				t.Fatalf("token %d: %v", i, err)
+			}
+			got[i] = append([]float32(nil), lg...)
+		}
+	}
+	step(0, a)
+	if n := st.SetGPULayers(0); n != 0 {
+		t.Fatalf("SetGPULayers(0) left %d blocks placed", n)
+	}
+	before, _ := st.CPUBlockSteps()
+	step(a, b)
+	served, declined := st.CPUBlockSteps()
+	if !composed && served != 0 {
+		t.Fatalf("main's arm served %d composed block steps", served)
+	}
+	if composed {
+		for i, n := range declined {
+			if n > 0 {
+				t.Fatalf("the CPU's third: %d block steps declined: %s (%v)", n, jit.DeclineName(i), st.CPUFormErr())
+			}
+		}
+		if served-before != (b-a)*m.Cfg.NLayer {
+			t.Fatalf("the CPU served %d block steps of the %d its third runs", served-before, (b-a)*m.Cfg.NLayer)
+		}
+		// Composed at the State's placement and once more on the move
+		// back, never at a step.
+		for li, n := range st.CPUCompositions() {
+			if n != 2 {
+				t.Fatalf("block %d was composed for the CPU %d times, where it was placed there twice", li, n)
+			}
+		}
+	}
+	if n := st.SetGPULayers(m.Cfg.NLayer); n != m.Cfg.NLayer {
+		t.Fatalf("regrowing the seam took %d of %d blocks: %v",
+			n, m.Cfg.NLayer, gpu.Err())
+	}
+	step(b, len(ids))
+	worst, worstD := compare(t, want, got)
+	t.Logf("%d on the card, %d on the CPU (composed %v), %d back on the card; "+
+		"worst logit NMSE %.3e, worst |dlogit| %.3f", a, b-a, composed, len(ids)-b, worst, worstD)
 }
 
 // TestMLAOnADeviceWithPoisonedBuffers runs MLA with NaN in every fresh device
@@ -436,7 +533,8 @@ func TestNoPEMLAOnEveryDevice(t *testing.T) {
 			name, linear, m.Cfg.NLayer)
 	}
 	want := teacherForce(t, m, ids)
-	ran := 0
+	mlaCPUArm(t, src, ids, want)
+	ran := 1
 	for _, spec := range stepDevices() {
 		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || gpu == nil {

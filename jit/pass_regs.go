@@ -369,7 +369,7 @@ func (b *binder86) gprs() error {
 	for pos, e := range k.Seq {
 		switch e.Kind {
 		case EntryLoop:
-			if it := k.iterOf(e.I); it >= 0 && k.Nodes[it].Reg == 0 && b.uses(it) > 0 {
+			if it := k.iterOf(e.I); it >= 0 && k.Nodes[it].Reg == 0 && (b.uses(it) > 0 || b.stores(it)) {
 				r := b.take(p.Spare)
 				if r < 0 {
 					r = b.take(p.Kept)
@@ -686,6 +686,18 @@ func (b *binder86) uses(i int) int {
 		}
 	}
 	return n
+}
+
+// stores reports whether a store indexes by node i or writes it: an
+// iteration a store alone reads (a group's sum written at the outer loop's
+// count) still needs its register.
+func (b *binder86) stores(i int) bool {
+	for _, s := range b.k.Stores {
+		if !s.Barrier && !s.Run && (s.Ix == i || s.Val == i) {
+			return true
+		}
+	}
+	return false
 }
 
 // slot is a red-zone slot free from sequence position from on, taken for

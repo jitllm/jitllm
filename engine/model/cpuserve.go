@@ -1356,8 +1356,6 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		return jit.DeclineExperts
 	case c.LayerKind(li).Recurrent() && (li >= len(s.rstate) || s.rstate[li] == nil || s.rconv[li] == nil):
 		return jit.DeclineRecurrent
-	case pg.latent:
-		return jit.DeclineLatent
 	case s.kvl.headMajor:
 		return jit.DeclineHeadMajor
 	case s.kvl.fmt != cpu.KVF16 && s.kvl.fmt != cpu.KVF32:
@@ -1472,8 +1470,9 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 		workers = s.jit.Workers()
 	}
 	req := jit.Request{Graph: &gr, Formats: formats, Strides: m.cpuStrides(li, g),
-		Step:   jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: 32, Seqs: max(s.nseq, 1)},
-		Device: composedCPUDevice(workers)}
+		Step:    jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: 32, Seqs: max(s.nseq, 1)},
+		History: jit.History{ValuesInKeys: pg.latent},
+		Device:  composedCPUDevice(workers)}
 	return m.cpuFormOf(req, &gr, rows, false, s.kvl.fmt == cpu.KVF32)
 }
 
@@ -2144,7 +2143,22 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 	case jlm.RoleSCX:
 		return &l.wq
 	case jlm.RoleAttnGate, jlm.RoleSCB:
+		// A full block of a model of latent attention gates its output by
+		// its own; a linear block's is its state's gate.
+		if l.mlaGate.rows != 0 && !s.c.LayerKind(li).Recurrent() {
+			return &l.mlaGate
+		}
 		return &l.ssmGate
+	case jlm.RoleAttnQA:
+		return &l.wqa
+	case jlm.RoleAttnQB:
+		return &l.wqb
+	case jlm.RoleAttnKVA:
+		return &l.wkva
+	case jlm.RoleAttnKB:
+		return &l.wkb
+	case jlm.RoleAttnVB:
+		return &l.wvb
 	case jlm.RoleSSMBA, jlm.RoleSCC:
 		return &l.ssmBA
 	case jlm.RoleSSMXDt:
@@ -2273,6 +2287,10 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 		return l.qNorm
 	case jlm.RoleAttnKNorm:
 		return l.kNorm
+	case jlm.RoleAttnQANorm:
+		return l.qaNorm
+	case jlm.RoleAttnKVANorm:
+		return l.kvaNorm
 	case jlm.RoleAttnQBias:
 		return l.bq
 	case jlm.RoleAttnKBias:

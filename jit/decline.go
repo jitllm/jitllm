@@ -16,7 +16,6 @@ const (
 	DeclineNoPool
 	DeclinePrefill
 	DeclineStream
-	DeclineLatent
 	DeclineWindow
 	DeclineHeadShape
 	DeclineHeadNorm
@@ -62,7 +61,6 @@ var declineNames = [NumDeclines]string{
 	DeclineNoPool:        "no paged history on the device",
 	DeclinePrefill:       "the history is mid-prefill",
 	DeclineStream:        "the history streams",
-	DeclineLatent:        "a latent attention's history",
 	DeclineWindow:        "a graph whose window is not the plan's",
 	DeclineHeadShape:     "a head graph other than a norm, its projection and elementwise ops after it",
 	DeclineHeadNorm:      "no norm buffer, a norm of another kind than the tier's, or a norm bias it holds none of",

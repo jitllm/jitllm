@@ -10597,3 +10597,34 @@ row where the composer's reads two.
   needed; the bicubic's sixteen indices still do not fit them, so Kimi-VL's
   and GLM-4.1V's entries are declined by name. arm64 divides by a register
   (UDIV), which the patch gather needed to form there.
+- Latent attention composed on the CPU device. cpuWhy no longer declines a
+  block whose history is latent: the CPU's form is asked with the cards'
+  latent layout (jit.History{ValuesInKeys}), so the latent row is read once
+  in the layer's arena, whose value span is its key span (mapKVArena), and
+  the CPU binds the latent roles (wqa, wqb, wkva, wkb, wvb, their norms, and
+  Kimi-K3's MLA output gate in a full block). DeepSeek-V3's grouped router
+  found a binder gap: an outer loop's iteration read only by a store (the
+  group rank written at its group) got no register on x86, so the block did
+  not lower; the binder now counts a store's index and value as reads
+  (jit.TestCPUStoreReadsItsIteration fails without it). TestComposedCPUBlocksServe
+  serves every block step of synth-deepseek-dense, synth-deepseek,
+  synth-deepseek-lite and synth-kimilinear at Q8_0 and Kimi-K3-0.40B Q8_0,
+  at 0.000, 0.000, 0.000, 0.000 and 0.155 of main's spread at the median
+  (argmax 80/80), and five latent violations leave the band (the latent
+  norm dropped, the absorb banks swapped, the value read at the key's
+  width, the rotary tail read from the latent's start, at median ratios
+  12..1749; the rotation a pair short moves the int8 fixtures 1.9e-3, under
+  main's own spread, and is held on the float arms). The float arms of
+  TestMLAOnEveryDevice and TestNoPEMLAOnEveryDevice read 6e-14..9e-13
+  against main's CPU, every violation 2e-7..3.3 (rotation a pair short
+  2e-7..3.2e-6); TestMLABatchMatchesDecode's composed arm 1e-13 (a mixture
+  block's several-row step declined by name, DeclineExpertsRows);
+  TestMLASeamMovesWithItsHistory moves the history card, CPU composed,
+  card at 2.1e-12 on CUDA and Vulkan; TestBlocksMoveBetweenDevices'
+  composed-CPU arm passes on all five; the composed decode allocates
+  nothing over 64 tokens on all five. Decode on one E5-2680 v4 socket
+  (12 cores, numactl --membind=0), dev/bench TestComposedCPUAB, two
+  passes: synth-deepseek-dense Q8_0 A/A 0.9976 and 1.0026, composed 0.351x
+  and 0.347x main (IQR 5.6%, 3.6%; main 830 tok/s = 8.8 GB/s = 14% of the
+  61 GB/s wall); Kimi-K3-0.40B Q8_0 A/A 0.9927 and 0.9971, composed 0.464x
+  and 0.472x (main 190 tok/s), its prompt's mixture blocks declined by name.

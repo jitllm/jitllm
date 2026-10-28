@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // TestMLARunsUnderAPageBudget runs Multi-head Latent Attention under the pager,
@@ -99,7 +100,7 @@ func mlaFixtures() []string {
 }
 
 // mlaOpen resolves a fixture name or an override path.
-func mlaOpen(t *testing.T, name string) *Model {
+func mlaOpen(t *testing.T, name string, opts ...Option) *Model {
 	t.Helper()
 	src := name
 	if os.Getenv("JITLLM_MLA_MODEL") == "" {
@@ -109,7 +110,7 @@ func mlaOpen(t *testing.T, name string) *Model {
 	} else {
 		t.Fatalf("JITLLM_MLA_MODEL=%s: not on this box (RULE 11: fetch it)", name)
 	}
-	m, err := Open(src, noTune, WithKVF16(false))
+	m, err := Open(src, append([]Option{noTune, WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,81 +175,104 @@ func TestMLAPrefillMatchesDecode(t *testing.T) {
 // ForwardBatch. A batch's rows are different sequences, each with its own cache
 // slot, so it reaches what prefill cannot: a query read from row 0's buffer, a
 // latent written into another sequence's slot. It fails against every row
-// using slot 0.
+// using slot 0. Its composed arm runs both sides on the CPU device composed,
+// every block step served.
 func TestMLABatchMatchesDecode(t *testing.T) {
 	for _, name := range mlaFixtures() {
-		t.Run(name, func(t *testing.T) {
-			m := mlaOpen(t, name)
-			defer m.Close()
-			if !m.Cfg.MLA() {
-				t.Fatalf("%s is not an MLA model -- this gate proved nothing", name)
-			}
+		t.Run(name, func(t *testing.T) { mlaBatchMatchesDecode(t, name, false) })
+		t.Run(name+"/composed-cpu", func(t *testing.T) { mlaBatchMatchesDecode(t, name, true) })
+	}
+}
 
-			// Three sequences that share no token, so a row reading another
-			// row's cache cannot look right by coincidence.
-			const nseq, steps = 3, 6
-			streams := make([][]int32, nseq)
-			for i := range streams {
-				streams[i] = make([]int32, steps)
-				for j := range streams[i] {
-					streams[i][j] = int32((7 + i*101 + j*13) % m.Cfg.NVocab)
-				}
-			}
+func mlaBatchMatchesDecode(t *testing.T, name string, composed bool) {
+	t.Helper()
+	m := mlaOpen(t, name, WithComposedCPU(composed))
+	defer m.Close()
+	if !m.Cfg.MLA() {
+		t.Fatalf("%s is not an MLA model -- this gate proved nothing", name)
+	}
 
-			want := make([][]float32, nseq)
-			for i := range streams {
-				s := m.NewState(steps + 1)
-				for _, id := range streams[i] {
-					lg, err := s.Forward(id)
-					if err != nil {
-						s.Close()
-						t.Fatal(err)
-					}
-					want[i] = append([]float32(nil), lg...)
-				}
+	// Three sequences that share no token, so a row reading another
+	// row's cache cannot look right by coincidence.
+	const nseq, steps = 3, 6
+	streams := make([][]int32, nseq)
+	for i := range streams {
+		streams[i] = make([]int32, steps)
+		for j := range streams[i] {
+			streams[i][j] = int32((7 + i*101 + j*13) % m.Cfg.NVocab)
+		}
+	}
+
+	want := make([][]float32, nseq)
+	for i := range streams {
+		s := m.NewState(steps + 1)
+		for _, id := range streams[i] {
+			lg, err := s.Forward(id)
+			if err != nil {
 				s.Close()
+				t.Fatal(err)
 			}
+			want[i] = append([]float32(nil), lg...)
+		}
+		cpuServed(t, s, "a sequence's decode", steps*m.Cfg.NLayer, composed)
+		s.Close()
+	}
 
-			b := m.NewBatch(nseq, steps+1)
-			defer b.Close()
-			var sse, sy2 float64
-			for j := 0; j < steps; j++ {
-				row := make([]int32, nseq)
-				for i := range streams {
-					row[i] = streams[i][j]
-				}
-				if _, err := b.ForwardBatch(row); err != nil {
-					t.Fatalf("step %d: %v", j, err)
-				}
+	b := m.NewBatch(nseq, steps+1)
+	defer b.Close()
+	var sse, sy2 float64
+	for j := 0; j < steps; j++ {
+		row := make([]int32, nseq)
+		for i := range streams {
+			row[i] = streams[i][j]
+		}
+		if _, err := b.ForwardBatch(row); err != nil {
+			t.Fatalf("step %d: %v", j, err)
+		}
+	}
+	if moe := mixtureBlocks(m); composed && moe > 0 {
+		// The CPU device forms a mixture's block for one row a step: a
+		// step of several rows declines it by that name, counted here,
+		// and serves every other block.
+		served, declined := b.CPUBlockSteps()
+		for i, n := range declined {
+			if n > 0 && i != int(jit.DeclineExpertsRows) {
+				t.Fatalf("the batch: %d block steps declined: %s (%v)", n, jit.DeclineName(i), b.CPUFormErr())
 			}
-			// Check each arm for non-finite values before subtracting, so a
-			// failure names the arm rather than reporting NMSE NaN.
-			for i := 0; i < nseq; i++ {
-				if at := firstNonFinite(want[i]); at >= 0 {
-					t.Fatalf("the HOST reference for sequence %d is non-finite at logit %d "+
-						"-- Forward, not ForwardBatch, is what failed here", i, at)
-				}
-				if at := firstNonFinite(b.BatchLogits(i)); at >= 0 {
-					t.Fatalf("ForwardBatch sequence %d is non-finite at logit %d", i, at)
-				}
-			}
-			for i := 0; i < nseq; i++ {
-				lg := b.BatchLogits(i)
-				for x, v := range lg {
-					d := float64(v - want[i][x])
-					sse += d * d
-					sy2 += float64(want[i][x]) * float64(want[i][x])
-				}
-			}
-			nmse := 0.0
-			if sy2 > 0 {
-				nmse = sse / sy2
-			}
-			t.Logf("%d sequence(s) x %d step(s), batch vs decode NMSE %.3e", nseq, steps, nmse)
-			if !(nmse < mlaBound(m)) {
-				t.Fatalf("ForwardBatch and Forward disagree: NMSE %.3e", nmse)
-			}
-		})
+		}
+		if declined[jit.DeclineExpertsRows] != steps*moe || served != steps*(m.Cfg.NLayer-moe) {
+			t.Fatalf("the batch: %d block steps served and %d declined (%s), want %d and %d", served,
+				declined[jit.DeclineExpertsRows], jit.DeclineName(int(jit.DeclineExpertsRows)), steps*(m.Cfg.NLayer-moe), steps*moe)
+		}
+	} else {
+		cpuServed(t, b, "the batch", steps*m.Cfg.NLayer, composed)
+	}
+	// Check each arm for non-finite values before subtracting, so a
+	// failure names the arm rather than reporting NMSE NaN.
+	for i := 0; i < nseq; i++ {
+		if at := firstNonFinite(want[i]); at >= 0 {
+			t.Fatalf("the HOST reference for sequence %d is non-finite at logit %d "+
+				"-- Forward, not ForwardBatch, is what failed here", i, at)
+		}
+		if at := firstNonFinite(b.BatchLogits(i)); at >= 0 {
+			t.Fatalf("ForwardBatch sequence %d is non-finite at logit %d", i, at)
+		}
+	}
+	for i := 0; i < nseq; i++ {
+		lg := b.BatchLogits(i)
+		for x, v := range lg {
+			d := float64(v - want[i][x])
+			sse += d * d
+			sy2 += float64(want[i][x]) * float64(want[i][x])
+		}
+	}
+	nmse := 0.0
+	if sy2 > 0 {
+		nmse = sse / sy2
+	}
+	t.Logf("%d sequence(s) x %d step(s), batch vs decode NMSE %.3e", nseq, steps, nmse)
+	if !(nmse < mlaBound(m)) {
+		t.Fatalf("ForwardBatch and Forward disagree: NMSE %.3e", nmse)
 	}
 }
 
@@ -324,4 +348,15 @@ func firstNonFinite(v []float32) int {
 		}
 	}
 	return -1
+}
+
+// mixtureBlocks is how many of m's blocks are mixtures.
+func mixtureBlocks(m *Model) int {
+	n := 0
+	for li := range m.Cfg.NLayer {
+		if m.Cfg.MoEAt(li) {
+			n++
+		}
+	}
+	return n
 }
