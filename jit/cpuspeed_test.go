@@ -24,7 +24,8 @@ import (
 // TestComposedCPUMatVecSpeed times each kernel of a decode matvec the
 // composer forms for the CPU, a weight of JITLLM_CPU_ROWS rows (default
 // 8192) by JITLLM_CPU_K (2048), as bytes of the weight a second: formed for
-// JITLLM_CPU_SLOTS workers, its calls run on JITLLM_CPU_THREADS threads.
+// JITLLM_CPU_SLOTS workers, its calls run on JITLLM_CPU_THREADS threads, a step of
+// JITLLM_CPU_STEP rows (1) jammed JITLLM_CPU_JAM rows a call (RowJam).
 // JITLLM_CPU_AHEAD sets Ahead's trips, JITLLM_CPU_NOVNNI forms for the host
 // without VNNI, and JITLLM_CPU_DUMP names a directory each kernel's code is
 // written to. The weight sits on the Go heap, not on the frames' huge pages
@@ -33,8 +34,8 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 	if os.Getenv("JITLLM_CPU_SPEED") == "" {
 		t.Skip("a measurement: set JITLLM_CPU_SPEED=1")
 	}
-	rows, k, slots, threads, ahead := 8192, 2048, 1, 1, -1
-	for v, p := range map[string]*int{"JITLLM_CPU_ROWS": &rows, "JITLLM_CPU_K": &k, "JITLLM_CPU_SLOTS": &slots, "JITLLM_CPU_THREADS": &threads, "JITLLM_CPU_AHEAD": &ahead} {
+	rows, k, slots, threads, ahead, step, jam := 8192, 2048, 1, 1, -1, 1, -1
+	for v, p := range map[string]*int{"JITLLM_CPU_ROWS": &rows, "JITLLM_CPU_K": &k, "JITLLM_CPU_SLOTS": &slots, "JITLLM_CPU_THREADS": &threads, "JITLLM_CPU_AHEAD": &ahead, "JITLLM_CPU_STEP": &step, "JITLLM_CPU_JAM": &jam} {
 		if s := os.Getenv(v); s != "" {
 			n, err := strconv.Atoi(s)
 			if err != nil {
@@ -43,18 +44,7 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 			*p = n
 		}
 	}
-	reg := Default()
-	if ahead >= 0 {
-		p := reg.Profiles[DeviceCPU]
-		p.Passes = slices.Clone(p.Passes)
-		for i, ps := range p.Passes {
-			if a, ok := ps.(Ahead); ok {
-				a.Trips = ahead
-				p.Passes[i] = a
-			}
-		}
-		reg.Profiles[DeviceCPU] = p
-	}
+	reg := speedRegistry(ahead, jam)
 	isa := uint64(cpu.CPU().ISA())
 	if os.Getenv("JITLLM_CPU_NOVNNI") != "" {
 		isa &^= uint64(x86.ISAVNNI)
@@ -72,17 +62,17 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 		_, codes, err := reg.Form(Request{
 			Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
 			Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
-			Step:    Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
+			Step:    Step{Rows: step, Page: 64, Keys: 1, ActWindow: 32},
 			Device:  Device{Kind: DeviceCPU, Slots: slots, Lanes: 8, ISA: isa, ExactDiv: true},
 		})
 		if err != nil {
 			t.Fatalf("%v: %v", typ, err)
 		}
-		x := make([]float32, k)
+		x := make([]float32, step*k)
 		for i := range x {
 			x[i] = float32(rng.NormFloat64())
 		}
-		out := make([]float32, rows+16)
+		out := make([]float32, step*rows+16)
 		scratch := map[Operand][]uint32{}
 		for ci, c := range codes {
 			if dir := os.Getenv("JITLLM_CPU_DUMP"); dir != "" {
@@ -172,12 +162,41 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 				reps++
 			}
 			per := time.Since(t0) / time.Duration(reps)
-			t.Logf("%v %dx%d %s: %d B of code, calls %v, %v a run, %.2f GB/s of the weight's %d B", typ, rows, k, c.Name, len(c.CPU), c.Calls, per,
+			t.Logf("%v %dx%d at %d rows %s: %d B of code, calls %v, %v a run, %.2f GMAC/s, %.2f GB/s of the weight's %d B", typ, rows, k, step, c.Name, len(c.CPU), c.Calls, per, float64(rows*k*step)/per.Seconds()/1e9,
 				float64(wbytes)/per.Seconds()/1e9, wbytes)
 			code.Close()
 		}
 		runtime.KeepAlive(scratch)
 	}
+}
+
+// speedRegistry is the default registry with the CPU's Ahead trips and
+// RowJam rows set where ahead and jam are not negative, and Jam's strip
+// to JITLLM_CPU_STRIP where that is set.
+func speedRegistry(ahead, jam int) *Registry {
+	reg := Default()
+	strip := -1
+	if s := os.Getenv("JITLLM_CPU_STRIP"); s != "" {
+		strip, _ = strconv.Atoi(s)
+	}
+	p := reg.Profiles[DeviceCPU]
+	p.Passes = slices.Clone(p.Passes)
+	for i, ps := range p.Passes {
+		if j, ok := ps.(RowJam); ok && jam >= 0 {
+			j.N = jam
+			p.Passes[i] = j
+		}
+		if a, ok := ps.(Ahead); ok && ahead >= 0 {
+			a.Trips = ahead
+			p.Passes[i] = a
+		}
+		if j, ok := ps.(Jam); ok && strip >= 0 {
+			j.Strip = strip
+			p.Passes[i] = j
+		}
+	}
+	reg.Profiles[DeviceCPU] = p
+	return reg
 }
 
 // callRange is callAll over the calls [lo, hi) alone.

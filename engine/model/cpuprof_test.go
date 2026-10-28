@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,12 +17,22 @@ import (
 // CPU: main's per-op time against the composed kernels' time, launches and
 // calls, by kernel, with the pool's regions a token and the bytes a token
 // against the CPU's read rate measured in the same process. A measurement:
-// JITLLM_COMPOSED_PROF=1, the model JITLLM_COMPOSED_MODEL.
+// JITLLM_COMPOSED_PROF=1, the model JITLLM_COMPOSED_MODEL. With
+// JITLLM_COMPOSED_PP=n it decomposes a prompt of n tokens instead, each
+// figure a prompt token's.
 func TestComposedCPUProfile(t *testing.T) {
 	if os.Getenv("JITLLM_COMPOSED_PROF") == "" {
 		t.Skip("a measurement: set JITLLM_COMPOSED_PROF=1")
 	}
-	const warm, toks = 32, 64
+	warm, toks, pp := 32, 64, 0
+	if v := os.Getenv("JITLLM_COMPOSED_PP"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		warm, toks, pp = n, 2*n, n
+	}
+	ft := float64(toks)
 	path := os.Getenv("JITLLM_COMPOSED_MODEL")
 	if path == "" {
 		path = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
@@ -37,6 +48,7 @@ func TestComposedCPUProfile(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := m.NewState(warm + toks + 64)
+		prompt := m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands. ", 1+pp/8), true)[:pp]
 		l, err := st.Prefill(m.Vocab.Encode("The river rose every spring until", true))
 		if err != nil {
 			t.Fatal(err)
@@ -45,6 +57,15 @@ func TestComposedCPUProfile(t *testing.T) {
 		each := make([]time.Duration, 0, toks)
 		run := func(n int) time.Duration {
 			t0 := time.Now()
+			if pp > 0 {
+				for range n / pp {
+					st.Reset()
+					if _, err := st.Prefill(prompt); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return time.Since(t0)
+			}
 			for range n {
 				t1 := time.Now()
 				lg, err := st.Forward(tok)
@@ -73,19 +94,21 @@ func TestComposedCPUProfile(t *testing.T) {
 		d := run(toks)
 		par, ser := st.jit.Regions()
 		phases := st.jit.Phases() - ph0
-		per := float64(d.Microseconds()) / toks
+		per := float64(d.Microseconds()) / ft
 		bpt := float64(m.BytesPerToken())
 		gb := bpt / (per * 1e-6) / 1e9
 		served, declined := st.CPUBlockSteps()
 		var b strings.Builder
 		fmt.Fprintf(&b, "composed=%v: %.0f us a token (%.1f tok/s), %.1f MB a token = %.1f GB/s = %.0f%% of the %.1f GB/s wall; regions a token %.1f parallel %.1f serial, %.1f phases; CPU block steps %d declined %v\n",
-			composed, per, 1e6/per, bpt/1e6, gb, 100*gb*1e9/host.Bandwidth, host.Bandwidth/1e9, float64(par)/toks, float64(ser)/toks, float64(phases)/toks, served, declined)
-		slices.Sort(each)
-		fmt.Fprintf(&b, "  a token's time: min %v p10 %v median %v p90 %v max %v\n", each[0], each[len(each)/10], each[len(each)/2], each[len(each)*9/10], each[len(each)-1])
+			composed, per, 1e6/per, bpt/1e6, gb, 100*gb*1e9/host.Bandwidth, host.Bandwidth/1e9, float64(par)/ft, float64(ser)/ft, float64(phases)/ft, served, declined)
+		if len(each) > 0 {
+			slices.Sort(each)
+			fmt.Fprintf(&b, "  a token's time: min %v p10 %v median %v p90 %v max %v\n", each[0], each[len(each)/10], each[len(each)/2], each[len(each)*9/10], each[len(each)-1])
+		}
 		names, ns := OpProfile()
 		for i, n := range ns {
 			if n > 0 {
-				fmt.Fprintf(&b, "  main %-12s %8.1f us a token\n", names[i], float64(n)/1e3/toks)
+				fmt.Fprintf(&b, "  main %-12s %8.1f us a token\n", names[i], float64(n)/1e3/ft)
 			}
 		}
 		type row struct {
@@ -110,11 +133,11 @@ func TestComposedCPUProfile(t *testing.T) {
 			tot += r.nanos
 		}
 		if len(rows) > 0 {
-			fmt.Fprintf(&b, "  composed kernels %.1f us a token (%.0f%% of the token)\n", float64(tot)/1e3/toks, 100*float64(tot)/float64(d.Nanoseconds()))
+			fmt.Fprintf(&b, "  composed kernels %.1f us a token (%.0f%% of the token)\n", float64(tot)/1e3/ft, 100*float64(tot)/float64(d.Nanoseconds()))
 		}
 		for _, r := range rows {
 			fmt.Fprintf(&b, "  %-60.60s %8.1f us/tok %5.1f%% launches/tok %5.1f calls %6d  %.2f us/launch  %d B\n",
-				r.name, float64(r.nanos)/1e3/toks, 100*float64(r.nanos)/float64(tot), float64(r.runs)/toks, r.calls, float64(r.nanos)/1e3/float64(r.runs), r.bytes)
+				r.name, float64(r.nanos)/1e3/ft, 100*float64(r.nanos)/float64(tot), float64(r.runs)/ft, r.calls, float64(r.nanos)/1e3/float64(r.runs), r.bytes)
 		}
 		if composed {
 			if cb := st.cpu.blocks[st.lo]; cb != nil && cb.f != nil {
