@@ -476,14 +476,67 @@ func (o *orderer) together(xs []int, c int) {
 		}
 		return ys
 	}
-	for _, a := range k.evalArgs(&nds[0], map[int]int{}, o.made) {
-		if ys := at(place(a)); ys != nil && !o.leaves(ys) {
-			o.together(ys, c)
+	// A value every sum reads at this place is made after the places
+	// where each reads its own, just before they read it. A place whose
+	// sums share fewer than two values still to make is made a sum after
+	// another, as the sums are read: side by side, each sum would hold
+	// its own value where one shared value is all a sum after another
+	// holds.
+	args := k.evalArgs(&nds[0], map[int]int{}, o.made)
+	for _, shared := range []bool{false, true} {
+		for _, a := range args {
+			if ys := at(place(a)); ys != nil && !o.leaves(ys) && one(ys) == shared && (shared || o.sharedToMake(ys, c) > 1) {
+				o.together(ys, c)
+			}
 		}
 	}
 	for _, x := range xs {
 		o.need(x, c)
 	}
+}
+
+// sharedToMake is the values of loop c not yet made that every one of xs
+// computes from and each reads apart, in a value of its own.
+func (o *orderer) sharedToMake(xs []int, c int) int {
+	k := o.k
+	count := map[int]int{}
+	for _, x := range xs {
+		seen := map[int]bool{}
+		var walk func(i int)
+		walk = func(i int) {
+			if seen[i] || !o.inLoop(i, c) {
+				return
+			}
+			seen[i] = true
+			count[i]++
+			for _, a := range k.Operands(&k.Nodes[i]) {
+				walk(*a)
+			}
+		}
+		walk(x)
+	}
+	read := map[int]bool{}
+	for i, m := range count {
+		if m == len(xs) {
+			continue
+		}
+		for _, a := range k.Operands(&k.Nodes[i]) {
+			if count[*a] == len(xs) {
+				read[*a] = true
+			}
+		}
+	}
+	return len(read)
+}
+
+// one reports whether xs are all one node.
+func one(xs []int) bool {
+	for _, x := range xs {
+		if x != xs[0] {
+			return false
+		}
+	}
+	return true
 }
 
 // leaves reports whether nodes xs, not all one node, are each a load or a
@@ -559,7 +612,8 @@ func (o *orderer) chain(f, c int) []int {
 }
 
 // shareComputed reports whether two of the folds' steps, homed in loop c,
-// read one computed value: not a load, a broadcast of one or a constant.
+// read one computed value or one word of a weight: not another load, a
+// broadcast of one or a constant.
 func (o *orderer) shareComputed(folds []int, c int) bool {
 	k := o.k
 	owner := map[int]int{}
@@ -572,7 +626,7 @@ func (o *orderer) shareComputed(folds []int, c int) bool {
 			}
 			seen[i] = true
 			nd := k.Nodes[i]
-			leaf := nd.Op == OpLoad || nd.Op == OpConst || nd.Op == OpParam || nd.Op == OpIter || nd.Op == OpBroadcast && k.Nodes[nd.A].Op == OpLoad
+			leaf := nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind != OperandWeight || nd.Op == OpConst || nd.Op == OpParam || nd.Op == OpIter || nd.Op == OpBroadcast && k.Nodes[nd.A].Op == OpLoad
 			if !leaf {
 				if w, ok := owner[i]; ok && w != x {
 					return true

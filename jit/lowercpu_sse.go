@@ -259,7 +259,7 @@ func (e *x86Lowerer) nodeSSE(i int) {
 			a.PXOR(r, r, r)
 			return
 		}
-		if !e.words[i] {
+		if !e.words[i] || k.dotZero(i) {
 			return
 		}
 		if nd.Tmp == 0 {
@@ -452,7 +452,7 @@ func (e *x86Lowerer) dot4SSE(i int) {
 	}
 	t, u := x86.Reg(nd.Tmp-1), x86.Reg(nd.Tmp2-1)
 	var p, free x86.Reg
-	if nd.Op == OpDot4U || e.unsignedBytes(nd.A) {
+	if nd.Op == OpDot4U || k.unsignedBytes(nd.A) {
 		a.MOVAPS(t, e.reg(nd.A))
 		a.PMADDUBSW(t, t, e.reg(nd.B))
 		p, free = t, u

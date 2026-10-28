@@ -847,7 +847,7 @@ func (k *Kernel) needsVector(i int) bool {
 // words is set, those already found (VectorWords).
 func (k *Kernel) needsVectorOf(i int, words map[int]bool) bool {
 	nd := k.Nodes[i]
-	if nd.Mem {
+	if nd.Mem || k.dotZero(i) {
 		return false
 	}
 	if nd.Type == ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight && k.vectorized() {
@@ -1050,10 +1050,17 @@ func (b *binder86) vectors() error {
 			}
 		}
 	}
+	// carry is the registers of sums whose one reader took the sum's
+	// register: each stays the sum's to its last read, for its step.
+	carry := map[int]int{}
 	free := func(pos int, spent bool) {
 		for _, v := range lastAt[pos] {
 			if k.Nodes[v].Reg > 0 && k.needsVector(v) && busy[k.Nodes[v].Reg-1] {
 				r := k.Nodes[v].Reg - 1
+				if f, ok := carry[r]; ok && f != v {
+					continue
+				}
+				delete(carry, r)
 				busy[r] = false
 				tag[r] = chain[v]
 				if spent && !k.isZero(v) {
@@ -1063,6 +1070,28 @@ func (b *binder86) vectors() error {
 		}
 	}
 	innermost := func(c int) bool { return c >= 0 && len(k.innerLoops(c)) == 0 }
+	// reads is the reads of each sum in its own loop; one after the loop
+	// reads its last step, which its register holds.
+	reads, hr := map[int]int{}, k.Homes()
+	within := func(at, f int) bool { return at >= 0 && k.Nodes[f].Op == OpFold && k.within(at, k.Nodes[f].At) }
+	for j := range k.Nodes {
+		if k.Nodes[j].Op == OpFold || j >= len(hr) {
+			continue
+		}
+		for _, a := range k.Operands(&k.Nodes[j]) {
+			if within(hr[j], *a) {
+				reads[*a]++
+			}
+		}
+	}
+	for x := range k.Stores {
+		st := &k.Stores[x]
+		for _, a := range k.storeArgs(st) {
+			if within(st.At, *a) {
+				reads[*a] += 2
+			}
+		}
+	}
 	held := make([]int, b.p.Vectors)
 	for r := range held {
 		held[r] = -1
@@ -1313,6 +1342,12 @@ func (b *binder86) vectors() error {
 			case OpDot4, OpDot4U:
 				first = nd.C
 			}
+			// A sum's one reader in its loop, the first of a chain of
+			// several to its step, takes the sum's register.
+			if f := carried(nd); reg < 0 && f >= 0 && k.Nodes[f].Op == OpFold && k.Nodes[f].Reg > 0 && k.needsVector(f) && k.Nodes[f].At == hs[i] && reads[f] == 1 {
+				reg = k.Nodes[f].Reg - 1
+				carry[reg] = f
+			}
 			if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && b.last[first] == pos {
 				reg = k.Nodes[first].Reg - 1
 			}
@@ -1346,21 +1381,32 @@ func (b *binder86) vectors() error {
 					held = append(held, r)
 				}
 			}
-			t := lowest(0, hs[i])
-			if t >= 0 {
-				busy[t] = true
+			need := k.dotTemps(i, b.isa)
+			var ts [2]int
+			for j := range need {
+				ts[j] = lowest(0, hs[i])
+				if ts[j] >= 0 {
+					busy[ts[j]] = true
+				}
 			}
-			t2 := lowest(0, hs[i])
-			if t >= 0 {
-				busy[t] = false
+			for j := range need {
+				if ts[j] >= 0 {
+					busy[ts[j]] = false
+				}
 			}
 			for _, r := range held {
 				busy[r] = false
 			}
-			if t < 0 || t2 < 0 {
+			if need > 0 && ts[0] < 0 || need > 1 && ts[1] < 0 {
 				return errors.New("no registers for a byte dot")
 			}
-			k.Nodes[i].Tmp, k.Nodes[i].Tmp2 = t+1, t2+1
+			k.Nodes[i].Tmp, k.Nodes[i].Tmp2 = 0, 0
+			if need > 0 {
+				k.Nodes[i].Tmp = ts[0] + 1
+			}
+			if need > 1 {
+				k.Nodes[i].Tmp2 = ts[1] + 1
+			}
 		}
 		if nd.Op == OpSelect || nd.Op == OpZip {
 			var held []int
@@ -2151,6 +2197,60 @@ func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 
 // zeroOperand reports whether float zero node i is an operand the code
 // computes with, not only a sum's start.
+// carried is the operand of nd a result may take the register of: a
+// multiply-add's or byte dot's addend, else the first operand of an
+// operation the lowering makes in place of its first; -1 for others.
+func carried(nd Node) int {
+	switch nd.Op {
+	case OpFma, OpDot4, OpDot4U:
+		return nd.C
+	case OpAdd, OpSub, OpMul, OpMin, OpMax:
+		return nd.A
+	}
+	return -1
+}
+
+// dotTemps is the scratch vector registers byte dot i takes beyond its
+// own: the signed operand and the magnitudes where A's bytes may be
+// negative, else the pairs' sums apart from the result where something is
+// added to them or VNNI may sum aside; the legacy encodings take two.
+func (k *Kernel) dotTemps(i int, isa x86.ISA) int {
+	nd := k.Nodes[i]
+	switch {
+	case sseNarrow(isa) || nd.Op != OpDot4U && !k.unsignedBytes(nd.A):
+		return 2
+	case isa&x86.ISAVNNI == 0 && k.dotZero(nd.C):
+		return 0
+	}
+	return 1
+}
+
+// dotZero reports whether node i is a word zero read only as a sum's start
+// or a byte dot's addend: the dot is its products' sums alone, and the zero
+// takes no register.
+func (k *Kernel) dotZero(i int) bool {
+	if nd := k.Nodes[i]; nd.Op != OpConst || nd.Imm != 0 || nd.Type == ir.F32 {
+		return false
+	}
+	read := false
+	for j := range k.Nodes {
+		nd := &k.Nodes[j]
+		if j == i || nd.Op == OpFold && nd.B == i && nd.A != i {
+			continue
+		}
+		for _, a := range k.Operands(nd) {
+			if *a != i {
+				continue
+			}
+			if !nd.Op.byteDot() || a != &nd.C || nd.A == i || nd.B == i {
+				return false
+			}
+			read = true
+		}
+	}
+	return read
+}
+
 func (k *Kernel) zeroOperand(i int) bool {
 	for j, nd := range k.Nodes {
 		if nd.Op == OpFold {

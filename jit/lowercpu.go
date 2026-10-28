@@ -363,29 +363,39 @@ func (e *x86Lowerer) node(i int) {
 		// Each lane's four byte products and C: A's magnitudes as unsigned
 		// bytes times B with A's signs (B is never -128, so neither the
 		// sign nor a pair's sum overflows), or A as it is where its bytes
-		// are unsigned; the pairs summed by ones.
-		if nd.Tmp == 0 || nd.Tmp2 == 0 || e.gpr(i) {
+		// are unsigned; the pairs summed by ones. Its scratch registers are
+		// those dotTemps counts.
+		need := k.dotTemps(i, e.isa)
+		if nd.Tmp == 0 && need > 0 || nd.Tmp2 == 0 && need > 1 || e.gpr(i) {
 			e.fail("node %d: a byte dot outside vector lanes", i)
 			return
 		}
 		t, u := x86.Reg(nd.Tmp-1), x86.Reg(nd.Tmp2-1)
-		if nd.Op == OpDot4U || e.unsignedBytes(nd.A) {
+		if nd.Op == OpDot4U || k.unsignedBytes(nd.A) {
 			// A's bytes are already magnitudes: A times B as they are.
 			u, t = e.reg(nd.A), e.reg(nd.B)
 		} else {
 			a.VPSIGNB(t, e.reg(nd.B), e.reg(nd.A))
 			a.VPABSB(u, e.reg(nd.A))
 		}
+		zero := k.dotZero(nd.C)
+		r := e.reg(i)
 		if e.isa&x86.ISAVNNI != 0 {
 			// VPDPBUSD sums each lane's four products into it at once.
-			r := e.reg(i)
 			switch {
-			case r == e.reg(nd.C):
+			case zero && r != u && r != t:
+				a.VPXOR(r, r, r)
+				a.VPDPBUSD(r, u, t)
+			case !zero && r == e.reg(nd.C):
 				a.VPDPBUSD(r, u, t)
 			case r == u || r == t:
 				// The result takes an operand's register: summed aside.
 				s := x86.Reg(nd.Tmp - 1)
-				a.VMOVAPSReg(s, e.reg(nd.C))
+				if zero {
+					a.VPXOR(s, s, s)
+				} else {
+					a.VMOVAPSReg(s, e.reg(nd.C))
+				}
 				a.VPDPBUSD(s, u, t)
 				a.VMOVAPSReg(r, s)
 			default:
@@ -394,15 +404,21 @@ func (e *x86Lowerer) node(i int) {
 			}
 			return
 		}
-		p := x86.Reg(nd.Tmp - 1)
-		a.VPMADDUBSW(p, u, t)
-		t = p
-		if e.k.Ones == 0 {
-			a.VPMADDWDMem(t, t, onesSlot)
-		} else {
-			a.VPMADDWD(t, t, x86.Reg(e.k.Ones-1))
+		// The pairs' sums in the result's register where nothing is added
+		// to them, else in the first scratch.
+		p := r
+		if !zero {
+			p = x86.Reg(nd.Tmp - 1)
 		}
-		a.VPADDD(e.reg(i), e.reg(nd.C), t)
+		a.VPMADDUBSW(p, u, t)
+		if e.k.Ones == 0 {
+			a.VPMADDWDMem(p, p, onesSlot)
+		} else {
+			a.VPMADDWD(p, p, x86.Reg(e.k.Ones-1))
+		}
+		if !zero {
+			a.VPADDD(r, e.reg(nd.C), p)
+		}
 	case OpWidenHalf:
 		switch {
 		case e.gpr(nd.A):
@@ -429,7 +445,7 @@ func (e *x86Lowerer) node(i int) {
 			a.VPXOR(r, r, r)
 			return
 		}
-		if !e.words[i] {
+		if !e.words[i] || k.dotZero(i) {
 			return
 		}
 		t := x86.Reg(nd.Tmp - 1)
@@ -737,44 +753,44 @@ func (e *x86Lowerer) node(i int) {
 
 // unsignedBytes reports whether every byte of node i is below 0x80: a mask
 // of bytes each of which is.
-func (e *x86Lowerer) unsignedBytes(i int) bool {
-	return e.wordBits(i, 6)&0x80808080 == 0
+func (k *Kernel) unsignedBytes(i int) bool {
+	return k.wordBits(i, 6)&0x80808080 == 0
 }
 
 // wordBits is the bits of node i's words that may be set, from the
 // constants its masks, shifts and disjoint sums read, depth nodes deep; all
 // of them where it cannot tell.
-func (e *x86Lowerer) wordBits(i, depth int) uint32 {
-	if v, ok := e.constWord(i); ok {
+func (k *Kernel) wordBits(i, depth int) uint32 {
+	if v, ok := k.constWord(i); ok {
 		return v
 	}
-	nd := e.k.Nodes[i]
+	nd := k.Nodes[i]
 	if depth == 0 || nd.Type != ir.U32 && nd.Type != ir.I32 {
 		return ^uint32(0)
 	}
 	shift := func() (uint32, bool) {
-		v, ok := e.constWord(nd.B)
+		v, ok := k.constWord(nd.B)
 		return v, ok && v < 32
 	}
 	switch nd.Op {
 	case OpBitcast, OpBroadcast:
-		return e.wordBits(nd.A, depth-1)
+		return k.wordBits(nd.A, depth-1)
 	case OpAnd:
-		return e.wordBits(nd.A, depth-1) & e.wordBits(nd.B, depth-1)
+		return k.wordBits(nd.A, depth-1) & k.wordBits(nd.B, depth-1)
 	case OpOr, OpXor:
-		return e.wordBits(nd.A, depth-1) | e.wordBits(nd.B, depth-1)
+		return k.wordBits(nd.A, depth-1) | k.wordBits(nd.B, depth-1)
 	case OpAdd:
 		// Two words with no bit both may set sum with no carry: their or.
-		if a, b := e.wordBits(nd.A, depth-1), e.wordBits(nd.B, depth-1); a&b == 0 {
+		if a, b := k.wordBits(nd.A, depth-1), k.wordBits(nd.B, depth-1); a&b == 0 {
 			return a | b
 		}
 	case OpShl:
 		if s, ok := shift(); ok {
-			return e.wordBits(nd.A, depth-1) << s
+			return k.wordBits(nd.A, depth-1) << s
 		}
 	case OpShr:
 		if s, ok := shift(); ok {
-			return e.wordBits(nd.A, depth-1) >> s
+			return k.wordBits(nd.A, depth-1) >> s
 		}
 	}
 	return ^uint32(0)
@@ -782,14 +798,14 @@ func (e *x86Lowerer) wordBits(i, depth int) uint32 {
 
 // constWord is node i's word where it is fixed: a constant, or a constant
 // block's word at a constant index.
-func (e *x86Lowerer) constWord(i int) (uint32, bool) {
-	nd := e.k.Nodes[i]
+func (k *Kernel) constWord(i int) (uint32, bool) {
+	nd := k.Nodes[i]
 	switch {
 	case nd.Op == OpConst:
 		return uint32(nd.Imm), true
-	case nd.Op == OpLoad && e.k.Bufs[nd.Buf].Words != nil && e.k.Nodes[nd.A].Op == OpConst:
-		w := e.k.Bufs[nd.Buf].Words
-		if x := int(e.k.Nodes[nd.A].Imm); x >= 0 && x < len(w) {
+	case nd.Op == OpLoad && k.Bufs[nd.Buf].Words != nil && k.Nodes[nd.A].Op == OpConst:
+		w := k.Bufs[nd.Buf].Words
+		if x := int(k.Nodes[nd.A].Imm); x >= 0 && x < len(w) {
 			return w[x], true
 		}
 	}

@@ -116,7 +116,7 @@ func (e *a64Lowerer) node(i int) {
 			e.zero(e.reg(i))
 			return
 		}
-		if !x.words[i] {
+		if !x.words[i] || k.dotZero(i) {
 			return
 		}
 		r := e.reg(i)
@@ -489,6 +489,39 @@ func (e *a64Lowerer) fma(i int) {
 	}
 }
 
+// dot4Zero is dot4 whose addend is zero: the products' sums alone.
+func (e *a64Lowerer) dot4Zero(r, p, q x86.Reg) {
+	a := e.a
+	if e.dot {
+		if r != p && r != q {
+			for _, h := range pair(r) {
+				a.MOVIzero(h)
+			}
+			each(r, p, q, a.SDOT)
+			return
+		}
+		t := e.temp(a64Halves(r, p, q)...)
+		for h := range 2 {
+			a.MOVIzero(t)
+			a.SDOT(t, pair(p)[h], pair(q)[h])
+			a.MOVvec(pair(r)[h], t)
+		}
+		e.release(t)
+		return
+	}
+	busy := a64Halves(r, p, q)
+	t0 := e.temp(busy...)
+	t1 := e.temp(append(busy, t0)...)
+	for h := range 2 {
+		a.SMULL8b(t0, pair(p)[h], pair(q)[h])
+		a.SMULL16b(t1, pair(p)[h], pair(q)[h])
+		a.ADDP8h(t0, t0, t1)
+		a.SADDLP8h(pair(r)[h], t0)
+	}
+	e.release(t1)
+	e.release(t0)
+}
+
 // dot4 is each lane's four signed byte products of A and B added to C: SDOT
 // where the device states it, else the products widened to halves, summed in
 // pairs, and the pairs added into the lane.
@@ -499,11 +532,16 @@ func (e *a64Lowerer) dot4(i int) {
 		e.fail("node %d: a byte dot outside vector lanes", i)
 		return
 	}
-	if nd.Op == OpDot4U && !x.unsignedBytes(nd.A) {
+	if nd.Op == OpDot4U && !x.k.unsignedBytes(nd.A) {
 		e.fail("node %d: an unsigned byte dot, which arm64 has no form of without i8mm", i)
 		return
 	}
-	r, p, q, c := e.reg(i), e.reg(nd.A), e.reg(nd.B), e.reg(nd.C)
+	r, p, q := e.reg(i), e.reg(nd.A), e.reg(nd.B)
+	if k.dotZero(nd.C) {
+		e.dot4Zero(r, p, q)
+		return
+	}
+	c := e.reg(nd.C)
 	if e.dot {
 		switch {
 		case r == c:

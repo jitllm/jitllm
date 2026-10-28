@@ -102,7 +102,7 @@ func cpuWideProfile() Profile {
 		Bounds{},
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
 		Workers{Rows: 16, Tile: 64},
-		RowJam{N: 2},
+		RowJam{N: 4},
 		Serial{},
 		Unsigned{},
 		Simplify{ConstLast: true},

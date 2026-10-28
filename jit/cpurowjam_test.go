@@ -108,3 +108,54 @@ func TestCPURowJamReadsTheWeightOnce(t *testing.T) {
 		t.Error("with Jam off the halving check passed: it cannot see a form that lost its lanes")
 	}
 }
+
+// fourRowsRefused is the packed types whose shipping prompt matvec the
+// registers refuse at four rows a call, by whether the host has VNNI: each
+// halves to two. A list that only shrinks.
+var fourRowsRefused = map[string]bool{"Q6_K/vnni": true, "Q3_K/vnni": true}
+
+// TestCPUPromptRunsFourRowsACall holds the shipping profile's prompt matvec
+// on the CPU to four rows a call where the registers hold them, Jam's lanes
+// kept: a zero a byte dot adds takes no register, a byte dot of unsigned
+// bytes one scratch, a sum's one reader the sum's register, and the rows
+// step side by side only where they share two or more values. Four rows a
+// call load a quarter of the weight words a row a call loads.
+func TestCPUPromptRunsFourRowsACall(t *testing.T) {
+	host := uint64(cpu.CPU().ISA())
+	vnni := uint64(x86.ISAVNNI)
+	isas := []uint64{host}
+	if host&vnni != 0 {
+		isas = append(isas, host&^vnni)
+	}
+	four := 0
+	for _, typ := range []quant.Type{quant.Q4_K, quant.Q5_K, quant.Q6_K, quant.Q8_0, quant.Q3_K, quant.Q4_0, quant.Q5_0, quant.Q5_1, quant.TQ2_0, quant.TQ2_F32, quant.MXFP4} {
+		for _, isa := range isas {
+			key := fmt.Sprintf("%v/novnni", typ)
+			if isa&vnni != 0 {
+				key = fmt.Sprintf("%v/vnni", typ)
+			}
+			k, jam := rowsForm(t, Default(), typ, isa, 8)
+			_, off := rowsForm(t, rowJamRegistry(4, "rowjam"), typ, isa, 8)
+			want := 4
+			if fourRowsRefused[key] {
+				want = 2
+			}
+			switch {
+			case k == nil || k.Jam != want:
+				t.Errorf("%s: the prompt's matvec does not run %d rows a call", key, want)
+			case typ != quant.MXFP4 && !k.wide():
+				t.Errorf("%s: %d rows a call lost Jam's lanes", key, k.Jam)
+			case jam == 0 || want*jam > off:
+				t.Errorf("%s: %d rows a call load %d weight words a launch, against %d a row a call", key, want, jam, off)
+			default:
+				t.Logf("%s: %d rows a call, %d weight words a launch against %d a row a call", key, k.Jam, jam, off)
+				if want == 4 {
+					four++
+				}
+			}
+		}
+	}
+	if four == 0 {
+		t.Fatal("no form ran four rows a call: the gate proved nothing")
+	}
+}
