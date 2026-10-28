@@ -29,7 +29,13 @@ import (
 //
 // Rows, Keys and Shared bound a workgroup's rows, a block's positions and
 // the workgroup memory it takes, in bytes; fewer rows or positions are
-// taken where the head is too wide for them.
+// taken where the head is too wide for them. A head too wide for half Rows
+// within Shared takes the unit's memory where the device states more
+// (Device.Shared): two warps a workgroup stage the history for few rows and
+// hide no latency. On a V100 a 512-row chunk at 2048 positions, 32 heads of
+// 128 over 8, reads 2401-2512 us at 32 rows a workgroup (48 KiB) and
+// 1440-1446 at 128 (92 KiB); a head of 64 keeps 64 rows in 40 KiB, where
+// 128 rows in 97 KiB read 3.6% slower in a prompt.
 type Flash struct {
 	Rows, Keys, Shared int
 }
@@ -312,13 +318,10 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 	if d.Shared > 0 {
 		limit = min(limit, d.Shared)
 	}
-	var g flashGeom
-	for TR := p.Rows; TR >= tm && g.TR == 0; TR /= 2 {
-		for KB := p.Keys; KB >= max(tn, tk) && KB%2 == 0; KB /= 2 {
-			if TR%tm == 0 && KB%tn == 0 && KB%tk == 0 && KB%4 == 0 && 4*flashLayout(TR, KB, Dk, Dv).total <= limit {
-				g = flashLayout(TR, KB, Dk, Dv)
-				break
-			}
+	g := p.layout(R, Dk, Dv, limit, tm, tn, tk)
+	if g.TR < p.Rows/2 && d.Shared > limit {
+		if w := p.layout(R, Dk, Dv, d.Shared, tm, tn, tk); w.TR > g.TR {
+			g = w
 		}
 	}
 	if g.TR == 0 {
@@ -327,6 +330,24 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 	b := flashBuild{c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
 		tq: map[int]int{}, tr: map[int]int{}}
 	return b.kernel(), true
+}
+
+// layout is the flash form of the most rows a workgroup, then the most
+// positions a block, whose workgroup memory is at most limit bytes: no more
+// rows than R take, at least a tile's. Its TR is 0 where none fits.
+func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk int) flashGeom {
+	top := p.Rows
+	for top/2 >= tm && top/2 >= R {
+		top /= 2
+	}
+	for TR := top; TR >= tm; TR /= 2 {
+		for KB := p.Keys; KB >= max(tn, tk) && KB%2 == 0; KB /= 2 {
+			if TR%tm == 0 && KB%tn == 0 && KB%tk == 0 && KB%4 == 0 && 4*flashLayout(TR, KB, Dk, Dv).total <= limit {
+				return flashLayout(TR, KB, Dk, Dv)
+			}
+		}
+	}
+	return flashGeom{}
 }
 
 // flashBuild is a Flash kernel as it is built.
