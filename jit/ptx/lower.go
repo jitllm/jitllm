@@ -40,7 +40,7 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 	// a kernel that has one gets it, so no other kernel's text changes.
 	sharedAlign := 0
 	for _, o := range k.Ops {
-		if o.Kind == ir.OpLoadV || o.Kind == ir.OpStoreV {
+		if o.Kind == ir.OpLoadV || o.Kind == ir.OpStoreV || o.Kind == ir.OpTileLoad && ir.Aligned(o) {
 			sharedAlign = 16
 		}
 	}

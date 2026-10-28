@@ -21,6 +21,7 @@ func (p Affine) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			step := m.cse()
 			step = m.foldConstants() || step
 			step = m.powersOfTwo() || step
+			step = m.headroom() || step
 			step = m.constantsOutward() || step
 			if !step {
 				break
@@ -115,6 +116,54 @@ func (k *Kernel) aligned() bool {
 				continue
 			}
 			k.Nodes[i] = Node{Op: OpMul, Type: ir.U32, A: a, B: k.u32(int(C >> n))}
+		}
+		changed = true
+	}
+	return changed
+}
+
+// headroom drops the c of x+c that a shift or a mask cannot see, exactly in
+// the u32 ring: where x is a multiple of 2^m by its structure and c is below
+// 2^m, x+c is x|c, so (x+c)>>n is x>>n for n at least m, and (x+c)&(2^n-1)
+// is (x&(2^n-1))+c; x&(2^n-1) is 0 for x a multiple of 2^n. The elements of
+// one word reached at x plus each place then read the word at one address.
+func (k *Kernel) headroom() bool {
+	changed := false
+	for i := range k.Nodes {
+		nd := k.Nodes[i]
+		if nd.Type != ir.U32 || nd.Op != OpShr && nd.Op != OpAnd || k.Nodes[nd.B].Op != OpConst {
+			continue
+		}
+		b := uint32(k.Nodes[nd.B].Imm)
+		if nd.Op == OpAnd && b&(b+1) == 0 && b != 0 && b != ^uint32(0) && k.divisibleBy(nd.A, b+1) {
+			k.Nodes[i] = Node{Op: OpConst, Type: ir.U32}
+			changed = true
+			continue
+		}
+		x, c, ok := k.addConst(nd.A)
+		if !ok || c == 0 {
+			continue
+		}
+		n := uint32(32)
+		if nd.Op == OpShr {
+			n = b
+		} else if b&(b+1) == 0 {
+			n = uint32(bitsOf(int(b) + 1))
+		}
+		m := uint32(0)
+		for e := n; e > 0; e-- {
+			if c < 1<<e && k.divisibleBy(x, 1<<e) {
+				m = e
+				break
+			}
+		}
+		if m == 0 || n > 31 {
+			continue
+		}
+		if nd.Op == OpShr {
+			k.Nodes[i].A = x
+		} else {
+			k.Nodes[i] = Node{Op: OpAdd, Type: ir.U32, A: k.bin(OpAnd, ir.U32, x, nd.B), B: k.u32(int(c))}
 		}
 		changed = true
 	}
@@ -298,6 +347,12 @@ func (k *Kernel) divisibleBy(i int, m uint32) bool {
 		return k.divisibleBy(nd.A, m) || k.divisibleBy(nd.B, m)
 	case nd.Op == OpAdd:
 		return k.divisibleBy(nd.A, m) && k.divisibleBy(nd.B, m)
+	case m&(m-1) != 0:
+		// The cases below hold for a power of two alone.
+	case nd.Op == OpAnd:
+		return k.divisibleBy(nd.A, m) || k.divisibleBy(nd.B, m)
+	case nd.Op == OpShl && k.Nodes[nd.B].Op == OpConst && k.Nodes[nd.B].Imm < 32:
+		return k.divisibleBy(nd.A, m) || uint64(1)<<uint64(k.Nodes[nd.B].Imm)%uint64(m) == 0
 	}
 	return false
 }

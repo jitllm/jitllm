@@ -1,0 +1,189 @@
+package jit_test
+
+import (
+	"encoding/binary"
+	"math"
+	"math/rand"
+	"os"
+	"sort"
+	"testing"
+	"time"
+
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
+)
+
+// TestComposedMatrixSpeed times the composer's projection on the matrix unit
+// against main's staged GEMM (kernels.GemmVolta, its shipping tile) on
+// Llama-3.1-8B Q4_K_M's projection shapes at a 512-row chunk, on every CUDA
+// device, interleaved: each round launches both arms in turn, and the figure
+// is each arm's median microseconds and the median of the per-round ratios.
+// Main's arm reads binary16 activations a kernel before it wrote, which it
+// does not time; the composer's reads the float rows. JITLLM_MATRIX_BENCH=1;
+// a probe, not a gate.
+func TestComposedMatrixSpeed(t *testing.T) {
+	if os.Getenv("JITLLM_MATRIX_BENCH") == "" {
+		t.Skip("set JITLLM_MATRIX_BENCH=1")
+	}
+	testlock.GPU(t)
+	const R, rounds, reps = 512, 16, 5
+	for _, d := range backend.Open() {
+		defer d.Close()
+		if d.API() != "ptx" {
+			continue
+		}
+		ok, why := backend.LowersTile(d, matrixTile)
+		if !ok {
+			t.Fatalf("%s: no binary16 tile: %s", d.Name(), why)
+		}
+		dev := gpuDevice(d)
+		dev.Matrix = [3]int{matrixTile.M, matrixTile.N, matrixTile.K}
+		for _, sh := range []struct {
+			what string
+			typ  quant.Type
+			n, k int
+		}{
+			{"q/o", quant.Q4_K, 4096, 4096},
+			{"gate/up", quant.Q4_K, 14336, 4096},
+			{"down", quant.Q6_K, 4096, 14336},
+		} {
+			jt, _ := jlm.TypeOf(sh.typ)
+			q, _ := kernels.QuantOf(sh.typ)
+			rng := rand.New(rand.NewSource(5))
+			w := tiledWeights(sh.typ, q, sh.n, sh.k, rng)
+			qs, dw, sc, err := kernels.PackWeights(q, w, sh.n, sh.k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sc) == 0 {
+				sc = []uint32{0}
+			}
+			b := graph.New()
+			in := b.In("x", sh.k)
+			out := b.MatVec(in, jlm.RoleFFNUp, sh.n)
+			b.Out(out)
+			_, codes, err := jit.Default().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleFFNUp: jt},
+				Step: jit.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
+			if err != nil {
+				t.Fatal(err)
+			}
+			op, err := compileLone(d, codes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var bufs []backend.Buf
+			up := func(words []uint32) backend.Buf {
+				bf, err := d.Alloc(max(4*len(words), 4))
+				if err != nil {
+					t.Fatal(err)
+				}
+				p := make([]byte, 4*len(words))
+				for i, v := range words {
+					binary.LittleEndian.PutUint32(p[4*i:], v)
+				}
+				if len(p) > 0 {
+					if err := bf.Write(p); err != nil {
+						t.Fatal(err)
+					}
+				}
+				bufs = append(bufs, bf)
+				return bf
+			}
+			x := make([]uint32, R*sh.k)
+			for i := range x {
+				x[i] = math.Float32bits(float32(rng.NormFloat64()))
+			}
+			planes := [3]backend.Buf{up(qs), up(dw), up(sc)}
+			xBuf, outBuf := up(x), up(make([]uint32, R*sh.n))
+			own := map[jit.Operand]backend.Buf{}
+			args := make([][]backend.Buf, len(codes))
+			for ci, c := range codes {
+				for _, bd := range c.Binds {
+					o := bd.Operand
+					var bf backend.Buf
+					switch {
+					case o.Kind == jit.OperandValue && o.Value == in:
+						bf = xBuf
+					case o.Kind == jit.OperandValue && o.Value == out:
+						bf = outBuf
+					case o.Kind == jit.OperandWeight:
+						bf = planes[o.Region]
+					case o.Kind == jit.OperandTable && o.Name == "rows.n":
+						bf = up([]uint32{R})
+					default:
+						if bf = own[o]; bf == nil {
+							w := bd.Words
+							if w == nil {
+								w = make([]uint32, max(bd.Bytes, 4)/4)
+							}
+							bf = up(w)
+							own[o] = bf
+						}
+					}
+					args[ci] = append(args[ci], bf)
+				}
+			}
+			composed := func() {
+				for ci, c := range codes {
+					if err := op.kerns[ci].Launch(c.LiveGroups(R), c.GPU.Group[0], args[ci]...); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			tl := kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}
+			sub, _, _, _ := kernels.Layout(q)
+			tl.KB = max(32/sub, 1)
+			s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.n, NTok: R}
+			mk, err := kernels.GemmVolta(s, tl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mainKern, err := d.Compile(mk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			act16 := up(make([]uint32, R*sh.k/2))
+			mainOut := up(make([]uint32, R*sh.n))
+			mainArm := func() {
+				if err := mainKern.Launch(kernels.GemmVoltaGroups(s, tl), tl.Threads(), planes[0], planes[1], planes[2], act16, mainOut); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sync := func() { outBuf.Read(make([]byte, 4)) }
+			time1 := func(f func()) float64 {
+				sync()
+				t0 := time.Now()
+				for range reps {
+					f()
+				}
+				sync()
+				return float64(time.Since(t0).Microseconds()) / reps
+			}
+			composed()
+			mainArm()
+			var cu, mu, ratio []float64
+			for range rounds {
+				c, m := time1(composed), time1(mainArm)
+				cu, mu, ratio = append(cu, c), append(mu, m), append(ratio, c/m)
+			}
+			med := func(v []float64) float64 {
+				s := append([]float64(nil), v...)
+				sort.Float64s(s)
+				return s[len(s)/2]
+			}
+			flop := 2 * float64(R) * float64(sh.n) * float64(sh.k)
+			t.Logf("%s %-8s %v %5dx%-5d rows %d: composed %8.1f us (%5.1f TFLOP/s, %d kernels), main %8.1f us (%5.1f TFLOP/s), composed/main %.2f",
+				d.Name(), sh.what, sh.typ, sh.n, sh.k, R, med(cu), flop/med(cu)/1e6, len(codes), med(mu), flop/med(mu)/1e6, med(ratio))
+			mainKern.Close()
+			op.close()
+			for _, bf := range bufs {
+				bf.Free()
+			}
+		}
+	}
+}

@@ -336,6 +336,11 @@ func (tl *tileLower) access(o ir.Op, base Reg, offset, stride Reg, store []Reg) 
 			}
 			a0, off0 := at(i, j, 0)
 			a1, off1 := at(i, j, 1)
+			if store == nil && ir.Aligned(o) && a0 == a1 && off1 == off0+2 && t.Elem == ir.TileF16 {
+				b.Op("ld.%s.b32 %v,[%v+%d];", sp, out[n], a0, off0)
+				n++
+				continue
+			}
 			h0, h1 := b.Reg(B16), b.Reg(B16)
 			if store != nil {
 				b.Op("mov.b32 {%v,%v},%v;", h0, h1, store[n])
@@ -499,8 +504,24 @@ func (tl *tileLower) voltaAccess(o ir.Op, base Reg, offset, stride Reg, store []
 	if store == nil {
 		out = tl.fresh(t)
 	}
-	for n, el := range tl.voltaElems(t) {
+	// A run of k is contiguous where k is the view's minor axis: A row-major,
+	// B column-major. A lane's two registers of one block and four of k are
+	// then four consecutive halves, read in one access of an aligned view.
+	vec := store == nil && ir.Aligned(o) && t.Elem == ir.TileF16 && (t.Use == ir.TileA) != col
+	els := tl.voltaElems(t)
+	for n := 0; n < len(els); n++ {
+		el := els[n]
 		g := guard(el.pred)
+		if vec && n%2 == 0 && n+1 < len(els) {
+			a, off := at(el.row, el.col)
+			if el.pred != nil {
+				b.Op("mov.b32 %v,0;", out[n])
+				b.Op("mov.b32 %v,0;", out[n+1])
+			}
+			b.Op("%sld.%s.v2.b32 {%v,%v},[%v+%d];", g, sp, out[n], out[n+1], a, off)
+			n++
+			continue
+		}
 		if t.Elem == ir.TileF32 {
 			a, off := at(el.row, el.col)
 			if store != nil {

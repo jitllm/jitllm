@@ -11,7 +11,11 @@ import (
 // input -- and a factor of the output and the reduced coordinate alone -- its
 // decoded weight. A workgroup of Warps[0]*Warps[1] warps takes Rows rows by
 // Cols outputs. Each trip stages Depth elements of k of both factors in
-// workgroup memory as binary16 pairs, behind a barrier; each warp multiplies
+// workgroup memory as binary16 pairs, behind a barrier, a thread eight
+// consecutive elements of a row at a time, so the elements of one packed
+// word share its load and its scales once Affine has proved the shared
+// address (headroom); a row of the stage is padded by four elements, which
+// puts the sixteen rows a fragment load reads in different banks. Each warp multiplies
 // its share of the block in the device's tiles into float32 accumulators
 // carried across the trips; and the block's sums pass through workgroup
 // memory to the kernel's own stores, an element a thread. A row past the
@@ -150,7 +154,11 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	shared := func(name string, e ir.Type, n int) int {
 		return m.buf(Buf{Kind: BufShared, Elem: e, Size: n, Operand: Operand{Kind: OperandScratch, Name: k.Name + "." + name}})
 	}
-	as, bs, cs := shared("a16", U, TR*KC/2), shared("b16", U, TN*KC/2), shared("sums", F, TR*TN)
+	// SK is a staged row's elements, padded; G the elements a thread stages
+	// at a time.
+	const pad, G = 4, 8
+	SK := KC + pad
+	as, bs, cs := shared("a16", U, TR*SK/2), shared("b16", U, TN*SK/2), shared("sums", F, TR*TN)
 
 	last := m.u32(R - 1)
 	if k.Capacity > 0 {
@@ -178,12 +186,15 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	m.Loops[P].Uniform, m.Loops[P].StepsLast = true, true
 	kc0 := m.bin(OpMul, U, m.add(Node{Op: OpIter, At: P, Type: U}), m.u32(KC))
 	m.Stores = append(m.Stores, Store{Barrier: true, At: P})
-	// stage is buf's words, each the binary16 pair of factor at k and k+1,
-	// at coordinate axis base + the word's row of KC/2 words, held to most.
-	stage := func(buf, words, axis, base, most, factor int) {
-		l, w := spread(words, P)
-		c := m.bin(OpMin, U, m.bin(OpAdd, U, base, m.bin(OpDiv, U, w, m.u32(KC/2))), most)
-		kk := m.bin(OpAdd, U, kc0, m.bin(OpMul, U, m.bin(OpRem, U, w, m.u32(KC/2)), m.u32(2)))
+	// stage is buf's rows of factor at coordinate axis base + the row, held
+	// to most: a trip G elements of k, binary16 pairs a word.
+	stage := func(buf, rows, axis, base, most, factor int) {
+		l, w := spread(rows*KC/G, P)
+		row := m.bin(OpDiv, U, w, m.u32(KC/G))
+		g := m.bin(OpRem, U, w, m.u32(KC/G))
+		c := m.bin(OpMin, U, m.bin(OpAdd, U, base, row), most)
+		kg := m.bin(OpAdd, U, kc0, m.bin(OpMul, U, g, m.u32(G)))
+		word := m.bin(OpAdd, U, m.bin(OpMul, U, row, m.u32(SK/2)), m.bin(OpMul, U, g, m.u32(G/2)))
 		elem := func(at int) int {
 			return m.un(OpHalf, U, copyInto(m, k, factor, func(i int, nd Node) (int, bool) {
 				switch {
@@ -195,11 +206,15 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 				return 0, false
 			}))
 		}
-		hi := m.bin(OpShl, U, elem(m.bin(OpAdd, U, kk, m.u32(1))), m.u32(16))
-		m.Stores = append(m.Stores, Store{Buf: buf, Ix: w, Val: m.bin(OpOr, U, elem(kk), hi), At: l})
+		for e := 0; e < G; e += 2 {
+			lo := elem(m.bin(OpAdd, U, kg, m.u32(e)))
+			hi := m.bin(OpShl, U, elem(m.bin(OpAdd, U, kg, m.u32(e+1))), m.u32(16))
+			ix := m.bin(OpAdd, U, word, m.u32(e/2))
+			m.Stores = append(m.Stores, Store{Buf: buf, Ix: ix, Val: m.bin(OpOr, U, lo, hi), At: l})
+		}
 	}
-	stage(as, TR*KC/2, 0, r0, last, f.row)
-	stage(bs, TN*KC/2, 1, n0, lastOut, f.out)
+	stage(as, TR, 0, r0, last, f.row)
+	stage(bs, TN, 1, n0, lastOut, f.out)
 	m.Stores = append(m.Stores, Store{Barrier: true, At: P})
 
 	aT := ir.TileType{Rows: tm, Cols: tk, Elem: ir.TileF16, Use: ir.TileA}
@@ -209,23 +224,25 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) *Kernel {
 	at := func(base, i, unit, stride, s int) int {
 		return m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpAdd, U, base, m.u32(i*unit)), m.u32(stride)), m.u32(s))
 	}
+	// A staged view's rows start four elements apart and its offsets are
+	// multiples of four: aligned.
 	tile := func(t ir.TileType, buf, off int, col bool) int {
-		var imm int64
+		imm := int64(2)
 		if col {
-			imm = 1
+			imm |= 1
 		}
-		return m.add(Node{Op: OpTileLoad, Type: ir.Void, Buf: buf, A: off, B: m.u32(KC), Imm: imm, At: P + 1, Tile: &t})
+		return m.add(Node{Op: OpTileLoad, Type: ir.Void, Buf: buf, A: off, B: m.u32(SK), Imm: imm, At: P + 1, Tile: &t})
 	}
 	a := make([][]int, mi)
 	for i := range a {
 		for s := 0; s < ks; s++ {
-			a[i] = append(a[i], tile(aT, as, at(wr0, i, tm, KC, s*tk), false))
+			a[i] = append(a[i], tile(aT, as, at(wr0, i, tm, SK, s*tk), false))
 		}
 	}
 	b := make([][]int, nj)
 	for j := range b {
 		for s := 0; s < ks; s++ {
-			b[j] = append(b[j], tile(bT, bs, at(wn0, j, tn, KC, s*tk), true))
+			b[j] = append(b[j], tile(bT, bs, at(wn0, j, tn, SK, s*tk), true))
 		}
 	}
 	zero := m.add(Node{Op: OpTileSplat, Type: ir.Void, A: m.f32(0), Tile: &cT})

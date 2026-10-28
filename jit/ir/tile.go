@@ -118,6 +118,16 @@ func (b *Builder) TileLoad(t TileType, buf, offset, stride Value, colMajor bool)
 	})
 }
 
+// TileLoadAligned is TileLoad over a view the caller states is aligned: its
+// offset and stride multiples of four components, and the buffer's start
+// aligned to sixteen bytes, so a backend may read a lane's run of
+// consecutive components in one access.
+func (b *Builder) TileLoadAligned(t TileType, buf, offset, stride Value, colMajor bool) Value {
+	v := b.TileLoad(t, buf, offset, stride, colMajor)
+	b.k.Ops[v-1].Imm |= 2
+	return v
+}
+
 // TileSplat is a tile every one of whose elements is v. It is how an
 // accumulator is zeroed; the value is collective, so it is an op.
 func (b *Builder) TileSplat(t TileType, v Value) Value {
@@ -215,7 +225,11 @@ func IsTileOp(k Kind) bool {
 }
 
 // ColMajor reports the layout an access op carries.
-func ColMajor(o Op) bool { return o.Imm != 0 }
+func ColMajor(o Op) bool { return o.Imm&1 != 0 }
+
+// Aligned reports whether a tile access's view is stated aligned
+// (TileLoadAligned).
+func Aligned(o Op) bool { return o.Imm&2 != 0 }
 
 func boolImm(b bool) int64 {
 	if b {

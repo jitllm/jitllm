@@ -334,7 +334,11 @@ func (e *lowerer) get(i int) ir.Value {
 		x, y := e.get(nd.A), e.get(nd.B)
 		v = binary(b, nd.Op, nd.Type, x, y)
 	case OpTileLoad:
-		v = b.TileLoad(*nd.Tile, e.params[nd.Buf], e.get(nd.A), e.get(nd.B), nd.Imm != 0)
+		if nd.Imm&2 != 0 {
+			v = b.TileLoadAligned(*nd.Tile, e.params[nd.Buf], e.get(nd.A), e.get(nd.B), nd.Imm&1 != 0)
+		} else {
+			v = b.TileLoad(*nd.Tile, e.params[nd.Buf], e.get(nd.A), e.get(nd.B), nd.Imm&1 != 0)
+		}
 	case OpTileSplat:
 		v = b.TileSplat(*nd.Tile, e.get(nd.A))
 	case OpTileMMA:
