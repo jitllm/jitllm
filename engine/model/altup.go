@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/jit"
 )
 
-// Gemma 3n's AltUp and LAuReL (Config.AltUp), transcribed from transformers'
+// Gemma 3n's AltUp and LAuReL (Config.PredStreams), transcribed from transformers'
 // Gemma3nTextModel/Gemma3nTextDecoderLayer, which llama.cpp's gemma3n.cpp
 // matches.
 //
@@ -44,7 +44,7 @@ const magEps = 1e-5
 // Streams is how many residual streams a token carries: AltUp's, DeepSeek
 // V4's hyper-connections, Kimi-K3's running residual and its checkpoints, or
 // one.
-func (c *Config) Streams() int { return max(c.AltUp, c.HCMult, c.resStreams(), 1) }
+func (c *Config) Streams() int { return max(c.PredStreams, c.HCMult, c.resStreams(), 1) }
 
 // ResidW is one row's residual width, every stream of it.
 func (c *Config) ResidW() int { return c.NEmbd * c.Streams() }
@@ -140,7 +140,7 @@ func (s *State) altHeadNorm(n int) {
 func loadAltUp(m *Model, cfg *Config, get func(jlm.Role, int32, int32) (tensor, error)) error {
 	var err error
 	d, s := cfg.NEmbd, cfg.Streams()
-	if m.altProj, err = get(jlm.RoleAltUpProj, jlm.DenseBlock, -1); err != nil {
+	if m.altProj, err = get(jlm.RoleStreamExpand, jlm.DenseBlock, -1); err != nil {
 		return err
 	}
 	if m.altProj.k != d || m.altProj.rows != (s-1)*d {
@@ -148,7 +148,7 @@ func loadAltUp(m *Model, cfg *Config, get func(jlm.Role, int32, int32) (tensor, 
 	}
 	m.altUnembd = make([]tensor, s-1)
 	for k := range m.altUnembd {
-		if m.altUnembd[k], err = get(jlm.RoleAltUpUnembd1+jlm.Role(k), jlm.DenseBlock, -1); err != nil {
+		if m.altUnembd[k], err = get(jlm.RoleStreamCollapse1+jlm.Role(k), jlm.DenseBlock, -1); err != nil {
 			return err
 		}
 		if t := m.altUnembd[k]; t.k != d || t.rows != d {
@@ -168,11 +168,11 @@ func loadAltUpLayer(l *layer, bi int32, cfg *Config,
 		role jlm.Role
 		n    int
 	}{
-		{&l.altRouterNorm, jlm.RoleAltUpRouterNorm, d},
-		{&l.altPredT, jlm.RoleAltUpPredCoef, s * s * s},
-		{&l.altCorrT, jlm.RoleAltUpCorrCoef, s * s},
-		{&l.altCorrScale, jlm.RoleAltUpCorrScale, d},
-		{&l.laurelPost, jlm.RoleLaurelPostNorm, d},
+		{&l.altRouterNorm, jlm.RoleStreamRouterNorm, d},
+		{&l.altPredT, jlm.RoleStreamPredictCoef, s * s * s},
+		{&l.altCorrT, jlm.RoleStreamCorrectCoef, s * s},
+		{&l.altCorrScale, jlm.RoleStreamCorrectScale, d},
+		{&l.laurelPost, jlm.RoleLowRankNorm, d},
 	} {
 		if *v.dst, err = vec(v.role, bi); err != nil {
 			return err
@@ -181,13 +181,13 @@ func loadAltUpLayer(l *layer, bi int32, cfg *Config,
 			return fmt.Errorf("model: block %d's %v holds %d values, want %d", bi, v.role, len(*v.dst), v.n)
 		}
 	}
-	if l.altRouter, err = get(jlm.RoleAltUpRouter, bi, -1); err != nil {
+	if l.altRouter, err = get(jlm.RoleStreamRouter, bi, -1); err != nil {
 		return err
 	}
-	if l.laurelL, err = get(jlm.RoleLaurelL, bi, -1); err != nil {
+	if l.laurelL, err = get(jlm.RoleLowRankIn, bi, -1); err != nil {
 		return err
 	}
-	if l.laurelR, err = get(jlm.RoleLaurelR, bi, -1); err != nil {
+	if l.laurelR, err = get(jlm.RoleLowRankOut, bi, -1); err != nil {
 		return err
 	}
 	if l.altRouter.k != d || l.altRouter.rows != s || l.laurelL.k != d || l.laurelR.k != l.laurelL.rows ||
@@ -202,7 +202,7 @@ func loadAltUpLayer(l *layer, bi int32, cfg *Config,
 // allocAltUp sizes the decode token's AltUp scratch.
 func (s *State) allocAltUp() {
 	c := s.m.Cfg
-	if c.AltUp == 0 {
+	if c.PredStreams == 0 {
 		return
 	}
 	d, n := c.NEmbd, c.Streams()
@@ -226,7 +226,7 @@ func (s *State) allocAltUp() {
 // growAltUpRows sizes a chunk's predictions and LAuReL outputs for n rows.
 func (s *State) growAltUpRows(n int) {
 	c := s.m.Cfg
-	if c.AltUp == 0 || len(s.baltPred) >= n*c.ResidW() {
+	if c.PredStreams == 0 || len(s.baltPred) >= n*c.ResidW() {
 		return
 	}
 	s.baltPred = make([]float32, n*c.ResidW())

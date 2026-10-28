@@ -300,11 +300,11 @@ type Config struct {
 	// k3Fault breaks one piece of Kimi-K3's graph, for a gate's violation
 	// only.
 	k3Fault k3Fault
-	// AltUp is Gemma 3n's residual stream count (altup.go), zero for one
-	// stream; NSparse blocks lead with a gaussian top-k on their FFN gate at
-	// SparseStd deviations.
-	AltUp, NSparse int
-	SparseStd      float32
+	// PredStreams is how many residual streams each block predicts and
+	// corrects (altup.go), zero for one stream; NSparse blocks lead with a
+	// gaussian top-k on their FFN gate at SparseStd deviations.
+	PredStreams, NSparse int
+	SparseStd            float32
 	// kvSrcOf replaces KVSource's choice, for a gate's violation only.
 	kvSrcOf func(li int) int
 	// noRouter marks the blocks of a mixture model that carry no router:
@@ -806,11 +806,11 @@ func configFrom(c *jlm.Config) (*Config, error) {
 			"%d local) on %d kv heads of %d", out.Arch, out.IdxHeads, out.IdxHeadDim, out.IdxTopK,
 			out.IdxBlock, out.IdxLocal, out.NKVHead, out.HeadDim)
 	}
-	out.AltUp, out.NSparse, out.SparseStd = int(c.AltUp), int(c.NSparse), c.SparseStd
-	if out.AltUp == 1 || (out.AltUp != 0 && (out.PLEDim == 0 || out.MLA() || out.Hybrid() || out.MoE() ||
+	out.PredStreams, out.NSparse, out.SparseStd = int(c.PredStreams), int(c.NSparse), c.SparseStd
+	if out.PredStreams == 1 || (out.PredStreams != 0 && (out.PLEDim == 0 || out.MLA() || out.Hybrid() || out.MoE() ||
 		out.Parallel || out.GeomSplit())) || out.NSparse > out.NLayer {
 		return nil, fmt.Errorf("model: %s: %d AltUp streams (per-layer input %d) and %d sparse blocks of %d",
-			out.Arch, out.AltUp, out.PLEDim, out.NSparse, out.NLayer)
+			out.Arch, out.PredStreams, out.PLEDim, out.NSparse, out.NLayer)
 	}
 	if out.Indexer() && (!out.MLA() || out.QLoraRank == 0 || out.IdxTopK <= 0 ||
 		out.IdxHeadDim%8 != 0 || out.NRot > out.IdxHeadDim) {
@@ -1048,7 +1048,7 @@ type layer struct {
 	// residual, the projection back and its norm.
 	pleGate, pleProj tensor
 	plePost          []float32
-	// Gemma 3n's AltUp and LAuReL (Config.AltUp, altup.go): the router and
+	// Gemma 3n's AltUp and LAuReL (Config.PredStreams, altup.go): the router and
 	// its norm, the prediction and correction coefficients transposed, the
 	// active stream's scale before the per-layer gate, and LAuReL's two
 	// matrices and norm.
@@ -2989,7 +2989,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				cfg.NEmbd, p)
 		}
 	}
-	if cfg.AltUp != 0 {
+	if cfg.PredStreams != 0 {
 		if err := loadAltUp(m, cfg, get); err != nil {
 			return nil, err
 		}
@@ -3422,7 +3422,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 					l.pleProj.k, l.pleProj.rows, len(l.plePost), cfg.NEmbd, p)
 			}
 		}
-		if cfg.AltUp != 0 {
+		if cfg.PredStreams != 0 {
 			if err := loadAltUpLayer(l, bi, cfg, get, vec); err != nil {
 				return nil, err
 			}

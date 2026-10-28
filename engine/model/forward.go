@@ -2204,7 +2204,7 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 	if c.MSA() && !c.MSAAt(li) {
 		plan.IdxHeads, plan.IdxHeadDim, plan.IdxTopK, plan.IdxBlock, plan.IdxLocal = 0, 0, 0, 0, 0
 	}
-	plan.AltUp, plan.Sparse, plan.SparseStd = c.AltUp, li < c.NSparse, c.SparseStd
+	plan.AltUp, plan.Sparse, plan.SparseStd = c.PredStreams, li < c.NSparse, c.SparseStd
 	plan.LaurelRank = l.laurelL.rows
 	plan.KVShared, plan.KVSource = c.KVShared(li), c.KVSource(li)
 	plan.NFFN, plan.FFNWide = c.NFFNAt(li), c.NFFNAt(li) != c.NFFN
@@ -3896,7 +3896,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 	}
 	// AltUp's streams ride the fill as well (altup.go): every restart begins
 	// from the embedding.
-	if c.AltUp != 0 {
+	if c.PredStreams != 0 {
 		inner := fill
 		fill = func() error {
 			if err := inner(); err != nil {
@@ -4083,7 +4083,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			m.trace(li, "ffn_resid", s.x)
 			continue
 		}
-		if c.AltUp != 0 {
+		if c.PredStreams != 0 {
 			if err := s.altPredict(l, s.xa, s.altPred, 1); err != nil {
 				return nil, err
 			}
@@ -4126,7 +4126,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		s.jit.NewInput()
 		s.tock(opRMSNorm, t0)
 		m.trace(li, "attn_norm", s.h)
-		if c.AltUp != 0 {
+		if c.PredStreams != 0 {
 			if err := s.laurel(l, s.h, s.altLaur); err != nil {
 				return nil, err
 			}
@@ -4318,7 +4318,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				// With nothing between the projection and the residual, the
 				// add rides the projection's rows (fuse.go).
 				plain := s.residFold && l.bo == nil && !kind.Recurrent() && l.postAttnNorm == nil &&
-					!c.ResAttn() && c.AltUp == 0 && !c.Q4E()
+					!c.ResAttn() && c.PredStreams == 0 && !c.Q4E()
 				if plain {
 					s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 				}
@@ -4354,7 +4354,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			s.addInto(s.x, s.h)
 		}
 		attnResid = false
-		if c.AltUp != 0 {
+		if c.PredStreams != 0 {
 			s.laurelJoin(s.x, s.altLaur)
 		}
 		s.tock(opResid, t0)
@@ -4498,7 +4498,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		}
 		ffnResid = false
 		s.tock(opResid, t0)
-		if c.AltUp != 0 {
+		if c.PredStreams != 0 {
 			if err := s.altCorrect(li, l, s.xa, s.altPred, s.ple, 1); err != nil {
 				return nil, err
 			}
@@ -4512,7 +4512,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 	}
 	// AltUp's head reads the streams' mean, written into stream 0 (altup.go);
 	// DeepSeek V4's their collapse (ds4.go).
-	if c.AltUp != 0 {
+	if c.PredStreams != 0 {
 		if err := s.altCollapse(s.xa, 1); err != nil {
 			return nil, err
 		}

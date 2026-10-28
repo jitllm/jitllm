@@ -961,7 +961,7 @@ type LayerPlan struct {
 	// forced in. The indexer's key is cached as one more kv head of the row
 	// (KVRow). Set only on the blocks that select (past the dense lead).
 	IdxBlock, IdxLocal int
-	// Gemma 3n (model.Config.AltUp): AltUp residual streams, zero for one,
+	// Gemma 3n (model.Config.PredStreams): AltUp residual streams, zero for one,
 	// carried stream-major in Layers' x (ResidW); a gaussian top-k at
 	// SparseStd deviations on the FFN gate of a block with Sparse set.
 	AltUp     int

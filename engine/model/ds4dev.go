@@ -13,7 +13,7 @@ import (
 // which the host takes (Gemma 3n's AltUp, DeepSeek V4's hyper-connections,
 // Kimi-K3's residual attention): a device runs the blocks and hands every
 // stream back, and never folds the head into them.
-func (c *Config) streamHead() bool { return c.AltUp != 0 || c.DSV4() || c.ResAttn() || c.Q4E() }
+func (c *Config) streamHead() bool { return c.PredStreams != 0 || c.DSV4() || c.ResAttn() || c.Q4E() }
 
 // expandStreams fills every stream of n rows of x from its embedding in
 // stream 0.

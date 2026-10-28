@@ -624,7 +624,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		}
 		// AltUp's other streams, from each row's embedding (altup.go), and
 		// DeepSeek V4's copies of it (ds4.go).
-		if c.AltUp != 0 {
+		if c.PredStreams != 0 {
 			fill := refill
 			refill = func() error {
 				if err := fill(); err != nil {
@@ -947,7 +947,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		// AltUp's head reads every stream of the row: collapsed in place, the
 		// chunk's rows' stream 0 is their head input, and the last row's is
 		// s.x's (altup.go).
-		if c.AltUp != 0 && base+n == total {
+		if c.PredStreams != 0 && base+n == total {
 			if err := s.altCollapse(s.bx[:n*c.ResidW()], n); err != nil {
 				return nil, err
 			}
@@ -1336,7 +1336,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 		}
 		return s.ds4Block(li, l, s.bx[:n*c.ResidW()], n)
 	}
-	if c.AltUp != 0 {
+	if c.PredStreams != 0 {
 		s.growAltUpRows(chunkRows)
 		if err := s.altPredict(l, s.bx[:n*c.ResidW()], s.baltPred, n); err != nil {
 			return err
@@ -1372,7 +1372,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 		}
 	}
 	s.batchNormB(s.bh, attnIn, l.attnNorm, l.attnNormB, c.NEmbd, n)
-	if c.AltUp != 0 {
+	if c.PredStreams != 0 {
 		for r := 0; r < n; r++ {
 			if err := s.laurel(l, s.bh[r*c.NEmbd:(r+1)*c.NEmbd], s.baltLaur[r*c.NEmbd:(r+1)*c.NEmbd]); err != nil {
 				return err
@@ -1622,7 +1622,7 @@ attend:
 	} else {
 		s.addInto(s.bx[:n*c.NEmbd], s.bh[:n*c.NEmbd])
 	}
-	if c.AltUp != 0 {
+	if c.PredStreams != 0 {
 		s.laurelJoin(s.bx[:n*c.NEmbd], s.baltLaur[:n*c.NEmbd])
 	}
 	s.tock(opResid, tr)
@@ -1727,7 +1727,7 @@ attend:
 		s.addInto(s.bx[:n*c.NEmbd], s.bh[:n*c.NEmbd])
 		s.tock(opResid, tr)
 	}
-	if c.AltUp != 0 {
+	if c.PredStreams != 0 {
 		if err := s.altCorrect(li, l, s.bx[:n*c.ResidW()], s.baltPred, s.bple, n); err != nil {
 			return err
 		}

@@ -11,18 +11,18 @@ import (
 )
 
 func init() {
-	roleOf["altup_proj.weight"] = jlm.RoleAltUpProj
+	roleOf["altup_proj.weight"] = jlm.RoleStreamExpand
 	// altup_unembd_proj is one {n, n, AltUp-1} tensor in the file; gemma3nTensors
 	// cuts it into one matrix per stream.
-	roleOf["altup_unembd_proj.weight"] = jlm.RoleAltUpUnembd1
-	roleOf["altup_router.weight"] = jlm.RoleAltUpRouter
-	roleOf["altup_router_norm.weight"] = jlm.RoleAltUpRouterNorm
-	roleOf["altup_predict_coef.weight"] = jlm.RoleAltUpPredCoef
-	roleOf["altup_correct_coef.weight"] = jlm.RoleAltUpCorrCoef
-	roleOf["altup_correct_scale.weight"] = jlm.RoleAltUpCorrScale
-	roleOf["laurel_l.weight"] = jlm.RoleLaurelL
-	roleOf["laurel_r.weight"] = jlm.RoleLaurelR
-	roleOf["laurel_post_norm.weight"] = jlm.RoleLaurelPostNorm
+	roleOf["altup_unembd_proj.weight"] = jlm.RoleStreamCollapse1
+	roleOf["altup_router.weight"] = jlm.RoleStreamRouter
+	roleOf["altup_router_norm.weight"] = jlm.RoleStreamRouterNorm
+	roleOf["altup_predict_coef.weight"] = jlm.RoleStreamPredictCoef
+	roleOf["altup_correct_coef.weight"] = jlm.RoleStreamCorrectCoef
+	roleOf["altup_correct_scale.weight"] = jlm.RoleStreamCorrectScale
+	roleOf["laurel_l.weight"] = jlm.RoleLowRankIn
+	roleOf["laurel_r.weight"] = jlm.RoleLowRankOut
+	roleOf["laurel_post_norm.weight"] = jlm.RoleLowRankNorm
 }
 
 // gemma3nConfig is llama.cpp's gemma3n.cpp and transformers'
@@ -92,9 +92,9 @@ func gemma3nConfig(f *meta.File, c *jlm.Config) error {
 	if c.NRot != c.HeadDim || c.HeadDimV != 0 {
 		return fmt.Errorf("rotary %d and value width %d on a %d-wide head", c.NRot, c.HeadDimV, c.HeadDim)
 	}
-	c.AltUp = uint32(f.UintKey("altup.num_inputs", 0))
-	if c.AltUp < 2 {
-		return fmt.Errorf("altup.num_inputs %d: gemma3n runs two or more streams", c.AltUp)
+	c.PredStreams = uint32(f.UintKey("altup.num_inputs", 0))
+	if c.PredStreams < 2 {
+		return fmt.Errorf("altup.num_inputs %d: gemma3n runs two or more streams", c.PredStreams)
 	}
 	// The active stream is the first in every published checkpoint and in
 	// both references' defaults; another index would only relabel streams, and
@@ -150,7 +150,7 @@ func gemma3nTensors(s *jlm.Source) error {
 	if c == nil || c.Arch != jlm.ArchGemma3n {
 		return nil
 	}
-	n, a := uint64(c.NEmbd), uint64(c.AltUp)
+	n, a := uint64(c.NEmbd), uint64(c.PredStreams)
 	out := s.Tensors[:0:0]
 	for _, t := range s.Tensors {
 		switch {
@@ -158,7 +158,7 @@ func gemma3nTensors(s *jlm.Source) error {
 			(t.Role == jlm.RoleAttnK || t.Role == jlm.RoleAttnV || t.Role == jlm.RoleAttnKNorm):
 			// A KV-sharing block computes no k or v (Gemma 4's rule).
 			continue
-		case t.Role == jlm.RoleAltUpUnembd1 && t.Block < 0:
+		case t.Role == jlm.RoleStreamCollapse1 && t.Block < 0:
 			if t.NDim != 3 || t.Dims[0] != n || t.Dims[1] != n || t.Dims[2] != a-1 {
 				return fmt.Errorf("convert: %s is %v, want {%d, %d, %d}", t.Name, t.Dims[:t.NDim], n, n, a-1)
 			}
@@ -173,23 +173,23 @@ func gemma3nTensors(s *jlm.Source) error {
 			sheet := uint64(len(b)) / (a - 1)
 			for k := uint64(0); k < a-1; k++ {
 				u := t
-				u.Role = jlm.RoleAltUpUnembd1 + jlm.Role(k)
+				u.Role = jlm.RoleStreamCollapse1 + jlm.Role(k)
 				u.NDim, u.Dims = 2, [4]uint64{n, n}
 				u.Data, u.Load = b[k*sheet:(k+1)*sheet], nil
 				u.Name = fmt.Sprintf("%s/%d", t.Name, k+1)
 				out = append(out, u)
 			}
 			continue
-		case t.Role == jlm.RoleAltUpProj:
+		case t.Role == jlm.RoleStreamExpand:
 			if t.NDim != 3 || t.Dims[0] != n || t.Dims[1] != n || t.Dims[2] != a-1 {
 				return fmt.Errorf("convert: %s is %v, want {%d, %d, %d}", t.Name, t.Dims[:t.NDim], n, n, a-1)
 			}
 			// The AltUp-1 projections stacked by rows: one matrix of
 			// (AltUp-1)*n rows, so the expansion is one matvec.
 			t.NDim, t.Dims = 2, [4]uint64{n, n * (a - 1)}
-		case t.Role == jlm.RoleAltUpPredCoef, t.Role == jlm.RoleAltUpCorrCoef:
+		case t.Role == jlm.RoleStreamPredictCoef, t.Role == jlm.RoleStreamCorrectCoef:
 			cols := a // the correction's out width: one coefficient per stream
-			if t.Role == jlm.RoleAltUpPredCoef {
+			if t.Role == jlm.RoleStreamPredictCoef {
 				cols = a * a
 			}
 			if err := widenF32(&t); err != nil {
@@ -207,7 +207,7 @@ func gemma3nTensors(s *jlm.Source) error {
 			if err := trimZeroRows(&t); err != nil {
 				return err
 			}
-		case t.Role == jlm.RoleAltUpRouter:
+		case t.Role == jlm.RoleStreamRouter:
 			// Read as plain floats on every tier: a published GGUF stores it
 			// F16, and a matrix of four rows gains nothing from staying narrow.
 			if err := widenF32(&t); err != nil {

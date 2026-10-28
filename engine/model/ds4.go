@@ -142,7 +142,7 @@ func ds4Config(out *Config, c *jlm.Config) error {
 	case out.HCMult != ds4Streams || out.HCIters < 1 || !(out.HCEps > 0):
 		return fmt.Errorf("model: %s: %d hyper-connection streams over %d Sinkhorn rounds: the "+
 			"generated mixer is built for %d streams", out.Arch, out.HCMult, out.HCIters, ds4Streams)
-	case out.NKVHead != 1 || out.QLoraRank == 0 || out.MLA() || out.Hybrid() || out.AltUp != 0:
+	case out.NKVHead != 1 || out.QLoraRank == 0 || out.MLA() || out.Hybrid() || out.PredStreams != 0:
 		return fmt.Errorf("model: %s: %d kv heads, q_lora_rank %d", out.Arch, out.NKVHead, out.QLoraRank)
 	case out.OGroups <= 0 || out.NHead%out.OGroups != 0 || out.OLoraRank <= 0:
 		return fmt.Errorf("model: %s: %d output groups of rank %d over %d heads", out.Arch, out.OGroups,

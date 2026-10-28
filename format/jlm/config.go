@@ -591,13 +591,14 @@ type Config struct {
 	// written only for ArchDeepseek32; see encodeConfig.
 	IdxHeads, IdxHeadDim, IdxTopK uint32
 
-	// Gemma 3n (ArchGemma3n): AltUp parallel residual streams (zero for one,
+	// PredStreams residual streams each block predicts from all of them and
+	// corrects by its active stream's change (Gemma 3n's AltUp; zero for one,
 	// the ordinary residual), and a gaussian top-k on the gate of the first
 	// NSparse blocks' FFNs, which keeps what lies SparseStd standard
 	// deviations above the gate row's mean. A sixth optional tail, written
 	// only for ArchGemma3n; see encodeConfig.
-	AltUp, NSparse uint32
-	SparseStd      float32
+	PredStreams, NSparse uint32
+	SparseStd            float32
 
 	// MiniMax Sparse Attention (ArchMiniMaxM3): the indexer scores BLOCKS of
 	// IdxBlock positions, each block by its best position, one selection per

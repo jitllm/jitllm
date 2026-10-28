@@ -23,7 +23,7 @@ var gemma3nFixtures = []struct {
 }{
 	{"synth-gemma3n", func(m *Model) bool {
 		c := m.Cfg
-		ok := c.Arch == "gemma3n" && c.AltUp == 4 && c.PLEDim == 32 && c.NKVShared == 2 && c.NSparse == 3 &&
+		ok := c.Arch == "gemma3n" && c.PredStreams == 4 && c.PLEDim == 32 && c.NKVShared == 2 && c.NSparse == 3 &&
 			c.SparseStd > 1.64 && c.SparseStd < 1.65 && c.VNorm && c.SWAPeriod == 5 && len(m.altUnembd) == 3
 		for i := range m.layers {
 			l := &m.layers[i]

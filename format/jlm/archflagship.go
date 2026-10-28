@@ -37,7 +37,7 @@ const (
 
 	// ArchGemma3n is Google's Gemma 3n text model (E2B, E4B): gemma3's
 	// attention with Gemma 4's per-layer embeddings, KV sharing, unweighted v
-	// norm and attention scale of one, inside AltUp's Config.AltUp parallel
+	// norm and attention scale of one, inside AltUp's Config.PredStreams parallel
 	// residual streams (each block predicts all of them from a router, runs on
 	// the active one and corrects the rest), with a LAuReL low-rank branch
 	// beside the attention and a gaussian top-k on the first NSparse FFNs'
@@ -164,32 +164,33 @@ const (
 	RoleIdxKNormB Role = 315
 	RoleIdxProj   Role = 316
 
-	// Gemma 3n's AltUp and LAuReL (ArchGemma3n). RoleAltUpProj projects the
-	// scaled embedding to the other Config.AltUp-1 streams, their rows stacked
-	// (stream k's at (k-1)*n_embd); RoleAltUpUnembd1..3 project stream k back
-	// before the streams are averaged for the head.
+	// Predicted residual streams (Config.PredStreams, Gemma 3n's AltUp) and a
+	// low-rank side branch (its LAuReL). RoleStreamExpand projects the scaled
+	// embedding to the other PredStreams-1 streams, their rows stacked
+	// (stream k's at (k-1)*n_embd); RoleStreamCollapse1..3 project stream k
+	// back before the streams are averaged for the head.
 	//
-	// Per block: RoleAltUpRouter (AltUp rows of n_embd) reads
-	// rmsnorm(x0) * RoleAltUpRouterNorm / n_embd into AltUp modalities;
-	// RoleAltUpPredCoef holds the prediction coefficients TRANSPOSED at
-	// conversion, AltUp rows of AltUp*AltUp, so the AltUp^2 coefficients are a
-	// sum of the rows weighted by the modalities; RoleAltUpCorrCoef the
-	// correction's, AltUp rows of AltUp, the same way; RoleAltUpCorrScale the
-	// active stream's scale before the per-layer input gate. RoleLaurelL
-	// (n_embd -> rank) and RoleLaurelR (rank -> n_embd) are LAuReL's branch
-	// and RoleLaurelPostNorm its norm.
-	RoleAltUpProj       Role = 317
-	RoleAltUpUnembd1    Role = 318
-	RoleAltUpUnembd2    Role = 319
-	RoleAltUpUnembd3    Role = 320
-	RoleAltUpRouter     Role = 321
-	RoleAltUpRouterNorm Role = 322
-	RoleAltUpPredCoef   Role = 323
-	RoleAltUpCorrCoef   Role = 324
-	RoleAltUpCorrScale  Role = 325
-	RoleLaurelL         Role = 326
-	RoleLaurelR         Role = 327
-	RoleLaurelPostNorm  Role = 328
+	// Per block: RoleStreamRouter (PredStreams rows of n_embd) reads
+	// rmsnorm(x0) * RoleStreamRouterNorm / n_embd into one weight a stream;
+	// RoleStreamPredictCoef holds the prediction coefficients TRANSPOSED at
+	// conversion, PredStreams rows of PredStreams^2, so the coefficients are a
+	// sum of the rows weighted by the router's weights; RoleStreamCorrectCoef
+	// the correction's, PredStreams rows of PredStreams, the same way;
+	// RoleStreamCorrectScale the active stream's scale before the per-layer
+	// input gate. RoleLowRankIn (n_embd -> rank) and RoleLowRankOut (rank ->
+	// n_embd) are the side branch and RoleLowRankNorm its norm.
+	RoleStreamExpand       Role = 317
+	RoleStreamCollapse1    Role = 318
+	RoleStreamCollapse2    Role = 319
+	RoleStreamCollapse3    Role = 320
+	RoleStreamRouter       Role = 321
+	RoleStreamRouterNorm   Role = 322
+	RoleStreamPredictCoef  Role = 323
+	RoleStreamCorrectCoef  Role = 324
+	RoleStreamCorrectScale Role = 325
+	RoleLowRankIn          Role = 326
+	RoleLowRankOut         Role = 327
+	RoleLowRankNorm        Role = 328
 
 	// MiniMax Sparse Attention's indexer (ArchMiniMaxM3), per sparse block.
 	// RoleIdxQ projects the block's normed input to IdxHeads*IdxHeadDim (one
@@ -312,18 +313,18 @@ var flagshipRoleNames = map[Role]string{
 	RoleIdxKNormB:     "indexer.k_norm_bias",
 	RoleIdxProj:       "indexer.proj",
 
-	RoleAltUpProj:       "altup_proj",
-	RoleAltUpUnembd1:    "altup_unembd_proj.1",
-	RoleAltUpUnembd2:    "altup_unembd_proj.2",
-	RoleAltUpUnembd3:    "altup_unembd_proj.3",
-	RoleAltUpRouter:     "altup_router",
-	RoleAltUpRouterNorm: "altup_router_norm",
-	RoleAltUpPredCoef:   "altup_predict_coef",
-	RoleAltUpCorrCoef:   "altup_correct_coef",
-	RoleAltUpCorrScale:  "altup_correct_scale",
-	RoleLaurelL:         "laurel_l",
-	RoleLaurelR:         "laurel_r",
-	RoleLaurelPostNorm:  "laurel_post_norm",
+	RoleStreamExpand:       "stream_expand",
+	RoleStreamCollapse1:    "stream_collapse.1",
+	RoleStreamCollapse2:    "stream_collapse.2",
+	RoleStreamCollapse3:    "stream_collapse.3",
+	RoleStreamRouter:       "stream_router",
+	RoleStreamRouterNorm:   "stream_router_norm",
+	RoleStreamPredictCoef:  "stream_predict_coef",
+	RoleStreamCorrectCoef:  "stream_correct_coef",
+	RoleStreamCorrectScale: "stream_correct_scale",
+	RoleLowRankIn:          "lowrank_in",
+	RoleLowRankOut:         "lowrank_out",
+	RoleLowRankNorm:        "lowrank_post_norm",
 
 	RoleIdxQ:     "indexer.q_proj",
 	RoleIdxQNorm: "indexer.q_norm",
@@ -392,7 +393,7 @@ func flagshipExpanded(r Role) bool {
 	switch r {
 	case RoleLayerOutScale, RoleFFNNorm2, RolePostFFNNorm1, RolePostFFNNorm2,
 		RoleRouterNorm, RoleExpScale, RolePLEProjNorm, RolePLEPostNorm, RoleIdxKNorm, RoleIdxKNormB,
-		RoleAltUpRouterNorm, RoleAltUpPredCoef, RoleAltUpCorrCoef, RoleAltUpCorrScale, RoleLaurelPostNorm,
+		RoleStreamRouterNorm, RoleStreamPredictCoef, RoleStreamCorrectCoef, RoleStreamCorrectScale, RoleLowRankNorm,
 		RoleIdxQNorm, RoleHCAttnBase, RoleHCAttnScale, RoleHCFFNBase, RoleHCFFNScale, RoleCompAPE,
 		RoleCompNorm, RoleIdxCompAPE, RoleIdxCompNorm, RoleHashExperts, RoleAttnResScore,
 		RoleFFNResScore, RoleOutputResScore, RoleFFNRoutedNorm, RoleHCAttnNorm, RoleHCFFNNorm,

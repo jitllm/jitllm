@@ -198,7 +198,7 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		c.KDALowerBound != 0 || c.LatentNormEps != 0
 	ds4 := k3 || c.HCMult != 0 || len(c.CompKinds) != 0
 	msa := ds4 || c.IdxBlock != 0 || c.IdxLocal != 0
-	alt := msa || c.AltUp != 0 || c.NSparse != 0
+	alt := msa || c.PredStreams != 0 || c.NSparse != 0
 	idx := alt || c.IdxHeads != 0
 	geom := idx || c.HeadDimSWA != 0 || c.NKVHeadSWA != 0 || c.NRotSWA != 0 || c.Flags2 != 0 ||
 		c.NKVShared != 0 || c.PLEDim != 0
@@ -232,7 +232,7 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		w.u32(c.IdxTopK)
 	}
 	if alt {
-		w.u32(c.AltUp)
+		w.u32(c.PredStreams)
 		w.u32(c.NSparse)
 		w.f32(c.SparseStd)
 	}
@@ -379,7 +379,7 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		c.IdxTopK = r.u32()
 	}
 	if r.err == nil && len(r.b) > 0 {
-		c.AltUp = r.u32()
+		c.PredStreams = r.u32()
 		c.NSparse = r.u32()
 		c.SparseStd = r.f32()
 	}

@@ -223,7 +223,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		}
 	}
 
-	if c.AltUp != 0 {
+	if c.PredStreams != 0 {
 		if err := s.altExpand(s.bx[:n*c.ResidW()], n); err != nil {
 			return nil, err
 		}
@@ -325,7 +325,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			}
 			continue
 		}
-		if c.AltUp != 0 {
+		if c.PredStreams != 0 {
 			s.growAltUpRows(n)
 			if err := s.altPredict(l, s.bx[:n*c.ResidW()], s.baltPred, n); err != nil {
 				return nil, err
@@ -357,7 +357,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			}
 		}
 		s.batchNormB(s.bh, attnIn, l.attnNorm, l.attnNormB, c.NEmbd, n)
-		if c.AltUp != 0 {
+		if c.PredStreams != 0 {
 			for r := 0; r < n; r++ {
 				if err := s.laurel(l, s.bh[r*c.NEmbd:(r+1)*c.NEmbd], s.baltLaur[r*c.NEmbd:(r+1)*c.NEmbd]); err != nil {
 					return nil, err
@@ -579,7 +579,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		} else {
 			s.addInto(s.bx[:n*c.NEmbd], s.bh[:n*c.NEmbd])
 		}
-		if c.AltUp != 0 {
+		if c.PredStreams != 0 {
 			s.laurelJoin(s.bx[:n*c.NEmbd], s.baltLaur[:n*c.NEmbd])
 		}
 		s.tock(opResid, t0)
@@ -673,7 +673,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			s.addInto(s.bx[:n*c.NEmbd], s.bh[:n*c.NEmbd])
 			s.tock(opResid, t0)
 		}
-		if c.AltUp != 0 {
+		if c.PredStreams != 0 {
 			if err := s.altCorrect(li, l, s.bx[:n*c.ResidW()], s.baltPred, s.bple, n); err != nil {
 				return nil, err
 			}
@@ -682,7 +682,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		}
 		s.layerOutScale(l, s.bx[:n*c.NEmbd])
 	}
-	if c.AltUp != 0 && nlogit > 0 {
+	if c.PredStreams != 0 && nlogit > 0 {
 		if err := s.altCollapse(s.bx[:n*c.ResidW()], n); err != nil {
 			return nil, err
 		}
