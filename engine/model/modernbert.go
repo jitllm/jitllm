@@ -309,7 +309,11 @@ func (e *Embedder) mbEncode(ids []int32) error {
 			if c.SWA(li) {
 				cs = e.csL[:n*c.NRot]
 			}
-			if e.cpuRun(li, n, x, cs) {
+			ok, err := e.cpuRun(li, n, x, cs)
+			if err != nil {
+				return err
+			}
+			if ok {
 				if e.afterBlock != nil {
 					e.afterBlock(li, x)
 				}
@@ -474,9 +478,15 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 		}
 		// On the composer's CPU device every row runs, gathered after the
 		// last block as a device's are.
-		if li := mb.trunk + bi; e.cpuRuns(li) && e.cpuRun(li, n, x, nil) {
-			gather = bi == len(mb.head)-1
-			continue
+		if li := mb.trunk + bi; e.cpuRuns(li) {
+			ok, err := e.cpuRun(li, n, x, nil)
+			if err != nil {
+				return err
+			}
+			if ok {
+				gather = bi == len(mb.head)-1
+				continue
+			}
 		}
 		b := &mb.head[bi]
 		last := bi == len(mb.head)-1

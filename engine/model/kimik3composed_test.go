@@ -106,10 +106,9 @@ func TestKimiK3ServesComposed(t *testing.T) {
 
 // TestKimiK3ServesComposedOnCPU runs each Kimi-K3 fixture on the CPU
 // device with the head's mix over the bank composed, teacher-forced on the
-// fixture's ids against main's kernels within 1e-5: every head step and
-// row of the mix served, every block step declined by name (the CPU's forms
-// hold no latent attention's history; the cards serve the blocks,
-// TestKimiK3ServesComposed). The input rows need no expansion: a block banks
+// fixture's ids against main's kernels within 1e-5: every head step, row of
+// the mix and block step served, its latent blocks among them. The input rows
+// need no expansion: a block banks
 // each checkpoint before any block reads it. A checkpoint read twice where
 // the mix reads the bank (a softmax mix is the same over any order of its
 // rows, so a swap is not a violation it can see), and the mix's score vector
@@ -140,7 +139,7 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 				t.Fatal("the bank's input rows are expanded, or the head's mix over it is not stated")
 			}
 			run := func(f cpuFault) float64 {
-				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, 0, jit.DeclineLatent))
+				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, m.Cfg.NLayer, jit.DeclineServes))
 			}
 			worst := run(cpuFaultNone)
 			t.Logf("the composed CPU head's mix from main: worst NMSE %.3g over %d steps", worst, len(g.IDs))
