@@ -10544,3 +10544,8 @@ row where the composer's reads two.
   (worst 7.1e-3 against the control's 1.5e-3) but not the key row, even
   without its own row (median 0.655, worst 1.25e-3): its attention reads
   nearly the same value from any row. It stays out of cpuServedModels.
+- Kimi Delta Attention's output gate has a composed violation: the sigmoid
+  gate over the delta rule's normed output read as that output. On the
+  cards synth-kimilinear's composed blocks read 1.9e-11 (cuda:0) and
+  1.6e-11 (vulkan) from the host and 1.96 with the gate dropped;
+  synth-kimik3's 2.8e-10 and 1.0e-10 move to 2.1 (ragged 2.12).

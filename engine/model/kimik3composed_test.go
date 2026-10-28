@@ -175,8 +175,7 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 // main's fault set beside the statement the front end makes without the
 // piece (its stored vector dropped, or the block's graph rewritten). The
 // head's mix is the host's, and a checkpoint every three blocks is a bank of
-// other streams than the device was placed with, so neither is here. KDA's
-// output gate is held by Kimi-Linear's composed gates.
+// other streams than the device was placed with, so neither is here.
 func k3ComposedViolations(t *testing.T) []c6Violation {
 	both := func(f k3Fault, undoS func(*Model) func()) func(*Model) func() {
 		return func(m *Model) func() {
@@ -213,6 +212,7 @@ func k3ComposedViolations(t *testing.T) []c6Violation {
 				}
 			})
 		})},
+		{"the KDA output ungated", both(k3FaultNoKDAGate, func(m *Model) func() { return m.rewriteEveryBlock(t, kdaUngated(t, m)) })},
 		{"the KDA decay unbounded (Kimi-Linear's softplus)", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.KDALowerBound = 0 })
 		}},
