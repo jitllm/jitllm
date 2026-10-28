@@ -97,6 +97,9 @@ type Kernel struct {
 	Args []Arg
 	// Ptrs are the copies of buffers' addresses cursors advance.
 	Ptrs []Ptr
+	// Lines are the prefetches the sequence's EntryAhead entries name
+	// (Ahead).
+	Lines []AheadLine
 	// vwords, while a register binding runs, keeps its VectorWords.
 	vwords *vectorMemo
 }
@@ -124,6 +127,8 @@ const (
 	EntryStore
 	EntryLoop
 	EntryEnd
+	// EntryAhead is a prefetch of line I of the kernel's Lines.
+	EntryAhead
 )
 
 // Positions is a primitive's Range on its kernel: the space axis whose
@@ -474,6 +479,7 @@ func (n *Kernel) clone() *Kernel {
 	c.Seq = append([]Entry(nil), n.Seq...)
 	c.Args = append([]Arg(nil), n.Args...)
 	c.Ptrs = append([]Ptr(nil), n.Ptrs...)
+	c.Lines = append([]AheadLine(nil), n.Lines...)
 	for i := range c.Bufs {
 		c.Bufs[i].Dims = append([]int(nil), c.Bufs[i].Dims...)
 	}

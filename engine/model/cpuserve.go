@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -105,6 +106,10 @@ type cpuCode struct {
 	// tiles is a kernel whose inner calls tile a weight (jit.Code.TileMajor):
 	// its calls run a tile for every live row before the next tile.
 	tiles bool
+	// name is the composer's name for the kernel; nanos and runs its time
+	// and launches under WithProfile.
+	name        string
+	nanos, runs int64
 }
 
 // cpuBlockForm is a block's kernels for the CPU at one composer Key, mapped
@@ -773,6 +778,17 @@ func (s *State) cpuOwn(f *cpuBlockForm) [][]uint32 {
 
 // cpuCall runs one kernel of a block: once, or over its calls on the pool.
 func (s *State) cpuCall(b *cpuBound, c *cpuCode) {
+	if s.prof {
+		t0 := time.Now()
+		s.cpuLaunch(b, c)
+		c.nanos += int64(time.Since(t0))
+		c.runs++
+		return
+	}
+	s.cpuLaunch(b, c)
+}
+
+func (s *State) cpuLaunch(b *cpuBound, c *cpuCode) {
 	n, live := c.n, 0
 	if c.live.Live > 0 {
 		live = c.live.LiveUnitsOf(b.n)
@@ -1230,7 +1246,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 			f.close()
 			return nil, fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		cc := cpuCode{calls: c.Calls, n: 1}
+		cc := cpuCode{calls: c.Calls, n: 1, name: c.Name}
 		for _, n := range c.Calls {
 			cc.n *= n
 		}
@@ -1359,7 +1375,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 			}
 			cc.args = append(cc.args, ar)
 		}
-		code, err := cpu.Map(c.CPU)
+		code, err := cpu.MapNamed(c.CPU, c.Name)
 		if err != nil {
 			f.close()
 			return nil, fmt.Errorf("mapping %s: %w", c.Name, err)

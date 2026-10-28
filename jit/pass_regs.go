@@ -406,7 +406,7 @@ func (b *binder86) gprs() error {
 		}
 		i := e.I
 		nd := k.Nodes[i]
-		if nd.Op != OpParam && (nd.Type == ir.F32 || nd.Op == OpConst || nd.Op == OpLoad && k.needsVector(i) || words[i]) {
+		if nd.Op != OpParam && (nd.Type == ir.F32 || nd.Op == OpConst || nd.Op == OpLoad && (nd.Mem || k.needsVector(i)) || words[i]) {
 			continue
 		}
 		for v, r := range freed {

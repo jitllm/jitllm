@@ -411,6 +411,9 @@ func (k *Kernel) compact() {
 	for i := range k.Args {
 		k.Args[i].Node = re(k.Args[i].Node)
 	}
+	for i := range k.Lines {
+		k.Lines[i].Load = at[k.Lines[i].Load]
+	}
 	if k.Seq != nil {
 		var seq []Entry
 		for _, st := range k.Seq {

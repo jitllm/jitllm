@@ -52,6 +52,12 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 			e.enter(en.I)
 		case EntryEnd:
 			e.leave(en.I)
+		case EntryAhead:
+			l := k.Lines[en.I]
+			nd := k.Nodes[l.Load]
+			m := e.addr(nd.Buf, nd.A, nd.Ptr)
+			m.Disp += l.Bytes
+			e.a.PREFETCHT0(m)
 		}
 	}
 	if e.err != nil {
