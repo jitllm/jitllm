@@ -187,7 +187,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 // and the moved blocks fill their pages from the host's pager on the card
 // they land on.
 func TestComposedExpertPagesMove(t *testing.T) {
-	for _, name := range []string{"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
+	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
 		t.Run(name, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(name))
 			blocksMoveBetweenDevicesWith(t, path, moveWhole, tier.ComposedBlock, func(st tier.Stats) {
@@ -298,5 +298,103 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 			}
 			t.Logf("%d page-ins under one page against %d resident, every logit identical; the wrong page held moves them %.3e", pagedIn, residentIn, far)
 		})
+	}
+}
+
+// TestComposedExpertPagesMoveToTheCPU moves every block of a mixture
+// mid-sequence from a card, its banks in pages there, to the CPU device,
+// its banks read in the host's expert pages, and back, composed on both:
+// before the first move the logits are the unmoved run's bit for bit, after
+// it in the band of the two devices' forms, every block step served on the
+// card and on the CPU and none declined, the experts filled from pages on
+// the card and read from them on the CPU.
+func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
+	const ntok, toCPU, back = 12, 4, 8
+	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
+		for _, dev := range stepDevices() {
+			t.Run(name+"/"+dev, func(t *testing.T) {
+				g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff), composedOpt(tier.ComposedBlock))
+				if err != nil || g == nil {
+					noDevice(t, dev, err)
+				}
+				defer g.Close()
+				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithComposedCPU(true), WithExperts("card"), WithStreamTrial(false))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer m.Close()
+				toks := cpuTokens(t, m, ntok+1)
+				nl := m.Cfg.NLayer
+				run := func(move bool) ([][]float32, int, [jit.NumDeclines]int) {
+					st := m.NewState(ntok + 2)
+					defer st.Close()
+					st.SetDeviceFallback(false)
+					if err := st.SetDevice(g); err != nil {
+						t.Fatal(err)
+					}
+					card, _ := st.DeviceOf(0)
+					if st.GPULayers() != nl || card == "" || onCPU(card) {
+						t.Fatalf("%s took %d of %d blocks", dev, st.GPULayers(), nl)
+					}
+					var out [][]float32
+					for i, tk := range toks[:ntok] {
+						if move && (i == toCPU || i == back) {
+							to := "cpu"
+							if i == back {
+								to = card
+							}
+							if _, err := st.MoveBlocks(0, nl, to); err != nil {
+								t.Fatalf("to %s: %v", to, err)
+							}
+						}
+						lg, err := st.Forward(tk)
+						if err != nil {
+							t.Fatal(err)
+						}
+						out = append(out, slices.Clone(lg))
+					}
+					served, declined := st.CPUBlockSteps()
+					return out, served, declined
+				}
+				want, _, _ := run(false)
+				// The two devices' spread: the sequence on the CPU alone.
+				cs := m.NewState(ntok + 2)
+				widest := 0.0
+				for i, tk := range toks[:ntok] {
+					lg, err := cs.Forward(tk)
+					if err != nil {
+						t.Fatal(err)
+					}
+					widest = max(widest, logitNMSE(want[i], lg))
+				}
+				cs.Close()
+				f0 := g.Stats().StreamFills
+				got, served, declined := run(true)
+				for i, n := range declined {
+					if n > 0 {
+						t.Fatalf("the CPU declined %d block steps: %s", n, jit.DeclineName(i))
+					}
+				}
+				if served != (back-toCPU)*nl {
+					t.Fatalf("the CPU served %d block steps of %d", served, (back-toCPU)*nl)
+				}
+				if fills := g.Stats().StreamFills - f0; fills == 0 {
+					t.Fatal("the card filled no pages: its banks were not in pages")
+				}
+				composedRan(t, tier.ComposedBlock, nil, g)
+				worst := 0.0
+				for i := range want {
+					e := logitNMSE(want[i], got[i])
+					switch {
+					case i < toCPU && !slices.Equal(want[i], got[i]):
+						t.Fatalf("token %d is before any move and its logits differ (%.3e)", i, e)
+					case math.IsNaN(e) || e > bandWorst*widest:
+						t.Fatalf("token %d: the moved logits are %.3e from the unmoved run's, past %.1f x the devices' spread %.3e", i, e, bandWorst, widest)
+					}
+					worst = max(worst, e)
+				}
+				t.Logf("%d block steps on the CPU from pages; worst logit NMSE after the moves %.3e, the devices' spread %.3e", served, worst, widest)
+			})
+		}
 	}
 }
