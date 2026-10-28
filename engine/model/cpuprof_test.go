@@ -42,18 +42,24 @@ func TestComposedCPUProfile(t *testing.T) {
 			t.Fatal(err)
 		}
 		tok := int32(argmax(l))
+		each := make([]time.Duration, 0, toks)
 		run := func(n int) time.Duration {
 			t0 := time.Now()
 			for range n {
+				t1 := time.Now()
 				lg, err := st.Forward(tok)
 				if err != nil {
 					t.Fatal(err)
+				}
+				if len(each) < cap(each) {
+					each = append(each, time.Since(t1))
 				}
 				tok = int32(argmax(lg))
 			}
 			return time.Since(t0)
 		}
 		run(warm)
+		each = each[:0]
 		ResetProfile()
 		m.cpuForms.mu.Lock()
 		for _, f := range m.cpuForms.m {
@@ -63,15 +69,19 @@ func TestComposedCPUProfile(t *testing.T) {
 		}
 		m.cpuForms.mu.Unlock()
 		st.jit.ResetRegions()
+		ph0 := st.jit.Phases()
 		d := run(toks)
 		par, ser := st.jit.Regions()
+		phases := st.jit.Phases() - ph0
 		per := float64(d.Microseconds()) / toks
 		bpt := float64(m.BytesPerToken())
 		gb := bpt / (per * 1e-6) / 1e9
 		served, declined := st.CPUBlockSteps()
 		var b strings.Builder
-		fmt.Fprintf(&b, "composed=%v: %.0f us a token (%.1f tok/s), %.1f MB a token = %.1f GB/s = %.0f%% of the %.1f GB/s wall; regions a token %.1f parallel %.1f serial; CPU block steps %d declined %v\n",
-			composed, per, 1e6/per, bpt/1e6, gb, 100*gb*1e9/host.Bandwidth, host.Bandwidth/1e9, float64(par)/toks, float64(ser)/toks, served, declined)
+		fmt.Fprintf(&b, "composed=%v: %.0f us a token (%.1f tok/s), %.1f MB a token = %.1f GB/s = %.0f%% of the %.1f GB/s wall; regions a token %.1f parallel %.1f serial, %.1f phases; CPU block steps %d declined %v\n",
+			composed, per, 1e6/per, bpt/1e6, gb, 100*gb*1e9/host.Bandwidth, host.Bandwidth/1e9, float64(par)/toks, float64(ser)/toks, float64(phases)/toks, served, declined)
+		slices.Sort(each)
+		fmt.Fprintf(&b, "  a token's time: min %v p10 %v median %v p90 %v max %v\n", each[0], each[len(each)/10], each[len(each)/2], each[len(each)*9/10], each[len(each)-1])
 		names, ns := OpProfile()
 		for i, n := range ns {
 			if n > 0 {
@@ -105,6 +115,20 @@ func TestComposedCPUProfile(t *testing.T) {
 		for _, r := range rows {
 			fmt.Fprintf(&b, "  %-60.60s %8.1f us/tok %5.1f%% launches/tok %5.1f calls %6d  %.2f us/launch  %d B\n",
 				r.name, float64(r.nanos)/1e3/toks, 100*float64(r.nanos)/float64(tot), float64(r.runs)/toks, r.calls, float64(r.nanos)/1e3/float64(r.runs), r.bytes)
+		}
+		if composed {
+			if cb := st.cpu.blocks[st.lo]; cb != nil && cb.f != nil {
+				b.WriteString("  block 0's kernels in order:\n")
+				for _, c := range cb.f.codes {
+					fmt.Fprintf(&b, "    %-24.24s calls %v n %d serial %v join %d", c.name, c.calls, c.n, c.serial, c.join)
+					for _, a := range c.args {
+						if a.src == cpuArgWeight || a.src == cpuArgCoord {
+							fmt.Fprintf(&b, " [src %d region %d per %v elem %d off %d]", a.src, a.region, a.per, a.elem, a.off)
+						}
+					}
+					b.WriteString("\n")
+				}
+			}
 		}
 		t.Log(b.String())
 		st.Close()

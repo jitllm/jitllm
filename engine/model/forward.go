@@ -4066,7 +4066,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		}
 		l := &m.layers[li]
 		if m.opt.composedCPU {
-			s.unfuse()
+			s.fuseRun()
 			why, err := s.cpuStep(li, l, s.ropeTable(li, s.cs, s.csSWA, 0))
 			if err != nil {
 				return nil, err

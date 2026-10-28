@@ -110,6 +110,22 @@ type cpuCode struct {
 	// and launches under WithProfile.
 	name        string
 	nanos, runs int64
+	// rd and wr are the buffers the kernel's calls read and write, as the
+	// call site binds them; join is how many kernels after it run in its
+	// pool phase, none reading or writing what another of the phase writes,
+	// and ends their calls' running totals (cpuGroup).
+	rd, wr []cpuBuf
+	join   int
+	ends   []int
+}
+
+// cpuBuf is a buffer a call word binds, by where the call site finds it.
+type cpuBuf struct {
+	src    uint8
+	region uint8
+	role   jlm.Role
+	i      int
+	stream int
 }
 
 // cpuBlockForm is a block's kernels for the CPU at one composer Key, mapped
@@ -278,6 +294,9 @@ type cpuRegion struct {
 	c    *cpuCode
 	live int
 	fn   func(worker, lo, hi int)
+	// g is a phase's kernels (cpuGroup), gfn the region that runs them.
+	g   []cpuCode
+	gfn func(worker, lo, hi int)
 }
 
 // cpuBound is a block's step as its words read it: n rows of the residual
@@ -929,6 +948,12 @@ func (r *cpuRegion) region(w, lo, hi int) {
 	}
 }
 
+// groupRegion runs the calls [lo, hi) of the phase's kernels on worker w's
+// words.
+func (r *cpuRegion) groupRegion(w, lo, hi int) {
+	r.s.cpuGroupRun(&r.s.cpu.args[w], r.b, r.g, lo, hi)
+}
+
 // cpuPlace composes a new State's blocks on the CPU: each block of the
 // State's range no device holds, once, at its placement (cpuCompose).
 func (s *State) cpuPlace() {
@@ -945,6 +970,7 @@ func (s *State) cpuPlace() {
 	}
 	s.cpu.args = make([]cpu.Args, max(w, 1))
 	s.cpu.run.fn = s.cpu.run.region
+	s.cpu.run.gfn = s.cpu.run.groupRegion
 	s.cpu.zero = make([]uint32, 4)
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
@@ -1278,6 +1304,8 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 			f.unit = max(f.unit, c.Live/c.LiveUnits)
 		}
 		bytes := map[jit.Operand]int64{}
+		// rw is each operand's use: 1 read, 2 written.
+		rw := map[jit.Operand]uint8{}
 		for _, bd := range c.Binds {
 			if o := bd.Operand; bd.Writes && o.Kind == jit.OperandTable && (o.Name == "kv.k" || o.Name == "kv.v") {
 				f.keysEnd = ci + 1
@@ -1293,6 +1321,12 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 			o := bd.Operand
 			o.Copy = 0
 			bytes[o] = max(bytes[o], bd.Bytes)
+			if bd.Read {
+				rw[o] |= 1
+			}
+			if bd.Writes {
+				rw[o] |= 2
+			}
 			if bd.Writes && bd.Operand.Kind == jit.OperandScratch && !callsOwnScratch(c, bd.Operand, bd.Bytes) {
 				cc.serial = true
 			}
@@ -1392,6 +1426,27 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 				ar.src = cpuArgWord
 			}
 			cc.args = append(cc.args, ar)
+			if ar.src != cpuArgValue && ar.src != cpuArgCoord {
+				buf := cpuBuf{src: ar.src, region: ar.region, role: ar.role, i: ar.i, stream: ar.stream}
+				if buf.src == cpuArgWord {
+					buf.src = cpuArgOwn
+				}
+				use := rw[o]
+				if use == 0 || a.Word {
+					// Unbound, or a word read when its call is set up: a
+					// read, and, unbound, a write too.
+					use |= 1
+					if rw[o] == 0 {
+						use |= 2
+					}
+				}
+				if use&1 != 0 {
+					cc.rd = append(cc.rd, buf)
+				}
+				if use&2 != 0 {
+					cc.wr = append(cc.wr, buf)
+				}
+			}
 		}
 		code, err := cpu.MapNamed(c.CPU, c.Name)
 		if err != nil {
@@ -1411,6 +1466,9 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpu
 	if err := f.bankHalves(gr, rows); err != nil {
 		f.close()
 		return nil, err
+	}
+	if rows == 1 {
+		f.joinPhases()
 	}
 	return f, nil
 }
@@ -1455,6 +1513,57 @@ func callsOwnScratch(c jit.Code, o jit.Operand, bytes int64) bool {
 		seen = true
 	}
 	return seen
+}
+
+// joinPhases runs each run of consecutive kernels that share no buffer one
+// of them writes in one pool phase: their calls one space, claimed as one
+// kernel's. A run does not cross the selection's split.
+func (f *cpuBlockForm) joinPhases() {
+	for g := 0; g < len(f.codes); {
+		j := g + 1
+		if f.codes[g].joinable() {
+			for j < len(f.codes) && j != f.split && f.codes[j].joinable() && apart(f.codes[g:j], &f.codes[j]) {
+				j++
+			}
+		}
+		c := &f.codes[g]
+		c.join = j - g - 1
+		if c.join > 0 {
+			c.ends = make([]int, 0, j-g)
+			n := 0
+			for i := g; i < j; i++ {
+				n += max(f.codes[i].n, 1)
+				c.ends = append(c.ends, n)
+			}
+		}
+		g = j
+	}
+}
+
+// joinable says a kernel's calls may share a phase with another's: calls
+// on the pool, each free of the others and of the step's rows. A kernel of
+// one call runs on the caller, in no phase.
+func (c *cpuCode) joinable() bool {
+	return c.live.Live == 0 && !c.tiles && c.n > 1 && !c.serial
+}
+
+// apart says kernel c reads nothing the kernels gs write and writes nothing
+// they read or write.
+func apart(gs []cpuCode, c *cpuCode) bool {
+	for i := range gs {
+		g := &gs[i]
+		for _, w := range g.wr {
+			if slices.Contains(c.rd, w) || slices.Contains(c.wr, w) {
+				return false
+			}
+		}
+		for _, w := range c.wr {
+			if slices.Contains(g.rd, w) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // selOf is the selection gr's banks are read at, -1 for a graph that reads
@@ -1551,14 +1660,10 @@ func (m *Model) bankTensor(li int, r jlm.Role) *tensor {
 // and counted as the host's own mixture counts them.
 func (s *State) cpuForm(b *cpuBound, f *cpuBlockForm, li int) error {
 	if f.split <= 0 {
-		for i := range f.codes {
-			s.cpuCall(b, &f.codes[i])
-		}
+		s.cpuCalls(b, f.codes)
 		return nil
 	}
-	for i := range f.codes[:f.split] {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuCalls(b, f.codes[:f.split])
 	s.cpu.sel = s.cpu.sel[:0]
 	for _, x := range b.own[f.sel][:f.selN] {
 		s.cpu.sel = append(s.cpu.sel, int32(x))
@@ -1577,10 +1682,66 @@ func (s *State) cpuForm(b *cpuBound, f *cpuBlockForm, li int) error {
 		s.res.touch(li, s.c.NExpert, s.cpu.sel)
 		s.hot.add(li, s.cpu.sel)
 	}
-	for i := range f.codes[f.split:] {
-		s.cpuCall(b, &f.codes[f.split+i])
-	}
+	s.cpuCalls(b, f.codes[f.split:])
 	return nil
+}
+
+// cpuCalls runs kernels cs in order, each with those its phase joins
+// (cpuBlockForm.joinPhases).
+func (s *State) cpuCalls(b *cpuBound, cs []cpuCode) {
+	for i := 0; i < len(cs); i++ {
+		c := &cs[i]
+		if c.join == 0 {
+			s.cpuCall(b, c)
+			continue
+		}
+		g := cs[i : i+c.join+1]
+		i += c.join
+		if !s.prof {
+			s.cpuGroup(b, g)
+			continue
+		}
+		t0 := time.Now()
+		s.cpuGroup(b, g)
+		d := int64(time.Since(t0))
+		for j := range g {
+			g[j].nanos += d * int64(max(g[j].n, 1)) / int64(c.ends[len(c.ends)-1])
+			g[j].runs++
+		}
+	}
+}
+
+// cpuGroup runs the kernels g as one phase over the pool: their calls one
+// space, in order of the kernels.
+func (s *State) cpuGroup(b *cpuBound, g []cpuCode) {
+	n := g[0].ends[len(g)-1]
+	if s.jit == nil || s.jit.Workers() <= 1 {
+		s.cpuGroupRun(&s.cpu.args[0], b, g, 0, n)
+		return
+	}
+	if w := s.jit.Workers(); len(s.cpu.args) < w {
+		s.cpu.args = append(s.cpu.args, make([]cpu.Args, w-len(s.cpu.args))...)
+	}
+	r := &s.cpu.run
+	r.s, r.b, r.g = s, b, g
+	s.jit.ParallelWorkers(n, 1, r.gfn)
+}
+
+// cpuGroupRun runs the calls [lo, hi) of the kernels g's one space on a.
+func (s *State) cpuGroupRun(a *cpu.Args, b *cpuBound, g []cpuCode, lo, hi int) {
+	ends := g[0].ends
+	k := 0
+	for i := lo; i < hi; i++ {
+		for i >= ends[k] {
+			k++
+		}
+		at := i
+		if k > 0 {
+			at -= ends[k-1]
+		}
+		s.cpuWords(a, b, &g[k], at)
+		g[k].code.Call(a)
+	}
 }
 
 // inPlace says the form may write each residual stream's output over its
