@@ -133,8 +133,10 @@ func TestGemma4ServesComposedOnCPU(t *testing.T) {
 // cap is moved to 1 instead, where it bends every logit. A model read
 // without its per-layer embeddings leaves their tensors unbound, so the
 // front end states no block of it (UncoveredUnbound) and no composed arm
-// runs: the composed gates take each block's per-layer gate the next
-// block's instead, which the graphs still state.
+// runs: the composed gates leave the per-layer inputs' norm unweighted
+// instead, which every block reads through its second input. Each block
+// given the next block's gate places no block on CUDA (the tier took 0 of
+// 6), so it is no violation the card arms can run.
 func gemma4ComposedViolations(name string) []c6Violation {
 	var vs []c6Violation
 	for _, v := range gemma4Violations[name] {
@@ -142,20 +144,14 @@ func gemma4ComposedViolations(name string) []c6Violation {
 		case "no final softcap":
 			v = c6Violation{"a final softcap of 1", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.FinalSoftcap = 1 }) }}
 		case "no per-layer embeddings":
-			v = c6Violation{"each block's per-layer gate the next block's", func(m *Model) func() {
-				n := len(m.layers)
-				was := make([]tensor, n)
-				for i := range m.layers {
-					was[i] = m.layers[i].pleGate
+			v = c6Violation{"the per-layer inputs' norm unweighted", func(m *Model) func() {
+				was := m.pleNorm
+				ones := make([]float32, len(was))
+				for i := range ones {
+					ones[i] = 1
 				}
-				for i := range m.layers {
-					m.layers[i].pleGate = was[(i+1)%n]
-				}
-				return func() {
-					for i := range m.layers {
-						m.layers[i].pleGate = was[i]
-					}
-				}
+				m.pleNorm = ones
+				return func() { m.pleNorm = was }
 			}}
 		}
 		vs = append(vs, v)
