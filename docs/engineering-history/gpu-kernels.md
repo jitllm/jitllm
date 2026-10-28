@@ -9557,3 +9557,36 @@ row where the composer's reads two.
   device time of gpt-oss's composed 512-token prompt in the CLI
   (JITLLM_CUDA_KERNEL_TIMING): 175 ms matrix, 103 ms plain reductions off
   the unit, 14 ms grouping; the server's prompt is four times the CLI's.
+- **Four faults around the mixtures, each at its cause.** (1) The composed
+  build held 20.9 GB resident in `TestBatchSeamMovesCarryEveryRowMoEFamilies`
+  (glm4moe alone, V100) against main's 1.9 GB: the coarsener, asked for the
+  sampler's candidates over a 151552-word vocabulary, raised its unit to
+  606208 for a chain whose first reduction is an integer sum, which no
+  exchange between threads carries, and unrolled the rest of the chain over
+  the vocabulary (29 million nodes, 32251 MiB allocated, 42 s) before it
+  acted on the refusal; it now stops at the first (`TestCoarsenRefusesWithoutBuildingTheChain`,
+  32251 MiB before, 0.02 s after). The whole family gate, 12 fixtures and 48
+  arms, now peaks at 1.38 GB in 84 s. (2) `synth-phimoe` read logits of NMSE
+  0.63-0.76 on CUDA sm_70 and passes on sm_86 and Vulkan: not the card but
+  the capacity its batch forms at (8 rows with sm_70's tile unit, 32
+  otherwise). `Split` and `SplitExtreme` put their segments in front of a
+  form's space, so `CallRows`, holding a call to the rows of the leading
+  axis, took the segments for the rows, and a call of 3 rows read partial
+  sums nothing had written. The segments sit behind a leading rows axis and
+  the combine carries the capacity; the same fix lets the head's normed rows
+  through the prologue (`Operand.Out` is stored whole by every workgroup).
+  `TestComposedGPUHead` holds the head to the oracle at capacities 1 to 32,
+  calls of fewer rows, on ptx, spirv and ptx lowered for sm_70, with guard
+  words (60 NaN rows before, none after; the laptop's sm_86 card reproduces
+  the V100's failure with `OpenCUDAWith(CUDATarget: "sm_70")`). phimoe on
+  the V100: 0.667 and 0.76 before the first move, 3.8e-07 and 2.1e-07 now.
+  (3) A streamed prompt differing between sessions (5.7e-04 to 8.4e-03) was
+  two paths, not a stale cache: the first prompt of a model is one chunk,
+  its streamed experts on the host (`emitGroupedMoE`), and `forwardRowsFor`
+  sends every short prompt after it through the decode path, the card's
+  experts, once `hostExperts` is set; sessions two onward agree bit for bit
+  (the first sits 1.1e-04 from a resident card, the later 6.5e-04). The
+  gate pins the path (`WithPrefillForwardRows`) and holds three sessions
+  to the first bit for bit. (4) The eviction gates squeezed a budget the
+  pool had already grown past: the prewarm covers the gate's 449 positions
+  (112 pages on a 3050 Ti), so nothing streamed; they open without it.

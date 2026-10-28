@@ -406,11 +406,18 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 	}
 }
 
-// TestStreamedPromptIsTheSameInASecondSession prefills one prompt in two
+// TestStreamedPromptIsTheSameInASecondSession prefills one prompt in three
 // sessions one after the other on one card, every mixture block's experts
-// sent to the card (WithExperts("card")): the second session starts with
-// the first's experts in the card's caches, and its logits must be the
+// sent to the card (WithExperts("card")): the second starts with the first's
+// experts in the card's caches, and every session's logits must be the
 // first's bit for bit, on the tier's kernels and composed.
+//
+// The prompt goes through the decode path in every session
+// (WithPrefillForwardRows). Left unset, a model takes a chunk for the first
+// prompt, its streamed experts run on the host, and the decode path from the
+// second on, once a device has run host experts (State.forwardRowsFor): the
+// two paths part by the host's and the card's arithmetic (5.7e-04 to 8.4e-03
+// on the V100) and sessions two and three agree bit for bit.
 func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
 		for _, dev := range stepDevices() {
@@ -421,13 +428,14 @@ func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
 						noDevice(t, dev, err)
 					}
 					defer g.Close()
-					m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts("card"), WithStreamTrial(false))
+					m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts("card"), WithStreamTrial(false),
+						WithPrefillForwardRows(16))
 					if err != nil {
 						t.Fatal(err)
 					}
 					defer m.Close()
 					prompt := m.Vocab.Encode("The capital of France is a city that", true)
-					var out [2][]float32
+					var out [3][]float32
 					for i := range out {
 						st := m.NewState(len(prompt) + 2)
 						st.SetDeviceFallback(false)
@@ -444,8 +452,10 @@ func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
 					if g.Stats().StreamBlocks == 0 {
 						t.Fatal("no block was streamed: the configuration under test was not selected")
 					}
-					if !slices.Equal(out[0], out[1]) {
-						t.Fatalf("the second session's prompt is %.3e from the first's", logitNMSE(out[0], out[1]))
+					for i := 1; i < len(out); i++ {
+						if !slices.Equal(out[0], out[i]) {
+							t.Fatalf("session %d's prompt is %.3e from the first's", i+1, logitNMSE(out[0], out[i]))
+						}
 					}
 				})
 			}
