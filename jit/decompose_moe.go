@@ -381,6 +381,10 @@ func expertWeight(o graph.Op, c *Context, wo Operand, x *exprs, inp *[]Operand, 
 // one expert's weight.
 const groupRows = 64
 
+// rankBlock is the pairs a block of a grouping's ranks counts its experts
+// over.
+const rankBlock = 64
+
 // expertGrouped is an expert matvec over a step of rows the device's matrix
 // unit runs (Context.matrix), the step's live pairs grouped by the expert
 // their selection names: each expert's count of them; each expert's run's
@@ -411,6 +415,7 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 		return Operand{Kind: OperandScratch, Name: of + "." + n, Elem: U}
 	}
 	count, start, rank, table, block := word("count"), word("start"), word("rank"), word("table"), word("block")
+	blockCount, blockStart := word("blockcount"), word("blockstart")
 	grouped := Operand{Kind: OperandScratch, Name: name + ".grouped", Temp: true}
 	formed := c.grouped[of]
 	c.grouped[of] = true
@@ -467,14 +472,41 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 			x.sel(U, less(&x, f, e), run, x.u(0))
 			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E + 1, E}, In: []Operand{count}, Out: start, Combine: OpAdd, Type: U, Expr: x.e})
 		}
+		// A pair's rank is its expert's pairs in the blocks of BQ pairs
+		// before its own (each block's count of each expert, then their sum
+		// over the blocks before) and in its own block before it:
+		// Q*BQ+nb*E*(BQ+nb) terms, not Q*Q.
+		BQ := min(Q, rankBlock)
+		nb := (Q + BQ - 1) / BQ
 		{
 			var x exprs
-			s, t := x.coord(0), x.coord(1)
-			ks, kt := key(&x, s), key(&x, t)
-			eq := same(&x, ks, kt)
-			x.sel(U, less(&x, t, s), eq, x.u(0))
+			b, e, i := x.coord(0), x.coord(1), x.coord(2)
+			t := x.op(OpAdd, U, x.op(OpMul, U, b, x.u(uint32(BQ))), i)
+			kt := key(&x, x.op(OpMin, U, t, x.u(uint32(Q-1))))
+			x.sel(U, less(&x, t, x.u(uint32(Q))), same(&x, kt, e), x.u(0))
 			in, f := keyed()
-			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{Q, Q}, In: in, Out: rank, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
+			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{nb, E, BQ}, In: in, Out: blockCount, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
+		}
+		{
+			var x exprs
+			b, e, b2 := x.coord(0), x.coord(1), x.coord(2)
+			x.sel(U, less(&x, b2, b), x.at(0, []int{nb, E}, b2, e), x.u(0))
+			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{nb, E, nb}, In: []Operand{blockCount}, Out: blockStart, Combine: OpAdd, Type: U, Expr: x.e})
+		}
+		{
+			var x exprs
+			s, i := x.coord(0), x.coord(1)
+			b := x.op(OpDiv, U, s, x.u(uint32(BQ)))
+			t := x.op(OpAdd, U, x.op(OpMul, U, b, x.u(uint32(BQ))), i)
+			ks := key(&x, s)
+			kt := key(&x, x.op(OpMin, U, t, x.u(uint32(Q-1))))
+			within := x.sel(U, less(&x, t, s), same(&x, ks, kt), x.u(0))
+			before := x.at(2, []int{nb, E}, b, x.op(OpMin, U, ks, x.u(uint32(E-1))))
+			x.op(OpAdd, U, within, x.sel(U, less(&x, i, x.u(1)), before, x.u(0)))
+			in, f := keyed()
+			in = append(in, blockStart)
+			f.Extents[2] = nb * E
+			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{Q, BQ}, In: in, Out: rank, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
 		}
 		{
 			var x exprs

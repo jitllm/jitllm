@@ -53,9 +53,12 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		q := p
 		if f.block > 0 && f.block < p.Rows {
 			// A workgroup's rows within one block: as many rows fewer, as
-			// many outputs more, the warps dealt the same way.
+			// many warps fewer, each warp's share of the block the same, and
+			// as many more workgroups a unit. Its outputs stay the
+			// profile's: a wider workgroup would leave more of the last
+			// columns of a bank's sheets idle.
 			s := p.Rows / f.block
-			q.Rows, q.Cols, q.Warps = f.block, p.Cols*s, [2]int{p.Warps[0] / s, p.Warps[1] * s}
+			q.Rows, q.Warps, q.Resident = f.block, [2]int{p.Warps[0] / s, p.Warps[1]}, max(p.Resident, 1)*s
 			if q.Warps[0] == 0 || q.Rows%(q.Warps[0]*d.Matrix[0]) != 0 || q.Cols%(q.Warps[1]*d.Matrix[1]) != 0 {
 				return nil, false, nil
 			}
