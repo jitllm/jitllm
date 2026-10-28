@@ -244,8 +244,11 @@ func TestComposedTowerOnCPU(t *testing.T) {
 // and its projector through the front end and names what each one it
 // states none of lacks: the work list
 // of towers the composer does not serve yet. A graph built wrong
-// (UncoveredUnverified) fails it.
+// (UncoveredUnverified) fails it, and so does an entry or projector stated
+// otherwise than towerDeclines lists: a family newly declined, or one served
+// that the list still names.
 func TestTowerCensus(t *testing.T) {
+	declines := towerDeclines()
 	for _, f := range towerFamilies() {
 		t.Run(f.name, func(t *testing.T) {
 			m, tw := f.open(t)
@@ -271,7 +274,29 @@ func TestTowerCensus(t *testing.T) {
 				}
 			}
 			t.Logf("%s: entry %s %v; projector %s %v", f.name, ew, ee, pw, pe)
+			if got, want := [2]bool{ew != Covered, pw != Covered}, declines[f.name]; got != want {
+				t.Errorf("%s declines entry %v, projector %v; towerDeclines lists entry %v, projector %v", f.name, got[0], got[1], want[0], want[1])
+			}
 		})
+	}
+}
+
+// towerDeclines is every family whose entry or projector the front end
+// states none of, as {entry, projector}: the composer's work list for a
+// picture's rows, which only shrinks.
+func towerDeclines() map[string][2]bool {
+	return map[string][2]bool{
+		"qwen3vl":  {true, true},
+		"qwen35vl": {true, false},
+		"glm4v":    {true, true},
+		"kimivl":   {true, true},
+		"minicpmv": {false, true},
+		"pixtral":  {false, true},
+		"llama4":   {true, true},
+		"gemma4":   {true, true},
+		"phi4":     {true, false},
+		"gemma3n":  {true, true},
+		"lfm2":     {true, false},
 	}
 }
 
