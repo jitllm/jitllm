@@ -10342,3 +10342,45 @@ row where the composer's reads two.
   rows than a CPU call now runs the codes through the last history write
   once over every row, the values the rest read kept per call, so no code
   runs twice (no first pass: 0.50 to 1.08 from the clean encode).
+- **The composer's CPU lowering emits for the SSE tier.** A CPU device
+  whose stated ISA is short of AVX2, FMA and F16C forms by the profile's
+  Narrow passes (jit/profile.go: Jam and Vectorize at four lanes, no FMA,
+  Halves keeping no NaN payload; an f32 cache forms without Halves, as on
+  AVX2, Registry.WithoutHalves dropping it from both) and is lowered in the
+  legacy encodings through jit/x86's SSE ops (jit/lowercpu_sse.go): SSE4.1
+  and SSSE3 at most, a product and a sum where AVX2 fuses them, binary16
+  widened and narrowed in integer ops and one float multiply or add, a
+  shift by a count a lane done a lane at a time in general registers, a
+  memory operand loaded first (legacy SSE faults unaligned), and a scratch
+  vector the kernel's registers leave none for borrowed below the red zone
+  and put back. jit.HostCPULowers takes the SSE tier, so an SSE host's
+  blocks are served where every one was declined by DeclineISA. The
+  VEX-leak gate is one package now (internal/ssegate, main's jit/cpu gate
+  moved there), and TestComposedCPUGatesOnSSE runs the 20 composer CPU
+  kernel gates on the SSE tier and reads every kernel they mapped back
+  through objdump: on the laptop (forced) and natively on an Atom C3558,
+  MatVec 180/180 formed and right over every packed type, no VEX; each new
+  form against a violation (the widened sign dropped, the narrowed sign
+  dropped, every lane shifted by lane 0's count, the byte dot unsigned, its
+  zero addend's sums from the wrong register, the fma's addend dropped, the
+  aliased operand not put back, the borrowed registers put back from the
+  wrong slots) fails a gate. On the Atoms, natively, the composed build:
+  TestComposedCPUBlocksServe serves every block step of all eleven
+  CPU-served models, stories15M, Qwen3-0.6B, Llama-3.2-1B, Qwen3.5-0.8B,
+  Ministral-3-3B, HunyuanOCR, mamba-130m, LFM2-350M, granite-4.0-h-350m,
+  Falcon-H1-0.5B and Gemma 4 E2B, at 0.364, 0.451, 0.943, 0.526, 0.990,
+  0.729, 0.403, 0.925, 0.403, 0.980 and 0.909 of main's spread from main
+  (argmax 76/80 to 80/80); TestEveryModelRunsSSE serves the composed arm on
+  all ten of the host's models, against main's SSE kernels 2.4e-6..7.9e-5
+  max|dlogit| on the small ones and 0.80 on Qwen3-0.6B, inside the 0.94
+  band; TestGreedyMatchesLlamaCpp and its SSE twin agree with llama.cpp
+  b10825 on Qwen3-0.6B 19/20 teacher-forced (one 0.021 tie) and on the
+  fixtures 20/20; TestBatchMatchesForward's and TestPrefillMatchesForward's
+  composed arms serve every block step (NMSE 3.4e-14, 5.6e-4). Decode,
+  Qwen3-0.6B Q8_0 on the second Atom (4 cores, a foreign test on one),
+  dev/bench TestComposedCPUAB, A/A 0.9952 (IQR 2.8%): composed 0.488x
+  main's SSE tier (IQR 2.9%), main 5.1 tok/s = 3.3 GB/s = 28% of the
+  11.5 GB/s wall, composed 2.6 tok/s. The int8 dot's step is a broadcast of
+  four activation bytes, a load, a sign, a magnitude, two multiply-adds and
+  an add a four-row vector with a register spill each step, and a binary16
+  scale widened in software a block: speed is the shared passes' work.
