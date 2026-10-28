@@ -68,6 +68,13 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				return nil, false, nil
 			}
 		}
+		// A device whose workgroup memory does not hold the stage takes
+		// half the rows a workgroup, and half the warps along them, until
+		// it does.
+		for d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, d.Matrix[0], q.Warps[0]) > d.Shared &&
+			q.Warps[0] > 1 && q.Warps[0]%2 == 0 && q.Rows%2 == 0 {
+			q.Rows, q.Warps[0] = q.Rows/2, q.Warps[0]/2
+		}
 		if d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, d.Matrix[0], q.Warps[0]) > d.Shared {
 			return nil, false, nil
 		}

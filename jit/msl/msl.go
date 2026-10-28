@@ -174,6 +174,11 @@ func Emit(k *ir.Kernel) (string, error) {
 		// Not in the preamble unconditionally: it is an extra header on every
 		// kernel the device compiles, and every other one has no matrix in it.
 		l.b.WriteString("#include <metal_simdgroup_matrix>\n")
+		s, err := tileStructs(k)
+		if err != nil {
+			return "", err
+		}
+		l.b.WriteString(s)
 	}
 	if k.Comment != "" {
 		fmt.Fprintf(&l.b, "\n// %s\n", k.Comment)
@@ -293,8 +298,18 @@ func (l *lowerer) block(lo, hi int) error {
 		case ir.OpNTID:
 			l.name[i+1] = fmt.Sprintf("%du", l.k.Group[0])
 		case ir.OpStore:
-			l.line("%s[%s] = %s;", l.n(o.Args[0]), l.idx(o), l.n(o.Args[2]))
+			v := l.n(o.Args[2])
+			if et, ok := l.elem(o.Args[0]); ok && scalar32(l.k.Ops[o.Args[2]-1].Type) && et != l.k.Ops[o.Args[2]-1].Type {
+				// The bits, not the value: a shared array is declared in
+				// one type and its words read and written in others.
+				v = fmt.Sprintf("as_type<%s>(%s)", tname(et), v)
+			}
+			l.line("%s[%s] = %s;", l.n(o.Args[0]), l.idx(o), v)
 		case ir.OpLoad:
+			if et, ok := l.elem(o.Args[0]); ok && scalar32(o.Type) && et != o.Type {
+				l.def(i, o.Type, "as_type<%s>(%s[%s])", tname(o.Type), l.n(o.Args[0]), l.idx(o))
+				break
+			}
 			l.def(i, o.Type, "%s[%s]", l.n(o.Args[0]), l.idx(o))
 		case ir.OpShared:
 			// Declared where it appears; ir.Validate requires it before any
@@ -318,6 +333,30 @@ func (l *lowerer) block(lo, hi int) error {
 	}
 	return nil
 }
+
+// elem is the 32-bit scalar type buffer value buf is declared over, where
+// it is one: a shared array's, or a parameter's that holds no tile.
+func (l *lowerer) elem(buf ir.Value) (ir.Type, bool) {
+	if buf <= 0 || int(buf) > len(l.k.Ops) {
+		return 0, false
+	}
+	o := l.k.Ops[buf-1]
+	t := o.Type
+	switch o.Kind {
+	case ir.OpShared:
+	case ir.OpParam:
+		p := l.k.Params[o.Imm]
+		if p.IsTile {
+			return 0, false
+		}
+		t = p.Elem
+	default:
+		return 0, false
+	}
+	return t, scalar32(t)
+}
+
+func scalar32(t ir.Type) bool { return t == ir.I32 || t == ir.U32 || t == ir.F32 }
 
 // space is the MSL address space a buffer value lives in: a shared array is
 // threadgroup memory, a parameter is device memory.

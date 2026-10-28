@@ -2,6 +2,7 @@ package msl
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -17,21 +18,18 @@ import (
 //	transposed load (the B operand's layout)   available
 //
 // The mixed form (f16*f16+f32 -> f32) is attention's shape, despite the
-// single-template-parameter documentation. 8x8 is the only shape (tileT refuses
-// any other), and Vulkan's cooperative matrices here have no 8x8x8
-// (vulkan.CooperativeMatrixShapes), so no tile shape is common to both;
-// composing a larger tile from 8x8 ones is the kernel's decision, not the lowering's. There is no
-// integer form, so s8 tiles are declined as hardware.
+// single-template-parameter documentation. 8x8 is the only matrix shape, so
+// a larger tile -- a multiple of 8 each way, as ir.TileType.Valid holds it --
+// is lowered as a struct of 8x8 matrices, row-major by block (tileStructs):
+// a load or store of each block at its own offset, a product the blocks'
+// sum over the depth. There is no integer form, so s8 tiles are declined as
+// hardware.
 
-// tileT is the MSL spelling of a tile type, or an error naming why this target
-// has no such matrix. Every refusal here is a compile-time refusal of the whole
-// kernel: there is no scalar twin to fall back to within a tile op.
-func tileT(t ir.TileType) (string, error) {
-	if t.Rows != 8 || t.Cols != 8 {
-		return "", fmt.Errorf("msl: simdgroup_matrix is 8x8 on this target and %s is not; "+
-			"compose the shape in the kernel (simdgroup_matrix<float,8,16> and "+
-			"<float,16,16> both fail to compile here -- metal.TestSimdgroupMatrixForms)", t)
-	}
+// tileElem is the MSL simdgroup_matrix of one 8x8 block of t, or an error
+// naming why this target has no such matrix. Every refusal here is a
+// compile-time refusal of the whole kernel: there is no scalar twin to fall
+// back to within a tile op.
+func tileElem(t ir.TileType) (string, error) {
 	switch t.Elem {
 	case ir.TileF32:
 		return "simdgroup_matrix<float,8,8>", nil
@@ -48,18 +46,78 @@ func tileT(t ir.TileType) (string, error) {
 		"target (char and int both fail to compile -- metal.TestSimdgroupMatrixForms)", t.Elem)
 }
 
+// tileT is the MSL spelling of a tile type: one simdgroup_matrix at 8x8,
+// else the struct of its blocks (tileStructs).
+func tileT(t ir.TileType) (string, error) {
+	if t.Rows <= 0 || t.Cols <= 0 || t.Rows%8 != 0 || t.Cols%8 != 0 {
+		return "", fmt.Errorf("msl: %s is not a whole number of 8x8 simdgroup matrices", t)
+	}
+	e, err := tileElem(t)
+	if err != nil {
+		return "", err
+	}
+	if t.Rows == 8 && t.Cols == 8 {
+		return e, nil
+	}
+	return fmt.Sprintf("jitllm_tile_%s_%dx%d", tileElemName(t.Elem), t.Rows, t.Cols), nil
+}
+
+// tileStructs declares the struct of every tile type of k past 8x8, each
+// once: its 8x8 blocks, row-major by block. A struct and not an array, so a
+// loop-carried tile is reassigned whole as a scalar is.
+func tileStructs(k *ir.Kernel) (string, error) {
+	seen := map[string]bool{}
+	var b strings.Builder
+	for _, o := range k.Ops {
+		if o.Tile == nil || o.Tile.Rows == 8 && o.Tile.Cols == 8 {
+			continue
+		}
+		n, err := tileT(*o.Tile)
+		if err != nil {
+			return "", err
+		}
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		e, _ := tileElem(*o.Tile)
+		fmt.Fprintf(&b, "struct %s { %s m[%d]; };\n", n, e, o.Tile.Rows/8*(o.Tile.Cols/8))
+	}
+	return b.String(), nil
+}
+
 // tile lowers the four collective-tile ops.
 func (l *lowerer) tile(i int, o ir.Op) error {
-	ty, err := tileT(*o.Tile)
+	t := *o.Tile
+	ty, err := tileT(t)
 	if err != nil {
 		return err
 	}
 	v := fmt.Sprintf("v%d", i+1)
+	whole := t.Rows == 8 && t.Cols == 8
+	br, bc := t.Rows/8, t.Cols/8
+	// blk is block (r, c) of a tile of rows x cols blocks named name.
+	blk := func(name string, rows, cols, r, c int) string {
+		if rows == 1 && cols == 1 {
+			return name
+		}
+		return fmt.Sprintf("%s.m[%d]", name, r*cols+c)
+	}
 
 	switch o.Kind {
 	case ir.OpTileSplat:
+		// make_filled_simdgroup_matrix, not the scalar constructor, which
+		// makes a diagonal matrix.
 		l.name[i+1] = v
-		l.line("%s %s = %s(%s);", ty, v, ty, l.n(o.Args[0]))
+		fill := fmt.Sprintf("make_filled_simdgroup_matrix<%s, 8, 8>(%s)", tileElemName(t.Elem), l.n(o.Args[0]))
+		if whole {
+			l.line("%s %s = %s;", ty, v, fill)
+			return nil
+		}
+		l.line("%s %s;", ty, v)
+		for q := range br * bc {
+			l.line("%s.m[%d] = %s;", v, q, fill)
+		}
 
 	case ir.OpTileMMA:
 		// D and C are separate declarations: the IR is SSA, and writing
@@ -67,8 +125,20 @@ func (l *lowerer) tile(i int, o ir.Op) error {
 		// value.
 		l.name[i+1] = v
 		l.line("%s %s = %s;", ty, v, l.n(o.Args[2]))
-		l.line("simdgroup_multiply_accumulate(%s, %s, %s, %s);",
-			v, l.n(o.Args[0]), l.n(o.Args[1]), v)
+		at := l.k.Ops[o.Args[0]-1].Tile
+		if at == nil || at.Cols <= 0 || at.Cols%8 != 0 {
+			return fmt.Errorf("msl: op %d: a tile product whose A is not a tile of whole 8x8 blocks", i+1)
+		}
+		bk := at.Cols / 8
+		for r := range br {
+			for c := range bc {
+				d := blk(v, br, bc, r, c)
+				for k := range bk {
+					l.line("simdgroup_multiply_accumulate(%s, %s, %s, %s);", d,
+						blk(l.n(o.Args[0]), br, bk, r, k), blk(l.n(o.Args[1]), bk, bc, k, c), d)
+				}
+			}
+		}
 
 	case ir.OpTileLoad, ir.OpTileStore:
 		p, err := l.tileParam(o)
@@ -76,21 +146,40 @@ func (l *lowerer) tile(i int, o ir.Op) error {
 			return err
 		}
 		// The layout is simdgroup_load's transpose flag, not a property
-		// of the type. ulong2(0,0) is the origin within the tile; the
-		// view's offset is already in the pointer.
+		// of the type. ulong2(0,0) is the origin within the block; the
+		// view's offset and the block's are in the pointer: block (r, c)
+		// starts 8r rows and 8c columns in, a row a stride apart where the
+		// layout is row-major and a column a stride apart where it is not.
 		trans := "false"
 		if ir.ColMajor(o) {
 			trans = "true"
 		}
-		ptr := fmt.Sprintf("%s + %s", p, l.n(o.Args[1]))
-		if o.Kind == ir.OpTileStore {
-			l.line("simdgroup_store(%s, %s, %s, ulong2(0, 0), %s);",
-				l.n(o.Vargs[0]), ptr, l.n(o.Args[2]), trans)
-			return nil
+		stride := l.n(o.Args[2])
+		ptr := func(r, c int) string {
+			if ir.ColMajor(o) {
+				r, c = c, r
+			}
+			if r == 0 && c == 0 {
+				return fmt.Sprintf("%s + %s", p, l.n(o.Args[1]))
+			}
+			return fmt.Sprintf("%s + %s + %du * %s + %du", p, l.n(o.Args[1]), 8*r, stride, 8*c)
 		}
-		l.name[i+1] = v
-		l.line("%s %s;", ty, v)
-		l.line("simdgroup_load(%s, %s, %s, ulong2(0, 0), %s);", v, ptr, l.n(o.Args[2]), trans)
+		name := v
+		if o.Kind == ir.OpTileStore {
+			name = l.n(o.Vargs[0])
+		} else {
+			l.name[i+1] = v
+			l.line("%s %s;", ty, v)
+		}
+		for r := range br {
+			for c := range bc {
+				if o.Kind == ir.OpTileStore {
+					l.line("simdgroup_store(%s, %s, %s, ulong2(0, 0), %s);", blk(name, br, bc, r, c), ptr(r, c), stride, trans)
+				} else {
+					l.line("simdgroup_load(%s, %s, %s, ulong2(0, 0), %s);", blk(name, br, bc, r, c), ptr(r, c), stride, trans)
+				}
+			}
+		}
 
 	default:
 		return fmt.Errorf("msl: %s is not a tile op", o.Kind)

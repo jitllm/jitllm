@@ -24,10 +24,11 @@ func TestTileMatchesReference(t *testing.T) {
 		t.Skip("no GPU backend on this host")
 	}
 	const chain = 3
-	// The shape list is the union of two disjoint ones: NVIDIA's cooperative
-	// matrices have M=16, Metal's simdgroup_matrix is 8x8 only. No shape runs
-	// on both, so a kernel must ask the device (vulkan.CooperativeMatrixShapes;
-	// msl's tileT admits 8x8 only) rather than bake a shape in.
+	// NVIDIA's cooperative matrices have M=16; Metal's simdgroup_matrix is
+	// 8x8, and msl lowers a larger tile as its 8x8 blocks, so a Metal device
+	// must run the 16x16x16 binary16 tile the composer asks for. A kernel
+	// still asks the device (vulkan.CooperativeMatrixShapes, LowersTile)
+	// rather than bake a shape in.
 	cases := []struct {
 		m, n, k int
 		elem    ir.TileElem
@@ -38,8 +39,9 @@ func TestTileMatchesReference(t *testing.T) {
 		{8, 8, 8, ir.TileF16},    // msl, the MIXED form: half operands, f32 accumulator
 		{8, 8, 8, ir.TileF32},    // msl
 	}
-	ran := 0
+	ran, msl16, msl := 0, 0, false
 	for _, d := range devs {
+		msl = msl || d.API() == "msl"
 		defer d.Close()
 		for _, c := range cases {
 			kk, err := kernels.TileProbe(c.m, c.n, c.k, chain, c.elem)
@@ -63,7 +65,13 @@ func TestTileMatchesReference(t *testing.T) {
 				tileCase(t, d, kern, c.m, c.n, c.k, chain, c.elem)
 			})
 			ran++
+			if d.API() == "msl" && c.m == 16 && c.n == 16 && c.k == 16 {
+				msl16++
+			}
 		}
+	}
+	if msl && msl16 == 0 {
+		t.Error("a Metal device lowered no 16x16x16 binary16 tile: msl composes it of 8x8 blocks")
 	}
 	if ran == 0 {
 		t.Skip("no backend on this host lowers a cooperative matrix")
