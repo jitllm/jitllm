@@ -180,10 +180,15 @@ func BenchmarkComposedMatrix(t *testing.B) {
 				}
 				composed()
 				mainArm()
-				var cu, mu, ratio []float64
+				first := func() {
+					if err := op.kerns[0].Launch(codes[0].LiveGroups(R), codes[0].GPU.Group[0], args[0]...); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var cu, mu, fu, ratio []float64
 				for range rounds {
-					c, m := time1(composed), time1(mainArm)
-					cu, mu, ratio = append(cu, c), append(mu, m), append(ratio, c/m)
+					c, m, f := time1(composed), time1(mainArm), time1(first)
+					cu, mu, fu, ratio = append(cu, c), append(mu, m), append(fu, f), append(ratio, c/m)
 				}
 				med := func(v []float64) float64 {
 					s := append([]float64(nil), v...)
@@ -199,8 +204,8 @@ func BenchmarkComposedMatrix(t *testing.B) {
 					t.Logf("%s %s: main %d workgroups of %d, regs %d, spill %d, shared %d, resident %d", d.Name(), sh.what,
 						kernels.GemmVoltaGroups(s, tl), tl.Threads(), r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
 				}
-				t.Logf("%s %v %-8s %v %5dx%-5d rows %d: composed %8.1f us (%5.1f TFLOP/s, %d kernels), main %8.1f us (%5.1f TFLOP/s), composed/main %.2f",
-					d.Name(), mx, sh.what, sh.typ, sh.n, sh.k, R, med(cu), flop/med(cu)/1e6, len(codes), med(mu), flop/med(mu)/1e6, med(ratio))
+				t.Logf("%s %v %-8s %v %5dx%-5d rows %d: composed %8.1f us (%5.1f TFLOP/s, %d kernels, the first %.1f us), main %8.1f us (%5.1f TFLOP/s), composed/main %.2f",
+					d.Name(), mx, sh.what, sh.typ, sh.n, sh.k, R, med(cu), flop/med(cu)/1e6, len(codes), med(fu), med(mu), flop/med(mu)/1e6, med(ratio))
 				mainKern.Close()
 				op.close()
 				for _, bf := range bufs {
