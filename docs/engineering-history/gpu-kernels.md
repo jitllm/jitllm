@@ -10665,3 +10665,31 @@ row where the composer's reads two.
   expert once for its rows. The cards' per-expert grouping (expertGrouped)
   does not form on the CPU yet (its grouped reduce at 8-row groups runs out
   of vector registers): that is the lever.
+- A sparse key selection stated as ops (graph.OpSelect): each index head's
+  dot with every attended position's key (its HeadDim elements at Offset of
+  a history row Width wide), passed through a stated function and a weight
+  per head, summed per group, a block of Span positions scored by its best,
+  the Local blocks ending at the row's own kept and the best of the rest up
+  to TopK, every block where they number no more; an OpAttend reading it as
+  In[1] attends each group's kept positions, over history rows wider than
+  its heads (Attrs.Width). DeepSeek V3.2's indexer (its key the tail of the
+  latent row, ReLU'd heads weighted, blocks of one) and MiniMax-M3's block
+  selection (its key one more kv head, its value head zero, a selection per
+  kv group) are that op; only QSA and DeepSeek V4's compressed blocks keep
+  UncoveredSelect. Its basic form ranks every pair of blocks.
+  TestComposedCPUSelect holds it on the CPU to the definition (NMSE 2e-13
+  to 1.2e-12, every group's count exact, the forced blocks and a dense
+  attention each seen). Two CPU lowering faults it found: a constant
+  offset into a binary16 buffer was counted in floats at the call
+  (CallArg.Elem unset), so a key at Offset 16 read the next position's at
+  8; and a vectorized map read a coordinate that also addressed memory as
+  one lane's scalar (Induction now makes such a value again over the
+  lanes' fold) -- a block's keep flag stored [0..0, 8, 0..0] for 0..15.
+  On a card a coarsened chain of a prompt form that combines across
+  threads and binds the history is no longer formed (CallRows refused it:
+  MiniMax-M3's dense lead block, heads of 16). synth-minimaxm3 on the
+  composed CPU: 5.8e-13 from main over 24 steps, 72 block steps, each
+  violation 0.41 to 1.04. TestDeepseek32OnEveryDevice composed: decode
+  4.9e-12 (cuda) and 5.0e-12 (vulkan), 36 block steps composed, no
+  decline, each violation 1.4 to 1.8. DeepSeek V3.2's blocks on the CPU
+  device stay declined by name (a latent attention's history).

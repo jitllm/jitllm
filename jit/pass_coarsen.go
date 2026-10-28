@@ -39,6 +39,13 @@ func (c Coarsen) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if !ok {
 			continue
 		}
+		// A chain of a form's capacity that combines across threads is held
+		// to the call's rows by its launch alone, a surplus row computing on
+		// (CallRows): one reading or writing the history, which that row
+		// would address, stays its kernels.
+		if m.Capacity > 0 && !m.RowsHeld && m.boundsSurplusHistory() {
+			continue
+		}
 		if host != nil {
 			m.Passes = append(append([]string(nil), host.Passes...), c.Name())
 			out[i-1] = m

@@ -55,9 +55,8 @@ func (p CallRows) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		m.RowsHeld = true
 		if m.Work && len(m.Space) > 1 || !m.Work && combines(m) {
-			// Workgroups a row each launch the call's rows and no other: no
-			// surplus row reaches the history.
-			if o, ok := m.history(); ok && !(m.Work && m.Space[0] == m.Capacity) {
+			if m.boundsSurplusHistory() {
+				o, _ := m.history()
 				return nil, false, fmt.Errorf("jit: %s combines across threads and binds %s, which a row past the call's would address",
 					m.Name, o.Name)
 			}
@@ -70,6 +69,18 @@ func (p CallRows) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m.Clamp = lim + 1
 		return []*Kernel{m}, true, nil
 	})
+}
+
+// boundsSurplusHistory reports whether k, held to a call's rows by its
+// launch alone, has a surplus row reach the history: it combines across
+// threads and binds the history, its workgroups not a row each (a staged
+// attention's, whose launch holds the call's rows exactly).
+func (k *Kernel) boundsSurplusHistory() bool {
+	if !(k.Work && len(k.Space) > 1 || !k.Work && combines(k)) {
+		return false
+	}
+	_, ok := k.history()
+	return ok && !(k.Work && k.Space[0] == k.Capacity)
 }
 
 // combines reports whether k's threads combine their values: through

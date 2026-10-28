@@ -153,7 +153,7 @@ func TestDeepseek32OnEveryDevice(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openDS32(t, fx.name)
 			defer m.Close()
-			fixtureOnEveryDeviceWithin(t, m, g, ds32DevViolations, 1e-5)
+			fixtureOnEveryDeviceCounted(t, m, g, ds32DevViolations, 1e-5, true)
 		})
 	}
 }

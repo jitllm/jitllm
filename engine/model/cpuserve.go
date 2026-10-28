@@ -2321,6 +2321,14 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 		return &l.laurelL
 	case jlm.RoleLowRankOut:
 		return &l.laurelR
+	case jlm.RoleIdxQ:
+		return &l.idxQ
+	case jlm.RoleIdxQB:
+		return &l.idxQB
+	case jlm.RoleIdxK:
+		return &l.idxK
+	case jlm.RoleIdxProj:
+		return &l.idxProj
 	}
 	if h := l.q4e; h != nil {
 		switch r {
@@ -2457,6 +2465,12 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 		return l.ffnSubNorm
 	case jlm.RoleXIELU:
 		return l.xielu
+	case jlm.RoleIdxQNorm:
+		return l.idxQNorm
+	case jlm.RoleIdxKNorm:
+		return l.idxKNorm
+	case jlm.RoleIdxKNormB:
+		return l.idxKNormB
 	case jlm.RoleLayerOutScale:
 		return l.outScaleRow
 	case jlm.RoleSSMA:

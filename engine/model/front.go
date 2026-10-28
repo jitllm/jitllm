@@ -400,7 +400,7 @@ func (m *Model) uncovered(li int) Uncovered {
 	switch {
 	case c.NRotAt(li) != c.NRot && !(m.ropeSWA != nil && c.SWA(li)) || !c.MLA() && c.HeadDimV != c.HeadDim || !m.sharesGeometry(li):
 		return UncoveredGeometry
-	case c.IdxHeads != 0:
+	case c.IdxHeads != 0 && (c.QSARatio != 0 || len(c.CompKinds) != 0):
 		return UncoveredSelect
 	case c.Streams() > 1 && !c.statesStreams():
 		return UncoveredStreams
@@ -659,7 +659,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	q := matvec(qIn, qRole, qrows, stored(jlm.RoleAttnQBias)...)
 	if has(jlm.RoleAttnKVA) {
-		att, err := m.latentAttention(b, li, n, q, has, stored, matvec)
+		att, err := m.latentAttention(b, li, n, qIn, q, has, stored, matvec)
 		if err != nil {
 			return nil, UncoveredUnverified, err
 		}
@@ -772,6 +772,38 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}, nil, pos)
 		q = mapRow(b, "q.temp", graph.Attrs{Fn: graph.MapMul}, nil, qdim, q, temp)
 	}
+	// A block selecting blocks of its keys caches its indexer's key as one
+	// more kv head of the row, that head's value zero, and asks a query
+	// head per kv group which blocks its heads attend.
+	var iq graph.ValueID
+	rowW := kvDim
+	selects := c.IdxBlock != 0 && has(jlm.RoleIdxK)
+	if selects {
+		id := c.IdxHeadDim
+		if id != hd || c.IdxHeads != nkv || shared {
+			return nil, UncoveredUnverified, fmt.Errorf("a block selection of %d heads of %d over %d kv heads of %d (shared %v)",
+				c.IdxHeads, id, nkv, hd, shared)
+		}
+		turn := func(v graph.ValueID, name string) graph.ValueID {
+			if !c.RopeAt(li) {
+				return v
+			}
+			r := m.rope
+			layout := graph.RopeNorm
+			if r.Neox {
+				layout = graph.RopeNeox
+			}
+			a := graph.Attrs{HeadDim: id, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
+			return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: name, Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0]
+		}
+		ik := turn(b.Norm(matvec(n, jlm.RoleIdxK, id), jlm.RoleIdxKNorm, c.RMSEps), "idx.k.rope")
+		iq = turn(b.HeadNorm(matvec(n, jlm.RoleIdxQ, c.IdxHeads*id), jlm.RoleIdxQNorm, id, c.RMSEps), "idx.q.rope")
+		rowW = kvDim + id
+		join := func(name string, x, y graph.ValueID) graph.ValueID {
+			return b.Emit(graph.OpConcat, []graph.ValueID{x, y}, []graph.Result{{Name: name, Width: rowW}}, nil, graph.Attrs{}, nil, nil)[0]
+		}
+		k, v = join("k.row", k, ik), join("v.row", v, mapRow(b, "v.pad", graph.Attrs{Fn: graph.MapMul}, nil, id, ik))
+	}
 	hist := graph.SharedHistory(c.KVSource(li))
 	if !shared {
 		hist = graph.StateRef{Name: "kv", Version: b.KVAppend(k, v, 0)}
@@ -784,7 +816,15 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.SWA(li) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
-	att := b.AttendOf(q, hist, a, stored(jlm.RoleAttnSinks)...)
+	var att graph.ValueID
+	if selects {
+		a.Width = rowW
+		sel := b.Select(iq, hist, graph.Attrs{NHead: c.IdxHeads, NKVHead: c.IdxHeads, HeadDim: c.IdxHeadDim, Offset: kvDim, Width: rowW,
+			Span: c.IdxBlock, TopK: c.IdxTopK, Local: c.IdxLocal})
+		att = b.AttendSelected(q, hist, sel, a, stored(jlm.RoleAttnSinks)...)
+	} else {
+		att = b.AttendOf(q, hist, a, stored(jlm.RoleAttnSinks)...)
+	}
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)
 	}
@@ -1153,13 +1193,15 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 // latentAttention is the attention of a block that projects its history
 // through a latent (the container stores RoleAttnKVA): the latent row, its
 // first KVLoraRank normed and the rest a key turned by the rotary, cached
-// once a position for every head; each head's query its head's first
+// once a position for every head, an indexer's key after them where the
+// block stores one (its heads' queries from qIn, the query's input, and
+// their weights selecting the positions the heads attend); each head's query its head's first
 // HeadDim-NRot through its sheet of RoleAttnKB, joined with the rest turned
 // by the rotary, so a query row is the cached row's width; attention over
 // the cached rows, each value the whole row, with the block's scale, window,
 // softcap and sinks; each head's first KVLoraRank of the result through its
 // sheet of RoleAttnVB, gated where the block stores a gate over the output.
-func (m *Model) latentAttention(b *graph.Builder, li int, n, q graph.ValueID, has func(jlm.Role) bool, stored func(jlm.Role) []jlm.Role,
+func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueID, has func(jlm.Role) bool, stored func(jlm.Role) []jlm.Role,
 	matvec func(graph.ValueID, jlm.Role, int, ...jlm.Role) graph.ValueID) (graph.ValueID, error) {
 	c := m.Cfg
 	nh, hd, lat, rot, hdv := c.NHead, c.HeadDimAt(li), c.KVLoraRank, c.NRot, c.HeadDimV
@@ -1197,9 +1239,26 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, q graph.ValueID, ha
 	abs := sheets(slice(q, "q.nope", hd, 0, nope, nh*nope), "q.abs", jlm.RoleAttnKB, nope, lat)
 	qrow := b.Emit(graph.OpConcat, []graph.ValueID{abs, qpe}, []graph.Result{{Name: "q.row", Width: nh * row}}, nil,
 		graph.Attrs{NHead: nh}, nil, nil)[0]
-	krow := b.Emit(graph.OpConcat, []graph.ValueID{latent, kpe}, []graph.Result{{Name: "kv.row", Width: row}}, nil,
-		graph.Attrs{}, nil, nil)[0]
-	hist := b.KVAppend(krow, krow, 0)
+	// An indexer's key rides the cached row after the rotary key.
+	parts, width := []graph.ValueID{latent, kpe}, row
+	var iq, iw graph.ValueID
+	if has(jlm.RoleIdxK) {
+		ih, id := c.IdxHeads, c.IdxHeadDim
+		turn := func(v graph.ValueID, name string) graph.ValueID {
+			if !c.RopeAt(li) {
+				return v
+			}
+			r := m.ropeAt(li)
+			a := graph.Attrs{HeadDim: id, NRot: r.NRot, Base: r.Base, Layout: graph.RopeNeox, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
+			return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: name, Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0]
+		}
+		ik := turn(b.LayerNorm(matvec(n, jlm.RoleIdxK, id), jlm.RoleIdxKNorm, idxEps, jlm.RoleIdxKNormB), "idx.k.rope")
+		iq = turn(matvec(qIn, jlm.RoleIdxQB, ih*id), "idx.q.rope")
+		iw = mapRow(b, "idx.w", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(id*ih))}, nil, ih, matvec(n, jlm.RoleIdxProj, ih))
+		parts, width = append(parts, ik), row+id
+	}
+	krow := b.Emit(graph.OpConcat, parts, []graph.Result{{Name: "kv.row", Width: width}}, nil, graph.Attrs{}, nil, nil)[0]
+	hist := graph.StateRef{Name: "kv", Version: b.KVAppend(krow, krow, 0)}
 	scale := c.AttnScale
 	if scale == 0 {
 		scale = 1 / math.Sqrt(float64(hd))
@@ -1208,7 +1267,15 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, q graph.ValueID, ha
 	if c.SWA(li) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
-	att := b.Attend(qrow, hist, a, stored(jlm.RoleAttnSinks)...)
+	var att graph.ValueID
+	if width != row {
+		a.Width = width
+		sel := b.Select(iq, hist, graph.Attrs{NHead: c.IdxHeads, NKVHead: 1, HeadDim: c.IdxHeadDim, Offset: row, Width: width,
+			Span: 1, TopK: c.IdxTopK, Fn: graph.MapMax}, iw)
+		att = b.AttendSelected(qrow, hist, sel, a, stored(jlm.RoleAttnSinks)...)
+	} else {
+		att = b.AttendOf(qrow, hist, a, stored(jlm.RoleAttnSinks)...)
+	}
 	o := sheets(slice(att, "att.latent", row, 0, lat, nh*lat), "att.v", jlm.RoleAttnVB, lat, hdv)
 	if has(jlm.RoleAttnGate) {
 		o = sigmoidMul(b, "att.gated", matvec(n, jlm.RoleAttnGate, nh*hdv), o)

@@ -1754,6 +1754,14 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.hcFU
 	case jlm.RoleHCFFNInject:
 		return l.hcFI
+	case jlm.RoleIdxQ:
+		return l.idxQ
+	case jlm.RoleIdxQB:
+		return l.idxQB
+	case jlm.RoleIdxK:
+		return l.idxK
+	case jlm.RoleIdxProj:
+		return l.idxProj
 	}
 	return nil
 }
@@ -1837,6 +1845,12 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.nQ
 	case jlm.RoleAttnKNorm:
 		return l.nK
+	case jlm.RoleIdxQNorm:
+		return l.nIdxQ
+	case jlm.RoleIdxKNorm:
+		return l.nIdxK
+	case jlm.RoleIdxKNormB:
+		return l.nIdxKB
 	case jlm.RoleAttnQBias:
 		return l.mvq.bias
 	case jlm.RoleAttnKBias:
