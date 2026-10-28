@@ -53,7 +53,7 @@ func (x *exprs) countsAt(k, t int) int {
 // K ranked as decomposeTopKRanked ranks a group. Its work is a few passes
 // over the row and K squared compares, whatever K is.
 func decomposeTopKSelect(c *Context, in, sel, val Operand, S, K int) []Prim {
-	U, F := ir.U32, ir.F32
+	U, I, F := ir.U32, ir.I32, ir.F32
 	R := c.Step.Rows
 	B := selectBlock(S)
 	sh := bits.TrailingZeros(uint(B))
@@ -70,12 +70,19 @@ func decomposeTopKSelect(c *Context, in, sel, val Operand, S, K int) []Prim {
 		return x.orderKey(x.load(0, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(S))), j)))
 	}
 	ext := map[int]int{0: R * S}
+	// A round's counts are sums of ones in floats, exact under 2^24, so a
+	// device sums them as it sums floats, then made words.
+	words := func(from, to Operand, n int) Prim {
+		var x exprs
+		x.un(OpBitcast, U, x.un(OpCvtI32, I, x.at(0, []int{R, n}, x.coord(0), x.coord(1))))
+		return Prim{Kind: PrimMap, Shape: []int{R, n}, In: []Operand{from}, Out: to, Expr: x.e}
+	}
 
 	var prims []Prim
 	var t Operand
 	for round := range 8 {
 		s := uint32(28 - 4*round)
-		cnt := scratch(fmt.Sprintf("cnt%d", round), U)
+		cnt, cw := scratch(fmt.Sprintf("cnt%d", round), F), scratch(fmt.Sprintf("cnt%d.w", round), U)
 		var cx exprs
 		r, d, i := cx.coord(0), cx.coord(1), cx.coord(2)
 		base := cx.u(0)
@@ -83,12 +90,13 @@ func decomposeTopKSelect(c *Context, in, sel, val Operand, S, K int) []Prim {
 			base = cx.at(1, []int{R}, r)
 		}
 		thr := cx.op(OpAdd, U, base, cx.op(OpShl, U, cx.op(OpAdd, U, d, cx.u(1)), cx.u(s)))
-		cx.sel(U, cx.op(OpLess, ir.Pred, keyAt(&cx, r, i), thr), cx.u(0), cx.u(1))
+		cx.sel(F, cx.op(OpLess, ir.Pred, keyAt(&cx, r, i), thr), cx.f(0), cx.f(1))
 		cin := []Operand{in}
 		if round > 0 {
 			cin = append(cin, t)
 		}
-		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, 15, S}, In: cin, Out: cnt, Combine: OpAdd, Type: U, Expr: cx.e})
+		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, 15, S}, In: cin, Out: cnt, Combine: OpAdd, Type: F, Expr: cx.e},
+			words(cnt, cw, 15))
 
 		next := scratch(fmt.Sprintf("t%d", round+1), U)
 		var ux exprs
@@ -100,7 +108,7 @@ func decomposeTopKSelect(c *Context, in, sel, val Operand, S, K int) []Prim {
 		jm := ux.op(OpSub, U, ux.op(OpMax, U, j, ux.u(1)), ux.u(1))
 		reach := ux.sel(U, ux.op(OpLess, ir.Pred, ux.at(0, []int{R, 15}, r, jm), ux.u(uint32(K))), ux.u(0), ux.u(1<<s))
 		ux.sel(U, ux.op(OpLess, ir.Pred, j, ux.u(1)), prev, reach)
-		uin := []Operand{cnt}
+		uin := []Operand{cw}
 		if round > 0 {
 			uin = append(uin, t)
 		}
@@ -140,15 +148,23 @@ func decomposeTopKSelect(c *Context, in, sel, val Operand, S, K int) []Prim {
 		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, nb, nb}, In: []Operand{blk}, Out: p, Combine: OpAdd, Type: U, Expr: px.e})
 	}
 
-	// The counts before each element within its block, packed.
-	within := scratch("within", U)
+	// The counts before each element within its block, packed: above the
+	// threshold plus 2^16 times at it, each below B, a sum of floats made
+	// words. A row whose blocks are whole reads no element past it.
+	wf, within := scratch("within.f", F), scratch("within", U)
 	var wx exprs
 	r, i, u = wx.coord(0), wx.coord(1), wx.coord(2)
 	j = wx.op(OpAdd, U, wx.op(OpShl, U, wx.op(OpShr, U, i, wx.u(uint32(sh))), wx.u(uint32(sh))), u)
-	jc = wx.op(OpMin, U, j, wx.u(uint32(S-1)))
-	wx.sel(U, wx.op(OpLess, ir.Pred, j, i), wx.countsAt(keyLoad(&wx, r, jc), wx.at(1, []int{R}, r)), wx.u(0))
-	prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, S, B}, In: []Operand{in, t}, Out: within, Combine: OpAdd, Type: U,
-		Expr: wx.e, Facts: Facts{Extents: ext}})
+	jc = j
+	if S%B != 0 {
+		jc = wx.op(OpMin, U, j, wx.u(uint32(S-1)))
+	}
+	k := keyLoad(&wx, r, jc)
+	tt := wx.at(1, []int{R}, r)
+	w := wx.sel(F, wx.op(OpLess, ir.Pred, tt, k), wx.f(1), wx.sel(F, wx.op(OpLess, ir.Pred, k, tt), wx.f(0), wx.f(1<<16)))
+	wx.sel(F, wx.op(OpLess, ir.Pred, j, i), w, wx.f(0))
+	prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, S, B}, In: []Operand{in, t}, Out: wf, Combine: OpAdd, Type: F,
+		Expr: wx.e, Facts: Facts{Extents: ext}}, words(wf, within, S))
 
 	// Every kept element written at its place among its row's kept, in
 	// index order; the others at the place after them, a row K+1 wide.
@@ -156,10 +172,10 @@ func decomposeTopKSelect(c *Context, in, sel, val Operand, S, K int) []Prim {
 	var sx exprs
 	r, i = sx.coord(0), sx.coord(1)
 	v := sx.at(0, []int{R, S}, r, i)
-	k := sx.orderKey(v)
-	tt := sx.at(1, []int{R}, r)
+	k = sx.orderKey(v)
+	tt = sx.at(1, []int{R}, r)
 	bi := sx.op(OpShr, U, i, sx.u(uint32(sh)))
-	w := sx.at(5, []int{R, S}, r, i)
+	w = sx.at(5, []int{R, S}, r, i)
 	ab := sx.op(OpAdd, U, sx.at(3, []int{R, nb}, r, bi), sx.op(OpAnd, U, w, sx.u(0xffff)))
 	eb := sx.op(OpAdd, U, sx.at(4, []int{R, nb}, r, bi), sx.op(OpShr, U, w, sx.u(16)))
 	need := sx.op(OpSub, U, sx.u(uint32(K)), sx.at(2, []int{R}, r))

@@ -10408,3 +10408,13 @@ row where the composer's reads two.
   in 42984 to 134135 of a row's elements at blocks of 64 and 128
   (jit.TestComposedCPULanesAsData). Each fix, reverted alone, fails its
   gate.
+- The top-k selection counts in floats: each round's counts and each
+  element's count within its block are sums of ones and 2^16s, exact below
+  2^24, and are converted to words after. Within a block the element's
+  position is compared with each other's, and the clamp of a block past the
+  row's end is kept only where the row is not whole blocks. The CPU now
+  vectorizes the within count over the block, four vectors a trip. One
+  call at v151936, k 40 and 256, laptop, codes mapped each call: 13-23 ms
+  against the integer form's 70-90 ms in the same pass. TestComposedCPUSampleTopK
+  and TestComposedGPUSampleTopK hold all 40 cases bit for bit, on the
+  V100's ptx and spirv as well.
