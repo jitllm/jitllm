@@ -83,13 +83,13 @@ func (g *devTier) shadowBegin(lc *launcher, bs *blockScratch, sv, cp *servedPart
 	lc.la(bs.copyRows, bs.p.NEmbd, bs.x, bs.shIn)
 	lc.la(bs.copyRows, bs.p.NEmbd, bs.x, bs.shForm)
 	if cp != nil {
-		if err := sv.run(g, lc, sv.inst, []backend.Buf{bs.shForm}, []backend.Buf{bs.h}); err != nil {
+		if err := sv.run(g, lc, sv.inst, []backend.Buf{bs.shForm, bs.pleIn}, []backend.Buf{bs.h}); err != nil {
 			return err
 		}
 		if err := cp.run(g, lc, cp.inst, []backend.Buf{bs.h}, []backend.Buf{bs.shForm}); err != nil {
 			return err
 		}
-	} else if err := sv.run(g, lc, sv.inst, []backend.Buf{bs.shForm}, []backend.Buf{bs.shForm}); err != nil {
+	} else if err := sv.run(g, lc, sv.inst, []backend.Buf{bs.shForm, bs.pleIn}, []backend.Buf{bs.shForm}); err != nil {
 		return err
 	}
 	sh.cmp, sh.l = cmp, l

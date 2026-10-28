@@ -21,9 +21,9 @@ const (
 	RequestRows
 )
 
-// decomposeEmbed is each row's token's row of the embedding, or its
-// position's row of a position table, every element decoded from the
-// weight's format.
+// decomposeEmbed is each row's token's row of the embedding (row 0 for an
+// id past a table that stops short of the vocabulary), or its position's
+// row of a position table, every element decoded from the weight's format.
 func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Weight) != 1 || len(o.In) != 0 || len(o.Out) != 1 {
 		return nil, fmt.Errorf("an embedding of %d weights and %d inputs", len(o.Weight), len(o.In))
@@ -44,6 +44,9 @@ func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 		tok = x.load(0, x.op(OpAdd, ir.U32, r, x.u(1)))
 		in[0] = tablePos
 		facts.Extents[0] = R + 1
+	} else {
+		// A table may stop short of the ids: an id past it reads row 0.
+		tok = x.sel(ir.U32, x.op(OpLess, ir.Pred, tok, x.u(uint32(w.Rows))), tok, x.u(0))
 	}
 	if _, err := weightElement(&x, wo, w.Rows, W, &in, &facts, tok, i); err != nil {
 		return nil, fmt.Errorf("an embedding of %s weights: %w", wo.Format, err)

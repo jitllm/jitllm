@@ -8573,11 +8573,13 @@ func (g *devTier) layersSession(s backend.Session) {
 				if cp != nil {
 					out = bs.h
 				}
+				// A second input is the rows' per-layer inputs (blockServes).
+				in := []backend.Buf{bs.x, bs.pleIn}
 				var serr error
 				if sv.f.split > 0 {
-					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, []backend.Buf{bs.x}, []backend.Buf{out})
+					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, in, []backend.Buf{out})
 				} else {
-					serr = sv.runAs(g, lc, inst, kind, []backend.Buf{bs.x}, []backend.Buf{out})
+					serr = sv.runAs(g, lc, inst, kind, in, []backend.Buf{out})
 				}
 				if err == nil {
 					err = serr

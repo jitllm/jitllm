@@ -209,4 +209,30 @@ func TestFrontRefusesWhatItDropsFromABlock(t *testing.T) {
 		t.Fatalf("a block built without its stored q norm is refused by %q (%v), want the unbound q norm named", why, err)
 	}
 	t.Logf("block 0 without its q/k norm: %s: %v", why, err)
+	// Gemma 4's E-model read without its per-layer embeddings leaves each
+	// block's gate unbound, and read as if no block shared a history has its
+	// readers bind keys the container does not store.
+	e := frontModel(t, "synth-gemma4-e.gguf")
+	last := e.Cfg.NLayer - 1
+	if !e.Cfg.KVShared(last) || e.Uncovered(0) != Covered || e.Uncovered(last) != Covered {
+		t.Fatalf("the fixture does not select the shape: block %d shares %v; %s, %s", last, e.Cfg.KVShared(last), e.Uncovered(0), e.Uncovered(last))
+	}
+	cfg := *e.Cfg
+	noPLE := cfg
+	noPLE.PLEDim = 0
+	e.Cfg = &noPLE
+	why, err = e.Uncovered(0), e.UncoveredErr(0)
+	if why != UncoveredUnbound || err == nil || !strings.Contains(err.Error(), jlm.RolePLEGate.String()) {
+		t.Fatalf("a block built without its per-layer embedding is refused by %q (%v), want the unbound gate named", why, err)
+	}
+	t.Logf("block 0 without its per-layer embedding: %s: %v", why, err)
+	noShare := cfg
+	noShare.NKVShared = 0
+	e.Cfg = &noShare
+	why, err = e.Uncovered(last), e.UncoveredErr(last)
+	if why != UncoveredUnverified || err == nil || !strings.Contains(err.Error(), jlm.RoleAttnK.String()) {
+		t.Fatalf("a reader built as if it wrote its own history is refused by %q (%v), want its unstored keys named", why, err)
+	}
+	t.Logf("block %d writing a history of its own: %s: %v", last, why, err)
+	e.Cfg = &cfg
 }

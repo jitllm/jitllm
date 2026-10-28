@@ -245,14 +245,14 @@ func segmentParts(f Model, seg Segment, first, rotBase, picture, picW int) ([]Pa
 		if g == nil {
 			return nil, fmt.Errorf("jit: block %d has no graph", li)
 		}
-		// A second input is the block's per-layer input, the embedding's
-		// output after its row.
+		// A second input is the row's per-layer inputs, the embedding's
+		// output after its row, of which the block reads its own.
 		var feeds []Feed
 		if len(g.In) > 1 {
-			if len(g.In) != 2 || len(em.Out) != 1+int(c.NLayer) || em.Values[em.Out[1+li]].Width != g.Values[g.In[1]].Width {
+			if len(g.In) != 2 || len(em.Out) != 2 || em.Values[em.Out[1]].Width != g.Values[g.In[1]].Width {
 				return nil, fmt.Errorf("jit: block %d reads %d inputs the input rows do not write", li, len(g.In))
 			}
-			feeds = []Feed{{In: 1, From: embed, Out: 1 + li}}
+			feeds = []Feed{{In: 1, From: embed, Out: 1}}
 		}
 		seam(li)
 		parts = append(parts, Part{Kind: PartBlock, Segment: seg, Block: li, Graph: g, Feeds: feeds})

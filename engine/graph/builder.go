@@ -110,14 +110,24 @@ func (s *Builder) KVAppend(k, v ValueID, n int) int {
 // Attend is q's attention over the history's version n, of a's heads,
 // scale, window and softcap, with the per-head sinks of sinks where given.
 func (s *Builder) Attend(q ValueID, n int, a Attrs, sinks ...jlm.Role) ValueID {
+	return s.AttendOf(q, StateRef{Name: "kv", Version: n}, a, sinks...)
+}
+
+// AttendOf is Attend over the history h: the block's own ("kv"), or block
+// N's as that block left it (SharedHistory), which a block writing no
+// history of its own reads.
+func (s *Builder) AttendOf(q ValueID, h StateRef, a Attrs, sinks ...jlm.Role) ValueID {
 	var w []Binding
 	for _, r := range sinks {
 		w = append(w, Binding{Role: r, K: a.NHead})
 	}
 	y := s.value("attend", s.width(q))
-	s.G.op(Op{Kind: OpAttend, In: []ValueID{q}, Out: []ValueID{y}, Weight: w, Reads: []StateRef{{Name: "kv", Version: n}}, Attr: a})
+	s.G.op(Op{Kind: OpAttend, In: []ValueID{q}, Out: []ValueID{y}, Weight: w, Reads: []StateRef{h}, Attr: a})
 	return y
 }
+
+// SharedHistory is block n's history as another block reads it.
+func SharedHistory(n int) StateRef { return StateRef{Name: "kv@" + strconv.Itoa(n)} }
 
 // NewBlock is block li's graph in this build's op language.
 func NewBlock(li int) *Builder { return &Builder{G: &Graph{Version: Version, Block: li}} }

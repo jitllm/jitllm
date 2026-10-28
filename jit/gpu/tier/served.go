@@ -781,7 +781,7 @@ const (
 	partNoPool      = jit.DeclineNoPool
 	partPrefill     = jit.DeclinePrefill
 	partStream      = jit.DeclineStream
-	partShared      = jit.DeclineShared
+	partFeeds       = jit.DeclineFeeds
 	partWindow      = jit.DeclineWindow
 	partHeadShape   = jit.DeclineHeadShape
 	partHeadNorm    = jit.DeclineHeadNorm
@@ -1635,6 +1635,10 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.shUp
 	case jlm.RoleShExpDown:
 		return l.shDown
+	case jlm.RolePLEGate:
+		return l.pleGate
+	case jlm.RolePLEProj:
+		return l.pleProj
 	}
 	return nil
 }
@@ -1772,6 +1776,8 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.m1BN
 	case jlm.RoleSSMCNorm:
 		return l.m1CN
+	case jlm.RolePLEPostNorm:
+		return l.nPLE
 	}
 	return nil
 }
@@ -1800,16 +1806,17 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partSkip
 	case l.linear && !g.recHeld(l, p, bs):
 		return partRecurrent
+	case len(l.graph.In) > 1 && (len(l.graph.In) != 2 || bs.pleIn == nil):
+		return partFeeds
 	case l.linear && !l.withAttn:
 		return partServes
-	case pk == nil || g.kvp == nil || g.kvp.layers[li] == nil:
+	case pk == nil || g.kvp == nil || g.kvp.layers[l.kvSrc] == nil:
+		// A block sharing another's history reads its source's pool.
 		return partNoPool
 	case pk.prefill && !prompt:
 		return partPrefill
 	case pk.st != nil:
 		return partStream
-	case l.kvSrc != li:
-		return partShared
 	case !l.windowHeld(li, p):
 		return partWindow
 	}
@@ -1876,7 +1883,7 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	if R > 1 {
 		qOff = bs.roff
 	}
-	sv, err = g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R)
+	sv, err = g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R)
 	if err != nil {
 		return nil, nil, nil, err
 	}

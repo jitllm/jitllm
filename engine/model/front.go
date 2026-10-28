@@ -36,9 +36,7 @@ const (
 	UncoveredStreams
 	UncoveredRopeAxes
 	UncoveredNonCausal
-	UncoveredKVShared
 	UncoveredTemp
-	UncoveredPLE
 	UncoveredCompressed
 	UncoveredNGram
 	UncoveredAct
@@ -55,14 +53,13 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredRouterScore: "a router whose score the container does not state, or whose weights are not the scores it selects",
 	UncoveredExperts: "routed experts weighted at their input, beside a dense MLP, in a latent of their own, " +
 		"scaled one by one or stored one matrix each",
-	UncoveredGeometry:   "a value head of another width than the key's, or a layer of its own rotary width turned by the model's rotary",
+	UncoveredGeometry: "a value head of another width than the key's, a layer of its own rotary width turned by the model's rotary, " +
+		"or a block reading another's history of another shape than its attention's",
 	UncoveredSelect:     "an attention indexer or sparse key selection",
 	UncoveredStreams:    "several residual streams",
 	UncoveredRopeAxes:   "a rotary over position axes its sections do not state (a pair's halves turned apart)",
 	UncoveredNonCausal:  "non-causal attention",
-	UncoveredKVShared:   "a block reading another block's history",
 	UncoveredTemp:       "an attention temperature whose position offset is not a whole number",
-	UncoveredPLE:        "per-layer embeddings",
 	UncoveredCompressed: "compressed or grouped attention",
 	UncoveredNGram:      "an n-gram embedding",
 	UncoveredAct:        "an activation the container does not state, or not over the block's operands",
@@ -330,7 +327,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredKind
 	}
 	switch {
-	case c.NRotAt(li) != c.NRot && !(m.ropeSWA != nil && c.SWA(li)) || !c.MLA() && c.HeadDimV != c.HeadDim:
+	case c.NRotAt(li) != c.NRot && !(m.ropeSWA != nil && c.SWA(li)) || !c.MLA() && c.HeadDimV != c.HeadDim || !m.sharesGeometry(li):
 		return UncoveredGeometry
 	case c.IdxHeads != 0:
 		return UncoveredSelect
@@ -340,12 +337,8 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredRopeAxes
 	case c.NonCausal:
 		return UncoveredNonCausal
-	case c.KVShared(li):
-		return UncoveredKVShared
 	case c.AttnTempScale != 0 && (c.AttnTempOffs < 0 || c.AttnTempOffs != math.Trunc(c.AttnTempOffs)):
 		return UncoveredTemp
-	case c.PLEDim != 0:
-		return UncoveredPLE
 	case len(c.CompKinds) != 0 || c.OGroups != 0:
 		return UncoveredCompressed
 	}
@@ -361,8 +354,6 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 		return UncoveredStreams
 	case c.NonCausal:
 		return UncoveredNonCausal
-	case c.PLEDim != 0:
-		return UncoveredPLE
 	case c.NGramAt(li):
 		return UncoveredNGram
 	case m.container.Config().ActAt(li) == nil:
@@ -375,6 +366,18 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 		return UncoveredExperts
 	}
 	return Covered
+}
+
+// sharesGeometry reports whether block li reads a history of its own
+// attention's shape: its own, or the one its source block writes, whose
+// key heads and head width are li's.
+func (m *Model) sharesGeometry(li int) bool {
+	c := m.Cfg
+	if !c.KVShared(li) {
+		return true
+	}
+	src := c.KVSource(li)
+	return src >= 0 && src < li && !c.KVShared(src) && c.HeadDimAt(src) == c.HeadDimAt(li) && c.NKVHeadAt(src) == c.NKVHeadAt(li)
 }
 
 // stores reports whether the container stores role for block li.
@@ -513,6 +516,11 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		return y
 	}
 	x := b.In("x", d)
+	// A model of per-layer embeddings gives each block the row's every
+	// layer's input (the input rows' second output): the block reads its own.
+	if c.PLEDim != 0 {
+		b.In("ple", c.pleWidth())
+	}
 	n := preNorm(x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
 	var mix graph.ValueID
 	var err error
@@ -561,11 +569,17 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	// A block that stores no v projection reads k's as its value, before
 	// k's norm and rotary.
+	// A block reading another's history (Config.KVShared) projects q alone:
+	// its keys and values are the ones its source block wrote.
+	shared := c.KVShared(li)
 	vFromK := m.layers[li].vFromK
-	k := matvec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
-	v := k
-	if !vFromK {
-		v = matvec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
+	var k, v graph.ValueID
+	if !shared {
+		k = matvec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
+		v = k
+		if !vFromK {
+			v = matvec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
+		}
 	}
 	var gate graph.ValueID
 	if c.AttnOutGate {
@@ -581,10 +595,14 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 			return b.Emit(graph.OpClamp, []graph.ValueID{x}, []graph.Result{{Name: name, Width: b.G.Values[x].Width}}, nil,
 				graph.Attrs{Bound: float64(bound)}, nil, nil)[0]
 		}
-		if q, k = clamp(q, "q.clamp"), clamp(k, "k.clamp"); vFromK {
+		q = clamp(q, "q.clamp")
+		switch {
+		case shared:
+		case vFromK:
+			k = clamp(k, "k.clamp")
 			v = k
-		} else {
-			v = clamp(v, "v.clamp")
+		default:
+			k, v = clamp(k, "k.clamp"), clamp(v, "v.clamp")
 		}
 	}
 	// ones is an RMS norm over each head of x with no weight.
@@ -597,15 +615,23 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// Under XD-RoPE k's norm follows the rotary too: a pair's elements
 	// turned apart do not keep a head's RMS.
 	postQ := c.QKNormAt(li) && c.QKNormPost
-	postK := postQ && c.RopeXD && c.RopeAt(li)
+	postK := postQ && c.RopeXD && c.RopeAt(li) && !shared
+	// onK is f over k where the block writes keys of its own.
+	onK := func(f func(graph.ValueID) graph.ValueID) {
+		if !shared {
+			k = f(k)
+		}
+	}
 	switch {
 	case postK:
 	case postQ:
-		k = b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps)
+		onK(func(k graph.ValueID) graph.ValueID { return b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps) })
 	case c.QKNormAt(li) && c.QKNormWide:
-		q, k = b.Norm(q, jlm.RoleAttnQNorm, c.RMSEps), b.Norm(k, jlm.RoleAttnKNorm, c.RMSEps)
+		q = b.Norm(q, jlm.RoleAttnQNorm, c.RMSEps)
+		onK(func(k graph.ValueID) graph.ValueID { return b.Norm(k, jlm.RoleAttnKNorm, c.RMSEps) })
 	case c.QKNormAt(li):
-		q, k = b.HeadNorm(q, jlm.RoleAttnQNorm, hd, c.RMSEps), b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps)
+		q = b.HeadNorm(q, jlm.RoleAttnQNorm, hd, c.RMSEps)
+		onK(func(k graph.ValueID) graph.ValueID { return b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps) })
 	}
 	if c.RopeAt(li) {
 		r := m.ropeAt(li)
@@ -619,9 +645,12 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		a := graph.Attrs{HeadDim: hd, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
 		a.Sections, a.Interleaved = m.ropeAxes(r)
 		q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qdim}}, nil, a, nil, nil)[0]
-		k = b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
+		onK(func(k graph.ValueID) graph.ValueID {
+			return b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
+		})
 		if c.QKL2Norm {
-			q, k = ones(q, "q.l2"), ones(k, "k.l2")
+			q = ones(q, "q.l2")
+			onK(func(k graph.ValueID) graph.ValueID { return ones(k, "k.l2") })
 		}
 	}
 	if postQ {
@@ -630,7 +659,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if postK {
 		k = b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps)
 	}
-	if c.VNorm {
+	if c.VNorm && !shared {
 		v = ones(v, "v.norm")
 	}
 	// The attention temperature, 1 + s ln(1 + floor((pos + o) / f)) at the
@@ -645,7 +674,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}, nil, pos)
 		q = mapRow(b, "q.temp", graph.Attrs{Fn: graph.MapMul}, nil, qdim, q, temp)
 	}
-	hist := b.KVAppend(k, v, 0)
+	hist := graph.SharedHistory(c.KVSource(li))
+	if !shared {
+		hist = graph.StateRef{Name: "kv", Version: b.KVAppend(k, v, 0)}
+	}
 	scale := c.AttnScale
 	if scale == 0 {
 		scale = 1 / math.Sqrt(float64(hd))
@@ -654,7 +686,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.SWA(li) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
-	att := b.Attend(q, hist, a, stored(jlm.RoleAttnSinks)...)
+	att := b.AttendOf(q, hist, a, stored(jlm.RoleAttnSinks)...)
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)
 	}
@@ -678,7 +710,11 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	}
 	x2 := resid(x, norm(proj, jlm.RolePostAttnNorm))
 	if !c.MoEAt(li) && !has(jlm.RoleFFNUp) && !has(jlm.RoleFFNDown) {
-		b.Out(outScaled(b, has, x2))
+		y, why, err := m.perLayer(b, f, li, x2)
+		if err != nil {
+			return nil, why, err
+		}
+		b.Out(outScaled(b, has, y))
 		return verified(b, f)
 	}
 	// A parallel block's MLP reads the block's input: through its own norm
@@ -711,8 +747,33 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		h = norm(h, jlm.RoleFFNSubNorm)
 		ffn = matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
 	}
-	b.Out(outScaled(b, has, resid(x2, norm(ffn, jlm.RolePostFFNNorm))))
+	y, why, err := m.perLayer(b, f, li, resid(x2, norm(ffn, jlm.RolePostFFNNorm)))
+	if err != nil {
+		return nil, why, err
+	}
+	b.Out(outScaled(b, has, y))
 	return verified(b, f)
+}
+
+// perLayer is block li's per-layer embedding over its residual y, where the
+// graph reads the row's per-layer inputs (its second input): y plus the
+// normed projection of the block's stated activation over its gate of y and
+// the block's slice of the inputs. y itself where it reads none.
+func (m *Model) perLayer(b *graph.Builder, f graph.Facts, li int, y graph.ValueID) (graph.ValueID, Uncovered, error) {
+	c := m.Cfg
+	if len(b.G.In) < 2 {
+		return y, Covered, nil
+	}
+	p := c.PLEDim
+	gate := b.MatVec(y, jlm.RolePLEGate, p)
+	in := b.Emit(graph.OpSlice, []graph.ValueID{b.G.In[1]}, []graph.Result{{Name: "ple.in", Width: p}}, nil,
+		graph.Attrs{Offset: li * p, Width: p}, nil, nil)[0]
+	h, err := b.Stated("ple.act", m.container.Config().ActAt(li), []graph.ValueID{gate, in}, p, f)
+	if err != nil {
+		return 0, UncoveredAct, fmt.Errorf("the per-layer input's stated activation: %w", err)
+	}
+	o := b.Norm(b.MatVec(h, jlm.RolePLEProj, c.NEmbd), jlm.RolePLEPostNorm, c.RMSEps)
+	return b.Add(y, o), Covered, nil
 }
 
 // outScaled is the block's output y times the scalar the block stores
@@ -1009,9 +1070,28 @@ func (m *Model) pickHeadGraph() (*graph.Graph, error) {
 	return pg, nil
 }
 
+// perLayerInputs is a row's every layer's per-layer input from its token and
+// its scaled row x: the token's row of the per-layer table times sqrt of a
+// layer's width, plus x's projection over sqrt of the row's width, normed
+// over each layer's slice, the sum over sqrt 2.
+func (m *Model) perLayerInputs(b *graph.Builder, f graph.Facts, x graph.ValueID) graph.ValueID {
+	c := m.Cfg
+	p, w := c.PLEDim, c.pleWidth()
+	scale := func(name string, v graph.ValueID, k float64) graph.ValueID {
+		return mapRow(b, name, graph.Attrs{Fn: graph.MapMul, Const: k}, nil, w, v)
+	}
+	t := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "ple.tok", Width: w}},
+		[]graph.Binding{{Role: jlm.RolePLETokEmbd, K: w, Rows: f.Inventory[jlm.RolePLETokEmbd].Rows}}, graph.Attrs{}, nil, nil)[0]
+	t = scale("ple.tok.scaled", t, math.Sqrt(float64(p)))
+	pr := scale("ple.proj.scaled", b.MatVec(x, jlm.RolePLEModelProj, w), 1/math.Sqrt(float64(c.NEmbd)))
+	pr = b.HeadNorm(pr, jlm.RolePLEProjNorm, p, c.RMSEps)
+	return scale("ple.in", b.Add(pr, t), 1/math.Sqrt2)
+}
+
 // embedGraph is the step's input rows: each row's token's row of the
 // embedding, times the stored scale, plus its position's row where the
-// container stores a position table.
+// container stores a position table; then, for a model of per-layer
+// embeddings, each row's per-layer inputs, the blocks' second input.
 func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	f, _ := m.inventory(jlm.DenseBlock)
@@ -1019,8 +1099,6 @@ func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 	switch {
 	case c.Streams() > 1:
 		return nil, UncoveredStreams, nil
-	case c.PLEDim != 0:
-		return nil, UncoveredPLE, nil
 	case types || m.hardEmbd != nil:
 		return nil, UncoveredEmbedRows, nil
 	}
@@ -1037,6 +1115,9 @@ func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 		x = b.Add(x, pos)
 	}
 	b.Out(x)
+	if c.PLEDim != 0 {
+		b.Out(m.perLayerInputs(b, f, x))
+	}
 	if err := graph.Verify(b.G, f); err != nil {
 		return nil, UncoveredUnverified, fmt.Errorf("the input rows' graph does not verify: %w", err)
 	}

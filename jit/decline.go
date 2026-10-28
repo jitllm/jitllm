@@ -17,7 +17,6 @@ const (
 	DeclinePrefill
 	DeclineStream
 	DeclineLatent
-	DeclineShared
 	DeclineWindow
 	DeclineHeadShape
 	DeclineHeadNorm
@@ -64,7 +63,6 @@ var declineNames = [NumDeclines]string{
 	DeclinePrefill:       "the history is mid-prefill",
 	DeclineStream:        "the history streams",
 	DeclineLatent:        "a latent attention's history",
-	DeclineShared:        "the history of another block",
 	DeclineWindow:        "a graph whose window is not the plan's",
 	DeclineHeadShape:     "a head graph other than a norm, its projection and elementwise ops after it",
 	DeclineHeadNorm:      "no norm buffer, a norm of another kind than the tier's, or a norm bias it holds none of",
@@ -81,7 +79,7 @@ var declineNames = [NumDeclines]string{
 	DeclineEmbedFormat:   "input rows in a format with no container type",
 	DeclineEmbedWeight:   "input rows reading a weight other than the token embedding and a position table",
 	DeclineEmbedToken:    "a token or position outside its table's rows",
-	DeclineFeeds:         "a block graph reading more than the residual",
+	DeclineFeeds:         "a block graph reading more than the residual and per-layer inputs the device holds",
 	DeclineRecurrent:     "a recurrent state the form does not step (a tail or a variant it does not hold, none held, or the CPU's several rows)",
 	DeclineHistoryWindow: "a windowed layer's history",
 	DeclineKVFormat:      "a history not binary16 (f32 or q8_0)",

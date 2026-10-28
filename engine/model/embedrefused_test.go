@@ -14,14 +14,12 @@ import (
 // the rows by the front end's graph alone (embedOnDevice, no family test): on
 // a model with each refused feature -- Gemma 3n's four AltUp streams beside
 // its per-layer embeddings, DeepSeek V4's and Qwen3.8-Flash-Next's
-// hyper-connection streams, and Gemma 4's per-layer embeddings on a single
-// stream -- the front end states no input rows by its named reason, the head
-// asks no device to gather them (nn.Head.GatherRow), the composer is asked
-// for none, and a decode with the whole step composed stays within the
-// device band of the CPU's. With the rows' plain graph stated in place of the
-// refusal (the violation), a single-stream model's rows are promised without
-// their per-layer inputs and the decode parts from the CPU's, and a
-// stream-major residual's are declined by name, every one.
+// hyper-connection streams -- the front end states no input rows by its
+// named reason, the head asks no device to gather them (nn.Head.GatherRow),
+// the composer is asked for none, and a decode with the whole step composed
+// stays within the device band of the CPU's. With the rows' plain graph
+// stated in place of the refusal (the violation), a stream-major residual's
+// are declined by name, every one.
 func TestRefusedInputRowsStayOnTheCPU(t *testing.T) {
 	const bound = 1e-5
 	cases := []struct {
@@ -32,7 +30,6 @@ func TestRefusedInputRowsStayOnTheCPU(t *testing.T) {
 		{"synth-gemma3n", openGemma3n, UncoveredStreams},
 		{"synth-deepseek4", openDS4, UncoveredStreams},
 		{"synth-qwen4exp", openQ4E, UncoveredStreams},
-		{"synth-gemma4-e", openGemma4, UncoveredPLE},
 	}
 	ran := 0
 	for _, tc := range cases {
@@ -91,12 +88,9 @@ func TestRefusedInputRowsStayOnTheCPU(t *testing.T) {
 					switch {
 					case !gather:
 						t.Fatalf("with the rows' plain graph stated the head asks no device to gather them")
-					case m.Cfg.Streams() > 1 && (ne != 0 || de != len(toks)):
+					case m.Cfg.Streams() < 2 || ne != 0 || de != len(toks):
 						t.Fatalf("with the plain graph over %d streams the composer gathered %d rows and declined %d of %d (%s)",
 							m.Cfg.Streams(), ne, de, len(toks), declinesOf(bst))
-					case m.Cfg.Streams() == 1 && (!(bad > 100*worst) || !(bad > 1e-4)):
-						t.Fatalf("with the plain graph the composer gathered %d of %d rows (%d declined, %d replayed: %s) and the decode is %.3e from the CPU (clean %.3e): the gate cannot see it",
-							ne, len(toks), de, bst.ReplayedPart(tier.ComposedEmbed), declinesOf(bst), bad, worst)
 					}
 					t.Logf("violation, the plain graph stated: %d rows gathered, %d declined (%s), worst NMSE %.3e", ne, de, declinesOf(bst), bad)
 					ran++

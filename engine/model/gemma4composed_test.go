@@ -12,8 +12,10 @@ import (
 // gemma4Composed are the Gemma 4 fixtures the front end states whole: the
 // global layers at another head width, kv head count and rotary width than
 // the sliding ones, v k's own on the global layers of two, normed with no
-// weight, and every block's output scaled by its stored scalar.
-var gemma4Composed = []string{"synth-gemma4", "synth-gemma4-kv", "synth-gemma4-wide"}
+// weight, and every block's output scaled by its stored scalar; and the
+// E-models' blocks, each reading its slice of the row's per-layer inputs,
+// the last two reading an earlier block's history.
+var gemma4Composed = []string{"synth-gemma4", "synth-gemma4-kv", "synth-gemma4-wide", "synth-gemma4-e", "synth-gemma4-e-ragged"}
 
 // TestGemma4ServesComposed holds the composer to each of gemma4Composed's
 // blocks and head on every device present, as TestC6ServesComposed holds
@@ -43,6 +45,16 @@ func TestGemma4ServesComposed(t *testing.T) {
 					t.Logf("%s: the step's tables served %d times, declined %d times (no table graph)", dev, served, declined)
 					if served != 0 || declined == 0 {
 						t.Fatalf("the step's tables served %d times and declined %d times by name: the gap moved", served, declined)
+					}
+					// The per-layer inputs' tables are the host's: the device
+					// declines the input rows that read them, by name.
+					if m.Cfg.PLEDim != 0 {
+						ne, de, _ := st.ServedPart(tier.ComposedEmbed)
+						dw := st.StepDeclines[jit.DeclineEmbedWeight]
+						t.Logf("%s: the input rows served %d times, declined %d (%d for the per-layer tables)", dev, ne, de, dw)
+						if ne != 0 || dw == 0 {
+							t.Fatalf("the input rows served %d times and declined %d times for the per-layer tables: the gap moved", ne, dw)
+						}
 					}
 				})
 			}
@@ -115,12 +127,33 @@ func TestGemma4ServesComposedOnCPU(t *testing.T) {
 // gemma4ComposedViolations is gemma4Violations[name] as the composed gates
 // hold them, past 10 times their bound: the final softcap of 30 over a
 // random fixture's small logits moves them 1.8e-05 when taken out, so the
-// cap is moved to 1 instead, where it bends every logit.
+// cap is moved to 1 instead, where it bends every logit. A model read
+// without its per-layer embeddings leaves their tensors unbound, so the
+// front end states no block of it (UncoveredUnbound) and no composed arm
+// runs: the composed gates take each block's per-layer gate the next
+// block's instead, which the graphs still state.
 func gemma4ComposedViolations(name string) []c6Violation {
 	var vs []c6Violation
 	for _, v := range gemma4Violations[name] {
-		if v.name == "no final softcap" {
+		switch v.name {
+		case "no final softcap":
 			v = c6Violation{"a final softcap of 1", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.FinalSoftcap = 1 }) }}
+		case "no per-layer embeddings":
+			v = c6Violation{"each block's per-layer gate the next block's", func(m *Model) func() {
+				n := len(m.layers)
+				was := make([]tensor, n)
+				for i := range m.layers {
+					was[i] = m.layers[i].pleGate
+				}
+				for i := range m.layers {
+					m.layers[i].pleGate = was[(i+1)%n]
+				}
+				return func() {
+					for i := range m.layers {
+						m.layers[i].pleGate = was[i]
+					}
+				}
+			}}
 		}
 		vs = append(vs, v)
 	}
