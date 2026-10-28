@@ -426,12 +426,31 @@ func (k *Kernel) split(as []access, whole bool, coords map[int]bool) int {
 			}
 		}
 	}
-	// An index left with a term taken away can go below zero, which a
-	// 32-bit index cannot hold: such an access keeps its monomials.
+	// A term taken away can leave the index below zero, which a 32-bit
+	// index cannot hold, where a term less in the rest reads what was taken
+	// (a row's start written coordinate - (coordinate & 15)): such an access
+	// keeps its monomials.
+	taken := map[int]bool{}
+	for m := range fixed {
+		for _, id := range monoIDs(m) {
+			taken[id] = true
+		}
+	}
+	// reads reports whether atom id is, or is a field of, a taken atom.
+	var reads func(id int) bool
+	reads = func(id int) bool {
+		a := g.atoms[id]
+		return taken[id] || a.field && reads(a.of)
+	}
 	for _, l := range ls {
 		for m, v := range l {
-			if _, moved := fixed[m]; m != "" && !moved && v < 0 {
-				clear(fixed)
+			if _, moved := fixed[m]; m == "" || moved || v >= 0 {
+				continue
+			}
+			for _, id := range monoIDs(m) {
+				if reads(id) {
+					clear(fixed)
+				}
 			}
 		}
 	}
