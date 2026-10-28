@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/jitllm/jitllm/jit/ir"
@@ -286,6 +287,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 	}
 	outs, ins := 0, 0
 	acts, weight, weighted, consts := false, false, false, false
+	held := map[int]Operand{}
 	for _, o := range kept {
 		if o.Kind == OperandWeight || o.Kind == OperandVector {
 			weight = true
@@ -328,6 +330,15 @@ func (k *Kernel) bindBufs(f ArgFields) {
 				fl = f2
 			}
 		}
+		if p, ok := held[fl]; ok && p != o {
+			// The convention gives the field to another buffer already (a
+			// second output where a pair's second head's goes): this one
+			// takes a field the kernel passes nothing in.
+			if fl = k.freeField(f, held); fl < 0 {
+				fl = f.Out[0]
+			}
+		}
+		held[fl] = o
 		base := k.add(Node{Op: OpParam, Type: ir.U32, Imm: int64(fl)})
 		bufs := map[int]bool{}
 		for _, a := range byOp[o] {
@@ -349,6 +360,33 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 		k.Args = append(k.Args, Arg{Field: fl, Buf: first})
 	}
+}
+
+// freeField is a field of the convention f that neither a buffer held
+// already nor any word k passes takes: its inputs' first, then its other
+// buffers', -1 where every one is taken.
+func (k *Kernel) freeField(f ArgFields, held map[int]Operand) int {
+	cands := slices.Concat(f.In, f.Out)
+	for _, s := range f.Second {
+		cands = append(cands, s)
+	}
+	for _, fl := range []int{f.Weight, f.Act, f.Query, f.Consts, f.Index, f.Word} {
+		if fl > 0 {
+			cands = append(cands, fl)
+		}
+	}
+	slices.Sort(cands[len(f.In):])
+	for _, fl := range cands {
+		if _, ok := held[fl]; ok {
+			continue
+		}
+		if slices.ContainsFunc(k.Args, func(a Arg) bool { return a.Field == fl }) ||
+			slices.Contains(f.Counts, fl) || slices.Contains(f.Coords, fl) || fl == f.Vectors || fl == f.Tail {
+			continue
+		}
+		return fl
+	}
+	return -1
 }
 
 // oneWord reports whether accesses as are loads of one word at a fixed
