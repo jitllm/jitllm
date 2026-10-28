@@ -17,6 +17,7 @@ var cpuRowsModels = []struct {
 	lengths []int
 }{
 	{"stories15M-q8_0.gguf", []int{5, 33, 100}},
+	{"stories15M-q4_0.gguf", []int{5, 33, 100}},
 	{"Qwen3-0.6B-Q8_0.gguf", []int{5, 33, 100, 513}},
 	{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", []int{5, 33, 100}},
 }

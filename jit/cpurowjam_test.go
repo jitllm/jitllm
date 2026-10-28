@@ -68,7 +68,7 @@ func TestCPURowJamReadsTheWeightOnce(t *testing.T) {
 		isas["without vnni"] = host &^ vnni
 	}
 	checked := 0
-	for _, typ := range []quant.Type{quant.Q4_K, quant.Q5_K, quant.Q6_K, quant.Q8_0} {
+	for _, typ := range []quant.Type{quant.Q4_K, quant.Q5_K, quant.Q6_K, quant.Q8_0, quant.Q3_K, quant.Q4_0, quant.Q5_0, quant.Q5_1, quant.TQ2_0, quant.TQ2_F32, quant.MXFP4} {
 		for name, isa := range isas {
 			name := fmt.Sprintf("%v/%s", typ, name)
 			k, jam := rowsForm(t, rowJamRegistry(2), typ, isa, 8)

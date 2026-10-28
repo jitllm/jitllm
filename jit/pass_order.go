@@ -415,7 +415,7 @@ func (o *orderer) lockstep(folds []int, c int) {
 			break
 		}
 		chains[x] = o.chain(f, c)
-		ok = len(chains[x]) > 1 && len(chains[x]) == len(chains[0])
+		ok = len(chains[x]) > 0 && len(chains[x]) == len(chains[0])
 	}
 	if ok && o.shareComputed(folds, c) {
 		xs := make([]int, len(chains))

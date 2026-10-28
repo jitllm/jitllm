@@ -50,7 +50,7 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 		isa &^= uint64(x86.ISAVNNI)
 	}
 	rng := rand.New(rand.NewSource(5))
-	for _, typ := range []quant.Type{quant.Q4_K, quant.Q8_0, quant.Q6_K} {
+	for _, typ := range []quant.Type{quant.Q4_K, quant.Q8_0, quant.Q6_K, quant.Q4_0} {
 		q, _ := kernels.QuantOf(typ)
 		jt, _ := jlm.TypeOf(typ)
 		w := cpuTestWeights(typ, q, rows, k, rng)
