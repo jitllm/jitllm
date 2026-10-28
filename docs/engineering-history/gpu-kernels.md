@@ -10832,3 +10832,18 @@ row where the composer's reads two.
   parts kernel over 512 by 4 by 2880, 95.1 ms against main's 8.7, the
   experts' projections at 1.58 of main's, and the sliding layers on the
   running form (55.1 ms), the flash form refusing a window.
+- A ragged step's mixed-sequence form at the reserved prompt width
+  (formed there since the ragged step forms where it runs) took an
+  instance of its own beside the one-sequence form's in the same scratch:
+  lev's composed instances grew from 472 MB to 877 MB on cuda:0, its
+  head (Q8_0 248320x2560, 677 MB) no longer fit the arm's budget
+  (5.81 of 6.10 GB used), and every label pick ran on the host
+  ("0 picks by the composer"; bisected to that commit, its parent
+  good). The two forms of one block at one width never run in one call
+  and an own buffer without words carries nothing between calls, so
+  the mixed form's instance borrows the one-sequence form's buffers,
+  paired largest with largest (promptPair): 483 MB, and the lev composed
+  arm picks 14 of 14 by the composer on cuda:0 and vulkan (NMSE-free:
+  worst 0.0455 and 0.0498 from the host, as before). TestComposedRowsServe
+  passes on both; with every borrowed buffer aliased to one, its ragged
+  rows read token 0 everywhere (18.8 apart on the host).

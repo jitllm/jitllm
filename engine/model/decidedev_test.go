@@ -394,14 +394,14 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						}
 						st := g.Stats()
 						served, declined, _ := st.ServedPart(tier.ComposedSample)
-						t.Logf("composed, every block on %s: worst difference from the host %.5f; %d prompts picked, %d picks by the composer (%d by the picked rows' projection), %d declined (%s)",
-							spec, worst, picked, served, st.PickRows, declined, declinesOf(st))
+						t.Logf("composed, every block on %s: worst difference from the host %.5f; %d prompts picked, %d picks by the composer (%d by the picked rows' projection), %d declined (%s); the composer's instances hold %d bytes",
+							spec, worst, picked, served, st.PickRows, declined, declinesOf(st), st.ComposedBytes)
 						if m.IsEncoder() || c.kind == jlm.DecisionClef || c.kind == jlm.DecisionKev {
 							return
 						}
 						if picked == 0 || served != picked || declined != 0 {
-							t.Fatalf("%d prompts picked on %s, %d by the composer, %d declined: the composer did not pick every prompt's labels (%s)",
-								picked, spec, served, declined, declinesOf(st))
+							t.Fatalf("%d prompts picked on %s, %d by the composer, %d declined: the composer did not pick every prompt's labels (%s; budgets %+v; %v)",
+								picked, spec, served, declined, declinesOf(st), g.Budgets(), g.Err())
 						}
 						if st.PickRows != picked {
 							t.Fatalf("%d of %d picks by the picked rows' projection: the composer's head over the picked rows did not run", st.PickRows, picked)
