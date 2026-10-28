@@ -29,9 +29,9 @@ func gpuProfile() Profile {
 		// second fold of the reduction's loop, and a reduction of more than
 		// its sum's fold joins nothing.
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
-		Prefetch{},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
 		Matrix{Rows: 128, Cols: 64, Depth: 32, Warps: [2]int{2, 2}, Resident: 2},
+		Prefetch{Except: []PrimKind{PrimMatrix}},
 		RowTiles{Rows: 16},
 		Threads{Group: 128},
 		LiveRows{},

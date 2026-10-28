@@ -161,7 +161,14 @@ func decomposeExpertMatVec(o graph.Op, c *Context) ([]Prim, error) {
 		out = Operand{Kind: OperandScratch, Name: out.Name + ".unbiased", Temp: true}
 	}
 	var prims []Prim
-	if l, ok := jlm.Layout(wo.Format); ok {
+	if c.matrix && len(o.In) == 2 && wo.Format != jlm.TypeF32 {
+		ps, err := expertGrouped(o, c, wo, out)
+		if err != nil {
+			return nil, err
+		}
+		prims = ps
+	}
+	if l, ok := jlm.Layout(wo.Format); ok && prims == nil {
 		if ps, ok := expertInt8(o, c, wo, l, out); ok {
 			prims = ps
 		}
@@ -320,6 +327,22 @@ func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error
 	// The input read as the row its producer writes and its other readers
 	// see, pair j's K from j*stride.
 	xv := x.at(0, []int{R, W}, r, x.op(OpAdd, U, x.op(OpMul, U, j, x.u(uint32(stride))), col))
+	wv, err := expertWeight(o, c, wo, &x, &in, &facts, sel, held, row, col)
+	if err != nil {
+		return Prim{}, err
+	}
+	x.op(OpMul, ir.F32, wv, xv)
+	return Prim{Kind: PrimReduce, Shape: []int{R, P, rows, K}, In: in, Out: out, Combine: OpAdd, Expr: x.e, Facts: facts}, nil
+}
+
+// expertWeight is element col of row row of the sheet sel of o's bank,
+// decoded, of a bank held in held sheets.
+func expertWeight(o graph.Op, c *Context, wo Operand, x *exprs, inp *[]Operand, facts *Facts, sel, held, row, col int) (int, error) {
+	w := o.Weight[0]
+	K, rows := w.K, w.Rows
+	U := ir.U32
+	in := *inp
+	defer func() { *inp = in }()
 	var wv int
 	if st := c.Strides[w.Role]; jlm.Verbatim(wo.Format) && st > 0 && pairStride(o) != 0 {
 		// Each sheet stride words from the last: the sheet's rows read
@@ -328,26 +351,166 @@ func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error
 		if wo.Format == jlm.TypeF32 {
 			width = 4
 		}
-		p := &packed{x: &x, in: &in, facts: &facts, codes: -1, sheet: sel, stride: st, planes: [3]int{len(in), -1, -1}}
+		p := &packed{x: x, in: &in, facts: facts, codes: -1, sheet: sel, stride: st, planes: [3]int{len(in), -1, -1}}
 		facts.Extents[len(in)] = (held-1)*st + (rows*K*width+3)/4
 		in = append(in, wo)
 		wv = jlm.DecodeVerbatim[int](p, wo.Format, K, row, col)
 	} else if jlm.Verbatim(wo.Format) {
-		v, err := weightElement(&x, wo, held*rows, K, &in, &facts, x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row), col)
+		v, err := weightElement(x, wo, held*rows, K, &in, facts, x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row), col)
 		if err != nil {
-			return Prim{}, err
+			return 0, err
 		}
 		wv = v
 	} else {
 		l, ok := jlm.Layout(wo.Format)
 		if !ok || K%(l.Sub*l.SuperSub) != 0 {
-			return Prim{}, fmt.Errorf("no reading rules for a bank of rows of %d", K)
+			return 0, fmt.Errorf("no reading rules for a bank of rows of %d", K)
 		}
-		p, dr, dw := sheetRow(o, &x, wo, l, &in, &facts, sel, held, c.Strides[w.Role], row)
+		p, dr, dw := sheetRow(o, x, wo, l, &in, facts, sel, held, c.Strides[w.Role], row)
 		wv = jlm.DecodeElement[int](p, l, dr, dw, col)
 	}
-	x.op(OpMul, ir.F32, wv, xv)
-	return Prim{Kind: PrimReduce, Shape: []int{R, P, rows, K}, In: in, Out: out, Combine: OpAdd, Expr: x.e, Facts: facts}, nil
+	return wv, nil
+}
+
+// groupRows is the rows a run of one expert's pairs is padded to where a
+// step's pairs are grouped by expert: a workgroup of the matrix unit's
+// rows (Matrix.Rows) at most this many, the rows of each block of it read
+// one expert's weight.
+const groupRows = 64
+
+// expertGrouped is an expert matvec over a step of rows the device's matrix
+// unit runs (Context.matrix), the step's live pairs grouped by the expert
+// their selection names: each expert's count of them; each expert's run's
+// start, the runs in expert order, each padded to groupRows; each pair's
+// rank among its expert's before it; the table of the runs' pairs, a pair
+// at its run's start plus its rank; each block of groupRows grouped rows'
+// expert, a block past the runs the last run's; the projection of the
+// grouped rows, row p of a block the block's run's pair at p, or its last
+// where p is past them, against its expert's sheet -- a weight of the
+// block alone, which the matrix unit takes; and each grouped row's outputs
+// stored at its pair's. A pair of a row past the call's is in no run.
+func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, error) {
+	w := o.Weight[0]
+	E, P, K, rows := w.Sheets, pairsOf(o, c), w.K, w.Rows
+	R, G := c.Step.Rows, groupRows
+	Q := R * P
+	most := (Q + E*(G-1) + G - 1) / G * G
+	stride := pairStride(o)
+	W := (P-1)*stride + K
+	U, F := ir.U32, ir.F32
+	name := c.value(o.Out[0]).Name
+	word := func(n string) Operand {
+		return Operand{Kind: OperandScratch, Name: name + "." + n, Elem: U, Temp: true}
+	}
+	count, start, rank, table, block := word("count"), word("start"), word("rank"), word("table"), word("block")
+	grouped := Operand{Kind: OperandScratch, Name: name + ".grouped", Temp: true}
+	sel := c.value(o.In[1])
+	sel.Elem = U
+	less := func(x *exprs, a, b int) int { return x.op(OpLess, ir.Pred, a, b) }
+	// same is 1 where words a and b are equal, else 0.
+	same := func(x *exprs, a, b int) int {
+		return x.sel(U, less(x, a, b), x.u(0), x.sel(U, less(x, b, a), x.u(0), x.u(1)))
+	}
+	// key is pair s's expert, E for a pair of a row past the call's: inputs
+	// 0 and 1 the selection and the call's rows.
+	key := func(x *exprs, s int) int {
+		live := x.op(OpMin, U, x.op(OpMax, U, x.load(1, x.u(0)), x.u(1)), x.u(uint32(R)))
+		e := x.op(OpMin, U, x.load(0, s), x.u(uint32(E-1)))
+		return x.sel(U, less(x, s, x.op(OpMul, U, live, x.u(uint32(P)))), e, x.u(uint32(E)))
+	}
+	keyed := func() ([]Operand, Facts) {
+		return []Operand{sel, tableCall}, Facts{Extents: map[int]int{0: Q, 1: 1}}
+	}
+	// pairOf is grouped row p's pair: inputs at, at+1, at+2 and at+3 the
+	// blocks' experts, the runs' starts, the counts and the table.
+	pairOf := func(x *exprs, p, at int) int {
+		b := x.op(OpShr, U, p, x.u(uint32(bitsOf(G))))
+		e := x.load(at, b)
+		end := x.op(OpSub, U, x.op(OpAdd, U, x.load(at+1, e), x.load(at+2, e)), x.u(1))
+		used := x.op(OpSub, U, x.op(OpShr, U, x.load(at+1, x.u(uint32(E))), x.u(uint32(bitsOf(G)))), x.u(1))
+		q := x.op(OpAdd, U, x.op(OpShl, U, x.op(OpMin, U, b, used), x.u(uint32(bitsOf(G)))), x.op(OpAnd, U, p, x.u(uint32(G-1))))
+		return x.load(at+3, x.op(OpMin, U, q, end))
+	}
+	grouping := func(at int, f *Facts) {
+		maps.Copy(f.Extents, map[int]int{at: most / G, at + 1: E + 1, at + 2: E, at + 3: most + 1})
+	}
+
+	var prims []Prim
+	{
+		var x exprs
+		e, s := x.coord(0), x.coord(1)
+		k := key(&x, s)
+		same(&x, k, e)
+		in, f := keyed()
+		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E, Q}, In: in, Out: count, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
+	}
+	{
+		var x exprs
+		e, f := x.coord(0), x.coord(1)
+		run := x.op(OpAnd, U, x.op(OpAdd, U, x.at(0, []int{E}, f), x.u(uint32(G-1))), x.u(^uint32(G-1)))
+		x.sel(U, less(&x, f, e), run, x.u(0))
+		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E + 1, E}, In: []Operand{count}, Out: start, Combine: OpAdd, Type: U, Expr: x.e})
+	}
+	{
+		var x exprs
+		s, t := x.coord(0), x.coord(1)
+		ks, kt := key(&x, s), key(&x, t)
+		eq := same(&x, ks, kt)
+		x.sel(U, less(&x, t, s), eq, x.u(0))
+		in, f := keyed()
+		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{Q, Q}, In: in, Out: rank, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
+	}
+	{
+		var x exprs
+		s := x.coord(0)
+		k := key(&x, s)
+		in, f := keyed()
+		in = append(in, start, rank)
+		f.Extents[2], f.Extents[3] = E+1, Q
+		ix := x.sel(U, less(&x, k, x.u(uint32(E))), x.op(OpAdd, U, x.load(2, k), x.load(3, s)), x.u(uint32(most)))
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{Q}, In: in, Expr: x.e, Facts: f,
+			Stores: []PrimStore{{Out: table, Index: ix, Value: s, Extent: most + 1}}})
+	}
+	{
+		var x exprs
+		b, e := x.coord(0), x.coord(1)
+		used := x.op(OpSub, U, x.op(OpShr, U, x.load(0, x.u(uint32(E))), x.u(uint32(bitsOf(G)))), x.u(1))
+		first := x.op(OpShl, U, x.op(OpMin, U, b, used), x.u(uint32(bitsOf(G))))
+		x.sel(U, less(&x, first, x.load(0, x.op(OpAdd, U, e, x.u(1)))), x.u(0), x.u(1))
+		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{most / G, E}, In: []Operand{start}, Out: block, Combine: OpAdd, Type: U,
+			Expr: x.e, Facts: Facts{Extents: map[int]int{0: E + 1}}})
+	}
+	{
+		var x exprs
+		p, row, col := x.coord(0), x.coord(1), x.coord(2)
+		in := []Operand{c.value(o.In[0]), block, start, count, table}
+		facts := Facts{Extents: map[int]int{0: R * W}}
+		grouping(1, &facts)
+		s := pairOf(&x, p, 1)
+		r, j := x.op(OpDiv, U, s, x.u(uint32(P))), x.op(OpRem, U, s, x.u(uint32(P)))
+		xv := x.at(0, []int{R, W}, r, x.op(OpAdd, U, x.op(OpMul, U, j, x.u(uint32(stride))), col))
+		e := x.load(1, x.op(OpShr, U, p, x.u(uint32(bitsOf(G)))))
+		sheet, held := pageOf(o, c, &x, &in, &facts, e)
+		wv, err := expertWeight(o, c, wo, &x, &in, &facts, sheet, held, row, col)
+		if err != nil {
+			return nil, err
+		}
+		x.op(OpMul, F, wv, xv)
+		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{most, rows, K}, In: in, Out: grouped, Combine: OpAdd, Expr: x.e, Facts: facts})
+	}
+	{
+		var x exprs
+		p, row := x.coord(0), x.coord(1)
+		in := []Operand{grouped, block, start, count, table}
+		facts := Facts{Extents: map[int]int{}}
+		grouping(1, &facts)
+		v := x.at(0, []int{most, rows}, p, row)
+		s := pairOf(&x, p, 1)
+		ix := x.op(OpAdd, U, x.op(OpMul, U, s, x.u(uint32(rows))), row)
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{most, rows}, In: in, Expr: x.e, Facts: facts,
+			Stores: []PrimStore{{Out: out, Index: ix, Value: v, Extent: Q * rows}}})
+	}
+	return prims, nil
 }
 
 // expertInt8 is decomposeMatVecInt8 a pair at a time: pair j's slice of the

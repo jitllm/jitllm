@@ -49,7 +49,17 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if !ok {
 			return nil, false, nil
 		}
-		return p.form(k, d, f), true, nil
+		q := p
+		if f.block > 0 && f.block < p.Rows {
+			// A workgroup's rows within one block: as many rows fewer, as
+			// many outputs more, the warps dealt the same way.
+			s := p.Rows / f.block
+			q.Rows, q.Cols, q.Warps = f.block, p.Cols*s, [2]int{p.Warps[0] / s, p.Warps[1] * s}
+			if q.Warps[0] == 0 || q.Rows%(q.Warps[0]*d.Matrix[0]) != 0 || q.Cols%(q.Warps[1]*d.Matrix[1]) != 0 {
+				return nil, false, nil
+			}
+		}
+		return q.form(k, d, f), true, nil
 	})
 }
 
@@ -58,6 +68,9 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // trip stages.
 type bilinear struct {
 	fold, row, out, depth int
+	// block, where set, is the rows of the blocks the output's factor reads
+	// the row in: it is a factor of the block of rows alone.
+	block int
 }
 
 func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
@@ -97,13 +110,24 @@ func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
 		return f, false
 	}
 	row := k.dependsOn(func(nd Node) bool { return nd.Op == OpCoord && nd.A == 0 })
+	// blockOf is the rows of the block node i reads the row in -- the row
+	// shifted right by a constant -- 0 where it is not one.
+	blockOf := func(i int) int {
+		nd := k.Nodes[i]
+		if nd.Op != OpShr || nd.Type != ir.U32 || k.Nodes[nd.A].Op != OpCoord || k.Nodes[nd.A].A != 0 || k.Nodes[nd.B].Op != OpConst || k.Nodes[nd.B].Imm > 16 {
+			return 0
+		}
+		return 1 << k.Nodes[nd.B].Imm
+	}
+	// byRow is what reaches the row other than through a block of it.
+	byRow := k.dependsOnCut(func(nd Node) bool { return nd.Op == OpCoord && nd.A == 0 }, func(i int) bool { return blockOf(i) > 0 })
 	out := k.dependsOn(func(nd Node) bool { return nd.Op == OpCoord && nd.A == 1 })
 	folded := k.dependsOn(func(nd Node) bool { return nd.Op == OpFold })
 	x, y := k.Nodes[term].A, k.Nodes[term].B
 	if row[y] {
 		x, y = y, x
 	}
-	if !row[x] || out[x] || !out[y] || row[y] || folded[x] || folded[y] || k.readsFloatWeight(y) {
+	if !row[x] || out[x] || !out[y] || byRow[y] || folded[x] || folded[y] || k.readsFloatWeight(y) {
 		return f, false
 	}
 	for _, s := range k.Stores {
@@ -112,16 +136,54 @@ func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
 		}
 	}
 	f.row, f.out = x, y
+	if row[y] {
+		reach := k.reaches(y)
+		for i := range k.Nodes {
+			if b := blockOf(i); b > 0 && reach[i] && (f.block == 0 || b < f.block) {
+				f.block = b
+			}
+		}
+		if f.block < d.Matrix[0] {
+			return f, false
+		}
+	}
 	return f, true
 }
 
 // dependsOn marks the nodes of k that reach a node pred holds for.
 func (k *Kernel) dependsOn(pred func(Node) bool) []bool {
+	return k.dependsOnCut(pred, func(int) bool { return false })
+}
+
+// reaches marks the nodes node i reads, i among them.
+func (k *Kernel) reaches(i int) []bool {
+	r := make([]bool, len(k.Nodes))
+	var walk func(i int)
+	walk = func(i int) {
+		if r[i] {
+			return
+		}
+		r[i] = true
+		nd := k.Nodes[i]
+		for _, a := range k.Operands(&nd) {
+			walk(*a)
+		}
+	}
+	walk(i)
+	return r
+}
+
+// dependsOnCut marks the nodes of k that reach a node pred holds for other
+// than through a node cut holds for.
+func (k *Kernel) dependsOnCut(pred func(Node) bool, cut func(int) bool) []bool {
 	dep := make([]bool, len(k.Nodes))
 	for changed := true; changed; {
 		changed = false
 		for i := range k.Nodes {
 			if dep[i] {
+				continue
+			}
+			if cut(i) {
 				continue
 			}
 			nd := k.Nodes[i]
@@ -261,6 +323,10 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear) []*Kernel {
 					switch {
 					case nd.Op == OpCoord && nd.A == axis:
 						return c, true
+					case nd.Op == OpCoord && nd.A == 0:
+						// The output's factor reads the row in its block:
+						// the workgroup's.
+						return r0, true
 					case nd.Op == OpIter && nd.At == 0:
 						return at, true
 					}

@@ -9,12 +9,13 @@ import (
 // Prefetch carries an indirection's table reads from trip to trip: a load a
 // loop's trip changes, of the trip alone, that another load's index reads
 // is loaded for the first trip before the loop and for the next one in each
-// trip. In a kernel of a kind in Staged it carries instead every load of
+// trip; a kernel of a kind in Except is left as it is. With Staged set it
+// carries instead, in a kernel of a kind in Staged alone, every load of
 // device memory the trip of a loop every thread takes together reads, the
 // last trip's next its own: what a trip stages into workgroup memory is in
 // registers before the trip ahead of it multiplies.
 type Prefetch struct {
-	Staged []PrimKind
+	Staged, Except []PrimKind
 }
 
 func (Prefetch) Name() string { return "prefetch" }
@@ -24,7 +25,7 @@ func (p Prefetch) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := n.clone()
 		ok := false
 		switch {
-		case len(p.Staged) == 0:
+		case len(p.Staged) == 0 && !slices.Contains(p.Except, n.Kind):
 			ok = m.prefetch()
 		case slices.Contains(p.Staged, n.Kind):
 			ok = m.prefetchStaged()
