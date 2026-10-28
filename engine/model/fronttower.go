@@ -332,7 +332,7 @@ func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
 		return p, UncoveredUnbound, fmt.Errorf("the tower holds no projector matrix")
 	case t.projW.kp != 0 || t.projW2.kp != 0:
 		return p, UncoveredGeometry, fmt.Errorf("a projector matrix packed past its width")
-	case len(c.Deep) > 0 || t.rs != nil || t.glm != nil || t.hy != nil:
+	case t.projReadsPastLastBlock():
 		return p, UncoveredUnbound, fmt.Errorf("the projector reads rows past its last block's")
 	}
 	E, S := c.NEmbd, max(c.Scale, 1)

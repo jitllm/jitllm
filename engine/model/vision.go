@@ -1892,6 +1892,13 @@ func (t *Tower) projNormOn() bool {
 	return c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil && !lfm2NoProjNorm
 }
 
+// projReadsPastLastBlock says the projector reads rows other than the last
+// block's output: taps of earlier blocks, a learned query set, or a merger
+// with rows of its own.
+func (t *Tower) projReadsPastLastBlock() bool {
+	return len(t.Cfg.Deep) > 0 || t.rs != nil || t.glm != nil || t.hy != nil
+}
+
 // projAct is the activation between the projector's two matrices.
 func (t *Tower) projAct() nn.ActKind {
 	if t.Cfg.Kind == jlm.ProjLFM2 && !lfm2TanhGELU {
