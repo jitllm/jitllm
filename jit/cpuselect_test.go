@@ -16,10 +16,10 @@ import (
 // Offset, in G groups, blocks of B, K kept, L forced, a ReLU and weights
 // where Relu, the values the keys' own pool where Latent.
 type selectCase struct {
-	name                  string
-	H, KV, Dk, W, Hi, G   int
-	Di, Off, B, K, L      int
-	Relu, Latent          bool
+	name                string
+	H, KV, Dk, W, Hi, G int
+	Di, Off, B, K, L    int
+	Relu, Latent        bool
 }
 
 // selectOracle is the selection the case states over n positions' keys: for
