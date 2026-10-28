@@ -426,6 +426,15 @@ func (k *Kernel) split(as []access, whole bool, coords map[int]bool) int {
 			}
 		}
 	}
+	// An index left with a term taken away can go below zero, which a
+	// 32-bit index cannot hold: such an access keeps its monomials.
+	for _, l := range ls {
+		for m, v := range l {
+			if _, moved := fixed[m]; m != "" && !moved && v < 0 {
+				clear(fixed)
+			}
+		}
+	}
 	least := ls[0][""]
 	for _, l := range ls[1:] {
 		least = min(least, l[""])

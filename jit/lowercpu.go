@@ -623,7 +623,7 @@ func (e *x86Lowerer) node(i int) {
 			a.VBROADCASTSS(e.reg(i), e.addr(x.Buf, x.A, x.Ptr))
 			return
 		}
-		if e.gpr(nd.A) {
+		if e.gpr(nd.A) || e.gprMask(nd.A) {
 			a.VMOVDToX(e.reg(i), e.reg(nd.A))
 			a.VPBROADCASTDReg(e.reg(i), e.reg(i))
 			return
@@ -848,7 +848,9 @@ func (e *x86Lowerer) divConst(op Op, dst, src x86.Reg, c uint32) {
 	l := bits.Len32(c - 1)
 	m := uint32((uint64(1)<<32)*(uint64(1)<<l-uint64(c))/uint64(c) + 1)
 	t := reloadReg
-	a.MOVimm(t, int64(m))
+	// Zero-extended: a multiplier past 2^31 sign-extended from an imm32 is
+	// not m.
+	a.MOVLimm(t, m)
 	a.IMUL(t, src)
 	a.SHRimm(t, 32)
 	if dst != src {
@@ -871,6 +873,13 @@ func (e *x86Lowerer) divConst(op Op, dst, src x86.Reg, c uint32) {
 func (e *x86Lowerer) gpr(i int) bool {
 	nd := e.k.Nodes[i]
 	return nd.Type != ir.F32 && nd.Type != ir.Pred && !nd.Mem && !e.words[i] && !e.k.needsVector(i)
+}
+
+// gprMask reports whether node i is a compare lessGPR makes: its mask in a
+// general register.
+func (e *x86Lowerer) gprMask(i int) bool {
+	nd := e.k.Nodes[i]
+	return nd.Op == OpLess && e.k.Nodes[nd.A].Type != ir.F32 && !e.words[i] && !e.k.needsVector(i)
 }
 
 // lessGPR is an integer compare whose mask a general register holds: all

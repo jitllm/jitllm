@@ -25,7 +25,8 @@ func (p Splats) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			nd := k.Nodes[i]
 			for s, a := range k.Operands(&nd) {
-				if cone[*a] && vw[*a] || vw[i] && k.Nodes[*a].Type != ir.F32 && k.Nodes[*a].Type != ir.Pred && k.counter(*a) {
+				if cone[*a] && vw[*a] || vw[i] && k.Nodes[*a].Type != ir.F32 && k.Nodes[*a].Type != ir.Pred && k.counter(*a) ||
+					(nd.Type == ir.F32 || vw[i]) && k.gprMask(*a, vw) {
 					uses = append(uses, use{i, s})
 				}
 			}
@@ -46,6 +47,14 @@ func (p Splats) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		return []*Kernel{m}, true, nil
 	})
+}
+
+// gprMask reports whether node i is a compare of words general registers
+// hold, its mask in one (the lowering's lessGPR): a vector reading it reads
+// a broadcast.
+func (k *Kernel) gprMask(i int, vw map[int]bool) bool {
+	nd := k.Nodes[i]
+	return nd.Op == OpLess && nd.Type == ir.Pred && k.Nodes[nd.A].Type != ir.F32 && !vw[i]
 }
 
 // counter reports whether node i is a word the code keeps in a general
