@@ -303,7 +303,11 @@ func declinesOf(st tier.Stats) string {
 // reads 0.574 from CUDA's tier (Vulkan's 0.00017) and one position off 2.6;
 // against the float reference the arm reads a median 1.014 of the tier's
 // distance and 0.708 at its worst, where the tier's own backends reach 0.71.
-var bandSeen = []string{"synth-nemotronhmoe-q8.gguf"}
+// Hunyuan-0.5B, whose consecutive logits never part by more than 0.945, so
+// ten times the CUDA arm's 0.115 (composed blocks and prompt together; 0.039
+// and 0.041 apart) is out of its reach; one position off reads 1.82 against
+// its band of 0.156.
+var bandSeen = []string{"synth-nemotronhmoe-q8.gguf", "hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf"}
 
 // composedResidue is what the tier still launches of its own on a one-row
 // step whose tables, blocks and head the composer serves: nothing.
