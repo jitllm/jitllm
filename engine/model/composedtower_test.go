@@ -89,13 +89,13 @@ func composedTowerOnCPU(t *testing.T, open func(testing.TB, ...Option) (*Model, 
 	ps, pd := s.CPUProjectorSteps()
 	pwhy, perr := s.CPUProjectorUncovered()
 	t.Logf("composed CPU projector: %d pictures served, declines %v (%s %v)", ps, nonZero(pd[:]), pwhy, perr)
-	if ps != 1 {
+	if ps != statedRows(pwhy) {
 		t.Fatalf("the CPU's composed projector served %d of the encode's 1 picture (declines %v; %s %v)", ps, nonZero(pd[:]), pwhy, perr)
 	}
 	es, ed := s.CPUEntrySteps()
 	ewhy, eerr := s.CPUEntryUncovered()
 	t.Logf("composed CPU entry: %d pictures served, declines %v (%s %v)", es, nonZero(ed[:]), ewhy, eerr)
-	if es != 1 {
+	if es != statedRows(ewhy) && !bucketDeclined(c, es, ed[jit.DeclineNoTable]) {
 		t.Fatalf("the CPU's composed entry served %d of the encode's 1 picture (declines %v; %s %v)", es, nonZero(ed[:]), ewhy, eerr)
 	}
 	nmse0, worst0 := nmseOf(got0, want0)
@@ -124,13 +124,15 @@ func composedTowerOnCPU(t *testing.T, open func(testing.TB, ...Option) (*Model, 
 	allocVerdict(t, "a warm composed encode", countAllocs(encode), 1, m.PagerReads()-r0, 0)
 
 	// The violation of the entry: each patch row gathered from the next patch.
-	s.cpu.fault = cpuFaultEntryRows
-	bade, _ := towerEncodeAt(t, s, px)
-	s.cpu.fault = cpuFaultNone
-	ne, _ := nmseOf(bade, want0)
-	t.Logf("violation (each row the next patch): NMSE %.3e after block 0", ne)
-	if !(ne > 100*nmse0) || !(ne > 5e-4) {
-		t.Fatalf("the gate cannot see the entry's rows misplaced: NMSE %.3e against a clean %.3e", ne, nmse0)
+	if es == 1 {
+		s.cpu.fault = cpuFaultEntryRows
+		bade, _ := towerEncodeAt(t, s, px)
+		s.cpu.fault = cpuFaultNone
+		ne, _ := nmseOf(bade, want0)
+		t.Logf("violation (each row the next patch): NMSE %.3e after block 0", ne)
+		if !(ne > 100*nmse0) || !(ne > 5e-4) {
+			t.Fatalf("the gate cannot see the entry's rows misplaced: NMSE %.3e against a clean %.3e", ne, nmse0)
+		}
 	}
 
 	// The violation of the run's first pass: each call's rows read only the
@@ -335,8 +337,11 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			rs, rd, _ := g.Stats().ServedPart(tier.ComposedRows)
 			t.Logf("%s: the card served the entry of %d pictures and the projector of %d, %d parts missed; %d picture-row parts served, %d declined (%s)",
 				spec, ce, cp, miss, rs, rd, g.Err())
-			if ce != 1 || cp != 1 || miss != 0 {
-				t.Fatalf("%s: the card served the entry of %d and the projector of %d of 1 picture, %d parts missed (%s)", spec, ce, cp, miss, g.Err())
+			_, ewhy, _ := m.towerEntryOf()
+			_, pwhy, _ := m.towerProjOf(false)
+			if ce != statedRows(ewhy) && !bucketDeclined(c, ce, 1) || cp != statedRows(pwhy) || miss != 0 {
+				t.Fatalf("%s: the card served the entry of %d (%s) and the projector of %d (%s) of 1 picture, %d parts missed (%s)",
+					spec, ce, ewhy, cp, pwhy, miss, g.Err())
 			}
 			// The violations of the card's picture rows, each against the clean
 			// composed encode: a patch row gathered from the next patch, then
@@ -351,12 +356,15 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 				be, bp, _ := bs.CardRowsSteps()
 				nb, _ := nmseOf(bad, got)
 				t.Logf("%s: violation (%s): NMSE %.3e from the clean encode (card entry %d, projector %d)", spec, name, nb, be, bp)
-				if be != 1 || bp != 1 || !(nb > 1e-4) {
+				if be != ce || bp != cp || !(nb > 1e-4) {
 					t.Fatalf("%s: the gate cannot see %s on the card: NMSE %.3e (entry %d, projector %d)", spec, name, nb, be, bp)
 				}
 			}
-			vio("each row the next patch", func(s *State) { s.cpu.fault = cpuFaultEntryRows }, func() {})
+			if ce == 1 {
+				vio("each row the next patch", func(s *State) { s.cpu.fault = cpuFaultEntryRows }, func() {})
+			}
 			switch {
+			case cp == 0:
 			case c.WinPattern > 0:
 				vio("the merged rows left in the window order", func(*State) { qwenNoUnwindow = true }, func() { qwenNoUnwindow = false })
 			case c.Scale > 1 && c.projK() == c.NEmbd:
@@ -544,6 +552,10 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 			ref, rtw := f.open(t, noTune)
 			defer ref.Close()
 			c := rtw.Cfg
+			if _, why, err := ref.towerProjOf(false); why != Covered {
+				t.Logf("the front end states no projector: %s (%v)", why, err)
+				return
+			}
 			side := c.ImageSz / c.PatchSz
 			x := projectorRows(side*side, c.NEmbd)
 			project := func(tw *Tower, composed bool) []float32 {
@@ -682,4 +694,19 @@ func TestComposedPictureRowsEveryFamily(t *testing.T) {
 			}
 		})
 	}
+}
+
+// statedRows is the pictures a composed entry or projector serves of one
+// where the front end states it, 0 where it declines it by name.
+func statedRows(why Uncovered) int {
+	if why == Covered {
+		return 1
+	}
+	return 0
+}
+
+// bucketDeclined says a bucketed position table over a grid of other rows
+// than its own declined the entry by name (no table), as it must.
+func bucketDeclined(c TowerConfig, served, noTable int) bool {
+	return c.PosBuckets > 0 && served == 0 && noTable == 1
 }
