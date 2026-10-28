@@ -260,6 +260,9 @@ func (s *State) altCoefs(dst, t []float32) {
 // altExpand fills streams 1.. of each of `rows` rows from stream 0, the
 // scaled embedding.
 func (s *State) altExpand(x []float32, rows int) error {
+	if s.cpuExpand(x, rows) == jit.DeclineServes {
+		return nil
+	}
 	m, c := s.m, s.m.Cfg
 	d := c.NEmbd
 	for r := 0; r < rows; r++ {
@@ -279,6 +282,9 @@ func (s *State) altExpand(x []float32, rows int) error {
 // altCollapse writes each row's head input into stream 0: the mean of
 // stream 0 and each unembedded stream matched to stream 0's magnitude.
 func (s *State) altCollapse(x []float32, rows int) error {
+	if s.cpuCollapse(x, rows) == jit.DeclineServes {
+		return nil
+	}
 	m, c := s.m, s.m.Cfg
 	n := c.Streams()
 	for r := 0; r < rows; r++ {

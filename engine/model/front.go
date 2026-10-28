@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -106,9 +107,16 @@ type frontSet struct {
 	// headHidden is head writing the norm's rows too (nn.Head.HiddenGraph).
 	headHidden *graph.Graph
 	// cpuHead and cpuHidden are head and headHidden over the row a model of
-	// several streams collapses them to before its head, as the CPU's call
-	// sites do: the same graphs on a model of one.
+	// several streams collapses them to before its head, as the host's call
+	// sites hand it to the CPU and to a card: the same graphs on a model of
+	// one.
 	cpuHead, cpuHidden *graph.Graph
+	// expand and collapse are the input rows' streams past stream 0 and the
+	// row the head reads from every stream (frontstreams.go), nil for a
+	// model of one or of streams it does not predict; streamsErr is why a
+	// graph of them did not verify.
+	expand, collapse *graph.Graph
+	streamsErr       error
 	// cpuSample and cpuTopK are sample and topK over cpuHead's logits.
 	cpuSample, cpuTopK *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
@@ -286,6 +294,10 @@ func (m *Model) frontGraphs() *frontSet {
 			s.cpuHidden, _, _ = m.headGraphOf(true, true)
 		}
 	}
+	var eerr, cerr error
+	s.expand, eerr = m.streamExpandGraph()
+	s.collapse, cerr = m.streamCollapseGraph()
+	s.streamsErr = errors.Join(eerr, cerr)
 	s.embed, s.embedWhy, s.embedErr = m.embedGraph()
 	for i, r := range (composing{m.container, m}).Rotaries() {
 		var t *graph.Graph

@@ -17,7 +17,10 @@ import (
 // decode, and each piece of the block taken out (gemma3nComposedViolations:
 // the prediction, the correction, the side branch, the gaussian top-k on no
 // block and on every block, the correction's scale) moving the composed
-// arm past 100 times its worst and past 1e-4.
+// arm past 100 times its worst and past 1e-4. The input rows' expansion of
+// stream 0 and the head's collapse of the streams are composed too, every
+// row of them served (cpuLogits), and streams 1 and 2 swapped where they
+// are bound moves the arm as far.
 func TestGemma3nServesComposedOnCPU(t *testing.T) {
 	const page, bound = 32, 1e-5
 	for _, fx := range gemma3nFixtures {
@@ -70,6 +73,13 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 					t.Errorf("%s: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", v.name, bad, worst)
 				}
 			}
+			// Streams 1 and 2 swapped where the expansion writes them and the
+			// collapse reads them.
+			bad := worstFrom(want, cpuLogits(t, m, toks, cpuFaultStreams, true))
+			t.Logf("violation \"the streams swapped at the expansion and the collapse\": worst NMSE %.3g", bad)
+			if !(bad > 100*worst) || !(bad > 10*bound) {
+				t.Errorf("the streams swapped: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", bad, worst)
+			}
 		})
 	}
 }
@@ -118,8 +128,10 @@ func gemma3nComposedViolations() []c6Violation {
 // device band of the host's logits, and each piece of the block taken out
 // (gemma3nComposedViolations) moving them past 100 times the clean worst and
 // past 1e-4. The streams' expansion at the input rows and their collapse
-// before the head are the host's: the input rows and the head are refused
-// by name (UncoveredStreams), and counted here.
+// before the head are the host's (the CPU device's composed forms,
+// TestGemma3nServesComposedOnCPU): the input rows and a head over every
+// stream are refused by name (UncoveredStreams), and the card's head reads
+// the collapsed row.
 func TestGemma3nServesComposed(t *testing.T) {
 	const bound, promptLen = 1e-5, 3
 	ran := 0

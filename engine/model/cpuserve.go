@@ -210,8 +210,9 @@ type cpuState struct {
 	bound cpuBound
 	// fault is a violation a gate sets: the bindings rewritten so a kernel
 	// reads the wrong history page or the wrong first row.
-	fault cpuFault
-	head  cpuHeadState
+	fault   cpuFault
+	head    cpuHeadState
+	streams cpuStreamsState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -240,6 +241,9 @@ const (
 	// the first the selection names: a bank's sheet read where the pager
 	// holds nothing of it, or holds it evicted.
 	cpuFaultExpert
+	// cpuFaultStreams swaps streams 1 and 2 where the input rows' expansion
+	// writes them and where the head's collapse reads them.
+	cpuFaultStreams
 )
 
 // cpuBlock is block li's forms on the CPU, its graph the one they were
@@ -941,6 +945,7 @@ func (s *State) cpuPlace() {
 		return
 	}
 	s.cpuPlaceHead()
+	s.cpuPlaceStreams()
 }
 
 // cpuRelocated follows block li onto the CPU, composed for it there, or off
@@ -1555,8 +1560,13 @@ func streamIn(gr *graph.Graph, v graph.ValueID) int {
 // with no block, the head's.
 func (s *State) cpuRoleWeight(l *layer, r jlm.Role) *tensor {
 	if l == nil {
-		if r == jlm.RoleOutput || r == jlm.RoleTokenEmbd {
+		switch m := s.m; {
+		case r == jlm.RoleOutput || r == jlm.RoleTokenEmbd:
 			return s.outW
+		case r == jlm.RoleStreamExpand && m.altProj.rows != 0:
+			return &m.altProj
+		case r >= jlm.RoleStreamCollapse1 && int(r-jlm.RoleStreamCollapse1) < len(m.altUnembd):
+			return &m.altUnembd[r-jlm.RoleStreamCollapse1]
 		}
 		return nil
 	}

@@ -13,7 +13,11 @@ import (
 // cpuServedModels are the models whose every block the composer serves on
 // the CPU at decode: Ministral-3-3B among them, the attention temperature
 // read at each row's position, HunyuanOCR's XD-RoPE, and Gemma 4 E2B's per-layer
-// inputs and blocks reading an earlier block's history.
+// inputs and blocks reading an earlier block's history. Gemma 3n E2B is
+// not here: its clean arm is in the band (median 0.634, worst 9.1e-4 where
+// main's control reaches 1.5e-3), but the key-row violation cannot leave
+// it -- its attention over 80 steps is its row's own key's, so attending
+// to that key alone in every block moves the logits 6.5e-4.
 var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
 	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
 	"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
@@ -98,6 +102,9 @@ func cpuFaultsOf(t *testing.T, m *Model) []cpuFault {
 	}
 	if rec > 1 {
 		fs = append(fs, cpuFaultRec)
+	}
+	if m.Cfg.predictsStreams() && m.Cfg.Streams() > 3 {
+		fs = append(fs, cpuFaultStreams)
 	}
 	if len(fs) == 0 {
 		t.Fatal("no violation reaches the model: the gate cannot discriminate")
@@ -187,6 +194,19 @@ func cpuLogits(t *testing.T, m *Model, toks []int32, f cpuFault, composed bool) 
 		}
 		if heads != len(toks) {
 			t.Fatalf("%d head steps served, want %d", heads, len(toks))
+		}
+		// A model of predicted streams expands every step's row and
+		// collapses it for the head on the composed CPU.
+		if m.Cfg.predictsStreams() {
+			rows, sdecl := s.CPUStreamSteps()
+			for i, n := range sdecl {
+				if n > 0 {
+					t.Errorf("%d rows of the streams' expansion or collapse declined: %s (%v)", n, jit.DeclineName(i), s.CPUFormErr())
+				}
+			}
+			if rows != 2*len(toks) {
+				t.Fatalf("the streams' expansion and collapse served %d rows, want %d", rows, 2*len(toks))
+			}
 		}
 	} else if served != 0 {
 		t.Fatalf("main's arm served %d composed block steps", served)

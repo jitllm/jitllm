@@ -7719,10 +7719,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		}
 	}
 	// The step's tables the composer serves (ComposedTable), which write cs
-	// and csSWA where the tier's own table would.
+	// and csSWA where the tier's own table would. A call of the head alone
+	// (a model whose host collapses its streams between the blocks and the
+	// head) turns nothing and is not asked for them.
 	tableSrv, tableMulti := false, false
 	var raxes []byte
-	if g.Composed&ComposedTable != 0 && bs.cs != nil && p.NRot > 0 {
+	if g.Composed&ComposedTable != 0 && bs.cs != nil && p.NRot > 0 && lo < hi {
 		switch why := g.tableServes(bs, p, pos); {
 		case R != 1 || rag != nil || g.prompt:
 			g.PartsUnasked[partRope]++
