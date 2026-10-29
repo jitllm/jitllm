@@ -268,7 +268,8 @@ func (r *Registry) generated(f Model, run []PartPlan, first int, s Step, sp *exp
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s: %w", pp.Part, err)
 			}
-			k.Part, k.Of, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored, k.Unstreamed = pp.Part.Kind, first+i, sp.unfused[first+i], sp.unjammed[first+i], sp.unpaired[first+i], sp.unwide[first+i], sp.uncursored[first+i], sp.unstreamed[first+i]
+			k.Part, k.Of, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored = pp.Part.Kind, first+i, sp.unfused[first+i], sp.unjammed[first+i], sp.unpaired[first+i], sp.unwide[first+i], sp.uncursored[first+i]
+			k.Unstreamed = sp.unstreamed[k.at()]
 			ks = append(ks, k)
 		}
 	}

@@ -203,7 +203,7 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 			}
 		}
 		kerns[ci] = b
-		t.Logf("%v %dx%d kernel %d %s: %d B of code, calls %v", typ, rows, k, ci, c.Name, len(c.CPU), c.Calls)
+		t.Logf("%v %dx%d kernel %d %s: %d B of code, calls %v passes %v", typ, rows, k, ci, c.Name, len(c.CPU), c.Calls, c.Passes)
 	}
 	wargs := make([]cpu.Args, workers)
 	var cur *bound

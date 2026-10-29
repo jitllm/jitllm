@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/ir"
 	"github.com/jitllm/jitllm/jit/x86"
 )
@@ -88,6 +89,23 @@ func spillOffset(s int) int32 {
 	return int32(-320 - 8*(s-16))
 }
 
+// KernelAt is a kernel of part Of by the weight it reads first, where it
+// reads one.
+type KernelAt struct {
+	Of     int
+	Role   jlm.Role
+	Weight bool
+}
+
+func (k *Kernel) at() KernelAt {
+	for _, b := range k.Bufs {
+		if b.Operand.Kind == OperandWeight {
+			return KernelAt{k.Of, b.Operand.Role, true}
+		}
+	}
+	return KernelAt{Of: k.Of}
+}
+
 // ErrRegisterPressure is a kernel Regs refuses for holding more values live
 // at once than the device's registers.
 var ErrRegisterPressure = errors.New("register pressure")
@@ -101,9 +119,9 @@ type PressureError struct {
 	// (HeadPairs), Wide those it jammed a loop's rows across lanes in
 	// (Jam), Cursored those whose loops walked its addresses (Cursors).
 	Jammed, Paired, Wide, Cursored []int
-	// Streamed is the parts of Parts a refused kernel walked along the
-	// rows a sub-block at a time in (Streams).
-	Streamed []int
+	// Streamed is the refused kernels that walked along the rows a
+	// sub-block at a time (Streams).
+	Streamed []KernelAt
 	Err      error
 }
 
@@ -132,7 +150,7 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				refused.Wide = append(refused.Wide, k.Of)
 			}
 			if k.streamed() {
-				refused.Streamed = append(refused.Streamed, k.Of)
+				refused.Streamed = append(refused.Streamed, k.at())
 			}
 			if k.cursored() {
 				refused.Cursored = append(refused.Cursored, k.Of)
