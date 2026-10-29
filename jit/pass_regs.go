@@ -120,9 +120,10 @@ type PressureError struct {
 	// (Jam), Cursored those whose loops walked its addresses (Cursors).
 	Jammed, Paired, Wide, Cursored []int
 	// Streamed is the refused kernels that walked along the rows a
-	// sub-block at a time (Streams).
-	Streamed []KernelAt
-	Err      error
+	// sub-block at a time (Streams), Crowded those of them whose walk held
+	// every plane in one rows loop.
+	Streamed, Crowded []KernelAt
+	Err               error
 }
 
 func (e *PressureError) Error() string { return e.Err.Error() }
@@ -149,7 +150,9 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			if k.wide() {
 				refused.Wide = append(refused.Wide, k.Of)
 			}
-			if k.streamed() {
+			if k.streamed() && !k.Aparted && !k.Crowded {
+				refused.Crowded = append(refused.Crowded, k.at())
+			} else if k.streamed() {
 				refused.Streamed = append(refused.Streamed, k.at())
 			}
 			if k.cursored() {

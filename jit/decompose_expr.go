@@ -119,12 +119,12 @@ type exprSplit struct {
 	// uncursored those formed indexing their buffers (Cursors), unstreamed
 	// those formed walking each row group through every sub-block (Streams).
 	unfused, unpaired, unwide, uncursored map[int]bool
-	unstreamed                            map[KernelAt]bool
+	unstreamed, crowded                   map[KernelAt]bool
 	unjammed                              map[int]int
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}, unstreamed: map[KernelAt]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
 }
 
 // splitRefused forms a part whose refused kernel walked a weight's planes
@@ -145,6 +145,11 @@ func (sp *exprSplit) splitRefused(err error) bool {
 		return false
 	}
 	more := false
+	for _, at := range pe.Crowded {
+		if !sp.crowded[at] {
+			sp.crowded[at], more = true, true
+		}
+	}
 	for _, at := range pe.Streamed {
 		if !sp.unstreamed[at] {
 			sp.unstreamed[at], more = true, true

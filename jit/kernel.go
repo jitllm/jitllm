@@ -60,8 +60,11 @@ type Kernel struct {
 	// form walking its buffers' addresses (Cursors) they refused.
 	Unpaired, Unwide, Uncursored bool
 	// Unstreamed is a kernel of a part whose form walking a weight's planes
-	// along the rows (Streams) the registers refused.
-	Unstreamed bool
+	// along the rows (Streams) the registers refused. Crowded is one whose
+	// walk of every plane in one rows loop they refused: its walk takes the
+	// planes apart (Streams.Apart) however short its rows. Aparted is a
+	// walk Streams took apart.
+	Unstreamed, Crowded, Aparted bool
 	// Rows is 1 + the node of how many of the leading axis's rows are live;
 	// Clamp, where a pass set it, 1 + the node of the elements a launch
 	// holds its threads to.

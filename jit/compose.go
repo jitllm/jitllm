@@ -269,7 +269,7 @@ func (r *Registry) generated(f Model, run []PartPlan, first int, s Step, sp *exp
 				return nil, nil, fmt.Errorf("%s: %w", pp.Part, err)
 			}
 			k.Part, k.Of, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored = pp.Part.Kind, first+i, sp.unfused[first+i], sp.unjammed[first+i], sp.unpaired[first+i], sp.unwide[first+i], sp.uncursored[first+i]
-			k.Unstreamed = sp.unstreamed[k.at()]
+			k.Unstreamed, k.Crowded = sp.unstreamed[k.at()], sp.crowded[k.at()]
 			ks = append(ks, k)
 		}
 	}

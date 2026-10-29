@@ -44,7 +44,7 @@ func (p Streams) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			apart := p.Apart
-			if l.Trip*4 < p.Fill*p.Line {
+			if l.Trip*4 < p.Fill*p.Line && !k.Crowded {
 				apart = 0
 			}
 			if m, ok := k.streams(r, in[0], p.Dots, p.Most, apart); ok {
@@ -264,6 +264,7 @@ func (k *Kernel) streams(r, s, dots, most, apart int) (*Kernel, bool) {
 	}
 	if whole && apart > 0 {
 		m.apart(s+1, r, apart, chain, acc)
+		m.Aparted = true
 	}
 	return m, true
 }
