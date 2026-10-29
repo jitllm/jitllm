@@ -135,7 +135,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 									atTile++
 								}
 								for _, o := range c.GPU.Ops {
-									if o.Kind == ir.OpTileMMA {
+									if o.Kind == ir.OpTileMMA || o.Kind == ir.OpMMA {
 										tiles++
 									}
 								}

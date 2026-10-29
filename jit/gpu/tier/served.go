@@ -251,6 +251,9 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
 		Matrix: g.composedMatrix(), HalfPairs: kernels.HalfPairs(g.dev.API()),
 		VectorLoads: kernels.VectorLoads(g.dev.API()), Shared: sharedPerUnit(g.dev), Launch: g.launchWords()}
+	if dev.Matrix[0] > 0 {
+		dev.Fragment = backend.Fragment(g.dev)
+	}
 	dev.Tile = g.matrixTile(r, dev, rows)
 	if dev.Tile.Rows > 0 {
 		g.Stats.MatrixTiled++
@@ -348,7 +351,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 		geom := jit.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
 			LiveGroup: c.LiveGroup, Work: c.Work, Few: c.Few, Many: c.Many}
 		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom,
-			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA }),
+			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA || o.Kind == ir.OpMMA }),
 			attend: slices.Contains(c.Passes, "flash")})
 		var args []partArg
 		for _, bd := range c.Binds {

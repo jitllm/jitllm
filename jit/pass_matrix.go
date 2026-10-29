@@ -105,7 +105,7 @@ func (p Matrix) cost(R, N, depth int, d Device) int {
 // where their threads and stage fit it, else one.
 func (p Matrix) resident(depth int, d Device) int {
 	threads := 32 * p.Warps[0] * p.Warps[1]
-	stage := 4 * matrixStage(p.Rows, p.Cols, depth, d.Matrix[0], p.Warps[0])
+	stage := 4 * matrixStage(p.Rows, p.Cols, depth, p.Warps[0], d)
 	if p.Resident > 1 && p.Resident*threads <= d.Slots/max(d.Units, 1) && (d.Shared == 0 || p.Resident*stage <= d.Shared) {
 		return p.Resident
 	}
@@ -143,11 +143,11 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		// A device whose workgroup memory does not hold the stage takes
 		// half the rows a workgroup, and half the warps along them, until
 		// it does.
-		for d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, d.Matrix[0], q.Warps[0]) > d.Shared &&
+		for d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, q.Warps[0], d) > d.Shared &&
 			q.Warps[0] > 1 && q.Warps[0]%2 == 0 && q.Rows%2 == 0 {
 			q.Rows, q.Warps[0] = q.Rows/2, q.Warps[0]/2
 		}
-		if d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, d.Matrix[0], q.Warps[0]) > d.Shared {
+		if d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, q.Warps[0], d) > d.Shared {
 			return nil, false, nil
 		}
 		return q.form(k, d, f, made), true, nil
@@ -158,12 +158,15 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 const maxThreadRegs = 255
 
 // regs is a thread's registers at p over depth elements of k a trip: its
-// warp's accumulator tiles, one trip's fragments of them, and the words it
-// stages a trip ahead.
+// warp's accumulator tiles, one trip's fragments of them (one eight of k's
+// in the fragment form), and the words it stages a trip ahead.
 func (p Matrix) regs(depth int, d Device) int {
 	tm, tn, tk := d.Matrix[0], d.Matrix[1], d.Matrix[2]
 	mi, nj := p.Rows/p.Warps[0]/tm, p.Cols/p.Warps[1]/tn
 	threads := 32 * p.Warps[0] * p.Warps[1]
+	if fragmentForm(d) {
+		return mi*nj*tm*tn/32 + (mi+nj)*tm*tk/64 + (p.Rows+p.Cols)*depth/(2*threads)
+	}
 	return mi*nj*tm*tn/32 + (mi+nj)*(depth/tk)*tm*tk/32 + (p.Rows+p.Cols)*depth/(2*threads)
 }
 
@@ -177,10 +180,17 @@ func (p Matrix) regBudget(d Device) int {
 
 // matrixStage is the words of a matrix workgroup's stage: two stages of
 // TR rows of A and TN of B at a depth of KC, padded (form), or after the
-// trips the sums, WR warps' tm rows of TN.
-func matrixStage(TR, TN, KC, tm, WR int) int {
-	return max(2*(TR*(KC+8)/2+TN*(KC+4)/2), WR*tm*TN)
+// trips the sums, WR warps' rows of a tile of TN; the fragment form's two
+// stages unpadded.
+func matrixStage(TR, TN, KC, WR int, d Device) int {
+	if fragmentForm(d) {
+		return max(TR*KC+TN*KC, WR*16*(TN+sumsPad(TN)))
+	}
+	return max(2*(TR*(KC+8)/2+TN*(KC+4)/2), WR*d.Matrix[0]*TN)
 }
+
+// fragmentForm reports whether Matrix lays out d's own instruction's lanes.
+func fragmentForm(d Device) bool { return d.Fragment == ir.MMAVolta() }
 
 // bilinear is a reduction's parts the matrix unit takes: its sum, its
 // factor of the row and its factor of the output, and the elements of k a
@@ -391,12 +401,16 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	// in different banks.
 	const G = 8
 	SKA, SKB := KC+8, KC+4
+	frag := fragmentForm(d)
+	if frag {
+		SKA, SKB = KC, KC
+	}
 	// A stage holds A's rows, then B's at bAt words; the array holds two,
 	// trip t multiplying stage t&1 while it fills the other with trip
 	// t+1's factors, and after the trips the sums.
 	bAt := TR * SKA / 2
 	half := bAt + TN*SKB/2
-	st := shared("stage", U, matrixStage(TR, TN, KC, tm, WR))
+	st := shared("stage", U, matrixStage(TR, TN, KC, WR, d))
 	if units := max(d.Units, 1); p.Resident*m.Group <= d.Slots/units && (d.Shared == 0 || p.Resident*4*m.Bufs[st].Size <= d.Shared) {
 		m.Resident = p.Resident
 	}
@@ -452,8 +466,15 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 			}
 			row := m.bin(OpDiv, U, w, m.u32(KC/G))
 			g := m.bin(OpRem, U, w, m.u32(KC/G))
+			if frag && axis == 1 {
+				// One row's runs of k a thread: its scales decode once.
+				row, g = m.bin(OpRem, U, w, m.u32(rows)), m.bin(OpDiv, U, w, m.u32(rows))
+			}
 			c := m.bin(OpMin, U, m.bin(OpAdd, U, base, row), most)
 			kg := m.bin(OpAdd, U, kc, m.bin(OpMul, U, g, m.u32(G)))
+			if frag {
+				g = m.bin(OpXor, U, g, m.swizzle(row, KC/G))
+			}
 			word := m.bin(OpAdd, U, m.bin(OpMul, U, row, m.u32(SK/2)), m.bin(OpAdd, U, m.bin(OpMul, U, g, m.u32(G/2)), into))
 			copyAt := func(x, at int) int {
 				return copyInto(m, k, x, func(i int, nd Node) (int, bool) {
@@ -510,6 +531,13 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	stage(P, kn, into, TR, 0, r0, last, f.row)
 	stage(P, kn, m.bin(OpAdd, U, into, m.u32(bAt)), TN, 1, n0, lastOut, f.out)
 	m.Stores = append(m.Stores, Store{Barrier: true, At: P})
+	if frag {
+		p.fragments(m, k, f, st, P, it, half, bAt, r0, n0, last, lastOut, wr0, wn0, thread)
+		if h == nil {
+			return []*Kernel{m}
+		}
+		return []*Kernel{h, m}
+	}
 	// from is the stage trip t multiplies, in binary16 elements.
 	from := m.bin(OpMul, U, m.bin(OpAnd, U, it, m.u32(1)), m.u32(2*half))
 
@@ -600,6 +628,170 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 		return []*Kernel{m}
 	}
 	return []*Kernel{h, m}
+}
+
+// swizzle is what a row xors its 16-byte chunk index with, so the rows one
+// fragment or staging access names fall in different banks.
+func (m *Kernel) swizzle(row, chunks int) int {
+	U := ir.U32
+	bit := func(b int) int { return m.bin(OpAnd, U, m.bin(OpShr, U, row, m.u32(b)), m.u32(1)) }
+	bits := []int{bit(0), bit(1), m.bin(OpXor, U, bit(2), bit(3))}
+	s := m.u32(0)
+	for i, b := range bits[max(0, 3-bitsOf(chunks)):] {
+		s = m.bin(OpOr, U, s, m.bin(OpShl, U, b, m.u32(i)))
+	}
+	return s
+}
+
+// fragments is form's trips and sums on ir.MMAVolta: blocks of 16 x 16,
+// quad-pair q taking quarter (q>>1, q&1), the sums through the stage.
+func (p Matrix) fragments(m, k *Kernel, f bilinear, st, P, it, half, bAt, r0, n0, last, lastOut, wr0, wn0, thread int) {
+	U, F := ir.U32, ir.F32
+	TR, TN, KC := p.Rows, p.Cols, f.depth
+	WR, WN := p.Warps[0], p.Warps[1]
+	mi, nj, C := TR/WR/16, TN/WN/16, KC/8
+	from := m.bin(OpMul, U, m.bin(OpAnd, U, it, m.u32(1)), m.u32(half))
+	lane := m.bin(OpAnd, U, thread, m.u32(31))
+	pr := m.bin(OpOr, U, m.bin(OpAnd, U, lane, m.u32(3)), m.bin(OpAnd, U, m.bin(OpShr, U, lane, m.u32(2)), m.u32(4)))
+	rowA := m.bin(OpOr, U, m.bin(OpAnd, U, lane, m.u32(8)), pr)
+	colB := m.bin(OpOr, U, m.bin(OpAnd, U, m.bin(OpShl, U, lane, m.u32(1)), m.u32(8)), pr)
+	// Rows before a lane's own are multiples of 16: the swizzle is its own.
+	swA, swB := m.swizzle(rowA, C), m.swizzle(colB, C)
+	rowAt := func(base, lr int) int {
+		return m.bin(OpMul, U, m.bin(OpAdd, U, base, lr), m.u32(KC/2))
+	}
+	aAt, bAt0 := rowAt(wr0, rowA), m.bin(OpAdd, U, rowAt(wn0, colB), m.u32(bAt))
+	fragment := func(base, sw, i, ch int) [4]int {
+		at := m.bin(OpAdd, U, m.bin(OpAdd, U, from, base), m.bin(OpMul, U, m.bin(OpXor, U, m.u32(ch), sw), m.u32(4)))
+		var w [4]int
+		for e := range w {
+			w[e] = m.add(Node{Op: OpLoad, Type: U, Buf: st, A: at, Imm: int64(16*i*KC/2 + e)})
+		}
+		return w
+	}
+	zero := m.f32(0)
+	acc := make([][][]int, mi)
+	folds := make([][][]int, mi)
+	for i := range acc {
+		acc[i], folds[i] = make([][]int, nj), make([][]int, nj)
+		for j := range acc[i] {
+			for x := 0; x < 8; x++ {
+				fd := m.add(Node{Op: OpFold, Type: F, At: P, B: zero})
+				folds[i][j] = append(folds[i][j], fd)
+			}
+			acc[i][j] = folds[i][j]
+		}
+	}
+	for ch := 0; ch < C; ch++ {
+		a, b := make([][4]int, mi), make([][4]int, nj)
+		for i := range a {
+			a[i] = fragment(aAt, swA, i, ch)
+		}
+		for j := range b {
+			b[j] = fragment(bAt0, swB, j, ch)
+		}
+		for x := 0; x < 2; x++ {
+			for i := 0; i < mi; i++ {
+				for j := 0; j < nj; j++ {
+					ax := append([]int{a[i][2*x], a[i][2*x+1], b[j][2*x], b[j][2*x+1]}, acc[i][j]...)
+					mma := m.add(Node{Op: OpMMA, Type: ir.Void, Ax: ax})
+					out := make([]int, 8)
+					for y := range out {
+						out[y] = m.add(Node{Op: OpMMAGet, Type: F, A: mma, Imm: int64(y)})
+					}
+					acc[i][j] = out
+				}
+			}
+		}
+	}
+	for i := range acc {
+		for j := range acc[i] {
+			for x, fd := range folds[i][j] {
+				m.Nodes[fd].A = acc[i][j][x]
+			}
+		}
+	}
+	// emit is k's stores of sum at row r and output n, in loop at.
+	emit := func(r, n, sum, at int) {
+		leaf := func(ix int, nd Node) (int, bool) {
+			switch {
+			case ix == f.fold:
+				return sum, true
+			case nd.Op == OpCoord && nd.A == 0:
+				return r, true
+			case nd.Op == OpCoord && nd.A == 1:
+				return n, true
+			}
+			return 0, false
+		}
+		for _, s := range k.Stores {
+			c := s
+			c.At = at
+			c.Val = copyInto(m, k, s.Val, leaf)
+			if s.Ax == nil {
+				c.Ix = copyInto(m, k, s.Ix, leaf)
+			}
+			c.Ax = make([]int, len(s.Ax))
+			for x, ax := range s.Ax {
+				c.Ax[x] = copyInto(m, k, ax, leaf)
+			}
+			m.Stores = append(m.Stores, c)
+		}
+	}
+	dr := m.bin(OpOr, U, m.bin(OpAnd, U, lane, m.u32(9)), m.bin(OpAnd, U, m.bin(OpShr, U, lane, m.u32(2)), m.u32(4)))
+	dc := m.bin(OpOr, U, m.bin(OpAnd, U, lane, m.u32(2)), m.bin(OpAnd, U, m.bin(OpShl, U, lane, m.u32(1)), m.u32(8)))
+	// Each warp's i-th row of blocks through the stage, then the kernel's
+	// stores an element a thread, a row of outputs a run of threads.
+	SN := TN + sumsPad(TN)
+	warp := m.bin(OpShr, U, thread, m.u32(5))
+	wq := m.bin(OpDiv, U, warp, m.u32(WN))
+	lrow := m.bin(OpAdd, U, m.bin(OpMul, U, wq, m.u32(16)), dr)
+	lcol := m.bin(OpAdd, U, wn0, dc)
+	for i := 0; i < mi; i++ {
+		m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
+		for j := 0; j < nj; j++ {
+			for y := 0; y < 8; y++ {
+				at := m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpAdd, U, lrow, m.u32(2*((y>>1)&1))), m.u32(SN)),
+					m.bin(OpAdd, U, lcol, m.u32(16*j+(y&1)+4*(y>>2))))
+				m.Stores = append(m.Stores, Store{Buf: st, Ix: at, Val: folds[i][j][y], At: -1})
+			}
+		}
+		m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
+		n := WR * 16 * TN
+		E := m.loop(n, -1)
+		m.Loops[E].Spread, m.Loops[E].Uniform = true, n%m.Group == 0
+		e := m.add(Node{Op: OpIter, At: E, Type: U})
+		if n%m.Group != 0 {
+			e = m.bin(OpMin, U, e, m.u32(n-1))
+		}
+		lr, c := m.bin(OpDiv, U, e, m.u32(TN)), m.bin(OpRem, U, e, m.u32(TN))
+		row := m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpDiv, U, lr, m.u32(16)), m.u32(TR/WR)), m.bin(OpAdd, U, m.bin(OpRem, U, lr, m.u32(16)), m.u32(16*i)))
+		r := m.bin(OpMin, U, m.bin(OpAdd, U, r0, row), last)
+		nn := m.bin(OpMin, U, m.bin(OpAdd, U, n0, c), lastOut)
+		sum := m.add(Node{Op: OpLoad, Type: F, Buf: st, A: m.bin(OpAdd, U, m.bin(OpMul, U, lr, m.u32(SN)), c)})
+		emit(r, nn, sum, E)
+	}
+}
+
+// sumsPad is the words a staged row of TN sums is padded by, the least
+// that spreads one store of a fragment's sums over the most banks.
+func sumsPad(TN int) int {
+	best, least := 0, 33
+	for pad := 0; pad < 32; pad++ {
+		var banks [32]int
+		worst := 0
+		for l := 0; l < 32; l++ {
+			r := l&9 | l>>2&4
+			c := l&2 | l<<1&8
+			b := (r*(TN+pad) + c) % 32
+			banks[b]++
+			worst = max(worst, banks[b])
+		}
+		if worst < least {
+			best, least = pad, worst
+		}
+	}
+	return best
 }
 
 // computes is what a halves kernel writes, its output aside: its space and

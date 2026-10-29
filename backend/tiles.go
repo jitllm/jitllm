@@ -44,6 +44,15 @@ func TileQuadPairs(d Device) bool {
 	return ok && ptx.QuadPairTiles(c.d.Target)
 }
 
+// Fragment is the matrix instruction d runs alone, its lanes' fragments
+// laid as ir states them (ir.MMAVolta() where TileQuadPairs), else none.
+func Fragment(d Device) ir.MMAShape {
+	if TileQuadPairs(d) {
+		return ir.MMAVolta()
+	}
+	return ir.MMAShape{}
+}
+
 // tileProbe is the smallest kernel with every part of a staged tile GEMM: A
 // and B staged through workgroup memory behind a barrier, the accumulator a
 // loop-carried tile, the result stored column-major to a buffer.

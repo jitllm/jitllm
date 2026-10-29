@@ -36,7 +36,8 @@ func gpuDevice(d backend.Device) jit.Device {
 		shared = s.SharedPerMultiprocessor()
 	}
 	return jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, Shared: shared, ExactDiv: kernels.DivExact(d.API()),
-		ExactArith: kernels.Gate2Exact(d.API()), HalfPairs: kernels.HalfPairs(d.API()), VectorLoads: kernels.VectorLoads(d.API())}
+		ExactArith: kernels.Gate2Exact(d.API()), HalfPairs: kernels.HalfPairs(d.API()), VectorLoads: kernels.VectorLoads(d.API()),
+		Fragment: backend.Fragment(d)}
 }
 
 // writesInput reports whether the formed kernels write the graph's input

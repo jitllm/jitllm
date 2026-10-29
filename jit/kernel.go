@@ -401,6 +401,11 @@ const (
 	// device that states them (Device.HalfPairs).
 	OpSubF16x2
 	OpFmaF16x2
+	// OpMMA is the device's own matrix instruction (Device.Fragment) on a
+	// lane's fragments, its operands Ax: A's words, B's words, then C's
+	// floats; OpMMAGet is its result's float Imm.
+	OpMMA
+	OpMMAGet
 	numOps
 )
 
@@ -551,7 +556,7 @@ func (n *Kernel) Elements() int {
 var opNames = [numOps]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
 	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "unpack", "upper", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy", "dot4", "widenhalf", "dot4u",
-	"tileload", "tilesplat", "tilemma", "subf16x2", "fmaf16x2"}
+	"tileload", "tilesplat", "tilemma", "subf16x2", "fmaf16x2", "mma", "mmaget"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

@@ -22,7 +22,7 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 	if s := sharedBytes(n); d.Shared > 0 && s > d.Shared {
 		return Lowered{}, fmt.Errorf("%s holds %d bytes of workgroup memory, past the device's %d", n.Name, s, d.Shared)
 	}
-	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison, lanes: d.Lanes}
+	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison, lanes: d.Lanes, fragment: d.Fragment}
 	if d.VectorLoads {
 		e.vectorGroups()
 	}
@@ -98,17 +98,22 @@ type lowerer struct {
 	// lanes is the subgroup the device guarantees (Device.Lanes).
 	lanes int
 	// vec is the loads read four words an access (vectorGroups).
-	vec    map[int]vecLoad
-	params []ir.Value
-	val    []ir.Value
-	home   []int
-	coords []ir.Value
-	flat   ir.Value
-	shared map[int]ir.Value
-	open   []int
-	iter   map[int]ir.Value
-	phi    map[int]ir.Value
-	done   []bool
+	vec map[int]vecLoad
+	// vecStore is each 16-byte store's first store and its run.
+	vecStore map[int][4]int
+	// mma is each OpMMA's result.
+	mma      map[int][]ir.Value
+	fragment ir.MMAShape
+	params   []ir.Value
+	val      []ir.Value
+	home     []int
+	coords   []ir.Value
+	flat     ir.Value
+	shared   map[int]ir.Value
+	open     []int
+	iter     map[int]ir.Value
+	phi      map[int]ir.Value
+	done     []bool
 	// stored marks each store emitted: one no loop reached is a kernel
 	// the lowering cannot place, never a store left out.
 	stored []bool
@@ -380,6 +385,20 @@ func (e *lowerer) get(i int) ir.Value {
 	case OpTileMMA:
 		x, y, z := e.get(nd.A), e.get(nd.B), e.get(nd.C)
 		v = b.TileMMA(x, y, z)
+	case OpMMA:
+		vs := make([]ir.Value, len(nd.Ax))
+		for j, a := range nd.Ax {
+			vs[j] = e.get(a)
+		}
+		na, nb, _ := e.fragment.Frags()
+		if e.mma == nil {
+			e.mma = map[int][]ir.Value{}
+		}
+		e.mma[i] = b.MMA(e.fragment, vs[:na], vs[na:na+nb], vs[na+nb:])
+		v = e.mma[i][0]
+	case OpMMAGet:
+		e.get(nd.A)
+		v = e.mma[nd.A][nd.Imm]
 	case OpSubF16x2:
 		v = b.SubF16x2(e.get(nd.A), e.get(nd.B))
 	case OpFmaF16x2:
@@ -412,6 +431,18 @@ func (e *lowerer) flatten(bf int, ax []int) ir.Value {
 // collective tile at its view.
 func (e *lowerer) store(si int, st Store) {
 	b := e.b
+	if e.stored[si] {
+		return
+	}
+	if run, ok := e.vecStore[si]; ok {
+		vs := make([]ir.Value, 4)
+		for j, r := range run {
+			vs[j] = e.get(e.n.Stores[r].Val)
+			e.stored[r] = true
+		}
+		b.StoreV(e.params[st.Buf], e.get(st.Ix), 0, vs...)
+		return
+	}
 	if st.Tile {
 		b.TileStore(e.params[st.Buf], e.get(st.Ix), e.get(st.Stride), e.get(st.Val), st.Col)
 	} else {
@@ -633,6 +664,12 @@ func (e *lowerer) lowerLoop(c int) {
 	// ahead is in flight while the trip's tiles multiply.
 	steps := make([]ir.Value, len(folds))
 	makeSteps := func() {
+		// Fragment products in the order formed, so fragments die early.
+		for i, nd := range n.Nodes {
+			if nd.Op == OpMMA && e.home[i] == c {
+				e.get(i)
+			}
+		}
 		for _, tiles := range []bool{false, true} {
 			for j, f := range folds {
 				if (n.Nodes[f].Tile != nil) == tiles {

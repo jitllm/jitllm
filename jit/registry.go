@@ -61,6 +61,9 @@ type Device struct {
 	// Tile, where set, is the matrix tile every projection takes in place
 	// of the one the model chooses (Matrix.chosen).
 	Tile MatrixTile
+	// Fragment, where set, is the device's own matrix instruction, which
+	// Matrix issues on fragments it lays out (OpMMA).
+	Fragment ir.MMAShape
 	// HalfPairs is a device whose lowering runs packed binary16 arithmetic
 	// (OpSubF16x2, OpFmaF16x2).
 	HalfPairs bool

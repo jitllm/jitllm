@@ -54,7 +54,7 @@ func (e *lowerer) vectorGroups() {
 			continue
 		}
 		bf := n.Bufs[nd.Buf]
-		if bf.Kind == BufShared || bf.Operand.Kind != OperandScratch || !n.alignedTo(nd.A, 4) {
+		if bf.Kind != BufShared && bf.Operand.Kind != OperandScratch || !n.alignedTo(nd.A, 4) {
 			continue
 		}
 		k := at{nd.Buf, id(nd.A), nd.Imm &^ 3, nd.Type}
@@ -68,6 +68,7 @@ func (e *lowerer) vectorGroups() {
 			have[k] |= 1 << (nd.Imm - k.base)
 		}
 	}
+	e.storeGroups(id)
 	for k, g := range groups {
 		if have[k] != 15 {
 			continue
@@ -78,6 +79,58 @@ func (e *lowerer) vectorGroups() {
 		for lane, i := range g {
 			e.vec[i] = vecLoad{group: g, lane: lane}
 		}
+	}
+}
+
+// storeGroups finds runs of four consecutive stores to a workgroup array at
+// an aligned index and the three words after it: one 16-byte access.
+func (e *lowerer) storeGroups(id func(int) int) {
+	n := e.n
+	split := func(i int) (int, int64) {
+		var off int64
+		for {
+			nd := n.Nodes[i]
+			if nd.Op != OpAdd || nd.Type != ir.U32 {
+				return i, off
+			}
+			if c := n.Nodes[nd.B]; c.Op == OpConst {
+				off, i = off+c.Imm, nd.A
+				continue
+			}
+			if c := n.Nodes[nd.A]; c.Op == OpConst {
+				off, i = off+c.Imm, nd.B
+				continue
+			}
+			return i, off
+		}
+	}
+	for si := 0; si+3 < len(n.Stores); si++ {
+		st := n.Stores[si]
+		if st.Barrier || st.Run || st.Tile || st.Ax != nil || n.Bufs[st.Buf].Kind != BufShared {
+			continue
+		}
+		base, off := split(st.Ix)
+		if off != 0 || !n.alignedTo(base, 4) {
+			continue
+		}
+		run := [4]int{si}
+		for j := 1; j < 4; j++ {
+			o := n.Stores[si+j]
+			b, f := split(o.Ix)
+			if o.Barrier || o.Run || o.Tile || o.Ax != nil || o.Buf != st.Buf || o.At != st.At || f != int64(j) || id(b) != id(base) {
+				run[0] = -1
+				break
+			}
+			run[j] = si + j
+		}
+		if run[0] < 0 {
+			continue
+		}
+		if e.vecStore == nil {
+			e.vecStore = map[int][4]int{}
+		}
+		e.vecStore[si] = run
+		si += 3
 	}
 }
 

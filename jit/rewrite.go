@@ -44,7 +44,7 @@ func (n *Kernel) Operands(nd *Node) []*int {
 	if nd.Op == OpExchange {
 		return exchangeArgs(nd)
 	}
-	if nd.Op == OpLoad && nd.Ax != nil {
+	if nd.Op == OpLoad && nd.Ax != nil || nd.Op == OpMMA {
 		nd.Ax = append([]int(nil), nd.Ax...)
 		out := make([]*int, len(nd.Ax))
 		for i := range nd.Ax {
@@ -68,7 +68,7 @@ func (n *Kernel) Operands(nd *Node) []*int {
 // no axes.
 func (n *Kernel) args(i int, buf *[3]int) []int {
 	nd := &n.Nodes[i]
-	if nd.Op == OpLoad && nd.Ax != nil {
+	if nd.Op == OpLoad && nd.Ax != nil || nd.Op == OpMMA {
 		return nd.Ax
 	}
 	buf[0], buf[1], buf[2] = nd.A, nd.B, nd.C
@@ -94,7 +94,7 @@ func arity(op Op) int {
 	switch op {
 	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam, OpLength, OpSpan, OpLanes:
 		return 0
-	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum, OpHMax, OpHMin, OpHalf, OpRoundI32, OpDupEven, OpDupOdd, OpSwapPairs, OpCopy, OpUpper, OpWidenHalf, OpTileSplat:
+	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum, OpHMax, OpHMin, OpHalf, OpRoundI32, OpDupEven, OpDupOdd, OpSwapPairs, OpCopy, OpUpper, OpWidenHalf, OpTileSplat, OpMMAGet:
 		return 1
 	case OpFma, OpSelect, OpDot4, OpDot4U, OpTileMMA, OpFmaF16x2:
 		return 3

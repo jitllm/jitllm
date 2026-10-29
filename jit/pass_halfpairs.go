@@ -226,7 +226,7 @@ func (n *Kernel) codeElemOf(f int) (codeElem, bool) {
 	for _, fd := range e.fields {
 		most += fd.mask << fd.left
 	}
-	return e, most < 1024
+	return e, len(e.fields) > 0 && most < 1024
 }
 
 // codeOf is node c, a float conversion of a non-negative integer, as the
@@ -247,6 +247,9 @@ func (n *Kernel) fieldsOf(c int, fs []codeField) ([]codeField, bool) {
 	if nd.Type != ir.U32 {
 		return nil, false
 	}
+	if nd.Op == OpConst && nd.Imm == 0 {
+		return fs, true
+	}
 	if nd.Op == OpAdd || nd.Op == OpOr {
 		fs, ok := n.fieldsOf(nd.A, fs)
 		if !ok {
@@ -262,6 +265,10 @@ func (n *Kernel) fieldsOf(c int, fs []codeField) ([]codeField, bool) {
 		}
 		left = uint32(s.Imm)
 		nd = n.Nodes[nd.A]
+	}
+	if sh := n.Nodes[nd.B]; nd.Op == OpShr && sh.Op == OpConst && sh.Imm >= 16 && sh.Imm < 32 {
+		// The word's top field, which no mask need cut.
+		return append(fs, codeField{word: nd.A, shift: -1, delta: uint32(sh.Imm), mask: 1<<(32-sh.Imm) - 1, left: left}), true
 	}
 	mk := n.Nodes[nd.B]
 	if nd.Op != OpAnd || mk.Op != OpConst || uint32(mk.Imm) >= 1<<16 {

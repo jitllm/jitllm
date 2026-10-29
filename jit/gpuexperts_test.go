@@ -103,7 +103,7 @@ func TestComposedGPUExperts(t *testing.T) {
 								t.Fatalf("%s: the matrix kernel's workgroup of %d threads is not the tile's", what, c.GPU.Group[0])
 							}
 							for _, o := range c.GPU.Ops {
-								if o.Kind == ir.OpTileMMA {
+								if o.Kind == ir.OpTileMMA || o.Kind == ir.OpMMA {
 									tiles++
 								}
 							}
