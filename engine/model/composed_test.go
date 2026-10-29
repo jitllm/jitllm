@@ -565,8 +565,8 @@ func TestComposedBlocksServe(t *testing.T) {
 							}
 							t.Run(name, func(t *testing.T) {
 								parts := a.parts | tier.ComposedPrompt
-								got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false,
-									tier.WithConfig(func(c *tier.Config) { c.MatrixTile = a.tile }))
+								tile := tier.WithConfig(func(c *tier.Config) { c.MatrixTile = a.tile })
+								got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, tile)
 								if a.tile > 0 && st.MatrixPart(tier.ComposedPrompt) > 0 && st.MatrixTiled == 0 {
 									t.Fatalf("the prompt ran on the matrix unit with no part formed at tile %d", a.tile)
 								}
@@ -767,7 +767,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								// composed kernel reading what nothing wrote shows
 								// as a changed logit.
 								if a.parts&tier.ComposedHead != 0 {
-									poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
+									poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, tile, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
 									for i := range got {
 										if !slices.Equal(poisoned[i], got[i]) {
 											t.Fatalf("step %d: with every buffer poisoned the logits change: a composed kernel reads what nothing wrote", i)
