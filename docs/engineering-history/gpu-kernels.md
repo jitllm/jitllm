@@ -10965,3 +10965,39 @@ row where the composer's reads two.
   token of a call, the weight held in registers, where a call here
   decodes it for four); the attention and maps at 1.7 ms against main's
   0.35.
+- **The serving gate's crossing prompt found two composer faults, both
+  older than the gate's new float reference (D77).** Once the float
+  reference stated no matrix tile and the prompt crossed two 64-row
+  chunks, eight synthetic fixtures (glm4moe, qwen2moe, ernie45moe, dots1,
+  bailingmoe2, minimaxm2, apertus, pixtral) read 1e4 times the tier's
+  distance on CUDA (glm4moe: worst 4.3e-8 against the tier's 1.75e-12),
+  and olmoe and DeepSeek-V2-Lite a median 8-10 times it (worst 0.28 and
+  0.17 against 0.04 and 0.004). Bisected on a V100 (card 0, cuda:0) with
+  the gate's commit carried onto older trees: the synthetic ones read the
+  same 4.3e-8 before ad28c1bd and from d8a6d95f (the flash form) on, and
+  1.15e-12 the commit before it; olmoe and DeepSeek-V2-Lite read the same
+  before the flash form too. (1) The flash form staged the second factor
+  as one binary16 rounding, exact only where the history holds it as
+  binary16; a float32 history (the synthetic fixtures' f32 layers, a
+  latent row) lost 2^-11 of it. It is now staged as its rounding and what
+  that leaves where the history holds float32, the weighted sums three
+  tile products, and as itself where it holds binary16 (an OpWidenHalf
+  read: no change there). TestComposedGPUAttendRows gains float32-value
+  cases: before, 4.3e-8 to 5.8e-8 on ptx (sm_70 and sm_86); after,
+  8e-13 to 2.3e-12. (2) A primitive whose leading extent equalled the
+  step's rows was taken for rows (liveOf), so a call of fewer rows clamped
+  it: an expert grouping's count over a bank of 64 experts at a 64-row
+  chunk counted only the call's first experts, and the scatter read a
+  table it never wrote (on the gate's harness an illegal address, in the
+  tier a wrong row). A grouping's primitives and the delta rule's state
+  map state Facts.Whole, which liveOf reads. TestComposedGPUExperts adds a
+  bank of 64 at a 64-row capacity (Q8_0, Q4_K, Q6_K, MXFP4: 4e-8 to
+  3.1e-7 against the oracle); without Facts.Whole it faults. The serving
+  gate on cuda:0 and vulkan:0 (card 0), every arm: the eight fixtures,
+  olmoe (median 0.99, worst 0.0376 against 0.0403), DeepSeek-V2-Lite
+  (1.16, 0.00159 against 0.00423) and Qwen3-1.7B (vulkan:0 worst 0.0533
+  against the band's 0.0852) pass; glm4moe reads 1.22e-12. Gemma-3-4b
+  still fails the gate's own sensitivity check (one position off 1.74,
+  under ten times the arm's worst 0.213 at step 940, the first steps
+  whose window cuts the prompt's first positions), with the arm inside
+  the float band (median 1.05, worst 0.252 against the tier's own 0.362).
