@@ -14,7 +14,9 @@ type Ahead struct {
 	Trips, Min int
 	// Outer is the trips of the loop around a stream of rows (Streams) a
 	// prefetch asks ahead: each of its trips is a sub-block of every row.
-	Outer int
+	// A stream whose run is Reach bytes or more is the hardware
+	// prefetcher's: it runs that far ahead of a load.
+	Outer, Reach int
 }
 
 // AheadLine is a sequence entry's prefetch: node Load's address Bytes on.
@@ -121,6 +123,10 @@ func (p Ahead) ahead(k *Kernel, i int, hs []int) (int, bool) {
 			// little a trip: the loop around moves the address (Streams'
 			// rows within a sub-block), and the line Outer of its trips on
 			// is the one to ask for.
+			l := k.Loops[c]
+			if p.Reach > 0 && l.Trip/max(1, l.Lanes)*step >= p.Reach {
+				return 0, false
+			}
 			step, trips = k.outerStep(c, nd.Buf, cu.From), p.Outer
 		}
 		b := trips * step

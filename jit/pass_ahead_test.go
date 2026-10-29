@@ -13,14 +13,17 @@ import (
 
 // TestAheadPrefetchesTheWeightStream holds the CPU's decode matvec over a
 // weight whose plane stride crosses a page to prefetching it (Ahead), with
-// and without VNNI, and one whose trip moves it less than Min to none:
-// each prefetch is PREFETCHT0 (0F 18 /1), counted in the code.
+// and without VNNI, where a worker's run of a plane is shorter than the
+// hardware prefetcher's reach (2048 rows over twelve), and to none where it
+// covers it (4096, but for Q8_0's scales, a plane a sub-block, lines apart)
+// or a trip moves it less than Min (16 rows): each prefetch is PREFETCHT0
+// (0F 18 /1), counted in the code.
 func TestAheadPrefetchesTheWeightStream(t *testing.T) {
 	host := uint64(cpu.CPU().ISA())
 	for _, typ := range []quant.Type{quant.Q4_K, quant.Q8_0, quant.Q6_K} {
 		jt, _ := jlm.TypeOf(typ)
 		for _, isa := range []uint64{host, host &^ uint64(x86.ISAVNNI)} {
-			for _, rows := range []int{4096, 16} {
+			for _, rows := range []int{2048, 4096, 16} {
 				count := func(trips int) (int, bool) {
 					r := Default()
 					p := r.Profiles[DeviceCPU]
@@ -50,8 +53,7 @@ func TestAheadPrefetchesTheWeightStream(t *testing.T) {
 				}
 				on, ran := count(2)
 				off, _ := count(0)
-				// Sixteen rows move a trip at most a few hundred bytes: no prefetch.
-				want := rows > 16
+				want := rows == 2048 || rows == 4096 && typ == quant.Q8_0
 				if want != ran || want != (on > 0) || off != 0 {
 					t.Errorf("%v at %d rows, isa %#x: ahead ran %v with %d prefetches, %d at no trips; want prefetches %v", typ, rows, isa, ran, on, off, want)
 				}

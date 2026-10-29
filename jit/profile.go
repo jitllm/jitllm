@@ -172,7 +172,7 @@ func cpuWideProfile() Profile {
 			Reloads:  [2]int{int(x86.R13), int(x86.RBX)},
 			Resident: map[int]int{0: 9, 1: 10, 2: 11, 3: 12, 4: 13, 5: 14, 6: 15, 7: 8, 9: 7},
 			Walks:    []int{int(x86.R11), int(x86.R8)}, Lanes: []int{1, 4}, Hoist: 8, Scalars: 6, Keep: 7},
-		Ahead{Trips: 2, Min: 2048, Outer: 1},
+		Ahead{Trips: 2, Min: 2048, Outer: 1, Reach: 20 * 64},
 	}}
 }
 
