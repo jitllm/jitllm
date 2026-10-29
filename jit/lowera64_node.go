@@ -809,20 +809,8 @@ func (e *a64Lowerer) counter(c int) cpu.XReg {
 func (e *a64Lowerer) enter(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
-	if it := k.iterOf(c); it >= 0 && k.Nodes[it].Reg > 0 {
-		a.MOVreg(e.xr(it), cpu.XZR)
-	} else if it >= 0 && k.Nodes[it].Spill > 0 {
-		e.slot(cpu.A64StrX, uint8(cpu.XZR), k.Nodes[it].Spill)
-	}
-	for _, cu := range l.Cursors {
-		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
-			e.slot(cpu.A64StrX, uint8(e.ptrReg(cu.Buf, cu.From)), k.Ptrs[cu.Ptr-1].Spill)
-		} else if cu.Take {
-			d := e.ptrReg(cu.Buf, cu.Ptr)
-			a.MOVreg(d, e.ptrReg(cu.Buf, cu.From))
-		}
-	}
 	if l.once() {
+		e.take(c)
 		return
 	}
 	ctr := e.counter(c)
@@ -844,12 +832,33 @@ func (e *a64Lowerer) enter(c int) {
 		a.MOVconst(ctr, uint64(l.Trip))
 		runtime = false
 	}
+	e.take(c)
 	e.end[c] = a.Label()
 	if runtime && !l.Nonempty {
 		a.CBZ(ctr, e.end[c])
 	}
 	e.top[c] = a.Label()
 	a.Bind(e.top[c])
+}
+
+// take zeroes loop c's iteration and takes its copies, after its counter
+// has read its count.
+func (e *a64Lowerer) take(c int) {
+	k, a := e.k, e.a
+	l := k.Loops[c]
+	if it := k.iterOf(c); it >= 0 && k.Nodes[it].Reg > 0 {
+		a.MOVreg(e.xr(it), cpu.XZR)
+	} else if it >= 0 && k.Nodes[it].Spill > 0 {
+		e.slot(cpu.A64StrX, uint8(cpu.XZR), k.Nodes[it].Spill)
+	}
+	for _, cu := range l.Cursors {
+		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
+			e.slot(cpu.A64StrX, uint8(e.ptrReg(cu.Buf, cu.From)), k.Ptrs[cu.Ptr-1].Spill)
+		} else if cu.Take {
+			d := e.ptrReg(cu.Buf, cu.Ptr)
+			a.MOVreg(d, e.ptrReg(cu.Buf, cu.From))
+		}
+	}
 }
 
 func (e *a64Lowerer) leave(c int) {

@@ -1352,28 +1352,8 @@ func (e *x86Lowerer) counter(c int) x86.Reg {
 func (e *x86Lowerer) enter(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
-	if it := k.iterOf(c); it >= 0 && k.Nodes[it].Reg > 0 {
-		r := e.reg(it)
-		a.XORQ(r, r)
-	} else if it >= 0 && k.Nodes[it].Spill > 0 {
-		a.MOVMemImm(spillSlot(k.Nodes[it].Spill), 0)
-	}
-	zeroed := map[int]bool{}
-	for _, cu := range l.Cursors {
-		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Off > 0 {
-			if off := k.Ptrs[cu.Ptr-1].Off; !zeroed[off] {
-				a.XORQ(x86.Reg(off-1), x86.Reg(off-1))
-				zeroed[off] = true
-			}
-			continue
-		}
-		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
-			a.MOVStore(spillSlot(k.Ptrs[cu.Ptr-1].Spill), e.ptrReg(cu.Buf, cu.From))
-		} else if cu.Take {
-			a.MOVQ(e.ptrReg(cu.Buf, cu.Ptr), e.ptrReg(cu.Buf, cu.From))
-		}
-	}
 	if l.once() {
+		e.take(c)
 		return
 	}
 	ctr := e.counter(c)
@@ -1398,6 +1378,7 @@ func (e *x86Lowerer) enter(c int) {
 		a.MOVimm(ctr, int64(l.Trip))
 		runtime = false
 	}
+	e.take(c)
 	e.end[c] = a.Label()
 	if runtime && !l.Nonempty {
 		a.TESTQ(ctr, ctr)
@@ -1405,6 +1386,34 @@ func (e *x86Lowerer) enter(c int) {
 	}
 	e.top[c] = a.Label()
 	a.Bind(e.top[c])
+}
+
+// take zeroes loop c's iteration and takes its copies, after its counter
+// has read its count.
+func (e *x86Lowerer) take(c int) {
+	k, a := e.k, e.a
+	l := k.Loops[c]
+	if it := k.iterOf(c); it >= 0 && k.Nodes[it].Reg > 0 {
+		r := e.reg(it)
+		a.XORQ(r, r)
+	} else if it >= 0 && k.Nodes[it].Spill > 0 {
+		a.MOVMemImm(spillSlot(k.Nodes[it].Spill), 0)
+	}
+	zeroed := map[int]bool{}
+	for _, cu := range l.Cursors {
+		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Off > 0 {
+			if off := k.Ptrs[cu.Ptr-1].Off; !zeroed[off] {
+				a.XORQ(x86.Reg(off-1), x86.Reg(off-1))
+				zeroed[off] = true
+			}
+			continue
+		}
+		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
+			a.MOVStore(spillSlot(k.Ptrs[cu.Ptr-1].Spill), e.ptrReg(cu.Buf, cu.From))
+		} else if cu.Take {
+			a.MOVQ(e.ptrReg(cu.Buf, cu.Ptr), e.ptrReg(cu.Buf, cu.From))
+		}
+	}
 }
 
 // madeBefore reports whether node i is made in the sequence before loop c

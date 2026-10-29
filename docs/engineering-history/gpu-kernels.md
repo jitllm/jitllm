@@ -11157,3 +11157,8 @@ row where the composer's reads two.
   The refusal is now the kernel's (KernelAt), retried with its planes apart (Kernel.Crowded). E5-2680 v4 node 0, 14 threads,
   composed/main (A/A 0.995-1.015): Llama-3.2-1B Q4_K_M 0.687/0.686 to 0.887/0.905, at 13 participants 0.688/0.667 to 0.895/0.931;
   Qwen3-0.6B Q8_0 0.978/0.977 to 0.990/0.978. Main's lookahead wired in read 0.878-0.900 against 0.885-0.901 and is not taken.
+- The CPU binder holds a general register over its value's live span, not the
+  kernel: copies, counters and a role's word (count, address) bind by span
+  overlap, a loop sets its counter before its copies. Matvec census, every
+  packed type: stack references 68468 to 40736, copy spills 964 to 412, forms
+  and outputs bit-identical. Node 1 pp512 of main: Llama Q4_K_M 0.507 to 0.513-0.522.

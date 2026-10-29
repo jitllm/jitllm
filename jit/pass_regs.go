@@ -243,6 +243,82 @@ type binder86 struct {
 	def    map[int]int
 	last   map[int]int
 	end    map[int]int
+	start  map[int]int
+	spans  map[int][]span
+	// reserved is the registers a spilling binding keeps for reloads and
+	// counters.
+	reserved map[int]bool
+}
+
+// span is a register's hold from one point to another, inclusive: point 2p
+// is sequence position p's reads and writes, 2p+1 what a loop beginning at p
+// writes after reading its count there.
+type span struct{ from, to int }
+
+func (s span) meets(o span) bool { return s.from <= o.to && o.from <= s.to }
+
+func (b *binder86) hold(r int, s span) {
+	if b.spans == nil {
+		b.spans = map[int][]span{}
+	}
+	b.spans[r] = append(b.spans[r], s)
+}
+
+// fits reports whether register r is held at no position of s.
+func (b *binder86) fits(r int, s span) bool {
+	for _, o := range b.spans[r] {
+		if o.meets(s) {
+			return false
+		}
+	}
+	return true
+}
+
+// takeOver is the first register of pool free over s, held there; -1 for
+// none.
+func (b *binder86) takeOver(pool []int, s span) int {
+	for _, r := range pool {
+		if !b.reserved[r] && b.fits(r, s) {
+			b.hold(r, s)
+			return r
+		}
+	}
+	return -1
+}
+
+// loopSpan is the points loop c's counter is held over in register r: from
+// its start, or its vector loop's where that loop sets it (x86Lowerer.enter:
+// a tail counting in neither the vector loop's register nor its count's), to
+// its end.
+func (b *binder86) loopSpan(c, r int) span {
+	k := b.k
+	s := span{2*b.start[c] + 1, 2 * b.end[c]}
+	l := k.Loops[c]
+	if v := c - 1; v >= 0 && l.Of == c && k.Loops[v].Lanes > 0 && l.Count > 0 && k.Nodes[l.Count-1].Op != OpConst && k.passes() &&
+		r != k.Loops[v].Reg-1 && r != k.Nodes[l.Count-1].Reg-1 {
+		if d, ok := b.def[l.Count-1]; ok && d < b.start[v] {
+			s.from = 2*b.start[v] + 1
+		}
+	}
+	return s
+}
+
+// ptrSpan is the points copy ptr is held over: every loop that takes or
+// steps it.
+func (b *binder86) ptrSpan(ptr int) span {
+	s := span{-1, -1}
+	for c, l := range b.k.Loops {
+		for _, cu := range l.Cursors {
+			if cu.Ptr != ptr {
+				continue
+			}
+			if s.from < 0 || 2*b.start[c]+1 < s.from {
+				s.from = 2*b.start[c] + 1
+			}
+			s.to = max(s.to, 2*b.end[c])
+		}
+	}
+	return s
 }
 
 func (b *binder86) take(pool []int) int {
@@ -261,21 +337,18 @@ func (b *binder86) take(pool []int) int {
 func (b *binder86) lives() {
 	k := b.k
 	hs := k.Homes()
-	b.def, b.last, b.end = map[int]int{}, map[int]int{}, map[int]int{}
+	b.def, b.last, b.end, b.start = map[int]int{}, map[int]int{}, map[int]int{}, map[int]int{}
 	for pos, e := range k.Seq {
 		switch e.Kind {
 		case EntryNode:
 			b.def[e.I] = pos
 		case EntryEnd:
 			b.end[e.I] = pos
+		case EntryLoop:
+			b.start[e.I] = pos
 		}
 	}
-	start := map[int]int{}
-	for p, e := range k.Seq {
-		if e.Kind == EntryLoop {
-			start[e.I] = p
-		}
-	}
+	start := b.start
 	use := func(v, pos, home int) {
 		d, ok := b.def[v]
 		if !ok {
@@ -347,11 +420,14 @@ func (b *binder86) gprs() error {
 		// The reload registers, and the counters, which a spilling
 		// binding keeps for its loops rather than its values: taken first,
 		// so a register held back for a deeper loop is neither.
+		b.reserved = map[int]bool{}
 		for _, r := range p.Reloads {
 			b.used[r] = true
+			b.reserved[r] = true
 		}
 		for _, r := range p.Counters {
 			b.used[r] = true
+			b.reserved[r] = true
 		}
 		// Loops count at once only along one nest: its depth past the two
 		// counters is what to hold back.
@@ -368,6 +444,7 @@ func (b *binder86) gprs() error {
 		for range depth - 2 {
 			if r := b.take(p.Spare); r >= 0 {
 				b.counters = append(b.counters, r)
+				b.reserved[r] = true
 			}
 		}
 	}
@@ -380,9 +457,19 @@ func (b *binder86) gprs() error {
 	direct := map[int]bool{}
 	words := k.vectorWords()
 	// A value made in a general register frees it after its last read; an
-	// argument word, a length, a count and a buffer's address keep theirs,
-	// read through what they address rather than as values.
-	freed, valued := map[int]int{}, map[int]bool{}
+	// argument word, a length, a count and a buffer's address after their
+	// last read in that role (keepEnd).
+	type kept struct{ r, end int }
+	freed, expire := map[int]int{}, map[int]kept{}
+	expired := func(at int) {
+		for v, h := range expire {
+			if h.end < at {
+				b.used[h.r] = false
+				delete(expire, v)
+				delete(b.params, v)
+			}
+		}
+	}
 	foldOf := map[int]int{}
 	for f, nd := range k.Nodes {
 		if nd.Op == OpFold {
@@ -411,6 +498,13 @@ func (b *binder86) gprs() error {
 		switch e.Kind {
 		case EntryLoop:
 			if it := k.iterOf(e.I); it >= 0 && k.Nodes[it].Reg == 0 && b.uses(it) > 0 {
+				for v, r := range freed {
+					if b.last[v] < pos {
+						b.used[r] = false
+						delete(freed, v)
+					}
+				}
+				expired(pos)
 				r := b.take(p.Spare)
 				if r < 0 {
 					r = b.take(p.Kept)
@@ -434,7 +528,6 @@ func (b *binder86) gprs() error {
 				}
 				k.Nodes[it].Reg = r + 1
 				iterReg[e.I] = r
-				valued[r] = true
 			}
 			continue
 		case EntryEnd:
@@ -456,6 +549,7 @@ func (b *binder86) gprs() error {
 				delete(freed, v)
 			}
 		}
+		expired(b.def[i])
 		if f, ok := foldOf[i]; ok && k.Nodes[f].Reg > 0 && k.Nodes[f].Type != ir.F32 {
 			// A sum's step writes the sum's register.
 			k.Nodes[i].Reg = k.Nodes[f].Reg
@@ -554,39 +648,47 @@ func (b *binder86) gprs() error {
 			return errors.New("more words live at once than registers")
 		}
 		k.Nodes[i].Reg = r + 1
-		valued[r] = true
+		for v, h := range expire {
+			if h.r == r {
+				delete(expire, v)
+			}
+		}
+		for v, x := range b.params {
+			if x == r {
+				delete(b.params, v)
+			}
+		}
 		if b.spill && nd.Op == OpParam && !k.isBaseNode(i) && !b.countsIn(r) {
 			if b.params == nil {
 				b.params = map[int]int{}
 			}
 			b.params[i] = r
 		}
-		if !keeps(i) {
-			freed[i] = r
-		}
 		for j := range k.Bufs {
 			if k.Bufs[j].Base == i+1 {
 				k.Bufs[j].Reg = r + 1
 			}
 		}
+		if !keeps(i) {
+			freed[i] = r
+		} else if e := b.keepEnd(i); e < len(k.Seq) {
+			expire[i] = kept{r, e}
+		}
 	}
-	// The counters and copies bound below are bound after the values, so a
-	// register a value or an iteration held at any point stays taken: freed
-	// in the walk, it was free only between that value's reads.
-	for r := range valued {
-		b.used[r] = true
-	}
+	// The counters and copies bound below take a register only where no
+	// value, iteration, copy or counter holds it.
+	b.valueSpans(keeps)
 	for c := range k.Loops {
 		l := &k.Loops[c]
 		if l.Kept && l.Reg == 0 {
-			if r := b.take([]int{p.Outer}); r >= 0 {
+			if r := b.takeCounter([]int{p.Outer}, c); r >= 0 {
 				l.Reg = r + 1
 			}
 		}
 		if !l.Walk || l.Reg != 0 || l.once() {
 			continue
 		}
-		if r := b.take([]int{p.Counters[0], p.Counters[1]}); r >= 0 {
+		if r := b.takeCounter([]int{p.Counters[0], p.Counters[1]}, c); r >= 0 {
 			l.Reg = r + 1
 		}
 	}
@@ -604,9 +706,10 @@ func (b *binder86) gprs() error {
 	if b.spill && !k.spills() {
 		reloads = k.reloadCopies(groups, lastLoop, len(p.Reloads))
 	}
-	reload := func() int {
+	reload := func(sp span) int {
 		for _, s := range p.Reloads {
-			if !b.copyIn(s) {
+			if b.fits(s, sp) {
+				b.hold(s, sp)
 				return s
 			}
 		}
@@ -624,17 +727,30 @@ func (b *binder86) gprs() error {
 				}
 			}
 			offs := map[int]int{}
+			hull := map[int]span{}
+			for _, cu := range k.Loops[e.I].Cursors {
+				if g, ok := groups[cu.Ptr]; ok && cu.Take && b.offBase(cu) {
+					s := b.ptrSpan(cu.Ptr)
+					if h, ok := hull[g.g]; ok {
+						s = span{min(s.from, h.from), max(s.to, h.to)}
+					}
+					hull[g.g] = s
+				}
+			}
 			for _, cu := range k.Loops[e.I].Cursors {
 				if cu.Take && k.Ptrs[cu.Ptr-1].Reg == 0 && k.Ptrs[cu.Ptr-1].Spill == 0 && k.Ptrs[cu.Ptr-1].Off == 0 {
 					if og, ok := groups[cu.Ptr]; ok && members[og.g] > 1 && b.offBase(cu) {
 						g := og.g
 						if offs[g] == 0 {
-							r := b.take(p.Walks)
+							r := b.takeOver(p.Walks, hull[g])
 							if r < 0 {
-								r = b.take(p.Spare)
+								r = b.takeOver(p.Spare, hull[g])
+							}
+							if r < 0 {
+								r = b.takeOver([]int{p.Outer}, hull[g])
 							}
 							if r < 0 && reloads[cu.Ptr] {
-								r = reload()
+								r = reload(hull[g])
 							}
 							offs[g] = r + 1
 						}
@@ -644,14 +760,18 @@ func (b *binder86) gprs() error {
 						}
 					}
 					r := -1
+					sp := b.ptrSpan(cu.Ptr)
 					if passes {
-						r = b.take(p.Walks)
+						r = b.takeOver(p.Walks, sp)
 					}
 					if r < 0 {
-						r = b.take(p.Spare)
+						r = b.takeOver(p.Spare, sp)
+					}
+					if r < 0 {
+						r = b.takeOver([]int{p.Outer}, sp)
 					}
 					if r < 0 && reloads[cu.Ptr] {
-						r = reload()
+						r = reload(sp)
 					}
 					if r < 0 && b.spill {
 						s := -1
@@ -675,12 +795,6 @@ func (b *binder86) gprs() error {
 			for ptr, c := range lastLoop {
 				if c != e.I {
 					continue
-				}
-				if r := k.Ptrs[ptr-1].Reg; r > 0 {
-					b.used[r-1] = false
-				}
-				if r := k.Ptrs[ptr-1].Off; r > 0 {
-					b.used[r-1] = false
 				}
 				if sl := k.Ptrs[ptr-1].Spill; sl > 0 {
 					freeSlots = append(freeSlots, sl)
@@ -715,9 +829,9 @@ func (b *binder86) gprs() error {
 				}
 			}
 			for _, r := range append([]int{p.Counters[1]}, p.Walks...) {
-				if !held[r] && !copies[r] && (!b.used[r] || b.counterFree(r, c)) {
+				if !held[r] && !copies[r] && (r == p.Counters[1] || !b.reserved[r]) && b.fits(r, b.loopSpan(c, r)) {
 					l.Reg = r + 1
-					b.used[r] = true
+					b.hold(r, b.loopSpan(c, r))
 					break
 				}
 			}
@@ -727,16 +841,10 @@ func (b *binder86) gprs() error {
 		}
 		// The counters first, then any register no value holds while the
 		// loop runs: a third nested loop counts in one of those.
-		for i, r := range slices.Concat([]int{p.Counters[0], p.Counters[1]}, b.counters, p.Spare, p.Kept) {
-			free := !b.used[r] || b.counterFree(r, c)
-			if i >= 2 && i < 2+len(b.counters) {
-				free = b.counterFree(r, c)
-			} else if i >= 2 {
-				free = !b.used[r] && b.counterFree(r, c)
-			}
-			if !held[r] && free && !b.copyIn(r) {
+		for i, r := range slices.Concat([]int{p.Counters[0], p.Counters[1]}, b.counters, p.Spare, p.Kept, []int{p.Outer}) {
+			if !held[r] && (i < 2+len(b.counters) || !b.reserved[r]) && b.fits(r, b.loopSpan(c, r)) {
 				l.Reg = r + 1
-				b.used[r] = true
+				b.hold(r, b.loopSpan(c, r))
 				break
 			}
 		}
@@ -744,35 +852,116 @@ func (b *binder86) gprs() error {
 			return errors.New("no counter free")
 		}
 	}
+	for r := range b.spans {
+		b.used[r] = true
+	}
 	return nil
 }
 
-// counterFree reports whether counter r counts no loop that is loop c, runs
-// around it or inside it.
-func (b *binder86) counterFree(r, c int) bool {
+// keepEnd is the last position value i, held for its role, is read at: its
+// last read, its loop's end where it is the loop's counter, and for a
+// buffer's address the end of every loop its buffer is reached in, from
+// the outermost; len(Seq) where that is not known.
+func (b *binder86) keepEnd(i int) int {
 	k := b.k
-	for d, l := range k.Loops {
-		if d != c && l.Reg == r+1 && (k.within(c, d) || k.within(d, c)) {
-			return false
+	nd := k.Nodes[i]
+	if nd.Op == OpFold || nd.Op == OpSpan {
+		return len(k.Seq)
+	}
+	e := max(b.def[i], b.last[i])
+	for c, l := range k.Loops {
+		if l.Count == i+1 && l.Reg == nd.Reg {
+			e = max(e, b.end[c])
 		}
 	}
-	for _, nd := range k.Nodes {
-		if nd.Reg == r+1 && nd.Type != ir.F32 {
-			return false
+	if !k.isBaseNode(i) {
+		return e
+	}
+	top := func(c int) int {
+		for k.Loops[c].Parent >= 0 {
+			c = k.Loops[c].Parent
+		}
+		return b.end[c]
+	}
+	hs := k.Homes()
+	mine := map[int]bool{}
+	for j, bf := range k.Bufs {
+		if bf.Base == i+1 {
+			mine[j] = true
 		}
 	}
-	return !b.copyIn(r)
+	for x, n := range k.Nodes {
+		if n.Op != OpLoad || !mine[n.Buf] {
+			continue
+		}
+		e = max(e, b.def[x], b.last[x])
+		if x < len(hs) && hs[x] >= 0 {
+			e = max(e, top(hs[x]))
+		}
+	}
+	for pos, en := range k.Seq {
+		switch {
+		case en.Kind == EntryStore && mine[k.Stores[en.I].Buf]:
+			e = max(e, pos)
+			if c := k.Stores[en.I].At; c >= 0 {
+				e = max(e, top(c))
+			}
+		case en.Kind == EntryAhead && mine[k.Nodes[k.Lines[en.I].Load].Buf]:
+			e = max(e, pos)
+		}
+	}
+	for c, l := range k.Loops {
+		for _, cu := range l.Cursors {
+			if mine[cu.Buf] {
+				e = max(e, top(c))
+			}
+		}
+	}
+	return e
 }
 
-// copyIn reports whether a copy of an address a loop walks is held in
-// register r.
-func (b *binder86) copyIn(r int) bool {
-	for _, p := range b.k.Ptrs {
-		if p.Reg == r+1 || p.Off == r+1 {
-			return true
+// takeCounter is the first register of pool free over loop c, held there.
+func (b *binder86) takeCounter(pool []int, c int) int {
+	for _, r := range pool {
+		if s := b.loopSpan(c, r); b.fits(r, s) {
+			b.hold(r, s)
+			return r
 		}
 	}
-	return false
+	return -1
+}
+
+// valueSpans holds each general register a value or an iteration takes over
+// the positions it is live: a value kept, the whole kernel; a value spilled,
+// where it is made.
+func (b *binder86) valueSpans(keeps func(int) bool) {
+	k := b.k
+	words := k.vectorWords()
+	whole := span{0, 2 * len(k.Seq)}
+	for c := range k.Loops {
+		if it := k.iterOf(c); it >= 0 && k.Nodes[it].Reg > 0 {
+			b.hold(k.Nodes[it].Reg-1, span{2*b.start[c] + 1, 2 * b.end[c]})
+		}
+	}
+	for i, nd := range k.Nodes {
+		if nd.Reg == 0 || nd.Op == OpIter || nd.Spill < 0 || nd.Reg-1 == int(reloadReg) {
+			continue
+		}
+		if nd.Op != OpParam && (nd.Type == ir.F32 || nd.Op == OpConst || nd.Op == OpLoad && (nd.Mem || k.needsVector(i)) || words[i]) {
+			continue
+		}
+		d, ok := b.def[i]
+		switch {
+		case !ok:
+			b.hold(nd.Reg-1, whole)
+		case keeps(i):
+			b.hold(nd.Reg-1, span{2 * d, 2 * max(d, b.keepEnd(i))})
+		case nd.Spill > 0:
+			b.hold(nd.Reg-1, span{2 * d, 2 * d})
+		default:
+			b.hold(nd.Reg-1, span{2 * d, 2 * max(d, b.last[i])})
+		}
+	}
 }
 
 func (b *binder86) offBase(cu Cursor) bool {
