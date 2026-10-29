@@ -577,6 +577,8 @@ func (b *binder86) gprs() error {
 		}
 	}
 	passes := k.passes()
+	// A copy's slot, once its last loop ends, holds the next copy's.
+	var freeSlots []int
 	for _, e := range k.Seq {
 		switch e.Kind {
 		case EntryLoop:
@@ -590,7 +592,13 @@ func (b *binder86) gprs() error {
 						r = b.take(p.Spare)
 					}
 					if r < 0 && b.spill {
-						if s := b.slot(0, -1); s > 0 {
+						s := -1
+						if n := len(freeSlots); n > 0 {
+							s, freeSlots = freeSlots[n-1], freeSlots[:n-1]
+						} else {
+							s = b.slot(0, -1)
+						}
+						if s > 0 {
 							k.Ptrs[cu.Ptr-1].Spill = s
 							continue
 						}
@@ -603,8 +611,14 @@ func (b *binder86) gprs() error {
 			}
 		case EntryEnd:
 			for ptr, c := range lastLoop {
-				if c == e.I && k.Ptrs[ptr-1].Reg > 0 {
-					b.used[k.Ptrs[ptr-1].Reg-1] = false
+				if c != e.I {
+					continue
+				}
+				if r := k.Ptrs[ptr-1].Reg; r > 0 {
+					b.used[r-1] = false
+				}
+				if sl := k.Ptrs[ptr-1].Spill; sl > 0 {
+					freeSlots = append(freeSlots, sl)
 				}
 			}
 		}

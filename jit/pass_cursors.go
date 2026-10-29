@@ -243,6 +243,9 @@ func (cu *cursorer) walk(p, ptr, from int, fresh bool, pos lin, as []int, ix []l
 	if fresh {
 		src = from
 	}
+	// A loop split from one that walked a copy aside (a vector loop's tail)
+	// walks on where that copy stands.
+	famPtr, famAt := map[int]int{}, map[int]lin{}
 	for li, c := range loops {
 		var mine []int
 		var mix []lin
@@ -281,9 +284,15 @@ func (cu *cursorer) walk(p, ptr, from int, fresh bool, pos lin, as []int, ix []l
 		}
 		after := g.merged(addLin(at, g.times(trips, step)))
 		q, take, qFrom := ptr, fresh, from
+		fq, cont := famPtr[family(c)]
+		cont = cont && !passes
+		if cont {
+			q, take = fq, false
+		}
 		// The scope's own accesses stand where it started, wherever they
 		// run among its loops: a loop that moves the pointer moves a copy.
-		aside := !fresh && (k.Loops[c].Walk || direct && len(g.merged(g.times(trips, step))) > 0 || cu.laterNeeds(loops[li+1:], as, ix, after))
+		// A fresh copy no loop has taken yet stands where its source does.
+		aside := !cont && (!fresh && (k.Loops[c].Walk || direct && len(g.merged(g.times(trips, step))) > 0) || cu.laterNeeds(loops[li+1:], as, ix, after))
 		if passes {
 			aside = false
 			if family(c) != pass {
@@ -297,14 +306,21 @@ func (cu *cursorer) walk(p, ptr, from int, fresh bool, pos lin, as []int, ix []l
 		}
 		if aside {
 			q, take, qFrom = cu.newPtr(), true, ptr
+			if fresh {
+				qFrom = from
+			}
 		}
-		net, ok := cu.walk(c, q, 0, false, at, mine, rest)
+		walkAt := at
+		if cont {
+			walkAt = famAt[family(c)]
+		}
+		net, ok := cu.walk(c, q, 0, false, walkAt, mine, rest)
 		if !ok {
 			return nil, false
 		}
 		bump := g.merged(addLin(step, scaleLin(net, -1)))
 		if _, ok := bump.constant(); !ok {
-			if _, ok = cu.walk(c, cu.newPtr(), q, true, at, mine, rest); !ok {
+			if _, ok = cu.walk(c, cu.newPtr(), q, true, walkAt, mine, rest); !ok {
 				return nil, false
 			}
 			bump = step
@@ -315,9 +331,11 @@ func (cu *cursorer) walk(p, ptr, from int, fresh bool, pos lin, as []int, ix []l
 		if b, _ := bump.constant(); b != 0 || take {
 			cu.cursor[c] = Cursor{Buf: cu.buf, Elems: int(b), Ptr: q, Take: take, From: qFrom}
 		}
-		if !aside {
-			at, ptr = after, q
+		if aside || cont {
+			famPtr[family(c)], famAt[family(c)] = q, g.merged(addLin(walkAt, g.times(trips, step)))
+			continue
 		}
+		at, ptr = after, q
 		fresh = false
 	}
 	if passes {
