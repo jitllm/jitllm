@@ -124,8 +124,8 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 		switch nd.Op {
 		// A reduction over the whole workgroup -- a norm's sum of squares --
 		// is paid for in every consumer workgroup before its own work starts:
-		// a row's norm inside q/k/v and gate/up measured slower than apart
-		// (docs/engineering-history/gpu-kernels.md).
+		// a row's norm inside q/k/v and gate/up gains at most 1% on 1-2B
+		// models and loses 6% on Phi-3.5 (docs/engineering-history/gpu-kernels.md).
 		case OpFlat, OpThread, OpGroupSum, OpGroupMax:
 			return false
 		case OpShuffle:

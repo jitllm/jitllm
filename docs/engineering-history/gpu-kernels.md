@@ -11193,3 +11193,8 @@ row where the composer's reads two.
   Phi-3.5's gate passes at the rebased base (cuda 0.469, unfloored 0.964; vulkan 0.753), the band floor
   alone carrying 9bc61a61 (unfloored 1.528). granite-3.3-2b vulkan reads 1.822; ulp-level changes to a
   few int8 codes read 0.94-1.22, and its int8 rows agree across division forms (NMSE 1.33e-4 both).
+- **Siblings of two formats, and launches within one wave** (Split.siblingWidths, Siblings): a sibling's segments are re-picked at the narrowest width, past the bias Epilogue joins (Qwen2.5's Q6_K v ran apart, 8 workgroups of 1024); independent kernels filling one wave together run as one (q's and k's head norms).
+  tg128, V100 CUDA, process per sample, 8 rounds a card, both main arms from one cache warmed on the card (two caches settled at 325 and 412 tok/s on Qwen2.5), two card rotations, A/A 0.979-1.008: over shipping composed 1.048/1.035 (Qwen2.5), 1.019/1.020 (Qwen3), 1.048/1.046 (gemma-3-4b), 1.001/0.996 (1B), 1.012/1.003 (8B), 0.999/1.002 (Phi-3.5);
+  over tuned main 0.935/0.894, 0.949/0.956, 1.008/1.018, 0.980/0.965, 0.968/0.970, 0.951/0.950.
+  The norm and its int8 form in q/k/v's and gate/up's workgroups (Prologue over a group sum, main's nin without its weight prefetch): bit for bit the norm apart, 1.009 (Qwen3), 1.005 (gemma), 1.004 (Qwen2.5), 0.940 (Phi-3.5) over shipping composed: refused.
+  D97: DeadStores drops an argmax's best value only where nothing reads it, and the index-only argmax stays splittable (TestDeadStoresKeepAReadRunningBest).
