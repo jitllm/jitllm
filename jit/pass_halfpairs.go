@@ -165,8 +165,8 @@ func (n *Kernel) scaledBy(b, s int) (uint32, bool) {
 			continue
 		}
 		v := math.Float32frombits(uint32(c.Imm))
-		if v >= 0 && v < 1024 && v == float32(math.Trunc(float64(v))) {
-			return uint32(v), true
+		if u := uint32(v); v >= 0 && v < 1024 && float32(u) == v {
+			return u, true
 		}
 	}
 	return 0, false
