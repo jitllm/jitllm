@@ -31,10 +31,11 @@ import (
 func TestComposedCPUMatVec(t *testing.T) {
 	const k = 256
 	rng := rand.New(rand.NewSource(5))
-	right, wrong, apart, unformed := 0, 0, 0, map[string]string{}
+	right, wrong, apart, shared, unformed := 0, 0, 0, 0, map[string]string{}
 	// 64 rows at one worker and six; at six, 48 and 80 rows too, which six
 	// workers do not divide; 1024 by 2048 at one worker and one token, a
-	// call of rows Streams cuts apart.
+	// call of rows Streams cuts apart, and at six, a share whose last call
+	// holds fewer rows.
 	for _, rows := range []int{64, 48, 80, 1024} {
 		k := k
 		if rows == 1024 {
@@ -71,7 +72,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 			}
 			for _, arm := range arms {
 				for _, at := range []struct{ tokens, slots int }{{1, 1}, {4, 1}, {1, 6}} {
-					if rows != 64 && rows != 1024 && at.slots == 1 || rows == 1024 && (at.slots != 1 || at.tokens != 1) {
+					if rows != 64 && rows != 1024 && at.slots == 1 || rows == 1024 && at.tokens != 1 {
 						continue
 					}
 					tokens := at.tokens
@@ -103,9 +104,14 @@ func TestComposedCPUMatVec(t *testing.T) {
 						continue
 					}
 					if rows == 1024 {
-						if ks, err := arm.r.formKernels(req); err == nil && rowsApart(ks, rows) {
-							apart++
-							t.Logf("%s: rows apart", name)
+						if ks, err := arm.r.formKernels(req); err == nil {
+							if rowsApart(ks) {
+								apart++
+								t.Logf("%s: rows apart", name)
+							}
+							if raggedShare(ks) {
+								shared++
+							}
 						}
 					}
 					if at.slots > 1 && !dealtOverWorkers(codes) {
@@ -148,16 +154,30 @@ func TestComposedCPUMatVec(t *testing.T) {
 	if apart == 0 {
 		t.Fatal("no matvec formed its rows apart (Streams.Apart): the gate never ran that form")
 	}
+	if shared == 0 {
+		t.Fatal("no matvec dealt a worker's share a call with a shorter last (Workers): the gate never ran that form")
+	}
+}
+
+// raggedShare reports whether a kernel's calls are workers' shares, the last
+// holding fewer rows.
+func raggedShare(ks []*Kernel) bool {
+	for _, k := range ks {
+		if k.Share > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // rowsApart reports whether a kernel runs several loops over a call's rows
 // in one loop.
-func rowsApart(ks []*Kernel, rows int) bool {
+func rowsApart(ks []*Kernel) bool {
 	for _, k := range ks {
-		n := map[int]int{}
+		n := map[[2]int]int{}
 		for _, l := range k.Loops {
-			if l.Parent >= 0 && l.Trip == rows {
-				n[l.Parent]++
+			if l.Parent >= 0 && l.Trip > 1 {
+				n[[2]int{l.Parent, l.Trip}]++
 			}
 		}
 		for _, c := range n {

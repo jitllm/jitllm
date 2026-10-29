@@ -92,6 +92,9 @@ type Kernel struct {
 	TileMajor bool
 	// Matrix is a matrix kernel's shape: its outputs and its reduction's trip.
 	Matrix [2]int
+	// Share, where set, is the rows a worker's calls (Workers) hold: each
+	// call the next Space's last extent of them, the last what is left.
+	Share int
 	// Running, where SplitRange set it, is a split whose partitions one
 	// workgroup runs in order (Running, the pass).
 	Running *RunningSplit

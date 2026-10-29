@@ -39,12 +39,24 @@ func (p Workers) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		case d.Slots > 1:
 			parts = workerParts(k.Space[a], d.Slots, max(p.Rows, 1))
 		}
+		chunk, share := 0, 0
+		if d.Slots > 1 && !rows && k.Kind != PrimScan {
+			if c, n := shareParts(k.Space[a], d.Slots, max(p.Rows, 1)); n > 1 && c <= workerCost(k.Space[a], parts, d.Slots) {
+				chunk, parts = c, n
+				if k.Space[a]%c != 0 {
+					share = k.Space[a]
+				}
+			}
+		}
 		if parts <= 1 {
 			return nil, false, nil
 		}
 		at := k.Calls
 		m := k.clone()
-		chunk := m.Space[a] / parts
+		if chunk == 0 {
+			chunk = m.Space[a] / parts
+		}
+		m.Share = share
 		var cut []int
 		for i := range m.Nodes {
 			if nd := &m.Nodes[i]; nd.Op == OpCoord && nd.A >= at {
@@ -105,6 +117,25 @@ func workerParts(rows, workers, unit int) int {
 		}
 	}
 	return best
+}
+
+// workerCost is the rows the busiest worker holds with rows cut into parts
+// equal calls.
+func workerCost(rows, parts, workers int) int {
+	if parts <= 1 {
+		return rows
+	}
+	return (parts + workers - 1) / workers * (rows / parts)
+}
+
+// shareParts is a worker's whole share of rows as one call: the call's rows,
+// a multiple of unit, and the calls, the last holding what is left.
+func shareParts(rows, workers, unit int) (int, int) {
+	c := ((rows+workers-1)/workers + unit - 1) / unit * unit
+	if rows%unit != 0 || c >= rows {
+		return 0, 1
+	}
+	return c, (rows + c - 1) / c
 }
 
 // callsAWorker is the most calls a worker's share of a weight is cut into

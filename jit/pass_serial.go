@@ -52,6 +52,14 @@ func (p Serial) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				m.Stores[i].At = parent
 			}
 		}
+		if m.Share > 0 && calls > 0 && len(m.Space) > calls {
+			// A worker's share: the last call runs the rows left.
+			last := len(m.Space) - 1
+			n := m.Space[last]
+			part := m.add(Node{Op: OpCoord, A: calls - 1, Type: ir.U32})
+			left := m.bin(OpSub, ir.U32, m.u32(m.Share), m.bin(OpMul, ir.U32, part, m.u32(n)))
+			m.Loops[loopOf[last]].Count = m.bin(OpMin, ir.U32, left, m.u32(n)) + 1
+		}
 		if pos := m.Positions; pos != nil && pos.Axis >= calls {
 			q := *pos
 			q.Loop, q.Axis = loopOf[pos.Axis], -1
