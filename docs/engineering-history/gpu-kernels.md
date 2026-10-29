@@ -11152,3 +11152,8 @@ row where the composer's reads two.
   stage converts a thin projection's row factor where the model says a halves kernel costs more words (Matrix.Convert). V100,
   server TTFT composed/main at 512/1024/2048, two rotations: Qwen3-30B-A3B 1.22-1.28 (was 1.60-1.73), Llama-3.1-8B 1.06-1.14
   (dense forms unchanged). Left: flash 130 vs 78 ms, the f32 router 117 vs 68, the eight slices' sum 58 vs 11.
+- In the token the CPU decode's Q4_K matvecs read 2.5 GB/s a core (the lone harness matvec 3.9), not for the pages (both arms
+  read the same frames): the registers refused the 512-row k/v walk of every plane in one loop and unstreamed the whole block.
+  The refusal is now the kernel's (KernelAt), retried with its planes apart (Kernel.Crowded). E5-2680 v4 node 0, 14 threads,
+  composed/main (A/A 0.995-1.015): Llama-3.2-1B Q4_K_M 0.687/0.686 to 0.887/0.905, at 13 participants 0.688/0.667 to 0.895/0.931;
+  Qwen3-0.6B Q8_0 0.978/0.977 to 0.990/0.978. Main's lookahead wired in read 0.878-0.900 against 0.885-0.901 and is not taken.
