@@ -159,6 +159,7 @@ func cpuWideProfile() Profile {
 		FoldLoads{},
 		ShiftChain{Regs: []int{8, 9, 0, 1, 2, 3}},
 		Horner{Acc: []int{11, 14}, Coef: 13, Var: 10},
+		HalfSplit{Tier: uint64(x86.ISATierAVX2), Unless: uint64(x86.ISAVNNI)},
 		Order{},
 		ConstRuns{},
 		ConstSiblings{},

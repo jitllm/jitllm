@@ -119,6 +119,9 @@ type PressureError struct {
 	// (HeadPairs), Wide those it jammed a loop's rows across lanes in
 	// (Jam), Cursored those whose loops walked its addresses (Cursors).
 	Jammed, Paired, Wide, Cursored []int
+	// Split is the parts a refused kernel cut its byte dots' runs in
+	// (HalfSplit).
+	Split []int
 	// Streamed is the refused kernels that walked along the rows a
 	// sub-block at a time (Streams), Crowded those of them whose walk held
 	// every plane in one rows loop.
@@ -157,6 +160,9 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			if k.cursored() {
 				refused.Cursored = append(refused.Cursored, k.Of)
+			}
+			if k.Split {
+				refused.Split = append(refused.Split, k.Of)
 			}
 			return nil, false, nil
 		}

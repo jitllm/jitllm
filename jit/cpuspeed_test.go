@@ -198,6 +198,10 @@ func speedRegistry(ahead, jam int) *Registry {
 			a.Lines, _ = strconv.Atoi(os.Getenv("JITLLM_CPU_AHEAD_LINES"))
 			p.Passes[i] = a
 		}
+		if q, ok := ps.(HalfSplit); ok && os.Getenv("JITLLM_CPU_NOSPLIT") != "" {
+			q.Tier = ^uint64(0)
+			p.Passes[i] = q
+		}
 		if q, ok := ps.(Streams); ok {
 			if most >= 0 {
 				q.Most = most

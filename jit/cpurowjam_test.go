@@ -164,7 +164,8 @@ func TestCPUPromptRunsFourRowsACall(t *testing.T) {
 // weight bytes, formed for a host without VNNI, to summing its byte dots'
 // pairs in sixteen bits for runs of them, widened once a run: on Q4_K's
 // nibbles a sub-block's eight words are one run, 8*2*15*127 within an
-// int16; on Q6_K's six bits two words are; Q8_0's signed bytes make none.
+// int16; on Q6_K's six bits two words are, a sub-block's later words runs of
+// their own (HalfSplit) and no dot widened alone; Q8_0's signed bytes make none.
 func TestCPUByteDotsSumInSixteenBits(t *testing.T) {
 	isa := uint64(cpu.CPU().ISA()) &^ uint64(x86.ISAVNNI)
 	for _, c := range []struct {
@@ -197,7 +198,15 @@ func TestCPUByteDotsSumInSixteenBits(t *testing.T) {
 			}
 			longest = max(longest, n)
 		}
+		alone := 0
+		for i := range k.Nodes {
+			if k.dotBound(i) >= 0 && runs[i] == halfNone {
+				alone++
+			}
+		}
 		switch {
+		case c.most > 1 && alone > 0:
+			t.Errorf("%v: %d byte dots widened alone", c.typ, alone)
 		case c.most == 0 && first > 0:
 			t.Errorf("%v: %d runs of signed byte dots summed in sixteen bits", c.typ, first)
 		case c.most > 0 && (first == 0 || longest != c.most):

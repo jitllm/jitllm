@@ -116,15 +116,16 @@ type exprSplit struct {
 	// its rows a call (RowJam),
 	// unpaired those formed with each head a call of its own (HeadPairs),
 	// unwide those formed with no loop's rows across lanes (Jam),
-	// uncursored those formed indexing their buffers (Cursors), unstreamed
+	// uncursored those formed indexing their buffers (Cursors), unsplit
+	// those formed with their dots' runs whole (HalfSplit), unstreamed
 	// those formed walking each row group through every sub-block (Streams).
-	unfused, unpaired, unwide, uncursored map[int]bool
-	unstreamed, crowded                   map[KernelAt]bool
-	unjammed                              map[int]int
+	unfused, unpaired, unwide, uncursored, unsplit map[int]bool
+	unstreamed, crowded                            map[KernelAt]bool
+	unjammed                                       map[int]int
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
 }
 
 // splitRefused forms a part whose refused kernel walked a weight's planes
@@ -153,6 +154,14 @@ func (sp *exprSplit) splitRefused(err error) bool {
 	for _, at := range pe.Streamed {
 		if !sp.unstreamed[at] {
 			sp.unstreamed[at], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
+	for _, of := range pe.Split {
+		if !sp.unsplit[of] {
+			sp.unsplit[of], more = true, true
 		}
 	}
 	if more {

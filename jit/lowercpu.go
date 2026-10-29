@@ -814,30 +814,8 @@ const (
 // ones. The words are the same as each dot widening its own: no sum
 // saturates.
 func (k *Kernel) halfRuns() map[int]halfRun {
-	readers := map[int]int{}
-	reader := map[int]int{}
-	for j := range k.Nodes {
-		for _, a := range k.Operands(&k.Nodes[j]) {
-			readers[*a]++
-			reader[*a] = j
-		}
-	}
-	for x := range k.Stores {
-		for _, a := range k.storeArgs(&k.Stores[x]) {
-			readers[*a] += 2
-		}
-	}
-	bound := func(i int) int {
-		nd := &k.Nodes[i]
-		if !nd.Op.byteDot() || nd.Op != OpDot4U && !k.unsignedBytes(nd.A) {
-			return -1
-		}
-		w, most := k.wordBits(nd.A, 6), 0
-		for b := range 4 {
-			most = max(most, int(w>>(8*b)&0xFF))
-		}
-		return 2 * most * 127
-	}
+	readers, reader := k.readerCounts()
+	bound := k.dotBound
 	runs := map[int]halfRun{}
 	for i := range k.Nodes {
 		used := bound(i)

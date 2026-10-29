@@ -59,6 +59,9 @@ type Kernel struct {
 	// loop's rows across lanes (Jam) they refused, Uncursored one whose
 	// form walking its buffers' addresses (Cursors) they refused.
 	Unpaired, Unwide, Uncursored bool
+	// Split is a kernel whose byte dots' runs HalfSplit cut, Unsplit one of
+	// a part whose cut form the registers refused.
+	Split, Unsplit bool
 	// Unstreamed is a kernel of a part whose form walking a weight's planes
 	// along the rows (Streams) the registers refused. Crowded is one whose
 	// walk of every plane in one rows loop they refused: its walk takes the
