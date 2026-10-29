@@ -32,7 +32,7 @@ func (s GroupExtreme) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	T, E := n.Loops[c].Trip, n.Elements()
-	if T <= s.Trips || T >= 1<<24 || d.Slots > 0 && E*ir.SubgroupLanes > d.Slots {
+	if T <= s.Trips || T >= 1<<24 || d.Slots > 0 && E >= d.Slots {
 		return nil, false, nil
 	}
 	G := ir.SubgroupLanes
