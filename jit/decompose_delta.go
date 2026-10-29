@@ -124,6 +124,8 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 	val := w.load(0, ix)
 	to := w.op(OpAdd, U, w.recSlot(1, 2, slotLen(o, N)), ix)
 	desc := func(j int) Facts { return Facts{Extents: map[int]int{0: N, j: 3}} }
+	whole := desc(1)
+	whole.Whole = true
 	var ps []Prim
 	if a.Additive {
 		ps = append(ps, Prim{Kind: PrimMap, Shape: sh[:3], In: []Operand{v, beta}, Out: delta, Expr: e.e})
@@ -135,7 +137,7 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 	return append(ps,
 		Prim{Kind: PrimMap, Shape: sh, In: []Operand{tableRecState, k, delta, decay, tableRecRows}, Out: next, Expr: u.e, Facts: desc(4)},
 		Prim{Kind: PrimReduce, Shape: sh, In: []Operand{next, q}, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: y.e},
-		Prim{Kind: PrimMap, Shape: []int{H * Dv, Dk}, In: []Operand{next, tableRecRows}, Expr: w.e, Facts: desc(1),
+		Prim{Kind: PrimMap, Shape: []int{H * Dv, Dk}, In: []Operand{next, tableRecRows}, Expr: w.e, Facts: whole,
 			Stores: []PrimStore{{Out: tableRecStateOut, Index: to, Value: val, Extent: N}}},
 	), nil
 }

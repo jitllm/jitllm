@@ -25,7 +25,9 @@ import (
 // selection names and the grouped rows projected on the matrix unit, over
 // the packed formats of the served mixtures, a selection that leaves
 // experts without a pair and gives one most of them, at calls of 1 to the
-// capacity's rows. Each pair must match the oracle's matvec of its row
+// capacity's rows, and a bank of as many experts as the capacity's rows
+// (olmoe's 64 at a 64-row chunk), whose grouping no call's rows may cut.
+// Each pair must match the oracle's matvec of its row
 // against its expert's sheet, a call must write no pair of a row past its
 // own and nothing past the result, and a kernel must multiply tiles. Two
 // violations must fail: every pair's expert moved by one, and a pair's
@@ -37,8 +39,7 @@ func TestComposedGPUExperts(t *testing.T) {
 	if len(devs) == 0 {
 		t.Skip("no device here multiplies binary16 tiles")
 	}
-	const guard, capacity, E, P, K, rows = 64, 100, 8, 2, 256, 96
-	calls := []int{1, 17, 64, capacity}
+	const guard, P, K, rows = 64, 2, 256, 96
 	names := slices.Sorted(func(yield func(string) bool) {
 		for n := range devs {
 			if !yield(n) {
@@ -48,125 +49,135 @@ func TestComposedGPUExperts(t *testing.T) {
 	})
 	for _, name := range names {
 		d := devs[name]
-		t.Run(name, func(t *testing.T) {
-			dev := gpuDevice(d)
-			dev.Matrix = [3]int{matrixTile.M, matrixTile.N, matrixTile.K}
-			rng := rand.New(rand.NewSource(71))
-			ran := 0
-			for _, typ := range []quant.Type{quant.Q8_0, quant.Q4_K, quant.Q6_K, quant.MXFP4} {
-				what := fmt.Sprintf("%v", typ)
-				jt, ok := jlm.TypeOf(typ)
-				q, qok := kernels.QuantOf(typ)
-				if !ok || !qok {
-					t.Fatalf("%v has no container type or kernel format", typ)
-				}
-				sheets := make([][]byte, E)
-				var planes [3][]uint32
-				for e := range sheets {
-					sheets[e] = expertWeights(typ, q, rows, K, rng)
-					qs, dw, sc, err := kernels.PackWeights(q, sheets[e], rows, K)
-					if err != nil {
-						t.Fatal(err)
+		for _, bank := range []struct{ capacity, E int }{{100, 8}, {64, 64}} {
+			capacity, E := bank.capacity, bank.E
+			calls := []int{1, 17, 64}
+			if capacity != 64 {
+				calls = append(calls, capacity)
+			}
+			t.Run(fmt.Sprintf("%s/%dx%d", name, capacity, E), func(t *testing.T) {
+				dev := gpuDevice(d)
+				dev.Matrix = [3]int{matrixTile.M, matrixTile.N, matrixTile.K}
+				rng := rand.New(rand.NewSource(71))
+				ran := 0
+				for _, typ := range []quant.Type{quant.Q8_0, quant.Q4_K, quant.Q6_K, quant.MXFP4} {
+					what := fmt.Sprintf("%v", typ)
+					jt, ok := jlm.TypeOf(typ)
+					q, qok := kernels.QuantOf(typ)
+					if !ok || !qok {
+						t.Fatalf("%v has no container type or kernel format", typ)
 					}
-					planes[0], planes[1], planes[2] = append(planes[0], qs...), append(planes[1], dw...), append(planes[2], sc...)
-				}
-				for i := range planes {
-					if len(planes[i]) == 0 {
-						planes[i] = []uint32{0}
-					}
-				}
-				b := graph.New()
-				x := b.In("x", P*K)
-				sel := b.In("sel", P)
-				b.G.Values[sel].Elem = graph.ElemU32
-				y := b.Emit(graph.OpExpertMatVec, []graph.ValueID{x, sel}, []graph.Result{{Name: "y", Width: P * rows}},
-					[]graph.Binding{{Role: jlm.RoleExpGateBank, K: K, Rows: rows, Sheets: E}}, graph.Attrs{}, nil, nil)
-				b.Out(y[0])
-				_, formed, err := jit.Default().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleExpGateBank: jt},
-					Step: jit.Step{Rows: capacity, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
-				if err != nil {
-					t.Fatalf("%s: forming: %v", what, err)
-				}
-				tiles := 0
-				for _, c := range formed {
-					for _, o := range c.GPU.Ops {
-						if o.Kind == ir.OpTileMMA {
-							tiles++
-						}
-					}
-				}
-				if tiles == 0 {
-					t.Fatalf("%s: no kernel was formed on the matrix unit", what)
-				}
-				op, err := compileLone(d, formed)
-				if err != nil {
-					t.Fatalf("%s: %v", what, err)
-				}
-				xs := make([]float32, capacity*P*K)
-				for i := range xs {
-					xs[i] = float32(rng.NormFloat64())
-				}
-				// Experts 5 and 6 take no pair; expert 2 takes most.
-				pick := []uint32{0, 1, 2, 2, 2, 2, 3, 4, 7, 2}
-				sels := make([]uint32, capacity*P)
-				for i := range sels {
-					sels[i] = pick[rng.Intn(len(pick))]
-				}
-				want := func(shift uint32) []float32 {
-					out := make([]float32, capacity*P*rows)
-					for s := range capacity * P {
-						e := (sels[s] + shift) % E
-						if err := oracle.MatVec(out[s*rows:(s+1)*rows], typ, sheets[e], xs[s*K:(s+1)*K], rows, K); err != nil {
+					sheets := make([][]byte, E)
+					var planes [3][]uint32
+					for e := range sheets {
+						sheets[e] = expertWeights(typ, q, rows, K, rng)
+						qs, dw, sc, err := kernels.PackWeights(q, sheets[e], rows, K)
+						if err != nil {
 							t.Fatal(err)
 						}
+						planes[0], planes[1], planes[2] = append(planes[0], qs...), append(planes[1], dw...), append(planes[2], sc...)
 					}
-					return out
-				}
-				ref := want(0)
-				run := func(L int) []float32 {
-					n := capacity * P * rows
-					res, tail, err := runExperts(d, formed, op.kerns, x, sel, y[0], xs, sels, n, guard, planes, L)
+					for i := range planes {
+						if len(planes[i]) == 0 {
+							planes[i] = []uint32{0}
+						}
+					}
+					b := graph.New()
+					x := b.In("x", P*K)
+					sel := b.In("sel", P)
+					b.G.Values[sel].Elem = graph.ElemU32
+					y := b.Emit(graph.OpExpertMatVec, []graph.ValueID{x, sel}, []graph.Result{{Name: "y", Width: P * rows}},
+						[]graph.Binding{{Role: jlm.RoleExpGateBank, K: K, Rows: rows, Sheets: E}}, graph.Attrs{}, nil, nil)
+					b.Out(y[0])
+					_, formed, err := jit.Default().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleExpGateBank: jt},
+						Step: jit.Step{Rows: capacity, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
+					if err != nil {
+						t.Fatalf("%s: forming: %v", what, err)
+					}
+					tiles := 0
+					for _, c := range formed {
+						for _, o := range c.GPU.Ops {
+							if o.Kind == ir.OpTileMMA {
+								tiles++
+							}
+						}
+					}
+					if tiles == 0 {
+						t.Fatalf("%s: no kernel was formed on the matrix unit", what)
+					}
+					op, err := compileLone(d, formed)
 					if err != nil {
 						t.Fatalf("%s: %v", what, err)
 					}
-					for i, v := range res[L*P*rows:] {
-						if math.Float32bits(v) != guardWord {
-							t.Fatalf("%s: a call of %d rows wrote row %d's element %d", what, L, L+i/(P*rows), i%(P*rows))
+					xs := make([]float32, capacity*P*K)
+					for i := range xs {
+						xs[i] = float32(rng.NormFloat64())
+					}
+					// Experts 5 and 6 take no pair; expert 2 takes most.
+					pick := []uint32{0, 1, 2, 2, 2, 2, 3, 4, 7, 2}
+					if E > 8 {
+						pick = append(pick, uint32(E/2), uint32(E-1))
+					}
+					sels := make([]uint32, capacity*P)
+					for i := range sels {
+						sels[i] = pick[rng.Intn(len(pick))]
+					}
+					want := func(shift uint32) []float32 {
+						out := make([]float32, capacity*P*rows)
+						for s := range capacity * P {
+							e := (sels[s] + shift) % uint32(E)
+							if err := oracle.MatVec(out[s*rows:(s+1)*rows], typ, sheets[e], xs[s*K:(s+1)*K], rows, K); err != nil {
+								t.Fatal(err)
+							}
+						}
+						return out
+					}
+					ref := want(0)
+					run := func(L int) []float32 {
+						n := capacity * P * rows
+						res, tail, err := runExperts(d, formed, op.kerns, x, sel, y[0], xs, sels, n, guard, planes, L)
+						if err != nil {
+							t.Fatalf("%s: %v", what, err)
+						}
+						for i, v := range res[L*P*rows:] {
+							if math.Float32bits(v) != guardWord {
+								t.Fatalf("%s: a call of %d rows wrote row %d's element %d", what, L, L+i/(P*rows), i%(P*rows))
+							}
+						}
+						for i, v := range tail {
+							if v != guardWord {
+								t.Fatalf("%s: the guard word %d past the result was written", what, i)
+							}
+						}
+						return res[:L*P*rows]
+					}
+					worst := 0.0
+					for _, L := range calls {
+						e := gpuNMSE(run(L), ref[:L*P*rows])
+						if math.IsNaN(e) || !(e < 2e-6) {
+							t.Fatalf("%s: a call of %d rows reads NMSE %.3e against the oracle", what, L, e)
+						}
+						worst = max(worst, e)
+					}
+					if ran == 0 {
+						for _, c := range formed {
+							t.Logf("%s: %s, %d workgroups of %d, passes %v", what, c.Name, c.Groups, c.GPU.Group[0], c.Passes)
 						}
 					}
-					for i, v := range tail {
-						if v != guardWord {
-							t.Fatalf("%s: the guard word %d past the result was written", what, i)
-						}
+					t.Logf("%s: worst NMSE %.3e", what, worst)
+					got := run(capacity)
+					if e := gpuNMSE(got, want(1)); !(e > 1e-2) {
+						t.Fatalf("%s: against every pair's next expert the NMSE is %.3e: the gate cannot see the experts", what, e)
 					}
-					return res[:L*P*rows]
-				}
-				worst := 0.0
-				for _, L := range calls {
-					e := gpuNMSE(run(L), ref[:L*P*rows])
-					if math.IsNaN(e) || !(e < 2e-6) {
-						t.Fatalf("%s: a call of %d rows reads NMSE %.3e against the oracle", what, L, e)
+					if e := gpuNMSE(got[:len(got)-rows], ref[rows:]); !(e > 1e-2) {
+						t.Fatalf("%s: against the next pair's reference the NMSE is %.3e: the gate cannot see the pairs", what, e)
 					}
-					worst = max(worst, e)
+					op.close()
+					ran++
 				}
-				if ran == 0 {
-					for _, c := range formed {
-						t.Logf("%s: %s, %d workgroups of %d, passes %v", what, c.Name, c.Groups, c.GPU.Group[0], c.Passes)
-					}
-				}
-				t.Logf("%s: worst NMSE %.3e", what, worst)
-				got := run(capacity)
-				if e := gpuNMSE(got, want(1)); !(e > 1e-2) {
-					t.Fatalf("%s: against every pair's next expert the NMSE is %.3e: the gate cannot see the experts", what, e)
-				}
-				if e := gpuNMSE(got[:len(got)-rows], ref[rows:]); !(e > 1e-2) {
-					t.Fatalf("%s: against the next pair's reference the NMSE is %.3e: the gate cannot see the pairs", what, e)
-				}
-				op.close()
-				ran++
-			}
-			t.Logf("%s: %d expert matvecs grouped onto the matrix unit, held to the oracle at calls of %v rows", name, ran, calls)
-		})
+				t.Logf("%s: %d expert matvecs grouped onto the matrix unit, held to the oracle at calls of %v rows", name, ran, calls)
+			})
+		}
 	}
 }
 

@@ -463,6 +463,7 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 			k := key(&x, s)
 			same(&x, k, e)
 			in, f := keyed()
+			f.Whole = true
 			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E, Q}, In: in, Out: count, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
 		}
 		{
@@ -470,7 +471,7 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 			e, f := x.coord(0), x.coord(1)
 			run := x.op(OpAnd, U, x.op(OpAdd, U, x.at(0, []int{E}, f), x.u(uint32(G-1))), x.u(^uint32(G-1)))
 			x.sel(U, less(&x, f, e), run, x.u(0))
-			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E + 1, E}, In: []Operand{count}, Out: start, Combine: OpAdd, Type: U, Expr: x.e})
+			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{E + 1, E}, In: []Operand{count}, Out: start, Combine: OpAdd, Type: U, Expr: x.e, Facts: Facts{Whole: true}})
 		}
 		// A pair's rank is its expert's pairs in the blocks of BQ pairs
 		// before its own (each block's count of each expert, then their sum
@@ -485,13 +486,14 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 			kt := key(&x, x.op(OpMin, U, t, x.u(uint32(Q-1))))
 			x.sel(U, less(&x, t, x.u(uint32(Q))), same(&x, kt, e), x.u(0))
 			in, f := keyed()
+			f.Whole = true
 			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{nb, E, BQ}, In: in, Out: blockCount, Combine: OpAdd, Type: U, Expr: x.e, Facts: f})
 		}
 		{
 			var x exprs
 			b, e, b2 := x.coord(0), x.coord(1), x.coord(2)
 			x.sel(U, less(&x, b2, b), x.at(0, []int{nb, E}, b2, e), x.u(0))
-			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{nb, E, nb}, In: []Operand{blockCount}, Out: blockStart, Combine: OpAdd, Type: U, Expr: x.e})
+			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{nb, E, nb}, In: []Operand{blockCount}, Out: blockStart, Combine: OpAdd, Type: U, Expr: x.e, Facts: Facts{Whole: true}})
 		}
 		{
 			var x exprs
@@ -526,14 +528,14 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 			first := x.op(OpShl, U, x.op(OpMin, U, b, used), x.u(uint32(bitsOf(G))))
 			x.sel(U, less(&x, first, x.load(0, x.op(OpAdd, U, e, x.u(1)))), x.u(0), x.u(1))
 			prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{most / G, E}, In: []Operand{start}, Out: block, Combine: OpAdd, Type: U,
-				Expr: x.e, Facts: Facts{Extents: map[int]int{0: E + 1}}})
+				Expr: x.e, Facts: Facts{Extents: map[int]int{0: E + 1}, Whole: true}})
 		}
 	}
 	{
 		var x exprs
 		p, row, col := x.coord(0), x.coord(1), x.coord(2)
 		in := []Operand{c.value(o.In[0]), block, start, count, table}
-		facts := Facts{Extents: map[int]int{0: R * W}}
+		facts := Facts{Extents: map[int]int{0: R * W}, Whole: true}
 		grouping(1, &facts)
 		s := pairOf(&x, p, 1)
 		r, j := x.op(OpDiv, U, s, x.u(uint32(P))), x.op(OpRem, U, s, x.u(uint32(P)))
@@ -556,7 +558,7 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 		var x exprs
 		p, row := x.coord(0), x.coord(1)
 		in := []Operand{grouped, block, start, count, table}
-		facts := Facts{Extents: map[int]int{}}
+		facts := Facts{Extents: map[int]int{}, Whole: true}
 		grouping(1, &facts)
 		s := pairOf(&x, p, 1)
 		v := x.at(0, []int{most, rows}, rowOf(&x, p, 1), row)

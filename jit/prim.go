@@ -193,6 +193,10 @@ type Facts struct {
 	// Pick, where set, says the primitive's elements are rows a selection
 	// names of a matrix's: its sums are cut as the form over every row's.
 	Pick *Pick
+	// Whole says the leading axis is not the step's rows, whatever its
+	// extent (a bank's experts, a grouping's blocks): every element is
+	// computed at any count of the call's rows.
+	Whole bool
 }
 
 // Pick is a selection of Rows of a matrix's Of rows, along an element axis.
