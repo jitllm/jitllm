@@ -317,10 +317,10 @@ func (k *Kernel) apart(s, r, g int, chain []int, acc int) {
 	k.compact()
 }
 
-// byteDotRun is the most byte dots in one chain of integer sums node x
-// reads: a trip's integer sub-reduction.
+// byteDotRun is the byte dots node x reads, whether they chain or their
+// sums add: a trip's integer sub-reduction.
 func (k *Kernel) byteDotRun(x int) int {
-	best := 0
+	n := 0
 	seen := map[int]bool{}
 	var walk func(i int)
 	walk = func(i int) {
@@ -333,11 +333,7 @@ func (k *Kernel) byteDotRun(x int) int {
 			return
 		}
 		if nd.Op.byteDot() {
-			n := 0
-			for c := i; k.Nodes[c].Op.byteDot(); c = k.Nodes[c].C {
-				n++
-			}
-			best = max(best, n)
+			n++
 		}
 		var buf [3]int
 		for _, a := range k.args(i, &buf) {
@@ -345,7 +341,7 @@ func (k *Kernel) byteDotRun(x int) int {
 		}
 	}
 	walk(x)
-	return best
+	return n
 }
 
 // StreamWords loads the words a loop of rows reads that the sub-blocks'
