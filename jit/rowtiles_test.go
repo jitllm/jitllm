@@ -162,6 +162,7 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 // untiled form for few rows (which must be formed there), elsewhere through
 // the tiled form alone. The input's rows moved by one must part a call from
 // the capacity's: the comparison sees a row that is not its own.
+// FloatTiles is removed: it takes a float32 projection over rows first.
 func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
 	testlock.GPU(t)
 	devs := backend.Open()
@@ -184,7 +185,7 @@ func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
 			in := b.In("x", k)
 			out := b.MatVec(in, jlm.RoleOutput, n)
 			b.Out(out)
-			_, formed, err := jit.Default().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jlm.TypeF32},
+			_, formed, err := withoutFloatTiles(jit.Default()).Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jlm.TypeF32},
 				Step: jit.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
 			if err != nil {
 				t.Fatal(err)
@@ -236,6 +237,16 @@ func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
 	}
 }
 
+func withoutFloatTiles(r *jit.Registry) *jit.Registry {
+	p := r.Profiles[jit.DeviceGPU]
+	p.Passes = slices.DeleteFunc(slices.Clone(p.Passes), func(x jit.Pass) bool {
+		_, ok := x.(jit.FloatTiles)
+		return ok
+	})
+	r.Profiles[jit.DeviceGPU] = p
+	return r
+}
+
 // tiledWeights is rows of k of t, random, with finite scales near one.
 func tiledWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	if t == quant.F32 {
@@ -271,6 +282,7 @@ func tiledWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []
 // fail: the weight's words moved by one, the input's rows moved by one, and
 // a call stating one row more than its input holds (the threads past the
 // call's rows not held).
+// FloatTiles is removed: it takes a float32 projection over rows first.
 func TestComposedGPURowTiles(t *testing.T) {
 	testlock.GPU(t)
 	devs := backend.Open()
@@ -318,7 +330,7 @@ func TestComposedGPURowTiles(t *testing.T) {
 					x[i] = float32(rng.NormFloat64() * math.Exp2(float64(rng.Intn(9)-4)))
 				}
 				for _, float := range []bool{false, true} {
-					r := jit.Default()
+					r := withoutFloatTiles(jit.Default())
 					if float {
 						r = r.WithoutInt8(jit.DeviceGPU)
 					}
