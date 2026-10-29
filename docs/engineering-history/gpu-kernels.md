@@ -11213,3 +11213,8 @@ row where the composer's reads two.
   are one twelve-bit field, and a pair of halves is dealt back by one byte permute (ir.OpPackHalves): the 8B gate projection's loop 883 -> 783 instructions a trip
   (main's 738). V100, kernels a 2048-token prompt: 8B matrix 462 -> 414 ms (main 418), 30B all kernels 503 (main 531). Server TTFT over tuned main at 512/1024/2048,
   two rotations: Llama-3.1-8B 0.970-0.976 (was 1.05), Qwen3-30B-A3B 0.90-0.93; answers equal.
+- A strided weight stream's prefetch runs at most eight lines ahead (Ahead.Lines, an L1 set's ways: a row group's words are
+  RowStr apart and share one set); two trips put Q4_K's 64 words ahead. HalfSplit cuts a byte dot chain past its int16 bound
+  into further runs (Q6_K without VNNI). One E5-2680 v4 core, 64 tokens, GMAC/s against main's stationary GEMM:
+  Q4_K 24.7 -> 33 (main 58), Q6_K 15.9 -> 21.3 (43), Q8_0 29 -> 37 (27). Node 0, composed/main, two passes (A/A 0.99-1.03):
+  pp512 Llama-3.2-1B Q4_K_M 0.480/0.465 -> 0.558/0.543, Qwen3-0.6B Q8_0 0.805/0.810 -> 0.837/0.847; tg 0.945 -> 0.964, 1.041 -> 1.046.
