@@ -38,7 +38,7 @@ func (p Simplify) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		changed := false
 		for {
-			step := m.cse(false)
+			step := m.cse(m.streamed())
 			step = m.foldDecided() || step
 			step = m.dropUnitLoops() || step
 			step = m.dropEmptyLoops() || step
