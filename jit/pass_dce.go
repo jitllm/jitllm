@@ -1,5 +1,7 @@
 package jit
 
+import "slices"
+
 // DeadStores drops the stores that no kernel of the part reads: of a
 // decomposition's temporaries, and of the graph's values it does not hand
 // back -- a norm's float row once its consumers read the int8 form a
@@ -34,6 +36,9 @@ func (p DeadStores) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		if len(keep) == len(k.Stores) {
 			return nil, false, nil
+		}
+		if !slices.ContainsFunc(keep, func(s Store) bool { return !s.Barrier }) {
+			return nil, true, nil
 		}
 		m := k.clone()
 		m.Stores = keep

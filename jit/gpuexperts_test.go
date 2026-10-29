@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -39,7 +40,7 @@ func TestComposedGPUExperts(t *testing.T) {
 	if len(devs) == 0 {
 		t.Skip("no device here multiplies binary16 tiles")
 	}
-	const guard, P, K, rows = 64, 2, 256, 96
+	const guard, P, rows = 64, 2, 96
 	names := slices.Sorted(func(yield func(string) bool) {
 		for n := range devs {
 			if !yield(n) {
@@ -49,13 +50,16 @@ func TestComposedGPUExperts(t *testing.T) {
 	})
 	for _, name := range names {
 		d := devs[name]
-		for _, bank := range []struct{ capacity, E int }{{100, 8}, {64, 64}} {
-			capacity, E := bank.capacity, bank.E
+		for _, bank := range []struct {
+			capacity, E, K int
+			tiled          bool
+		}{{100, 8, 256, false}, {64, 64, 256, false}, {100, 8, 2048, false}, {100, 8, 256, true}} {
+			capacity, E, K, tiled := bank.capacity, bank.E, bank.K, bank.tiled
 			calls := []int{1, 17, 64}
 			if capacity != 64 {
 				calls = append(calls, capacity)
 			}
-			t.Run(fmt.Sprintf("%s/%dx%d", name, capacity, E), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/%dx%dx%d/tiled=%v", name, capacity, E, K, tiled), func(t *testing.T) {
 				dev := gpuDevice(d)
 				dev.Matrix = [3]int{matrixTile.M, matrixTile.N, matrixTile.K}
 				rng := rand.New(rand.NewSource(71))
@@ -82,23 +86,40 @@ func TestComposedGPUExperts(t *testing.T) {
 						}
 					}
 					b := graph.New()
-					x := b.In("x", P*K)
+					var x, in graph.ValueID
+					if tiled {
+						x = b.In("x", K)
+						in = b.Emit(graph.OpTile, []graph.ValueID{x}, []graph.Result{{Name: "x.tiled", Width: P * K}}, nil, graph.Attrs{Span: K}, nil, nil)[0]
+					} else {
+						x = b.In("x", P*K)
+						in = x
+					}
 					sel := b.In("sel", P)
 					b.G.Values[sel].Elem = graph.ElemU32
-					y := b.Emit(graph.OpExpertMatVec, []graph.ValueID{x, sel}, []graph.Result{{Name: "y", Width: P * rows}},
+					y := b.Emit(graph.OpExpertMatVec, []graph.ValueID{in, sel}, []graph.Result{{Name: "y", Width: P * rows}},
 						[]graph.Binding{{Role: jlm.RoleExpGateBank, K: K, Rows: rows, Sheets: E}}, graph.Attrs{}, nil, nil)
 					b.Out(y[0])
 					for _, tile := range gpuMatrixTiles() {
 						td := dev
 						td.Tile = tile
+						if tiled {
+							// The halves kernel's, which reads the tile's rows.
+							td.Tile.Convert = -1
+						}
 						what := fmt.Sprintf("%v at %v", typ, tile)
 						_, formed, err := poisonedRegistry().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleExpGateBank: jt},
 							Step: jit.Step{Rows: capacity, Page: 64, Keys: 1, ActWindow: 32}, Device: td})
 						if err != nil {
 							t.Fatalf("%s: forming: %v", what, err)
 						}
-						tiles := 0
+						tiles, cuts, byRow := 0, 0, 0
 						for _, c := range formed {
+							if strings.HasSuffix(c.Name, ".combine") {
+								cuts++
+							}
+							if strings.HasSuffix(c.Name, ".halves") && c.Groups*c.GPU.Group[0] == capacity*K/2 {
+								byRow++
+							}
 							if c.Matrix != [2]int{} && !threadsAtTile(c, tile) {
 								t.Fatalf("%s: the matrix kernel's workgroup of %d threads is not the tile's", what, c.GPU.Group[0])
 							}
@@ -111,6 +132,12 @@ func TestComposedGPUExperts(t *testing.T) {
 						if tiles == 0 {
 							t.Fatalf("%s: no kernel was formed on the matrix unit", what)
 						}
+						if tiled && byRow == 0 {
+							t.Fatalf("%s: the tiled input's halves are not its %d rows'", what, capacity)
+						}
+						if K > 256 && cuts == 0 {
+							t.Fatalf("%s: k of %d over %d experts' blocks: the model cut no projection", what, K, E)
+						}
 						op, err := compileLone(d, formed)
 						if err != nil {
 							t.Fatalf("%s: %v", what, err)
@@ -118,6 +145,16 @@ func TestComposedGPUExperts(t *testing.T) {
 						xs := make([]float32, capacity*P*K)
 						for i := range xs {
 							xs[i] = float32(rng.NormFloat64())
+						}
+						xin := xs
+						if tiled {
+							xin = make([]float32, capacity*K)
+							for r := range capacity {
+								copy(xin[r*K:(r+1)*K], xs[r*P*K:r*P*K+K])
+								for j := 1; j < P; j++ {
+									copy(xs[(r*P+j)*K:(r*P+j+1)*K], xin[r*K:(r+1)*K])
+								}
+							}
 						}
 						// Experts 5 and 6 take no pair; expert 2 takes most.
 						pick := []uint32{0, 1, 2, 2, 2, 2, 3, 4, 7, 2}
@@ -141,7 +178,7 @@ func TestComposedGPUExperts(t *testing.T) {
 						ref := want(0)
 						run := func(L int) []float32 {
 							n := capacity * P * rows
-							res, tail, err := runExperts(d, formed, op.kerns, x, sel, y[0], xs, sels, n, guard, planes, L)
+							res, tail, err := runExperts(d, formed, op.kerns, x, sel, y[0], xin, sels, n, guard, planes, L)
 							if err != nil {
 								t.Fatalf("%s: %v", what, err)
 							}

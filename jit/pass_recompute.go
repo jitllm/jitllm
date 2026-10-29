@@ -102,8 +102,8 @@ func recomputed(ks []*Kernel, i int) ([]int, bool) {
 			if nd.Op == OpLoad && c.Bufs[nd.Buf].Operand == o {
 				reads++
 			}
-			if nd.Op == OpLoad && c.Bufs[nd.Buf].Operand == o && (nd.Ax != nil && (len(nd.Ax) != len(pk.Space) || nd.Imm != 0) ||
-				nd.Ax == nil && c.Bufs[nd.Buf].Shape != nil && !slices.Equal(c.Bufs[nd.Buf].Shape, pk.Space)) {
+			if sh := c.Bufs[nd.Buf].Shape; nd.Op == OpLoad && c.Bufs[nd.Buf].Operand == o && (nd.Ax != nil && (len(nd.Ax) != len(pk.Space) || nd.Imm != 0) ||
+				sh != nil && !slices.Equal(sh, pk.Space)) {
 				return nil, false
 			}
 		}

@@ -41,11 +41,15 @@ import (
 // k. Where the workgroups leave units idle, k is cut into Split segments
 // (splits): each writes its sums to planes, and a combine sums them and
 // stores, at Launch for its launch and Plane a word it moves on one unit.
+// The stage converts the row's factor itself where the words the
+// workgroups read of it cost less than a halves kernel's launch and words
+// (rowCost); Convert, where set, states it (1) or not (-1).
 type Matrix struct {
 	Rows, Cols, Depth int
 	Warps             [2]int
 	Resident          int
 	Split             int
+	Convert           int
 	Tiles             []MatrixTile
 	Latency, Decode   int
 	Launch, Plane     int
@@ -53,21 +57,23 @@ type Matrix struct {
 
 // MatrixTile is one form of Matrix: a workgroup's rows, outputs and warps,
 // the elements of k a trip stages, the workgroups a unit holds, and the
-// segments k is cut in (0: the model's).
+// segments k is cut in (0: the model's), and whether the stage converts the
+// row's factor (Matrix.Convert).
 type MatrixTile struct {
 	Rows, Cols, Depth int
 	Warps             [2]int
 	Resident          int
 	Split             int
+	Convert           int
 }
 
 // Tile is p's own form.
 func (p Matrix) Tile() MatrixTile {
-	return MatrixTile{Rows: p.Rows, Cols: p.Cols, Depth: p.Depth, Warps: p.Warps, Resident: p.Resident, Split: p.Split}
+	return MatrixTile{Rows: p.Rows, Cols: p.Cols, Depth: p.Depth, Warps: p.Warps, Resident: p.Resident, Split: p.Split, Convert: p.Convert}
 }
 
 func (p Matrix) with(t MatrixTile) Matrix {
-	p.Rows, p.Cols, p.Depth, p.Warps, p.Resident, p.Split = t.Rows, t.Cols, t.Depth, t.Warps, t.Resident, t.Split
+	p.Rows, p.Cols, p.Depth, p.Warps, p.Resident, p.Split, p.Convert = t.Rows, t.Cols, t.Depth, t.Warps, t.Resident, t.Split, t.Convert
 	return p
 }
 
@@ -147,48 +153,134 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	if d.Matrix[0] == 0 {
 		return ks, nil
 	}
-	// made is the halves kernels formed, by what they compute: projections
-	// of one row factor (q, k and v of one normed input) read one.
+	// A row factor's cost both ways, by what a halves kernel of it
+	// computes: projections of one row factor (q, k and v of one normed
+	// input) read one.
+	type planned struct {
+		q   Matrix
+		f   bilinear
+		sig string
+	}
+	plans := map[*Kernel]planned{}
+	costs := map[string]*rowCost{}
+	for _, k := range ks {
+		q, f, ok := p.plan(k, d)
+		if !ok {
+			continue
+		}
+		h, _ := halves(k, f)
+		sig := h.computes()
+		c := costs[sig]
+		if c == nil {
+			c = newRowCost(k, f, d)
+			costs[sig] = c
+		}
+		c.add(k, q.Cols)
+		plans[k] = planned{q, f, sig}
+	}
 	made := map[string]Buf{}
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
-		p := p.chosen(k, d)
-		f, ok := p.bilinear(k, d)
+		pl, ok := plans[k]
 		if !ok {
 			return nil, false, nil
 		}
-		q := p
-		if f.block > 0 && f.block < p.Rows {
-			// A workgroup's rows within one block: as many rows fewer, as
-			// many warps fewer, each warp's share of the block the same, and
-			// as many more workgroups a unit. Its outputs stay the
-			// profile's: a wider workgroup would leave more of the last
-			// columns of a bank's sheets idle.
-			s := p.Rows / f.block
-			q.Rows, q.Warps, q.Resident = f.block, [2]int{p.Warps[0] / s, p.Warps[1]}, max(p.Resident, 1)*s
-			if q.Warps[0] == 0 || q.Rows%(q.Warps[0]*d.Matrix[0]) != 0 || q.Cols%(q.Warps[1]*d.Matrix[1]) != 0 {
-				return nil, false, nil
+		q := pl.q
+		if q.Convert == 0 {
+			q.Convert = -1
+			if c := costs[pl.sig]; c.convert < c.halves && q.regs(pl.f.depth, d)+c.regs(q, pl.f.depth) <= q.regBudget(d) {
+				q.Convert = 1
 			}
 		}
-		// A device whose workgroup memory does not hold the stage takes
-		// half the rows a workgroup, and half the warps along them, until
-		// it does.
-		for d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, q.Warps[0], d) > d.Shared &&
-			q.Warps[0] > 1 && q.Warps[0]%2 == 0 && q.Rows%2 == 0 {
-			q.Rows, q.Warps[0] = q.Rows/2, q.Warps[0]/2
-		}
-		if d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, q.Warps[0], d) > d.Shared {
-			return nil, false, nil
-		}
-		switch {
-		case q.Split > 0 && k.Loops[0].Trip%(f.depth*q.Split) != 0:
-			q.Split = 1
-		case q.Split == 0 && d.Units > 0:
-			q.Split, _ = q.splits(k, f.depth, d)
-		case q.Split == 0:
-			q.Split = 1
-		}
-		return q.form(k, d, f, made), true, nil
+		return q.form(k, d, pl.f, made), true, nil
 	})
+}
+
+// plan is k's form at p on d and its parts, false where the matrix unit
+// does not take it.
+func (p Matrix) plan(k *Kernel, d Device) (Matrix, bilinear, bool) {
+	p = p.chosen(k, d)
+	f, ok := p.bilinear(k, d)
+	if !ok {
+		return p, f, false
+	}
+	q := p
+	if f.block > 0 && f.block < p.Rows {
+		// A workgroup's rows within one block: as many rows fewer, as
+		// many warps fewer, each warp's share of the block the same, and
+		// as many more workgroups a unit. Its outputs stay the
+		// profile's: a wider workgroup would leave more of the last
+		// columns of a bank's sheets idle.
+		s := p.Rows / f.block
+		q.Rows, q.Warps, q.Resident = f.block, [2]int{p.Warps[0] / s, p.Warps[1]}, max(p.Resident, 1)*s
+		if q.Warps[0] == 0 || q.Rows%(q.Warps[0]*d.Matrix[0]) != 0 || q.Cols%(q.Warps[1]*d.Matrix[1]) != 0 {
+			return p, f, false
+		}
+	}
+	// A device whose workgroup memory does not hold the stage takes
+	// half the rows a workgroup, and half the warps along them, until
+	// it does.
+	for d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, q.Warps[0], d) > d.Shared &&
+		q.Warps[0] > 1 && q.Warps[0]%2 == 0 && q.Rows%2 == 0 {
+		q.Rows, q.Warps[0] = q.Rows/2, q.Warps[0]/2
+	}
+	if d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, q.Warps[0], d) > d.Shared {
+		return p, f, false
+	}
+	switch {
+	case q.Split > 0 && k.Loops[0].Trip%(f.depth*q.Split) != 0:
+		q.Split = 1
+	case q.Split == 0 && d.Units > 0:
+		q.Split, _ = q.splits(k, f.depth, d)
+	case q.Split == 0:
+		q.Split = 1
+	}
+	return q, f, true
+}
+
+// rowCost is the words a row factor costs its projections: written as
+// halves by a kernel of its own -- a launch, its inputs read once and its
+// halves written, then each workgroup reading its rows' halves -- or
+// converted in each workgroup's stage, each reading its rows' inputs.
+type rowCost struct {
+	halves, convert int
+	// elem is the words an element of the factor reads along the row and
+	// k, along those along k.
+	elem, along int
+}
+
+func newRowCost(k *Kernel, f bilinear, d Device) *rowCost {
+	row := k.dependsOn(func(nd Node) bool { return nd.Op == OpCoord && nd.A == 0 })
+	iter := k.dependsOn(func(nd Node) bool { return nd.Op == OpIter && nd.At == 0 })
+	c := &rowCost{}
+	for i, r := range k.reaches(f.row) {
+		if !r || k.Nodes[i].Op != OpLoad || !iter[i] {
+			continue
+		}
+		c.along++
+		if row[i] {
+			c.elem++
+		}
+	}
+	RK := k.Space[0] * k.Loops[0].Trip
+	if f.index > 0 {
+		RK = f.rows * k.Loops[0].Trip
+	}
+	c.halves = d.Launch + RK*c.elem + RK/2
+	return c
+}
+
+// add is a projection of k, cols outputs a workgroup, reading the factor.
+func (c *rowCost) add(k *Kernel, cols int) {
+	RK, groups := k.Space[0]*k.Loops[0].Trip, (k.Space[1]+cols-1)/cols
+	c.halves += RK / 2 * groups
+	c.convert += RK * c.elem * groups
+}
+
+// regs is the registers a thread of q holds besides regs' where its stage
+// converts the factor: the inputs' words a trip ahead, not its halves.
+func (c *rowCost) regs(q Matrix, depth int) int {
+	threads := 32 * q.Warps[0] * q.Warps[1]
+	return max(q.Rows*depth*(2*c.along-1)/(2*threads), 0)
 }
 
 // maxThreadRegs is the 32-bit registers a GPU thread addresses at most.
@@ -237,6 +329,9 @@ type bilinear struct {
 	// block, where set, is the rows of the blocks the output's factor reads
 	// the row in: it is a factor of the block of rows alone.
 	block int
+	// index, where set, is the node the row's factor reads its rows at,
+	// of rows of them (rowIndex).
+	index, rows int
 }
 
 func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
@@ -302,6 +397,7 @@ func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
 		}
 	}
 	f.row, f.out = x, y
+	f.index, f.rows = k.rowIndex(x)
 	if row[y] {
 		reach := k.reaches(y)
 		for i := range k.Nodes {
@@ -378,6 +474,26 @@ func (k *Kernel) readsFloatWeight(i int) bool {
 	return reach[i]
 }
 
+// rowIndex is the node row factor x reads the rows of a buffer at, and
+// the buffer's rows, where everything of x's the row reaches goes through
+// it and it is not the row itself: a grouped row's token. 0, 0 where not.
+func (k *Kernel) rowIndex(x int) (int, int) {
+	isRow := func(nd Node) bool { return nd.Op == OpCoord && nd.A == 0 }
+	row := k.dependsOn(isRow)
+	for i, r := range k.reaches(x) {
+		nd := k.Nodes[i]
+		sh := k.Bufs[nd.Buf].Shape
+		if !r || nd.Op != OpLoad || len(nd.Ax) < 2 || len(sh) != len(nd.Ax) || !row[nd.Ax[0]] || isRow(k.Nodes[nd.Ax[0]]) {
+			continue
+		}
+		ri := nd.Ax[0]
+		if !k.dependsOnCut(isRow, func(i int) bool { return i == ri })[x] {
+			return ri, sh[0]
+		}
+	}
+	return 0, 0
+}
+
 // halves is a kernel writing the factor of the row of k as binary16 pairs,
 // a word of a row a thread, into a buffer of R rows of K/2 words, and that
 // buffer: the factor is rounded once, not once a workgroup of outputs, and a
@@ -385,13 +501,16 @@ func (k *Kernel) readsFloatWeight(i int) bool {
 func halves(k *Kernel, f bilinear) (*Kernel, Buf) {
 	U := ir.U32
 	R, W := k.Space[0], k.Loops[0].Trip/2
+	if f.index > 0 {
+		R = f.rows
+	}
 	// Named by what k stores, as a split names its planes: two
 	// projections of one form hold their own.
 	out := k.Bufs[k.Stores[0].Buf].Operand
 	b := Buf{Kind: BufOut, Elem: U, Shape: []int{R, W},
 		Operand: Operand{Kind: OperandScratch, Name: out.Name + ".halves", Elem: U, Temp: true, Of: out.Of}}
 	h := &Kernel{Name: k.Name + ".halves", Kind: PrimMap, Space: []int{R, W}, Part: k.Part, Apart: k.Apart, Of: k.Of, Capacity: k.Capacity}
-	if k.Rows > 0 {
+	if k.Rows > 0 && f.index == 0 {
 		h.Rows = copyInto(h, k, k.Rows-1, func(int, Node) (int, bool) { return 0, false }) + 1
 	}
 	r := h.add(Node{Op: OpCoord, A: 0, Type: U})
@@ -399,6 +518,8 @@ func halves(k *Kernel, f bilinear) (*Kernel, Buf) {
 	elem := func(at int) int {
 		return h.un(OpHalf, U, copyInto(h, k, f.row, func(i int, nd Node) (int, bool) {
 			switch {
+			case f.index > 0 && i == f.index:
+				return r, true
 			case nd.Op == OpCoord && nd.A == 0:
 				return r, true
 			case nd.Op == OpIter && nd.At == 0:
@@ -487,16 +608,21 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	// into: G elements a share, binary16 pairs a word. A thread's shares
 	// are its own, not a loop's, so what a trip's shares load is a value of
 	// the trip a later pass can load a trip ahead.
-	h, hb := halves(k, f)
-	sig := h.computes()
-	if b, ok := made[sig]; ok {
-		h, hb = nil, b
-	} else {
-		made[sig] = hb
-	}
 	W := k.Loops[0].Trip / 2
-	hb.Kind, hb.Shape, hb.Extent = BufIn, nil, R*W
-	hw := m.buf(hb)
+	var h *Kernel
+	hw := -1
+	if p.Convert < 0 {
+		var hb Buf
+		h, hb = halves(k, f)
+		sig := h.computes()
+		if b, ok := made[sig]; ok {
+			h, hb = nil, b
+		} else {
+			made[sig] = hb
+		}
+		hb.Kind, hb.Shape, hb.Extent = BufIn, nil, hb.Shape[0]*hb.Shape[1]
+		hw = m.buf(hb)
+	}
 	stage := func(l, kc, into, rows, axis, base, most, factor int) {
 		SK := SKA
 		if axis == 1 {
@@ -536,8 +662,12 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 				})
 			}
 			elem := func(at int) int { return m.un(OpHalf, U, copyAt(factor, at)) }
-			if axis == 0 {
-				at := m.bin(OpAdd, U, m.bin(OpMul, U, c, m.u32(W)), m.bin(OpShr, U, kg, m.u32(1)))
+			if axis == 0 && hw >= 0 {
+				ri := c
+				if f.index > 0 {
+					ri = copyAt(f.index, kg)
+				}
+				at := m.bin(OpAdd, U, m.bin(OpMul, U, ri, m.u32(W)), m.bin(OpShr, U, kg, m.u32(1)))
 				for e := 0; e < G/2; e++ {
 					v := m.add(Node{Op: OpLoad, Type: U, Buf: hw, A: m.bin(OpAdd, U, at, m.u32(e))})
 					m.Stores = append(m.Stores, Store{Buf: st, Ix: m.bin(OpAdd, U, word, m.u32(e)), Val: v, At: l})

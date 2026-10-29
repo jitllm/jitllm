@@ -11147,3 +11147,8 @@ row where the composer's reads two.
   V100, composed/main per projection, 8B at 512 rows: q/o 1.28, k/v 1.52, gate/up 1.17, down 1.23; 30B at 2048: router
   1.85, the activations' binary16 kernel half of it. TTFT over the parent: Qwen3-30B-A3B 0.92-0.95, Llama-3.1-8B
   over main 1.05-1.12 (parent 1.18-1.22). The 8B's answer changes at a tie main holds to 3 decimals.
+- A mixture's grouped projections read a pair's grouped row by gather (its run's start plus its rank), a tiled row as the row, and
+  their halves by the row a factor reads (rowIndex): Qwen3-30B-A3B's kernels a 2048-token prompt 933 -> 692 ms (main 539). The
+  stage converts a thin projection's row factor where the model says a halves kernel costs more words (Matrix.Convert). V100,
+  server TTFT composed/main at 512/1024/2048, two rotations: Qwen3-30B-A3B 1.22-1.28 (was 1.60-1.73), Llama-3.1-8B 1.06-1.14
+  (dense forms unchanged). Left: flash 130 vs 78 ms, the f32 router 117 vs 68, the eight slices' sum 58 vs 11.

@@ -1,6 +1,7 @@
 package jit_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -45,8 +46,9 @@ func TestMatrixTileFollowsTheModel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		found := false
+		found, halves := false, false
 		for _, cd := range codes {
+			halves = halves || strings.HasSuffix(cd.Name, ".halves")
 			if cd.Matrix == [2]int{} {
 				continue
 			}
@@ -66,6 +68,9 @@ func TestMatrixTileFollowsTheModel(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("%d outputs of %d: no kernel was formed on the matrix unit", c.n, c.k)
+		}
+		if convert := c.n <= 128; halves == convert {
+			t.Fatalf("%d outputs of %d: a halves kernel %v, the stage converting the row's factor %v", c.n, c.k, halves, convert)
 		}
 	}
 }

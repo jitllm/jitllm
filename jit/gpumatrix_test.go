@@ -222,12 +222,13 @@ func gpuMatrixTiles() []jit.MatrixTile {
 	return nil
 }
 
-// splitTiles is each tile with k whole and cut in four.
+// splitTiles is each tile with k whole and cut in four, the row's factor
+// written as halves first, and k whole with the factor converted in the stage.
 func splitTiles(tiles []jit.MatrixTile) []jit.MatrixTile {
 	var out []jit.MatrixTile
 	for _, t := range tiles {
-		for _, s := range []int{1, 4} {
-			t.Split = s
+		for _, c := range [][2]int{{1, -1}, {4, -1}, {1, 1}} {
+			t.Split, t.Convert = c[0], c[1]
 			out = append(out, t)
 		}
 	}

@@ -394,8 +394,9 @@ const rankBlock = 64
 // expert, a block past the runs the last run's; the projection of the
 // grouped rows, row p of a block the block's run's pair at p, or its last
 // where p is past them, against its expert's sheet -- a weight of the
-// block alone, which the matrix unit takes; and each grouped row's outputs
-// stored at its pair's. A pair of a row past the call's is in no run.
+// block alone, which the matrix unit takes; and each pair's outputs read
+// from its grouped row, its run's start plus its rank. A pair of a row past
+// the call's is in no run.
 func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, error) {
 	w := o.Weight[0]
 	E, P, K, rows := w.Sheets, pairsOf(o, c), w.K, w.Rows
@@ -443,13 +444,6 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 		used := x.op(OpSub, U, x.op(OpShr, U, x.load(at+1, x.u(uint32(E))), x.u(uint32(bitsOf(G)))), x.u(1))
 		q := x.op(OpAdd, U, x.op(OpShl, U, x.op(OpMin, U, b, used), x.u(uint32(bitsOf(G)))), x.op(OpAnd, U, p, x.u(uint32(G-1))))
 		return x.load(at+3, x.op(OpMin, U, q, end))
-	}
-	// rowOf is the grouped row p is read at: its own, or in a block past
-	// the runs the last run's block's.
-	rowOf := func(x *exprs, p, at int) int {
-		b := x.op(OpShr, U, p, x.u(uint32(bitsOf(G))))
-		used := x.op(OpSub, U, x.op(OpShr, U, x.load(at+1, x.u(uint32(E))), x.u(uint32(bitsOf(G)))), x.u(1))
-		return x.op(OpAdd, U, x.op(OpShl, U, x.op(OpMin, U, b, used), x.u(uint32(bitsOf(G)))), x.op(OpAnd, U, p, x.u(uint32(G-1))))
 	}
 	grouping := func(at int, f *Facts) {
 		maps.Copy(f.Extents, map[int]int{at: most / G, at + 1: E + 1, at + 2: E, at + 3: most + 1})
@@ -539,7 +533,17 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 		grouping(1, &facts)
 		s := pairOf(&x, p, 1)
 		r, j := x.op(OpDiv, U, s, x.u(uint32(P))), x.op(OpRem, U, s, x.u(uint32(P)))
-		xv := x.at(0, []int{R, W}, r, x.op(OpAdd, U, x.op(OpMul, U, j, x.u(uint32(stride))), col))
+		// A pair's row read as a row of pairs; a tile of a row a pair's
+		// width, as the row itself.
+		var xv int
+		if t := c.producer(o.In[0]); t != nil && t.Kind == graph.OpTile && t.Attr.Span == K && stride == K && c.width(t.In[0]) == K {
+			in[0], facts.Extents[0] = c.value(t.In[0]), R*K
+			xv = x.at(0, []int{R, K}, r, col)
+		} else if stride == K && W == P*K {
+			xv = x.at(0, []int{R * P, K}, s, col)
+		} else {
+			xv = x.at(0, []int{R, W}, r, x.op(OpAdd, U, x.op(OpMul, U, j, x.u(uint32(stride))), col))
+		}
 		e := x.load(1, x.op(OpShr, U, p, x.u(uint32(bitsOf(G)))))
 		sheet, held := pageOf(o, c, &x, &in, &facts, e)
 		wv, err := expertWeight(o, c, wo, &x, &in, &facts, sheet, held, row, col)
@@ -556,15 +560,14 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 	}
 	{
 		var x exprs
-		p, row := x.coord(0), x.coord(1)
-		in := []Operand{grouped, block, start, count, table}
-		facts := Facts{Extents: map[int]int{}, Whole: true}
-		grouping(1, &facts)
-		s := pairOf(&x, p, 1)
-		v := x.at(0, []int{most, rows}, rowOf(&x, p, 1), row)
-		ix := x.op(OpAdd, U, x.op(OpMul, U, s, x.u(uint32(rows))), row)
-		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{most, rows}, In: in, Expr: x.e, Facts: facts,
-			Stores: []PrimStore{{Out: out, Index: ix, Value: v, Extent: Q * rows}}})
+		r, c1 := x.coord(0), x.coord(1)
+		j, row := x.op(OpDiv, U, c1, x.u(uint32(rows))), x.op(OpRem, U, c1, x.u(uint32(rows)))
+		s := x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(P))), j)
+		e := x.op(OpMin, U, x.load(3, s), x.u(uint32(E-1)))
+		at := x.op(OpMin, U, x.op(OpAdd, U, x.load(1, e), x.load(2, s)), x.u(uint32(most-1)))
+		x.at(0, []int{most, rows}, at, row)
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, P * rows}, In: []Operand{grouped, start, rank, sel}, Out: out, Expr: x.e,
+			Facts: Facts{Extents: map[int]int{0: most * rows, 1: E + 1, 2: Q, 3: Q}}})
 	}
 	return prims, nil
 }
