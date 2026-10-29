@@ -208,7 +208,90 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 			read = true
 		}
 	}
-	return read && words <= p.Words
+	return read && words <= p.Words && !readsASlice(pr, c)
+}
+
+// readsASlice says a workgroup of c reads only part of what pr writes: a
+// load of it whose index differs between c's first and last workgroups,
+// each thread at its first trip, so every workgroup making the whole of it
+// repeats the producer's work for parts it never reads.
+func readsASlice(pr, c *Kernel) bool {
+	last := map[int]uint32{}
+	for a, x := range c.Space {
+		last[a] = uint32(x - 1)
+	}
+	for _, nd := range c.Nodes {
+		if nd.Op != OpLoad || nd.Ax != nil {
+			continue
+		}
+		for _, x := range pr.Bufs {
+			if x.Kind != BufOut || x.Operand != c.Bufs[nd.Buf].Operand {
+				continue
+			}
+			lo, ok0 := c.intAt(nd.A, nil)
+			hi, ok1 := c.intAt(nd.A, last)
+			if ok0 && ok1 && lo != hi {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// intAt is node i's u32 value at the coordinates coord gives (zero where
+// absent), every thread and trip at zero; false where it reads anything
+// else.
+func (k *Kernel) intAt(i int, coord map[int]uint32) (uint32, bool) {
+	nd := k.Nodes[i]
+	switch nd.Op {
+	case OpConst:
+		return uint32(nd.Imm), true
+	case OpCoord:
+		return coord[nd.A], true
+	case OpThread, OpIter:
+		return 0, true
+	}
+	a, ok := k.intAt(nd.A, coord)
+	if !ok {
+		return 0, false
+	}
+	b, ok := k.intAt(nd.B, coord)
+	if !ok {
+		return 0, false
+	}
+	switch nd.Op {
+	case OpAdd:
+		return a + b, true
+	case OpSub:
+		return a - b, true
+	case OpMul:
+		return a * b, true
+	case OpDiv:
+		if b == 0 {
+			return 0, false
+		}
+		return a / b, true
+	case OpRem:
+		if b == 0 {
+			return 0, false
+		}
+		return a % b, true
+	case OpMin:
+		return min(a, b), true
+	case OpMax:
+		return max(a, b), true
+	case OpShl:
+		return a << (b & 31), true
+	case OpShr:
+		return a >> (b & 31), true
+	case OpAnd:
+		return a & b, true
+	case OpOr:
+		return a | b, true
+	case OpXor:
+		return a ^ b, true
+	}
+	return 0, false
 }
 
 // readsOperand says k reads operand o.
