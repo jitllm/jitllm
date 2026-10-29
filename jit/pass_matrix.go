@@ -35,10 +35,81 @@ import (
 //
 // Resident is how many workgroups a unit is to hold at once, where their
 // threads and workgroup memory fit it: one's barrier is another's issue.
+// Tiles is the other forms the device's model weighs per projection
+// (cost); Latency is a round of a unit's resident workgroups' fixed cost and
+// Decode a weight row's staging, each in products of one output element.
 type Matrix struct {
 	Rows, Cols, Depth int
 	Warps             [2]int
 	Resident          int
+	Tiles             []MatrixTile
+	Latency, Decode   int
+}
+
+// MatrixTile is one form of Matrix: a workgroup's rows, outputs and warps,
+// the elements of k a trip stages, and the workgroups a unit holds.
+type MatrixTile struct {
+	Rows, Cols, Depth int
+	Warps             [2]int
+	Resident          int
+}
+
+// Tile is p's own form.
+func (p Matrix) Tile() MatrixTile {
+	return MatrixTile{Rows: p.Rows, Cols: p.Cols, Depth: p.Depth, Warps: p.Warps, Resident: p.Resident}
+}
+
+func (p Matrix) with(t MatrixTile) Matrix {
+	p.Rows, p.Cols, p.Depth, p.Warps, p.Resident = t.Rows, t.Cols, t.Depth, t.Warps, t.Resident
+	return p
+}
+
+// chosen is p at the tile d states, else at the form of p's the device's
+// model costs least for k (cost), p's own on a tie.
+func (p Matrix) chosen(k *Kernel, d Device) Matrix {
+	if d.Tile.Rows > 0 {
+		return p.with(d.Tile)
+	}
+	if d.Units == 0 || len(p.Tiles) == 0 {
+		return p
+	}
+	best, least := p, 0
+	for i, t := range append([]MatrixTile{p.Tile()}, p.Tiles...) {
+		q := p.with(t)
+		f, ok := q.bilinear(k, d)
+		if !ok || f.block > 0 {
+			if i == 0 {
+				return p
+			}
+			continue
+		}
+		if c := q.cost(k.Space[0], k.Space[1], f.depth, d); i == 0 || c < least {
+			best, least = q, c
+		}
+	}
+	return best
+}
+
+// cost is the model's time for R rows by N outputs at p: each unit runs its
+// share of the workgroups in rounds of those it holds at once, which share
+// its matrix unit, a round paying Latency besides their products and the
+// weight rows they decode.
+func (p Matrix) cost(R, N, depth int, d Device) int {
+	groups := (R + p.Rows - 1) / p.Rows * ((N + p.Cols - 1) / p.Cols)
+	share := (groups + d.Units - 1) / d.Units
+	held := min(share, p.resident(depth, d))
+	return (share + held - 1) / held * (p.Latency + held*(p.Rows*p.Cols+p.Decode*p.Cols))
+}
+
+// resident is the workgroups of p a unit holds at once on d: p.Resident
+// where their threads and stage fit it, else one.
+func (p Matrix) resident(depth int, d Device) int {
+	threads := 32 * p.Warps[0] * p.Warps[1]
+	stage := 4 * matrixStage(p.Rows, p.Cols, depth, d.Matrix[0], p.Warps[0])
+	if p.Resident > 1 && p.Resident*threads <= d.Slots/max(d.Units, 1) && (d.Shared == 0 || p.Resident*stage <= d.Shared) {
+		return p.Resident
+	}
+	return 1
 }
 
 func (Matrix) Name() string { return "matrix" }
@@ -51,6 +122,7 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	// of one row factor (q, k and v of one normed input) read one.
 	made := map[string]Buf{}
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
+		p := p.chosen(k, d)
 		f, ok := p.bilinear(k, d)
 		if !ok {
 			return nil, false, nil
@@ -283,6 +355,7 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	R, N := k.Space[0], k.Space[1]
 	m := k.clone()
 	m.Name, m.Kind = k.Name+".matrix", PrimMatrix
+	m.Matrix = [2]int{N, k.Loops[0].Trip}
 	m.Nodes, m.Loops, m.Stores, m.Rows = nil, nil, nil, 0
 	m.Space = []int{(R + TR - 1) / TR, (N + TN - 1) / TN}
 	m.Work, m.Group = true, 32*WR*WN

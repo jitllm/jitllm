@@ -31,7 +31,11 @@ func gpuProfile() Profile {
 		// its sum's fold joins nothing.
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
-		Matrix{Rows: 128, Cols: 64, Depth: 32, Warps: [2]int{2, 2}, Resident: 2},
+		Matrix{Rows: 128, Cols: 64, Depth: 32, Warps: [2]int{2, 2}, Resident: 2, Tiles: []MatrixTile{
+			{Rows: 128, Cols: 128, Depth: 32, Warps: [2]int{4, 2}, Resident: 1},
+			{Rows: 64, Cols: 64, Depth: 32, Warps: [2]int{2, 2}, Resident: 4},
+			{Rows: 128, Cols: 32, Depth: 32, Warps: [2]int{4, 1}, Resident: 2},
+		}, Latency: 12000, Decode: 16},
 		Prefetch{Except: []PrimKind{PrimMatrix}},
 		RowTiles{Rows: 16},
 		Threads{Group: 128},

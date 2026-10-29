@@ -58,6 +58,9 @@ type Device struct {
 	// staged in workgroup memory and carried across a loop (ir's tile ops):
 	// a reduction over several rows runs there (Matrix, the pass).
 	Matrix [3]int
+	// Tile, where set, is the matrix tile every projection takes in place
+	// of the one the model chooses (Matrix.chosen).
+	Tile MatrixTile
 	// HalfPairs is a device whose lowering runs packed binary16 arithmetic
 	// (OpSubF16x2, OpFmaF16x2).
 	HalfPairs bool

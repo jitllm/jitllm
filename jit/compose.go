@@ -82,6 +82,8 @@ type Code struct {
 	// the rows of the call its run descriptor names, whatever the call's
 	// rows.
 	Scan bool
+	// Matrix is Kernel.Matrix.
+	Matrix [2]int
 }
 
 // Writes reports whether the kernel writes operand o.
@@ -338,7 +340,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			errs = append(errs, fmt.Errorf("jit: lowering %s: %w", k.Name, err))
 			continue
 		}
-		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work, Few: k.Few, Many: k.Many, Scan: k.Kind == PrimScan}
+		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work, Few: k.Few, Many: k.Many, Scan: k.Kind == PrimScan, Matrix: k.Matrix}
 		if l.CPU != nil && !k.Work && k.Group <= 0 {
 			c.Calls = append([]int(nil), k.Space...)
 		}

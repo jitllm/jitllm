@@ -87,6 +87,8 @@ type Kernel struct {
 	// TileMajor is a kernel whose calls over a step's rows and a weight's
 	// tiles (Workers) run every row of a tile before the next tile.
 	TileMajor bool
+	// Matrix is a matrix kernel's shape: its outputs and its reduction's trip.
+	Matrix [2]int
 	// Running, where SplitRange set it, is a split whose partitions one
 	// workgroup runs in order (Running, the pass).
 	Running *RunningSplit

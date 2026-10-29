@@ -266,6 +266,10 @@ type Config struct {
 	// GEMM shape they divide (1) or off (-1); 0 leaves it to tuneGemm's
 	// measurement. The A/B arm and the gate's selection switch.
 	GemmDeep int
+	// MatrixTile forces the composer's matrix tile on every prompt
+	// projection, the profile's k'th (its own, then jit.Matrix.Tiles); 0
+	// leaves it to the composer's model. The gates' selection switch.
+	MatrixTile int
 	// PreferTiles puts the collective-tile prompt kernels (kernels.GemmTile,
 	// kernels.FlashPrefillTile) ahead of a backend's own -- the m16n8 GEMMs
 	// and FlashPrefill80 on CUDA -- wherever the device lowers the tiles. Off
@@ -941,6 +945,9 @@ type Stats struct {
 	GemmF16 int
 	// GemmDeep counts those built on the deep tiles (f16DeepTiles).
 	GemmDeep int
+	// MatrixTiled counts the composed parts formed at a forced matrix tile
+	// (Config.MatrixTile).
+	MatrixTiled int
 	// GemmInt8 counts batched matvecs built as kernels.GemmInt8, the staged
 	// int8 GEMM (sm_80 on, devTier.int8Gemm).
 	GemmInt8 int
@@ -1516,6 +1523,7 @@ func (s *Stats) add(o Stats) {
 	s.VoltaGemm += o.VoltaGemm
 	s.GemmF16 += o.GemmF16
 	s.GemmDeep += o.GemmDeep
+	s.MatrixTiled += o.MatrixTiled
 	s.GemmInt8 += o.GemmInt8
 	s.NormF16 += o.NormF16
 	s.AddNormFolded += o.AddNormFolded

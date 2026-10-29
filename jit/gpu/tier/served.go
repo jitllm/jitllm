@@ -236,6 +236,14 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		return 0, nil, err
 	}
 	g.Stats.ComposedLanes = lanes
+	dev := jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
+		Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
+		Matrix: g.composedMatrix(), HalfPairs: kernels.HalfPairs(g.dev.API()),
+		VectorLoads: kernels.VectorLoads(g.dev.API()), Shared: sharedPerUnit(g.dev)}
+	dev.Tile = g.matrixTile(r, dev, rows)
+	if dev.Tile.Rows > 0 {
+		g.Stats.MatrixTiled++
+	}
 	return r.Form(jit.Request{
 		Graph:   sl.graph,
 		Part:    sl.part,
@@ -243,10 +251,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Paged:   sl.paged,
 		Apart:   sl.apart,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin, Seqs: sl.seqs},
-		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
-			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
-			Matrix: g.composedMatrix(), HalfPairs: kernels.HalfPairs(g.dev.API()),
-			VectorLoads: kernels.VectorLoads(g.dev.API()), Shared: sharedPerUnit(g.dev)},
+		Device:  dev,
 		History: sl.history,
 	})
 }

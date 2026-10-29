@@ -7,6 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -59,6 +60,20 @@ func TestComposedPromptRunsOnTheMatrixUnit(t *testing.T) {
 					e, te, bandRatio, Greedy(got), Greedy(want))
 			}
 			t.Logf("%d matrix launches, %d chunks of %d blocks, logits NMSE %.3e against the host, the tier's %.3e", n, chunks, m.Cfg.NLayer, e, te)
+			for k := 2; k <= matrixTileCount(); k++ {
+				got, s0, s1 := composedPromptAt(t, m, ids, tier.ComposedStep, k)
+				tiled := s1.MatrixTiled
+				n := s1.MatrixPart(tier.ComposedPrompt) - s0.MatrixPart(tier.ComposedPrompt)
+				if tiled == 0 || n < chunks*m.Cfg.NLayer {
+					t.Fatalf("tile %d: %d parts formed at it, %d matrix launches", k, tiled, n)
+				}
+				e := promptNMSE(t, got, want)
+				if !(e <= bandRatio*te) || Greedy(got) != Greedy(want) {
+					t.Fatalf("tile %d: the prompt's logits NMSE %.3e against the host, the tier's %.3e (band %.1fx), argmax %d against %d",
+						k, e, te, bandRatio, Greedy(got), Greedy(want))
+				}
+				t.Logf("tile %d: %d parts formed at it, %d matrix launches, logits NMSE %.3e", k, tiled, n, e)
+			}
 		})
 	}
 }
@@ -93,7 +108,24 @@ func composedPromptModel(t *testing.T, name string) (*Model, []int32, []float32)
 // serves parts of, and the logits and the device's stats before and after.
 func composedPrompt(t *testing.T, m *Model, ids []int32, parts tier.Parts) ([]float32, tier.Stats, tier.Stats) {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) { c.Composed = parts }))
+	return composedPromptAt(t, m, ids, parts, 0)
+}
+
+// matrixTileCount is the GPU profile's matrix tiles, its own among them.
+func matrixTileCount() int {
+	for _, p := range jit.Default().Profiles[jit.DeviceGPU].Passes {
+		if mx, ok := p.(jit.Matrix); ok {
+			return 1 + len(mx.Tiles)
+		}
+	}
+	return 0
+}
+
+// composedPromptAt is composedPrompt with the matrix tile forced
+// (tier.Config.MatrixTile).
+func composedPromptAt(t *testing.T, m *Model, ids []int32, parts tier.Parts, tile int) ([]float32, tier.Stats, tier.Stats) {
+	t.Helper()
+	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) { c.Composed, c.MatrixTile = parts, tile }))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

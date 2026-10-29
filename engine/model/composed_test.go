@@ -479,12 +479,14 @@ const flashBlock = 32
 // nothing, and one position off must be ten times the arm's worst: the
 // comparison discriminates.
 func TestComposedBlocksServe(t *testing.T) {
-	arms := []struct {
+	type arm struct {
 		name  string
 		parts tier.Parts
-	}{
-		{"whole block", tier.ComposedBlock},
-		{"whole step", tier.ComposedStep},
+		tile  int
+	}
+	arms := []arm{{"whole block", tier.ComposedBlock, 0}, {"whole step", tier.ComposedStep, 0}}
+	for k := 2; k <= matrixTileCount(); k++ {
+		arms = append(arms, arm{fmt.Sprintf("whole step at matrix tile %d", k), tier.ComposedStep, k})
 	}
 	ran := 0
 	for _, file := range servedModels {
@@ -554,13 +556,20 @@ func TestComposedBlocksServe(t *testing.T) {
 					for g, noGraph := range []bool{false, true} {
 						want, ref := runs[dev][g].want, runs[dev][g].ref
 						for _, a := range arms {
+							if a.tile > 0 && noGraph {
+								continue
+							}
 							name := a.name
 							if noGraph {
 								name = "no graph/" + a.name
 							}
 							t.Run(name, func(t *testing.T) {
 								parts := a.parts | tier.ComposedPrompt
-								got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false)
+								got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false,
+									tier.WithConfig(func(c *tier.Config) { c.MatrixTile = a.tile }))
+								if a.tile > 0 && st.MatrixPart(tier.ComposedPrompt) > 0 && st.MatrixTiled == 0 {
+									t.Fatalf("the prompt ran on the matrix unit with no part formed at tile %d", a.tile)
+								}
 								// Every form was built at the placement or PrepHead.
 								if st.FormedAtStep != 0 {
 									t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
