@@ -11176,3 +11176,7 @@ row where the composer's reads two.
   The 1.057 row's main arm carried the composed sample. One binary, tg128, 8 rounds, IQR/median at most 0.019:
   A/A 1.001, composed over main 0.447 graphed, 0.459 ungraphed before; after 1.20 (Llama 1B), 0.994 (8B),
   1.085 (Qwen2.5-1.5B), 1.18 (Qwen3-1.7B), 1.07 (gemma-3-4b), 1.11 (Phi-3.5).
+- gpt-oss-20b decode on one V100, kernels a token 9.77 -> 7.27 ms (main 7.70). A prologue runs only where
+  each workgroup reads all of its producer's output: the expert matvec's per-pair quantize had run whole in 360
+  workgroups (experts 4.85 -> 3.01 ms; main 2.46). Phases runs a router's ten one-workgroup launches as one
+  (1.5 -> 0.78 ms). Servers n=20, A/A ITL 1.001: ITL composed/main 1.114, 1.151 (PF6 over this 1.28), TTFT 512 1.575, 1.586; 2048 1.655, 1.654.

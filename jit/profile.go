@@ -65,10 +65,11 @@ func gpuProfile() Profile {
 		Siblings{},
 		Prologue{Words: 12 << 10},
 		CallRows{},
-		Affine{Weights: []PrimKind{PrimMatrix}},
+		Affine{Weights: []PrimKind{PrimMatrix, PrimReduce}},
 		Prefetch{Staged: []PrimKind{PrimMatrix}},
 		Running{},
 		HalfPairs{Kinds: []PrimKind{PrimMatrix}},
+		Phases{Params: 64},
 	}}
 }
 
