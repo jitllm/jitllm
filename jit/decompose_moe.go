@@ -610,7 +610,11 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 		per = l.Sub / 4
 		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), d.op(OpMul, U, t, d.u(4)))
 		wq, _ := jlm.DecodeWord[int](p, l, dr, dw, col)
-		xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), d.op(OpShr, U, at(col), d.u(2))))
+		wcol := d.op(OpShr, U, at(col), d.u(2))
+		if stride%4 == 0 {
+			wcol = d.op(OpAdd, U, d.op(OpShr, U, at(d.op(OpMul, U, s, d.u(uint32(l.Sub)))), d.u(2)), t)
+		}
+		xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), wcol))
 		d.add(Expr{Op: OpDot4, Type: I, A: wq, B: xw, C: d.i(0)})
 	} else {
 		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), t)

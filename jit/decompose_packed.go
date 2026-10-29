@@ -208,7 +208,8 @@ func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (
 		per = l.Sub / 4
 		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), d.op(OpMul, U, j, d.u(4)))
 		w, _ := jlm.DecodeWord[int](p, l, rows, row, col)
-		xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), d.op(OpShr, U, col, d.u(2))))
+		wcol := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub/4))), j)
+		xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), wcol))
 		d.add(Expr{Op: OpDot4, Type: I, A: w, B: xw, C: d.i(0)})
 	} else {
 		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), j)
