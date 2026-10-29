@@ -126,8 +126,8 @@ func cpuWideProfile() Profile {
 		FMA{},
 		FirstTerm{},
 		HalfWords{},
-		// Intel's L2 streamer runs up to 20 lines ahead of a load.
-		Streams{Dots: 4, Most: 8, Apart: 1, Ahead: 20, Line: 64},
+		// An Intel core's L1 has 10 line fill buffers (Broadwell, Skylake).
+		Streams{Dots: 4, Most: 8, Apart: 1, Fill: 10, Line: 64},
 		Jam{Lanes: 8, Sums: 8, Temps: map[Op]int{OpDot4: 2, OpDot4U: 2}, Spread: []int{15, 13}, Rows: 14, Positions: 4},
 		Periods{Most: 8},
 		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}, Carry: []int{9, 10, 8}, Keep: true, Quads: true, QuadRegs: []int{13, 15, 9}},
@@ -172,6 +172,7 @@ func cpuWideProfile() Profile {
 			Reloads:  [2]int{int(x86.R13), int(x86.RBX)},
 			Resident: map[int]int{0: 9, 1: 10, 2: 11, 3: 12, 4: 13, 5: 14, 6: 15, 7: 8, 9: 7},
 			Walks:    []int{int(x86.R11), int(x86.R8)}, Lanes: []int{1, 4}, Hoist: 8, Scalars: 6, Keep: 7},
+		// Intel's L2 streamer runs up to 20 lines ahead of a load.
 		Ahead{Trips: 2, Min: 2048, Outer: 1, Reach: 20 * 64},
 	}}
 }

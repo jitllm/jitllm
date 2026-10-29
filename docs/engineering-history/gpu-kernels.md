@@ -11114,3 +11114,8 @@ row where the composer's reads two.
   pointer reads the scope's. E5-2680 v4 node 0, 8192x2048, two passes:
   Q4_K 1 thread 0.342 to 0.61 of main, Q6_K 0.47 to 0.70; 14 threads keep
   the old form (0.65-0.72). 64-row calls lose (0.55 to 0.42): not taken.
+- Decode: a worker's share is one call (`Kernel.Share`), taken apart where a
+  plane's run fills the 10 line fill buffers, its planes walked by pointer,
+  a word loaded once, no prefetch on a run the streamer's 20 lines reach.
+  E5-2680 v4 node 0, 14 threads, Q4_K, of main: 8192x2048 0.65 to 0.894,
+  0.895; 2048x8192 0.46 to 0.66-0.70; 2048x2048 0.51 to 0.75; token 0.55.
