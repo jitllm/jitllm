@@ -11203,3 +11203,8 @@ row where the composer's reads two.
   over tuned main 0.950/0.939, 0.994/0.998, 1.028/1.020, 0.984/0.978, 0.962/0.954, 0.912/0.973.
 - A composed GPU kernel states its workgroup as a launch bound, so ptxas holds a thread's registers to what that workgroup can have (synth-gemma3n's reduce_group read 157 at 1024 threads). Recompute moves no read of a part's input past an output bound over it (synth-qwen4exp's streams, the shadow's state). The recompute before the work forms runs a map only in maps, so a norm's sum stays one row's work. The decode alloc arm fails where its placed blocks left the device.
   tg128, V100 CUDA, process per sample, 20 rotated rounds, two card rotations, both main arms from one warmed cache (A/A 0.993-1.006): composed over tuned main 0.956/0.959 (8B), 0.986/0.984 (1B), 0.983/0.907 (Qwen2.5-1.5B: main 384 and 417 tok/s from two caches), 0.985/0.987 (Qwen3-1.7B), 1.034/1.033 (gemma-3-4b), 0.946/0.934 (Phi-3.5).
+- The CPU's int8 form quantizes a Sums of a window a map row, so the window's inverse is one broadcast and the codes vectorize,
+  and sums the codes a Sums in one reduction (the word sums gone): Llama's 8192-wide chain 15.6 -> 5.1 us on one laptop core.
+  A decode attention runs as one pool phase, head pair by head pair, where the composer states each call reaches only its own
+  heads (Kernel.Reach): 129 -> 81 phases a token (main 82). E5-2680 v4 node 1, 14 threads, composed/main (A/A 0.99-1.02):
+  tg Llama Q4_K_M 0.883 -> 0.92-0.935, Qwen3 Q8_0 0.990 -> 1.03-1.05; pp512 0.473 -> 0.493 and 0.801 -> 0.804.
