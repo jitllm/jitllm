@@ -73,3 +73,51 @@ func prefetchesIn(code []byte) int {
 	}
 	return n
 }
+
+// TestAheadStaysWithinAnL1SetsWays holds a prompt matvec's prefetches over
+// 2048 rows, whose weight words are 8 KiB apart and so share one L1 set, to
+// at most Lines (8) of a stream's lines ahead, where two trips of Q4_K's,
+// Q6_K's and Q8_0's sub-blocks reach past it.
+func TestAheadStaysWithinAnL1SetsWays(t *testing.T) {
+	host := uint64(cpu.CPU().ISA())
+	const rows, k, stride = 2048, 2048, 2048 / 8 * 32
+	for _, typ := range []quant.Type{quant.Q4_K, quant.Q8_0, quant.Q6_K} {
+		jt, _ := jlm.TypeOf(typ)
+		for _, isa := range []uint64{host, host &^ uint64(x86.ISAVNNI)} {
+			reach := func(lines int) (int, int) {
+				r := Default()
+				p := r.Profiles[DeviceCPU]
+				p.Passes = slices.Clone(p.Passes)
+				for i, ps := range p.Passes {
+					if a, ok := ps.(Ahead); ok {
+						a.Lines = lines
+						p.Passes[i] = a
+					}
+				}
+				r.Profiles[DeviceCPU] = p
+				ks, err := r.formKernels(Request{
+					Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
+					Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
+					Step:    Step{Rows: 64, Page: 64, Keys: 1, ActWindow: 32},
+					Device:  Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: isa, ExactDiv: true},
+				})
+				if err != nil {
+					t.Fatalf("%v: %v", typ, err)
+				}
+				n, most := 0, 0
+				for _, kn := range ks {
+					for _, l := range kn.Lines {
+						n++
+						most = max(most, int(l.Bytes))
+					}
+				}
+				return n, most
+			}
+			n, most := reach(8)
+			_, wide := reach(0)
+			if n == 0 || most > 8*stride || wide <= 8*stride {
+				t.Errorf("%v isa %#x: %d prefetches reaching %d B, %d B with no cap; want some, within %d B, and past it uncapped", typ, isa, n, most, wide, 8*stride)
+			}
+		}
+	}
+}

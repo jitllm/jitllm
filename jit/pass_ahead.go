@@ -17,6 +17,10 @@ type Ahead struct {
 	// A stream whose run is Reach bytes or more is the hardware
 	// prefetcher's: it runs that far ahead of a load.
 	Outer, Reach int
+	// Lines, where set, is the most of a strided stream's lines a prefetch
+	// runs ahead: lines a multiple of the L1's alias apart share one set,
+	// and a prefetch past its ways evicts lines before they are read.
+	Lines int
 }
 
 // AheadLine is a sequence entry's prefetch: node Load's address Bytes on.
@@ -63,6 +67,12 @@ func (p Ahead) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				}
 			}
 		}
+		gap := map[stream]int{}
+		for s, ls := range lines {
+			if len(ls) > 1 {
+				gap[s] = (ls[len(ls)-1] - ls[0]) / (len(ls) - 1) * 64
+			}
+		}
 		seen := map[stream]map[int]bool{}
 		var seq []Entry
 		var pf []AheadLine
@@ -75,6 +85,9 @@ func (p Ahead) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				}
 				if l := k.offsetOf(e.I) >> 6; strided[s] && !seen[s][l] {
 					seen[s][l] = true
+					if g := gap[s]; p.Lines > 0 && g > 0 {
+						b = min(b, p.Lines*g)
+					}
 					pf = append(pf, AheadLine{Load: e.I, Bytes: int32(b)})
 					seq = append(seq, Entry{Kind: EntryAhead, I: len(pf) - 1})
 				}

@@ -26,7 +26,7 @@ import (
 // 8192) by JITLLM_CPU_K (2048), as bytes of the weight a second: formed for
 // JITLLM_CPU_SLOTS workers, its calls run on JITLLM_CPU_THREADS threads, a step of
 // JITLLM_CPU_STEP rows (1) jammed JITLLM_CPU_JAM rows a call (RowJam).
-// JITLLM_CPU_AHEAD sets Ahead's trips, JITLLM_CPU_NOVNNI forms for the host
+// JITLLM_CPU_AHEAD sets Ahead's trips and JITLLM_CPU_AHEAD_LINES its Lines, JITLLM_CPU_NOVNNI forms for the host
 // without VNNI, and JITLLM_CPU_DUMP names a directory each kernel's code is
 // written to. The weight sits on the Go heap, not on the frames' huge pages
 // a model's does. A measurement: JITLLM_CPU_SPEED=1.
@@ -192,6 +192,10 @@ func speedRegistry(ahead, jam int) *Registry {
 		}
 		if a, ok := ps.(Ahead); ok && ahead >= 0 {
 			a.Trips = ahead
+			p.Passes[i] = a
+		}
+		if a, ok := ps.(Ahead); ok && os.Getenv("JITLLM_CPU_AHEAD_LINES") != "" {
+			a.Lines, _ = strconv.Atoi(os.Getenv("JITLLM_CPU_AHEAD_LINES"))
 			p.Passes[i] = a
 		}
 		if q, ok := ps.(Streams); ok {
