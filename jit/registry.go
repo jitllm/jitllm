@@ -67,6 +67,9 @@ type Device struct {
 	// VectorLoads is a device whose lowering reads four consecutive words
 	// of a buffer in one access (ir.OpLoadV).
 	VectorLoads bool
+	// Launch is the words its memory serves while one launch holds it, as
+	// its probe measured; 0 where nothing did.
+	Launch int
 }
 
 // warp is the threads a combine by lane shuffles takes whole on d: its

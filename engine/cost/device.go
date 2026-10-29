@@ -34,6 +34,12 @@ type Device struct {
 	Delay [NumClasses]float64
 }
 
+// LaunchWords is the words d's memory serves while one launch or call
+// holds it beyond its work: 0 where nothing measured either.
+func (d Device) LaunchWords() int {
+	return int(max(d.Floor, d.Launch) * d.Bandwidth / 4)
+}
+
 // Placement is the device each part of a model is priced on.
 type Placement func(jit.Part) Device
 

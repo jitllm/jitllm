@@ -202,6 +202,17 @@ func jlmType(q kernels.Quant) (jlm.Type, bool) {
 	return 0, false
 }
 
+// launchWords is the words a launch on the card costs, by its profile.
+func (g *devTier) launchWords() int {
+	if !g.launchSet && g.Profile != nil {
+		if p, ok := g.Profile(g.dev); ok {
+			g.launch = p.Device.LaunchWords()
+		}
+	}
+	g.launchSet = true
+	return g.launch
+}
+
 // units is the device's multiprocessors where its backend says, else 0.
 func units(d backend.Device) int {
 	if m, ok := d.(backend.MultiprocessorDevice); ok {
@@ -239,7 +250,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 	dev := jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
 		Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
 		Matrix: g.composedMatrix(), HalfPairs: kernels.HalfPairs(g.dev.API()),
-		VectorLoads: kernels.VectorLoads(g.dev.API()), Shared: sharedPerUnit(g.dev)}
+		VectorLoads: kernels.VectorLoads(g.dev.API()), Shared: sharedPerUnit(g.dev), Launch: g.launchWords()}
 	dev.Tile = g.matrixTile(r, dev, rows)
 	if dev.Tile.Rows > 0 {
 		g.Stats.MatrixTiled++

@@ -49,10 +49,13 @@ func TestComposedPartsAB(t *testing.T) {
 		parts = tier.Parts(n)
 	}
 	dev := os.Getenv("JITLLM_COMPOSED_DEVICE")
-	arm := func(name string, s tier.Parts) (Case, func() tier.Stats, func()) {
+	arm := func(name string, s tier.Parts, cfg ...func(*tier.Config)) (Case, func() tier.Stats, func()) {
 		// The shipping default: the device tuned (TuneAuto), into a cache
 		// of the arm's own, so neither arm reads the other's answers.
 		opts := []tier.Option{tier.WithTuneCache(t.TempDir()), tier.WithConfig(func(c *tier.Config) { c.Composed = s })}
+		for _, f := range cfg {
+			opts = append(opts, tier.WithConfig(f))
+		}
 		if dev != "" {
 			opts = append(opts, tier.WithDevices(dev))
 		}
@@ -97,6 +100,14 @@ func TestComposedPartsAB(t *testing.T) {
 	// rounds deeper into their history.
 	closeA()
 	closeA2()
+	if os.Getenv("JITLLM_COMPOSED_AB_COST") != "" {
+		// The device's launch cost against none: the composer's plain rules.
+		p, _, closeP := arm("composed, no launch cost", parts, func(c *tier.Config) { c.Profile = nil })
+		q, _, closeQ := arm("composed", parts)
+		t.Logf("composed with the device's launch cost vs without: %v", AB(p, q, rounds, iters))
+		closeP()
+		closeQ()
+	}
 	a3, _, closeA3 := arm("tier", 0)
 	b, stats, closeB := arm("composed", parts)
 	r := AB(a3, b, rounds, iters)

@@ -4,10 +4,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/jit"
 )
 
@@ -55,12 +52,7 @@ func (h header) Find(role jlm.Role, block, index int32) (*jlm.Entry, bool) {
 // container with every offset dropped, its graphs with it, and the
 // model closed, to pricing the model as the container does.
 func TestHeaderPricesAsTheContainer(t *testing.T) {
-	fresh.Must(t, testmodels.Path("synth-ernie45.jlm"))
-	m, err := model.Open(testmodels.Path("synth-ernie45.jlm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := m.Composing()
+	f := composing(t, "synth-ernie45.jlm")
 	cfg := *f.Config()
 	h := header{cfg: &cfg, by: map[[3]int32]*jlm.Entry{}, head: f.HeadGraph(), embed: f.EmbedGraph(), rotaries: f.Rotaries()}
 	for _, e := range f.Entries() {
@@ -80,7 +72,6 @@ func TestHeaderPricesAsTheContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.Close()
 	got, err := Estimate(jit.Default(), h, s, on)
 	if err != nil {
 		t.Fatal(err)

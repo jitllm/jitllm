@@ -3,13 +3,16 @@ package model
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"slices"
 	"sync"
 	"time"
 	"unsafe"
 
+	hw "github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
@@ -212,12 +215,14 @@ func (c *cpuForms) close() {
 // cpuState is a State's composed CPU blocks: each block's form and its own
 // buffers, the history tables, and the census.
 type cpuState struct {
-	blocks   []*cpuBlock
-	composed []int
-	served   int
-	declined [jit.NumDeclines]int
-	formErr  error
-	pages    []uint32
+	launch    int
+	launchSet bool
+	blocks    []*cpuBlock
+	composed  []int
+	served    int
+	declined  [jit.NumDeclines]int
+	formErr   error
+	pages     []uint32
 	// fpages is pages under cpuFaultPage (cpuFaultTable).
 	fpages []uint32
 	rows   [4]uint32
@@ -410,6 +415,26 @@ const cpuIO = 6
 // composedCPUDevice is the CPU as the composer forms for it.
 func composedCPUDevice(workers int) jit.Device {
 	return jit.Device{Kind: jit.DeviceCPU, Slots: max(workers, 1), Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+}
+
+// composedCPU is this State's CPU as the composer forms for it, its launch
+// cost its probe row's.
+func (s *State) composedCPU() jit.Device {
+	workers := 1
+	if s.jit != nil {
+		workers = s.jit.Workers()
+	}
+	d := composedCPUDevice(workers)
+	if !s.cpu.launchSet {
+		if name, err := probe.HostName(); err == nil {
+			if p, ok := hw.Known(name, runtime.GOARCH); ok {
+				s.cpu.launch = p.Device.LaunchWords()
+			}
+		}
+		s.cpu.launchSet = true
+	}
+	d.Launch = s.cpu.launch
+	return d
 }
 
 // cpuFaultRowWords applies the State's key-row fault to one row's
@@ -1513,14 +1538,10 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	if a := s.nc(); a != nil {
 		page = a.page
 	}
-	workers := 1
-	if s.jit != nil {
-		workers = s.jit.Workers()
-	}
 	req := jit.Request{Graph: &gr, Formats: formats, Strides: m.cpuStrides(li, g),
 		Step:    jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: 32, Seqs: max(s.nseq, 1)},
 		History: jit.History{ValuesInKeys: pg.latent},
-		Device:  composedCPUDevice(workers)}
+		Device:  s.composedCPU()}
 	fm, err := m.cpuFormOf(req, &gr, rows, false, false, s.kvl.fmt == cpu.KVF32)
 	if err == nil && readsPlanes(g) && !m.cpuPlanes(li) {
 		return nil, cpuDeclineError{jit.DeclineTable, fmt.Errorf("block %d turns by a rotary with no planes", li)}

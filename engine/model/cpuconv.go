@@ -38,10 +38,6 @@ func (s *State) cpuComposeConv(li int, cb *cpuBlock) {
 			}
 		}
 	}
-	workers := 1
-	if s.jit != nil {
-		workers = s.jit.Workers()
-	}
 	rows := l.mn.hin * l.mn.win
 	page := 1
 	if s.kv.layers[li].p > 0 {
@@ -57,7 +53,7 @@ func (s *State) cpuComposeConv(li int, cb *cpuBlock) {
 		}
 	}
 	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: page, Keys: page, ActWindow: 32},
-		Device: composedCPUDevice(workers), Apart: true}
+		Device: s.composedCPU(), Apart: true}
 	f, err := s.m.cpuFormOf(req, g, rows, true, true, false)
 	if err != nil {
 		cb.why = s.cpuFormDecline(err)

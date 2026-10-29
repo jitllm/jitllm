@@ -3,9 +3,6 @@ package cost
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/jit"
 )
 
@@ -129,13 +126,3 @@ func TestEstimateReadsTheHeadOnce(t *testing.T) {
 
 // composing is fixture name as the composer reads it: the container and the
 // block graphs the engine builds from it.
-func composing(t *testing.T, name string) jit.Model {
-	t.Helper()
-	fresh.Must(t, testmodels.Path(name))
-	m, err := model.Open(testmodels.Path(name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { m.Close() })
-	return m.Composing()
-}

@@ -23,8 +23,10 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
+	hw "github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
@@ -195,6 +197,9 @@ type Config struct {
 	// int8 form: the reference a gate holds the int8 forms and the tier's
 	// own kernels to.
 	ComposedFloat bool
+	// Profile is a card's measured row, its launch cost what the composer
+	// weighs a fusion against; none keeps the composer's plain rules.
+	Profile func(backend.Device) (cost.Profile, bool)
 	// ComposedShadow runs the composer's form of each block it would serve
 	// beside the tier's own kernels, on a copy of the block's input and into
 	// buffers of its own, and compares the two outputs on the device with a
@@ -2288,6 +2293,9 @@ type devShared struct {
 	tileF32Cap int8
 	// matrixCap is composedMatrix's probe, in tileCap's terms.
 	matrixCap int8
+	// launch is launchWords' answer, asked once where launchSet.
+	launch    int
+	launchSet bool
 	// voltaMoE is the grouped tensor-core mixture's probe (voltaOn): 0 not yet
 	// asked, 1 this device runs it, -1 it does not.
 	voltaMoE int8
@@ -2499,6 +2507,7 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	// measures faster. On a V100 it read 1.008-1.028 of the two launches on
 	// Llama 1B, 3B and 8B.
 	cfg.GateUp2 = true
+	cfg.Profile = func(d backend.Device) (cost.Profile, bool) { return cost.Known(hw.GPUName(d), d.API()) }
 	for _, f := range o.cfg {
 		f(cfg)
 	}
