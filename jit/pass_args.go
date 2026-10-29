@@ -471,7 +471,9 @@ func (k *Kernel) split(as []access, whole bool, coords map[int]bool) int {
 	taken := map[int]bool{}
 	for m := range fixed {
 		for _, id := range monoIDs(m) {
-			taken[id] = true
+			if !whole || k.lengthOf(g.atoms[id].node) < 0 {
+				taken[id] = true
+			}
 		}
 	}
 	// reads reports whether atom id is, or is a field of, a taken atom.
@@ -522,14 +524,40 @@ func (k *Kernel) accessBuf(a access) int {
 	return k.Stores[a.store].Buf
 }
 
-// coordMono reports whether monomial m is one of coords' nodes alone.
+// coordMono reports whether monomial m is one of coords' nodes alone, or
+// times lengths the caller passes as their static extents.
 func (g *alg) coordMono(m string, coords map[int]bool) bool {
-	ids := monoIDs(m)
-	if len(ids) != 1 {
-		return false
+	n := 0
+	for _, id := range monoIDs(m) {
+		a := g.atoms[id]
+		switch {
+		case a != atom{node: a.node}:
+			return false
+		case coords[a.node]:
+			n++
+		case g.k.lengthOf(a.node) < 0:
+			return false
+		}
 	}
-	a := g.atoms[ids[0]]
-	return coords[a.node] && a == atom{node: a.node}
+	return n == 1
+}
+
+// lengthOf is the static extent of the length node i is, or is the word
+// of: -1 where it is none.
+func (k *Kernel) lengthOf(i int) int {
+	nd := k.Nodes[i]
+	if nd.Op == OpLength {
+		return int(nd.Imm)
+	}
+	if nd.Op != OpParam {
+		return -1
+	}
+	for _, a := range k.Args {
+		if a.Buf < 0 && a.Coord == 0 && a.Node > 0 && int64(a.Field) == nd.Imm && k.Nodes[a.Node-1].Op == OpLength {
+			return int(k.Nodes[a.Node-1].Imm)
+		}
+	}
+	return -1
 }
 
 // callOffset is node off as a constant and, for each axis of the calls'
@@ -550,19 +578,29 @@ func (k *Kernel) callOffset(off int) (int, []int, bool) {
 			c = int(v)
 			continue
 		}
-		ids := monoIDs(m)
-		if len(ids) != 1 {
+		ax, n := -1, int(v)
+		for _, id := range monoIDs(m) {
+			a := g.atoms[id]
+			if a != (atom{node: a.node}) {
+				return 0, nil, false
+			}
+			if x, ok := axis[a.node]; ok && ax < 0 {
+				ax = x
+				continue
+			}
+			if e := k.lengthOf(a.node); e >= 0 {
+				n *= e
+				continue
+			}
 			return 0, nil, false
 		}
-		a := g.atoms[ids[0]]
-		ax, ok := axis[a.node]
-		if !ok || a != (atom{node: a.node}) {
+		if ax < 0 {
 			return 0, nil, false
 		}
 		for len(per) <= ax {
 			per = append(per, 0)
 		}
-		per[ax] += int(v)
+		per[ax] += n
 	}
 	return c, per, true
 }

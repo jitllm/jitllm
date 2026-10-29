@@ -112,9 +112,11 @@ func TestComposedCPUProfile(t *testing.T) {
 			}
 		}
 		type row struct {
-			name               string
-			nanos, runs, calls int64
-			bytes              int
+			name           string
+			calls          []int
+			serial         bool
+			nanos, runs, n int64
+			bytes          int
 		}
 		var rows []row
 		m.cpuForms.mu.Lock()
@@ -122,7 +124,7 @@ func TestComposedCPUProfile(t *testing.T) {
 			for i := range f.codes {
 				c := &f.codes[i]
 				if c.runs > 0 {
-					rows = append(rows, row{c.name, c.nanos, c.runs, int64(c.n), c.code.Size})
+					rows = append(rows, row{c.name + c.desc, c.calls, c.serial, c.nanos, c.runs, int64(c.n), c.code.Size})
 				}
 			}
 		}
@@ -136,14 +138,14 @@ func TestComposedCPUProfile(t *testing.T) {
 			fmt.Fprintf(&b, "  composed kernels %.1f us a token (%.0f%% of the token)\n", float64(tot)/1e3/ft, 100*float64(tot)/float64(d.Nanoseconds()))
 		}
 		for _, r := range rows {
-			fmt.Fprintf(&b, "  %-60.60s %8.1f us/tok %5.1f%% launches/tok %5.1f calls %6d  %.2f us/launch  %d B\n",
-				r.name, float64(r.nanos)/1e3/ft, 100*float64(r.nanos)/float64(tot), float64(r.runs)/ft, r.calls, float64(r.nanos)/1e3/float64(r.runs), r.bytes)
+			fmt.Fprintf(&b, "  %-70.70s %8.1f us/tok %5.1f%% launches/tok %5.1f calls %v serial %v  %.2f us/launch  %d B\n",
+				r.name, float64(r.nanos)/1e3/ft, 100*float64(r.nanos)/float64(tot), float64(r.runs)/ft, r.calls, r.serial, float64(r.nanos)/1e3/float64(r.runs), r.bytes)
 		}
 		if composed {
 			if cb := st.cpu.blocks[st.lo]; cb != nil && cb.f != nil {
 				b.WriteString("  block 0's kernels in order:\n")
 				for _, c := range cb.f.codes {
-					fmt.Fprintf(&b, "    %-24.24s calls %v n %d serial %v join %d", c.name, c.calls, c.n, c.serial, c.join)
+					fmt.Fprintf(&b, "    %-60.60s calls %v n %d serial %v join %d", c.name+c.desc, c.calls, c.n, c.serial, c.join)
 					for _, a := range c.args {
 						if a.src == cpuArgWeight || a.src == cpuArgCoord {
 							fmt.Fprintf(&b, " [src %d region %d per %v elem %d off %d]", a.src, a.region, a.per, a.elem, a.off)

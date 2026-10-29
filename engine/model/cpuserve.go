@@ -126,6 +126,7 @@ type cpuCode struct {
 	// name is the composer's name for the kernel; nanos and runs its time
 	// and launches under WithProfile.
 	name        string
+	desc        string
 	nanos, runs int64
 	// rd and wr are the buffers the kernel's calls read and write, as the
 	// call site binds them; join is how many kernels after it run in its
@@ -1677,6 +1678,13 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 			}
 			if bd.Writes && bd.Operand.Kind == jit.OperandScratch && !callsOwnScratch(c, bd.Operand, bd.Bytes) {
 				cc.serial = true
+			}
+			if bd.Writes {
+				n := o.Name
+				if o.Kind == jit.OperandValue && int(o.Value) < len(gr.Values) {
+					n = gr.Values[o.Value].Name
+				}
+				cc.desc += " " + n
 			}
 		}
 		for _, a := range c.Args {

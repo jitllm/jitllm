@@ -11058,3 +11058,7 @@ row where the composer's reads two.
   one set, the one-sequence and mixed forms of a block among them. lev's
   composed instances 318 MB on cuda:0 (promptPair's 483), 14 of 14 picks
   by the composer on cuda:0 and vulkan; the arena on one buffer fails it.
+- A prompt's int8 input forms ran serially: a scratch row's offset, the call's coordinate times a run-time length, stayed in the code; it now moves into the call's offset (TestCPUPromptScratchMovesWithItsCalls).
+  Prompt at 512 on node 1 (n=20, busy 0-2%, A/A 0.98-1.00): Llama 0.4130 -> 0.5092 and 0.4040 -> 0.5152, 159 -> 202 tok/s;
+  Qwen3-0.6B Q8_0 0.6844 -> 0.9773 and 0.6921 -> 0.9737. Llama's profile: 4948 us a token against main's 2589, the matvec 4229 of it
+  against 2261 (Q6_K's ffn_down 968, Q4_K's 501); weight tiles of 16 or 32 rows for 64 change nothing (5069, 5021).
