@@ -66,7 +66,9 @@ func (p Args) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if err := m.bindCoords(f); err != nil {
 			return nil, false, err
 		}
-		m.bindCounts(f)
+		if err := m.bindCounts(f); err != nil {
+			return nil, false, err
+		}
 		m.bindBufs(f)
 		if err := m.oneBufferAField(); err != nil {
 			return nil, false, err
@@ -135,7 +137,7 @@ func (k *Kernel) fixed(i int) bool {
 // loops taken outermost first: the length a count was split from, whole,
 // the count derived from it in the kernel. The call states lengths, never
 // what a kernel makes of them.
-func (k *Kernel) bindCounts(f ArgFields) {
+func (k *Kernel) bindCounts(f ArgFields) error {
 	next := 0
 	field := func(c int) int {
 		l := k.Loops[c]
@@ -145,7 +147,10 @@ func (k *Kernel) bindCounts(f ArgFields) {
 		if len(k.foldsOf(c)) == 0 && k.vectorTail(c) {
 			return f.Tail
 		}
-		v := f.Counts[min(next, len(f.Counts)-1)]
+		if next >= len(f.Counts) {
+			return -1
+		}
+		v := f.Counts[next]
 		next++
 		return v
 	}
@@ -178,10 +183,17 @@ func (k *Kernel) bindCounts(f ArgFields) {
 		if nd := k.Nodes[n]; fl == 0 || nd.Op != OpLength || nd.A >= 0 || slices.ContainsFunc(k.Args, func(a Arg) bool { return a.Field == fl }) {
 			fl = field(c)
 		}
+		if fl < 0 {
+			return fmt.Errorf("jit: %s: more loop counts than the device's %d count words", k.Name, len(f.Counts))
+		}
+		if slices.ContainsFunc(k.Args, func(a Arg) bool { return a.Field == fl && a.Buf < 0 }) {
+			return fmt.Errorf("jit: %s: argument field %d holds two loop counts", k.Name, fl)
+		}
 		pv := k.add(Node{Op: OpParam, Type: ir.U32, Imm: int64(fl)})
 		k.redirectAll(n, pv)
 		k.Args = append(k.Args, Arg{Field: fl, Buf: -1, Node: n + 1})
 	}
+	return nil
 }
 
 // lengthIn is the run-time length node i is computed from, -1 for none.
