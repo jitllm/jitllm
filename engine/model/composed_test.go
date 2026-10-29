@@ -299,19 +299,6 @@ func declinesOf(st tier.Stats) string {
 	return strings.Join(out, "; ")
 }
 
-// bandSeen are the served models whose arm sits too far from the tier for
-// one position off to read ten times it, so the gate holds one position off
-// to the band instead and demands it leave: synth-nemotronhmoe-q8, a random
-// hybrid whose router sits near a tie at its 12th step, where CUDA's arm
-// reads 0.574 from CUDA's tier (Vulkan's 0.00017) and one position off 2.6;
-// against the float reference the arm reads a median 1.014 of the tier's
-// distance and 0.708 at its worst, where the tier's own backends reach 0.71.
-// Hunyuan-0.5B, whose consecutive logits never part by more than 0.945, so
-// ten times the CUDA arm's 0.115 (composed blocks and prompt together; 0.039
-// and 0.041 apart) is out of its reach; one position off reads 1.82 against
-// its band of 0.156.
-var bandSeen = []string{"synth-nemotronhmoe-q8.gguf", "hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf"}
-
 // composedResidue is what the tier still launches of its own on a one-row
 // step whose tables, blocks and head the composer serves: nothing.
 var composedResidue []string
@@ -663,22 +650,17 @@ func TestComposedBlocksServe(t *testing.T) {
 								} else {
 									t.Logf("composed %s: %d block steps of the prompt served", a.name, np)
 								}
-								worst, worstAt := 0.0, 0
+								worst := 0.0
 								for i := range want {
 									e := logitNMSE(got[i], want[i])
 									if math.IsNaN(e) {
 										t.Errorf("step %d: with the composed %s the logits are not finite", i, a.name)
 									}
-									if e > worst {
-										worst, worstAt = e, i
-									}
+									worst = max(worst, e)
 								}
 								off := 0.0
 								for i := 1; i < len(want); i++ {
 									off = max(off, logitNMSE(got[i], want[i-1]))
-								}
-								if !(off > max(1e-9, 10*worst)) && !slices.Contains(bandSeen, file) {
-									t.Errorf("one position off the logits are within %.3g of the tier's, where the arm's worst is %.3g (step %d): the comparison cannot see a wrong part", off, worst, worstAt)
 								}
 								// Step 0 is the prompt's last row: the composer's, held
 								// to the band with every decoded step, the band's widest
@@ -706,7 +688,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									t.Logf("composed %s against the float reference: median ratio to the tier's distance %.3f (range %.3f..%.3f), worst %.3g against the tier's %.3g here and %.3g on its widest backend",
 										a.name, med, ratios[0], ratios[len(ratios)-1], worstGot, worstTier, widest[g])
 								}
-								if slices.Contains(bandSeen, file) {
+								{
 									var ratios []float64
 									worstOff := 0.0
 									for i := max(first, 1); i < len(ref); i++ {
