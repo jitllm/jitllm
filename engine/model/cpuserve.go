@@ -1903,8 +1903,9 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 // scratch o no other call writes: every address of o the code is passed
 // moves along every axis of its calls, each axis's step past the whole of
 // the axes inside it, as an operand laid out by its primitive's leading axes
-// is, and the code reaching no more of o than its calls' slices. A scratch
-// some call's address does not move along is every call's.
+// is, and the code reaching no more of o than its calls' slices; an axis of
+// one call moves nothing. A scratch some call's address does not move along
+// is every call's.
 func callsOwnScratch(c jit.Code, o jit.Operand, bytes int64) bool {
 	if len(c.Calls) == 0 {
 		return false
@@ -1920,7 +1921,11 @@ func callsOwnScratch(c jit.Code, o jit.Operand, bytes int64) bool {
 		if a.Word || a.Coord > 0 || a.Length || a.Value || a.Moving || len(a.Per) != len(c.Calls) {
 			return false
 		}
+		span := 0
 		for ax := range c.Calls {
+			if c.Calls[ax] == 1 {
+				continue
+			}
 			inner := 1
 			if ax+1 < len(c.Calls) {
 				inner = a.Per[ax+1] * c.Calls[ax+1]
@@ -1928,12 +1933,13 @@ func callsOwnScratch(c jit.Code, o jit.Operand, bytes int64) bool {
 			if a.Per[ax] <= 0 || a.Per[ax] < inner {
 				return false
 			}
+			span = max(span, a.Per[ax]*c.Calls[ax])
 		}
 		elem := int64(4)
 		if a.Elem > 0 {
 			elem = int64(a.Elem)
 		}
-		if bytes <= 0 || bytes > int64(a.Per[0]*c.Calls[0])*elem {
+		if bytes <= 0 || bytes > int64(span)*elem {
 			return false
 		}
 		seen = true
