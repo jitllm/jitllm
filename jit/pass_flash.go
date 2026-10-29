@@ -325,7 +325,7 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 		return nil, false
 	}
 	b := flashBuild{c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
-		tq: map[int]int{}, tr: map[int]int{}}
+		tq: map[int]int{}, tr: map[int]int{}, scale: d.ScaleRows}
 	return b.kernel(), true
 }
 
@@ -361,6 +361,9 @@ type flashBuild struct {
 	first, warpRow  int
 	minus, zero     int
 	tq, tr          map[int]int
+	// scale keeps the weighted sums in accumulators (Device.ScaleRows).
+	scale bool
+	sums  []int
 }
 
 func (b *flashBuild) side(m *member, row, kpos, inner int, subs map[Operand]int) *flashSide {
@@ -481,6 +484,10 @@ func (b *flashBuild) kernel() *Kernel {
 // descriptor addressing the history.
 func (b *flashBuild) stageBlock() {
 	U, m, g := ir.U32, b.m, b.g
+	if b.scale {
+		// The trip before multiplied its block after its last barrier.
+		m.Stores = append(m.Stores, Store{Barrier: true, At: b.P})
+	}
 	half := b.Dk / 2
 	n := g.KB * half
 	for u := 0; u < (n+m.Group-1)/m.Group; u++ {
@@ -600,6 +607,30 @@ func (b *flashBuild) weighted() {
 	for s := range steps {
 		ph[s] = b.tile(aT, at(b.warpRow, g.sp, 2*g.pOff+s*b.tk), g.sp, false, b.P)
 	}
+	if b.scale {
+		alpha := m.bin(OpAdd, U, b.warpRow, m.u32(g.sOff+2*(g.TR+1)))
+		var sums []int
+		for j := 0; j < b.Dv/b.tn; j++ {
+			f := m.add(Node{Op: OpFold, Type: ir.Void, At: b.P, B: b.zero, Tile: &cT})
+			acc := m.add(Node{Op: OpTileScale, Type: ir.Void, A: f, B: alpha, Buf: b.st, Tile: &cT})
+			for s := range steps {
+				v := b.tile(bT, m.u32(2*g.vOff+s*b.tk*g.sv+j*b.tn), g.sv, false, b.P)
+				acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ph[s], B: v, C: acc, Tile: &cT})
+			}
+			m.Nodes[f].A = acc
+			sums = append(sums, f)
+		}
+		m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
+		for j, f := range sums {
+			m.Stores = append(m.Stores, Store{Buf: b.st, Ix: at(b.warpRow, b.Dv, g.aOff+j*b.tn), Val: f, At: -1, Tile: true, Stride: m.u32(b.Dv)})
+		}
+		m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
+		for u := 0; u < g.TR*b.Dv/m.Group; u++ {
+			rloc, dd := b.split(u, g.TR*b.Dv, b.Dv)
+			b.sums = append(b.sums, b.load(F, m.bin(OpAdd, U, m.bin(OpMul, U, rloc, m.u32(b.Dv)), m.bin(OpAdd, U, dd, m.u32(g.aOff))), -1))
+		}
+		return
+	}
 	for j := 0; j < b.Dv/b.tn; j++ {
 		acc := b.zero
 		for s := range steps {
@@ -613,6 +644,7 @@ func (b *flashBuild) weighted() {
 	for u := 0; u < n/m.Group; u++ {
 		f := m.add(Node{Op: OpFold, Type: F, At: b.P, B: m.f32(0)})
 		m.Nodes[f].A = b.rescaled(f, u)
+		b.sums = append(b.sums, f)
 	}
 }
 
@@ -631,9 +663,8 @@ func (b *flashBuild) rescaled(f, u int) int {
 // weighted sum its register's, the sum and the maximum the row's.
 func (b *flashBuild) output() {
 	U, F, m, g, last := ir.U32, ir.F32, b.m, b.g, b.c.last
-	folds := m.foldsOf(b.P)
 	st := last.Stores[0]
-	for u, f := range folds {
+	for u, f := range b.sums {
 		rloc, dd := b.split(u, g.TR*b.Dv, b.Dv)
 		row := m.bin(OpMin, U, m.bin(OpAdd, U, b.r0, rloc), b.last)
 		subs := map[Operand]int{

@@ -85,16 +85,17 @@ func recomputed(ks []*Kernel, i int) ([]int, bool) {
 	}
 	st := pk.Stores[0]
 	o := pk.Bufs[st.Buf].Operand
-	if !pk.storesOwn(st) || o.Kind != OperandValue || o.Out || pk.reads(o) || slices.Contains(pk.Passes, "recompute") {
+	if !pk.storesOwn(st) || o.Kind != OperandValue || o.Out || pk.reads(o) {
 		return nil, false
 	}
+	again := slices.Contains(pk.Passes, "recompute")
 	var readers []int
 	for j := range ks {
 		if j == i || !ks[j].reads(o) {
 			continue
 		}
 		c := ks[j]
-		if j < i || c.Kind != PrimMap || c.Work || len(c.Loops) != 0 || c.Part != pk.Part || c.Of != pk.Of || c.writes(o) {
+		if j < i || c.Kind != PrimMap && c.Kind != PrimReduce || c.Work || c.Kind == PrimMap && len(c.Loops) != 0 || c.Part != pk.Part || c.Of != pk.Of || c.writes(o) {
 			return nil, false
 		}
 		reads := 0
@@ -107,7 +108,7 @@ func recomputed(ks []*Kernel, i int) ([]int, bool) {
 				return nil, false
 			}
 		}
-		if reads > recomputeReads {
+		if reads > recomputeReads || again && reads > 1 || c.Kind == PrimReduce && reads > 1 {
 			return nil, false
 		}
 		readers = append(readers, j)

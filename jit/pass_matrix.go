@@ -332,6 +332,8 @@ type bilinear struct {
 	// index, where set, is the node the row's factor reads its rows at,
 	// of rows of them (rowIndex).
 	index, rows int
+	// fma is a term fused with its step.
+	fma bool
 }
 
 func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
@@ -351,8 +353,26 @@ func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
 			break
 		}
 	}
+	if f.depth == 0 {
+		return f, false
+	}
+	g, ok := k.bilinearOf(false)
+	if !ok || k.readsFloatWeight(g.out) {
+		return f, false
+	}
+	g.depth = f.depth
+	if g.block > 0 && g.block < d.Matrix[0] {
+		return f, false
+	}
+	return g, true
+}
+
+// bilinearOf is k's one fold over its one loop whose term is a product of
+// a factor of the row and one of the output, each of k alone.
+func (k *Kernel) bilinearOf(fused bool) (bilinear, bool) {
+	var f bilinear
 	folds := k.foldsOf(0)
-	if f.depth == 0 || len(folds) != 1 {
+	if len(folds) != 1 {
 		return f, false
 	}
 	f.fold = folds[0]
@@ -361,14 +381,20 @@ func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
 		return f, false
 	}
 	step := k.Nodes[fd.A]
-	term := step.B
-	if step.B == f.fold {
-		term = step.A
-	} else if step.A != f.fold {
-		return f, false
-	}
-	if step.Op != OpAdd || step.Type != ir.F32 || k.Nodes[term].Op != OpMul || k.Nodes[term].Type != ir.F32 {
-		return f, false
+	var x, y int
+	if f.fma = fused && step.Op == OpFma && step.Type == ir.F32 && step.C == f.fold; f.fma {
+		x, y = step.A, step.B
+	} else {
+		term := step.B
+		if step.B == f.fold {
+			term = step.A
+		} else if step.A != f.fold {
+			return f, false
+		}
+		if step.Op != OpAdd || step.Type != ir.F32 || k.Nodes[term].Op != OpMul || k.Nodes[term].Type != ir.F32 {
+			return f, false
+		}
+		x, y = k.Nodes[term].A, k.Nodes[term].B
 	}
 	row := k.dependsOn(func(nd Node) bool { return nd.Op == OpCoord && nd.A == 0 })
 	// blockOf is the rows of the block node i reads the row in -- the row
@@ -384,11 +410,10 @@ func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
 	byRow := k.dependsOnCut(func(nd Node) bool { return nd.Op == OpCoord && nd.A == 0 }, func(i int) bool { return blockOf(i) > 0 })
 	out := k.dependsOn(func(nd Node) bool { return nd.Op == OpCoord && nd.A == 1 })
 	folded := k.dependsOn(func(nd Node) bool { return nd.Op == OpFold })
-	x, y := k.Nodes[term].A, k.Nodes[term].B
 	if row[y] {
 		x, y = y, x
 	}
-	if !row[x] || out[x] || !out[y] || byRow[y] || folded[x] || folded[y] || k.readsFloatWeight(y) {
+	if !row[x] || out[x] || !out[y] || byRow[y] || folded[x] || folded[y] {
 		return f, false
 	}
 	for _, s := range k.Stores {
@@ -405,7 +430,7 @@ func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
 				f.block = b
 			}
 		}
-		if f.block < d.Matrix[0] {
+		if f.block == 0 {
 			return f, false
 		}
 	}

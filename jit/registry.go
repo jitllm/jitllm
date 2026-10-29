@@ -64,6 +64,9 @@ type Device struct {
 	// Fragment, where set, is the device's own matrix instruction, which
 	// Matrix issues on fragments it lays out (OpMMA).
 	Fragment ir.MMAShape
+	// ScaleRows is a device whose lowering scales an accumulator tile's
+	// rows by words of workgroup memory (OpTileScale).
+	ScaleRows bool
 	// HalfPairs is a device whose lowering runs packed binary16 arithmetic
 	// (OpSubF16x2, OpFmaF16x2).
 	HalfPairs bool
@@ -308,7 +311,11 @@ func gridRowWise(o graph.Op) bool {
 // decomposeOps is every op of c's graph as primitives, owned by part of.
 func (r *Registry) decomposeOps(c *Context, of int) ([]Prim, error) {
 	var prims []Prim
+	sums, folded := sliceSums(c.Graph)
 	for i, o := range c.Graph.Ops {
+		if folded[i] {
+			continue
+		}
 		d, ok := r.Decompositions[o.Kind]
 		if !ok {
 			return nil, fmt.Errorf("op %d (%s) has no decomposition", i, o.Kind)
@@ -327,6 +334,9 @@ func (r *Registry) decomposeOps(c *Context, of int) ([]Prim, error) {
 			oc = &g
 		}
 		ps, err := d(o, oc)
+		if s, ok := sums[i]; ok {
+			ps, err = decomposeSliceSum(o, s, oc), nil
+		}
 		if err != nil {
 			return nil, fmt.Errorf("op %d (%s): %w", i, o.Kind, err)
 		}

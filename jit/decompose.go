@@ -272,3 +272,93 @@ func decomposeAdd(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
+
+// sliceSum is a left fold of adds of a value's k slices, w wide at j*w.
+type sliceSum struct {
+	v    graph.ValueID
+	w, k int
+}
+
+// sliceSums is every slice sum by its root op, every value between read by
+// the fold alone, and the fold's other ops.
+func sliceSums(g *graph.Graph) (map[int]sliceSum, map[int]bool) {
+	readers := make([]int, len(g.Values))
+	made := make([]int, len(g.Values))
+	for i, o := range g.Ops {
+		for _, v := range o.In {
+			readers[v]++
+		}
+		for _, v := range o.Out {
+			made[v] = i + 1
+		}
+	}
+	for _, v := range g.Out {
+		readers[v]++
+	}
+	plainAdd := func(o graph.Op) bool {
+		return o.Kind == graph.OpAdd && len(o.In) == 2 && len(o.Out) == 1 && (o.Attr.Alpha == 0 || o.Attr.Alpha == 1) && o.Attr.Scale == 0
+	}
+	leaf := func(v graph.ValueID) (graph.Op, bool) {
+		if made[v] == 0 || readers[v] != 1 {
+			return graph.Op{}, false
+		}
+		o := g.Ops[made[v]-1]
+		return o, o.Kind == graph.OpSlice && len(o.In) == 1 && len(o.Weight) == 0 && o.Attr.HeadDim == 0 &&
+			g.Values[o.In[0]].Rows == g.Values[v].Rows
+	}
+	roots, members := map[int]sliceSum{}, map[int]bool{}
+	for i := len(g.Ops) - 1; i >= 0; i-- {
+		o := g.Ops[i]
+		if members[i] || !plainAdd(o) {
+			continue
+		}
+		var terms []graph.Op
+		var ops []int
+		cur := o
+		for {
+			t, ok := leaf(cur.In[1])
+			if !ok {
+				break
+			}
+			terms = append(terms, t)
+			ops = append(ops, made[cur.In[1]]-1)
+			l := cur.In[0]
+			if t, ok := leaf(l); ok {
+				terms = append(terms, t)
+				ops = append(ops, made[l]-1)
+				cur = graph.Op{}
+				break
+			}
+			if made[l] == 0 || readers[l] != 1 || !plainAdd(g.Ops[made[l]-1]) {
+				break
+			}
+			ops = append(ops, made[l]-1)
+			cur = g.Ops[made[l]-1]
+		}
+		if cur.Kind != graph.OpInvalid || len(terms) < 2 {
+			continue
+		}
+		v, w, k := terms[0].In[0], terms[0].Attr.Width, len(terms)
+		ok := g.Values[v].Width == k*w && g.Values[o.Out[0]].Rows == g.Values[v].Rows
+		for j, t := range terms {
+			ok = ok && t.In[0] == v && t.Attr.Width == w && t.Attr.Offset == (k-1-j)*w
+		}
+		if !ok {
+			continue
+		}
+		roots[i] = sliceSum{v: v, w: w, k: k}
+		for _, m := range ops {
+			members[m] = true
+		}
+	}
+	return roots, members
+}
+
+func decomposeSliceSum(o graph.Op, s sliceSum, c *Context) []Prim {
+	U := ir.U32
+	sh := c.rows(o.Out[0])
+	var x exprs
+	x.at(0, c.rows(s.v), x.coord(0), x.op(OpAdd, U, x.op(OpMul, U, x.coord(2), x.u(uint32(s.w))), x.coord(1)))
+	return []Prim{{Kind: PrimReduce, Shape: []int{sh[0], s.w, s.k}, In: []Operand{c.value(s.v)}, Out: c.value(o.Out[0]),
+		Combine: OpAdd, Expr: x.e}}
+}

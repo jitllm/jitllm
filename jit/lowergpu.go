@@ -385,6 +385,8 @@ func (e *lowerer) get(i int) ir.Value {
 	case OpTileMMA:
 		x, y, z := e.get(nd.A), e.get(nd.B), e.get(nd.C)
 		v = b.TileMMA(x, y, z)
+	case OpTileScale:
+		v = b.TileScaleRows(e.get(nd.A), e.params[nd.Buf], e.get(nd.B))
 	case OpMMA:
 		vs := make([]ir.Value, len(nd.Ax))
 		for j, a := range nd.Ax {

@@ -6,10 +6,12 @@ import (
 )
 
 // TileShape is one collective multiply-accumulate: an M x K by K x N product
-// of Elem operands into an Acc accumulator.
+// of Elem operands into an Acc accumulator, its rows scaled first where
+// Scale is set (ir.OpTileScale).
 type TileShape struct {
 	M, N, K   int
 	Elem, Acc ir.TileElem
+	Scale     bool
 }
 
 // LowersTile reports whether d compiles a kernel that multiplies collective
@@ -78,7 +80,11 @@ func tileProbe(s TileShape) (*ir.Kernel, error) {
 	acc := b.TilePhi(init)
 	a := b.TileLoad(aT, sh, zero, b.Const(ir.U32, int64(s.K)), false)
 	bb := b.TileLoad(bT, sh, b.Const(ir.U32, int64(s.M*s.K)), b.Const(ir.U32, int64(s.K)), true)
-	b.SetPhi(acc, b.TileMMA(a, bb, acc))
+	c := acc
+	if s.Scale {
+		c = b.TileScaleRows(acc, sh, zero)
+	}
+	b.SetPhi(acc, b.TileMMA(a, bb, c))
 	b.EndLoop()
 	b.TileStore(pOut, zero, b.Const(ir.U32, int64(s.M)), acc, true)
 	k, err := b.Done()

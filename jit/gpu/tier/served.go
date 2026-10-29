@@ -253,6 +253,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		VectorLoads: kernels.VectorLoads(g.dev.API()), Shared: sharedPerUnit(g.dev), Launch: g.launchWords()}
 	if dev.Matrix[0] > 0 {
 		dev.Fragment = backend.Fragment(g.dev)
+		dev.ScaleRows = g.composedScale()
 	}
 	dev.Tile = g.matrixTile(r, dev, rows)
 	if dev.Tile.Rows > 0 {
@@ -293,6 +294,18 @@ func (g *devTier) composedMatrix() [3]int {
 		return [3]int{}
 	}
 	return [3]int{s.M, s.N, s.K}
+}
+
+// composedScale reports whether the device lowers a row scale of the
+// matrix tile's accumulator (jit.Device.ScaleRows), asked once.
+func (g *devTier) composedScale() bool {
+	if g.scaleCap == 0 {
+		g.scaleCap = -1
+		if ok, _ := backend.LowersTile(g.dev, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32, Scale: true}); ok {
+			g.scaleCap = 1
+		}
+	}
+	return g.scaleCap > 0
 }
 
 // composedLanes is the subgroup the composer forms for: the device's lanes,

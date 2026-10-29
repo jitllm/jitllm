@@ -194,6 +194,17 @@ func (b *Builder) TileMMA(a, bb, c Value) Value {
 	return b.emit(Op{Kind: OpTileMMA, Type: Void, Tile: &tt, Args: [3]Value{a, bb, c}})
 }
 
+// TileScaleRows is accumulator t with each row r times the float32 word
+// offset+r of the shared array buf.
+func (b *Builder) TileScaleRows(t, buf, offset Value) Value {
+	tt := b.tileTypeOf(t)
+	if tt == nil || tt.Use != TileAcc || tt.Elem != TileF32 {
+		b.fail("ir: TileScaleRows: the scaled value is not a float32 accumulator")
+	}
+	r := *tt
+	return b.emit(Op{Kind: OpTileScale, Type: Void, Tile: &r, Args: [3]Value{t, buf, offset}})
+}
+
 // TileStore writes a tile back to memory. It is the only way out of a tile
 // value: there is no element accessor, since the lane mapping is undefined.
 func (b *Builder) TileStore(buf, offset, stride, tile Value, colMajor bool) {
@@ -227,7 +238,7 @@ func TileTypeOf(k *Kernel, v Value) *TileType {
 // IsTileOp reports whether a kind produces or consumes a collective value.
 func IsTileOp(k Kind) bool {
 	switch k {
-	case OpTileLoad, OpTileSplat, OpTileMMA, OpTileStore:
+	case OpTileLoad, OpTileSplat, OpTileMMA, OpTileStore, OpTileScale:
 		return true
 	}
 	return false
@@ -338,6 +349,20 @@ func (k *Kernel) validateTiles() error {
 		case OpTileSplat:
 			if TileTypeOf(k, o.Args[0]) != nil {
 				return fmt.Errorf("ir: op %d (tile.splat) splats a tile", i)
+			}
+		case OpTileScale:
+			t := TileTypeOf(k, o.Args[0])
+			if t == nil || *t != *o.Tile || t.Use != TileAcc || t.Elem != TileF32 {
+				return fmt.Errorf("ir: op %d (tile.scale) scales what is not its float32 accumulator", i)
+			}
+			if pd := int(o.Args[1]); pd <= 0 || pd > len(k.Ops) || k.Ops[pd-1].Kind != OpShared || k.Ops[pd-1].Type != F32 && k.Ops[pd-1].Type != U32 {
+				return fmt.Errorf("ir: op %d (tile.scale) reads its factors from value %d, not a shared array of words", i, o.Args[1])
+			}
+			if TileTypeOf(k, o.Args[2]) != nil {
+				return fmt.Errorf("ir: op %d (tile.scale): its offset is a tile", i)
+			}
+			if lane, why := k.laneDependent(o.Args[2], map[Value]bool{}); lane {
+				return fmt.Errorf("ir: op %d (tile.scale): its offset is lane-dependent (%s)", i, why)
 			}
 		case OpTileMMA:
 			a, b, c := TileTypeOf(k, o.Args[0]), TileTypeOf(k, o.Args[1]), TileTypeOf(k, o.Args[2])

@@ -150,6 +150,10 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 		}
 		if slices.Contains(cd.Passes, "flash") {
 			flash++
+			scaled := cd.GPU != nil && slices.ContainsFunc(cd.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileScale })
+			if scaled != dev.ScaleRows {
+				t.Errorf("%s scales its sums' rows in place %v on a device that states it %v", cd.Name, scaled, dev.ScaleRows)
+			}
 		}
 		for _, bd := range cd.Binds {
 			if bd.Operand.Kind != jit.OperandScratch || !bd.Read && !bd.Writes {

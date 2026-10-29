@@ -2296,8 +2296,9 @@ type devShared struct {
 	tileTallCap int8
 	// tileF32Cap is tileF32's probe, in tileCap's terms.
 	tileF32Cap int8
-	// matrixCap is composedMatrix's probe, in tileCap's terms.
-	matrixCap int8
+	// matrixCap is composedMatrix's probe, in tileCap's terms, scaleCap
+	// composedScale's.
+	matrixCap, scaleCap int8
 	// launch is launchWords' answer, asked once where launchSet.
 	launch    int
 	launchSet bool

@@ -205,6 +205,9 @@ const (
 	OpDepSignal
 	OpDepExit
 	OpOr
+	// OpTileScale is accumulator tile Args[0] with each row r times
+	// element Args[2]+r of the shared array Args[1].
+	OpTileScale
 	nKind
 )
 
@@ -219,7 +222,7 @@ var kindName = [nKind]string{
 	"tile.load", "tile.splat", "tile.mma", "tile.store", "sub.f16x2", "fma.f16x2",
 	"loadv", "loadv.get", "storev", "funnel",
 	"subgroup.reduce", "subgroup.broadcast", "shuffle", "laneid", "subgroup.size", "prefetch",
-	"grid.barrier", "dep.task", "dep.epoch", "dep.wait", "dep.signal", "dep.exit", "or",
+	"grid.barrier", "dep.task", "dep.epoch", "dep.wait", "dep.signal", "dep.exit", "or", "tile.scale",
 }
 
 func (k Kind) String() string { return kindName[k] }

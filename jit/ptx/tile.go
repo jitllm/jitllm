@@ -587,6 +587,52 @@ func (tl *tileLower) voltaAccess(o ir.Op, base Reg, offset, stride Reg, store []
 	return out
 }
 
+// scale is accumulator rs of t with each element times the f32 word of
+// shared array base at offset plus the element's row.
+func (tl *tileLower) scale(t ir.TileType, rs []Reg, base, offset Reg) []Reg {
+	b := tl.b
+	out := tl.fresh(t)
+	type rowAt struct {
+		l Reg
+		c int
+	}
+	factor := map[rowAt]Reg{}
+	mul := func(n int, l Reg, c int) {
+		f, ok := factor[rowAt{l, c}]
+		if !ok {
+			idx := b.Reg(B32)
+			b.Op("add.u32 %v,%v,%v;", idx, offset, l)
+			a := b.Reg(B64)
+			b.Op("mad.wide.u32 %v,%v,4,%v;", a, idx, base)
+			f = b.Reg(F32)
+			b.Op("ld.shared.f32 %v,[%v+%d];", f, a, 4*c)
+			factor[rowAt{l, c}] = f
+		}
+		b.Op("mul.rn.f32 %v,%v,%v;", out[n], rs[n], f)
+	}
+	if tl.volta {
+		l := tl.dr
+		if tl.pairs {
+			l = tl.aR
+		}
+		for n, el := range tl.voltaElems(t) {
+			mul(n, l, el.row)
+		}
+		return out
+	}
+	n := 0
+	for i := 0; i < t.Rows/8; i++ {
+		for j := 0; j < t.Cols/8; j++ {
+			for e := 0; e < 2; e++ {
+				l, c, _, _ := tl.element(t, i, j, e)
+				mul(n, l, c)
+				n++
+			}
+		}
+	}
+	return out
+}
+
 // splat is a tile every element of which is the f32 value v.
 func (tl *tileLower) splat(t ir.TileType, v Reg) []Reg {
 	b := tl.b
