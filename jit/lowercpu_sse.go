@@ -671,9 +671,21 @@ func (e *x86Lowerer) storeSSE(i int) {
 		}
 		return
 	}
+	if wide && s.Step > 1 {
+		for l := range 4 {
+			e.a.PEXTRDStore(laneAt(m, l*s.Step), e.reg(s.Val), byte(l))
+		}
+		return
+	}
 	if wide {
 		e.a.MOVDQUStore(m, e.reg(s.Val))
 		return
 	}
 	e.a.MOVSSStore(m, e.reg(s.Val))
+}
+
+// laneAt is m moved on by n words.
+func laneAt(m x86.Mem, n int) x86.Mem {
+	m.Disp += int32(4 * n)
+	return m
 }

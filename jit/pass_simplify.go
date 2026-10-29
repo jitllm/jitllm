@@ -509,6 +509,9 @@ func (k *Kernel) dropUnitLoops() bool {
 // them of the loop c took its own of, or else of the first of them.
 func (k *Kernel) removeLoop(c int) {
 	parent := k.Loops[c].Parent
+	if parent > c {
+		parent--
+	}
 	re := func(x int) int {
 		switch {
 		case x == c:

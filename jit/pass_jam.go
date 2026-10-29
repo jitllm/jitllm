@@ -76,59 +76,79 @@ func (p Jam) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // inner loop i and o's stores only as their last coordinate, by one, and
 // o stores only the sums i makes.
 func (k *Kernel) jammable(o, i int) bool {
+	_, ok := k.jamSteps(o, i)
+	return ok
+}
+
+// jamSteps is jammable, with the elements o's iteration moves each store
+// by: one, or for a float stored at a flat index, any constant.
+func (k *Kernel) jamSteps(o, i int) ([]int, bool) {
 	it := k.iterOf(o)
 	if it < 0 || k.readsAsValue(i, it) {
-		return false
+		return nil, false
 	}
 	hs := k.Homes()
 	g := newAlg(k)
 	a := g.id(atom{node: it})
-	// step reports whether index x moves by one a trip of o: one times the
-	// iteration and nothing else that reads it.
-	step := func(x int) bool {
+	// step is the constant index x moves by a trip of o, nothing else that
+	// reads the iteration in it.
+	step := func(x int) (int, bool) {
 		w, rest := g.coef(g.of(x), a)
-		if c, ok := w.constant(); !ok || c != 1 {
-			return false
+		c, ok := w.constant()
+		if !ok || c < 1 {
+			return 0, false
 		}
 		for m := range rest {
 			for _, id := range monoIDs(m) {
 				for _, nd := range g.nodes(id) {
 					if k.readsNode(nd, it) {
-						return false
+						return 0, false
 					}
 				}
 			}
 		}
-		return true
+		return int(c), true
 	}
 	consecutive := func(ax []int, ix int) bool {
 		if ax == nil {
-			return step(ix)
+			c, ok := step(ix)
+			return ok && c == 1
 		}
 		for _, a := range ax[:len(ax)-1] {
 			if k.readsNode(a, it) {
 				return false
 			}
 		}
-		return step(ax[len(ax)-1])
+		c, ok := step(ax[len(ax)-1])
+		return ok && c == 1
 	}
 	for x, nd := range k.Nodes {
 		if nd.Op != OpLoad || x >= len(hs) || hs[x] != i {
 			continue
 		}
 		if k.readsNode(x, it) && !consecutive(nd.Ax, nd.A) {
-			return false
+			return nil, false
 		}
 	}
-	for _, s := range k.Stores {
+	steps := make([]int, len(k.Stores))
+	for j, s := range k.Stores {
 		if s.Barrier || s.Run {
 			continue
 		}
-		if s.At != o || k.Nodes[s.Val].Op != OpFold || k.Nodes[s.Val].At != i || !consecutive(s.Ax, s.Ix) {
-			return false
+		if s.At != o || k.Nodes[s.Val].Op != OpFold || k.Nodes[s.Val].At != i {
+			return nil, false
 		}
+		steps[j] = 1
+		if consecutive(s.Ax, s.Ix) {
+			continue
+		}
+		c, ok := step(s.Ix)
+		if s.Ax != nil || !ok || k.Nodes[s.Val].Type != ir.F32 || k.Bufs[s.Buf].Half {
+			return nil, false
+		}
+		steps[j] = c
 	}
-	return true
+	return steps, true
 }
 
 // readsAsValue reports whether loop i's sums or its stores' values read
@@ -286,6 +306,7 @@ func (k *Kernel) jam(o, i int, p Jam, runtime bool, n int) *Kernel {
 	if runtime {
 		m.stripTail(o, i, n*L)
 	}
+	steps, _ := k.jamSteps(o, i)
 	hs := m.Homes()
 	var lanes []int
 	for x, nd := range m.Nodes {
@@ -334,7 +355,7 @@ func (k *Kernel) jam(o, i int, p Jam, runtime bool, n int) *Kernel {
 		of[j][it] = sub[it]
 	}
 	var stores []Store
-	for _, s := range m.Stores {
+	for x, s := range m.Stores {
 		if s.Barrier || s.Run || s.At != o {
 			stores = append(stores, s)
 			continue
@@ -342,6 +363,14 @@ func (k *Kernel) jam(o, i int, p Jam, runtime bool, n int) *Kernel {
 		for j := range n {
 			ns := s
 			ns.Val = of[j][s.Val]
+			if s.Ax == nil {
+				if x < len(steps) && steps[x] > 1 {
+					ns.Step = steps[x]
+				}
+				ns.Ix = m.copyKeep(s.Ix, map[int]int{it: of[j][it]})
+				stores = append(stores, ns)
+				continue
+			}
 			ns.Ax = make([]int, len(s.Ax))
 			for x, a := range s.Ax {
 				ns.Ax[x] = m.copyKeep(a, map[int]int{it: of[j][it]})

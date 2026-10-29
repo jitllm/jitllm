@@ -497,6 +497,17 @@ func (a *Buf) VPEXTRBStore(m Mem, src Reg, imm byte) {
 	a.u8(imm)
 }
 
+func (a *Buf) VPEXTRDStore(m Mem, src Reg, imm byte) {
+	idx := noIndex
+	if m.hasIndex() {
+		idx = m.Index
+	}
+	a.vex(src, Y0, m.Base, idx, false, p66, m0F3A, 0)
+	a.u8(0x16)
+	a.modrmMem(src, m)
+	a.u8(imm)
+}
+
 func (a *Buf) VMOVDQUStorex(m Mem, src Reg) {
 	idx := noIndex
 	if m.hasIndex() {

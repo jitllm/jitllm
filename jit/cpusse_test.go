@@ -46,6 +46,8 @@ func TestComposedCPUGatesOnSSE(t *testing.T) {
 		{"Head", TestComposedCPUHead},
 		{"HeadStoresItsOutputs", TestCPUHeadStoresItsOutputs},
 		{"AZeroInEveryLoop", TestAZeroIsMadeInEveryLoopThatReadsIt},
+		{"JamStoresAtAFlatIndex", TestCPUJamStoresAtAFlatIndex},
+		{"JamLooksUpByAWeightWord", TestCPUJamLooksUpByAWeightWord},
 	}
 	for _, g := range gates {
 		sseKernels.Lock()

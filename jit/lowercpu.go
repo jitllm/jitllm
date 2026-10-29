@@ -1303,6 +1303,19 @@ func (e *x86Lowerer) store(i int) {
 		}
 		return
 	}
+	if wide && s.Step > 1 {
+		r := e.reg(s.Val)
+		for h := range 2 {
+			if h == 1 {
+				e.a.VPERM2F128(r, r, r, 0x01)
+			}
+			for l := range 4 {
+				e.a.VPEXTRDStore(laneAt(m, (4*h+l)*s.Step), r, byte(l))
+			}
+		}
+		e.a.VPERM2F128(r, r, r, 0x01)
+		return
+	}
 	if wide {
 		e.a.VMOVDQUStore(m, e.reg(s.Val))
 		return

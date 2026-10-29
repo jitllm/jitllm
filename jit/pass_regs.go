@@ -850,11 +850,15 @@ func (k *Kernel) needsVectorOf(i int, words map[int]bool) bool {
 	if nd.Mem || k.dotZero(i) {
 		return false
 	}
-	if nd.Type == ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight && k.vectorized() {
+	if nd.Type == ir.F32 {
 		return nd.Op != OpConst || nd.Imm == 0 && k.zeroOperand(i)
 	}
 	if words == nil {
 		words = k.vectorWords()
+	}
+	if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight && k.vectorized() {
+		// A jammed loop's word an address reads stays in the general registers.
+		return words[i] || !k.wide() || !k.addressNodes()[i]
 	}
 	return words[i]
 }

@@ -465,6 +465,9 @@ type Store struct {
 	Tile   bool
 	Stride int
 	Col    bool
+	// Step, where more than one, is the elements between a jammed store's
+	// lanes, each stored alone.
+	Step int
 }
 
 func (n *Kernel) add(nd Node) int {
