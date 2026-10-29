@@ -447,9 +447,12 @@ func (e *lowerer) store(si int, st Store) {
 		b.StoreV(e.params[st.Buf], e.get(st.Ix), 0, vs...)
 		return
 	}
-	if st.Tile {
+	switch {
+	case st.Touch:
+		b.Prefetch(e.params[st.Buf], e.storeIndex(st))
+	case st.Tile:
 		b.TileStore(e.params[st.Buf], e.get(st.Ix), e.get(st.Stride), e.get(st.Val), st.Col)
-	} else {
+	default:
 		ix, v := e.storeIndex(st), e.get(st.Val)
 		b.Store(e.params[st.Buf], ix, v, 0)
 	}

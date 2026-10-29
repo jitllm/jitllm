@@ -494,6 +494,9 @@ type Store struct {
 	// Step, where more than one, is the elements between a jammed store's
 	// lanes, each stored alone.
 	Step int
+	// Touch writes nothing: it asks the cache for the word at Ix of Buf,
+	// which the kernel reads later.
+	Touch bool
 }
 
 func (n *Kernel) add(nd Node) int {

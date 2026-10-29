@@ -64,7 +64,7 @@ func gpuProfile() Profile {
 		FMA{},
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimMap, Unrolled: true}}},
 		Siblings{},
-		Prologue{Words: 12 << 10},
+		Prologue{Words: 12 << 10, Lead: 8, Trips: 8},
 		CallRows{},
 		Affine{Weights: []PrimKind{PrimMatrix, PrimReduce}},
 		Prefetch{Staged: []PrimKind{PrimMatrix}},

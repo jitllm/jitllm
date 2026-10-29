@@ -23,6 +23,13 @@ import (
 // producer's together (the 48 KiB every backend gives a workgroup statically).
 type Prologue struct {
 	Words int
+	// Lead is how many of each thread's weight words a kernel it forms asks
+	// the cache for before the producer runs, its first trips' words.
+	Lead int
+	// Trips caps the trips a thread of the kernel takes of a producer's
+	// loop where the producer reduces over its workgroup: its latency is
+	// paid before any weight word is summed.
+	Trips int
 }
 
 func (Prologue) Name() string { return "prologue" }
@@ -119,15 +126,13 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 		pr.Seq != nil || len(pr.Args) > 0 || len(pr.Ptrs) > 0 || pr.Part != c.Part || pr.Of != c.Of {
 		return false
 	}
-	shuffles, exchanges := false, false
+	shuffles, exchanges, whole := false, false, false
 	for _, nd := range pr.Nodes {
 		switch nd.Op {
-		// A reduction over the whole workgroup -- a norm's sum of squares --
-		// is paid for in every consumer workgroup before its own work starts:
-		// a row's norm inside q/k/v and gate/up gains at most 1% on 1-2B
-		// models and loses 6% on Phi-3.5 (docs/engineering-history/gpu-kernels.md).
-		case OpFlat, OpThread, OpGroupSum, OpGroupMax:
+		case OpFlat, OpThread:
 			return false
+		case OpGroupSum, OpGroupMax:
+			whole = true
 		case OpShuffle:
 			shuffles = true
 		case OpExchange:
@@ -208,7 +213,7 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 			read = true
 		}
 	}
-	return read && words <= p.Words && !readsASlice(pr, c)
+	return read && words <= p.Words && !readsASlice(pr, c) && (!whole || oneWave(c, 4*words, d) && p.short(pr, c))
 }
 
 // readsASlice says a workgroup of c reads only part of what pr writes: a
@@ -294,6 +299,30 @@ func (k *Kernel) intAt(i int, coord map[int]uint32) (uint32, bool) {
 	return 0, false
 }
 
+// short says each of pr's spread loops takes at most Trips trips a thread
+// of c.
+func (p Prologue) short(pr, c *Kernel) bool {
+	for _, l := range pr.Loops {
+		if l.Parent < 0 && l.Spread && (l.Trip+c.Group-1)/c.Group > p.Trips {
+			return false
+		}
+	}
+	return true
+}
+
+// oneWave says the device holds every workgroup of c at once, each taking
+// shared bytes, with registers past those of a full unit's threads for the
+// producer's values: a reduction over the workgroup run in each of them is
+// paid once, not once a wave.
+func oneWave(c *Kernel, shared int, d Device) bool {
+	g := c.groups()
+	if d.Units <= 0 || d.Slots <= 0 || c.Group <= 0 {
+		return false
+	}
+	per := (g + d.Units - 1) / d.Units
+	return per*c.Group < d.Slots/d.Units && (d.Shared <= 0 || per*shared <= d.Shared)
+}
+
 // readsOperand says k reads operand o.
 func readsOperand(k *Kernel, o Operand) bool {
 	for _, b := range k.Bufs {
@@ -328,6 +357,7 @@ func readsShaped(k *Kernel, o Operand) bool {
 // merge is c with pr run first in each of its workgroups.
 func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 	k := c.clone()
+	lead := k.lead(p.Lead)
 	k.Passes = append(append([]string(nil), c.Passes...), p.Name())
 	// What c reads of pr is workgroup memory: its buffer, and pr's stores
 	// to it, one slot of k.
@@ -502,6 +532,128 @@ func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 	// What the producer wrote is seen by every thread before the kernel's
 	// own body reads it.
 	first = append(first, Store{Barrier: true, At: -1})
-	k.Stores = append(first, k.Stores...)
+	k.Stores = append(append(lead, first...), k.Stores...)
 	return k
+}
+
+// lead is up to n touches of the weight words each of k's threads reads
+// first: each weight load whose index is arithmetic of the thread, the
+// workgroup and the trip of one loop of fixed trips, at that loop's trips
+// in order. A loop in a guard -- a sibling's, run by its own workgroups --
+// takes its touches in a guard of the same count.
+func (k *Kernel) lead(n int) []Store {
+	if n <= 0 {
+		return nil
+	}
+	guardOf := func(l Loop) (int, bool) {
+		if l.Parent < 0 {
+			return -1, true
+		}
+		g := k.Loops[l.Parent]
+		return l.Parent, g.Parent < 0 && g.Kept && g.Trip == 1 && g.Count > 0 && !g.Spread && !g.Range
+	}
+	type site struct{ load, loop, guard int }
+	var sites []site
+	for i, nd := range k.Nodes {
+		if nd.Op != OpLoad || nd.Ax != nil || k.Bufs[nd.Buf].Operand.Kind != OperandWeight {
+			continue
+		}
+		loop, ok := -1, true
+		var walk func(v int)
+		walk = func(v int) {
+			x := k.Nodes[v]
+			switch x.Op {
+			case OpConst, OpCoord, OpThread:
+				return
+			case OpIter:
+				l := k.Loops[x.At]
+				_, guarded := guardOf(l)
+				if loop >= 0 && loop != x.At || !guarded || l.Count != 0 || l.Spread || l.Range || l.Lanes != 0 || l.Copies != 0 || l.Wide != 0 || len(l.Cursors) > 0 {
+					ok = false
+				}
+				loop = x.At
+				return
+			case OpAdd, OpSub, OpMul, OpDiv, OpRem, OpMin, OpMax, OpShl, OpShr, OpAnd, OpOr, OpXor:
+			default:
+				ok = false
+				return
+			}
+			for _, a := range k.Operands(&x) {
+				walk(*a)
+			}
+		}
+		walk(nd.A)
+		if !ok {
+			continue
+		}
+		g := -1
+		if loop >= 0 {
+			g, _ = guardOf(k.Loops[loop])
+		}
+		sites = append(sites, site{i, loop, g})
+	}
+	var out []Store
+	type word struct {
+		buf, ix int
+		imm     int64
+		trip    int
+	}
+	guards := map[int]int{}
+	taken := map[int]int{}
+	seen := map[word]bool{}
+	for t := 0; ; t++ {
+		more := false
+		for _, s := range sites {
+			if taken[s.guard] == n || s.loop < 0 && t > 0 || s.loop >= 0 && t >= k.Loops[s.loop].Trip {
+				continue
+			}
+			more = true
+			nd := k.Nodes[s.load]
+			if w := (word{nd.Buf, nd.A, nd.Imm, t}); seen[w] {
+				continue
+			} else {
+				seen[w] = true
+			}
+			memo := map[int]int{}
+			var at func(v int) int
+			at = func(v int) int {
+				if r, ok := memo[v]; ok {
+					return r
+				}
+				x := k.Nodes[v]
+				r := v
+				switch {
+				case x.Op == OpIter:
+					r = k.u32(t)
+				case x.Op != OpConst && x.Op != OpCoord && x.Op != OpThread && s.loop >= 0 && k.Varies(v, s.loop):
+					for _, a := range k.Operands(&x) {
+						*a = at(*a)
+					}
+					r = k.add(x)
+				}
+				memo[v] = r
+				return r
+			}
+			ix := at(nd.A)
+			if nd.Imm != 0 {
+				ix = k.bin(OpAdd, ir.U32, ix, k.u32(int(nd.Imm)))
+			}
+			st := Store{Buf: nd.Buf, Ix: ix, Val: ix, At: -1, Touch: true}
+			if s.guard >= 0 {
+				g, ok := guards[s.guard]
+				if !ok {
+					g = k.loop(1, -1)
+					k.Loops[g].Kept, k.Loops[g].Count = true, k.Loops[s.guard].Count
+					guards[s.guard] = g
+				}
+				st.At = g
+			}
+			out = append(out, st)
+			taken[s.guard]++
+		}
+		if !more {
+			break
+		}
+	}
+	return out
 }
