@@ -851,7 +851,15 @@ func (e *a64Lowerer) take(c int) {
 	} else if it >= 0 && k.Nodes[it].Spill > 0 {
 		e.slot(cpu.A64StrX, uint8(cpu.XZR), k.Nodes[it].Spill)
 	}
+	zeroed := map[int]bool{}
 	for _, cu := range l.Cursors {
+		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Off > 0 {
+			if off := k.Ptrs[cu.Ptr-1].Off; !zeroed[off] {
+				a.MOVreg(e.gp(x86.Reg(off-1)), cpu.XZR)
+				zeroed[off] = true
+			}
+			continue
+		}
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
 			e.slot(cpu.A64StrX, uint8(e.ptrReg(cu.Buf, cu.From)), k.Ptrs[cu.Ptr-1].Spill)
 		} else if cu.Take {
@@ -864,10 +872,20 @@ func (e *a64Lowerer) take(c int) {
 func (e *a64Lowerer) leave(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
+	stepped := map[int]bool{}
 	for _, cu := range l.Cursors {
 		step := int64(cu.Elems * ElemBytes(k.Bufs[cu.Buf]))
+		off := 0
+		if cu.Ptr > 0 {
+			off = k.Ptrs[cu.Ptr-1].Off
+		}
 		switch {
 		case cu.Elems == 0:
+		case off > 0 && stepped[off]:
+		case off > 0:
+			r := e.gp(x86.Reg(off - 1))
+			e.addConstTo(r, r, step/int64(k.Ptrs[cu.Ptr-1].Scale))
+			stepped[off] = true
 		case cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0:
 			s := k.Ptrs[cu.Ptr-1].Spill
 			e.slot(cpu.A64LdrX, uint8(a64T), s)

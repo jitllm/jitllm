@@ -213,6 +213,9 @@ func (e *a64Lowerer) laneAddr(b, ix, ptr int) a64Mem {
 	a.UMOVs0(a64Addr, lo(e.reg(ix)))
 	a.LSLimm(a64Addr, a64Addr, uint8(bits.TrailingZeros(uint(ElemBytes(k.Bufs[b])))))
 	switch {
+	case ptr > 0 && k.Ptrs[ptr-1].Off > 0:
+		a.ADDreg(a64Addr, a64Addr, e.offBase(ptr))
+		a.ADDlsl(a64Addr, a64Addr, e.gp(x86.Reg(k.Ptrs[ptr-1].Off-1)), uint8(bits.TrailingZeros(uint(k.Ptrs[ptr-1].Scale))))
 	case ptr > 0 && k.Ptrs[ptr-1].Reg == 0 && k.Ptrs[ptr-1].Spill > 0:
 		e.slot(cpu.A64LdrX, uint8(a64Imm), k.Ptrs[ptr-1].Spill)
 		a.ADDreg(a64Addr, a64Addr, a64Imm)
@@ -229,8 +232,20 @@ func (e *a64Lowerer) laneAddr(b, ix, ptr int) a64Mem {
 	return a64Mem{a64Addr, 0}
 }
 
+func (e *a64Lowerer) offBase(ptr int) cpu.XReg {
+	p := e.k.Ptrs[ptr-1]
+	if p.From > 0 {
+		return e.gp(x86.Reg(e.k.Ptrs[p.From-1].Reg - 1))
+	}
+	return e.gp(x86.Reg(e.k.Bufs[p.Buf].Reg - 1))
+}
+
 func (e *a64Lowerer) ptrReg(b, ptr int) cpu.XReg {
 	r := e.k.Bufs[b].Reg
+	if p := e.k.Ptrs; ptr > 0 && p[ptr-1].Off > 0 {
+		e.a.ADDlsl(e.gp(reloadReg), e.offBase(ptr), e.gp(x86.Reg(p[ptr-1].Off-1)), uint8(bits.TrailingZeros(uint(p[ptr-1].Scale))))
+		return e.gp(reloadReg)
+	}
 	if ptr > 0 {
 		r = e.k.Ptrs[ptr-1].Reg
 		if s := e.k.Ptrs[ptr-1].Spill; r == 0 && s > 0 {
