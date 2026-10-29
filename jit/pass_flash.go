@@ -21,11 +21,12 @@ import (
 // less the new. No buffer holds a row's scores, and the blocks run to the
 // tile's last live position, read from the row descriptors at run time.
 //
-// The matrix unit multiplies binary16; each float32 operand is staged as
-// two, its binary16 rounding and the rounding of what is left, and a
-// product of two such the three products the leftovers' product does not
-// reach, so the dots keep float32's precision. A value the history holds
-// as binary16 is staged as itself.
+// The matrix unit multiplies binary16. Over a history holding the second
+// factor as binary16, every operand is staged as its binary16 rounding: one
+// product a block of dots and one of weighted sums. Over a float32 history
+// each operand is staged as two, its rounding and the rounding of what is
+// left, and a product of two such the three products the leftovers'
+// product does not reach.
 //
 // Rows, Keys and Shared bound a workgroup's rows, a block's positions and
 // the workgroup memory it takes, in bytes; fewer rows or positions are
@@ -38,8 +39,6 @@ import (
 // 128 rows in 97 KiB read 3.6% slower in a prompt.
 type Flash struct {
 	Rows, Keys, Shared int
-	// one stages no remainders: a product a block of dots or weighted sums.
-	one bool
 }
 
 func (Flash) Name() string { return "flash" }
@@ -325,8 +324,6 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 	if d.Shared > 0 {
 		limit = min(limit, d.Shared)
 	}
-	// A second factor the history holds as binary16 is staged as itself;
-	// one it holds as float32 as its two binary16 parts.
 	vlo := c.vl.k.Nodes[vx].Op != OpWidenHalf
 	g := p.layout(R, Dk, Dv, limit, tm, tn, tk, vlo)
 	if g.TR < p.Rows/2 && d.Shared > limit {
@@ -337,7 +334,7 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 	if g.TR == 0 {
 		return nil, false
 	}
-	b := flashBuild{one: p.one, c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
+	b := flashBuild{one: !vlo, c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
 		tq: map[int]int{}, tr: map[int]int{}}
 	return b.kernel(), true
 }

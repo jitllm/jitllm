@@ -197,7 +197,11 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 		}
 		return 0
 	}
-	ref := func(sinkOn bool) []float64 {
+	half := func(x float64) float64 { return float64(quant.DecodeHalf(quant.EncodeHalf(float32(x)))) }
+	id := func(x float64) float64 { return x }
+	// ref is the definition over the pools; with rnd binary16 rounding, the
+	// tier's FlashPrefill70 arithmetic: q, k and each exponential rounded.
+	ref := func(sinkOn bool, rnd func(float64) float64) []float64 {
 		want := make([]float64, R*qw)
 		for r := range R {
 			end := p0 + r + 1
@@ -207,7 +211,7 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 				for p := first(r); p < end; p++ {
 					var s float64
 					for e := range c.dim {
-						s += float64(q[r*qw+h*c.dim+e]) * float64(ks[p][kv*c.dim+e])
+						s += rnd(float64(q[r*qw+h*c.dim+e])) * rnd(float64(ks[p][kv*c.dim+e]))
 					}
 					sc = append(sc, s*float64(scale))
 				}
@@ -215,12 +219,13 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 					sc = append(sc, float64(sinkv[h]))
 				}
 				oracle.Softmax(sc)
+				top := slices.Max(sc)
 				for e := range c.dim {
 					var o float64
 					for i, p := 0, first(r); p < end; i, p = i+1, p+1 {
-						o += sc[i] * round(vs[p][kv*c.dim+e])
+						o += rnd(sc[i]/top) * round(vs[p][kv*c.dim+e])
 					}
-					want[r*qw+h*c.dim+e] = o
+					want[r*qw+h*c.dim+e] = o * top
 				}
 			}
 		}
@@ -256,7 +261,7 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 		}
 		return num / den
 	}
-	want := ref(c.sinks)
+	want := ref(c.sinks, id)
 	got := run(0, sinkv)
 	// A device whose lowering rounds every operation alone is held to
 	// float32's band; a driver free to contract and approximate (SPIR-V's)
@@ -265,6 +270,18 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 	band := 1e-8
 	if !dev.ExactArith {
 		band = 1e-6
+	}
+	if flash == 1 && !c.f32v {
+		tier := make([]float32, R*qw)
+		for i, x := range ref(c.sinks, half) {
+			tier[i] = float32(x)
+		}
+		worstTier := 0.0
+		for r := range R {
+			worstTier = max(worstTier, nmse(tier, want, r))
+		}
+		band = max(band, flashTierFactor*worstTier)
+		t.Logf("the tier's arithmetic: worst NMSE %.3e against the definition, the band %.3e", worstTier, band)
 	}
 	worst := 0.0
 	for r := range R {
@@ -281,16 +298,20 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 	}
 	t.Logf("%d rows of a %d-row form: worst NMSE %.3e against the definition", R, capRows, worst)
 	bad := run(1, sinkv)
-	if e := nmse(bad, want, R-1); !(e > 1e-6) {
+	if e := nmse(bad, want, R-1); !(e > max(1e-6, band)) {
 		t.Errorf("with every row's first attended position moved the NMSE is %.3e: the gate cannot see a wrong row", e)
 	}
 	if c.sinks {
 		bad := run(0, make([]float32, c.heads))
-		if e := nmse(bad, want, 0); !(e > 1e-6) {
+		if e := nmse(bad, want, 0); !(e > max(1e-6, band)) {
 			t.Errorf("with the sinks zeroed the NMSE is %.3e: the gate cannot see the sinks", e)
 		}
 	}
 }
+
+// flashTierFactor bounds the flash form over a binary16 history at the
+// tier's own arithmetic's worst row.
+const flashTierFactor = 2
 
 // launchAttend runs codes in order at their full grids, each binding the
 // gate's words by kind -- values by id, tables by name, vectors by role --

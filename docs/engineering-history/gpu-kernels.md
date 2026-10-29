@@ -11119,3 +11119,8 @@ row where the composer's reads two.
   a word loaded once, no prefetch on a run the streamer's 20 lines reach.
   E5-2680 v4 node 0, 14 threads, Q4_K, of main: 8192x2048 0.65 to 0.894,
   0.895; 2048x8192 0.46 to 0.66-0.70; 2048x2048 0.51 to 0.75; token 0.55.
+- The flash form over a binary16 value history stages no remainders: one
+  binary16 product for the dots and one for the weighted sums, main's own
+  arithmetic; a float32 history keeps every remainder. The attention gate
+  holds it within 2x the oracle with q, k, p and v rounded (sm_70 and sm_86:
+  1.5e-7..2.1e-7 against 1.5e-7..2.1e-7), and the fault switch is gone.
