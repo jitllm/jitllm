@@ -11208,3 +11208,8 @@ row where the composer's reads two.
   A decode attention runs as one pool phase, head pair by head pair, where the composer states each call reaches only its own
   heads (Kernel.Reach): 129 -> 81 phases a token (main 82). E5-2680 v4 node 1, 14 threads, composed/main (A/A 0.99-1.02):
   tg Llama Q4_K_M 0.883 -> 0.92-0.935, Qwen3 Q8_0 0.990 -> 1.03-1.05; pp512 0.473 -> 0.493 and 0.801 -> 0.804.
+- A slice sum is one reduce kernel, a float32 projection runs float tiles, flash rescales its sums in place; a group split keeps its width (halved to fill idle units it
+  cost V100 tg128 Qwen2.5-1.5B 0.967, q/k/v two launches, and bought pp2048 nothing). On sm_70 the matrix stage's shares are stated in the thread's terms, Affine drops x+0 and x*1, a scale stream's scale and minimum
+  are one twelve-bit field, and a pair of halves is dealt back by one byte permute (ir.OpPackHalves): the 8B gate projection's loop 883 -> 783 instructions a trip
+  (main's 738). V100, kernels a 2048-token prompt: 8B matrix 462 -> 414 ms (main 418), 30B all kernels 503 (main 531). Server TTFT over tuned main at 512/1024/2048,
+  two rotations: Llama-3.1-8B 0.970-0.976 (was 1.05), Qwen3-30B-A3B 0.90-0.93; answers equal.

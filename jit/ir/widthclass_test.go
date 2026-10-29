@@ -19,7 +19,7 @@ func TestWidthDependentIsTheWholeClass(t *testing.T) {
 		}
 	}
 	want := []Kind{OpShuffleXor, OpMMA, OpTileLoad, OpTileSplat, OpTileMMA, OpTileStore,
-		OpSubgroupReduce, OpSubgroupBroadcast, OpShuffle, OpLaneID}
+		OpSubgroupReduce, OpSubgroupBroadcast, OpShuffle, OpLaneID, OpTileScale}
 	if len(got) != len(want) {
 		t.Fatalf("width-dependent ops are %v, want %v", got, want)
 	}

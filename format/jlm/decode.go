@@ -119,24 +119,20 @@ func DecodeParts[V any](a Arith[V], l TypeLayout, rows int, r, c V) (code, scale
 	// The sub-block's own scale and minimum, and the bias.
 	switch {
 	case l.scStream():
-		s8 := a.Rem(si, u(8))
-		field := func(min uint32) V {
-			f := a.Add(a.Mul(s8, u(2)), u(min))
-			bit := a.Mul(f, u(6))
-			w, b := a.Div(bit, u(32)), a.Rem(bit, u(32))
-			word := func(w V) V {
-				return a.Word(PlaneSC, a.Add(a.Mul(a.Add(a.Mul(super, u(scStreamWords)), w), R), r))
-			}
-			lo := a.Shr(word(w), b)
-			// A field past bit 26 takes its high bits from the next word;
-			// shifted 32-b in two steps, so no shift reaches 32, and the
-			// next word's index held inside the stream.
-			next := word(a.Min(a.Add(w, u(1)), u(scStreamWords-1)))
-			hiPart := a.Shl(a.Shl(next, u(1)), a.Sub(u(31), b))
-			return a.And(a.Add(lo, hiPart), u(63))
+		// The scale and the minimum are one twelve-bit field.
+		bit := a.Mul(a.Rem(si, u(8)), u(12))
+		w, b := a.Div(bit, u(32)), a.Rem(bit, u(32))
+		word := func(w V) V {
+			return a.Word(PlaneSC, a.Add(a.Mul(a.Add(a.Mul(super, u(scStreamWords)), w), R), r))
 		}
-		scale = a.FMul(scale, a.Float(field(0)))
-		bias = a.FMul(dmin, a.Float(field(1)))
+		lo := a.Shr(word(w), b)
+		// A field past bit 20 takes its high bits from the next word;
+		// shifted 32-b in two steps, so no shift reaches 32, and the
+		// next word's index held inside the stream.
+		next := word(a.Min(a.Add(w, u(1)), u(scStreamWords-1)))
+		pair := a.Add(lo, a.Shl(a.Shl(next, u(1)), a.Sub(u(31), b)))
+		scale = a.FMul(scale, a.Float(a.And(pair, u(63))))
+		bias = a.FMul(dmin, a.Float(a.And(a.Shr(pair, u(6)), u(63))))
 	case l.SuperSub > 1:
 		perWord, stride := 4, 8
 		if l.HasMin {

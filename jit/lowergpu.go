@@ -407,6 +407,8 @@ func (e *lowerer) get(i int) ir.Value {
 		v = b.SubF16x2(e.get(nd.A), e.get(nd.B))
 	case OpFmaF16x2:
 		v = b.FmaF16x2(e.get(nd.A), e.get(nd.B), e.get(nd.C))
+	case OpPackHalves:
+		v = b.PackHalves(e.get(nd.A), e.get(nd.B), nd.Imm == 1)
 	default:
 		e.fail("node %d: op %d", i, nd.Op)
 		return 0

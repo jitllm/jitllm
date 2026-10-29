@@ -88,8 +88,8 @@ func (n *Kernel) halfPairs() bool {
 			}
 			ac, bd := n.decodePair(X.lo), n.decodePair(X.hi)
 			U := ir.U32
-			n.Stores[X.store].Val = n.bin(OpOr, U, n.bin(OpAnd, U, ac, n.u32(0xFFFF)), n.bin(OpShl, U, bd, n.u32(16)))
-			n.Stores[Y.store].Val = n.bin(OpOr, U, n.bin(OpShr, U, ac, n.u32(16)), n.bin(OpAnd, U, bd, n.u32(0xFFFF0000)))
+			n.Stores[X.store].Val = n.add(Node{Op: OpPackHalves, Type: U, A: ac, B: bd})
+			n.Stores[Y.store].Val = n.add(Node{Op: OpPackHalves, Type: U, A: ac, B: bd, Imm: 1})
 			used[x], used[y] = true, true
 			changed = true
 		}

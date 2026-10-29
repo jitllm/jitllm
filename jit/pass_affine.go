@@ -30,6 +30,7 @@ func (p Affine) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		for {
 			step := m.cse(weights)
 			step = m.foldConstants() || step
+			step = m.identities() || step
 			step = m.powersOfTwo() || step
 			step = m.headroom() || step
 			if weights {
@@ -312,6 +313,51 @@ func (k *Kernel) foldConstants() bool {
 		changed = true
 	}
 	return changed
+}
+
+// identities takes x+0, x-0, x|0 shifted by 0, x*1 and x/1 as x.
+func (k *Kernel) identities() bool {
+	same := map[int]int{}
+	for i, nd := range k.Nodes {
+		if nd.Type != ir.U32 {
+			continue
+		}
+		c := func(x int, v int64) bool { return k.Nodes[x].Op == OpConst && k.Nodes[x].Imm == v }
+		switch nd.Op {
+		case OpAdd:
+			if c(nd.B, 0) {
+				same[i] = nd.A
+			} else if c(nd.A, 0) {
+				same[i] = nd.B
+			}
+		case OpSub, OpShr, OpShl, OpXor:
+			if c(nd.B, 0) {
+				same[i] = nd.A
+			}
+		case OpMul:
+			if c(nd.B, 1) {
+				same[i] = nd.A
+			} else if c(nd.A, 1) {
+				same[i] = nd.B
+			}
+		case OpDiv:
+			if c(nd.B, 1) {
+				same[i] = nd.A
+			}
+		}
+	}
+	for i, j := range same {
+		for {
+			t, ok := same[j]
+			if !ok {
+				break
+			}
+			j = t
+		}
+		same[i] = j
+	}
+	k.redirectMany(same)
+	return len(same) > 0
 }
 
 // addConst is node i as x + c for a constant c, when it is one.

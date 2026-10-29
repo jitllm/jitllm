@@ -459,6 +459,16 @@ func (l *lowerer) op(i int, o ir.Op, v ir.Value) error {
 		hi := l.fresh()
 		l.emit("%s = shl i32 %s, 16", hi, w[1])
 		l.emit("%s = or i32 %s, %s", r, w[0], hi)
+	case ir.OpPackHalves:
+		x, y := l.fresh(), l.fresh()
+		if o.Imm == 1 {
+			l.emit("%s = lshr i32 %s, 16", x, val(a0))
+			l.emit("%s = and i32 %s, 4294901760", y, val(a1))
+		} else {
+			l.emit("%s = and i32 %s, 65535", x, val(a0))
+			l.emit("%s = shl i32 %s, 16", y, val(a1))
+		}
+		l.emit("%s = or i32 %s, %s", r, x, y)
 	case ir.OpSubF16x2, ir.OpFmaF16x2:
 		var hs []string
 		args := []ir.Value{a0, a1}

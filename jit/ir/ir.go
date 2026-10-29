@@ -208,6 +208,9 @@ const (
 	// OpTileScale is accumulator tile Args[0] with each row r times
 	// element Args[2]+r of the shared array Args[1].
 	OpTileScale
+	// OpPackHalves is the low binary16 halves of Args[0] and Args[1] in one
+	// u32, Args[0]'s low; with Imm 1 their high halves.
+	OpPackHalves
 	nKind
 )
 
@@ -222,7 +225,7 @@ var kindName = [nKind]string{
 	"tile.load", "tile.splat", "tile.mma", "tile.store", "sub.f16x2", "fma.f16x2",
 	"loadv", "loadv.get", "storev", "funnel",
 	"subgroup.reduce", "subgroup.broadcast", "shuffle", "laneid", "subgroup.size", "prefetch",
-	"grid.barrier", "dep.task", "dep.epoch", "dep.wait", "dep.signal", "dep.exit", "or", "tile.scale",
+	"grid.barrier", "dep.task", "dep.epoch", "dep.wait", "dep.signal", "dep.exit", "or", "tile.scale", "pack.halves",
 }
 
 func (k Kind) String() string { return kindName[k] }
@@ -406,6 +409,16 @@ func (b *Builder) PackF16(lo, hi Value) Value {
 // SubF16x2 is a-b on two packed binary16 halves.
 func (b *Builder) SubF16x2(x, y Value) Value {
 	return b.emit(Op{Kind: OpSubF16x2, Type: U32, Args: [3]Value{x, y}})
+}
+
+// PackHalves is x's and y's low halves in one word, x's low, or their high
+// halves where high is set.
+func (b *Builder) PackHalves(x, y Value, high bool) Value {
+	imm := int64(0)
+	if high {
+		imm = 1
+	}
+	return b.emit(Op{Kind: OpPackHalves, Type: U32, Args: [3]Value{x, y}, Imm: imm})
 }
 
 // FmaF16x2 is a*b+c on two packed binary16 halves, rounded once.

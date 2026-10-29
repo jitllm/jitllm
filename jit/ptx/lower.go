@@ -343,6 +343,15 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 			b.Op("sub.rn.f16x2 %v,%v,%v;", r, reg[a0], reg[a1])
 			reg[v] = r
 
+		case ir.OpPackHalves:
+			r := b.Reg(B32)
+			sel := 0x5410
+			if o.Imm == 1 {
+				sel = 0x7632
+			}
+			b.Op("prmt.b32 %v,%v,%v,0x%x;", r, reg[a0], reg[a1], sel)
+			reg[v] = r
+
 		case ir.OpFmaF16x2:
 			r := b.Reg(B32)
 			b.Op("fma.rn.f16x2 %v,%v,%v,%v;", r, reg[a0], reg[a1], reg[a2])

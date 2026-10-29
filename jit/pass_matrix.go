@@ -656,14 +656,14 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 		n := rows * KC / G
 		for j := 0; j*m.Group < n; j++ {
 			w := m.bin(OpAdd, U, thread, m.u32(j*m.Group))
-			if (j+1)*m.Group > n {
+			whole := (j+1)*m.Group <= n
+			if !whole {
 				w = m.bin(OpMin, U, w, m.u32(n-1))
 			}
-			row := m.bin(OpDiv, U, w, m.u32(KC/G))
-			g := m.bin(OpRem, U, w, m.u32(KC/G))
+			row, g := m.share(thread, w, j*m.Group, KC/G, whole)
 			if frag && axis == 1 {
 				// One row's runs of k a thread: its scales decode once.
-				row, g = m.bin(OpRem, U, w, m.u32(rows)), m.bin(OpDiv, U, w, m.u32(rows))
+				g, row = m.share(thread, w, j*m.Group, rows, whole)
 			}
 			c := m.bin(OpMin, U, m.bin(OpAdd, U, base, row), most)
 			kg := m.bin(OpAdd, U, kc, m.bin(OpMul, U, g, m.u32(G)))
@@ -821,6 +821,20 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	return formed
 }
 
+// share is w/per and w%per for w = thread + at, at a multiple of the
+// workgroup, in terms of the thread alone where per and the workgroup
+// divide one another, so every share of one row reads one address.
+func (m *Kernel) share(thread, w, at, per int, whole bool) (int, int) {
+	U := ir.U32
+	switch {
+	case whole && per%m.Group == 0:
+		return m.u32(at / per), m.bin(OpAdd, U, thread, m.u32(at%per))
+	case whole && m.Group%per == 0:
+		return m.bin(OpAdd, U, m.bin(OpDiv, U, thread, m.u32(per)), m.u32(at/per)), m.bin(OpRem, U, thread, m.u32(per))
+	}
+	return m.bin(OpDiv, U, w, m.u32(per)), m.bin(OpRem, U, w, m.u32(per))
+}
+
 // storesOf copies k's stores into m at row r and output n, the value of
 // k's fold the sum, in loop at.
 func (k *Kernel) storesOf(m *Kernel, fold, r, n, sum, at int) {
@@ -875,6 +889,9 @@ func combine(k *Kernel, planes Operand, S int) *Kernel {
 // fragment or staging access names fall in different banks.
 func (m *Kernel) swizzle(row, chunks int) int {
 	U := ir.U32
+	if nd := m.Nodes[row]; nd.Op == OpAdd && m.Nodes[nd.B].Op == OpConst && m.Nodes[nd.B].Imm%16 == 0 {
+		row = nd.A
+	}
 	bit := func(b int) int { return m.bin(OpAnd, U, m.bin(OpShr, U, row, m.u32(b)), m.u32(1)) }
 	bits := []int{bit(0), bit(1), m.bin(OpXor, U, bit(2), bit(3))}
 	s := m.u32(0)

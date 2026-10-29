@@ -446,6 +446,12 @@ func (l *lowerer) arith(i int, o ir.Op) error {
 		// Packed binary16 pairs, as PTX's sub.rn.f16x2: MSL's half2 is the
 		// same two IEEE halves in one 32-bit value, so the bits pass through.
 		l.def(i, ir.U32, "as_type<uint>(as_type<half2>(%s) - as_type<half2>(%s))", a, b)
+	case ir.OpPackHalves:
+		if o.Imm == 1 {
+			l.def(i, ir.U32, "((%s >> 16) | (%s & 0xFFFF0000u))", a, b)
+		} else {
+			l.def(i, ir.U32, "((%s & 0xFFFFu) | (%s << 16))", a, b)
+		}
 	case ir.OpFmaF16x2:
 		l.def(i, ir.U32, "as_type<uint>(fma(as_type<half2>(%s), as_type<half2>(%s), as_type<half2>(%s)))", a, b, c)
 	case ir.OpLoadV:
