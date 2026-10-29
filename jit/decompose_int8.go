@@ -145,6 +145,16 @@ func (x *exprs) recipPick(d, r, acc int) (v, pos int) {
 // model's widest row).
 func (c *Context) window(v graph.ValueID) int { return min(c.Int8.Window, c.width(v)) }
 
+// slot is how many elements each of value v's scale words covers: its
+// window, or the form's Slot where the window is wider, the window's scale
+// then stored once a slot so that a sub-block's index scales to it.
+func (c *Context) slot(v graph.ValueID) int {
+	if s, ww := c.Int8.Slot, c.window(v); s > 0 && ww > s && ww%s == 0 {
+		return s
+	}
+	return c.window(v)
+}
+
 // int8 is value v's int8 form, rows of w, as primitives: each window's
 // amax, its scale, the scale's inverse, each element's code, the codes
 // packed into words, each word's sum and the sums a Sums. The words and the
@@ -156,7 +166,8 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	sh := c.rows(v)
 	R, W := sh[0], sh[1]
 	ww := c.window(v)
-	nw, ns := W/ww, W/q.Sums
+	nw, ns, nsl := W/ww, W/q.Sums, W/c.slot(v)
+	rep := ww / c.slot(v)
 	x := c.value(v)
 	temp := func(name string, t ir.Type) Operand {
 		return Operand{Kind: OperandScratch, Name: x.Name + "." + name, Elem: t, Temp: true}
@@ -171,19 +182,31 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 
 	var d exprs
 	var ds int
-	if c.exactDiv {
-		ds = d.op(OpDiv, F, d.at(0, win, d.coord(0), d.coord(1)), d.f(127))
-	} else {
-		ds = d.scale(d.at(0, win, d.coord(0), d.coord(1)))
+	dw := d.coord(1)
+	if rep > 1 {
+		dw = d.op(OpDiv, U, dw, d.u(uint32(rep)))
 	}
-	dix := flat(&d, d.coord(0), d.coord(1), nw+ns)
+	if c.exactDiv {
+		ds = d.op(OpDiv, F, d.at(0, win, d.coord(0), dw), d.f(127))
+	} else {
+		ds = d.scale(d.at(0, win, d.coord(0), dw))
+	}
+	dix := flat(&d, d.coord(0), d.coord(1), nsl+ns)
+	slots := []int{R, nsl}
+	at := func(e *exprs) int {
+		w := e.coord(1)
+		if rep > 1 {
+			w = e.op(OpMul, U, w, e.u(uint32(rep)))
+		}
+		return flat(e, e.coord(0), w, nsl+ns)
+	}
 
-	ext := R * (nw + ns)
+	ext := R * (nsl + ns)
 	facts := Facts{Extents: map[int]int{1: ext}}
 	var r exprs
 	var refined []Prim
 	pick := []Operand{amax, scales}
-	if dd := r.load(1, flat(&r, r.coord(0), r.coord(1), nw+ns)); c.exactDiv {
+	if dd := r.load(1, at(&r)); c.exactDiv {
 		r.sel(F, r.op(OpLess, ir.Pred, r.f(0), dd), r.op(OpDiv, F, r.f(1), dd), r.f(0))
 	} else {
 		// The correctly rounded reciprocal in three maps, the estimate
@@ -191,8 +214,8 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 		// vector registers of a device that holds them.
 		var n, m exprs
 		est, rank := temp("est", F), temp("rank", U)
-		n.refine(n.load(1, flat(&n, n.coord(0), n.coord(1), nw+ns)), n.op(OpDiv, F, n.f(127), n.at(0, win, n.coord(0), n.coord(1))))
-		m.recipRank(m.load(1, flat(&m, m.coord(0), m.coord(1), nw+ns)), m.at(0, win, m.coord(0), m.coord(1)))
+		n.refine(n.load(1, at(&n)), n.op(OpDiv, F, n.f(127), n.at(0, win, n.coord(0), n.coord(1))))
+		m.recipRank(m.load(1, at(&m)), m.at(0, win, m.coord(0), m.coord(1)))
 		refined = []Prim{
 			{Kind: PrimMap, Shape: win, In: []Operand{amax, scales}, Out: est, Expr: n.e, Facts: facts},
 			{Kind: PrimMap, Shape: win, In: []Operand{est, scales}, Out: rank, Expr: m.e, Facts: facts},
@@ -208,13 +231,13 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 
 	ps := []Prim{
 		{Kind: PrimReduce, Shape: []int{R, nw, ww}, In: []Operand{x}, Out: amax, Combine: OpMax, Expr: a.e},
-		{Kind: PrimMap, Shape: win, In: []Operand{amax}, Expr: d.e, Stores: []PrimStore{{Out: scales, Index: dix, Value: ds, Extent: ext}}},
+		{Kind: PrimMap, Shape: slots, In: []Operand{amax}, Expr: d.e, Stores: []PrimStore{{Out: scales, Index: dix, Value: ds, Extent: ext}}},
 	}
 	ps = append(ps, refined...)
 	ps = append(ps,
 		Prim{Kind: PrimMap, Shape: win, In: pick, Out: inv, Expr: r.e, Facts: facts},
 		Prim{Kind: PrimMap, Shape: sh, In: []Operand{x, inv}, Out: codes, Expr: k.e})
-	return append(ps, c.int8Pack(v, codes, false, nw)...)
+	return append(ps, c.int8Pack(v, codes, false, nsl)...)
 }
 
 // int8Codes is the int8 form of value v, a row of codes the graph states

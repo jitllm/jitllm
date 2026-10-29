@@ -45,6 +45,9 @@ func (p Profile) on(d Device) Profile {
 type Int8Form struct {
 	Window, Word, Sums int
 	UnsignedDot        uint64
+	// Slot, where set, is the elements one scale word covers under a wider
+	// window, the window's scale stored once a slot (Context.slot).
+	Slot int
 }
 
 func (p Profile) run(ks []*Kernel, d Device) ([]*Kernel, error) {

@@ -146,7 +146,7 @@ func (m *Model) formCPUGraph(s *State, g *graph.Graph, rows int, over map[jlm.Ro
 			}
 		}
 	}
-	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: 32},
+	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: s.jit.ActWindow()},
 		Device: s.composedCPU(), Apart: true}
 	return m.cpuFormOf(req, g, rows, true, false, false)
 }

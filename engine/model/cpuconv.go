@@ -52,7 +52,7 @@ func (s *State) cpuComposeConv(li int, cb *cpuBlock) {
 			s.cpu.rowsTab = make([]uint32, rows*4)
 		}
 	}
-	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: page, Keys: page, ActWindow: 32},
+	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: page, Keys: page, ActWindow: s.jit.ActWindow()},
 		Device: s.composedCPU(), Apart: true}
 	f, err := s.m.cpuFormOf(req, g, rows, true, true, false)
 	if err != nil {

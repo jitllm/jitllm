@@ -61,16 +61,22 @@ func TestComposedCPUMatVec(t *testing.T) {
 				r         *Registry
 				isa       uint64
 				inexactDv bool
+				win       int
 			}
-			arms := []cpuArm{{"float", Default().WithoutInt8(DeviceCPU), host, false}, {"int8", withCPUInt8(), host, false},
-				{"int8 inexact division", withCPUInt8(), host, true}}
+			arms := []cpuArm{{"float", Default().WithoutInt8(DeviceCPU), host, false, 0}, {"int8", withCPUInt8(), host, false, 0},
+				{"int8 inexact division", withCPUInt8(), host, true, 0}}
 			if vnni := uint64(x86.ISAVNNI); host&vnni != 0 {
-				arms = append(arms, cpuArm{"int8 without vnni", withCPUInt8(), host &^ vnni, false})
+				arms = append(arms, cpuArm{"int8 without vnni", withCPUInt8(), host &^ vnni, false, 0})
 			}
 			if dp := uint64(cpu.ISADotProd); host&dp != 0 {
-				arms = append(arms, cpuArm{"int8 without dotprod", withCPUInt8(), host &^ dp, false})
+				arms = append(arms, cpuArm{"int8 without dotprod", withCPUInt8(), host &^ dp, false, 0})
+			}
+			if l, ok := jlm.Layout(jt); ok && l.Sub*l.SuperSub == 256 {
+				arms = append(arms, cpuArm{"int8 window 256", withCPUInt8(), host, false, 256},
+					cpuArm{"int8 window 256 without vnni", withCPUInt8(), host &^ uint64(x86.ISAVNNI), false, 256})
 			}
 			for _, arm := range arms {
+				win := max(arm.win, 32)
 				for _, at := range []struct{ tokens, slots int }{{1, 1}, {4, 1}, {1, 6}} {
 					if rows != 64 && rows != 1024 && at.slots == 1 || rows == 1024 && at.tokens != 1 {
 						continue
@@ -83,7 +89,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 					}
 					ref := x
 					if arm.r.Profiles[DeviceCPU].Int8 != nil && typ != quant.F32 {
-						ref = int8Row(x, 32)
+						ref = int8Row(x, win)
 					}
 					want := make([]float32, tokens*rows)
 					for tk := range tokens {
@@ -95,7 +101,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 					req := Request{
 						Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
 						Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
-						Step:    Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32},
+						Step:    Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: win},
 						Device:  Device{Kind: DeviceCPU, Slots: at.slots, Lanes: 8, ISA: arm.isa, ExactDiv: !arm.inexactDv},
 					}
 					_, codes, err := arm.r.Form(req)
@@ -415,7 +421,7 @@ func argValue(a CallArg, sp callSpace) uint64 {
 func withCPUInt8() *Registry {
 	r := Default()
 	p := r.Profiles[DeviceCPU]
-	p.Int8 = &Int8Form{Window: 32, Word: 4, Sums: 16, UnsignedDot: uint64(x86.ISAVNNI)}
+	p.Int8 = &Int8Form{Window: 32, Word: 4, Sums: 16, UnsignedDot: uint64(x86.ISAVNNI), Slot: 16}
 	r.Profiles[DeviceCPU] = p
 	return r
 }

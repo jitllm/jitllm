@@ -11162,3 +11162,8 @@ row where the composer's reads two.
   overlap, a loop sets its counter before its copies. Matvec census, every
   packed type: stack references 68468 to 40736, copy spills 964 to 412, forms
   and outputs bit-identical. Node 1 pp512 of main: Llama Q4_K_M 0.507 to 0.513-0.522.
+- Composed CPU serving takes main's activation window (256 for an all-k-quant
+  model) and the CPU's int8 form stores a window's scale once a 16-element slot,
+  so a sub-block reads it at an index its own scales to. The window alone read
+  0.473 (a division per scale load); with the slots node 1 pp512 of main: Llama
+  Q4_K_M 0.511-0.524 to 0.522-0.534; Qwen3 Q8_0 (window 32) and tg unresolved.

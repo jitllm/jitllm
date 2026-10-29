@@ -177,6 +177,7 @@ func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (
 		if win%l.Sub != 0 || c.width(v)%win != 0 {
 			return nil, false
 		}
+		win = c.slot(v)
 		nw = c.width(v) / win
 	}
 	if !c.formed[v] {

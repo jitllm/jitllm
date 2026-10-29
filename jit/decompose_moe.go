@@ -591,6 +591,7 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 	P, R, rows, K := pairsOf(o, c), c.Step.Rows, w.Rows, w.K
 	stride := pairStride(o)
 	W := (P-1)*stride + K
+	win = c.slot(v)
 	nsub, nwd, nw, ns := K/l.Sub, W/q.Word, W/win, W/q.Sums
 	x := c.value(v)
 	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}

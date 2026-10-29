@@ -1596,7 +1596,7 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 		page = a.page
 	}
 	req := jit.Request{Graph: &gr, Formats: formats, Strides: m.cpuStrides(li, g),
-		Step:    jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: 32, Seqs: max(s.nseq, 1)},
+		Step:    jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.jit.ActWindow(), Seqs: max(s.nseq, 1)},
 		History: jit.History{ValuesInKeys: pg.latent},
 		Device:  s.composedCPU()}
 	fm, err := m.cpuFormOf(req, &gr, rows, false, false, s.kvl.fmt == cpu.KVF32)
