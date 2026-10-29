@@ -144,9 +144,10 @@ func runCPUTables(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32,
 // runCPUGridValues is runCPUTables over values of several rows, value v
 // rowsOf(v) rows of its width (one where rowsOf is nil), and each weight
 // and vector a matrix of byRole binds by its role, its words as the
-// format the request named lays them. A value's guard past it holds the
-// widest value's most rows, so a form run at more rows than a value holds
-// writes its guard and not the process's memory.
+// format the request named lays them. A scratch holds the most any code
+// states of it. A value's or scratch's guard past it holds the widest
+// value's most rows, so a form run at more rows than a value holds writes
+// its guard and not the process's memory.
 func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32, tables map[string][]uint32,
 	rowsOf func(graph.ValueID) int, byRole map[jlm.Role][]uint32) error {
 	guard := 16
@@ -171,12 +172,22 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 		}
 		return w
 	}
+	// A guard is a signalling NaN, which no arithmetic writes: a row
+	// computed from poison and stored past the end still shows.
+	const fence = 0x7fa00001
+	fenced := func(w []uint32) []uint32 {
+		for range guard {
+			w = append(w, fence)
+		}
+		return w
+	}
 	store := map[graph.ValueID][]uint32{}
 	for v, w := range vals {
-		store[v] = append(slices.Clone(w), poison(guard)...)
+		store[v] = fenced(slices.Clone(w))
 	}
 	keep := [][]uint32{}
 	scratch := map[Operand][]uint32{}
+	scratchN := map[Operand]int{}
 	for _, c := range codes {
 		if c.CPU == nil {
 			return fmt.Errorf("%s has no CPU code", c.Name)
@@ -208,7 +219,7 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 				words = append([]uint32(nil), a.Words...)
 			case o.Kind == OperandValue:
 				if store[o.Value] == nil {
-					store[o.Value] = poison(extent(o.Value) + guard)
+					store[o.Value] = fenced(poison(extent(o.Value)))
 				}
 				words = store[o.Value]
 			case (o.Kind == OperandWeight || o.Kind == OperandVector) && len(byRole[o.Role]) > 0:
@@ -224,17 +235,20 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 				so.Copy = 0
 				if scratch[so] == nil {
 					size := 0
-					for _, b := range c.Binds {
-						bo := b.Operand
-						bo.Copy = 0
-						if bo == so && b.Bytes > 0 {
-							size = max(size, int(b.Bytes)/4+1)
+					for _, cc := range codes {
+						for _, b := range cc.Binds {
+							bo := b.Operand
+							bo.Copy = 0
+							if bo == so && b.Bytes > 0 {
+								size = max(size, int(b.Bytes+3)/4)
+							}
 						}
 					}
 					if size == 0 {
 						size = 1 << 16
 					}
-					scratch[so] = poison(size)
+					scratch[so] = fenced(poison(size))
+					scratchN[so] = size
 				}
 				words = scratch[so]
 			default:
@@ -257,6 +271,13 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 		}
 		callAll(code, &args, spaceOf(&c, harnessWorkers), coords, moving)
 		code.Close()
+		for so, w := range scratch {
+			for i, x := range w[scratchN[so]:] {
+				if x != fence {
+					return fmt.Errorf("%s: scratch %s: word %#x written %d past its end", c.Name, so.Name, x, i)
+				}
+			}
+		}
 	}
 	runtime.KeepAlive(keep)
 	// An output no kernel binds was stored over the value its last writer
@@ -277,7 +298,7 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 	for v, w := range store {
 		n := extent(v)
 		for i, x := range w[n:] {
-			if x != nan {
+			if x != fence {
 				return fmt.Errorf("value %s: word %#x written %d past its end", g.Values[v].Name, x, i)
 			}
 		}
