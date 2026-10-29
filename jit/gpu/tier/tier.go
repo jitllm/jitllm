@@ -2811,7 +2811,9 @@ func freeScratch(bs *blockScratch) {
 	if bs == nil {
 		return
 	}
-	bs.mg.free()  // a pointer, which the field walk below does not follow
+	bs.mg.free() // a pointer, which the field walk below does not follow
+	bs.arena.free()
+	bs.arena = nil
 	freeFlash(bs) // a slice, likewise
 	// Both slices may hold nil where an allocation failed part-way, which is
 	// how a card too small for a tower's planes reaches here.

@@ -1336,7 +1336,7 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 			return false
 		}
 		if head != nil && tail == nil {
-			return hd.layersFor(sid, hi, hi, pos, n, x, cs, nil, head)
+			return headOfLast(hd, sid, hi, pos, n, x, cs, nil, head)
 		}
 		return true
 	}
@@ -1345,7 +1345,7 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 			return false
 		}
 		if head != nil && tail == nil {
-			return hd.layersFor(sid, hi, hi, pos, n, x, cs, csSWA, head)
+			return headOfLast(hd, sid, hi, pos, n, x, cs, csSWA, head)
 		}
 		return true
 	}
@@ -1369,6 +1369,24 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		return hd.layersFor(sid, hi, hi, pos, n, x, cs, csSWA, head)
 	}
 	return true
+}
+
+// headOfLast is the head's own submission after a call of n rows cut into
+// pieces wider than one submission takes: a head over the last row is
+// handed that row alone, as a head-only call cut within a device hands it
+// (devTier.layersCall). The whole call's rows would exceed the batched
+// width, be refused after every block had run, and send the call round
+// again a row at a time. A head over every row (RowLogits) keeps its rows.
+func headOfLast(hd *devTier, sid uint64, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+	if head.RowLogits || n <= 1 {
+		return hd.layersFor(sid, hi, hi, pos, n, x, cs, csSWA, head)
+	}
+	e, r := len(x)/n, len(cs)/n
+	if len(csSWA) >= n {
+		w := len(csSWA) / n
+		csSWA = csSWA[(n-1)*w : n*w]
+	}
+	return hd.layersFor(sid, hi, hi, pos+n-1, 1, x[(n-1)*e:n*e], cs[(n-1)*r:n*r], csSWA, head)
 }
 
 // putRuns hands layersCall's runs slice back for the next call.

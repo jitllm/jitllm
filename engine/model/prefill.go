@@ -490,17 +490,20 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		chunkCap = total
 	}
 	chunkRows := min(chunkCap, total)
-	if s.allOnDevice() {
-		s.growDeviceBatch(chunkRows)
-	} else {
-		s.growBatch(chunkRows)
-	}
-	if c.MoE() {
-		if w := min(chunkCap, total) * c.NExpertUsed; len(s.bsel) < w {
-			s.bsel = make([]int32, w)
-			s.bw = make([]float32, w)
+	sizeFor := func(rows int) {
+		if s.allOnDevice() {
+			s.growDeviceBatch(rows)
+		} else {
+			s.growBatch(rows)
+		}
+		if c.MoE() {
+			if w := rows * c.NExpertUsed; len(s.bsel) < w {
+				s.bsel = make([]int32, w)
+				s.bw = make([]float32, w)
+			}
 		}
 	}
+	sizeFor(chunkRows)
 
 	// The prefill pool, where the JIT has one (nn.Config.PrefillCores). A
 	// mixture stays on the decode pool: its expert GEMMs are a few routed
@@ -567,6 +570,13 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			}
 		}
 		n := min(width, total-base)
+		// A block an earlier chunk moved (relocateFor) can widen the
+		// device's chunk past what the prompt was sized for: a second card
+		// makes it a pipeline (deviceChunk).
+		if n > chunkRows {
+			chunkRows = n
+			sizeFor(n)
+		}
 		// A bidirectional run is never cut (bidir.go).
 		if len(s.bidir) > 0 && !s.bidirCutFault {
 			n = min(s.bidirChunk(s.seqPos(slot), n), total-base)

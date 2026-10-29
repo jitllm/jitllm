@@ -110,6 +110,13 @@ type partForm struct {
 	// own is each of the form's own buffers: its bytes, and the words a
 	// constant is written with.
 	own []partBuf
+	// phys is the device buffers an instance holds, and slot the one each
+	// own buffer is laid on (share).
+	phys []partBuf
+	slot []int
+	// arenaAt is the buffer of a scratch's arena each passing buffer of
+	// phys is laid on in a prompt instance, -1 for one the instance holds.
+	arenaAt []int
 	// width is each output's width in floats at the form's rows.
 	width []int
 	// key is the composer's Key the form is kept under, and refs the served
@@ -144,16 +151,12 @@ type partCode struct {
 }
 
 // partInst is one lane's instance of a form: the form's own buffers and
-// what they charge the device's budget. An instance may borrow buffers from
-// the instance of another form in the same scratch that never runs in the
-// same call (from): the borrowed ones (lent) are that instance's to free and
-// charge.
+// what they charge the device's budget.
 type partInst struct {
-	bufs  []backend.Buf
-	size  []int
-	bytes uint64
-	from  *partForm
-	lent  []bool
+	// bufs is the buffer each of the form's own buffers is, by index;
+	// phys the device buffers they are laid on (partForm.share).
+	bufs, phys []backend.Buf
+	bytes      uint64
 }
 
 // partArg is what one kernel parameter binds: one of the form's own
@@ -395,7 +398,186 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 			return nil, err
 		}
 	}
+	f.share(sl.paged != nil)
 	return f, nil
+}
+
+// share lays the form's own buffers out on fewer device buffers
+// (partForm.slot, phys), as the tier's own scratch reuses its buffers
+// block after block: a buffer whose first code writes it without reading
+// it, live from that code to the last that binds it, takes a buffer one
+// whose last code ran before its first gave up. The codes run in order on
+// one stream, so the earlier holder is done with it. A constant, a buffer
+// first read (it carries what an earlier call left), and a paged form's
+// selection and page table, which the host reads and writes between its
+// halves, keep buffers of their own. Callers form f outside any step.
+func (f *partForm) share(paged bool) {
+	n := len(f.own)
+	first, last := make([]int, n), make([]int, n)
+	fresh := make([]bool, n)
+	for i := range first {
+		first[i] = -1
+	}
+	for ci, args := range f.args {
+		for _, a := range args {
+			if a.kind != partOwn {
+				continue
+			}
+			if first[a.i] < 0 {
+				first[a.i], fresh[a.i] = ci, true
+			}
+			if first[a.i] == ci && (a.read || !a.writes) {
+				fresh[a.i] = false
+			}
+			last[a.i] = ci
+		}
+	}
+	f.slot = make([]int, n)
+	f.phys = f.phys[:0]
+	var free []int // the end code of each shared buffer, by its index in phys
+	order := make([]int, 0, n)
+	for i, b := range f.own {
+		pinned := b.words != nil || !fresh[i] || paged && (i == f.sel || i == f.table)
+		if pinned {
+			f.slot[i] = len(f.phys)
+			f.phys = append(f.phys, b)
+			free = append(free, len(f.codes))
+			continue
+		}
+		order = append(order, i)
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return first[a] - first[b] })
+	for _, i := range order {
+		need, at := f.own[i].n, -1
+		for p, end := range free {
+			if f.phys[p].words != nil || end >= first[i] || end == len(f.codes) {
+				continue
+			}
+			// The narrowest that holds it, else the widest, grown.
+			switch {
+			case at < 0:
+				at = p
+			case f.phys[p].n >= need && (f.phys[at].n < need || f.phys[p].n < f.phys[at].n):
+				at = p
+			case f.phys[at].n < need && f.phys[p].n > f.phys[at].n:
+				at = p
+			}
+		}
+		if at < 0 {
+			at = len(f.phys)
+			f.phys = append(f.phys, partBuf{})
+			free = append(free, 0)
+		}
+		f.phys[at].n = max(f.phys[at].n, need)
+		free[at] = last[i]
+		f.slot[i] = at
+	}
+	// The passing buffers numbered widest first, so a scratch's arena of
+	// every form's (partArena) holds each form's widest in one buffer.
+	f.arenaAt = make([]int, len(f.phys))
+	var pass []int
+	for p, end := range free {
+		f.arenaAt[p] = -1
+		if end != len(f.codes) {
+			pass = append(pass, p)
+		}
+	}
+	slices.SortStableFunc(pass, func(a, b int) int { return f.phys[b].n - f.phys[a].n })
+	for j, p := range pass {
+		f.arenaAt[p] = j
+	}
+}
+
+// partArena is a scratch's buffers the prompt instances of every form at
+// its rows lay their passing buffers on (partForm.arenaAt): buffer j holds
+// the widest j-th of any form's. A prompt chunk runs its blocks one after
+// another on one stream, and a passing buffer holds nothing from one code
+// run to the next call, so the forms share them as one form's buffers
+// share them (share).
+type partArena struct {
+	bufs []backend.Buf
+	n    []int
+}
+
+// grow widens the arena to hold form f's passing buffers, charging what it
+// adds, and binds every instance of bs (in among them) whose buffers moved.
+// Callers hold g.mu, outside any submission.
+func (g *devTier) growArena(bs *blockScratch, f *partForm, in *partInst) error {
+	if bs.arena == nil {
+		bs.arena = &partArena{}
+	}
+	ar, moved := bs.arena, false
+	for p, j := range f.arenaAt {
+		if j < 0 {
+			continue
+		}
+		for len(ar.bufs) <= j {
+			ar.bufs, ar.n = append(ar.bufs, nil), append(ar.n, 0)
+		}
+		need := f.phys[p].n
+		if ar.n[j] >= need {
+			continue
+		}
+		d, err := g.dev.Alloc(need)
+		if err != nil {
+			return err
+		}
+		g.poisonBuf(d, need)
+		if ar.bufs[j] != nil {
+			ar.bufs[j].Free()
+		}
+		add := uint64(need - ar.n[j])
+		ar.bufs[j], ar.n[j] = d, need
+		g.charge(add)
+		g.instBytes += add
+		moved = true
+	}
+	bind := func(f *partForm, in *partInst) {
+		for i, p := range f.slot {
+			if j := f.arenaAt[p]; j >= 0 {
+				in.bufs[i] = ar.bufs[j]
+			}
+		}
+	}
+	bind(f, in)
+	if moved {
+		for pf, pi := range bs.prompt {
+			bind(pf, pi)
+		}
+	}
+	return nil
+}
+
+// arenaNeeds is what the arena must add to hold form f's passing buffers.
+func (ar *partArena) needs(f *partForm) uint64 {
+	var n uint64
+	for p, j := range f.arenaAt {
+		if j < 0 {
+			continue
+		}
+		have := 0
+		if ar != nil && j < len(ar.n) {
+			have = ar.n[j]
+		}
+		n += uint64(max(0, f.phys[p].n-have))
+	}
+	return n
+}
+
+// free frees the arena's buffers and reports what they charged.
+func (ar *partArena) free() uint64 {
+	if ar == nil {
+		return 0
+	}
+	var n uint64
+	for j, b := range ar.bufs {
+		if b != nil {
+			b.Free()
+			n += uint64(ar.n[j])
+		}
+	}
+	ar.bufs, ar.n = nil, nil
+	return n
 }
 
 // expertTable is the step's table of a bank held in pages, as the composer
@@ -455,52 +637,53 @@ func (f *partForm) pagedHalves(gr *graph.Graph, vals map[graph.ValueID]int, own 
 // a partRoomError. Outside a submission the room is made as for state
 // (stateFits): the pools' free pages first, then a streamed block paged out.
 // Callers hold g.mu.
-func (g *devTier) instance(f *partForm) (*partInst, error) {
-	return g.instanceOf(f, nil, nil, nil)
-}
+func (g *devTier) instance(f *partForm) (*partInst, error) { return g.instanceOn(f, nil) }
 
-// instanceOf is instance with each own buffer i of size[i] bytes (nil: the
-// form's), and where take[i] >= 0 buffer i borrowed from lender, the
-// instance of another form that never runs in one call with f: lender's
-// buffer take[i], which lender frees and charges.
-func (g *devTier) instanceOf(f *partForm, size []int, lender *partInst, take []int) (*partInst, error) {
-	sz := func(i int) int {
-		if size != nil {
-			return size[i]
-		}
-		return f.own[i].n
-	}
-	var n uint64
-	for i := range f.own {
-		if take == nil || take[i] < 0 {
-			n += uint64(sz(i))
+// instanceOn is instance for a prompt instance of scratch bs, its passing
+// buffers laid on bs's arena (partArena), or with bs nil every buffer its
+// own.
+func (g *devTier) instanceOn(f *partForm, bs *blockScratch) (*partInst, error) {
+	var n, grow uint64
+	for p, b := range f.phys {
+		if bs == nil || f.arenaAt[p] < 0 {
+			n += uint64(b.n)
 		}
 	}
-	if !g.room(n) && (g.inSub || g.prologueHeld || !g.stateFits(n, nil)) {
-		return nil, partRoomError{n}
+	if bs != nil {
+		grow = bs.arena.needs(f)
 	}
-	in := &partInst{lent: make([]bool, 0, len(f.own)), size: make([]int, 0, len(f.own))}
-	for i, b := range f.own {
-		if take != nil && take[i] >= 0 {
-			in.bufs = append(in.bufs, lender.bufs[take[i]])
-			in.lent = append(in.lent, true)
-			in.size = append(in.size, lender.size[take[i]])
+	if !g.room(n+grow) && (g.inSub || g.prologueHeld || !g.stateFits(n+grow, nil)) {
+		return nil, partRoomError{n + grow}
+	}
+	in := &partInst{}
+	at := make([]backend.Buf, len(f.phys))
+	for p, b := range f.phys {
+		if bs != nil && f.arenaAt[p] >= 0 {
 			continue
 		}
-		in.lent = append(in.lent, false)
-		in.size = append(in.size, sz(i))
-		d, err := g.dev.Alloc(sz(i))
+		d, err := g.dev.Alloc(b.n)
 		if err != nil {
 			in.free()
 			return nil, err
 		}
-		g.poisonBuf(d, sz(i))
-		in.bufs = append(in.bufs, d)
+		g.poisonBuf(d, b.n)
+		in.phys = append(in.phys, d)
+		at[p] = d
 		if b.words != nil {
 			if err := d.Write(u32b(b.words)); err != nil {
 				in.free()
 				return nil, err
 			}
+		}
+	}
+	in.bufs = make([]backend.Buf, len(f.own))
+	for i, p := range f.slot {
+		in.bufs[i] = at[p]
+	}
+	if bs != nil {
+		if err := g.growArena(bs, f, in); err != nil {
+			in.free()
+			return nil, err
 		}
 	}
 	in.bytes = n
@@ -530,13 +713,10 @@ func (f *partForm) launchArgs() [][]backend.Buf {
 // free frees an instance's buffers; what they charged is the caller's to
 // give back.
 func (in *partInst) free() {
-	for i, b := range in.bufs {
-		if i < len(in.lent) && in.lent[i] {
-			continue
-		}
+	for _, b := range in.phys {
 		b.Free()
 	}
-	in.bufs = nil
+	in.phys, in.bufs = nil, nil
 }
 
 // launch binds the form's kernels to the caller's inputs and outputs, the
@@ -688,127 +868,26 @@ func (g *devTier) promptInst(bs *blockScratch, f *partForm) *partInst {
 	if in := bs.prompt[f]; in != nil {
 		return in
 	}
-	in, err := g.instance(f)
-	if !g.keepPromptInst(bs, f, in, err) {
-		return nil
-	}
-	return in
-}
-
-// keepPromptInst keeps in, made with err, as bs's instance of f: false
-// where it was not made, named and, for room, marked on the scratch.
-func (g *devTier) keepPromptInst(bs *blockScratch, f *partForm, in *partInst, err error) bool {
+	in, err := g.instanceOn(f, bs)
 	if err != nil {
 		g.LastErr = "the composed prompt block: " + err.Error()
 		if _, room := err.(partRoomError); room {
 			bs.instNoRoom = true
 		}
-		return false
+		return nil
 	}
 	if bs.prompt == nil {
 		bs.prompt = map[*partForm]*partInst{}
 	}
 	bs.prompt[f] = in
 	g.placeGen.Add(1)
-	return true
-}
-
-// promptPair is the instances of a and b, two forms of one block at bs's
-// rows that never run in one call (a prompt's chunk and a ragged step's
-// mixed rows), made where the scratch holds none: an own buffer without
-// words carries nothing from one call to the next, so b borrows a's. Made
-// together, the two's constant-free buffers pair largest with largest, a's
-// sized to the larger of its pair (pairOwn); beside an instance of a made
-// before, b borrows those of a's that hold its own (fitOwn).
-func (g *devTier) promptPair(bs *blockScratch, a, b *partForm) bool {
-	if a == b || bs.prompt[b] != nil {
-		return g.promptInst(bs, a) != nil && g.promptInst(bs, b) != nil
-	}
-	la := bs.prompt[a]
-	var take []int
-	if la == nil {
-		var size []int
-		size, take = pairOwn(a, b)
-		in, err := g.instanceOf(a, size, nil, nil)
-		if !g.keepPromptInst(bs, a, in, err) {
-			return false
-		}
-		la = in
-	} else {
-		take = fitOwn(a, la, b)
-	}
-	in, err := g.instanceOf(b, nil, la, take)
-	if err == nil {
-		in.from = a
-	}
-	return g.keepPromptInst(bs, b, in, err)
-}
-
-// pairOwn pairs b's own buffers that hold no constant with a's, largest with
-// largest: take[i] is the buffer of a's that b's buffer i borrows (-1: its
-// own), and size each of a's buffers grown to the larger of its pair.
-func pairOwn(a, b *partForm) (size, take []int) {
-	free := func(f *partForm) []int {
-		var ix []int
-		for i, o := range f.own {
-			if o.words == nil {
-				ix = append(ix, i)
-			}
-		}
-		slices.SortStableFunc(ix, func(x, y int) int { return f.own[y].n - f.own[x].n })
-		return ix
-	}
-	ai, bi := free(a), free(b)
-	size = make([]int, len(a.own))
-	for i, o := range a.own {
-		size[i] = o.n
-	}
-	take = make([]int, len(b.own))
-	for i := range take {
-		take[i] = -1
-	}
-	for k := range min(len(ai), len(bi)) {
-		size[ai[k]] = max(size[ai[k]], b.own[bi[k]].n)
-		take[bi[k]] = ai[k]
-	}
-	return size, take
-}
-
-// fitOwn is which of lender's buffers, a's instance, each of b's own
-// buffers that holds no constant borrows: the smallest that holds it, none
-// twice, -1 where none does.
-func fitOwn(a *partForm, lender *partInst, b *partForm) []int {
-	take := make([]int, len(b.own))
-	used := make([]bool, len(lender.bufs))
-	for i, o := range b.own {
-		take[i] = -1
-		if o.words != nil {
-			continue
-		}
-		for j, lo := range a.own {
-			if used[j] || lo.words != nil || lender.lent[j] || lender.size[j] < o.n {
-				continue
-			}
-			if take[i] < 0 || lender.size[j] < lender.size[take[i]] {
-				take[i] = j
-			}
-		}
-		if take[i] >= 0 {
-			used[take[i]] = true
-		}
-	}
-	return take
+	return in
 }
 
 // dropPromptInst frees bs's instance of form f and gives its bytes back.
 // Callers hold g.mu, with no submission running.
 func (g *devTier) dropPromptInst(bs *blockScratch, f *partForm) {
 	if in := bs.prompt[f]; in != nil {
-		for fo, o := range bs.prompt {
-			if o.from == f {
-				g.dropPromptInst(bs, fo)
-			}
-		}
 		in.free()
 		g.refund(in.bytes)
 		g.instBytes -= in.bytes
@@ -2384,9 +2463,6 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	// A call's rows are one sequence's in position order (a prompt's
 	// chunk), or at the ragged step's width any sequences': a form each,
 	// both formed here.
-	// The two never run in one call, so the second's instance borrows the
-	// first's buffers (promptPair).
-	var one *partForm
 	for _, seqs := range [...]int{1, 0} {
 		if seqs == 0 && !g.raggedAt(bb) {
 			continue
@@ -2406,13 +2482,11 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 				return false
 			}
 		}
-		if one == nil {
-			one = sv.f
-		} else if !g.promptPair(bb, one, sv.f) {
+		if g.promptInst(bb, sv.f) == nil {
 			return false
 		}
 	}
-	return one != nil && g.promptInst(bb, one) != nil
+	return true
 }
 
 // rowSeqs is the sequences a call of R rows is of as its form states them

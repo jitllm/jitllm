@@ -11001,3 +11001,60 @@ row where the composer's reads two.
   under ten times the arm's worst 0.213 at step 940, the first steps
   whose window cuts the prompt's first positions), with the arm inside
   the float band (median 1.05, worst 0.252 against the tier's own 0.362).
+- **A wide prompt's head off the last card, and a composed prompt's
+  buffers laid by their lives (D83, D82).** gpt-oss-20b, V100s (CUDA,
+  sm_70), PM3's server flags. D83: a composed server on two cards took
+  16.56 s for a 1024-token prompt against main's 213 ms because the prompt
+  ran twice, the second time a row at a time (19.27 s of kernels a prompt,
+  73,725 reduce_reduce launches, one decode step's 73 times 1024). The
+  composed footprint left block 23 to a second card with the head on the
+  first; a call wider than one submission ran its blocks in pieces and then
+  handed the head's own submission the whole chunk, which the head's card
+  refuses above its 512-row width ("batch n=1024 width=512 head=true")
+  after every block had run, and the State took the refusal as the
+  device's and ran the prompt again token by token. The head's own
+  submission after pieces or a pipeline now takes the last row alone
+  (headOfLast), as a head-only call cut within a card already did;
+  TestAWideChunkReachesAHeadOffTheLastDevice (fake devices) fails on the
+  parent with that refusal. Behind it a block an earlier chunk moved
+  widened the device's chunk to a 2048-row pipeline past the prompt's
+  512-row buffers (slice bounds [:4423680] with capacity 1474560 in
+  prefillSrc): the buffers now grow when the chunk widens. D82: on one
+  card jitllm speed's 512-token prompt held 14.44 GiB composed against
+  main's 11.30 (scratch 0.68 / 0.32, composed instances 2.00 / 0, history
+  pool 0.11 / 0.11, weights 11.65 / 10.87, the 0.78 being mostly the token
+  embedding the composed gather keeps on the card, Q8_0 201088 x 2880 =
+  0.57 GiB). Every intermediate of a form's instance had a device buffer
+  of its own (a 512-row block form 68 buffers, 536 MB) and each of the
+  four prompt forms its own instance. A form's buffers are now laid on
+  fewer by their live ranges (partForm.share: a buffer first written
+  takes one whose last code ran before its first; constants, buffers first
+  read, a paged form's selection and table keep theirs), 2.00 -> 1.05 GiB,
+  and a scratch's prompt instances lay their passing buffers on one arena
+  for every form, widest first (partArena), 1.05 -> 0.56 GiB: 12.89 GiB
+  resident. The one-card server that failed its first request at the base
+  and with the head fix alone ("tier: no room for another page of
+  attention history") serves: time to first token 209 / 414 / 904 ms at
+  512 / 1024 / 2048 against main's 108.7 / 214 / 460 (main over it
+  0.521 / 0.518 / 0.510; ar1 over main 1.921 / 1.931 / 1.961 and
+  1.913 / 1.924 / 1.947 with the cards swapped, IQR at most 0.007, 8
+  rounds of 4). Two cards an arm, a cross-card A/A of one build on the
+  four card pairs first (0.9968-1.0048, IQR at most 0.011), two passes
+  rotated: the head fix over the base at 512 0.9985 (IQR 0.005; at 1024 and
+  2048 the base takes 16.6 and 33.4 s); the laid-out buffers over the head
+  fix 0.997 / 0.777 / 0.688 and 0.993 / 0.771 / 0.684 (IQR at most 0.009),
+  the smaller footprint placing 12 and 12 blocks and pipelining where the
+  head fix's placed 23 and 1; the composed prompt's rate over main's
+  0.49 / 0.65 / 0.74 and 0.51 / 0.67 / 0.76. Every composed answer is the
+  same 16 tokens on every card ("The committee reviewed the **...**"),
+  main's parts from it at the fourth. Left of D82: 1.59 GiB over main's
+  footprint, the embedding table 0.57, scratch 0.36 more, and the arena
+  0.56 that main's own scratch holds in its place; the prompt's kernels
+  at 2048 on one card read 806.5 ms against main's 384.4, the projections
+  457.1 against 295.5, the experts' gathered input (parts) 105.3 against
+  6.2.
+- The mixed-sequence form's borrowing (promptPair) is gone: the scratch's
+  arena (partArena) already lays every prompt form's passing buffers on
+  one set, the one-sequence and mixed forms of a block among them. lev's
+  composed instances 318 MB on cuda:0 (promptPair's 483), 14 of 14 picks
+  by the composer on cuda:0 and vulkan; the arena on one buffer fails it.

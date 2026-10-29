@@ -2184,7 +2184,11 @@ type blockScratch struct {
 	// prompt chunk's blocks with at this scratch's rows, shared by the blocks
 	// of the form (served.go): freed and refunded with the scratch.
 	prompt map[*partForm]*partInst
-	p      nn.LayerPlan
+	// arena is the device buffers those instances' passing buffers are laid
+	// on, one set for every form, since the blocks run one after another
+	// (partArena).
+	arena *partArena
+	p     nn.LayerPlan
 	// rows is how many token positions this scratch runs at once: 1 for decode
 	// and the prefill chunk width for the batched arm. Every buffer is sized
 	// rows-wide and every kernel is the Rows variant, which is byte-identical

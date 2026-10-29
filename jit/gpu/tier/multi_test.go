@@ -179,6 +179,56 @@ func TestHeadOnlySubmissionReachesItsDevice(t *testing.T) {
 	}
 }
 
+// TestAWideChunkReachesAHeadOffTheLastDevice runs a chunk wider than one
+// submission over blocks whose last sits on another device than the head (a
+// relocation leaves it so): the pieces run every block, and the head's own
+// submission must then take the last row, not the whole chunk, which a
+// device refuses above the batched width after every block had run -- the
+// caller then ran the whole prompt again a row at a time.
+func TestAWideChunkReachesAHeadOffTheLastDevice(t *testing.T) {
+	p := fakePlan()
+	p.MaxSeq = 2 * batchWidth
+	ws := blocks(p, 3)
+	a, b := &fakeDev{}, &fakeDev{}
+	g, err := New([]Slot{{Dev: a, Bytes: 1 << 40, Name: "fake:0"}, {Dev: b, Bytes: 1 << 40, Name: "fake:1"}},
+		WithDeviceTune(TuneOff))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer g.Close()
+	for li, at := range []string{"fake:0", "fake:0", "fake:1"} {
+		if ok, err := g.PrepLayerOn(at, li, p, ws[li]); !ok || err != nil {
+			t.Fatalf("PrepLayerOn(%s, %d): %v %s", at, li, err, g.Err())
+		}
+	}
+	const nvocab = 64
+	h := &nn.Head{
+		Norm:   make([]float32, p.NEmbd),
+		W:      nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
+		Logits: make([]float32, nvocab),
+	}
+	if ok, err := g.PrepHeadOn("fake:0", h); !ok || err != nil {
+		t.Fatalf("PrepHeadOn: %v %s", err, g.Err())
+	}
+	if g.head != g.devs[0] || g.own[2] != g.devs[1] {
+		t.Fatal("the head is not on the first device beside a last block on the second: this gate proves nothing")
+	}
+	if !g.ReserveKV(p.MaxSeq) {
+		t.Fatalf("ReserveKV: %s", g.Err())
+	}
+	n := batchWidth + batchWidth/2
+	x := make([]float32, n*p.NEmbd)
+	cs := make([]float32, n*p.NRot)
+	a.log, b.log = nil, nil
+	if !g.Layers(0, 3, 0, n, x, cs, nil, h) {
+		t.Fatalf("a %d-row chunk with the head off the last device was refused: %s", n, g.Err())
+	}
+	if len(a.log) == 0 || len(b.log) == 0 {
+		t.Fatalf("launches %d on the head's device and %d on the last block's: a device ran nothing",
+			len(a.log), len(b.log))
+	}
+}
+
 // TestBlocksAreContiguousPerDevice: each device's blocks are one run and there
 // are (devices - 1) crossings. A scattered placement computes the same token
 // with a residual-stream crossing per device change, invisible to correctness

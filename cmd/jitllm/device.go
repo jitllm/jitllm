@@ -98,6 +98,11 @@ func deviceStats(d nn.Device) string {
 	}
 	st := g.Stats()
 	s := fmt.Sprintf("%.2f GiB resident", float64(g.Bytes())/(1<<30))
+	// Where the budget went: a footprint above another build's is read here
+	// before anything is guessed.
+	const gib = 1 << 30
+	s += fmt.Sprintf(" (scratch %.2f, composed %.2f, history pool %.2f GiB)",
+		float64(st.ScratchBytes)/gib, float64(st.ComposedBytes)/gib, float64(st.KVPoolBytes)/gib)
 	// The decode row tile, printed whenever it is on -- "it made no difference"
 	// and "it never ran" are otherwise the same number.
 	if st.RowtTiles > 0 || st.RowtPlain > 0 {

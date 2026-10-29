@@ -144,6 +144,10 @@ func (g *devTier) dropScratch(bs *blockScratch) {
 		for f := range bs.prompt {
 			g.dropPromptInst(bs, f)
 		}
+		n := bs.arena.free()
+		bs.arena = nil
+		g.refund(n)
+		g.instBytes -= n
 	}
 	freeScratch(bs)
 }
