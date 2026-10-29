@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -266,15 +267,17 @@ func TestComposedGPUEqual(t *testing.T) {
 // device present, at widths whose argmax is cut into segments that divide
 // it and into segments the last of which reads past it (a vocabulary of
 // 201088), each row's best alone at its start and its end, and in its
-// middle tied with an earlier one. The violation: the logits negated must
-// part.
+// middle tied with an earlier one, and on a vocabulary's width later ties
+// in another thread's, workgroup's and segment's terms. A vocabulary's row
+// forms as kernels of a workgroup an element (GroupExtreme). The violation:
+// the logits negated must part.
 func TestComposedGPUSampleGreedy(t *testing.T) {
 	testlock.GPU(t)
 	devs := backend.Open()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
-	widths := []int{1, 7, 33, 1531, 4096, 151936, 201088}
+	widths := []int{1, 7, 33, 1531, 4096, 32064, 128256, 151936, 201088, 262144}
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
@@ -286,6 +289,13 @@ func TestComposedGPUSampleGreedy(t *testing.T) {
 				_, codes, err := jit.Default().Form(jit.Request{Graph: g, Step: jit.Step{Rows: 1, Page: 64, Keys: 1}, Device: dv})
 				if err != nil {
 					t.Fatalf("width %d: forming: %v", n, err)
+				}
+				if n >= 32064 {
+					for _, c := range codes {
+						if !slices.Contains(c.Passes, "groupextreme") {
+							t.Fatalf("width %d: %s is not a workgroup an element (passes %v)", n, c.Name, c.Passes)
+						}
+					}
 				}
 				op, err := compileLone(d, codes)
 				if err != nil {
@@ -313,6 +323,9 @@ func TestComposedGPUSampleGreedy(t *testing.T) {
 					if tie >= 0 && tie < at {
 						l[tie] = 9
 						want = tie
+						if n >= 32064 {
+							l[tie+1], l[tie+129], l[min(tie+40000, n-1)] = 9, 9, 9
+						}
 					}
 					if got := run(l); got != want {
 						t.Errorf("width %d, best at %d: token %d, want %d", n, at, got, want)

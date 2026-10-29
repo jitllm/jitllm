@@ -11172,3 +11172,7 @@ row where the composer's reads two.
   argmax; the 2048 prompt's tiled gather 105 -> 16 ms; sliding layers on
   flash. Servers n=20 (A/A 0.999): ITL composed/main 1.47 (base 2.99),
   TTFT 2048 1.65 (base 1.96). Open: experts 4.8 ms against main's 2.4.
+- **A greedy sample's segments are each one workgroup** (GroupExtreme): Llama-3.2-1B's sample on a V100 reads 13 us in two kernels (one thread: 3.0 ms; thread-serial segments: 51 us; main 20 us).
+  The 1.057 row's main arm carried the composed sample. One binary, tg128, 8 rounds, IQR/median at most 0.019:
+  A/A 1.001, composed over main 0.447 graphed, 0.459 ungraphed before; after 1.20 (Llama 1B), 0.994 (8B),
+  1.085 (Qwen2.5-1.5B), 1.18 (Qwen3-1.7B), 1.07 (gemma-3-4b), 1.11 (Phi-3.5).

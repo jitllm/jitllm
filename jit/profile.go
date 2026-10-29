@@ -58,6 +58,7 @@ func gpuProfile() Profile {
 		Recompute{},
 		Same{},
 		SplitExtreme{Parts: 1024, Kinds: []PrimKind{PrimReduce}},
+		GroupExtreme{Trips: 4, Kinds: []PrimKind{PrimReduce}},
 		SplitExtreme{Parts: 32, Kinds: []PrimKind{PrimReduce}},
 		FMA{},
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimMap, Unrolled: true}}},
