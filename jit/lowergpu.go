@@ -28,7 +28,9 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 	}
 	k, err := e.run()
 	if err == nil {
-		k.Resident = resident(n, d)
+		// At least one: the bound holds a thread's registers to what the
+		// workgroup it launches at can have.
+		k.Resident = max(resident(n, d), 1)
 		if n.Resident > 0 {
 			k.Resident = n.Resident
 		}
