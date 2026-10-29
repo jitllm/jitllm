@@ -200,7 +200,7 @@ func (r *Registry) WithoutSplits(kind DeviceKind) *Registry {
 	p := fr.Profiles[kind]
 	cut := func(x Pass) bool {
 		switch x.(type) {
-		case Split, SplitRange, SplitExtreme:
+		case Split, SplitRange, SplitExtreme, GroupExtreme:
 			return true
 		}
 		return false
