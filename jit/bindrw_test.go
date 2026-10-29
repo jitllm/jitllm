@@ -37,9 +37,12 @@ func TestBindingsSayWhatACodeReadsAndWrites(t *testing.T) {
 	}
 	before, writer := 0, 0
 	for _, dev := range []Device{{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 1}} {
-		for _, sh := range [][2]int{{64, 64}, {768, 1536}, {2048, 512}} {
+		for _, sh := range [][2]int{{64, 64}, {768, 1536}, {2048, 512}, {80, 512}} {
 			for _, rows := range []int{1, 8} {
 				for _, ty := range []jlm.Type{jlm.TypeF32, jlm.TypeQ8} {
+					if ty == jlm.TypeQ8 && sh[0]%32 != 0 {
+						continue
+					}
 					for _, mixed := range []bool{true, false} {
 						name := fmt.Sprintf("lanes %d %dx%d rows %d %v mixed %v", dev.Lanes, sh[0], sh[1], rows, ty, mixed)
 						x, y, codes := form(t, dev, sh[0], sh[1], rows, ty, mixed)

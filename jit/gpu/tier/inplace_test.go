@@ -11,7 +11,8 @@ import (
 
 // TestAKernelReadingXWhereItWritesIsNotInPlace forms a block with no MLP,
 // x plus the projection of a row of the mixer's width, at mamba-130m's
-// widths (768 over 1536) and at a fixture's (64 over 128), and holds
+// widths (768 over 1536), at a fixture's (64 over 128) and at 80, whose rows
+// fill no workgroup and split into planes, and holds
 // partForm.inPlace to the rule: a form whose kernel writing the output
 // reads x is not written over x, though it reads x only at the elements it
 // writes -- the launch clamps its surplus threads to the last element and
@@ -21,8 +22,11 @@ import (
 // buffers). A form reading x before its first write is.
 func TestAKernelReadingXWhereItWritesIsNotInPlace(t *testing.T) {
 	over, before := 0, 0
-	for _, sh := range [][2]int{{768, 1536}, {64, 128}, {2048, 512}} {
+	for _, sh := range [][2]int{{768, 1536}, {64, 128}, {2048, 512}, {80, 512}} {
 		for _, ty := range []jlm.Type{jlm.TypeF32, jlm.TypeQ8} {
+			if ty == jlm.TypeQ8 && sh[0]%32 != 0 {
+				continue
+			}
 			for _, rows := range []int{1, 3} {
 				name := fmt.Sprintf("%dx%d %v rows %d", sh[0], sh[1], ty, rows)
 				b := graph.New()
