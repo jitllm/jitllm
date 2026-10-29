@@ -27,6 +27,10 @@ type Split struct {
 	Slots, Max, Block int
 	Parts             int
 	Group, Matrix     bool
+	// Fill is the share of the device's resident threads a workgroup split's threads stay under.
+	Fill float64
+	// Width, where set, forces a workgroup split's threads.
+	Width int
 	// Few, where set, forms beside a tiled kernel's split (groupSplitRows),
 	// or beside the tiled kernel where its rows are wide enough to take no
 	// split, its untiled form, each row's sums cut and combined in the tiled
@@ -43,10 +47,85 @@ type Split struct {
 func (Split) Name() string { return "split" }
 
 func (s Split) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
-	return eachKernel(s.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) { return s.apply(k, d) })
+	widths := s.siblingWidths(ks, d)
+	return eachKernel(s.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) { return s.apply(k, d, widths[k]) })
 }
 
-func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
+func (s Split) groupThreads(d Device) int {
+	if s.Fill > 0 && d.Slots > 0 {
+		return int(s.Fill * float64(d.Slots))
+	}
+	slots := s.Slots
+	if slots == 0 {
+		slots = d.Slots
+	}
+	return 4 * slots
+}
+
+func (s Split) groupSegments(n *Kernel, d Device) (S, G int, ok bool) {
+	if !s.Group || s.Parts > 0 || n.Few > 0 || n.Many > 0 || n.Work || n.Tile > 1 && n.Capacity > 0 || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
+		return 0, 0, false
+	}
+	c, _, _, _, ok := splittable(n)
+	if !ok {
+		return 0, 0, false
+	}
+	T, E, limit := n.Loops[c].Trip, n.cutElements(), s.groupThreads(d)
+	for g := s.Max; g > 1; g-- {
+		if G := groupWidth(g); T%g == 0 && E*g < limit && groupFits(n.Elements(), T, g, G) {
+			return g, G, true
+		}
+	}
+	return 0, 0, false
+}
+
+func groupWidth(S int) int { return min(max(32*S, 128), 1024) }
+
+func groupFits(E, T, S, G int) bool { return G%S == 0 && E%(G/S) == 0 && T%S == 0 }
+
+// siblingWidths gives kernels reading one activation the narrowest of their
+// workgroups, so Siblings runs them as one launch; a segment keeps eight rows,
+// a 32-byte sector.
+func (s Split) siblingWidths(ks []*Kernel, d Device) map[*Kernel]int {
+	if s.Width > 0 {
+		return nil
+	}
+	var out map[*Kernel]int
+	for i := 0; i < len(ks); {
+		S0, G, ok := s.groupSegments(ks[i], d)
+		if !ok {
+			i++
+			continue
+		}
+		segs := []int{S0}
+		j := i + 1
+		for ; j < len(ks); j++ {
+			Sj, Gj, ok := s.groupSegments(ks[j], d)
+			if !ok || !sharesActivation(ks[i], ks[j]) || writesInto(ks[i], ks[j]) || writesInto(ks[j], ks[i]) {
+				break
+			}
+			segs, G = append(segs, Sj), min(G, Gj)
+		}
+		fits := j-i > 1
+		for x, S := range segs {
+			k := ks[i+x]
+			c, _, _, _, _ := splittable(k)
+			fits = fits && G >= 8*S && groupFits(k.Elements(), k.Loops[c].Trip, S, G)
+		}
+		if fits {
+			if out == nil {
+				out = map[*Kernel]int{}
+			}
+			for _, k := range ks[i:j] {
+				out[k] = G
+			}
+		}
+		i = j
+	}
+	return out
+}
+
+func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
 	if n.Few > 0 || n.Many > 0 {
 		// A pair's two forms are cut alike or not at all.
 		return nil, false, nil
@@ -73,14 +152,15 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 			S /= 2
 		}
 	}
-	if s.Group && s.Parts == 0 {
-		for g := s.Max; g > 1; g-- {
-			if T%g != 0 || E*g >= 4*slots {
-				continue
-			}
-			if k, ok := groupSplit(n, c, f, term, st, g, s.Drop); ok {
-				return []*Kernel{k}, true, nil
-			}
+	if g, G, ok := s.groupSegments(n, d); ok {
+		switch {
+		case s.Width > 0:
+			G = s.Width
+		case width > 0:
+			G = width
+		}
+		if k, ok := groupSplit(n, c, f, term, st, g, G, s.Drop); ok {
+			return []*Kernel{k}, true, nil
 		}
 	}
 	for s.Parts == 0 && S < s.Max && E*S < 2*slots && T%(s.Block*S*2) == 0 {
@@ -90,7 +170,7 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	if s.Group {
-		if g, ok := groupSplit(n, c, f, term, st, S, s.Drop); ok {
+		if g, ok := groupSplit(n, c, f, term, st, S, groupWidth(S), s.Drop); ok {
 			return []*Kernel{g}, true, nil
 		}
 	}
@@ -182,10 +262,9 @@ func (n *Kernel) cutElements() int {
 // memory, a barrier, and every thread of an element its segments' sum
 // stored at the element. False where the elements do not fill whole
 // workgroups.
-func groupSplit(n *Kernel, c, f, term, st, S int, drop bool) (*Kernel, bool) {
-	G := min(max(32*S, 128), 1024)
+func groupSplit(n *Kernel, c, f, term, st, S, G int, drop bool) (*Kernel, bool) {
 	E, T := n.Elements(), n.Loops[c].Trip
-	if G%S != 0 || E%(G/S) != 0 || T%S != 0 {
+	if !groupFits(E, T, S, G) {
 		return nil, false
 	}
 	rpg := G / S

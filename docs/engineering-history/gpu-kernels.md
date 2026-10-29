@@ -11180,3 +11180,8 @@ row where the composer's reads two.
   each workgroup reads all of its producer's output: the expert matvec's per-pair quantize had run whole in 360
   workgroups (experts 4.85 -> 3.01 ms; main 2.46). Phases runs a router's ten one-workgroup launches as one
   (1.5 -> 0.78 ms). Servers n=20, A/A ITL 1.001: ITL composed/main 1.114, 1.151 (PF6 over this 1.28), TTFT 512 1.575, 1.586; 2048 1.655, 1.654.
+- **A decode split follows the device, and q/k/v share one workgroup width** (Split.Fill, siblingWidths): a workgroup split's threads stay under 3/4 of the card's resident threads (the old 4x30720 on a V100, so its splits are unchanged); sibling projections take the narrowest workgroup, so the 8B's q (16 segments) and k/v (32) run as one 256x512 launch, 1114 -> 844 us a token.
+  BenchmarkComposedDecode (V100, 8B/1B/Qwen3-1.7B shapes): the profile's split is within 1-2% of every in-group S from 4 to 128; partial planes and a combine 13-35% slower; launch bounds at 2-8 workgroups a unit (registers held to 32) change nothing, the grids being 128-896 workgroups. Neither main's planes nor occupancy sizing is the decode gap.
+  tg128, 20 rotated rounds, V100 CUDA (A/A 0.98-1.02): over shipping composed 1.0156 (8B), 0.995-1.001 on five models whose forms are unchanged; over main 0.906 (8B), 0.947 (1B), 0.840 (Qwen2.5-1.5B), 0.899 (Qwen3-1.7B), 0.923 (gemma-3-4b), 0.940 (Phi-3.5).
+  The 8B's remaining kernel gap: down's silu*mul prologue in 128 workgroups (510 us a token; off, 97.3 tok/s against 92.9), two norm kernels a block against main's one (277 us), gate/up written apart and multiplied after (106 us, main's Gate2 pairs them).
+  TestComposedGPUSiblingWidths holds the merged launch to float64.

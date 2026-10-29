@@ -52,7 +52,7 @@ func gpuProfile() Profile {
 		Split{Slots: 30720, Max: 32, Block: 32, Group: true, Matrix: true, Few: 4, Kinds: contract},
 		Split{Slots: 30720, Max: 32, Block: 32, Few: 4, Kinds: contract},
 		Blocks{Size: 32, Kinds: contract},
-		Split{Slots: 30720, Max: 32, Block: 1, Group: true, Matrix: true, Few: 4, Kinds: []PrimKind{PrimReduce}},
+		Split{Slots: 30720, Fill: 0.75, Max: 32, Block: 1, Group: true, Matrix: true, Few: 4, Kinds: []PrimKind{PrimReduce}},
 		Split{Parts: 64, Group: true, Kinds: []PrimKind{PrimReduce}},
 		Epilogue{},
 		Recompute{},
