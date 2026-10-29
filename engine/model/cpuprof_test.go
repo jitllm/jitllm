@@ -86,6 +86,7 @@ func TestComposedCPUProfile(t *testing.T) {
 		for _, f := range m.cpuForms.m {
 			for i := range f.codes {
 				f.codes[i].nanos, f.codes[i].runs = 0, 0
+				f.codes[i].pcalls, f.codes[i].pcallNs, f.codes[i].pstartNs, f.codes[i].pmaxNs = 0, 0, 0, 0
 			}
 		}
 		m.cpuForms.mu.Unlock()
@@ -112,11 +113,12 @@ func TestComposedCPUProfile(t *testing.T) {
 			}
 		}
 		type row struct {
-			name           string
-			calls          []int
-			serial         bool
-			nanos, runs, n int64
-			bytes          int
+			name                    string
+			calls                   []int
+			serial                  bool
+			nanos, runs, n          int64
+			bytes                   int
+			pc, pcall, pstart, pmax int64
 		}
 		var rows []row
 		m.cpuForms.mu.Lock()
@@ -124,7 +126,7 @@ func TestComposedCPUProfile(t *testing.T) {
 			for i := range f.codes {
 				c := &f.codes[i]
 				if c.runs > 0 {
-					rows = append(rows, row{c.name + c.desc, c.calls, c.serial, c.nanos, c.runs, int64(c.n), c.code.Size})
+					rows = append(rows, row{c.name + c.desc, c.calls, c.serial, c.nanos, c.runs, int64(c.n), c.code.Size, c.pcalls, c.pcallNs, c.pstartNs, c.pmaxNs})
 				}
 			}
 		}
@@ -140,6 +142,10 @@ func TestComposedCPUProfile(t *testing.T) {
 		for _, r := range rows {
 			fmt.Fprintf(&b, "  %-70.70s %8.1f us/tok %5.1f%% launches/tok %5.1f calls %v serial %v  %.2f us/launch  %d B\n",
 				r.name, float64(r.nanos)/1e3/ft, 100*float64(r.nanos)/float64(tot), float64(r.runs)/ft, r.calls, r.serial, float64(r.nanos)/1e3/float64(r.runs), r.bytes)
+			if r.pc > 0 {
+				fmt.Fprintf(&b, "      calls/launch %.1f, a call %.2f us, starts %.2f us after the launch, the last %.2f us\n",
+					float64(r.pc)/float64(r.runs), float64(r.pcall)/1e3/float64(r.pc), float64(r.pstart)/1e3/float64(r.pc), float64(r.pmax)/1e3/float64(r.runs))
+			}
 		}
 		if composed {
 			if cb := st.cpu.blocks[st.lo]; cb != nil && cb.f != nil {

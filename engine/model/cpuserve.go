@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -133,6 +134,9 @@ type cpuCode struct {
 	name        string
 	desc        string
 	nanos, runs int64
+	// pcalls, pcallNs, pstartNs and pmaxNs are its calls under WithProfile:
+	// their count, time, start after the launch's and each launch's last start.
+	pcalls, pcallNs, pstartNs, pmaxNs int64
 	// rd and wr are the buffers the kernel's calls read and write, as the
 	// call site binds them; join is how many kernels after it run in its
 	// pool phase, none reading or writing what another of the phase writes,
@@ -280,10 +284,13 @@ type cpuState struct {
 	args []cpu.Args
 	// part is the workers the launch running sizes its calls for, and ends
 	// its phase's kernels' calls' running totals (cpuGroup).
-	part  int
-	ends  []int
-	run   cpuRegion
-	bound cpuBound
+	part int
+	ends []int
+	// t0 and maxStart are the profiled launch's start and its latest call's.
+	t0       time.Time
+	maxStart int64
+	run      cpuRegion
+	bound    cpuBound
 	// fault is a violation a gate sets: the bindings rewritten so a kernel
 	// reads the wrong history page or the wrong first row.
 	fault   cpuFault
@@ -1133,9 +1140,11 @@ func (s *State) cpuOwn(f *cpuBlockForm) [][]uint32 {
 func (s *State) cpuCall(b *cpuBound, c *cpuCode) {
 	if s.prof {
 		t0 := time.Now()
+		s.cpu.t0, s.cpu.maxStart = t0, 0
 		s.cpuLaunch(b, c)
 		c.nanos += int64(time.Since(t0))
 		c.runs++
+		c.pmaxNs += s.cpu.maxStart
 		return
 	}
 	s.cpuLaunch(b, c)
@@ -1300,7 +1309,26 @@ func (r *cpuRegion) region(w, lo, hi int) {
 	a := &r.s.cpu.args[w]
 	for i := lo; i < hi; i++ {
 		r.s.cpuWords(a, r.b, r.c, r.c.callAt(i, r.live))
+		if r.s.prof {
+			r.s.cpuProfCall(r.c, a)
+			continue
+		}
 		r.c.code.Call(a)
+	}
+}
+
+func (s *State) cpuProfCall(c *cpuCode, a *cpu.Args) {
+	t := time.Now()
+	c.code.Call(a)
+	off := int64(t.Sub(s.cpu.t0))
+	atomic.AddInt64(&c.pcalls, 1)
+	atomic.AddInt64(&c.pcallNs, int64(time.Since(t)))
+	atomic.AddInt64(&c.pstartNs, off)
+	for {
+		m := atomic.LoadInt64(&s.cpu.maxStart)
+		if off <= m || atomic.CompareAndSwapInt64(&s.cpu.maxStart, m, off) {
+			return
+		}
 	}
 }
 
@@ -2239,8 +2267,10 @@ func (s *State) cpuCalls(b *cpuBound, cs []cpuCode) {
 			continue
 		}
 		t0 := time.Now()
+		s.cpu.t0, s.cpu.maxStart = t0, 0
 		s.cpuGroup(b, g)
 		d := int64(time.Since(t0))
+		g[0].pmaxNs += s.cpu.maxStart
 		ends := s.cpu.ends
 		for j := range g {
 			n := ends[j]
@@ -2293,6 +2323,10 @@ func (s *State) cpuGroupRun(a *cpu.Args, b *cpuBound, g []cpuCode, lo, hi int) {
 			at -= ends[k-1]
 		}
 		s.cpuWords(a, b, &g[k], at)
+		if s.prof {
+			s.cpuProfCall(&g[k], a)
+			continue
+		}
 		g[k].code.Call(a)
 	}
 }
