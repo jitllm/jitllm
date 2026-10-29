@@ -579,6 +579,18 @@ func (b *binder86) gprs() error {
 	}
 	passes := k.passes()
 	groups := k.offsetGroups(lastLoop)
+	var reloads map[int]bool
+	if b.spill && !k.spills() {
+		reloads = k.reloadCopies(groups, lastLoop, len(p.Reloads))
+	}
+	reload := func() int {
+		for _, s := range p.Reloads {
+			if !b.copyIn(s) {
+				return s
+			}
+		}
+		return -1
+	}
 	// A copy's slot, once its last loop ends, holds the next copy's.
 	var freeSlots []int
 	for _, e := range k.Seq {
@@ -600,12 +612,8 @@ func (b *binder86) gprs() error {
 							if r < 0 {
 								r = b.take(p.Spare)
 							}
-							if r < 0 && b.spill && !k.spills() {
-								for _, s := range p.Reloads {
-									if r < 0 && !b.copyIn(s) {
-										r = s
-									}
-								}
+							if r < 0 && reloads[cu.Ptr] {
+								r = reload()
 							}
 							offs[g] = r + 1
 						}
@@ -620,6 +628,9 @@ func (b *binder86) gprs() error {
 					}
 					if r < 0 {
 						r = b.take(p.Spare)
+					}
+					if r < 0 && reloads[cu.Ptr] {
+						r = reload()
 					}
 					if r < 0 && b.spill {
 						s := -1
@@ -2444,6 +2455,94 @@ func (k *Kernel) passes() bool {
 		}
 	}
 	return false
+}
+
+// reloadCopies picks the copies that take the n reload registers a binding
+// holds back and no value needs: the most read a trip of a loop reading it
+// first, no more than n of them live at once.
+func (k *Kernel) reloadCopies(groups map[int]offGroup, lastLoop map[int]int, n int) map[int]bool {
+	weight := func(c int) int {
+		w := 1
+		for ; c >= 0; c = k.Loops[c].Parent {
+			if !k.Loops[c].once() {
+				w *= 16
+			}
+		}
+		return w
+	}
+	hs := k.Homes()
+	reads := map[int]int{}
+	loops := map[int]map[int]bool{}
+	read := func(ptr, c int) {
+		reads[ptr] += weight(c)
+		if loops[ptr] == nil {
+			loops[ptr] = map[int]bool{}
+		}
+		loops[ptr][c] = true
+	}
+	for i, nd := range k.Nodes {
+		if nd.Ptr > 0 && hs[i] >= 0 {
+			read(nd.Ptr, hs[i])
+		}
+	}
+	for _, st := range k.Stores {
+		if st.Ptr > 0 && st.At >= 0 {
+			read(st.Ptr, st.At)
+		}
+	}
+	pos, end := map[int]int{}, map[int]int{}
+	for p, e := range k.Seq {
+		switch e.Kind {
+		case EntryLoop:
+			pos[e.I] = p
+		case EntryEnd:
+			end[e.I] = p
+		}
+	}
+	type cand struct {
+		ptrs           []int
+		weight, lo, hi int
+	}
+	byKey := map[[2]int]*cand{}
+	var cs []*cand
+	for c, l := range k.Loops {
+		for _, cu := range l.Cursors {
+			if !cu.Take || cu.Ptr == 0 {
+				continue
+			}
+			key := [2]int{-1, cu.Ptr}
+			if g, ok := groups[cu.Ptr]; ok {
+				key = [2]int{g.g, c}
+			}
+			x := byKey[key]
+			if x == nil {
+				x = &cand{lo: pos[c], hi: end[lastLoop[cu.Ptr]]}
+				byKey[key] = x
+				cs = append(cs, x)
+			}
+			x.ptrs = append(x.ptrs, cu.Ptr)
+			x.weight += reads[cu.Ptr]/max(len(loops[cu.Ptr]), 1) + weight(c)
+		}
+	}
+	slices.SortStableFunc(cs, func(a, b *cand) int { return b.weight - a.weight })
+	out := map[int]bool{}
+	var chosen []*cand
+	for _, x := range cs {
+		live := 0
+		for _, y := range chosen {
+			if x.lo <= y.hi && y.lo <= x.hi {
+				live++
+			}
+		}
+		if live >= n {
+			continue
+		}
+		chosen = append(chosen, x)
+		for _, p := range x.ptrs {
+			out[p] = true
+		}
+	}
+	return out
 }
 
 func (k *Kernel) spills() bool {
