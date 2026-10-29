@@ -463,6 +463,11 @@ func (b *binder86) gprs() error {
 	freed, expire := map[int]int{}, map[int]kept{}
 	expired := func(at int) {
 		for v, h := range expire {
+			if k.Nodes[v].Spill != 0 {
+				// Re-read or spilled: its register was handed on.
+				delete(expire, v)
+				continue
+			}
 			if h.end < at {
 				b.used[h.r] = false
 				delete(expire, v)
