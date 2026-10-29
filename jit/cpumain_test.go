@@ -136,7 +136,7 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 	scratch := map[Operand][]uint32{}
 	type bound struct {
 		code   *cpu.Code
-		calls  []int
+		sp     callSpace
 		ncalls int
 		args   []cpu.Args // a template a copy
 		coords []CallArg
@@ -149,10 +149,8 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer code.Close()
-		b := bound{code: code, calls: c.Calls, ncalls: 1, args: make([]cpu.Args, n), moving: make([][]movingArg, n)}
-		for _, cl := range c.Calls {
-			b.ncalls *= cl
-		}
+		sp := spaceOf(&c, workers)
+		b := bound{code: code, sp: sp, ncalls: sp.n, args: make([]cpu.Args, n), moving: make([][]movingArg, n)}
 		for i := range n {
 			base := unsafe.Pointer(&b.args[i])
 			for _, a := range c.Args {
@@ -166,7 +164,7 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 					}
 					continue
 				case a.Length || a.Value:
-					*slot = uint64(a.Extent)
+					*slot = argValue(a, sp)
 					continue
 				case a.Words != nil:
 					words = append([]uint32(nil), a.Words...)
@@ -213,7 +211,7 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 	body := func(wk, lo, hi int) {
 		a := &wargs[wk]
 		*a = cur.args[curCopy]
-		callRange(cur.code, a, cur.calls, cur.coords, cur.moving[curCopy], lo, hi)
+		callRange(cur.code, a, cur.sp, cur.coords, cur.moving[curCopy], lo, hi)
 	}
 	composed := func(i int) {
 		curCopy = i
@@ -222,7 +220,7 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 			if cur.ncalls <= 1 {
 				a := &wargs[0]
 				*a = cur.args[i]
-				callAll(cur.code, a, cur.calls, cur.coords, cur.moving[i])
+				callAll(cur.code, a, cur.sp, cur.coords, cur.moving[i])
 				continue
 			}
 			j.ParallelWorkers(cur.ncalls, 1, body)

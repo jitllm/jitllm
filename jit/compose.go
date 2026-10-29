@@ -84,6 +84,11 @@ type Code struct {
 	Scan bool
 	// Matrix is Kernel.Matrix.
 	Matrix [2]int
+	// Share, where set, is the rows of a host kernel whose single calls'
+	// axis is a call's first row in ShareUnit rows: the caller cuts them into
+	// a call a worker, of a multiple of ShareUnit rows, and passes each its
+	// rows in the Share word.
+	Share, ShareUnit int
 }
 
 // Writes reports whether the kernel writes operand o.
@@ -112,6 +117,8 @@ type CallArg struct {
 	Value   bool
 	Length  bool
 	Extent  int
+	// Share is the length of a call's rows of Code.Share.
+	Share bool
 	// Coord, where set, is 1 + the axis of Calls whose coordinate the word
 	// is, set for each call.
 	Coord int
@@ -343,6 +350,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work, Few: k.Few, Many: k.Many, Scan: k.Kind == PrimScan, Matrix: k.Matrix}
 		if l.CPU != nil && !k.Work && k.Group <= 0 {
 			c.Calls = append([]int(nil), k.Space...)
+			c.Share, c.ShareUnit = k.Share, k.ShareUnit
 		}
 		if k.Capacity > 0 && k.RowsHeld && len(k.Space) > 0 && k.Space[0] > 0 {
 			c.Live, c.LiveUnits, c.LiveInner, c.LiveGroup = k.Capacity, k.Space[0], k.Elements()/k.Space[0], k.Group
@@ -369,7 +377,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 				continue
 			}
 			nd := k.Nodes[a.Node-1]
-			c.Args = append(c.Args, CallArg{Field: a.Field, Value: true, Length: nd.Op == OpLength, Extent: int(nd.Imm)})
+			c.Args = append(c.Args, CallArg{Field: a.Field, Value: true, Length: nd.Op == OpLength, Extent: int(nd.Imm), Share: nd.Op == OpLength && nd.A < 0})
 		}
 		// What the code reads: the loads its stores, loop counts and launch
 		// clamp reach, and the buffers its cursors walk.
@@ -412,4 +420,16 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 		codes = append(codes, PartCode{Code: c, Part: k.Of})
 	}
 	return codes, errors.Join(errs...)
+}
+
+// ShareRows is a call's rows of a Share code whose calls run on workers
+// workers, a multiple of the code's unit, and the calls they take: one a
+// worker, whatever workers the code was formed for.
+func (c *Code) ShareRows(workers int) (rows, calls int) {
+	if c.Share <= 0 {
+		return 0, 0
+	}
+	w, u := max(workers, 1), max(c.ShareUnit, 1)
+	rows = ((c.Share+w-1)/w + u - 1) / u * u
+	return rows, (c.Share + rows - 1) / rows
 }

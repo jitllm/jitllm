@@ -67,6 +67,8 @@ const (
 	cpuArgRecState
 	cpuArgRecConv
 	cpuArgRecConvOut
+	// cpuArgShare is the rows a call of a Share code takes (jit.Code.Share).
+	cpuArgShare
 	cpuArgRecRows
 	// cpuArgPoolPos is the positions table a pooled readout reads its live
 	// count from (cpupool.go).
@@ -137,7 +139,9 @@ type cpuCode struct {
 	// and ends their calls' running totals (cpuGroup).
 	rd, wr []cpuBuf
 	join   int
-	ends   []int
+	// share is the code's hold on a weight's rows sized at the launch
+	// (jit.Code.Share).
+	share jit.Code
 }
 
 // cpuBuf is a buffer a call word binds, by where the call site finds it.
@@ -273,7 +277,11 @@ type cpuState struct {
 	// after another, so they share them.
 	own map[*cpuBlockForm][][]uint32
 	// args is a call's words for each pool worker.
-	args  []cpu.Args
+	args []cpu.Args
+	// part is the workers the launch running sizes its calls for, and ends
+	// its phase's kernels' calls' running totals (cpuGroup).
+	part  int
+	ends  []int
 	run   cpuRegion
 	bound cpuBound
 	// fault is a violation a gate sets: the bindings rewritten so a kernel
@@ -1142,6 +1150,13 @@ func (s *State) cpuLaunch(b *cpuBound, c *cpuCode) {
 	if !c.tiles {
 		live = 0
 	}
+	s.cpu.part = s.Workers()
+	if c.serial {
+		s.cpu.part = 1
+	}
+	if c.share.Share > 0 {
+		_, n = c.share.ShareRows(s.cpu.part)
+	}
 	if n <= 1 || c.serial || s.jit == nil || s.jit.Workers() <= 1 {
 		a := &s.cpu.args[0]
 		for i := range max(n, 1) {
@@ -1174,6 +1189,7 @@ func (c *cpuCode) callAt(i, live int) int {
 // cpuWords writes call at's words of kernel c into a.
 func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 	base := unsafe.Pointer(a)
+	rows, _ := c.share.ShareRows(s.cpu.part)
 	for i := range c.args {
 		ar := &c.args[i]
 		var p unsafe.Pointer
@@ -1181,8 +1197,11 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 		case cpuArgValue:
 			*(*uint64)(unsafe.Add(base, ar.field)) = ar.val
 			continue
+		case cpuArgShare:
+			*(*uint64)(unsafe.Add(base, ar.field)) = uint64(min(rows, c.share.Share-at*rows))
+			continue
 		case cpuArgCoord:
-			*(*uint64)(unsafe.Add(base, ar.field)) = uint64(cpuCoord(c.calls, at, int(ar.coord)))
+			*(*uint64)(unsafe.Add(base, ar.field)) = uint64(c.coord(at, int(ar.coord), rows))
 			continue
 		case cpuArgWord:
 			*(*uint64)(unsafe.Add(base, ar.field)) = uint64(b.own[ar.i][ar.off])
@@ -1249,12 +1268,21 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 		if ar.moves {
 			for ax := range c.calls {
 				if ax < len(ar.per) && ar.per[ax] != 0 {
-					off += cpuCoord(c.calls, at, ax) * ar.per[ax]
+					off += c.coord(at, ax, rows) * ar.per[ax]
 				}
 			}
 		}
 		*(*uint64)(unsafe.Add(base, ar.field)) = uint64(uintptr(p)) + uint64(off*ar.elem)
 	}
+}
+
+// coord is call at's coordinate along axis ax: a Share code's first row
+// for calls of rows rows, else cpuCoord's.
+func (c *cpuCode) coord(at, ax, rows int) int {
+	if rows > 0 {
+		return at * rows / max(c.share.ShareUnit, 1)
+	}
+	return cpuCoord(c.calls, at, ax)
 }
 
 // cpuCoord is call at's coordinate along axis ax of the calls' space calls,
@@ -1297,6 +1325,7 @@ func (s *State) cpuPlace() {
 		w = s.jit.Workers()
 	}
 	s.cpu.args = make([]cpu.Args, max(w, 1))
+	s.cpu.ends = make([]int, 0, 16)
 	s.cpu.run.fn = s.cpu.run.region
 	s.cpu.run.gfn = s.cpu.run.groupRegion
 	s.cpu.zero = make([]uint32, 4)
@@ -1655,7 +1684,11 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 			f.close()
 			return nil, fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		cc := cpuCode{calls: c.Calls, n: 1, name: c.Name}
+		cc := cpuCode{calls: c.Calls, n: 1, name: c.Name, share: jit.Code{Share: c.Share, ShareUnit: c.ShareUnit}}
+		if c.Share > 0 && len(c.Calls) != 1 {
+			f.close()
+			return nil, fmt.Errorf("%s: a share of rows over calls %v", c.Name, c.Calls)
+		}
 		for _, n := range c.Calls {
 			cc.n *= n
 		}
@@ -1732,6 +1765,8 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 			switch {
 			case a.Coord > 0:
 				ar.src, ar.coord = cpuArgCoord, uint8(a.Coord-1)
+			case a.Share:
+				ar.src = cpuArgShare
 			case a.Length:
 				ar.src, ar.val = cpuArgValue, uint64(a.Extent)
 			case a.Value:
@@ -1829,7 +1864,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 				ar.src = cpuArgWord
 			}
 			cc.args = append(cc.args, ar)
-			if ar.src != cpuArgValue && ar.src != cpuArgCoord {
+			if ar.src != cpuArgValue && ar.src != cpuArgCoord && ar.src != cpuArgShare {
 				buf := cpuBuf{src: ar.src, region: ar.region, role: ar.role, i: ar.i, stream: ar.stream}
 				if buf.src == cpuArgWord {
 					buf.src = cpuArgOwn
@@ -1958,16 +1993,7 @@ func (f *cpuBlockForm) joinPhases() {
 				j++
 			}
 		}
-		c := &f.codes[g]
-		c.join = j - g - 1
-		if c.join > 0 {
-			c.ends = make([]int, 0, j-g)
-			n := 0
-			for i := g; i < j; i++ {
-				n += max(f.codes[i].n, 1)
-				c.ends = append(c.ends, n)
-			}
-		}
+		f.codes[g].join = j - g - 1
 		g = j
 	}
 }
@@ -2215,8 +2241,13 @@ func (s *State) cpuCalls(b *cpuBound, cs []cpuCode) {
 		t0 := time.Now()
 		s.cpuGroup(b, g)
 		d := int64(time.Since(t0))
+		ends := s.cpu.ends
 		for j := range g {
-			g[j].nanos += d * int64(max(g[j].n, 1)) / int64(c.ends[len(c.ends)-1])
+			n := ends[j]
+			if j > 0 {
+				n -= ends[j-1]
+			}
+			g[j].nanos += d * int64(n) / int64(ends[len(ends)-1])
 			g[j].runs++
 		}
 	}
@@ -2225,7 +2256,18 @@ func (s *State) cpuCalls(b *cpuBound, cs []cpuCode) {
 // cpuGroup runs the kernels g as one phase over the pool: their calls one
 // space, in order of the kernels.
 func (s *State) cpuGroup(b *cpuBound, g []cpuCode) {
-	n := g[0].ends[len(g)-1]
+	s.cpu.part = s.Workers()
+	s.cpu.ends = s.cpu.ends[:0]
+	n := 0
+	for j := range g {
+		if g[j].share.Share > 0 {
+			_, k := g[j].share.ShareRows(s.cpu.part)
+			n += k
+		} else {
+			n += max(g[j].n, 1)
+		}
+		s.cpu.ends = append(s.cpu.ends, n)
+	}
 	if s.jit == nil || s.jit.Workers() <= 1 {
 		s.cpuGroupRun(&s.cpu.args[0], b, g, 0, n)
 		return
@@ -2240,7 +2282,7 @@ func (s *State) cpuGroup(b *cpuBound, g []cpuCode) {
 
 // cpuGroupRun runs the calls [lo, hi) of the kernels g's one space on a.
 func (s *State) cpuGroupRun(a *cpu.Args, b *cpuBound, g []cpuCode, lo, hi int) {
-	ends := g[0].ends
+	ends := s.cpu.ends
 	k := 0
 	for i := lo; i < hi; i++ {
 		for i >= ends[k] {

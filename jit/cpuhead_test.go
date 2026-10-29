@@ -149,7 +149,7 @@ func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWei
 				coords = append(coords, a)
 				continue
 			case a.Length || a.Value:
-				*slot = uint64(a.Extent)
+				*slot = argValue(a, spaceOf(&c, harnessWorkers))
 				continue
 			case a.Words != nil:
 				words = append([]uint32(nil), a.Words...)
@@ -192,7 +192,7 @@ func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWei
 				moving = append(moving, movingArg{a, *slot, elem})
 			}
 		}
-		callAll(code, &args, c.Calls, coords, moving)
+		callAll(code, &args, spaceOf(&c, harnessWorkers), coords, moving)
 		code.Close()
 	}
 	runtime.KeepAlive(keep)

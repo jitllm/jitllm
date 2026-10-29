@@ -92,9 +92,10 @@ type Kernel struct {
 	TileMajor bool
 	// Matrix is a matrix kernel's shape: its outputs and its reduction's trip.
 	Matrix [2]int
-	// Share, where set, is the rows a worker's calls (Workers) hold: each
-	// call the next Space's last extent of them, the last what is left.
-	Share int
+	// Share, where set, is the rows a kernel's calls (Workers) hold, a
+	// call's first row its coordinate's ShareUnit rows on and its rows a
+	// length the caller sizes to the workers it runs, a multiple of them.
+	Share, ShareUnit int
 	// Running, where SplitRange set it, is a split whose partitions one
 	// workgroup runs in order (Running, the pass).
 	Running *RunningSplit
@@ -330,7 +331,7 @@ const (
 	// OpBroadcast is scalar A in every lane.
 	OpBroadcast
 	// OpLength is a length the caller passes at run time, Imm for this
-	// model.
+	// model; with A -1, a call's rows of a Share, Imm at Device.Slots.
 	OpLength
 	// OpHSum is the sum of A's lanes.
 	OpHSum

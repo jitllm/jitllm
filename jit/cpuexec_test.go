@@ -31,7 +31,7 @@ import (
 func TestComposedCPUMatVec(t *testing.T) {
 	const k = 256
 	rng := rand.New(rand.NewSource(5))
-	right, wrong, apart, shared, unformed := 0, 0, 0, 0, map[string]string{}
+	right, wrong, apart, shared, sized, unformed := 0, 0, 0, 0, 0, map[string]string{}
 	// 64 rows at one worker and six; at six, 48 and 80 rows too, which six
 	// workers do not divide; 1024 by 2048 at one worker and one token, a
 	// call of rows Streams cuts apart, and at six, a share whose last call
@@ -133,6 +133,23 @@ func TestComposedCPUMatVec(t *testing.T) {
 						continue
 					}
 					right++
+					for _, c := range codes {
+						if c.Share == 0 {
+							continue
+						}
+						for _, wk := range []int{1, 5, 7, 13} {
+							if sp := spaceOf(&c, wk); sp.n > wk {
+								t.Errorf("%s: %s runs %d calls on %d workers: in waves", name, c.Name, sp.n, wk)
+							}
+							got, err := runCPUWorkers(codes, x, tokens*rows, planes, nil, nil, wk)
+							if err != nil {
+								t.Errorf("%s at %d workers: %v", name, wk, err)
+							} else if e := cpuNMSE(got, want); math.IsNaN(e) || !(e < 1e-9) {
+								t.Errorf("%s at %d workers: NMSE %.3e against the oracle", name, wk, e)
+							}
+							sized++
+						}
+					}
 					moved := [3][]uint32{append(qs[1:len(qs):len(qs)], qs[0]), d, sc}
 					bad, err := runCPU(codes, x, tokens*rows, moved)
 					if err != nil {
@@ -154,13 +171,12 @@ func TestComposedCPUMatVec(t *testing.T) {
 	if apart == 0 {
 		t.Fatal("no matvec formed its rows apart (Streams.Apart): the gate never ran that form")
 	}
-	if shared == 0 {
-		t.Fatal("no matvec dealt a worker's share a call with a shorter last (Workers): the gate never ran that form")
+	if shared == 0 || sized == 0 {
+		t.Fatal("no matvec dealt a worker's share a call (Workers): the gate never ran that form")
 	}
 }
 
-// raggedShare reports whether a kernel's calls are workers' shares, the last
-// holding fewer rows.
+// raggedShare reports whether a kernel's calls are workers' shares.
 func raggedShare(ks []*Kernel) bool {
 	for _, k := range ks {
 		if k.Share > 0 {
@@ -244,6 +260,11 @@ func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs ma
 // runCPUBound is runCPUVectors with bind asked first for each operand: the
 // words it returns, or nil for runCPUVectors' own.
 func runCPUBound(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32, bind func(Operand) []uint32) ([]float32, error) {
+	return runCPUWorkers(codes, x, n, planes, vecs, bind, harnessWorkers)
+}
+
+// runCPUWorkers is runCPUBound with a Share code's calls sized for workers.
+func runCPUWorkers(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32, bind func(Operand) []uint32, workers int) ([]float32, error) {
 	const guard = 16
 	out := make([]float32, n+guard)
 	for i := range out {
@@ -276,7 +297,7 @@ func runCPUBound(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[
 				coords = append(coords, a)
 				continue
 			case a.Length || a.Value:
-				*slot = uint64(a.Extent)
+				*slot = argValue(a, spaceOf(&c, workers))
 				continue
 			case a.Words != nil:
 				words = append([]uint32(nil), a.Words...)
@@ -324,7 +345,7 @@ func runCPUBound(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[
 				moving = append(moving, movingArg{a, *slot, elem})
 			}
 		}
-		callAll(code, &args, c.Calls, coords, moving)
+		callAll(code, &args, spaceOf(&c, workers), coords, moving)
 		code.Close()
 	}
 	runtime.KeepAlive(keep)
@@ -338,31 +359,55 @@ func runCPUBound(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[
 
 // callAll calls code once at each coordinate of the calls' space calls, its
 // coordinate words and its moving addresses set for each.
-func callAll(code *cpu.Code, args *cpu.Args, calls []int, coords []CallArg, moving []movingArg) {
-	base := unsafe.Pointer(args)
-	n := 1
-	for _, c := range calls {
-		n *= c
-	}
-	coord := func(at, ax int) int {
-		for a := len(calls) - 1; a > ax; a-- {
-			at /= calls[a]
-		}
-		return at % calls[ax]
-	}
-	for at := range n {
-		for _, a := range coords {
-			*(*uint64)(unsafe.Add(base, a.Field)) = uint64(coord(at, a.Coord-1))
-		}
-		for _, m := range moving {
-			addr := m.at
-			for ax, per := range m.a.Per {
-				addr += uint64(coord(at, ax) * per * m.elem)
+func callAll(code *cpu.Code, args *cpu.Args, sp callSpace, coords []CallArg, moving []movingArg) {
+	callRange(code, args, sp, coords, moving, 0, sp.n)
+}
+
+// callSpace is a code's calls as a test runs them on its workers: their
+// count, and for a Share code the rows a call takes.
+type callSpace struct {
+	calls                       []int
+	n, rows, unit, share, field int
+}
+
+// harnessWorkers is the workers runCPU sizes a Share code's calls for:
+// fewer than any device a test forms for has.
+const harnessWorkers = 3
+
+func spaceOf(c *Code, workers int) callSpace {
+	sp := callSpace{calls: c.Calls, n: 1}
+	if rows, n := c.ShareRows(workers); n > 0 {
+		sp.rows, sp.n, sp.unit, sp.share = rows, n, max(c.ShareUnit, 1), c.Share
+		for _, a := range c.Args {
+			if a.Share {
+				sp.field = a.Field
 			}
-			*(*uint64)(unsafe.Add(base, m.a.Field)) = addr
 		}
-		code.Call(args)
+		return sp
 	}
+	for _, x := range c.Calls {
+		sp.n *= x
+	}
+	return sp
+}
+
+func (sp callSpace) coord(at, ax int) int {
+	if sp.rows > 0 {
+		return at * sp.rows / sp.unit
+	}
+	for a := len(sp.calls) - 1; a > ax; a-- {
+		at /= sp.calls[a]
+	}
+	return at % sp.calls[ax]
+}
+
+// argValue is the value word a: a Share code's first call's rows, or its
+// extent.
+func argValue(a CallArg, sp callSpace) uint64 {
+	if a.Share {
+		return uint64(sp.rows)
+	}
+	return uint64(a.Extent)
 }
 
 // withCPUInt8 is the default registry with the CPU keeping the int8 form,

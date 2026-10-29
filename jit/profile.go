@@ -191,7 +191,7 @@ func mainBlock() []uint32 {
 // in Cols and OutStr.
 func mainArgs() ArgFields {
 	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136, 104, 64, 48, 72, 144, 152, 160}, Vectors: 40, Tail: 32, Counts: []int{32, 40},
-		Coords: []int{80, 88}}
+		Coords: []int{80, 88}, Share: 88}
 }
 
 // mainSampleArgs is main's convention for a sample part's words: the

@@ -202,7 +202,7 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 				coords = append(coords, a)
 				continue
 			case a.Length || a.Value:
-				*slot = uint64(a.Extent)
+				*slot = argValue(a, spaceOf(&c, harnessWorkers))
 				continue
 			case a.Words != nil:
 				words = append([]uint32(nil), a.Words...)
@@ -255,31 +255,7 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 				moving = append(moving, movingArg{a, *slot, elem})
 			}
 		}
-		calls := 1
-		for _, n := range c.Calls {
-			calls *= n
-		}
-		for at := range calls {
-			for _, a := range coords {
-				v := at
-				for ax := len(c.Calls) - 1; ax > a.Coord-1; ax-- {
-					v /= c.Calls[ax]
-				}
-				*(*uint64)(unsafe.Add(base, a.Field)) = uint64(v % c.Calls[a.Coord-1])
-			}
-			for _, m := range moving {
-				addr := m.at
-				for ax, per := range m.a.Per {
-					v := at
-					for a := len(c.Calls) - 1; a > ax; a-- {
-						v /= c.Calls[a]
-					}
-					addr += uint64((v % c.Calls[ax]) * per * m.elem)
-				}
-				*(*uint64)(unsafe.Add(base, m.a.Field)) = addr
-			}
-			code.Call(&args)
-		}
+		callAll(code, &args, spaceOf(&c, harnessWorkers), coords, moving)
 		code.Close()
 	}
 	runtime.KeepAlive(keep)

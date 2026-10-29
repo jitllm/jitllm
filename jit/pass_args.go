@@ -41,6 +41,9 @@ type ArgFields struct {
 	In            []int
 	Vectors, Tail int
 	Counts        []int
+	// Share, where set and free of the call's coordinates, is the word of
+	// a call's rows of a Share.
+	Share int
 	// Coords, where set, are the words each axis of a kernel's calls'
 	// space passes its coordinate in, the outermost first, and the kernel
 	// addresses every buffer from the address it is given with the whole of
@@ -171,7 +174,10 @@ func (k *Kernel) bindCounts(f ArgFields) {
 			}
 		}
 		bound[n] = true
-		fl := field(c)
+		fl := f.Share
+		if nd := k.Nodes[n]; fl == 0 || nd.Op != OpLength || nd.A >= 0 || slices.ContainsFunc(k.Args, func(a Arg) bool { return a.Field == fl }) {
+			fl = field(c)
+		}
 		pv := k.add(Node{Op: OpParam, Type: ir.U32, Imm: int64(fl)})
 		k.redirectAll(n, pv)
 		k.Args = append(k.Args, Arg{Field: fl, Buf: -1, Node: n + 1})

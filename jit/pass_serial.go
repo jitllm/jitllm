@@ -53,12 +53,10 @@ func (p Serial) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 		}
 		if m.Share > 0 && calls > 0 && len(m.Space) > calls {
-			// A worker's share: the last call runs the rows left.
+			// A call's rows, from its coordinate's unit on, are a length the
+			// caller sizes for the workers it runs.
 			last := len(m.Space) - 1
-			n := m.Space[last]
-			part := m.add(Node{Op: OpCoord, A: calls - 1, Type: ir.U32})
-			left := m.bin(OpSub, ir.U32, m.u32(m.Share), m.bin(OpMul, ir.U32, part, m.u32(n)))
-			m.Loops[loopOf[last]].Count = m.bin(OpMin, ir.U32, left, m.u32(n)) + 1
+			m.Loops[loopOf[last]].Count = m.add(Node{Op: OpLength, A: -1, Type: ir.U32, Imm: int64(m.Space[last])}) + 1
 		}
 		if pos := m.Positions; pos != nil && pos.Axis >= calls {
 			q := *pos

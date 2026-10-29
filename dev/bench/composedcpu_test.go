@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -16,9 +17,10 @@ import (
 // kernels, each arm a model and a state of its own at the shipping tuning,
 // interleaved in one process (AB), the same-binary A/A control first on the
 // same harness. The model is JITLLM_COMPOSED_MODEL (default Llama-3.2-1B
-// Q4_K_M). Each arm's rate is stated as bytes a token and a share of the
-// CPU's read rate, measured in the same process by the estimator's probe
-// once both arms are closed: a rate above it is a harness bug.
+// Q4_K_M), its pool's participants JITLLM_COMPOSED_PART where set. Each
+// arm's rate is stated as bytes a token and a share of the CPU's read rate,
+// measured in the same process by the estimator's probe once both arms are
+// closed: a rate above it is a harness bug.
 func TestComposedCPUAB(t *testing.T) {
 	if os.Getenv("JITLLM_COMPOSED_AB") == "" {
 		t.Skip("a measurement: set JITLLM_COMPOSED_AB=1, on an idle host")
@@ -33,8 +35,16 @@ func TestComposedCPUAB(t *testing.T) {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this measurement proved nothing", err)
 	}
 	var bpt float64
+	opts := []model.Option{}
+	if v := os.Getenv("JITLLM_COMPOSED_PART"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts = append(opts, model.WithJITOptions(nn.WithParticipants(n)))
+	}
 	arm := func(name string, composed bool) (Case, func() int, func()) {
-		m, err := model.Open(path, model.WithComposedCPU(composed))
+		m, err := model.Open(path, append(opts, model.WithComposedCPU(composed))...)
 		if err != nil {
 			t.Fatal(err)
 		}

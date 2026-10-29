@@ -97,7 +97,7 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 					coords = append(coords, a)
 					continue
 				case a.Length || a.Value:
-					*slot = uint64(a.Extent)
+					*slot = argValue(a, spaceOf(&c, threads))
 					continue
 				case a.Words != nil:
 					words = append([]uint32(nil), a.Words...)
@@ -134,13 +134,11 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 					moving = append(moving, movingArg{a, *slot, elem})
 				}
 			}
-			n := 1
-			for _, c := range c.Calls {
-				n *= c
-			}
+			sp := spaceOf(&c, threads)
+			n := sp.n
 			run := func() {
 				if threads <= 1 || n <= 1 {
-					callAll(code, &args, c.Calls, coords, moving)
+					callAll(code, &args, sp, coords, moving)
 					return
 				}
 				var wg sync.WaitGroup
@@ -149,7 +147,7 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 					go func() {
 						defer wg.Done()
 						a := args
-						callRange(code, &a, c.Calls, coords, moving, w*n/threads, (w+1)*n/threads)
+						callRange(code, &a, sp, coords, moving, w*n/threads, (w+1)*n/threads)
 					}()
 				}
 				wg.Wait()
@@ -222,22 +220,19 @@ func speedRegistry(ahead, jam int) *Registry {
 }
 
 // callRange is callAll over the calls [lo, hi) alone.
-func callRange(code *cpu.Code, args *cpu.Args, calls []int, coords []CallArg, moving []movingArg, lo, hi int) {
+func callRange(code *cpu.Code, args *cpu.Args, sp callSpace, coords []CallArg, moving []movingArg, lo, hi int) {
 	base := unsafe.Pointer(args)
-	coord := func(at, ax int) int {
-		for a := len(calls) - 1; a > ax; a-- {
-			at /= calls[a]
-		}
-		return at % calls[ax]
-	}
 	for at := lo; at < hi; at++ {
 		for _, a := range coords {
-			*(*uint64)(unsafe.Add(base, a.Field)) = uint64(coord(at, a.Coord-1))
+			*(*uint64)(unsafe.Add(base, a.Field)) = uint64(sp.coord(at, a.Coord-1))
+		}
+		if sp.rows > 0 {
+			*(*uint64)(unsafe.Add(base, sp.field)) = uint64(min(sp.rows, sp.share-at*sp.rows))
 		}
 		for _, m := range moving {
 			addr := m.at
 			for ax, per := range m.a.Per {
-				addr += uint64(coord(at, ax) * per * m.elem)
+				addr += uint64(sp.coord(at, ax) * per * m.elem)
 			}
 			*(*uint64)(unsafe.Add(base, m.a.Field)) = addr
 		}

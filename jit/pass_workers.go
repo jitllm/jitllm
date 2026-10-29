@@ -42,10 +42,7 @@ func (p Workers) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		chunk, share := 0, 0
 		if d.Slots > 1 && !rows && k.Kind != PrimScan {
 			if c, n := shareParts(k.Space[a], d.Slots, max(p.Rows, 1)); n > 1 && c <= workerCost(k.Space[a], parts, d.Slots) {
-				chunk, parts = c, n
-				if k.Space[a]%c != 0 {
-					share = k.Space[a]
-				}
+				chunk, parts, share = c, n, k.Space[a]
 			}
 		}
 		if parts <= 1 {
@@ -56,7 +53,7 @@ func (p Workers) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if chunk == 0 {
 			chunk = m.Space[a] / parts
 		}
-		m.Share = share
+		m.Share, m.ShareUnit = share, max(p.Rows, 1)
 		var cut []int
 		for i := range m.Nodes {
 			if nd := &m.Nodes[i]; nd.Op == OpCoord && nd.A >= at {
@@ -66,8 +63,11 @@ func (p Workers) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				nd.A++
 			}
 		}
-		part := m.add(Node{Op: OpCoord, A: at, Type: ir.U32})
-		base := m.bin(OpMul, ir.U32, part, m.u32(chunk))
+		step := chunk
+		if share > 0 {
+			step = m.ShareUnit
+		}
+		base := m.bin(OpMul, ir.U32, m.add(Node{Op: OpCoord, A: at, Type: ir.U32}), m.u32(step))
 		for _, i := range cut {
 			inner := m.add(Node{Op: OpCoord, A: a + 1, Type: ir.U32})
 			m.Nodes[i] = Node{Op: OpAdd, Type: ir.U32, A: inner, B: base}
@@ -77,7 +77,11 @@ func (p Workers) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			q.Axis++
 			m.Positions = &q
 		}
-		m.Space = append(append(append([]int(nil), m.Space[:at]...), parts), m.Space[at:]...)
+		calls := parts
+		if share > 0 {
+			calls = share / m.ShareUnit
+		}
+		m.Space = append(append(append([]int(nil), m.Space[:at]...), calls), m.Space[at:]...)
 		m.Space[a+1] = chunk
 		m.Calls = at + 1
 		m.TileMajor = rows
