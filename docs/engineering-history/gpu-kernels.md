@@ -11124,3 +11124,8 @@ row where the composer's reads two.
   arithmetic; a float32 history keeps every remainder. The attention gate
   holds it within 2x the oracle with q, k, p and v rounded (sm_70 and sm_86:
   1.5e-7..2.1e-7 against 1.5e-7..2.1e-7), and the fault switch is gone.
+- The flash form takes two binary16 products over every history (Flash.Half, the
+  precision policy): q, k, the exponentials and v rounded, no remainders staged,
+  and its workgroup memory without their regions. The attention gate holds it to a
+  derived budget (six times the expected binary16 error; rows read 0.12-0.56 of it).
+  Llama-3.1-8B TTFT at 2048 on a V100 0.952 and 0.939 of the parent (n=20, A/A 0.983).

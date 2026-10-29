@@ -31,10 +31,7 @@ import (
 // taken where the head is too wide for them. A head too wide for half Rows
 // within Shared takes the unit's memory where the device states more
 // (Device.Shared): two warps a workgroup stage the history for few rows and
-// hide no latency. On a V100 a 512-row chunk at 2048 positions, 32 heads of
-// 128 over 8, reads 2401-2512 us at 32 rows a workgroup (48 KiB) and
-// 1440-1446 at 128 (92 KiB); a head of 64 keeps 64 rows in 40 KiB, where
-// 128 rows in 97 KiB read 3.6% slower in a prompt.
+// hide no latency.
 type Flash struct {
 	Rows, Keys, Shared int
 	Half               bool
