@@ -11132,3 +11132,8 @@ row where the composer's reads two.
 - A prologue is admitted by the device's launch cost (jit.Device.Launch, its probe row's Floor x Bandwidth: 1.69M words on a V100): its workgroups re-reading the producer's inputs cost G*(In-Read)-In-Out words. The 8B's down declines (2.99M), its o (0.34M) and the 1B's down (0.84M) take theirs.
   V100 CUDA, composed with the launch cost against without (32-token rounds, n=20, A/A 0.99-1.03): Llama-3.1-8B 1.0685 and 1.0737 (IQR 0.3-0.6%); Llama-3.2-1B 0.9994, gemma-3-4b 1.0020, Phi-3.5 0.9995, Qwen2.5-1.5B 1.0006. Composed over the tier (TestComposedPartsAB: each arm tuned into its own cache over 128 warm tokens, round 0 kept): 8B 0.950/0.946, 1B 0.953, gemma 0.908, Phi 0.933, Qwen2.5 0.746.
   The rest of the block's prologues decline by the same words: the flash merge into o (In 49k words at 1024 keys), each norm into its projections (2.07M words for q/k/v; a group sum besides). The CPU states its call (Launch x Bandwidth) and runs no prologue: Qwen3-0.6B Q8_0 on node 1, composed over main 0.897 (A/A 0.997).
+- A weight-stationary prompt pass (8 rows in lanes, the 64 tokens a run-time
+  loop under each sub-block, output read-added-stored) was measured and not
+  taken: pp512 of main, E5-2680 v4 node 1, Qwen3-0.6B Q8_0 0.970/0.964 to
+  0.435/0.433, Llama-3.2-1B Q4_K_M 0.515/0.513 to 0.327. Its token loop spills
+  its pointers and output index: the binder holds outer values' registers.
