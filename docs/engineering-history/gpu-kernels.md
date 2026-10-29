@@ -11142,3 +11142,8 @@ row where the composer's reads two.
   float split's last segment dropped (`WithSplitFault`) leaves the reference
   bit for bit and fails each arm: median ratio 46.8-467 on Llama-3.2-1B,
   Qwen3-1.7B, Llama-3.1-8B (now served) and Qwen3-MOE-4x0.6B, cuda and vulkan.
+- On sm_70 the matrix form issues m8n8k4 on fragments it lays out (Device.Fragment), stages unpadded
+  xor-swizzled rows 16 bytes an access, and cuts k where the device's model says the grid idles units (Matrix.Split, planes and a combine).
+  V100, composed/main per projection, 8B at 512 rows: q/o 1.28, k/v 1.52, gate/up 1.17, down 1.23; 30B at 2048: router
+  1.85, the activations' binary16 kernel half of it. TTFT over the parent: Qwen3-30B-A3B 0.92-0.95, Llama-3.1-8B
+  over main 1.05-1.12 (parent 1.18-1.22). The 8B's answer changes at a tie main holds to 3 decimals.
