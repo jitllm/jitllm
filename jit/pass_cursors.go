@@ -238,7 +238,7 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 		return c
 	}
 	passes := cu.passes(loops, family) > 1 && cu.row()
-	pass, start := -1, copyLin(at)
+	pass, start, scope := -1, copyLin(at), ptr
 	for li, c := range loops {
 		var mine []int
 		var mix []lin
@@ -285,7 +285,10 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 			if family(c) != pass {
 				pass, at = family(c), copyLin(start)
 				after = g.merged(addLin(at, g.times(trips, step)))
-				q, take = cu.newPtr(), true
+				q, take = scope, false
+				if fresh || cu.familyMoves(loops, family, family(c), as, ix) {
+					q, take = cu.newPtr(), true
+				}
 			}
 		}
 		if aside {
@@ -319,6 +322,32 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 	moved := copyLin(at)
 	moved.add(pos, -1)
 	return g.merged(moved), true
+}
+
+// familyMoves reports whether a loop of family f among loops moves the
+// pointer its accesses as read.
+func (cu *cursorer) familyMoves(loops []int, family func(int) int, f int, as []int, ix []lin) bool {
+	k, g := cu.k, cu.g
+	for _, d := range loops {
+		if family(d) != f {
+			continue
+		}
+		if k.Loops[d].Walk {
+			return true
+		}
+		it := k.iterOf(d)
+		if it < 0 || k.Loops[d].once() {
+			continue
+		}
+		for j, a := range as {
+			if cu.in(a, d) {
+				if w, _ := g.coef(ix[j], g.id(atom{node: it})); len(g.merged(w)) > 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // passes is how many passes the loops make over rows of values: the

@@ -95,8 +95,9 @@ func (k *Kernel) unrollFull(c, f int) {
 
 // unrollBy runs loop c u trips a trip: each fold stepped once for each, in
 // order, the trip's position it*u+j, the folds' steps at one position
-// sharing what they compute alike.
-func (k *Kernel) unrollBy(c, u int) {
+// sharing what they compute alike. It returns each fold's sum after each
+// position.
+func (k *Kernel) unrollBy(c, u int) [][]int {
 	its := k.itersOf(c)
 	it := k.add(Node{Op: OpIter, At: c, Type: ir.U32})
 	folds := k.foldsOf(c)
@@ -105,6 +106,7 @@ func (k *Kernel) unrollBy(c, u int) {
 		steps[i] = k.Nodes[f].A
 	}
 	last := append([]int(nil), folds...)
+	chains := make([][]int, len(folds))
 	for j := 0; j < u; j++ {
 		at := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, it, k.u32(u)), k.u32(j))
 		sub := map[int]int{}
@@ -117,6 +119,7 @@ func (k *Kernel) unrollBy(c, u int) {
 		memo := map[int]int{}
 		for i := range folds {
 			last[i] = k.copyMemo(steps[i], sub, memo)
+			chains[i] = append(chains[i], last[i])
 		}
 	}
 	for i, f := range folds {
@@ -125,6 +128,7 @@ func (k *Kernel) unrollBy(c, u int) {
 	l := &k.Loops[c]
 	l.Trip = (l.Trip + u - 1) / u
 	l.Unit *= u
+	return chains
 }
 
 // copyFolded is node i with sub's nodes replaced, the replaced nodes' readers

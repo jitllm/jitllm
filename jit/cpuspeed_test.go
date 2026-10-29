@@ -175,9 +175,15 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 // to JITLLM_CPU_STRIP where that is set.
 func speedRegistry(ahead, jam int) *Registry {
 	reg := Default()
-	strip := -1
+	strip, most, least := -1, -1, -1
 	if s := os.Getenv("JITLLM_CPU_STRIP"); s != "" {
 		strip, _ = strconv.Atoi(s)
+	}
+	if s := os.Getenv("JITLLM_CPU_STREAMS_MOST"); s != "" {
+		most, _ = strconv.Atoi(s)
+	}
+	if s := os.Getenv("JITLLM_CPU_WORDS_LEAST"); s != "" {
+		least, _ = strconv.Atoi(s)
 	}
 	p := reg.Profiles[DeviceCPU]
 	p.Passes = slices.Clone(p.Passes)
@@ -189,6 +195,19 @@ func speedRegistry(ahead, jam int) *Registry {
 		if a, ok := ps.(Ahead); ok && ahead >= 0 {
 			a.Trips = ahead
 			p.Passes[i] = a
+		}
+		if q, ok := ps.(Streams); ok {
+			if most >= 0 {
+				q.Most = most
+			}
+			if s := os.Getenv("JITLLM_CPU_APART"); s != "" {
+				q.Apart, _ = strconv.Atoi(s)
+			}
+			p.Passes[i] = q
+		}
+		if q, ok := ps.(StreamWords); ok && least >= 0 {
+			q.Least = least
+			p.Passes[i] = q
 		}
 		if j, ok := ps.(Jam); ok && strip >= 0 {
 			j.Strip = strip

@@ -31,10 +31,15 @@ import (
 func TestComposedCPUMatVec(t *testing.T) {
 	const k = 256
 	rng := rand.New(rand.NewSource(5))
-	right, wrong, unformed := 0, 0, map[string]string{}
+	right, wrong, apart, unformed := 0, 0, 0, map[string]string{}
 	// 64 rows at one worker and six; at six, 48 and 80 rows too, which six
-	// workers do not divide.
-	for _, rows := range []int{64, 48, 80} {
+	// workers do not divide; 1024 by 2048 at one worker and one token, a
+	// call of rows Streams cuts apart.
+	for _, rows := range []int{64, 48, 80, 1024} {
+		k := k
+		if rows == 1024 {
+			k = 2048
+		}
 		for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
 			q, ok := kernels.QuantOf(typ)
 			if typ == quant.F32 {
@@ -66,7 +71,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 			}
 			for _, arm := range arms {
 				for _, at := range []struct{ tokens, slots int }{{1, 1}, {4, 1}, {1, 6}} {
-					if rows != 64 && at.slots == 1 {
+					if rows != 64 && rows != 1024 && at.slots == 1 || rows == 1024 && (at.slots != 1 || at.tokens != 1) {
 						continue
 					}
 					tokens := at.tokens
@@ -86,15 +91,22 @@ func TestComposedCPUMatVec(t *testing.T) {
 						}
 					}
 					t.Logf("forming %s", name)
-					_, codes, err := arm.r.Form(Request{
+					req := Request{
 						Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
 						Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
 						Step:    Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32},
 						Device:  Device{Kind: DeviceCPU, Slots: at.slots, Lanes: 8, ISA: arm.isa, ExactDiv: !arm.inexactDv},
-					})
+					}
+					_, codes, err := arm.r.Form(req)
 					if err != nil {
 						unformed[name] = err.Error()
 						continue
+					}
+					if rows == 1024 {
+						if ks, err := arm.r.formKernels(req); err == nil && rowsApart(ks, rows) {
+							apart++
+							t.Logf("%s: rows apart", name)
+						}
 					}
 					if at.slots > 1 && !dealtOverWorkers(codes) {
 						t.Errorf("%s: no kernel's rows are dealt over the %d workers", name, at.slots)
@@ -129,10 +141,32 @@ func TestComposedCPUMatVec(t *testing.T) {
 	for name, why := range unformed {
 		t.Errorf("%s does not form on the CPU: %s", name, why)
 	}
-	t.Logf("%d formed and right, %d formed and wrong, %d not formed", right, wrong, len(unformed))
+	t.Logf("%d formed and right, %d formed and wrong, %d not formed, %d with their rows apart", right, wrong, len(unformed), apart)
 	if right == 0 {
 		t.Fatal("no matvec formed on the CPU: this gate proved nothing")
 	}
+	if apart == 0 {
+		t.Fatal("no matvec formed its rows apart (Streams.Apart): the gate never ran that form")
+	}
+}
+
+// rowsApart reports whether a kernel runs several loops over a call's rows
+// in one loop.
+func rowsApart(ks []*Kernel, rows int) bool {
+	for _, k := range ks {
+		n := map[int]int{}
+		for _, l := range k.Loops {
+			if l.Parent >= 0 && l.Trip == rows {
+				n[l.Parent]++
+			}
+		}
+		for _, c := range n {
+			if c > 1 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // movingArg is an address word a call moves along its coordinates, at

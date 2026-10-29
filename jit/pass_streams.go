@@ -14,7 +14,8 @@ import (
 // before the first, loaded, added and stored again a sub-block). A trip then
 // reads each word's plane along the rows, a stream the hardware follows,
 // rather than every plane a line at a time row group after row group. The
-// sums add in the same order, so the result is the same.
+// sums add in the same order, so the result is the same. With Apart, each
+// position of a whole period is a rows loop of its own: a few planes a loop.
 type Streams struct {
 	// Dots is the fewest byte dots a trip's integer sum takes: below it a
 	// trip is too little work to pay its output's load and store.
@@ -22,6 +23,9 @@ type Streams struct {
 	// Most is the longest period of the sub-blocks' iteration a trip runs
 	// whole (Periods).
 	Most int
+	// Apart, where set, is the positions of the period a loop over the
+	// rows takes, on a call of at least ApartRows rows.
+	Apart, ApartRows int
 }
 
 func (Streams) Name() string { return "streams" }
@@ -36,7 +40,11 @@ func (p Streams) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			if l.Lanes > 0 || l.Wide > 0 || l.Range || l.Spread || l.Walk || len(in) != 1 || len(k.innerLoops(in[0])) > 0 {
 				continue
 			}
-			if m, ok := k.streams(r, in[0], p.Dots, p.Most); ok {
+			apart := p.Apart
+			if l.Trip < p.ApartRows {
+				apart = 0
+			}
+			if m, ok := k.streams(r, in[0], p.Dots, p.Most, apart); ok {
 				return []*Kernel{m}, true, nil
 			}
 		}
@@ -46,7 +54,7 @@ func (p Streams) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 // streams is k with row loop r turned around sub-block loop s, where it
 // qualifies.
-func (k *Kernel) streams(r, s, dots, most int) (*Kernel, bool) {
+func (k *Kernel) streams(r, s, dots, most, apart int) (*Kernel, bool) {
 	ls := k.Loops[s]
 	if ls.Lanes > 0 || ls.Wide > 0 || ls.Range || ls.Spread || ls.Walk || ls.Count > 0 || len(k.foldsOf(r)) > 0 {
 		return nil, false
@@ -158,9 +166,18 @@ func (k *Kernel) streams(r, s, dots, most int) (*Kernel, bool) {
 	// A trip a whole period of the sub-blocks' iteration (Periods): what
 	// the sub-block's low bits picked is then a fixed word and offset, and
 	// every plane an address the rows advance.
-	if u := m.period(s, most); u >= 2 && ls.Trip%u == 0 {
-		m.unrollBy(s, u)
-		m.compact()
+	u := m.period(s, most)
+	whole := u >= 2 && ls.Trip%u == 0
+	apart = min(apart, u)
+	if apart > 0 && whole && u%apart != 0 {
+		apart = 0
+	}
+	var chain []int
+	if whole {
+		chain = m.unrollBy(s, u)[0]
+		if apart == 0 {
+			m.compact()
+		}
 		it, folds, hs = m.iterOf(r), m.foldsOf(s), m.Homes()
 		clear(stored)
 		for i, st := range m.Stores {
@@ -193,6 +210,7 @@ func (k *Kernel) streams(r, s, dots, most int) (*Kernel, bool) {
 		}
 	}
 	var inits []Store
+	acc := -1
 	for _, f := range folds {
 		i := stored[f]
 		st := m.Stores[i]
@@ -203,7 +221,7 @@ func (k *Kernel) streams(r, s, dots, most int) (*Kernel, bool) {
 			ax[len(ax)-1] = canon(ax[len(ax)-1])
 			ix = st.Ix
 		}
-		acc := m.add(Node{Op: OpLoad, Type: ir.F32, Buf: st.Buf, A: ix, Ax: ax})
+		acc = m.add(Node{Op: OpLoad, Type: ir.F32, Buf: st.Buf, A: ix, Ax: ax})
 		step := m.Nodes[f].A
 		for x := range m.Nodes {
 			if x == f || m.Nodes[x].Op == OpFold {
@@ -241,7 +259,59 @@ func (k *Kernel) streams(r, s, dots, most int) (*Kernel, bool) {
 	for _, f := range folds {
 		m.Nodes[f] = Node{Op: OpConst, Type: ir.F32}
 	}
+	if whole && apart > 0 {
+		m.apart(s+1, r, apart, chain, acc)
+	}
 	return m, true
+}
+
+// apart cuts rows loop r into a loop for each g positions of chain, each
+// summing on from acc where the one before stored.
+func (k *Kernel) apart(s, r, g int, chain []int, acc int) {
+	U := ir.U32
+	rits := k.itersOf(r)
+	var body Store
+	var stores []Store
+	for _, st := range k.Stores {
+		if st.At == r {
+			body = st
+		} else {
+			stores = append(stores, st)
+		}
+	}
+	for n := range len(chain) / g {
+		end := chain[(n+1)*g-1]
+		st := body
+		if n == 0 {
+			st.Val = end
+			stores = append(stores, st)
+			continue
+		}
+		c := k.insertLoop(r+n, Loop{Trip: k.Loops[r].Trip, Count: k.Loops[r].Count, Parent: s})
+		if s >= c {
+			s++
+		}
+		it := k.add(Node{Op: OpIter, At: c, Type: U})
+		sub := map[int]int{}
+		for _, o := range rits {
+			sub[o] = it
+		}
+		memo := map[int]int{}
+		st.At = c
+		st.Ix = k.copyMemo(st.Ix, sub, memo)
+		if st.Ax != nil {
+			ax := make([]int, len(st.Ax))
+			for x, v := range st.Ax {
+				ax[x] = k.copyMemo(v, sub, memo)
+			}
+			st.Ax = ax
+		}
+		sub[chain[n*g-1]] = k.copyMemo(acc, sub, memo)
+		st.Val = k.copyOf(end, sub)
+		stores = append(stores, st)
+	}
+	k.Stores = stores
+	k.compact()
 }
 
 // byteDotRun is the most byte dots in one chain of integer sums node x

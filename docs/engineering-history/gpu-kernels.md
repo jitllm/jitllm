@@ -11109,3 +11109,8 @@ row where the composer's reads two.
   line a plane before it jumps, which is no stream. The walk pays only with
   calls of a worker's whole share. An `Unroll` of the rows' accumulating
   loop by 4 vectors spills (one core, 21.7 to 9.2 GB/s): not kept.
+- `Streams.Apart`: a call of 1024 rows or more runs each period position as
+  its own rows loop (4 planes, not 34); a row pass that never moves its
+  pointer reads the scope's. E5-2680 v4 node 0, 8192x2048, two passes:
+  Q4_K 1 thread 0.342 to 0.61 of main, Q6_K 0.47 to 0.70; 14 threads keep
+  the old form (0.65-0.72). 64-row calls lose (0.55 to 0.42): not taken.
