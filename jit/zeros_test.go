@@ -7,6 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // zerosReadAcrossLoops is each read, in kernel k's sequence, of a float zero
@@ -147,4 +148,20 @@ func TestAZeroIsMadeInEveryLoopThatReadsIt(t *testing.T) {
 		t.Fatal("no kernel made a zero in more than one loop: this gate proved nothing")
 	}
 	t.Logf("%d kernels made a zero in each loop that reads it; merged into one each is seen", seen)
+}
+
+// TestAZeroStoredInTwoLoopsIsMadeInEach holds zerosPerLoop to a zero two
+// loops store, made in the first: the second makes its own.
+func TestAZeroStoredInTwoLoopsIsMadeInEach(t *testing.T) {
+	k := &Kernel{Name: "starts", Space: []int{1}, Loops: []Loop{{Trip: 4, Parent: -1}, {Trip: 4, Parent: -1}}}
+	z := k.add(Node{Op: OpConst, Type: ir.F32})
+	k.Bufs = append(k.Bufs, Buf{Kind: BufOut, Elem: ir.F32, Operand: Operand{Kind: OperandScratch, Name: "out"}, Shape: []int{8}})
+	ix := k.u32(0)
+	k.Stores = append(k.Stores, Store{Buf: 0, Val: z, At: 0, Ix: ix}, Store{Buf: 0, Val: z, At: 1, Ix: ix})
+	k.Seq = []Entry{{Kind: EntryLoop, I: 0}, {Kind: EntryNode, I: ix}, {Kind: EntryNode, I: z}, {Kind: EntryStore, I: 0}, {Kind: EntryEnd, I: 0},
+		{Kind: EntryLoop, I: 1}, {Kind: EntryStore, I: 1}, {Kind: EntryEnd, I: 1}}
+	k.zerosPerLoop()
+	if bad := zerosReadAcrossLoops(k); len(bad) != 0 {
+		t.Fatal(bad)
+	}
 }

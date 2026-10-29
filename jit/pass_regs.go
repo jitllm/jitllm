@@ -1615,7 +1615,7 @@ func (b *binder86) vectors() error {
 	return k.copyRegs(cp, len(splats))
 }
 
-// zerosPerLoop makes a float zero read in several loops in each of them,
+// zerosPerLoop makes a float zero read or stored in several loops in each of them,
 // where it is first read there.
 func (k *Kernel) zerosPerLoop() {
 	hs := k.Homes()
@@ -1626,6 +1626,21 @@ func (k *Kernel) zerosPerLoop() {
 		made := map[int]int{}
 		for p := 0; p < len(k.Seq); p++ {
 			e := k.Seq[p]
+			if e.Kind == EntryStore && k.Stores[e.I].Val == z && k.Stores[e.I].At >= 0 {
+				c := k.Stores[e.I].At
+				if len(made) == 0 {
+					made[c] = z
+				}
+				n, ok := made[c]
+				if !ok {
+					n = k.add(k.Nodes[z])
+					made[c] = n
+					k.Seq = append(k.Seq[:p], append([]Entry{{Kind: EntryNode, I: n}}, k.Seq[p:]...)...)
+					p++
+				}
+				k.Stores[e.I].Val = n
+				continue
+			}
 			if e.Kind != EntryNode || e.I >= len(hs) || hs[e.I] < 0 {
 				continue
 			}
