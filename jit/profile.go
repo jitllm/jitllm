@@ -41,7 +41,7 @@ func gpuProfile() Profile {
 		ContractPairs{},
 		// Before Coarsen and Parts: a gather the matrix unit's halves read
 		// runs in them rather than through a buffer of its own.
-		Recompute{},
+		Recompute{MapsOnly: true},
 		Prefetch{Except: []PrimKind{PrimMatrix}},
 		RowTiles{Rows: 16},
 		Threads{Group: 128},

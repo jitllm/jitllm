@@ -11,14 +11,17 @@ import (
 // output is the part's own: the map's kernel dropped and its output never
 // written. A reader's read of the output becomes the map's value there, its
 // own reads of what nothing between them writes.
-type Recompute struct{}
+type Recompute struct {
+	// MapsOnly runs it only in maps, never in a reduction reading it.
+	MapsOnly bool
+}
 
 func (Recompute) Name() string { return "recompute" }
 
 func (p Recompute) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	out := append([]*Kernel(nil), ks...)
 	for i := 0; i < len(out); i++ {
-		readers, ok := recomputed(out, i)
+		readers, ok := recomputed(out, i, p.MapsOnly)
 		if !ok {
 			continue
 		}
@@ -78,7 +81,7 @@ const recomputeReads = 2
 // element and not itself a map run in another, every reader is a map of no
 // loops reading it at coordinates, at most recomputeReads of them, and no
 // kernel from ks[i] to its last reader writes what ks[i] reads.
-func recomputed(ks []*Kernel, i int) ([]int, bool) {
+func recomputed(ks []*Kernel, i int, mapsOnly bool) ([]int, bool) {
 	pk := ks[i]
 	if pk.Kind != PrimMap || pk.Work || len(pk.Loops) != 0 || len(pk.Stores) != 1 || pk.Few > 0 || pk.Many > 0 {
 		return nil, false
@@ -95,7 +98,7 @@ func recomputed(ks []*Kernel, i int) ([]int, bool) {
 			continue
 		}
 		c := ks[j]
-		if j < i || c.Kind != PrimMap && c.Kind != PrimReduce || c.Work || c.Kind == PrimMap && len(c.Loops) != 0 || c.Part != pk.Part || c.Of != pk.Of || c.writes(o) {
+		if j < i || c.Kind != PrimMap && (mapsOnly || c.Kind != PrimReduce) || c.Work || c.Kind == PrimMap && len(c.Loops) != 0 || c.Part != pk.Part || c.Of != pk.Of || c.writes(o) {
 			return nil, false
 		}
 		reads := 0
