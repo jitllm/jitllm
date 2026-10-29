@@ -11188,3 +11188,8 @@ row where the composer's reads two.
 - **Gate and up as one kernel** (ContractPairs): twin reductions of one input, read only by the map after them, form as one whose element sums both and stores silu(gate)*up; Split cuts a value of several sums in one workgroup. Main's V100 tuner picks Gate2 on every gated shape, the in-group splits the device model already reaches (8B gate/up 8, q 16; k/v 64 partial planes and 8B down 14 are its open differences), and no down prologue (actin d=0 on all six).
   tg128, V100 CUDA, process per sample, two card rotations (16 + 8 rounds, A/A 0.983-1.011): over shipping composed 1.069/1.067 (8B), 1.016/1.021 (1B), 1.053/1.057 (Qwen2.5-1.5B), 1.026/1.032 (Qwen3-1.7B), 1.052/1.049 (gemma-3-4b), 1.012/1.010 (Phi-3.5);
   over tuned main 0.971/0.971, 0.955/0.980, 0.860/0.875, 0.920/0.921, 0.974/0.972, 0.962/0.964. Gate/up swapped in the pair fails TestComposedGPUContractPairs (NMSE 1.03).
+- GroupExtreme declines only where an argmax's elements fill the device's threads (it had declined
+  where they times a subgroup passed the slots: sm_86's 30720 at 1024 segments ran thread-serial).
+  Phi-3.5's gate passes at the rebased base (cuda 0.469, unfloored 0.964; vulkan 0.753), the band floor
+  alone carrying 9bc61a61 (unfloored 1.528). granite-3.3-2b vulkan reads 1.822; ulp-level changes to a
+  few int8 codes read 0.94-1.22, and its int8 rows agree across division forms (NMSE 1.33e-4 both).
