@@ -203,6 +203,9 @@ func speedRegistry(ahead, jam int) *Registry {
 			if s := os.Getenv("JITLLM_CPU_APART"); s != "" {
 				q.Apart, _ = strconv.Atoi(s)
 			}
+			if s := os.Getenv("JITLLM_CPU_APART_LINES"); s != "" {
+				q.Ahead, _ = strconv.Atoi(s)
+			}
 			p.Passes[i] = q
 		}
 		if q, ok := ps.(StreamWords); ok && least >= 0 {

@@ -26,7 +26,7 @@ import (
 // TestComposedCPUMatVecAgainstMain times the composed decode matvec against
 // main's MatVecPacked on main's pool, interleaved, A/A first, on ~192 MiB of
 // weight copies. Knobs: JITLLM_CPU_{ROWS,K,TYPE,THREADS,ROUNDS,HUGE,VNNI,
-// ONLY,SECONDS,AHEAD,JAM}. A measurement: JITLLM_CPU_SPEED=1.
+// ONLY,SECONDS,AHEAD,JAM,APART,APART_LINES}. A measurement: JITLLM_CPU_SPEED=1.
 func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 	if os.Getenv("JITLLM_CPU_SPEED") == "" {
 		t.Skip("a measurement: set JITLLM_CPU_SPEED=1")

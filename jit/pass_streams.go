@@ -24,8 +24,11 @@ type Streams struct {
 	// whole (Periods).
 	Most int
 	// Apart, where set, is the positions of the period a loop over the
-	// rows takes, on a call of at least ApartRows rows.
-	Apart, ApartRows int
+	// rows takes, where a plane's run of a call's rows covers the lines the
+	// core's streaming prefetcher runs ahead of a load (Ahead), each Line
+	// bytes: shorter, every plane's run ends before the prefetch it
+	// started arrives.
+	Apart, Ahead, Line int
 }
 
 func (Streams) Name() string { return "streams" }
@@ -41,7 +44,7 @@ func (p Streams) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			apart := p.Apart
-			if l.Trip < p.ApartRows {
+			if l.Trip*4 < p.Ahead*p.Line {
 				apart = 0
 			}
 			if m, ok := k.streams(r, in[0], p.Dots, p.Most, apart); ok {
