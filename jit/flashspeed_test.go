@@ -36,7 +36,7 @@ func BenchmarkComposedFlash(t *testing.B) {
 		if d.API() != "ptx" {
 			continue
 		}
-		for _, c := range []attendRowsCase{{32, 8, 64, 0, false}, {32, 8, 128, 0, false}} {
+		for _, c := range []attendRowsCase{{32, 8, 64, 0, false, false}, {32, 8, 128, 0, false, false}} {
 			for _, fl := range flashConfigs(t) {
 				reg := jit.Default()
 				if fl.Rows != 0 {

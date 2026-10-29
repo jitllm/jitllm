@@ -34,20 +34,22 @@ func declaredShared(k *ir.Kernel) int {
 // KiB somewhere, or the gate bounds nothing.
 func TestFormsHoldTheDevicesWorkgroupMemory(t *testing.T) {
 	cases := []attendRowsCase{
-		{8, 2, 64, 0, false},
-		{16, 8, 128, 0, false},
-		{32, 8, 64, 0, false},
-		{64, 8, 64, 16, true},
-		{64, 8, 64, 0, true},
-		{16, 8, 256, 0, false},
-		{32, 4, 128, 0, false},
+		{8, 2, 64, 0, false, false},
+		{16, 8, 128, 0, false, false},
+		{32, 8, 64, 0, false, false},
+		{64, 8, 64, 16, true, false},
+		{64, 8, 64, 0, true, false},
+		{16, 8, 256, 0, false, false},
+		{32, 4, 128, 0, false, false},
+		{16, 8, 128, 0, false, true},
+		{16, 8, 256, 0, false, true},
 	}
 	unbounded, refused := 0, 0
 	for _, shared := range []int{0, 32 << 10, 16 << 10} {
 		for _, matrix := range []bool{false, true} {
 			for _, rows := range []int{1, 64, 512} {
 				for _, c := range cases {
-					name := fmt.Sprintf("shared%d/matrix%v/rows%d/%dq%dkv%dd/window%d", shared, matrix, rows, c.heads, c.kvh, c.dim, c.window)
+					name := fmt.Sprintf("shared%d/matrix%v/rows%d/%dq%dkv%dd/window%d/f32values%v", shared, matrix, rows, c.heads, c.kvh, c.dim, c.window, c.f32v)
 					b := graph.New()
 					n := b.KVAppend(b.In("k", c.kvh*c.dim), b.In("v", c.kvh*c.dim), 0)
 					var sinks []jlm.Role
@@ -61,7 +63,7 @@ func TestFormsHoldTheDevicesWorkgroupMemory(t *testing.T) {
 						dev.Matrix = [3]int{16, 16, 16}
 					}
 					_, codes, err := jit.Default().Form(jit.Request{Graph: b.G, Step: jit.Step{Rows: rows, Page: 64, Keys: 4096, Seqs: 1},
-						Device: dev, History: jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: true}}})
+						Device: dev, History: jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: !c.f32v}}})
 					if err != nil {
 						// Below Apple's 32 KiB a form may hold more than the
 						// device: refused by name, never launched.

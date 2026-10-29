@@ -19,15 +19,17 @@ import (
 )
 
 // attendRowsCase is an attention a gate forms at a prompt chunk's rows: its
-// heads, its window (0 none) and whether it carries sinks.
+// heads, its window (0 none), whether it carries sinks and whether its
+// history holds the values as float32 rather than binary16.
 type attendRowsCase struct {
 	heads, kvh, dim, window int
-	sinks                   bool
+	sinks, f32v             bool
 }
 
 // TestComposedGPUAttendRows forms an appended history and the attention
 // over it at a prompt chunk's rows on every GPU, the served models' pool
-// layout (keys float32 by dimension, values binary16 by position), and runs
+// layout (keys float32 by dimension, values by position, binary16 or, as a
+// float32 layer holds them, float32), and runs
 // fewer live rows than the form holds, past a workgroup's chunk of
 // positions so a causal row's span takes two partitions, starting inside a
 // page and crossing into the next: each row attends causally from the history's
@@ -54,12 +56,15 @@ func TestComposedGPUAttendRows(t *testing.T) {
 		t.Skip("no GPU")
 	}
 	cases := []attendRowsCase{
-		{8, 2, 64, 0, false},
-		{8, 2, 64, 0, true},
-		{16, 8, 128, 0, false},
-		{64, 8, 64, 16, true},
-		{64, 8, 64, 0, true},
-		{12, 4, 64, 16, false},
+		{8, 2, 64, 0, false, false},
+		{8, 2, 64, 0, true, false},
+		{16, 8, 128, 0, false, false},
+		{64, 8, 64, 16, true, false},
+		{64, 8, 64, 0, true, false},
+		{12, 4, 64, 16, false, false},
+		{8, 2, 64, 0, false, true},
+		{16, 8, 128, 0, false, true},
+		{64, 8, 64, 0, true, true},
 	}
 	matrices, cuda := 0, false
 	for _, d := range devs {
@@ -73,7 +78,7 @@ func TestComposedGPUAttendRows(t *testing.T) {
 				if matrix {
 					matrices++
 				}
-				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v", d.API(), matrix, c.heads, c.kvh, c.dim, c.window, c.sinks)
+				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v", d.API(), matrix, c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v)
 				t.Run(name, func(t *testing.T) { gpuAttendRows(t, d, c, matrix) })
 			}
 		}
@@ -104,7 +109,7 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 		dev.Matrix = [3]int{16, 16, 16}
 	}
 	_, codes, err := jit.Default().Form(jit.Request{Graph: g, Step: jit.Step{Rows: capRows, Page: page, Keys: keys, Seqs: 1},
-		Device: dev, History: jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: true}}})
+		Device: dev, History: jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: !c.f32v}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,19 +167,30 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 	}
 	kpool := poisoned(keys / page * page * w)
 	vpool := poisoned(keys / page * page * w / 2)
+	if c.f32v {
+		vpool = poisoned(keys / page * page * w)
+	}
 	for p := range p0 {
 		pg, off := p/page, p%page
 		for e := range w {
 			kpool[(pg*w+e)*page+off] = math.Float32bits(ks[p][e])
 			hv, i := uint32(quant.EncodeHalf(vs[p][e])), (pg*page+off)*w+e
-			if e%2 == 0 {
+			switch {
+			case c.f32v:
+				vpool[i] = math.Float32bits(vs[p][e])
+			case e%2 == 0:
 				vpool[i/2] = vpool[i/2]&0xFFFF0000 | hv
-			} else {
+			default:
 				vpool[i/2] = vpool[i/2]&0xFFFF | hv<<16
 			}
 		}
 	}
-	round := func(x float32) float64 { return float64(quant.DecodeHalf(quant.EncodeHalf(x))) }
+	round := func(x float32) float64 {
+		if c.f32v {
+			return float64(x)
+		}
+		return float64(quant.DecodeHalf(quant.EncodeHalf(x)))
+	}
 	first := func(r int) int {
 		if c.window > 0 {
 			return max(0, p0+r+1-c.window)

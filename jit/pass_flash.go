@@ -219,19 +219,24 @@ func products(m *member) (a, b int, ok bool) {
 // flashGeom is a workgroup's tile: TR rows, KB positions a block, and its
 // workgroup memory's regions in words -- the first the row factor's halves
 // before the blocks, then each block's dots and then its weighted sums --
-// and the words in all.
+// and the words in all. vLo, where it is not vOff, is the second factor's
+// leftovers: a factor the history does not hold as binary16.
 type flashGeom struct {
-	TR, KB                              int
-	sq, sv, sp                          int
-	aOff, kOff, vOff, pOff, sOff, total int
+	TR, KB                                   int
+	sq, sv, sp                               int
+	aOff, kOff, vOff, vLo, pOff, sOff, total int
 }
 
-func flashLayout(TR, KB, Dk, Dv int) flashGeom {
+func flashLayout(TR, KB, Dk, Dv int, vlo bool) flashGeom {
 	g := flashGeom{TR: TR, KB: KB, sq: Dk + 4, sv: Dv + 4, sp: KB + 4}
 	up := func(n int) int { return (n + 3) / 4 * 4 }
 	g.kOff = up(max(TR*g.sq, TR*KB, TR*Dv))
 	g.vOff = g.kOff + up(KB*g.sq)
-	g.pOff = g.vOff + up(KB*g.sv/2)
+	g.vLo = g.vOff
+	if vlo {
+		g.vLo = g.vOff + up(KB*g.sv/2)
+	}
+	g.pOff = g.vLo + up(KB*g.sv/2)
 	g.sOff = g.pOff + up((TR+1)*g.sp)
 	g.total = g.sOff + 3*(TR+1)
 	return g
@@ -320,9 +325,12 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 	if d.Shared > 0 {
 		limit = min(limit, d.Shared)
 	}
-	g := p.layout(R, Dk, Dv, limit, tm, tn, tk)
+	// A second factor the history holds as binary16 is staged as itself;
+	// one it holds as float32 as its two binary16 parts.
+	vlo := c.vl.k.Nodes[vx].Op != OpWidenHalf
+	g := p.layout(R, Dk, Dv, limit, tm, tn, tk, vlo)
 	if g.TR < p.Rows/2 && d.Shared > limit {
-		if w := p.layout(R, Dk, Dv, d.Shared, tm, tn, tk); w.TR > g.TR {
+		if w := p.layout(R, Dk, Dv, d.Shared, tm, tn, tk, vlo); w.TR > g.TR {
 			g = w
 		}
 	}
@@ -337,15 +345,15 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 // layout is the flash form of the most rows a workgroup, then the most
 // positions a block, whose workgroup memory is at most limit bytes: no more
 // rows than R take, at least a tile's. Its TR is 0 where none fits.
-func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk int) flashGeom {
+func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk int, vlo bool) flashGeom {
 	top := p.Rows
 	for top/2 >= tm && top/2 >= R {
 		top /= 2
 	}
 	for TR := top; TR >= tm; TR /= 2 {
 		for KB := p.Keys; KB >= max(tn, tk) && KB%2 == 0; KB /= 2 {
-			if TR%tm == 0 && KB%tn == 0 && KB%tk == 0 && KB%4 == 0 && 4*flashLayout(TR, KB, Dk, Dv).total <= limit {
-				return flashLayout(TR, KB, Dk, Dv)
+			if TR%tm == 0 && KB%tn == 0 && KB%tk == 0 && KB%4 == 0 && 4*flashLayout(TR, KB, Dk, Dv, vlo).total <= limit {
+				return flashLayout(TR, KB, Dk, Dv, vlo)
 			}
 		}
 	}
@@ -524,10 +532,17 @@ func (b *flashBuild) stageBlock() {
 		s := b.side(b.c.vl, b.rl, m.bin(OpAdd, U, b.k0, key), 0, nil)
 		v := func(e int) int {
 			s.inner = m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
-			return m.un(OpHalf, U, s.at(m, b.vx))
+			return s.at(m, b.vx)
 		}
-		word := m.bin(OpOr, U, v(0), m.bin(OpShl, U, v(1), m.u32(16)))
-		b.store(m.bin(OpAdd, U, m.bin(OpAdd, U, m.bin(OpMul, U, key, m.u32(g.sv/2)), dp), m.u32(g.vOff)), word, b.P)
+		ix := m.bin(OpAdd, U, m.bin(OpMul, U, key, m.u32(g.sv/2)), dp)
+		if g.vLo == g.vOff {
+			word := m.bin(OpOr, U, m.un(OpHalf, U, v(0)), m.bin(OpShl, U, m.un(OpHalf, U, v(1)), m.u32(16)))
+			b.store(m.bin(OpAdd, U, ix, m.u32(g.vOff)), word, b.P)
+			continue
+		}
+		hi, lo := b.words(v(0), v(1))
+		b.store(m.bin(OpAdd, U, ix, m.u32(g.vOff)), hi, b.P)
+		b.store(m.bin(OpAdd, U, ix, m.u32(g.vLo)), lo, b.P)
 	}
 	m.Stores = append(m.Stores, Store{Barrier: true, At: b.P})
 }
@@ -643,6 +658,10 @@ func (b *flashBuild) weighted() {
 			v := b.tile(bT, m.u32(2*g.vOff+s*b.tk*g.sv+j*b.tn), g.sv, false, b.P)
 			if !b.one {
 				acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: pl[s], B: v, C: acc, Tile: &cT})
+				if g.vLo != g.vOff {
+					vl := b.tile(bT, m.u32(2*g.vLo+s*b.tk*g.sv+j*b.tn), g.sv, false, b.P)
+					acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ph[s], B: vl, C: acc, Tile: &cT})
+				}
 			}
 			acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ph[s], B: v, C: acc, Tile: &cT})
 		}
