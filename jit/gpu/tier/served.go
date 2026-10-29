@@ -1242,11 +1242,20 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		if g.kb.poisonScratch {
 			g.composer.PoisonWorkgroupMemory()
 		}
+		if g.kb.dropSegments {
+			g.composer.DropSegments(jit.DeviceGPU)
+		}
 	}
 	r := g.composer
-	if g.ComposedFloat {
+	if g.ComposedFloat || g.ComposedUnsplit {
 		if g.composerFloat == nil {
-			g.composerFloat = g.composer.WithoutInt8(jit.DeviceGPU)
+			g.composerFloat = g.composer
+			if g.ComposedFloat {
+				g.composerFloat = g.composerFloat.WithoutInt8(jit.DeviceGPU)
+			}
+			if g.ComposedUnsplit {
+				g.composerFloat = g.composerFloat.WithoutSplits(jit.DeviceGPU)
+			}
 		}
 		r = g.composerFloat
 	}

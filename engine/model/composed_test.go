@@ -40,6 +40,10 @@ func (a *axesShift) SetRopeAxes(pos int, at []int32) {
 	a.RopeAxesDevice.SetRopeAxes(pos, a.buf[:min(len(at), 4)])
 }
 
+// unsplit forms a reference's sums with no split (Config.ComposedUnsplit):
+// a split an arm forms wrong is not the reference's too.
+var unsplit = tier.WithConfig(func(c *tier.Config) { c.ComposedUnsplit = true })
+
 // composedTables is how many rotary tables the front end states for m: the
 // tables a served step writes.
 func composedTables(m *Model) int {
@@ -180,7 +184,7 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
 	"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-kimilinear@q8",
 	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "synth-llama4-q8.gguf", "synth-pixtral.gguf", "synth-hunyuanvl.gguf",
-	"hunyuanvl/HunyuanOCR-Q8_0.gguf"}
+	"hunyuanvl/HunyuanOCR-Q8_0.gguf", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K, unblockedModels),
@@ -547,9 +551,22 @@ func TestComposedBlocksServe(t *testing.T) {
 				// A device the box does not have skips its own subtest, not the model's.
 				t.Run(dev+"/reference", func(t *testing.T) {
 					r := &[2]tierRun{}
+					refParts := tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt
 					for g, noGraph := range []bool{false, true} {
 						r[g].want, _, _, _ = composedDecode(t, m, dev, ids, toks, 0, noGraph, false)
-						r[g].ref, _, _, _ = composedDecode(t, m, dev, ids, toks, tier.ComposedBlock|tier.ComposedHead|tier.ComposedPrompt, noGraph, true)
+						var st tier.Stats
+						r[g].ref, st, _, _ = composedDecode(t, m, dev, ids, toks, refParts, noGraph, true, unsplit)
+						if n, d, _ := st.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+							t.Fatalf("the float reference served its blocks %d times and declined them %d (%s)", n, d, declinesOf(st))
+						}
+						// Every split dropping its last segment leaves the reference
+						// as it was: it forms no split to share with an arm.
+						cut, _, _, _ := composedDecode(t, m, dev, ids, toks, refParts, noGraph, true, unsplit, tier.WithSplitFault(true))
+						for i := range cut {
+							if !slices.Equal(cut[i], r[g].ref[i]) {
+								t.Fatalf("step %d: with every split's last segment dropped the float reference moves (NMSE %.3g): it forms through the composer's splits", i, logitNMSE(cut[i], r[g].ref[i]))
+							}
+						}
 						for i := 1; i < len(r[g].ref); i++ {
 							widest[g] = max(widest[g], logitNMSE(r[g].want[i], r[g].ref[i]))
 						}
@@ -728,8 +745,8 @@ func TestComposedBlocksServe(t *testing.T) {
 								// A part the composer serves wrong must fall outside the
 								// band the arm is held to: the State's statement of the
 								// step changed under the served part, k the part.
-								violated := func(what string, k tier.Parts, after func(*State)) {
-									bad, bst, _, _ := composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, false, after)
+								violated := func(what string, k tier.Parts, after func(*State), extra ...tier.Option) {
+									bad, bst, _, _ := composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, false, after, extra...)
 									if n, d, _ := bst.ServedPart(k); n == 0 || d != 0 {
 										t.Fatalf("the arm with %s served the part %d times and declined it %d", what, n, d)
 									}
@@ -774,6 +791,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								if ne, _, _ := st.ServedPart(tier.ComposedEmbed); ne > 0 {
 									violated("every row gathered at the next token's", tier.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))
 								}
+								violated("every split's last segment dropped", tier.ComposedBlock, nil, tile, tier.WithSplitFault(true))
 								// Every buffer filled with NaN at allocation: a
 								// composed kernel reading what nothing wrote shows
 								// as a changed logit.

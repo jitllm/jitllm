@@ -34,6 +34,8 @@ type Split struct {
 	// (Device.ExactArith), where the two kernels write a row's same bits.
 	Few   int
 	Kinds []PrimKind
+	// Drop adds every float sum's segments but the last: a gate's violation.
+	Drop bool
 }
 
 func (Split) Name() string { return "split" }
@@ -76,7 +78,7 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	if s.Group {
-		if g, ok := groupSplit(n, c, f, term, st, S); ok {
+		if g, ok := groupSplit(n, c, f, term, st, S, s.Drop); ok {
 			return []*Kernel{g}, true, nil
 		}
 	}
@@ -119,13 +121,22 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	}
 	in := m.buf(Buf{Kind: BufIn, Elem: t, Operand: planes, Shape: shape})
 	ob := m.buf(n.Bufs[n.Stores[st].Buf])
-	l := m.loop(S, -1)
+	l := m.loop(kept(S, t, s.Drop), -1)
 	it := m.add(Node{Op: OpIter, At: l, Type: ir.U32})
 	acc := m.add(Node{Op: OpFold, At: l, Type: t, B: zero(m)})
 	x := m.add(Node{Op: OpLoad, Type: t, Buf: in, Ax: slices.Insert(slices.Clone(coords), at, it)})
 	m.Nodes[acc].A = m.bin(OpAdd, t, acc, x)
 	m.Stores = append(m.Stores, Store{Buf: ob, Val: acc, At: -1, Ax: coords})
 	return []*Kernel{p, m}, true, nil
+}
+
+// kept is how many of S segments a split of a sum of type t adds: a float
+// sum drops its last where drop, an integer one (a count, an offset) none.
+func kept(S int, t ir.Type, drop bool) int {
+	if drop && t == ir.F32 {
+		return S - 1
+	}
+	return S
 }
 
 // segmentAxis is the axis a cut's segments take in a kernel's space: the
@@ -157,7 +168,7 @@ func (n *Kernel) cutElements() int {
 // memory, a barrier, and every thread of an element its segments' sum
 // stored at the element. False where the elements do not fill whole
 // workgroups.
-func groupSplit(n *Kernel, c, f, term, st, S int) (*Kernel, bool) {
+func groupSplit(n *Kernel, c, f, term, st, S int, drop bool) (*Kernel, bool) {
 	G := min(max(32*S, 128), 1024)
 	E, T := n.Elements(), n.Loops[c].Trip
 	if G%S != 0 || E%(G/S) != 0 || T%S != 0 {
@@ -198,7 +209,7 @@ func groupSplit(n *Kernel, c, f, term, st, S int) (*Kernel, bool) {
 	final := g.Stores[st]
 	g.Stores = []Store{{Buf: sh, Ix: tid, Val: val, At: -1}, {Barrier: true, At: -1}}
 	sum := -1
-	for i := range S {
+	for i := range kept(S, t, drop) {
 		x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: g.bin(OpAdd, U, rl, g.u32(i*rpg))})
 		if sum < 0 {
 			sum = x
@@ -268,7 +279,7 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	for G > 32*S && E%(G/S) != 0 {
 		G /= 2
 	}
-	g, ok := splitTile(n, S, G)
+	g, ok := splitTile(n, S, G, s.Drop)
 	if !ok {
 		return nil, false
 	}
@@ -279,7 +290,7 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	if !ok {
 		return []*Kernel{g}, true
 	}
-	f, ok := splitTile(u, S, fewGroup(G, S, E, d))
+	f, ok := splitTile(u, S, fewGroup(G, S, E, d), s.Drop)
 	if !ok {
 		return []*Kernel{g}, true
 	}
@@ -321,7 +332,7 @@ func fewGroup(G, S, E int, d Device) int {
 // splitTile is n, whose threads each sum a tile of n.Tile rows (one where
 // untiled), split in S segments within a workgroup of G threads
 // (groupSplitRows).
-func splitTile(n *Kernel, S, G int) (*Kernel, bool) {
+func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 	T := n.Tile
 	if len(n.Stores) != T || n.TileFirst == 0 || n.TileBase == 0 {
 		return nil, false
@@ -403,7 +414,7 @@ func splitTile(n *Kernel, S, G int) (*Kernel, bool) {
 		}
 		at := g.bin(OpAdd, I, g.bin(OpMul, I, jj, g.u32(G)), rl)
 		sum := -1
-		for i := range S {
+		for i := range kept(S, t, drop) {
 			x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: g.bin(OpAdd, I, at, g.u32(i*rpg))})
 			if sum < 0 {
 				sum = x

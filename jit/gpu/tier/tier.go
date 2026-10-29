@@ -200,6 +200,10 @@ type Config struct {
 	// Profile is a card's measured row, its launch cost what the composer
 	// weighs a fusion against; none keeps the composer's plain rules.
 	Profile func(backend.Device) (cost.Profile, bool)
+	// ComposedUnsplit forms the served parts with no sum cut into segments
+	// (jit.Registry.WithoutSplits): a reference apart from the composer's
+	// splits.
+	ComposedUnsplit bool
 	// ComposedShadow runs the composer's form of each block it would serve
 	// beside the tier's own kernels, on a copy of the block's input and into
 	// buffers of its own, and compares the two outputs on the device with a
@@ -2115,7 +2119,8 @@ type devShared struct {
 	// census is Config.Census's count, made at the first step it counts.
 	census   *launchCensus
 	composer *jit.Registry
-	// composerFloat is composer with no int8 form (Config.ComposedFloat).
+	// composerFloat is composer with no int8 form (Config.ComposedFloat),
+	// and no split where Config.ComposedUnsplit.
 	composerFloat *jit.Registry
 	mvTo          launchTo
 	// embTo is the composer's gather made real on its own

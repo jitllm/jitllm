@@ -26,6 +26,7 @@ type knobs struct {
 	lanes         int             // pin the subgroup width: 0 ask, 1, or 32
 	poisonKV      bool            // fill a fresh KV cache with NaN (RULE 13)
 	poisonScratch bool            // and the block scratch, its twin
+	dropSegments  bool            // every composed split sums all but its last segment
 	noAttnMMA     bool            // decline the matrix instruction for scores only
 	skip          map[string]bool // produce wrong answers on purpose; see WithSkip
 	batch         BatchShape      // the batched prefill's tile shape
@@ -187,6 +188,10 @@ func WithPoisonKV(on bool) Option { return func(o *openOpts) { o.kb.poisonKV = o
 // kernel reading a region it did not write is right while the buffer is fresh
 // zeros and wrong for the next session.
 func WithPoisonScratch(on bool) Option { return func(o *openOpts) { o.kb.poisonScratch = on } }
+
+// WithSplitFault has every split the composer forms sum its segments but the
+// last (jit.Registry.DropSegments): the violation a serving gate must fail on.
+func WithSplitFault(on bool) Option { return func(o *openOpts) { o.kb.dropSegments = on } }
 
 // WithoutAttnMMA declines the warp matrix instruction for the attention SCORES
 // only, leaving it in place for the matvecs. Config.NoMMA declines it

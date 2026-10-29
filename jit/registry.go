@@ -186,6 +186,41 @@ func (r *Registry) WithoutHalves(kind DeviceKind) *Registry {
 	return &fr
 }
 
+// WithoutSplits is r with no sum, range or extreme cut into segments on
+// device kind: every sum in its loop's order. It shares r's cache.
+func (r *Registry) WithoutSplits(kind DeviceKind) *Registry {
+	fr := *r
+	fr.Profiles = maps.Clone(r.Profiles)
+	p := fr.Profiles[kind]
+	cut := func(x Pass) bool {
+		switch x.(type) {
+		case Split, SplitRange, SplitExtreme:
+			return true
+		}
+		return false
+	}
+	p.Passes = slices.DeleteFunc(slices.Clone(p.Passes), cut)
+	if p.Narrow != nil {
+		p.Narrow = slices.DeleteFunc(slices.Clone(p.Narrow), cut)
+	}
+	fr.Profiles[kind] = p
+	return &fr
+}
+
+// DropSegments has every split on device kind sum its segments but the
+// last (Split.Drop): a gate's violation, never a shipping one.
+func (r *Registry) DropSegments(kind DeviceKind) {
+	p := r.Profiles[kind]
+	p.Passes = slices.Clone(p.Passes)
+	for i, x := range p.Passes {
+		if s, ok := x.(Split); ok {
+			s.Drop = true
+			p.Passes[i] = s
+		}
+	}
+	r.Profiles[kind] = p
+}
+
 // PoisonWorkgroupMemory has the GPU lowering poison every workgroup array
 // at kernel start: a gate's choice, never a shipping one.
 func (r *Registry) PoisonWorkgroupMemory() {

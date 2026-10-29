@@ -11137,3 +11137,8 @@ row where the composer's reads two.
   taken: pp512 of main, E5-2680 v4 node 1, Qwen3-0.6B Q8_0 0.970/0.964 to
   0.435/0.433, Llama-3.2-1B Q4_K_M 0.515/0.513 to 0.327. Its token loop spills
   its pointers and output index: the binder holds outer values' registers.
+- The serving gate's float reference forms no split (`Config.ComposedUnsplit`,
+  `Registry.WithoutSplits`): a split formed wrong is the arm's alone. Every
+  float split's last segment dropped (`WithSplitFault`) leaves the reference
+  bit for bit and fails each arm: median ratio 46.8-467 on Llama-3.2-1B,
+  Qwen3-1.7B, Llama-3.1-8B (now served) and Qwen3-MOE-4x0.6B, cuda and vulkan.
