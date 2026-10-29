@@ -1,6 +1,7 @@
 package jit
 
 import (
+	"cmp"
 	"slices"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -66,7 +67,7 @@ func (s Split) groupSegments(n *Kernel, d Device) (S, G int, ok bool) {
 	if !s.Group || s.Parts > 0 || n.Few > 0 || n.Many > 0 || n.Work || n.Tile > 1 && n.Capacity > 0 || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
 		return 0, 0, false
 	}
-	c, _, _, _, ok := splittable(n)
+	c, _, ok := sums(n)
 	if !ok {
 		return 0, 0, false
 	}
@@ -109,7 +110,7 @@ func (s Split) siblingWidths(ks []*Kernel, d Device) map[*Kernel]int {
 		fits := j-i > 1
 		for x, S := range segs {
 			k := ks[i+x]
-			c, _, _, _, _ := splittable(k)
+			c, _, _ := sums(k)
 			fits = fits && G >= 8*S && groupFits(k.Elements(), k.Loops[c].Trip, S, G)
 		}
 		if fits {
@@ -137,7 +138,32 @@ func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	c, f, term, st, ok := splittable(n)
-	if !ok || n.Work || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
+	if !ok {
+		c, folds, ok := sums(n)
+		if !ok || n.Work || !s.Group || s.Parts > 0 || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
+			return nil, false, nil
+		}
+		S, G, ok := s.groupSegments(n, d)
+		switch {
+		case !ok:
+			T, E, slots := n.Loops[c].Trip, n.cutElements(), cmp.Or(s.Slots, d.Slots)
+			for S = 1; S < s.Max && E*S < 2*slots && T%(s.Block*S*2) == 0; S *= 2 {
+			}
+			G = groupWidth(S)
+		case s.Width > 0:
+			G = s.Width
+		case width > 0:
+			G = width
+		}
+		if S < 2 {
+			return nil, false, nil
+		}
+		if k, ok := groupSplitOf(n, c, folds, -1, 0, S, G, s.Drop); ok {
+			return []*Kernel{k}, true, nil
+		}
+		return nil, false, nil
+	}
+	if n.Work || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
 		return nil, false, nil
 	}
 	T, E := n.Loops[c].Trip, n.cutElements()
@@ -263,6 +289,11 @@ func (n *Kernel) cutElements() int {
 // stored at the element. False where the elements do not fill whole
 // workgroups.
 func groupSplit(n *Kernel, c, f, term, st, S, G int, drop bool) (*Kernel, bool) {
+	return groupSplitOf(n, c, []int{f}, term, st, S, G, drop)
+}
+
+// groupSplitOf is groupSplit of a value made of several sums over loop c.
+func groupSplitOf(n *Kernel, c int, folds []int, term, st, S, G int, drop bool) (*Kernel, bool) {
 	E, T := n.Elements(), n.Loops[c].Trip
 	if !groupFits(E, T, S, G) {
 		return nil, false
@@ -303,27 +334,100 @@ func groupSplit(n *Kernel, c, f, term, st, S, G int, drop bool) (*Kernel, bool) 
 			g.redirect(it, k, k)
 		}
 	}
+	f := folds[0]
 	t := n.Nodes[f].Type
 	val := f
 	if term >= 0 {
 		first := g.add(Node{Op: OpLess, Type: ir.Pred, A: seg, B: g.u32(1)})
 		val = g.bin(OpAdd, t, f, g.add(Node{Op: OpSelect, Type: t, A: first, B: term, C: g.add(Node{Op: OpConst, Type: t})}))
 	}
-	sh := g.buf(Buf{Kind: BufShared, Elem: t, Size: G})
+	sh := g.buf(Buf{Kind: BufShared, Elem: t, Size: G * len(folds)})
 	final := g.Stores[st]
-	g.Stores = []Store{{Buf: sh, Ix: tid, Val: val, At: -1}, {Barrier: true, At: -1}}
-	sum := -1
-	for i := range kept(S, t, drop) {
-		x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: slot(i)})
-		if sum < 0 {
-			sum = x
-			continue
+	at := func(ix, j int) int {
+		if j == 0 {
+			return ix
 		}
-		sum = g.bin(OpAdd, t, sum, x)
+		return g.bin(OpAdd, U, ix, g.u32(j*G))
 	}
-	final.Val = sum
+	g.Stores = nil
+	total := map[int]int{}
+	for j, fj := range folds {
+		v := fj
+		if j == 0 {
+			v = val
+		}
+		g.Stores = append(g.Stores, Store{Buf: sh, Ix: at(tid, j), Val: v, At: -1})
+	}
+	g.Stores = append(g.Stores, Store{Barrier: true, At: -1})
+	for j, fj := range folds {
+		sum := -1
+		for i := range kept(S, t, drop) {
+			x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: at(slot(i), j)})
+			if sum < 0 {
+				sum = x
+				continue
+			}
+			sum = g.bin(OpAdd, t, sum, x)
+		}
+		total[fj] = sum
+	}
+	if len(folds) == 1 {
+		final.Val = total[f]
+	} else {
+		final.Val = copyInto(g, g, final.Val, func(i int, nd Node) (int, bool) {
+			v, ok := total[i]
+			return v, ok
+		})
+	}
 	g.Stores = append(g.Stores, final)
 	return g, true
+}
+
+// sums is splittable's loop and sums for a store made of one or more sums.
+func sums(n *Kernel) (c int, folds []int, ok bool) {
+	if c, f, _, _, ok := splittable(n); ok {
+		return c, []int{f}, true
+	}
+	if len(n.Stores) != 1 || n.Stores[0].At != -1 || !n.storesOwn(n.Stores[0]) {
+		return 0, nil, false
+	}
+	c, ok = -1, true
+	seen := map[int]bool{}
+	var walk func(i int)
+	walk = func(i int) {
+		if seen[i] || !ok {
+			return
+		}
+		seen[i] = true
+		nd := n.Nodes[i]
+		switch {
+		case nd.Op == OpFold:
+			if c >= 0 && nd.At != c || n.Loops[nd.At].Parent != -1 || !n.sumFold(i) {
+				ok = false
+				return
+			}
+			c = nd.At
+			folds = append(folds, i)
+			return
+		case nd.Op == OpIter, (nd.Op == OpLoad || nd.Op == OpTileLoad) && nd.At > 0:
+			ok = false
+			return
+		}
+		for _, a := range n.Operands(&nd) {
+			walk(*a)
+		}
+	}
+	walk(n.Stores[0].Val)
+	if !ok || len(folds) < 2 || len(n.foldsOf(c)) != len(folds) {
+		return 0, nil, false
+	}
+	slices.Sort(folds)
+	for _, f := range folds {
+		if n.Nodes[f].Type != n.Nodes[folds[0]].Type {
+			return 0, nil, false
+		}
+	}
+	return c, folds, true
 }
 
 // elementTrips reports whether n reads a weight and every weight it reads

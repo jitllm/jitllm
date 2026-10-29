@@ -42,7 +42,7 @@ func TestDecodeSplitFollowsTheDevice(t *testing.T) {
 	small.Slots, small.Units = 20*1536, 20
 	// q's 4096 rows in 16 segments, k's and v's 1024 each in 32, at 512
 	// threads: 128 + 32 + 32 workgroups.
-	want := []launch{{256, 512}, {128, 512}, {896, 256}, {128, 896}}
+	want := []launch{{256, 512}, {128, 512}, {448, 256}, {128, 896}}
 	big, little := form(v100), form(small)
 	if !slices.Equal(big, want) {
 		t.Fatalf("V100: projections launch %v, want %v", big, want)

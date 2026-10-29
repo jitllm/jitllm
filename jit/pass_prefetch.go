@@ -40,7 +40,7 @@ func (p Prefetch) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 }
 
 func cuttable(n *Kernel) bool {
-	_, _, _, _, ok := splittable(n)
+	_, _, ok := sums(n)
 	return ok && !n.Work && readsMatrix(n)
 }
 
