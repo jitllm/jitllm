@@ -34,6 +34,22 @@ func TestRemovingALoopMovesItsInnerLoopsToItsParent(t *testing.T) {
 	}
 }
 
+// TestALoopKeptAtOneTripStays holds dropUnitLoops to a loop of one trip that
+// is Kept: it stays a loop, its store in it.
+func TestALoopKeptAtOneTripStays(t *testing.T) {
+	k := &Kernel{Name: "kept", Space: []int{1}, Loops: []Loop{
+		{Trip: 4, Parent: -1},
+		{Trip: 1, Parent: 0, Kept: true},
+	}}
+	v := k.add(Node{Op: OpConst, Type: ir.F32, Imm: 1})
+	k.Bufs = append(k.Bufs, Buf{Kind: BufOut, Elem: ir.F32, Operand: Operand{Kind: OperandScratch, Name: "out"}, Shape: []int{1}})
+	k.Stores = append(k.Stores, Store{Buf: 0, Val: v, At: 1, Ax: []int{k.u32(0)}})
+	k.dropUnitLoops()
+	if len(k.Loops) != 2 || !k.Loops[1].Kept || k.Stores[0].At != 1 {
+		t.Fatalf("the kept loop of one trip was removed: loops %+v, store at %d", k.Loops, k.Stores[0].At)
+	}
+}
+
 // TestRemovingALoopKeepsALoadPinnedToALaterLoop removes a loop of one trip
 // before a loop a load is pinned to (Node.At, 1 + the loop): the load stays
 // in that loop, numbered as it is after the removal.

@@ -489,7 +489,7 @@ func (k *Kernel) insideRange(pos, last int) bool {
 // its iteration is 0, what ran in it runs in its parent.
 func (k *Kernel) dropUnitLoops() bool {
 	for c, l := range k.Loops {
-		if l.Trip != 1 || l.Count != 0 || l.Range || len(k.foldsOf(c)) > 0 || l.Lanes > 0 {
+		if !l.once() || l.Range || len(k.foldsOf(c)) > 0 || l.Lanes > 0 {
 			continue
 		}
 		zero := k.u32(0)
