@@ -12,8 +12,8 @@ import "github.com/jitllm/jitllm/jit/ir"
 // threads (Rows rows where the device states no registers), no more than
 // the form's rows, and past two no more than leave every unit four warps
 // of threads: a router's 32 outputs over 512 rows in tiles of 16 were
-// 1024 threads, eight workgroups on a V100's 80 units (gpt-oss-20b's,
-// 92.9 ms of a 2048-token prompt against main's 12.7). The kernel's ops grow with T, never with the step's
+// 1024 threads, eight workgroups on a V100's 80 units (92.9 ms of a
+// 2048-token prompt against main's 12.7). The kernel's ops grow with T, never with the step's
 // rows, and a call's rows need not fill the last tile: its rows past the
 // call's (Kernel.Capacity) or the step's are guarded, each the last row's copy,
 // so they read and write nothing the rows before them do not. A kernel of
