@@ -59,7 +59,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 					r := &devRun{}
 					var st tier.Stats
 					r.want, st, _, _ = composedDecode(t, m, dev, ids, toks, 0, true, false)
-					r.ref, _, _, _ = composedDecode(t, m, dev, ids, toks, parts, true, true)
+					r.ref = unsplitRef(t, m, dev, ids, toks, parts, true)
 					r.lanes = st.Lanes
 					for i := 1; i < len(r.ref); i++ {
 						widest = max(widest, logitNMSE(r.want[i], r.ref[i]))
@@ -138,6 +138,23 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 							if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
 								t.Errorf("at %d lanes the composed parts are %.3g at the median of the tier's distance from the float reference and %.3g at their worst, where the tier's backends reach %.3g (bounds %.1f and %.1fx)",
 									a.lanes, med, worst, widest, bandRatio, bandWorst)
+							}
+							cut, cst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, append(a.opts, tier.WithSplitFault(true))...)
+							if nb, d, _ := cst.ServedPart(tier.ComposedBlock); nb == 0 || d != 0 {
+								t.Fatalf("with every split's last segment dropped the composer served %d block steps and declined %d", nb, d)
+							}
+							var cr []float64
+							cworst := 0.0
+							for i := 1; i < len(r.ref); i++ {
+								eg := logitNMSE(cut[i], r.ref[i])
+								cr = append(cr, eg/logitNMSE(r.want[i], r.ref[i]))
+								cworst = max(cworst, eg)
+							}
+							slices.Sort(cr)
+							if cmed := cr[len(cr)/2]; cmed <= bandRatio && cworst <= bandWorst*widest {
+								t.Fatalf("with every split's last segment dropped the arm is %.3g at the median of the tier's distance and %.3g at its worst, inside the band: the gate cannot see it", cmed, cworst)
+							} else {
+								t.Logf("with every split's last segment dropped: median ratio %.3g, worst %.3g against the band's %.3g", cmed, cworst, bandWorst*widest)
 							}
 							poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false,
 								append(a.opts, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))...)

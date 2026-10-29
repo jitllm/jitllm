@@ -44,6 +44,24 @@ func (a *axesShift) SetRopeAxes(pos int, at []int32) {
 // a split an arm forms wrong is not the reference's too.
 var unsplit = tier.WithConfig(func(c *tier.Config) { c.ComposedUnsplit = true })
 
+// unsplitRef is the float reference of parts on dev, formed with no split:
+// its blocks all served, and every split's last segment dropped leaves it
+// bit for bit, so a split an arm forms wrong is not the reference's too.
+func unsplitRef(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph bool) [][]float32 {
+	t.Helper()
+	ref, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit)
+	if n, d, _ := st.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+		t.Fatalf("the float reference served its blocks %d times and declined them %d (%s)", n, d, declinesOf(st))
+	}
+	cut, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit, tier.WithSplitFault(true))
+	for i := range cut {
+		if !slices.Equal(cut[i], ref[i]) {
+			t.Fatalf("step %d: with every split's last segment dropped the float reference moves (NMSE %.3g): it forms through the composer's splits", i, logitNMSE(cut[i], ref[i]))
+		}
+	}
+	return ref
+}
+
 // composedTables is how many rotary tables the front end states for m: the
 // tables a served step writes.
 func composedTables(m *Model) int {
@@ -563,19 +581,7 @@ func TestComposedBlocksServe(t *testing.T) {
 						for _, p := range panel {
 							var tr tierRun
 							tr.want, _, _, _ = composedDecode(t, m, dev, p.ids, p.toks, 0, noGraph, false)
-							var st tier.Stats
-							tr.ref, st, _, _ = composedDecode(t, m, dev, p.ids, p.toks, refParts, noGraph, true, unsplit)
-							if n, d, _ := st.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
-								t.Fatalf("the float reference served its blocks %d times and declined them %d (%s)", n, d, declinesOf(st))
-							}
-							// Every split dropping its last segment leaves the reference
-							// as it was: it forms no split to share with an arm.
-							cut, _, _, _ := composedDecode(t, m, dev, p.ids, p.toks, refParts, noGraph, true, unsplit, tier.WithSplitFault(true))
-							for i := range cut {
-								if !slices.Equal(cut[i], tr.ref[i]) {
-									t.Fatalf("step %d: with every split's last segment dropped the float reference moves (NMSE %.3g): it forms through the composer's splits", i, logitNMSE(cut[i], tr.ref[i]))
-								}
-							}
+							tr.ref = unsplitRef(t, m, dev, p.ids, p.toks, refParts, noGraph)
 							for i := 1; i < len(tr.ref); i++ {
 								widest[g] = max(widest[g], logitNMSE(tr.want[i], tr.ref[i]))
 							}
