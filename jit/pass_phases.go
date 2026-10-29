@@ -26,8 +26,14 @@ func (p Phases) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	for i := 0; i < len(ks); i++ {
 		j := i
 		bound := map[Operand]bool{}
+		reads, writes := false, false
 		for j < len(ks) && phaseable(ks[j]) && ks[j].Group == ks[i].Group && ks[j].Part == ks[i].Part &&
-			ks[j].Of == ks[i].Of && ks[j].Apart == ks[i].Apart && !atTheEdge(ks[j], made) {
+			ks[j].Of == ks[i].Of && ks[j].Apart == ks[i].Apart {
+			r, w := atTheEdge(ks[j], made)
+			if (reads || r) && (writes || w) {
+				break
+			}
+			reads, writes = reads || r, writes || w
 			for _, b := range ks[j].Bufs {
 				if b.Kind != BufShared {
 					bound[b.Operand] = true
@@ -184,14 +190,14 @@ func (Phases) phase(k, m *Kernel) {
 	}
 }
 
-// atTheEdge says k reads a value of the part's input or writes one it hands
-// back: the tier writes the output over the input only where the input's
-// every read runs in a launch before the output's first write.
-func atTheEdge(k *Kernel, made map[Operand]bool) bool {
+// atTheEdge says whether k reads a value of the part's input and whether it
+// writes one it hands back: the tier writes the output over the input only
+// where the input's every read runs in a launch before the output's first
+// write, so one launch takes the readers or the writers, not both.
+func atTheEdge(k *Kernel, made map[Operand]bool) (reads, writes bool) {
 	for _, b := range k.Bufs {
-		if b.Kind == BufOut && b.Operand.Out || b.Kind == BufIn && b.Operand.Kind == OperandValue && !made[b.Operand] {
-			return true
-		}
+		writes = writes || b.Kind == BufOut && b.Operand.Out
+		reads = reads || b.Kind == BufIn && b.Operand.Kind == OperandValue && !made[b.Operand]
 	}
-	return false
+	return reads, writes
 }
