@@ -185,6 +185,9 @@ type Config struct {
 	// the composer does not form fails the step, naming why; the tier's
 	// kernels never run in its place.
 	Composed Parts
+	// ComposedAuto takes ComposedStep for a model whose plan states a verdict
+	// covering every device, when Composed is unset: the staged default.
+	ComposedAuto bool
 	// TierBlocks are blocks the caller keeps on the tier's own kernels where
 	// the composer would serve them, each declined by that name.
 	TierBlocks []int
@@ -2309,6 +2312,10 @@ type GPU struct {
 	ownMu sync.Mutex
 	model uint64
 	held  bool
+	// verdictFor is the model the composer's parts were last decided for
+	// (admitPlan), and verdictAuto that they were taken by its verdict.
+	verdictFor              uint64
+	verdictSet, verdictAuto bool
 	// devs is every device, in the order they were opened (AddDevices
 	// appends).
 	devs []*devTier

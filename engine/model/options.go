@@ -118,6 +118,10 @@ type modelOpts struct {
 	// composedCPU runs every block a State keeps on the CPU on what the
 	// composer forms for the CPU (WithComposedCPU).
 	composedCPU bool
+	// composedCPUSet is WithComposedCPU given, either way, over the verdict.
+	composedCPUSet bool
+	// structures replaces composedStructures; only a test sets it.
+	structures map[uint64]nn.Backends
 	// kvType and kvTypeSet force the cache's format, overriding what
 	// nn.KVWidthPaysOff decides. Two fields because "not forced" and "forced
 	// to f32" are different states.
@@ -384,7 +388,9 @@ func WithKVHeadMajor(on bool) Option { return func(l *loadOpts) { l.opt.kvHeadMa
 // (kvArena). A block step the composer does not serve runs main's kernels
 // and is counted by its reason (State.CPUBlockSteps). Off by default: the
 // composed CPU kernels do not yet reach main's rate.
-func WithComposedCPU(on bool) Option { return func(l *loadOpts) { l.opt.composedCPU = on } }
+func WithComposedCPU(on bool) Option {
+	return func(l *loadOpts) { l.opt.composedCPU, l.opt.composedCPUSet = on, true }
+}
 
 // WithKVF16 forces the cache width, overriding what nn.KVWidthPaysOff decides:
 // WithKVType(KVF16) or WithKVType(KVF32).

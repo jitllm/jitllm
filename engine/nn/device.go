@@ -849,6 +849,17 @@ func (d *DS4Plan) EntRowAt(comp, hd int) int {
 // Most flags below describe a graph feature that runs and produces fluent,
 // wrong text when ignored, so a tier that cannot apply one must decline the
 // block by name (see RULE 8a in AGENTS.md).
+// Backends is a set of the backends a model runs on.
+type Backends uint8
+
+const (
+	BackendCPU Backends = 1 << iota
+	BackendPTX
+	BackendSPIRV
+	BackendMSL
+	BackendAMDGCN
+)
+
 type LayerPlan struct {
 	// Graph is the block's graph of generic ops as the model's front end
 	// built it from the container (engine/model/front.go), nil for a block
@@ -878,6 +889,9 @@ type LayerPlan struct {
 	// its blocks by index, so it must not take a block of a second model
 	// while the first's are there.
 	Model uint64
+	// ComposedOn is the backends whose composed serving of this model passed
+	// its gates at main's speed.
+	ComposedOn Backends
 	// Vocab is the output projection's rows. A device that reserves a ragged
 	// step's per-row logits at placement sizes them from it, because the
 	// head is offered after the blocks; 0 leaves them to the first step.

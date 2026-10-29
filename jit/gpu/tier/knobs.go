@@ -346,6 +346,12 @@ func WithPersist(on bool, grid int) Option {
 	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, false, grid })
 }
 
+// WithComposedByVerdict sets Config.ComposedAuto: a model whose measured
+// verdict covers the tier's devices is served by the composer.
+func WithComposedByVerdict() Option {
+	return WithConfig(func(c *Config) { c.ComposedAuto = true })
+}
+
 // WithComposedShadow sets Config.ComposedShadow: the composer's form of each
 // block it would serve runs beside the tier's own kernels and is compared with
 // them at every step (Stats.ShadowWorst). It changes no answer, and needs

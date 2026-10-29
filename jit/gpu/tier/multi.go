@@ -293,7 +293,7 @@ func (g *GPU) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 // sat empty: the same tokens at a much worse rate.
 func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 	g.settle()
-	done, ok := g.admit(p.Model, fmt.Sprintf("block %d", li))
+	done, ok := g.admitPlan(p, fmt.Sprintf("block %d", li))
 	if !ok {
 		return false
 	}
@@ -895,7 +895,7 @@ func (g *GPU) prepLayerOn(sid uint64, name string, li int, p *nn.LayerPlan, w *n
 	if err != nil {
 		return false, err
 	}
-	done, ok := g.admit(p.Model, fmt.Sprintf("block %d", li))
+	done, ok := g.admitPlan(p, fmt.Sprintf("block %d", li))
 	if !ok {
 		return false, nil
 	}

@@ -1450,6 +1450,9 @@ func Open(path string, options ...Option) (*Model, error) {
 	// Where the composer serves, a container written before the converter
 	// stated its activations would run every block on the tier's own kernels
 	// and say nothing: refused, with the command that states them.
+	if !m.opt.composedCPUSet && m.composedReady()&nn.BackendCPU != 0 {
+		m.opt.composedCPU = true
+	}
 	if jit.ComposedByDefault || m.opt.composedCPU {
 		if err := m.statesActivations(path); err != nil {
 			m.Close()
