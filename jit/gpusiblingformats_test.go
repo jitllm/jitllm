@@ -113,7 +113,8 @@ func TestComposedGPUSiblingsOfTwoFormats(t *testing.T) {
 
 // TestComposedGPUHeadNormsInOneLaunch runs q's and k's head norms, 16 and 8
 // heads of 128, on every GPU device present: two launches each leaving the
-// device idle run as one, each head its launch-apart form's. The violation:
+// device idle run as one where it states its wave, each head its
+// launch-apart form's. The violation:
 // k's norm weight scaled must part.
 func TestComposedGPUHeadNormsInOneLaunch(t *testing.T) {
 	testlock.GPU(t)
@@ -144,8 +145,13 @@ func TestComposedGPUHeadNormsInOneLaunch(t *testing.T) {
 			formats := map[jlm.Role]jlm.Type{jlm.RoleAttnQNorm: jlm.TypeF32, jlm.RoleAttnKNorm: jlm.TypeF32}
 			codes := formWith(t, jit.Default(), b.G, formats, dev)
 			apart := formWith(t, without("siblings"), b.G, formats, dev)
-			if len(codes) != 1 || len(apart) != 2 {
-				t.Fatalf("the head norms formed as %d launches, %d apart: want one and two", len(codes), len(apart))
+			// A device stating no units or resident threads has no wave to fill.
+			want := 1
+			if dev.Units == 0 || dev.Slots == 0 {
+				want = 2
+			}
+			if len(codes) != want || len(apart) != 2 {
+				t.Fatalf("the head norms formed as %d launches, %d apart: want %d and two", len(codes), len(apart), want)
 			}
 			ins := map[graph.ValueID][]float32{qi: q, ki: k}
 			run := func(codes []jit.Code, out graph.ValueID, n int) []float64 {
@@ -174,7 +180,7 @@ func TestComposedGPUHeadNormsInOneLaunch(t *testing.T) {
 			if e := nmseOf(got, run(apart, ko, len(k))); !(e > 1e-3) {
 				t.Errorf("k's norm weight scaled reads NMSE %.3g: the gate cannot see k's share", e)
 			}
-			t.Logf("%s: q's and k's head norms one launch of %d workgroups", d.API(), codes[0].Groups)
+			t.Logf("%s: q's and k's head norms %d launch(es), %d units, %d slots", d.API(), len(codes), dev.Units, dev.Slots)
 		})
 	}
 }
