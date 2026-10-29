@@ -114,7 +114,17 @@ func SetFormFault(on bool, kind graph.OpKind, asDevice bool) {
 
 var errInjectedForm = errors.New("injected form failure (SetFormFault)")
 
+var flashOne bool
+
+// SetFlashOneProduct makes the tiers that create their composer after it
+// form flash attention with one binary16 product a block of dots and one of
+// weighted sums.
+func SetFlashOneProduct(on bool) { flashOne = on }
+
 func (g *devTier) rewriteComposer(r *jit.Registry) {
+	if flashOne {
+		r.FlashOneProduct()
+	}
 	if !formFault.on {
 		return
 	}

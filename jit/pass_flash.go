@@ -38,6 +38,8 @@ import (
 // 128 rows in 97 KiB read 3.6% slower in a prompt.
 type Flash struct {
 	Rows, Keys, Shared int
+	// one stages no remainders: a product a block of dots or weighted sums.
+	one bool
 }
 
 func (Flash) Name() string { return "flash" }
@@ -327,7 +329,7 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 	if g.TR == 0 {
 		return nil, false
 	}
-	b := flashBuild{c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
+	b := flashBuild{one: p.one, c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
 		tq: map[int]int{}, tr: map[int]int{}}
 	return b.kernel(), true
 }
@@ -364,6 +366,7 @@ type flashBuild struct {
 	first, warpRow  int
 	minus, zero     int
 	tq, tr          map[int]int
+	one             bool
 }
 
 func (b *flashBuild) side(m *member, row, kpos, inner int, subs map[Operand]int) *flashSide {
@@ -388,6 +391,12 @@ func (b *flashBuild) words(x0, x1 int) (hi, lo int) {
 // store writes v at word ix of the workgroup memory, in loop at.
 func (b *flashBuild) store(ix, v, at int) {
 	b.m.Stores = append(b.m.Stores, Store{Buf: b.st, Ix: ix, Val: v, At: at})
+}
+
+func (b *flashBuild) storeLo(ix, v, at int) {
+	if !b.one {
+		b.store(ix, v, at)
+	}
 }
 
 // load is the workgroup memory's word ix as type t, read in loop at.
@@ -459,7 +468,7 @@ func (b *flashBuild) kernel() *Kernel {
 		hi, lo := b.words(q(0), q(1))
 		ix := m.bin(OpAdd, U, m.bin(OpMul, U, rloc, m.u32(g.sq/2)), dp)
 		b.store(m.bin(OpAdd, U, ix, m.u32(g.aOff)), hi, -1)
-		b.store(m.bin(OpAdd, U, ix, m.u32(g.aOff+g.TR*g.sq/2)), lo, -1)
+		b.storeLo(m.bin(OpAdd, U, ix, m.u32(g.aOff+g.TR*g.sq/2)), lo, -1)
 	}
 	m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
 
@@ -506,7 +515,7 @@ func (b *flashBuild) stageBlock() {
 		hi, lo := b.words(k(0), k(1))
 		ix := m.bin(OpAdd, U, m.bin(OpMul, U, key, m.u32(g.sq/2)), dp)
 		b.store(m.bin(OpAdd, U, ix, m.u32(g.kOff)), hi, b.P)
-		b.store(m.bin(OpAdd, U, ix, m.u32(g.kOff+g.KB*g.sq/2)), lo, b.P)
+		b.storeLo(m.bin(OpAdd, U, ix, m.u32(g.kOff+g.KB*g.sq/2)), lo, b.P)
 	}
 	vhalf := b.Dv / 2
 	n = g.KB * vhalf
@@ -538,16 +547,20 @@ func (b *flashBuild) dots() {
 	qh, ql := make([]int, steps), make([]int, steps)
 	for s := range steps {
 		qh[s] = b.tile(aT, at(b.warpRow, g.sq, 2*g.aOff+s*b.tk), g.sq, false, -1)
-		ql[s] = b.tile(aT, at(b.warpRow, g.sq, 2*g.aOff+g.TR*g.sq+s*b.tk), g.sq, false, -1)
+		if !b.one {
+			ql[s] = b.tile(aT, at(b.warpRow, g.sq, 2*g.aOff+g.TR*g.sq+s*b.tk), g.sq, false, -1)
+		}
 	}
 	for j := 0; j < g.KB/b.tn; j++ {
 		acc := b.zero
 		for s := range steps {
 			off := 2*g.kOff + j*b.tn*g.sq + s*b.tk
 			kh := b.tile(bT, m.u32(off), g.sq, true, b.P)
-			kl := b.tile(bT, m.u32(off+g.KB*g.sq), g.sq, true, b.P)
-			acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ql[s], B: kh, C: acc, Tile: &cT})
-			acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: qh[s], B: kl, C: acc, Tile: &cT})
+			if !b.one {
+				kl := b.tile(bT, m.u32(off+g.KB*g.sq), g.sq, true, b.P)
+				acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ql[s], B: kh, C: acc, Tile: &cT})
+				acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: qh[s], B: kl, C: acc, Tile: &cT})
+			}
 			acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: qh[s], B: kh, C: acc, Tile: &cT})
 		}
 		m.Stores = append(m.Stores, Store{Buf: b.st, Ix: at(b.warpRow, g.KB, g.aOff+j*b.tn), Val: acc, At: b.P, Tile: true, Stride: m.u32(g.KB)})
@@ -594,7 +607,7 @@ func (b *flashBuild) rowsPhase() {
 		}
 		hi, lo := b.words(pe[0], pe[1])
 		b.store(at(pw, g.pOff+i/2), hi, b.P)
-		b.store(at(pw, g.pOff+(g.TR+1)*g.sp/2+i/2), lo, b.P)
+		b.storeLo(at(pw, g.pOff+(g.TR+1)*g.sp/2+i/2), lo, b.P)
 	}
 	sum = m.bin(OpAdd, F, sum, m.add(Node{Op: OpShuffle, Type: F, A: sum, Imm: 1}))
 	alpha := m.un(OpExp, F, m.bin(OpSub, F, mOld, mNew))
@@ -620,13 +633,17 @@ func (b *flashBuild) weighted() {
 	ph, pl := make([]int, steps), make([]int, steps)
 	for s := range steps {
 		ph[s] = b.tile(aT, at(b.warpRow, g.sp, 2*g.pOff+s*b.tk), g.sp, false, b.P)
-		pl[s] = b.tile(aT, at(b.warpRow, g.sp, 2*g.pOff+(g.TR+1)*g.sp+s*b.tk), g.sp, false, b.P)
+		if !b.one {
+			pl[s] = b.tile(aT, at(b.warpRow, g.sp, 2*g.pOff+(g.TR+1)*g.sp+s*b.tk), g.sp, false, b.P)
+		}
 	}
 	for j := 0; j < b.Dv/b.tn; j++ {
 		acc := b.zero
 		for s := range steps {
 			v := b.tile(bT, m.u32(2*g.vOff+s*b.tk*g.sv+j*b.tn), g.sv, false, b.P)
-			acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: pl[s], B: v, C: acc, Tile: &cT})
+			if !b.one {
+				acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: pl[s], B: v, C: acc, Tile: &cT})
+			}
 			acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ph[s], B: v, C: acc, Tile: &cT})
 		}
 		m.Stores = append(m.Stores, Store{Buf: b.st, Ix: at(b.warpRow, b.Dv, g.aOff+j*b.tn), Val: acc, At: b.P, Tile: true, Stride: m.u32(b.Dv)})
