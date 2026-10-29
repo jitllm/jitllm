@@ -20,8 +20,9 @@ import (
 // of nctx, saving its log-probabilities (--kl-divergence-base), and returns the
 // chunk's tokens and, for positions nctx/2 .. nctx-2, each position's
 // log-softmax over the vocabulary. llama.cpp stores them quantized to 16 bits
-// over the top 16 nats; an entry below that window comes back as -Inf.
-func lcppLogProbs(t *testing.T, dir, gguf, text string, nctx int, ngl int) ([]int32, [][]float32) {
+// over the top 16 nats; an entry below that window comes back as -Inf. At
+// ngl 0 no device is visible, so a CUDA build offloads no batch to one.
+func lcppLogProbs(t *testing.T, dir, gguf, text string, nctx int, ngl int, args ...string) ([]int32, [][]float32) {
 	t.Helper()
 	bin := filepath.Join(dir, "llama-perplexity")
 	if _, err := os.Stat(bin); err != nil {
@@ -34,9 +35,12 @@ func lcppLogProbs(t *testing.T, dir, gguf, text string, nctx int, ngl int) ([]in
 		t.Fatal(err)
 	}
 	out := filepath.Join(tmp, "base.kld")
-	cmd := exec.Command(bin, "-m", gguf, "-f", in, "-c", fmt.Sprint(nctx), "-b", fmt.Sprint(nctx),
-		"--chunks", "1", "-ngl", fmt.Sprint(ngl), "-t", "6", "--kl-divergence-base", out)
+	cmd := exec.Command(bin, append([]string{"-m", gguf, "-f", in, "-c", fmt.Sprint(nctx), "-b", fmt.Sprint(nctx),
+		"--chunks", "1", "-ngl", fmt.Sprint(ngl), "-t", "6", "--kl-divergence-base", out}, args...)...)
 	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+dir)
+	if ngl == 0 {
+		cmd.Env = append(cmd.Env, "CUDA_VISIBLE_DEVICES=")
+	}
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s: %v\n%s", bin, err, b)
 	}

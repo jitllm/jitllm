@@ -1,0 +1,473 @@
+lock left on the CPU the residual stream has to come
+home regardless, so folding the projection in saves nothing". True about ROUND
+TRIPS, false about BYTES. Fixed: `placeHead` releases blocks from the END (so the
+device's blocks stay the contiguous prefix `Layers(0, gpuLayers)` needs) until
+the projection fits.
+
+    measured  19.29 tok/s CPU-only, 1.92 GB/token = 37.0 GB/s of a 39 GB/s wall
+              -- so the 30B host token IS memory-bound and placement is LINEAR
+      head off the host    243 MiB / 37.0 GB/s  = 6.9 ms
+      head on the device   318 MiB / 153 GB/s   = 2.2 ms
+      one extra seam                            = 0.06 ms
+    ~4.6 ms of a 51.8 ms token for 318 MiB: 2.3x attention's return per GiB.
+
+**★ MEASURED AT 1.0566, IQR/median 0.032, AND NOT ON THE MODEL IT WAS DESIGNED FOR.**
+Qwen3-MOE-4x0.6B at a forced partial seam (`-vram 400 MiB`, so 10 blocks and the
+projection where the same budget takes 16 blocks without it), ABBA over
+`JITLLM_NO_HEAD_PLACE`, n=96, four rounds, PSI 1.04%:
+
+    placed  74.70 72.72 76.88 77.45 76.82 76.37 78.51
+    host    69.67 69.37 72.88 68.28 74.02 71.47 74.75
+    per-round ratios 1.0603 1.0933 1.0529 1.0503
+
+Two samples of round 4 (32.93 and 47.22 against a session median of 74.36) were
+discarded as RULE 2d clamps.
+
+**★ AND THE 30B -- THE MODEL THE ARITHMETIC ABOVE IS ABOUT -- IS UNMEASURABLE ON
+THIS CARD, WHICH IS RULE 1d-ter AGAIN.** `-devices gpu:0` on Qwen3-30B-A3B reads
+4.2-5.0 tok/s against 19.29 CPU-only: with 2.5 GiB usable it refuses ~6700
+tensors for want of memory and thrashes. Loading an 18.5 GB model per arm also
+puts PSI at 45%, four times RULE 2b's gate. **Record the capability and the
+arithmetic; do not quote a ratio for that row.**
+
+**★ 15b. ONE HOST/DEVICE CROSSING COSTS ~36 us. AN EARLIER VERSION OF THIS RULE
+SAID 64.3 us AND WAS WRONG THREE WAYS AT ONCE.** `GPU.PerLayerSubmit` is
+documented as "one Session and one Read per block, which is what the seam did
+before Layers existed" -- it is not a proxy for a per-layer seam, it IS one, so
+`jitllm verify -ab submit` is the measurement. Corrected, on Qwen3-MOE-4x0.6B
+(28 blocks + the head = 29 submissions against 1, so 28 extra), n=64, graphs
+forced OFF on both arms, three passes:
+
+    A 591.48  B 526.42  ->  36.3 us        A/B medians are one ROUND of n tokens
+    A 594.28  B 537.15  ->  31.9 us
+    A 605.13  B 537.04  ->  38.0 us        median 36.3, spread 31.9-38.0
+
+That sits where it should: above `gpubench`'s 19.3 us CUDA floor and below
+RULE 12's ~59 us per-matvec figure, which included a full drain.
+
+**The three defects, because each is a different lesson:**
+
+1. **I DIVIDED BY ROUNDS INSTEAD OF BY TOKENS.** `bench.AB(a, b, rounds, iters)`
+   reports `AMedian`/`BMedian` as the median duration of ONE ROUND, and a round
+   runs `iters` tokens. Dividing the delta by the round count instead of the
+   token count inflated it by 1.77x. **Read the harness's units before dividing
+   by anything it printed** -- this is RULE 11's "the harness is code too", in
+   the smallest possible form.
+2. **GRAPHS WERE ON FOR ONE ARM ONLY.** `layersOnce` disables capture whenever
+   `PerLayerSubmit` is set, because it would otherwise record once per block per
+   token. So an unforced run gave the per-token arm a replayed graph and the
+   per-block arm raw launches, and the ratio carried both changes. `-ab submit`
+   now forces `NoGraph` on both arms; the graph's own cost has its own arm.
+3. **THE ARM DID NOTHING AT ALL WHEN THE HEAD WAS RESIDENT.** `Layers` guarded
+   the per-block path with `hi-lo > 1 && head == nil`, so on any model whose
+   projection is on the device -- which since `placeHead` is most of them -- the
+   two arms were byte-identical and the reported ratio was measuring noise. The
+   guard predates `layersOnce` accepting an empty block range, which is what
+   makes a head-only submission expressible at all; with that in place the head
+   is simply one more submission. **A benchmark arm that silently degrades to a
+   no-op reports a number either way**, which is RULE 14r's skipping test one
+   layer up.
+
+**★ 15c. ATTENTION-ONLY PLACEMENT WAS WORKED THROUGH AND DOES NOT HOLD UP.** The idea is to put
+the attention half of every layer on the card (0.52 GiB, ~32% of a 30B token)
+instead of whole blocks (1.31 GiB, 8%). It fails on four counts, and the first
+three are structural rather than economic:
+
+1. **"Prep by omission" does not produce an attention-only layer, it produces a
+   DECLINED one.** `PrepLayer` iterates all seven weights and `mkw` returns nil
+   for `len(x.Data) == 0`, so a `LayerWeights` with Gate/Up/Down zeroed returns
+   false. `blockBytes` skipping empty weights is a PRICING path, not the gate.
+2. **It silently breaks the prompt.** `prefill.go` and `batch.go` both use
+   `s.gpuLayers > 0` as the proxy for "the device owns some KV". Attention-only
+   leaves `gpuLayers == 0` while the device owns EVERY layer's KV, so the
+   batched host prefill runs and fills the HOST cache. `prefill.go` names that
+   outcome in its own comment: "correct-looking output for the prompt and
+   nonsense from the first generated token, which is the worst shape a bug can
+   have."
+3. **Its own gate cannot see either failure.** `forcedDiff` migrates only when
+   `gs.GPULayers() != 0`, and it calls `Forward`, never `Prefill`.
+4. **The economics never justified the repair.** The 32% is really 26.9% (the
+   `Place` fixture's `Offered` omits `output.weight`), and the 0.52 GiB is
+   really 1.02 GiB at 2K context -- RULE 12o's packing debt takes attention to
+   657 MiB, and attention on EVERY layer forces every layer's KV onto the card,
+   which is 192 KiB per position across 48 layers. That is the same VRAM class
+   as the whole-block arm, with a context ceiling the whole-block arm does not
+   have. It lands at 1.05-1.18x against an incumbent already at ~1.10x, and on
+   Metal it is a net LOSS: a Session is one command buffer and `Commit` waits,
+   so 47 extra command buffers is 13.6 ms/token.
+
+**What replaces it is `tier.Place` wired to real hotness** -- attention AND the
+head AND the hot experts, ranked, for the same 47 seams. `Place` is written and
+tested and has NO non-test caller. Two things it needs first: a `KindHead`, since
+the densest unit in the model has no UnitKind, and `Unit.Bytes` for an attention
+group must include the KV cache, which `PrepLayer` charges and `place.go` does
+not price.
+
+**★ 15c-bis. THE ONE NUMBER THAT DECIDES EVERY PLACEMENT: A UNIT MUST CARRY AT
+LEAST ~2 MB OF WEIGHTS PER HOST/DEVICE CROSSING.** Break-even is where the host
+read it removes equals the device read it adds plus the seam it costs:
+
+    bytes/R_host = bytes*pack/R_dev + n_seams*36.3 us
+    with R_host 37.0 GB/s, R_dev 153 GB/s, pack 1.4 (RULE 12o)
+      ->  bytes per crossing >= 2.03 MB
+
+Every placement result in this file falls out of that one line:
+
+    output projection      255.3 MB / 1 crossing  =  255.3 MB   126x   PAYS
+    whole block (30B)      403.6 MB / 1           =  403.6 MB   199x   PAYS
+    attention, one layer    11.6 MB / 1           =   11.6 MB   5.7x   PAYS
+    one expert (g+u+d)       3.2 MB / 3           =    1.1 MB   0.5x   LOSES
+
+**So the head is the best placement in the model not because it is big but
+because it is ONE MATVEC that is big** -- the seam amortizes over a 255 MB read.
+An expert is the opposite shape: 3.2 MB split across THREE matvecs, so it pays
+three seams for HALF the threshold and loses every time.
+
+**★ AND THAT IS THE ANSWER TO EXPERT-LEVEL VRAM PAGING, WHICH THE USER DOUBTED
+ON DESIGN GROUNDS AND WHICH THE ARITHMETIC ALSO PRICES AS A LOSS.** The per-matvec path
+(`s.mv` -> `JIT.MatVec` -> `GPU.MatVec` -> `resident`) is the ONLY path that can
+make a sub-block unit resident today, and it costs one crossing per matvec. An
+expert served that way costs 222 us where the host takes 87. Expert paging needs
+a path that puts a whole LAYER's selected experts in one submission before its
+economics change, and that is a different feature from paging.
+
+**★ WHICH ALSO SAYS WHY `tier.Place` IS STILL UNWIRED, AND IT IS NOT NEGLECT.**
+Its ranking is right and its four `UnitKind`s are not equally executable:
+`KindAttn` needed attention-only placement, which 15c found does not work; `KindExpert` loses
+on the line above; `KindFFN` has no path at all. The only sub-block unit that
+both PAYS and has a way to run is the head, and `placeHead` does that directly
+in twenty lines. **`Place` is waiting on an execution path, not on a caller** --
+and it needs a `KindHead` before it could even express the one placement that
+works.
+
+**★ 15d. A CACHED DECLINE IS A TOMBSTONE, AND IT BROKE SEAM GROWTH SILENTLY.**
+`resident()` registers its map entry BEFORE pricing it and leaves the FAILED
+entry there, deliberately, so a tensor priced once is not re-priced by every
+matvec of every token. The cost is that the entry says "no" FOREVER -- including
+after the room it wanted has been freed. Nothing noticed while the seam only
+ever grew from a cold device, because then no decline had happened yet; it bites
+`SetGPULayers` growing after a shrink, and it bit `placeHead`, which freed
+300 MiB and was still refused. `ReleaseLayers` now drops the failed entries and
+ONLY those -- a live one is another block's weights and deleting it leaks the
+buffer.
+
+**★ 15e. THE GRAPH CACHE IS A MAP NOW, AND THE TWO AXES OF ITS KEY BEHAVE
+OPPOSITELY.** One slot was correct while a token was one call. The head under a
+partial seam makes two, under `{0,gl}` and `{gl,gl}`, and one slot makes them
+evict each other EVERY TOKEN -- a capture per call, which is the most expensive
+state there is, and strictly worse than graphs being off. `scoreN` only ever
+INCREASES, so a key differing only there is dead and must be retired or the
+generation leaks one recording per grain; `lo/hi/head` is a PLACEMENT and
+alternates, so retiring on it is the thrash. `Captures` is the observable: one
+per key per prompt is the design, one per TOKEN means a key is moving.
+
+**★ 15g. A PARTIAL SEAM WAS SLOWER THAN NO DEVICE AT ALL, AND THAT IS THE
+CONFIGURATION RULE 1d-ter SELLS.** RULE 15c-bis derived the break-even -- a unit
+must carry ~2 MB of weights per host/device crossing -- and NOTHING ENFORCED IT.
+`GPU.MatVec` predates `Layers` and priced a matvec by the VRAM budget alone, so
+every matvec of every block the placement did not take was served one at a time
+with a full round trip. tinyllama, 48 tokens, on a card with room for the whole
+model, median of 3, both arms in ONE pass on a rested box:
+
+                  before   after
+      cpu          76.4
+      gl=0         54.4    76.2
+      gl=6         64.0    81.4
+      gl=11        73.0    97.4    <- HALF the model on the device and LOSING
+      gl=16        99.5   107.8
+      gl=22       164.1   166.5
+
+**Every placement up to half the model was BELOW the CPU tier**, and the curve
+was not even monotone in the seam. "jitllm puts what fits on the device and runs the
+rest on the host" was true about the weights and false about the speed: the rest
+ran on the host the slow way, one crossing at a time.
+
+★ AND "EVERY PARTIAL PLACEMENT WAS BELOW THE CPU" IS WHAT I WROTE FIRST AND IT IS
+TOO STRONG -- gl=16 was already above it at 99.5. The first curve simply had no
+gl=16 row, so the claim was extrapolated from three points and stated as four.
+
+**★ AND THE FIX HAS TO BE PER MODEL, NOT PER TENSOR -- THE PER-TENSOR VERSION IS
+THE ONE I BUILT FIRST AND IT REGRESSED THE OTHER MODEL BY 18%.** A byte
+threshold on each matvec (8 MiB, chosen off the sweep) measures **1.3898 on
+tinyllama at a half seam (IQR/median 0.069, n=12, ABBA) and 0.8242 on gemma at
+gl=14** -- the gemma pass is REFUSED on dispersion at IQR/median 0.131, and is
+reported anyway because all twelve of its ratios are below one, which is not
+what dispersion looks like. The cause is ACTIVATION REUSE: q, k
+and v read the same normed vector and `prepare` skips the upload when x is
+unchanged, so declining q while serving v puts the upload back. **Mixing the two
+tiers inside one layer costs more than either tier alone**, which is why the
+knob has to be all-or-nothing over the set.
+
+The average over what the seam actually leaves on the host is the statistic, and
+it fits every measurement:
+
+                per layer   crossings   MB/crossing   verdict
+      tinyllama   20.1 MB       7           2.87       decline
+      gemma-2b    59.1 MB       7           8.44       serve
+
+    model              seam   MB/crossing  verdict   ratio    IQR/med
+      Qwen3-MOE-4x0.6B  gl=14      small    decline   2.4485    0.095
+      tinyllama q3_K_M  gl=11      2.87     decline   1.3169    0.026
+      gemma-2b          gl=14      8.44     serve     1.0013    0.047
+      Phi-3.5-mini      gl=16      9.10     serve     1.0174    0.058
+      Qwen3-1.7B        gl=14      4.05     serve     REFUSED at IQR 0.149
+      llama-2-7b        gl=16     16.3      serve     RULE 1d-ter: unmeasurable
+
+**THE FOUR "SERVE" ROWS ARE THE CONTROLS AND THEY ARE WHAT MAKE THE TWO WINS
+ATTRIBUTABLE.** A model whose verdict is "serve" runs the unpriced path by
+construction, so 1.0013 and 1.0174 say the machinery costs nothing where it
+decides nothing. **The MoE is the largest win in the change** -- its experts are
+the smallest matvecs in any model here, so every crossing loses.
+
+★ AND tinyllama WAS READ THREE TIMES, WHICH IS RULE 2c EARNING ITS KEEP: 1.4192
+(IQR 0.098) on a warm box, then 1.2875 (IQR 0.163) REFUSED with the package at
+1696 MHz -- RULE 2d's partial band -- then 1.3169 (IQR 0.026) rested. Quote the
+rested one; the win is ~1.32, not the 1.42 the first pass showed.
+
+**Monotone now, and every partial placement beats the CPU** -- see the table
+above, whose "after" column is that curve. Teacher-forced 0/24
+on tinyllama, gemma, the MoE and Phi-3.5 at a forced partial seam, so the seam
+change costs no correctness.
+
+★ AND A SINGLE-RUN CROSS-MODEL SWEEP TOLD ME Phi-3.5 GAINED 56%, WHICH IS RULE
+1d-bis IN ONE LINE. It gained nothing: its verdict is "serve" and its gated ratio
+is 1.0174. The 17.1 tok/s I read for its "before" arm was a contended box, not a
+configuration. The same sweep understated the MoE by a third. **A sweep across
+models is for choosing what to measure, never for the number.**
+
+**★ THE SEAM CONSTANT IS RULE 12's ~59 us AND NOT RULE 15b's 36.3, AND I USED THE
+WRONG ONE FIRST.** 36.3 us is one crossing around a BLOCK submission, where the
+activation is already on the device and the readback is one residual vector. A
+matvec served alone quantizes and uploads its activation, launches, and reads its
+output back -- exactly what RULE 12 measured before `Layers` existed. Halving the
+seam halves the threshold, which is the difference between declining tinyllama's
+gate/up and serving them.
+
+★ AND THE VERDICT IS A PROPERTY OF THE SEAM, NOT ONLY OF THE MODEL. What reaches
+this path is whatever the placement LEFT on the host, so tinyllama at a deep seam
+samples five layers plus a 51 MB output projection and can settle above the line
+where the same model at gl=0 settles below it. That is the honest answer -- those
+are the crossings that would actually be paid -- but two runs of one model can
+settle differently, and `jitllm verify` prints the counter that says which.
+
+★ RULE 14n's "~1.35 s is OPENING the device" IS RETIRED ON THE WAY PAST.
+Instrumented, `backend.Open` is **95 ms** on this box (ptx 42, spirv 51, metal 0)
+and the rest of that 1.35 s was this same defect: the first token paying ~200
+crossings. The biggest time-to-first-token lever was never device open.
+
+**★ 15f. AND THE LESSON THAT COST THE MOST TODAY: A COMMENT EXPLAINING WHY
+SOMETHING IS *NOT* DONE IS A CLAIM ABOUT THE CODE, AND IT ROTS LIKE ANY OTHER.**
+Three of them were load-bearing, all three were false, and each was guarding a
+real win:
+
+    "Reduce bakes ONE row count, which for an indexed launch is Rows*Slots"
+        -> kernels.Reduce takes rows as a PARAMETER. Worth 1.31x on MoE.
+    "folding the projection in saves nothing"
+        -> true about round trips, false about bytes. Worth ~9% on the 30B.
+    ROADMAP item 1's first bullet
+        -> inherited the first one without checking it.
+
+All three had the same shape: a decision was correct when written, the code
+underneath moved, and the COMMENT is what got re-read. This is RULE 5t's "an
+idea priced against an unoptimised baseline can flip sign once the baseline
+improves" one level up -- there it was a number that went stale, here it is a
+reason. **Before inheriting a "we do not do X because Y", check Y at the source.
+It costs one grep and it has now paid three times in one session.**
+
+
+## ★ 15h. A HYBRID'S SEAM: qwen3next RUNS ON THE CARD, AND BOTH THINGS THAT STOPPED IT WERE ABOUT THE FALLBACK RATHER THAN THE BLOCK.
+
+Qwen3-Next-80B-A3B-Instruct, `-devices cuda`, 2 of 48 blocks on an RTX 3050 Ti
+(4 GiB, 2.00 GiB budget), 34 block-runs, no demotion. Before this it read
+**"The capital of France is is is is is is"**; it is coherent now, and the two
+arms of the SAME binary part at token 10:
+
+    cpu    ...Paris. The capital of Germany is Berlin. The capital of
+           ids [... 576 6722 315 **9856** 374 **19846** 13 576 6722 315]
+    cuda   ...Paris. The capital of Italy is Rome. The capital of
+           ids [... 576 6722 315 **15344** 374 **21718** 13 576 6722 315]
+
+★★ **AND THE SAME BINARY GIVES BOTH ANSWERS ON DIFFERENT RUNS, WHICH SETTLES IT
+BEYOND ARGUMENT.** Two `jitllm run -devices cuda` invocations of the FIXED
+engine, same prompt, same placement: one produced `...Germany is Berlin`
+(matching the CPU arm token for token) and the other `...Italy is Rome`. Nothing
+changed between them but `tuneSplit`'s per-process choice of reduction order.
+**A greedy chain that agrees on one run and not the next is not a gate**, and
+that is why the standing number for this seam is the logit diff below and not an
+id list.
+
+★ **AND "TOKEN-IDENTICAL TO llama.cpp" STOOD HERE UNTIL THE EXPERT BANKS WERE
+FIXED, WHICH MAKES IT THE BEST EXAMPLE IN THIS FILE OF WHY A GREEDY CHAIN IS NOT
+A MEASUREMENT.** That reading was taken before 15j, when blocks 3 and 7's routed
+experts were ZEROS -- a mixture with two dead feed-forwards reproduced the
+reference transcript exactly, and the CORRECT engine does not. The chain agreeing
+was the broken configuration's accident; where it stops agreeing is decided by a
+**0.13-logit margin** on "the capital of <country>", far inside the 0.2-0.94 band
+this file records for f32 reduction order.
+
+**The gate is the teacher-forced diff, which compares logits rather than
+argmaxes: `max|dlogit|` 0.316-0.551 at every position, 1 of 8 positions flipping
+an argmax.** See 15i for why an absolute difference across this seam cannot be
+tighter than that.
+
+**The block was never the problem and the decline that named it is lifted.**
+`declineReason` returned *"a partial rotary (NRot < HeadDim)"*; with the rotary
+tail copied before the rotation (`bs.copyQ`/`bs.copyK`) the block is right, and
+`model.TestHybridAttentionBlockOnDevice` diffs it against the host at every
+position over four fixtures -- the small one, the mixture, Qwen3-Next-80B's own
+head geometry (2048 wide, 16 heads of 256 with 64 rotated) and its mixture
+shape (512 experts of which 10 run, 512 wide). Every one gates at 1e-9 to 5e-5.
+
+★ **THE FIRST CAUSE: A BATCH THE DEVICE CANNOT PREPARE WAS REPORTED AS A DEVICE
+FAILURE.** `prepBatch` refuses a mixture of experts outright -- *"batched
+prefill does not cover a mixture of experts"* -- and it refuses BEFORE it
+submits anything. `Layers` returned false, `engine/model/prefill.go` read that as the
+card breaking, demoted the whole placement and restarted the chunk on the host.
+The rows now go through the device one at a time instead, which is what every
+prompt did before batching existed and costs the speed and nothing else.
+
+★ **THE SECOND CAUSE, AND IT IS THE ONE THAT TURNED A SLOWDOWN INTO WRONG TEXT:
+A HYBRID CANNOT RESTART A TOKEN ON THE HOST.** The recovery for a device
+failure is `refill()`/`fill()` -- back to the embeddings, then run every block
+again -- and prefill.go's own comment says it is sound only at block 0. A
+qwen3next device block is block 3, and blocks 0..2 are LINEAR: their gated delta
+rule has already advanced, so re-running them applies the update twice. Nothing
+faults, every shape is right, and the model is fluent. It is refused now
+(`errRecurRetry`) rather than producing an answer. The upgrade path is to
+snapshot `rconv`/`rstate` for the blocks BEFORE the seam at the head of each
+token -- 3 of 36 layers on this model -- and restore them on the retry.
+
+★ **AND THE REPORTS THAT HID IT FOR TWO SESSIONS WERE BOTH ONE LINE.** `run`
+printed *"the device failed 1 time(s)"* and not why, while the tier held the
+sentence naming the refusal; `verify`'s teacher-forced diff printed only the
+positions whose ARGMAX flipped, so a uniform error looked like an intermittent
+one. Both print the missing half now, and the per-position `max|dlogit|` trace
+is what made the next entry measurable at all.
+
+## ★ 15i. A DEVICE BLOCK'S DISAGREEMENT WITH THE HOST IS AMPLIFIED BY EVERY BLOCK BELOW IT, AND ON A HYBRID THE FACTOR IS 2550x OVER FORTY.
+
+`model.TestHybridDeviceErrorIsAmplification` places ONE attention block of a
+48-block hybrid and moves only its DEPTH. Same block shape, same weights, same
+kernels; the arms differ in how many host blocks run below the seam:
+
+| one device block at | host blocks below | logit NMSE |
+|---|---|---|
+| block 43 | 4 | **7.769e-06** |
+| block 3 | 44 | **1.981e-02** |
+
+**2550x, which is 1.21x per block.** Both tiers quantize activations to int8 and
+do not round identically, so a placed block starts a perturbation whatever else
+is right -- this is the same compounding `TestTowerOnDeviceMatchesHost` records
+from the other side (*"5e-6 after one block is 1e-3 after twelve"*), and a gated
+delta rule is a recurrence, so it travels harder.
+
+★ **THE CONSEQUENCE IS A READING RULE, AND IT COST MOST OF A SESSION.**
+Qwen3-Next-80B with ONE block at index 3 of 48 reads `max|dlogit|` 1.0-3.5 at
+EVERY position including 0, where attention is a softmax over one key and the
+block's output is exactly V[0]. That looks exactly like a broken block and it is
+forty-four layers of amplification. **An absolute logit difference across a deep
+seam is not evidence of a device bug** -- the falsifiable form is to move the
+seam and see whether the error tracks the depth below it, which is one test and
+a quarter of a second.
+
+★ **AND IT IS WHY THE FIXTURE HAD TO GROW DEPTH RATHER THAN ONLY FEATURES.**
+Four layers cannot separate "the block is wrong" from "the error compounds";
+the whole point of `hyOpt.solo` is to put the same block at two depths in one
+run.
+
+## ★ 15j. A DEVICE IS HANDED A MIXTURE'S WHOLE EXPERT BANK AND THE PAGER NEVER READ IT.
+
+`pageIn` skips the routed experts on purpose and says why in its own comment:
+
+    ★ THE BLOCK'S OWN WEIGHTS, NOT ITS EXPERTS. A mixture's page is almost
+    entirely expert bank -- 512 of them on Qwen3-Next-80B, of which a token
+    touches ten -- so reading the page to reach the attention weights is the
+    difference between 2.56 GiB a token and 37.8. The experts are ensured by
+    moe(), after the router has said which ones, which is the only moment
+    anyone knows.
+
+    A bank is skipped here and NOT left half-read: EnsureRange tracks which
+    chunks hold real bytes, so an expert nobody ensured is absent rather than
+    stale. That is why every consumer of a packed span has to ensure it.
+
+**Every consumer except the one that cannot come back.** `offerRange` calls
+`pageIn` and then hands `Gate`/`Up`/`Down` -- the whole banks -- to `PrepLayer`,
+which uploads them once. Whatever the frame held at that moment is what the card
+runs for the rest of the process.
+
+★ **THE TWO FAILURES ARE DIFFERENT AND BOTH WERE LIVE, WHICH IS WHY IT SURVIVED
+A WHOLE SESSION OF HUNTING.**
+
+    a FRESH frame        the bank is zeros. The block's routed FFN contributes
+                         nothing, the shared expert and the attention are right,
+                         and the model stays fluent. `jitllm run -devices cuda`
+                         generated 64 correct-looking tokens this way.
+    a REUSED frame       the bank is another block's Q4_K scales. An f16 that
+                         happens to be NaN takes the logits non-finite, and
+                         `jitllm verify` read "pos 0: logit 0 is non-finite".
+
+**The only difference between those two commands is whether a host decode had
+cycled the frames first** -- `run` attaches the device before any token, `verify`
+benchmarks the CPU for sixteen tokens and attaches after. That is why one looked
+perfect and the other looked like a kernel bug, on the same binary, in the same
+minute.
+
+★ **FIXED BY `Model.ensureBlockExperts`, AND THE ROW IS THE WHOLE ACCOUNT.**
+Qwen3-Next-80B, 2 of 48 blocks on an RTX 3050 Ti, teacher-forced against the CPU:
+
+    before   pos 0: logit 0 is non-finite, and the benchmark arm was non-finite
+             from position 0 too -- every gpu tok/s printed during this
+             investigation was the speed of computing NaN
+    after    max|dlogit| 0.316 .. 0.551 at every position, 1 of 8 argmaxes
+             flipped on a margin of 0.13
+
+**0.32-0.55 is the f32 reduction-order band this file already records at
+0.2-0.94.** Nothing is left over.
+
+★ **THE GATE IS `model.TestMoEDeviceUploadReadsTheWholeBank`, AND MAKING IT FIRE
+IS ITSELF THE FINDING.** Three fixtures passed against the violation before one
+reproduced it, and the reason is arithmetic rather than luck: **EnsureRange
+tracks residency in 1 MiB CHUNKS**, so a chunk that any routed expert lands in
+arrives whole. A bank is only partly read while the number of expert SELECTIONS
+is far below the number of CHUNKS:
+
+    4 experts, 2 used, 8 tokens, a page under one chunk      every expert present
+    512 experts, 2 used, 8 tokens, a 1.8 MiB page (2 chunks) both chunks touched
+    4096 experts, 1 used, 2 tokens, a 7.3 MiB page (7 chunks) **NMSE 1.825e-01**
+    Qwen3-Next-80B: 512 experts, 10 used, a 1042.8 MiB page   1043 chunks
+
+So the 80B shows it under any prompt and a small fixture shows it under almost
+none. A gate for a partially-read page has to be sized against the CHUNK, not
+against the expert count.
+
+★★ **AND THE COST IS PAID AT ADMISSION, NOT AT THE OFFER -- WHICH IS A SECOND
+FIX, BECAUSE THE FIRST ONE READ A BANK FOR EVERY BLOCK THE BUDGET THEN
+REFUSED.** `offerRange` reading eagerly cost Qwen3-Next-80B **8.5 GiB** on a
+2 GiB budget: it offers twelve attention blocks, takes two, and read ten banks
+of 1.04 GiB for nothing (55.41 -> 63.98 GiB of file reads on the same 12-token
+run).
+
+Everything `prepLayer` decides with -- `pageSizeWhy`, `blockBytes`, `room` --
+reads SHAPES and `len(Data)` and never a byte, which is what makes the fix a
+reordering rather than a negotiation: `nn.LayerWeights.Ensure` is a callback the
+tier invokes at the point its own comment already calls *"the block is already
+won"*. A caller that leaves it nil is unchanged, and a paged mixture is the only
+one that sets it.
+
+★ **THE GATE IS SELF-CALIBRATING, WHICH IS WHY IT CARRIES NO CONSTANT.**
+`model.TestMoEDeviceReadsOnlyTheBanksItTakes` runs the same container under two
+budgets and counts `jlm.File.ChunksIn`:
+
+    budget for two blocks   2 placed   **16 chunks**
+    budget for one block    1 placed   **10 chunks**
+    the same, reading eagerly          **16 and 16**
+
+Both budgets OFFER the same two blocks, so equal counts are exactly the defect
+and the six-chunk gap is one expert bank. The per-token read is unchanged either
+way: a placed block's host page is dropped immediately afterwards and a placed
+block is not read on the host at all.
+
+★ **AND THE 80B's OWN READ COUNT CLOSES ON THE ARITHMETIC, WHICH IS WHAT SAYS
+NOTHING IS LEFT OVER.** Same prompt, same 12 tokens, same 2 of 48 blocks:
+
+    before the bank was read at

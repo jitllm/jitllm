@@ -183,7 +183,7 @@ sweep by name and are never resolved.
 | `JITLLM_MOVE_REPLY_MODEL` | `server.TestAMoveLandsBetweenTwoTokensOfAReply` | a `.jlm` whose reply outlasts its move's preparation | `Llama-3.2-1B-Instruct-Q4_K_M.jlm` |
 | `JITLLM_MOVE_PAUSE_MODEL` | `model.TestMovePause`, a measurement: the pause of a move between two devices, direct against through the host | a model name; opts in | the test skips |
 | `JITLLM_POSTNORM_MODELS` | `model.TestPostNormDeviceErrorIsAmplification` | comma-separated GGUF names in the directory, any model whose last block has a post-FFN norm | OLMo 2 1B and EXAONE 4.0 1.2B |
-| `JITLLM_LLAMACPP_CPU` | `model.TestPostNormDeviceErrorIsAmplification` | a directory holding a CPU-only `llama-perplexity` and its libraries (a CUDA library beside it is loaded and used) | the test skips naming it |
+| `JITLLM_LLAMACPP_CPU` | `model.TestPostNormDeviceErrorIsAmplification`, `model.TestComposedPromptMatchesLlamaCppF32` | a directory holding a CPU-only `llama-perplexity` and its libraries (a CUDA library beside it is loaded and used) | the test skips naming it |
 
 Every other `JITLLM_*` variable a test reads is a knob or an opt-in for a
 measurement, not a model choice.

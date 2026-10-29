@@ -310,6 +310,15 @@ var composedResidue []string
 // arm to a reference take them from here.
 const bandRatio, bandWorst = 1.5, 4.0
 
+// bandFloor is the least distance from the float reference a model of
+// layers blocks is held to, where its tier sits closer: what binary16
+// attention operands alone reach. A block's attention rounds four operands
+// (q, k, the exponentials, v), each a relative variance of u^2/3 (u = 2^-11)
+// at its output, and the blocks add through the residual independently:
+// layers*4*u^2/3, times the attention gate's tail factor of 6
+// (jit's flashTail).
+func bandFloor(layers int) float64 { return 6 * 4 * float64(layers) / 3 / (1 << 22) }
+
 // ssmServed are the state-space models served (servedModels), their
 // prompts a chunk's rows the scan's. A selective update
 // with one decay a head beside attention and an MLP (granite-4.0-h, and
@@ -555,6 +564,8 @@ func TestComposedBlocksServe(t *testing.T) {
 				t.Run(dev, func(t *testing.T) {
 					for g, noGraph := range []bool{false, true} {
 						want, ref := runs[dev][g].want, runs[dev][g].ref
+						floor := bandFloor(m.Cfg.NLayer)
+						wide := max(widest[g], floor)
 						for _, a := range arms {
 							if a.tile > 0 && noGraph {
 								continue
@@ -685,33 +696,33 @@ func TestComposedBlocksServe(t *testing.T) {
 										if math.IsNaN(et) || math.IsNaN(eg) || !(et > 0) {
 											t.Fatalf("step %d: the float reference is %.3g from the tier and %.3g from the arm: a degenerate reference proves nothing", i, et, eg)
 										}
-										ratios = append(ratios, eg/et)
+										ratios = append(ratios, eg/max(et, floor))
 										worstTier, worstGot = max(worstTier, et), max(worstGot, eg)
 									}
 									slices.Sort(ratios)
 									med := ratios[len(ratios)/2]
-									if !(med <= bandRatio) || !(worstGot <= bandWorst*widest[g]) {
+									if !(med <= bandRatio) || !(worstGot <= bandWorst*wide) {
 										t.Errorf("against the float reference the composed %s is %.3g at the median of the tier's distance and %.3g at its worst, where the tier's backends reach %.3g (bounds %.1f and %.1fx)",
-											a.name, med, worstGot, widest[g], bandRatio, bandWorst)
+											a.name, med, worstGot, wide, bandRatio, bandWorst)
 									}
 									t.Logf("composed %s against the float reference: median ratio to the tier's distance %.3f (range %.3f..%.3f), worst %.3g against the tier's %.3g here and %.3g on its widest backend",
-										a.name, med, ratios[0], ratios[len(ratios)-1], worstGot, worstTier, widest[g])
+										a.name, med, ratios[0], ratios[len(ratios)-1], worstGot, worstTier, wide)
 								}
 								{
 									var ratios []float64
 									worstOff := 0.0
 									for i := max(first, 1); i < len(ref); i++ {
 										eg := logitNMSE(got[i-1], ref[i])
-										ratios = append(ratios, eg/logitNMSE(want[i], ref[i]))
+										ratios = append(ratios, eg/max(logitNMSE(want[i], ref[i]), floor))
 										worstOff = max(worstOff, eg)
 									}
 									slices.Sort(ratios)
 									med := ratios[len(ratios)/2]
-									if med <= bandRatio && worstOff <= bandWorst*widest[g] {
+									if med <= bandRatio && worstOff <= bandWorst*wide {
 										t.Errorf("one position off the composed %s is %.3g at the median of the tier's distance and %.3g at its worst, inside the band (%.1f and %.1fx of %.3g): the gate cannot see a wrong part",
-											a.name, med, worstOff, bandRatio, bandWorst, widest[g])
+											a.name, med, worstOff, bandRatio, bandWorst, wide)
 									}
-									t.Logf("one position off the composed %s: median ratio %.3g, worst %.3g against the band's %.3g", a.name, med, worstOff, bandWorst*widest[g])
+									t.Logf("one position off the composed %s: median ratio %.3g, worst %.3g against the band's %.3g", a.name, med, worstOff, bandWorst*wide)
 								}
 								t.Logf("composed %s: %d part steps served, worst NMSE from the tier %.3g, one position off %.3g", a.name, served, worst, off)
 								// A part the composer serves wrong must fall outside the
@@ -726,16 +737,16 @@ func TestComposedBlocksServe(t *testing.T) {
 									worstBad := 0.0
 									for i := first; i < len(ref); i++ {
 										eg := logitNMSE(bad[i], ref[i])
-										ratios = append(ratios, eg/logitNMSE(want[i], ref[i]))
+										ratios = append(ratios, eg/max(logitNMSE(want[i], ref[i]), floor))
 										worstBad = max(worstBad, eg)
 									}
 									slices.Sort(ratios)
 									med := ratios[len(ratios)/2]
-									if med <= bandRatio && worstBad <= bandWorst*widest[g] {
+									if med <= bandRatio && worstBad <= bandWorst*wide {
 										t.Fatalf("with %s the arm is %.3g at the median of the tier's distance and %.3g at its worst, inside the band (%.1f and %.1fx of %.3g): the gate cannot see it",
-											what, med, worstBad, bandRatio, bandWorst, widest[g])
+											what, med, worstBad, bandRatio, bandWorst, wide)
 									}
-									t.Logf("with %s: median ratio %.3g, worst %.3g against the band's %.3g", what, med, worstBad, bandWorst*widest[g])
+									t.Logf("with %s: median ratio %.3g, worst %.3g against the band's %.3g", what, med, worstBad, bandWorst*wide)
 								}
 								// The served tables turn each row by the positions the
 								// State states for it; the gathered row is the token's.
