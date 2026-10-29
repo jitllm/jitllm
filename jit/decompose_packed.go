@@ -204,7 +204,7 @@ func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (
 	facts := Facts{Extents: map[int]int{0: R * nwd}}
 	p := packedOperands(&d, wo, l, rows, K, &in, &facts)
 	per := l.Sub
-	if c.wordCodes(l) {
+	if l.WordCodes() {
 		per = l.Sub / 4
 		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), d.op(OpMul, U, j, d.u(4)))
 		w, _ := jlm.DecodeWord[int](p, l, rows, row, col)

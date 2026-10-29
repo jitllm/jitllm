@@ -606,7 +606,7 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 	p, dr, dw := sheetRow(o, &d, wo, l, &in, &facts, sheet, held, c.Strides[w.Role], row)
 	at := func(col int) int { return d.op(OpAdd, U, d.op(OpMul, U, j, d.u(uint32(stride))), col) }
 	per := l.Sub
-	if c.wordCodes(l) {
+	if l.WordCodes() {
 		per = l.Sub / 4
 		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), d.op(OpMul, U, t, d.u(4)))
 		wq, _ := jlm.DecodeWord[int](p, l, dr, dw, col)
