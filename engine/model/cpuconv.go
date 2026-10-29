@@ -43,7 +43,20 @@ func (s *State) cpuComposeConv(li int, cb *cpuBlock) {
 		workers = s.jit.Workers()
 	}
 	rows := l.mn.hin * l.mn.win
-	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: 32},
+	page := 1
+	if s.kv.layers[li].p > 0 {
+		a := s.nc()
+		if a == nil || a.arena == nil {
+			cb.why = jit.DeclineNoRoom
+			return
+		}
+		page = a.page
+		s.cpuPages(1)
+		if len(s.cpu.rowsTab) < rows*4 {
+			s.cpu.rowsTab = make([]uint32, rows*4)
+		}
+	}
+	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: page, Keys: page, ActWindow: 32},
 		Device: composedCPUDevice(workers), Apart: true}
 	f, err := s.m.cpuFormOf(req, g, rows, true, true, false)
 	if err != nil {
@@ -79,12 +92,37 @@ func (s *State) cpuConvRun(li int) jit.Decline {
 	bd := &s.cpu.bound
 	*bd = cpuBound{li: li, l: l, own: s.cpuOwn(f), n: nin}
 	bd.io[0], bd.io[1] = unsafe.Pointer(&x[0]), unsafe.Pointer(&y[0])
+	if pg := &s.kv.layers[li]; pg.p > 0 {
+		if !s.lendNC(li) {
+			return jit.DeclineNoRoom
+		}
+		defer s.unlend(li)
+		for i := range nin {
+			t := s.cpu.rowsTab[i*4 : i*4+4]
+			t[0], t[1], t[2], t[3] = 0, 0, uint32(pg.p), uint32(i)
+			s.cpuFaultRowWords(t)
+		}
+		bd.kv, bd.pages, bd.rows = pg, s.cpu.pages, s.cpu.rowsTab
+	}
 	s.cpu.call[0] = uint32(nin)
 	for i := range f.codes {
 		s.cpuCall(bd, &f.codes[i])
 	}
 	s.mnHandOver(li, y[:nout*b.cout])
 	return jit.DeclineServes
+}
+
+// mnPages is a convolutional tower's history: an attention block's keys
+// are its key grid's rows, one key head wide; a convolution keeps none.
+func (s *State) mnPages() {
+	for li := s.lo; li < s.hi; li++ {
+		b, pg := s.m.layers[li].mn, &s.kv.layers[li]
+		pg.p, pg.pp = 0, 0
+		if b != nil && b.kind == mnAttention {
+			pg.p = b.hkv * b.wkv
+			pg.pp = pg.p * b.kd
+		}
+	}
 }
 
 // filter is the block's depthwise filter of role r as a weight (f32, its

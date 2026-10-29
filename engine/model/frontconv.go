@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -104,10 +105,6 @@ func (m *Model) convGraph(li int) (*graph.Graph, Uncovered, error) {
 		_, ok := f.Inventory[r]
 		return ok
 	}
-	if has(jlm.RoleVAttnQ) {
-		return nil, UncoveredGridAttend, fmt.Errorf("attends over keys and values of a %dx%d grid from a %dx%d grid's queries",
-			bl.hkv, bl.wkv, bl.hin, bl.win)
-	}
 	act, err := m.container.Vision().Activation(false)
 	if err != nil {
 		return nil, UncoveredAct, err
@@ -135,6 +132,22 @@ func (m *Model) convGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	var y graph.ValueID
 	switch {
+	case has(jlm.RoleVAttnQ) && has(jlm.RoleVAttnK) && has(jlm.RoleVAttnV) && has(jlm.RoleVAttnOut) && has(jlm.RoleVAttnNorm):
+		// Every head reads one key and value head, of a downsampled grid where it holds the filters.
+		xn := b.Norm(x, jlm.RoleVAttnNorm, eps)
+		q := b.MatVec(xn, jlm.RoleVAttnQ, bl.heads*bl.kd)
+		side := func(r, down, norm jlm.Role) graph.ValueID {
+			in := xn
+			if has(down) {
+				in = depthwise(xn, down, norm, bl.kvK, bl.win, 2, bl.hkv, bl.wkv)
+			}
+			return b.MatVec(in, r, bl.kd)
+		}
+		k := side(jlm.RoleVAttnK, jlm.RoleVMNKDown, jlm.RoleVMNKDownNorm)
+		v := side(jlm.RoleVAttnV, jlm.RoleVMNVDown, jlm.RoleVMNVDownNorm)
+		a := b.Attend(q, b.KVAppend(k, v, 0), graph.Attrs{NHead: bl.heads, NKVHead: 1, HeadDim: bl.kd,
+			Scale: 1 / math.Sqrt(float64(bl.kd)), Bidir: true})
+		y = b.MatVec(a, jlm.RoleVAttnOut, bl.cout)
 	case has(jlm.RoleVMNConvExp) && has(jlm.RoleVMNConvPwl) && has(jlm.RoleVMNNorm1) && has(jlm.RoleVMNNorm2):
 		// A full convolution over a window of rows: the window whose rows
 		// of the input's channels the matrix reads, a whole quantization

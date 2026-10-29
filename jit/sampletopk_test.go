@@ -218,16 +218,25 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 			case o.Kind == OperandTable && len(tables[o.Name]) > 0:
 				words = tables[o.Name]
 			case o.Kind == OperandScratch:
-				if scratch[o] == nil {
-					size := 1 << 16
+				// A pair's second head's scratch is the first's at its offset,
+				// as the engine binds it.
+				so := o
+				so.Copy = 0
+				if scratch[so] == nil {
+					size := 0
 					for _, b := range c.Binds {
-						if b.Operand == o && b.Bytes > 0 {
-							size = int(b.Bytes)/4 + 1
+						bo := b.Operand
+						bo.Copy = 0
+						if bo == so && b.Bytes > 0 {
+							size = max(size, int(b.Bytes)/4+1)
 						}
 					}
-					scratch[o] = poison(size)
+					if size == 0 {
+						size = 1 << 16
+					}
+					scratch[so] = poison(size)
 				}
-				words = scratch[o]
+				words = scratch[so]
 			default:
 				code.Close()
 				return fmt.Errorf("%s binds %+v, which the sampler does not provide", c.Name, o)

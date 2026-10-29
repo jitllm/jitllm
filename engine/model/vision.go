@@ -1099,6 +1099,9 @@ func (t *Tower) newState(j *nn.JIT, owned bool) *State {
 	// tile, and the page is the pair every block borrows in turn (lend).
 	s.kvl = kvLayout{maxSeq: n, nKV: c.NKVHead, headDim: c.HeadDim}
 	s.kv = newKVCacheRange(c, nextCacheID(), 1, s.kvl, nil, align(n, kvKeyTile), s.lo, s.hi)
+	if t.mn != nil {
+		s.mnPages()
+	}
 	qDim := c.NHead * c.HeadDim
 	s.attnG = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, s.kvl.Stride(), cpu.KVF32)
 	s.attnL = s.attnG

@@ -1,21 +1,17 @@
 package model
 
-import (
-	"testing"
-
-	"github.com/jitllm/jitllm/jit"
-)
+import "testing"
 
 // TestComposedConvTowerOnCPU is the composed CPU arm of a convolutional
 // tower (Gemma 3n's MobileNet-V5): every block the front end states
 // (frontconv.go) composed for the CPU at its own grid and run over the
-// encode's own buffers, the rest named -- an attention over another grid's
-// keys (UncoveredGridAttend) and nothing else -- and declined by name at
-// the run. Its output is held to main's runner's after ONE block at the
-// composed tower's one-block bound and over the whole encode at the device
-// arm's whole-tower bound, every block's reading logged;
-// a warm composed encode allocates nothing; and the depthwise filters bound
-// transposed must part from the clean encode.
+// encode's own buffers, an attention's keys in the segment's arena. Every
+// block is stated and served. Its output is held to main's runner's after
+// ONE block at the composed tower's one-block bound and over the whole
+// encode at the device arm's whole-tower bound, every block's reading
+// logged; a warm composed encode allocates nothing; and the depthwise
+// filters bound transposed, each query's keys cut by one and each key
+// written a row early must part from the clean encode.
 func TestComposedConvTowerOnCPU(t *testing.T) {
 	ref, _ := openGemma3nV(t)
 	defer ref.Close()
@@ -42,21 +38,20 @@ func TestComposedConvTowerOnCPU(t *testing.T) {
 	m, _ := openGemma3nV(t, WithComposedCPU(true))
 	defer m.Close()
 	tw := m.Tower()
-	stated, why := 0, map[string]int{}
+	stated, attn := 0, 0
 	for i := range c.NLayer {
 		u := m.Uncovered(tw.base + i)
-		switch u {
-		case Covered:
-			stated++
-		case UncoveredGridAttend:
-		default:
+		if u != Covered {
 			t.Fatalf("tower block %d: %s (%v)", i, u, m.UncoveredErr(tw.base+i))
 		}
-		why[u.String()]++
+		stated++
+		if m.layers[tw.base+i].mn.kind == mnAttention {
+			attn++
+		}
 	}
-	t.Logf("%d of %d tower blocks stated: %v", stated, c.NLayer, why)
-	if stated == 0 {
-		t.Fatal("the front end states none of the tower's blocks: the gate proves nothing")
+	t.Logf("%d of %d tower blocks stated, %d of them attention", stated, c.NLayer, attn)
+	if attn == 0 {
+		t.Fatal("the tower states no attention block: the gate proves nothing of one")
 	}
 	s := tw.testState()
 	defer s.Close()
@@ -73,7 +68,7 @@ func TestComposedConvTowerOnCPU(t *testing.T) {
 	out = append([]float32(nil), out...)
 	served, declined := s.CPUBlockSteps()
 	t.Logf("composed CPU tower: %d block runs served, declines %v (form error: %v)", served, nonZero(declined[:]), s.CPUFormErr())
-	if served != stated || declined[jit.DeclineNoGraph] != c.NLayer-stated || served+declined[jit.DeclineNoGraph] != c.NLayer {
+	if served != c.NLayer || len(nonZero(declined[:])) != 0 {
 		t.Fatalf("the CPU served %d of the %d stated blocks, declines %v (form error %v)", served, stated, nonZero(declined[:]), s.CPUFormErr())
 	}
 	if len(got) != len(wantBlocks) {
@@ -106,15 +101,21 @@ func TestComposedConvTowerOnCPU(t *testing.T) {
 	r0 := m.PagerReads()
 	allocVerdict(t, "a warm composed convolutional encode", countAllocs(encode), 1, m.PagerReads()-r0, 0)
 
-	s.cpu.fault = cpuFaultFilterT
-	bad, err := s.Encode(px)
-	s.cpu.fault = cpuFaultNone
-	if err != nil {
-		t.Fatal(err)
-	}
-	nb, _ := nmseOf(bad, out)
-	t.Logf("violation (depthwise filters transposed): NMSE %.3e from the clean composed encode", nb)
-	if !(nb > 1e-4) {
-		t.Fatalf("the gate cannot see the filters transposed: NMSE %.3e", nb)
+	for _, v := range []struct {
+		name  string
+		fault cpuFault
+	}{{"depthwise filters transposed", cpuFaultFilterT}, {"each query's keys cut by one", cpuFaultRow},
+		{"each key written a row early", cpuFaultWrite}} {
+		s.cpu.fault = v.fault
+		bad, err := s.Encode(px)
+		s.cpu.fault = cpuFaultNone
+		if err != nil {
+			t.Fatal(err)
+		}
+		nb, _ := nmseOf(bad, out)
+		t.Logf("violation (%s): NMSE %.3e from the clean composed encode", v.name, nb)
+		if !(nb > 1e-4) {
+			t.Fatalf("the gate cannot see %s: NMSE %.3e", v.name, nb)
+		}
 	}
 }

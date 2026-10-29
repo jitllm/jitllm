@@ -18,9 +18,10 @@ import (
 // runGPUGraph forms nothing: it launches codes, formed from g, on d over x
 // (g's input), every value at rowsOf rows of its width followed by guard
 // words the widest value's most rows deep, F32 weights and vectors bound by
-// role; it returns g's output, or an error where any value's guard was
-// written.
-func runGPUGraph(d backend.Device, codes []jit.Code, g *graph.Graph, rowsOf func(graph.ValueID) int, x []float32, roles map[jlm.Role][]float32) ([]float32, error) {
+// role, tables by name and read back into them; it returns g's output, or
+// an error where any value's guard was written.
+func runGPUGraph(d backend.Device, codes []jit.Code, g *graph.Graph, rowsOf func(graph.ValueID) int, x []float32, roles map[jlm.Role][]float32,
+	tables map[string][]uint32) ([]float32, error) {
 	var kerns []backend.Kernel
 	var bufs []backend.Buf
 	defer func() {
@@ -69,6 +70,7 @@ func runGPUGraph(d backend.Device, codes []jit.Code, g *graph.Graph, rowsOf func
 	}
 	vec := map[jlm.Role]backend.Buf{}
 	own := map[jit.Operand]backend.Buf{}
+	tab := map[string]backend.Buf{}
 	for _, c := range codes {
 		if c.GPU == nil {
 			return nil, fmt.Errorf("%s has no GPU code", c.Name)
@@ -100,6 +102,15 @@ func runGPUGraph(d backend.Device, codes []jit.Code, g *graph.Graph, rowsOf func
 					vec[o.Role] = b
 				}
 				args[i] = b
+			case o.Kind == jit.OperandTable && tables[o.Name] != nil:
+				b, ok := tab[o.Name]
+				if !ok {
+					if b, err = alloc(tables[o.Name]); err != nil {
+						return nil, err
+					}
+					tab[o.Name] = b
+				}
+				args[i] = b
 			case bd.Words != nil || o.Kind == jit.OperandScratch || o.Kind == jit.OperandTable && o.Name == "rows.n":
 				b, ok := own[o]
 				if !ok {
@@ -119,6 +130,15 @@ func runGPUGraph(d backend.Device, codes []jit.Code, g *graph.Graph, rowsOf func
 		}
 		if err := k.Launch(c.Groups, c.GPU.Group[0], args...); err != nil {
 			return nil, fmt.Errorf("launching %s: %w", c.Name, err)
+		}
+	}
+	for name, b := range tab {
+		raw := make([]byte, 4*len(tables[name]))
+		if err := b.Read(raw); err != nil {
+			return nil, err
+		}
+		for i := range tables[name] {
+			tables[name][i] = binary.LittleEndian.Uint32(raw[4*i:])
 		}
 	}
 	read := func(v graph.ValueID) ([]uint32, error) {
@@ -219,7 +239,7 @@ func TestComposedGPUGridRows(t *testing.T) {
 					if err != nil {
 						return nil, err
 					}
-					return runGPUGraph(d, codes, gr, gridRowsOf(gr, step.Rows), x, roles)
+					return runGPUGraph(d, codes, gr, gridRowsOf(gr, step.Rows), x, roles, nil)
 				}
 				got, err := run(jit.Default(), gr)
 				if err != nil {
@@ -315,7 +335,7 @@ func TestComposedGPUUnfold(t *testing.T) {
 					continue
 				}
 				run := func(wt []float32) ([]float32, error) {
-					return runGPUGraph(d, codes, b.G, gridRowsOf(b.G, step.Rows), x, map[jlm.Role][]float32{jlm.RoleVMNConvExp: wt})
+					return runGPUGraph(d, codes, b.G, gridRowsOf(b.G, step.Rows), x, map[jlm.Role][]float32{jlm.RoleVMNConvExp: wt}, nil)
 				}
 				got, err := run(wt)
 				if err != nil {
@@ -348,6 +368,74 @@ func TestComposedGPUUnfold(t *testing.T) {
 				t.Fatalf("%d of %d full convolutions held to the oracle", right, len(jit.GridRowsCases()))
 			}
 			t.Logf("%d full convolutions held to the oracle", right)
+		})
+	}
+}
+
+// TestComposedGPUGridAttend is TestComposedCPUGridAttend on every device
+// backend: MobileNet-V5's attention over a stride-2 grid's keys held to the
+// oracle, the pools poisoned past the key grid, and the append at the query
+// grid's rows seen writing past it.
+func TestComposedGPUGridAttend(t *testing.T) {
+	testlock.GPU(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Fatal("no GPU backend on this host: the gate proved nothing")
+	}
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			dev := gpuDevice(d)
+			rng := rand.New(rand.NewSource(43))
+			right, seen := 0, 0
+			for _, g := range jit.GridAttendCases() {
+				gr, err := jit.GridAttendGraph(g)
+				if err != nil {
+					t.Fatalf("%v: %v", g, err)
+				}
+				roles, x, want := jit.GridAttendData(g, rng)
+				n, m := g.H*g.W, g.Out()
+				if g.S == 1 {
+					m = n
+				}
+				step := jit.Step{Rows: n, Page: m, Keys: m}
+				run := func(r *jit.Registry) ([]float32, map[string][]uint32, error) {
+					_, codes, err := r.Form(jit.Request{Graph: gr, Formats: jit.GridAttendFormats(), Step: step, Device: dev})
+					if err != nil {
+						return nil, nil, err
+					}
+					tabs := jit.GridAttendTables(g, m, n+m)
+					got, err := runGPUGraph(d, codes, gr, gridRowsOf(gr, n), x, roles, tabs)
+					return got, tabs, err
+				}
+				got, tabs, err := run(jit.Default())
+				if err != nil {
+					t.Errorf("%v: %v", g, err)
+					continue
+				}
+				if e := gpuNMSE(got, want); math.IsNaN(e) || !(e < 1e-7) {
+					t.Errorf("%v: NMSE %.3e against the oracle", g, e)
+					continue
+				}
+				if w := jit.PoolWrittenPast(tabs, m*g.KD); w >= 0 {
+					t.Errorf("%v: the key pool written at word %d, past the key grid's %d rows", g, w, m)
+					continue
+				}
+				right++
+				if g.S == 1 {
+					continue
+				}
+				if _, tabs, err = run(jit.Misrowed(jit.Default(), graph.OpKVAppend, n)); err != nil || jit.PoolWrittenPast(tabs, m*g.KD) >= 0 {
+					seen++
+				}
+			}
+			t.Logf("%d of %d grids' attention held to the oracle; the append at the query grid's rows seen at %d", right, len(jit.GridAttendCases()), seen)
+			if right != len(jit.GridAttendCases()) {
+				t.Fatalf("%d of %d grids' attention held to the oracle", right, len(jit.GridAttendCases()))
+			}
+			if seen == 0 {
+				t.Fatal("the append at the query grid's rows is seen at no grid: the gate cannot see it")
+			}
 		})
 	}
 }
