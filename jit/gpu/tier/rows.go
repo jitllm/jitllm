@@ -1397,16 +1397,6 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 	return mv{}, false
 }
 
-// voltaTiles are GemmVolta's blockings, widest first. All are four warps
-// (runBatched launches 128-thread workgroups), all four along the tokens: a
-// 2x2 warp grid dequantizes twice the weights per MMA and measured slower on a
-// Volta-class card. The 96-row tiles serve matrices no 128-row block divides
-// (gpt-oss's 2880 rows).
-var voltaTiles = []kernels.VoltaTile{
-	{MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 4, NT: 2, WM: 1, WN: 4}, {MT: 4, NT: 1, WM: 1, WN: 4},
-	{MT: 3, NT: 4, WM: 1, WN: 4}, {MT: 3, NT: 2, WM: 1, WN: 4},
-}
-
 // voltaGemm is m's batched twin as kernels.GemmVolta, the shared-memory-staged
 // form of MatVecMMA70, with the ActF16T conversion it reads; false where no
 // tile divides the shape, and voltaMV then takes MatVecMMA70.
@@ -1414,11 +1404,11 @@ var voltaTiles = []kernels.VoltaTile{
 // k is staged 32 elements a trip (one sub-block of a 32-element format, two of
 // Q6_K's 16): four 16-byte chunks a row, the width the swizzle is built for,
 // keeping a double-buffered 128x128 block at 32 KiB. k is split only where the
-// grid is thin (kb0Split); a well-filled grid is fastest unsplit.
+// grid is thin (kernels.VoltaSplit); a well-filled grid is fastest unsplit.
 func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
-	if bm, ok := g.stagedGemm(m, ntok, voltaTiles, 0, 0); ok || !kernels.IsFloat(m.q) {
+	if bm, ok := g.stagedGemm(m, ntok, kernels.VoltaTiles(), 0, 0); ok || !kernels.IsFloat(m.q) {
 		return bm, ok
 	}
 	// A float weight has no MatVecMMA70 behind this, so a row count no 96-
@@ -1427,7 +1417,7 @@ func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
 }
 
 // voltaTiles64 are GemmVolta's 64-row blockings, for the float shapes
-// voltaTiles leave to a slower kernel.
+// kernels.VoltaTiles leave to a slower kernel.
 var voltaTiles64 = []kernels.VoltaTile{{MT: 2, NT: 4, WM: 1, WN: 4}, {MT: 2, NT: 2, WM: 1, WN: 4}}
 
 // f16Tiles are GemmVolta's m16n8 blockings, widest first: four warps as 2x2,
@@ -1489,7 +1479,7 @@ func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
 	// workgroup). The card decides it, not the shape: the 128x64 block gives
 	// a 1024x1024 projection at 512 rows 64 workgroups, three an SM of an
 	// RTX 3050 Ti's 20 and fewer than one an SM of a 142-SM card. The bar is
-	// sm_70's measured one (kb0Split: a V100's 128-row blocks were fastest
+	// sm_70's measured one (kernels.VoltaSplit: a V100's 128-row blocks were fastest
 	// unsplit from 64 workgroups on 80 SMs), not full residency: a staged
 	// block's shared memory holds an SM to a few of them anyway.
 	deep := g.Config.GemmDeep
@@ -1796,7 +1786,7 @@ func fillSplit(trips, threads, fill int) int {
 // the shape and compiles, with instruction f16k (VoltaTile.F16K). With fill
 // > 0 the tile and split are chosen for a grid of at least fill threads
 // (fillTile, fillSplit) and the others are the fallbacks; with 0, tiles'
-// order and kb0Split decide. Callers hold g.mu.
+// order and kernels.VoltaSplit decide. Callers hold g.mu.
 func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k, fill int) (mv, bool) {
 	sub, _, _, _ := kernels.Layout(m.q)
 	kbN := max(32/sub, 1)
@@ -1821,7 +1811,7 @@ func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k, fi
 			continue
 		}
 		groups := (m.rows / tl.Rows()) * (ntok / tl.Toks())
-		split := kb0Split(m.k/sub/kbN, groups)
+		split := kernels.VoltaSplit(m.k/sub/kbN, groups)
 		if fill > 0 {
 			split = fillSplit(m.k/sub/kbN, groups*tl.Threads(), fill)
 		}
@@ -1894,17 +1884,6 @@ func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k, fi
 		return out, true
 	}
 	return mv{}, false
-}
-
-// kb0Split is GemmVolta's k-split for a grid of groups workgroups over trips
-// k-trips: doubled while under 64 workgroups (an 80-SM Volta card holds two
-// of these an SM) and while the halves still divide the trips.
-func kb0Split(trips, groups int) int {
-	split := 1
-	for groups*split < 64 && trips%(2*split) == 0 && split < 8 {
-		split *= 2
-	}
-	return split
 }
 
 // prepRagLinear builds bs's linear-block kernels for a step of n rows, once per

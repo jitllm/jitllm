@@ -43,6 +43,29 @@ func (t VoltaTile) Toks() int { return t.WN * t.NT * 8 }
 // Threads is the workgroup width.
 func (t VoltaTile) Threads() int { return 32 * t.WM * t.WN }
 
+// VoltaTiles are GemmVolta's blockings, widest first. All are four warps
+// (runBatched launches 128-thread workgroups), all four along the tokens: a
+// 2x2 warp grid dequantizes twice the weights per MMA and measured slower on a
+// Volta-class card. The 96-row tiles serve matrices no 128-row block divides
+// (gpt-oss's 2880 rows).
+func VoltaTiles() []VoltaTile {
+	return []VoltaTile{
+		{MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 4, NT: 2, WM: 1, WN: 4}, {MT: 4, NT: 1, WM: 1, WN: 4},
+		{MT: 3, NT: 4, WM: 1, WN: 4}, {MT: 3, NT: 2, WM: 1, WN: 4},
+	}
+}
+
+// VoltaSplit is GemmVolta's k-split for a grid of groups workgroups over
+// trips k-trips: doubled while under 64 workgroups (an 80-SM Volta card holds
+// two of these an SM) and while the halves still divide the trips.
+func VoltaSplit(trips, groups int) int {
+	split := 1
+	for groups*split < 64 && trips%(2*split) == 0 && split < 8 {
+		split *= 2
+	}
+	return split
+}
+
 // GemmVoltaGroups is how many workgroups GemmVolta launches for a shape. A
 // grouped shape launches GemmVoltaGrouped(s, t, used) instead.
 func GemmVoltaGroups(s MatVecShape, t VoltaTile) int {

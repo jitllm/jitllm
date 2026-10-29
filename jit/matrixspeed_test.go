@@ -19,19 +19,18 @@ import (
 	"github.com/jitllm/jitllm/internal/testlock"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // BenchmarkComposedMatrix times the composer's projection on the matrix unit
 // at each form JITLLM_MATRIX_SHAPES lists (the profile's alone without it)
-// against main's staged GEMM (kernels.GemmVolta at the tile and k split the
-// tier ships for the shape, its partials' sum not timed), on the projection
+// against main as it ships (kernels.GemmVolta at the tier's blocking and k
+// split, timed with its activations' conversion and its partials' sum), on the projection
 // shapes of the models JITLLM_MATRIX_MODELS names (matrixModels; Llama-3.1-8B
 // without it) at JITLLM_MATRIX_ROWS rows (512 without it), on every CUDA
 // device. Each round launches main, every form, then main again: a form's
 // figure is the median of its per-round ratios to the mean of main's two,
-// and main's second over its first is the A/A. Main's arm reads binary16
-// activations a kernel before it wrote, which it does not time; the
-// composer's reads the float rows. It runs its own rounds:
+// and main's second over its first is the A/A. It runs its own rounds:
 //
 //	go test ./jit -run '^$' -bench ComposedMatrix -benchtime 1x
 func BenchmarkComposedMatrix(t *testing.B) {
@@ -203,35 +202,70 @@ func timeMatrixShape(t *testing.B, d backend.Device, dev jit.Device, model strin
 			}
 		}
 	}
-	// Main's shipping tile: the first of the tier's blockings (voltaTiles)
-	// that compiles, k split where its grid is thin.
-	split := 1
-	if sh.n <= 1024 {
-		split = 2
-	}
+	// Main as it ships: the tier's first blocking that divides the shape and
+	// compiles unspilled, k split by its rule, its activations' conversion
+	// before and its partials' sum after.
 	sub, _, _, _ := kernels.Layout(q)
-	s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.n, NTok: R, Split: split}
+	kbN := max(32/sub, 1)
+	var s kernels.MatVecShape
 	var tl kernels.VoltaTile
-	var mainKern backend.Kernel
-	for _, c := range []kernels.VoltaTile{{MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 4, NT: 2, WM: 1, WN: 4}, {MT: 4, NT: 1, WM: 1, WN: 4}} {
-		c.KB = max(32/sub, 1)
-		mk, err := kernels.GemmVolta(s, c)
+	var mainKern, actKern, redKern backend.Kernel
+	for _, c := range kernels.VoltaTiles() {
+		c.KB = kbN
+		if sh.n%c.Rows() != 0 || R%c.Toks() != 0 {
+			continue
+		}
+		cs := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.n, NTok: R, Split: kernels.VoltaSplit(sh.k/sub/kbN, sh.n/c.Rows()*(R/c.Toks()))}
+		mk, err := kernels.GemmVolta(cs, c)
 		if err != nil {
 			continue
 		}
-		if mainKern, err = d.Compile(mk); err == nil {
-			tl = c
-			break
+		k, err := d.Compile(mk)
+		if err != nil {
+			continue
 		}
+		if r, ok := backend.KernelResourcesOf(k); ok && r.SpillBytes > 0 {
+			k.Close()
+			continue
+		}
+		mainKern, tl, s = k, c, cs
+		break
 	}
 	if len(arms) == 0 {
 		t.Fatalf("%s %s: no form compiles", model, sh.what)
 	}
+	compile := func(k *ir.Kernel, err error) backend.Kernel {
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := d.Compile(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	split := max(s.Split, 1)
 	act16 := up(make([]uint32, R*sh.k/2))
 	mainOut := up(make([]uint32, R*sh.n*split))
+	if mainKern != nil {
+		actKern = compile(kernels.ActF16T(q, R, sh.k))
+		defer actKern.Close()
+		if split > 1 {
+			redKern = compile(kernels.Reduce(sh.n*R, split))
+			defer redKern.Close()
+		}
+	}
 	mainArm := func() {
+		if err := actKern.Launch((R*sh.k/sub+127)/128, 128, xBuf, act16); err != nil {
+			t.Fatal(err)
+		}
 		if err := mainKern.Launch(kernels.GemmVoltaGroups(s, tl), tl.Threads(), planes[0], planes[1], planes[2], act16, mainOut); err != nil {
 			t.Fatal(err)
+		}
+		if redKern != nil {
+			if err := redKern.Launch((sh.n*R+127)/128, 128, mainOut, outBuf); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if mainKern == nil {
@@ -276,7 +310,7 @@ func timeMatrixShape(t *testing.B, d backend.Device, dev jit.Device, model strin
 	}
 	mm, _ := mid(mu)
 	am, ai := mid(aa)
-	t.Logf("%s %s %s %v %dx%d rows %d: main %+v %.1f us, A/A %.3f (IQR/median %.3f)", d.Name(), model, sh.what, sh.typ, sh.n, sh.k, R, tl, mm, am, ai)
+	t.Logf("%s %s %s %v %dx%d rows %d: main %+v split %d %.1f us, A/A %.3f (IQR/median %.3f)", d.Name(), model, sh.what, sh.typ, sh.n, sh.k, R, tl, split, mm, am, ai)
 	for i, a := range arms {
 		c, _ := mid(us[i])
 		r, ri := mid(ratio[i])
