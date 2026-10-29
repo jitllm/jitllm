@@ -37,30 +37,37 @@ import (
 // threads and workgroup memory fit it: one's barrier is another's issue.
 // Tiles is the other forms the device's model weighs per projection
 // (cost); Latency is a round of a unit's resident workgroups' fixed cost and
-// Decode a weight row's staging, each in products of one output element.
+// Decode a weight row's staging, each in products of one output element a
+// k. Where the workgroups leave units idle, k is cut into Split segments
+// (splits): each writes its sums to planes, and a combine sums them and
+// stores, at Launch for its launch and Plane a word it moves on one unit.
 type Matrix struct {
 	Rows, Cols, Depth int
 	Warps             [2]int
 	Resident          int
+	Split             int
 	Tiles             []MatrixTile
 	Latency, Decode   int
+	Launch, Plane     int
 }
 
 // MatrixTile is one form of Matrix: a workgroup's rows, outputs and warps,
-// the elements of k a trip stages, and the workgroups a unit holds.
+// the elements of k a trip stages, the workgroups a unit holds, and the
+// segments k is cut in (0: the model's).
 type MatrixTile struct {
 	Rows, Cols, Depth int
 	Warps             [2]int
 	Resident          int
+	Split             int
 }
 
 // Tile is p's own form.
 func (p Matrix) Tile() MatrixTile {
-	return MatrixTile{Rows: p.Rows, Cols: p.Cols, Depth: p.Depth, Warps: p.Warps, Resident: p.Resident}
+	return MatrixTile{Rows: p.Rows, Cols: p.Cols, Depth: p.Depth, Warps: p.Warps, Resident: p.Resident, Split: p.Split}
 }
 
 func (p Matrix) with(t MatrixTile) Matrix {
-	p.Rows, p.Cols, p.Depth, p.Warps, p.Resident = t.Rows, t.Cols, t.Depth, t.Warps, t.Resident
+	p.Rows, p.Cols, p.Depth, p.Warps, p.Resident, p.Split = t.Rows, t.Cols, t.Depth, t.Warps, t.Resident, t.Split
 	return p
 }
 
@@ -83,22 +90,44 @@ func (p Matrix) chosen(k *Kernel, d Device) Matrix {
 			}
 			continue
 		}
-		if c := q.cost(k.Space[0], k.Space[1], f.depth, d); i == 0 || c < least {
+		if _, c := q.splits(k, f.depth, d); i == 0 || c < least {
 			best, least = q, c
 		}
 	}
 	return best
 }
 
-// cost is the model's time for R rows by N outputs at p: each unit runs its
-// share of the workgroups in rounds of those it holds at once, which share
-// its matrix unit, a round paying Latency besides their products and the
-// weight rows they decode.
-func (p Matrix) cost(R, N, depth int, d Device) int {
-	groups := (R + p.Rows - 1) / p.Rows * ((N + p.Cols - 1) / p.Cols)
+// cost is the model's time for R rows by N outputs over K at p, k cut in S
+// segments: each unit runs its share of the workgroups in rounds of those it
+// holds at once, which share its matrix unit, a round paying Latency besides
+// their products and the weight rows they decode, a k; and a cut's combine
+// its launch and the planes' words, written and read, and the sums'.
+func (p Matrix) cost(R, N, K, S, depth int, d Device) int {
+	groups := (R + p.Rows - 1) / p.Rows * ((N + p.Cols - 1) / p.Cols) * S
 	share := (groups + d.Units - 1) / d.Units
 	held := min(share, p.resident(depth, d))
-	return (share + held - 1) / held * (p.Latency + held*(p.Rows*p.Cols+p.Decode*p.Cols))
+	c := (share + held - 1) / held * (p.Latency + held*(p.Rows*p.Cols+p.Decode*p.Cols)) * (K / S)
+	if S > 1 {
+		c += p.Launch + p.Plane*(2*S+1)*R*N/d.Units
+	}
+	return c
+}
+
+// splits is the segments k of k is cut in at p, and the model's cost: the
+// tile's where it states them, else the least costly of the powers of two
+// leaving each segment two trips or more.
+func (p Matrix) splits(k *Kernel, depth int, d Device) (int, int) {
+	R, N, K := k.Space[0], k.Space[1], k.Loops[0].Trip
+	if p.Split > 0 {
+		return p.Split, p.cost(R, N, K, p.Split, depth, d)
+	}
+	best, least := 1, p.cost(R, N, K, 1, depth, d)
+	for S := 2; p.Plane > 0 && K%(depth*S) == 0 && K/(depth*S) >= 2; S *= 2 {
+		if c := p.cost(R, N, K, S, depth, d); c < least {
+			best, least = S, c
+		}
+	}
+	return best, least
 }
 
 // resident is the workgroups of p a unit holds at once on d: p.Resident
@@ -149,6 +178,14 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		if d.Shared > 0 && 4*matrixStage(q.Rows, q.Cols, f.depth, q.Warps[0], d) > d.Shared {
 			return nil, false, nil
+		}
+		switch {
+		case q.Split > 0 && k.Loops[0].Trip%(f.depth*q.Split) != 0:
+			q.Split = 1
+		case q.Split == 0 && d.Units > 0:
+			q.Split, _ = q.splits(k, f.depth, d)
+		case q.Split == 0:
+			q.Split = 1
 		}
 		return q.form(k, d, f, made), true, nil
 	})
@@ -388,7 +425,8 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	m.Name, m.Kind = k.Name+".matrix", PrimMatrix
 	m.Matrix = [2]int{N, k.Loops[0].Trip}
 	m.Nodes, m.Loops, m.Stores, m.Rows = nil, nil, nil, 0
-	m.Space = []int{(R + TR - 1) / TR, (N + TN - 1) / TN}
+	S, NB := max(p.Split, 1), (N+TN-1)/TN
+	m.Space = []int{(R + TR - 1) / TR, NB * S}
 	m.Work, m.Group = true, 32*WR*WN
 	shared := func(name string, e ir.Type, n int) int {
 		return m.buf(Buf{Kind: BufShared, Elem: e, Size: n, Operand: Operand{Kind: OperandScratch, Name: k.Name + "." + name}})
@@ -421,7 +459,13 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	}
 	lastOut := m.u32(N - 1)
 	r0 := m.bin(OpMul, U, m.add(Node{Op: OpCoord, A: 0, Type: U}), m.u32(TR))
-	n0 := m.bin(OpMul, U, m.add(Node{Op: OpCoord, A: 1, Type: U}), m.u32(TN))
+	c1 := m.add(Node{Op: OpCoord, A: 1, Type: U})
+	T := k.Loops[0].Trip / KC / S
+	n0, k0 := m.bin(OpMul, U, c1, m.u32(TN)), m.u32(0)
+	if S > 1 {
+		n0 = m.bin(OpMul, U, m.bin(OpRem, U, c1, m.u32(NB)), m.u32(TN))
+		k0 = m.bin(OpMul, U, m.bin(OpDiv, U, c1, m.u32(NB)), m.u32(T*KC))
+	}
 	thread := m.add(Node{Op: OpThread, Type: U})
 	warp := m.bin(OpShr, U, thread, m.u32(5))
 	wr0 := m.bin(OpMul, U, m.bin(OpDiv, U, warp, m.u32(WN)), m.u32(TR/WR))
@@ -511,9 +555,8 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 			}
 		}
 	}
-	T := k.Loops[0].Trip / KC
-	stage(-1, m.u32(0), m.u32(0), TR, 0, r0, last, f.row)
-	stage(-1, m.u32(0), m.u32(bAt), TN, 1, n0, lastOut, f.out)
+	stage(-1, k0, m.u32(0), TR, 0, r0, last, f.row)
+	stage(-1, k0, m.u32(bAt), TN, 1, n0, lastOut, f.out)
 	m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
 	P := m.loop(T, -1)
 	m.Loops[P].Uniform = true
@@ -526,17 +569,37 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	}
 	it := m.add(Node{Op: OpIter, At: P, Type: U})
 	next := m.bin(OpAdd, U, it, m.u32(1))
-	kn := m.bin(OpMul, U, m.bin(OpMin, U, next, m.u32(T-1)), m.u32(KC))
+	kn := m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpMin, U, next, m.u32(T-1)), m.u32(KC)), k0)
 	into := m.bin(OpMul, U, m.bin(OpAnd, U, next, m.u32(1)), m.u32(half))
 	stage(P, kn, into, TR, 0, r0, last, f.row)
 	stage(P, kn, m.bin(OpAdd, U, into, m.u32(bAt)), TN, 1, n0, lastOut, f.out)
 	m.Stores = append(m.Stores, Store{Barrier: true, At: P})
-	if frag {
-		p.fragments(m, k, f, st, P, it, half, bAt, r0, n0, last, lastOut, wr0, wn0, thread)
-		if h == nil {
-			return []*Kernel{m}
+	// emit is k's stores of sum at row r and output n, in loop at; or
+	// where k is cut, the sum to its segment's plane.
+	var planes Operand
+	pb := -1
+	if S > 1 {
+		out := k.Bufs[k.Stores[0].Buf].Operand
+		planes = Operand{Kind: OperandScratch, Name: out.Name + ".segments", Of: out.Of}
+		pb = m.buf(Buf{Kind: BufOut, Elem: F, Operand: planes, Shape: []int{S, R, N}})
+	}
+	emit := func(r, n, sum, at int) {
+		if pb >= 0 {
+			m.Stores = append(m.Stores, Store{Buf: pb, Val: sum, At: at, Ax: []int{m.bin(OpDiv, U, c1, m.u32(NB)), r, n}})
+			return
 		}
-		return []*Kernel{h, m}
+		k.storesOf(m, f.fold, r, n, sum, at)
+	}
+	formed := []*Kernel{m}
+	if h != nil {
+		formed = []*Kernel{h, m}
+	}
+	if S > 1 {
+		formed = append(formed, combine(k, planes, S))
+	}
+	if frag {
+		p.fragments(m, f, st, P, it, half, bAt, r0, n0, last, lastOut, wr0, wn0, thread, emit)
+		return formed
 	}
 	// from is the stage trip t multiplies, in binary16 elements.
 	from := m.bin(OpMul, U, m.bin(OpAnd, U, it, m.u32(1)), m.u32(2*half))
@@ -598,36 +661,59 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 		row := m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpDiv, U, lr, m.u32(tm)), m.u32(TR/WR)), m.bin(OpAdd, U, m.bin(OpRem, U, lr, m.u32(tm)), m.u32(i*tm)))
 		r := m.bin(OpMin, U, m.bin(OpAdd, U, r0, row), last)
 		n := m.bin(OpMin, U, m.bin(OpAdd, U, n0, m.bin(OpRem, U, e, m.u32(TN))), lastOut)
-		sum := m.add(Node{Op: OpLoad, Type: F, Buf: st, A: e})
-		leaf := func(i int, nd Node) (int, bool) {
-			switch {
-			case i == f.fold:
-				return sum, true
-			case nd.Op == OpCoord && nd.A == 0:
-				return r, true
-			case nd.Op == OpCoord && nd.A == 1:
-				return n, true
-			}
-			return 0, false
-		}
-		for _, s := range k.Stores {
-			c := s
-			c.At = E
-			c.Val = copyInto(m, k, s.Val, leaf)
-			if s.Ax == nil {
-				c.Ix = copyInto(m, k, s.Ix, leaf)
-			}
-			c.Ax = make([]int, len(s.Ax))
-			for x, ax := range s.Ax {
-				c.Ax[x] = copyInto(m, k, ax, leaf)
-			}
-			m.Stores = append(m.Stores, c)
-		}
+		emit(r, n, m.add(Node{Op: OpLoad, Type: F, Buf: st, A: e}), E)
 	}
-	if h == nil {
-		return []*Kernel{m}
+	return formed
+}
+
+// storesOf copies k's stores into m at row r and output n, the value of
+// k's fold the sum, in loop at.
+func (k *Kernel) storesOf(m *Kernel, fold, r, n, sum, at int) {
+	leaf := func(i int, nd Node) (int, bool) {
+		switch {
+		case i == fold:
+			return sum, true
+		case nd.Op == OpCoord && nd.A == 0:
+			return r, true
+		case nd.Op == OpCoord && nd.A == 1:
+			return n, true
+		}
+		return 0, false
 	}
-	return []*Kernel{h, m}
+	for _, s := range k.Stores {
+		c := s
+		c.At = at
+		c.Val = copyInto(m, k, s.Val, leaf)
+		if s.Ax == nil {
+			c.Ix = copyInto(m, k, s.Ix, leaf)
+		}
+		c.Ax = make([]int, len(s.Ax))
+		for x, ax := range s.Ax {
+			c.Ax[x] = copyInto(m, k, ax, leaf)
+		}
+		m.Stores = append(m.Stores, c)
+	}
+}
+
+// combine is k's stores of the sum of S planes of its sums, in order: a
+// map, which no later pass cuts again.
+func combine(k *Kernel, planes Operand, S int) *Kernel {
+	U, F := ir.U32, ir.F32
+	R, N := k.Space[0], k.Space[1]
+	c := k.clone()
+	c.Name, c.Kind, c.Nodes, c.Loops, c.Stores, c.Rows = k.Name+".combine", PrimMap, nil, nil, nil, 0
+	if k.Rows > 0 {
+		c.Rows = copyInto(c, k, k.Rows-1, func(int, Node) (int, bool) { return 0, false }) + 1
+	}
+	r := c.add(Node{Op: OpCoord, A: 0, Type: U})
+	n := c.add(Node{Op: OpCoord, A: 1, Type: U})
+	in := c.buf(Buf{Kind: BufIn, Elem: F, Operand: planes, Shape: []int{S, R, N}})
+	sum := c.add(Node{Op: OpLoad, Type: F, Buf: in, Ax: []int{c.u32(0), r, n}})
+	for s := 1; s < S; s++ {
+		sum = c.bin(OpAdd, F, sum, c.add(Node{Op: OpLoad, Type: F, Buf: in, Ax: []int{c.u32(s), r, n}}))
+	}
+	k.storesOf(c, k.foldsOf(0)[0], r, n, sum, -1)
+	return c
 }
 
 // swizzle is what a row xors its 16-byte chunk index with, so the rows one
@@ -645,7 +731,7 @@ func (m *Kernel) swizzle(row, chunks int) int {
 
 // fragments is form's trips and sums on ir.MMAVolta: blocks of 16 x 16,
 // quad-pair q taking quarter (q>>1, q&1), the sums through the stage.
-func (p Matrix) fragments(m, k *Kernel, f bilinear, st, P, it, half, bAt, r0, n0, last, lastOut, wr0, wn0, thread int) {
+func (p Matrix) fragments(m *Kernel, f bilinear, st, P, it, half, bAt, r0, n0, last, lastOut, wr0, wn0, thread int, emit func(r, n, sum, at int)) {
 	U, F := ir.U32, ir.F32
 	TR, TN, KC := p.Rows, p.Cols, f.depth
 	WR, WN := p.Warps[0], p.Warps[1]
@@ -709,33 +795,6 @@ func (p Matrix) fragments(m, k *Kernel, f bilinear, st, P, it, half, bAt, r0, n0
 			for x, fd := range folds[i][j] {
 				m.Nodes[fd].A = acc[i][j][x]
 			}
-		}
-	}
-	// emit is k's stores of sum at row r and output n, in loop at.
-	emit := func(r, n, sum, at int) {
-		leaf := func(ix int, nd Node) (int, bool) {
-			switch {
-			case ix == f.fold:
-				return sum, true
-			case nd.Op == OpCoord && nd.A == 0:
-				return r, true
-			case nd.Op == OpCoord && nd.A == 1:
-				return n, true
-			}
-			return 0, false
-		}
-		for _, s := range k.Stores {
-			c := s
-			c.At = at
-			c.Val = copyInto(m, k, s.Val, leaf)
-			if s.Ax == nil {
-				c.Ix = copyInto(m, k, s.Ix, leaf)
-			}
-			c.Ax = make([]int, len(s.Ax))
-			for x, ax := range s.Ax {
-				c.Ax[x] = copyInto(m, k, ax, leaf)
-			}
-			m.Stores = append(m.Stores, c)
 		}
 	}
 	dr := m.bin(OpOr, U, m.bin(OpAnd, U, lane, m.u32(9)), m.bin(OpAnd, U, m.bin(OpShr, U, lane, m.u32(2)), m.u32(4)))

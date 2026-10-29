@@ -98,7 +98,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 			ran := 0
 			for _, typ := range formats {
 				for _, sh := range []struct{ n, k int }{{100, 256}, {1056, 512}, {160, 2048}} {
-					for _, tile := range gpuMatrixTiles() {
+					for _, tile := range splitTiles(gpuMatrixTiles()) {
 						n, k := sh.n, sh.k
 						td := dev
 						td.Tile = tile
@@ -222,12 +222,24 @@ func gpuMatrixTiles() []jit.MatrixTile {
 	return nil
 }
 
+// splitTiles is each tile with k whole and cut in four.
+func splitTiles(tiles []jit.MatrixTile) []jit.MatrixTile {
+	var out []jit.MatrixTile
+	for _, t := range tiles {
+		for _, s := range []int{1, 4} {
+			t.Split = s
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // formedAtTile is whether c, a matrix kernel over capacity rows by n
-// outputs, holds tile's workgroups: its rows and warps along them halved
-// where the device's workgroup memory takes fewer.
+// outputs, holds tile's workgroups, k cut in its segments: its rows and
+// warps along them halved where the device's workgroup memory takes fewer.
 func formedAtTile(c jit.Code, t jit.MatrixTile, capacity, n int) bool {
 	for rows, wr := t.Rows, t.Warps[0]; wr >= 1; rows, wr = rows/2, wr/2 {
-		if c.GPU.Group[0] == 32*wr*t.Warps[1] && c.Groups == (capacity+rows-1)/rows*((n+t.Cols-1)/t.Cols) {
+		if c.GPU.Group[0] == 32*wr*t.Warps[1] && c.Groups == (capacity+rows-1)/rows*((n+t.Cols-1)/t.Cols)*max(t.Split, 1) {
 			return true
 		}
 	}

@@ -11,25 +11,28 @@ import (
 
 // TestMatrixTileFollowsTheModel forms projections at a 512-row prompt chunk
 // for a V100's stated units, threads and workgroup memory, and holds each
-// matrix kernel to the tile the device's model costs least: a grid too thin
-// to fill the units takes narrower workgroups, a wide one takes the
-// profile's widest warp tile, at the depth of k its registers hold, and a
-// forced tile (Device.Tile) is the one formed whatever the model says.
+// matrix kernel to the tile and the cut of k the device's model costs least:
+// a grid too thin to fill the units cuts k, a wide one takes the profile's
+// widest warp tile whole, at the depth of k its registers hold, and a forced
+// tile (Device.Tile) is the one formed whatever the model says, its cut the
+// model's unless it states one.
 func TestMatrixTileFollowsTheModel(t *testing.T) {
 	dev := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, Shared: 96 << 10, Matrix: [3]int{16, 16, 16}}
 	tiles := gpuMatrixTiles()
 	own, narrow := tiles[0], jit.MatrixTile{Rows: 128, Cols: 32, Depth: 32, Warps: [2]int{4, 1}, Resident: 2}
+	cut := func(t jit.MatrixTile, s int) jit.MatrixTile { t.Split = s; return t }
 	wide := jit.MatrixTile{Rows: 128, Cols: 128, Depth: 32, Warps: [2]int{2, 2}, Resident: 2}
 	for _, c := range []struct {
 		n, k  int
 		force jit.MatrixTile
 		want  jit.MatrixTile
 	}{
-		{512, 2048, jit.MatrixTile{}, narrow},
-		{128, 2048, jit.MatrixTile{}, narrow},
+		{512, 2048, jit.MatrixTile{}, cut(own, 4)},
+		{128, 2048, jit.MatrixTile{}, cut(own, 8)},
 		{4096, 4096, jit.MatrixTile{}, wide},
 		{14336, 4096, jit.MatrixTile{}, wide},
-		{512, 2048, own, own},
+		{512, 2048, own, cut(own, 4)},
+		{512, 2048, cut(narrow, 1), cut(narrow, 1)},
 		{4096, 4096, narrow, narrow},
 	} {
 		d := dev

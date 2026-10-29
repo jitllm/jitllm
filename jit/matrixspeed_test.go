@@ -2,6 +2,7 @@ package jit_test
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -280,21 +281,34 @@ func timeMatrixShape(t *testing.B, d backend.Device, dev jit.Device, model strin
 		c, _ := mid(us[i])
 		r, ri := mid(ratio[i])
 		var mat [2]int
-		var regs, spill, shared int
+		var regs, spill, shared, groups int
 		for ci, cd := range a.codes {
 			if cd.Matrix != [2]int{} {
-				mat = cd.Matrix
+				mat, groups = cd.Matrix, cd.Groups
 				if rs, ok := backend.KernelResourcesOf(a.op.kerns[ci]); ok {
 					regs, spill, shared = rs.Regs, rs.SpillBytes, rs.SharedBytes
 				}
 			}
 		}
-		t.Logf("  %v shape %v regs %d spill %d shared %d: %.1f us, composed/main %.3f (IQR/median %.3f)", a.mx.Tile(), mat, regs, spill, shared, c, r, ri)
+		var each []string
+		for ci, cd := range a.codes {
+			var ts []float64
+			for range rounds / 2 {
+				ts = append(ts, time1(func() {
+					if err := a.op.kerns[ci].Launch(cd.LiveGroups(R), cd.GPU.Group[0], a.args[ci]...); err != nil {
+						t.Fatal(err)
+					}
+				}))
+			}
+			m, _ := mid(ts)
+			each = append(each, fmt.Sprintf("%s %.1f", cd.Name, m))
+		}
+		t.Logf("  %v shape %v %d workgroups, regs %d spill %d shared %d: %.1f us, composed/main %.3f (IQR/median %.3f); us each: %s", a.mx.Tile(), mat, groups, regs, spill, shared, c, r, ri, strings.Join(each, ", "))
 	}
 }
 
 // matrixConfigs is the matrix forms the probe times: JITLLM_MATRIX_SHAPES,
-// a comma list of ROWSxCOLSxDEPTH:WRxWN:RESIDENT, or the profile's alone.
+// a comma list of ROWSxCOLSxDEPTH:WRxWN:RESIDENT[:SPLIT], or the profile's alone.
 func matrixConfigs(t testing.TB) []jit.Matrix {
 	env := os.Getenv("JITLLM_MATRIX_SHAPES")
 	if env == "" {
@@ -310,10 +324,13 @@ func matrixConfigs(t testing.TB) []jit.Matrix {
 			}
 			v = append(v, n)
 		}
-		if len(v) != 6 {
-			t.Fatalf("JITLLM_MATRIX_SHAPES %q: want ROWSxCOLSxDEPTH:WRxWN:RESIDENT", f)
+		if len(v) == 6 {
+			v = append(v, 0)
 		}
-		out = append(out, jit.Matrix{Rows: v[0], Cols: v[1], Depth: v[2], Warps: [2]int{v[3], v[4]}, Resident: v[5]})
+		if len(v) != 7 {
+			t.Fatalf("JITLLM_MATRIX_SHAPES %q: want ROWSxCOLSxDEPTH:WRxWN:RESIDENT[:SPLIT]", f)
+		}
+		out = append(out, jit.Matrix{Rows: v[0], Cols: v[1], Depth: v[2], Warps: [2]int{v[3], v[4]}, Resident: v[5], Split: v[6]})
 	}
 	return out
 }
