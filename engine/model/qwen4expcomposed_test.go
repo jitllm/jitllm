@@ -137,28 +137,15 @@ func q4ePrompt(t *testing.T, m *Model, ids []int32, n int, composed bool) [][]fl
 	if !composed {
 		return out
 	}
-	// A stated attention block with routed experts runs a step of several rows on
-	// main's kernels, declined by name (cpuCompose): the prompt's one call.
-	moe := 0
-	for li := range m.Cfg.NLayer {
-		if m.Uncovered(li) == Covered && m.Cfg.MoEAt(li) && !m.Cfg.LayerKind(li).Recurrent() {
-			moe++
-		}
-	}
 	for i, k := range declined {
-		if jit.Decline(i) != jit.DeclineNoGraph && k > 0 && (jit.Decline(i) != jit.DeclineExpertsRows || k != moe) {
+		if jit.Decline(i) != jit.DeclineNoGraph && k > 0 {
 			t.Errorf("%d block steps declined: %s (%v)", k, jit.DeclineName(i), s.CPUFormErr())
 		}
-	}
-	if declined[jit.DeclineExpertsRows] != moe {
-		t.Errorf("%d prompt steps declined for routed experts at several rows, want one each of the %d stated attention blocks with experts",
-			declined[jit.DeclineExpertsRows], moe)
 	}
 	if served == 0 {
 		t.Fatal("no block step of the prompt served")
 	}
-	t.Logf("a prompt of %d: %d block steps served, %d declined for no graph, %d for routed experts at several rows",
-		n, served, declined[jit.DeclineNoGraph], declined[jit.DeclineExpertsRows])
+	t.Logf("a prompt of %d: %d block steps served, %d declined for no graph", n, served, declined[jit.DeclineNoGraph])
 	return out
 }
 

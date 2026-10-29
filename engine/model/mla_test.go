@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // TestMLARunsUnderAPageBudget runs Multi-head Latent Attention under the pager,
@@ -230,23 +229,7 @@ func mlaBatchMatchesDecode(t *testing.T, name string, composed bool) {
 			t.Fatalf("step %d: %v", j, err)
 		}
 	}
-	if moe := mixtureBlocks(m); composed && moe > 0 {
-		// The CPU device forms a mixture's block for one row a step: a
-		// step of several rows declines it by that name, counted here,
-		// and serves every other block.
-		served, declined := b.CPUBlockSteps()
-		for i, n := range declined {
-			if n > 0 && i != int(jit.DeclineExpertsRows) {
-				t.Fatalf("the batch: %d block steps declined: %s (%v)", n, jit.DeclineName(i), b.CPUFormErr())
-			}
-		}
-		if declined[jit.DeclineExpertsRows] != steps*moe || served != steps*(m.Cfg.NLayer-moe) {
-			t.Fatalf("the batch: %d block steps served and %d declined (%s), want %d and %d", served,
-				declined[jit.DeclineExpertsRows], jit.DeclineName(int(jit.DeclineExpertsRows)), steps*(m.Cfg.NLayer-moe), steps*moe)
-		}
-	} else {
-		cpuServed(t, b, "the batch", steps*m.Cfg.NLayer, composed)
-	}
+	cpuServed(t, b, "the batch", steps*m.Cfg.NLayer, composed)
 	// Check each arm for non-finite values before subtracting, so a
 	// failure names the arm rather than reporting NMSE NaN.
 	for i := 0; i < nseq; i++ {
@@ -348,15 +331,4 @@ func firstNonFinite(v []float32) int {
 		}
 	}
 	return -1
-}
-
-// mixtureBlocks is how many of m's blocks are mixtures.
-func mixtureBlocks(m *Model) int {
-	n := 0
-	for li := range m.Cfg.NLayer {
-		if m.Cfg.MoEAt(li) {
-			n++
-		}
-	}
-	return n
 }
