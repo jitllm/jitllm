@@ -21,12 +21,10 @@ import (
 // less the new. No buffer holds a row's scores, and the blocks run to the
 // tile's last live position, read from the row descriptors at run time.
 //
-// The matrix unit multiplies binary16. Over a history holding the second
-// factor as binary16, every operand is staged as its binary16 rounding: one
-// product a block of dots and one of weighted sums. Over a float32 history
-// each operand is staged as two, its rounding and the rounding of what is
-// left, and a product of two such the three products the leftovers'
-// product does not reach.
+// The matrix unit multiplies binary16, so the form is taken only where Half
+// admits binary16 operands: the row factor, the position factors and the
+// exponentials rounded, one product a block of dots and one of weighted
+// sums, whatever the history holds.
 //
 // Rows, Keys and Shared bound a workgroup's rows, a block's positions and
 // the workgroup memory it takes, in bytes; fewer rows or positions are
@@ -39,12 +37,13 @@ import (
 // 128 rows in 97 KiB read 3.6% slower in a prompt.
 type Flash struct {
 	Rows, Keys, Shared int
+	Half               bool
 }
 
 func (Flash) Name() string { return "flash" }
 
 func (p Flash) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
-	if d.Matrix[0] == 0 || d.warp() != ir.SubgroupLanes {
+	if !p.Half || d.Matrix[0] == 0 || d.warp() != ir.SubgroupLanes {
 		return ks, nil
 	}
 	var out []*Kernel
@@ -218,25 +217,20 @@ func products(m *member) (a, b int, ok bool) {
 // flashGeom is a workgroup's tile: TR rows, KB positions a block, and its
 // workgroup memory's regions in words -- the first the row factor's halves
 // before the blocks, then each block's dots and then its weighted sums --
-// and the words in all. vLo, where it is not vOff, is the second factor's
-// leftovers: a factor the history does not hold as binary16.
+// and the words in all.
 type flashGeom struct {
-	TR, KB                                   int
-	sq, sv, sp                               int
-	aOff, kOff, vOff, vLo, pOff, sOff, total int
+	TR, KB                              int
+	sq, sv, sp                          int
+	aOff, kOff, vOff, pOff, sOff, total int
 }
 
-func flashLayout(TR, KB, Dk, Dv int, vlo bool) flashGeom {
+func flashLayout(TR, KB, Dk, Dv int) flashGeom {
 	g := flashGeom{TR: TR, KB: KB, sq: Dk + 4, sv: Dv + 4, sp: KB + 4}
 	up := func(n int) int { return (n + 3) / 4 * 4 }
-	g.kOff = up(max(TR*g.sq, TR*KB, TR*Dv))
-	g.vOff = g.kOff + up(KB*g.sq)
-	g.vLo = g.vOff
-	if vlo {
-		g.vLo = g.vOff + up(KB*g.sv/2)
-	}
-	g.pOff = g.vLo + up(KB*g.sv/2)
-	g.sOff = g.pOff + up((TR+1)*g.sp)
+	g.kOff = up(max(TR*g.sq/2, TR*KB, TR*Dv))
+	g.vOff = g.kOff + up(KB*g.sq/2)
+	g.pOff = g.vOff + up(KB*g.sv/2)
+	g.sOff = g.pOff + up((TR+1)*g.sp/2)
 	g.total = g.sOff + 3*(TR+1)
 	return g
 }
@@ -324,17 +318,16 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 	if d.Shared > 0 {
 		limit = min(limit, d.Shared)
 	}
-	vlo := c.vl.k.Nodes[vx].Op != OpWidenHalf
-	g := p.layout(R, Dk, Dv, limit, tm, tn, tk, vlo)
+	g := p.layout(R, Dk, Dv, limit, tm, tn, tk)
 	if g.TR < p.Rows/2 && d.Shared > limit {
-		if w := p.layout(R, Dk, Dv, d.Shared, tm, tn, tk, vlo); w.TR > g.TR {
+		if w := p.layout(R, Dk, Dv, d.Shared, tm, tn, tk); w.TR > g.TR {
 			g = w
 		}
 	}
 	if g.TR == 0 {
 		return nil, false
 	}
-	b := flashBuild{one: !vlo, c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
+	b := flashBuild{c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
 		tq: map[int]int{}, tr: map[int]int{}}
 	return b.kernel(), true
 }
@@ -342,15 +335,15 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 // layout is the flash form of the most rows a workgroup, then the most
 // positions a block, whose workgroup memory is at most limit bytes: no more
 // rows than R take, at least a tile's. Its TR is 0 where none fits.
-func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk int, vlo bool) flashGeom {
+func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk int) flashGeom {
 	top := p.Rows
 	for top/2 >= tm && top/2 >= R {
 		top /= 2
 	}
 	for TR := top; TR >= tm; TR /= 2 {
 		for KB := p.Keys; KB >= max(tn, tk) && KB%2 == 0; KB /= 2 {
-			if TR%tm == 0 && KB%tn == 0 && KB%tk == 0 && KB%4 == 0 && 4*flashLayout(TR, KB, Dk, Dv, vlo).total <= limit {
-				return flashLayout(TR, KB, Dk, Dv, vlo)
+			if TR%tm == 0 && KB%tn == 0 && KB%tk == 0 && KB%4 == 0 && 4*flashLayout(TR, KB, Dk, Dv).total <= limit {
+				return flashLayout(TR, KB, Dk, Dv)
 			}
 		}
 	}
@@ -371,7 +364,6 @@ type flashBuild struct {
 	first, warpRow  int
 	minus, zero     int
 	tq, tr          map[int]int
-	one             bool
 }
 
 func (b *flashBuild) side(m *member, row, kpos, inner int, subs map[Operand]int) *flashSide {
@@ -379,29 +371,15 @@ func (b *flashBuild) side(m *member, row, kpos, inner int, subs map[Operand]int)
 	return &flashSide{m: m, pos: pos, base: base, row: row, head: b.hd, kpos: kpos, inner: inner, subs: subs}
 }
 
-// words is two float32 values as the binary16 pair of their roundings and
-// the pair of what each rounding leaves.
-func (b *flashBuild) words(x0, x1 int) (hi, lo int) {
+// word is two float32 values as the binary16 pair of their roundings.
+func (b *flashBuild) word(x0, x1 int) int {
 	U, m := ir.U32, b.m
-	half := func(x int) (int, int) {
-		h := m.un(OpHalf, U, x)
-		return h, m.un(OpHalf, U, m.bin(OpSub, ir.F32, x, m.un(OpWidenHalf, ir.F32, h)))
-	}
-	h0, l0 := half(x0)
-	h1, l1 := half(x1)
-	pair := func(a, c int) int { return m.bin(OpOr, U, a, m.bin(OpShl, U, c, m.u32(16))) }
-	return pair(h0, h1), pair(l0, l1)
+	return m.bin(OpOr, U, m.un(OpHalf, U, x0), m.bin(OpShl, U, m.un(OpHalf, U, x1), m.u32(16)))
 }
 
 // store writes v at word ix of the workgroup memory, in loop at.
 func (b *flashBuild) store(ix, v, at int) {
 	b.m.Stores = append(b.m.Stores, Store{Buf: b.st, Ix: ix, Val: v, At: at})
-}
-
-func (b *flashBuild) storeLo(ix, v, at int) {
-	if !b.one {
-		b.store(ix, v, at)
-	}
 }
 
 // load is the workgroup memory's word ix as type t, read in loop at.
@@ -470,10 +448,8 @@ func (b *flashBuild) kernel() *Kernel {
 			s.inner = m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
 			return s.at(m, b.qx)
 		}
-		hi, lo := b.words(q(0), q(1))
 		ix := m.bin(OpAdd, U, m.bin(OpMul, U, rloc, m.u32(g.sq/2)), dp)
-		b.store(m.bin(OpAdd, U, ix, m.u32(g.aOff)), hi, -1)
-		b.storeLo(m.bin(OpAdd, U, ix, m.u32(g.aOff+g.TR*g.sq/2)), lo, -1)
+		b.store(m.bin(OpAdd, U, ix, m.u32(g.aOff)), b.word(q(0), q(1)), -1)
 	}
 	m.Stores = append(m.Stores, Store{Barrier: true, At: -1})
 
@@ -517,10 +493,8 @@ func (b *flashBuild) stageBlock() {
 			s.inner = m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
 			return s.at(m, b.kx)
 		}
-		hi, lo := b.words(k(0), k(1))
 		ix := m.bin(OpAdd, U, m.bin(OpMul, U, key, m.u32(g.sq/2)), dp)
-		b.store(m.bin(OpAdd, U, ix, m.u32(g.kOff)), hi, b.P)
-		b.storeLo(m.bin(OpAdd, U, ix, m.u32(g.kOff+g.KB*g.sq/2)), lo, b.P)
+		b.store(m.bin(OpAdd, U, ix, m.u32(g.kOff)), b.word(k(0), k(1)), b.P)
 	}
 	vhalf := b.Dv / 2
 	n = g.KB * vhalf
@@ -532,14 +506,7 @@ func (b *flashBuild) stageBlock() {
 			return s.at(m, b.vx)
 		}
 		ix := m.bin(OpAdd, U, m.bin(OpMul, U, key, m.u32(g.sv/2)), dp)
-		if g.vLo == g.vOff {
-			word := m.bin(OpOr, U, m.un(OpHalf, U, v(0)), m.bin(OpShl, U, m.un(OpHalf, U, v(1)), m.u32(16)))
-			b.store(m.bin(OpAdd, U, ix, m.u32(g.vOff)), word, b.P)
-			continue
-		}
-		hi, lo := b.words(v(0), v(1))
-		b.store(m.bin(OpAdd, U, ix, m.u32(g.vOff)), hi, b.P)
-		b.store(m.bin(OpAdd, U, ix, m.u32(g.vLo)), lo, b.P)
+		b.store(m.bin(OpAdd, U, ix, m.u32(g.vOff)), b.word(v(0), v(1)), b.P)
 	}
 	m.Stores = append(m.Stores, Store{Barrier: true, At: b.P})
 }
@@ -556,23 +523,15 @@ func (b *flashBuild) dots() {
 		return m.bin(OpAdd, U, m.bin(OpMul, U, base, m.u32(scale)), m.u32(off))
 	}
 	steps := b.Dk / b.tk
-	qh, ql := make([]int, steps), make([]int, steps)
+	qh := make([]int, steps)
 	for s := range steps {
 		qh[s] = b.tile(aT, at(b.warpRow, g.sq, 2*g.aOff+s*b.tk), g.sq, false, -1)
-		if !b.one {
-			ql[s] = b.tile(aT, at(b.warpRow, g.sq, 2*g.aOff+g.TR*g.sq+s*b.tk), g.sq, false, -1)
-		}
 	}
 	for j := 0; j < g.KB/b.tn; j++ {
 		acc := b.zero
 		for s := range steps {
 			off := 2*g.kOff + j*b.tn*g.sq + s*b.tk
 			kh := b.tile(bT, m.u32(off), g.sq, true, b.P)
-			if !b.one {
-				kl := b.tile(bT, m.u32(off+g.KB*g.sq), g.sq, true, b.P)
-				acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ql[s], B: kh, C: acc, Tile: &cT})
-				acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: qh[s], B: kl, C: acc, Tile: &cT})
-			}
 			acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: qh[s], B: kh, C: acc, Tile: &cT})
 		}
 		m.Stores = append(m.Stores, Store{Buf: b.st, Ix: at(b.warpRow, g.KB, g.aOff+j*b.tn), Val: acc, At: b.P, Tile: true, Stride: m.u32(g.KB)})
@@ -582,7 +541,7 @@ func (b *flashBuild) dots() {
 
 // rowsPhase is two threads a row of the tile, adjacent lanes, each half
 // the block's positions: the row's scores, the running maximum, the
-// exponentials -- their two binary16 parts staged for the weighted sums --
+// exponentials -- their binary16 roundings staged for the weighted sums --
 // the running sum, and the factor the weighted sums so far are rescaled
 // by, the pair's halves combined by a shuffle. The even lane writes the
 // row's running values, the odd one a slot of its own.
@@ -617,9 +576,7 @@ func (b *flashBuild) rowsPhase() {
 			pe[e] = b.side(b.c.wt, row, kpos[i+e], 0, map[Operand]int{b.sc.out: scores[i+e], b.c.mx.out: mNew}).at(m, b.c.wt.k.Stores[0].Val)
 			sum = m.bin(OpAdd, F, sum, pe[e])
 		}
-		hi, lo := b.words(pe[0], pe[1])
-		b.store(at(pw, g.pOff+i/2), hi, b.P)
-		b.storeLo(at(pw, g.pOff+(g.TR+1)*g.sp/2+i/2), lo, b.P)
+		b.store(at(pw, g.pOff+i/2), b.word(pe[0], pe[1]), b.P)
 	}
 	sum = m.bin(OpAdd, F, sum, m.add(Node{Op: OpShuffle, Type: F, A: sum, Imm: 1}))
 	alpha := m.un(OpExp, F, m.bin(OpSub, F, mOld, mNew))
@@ -642,24 +599,14 @@ func (b *flashBuild) weighted() {
 		return m.bin(OpAdd, U, m.bin(OpMul, U, base, m.u32(scale)), m.u32(off))
 	}
 	steps := g.KB / b.tk
-	ph, pl := make([]int, steps), make([]int, steps)
+	ph := make([]int, steps)
 	for s := range steps {
 		ph[s] = b.tile(aT, at(b.warpRow, g.sp, 2*g.pOff+s*b.tk), g.sp, false, b.P)
-		if !b.one {
-			pl[s] = b.tile(aT, at(b.warpRow, g.sp, 2*g.pOff+(g.TR+1)*g.sp+s*b.tk), g.sp, false, b.P)
-		}
 	}
 	for j := 0; j < b.Dv/b.tn; j++ {
 		acc := b.zero
 		for s := range steps {
 			v := b.tile(bT, m.u32(2*g.vOff+s*b.tk*g.sv+j*b.tn), g.sv, false, b.P)
-			if !b.one {
-				acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: pl[s], B: v, C: acc, Tile: &cT})
-				if g.vLo != g.vOff {
-					vl := b.tile(bT, m.u32(2*g.vLo+s*b.tk*g.sv+j*b.tn), g.sv, false, b.P)
-					acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ph[s], B: vl, C: acc, Tile: &cT})
-				}
-			}
 			acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ph[s], B: v, C: acc, Tile: &cT})
 		}
 		m.Stores = append(m.Stores, Store{Buf: b.st, Ix: at(b.warpRow, b.Dv, g.aOff+j*b.tn), Val: acc, At: b.P, Tile: true, Stride: m.u32(b.Dv)})

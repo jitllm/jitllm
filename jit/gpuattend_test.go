@@ -1,6 +1,7 @@
 package jit_test
 
 import (
+	"cmp"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -24,6 +25,16 @@ import (
 type attendRowsCase struct {
 	heads, kvh, dim, window int
 	sinks, f32v             bool
+}
+
+// attendInputs is what a gate's factors hold: the positions before the
+// chunk (2100 where 0), the factors' deviation (1 where 0; at 4 most
+// exponentials fall below binary16's normal range), and whether the row
+// and position factors share a large part whose dots cancel.
+type attendInputs struct {
+	ctx    int
+	spread float64
+	cancel bool
 }
 
 // TestComposedGPUAttendRows forms an appended history and the attention
@@ -55,16 +66,27 @@ func TestComposedGPUAttendRows(t *testing.T) {
 	if len(devs) == 0 {
 		t.Skip("no GPU")
 	}
-	cases := []attendRowsCase{
-		{8, 2, 64, 0, false, false},
-		{8, 2, 64, 0, true, false},
-		{16, 8, 128, 0, false, false},
-		{64, 8, 64, 16, true, false},
-		{64, 8, 64, 0, true, false},
-		{12, 4, 64, 16, false, false},
-		{8, 2, 64, 0, false, true},
-		{16, 8, 128, 0, false, true},
-		{64, 8, 64, 0, true, true},
+	cases := []struct {
+		c  attendRowsCase
+		in attendInputs
+	}{
+		{attendRowsCase{8, 2, 64, 0, false, false}, attendInputs{}},
+		{attendRowsCase{8, 2, 64, 0, true, false}, attendInputs{}},
+		{attendRowsCase{16, 8, 128, 0, false, false}, attendInputs{}},
+		{attendRowsCase{64, 8, 64, 16, true, false}, attendInputs{}},
+		{attendRowsCase{64, 8, 64, 0, true, false}, attendInputs{}},
+		{attendRowsCase{12, 4, 64, 16, false, false}, attendInputs{}},
+		{attendRowsCase{8, 2, 64, 0, false, true}, attendInputs{}},
+		{attendRowsCase{16, 8, 128, 0, false, true}, attendInputs{}},
+		{attendRowsCase{64, 8, 64, 0, true, true}, attendInputs{}},
+		{attendRowsCase{10, 2, 80, 0, false, false}, attendInputs{}},
+		{attendRowsCase{12, 4, 96, 0, true, true}, attendInputs{}},
+		{attendRowsCase{16, 8, 128, 0, false, false}, attendInputs{cancel: true}},
+		{attendRowsCase{16, 8, 128, 0, false, true}, attendInputs{cancel: true}},
+		{attendRowsCase{8, 2, 64, 0, true, false}, attendInputs{spread: 4}},
+		{attendRowsCase{8, 2, 64, 0, false, true}, attendInputs{spread: 4}},
+		{attendRowsCase{8, 2, 128, 0, false, false}, attendInputs{ctx: 8192}},
+		{attendRowsCase{8, 2, 128, 0, true, true}, attendInputs{ctx: 8192}},
 	}
 	matrices, cuda := 0, false
 	for _, d := range devs {
@@ -74,12 +96,14 @@ func TestComposedGPUAttendRows(t *testing.T) {
 			if matrix && !tile {
 				continue
 			}
-			for _, c := range cases {
+			for _, tc := range cases {
 				if matrix {
 					matrices++
 				}
-				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v", d.API(), matrix, c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v)
-				t.Run(name, func(t *testing.T) { gpuAttendRows(t, d, c, matrix) })
+				c, in := tc.c, tc.in
+				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v/ctx%d/spread%g/cancel%v", d.API(), matrix,
+					c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v, in.ctx, in.spread, in.cancel)
+				t.Run(name, func(t *testing.T) { gpuAttendRows(t, d, c, in, matrix) })
 			}
 		}
 	}
@@ -92,8 +116,13 @@ func TestComposedGPUAttendRows(t *testing.T) {
 // matrix is: an attention whose rows share their first position then
 // forms on it (the flash pass), its blocks of positions run in order,
 // and any other the split's running form.
-func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool) {
-	const page, p0, R, capRows, keys = 64, 2100, 37, 64, 64 * 64
+func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendInputs, matrix bool) {
+	const page, capRows = 64, 64
+	p0, spread, R := cmp.Or(in.ctx, 2100), cmp.Or(in.spread, 1), 37
+	if in.ctx > 0 {
+		R = 9
+	}
+	keys := (p0 + R + 64*page - 1) / (64 * page) * 64 * page
 	b := graph.New()
 	n := b.KVAppend(b.In("k", c.kvh*c.dim), b.In("v", c.kvh*c.dim), 0)
 	var sinks []jlm.Role
@@ -144,26 +173,38 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 
 	rng := rand.New(rand.NewSource(11))
 	w, qw := c.kvh*c.dim, c.heads*c.dim
-	rnd := func(n int) []float32 {
+	rnd := func(n int, sd float64) []float32 {
 		x := make([]float32, n)
 		for i := range x {
-			x[i] = float32(rng.NormFloat64())
+			x[i] = float32(rng.NormFloat64() * sd)
+		}
+		return x
+	}
+	// Cancelling factors: a position's is 8 at every element and a row's 8
+	// and -8 in turn, beside a deviation of 1/8.
+	factor := func(n int, row bool) []float32 {
+		if !in.cancel {
+			return rnd(n, spread)
+		}
+		x := rnd(n, 0.125)
+		for i := range x {
+			if row && i%2 == 1 {
+				x[i] -= 8
+			} else {
+				x[i] += 8
+			}
 		}
 		return x
 	}
 	ks, vs := make([][]float32, p0+R), make([][]float32, p0+R)
 	for p := range p0 + R {
-		ks[p], vs[p] = rnd(w), rnd(w)
+		ks[p], vs[p] = factor(w, false), rnd(w, 1)
 	}
-	q := rnd(capRows * qw)
+	q := factor(capRows*qw, true)
 	k, v := make([]float32, capRows*w), make([]float32, capRows*w)
 	for r := range R {
 		copy(k[r*w:], ks[p0+r])
 		copy(v[r*w:], vs[p0+r])
-	}
-	sinkv := make([]float32, c.heads)
-	for h := range sinkv {
-		sinkv[h] = float32(rng.NormFloat64()) * 2
 	}
 	kpool := poisoned(keys / page * page * w)
 	vpool := poisoned(keys / page * page * w / 2)
@@ -197,45 +238,65 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 		}
 		return 0
 	}
-	half := func(x float64) float64 { return float64(quant.DecodeHalf(quant.EncodeHalf(float32(x)))) }
-	id := func(x float64) float64 { return x }
-	// ref is the definition over the pools; with rnd binary16 rounding, the
-	// tier's FlashPrefill70 arithmetic: q, k and each exponential rounded.
-	ref := func(sinkOn bool, rnd func(float64) float64) []float64 {
-		want := make([]float64, R*qw)
-		for r := range R {
-			end := p0 + r + 1
-			for h := range c.heads {
-				kv := h / (c.heads / c.kvh)
-				var sc []float64
-				for p := first(r); p < end; p++ {
-					var s float64
-					for e := range c.dim {
-						s += rnd(float64(q[r*qw+h*c.dim+e])) * rnd(float64(ks[p][kv*c.dim+e]))
-					}
-					sc = append(sc, s*float64(scale))
+	// A sink near the log-sum-exp of the first row's scores holds about as
+	// much as the positions do, at any length and spread.
+	sinkv := make([]float32, c.heads)
+	for h := range sinkv {
+		var sc []float64
+		for p := first(0); p <= p0; p++ {
+			var s float64
+			for e := range c.dim {
+				s += float64(q[h*c.dim+e]) * float64(ks[p][h/(c.heads/c.kvh)*c.dim+e])
+			}
+			sc = append(sc, s*float64(scale))
+		}
+		top, sum := slices.Max(sc), 0.0
+		for _, x := range sc {
+			sum += math.Exp(x - top)
+		}
+		sinkv[h] = float32(top + math.Log(sum) + rng.NormFloat64())
+	}
+	// row is the definition at row r over the pools with the row factor qr
+	// and, where msq, the expected squared error the flash form's binary16
+	// operands add to it (flashErr).
+	row := func(r int, qr []float32, sinkOn, msq bool) ([]float64, float64) {
+		want, n := make([]float64, qw), p0+r+1-first(r)
+		var mse float64
+		raw, wt := make([]float64, 0, n+1), make([]float64, 0, n+1)
+		for h := range c.heads {
+			kv, qh := h/(c.heads/c.kvh), qr[h*c.dim:(h+1)*c.dim]
+			raw = raw[:0]
+			for p := first(r); p <= p0+r; p++ {
+				var s float64
+				for e, x := range qh {
+					s += float64(x) * float64(ks[p][kv*c.dim+e])
 				}
-				if sinkOn {
-					sc = append(sc, float64(sinkv[h]))
-				}
-				oracle.Softmax(sc)
-				top := slices.Max(sc)
-				for e := range c.dim {
-					var o float64
-					for i, p := 0, first(r); p < end; i, p = i+1, p+1 {
-						o += rnd(sc[i]/top) * round(vs[p][kv*c.dim+e])
-					}
-					want[r*qw+h*c.dim+e] = o * top
+				raw = append(raw, s*float64(scale))
+			}
+			if sinkOn {
+				raw = append(raw, float64(sinkv[h]))
+			}
+			wt = append(wt[:0], raw...)
+			oracle.Softmax(wt)
+			o := want[h*c.dim : (h+1)*c.dim]
+			for d := range o {
+				for i := range n {
+					o[d] += wt[i] * round(vs[first(r)+i][kv*c.dim+d])
 				}
 			}
+			if !msq {
+				continue
+			}
+			mse += flashErr(qh, func(i int) []float32 { return ks[first(r)+i][kv*c.dim : (kv+1)*c.dim] },
+				func(i, d int) float64 { return round(vs[first(r)+i][kv*c.dim+d]) }, wt[:n], raw, o, float64(scale), c.f32v)
 		}
-		return want
+		return want, mse
 	}
 	pages := make([]uint32, keys/page)
 	for i := range pages {
 		pages[i] = uint32(i)
 	}
-	run := func(shift uint32, sv []float32) []float32 {
+	run := func(shift uint32, sv, q []float32) []float32 {
 		rows, win := make([]uint32, capRows*4), make([]uint32, capRows*4)
 		for r := range R {
 			p := uint32(p0 + r)
@@ -243,7 +304,7 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 			copy(win[r*4:], []uint32{0, uint32(first(r)) + shift, p + 1, p})
 		}
 		vals := map[graph.ValueID][]uint32{g.In[0]: f32w(k), g.In[1]: f32w(v), g.In[2]: f32w(q), g.Out[0]: poisoned(capRows * qw)}
-		tables := map[string][]uint32{"rows": rows, "rows.win": win, "rows.n": {R}, "pages": pages,
+		tables := map[string][]uint32{"rows": rows, "rows.win": win, "rows.n": {uint32(R)}, "pages": pages,
 			"kv.k": append([]uint32(nil), kpool...), "kv.v": append([]uint32(nil), vpool...)}
 		vecs := map[jlm.Role][]uint32{jlm.RoleAttnSinks: f32w(sv)}
 		out, err := launchAttend(d, codes, vals, tables, vecs, g.Out[0])
@@ -261,8 +322,8 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 		}
 		return num / den
 	}
-	want := ref(c.sinks, id)
-	got := run(0, sinkv)
+	want := make([]float64, R*qw)
+	budget := make([]float64, R)
 	// A device whose lowering rounds every operation alone is held to
 	// float32's band; a driver free to contract and approximate (SPIR-V's)
 	// to a wider one: the V100's Vulkan driver reads 1.4e-7 on the form
@@ -271,47 +332,163 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, matrix bool
 	if !dev.ExactArith {
 		band = 1e-6
 	}
-	if flash == 1 && !c.f32v {
-		tier := make([]float32, R*qw)
-		for i, x := range ref(c.sinks, half) {
-			tier[i] = float32(x)
+	for r := range R {
+		w, mse := row(r, q[r*qw:(r+1)*qw], c.sinks, flash == 1)
+		copy(want[r*qw:], w)
+		budget[r] = band
+		if flash == 1 {
+			budget[r] = flashBudget(mse, w, band)
 		}
-		worstTier := 0.0
-		for r := range R {
-			worstTier = max(worstTier, nmse(tier, want, r))
-		}
-		band = max(band, flashTierFactor*worstTier)
-		t.Logf("the tier's arithmetic: worst NMSE %.3e against the definition, the band %.3e", worstTier, band)
 	}
-	worst := 0.0
+	got := run(0, sinkv, q)
+	worst, tight := 0.0, 0.0
 	for r := range R {
 		e := nmse(got, want, r)
-		if math.IsNaN(e) || e > band {
-			t.Errorf("row %d at position %d: NMSE %.3e against the definition", r, p0+r, e)
+		if math.IsNaN(e) || e > budget[r] {
+			t.Errorf("row %d at position %d: NMSE %.3e against the definition, past its budget %.3e", r, p0+r, e, budget[r])
 		}
-		worst = max(worst, e)
+		worst, tight = max(worst, e), max(tight, e/budget[r])
 	}
 	for i := R * qw; i < capRows*qw; i++ {
 		if math.Float32bits(got[i]) != guardWord {
 			t.Fatalf("output word %d, past the call's %d rows, was written", i, R)
 		}
 	}
-	t.Logf("%d rows of a %d-row form: worst NMSE %.3e against the definition", R, capRows, worst)
-	bad := run(1, sinkv)
-	if e := nmse(bad, want, R-1); !(e > max(1e-6, band)) {
+	t.Logf("%d rows of a %d-row form: worst NMSE %.3e against the definition, %.3f of a row's budget at most", R, capRows, worst, tight)
+	last := R - 1
+	// A peaked softmax hides one position, and cancelling factors' binary16
+	// error is as wide as one: half the context is moved.
+	shift := uint32(1)
+	if spread > 1 || in.cancel {
+		shift = uint32(p0 / 2)
+	}
+	if e := nmse(run(shift, sinkv, q), want, last); !(e > max(1e-6, budget[last])) {
 		t.Errorf("with every row's first attended position moved the NMSE is %.3e: the gate cannot see a wrong row", e)
 	}
 	if c.sinks {
-		bad := run(0, make([]float32, c.heads))
-		if e := nmse(bad, want, 0); !(e > max(1e-6, band)) {
+		if e := nmse(run(0, make([]float32, c.heads), q), want, 0); !(e > max(1e-6, budget[0])) {
 			t.Errorf("with the sinks zeroed the NMSE is %.3e: the gate cannot see the sinks", e)
 		}
 	}
+	if flash != 1 {
+		return
+	}
+	// The last row's factor scaled by 1+f, where the definition moves one
+	// and a half budgets past the form's own error there: a fault a budget
+	// a few times too wide lets through, this one must not.
+	lw := want[last*qw : (last+1)*qw]
+	target := math.Pow(math.Sqrt(1.5*budget[last])+math.Sqrt(nmse(got, want, last)), 2)
+	scaled := func(f float64) []float32 {
+		x := slices.Clone(q)
+		for i := last * qw; i < (last+1)*qw; i++ {
+			x[i] = float32(float64(x[i]) * (1 + f))
+		}
+		return x
+	}
+	moved := func(f float64) float64 {
+		w, _ := row(last, scaled(f)[last*qw:(last+1)*qw], c.sinks, false)
+		var num, den float64
+		for i, x := range w {
+			num += (x - lw[i]) * (x - lw[i])
+			den += lw[i] * lw[i]
+		}
+		return num / den
+	}
+	lo, hi := 0.0, 1.0
+	for range 40 {
+		if mid := (lo + hi) / 2; moved(mid) < target {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	e := nmse(run(0, sinkv, scaled(hi)), want, last)
+	t.Logf("the last row's factor scaled by 1+%.3e moves the definition %.3e: the form reads %.3e, %.2f budgets", hi, moved(hi), e, e/budget[last])
+	if !(e > budget[last]) {
+		t.Errorf("the last row's factor scaled by 1+%.3e reads NMSE %.3e within its budget %.3e: the budget is wider than the form's error", hi, e, budget[last])
+	}
 }
 
-// flashTierFactor bounds the flash form over a binary16 history at the
-// tier's own arithmetic's worst row.
-const flashTierFactor = 2
+// flashErr is the expected squared error binary16 operands add to a head
+// of a row -- its factor, the position factors and the exponentials
+// rounded, and a float32 history's second factor -- each rounding an
+// independent error uniform over a binary16 step, carried to first order:
+// an error in score i moves output d by w_i (v_id - o_d), so the row
+// factor's, shared by every position, by sum_e err_e A_de with
+// A_de = scale sum_i w_i (v_id - o_d) k_ie. An exponential is rounded in the
+// frame of a running maximum, at most the row's: a step relative to its
+// weight, or a subnormal step where it can fall below the normal range.
+func flashErr(qh []float32, k func(int) []float32, v func(i, d int) float64, w, raw, o []float64, scale float64, f32v bool) float64 {
+	const u, normal = 1.0 / 2048, 1.0 / (1 << 14)
+	D, top := len(qh), slices.Max(raw)
+	A, ck := make([]float64, D*D), make([]float64, len(w))
+	dv := make([]float64, D)
+	for i, wi := range w {
+		ki := k(i)
+		for e, x := range qh {
+			ck[i] += float64(x) * float64(x) * step2(float64(ki[e]))
+		}
+		for d := range D {
+			dv[d] = wi * (v(i, d) - o[d])
+		}
+		for d, a := range dv {
+			row := A[d*D : (d+1)*D]
+			for e, x := range ki {
+				row[e] += a * float64(x)
+			}
+		}
+	}
+	var mse float64
+	for d := range D {
+		for e, x := range qh {
+			mse += step2(float64(x)) * A[d*D+e] * A[d*D+e] * scale * scale
+		}
+		for i, wi := range w {
+			vi := v(i, d)
+			mse += wi * wi * (vi - o[d]) * (vi - o[d]) * ck[i] * scale * scale
+			if math.Exp(raw[i]-top) < normal {
+				mse += step2(0) * vi * vi
+			} else {
+				mse += wi * wi * u * u / 3 * vi * vi
+			}
+			if f32v {
+				mse += wi * wi * step2(vi)
+			}
+		}
+	}
+	return mse
+}
+
+// ulp16 is binary16's step at x: 2^(e-10) on [2^e, 2^(e+1)), and 2^-24
+// below the normal range.
+func ulp16(x float64) float64 {
+	if x == 0 {
+		return 0x1p-24
+	}
+	_, e := math.Frexp(x)
+	return math.Ldexp(1, max(e-11, -24))
+}
+
+// step2 is the variance of x's rounding to binary16.
+func step2(x float64) float64 {
+	u := ulp16(x)
+	return u * u / 12
+}
+
+// flashBudget is a row's NMSE budget: flashTail times the expected squared
+// error over the row's own, beside the device's float32 band.
+func flashBudget(mse float64, want []float64, band float64) float64 {
+	var den float64
+	for _, x := range want {
+		den += x * x
+	}
+	return math.Pow(math.Sqrt(flashTail*mse/den)+math.Sqrt(band), 2)
+}
+
+// flashTail is a row's squared error's ratio to its expectation that the
+// gate admits: a chi-square of eight degrees, the fewest heads a case
+// has, exceeds six times its mean with probability 1e-7.
+const flashTail = 6
 
 // launchAttend runs codes in order at their full grids, each binding the
 // gate's words by kind -- values by id, tables by name, vectors by role --

@@ -192,7 +192,7 @@ func flashConfigs(t testing.TB) []jit.Flash {
 		if len(v) != 3 {
 			t.Fatalf("JITLLM_FLASH_SHAPES %q: want ROWS:KEYS:SHARED", f)
 		}
-		out = append(out, jit.Flash{Rows: v[0], Keys: v[1], Shared: v[2]})
+		out = append(out, jit.Flash{Rows: v[0], Keys: v[1], Shared: v[2], Half: true})
 	}
 	return out
 }
