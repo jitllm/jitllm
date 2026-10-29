@@ -303,6 +303,10 @@ head's double-width query swapped or read whole), which only the composer
 reads, and holds the hybrid gate's own verdict on it to a failure: past the
 block bound with the shallow control past it too.
 
+- `TestComposedBlocksServe` judges each arm on a panel of eight prompts (`servePanel`), by the
+  user's decision: the median across prompts of each prompt's median per-step ratio, against 1.5;
+  the worst-step bound and every per-step check are kept.
+
 ## The shadow arm
 
 `tier.WithComposedShadow()` (`Config.ComposedShadow`, beside a `Config.Composed`

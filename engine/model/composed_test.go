@@ -473,16 +473,15 @@ const flashBlock = 32
 // by the composer from its graph (the model's front end's, from the
 // container), the prompt's blocks at the chunk's rows, and
 // the head, in main's runtime (Config.Composed), against the tier's own
-// kernels: every block placed, with and without the captured graph, the
-// prompt's last row -- a prompt of two chunks crossing several blocks of
-// positions (crossingPrompt) -- and 140 teacher-forced steps (past the
-// first key bound),
-// and on a model whose sliding window cuts inside its context, steps past
-// the window. Each arm is held to a float reference -- the same blocks and
-// head formed with float activations, which neither the tier nor the arm
-// computes: from the first
-// decoded step its distance from it may be no more than bandRatio times the
-// tier's at the median step, and no more than bandWorst times the widest the
+// kernels: every block placed, with and without the captured graph, on each
+// prompt of servePanel (each of two chunks crossing several blocks of
+// positions) its last row and teacher-forced steps: 140 on crossingPrompt
+// (past the first key bound, and on a model whose sliding window cuts inside
+// its context, past the window) and panelSteps on the others. Each arm is
+// held to a float reference -- the same blocks and head formed with float
+// activations, which neither the tier nor the arm computes: its distance from
+// it may be no more than bandRatio times the tier's at the median prompt's
+// median step, and no more than bandWorst times the widest the
 // tier's own backends come at their worst: a model whose decode passes a
 // near tie (OLMo 2's fifth step) sends each implementation to one side of it
 // or the other, main's CUDA and Vulkan tiers 0.118 apart there, and the arm
@@ -513,13 +512,8 @@ func TestComposedBlocksServe(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			ids := m.Vocab.Encode(crossingPrompt, true)
-			if len(ids) <= 2*flashBlock {
-				t.Fatalf("the prompt is %d tokens: it does not cross several blocks of %d positions", len(ids), flashBlock)
-			}
-			n := 140
-			// A window the context can outrun is decoded past, so it cuts:
-			// the window's last position and windowPast more.
+			// A window the context can outrun is decoded past on the first
+			// prompt, so it cuts: the window's last position and windowPast more.
 			const windowPast = 64
 			w, c := 0, int(m.Cfg.NCtx)
 			for li := range m.Cfg.NLayer {
@@ -527,48 +521,65 @@ func TestComposedBlocksServe(t *testing.T) {
 					w = m.Cfg.SWAWindow
 				}
 			}
-			if w > 0 && (c <= 0 || w+windowPast+len(ids)+4 <= c) {
-				n = max(n, w+windowPast)
-			}
-			if c > 0 {
-				n = min(n, c-len(ids)-4)
-			}
-			if w > 0 && len(ids)+n > w {
-				t.Logf("the decode runs %d positions past the window of %d", len(ids)+n-w, w)
-			} else if w > 0 {
-				t.Logf("the window of %d cuts nothing in the model's context of %d", w, c)
-			}
-			toks, moved := trainedToks(t, m, ids, n)
-			if moved > 0 {
-				t.Logf("%d teacher-forced ids store no embedding and took the next id that does", moved)
+			type prompt struct{ ids, toks []int32 }
+			var panel []prompt
+			for pi, text := range servePanel {
+				ids := m.Vocab.Encode(text, true)
+				if len(ids) <= 2*flashBlock {
+					t.Fatalf("prompt %d is %d tokens: it does not cross several blocks of %d positions", pi, len(ids), flashBlock)
+				}
+				n := panelSteps
+				if pi == 0 {
+					n = 140
+					if w > 0 && (c <= 0 || w+windowPast+len(ids)+4 <= c) {
+						n = max(n, w+windowPast)
+					}
+				}
+				if c > 0 {
+					n = min(n, c-len(ids)-4)
+				}
+				if pi == 0 && w > 0 && len(ids)+n > w {
+					t.Logf("the decode runs %d positions past the window of %d", len(ids)+n-w, w)
+				} else if pi == 0 && w > 0 {
+					t.Logf("the window of %d cuts nothing in the model's context of %d", w, c)
+				}
+				toks, moved := trainedToks(t, m, ids, n)
+				if moved > 0 {
+					t.Logf("prompt %d: %d teacher-forced ids store no embedding and took the next id that does", pi, moved)
+				}
+				panel = append(panel, prompt{ids, toks})
 			}
 			// The tier and the float reference on every device first: the
 			// spread of the tier's own backends is the band each arm is held to.
 			type tierRun struct{ want, ref [][]float32 }
-			runs := map[string]*[2]tierRun{}
+			runs := map[string]*[2][]tierRun{}
 			var widest [2]float64
 			for _, dev := range stepDevices() {
 				// A device the box does not have skips its own subtest, not the model's.
 				t.Run(dev+"/reference", func(t *testing.T) {
-					r := &[2]tierRun{}
+					r := &[2][]tierRun{}
 					refParts := tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt
 					for g, noGraph := range []bool{false, true} {
-						r[g].want, _, _, _ = composedDecode(t, m, dev, ids, toks, 0, noGraph, false)
-						var st tier.Stats
-						r[g].ref, st, _, _ = composedDecode(t, m, dev, ids, toks, refParts, noGraph, true, unsplit)
-						if n, d, _ := st.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
-							t.Fatalf("the float reference served its blocks %d times and declined them %d (%s)", n, d, declinesOf(st))
-						}
-						// Every split dropping its last segment leaves the reference
-						// as it was: it forms no split to share with an arm.
-						cut, _, _, _ := composedDecode(t, m, dev, ids, toks, refParts, noGraph, true, unsplit, tier.WithSplitFault(true))
-						for i := range cut {
-							if !slices.Equal(cut[i], r[g].ref[i]) {
-								t.Fatalf("step %d: with every split's last segment dropped the float reference moves (NMSE %.3g): it forms through the composer's splits", i, logitNMSE(cut[i], r[g].ref[i]))
+						for _, p := range panel {
+							var tr tierRun
+							tr.want, _, _, _ = composedDecode(t, m, dev, p.ids, p.toks, 0, noGraph, false)
+							var st tier.Stats
+							tr.ref, st, _, _ = composedDecode(t, m, dev, p.ids, p.toks, refParts, noGraph, true, unsplit)
+							if n, d, _ := st.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+								t.Fatalf("the float reference served its blocks %d times and declined them %d (%s)", n, d, declinesOf(st))
 							}
-						}
-						for i := 1; i < len(r[g].ref); i++ {
-							widest[g] = max(widest[g], logitNMSE(r[g].want[i], r[g].ref[i]))
+							// Every split dropping its last segment leaves the reference
+							// as it was: it forms no split to share with an arm.
+							cut, _, _, _ := composedDecode(t, m, dev, p.ids, p.toks, refParts, noGraph, true, unsplit, tier.WithSplitFault(true))
+							for i := range cut {
+								if !slices.Equal(cut[i], tr.ref[i]) {
+									t.Fatalf("step %d: with every split's last segment dropped the float reference moves (NMSE %.3g): it forms through the composer's splits", i, logitNMSE(cut[i], tr.ref[i]))
+								}
+							}
+							for i := 1; i < len(tr.ref); i++ {
+								widest[g] = max(widest[g], logitNMSE(tr.want[i], tr.ref[i]))
+							}
+							r[g] = append(r[g], tr)
 						}
 					}
 					runs[dev] = r
@@ -580,7 +591,6 @@ func TestComposedBlocksServe(t *testing.T) {
 				}
 				t.Run(dev, func(t *testing.T) {
 					for g, noGraph := range []bool{false, true} {
-						want, ref := runs[dev][g].want, runs[dev][g].ref
 						floor := bandFloor(m.Cfg.NLayer)
 						wide := max(widest[g], floor)
 						for _, a := range arms {
@@ -594,176 +604,175 @@ func TestComposedBlocksServe(t *testing.T) {
 							t.Run(name, func(t *testing.T) {
 								parts := a.parts | tier.ComposedPrompt
 								tile := tier.WithConfig(func(c *tier.Config) { c.MatrixTile = a.tile })
-								got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, tile)
-								if a.tile > 0 && st.MatrixPart(tier.ComposedPrompt) > 0 && st.MatrixTiled == 0 {
-									t.Fatalf("the prompt ran on the matrix unit with no part formed at tile %d", a.tile)
-								}
-								// Every form was built at the placement or PrepHead.
-								if st.FormedAtStep != 0 {
-									t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
-								}
-								// Every part the arm asks for served, and none declined: a
-								// head the device does not hold (it did not fit beside the
-								// blocks) is named, not demanded.
-								served, _, _ := st.ServedPart(parts)
-								for _, k := range []tier.Parts{tier.ComposedTable, tier.ComposedBlock, tier.ComposedHead, tier.ComposedPrompt} {
-									if parts&k == 0 {
-										continue
+								var band, offBand panelBand
+								var st0 tier.Stats
+								var got0 [][]float32
+								for pi, p := range panel {
+									ids, toks := p.ids, p.toks
+									want, ref := runs[dev][g][pi].want, runs[dev][g][pi].ref
+									got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, tile)
+									if pi == 0 {
+										st0, got0 = st, got
 									}
-									n, d, _ := st.ServedPart(k)
-									if k == tier.ComposedHead && !headOn {
-										t.Logf("the head runs at home here (it does not fit beside the blocks): the composed head has nothing to serve")
-										continue
+									if a.tile > 0 && st.MatrixPart(tier.ComposedPrompt) > 0 && st.MatrixTiled == 0 {
+										t.Fatalf("the prompt ran on the matrix unit with no part formed at tile %d", a.tile)
 									}
-									if n == 0 || d != 0 {
-										t.Fatalf("composed parts %#x served %d steps and were declined %d: the arm did not run them (declines: %s; last error %q)", uint8(k), n, d, declinesOf(st), st.LastErr)
+									// Every form was built at the placement or PrepHead.
+									if st.FormedAtStep != 0 {
+										t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
 									}
-								}
-								// Every step runs every block, emitted or replayed in a
-								// recording, so a block the composer did not serve shows
-								// in the count.
-								blocks, _, _ := st.ServedPart(tier.ComposedBlock)
-								if replayed := st.ReplayedPart(tier.ComposedBlock); blocks+replayed != len(toks)*m.Cfg.NLayer {
-									t.Fatalf("the composer ran %d block steps (%d of them replayed) where %d steps of %d blocks are %d",
-										blocks+replayed, replayed, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
-								}
-								// Every step writes every table the plan states.
-								if a.parts&tier.ComposedTable != 0 {
-									nt, _, tableUnasked := st.ServedPart(tier.ComposedTable)
-									if replayed := st.ReplayedPart(tier.ComposedTable); nt+replayed != len(toks)*composedTables(m) {
-										t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps of %d tables; %d capture(s), %d unasked, last error %q",
-											nt+replayed, replayed, len(toks), composedTables(m), st.Captures, tableUnasked, st.LastErr)
+									// Every part the arm asks for served, and none declined: a
+									// head the device does not hold (it did not fit beside the
+									// blocks) is named, not demanded.
+									for _, k := range []tier.Parts{tier.ComposedTable, tier.ComposedBlock, tier.ComposedHead, tier.ComposedPrompt} {
+										if parts&k == 0 {
+											continue
+										}
+										n, d, _ := st.ServedPart(k)
+										if k == tier.ComposedHead && !headOn {
+											if pi == 0 {
+												t.Logf("the head runs at home here (it does not fit beside the blocks): the composed head has nothing to serve")
+											}
+											continue
+										}
+										if n == 0 || d != 0 {
+											t.Fatalf("composed parts %#x served %d steps and were declined %d: the arm did not run them (declines: %s; last error %q)", uint8(k), n, d, declinesOf(st), st.LastErr)
+										}
 									}
-								}
-								// Every step's input row gathered by the composer, from
-								// the head where it is the embedding and from the token
-								// embedding the device holds beside it where it is not
-								// (tinyllama, stories15M), and the prompt's rows too.
-								if a.parts&tier.ComposedEmbed != 0 {
-									ne, de, _ := st.ServedPart(tier.ComposedEmbed)
-									ne += st.ReplayedPart(tier.ComposedEmbed)
-									np, dp, _ := st.ServedPart(tier.PromptEmbed)
-									switch {
-									case ne+de != len(toks):
-										t.Fatalf("the input rows of %d steps served %d times and declined %d", len(toks), ne, de)
-									case headOn && ne != len(toks):
-										t.Fatalf("the composer gathered %d of %d steps' rows (%s)", ne, len(toks), declinesOf(st))
-									case headOn && (np == 0 || dp != 0):
-										t.Fatalf("the composer gathered the prompt's rows %d times and declined them %d (%s)", np, dp, declinesOf(st))
+									// Every step runs every block, emitted or replayed in a
+									// recording, so a block the composer did not serve shows
+									// in the count.
+									blocks, _, _ := st.ServedPart(tier.ComposedBlock)
+									if replayed := st.ReplayedPart(tier.ComposedBlock); blocks+replayed != len(toks)*m.Cfg.NLayer {
+										t.Fatalf("the composer ran %d block steps (%d of them replayed) where %d steps of %d blocks are %d",
+											blocks+replayed, replayed, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 									}
-									t.Logf("composed %s: %d input rows gathered, %d declined, the prompt's %d (%s)", a.name, ne, de, np, declinesOf(st))
-								}
-								// Every step's head, and the prompt's once.
-								wantHeads := len(toks) + 1
-								heads, headDeclined, headUnasked := st.ServedPart(tier.ComposedHead)
-								if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
-									heads+replayed != wantHeads {
-									t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps and the prompt (%d asked); %d declined, %d unasked, %d folds, %d capture(s)",
-										heads+replayed, replayed, len(toks), parts&tier.ComposedPrompt, headDeclined, headUnasked, st.HeadFolds, st.Captures)
-								}
-								if noGraph {
-									t.Logf("composed %s: the tier's own launches on the steps it served: %v", a.name, census)
-									// With the blocks and the head the composer's, what the tier
-									// still launches on a step is the residual list, nothing more.
-									if a.parts&tier.ComposedHead != 0 && headOn {
-										for k := range census {
-											if !slices.Contains(composedResidue, k) {
-												t.Fatalf("the tier launched its own %s on a step the composer served whole (%v)", k, census)
+									// Every step writes every table the plan states.
+									if a.parts&tier.ComposedTable != 0 {
+										nt, _, tableUnasked := st.ServedPart(tier.ComposedTable)
+										if replayed := st.ReplayedPart(tier.ComposedTable); nt+replayed != len(toks)*composedTables(m) {
+											t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps of %d tables; %d capture(s), %d unasked, last error %q",
+												nt+replayed, replayed, len(toks), composedTables(m), st.Captures, tableUnasked, st.LastErr)
+										}
+									}
+									// Every step's input row gathered by the composer, from
+									// the head where it is the embedding and from the token
+									// embedding the device holds beside it where it is not
+									// (tinyllama, stories15M), and the prompt's rows too.
+									if a.parts&tier.ComposedEmbed != 0 {
+										ne, de, _ := st.ServedPart(tier.ComposedEmbed)
+										ne += st.ReplayedPart(tier.ComposedEmbed)
+										np, dp, _ := st.ServedPart(tier.PromptEmbed)
+										switch {
+										case ne+de != len(toks):
+											t.Fatalf("the input rows of %d steps served %d times and declined %d", len(toks), ne, de)
+										case headOn && ne != len(toks):
+											t.Fatalf("the composer gathered %d of %d steps' rows (%s)", ne, len(toks), declinesOf(st))
+										case headOn && (np == 0 || dp != 0):
+											t.Fatalf("the composer gathered the prompt's rows %d times and declined them %d (%s)", np, dp, declinesOf(st))
+										}
+										if pi == 0 {
+											t.Logf("composed %s: %d input rows gathered, %d declined, the prompt's %d (%s)", a.name, ne, de, np, declinesOf(st))
+										}
+									}
+									// Every step's head, and the prompt's once.
+									wantHeads := len(toks) + 1
+									heads, headDeclined, headUnasked := st.ServedPart(tier.ComposedHead)
+									if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
+										heads+replayed != wantHeads {
+										t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps and the prompt (%d asked); %d declined, %d unasked, %d folds, %d capture(s)",
+											heads+replayed, replayed, len(toks), parts&tier.ComposedPrompt, headDeclined, headUnasked, st.HeadFolds, st.Captures)
+									}
+									if noGraph {
+										if pi == 0 {
+											t.Logf("composed %s: the tier's own launches on the steps it served: %v", a.name, census)
+										}
+										// With the blocks and the head the composer's, what the tier
+										// still launches on a step is the residual list, nothing more.
+										if a.parts&tier.ComposedHead != 0 && headOn {
+											for k := range census {
+												if !slices.Contains(composedResidue, k) {
+													t.Fatalf("the tier launched its own %s on a step the composer served whole (%v)", k, census)
+												}
 											}
 										}
+										if nb, _, _ := st.ServedPart(tier.ComposedBlock); nb != len(toks)*m.Cfg.NLayer {
+											t.Fatalf("the composer served %d block steps where %d steps of %d blocks are %d",
+												nb, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
+										}
+										if nh, _, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && nh != wantHeads {
+											t.Fatalf("the composer served the head %d times in %d steps and the prompt (%d asked)", nh, len(toks), parts&tier.ComposedPrompt)
+										}
 									}
-									if nb, _, _ := st.ServedPart(tier.ComposedBlock); nb != len(toks)*m.Cfg.NLayer {
-										t.Fatalf("the composer served %d block steps where %d steps of %d blocks are %d",
-											nb, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
+									// The prompt's every block step served, in whole chunks.
+									if np, dp, up := st.ServedPart(tier.ComposedPrompt); np < m.Cfg.NLayer || np%m.Cfg.NLayer != 0 || dp != 0 || up != 0 {
+										t.Fatalf("the composer served %d block steps of the prompt, declined %d and was not asked for %d, where every chunk is %d blocks (%s)",
+											np, dp, up, m.Cfg.NLayer, st.LastErr)
 									}
-									if nh, _, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && nh != wantHeads {
-										t.Fatalf("the composer served the head %d times in %d steps and the prompt (%d asked)", nh, len(toks), parts&tier.ComposedPrompt)
+									for i := range want {
+										if math.IsNaN(logitNMSE(got[i], want[i])) {
+											t.Errorf("prompt %d step %d: with the composed %s the logits are not finite", pi, i, a.name)
+										}
 									}
-								}
-								// The prompt's every block step served, in whole chunks.
-								if np, dp, up := st.ServedPart(tier.ComposedPrompt); np < m.Cfg.NLayer || np%m.Cfg.NLayer != 0 || dp != 0 || up != 0 {
-									t.Fatalf("the composer served %d block steps of the prompt, declined %d and was not asked for %d, where every chunk is %d blocks (%s)",
-										np, dp, up, m.Cfg.NLayer, st.LastErr)
-								} else {
-									t.Logf("composed %s: %d block steps of the prompt served", a.name, np)
-								}
-								worst := 0.0
-								for i := range want {
-									e := logitNMSE(got[i], want[i])
-									if math.IsNaN(e) {
-										t.Errorf("step %d: with the composed %s the logits are not finite", i, a.name)
-									}
-									worst = max(worst, e)
-								}
-								off := 0.0
-								for i := 1; i < len(want); i++ {
-									off = max(off, logitNMSE(got[i], want[i-1]))
-								}
-								// Step 0 is the prompt's last row: the composer's, held
-								// to the band with every decoded step, the band's widest
-								// still the tier's backends' over the decoded steps alone.
-								// The prompt's input rows, where the composer gathers
-								// them, are the same rows as the tier's and the CPU's.
-								first := 0
-								{
+									// Step 0 is the prompt's last row: the composer's, held
+									// to the band with every decoded step, the band's widest
+									// still the tier's backends' over the decoded steps alone.
 									var ratios []float64
-									worstTier, worstGot := 0.0, 0.0
-									for i := first; i < len(ref); i++ {
+									worstGot := 0.0
+									for i := range ref {
 										et, eg := logitNMSE(want[i], ref[i]), logitNMSE(got[i], ref[i])
 										if math.IsNaN(et) || math.IsNaN(eg) || !(et > 0) {
-											t.Fatalf("step %d: the float reference is %.3g from the tier and %.3g from the arm: a degenerate reference proves nothing", i, et, eg)
+											t.Fatalf("prompt %d step %d: the float reference is %.3g from the tier and %.3g from the arm: a degenerate reference proves nothing", pi, i, et, eg)
 										}
 										ratios = append(ratios, eg/max(et, floor))
-										worstTier, worstGot = max(worstTier, et), max(worstGot, eg)
+										worstGot = max(worstGot, eg)
 									}
-									slices.Sort(ratios)
-									med := ratios[len(ratios)/2]
-									if !(med <= bandRatio) || !(worstGot <= bandWorst*wide) {
-										t.Errorf("against the float reference the composed %s is %.3g at the median of the tier's distance and %.3g at its worst, where the tier's backends reach %.3g (bounds %.1f and %.1fx)",
-											a.name, med, worstGot, wide, bandRatio, bandWorst)
-									}
-									t.Logf("composed %s against the float reference: median ratio to the tier's distance %.3f (range %.3f..%.3f), worst %.3g against the tier's %.3g here and %.3g on its widest backend",
-										a.name, med, ratios[0], ratios[len(ratios)-1], worstGot, worstTier, wide)
-								}
-								{
-									var ratios []float64
-									worstOff := 0.0
-									for i := max(first, 1); i < len(ref); i++ {
+									band.add(ratios, worstGot)
+									ratios, worstOff := nil, 0.0
+									for i := 1; i < len(ref); i++ {
 										eg := logitNMSE(got[i-1], ref[i])
 										ratios = append(ratios, eg/max(logitNMSE(want[i], ref[i]), floor))
 										worstOff = max(worstOff, eg)
 									}
-									slices.Sort(ratios)
-									med := ratios[len(ratios)/2]
-									if med <= bandRatio && worstOff <= bandWorst*wide {
-										t.Errorf("one position off the composed %s is %.3g at the median of the tier's distance and %.3g at its worst, inside the band (%.1f and %.1fx of %.3g): the gate cannot see a wrong part",
-											a.name, med, worstOff, bandRatio, bandWorst, wide)
-									}
-									t.Logf("one position off the composed %s: median ratio %.3g, worst %.3g against the band's %.3g", a.name, med, worstOff, bandWorst*wide)
+									offBand.add(ratios, worstOff)
 								}
-								t.Logf("composed %s: %d part steps served, worst NMSE from the tier %.3g, one position off %.3g", a.name, served, worst, off)
+								if !band.inside(wide) {
+									t.Errorf("against the float reference the composed %s is %.3g at the median prompt's median of the tier's distance and %.3g at its worst, where the tier's backends reach %.3g (bounds %.1f and %.1fx)",
+										a.name, band.median(), band.worst, wide, bandRatio, bandWorst)
+								}
+								t.Logf("composed %s against the float reference: median ratio to the tier's distance %.3f (per prompt %.3f), worst %.3g against %.3g on the tier's widest backend",
+									a.name, band.median(), band.meds, band.worst, wide)
+								if offBand.inside(wide) {
+									t.Errorf("one position off the composed %s is %.3g at the median prompt's median of the tier's distance and %.3g at its worst, inside the band (%.1f and %.1fx of %.3g): the gate cannot see a wrong part",
+										a.name, offBand.median(), offBand.worst, bandRatio, bandWorst, wide)
+								}
+								t.Logf("one position off the composed %s: median ratio %.3g (per prompt %.3g), worst %.3g against the band's %.3g", a.name, offBand.median(), offBand.meds, offBand.worst, bandWorst*wide)
 								// A part the composer serves wrong must fall outside the
-								// band the arm is held to: the State's statement of the
-								// step changed under the served part, k the part.
+								// band the arm is held to on the panel: the State's
+								// statement of the step changed under the served part,
+								// k the part.
 								violated := func(what string, k tier.Parts, after func(*State), extra ...tier.Option) {
-									bad, bst, _, _ := composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, false, after, extra...)
-									if n, d, _ := bst.ServedPart(k); n == 0 || d != 0 {
-										t.Fatalf("the arm with %s served the part %d times and declined it %d", what, n, d)
+									var bad panelBand
+									for pi, p := range panel {
+										want, ref := runs[dev][g][pi].want, runs[dev][g][pi].ref
+										out, bst, _, _ := composedDecodeWith(t, m, dev, p.ids, p.toks, parts, noGraph, false, after, extra...)
+										if n, d, _ := bst.ServedPart(k); n == 0 || d != 0 {
+											t.Fatalf("the arm with %s served the part %d times and declined it %d", what, n, d)
+										}
+										var ratios []float64
+										worstBad := 0.0
+										for i := range ref {
+											eg := logitNMSE(out[i], ref[i])
+											ratios = append(ratios, eg/max(logitNMSE(want[i], ref[i]), floor))
+											worstBad = max(worstBad, eg)
+										}
+										bad.add(ratios, worstBad)
 									}
-									var ratios []float64
-									worstBad := 0.0
-									for i := first; i < len(ref); i++ {
-										eg := logitNMSE(bad[i], ref[i])
-										ratios = append(ratios, eg/max(logitNMSE(want[i], ref[i]), floor))
-										worstBad = max(worstBad, eg)
+									if bad.inside(wide) {
+										t.Fatalf("with %s the arm is %.3g at the median prompt's median of the tier's distance and %.3g at its worst, inside the band (%.1f and %.1fx of %.3g): the gate cannot see it",
+											what, bad.median(), bad.worst, bandRatio, bandWorst, wide)
 									}
-									slices.Sort(ratios)
-									med := ratios[len(ratios)/2]
-									if med <= bandRatio && worstBad <= bandWorst*wide {
-										t.Fatalf("with %s the arm is %.3g at the median of the tier's distance and %.3g at its worst, inside the band (%.1f and %.1fx of %.3g): the gate cannot see it",
-											what, med, worstBad, bandRatio, bandWorst, wide)
-									}
-									t.Logf("with %s: median ratio %.3g, worst %.3g against the band's %.3g", what, med, worstBad, bandWorst*wide)
+									t.Logf("with %s: median ratio %.3g (per prompt %.3g), worst %.3g against the band's %.3g", what, bad.median(), bad.meds, bad.worst, bandWorst*wide)
 								}
 								// The served tables turn each row by the positions the
 								// State states for it; the gathered row is the token's.
@@ -788,7 +797,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								if a.parts&tier.ComposedTable != 0 && !m.container.Config().Flags.Has(jlm.FlagNoPosEnc) {
 									violated("every row told twice its position and 16 past", tier.ComposedTable, stretchAxes(2, 16))
 								}
-								if ne, _, _ := st.ServedPart(tier.ComposedEmbed); ne > 0 {
+								if ne, _, _ := st0.ServedPart(tier.ComposedEmbed); ne > 0 {
 									violated("every row gathered at the next token's", tier.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))
 								}
 								violated("every split's last segment dropped", tier.ComposedBlock, nil, tile, tier.WithSplitFault(true))
@@ -796,9 +805,9 @@ func TestComposedBlocksServe(t *testing.T) {
 								// composed kernel reading what nothing wrote shows
 								// as a changed logit.
 								if a.parts&tier.ComposedHead != 0 {
-									poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, tile, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
-									for i := range got {
-										if !slices.Equal(poisoned[i], got[i]) {
+									poisoned, _, _, _ := composedDecode(t, m, dev, panel[0].ids, panel[0].toks, parts, noGraph, false, tile, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
+									for i := range got0 {
+										if !slices.Equal(poisoned[i], got0[i]) {
 											t.Fatalf("step %d: with every buffer poisoned the logits change: a composed kernel reads what nothing wrote", i)
 										}
 									}
