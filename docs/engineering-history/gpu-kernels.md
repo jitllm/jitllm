@@ -10908,3 +10908,60 @@ row where the composer's reads two.
   downsample of the queries' grid) are declined by name
   (UncoveredGridAttend). On the cards the blocks still run the tier's
   convolution programs.
+- **A prompt's matvec on the CPU runs four rows a call, and sums its
+  byte dots in sixteen bits.** Decomposed on the E5-2680 v4's node 1
+  (TestComposedCPUProfile, Llama-3.2-1B Q4_K_M, a prompt of 512, us a
+  prompt token): composed 8414 against main's 2615; the rows matvec 6798
+  of it (Q4_K 5319, Q6_K 1468) against main's matvec 2242; the
+  attention's and the block's other reduces 737 and maps 827 against
+  main's attention 287 and its norms, rotary, activation and residual 60.
+  Four rows a call were refused by the vector registers, and five things
+  held them, each found from the live set at the refusal: the zero a
+  sub-block's first byte dot adds to sat in a register for the whole call
+  (a dot whose addend is zero now makes its pairs' sums in its own
+  register, on x86, SSE and arm64); a byte dot of unsigned bytes reserved
+  two scratch registers and uses one (dotTemps); each sum's period chain
+  held the sum's register and a register of its own, since the sum is
+  live to its loop's end (a sum's one reader in its loop now takes the
+  sum's register, kept to the step); orderer.together stepped the rows
+  side by side through the combine after the decode, so four rows held
+  four products and four minimum terms at once (rows now step side by
+  side only where they share two or more values still to make, the
+  shared value made after each row's own); and Q8_0's weight words are
+  loads, which shareComputed did not count, so its rows ran one after
+  another holding eight words (a weight's word now counts). RowJam runs
+  four rows a call: every packed type forms it but Q6_K and Q3_K with
+  VNNI, which halve to two, a quarter of the weight words a row a call
+  loads. Without VNNI a run of byte dots of unsigned bytes, from a zero
+  addend through the one dot reading each, sums its pairs in int16
+  (VPADDW) while the bound, twice the largest byte times 127 a dot, stays
+  within 32767, and widens once by ones at its last dot (Kernel.halfRuns):
+  a Q4_K or Q4_0 sub-block's eight words are one run, Q6_K's two, Q8_0's
+  signed bytes none; the sums are the same words. Prompt at 512 on node 1
+  (dev/bench TestComposedCPUPrefillAB, n=20, all cores of the node, node
+  busy 0-10% before each arm), composed against main: four rows, Llama
+  0.3046 -> 0.3665 and 0.3053 -> 0.3700 in two passes (A/A 0.9970 and
+  1.0121, 0.9852 and 0.9912; IQR 2.2-3.6%), 119 -> 144 tok/s against
+  main's 386-393; Qwen3-0.6B Q8_0 0.6161 -> 0.7047 and 0.6159 -> 0.6997
+  (A/A 0.9999, 0.9769, 1.0010, 1.0114). Sixteen-bit runs, against four
+  rows: Llama 0.3802 -> 0.4032 and 0.3714 -> 0.4065 (A/A 1.0110, 0.9977,
+  1.0055, 0.9945; IQR 2.3-3.1%), 145 -> 158 tok/s; Qwen3 0.7040 -> 0.7077
+  and 0.7056 -> 0.7023, unchanged by construction. With four rows the
+  profile reads 6868 us a token, the rows matvec 5128 of it (Q4_K 4023,
+  Q6_K 1095), and with the runs 6406 (Q4_K 3449, Q6_K 1075, the rest
+  1720 against main's 360). Gates: TestCPUPromptRunsFourRowsACall (four rows on eleven
+  packed types at both ISAs but the two named, a quarter of the words;
+  each of the five changes reverted alone fails it),
+  TestCPUByteDotsSumInSixteenBits (runs of eight, eight, two and none;
+  the bound doubled gives Q6_K runs of four and fails it; a run's addend
+  dropped fails TestComposedCPUMatVec and TestComposedCPURowsMatVec on
+  the Xeon, NMSE 2.2-3.3); the jit suite on the laptop with VNNI and on
+  the D-2123IT without; TestComposedCPURowsServe,
+  TestComposedCPURowsDoNotAllocate, TestCPUComposesOnce,
+  TestComposedCPUBlocksServe and TestPrefillMatchesForward/composed-cpu
+  on the E5's node 1 with no card (TestCPUComposesOnce's relocation arms
+  need a card). Left: Q6_K and Q3_K at four rows with VNNI; the rows
+  matvec still 2.3x main's (main decodes a row group once for every
+  token of a call, the weight held in registers, where a call here
+  decodes it for four); the attention and maps at 1.7 ms against main's
+  0.35.
