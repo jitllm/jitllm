@@ -109,6 +109,9 @@ type x86Lowerer struct {
 	// no AVX2, so the kernel is made in the legacy encodings.
 	isa x86.ISA
 	sse bool
+	// halves is each byte dot's place in a run that sums its pairs in
+	// sixteen bits (Kernel.halfRuns), made at the first byte dot.
+	halves map[int]halfRun
 }
 
 // shiftCount is the red-zone word a vector shift by a general register's
@@ -401,6 +404,30 @@ func (e *x86Lowerer) node(i int) {
 			default:
 				a.VMOVAPSReg(r, e.reg(nd.C))
 				a.VPDPBUSD(r, u, t)
+			}
+			return
+		}
+		if e.halves == nil {
+			e.halves = k.halfRuns()
+		}
+		switch e.halves[i] {
+		case halfFirst:
+			// A run's pairs summed in sixteen bits until its last dot.
+			a.VPMADDUBSW(r, u, t)
+			return
+		case halfOn:
+			p := x86.Reg(nd.Tmp - 1)
+			a.VPMADDUBSW(p, u, t)
+			a.VPADDW(r, e.reg(nd.C), p)
+			return
+		case halfLast:
+			p := x86.Reg(nd.Tmp - 1)
+			a.VPMADDUBSW(p, u, t)
+			a.VPADDW(p, e.reg(nd.C), p)
+			if e.k.Ones == 0 {
+				a.VPMADDWDMem(r, p, onesSlot)
+			} else {
+				a.VPMADDWD(r, p, x86.Reg(e.k.Ones-1))
 			}
 			return
 		}
@@ -749,6 +776,80 @@ func (e *x86Lowerer) node(i int) {
 	default:
 		e.fail("node %d: no x86 form of %s.%s", i, nd.Op, nd.Type)
 	}
+}
+
+// halfRun is a byte dot's place in a run of them summed in sixteen bits.
+type halfRun int8
+
+const (
+	halfNone halfRun = iota
+	halfFirst
+	halfOn
+	halfLast
+)
+
+// halfRuns is the byte dots of unsigned bytes whose pairs' sums, each at
+// most twice the largest byte times 127, are summed in sixteen bits before
+// they are widened: a run starts at a dot that adds them to zero and goes on
+// through the one dot that reads each, an addend of its own, for as long as
+// the bound stays within an int16, the last dot widening the run's sums by
+// ones. The words are the same as each dot widening its own: no sum
+// saturates.
+func (k *Kernel) halfRuns() map[int]halfRun {
+	readers := map[int]int{}
+	reader := map[int]int{}
+	for j := range k.Nodes {
+		for _, a := range k.Operands(&k.Nodes[j]) {
+			readers[*a]++
+			reader[*a] = j
+		}
+	}
+	for x := range k.Stores {
+		for _, a := range k.storeArgs(&k.Stores[x]) {
+			readers[*a] += 2
+		}
+	}
+	bound := func(i int) int {
+		nd := &k.Nodes[i]
+		if !nd.Op.byteDot() || nd.Op != OpDot4U && !k.unsignedBytes(nd.A) {
+			return -1
+		}
+		w, most := k.wordBits(nd.A, 6), 0
+		for b := range 4 {
+			most = max(most, int(w>>(8*b)&0xFF))
+		}
+		return 2 * most * 127
+	}
+	runs := map[int]halfRun{}
+	for i := range k.Nodes {
+		used := bound(i)
+		if used < 0 || !k.dotZero(k.Nodes[i].C) {
+			continue
+		}
+		run := []int{i}
+		for cur := i; readers[cur] == 1; {
+			j := reader[cur]
+			nd := &k.Nodes[j]
+			b := bound(j)
+			if b < 0 || nd.C != cur || nd.A == cur || nd.B == cur || used+b > 32767 {
+				break
+			}
+			used += b
+			run = append(run, j)
+			cur = j
+		}
+		if len(run) < 2 {
+			continue
+		}
+		for x, j := range run {
+			runs[j] = halfOn
+			if x == 0 {
+				runs[j] = halfFirst
+			}
+		}
+		runs[run[len(run)-1]] = halfLast
+	}
+	return runs
 }
 
 // unsignedBytes reports whether every byte of node i is below 0x80: a mask

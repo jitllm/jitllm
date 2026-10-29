@@ -159,3 +159,51 @@ func TestCPUPromptRunsFourRowsACall(t *testing.T) {
 		t.Fatal("no form ran four rows a call: the gate proved nothing")
 	}
 }
+
+// TestCPUByteDotsSumInSixteenBits holds a prompt's matvec of unsigned
+// weight bytes, formed for a host without VNNI, to summing its byte dots'
+// pairs in sixteen bits for runs of them, widened once a run: on Q4_K's
+// nibbles a sub-block's eight words are one run, 8*2*15*127 within an
+// int16; on Q6_K's six bits two words are; Q8_0's signed bytes make none.
+func TestCPUByteDotsSumInSixteenBits(t *testing.T) {
+	isa := uint64(cpu.CPU().ISA()) &^ uint64(x86.ISAVNNI)
+	for _, c := range []struct {
+		typ  quant.Type
+		most int
+	}{{quant.Q4_K, 8}, {quant.Q4_0, 8}, {quant.Q6_K, 2}, {quant.Q8_0, 0}} {
+		k, _ := rowsForm(t, Default(), c.typ, isa, 8)
+		if k == nil {
+			t.Fatalf("%v: no rows kernel", c.typ)
+		}
+		runs := k.halfRuns()
+		first, longest := 0, 0
+		for i, r := range runs {
+			if r != halfFirst {
+				continue
+			}
+			first++
+			n := 1
+			for j := i; runs[j] != halfLast; n++ {
+				next := -1
+				for x := range k.Nodes {
+					if k.Nodes[x].C == j && runs[x] != halfNone && k.Nodes[x].Op.byteDot() {
+						next = x
+					}
+				}
+				if next < 0 {
+					t.Fatalf("%v: a run started at node %d breaks after node %d", c.typ, i, j)
+				}
+				j = next
+			}
+			longest = max(longest, n)
+		}
+		switch {
+		case c.most == 0 && first > 0:
+			t.Errorf("%v: %d runs of signed byte dots summed in sixteen bits", c.typ, first)
+		case c.most > 0 && (first == 0 || longest != c.most):
+			t.Errorf("%v: %d runs, the longest %d dots, want runs of %d", c.typ, first, longest, c.most)
+		default:
+			t.Logf("%v: %d runs of at most %d dots", c.typ, first, longest)
+		}
+	}
+}
