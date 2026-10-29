@@ -118,7 +118,7 @@ func recomputed(ks []*Kernel, i int) ([]int, bool) {
 	}
 	for j := i + 1; j <= readers[len(readers)-1]; j++ {
 		for _, b := range pk.Bufs {
-			if b.Operand != o && ks[j].writes(b.Operand) || writesStream(ks[j], b.Operand) {
+			if b.Operand != o && ks[j].writes(b.Operand) || b.Kind == BufIn && !writtenBy(ks, b.Operand) && writesBound(ks[j], b.Operand) {
 				return nil, false
 			}
 		}
@@ -126,13 +126,14 @@ func recomputed(ks []*Kernel, i int) ([]int, bool) {
 	return readers, true
 }
 
-// writesStream says k writes the output bound over stream input in.
-func writesStream(k *Kernel, in Operand) bool {
-	if in.Stream == 0 || in.Out {
+// writesBound says k writes an output a call may bind over the part's
+// input in: its own stream's in a block of several, any other part's.
+func writesBound(k *Kernel, in Operand) bool {
+	if in.Kind != OperandValue || in.Out {
 		return false
 	}
 	for _, b := range k.Bufs {
-		if b.Operand.Out && b.Operand.Stream == in.Stream && k.writes(b.Operand) {
+		if b.Operand.Out && b.Operand.Of == in.Of && (in.Stream == 0 || b.Operand.Stream == in.Stream) && k.writes(b.Operand) {
 			return true
 		}
 	}
