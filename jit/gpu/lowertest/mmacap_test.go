@@ -135,8 +135,8 @@ func TestTileCoversExactlyWhatItClaims(t *testing.T) {
 	//
 	//	spirv  the shape is in the type, so the lowering takes any of them and
 	//	       the driver refuses what it did not enumerate (not visible here).
-	//	msl    the shape is a template parameter and simdgroup_matrix is 8x8
-	//	       only, so the lowering refuses 16x8x16 itself.
+	//	msl    simdgroup_matrix is 8x8; a larger float tile is lowered as
+	//	       8x8 pieces, and an integer tile is refused.
 	//	ptx    any side a multiple of 8, binary16 or float32 (three tf32
 	//	       products) operands; an int8 tile is refused.
 	for _, c := range []struct {
@@ -144,7 +144,7 @@ func TestTileCoversExactlyWhatItClaims(t *testing.T) {
 		elem    ir.TileElem
 		lowers  []string // the backends whose LOWERING accepts this shape
 	}{
-		{16, 8, 16, ir.TileF16, []string{"spirv", "ptx"}},
+		{16, 8, 16, ir.TileF16, []string{"spirv", "msl", "ptx"}},
 		{8, 8, 8, ir.TileF32, []string{"spirv", "msl", "ptx"}},
 		{16, 8, 32, ir.TileS8, []string{"spirv"}},
 	} {
