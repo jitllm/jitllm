@@ -156,8 +156,9 @@ func (c *Context) slot(v graph.ValueID) int {
 }
 
 // int8 is value v's int8 form, rows of w, as primitives: each window's
-// amax, its scale, the scale's inverse, each element's code, the codes
-// packed into words, each word's sum and the sums a Sums. The words and the
+// amax, its scale, the scale's inverse, each element's code (a Sums of a
+// window a row of the map), the codes' sums a Sums and the codes packed
+// into words. The words and the
 // scales are what it keeps, the scales a row's windows' and then its sums',
 // row after row (scaleRow), so its layout holds any count of rows.
 func (c *Context) int8(v graph.ValueID) []Prim {
@@ -225,7 +226,15 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	}
 
 	var k exprs
-	t := k.op(OpMul, F, k.at(0, sh, k.coord(0), k.coord(1)), k.at(1, win, k.coord(0), k.op(OpDiv, U, k.coord(1), k.u(uint32(ww)))))
+	cs, el, wi := sh, k.coord(1), -1
+	if ww%q.Sums == 0 {
+		cs = []int{R, ns, q.Sums}
+		el = k.op(OpAdd, U, k.op(OpMul, U, k.coord(1), k.u(uint32(q.Sums))), k.coord(2))
+		wi = k.op(OpDiv, U, k.coord(1), k.u(uint32(ww/q.Sums)))
+	} else {
+		wi = k.op(OpDiv, U, el, k.u(uint32(ww)))
+	}
+	t := k.op(OpMul, F, k.at(0, sh, k.coord(0), el), k.at(1, win, k.coord(0), wi))
 	half := k.un(OpBitcast, F, k.op(OpAdd, U, k.op(OpAnd, U, k.un(OpBitcast, U, t), k.u(0x80000000)), k.u(0x3f000000)))
 	k.un(OpCvtI32, I, k.op(OpAdd, F, t, half))
 
@@ -236,18 +245,18 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	ps = append(ps, refined...)
 	ps = append(ps,
 		Prim{Kind: PrimMap, Shape: win, In: pick, Out: inv, Expr: r.e, Facts: facts},
-		Prim{Kind: PrimMap, Shape: sh, In: []Operand{x, inv}, Out: codes, Expr: k.e})
+		Prim{Kind: PrimMap, Shape: cs, In: []Operand{x, inv}, Out: codes, Expr: k.e})
 	return append(ps, c.int8Pack(v, codes, false, nsl)...)
 }
 
 // int8Codes is the int8 form of value v, a row of codes the graph states
-// (graph.ElemI8, held as floats): its codes packed into words, each word's
-// sum and the sums a Sums, the sums the scales' only words.
+// (graph.ElemI8, held as floats): its sums a Sums, the scales' only words,
+// and its codes packed into words.
 func (c *Context) int8Codes(v graph.ValueID) []Prim { return c.int8Pack(v, c.value(v), true, 0) }
 
-// int8Pack is the codes of value v packed Word to a word, each word's sum,
-// and the sums a Sums into its scales after each row's nw windows' (a row
-// nw+ns words): the codes i32, or floats where float is set.
+// int8Pack is the sums of value v's codes a Sums into its scales after each
+// row's nw windows' (a row nw+ns words) and the codes packed Word to a
+// word: the codes i32, or floats where float is set.
 func (c *Context) int8Pack(v graph.ValueID, codes Operand, float bool, nw int) []Prim {
 	q := c.Int8
 	U, F, I := ir.U32, ir.F32, ir.I32
@@ -255,7 +264,6 @@ func (c *Context) int8Pack(v graph.ValueID, codes Operand, float bool, nw int) [
 	R, W := sh[0], sh[1]
 	nwd, ns := W/q.Word, W/q.Sums
 	x := c.value(v)
-	wsum := Operand{Kind: OperandScratch, Name: x.Name + ".wsum", Elem: I, Temp: true}
 	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}
 	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
 	code := func(e *exprs, ax ...int) int {
@@ -278,20 +286,17 @@ func (c *Context) int8Pack(v graph.ValueID, codes Operand, float bool, nw int) [
 		packed = b
 	}
 
-	var s exprs
-	code(&s, s.coord(0), s.op(OpAdd, U, s.op(OpMul, U, s.coord(1), s.u(uint32(q.Word))), s.coord(2)))
-
-	per := q.Sums / q.Word
 	var f exprs
-	f.un(OpCvtF32, F, f.at(0, []int{R, nwd}, f.coord(0), f.op(OpAdd, U, f.op(OpMul, U, f.coord(1), f.u(uint32(per))), f.coord(2))))
+	if sum := f.at(0, []int{R, ns, q.Sums}, f.coord(0), f.coord(1), f.coord(2)); !float {
+		f.un(OpCvtF32, F, sum)
+	}
 	var fi exprs
 	fi.op(OpAdd, U, fi.op(OpAdd, U, fi.op(OpMul, U, fi.coord(0), fi.u(uint32(nw+ns))), fi.coord(1)), fi.u(uint32(nw)))
 
 	ext := R * (nw + ns)
 	return []Prim{
-		{Kind: PrimMap, Shape: []int{R, nwd}, In: []Operand{codes}, Out: words, Expr: p.e},
-		{Kind: PrimReduce, Shape: []int{R, nwd, q.Word}, In: []Operand{codes}, Out: wsum, Combine: OpAdd, Type: I, Expr: s.e},
-		{Kind: PrimReduce, Shape: []int{R, ns, per}, In: []Operand{wsum}, Out: scales, Combine: OpAdd, Start: StartFirst,
+		{Kind: PrimReduce, Shape: []int{R, ns, q.Sums}, In: []Operand{codes}, Out: scales, Combine: OpAdd,
 			Expr: f.e, Index: fi.e, Facts: Facts{OutExtent: ext}},
+		{Kind: PrimMap, Shape: []int{R, nwd}, In: []Operand{codes}, Out: words, Expr: p.e},
 	}
 }
