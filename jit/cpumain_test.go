@@ -101,6 +101,9 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 		off := i * per
 		var bs [3][]byte
 		for r, p := range planes {
+			if len(p) == 0 {
+				continue
+			}
 			b := mem[off : off+4*len(p)]
 			copy(b, unsafe.Slice((*byte)(unsafe.Pointer(&p[0])), 4*len(p)))
 			copies[i][r] = unsafe.Slice((*uint32)(unsafe.Pointer(&b[0])), len(p))
