@@ -11062,3 +11062,7 @@ row where the composer's reads two.
   Prompt at 512 on node 1 (n=20, busy 0-2%, A/A 0.98-1.00): Llama 0.4130 -> 0.5092 and 0.4040 -> 0.5152, 159 -> 202 tok/s;
   Qwen3-0.6B Q8_0 0.6844 -> 0.9773 and 0.6921 -> 0.9737. Llama's profile: 4948 us a token against main's 2589, the matvec 4229 of it
   against 2261 (Q6_K's ffn_down 968, Q4_K's 501); weight tiles of 16 or 32 rows for 64 change nothing (5069, 5021).
+- A scratch each call writes alone is stated by the composer (jit.Binding.Own: every store at the point's own coordinates, or a flat index no two points share), and the CPU call site runs such a kernel on the pool: decode's attention dots, scale and softmax ran their calls on one core (Qwen3-0.6B Q8_0, 2533 + 161 us a token of 22.6 ms, main's attention 656).
+  Node 1 of a V100 box (TestComposedCPUAB, n=20, A/A 1.004-1.016): composed over main 0.885 and 0.901 (IQR 3.1%, 4.1%), 27.7-28.9 -> 45.2-46.3 tok/s; the base reads 0.573 and 0.578 at IQR 23-38%, unquotable.
+  Decided against by structure: the scale as the dots' epilogue (the head pairs sharing a key row are lost), the scale beside the softmax's max (a range loop iterates positions, TestComposedCPUAttendRows NMSE 1.0), a residual add in a CPU matvec's epilogue (the matvec loses its jam).
+  A V100 decode block is nine composed kernels to main's eight or nine; the composed greedy token's one-workgroup argmax is 3.0 of a 1B token's 5.3 ms of kernels.

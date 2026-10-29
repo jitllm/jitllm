@@ -90,6 +90,9 @@ type Kernel struct {
 	// Running, where SplitRange set it, is a split whose partitions one
 	// workgroup runs in order (Running, the pass).
 	Running *RunningSplit
+	// Own is the operands each point of the generated space writes at its
+	// own place alone: a call over points of it writes its own elements.
+	Own []Operand
 	// Seq, where a schedule set it, is the kernel as a sequence: each node,
 	// store and loop in the order the code runs them.
 	Seq []Entry

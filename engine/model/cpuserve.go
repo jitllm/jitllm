@@ -1676,7 +1676,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 			if bd.Writes {
 				rw[o] |= 2
 			}
-			if bd.Writes && bd.Operand.Kind == jit.OperandScratch && !callsOwnScratch(c, bd.Operand, bd.Bytes) {
+			if bd.Writes && bd.Operand.Kind == jit.OperandScratch && !bd.Own && !callsOwnScratch(c, bd.Operand, bd.Bytes) {
 				cc.serial = true
 			}
 			if bd.Writes {

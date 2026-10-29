@@ -36,6 +36,7 @@ func (p Prescale) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		n, scaled := scaleMap(k, m, w, g)
 		kc := k.clone()
+		kc.Own = k.ownRenamed(vals, dst)
 		for b := range kc.Bufs {
 			switch kc.Bufs[b].Operand {
 			case w.Operand:
@@ -154,5 +155,6 @@ func scaleMap(k, m *Kernel, w Buf, g int) (*Kernel, Operand) {
 	if pos := k.Positions; pos != nil {
 		n.Positions = &Positions{Axis: 2, Loop: -1, Align: 1, First: copyInto(n, k, pos.First, leaf), End: copyInto(n, k, pos.End, leaf)}
 	}
+	n.Own = n.ownWrites()
 	return n, scaled
 }

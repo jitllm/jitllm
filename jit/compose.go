@@ -8,6 +8,7 @@ package jit
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // Step is the shape of one step the engine runs: rows a step, the history's
@@ -134,6 +135,9 @@ type Binding struct {
 	// Read is whether a live load of the kernel reads it: a binding a
 	// rewrite left unread is still bound, and is no reader of its storage.
 	Read bool
+	// Own is a buffer each call writes its own elements of, no other call
+	// writing them.
+	Own bool
 }
 
 // PartPlan is one part of the model on its device: its kernels in launch
@@ -397,7 +401,10 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 		}
 		for bi, b := range k.Bufs {
 			if b.Kind != BufShared {
-				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut && written[bi], Bytes: b.bytes(), Words: b.Words, Read: read[bi]})
+				o := b.Operand
+				o.Copy = 0
+				own := !k.Work && k.Group == 0 && slices.Contains(k.Own, o)
+				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut && written[bi], Bytes: b.bytes(), Words: b.Words, Read: read[bi], Own: own})
 			}
 		}
 		codes = append(codes, PartCode{Code: c, Part: k.Of})

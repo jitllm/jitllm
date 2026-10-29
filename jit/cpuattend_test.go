@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
+	"slices"
 	"testing"
 	"unsafe"
 
@@ -24,9 +25,23 @@ func attendGraph(heads, kv, dim int) *graph.Graph {
 // every operand's words where bufs names it by kind and name (a value by
 // its graph name), the composer's own buffers made here.
 func runCPUCalls(codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
+	return runCPUCallsAt(codes, g, bufs, func(at int) int { return at })
+}
+
+// runCPUCallsAt is runCPUCalls with each kernel's at-th call run at the
+// coordinates of call of(at). A scratch a code binds as its calls' own
+// (Binding.Own) fails it where two calls change one word of it.
+func runCPUCallsAt(codes []Code, g *graph.Graph, bufs map[string][]uint32, of func(int) int) error {
 	own := map[Operand][]uint32{}
 	var keep [][]uint32
 	for _, c := range codes {
+		var owned []Operand
+		for _, b := range c.Binds {
+			if o := b.Operand; b.Own && b.Writes && o.Kind == OperandScratch && o.Copy == 0 {
+				owned = append(owned, o)
+			}
+		}
+		writer := map[Operand][]int{}
 		if c.CPU == nil {
 			return fmt.Errorf("%s has no CPU code", c.Name)
 		}
@@ -38,7 +53,8 @@ func runCPUCalls(codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
 		for _, e := range c.Calls {
 			n *= e
 		}
-		for at := range n {
+		for call := range n {
+			at := of(call)
 			var args cpu.Args
 			base := unsafe.Pointer(&args)
 			for _, a := range c.Args {
@@ -98,7 +114,26 @@ func runCPUCalls(codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
 				}
 				*slot = uint64(uintptr(unsafe.Pointer(&words[0]))) + uint64(elem*off)
 			}
+			var before [][]uint32
+			for _, o := range owned {
+				before = append(before, slices.Clone(own[o]))
+			}
 			code.Call(&args)
+			for i, o := range owned {
+				if writer[o] == nil {
+					writer[o] = make([]int, len(own[o]))
+				}
+				for w := range own[o] {
+					if own[o][w] == before[i][w] {
+						continue
+					}
+					if x := writer[o][w]; x > 0 && x != call+1 {
+						code.Close()
+						return fmt.Errorf("%s: calls %d and %d both write word %d of %s, which it binds as each call's own", c.Name, x-1, call, w, o.Name)
+					}
+					writer[o][w] = call + 1
+				}
+			}
 		}
 		code.Close()
 	}

@@ -411,6 +411,7 @@ func (f Fuse) joinsAlongside(p, c *Kernel) (Operand, int, int, bool) {
 func mergeAlongside(p, c *Kernel, v Operand, st, pl int) *Kernel {
 	m := p.clone()
 	m.Name, m.Kind = p.Name+"+"+c.Name, PrimReduce
+	m.Own = ownApart(p, c)
 	coords := map[int]int{}
 	for i, nd := range m.Nodes {
 		if nd.Op == OpCoord {
@@ -482,6 +483,7 @@ func graftStores(m, c *Kernel, nodeOf, bufOf, loopOf []int) {
 func merge(p, c *Kernel, v Operand, st int) *Kernel {
 	m := p.clone()
 	m.Name = p.Name + "+" + c.Name
+	m.Own = ownJoined(p, c)
 	val := p.Stores[st].Val
 	m.Stores = append(m.Stores[:st:st], m.Stores[st+1:]...)
 	coords := map[int]int{}
@@ -521,6 +523,7 @@ func (f Fuse) joinsAtStores(p, c *Kernel, ks []*Kernel) (Operand, bool) {
 func mergeAtStores(p, c *Kernel, v Operand) *Kernel {
 	m := p.clone()
 	m.Name = p.Name + "+" + c.Name
+	m.Own = ownApart(p, c)
 	var kept, at []Store
 	for _, s := range m.Stores {
 		if !s.Barrier && !s.Run && s.At == -1 && m.Bufs[s.Buf].Operand == v {

@@ -108,6 +108,7 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 			}
 			k.Part, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored = req.Part, sp.unfused[k.Of], sp.unjammed[k.Of], sp.unpaired[k.Of], sp.unwide[k.Of], sp.uncursored[k.Of]
 			k.Apart = req.Apart
+			k.Own = k.ownWrites()
 			k.Capacity = liveOf(p, req.Step, req.Device)
 			ks = append(ks, k)
 		}

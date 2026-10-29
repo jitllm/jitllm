@@ -64,6 +64,7 @@ func sameAs(a, b *Kernel, oi, ob Operand) bool {
 // renamed is k with its buffers of operand from those of to.
 func (k *Kernel) renamed(from, to Operand) *Kernel {
 	m := k.clone()
+	m.Own = k.ownRenamed(from, to)
 	for i := range m.Bufs {
 		if m.Bufs[i].Operand == from {
 			m.Bufs[i].Operand = to

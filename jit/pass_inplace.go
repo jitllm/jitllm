@@ -77,6 +77,7 @@ func (p InPlace) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 					continue
 				}
 				m := out[j].clone()
+				m.Own = out[j].ownRenamed(from, to)
 				for b := range m.Bufs {
 					if c, ok := same(m.Bufs[b].Operand); ok {
 						m.Bufs[b].Operand = to
