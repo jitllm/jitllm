@@ -90,8 +90,9 @@ func (p Prologue) readers(ks []*Kernel, i int, d Device) int {
 }
 
 // pays says running pr in each workgroup of cs moves no more words than a
-// launch of pr holds d for: every workgroup reads pr's inputs in place of
-// the outputs it reads, and pr's own reads and writes go.
+// launch of pr holds d for: every workgroup reads pr's inputs whole before
+// its own first load -- what it then reads of pr's outputs streamed beside
+// its weights apart, so saves it no wait -- and pr's own reads and writes go.
 func pays(pr *Kernel, cs []*Kernel, d Device) bool {
 	if d.Launch <= 0 {
 		return true
@@ -108,13 +109,7 @@ func pays(pr *Kernel, cs []*Kernel, d Device) bool {
 	}
 	extra := -in - out
 	for _, c := range cs {
-		read := int64(0)
-		for _, b := range pr.Bufs {
-			if b.Kind == BufOut && readsOperand(c, b.Operand) {
-				read += words(b)
-			}
-		}
-		extra += int64(c.Elements()) * (in - read)
+		extra += int64(c.Elements()) * in
 	}
 	return extra <= int64(d.Launch)
 }
