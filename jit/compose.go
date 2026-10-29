@@ -89,6 +89,9 @@ type Code struct {
 	// a call a worker, of a multiple of ShareUnit rows, and passes each its
 	// rows in the Share word.
 	Share, ShareUnit int
+	// Reach is Kernel.Reach: the operands each call reaches only its own
+	// leading rows of.
+	Reach []Reach
 }
 
 // Writes reports whether the kernel writes operand o.
@@ -352,6 +355,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 		if l.CPU != nil && !k.Work && k.Group <= 0 {
 			c.Calls = append([]int(nil), k.Space...)
 			c.Share, c.ShareUnit = k.Share, k.ShareUnit
+			c.Reach = k.Reach
 		}
 		if k.Capacity > 0 && k.RowsHeld && len(k.Space) > 0 && k.Space[0] > 0 {
 			c.Live, c.LiveUnits, c.LiveInner, c.LiveGroup = k.Capacity, k.Space[0], k.Elements()/k.Space[0], k.Group

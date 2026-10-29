@@ -143,9 +143,19 @@ type cpuCode struct {
 	// and ends their calls' running totals (cpuGroup).
 	rd, wr []cpuBuf
 	join   int
+	// chain is how many kernels after it, some reading what one before
+	// writes, run in its phase unit by unit (chainPhases), of units units;
+	// sliced is the rows of each buffer a call reaches alone (cpuCode.slice).
+	chain, units int
+	sliced       []cpuSlice
 	// share is the code's hold on a weight's rows sized at the launch
 	// (jit.Code.Share).
 	share jit.Code
+}
+
+type cpuSlice struct {
+	buf cpuBuf
+	per int
 }
 
 // cpuBuf is a buffer a call word binds, by where the call site finds it.
@@ -387,9 +397,12 @@ type cpuRegion struct {
 	c    *cpuCode
 	live int
 	fn   func(worker, lo, hi int)
-	// g is a phase's kernels (cpuGroup), gfn the region that runs them.
-	g   []cpuCode
-	gfn func(worker, lo, hi int)
+	// g is a phase's kernels (cpuGroup), gfn the region that runs them;
+	// cfn runs them unit by unit, units units (cpuChain).
+	g     []cpuCode
+	gfn   func(worker, lo, hi int)
+	cfn   func(worker, lo, hi int)
+	units int
 }
 
 // cpuBound is a block's step as its words read it: n rows of the residual
@@ -1356,6 +1369,7 @@ func (s *State) cpuPlace() {
 	s.cpu.ends = make([]int, 0, 16)
 	s.cpu.run.fn = s.cpu.run.region
 	s.cpu.run.gfn = s.cpu.run.groupRegion
+	s.cpu.run.cfn = s.cpu.run.chainRegion
 	s.cpu.zero = make([]uint32, 4)
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
@@ -1735,6 +1749,10 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 			f.unit = max(f.unit, c.Live/c.LiveUnits)
 		}
 		bytes := map[jit.Operand]int64{}
+		reach := map[jit.Operand][]int{}
+		for _, r := range c.Reach {
+			reach[r.Operand] = r.Per
+		}
 		// rw is each operand's use: 1 read, 2 written.
 		rw := map[jit.Operand]uint8{}
 		for _, bd := range c.Binds {
@@ -1912,6 +1930,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 				if use&2 != 0 {
 					cc.wr = append(cc.wr, buf)
 				}
+				cc.slice(buf, reach[o])
 			}
 		}
 		code, err := cpu.MapNamed(c.CPU, c.Name)
@@ -1957,6 +1976,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 		return nil, err
 	}
 	if rows == 1 {
+		f.chainPhases()
 		f.joinPhases()
 	}
 	return f, nil
@@ -2015,15 +2035,120 @@ func callsOwnScratch(c jit.Code, o jit.Operand, bytes int64) bool {
 // kernel's. A run does not cross the selection's split.
 func (f *cpuBlockForm) joinPhases() {
 	for g := 0; g < len(f.codes); {
+		if f.codes[g].chain > 0 {
+			g += f.codes[g].chain + 1
+			continue
+		}
 		j := g + 1
 		if f.codes[g].joinable() {
-			for j < len(f.codes) && j != f.split && f.codes[j].joinable() && apart(f.codes[g:j], &f.codes[j]) {
+			for j < len(f.codes) && j != f.split && f.codes[j].joinable() && f.codes[j].chain == 0 && apart(f.codes[g:j], &f.codes[j]) {
 				j++
 			}
 		}
 		f.codes[g].join = j - g - 1
 		g = j
 	}
+}
+
+// slice records the rows of buffer b a call reaches alone along the one
+// axis of its calls past a single call (jit.Code.Reach), -1 for none.
+func (c *cpuCode) slice(b cpuBuf, reach []int) {
+	per := -1
+	if ax := oneAxis(c.calls); ax >= 0 && ax < len(reach) && reach[ax] > 0 {
+		per = reach[ax]
+	}
+	for i := range c.sliced {
+		if c.sliced[i].buf == b {
+			if c.sliced[i].per != per {
+				c.sliced[i].per = -1
+			}
+			return
+		}
+	}
+	c.sliced = append(c.sliced, cpuSlice{b, per})
+}
+
+// oneAxis is the one axis of calls past a single call, -1 for none or more.
+func oneAxis(calls []int) int {
+	ax := -1
+	for i, n := range calls {
+		if n == 1 {
+			continue
+		}
+		if ax >= 0 {
+			return -1
+		}
+		ax = i
+	}
+	return ax
+}
+
+// chainPhases runs each run of kernels that chained admits, one reading
+// what another writes, in one pool phase: unit u runs its calls of each
+// kernel in turn. A run does not cross the selection's split.
+func (f *cpuBlockForm) chainPhases() {
+	for g := 0; g < len(f.codes); {
+		j := g + 1
+		for j < len(f.codes) && j != f.split && f.codes[j].joinable() && chained(f.codes[g:j+1]) {
+			j++
+		}
+		dep := false
+		for k := g + 1; k < j; k++ {
+			dep = dep || !apart(f.codes[g:k], &f.codes[k])
+		}
+		if dep {
+			f.codes[g].chain, f.codes[g].units = j-g-1, chainUnits(f.codes[g:j])
+		}
+		g = j
+	}
+}
+
+// chainUnits is the units of a phase of kernels cs: the fewest calls of
+// one, every kernel's calls along one axis and a whole number a unit; 0
+// where they are not.
+func chainUnits(cs []cpuCode) int {
+	u := cs[0].n
+	for i := range cs {
+		u = min(u, cs[i].n)
+	}
+	ax := oneAxis(cs[0].calls)
+	for i := range cs {
+		if !cs[i].joinable() || cs[i].share.Share > 0 || ax < 0 || oneAxis(cs[i].calls) != ax || len(cs[i].calls) != len(cs[0].calls) || cs[i].n%u != 0 {
+			return 0
+		}
+	}
+	return u
+}
+
+// chained says kernels cs may run in one phase unit by unit: every buffer
+// one writes and another reads or writes, every call of both reaches only
+// its own slice of, a unit's calls' slices one span in each.
+func chained(cs []cpuCode) bool {
+	u := chainUnits(cs)
+	if u <= 1 {
+		return false
+	}
+	span := func(c *cpuCode, b cpuBuf) int {
+		for _, s := range c.sliced {
+			if s.buf == b && s.per > 0 {
+				return s.per * (c.n / u)
+			}
+		}
+		return -1
+	}
+	for i := range cs {
+		for _, b := range cs[i].wr {
+			for j := range cs {
+				if j == i || !slices.Contains(cs[j].rd, b) && !slices.Contains(cs[j].wr, b) {
+					continue
+				}
+				if s := span(&cs[i], b); s < 0 || s != span(&cs[j], b) {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 // joinable says a kernel's calls may share a phase with another's: calls
@@ -2256,6 +2381,19 @@ func (s *State) cpuExperts(b *cpuBound, f *cpuBlockForm, li, n int) error {
 func (s *State) cpuCalls(b *cpuBound, cs []cpuCode) {
 	for i := 0; i < len(cs); i++ {
 		c := &cs[i]
+		if c.chain > 0 {
+			g := cs[i : i+c.chain+1]
+			i += c.chain
+			if !s.prof {
+				s.cpuChain(b, g, c.units)
+				continue
+			}
+			t0 := time.Now()
+			s.cpuChain(b, g, c.units)
+			c.nanos += int64(time.Since(t0))
+			c.runs++
+			continue
+		}
 		if c.join == 0 {
 			s.cpuCall(b, c)
 			continue
@@ -2308,6 +2446,41 @@ func (s *State) cpuGroup(b *cpuBound, g []cpuCode) {
 	r := &s.cpu.run
 	r.s, r.b, r.g = s, b, g
 	s.jit.ParallelWorkers(n, 1, r.gfn)
+}
+
+// cpuChain runs the kernels g as one phase over the pool, units units:
+// a unit its calls of each kernel in turn (chainPhases).
+func (s *State) cpuChain(b *cpuBound, g []cpuCode, units int) {
+	s.cpu.part = s.Workers()
+	if s.jit == nil || s.jit.Workers() <= 1 {
+		s.cpuChainRun(&s.cpu.args[0], b, g, units, 0, units)
+		return
+	}
+	if w := s.jit.Workers(); len(s.cpu.args) < w {
+		s.cpu.args = append(s.cpu.args, make([]cpu.Args, w-len(s.cpu.args))...)
+	}
+	r := &s.cpu.run
+	r.s, r.b, r.g, r.units = s, b, g, units
+	s.jit.ParallelWorkers(units, 1, r.cfn)
+}
+
+// cpuChainRun runs the units [lo, hi) of the kernels g's phase on a.
+func (s *State) cpuChainRun(a *cpu.Args, b *cpuBound, g []cpuCode, units, lo, hi int) {
+	for u := lo; u < hi; u++ {
+		for k := range g {
+			q := g[k].n / units
+			for at := u * q; at < (u+1)*q; at++ {
+				s.cpuWords(a, b, &g[k], at)
+				g[k].code.Call(a)
+			}
+		}
+	}
+}
+
+// chainRegion runs the units [lo, hi) of the phase's kernels on worker w's
+// words.
+func (r *cpuRegion) chainRegion(w, lo, hi int) {
+	r.s.cpuChainRun(&r.s.cpu.args[w], r.b, r.g, r.units, lo, hi)
 }
 
 // cpuGroupRun runs the calls [lo, hi) of the kernels g's one space on a.

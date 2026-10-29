@@ -151,7 +151,7 @@ func TestComposedCPUProfile(t *testing.T) {
 			if cb := st.cpu.blocks[st.lo]; cb != nil && cb.f != nil {
 				b.WriteString("  block 0's kernels in order:\n")
 				for _, c := range cb.f.codes {
-					fmt.Fprintf(&b, "    %-60.60s calls %v n %d serial %v join %d", c.name+c.desc, c.calls, c.n, c.serial, c.join)
+					fmt.Fprintf(&b, "    %-60.60s calls %v n %d serial %v join %d chain %d", c.name+c.desc, c.calls, c.n, c.serial, c.join, c.chain)
 					for _, a := range c.args {
 						if a.src == cpuArgWeight || a.src == cpuArgCoord {
 							fmt.Fprintf(&b, " [src %d region %d per %v elem %d off %d]", a.src, a.region, a.per, a.elem, a.off)

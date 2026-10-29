@@ -150,6 +150,7 @@ func cpuWideProfile() Profile {
 		Induction{Tail: 13},
 		Splats{},
 		Consts{Shared: mainBlock()},
+		Reaches{},
 		Args{Fields: mainArgs(), Parts: map[PartKind]ArgFields{PartSample: mainSampleArgs(), PartTable: mainTableArgs()}},
 		Simplify{ConstLast: true},
 		Cursors{},

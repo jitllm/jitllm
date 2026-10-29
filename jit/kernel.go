@@ -105,6 +105,9 @@ type Kernel struct {
 	// Own is the operands each point of the generated space writes at its
 	// own place alone: a call over points of it writes its own elements.
 	Own []Operand
+	// Reach, where Reaches set it, is the operands each point reaches only
+	// its own leading rows of.
+	Reach []Reach
 	// Seq, where a schedule set it, is the kernel as a sequence: each node,
 	// store and loop in the order the code runs them.
 	Seq []Entry
