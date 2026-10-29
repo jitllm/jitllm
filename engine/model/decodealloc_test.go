@@ -570,6 +570,7 @@ func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
 			t.Skipf("no block placed on the device -- this arm proved nothing")
 		}
 	}
+	placed := s.GPULayers()
 	// The warm-up settles the tuners, the kernel caches and the pages, whose
 	// one-off allocations are not a token's.
 	for i := range warm {
@@ -602,6 +603,9 @@ func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
 		captures = g.Stats().Captures - c0.Captures
 	}
 	_, a1 := s.jit.NUMA()
+	if g != nil && s.GPULayers() < placed {
+		t.Fatalf("%d of the %d blocks placed on the device are still there after the window (%s): this arm measured the host", s.GPULayers(), placed, declinesOf(g.Stats()))
+	}
 	if m.opt.composedCPU {
 		if served, _ := s.CPUBlockSteps(); served != (warm+n)*m.Cfg.NLayer {
 			t.Fatalf("the composed CPU served %d of %d block steps (%v): this arm measured main's decode", served, (warm+n)*m.Cfg.NLayer, s.CPUFormErr())
