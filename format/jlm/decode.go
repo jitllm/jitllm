@@ -193,8 +193,9 @@ func DecodeParts[V any](a Arith[V], l TypeLayout, rows int, r, c V) (code, scale
 // DecodeWord is the codes of elements c to c+3 of row r, c a multiple of
 // four, one byte each in a word as a four-way byte dot reads them: the
 // fields of one word of the primary plane at one shift, and the secondary
-// plane's bits above each. ok is false where a code is not such a field --
-// a format's code table, or a field of eight bits or more past its sign.
+// plane's bits above each, or each field's entry of the format's code
+// table. ok is false where a code is not such a field -- a field of eight
+// bits or more past its sign.
 func DecodeWord[V any](a Arith[V], l TypeLayout, rows int, r, c V) (codes V, ok bool) {
 	if !l.WordCodes() {
 		return codes, false
@@ -215,6 +216,17 @@ func DecodeWord[V any](a Arith[V], l TypeLayout, rows int, r, c V) (codes V, ok 
 	f, rem := a.Div(e, u(uint32(h))), a.Rem(e, u(uint32(h)))
 	v := a.Word(PlaneQS, a.Add(base, a.Mul(a.Div(rem, u(4)), R)))
 	q := a.And(a.Shr(v, a.Mul(f, u(uint32(bits)))), bytes(uint32(1)<<bits-1))
+	if l.Codes == &mx4Codes {
+		return e2m1Word(a, q), true
+	}
+	if l.Codes != nil {
+		m := u(uint32(1)<<bits - 1)
+		t := a.Code(l.Codes, a.And(q, m))
+		for b := 1; b < 4; b++ {
+			t = a.Add(t, a.Shl(a.Code(l.Codes, a.And(a.Shr(q, u(uint32(8*b))), m)), u(uint32(8*b))))
+		}
+		return t, true
+	}
 	if hi > 0 {
 		lanes := 8 / hi
 		g := a.Div(e, u(4))
@@ -225,11 +237,27 @@ func DecodeWord[V any](a Arith[V], l TypeLayout, rows int, r, c V) (codes V, ok 
 	return q, true
 }
 
+// e2m1Word is mx4Codes' entries of the four codes of q, one a byte,
+// computed: with l the code's two low bits and b2 its third, the doubled
+// magnitude is l + (l if b2) + 4*b2 + 2*(b0 b1 b2), and the entry 12 plus
+// it, or less it where the sign bit is set. No byte passes 24.
+func e2m1Word[V any](a Arith[V], q V) V {
+	u := a.U
+	ones := u(0x01010101)
+	l := a.And(q, u(0x03030303))
+	b2 := a.And(a.Shr(q, u(2)), ones)
+	v := a.Add(a.Add(l, a.And(l, a.Mul(b2, u(0xff)))), a.Shl(b2, u(2)))
+	v = a.Add(v, a.Shl(a.And(a.And(q, a.Shr(q, u(1))), b2), u(1)))
+	neg := a.Mul(a.And(a.Shr(q, u(3)), ones), u(0xff))
+	return a.Sub(a.Add(v, u(12*0x01010101)), a.And(a.Shl(v, u(1)), neg))
+}
+
 // WordCodes reports whether DecodeWord states the format: its codes fields
-// of a byte or less, no code table, four of them in one word.
+// of a byte or less, through a code table only from one plane, four of them
+// in one word.
 func (l TypeLayout) WordCodes() bool {
 	bits := l.Planes[0]
-	if l.Codes != nil || l.Sub%4 != 0 || bits > 8 || 8%bits != 0 {
+	if l.Codes != nil && (l.Planes[1] != 0 || l.Signed) || l.Sub%4 != 0 || bits > 8 || 8%bits != 0 {
 		return false
 	}
 	return bits == 8 || l.Sub/(8/bits)%4 == 0

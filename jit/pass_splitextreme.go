@@ -14,7 +14,9 @@ import (
 // planes in order the way the loop ran its terms: a later segment wins only
 // where it is strictly larger, so the first of equal terms keeps its value.
 // The segments are the most, at most Parts and a power of two, that divide
-// the trips.
+// the trips; where those leave a loop not yet cut more than Parts trips a
+// segment, Parts segments, the last ones reading the last term again, which
+// never wins.
 type SplitExtreme struct {
 	Parts int
 	Kinds []PrimKind
@@ -39,12 +41,23 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 	for S > 1 && T%S != 0 {
 		S /= 2
 	}
+	trip := T / max(S, 1)
+	if trip > s.Parts && !n.ran(s.Name()) {
+		S = s.Parts
+		trip = (T + S - 1) / S
+	}
 	if S <= 1 {
 		return nil, false, nil
 	}
-	vst, cst := n.Stores[vs], n.Stores[cs]
+	cst := n.Stores[cs]
+	vst := Store{Ax: cst.Ax}
 	vt, ct := n.Nodes[ext].Type, n.Nodes[car].Type
-	vout, cout := n.Bufs[vst.Buf].Operand, n.Bufs[cst.Buf].Operand
+	cout := n.Bufs[cst.Buf].Operand
+	vout := Operand{Name: cout.Name + ".extreme", Of: cout.Of}
+	if vs >= 0 {
+		vst = n.Stores[vs]
+		vout = n.Bufs[vst.Buf].Operand
+	}
 	vplanes := Operand{Kind: OperandScratch, Name: n.Name + "." + vout.Name + ".planes", Of: vout.Of}
 	cplanes := Operand{Kind: OperandScratch, Name: n.Name + "." + cout.Name + ".planes", Of: cout.Of, Elem: ct}
 	at := segmentAxis(n)
@@ -59,14 +72,23 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 		}
 	}
 	seg := p.add(Node{Op: OpCoord, A: at, Type: ir.U32})
-	p.Loops[c].Trip = T / S
+	p.Loops[c].Trip = trip
 	if it := p.iterOf(c); it >= 0 {
-		k := p.bin(OpAdd, ir.U32, p.bin(OpMul, ir.U32, seg, p.u32(T/S)), it)
-		p.redirect(it, k, k)
+		a := p.bin(OpAdd, ir.U32, p.bin(OpMul, ir.U32, seg, p.u32(trip)), it)
+		k := a
+		if trip*S != T {
+			k = p.bin(OpMin, ir.U32, a, p.u32(T-1))
+		}
+		p.redirect(it, k, a)
 	}
 	vb := p.buf(Buf{Kind: BufOut, Elem: vt, Operand: vplanes, Shape: shape})
 	cb := p.buf(Buf{Kind: BufOut, Elem: ct, Operand: cplanes, Shape: shape})
-	p.Stores[vs] = Store{Buf: vb, Val: ext, At: -1, Ax: slices.Insert(slices.Clone(vst.Ax), at, seg)}
+	vstore := Store{Buf: vb, Val: ext, At: -1, Ax: slices.Insert(slices.Clone(vst.Ax), at, seg)}
+	if vs >= 0 {
+		p.Stores[vs] = vstore
+	} else {
+		p.Stores = append(p.Stores, vstore)
+	}
 	p.Stores[cs] = Store{Buf: cb, Val: car, At: -1, Ax: slices.Insert(slices.Clone(cst.Ax), at, seg)}
 
 	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Apart: n.Apart, Of: n.Of,
@@ -88,7 +110,9 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 	won := m.add(Node{Op: OpLess, Type: ir.Pred, A: acc, B: x})
 	m.Nodes[carried].A = m.add(Node{Op: OpSelect, Type: ct, A: won, B: y, C: carried})
 	out := make([]Store, len(n.Stores))
-	out[vs] = Store{Buf: m.buf(n.Bufs[vst.Buf]), Val: acc, At: -1, Ax: coords}
+	if vs >= 0 {
+		out[vs] = Store{Buf: m.buf(n.Bufs[vst.Buf]), Val: acc, At: -1, Ax: coords}
+	}
 	out[cs] = Store{Buf: m.buf(n.Bufs[cst.Buf]), Val: carried, At: -1, Ax: append([]int(nil), coords...)}
 	m.Stores = out
 	return []*Kernel{p, m}, true, nil
@@ -96,10 +120,11 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 
 // extremeSplittable finds an element's argmax: a top-level loop whose only
 // folds are a largest term and a value carried with it, each stored at the
-// element's own place, the kernel's only two stores. vs and cs are the
-// stores of the largest term and of the carried value.
+// element's own place, the kernel's only two stores, or the carried value
+// alone. vs and cs are the stores of the largest term (-1 for none) and of
+// the carried value.
 func extremeSplittable(n *Kernel) (c, ext, car, vs, cs int, ok bool) {
-	if len(n.Stores) != 2 {
+	if len(n.Stores) != 1 && len(n.Stores) != 2 {
 		return
 	}
 	for _, s := range n.Stores {
@@ -107,10 +132,21 @@ func extremeSplittable(n *Kernel) (c, ext, car, vs, cs int, ok bool) {
 			return
 		}
 	}
-	car, ext = n.Stores[1].Val, n.Stores[0].Val
-	vs, cs = 0, 1
-	if n.carriedBy(car) != ext {
-		car, ext, vs, cs = ext, car, 1, 0
+	if len(n.Stores) == 1 {
+		car, vs, cs = n.Stores[0].Val, -1, 0
+		if n.Nodes[car].Op != OpFold {
+			return
+		}
+		ext = n.carriedBy(car)
+		if ext < 0 {
+			return
+		}
+	} else {
+		car, ext = n.Stores[1].Val, n.Stores[0].Val
+		vs, cs = 0, 1
+		if n.carriedBy(car) != ext {
+			car, ext, vs, cs = ext, car, 1, 0
+		}
 	}
 	if n.Nodes[car].Op != OpFold || n.Nodes[ext].Op != OpFold || n.carriedBy(car) != ext ||
 		n.Nodes[n.Nodes[ext].A].Op != OpMax || n.Nodes[n.Nodes[car].A].Op != OpSelect {

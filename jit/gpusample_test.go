@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -257,6 +258,83 @@ func TestComposedGPUEqual(t *testing.T) {
 				t.Fatal("the equality one id off agrees with the form everywhere: the gate cannot see it")
 			}
 			t.Logf("%d widths held; one id off, %d elements part", ran, parted)
+		})
+	}
+}
+
+// TestComposedGPUSampleGreedy is TestComposedCPUSampleGreedy on every GPU
+// device present, at widths whose argmax is cut into segments that divide
+// it and into segments the last of which reads past it (a vocabulary of
+// 201088), each row's best alone at its start and its end, and in its
+// middle tied with an earlier one. The violation: the logits negated must
+// part.
+func TestComposedGPUSampleGreedy(t *testing.T) {
+	testlock.GPU(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Fatal("no GPU backend on this host: the gate runs on one")
+	}
+	widths := []int{1, 7, 33, 1531, 4096, 151936, 201088}
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			dv := gpuDevice(d)
+			rng := rand.New(rand.NewSource(5))
+			ran, parted := 0, 0
+			for _, n := range widths {
+				g := (&graph.Sample{NVocab: n}).Build()
+				_, codes, err := jit.Default().Form(jit.Request{Graph: g, Step: jit.Step{Rows: 1, Page: 64, Keys: 1}, Device: dv})
+				if err != nil {
+					t.Fatalf("width %d: forming: %v", n, err)
+				}
+				op, err := compileLone(d, codes)
+				if err != nil {
+					t.Fatalf("width %d: %v", n, err)
+				}
+				run := func(l []float32) int {
+					lw := make([]uint32, n)
+					for i, v := range l {
+						lw[i] = math.Float32bits(v)
+					}
+					vals := map[graph.ValueID][]uint32{g.In[0]: lw}
+					if err := runGraphValues(d, codes, op.kerns, g, vals); err != nil {
+						t.Fatalf("width %d: %v", n, err)
+					}
+					return int(vals[g.Out[0]][0])
+				}
+				for _, c := range [][2]int{{0, -1}, {n / 2, n / 4}, {n - 1, -1}} {
+					at, tie := c[0], c[1]
+					l := make([]float32, n)
+					for i := range l {
+						l[i] = float32(rng.NormFloat64())
+					}
+					l[at] = 9
+					want := at
+					if tie >= 0 && tie < at {
+						l[tie] = 9
+						want = tie
+					}
+					if got := run(l); got != want {
+						t.Errorf("width %d, best at %d: token %d, want %d", n, at, got, want)
+						continue
+					}
+					for i := range l {
+						l[i] = -l[i]
+					}
+					if n > 2 && run(l) != want {
+						parted++
+					}
+					ran++
+				}
+				op.close()
+			}
+			if ran != 3*len(widths) {
+				t.Fatalf("%d of %d rows held", ran, 3*len(widths))
+			}
+			if parted == 0 {
+				t.Fatal("the negated logits give every token: the gate cannot see a wrong one")
+			}
+			t.Logf("%d rows held", ran)
 		})
 	}
 }

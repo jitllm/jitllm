@@ -260,13 +260,10 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 			return nil, false
 		}
 	}
-	// A window's rows start at positions of their own: a tile's would not
-	// share the history its first row's start clamps to.
+	windowed := false
 	for _, m := range c.mem {
 		for _, b := range m.k.Bufs {
-			if b.Operand == tableWindows {
-				return nil, false
-			}
+			windowed = windowed || b.Operand == tableWindows
 		}
 	}
 	if dt.k.Nodes[dt.k.Positions.First].Op != OpLoad {
@@ -325,7 +322,7 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 		return nil, false
 	}
 	b := flashBuild{c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
-		tq: map[int]int{}, tr: map[int]int{}, scale: d.ScaleRows}
+		tq: map[int]int{}, tr: map[int]int{}, scale: d.ScaleRows, windowed: windowed}
 	return b.kernel(), true
 }
 
@@ -362,8 +359,10 @@ type flashBuild struct {
 	minus, zero     int
 	tq, tr          map[int]int
 	// scale keeps the weighted sums in accumulators (Device.ScaleRows).
-	scale bool
-	sums  []int
+	scale    bool
+	sums     []int
+	windowed bool
+	end0     int
 }
 
 func (b *flashBuild) side(m *member, row, kpos, inner int, subs map[Operand]int) *flashSide {
@@ -458,6 +457,9 @@ func (b *flashBuild) kernel() *Kernel {
 	ps := b.dt.k.Positions
 	first := b.side(b.dt, m.bin(OpMin, ir.U32, b.r0, b.last), 0, 0, nil).at(m, ps.First)
 	end := b.side(b.dt, b.rl, 0, 0, nil).at(m, ps.End)
+	if b.windowed {
+		b.end0 = b.side(b.dt, m.bin(OpMin, ir.U32, b.r0, b.last), 0, 0, nil).at(m, ps.End)
+	}
 	span := m.add(Node{Op: OpSelect, Type: U, A: m.add(Node{Op: OpLess, Type: ir.Pred, A: first, B: end}), B: m.bin(OpSub, U, end, first), C: m.u32(0)})
 	blocks := m.bin(OpMax, U, m.bin(OpDiv, U, m.bin(OpAdd, U, span, m.u32(g.KB-1)), m.u32(g.KB)), m.u32(1))
 	P := m.loop(1, -1)
@@ -492,7 +494,8 @@ func (b *flashBuild) stageBlock() {
 	n := g.KB * half
 	for u := 0; u < (n+m.Group-1)/m.Group; u++ {
 		dp, key := b.split(u, n, g.KB)
-		s := b.side(b.dt, b.rl, m.bin(OpAdd, U, b.k0, key), 0, nil)
+		kp := m.bin(OpAdd, U, b.k0, key)
+		s := b.side(b.dt, b.stageRow(kp), kp, 0, nil)
 		k := func(e int) int {
 			s.inner = m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
 			return s.at(m, b.kx)
@@ -504,7 +507,8 @@ func (b *flashBuild) stageBlock() {
 	n = g.KB * vhalf
 	for u := 0; u < (n+m.Group-1)/m.Group; u++ {
 		key, dp := b.split(u, n, vhalf)
-		s := b.side(b.c.vl, b.rl, m.bin(OpAdd, U, b.k0, key), 0, nil)
+		kp := m.bin(OpAdd, U, b.k0, key)
+		s := b.side(b.c.vl, b.stageRow(kp), kp, 0, nil)
 		v := func(e int) int {
 			s.inner = m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
 			return s.at(m, b.vx)
@@ -513,6 +517,19 @@ func (b *flashBuild) stageBlock() {
 		b.store(m.bin(OpAdd, U, ix, m.u32(g.vOff)), b.word(v(0), v(1)), b.P)
 	}
 	m.Stores = append(m.Stores, Store{Barrier: true, At: b.P})
+}
+
+// stageRow is the row whose descriptor addresses position kpos: the
+// tile's last, or in a windowed chain the row kpos is the last position
+// of, the first row for a position before it.
+func (b *flashBuild) stageRow(kpos int) int {
+	if !b.windowed {
+		return b.rl
+	}
+	U, m := ir.U32, b.m
+	own := m.bin(OpSub, U, b.end0, m.u32(1))
+	past := m.add(Node{Op: OpSelect, Type: U, A: m.add(Node{Op: OpLess, Type: ir.Pred, A: own, B: kpos}), B: m.bin(OpSub, U, kpos, own), C: m.u32(0)})
+	return m.bin(OpMin, U, m.bin(OpAdd, U, b.r0, m.bin(OpMin, U, past, m.u32(b.g.TR-1))), b.last)
 }
 
 // dots is a warp's rows' dots with the block's positions, on the matrix

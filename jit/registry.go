@@ -117,6 +117,9 @@ type Context struct {
 	scanLoops bool
 	// split is the run's expressions formed a map a term.
 	split *exprSplit
+	// codeWords is a device that reads a code table's four entries into a
+	// word for its byte dot (jlm.DecodeWord): a GPU's.
+	codeWords bool
 	// matrix is a step of rows the device's matrix unit runs a projection
 	// over (Device.Matrix): its weight decoded, its input float.
 	matrix bool
@@ -139,6 +142,12 @@ type Context struct {
 	// (expertGrouped), by their scratch's name: the projections a
 	// selection routes share one.
 	grouped map[string]bool
+}
+
+// wordCodes reports whether a byte dot over l reads its codes a word at a
+// time (jlm.DecodeWord).
+func (c *Context) wordCodes(l jlm.TypeLayout) bool {
+	return l.WordCodes() && (l.Codes == nil || c.codeWords)
 }
 
 // blockPart is the part of block li, for a block part's decomposition: the
@@ -260,7 +269,7 @@ func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device, sp *e
 func (r *Registry) context(g *graph.Graph, k PartKind, f map[jlm.Role]jlm.Type, rots []graph.Rotary, s Step, d Device) *Context {
 	c := &Context{Graph: g, Part: k, Formats: f, Step: s, Int8: r.Profiles[d.Kind].Int8, Rotaries: rots, exactDiv: d.ExactDiv,
 		formed: map[graph.ValueID]bool{}, grouped: map[string]bool{}, matrix: d.Matrix[0] > 0 && s.Rows >= d.Matrix[0],
-		scanLoops: r.Profiles[d.Kind].ScanLoops}
+		scanLoops: r.Profiles[d.Kind].ScanLoops, codeWords: d.Kind == DeviceGPU}
 	if q := c.Int8; q != nil && s.ActWindow > 0 && s.ActWindow != q.Window {
 		w := *q
 		w.Window = s.ActWindow

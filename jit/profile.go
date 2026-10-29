@@ -38,6 +38,9 @@ func gpuProfile() Profile {
 			{Rows: 128, Cols: 128, Depth: 32, Warps: [2]int{2, 2}, Resident: 2},
 		}, Latency: 12000, Decode: 16, Launch: 3 << 20, Plane: 384},
 		FloatTiles{Depth: 16, Tiles: []FloatTile{{64, 64, [2]int{4, 4}}, {32, 64, [2]int{4, 4}}, {32, 32, [2]int{4, 4}}, {16, 32, [2]int{2, 4}}, {16, 16, [2]int{2, 2}}}},
+		// Before Coarsen and Parts: a gather the matrix unit's halves read
+		// runs in them rather than through a buffer of its own.
+		Recompute{},
 		Prefetch{Except: []PrimKind{PrimMatrix}},
 		RowTiles{Rows: 16},
 		Threads{Group: 128},
@@ -46,6 +49,7 @@ func gpuProfile() Profile {
 		Coarsen{Unit: 4},
 		DeadStores{},
 		Parts{Kinds: []PrimKind{PrimMap}},
+		Split{Slots: 30720, Max: 32, Block: 32, Group: true, Matrix: true, Few: 4, Kinds: contract},
 		Split{Slots: 30720, Max: 32, Block: 32, Few: 4, Kinds: contract},
 		Blocks{Size: 32, Kinds: contract},
 		Split{Slots: 30720, Max: 32, Block: 1, Group: true, Matrix: true, Few: 4, Kinds: []PrimKind{PrimReduce}},

@@ -3,6 +3,7 @@ package jit
 import (
 	"slices"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
@@ -15,7 +16,8 @@ import (
 // trips and keep the elements' threads within the device's slots: elements
 // that fill the device alone -- a vocabulary's rows -- are not split. Where
 // Group is set and the elements allow, a row's segments are
-// instead one workgroup's (main's GroupSplit): 32 rows by the segments,
+// instead one workgroup's (main's GroupSplit), the most segments that
+// divide the trips, any count: 32 rows by the segments,
 // 128 to 1024 threads, each segment's sum through workgroup memory and the
 // row written whole, with no partial planes and no combine. Where Matrix is
 // set it cuts only a sum over a weight matrix -- a projection's. A form of a
@@ -69,6 +71,16 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		S = s.Parts
 		for S > 1 && (T%S != 0 || E*S > slots) {
 			S /= 2
+		}
+	}
+	if s.Group && s.Parts == 0 {
+		for g := s.Max; g > 1; g-- {
+			if T%g != 0 || E*g >= 4*slots {
+				continue
+			}
+			if k, ok := groupSplit(n, c, f, term, st, g, s.Drop); ok {
+				return []*Kernel{k}, true, nil
+			}
 		}
 	}
 	for s.Parts == 0 && S < s.Max && E*S < 2*slots && T%(s.Block*S*2) == 0 {
@@ -164,7 +176,9 @@ func (n *Kernel) cutElements() int {
 
 // groupSplit is n's sum over loop c in S segments within one workgroup:
 // G = 32*S threads (128 to 1024), rpg = G/S elements a workgroup, thread t
-// segment t/rpg of element t%rpg; each segment's partial to workgroup
+// segment t/rpg of element t%rpg, or where a trip reads one element of a
+// verbatim weight's row segment t%S of element t/S, its trips s, s+S, ...,
+// so adjacent threads read adjacent words; each segment's partial to workgroup
 // memory, a barrier, and every thread of an element its segments' sum
 // stored at the element. False where the elements do not fill whole
 // workgroups.
@@ -182,6 +196,12 @@ func groupSplit(n *Kernel, c, f, term, st, S int, drop bool) (*Kernel, bool) {
 	tid := g.add(Node{Op: OpThread, Type: U})
 	seg := g.bin(OpDiv, U, tid, g.u32(rpg))
 	rl := g.bin(OpRem, U, tid, g.u32(rpg))
+	slot := func(i int) int { return g.bin(OpAdd, U, rl, g.u32(i*rpg)) }
+	wide := elementTrips(n)
+	if wide {
+		seg, rl = g.bin(OpRem, U, tid, g.u32(S)), g.bin(OpDiv, U, tid, g.u32(S))
+		slot = func(i int) int { return g.bin(OpAdd, U, g.bin(OpMul, U, rl, g.u32(S)), g.u32(i)) }
+	}
 	var old []int
 	for i, nd := range n.Nodes {
 		if nd.Op == OpCoord {
@@ -196,8 +216,13 @@ func groupSplit(n *Kernel, c, f, term, st, S int, drop bool) (*Kernel, bool) {
 	}
 	g.Loops[c].Trip = T / S
 	if it := g.iterOf(c); it >= 0 {
-		k := g.bin(OpAdd, U, g.bin(OpMul, U, seg, g.u32(T/S)), it)
-		g.redirect(it, k, k)
+		if wide {
+			m := g.bin(OpMul, U, it, g.u32(S))
+			g.redirect(it, g.bin(OpAdd, U, m, seg), m)
+		} else {
+			k := g.bin(OpAdd, U, g.bin(OpMul, U, seg, g.u32(T/S)), it)
+			g.redirect(it, k, k)
+		}
 	}
 	t := n.Nodes[f].Type
 	val := f
@@ -210,7 +235,7 @@ func groupSplit(n *Kernel, c, f, term, st, S int, drop bool) (*Kernel, bool) {
 	g.Stores = []Store{{Buf: sh, Ix: tid, Val: val, At: -1}, {Barrier: true, At: -1}}
 	sum := -1
 	for i := range kept(S, t, drop) {
-		x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: g.bin(OpAdd, U, rl, g.u32(i*rpg))})
+		x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: slot(i)})
 		if sum < 0 {
 			sum = x
 			continue
@@ -220,6 +245,21 @@ func groupSplit(n *Kernel, c, f, term, st, S int, drop bool) (*Kernel, bool) {
 	final.Val = sum
 	g.Stores = append(g.Stores, final)
 	return g, true
+}
+
+// elementTrips reports whether n reads a weight and every weight it reads
+// is verbatim: a trip of its sum reads one element of a row.
+func elementTrips(n *Kernel) bool {
+	reads := false
+	for _, b := range n.Bufs {
+		if b.Kind == BufIn && b.Operand.Kind == OperandWeight {
+			if !jlm.Verbatim(b.Operand.Format) {
+				return false
+			}
+			reads = true
+		}
+	}
+	return reads
 }
 
 // splitShared is the workgroup memory, in words, a split of a tile of rows

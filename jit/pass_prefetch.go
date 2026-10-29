@@ -13,7 +13,9 @@ import (
 // carries instead, in a kernel of a kind in Staged alone, every load of
 // device memory the trip of a loop every thread takes together reads, the
 // last trip's next its own: what a trip stages into workgroup memory is in
-// registers before the trip ahead of it multiplies.
+// registers before the trip ahead of it multiplies. A sum over a weight
+// matrix a split can still cut is left to it: a carried load is a second
+// fold of its loop.
 type Prefetch struct {
 	Staged, Except []PrimKind
 }
@@ -25,7 +27,7 @@ func (p Prefetch) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := n.clone()
 		ok := false
 		switch {
-		case len(p.Staged) == 0 && !slices.Contains(p.Except, n.Kind):
+		case len(p.Staged) == 0 && !slices.Contains(p.Except, n.Kind) && !cuttable(n):
 			ok = m.prefetch()
 		case slices.Contains(p.Staged, n.Kind):
 			ok = m.prefetchStaged()
@@ -35,6 +37,11 @@ func (p Prefetch) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		return []*Kernel{m}, true, nil
 	})
+}
+
+func cuttable(n *Kernel) bool {
+	_, _, _, _, ok := splittable(n)
+	return ok && !n.Work && readsMatrix(n)
 }
 
 func (n *Kernel) prefetch() bool {

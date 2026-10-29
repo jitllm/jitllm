@@ -11167,3 +11167,8 @@ row where the composer's reads two.
   so a sub-block reads it at an index its own scales to. The window alone read
   0.473 (a division per scale load); with the slots node 1 pp512 of main: Llama
   Q4_K_M 0.511-0.524 to 0.522-0.534; Qwen3 Q8_0 (window 32) and tg unresolved.
+- gpt-oss-20b composed, one V100: decode kernels 24.3 -> 9.8 ms a token
+  (main 7.5): any-count group splits, MXFP4 codes a word as e2m1, ragged
+  argmax; the 2048 prompt's tiled gather 105 -> 16 ms; sliding layers on
+  flash. Servers n=20 (A/A 0.999): ITL composed/main 1.47 (base 2.99),
+  TTFT 2048 1.65 (base 1.96). Open: experts 4.8 ms against main's 2.4.

@@ -47,8 +47,8 @@ type attendInputs struct {
 // start, or from its window's where the attention slides, with a sink a head
 // where it carries them, held row by row to the definition over the history
 // as the pools hold it. The form must run its partitions in order (the
-// running pass), or where the device's matrix unit is stated and the rows
-// share their first position, run on the unit (the flash pass), every
+// running pass), or where the device's matrix unit is stated, run on the
+// unit (the flash pass), a window a bound of its loop, every
 // device whose backend lowers a tile in both arms, which a CUDA device must;
 // its scratch is counted at a key bound far past the live
 // positions: no binding a kernel reads or writes may hold more than four
@@ -113,9 +113,8 @@ func TestComposedGPUAttendRows(t *testing.T) {
 }
 
 // gpuAttendRows is one case on d, the device's matrix unit stated where
-// matrix is: an attention whose rows share their first position then
-// forms on it (the flash pass), its blocks of positions run in order,
-// and any other the split's running form.
+// matrix is: an attention then forms on it (the flash pass), its blocks of
+// positions run in order, and without it the split's running form.
 func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendInputs, matrix bool) {
 	const page, capRows = 64, 64
 	p0, spread, R := cmp.Or(in.ctx, 2100), cmp.Or(in.spread, 1), 37
@@ -167,9 +166,9 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 		}
 	}
 	switch {
-	case matrix && c.window == 0 && (flash != 1 || running != 0):
+	case matrix && (flash != 1 || running != 0):
 		t.Errorf("%d kernels run on the matrix unit and %d the partitions in order: the gate did not select the matrix unit's form", flash, running)
-	case (!matrix || c.window > 0) && (running != 1 || flash != 0):
+	case !matrix && (running != 1 || flash != 0):
 		t.Errorf("%d kernels run the partitions in order and %d on the matrix unit: the gate did not select the running form", running, flash)
 	}
 	t.Logf("%d kernels, the largest scratch the attention reads or writes %d bytes (a [rows, heads, keys] buffer is %d)",
