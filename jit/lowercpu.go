@@ -1342,9 +1342,9 @@ func (e *x86Lowerer) enter(c int) {
 	}
 	for _, cu := range l.Cursors {
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
-			a.MOVStore(spillSlot(k.Ptrs[cu.Ptr-1].Spill), e.ptrReg(cu.Buf, 0))
+			a.MOVStore(spillSlot(k.Ptrs[cu.Ptr-1].Spill), e.ptrReg(cu.Buf, cu.From))
 		} else if cu.Take {
-			a.MOVQ(e.ptrReg(cu.Buf, cu.Ptr), e.ptrReg(cu.Buf, 0))
+			a.MOVQ(e.ptrReg(cu.Buf, cu.Ptr), e.ptrReg(cu.Buf, cu.From))
 		}
 	}
 	if l.once() {

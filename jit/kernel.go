@@ -207,11 +207,11 @@ type Loop struct {
 }
 
 // Cursor is pointer Ptr of buffer Buf advanced Elems elements a trip: 0 the
-// buffer's address itself, else 1 + the kernel's copy, taken from the
-// buffer's address as the loop starts where Take is set.
+// buffer's address itself, else 1 + the kernel's copy, taken from pointer
+// From as the loop starts where Take is set.
 type Cursor struct {
 	Buf, Elems int
-	Ptr        int
+	Ptr, From  int
 	Take       bool
 }
 

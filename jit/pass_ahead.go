@@ -121,7 +121,7 @@ func (p Ahead) ahead(k *Kernel, i int, hs []int) (int, bool) {
 			// little a trip: the loop around moves the address (Streams'
 			// rows within a sub-block), and the line Outer of its trips on
 			// is the one to ask for.
-			step, trips = k.outerStep(c, nd.Buf), p.Outer
+			step, trips = k.outerStep(c, nd.Buf, cu.From), p.Outer
 		}
 		b := trips * step
 		if step < p.Min || b > 1<<30 {
@@ -134,13 +134,13 @@ func (p Ahead) ahead(k *Kernel, i int, hs []int) (int, bool) {
 
 // outerStep is the bytes the loop around loop c moves buffer b's address a
 // trip, 0 for none.
-func (k *Kernel) outerStep(c, b int) int {
+func (k *Kernel) outerStep(c, b, ptr int) int {
 	o := k.Loops[c].Parent
 	if o < 0 {
 		return 0
 	}
 	for _, cu := range k.Loops[o].Cursors {
-		if cu.Buf == b && cu.Ptr == 0 {
+		if cu.Buf == b && cu.Ptr == ptr {
 			return cu.Elems * ElemBytes(k.Bufs[b])
 		}
 	}

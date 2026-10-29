@@ -175,7 +175,7 @@ func (cu *cursorer) run() bool {
 	if cu.copied {
 		start = cu.newPtr()
 	}
-	if _, ok := cu.walk(-1, start, cu.copied, lin{}, all, ix); !ok {
+	if _, ok := cu.walk(-1, start, 0, cu.copied, lin{}, all, ix); !ok {
 		k.Ptrs = k.Ptrs[:ptrs]
 		return false
 	}
@@ -201,9 +201,9 @@ func (cu *cursorer) in(a, c int) bool {
 
 // walk lays the accesses as, their indices ix with the iterations of the
 // loops around scope p taken out, on pointer ptr standing at pos as the
-// scope starts; with fresh set, ptr is a copy the scope's first loop takes.
-// It returns how far the scope moves the pointer.
-func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (lin, bool) {
+// scope starts; with fresh set, ptr is a copy of pointer from the scope's
+// first loop takes. It returns how far the scope moves the pointer.
+func (cu *cursorer) walk(p, ptr, from int, fresh bool, pos lin, as []int, ix []lin) (lin, bool) {
 	k, g := cu.k, cu.g
 	at := copyLin(pos)
 	direct := false
@@ -238,7 +238,11 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 		return c
 	}
 	passes := cu.passes(loops, family) > 1 && cu.row()
-	pass, start, scope := -1, copyLin(at), ptr
+	pass, start, scope, scopeFresh := -1, copyLin(at), ptr, fresh
+	src := ptr
+	if fresh {
+		src = from
+	}
 	for li, c := range loops {
 		var mine []int
 		var mix []lin
@@ -276,7 +280,7 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 			trips = g.of(k.Loops[c].Count - 1)
 		}
 		after := g.merged(addLin(at, g.times(trips, step)))
-		q, take := ptr, fresh
+		q, take, qFrom := ptr, fresh, from
 		// The scope's own accesses stand where it started, wherever they
 		// run among its loops: a loop that moves the pointer moves a copy.
 		aside := !fresh && (k.Loops[c].Walk || direct && len(g.merged(g.times(trips, step))) > 0 || cu.laterNeeds(loops[li+1:], as, ix, after))
@@ -286,21 +290,21 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 				pass, at = family(c), copyLin(start)
 				after = g.merged(addLin(at, g.times(trips, step)))
 				q, take = scope, false
-				if fresh || cu.familyMoves(loops, family, family(c), as, ix) {
-					q, take = cu.newPtr(), true
+				if scopeFresh || cu.familyMoves(loops, family, family(c), as, ix) {
+					q, take, qFrom = cu.newPtr(), true, src
 				}
 			}
 		}
 		if aside {
-			q, take = cu.newPtr(), true
+			q, take, qFrom = cu.newPtr(), true, ptr
 		}
-		net, ok := cu.walk(c, q, false, at, mine, rest)
+		net, ok := cu.walk(c, q, 0, false, at, mine, rest)
 		if !ok {
 			return nil, false
 		}
 		bump := g.merged(addLin(step, scaleLin(net, -1)))
 		if _, ok := bump.constant(); !ok {
-			if _, ok = cu.walk(c, cu.newPtr(), true, at, mine, rest); !ok {
+			if _, ok = cu.walk(c, cu.newPtr(), q, true, at, mine, rest); !ok {
 				return nil, false
 			}
 			bump = step
@@ -309,7 +313,7 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 			}
 		}
 		if b, _ := bump.constant(); b != 0 || take {
-			cu.cursor[c] = Cursor{Buf: cu.buf, Elems: int(b), Ptr: q, Take: take}
+			cu.cursor[c] = Cursor{Buf: cu.buf, Elems: int(b), Ptr: q, Take: take, From: qFrom}
 		}
 		if !aside {
 			at, ptr = after, q

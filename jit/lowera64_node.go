@@ -816,10 +816,10 @@ func (e *a64Lowerer) enter(c int) {
 	}
 	for _, cu := range l.Cursors {
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
-			e.slot(cpu.A64StrX, uint8(e.ptrReg(cu.Buf, 0)), k.Ptrs[cu.Ptr-1].Spill)
+			e.slot(cpu.A64StrX, uint8(e.ptrReg(cu.Buf, cu.From)), k.Ptrs[cu.Ptr-1].Spill)
 		} else if cu.Take {
 			d := e.ptrReg(cu.Buf, cu.Ptr)
-			a.MOVreg(d, e.ptrReg(cu.Buf, 0))
+			a.MOVreg(d, e.ptrReg(cu.Buf, cu.From))
 		}
 	}
 	if l.once() {
