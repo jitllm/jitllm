@@ -98,32 +98,58 @@ func (s Split) siblingWidths(ks []*Kernel, d Device) map[*Kernel]int {
 			i++
 			continue
 		}
-		segs := []int{S0}
+		run, segs, between := []*Kernel{ks[i]}, []int{S0}, []*Kernel(nil)
 		j := i + 1
+		// A kernel after a sibling reading what it writes -- its bias, which
+		// Epilogue joins to it -- stands between siblings and not across them.
 		for ; j < len(ks); j++ {
-			Sj, Gj, ok := s.groupSegments(ks[j], d)
-			if !ok || !sharesActivation(ks[i], ks[j]) || writesInto(ks[i], ks[j]) || writesInto(ks[j], ks[i]) {
-				break
+			k := ks[j]
+			apart := !writesInto(k, ks[i])
+			for _, m := range run {
+				apart = apart && !writesInto(k, m) && !writesInto(m, k)
 			}
-			segs, G = append(segs, Sj), min(G, Gj)
+			for _, m := range between {
+				apart = apart && !writesInto(m, k) && !writesInto(k, m)
+			}
+			Sj, Gj, ok := s.groupSegments(k, d)
+			if ok && apart && sharesActivation(ks[i], k) {
+				run, segs, G = append(run, k), append(segs, Sj), min(G, Gj)
+				continue
+			}
+			if !ok && !sharesActivation(ks[i], k) && slices.ContainsFunc(run, func(m *Kernel) bool { return writesInto(m, k) }) &&
+				!slices.ContainsFunc(run, func(m *Kernel) bool { return writesInto(k, m) }) {
+				between = append(between, k)
+				continue
+			}
+			break
 		}
-		fits := j-i > 1
+		fits := len(run) > 1
 		for x, S := range segs {
-			k := ks[i+x]
-			c, _, _ := sums(k)
-			fits = fits && G >= 8*S && groupFits(k.Elements(), k.Loops[c].Trip, S, G)
+			fits = fits && segmentsAt(run[x], S, G) > 0
 		}
 		if fits {
 			if out == nil {
 				out = map[*Kernel]int{}
 			}
-			for _, k := range ks[i:j] {
+			for _, k := range run {
 				out[k] = G
 			}
 		}
 		i = j
 	}
 	return out
+}
+
+// segmentsAt is the most segments, at most S, that k's sum takes in
+// workgroups of G threads, a segment keeping eight rows; 0 where none does.
+func segmentsAt(k *Kernel, S, G int) int {
+	c, _, _ := sums(k)
+	for ; S > 1; S-- {
+		if G >= 8*S && groupFits(k.Elements(), k.Loops[c].Trip, S, G) {
+			return S
+		}
+	}
+	return 0
 }
 
 func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
@@ -153,7 +179,7 @@ func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
 		case s.Width > 0:
 			G = s.Width
 		case width > 0:
-			G = width
+			S, G = segmentsAt(n, S, width), width
 		}
 		if S < 2 {
 			return nil, false, nil
@@ -183,7 +209,7 @@ func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
 		case s.Width > 0:
 			G = s.Width
 		case width > 0:
-			G = width
+			g, G = segmentsAt(n, g, width), width
 		}
 		if k, ok := groupSplit(n, c, f, term, st, g, G, s.Drop); ok {
 			return []*Kernel{k}, true, nil

@@ -2,8 +2,9 @@ package jit
 
 import "github.com/jitllm/jitllm/jit/ir"
 
-// Siblings runs consecutive kernels that read one activation and touch
-// nothing of each other's -- the projections of one row -- as one launch.
+// Siblings runs consecutive kernels that touch nothing of each other's and
+// read one activation -- the projections of one row -- or together fill no
+// more than one wave of the device -- q's and k's head norms -- as one launch.
 // Each keeps its own workgroups, its body under a loop that runs once in
 // them and never in the others' (the IR's conditional: there is no branch
 // outside a loop, and a count that is one value for a whole workgroup is
@@ -13,7 +14,7 @@ import "github.com/jitllm/jitllm/jit/ir"
 // A kernel joins when its element is a workgroup of the first's size, it
 // is of the first's kind, it carries no positions, heads or live rows, it
 // reads no index of the whole launch, and every store it makes is its
-// workgroup's own, outside its loops. A guard is a scope to the lowering:
+// workgroup's own. A guard is a scope to the lowering:
 // what a share reads is made inside its guard and dies there, so the launch
 // holds one share's values at a time.
 type Siblings struct{}
@@ -24,7 +25,7 @@ func (s Siblings) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	var out []*Kernel
 	for i := 0; i < len(ks); {
 		j := i + 1
-		for j < len(ks) && sibling(ks[i:j], ks[j]) {
+		for j < len(ks) && sibling(ks[i:j], ks[j], d) {
 			j++
 		}
 		if j-i < 2 {
@@ -40,25 +41,26 @@ func (s Siblings) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return out, nil
 }
 
-// sibling says k joins run: a launch like run's first, sharing an
-// activation with one of them, and independent of all.
-func sibling(run []*Kernel, k *Kernel) bool {
+// sibling says k joins run: a launch like run's first, independent of all,
+// sharing an activation with one of them or, all together, one wave of d's
+// workgroups -- launches each leaving the device idle.
+func sibling(run []*Kernel, k *Kernel, d Device) bool {
 	f := run[0]
 	if !joinable(k) || !joinable(f) || k.Group != f.Group || k.Kind != f.Kind || k.Part != f.Part || k.Of != f.Of || k.Least != f.Least {
 		return false
 	}
-	shares := false
+	shares, n := false, k.Elements()
 	for _, m := range run {
 		if writesInto(m, k) || writesInto(k, m) {
 			return false
 		}
-		shares = shares || sharesActivation(m, k)
+		shares, n = shares || sharesActivation(m, k), n+m.Elements()
 	}
-	return shares
+	return shares || d.Units > 0 && d.Slots > 0 && n <= d.Units*max(d.Slots/d.Units/k.Group, 1)
 }
 
 // joinable says k can be one share of a launch: a workgroup an element,
-// nothing a fact about its space, every store at the element. A form of a
+// nothing a fact about its space, no store running a loop. A form of a
 // capacity's kernel holds a call's rows by its leading axis (CallRows), which
 // a share of one launch would lose.
 func joinable(k *Kernel) bool {
@@ -67,7 +69,7 @@ func joinable(k *Kernel) bool {
 		return false
 	}
 	for _, st := range k.Stores {
-		if st.At != -1 || st.Run {
+		if st.Run {
 			return false
 		}
 	}
@@ -226,6 +228,9 @@ func (Siblings) share(k, m *Kernel, g, local int) {
 	}
 	for _, st := range m.Stores {
 		ns := Store{Barrier: st.Barrier, At: g, Narrow: st.Narrow}
+		if st.At >= 0 {
+			ns.At = loopOf[st.At]
+		}
 		if !st.Barrier {
 			ns.Buf, ns.Val = bufOf[st.Buf], walk(st.Val)
 			// The flat index is read even beside coordinates: it is the
