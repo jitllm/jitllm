@@ -154,6 +154,27 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	})
 }
 
+// maxThreadRegs is the 32-bit registers a GPU thread addresses at most.
+const maxThreadRegs = 255
+
+// regs is a thread's registers at p over depth elements of k a trip: its
+// warp's accumulator tiles, one trip's fragments of them, and the words it
+// stages a trip ahead.
+func (p Matrix) regs(depth int, d Device) int {
+	tm, tn, tk := d.Matrix[0], d.Matrix[1], d.Matrix[2]
+	mi, nj := p.Rows/p.Warps[0]/tm, p.Cols/p.Warps[1]/tn
+	threads := 32 * p.Warps[0] * p.Warps[1]
+	return mi*nj*tm*tn/32 + (mi+nj)*(depth/tk)*tm*tk/32 + (p.Rows+p.Cols)*depth/(2*threads)
+}
+
+// regBudget is the registers a thread of p's workgroup holds on d.
+func (p Matrix) regBudget(d Device) int {
+	if d.Regs == 0 || d.Units == 0 {
+		return maxThreadRegs
+	}
+	return min(maxThreadRegs, d.Regs*d.Slots/d.Units/(32*p.Warps[0]*p.Warps[1]))
+}
+
 // matrixStage is the words of a matrix workgroup's stage: two stages of
 // TR rows of A and TN of B at a depth of KC, padded (form), or after the
 // trips the sums, WR warps' tm rows of TN.
@@ -183,7 +204,7 @@ func (p Matrix) bilinear(k *Kernel, d Device) (bilinear, bool) {
 		return f, false
 	}
 	for depth := p.Depth; depth >= tk; depth /= 2 {
-		if depth%tk == 0 && k.Loops[0].Trip%depth == 0 {
+		if depth%tk == 0 && k.Loops[0].Trip%depth == 0 && p.regs(depth, d) <= p.regBudget(d) {
 			f.depth = depth
 			break
 		}

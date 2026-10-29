@@ -6,18 +6,20 @@ import (
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestMatrixTileFollowsTheModel forms projections at a 512-row prompt chunk
 // for a V100's stated units, threads and workgroup memory, and holds each
 // matrix kernel to the tile the device's model costs least: a grid too thin
-// to fill the units takes narrower workgroups, a wide one keeps the
-// profile's, and a forced tile (Device.Tile) is the one formed whatever the
-// model says.
+// to fill the units takes narrower workgroups, a wide one takes the
+// profile's widest warp tile, at the depth of k its registers hold, and a
+// forced tile (Device.Tile) is the one formed whatever the model says.
 func TestMatrixTileFollowsTheModel(t *testing.T) {
 	dev := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, Shared: 96 << 10, Matrix: [3]int{16, 16, 16}}
 	tiles := gpuMatrixTiles()
 	own, narrow := tiles[0], jit.MatrixTile{Rows: 128, Cols: 32, Depth: 32, Warps: [2]int{4, 1}, Resident: 2}
+	wide := jit.MatrixTile{Rows: 128, Cols: 128, Depth: 32, Warps: [2]int{2, 2}, Resident: 2}
 	for _, c := range []struct {
 		n, k  int
 		force jit.MatrixTile
@@ -25,8 +27,8 @@ func TestMatrixTileFollowsTheModel(t *testing.T) {
 	}{
 		{512, 2048, jit.MatrixTile{}, narrow},
 		{128, 2048, jit.MatrixTile{}, narrow},
-		{4096, 4096, jit.MatrixTile{}, own},
-		{14336, 4096, jit.MatrixTile{}, own},
+		{4096, 4096, jit.MatrixTile{}, wide},
+		{14336, 4096, jit.MatrixTile{}, wide},
 		{512, 2048, own, own},
 		{4096, 4096, narrow, narrow},
 	} {
@@ -48,6 +50,15 @@ func TestMatrixTileFollowsTheModel(t *testing.T) {
 			found = true
 			if !formedAtTile(cd, c.want, 512, c.n) {
 				t.Fatalf("%d outputs of %d, forced %v: %d workgroups of %d threads, not %v's", c.n, c.k, c.force, cd.Groups, cd.GPU.Group[0], c.want)
+			}
+			shared := 0
+			for _, o := range cd.GPU.Ops {
+				if o.Kind == ir.OpShared {
+					shared += int(o.Imm)
+				}
+			}
+			if c.want == wide && shared != 5632 {
+				t.Fatalf("%d outputs of %d at %v: a stage of %d words, not the 5632 of 16 elements of k a trip its registers hold", c.n, c.k, c.want, shared)
 			}
 		}
 		if !found {
