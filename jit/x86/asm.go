@@ -559,6 +559,16 @@ func (a *Buf) MOVStore(m Mem, src Reg) {
 	a.modrmMem(src, m)
 }
 
+func (a *Buf) LEAQ(dst Reg, m Mem) {
+	idx := noIndex
+	if m.hasIndex() {
+		idx = m.Index
+	}
+	a.rex(true, dst, idx, m.Base)
+	a.u8(0x8D)
+	a.modrmMem(dst, m)
+}
+
 func (a *Buf) MOVQ(dst, src Reg) {
 	a.rex(true, src, noIndex, dst)
 	a.u8(0x89)

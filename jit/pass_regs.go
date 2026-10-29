@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/jitllm/jitllm/jit/ir"
@@ -577,13 +578,42 @@ func (b *binder86) gprs() error {
 		}
 	}
 	passes := k.passes()
+	groups := k.offsetGroups(lastLoop)
 	// A copy's slot, once its last loop ends, holds the next copy's.
 	var freeSlots []int
 	for _, e := range k.Seq {
 		switch e.Kind {
 		case EntryLoop:
+			members := map[int]int{}
 			for _, cu := range k.Loops[e.I].Cursors {
-				if cu.Take && k.Ptrs[cu.Ptr-1].Reg == 0 && k.Ptrs[cu.Ptr-1].Spill == 0 {
+				if g, ok := groups[cu.Ptr]; ok && cu.Take && b.offBase(cu) {
+					members[g.g]++
+				}
+			}
+			offs := map[int]int{}
+			for _, cu := range k.Loops[e.I].Cursors {
+				if cu.Take && k.Ptrs[cu.Ptr-1].Reg == 0 && k.Ptrs[cu.Ptr-1].Spill == 0 && k.Ptrs[cu.Ptr-1].Off == 0 {
+					if og, ok := groups[cu.Ptr]; ok && members[og.g] > 1 && b.offBase(cu) {
+						g := og.g
+						if offs[g] == 0 {
+							r := b.take(p.Walks)
+							if r < 0 {
+								r = b.take(p.Spare)
+							}
+							if r < 0 && b.spill && !k.spills() {
+								for _, s := range p.Reloads {
+									if r < 0 && !b.copyIn(s) {
+										r = s
+									}
+								}
+							}
+							offs[g] = r + 1
+						}
+						if offs[g] > 0 {
+							k.Ptrs[cu.Ptr-1].Off, k.Ptrs[cu.Ptr-1].From, k.Ptrs[cu.Ptr-1].Scale = offs[g], cu.From, og.scale
+							continue
+						}
+					}
 					r := -1
 					if passes {
 						r = b.take(p.Walks)
@@ -617,6 +647,9 @@ func (b *binder86) gprs() error {
 				if r := k.Ptrs[ptr-1].Reg; r > 0 {
 					b.used[r-1] = false
 				}
+				if r := k.Ptrs[ptr-1].Off; r > 0 {
+					b.used[r-1] = false
+				}
 				if sl := k.Ptrs[ptr-1].Spill; sl > 0 {
 					freeSlots = append(freeSlots, sl)
 				}
@@ -643,6 +676,9 @@ func (b *binder86) gprs() error {
 				for _, cu := range k.Loops[d].Cursors {
 					if cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Reg > 0 {
 						copies[k.Ptrs[cu.Ptr-1].Reg-1] = true
+					}
+					if cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Off > 0 {
+						copies[k.Ptrs[cu.Ptr-1].Off-1] = true
 					}
 				}
 			}
@@ -700,12 +736,109 @@ func (b *binder86) counterFree(r, c int) bool {
 // register r.
 func (b *binder86) copyIn(r int) bool {
 	for _, p := range b.k.Ptrs {
-		if p.Reg == r+1 {
+		if p.Reg == r+1 || p.Off == r+1 {
 			return true
 		}
 	}
 	return false
 }
+
+func (b *binder86) offBase(cu Cursor) bool {
+	if cu.From == 0 {
+		return b.k.Bufs[cu.Buf].Reg > 0
+	}
+	f := b.k.Ptrs[cu.From-1]
+	return f.Reg > 0 && f.Off == 0
+}
+
+// offsetGroups groups the copies one loop takes that live as long and move
+// alike, their sources still: each group can share one offset register.
+func (k *Kernel) offsetGroups(lastLoop map[int]int) map[int]offGroup {
+	type adv struct{ loop, bytes int }
+	take, from, buf := map[int]int{}, map[int]int{}, map[int]int{}
+	steps := map[int][]adv{}
+	sources := map[[2]int]bool{}
+	for c, l := range k.Loops {
+		for _, cu := range l.Cursors {
+			if cu.Take {
+				sources[[2]int{cu.Buf, cu.From}] = true
+			}
+			if cu.Ptr == 0 {
+				continue
+			}
+			if cu.Take {
+				take[cu.Ptr], from[cu.Ptr], buf[cu.Ptr] = c, cu.From, cu.Buf
+			}
+			if cu.Elems != 0 {
+				steps[cu.Ptr] = append(steps[cu.Ptr], adv{c, cu.Elems * ElemBytes(k.Bufs[cu.Buf])})
+			}
+		}
+	}
+	order := map[int]int{}
+	ends := map[int]int{}
+	for pos, e := range k.Seq {
+		switch e.Kind {
+		case EntryLoop:
+			order[e.I] = pos
+		case EntryEnd:
+			ends[e.I] = pos
+		}
+	}
+	moves := func(b, ptr, lo, hi int) bool {
+		for c, l := range k.Loops {
+			if order[c] < lo || order[c] > hi {
+				continue
+			}
+			for _, cu := range l.Cursors {
+				if cu.Buf == b && cu.Ptr == ptr && cu.Elems != 0 {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	type member struct{ ptr, unit int }
+	keys := map[string][]member{}
+	for ptr, c := range take {
+		if sources[[2]int{buf[ptr], ptr}] || moves(buf[ptr], from[ptr], order[c], ends[lastLoop[ptr]]) {
+			continue
+		}
+		unit := 0
+		for _, a := range steps[ptr] {
+			unit = gcd(unit, a.bytes)
+		}
+		if unit < 0 {
+			continue
+		}
+		norm := make([]adv, len(steps[ptr]))
+		for i, a := range steps[ptr] {
+			norm[i] = adv{a.loop, a.bytes / max(unit, 1)}
+		}
+		key := fmt.Sprint(c, lastLoop[ptr], norm)
+		keys[key] = append(keys[key], member{ptr, unit})
+	}
+	out := map[int]offGroup{}
+	for g, key := range slices.Sorted(maps.Keys(keys)) {
+		ms := keys[key]
+		least := ms[0].unit
+		for _, m := range ms {
+			least = min(least, m.unit)
+		}
+		for _, m := range ms {
+			sc := 1
+			if least > 0 {
+				sc = m.unit / least
+			}
+			if least > 0 && m.unit%least != 0 || sc != 1 && sc != 2 && sc != 4 && sc != 8 {
+				continue
+			}
+			out[m.ptr] = offGroup{g, sc}
+		}
+	}
+	return out
+}
+
+type offGroup struct{ g, scale int }
 
 // uses is how many nodes and stores read node i.
 func (b *binder86) uses(i int) int {
@@ -2307,6 +2440,15 @@ func (k *Kernel) passes() bool {
 	}
 	for _, n := range taken {
 		if n > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func (k *Kernel) spills() bool {
+	for _, nd := range k.Nodes {
+		if nd.Spill != 0 {
 			return true
 		}
 	}

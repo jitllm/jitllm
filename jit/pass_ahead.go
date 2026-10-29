@@ -104,7 +104,7 @@ func (p Ahead) ahead(k *Kernel, i int, hs []int) (int, bool) {
 		return 0, false
 	}
 	switch {
-	case nd.Ptr > 0 && (k.Ptrs[nd.Ptr-1].Reg > 0 || k.Ptrs[nd.Ptr-1].Spill > 0), nd.Ptr == 0 && k.Bufs[nd.Buf].Reg > 0:
+	case nd.Ptr > 0 && (k.Ptrs[nd.Ptr-1].Reg > 0 || k.Ptrs[nd.Ptr-1].Spill > 0 || k.Ptrs[nd.Ptr-1].Off > 0), nd.Ptr == 0 && k.Bufs[nd.Buf].Reg > 0:
 	default:
 		return 0, false
 	}

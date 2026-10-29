@@ -177,6 +177,9 @@ func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 		}
 		return x86.Idx(e.ptrReg(b, ptr), e.reg(ix), uint8(ElemBytes(k.Bufs[b])), 0)
 	}
+	if ptr > 0 && k.Ptrs[ptr-1].Off > 0 {
+		return x86.Idx(e.offBase(ptr), x86.Reg(k.Ptrs[ptr-1].Off-1), uint8(k.Ptrs[ptr-1].Scale), int32(nd.Imm)*int32(ElemBytes(k.Bufs[b])))
+	}
 
 	if w := k.Bufs[b].Word; w > 0 {
 		return x86.At(x86.RDI, int32(w-1)+int32(nd.Imm)*int32(ElemBytes(k.Bufs[b])))
@@ -197,6 +200,9 @@ func (e *x86Lowerer) laneAddr(b, ix, ptr int) x86.Mem {
 	}
 	a.SHLimm(r, byte(bits.TrailingZeros(uint(ElemBytes(k.Bufs[b])))))
 	switch {
+	case ptr > 0 && k.Ptrs[ptr-1].Off > 0:
+		a.ADDQ(r, e.offBase(ptr))
+		a.LEAQ(r, x86.Idx(r, x86.Reg(k.Ptrs[ptr-1].Off-1), uint8(k.Ptrs[ptr-1].Scale), 0))
 	case ptr > 0 && k.Ptrs[ptr-1].Reg == 0 && k.Ptrs[ptr-1].Spill > 0:
 		a.ADDQmem(r, spillSlot(k.Ptrs[ptr-1].Spill))
 	case ptr > 0 && k.Ptrs[ptr-1].Reg > 0:
@@ -211,9 +217,21 @@ func (e *x86Lowerer) laneAddr(b, ix, ptr int) x86.Mem {
 	return x86.At(r, 0)
 }
 
+func (e *x86Lowerer) offBase(ptr int) x86.Reg {
+	p := e.k.Ptrs[ptr-1]
+	if p.From > 0 {
+		return x86.Reg(e.k.Ptrs[p.From-1].Reg - 1)
+	}
+	return x86.Reg(e.k.Bufs[p.Buf].Reg - 1)
+}
+
 // ptrReg is the register of buffer b's pointer ptr.
 func (e *x86Lowerer) ptrReg(b, ptr int) x86.Reg {
 	r := e.k.Bufs[b].Reg
+	if ptr > 0 && e.k.Ptrs[ptr-1].Off > 0 {
+		e.a.LEAQ(reloadReg, x86.Idx(e.offBase(ptr), x86.Reg(e.k.Ptrs[ptr-1].Off-1), uint8(e.k.Ptrs[ptr-1].Scale), 0))
+		return reloadReg
+	}
 	if ptr > 0 {
 		r = e.k.Ptrs[ptr-1].Reg
 		if s := e.k.Ptrs[ptr-1].Spill; r == 0 && s > 0 {
@@ -1340,7 +1358,15 @@ func (e *x86Lowerer) enter(c int) {
 	} else if it >= 0 && k.Nodes[it].Spill > 0 {
 		a.MOVMemImm(spillSlot(k.Nodes[it].Spill), 0)
 	}
+	zeroed := map[int]bool{}
 	for _, cu := range l.Cursors {
+		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Off > 0 {
+			if off := k.Ptrs[cu.Ptr-1].Off; !zeroed[off] {
+				a.XORQ(x86.Reg(off-1), x86.Reg(off-1))
+				zeroed[off] = true
+			}
+			continue
+		}
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
 			a.MOVStore(spillSlot(k.Ptrs[cu.Ptr-1].Spill), e.ptrReg(cu.Buf, cu.From))
 		} else if cu.Take {
@@ -1398,10 +1424,19 @@ func (e *x86Lowerer) madeBefore(i, c int) bool {
 func (e *x86Lowerer) leave(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
+	stepped := map[int]bool{}
 	for _, cu := range l.Cursors {
 		step := int32(cu.Elems * ElemBytes(k.Bufs[cu.Buf]))
+		off := 0
+		if cu.Ptr > 0 {
+			off = k.Ptrs[cu.Ptr-1].Off
+		}
 		switch {
 		case cu.Elems == 0:
+		case off > 0 && stepped[off]:
+		case off > 0:
+			a.ADDimm(x86.Reg(off-1), step/int32(k.Ptrs[cu.Ptr-1].Scale))
+			stepped[off] = true
 		case cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0:
 			a.ADDMemImm32(spillSlot(k.Ptrs[cu.Ptr-1].Spill), step)
 		default:

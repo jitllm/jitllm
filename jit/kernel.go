@@ -224,6 +224,9 @@ type Ptr struct {
 	Buf, Reg int
 	// Spill, where set, is 1 + the red-zone slot the copy lives in.
 	Spill int
+	// Off, where set, is 1 + a register of offsets the copies a loop takes
+	// together share: the copy is pointer From's address plus it times Scale.
+	Off, From, Scale int
 }
 
 type BufKind uint8

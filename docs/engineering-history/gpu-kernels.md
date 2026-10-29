@@ -11124,3 +11124,8 @@ row where the composer's reads two.
   and its workgroup memory without their regions. The attention gate holds it to a
   derived budget (six times the expected binary16 error; rows read 0.12-0.56 of it).
   Llama-3.1-8B TTFT at 2048 on a V100 0.952 and 0.939 of the parent (n=20, A/A 0.983).
+- Copies of addresses a loop takes together and advances alike share one
+  offset register (`Ptr.Off`, scaled 1-8), the planes read as base+offset:
+  Q4_K's rows loop reloads no plane pointer. E5-2680 v4 node 0, 14 threads,
+  of main, two passes before / after: 2048x8192 0.707, 0.697 / 0.794, 0.839;
+  2048x2048 0.789, 0.850 / 0.852, 0.829; 8192x2048 unchanged; token unchanged.

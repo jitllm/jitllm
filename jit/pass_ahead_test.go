@@ -15,8 +15,8 @@ import (
 // weight whose plane stride crosses a page to prefetching it (Ahead), with
 // and without VNNI, where a worker's run of a plane is shorter than the
 // hardware prefetcher's reach (2048 rows over twelve), and to none where it
-// covers it (4096, but for Q8_0's scales, a plane a sub-block, lines apart)
-// or a trip moves it less than Min (16 rows): each prefetch is PREFETCHT0
+// covers it (4096, but for Q8_0's f16 scale planes, two bytes a row: 684 B a
+// worker) or a trip moves it less than Min (16 rows): each prefetch is PREFETCHT0
 // (0F 18 /1), counted in the code.
 func TestAheadPrefetchesTheWeightStream(t *testing.T) {
 	host := uint64(cpu.CPU().ISA())
