@@ -889,9 +889,6 @@ type LayerPlan struct {
 	// its blocks by index, so it must not take a block of a second model
 	// while the first's are there.
 	Model uint64
-	// ComposedOn is the backends whose composed serving of this model passed
-	// its gates at main's speed.
-	ComposedOn Backends
 	// Vocab is the output projection's rows. A device that reserves a ragged
 	// step's per-row logits at placement sizes them from it, because the
 	// head is offered after the blocks; 0 leaves them to the first step.

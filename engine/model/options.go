@@ -120,8 +120,6 @@ type modelOpts struct {
 	composedCPU bool
 	// composedCPUSet is WithComposedCPU given, either way, over the verdict.
 	composedCPUSet bool
-	// structures replaces composedStructures; only a test sets it.
-	structures map[uint64]nn.Backends
 	// kvType and kvTypeSet force the cache's format, overriding what
 	// nn.KVWidthPaysOff decides. Two fields because "not forced" and "forced
 	// to f32" are different states.

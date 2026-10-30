@@ -1222,7 +1222,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	c := s.c
 	p := nn.LayerPlan{
 		// Whose blocks these are: a device holds one model's at a time.
-		Model: s.m.id, ComposedOn: s.m.composedReady(),
+		Model: s.m.id,
 		NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: c.HeadDim,
 		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab, FinalSoftcap: c.FinalSoftcap,
 		RMSEps: c.RMSEps, RopeBase: c.RopeBase, Act: c.Act, RopeNeox: c.RopeNeox,

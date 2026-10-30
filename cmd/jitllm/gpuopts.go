@@ -23,7 +23,7 @@ import (
 // jit/gpu/tier/fault.go, compiled only under `-tags jitllmfault`, so no release
 // binary can be made to pretend its GPU broke.
 func gpuOptions() []tier.Option {
-	o := []tier.Option{tier.WithComposedByVerdict()}
+	var o []tier.Option
 	str := func(k string) string { return os.Getenv(k) }
 	num := func(k string) int {
 		n, _ := strconv.Atoi(os.Getenv(k))
@@ -224,12 +224,6 @@ func gpuOptions() []tier.Option {
 		set func(*tier.Config)
 	}{
 		{"JITLLM_GPU_GRAPH", os.Getenv("JITLLM_GPU_GRAPH") == "0", func(c *tier.Config) { c.NoGraph = true }},
-		// =1 serves every block the model's front end states whole, and the
-		// head, the step's rotary tables and its greedy token, from the
-		// composer (tier.Config.Composed); =0 the tier's own.
-		{"JITLLM_GPU_COMPOSED", os.Getenv("JITLLM_GPU_COMPOSED") == "1",
-			func(c *tier.Config) { c.Composed = tier.ComposedStep }},
-		{"JITLLM_GPU_COMPOSED", os.Getenv("JITLLM_GPU_COMPOSED") == "0", func(c *tier.Config) { c.Composed, c.ComposedAuto = 0, false }},
 		{"JITLLM_GPU_UNPACK", os.Getenv("JITLLM_GPU_UNPACK") == "0", func(c *tier.Config) { c.NoUnpack = true }},
 		{"JITLLM_NO_GPU_BATCH", set("JITLLM_NO_GPU_BATCH"), func(c *tier.Config) { c.NoBatch = true }},
 		{"JITLLM_GPU_NO_TAIL", set("JITLLM_GPU_NO_TAIL"), func(c *tier.Config) { c.NoTail = true }},

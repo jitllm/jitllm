@@ -738,7 +738,6 @@ func (e *Engine) tierOptions(sessions int, tierConfig func(*tier.Config), hostBu
 		// Every model's tier spends one card's memory once, so the room one
 		// model gives back is the next one's (orchestrate.go).
 		tier.WithPoolRegistry(e.pools),
-		tier.WithComposedByVerdict(),
 		tier.WithConfig(func(c *tier.Config) {
 			c.Sessions = sessions
 			// The step loop (newStepLoop) runs steps of up to MaxStepRows

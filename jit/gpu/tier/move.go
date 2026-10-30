@@ -91,7 +91,7 @@ func (g *GPU) stageBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.L
 	if busy {
 		return false
 	}
-	done, ok := g.admitPlan(p, fmt.Sprintf("block %d", li))
+	done, ok := g.admit(p.Model, fmt.Sprintf("block %d", li))
 	if !ok {
 		return false
 	}
@@ -223,7 +223,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 			"so it cannot move to %s", li, label(src.dev, src.ord), to)
 	}
 	if !staged {
-		done, ok := g.admitPlan(p, fmt.Sprintf("block %d", li))
+		done, ok := g.admit(p.Model, fmt.Sprintf("block %d", li))
 		if !ok {
 			return out, nil
 		}
