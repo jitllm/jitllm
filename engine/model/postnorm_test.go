@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -125,6 +126,52 @@ func lpDiff(a, b []float32) (float64, bool) {
 		d = max(d, math.Abs(float64(a[i]-b[i])))
 	}
 	return d, ia != ib
+}
+
+// lcppSteps teacher-forces llama.cpp (scripts/lcpplogits, built in dir beside
+// its libraries) over ids then toks at ngl, returning the logits of the
+// prompt's last row and of every step, as composedDecode does; false when
+// llama.cpp does not read the file.
+func lcppSteps(t *testing.T, dir, gguf string, ids, toks []int32, ngl int) ([][]float32, bool) {
+	t.Helper()
+	tmp := t.TempDir()
+	seq := append(slices.Clone(ids), toks...)
+	b := make([]byte, 4*len(seq))
+	for i, id := range seq {
+		binary.LittleEndian.PutUint32(b[4*i:], uint32(id))
+	}
+	in, out := filepath.Join(tmp, "ids.bin"), filepath.Join(tmp, "logits.bin")
+	if err := os.WriteFile(in, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(dir, "lcpplogits"), gguf, fmt.Sprint(ngl), in, fmt.Sprint(len(ids)), out)
+	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+dir)
+	if ngl == 0 {
+		cmd.Env = append(cmd.Env, "CUDA_VISIBLE_DEVICES=")
+	}
+	if msg, err := cmd.CombinedOutput(); err != nil {
+		if strings.Contains(string(msg), "load failed") {
+			return nil, false
+		}
+		t.Fatalf("lcpplogits: %v\n%s", err, msg)
+	}
+	r, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := len(toks) + 1
+	if len(r)%(4*rows) != 0 {
+		t.Fatalf("lcpplogits wrote %d bytes, not %d rows", len(r), rows)
+	}
+	nv := len(r) / 4 / rows
+	lg := make([][]float32, rows)
+	for i := range lg {
+		lg[i] = make([]float32, nv)
+		for j := range lg[i] {
+			lg[i][j] = math.Float32frombits(binary.LittleEndian.Uint32(r[4*(i*nv+j):]))
+		}
+	}
+	return lg, true
 }
 
 const postNormText = "The history of the city begins with a small fishing village on the northern bank of the " +

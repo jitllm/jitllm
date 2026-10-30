@@ -306,6 +306,9 @@ block bound with the shallow control past it too.
 - `TestComposedBlocksServe` judges each arm on a panel of eight prompts (`servePanel`), by the
   user's decision: the median across prompts of each prompt's median per-step ratio, against 1.5;
   the worst-step bound and every per-step check are kept.
+- Its worst-step bound is compared to llama.cpp, by the user's decision: 4x the widest of main's
+  two backends and llama.cpp's CUDA and CPU arms (`scripts/lcpplogits`, built in `JITLLM_LCPP`,
+  which the gate requires), each teacher-forced on the panel against the float reference.
 
 ## The shadow arm
 

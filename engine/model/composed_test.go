@@ -330,6 +330,7 @@ var composedResidue []string
 // than bandRatio times the tier, and at its worst no further than bandWorst
 // times the widest the tier's backends come at theirs. Both gates that hold an
 // arm to a reference take them from here.
+// The widest is over main's backends and llama.cpp's CUDA and CPU arms, teacher-forced on the panel (the user's decision).
 const bandRatio, bandWorst = 1.5, 4.0
 
 // bandFloor is the least distance from the float reference a model of
@@ -500,7 +501,7 @@ const flashBlock = 32
 // activations, which neither the tier nor the arm computes: its distance from
 // it may be no more than bandRatio times the tier's at the median prompt's
 // median step, and no more than bandWorst times the widest the
-// tier's own backends come at their worst: a model whose decode passes a
+// tier's own backends and llama.cpp's come at their worst: a model whose decode passes a
 // near tie (OLMo 2's fifth step) sends each implementation to one side of it
 // or the other, main's CUDA and Vulkan tiers 0.118 apart there, and the arm
 // is held to that spread, not to the side one backend's tier landed on.
@@ -569,9 +570,30 @@ func TestComposedBlocksServe(t *testing.T) {
 			}
 			// The tier and the float reference on every device first: the
 			// spread of the tier's own backends is the band each arm is held to.
+			lcppDir := os.Getenv("JITLLM_LCPP")
+			if lcppDir == "" {
+				t.Fatal("JITLLM_LCPP is unset: it names a CUDA build of llama.cpp holding scripts/lcpplogits, the worst-step bound's oracle")
+			}
+			var lcpp [][][]float32
+			for _, ngl := range []int{99, 0} {
+				for _, p := range panel {
+					lg, ok := lcppSteps(t, lcppDir, fixtureSource(path), p.ids, p.toks, ngl)
+					if !ok {
+						t.Logf("llama.cpp does not read %s: the worst step is held to the tier's backends alone", file)
+						lcpp = nil
+						break
+					}
+					lcpp = append(lcpp, lg)
+				}
+				if lcpp == nil {
+					break
+				}
+			}
 			type tierRun struct{ want, ref [][]float32 }
 			runs := map[string]*[2][]tierRun{}
 			var widest [2]float64
+			var widestTier, widestLcpp [2]float64
+			var tierAt, lcppAt [2]string
 			for _, dev := range stepDevices() {
 				// A device the box does not have skips its own subtest, not the model's.
 				t.Run(dev+"/reference", func(t *testing.T) {
@@ -582,9 +604,23 @@ func TestComposedBlocksServe(t *testing.T) {
 							var tr tierRun
 							tr.want, _, _, _ = composedDecode(t, m, dev, p.ids, p.toks, 0, noGraph, false)
 							tr.ref = unsplitRef(t, m, dev, p.ids, p.toks, refParts, noGraph)
+							pi := len(r[g])
 							for i := 1; i < len(tr.ref); i++ {
-								widest[g] = max(widest[g], logitNMSE(tr.want[i], tr.ref[i]))
+								if e := logitNMSE(tr.want[i], tr.ref[i]); e > widestTier[g] {
+									widestTier[g], tierAt[g] = e, fmt.Sprintf("%s, prompt %d step %d", dev, pi, i)
+								}
 							}
+							for li := pi; li < len(lcpp); li += len(panel) {
+								if len(lcpp[li][0]) != len(tr.ref[0]) {
+									t.Fatalf("llama.cpp's logits are %d wide where the model's are %d", len(lcpp[li][0]), len(tr.ref[0]))
+								}
+								for i := 1; i < len(tr.ref); i++ {
+									if e := logitNMSE(lcpp[li][i], tr.ref[i]); e > widestLcpp[g] {
+										widestLcpp[g], lcppAt[g] = e, fmt.Sprintf("%s, prompt %d step %d", [2]string{"cuda", "cpu"}[li/len(panel)], pi, i)
+									}
+								}
+							}
+							widest[g] = max(widestTier[g], widestLcpp[g])
 							r[g] = append(r[g], tr)
 						}
 					}
@@ -599,6 +635,7 @@ func TestComposedBlocksServe(t *testing.T) {
 					for g, noGraph := range []bool{false, true} {
 						floor := bandFloor(m.Cfg.NLayer)
 						wide := max(widest[g], floor)
+						t.Logf("graph %v: the tier's backends reach %.3g at their worst step (%s), llama.cpp's cuda and cpu %.3g (%s)", !noGraph, widestTier[g], tierAt[g], widestLcpp[g], lcppAt[g])
 						for _, a := range arms {
 							if a.tile > 0 && noGraph {
 								continue
