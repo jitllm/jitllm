@@ -89,7 +89,7 @@
     "composed": {
       "module": ".", "packages": ["./engine/model"], "run": "TestFrontStatesTheModelAsOps|TestComposedBlocksServe|TestComposedHead|TestComposedShadowHoldsEveryBlock|TestC6ServesComposed|TestPrefillFoldsALayerNormHead|TestPlacedPromptsCompileNothing|TestDeviceMemoryHoldsSteadyAcrossMoves|TestSessionsStepAtOnceComposed|TestSessionsRelocateAtOnceComposed|TestABatchLeavesAnotherSessionAlone|TestLayerRelocatesToAnotherDevice|TestBlocksMoveBetweenDevices", "cap": "16G",
       "needs": {"models": true, "device": true},
-      "note": "the composer serving the tier's blocks and heads: every block served, none formed at a step, forms charged and freed, sessions side by side, moves; -tags jitllmcomposed runs every device gate composed (docs/testing.md)"
+      "note": "the composer serving the tier's blocks and heads: every block served, none formed at a step, forms charged and freed, sessions side by side, moves; every device gate runs composed (docs/testing.md)"
     },
     "gpu-tier": {
       "module": ".", "packages": ["./jit/gpu/tier/..."], "cap": "16G",

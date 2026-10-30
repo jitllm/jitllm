@@ -386,8 +386,8 @@ func WithKVHeadMajor(on bool) Option { return func(l *loadOpts) { l.opt.kvHeadMa
 // the composer forms for the CPU from the block's graph, its history in the
 // State's KV pages, each layer's held as one span the kernels address
 // (kvArena). A block step the composer does not serve runs main's kernels
-// and is counted by its reason (State.CPUBlockSteps). Off by default: the
-// composed CPU kernels do not yet reach main's rate.
+// and is counted by its reason (State.CPUBlockSteps). On by default
+// (jit.ComposedByDefault).
 func WithComposedCPU(on bool) Option {
 	return func(l *loadOpts) { l.opt.composedCPU, l.opt.composedCPUSet = on, true }
 }

@@ -278,18 +278,18 @@ and every other caller of `swaTier`). `JITLLM_TEST_DEVICES` names their device:
 
 ## Running the device gates composed
 
-A test binary built with `-tags jitllmcomposed` opens every tier with the
-composer serving the blocks and the head (`Config.Composed`) unless a gate
-sets its own, so every device gate runs the composed path on what the front
-end states and the tier's own kernels on the rest. The relocation, move and
+Every test binary opens every tier with the composer serving the blocks and
+the head (`Config.Composed`), and the CPU's blocks (`WithComposedCPU`), unless
+a gate sets its own, so every device gate runs the composed path on what the
+front end states and main's kernels on the named rest. The relocation, move and
 session gates carry a composed arm in every build as well, on the models the
 front end states whole, held to the composer having served
 (`composedRan`: part steps served, none formed at a step, no decline outside
 the arm's stated reasons):
 
-    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test -tags jitllmcomposed ./engine/model -run TestBlocksMoveBetweenDevices
+    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine/model -run TestBlocksMoveBetweenDevices
 
-In a composed build the classic-kit and dense (`TestC6OnEveryDevice`), hybrid
+The classic-kit and dense (`TestC6OnEveryDevice`), hybrid
 attention (`TestHybridAttentionBlockOnDevice`) and BitNet
 (`TestBitNetOnEveryDevice`) device gates hold the composer to having run
 exactly the steps times the blocks the front end states, emitted or replayed
@@ -324,7 +324,7 @@ captured graph, and holds them to the tier's logits bit for bit, to the spread
 of the tier's backends at every depth, and to flagging a rewrite of one block's
 graph at that block and no other:
 
-    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test -tags jitllmcomposed ./engine/model -run TestComposedShadowHoldsEveryBlock
+    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine/model -run TestComposedShadowHoldsEveryBlock
 
 ## Reference scripts
 

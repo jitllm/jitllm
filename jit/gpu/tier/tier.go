@@ -2504,8 +2504,6 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	// (PersistByDefaultForTest), so the regression gates run through it.
 	cfg.Persist = persistDefault
 	cfg.PersistDeps = persistDepsDefault
-	// A jitllmcomposed build serves every tier's blocks and head through the
-	// composer by default.
 	if jit.ComposedByDefault {
 		cfg.Composed = ComposedStep
 	}
