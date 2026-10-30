@@ -48,6 +48,9 @@ type Int8Form struct {
 	// Slot, where set, is the elements one scale word covers under a wider
 	// window, the window's scale stored once a slot (Context.slot).
 	Slot int
+	// SumCodes runs the codes map a Sums of a window a row and sums the
+	// Sums straight from the codes, with no word sums between.
+	SumCodes bool
 }
 
 func (p Profile) run(ks []*Kernel, d Device) ([]*Kernel, error) {

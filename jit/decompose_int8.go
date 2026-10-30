@@ -227,7 +227,7 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 
 	var k exprs
 	cs, el, wi := sh, k.coord(1), -1
-	if ww%q.Sums == 0 {
+	if q.SumCodes && ww%q.Sums == 0 {
 		cs = []int{R, ns, q.Sums}
 		el = k.op(OpAdd, U, k.op(OpMul, U, k.coord(1), k.u(uint32(q.Sums))), k.coord(2))
 		wi = k.op(OpDiv, U, k.coord(1), k.u(uint32(ww/q.Sums)))
@@ -286,14 +286,29 @@ func (c *Context) int8Pack(v graph.ValueID, codes Operand, float bool, nw int) [
 		packed = b
 	}
 
+	var fi exprs
+	fi.op(OpAdd, U, fi.op(OpAdd, U, fi.op(OpMul, U, fi.coord(0), fi.u(uint32(nw+ns))), fi.coord(1)), fi.u(uint32(nw)))
+	ext := R * (nw + ns)
+
+	if !q.SumCodes {
+		wsum := Operand{Kind: OperandScratch, Name: x.Name + ".wsum", Elem: I, Temp: true}
+		var s exprs
+		code(&s, s.coord(0), s.op(OpAdd, U, s.op(OpMul, U, s.coord(1), s.u(uint32(q.Word))), s.coord(2)))
+		per := q.Sums / q.Word
+		var f exprs
+		f.un(OpCvtF32, F, f.at(0, []int{R, nwd}, f.coord(0), f.op(OpAdd, U, f.op(OpMul, U, f.coord(1), f.u(uint32(per))), f.coord(2))))
+		return []Prim{
+			{Kind: PrimMap, Shape: []int{R, nwd}, In: []Operand{codes}, Out: words, Expr: p.e},
+			{Kind: PrimReduce, Shape: []int{R, nwd, q.Word}, In: []Operand{codes}, Out: wsum, Combine: OpAdd, Type: I, Expr: s.e},
+			{Kind: PrimReduce, Shape: []int{R, ns, per}, In: []Operand{wsum}, Out: scales, Combine: OpAdd, Start: StartFirst,
+				Expr: f.e, Index: fi.e, Facts: Facts{OutExtent: ext}},
+		}
+	}
+
 	var f exprs
 	if sum := f.at(0, []int{R, ns, q.Sums}, f.coord(0), f.coord(1), f.coord(2)); !float {
 		f.un(OpCvtF32, F, sum)
 	}
-	var fi exprs
-	fi.op(OpAdd, U, fi.op(OpAdd, U, fi.op(OpMul, U, fi.coord(0), fi.u(uint32(nw+ns))), fi.coord(1)), fi.u(uint32(nw)))
-
-	ext := R * (nw + ns)
 	return []Prim{
 		{Kind: PrimReduce, Shape: []int{R, ns, q.Sums}, In: []Operand{codes}, Out: scales, Combine: OpAdd,
 			Expr: f.e, Index: fi.e, Facts: Facts{OutExtent: ext}},
