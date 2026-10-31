@@ -33,9 +33,6 @@ func scoreMap(shape []int, in []Operand, out Operand, e []Expr, f Facts) Prim {
 func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	if len(o.Reads) == 2 {
-		if c.History.Passes {
-			return nil, fmt.Errorf("an attention over two histories read in passes")
-		}
 		return attendTwo(o, c)
 	}
 	if len(o.In) != 1 && len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) > 1 || a.Window < 0 || a.Softcap < 0 ||
@@ -59,9 +56,6 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) == 2 {
 		// A block selection: the positions each kv group's mask keeps.
 		sel := c.producer(o.In[1])
-		if c.History.Passes {
-			return nil, fmt.Errorf("a block selection over a history read in passes")
-		}
 		if sel == nil || sel.Kind != graph.OpSelect || a.NHead%sel.Attr.NKVHead != 0 || a.Window != 0 || a.Bidir {
 			return nil, fmt.Errorf("an attention of %d heads, window %d, over a selection that is not its own history's", a.NHead, a.Window)
 		}
@@ -164,12 +158,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	vkh := vx.op(OpDiv, U, vh, vx.u(uint32(gqa)))
 	vd2 := vx.op(OpAdd, U, vx.op(OpMul, U, vkh, vx.u(uint32(D))), vd)
 	w := vx.at(0, keys, vx.coord(0), vh, vk)
-	v := c.poolRead(&vx, 3, g.ValuePool, kw, vpid, voff, vd2)
-	if c.History.Passes {
-		// A pass the row attends nothing of reads a page outside the pass.
-		v = vx.sel(F, vx.op(OpLess, ir.Pred, vpos, vx.live()), v, vx.f(0))
-	}
-	vx.op(OpMul, F, w, v)
+	vx.op(OpMul, F, w, c.poolRead(&vx, 3, g.ValuePool, kw, vpid, voff, vd2))
 
 	var ox exprs
 	nv := ox.at(0, dims, ox.coord(0), ox.coord(1), ox.coord(2))
@@ -188,9 +177,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	ox.op(OpMul, F, nv, ox.op(OpDiv, F, ox.f(1), ox.op(OpMax, F, l, ox.f(1e-30))))
 
 	sum := rng(2)
-	if !c.History.Passes {
-		sum.Least = 1
-	}
+	sum.Least = 1
 	scored := rng(2)
 	scored.Extents[0] = R * H * D
 	desc := tableRows
@@ -205,7 +192,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		}
 		return tables(d)
 	}
-	prims := []Prim{
+	return []Prim{
 		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, g.Keys), Out: dots, Expr: dx.e, Facts: scored},
 		scoreMap(keys, withMask(dots), scores, sx.e, rng(2)),
 		{Kind: PrimReduce, Shape: keys, In: tables(scores), Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)),
@@ -213,56 +200,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		{Kind: PrimMap, Shape: keys, In: tables(scores, maxes), Out: weights, Expr: wx.e, Facts: rng(2)},
 		{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: sum},
 		{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, g.Values), Out: values, Expr: vx.e, Facts: rng(3)},
-	}
-	if c.History.Passes {
-		return append(prims, foldPasses(o, R, H, D, values, sums, maxes, out)...)
-	}
-	return append(prims, Prim{Kind: PrimMap, Shape: dims, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs}}})
-}
-
-// The running partial of an attention read in passes: a row's heads, each
-// its weighted values, then their maximum, then their sum.
-var (
-	tableRunIn  = Operand{Kind: OperandTable, Name: "run.in"}
-	tableRunOut = Operand{Kind: OperandTable, Name: "run.out"}
-)
-
-// foldPasses folds a pass's weighted values, sums and maxima into the
-// running partial, each side scaled by exp of its maximum less the larger,
-// and finishes the row from the fold: the values over the sum, a sink's
-// exp(sink - max) in the sum alone. A partial of sum zero has attended
-// nothing, whatever its maximum: the first pass folds into zeros.
-func foldPasses(o graph.Op, R, H, D int, values, sums, maxes, out Operand) []Prim {
-	U, F := ir.U32, ir.F32
-	runs, heads, dims := []int{R, H, D + 2}, []int{R, H}, []int{R, H, D}
-
-	var fx exprs
-	r, h, d := fx.coord(0), fx.coord(1), fx.coord(2)
-	mo, lo := fx.at(3, runs, r, h, fx.u(uint32(D))), fx.at(3, runs, r, h, fx.u(uint32(D+1)))
-	mj, lj := fx.at(2, heads, r, h), fx.at(1, heads, r, h)
-	held := fx.op(OpLess, ir.Pred, fx.f(0), lo)
-	mn := fx.sel(F, held, fx.op(OpMax, F, mo, mj), mj)
-	ea := fx.sel(F, held, fx.un(OpExp, F, fx.op(OpSub, F, mo, mn)), fx.f(0))
-	eb := fx.un(OpExp, F, fx.op(OpSub, F, mj, mn))
-	vd := fx.op(OpMin, U, d, fx.u(uint32(D-1)))
-	acc := fx.op(OpAdd, F, fx.op(OpMul, F, fx.at(3, runs, r, h, d), ea), fx.op(OpMul, F, fx.at(0, dims, r, h, vd), eb))
-	sum := fx.op(OpAdd, F, fx.op(OpMul, F, lo, ea), fx.op(OpMul, F, lj, eb))
-	tail := fx.sel(F, fx.op(OpLess, ir.Pred, d, fx.u(uint32(D+1))), mn, sum)
-	fx.sel(F, fx.op(OpLess, ir.Pred, d, fx.u(uint32(D))), acc, tail)
-
-	var ex exprs
-	er, eh := ex.coord(0), ex.coord(1)
-	l := ex.at(0, runs, er, eh, ex.u(uint32(D+1)))
-	in := []Operand{tableRunOut}
-	if len(o.Weight) == 1 {
-		m := ex.at(0, runs, er, eh, ex.u(uint32(D)))
-		l = ex.op(OpAdd, F, l, ex.un(OpExp, F, ex.op(OpSub, F, ex.at(1, []int{H}, eh), m)))
-		in = append(in, sinkVec(o))
-	}
-	ex.op(OpMul, F, ex.at(0, runs, er, eh, ex.coord(2)), ex.op(OpDiv, F, ex.f(1), ex.op(OpMax, F, l, ex.f(1e-30))))
-	return []Prim{
-		{Kind: PrimMap, Shape: runs, In: []Operand{values, sums, maxes, tableRunIn}, Out: tableRunOut, Expr: fx.e},
-		{Kind: PrimMap, Shape: dims, In: in, Out: out, Expr: ex.e},
+		{Kind: PrimMap, Shape: dims, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs}}},
 	}
 }
 

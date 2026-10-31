@@ -8638,11 +8638,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if asked && why == partServes {
 				var serr error
 				sv, inst, cp, serr = g.servedStep(bs, l, li, p, R, rag == nil || rag.oneSequence())
-				switch {
-				case errors.Is(serr, errStreamForm):
-					g.LastErr = serr.Error()
-					sv, inst, cp, why = nil, nil, nil, partStream
-				case serr != nil:
+				if serr != nil {
 					if err == nil {
 						err = serr
 					}
@@ -8708,12 +8704,9 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 				}
 				var serr error
-				switch {
-				case sv.f.split > 0:
+				if sv.f.split > 0 {
 					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, in, outs)
-				case sv.f.passHi > 0:
-					serr = sv.streamRun(g, lc, s, inst, kind, bs, g.kvp.layers[l.kvSrc], in, outs)
-				default:
+				} else {
 					serr = sv.runAs(g, lc, inst, kind, in, outs)
 				}
 				if err == nil {

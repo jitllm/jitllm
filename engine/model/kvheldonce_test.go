@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -146,24 +145,6 @@ func TestKVIsHeldOnce(t *testing.T) {
 				t.Fatalf("%d page(s) of the decisions' history held twice", dup)
 			}
 		})
-		if g != nil {
-			s := g.Stats()
-			declined := map[string]int{}
-			for i, n := range s.BlockDeclines {
-				if n > 0 {
-					declined[tier.DeclineName(i)] = n
-				}
-			}
-			t.Logf("the composer served %d block steps on the card; declined %v", composedBlockSteps(g), declined)
-			if composedBlockSteps(g) == 0 {
-				t.Error("the composer served no block step on the card")
-			}
-			for _, why := range []jit.Decline{jit.DeclineStream, jit.DeclineNoRoom} {
-				if n := s.BlockDeclines[why]; n > 0 {
-					t.Errorf("the composer declined %d block step(s) on the card: %s", n, jit.DeclineName(int(why)))
-				}
-			}
-		}
 		// The violation: the copying store keeps a copy of every sealed page
 		// beside the session's.
 		t.Run("violation", func(t *testing.T) {

@@ -22,10 +22,6 @@ type Pool struct {
 type History struct {
 	Keys, Values Pool
 	ValuesInKeys bool
-	// Passes reads the history in passes over the rows' descriptors, which
-	// the call site clips to each pass: the attention folds each pass into
-	// the running partial "run.in" -> "run.out" and finishes from the last.
-	Passes bool
 }
 
 // values is the pool the values are read from, its operand and its layout.

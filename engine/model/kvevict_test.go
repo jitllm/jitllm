@@ -104,16 +104,12 @@ func (eg *evictGate) second(t *testing.T, st *State) [][]float32 {
 }
 
 // open is an arm's device and State, the model wholly placed and the prompt
-// in; squeeze then holds the budget at a few pages of slack. cfg, where set,
-// changes the arm's device configuration.
-func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*tier.Config)) (*tier.GPU, *State, int) {
+// in; squeeze then holds the budget at a few pages of slack.
+func (eg *evictGate) open(t *testing.T, squeeze bool) (*tier.GPU, *State, int) {
 	g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) {
 			c.KVPage = 64 // the smallest page: several over a short history
 			c.StagedDecode = true
-			if cfg != nil {
-				cfg(c)
-			}
 		}))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
@@ -143,8 +139,8 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*tier.Config)) (*
 	return g, st, resident
 }
 
-func (eg *evictGate) run(t *testing.T, squeeze bool, cfg func(*tier.Config)) evictRun {
-	g, st, resident := eg.open(t, squeeze, cfg)
+func (eg *evictGate) run(t *testing.T, squeeze bool) evictRun {
+	g, st, resident := eg.open(t, squeeze)
 	r := evictRun{resident: resident}
 	for _, id := range eg.ids {
 		lg, err := st.Forward(id)
@@ -178,30 +174,10 @@ func worstStep(got, want [][]float32) (float64, int) {
 // token's attention, and its logits stay with an unconstrained device arm's
 // and the host's. Stats.KVEvictions and KVStreamPasses are the selection
 // check: a budget that did not bind would compare a run against itself.
-//
-// The arms run the composer's blocks, the squeezed one its forms over passes
-// (Stats.ComposedStreamPasses, with no block step declined); main's tier
-// squeezed and the composer's float reference squeezed are held to the same
-// bound against it.
 func TestKVEvictionRunsPastTheBudget(t *testing.T) {
 	eg := newEvictGate(t)
-	free := eg.run(t, false, nil)
-	got := eg.run(t, true, nil)
-	tierArm := eg.run(t, true, func(c *tier.Config) { c.Composed = 0 })
-	ref := eg.run(t, true, func(c *tier.Config) { c.ComposedFloat = true })
-	for name, r := range map[string]evictRun{"composed": got, "float reference": ref} {
-		for i, n := range r.st.BlockDeclines {
-			if n > 0 {
-				t.Errorf("the %s arm declined %d block step(s): %s", name, n, tier.DeclineName(i))
-			}
-		}
-		if r.st.ComposedStreamPasses == 0 {
-			t.Errorf("the %s arm ran no composed pass over the evicted history", name)
-		}
-	}
-	if tierArm.st.ComposedStreamPasses != 0 || tierArm.st.KVStreamPasses == 0 {
-		t.Errorf("main's tier arm: %d composed passes and %d streamed passes", tierArm.st.ComposedStreamPasses, tierArm.st.KVStreamPasses)
-	}
+	free := eg.run(t, false)
+	got := eg.run(t, true)
 	if got.after != got.resident {
 		t.Fatalf("%d of %d blocks on the card after the decode: eviction must not move blocks home",
 			got.after, got.resident)
@@ -242,16 +218,6 @@ func TestKVEvictionRunsPastTheBudget(t *testing.T) {
 	if !(host < evictNMSE) {
 		t.Fatalf("worst logit NMSE %.3e against the host at step %d", host, hat)
 	}
-	tw, tat := worstStep(got.logits, tierArm.logits)
-	rw, rat := worstStep(got.logits, ref.logits)
-	t.Logf("composed passes: %d, against main's tier squeezed %.3e (step %d), against the float reference squeezed %.3e (step %d)",
-		got.st.ComposedStreamPasses, tw, tat, rw, rat)
-	if !(tw < evictNMSE) {
-		t.Fatalf("worst logit NMSE %.3e against main's tier squeezed at step %d", tw, tat)
-	}
-	if !(rw < evictNMSE) {
-		t.Fatalf("worst logit NMSE %.3e against the float reference squeezed at step %d", rw, rat)
-	}
 }
 
 // TestKVEvictionStreamsWithoutAllocating holds a decode token whose attention
@@ -260,7 +226,7 @@ func TestKVEvictionRunsPastTheBudget(t *testing.T) {
 // TestDecodeDoesNotAllocate's short, unconstrained window never reaches.
 func TestKVEvictionStreamsWithoutAllocating(t *testing.T) {
 	eg := newEvictGate(t)
-	g, st, _ := eg.open(t, true, nil)
+	g, st, _ := eg.open(t, true)
 	// The window inside one 64-position page: sending a page home is paid
 	// once a page of growth, as committing one is, not once a token.
 	const n = 16
@@ -305,7 +271,7 @@ func TestKVEvictionStreamsWithoutAllocating(t *testing.T) {
 // home copy back reads 0.20.
 func TestKVEvictionRewindsIntoAnEvictedPage(t *testing.T) {
 	eg := newEvictGate(t)
-	g, st, _ := eg.open(t, true, nil)
+	g, st, _ := eg.open(t, true)
 	for _, id := range eg.ids {
 		if _, err := st.Forward(id); err != nil {
 			t.Fatalf("%v (%s)", err, g.Err())

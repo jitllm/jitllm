@@ -1171,9 +1171,6 @@ type Stats struct {
 	// StagedPasses counts attention passes of streamed calls: those over
 	// evicted history and those past Config.StagedPassKeys on the card.
 	StagedPasses int
-	// ComposedStreamPasses counts the passes of composed blocks over
-	// evicted history (streamRun).
-	ComposedStreamPasses int
 	// PipelinePieces counts the pieces of pipelined prompt chunks this device
 	// ran (GPU.pipeline).
 	PipelinePieces int
@@ -1630,7 +1627,6 @@ func (s *Stats) add(o Stats) {
 	s.RecPointsLoaded += o.RecPointsLoaded
 	s.KVStreamPasses += o.KVStreamPasses
 	s.StagedPasses += o.StagedPasses
-	s.ComposedStreamPasses += o.ComposedStreamPasses
 	s.PipelinePieces += o.PipelinePieces
 	s.StageOverlaps += o.StageOverlaps
 	s.SubsBeside += o.SubsBeside
