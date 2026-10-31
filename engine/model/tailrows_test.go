@@ -30,23 +30,25 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 	// One arm at a time: a 4 GiB card holds one copy of the model.
 	// decode is the third arm: the prompt a token at a time, which the
 	// ragged step's matvec is (decode's, over several rows).
-	run := func(on, decode bool, n int, force []int32) out {
+	run := func(on, decode, dev bool, n int, force []int32) out {
 		m, err := Open(p, WithTailRows(on))
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer m.Close()
 		ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 80), true)[:n]
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
-		if err != nil || g == nil {
-			noDevice(t, "device", err)
-		}
-		defer g.Close()
 		st := m.NewState(n + 16)
 		defer st.Close()
-		st.SetDevice(g)
-		if st.GPULayers() != m.Cfg.NLayer {
-			t.Fatalf("placed %d of %d blocks: %q", st.GPULayers(), m.Cfg.NLayer, g.Err())
+		if dev {
+			g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+			if err != nil || g == nil {
+				noDevice(t, "device", err)
+			}
+			defer g.Close()
+			st.SetDevice(g)
+			if st.GPULayers() != m.Cfg.NLayer {
+				t.Fatalf("placed %d of %d blocks: %q", st.GPULayers(), m.Cfg.NLayer, g.Err())
+			}
 		}
 		var lg []float32
 		if decode {
@@ -74,8 +76,19 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 		return o
 	}
 	for _, n := range []int{512 + 3, 2, 4} {
-		dec := run(true, true, n, nil)
-		on, off := run(true, false, n, dec.toks), run(false, false, n, dec.toks)
+		dec := run(true, true, true, n, nil)
+		on, off := run(true, false, true, n, dec.toks), run(false, false, true, n, dec.toks)
+		// The CPU device on the same tokens: how far each device arm sits
+		// from it says whether a gap between the arms is one arm's.
+		ref := run(true, true, false, n, dec.toks)
+		far := func(o out) float64 {
+			w := nmseF32(ref.last, o.last)
+			for i := range ref.steps {
+				w = max(w, nmseF32(ref.steps[i], o.steps[i]))
+			}
+			return w
+		}
+		t.Logf("n=%d: from the CPU device, decode %.2e, the ragged tail %.2e, the chunk %.2e", n, far(dec), far(on), far(off))
 		if on.tails != 1 || off.tails != 0 || dec.tails != 0 {
 			t.Fatalf("n=%d: %d ragged tail(s) with the rows on, %d off, %d decoding; want 1, 0 and 0",
 				n, on.tails, off.tails, dec.tails)
