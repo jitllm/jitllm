@@ -144,7 +144,7 @@ func (Phases) phase(k, m *Kernel) {
 			nodeOf[i] = coord[nd.A]
 			return nodeOf[i]
 		}
-		if nd.Op == OpIter || nd.Op == OpFold {
+		if nd.Op == OpIter || nd.Op == OpFold || nd.Op == OpLoad && nd.At > 0 {
 			nd.At += lb
 		}
 		if nd.Op == OpLoad {
@@ -176,14 +176,13 @@ func (Phases) phase(k, m *Kernel) {
 			ns.At += lb
 		}
 		if !s.Barrier && !s.Run {
-			ns.Buf, ns.Val = bufOf[s.Buf], walk(s.Val)
+			// Ix too where Ax indexes: every pass reads it as the store's.
+			ns.Buf, ns.Val, ns.Ix = bufOf[s.Buf], walk(s.Val), walk(s.Ix)
 			if s.Ax != nil {
 				ns.Ax = make([]int, len(s.Ax))
 				for a, x := range s.Ax {
 					ns.Ax[a] = walk(x)
 				}
-			} else {
-				ns.Ix = walk(s.Ix)
 			}
 		}
 		k.Stores = append(k.Stores, ns)

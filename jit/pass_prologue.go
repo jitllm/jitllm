@@ -358,7 +358,7 @@ func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 	// to it, one slot of k.
 	shared := map[Operand]int{}
 	for bi, b := range k.Bufs {
-		if b.Kind != BufIn {
+		if _, ok := shared[b.Operand]; ok || b.Kind != BufIn {
 			continue
 		}
 		for _, x := range pr.Bufs {
@@ -368,6 +368,16 @@ func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 				k.Bufs[bi] = b
 				shared[b.Operand] = bi
 			}
+		}
+	}
+	// One array an output: c's other buffers of it -- a gather's flat
+	// reads beside reads at coordinates -- read the array the producer fills.
+	for i, nd := range k.Nodes {
+		if nd.Op != OpLoad || k.Bufs[nd.Buf].Kind != BufIn {
+			continue
+		}
+		if at, ok := shared[k.Bufs[nd.Buf].Operand]; ok {
+			k.Nodes[i].Buf = at
 		}
 	}
 	// A value the graph hands back is stored whole as well: every workgroup
