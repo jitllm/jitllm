@@ -325,7 +325,7 @@ func TestLinearRowsMatchRowByRow(t *testing.T) {
 		{"hybrid", func(t *testing.T) *Model { return hybridModelOpt(t, hyOpt{ctx: 320}) }},
 		{"hybrid-tiled-moe", func(t *testing.T) *Model { return hybridModelOpt(t, hyOpt{ctx: 320, tiled: true, moe: true}) }},
 		{"synth-kimik3", golden("kimik3", k3GoldScript, "synth-kimik3")},
-		{"synth-kimilinear", file("synth-kimilinear.jlm")},
+		{"synth-kimilinear", file("synth-kimilinear")},
 		{"synth-qwen35-hybrid-mtp", file("synth-qwen35-hybrid-mtp.gguf")},
 		{"synth-mamba2", golden("ssm", ssmGoldScript, "synth-mamba2")},
 		{"synth-mamba1", file("synth-mamba1.gguf")},
