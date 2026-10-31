@@ -713,18 +713,14 @@ func (g *devTier) prewarmDecodePlansOf(bs *blockScratch) {
 	}
 }
 
-// prewarmHeadKernels builds the decode scratch's two prompt-only kernels,
-// which a first prompt would build otherwise: the embedding gather from the
-// resident head and the row copy the folded head reads. PrepHead calls it
+// prewarmHeadKernels builds the decode scratch's prompt-only kernel, which a
+// first prompt would build otherwise: the row copy the folded head reads. PrepHead calls it
 // once the head is resident; placement may end before the head is offered.
 // Callers hold g.mu.
 func (g *devTier) prewarmHeadKernels() {
 	hb := g.bs
 	if g.NoPromptPrewarm || hb == nil || hb.head == nil || !hb.head.ok || kernels.IsFloat(hb.head.t) {
 		return
-	}
-	if hb.headEmbeds {
-		g.embedKernel(hb)
 	}
 	if hb.p.NEmbd == hb.head.k {
 		if err := g.spanKernel(hb); err != nil {

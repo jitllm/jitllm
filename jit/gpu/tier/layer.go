@@ -2288,14 +2288,6 @@ type blockScratch struct {
 	ragCapK backend.Kernel
 	ragCap  backend.Buf
 	ragCapC float32
-	// headEmbeds and embScale are nn.Head.Embeds and EmbdScale: the resident
-	// head is also the token embedding, and EmbedRows gathers a prompt chunk's
-	// rows from it where the composer does not. embK is GetRowsPacked at the
-	// widest chunk, with its id and output buffers, made on first use.
-	headEmbeds     bool
-	embScale       float32
-	embK           backend.Kernel
-	embIds, embOut backend.Buf
 	// embedGraph is the input rows as ops (nn.Head.Embed); embW and posW the
 	// tables they read, the token embedding (the head where it is the
 	// embedding) and a learned position table, resident for the model, and
@@ -6690,10 +6682,6 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	g.shapeChanged()
 	g.headSrc, g.headNormHost = &h.W.Data[0], slices.Clone(h.Norm)
 	g.charge(uint64(len(h.Norm)*4 + h.W.Rows*4))
-	bs.headEmbeds, bs.embScale = h.Embeds, h.EmbdScale
-	if bs.embScale == 0 {
-		bs.embScale = 1
-	}
 	g.prepEmbed(bs, h)
 	// The output bias, for a head graph the composer serves that binds it. A
 	// head without it (no room, a bias of another width) is declined by name
@@ -7479,9 +7467,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// last workgroup must not run past R rows; otherwise the promise is made real
 	// on the host.
 	pe := g.takeEmbedLocked(x)
-	var gatherN int
 	embedSrv := false
-	if pe != nil && pe.composed {
+	if pe != nil {
 		// The composer's gather (ComposedEmbed) at the call's rows; a call
 		// it cannot write them for (a ragged step's rows, each its own
 		// sequence's) takes them made real by the same form.
@@ -7489,13 +7476,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			g.bs.embW.k == p.NEmbd {
 			embedSrv = true
 		} else {
-			g.materializeLocked(pe)
-			pe = nil
-		}
-	} else if pe != nil {
-		hr := g.bs.head
-		gatherN = kernels.GetRowsThreads(hr.t, hr.k, R)
-		if !g.embedKernel(g.bs) || hr.k != p.NEmbd || len(pe.ids) > R || gatherN%128 != 0 {
 			g.materializeLocked(pe)
 			pe = nil
 		}
@@ -8018,7 +7998,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		bs: bs, hb: hb, head: head, lo: lo, hi: hi, pos: pos, x: x,
 		hx: hx, hcs: hcs, hcsSWA: hcsSWA, pn: pn, koffs: koffs, kposs: kposs, rposs: rposs,
 		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow, kvDim: kvDim, qdim: qdim,
-		kst: kst, nCap: nCap, gatherN: gatherN, rrows: rrows, sm: sm, smG: smG, smW: smW,
+		kst: kst, nCap: nCap, rrows: rrows, sm: sm, smG: smG, smW: smW,
 		tableSrv: tableSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, raxes: raxes,
 		fold: fold, ropeDev: ropeDev, argmax: argmax, sampleK: sampleK, samplePen: samplePen, pick: pick, ragHead: ragHead, parOK: parOK,
 		allRows: allRows, hNorm: hNorm, headWhy: headWhy, pickOnly: pickOnly,
@@ -8120,7 +8100,7 @@ type submitArgs struct {
 	pe                      *embPend
 	key                     graphKey
 	R, nrow, kvDim, qdim    int
-	kst, nCap, gatherN      int
+	kst, nCap               int
 	rrows                   int
 	sm                      backend.Kernel
 	smG, smW                int
@@ -8175,7 +8155,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	bs, hb, head, lo, hi, pos, x := a.bs, a.hb, a.head, a.lo, a.hi, a.pos, a.x
 	hx, hcs, hcsSWA, pn, koffs, kposs, rposs := a.hx, a.hcs, a.hcsSWA, a.pn, a.koffs, a.kposs, a.rposs
 	p, rag, pe, key := a.p, a.rag, a.pe, a.key
-	R, nrow, kvDim, qdim, kst, nCap, gatherN, rrows := a.R, a.nrow, a.kvDim, a.qdim, a.kst, a.nCap, a.gatherN, a.rrows
+	R, nrow, kvDim, qdim, kst, nCap, rrows := a.R, a.nrow, a.kvDim, a.qdim, a.kst, a.nCap, a.rrows
 	sm, smG, smW := a.sm, a.smG, a.smW
 	fold, ropeDev, argmax, sampleK, samplePen, pick := a.fold, a.ropeDev, a.argmax, a.sampleK, a.samplePen, a.pick
 	tableSrv, sampleSrv, embedSrv, raxes := a.tableSrv, a.sampleSrv, a.embedSrv, a.raxes
@@ -10712,14 +10692,6 @@ func (g *devTier) layersSession(s backend.Session) {
 		if err == nil {
 			err = serr
 		}
-	} else if pe != nil {
-		hr := g.bs.head
-		g.subBytes.embIDs = embIDs(g.subBytes.embIDs, pe.ids, R, hr.nrows)
-		w(g.bs.embIds, g.subBytes.embIDs)
-		if err == nil {
-			err = lc.launch(g.bs.embK, gatherN/128, 128, hr.qs, hr.d, hr.sc, g.bs.embIds, bs.x)
-		}
-		g.EmbedLaunches++
 	} else {
 		w(bs.x, f32b(hx))
 	}

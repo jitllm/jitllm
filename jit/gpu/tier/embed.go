@@ -9,7 +9,6 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // embPend is a prompt chunk whose rows EmbedRows promised and has not yet
@@ -40,9 +39,7 @@ func (pe *embPend) same(x []float32) bool {
 // ids at positions pos onwards (nn.EmbedDevice). Where the composer serves
 // them (ComposedEmbed) they are the front end's graph of the input rows over
 // the tables the device holds, any rows a call carries, each decline named;
-// otherwise the tier gathers a prompt chunk's from a head that is also the
-// embedding (nn.Head.Embeds) in a format kernels.GetRowsPacked reads. False
-// writes nothing.
+// otherwise the host writes them. False writes nothing.
 //
 // The gather rides the next submission rather than running here: reading the
 // rows back into a fresh prompt buffer cost more than the host lookup it
@@ -78,24 +75,7 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 		g.embPend = pe
 		return true
 	}
-	if n == 0 || n == 1 && !g.prompt || n > batchWidth || bs == nil || bs.head == nil || !bs.head.ok || !bs.headEmbeds ||
-		len(dst) != n*bs.head.k || kernels.IsFloat(bs.head.t) {
-		return false
-	}
-	r := bs.head
-	for _, id := range ids {
-		if id < 0 || int(id) >= r.nrows {
-			g.LastErr = fmt.Sprintf("tier: EmbedRows: token %d outside a vocabulary of %d", id, r.nrows)
-			return false
-		}
-	}
-	if !g.embedKernel(bs) {
-		return false
-	}
-	pe := &g.embBuf
-	pe.dst, pe.ids, pe.pos, pe.composed = dst, append(pe.ids[:0], ids...), pos, false
-	g.embPend = pe
-	return true
+	return false
 }
 
 // embedFits is why the rows of tokens ids at positions pos onwards into dst
@@ -300,40 +280,6 @@ func (g *devTier) embedRowsAt(bs *blockScratch, n int) int {
 	return n
 }
 
-// embedKernel makes bs's gather kernel and id buffer if it has none -- here,
-// outside any Session, because a Session may not compile. One kernel at the
-// widest chunk serves every narrower one (a launch covers fewer rows). A
-// scratch rebuilt between EmbedRows and the submission (a KV growth) comes
-// back without them, which is why the submission asks again. Callers hold mu.
-func (g *devTier) embedKernel(bs *blockScratch) bool {
-	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
-	if bs.embK != nil {
-		return true
-	}
-	r := bs.head
-	es := bs.embScale
-	if g.kb.scaleFault == ScaleFaultEmbd {
-		es = 1
-	}
-	kk, err := kernels.GetRowsPacked(r.t, r.nrows, r.k, batchWidth, es)
-	var k backend.Kernel
-	if err == nil {
-		k, err = g.compile(kk)
-	}
-	var ib backend.Buf
-	if err == nil {
-		if ib, err = g.dev.Alloc(batchWidth * 4); err != nil {
-			closeKern(k)
-		}
-	}
-	if err != nil {
-		g.LastErr = err.Error()
-		return false
-	}
-	bs.embK, bs.embIds = k, ib
-	return true
-}
-
 // dropEmbed forgets an unconsumed promise; see layersCall.
 func (g *devTier) dropEmbed() {
 	g.mu.Lock()
@@ -379,30 +325,7 @@ func (g *devTier) takeEmbedLocked(x []float32) *embPend {
 // materializeLocked runs a promised gather on its own and reads the rows back
 // into the promised slice. Callers hold mu.
 func (g *devTier) materializeLocked(pe *embPend) {
-	if pe.composed {
-		g.materializeComposed(pe)
-		return
-	}
-	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
-	bs := g.bs
-	if bs == nil || bs.head == nil || !g.embedKernel(bs) {
-		return
-	}
-	if bs.embOut == nil {
-		b, err := g.dev.Alloc(batchWidth * bs.head.k * 4)
-		if err != nil {
-			g.LastErr = err.Error()
-			return
-		}
-		bs.embOut = b
-	}
-	rd := &g.embRd
-	if rd.gatherFn == nil {
-		rd.gatherFn = g.gatherSession
-	}
-	if g.readBack(pe, nil, rd.gatherFn) {
-		g.EmbedLaunches++
-	}
+	g.materializeComposed(pe)
 }
 
 // materializeComposed is materializeLocked for the composer's promise: its
@@ -456,7 +379,7 @@ type embRead struct {
 	err      error
 	lc       launcher
 
-	gatherFn, composedFn func(backend.Session)
+	composedFn func(backend.Session)
 }
 
 // readBack runs fn, one of embRead's session bodies, over the promise pe
@@ -475,25 +398,6 @@ func (g *devTier) readBack(pe *embPend, sv *servedPart, fn func(backend.Session)
 	}
 	g.EmbedReadBacks++
 	return true
-}
-
-// gatherSession is materializeLocked's submission: the tier's gather from
-// the tied head, and the rows read back.
-func (g *devTier) gatherSession(s backend.Session) {
-	rd, bs := &g.embRd, g.bs
-	r, pe := bs.head, rd.pe
-	n := len(pe.ids)
-	g.subBytes.embIDs = embIDs(g.subBytes.embIDs, pe.ids, batchWidth, r.nrows)
-	if rd.err = s.Write(bs.embIds, g.subBytes.embIDs); rd.err != nil {
-		return
-	}
-	g.embTo.s = s
-	defer g.embTo.leave()
-	threads := kernels.GetRowsThreads(r.t, r.k, n)
-	if rd.err = rd.lc.issue(bs.embK, (threads+127)/128, 128, r.qs, r.d, r.sc, bs.embIds, bs.embOut); rd.err != nil {
-		return
-	}
-	rd.err = s.Read(bs.embOut, f32b(pe.dst[:n*r.k]))
 }
 
 // composedSession is materializeComposed's submission: the composer's form
@@ -540,20 +444,4 @@ func (g *devTier) composedSession(s backend.Session) {
 		return
 	}
 	rd.err = s.Read(bs.embCast, f32b(pe.dst[:n*d]))
-}
-
-// embIDs is the first rows entries of the id buffer: the promised ids, then
-// nrows -- a padding row, which the gather writes as zeros. A launch whose last
-// group can run past its rows (materialize) writes the whole buffer, so it
-// reads padding and never a stale id; one that cannot writes only its rows.
-func embIDs(raw []byte, ids []int32, rows, nrows int) []byte {
-	raw = slices.Grow(raw[:0], rows*4)[:rows*4]
-	for i := 0; i < rows; i++ {
-		v := uint32(nrows)
-		if i < len(ids) {
-			v = uint32(ids[i])
-		}
-		binary.LittleEndian.PutUint32(raw[4*i:], v)
-	}
-	return raw
 }
