@@ -346,6 +346,10 @@ func (g *devTier) materializeComposed(pe *embPend) {
 	}
 	R := g.embedRowsAt(bs, len(pe.ids))
 	if bs.embCast == nil {
+		if need := g.footprint(batchWidth * bs.embW.k * 4); !g.room(need) {
+			g.LastErr = fmt.Sprintf("the composer's input rows need %d bytes, %d of %d used", need, g.used, g.limit)
+			return
+		}
 		b, err := g.dev.Alloc(batchWidth * bs.embW.k * 4)
 		if err != nil {
 			g.LastErr = err.Error()

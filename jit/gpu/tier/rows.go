@@ -345,6 +345,9 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		return true
 	}
 	head := g.bs.head
+	if need := g.rowsHeadNeed(bs, head.nrows, rowsHead.Softcap); need > 0 && !g.room(need) {
+		return fail(fmt.Errorf("the logits of %d rows need %d bytes, %d of %d used", R, need, g.used, g.limit))
+	}
 	// The composer's head over rows serves any count of them in the
 	// reserved width (servedHead): the tier's per-count projections are not
 	// built for it.
@@ -406,6 +409,24 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		bs.ragCapK, bs.ragCapC = k, c
 	}
 	return true
+}
+
+// rowsHeadNeed is what prepRowsHead allocates for bs's per-row logits at a
+// head of nrows rows, the final softcap's twin included: nothing where they
+// are held at that width.
+func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int, softcap float32) uint64 {
+	if bs == nil {
+		return 0
+	}
+	var n uint64
+	fresh := bs.ragLogits == nil || bs.ragVocab != nrows
+	if fresh {
+		n += g.footprint(bs.rows*nrows*4) + g.footprint(bs.rows*4)
+	}
+	if softcap != 0 && (fresh || bs.ragCap == nil) {
+		n += g.footprint(bs.rows * nrows * 4)
+	}
+	return n
 }
 
 // prepRowsReserved builds the reserved width's per-row head where a ragged

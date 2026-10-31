@@ -620,7 +620,9 @@ const (
 // budget, what m's blocks take placed as the arm places them -- its parts,
 // graph setting, prompt width and context ctx -- less half its routed banks.
 // A fixture's banks are kilobytes beside the rest, so a probe placed any
-// other way leaves the budget's cut to the scratch or the history.
+// other way leaves the budget's cut to the scratch or the history. The head
+// is placed after the blocks, so the probe leaves it home: a cut it covered
+// would land on it, and the arm runs it at home.
 func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts tier.Parts, noGraph bool, ctx int) []tier.Option {
 	t.Helper()
 	switch a {
@@ -632,6 +634,8 @@ func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts tier.Part
 			noDevice(t, dev, err)
 		}
 		defer g.Close()
+		defer func(on bool) { m.opt.headPlace = on }(m.opt.headPlace)
+		m.opt.headPlace = false
 		s := m.NewState(ctx)
 		defer s.Close()
 		s.SetDeviceFallback(false)

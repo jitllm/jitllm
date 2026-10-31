@@ -6594,6 +6594,17 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if !ok || h.W.K != bs.p.NEmbd || h.W.Rows <= 0 || len(h.W.Data) == 0 {
 		return false
 	}
+	// The reserved width's per-row logits are the head's (prepRowsReserved),
+	// admitted with it: built after it without asking, they put the card past
+	// its budget by a vocabulary a row.
+	var rows uint64
+	if bb := g.reservedFor(ComposedBlock); bb != nil && g.rowsReserved() {
+		rows = g.rowsHeadNeed(bb, h.W.Rows, h.Softcap)
+	}
+	foot, ferr := g.planesFootprint(q, h.W.Rows, h.W.K)
+	if ferr != nil {
+		foot = uint64(len(h.W.Data))
+	}
 	// Under paging the projection and a block slot compete for the same bytes,
 	// and the head is permanent while a slot turns over every block. The head
 	// runs once per token and a block NLayer times, so the projection is taken
@@ -6601,10 +6612,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// A caller that did not list the CPU has no other device for it: the
 	// projection is taken while a swap still has its slots, the streamed
 	// blocks paging out to make the room.
-	if want := uint64(len(h.W.Data)); len(g.stream) > 0 && h.NoCPU {
-		if foot, err := g.planesFootprint(q, h.W.Rows, h.W.K); err == nil {
-			want = foot
-		}
+	if want := foot + rows; len(g.stream) > 0 && h.NoCPU {
 		after := g.slotsIfPerm(want)
 		for after < minSlots && g.promptW > 0 && g.narrowReserved("the output projection and a block slot") {
 			after = g.slotsIfPerm(want)
@@ -6627,6 +6635,12 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 				"projection runs once a token", want, after, now)
 			return false
 		}
+	}
+	if rows > 0 && !g.room(foot+rows) {
+		g.Declined++
+		g.LastErr = fmt.Sprintf("the output projection needs %d bytes and its per-row logits %d more, %d of %d used",
+			foot, rows, g.used, g.limit)
+		return false
 	}
 	// -1: the output projection is not a block, so it is not released with one.
 	r := g.resident(-1, 0, q, h.W.Data, h.W.Rows, h.W.K, h.W.Packed)
