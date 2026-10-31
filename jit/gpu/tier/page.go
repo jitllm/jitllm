@@ -171,6 +171,17 @@ func (g *devTier) slots() int {
 	return int(avail / g.widest)
 }
 
+// holdsPages says a block placed on the card pages through its slots, paged
+// in or out. Callers hold g.mu.
+func (g *devTier) holdsPages() bool {
+	for _, l := range g.layers {
+		if l != nil && l.pg != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // slotsIfPerm is slots() with n more bytes held permanently: what the pager
 // would have left if something that is not a page took that space. The output
 // projection and a block slot compete for the same bytes; see PrepHead.

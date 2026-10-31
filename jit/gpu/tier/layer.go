@@ -6632,14 +6632,16 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 				"can be paged out for it", want)
 			return false
 		}
-	} else if len(g.stream) > 0 {
-		if now, after := g.slots(), g.slotsIfPerm(want); after < now {
-			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and "+
-				"taking them would leave %d block slot(s) instead of %d, so it "+
-				"stays on the host: a slot turns over every block and the "+
-				"projection runs once a token", want, after, now)
-			return false
-		}
+	} else if now, after := g.slots(), g.slotsIfPerm(want); len(g.stream) > 0 && after < now ||
+		!h.NoCPU && (after < g.pagesIn || g.holdsPages() && after < minSlots) {
+		// Paging is always on: a projection that pushes out a block the card
+		// holds, or leaves a block paged out here no slot to come back in,
+		// costs that block a page-in a token or every step it runs.
+		g.LastErr = fmt.Sprintf("the output projection needs %d bytes and "+
+			"taking them would leave %d block slot(s) instead of %d for %d block(s) the card holds, so it "+
+			"stays on the host: a slot turns over every block and the "+
+			"projection runs once a token", want, after, now, g.pagesIn)
+		return false
 	}
 	if rows > 0 && !g.room(foot+rows) {
 		g.Declined++
