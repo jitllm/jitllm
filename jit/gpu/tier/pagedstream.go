@@ -354,6 +354,9 @@ func (bs *blockScratch) inPasses(l *layer) bool {
 // then the folds' two sides. Callers hold g.mu, outside any submission.
 func (g *devTier) runBufs(bs *blockScratch, l *layer, li int) ([]backend.Buf, error) {
 	pg, n := bs.pkv, 0
+	if l.graph == nil {
+		return nil, fmt.Errorf("block %d has no graph to read its history in passes", li)
+	}
 	for _, o := range l.graph.Ops {
 		if o.Kind == graph.OpAttend {
 			n = max(n, bs.rows*o.Attr.NHead*(o.Attr.HeadDim+2))

@@ -2709,10 +2709,9 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 	if l == nil || bb == nil {
 		return
 	}
-	g.promptServed(l, li, bb)
 	// Its form over passes too, as main's staged prefill holds its planes
 	// from the placement: a chunk over evicted history forms nothing.
-	if bb.rows > 1 && bb.pkv != nil && g.kvp != nil && (!l.linear || l.withAttn) && !g.streamServed(l, li, bb) {
+	if g.promptServed(l, li, bb) && (!l.linear || l.withAttn) && !g.streamServed(l, li, bb) {
 		g.LastErr = "the composed prompt block over passes: " + g.LastErr
 	}
 }
