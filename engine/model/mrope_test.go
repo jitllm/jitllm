@@ -298,8 +298,10 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 				t.Fatalf("worst NMSE %.3e against transformers, %d argmax flips", w, flips)
 			}
 			// The device must not build the table from a row's CACHE position,
-			// which is the image at sequential positions: the host's goes up.
-			if s := gpu.Stats(); s.RopeTableUploads == 0 || s.RopeTables != 0 {
+			// which is the image at sequential positions: the composer's is
+			// served at the positions the State states, or the host's goes up.
+			s := gpu.Stats()
+			if served, _, _ := s.ServedPart(tier.ComposedTable); s.RopeTables != 0 || s.RopeTableUploads == 0 && served == 0 {
 				t.Fatalf("the device built %d rotary rows and took %d from the host (%q): an M-RoPE table "+
 					"built from cache positions is the violation", s.RopeTables, s.RopeTableUploads, s.RopeTableWhy)
 			}
@@ -693,12 +695,13 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 			why[u.String()]++
 		}
 	}
-	steps := len(g.Cont) - 1
+	// Every step's tables and the picture prompt's chunks', each a whole set.
+	steps, tabs := len(g.Cont)-1, composedTables(m)
 	nt, dt, _ := stats.ServedPart(tier.ComposedTable)
 	switch {
-	case nt != steps*composedTables(m) || dt != 0:
-		t.Fatalf("composed: %d tables served and %d steps declined (%s), where %d steps of %d tables are %d",
-			nt, dt, declinesOf(stats), steps, composedTables(m), steps*composedTables(m))
+	case nt < (steps+1)*tabs || nt%tabs != 0 || dt != 0:
+		t.Fatalf("composed: %d tables served and %d calls declined (%s), where %d steps and the prompt's chunks of %d tables are at least %d",
+			nt, dt, declinesOf(stats), steps, tabs, (steps+1)*tabs)
 	default:
 		bad, _ := run(1)
 		wb, fb := qvlWorst(g, bad)

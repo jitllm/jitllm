@@ -1029,8 +1029,9 @@ const (
 	// ComposedPrompt serves a prompt chunk's blocks whole at the chunk's
 	// rows: a form a width, as the tier keeps a scratch a width.
 	ComposedPrompt Parts = 1 << partPrompt
-	// ComposedTable serves a one-row step's rotary tables from their graphs
-	// (nn.LayerPlan.Tables) at the row's rotary positions.
+	// ComposedTable serves a call's rotary tables from their graphs
+	// (nn.LayerPlan.Tables) at its rows' rotary positions, a step's, a
+	// ragged step's or a prompt chunk's.
 	ComposedTable Parts = 1 << partRope
 	// ComposedSample serves a one-row step's greedy token from its graph
 	// (nn.Head.Sample).
@@ -1611,11 +1612,11 @@ func tableAxes(gr *graph.Graph) bool {
 	return false
 }
 
-// servedTable is a step's rotary table gr served at one row: writing cs, its
+// servedTable is a call's rotary table gr served at R rows: writing cs, its
 // planes those the tier folded for it and its positions pos, the live row
 // count and then each row's (four a row over several axes).
-func (g *devTier) servedTable(gr *graph.Graph, cs, planes, pos backend.Buf) (*servedPart, error) {
-	sk := servedKey{kind: partRope, graph: gr, rows: 1}
+func (g *devTier) servedTable(gr *graph.Graph, R int, cs, planes, pos backend.Buf) (*servedPart, error) {
+	sk := servedKey{kind: partRope, graph: gr, rows: R}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		name := tableName(gr)
 		if !strings.HasPrefix(name, "rope.cs") {
@@ -1646,75 +1647,121 @@ func (g *devTier) servedTable(gr *graph.Graph, cs, planes, pos backend.Buf) (*se
 	return sv, nil
 }
 
-// tableServes is why a one-row step's tables at cache position pos are not
-// the ones the composer is asked for, serves where they are: a table graph
-// for each table the tier holds (cs, and csSWA where the plan has local
-// layers), the planes and positions each reads, and over several axes the
-// row's positions on them, which the caller states for this position
-// (SetRopeAxes). Callers hold g.mu.
-func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos int) partDecline {
-	n := 0
-	for _, gr := range p.Tables {
-		if gr != nil {
-			n++
-		}
-	}
-	want := 1
-	if bs.csSWA != nil {
-		want = 2
-	}
-	switch {
-	case g.RopeTableHost:
+// tableServes is why the tables of a call of R rows (rag's, a ragged step's)
+// at cache position pos are not the ones the composer is asked for, serves
+// where they are: a graph for each table bs holds (scratchTable), as wide as
+// its rows, the planes and positions each reads, and over several axes each
+// row's positions on them, which the caller states for the call (callAxes).
+// Callers hold g.mu.
+func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos, R int, rag *ragStep) partDecline {
+	if g.RopeTableHost {
 		return partCaller
-	case n != want || len(p.Tables) != want || p.Tables[0] == nil:
-		return partNoTable
 	}
-	for i, gr := range p.Tables {
-		multi := tableAxes(gr)
+	for i := range bs.tableCount() {
+		gr := scratchTable(bs, p, i)
+		if gr == nil || gr.Values[gr.Out[0]].Width != bs.p.RopeW() {
+			return partNoTable
+		}
 		cs, planes, at := g.tableBinds(bs, i)
 		switch {
 		case cs == nil || planes == nil || at == nil:
 			return partTableHeld
-		case multi && (len(g.ropeAxes) != 4 || g.ropeAxesAt != pos):
+		case tableAxes(gr) && g.callAxes(pos, R, rag) == nil:
 			return partNoAxes
 		}
 	}
 	return partServes
 }
 
-// tableBinds is what table i of the plan writes and reads: the global table
-// cs or the local one, its planes, and its positions (rope.pos, or over
-// several axes rope.pos.axes).
+// tableCount is how many tables bs holds: cs, and csSWA where the plan has
+// local layers.
+func (bs *blockScratch) tableCount() int {
+	if bs.csSWA != nil {
+		return 2
+	}
+	return 1
+}
+
+// scratchTable is the graph of bs's table i (cs, then csSWA) among the
+// plan's tables, nil where the plan states none for it. A scratch set of one
+// geometry of a split model (scratchPlanOf) holds its own layers' table in
+// cs: the global set the plan's first, the sliding set its second.
+func scratchTable(bs *blockScratch, p *nn.LayerPlan, i int) *graph.Graph {
+	if bs.p.GeomSplit {
+		switch {
+		case i > 0 || len(p.Tables) != 2:
+			return nil
+		case bs.p.Sliding:
+			return p.Tables[1]
+		}
+		return p.Tables[0]
+	}
+	if len(p.Tables) != bs.tableCount() || i >= len(p.Tables) {
+		return nil
+	}
+	return p.Tables[i]
+}
+
+// callAxes is the rotary positions the caller states for a call of R rows at
+// cache position pos, four a row (nn.RopeAxesDevice), nil where it states
+// none for this call. A ragged step's are stated at its first row's.
+func (g *devTier) callAxes(pos, R int, rag *ragStep) []int32 {
+	if rag != nil && len(rag.pos) > 0 {
+		pos = rag.pos[0]
+	}
+	if g.ropeAxesAt != pos || len(g.ropeAxes) < 4*R {
+		return nil
+	}
+	return g.ropeAxes[:4*R]
+}
+
+// tableBinds is what table i of bs writes and reads: the global table cs or
+// the local one, its planes, and its positions (rope.pos, or over several
+// axes rope.pos.axes).
 func (g *devTier) tableBinds(bs *blockScratch, i int) (cs, planes, pos backend.Buf) {
 	if i > 0 {
 		return bs.csSWA, bs.ropeTabSWA, bs.rpos
 	}
-	if p := &bs.p; len(p.Tables) > 0 && p.Tables[0] != nil && tableAxes(p.Tables[0]) {
+	if gr := scratchTable(bs, &bs.p, 0); gr != nil && tableAxes(gr) {
 		return bs.cs, bs.ropeTabAxes, bs.rposAxes
 	}
 	return bs.cs, bs.ropeTab, bs.rpos
 }
 
-// prewarmComposedTables forms the step's tables where the composer serves
-// them, at placement: a table met first at a token formed inside it.
-// Callers hold g.mu.
-func (g *devTier) prewarmComposedTables() {
-	bs := g.bs
-	if g.NoPromptPrewarm || g.Composed&ComposedTable == 0 || bs == nil || bs.cs == nil {
+// formTables forms bs's tables at its rows where the composer serves them,
+// at a placement or where a width's scratch is built: a table met first at
+// a step formed inside it. Callers hold g.mu.
+func (g *devTier) formTables(bs *blockScratch) {
+	if g.NoPromptPrewarm || g.Composed&ComposedTable == 0 || bs == nil || bs.cs == nil || bs.p.NRot <= 0 || bs.p.NonCausal {
 		return
 	}
-	g.prewarming = true
-	defer func() { g.prewarming = false }()
-	for i, gr := range bs.p.Tables {
-		if gr == nil {
-			continue
-		}
+	for i := range bs.tableCount() {
+		gr := scratchTable(bs, &bs.p, i)
 		cs, planes, at := g.tableBinds(bs, i)
-		if cs == nil || planes == nil || at == nil {
+		if gr == nil || cs == nil || planes == nil || at == nil {
 			continue
 		}
-		if _, err := g.servedTable(gr, cs, planes, at); err != nil {
+		if _, err := g.servedTable(gr, bs.rows, cs, planes, at); err != nil {
 			g.LastErr = "the composed table: " + err.Error()
+		}
+	}
+}
+
+// prewarmComposedTables forms the step's tables where the composer serves
+// them, at placement, in the decode scratch and every width's of every
+// scratch set. Callers hold g.mu.
+func (g *devTier) prewarmComposedTables() {
+	was := g.prewarming
+	g.prewarming = true
+	defer func() { g.prewarming = was }()
+	g.formTables(g.bs)
+	for _, bb := range g.bbs {
+		g.formTables(bb)
+	}
+	for _, gs := range g.geoSets {
+		g.formTables(gs.bs)
+		for _, bb := range gs.bbs {
+			g.formTables(bb)
 		}
 	}
 }
@@ -2626,12 +2673,16 @@ func (g *devTier) declineTwins(l *layer, li int, bs *blockScratch, why partDecli
 // the walk compiles the tier's own kernels for it. At a placement
 // (reserveScratch) that is the placement's forming. Callers hold g.mu.
 func (g *devTier) promptForms(bb *blockScratch) {
-	if bb == nil || bb.rows < 2 || !g.rowsForms(bb) {
+	if bb == nil || bb.rows < 2 {
 		return
 	}
 	was := g.prewarming
 	g.prewarming = was || g.reserving
 	defer func() { g.prewarming = was }()
+	g.formTables(bb)
+	if !g.rowsForms(bb) {
+		return
+	}
 	// The input rows at bb's rows, where the composer gathers a chunk's.
 	if bs := g.bs; g.Composed&ComposedEmbed != 0 && bs != nil && bs.embedServes() == partServes && g.embedBufs(bs) {
 		if _, err := g.servedEmbed(bs, bb.rows); err != nil {

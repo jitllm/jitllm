@@ -30,14 +30,15 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 type axesShift struct {
 	nn.RopeAxesDevice
 	k, d int32
-	buf  [4]int32
+	buf  []int32
 }
 
 func (a *axesShift) SetRopeAxes(pos int, at []int32) {
-	for i, v := range at[:min(len(at), 4)] {
-		a.buf[i] = a.k*v + a.d
+	a.buf = a.buf[:0]
+	for _, v := range at {
+		a.buf = append(a.buf, a.k*v+a.d)
 	}
-	a.RopeAxesDevice.SetRopeAxes(pos, a.buf[:min(len(at), 4)])
+	a.RopeAxesDevice.SetRopeAxes(pos, a.buf)
 }
 
 // unsplit forms a reference's sums with no split (Config.ComposedUnsplit):
@@ -701,12 +702,15 @@ func TestComposedBlocksServe(t *testing.T) {
 										t.Fatalf("the composer ran %d block steps (%d of them replayed) where %d steps of %d blocks are %d",
 											blocks+replayed, replayed, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 									}
-									// Every step writes every table the plan states.
+									// Every step and every prompt chunk writes every table
+									// the plan states.
 									if a.parts&tier.ComposedTable != 0 {
 										nt, _, tableUnasked := st.ServedPart(tier.ComposedTable)
-										if replayed := st.ReplayedPart(tier.ComposedTable); nt+replayed != len(toks)*composedTables(m) {
-											t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps of %d tables; %d capture(s), %d unasked, last error %q",
-												nt+replayed, replayed, len(toks), composedTables(m), st.Captures, tableUnasked, st.LastErr)
+										np, _, _ := st.ServedPart(tier.ComposedPrompt)
+										calls := len(toks) + np/m.Cfg.NLayer
+										if replayed := st.ReplayedPart(tier.ComposedTable); nt+replayed != calls*composedTables(m) {
+											t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps and %d prompt chunks of %d tables; %d capture(s), %d unasked, last error %q",
+												nt+replayed, replayed, len(toks), np/m.Cfg.NLayer, composedTables(m), st.Captures, tableUnasked, st.LastErr)
 										}
 									}
 									// Every step's input row gathered by the composer, from

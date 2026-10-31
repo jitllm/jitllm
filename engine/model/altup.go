@@ -83,6 +83,7 @@ func (s *State) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32, n
 			return err
 		}
 	}
+	s.rowAxes(pos[0], 0, n)
 	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.NRotSWA), nil) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {

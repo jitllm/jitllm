@@ -257,6 +257,7 @@ func (s *State) stepRowsDevice(src []func(dst []float32) error, ids []int32, out
 		}
 		defer func() { h.RowLogits, h.Logits, h.LogitRows, h.Hidden = false, keep, 0, nil }()
 	}
+	s.rowAxes(pos[0], 0, n)
 	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, s.bx[:n*c.NEmbd], s.bcs[:n*nrot], s.bswaTable(n, c.NRotSWA), h) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {

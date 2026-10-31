@@ -7735,41 +7735,49 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			return refuse("%v", e)
 		}
 	}
-	// The step's tables the composer serves (ComposedTable), which write cs
-	// and csSWA where the tier's own table would. A call of the head alone
-	// (a model whose host collapses its streams between the blocks and the
-	// head) turns nothing and is not asked for them.
+	// The call's tables the composer serves (ComposedTable) at its rows,
+	// which write cs and csSWA where the tier's own table would. A call of
+	// the head alone (a model whose host collapses its streams between the
+	// blocks and the head) turns nothing and is not asked for them, nor is a
+	// non-causal segment's, whose rotary is the caller's table of its grid.
 	tableSrv, tableMulti := false, false
 	var raxes []byte
-	if g.Composed&ComposedTable != 0 && bs.cs != nil && p.NRot > 0 && lo < hi {
-		switch why := g.tableServes(bs, p, pos); {
-		case R != 1 || rag != nil || g.prompt:
-			g.PartsUnasked[partRope]++
-		case why != partServes:
+	if g.Composed&ComposedTable != 0 && bs.cs != nil && p.NRot > 0 && !p.NonCausal && lo < hi && rrows >= 1 {
+		if why := g.tableServes(bs, p, pos, rrows, rag); why != partServes {
 			g.PartsDeclined[partRope]++
 			g.StepDeclines[why]++
-		default:
-			tableSrv, tableMulti = true, tableAxes(p.Tables[0])
+		} else {
+			tableSrv, tableMulti = true, tableAxes(scratchTable(bs, p, 0))
 		}
 	}
 	var rposs []byte
 	switch {
 	case tableSrv && tableMulti:
-		raxes = binary.LittleEndian.AppendUint32(g.subBytes.raxes[:0], 1)
-		for _, v := range g.ropeAxes[:4] {
+		axes := g.callAxes(pos, rrows, rag)
+		raxes = binary.LittleEndian.AppendUint32(g.subBytes.raxes[:0], uint32(rrows))
+		for _, v := range axes {
 			raxes = binary.LittleEndian.AppendUint32(raxes, uint32(v))
 		}
 		g.subBytes.raxes = raxes
 	case tableSrv:
-		// The row's rotary position where the caller states it for this
-		// position, else its cache position, which is the same on a
-		// rotary over one axis.
-		at := pos
-		if len(g.ropeAxes) == 4 && g.ropeAxesAt == pos {
-			at = int(g.ropeAxes[0])
+		// Each row's rotary position where the caller states the call's,
+		// else its cache position, which is the same on a rotary over one
+		// axis; a row past the live ones is never read.
+		axes := g.callAxes(pos, rrows, rag)
+		rposs = binary.LittleEndian.AppendUint32(g.subBytes.rposs[:0], uint32(rrows))
+		for r := 0; r < R; r++ {
+			at := pos
+			switch {
+			case r >= rrows:
+			case axes != nil:
+				at = int(axes[4*r])
+			case rag != nil:
+				at = rag.pos[r]
+			default:
+				at = pos + r
+			}
+			rposs = binary.LittleEndian.AppendUint32(rposs, uint32(at))
 		}
-		rposs = binary.LittleEndian.AppendUint32(g.subBytes.rposs[:0], 1)
-		rposs = binary.LittleEndian.AppendUint32(rposs, uint32(at))
 	case ropeDev:
 		rposs = append(g.subBytes.rposs[:0], u32one(uint32(rrows))...)
 		for r := 0; r < R; r++ {
@@ -8517,12 +8525,9 @@ func (g *devTier) layersSession(s backend.Session) {
 		// whatever bs.rpos holds this token.
 		switch {
 		case tableSrv:
-			for i, gr := range p.Tables {
-				if gr == nil {
-					continue
-				}
+			for i := range bs.tableCount() {
 				cs, planes, at := g.tableBinds(bs, i)
-				sv, serr := g.servedTable(gr, cs, planes, at)
+				sv, serr := g.servedTable(scratchTable(bs, p, i), R, cs, planes, at)
 				if serr == nil {
 					serr = sv.run(g, lc, sv.inst, nil, nil)
 				}

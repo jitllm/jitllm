@@ -21,10 +21,12 @@ var gemma4Composed = []string{"synth-gemma4", "synth-gemma4-kv", "synth-gemma4-w
 // blocks and head on every device present, as TestC6ServesComposed holds
 // the classic fixtures: every block step and head served, the logits within
 // the device band of the host's, and each of Gemma 4's features taken out
-// (gemma4Violations) moving them. The rest of a step is not served on a
-// card: each geometry's scratch set holds one rotary table where the plan
-// states two, so the step's tables are declined by name (DeclineNoTable) at
-// every step, counted here, and the input rows with them (open).
+// (gemma4Violations) moving them. The whole step on a card, its tables
+// served in each geometry's scratch set (the global set the global table,
+// the sliding set the local one) at the prompt's rows and every step's,
+// within the bound of the host's logits and of main's tier, and every row
+// told twice its position and 16 past far from them. The input rows of the
+// E-models are declined by name (open).
 func TestGemma4ServesComposed(t *testing.T) {
 	const bound = 1e-5
 	ran := 0
@@ -36,18 +38,46 @@ func TestGemma4ServesComposed(t *testing.T) {
 				t.Fatalf("the container does not carry the fixture's graph: %+v", m.Cfg)
 			}
 			ran += servesComposed(t, m, g.IDs, bound, gemma4ComposedViolations(name), false)
+			const promptLen = 3
+			host := hostLogits(t, m, g.IDs)
 			for _, dev := range stepDevices() {
 				t.Run(dev+"/step", func(t *testing.T) {
-					prompt, toks := g.IDs[:3], g.IDs[3:]
-					_, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedStep, true, false)
-					served, _, _ := st.ServedPart(tier.ComposedTable)
-					declined := st.StepDeclines[jit.DeclineNoTable]
-					t.Logf("%s: the step's tables served %d times, declined %d times (no table graph)", dev, served, declined)
+					prompt, toks := g.IDs[:promptLen], g.IDs[promptLen:]
+					from := func(got, want [][]float32, off int) float64 {
+						w := 0.0
+						for i := range got {
+							e := logitNMSE(got[i], want[off+i])
+							if math.IsNaN(e) {
+								return math.Inf(1)
+							}
+							w = max(w, e)
+						}
+						return w
+					}
+					tierOut, _, _, _ := composedDecode(t, m, dev, prompt, toks, 0, true, false)
+					got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedStep, true, false)
+					served, td, _ := st.ServedPart(tier.ComposedTable)
+					served += st.ReplayedPart(tier.ComposedTable)
 					nb, db, _ := st.ServedPart(tier.ComposedBlock)
 					np, dp, up := st.ServedPart(tier.ComposedPrompt)
-					t.Logf("%s: block steps served %d, declined %d; the prompt's %d served, %d declined, %d unasked (%s)", dev, nb, db, np, dp, up, declinesOf(st))
-					if served != 0 || declined == 0 {
-						t.Fatalf("the step's tables served %d times and declined %d times by name: the gap moved", served, declined)
+					t.Logf("%s: the tables served %d times, declined %d; block steps served %d, declined %d; the prompt's %d served, %d declined, %d unasked (%s)",
+						dev, served, td, nb, db, np, dp, up, declinesOf(st))
+					if want := (len(toks) + 1) * composedTables(m); served < want || td != 0 || st.StepDeclines[jit.DeclineNoTable] != 0 {
+						t.Fatalf("the tables served %d times (want at least %d, a table a geometry's run of each step and the prompt) and declined %d", served, want, td)
+					}
+					if n := st.FormedPart(tier.ComposedTable); n != 0 {
+						t.Fatalf("%d table(s) formed at a step, not at the placement (%s)", n, st.LastErr)
+					}
+					hostW, tierW := from(got, host, promptLen-1), from(got, tierOut, 0)
+					t.Logf("%s: the composed step %.3e from the host, %.3e from main's tier", dev, hostW, tierW)
+					if !(hostW < bound) || !(tierW < bound) {
+						t.Fatalf("the composed step is %.3e from the host and %.3e from main's tier, bound %g", hostW, tierW, bound)
+					}
+					bad, _, _, _ := composedDecodeWith(t, m, dev, prompt, toks, tier.ComposedStep, true, false, stretchAxes(2, 16))
+					badW := from(bad, host, promptLen-1)
+					t.Logf("%s: every row told twice its position and 16 past: %.3e from the host", dev, badW)
+					if !(badW > 100*hostW) || !(badW > 10*bound) {
+						t.Fatalf("every row told twice its position and 16 past reads %.3e against a clean %.3e: the served tables cannot see it", badW, hostW)
 					}
 					// The per-layer inputs' tables are the host's: the device
 					// declines the input rows that read them, by name.

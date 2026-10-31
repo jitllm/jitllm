@@ -794,6 +794,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 					}
 				}
 				s.layerInputs(s.bple[:n*c.pleWidth()])
+				s.rowAxes(p0, 0, n)
 				if s.callTell(p0, n) && s.ld.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
 					s.bswaTable(n, c.NRotSWA), fh) {
 					headDone = fh != nil
@@ -855,6 +856,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 						if err := s.ngramToDevice(li, hi, 1, nil, s.q4.callOwner, s.q4.callTok); err != nil {
 							return nil, err
 						}
+						s.rowAxes(p0+i, i, 1)
 						if s.ld.Layers(li, hi, p0+i, 1, row,
 							s.bcs[i*c.RopeW():(i+1)*c.RopeW()],
 							s.bswaTableAt(i, c.NRotSWA), nil) {
@@ -1274,6 +1276,7 @@ func (s *State) ropeFill(cs []float32, p int) {
 }
 
 func (s *State) ropeRow(j, p int) {
+	s.noteAxes(j, [4]int32{int32(p), int32(p), int32(p), int32(p)})
 	nrot, nrotSWA := s.c.RopeW(), s.c.NRotSWA
 	s.ropeFill(s.bcs[j*nrot:(j+1)*nrot], p)
 	if s.m.ropeSWA != nil {

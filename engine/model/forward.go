@@ -301,9 +301,11 @@ type State struct {
 	ldInputs nn.LayerInputDevice
 	ldTokens nn.TokenDevice
 	// ldRope is its rotary-position face (nn.RopeAxesDevice), and axes1 the
-	// one row's positions it is handed.
+	// one row's positions it is handed; raxes are the batch rows', four a
+	// row, as ropeRow and ropeTableRow write their tables.
 	ldRope nn.RopeAxesDevice
 	axes1  [4]int32
+	raxes  []int32
 	// ldEmbed is its gather face (nn.EmbedDevice), and tokFill says the
 	// token being stepped fills its row from the embedding (Forward), which
 	// the device may gather instead (embedOnDevice).
@@ -4936,6 +4938,25 @@ func (s *State) ropeAxes(pos, rp int) {
 	}
 	s.axes1 = [4]int32{int32(rp), int32(rp), int32(rp), int32(rp)}
 	s.ldRope.SetRopeAxes(pos, s.axes1[:])
+}
+
+// rowAxes tells the device the rotary positions of the n batch rows from
+// row first of the call about to be made at cache position pos, its first
+// row's (nn.RopeAxesDevice), as ropeRow and ropeTableRow wrote them.
+func (s *State) rowAxes(pos, first, n int) {
+	if s.ldRope == nil || len(s.raxes) < 4*(first+n) {
+		return
+	}
+	s.ldRope.SetRopeAxes(pos, s.raxes[4*first:4*(first+n)])
+}
+
+// noteAxes records batch row j's rotary positions.
+func (s *State) noteAxes(j int, at [4]int32) {
+	if len(s.raxes) < 4*(j+1) {
+		need := 4 * max(j+1, len(s.bcs)/max(s.c.RopeW(), 1))
+		s.raxes = append(s.raxes, make([]int32, need-len(s.raxes))...)
+	}
+	copy(s.raxes[4*j:], at[:])
 }
 
 // layerInputs hands the device the rows' per-layer embedding inputs for the

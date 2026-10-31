@@ -216,6 +216,7 @@ func (s *State) ropeTableRow(j int, at [4]int) {
 		s.ropeRow(j, at[0])
 		return
 	}
+	s.noteAxes(j, [4]int32{int32(at[0]), int32(at[1]), int32(at[2]), int32(at[3])})
 	cs := s.bcs[j*nrot : (j+1)*nrot]
 	s.jit.RopeTableAt(s.m.rope, cs[:s.c.NRot], at[:])
 	if s.m.ropeB != nil {

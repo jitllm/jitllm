@@ -294,6 +294,7 @@ func (s *State) rowsRun(lo, hi int, pos, slot []int, x, cs, csSWA []float32, hea
 		defer func() { h.RowLogits, h.Logits, h.LogitRows = false, keep, 0 }()
 	}
 	s.layerInputs(s.bple[:len(pos)*s.c.pleWidth()])
+	s.rowAxes(pos[0], 0, len(pos))
 	if !rd.LayersRows(lo, hi, pos, slot, s.maxSeq, x, cs, csSWA, h) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {
@@ -369,6 +370,7 @@ func (s *State) rowsStep(tokens []int32, pos, slot []int, logits []float32, nlog
 		h.RowLogits, h.Logits, h.LogitRows = true, logits, nlogit
 	}
 	defer func() { s.head.RowLogits, s.head.Logits, s.head.LogitRows = false, keep, 0 }()
+	s.rowAxes(pos[0], 0, n)
 	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, s.bx[:n*c.NEmbd], s.bcs[:n*nrot], s.bswaTable(n, c.NRotSWA), h) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {

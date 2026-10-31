@@ -125,9 +125,8 @@ func ropeTableMatchesTheUpload(t *testing.T, parts tier.Parts) {
 				t.Fatal("the host arm uploaded no table at all, so it is not the control " +
 					"this comparison needs")
 			}
-			// Which device table the decode ran: the composer's where it
-			// serves the step (the prompt's chunk is the tier's), the tier's
-			// where it does not.
+			// Which device table the prompt and the decode ran: the
+			// composer's where it serves them, the tier's where it does not.
 			all := g.Stats()
 			if n, _, _ := all.ServedPart(tier.ComposedTable); (parts != 0) != (n > 0) {
 				t.Fatalf("the composer served %d tables with parts %#x", n, uint8(parts))

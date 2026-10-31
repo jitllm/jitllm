@@ -54,6 +54,22 @@ func TestC6ServesComposed(t *testing.T) {
 	}
 }
 
+// hostLogits is the host's logits at each of ids, one row at a time.
+func hostLogits(t *testing.T, m *Model, ids []int32) [][]float32 {
+	t.Helper()
+	host := m.NewState(len(ids) + 1)
+	defer host.Close()
+	var out [][]float32
+	for _, id := range ids {
+		lg, err := host.Forward(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, append([]float32(nil), lg...))
+	}
+	return out
+}
+
 // servesComposed is TestC6ServesComposed's arms for one model on every
 // device present, decoding ids after a prompt of three: every block and the
 // head served at every step, within bound of the host's logits with no
@@ -65,16 +81,7 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 	t.Helper()
 	const promptLen = 3
 	ran := 0
-	host := m.NewState(len(ids) + 1)
-	var want [][]float32
-	for _, id := range ids {
-		lg, err := host.Forward(id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want = append(want, append([]float32(nil), lg...))
-	}
-	host.Close()
+	want := hostLogits(t, m, ids)
 	// The prompt takes the batched path, which the composer is not asked
 	// for; each token after it is a one-row step it is.
 	prompt, toks := ids[:promptLen], ids[promptLen:]
