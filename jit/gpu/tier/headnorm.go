@@ -109,10 +109,17 @@ func (g *devTier) dropHead() {
 	if bs == nil || bs.head == nil || len(g.layers) > 0 {
 		return
 	}
+	g.giveBackHead(bs)
+	g.dropAllScratch()
+}
+
+// giveBackHead frees the head PrepHead placed: the scratch around it and,
+// where no other holder shares it, the projection. Callers hold g.mu.
+func (g *devTier) giveBackHead(bs *blockScratch) {
 	r := bs.head
 	g.dropGraph()
 	g.dropHeadScratch(bs)
-	if r.ok && !r.shared {
+	if r != nil && r.ok && !r.shared {
 		for k, v := range g.res {
 			if v == r {
 				delete(g.res, k)
@@ -125,5 +132,4 @@ func (g *devTier) dropHead() {
 		g.freeResident(r)
 	}
 	g.headSrc, g.headNormHost = nil, nil
-	g.dropAllScratch()
 }

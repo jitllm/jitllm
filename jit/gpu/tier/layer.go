@@ -3009,7 +3009,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			// width fitReserved reached, does not fit beside the blocks placed
 			// is declined here rather than met by its first step or prompt; a
 			// mixture's is offered again streamed.
-			why := g.prewarmComposedBlock(li)
+			why := g.prewarmComposedBlock(li, true)
 			if why == "" {
 				why = g.promptRoomless(li)
 			}
@@ -6779,7 +6779,15 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		w.close()
 	}
 	g.prewarmHeadKernels()
-	g.prewarmComposedHead()
+	// A head whose composed part has no room beside the blocks placed stays
+	// home, as such a block does (prepLayer), rather than met by its first
+	// step.
+	if why := g.prewarmComposedHead(true); why != "" {
+		g.giveBackHead(bs)
+		g.Declined++
+		g.LastErr = why
+		return false
+	}
 	g.prepRowsReserved()
 	return true
 }

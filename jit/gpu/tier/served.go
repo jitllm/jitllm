@@ -2660,9 +2660,9 @@ func (g *devTier) servedCopy(bs *blockScratch, rows int) (*servedPart, error) {
 func (g *devTier) prewarmComposed() {
 	g.prewarmComposedTables()
 	for li := range g.layers {
-		g.prewarmComposedBlock(li)
+		g.prewarmComposedBlock(li, false)
 	}
-	g.prewarmComposedHead()
+	g.prewarmComposedHead(false)
 	g.prepRowsReserved()
 }
 
@@ -2671,7 +2671,7 @@ func (g *devTier) prewarmComposed() {
 // seam grown back), which a step would otherwise meet first. A form that
 // does not build is named in LastErr and leaves the other blocks to form.
 // Callers hold g.mu.
-func (g *devTier) prewarmComposedBlock(li int) (roomless string) {
+func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	bs, l := g.bs, g.layers[li]
 	if g.NoPromptPrewarm || g.Composed&(ComposedBlock|ComposedPrompt) == 0 || bs == nil || bs.pkv == nil ||
 		g.kvp == nil || l == nil {
@@ -2684,8 +2684,16 @@ func (g *devTier) prewarmComposedBlock(li int) (roomless string) {
 		if bs.csSWA != nil && bs.p.LocalRope(li) {
 			rcs = bs.csSWA
 		}
-		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
-			g.kvp.p, 1, 0)
+		serve := func() (*servedPart, error) {
+			return g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
+				g.kvp.p, 1, 0)
+		}
+		sv, err := serve()
+		// At a placement the prompt's reserved width gives way first, as it
+		// does to the prompt part (fitReserved).
+		for narrow && err != nil && errors.As(err, new(partRoomError)) && g.narrowReserved(fmt.Sprintf("block %d's composed buffers", li)) {
+			sv, err = serve()
+		}
 		if err != nil {
 			g.LastErr = "the composed block: " + err.Error()
 			if errors.As(err, new(partRoomError)) {
@@ -2996,7 +3004,7 @@ func keyBound(maxSeq int) int { return (maxSeq + scoreGrain - 1) / scoreGrain * 
 // prewarmComposedHead forms the head's part where the composer serves it,
 // at placement and again at PrepHead, which a model calls after placing its
 // blocks: a head met first at a token formed inside it. Callers hold g.mu.
-func (g *devTier) prewarmComposedHead() {
+func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	bs := g.bs
 	if !g.NoPromptPrewarm && g.Composed&ComposedSample != 0 && bs != nil && bs.sampleGraph != nil && g.argmaxOut != nil {
 		g.prewarming = true
@@ -3071,8 +3079,15 @@ func (g *devTier) prewarmComposedHead() {
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	if _, err := g.servedHead(bs, bs.hNorm, 1); err != nil {
+	_, err := g.servedHead(bs, bs.hNorm, 1)
+	for narrow && err != nil && errors.As(err, new(partRoomError)) && g.narrowReserved("the composed head's buffers") {
+		_, err = g.servedHead(bs, bs.hNorm, 1)
+	}
+	if err != nil {
 		g.LastErr = "the composed head: " + err.Error()
+		if errors.As(err, new(partRoomError)) {
+			return fmt.Sprintf("the composed head does not fit beside the blocks placed (%s)", err)
+		}
 	}
 	if g.Composed&ComposedSample != 0 && bs.pickHead != nil && bs.headCap == nil {
 		if _, err := g.servedPickHead(bs, bs.hNorm); err != nil {
@@ -3088,6 +3103,7 @@ func (g *devTier) prewarmComposedHead() {
 			return
 		}
 	}
+	return
 }
 
 // poolHistory is how a pool layer of geometry k lays out its pages for the
