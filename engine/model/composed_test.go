@@ -24,9 +24,10 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 	return composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, float, nil, extra...)
 }
 
-// axesShift states each row's rotary positions as k times the State's and d
-// past that: the violation of a served table that turns a row by the
-// positions it is told.
+// axesShift states each row's rotary positions as k times the State's, and
+// a call's first row d past that: the violation of a served table that turns
+// a row by the positions it is told. A shift of every row alike moves no
+// position against another, which a rotary cannot see.
 type axesShift struct {
 	nn.RopeAxesDevice
 	k, d int32
@@ -35,8 +36,12 @@ type axesShift struct {
 
 func (a *axesShift) SetRopeAxes(pos int, at []int32) {
 	a.buf = a.buf[:0]
-	for _, v := range at {
-		a.buf = append(a.buf, a.k*v+a.d)
+	for i, v := range at {
+		w := a.k * v
+		if i < 4 {
+			w += a.d
+		}
+		a.buf = append(a.buf, w)
 	}
 	a.RopeAxesDevice.SetRopeAxes(pos, a.buf)
 }
@@ -112,7 +117,7 @@ func shiftEmbed(d, p, vocab int) func(*State) {
 func shiftAxes(d int32) func(*State) { return stretchAxes(1, d) }
 
 // stretchAxes has the State tell its device every row's rotary positions as
-// k times their own and d past that.
+// k times their own, a call's first row d past that (axesShift).
 func stretchAxes(k, d int32) func(*State) {
 	return func(s *State) {
 		if s.ldRope != nil {
