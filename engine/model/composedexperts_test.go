@@ -666,8 +666,9 @@ func streamSelected(t *testing.T, st tier.Stats, a streamArm) {
 	switch {
 	case st.StreamBlocks == 0 || st.StreamFills == 0:
 		t.Fatalf("%d blocks placed streamed, %d fills: the configuration under test was not selected "+
-			"(%d bytes used, %d declined (%s), %d page-ins, %d page-outs)",
-			st.StreamBlocks, st.StreamFills, st.BudgetUsed, st.Declined, st.DeclineWhy, st.PageIns, st.PageOuts)
+			"(%d bytes used: scratch %d, composed %d, KV pool %d; %d declined (%s), %d page-ins, %d page-outs)",
+			st.StreamBlocks, st.StreamFills, st.BudgetUsed, st.ScratchBytes, st.ComposedBytes, st.KVPoolBytes,
+			st.Declined, st.DeclineWhy, st.PageIns, st.PageOuts)
 	case st.HybridRuns != 0:
 		t.Fatalf("%d block steps ran their experts on the host", st.HybridRuns)
 	case a == streamCache && st.StreamRowFills == 0:
