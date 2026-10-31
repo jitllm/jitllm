@@ -121,7 +121,9 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow,
 	e, w := 0, pass/kp.p
 	if over {
 		e = kp.evicted[s]
-		if !deep || e < w {
+		// No pass wider than the pass width: the composer's form over passes
+		// is formed for that many keys (passKeys).
+		if w == 0 || e < w {
 			w = e
 		}
 		if err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
@@ -340,6 +342,16 @@ func (g *devTier) stagedPassKeys(bs *blockScratch) int {
 		n = devStagedPlane / 4 / max(pg.shape.Rows*pg.shape.Heads, 1)
 	}
 	return max(n/kp.p, 1) * kp.p
+}
+
+// passKeys is the key bound of bs's form over passes, as of a history of
+// maxSeq positions: a pass is at most the pass width (pagedStreamPrep), so
+// the form's planes are its rows by heads by that, not by the whole history.
+func (g *devTier) passKeys(bs *blockScratch, maxSeq int) int {
+	if k := g.stagedPassKeys(bs); k > 0 && k < maxSeq {
+		return k
+	}
+	return maxSeq
 }
 
 // inPasses says block l of this call reads a history with evicted pages, so

@@ -2608,12 +2608,14 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 		qOff = bs.roff
 	}
 	var run []backend.Buf
+	keys := p.MaxSeq
 	if bs.inPasses(l) {
 		if run, err = g.runBufs(bs, l, li); err != nil {
 			return nil, nil, nil, fmt.Errorf("%w: %w", errStreamForm, err)
 		}
+		keys = g.passKeys(bs, keys)
 	}
-	sv, err = g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R,
+	sv, err = g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, keys, g.kvp.p, R,
 		rowSeqs(R, one), run)
 	if err != nil {
 		if run != nil {
@@ -2832,7 +2834,7 @@ func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 			continue
 		}
 		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), qOff, bb.calls, bb.dRows,
-			bb.p.MaxSeq, g.kvp.p, bb.rows, seqs, run)
+			g.passKeys(bb, bb.p.MaxSeq), g.kvp.p, bb.rows, seqs, run)
 		if err != nil {
 			if !errors.Is(err, errFormedEarlier) {
 				g.LastErr = err.Error()
