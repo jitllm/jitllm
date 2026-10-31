@@ -110,7 +110,9 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 				}
 				headHome = d.st.headReady == nil
 				if _, err := d.st.Prefill(ids[a:b]); err != nil {
-					t.Fatal(err)
+					gs := g.Stats()
+					t.Fatalf("%v (%d bytes used: scratch %d, composed %d, KV pool %d, KV held %d)",
+						err, gs.BudgetUsed, gs.ScratchBytes, gs.ComposedBytes, gs.KVPoolBytes, gs.KVBytes)
 				}
 				if err := d.st.SetDeviceLayers(g, 0); err != nil {
 					t.Fatal(err)
