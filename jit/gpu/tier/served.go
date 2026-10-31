@@ -2723,7 +2723,6 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 // the scratch's instance of it held, both made here where they are not,
 // outside the submission. Callers hold g.mu.
 func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
-	g.promptWhy = partNoRoom
 	if bb.rows < 2 || bb.pkv == nil || g.kvp == nil || !g.rowsForms(bb) ||
 		g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
 		return false
@@ -2759,7 +2758,6 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		}
 	}
 	if bb.inPasses(l) && !g.streamServed(l, li, bb) {
-		g.promptWhy = partStream
 		return false
 	}
 	return true
@@ -2851,7 +2849,9 @@ func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int, asks bool) (bool,
 		case !asks:
 			why = partCaller
 		default:
-			why = g.promptWhy
+			// The composer serves the block and its prompt part did not form
+			// or fit: that is room or a bug to name, never main's kernels.
+			return true, fmt.Errorf("block %d: the composed prompt part: %s", li, g.LastErr)
 		}
 		if err := g.declineTwins(l, li, bs, why); err != nil {
 			return true, err
