@@ -437,7 +437,8 @@ func (g *devTier) swapRoom(n uint64) bool {
 		}
 		b := l.pg.bytes + l.pg.round
 		widest = max(widest, b)
-		if l.pg.in {
+		// A page a submission reads is no swap space until it lets go.
+		if l.pg.in && l.pg.uses == 0 {
 			in += b
 		}
 	}
