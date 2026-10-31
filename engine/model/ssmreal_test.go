@@ -99,7 +99,7 @@ func TestSSMRealModelsTeacherForced(t *testing.T) {
 				run := func(ngl string) ([]byte, error) {
 					cmd := exec.Command(bin, "-m", path, "-p", prompt, "-n", itoa(n), "--temp", "0", "-no-cnv",
 						"--no-warmup", "--ignore-eos", "-ngl", ngl, "-c", "512", "--prompt-cache", sess, "--prompt-cache-all")
-					cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(bin))
+					cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("LD_LIBRARY_PATH"))
 					return cmd.CombinedOutput()
 				}
 				out, err := run(ngl)
@@ -130,7 +130,7 @@ func TestSSMRealModelsTeacherForced(t *testing.T) {
 				// ids are compared only up to where the session run leaves it.
 				plain := exec.Command(bin, "-m", path, "-p", prompt, "-n", itoa(n), "--temp", "0", "-no-cnv",
 					"--no-warmup", "--ignore-eos", "-ngl", ngl, "-c", "512")
-				plain.Env = append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(bin))
+				plain.Env = append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("LD_LIBRARY_PATH"))
 				if pout, err := plain.Output(); err == nil {
 					text := strings.TrimSpace(strings.ReplaceAll(string(pout), "[end of text]", ""))
 					for i := range want {

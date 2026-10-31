@@ -272,7 +272,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 							args = append(args, "--prompt-cache", sess, "--prompt-cache-all")
 						}
 						cmd := exec.Command(bin, args...)
-						cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(bin))
+						cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("LD_LIBRARY_PATH"))
 						var log strings.Builder
 						cmd.Stderr = &log
 						if out, e := cmd.Output(); e == nil {

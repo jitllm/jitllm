@@ -38,7 +38,7 @@ func lcppLogProbs(t *testing.T, dir, gguf, text string, nctx int, ngl int, args 
 	out := filepath.Join(tmp, "base.kld")
 	cmd := exec.Command(bin, append([]string{"-m", gguf, "-f", in, "-c", fmt.Sprint(nctx), "-b", fmt.Sprint(nctx),
 		"--chunks", "1", "-ngl", fmt.Sprint(ngl), "-t", "6", "--kl-divergence-base", out}, args...)...)
-	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+dir)
+	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+dir+string(os.PathListSeparator)+os.Getenv("LD_LIBRARY_PATH"))
 	if ngl == 0 {
 		cmd.Env = append(cmd.Env, "CUDA_VISIBLE_DEVICES=")
 	}
@@ -145,7 +145,7 @@ func lcppSteps(t *testing.T, dir, gguf string, ids, toks []int32, ngl int) ([][]
 		t.Fatal(err)
 	}
 	cmd := exec.Command(filepath.Join(dir, "lcpplogits"), gguf, fmt.Sprint(ngl), in, fmt.Sprint(len(ids)), out)
-	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+dir)
+	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+dir+string(os.PathListSeparator)+os.Getenv("LD_LIBRARY_PATH"))
 	if ngl == 0 {
 		cmd.Env = append(cmd.Env, "CUDA_VISIBLE_DEVICES=")
 	}
