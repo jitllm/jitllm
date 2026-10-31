@@ -620,7 +620,8 @@ const (
 // budget, what m's blocks take placed as the arm places them -- its parts,
 // graph setting, prompt width and context ctx -- less half of what
 // streaming one mixture block saves on the card, measured: the blocks placed
-// resident and placed streamed, the difference over the mixture blocks.
+// resident and placed streamed with no expert cache, the difference over the
+// mixture blocks.
 // Placement keeps the blocks that fit resident and streams the rest, the
 // last first, so a deeper cut leaves that block home; and a fixture's banks
 // are kilobytes, where the card's allocation pieces can make a streamed
@@ -635,8 +636,13 @@ func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts tier.Part
 			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 				tier.WithConfig(func(c *tier.Config) {
 					c.Composed, c.NoGraph, c.Census, c.PromptRows = parts, noGraph, true, 64
+					// Streamed at its floor: no cache, each block's plain bank
+					// of the selection's sheets. With no budget the caches
+					// sizeAutoCaches gives would take the card's whole room,
+					// every expert on Qwen3-MOE-4x0.6B; under the arm's budget
+					// they take what the budget leaves.
 					if stream {
-						c.StreamExperts, c.HybridExperts, c.NoHybrid = true, false, true
+						c.StreamExperts, c.HybridExperts, c.NoHybrid, c.StreamCacheSlots = true, false, true, -1
 					}
 				})},
 				testTierOpts(t)...)...)
