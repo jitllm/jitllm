@@ -192,6 +192,25 @@ func (r *Registry) WithoutHalves(kind DeviceKind) *Registry {
 	return &fr
 }
 
+// ForPasses is r for forms over a history read in passes (History.Passes) on
+// device kind: no split, whose merge normalizes the whole history, and no
+// Flash, whose fused normalization leaves no pass maximum, sum or weighted
+// values for the fold. It shares r's cache.
+func (r *Registry) ForPasses(kind DeviceKind) *Registry {
+	fr := r.WithoutSplits(kind)
+	p := fr.Profiles[kind]
+	flash := func(x Pass) bool {
+		_, ok := x.(Flash)
+		return ok
+	}
+	p.Passes = slices.DeleteFunc(p.Passes, flash)
+	if p.Narrow != nil {
+		p.Narrow = slices.DeleteFunc(p.Narrow, flash)
+	}
+	fr.Profiles[kind] = p
+	return fr
+}
+
 // WithoutSplits is r with no sum, range or extreme cut into segments on
 // device kind: every sum in its loop's order. It shares r's cache.
 func (r *Registry) WithoutSplits(kind DeviceKind) *Registry {

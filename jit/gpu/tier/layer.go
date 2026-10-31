@@ -7620,11 +7620,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			}
 			// The lightning indexer scores every position through the
 			// table, which a streamed pass does not hold.
-			// A prompt chunk over evicted history runs a row at a time (the
-			// caller's retry), each row's step reading it in passes.
-			if pk.st != nil && pk.st.evicted > 0 && R > 1 && rag == nil {
-				return refuse("a chunk of %d rows over %d evicted page(s) runs a row at a time", R, pk.st.evicted)
-			}
 			if pk.st != nil && pk.idx != nil {
 				return refuse("the lightning indexer reads the whole history and part of it is evicted")
 			}

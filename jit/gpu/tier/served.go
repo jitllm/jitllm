@@ -1349,14 +1349,14 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	if err != nil {
 		return nil, fail(err)
 	}
-	// A pass's sums run in their loop's order: a split's merge is the
-	// whole history's normalization, not the fold of a pass.
+	// A pass's attention leaves its maximum, sum and weighted values for the
+	// fold (jit.Registry.ForPasses).
 	if sl.history.Passes {
 		if r != g.composer {
-			r = r.WithoutSplits(jit.DeviceGPU)
+			r = r.ForPasses(jit.DeviceGPU)
 		} else {
 			if g.composerPasses == nil {
-				g.composerPasses = g.composer.WithoutSplits(jit.DeviceGPU)
+				g.composerPasses = g.composer.ForPasses(jit.DeviceGPU)
 			}
 			r = g.composerPasses
 		}

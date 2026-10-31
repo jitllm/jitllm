@@ -2134,8 +2134,8 @@ type devShared struct {
 	// composerFloat is composer with no int8 form (Config.ComposedFloat),
 	// and no split where Config.ComposedUnsplit.
 	composerFloat *jit.Registry
-	// composerPasses is composer with no split, for forms over a history
-	// read in passes.
+	// composerPasses is composer for forms over a history read in passes
+	// (jit.Registry.ForPasses).
 	composerPasses *jit.Registry
 	mvTo           launchTo
 	// embTo is the composer's gather made real on its own

@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testlock"
 	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestComposedGPUAttendInPasses forms an attention over a paged history read
@@ -32,28 +33,59 @@ func TestComposedGPUAttendInPasses(t *testing.T) {
 	if len(devs) == 0 {
 		t.Skip("no GPU")
 	}
+	wide := make([]int, 128)
+	for i := range wide {
+		wide[i] = 300 + i
+	}
+	cases := []passCase{
+		{name: "rows", pos: []int{40, 70, 100}},
+		{name: "chunk", pos: []int{92, 93, 94, 95, 96, 97, 98, 99}, seqs: 1},
+		{name: "chunk/wide", pos: wide, seqs: 1},
+		{name: "chunk/matrix", pos: wide, seqs: 1, matrix: true},
+	}
 	for _, d := range devs {
-		// Rows of separate sequences, rows 0 and 1 seeing none of the last
-		// pass; and a prompt chunk, one sequence's rows in order.
-		t.Run(d.API()+"/rows", func(t *testing.T) { attendInPasses(t, d, []int{40, 70, 100}, 0) })
-		t.Run(d.API()+"/chunk", func(t *testing.T) { attendInPasses(t, d, []int{92, 93, 94, 95, 96, 97, 98, 99}, 1) })
+		tiles, _ := backend.LowersTile(d, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32})
+		for _, c := range cases {
+			if c.matrix && !tiles {
+				continue
+			}
+			t.Run(d.API()+"/"+c.name, func(t *testing.T) { attendInPasses(t, d, c) })
+		}
 	}
 }
 
-func attendInPasses(t *testing.T, d backend.Device, pos []int, seqs int) {
-	const heads, kvh, dim, page, capRows = 4, 2, 64, 16, 8
+// passCase is one shape of the pass gate: the rows' positions, one sequence
+// (a prompt chunk) or a sequence a row, and whether the device's matrix unit
+// forms the attention.
+type passCase struct {
+	name   string
+	pos    []int
+	seqs   int
+	matrix bool
+}
+
+func attendInPasses(t *testing.T, d backend.Device, c passCase) {
+	pos, seqs := c.pos, c.seqs
+	const heads, kvh, dim, page = 4, 2, 64, 16
 	R := len(pos)
+	capRows := max(8, R)
 	keys := 8 * page
 	passKeys := 2 * page
+	if pos[R-1] >= keys {
+		keys, passKeys = 32*page, 8*page
+	}
 	b := graph.New()
 	n := b.KVAppend(b.In("k", kvh*dim), b.In("v", kvh*dim), 0)
 	b.Out(b.Attend(b.In("q", heads*dim), n, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim, Scale: 1 / math.Sqrt(dim)}))
 	g := b.G
 	dev := gpuDevice(d)
+	if c.matrix {
+		dev.Matrix = [3]int{16, 16, 16}
+	}
 	form := func(passes bool) []jit.Code {
 		reg := jit.Default()
 		if passes {
-			reg = reg.WithoutSplits(jit.DeviceGPU)
+			reg = reg.ForPasses(jit.DeviceGPU)
 		}
 		_, codes, err := reg.Form(jit.Request{Graph: g, Step: jit.Step{Rows: capRows, Page: page, Keys: keys, Seqs: seqs},
 			Device: dev, History: jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: true}, Passes: passes}})
@@ -236,8 +268,9 @@ func aliasTables(run map[string][]uint32, alias map[string]string) map[string]st
 // passRunner launches a form's codes over buffers held across calls, so the
 // codes before a pass, the passes and the codes after share their values.
 type passRunner struct {
-	d    backend.Device
-	bufs map[string]backend.Buf
+	d     backend.Device
+	bufs  map[string]backend.Buf
+	calls int
 }
 
 func newPassRunner(d backend.Device) *passRunner {
@@ -278,6 +311,7 @@ func (r *passRunner) run(codes []jit.Code, lo, hi int, vals map[graph.ValueID][]
 	runs map[string]string) ([]uint32, error) {
 	var outVal graph.ValueID
 	wrote := false
+	r.calls++
 	for ci := lo; ci < hi; ci++ {
 		c := codes[ci]
 		k, err := r.d.Compile(c.GPU)
@@ -297,7 +331,7 @@ func (r *passRunner) run(codes []jit.Code, lo, hi int, vals map[graph.ValueID][]
 					w = poisoned(len(w))
 				}
 			case o.Kind == jit.OperandTable && over[o.Name] != nil:
-				key, w = fmt.Sprintf("t%s@%p", o.Name, &over[o.Name][0]), over[o.Name]
+				key, w = fmt.Sprintf("t%s#%d", o.Name, r.calls), over[o.Name]
 			case o.Kind == jit.OperandTable && base[o.Name] != nil:
 				key, w = "t"+o.Name, base[o.Name]
 			case o.Kind == jit.OperandValue && vals[o.Value] != nil:
