@@ -401,8 +401,10 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 				// only grows to the widest shape asked, so the first trip is
 				// held exactly outside the scratch and the second exactly
 				// everywhere, the driver's rounding included.
+				// The composed prompt arenas are scratch too: a width's
+				// buffers every prompt form shares, grown to the widest.
 				outside := func(s tier.Stats) (alloc, charged uint64) {
-					return s.Allocated - s.ScratchBytes, s.BudgetUsed - s.RoundingBytes - s.ScratchBytes
+					return s.Allocated - s.ScratchBytes - s.ComposedArena, s.BudgetUsed - s.RoundingBytes - s.ScratchBytes - s.ComposedArena
 				}
 				a0, c0 := outside(s0)
 				a1, c1 := outside(s1)

@@ -731,6 +731,10 @@ type Stats struct {
 	// ComposedBytes is the part of BudgetUsed the composed parts' instances
 	// hold: their scratch, a prompt part's at its rows and key bound.
 	ComposedBytes uint64
+	// ComposedArena is the part of ComposedBytes the prompt arenas hold: a
+	// scratch's buffers every prompt form at its rows shares, the widest
+	// each, which a block's move neither frees nor leaves behind.
+	ComposedArena uint64
 	// Allocated is what the device's buffers hold by the backend's own count
 	// (backend.AllocCounter), 0 where it keeps none, and RoundingBytes the
 	// part of BudgetUsed that is the driver's page rounding of them.
@@ -1470,6 +1474,7 @@ func (s *Stats) add(o Stats) {
 	s.BudgetUsed += o.BudgetUsed
 	s.ScratchBytes += o.ScratchBytes
 	s.ComposedBytes += o.ComposedBytes
+	s.ComposedArena += o.ComposedArena
 	s.Allocated += o.Allocated
 	s.RoundingBytes += o.RoundingBytes
 	s.ReservedPrompt = max(s.ReservedPrompt, o.ReservedPrompt)
@@ -1873,6 +1878,8 @@ type devShared struct {
 	// instBytes is what the composed parts' instances charge
 	// (Stats.ComposedBytes).
 	instBytes uint64
+	// arenaBytes is the part of instBytes the prompt arenas hold.
+	arenaBytes uint64
 	// tabPend are page-table writes waiting for flushTabs (kvpool.go).
 	tabPend []tabWrite
 	// autoStream holds the blocks placed with their routed experts off the
@@ -2626,10 +2633,11 @@ func (g *GPU) Census() map[string]int {
 	return out
 }
 
-// LaneParts is, device by device, how many composed parts each lane holds an
-// instance of, lane0 first. Every lane holds every part the device serves: a
-// lane short of one forms it at a step, and one holding more keeps a released
-// block's instance charged.
+// LaneParts is, device by device, how many block and head parts each lane
+// holds an instance of, lane0 first. Every lane holds every one the device
+// serves: a lane short of one forms it at a step, and one holding more keeps
+// a released block's instance charged. The device's own parts (row copies,
+// tables, tokens) are not counted.
 func (g *GPU) LaneParts() [][]int {
 	var out [][]int
 	for _, d := range g.devs {
@@ -2637,8 +2645,8 @@ func (g *GPU) LaneParts() [][]int {
 		var n []int
 		d.eachLane(func(l *lane) {
 			k := 0
-			for _, sv := range l.served {
-				if sv != nil {
+			for sk, sv := range l.served {
+				if sv != nil && (sk.kind == partBlock || sk.kind == partHead) {
 					k++
 				}
 			}
@@ -2698,7 +2706,7 @@ func (d *devTier) stats() Stats {
 		s.KVPoolBytes = d.kvp.charged()
 	}
 	s.BudgetUsed = d.used
-	s.ComposedBytes = d.instBytes
+	s.ComposedBytes, s.ComposedArena = d.instBytes, d.arenaBytes
 	for _, l := range d.layers {
 		if l != nil && l.stream != nil && l.stream.cached() && l.stream.plain[2] != nil {
 			for _, r := range [3]*resident{l.gate, l.up, l.down} {

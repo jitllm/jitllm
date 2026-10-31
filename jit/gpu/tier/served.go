@@ -568,6 +568,7 @@ func (g *devTier) growArena(bs *blockScratch, f *partForm, in *partInst) error {
 		ar.bufs[j], ar.n[j] = d, need
 		g.charge(add)
 		g.instBytes += add
+		g.arenaBytes += add
 		moved = true
 	}
 	bind := func(f *partForm, in *partInst) {

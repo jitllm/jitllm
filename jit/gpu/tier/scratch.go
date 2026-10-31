@@ -148,6 +148,7 @@ func (g *devTier) dropScratch(bs *blockScratch) {
 		bs.arena = nil
 		g.refund(n)
 		g.instBytes -= n
+		g.arenaBytes -= n
 	}
 	freeScratch(bs)
 }
