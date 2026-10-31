@@ -22,14 +22,12 @@ import (
 var pagedExpertModels = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
 	"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "synth-ernie45moe-hf" + q8Suffix,
 	"synth-hunyuanmoe-hf" + q8Suffix, "synth-dots1-hf" + q8Suffix, "synth-deepseek" + q8Suffix,
-	"synth-deepseek-lite" + q8Suffix, "synth-gptoss.gguf"}
+	"synth-deepseek-lite" + q8Suffix, "synth-gptoss.gguf", "synth-llama4-q8.gguf"}
 
 // plainBankModels are the mixtures whose streamed banks the tier keeps plain
 // whatever cache is stated (cacheSlotsFor): gpt-oss's experts carry biases,
 // which the tier's own kernels index by the selection a cache rewrites as
-// slots. Their pages are the compact bank's, re-read every token. Llama 4's
-// top-1 mixture is not here: the tier streams no selection of one expert to
-// a card (it runs it on the host).
+// slots. Their pages are the compact bank's, re-read every token.
 var plainBankModels = []string{"synth-gptoss.gguf"}
 
 // TestComposedExpertPagesServe serves each mixture's blocks composed with
@@ -88,7 +86,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 				t.Run(dev, func(t *testing.T) {
 					decode := func(t *testing.T, budget bool, opts ...tier.Option) ([][]float32, tier.Stats, int64) {
 						t.Helper()
-						mo := []Option{noTune}
+						mo := []Option{noTune, WithStreamTrial(false)}
 						if budget {
 							mo = append(mo, WithPageBudget(1))
 						}
@@ -106,16 +104,15 @@ func TestComposedExpertPagesServe(t *testing.T) {
 							c.StreamExperts, c.StreamCacheSlots, c.HybridExperts, c.NoHybrid = true, slots, false, true
 						})
 					}
+					// A card that does not hold every bank whole streams the
+					// rest by default: the reference is then those blocks' banks
+					// in pages, served like the whole ones.
 					want, whole, _ := decode(t, false)
-					if n, d, _ := whole.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
-						if d != whole.BlockDeclines[jit.DeclineExpertsHost] {
-							t.Fatalf("the whole banks served %d block steps and declined %d (%s)", n, d, declinesOf(whole))
-						}
-						// A card that does not hold every bank whole runs some
-						// blocks' experts on the host by default: the reference is
-						// the compact bank in pages, every block served from it.
-						t.Logf("the card holds no whole banks for %d block steps (%s): the compact bank in pages is the reference", d, declinesOf(whole))
-						want, _, _ = decode(t, false, stream(-1))
+					if n, d, _ := whole.ServedPart(tier.ComposedBlock); n == 0 || d != 0 || whole.HybridRuns != 0 {
+						t.Fatalf("the default placement served %d block steps, declined %d and ran %d on the host (%s)", n, d, whole.HybridRuns, declinesOf(whole))
+					}
+					if whole.StreamBlocks > 0 {
+						t.Logf("the card holds %d blocks streamed by default, %d fills", whole.StreamBlocks, whole.StreamFills)
 					}
 					resident := map[int]int64{}
 					for _, arm := range []struct {
@@ -604,5 +601,69 @@ func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// streamArm is where a serving arm puts a mixture's routed experts: whole on
+// the card (0), in pages under a budget the banks do not fit beside the
+// blocks (the auto-stream default), or in an expert cache of half the
+// experts and at least two rows' selections, so a prompt's calls of several
+// rows fill their pages at once.
+type streamArm int
+
+const (
+	streamBudget streamArm = iota + 1
+	streamCache
+)
+
+// streamOpts is the tier options of arm a for mixture m on dev: for the
+// budget, what m's blocks take there resident less half its routed banks.
+func streamOpts(t *testing.T, m *Model, dev string, a streamArm) []tier.Option {
+	t.Helper()
+	switch a {
+	case streamBudget:
+		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+			tier.WithConfig(func(c *tier.Config) { c.PromptRows = 64 })}, testTierOpts(t)...)...)
+		if err != nil || g == nil {
+			noDevice(t, dev, err)
+		}
+		defer g.Close()
+		s := m.NewState(64)
+		defer s.Close()
+		s.SetDeviceFallback(false)
+		if err := s.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		var bank uint64
+		for li := range m.Cfg.NLayer {
+			_, b := m.blockBytes(li)
+			bank += b
+		}
+		used := g.Stats().BudgetUsed
+		if s.GPULayers() != m.Cfg.NLayer || bank == 0 || used <= bank {
+			t.Fatalf("%s holds %d of %d blocks in %d bytes, %d of them routed banks", dev, s.GPULayers(), m.Cfg.NLayer, used, bank)
+		}
+		return []tier.Option{tier.WithBudget(used - bank/2)}
+	case streamCache:
+		e, k := int(m.Cfg.NExpert), int(m.Cfg.NExpertUsed)
+		return []tier.Option{tier.WithConfig(func(c *tier.Config) {
+			c.StreamExperts, c.StreamCacheSlots, c.HybridExperts, c.NoHybrid = true, min(e, max(2*k, e/2)), false, true
+		})}
+	}
+	return nil
+}
+
+// streamSelected fails t unless a run of arm a streamed its mixture blocks,
+// ran none of their experts on the host, and with a cache filled a call of
+// several rows at once.
+func streamSelected(t *testing.T, st tier.Stats, a streamArm) {
+	t.Helper()
+	switch {
+	case st.StreamBlocks == 0 || st.StreamFills == 0:
+		t.Fatalf("%d blocks placed streamed, %d fills: the configuration under test was not selected", st.StreamBlocks, st.StreamFills)
+	case st.HybridRuns != 0:
+		t.Fatalf("%d block steps ran their experts on the host", st.HybridRuns)
+	case a == streamCache && st.StreamRowFills == 0:
+		t.Fatalf("no call of several rows filled its pages (%d fills)", st.StreamFills)
 	}
 }

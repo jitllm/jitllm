@@ -592,7 +592,7 @@ func (g *GPU) DeclineSize(li int, total, bank uint64) string {
 // really has left once placement ends. blocks and meanBase are kept for the
 // report.
 func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int, meanBase uint64) bool {
-	if g.NoAutoStream || len(g.devs) == 0 || bank >= total || nExpert <= nUsed || nUsed < 2 {
+	if g.NoAutoStream || len(g.devs) == 0 || bank >= total || nExpert <= nUsed || nUsed < 1 || nUsed < 2 && g.Composed&ComposedBlock == 0 {
 		return false
 	}
 	base := total - bank
@@ -680,6 +680,10 @@ func (g *GPU) SetExpertMode(where string) int {
 	m := expAuto
 	switch where {
 	case "host":
+		// The composed block has no host side to measure.
+		if g.Composed&ComposedBlock != 0 {
+			return 0
+		}
 		m = expHost
 	case "card":
 		m = expCard

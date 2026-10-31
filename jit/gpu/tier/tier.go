@@ -1029,6 +1029,9 @@ type Stats struct {
 	// such a block, cumulative like Blocks and Captures. They are the selection
 	// check: a streamed and a resident block compute the same logits.
 	StreamFills int
+	// StreamRowFills counts the fills of a composed call of several rows:
+	// every live row's selection filled at once.
+	StreamRowFills int
 	// StreamOverlaps is how many group reads were issued while an upload was in
 	// flight; zero with StreamGroups at its default.
 	StreamOverlaps int
@@ -1555,6 +1558,7 @@ func (s *Stats) add(o Stats) {
 		s.RopeTableWhy = o.RopeTableWhy
 	}
 	s.StreamFills += o.StreamFills
+	s.StreamRowFills += o.StreamRowFills
 	s.StreamOverlaps += o.StreamOverlaps
 	s.StreamBlocks += o.StreamBlocks
 	s.Blocks += o.Blocks

@@ -517,11 +517,15 @@ func TestComposedBlocksServe(t *testing.T) {
 		name  string
 		parts tier.Parts
 		tile  int
+		// stream puts a mixture's routed experts in pages on the card.
+		stream streamArm
 	}
-	arms := []arm{{"whole block", tier.ComposedBlock, 0}, {"whole step", tier.ComposedStep, 0}}
+	arms := []arm{{"whole block", tier.ComposedBlock, 0, 0}, {"whole step", tier.ComposedStep, 0, 0}}
 	for k := 2; k <= matrixTileCount(); k++ {
-		arms = append(arms, arm{fmt.Sprintf("whole step at matrix tile %d", k), tier.ComposedStep, k})
+		arms = append(arms, arm{fmt.Sprintf("whole step at matrix tile %d", k), tier.ComposedStep, k, 0})
 	}
+	arms = append(arms, arm{"whole step, experts streamed under a budget", tier.ComposedStep, 0, streamBudget},
+		arm{"whole step, experts cached in pages", tier.ComposedStep, 0, streamCache})
 	ran := 0
 	for _, file := range servedModels {
 		t.Run(file, func(t *testing.T) {
@@ -529,7 +533,9 @@ func TestComposedBlocksServe(t *testing.T) {
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune)
+			// The budget arm streams blocks the card does not hold: the trial
+			// against the CPU would move them mid-decode.
+			m, err := Open(jlmOf(t, path), noTune, WithStreamTrial(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -649,7 +655,7 @@ func TestComposedBlocksServe(t *testing.T) {
 							t.Logf("graph %v: llama.cpp does not read this model: the band's reference is the tier, whose backends reach %.3g at their worst step (%s)", !noGraph, widestTier[g], tierAt[g])
 						}
 						for _, a := range arms {
-							if a.tile > 0 && noGraph {
+							if a.tile > 0 && noGraph || a.stream != 0 && (noGraph || m.Cfg.NExpert == 0) {
 								continue
 							}
 							name := a.name
@@ -659,15 +665,19 @@ func TestComposedBlocksServe(t *testing.T) {
 							t.Run(name, func(t *testing.T) {
 								parts := a.parts | tier.ComposedPrompt
 								tile := tier.WithConfig(func(c *tier.Config) { c.MatrixTile = a.tile })
+								sopts := streamOpts(t, m, dev, a.stream)
 								var band, offBand panelBand
 								var st0 tier.Stats
 								var got0 [][]float32
 								for pi, p := range panel {
 									ids, toks := p.ids, p.toks
 									want, ref := runs[dev][g][pi].want, runs[dev][g][pi].ref
-									got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, tile)
+									got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, append([]tier.Option{tile}, sopts...)...)
 									if pi == 0 {
 										st0, got0 = st, got
+									}
+									if a.stream != 0 {
+										streamSelected(t, st, a.stream)
 									}
 									if a.tile > 0 && st.MatrixPart(tier.ComposedPrompt) > 0 && st.MatrixTiled == 0 {
 										t.Fatalf("the prompt ran on the matrix unit with no part formed at tile %d", a.tile)
@@ -813,7 +823,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									var bad panelBand
 									for pi, p := range panel {
 										want, ref := runs[dev][g][pi].want, runs[dev][g][pi].ref
-										out, bst, _, _ := composedDecodeWith(t, m, dev, p.ids, p.toks, parts, noGraph, false, after, extra...)
+										out, bst, _, _ := composedDecodeWith(t, m, dev, p.ids, p.toks, parts, noGraph, false, after, slices.Concat(sopts, extra)...)
 										if n, d, _ := bst.ServedPart(k); n == 0 || d != 0 {
 											t.Fatalf("the arm with %s served the part %d times and declined it %d", what, n, d)
 										}
@@ -859,11 +869,15 @@ func TestComposedBlocksServe(t *testing.T) {
 									violated("every row gathered at the next token's", tier.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))
 								}
 								violated("every split's last segment dropped", tier.ComposedBlock, nil, tile, tier.WithSplitFault(true))
+								if a.stream != 0 {
+									violated("every page table swapping two experts", tier.ComposedBlock, nil, tier.WithPageFault(tier.PageFaultSwap))
+									violated("every block's pages left as the last call filled them", tier.ComposedBlock, nil, tier.WithPageFault(tier.PageFaultStale))
+								}
 								// Every buffer filled with NaN at allocation: a
 								// composed kernel reading what nothing wrote shows
 								// as a changed logit.
 								if a.parts&tier.ComposedHead != 0 {
-									poisoned, _, _, _ := composedDecode(t, m, dev, panel[0].ids, panel[0].toks, parts, noGraph, false, tile, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
+									poisoned, _, _, _ := composedDecode(t, m, dev, panel[0].ids, panel[0].toks, parts, noGraph, false, slices.Concat([]tier.Option{tile, tier.WithPoisonScratch(true), tier.WithPoisonKV(true)}, sopts)...)
 									for i := range got0 {
 										if !slices.Equal(poisoned[i], got0[i]) {
 											t.Fatalf("step %d: with every buffer poisoned the logits change: a composed kernel reads what nothing wrote", i)

@@ -1370,8 +1370,24 @@ func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind partK
 func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind partKind, l *layer, nExpert int,
 	uses []uint32, in, out []backend.Buf) error {
 	f, st := sv.f, l.stream
-	if st == nil || f.selN != len(st.sel) {
+	if st == nil || len(st.sel) == 0 || f.selN%len(st.sel) != 0 {
 		return fmt.Errorf("a form over banks in pages selects %d experts where the block's pages are filled for its selection", f.selN)
+	}
+	// A call of several rows reads every live row's selection, each expert
+	// filled once into the cache: pagedCall holds the call to the rows its
+	// slots hold.
+	k, live := len(st.sel), len(st.sel)
+	if f.selN > k {
+		live = min(f.selN, max(sv.rows, 1)*k)
+	}
+	if live > k {
+		if !st.cached() || live > len(st.owner) {
+			return fmt.Errorf("%d rows select %d experts, more than the block's %d pages hold", live/k, live, max(len(st.owner), k))
+		}
+		one := st.sel
+		st.rsel = growU32(st.rsel, live)
+		st.sel, st.slotSel = st.rsel, growU32(st.slotSel, live)
+		defer func() { st.sel, st.slotSel = one, st.slotSel[:k] }()
 	}
 	copy(sv.in[:sv.n], in)
 	copy(sv.out[:sv.m], out)
@@ -1404,6 +1420,9 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 		return err
 	}
 	g.StreamFills++
+	if live > k {
+		g.StreamRowFills++
+	}
 	st.tab = growU32(st.tab, nExpert)
 	if st.cached() {
 		for e, slot := range st.slotOf {
@@ -2096,8 +2115,8 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 // reads them, serves where they are: every bank its graph binds held whole
 // on the card, or a streamed block's in pages -- its cache's slots or its
 // compact bank, each expert reached through the step's table (pagedRun) --
-// at a step of one row, its experts sent to the card rather than run on the
-// host.
+// at a call of no more rows than its pages hold the selections of
+// (pagedRows), its experts sent to the card rather than run on the host.
 func (l *layer) expertsServe(rows int) partDecline {
 	held, banks := true, false
 	for _, o := range l.graph.Ops {
@@ -2115,10 +2134,34 @@ func (l *layer) expertsServe(rows int) partDecline {
 		return partExpertsHost
 	case !held:
 		return partExperts
-	case l.stream != nil && rows > 1:
+	case l.stream != nil && rows > l.pagedRows():
 		return partExpertsRows
 	}
 	return partServes
+}
+
+// pagedCall is the rows a composed call over blocks [lo, hi) takes at a
+// time, at most w: no more than every streamed block's pages hold.
+func (g *devTier) pagedCall(lo, hi, w int) int {
+	for li := lo; li < hi; li++ {
+		if l := g.layers[li]; l != nil && l.stream != nil && !l.stream.hybrid {
+			w = min(w, max(l.pagedRows(), 1))
+		}
+	}
+	return w
+}
+
+// pagedRows is the most rows of a call whose selections a streamed block's
+// pages hold whatever its rows choose: its sheets over a row's selection.
+func (l *layer) pagedRows() int {
+	st := l.stream
+	if st == nil || len(st.sel) == 0 {
+		return 0
+	}
+	if st.cached() {
+		return len(st.owner) / len(st.sel)
+	}
+	return 1
 }
 
 // paged is each bank of block l's graph a streamed block holds in pages,
@@ -2307,8 +2350,8 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 	switch {
 	case l.graph == nil:
 		return partNoGraph
-	case l.expertsServe(bs.rows) != partServes:
-		return l.expertsServe(bs.rows)
+	case l.expertsServe(1) != partServes:
+		return l.expertsServe(1)
 	case !l.weightsHeld():
 		return partNoWeight
 	case slices.Contains(g.TierBlocks, li):

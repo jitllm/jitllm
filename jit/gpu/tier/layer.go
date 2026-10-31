@@ -384,8 +384,9 @@ type streamBank struct {
 	pred     []uint32
 	havePred bool
 	// tab is a composed step's page table (servedPart.pagedRun): each
-	// expert's sheet of the bank, reused every token.
-	tab []uint32
+	// expert's sheet of the bank, reused every token; rsel the selections
+	// of a call of several rows.
+	tab, rsel []uint32
 }
 
 // score charges this token's selection to the probe's counters and hands it
@@ -3369,9 +3370,12 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// on the card at all -- no compact bank, no expert kernels, no packed
 	// layout needed -- and a top-1 router is no obstacle, since no indexed
 	// matvec runs.
+	// The composed block reads its experts in pages on the card: only a
+	// placement's own "host" sends them to the host.
+	composed := g.Composed&ComposedBlock != 0
 	hostExp := w.HostExperts != nil && (auto && mode == expHost ||
-		g.HybridExperts && !(auto && mode == expCard) || auto && mode == expAuto && !g.NoHybrid)
-	stream := moe && (g.StreamExperts || auto) && slots < bank && (slots > 1 || hostExp)
+		!composed && (g.HybridExperts && !(auto && mode == expCard) || auto && mode == expAuto && !g.NoHybrid))
+	stream := moe && (g.StreamExperts || auto) && slots < bank && (slots > 1 || hostExp || composed)
 	// A hybrid block that can hold an expert cache (Config.NoHybridCache)
 	// is placed as a streamed one -- the compact bank and its kernels on the
 	// card -- marked hybrid, so the cache sized after placement has kernels
@@ -3836,7 +3840,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				// (placement.md 16c-2).
 				switch {
 				case l.stream.host == nil || auto && mode == expCard:
-				case auto && mode == expHost, g.HybridExperts:
+				case auto && mode == expHost:
+					l.stream.hybrid = true
+				case composed:
+				case g.HybridExperts:
 					l.stream.hybrid = true
 				default:
 					l.stream.hybrid = auto && !g.NoHybrid
@@ -6882,6 +6889,11 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		// width is built, formed or compiled for a prompt's length.
 		ww := 0
 		composed := g.promptComposed(lo, hi)
+		// A head over every row cannot be cut into the calls a streamed
+		// block's pages hold.
+		if composed && head != nil && head.RowLogits && n > g.pagedCall(lo, hi, n) {
+			composed = false
+		}
 		switch {
 		case composed && n <= g.promptW:
 			ww = g.promptW
@@ -6905,7 +6917,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		}
 		bbs, dbs, sub := g.bbs[w], g.bs, max(g.promptW, nn.MaxPrefillChunk)
 		if composed {
-			sub = g.promptW
+			sub = g.pagedCall(lo, hi, g.promptW)
 		}
 		// A head over every row (a speculative verification) runs only in
 		// the one-submission path, with the per-row head built for it: every
@@ -8597,7 +8609,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			default:
 				why = g.blockServes(l, li, p, bs, persist, kind == partPrompt)
 				if why == partServes && R > 1 {
-					why = l.expertsServe(R)
+					why = l.expertsServe(nrow)
 				}
 			}
 			var sv, cp *servedPart
