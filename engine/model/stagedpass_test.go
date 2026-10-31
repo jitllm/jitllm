@@ -17,6 +17,9 @@ func (eg *evictGate) stagedPassRun(t *testing.T, dev string, pass int) ([][]floa
 			c.KVPage = 64
 			c.StagedDecode = true
 			c.StagedPassKeys = pass
+			// The staged plan is main's tier's: a composed block reads its
+			// whole history through the table in one launch.
+			c.Composed = 0
 		}))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
