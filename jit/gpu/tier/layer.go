@@ -6599,11 +6599,11 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if !ok || h.W.K != bs.p.NEmbd || h.W.Rows <= 0 || len(h.W.Data) == 0 {
 		return false
 	}
-	// The reserved width's per-row logits are the head's (prepRowsReserved),
-	// admitted with it: built after it without asking, they put the card past
-	// its budget by a vocabulary a row.
+	// The reserved width's per-row logits are the head's where a ragged step's
+	// width is reserved (prepRowsReserved), admitted with it: built after it
+	// without asking, they put the card past its budget by a vocabulary a row.
 	var rows uint64
-	if bb := g.reservedFor(ComposedBlock); bb != nil && g.rowsReserved() {
+	if bb := g.reservedFor(ComposedBlock); bb != nil && g.StepRows > 0 && g.rowsReserved() {
 		rows = g.rowsHeadNeed(bb, h.W.Rows, h.Softcap)
 	}
 	foot, ferr := g.planesFootprint(q, h.W.Rows, h.W.K)

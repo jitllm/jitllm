@@ -430,12 +430,14 @@ func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int, softcap float32) uin
 }
 
 // prepRowsReserved builds the reserved width's per-row head where a ragged
-// step's rows run there (rowsReserved) -- the per-row argmax and the final
-// softcap, the composer's head writing the logits they read -- at placement
-// and at PrepHead, so no step compiles them. Callers hold g.mu.
+// step's rows run there (rowsReserved) and the device reserves a step width
+// (Config.StepRows) -- the per-row argmax and the final softcap, the
+// composer's head writing the logits they read -- at placement and at
+// PrepHead, so no step compiles them. Without a step width a ragged step
+// builds it at its first call (prepRagged). Callers hold g.mu.
 func (g *devTier) prepRowsReserved() {
 	bb := g.reservedFor(ComposedBlock)
-	if bb == nil || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsReserved() {
+	if bb == nil || g.StepRows <= 0 || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsReserved() {
 		return
 	}
 	if !g.prepRowsHead(bb, &nn.Head{Softcap: g.bs.capC}, bb.rows) {
