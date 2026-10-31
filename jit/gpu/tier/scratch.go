@@ -561,25 +561,36 @@ func (g *devTier) composedBlock(li int, bb *blockScratch) bool {
 func (g *devTier) fitReserved() {
 	for {
 		bb := g.bbs[g.promptW]
-		if bb == nil || !g.rowsForms(bb) || !bb.instNoRoom {
+		if bb == nil || !g.rowsForms(bb) || !bb.instNoRoom || !g.narrowReserved("the composer's buffers") {
 			break
 		}
-		w := g.promptW / 2 / batchGrain * batchGrain
-		if w < batchGrain {
-			g.LastErr = fmt.Sprintf("the reserved width of %d rows is the narrowest, and the composer's buffers do not fit beside it", g.promptW)
-			break
-		}
-		g.dropBatch(g.promptW)
-		if !g.prepBatch(w) || !g.reservePaged(g.bbs[w]) || !g.reserveRowsHead(g.bbs[w], &g.bs.p) {
-			g.dropBatch(w)
-			g.LastErr = fmt.Sprintf("no reserved width of %d rows builds beside the blocks placed", w)
-			break
-		}
-		g.promptW = w
-		g.placeGen.Add(1)
-		g.promptForms(g.bbs[w])
 	}
 	g.ReservedRows = g.promptW
+}
+
+// narrowReserved halves the reserved width, builds the scratch again at it
+// and forms every placed block there, and reports whether it did; beside
+// names what the freed bytes are for. Callers hold g.mu.
+func (g *devTier) narrowReserved(beside string) bool {
+	w := g.promptW / 2 / batchGrain * batchGrain
+	if w < batchGrain {
+		g.LastErr = fmt.Sprintf("the reserved width of %d rows is the narrowest, and %s do not fit beside it", g.promptW, beside)
+		return false
+	}
+	was := g.prewarming
+	g.prewarming = true
+	defer func() { g.prewarming = was }()
+	g.dropBatch(g.promptW)
+	if !g.prepBatch(w) || !g.reservePaged(g.bbs[w]) || !g.reserveRowsHead(g.bbs[w], &g.bs.p) {
+		g.dropBatch(w)
+		g.LastErr = fmt.Sprintf("no reserved width of %d rows builds beside the blocks placed", w)
+		return false
+	}
+	g.promptW = w
+	g.ReservedRows = w
+	g.placeGen.Add(1)
+	g.promptForms(g.bbs[w])
+	return true
 }
 
 // rowsReserved reports whether every block placed on the device has its

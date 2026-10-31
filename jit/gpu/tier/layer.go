@@ -6591,7 +6591,11 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		if foot, err := g.planesFootprint(q, h.W.Rows, h.W.K); err == nil {
 			want = foot
 		}
-		if after := g.slotsIfPerm(want); after < minSlots {
+		after := g.slotsIfPerm(want)
+		for after < minSlots && g.promptW > 0 && g.narrowReserved("the output projection and a block slot") {
+			after = g.slotsIfPerm(want)
+		}
+		if after < minSlots {
 			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and taking them "+
 				"would leave %d block slot(s), below the %d a swap needs", want, after, minSlots)
 			return false
