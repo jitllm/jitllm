@@ -141,15 +141,6 @@ func (g *devTier) settleScratch(d int64) {
 func (g *devTier) dropScratch(bs *blockScratch) {
 	defer g.scratchWin().close()
 	if bs != nil {
-		// A part launching in an instance of bs goes with it.
-		g.eachLane(func(l *lane) {
-			for sk, sv := range l.served {
-				if sv != nil && !sv.own && sv.inst != nil && bs.prompt[sv.f] == sv.inst {
-					delete(l.served, sk)
-					g.dropPart(sv)
-				}
-			}
-		})
 		for f := range bs.prompt {
 			g.dropPromptInst(bs, f)
 		}
