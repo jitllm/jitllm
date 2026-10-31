@@ -14,8 +14,10 @@ import (
 // llama.cpp and between tiers compare argmax, so Temp == 0 short-circuits to
 // Greedy before any other field is read.
 //
-// The filters run in llama.cpp's order (penalty, top-k, min-p, top-p), so a
-// prompt behaves comparably across engines.
+// The filters run in llama.cpp's order (penalty, top-k, top-p, min-p, then the
+// temperature), so a prompt behaves comparably across engines: top-p and min-p
+// cut the candidates' softmax at temperature 1, and the temperature shapes
+// only the draw over what survives them.
 //
 // Every vocabulary-sized operation is generated code: the ordering is a
 // segmented selection that takes only as many candidates as the cuts consume
@@ -48,6 +50,7 @@ type Sampler struct {
 	draw nn.SampleDraw
 	ids  []int32   // the candidates, descending
 	p    []float32 // their probabilities, descending
+	q    []float32 // a top-k's softmax at temperature 1, which the cuts read
 	pen  []float32 // the penalized logits, only when RepeatPen > 1
 	pall []float32 // the whole row's softmax, only when top-k is disabled
 }
@@ -103,42 +106,59 @@ func (s *Sampler) Sample(logits []float32) int32 {
 		vals = s.pen
 	}
 
-	// With a top-k the distribution is the softmax over those k alone. Without
-	// one it is the softmax over the whole vocabulary, which a prefix of the
-	// candidates cannot see, so that path computes the row's probabilities
-	// once and hands the total mass to the draw kernel.
-	bounded := s.TopK > 0 && s.TopK < n
-	order, minp, topp := vals, float32(s.MinP), float32(math.Inf(1))
-	if s.TopP > 0 && s.TopP < 1 {
-		topp = float32(s.TopP)
-	}
-	if !bounded {
-		s.pall = grow32(s.pall, n)
-		copy(s.pall, vals)
-		nn.Scale32JIT(s.pall, float32(1/s.Temp))
-		nn.Softmax32JIT(s.pall, n)
-		order = s.pall
-	}
-
-	s.ord.Begin(order)
-
-	// One uniform draw per call: every round of the growth loop must use the
+	// One uniform draw per call: every round of a growth loop must use the
 	// same u, or the stream would advance by a data-dependent amount.
 	u := float32(s.rng.Float64())
 
-	// The whole row's mass is only the divisor when no cut fires, so it is
-	// computed lazily, after a round comes back uncut.
-	sumAll, haveSum := float32(-1), bounded
-
-	want := sampleGrowStart
-	if bounded {
-		want = s.TopK
+	minp, topp := float32(s.MinP), float32(math.Inf(1))
+	if s.TopP > 0 && s.TopP < 1 {
+		topp = float32(s.TopP)
 	}
-	have := 0
+	// With a top-k the distribution is the softmax over those k alone.
+	if s.TopK > 0 && s.TopK < n {
+		s.ord.Begin(vals)
+		s.ids, s.p = grow32i(s.ids, s.TopK), grow32(s.p, s.TopK)
+		have := 0
+		for have < s.TopK {
+			v, id, ok := s.ord.Next()
+			if !ok {
+				break
+			}
+			s.ids[have], s.p[have] = id, v
+			have++
+		}
+		if have == 0 {
+			return 0
+		}
+		return s.drawBounded(have, u)
+	}
+	// Without one it is the softmax over the whole vocabulary, which a prefix
+	// of the candidates cannot see: the cuts read the row's at temperature 1,
+	// and a draw no cut decides reads it at the temperature.
+	if minp > 0 || topp < 1 {
+		if m := s.cutRow(vals, minp, topp); m > 0 {
+			for i := range m {
+				s.p[i] = vals[s.ids[i]]
+			}
+			return s.drawTempered(m, u)
+		}
+	}
+	return s.drawRow(vals, u)
+}
+
+// cutRow orders the row's softmax at temperature 1 into s.ids and s.p only as
+// deep as top-p and min-p reach, and returns how many candidates survive
+// them, 0 when neither fires anywhere in the row. The candidates already
+// taken stay as a round grows the list: a buffer reallocated there once lost
+// them.
+func (s *Sampler) cutRow(vals []float32, minp, topp float32) int {
+	n := len(vals)
+	s.pall = grow32(s.pall, n)
+	copy(s.pall, vals)
+	nn.Softmax32JIT(s.pall, n)
+	s.ord.Begin(s.pall)
+	have, want := 0, min(sampleGrowStart, n)
 	for {
-		// The candidates already taken stay: a round grows the list, and a
-		// buffer reallocated here once lost them, so the first draw a Sampler
-		// made past its first round walked zeros.
 		s.ids = slices.Grow(s.ids[:have], want-have)[:want]
 		s.p = slices.Grow(s.p[:have], want-have)[:want]
 		for have < want {
@@ -152,62 +172,79 @@ func (s *Sampler) Sample(logits []float32) int32 {
 		if have == 0 {
 			return 0
 		}
-		if bounded {
-			return s.drawBounded(have, u)
+		if r := s.draw.Run(s.p[:have], minp, topp, 0, -1); r.Cut {
+			return max(r.M, 1) // MinP > 1 cuts everything; the best is kept
 		}
-		r := s.draw.Run(s.p[:have], minp, topp, u, sumAll)
-		if !r.Cut && !haveSum {
-			// The cuts did not decide it, so the divisor is the whole row's
-			// mass. Mass skips the kernel's walk.
-			sumAll, haveSum = s.draw.Mass(s.pall), true
-			continue
+		if have < want || have == n {
+			return 0
 		}
-		// A cut decides the surviving set on its own; without one, a walk that
-		// terminated inside the prefix has already found its token, because
-		// every candidate below the prefix is below the one it landed on.
-		if r.Cut || r.Resolved || have == n {
-			res := r.Res
-			if res < 0 {
-				res = 0 // MinP > 1 cuts everything; the Go loop indexed c[-1]
+		want = min(2*want, n)
+	}
+}
+
+// drawRow is a draw no cut decides: the whole row's softmax at the
+// temperature, ordered only as deep as the walk at u reaches, its divisor the
+// row's mass.
+func (s *Sampler) drawRow(vals []float32, u float32) int32 {
+	n := len(vals)
+	s.pall = grow32(s.pall, n)
+	copy(s.pall, vals)
+	nn.Scale32JIT(s.pall, float32(1/s.Temp))
+	nn.Softmax32JIT(s.pall, n)
+	s.ord.Begin(s.pall)
+	sumAll := s.draw.Mass(s.pall)
+	have, want := 0, min(sampleGrowStart, n)
+	for {
+		s.ids = slices.Grow(s.ids[:have], want-have)[:want]
+		s.p = slices.Grow(s.p[:have], want-have)[:want]
+		for have < want {
+			v, id, ok := s.ord.Next()
+			if !ok {
+				break
 			}
-			if res >= have {
-				res = have - 1
-			}
-			return s.ids[res]
+			s.ids[have], s.p[have] = id, v
+			have++
 		}
-		// Not enough candidates to decide. Take twice as many; the ordering
-		// resumes rather than sweeping the vocabulary again.
-		want *= 2
-		if want > n {
-			want = n
+		if have == 0 {
+			return 0
 		}
-		if have == want {
-			return s.ids[have-1]
+		// A walk that terminated inside the prefix has found its token: every
+		// candidate below the prefix is below the one it landed on.
+		r := s.draw.Run(s.p[:have], 0, float32(math.Inf(1)), u, sumAll)
+		if r.Resolved || have < want || have == n {
+			return s.ids[min(max(r.Res, 0), have-1)]
 		}
+		want = min(2*want, n)
 	}
 }
 
 // drawBounded is the end of a top-k draw: the candidates are the k best
-// logits in s.ids and s.p, best first, and the distribution is the softmax
-// over exactly these k at temperature T, cut by min-p and top-p and walked at
-// u. Sample and SampleFrom both end here, so a device's candidates draw what
-// the host's would.
+// logits in s.ids and s.p, best first. Top-p and min-p cut their softmax at
+// temperature 1, and the draw at u is over the survivors' softmax at the
+// temperature. Sample and SampleFrom both end here, so a device's candidates
+// draw what the host's would.
 func (s *Sampler) drawBounded(have int, u float32) int32 {
 	topp := float32(math.Inf(1))
 	if s.TopP > 0 && s.TopP < 1 {
 		topp = float32(s.TopP)
 	}
-	nn.Scale32JIT(s.p[:have], float32(1/s.Temp))
-	nn.Softmax32JIT(s.p[:have], have)
-	r := s.draw.Run(s.p[:have], float32(s.MinP), topp, u, -1)
-	res := r.Res
-	if res < 0 {
-		res = 0 // MinP > 1 cuts everything; the Go loop indexed c[-1]
+	s.q = grow32(s.q, have)
+	copy(s.q, s.p[:have])
+	nn.Softmax32JIT(s.q, have)
+	m := have
+	if r := s.draw.Run(s.q, float32(s.MinP), topp, 0, -1); r.Cut {
+		m = max(r.M, 1) // MinP > 1 cuts everything; the best is kept
 	}
-	if res >= have {
-		res = have - 1
-	}
-	return s.ids[res]
+	return s.drawTempered(m, u)
+}
+
+// drawTempered draws at u from the softmax at the temperature over the m
+// candidate logits in s.p, best first.
+func (s *Sampler) drawTempered(m int, u float32) int32 {
+	nn.Scale32JIT(s.p[:m], float32(1/s.Temp))
+	nn.Softmax32JIT(s.p[:m], m)
+	r := s.draw.Run(s.p[:m], 0, float32(math.Inf(1)), u, -1)
+	return s.ids[min(max(r.Res, 0), m-1)]
 }
 
 // Bounded reports whether a draw over n logits is a top-k draw, the one a

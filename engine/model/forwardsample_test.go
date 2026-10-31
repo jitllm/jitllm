@@ -20,9 +20,9 @@ import (
 //
 // The candidates are then held to the definition rather than to the shared
 // draw: two thousand seeds drawn from the last step's candidates must all land
-// in the top-p nucleus of the tempered softmax over them, computed here in
-// float64. The host and device arms share drawBounded, so only this half sees
-// a broken cut.
+// in what llama.cpp's order keeps of them -- top-p, then min-p, over their
+// softmax at temperature 1 -- computed here in float64. The host and device
+// arms share drawBounded, so only this half sees a broken cut.
 func TestForwardSampleMatchesSampleOverForward(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "gemma-2-2b-it-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) { forwardSampleMatches(t, name) })
@@ -148,16 +148,17 @@ func forwardSampleMatches(t *testing.T, name string) {
 	}
 }
 
-// topPNucleus is the tokens a top-k/min-p/top-p draw over these candidates
-// may return, by the definition in float64: the tempered softmax over the k,
-// min-p's floor against the best, and the smallest prefix whose mass reaches
-// top-p -- widened by one past the boundary, where float32 rounding may
-// legitimately keep one more.
+// topPNucleus is the tokens a top-k/top-p/min-p draw over these candidates
+// may return, by llama.cpp's order in float64: their softmax at temperature
+// 1, the smallest prefix whose mass reaches top-p, then min-p's floor against
+// the best -- the temperature shapes only the draw over what survives --
+// widened by one past the boundary, where float32 rounding may legitimately
+// keep one more.
 func topPNucleus(vals []float32, ids []uint32, s *Sampler) map[int32]bool {
 	p := make([]float64, len(vals))
 	sum := 0.0
 	for i, v := range vals {
-		p[i] = math.Exp((float64(v) - float64(vals[0])) / s.Temp)
+		p[i] = math.Exp(float64(v) - float64(vals[0]))
 		sum += p[i]
 	}
 	for i := range p {
@@ -166,27 +167,23 @@ func topPNucleus(vals []float32, ids []uint32, s *Sampler) map[int32]bool {
 	if !sort.SliceIsSorted(p, func(a, b int) bool { return p[a] > p[b] }) {
 		panic("candidates not best first")
 	}
-	keep := len(p)
+	cut, mass := len(p), 0.0
 	for i := range p {
+		mass += p[i]
+		if mass >= s.TopP {
+			cut = i + 1
+			break
+		}
+	}
+	keep := cut
+	for i := range cut {
 		if p[i] < s.MinP*p[0] {
 			keep = i
 			break
 		}
 	}
-	mass, total := 0.0, 0.0
-	for i := range keep {
-		total += p[i]
-	}
-	cut := keep
-	for i := range keep {
-		mass += p[i]
-		if mass/total >= s.TopP {
-			cut = i + 1
-			break
-		}
-	}
 	out := map[int32]bool{}
-	for i := range min(cut+1, keep) {
+	for i := range min(keep+1, len(p)) {
 		out[int32(ids[i])] = true
 	}
 	return out

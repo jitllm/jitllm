@@ -326,6 +326,38 @@ func TestSamplerTopKThenTopP(t *testing.T) {
 	}
 }
 
+// TestSamplerCutsBeforeTheTemperature pins llama.cpp's order of the cuts and
+// the temperature: top-p and min-p read the softmax at temperature 1, and the
+// temperature shapes only the draw over their survivors. At temperature 4 the
+// tempered softmax is flat enough that the same top-p would keep four of
+// these five and the same min-p all five; at temperature 1 each keeps two,
+// drawn in the tempered proportion e^(3/4) : e^(2/4). Run with a top-k and
+// over the whole row, the two paths that cut.
+func TestSamplerCutsBeforeTheTemperature(t *testing.T) {
+	logits := []float32{3, 2, 1, 0, -1}
+	want0 := math.Exp(0.75) / (math.Exp(0.75) + math.Exp(0.5))
+	for _, tc := range []struct {
+		name       string
+		topk       int
+		topp, minp float64
+	}{
+		{"top-p over a top-k", 4, 0.8, 0},
+		{"top-p over the row", 0, 0.8, 0},
+		{"min-p over a top-k", 4, 0, 0.2},
+		{"min-p over the row", 0, 0, 0.2},
+	} {
+		s := &Sampler{Temp: 4, TopK: tc.topk, TopP: tc.topp, MinP: tc.minp, Seed: 43}
+		got := support(s, logits, smallN)
+		if !sameSet(got, []int32{0, 1}) {
+			t.Errorf("%s at temperature 4 drew %v, want [0 1]: the cut read the tempered softmax", tc.name, keys(got))
+			continue
+		}
+		if f := float64(got[0]) / smallN; math.Abs(f-want0) > 0.01 {
+			t.Errorf("%s drew token 0 at %.4f, want %.4f: the survivors are not drawn at the temperature", tc.name, f, want0)
+		}
+	}
+}
+
 // TestSamplerIsDeterministic: the same seed and the same logits give the same
 // sequence, in one process, twice, and across two independent Samplers.
 func TestSamplerIsDeterministic(t *testing.T) {
