@@ -84,12 +84,28 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer mk.Close()
+				closeK := func() {
+					if mk != nil {
+						mk.Close()
+						mk = nil
+					}
+				}
+				defer closeK()
 				// An all-float model (the synth fixtures, every tensor F32) has
 				// no fused packed matvec, which is the only kernel k-slicing
 				// splits; the host arm above is its whole decode.
 				if !anyPackedBlock(mk) {
 					t.Skip("every block weight is float: there is no fused packed matvec to split over k")
+				}
+				// A mixture whose only packed weights are its expert banks runs
+				// them in the batched regions, which are not split over k: the
+				// per-expert loop is where the pin reaches them.
+				if !anyDensePacked(mk) {
+					closeK()
+					mk, err = Open(jlmOf(t, p), noTune, resident, WithJITOptions(nn.WithFusedKSlices(2), nn.WithMixtureBatch(-1)))
+					if err != nil {
+						t.Fatal(err)
+					}
 				}
 				if decodeAllocs(t, mk, nil).ksliced == 0 {
 					t.Fatal("no matvec of the window was split over k: this arm measured the plain host decode twice")
@@ -812,6 +828,23 @@ func anyPackedBlock(m *Model) bool {
 	for i := range m.layers {
 		l := &m.layers[i]
 		for _, w := range []*tensor{&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down} {
+			if w.packed != nil {
+				return true
+			}
+		}
+	}
+	return m.output.packed != nil
+}
+
+// anyDensePacked is anyPackedBlock without a mixture's expert banks.
+func anyDensePacked(m *Model) bool {
+	for i := range m.layers {
+		l := &m.layers[i]
+		ws := []*tensor{&l.wq, &l.wk, &l.wv, &l.wo}
+		if len(l.experts) == 0 {
+			ws = append(ws, &l.gate, &l.up, &l.down)
+		}
+		for _, w := range ws {
 			if w.packed != nil {
 				return true
 			}
