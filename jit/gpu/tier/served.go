@@ -2283,6 +2283,23 @@ func (l *layer) paged() map[jlm.Role]int {
 	return pg
 }
 
+// pagedHeld is the most sheets block l holds of any bank in pages (paged's
+// largest), 0 for a block whose banks are whole: per step, with nothing made.
+func (l *layer) pagedHeld() int {
+	if l.stream == nil {
+		return 0
+	}
+	n := 0
+	for _, o := range l.graph.Ops {
+		for _, w := range o.Weight {
+			if r := l.roleWeight(w.Role); jlm.ExpertBank(w.Role) && r != nil && w.Rows > 0 {
+				n = max(n, r.nrows/w.Rows)
+			}
+		}
+	}
+	return n
+}
+
 // weightsHeld says block l holds every matrix and vector its graph binds,
 // as servedBlock binds them.
 func (l *layer) weightsHeld() bool {
@@ -3065,11 +3082,8 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	if pl != nil && (!l.linear || l.withAttn) {
 		kk, kv, tab, geom = pl.k, pl.v, pl.tab, pl.geom
 	}
-	paged := l.paged()
-	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs, stream: run != nil}
-	for _, n := range paged {
-		sk.held = max(sk.held, n)
-	}
+	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs, stream: run != nil,
+		held: l.pagedHeld()}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		// The request names no block: blocks of one structure and formats
 		// share a form, each launched on its own bindings, one after
@@ -3081,7 +3095,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": kk, "kv.v": kv, "pages": tab, "rows": rows,
 				"rows.win": rowsW, "q.off": qOff, "rows.n": calls},
 			history: poolHistory(geom),
-			keys:    keys, page: page, seqs: seqs, paged: paged}
+			keys:    keys, page: page, seqs: seqs, paged: l.paged()}
 		if run != nil {
 			sl.history.Passes = true
 			sl.tables["run.in"], sl.tables["run.out"] = run[0], run[1]

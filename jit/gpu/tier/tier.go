@@ -2640,8 +2640,8 @@ func (g *GPU) Census() map[string]int {
 	return out
 }
 
-// LaneParts is, device by device, how many block and head parts each lane
-// holds an instance of, lane0 first. Every lane holds every one the device
+// LaneParts is, device by device, how many blocks and heads each lane holds
+// an instance of a part of, lane0 first (a head's widths count once). Every lane holds every one the device
 // serves: a lane short of one forms it at a step, and one holding more keeps
 // a released block's instance charged. The device's own parts (row copies,
 // tables, tokens) are not counted.
@@ -2651,13 +2651,13 @@ func (g *GPU) LaneParts() [][]int {
 		d.mu.Lock()
 		var n []int
 		d.eachLane(func(l *lane) {
-			k := 0
+			seen := map[*graph.Graph]bool{}
 			for sk, sv := range l.served {
 				if sv != nil && (sk.kind == partBlock || sk.kind == partHead) {
-					k++
+					seen[sk.graph] = true
 				}
 			}
-			n = append(n, k)
+			n = append(n, len(seen))
 		})
 		d.mu.Unlock()
 		out = append(out, n)

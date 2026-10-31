@@ -488,6 +488,9 @@ type kvCache struct {
 	names  map[[16]byte]string
 	probes []int
 	wr     sliceWriter
+	// rd is a sealed page's reader for the store's Set, which takes the
+	// bytes before it returns: kept, so sealing allocates nothing.
+	rd bytes.Reader
 	// lo is the first block this cache holds pages for: zero for a trunk, the
 	// first prediction block for a draft State (State.lo). layers is indexed by
 	// block, so the slice runs from zero and the blocks below lo stay empty.
@@ -2014,11 +2017,11 @@ func (kc *kvCache) seal(pos int) {
 				kc.stored += 2
 				continue
 			}
-			if err := kc.store.Set(key, li*2, n, bytes.NewReader(kvBytesOf(s.k[n]))); err != nil {
+			if err := kc.store.Set(key, li*2, n, kc.page(s.k[n])); err != nil {
 				kc.failed++
 				break
 			}
-			if err := kc.store.Set(key, li*2+1, n, bytes.NewReader(kvBytesOf(s.v[n]))); err != nil {
+			if err := kc.store.Set(key, li*2+1, n, kc.page(s.v[n])); err != nil {
 				kc.failed++
 				break
 			}
@@ -2440,11 +2443,11 @@ func (kc *kvCache) sealTail(pos int) int {
 		}
 		for i, key := range keys {
 			n := lens[i]
-			if err := kc.store.Set(key, li*2, cur, bytes.NewReader(kvBytesOf(s.k[cur][:n]))); err != nil {
+			if err := kc.store.Set(key, li*2, cur, kc.page(s.k[cur][:n])); err != nil {
 				kc.failed++
 				continue
 			}
-			if err := kc.store.Set(key, li*2+1, cur, bytes.NewReader(kvBytesOf(s.v[cur][:n]))); err != nil {
+			if err := kc.store.Set(key, li*2+1, cur, kc.page(s.v[cur][:n])); err != nil {
 				kc.failed++
 				continue
 			}
@@ -2635,6 +2638,12 @@ func (kc *kvCache) digestHead(p, fill int) hash.Hash {
 	kc.hbuf = b
 	x.Write(b)
 	return x
+}
+
+// page is the cache's reader over a sealed page's floats, for one Set.
+func (kc *kvCache) page(f []float32) *bytes.Reader {
+	kc.rd.Reset(kvBytesOf(f))
+	return &kc.rd
 }
 
 // digestName is the key of what x has been fed so far; Sum leaves x as it
@@ -2851,8 +2860,7 @@ func (s *State) sealLogits(pos int, lg []float32) {
 	if key == "" {
 		return
 	}
-	if err := s.kv.store.Set(key, s.logitsLayer(), cur,
-		bytes.NewReader(kvBytesOf(lg))); err != nil {
+	if err := s.kv.store.Set(key, s.logitsLayer(), cur, s.kv.page(lg)); err != nil {
 		s.kv.failed++
 	}
 }

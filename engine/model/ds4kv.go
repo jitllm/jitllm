@@ -1,7 +1,6 @@
 package model
 
 import (
-	"bytes"
 	"errors"
 
 	"github.com/jitllm/jitllm/jit/cpu"
@@ -119,7 +118,7 @@ func (kc *kvCache) entSeal(pos int) {
 			if key == "" {
 				break
 			}
-			if err := kc.store.Set(key, kc.entStoreLayer(li), n, bytes.NewReader(kvBytesOf(e.k[n]))); err != nil {
+			if err := kc.store.Set(key, kc.entStoreLayer(li), n, kc.page(e.k[n])); err != nil {
 				kc.failed++
 				break
 			}
@@ -157,7 +156,7 @@ func (kc *kvCache) entSealTail(pos int) int {
 			if key == "" {
 				continue
 			}
-			if err := kc.store.Set(key, kc.entStoreLayer(li), cur, bytes.NewReader(kvBytesOf(e.k[cur][:f*row]))); err != nil {
+			if err := kc.store.Set(key, kc.entStoreLayer(li), cur, kc.page(e.k[cur][:f*row])); err != nil {
 				kc.failed++
 				continue
 			}
