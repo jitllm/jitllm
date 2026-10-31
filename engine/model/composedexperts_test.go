@@ -618,13 +618,16 @@ const (
 
 // streamOpts is the tier options of arm a for mixture m on dev: for the
 // budget, what m's blocks take there resident, with the arm's parts and graph
-// setting, less half its routed banks.
+// setting and the narrowest prompt scratch, less half its routed banks. The
+// placement halves the prompt width until the blocks fit, so a budget taken
+// at a wider scratch is absorbed by the scratch and no bank ever misses room
+// (a fixture's banks are kilobytes beside it).
 func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts tier.Parts, noGraph bool) []tier.Option {
 	t.Helper()
 	switch a {
 	case streamBudget:
 		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph, c.Census, c.PromptRows = parts, noGraph, true, 64 })},
+			tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph, c.Census, c.PromptRows = parts, noGraph, true, 8 })},
 			testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)
