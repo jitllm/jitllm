@@ -124,6 +124,7 @@ func embedsOnTheDevice(t *testing.T, name string, opts ...tier.Option) {
 		t.Fatalf("the device arm never gathered: %s", g.Err())
 	}
 	nmse, worstAt := 0.0, 0
+	var steps []float64
 	for s := range want {
 		var num, den float64
 		for i := range want[s] {
@@ -134,6 +135,7 @@ func embedsOnTheDevice(t *testing.T, name string, opts ...tier.Option) {
 			num += d * d
 			den += float64(want[s][i]) * float64(want[s][i])
 		}
+		steps = append(steps, num/den)
 		if num/den > nmse {
 			nmse, worstAt = num/den, s
 		}
@@ -141,7 +143,7 @@ func embedsOnTheDevice(t *testing.T, name string, opts ...tier.Option) {
 	// The bound is rounding, not a band: the only difference is whether
 	// scale*q - bias was fused on the card, one ulp of an embedding value.
 	if !(nmse < 1e-6) {
-		t.Fatalf("worst logits NMSE %.3e at step %d (0 the prompt, then 8 decode steps) between the device gather and the host lookup", nmse, worstAt)
+		t.Fatalf("worst logits NMSE %.3e at step %d (0 the prompt, then 8 decode steps; each %.2e) between the device gather and the host lookup", nmse, worstAt, steps)
 	}
 	for i := range wantToks {
 		if gotToks[i] != wantToks[i] {
