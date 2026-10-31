@@ -27,6 +27,15 @@ func (h hostEmbed) Detach() {
 	}
 }
 
+// ChunkRows forwards the device's chunk width: hidden, the host arm ran
+// 512-row chunks under NoBatch where the device arm ran one-row ones.
+func (h hostEmbed) ChunkRows() int {
+	if c, ok := h.LayerDevice.(nn.ChunkLimiter); ok {
+		return c.ChunkRows()
+	}
+	return 0
+}
+
 // HeldBytes completes nn.Session, so the forwarding above is reached at all.
 func (h hostEmbed) HeldBytes() uint64 {
 	if s, ok := h.LayerDevice.(nn.Session); ok {
