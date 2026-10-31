@@ -144,9 +144,9 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*tier.Config)) (*
 		// history can grow only by sending pages home. Evicting needs room to
 		// stream through; a pool of the dummy and one page refuses instead.
 		// The prompt is under a page, so each layer holds one: two more a
-		// layer, and never less than the 8 MiB the dense model was set at.
+		// layer.
 		st := g.Stats()
-		if _, err := g.SetBudget(st.BudgetUsed + max(8<<20, 2*st.KVBytes)); err != nil {
+		if _, err := g.SetBudget(st.BudgetUsed + 2*st.KVBytes); err != nil {
 			t.Fatal(err)
 		}
 	}
