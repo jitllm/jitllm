@@ -304,6 +304,12 @@ func (g *devTier) composedMatrix() [3]int {
 func (g *devTier) composedScale() bool {
 	if g.scaleCap == 0 {
 		g.scaleCap = -1
+		// Not on sm_70's quad-pair accumulators until their row scale is gated
+		// alone: with it the float32 prompt gate's worst step on Qwen3-1.7B
+		// read 0.00522 against its 0.00212 bound, without it 0.000621.
+		if backend.TileQuadPairs(g.dev) {
+			return false
+		}
 		if ok, _ := backend.LowersTile(g.dev, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32, Scale: true}); ok {
 			g.scaleCap = 1
 		}
