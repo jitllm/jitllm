@@ -754,7 +754,7 @@ func (g *devTier) instanceOn(f *partForm, bs *blockScratch) (*partInst, error) {
 	}
 	// Room alone counts a paged-in block as space; a streaming device keeps
 	// the slots its streamed blocks page through (keepsSlot).
-	if need := n + grow; !(g.room(need) && g.keepsSlot(need)) && (g.inSub || g.prologueHeld || !g.stateFits(need, nil)) {
+	if need := n + grow; need > 0 && !(g.room(need) && g.keepsSlot(need)) && (g.inSub || g.prologueHeld || !g.stateFits(need, nil)) {
 		return nil, partRoomError{need}
 	}
 	in := &partInst{}
