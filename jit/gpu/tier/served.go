@@ -1349,6 +1349,18 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	if err != nil {
 		return nil, fail(err)
 	}
+	// A pass's sums run in their loop's order: a split's merge is the
+	// whole history's normalization, not the fold of a pass.
+	if sl.history.Passes {
+		if r != g.composer {
+			r = r.WithoutSplits(jit.DeviceGPU)
+		} else {
+			if g.composerPasses == nil {
+				g.composerPasses = g.composer.WithoutSplits(jit.DeviceGPU)
+			}
+			r = g.composerPasses
+		}
+	}
 	// A form of several rows reads the rows it runs from the call's word: a
 	// part whose call states none runs its form's every row.
 	if _, ok := sl.tables["rows.n"]; !ok {
