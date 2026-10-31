@@ -1102,13 +1102,39 @@ func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, 
 	return ok
 }
 
-// ChunkRows is 1 where Config.NoBatch asks for one prompt row a call, else 0
-// (nn.ChunkLimiter).
+// ChunkRows is how many prompt rows a call takes (nn.ChunkLimiter): 1 where
+// Config.NoBatch asks for a row a call, or where a device holding blocks
+// whose prompt the composer serves reserved no width (no chunk's buffers fit
+// beside its blocks, fitReserved), else 0: a device cuts a wider call into
+// chunks of the width it reserved.
 func (g *GPU) ChunkRows() int {
 	if d := g.dev(0); d != nil && d.NoBatch {
 		return 1
 	}
+	var held [8]*devTier
+	n := 0
+	g.mu.Lock()
+	for _, d := range g.own {
+		if !slices.Contains(held[:n], d) && n < len(held) {
+			held[n] = d
+			n++
+		}
+	}
+	g.mu.Unlock()
+	for _, d := range held[:n] {
+		if d.promptOneRow() {
+			return 1
+		}
+	}
 	return 0
+}
+
+// promptOneRow reports whether the device takes a prompt a row a call: the
+// composer serves its blocks' prompts and no width is reserved for them.
+func (g *devTier) promptOneRow() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.Composed&ComposedPrompt != 0 && !g.ComposedWidths && !g.NoScratchReserve && g.promptW < 2 && len(g.layers) > 0
 }
 
 // PipelineDepth is how many devices hold blocks (nn.Pipeliner): a prompt chunk
