@@ -47,8 +47,15 @@ const evictTurnSteps = 4
 // and the host's: the order-only band is ~2e-3 on this model.
 const evictNMSE = 1e-2
 
-func newEvictGate(t *testing.T) *evictGate {
-	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
+func newEvictGate(t *testing.T) *evictGate { return newEvictGateOf(t, evictModels[0]) }
+
+// evictModels are the checkpoints the eviction gate runs: a dense model and
+// a mixture, whose blocks fold their history in passes through forms of
+// their own.
+var evictModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"}
+
+func newEvictGateOf(t *testing.T, name string) *evictGate {
+	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
@@ -136,7 +143,10 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*tier.Config)) (*
 		// A few pages of slack: the pool fills them, and past them the
 		// history can grow only by sending pages home. Evicting needs room to
 		// stream through; a pool of the dummy and one page refuses instead.
-		if _, err := g.SetBudget(g.Stats().BudgetUsed + 8<<20); err != nil {
+		// The prompt is under a page, so each layer holds one: two more a
+		// layer, and never less than the 8 MiB the dense model was set at.
+		st := g.Stats()
+		if _, err := g.SetBudget(st.BudgetUsed + max(8<<20, 2*st.KVBytes)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -184,7 +194,12 @@ func worstStep(got, want [][]float32) (float64, int) {
 // squeezed and the composer's float reference squeezed are held to the same
 // bound against it.
 func TestKVEvictionRunsPastTheBudget(t *testing.T) {
-	eg := newEvictGate(t)
+	for _, name := range evictModels {
+		t.Run(name, func(t *testing.T) { evictionRunsPastTheBudget(t, newEvictGateOf(t, name)) })
+	}
+}
+
+func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 	free := eg.run(t, false, nil)
 	got := eg.run(t, true, nil)
 	tierArm := eg.run(t, true, func(c *tier.Config) { c.Composed = 0 })
@@ -203,8 +218,8 @@ func TestKVEvictionRunsPastTheBudget(t *testing.T) {
 		t.Errorf("main's tier arm: %d composed passes and %d streamed passes", tierArm.st.ComposedStreamPasses, tierArm.st.KVStreamPasses)
 	}
 	if got.after != got.resident {
-		t.Fatalf("%d of %d blocks on the card after the decode: eviction must not move blocks home",
-			got.after, got.resident)
+		t.Fatalf("%d of %d blocks on the card after the decode: eviction must not move blocks home (%s)",
+			got.after, got.resident, got.st.LastErr)
 	}
 	if got.st.KVEvictions == 0 || got.st.KVStreamPasses == 0 {
 		t.Fatalf("%d evictions and %d streamed passes: the budget never bound (pool %d B)",
@@ -235,22 +250,27 @@ func TestKVEvictionRunsPastTheBudget(t *testing.T) {
 		len(eg.turn), got.turnPasses, got.turnAfter, got.resident)
 	// Passes fold the history in another order than one launch does, and the
 	// difference compounds through the layers: the bound is the device's own
-	// band against the host, which a stale or missing page is far outside.
-	if !(dev < evictNMSE) {
-		t.Fatalf("worst logit NMSE %.3e against the unconstrained card at step %d", dev, at)
+	// band against the host, which a stale or missing page is far outside --
+	// evictNMSE, or where the unconstrained card is already farther from the
+	// host (a mixture's routing turns the order's differences into larger
+	// moves), that distance, measured in this run (the user's decision).
+	bound := max(evictNMSE, ctl)
+	if !(dev < bound) {
+		t.Fatalf("worst logit NMSE %.3e against the unconstrained card at step %d, past %.3e (%d composed passes, %d streamed)",
+			dev, at, bound, got.st.ComposedStreamPasses, got.st.KVStreamPasses)
 	}
-	if !(host < evictNMSE) {
-		t.Fatalf("worst logit NMSE %.3e against the host at step %d", host, hat)
+	if !(host < bound) {
+		t.Fatalf("worst logit NMSE %.3e against the host at step %d, past %.3e", host, hat, bound)
 	}
 	tw, tat := worstStep(got.logits, tierArm.logits)
 	rw, rat := worstStep(got.logits, ref.logits)
 	t.Logf("composed passes: %d, against main's tier squeezed %.3e (step %d), against the float reference squeezed %.3e (step %d)",
 		got.st.ComposedStreamPasses, tw, tat, rw, rat)
-	if !(tw < evictNMSE) {
-		t.Fatalf("worst logit NMSE %.3e against main's tier squeezed at step %d", tw, tat)
+	if !(tw < bound) {
+		t.Fatalf("worst logit NMSE %.3e against main's tier squeezed at step %d, past %.3e", tw, tat, bound)
 	}
-	if !(rw < evictNMSE) {
-		t.Fatalf("worst logit NMSE %.3e against the float reference squeezed at step %d", rw, rat)
+	if !(rw < bound) {
+		t.Fatalf("worst logit NMSE %.3e against the float reference squeezed at step %d, past %.3e", rw, rat, bound)
 	}
 }
 
