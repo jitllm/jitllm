@@ -7824,8 +7824,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	case bs.cs != nil:
 		g.RopeTableUploads += R
 	}
-	// The positions are the call's: a later call states its own or none.
-	g.ropeAxes = nil
+	g.spendAxes(pos, rrows, rag)
 
 	// Retire recordings before the session opens: freeing one is a driver call
 	// that cannot nest inside a session. See dropGraph.

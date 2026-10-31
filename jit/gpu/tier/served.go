@@ -1792,10 +1792,24 @@ func (g *devTier) callAxes(pos, R int, rag *ragStep) []int32 {
 	if rag != nil && len(rag.pos) > 0 {
 		pos = rag.pos[0]
 	}
-	if g.ropeAxesAt != pos || len(g.ropeAxes) < 4*R {
+	// A call the tier cuts into narrower ones takes its rows' positions from
+	// where its first row sits in the caller's.
+	off := pos - g.ropeAxesAt
+	if g.ropeAxes == nil || off < 0 || rag != nil && off != 0 || len(g.ropeAxes) < 4*(off+R) {
 		return nil
 	}
-	return g.ropeAxes[:4*R]
+	return g.ropeAxes[4*off : 4*(off+R)]
+}
+
+// spendAxes drops the caller's rotary positions once a call has run their
+// last row: a later call states its own or none.
+func (g *devTier) spendAxes(pos, R int, rag *ragStep) {
+	if rag != nil && len(rag.pos) > 0 {
+		pos = rag.pos[0]
+	}
+	if rag != nil || pos+R >= g.ropeAxesAt+len(g.ropeAxes)/4 {
+		g.ropeAxes = nil
+	}
 }
 
 // tableBinds is what table i of bs writes and reads: the global table cs or
