@@ -648,8 +648,9 @@ func (g *devTier) growArena(bs *blockScratch, f *partForm, in *partInst) error {
 	return nil
 }
 
-// arenaNeeds is what the arena must add to hold form f's passing buffers.
-func (ar *partArena) needs(f *partForm) uint64 {
+// needs is what the arena must add to hold form f's passing buffers, each
+// priced by foot (the card's footprint of a buffer of that many bytes).
+func (ar *partArena) needs(f *partForm, foot func(int) uint64) uint64 {
 	var n uint64
 	for p, j := range f.arenaAt {
 		if j < 0 {
@@ -659,7 +660,13 @@ func (ar *partArena) needs(f *partForm) uint64 {
 		if ar != nil && j < len(ar.n) {
 			have = ar.n[j]
 		}
-		n += uint64(max(0, f.phys[p].n-have))
+		if want := f.phys[p].n; want > have {
+			add := foot(want)
+			if have > 0 {
+				add -= min(add, foot(have))
+			}
+			n += add
+		}
 	}
 	return n
 }
@@ -743,18 +750,22 @@ func (g *devTier) instance(f *partForm) (*partInst, error) { return g.instanceOn
 // buffers laid on bs's arena (partArena), or with bs nil every buffer its
 // own.
 func (g *devTier) instanceOn(f *partForm, bs *blockScratch) (*partInst, error) {
-	var n, grow uint64
+	// Admitted at what the card spends, the driver's page rounding included,
+	// as a block's weights are: an instance admitted at its bytes put the card
+	// past its budget by the rounding of its small buffers.
+	var n, foot, grow uint64
 	for p, b := range f.phys {
 		if bs == nil || f.arenaAt[p] < 0 {
 			n += uint64(b.n)
+			foot += g.footprint(b.n)
 		}
 	}
 	if bs != nil {
-		grow = bs.arena.needs(f)
+		grow = bs.arena.needs(f, g.footprint)
 	}
 	// Room alone counts a paged-in block as space; a streaming device keeps
 	// the slots its streamed blocks page through (keepsSlot).
-	if need := n + grow; need > 0 && !(g.room(need) && g.keepsSlot(need)) && (g.inSub || g.prologueHeld || !g.stateFits(need, nil)) {
+	if need := foot + grow; need > 0 && !(g.room(need) && g.keepsSlot(need)) && (g.inSub || g.prologueHeld || !g.stateFits(need, nil)) {
 		return nil, partRoomError{need}
 	}
 	in := &partInst{}
@@ -767,7 +778,7 @@ func (g *devTier) instanceOn(f *partForm, bs *blockScratch) (*partInst, error) {
 		if err != nil {
 			// A driver's refusal inside the budget is no room either.
 			in.free()
-			return nil, partRoomError{n + grow}
+			return nil, partRoomError{foot + grow}
 		}
 		g.poisonBuf(d, b.n)
 		in.phys = append(in.phys, d)
@@ -786,7 +797,7 @@ func (g *devTier) instanceOn(f *partForm, bs *blockScratch) (*partInst, error) {
 	if bs != nil {
 		if err := g.growArena(bs, f, in); err != nil {
 			in.free()
-			return nil, partRoomError{n + grow}
+			return nil, partRoomError{foot + grow}
 		}
 	}
 	in.bytes = n
@@ -2656,11 +2667,11 @@ func (g *devTier) prewarmComposed() {
 // seam grown back), which a step would otherwise meet first. A form that
 // does not build is named in LastErr and leaves the other blocks to form.
 // Callers hold g.mu.
-func (g *devTier) prewarmComposedBlock(li int) {
+func (g *devTier) prewarmComposedBlock(li int) (roomless string) {
 	bs, l := g.bs, g.layers[li]
 	if g.NoPromptPrewarm || g.Composed&(ComposedBlock|ComposedPrompt) == 0 || bs == nil || bs.pkv == nil ||
 		g.kvp == nil || l == nil {
-		return
+		return ""
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
@@ -2673,7 +2684,10 @@ func (g *devTier) prewarmComposedBlock(li int) {
 			g.kvp.p, 1, 0)
 		if err != nil {
 			g.LastErr = "the composed block: " + err.Error()
-			return
+			if errors.As(err, new(partRoomError)) {
+				return fmt.Sprintf("block %d: its composed part does not fit beside the blocks placed (%s)", li, err)
+			}
+			return ""
 		}
 		if !sv.f.inPlace(0, 0) {
 			if _, err := g.servedCopy(bs, 1); err != nil {
@@ -2714,6 +2728,7 @@ func (g *devTier) prewarmComposedBlock(li int) {
 			}
 		}
 	})
+	return ""
 }
 
 // prewarmPromptBlock forms block li's part at the rows of bb, a prompt
