@@ -350,6 +350,13 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 	}
 	g.mu.Unlock()
 	for _, mayPage := range [2]bool{false, true} {
+		// A mixture block no card holds resident is paged an expert at a time
+		// (AutoStream), not whole: a whole page reads every expert again, a
+		// stream only the selected ones. The model offers it again streamed
+		// when this refuses it.
+		if mayPage && g.streamsInstead(li, p) {
+			return false
+		}
 		for i := start; i < end; i++ {
 			d := g.devs[i]
 			d.mu.Lock()
@@ -592,7 +599,7 @@ func (g *GPU) DeclineSize(li int, total, bank uint64) string {
 // really has left once placement ends. blocks and meanBase are kept for the
 // report.
 func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int, meanBase uint64) bool {
-	if g.NoAutoStream || len(g.devs) == 0 || bank >= total || nExpert <= nUsed || nUsed < 1 || nUsed < 2 && g.Composed&ComposedBlock == 0 {
+	if !g.autoStreams(nExpert, nUsed) || bank >= total {
 		return false
 	}
 	base := total - bank
@@ -620,6 +627,26 @@ func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int,
 		d.mu.Unlock()
 	}
 	return true
+}
+
+// autoStreams says a mixture of nExpert experts, nUsed a token, is one
+// AutoStream streams: a top-1 router only where the composer runs the block.
+func (g *GPU) autoStreams(nExpert, nUsed int) bool {
+	return !g.NoAutoStream && len(g.devs) > 0 && nExpert > nUsed && nUsed >= 1 && (nUsed >= 2 || g.Composed&ComposedBlock != 0)
+}
+
+// streamsInstead says block li, refused resident on every card, is a mixture
+// the model streams rather than one a card pages whole: neither streamed by
+// the tier's configuration nor marked by AutoStream or a placement yet.
+func (g *GPU) streamsInstead(li int, p *nn.LayerPlan) bool {
+	if g.StreamExperts || !g.autoStreams(p.NExpert, p.NExpertUsed) {
+		return false
+	}
+	d := g.devs[0]
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, auto := d.autoStream[li]
+	return !auto && !d.stream[li]
 }
 
 // expertMode is where a streamed block's routed experts run.
