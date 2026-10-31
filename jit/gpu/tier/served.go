@@ -1305,6 +1305,14 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	g.served[sk] = nil
 	fail := func(err error) error {
+		// Room is a decline a later call may not meet: nothing is
+		// remembered, and nothing failed to build.
+		var room partRoomError
+		if errors.As(err, &room) {
+			delete(g.served, sk)
+			g.LastErr = err.Error()
+			return err
+		}
 		err = g.buildFailed(err)
 		if g.formErr == nil {
 			g.formErr = map[servedKey]error{}
