@@ -95,21 +95,27 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 		}
 		// Teacher-forced on the decode arm's tokens, so a near-tie that one
 		// arm breaks the other way cannot send the arms down different
-		// texts: every step reads the history the prompt wrote.
+		// texts: every step reads the history the prompt wrote. Each device
+		// arm is held to the CPU device, not to another device arm, whose
+		// gap adds both arms' errors (the user's decision).
+		for _, a := range []struct {
+			name string
+			o    out
+		}{{"decoding the prompt", dec}, {"the ragged tail", on}, {"the batched chunk", off}} {
+			if w := far(a.o); !(w < tailBand) {
+				t.Fatalf("n=%d: %s reads NMSE %.3e from the CPU device, past %.0e", n, a.name, w, tailBand)
+			}
+		}
 		worst, chunkWorst := nmseF32(dec.last, on.last), nmseF32(dec.last, off.last)
 		for i := range dec.steps {
 			worst = max(worst, nmseF32(dec.steps[i], on.steps[i]))
 			chunkWorst = max(chunkWorst, nmseF32(dec.steps[i], off.steps[i]))
 		}
-		if !(worst < tailBand) {
-			t.Fatalf("n=%d: the ragged tail's logits are NMSE %.3e from the prompt decoded a token at a time "+
-				"(the batched chunk's: %.3e)", n, worst, chunkWorst)
-		}
 		t.Logf("n=%d: worst NMSE against decoding the prompt %.2e with the ragged tail, %.2e with the chunk", n, worst, chunkWorst)
 	}
 }
 
-// tailBand is the NMSE a device prompt's logits may sit from the same prompt
-// decoded a token at a time: the reduction-order band, which on a V100 read up
-// to 2.6e-3 for either form of the chunk.
+// tailBand is the NMSE a device arm's logits may sit from the CPU device's on
+// the same tokens: the reduction-order band, which on a V100 read up to
+// 8.3e-3 (decode at n=4).
 const tailBand = 1e-2
