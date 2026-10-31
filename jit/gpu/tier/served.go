@@ -752,8 +752,10 @@ func (g *devTier) instanceOn(f *partForm, bs *blockScratch) (*partInst, error) {
 	if bs != nil {
 		grow = bs.arena.needs(f)
 	}
-	if !g.room(n+grow) && (g.inSub || g.prologueHeld || !g.stateFits(n+grow, nil)) {
-		return nil, partRoomError{n + grow}
+	// Room alone counts a paged-in block as space; a streaming device keeps
+	// the slots its streamed blocks page through (keepsSlot).
+	if need := n + grow; !(g.room(need) && g.keepsSlot(need)) && (g.inSub || g.prologueHeld || !g.stateFits(need, nil)) {
+		return nil, partRoomError{need}
 	}
 	in := &partInst{}
 	at := make([]backend.Buf, len(f.phys))
