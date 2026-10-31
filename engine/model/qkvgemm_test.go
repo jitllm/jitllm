@@ -16,7 +16,7 @@ import (
 // is the grid's arithmetic. layers < 0 places every block.
 func qkvGemmPrefill(t *testing.T, m *Model, ids, toks []int32, unsplit, noGraph bool, layers int) (off, on [][]float32, st tier.Stats, placed int) {
 	t.Helper()
-	opts := []tier.Option{tier.WithDevices("cuda"), tier.WithDeviceTune(tier.TuneOff),
+	opts := []tier.Option{tier.WithDevices("cuda"), tier.WithDeviceTune(tier.TuneOff), mainKernels,
 		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph })}
 	if unsplit {
 		opts = append(opts, tier.WithBatchShape(tier.BatchShape{Split: 1}))

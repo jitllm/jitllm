@@ -119,7 +119,7 @@ func oneRowHeadGap(t *testing.T, m *Model, dev string) (float64, int, int) {
 	plan := runsPlan{early: []string{"The capital of France is"},
 		late: "The clerk counted barrels of salt on the upper floor, and", chunk: 3, steps: 2}
 	run := func(off bool) ([][]float32, int) {
-		g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+		g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff), mainKernels,
 			tier.WithConfig(func(c *tier.Config) { c.NoRagHeadOne = off }))
 		if err != nil || g == nil {
 			noDevice(t, dev, err)

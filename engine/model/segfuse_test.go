@@ -38,7 +38,7 @@ func TestSegFusedPairsOnDevice(t *testing.T) {
 			}
 			defer m.Close()
 			run := func(fuse bool) ([][]float32, tier.Stats) {
-				opts := []tier.Option{tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
+				opts := []tier.Option{tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff), mainKernels,
 					tier.WithSplit(1)}
 				if !fuse {
 					opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoSegFuse = true }))

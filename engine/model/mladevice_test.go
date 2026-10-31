@@ -457,7 +457,7 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 			}
 			want := teacherForce(t, m, ids)
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), mainKernels)
 				if err != nil || gpu == nil {
 					continue
 				}

@@ -38,7 +38,7 @@ func TestStepFusesAsDecodeDoes(t *testing.T) {
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
 			arm := func(noFuse bool) ([][]float32, tier.Stats) {
-				g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
+				g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), mainKernels,
 					tier.WithConfig(func(c *tier.Config) { c.NoRagFuse = noFuse }))
 				if err != nil || g == nil {
 					noDevice(t, spec, err)
