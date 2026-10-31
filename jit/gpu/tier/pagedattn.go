@@ -115,6 +115,11 @@ type pagedScratch struct {
 	// streamDesc are the passes' descriptor buffers, full [0] and windowed
 	// [1], grown to the most passes a call has run.
 	streamDesc [2][]backend.Buf
+	// run is a composed form's running partial over the passes
+	// (jit.History.Passes): run[0] the empty partial it starts from, run[1]
+	// and run[2] the folds' two sides, each runN floats.
+	run  [3]backend.Buf
+	runN int
 }
 
 // pagedVariant is one decode plan's attention (kernels.ChooseDecodePlan):
@@ -391,6 +396,11 @@ func freePaged(pg *pagedScratch) {
 	}
 	for _, bufs := range pg.streamDesc {
 		for _, b := range bufs {
+			b.Free()
+		}
+	}
+	for _, b := range pg.run {
+		if b != nil {
 			b.Free()
 		}
 	}

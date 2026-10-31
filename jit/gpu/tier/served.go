@@ -129,6 +129,9 @@ type partForm struct {
 	// selection, of selN words, and table the own buffer the step's table
 	// "experts" is written to.
 	split, sel, selN, table int
+	// A form over a history read in passes (jit.History.Passes) runs its
+	// codes [passLo, passHi) once a pass (streamRun).
+	passLo, passHi int
 }
 
 // partBuf is one of a form's own buffers: n bytes, holding words where it
@@ -436,8 +439,60 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 			return nil, err
 		}
 	}
+	if sl.history.Passes {
+		if err := f.passHalves(); err != nil {
+			f.close()
+			return nil, err
+		}
+	}
 	f.share(sl.paged != nil)
 	return f, nil
+}
+
+// passHalves finds the codes a form over a history read in passes runs once
+// a pass: from its first code reading the history to its last folding the
+// running partial. A pass writes none of the call's buffers, no table but
+// the pools and the partial, and no buffer a code of the pass reads before.
+func (f *partForm) passHalves() error {
+	f.passLo, f.passHi = -1, -1
+	for ci, args := range f.args {
+		for _, a := range args {
+			if a.kind != partTable {
+				continue
+			}
+			switch a.table {
+			case "rows", "rows.win", "pages", "kv.k", "kv.v":
+				if f.passLo < 0 {
+					f.passLo = ci
+				}
+			case "run.out":
+				if a.writes {
+					f.passHi = ci + 1
+				}
+			}
+		}
+	}
+	if f.passLo < 0 || f.passHi <= f.passLo {
+		return fmt.Errorf("a form over a history read in passes with no pass between codes %d and %d", f.passLo, f.passHi)
+	}
+	read := map[int]bool{}
+	for ci := f.passLo; ci < f.passHi; ci++ {
+		for _, a := range f.args[ci] {
+			if a.kind == partOwn && a.read {
+				read[a.i] = true
+			}
+		}
+		for _, a := range f.args[ci] {
+			switch {
+			case !a.writes:
+			case a.kind == partIn || a.kind == partOut,
+				a.kind == partTable && a.table != "run.out" && a.table != "kv.k" && a.table != "kv.v",
+				a.kind == partOwn && read[a.i]:
+				return fmt.Errorf("the composer's kernel %d of a pass writes what a pass cannot run again over", ci)
+			}
+		}
+	}
+	return nil
 }
 
 // share lays the form's own buffers out on fewer device buffers
@@ -468,6 +523,12 @@ func (f *partForm) share(paged bool) {
 				fresh[a.i] = false
 			}
 			last[a.i] = ci
+		}
+	}
+	// A pass runs again over what was written before it.
+	for i := range last {
+		if f.passHi > 0 && first[i] >= 0 && first[i] < f.passLo && last[i] >= f.passLo {
+			last[i] = max(last[i], f.passHi-1)
 		}
 	}
 	f.slot = make([]int, n)
@@ -1188,8 +1249,9 @@ type servedKey struct {
 	t          jlm.Type
 	// held is the sheets a streamed block holds of its banks in pages, 0
 	// where they are whole.
-	held int
-	seqs int
+	held   int
+	seqs   int
+	stream bool
 }
 
 // partIO is the most inputs, and the most outputs, a served part binds: a
@@ -1314,7 +1376,9 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		g.servedForms[key] = f
 	}
 	var in *partInst
-	if sk.kind != partPrompt {
+	// A form over a history read in passes is laid on its scratch's arena
+	// (streamPart).
+	if sk.kind != partPrompt && !sk.stream {
 		if in, err = g.instance(f); err != nil {
 			if f.refs == 0 {
 				delete(g.servedForms, key)
@@ -1337,7 +1401,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	f.refs++
 	sv := &servedPart{sl: sl, f: f, inst: in, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
 	g.served[sk] = sv
-	if sk.kind == partBlock && sk.graph.Block >= 0 {
+	if sk.kind == partBlock && !sk.stream && sk.graph.Block >= 0 {
 		if b := sk.graph.Block; b >= len(g.blockForms) {
 			g.blockForms = append(g.blockForms, make([]int, b+1-len(g.blockForms))...)
 		}
@@ -2367,8 +2431,8 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 // blockServes is why block li of this step is not one the composer serves
 // whole, serves where it is: a graph from the front end, a block the caller
 // leaves to it, the paged decode -- or a prompt chunk's, which the tier's
-// own kernels would run through its paged prefill attention -- none of its
-// history in host memory, the window the plan holds the block to (windowHeld),
+// own kernels would run through its paged prefill attention -- the window
+// the plan holds the block to (windowHeld),
 // outside the persistent block and a fault probe, and every weight and
 // vector its graph binds held (weightsHeld).
 func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist, prompt bool) partDecline {
@@ -2401,8 +2465,6 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partNoPool
 	case pk.prefill && !prompt:
 		return partPrefill
-	case pk.st != nil:
-		return partStream
 	case !l.windowHeld(li, p):
 		return partWindow
 	}
@@ -2487,9 +2549,18 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	if R > 1 {
 		qOff = bs.roff
 	}
-	sv, err = g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R,
-		rowSeqs(R, one))
+	var run []backend.Buf
+	if bs.inPasses(l) {
+		if run, err = g.runBufs(bs, l, li); err != nil {
+			return nil, nil, nil, fmt.Errorf("%w: %w", errStreamForm, err)
+		}
+	}
+	sv, err = g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R,
+		rowSeqs(R, one), run)
 	if err != nil {
+		if run != nil {
+			err = fmt.Errorf("%w: %w", errStreamForm, err)
+		}
 		return nil, nil, nil, err
 	}
 	if err := sv.f.streamsInPlace(len(l.graph.Out)); err != nil {
@@ -2500,11 +2571,15 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 			return nil, nil, nil, err
 		}
 	}
-	if R == 1 {
+	if R == 1 && run == nil {
 		return sv, sv.inst, cp, nil
 	}
 	return sv, g.promptInst(bs, sv.f), cp, nil
 }
+
+// errStreamForm is a block whose form over passes did not form: it declines
+// as one whose history streams (partStream).
+var errStreamForm = errors.New("the composed block over passes")
 
 // servedCopy is the copy of a block's output from bs.h over x at a step of
 // rows, formed through the composer like any other part, for a form that
@@ -2559,6 +2634,9 @@ func (g *devTier) prewarmComposedBlock(li int) {
 			if _, err := g.servedCopy(bs, 1); err != nil {
 				g.LastErr = "the composed block's copy: " + err.Error()
 			}
+		}
+		if (!l.linear || l.withAttn) && !g.streamServed(l, li, bs) {
+			g.LastErr = "the composed block over passes: " + g.LastErr
 		}
 	}
 	// Every prompt width the lane holds a scratch for, and a ragged step's:
@@ -2636,6 +2714,53 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		if !sv.f.inPlace(0, 0) {
 			if _, err := g.servedCopy(bb, bb.rows); err != nil {
 				g.LastErr = "the composed prompt block's copy: " + err.Error()
+				return false
+			}
+		}
+		if g.promptInst(bb, sv.f) == nil {
+			return false
+		}
+	}
+	if bb.inPasses(l) && !g.streamServed(l, li, bb) {
+		g.promptWhy = partStream
+		return false
+	}
+	return true
+}
+
+// streamServed reports whether the composer serves block li at bb's rows
+// over a history read in passes: its forms over passes (servedStep's where
+// the call's history streams) formed, one a sequences form the rows take,
+// and the scratch's instance of each held, made here where they are not.
+// Callers hold g.mu, outside any submission.
+func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
+	run, err := g.runBufs(bb, l, li)
+	if err != nil {
+		g.LastErr = err.Error()
+		return false
+	}
+	rcs, qOff := bb.cs, bb.zero
+	if bb.csSWA != nil && bb.p.LocalRope(li) {
+		rcs = bb.csSWA
+	}
+	if bb.rows > 1 {
+		qOff = bb.roff
+	}
+	for _, seqs := range [...]int{1, 0} {
+		if seqs == 1 && bb.rows == 1 || seqs == 0 && bb.rows > 1 && !g.raggedAt(bb) {
+			continue
+		}
+		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), qOff, bb.calls, bb.dRows,
+			bb.p.MaxSeq, g.kvp.p, bb.rows, seqs, run)
+		if err != nil {
+			if !errors.Is(err, errFormedEarlier) {
+				g.LastErr = err.Error()
+			}
+			return false
+		}
+		if !sv.f.inPlace(0, 0) {
+			if _, err := g.servedCopy(bb, bb.rows); err != nil {
+				g.LastErr = err.Error()
 				return false
 			}
 		}
@@ -2902,6 +3027,13 @@ func poolHistory(k kvGeom) jit.History {
 // session's capacity is its key bound and no position compiles a form. A
 // prompt chunk's form is its width's, as the tier's kernels are.
 func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R, seqs int) (*servedPart, error) {
+	return g.servedBlockAs(l, li, cs, pl, rows, rowsW, qOff, calls, rec, maxSeq, page, R, seqs, nil)
+}
+
+// servedBlockAs is servedBlock, its history read in passes where run, the
+// running partial's buffers, is set (jit.History.Passes).
+func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R, seqs int,
+	run []backend.Buf) (*servedPart, error) {
 	keys := keyBound(maxSeq)
 	kind := partBlock
 	if R > 1 {
@@ -2915,7 +3047,7 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 		kk, kv, tab, geom = pl.k, pl.v, pl.tab, pl.geom
 	}
 	paged := l.paged()
-	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs}
+	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs, stream: run != nil}
 	for _, n := range paged {
 		sk.held = max(sk.held, n)
 	}
@@ -2931,6 +3063,10 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 				"rows.win": rowsW, "q.off": qOff, "rows.n": calls},
 			history: poolHistory(geom),
 			keys:    keys, page: page, seqs: seqs, paged: paged}
+		if run != nil {
+			sl.history.Passes = true
+			sl.tables["run.in"], sl.tables["run.out"] = run[0], run[1]
+		}
 		if readsPlanes(l.graph) {
 			pl := g.blockPlanes()
 			if pl == nil {
@@ -2986,6 +3122,9 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 	t := sv.sl.tables
 	t["rope.cs"], t["kv.k"], t["kv.v"], t["pages"], t["rows"], t["rows.win"], t["q.off"] = cs, kk, kv, tab, rows, rowsW, qOff
 	t["rows.n"] = calls
+	if run != nil {
+		t["run.in"], t["run.out"] = run[0], run[1]
+	}
 	if l.linear {
 		t["rec.rows"] = rec
 	}

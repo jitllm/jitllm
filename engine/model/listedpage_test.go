@@ -147,6 +147,16 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 		}
 		t.Logf("%s at %d MiB: %d of %d blocks on the card, %d page-ins, %d page-outs, worst logit diff %.3g",
 			card, budget>>20, st.devCount(), nl, ps.PageIns, ps.PageOuts, worst)
+		if composedByDefault {
+			for i, n := range ps.BlockDeclines {
+				if n > 0 {
+					t.Errorf("the composer declined %d paged block step(s): %s", n, tier.DeclineName(i))
+				}
+			}
+			if n := composedBlockSteps(g); n < ntok*nl {
+				t.Errorf("the composer served %d block steps, where %d tokens over %d paged blocks take at least %d", n, ntok, nl, ntok*nl)
+			}
+		}
 
 		// Composed once, then served: each block's one-row part formed once
 		// on the card however often its weights paged, and once more for a

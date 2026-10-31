@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -62,8 +63,9 @@ type pagedStream struct {
 	set     *streamSet
 	s       seqID
 	evicted int
-	passes  int
-	desc    [2][]backend.Buf
+	// passes is how many, each over w pages.
+	passes, w int
+	desc      [2][]backend.Buf
 	// words is each set's descriptors, pass after pass, for desc.
 	words [2][]uint32
 	ids   []uint32
@@ -148,7 +150,7 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow,
 		return err
 	}
 	st := &pg.stream
-	*st = pagedStream{g: g, set: set, s: s, evicted: e, ids: st.ids[:0]}
+	*st = pagedStream{g: g, set: set, s: s, evicted: e, w: w, ids: st.ids[:0]}
 	keys := w * kp.p
 	st.passes = (far + keys) / keys
 	for i, src := range [2][]uint32{pg.desc, pg.descW} {
@@ -338,4 +340,131 @@ func (g *devTier) stagedPassKeys(bs *blockScratch) int {
 		n = devStagedPlane / 4 / max(pg.shape.Rows*pg.shape.Heads, 1)
 	}
 	return max(n/kp.p, 1) * kp.p
+}
+
+// inPasses says block l of this call reads a history with evicted pages, so
+// the composer serves it with its form over passes (servedStep).
+func (bs *blockScratch) inPasses(l *layer) bool {
+	pk := bs.pkv
+	return pk != nil && pk.st != nil && pk.st.evicted > 0 && (!l.linear || l.withAttn)
+}
+
+// runBufs is bs's running partial's buffers for block li's form over
+// passes, grown to its rows' heads: the zeros the first pass folds into,
+// then the folds' two sides. Callers hold g.mu, outside any submission.
+func (g *devTier) runBufs(bs *blockScratch, l *layer, li int) ([]backend.Buf, error) {
+	pg, n := bs.pkv, 0
+	for _, o := range l.graph.Ops {
+		if o.Kind == graph.OpAttend {
+			n = max(n, bs.rows*o.Attr.NHead*(o.Attr.HeadDim+2))
+		}
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("block %d reads a history it attends none of", li)
+	}
+	if pg.runN >= n {
+		return pg.run[:2], nil
+	}
+	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
+	for i, b := range pg.run {
+		if b != nil {
+			b.Free()
+		}
+		pg.run[i] = nil
+	}
+	pg.runN = 0
+	for i := range pg.run {
+		b, err := g.dev.Alloc(n * 4)
+		if err != nil {
+			return nil, err
+		}
+		pg.run[i] = b
+	}
+	if err := pg.run[0].Write(make([]byte, n*4)); err != nil {
+		return nil, err
+	}
+	pg.runN = n
+	return pg.run[:2], nil
+}
+
+// streamRun launches a form over a history read in passes: its codes before
+// the passes, then each pass's codes over the keys the pass holds -- the
+// evicted pages it covers first uploaded into the layer's free ids and the
+// table pointed at them, as streamDecode stages them, the rows' descriptors
+// clipped to the pass and the running partial folded from one side into the
+// other -- then the codes after, which finish from the last fold. pl is the
+// pool the form reads. Callers hold g.mu, inside the submission's session.
+func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind partKind, bs *blockScratch,
+	pl *kvLayerPool, in, out []backend.Buf) error {
+	f, pg := sv.f, bs.pkv
+	st, t := pg.st, sv.sl.tables
+	copy(sv.in[:sv.n], in)
+	copy(sv.out[:sv.m], out)
+	in, out = sv.in[:sv.n], sv.out[:sv.m]
+	rows, rowsW := t["rows"], t["rows.win"]
+	defer func() { t["rows"], t["rows.win"], t["run.in"], t["run.out"] = rows, rowsW, pg.run[0], pg.run[1] }()
+	m0, err := sv.launchCodes(lc, inst, in, out, 0, f.passLo)
+	if err != nil {
+		return err
+	}
+	kp := g.kvPages()
+	kw, vw := pl.geom.kWords(kp.p), pl.geom.vWords(kp.p)
+	off := kp.ranges[st.s].off
+	home := pl.home[st.s]
+	for j := 0; j < st.passes; j++ {
+		if p0, p1 := j*st.w, min((j+1)*st.w, st.evicted); p0 < p1 {
+			// The ids the pass before read are this pass's: wait for it.
+			if j > 0 {
+				if err := s.Sync(); err != nil {
+					return err
+				}
+			}
+			st.ids = append(st.ids[:0], pl.free[:p1-p0]...)
+			for i, id := range st.ids {
+				if pagedFaulted("stream") {
+					break // the violation: the pass reads whatever the ids held
+				}
+				page := home[p0+i]
+				if page == nil {
+					continue // released behind a window every row starts past
+				}
+				if err := s.WriteAt(pl.k, int(id)*kw*4, f32b(page[:kw])); err != nil {
+					return err
+				}
+				if vw > 0 {
+					if err := s.WriteAt(pl.v, int(id)*vw*4, f32b(page[kw:])); err != nil {
+						return err
+					}
+				}
+			}
+			if err := s.WriteAt(pl.tab, (off+p0)*4, u32view(st.ids)); err != nil {
+				return err
+			}
+			g.KVStreamPasses++
+		}
+		t["rows"] = st.desc[0][j]
+		t["rows.win"] = t["rows"]
+		if rowsW == pg.pRowW && len(st.desc[1]) > 0 {
+			t["rows.win"] = st.desc[1][j]
+		}
+		t["run.in"], t["run.out"] = pg.run[0], pg.run[1+j%2]
+		if j > 0 && !pagedFaulted("passfold") {
+			t["run.in"] = pg.run[1+(j+1)%2]
+		}
+		m, err := sv.launchCodes(lc, inst, in, out, f.passLo, f.passHi)
+		if err != nil {
+			return err
+		}
+		m0.matrix, m0.attend = m0.matrix+m.matrix, m0.attend+m.attend
+		g.ComposedStreamPasses++
+	}
+	t["rows"], t["rows.win"] = rows, rowsW
+	m, err := sv.launchCodes(lc, inst, in, out, f.passHi, len(f.codes))
+	if err != nil {
+		return err
+	}
+	g.PartsServed[kind]++
+	g.MatrixLaunches[kind] += m0.matrix + m.matrix
+	g.AttendLaunches[kind] += m0.attend + m.attend
+	return nil
 }
