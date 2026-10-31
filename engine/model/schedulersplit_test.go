@@ -81,9 +81,12 @@ func schedulerOnSplit(t *testing.T, p string) {
 	// reserved at placement, the driver's page rounding, the head, the history
 	// and the recurrent states (tier/scratch.go) -- so a share of the model is
 	// that share of the weights plus what the whole model costs a card beside
-	// its weights.
+	// its weights, measured at the narrowest prompt scratch: the placement
+	// halves the scratch until blocks fit, so a share taken at a wider one
+	// left room for every block and the paging arm paged nothing.
 	var sc uint64
-	if g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff)); err == nil && g != nil {
+	if g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
+		tier.WithConfig(func(c *tier.Config) { c.PromptRows = 8 })); err == nil && g != nil {
 		sz := NewScheduler(m, rows, seq)
 		if err := sz.st.SetDeviceLayers(g, -1); err == nil && g.Stats().BudgetUsed > m.WeightBytes() {
 			sc = g.Stats().BudgetUsed - m.WeightBytes()
