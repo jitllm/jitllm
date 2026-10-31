@@ -557,6 +557,13 @@ func TestComposedBlocksServe(t *testing.T) {
 			var panel []prompt
 			for pi, text := range servePanel {
 				ids := m.Vocab.Encode(text, true)
+				// A context the prompt and the panel's steps overrun keeps the
+				// prompt's head, still across several blocks.
+				if c > 0 && len(ids)+panelSteps+4 > c {
+					keep := max(2*flashBlock+1, c-panelSteps-4)
+					t.Logf("prompt %d: %d of its %d tokens in the model's context of %d", pi, keep, len(ids), c)
+					ids = ids[:min(keep, len(ids))]
+				}
 				if len(ids) <= 2*flashBlock {
 					t.Fatalf("prompt %d is %d tokens: it does not cross several blocks of %d positions", pi, len(ids), flashBlock)
 				}
@@ -569,6 +576,9 @@ func TestComposedBlocksServe(t *testing.T) {
 				}
 				if c > 0 {
 					n = min(n, c-len(ids)-4)
+				}
+				if n < 1 {
+					t.Fatalf("prompt %d of %d tokens leaves no step in the model's context of %d", pi, len(ids), c)
 				}
 				if pi == 0 && w > 0 && len(ids)+n > w {
 					t.Logf("the decode runs %d positions past the window of %d", len(ids)+n-w, w)
