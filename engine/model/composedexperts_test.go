@@ -643,6 +643,7 @@ func streamOpts(t *testing.T, m *Model, dev string, a streamArm) []tier.Option {
 		if s.GPULayers() != m.Cfg.NLayer || bank == 0 || used <= bank {
 			t.Fatalf("%s holds %d of %d blocks in %d bytes, %d of them routed banks", dev, s.GPULayers(), m.Cfg.NLayer, used, bank)
 		}
+		t.Logf("experts under a budget: %d bytes resident with %d of routed banks; the budget %d", used, bank, used-bank/2)
 		return []tier.Option{tier.WithBudget(used - bank/2)}
 	case streamCache:
 		e, k := int(m.Cfg.NExpert), int(m.Cfg.NExpertUsed)
@@ -660,7 +661,9 @@ func streamSelected(t *testing.T, st tier.Stats, a streamArm) {
 	t.Helper()
 	switch {
 	case st.StreamBlocks == 0 || st.StreamFills == 0:
-		t.Fatalf("%d blocks placed streamed, %d fills: the configuration under test was not selected", st.StreamBlocks, st.StreamFills)
+		t.Fatalf("%d blocks placed streamed, %d fills: the configuration under test was not selected "+
+			"(%d bytes used, %d declined (%s), %d page-ins, %d page-outs)",
+			st.StreamBlocks, st.StreamFills, st.BudgetUsed, st.Declined, st.DeclineWhy, st.PageIns, st.PageOuts)
 	case st.HybridRuns != 0:
 		t.Fatalf("%d block steps ran their experts on the host", st.HybridRuns)
 	case a == streamCache && st.StreamRowFills == 0:
