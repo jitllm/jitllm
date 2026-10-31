@@ -1,6 +1,7 @@
 package jit_test
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -38,7 +39,9 @@ func TestGuardedPhaseIsTheWarpsOwn(t *testing.T) {
 		}
 		phases := 0
 		for _, code := range codes {
-			if !slices.Contains(code.Passes, "coarsen") {
+			// The phase is coarsened, or a matvec's prologue (the norm
+			// folded into its readers' workgroups).
+			if !slices.Contains(code.Passes, "coarsen") && !slices.Contains(code.Passes, "prologue") {
 				continue
 			}
 			phases++
@@ -55,7 +58,11 @@ func TestGuardedPhaseIsTheWarpsOwn(t *testing.T) {
 			}
 		}
 		if phases == 0 {
-			t.Fatalf("%d wide, window %d: no coarsened phase formed", c.width, c.window)
+			var formed []string
+			for _, code := range codes {
+				formed = append(formed, fmt.Sprintf("%s %v", code.Name, code.Passes))
+			}
+			t.Fatalf("%d wide, window %d: no coarsened or prologue phase formed: %v", c.width, c.window, formed)
 		}
 	}
 }
