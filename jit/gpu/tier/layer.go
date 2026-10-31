@@ -6550,11 +6550,10 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if bs == nil || h == nil {
 		return false
 	}
-	// Every device path of the tier's own head caps the logits before the host
-	// adds the bias, the other order of the model's head (bias, softcap,
-	// scale). No model has both: the pair is declined by name, on the CPU where
-	// the order is the model's, until the cap can follow the bias.
-	if h.Softcap != 0 && h.Bias != nil {
+	// The tier's own head caps the logits before the host adds the bias, the
+	// other order of the model's head (bias, softcap, scale); the composed head
+	// keeps the model's order, and a step it declines with both is refused.
+	if h.Softcap != 0 && h.Bias != nil && g.Composed&ComposedHead == 0 {
 		g.LastErr = "the head states a final softcap and an output bias: the device caps before the host adds the bias, " +
 			"the other order of the model's head, so the head stays on the host"
 		return false
@@ -7841,6 +7840,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	}
 	if head != nil {
 		left = head.Stages &^ applied
+	}
+	// The tier's own head caps on the card and leaves the bias to the host:
+	// the other order of the model's head, which only the composed head keeps.
+	if applied&nn.HeadCap != 0 && left&nn.HeadBias != 0 {
+		return refuse("the head's bias comes before its softcap, which only the composed head applies, and it declined (%s)",
+			DeclineName(int(headWhy)))
 	}
 	argmax := head != nil && head.ArgmaxOnly && g.argmaxOut != nil && R == 1 && left&nn.HeadBias == 0 &&
 		(g.argmaxK != nil || g.Composed&ComposedSample != 0 && rag == nil && !g.prompt && !fold && bs.sampleGraph != nil && head.Sample == bs.sampleGraph)
