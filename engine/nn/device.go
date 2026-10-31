@@ -1819,6 +1819,11 @@ type SessionStepper interface {
 // work at once instead of in turn.
 type Pipeliner interface{ PipelineDepth() int }
 
+// ChunkLimiter says how many rows of one prompt one device call takes, 0 for
+// the device's own width: a device configured to take one row at a time
+// answers 1, and the caller cuts its chunks to that.
+type ChunkLimiter interface{ ChunkRows() int }
+
 // ExpertHolder says whether the device holding block li holds its routed
 // bank, so the host may give the bank's expert pages back with the block's
 // page. A block whose experts run off the card (streamed, hybrid) does not.

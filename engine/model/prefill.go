@@ -1133,6 +1133,9 @@ func (s *State) axpyRows(dst, b []float32, idx []int32, dim, n, chunk int, alpha
 // (nn.Pipeliner). Only then: host blocks between device runs take the chunk
 // whole.
 func (s *State) deviceChunk() int {
+	if l, ok := s.ld.(nn.ChunkLimiter); ok && l.ChunkRows() > 0 {
+		return l.ChunkRows()
+	}
 	if p, ok := s.ld.(nn.Pipeliner); ok && s.allOnDevice() && p.PipelineDepth() > 1 {
 		return nn.MaxDevicePrefillChunk * pipelineChunks
 	}

@@ -6847,12 +6847,6 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 	// at positions not yet reached, which decode overwrites, and no earlier row
 	// attends to them because the scores mask past each row's causal count.
 	if n != 1 {
-		// Config.NoBatch makes the caller go one device call per prompt token:
-		// the way to tell a batching bug from an f32 tie, and the A/B control.
-		if g.NoBatch {
-			g.LastErr = "batched prefill disabled"
-			return false
-		}
 		bw := batchWidth
 		if n > bw {
 			g.LastErr = fmt.Sprintf("batch n=%d width=%d head=%v", n, bw, head != nil)

@@ -1102,6 +1102,15 @@ func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, 
 	return ok
 }
 
+// ChunkRows is 1 where Config.NoBatch asks for one prompt row a call, else 0
+// (nn.ChunkLimiter).
+func (g *GPU) ChunkRows() int {
+	if d := g.dev(0); d != nil && d.NoBatch {
+		return 1
+	}
+	return 0
+}
+
 // PipelineDepth is how many devices hold blocks (nn.Pipeliner): a prompt chunk
 // crosses each once, in order. It allocates nothing: the server's step loop
 // asks it every step.

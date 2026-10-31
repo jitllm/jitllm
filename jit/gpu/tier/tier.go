@@ -161,7 +161,8 @@ type Config struct {
 	// Verify recomputes every served matvec on the host and reports the first
 	// shapes that disagree. Slow; a debugging tool, not a mode to ship in.
 	Verify bool
-	// NoBatch refuses the batched prefill path; see Layers.
+	// NoBatch has the caller send one prompt row a call (ChunkRows): the
+	// way to tell a batching bug from an f32 tie, and the A/B control.
 	NoBatch bool
 	// NoTail pads every chunk to the full batch width instead of generating a
 	// narrower kernel set for a ragged tail; the A/B arm for that.

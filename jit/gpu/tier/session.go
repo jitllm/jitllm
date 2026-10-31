@@ -217,6 +217,9 @@ func (s *gpuSession) RecSteps() int { return s.g.recStepsOf(s.sid) }
 // PipelineDepth forwards the GPU's answer (nn.Pipeliner).
 func (s *gpuSession) PipelineDepth() int { return s.g.PipelineDepth() }
 
+// ChunkRows forwards the GPU's answer (nn.ChunkLimiter).
+func (s *gpuSession) ChunkRows() int { return s.g.ChunkRows() }
+
 // HoldsBlock forwards the tier's answer (nn.BlockHolder).
 func (s *gpuSession) HoldsBlock(li int) bool { return s.g.HoldsBlock(li) }
 
