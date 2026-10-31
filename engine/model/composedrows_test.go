@@ -1,10 +1,14 @@
 package model
 
 import (
+	"math"
 	"os"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -40,6 +44,156 @@ func TestComposedRowsServe(t *testing.T) {
 				t.Fatalf("row %d token %d: batched %v, the host %v, %.4f apart on the host", i, j, got[i], want[i], gap)
 			}
 		})
+	}
+}
+
+// TestComposedRowsTokens decodes composedRowsPrompts together on each
+// device with every part asked of the composer (tier.ComposedStep), every
+// row's logits read back: each ragged step's greedy tokens are the
+// composer's sample over its rows, served at every step and declined at
+// none, and each row's token is the host's Greedy over that row's logits,
+// capped where the model has a final softcap (gemma-2). With the token left
+// to the tier's per-row argmax the logits are the same bits and so are the
+// tokens; over the logits negated (a wrong pick) the tokens part from the
+// host's.
+func TestComposedRowsTokens(t *testing.T) {
+	ran, capped := 0, 0
+	for _, file := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf"} {
+		t.Run(file, func(t *testing.T) {
+			p := testmodels.Path(file)
+			if _, err := os.Stat(p); err != nil {
+				t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS)", err)
+			}
+			m, err := Open(jlmOf(t, p), noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			composedRowsTokens(t, m)
+			ran++
+			if m.Cfg.FinalSoftcap != 0 {
+				capped++
+			}
+		})
+	}
+	if ran != 2 || capped == 0 {
+		t.Fatalf("%d of 2 models ran, %d with a final softcap", ran, capped)
+	}
+}
+
+func composedRowsTokens(t *testing.T, m *Model) {
+	t.Helper()
+	ids := make([][]int32, len(composedRowsPrompts))
+	for i, p := range composedRowsPrompts {
+		ids[i] = m.Vocab.Encode(p, true)
+	}
+	const gen = 12
+	nv := m.Cfg.NVocab
+	parted := func(toks [][]int32, logits [][]float32) (bad, rows int) {
+		for s := range toks {
+			for r, tok := range toks[s] {
+				rows++
+				if tok != Greedy(logits[s][r*nv:(r+1)*nv]) {
+					bad++
+				}
+			}
+		}
+		return bad, rows
+	}
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			toks, logits, steps, st := rowsTokens(t, m, ids, gen, tier.WithDevices(dev), composedOpt(tier.ComposedStep))
+			ns, ds, _ := st.ServedPart(tier.ComposedSample)
+			ns += st.ReplayedPart(tier.ComposedSample)
+			if ns != steps || ds != 0 || st.StepDeclines[jit.DeclineNoSample] != 0 || st.FormedPart(tier.ComposedSample) != 0 {
+				t.Fatalf("the composer selected the tokens of %d of %d ragged steps, declined %d, formed %d at a step (%s; last error %q)",
+					ns, steps, ds, st.FormedPart(tier.ComposedSample), declinesOf(st), st.LastErr)
+			}
+			if bad, rows := parted(toks, logits); bad != 0 {
+				t.Fatalf("%d of %d rows' composed tokens are not the host's Greedy over their logits", bad, rows)
+			}
+			// Main's own answer: the tier's per-row argmax over the same logits.
+			mt, ml, msteps, mst := rowsTokens(t, m, ids, gen, tier.WithDevices(dev), composedOpt(tier.ComposedStep&^tier.ComposedSample))
+			if n, _, _ := mst.ServedPart(tier.ComposedSample); n+mst.ReplayedPart(tier.ComposedSample) != 0 || msteps != steps {
+				t.Fatalf("the tier's own arm: the composer selected %d tokens in %d steps (want none in %d)", n, msteps, steps)
+			}
+			for s := range ml {
+				for i := range ml[s] {
+					if math.Float32bits(ml[s][i]) != math.Float32bits(logits[s][i]) {
+						t.Fatalf("step %d: the tier's argmax arm's logits part from the composed arm's at %d (%g, %g): not one input", s, i, ml[s][i], logits[s][i])
+					}
+				}
+				if !slices.Equal(mt[s], toks[s]) {
+					t.Fatalf("step %d: the composer's tokens %v, the tier's argmax %v over the same logits", s, toks[s], mt[s])
+				}
+			}
+			// The violation: the token over the logits negated.
+			set := m.frontGraphs()
+			orig := set.cpuSample
+			m.front.mu.Lock()
+			set.cpuSample = negatedSample(orig)
+			m.front.mu.Unlock()
+			vt, vl, _, vst := rowsTokens(t, m, ids, gen, tier.WithDevices(dev),
+				tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = tier.ComposedStep, true }))
+			m.front.mu.Lock()
+			set.cpuSample = orig
+			m.front.mu.Unlock()
+			vn, _, _ := vst.ServedPart(tier.ComposedSample)
+			bad, rows := parted(vt, vl)
+			if vn == 0 || bad == 0 {
+				t.Fatalf("over the logits negated the composer selected %d steps' tokens and %d of %d rows part: the gate cannot see a wrong pick", vn, bad, rows)
+			}
+			t.Logf("%d ragged steps' tokens (%d rows, softcap %g) selected by the composer, the tier's argmax's bit for bit; over the logits negated %d of %d part",
+				steps, rows, m.Cfg.FinalSoftcap, bad, rows)
+		})
+	}
+}
+
+// rowsTokens decodes ids together for gen tokens a row on a fresh tier of
+// opts, every row's logits read back each step: each step's rows' device
+// tokens and logits, how many steps ran, and the tier's stats.
+func rowsTokens(t *testing.T, m *Model, ids [][]int32, gen int, opts ...tier.Option) (toks [][]int32, logits [][]float32, steps int, st tier.Stats) {
+	t.Helper()
+	g, err := tier.OpenWith(append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opts...)...)
+	if err != nil || g == nil {
+		noDevice(t, "device", err)
+	}
+	defer g.Close()
+	s := m.NewBatch(len(ids), 256)
+	defer s.Close()
+	s.SetDevice(g)
+	if s.GPULayers() != m.Cfg.NLayer || !s.HeadOnDevice() {
+		t.Fatalf("batch: placed %d of %d blocks: %q", s.GPULayers(), m.Cfg.NLayer, g.Err())
+	}
+	feed, got := make([]int32, len(ids)), make([]int, len(ids))
+	var took []time.Duration
+	for step := 0; ; step++ {
+		done := true
+		for i := range ids {
+			if step < len(ids[i]) {
+				feed[i] = ids[i][step]
+			}
+			done = done && got[i] >= gen
+		}
+		if done {
+			slices.Sort(took[len(took)/2:])
+			t.Logf("%s: the median of the last %d steps %v", g.Name(), len(took)-len(took)/2, took[len(took)/2+(len(took)-len(took)/2)/2])
+			return toks, logits, steps, g.Stats()
+		}
+		t0 := time.Now()
+		lg, err := s.ForwardBatch(feed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		took = append(took, time.Since(t0))
+		tk := slices.Clone(s.head.Tokens[:len(ids)])
+		toks, logits, steps = append(toks, tk), append(logits, slices.Clone(lg)), steps+1
+		for i := range ids {
+			if step >= len(ids[i])-1 {
+				feed[i] = tk[i]
+				got[i]++
+			}
+		}
 	}
 }
 

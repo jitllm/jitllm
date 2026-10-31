@@ -132,10 +132,12 @@ func (g *devTier) releaseModel() {
 	g.dropAllScratch() // refunded as it goes (scratch.go)
 	g.freeKVPool(g.kvp)
 	g.kvp = nil
-	if g.argmaxK != nil {
+	if g.argmaxOut != nil {
 		// Built for the head's row count; its word was charged as scratch.
 		w := g.scratchWin()
-		g.argmaxK.Close()
+		if g.argmaxK != nil {
+			g.argmaxK.Close()
+		}
 		g.argmaxOut.Free()
 		g.argmaxK, g.argmaxOut = nil, nil
 		w.close()

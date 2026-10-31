@@ -3064,6 +3064,8 @@ func (g *devTier) Close() {
 	g.kvp = nil
 	if g.argmaxK != nil {
 		g.argmaxK.Close()
+	}
+	if g.argmaxOut != nil {
 		g.argmaxOut.Free()
 	}
 	g.closeSample()

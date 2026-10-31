@@ -1989,10 +1989,15 @@ func (g *devTier) embedFault(gr *graph.Graph) *graph.Graph {
 
 // servedSample is the step's greedy token, gr, served over one row's logits.
 func (g *devTier) servedSample(gr *graph.Graph) (*servedPart, error) {
+	return g.servedSampleAt(gr, 1)
+}
+
+// servedSampleAt is servedSample over rows rows of logits, a token each.
+func (g *devTier) servedSampleAt(gr *graph.Graph, rows int) (*servedPart, error) {
 	if gr == nil || !(len(gr.In) == 1 && len(gr.Out) == 1 || len(gr.In) == 3 && len(gr.Out) == 2 || len(gr.In) == 2 && len(gr.Out) == 1) {
 		return nil, errors.New("the composed sample: a graph that is not logits in and a token out, the sampler's candidates or the label pick")
 	}
-	sk := servedKey{kind: partSample, graph: gr, rows: 1}
+	sk := servedKey{kind: partSample, graph: gr, rows: rows}
 	return g.servedFor(sk, func() (composedPart, error) {
 		return composedPart{kind: partSample, part: jit.PartSample, graph: gr, formats: map[jlm.Role]jlm.Type{}}, nil
 	})
@@ -2891,6 +2896,16 @@ func (g *devTier) prewarmComposedHead() {
 		g.prewarming = true
 		if _, err := g.servedSample(bs.sampleGraph); err != nil {
 			g.LastErr = "the composed sample: " + err.Error()
+		}
+		g.prewarming = false
+	}
+	// A ragged step's tokens at each width the lane holds a scratch for.
+	if !g.NoPromptPrewarm && g.Composed&ComposedSample != 0 && bs != nil && bs.sampleGraph != nil {
+		g.prewarming = true
+		for w := range g.bbs {
+			if _, err := g.servedSampleAt(bs.sampleGraph, w); err != nil {
+				g.LastErr = "the composed rows sample: " + err.Error()
+			}
 		}
 		g.prewarming = false
 	}

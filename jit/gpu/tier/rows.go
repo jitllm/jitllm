@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -353,10 +354,12 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		g.groupMV(g.headMV(), rowsHead.WantedRows(n), R)
 		g.headOneMV(R)
 	}
-	if bs.ragArgmax == nil {
-		amk := comp(kernels.ArgmaxRows(head.nrows, R))
-		if amk == nil {
-			return false
+	if !bs.ragBuilt {
+		var amk backend.Kernel
+		if !g.ragSampleServes() {
+			if amk = comp(kernels.ArgmaxRows(head.nrows, R)); amk == nil {
+				return false
+			}
 		}
 		var hm mv
 		if !served {
@@ -380,7 +383,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		if err != nil {
 			return fail(err)
 		}
-		bs.ragArgmax, bs.ragHead = amk, hm
+		bs.ragArgmax, bs.ragHead, bs.ragBuilt = amk, hm, true
 	}
 	// The final softcap over every row the head can project: the kernel is
 	// sized for R rows and launched over the wanted ones.
@@ -417,6 +420,25 @@ func (g *devTier) prepRowsReserved() {
 	if !g.prepRowsHead(bb, &nn.Head{Softcap: g.bs.capC}, bb.rows) {
 		g.LastErr = "the reserved width's per-row head: " + g.LastErr
 	}
+}
+
+// ragTokens writes the greedy token of each of a step's n wanted rows of
+// logits into bs.ragTok: the composer's sample at the scratch's rows, its
+// rows the call's (headCalls), where it serves the step's token, else the
+// tier's per-row argmax.
+func (g *devTier) ragTokens(lc *launcher, bs, hb *blockScratch, n int, served bool) error {
+	if !served {
+		if bs.ragArgmax == nil {
+			return errors.New("rows: no per-row argmax built and the composed sample not asked")
+		}
+		return lc.launch(bs.ragArgmax, n, kernels.ArgmaxGroup, bs.ragOut(), bs.ragTok)
+	}
+	sv, err := g.servedSampleAt(hb.sampleGraph, bs.rows)
+	if err != nil {
+		return err
+	}
+	sv.rows, sv.sl.tables["rows.n"] = n, bs.headCalls
+	return sv.run(g, lc, sv.inst, []backend.Buf{bs.ragOut()}, []backend.Buf{bs.ragTok})
 }
 
 // rowsCall is what a rows call keeps between its calls: its runs slice,
@@ -763,9 +785,9 @@ func (g *devTier) rowsHeadRoom(bs *blockScratch, head *nn.Head) bool {
 	R, vocab := bs.rows, g.bs.head.nrows
 	// A head of another width than the one reserved gives back every buffer
 	// (prepRowsHead's freeRagOut) and asks for them all again.
-	fresh := bs.ragArgmax == nil && bs.ragLogits != nil && bs.ragVocab != vocab
+	fresh := !bs.ragBuilt && bs.ragLogits != nil && bs.ragVocab != vocab
 	var need uint64
-	if bs.ragArgmax == nil && (bs.ragLogits == nil || fresh) {
+	if !bs.ragBuilt && (bs.ragLogits == nil || fresh) {
 		need += g.footprint(R*vocab*4) + g.footprint(R*4)
 	}
 	if c := head.Softcap; c != 0 && (fresh || bs.ragCap == nil && (bs.ragCapK == nil || bs.ragCapC != c)) {
@@ -2078,4 +2100,10 @@ func (g *GPU) resetRecRows(sid uint64, rows []int) bool {
 func (s *gpuSession) ResetRecRows(rows []int) bool {
 	defer s.leave(s.enter())
 	return s.g.resetRecRows(s.sid, rows)
+}
+
+// ragSampleServes says the composer writes a ragged step's tokens: asked
+// for the token and a prompt's rows, over the sample its head states.
+func (g *devTier) ragSampleServes() bool {
+	return g.Composed&ComposedSample != 0 && g.Composed&ComposedPrompt != 0 && g.bs != nil && g.bs.sampleGraph != nil
 }

@@ -2246,7 +2246,10 @@ type blockScratch struct {
 	fpTile    kernels.FlashTile
 	// The ragged-decode set (rows.go): attention whose rows are different
 	// sequences, a per-row softmax, the head's batched twin and a per-row argmax.
+	// ragArgmax is nil where the composer's sample writes the tokens;
+	// ragBuilt says prepRowsHead built the set.
 	ragArgmax         backend.Kernel
+	ragBuilt          bool
 	ragLogits, ragTok backend.Buf
 	ragVocab          int // the rows of ragLogits a row holds
 	ragHead           mv
@@ -6727,20 +6730,27 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		g.charge(uint64(h.W.Rows * 4))
 	}
 	bs.capC = h.Softcap
-	// The greedy token on the device (nn.Head.ArgmaxOnly). Without it the head
-	// still runs and every caller gets its logits, so a failure is not one.
-	if g.argmaxK == nil {
-		if ak, e := kernels.Argmax(h.W.Rows); e == nil {
-			if c, e := g.dev.Compile(ak); e == nil {
-				w := g.scratchWin() // the device's own word (scratch.go)
-				if b, e := g.dev.Alloc(4); e == nil {
-					g.argmaxK, g.argmaxOut = c, b
-				} else {
-					closeKern(c)
+	// The greedy token on the device (nn.Head.ArgmaxOnly): its word, and the
+	// tier's argmax where the composer is not asked to select it. Without
+	// them the head still runs and every caller gets its logits, so a
+	// failure is not one.
+	if g.argmaxOut == nil {
+		w := g.scratchWin() // the device's own word (scratch.go)
+		if b, e := g.dev.Alloc(4); e == nil {
+			g.argmaxOut = b
+			if g.Composed&ComposedSample == 0 || h.Sample == nil {
+				if ak, e := kernels.Argmax(h.W.Rows); e == nil {
+					if c, e := g.dev.Compile(ak); e == nil {
+						g.argmaxK = c
+					}
 				}
-				w.close()
+				if g.argmaxK == nil {
+					b.Free()
+					g.argmaxOut = nil
+				}
 			}
 		}
+		w.close()
 	}
 	g.prewarmHeadKernels()
 	g.prewarmComposedHead()
@@ -7859,7 +7869,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	if head != nil {
 		left = head.Stages &^ applied
 	}
-	argmax := head != nil && head.ArgmaxOnly && g.argmaxK != nil && R == 1 && left&nn.HeadBias == 0
+	argmax := head != nil && head.ArgmaxOnly && g.argmaxOut != nil && R == 1 && left&nn.HeadBias == 0 &&
+		(g.argmaxK != nil || g.Composed&ComposedSample != 0 && rag == nil && !g.prompt && !fold && bs.sampleGraph != nil && head.Sample == bs.sampleGraph)
 	sampleK, samplePen := 0, false
 	// The composer selects the sampler's candidates where it serves a step's
 	// token (ComposedSample) and the front end states them.
@@ -7886,9 +7897,16 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// greedy token, written where the tier's argmax writes it, the sampler's
 	// candidates, or the label pick.
 	sampleSrv := false
-	if g.Composed&ComposedSample != 0 && head != nil && (argmax || sampleK > 0 || pick) {
+	ragSample := head != nil && (rag != nil || allRows)
+	if g.Composed&ComposedSample != 0 && head != nil && (argmax || sampleK > 0 || pick || ragSample) {
 		why := partServes
 		switch {
+		case ragSample && g.prompt && g.Composed&ComposedPrompt == 0:
+			g.PartsUnasked[partSample]++
+		case ragSample && (hb.sampleGraph == nil || head.Sample != hb.sampleGraph):
+			why = partNoSample
+		case ragSample:
+			sampleSrv = true
 		case pick && pickAsked && (pickSrv || pickHeadSrv):
 			sampleSrv = true
 		case pick && pickAsked:
@@ -10350,7 +10368,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(bs.ragCapK, ragHead*hb.head.nrows, bs.ragLogits, bs.ragCap)
 			}
 			if err == nil {
-				err = lc.launch(bs.ragArgmax, ragHead, kernels.ArgmaxGroup, bs.ragOut(), bs.ragTok)
+				err = g.ragTokens(lc, bs, hb, ragHead, sampleSrv)
 			}
 		} else if head != nil && (rag != nil || allRows) {
 			// The output norm, the projection of the rows that want logits
@@ -10401,7 +10419,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(bs.ragCapK, ragHead*hr.nrows, bs.ragLogits, bs.ragCap)
 			}
 			if err == nil {
-				err = lc.launch(bs.ragArgmax, ragHead, kernels.ArgmaxGroup, bs.ragOut(), bs.ragTok)
+				err = g.ragTokens(lc, bs, hb, ragHead, sampleSrv)
 			}
 		} else if fold && headSrv {
 			// The chunk's last row, into the decode scratch, and decode's
@@ -10551,6 +10569,8 @@ func (g *devTier) layersSession(s backend.Session) {
 					serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.headOut()}, []backend.Buf{g.argmaxOut})
 				}
 				err = serr
+			case argmax && g.argmaxK == nil && err == nil:
+				err = errors.New("the greedy token: no argmax built and the composed sample not asked")
 			case argmax && err == nil:
 				err = lc.launch(g.argmaxK, 1, kernels.ArgmaxGroup, bs.headOut(), g.argmaxOut)
 			}
