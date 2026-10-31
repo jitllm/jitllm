@@ -985,10 +985,12 @@ func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
 // (nn.PromptDevice) with the composer serving the blocks and the head. A
 // float head does not fold into a batched chunk and a prompt of a few rows
 // runs as one ragged step, so either way the prompt's last-row head is a
-// one-row call of its own: it must count as unasked, never as a step the
-// composer serves. Each decode step after it serves every block and the head
-// once. With the State keeping the prompt from the device (the violation)
-// the head is served once more than the steps, which the gate must see.
+// one-row call of its own, which the composed head serves: no call is left
+// unasked or declined. Each decode step after it serves every block once; the
+// prompt reaches the device as a prompt, never as steps. With the State not
+// telling the device the calls are a prompt's (the violation) a ragged prompt
+// runs as a step, which the gate must see; a chunk is a prompt by its shape,
+// and its run must not change.
 func TestComposedPromptIsNotServed(t *testing.T) {
 	const file, steps = "synth-qwen3vl.gguf", 6
 	path := testmodels.Path(file)
@@ -1005,8 +1007,9 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 		// Three rows run as one ragged step, nine as a chunk whose float head
 		// does not fold.
 		for _, rows := range []int{3, 9} {
+			ragged := rows == 3
 			t.Run(fmt.Sprintf("%s/%d rows", dev, rows), func(t *testing.T) {
-				run := func(withhold bool) (heads, unasked, blocks int) {
+				run := func(withhold bool) (heads, left, blocks, prompt int) {
 					// Without a recording every step runs every part, so the
 					// counts are the steps'.
 					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
@@ -1043,8 +1046,12 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 						}
 					}
 					st := g.Stats()
-					heads, _, unasked = st.ServedPart(tier.ComposedHead)
+					heads, declined, unasked := st.ServedPart(tier.ComposedHead)
+					left = declined + unasked
 					blocks, _, _ = st.ServedPart(tier.ComposedBlock)
+					var pd, pu int
+					prompt, pd, pu = st.ServedPart(tier.ComposedPrompt)
+					left += pd + pu
 					if !withhold {
 						for k := range g.Census() {
 							if !slices.Contains(composedResidue, k) {
@@ -1052,18 +1059,24 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 							}
 						}
 					}
-					return heads, unasked, blocks
+					return heads, left, blocks, prompt
 				}
-				heads, unasked, blocks := run(false)
-				if heads != steps || unasked < 1 || blocks != steps*m.Cfg.NLayer {
-					t.Fatalf("the head was served %d times and left unasked %d in %d steps, the blocks served %d times where %d steps of %d blocks are %d",
-						heads, unasked, steps, blocks, steps, m.Cfg.NLayer, steps*m.Cfg.NLayer)
+				asPrompt := func(blocks, prompt int) bool { return blocks == steps*m.Cfg.NLayer && prompt > 0 }
+				heads, left, blocks, prompt := run(false)
+				if heads != steps+1 || left != 0 || !asPrompt(blocks, prompt) {
+					t.Fatalf("the head was served %d times and the head or prompt left to the tier %d in %d steps and the prompt; the blocks served %d times where %d steps of %d blocks are %d, and the prompt part %d times",
+						heads, left, steps, blocks, steps, m.Cfg.NLayer, steps*m.Cfg.NLayer, prompt)
 				}
-				leaked, _, _ := run(true)
-				if leaked != steps+1 {
-					t.Fatalf("with the prompt kept from the device the head was served %d times in %d steps: the gate cannot see a prompt's head served", leaked, steps)
+				_, _, wb, wp := run(true)
+				switch {
+				case ragged && asPrompt(wb, wp):
+					t.Fatalf("with the prompt's calls not marked the blocks were served %d times in %d steps of %d blocks and the prompt part %d times: the gate cannot see a ragged prompt run as a step",
+						wb, steps, m.Cfg.NLayer, wp)
+				case !ragged && (wb != blocks || wp != prompt):
+					t.Fatalf("with the chunk's calls not marked the blocks were served %d times and the prompt part %d, against %d and %d: a chunk's run depends on the mark",
+						wb, wp, blocks, prompt)
 				}
-				t.Logf("the head served %d times in %d steps, %d of its calls unasked; kept from the device, %d", heads, steps, unasked, leaked)
+				t.Logf("the head served %d times in %d steps and the prompt, the blocks %d and the prompt part %d; unmarked, %d and %d", heads, steps, blocks, prompt, wb, wp)
 				ran++
 			})
 		}
