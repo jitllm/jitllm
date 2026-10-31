@@ -7607,9 +7607,19 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	var pagedVar *pagedVariant
 	if pk := bs.pkv; pk != nil {
 		pk.rows = g.pagedRows(sid, pk.rows, R, nrow, pos, rag)
-		// A call of rows the composer serves whole in the reserved width runs
-		// none of the tier's attention: it stages the descriptors alone.
-		stageOnly := R > 1 && bs == g.bbs[g.promptW] && g.rowsComposed(lo, hi)
+		// A call whose every block the composer serves runs none of the
+		// tier's attention: it stages the descriptors alone, and no plan of
+		// the tier's is built. A block it declines has the tier's kernels
+		// readied here (promptDeclines).
+		tierRuns := true
+		if R > 1 {
+			var e error
+			_, asks := g.rowsKind(R, rag != nil)
+			if tierRuns, e = g.promptDeclines(bs, lo, hi, asks); e != nil {
+				return refuse("%v", e)
+			}
+		}
+		stageOnly := R > 1 && !tierRuns
 		if e := g.pagedPrep(sid, bs, pk.rows, stageOnly); e != nil {
 			return refuse("paged attention: %v", e)
 		}
@@ -7630,17 +7640,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			// So do MiniMax-M3's and QSA's block selections (msa.go, qsa.go).
 			if pk.st != nil && (pk.msa != nil || pk.qsa != nil) {
 				return refuse("the block selection reads the whole history and part of it is evicted")
-			}
-		}
-		// A call whose every block the composer serves runs none of the
-		// tier's attention and stages none; a block it declines has the
-		// tier's kernels readied here (promptDeclines).
-		tierRuns := true
-		if R > 1 {
-			var e error
-			_, asks := g.rowsKind(R, rag != nil)
-			if tierRuns, e = g.promptDeclines(bs, lo, hi, asks); e != nil {
-				return refuse("%v", e)
 			}
 		}
 		if tierRuns {
