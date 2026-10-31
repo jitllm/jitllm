@@ -9,8 +9,7 @@ import (
 // TestStagedPagedPrefillMatchesDecode prefills a prompt on the device as one
 // chunk and, in a second State, a token at a time, and demands the same last
 // logits, on a model whose attention head (256 wide) has no one-kernel flash
-// prefill on any backend here, so the chunk runs the staged paged kernels:
-// scores, a per-split softmax and an accumulate (tier/pagedprefill.go).
+// prefill on any backend here; the composer serves the chunk.
 //
 // The softmax's launch width is the tier's to give and the kernel's to
 // declare. Metal runs a launch at the width it is given, so the 64 the tier
@@ -18,8 +17,8 @@ import (
 // prompt over one token prefilled wrong there while CUDA and Vulkan, which keep
 // the declared width, were right: Qwen3.5-0.8B read 0.38 there against
 // 3e-4 elsewhere. Every kernel gate was green, since each launches its
-// kernel at the kernel's own width. Stats.PagedPrefillLaunches with no
-// FlashPrefills is the selection check that the staged form ran.
+// kernel at the kernel's own width. Every block step of the chunk served by
+// the composer is the selection check.
 func TestStagedPagedPrefillMatchesDecode(t *testing.T) {
 	m := openStepHybrid(t)
 	defer m.Close()
@@ -52,8 +51,11 @@ func stagedPrefillGap(t *testing.T, m *Model, dev string) float64 {
 		t.Fatal(err)
 	}
 	s1 := g.Stats()
-	if n, f := s1.PagedPrefillLaunches-s0.PagedPrefillLaunches, s1.FlashPrefills-s0.FlashPrefills; n == 0 || f != 0 {
-		t.Fatalf("%d paged prefill attentions and %d flash prefills: the chunk did not run the staged form", n, f)
+	n0, d0, u0 := s0.ServedPart(tier.ComposedPrompt)
+	n1, d1, u1 := s1.ServedPart(tier.ComposedPrompt)
+	if n, d, u := n1-n0, d1-d0, u1-u0; n < m.Cfg.NLayer || d != 0 || u != 0 {
+		t.Fatalf("the composer served %d block steps of the chunk, declined %d and was not asked for %d (%d blocks): the chunk did not run composed",
+			n, d, u, m.Cfg.NLayer)
 	}
 	one := plan.placed(t, m, g, len(ids)+1)
 	defer one.Close()
