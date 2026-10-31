@@ -954,7 +954,12 @@ func (g *devTier) dropPart(sv *servedPart) {
 		in.bytes = 0
 	}
 	if sv.f.refs--; sv.f.refs == 0 {
+		// A form over passes keeps the decode scratch's instance in its
+		// prompt map too (streamServed at one row).
 		g.eachLane(func(l *lane) {
+			if l.bs != nil {
+				g.dropPromptInst(l.bs, sv.f)
+			}
 			for _, bs := range l.bbs {
 				g.dropPromptInst(bs, sv.f)
 			}
