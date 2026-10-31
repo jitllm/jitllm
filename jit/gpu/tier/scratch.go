@@ -597,6 +597,16 @@ func (g *devTier) narrowReserved(beside string) bool {
 	return true
 }
 
+// rowsHeld is rowsReserved asked as a question of sizes: a block it finds
+// uncomposed is a prompt that runs at its own widths, not a refusal, so it
+// leaves LastErr as it was. Callers hold g.mu.
+func (g *devTier) rowsHeld() bool {
+	e := g.LastErr
+	ok := g.rowsReserved()
+	g.LastErr = e
+	return ok
+}
+
 // rowsReserved reports whether every block placed on the device has its
 // ragged rows in the reserved width (rowsComposed): a step of any count of
 // rows up to it builds, forms and compiles nothing. Callers hold g.mu.

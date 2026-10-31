@@ -452,7 +452,7 @@ func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int, softcap float32) uin
 // and at PrepHead, so no step compiles them. Callers hold g.mu.
 func (g *devTier) prepRowsReserved() {
 	bb := g.reservedFor(ComposedBlock)
-	if bb == nil || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsReserved() {
+	if bb == nil || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsHeld() {
 		return
 	}
 	if !g.prepRowsHead(bb, &nn.Head{Softcap: g.bs.capC}, bb.rows) {

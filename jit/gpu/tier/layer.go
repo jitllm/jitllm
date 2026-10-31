@@ -6604,7 +6604,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// its budget by a vocabulary a row, and a ragged step on a full card could
 	// not build them.
 	rowsNeed := func() uint64 {
-		if bb := g.reservedFor(ComposedBlock); bb != nil && g.rowsReserved() {
+		if bb := g.reservedFor(ComposedBlock); bb != nil && g.rowsHeld() {
 			return g.rowsHeadNeed(bb, h.W.Rows, h.Softcap)
 		}
 		return 0
