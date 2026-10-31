@@ -390,24 +390,41 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	}
 	// The final softcap over every row the head can project: the kernel is
 	// sized for R rows and launched over the wanted ones.
-	if c := rowsHead.Softcap; c != 0 && (bs.ragCapK == nil || bs.ragCapC != c) {
-		k := comp(kernels.Softcap(R*head.nrows, c))
-		if k == nil {
+	if c := rowsHead.Softcap; c != 0 {
+		if !g.prepRowsCap(bs, c) {
 			return false
 		}
 		if bs.ragCap == nil {
 			b, err := g.dev.Alloc(R * head.nrows * 4)
 			if err != nil {
-				closeKern(k)
 				return fail(err)
 			}
 			bs.ragCap = b
 		}
-		if bs.ragCapK != nil {
-			bs.ragCapK.Close()
-		}
-		bs.ragCapK, bs.ragCapC = k, c
 	}
+	return true
+}
+
+// prepRowsCap compiles the final softcap c over bs's rows of the head's
+// logits where bs holds no kernel of it. Callers hold g.mu.
+func (g *devTier) prepRowsCap(bs *blockScratch, c float32) bool {
+	if c == 0 || bs.ragCapK != nil && bs.ragCapC == c {
+		return true
+	}
+	k, err := kernels.Softcap(bs.rows*g.bs.head.nrows, c)
+	if err != nil {
+		g.LastErr = "rows: " + err.Error()
+		return false
+	}
+	ck, err := g.compile(k)
+	if err != nil {
+		g.LastErr = "rows: " + err.Error()
+		return false
+	}
+	if bs.ragCapK != nil {
+		bs.ragCapK.Close()
+	}
+	bs.ragCapK, bs.ragCapC = ck, c
 	return true
 }
 
@@ -430,14 +447,12 @@ func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int, softcap float32) uin
 }
 
 // prepRowsReserved builds the reserved width's per-row head where a ragged
-// step's rows run there (rowsReserved) and the device reserves a step width
-// (Config.StepRows) -- the per-row argmax and the final softcap, the
-// composer's head writing the logits they read -- at placement and at
-// PrepHead, so no step compiles them. Without a step width a ragged step
-// builds it at its first call (prepRagged). Callers hold g.mu.
+// step's rows run there (rowsReserved) -- the per-row argmax and the final
+// softcap, the composer's head writing the logits they read -- at placement
+// and at PrepHead, so no step compiles them. Callers hold g.mu.
 func (g *devTier) prepRowsReserved() {
 	bb := g.reservedFor(ComposedBlock)
-	if bb == nil || g.StepRows <= 0 || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsReserved() {
+	if bb == nil || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsReserved() {
 		return
 	}
 	if !g.prepRowsHead(bb, &nn.Head{Softcap: g.bs.capC}, bb.rows) {

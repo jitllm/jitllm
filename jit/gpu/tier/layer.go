@@ -6599,16 +6599,26 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if !ok || h.W.K != bs.p.NEmbd || h.W.Rows <= 0 || len(h.W.Data) == 0 {
 		return false
 	}
-	// The reserved width's per-row logits are the head's where a ragged step's
-	// width is reserved (prepRowsReserved), admitted with it: built after it
-	// without asking, they put the card past its budget by a vocabulary a row.
-	var rows uint64
-	if bb := g.reservedFor(ComposedBlock); bb != nil && g.StepRows > 0 && g.rowsReserved() {
-		rows = g.rowsHeadNeed(bb, h.W.Rows, h.Softcap)
+	// The reserved width's per-row logits are the head's (prepRowsReserved),
+	// admitted with it: built after it without asking, they put the card past
+	// its budget by a vocabulary a row, and a ragged step on a full card could
+	// not build them.
+	rowsNeed := func() uint64 {
+		if bb := g.reservedFor(ComposedBlock); bb != nil && g.rowsReserved() {
+			return g.rowsHeadNeed(bb, h.W.Rows, h.Softcap)
+		}
+		return 0
 	}
+	rows := rowsNeed()
 	foot, ferr := g.planesFootprint(q, h.W.Rows, h.W.K)
 	if ferr != nil {
 		foot = uint64(len(h.W.Data))
+	}
+	// They shrink with the reserved width. A caller that did not list the CPU
+	// has no other device for the head, so the width gives way first; with
+	// the CPU listed the head goes home and the reservation holds.
+	for h.NoCPU && rows > 0 && !g.room(foot+rows) && g.narrowReserved("the output projection's per-row logits") {
+		rows = rowsNeed()
 	}
 	// Under paging the projection and a block slot compete for the same bytes,
 	// and the head is permanent while a slot turns over every block. The head
@@ -6633,10 +6643,9 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 			return false
 		}
 	} else if now, after := g.slots(), g.slotsIfPerm(want); len(g.stream) > 0 && after < now ||
-		!h.NoCPU && (after < g.pagesIn || g.holdsPages() && after < minSlots) {
-		// Paging is always on: a projection that pushes out a block the card
-		// holds, or leaves a block paged out here no slot to come back in,
-		// costs that block a page-in a token or every step it runs.
+		!h.NoCPU && g.holdsPages() && after < minSlots {
+		// Paging is always on: a projection that leaves the blocks paged here
+		// no slot to turn over in strands them.
 		g.LastErr = fmt.Sprintf("the output projection needs %d bytes and "+
 			"taking them would leave %d block slot(s) instead of %d for %d block(s) the card holds, so it "+
 			"stays on the host: a slot turns over every block and the "+

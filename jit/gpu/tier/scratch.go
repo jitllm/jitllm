@@ -573,9 +573,12 @@ func (g *devTier) fitReserved() {
 // and forms every placed block there, and reports whether it did; beside
 // names what the freed bytes are for. Callers hold g.mu.
 func (g *devTier) narrowReserved(beside string) bool {
+	// A step width the caller reserves (Config.StepRows) is never narrowed
+	// away: its ragged steps would build their rows at a step instead.
 	w := g.promptW / 2 / batchGrain * batchGrain
-	if w < batchGrain {
-		g.LastErr = fmt.Sprintf("the reserved width of %d rows is the narrowest, and %s do not fit beside it", g.promptW, beside)
+	if w < max(batchGrain, g.StepRows) {
+		g.LastErr = fmt.Sprintf("the reserved width of %d rows is the narrowest (a step of %d rows reserved), and %s do not fit beside it",
+			g.promptW, g.StepRows, beside)
 		return false
 	}
 	was := g.prewarming
