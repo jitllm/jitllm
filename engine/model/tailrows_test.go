@@ -22,10 +22,10 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	type out struct {
-		last          []float32
-		toks          []int32
-		steps         [][]float32
-		tails         int
+		last  []float32
+		toks  []int32
+		steps [][]float32
+		tails int
 	}
 	// One arm at a time: a 4 GiB card holds one copy of the model.
 	// decode is the third arm: the prompt a token at a time, which the
