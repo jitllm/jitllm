@@ -79,7 +79,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	prompt = prompt[:plen]
 	const gen = 12
 	run := func(noBatch bool) ([]float32, []int32, tier.Stats, string, int) {
-		opts := []tier.Option{tier.WithDeviceTune(tier.TuneOff), tier.WithPoisonScratch(true)}
+		opts := []tier.Option{tier.WithDeviceTune(tier.TuneOff), tier.WithPoisonScratch(true), mainKernels}
 		if testdevices.Selected() {
 			opts = append(opts, tier.WithDevices(testdevices.Spec(""))) // a model bigger than one card
 		}

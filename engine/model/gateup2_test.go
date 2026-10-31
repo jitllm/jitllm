@@ -34,7 +34,7 @@ var gateUp2Devices = testdevices.Specs("cuda", "vulkan", "metal")
 func gateUp2Decode(t *testing.T, m *Model, devs string, ids, toks []int32, noGraph bool, layers int, cache string) (off, on [][]float32, st tier.Stats, placed int) {
 	t.Helper()
 	g, err := tier.OpenWith(tier.WithDevices(devs), tier.WithTuneCache(cache),
-		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph }))
+		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph }), mainKernels)
 	if err != nil || g == nil {
 		return nil, nil, tier.Stats{}, 0
 	}
