@@ -121,9 +121,9 @@ func TestComposedHeadTokens(t *testing.T) {
 							// a tier of its own that records nothing, so that no
 							// recording of the right token replays.
 							set := m.frontGraphs()
-							orig := set.sample
+							orig := set.cpuSample
 							m.front.mu.Lock()
-							set.sample = negatedSample(orig)
+							set.cpuSample = negatedSample(orig)
 							m.front.mu.Unlock()
 							vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 								tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = parts, true }))
@@ -157,7 +157,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							va.Close()
 							vb.Close()
 							m.front.mu.Lock()
-							set.sample = orig
+							set.cpuSample = orig
 							m.front.mu.Unlock()
 							if vn, _, _ := vg.Stats().ServedPart(tier.ComposedSample); vn != len(ids) {
 								t.Fatalf("the violation's tier selected %d of %d tokens: it did not run the negated pick (%s)", vn, len(ids), declinesOf(vg.Stats()))
@@ -247,13 +247,13 @@ func TestComposedHeadTokens(t *testing.T) {
 							// neighbouring id. Each must part the draws, every set
 							// still the composer's.
 							set := m.frontGraphs()
-							orig := set.topK
+							orig := set.cpuTopK
 							for _, v := range []struct {
 								name string
 								g    *graph.Graph
 							}{{"k+1", sampleShifted(orig)}, {"the penalty on the neighbouring id", sampleNeighbour(orig)}} {
 								m.front.mu.Lock()
-								set.topK = v.g
+								set.cpuTopK = v.g
 								m.front.mu.Unlock()
 								vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 									tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = parts, true }))
@@ -264,7 +264,7 @@ func TestComposedHeadTokens(t *testing.T) {
 								vn := composedSamples(vg.Stats())
 								vg.Close()
 								m.front.mu.Lock()
-								set.topK = orig
+								set.cpuTopK = orig
 								m.front.mu.Unlock()
 								t.Logf("violation, %s: %d of %d draws parted, %d sets selected by the composer", v.name, vp, gen, vn)
 								if vd == 0 || vn < int(vd) || vp == 0 {

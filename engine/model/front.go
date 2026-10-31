@@ -130,11 +130,8 @@ type frontSet struct {
 	cpuSample, cpuTopK *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
 	// sliding layers', as jit.Front states them (nil for one that turns
-	// nothing); sample is the step's greedy sampling of the head's logits,
-	// topK the sampler's candidates over them.
+	// nothing).
 	tables []*graph.Graph
-	sample *graph.Graph
-	topK   *graph.Graph
 	// pick is the label pick over the logits, pickHead the head projecting
 	// the picked rows alone.
 	pick, pickHead *graph.Graph
@@ -335,17 +332,15 @@ func (m *Model) frontGraphs() *frontSet {
 		}
 		s.tables = append(s.tables, t)
 	}
-	if s.head != nil && len(s.head.Out) == 1 && s.head.Values[s.head.Out[0]].Width == m.Cfg.NVocab {
-		sm := graph.Sample{NVocab: m.Cfg.NVocab}
-		s.sample = sm.Build()
-		tk := graph.SampleTopK{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK, Hist: nn.SampleMaxHist}
-		s.topK = tk.Build()
+	vocab := func(h *graph.Graph) bool {
+		return h != nil && len(h.Out) == 1 && h.Values[h.Out[0]].Width == m.Cfg.NVocab
+	}
+	if vocab(s.head) {
 		pk := graph.Pick{NVocab: m.Cfg.NVocab, N: nn.PickMax}
 		s.pick = pk.Build()
 		s.pickHead, _ = m.pickHeadGraph()
 	}
-	s.cpuSample, s.cpuTopK = s.sample, s.topK
-	if s.cpuSample == nil && s.cpuHead != nil && s.cpuHead.Values[s.cpuHead.Out[0]].Width == m.Cfg.NVocab {
+	if vocab(s.head) || vocab(s.cpuHead) {
 		sm := graph.Sample{NVocab: m.Cfg.NVocab}
 		s.cpuSample = sm.Build()
 		tk := graph.SampleTopK{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK, Hist: nn.SampleMaxHist}
