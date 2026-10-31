@@ -21,7 +21,11 @@ import (
 // clipped to its keys with the running partial folded from one side into the
 // other, then the codes after. Every row must read what the form over the
 // whole history reads, with the rows at different positions so a pass holds
-// keys some rows may not see; a fold that drops a pass must not.
+// keys some rows may not see; a fold that drops a pass must not. A pass
+// starts at the first code reading the history and ends at the fold, and
+// writes none of the call's values: with a front before the read and a
+// residual after the fold, at widths where every kernel is one workgroup,
+// the composer must not join either into the pass.
 func TestComposedGPUAttendInPasses(t *testing.T) {
 	testlock.GPU(t)
 	devs := backend.Open()
@@ -42,6 +46,11 @@ func TestComposedGPUAttendInPasses(t *testing.T) {
 		{name: "chunk", pos: []int{92, 93, 94, 95, 96, 97, 98, 99}, seqs: 1},
 		{name: "chunk/wide", pos: wide, seqs: 1},
 		{name: "chunk/matrix", pos: wide, seqs: 1, matrix: true},
+		{name: "rows/around", pos: []int{40, 70, 100}, around: true},
+		{name: "narrow/around", pos: []int{40, 70, 100}, around: true, heads: 2, kvh: 1, dim: 16},
+		{name: "narrow/around/chunk", pos: []int{92, 93, 94, 95, 96, 97, 98, 99}, seqs: 1, around: true, heads: 2, kvh: 1, dim: 16},
+		{name: "rows/around/one", pos: []int{100}, one: true, around: true},
+		{name: "narrow/around/one", pos: []int{100}, one: true, around: true, heads: 2, kvh: 1, dim: 16},
 	}
 	for _, d := range devs {
 		tiles, _ := backend.LowersTile(d, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32})
@@ -55,28 +64,52 @@ func TestComposedGPUAttendInPasses(t *testing.T) {
 }
 
 // passCase is one shape of the pass gate: the rows' positions, one sequence
-// (a prompt chunk) or a sequence a row, and whether the device's matrix unit
-// forms the attention.
+// (a prompt chunk) or a sequence a row, whether the device's matrix unit
+// forms the attention, whether a front adds to q and k before the attention
+// and a residual to its result (around), whether the step is formed for
+// its one row (a decode, whose one-workgroup kernels the composer phases
+// into one launch), and the heads and head dimension where not 4, 2 and 64.
 type passCase struct {
-	name   string
-	pos    []int
-	seqs   int
-	matrix bool
+	name            string
+	pos             []int
+	seqs            int
+	matrix          bool
+	around          bool
+	one             bool
+	heads, kvh, dim int
 }
 
 func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 	pos, seqs := c.pos, c.seqs
-	const heads, kvh, dim, page = 4, 2, 64, 16
+	const page = 16
+	heads, kvh, dim := 4, 2, 64
+	if c.dim > 0 {
+		heads, kvh, dim = c.heads, c.kvh, c.dim
+	}
 	R := len(pos)
 	capRows := max(8, R)
+	if c.one {
+		capRows = R
+	}
 	keys := 8 * page
 	passKeys := 2 * page
 	if pos[R-1] >= keys {
 		keys, passKeys = 32*page, 8*page
 	}
 	b := graph.New()
-	n := b.KVAppend(b.In("k", kvh*dim), b.In("v", kvh*dim), 0)
-	b.Out(b.Attend(b.In("q", heads*dim), n, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim, Scale: 1 / math.Sqrt(dim)}))
+	kIn, vIn, qIn := b.In("k", kvh*dim), b.In("v", kvh*dim), b.In("q", heads*dim)
+	kRow, qRow := kIn, qIn
+	var kb, qb, resid graph.ValueID
+	if c.around {
+		kb, qb, resid = b.In("k.b", kvh*dim), b.In("q.b", heads*dim), b.In("resid", heads*dim)
+		kRow, qRow = b.Add(kIn, kb), b.Add(qIn, qb)
+	}
+	n := b.KVAppend(kRow, vIn, 0)
+	out := b.Attend(qRow, n, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim, Scale: 1 / math.Sqrt(float64(dim))})
+	if c.around {
+		out = b.Add(out, resid)
+	}
+	b.Out(out)
 	g := b.G
 	dev := gpuDevice(d)
 	if c.matrix {
@@ -139,8 +172,11 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 		}
 		return rows
 	}
-	vals := map[graph.ValueID][]uint32{g.In[0]: f32w(k), g.In[1]: f32w(v), g.In[2]: f32w(q), g.Out[0]: poisoned(capRows * qw)}
-	base := map[string][]uint32{"rows.n": {uint32(R)}, "pages": pages, "kv.k": kpool, "kv.v": vpool}
+	vals := map[graph.ValueID][]uint32{kIn: f32w(k), vIn: f32w(v), qIn: f32w(q), g.Out[0]: poisoned(capRows * qw)}
+	if c.around {
+		vals[kb], vals[qb], vals[resid] = f32w(rnd(capRows*w)), f32w(rnd(capRows*qw)), f32w(rnd(capRows*qw))
+	}
+	base := map[string][]uint32{"rows.n": {uint32(R)}, "pages": pages, "kv.k": kpool, "kv.v": vpool, "q.off": make([]uint32, capRows*4)}
 
 	runner := newPassRunner(d)
 	defer runner.close()
@@ -156,6 +192,16 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 		t.Fatalf("no pass between codes %d and %d", lo, hi)
 	}
 	t.Logf("%d codes: %d before the pass, %d a pass, %d after", len(inPasses), lo, hi-lo, len(inPasses)-hi)
+	for ci := lo; ci < hi; ci++ {
+		for _, bd := range inPasses[ci].Binds {
+			switch {
+			case !bd.Writes:
+			case bd.Operand.Kind == jit.OperandValue,
+				bd.Operand.Kind == jit.OperandTable && bd.Operand.Name != "run.out" && bd.Operand.Name != "kv.k" && bd.Operand.Name != "kv.v":
+				t.Errorf("code %d of the pass (%s) writes %s, which a pass run again over cannot", ci, inPasses[ci].Name, bd.Operand.Name)
+			}
+		}
+	}
 	var runIn func(int, bool) []float32
 	for ci, c := range inPasses {
 		var bs []string
@@ -229,8 +275,8 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 }
 
 // passSpan is the codes a pass runs, as the tier finds them: from the first
-// that reads the history's tables to the last that writes the running
-// partial.
+// that reads the history (its keys or values) to the last that writes the
+// running partial.
 func passSpan(codes []jit.Code) (lo, hi int) {
 	lo, hi = -1, -1
 	for ci, c := range codes {
@@ -239,8 +285,8 @@ func passSpan(codes []jit.Code) (lo, hi int) {
 				continue
 			}
 			switch bd.Operand.Name {
-			case "rows", "rows.win", "pages", "kv.k", "kv.v":
-				if lo < 0 {
+			case "kv.k", "kv.v":
+				if bd.Read && lo < 0 {
 					lo = ci
 				}
 			case "run.out":
