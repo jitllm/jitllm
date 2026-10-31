@@ -330,10 +330,9 @@ var composedResidue []string
 // distance from the float reference: at the median step no further than
 // bandRatio times the reference's, and at its worst no further than bandWorst
 // times the widest the reference comes. The serving gate's reference is
-// llama.cpp's CUDA arm, its widest over the CUDA and CPU arms, teacher-forced
-// on the panel; main's tier where llama.cpp does not read the model (the
-// user's decision). Both gates that hold an arm to a reference take them from
-// here.
+// llama.cpp: each step the wider of its CUDA and CPU arms, teacher-forced on
+// the panel; main's tier where llama.cpp does not read the model (the user's
+// decision). Both gates that hold an arm to a reference take them from here.
 const bandRatio, bandWorst = 1.5, 4.0
 
 // bandFloor is the least distance from the float reference a model of
@@ -599,7 +598,14 @@ func TestComposedBlocksServe(t *testing.T) {
 					break
 				}
 			}
-			type tierRun struct{ want, ref [][]float32 }
+			type tierRun struct{ want, cpu, ref [][]float32 }
+			refDist := func(r tierRun, i int) float64 {
+				e := logitNMSE(r.want[i], r.ref[i])
+				if r.cpu != nil {
+					e = max(e, logitNMSE(r.cpu[i], r.ref[i]))
+				}
+				return e
+			}
 			runs := map[string]*[2][]tierRun{}
 			var widest [2]float64
 			var widestTier, widestLcpp [2]float64
@@ -616,6 +622,9 @@ func TestComposedBlocksServe(t *testing.T) {
 							tr.ref = unsplitRef(t, m, dev, p.ids, p.toks, refParts, noGraph)
 							if lcpp != nil {
 								tr.want = lcpp[pi]
+								if len(lcpp) >= 2*len(panel) {
+									tr.cpu = lcpp[len(panel)+pi]
+								}
 							} else {
 								tr.want, _, _, _ = composedDecode(t, m, dev, p.ids, p.toks, 0, noGraph, false)
 								for i := 1; i < len(tr.ref); i++ {
@@ -650,7 +659,7 @@ func TestComposedBlocksServe(t *testing.T) {
 						floor := bandFloor(m.Cfg.NLayer)
 						wide := max(widest[g], floor)
 						if lcpp != nil {
-							t.Logf("graph %v: the band's reference is llama.cpp's cuda arm; its cuda and cpu arms reach %.3g at their worst step (%s)", !noGraph, widestLcpp[g], lcppAt[g])
+							t.Logf("graph %v: the band's reference is the wider of llama.cpp's cuda and cpu arms, which reach %.3g at their worst step (%s)", !noGraph, widestLcpp[g], lcppAt[g])
 						} else {
 							t.Logf("graph %v: llama.cpp does not read this model: the band's reference is the tier, whose backends reach %.3g at their worst step (%s)", !noGraph, widestTier[g], tierAt[g])
 						}
@@ -788,7 +797,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									var ratios []float64
 									worstGot := 0.0
 									for i := range ref {
-										et, eg := logitNMSE(want[i], ref[i]), logitNMSE(got[i], ref[i])
+										et, eg := refDist(runs[dev][g][pi], i), logitNMSE(got[i], ref[i])
 										if math.IsNaN(et) || math.IsNaN(eg) || !(et > 0) {
 											t.Fatalf("prompt %d step %d: the float reference is %.3g from the tier and %.3g from the arm: a degenerate reference proves nothing", pi, i, et, eg)
 										}
@@ -799,7 +808,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									ratios, worstOff := nil, 0.0
 									for i := 1; i < len(ref); i++ {
 										eg := logitNMSE(got[i-1], ref[i])
-										ratios = append(ratios, eg/max(logitNMSE(want[i], ref[i]), floor))
+										ratios = append(ratios, eg/max(refDist(runs[dev][g][pi], i), floor))
 										worstOff = max(worstOff, eg)
 									}
 									offBand.add(ratios, worstOff)
@@ -810,6 +819,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								}
 								t.Logf("composed %s against the float reference: median ratio to the reference's distance %.3f (per prompt %.3f), worst %.3g against %.3g, the reference's widest",
 									a.name, band.median(), band.meds, band.worst, wide)
+
 								if offBand.inside(wide) {
 									t.Errorf("one position off the composed %s is %.3g at the median prompt's median of the reference's distance and %.3g at its worst, inside the band (%.1f and %.1fx of %.3g): the gate cannot see a wrong part",
 										a.name, offBand.median(), offBand.worst, bandRatio, bandWorst, wide)
@@ -822,7 +832,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								violated := func(what string, k tier.Parts, after func(*State), extra ...tier.Option) {
 									var bad panelBand
 									for pi, p := range panel {
-										want, ref := runs[dev][g][pi].want, runs[dev][g][pi].ref
+										ref := runs[dev][g][pi].ref
 										out, bst, _, _ := composedDecodeWith(t, m, dev, p.ids, p.toks, parts, noGraph, false, after, slices.Concat(sopts, extra)...)
 										if n, d, _ := bst.ServedPart(k); n == 0 || d != 0 {
 											t.Fatalf("the arm with %s served the part %d times and declined it %d", what, n, d)
@@ -831,7 +841,7 @@ func TestComposedBlocksServe(t *testing.T) {
 										worstBad := 0.0
 										for i := range ref {
 											eg := logitNMSE(out[i], ref[i])
-											ratios = append(ratios, eg/max(logitNMSE(want[i], ref[i]), floor))
+											ratios = append(ratios, eg/max(refDist(runs[dev][g][pi], i), floor))
 											worstBad = max(worstBad, eg)
 										}
 										bad.add(ratios, worstBad)
