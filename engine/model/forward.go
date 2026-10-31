@@ -429,13 +429,11 @@ type State struct {
 	noHeadFold bool
 	devDemoted int
 	// demotedBy counts the demotions by the cause the device gave, and
-	// buildRefused the calls a kernel that did not build ended: a build
-	// failure moves nothing, so it has no demotion to count.
+	// buildRefused and declined the calls a kernel that did not build and a
+	// decline ended (refusal): neither moves anything.
 	demotedBy    [nFailCauses]int
 	buildRefused int
-	// devRowChunks counts prompt chunks the device refused whole and ran
-	// again a row at a time (prefillSrc's per-row retry). See DeviceRowChunks.
-	devRowChunks int
+	declined     int
 	// tailRowChunks counts few-row prompt chunks run as one ragged step
 	// (tailrows.go). See TailRowChunks.
 	tailRowChunks int
@@ -2420,10 +2418,12 @@ func (s *State) embed(token int32) error {
 	return nil
 }
 
-// SetDeviceFallback decides what happens when the device fails mid-sequence:
-// move every block and its history to the CPU device and finish there (true,
-// the default), or return an error (false). A model whose caller did not list
-// the CPU (WithCPU(false)) takes the error either way.
+// SetDeviceFallback decides what happens when the device faults mid-sequence
+// (a driver error, a device lost): move every block and its history to the
+// CPU device and finish there (true, the default), or return an error
+// (false). A model whose caller did not list the CPU (WithCPU(false)) takes
+// the error either way, and a decline or a kernel that did not build is an
+// error always (refusal).
 //
 // A service would rather serve slowly than fail; a benchmark wants the error,
 // since a run silently finished on the CPU produces a meaningless number.
@@ -2471,13 +2471,6 @@ func (s *State) demoteAll() bool {
 // to the host. Non-zero means this session's rate is not comparable with one
 // that kept the card.
 func (s *State) DeviceDemotions() int { return s.devDemoted }
-
-// DeviceRowChunks is how many prompt chunks the device refused as one batch
-// and ran again one row at a time. A batched-path gate reads it: a chunk the
-// device ran whole and then refused (at its head, say) is re-run a row at a
-// time, and its logits are then the row-by-row arm's, whatever the batched
-// kernels computed.
-func (s *State) DeviceRowChunks() int { return s.devRowChunks }
 
 // TailRowChunks is how many few-row prompt chunks this session ran on the
 // device as one ragged step of their rows rather than as a batched chunk
@@ -2563,7 +2556,7 @@ func (s *State) relocateUntil(pos int, fits func() bool) {
 	for s.devCount() > 0 && !fits() {
 		// A kernel that did not build is not room, and no block's move gives
 		// it one: nothing moves, and the step that needs the kernel meets the
-		// failure and returns it (buildRefusal).
+		// failure and returns it (refusal).
 		if s.devCause() == nn.FailBuild {
 			return
 		}
@@ -4008,14 +4001,14 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				return nil, err
 			}
 			if !s.ld.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), fold) {
-				if err := s.buildRefusal(li); err != nil {
+				if err := s.refusal(li); err != nil {
 					return nil, err
 				}
 				s.ngramUndoRows()
-				// A failed run demotes everything and restarts the token on the
-				// host from the embeddings (Layers may have written part of the
-				// residual), unless SetDeviceFallback(false) asked for the
-				// error.
+				// A fault demotes everything and restarts the token on the
+				// CPU device from the embeddings (Layers may have written part
+				// of the residual), unless SetDeviceFallback(false) asked for
+				// the error.
 				if !s.fallsBack() {
 					return nil, errDevice{li, s.devWhy()}
 				}
@@ -4546,7 +4539,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		}
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), s.head) {
 			done = true
-		} else if err := s.buildRefusal(s.gpuLayers); err != nil {
+		} else if err := s.refusal(s.gpuLayers); err != nil {
 			return nil, err
 		} else if !s.fallsBack() {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}

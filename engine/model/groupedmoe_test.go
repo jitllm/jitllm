@@ -78,7 +78,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	}
 	prompt = prompt[:plen]
 	const gen = 12
-	run := func(noBatch bool) ([]float32, []int32, tier.Stats, string, int) {
+	run := func(noBatch bool) ([]float32, []int32, tier.Stats, string) {
 		opts := []tier.Option{tier.WithDeviceTune(tier.TuneOff), tier.WithPoisonScratch(true), mainKernels}
 		if testdevices.Selected() {
 			opts = append(opts, tier.WithDevices(testdevices.Spec(""))) // a model bigger than one card
@@ -119,10 +119,10 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 		if st.DeviceDemotions() != 0 {
 			t.Fatalf("the device failed: %s", g.Err())
 		}
-		return lg, out, g.Stats(), g.Err(), st.DeviceRowChunks()
+		return lg, out, g.Stats(), g.Err()
 	}
-	rowLg, rowIDs, rowSt, _, _ := run(true)
-	batLg, batIDs, batSt, batErr, batRetry := run(false)
+	rowLg, rowIDs, rowSt, _ := run(true)
+	batLg, batIDs, batSt, batErr := run(false)
 	nmseOf := func(a, b []float32) float64 {
 		var num, den float64
 		for i := range b {
@@ -151,15 +151,6 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 		"%d paged prefill attentions (%d on sm_70's m8n8k4), last-row logit NMSE %.3e\n  batched %v\n  rows    %v",
 		name, batSt.GroupedMoE, batSt.GroupedVolta, batSt.MLABatched, batSt.PagedPrefillLaunches, batSt.PagedPrefill70,
 		nmse, batIDs, rowIDs)
-	// A chunk the device ran grouped and then refused (its head, say) goes
-	// round again a row at a time, and the batched arm's logits are then the
-	// row-by-row arm's: GroupedMoE counted a run whose answer was thrown away.
-	// MiniMax-M3's float head was refused so on every chunk, and this gate
-	// read NMSE 0 with any violation armed.
-	if batRetry != 0 {
-		t.Fatalf("the batched arm ran %d prompt chunks again a row at a time (%s): it is the row-by-row arm",
-			batRetry, batErr)
-	}
 	if rowSt.GroupedMoE != 0 || batSt.GroupedMoE == 0 {
 		t.Fatalf("grouped mixture blocks: %d row by row, %d batched -- the arms are not the two paths (%s)",
 			rowSt.GroupedMoE, batSt.GroupedMoE, batErr)

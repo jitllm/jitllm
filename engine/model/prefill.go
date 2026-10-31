@@ -767,8 +767,9 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 				// A chunk of a few rows over the whole model is one ragged step
 				// of them (tailrows.go): decode's matvec over the live rows,
 				// where the chunk would run its batched kernels at the device's
-				// grain. The head is the tail call after the loop. A refusal
-				// falls through to the chunk.
+				// grain. The head is the tail call after the loop. A decline is
+				// the prompt's error (refusal); a fault falls through to the
+				// chunk, whose call takes the fault's path.
 				if !s.m.opt.noTailRows && n >= 2 && n <= tailRowsMax && li == s.lo && hi == s.hi && !chunkBidir && s.rows == nil &&
 					!s.recurrent() && s.rowsRefusal() == nil {
 					pos := s.tailPos[:0]
@@ -783,6 +784,9 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 						s.addDeep(hi-1, base, n)
 						li = hi - 1
 						continue
+					}
+					if err := s.refusal(li); err != nil {
+						return nil, err
 					}
 					// The step may have written part of the residual.
 					if err := refill(); err != nil {
@@ -802,15 +806,13 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 					li = hi - 1
 					continue
 				}
-				if err := s.buildRefusal(li); err != nil {
+				if err := s.refusal(li); err != nil {
 					return nil, err
 				}
 				s.ngramUndoRows()
-				// A hybrid's speculation step is rolled back as one pass, and a
-				// recurrent block run row by row could not be: the device's
-				// refusal is the step's error. Any other model's step takes the
-				// retry below like a prompt chunk, and its head on the host
-				// (finishRows).
+				// A fault: a hybrid's speculation step is rolled back as one
+				// pass, so its fault is the step's error; any other chunk's
+				// demotes and restarts on the CPU device.
 				if s.rows != nil && s.recurrent() {
 					why := "no reason given"
 					if e, ok := s.ld.(nn.ErrReporter); ok && e.Err() != "" {
@@ -818,83 +820,6 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 					}
 					return nil, fmt.Errorf("model: the device refused a %d-row speculation step on blocks [%d,%d): %s",
 						n, li, hi, why)
-				}
-				// The per-row retry is only for a run at block 0: refill()
-				// restarts from the embeddings, which is sound only while no
-				// earlier block has been applied. At li > 0 we demote and
-				// restart on the host. The retry is per token on the device,
-				// since the device still owns those blocks' KV cache.
-				// Not for a chunk holding a bidirectional run: one row at a time
-				// is causal by construction. A row of several streams (AltUp's,
-				// DeepSeek V4's) is gathered out of the chunk's stream-major
-				// layout and put back (rowStreams).
-				if li == s.lo && !chunkBidir {
-					s.devRowChunks++
-					// A hybrid's batch that advanced a linear block before it
-					// failed cannot go round again from the embeddings: the
-					// retry would apply that block's rule twice.
-					if s.recurrent() && s.recStepped() != 0 {
-						return nil, errRecurRetry{li, s.devWhy()}
-					}
-					// From the embeddings: the failed batch may have written
-					// some rows already.
-					if err := refill(); err != nil {
-						return nil, err
-					}
-					s.ngramUndoRows()
-					done := true
-					for i := 0; i < n; i++ {
-						row := s.bx[i*c.NEmbd : (i+1)*c.NEmbd]
-						if c.Streams() > 1 {
-							row = s.rowStreams(s.bx[:n*c.ResidW()], i, n, false)
-						}
-						s.layerInputs(s.bple[i*c.pleWidth() : (i+1)*c.pleWidth()])
-						if cids != nil {
-							s.tokenIDs(cids[i : i+1])
-						}
-						s.q4.setCall(s, slot, cids[min(i, len(cids)):min(i+1, len(cids))])
-						if err := s.ngramToDevice(li, hi, 1, nil, s.q4.callOwner, s.q4.callTok); err != nil {
-							return nil, err
-						}
-						s.rowAxes(p0+i, i, 1)
-						if s.ld.Layers(li, hi, p0+i, 1, row,
-							s.bcs[i*c.RopeW():(i+1)*c.RopeW()],
-							s.bswaTableAt(i, c.NRotSWA), nil) {
-							if c.Streams() > 1 {
-								s.rowStreams(s.bx[:n*c.ResidW()], i, n, true)
-							}
-							continue
-						}
-						if err := s.buildRefusal(li); err != nil {
-							return nil, err
-						}
-						s.ngramUndoRows()
-						if !s.fallsBack() {
-							return nil, errDevice{0, s.devWhy()}
-						}
-						// The host restart re-runs rows 0..i from the
-						// embeddings, which a hybrid's advanced rows forbid.
-						if s.recurrent() && (i > 0 || s.recStepped() != 0) {
-							return nil, errRecurRetry{li, s.devWhy()}
-						}
-						if !s.demoteAll() {
-							return nil, errDevice{0, s.devWhy()}
-						}
-						// And again before the host restart: rows 0..i-1 have
-						// already been through the device's blocks.
-						if err := refill(); err != nil {
-							return nil, err
-						}
-						done = false
-						break
-					}
-					if done {
-						s.addDeep(hi-1, base, n)
-						li = hi - 1
-						continue
-					}
-					li = s.lo - 1
-					continue
 				}
 				if !s.fallsBack() {
 					return nil, errDevice{li, s.devWhy()}
@@ -1028,7 +953,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			}
 			return s.logits, nil
 		}
-		if err := s.buildRefusal(s.gpuLayers); err != nil {
+		if err := s.refusal(s.gpuLayers); err != nil {
 			return nil, err
 		}
 		if !s.fallsBack() {

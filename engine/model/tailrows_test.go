@@ -25,7 +25,7 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 		last          []float32
 		toks          []int32
 		steps         [][]float32
-		tails, refuse int
+		tails         int
 	}
 	// One arm at a time: a 4 GiB card holds one copy of the model.
 	// decode is the third arm: the prompt a token at a time, which the
@@ -60,7 +60,7 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 		} else if lg, err = st.Prefill(ids); err != nil {
 			t.Fatal(err)
 		}
-		o := out{last: append([]float32(nil), lg...), tails: st.TailRowChunks(), refuse: st.DeviceRowChunks()}
+		o := out{last: append([]float32(nil), lg...), tails: st.TailRowChunks()}
 		next := int32(argmax(lg))
 		for i := range 8 {
 			if force != nil {
@@ -92,9 +92,6 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 		if on.tails != 1 || off.tails != 0 || dec.tails != 0 {
 			t.Fatalf("n=%d: %d ragged tail(s) with the rows on, %d off, %d decoding; want 1, 0 and 0",
 				n, on.tails, off.tails, dec.tails)
-		}
-		if on.refuse != 0 || off.refuse != 0 {
-			t.Fatalf("n=%d: the device refused %d / %d chunk(s)", n, on.refuse, off.refuse)
 		}
 		// Teacher-forced on the decode arm's tokens, so a near-tie that one
 		// arm breaks the other way cannot send the arms down different

@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -18,23 +19,39 @@ func (s *State) devCause() nn.FailCause {
 	return nn.FailDecline
 }
 
-// buildRefusal is the error a device call that refused because a kernel did
-// not build ends with, nil for any other refusal. No move gives a kernel its
-// build, so the caller returns it where it would have demoted or relocated:
-// the kernel is the work still to write.
-func (s *State) buildRefusal(li int) error {
-	if s.devCause() != nn.FailBuild {
-		return nil
+// refusal is the error a device call that refused ends with, nil for a
+// fault. A kernel that did not build and a decline -- a limit, or a form the
+// device does not serve -- are answered by no move: the caller returns the
+// error. Only a fault moves blocks (demoteAll).
+func (s *State) refusal(li int) error {
+	why := strings.TrimPrefix(s.devWhy(), ": ")
+	switch s.devCause() {
+	case nn.FailBuild:
+		s.buildRefused++
+		return &nn.BuildError{Layer: li, Err: errors.New(why)}
+	case nn.FailDecline:
+		s.declined++
+		return errDeclined{li, why}
 	}
-	s.buildRefused++
-	return &nn.BuildError{Layer: li, Err: errors.New(strings.TrimPrefix(s.devWhy(), ": "))}
+	return nil
+}
+
+// errDeclined is a device call that declined block layer: the reason is the
+// work still to do, and nothing runs the block elsewhere in its place.
+type errDeclined struct {
+	layer int
+	why   string
+}
+
+func (e errDeclined) Error() string {
+	return fmt.Sprintf("model: the device declined block %d: %s", e.layer, e.why)
 }
 
 // Evacuations is every way work left a device since the State began, by why.
-// A fault is a driver error or a device lost; a decline is a refusal that
-// names a limit (room, a width). Only those two move work: a kernel that did
-// not build moves nothing and is counted as BuildRefused, the calls it ended
-// with an nn.BuildError.
+// A fault is a driver error or a device lost, and only a fault moves work. A
+// kernel that did not build and a decline move nothing: they are counted
+// (BuildRefused, Declined) and the call ends with the error. A relocation
+// for room is a placement, made before a call.
 type Evacuations struct {
 	// DemotedFault and DemotedDecline are the times every block was moved to
 	// the CPU device, by the cause the device gave (DeviceDemotions is their
@@ -44,6 +61,8 @@ type Evacuations struct {
 	// a relocation is always a decline.
 	Relocated    int
 	BuildRefused int
+	// Declined is the calls the device declined, each ended with errDeclined.
+	Declined int
 }
 
 // Evacuations reads the State's counters of work moved off a device.
@@ -53,5 +72,6 @@ func (s *State) Evacuations() Evacuations {
 		DemotedDecline: s.demotedBy[nn.FailDecline],
 		Relocated:      s.devRelocated,
 		BuildRefused:   s.buildRefused,
+		Declined:       s.declined,
 	}
 }

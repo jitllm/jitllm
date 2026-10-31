@@ -55,9 +55,6 @@ func TestPrefillFoldsALayerNormHead(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if st.devRowChunks != 0 {
-					t.Fatalf("%d chunk(s) ran a row at a time after the device refused them: %s", st.devRowChunks, gpu.Err())
-				}
 				return append([]float32(nil), lg...), gpu.Stats().HeadFolds - before
 			}
 			want, tailFolds := run(false)
