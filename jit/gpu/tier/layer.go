@@ -1282,10 +1282,11 @@ func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert 
 		if m == 0 && pair.r == nil && pair.w.Packed == nil && pair.w.Data == nil {
 			continue
 		}
-		if pair.r == nil || !pair.r.ok || pair.w.Packed == nil {
+		pk := pair.w.Packed
+		float := pk == nil && kernels.IsFloat(pair.r.t) && len(pair.w.Data) > 0
+		if pair.r == nil || !pair.r.ok || pk == nil && !float {
 			return fmt.Errorf("tier: streamed bank %d has no host side", m)
 		}
-		pk := pair.w.Packed
 		for pl := 0; pl < 3; pl++ {
 			n := st.sh[m][pl]
 			if n == 0 {
@@ -1307,7 +1308,7 @@ func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert 
 					g.ringUsed = 0
 				}
 				buf := g.upRing[g.ringUsed : g.ringUsed+n : g.ringUsed+n]
-				if pk.Sheet != nil {
+				if !float && pk.Sheet != nil {
 					sp, rel, err := pk.Sheet(int(it.e))
 					if err != nil {
 						rel()
@@ -1321,7 +1322,11 @@ func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert 
 					copy(buf, src)
 					rel()
 				} else {
-					whole := [3][]byte{pk.QS, pk.D, pk.SC}[pl]
+					// A float bank's rows are its one plane.
+					whole := pair.w.Data
+					if !float {
+						whole = [3][]byte{pk.QS, pk.D, pk.SC}[pl]
+					}
 					off := int(it.e) * n
 					if off+n > len(whole) {
 						return fmt.Errorf("tier: expert %d plane %d wants bytes %d..%d of %d",
@@ -1466,10 +1471,11 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 		if m == 0 && pair.r == nil && pair.w.Packed == nil && pair.w.Data == nil {
 			continue
 		}
-		if pair.r == nil || !pair.r.ok || pair.w.Packed == nil {
+		pk := pair.w.Packed
+		float := pk == nil && kernels.IsFloat(pair.r.t) && len(pair.w.Data) > 0
+		if pair.r == nil || !pair.r.ok || pk == nil && !float {
 			return fmt.Errorf("tier: streamed bank %d has no host side", m)
 		}
-		pk := pair.w.Packed
 		for pl := 0; pl < 3; pl++ {
 			n := st.sh[m][pl]
 			if n == 0 {
@@ -1493,7 +1499,7 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 				var src []byte
 				release := func() {}
 				ts := time.Now()
-				if pk.Sheet != nil {
+				if !float && pk.Sheet != nil {
 					sp, rel, err := pk.Sheet(int(e))
 					release = rel
 					if err != nil {
@@ -1502,7 +1508,11 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 					}
 					src = [3][]byte{sp.QS, sp.D, sp.SC}[pl]
 				} else {
-					whole := [3][]byte{pk.QS, pk.D, pk.SC}[pl]
+					// A float bank's rows are its one plane.
+					whole := pair.w.Data
+					if !float {
+						whole = [3][]byte{pk.QS, pk.D, pk.SC}[pl]
+					}
 					off := int(e) * n
 					if off+n > len(whole) {
 						return fmt.Errorf("tier: expert %d plane %d wants bytes %d..%d of %d",
@@ -3811,10 +3821,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 					li, weightRole(i), x.T)
 				return false
 			}
-			if x.Packed == nil {
-				// A streamed bank needs the packed layout, since fill() sends a
-				// sheet at a time. A float bank (an F32 or F16 file) has none, so
-				// such a mixture streams nothing and is declined here by name.
+			if x.Packed == nil && (!kernels.IsFloat(q) || len(x.Data) == 0) {
+				// A streamed bank sends a sheet at a time: a packed bank's planes,
+				// or a float bank's own rows (its one plane, expert-major).
 				g.LastErr = fmt.Sprintf("block %d: %s is not pre-packed, so its bank cannot be streamed",
 					li, weightRole(i))
 				return false
