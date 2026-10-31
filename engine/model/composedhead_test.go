@@ -262,11 +262,12 @@ func TestComposedHeadOps(t *testing.T) {
 							// The composer's head, then the tier's own with the
 							// host finishing the logits.
 							for _, parts := range []tier.Parts{tier.ComposedHead, 0} {
-								// Every device path caps before the host adds the bias,
-								// and the model's head biases first: no model has both,
-								// and the tier leaves such a head on the host, which
-								// runs it in the model's order (finishLogits).
-								refused := arm.cap != 0 && outB != nil
+								// The tier's own head caps before the host adds the bias,
+								// and the model's head biases first: without the composed
+								// head the tier leaves such a head on the host, which runs
+								// it in the model's order (finishLogits). The composed head
+								// keeps the model's order on the device.
+								refused := arm.cap != 0 && outB != nil && parts == 0
 								a := &headArm{fx: fx, dev: dev, parts: parts, xs: xs, lnb: lnb, outB: outB, want: set, cfg: set, refused: refused}
 								a.run(t)
 								n, d, _ := a.stats.ServedPart(tier.ComposedHead)
