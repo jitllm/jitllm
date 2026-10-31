@@ -33,13 +33,16 @@ func TestComposedGPUAttendInPasses(t *testing.T) {
 		t.Skip("no GPU")
 	}
 	for _, d := range devs {
-		t.Run(d.API(), func(t *testing.T) { attendInPasses(t, d) })
+		// Rows of separate sequences, rows 0 and 1 seeing none of the last
+		// pass; and a prompt chunk, one sequence's rows in order.
+		t.Run(d.API()+"/rows", func(t *testing.T) { attendInPasses(t, d, []int{40, 70, 100}, 0) })
+		t.Run(d.API()+"/chunk", func(t *testing.T) { attendInPasses(t, d, []int{92, 93, 94, 95, 96, 97, 98, 99}, 1) })
 	}
 }
 
-func attendInPasses(t *testing.T, d backend.Device) {
-	const heads, kvh, dim, page, capRows, R = 4, 2, 64, 16, 8, 3
-	pos := []int{40, 70, 100} // each row's position: rows 0 and 1 see none of the last pass
+func attendInPasses(t *testing.T, d backend.Device, pos []int, seqs int) {
+	const heads, kvh, dim, page, capRows = 4, 2, 64, 16, 8
+	R := len(pos)
 	keys := 8 * page
 	passKeys := 2 * page
 	b := graph.New()
@@ -52,7 +55,7 @@ func attendInPasses(t *testing.T, d backend.Device) {
 		if passes {
 			reg = reg.WithoutSplits(jit.DeviceGPU)
 		}
-		_, codes, err := reg.Form(jit.Request{Graph: g, Step: jit.Step{Rows: capRows, Page: page, Keys: keys},
+		_, codes, err := reg.Form(jit.Request{Graph: g, Step: jit.Step{Rows: capRows, Page: page, Keys: keys, Seqs: seqs},
 			Device: dev, History: jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: true}, Passes: passes}})
 		if err != nil {
 			t.Fatal(err)
