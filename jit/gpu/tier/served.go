@@ -765,8 +765,9 @@ func (g *devTier) instanceOn(f *partForm, bs *blockScratch) (*partInst, error) {
 		}
 		d, err := g.dev.Alloc(b.n)
 		if err != nil {
+			// A driver's refusal inside the budget is no room either.
 			in.free()
-			return nil, err
+			return nil, partRoomError{n + grow}
 		}
 		g.poisonBuf(d, b.n)
 		in.phys = append(in.phys, d)
@@ -785,7 +786,7 @@ func (g *devTier) instanceOn(f *partForm, bs *blockScratch) (*partInst, error) {
 	if bs != nil {
 		if err := g.growArena(bs, f, in); err != nil {
 			in.free()
-			return nil, err
+			return nil, partRoomError{n + grow}
 		}
 	}
 	in.bytes = n
