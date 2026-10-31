@@ -2995,6 +2995,17 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			g.mu.Lock()
 			g.prewarmComposedTables()
 			g.prewarmComposedBlock(li)
+			// A block whose composed prompt part does not fit beside the
+			// blocks placed, at the narrowest width fitReserved reached, is
+			// declined here rather than met by its first prompt.
+			if why := g.promptRoomless(li); why != "" && !g.sharedBeyond(li, sid) {
+				g.dropGraph()
+				g.releaseBlock(li)
+				g.afterRelease()
+				g.Declined++
+				g.LastErr = why
+				placed = false
+			}
 			g.mu.Unlock()
 		}
 	}()

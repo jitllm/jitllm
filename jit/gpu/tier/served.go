@@ -2726,6 +2726,21 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 	}
 }
 
+// promptRoomless is why block li, which the composer serves, has no prompt
+// part at the reserved width for want of room, or "" where it has one, the
+// composer does not serve it, or what failed was not room. Callers hold g.mu.
+func (g *devTier) promptRoomless(li int) string {
+	bb, l := g.bbs[g.promptW], g.layers[li]
+	if bb == nil || l == nil || !g.rowsForms(bb) || g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
+		return ""
+	}
+	bb.instNoRoom = false
+	if g.promptServed(l, li, bb) || !bb.instNoRoom {
+		return ""
+	}
+	return fmt.Sprintf("block %d: its composed prompt part does not fit beside the blocks placed (%s)", li, g.LastErr)
+}
+
 // promptServed reports whether the composer serves block li of a prompt call
 // or a ragged step at bb's rows (rowsForms, blockServes): its form formed and
 // the scratch's instance of it held, both made here where they are not,
