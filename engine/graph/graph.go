@@ -270,10 +270,17 @@ const (
 	// grid's edges and past Taps*Taps rows to Out[0]'s width. A full
 	// convolution is OpMatVec over it.
 	OpUnfold
+	// OpUniform is a uniform in [0, 1) for each key of In[0] (u32), counter
+	// based: Philox2x32-10 over the counter (the key, In[1]'s second word)
+	// with In[1]'s first word as its key (In[1] u32, two words: the seed,
+	// then the position), the first output word's top 24 bits over 2^24.
+	// Out[0] one float a key. A primitive: a sampler's draw, the same on
+	// every device.
+	OpUniform
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash", "unfold"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash", "unfold", "uniform"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

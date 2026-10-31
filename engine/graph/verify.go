@@ -219,6 +219,15 @@ func Verify(g *Graph, f Facts) error {
 				width(o.Out[0]) < t*t*width(o.In[0]) {
 				bad("%s: a %dx%d window over a grid %d wide of rows of %d into %d", at, t, t, o.Attr.GridW, width(o.In[0]), width(o.Out[0]))
 			}
+		case OpUniform:
+			switch {
+			case len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) != 0:
+				bad("%s: %d inputs into %d outputs", at, len(o.In), len(o.Out))
+			case width(o.In[1]) != 2 || width(o.Out[0]) != width(o.In[0]):
+				bad("%s: %d keys and a counter of %d into %d uniforms", at, width(o.In[0]), width(o.In[1]), width(o.Out[0]))
+			case g.Values[o.In[0]].Elem != ElemU32 || g.Values[o.In[1]].Elem != ElemU32 || g.Values[o.Out[0]].Elem != ElemF32:
+				bad("%s: keys and a counter not of words, or uniforms not of floats", at)
+			}
 		case OpPosition:
 			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || o.Attr.Offset < 0 || o.Attr.Span < 0 {
 				bad("%s: %d inputs into %d outputs, offset %d and span %d", at, len(o.In), len(o.Out), o.Attr.Offset, o.Attr.Span)
