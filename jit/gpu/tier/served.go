@@ -960,7 +960,7 @@ func (g *devTier) dropPart(sv *servedPart) {
 	if sv == nil {
 		return
 	}
-	if in := sv.inst; in != nil {
+	if in := sv.inst; in != nil && sv.own {
 		in.free()
 		g.refund(in.bytes)
 		g.instBytes -= in.bytes
@@ -986,10 +986,7 @@ func (g *devTier) dropPart(sv *servedPart) {
 // where the scratch holds none, nil where the budget does not hold it.
 // Callers hold g.mu.
 func (g *devTier) promptInst(bs *blockScratch, f *partForm) *partInst {
-	if in := bs.prompt[f]; in != nil {
-		return in
-	}
-	in, err := g.instanceOn(f, bs)
+	in, _, err := g.scratchInst(bs, f)
 	if err != nil {
 		g.LastErr = "the composed prompt block: " + err.Error()
 		if _, room := err.(partRoomError); room {
@@ -997,12 +994,30 @@ func (g *devTier) promptInst(bs *blockScratch, f *partForm) *partInst {
 		}
 		return nil
 	}
+	return in
+}
+
+// scratchInst is bs's instance of form f, made where it holds none: every
+// part of the form on the lane launches in it, one after another on one
+// stream, its passing buffers on bs's arena. A lane with no scratch gives
+// the part one of its own (own). Callers hold g.mu.
+func (g *devTier) scratchInst(bs *blockScratch, f *partForm) (in *partInst, own bool, err error) {
+	if bs == nil {
+		in, err = g.instance(f)
+		return in, true, err
+	}
+	if in := bs.prompt[f]; in != nil {
+		return in, false, nil
+	}
+	if in, err = g.instanceOn(f, bs); err != nil {
+		return nil, false, err
+	}
 	if bs.prompt == nil {
 		bs.prompt = map[*partForm]*partInst{}
 	}
 	bs.prompt[f] = in
 	g.placeGen.Add(1)
-	return in
+	return in, false, nil
 }
 
 // dropPromptInst frees bs's instance of form f and gives its bytes back.
@@ -1089,9 +1104,10 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 			continue
 		}
 		var in *partInst
+		own := false
 		if sk.kind != partPrompt {
 			var err error
-			if in, err = g.instance(sv.f); err != nil {
+			if in, own, err = g.scratchInst(nl.bs, sv.f); err != nil {
 				return fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
 			}
 		}
@@ -1099,7 +1115,7 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 		if nl.served == nil {
 			nl.served = map[servedKey]*servedPart{}
 		}
-		nl.served[sk] = &servedPart{sl: sv.sl.clone(), f: sv.f, inst: in, args: sv.f.launchArgs(), n: sv.n, m: sv.m}
+		nl.served[sk] = &servedPart{sl: sv.sl.clone(), f: sv.f, inst: in, own: own, args: sv.f.launchArgs(), n: sv.n, m: sv.m}
 	}
 	return nil
 }
@@ -1280,12 +1296,15 @@ type servedKey struct {
 const partIO = 8
 
 // servedPart is a served part and its form, with the arguments its launch
-// binds, reused every step: its own instance, or for a prompt part none,
-// its instance its scratch's (promptInst).
+// binds, reused every step: its instance its decode scratch's, one for
+// every block of the form (scratchInst), or its own where the lane has no
+// scratch (own), or for a prompt part none, its instance its call scratch's
+// (promptInst).
 type servedPart struct {
 	sl      composedPart
 	f       *partForm
 	inst    *partInst
+	own     bool
 	args    [][]backend.Buf
 	in, out [partIO]backend.Buf
 	n, m    int
@@ -1419,8 +1438,9 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	var in *partInst
 	// A form over a history read in passes is laid on its scratch's arena
 	// (streamPart).
+	own := false
 	if sk.kind != partPrompt && !sk.stream {
-		if in, err = g.instance(f); err != nil {
+		if in, own, err = g.scratchInst(g.bs, f); err != nil {
 			if f.refs == 0 {
 				delete(g.servedForms, key)
 				f.close()
@@ -1440,7 +1460,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		return nil, fail(fmt.Errorf("a part of %d inputs and %d outputs, past the %d a served part binds", len(sl.graph.In), len(sl.graph.Out), partIO))
 	}
 	f.refs++
-	sv := &servedPart{sl: sl, f: f, inst: in, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
+	sv := &servedPart{sl: sl, f: f, inst: in, own: own, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
 	g.served[sk] = sv
 	if sk.kind == partBlock && !sk.stream && sk.graph.Block >= 0 {
 		if b := sk.graph.Block; b >= len(g.blockForms) {
