@@ -303,6 +303,9 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 	if err := g.ensureRange(kp, s, have+count); err != nil {
 		return err
 	}
+	if len(l.free) < count {
+		l.fence()
+	}
 	// The prefix cache's unheld pages first: they are a cache, and room for
 	// them is the first a sequence takes back (kvshare.go).
 	if len(l.free) < count {

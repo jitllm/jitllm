@@ -199,6 +199,9 @@ func (g *devTier) evictPage(kp *kvPool, s seqID) error {
 // back would refuse every later call rather than this one.
 // Callers hold g.mu, between submissions.
 func (g *devTier) evictForRoom(sid uint64, kp *kvPool, l *kvLayerPool, want int) bool {
+	// Pages released since the last submission (a rewind's) are room once
+	// nothing in flight reads them.
+	l.fence()
 	short := want + 1 - len(l.free)
 	if short <= 0 {
 		return true

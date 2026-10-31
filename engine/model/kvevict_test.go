@@ -346,6 +346,9 @@ func TestKVEvictionRewindsIntoAnEvictedPage(t *testing.T) {
 	}
 	t.Logf("rewound to %d past %d page(s) at home, %d more sent home after it; worst logit NMSE %.3e against "+
 		"the host (step %d)", p, ev, g.Stats().KVEvictions-ev, worst, at)
+	if d, r := st.DeviceDemotions(), st.Relocations(); d != 0 || r != 0 {
+		t.Fatalf("%d demotion(s) and %d relocation(s): the steps after the rewind did not all run on the device (%s)", d, r, g.Err())
+	}
 	if !(worst < evictNMSE) {
 		t.Fatalf("worst logit NMSE %.3e against the host at step %d: the rows after the rewind were lost or "+
 			"read stale", worst, at)
