@@ -751,7 +751,9 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 					continue
 				}
 				var fh *nn.Head
-				if li == s.lo && hi == s.hi && base+n == total && s.emb == nil && s.head != nil && !s.noHeadFold &&
+				// A tap reads every chunk's residual, which a folded head keeps
+				// on the device.
+				if li == s.lo && hi == s.hi && base+n == total && s.emb == nil && s.head != nil && !s.noHeadFold && s.rowTap == nil &&
 					!c.streamHead() {
 					fh = s.head
 					// A speculation step folds the head only over the rows it
