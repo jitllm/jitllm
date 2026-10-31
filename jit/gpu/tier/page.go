@@ -394,36 +394,58 @@ func (g *devTier) roomOrReclaim(n uint64) bool {
 
 // streamForRoom makes room for n bytes of history where neither growth nor
 // sending cold history home can (allocPages), by streaming blocks: the
-// highest resident ones no one pinned or is reading, until what they hold
-// beyond one slot covers n, then the pager takes it (reclaim). One streamed block frees nothing -- it needs its slot
-// back to run -- so the slot they swap through stays. Nothing is marked when
-// the blocks cannot cover n. Callers hold g.mu, outside any submission.
+// highest resident ones no one pinned or is reading, until n leaves them a
+// slot to swap through (swapRoom), then the pager takes it (reclaim). One
+// streamed block frees nothing -- it needs its slot back to run. Nothing stays
+// marked when they cannot cover n. Callers hold g.mu, outside any submission.
 func (g *devTier) streamForRoom(n uint64) bool {
+	if g.stream == nil {
+		g.stream = map[int]bool{}
+	}
 	var marked []int
-	var sum, widest uint64
-	for li := len(g.layers) - 1; li >= 0 && (len(marked) < 2 || sum-widest < n); li-- {
+	for li := len(g.layers) - 1; li >= 0 && (len(marked) < 2 || !g.swapRoom(n)); li-- {
 		l := g.layers[li]
 		if l == nil || l.pg == nil || !l.pg.in || l.pg.bytes == 0 || l.pg.uses > 0 || g.pinned[li] || g.stream[li] {
 			continue
 		}
-		marked = append(marked, li)
-		b := l.pg.bytes + l.pg.round
-		sum, widest = sum+b, max(widest, b)
-	}
-	if len(marked) < 2 || sum-widest < n {
-		return false
-	}
-	if g.stream == nil {
-		g.stream = map[int]bool{}
-	}
-	for _, li := range marked {
 		g.stream[li] = true
+		marked = append(marked, li)
 	}
-	if !g.reclaim(n, -1, 0, 0) {
+	if len(marked) < 2 || !g.swapRoom(n) || !g.reclaim(n, -1, 0, 0) {
+		for _, li := range marked {
+			if l := g.layers[li]; l != nil && l.pg != nil && l.pg.in {
+				delete(g.stream, li)
+			}
+		}
 		return false
 	}
 	g.Slots = g.slots()
 	return true
+}
+
+// swapRoom reports that n more bytes held for good leave the streamed blocks
+// a slot to swap through: everything held but their paged-in pages, n and the
+// widest of them inside the budget. slots() divides the budget by the widest
+// block of all and counts every paged-in block as swap space, which a block
+// resident and unstreamed is not. Callers hold g.mu.
+func (g *devTier) swapRoom(n uint64) bool {
+	var in, widest uint64
+	for li := range g.stream {
+		l := g.layers[li]
+		if l == nil || l.pg == nil {
+			continue
+		}
+		b := l.pg.bytes + l.pg.round
+		widest = max(widest, b)
+		if l.pg.in {
+			in += b
+		}
+	}
+	if widest == 0 {
+		return true
+	}
+	held := g.used - min(g.used, in) + g.reserved()
+	return held+n+widest <= g.limit
 }
 
 // keepsSlot reports that n more bytes held for good leave a device that
@@ -434,7 +456,7 @@ func (g *devTier) streamForRoom(n uint64) bool {
 // streamed histories took the one slot and nothing ever paged in. Callers hold
 // g.mu.
 func (g *devTier) keepsSlot(n uint64) bool {
-	return len(g.stream) == 0 || g.widest == 0 || g.slotsIfPerm(n+g.reserved()) >= minSlots
+	return len(g.stream) == 0 || g.widest == 0 || g.slotsIfPerm(n+g.reserved()) >= minSlots && g.swapRoom(n)
 }
 
 // stateFits makes room for n bytes of state that cannot be re-read -- KV
