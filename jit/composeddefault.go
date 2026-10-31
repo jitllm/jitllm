@@ -1,5 +1,5 @@
 package jit
 
-// ComposedByDefault is whether models are served through the composer with no
-// option set: every tier's blocks and head, and the CPU's blocks.
+// ComposedByDefault is whether every tier serves its blocks and head through
+// the composer with no option set.
 const ComposedByDefault = true

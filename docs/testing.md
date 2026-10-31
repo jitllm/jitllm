@@ -279,9 +279,10 @@ and every other caller of `swaTier`). `JITLLM_TEST_DEVICES` names their device:
 ## Running the device gates composed
 
 Every test binary opens every tier with the composer serving the blocks and
-the head (`Config.Composed`), and the CPU's blocks (`WithComposedCPU`), unless
-a gate sets its own, so every device gate runs the composed path on what the
-front end states and main's kernels on the named rest. The relocation, move and
+the head (`Config.Composed`) unless a gate sets its own, so every device gate
+runs the composed path on what the front end states and main's kernels on the
+named rest. The CPU's blocks are composed where a gate asks (`WithComposedCPU`)
+until the CPU path passes the CPU's gates. The relocation, move and
 session gates carry a composed arm in every build as well, on the models the
 front end states whole, held to the composer having served
 (`composedRan`: part steps served, none formed at a step, no decline outside
