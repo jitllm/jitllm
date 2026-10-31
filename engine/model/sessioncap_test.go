@@ -199,16 +199,17 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 		t.Fatal("the roomy arm did not run, so the tight one has no budget to derive")
 	}
 
-	// Room for A and half of B's rows: B takes blocks home for itself, and A
-	// keeps every one.
+	// Room for A and half of B's rows: B takes blocks home for itself or the
+	// card pages them, and A keeps every one.
 	t.Run("tight", func(t *testing.T) {
 		g := open(t, testdevices.Like(t, "cuda:0")+"="+strconv.FormatUint(usedA+bFull/2, 10))
 		b := run(t, g)
-		if n := b.devCount(); n == 0 || n == m.Cfg.NLayer {
-			t.Fatalf("B placed %d of %d blocks: the budget did not make B split, so this "+
-				"compared nothing (%d of %d bytes charged: %s)", n, m.Cfg.NLayer, g.Budgets()[0].Used, g.Budgets()[0].Limit, g.Err())
+		n, pages := b.devCount(), g.Stats().PageOuts
+		if n == 0 || n == m.Cfg.NLayer && pages == 0 {
+			t.Fatalf("B placed %d of %d blocks and the card paged nothing out: the budget did not bite, so "+
+				"this compared nothing (%d of %d bytes charged: %s)", n, m.Cfg.NLayer, g.Budgets()[0].Used, g.Budgets()[0].Limit, g.Err())
 		}
 		composedRan(t, parts, nil, g)
-		t.Logf("B kept %d of %d blocks on the card; A kept all of them", b.devCount(), m.Cfg.NLayer)
+		t.Logf("B kept %d of %d blocks on the card, %d page-out(s); A kept all of them", n, m.Cfg.NLayer, pages)
 	})
 }
