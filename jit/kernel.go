@@ -49,6 +49,10 @@ type Kernel struct {
 	// Unfused is a kernel of a part the registers refused fused, with no
 	// expression left to split: Fuse joins it to nothing.
 	Unfused bool
+	// Folds is a kernel folding a pass into the running partial
+	// (foldsAPass): a pass ends at it, so Fuse joins nothing after it into
+	// it and no launch it begins or joins runs past it.
+	Folds bool
 	// Jam is the rows a call of the kernel runs where RowJam set it;
 	// Unjam is the times a part's jammed form the registers refused, each
 	// halving the rows a call RowJam runs.

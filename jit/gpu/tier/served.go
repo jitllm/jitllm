@@ -450,9 +450,11 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 }
 
 // passHalves finds the codes a form over a history read in passes runs once
-// a pass: from its first code reading the history to its last folding the
-// running partial. A pass writes none of the call's buffers, no table but
-// the pools and the partial, and no buffer a code of the pass reads before.
+// a pass: from its first code reading the history (its keys or values) to
+// its last folding the running partial. A code before it -- a front fused
+// with the row's own append, which addresses the pages but reads no history
+// -- runs once. A pass writes none of the call's buffers, no table but the
+// pools and the partial, and no buffer a code of the pass reads before.
 func (f *partForm) passHalves() error {
 	f.passLo, f.passHi = -1, -1
 	for ci, args := range f.args {
@@ -461,8 +463,8 @@ func (f *partForm) passHalves() error {
 				continue
 			}
 			switch a.table {
-			case "rows", "rows.win", "pages", "kv.k", "kv.v":
-				if f.passLo < 0 {
+			case "kv.k", "kv.v":
+				if a.read && f.passLo < 0 {
 					f.passLo = ci
 				}
 			case "run.out":

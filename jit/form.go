@@ -107,7 +107,7 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
 			}
 			k.Part, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored, k.Unstreamed, k.Unsplit = req.Part, sp.unfused[k.Of], sp.unjammed[k.Of], sp.unpaired[k.Of], sp.unwide[k.Of], sp.uncursored[k.Of], sp.unstreamed[k.at()], sp.unsplit[k.Of]
-			k.Crowded = sp.crowded[k.at()]
+			k.Crowded, k.Folds = sp.crowded[k.at()], foldsAPass(p)
 			k.Apart = req.Apart
 			k.Own = k.ownWrites()
 			k.Capacity = liveOf(p, req.Step, req.Device)

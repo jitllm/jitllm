@@ -227,6 +227,13 @@ var (
 	tableRunOut = Operand{Kind: OperandTable, Name: "run.out"}
 )
 
+// foldsAPass reports whether p folds a pass into the running partial: a
+// pass ends at its kernel (Kernel.Folds), and what reads the partial runs
+// once, after the last pass.
+func foldsAPass(p Prim) bool {
+	return p.Out.Kind == tableRunOut.Kind && p.Out.Name == tableRunOut.Name
+}
+
 // foldPasses folds a pass's weighted values, sums and maxima into the
 // running partial, each side scaled by exp of its maximum less the larger,
 // and finishes the row from the fold: the values over the sum, a sink's
