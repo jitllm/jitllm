@@ -241,9 +241,12 @@ func foldPasses(o graph.Op, R, H, D int, values, sums, maxes, out Operand) []Pri
 	mo, lo := fx.at(3, runs, r, h, fx.u(uint32(D))), fx.at(3, runs, r, h, fx.u(uint32(D+1)))
 	mj, lj := fx.at(2, heads, r, h), fx.at(1, heads, r, h)
 	held := fx.op(OpLess, ir.Pred, fx.f(0), lo)
-	mn := fx.sel(F, held, fx.op(OpMax, F, mo, mj), mj)
+	// A pass whose every key the row may not see has the mask's maximum,
+	// its weights exp(0) each: it attended nothing.
+	seen := fx.op(OpLess, ir.Pred, fx.f(math.Float32frombits(0xff7fffff)/2), mj)
+	mn := fx.sel(F, held, fx.sel(F, seen, fx.op(OpMax, F, mo, mj), mo), mj)
 	ea := fx.sel(F, held, fx.un(OpExp, F, fx.op(OpSub, F, mo, mn)), fx.f(0))
-	eb := fx.un(OpExp, F, fx.op(OpSub, F, mj, mn))
+	eb := fx.sel(F, seen, fx.un(OpExp, F, fx.op(OpSub, F, mj, mn)), fx.f(0))
 	vd := fx.op(OpMin, U, d, fx.u(uint32(D-1)))
 	acc := fx.op(OpAdd, F, fx.op(OpMul, F, fx.at(3, runs, r, h, d), ea), fx.op(OpMul, F, fx.at(0, dims, r, h, vd), eb))
 	sum := fx.op(OpAdd, F, fx.op(OpMul, F, lo, ea), fx.op(OpMul, F, lj, eb))
