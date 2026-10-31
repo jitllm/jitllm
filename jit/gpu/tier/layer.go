@@ -1362,9 +1362,10 @@ func (st *streamBank) forget() {
 // whose expert kernels read the selection itself (DenseMoE's per-expert
 // scale) keeps the plain bank: the cache rewrites the selection as slots.
 func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, bank int, biased bool) int {
-	// Nor one whose experts carry biases (gpt-oss): the bias kernels index
-	// them by the selection, which the cache rewrites as slots. A second
-	// buffer of true ids would lift it.
+	// Nor one whose experts carry biases (gpt-oss) where the tier's own
+	// kernels run it: they index the biases by the selection, which the cache
+	// rewrites as slots. The composer's form reads only the banks in pages
+	// through the page table.
 	if p.DenseMoE || biased {
 		return slots
 	}
@@ -3795,7 +3796,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 					// An auto-streamed block is placed on the plain bank;
 					// its cache comes after placement (sizeAutoCaches).
 					cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank,
-						w.ExpGateB != nil || w.ExpUpB != nil || w.ExpDownB != nil)
+						!composed && (w.ExpGateB != nil || w.ExpUpB != nil || w.ExpDownB != nil))
 				}
 				e = cslots
 			}
