@@ -234,7 +234,7 @@ func TestHybridPrefillMatchesTheHost(t *testing.T) {
 			defer m.Close()
 			// Streamed, so the card arm's bank is a token's sheets even where
 			// the whole bank would fit.
-			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
+			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), mainKernels,
 				tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true }))
 			if err != nil || g == nil {
 				noDevice(t, "gpu:0", err)

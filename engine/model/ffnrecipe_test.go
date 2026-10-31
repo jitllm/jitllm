@@ -14,7 +14,7 @@ import (
 // and the stats after each; nil where the host has no CUDA device.
 func ffnRecipeDecode(t *testing.T, m *Model, ids, toks []int32, noGraph bool, layers int, cache string, arms []tier.FFNForm) ([][][]float32, []tier.Stats) {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithDevices("cuda"), tier.WithTuneCache(cache),
+	g, err := tier.OpenWith(tier.WithDevices("cuda"), tier.WithTuneCache(cache), mainKernels,
 		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph }))
 	if err != nil || g == nil {
 		return nil, nil

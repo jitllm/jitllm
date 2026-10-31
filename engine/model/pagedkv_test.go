@@ -219,7 +219,7 @@ func TestPagedKVBatchMatchesHost(t *testing.T) {
 		ids[i] = m.Vocab.Encode(s, true)
 	}
 	const gen, seq = 12, 256
-	got, after, _ := batchGreedy(t, m, ids, gen, seq, append([]tier.Option{tier.WithDevices("gpu:0")}, pagedOpts(pagedKVPage)...))
+	got, after, _ := batchGreedy(t, m, ids, gen, seq, append([]tier.Option{tier.WithDevices("gpu:0"), mainKernels}, pagedOpts(pagedKVPage)...))
 	if lastBatchStats.PagedLaunches == 0 {
 		t.Fatal("the batch launched no paged attention kernel")
 	}
