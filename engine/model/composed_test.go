@@ -689,7 +689,11 @@ func TestComposedBlocksServe(t *testing.T) {
 							t.Run(name, func(t *testing.T) {
 								parts := a.parts | tier.ComposedPrompt
 								tile := tier.WithConfig(func(c *tier.Config) { c.MatrixTile = a.tile })
-								sopts := streamOpts(t, m, dev, a.stream, parts, noGraph)
+								ctx := 0
+								for _, p := range panel {
+									ctx = max(ctx, len(p.ids)+len(p.toks)+4)
+								}
+								sopts := streamOpts(t, m, dev, a.stream, parts, noGraph, ctx)
 								var band, offBand panelBand
 								var st0 tier.Stats
 								var got0 [][]float32

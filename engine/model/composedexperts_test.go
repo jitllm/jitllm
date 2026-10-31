@@ -617,23 +617,22 @@ const (
 )
 
 // streamOpts is the tier options of arm a for mixture m on dev: for the
-// budget, what m's blocks take there resident, with the arm's parts and graph
-// setting and the narrowest prompt scratch, less half its routed banks. The
-// placement halves the prompt width until the blocks fit, so a budget taken
-// at a wider scratch is absorbed by the scratch and no bank ever misses room
-// (a fixture's banks are kilobytes beside it).
-func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts tier.Parts, noGraph bool) []tier.Option {
+// budget, what m's blocks take placed as the arm places them -- its parts,
+// graph setting, prompt width and context ctx -- less half its routed banks.
+// A fixture's banks are kilobytes beside the rest, so a probe placed any
+// other way leaves the budget's cut to the scratch or the history.
+func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts tier.Parts, noGraph bool, ctx int) []tier.Option {
 	t.Helper()
 	switch a {
 	case streamBudget:
 		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph, c.Census, c.PromptRows = parts, noGraph, true, 8 })},
+			tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph, c.Census, c.PromptRows = parts, noGraph, true, 64 })},
 			testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)
 		}
 		defer g.Close()
-		s := m.NewState(64)
+		s := m.NewState(ctx)
 		defer s.Close()
 		s.SetDeviceFallback(false)
 		if err := s.SetDevice(g); err != nil {
