@@ -722,14 +722,16 @@ func TestComposedBlocksServe(t *testing.T) {
 											blocks+replayed, replayed, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 									}
 									// Every step and every prompt chunk writes every table
-									// the plan states.
+									// the plan states, none declined or left unasked; a
+									// prompt's tail too short for a chunk runs as a step and
+									// writes its own.
 									if a.parts&tier.ComposedTable != 0 {
-										nt, _, tableUnasked := st.ServedPart(tier.ComposedTable)
+										nt, tableDeclined, tableUnasked := st.ServedPart(tier.ComposedTable)
 										np, _, _ := st.ServedPart(tier.ComposedPrompt)
 										calls := len(toks) + np/m.Cfg.NLayer
-										if replayed := st.ReplayedPart(tier.ComposedTable); nt+replayed != calls*composedTables(m) {
-											t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps and %d prompt chunks of %d tables; %d capture(s), %d unasked, last error %q",
-												nt+replayed, replayed, len(toks), np/m.Cfg.NLayer, composedTables(m), st.Captures, tableUnasked, st.LastErr)
+										if replayed := st.ReplayedPart(tier.ComposedTable); tableDeclined != 0 || tableUnasked != 0 || nt+replayed < calls*composedTables(m) {
+											t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps and %d prompt chunks of %d tables; %d declined, %d unasked, %d capture(s), last error %q",
+												nt+replayed, replayed, len(toks), np/m.Cfg.NLayer, composedTables(m), tableDeclined, tableUnasked, st.Captures, st.LastErr)
 										}
 									}
 									// Every step's input row gathered by the composer, from
