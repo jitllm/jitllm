@@ -214,8 +214,11 @@ func promptFits(t *testing.T, m *Model, spec string) {
 	// and the chunk goes in pieces; after TestQwenVLMatchesLlamaCppTeacherForced
 	// in the same process it is the head's last planes at placement, and the
 	// chunk runs whole on the room the head never took. Both are the driver
-	// refusing what the budget admitted.
-	if !isOOM(st2.LastErr) || st2.PromptSplits == 0 && st2.NoRoom == 0 {
+	// refusing what the budget admitted. The composer's prompt part may meet
+	// the full card first, as the budget refusing it at the chunk: the same
+	// violation, caught a step earlier.
+	roomRefused := err != nil && strings.Contains(err.Error(), "which the device's budget does not hold")
+	if !roomRefused && (!isOOM(st2.LastErr) || st2.PromptSplits == 0 && st2.NoRoom == 0) {
 		t.Fatalf("without the reservation the chunk ran whole on %d blocks (%d splits, %d uploads refused, %q): "+
 			"the card was not full, so this gate does not discriminate", n2, st2.PromptSplits, st2.NoRoom, st2.LastErr)
 	}
