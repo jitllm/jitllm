@@ -618,41 +618,63 @@ const (
 
 // streamOpts is the tier options of arm a for mixture m on dev: for the
 // budget, what m's blocks take placed as the arm places them -- its parts,
-// graph setting, prompt width and context ctx -- less half its routed banks.
-// A fixture's banks are kilobytes beside the rest, so a probe placed any
-// other way leaves the budget's cut to the scratch or the history. The head
-// is placed after the blocks, so the probe leaves it home: a cut it covered
-// would land on it, and the arm runs it at home.
+// graph setting, prompt width and context ctx -- less half of what
+// streaming one mixture block saves on the card, measured: the blocks placed
+// resident and placed streamed, the difference over the mixture blocks.
+// Placement keeps the blocks that fit resident and streams the rest, the
+// last first, so a deeper cut leaves that block home; and a fixture's banks
+// are kilobytes, where the card's allocation pieces can make a streamed
+// block cost what a resident one does, which no budget then tells apart.
+// The head is placed after the blocks, so the probes leave it home: a cut it
+// covered would land on it, and the arm runs it at home.
 func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts tier.Parts, noGraph bool, ctx int) []tier.Option {
 	t.Helper()
 	switch a {
 	case streamBudget:
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph, c.Census, c.PromptRows = parts, noGraph, true, 64 })},
-			testTierOpts(t)...)...)
-		if err != nil || g == nil {
-			noDevice(t, dev, err)
+		probe := func(stream bool) tier.Stats {
+			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+				tier.WithConfig(func(c *tier.Config) {
+					c.Composed, c.NoGraph, c.Census, c.PromptRows = parts, noGraph, true, 64
+					if stream {
+						c.StreamExperts, c.HybridExperts, c.NoHybrid = true, false, true
+					}
+				})},
+				testTierOpts(t)...)...)
+			if err != nil || g == nil {
+				noDevice(t, dev, err)
+			}
+			defer g.Close()
+			defer func(on bool) { m.opt.headPlace = on }(m.opt.headPlace)
+			m.opt.headPlace = false
+			s := m.NewState(ctx)
+			defer s.Close()
+			s.SetDeviceFallback(false)
+			if err := s.SetDevice(g); err != nil {
+				t.Fatal(err)
+			}
+			st := g.Stats()
+			if s.GPULayers() != m.Cfg.NLayer || stream && st.StreamBlocks == 0 {
+				t.Fatalf("%s holds %d of %d blocks, %d streamed: %s", dev, s.GPULayers(), m.Cfg.NLayer, st.StreamBlocks, g.Err())
+			}
+			return st
 		}
-		defer g.Close()
-		defer func(on bool) { m.opt.headPlace = on }(m.opt.headPlace)
-		m.opt.headPlace = false
-		s := m.NewState(ctx)
-		defer s.Close()
-		s.SetDeviceFallback(false)
-		if err := s.SetDevice(g); err != nil {
-			t.Fatal(err)
-		}
-		var bank uint64
+		mixed := 0
 		for li := range m.Cfg.NLayer {
-			_, b := m.blockBytes(li)
-			bank += b
+			if _, b := m.blockBytes(li); b > 0 {
+				mixed++
+			}
 		}
-		used := g.Stats().BudgetUsed
-		if s.GPULayers() != m.Cfg.NLayer || bank == 0 || used <= bank {
-			t.Fatalf("%s holds %d of %d blocks in %d bytes, %d of them routed banks", dev, s.GPULayers(), m.Cfg.NLayer, used, bank)
+		rs, ss := probe(false), probe(true)
+		resident, streamed := rs.BudgetUsed, ss.BudgetUsed
+		if mixed == 0 || streamed >= resident {
+			t.Fatalf("streaming saves the card nothing here, so no budget tells the two apart: %d bytes resident (scratch %d, composed %d, KV pool %d, rounding %d), "+
+				"%d with every mixture block streamed (scratch %d, composed %d, KV pool %d, rounding %d, caches %d, %d streamed)",
+				resident, rs.ScratchBytes, rs.ComposedBytes, rs.KVPoolBytes, rs.RoundingBytes,
+				streamed, ss.ScratchBytes, ss.ComposedBytes, ss.KVPoolBytes, ss.RoundingBytes, ss.CacheBytes, ss.StreamBlocks)
 		}
-		t.Logf("experts under a budget: %d bytes resident with %d of routed banks; the budget %d", used, bank, used-bank/2)
-		return []tier.Option{tier.WithBudget(used - bank/2)}
+		cut := (resident - streamed) / uint64(mixed) / 2
+		t.Logf("experts under a budget: %d bytes resident, %d streamed over %d mixture blocks; the budget %d", resident, streamed, mixed, resident-cut)
+		return []tier.Option{tier.WithBudget(resident - cut)}
 	case streamCache:
 		e, k := int(m.Cfg.NExpert), int(m.Cfg.NExpertUsed)
 		return []tier.Option{tier.WithConfig(func(c *tier.Config) {
