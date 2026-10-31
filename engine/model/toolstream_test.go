@@ -39,7 +39,12 @@ func TestToolStreamReadsControlTokens(t *testing.T) {
 		t.Run(c.file, func(t *testing.T) {
 			path := testmodels.Path(c.file)
 			if _, err := os.Stat(path); err != nil {
-				testmodels.Missing(t, "%s: %v (set JITLLM_MODELS)", c.file, err)
+				// The suite converts what ships: the source beside it.
+				src := strings.TrimSuffix(path, ".jlm") + ".gguf"
+				if _, serr := os.Stat(src); serr != nil {
+					testmodels.Missing(t, "%s: %v (set JITLLM_MODELS)", c.file, err)
+				}
+				path = jlmOf(t, src)
 			}
 			m, err := Open(path, noTune)
 			if err != nil {
