@@ -315,7 +315,8 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 		// Growth first -- a page-out of streamed weights or more pool -- and
 		// when nothing can grow, cold history goes to host memory (kvevict.go). A
 		// driver's refusal inside the budget is no room either.
-		err := g.growKVLayer(kp, l, l.n+count-len(l.free))
+		want := l.n + count - len(l.free)
+		err := g.growKVLayer(kp, l, want)
 		switch {
 		case err == nil:
 			g.kvTight = false
@@ -324,8 +325,15 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 			// own ceiling, which KVRoom then reads (kvTight).
 			g.kvTight = true
 		}
+		// Last, blocks stream to make the room (streamForRoom): weights read
+		// again every token, where history read again in passes could not.
 		if err != nil && !g.evictForRoom(sid, kp, l, count) {
-			return err
+			if !errors.Is(err, ErrKVCapacity) || !g.streamForRoom(kp.pageBytes(l)*uint64(want-l.n)) {
+				return err
+			}
+			if err := g.growKVLayer(kp, l, want); err != nil {
+				return err
+			}
 		}
 	}
 	take := l.free[len(l.free)-count:]

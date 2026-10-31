@@ -392,6 +392,40 @@ func (g *devTier) roomOrReclaim(n uint64) bool {
 	return true
 }
 
+// streamForRoom makes room for n bytes of history where neither growth nor
+// sending cold history home can (allocPages), by streaming blocks: the
+// highest resident ones no one pinned or is reading, until what they hold
+// beyond one slot covers n, then the pager takes it (reclaim). One streamed block frees nothing -- it needs its slot
+// back to run -- so the slot they swap through stays. Nothing is marked when
+// the blocks cannot cover n. Callers hold g.mu, outside any submission.
+func (g *devTier) streamForRoom(n uint64) bool {
+	var marked []int
+	var sum, widest uint64
+	for li := len(g.layers) - 1; li >= 0 && (len(marked) < 2 || sum-widest < n); li-- {
+		l := g.layers[li]
+		if l == nil || l.pg == nil || !l.pg.in || l.pg.bytes == 0 || l.pg.uses > 0 || g.pinned[li] || g.stream[li] {
+			continue
+		}
+		marked = append(marked, li)
+		b := l.pg.bytes + l.pg.round
+		sum, widest = sum+b, max(widest, b)
+	}
+	if len(marked) < 2 || sum-widest < n {
+		return false
+	}
+	if g.stream == nil {
+		g.stream = map[int]bool{}
+	}
+	for _, li := range marked {
+		g.stream[li] = true
+	}
+	if !g.reclaim(n, -1, 0, 0) {
+		return false
+	}
+	g.Slots = g.slots()
+	return true
+}
+
 // keepsSlot reports that n more bytes held for good leave a device that
 // streams the minSlots its streamed blocks swap through. It is asked whether or
 // not n fits right now: room() counts the pages in as space, so state charged

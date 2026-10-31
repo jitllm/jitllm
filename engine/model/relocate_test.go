@@ -69,8 +69,10 @@ func relocTier(t *testing.T, used uint64) *tier.GPU {
 // TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt gives a device room for
 // every block and one page of history, runs past that page, and holds the run
 // to the host. The control is the same budget without relocation, which must
-// demote (so the budget bites). A relocated block whose history did not follow
-// it attends over an empty host cache, far outside the device's band.
+// page: blocks streamed through a slot so the history grows on the card, none
+// demoted, every block kept (so the budget bites and is answered by paging). A
+// relocated block whose history did not follow it attends over an empty host
+// cache, far outside the device's band.
 func TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt(t *testing.T) {
 	m, ids, used := relocationModel(t)
 	const page = relocPage
@@ -79,8 +81,8 @@ func TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt(t *testing.T) {
 	// arm is what one run leaves behind: its tier and State are closed before
 	// the next opens, because a 4 GiB card holds one copy of this model.
 	type arm struct {
-		out                      [][]float32
-		relocated, demoted, kept int
+		out                                [][]float32
+		relocated, demoted, kept, pageOuts int
 	}
 	run := func(relocate, batched bool) arm {
 		g := relocTier(t, used)
@@ -111,7 +113,7 @@ func TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt(t *testing.T) {
 				out = append(out, keep(lg))
 			}
 		}
-		return arm{out, st.Relocations(), st.DeviceDemotions(), st.GPULayers()}
+		return arm{out, st.Relocations(), st.DeviceDemotions(), st.GPULayers(), g.Stats().PageOuts}
 	}
 	for _, batched := range []bool{false, true} {
 		href := host
@@ -124,15 +126,19 @@ func TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt(t *testing.T) {
 		gb.Close()
 		bound := max(1e-3, 10*band)
 		ctl := run(false, batched)
-		if ctl.demoted == 0 {
-			t.Fatalf("batched=%v: without relocation the budget demoted nothing (%d of %d blocks "+
-				"kept): it does not bite and this gate would prove nothing", batched, ctl.kept, m.Cfg.NLayer)
+		switch {
+		case ctl.pageOuts == 0:
+			t.Fatalf("batched=%v: without relocation the device paged nothing out (%d of %d blocks "+
+				"kept): the budget does not bite and this gate would prove nothing", batched, ctl.kept, m.Cfg.NLayer)
+		case ctl.demoted != 0 || ctl.kept != m.Cfg.NLayer:
+			t.Fatalf("batched=%v: without relocation %d demotion(s) and %d of %d blocks kept: the growth "+
+				"was not answered by paging", batched, ctl.demoted, ctl.kept, m.Cfg.NLayer)
 		}
-		// The demotion itself must be right: a growth refused halfway must not
-		// leave blocks read home at the wrong stride.
+		// The paged run must be right: a block streamed in reads its weights
+		// back byte for byte, and the history grew on the card.
 		if c := swaMedian(ctl.out, href, page); c > bound {
-			t.Errorf("batched=%v: after the demotion the host run reads %.2e against the host "+
-				"(bound %.2e): the history it brought home was read wrong", batched, c, bound)
+			t.Errorf("batched=%v: paging blocks through a slot reads %.2e against the host "+
+				"(bound %.2e)", batched, c, bound)
 		}
 		a := run(true, batched)
 		d := swaMedian(a.out, href, page)
