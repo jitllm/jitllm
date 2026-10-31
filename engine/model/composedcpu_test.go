@@ -945,50 +945,74 @@ func TestComposedCPUHeadSheets(t *testing.T) {
 
 // TestComposedCPUReduceTree holds a pairwise reduce (graph.OrderTree, a
 // stated activation's mean) to its definition: each level combines element
-// i with element i+w/2, to the bit, nothing written past the output. The violation: values whose
-// sequential sum differs from the pairwise one, which the comparison must
-// tell apart.
+// i with element i+w/2, from the group's width rounded up to a power of two,
+// an element whose pair is past the group passed on alone; to the bit, at
+// ragged widths and several groups to a row, nothing written past the
+// output. The violations: values whose sequential sum differs from the
+// pairwise one, and negative zeros, which a pad of +0 would turn positive.
 func TestComposedCPUReduceTree(t *testing.T) {
 	tree := func(xs []float32, fn func(a, b float32) float32) float32 {
 		v := slices.Clone(xs)
-		for w := len(v); w > 1; w /= 2 {
+		w := 1
+		for w < len(v) {
+			w <<= 1
+		}
+		for n := len(v); w > 1; w /= 2 {
 			for i := range w / 2 {
-				v[i] = fn(v[i], v[i+w/2])
+				if i+w/2 < n {
+					v[i] = fn(v[i], v[i+w/2])
+				}
 			}
+			n = w / 2
 		}
 		return v[0]
 	}
-	run := func(xs []float32, fn graph.MapFn) float32 {
+	run := func(xs []float32, fn graph.MapFn, span int) []float32 {
 		b := graph.New()
 		x := b.In("x", len(xs))
-		y := b.Emit(graph.OpReduce, []graph.ValueID{x}, []graph.Result{{Name: "y", Width: 1}}, nil,
-			graph.Attrs{Fn: fn, Order: graph.OrderTree}, nil, nil)[0]
+		y := b.Emit(graph.OpReduce, []graph.ValueID{x}, []graph.Result{{Name: "y", Width: len(xs) / span}}, nil,
+			graph.Attrs{Fn: fn, Order: graph.OrderTree, Span: span}, nil, nil)[0]
 		b.Out(y)
-		row, back := guarded(1)
+		row, back := guarded(len(xs) / span)
 		cpuRun(t, b.G, nil, map[graph.ValueID][]float32{x: xs, y: row})
-		checkGuard(t, "the pairwise reduce", back, 1)
-		return row[0]
+		checkGuard(t, "the pairwise reduce", back, len(xs)/span)
+		return row
 	}
+	sum := func(a, b float32) float32 { return a + b }
+	maxOf := func(a, b float32) float32 { return max(a, b) }
 	rng := rand.New(rand.NewSource(7))
-	for _, n := range []int{1, 2, 4, 8, 16, 64, 256} {
-		xs := make([]float32, n)
-		for i := range xs {
-			xs[i] = float32(rng.NormFloat64()) * float32(math.Pow(10, float64(rng.Intn(6))))
-		}
-		if got, want := run(xs, graph.MapAdd), tree(xs, func(a, b float32) float32 { return a + b }); got != want {
-			t.Fatalf("a pairwise sum of %d is %g, want %g", n, got, want)
-		}
-		if got, want := run(xs, graph.MapMax), tree(xs, func(a, b float32) float32 { return max(a, b) }); got != want {
-			t.Fatalf("a pairwise max of %d is %g, want %g", n, got, want)
+	for _, n := range []int{1, 2, 3, 4, 5, 7, 8, 16, 33, 60, 64, 100, 256} {
+		for _, groups := range []int{1, 3} {
+			xs := make([]float32, n*groups)
+			for i := range xs {
+				xs[i] = float32(rng.NormFloat64()) * float32(math.Pow(10, float64(rng.Intn(6))))
+			}
+			for _, c := range []struct {
+				name string
+				fn   graph.MapFn
+				ref  func(a, b float32) float32
+			}{{"sum", graph.MapAdd, sum}, {"max", graph.MapMax, maxOf}} {
+				got := run(xs, c.fn, n)
+				for g := range groups {
+					if want := tree(xs[g*n:(g+1)*n], c.ref); got[g] != want {
+						t.Fatalf("a pairwise %s of %d, group %d of %d, is %g, want %g", c.name, n, g, groups, got[g], want)
+					}
+				}
+			}
 		}
 	}
-	xs := []float32{1e8, 1, -1e8, 1}
-	seq := float32(0)
-	for _, v := range xs {
-		seq += v
+	for _, xs := range [][]float32{{1e8, 1, -1e8, 1}, {1e8, 1, -1e8}} {
+		seq := float32(0)
+		for _, v := range xs {
+			seq += v
+		}
+		got := run(xs, graph.MapAdd, len(xs))[0]
+		if want := tree(xs, sum); got != want || got == seq {
+			t.Fatalf("the pairwise sum of %v is %g: pairwise %g, in order %g", xs, got, want, seq)
+		}
 	}
-	got := run(xs, graph.MapAdd)
-	if want := tree(xs, func(a, b float32) float32 { return a + b }); got != want || got == seq {
-		t.Fatalf("the pairwise sum of %v is %g: pairwise %g, in order %g", xs, got, want, seq)
+	negz := float32(math.Copysign(0, -1))
+	if got := run([]float32{negz, negz, negz}, graph.MapAdd, 3)[0]; got != 0 || !math.Signbit(float64(got)) {
+		t.Fatalf("the pairwise sum of three negative zeros is %g, sign bit %v: an element without a pair was combined", got, math.Signbit(float64(got)))
 	}
 }

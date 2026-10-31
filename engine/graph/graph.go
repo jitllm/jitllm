@@ -399,7 +399,9 @@ const (
 	// OrderSeq combines a group's elements one at a time from its first.
 	OrderSeq Order = iota
 	// OrderTree combines them pairwise, the first half with the second, down
-	// to one.
+	// to one. A group of a width not a power of two starts at the next power
+	// of two: element i is combined with element i+P/2 where that is in the
+	// group, and passed on alone where it is not.
 	OrderTree
 )
 
