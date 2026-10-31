@@ -50,6 +50,11 @@ type devSess struct {
 	// nothing after them, 2 runs the chunk's queries over the ncKeys keys
 	// phase 1 wrote and the rest of the block. 0 is a whole call.
 	ncPhase, ncKeys int
+	// asking is set while a reservation of the session's asks for history
+	// room (reserveKV, reserveKVSeqs): an ask is answered by growth and
+	// history sent home, so a caller that relocates can; only a call's own
+	// pages stream blocks (streamForRoom).
+	asking bool
 	// sessCause is the refusal kind the session's last call met here, noted by
 	// its view (devTier.noteCause).
 	sessCause atomic.Uint32

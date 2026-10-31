@@ -11177,6 +11177,8 @@ func (g *devTier) reserveKV(sid uint64, pos int) bool {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.asking = true
+	defer func() { g.asking = false }()
 	// No paged history is no attention history here (a tower's keys live for
 	// one encode): nothing to reserve.
 	if !g.paged {

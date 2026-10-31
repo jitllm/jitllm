@@ -1476,6 +1476,8 @@ func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 	g = g.bareView(sid)
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.asking = true
+	defer func() { g.asking = false }()
 	if !g.paged {
 		g.LastErr = "ReserveKVSeqs: this device keeps the contiguous cache"
 		return false
