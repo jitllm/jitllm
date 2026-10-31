@@ -423,6 +423,9 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 						if alone[i] == nil {
 							continue
 						}
+						if got[i].Err != nil {
+							t.Fatalf("batched request %d: %v", i, got[i].Err)
+						}
 						worst = max(worst, decisionDiffRow(t, [][]DecisionAnswer{alone[i]}, [][]DecisionAnswer{got[i].Answers}))
 					}
 					t.Logf("%d requests in one batch: worst difference from each alone %.6f (bound %.3f)", len(reqs), worst, tol)
@@ -444,6 +447,9 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 						seen := 0.0
 						for i := range reqs {
 							if alone[i] != nil {
+								if vio[i].Err != nil {
+									t.Fatalf("request %d without a reset: %v", i, vio[i].Err)
+								}
 								seen = max(seen, decisionDiffRow(t, [][]DecisionAnswer{alone[i]}, [][]DecisionAnswer{vio[i].Answers}))
 							}
 						}

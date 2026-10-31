@@ -302,6 +302,9 @@ func decisionDiffRow(t *testing.T, want, got [][]DecisionAnswer) float64 {
 	t.Helper()
 	worst := 0.0
 	for r := range want {
+		if len(got[r]) != len(want[r]) {
+			t.Fatalf("request %d: %d answers where %d are wanted", r, len(got[r]), len(want[r]))
+		}
 		for i := range want[r] {
 			a, b := want[r][i], got[r][i]
 			vals := [][2]float64{{a.Noul, b.Noul}}
