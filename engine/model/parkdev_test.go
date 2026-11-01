@@ -60,7 +60,7 @@ func TestParkTakesTheCardHistoryOffAndBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	if st.GPULayers() != m.Cfg.NLayer {
-		t.Fatalf("resume put %d of %d blocks back on the device", st.GPULayers(), m.Cfg.NLayer)
+		t.Fatalf("resume put %d of %d blocks back on the device (%v)", st.GPULayers(), m.Cfg.NLayer, st.DeviceDeclines())
 	}
 	rest, _ := decodeIDs(t, st, next, n-half)
 	got = append(got, rest...)

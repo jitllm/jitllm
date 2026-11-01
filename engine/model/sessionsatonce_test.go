@@ -642,7 +642,7 @@ func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, hal
 				}
 			case 16:
 				if got := st.SetGPULayers(nl); got != nl {
-					return fmt.Errorf("the seam came back to %d blocks, asked %d", got, nl)
+					return fmt.Errorf("the seam came back to %d blocks, asked %d (%v)", got, nl, st.DeviceDeclines())
 				}
 				if parts != 0 {
 					if err := lanesHold(g, nl, parts, 1); err != nil {

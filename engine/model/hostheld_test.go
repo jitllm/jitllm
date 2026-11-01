@@ -84,7 +84,7 @@ func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
 	check("attached, nothing placed", 0)
 
 	if n := st.SetGPULayers(3); n != 3 {
-		t.Fatalf("SetGPULayers(3) placed %d", n)
+		t.Fatalf("SetGPULayers(3) placed %d (%v)", n, st.DeviceDeclines())
 	}
 	check("seam up to 3", 3)
 	st.SetGPULayers(1)

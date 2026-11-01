@@ -2481,14 +2481,9 @@ func (s *State) devCount() int {
 	return n
 }
 
-// prepDeviceRange grows the device's prefix to n blocks.
+// prepDeviceRange grows the device's prefix to n blocks. A binary16 history
+// travels widened, as SetDeviceLayers' does (migrateKVAs).
 func (s *State) prepDeviceRange(lo, n int) {
-	// A binary16 host cache cannot migrate to the device (packed halves read
-	// as float32). SetDeviceLayers steps it down first, so this is a
-	// backstop.
-	if s.kvFmt == cpu.KVF16 {
-		return
-	}
 	s.offerRange(lo, n)
 	s.placeHead()
 }
