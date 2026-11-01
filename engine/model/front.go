@@ -710,7 +710,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// Under XD-RoPE k's norm follows the rotary too: a pair's elements
 	// turned apart do not keep a head's RMS.
 	postQ := c.QKNormAt(li) && c.QKNormPost
-	postK := postQ && c.RopeXD && c.RopeAt(li) && !shared
+	postK := postQ && c.RopeXD && c.RopeAt(li) && !shared && !m.xdKNormFirst
 	// onK is f over k where the block writes keys of its own.
 	onK := func(f func(graph.ValueID) graph.ValueID) {
 		if !shared {

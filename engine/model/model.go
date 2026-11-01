@@ -1200,8 +1200,12 @@ type Model struct {
 	bankWts  sync.Map
 	holdMu   sync.Mutex
 	holdFree []*sheetHold
-	Cfg           *Config
-	Vocab         *tok.Vocab
+	// xdKNormFirst is a gate's violation: k normed before XD-RoPE's
+	// rotary, as every other q/k-normed model does. The rotation does not
+	// keep a head's RMS, so HunyuanVL's post-rotary norm is load-bearing.
+	xdKNormFirst bool
+	Cfg          *Config
+	Vocab        *tok.Vocab
 
 	// pager serialises decode when the container evicts; see pagelock.go.
 	pager sync.Mutex
