@@ -44,24 +44,3 @@ type ropeSplitKey struct {
 }
 
 var ropeSplits sync.Map
-
-// RoPESplit32JIT is XD-RoPE's rotation (HunyuanVL) of every head of hd floats
-// in x: NEOX pairs whose first halves turn by table A and second halves by
-// table B, cs holding A then B ({cos, sin} per pair, nrot floats each), with
-// generated code (cpu.EmitRoPESplit). With A equal to B it is RoPE32JIT's NEOX
-// rotation to the bit.
-func RoPESplit32JIT(x []float32, hd int, cs []float32) {
-	if len(x) == 0 {
-		return
-	}
-	if len(cs)%4 != 0 || hd <= 0 || len(x)%hd != 0 {
-		panic(fmt.Sprintf("jit: split rope over %d floats of %d-wide heads with %d table floats",
-			len(x), hd, len(cs)))
-	}
-	k := ropeSplitKey{cpu.HostTier(), hd, len(cs) / 2}
-	c, ok := ropeSplits.Load(k)
-	if !ok {
-		c, _ = ropeSplits.LoadOrStore(k, mustEmit("rope split")(cpu.EmittersFor(k.t).RoPESplit(hd, k.nrot)))
-	}
-	c.(*cpu.Code).Call(&cpu.Args{Out: &x[0], AScale: &cs[0], Rows: int64(len(x) / hd)})
-}

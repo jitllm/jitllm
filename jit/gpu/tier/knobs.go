@@ -357,14 +357,6 @@ func WithPersist(on bool, grid int) Option {
 // Config.Composed to ask for the blocks.
 func WithComposedShadow() Option { return WithConfig(func(c *Config) { c.ComposedShadow = true }) }
 
-// WithGateUp2 sets Config.GateUp2: a dense gated FFN's gate and up as one
-// Gate2 matvec writing act(gate)*up. On by default.
-func WithGateUp2(on bool) Option { return WithConfig(func(c *Config) { c.GateUp2 = on }) }
-
-// WithGateUp2Force sets Config.GateUp2Force: Gate2 wherever the shape has it,
-// whatever the tuner chose.
-func WithGateUp2Force(on bool) Option { return WithConfig(func(c *Config) { c.GateUp2Force = on }) }
-
 // WithPersistDeps is WithPersist with the persistent kernels' tasks ordered
 // by dependency counters rather than grid barriers (Config.PersistDeps,
 // docs/design/dep-block.md). Off by default.

@@ -190,14 +190,3 @@ func (s *State) provisionAttn() {
 		s.attnM = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, s.kvlMSA().Stride(), s.kvFmt)
 	}
 }
-
-// attnAt is the kernel set layer li attends with.
-func (s *State) attnAt(li int) *nn.AttnSet {
-	if s.c.extraKVHead(li) {
-		return s.attnM
-	}
-	if s.c.SWA(li) {
-		return s.attnL
-	}
-	return s.attnG
-}

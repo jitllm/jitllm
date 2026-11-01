@@ -52,35 +52,6 @@ var (
 	ssdGateK    [cpu.NumTiers]*cpu.Code
 )
 
-// SSDGate32JIT computes Mamba-2's two per-head scalars with generated code:
-//
-//	dt[i]    = softplus(alpha[i] + bias[i])
-//	decay[i] = exp(A[i] * dt[i])
-func SSDGate32JIT(decay, dt, alpha, bias, a []float32) {
-	tier := cpu.HostTier()
-	ssdGateOnce.do(tier, func() {
-		ssdGateK[tier] = mustEmit("ssd_gate")(cpu.EmittersFor(tier).SSDGate())
-	})
-	n := len(decay)
-	if n == 0 {
-		return
-	}
-	if len(dt) < n || len(alpha) < n || len(bias) < n || len(a) < n {
-		lengthPanic("ssd_gate", n, min(len(dt), len(alpha), len(bias), len(a)))
-	}
-	args := cpu.Args{
-		Out:    &decay[0],
-		Out2:   &dt[0],
-		W:      (*byte)(unsafe.Pointer(&alpha[0])),
-		AScale: &bias[0],
-		Q32:    &a[0],
-		Scr:    (*byte)(unsafe.Pointer(&gateConsts[0])),
-		K:      int64(n / cpu.ElemLanes),
-		Rows:   int64(n % cpu.ElemLanes),
-	}
-	ssdGateK[tier].Call(&args)
-}
-
 // AddSelScan generates Mamba-1's selective scan for one state size,
 // provisioned per model like AddSSD.
 func (f *JIT) AddSelScan(n int) {

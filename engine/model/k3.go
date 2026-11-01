@@ -318,40 +318,6 @@ func (s *State) k3Mix(x []float32, n, nb int, w tensor) ([]float32, error) {
 	return g.mix[:n*d], nil
 }
 
-// k3AttnIn is block li's attention input for n rows of x, before its norm:
-// the mix over the checkpoints banked so far. On a checkpoint block it then
-// banks the rows' running residual, the block's raw input.
-func (s *State) k3AttnIn(li int, l *layer, x []float32, n int) ([]float32, error) {
-	c := s.m.Cfg
-	in, err := s.k3Mix(x, n, c.resBank(li, false), l.resAttnT)
-	if err != nil {
-		return nil, err
-	}
-	if k, ok := c.resCheckpoint(li); ok {
-		for r := 0; r < n; r++ {
-			copy(c.stream(x, k, n, r), c.stream(x, 0, n, r))
-		}
-	}
-	return in, nil
-}
-
-// k3Resid adds the attention's output h into the running residual of n rows
-// of x -- or, on a checkpoint block, restarts the residual from it.
-func (s *State) k3Resid(li int, x, h []float32, n int) {
-	d := s.m.Cfg.NEmbd
-	if _, ok := s.m.Cfg.resCheckpoint(li); ok && s.m.Cfg.k3Fault != k3FaultNoRestart {
-		copy(x[:n*d], h[:n*d])
-		return
-	}
-	s.addInto(x[:n*d], h[:n*d])
-}
-
-// k3FFNIn is block li's FFN input for n rows of x, before its norm: the mix
-// over the bank, this block's checkpoint included, and the running residual.
-func (s *State) k3FFNIn(li int, l *layer, x []float32, n int) ([]float32, error) {
-	return s.k3Mix(x, n, s.m.Cfg.resBank(li, true), l.resFFNT)
-}
-
 // k3Collapse is the head's mix for n rows of x over the whole bank, written
 // into stream 0, where the output norm reads it.
 func (s *State) k3Collapse(x []float32, n int) error {
@@ -368,85 +334,6 @@ func (s *State) k3Collapse(x []float32, n int) error {
 	}
 	copy(x[:n*c.NEmbd], in)
 	return nil
-}
-
-// k3MoE is a latent mixture over the normed vector h, added into out: the
-// router reads h, the routed experts routed_down(h), their weighted sum is
-// normed and taken back by routed_up, and the shared experts read h.
-func (s *State) k3MoE(li int, l *layer, h, out []float32) error {
-	c, g := s.c, s.k3
-	L := c.ExpertLatent
-	lat, acc, up := g.lat[:L], g.latAcc[:L], g.latUp[:c.NEmbd]
-	if err := s.mv(lat, l.routedDown, h); err != nil {
-		return err
-	}
-	clear(acc)
-	// The shared experts run behind the routed read (moe's shOverlap) when
-	// the block has them; they are added below, where they always were.
-	s.shReady = false
-	if (l.shGate.rows != 0 || l.shUp.rows != 0) && !s.m.opt.noShOverlap {
-		s.shOverlap, s.shOverlapH = l, h
-	}
-	if err := s.moe(li, l, h, lat, acc); err != nil {
-		s.shOverlap = nil
-		return err
-	}
-	s.shOverlap = nil
-	if err := s.k3LatentOut(l, acc, up, 1); err != nil {
-		return err
-	}
-	s.addInto(out, up)
-	s.jit.NewInput()
-	if s.shReady {
-		s.shReady = false
-		s.axpy(out, s.shOut, s.shW)
-		s.jit.NewInput()
-		return nil
-	}
-	return s.sharedExpert(l, h, out)
-}
-
-// k3MoEBatch is k3MoE over n rows of h, added into n rows of resid, the
-// experts visited expert-major as moeBatch visits them.
-func (s *State) k3MoEBatch(li int, l *layer, h, resid []float32, n int) error {
-	c := s.c
-	s.growK3(n)
-	g := s.k3
-	L, d := c.ExpertLatent, c.NEmbd
-	lat, acc, up := g.lat[:n*L], g.latAcc[:n*L], g.latUp[:n*d]
-	if err := s.mm(lat, l.routedDown, h[:n*d], n); err != nil {
-		return err
-	}
-	clear(acc)
-	if err := s.moeBatchFrom(li, l, h, lat, acc, n); err != nil {
-		return err
-	}
-	if err := s.k3LatentOut(l, acc, up, n); err != nil {
-		return err
-	}
-	s.addInto(resid[:n*d], up)
-	for i := 0; i < n; i++ {
-		s.jit.NewInput()
-		if err := s.sharedExpert(l, h[i*d:(i+1)*d], resid[i*d:(i+1)*d]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// k3LatentOut takes n rows of the routed sum acc out of the latent into up:
-// RMSNormed (latent_moe_use_norm), then routed_up.
-func (s *State) k3LatentOut(l *layer, acc, up []float32, n int) error {
-	c := s.c
-	L := c.ExpertLatent
-	if l.routedNorm != nil && c.k3Fault != k3FaultNoLatentNorm {
-		for r := 0; r < n; r++ {
-			v := acc[r*L : (r+1)*L]
-			s.rmsnorm(v, v, l.routedNorm, c.RMSEps)
-		}
-	}
-	s.jit.NewInput()
-	return s.mm(up, l.routedUp, acc, n)
 }
 
 // k3Plan adjusts block li's plan for Kimi-K3: the residual attention's mixes

@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -481,24 +480,6 @@ func (s *State) hcMix(x []float32, n int, hc *q4eHC) error {
 	return nil
 }
 
-// hcPlace adds each of n rows' sublayer output y into every stream of x at
-// the weights hcMix left in g.w.
-func (s *State) hcPlace(x []float32, n int, y []float32) {
-	c, g := s.m.Cfg, s.q4
-	h, d := c.HCMult, c.NEmbd
-	for r := 0; r < n; r++ {
-		yr := y[r*d : (r+1)*d]
-		for k := 0; k < h; k++ {
-			w := g.w[r*h+k]
-			if c.q4eFault == q4eFaultPlainPlace {
-				w = 1
-			}
-			s.axpy(c.stream(x, k, n, r), yr, w)
-		}
-	}
-	s.jit.NewInput()
-}
-
 // q4eCollapse is the head's mix for n rows of x, written into stream 0 of
 // each row, which the projection reads with no norm.
 //
@@ -532,9 +513,6 @@ func (s *State) q4eCollapse(x []float32, n int) error {
 func (c *Config) q4eSigmoidGate() bool {
 	return c.DeltaSigmoidGate && c.q4eFault != q4eFaultSiLUGate
 }
-
-// invSqrt is 1/sqrt(n) as a float32.
-func invSqrt(n int) float32 { return float32(1 / math.Sqrt(float64(n))) }
 
 // attnSetF32 is a kernel set scoring rows of width w laid back to back.
 func (s *State) attnSetF32(w int) *nn.AttnSet { return s.jit.AttnSetFor(w, w, w, cpu.KVF32) }

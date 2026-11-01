@@ -62,32 +62,3 @@ func HCMix32JIT(out, mix, scale, base []float32, eps float32, iters int, head bo
 		Scr:    (*byte)(unsafe.Pointer(&kons[0])),
 	})
 }
-
-// ColPool32JIT is the compressor's pool with generated code: for each of the
-// len(out) channels, the softmax over the slots of gate times kv, summed. kv
-// and gate are slots rows of len(out).
-func ColPool32JIT(out, kv, gate []float32, slots int) {
-	w := len(out)
-	if w == 0 {
-		return
-	}
-	if slots <= 0 || len(kv) < slots*w || len(gate) < slots*w {
-		panic(fmt.Sprintf("jit: colpool of %d slots of %d over %d kv and %d gate floats", slots, w,
-			len(kv), len(gate)))
-	}
-	t := cpu.HostTier()
-	c, ok := colPools.Load(t)
-	if !ok {
-		c, _ = colPools.LoadOrStore(t, mustEmit("colpool")(cpu.EmittersFor(t).ColPool()))
-	}
-	c.(*cpu.Code).Call(&cpu.Args{
-		Out:    &out[0],
-		Q32:    &kv[0],
-		Q2:     &gate[0],
-		Scr:    (*byte)(unsafe.Pointer(&elemConsts[0])),
-		K:      int64(w / cpu.ElemLanes),
-		Rows:   int64(w % cpu.ElemLanes),
-		Cols:   int64(slots),
-		RowStr: int64(4 * w),
-	})
-}

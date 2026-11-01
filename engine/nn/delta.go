@@ -160,34 +160,3 @@ var (
 	boundOnce tierOnce
 	boundK    [cpu.NumTiers]*cpu.Code
 )
-
-// DeltaDecayBound32JIT computes Kimi-K3's bounded KDA decay with generated
-// code:
-//
-//	decay[i] = exp(lb * sigmoid(-A[i] * (alpha[i] + dt[i])))
-//
-// fla's lower_bound gate, A being -exp(A_log); beta is DeltaGate32JIT's.
-func DeltaDecayBound32JIT(decay, alpha, dt, a []float32, lb float32) {
-	tier := cpu.HostTier()
-	boundOnce.do(tier, func() {
-		boundK[tier] = mustEmit("delta_decay_bound")(cpu.EmittersFor(tier).DeltaDecayBound())
-	})
-	n := len(decay)
-	if n == 0 {
-		return
-	}
-	if len(alpha) < n || len(dt) < n || len(a) < n {
-		lengthPanic("delta_decay_bound", n, min(len(alpha), len(dt), len(a)))
-	}
-	args := cpu.Args{
-		Out:     &decay[0],
-		W:       (*byte)(unsafe.Pointer(&alpha[0])),
-		AScale:  &dt[0],
-		AScale2: &lb,
-		Q32:     &a[0],
-		Scr:     (*byte)(unsafe.Pointer(&gateConsts[0])),
-		K:       int64(n / cpu.ElemLanes),
-		Rows:    int64(n % cpu.ElemLanes),
-	}
-	boundK[tier].Call(&args)
-}

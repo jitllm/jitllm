@@ -598,13 +598,6 @@ func (s *kvPages) vSpan(l kvLayout, sp kvSpan, slot, kvHead int) []float32 {
 	return s.v[sp.page][s.layout(l).At(slot, sp.first, kvHead):]
 }
 
-// at is one (slot, position, kv head) vector, for the scalar fallbacks.
-func (s *kvPages) at(l kvLayout, slot, pos, kvHead int) (k, v []float32) {
-	pg, off := s.page(pos)
-	i := s.layout(l).At(slot, off, kvHead)
-	return s.k[pg][i:], s.v[pg][i:]
-}
-
 // write stores one position's whole kvDim-wide vector into the page that holds
 // it, growing the page list if this position starts a new one.
 func (s *kvPages) write(l kvLayout, slot, pos int, k, v []float32) {
@@ -960,90 +953,6 @@ func (s *State) migrateRecLayer(li int, toDevice bool) bool {
 // so the page arithmetic exists once. The scores are written contiguously, so
 // softmax still normalises over the whole attended range, and the spans are
 // consumed in order (see spans).
-
-// kvScores fills af[0:want] with dot(q, k[t]) for t in [w0, w0+want).
-func (s *State) kvScores(fast *nn.AttnSet, li, slot, kvh int, q, af []float32, w0, want int) {
-	pg := &s.kv.layers[li]
-	for pos, end := w0, w0+want; pos < end && pg.p > 0; {
-		sp := pg.span(pos, end)
-		if !pg.resident(sp.page) {
-			return
-		}
-		fast.AttnScores(af[pos-w0:], pg.kSpan(s.kvlAt(li), sp, slot, kvh), q, sp.n)
-		pos += sp.n
-	}
-}
-
-// kvScores2 is kvScores for two query heads sharing a kv head. It reports false
-// when no paired kernel served the whole walk, and the caller makes two single
-// passes -- all or nothing, so a window is never half paired.
-func (s *State) kvScores2(fast *nn.AttnSet, li, slot, kvh int, q0, q1, af0, af1 []float32, w0, want int) bool {
-	pg := &s.kv.layers[li]
-	if pg.p == 0 || want <= 0 {
-		return false
-	}
-	for pos, end := w0, w0+want; pos < end; {
-		x := pg.span(pos, end)
-		if !pg.resident(x.page) {
-			return false
-		}
-		at := pos - w0
-		if !fast.AttnScores2(af0[at:], af1[at:], pg.kSpan(s.kvlAt(li), x, slot, kvh), q0, q1, x.n) {
-			return false
-		}
-		pos += x.n
-	}
-	return true
-}
-
-// kvAcc accumulates V over the window into out.
-func (s *State) kvAcc(fast *nn.AttnSet, li, slot, kvh int, out, af []float32, w0, want int) {
-	pg := &s.kv.layers[li]
-	for pos, end := w0, w0+want; pos < end && pg.p > 0; {
-		sp := pg.span(pos, end)
-		if !pg.resident(sp.page) {
-			return
-		}
-		v := pg.vSpan(s.kvlAt(li), sp, slot, kvh)
-		if pos == w0 {
-			fast.AttnAcc(out, v, af, sp.n)
-		} else {
-			fast.AttnAccInto(out, v, af[pos-w0:], sp.n)
-		}
-		pos += sp.n
-	}
-}
-
-// kvAcc2 is kvAcc for two heads at once, all or nothing like kvScores2.
-func (s *State) kvAcc2(fast *nn.AttnSet, li, slot, kvh int, o0, o1, af0, af1 []float32, w0, want int) bool {
-	pg := &s.kv.layers[li]
-	if pg.p == 0 || want <= 0 {
-		return false
-	}
-	// Page 0 overwrites and the rest add in, as in the single-head walk.
-	for pos, end := w0, w0+want; pos < end; {
-		x := pg.span(pos, end)
-		if !pg.resident(x.page) {
-			return false
-		}
-		at := pos - w0
-		v := pg.vSpan(s.kvlAt(li), x, slot, kvh)
-		ok := false
-		if pos == w0 {
-			ok = fast.AttnAcc2(o0, o1, v, af0[at:], af1[at:], x.n)
-		} else {
-			ok = fast.AttnAcc2Into(o0, o1, v, af0[at:], af1[at:], x.n)
-		}
-		if !ok {
-			// All or nothing: a window half-paired would have the first spans
-			// already written into o0/o1, so the caller's two single passes
-			// must start from a clean slate. kvAcc's page-0 call does that.
-			return false
-		}
-		pos += x.n
-	}
-	return true
-}
 
 // ============================ residency ============================
 //

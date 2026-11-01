@@ -56,44 +56,6 @@ func (s *State) pleInputs(dst []float32, token int32, x []float32) error {
 	return nil
 }
 
-// pleApply is block li's per-layer embedding on one row: x += post_norm(W_out
-// · (gelu(W_gate · x) * pl[li])). pl is the row's NLayer*PLEDim inputs.
-func (s *State) pleApply(li int, l *layer, x, pl []float32) error {
-	c := s.c
-	p := c.PLEDim
-	g := s.pleG[:p]
-	s.jit.NewInput()
-	if err := s.mv(g, l.pleGate, x); err != nil {
-		return err
-	}
-	// act(gate) * up, with the layer's slice of pl as the up operand.
-	s.actmul(g, pl[li*p:(li+1)*p], c.Act)
-	s.jit.NewInput()
-	if err := s.mv(s.pleO, l.pleProj, g); err != nil {
-		return err
-	}
-	s.rmsnorm(s.pleO, s.pleO, l.plePost, c.RMSEps)
-	s.addInto(x, s.pleO)
-	s.jit.NewInput()
-	return nil
-}
-
-// pleRows is pleApply over the n rows of a batched chunk, each with its own
-// inputs in s.bple. Nothing where the model has no per-layer embeddings.
-func (s *State) pleRows(li int, l *layer, x []float32, n int) error {
-	c := s.c
-	if c.PLEDim == 0 {
-		return nil
-	}
-	d, w := c.NEmbd, c.pleWidth()
-	for i := 0; i < n; i++ {
-		if err := s.pleApply(li, l, x[i*d:(i+1)*d], s.bple[i*w:(i+1)*w]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // growPLE sizes the per-layer embedding scratch. A model without them gets
 // none.
 func (s *State) growPLE() {

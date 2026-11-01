@@ -173,39 +173,6 @@ func (t *Tower) loadGemma4V(f *jlm.File, get func(jlm.Role, int32) (tensor, erro
 // run.
 var gemma4ClampFault bool
 
-// clampIn is matrix slot's input under its block's clipped-linear bounds:
-// src itself when the block has none or the bounds clamp nothing, otherwise
-// a clamped copy in the State's scratch, the activation marked new.
-func (s *State) clampIn(l *layer, slot int, src []float32) []float32 {
-	if l.clamp == nil || gemma4ClampFault {
-		return src
-	}
-	lo, hi := l.clamp[4*slot], l.clamp[4*slot+1]
-	if math.IsInf(float64(lo), -1) && math.IsInf(float64(hi), 1) {
-		return src
-	}
-	if cap(s.bclamp) < len(src) {
-		s.bclamp = make([]float32, len(src))
-	}
-	dst := s.bclamp[:len(src)]
-	copy(dst, src)
-	nn.ClampRange32JIT(dst, lo, hi)
-	s.jit.NewInput()
-	return dst
-}
-
-// clampOut clamps matrix slot's output in place under its block's bounds.
-func (s *State) clampOut(l *layer, slot int, out []float32) {
-	if l.clamp == nil || gemma4ClampFault {
-		return
-	}
-	lo, hi := l.clamp[4*slot+2], l.clamp[4*slot+3]
-	if math.IsInf(float64(lo), -1) && math.IsInf(float64(hi), 1) {
-		return
-	}
-	nn.ClampRange32JIT(out, lo, hi)
-}
-
 // The clamped matrices' slots in a block's bounds.
 const (
 	clampQ = iota

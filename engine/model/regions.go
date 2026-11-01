@@ -31,13 +31,6 @@ type mamba1Region struct {
 	fn       func(lo, hi int)
 }
 
-// mamba1Channels is one chunk of the scan: channels lo..hi-1.
-func (s *State) mamba1Channels(lo, hi int) {
-	j, n := &s.rg.mamba1, s.dg.kDim
-	s.jit.SelScan(s.dOut[lo:hi], j.st[lo*n:hi*n], s.dSB, s.dSC, s.dMixed[lo:hi], s.dBeta[lo:hi],
-		j.a[lo*n:hi*n], j.d[lo:hi], hi-lo, n)
-}
-
 // elemOp is which elementwise op an elemRegion runs.
 type elemOp uint8
 
@@ -116,110 +109,12 @@ type attnRegion struct {
 	fn      func(lo, hi int)
 }
 
-// attnHeads is one chunk of decode's attention: heads lo..hi-1. Heads are
-// independent -- each writes its own slice of the output and its own scores
-// row -- so the split needs no coordination. With GQA, query head hh reads kv
-// head hh/gqa.
-func (s *State) attnHeads(lo, hi int) {
-	j := &s.rg.attn
-	for hh := lo; hh < hi; hh++ {
-		// A pair needs both heads in this task and the same kv head.
-		if j.pair != 0 && j.gqa%2 == 0 && hh%2 == 0 && hh+1 < hi {
-			q0, af0, kvh := j.head(hh)
-			q1, af1, _ := j.head(hh + 1)
-			okS := j.pair&1 != 0 && s.kvScores2(j.fast, j.li, 0, kvh, q0, q1, af0, af1, j.w0, j.an)
-			if !okS {
-				s.kvScores(j.fast, j.li, 0, kvh, q0, af0, j.w0, j.an)
-				s.kvScores(j.fast, j.li, 0, kvh, q1, af1, j.w0, j.an)
-			}
-			s.attnSoftmax(af0, hh)
-			s.attnSoftmax(af1, hh+1)
-			o0, o1 := j.out(hh), j.out(hh+1)
-			okA := j.pair&2 != 0 && s.kvAcc2(j.fast, j.li, 0, kvh, o0, o1, af0, af1, j.w0, j.an)
-			if !okA {
-				s.kvAcc(j.fast, j.li, 0, kvh, o0, af0, j.w0, j.an)
-				s.kvAcc(j.fast, j.li, 0, kvh, o1, af1, j.w0, j.an)
-			}
-			j.store(hh, o0)
-			j.store(hh+1, o1)
-			// Counted only when a paired kernel actually ran, not when the
-			// branch fell back to two single calls.
-			if okS || okA {
-				s.attnPaired.Add(1)
-			}
-			hh++
-			continue
-		}
-		qh, af, kvh := j.head(hh)
-		s.kvScores(j.fast, j.li, 0, kvh, qh, af, j.w0, j.an)
-		s.attnSoftmax(af, hh)
-		out := j.out(hh)
-		s.kvAcc(j.fast, j.li, 0, kvh, out, af, j.w0, j.an)
-		j.store(hh, out)
-	}
-}
-
-// head is query head hh's query, its scores row and its kv head.
-func (j *attnRegion) head(hh int) (qh, af []float32, kvh int) {
-	return j.qbuf[hh*j.qw : (hh+1)*j.qw], j.atf[hh*j.astride : hh*j.astride+j.an], hh / j.gqa
-}
-
-// out is head hh's output row.
-func (j *attnRegion) out(hh int) []float32 { return j.obuf[hh*j.ow : (hh+1)*j.ow] }
-
-// store copies a head's output into xb; a no-op under MLA, whose result stays
-// in s.mlaAcc for the un-absorb.
-func (j *attnRegion) store(hh int, out []float32) {
-	if !j.mla {
-		copy(j.xb[hh*j.hd:], out)
-	}
-}
-
-// attnSoftmax scales a head's scores, caps them (gemma2, before the softmax)
-// and normalises them with the layer's sink.
-func (s *State) attnSoftmax(af []float32, hh int) {
-	j := &s.rg.attn
-	s.scale(af, j.scale)
-	softcap(af, j.softcap)
-	if j.bias != nil {
-		s.idxApply(af, j.bias[(hh/j.gqa)*j.bstride:], j.w0)
-	}
-	s.softmaxSink(af, j.l.sinks, hh)
-}
-
 // deltaRegion is the gated delta rule's fan-out over value heads (State.delta).
 type deltaRegion struct {
 	st, q, k, v []float32
 	// d is a Mamba-2 block's skip, one per value head; nil on the delta rule.
 	d  []float32
 	fn func(lo, hi int)
-}
-
-// deltaHeads is one chunk of the gated delta rule: value heads lo..hi-1.
-func (s *State) deltaHeads(lo, hi int) {
-	j, g := &s.rg.delta, s.dg
-	for vh := lo; vh < hi; vh++ {
-		kh := g.keyHead(vh)
-		kv := j.k[kh*g.kDim : (kh+1)*g.kDim]
-		qv := j.q[kh*g.kDim : (kh+1)*g.kDim]
-		vv := j.v[vh*g.vDim : (vh+1)*g.vDim]
-		o := s.dOut[vh*g.vDim : (vh+1)*g.vDim]
-		mat := j.st[vh*g.vDim*g.kDim:][:g.vDim*g.kDim]
-		if g.ssd {
-			// k is B, q is C and v is x; dBeta holds dt (ssdAttn).
-			s.jit.GatedSSD(o, mat, kv, qv, vv, s.dDecay[vh], s.dBeta[vh], j.d[vh], g.vDim, g.kDim)
-			continue
-		}
-		if g.chanDecay {
-			// The decay vector is this value head's, where k and q are the
-			// key head's: rep value heads share a key and each owns its own
-			// forget gate.
-			dv := s.dDecay[vh*g.kDim : (vh+1)*g.kDim]
-			s.jit.GatedDeltaChan(o, mat, kv, qv, vv, dv, s.dBeta[vh], g.kDim)
-			continue
-		}
-		s.jit.GatedDelta(o, mat, kv, qv, vv, s.dDecay[vh], s.dBeta[vh], g.kDim)
-	}
 }
 
 // rowOp is which per-row op a rowRegion runs.
@@ -373,59 +268,4 @@ type prefAttnRegion struct {
 	masks                     [][]float32
 	fast                      *nn.AttnSet
 	fn                        func(lo, hi int)
-}
-
-// prefAttnRows is one chunk of a prompt chunk's attention: rows lo..hi-1.
-// Each row owns its own scores buffer, so heads can share it without any
-// coordination, and the causal bound p0+i is what keeps this equal to the
-// decode path.
-func (s *State) prefAttnRows(lo, hi int) {
-	j, c := &s.rg.pattn, s.c
-	l, li, kvli, slot := j.l, j.li, j.kvli, j.slot
-	for i := lo; i < hi; i++ {
-		pos := j.p0 + i
-		out := j.bxb[i*j.qDim : (i+1)*j.qDim]
-		if !j.mla {
-			clear(out)
-		}
-		qfi := j.qsrc[i*c.NHead*j.qw : (i+1)*c.NHead*j.qw]
-		ofi := j.odst[i*c.NHead*j.ow : (i+1)*c.NHead*j.ow]
-		for hh := 0; hh < c.NHead; hh++ {
-			qh := qfi[hh*j.qw : (hh+1)*j.qw]
-			if !j.mla {
-				copy(qh, j.bq[i*j.qDim+hh*j.hd:])
-			}
-			kvh := hh / j.gqa
-			// The same generated kernels and sliding window decode uses, so
-			// Prefill and Forward compute the same attention.
-			w0, an := c.AttnWindow(li, pos)
-			// A row of a bidirectional run sees keys to the run's end; the
-			// window still starts where the row's own position puts it.
-			if e := s.bidirEnd(pos); e > 0 && (!c.BidirSWA || c.SWA(li)) {
-				an = e - w0
-			}
-			if j.bidir {
-				// Every position of the sequence, before this one and after it.
-				w0, an = 0, j.p0+j.n
-				if c.SWA(li) {
-					w0, an = symmetricWindow(pos, j.p0+j.n, c.SWAWindow)
-				}
-			}
-			af := j.attf[i*j.astride : i*j.astride+an]
-			s.kvScores(j.fast, kvli, slot, kvh, qh, af, w0, an)
-			// Llama 4's temperature is per row: it steps with the position.
-			s.scale(af, float32(j.scale*c.AttnTemp(li, pos)))
-			softcap(af, c.AttnSoftcap)
-			if j.masks != nil && j.masks[i] != nil {
-				s.idxApply(af, j.masks[i][kvh*j.mstride:], w0)
-			}
-			s.softmaxSink(af, l.sinks, hh)
-			oh := ofi[hh*j.ow : (hh+1)*j.ow]
-			s.kvAcc(j.fast, kvli, slot, kvh, oh, af, w0, an)
-			// MLA's result stays in bmlaAcc, where the un-absorb reads it.
-			if !j.mla {
-				copy(out[hh*j.hd:], oh)
-			}
-		}
-	}
 }

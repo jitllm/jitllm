@@ -1643,21 +1643,6 @@ func (s *State) growVision(n int) {
 	s.growBatch(n)
 }
 
-// visPrep is attnPrep over a picture's n rows of block li, on the pool: each
-// row's q and k turned by its rotary row where the tower has one, and its k
-// and v written to the page the block was lent (lend), which holds every row
-// of the picture -- so no row grows the page or faults it, and the rows are
-// independent. A tower block has no clamp, q/k norm or v norm, which is all
-// attnPrep would add.
-func (s *State) visPrep(li, n int) {
-	pg := &s.kv.layers[li]
-	pg.grow(0)
-	j := &s.rg.rows
-	j.op, j.li = rowPrep, li
-	s.rowRun(n, s.rowChunk(n, s.c.QDimAt(li)))
-	pg.written = max(pg.written, n)
-}
-
 // visPrepRows is rows lo..hi-1 of visPrep.
 func (s *State) visPrepRows(lo, hi int) {
 	c, li := s.c, s.rg.rows.li
@@ -1692,21 +1677,6 @@ func (s *State) visPrepRows(lo, hi int) {
 		pl.Write(pg.k[0], 0, i, k)
 		pl.Write(pg.v[0], 0, i, v)
 	}
-}
-
-// visAttend is a vision block's attention: every row over the keys of its
-// run -- the whole image, or on a windowed block its window -- from the K/V
-// page the block wrote, into s.bxb. On the pool over heads: each head writes
-// a disjoint HeadDim slice and has its own scratch.
-func (s *State) visAttend(li, n int) {
-	v := s.vis
-	v.whole = [2]int{0, n}
-	j := &s.rg.rows
-	j.op, j.li, j.segs, j.alpha = rowHeads, li, v.whole[:], float32(s.c.AttnScale)
-	if s.visWindowed(li) {
-		j.segs = v.segs
-	}
-	s.rowRun(s.c.NHead, 1)
 }
 
 // visAttendHead is one head's attention for the queries [w0, w1) over the

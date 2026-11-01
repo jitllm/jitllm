@@ -58,18 +58,6 @@ func (s *State) entLayout(li int) kvLayout {
 	return l
 }
 
-// entWrite caches entry w of slot's history in block li.
-func (s *State) entWrite(li, slot, w int, row []float32) {
-	e := &s.kv.ent[li]
-	e.write(s.entLayout(li), slot, w, row, row)
-}
-
-// entAt is entry w of slot's history in block li.
-func (s *State) entAt(li, slot, w int) []float32 {
-	k, _ := s.kv.ent[li].at(s.entLayout(li), slot, w, 0)
-	return k
-}
-
 // The prefix cache over the entries (kvpage.go). Every block's rows slide, so
 // the entries decide how much of a prompt restores: block li's entry page n
 // holds entries [n*P, (n+1)*P), which positions [0, (n+1)*P*rate) wrote, and

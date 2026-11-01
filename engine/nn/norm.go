@@ -371,24 +371,6 @@ func Clamp32JIT(x []float32, c float32) {
 	})
 }
 
-// ClampRange32JIT clamps x to [lo, hi] in place with generated code: Gemma 4's
-// clipped linears, whose bounds need not be symmetric. The kernel is
-// Clamp32JIT's, which takes the two bounds.
-func ClampRange32JIT(x []float32, lo, hi float32) {
-	if len(x) == 0 {
-		return
-	}
-	e := elemFor()
-	lh := [2]float32{lo, hi}
-	n := len(x)
-	e.clamp.Call(&cpu.Args{
-		Out:  &x[0],
-		Scr:  (*byte)(unsafe.Pointer(&lh[0])),
-		K:    int64(n / cpu.ElemLanes),
-		Rows: int64(n % cpu.ElemLanes),
-	})
-}
-
 // ActKind is which activation to apply, re-exported from the assembler so
 // model/ need not import it to name one.
 type ActKind = cpu.ActKind
@@ -591,23 +573,6 @@ func lnCode(k lnKey, nk lnKons) (*cpu.Code, []float32) {
 		c, kc = lnFill(k.n, k, nk)
 	}
 	return c, kc
-}
-
-// GaussTopK32JIT is Gemma 3n's activation sparsity on one gate row, in place:
-// x = max(x - (mean(x) + c*std(x)), 0), the population standard deviation,
-// with generated code.
-func GaussTopK32JIT(x []float32, c float32) {
-	n := len(x)
-	if n == 0 {
-		return
-	}
-	code, kc := lnCode(lnKey{cpu.HostTier(), n, false, cpu.RowGauss}, lnKons{n, 0, float64(c)})
-	code.Call(&cpu.Args{
-		Out: &x[0],
-		A:   (*int8)(unsafe.Pointer(&x[0])),
-		Scr: (*byte)(unsafe.Pointer(&kc[0])),
-		K:   int64(n),
-	})
 }
 
 // MagMatch32JIT is AltUp's magnitude match: y = x * rms(ref) /

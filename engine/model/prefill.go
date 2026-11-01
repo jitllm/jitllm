@@ -3,7 +3,6 @@ package model
 import (
 	"errors"
 	"fmt"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"time"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -1006,10 +1005,6 @@ func (s *State) mm(out []float32, w tensor, x []float32, ntok int) error {
 	return nil
 }
 
-func (s *State) batchNorm(dst, src, weight []float32, dim, ntok int) {
-	s.batchNormB(dst, src, weight, nil, dim, ntok)
-}
-
 // batchNormB is batchNorm with the norm's bias, and it is State.norm per row:
 // a LayerNorm on a classic block (C6), an RMSNorm everywhere else.
 func (s *State) batchNormB(dst, src, weight, bias []float32, dim, ntok int) {
@@ -1256,49 +1251,6 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 		return nil
 	}
 	return s.cpuRefused(li, why)
-}
-
-// pickOnHost is the label pick on the host (State.HostPick): the projection
-// at the picked rows alone, each a one-row view of the packed head through
-// the generated matvec, where the whole vocabulary was projected for a
-// handful of ids -- on Lev, 248320 rows of Q8_0 read for nine. It reads the
-// normed row in s.h and leaves s.logits as it was, so a caller that picked
-// reads HostPickVals. False, with nothing done, where the pick does not
-// apply: no pick asked, a head the generated matvec does not read packed, or
-// a model that adjusts its logits after the head (a bias, a final softcap or a
-// logit scale), which the picked values would have to take too.
-func (s *State) pickOnHost() bool {
-	s.HostPicked = false
-	w := s.outW
-	if len(s.HostPick) == 0 || len(s.HostPickVals) < len(s.HostPick) || w.packed == nil || s.m.outB != nil ||
-		s.c.FinalSoftcap != 0 || s.c.LogitScale != 1 {
-		return false
-	}
-	// A narrow format packs DSlots rows' scales in a word, so a view starts
-	// on a word: the slot's rows are projected and the one asked kept.
-	sl := 1
-	if q, ok := kernels.QuantOf(w.typ); ok {
-		sl = max(kernels.DSlots(q), 1)
-	}
-	tmp := s.pickTmp[:]
-	if sl > len(tmp) {
-		return false
-	}
-	for j, id := range s.HostPick {
-		lo := int(id) - int(id)%sl
-		if id < 0 || lo+sl > w.rows {
-			return false
-		}
-		v := &s.pickView
-		*v = *w.packed
-		v.Stride, v.Row = max(v.Stride, w.rows), v.Row+lo
-		if !s.jit.MatVecPacked(tmp[:sl], w.typ, v, s.h, sl, w.k) {
-			return false
-		}
-		s.HostPickVals[j] = tmp[int(id)-lo]
-	}
-	s.HostPicked = true
-	return true
 }
 
 // forwardRowsFor is the longest prompt run through the decode path: the

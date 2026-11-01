@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -224,40 +223,6 @@ func (s *State) allocAltUp() {
 	s.altXC = make([]float32, d)
 }
 
-// growAltUpRows sizes a chunk's predictions and LAuReL outputs for n rows.
-func (s *State) growAltUpRows(n int) {
-	c := s.m.Cfg
-	if c.PredStreams == 0 || len(s.baltPred) >= n*c.ResidW() {
-		return
-	}
-	s.baltPred = make([]float32, n*c.ResidW())
-	s.baltLaur = make([]float32, n*c.NEmbd)
-}
-
-// altModalities writes tanh(R · rmsnorm(x0) / n_embd) into s.altM.
-func (s *State) altModalities(l *layer, x0 []float32) error {
-	c := s.m.Cfg
-	s.rmsnorm(s.altH, x0, l.altRouterNorm, c.RMSEps)
-	s.scale(s.altH, float32(1/float64(c.NEmbd)))
-	s.jit.NewInput()
-	if err := s.mv(s.altM, l.altRouter, s.altH); err != nil {
-		return err
-	}
-	softcap(s.altM, 1)
-	s.jit.NewInput()
-	return nil
-}
-
-// altCoefs writes the coefficient vector sum_i m_i T_i into dst: T holds the
-// coefficient matrix transposed (one row per modality).
-func (s *State) altCoefs(dst, t []float32) {
-	clear(dst)
-	w := len(dst)
-	for i, m := range s.altM {
-		s.axpy(dst, t[i*w:(i+1)*w], m)
-	}
-}
-
 // altExpand fills streams 1.. of each of `rows` rows from stream 0, the
 // scaled embedding.
 func (s *State) altExpand(x []float32, rows int) error {
@@ -304,112 +269,4 @@ func (s *State) altCollapse(x []float32, rows int) error {
 	}
 	s.jit.NewInput()
 	return nil
-}
-
-// altPredict is a block's prologue on `rows` rows: every stream's prediction
-// into pred, and the active one into stream 0 of x, where the block runs.
-func (s *State) altPredict(l *layer, x, pred []float32, rows int) error {
-	c := s.m.Cfg
-	n := c.Streams()
-	for r := 0; r < rows; r++ {
-		if err := s.altModalities(l, c.stream(x, 0, rows, r)); err != nil {
-			return err
-		}
-		s.altCoefs(s.altC, l.altPredT)
-		for k := 0; k < n; k++ {
-			pk := c.stream(pred, k, rows, r)
-			copy(pk, c.stream(x, k, rows, r))
-			for j := 0; j < n; j++ {
-				s.axpy(pk, c.stream(x, j, rows, r), s.altC[k*n+j])
-			}
-		}
-	}
-	for r := 0; r < rows; r++ {
-		copy(c.stream(x, 0, rows, r), c.stream(pred, 0, rows, r))
-	}
-	s.jit.NewInput()
-	return nil
-}
-
-// altCorrect is a block's epilogue on `rows` rows: stream 0 of x holds the
-// block's output; every stream becomes its prediction corrected by what the
-// block did to the active one, and the per-layer input is gated into the
-// others from the corrected active stream.
-func (s *State) altCorrect(li int, l *layer, x, pred, ple []float32, rows int) error {
-	c := s.m.Cfg
-	n, p, w := c.Streams(), c.PLEDim, c.pleWidth()
-	for r := 0; r < rows; r++ {
-		out := c.stream(x, 0, rows, r)
-		if err := s.altModalities(l, out); err != nil {
-			return err
-		}
-		cc := s.altC[:n]
-		s.altCoefs(cc, l.altCorrT)
-		s.axpy(cc, s.altOnes, 1)
-		copy(s.altInn, out)
-		s.axpy(s.altInn, c.stream(pred, 0, rows, r), -1)
-		for k := 0; k < n; k++ {
-			xk := c.stream(x, k, rows, r)
-			copy(xk, c.stream(pred, k, rows, r))
-			s.axpy(xk, s.altInn, cc[k])
-		}
-		// The per-layer input, gated by the corrected active stream times
-		// its scale, into every other stream.
-		copy(s.altH, c.stream(x, 0, rows, r))
-		nn.ActMul32JIT(s.altH, l.altCorrScale, nn.ActIdentity)
-		s.jit.NewInput()
-		g := s.pleG[:p]
-		if err := s.mv(g, l.pleGate, s.altH); err != nil {
-			return err
-		}
-		s.actmul(g, ple[r*w+li*p:r*w+(li+1)*p], c.Act)
-		s.jit.NewInput()
-		if err := s.mv(s.pleO, l.pleProj, g); err != nil {
-			return err
-		}
-		s.rmsnorm(s.pleO, s.pleO, l.plePost, c.RMSEps)
-		for k := 1; k < n; k++ {
-			s.addInto(c.stream(x, k, rows, r), s.pleO)
-		}
-	}
-	s.jit.NewInput()
-	return nil
-}
-
-// laurel writes LAuReL's branch of the attention-normed row h into out:
-// h + post_norm(L_r · L_l · h). The caller's quantization of h is spent, so
-// the caller starts a new input after.
-func (s *State) laurel(l *layer, h, out []float32) error {
-	c := s.m.Cfg
-	s.jit.NewInput()
-	if err := s.mv(s.altLT, l.laurelL, h); err != nil {
-		return err
-	}
-	s.jit.NewInput()
-	if err := s.mv(out, l.laurelR, s.altLT); err != nil {
-		return err
-	}
-	s.rmsnorm(out, out, l.laurelPost, c.RMSEps)
-	s.addInto(out, h)
-	s.jit.NewInput()
-	return nil
-}
-
-// laurelJoin is the attention's residual add with LAuReL beside it: x already
-// holds a + attn; it becomes (x + laurel) / sqrt(2).
-func (s *State) laurelJoin(x, laur []float32) {
-	s.addInto(x, laur)
-	s.scale(x, float32(1/math.Sqrt2))
-}
-
-// gaussTopK is the activation sparsity of block li's FFN gate, rows of width
-// ff: nothing on a block past the sparse lead.
-func (s *State) gaussTopK(li int, gate []float32, ff int) {
-	c := s.m.Cfg
-	if li >= c.NSparse {
-		return
-	}
-	for o := 0; o+ff <= len(gate); o += ff {
-		nn.GaussTopK32JIT(gate[o:o+ff], c.SparseStd)
-	}
 }

@@ -2,8 +2,6 @@ package model
 
 import (
 	"sync/atomic"
-
-	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A decode token runs each run of consecutive resident host blocks as ONE pool
@@ -66,78 +64,9 @@ var fusedRunsTotal atomic.Int64
 // has nothing to say about fusion either way.
 var fuseTriesTotal atomic.Int64
 
-// groupOf runs n matvecs of ws that read x as one region
-// (nn.MatVecPackedGroup) when a fused run is open, and reports whether it did;
-// false means nothing ran and the caller runs them one at a time. Inside a
-// fused run this folds the activation's quantization into the products and
-// runs siblings (q/k/v, gate/up) back to back, with no phase wait between.
-func (s *State) groupOf(x []float32, ws [nn.MaxGroup]*tensor, outs [nn.MaxGroup][]float32, n int) bool {
-	if !s.fused || s.groupOff {
-		return false
-	}
-	g := &s.grp
-	for i := 0; i < n; i++ {
-		w := ws[i]
-		if w.packed == nil || w.k != ws[0].k || len(x) < w.k {
-			return false
-		}
-		g.Out[i], g.T[i], g.P[i], g.Rows[i] = outs[i], w.typ, w.packed, w.rows
-	}
-	g.N, g.X, g.K = n, x, ws[0].k
-	ok := s.jit.MatVecPackedGroup(g)
-	g.X = nil
-	for i := range g.Out {
-		g.Out[i], g.P[i] = nil, nil
-	}
-	if ok {
-		s.Grouped++
-	}
-	return ok
-}
-
 // aheadOps is how many lookahead sets a block has: what it reads after its
 // q/k/v, after its o, after its gate/up and after its down.
 const aheadOps = 4
-
-// aheadOf names in the fused run's lookahead (nn.AheadSet) the weights block
-// li reads after op: idle workers at the end of a phase hint them into the
-// outer caches. It does nothing outside a fused run. The set is the State's,
-// one per (block, op), named once per run (fuseRun clears the last one), so
-// the set a worker may still be reading is never the one being filled.
-func (s *State) aheadOf(li, op int, ws [nn.MaxGroup]*tensor) {
-	if !s.fused || s.lookOff {
-		return
-	}
-	i := li*aheadOps + op
-	if i >= len(s.aheads) {
-		if n := len(s.m.layers) * aheadOps; n > i {
-			s.aheads = make([]nn.AheadSet, n)
-		} else {
-			s.jit.SetAhead(nil)
-			return
-		}
-	}
-	set := &s.aheads[i]
-	for k, w := range ws {
-		set.P[k] = nil
-		if w != nil {
-			set.P[k] = w.packed
-		}
-	}
-	s.jit.SetAhead(set)
-}
-
-// aheadNext names block li+1's q/k/v as what follows li's down projection,
-// when that block runs next in this fused run: on the host and resident.
-func (s *State) aheadNext(li int) {
-	n := li + 1
-	if n >= s.hi || s.devAt(n) || !s.m.blockResident(n) || s.m.layers[n].wq.packed == nil {
-		s.aheadOf(li, 3, [nn.MaxGroup]*tensor{})
-		return
-	}
-	l := &s.m.layers[n]
-	s.aheadOf(li, 3, [nn.MaxGroup]*tensor{&l.wq, &l.wk, &l.wv})
-}
 
 // SetLookahead turns the fused runs' lookahead on or off for this State's
 // decode tokens (WithLookahead is the model-wide default).
