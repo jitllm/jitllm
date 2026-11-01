@@ -187,7 +187,7 @@ type Config struct {
 	ExpertScale                    float64
 	NExpertGroup, NExpertGroupUsed int
 	// SparseMixer, when non-zero, is Phi-3.5-MoE's router and its jitter_eps
-	// (jlm.ArchPhiMoE carries it; nn.MoEGate.SparseMixer has the arithmetic).
+	// (jlm.ArchPhiMoE carries it).
 	SparseMixer float32
 
 	// AttnScale is the softmax's multiplier, already including YaRN's squared

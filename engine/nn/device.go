@@ -1038,7 +1038,7 @@ type LayerPlan struct {
 	ExpertGroups, ExpertGroupsUsed int
 	ExpertScale                    float64
 	// ExpertSparseMixer, when non-zero, is Phi-3.5-MoE's sparsemixer router
-	// and its jitter_eps (MoEGate.SparseMixer): the plain logit rank keeps two
+	// and its jitter_eps: the plain logit rank keeps two
 	// and the weights are its masked softmaxes, not renormalised.
 	ExpertSparseMixer float32
 	// NFFNShExp is the shared expert's hidden width, 0 when the model has none.

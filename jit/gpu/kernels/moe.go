@@ -15,8 +15,7 @@ import (
 // nn.LayerDevice exists to avoid. It is branch-free: ir.OpSelect is data flow,
 // so the clamp invariant (RULE 13) is untouched.
 
-// MoERoute is the router's shape on the device: the device's copy of
-// nn.MoEGate, which is the host's.
+// MoERoute is the router's shape on the device.
 //
 // The V3 fields (sigmoid gating, a selection-only correction bias, grouped
 // top-k, renormalise then scale) are one capability: DeepSeek-V3, R1, Kimi-K2
