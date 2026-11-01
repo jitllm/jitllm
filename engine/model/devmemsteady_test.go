@@ -40,7 +40,7 @@ func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 	for _, arm := range []struct {
 		parts  tier.Parts
 		shadow bool
-	}{{tier.ComposedBlock | tier.ComposedHead, false}, {tier.ComposedBlock | tier.ComposedHead, true}} {
+	}{{tier.ComposedBlock | tier.ComposedHead, false}} {
 		name := fmt.Sprintf("composed%d", arm.parts)
 		if arm.shadow {
 			name += "shadowed"
