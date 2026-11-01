@@ -118,8 +118,7 @@ func (s *State) moeFFN(l *layer, ord []int32, h, out []float32, dw []float32) (b
 	}
 	s.traceExperts(ord, "moe_act", s.moeGate, s.moePad, rows)
 	// dw is the routed weights in the ascending-expert-id order the
-	// contributions are summed in -- the router kernel's second weight output,
-	// not a re-derivation of it from moeProbs and a divisor.
+	// contributions are summed in.
 	// The down projection batches under a different contract: each expert
 	// reads its own SwiGLU output, so MatVecPackedGather quantizes k
 	// activations in one region and runs k matvecs in one more.

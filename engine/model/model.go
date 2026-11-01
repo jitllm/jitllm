@@ -972,15 +972,6 @@ func configFrom(c *jlm.Config) (*Config, error) {
 	return out, nil
 }
 
-// routedScale is what the router multiplies the selected weights by:
-// DeepSeek's routed_scaling_factor times Granite's residual scale.
-//
-// The residual scale rides the routed one because each expert goes straight
-// into the residual, so there is no add of its own to scale. The route's
-// constructor and every call must agree on it; nn.MoERouteJIT refuses a gate
-// whose scale differs from the one it was built for.
-func (c *Config) routedScale() float64 { return c.ExpertScale * c.ResidualScale }
-
 // tensor is one weight matrix, kept as the raw mapping plus its shape.
 type tensor struct {
 	// e is the container entry this weight came from: its role, its block and

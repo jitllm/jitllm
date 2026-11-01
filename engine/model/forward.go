@@ -217,11 +217,10 @@ type State struct {
 	reqSeq    int       // what the caller asked for; > maxSeq when the model is shorter
 	kvFmt     cpu.KVFmt // the KV cache's element format
 
-	// MoE scratch, allocated only for a mixture-of-experts model. moeProbs is
-	// NExpert wide and moeGate/moeUp are the per-expert ffn width, which is not
-	// NFFN -- gate and up are NFFN for every dense model here and NFFNExp for
-	// this one.
-	moeProbs, moeGate, moeUp, moeDown []float32
+	// MoE scratch, allocated only for a mixture-of-experts model. moeGate/moeUp
+	// are the per-expert ffn width, which is not NFFN -- gate and up are NFFN
+	// for every dense model here and NFFNExp for this one.
+	moeGate, moeUp, moeDown []float32
 	// moeGate/moeUp hold every selected expert, not one, so the k gate and k
 	// up projections go out in one pool region (nn.MatVecPackedMulti) and the
 	// SwiGLU over all of them is one more. Expert i occupies
@@ -327,13 +326,8 @@ type State struct {
 	// counts no hotness: endToken() advances once per Forward. See
 	// denseMoERows.
 	rowsOfChunk bool
-	// route is the router kernel's output: the selection in descending
-	// probability, the same ids ascending, both orders' renormalised weights
-	// and the divisor. One per State, reused every layer of every token, so a
-	// decode token allocates nothing here either.
-	route *nn.MoERoute
 	// expHold pins a layer's routed expert pages while its FFN reads them;
-	// reused, like route.
+	// one per State, reused every layer of every token.
 	expHold expertHold
 	// spareHost is a closed State's prompt scratch, taken from the model with
 	// its promptBuf, for growBatch and growMoEBatch to grow into.
@@ -824,24 +818,6 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 		s.ogate = make([]float32, nseq*qd)
 	}
 	if c.MoE() {
-		// Capacity for the generated softmax's padding (see attStride); the
-		// length stays NExpert, which is what the top-k reads.
-		s.moeProbs = make([]float32, c.NExpert, attStride(c.NExpert))
-		// route.Ord is route.Sel sorted ascending by expert id, the order the
-		// FFN contributions are summed in (see moe()); the router kernel
-		// writes both. It is sized for this model's gate, and the bias's
-		// presence is baked into the kernel key, which is why expSelBias is a
-		// model-level fact checked at load.
-		s.route = nn.NewMoERouteFor(c.NExpert, c.NExpertUsed, nn.MoEGate{
-			Sigmoid:      c.ExpertSigmoid,
-			SqrtSoftplus: c.ExpertSqrtSoftplus,
-			Bias:         m.expSelBias(),
-			NGroup:       c.NExpertGroup,
-			NGroupUsed:   c.NExpertGroupUsed,
-			Norm:         !c.NoExpertNorm,
-			Scale:        float32(c.routedScale()),
-			SparseMixer:  c.SparseMixer,
-		})
 		s.moePad = ffnPad(c.NFFNExp)
 		s.moeGate = make([]float32, c.NExpertUsed*s.moePad)
 		s.moeUp = make([]float32, c.NExpertUsed*s.moePad)
