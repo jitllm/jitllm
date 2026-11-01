@@ -1494,7 +1494,7 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType) {
 			s.SetDeviceLayers(dev, 4)
 			if s.gpuLayers == 0 {
 				t.Fatalf("no block was placed, so nothing relocated and this gate is "+
-					"vacuous (kvF16=%v, headMajor=%v)", s.KVIsF16(), s.kvl.headMajor)
+					"vacuous (kvF16=%v)", s.KVIsF16())
 			}
 			// Straight back down with nothing run in between, so what returns
 			// must be exactly what left.

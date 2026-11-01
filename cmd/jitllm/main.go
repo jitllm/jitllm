@@ -1802,9 +1802,6 @@ func modelOptions() []model.Option {
 	if os.Getenv("JITLLM_NO_HEAD_PLACE") != "" {
 		o = append(o, model.WithHeadPlacement(false))
 	}
-	if os.Getenv("JITLLM_KV_HEADMAJOR") != "" {
-		o = append(o, model.WithKVHeadMajor(true))
-	}
 	if v := os.Getenv("JITLLM_KV_F16"); v != "" {
 		o = append(o, model.WithKVF16(v == "1"))
 	}

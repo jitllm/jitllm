@@ -16,19 +16,17 @@ func TestTwoModelsKeepTheirOwnLoadOptions(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 
 	type arm struct {
-		name    string
-		opts    []Option
-		pair    int
-		kvF16   bool
-		headMaj bool
+		name  string
+		opts  []Option
+		pair  int
+		kvF16 bool
 	}
 	arms := []arm{
-		{"A", []Option{WithAttnPair(0), WithKVF16(false), WithKVHeadMajor(false)}, 0, false, false},
-		{"B", []Option{WithAttnPair(3), WithKVF16(true), WithKVHeadMajor(true)}, 3, true, true},
+		{"A", []Option{WithAttnPair(0), WithKVF16(false)}, 0, false},
+		{"B", []Option{WithAttnPair(3), WithKVF16(true)}, 3, true},
 	}
 	// The arms must differ in every axis, or an axis proves nothing.
-	if arms[0].pair == arms[1].pair || arms[0].kvF16 == arms[1].kvF16 ||
-		arms[0].headMaj == arms[1].headMaj {
+	if arms[0].pair == arms[1].pair || arms[0].kvF16 == arms[1].kvF16 {
 		t.Fatal("the two arms must disagree on every knob; this gate would prove nothing")
 	}
 
@@ -59,10 +57,6 @@ func TestTwoModelsKeepTheirOwnLoadOptions(t *testing.T) {
 		if got := s.KVIsF16(); got != a.kvF16 {
 			t.Errorf("%s: KVIsF16() = %v, want %v -- it read the other model's option",
 				a.name, got, a.kvF16)
-		}
-		if got := s.kvl.headMajor; got != a.headMaj {
-			t.Errorf("%s: kv headMajor = %v, want %v -- it read the other model's option",
-				a.name, got, a.headMaj)
 		}
 		s.Close()
 	}

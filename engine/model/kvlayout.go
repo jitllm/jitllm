@@ -9,18 +9,12 @@ import (
 
 // kvLayout is where a (sequence slot, position, kv head) lives in the host KV
 // cache, so the layout is one decision shared by every attention path, the
-// cache write and the migrations. The attention kernels advance by Stride and
-// read HeadDim elements per step; head-major makes that walk contiguous (see
-// docs/engineering-history/cpu-kernels.md for the measurements). Both layouts
-// occupy the same bytes and differ only in order.
-//
-//	row-major   [slot][position][kv head][dim]   Stride = kvDim
-//	head-major  [slot][kv head][position][dim]   Stride = headDim
+// cache write and the migrations: [slot][position][kv head][dim], a kernel
+// advancing by Stride (kvDim) and reading HeadDim elements per step.
 type kvLayout struct {
-	headMajor bool
-	maxSeq    int
-	nKV       int
-	headDim   int
+	maxSeq  int
+	nKV     int
+	headDim int
 	// fmt is the cached elements' format. The cache stays a []float32 and
 	// holds packed halves (f16) or q8_0 rows (cpu.KVFmt) in its slots; every
 	// offset handed out is a whole number of head rows, and a row of any
@@ -65,24 +59,12 @@ func (l kvLayout) kvDim() int { return l.nKV * l.headDim }
 
 // Stride is the element distance between one head's consecutive positions, and
 // is exactly what the generated kernels bake as kvStride.
-func (l kvLayout) Stride() int {
-	if l.headMajor {
-		return l.headDim
-	}
-	return l.kvDim()
-}
+func (l kvLayout) Stride() int { return l.kvDim() }
 
 // Base is the element offset of (slot, kvHead) at position zero. A kernel is
-// handed cache[Base(...):] and advances by Stride, which is how both layouts
-// reach the same kernel unchanged.
+// handed cache[Base(...):] and advances by Stride.
 func (l kvLayout) Base(slot, kvHead int) int {
-	s := slot * l.maxSeq * l.kvDim()
-	if l.headMajor {
-		s += kvHead * l.maxSeq * l.headDim
-	} else {
-		s += kvHead * l.headDim
-	}
-	return l.slots(s)
+	return l.slots(slot*l.maxSeq*l.kvDim() + kvHead*l.headDim)
 }
 
 // At is one (slot, position, kvHead) vector, for the scalar fallbacks.
@@ -91,18 +73,9 @@ func (l kvLayout) At(slot, pos, kvHead int) int {
 }
 
 // Write stores one position's whole kvDim-wide vector, narrowing to the
-// cache's format.
-//
-// Row-major writes a position's heads in one store; head-major writes nKV
-// separate ones, the layout's standing cost.
+// cache's format, its heads in one store.
 func (l kvLayout) Write(dst []float32, slot, pos int, src []float32) {
-	if !l.headMajor {
-		l.store(dst[l.slots(slot*l.maxSeq*l.kvDim()+pos*l.kvDim()):], src)
-		return
-	}
-	for h := 0; h < l.nKV; h++ {
-		l.store(dst[l.At(slot, pos, h):], src[h*l.headDim:(h+1)*l.headDim])
-	}
+	l.store(dst[l.slots(slot*l.maxSeq*l.kvDim()+pos*l.kvDim()):], src)
 }
 
 // store copies one run of whole head rows at the cache's own format.

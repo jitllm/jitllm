@@ -1500,8 +1500,6 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		return jit.DeclineExperts
 	case c.LayerKind(li).Recurrent() && (li >= len(s.rstate) || s.rstate[li] == nil || s.rconv[li] == nil):
 		return jit.DeclineRecurrent
-	case s.kvl.headMajor:
-		return jit.DeclineHeadMajor
 	case s.kvl.fmt != cpu.KVF16 && s.kvl.fmt != cpu.KVF32:
 		// The CPU's profile keeps a history binary16 itself (jit.Halves),
 		// or at f32 without that pass.

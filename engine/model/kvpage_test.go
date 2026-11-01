@@ -205,7 +205,6 @@ func TestPageKeySeparatesAliasingGeometries(t *testing.T) {
 	}{
 		{"nKV 2 x hd 128 (same kvDim)", &qwen, 1, kvLayout{nKV: 2, headDim: 128}},
 		{"nKV 1 x hd 256 (same kvDim)", &gemma, 1, kvLayout{nKV: 1, headDim: 256}},
-		{"head-major (same bytes, permuted)", base, 1, kvLayout{nKV: 4, headDim: 64, headMajor: true}},
 		{"f16 cache", base, 1, kvLayout{fmt: cpu.KVF16, nKV: 4, headDim: 64}},
 		{"nseq 2", base, 2, l32},
 		{"a different vocabulary", &fewer, 1, l32},

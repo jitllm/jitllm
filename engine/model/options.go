@@ -117,8 +117,6 @@ type modelOpts struct {
 	// WithoutSplits). Only a test sets it, for a gate's reference arm.
 	cpuFloat bool
 
-	// kvHeadMajor selects the head-major KV layout for States built afterwards.
-	kvHeadMajor bool
 	// kvType and kvTypeSet force the cache's format, overriding what
 	// nn.KVWidthPaysOff decides. Two fields because "not forced" and "forced
 	// to f32" are different states.
@@ -372,12 +370,6 @@ func WithPlacement(p Placement) Option {
 // CPU (MoveBlocks, SetGPULayers, a Placement naming "cpu") is its choice and
 // is honoured either way.
 func WithCPU(listed bool) Option { return func(l *loadOpts) { l.opt.noCPU = !listed } }
-
-// WithKVHeadMajor selects the head-major KV layout for States this model
-// creates afterwards. A running State cannot change layout, because its cache
-// already holds a history in the old one. Off by default until an end-to-end
-// A/B charges the scattered write (see kvLayout).
-func WithKVHeadMajor(on bool) Option { return func(l *loadOpts) { l.opt.kvHeadMajor = on } }
 
 // WithKVF16 forces the cache width, overriding what nn.KVWidthPaysOff decides:
 // WithKVType(KVF16) or WithKVType(KVF32).

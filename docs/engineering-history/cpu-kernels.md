@@ -2334,11 +2334,12 @@ row-major against 23.1% head-major, while the token itself grew 10%. The read
 gain the pool leaves on the table does not cover the write, which becomes nKV
 scattered copies of headDim floats where row-major is one contiguous store.
 
-**★ SO THE LAYOUT IS SHELVED, AND THE CODE STAYS BEHIND A FLAG THAT DEFAULTS
-OFF.** `JITLLM_KV_HEADMAJOR=1` / `model.SetKVHeadMajor`. Do not enable it for
-decode. `TestKVLayoutsAgree` holds the two layouts bit-identical across decode,
-prefill and mixed, and three violations fire, so the option is correct -- it is
-merely slower.
+**★ SO THE LAYOUT IS SHELVED.** It stood behind a flag that defaulted off
+(`JITLLM_KV_HEADMAJOR=1`, `model.WithKVHeadMajor`), held bit-identical to the
+row-major cache by `TestKVLayoutsAgree`. Main's KV path was its only reader; the
+composer declined a head-major history by name, and the flag, the layout's
+branches and the gate were removed with that path. The way back is a history
+layout the composer forms, measured as below.
 
 ★ WHAT IS *NOT* TESTED, and is the one reason to keep the code: this is a DECODE
 measurement. RULE 12aa's device transpose won 1.24x on a PREFILL and explicitly

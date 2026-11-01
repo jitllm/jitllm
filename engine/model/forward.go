@@ -764,7 +764,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 			s.outNorm, s.outW = w.headNorm, &w.head
 		}
 	}
-	s.kvl = kvLayout{headMajor: m.opt.kvHeadMajor, maxSeq: maxSeq, nKV: c.NKVHead,
+	s.kvl = kvLayout{maxSeq: maxSeq, nKV: c.NKVHead,
 		headDim: c.HeadDim}
 	// MLA caches one row per position for the whole layer: the compressed
 	// latent plus the shared rotary key (KVLoraRank + NRot), which every head
@@ -1131,12 +1131,6 @@ func ropeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
 // named a device not attached, a strict one that could not be met (nothing is
 // placed then), and a device this State cannot move onto at all.
 func (s *State) SetDeviceLayers(d nn.Device, max int) error {
-	// A head-major host cache cannot migrate: MigrateKV's contract is
-	// row-major [pos*kvDim + i], and copying would hand the device a
-	// permutation of the history.
-	if s.kvl.headMajor && d != nil {
-		return fmt.Errorf("model: a head-major KV cache cannot move to a device")
-	}
 	// MigrateKV moves float32: a binary16 or q8_0 history travels converted
 	// (State.migrateKVAs).
 	// An empty binary16 cache steps down to the f32 the device holds; one

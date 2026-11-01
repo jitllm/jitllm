@@ -35,7 +35,6 @@ const (
 	DeclineFeeds
 	DeclineRecurrent
 	DeclineKVFormat
-	DeclineHeadMajor
 	DeclinePageOut
 	DeclineNoWeight
 	DeclineCutWeight
@@ -79,7 +78,6 @@ var declineNames = [NumDeclines]string{
 	DeclineFeeds:        "a block graph reading more than the residual and per-layer inputs the device holds",
 	DeclineRecurrent:    "a recurrent state the form does not step (a tail or a variant it does not hold, none held, or the CPU's several rows)",
 	DeclineKVFormat:     "a history neither binary16 nor f32 (q8_0)",
-	DeclineHeadMajor:    "a head-major history",
 	DeclinePageOut:      "a history page outside the layer's arena",
 	DeclineNoWeight:     "a weight or vector the block does not hold",
 	DeclineCutWeight:    "a weight cut from a larger one",
