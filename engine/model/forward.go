@@ -260,8 +260,10 @@ type State struct {
 	// tell whether its submission suspended for the host's experts.
 	hostCalls int
 	// autoStreamed counts the blocks the last placement streamed because no
-	// card could hold them resident (nn.AutoStreamer).
+	// card could hold them resident (nn.AutoStreamer), and streamedOn marks
+	// them, with those streamed to make room for the head (streamForHead).
 	autoStreamed int
+	streamedOn   []bool
 	shReady      bool
 	// ShOverlaps counts mixture layers whose shared expert ran behind the
 	// routed read: the selection check for WithSharedOverlap.
@@ -1316,6 +1318,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		}
 		s.placing, s.placeErr = true, nil
 		s.autoStreamed = 0
+		clear(s.streamedOn)
 		s.offerRange(s.lo, hi)
 		if s.placeErr == nil {
 			s.placeErr = s.pageOnCards(s.lo, hi)
@@ -1554,6 +1557,7 @@ func (s *State) placeHead() {
 	// loop cannot tell them apart. PrepHead is asked rather than the space
 	// predicted, because the device's accounting has slack and fragmentation.
 	was := s.gpuLayers
+	var streamed []int
 	// A block given back mid-sequence takes its history home first, and one
 	// restored takes it up again, as SetDeviceLayers' placement does:
 	// releasing first frees the only copy of a linear block's summary and an
@@ -1579,6 +1583,17 @@ func (s *State) placeHead() {
 	for {
 		if s.ld.PrepHead(h) {
 			s.head, s.headReady = h, h
+			return
+		}
+		// With every block on the card the room is bought by streaming the
+		// last resident mixture blocks instead: each stays on the card, its
+		// routed experts sent per token.
+		if s.gpuLayers >= s.hi {
+			if li, ok := s.streamForHead(&budget); ok {
+				streamed = append(streamed, li)
+				continue
+			}
+			s.residentAgain(streamed)
 			return
 		}
 		// Only buy room when the device is already partial. With every block
@@ -1611,6 +1626,88 @@ func (s *State) placeHead() {
 		s.ld.ReleaseLayers(s.gpuLayers, s.gpuLayers+1)
 	}
 }
+
+// streamForHead streams the last resident mixture block on the card for the
+// head (nn.AutoStreamer): its base stays, its routed experts are sent per
+// token, while what a token reads of them costs less than what is left of
+// budget, the head's read at home (placeHead). It reports the block, or false
+// where none is left to stream or the device takes it neither way.
+func (s *State) streamForHead(budget *uint64) (int, bool) {
+	// Asked of the shared tier, the block offered through this State's view,
+	// as placement does (offerRange).
+	as, ok := s.ldCand.(nn.AutoStreamer)
+	if !ok || s.pos > 0 {
+		return 0, false
+	}
+	c := s.c
+	for li := s.hi - 1; li >= s.lo; li-- {
+		if !s.devAt(li) || !c.MoEAt(li) || s.streamedAt(li) || s.pinnedOnDev(li) {
+			continue
+		}
+		total, bank := s.m.blockBytes(li)
+		cost := s.m.expertReadBytes(li)
+		if bank == 0 || cost > *budget {
+			return 0, false
+		}
+		s.ld.ReleaseLayers(li, li+1)
+		s.unmarkOnDev(li)
+		if as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.meanBase()) && s.offerAgain(li) {
+			s.autoStreamed++
+			s.markStreamed(li, true)
+			*budget -= cost
+			return li, true
+		}
+		s.unstream(li)
+		return 0, false
+	}
+	return 0, false
+}
+
+// residentAgain puts the blocks streamForHead streamed back resident, the
+// head not having fitted.
+func (s *State) residentAgain(streamed []int) {
+	for _, li := range slices.Backward(streamed) {
+		s.ld.ReleaseLayers(li, li+1)
+		s.unmarkOnDev(li)
+		s.autoStreamed--
+		s.unstream(li)
+	}
+}
+
+// unstream takes block li's stream mark off and offers it resident.
+func (s *State) unstream(li int) {
+	if ep, ok := s.ldCand.(nn.ExpertPlacer); ok {
+		ep.PlaceExperts(li, "")
+	}
+	s.markStreamed(li, false)
+	s.offerAgain(li)
+}
+
+// offerAgain offers block li to the device as placement does, and marks it
+// placed where the device takes it.
+func (s *State) offerAgain(li int) bool {
+	plan, w, err := s.blockOffer(li)
+	if err != nil {
+		return false
+	}
+	took, err := s.prepOffered(s.ld, li, &plan, &w)
+	if err != nil || !took {
+		return false
+	}
+	s.markOnDev(li)
+	return true
+}
+
+// markStreamed records whether placement streamed block li.
+func (s *State) markStreamed(li int, on bool) {
+	if s.streamedOn == nil {
+		s.streamedOn = make([]bool, len(s.m.layers))
+	}
+	s.streamedOn[li] = on
+}
+
+// streamedAt says placement streamed block li.
+func (s *State) streamedAt(li int) bool { return li < len(s.streamedOn) && s.streamedOn[li] }
 
 // newHead is the output projection as a device takes it.
 func (s *State) newHead() *nn.Head {
@@ -1917,6 +2014,7 @@ func (s *State) offerRange(lo, hi int) {
 					continue
 				}
 				s.autoStreamed++
+				s.markStreamed(li, true)
 			}
 		}
 		// A block whose experts are separate tensors has no bank to offer; say
@@ -1995,6 +2093,7 @@ func (s *State) offerRange(lo, hi int) {
 					}
 					if took {
 						s.autoStreamed++
+						s.markStreamed(li, true)
 					} else if ep, ok := ld.(nn.ExpertPlacer); ok && !(named && place.Experts != "") && s.m.opt.experts == "" {
 						// It cannot stream either (a float bank with no host
 						// side, Gemma 4's dense MLP): the mark goes, or the block

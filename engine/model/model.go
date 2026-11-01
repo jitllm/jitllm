@@ -4101,6 +4101,16 @@ func (m *Model) blockReadBytes(li int) uint64 {
 	return n + dense
 }
 
+// expertReadBytes is what a token reads of block li's routed experts: the
+// selected share of its bank, what streaming the block sends per token.
+func (m *Model) expertReadBytes(li int) uint64 {
+	l, c := &m.layers[li], m.Cfg
+	if !c.MoE() || c.NExpert == 0 {
+		return 0
+	}
+	return (tensorBytes(l.gate) + tensorBytes(l.up) + tensorBytes(l.down)) / uint64(c.NExpert) * uint64(c.NExpertUsed)
+}
+
 // headReadBytes is what a token reads for the output projection, or zero when
 // the model ties its embedding (the projection is then the embedding table,
 // which is already counted and already on the host).
