@@ -208,7 +208,12 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
 	"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-kimilinear@q8",
 	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "synth-llama4-q8.gguf", "synth-pixtral.gguf", "synth-hunyuanvl.gguf",
-	"hunyuanvl/HunyuanOCR-Q8_0.gguf", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"}
+	"hunyuanvl/HunyuanOCR-Q8_0.gguf", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "gpt-oss-20b-MXFP4.gguf"}
+
+// budgetElsewhere is the fixtures whose experts are too small for any budget
+// to tell streamed from resident, each with the served model whose budget arm
+// stands for its family's.
+var budgetElsewhere = map[string]string{"synth-gptoss.gguf": "gpt-oss-20b-MXFP4.gguf"}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K, unblockedModels),
@@ -530,6 +535,11 @@ func TestComposedBlocksServe(t *testing.T) {
 	}
 	arms = append(arms, arm{"whole step, experts streamed under a budget", tier.ComposedStep, 0, streamBudget},
 		arm{"whole step, experts cached in pages", tier.ComposedStep, 0, streamCache})
+	for f, by := range budgetElsewhere {
+		if !slices.Contains(servedModels, by) {
+			t.Fatalf("%s's budget arm runs on %s, which the gate does not serve", f, by)
+		}
+	}
 	ran := 0
 	for _, file := range servedModels {
 		t.Run(file, func(t *testing.T) {
@@ -680,6 +690,10 @@ func TestComposedBlocksServe(t *testing.T) {
 						}
 						for _, a := range arms {
 							if a.tile > 0 && noGraph || a.stream != 0 && (noGraph || m.Cfg.NExpert == 0) {
+								continue
+							}
+							if a.stream == streamBudget && budgetElsewhere[file] != "" {
+								t.Logf("%s: its budget arm runs on %s", a.name, budgetElsewhere[file])
 								continue
 							}
 							name := a.name
