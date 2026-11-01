@@ -67,6 +67,7 @@ func (g *devTier) joinHead(h *nn.Head) bool {
 	if g.bs == nil || g.bs.head == nil || !g.bs.head.ok {
 		return false
 	}
+	g.headGraphs(h)
 	return g.adoptHead(h)
 }
 

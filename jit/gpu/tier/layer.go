@@ -5991,6 +5991,25 @@ func (g *devTier) dropHeadScratch(bs *blockScratch) {
 	g.freeAltNorms()
 }
 
+// headGraphs records the head as ops from the model's front end, what the
+// composer serves: the model's, so every lane's and every geometry set's. A
+// later State of the model, its graphs restated, offers them. Callers hold
+// g.mu.
+func (g *devTier) headGraphs(h *nn.Head) {
+	g.eachLane(func(l *lane) {
+		ds := []*blockScratch{l.bs}
+		for _, set := range l.geoSets {
+			ds = append(ds, set.bs)
+		}
+		for _, d := range ds {
+			if d != nil {
+				d.headGraph, d.headHidden, d.sampleGraph, d.embedGraph = h.Graph, h.HiddenGraph, h.Sample, h.Embed
+				d.sampleTopK, d.pickGraph, d.pickHead = h.SampleTopK, h.PickGraph, h.PickHead
+			}
+		}
+	})
+}
+
 // PrepHead uploads the output norm and the vocabulary projection.
 func (g *devTier) PrepHead(h *nn.Head) bool {
 	g.mu.Lock()
@@ -6001,9 +6020,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if bs == nil || h == nil {
 		return false
 	}
-	// The head as ops from the model's front end: what the composer serves.
-	bs.headGraph, bs.headHidden, bs.sampleGraph, bs.embedGraph = h.Graph, h.HiddenGraph, h.Sample, h.Embed
-	bs.sampleTopK, bs.pickGraph, bs.pickHead = h.SampleTopK, h.PickGraph, h.PickHead
+	g.headGraphs(h)
 	h.GatherRow = h.Embed != nil
 	g.prepCollapse(bs, h)
 	// The head is the model's: a second State on this tier finds it placed.

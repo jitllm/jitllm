@@ -1494,8 +1494,8 @@ const seamCrossBytes = 2 << 20
 // placeHead puts the vocabulary projection on the device, giving up blocks to
 // make room for it.
 //
-// It outranks a block by reads per resident byte (tier.Place's ranking): the
-// head is read in full every token, while a mixture block's expert banks are
+// It outranks a block by reads per resident byte: the head is read in full
+// every token, while a mixture block's expert banks are
 // read a fraction of the time. Releasing from the end keeps the placed blocks a
 // contiguous prefix, and a trailing block is the cheapest to give up.
 func (s *State) placeHead() {

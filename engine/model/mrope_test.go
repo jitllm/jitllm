@@ -295,7 +295,11 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 					return nil, fmt.Errorf("placed %d of %d blocks, head %v: %v %v", got, m.Cfg.NLayer,
 						st.HeadOnDevice(), st.DeviceDeclines(), gpu.Err())
 				}
-				return qvlRun(t, st, g, grid), nil
+				rows, err := qvlRunErr(st, g, grid)
+				if err != nil {
+					return nil, fmt.Errorf("%w (the device: %s)", err, gpu.Err())
+				}
+				return rows, nil
 			}
 			rows, err := run(true)
 			if err != nil {
