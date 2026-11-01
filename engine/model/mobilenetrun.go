@@ -161,27 +161,6 @@ func (s *State) mnPad(src []float32, h, w, c, k, st int) (wp int, sh cpu.DWShape
 	return wp, cpu.DWShape{K: k, Stride: st, WP: wp, Chans: c, WOut: wo}
 }
 
-// mnDW is a depthwise convolution of src (h x w rows of c) into dst under
-// SAME padding, one generated row kernel call per output row across the
-// pool, and returns the output's grid.
-func (s *State) mnDW(dst, src []float32, h, w, c, k, st int, filt []float32) (int, int) {
-	r := s.vis.mn
-	ho, _, _ := mnSame(h, k, st)
-	wp, sh := s.mnPad(src, h, w, c, k, st)
-	r.op, r.dwOut, r.dwIn, r.dwFilt, r.dwShape, r.dwStride = mnOpDW, dst, r.pad, filt, sh, st*wp*c
-	r.chunk = s.mnChunk(ho)
-	s.jit.Parallel(ho, r.chunk, r.fn)
-	r.dwOut, r.dwIn, r.dwFilt = nil, nil, nil
-	return ho, sh.WOut
-}
-
-// mnChunk is a region's chunk over n items: at most 4*Workers chunks, which
-// is what the attention's score rows are sized for.
-func (s *State) mnChunk(n int) int {
-	w := 4 * s.jit.Workers()
-	return max(1, (n+w-1)/w)
-}
-
 // mnItems is one chunk of the tower's pool region.
 func (s *State) mnItems(lo, hi int) {
 	r := s.vis.mn
@@ -237,125 +216,20 @@ func (s *State) mnConv(dst, src []float32, h, w, c, k, st int, wt tensor) error 
 	return nil
 }
 
-// mnHostRun runs block li of the tower on the CPU: the composer's form
-// where the composed CPU path is on and serves it, counted served or
-// declined by name, main's runner otherwise.
+// mnHostRun runs block li of the tower on the CPU in the composer's form,
+// counted served, or refuses it by name.
 func (s *State) mnHostRun(li int) error {
 	if s.cpu.args == nil {
-		return s.mnBlockRun(li)
+		return s.cpuRefused(li, jit.DeclineCaller)
 	}
 	if err := s.m.pageIn(li); err != nil {
 		return err
 	}
 	why := s.cpuConvRun(li)
-	if why == jit.DeclineServes {
-		s.cpu.served++
-		return nil
+	if why != jit.DeclineServes {
+		return s.cpuRefused(li, why)
 	}
-	s.cpu.declined[why]++
-	return s.mnBlockRun(li)
-}
-
-// mnBlockRun runs block li of the tower on the host: the encode's activation
-// in, the block's output in the other half.
-func (s *State) mnBlockRun(li int) error {
-	if err := s.m.pageIn(li); err != nil {
-		return err
-	}
-	v := s.vis
-	r, l := v.mn, &s.m.layers[li]
-	b := l.mn
-	eps := v.t.Cfg.Eps
-	if r.h != b.hin || r.w != b.win || r.c != b.cin {
-		return fmt.Errorf("model: tower block %d reads %dx%dx%d and the encode holds %dx%dx%d",
-			li-s.lo, b.hin, b.win, b.cin, r.h, r.w, r.c)
-	}
-	x := r.act[r.cur][:b.hin*b.win*b.cin]
-	y := r.act[1-r.cur][:b.hout*b.wout*b.cout]
-	nin, nout := b.hin*b.win, b.hout*b.wout
-	switch b.kind {
-	case mnEdge:
-		e := r.exp[:nout*b.cexp]
-		if err := s.mnConv(e, x, b.hin, b.win, b.cin, 3, b.stride, l.up); err != nil {
-			return err
-		}
-		s.normRows(e, e, b.norm1, nil, b.cexp, nout, false, eps, s.rowChunk(nout, b.cexp))
-		s.actAll(e, nn.ActGELU)
-		s.jit.NewInput()
-		if err := s.mm(y, l.down, e, nout); err != nil {
-			return err
-		}
-		s.normRows(y, y, b.norm2, nil, b.cout, nout, false, eps, s.rowChunk(nout, b.cout))
-	case mnInverted:
-		in, h, w := x, b.hin, b.win
-		if b.dwStart != nil {
-			t1 := r.kin[:b.hmid*b.wmid*b.cin]
-			s.mnDW(t1, x, h, w, b.cin, b.kStart, b.sStart, b.dwStart)
-			nm := b.hmid * b.wmid
-			s.normRows(t1, t1, b.dwStartNorm, nil, b.cin, nm, false, eps, s.rowChunk(nm, b.cin))
-			in, h, w = t1, b.hmid, b.wmid
-		}
-		nm := h * w
-		e := r.exp[:nm*b.cexp]
-		s.jit.NewInput()
-		if err := s.mm(e, l.up, in, nm); err != nil {
-			return err
-		}
-		s.normRows(e, e, b.norm1, nil, b.cexp, nm, false, eps, s.rowChunk(nm, b.cexp))
-		s.actAll(e, nn.ActGELU)
-		if b.dwMid != nil {
-			e2 := r.exp[nm*b.cexp : nm*b.cexp+nout*b.cexp]
-			s.mnDW(e2, e, h, w, b.cexp, b.kMid, b.sMid, b.dwMid)
-			s.normRows(e2, e2, b.dwMidNorm, nil, b.cexp, nout, false, eps, s.rowChunk(nout, b.cexp))
-			s.actAll(e2, nn.ActGELU)
-			e = e2
-		}
-		s.jit.NewInput()
-		if err := s.mm(y, l.down, e, nout); err != nil {
-			return err
-		}
-		s.normRows(y, y, b.norm2, nil, b.cout, nout, false, eps, s.rowChunk(nout, b.cout))
-	case mnAttention:
-		xn := r.kin[:nin*b.cin]
-		s.normRows(xn, x, b.norm1, nil, b.cin, nin, false, eps, s.rowChunk(nin, b.cin))
-		qd := b.heads * b.kd
-		q := r.q[:nin*qd]
-		s.jit.NewInput()
-		if err := s.mm(q, l.wq, xn, nin); err != nil {
-			return err
-		}
-		s.scale(q, float32(1/math.Sqrt(float64(b.kd))))
-		m := b.hkv * b.wkv
-		for _, side := range []struct {
-			down, norm []float32
-			wt         tensor
-			out        []float32
-		}{{b.kDown, b.kDownNorm, l.wk, r.k[:m*b.kd]}, {b.vDown, b.vDownNorm, l.wv, r.v[:m*b.kd]}} {
-			src := xn
-			if side.down != nil {
-				d := r.exp[:m*b.cin]
-				s.mnDW(d, xn, b.hin, b.win, b.cin, b.kvK, 2, side.down)
-				s.normRows(d, d, side.norm, nil, b.cin, m, false, eps, s.rowChunk(m, b.cin))
-				src = d
-			}
-			s.jit.NewInput()
-			if err := s.mm(side.out, side.wt, src, m); err != nil {
-				return err
-			}
-		}
-		r.op, r.att, r.attM, r.attKD, r.attHeads = mnOpAttn, s.jit.AttnSetFor(b.kd, b.kd, b.kd, cpu.KVF32), m, b.kd, b.heads
-		r.chunk = s.mnChunk(nin)
-		s.jit.Parallel(nin, r.chunk, r.fn)
-		r.att = nil
-		s.jit.NewInput()
-		if err := s.mm(y, l.wo, r.ao[:nin*qd], nin); err != nil {
-			return err
-		}
-	}
-	if b.residual && mnFault != mnFaultNoResidual {
-		s.addInto(y, x)
-	}
-	s.mnHandOver(li, y)
+	s.cpu.served++
 	return nil
 }
 
