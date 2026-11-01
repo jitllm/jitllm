@@ -7809,6 +7809,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		if why := g.tableServes(bs, p, pos, rrows, rag); why != partServes {
 			g.PartsDeclined[partRope]++
 			g.StepDeclines[why]++
+			return refuse("the composer does not serve the rotary tables: %s", DeclineName(int(why)))
 		} else {
 			tableSrv, tableMulti = true, tableAxes(scratchTable(bs, p, 0))
 		}
@@ -7966,6 +7967,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		if why != partServes {
 			g.PartsDeclined[partSample]++
 			g.StepDeclines[why]++
+			return refuse("the composer does not serve the step's token: %s", DeclineName(int(why)))
 		}
 	}
 	// A pick that projects its labels' rows alone leaves no logits to apply
@@ -7978,6 +7980,14 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		headWhy = partPick
 	}
 	headSrv := composedHead && headWhy == partServes
+	// The composer is the only path: a head it does not serve is refused.
+	if head != nil && !headSrv {
+		reason := "the composer was not asked for it"
+		if composedHead {
+			reason = DeclineName(int(headWhy))
+		}
+		return refuse("the composer does not serve the head: %s", reason)
+	}
 	// A head alone over every stream collapses them into the first before it
 	// (collapse.go): the caller handed them uncollapsed.
 	collapse := head != nil && lo == hi && hb.collapse != nil && p.Streams() > 1
@@ -8715,12 +8725,15 @@ func (g *devTier) layersSession(s backend.Session) {
 				g.PartsDeclined[kind]++
 				g.BlockDeclines[why]++
 			}
-			// The tier's own kernels of a block the placement left to the
-			// composer are readied before the submission (promptDeclines);
-			// a block reaching them unreadied is refused.
-			if inst == nil && left {
+			// The composer is the only path: a block it does not serve is
+			// refused, never run on the tier's own kernels.
+			if inst == nil {
 				if err == nil {
-					err = fmt.Errorf("tier: block %d at %d rows runs the tier's kernels, which no decline readied", li, R)
+					reason := "the composer was not asked for it"
+					if asked {
+						reason = DeclineName(int(why))
+					}
+					err = fmt.Errorf("tier: the composer does not serve block %d at %d rows: %s", li, R, reason)
 				}
 				continue
 			}
