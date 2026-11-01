@@ -33,14 +33,6 @@ func sigmoidGate(b *graph.Builder, g, v graph.ValueID, width int) graph.ValueID 
 	return b.Expr("gated", width, outGateTerms, nil, g, v)
 }
 
-// gatedBy is the terms of act(in0) * in1 where gated, act(in0) where not.
-func gatedBy(act []graph.Term, gated bool) []graph.Term {
-	if !gated {
-		return act
-	}
-	return append(slices.Clone(act), term(graph.MapMul, argTerm(len(act)-1), argIn(1)))
-}
-
 // reluSquaredTerms and siluTerms are two activations a fault swaps one for
 // the other.
 var (

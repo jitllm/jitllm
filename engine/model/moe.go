@@ -3,11 +3,9 @@ package model
 import (
 	"fmt"
 	"slices"
-	"time"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The mixture-of-experts FFN.
@@ -32,126 +30,6 @@ import (
 //
 // llama.cpp's clamp is not reproduced; the divisor guard is DeepSeek's
 // `sum + 1e-20` (see AGENTS.md's open questions).
-
-// moe writes one mixture-of-experts FFN of the normed vector h into out.
-//
-// h is the vector every selected expert reads and rin the router's: the same
-// vector for every mixture but Gemma 4's (Config.DenseMoE), whose router reads
-// its own norm of the residual. The caller has already called NewInput for
-// rin.
-//
-// out is added to, not written: the caller passes the residual and each
-// expert's contribution goes straight in, as moeBatch does, so the two produce
-// the same float sum.
-//
-// A post-FFN norm cannot be expressed this way; forward.go refuses a mixture
-// that has one.
-func (s *State) moe(li int, l *layer, rin, h, out []float32) error {
-	c := s.c
-	s.traceLayer = li
-	t0 := s.tick()
-	if err := s.mv(s.moeProbs, l.router, rin); err != nil {
-		return err
-	}
-	if &rin[0] != &h[0] {
-		// The experts read another vector than the router did.
-		s.jit.NewInput()
-	}
-	// gpt-oss biases the router's logits before the softmax; nil elsewhere.
-	s.routerBias(l)
-	// The router's logits, before the gate: what a selection's margin is read
-	// from. A nil check when no tracer is installed.
-	s.m.trace(li, "moe_logits", s.moeProbs[:c.NExpert])
-	// s.mv already charged this to opMatVec; move it to its own bucket.
-	if s.prof {
-		d := time.Now().UnixNano() - t0
-		opNanos[opRouter].Add(d)
-		opNanos[opMatVec].Add(-d) // s.mv already charged it; do not count it twice
-	}
-	// The whole router decision is one generated kernel: the selection in
-	// descending-probability order (lowest id wins a tie), the same ids
-	// ascending, both orders' renormalised weights and the divisor. There is
-	// no fallback.
-	if err := s.routeExperts(l); err != nil {
-		return err
-	}
-	sel := s.route.Sel
-	// The selected experts are read here, the first moment anyone knows which.
-	// pageIn deliberately skipped the banks, since a token touches only a few.
-	var err error
-	if sh := s.shOverlap; sh != nil {
-		// The shared expert reads none of the routed pages, so it runs while
-		// they are read; its contribution is added where it always was, by
-		// the caller, so the sum is the same float sum (placement.md 16c-2).
-		s.shOverlap = nil
-		if s.expReq == nil {
-			// One reader for the State's life, not a goroutine a layer: a go
-			// statement with arguments allocates (TestDecodeDoesNotAllocate).
-			s.expReq = make(chan expRead)
-			go s.expertReader(s.expReq)
-		}
-		s.expWG.Add(1)
-		s.expReq <- expRead{li: li, sel: sel}
-		w, serr := s.sharedExpertOut(sh, s.shOverlapH)
-		s.expWG.Wait()
-		err = s.expErr
-		if err == nil {
-			err = serr
-		}
-		s.shW, s.shReady = w, serr == nil
-		s.ShOverlaps++
-	} else {
-		err = s.m.ensureExperts(li, sel, &s.expHold)
-	}
-	defer s.expHold.release()
-	if err != nil {
-		return err
-	}
-	s.res.touch(li, c.NExpert, sel)
-	// Hotness is counted here and not in moeBatch: endToken() advances once
-	// per Forward, so counting a prefill chunk's rows would push Uses, a
-	// per-token probability tier.Place ranks by, above 1.
-	if !s.rowsOfChunk {
-		s.hot.add(li, sel)
-	}
-	// The selection is not visible in any output, so it is traced; a nil check
-	// when no tracer is installed.
-	if s.m.tracer != nil {
-		v := make([]float32, len(sel))
-		for i, e := range sel {
-			v[i] = float32(e)
-		}
-		s.m.trace(li, "moe_topk", v)
-	}
-
-	// Renormalisation is the architecture's choice (llama and qwen3moe do,
-	// olmoe does not); without it the kernel divides by one.
-	//
-	// Contributions are summed in ascending expert id, not selection order,
-	// because moeBatch visits the bank expert-major. A different order makes
-	// Forward and Prefill/ForwardBatch different float sums, which in a mixture
-	// can flip a near-tied top-k in the next layer. Selection order is still
-	// what the trace, the counters and the divisor see.
-	ord, ow := s.route.Ord, s.route.OWt
-	// The k experts go out in one region per stage; the loop below is the
-	// fallback. See moeFFN.
-	done, err := s.moeFFN(l, ord, h, out, ow)
-	if err != nil {
-		return err
-	}
-	if !done {
-		if err := s.moeLoop(l, ord, ow, h, out); err != nil {
-			return err
-		}
-	}
-	// Gemma 4's dense MLP is not a shared expert's addition (see denseMoE),
-	// and a latent mixture's shared expert reads the full-width input and adds
-	// after the routed sum leaves the latent (k3MoE).
-	if c.DenseMoE || c.ExpertLatent != 0 {
-		return nil
-	}
-	return s.sharedExpert(l, h, out)
-}
 
 // moeFFN runs the k selected experts' feed-forward with one pool region per
 // stage instead of one per expert, and reports whether it served the call.
@@ -340,94 +218,10 @@ func (s *State) moeReduce(out, w []float32, n int) {
 	s.elemRun()
 }
 
-// sharedExpert adds the always-on feed-forward, scaled by its own sigmoid gate.
-//
-// The gate is a vector producing one logit whose sigmoid scales the whole
-// contribution; nothing is selected or renormalised. It is added after the
-// routed sum, so the routed renormalisation does not rescale it.
-func (s *State) sharedExpert(l *layer, h, out []float32) error {
-	// Presence is the weights, not the gate: DeepSeek has a shared expert and
-	// no gate (weight 1). Test rows, not data: a paged matrix's data is nil
-	// while its page is out, but rows is set when the tensor is bound.
-	if l.shGate.rows == 0 && l.shUp.rows == 0 {
-		return nil
-	}
-	w, err := s.sharedExpertOut(l, h)
-	if err != nil {
-		return err
-	}
-	s.axpy(out, s.shOut, w)
-	s.jit.NewInput()
-	return nil
-}
-
 // expRead is one layer's routed read handed to the State's reader.
 type expRead struct {
 	li  int
 	sel []int32
-}
-
-// expertReader runs ensureExperts for each request until the channel closes
-// (State.Close), its error left in s.expErr: the routed read moe runs
-// behind the shared expert.
-func (s *State) expertReader(req chan expRead) {
-	for r := range req {
-		s.expErr = s.m.ensureExperts(r.li, r.sel, &s.expHold)
-		s.expWG.Done()
-	}
-}
-
-// sharedExpertOut computes the shared expert's output into s.shOut and
-// returns the weight it is added at, adding nothing: sharedExpert adds it,
-// and moe's overlap leaves the add to its caller.
-func (s *State) sharedExpertOut(l *layer, h []float32) (float32, error) {
-	if l.shGate.rows == 0 && l.shUp.rows == 0 {
-		return 0, nil
-	}
-	// The gate logit is a 1 x NEmbd F32 matvec written straight into s.sg[0].
-	// MatVecHost, not MatVec: this only runs for a block the host is running,
-	// so offering one row to the device would be a pointless round trip.
-	if l.shRouter != nil {
-		if !s.jit.MatVecHost(s.sg[:1], quant.F32, f32Bytes(l.shRouter), h, 1, len(l.shRouter)) {
-			return 0, fmt.Errorf("model: no kernel for the shared expert's gate (F32, 1 x %d)",
-				len(l.shRouter))
-		}
-	}
-	if l.shGate.rows == 0 {
-		// Ungated (Nemotron 3): down(act(up(h))).
-		if err := s.mv(s.shGate, l.shUp, h); err != nil {
-			return 0, err
-		}
-		s.actAll(s.shGate, s.c.Act)
-	} else {
-		if err := s.mv(s.shGate, l.shGate, h); err != nil {
-			return 0, err
-		}
-		if err := s.mv(s.shUp, l.shUp, h); err != nil {
-			return 0, err
-		}
-		s.actmulAll(s.shGate, s.shUp, s.c.Act)
-	}
-	s.jit.NewInput()
-	if err := s.mv(s.shOut, l.shDown, s.shGate); err != nil {
-		return 0, err
-	}
-	// The gate is one logit, and the generated sigmoid takes it as a
-	// one-element vector: sg[0] = sigma(logit) * sg[1], with sg[1] = 1.
-	//
-	// An ungated shared expert contributes at weight 1 and skips the sigmoid;
-	// a zero logit would give 0.5.
-	w := float32(1)
-	if l.shRouter != nil {
-		s.sg[1] = 1
-		nn.SigmoidMul32JIT(s.sg[:1], s.sg[1:])
-		w = s.sg[0]
-	}
-	// Granite's residual scale, which the mixture cannot take at an add of
-	// its own: it adds straight into the residual. See addInto.
-	w *= float32(s.c.ResidualScale)
-	s.jit.NewInput()
-	return w, nil
 }
 
 // f32Bytes is a float32 slice addressed as the bytes a kernel reads. The
@@ -439,13 +233,6 @@ func f32Bytes(v []float32) []byte {
 		return nil
 	}
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*4)
-}
-
-// routerBias adds the router's bias to its logits in moeProbs.
-func (s *State) routerBias(l *layer) {
-	if l.routerB != nil {
-		s.axpy(s.moeProbs[:len(l.routerB)], l.routerB, 1)
-	}
 }
 
 // traceExperts hands the tracer each selected expert's row of buf, laid out
@@ -482,48 +269,6 @@ func (s *State) MoEDispatch() (batched, looped int64) {
 // counter can show which path ran.
 func (s *State) MoEDownDispatch() (batched, looped int64) {
 	return s.moeDownBatched.Load(), s.moeDownLooped.Load()
-}
-
-// moeRouteGate describes this model's router to the generated kernel.
-//
-// Its shape is compiled into the kernel key (nn.MoEGate.baked()); the bias
-// values and the scale's magnitude are read at run time, so one kernel serves
-// every block.
-//
-// The two biases are different tensors: l.routerB (gpt-oss) is added to the
-// router's logits by routerBias; l.expProbsB (DeepSeek) is added to the gated
-// scores for selection only. See jlm.RoleExpProbsB.
-func (s *State) moeRouteGate(l *layer) nn.MoEGate {
-	c := s.c
-	bias := l.expProbsB
-	// DeepSeek V4's hash blocks select the token's own experts: a mask as the
-	// selection bias (ds4HashBias), the weights still the gate's.
-	if l.ds4 != nil && l.ds4.hash != nil && c.ds4Fault != ds4FaultScoreRoute {
-		bias = s.ds.hashBias
-	}
-	return nn.MoEGate{
-		Sigmoid:      c.ExpertSigmoid,
-		SqrtSoftplus: c.ExpertSqrtSoftplus,
-		Bias:         bias,
-		NGroup:       c.NExpertGroup,
-		NGroupUsed:   c.NExpertGroupUsed,
-		Norm:         !c.NoExpertNorm,
-		Scale:        float32(c.routedScale()),
-		ExpScale:     l.expScale,
-		SparseMixer:  c.SparseMixer,
-	}
-}
-
-// routeExperts gates the router's logits and selects the top k, in one
-// generated kernel. It takes raw logits: MoERouteJIT applies the gating
-// itself, so softmaxing first would compute softmax(softmax(x)).
-func (s *State) routeExperts(l *layer) error {
-	c := s.c
-	if !nn.MoERouteJIT(s.moeProbs, s.moeRouteGate(l), s.route) {
-		return fmt.Errorf("model: no kernel for the mixture router's top-k "+
-			"(%d experts, %d used, %d group(s))", c.NExpert, c.NExpertUsed, c.NExpertGroup)
-	}
-	return nil
 }
 
 // expSelBias is a representative selection bias, or nil when this model has
