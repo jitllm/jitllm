@@ -118,7 +118,9 @@ func TestComposedGPURouterRows(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.ContainsFunc(codes, func(c jit.Code) bool { return slices.Contains(c.Passes, "prologue") && slices.Contains(c.Passes, "epilogue") }) {
+			if !slices.ContainsFunc(codes, func(c jit.Code) bool {
+				return slices.Contains(c.Passes, "prologue") && slices.Contains(c.Passes, "epilogue")
+			}) {
 				t.Fatalf("no launch takes a prologue and an epilogue (%d launches)", len(codes))
 			}
 			lone, err := compileLone(d, codes)
