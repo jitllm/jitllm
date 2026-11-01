@@ -1,6 +1,9 @@
 package graph
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // Sample is greedy sampling: the token of the largest logit, the lower of
 // two equal ones.
@@ -39,6 +42,13 @@ const sampleSteps = 16
 
 func (s *SampleTopK) Build() *Graph {
 	b := New()
+	vals, ids := s.emit(b)
+	b.Out(vals, ids)
+	return b.G
+}
+
+// emit is SampleTopK on b: its inputs, then the K values and their ids.
+func (s *SampleTopK) emit(b *Builder) (vals, ids ValueID) {
 	C := min(s.K+s.Hist, s.NVocab)
 	K := min(s.K, C)
 	l := b.In("logits", s.NVocab)
@@ -74,10 +84,67 @@ func (s *SampleTopK) Build() *Graph {
 	negID := b.Emit(OpMap, []ValueID{cand[0]}, []Result{f32("sample.cand.negid", C)}, nil, Attrs{Fn: MapMul, Const: -1}, nil, nil)[0]
 	byID := b.Emit(OpTopK, []ValueID{negID}, []Result{u32("sample.byid", C), f32("sample.byid.v", C)}, nil, Attrs{TopK: C}, nil, nil)
 	pv := b.Emit(OpTake, []ValueID{v, byID[0]}, []Result{f32("sample.byid.pen", C)}, nil, Attrs{}, nil, nil)[0]
-	ids := b.Emit(OpTake, []ValueID{cand[0], byID[0]}, []Result{u32("sample.byid.ids", C)}, nil, Attrs{}, nil, nil)[0]
+	byIDs := b.Emit(OpTake, []ValueID{cand[0], byID[0]}, []Result{u32("sample.byid.ids", C)}, nil, Attrs{}, nil, nil)[0]
 	best := b.Emit(OpTopK, []ValueID{pv}, []Result{u32("sample.place", K), f32("sample.vals", K)}, nil, Attrs{TopK: K}, nil, nil)
-	out := b.Emit(OpTake, []ValueID{ids, best[0]}, []Result{u32("sample.ids", K)}, nil, Attrs{}, nil, nil)[0]
-	b.Out(best[1], out)
+	out := b.Emit(OpTake, []ValueID{byIDs, best[0]}, []Result{u32("sample.ids", K)}, nil, Attrs{}, nil, nil)[0]
+	return best[1], out
+}
+
+// SampleDraw is SampleTopK's candidates drawn from where they are: of the
+// first k, in llama.cpp's order, top-p and then min-p over their softmax at
+// temperature 1, the best always kept, then a Gumbel-max at the temperature
+// -- the largest of (v - v0)/T - log(-log u) over the survivors, u each
+// candidate's OpUniform under the counter keyed by its id. Its inputs are
+// SampleTopK's, then sample.draw (k, 1/T, top-p and min-p: top-p +Inf and
+// min-p 0 where off) and sample.counter (u32: the seed, then the position);
+// its output the token. Top-p's mass before each candidate is a KxK sum:
+// each candidate's row of the probabilities, those of a lower place kept.
+type SampleDraw struct {
+	SampleTopK
+}
+
+func (s *SampleDraw) Build() *Graph {
+	b := New()
+	vals, ids := s.emit(b)
+	draw := b.In("sample.draw", 4)
+	ctr := b.In("sample.counter", 2)
+	b.G.Values[ctr].Elem = ElemU32
+	K := b.G.Values[vals].Width
+	f32 := func(name string, w int) Result { return Result{Name: name, Width: w} }
+	one := func(op OpKind, name string, w int, a Attrs, in ...ValueID) ValueID {
+		return b.Emit(op, in, []Result{f32(name, w)}, nil, a, nil, nil)[0]
+	}
+	mapc := func(fn MapFn, c float64, name string, w int, in ...ValueID) ValueID {
+		return one(OpMap, name, w, Attrs{Fn: fn, Const: c}, in...)
+	}
+	word := func(i int, name string) ValueID {
+		return one(OpSlice, name, 1, Attrs{Offset: i, Width: 1}, draw)
+	}
+	k, invT, topp, minp := word(0, "sample.k"), word(1, "sample.invtemp"), word(2, "sample.topp"), word(3, "sample.minp")
+	rank := b.Emit(OpRank, []ValueID{vals}, []Result{{Name: "sample.rank", Width: K, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
+	place := mapc(MapMul, 1, "sample.place.f", K, rank)
+	inK := mapc(MapLess, 0, "sample.ink", K, place, k)
+	v0 := one(OpReduce, "sample.v0", 1, Attrs{Fn: MapMax}, vals)
+	d := mapc(MapSub, 0, "sample.d", K, vals, v0)
+	e := mapc(MapMul, 0, "sample.e", K, mapc(MapExp, 0, "sample.ed", K, d), inK)
+	p := mapc(MapDiv, 0, "sample.p", K, e, one(OpReduce, "sample.sum", 1, Attrs{Fn: MapAdd}, e))
+	tp := one(OpTile, "sample.p.rows", K*K, Attrs{Span: K}, p)
+	tr := one(OpTile, "sample.place.rows", K*K, Attrs{Span: K}, place)
+	lower := mapc(MapMul, 0, "sample.lower", K*K, tp, mapc(MapLess, 0, "sample.lt", K*K, tr, place))
+	before := one(OpReduce, "sample.before", K, Attrs{Fn: MapAdd, Span: K}, lower)
+	keepP := mapc(MapLess, 0, "sample.keep.p", K, before, topp)
+	floor := mapc(MapMul, 0, "sample.floor", 1, one(OpReduce, "sample.pmax", 1, Attrs{Fn: MapMax}, p), minp)
+	under := mapc(MapLess, 0, "sample.under", K, p, floor)
+	keepM := mapc(MapAdd, 1, "sample.keep.m", K, mapc(MapMul, -1, "sample.under.neg", K, under))
+	first := mapc(MapLess, 1, "sample.first", K, place)
+	keep := mapc(MapMax, 0, "sample.keep", K, mapc(MapMul, 0, "sample.keep.pmk", K, mapc(MapMul, 0, "sample.keep.pm", K, keepP, keepM), inK), first)
+	u := one(OpUniform, "sample.u", K, Attrs{}, ids, ctr)
+	g := mapc(MapMul, -1, "sample.gumbel", K, mapc(MapLog, 0, "sample.lnlnu", K, mapc(MapMul, -1, "sample.nlnu", K, mapc(MapLog, 0, "sample.lnu", K, u))))
+	score := mapc(MapAdd, 0, "sample.score", K, mapc(MapMul, 0, "sample.dt", K, d, invT), g)
+	kept := mapc(MapWhere, math.Inf(-1), "sample.kept", K, keep, score)
+	best := b.Emit(OpTopK, []ValueID{kept}, []Result{{Name: "sample.best", Width: 1, Elem: ElemU32}, f32("sample.best.v", 1)}, nil, Attrs{TopK: 1}, nil, nil)
+	tok := b.Emit(OpTake, []ValueID{ids, best[0]}, []Result{{Name: "sample.token", Width: 1, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
+	b.Out(tok)
 	return b.G
 }
 
