@@ -1601,6 +1601,9 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 			}
 			if e, ok := f.Find(w.Role, int32(li), -1); ok {
 				formats[w.Role] = e.Type
+			} else if w.Rows == 0 {
+				// A vector a restatement adds is held as every vector is.
+				formats[w.Role] = jlm.TypeF32
 			}
 		}
 	}

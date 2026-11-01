@@ -5,7 +5,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // TestAttentionBiasesReachTheModel injects each attention bias (a bias is just a
@@ -37,12 +39,13 @@ func TestAttentionBiasesReachTheModel(t *testing.T) {
 			c := m.Cfg
 			for _, b := range []struct {
 				name string
-				set  func(l *layer, v []float32)
+				role jlm.Role
+				at   func(l *layer) *[]float32
 			}{
-				{"attn_q.bias", func(l *layer, v []float32) { l.bq = v }},
-				{"attn_k.bias", func(l *layer, v []float32) { l.bk = v }},
-				{"attn_v.bias", func(l *layer, v []float32) { l.bv = v }},
-				{"attn_output.bias", func(l *layer, v []float32) { l.bo = v }},
+				{"attn_q.bias", jlm.RoleAttnQBias, func(l *layer) *[]float32 { return &l.bq }},
+				{"attn_k.bias", jlm.RoleAttnKBias, func(l *layer) *[]float32 { return &l.bk }},
+				{"attn_v.bias", jlm.RoleAttnVBias, func(l *layer) *[]float32 { return &l.bv }},
+				{"attn_output.bias", jlm.RoleAttnOutBias, func(l *layer) *[]float32 { return &l.bo }},
 			} {
 				t.Run(b.name, func(t *testing.T) {
 					// Width by role: q is nHead*headDim, k and v are the KV
@@ -58,12 +61,18 @@ func TestAttentionBiasesReachTheModel(t *testing.T) {
 					for i := range v {
 						v[i] = 0.05 // small, but far outside f32 rounding
 					}
+					// The bias in the layers and as the composer reads the
+					// container, each layer's own put back after.
+					was := make([][]float32, len(m.layers))
 					for li := range m.layers {
-						b.set(&m.layers[li], v)
+						p := b.at(&m.layers[li])
+						was[li], *p = *p, v
 					}
+					undoR := m.restate(func(inv map[jlm.Role]graph.Shape) { inv[b.role] = graph.Shape{K: w} })
 					defer func() {
+						undoR()
 						for li := range m.layers {
-							b.set(&m.layers[li], nil)
+							*b.at(&m.layers[li]) = was[li]
 						}
 					}()
 
@@ -120,6 +129,13 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 				l.bv = fill(c.KVDim(), 0.07)
 				l.bo = fill(c.NEmbd, -0.02)
 			}
+			// The biases as the composer reads the container too.
+			defer m.restate(func(inv map[jlm.Role]graph.Shape) {
+				inv[jlm.RoleAttnQBias] = graph.Shape{K: c.NHead * c.HeadDim}
+				inv[jlm.RoleAttnKBias] = graph.Shape{K: c.KVDim()}
+				inv[jlm.RoleAttnVBias] = graph.Shape{K: c.KVDim()}
+				inv[jlm.RoleAttnOutBias] = graph.Shape{K: c.NEmbd}
+			})()
 
 			const steps = 8
 			ids := make([]int32, steps)
@@ -175,6 +191,12 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 					l.bv = fill(c.KVDim(), 0.07)
 					l.bo = fill(c.NEmbd, -0.02)
 				}
+				defer pm.restate(func(inv map[jlm.Role]graph.Shape) {
+					inv[jlm.RoleAttnQBias] = graph.Shape{K: c.NHead * c.HeadDim}
+					inv[jlm.RoleAttnKBias] = graph.Shape{K: c.KVDim()}
+					inv[jlm.RoleAttnVBias] = graph.Shape{K: c.KVDim()}
+					inv[jlm.RoleAttnOutBias] = graph.Shape{K: c.NEmbd}
+				})()
 				ref := pm.NewState(steps + 1)
 				defer ref.Close()
 				var w []float32
