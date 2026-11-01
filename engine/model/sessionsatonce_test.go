@@ -476,7 +476,6 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 	const seq, gen = 128, 100
 	g := atOnceTier(t, spec, func(c *tier.Config) {
 		c.KVPage = 64 // the smallest page: a short history is two
-		c.StagedDecode = true
 	})
 	var alone [2]atOnceRun
 	var first [2]int32
@@ -553,7 +552,7 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 				"move blocks home (%s)", k, st.devCount(), m.Cfg.NLayer, g.Err())
 		}
 	}
-	r := evictArm{ev: after.KVEvictions - before.KVEvictions, passes: after.KVStreamPasses - before.KVStreamPasses}
+	r := evictArm{ev: after.KVEvictions - before.KVEvictions, passes: after.ComposedStreamPasses - before.ComposedStreamPasses}
 	for k := range got {
 		for i, lg := range got[k] {
 			if e := logitNMSE(lg, alone[k].logits[i]); !(e <= r.worst) {

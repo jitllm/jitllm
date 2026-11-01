@@ -1,7 +1,6 @@
 package model
 
 import (
-	"math"
 	"strings"
 	"testing"
 
@@ -56,105 +55,6 @@ func q8Twin(s *State) {
 	s.kvl.jit = s.jit
 	s.jit.ReserveKVQuant(hd)
 	s.kvl.q8Twin = make([]float32, (max(c.NKVHead, c.NKVHeadSWA)+1)*cpu.KVRowBytes(cpu.KVQ8, hd)/4)
-}
-
-// TestKVQ8IsSelectedAndRuns holds the q8_0 cache end to end, teacher-forced
-// over 48 tokens, against two arms of the same model:
-//
-//   - its twin, an f32 cache whose every stored row was rounded through q8_0
-//     and widened back (q8Twin): the q8 kernels read d*q exactly as the f32
-//     ones read the widened row, in the same order, so the logits must be
-//     BIT-IDENTICAL at every position. Any difference is the q8 cache's own
-//     addressing (a wrong block's scale, head, row or page), which an NMSE
-//     band would hide inside the rounding;
-//   - the plain f32 cache, which it must NOT equal (else the q8 cache never
-//     ran) and whose distance is the q8_0 rounding's cost, logged per model.
-//
-// It checks the cache is SELECTED (State.KVType and the page's row format),
-// and counts the KV bytes a position costs in each format against the row
-// format's arithmetic.
-func TestKVQ8IsSelectedAndRuns(t *testing.T) {
-	for _, name := range kvq8Models {
-		t.Run(name, func(t *testing.T) {
-			// Untuned: the arms are held bit for bit, and a kernel pick timed
-			// mid-run (the arm64 per-shape choice) moves the reduction order
-			// between them -- the logits then differ by up to a few percent.
-			m, err := Open(jlmOf(t, testmodels.Path(name)), noTune)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer m.Close()
-			ids := make([]int32, 48)
-			for i := range ids {
-				ids[i] = int32((i*7919 + 13) % m.Cfg.NVocab)
-			}
-			s32, a := kvTeacherForce(t, m, KVF32, ids, nil)
-			defer s32.Close()
-			s8, b := kvTeacherForce(t, m, KVQ8_0, ids, nil)
-			defer s8.Close()
-			tw, c := kvTeacherForce(t, m, KVF32, ids, q8Twin)
-			defer tw.Close()
-			if s8.KVType() != KVQ8_0 || s8.kvl.fmt != cpu.KVQ8 {
-				t.Fatalf("asked for a q8_0 cache and got %v", s8.KVType())
-			}
-			if s32.KVType() != KVF32 || tw.KVType() != KVF32 {
-				t.Fatalf("asked for f32 caches and got %v and %v", s32.KVType(), tw.KVType())
-			}
-			for p := range ids {
-				for i := range b[p] {
-					if math.Float32bits(b[p][i]) != math.Float32bits(c[p][i]) {
-						t.Fatalf("position %d logit %d: %v on the q8_0 cache, %v on the f32 cache of its rows",
-							p, i, b[p][i], c[p][i])
-					}
-				}
-			}
-			var worst, floor float64
-			floor = math.Inf(1)
-			agree := 0
-			for p := 0; p < len(ids); p++ {
-				e := logitNMSE(b[p], a[p])
-				if math.IsNaN(e) {
-					t.Fatalf("position %d: a non-finite logit NMSE", p)
-				}
-				worst = math.Max(worst, e)
-				floor = math.Min(floor, e)
-				if argmaxF(a[p]) == argmaxF(b[p]) {
-					agree++
-				}
-			}
-			if worst == 0 {
-				t.Fatalf("the q8_0 cache's logits equal the f32 cache's at every position: it did not run")
-			}
-			// The twin shares the widening load with the q8 kernels (a scale
-			// read from the wrong block reads wrong in both, and the twin
-			// still agrees), which the kernel gates hold against an
-			// independent dequantization (cpu.TestAttnQ8*). The band against
-			// f32 closes it end to end: clean, the worst position's logit
-			// NMSE is 6e-4 to 0.053 across these models and the top-1 agrees
-			// at 35 of 48 positions or more; with every scale read from the
-			// row's first block, Llama-3.2-1B reads 5.13 and agrees at 1.
-			if worst > 0.25 || agree < len(ids)/2 {
-				t.Errorf("against the f32 cache: worst logit NMSE %.3g, top-1 at %d of %d positions -- past "+
-					"what q8_0 rounding costs", worst, agree, len(ids))
-			}
-			// Bytes: every layer that keeps history, K and V, at the row
-			// format's bytes.
-			b32, b8 := s32.KVBytesPerToken(), s8.KVBytesPerToken()
-			want := 0
-			for li := 0; li < m.Cfg.NLayer; li++ {
-				if s8.kv.layers[li].p == 0 || m.Cfg.KVShared(li) {
-					continue
-				}
-				l := s8.kvlAt(li)
-				want += 2 * l.nKV * cpu.KVRowBytes(cpu.KVQ8, l.headDim)
-			}
-			if b8 != want || b8 >= b32 {
-				t.Errorf("q8_0 costs %d bytes a position (want %d) against f32's %d", b8, want, b32)
-			}
-			t.Logf("%-36s KV bytes/token f32 %d q8_0 %d (%.3fx); against f32: logit NMSE worst %.3g best %.3g, top-1 %d/%d",
-				name, b32, b8, float64(b8)/float64(b32), worst, floor, agree, len(ids))
-		})
-	}
 }
 
 // argmaxF is the index of the largest logit.

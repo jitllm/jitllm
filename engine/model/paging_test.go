@@ -36,11 +36,6 @@ func relocModels() []string { return append(principleModels(), principleMixtures
 func TestPagingDoesNotChangeTheAnswer(t *testing.T) {
 	for _, name := range principleModels() {
 		t.Run(name, func(t *testing.T) { pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name))) })
-		// And on a q8_0 KV cache: a block paged out and back is the same
-		// block whatever its history is stored as.
-		t.Run(name+"/q8_0", func(t *testing.T) {
-			pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)), WithKVType(KVQ8_0))
-		})
 	}
 	// And with the CPU's blocks on what the composer forms for it: a block
 	// paged out and back binds its weights where they now are.

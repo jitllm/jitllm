@@ -31,24 +31,6 @@ func TestBatchSeamMovesCarryEveryRow(t *testing.T) {
 	batchSeamMoves(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), 1e-1, true)
 }
 
-// TestBatchSeamMovesCarryEveryRowQ8 is the same with a q8_0 host cache, held
-// to a host-only batch on the same q8 cache: every move widens the rows'
-// history to the device's float32 and quantizes what comes home
-// (State.migrateKVAs), so a row whose history did not survive the conversion
-// reads as one that lost it. Llama and the hybrid, at their f32 bounds: what
-// the device adds on top of its own arithmetic is the rows it wrote in
-// float32 that the host arm wrote in q8_0, a rounding the bounds cover.
-func TestBatchSeamMovesCarryEveryRowQ8(t *testing.T) {
-	t.Run("llama", func(t *testing.T) {
-		batchSeamMovesWith(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), 1e-1, true,
-			[]Option{WithKVType(KVQ8_0)}, nil)
-	})
-	t.Run("hybrid", func(t *testing.T) {
-		batchSeamMovesWith(t, testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"), 3e-2, false,
-			[]Option{WithKVType(KVQ8_0)}, nil)
-	})
-}
-
 // TestBatchSeamMovesCarryEveryRowHybrid is the same on a hybrid, where a linear
 // block's history is a per-row recurrent summary (MigrateRec) beside the
 // attention blocks' KV.

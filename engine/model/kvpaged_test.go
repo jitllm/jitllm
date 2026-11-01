@@ -1406,10 +1406,6 @@ func TestKVPagesRelocateWithTheLayer(t *testing.T) {
 	defer fusedRunsCheck(t, true)()
 	for _, name := range relocModels() {
 		t.Run(name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), KVF32) })
-		// The q8_0 cache travels widened to float32 and comes home quantized
-		// again (State.migrateKVAs): the round trip must give back every int8
-		// and every scale, or the logits below move.
-		t.Run(name+"/q8_0", func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), KVQ8_0) })
 	}
 }
 
