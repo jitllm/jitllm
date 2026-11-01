@@ -1,6 +1,5 @@
 package tier
 
-
 // foldTakes says block l's attention norm, in a prompt chunk on the binary16
 // GEMM path, is the plain RMSNorm of bs.x that a held residual add can be
 // folded into: the voltaOnly branch of the attention half, reading bs.x, with

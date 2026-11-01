@@ -1,7 +1,6 @@
 package tier
 
 import (
-
 	"github.com/jitllm/jitllm/backend"
 )
 

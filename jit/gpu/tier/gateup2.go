@@ -1,8 +1,5 @@
 package tier
 
-import (
-)
-
 // gateUp2Shape says block l's FFN has a Gate2 form: a plain dense gated FFN
 // whose gate and up are one shape at one final-row split.
 func (g *devTier) gateUp2Shape(l *layer) bool {
