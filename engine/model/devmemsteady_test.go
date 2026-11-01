@@ -102,7 +102,7 @@ func memoryAcrossMoves(t *testing.T, m *Model, parts tier.Parts) {
 		}
 	}
 	if parts != 0 {
-		if n, d, _ := g.Stats().ServedPart(parts); n == 0 || d != 0 {
+		if n, d := g.Stats().ServedPart(parts); n == 0 || d != 0 {
 			t.Fatalf("the composer served %d part steps and declined %d across the moves", n, d)
 		}
 	}

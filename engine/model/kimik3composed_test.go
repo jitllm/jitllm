@@ -57,11 +57,11 @@ func TestKimiK3ServesComposed(t *testing.T) {
 			run := func(t *testing.T, dev string) float64 {
 				t.Helper()
 				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock|tier.ComposedEmbed, true, false)
-				served, declined, _ := st.ServedPart(tier.ComposedBlock)
+				served, declined := st.ServedPart(tier.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))
 				}
-				ne, de, _ := st.ServedPart(tier.ComposedEmbed)
+				ne, de := st.ServedPart(tier.ComposedEmbed)
 				if ne += st.ReplayedPart(tier.ComposedEmbed); ne < len(toks) || de != 0 {
 					t.Fatalf("the input rows served %d times and declined %d, want every step's (%s)", ne, de, declinesOf(st))
 				}

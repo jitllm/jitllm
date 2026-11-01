@@ -61,7 +61,7 @@ func TestComposedPromptMatchesLlamaCppF32(t *testing.T) {
 			got := map[int][]float32{}
 			for _, i := range at {
 				l, st, _, _ := composedDecode(t, m, "cuda:0", ids[:nctx/2+i+1], nil, tier.ComposedBlock|tier.ComposedPrompt, false, false)
-				if n, d, _ := st.ServedPart(tier.ComposedPrompt); n == 0 || d != 0 {
+				if n, d := st.ServedPart(tier.ComposedPrompt); n == 0 || d != 0 {
 					t.Fatalf("position %d: the composer served %d block steps of the prompt and declined %d", nctx/2+i, n, d)
 				}
 				got[i] = logSoftmax(l[0])

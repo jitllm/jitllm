@@ -98,12 +98,12 @@ func TestSynthLlama4Q8BatchedPrefillOnDevice(t *testing.T) {
 			if n := st.GPULayers(); n != m.Cfg.NLayer {
 				t.Fatalf("%s took %d of %d blocks: %v %v", spec, n, m.Cfg.NLayer, st.DeviceDeclines(), gpu.Err())
 			}
-			n0, d0, _ := gpu.Stats().ServedPart(tier.ComposedPrompt)
+			n0, d0 := gpu.Stats().ServedPart(tier.ComposedPrompt)
 			got, err := st.Prefill(g.IDs)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n, d, _ := gpu.Stats().ServedPart(tier.ComposedPrompt); n == n0 || d != d0 {
+			if n, d := gpu.Stats().ServedPart(tier.ComposedPrompt); n == n0 || d != d0 {
 				t.Fatalf("the composer served %d of the prompt's block steps and declined %d (%s), so this compared no batched mixture", n-n0, d-d0, gpu.Err())
 			}
 			// The chunk must have stayed on the device: a demotion restarts it

@@ -55,7 +55,7 @@ func TestPagedKVBatchMatchesHost(t *testing.T) {
 	}
 	const gen, seq = 12, 256
 	got, after := batchGreedy(t, m, ids, gen, seq, append([]tier.Option{tier.WithDevices("gpu:0")}, pagedOpts(pagedKVPage)...))
-	if n, d, _ := lastBatchStats.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+	if n, d := lastBatchStats.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the composer served %d of the batch's block steps and declined %d", n, d)
 	}
 	for i := range ids {

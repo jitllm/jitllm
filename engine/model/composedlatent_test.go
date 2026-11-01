@@ -161,7 +161,7 @@ func TestComposedLatentViolations(t *testing.T) {
 					got, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, false, false)
 					// Every step runs every latent block, emitted or replayed in a
 					// recording, and declines the rest for no graph alone.
-					n, _, _ := st.ServedPart(parts)
+					n, _ := st.ServedPart(parts)
 					n += st.ReplayedPart(parts)
 					declined := 0
 					for i, k := range st.BlockDeclines {
@@ -197,7 +197,7 @@ func TestComposedLatentViolations(t *testing.T) {
 						for _, u := range undo {
 							u()
 						}
-						if n, d, _ := bst.ServedPart(parts); n == 0 || d != 0 {
+						if n, d := bst.ServedPart(parts); n == 0 || d != 0 {
 							t.Fatalf("with %s the composer served %d block steps and declined %d (%s; %q)", rw.what, n, d, declinesOf(bst), bst.LastErr)
 						}
 						bmed, bworst := band(bad)

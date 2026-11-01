@@ -107,7 +107,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 					// rest by default: the reference is then those blocks' banks
 					// in pages, served like the whole ones.
 					want, whole, _ := decode(t, false)
-					if n, d, _ := whole.ServedPart(tier.ComposedBlock); n == 0 || d != 0 || whole.HybridRuns != 0 {
+					if n, d := whole.ServedPart(tier.ComposedBlock); n == 0 || d != 0 || whole.HybridRuns != 0 {
 						t.Fatalf("the default placement served %d block steps, declined %d and ran %d on the host (%s)", n, d, whole.HybridRuns, declinesOf(whole))
 					}
 					if whole.StreamBlocks > 0 {
@@ -124,7 +124,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 						}
 						t.Run(arm.name, func(t *testing.T) {
 							got, st, pageIns := decode(t, arm.budget, stream(arm.slots))
-							served, declined, _ := st.ServedPart(tier.ComposedBlock)
+							served, declined := st.ServedPart(tier.ComposedBlock)
 							switch {
 							case st.StreamBlocks < moe:
 								t.Fatalf("%d blocks placed streamed of the %d mixtures: the configuration under test was not selected", st.StreamBlocks, moe)

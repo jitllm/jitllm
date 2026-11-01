@@ -393,7 +393,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 							t.Errorf("the answers moved %.5f from the host's, past %.3f", worst, tol)
 						}
 						st := g.Stats()
-						served, declined, _ := st.ServedPart(tier.ComposedSample)
+						served, declined := st.ServedPart(tier.ComposedSample)
 						t.Logf("composed, every block on %s: worst difference from the host %.5f; %d prompts picked, %d picks by the composer (%d by the picked rows' projection), %d declined (%s); the composer's instances hold %d bytes",
 							spec, worst, picked, served, st.PickRows, declined, declinesOf(st), st.ComposedBytes)
 						if m.IsEncoder() || c.kind == jlm.DecisionClef || c.kind == jlm.DecisionKev {
@@ -427,7 +427,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 							cardTooSmall(t, why, "%s held %d of %d blocks in the composed gather arm", spec, n, nb)
 						}
 						gs := gg.Stats()
-						gn, gd, _ := gs.ServedPart(tier.ComposedSample)
+						gn, gd := gs.ServedPart(tier.ComposedSample)
 						if gp == 0 || gn != gp || gd != 0 || gs.PickRows != 0 {
 							t.Fatalf("the gather arm: %d prompts picked, %d by the composer, %d declined, %d by the picked rows' projection (%s)", gp, gn, gd, gs.PickRows, declinesOf(gs))
 						}

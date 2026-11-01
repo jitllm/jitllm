@@ -315,7 +315,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 			// which is the image at sequential positions: the composer's is
 			// served at the positions the State states, or the host's goes up.
 			s := gpu.Stats()
-			if served, _, _ := s.ServedPart(tier.ComposedTable); s.RopeTables != 0 || s.RopeTableUploads == 0 && served == 0 {
+			if served, _ := s.ServedPart(tier.ComposedTable); s.RopeTables != 0 || s.RopeTableUploads == 0 && served == 0 {
 				t.Fatalf("the device built %d rotary rows and took %d from the host (%q): an M-RoPE table "+
 					"built from cache positions is the violation", s.RopeTables, s.RopeTableUploads, s.RopeTableWhy)
 			}
@@ -711,7 +711,7 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 	}
 	// Every step's tables and the picture prompt's chunks', each a whole set.
 	steps, tabs := len(g.Cont)-1, composedTables(m)
-	nt, dt, _ := stats.ServedPart(tier.ComposedTable)
+	nt, dt := stats.ServedPart(tier.ComposedTable)
 	switch {
 	case nt < (steps+1)*tabs || nt%tabs != 0 || dt != 0:
 		t.Fatalf("composed: %d tables served and %d calls declined (%s), where %d steps and the prompt's chunks of %d tables are at least %d",
@@ -747,12 +747,12 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 		}
 		t.Logf("composed: XD-RoPE's sections moved reach %.3e against transformers (%d flips)", wb, fb)
 	}
-	nb, db, _ := stats.ServedPart(tier.ComposedBlock)
+	nb, db := stats.ServedPart(tier.ComposedBlock)
 	if nb != steps*stated || db != steps*(m.Cfg.NLayer-stated) {
 		t.Fatalf("composed: %d block steps served and %d declined, where %d steps of %d stated and %d other blocks are %d and %d",
 			nb, db, steps, stated, m.Cfg.NLayer-stated, steps*stated, steps*(m.Cfg.NLayer-stated))
 	}
-	nh, dh, _ := stats.ServedPart(tier.ComposedHead)
+	nh, dh := stats.ServedPart(tier.ComposedHead)
 	t.Logf("composed after the picture: worst %.3e; %d tables served, %d declined; %d of %d blocks stated, %d block steps served, %d declined %v; head served %d, declined %d",
 		w, nt, dt, stated, m.Cfg.NLayer, nb, db, why, nh, dh)
 }

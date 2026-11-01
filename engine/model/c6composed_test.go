@@ -92,13 +92,13 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 			t.Fatalf("the front end states %d of %d blocks: %s %v", covered, m.Cfg.NLayer, m.Uncovered(0), m.UncoveredErr(0))
 		}
 		got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock|tier.ComposedHead, true, false)
-		served, declined, _ := st.ServedPart(tier.ComposedBlock)
+		served, declined := st.ServedPart(tier.ComposedBlock)
 		if want := len(toks) * covered; served != want || declined != 0 {
 			t.Fatalf("%d block steps served and %d declined, where %d steps of %d covered blocks are %d served",
 				served, declined, len(toks), covered, want)
 		}
 		// Every step's head, and the prompt's last row's.
-		if heads, hd, _ := st.ServedPart(tier.ComposedHead); heads != len(toks)+1 || hd != 0 {
+		if heads, hd := st.ServedPart(tier.ComposedHead); heads != len(toks)+1 || hd != 0 {
 			t.Fatalf("%d head steps served and %d declined, where the %d steps and the prompt's last row are %d (%s)", heads, hd, len(toks), len(toks)+1, declinesOf(st))
 		}
 		for i, k := range st.BlockDeclines {
@@ -159,8 +159,8 @@ func wholeStepC6(t *testing.T, m *Model, dev string, prompt, toks []int32, want 
 	t.Helper()
 	decode := func(after func(*State)) (worst float64, flips int) {
 		got, st, _, _ := composedDecodeWith(t, m, dev, prompt, toks, tier.ComposedStep, true, false, after)
-		ne, de, _ := st.ServedPart(tier.ComposedEmbed)
-		np, dp, _ := st.ServedPart(tier.PromptEmbed)
+		ne, de := st.ServedPart(tier.ComposedEmbed)
+		np, dp := st.ServedPart(tier.PromptEmbed)
 		if ne != len(toks) || de != 0 || np == 0 || dp != 0 {
 			t.Fatalf("the composer gathered %d of %d steps' rows (%d declined) and the prompt's %d times (%d declined): %s",
 				ne, len(toks), de, np, dp, declinesOf(st))

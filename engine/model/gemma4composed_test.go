@@ -56,12 +56,12 @@ func TestGemma4ServesComposed(t *testing.T) {
 					}
 					tierOut, _, _, _ := composedDecode(t, m, dev, prompt, toks, 0, true, false)
 					got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedStep, true, false)
-					served, td, _ := st.ServedPart(tier.ComposedTable)
+					served, td := st.ServedPart(tier.ComposedTable)
 					served += st.ReplayedPart(tier.ComposedTable)
-					nb, db, _ := st.ServedPart(tier.ComposedBlock)
-					np, dp, up := st.ServedPart(tier.ComposedPrompt)
-					t.Logf("%s: the tables served %d times, declined %d; block steps served %d, declined %d; the prompt's %d served, %d declined, %d unasked (%s)",
-						dev, served, td, nb, db, np, dp, up, declinesOf(st))
+					nb, db := st.ServedPart(tier.ComposedBlock)
+					np, dp := st.ServedPart(tier.ComposedPrompt)
+					t.Logf("%s: the tables served %d times, declined %d; block steps served %d, declined %d; the prompt's %d served, %d declined (%s)",
+						dev, served, td, nb, db, np, dp, declinesOf(st))
 					if want := (len(toks) + 1) * composedTables(m); served < want || td != 0 || st.StepDeclines[jit.DeclineNoTable] != 0 {
 						t.Fatalf("the tables served %d times (want at least %d, a table a geometry's run of each step and the prompt) and declined %d", served, want, td)
 					}
@@ -82,7 +82,7 @@ func TestGemma4ServesComposed(t *testing.T) {
 					// The per-layer inputs' tables are the host's: the device
 					// declines the input rows that read them, by name.
 					if m.Cfg.PLEDim != 0 {
-						ne, de, _ := st.ServedPart(tier.ComposedEmbed)
+						ne, de := st.ServedPart(tier.ComposedEmbed)
 						dw := st.StepDeclines[jit.DeclineEmbedWeight]
 						t.Logf("%s: the input rows served %d times, declined %d (%d for the per-layer tables)", dev, ne, de, dw)
 						if ne != 0 || dw == 0 {
@@ -276,8 +276,8 @@ func TestGemma4PictureServesComposed(t *testing.T) {
 				return out
 			}
 			worst := worstFrom(want, run(true))
-			blocks, bd, _ := st.ServedPart(tier.ComposedBlock)
-			prompt, pd, _ := st.ServedPart(tier.ComposedPrompt)
+			blocks, bd := st.ServedPart(tier.ComposedBlock)
+			prompt, pd := st.ServedPart(tier.ComposedPrompt)
 			t.Logf("%s: %d decode and %d prompt block steps served (%d and %d declined); worst logit NMSE %.3e from the host",
 				dev, blocks, prompt, bd, pd, worst)
 			for i, k := range st.BlockDeclines {

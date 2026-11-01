@@ -187,7 +187,7 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 	}
 	prompts := func(s *State, off int, lengths []int) int {
 		t.Helper()
-		served0, _, _ := g.Stats().ServedPart(tier.ComposedPrompt)
+		served0, _ := g.Stats().ServedPart(tier.ComposedPrompt)
 		steps := 0
 		for _, n := range lengths {
 			l, err := s.Prefill(ids[off : off+n])
@@ -206,7 +206,7 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 				steps += (n + width - 1) / width * nl
 			}
 		}
-		np, dp, _ := g.Stats().ServedPart(tier.ComposedPrompt)
+		np, dp := g.Stats().ServedPart(tier.ComposedPrompt)
 		if np-served0 < steps || dp != 0 {
 			t.Fatalf("the composer served %d prompt block steps of the %d the chunks hold and declined %d: %s",
 				np-served0, steps, dp, g.Err())

@@ -109,16 +109,16 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				if got != 0 {
 					t.Fatalf("%d kernel(s) compiled after the blocks were placed", got)
 				}
-				if served, _, _ := st.ServedPart(arm.composed); served == 0 {
+				if served, _ := st.ServedPart(arm.composed); served == 0 {
 					t.Fatalf("the composer served none of the parts asked of it: %s", g.Err())
 				}
 				// Every chunk's every block step the composer's, each at its
 				// own width's form.
 				{
-					np, dp, up := st.ServedPart(tier.ComposedPrompt)
-					if np != len(chunks)*m.Cfg.NLayer || dp != 0 || up != 0 {
-						t.Fatalf("the composer served %d block steps of %d chunks of %d blocks, declined %d and was not asked for %d: %s",
-							np, len(chunks), m.Cfg.NLayer, dp, up, g.Err())
+					np, dp := st.ServedPart(tier.ComposedPrompt)
+					if np != len(chunks)*m.Cfg.NLayer || dp != 0 {
+						t.Fatalf("the composer served %d block steps of %d chunks of %d blocks and declined %d: %s",
+							np, len(chunks), m.Cfg.NLayer, dp, g.Err())
 					}
 					t.Logf("the composer served the prompt's %d block steps", np)
 					// The placement compiled none of the tier's own batched

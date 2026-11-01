@@ -49,7 +49,7 @@ func TestKimiLinearKDAGateIsLoadBearing(t *testing.T) {
 			want, _, _, _ := composedDecode(t, m, dev, ids, toks, 0, true, false)
 			run := func() float64 {
 				got, st, _, _ := composedDecode(t, m, dev, ids, toks, tier.ComposedBlock, true, false)
-				served, declined, _ := st.ServedPart(tier.ComposedBlock)
+				served, declined := st.ServedPart(tier.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))
 				}

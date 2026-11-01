@@ -406,7 +406,7 @@ func TestComposedPromptChainGateDiscriminates(t *testing.T) {
 			got, fst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
 			tier.SetRecFault("")
 			for _, s := range []tier.Stats{st, fst} {
-				if n, d, _ := s.ServedPart(tier.ComposedPrompt); n < m.Cfg.NLayer || d != 0 {
+				if n, d := s.ServedPart(tier.ComposedPrompt); n < m.Cfg.NLayer || d != 0 {
 					t.Fatalf("the composer served %d block steps of the prompt and declined %d, of %d blocks", n, d, m.Cfg.NLayer)
 				}
 			}

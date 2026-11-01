@@ -215,8 +215,8 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts tier
 	}
 	if parts&tier.ComposedEmbed != 0 {
 		st := g.Stats()
-		n, d, _ := st.ServedPart(tier.ComposedEmbed)
-		np, dp, _ := st.ServedPart(tier.PromptEmbed)
+		n, d := st.ServedPart(tier.ComposedEmbed)
+		np, dp := st.ServedPart(tier.PromptEmbed)
 		if n == 0 || d != 0 || np == 0 || dp != 0 {
 			t.Fatalf("the composer gathered %d steps' rows (%d declined) and %d prompts' (%d declined): %s", n, d, np, dp, declinesOf(st))
 		}

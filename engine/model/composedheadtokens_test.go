@@ -111,7 +111,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							t.Fatalf("the device selected %d of %d greedy tokens, want %d (stages %03b, parts %d)", served, len(ids), wantServed, stages, parts)
 						}
 						if parts&tier.ComposedSample != 0 {
-							ns, ds, _ := g.Stats().ServedPart(tier.ComposedSample)
+							ns, ds := g.Stats().ServedPart(tier.ComposedSample)
 							ns += g.Stats().ReplayedPart(tier.ComposedSample)
 							if ns != served || ds != 0 {
 								t.Fatalf("the composer selected %d of the %d greedy tokens the device did and was declined %d (%s)", ns, served, ds, declinesOf(g.Stats()))
@@ -158,7 +158,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							m.front.mu.Lock()
 							set.cpuSample = orig
 							m.front.mu.Unlock()
-							if vn, _, _ := vg.Stats().ServedPart(tier.ComposedSample); vn != len(ids) {
+							if vn, _ := vg.Stats().ServedPart(tier.ComposedSample); vn != len(ids) {
 								t.Fatalf("the violation's tier selected %d of %d tokens: it did not run the negated pick (%s)", vn, len(ids), declinesOf(vg.Stats()))
 							}
 							if parted == 0 {
@@ -330,6 +330,6 @@ func sampleNeighbour(s *graph.Graph) *graph.Graph {
 // composedSamples is how many steps the composer selected a token or the
 // sampler's candidates in, emitted or replayed.
 func composedSamples(s tier.Stats) int {
-	n, _, _ := s.ServedPart(tier.ComposedSample)
+	n, _ := s.ServedPart(tier.ComposedSample)
 	return n + s.ReplayedPart(tier.ComposedSample)
 }

@@ -184,7 +184,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					decodeAllocs(t, m2, g)
 					st := g.Stats()
 					backs := st.EmbedReadBacks - r0.EmbedReadBacks
-					n, _, _ := st.ServedPart(tier.ComposedEmbed)
+					n, _ := st.ServedPart(tier.ComposedEmbed)
 					if backs < 64 || n < 64 {
 						t.Fatalf("%d rows read back and %d composed on %s for blocks on %s: the arm did not cross devices (%s)",
 							backs, n, d[0], d[1], declinesOf(st))
@@ -270,7 +270,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 							greedyAllocs(t, m, gc)
 							sampledAllocs(t, m, gc)
 							for _, k := range parts {
-								if n, _, _ := gc.Stats().ServedPart(k); n == 0 {
+								if n, _ := gc.Stats().ServedPart(k); n == 0 {
 									t.Fatalf("composed part %#x never ran: this arm measured the tier's own", uint8(k))
 								}
 							}

@@ -286,12 +286,12 @@ func encDeviceArm(t *testing.T, m *Model, g embedGolden, spec string, n int) (af
 	if n < 0 && placed != nb || n >= 0 && placed != n {
 		t.Fatalf("placed %d blocks, offered %d of %d: %v %s", placed, n, nb, e.DeviceDeclines(), gpu.Err())
 	}
-	s0, _, _ := gpu.Stats().ServedPart(tier.ComposedTower)
+	s0, _ := gpu.Stats().ServedPart(tier.ComposedTower)
 	after0, out = encodeTexts(t, m, e, g)
 	st := gpu.Stats()
-	served, declined, unasked := st.ServedPart(tier.ComposedTower)
-	t.Logf("%s: %d of %d blocks placed, %d block runs served by the composer, %d declined %v, %d unasked (%s)",
-		spec, placed, nb, served-s0, declined, nonZero(st.BlockDeclines[:]), unasked, gpu.Err())
+	served, declined := st.ServedPart(tier.ComposedTower)
+	t.Logf("%s: %d of %d blocks placed, %d block runs served by the composer, %d declined %v (%s)",
+		spec, placed, nb, served-s0, declined, nonZero(st.BlockDeclines[:]), gpu.Err())
 	if served-s0 != placed*len(g.Texts) || declined != 0 {
 		t.Fatalf("%s: the composer served %d of %d block runs, declined %d %v (%s)", spec,
 			served-s0, placed*len(g.Texts), declined, nonZero(st.BlockDeclines[:]), gpu.Err())

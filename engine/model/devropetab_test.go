@@ -68,7 +68,7 @@ func ropeTableMatchesTheUpload(t *testing.T, parts tier.Parts) {
 			// built is the tables the device made: the tier's kernel's, or
 			// the composer's served and replayed.
 			built := func(s tier.Stats) int {
-				n, _, _ := s.ServedPart(tier.ComposedTable)
+				n, _ := s.ServedPart(tier.ComposedTable)
 				return s.RopeTables + n + s.ReplayedPart(tier.ComposedTable)
 			}
 			run := func(host bool) ([]int32, [][]float32, tier.Stats) {
@@ -128,7 +128,7 @@ func ropeTableMatchesTheUpload(t *testing.T, parts tier.Parts) {
 			// Which device table the prompt and the decode ran: the
 			// composer's where it serves them, the tier's where it does not.
 			all := g.Stats()
-			if n, _, _ := all.ServedPart(tier.ComposedTable); (parts != 0) != (n > 0) {
+			if n, _ := all.ServedPart(tier.ComposedTable); (parts != 0) != (n > 0) {
 				t.Fatalf("the composer served %d tables with parts %#x", n, uint8(parts))
 			}
 

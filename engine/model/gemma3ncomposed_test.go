@@ -165,11 +165,11 @@ func TestGemma3nServesComposed(t *testing.T) {
 				t.Helper()
 				parts := tier.ComposedBlock | tier.ComposedPrompt
 				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, parts, true, false)
-				served, declined, _ := st.ServedPart(tier.ComposedBlock)
+				served, declined := st.ServedPart(tier.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))
 				}
-				np, dp, _ := st.ServedPart(tier.ComposedPrompt)
+				np, dp := st.ServedPart(tier.ComposedPrompt)
 				if np == 0 || dp != 0 {
 					t.Fatalf("the prompt's blocks served %d times and declined %d (%s)", np, dp, declinesOf(st))
 				}

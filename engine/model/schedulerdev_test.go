@@ -116,7 +116,7 @@ func schedulerOnDeviceModel(t *testing.T, m *Model, open func(*testing.T) *tier.
 	// Each step's rows' greedy tokens are the composer's sample, none the
 	// tier's argmax.
 	st := g.Stats()
-	if ns, ds, _ := st.ServedPart(tier.ComposedSample); ns+st.ReplayedPart(tier.ComposedSample) == 0 || ds != 0 {
+	if ns, ds := st.ServedPart(tier.ComposedSample); ns+st.ReplayedPart(tier.ComposedSample) == 0 || ds != 0 {
 		t.Fatalf("the composer selected the tokens of %d steps and was declined %d (%s)", ns+st.ReplayedPart(tier.ComposedSample), ds, declinesOf(st))
 	}
 	if n := latentBlocks(m); n > 0 && g.Stats().RowsLatent == 0 {

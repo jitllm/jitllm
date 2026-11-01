@@ -277,9 +277,9 @@ func TestQwenVLWindowsSurviveQueryChunks(t *testing.T) {
 			}
 			defer gpu.Close()
 			ran++
-			s0, d0, _ := gpu.Stats().ServedPart(tier.ComposedTower)
+			s0, d0 := gpu.Stats().ServedPart(tier.ComposedTower)
 			got, placed := encode(gpu)
-			s1, d1, _ := gpu.Stats().ServedPart(tier.ComposedTower)
+			s1, d1 := gpu.Stats().ServedPart(tier.ComposedTower)
 			chunks := s1 - s0
 			if chunks == 0 || d1 != d0 {
 				t.Fatalf("%d of %d tower blocks placed, the composer served %d of their calls and declined %d: "+

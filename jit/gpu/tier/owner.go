@@ -135,17 +135,12 @@ func (g *devTier) releaseModel() {
 	if g.argmaxOut != nil {
 		// Built for the head's row count; its word was charged as scratch.
 		w := g.scratchWin()
-		if g.argmaxK != nil {
-			g.argmaxK.Close()
-		}
 		g.argmaxOut.Free()
-		g.argmaxK, g.argmaxOut = nil, nil
+		g.argmaxOut = nil
 		w.close()
 	}
-	// The sampler's kernels are built for the head's rows and its buffers
-	// were charged as scratch, like the argmax's.
+	// The sampler's buffers were charged as scratch, like the argmax's.
 	sw := g.scratchWin()
-	g.closeSample()
 	g.lane0.freeSample()
 	g.closePick()
 	g.lane0.freePick()

@@ -42,7 +42,7 @@ func TestComposedHeadWritesItsHidden(t *testing.T) {
 						t.Fatalf("the composer served %d heads whose %d normed rows were read back, where the step read %d",
 							st.HiddenHeads, st.HiddenRows, len(a.at))
 					}
-					if hs, hd, _ := st.ServedPart(tier.ComposedHead); hs == 0 || hd != 0 {
+					if hs, hd := st.ServedPart(tier.ComposedHead); hs == 0 || hd != 0 {
 						t.Fatalf("the composer served the head %d times and declined it %d (%s)", hs, hd, declinesOf(st))
 					}
 					worst, off := composedHiddenGap(t, m, got, want, a.at)

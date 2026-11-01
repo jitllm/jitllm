@@ -56,7 +56,7 @@ var unsplit = tier.WithConfig(func(c *tier.Config) { c.ComposedUnsplit = true })
 func unsplitRef(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph bool) [][]float32 {
 	t.Helper()
 	ref, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit)
-	if n, d, _ := st.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+	if n, d := st.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the float reference served its blocks %d times and declined them %d (%s)", n, d, declinesOf(st))
 	}
 	cut, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit, tier.WithSplitFault(true))
@@ -420,8 +420,8 @@ func TestComposedBlocksServeApart(t *testing.T) {
 				t.Run(dev, func(t *testing.T) {
 					parts := tier.ComposedBlock | tier.ComposedHead
 					got, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
-					served, declined, _ := st.ServedPart(tier.ComposedBlock)
-					copies, _, _ := st.ServedPart(tier.PartCopy)
+					served, declined := st.ServedPart(tier.ComposedBlock)
+					copies, _ := st.ServedPart(tier.PartCopy)
 					if served != len(toks)*m.Cfg.NLayer || declined != 0 {
 						t.Fatalf("%d block steps served and %d declined of %d: %s",
 							served, declined, len(toks)*m.Cfg.NLayer, declinesOf(st))
@@ -729,7 +729,7 @@ func TestComposedBlocksServe(t *testing.T) {
 										if parts&k == 0 {
 											continue
 										}
-										n, d, _ := st.ServedPart(k)
+										n, d := st.ServedPart(k)
 										if k == tier.ComposedHead && !headOn {
 											if pi == 0 {
 												t.Logf("the head runs at home here (it does not fit beside the blocks): the composed head has nothing to serve")
@@ -743,22 +743,22 @@ func TestComposedBlocksServe(t *testing.T) {
 									// Every step runs every block, emitted or replayed in a
 									// recording, so a block the composer did not serve shows
 									// in the count.
-									blocks, _, _ := st.ServedPart(tier.ComposedBlock)
+									blocks, _ := st.ServedPart(tier.ComposedBlock)
 									if replayed := st.ReplayedPart(tier.ComposedBlock); blocks+replayed != len(toks)*m.Cfg.NLayer {
 										t.Fatalf("the composer ran %d block steps (%d of them replayed) where %d steps of %d blocks are %d",
 											blocks+replayed, replayed, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 									}
 									// Every step and every prompt chunk writes every table
-									// the plan states, none declined or left unasked; a
+									// the plan states, none declined; a
 									// prompt's tail too short for a chunk runs as a step and
 									// writes its own.
 									if a.parts&tier.ComposedTable != 0 {
-										nt, tableDeclined, tableUnasked := st.ServedPart(tier.ComposedTable)
-										np, _, _ := st.ServedPart(tier.ComposedPrompt)
+										nt, tableDeclined := st.ServedPart(tier.ComposedTable)
+										np, _ := st.ServedPart(tier.ComposedPrompt)
 										calls := len(toks) + np/m.Cfg.NLayer
-										if replayed := st.ReplayedPart(tier.ComposedTable); tableDeclined != 0 || tableUnasked != 0 || nt+replayed < calls*composedTables(m) {
-											t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps and %d prompt chunks of %d tables; %d declined, %d unasked, %d capture(s), last error %q",
-												nt+replayed, replayed, len(toks), np/m.Cfg.NLayer, composedTables(m), tableDeclined, tableUnasked, st.Captures, st.LastErr)
+										if replayed := st.ReplayedPart(tier.ComposedTable); tableDeclined != 0 || nt+replayed < calls*composedTables(m) {
+											t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps and %d prompt chunks of %d tables; %d declined, %d capture(s), last error %q",
+												nt+replayed, replayed, len(toks), np/m.Cfg.NLayer, composedTables(m), tableDeclined, st.Captures, st.LastErr)
 										}
 									}
 									// Every step's input row gathered by the composer, from
@@ -766,9 +766,9 @@ func TestComposedBlocksServe(t *testing.T) {
 									// embedding the device holds beside it where it is not
 									// (tinyllama, stories15M), and the prompt's rows too.
 									if a.parts&tier.ComposedEmbed != 0 {
-										ne, de, _ := st.ServedPart(tier.ComposedEmbed)
+										ne, de := st.ServedPart(tier.ComposedEmbed)
 										ne += st.ReplayedPart(tier.ComposedEmbed)
-										np, dp, _ := st.ServedPart(tier.PromptEmbed)
+										np, dp := st.ServedPart(tier.PromptEmbed)
 										switch {
 										case ne+de != len(toks):
 											t.Fatalf("the input rows of %d steps served %d times and declined %d", len(toks), ne, de)
@@ -783,11 +783,11 @@ func TestComposedBlocksServe(t *testing.T) {
 									}
 									// Every step's head, and the prompt's once.
 									wantHeads := len(toks) + 1
-									heads, headDeclined, headUnasked := st.ServedPart(tier.ComposedHead)
+									heads, headDeclined := st.ServedPart(tier.ComposedHead)
 									if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
 										heads+replayed != wantHeads {
-										t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps and the prompt (%d asked); %d declined, %d unasked, %d folds, %d capture(s)",
-											heads+replayed, replayed, len(toks), parts&tier.ComposedPrompt, headDeclined, headUnasked, st.HeadFolds, st.Captures)
+										t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps and the prompt (%d asked); %d declined, %d folds, %d capture(s)",
+											heads+replayed, replayed, len(toks), parts&tier.ComposedPrompt, headDeclined, st.HeadFolds, st.Captures)
 									}
 									if noGraph {
 										if pi == 0 {
@@ -802,18 +802,18 @@ func TestComposedBlocksServe(t *testing.T) {
 												}
 											}
 										}
-										if nb, _, _ := st.ServedPart(tier.ComposedBlock); nb != len(toks)*m.Cfg.NLayer {
+										if nb, _ := st.ServedPart(tier.ComposedBlock); nb != len(toks)*m.Cfg.NLayer {
 											t.Fatalf("the composer served %d block steps where %d steps of %d blocks are %d",
 												nb, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 										}
-										if nh, _, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && nh != wantHeads {
+										if nh, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && nh != wantHeads {
 											t.Fatalf("the composer served the head %d times in %d steps and the prompt (%d asked)", nh, len(toks), parts&tier.ComposedPrompt)
 										}
 									}
 									// The prompt's every block step served, in whole chunks.
-									if np, dp, up := st.ServedPart(tier.ComposedPrompt); np < m.Cfg.NLayer || np%m.Cfg.NLayer != 0 || dp != 0 || up != 0 {
-										t.Fatalf("the composer served %d block steps of the prompt, declined %d and was not asked for %d, where every chunk is %d blocks (%s)",
-											np, dp, up, m.Cfg.NLayer, st.LastErr)
+									if np, dp := st.ServedPart(tier.ComposedPrompt); np < m.Cfg.NLayer || np%m.Cfg.NLayer != 0 || dp != 0 {
+										t.Fatalf("the composer served %d block steps of the prompt and declined %d, where every chunk is %d blocks (%s)",
+											np, dp, m.Cfg.NLayer, st.LastErr)
 									}
 									for i := range want {
 										if math.IsNaN(logitNMSE(got[i], want[i])) {
@@ -863,7 +863,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									for pi, p := range panel {
 										ref := runs[dev][g][pi].ref
 										out, bst, _, _ := composedDecodeWith(t, m, dev, p.ids, p.toks, parts, noGraph, false, after, slices.Concat(sopts, extra)...)
-										if n, d, _ := bst.ServedPart(k); n == 0 || d != 0 {
+										if n, d := bst.ServedPart(k); n == 0 || d != 0 {
 											t.Fatalf("the arm with %s served the part %d times and declined it %d", what, n, d)
 										}
 										var ratios []float64
@@ -904,7 +904,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								if a.parts&tier.ComposedTable != 0 && !m.container.Config().Flags.Has(jlm.FlagNoPosEnc) {
 									violated("every row told twice its position and 16 past", tier.ComposedTable, stretchAxes(2, 16))
 								}
-								if ne, _, _ := st0.ServedPart(tier.ComposedEmbed); ne > 0 {
+								if ne, _ := st0.ServedPart(tier.ComposedEmbed); ne > 0 {
 									violated("every row gathered at the next token's", tier.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))
 								}
 								violated("every split's last segment dropped", tier.ComposedBlock, nil, tile, tier.WithSplitFault(true))
@@ -968,8 +968,8 @@ func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
 					wst.RecShared, st.RecShared)
 			}
 			for _, s := range []tier.Stats{wst, st} {
-				np, dp, _ := s.ServedPart(tier.ComposedPrompt)
-				nb, db, _ := s.ServedPart(tier.ComposedBlock)
+				np, dp := s.ServedPart(tier.ComposedPrompt)
+				nb, db := s.ServedPart(tier.ComposedBlock)
 				if np < m.Cfg.NLayer || dp != 0 || nb < len(toks)*m.Cfg.NLayer || db != 0 {
 					t.Fatalf("the composer served %d prompt block steps (%d declined) and %d decode block steps (%d declined): %s",
 						np, dp, nb, db, declinesOf(s))
@@ -994,7 +994,7 @@ func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
 // float head does not fold into a batched chunk and a prompt of a few rows
 // runs as one ragged step, so either way the prompt's last-row head is a
 // one-row call of its own, which the composed head serves: no call is left
-// unasked or declined. Each decode step after it serves every block once; the
+// declined. Each decode step after it serves every block once; the
 // prompt reaches the device as a prompt, never as steps. With the State not
 // telling the device the calls are a prompt's (the violation) a ragged prompt
 // runs as a step, which the gate must see; a chunk is a prompt by its shape,
@@ -1054,12 +1054,12 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 						}
 					}
 					st := g.Stats()
-					heads, declined, unasked := st.ServedPart(tier.ComposedHead)
-					left = declined + unasked
-					blocks, _, _ = st.ServedPart(tier.ComposedBlock)
-					var pd, pu int
-					prompt, pd, pu = st.ServedPart(tier.ComposedPrompt)
-					left += pd + pu
+					heads, declined := st.ServedPart(tier.ComposedHead)
+					left = declined
+					blocks, _ = st.ServedPart(tier.ComposedBlock)
+					var pd int
+					prompt, pd = st.ServedPart(tier.ComposedPrompt)
+					left += pd
 					if !withhold {
 						for k := range g.Census() {
 							if !slices.Contains(composedResidue, k) {

@@ -207,10 +207,10 @@ type lane struct {
 	partCap, f16Cap int
 	// argmaxOut is the device argmax's one word (PrepHead).
 	argmaxOut backend.Buf
-	// The device sampler's buffers (sample.go), made the first time a call
-	// in this lane samples: the history, the penalized row, the first
-	// pass's candidates and the k that are read back.
-	sampleArgs, samplePen, sampleV1, sampleI1, sampleV, sampleI backend.Buf
+	// The composed sampler's buffers (sample.go), made the first time a
+	// call in this lane samples: the history and the k candidates that are
+	// read back.
+	sampleArgs, sampleV, sampleI backend.Buf
 	// samplePenalty is the composed sampler's penalty word, and sampleStage
 	// the argument words it reads, padded past the history (graph.SampleTopK).
 	samplePenalty backend.Buf

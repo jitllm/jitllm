@@ -240,10 +240,10 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 				// The composer runs each block whole: the prompt's chunk one
 				// served prompt part a block, a decode token one block step a
 				// block, none declined.
-				p0, pd0, _ := s0.ServedPart(tier.ComposedPrompt)
-				p1, pd1, _ := s1.ServedPart(tier.ComposedPrompt)
-				b1, bd1, _ := s1.ServedPart(tier.ComposedBlock)
-				b2, bd2, _ := s2.ServedPart(tier.ComposedBlock)
+				p0, pd0 := s0.ServedPart(tier.ComposedPrompt)
+				p1, pd1 := s1.ServedPart(tier.ComposedPrompt)
+				b1, bd1 := s1.ServedPart(tier.ComposedBlock)
+				b2, bd2 := s2.ServedPart(tier.ComposedBlock)
 				t.Logf("prefill of %d: %d prompt blocks served, %d declined; a decode token: %d block steps served, %d declined",
 					len(g.IDs), p1-p0, pd1-pd0, b2-b1, bd2-bd1)
 				if p1-p0 != nl || pd1 != pd0 {

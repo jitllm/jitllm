@@ -101,7 +101,7 @@ func composedRan(t *testing.T, parts tier.Parts, allow []string, gs ...*tier.GPU
 	declined := map[string]int{}
 	for _, g := range gs {
 		s := g.Stats()
-		n, _, _ := s.ServedPart(parts)
+		n, _ := s.ServedPart(parts)
 		served += n
 		formed += s.FormedAtStep
 		for i := range s.BlockDeclines {
@@ -130,7 +130,7 @@ func composedBlockSteps(gs ...*tier.GPU) int {
 	n := 0
 	for _, g := range gs {
 		s := g.Stats()
-		b, _, _ := s.ServedPart(tier.ComposedBlock)
+		b, _ := s.ServedPart(tier.ComposedBlock)
 		n += b + s.ReplayedPart(tier.ComposedBlock)
 	}
 	return n

@@ -364,7 +364,7 @@ func TestQwen4ExpServesComposed(t *testing.T) {
 			run := func(t *testing.T, dev string) float64 {
 				t.Helper()
 				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock, true, false)
-				served, declined, _ := st.ServedPart(tier.ComposedBlock)
+				served, declined := st.ServedPart(tier.ComposedBlock)
 				if n := len(toks) * covered; served != n || declined != len(toks)*(m.Cfg.NLayer-covered) ||
 					st.BlockDeclines[jit.DeclineNoGraph] != declined {
 					t.Fatalf("%d block steps served and %d declined, want %d served and the rest declined for no graph (%s)",

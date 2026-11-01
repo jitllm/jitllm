@@ -172,11 +172,11 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 	}
 	composedRan(t, parts, allow, g)
 	st := g.Stats()
-	np, dp, up := st.ServedPart(tier.ComposedPrompt)
-	if per := m.Cfg.NLayer - len(keep); np == 0 || np%per != 0 || up != 0 || dp != 0 && !mixed {
-		t.Fatalf("the composer served %d block steps of the prompt, %d of a chunk, declined %d and was not asked for %d", np, per, dp, up)
+	np, dp := st.ServedPart(tier.ComposedPrompt)
+	if per := m.Cfg.NLayer - len(keep); np == 0 || np%per != 0 || dp != 0 && !mixed {
+		t.Fatalf("the composer served %d block steps of the prompt, %d of a chunk, and declined %d", np, per, dp)
 	}
-	if hs, hd, _ := st.ServedPart(tier.ComposedHead); parts&tier.ComposedHead != 0 && (hs == 0 || hd != 0) {
+	if hs, hd := st.ServedPart(tier.ComposedHead); parts&tier.ComposedHead != 0 && (hs == 0 || hd != 0) {
 		t.Fatalf("the composer served the head %d times and declined it %d (%s)", hs, hd, declinesOf(st))
 	}
 	// A device whose matrix unit takes the composer's tiles runs the

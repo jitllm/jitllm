@@ -270,7 +270,7 @@ func TestComposedHeadOps(t *testing.T) {
 								refused := arm.cap != 0 && outB != nil && parts == 0
 								a := &headArm{fx: fx, dev: dev, parts: parts, xs: xs, lnb: lnb, outB: outB, want: set, cfg: set, refused: refused}
 								a.run(t)
-								n, d, _ := a.stats.ServedPart(tier.ComposedHead)
+								n, d := a.stats.ServedPart(tier.ComposedHead)
 								if refused {
 									if n != 0 || d != 0 || !(a.worst < bound) {
 										t.Fatalf("parts %d: a head the tier refuses: %d composed head steps served, %d declined, %.3e from the oracle, bound %.0e",
@@ -342,7 +342,7 @@ func TestComposedHeadOps(t *testing.T) {
 						t.Run(v.name, func(t *testing.T) {
 							a := &headArm{fx: fx, dev: dev, parts: tier.ComposedHead, xs: xs, lnb: lnb, outB: outB, want: full, cfg: v.cfg, mut: v.mut}
 							a.run(t)
-							n, d, _ := a.stats.ServedPart(tier.ComposedHead)
+							n, d := a.stats.ServedPart(tier.ComposedHead)
 							if n != a.steps || d != 0 {
 								t.Fatalf("the composed head served %d of %d steps and was declined %d: %s", n, a.steps, d, declinesOf(a.stats))
 							}

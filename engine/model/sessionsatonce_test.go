@@ -285,7 +285,7 @@ func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks 
 			"were serialised")
 	}
 	if parts != 0 {
-		if n, d, _ := after.ServedPart(parts); n == 0 || d != 0 {
+		if n, d := after.ServedPart(parts); n == 0 || d != 0 {
 			t.Fatalf("the composer served %d part steps and declined %d", n, d)
 		}
 		if f := after.FormedAtStep - before.FormedAtStep; f != 0 {
@@ -724,8 +724,8 @@ func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, hal
 		}
 		after2 := g2.Stats()
 		for k, s := range [2][2]tier.Stats{{before, after}, {before2, after2}} {
-			n, d, _ := s[1].ServedPart(parts)
-			n0, d0, _ := s[0].ServedPart(parts)
+			n, d := s[1].ServedPart(parts)
+			n0, d0 := s[0].ServedPart(parts)
 			if n-n0 == 0 || d-d0 != 0 {
 				t.Fatalf("tier %d: the composer served %d part steps and declined %d", k+1, n-n0, d-d0)
 			}

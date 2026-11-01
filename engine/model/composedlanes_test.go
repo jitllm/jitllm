@@ -96,11 +96,11 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 							if st.ComposedLanes != a.lanes {
 								t.Fatalf("the composer formed for %d lanes, not %d: the arm did not select its subgroup", st.ComposedLanes, a.lanes)
 							}
-							if nb, d, _ := st.ServedPart(tier.ComposedBlock); nb != len(toks)*m.Cfg.NLayer || d != 0 {
+							if nb, d := st.ServedPart(tier.ComposedBlock); nb != len(toks)*m.Cfg.NLayer || d != 0 {
 								t.Fatalf("the composer served %d block steps and declined %d where %d steps of %d blocks are %d (%s)",
 									nb, d, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer, st.LastErr)
 							}
-							if nh, d, _ := st.ServedPart(tier.ComposedHead); headOn {
+							if nh, d := st.ServedPart(tier.ComposedHead); headOn {
 								// Every decode step's head is served, and the prompt's
 								// last row's.
 								if nh != len(toks)+1 || d != 0 {
@@ -140,7 +140,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 									a.lanes, med, worst, widest, bandRatio, bandWorst)
 							}
 							cut, cst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, append(a.opts, tier.WithSplitFault(true))...)
-							if nb, d, _ := cst.ServedPart(tier.ComposedBlock); nb == 0 || d != 0 {
+							if nb, d := cst.ServedPart(tier.ComposedBlock); nb == 0 || d != 0 {
 								t.Fatalf("with every split's last segment dropped the composer served %d block steps and declined %d", nb, d)
 							}
 							var cr []float64

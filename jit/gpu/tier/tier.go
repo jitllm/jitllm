@@ -786,11 +786,6 @@ type Stats struct {
 	// conditions leave out (a LayerNorm head, a window, the persistent
 	// block, history in host memory, a ragged step's rows).
 	PartsDeclined [numParts]int
-	// PartsUnasked counts the steps the composer is asked for no part of
-	// at all, by part: a prompt chunk's rows without ComposedPrompt, a
-	// vision tower's encode, a step over several sessions' rows. They run
-	// the tier's own kernels; this is where they are seen.
-	PartsUnasked [numParts]int
 	// PartsReplayed counts the steps a recording replayed the composer's
 	// parts in, by part: what PartsServed, counted where a step is emitted,
 	// does not see.
@@ -936,9 +931,6 @@ type Stats struct {
 	// PickReads counts heads whose label pick ran on the device and read
 	// back the picked logits instead of the vocabulary (nn.Head.Pick).
 	PickReads int
-	// SampleLaunches counts the sampler's launches: two top-k passes a
-	// token, and the penalty's when it runs.
-	SampleLaunches int
 	// VoltaGemm counts those of them that are the shared-memory-staged
 	// kernels.GemmVolta rather than MatVecMMA70.
 	VoltaGemm int
@@ -1420,7 +1412,6 @@ func (s *Stats) add(o Stats) {
 		s.MatrixLaunches[i] += o.MatrixLaunches[i]
 		s.AttendLaunches[i] += o.AttendLaunches[i]
 		s.PartsDeclined[i] += o.PartsDeclined[i]
-		s.PartsUnasked[i] += o.PartsUnasked[i]
 		s.PartsReplayed[i] += o.PartsReplayed[i]
 	}
 	for i := range s.BlockDeclines {
@@ -1515,7 +1506,6 @@ func (s *Stats) add(o Stats) {
 	s.RagHeadOne += o.RagHeadOne
 	s.SampleReads += o.SampleReads
 	s.PickReads += o.PickReads
-	s.SampleLaunches += o.SampleLaunches
 	s.GroupedMoE += o.GroupedMoE
 	s.GroupedFloat += o.GroupedFloat
 	s.MLABatched += o.MLABatched
@@ -2196,11 +2186,6 @@ type devShared struct {
 	KevHeads int64
 	convN    int
 	ragSeg   map[segShapeKey]segLaunch // a few-sequence step's q/k/v; see groupQKV
-	argmaxK  backend.Kernel            // kernels.Argmax over the head's rows; see PrepHead
-	// samplePenK and sampleKs are the device sampler's kernels: the penalty
-	// over the head's rows and, per k, the two top-k passes (sample.go).
-	samplePenK backend.Kernel
-	sampleKs   map[int]sampleKerns
 	// pickK is the label pick's gather over the head's rows (pick.go).
 	pickK backend.Kernel
 	// pickMV projects the picked rows of the head alone (kernels.MatVec's
@@ -3061,13 +3046,9 @@ func (g *devTier) Close() {
 	// itself and its charge.
 	g.freeKVPool(g.kvp)
 	g.kvp = nil
-	if g.argmaxK != nil {
-		g.argmaxK.Close()
-	}
 	if g.argmaxOut != nil {
 		g.argmaxOut.Free()
 	}
-	g.closeSample()
 	g.lane0.freeSample()
 	g.closePick()
 	g.lane0.freePick()

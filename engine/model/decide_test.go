@@ -229,7 +229,7 @@ func TestDecisionMatchesLlamaCpp(t *testing.T) {
 					}
 					checkDecisions(t, qs, ans, gold, c.tol, !c.ownConfidence)
 					st := g.Stats()
-					served, declined, _ := st.ServedPart(tier.ComposedSample)
+					served, declined := st.ServedPart(tier.ComposedSample)
 					t.Logf("%d device blocks; %d prompts picked, %d picks by the composer, %d declined (%s)", d.DeviceBlocks(), d.picked, served, declined, declinesOf(st))
 					if c.kind != jlm.DecisionClef && c.kind != jlm.DecisionKev && (d.picked == 0 || served != d.picked || declined != 0) {
 						t.Fatalf("%d prompts picked, %d by the composer, %d declined", d.picked, served, declined)

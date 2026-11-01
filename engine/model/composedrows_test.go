@@ -102,7 +102,7 @@ func composedRowsTokens(t *testing.T, m *Model) {
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
 			toks, logits, steps, st := rowsTokens(t, m, ids, gen, tier.WithDevices(dev))
-			ns, ds, _ := st.ServedPart(tier.ComposedSample)
+			ns, ds := st.ServedPart(tier.ComposedSample)
 			ns += st.ReplayedPart(tier.ComposedSample)
 			if ns != steps || ds != 0 || st.StepDeclines[jit.DeclineNoSample] != 0 || st.FormedPart(tier.ComposedSample) != 0 {
 				t.Fatalf("the composer selected the tokens of %d of %d ragged steps, declined %d, formed %d at a step (%s; last error %q)",
@@ -122,7 +122,7 @@ func composedRowsTokens(t *testing.T, m *Model) {
 			m.front.mu.Lock()
 			set.cpuSample = orig
 			m.front.mu.Unlock()
-			vn, _, _ := vst.ServedPart(tier.ComposedSample)
+			vn, _ := vst.ServedPart(tier.ComposedSample)
 			bad, rows := parted(vt, vl)
 			if vn == 0 || bad == 0 {
 				t.Fatalf("over the logits negated the composer selected %d steps' tokens and %d of %d rows part: the gate cannot see a wrong pick", vn, bad, rows)
@@ -199,8 +199,8 @@ func composedRowsModel(t *testing.T) *Model {
 // block steps of every block and heads, and declined none.
 func composedRowsServed(t *testing.T, m *Model, st tier.Stats) {
 	t.Helper()
-	nb, db, _ := st.ServedPart(tier.ComposedBlock)
-	nh, dh, _ := st.ServedPart(tier.ComposedHead)
+	nb, db := st.ServedPart(tier.ComposedBlock)
+	nh, dh := st.ServedPart(tier.ComposedHead)
 	nb += st.ReplayedPart(tier.ComposedBlock)
 	if nb == 0 || nb%m.Cfg.NLayer != 0 || db != 0 || nh == 0 || dh != 0 {
 		t.Fatalf("the composer served %d block steps of %d blocks and %d heads, and declined %d and %d (%s; last error %q)",

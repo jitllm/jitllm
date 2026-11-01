@@ -52,7 +52,7 @@ func stepAcrossSessions(t *testing.T, m *Model, spec string) {
 	r := stepGate(t, m, g, false)
 	// The configuration this gates: the composer serves the step's rows, every
 	// sequence's, as one call of its blocks.
-	if n, d, _ := g.Stats().ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+	if n, d := g.Stats().ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the composer served %d of the step's block steps and declined %d (%s)", n, d, g.Err())
 	}
 	if bound := denseStepBand * ctl; !(r.worst < bound) {

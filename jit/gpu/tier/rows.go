@@ -334,18 +334,6 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	p := &bs.p
 	R := bs.rows
 	fail := func(err error) bool { g.LastErr = "rows: " + err.Error(); return false }
-	comp := func(k *ir.Kernel, err error) backend.Kernel {
-		if err != nil {
-			fail(err)
-			return nil
-		}
-		c, err := g.compile(k)
-		if err != nil {
-			fail(err)
-			return nil
-		}
-		return c
-	}
 	// A batch's rows read their history through the scratch's paged set
 	// (pagedDecode); what is left to build is the head.
 	if rowsHead == nil {
@@ -365,11 +353,8 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		g.headOneMV(R)
 	}
 	if !bs.ragBuilt {
-		var amk backend.Kernel
 		if !g.ragSampleServes() {
-			if amk = comp(kernels.ArgmaxRows(head.nrows, R)); amk == nil {
-				return false
-			}
+			return fail(errors.New("the composer states no sample for the head"))
 		}
 		var hm mv
 		if !served {
@@ -393,7 +378,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		if err != nil {
 			return fail(err)
 		}
-		bs.ragArgmax, bs.ragHead, bs.ragBuilt = amk, hm, true
+		bs.ragHead, bs.ragBuilt = hm, true
 	}
 	// The final softcap over every row the head can project: the kernel is
 	// sized for R rows and launched over the wanted ones.
@@ -469,14 +454,10 @@ func (g *devTier) prepRowsReserved() {
 
 // ragTokens writes the greedy token of each of a step's n wanted rows of
 // logits into bs.ragTok: the composer's sample at the scratch's rows, its
-// rows the call's (headCalls), where it serves the step's token, else the
-// tier's per-row argmax.
+// rows the call's (headCalls).
 func (g *devTier) ragTokens(lc *launcher, bs, hb *blockScratch, n int, served bool) error {
 	if !served {
-		if bs.ragArgmax == nil {
-			return errors.New("rows: no per-row argmax built and the composed sample not asked")
-		}
-		return lc.launch(bs.ragArgmax, n, kernels.ArgmaxGroup, bs.ragOut(), bs.ragTok)
+		return errors.New("rows: the composed sample was not asked for the step's tokens")
 	}
 	sv, err := g.servedSampleAt(hb.sampleGraph, bs.rows)
 	if err != nil {

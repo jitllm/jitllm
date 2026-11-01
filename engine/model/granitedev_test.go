@@ -89,7 +89,7 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					}
 					// The scaled add is the tier's own, or the composer's block or
 					// prompt block, whose add carries the scale as its factor.
-					if composed, _, _ := cs.ServedPart(tier.ComposedBlock | tier.ComposedPrompt); cs.ResidScaled == 0 && composed == 0 {
+					if composed, _ := cs.ServedPart(tier.ComposedBlock | tier.ComposedPrompt); cs.ResidScaled == 0 && composed == 0 {
 						t.Fatalf("no residual add took the scale (Stats.ResidScaled 0): the scaled path was not selected")
 					}
 					worst := 0.0
@@ -398,7 +398,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						got, s := onDevice(arm.run)
 						// The scaled add is the tier's own, or the composer's block or
 						// prompt block, whose add carries the scale as its factor.
-						composed, _, _ := s.ServedPart(tier.ComposedBlock | tier.ComposedPrompt)
+						composed, _ := s.ServedPart(tier.ComposedBlock | tier.ComposedPrompt)
 						if s.ResidScaled == 0 && composed == 0 {
 							t.Fatalf("%s: no residual add took the scale -- the scaled path was not selected", arm.name)
 						}

@@ -343,12 +343,12 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			if n := all.GPUBlocks(); n != c.NLayer {
 				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, g.Err())
 			}
-			s0, _, _ := g.Stats().ServedPart(tier.ComposedTower)
+			s0, _ := g.Stats().ServedPart(tier.ComposedTower)
 			_, got := towerEncode(t, all, px)
 			st := g.Stats()
-			served, declined, unasked := st.ServedPart(tier.ComposedTower)
-			t.Logf("%s: %d tower block runs served by the composer, %d declined %v, %d unasked (%s)", spec,
-				served-s0, declined, nonZero(st.BlockDeclines[:]), unasked, g.Err())
+			served, declined := st.ServedPart(tier.ComposedTower)
+			t.Logf("%s: %d tower block runs served by the composer, %d declined %v (%s)", spec,
+				served-s0, declined, nonZero(st.BlockDeclines[:]), g.Err())
 			if served-s0 != c.NLayer || declined != 0 {
 				t.Fatalf("%s: the composer served %d of the tower's %d blocks, declined %d %v (%s)", spec,
 					served-s0, c.NLayer, declined, nonZero(st.BlockDeclines[:]), g.Err())
@@ -359,7 +359,7 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 				t.Errorf("%s: the composed tower's encode reads NMSE %.3e against the host (bound %.0e)", spec, nm, bound)
 			}
 			ce, cp, miss := all.CardRowsSteps()
-			rs, rd, _ := g.Stats().ServedPart(tier.ComposedRows)
+			rs, rd := g.Stats().ServedPart(tier.ComposedRows)
 			t.Logf("%s: the card served the entry of %d pictures and the projector of %d, %d parts missed; %d picture-row parts served, %d declined; %d picture-row parts and %d parts in all formed at the encode (%s)",
 				spec, ce, cp, miss, rs, rd, st.FormedPart(tier.ComposedRows), st.FormedAtStep, g.Err())
 			if n := st.FormedPart(tier.ComposedRows); n != 0 {
@@ -463,12 +463,12 @@ func (a towerArm) String() string { return a.spec }
 // block runs in it and declined none.
 func (a towerArm) served(t *testing.T, g *tier.GPU, runs int, encode func()) {
 	t.Helper()
-	s0, d0, _ := g.Stats().ServedPart(tier.ComposedTower)
+	s0, d0 := g.Stats().ServedPart(tier.ComposedTower)
 	encode()
 	st := g.Stats()
-	s1, d1, u := st.ServedPart(tier.ComposedTower)
-	t.Logf("%s: %d tower block runs served by the composer, %d declined %v, %d unasked", a, s1-s0, d1-d0,
-		nonZero(st.BlockDeclines[:]), u)
+	s1, d1 := st.ServedPart(tier.ComposedTower)
+	t.Logf("%s: %d tower block runs served by the composer, %d declined %v", a, s1-s0, d1-d0,
+		nonZero(st.BlockDeclines[:]))
 	if s1-s0 != runs || d1 != d0 {
 		t.Fatalf("%s: the composer served %d of %d tower block runs, declined %d %v (%s)", a, s1-s0, runs, d1-d0,
 			nonZero(st.BlockDeclines[:]), g.Err())

@@ -51,11 +51,11 @@ func stagedPrefillGap(t *testing.T, m *Model, dev string) float64 {
 		t.Fatal(err)
 	}
 	s1 := g.Stats()
-	n0, d0, u0 := s0.ServedPart(tier.ComposedPrompt)
-	n1, d1, u1 := s1.ServedPart(tier.ComposedPrompt)
-	if n, d, u := n1-n0, d1-d0, u1-u0; n < m.Cfg.NLayer || d != 0 || u != 0 {
-		t.Fatalf("the composer served %d block steps of the chunk, declined %d and was not asked for %d (%d blocks): the chunk did not run composed",
-			n, d, u, m.Cfg.NLayer)
+	n0, d0 := s0.ServedPart(tier.ComposedPrompt)
+	n1, d1 := s1.ServedPart(tier.ComposedPrompt)
+	if n, d := n1-n0, d1-d0; n < m.Cfg.NLayer || d != 0 {
+		t.Fatalf("the composer served %d block steps of the chunk and declined %d (%d blocks): the chunk did not run composed",
+			n, d, m.Cfg.NLayer)
 	}
 	one := plan.placed(t, m, g, len(ids)+1)
 	defer one.Close()

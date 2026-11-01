@@ -1202,19 +1202,17 @@ const (
 // Stats.BlockDeclines or HeadDeclines (jit.DeclineName).
 func DeclineName(i int) string { return jit.DeclineName(i) }
 
-// ServedPart is how many steps the composer served the parts of k in, how
-// many steps where they serve it was not asked for, and how many other block
-// steps asked it for nothing (Stats.PartsServed, PartsDeclined,
-// PartsUnasked).
-func (s Stats) ServedPart(k Parts) (served, declined, unasked int) {
+// ServedPart is how many steps the composer served the parts of k in, and
+// how many steps where they serve it was not asked for (Stats.PartsServed,
+// PartsDeclined).
+func (s Stats) ServedPart(k Parts) (served, declined int) {
 	for i := range s.PartsServed {
 		if k&(1<<i) != 0 {
 			served += s.PartsServed[i]
 			declined += s.PartsDeclined[i]
-			unasked += s.PartsUnasked[i]
 		}
 	}
-	return served, declined, unasked
+	return served, declined
 }
 
 // FormedPart is how many of the parts of k formed at a step rather than

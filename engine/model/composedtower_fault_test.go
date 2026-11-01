@@ -39,9 +39,9 @@ func TestComposedTowerOnDeviceSeesCausalRows(t *testing.T) {
 				s := tw.testState()
 				defer s.Close()
 				s.SetDevice(g)
-				s0, _, _ := g.Stats().ServedPart(tier.ComposedTower)
+				s0, _ := g.Stats().ServedPart(tier.ComposedTower)
 				got0, _ := towerEncodeAt(t, s, px)
-				if n, _, _ := g.Stats().ServedPart(tier.ComposedTower); n-s0 != 1 {
+				if n, _ := g.Stats().ServedPart(tier.ComposedTower); n-s0 != 1 {
 					t.Fatalf("%s: the composer served %d tower block runs, want the one placed (%s)", spec, n-s0, g.Err())
 				}
 				nm, _ := nmseOf(got0, want0)

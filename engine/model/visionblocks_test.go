@@ -488,14 +488,14 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 				t.Skipf("%s placed %d tower blocks: the relocation needs more than %d", spec, sb.GPUBlocks(), k)
 			}
 			side := twb.Cfg.ImageSz / twb.Cfg.PatchSz
-			s0, _, _ := g.Stats().ServedPart(tier.ComposedTower)
+			s0, _ := g.Stats().ServedPart(tier.ComposedTower)
 			if err := sb.encodeBegin(px, side, side); err != nil {
 				t.Fatal(err)
 			}
 			if done, err := sb.encodeBlocks(k); err != nil || done {
 				t.Fatalf("the first step: done %v, %v", done, err)
 			}
-			s1, _, _ := g.Stats().ServedPart(tier.ComposedTower)
+			s1, _ := g.Stats().ServedPart(tier.ComposedTower)
 			if err := sb.SetDevice(nil); err != nil {
 				t.Fatal(err)
 			}
@@ -507,7 +507,7 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 			}
 			if composed {
 				served, declined := sb.CPUBlockSteps()
-				s2, _, _ := g.Stats().ServedPart(tier.ComposedTower)
+				s2, _ := g.Stats().ServedPart(tier.ComposedTower)
 				t.Logf("%s: the composer served %d tower blocks on the device before the move, %d on the CPU after it (declines %v)",
 					spec, s1-s0, served, nonZero(declined[:]))
 				if s1-s0 != k || s2 != s1 || served != n-k {

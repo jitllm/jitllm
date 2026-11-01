@@ -73,10 +73,10 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 						after(s)
 					}
 				})
-				ne, de, _ := st.ServedPart(tier.ComposedEmbed)
-				nc, dc, _ := st.ServedPart(tier.CollapsedHead)
-				nh, dh, _ := st.ServedPart(tier.ComposedHead)
-				nb, db, _ := st.ServedPart(tier.ComposedBlock)
+				ne, de := st.ServedPart(tier.ComposedEmbed)
+				nc, dc := st.ServedPart(tier.CollapsedHead)
+				nh, dh := st.ServedPart(tier.ComposedHead)
+				nb, db := st.ServedPart(tier.ComposedBlock)
 				t.Logf("%s: %d input rows, %d collapses, %d heads and %d block steps served; declined %d, %d, %d, %d (%s)",
 					dev, ne, nc, nh, nb, de, dc, dh, db, declinesOf(st))
 				switch {
