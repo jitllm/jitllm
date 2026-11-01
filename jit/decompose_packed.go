@@ -134,10 +134,13 @@ func weightElement(x *exprs, wo Operand, rows, k int, in *[]Operand, facts *Fact
 		return jlm.DecodeVerbatim[int](p, wo.Format, k, row, col), nil
 	}
 	l, ok := jlm.Layout(wo.Format)
-	if !ok || k%(l.Sub*l.SuperSub) != 0 {
+	if !ok {
 		return 0, fmt.Errorf("no reading rules for a row of %d", k)
 	}
-	p := packedOperands(x, wo, l, rows, k, in, facts)
+	// A packed row is whole blocks: a k short of them (a tower 144 wide) is
+	// stored with zero columns to the next, read here only to k.
+	blk := l.Sub * l.SuperSub
+	p := packedOperands(x, wo, l, rows, (k+blk-1)/blk*blk, in, facts)
 	return jlm.DecodeElement[int](p, l, rows, row, col), nil
 }
 

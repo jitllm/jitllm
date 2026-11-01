@@ -234,7 +234,7 @@ func decomposeMatVecRows(o graph.Op, c *Context) ([]Prim, error) {
 	if err != nil {
 		return nil, err
 	}
-	if wo.Format == jlm.TypeQ8 && c.Int8 != nil && c.Graph.Values[o.In[0]].Elem != graph.ElemI8 {
+	if wo.Format == jlm.TypeQ8 && c.Int8 != nil && c.Graph.Values[o.In[0]].Elem != graph.ElemI8 && w.K%q8Block == 0 {
 		// The plain matvec's Q8_0 form, at the selected rows.
 		return decomposeMatVecQ8(o, c, wo)
 	}

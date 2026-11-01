@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -54,7 +53,6 @@ func TestOpenJevPicturesMatchLlamaCpp(t *testing.T) {
 		if m.Tower() == nil || m.Decision() != jlm.DecisionOpenJev {
 			t.Fatalf("the container carries tower %v and readout %v", m.Tower() != nil, m.Decision())
 		}
-		ragged0 := nn.RaggedRows.Load()
 		d, err := m.NewDecider(4096)
 		if err != nil {
 			t.Fatal(err)
@@ -64,15 +62,22 @@ func TestOpenJevPicturesMatchLlamaCpp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return ans, d.InputTokens(), int(nn.RaggedRows.Load() - ragged0)
+		m.cpuForms.mu.Lock()
+		defer m.cpuForms.mu.Unlock()
+		if len(m.cpuForms.err) > 0 {
+			t.Fatalf("the composed CPU refused %d form(s)", len(m.cpuForms.err))
+		}
+		return ans, d.InputTokens(), len(m.cpuForms.m)
 	}
-	ans, tokens, padded := decide()
+	ans, tokens, forms := decide()
 	if tokens != gold.Usage.InputTokens {
 		t.Errorf("ran %d positions, llama.cpp %d: the prompts differ", tokens, gold.Usage.InputTokens)
 	}
-	if padded == 0 {
-		t.Fatal("no row had a ragged tail quantized: the ragged tower's products did not run at the packed width")
+	// The tower is 144 wide, packed at 160: its blocks read the padded rows
+	// through the composer's one decoding (jit weightElement).
+	if forms == 0 {
+		t.Fatal("the composed CPU formed nothing: the tower's blocks did not run composed")
 	}
-	t.Logf("%d rows quantized with a ragged tail", padded)
+	t.Logf("%d composed CPU form(s)", forms)
 	checkDecisions(t, req.Questions, ans, gold, 0.01, true)
 }

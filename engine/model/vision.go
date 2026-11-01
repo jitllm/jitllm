@@ -2082,9 +2082,6 @@ func (s *State) visPlan(li int) *nn.LayerPlan {
 		UngatedFFN: l.gate.e == nil,
 		KPad:       l.wq.kp,
 	}
-	if s.m.kpadViolation {
-		plan.KPad = 0
-	}
 	// The block as ops (fronttower.go): what a device serving it whole
 	// forms; nil where the front end states none.
 	plan.Graph = s.m.Composing().BlockGraph(li)

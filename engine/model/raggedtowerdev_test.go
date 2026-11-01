@@ -16,10 +16,10 @@ const raggedBound = 1e-4
 // TestRaggedTowerOnDeviceMatchesHost runs the openjev test model's tower,
 // 144 wide and packed at 160, with every block on each device present and
 // with one, against the host's encoding of the same picture. The bound is
-// tighter than towerBound: the clean arms read 1e-8 to 1e-7 on the laptop's
-// CUDA and Vulkan, and the violation -- plans that state no padded width, so
-// the device quantizes its rows at 144 under weights packed at 160 -- reads
-// 2e-3, inside towerBound.
+// tighter than towerBound: the arms read 1e-8 to 1e-7 on CUDA and Vulkan. The
+// host and the devices read the padded rows through the composer's one
+// decoding, so the padding itself is held to llama.cpp by
+// TestOpenJevPicturesMatchLlamaCpp.
 func TestRaggedTowerOnDeviceMatchesHost(t *testing.T) {
 	text, proj := testmodels.Path("openjev/tinyopenjev-for-testing-Q8_0.gguf"), testmodels.Path("openjev/mmproj-tinyopenjev-for-testing-Q8_0.gguf")
 	if !vlmAvailable(text, proj) {
@@ -84,26 +84,6 @@ func TestRaggedTowerOnDeviceMatchesHost(t *testing.T) {
 				if math.IsNaN(nm) || nm > raggedBound {
 					t.Errorf("%d blocks on %s: NMSE %.3e against the host", placed, spec, nm)
 				}
-			}
-			tw.opt.towerGPULayers = -1
-			m.kpadViolation = true
-			defer func() { m.kpadViolation = false }()
-			gv, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-			if err != nil || gv == nil {
-				t.Fatalf("%s: a second tier: %v", spec, err)
-			}
-			defer gv.Close()
-			s := tw.testState()
-			s.SetDevice(gv)
-			if s.GPUBlocks() == 0 {
-				s.Close()
-				t.Fatalf("the violation placed no block on %s", spec)
-			}
-			bad, _ := nmse32(want, encode(s))
-			s.Close()
-			t.Logf("no padded width in the plans: NMSE %.3e", bad)
-			if !(bad > raggedBound) {
-				t.Errorf("%s: plans with no padded width read %.3e: the gate does not see the padding", spec, bad)
 			}
 		})
 	}

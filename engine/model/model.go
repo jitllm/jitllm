@@ -1200,10 +1200,6 @@ type Model struct {
 	bankWts  sync.Map
 	holdMu   sync.Mutex
 	holdFree []*sheetHold
-	// kpadViolation is a gate's violation of a ragged tower on a device: its
-	// plans state no padded width (nn.LayerPlan.KPad), so the device
-	// quantizes the rows at their own width under weights packed wider.
-	kpadViolation bool
 	Cfg           *Config
 	Vocab         *tok.Vocab
 
