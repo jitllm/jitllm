@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 )
@@ -51,45 +50,45 @@ func TestComposedCPURowsServe(t *testing.T) {
 				m.setKVPageForTest(page)
 				return m
 			}
-			ref, ctlm, cm := open(), open(WithJITOptions(nn.WithActWindow(cpuControlWindow))), open()
-			defer ref.Close()
-			defer ctlm.Close()
+			fm, cm := cpuFloat(t, path, page), open()
+			defer fm.Close()
 			defer cm.Close()
-			ids := ref.Vocab.Encode(text, true)
-			var want, ctl, got [][]float32
+			src, layers := fixtureSource(testmodels.Path(tc.file)), fm.Cfg.NLayer
+			ids := cm.Vocab.Encode(text, true)
+			var want, got [][]float32
+			var band, last []float64
 			for _, n := range tc.lengths {
 				if len(ids) < n+decode {
 					t.Fatalf("%d tokens, %d wanted", len(ids), n+decode)
 				}
-				w := cpuPrompt(t, ref, ids, n, decode, cpuFaultNone, false)
-				c := cpuPrompt(t, ctlm, ids, n, decode, cpuFaultNone, false)
+				w := cpuPrompt(t, fm, ids, n, decode, cpuFaultNone, true)
+				b := lcppBand(t, src, layers, w, lcppSeq{ids[:n], ids[n : n+decode], nil})
 				g := cpuPrompt(t, cm, ids, n, decode, cpuFaultNone, true)
-				med, worst, widest := cpuBand(t, w, g, c)
-				t.Logf("a prompt of %d: %.3f of main's spread at the median, worst NMSE %.3g where the control reaches %.3g", n, med, worst, widest)
-				want, ctl, got = append(want, w...), append(ctl, c...), append(got, g...)
+				med, worst, widest := cpuBandTo(t, w, g, b)
+				t.Logf("a prompt of %d: %.3f of the band at the median, worst NMSE %.3g where the band's widest is %.3g", n, med, worst, widest)
+				want, band, got, last = append(want, w...), append(band, b...), append(got, g...), b
 			}
-			med, worst, widest := cpuBand(t, want, got, ctl)
+			med, worst, widest := cpuBandTo(t, want, got, band)
 			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
-				t.Fatalf("the composed CPU's prompts leave main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+				t.Fatalf("the composed CPU's prompts leave the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
 			}
 			// The longest prompt again with its history paged out and back:
 			// the pages a step reads faulted into the layer's arena.
 			n := tc.lengths[len(tc.lengths)-1]
-			pw := cpuPrompt(t, ref, ids, n, decode, cpuFaultNone, false)
-			pc := cpuPrompt(t, ctlm, ids, n, decode, cpuFaultNone, false)
+			pw := want[len(want)-len(last):]
 			pg := cpuPromptPaged(t, cm, ids, n, decode, cpuFaultNone, true, true)
-			pm, pwst, pwide := cpuBand(t, pw, pg, pc)
-			t.Logf("a prompt of %d paged: %.3f of main's spread at the median, worst NMSE %.3g where the control reaches %.3g", n, pm, pwst, pwide)
+			pm, pwst, pwide := cpuBandTo(t, pw, pg, last)
+			t.Logf("a prompt of %d paged: %.3f of the band at the median, worst NMSE %.3g where the band's widest is %.3g", n, pm, pwst, pwide)
 			if !(pm <= bandRatio) || !(pwst <= bandWorst*pwide) {
-				t.Fatalf("the composed CPU's paged prompt leaves main's band: median ratio %.3f, worst %.3g (bound %.1f x %.3g)", pm, pwst, bandWorst, pwide)
+				t.Fatalf("the composed CPU's paged prompt leaves the band: median ratio %.3f, worst %.3g (bound %.1f x %.3g)", pm, pwst, bandWorst, pwide)
 			}
 			for _, f := range []cpuFault{cpuFaultPage, cpuFaultRow} {
 				var bad [][]float32
 				for _, n := range tc.lengths {
 					bad = append(bad, cpuPrompt(t, cm, ids, n, decode, f, true)...)
 				}
-				bm, bw, _ := cpuBand(t, want, bad, ctl)
+				bm, bw, _ := cpuBandTo(t, want, bad, band)
 				t.Logf("violation %d: median ratio %.3f, worst %.3g", f, bm, bw)
 				if bm <= bandRatio && bw <= bandWorst*widest {
 					t.Errorf("violation %d stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", f, bm, bw)
@@ -99,13 +98,24 @@ func TestComposedCPURowsServe(t *testing.T) {
 			// A batch of three sequences, each prompted into its own slot.
 			prompts := [][]int32{ids[:7], ids[40:73], ids[100:150]}
 			steps := ids[200 : 200+decode]
-			bw := cpuBatch(t, ref, prompts, steps, cpuFaultNone, false)
-			bc := cpuBatch(t, ctlm, prompts, steps, cpuFaultNone, false)
+			bw := cpuBatch(t, fm, prompts, steps, cpuFaultNone, true)
+			var seqs, sseqs []lcppSeq
+			// A session's first step is three of its rows, its logits the
+			// last's (cpuSessionSteps).
+			srows := []int{0}
+			for i := min(3, len(steps)); i <= len(steps); i++ {
+				srows = append(srows, i)
+			}
+			for _, p := range prompts {
+				seqs = append(seqs, lcppSeq{p, steps, nil})
+				sseqs = append(sseqs, lcppSeq{p, steps, srows})
+			}
+			bb := lcppBand(t, src, layers, bw, seqs...)
 			bg := cpuBatch(t, cm, prompts, steps, cpuFaultNone, true)
-			med, worst, widest = cpuBand(t, bw, bg, bc)
-			t.Logf("a batch of %d: %.3f of main's spread at the median, worst NMSE %.3g where the control reaches %.3g", len(prompts), med, worst, widest)
+			med, worst, widest = cpuBandTo(t, bw, bg, bb)
+			t.Logf("a batch of %d: %.3f of the band at the median, worst NMSE %.3g where the band's widest is %.3g", len(prompts), med, worst, widest)
 			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
-				t.Fatalf("the composed CPU's batch leaves main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+				t.Fatalf("the composed CPU's batch leaves the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
 			}
 			var alone [][]float32
@@ -125,17 +135,16 @@ func TestComposedCPURowsServe(t *testing.T) {
 			// The same sequences as sessions of their own, stepped together
 			// (StepRuns), the first step three rows of each: each row's
 			// history its own session's.
-			sw := cpuSessionSteps(t, ref, prompts, steps, false)
-			sc := cpuSessionSteps(t, ctlm, prompts, steps, false)
+			sw := cpuSessionSteps(t, fm, prompts, steps, true)
 			sg := cpuSessionSteps(t, cm, prompts, steps, true)
-			sm, swst, swide := cpuBand(t, sw, sg, sc)
-			t.Logf("%d sessions stepped together: %.3f of main's spread at the median, worst NMSE %.3g where the control reaches %.3g", len(prompts), sm, swst, swide)
+			sm, swst, swide := cpuBandTo(t, sw, sg, lcppBand(t, src, layers, sw, sseqs...))
+			t.Logf("%d sessions stepped together: %.3f of the band at the median, worst NMSE %.3g where the band's widest is %.3g", len(prompts), sm, swst, swide)
 			if !(sm <= bandRatio) || !(swst <= bandWorst*swide) {
-				t.Fatalf("the composed CPU's step across sessions leaves main's band: median ratio %.3f, worst %.3g (bound %.1f x %.3g)", sm, swst, bandWorst, swide)
+				t.Fatalf("the composed CPU's step across sessions leaves the band: median ratio %.3f, worst %.3g (bound %.1f x %.3g)", sm, swst, bandWorst, swide)
 			}
 			for _, f := range []cpuFault{cpuFaultPage, cpuFaultRow} {
 				bad := cpuBatch(t, cm, prompts, steps, f, true)
-				bm, bwst, _ := cpuBand(t, bw, bad, bc)
+				bm, bwst, _ := cpuBandTo(t, bw, bad, bb)
 				t.Logf("batch violation %d: median ratio %.3f, worst %.3g", f, bm, bwst)
 				if bm <= bandRatio && bwst <= bandWorst*widest {
 					t.Errorf("batch violation %d stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", f, bm, bwst)

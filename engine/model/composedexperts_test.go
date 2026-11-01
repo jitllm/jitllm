@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
@@ -221,8 +220,8 @@ var cpuExpertModels = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-glm4moe-hf
 
 // TestComposedCPUExpertPagesServe runs each mixture's blocks on the CPU
 // device composed, its banks read in the host's expert pages at a page's
-// stride, teacher-forced, against main's kernels within main's own spread
-// (TestComposedCPUBlocksServe's band): every block step served, none
+// stride, teacher-forced, against the CPU's float reference within
+// llama.cpp's spread from it (TestComposedCPUBlocksServe's band): every block step served, none
 // declined. Under a one-page budget every expert page is evicted and read
 // again from the file between the steps that use it, and the composed
 // logits are the resident run's bit for bit, the page-ins counted. With the
@@ -237,21 +236,10 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 	for _, file := range names {
 		t.Run(file, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
-			ref, err := Open(path, noTune)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ref.Close()
-			ref.setKVPageForTest(page)
-			toks := cpuTokens(t, ref, steps)
-			want := cpuLogits(t, ref, toks, cpuFaultNone, false)
-			cm, err := Open(path, noTune, WithJITOptions(nn.WithActWindow(cpuControlWindow)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cm.Close()
-			cm.setKVPageForTest(page)
-			ctl := cpuLogits(t, cm, toks, cpuFaultNone, false)
+			fm := cpuFloat(t, path, page)
+			toks := cpuTokens(t, fm, steps)
+			fm.Close()
+			want, band := cpuReference(t, path, fixtureSource(testmodels.Path(file)), page, toks)
 			run := func(f cpuFault, opts ...Option) ([][]float32, int64) {
 				m, err := Open(path, append([]Option{noTune}, opts...)...)
 				if err != nil {
@@ -264,29 +252,12 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 				return got, in
 			}
 			got, residentIn := run(cpuFaultNone)
-			float := true
-			for i := range ctl {
-				float = float && slices.Equal(ctl[i], want[i])
-			}
-			if float {
-				// A float model quantizes nothing: main's control is main, and
-				// the composed CPU is held to it within f32's reduction order.
-				worst := 0.0
-				for i := range want {
-					worst = max(worst, logitNMSE(got[i], want[i]))
-				}
-				t.Logf("over %d steps the composed CPU's float mixture is %.3g from main at the worst", steps, worst)
-				if math.IsNaN(worst) || worst > 1e-9 {
-					t.Fatalf("the composed CPU's float mixture is %.3g from main", worst)
-				}
-			} else {
-				med, worst, widest := cpuBand(t, want, got, ctl)
-				t.Logf("over %d steps the composed CPU is %.3f of main's spread from main at the median, worst NMSE %.3g where main's control reaches %.3g",
-					steps, med, worst, widest)
-				if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
-					t.Fatalf("the composed CPU mixture leaves main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
-						med, bandRatio, worst, bandWorst, widest)
-				}
+			med, worst, widest := cpuBandTo(t, want, got, band)
+			t.Logf("over %d steps the composed CPU is %.3f of the band from the float reference at the median, worst NMSE %.3g where the band's widest is %.3g",
+				steps, med, worst, widest)
+			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
+				t.Fatalf("the composed CPU mixture leaves the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+					med, bandRatio, worst, bandWorst, widest)
 			}
 			paged, pagedIn := run(cpuFaultNone, WithPageBudget(1))
 			if pagedIn <= residentIn {
@@ -351,11 +322,11 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 				m.setKVPageForTest(page)
 				return m
 			}
-			ref := open()
-			defer ref.Close()
+			fm := cpuFloat(t, path, page)
+			defer fm.Close()
 			// Tokens spread over the vocabulary: a random fixture's greedy
 			// tokens repeat, and rows of one token pick one set of experts.
-			v := ref.Cfg.NVocab
+			v := fm.Cfg.NVocab
 			rng := rand.New(rand.NewSource(7))
 			ids := make([]int32, 140)
 			for i := range ids {
@@ -374,10 +345,12 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 				out := cpuPrompt(t, m, ids, pn, decode, f, composed)
 				return append(out, cpuBatch(t, m, prompts, steps, f, composed)...)
 			}
-			want := prompt(ref, cpuFaultNone, false)
-			ctlm := open(WithJITOptions(nn.WithActWindow(cpuControlWindow)))
-			ctl := prompt(ctlm, cpuFaultNone, false)
-			ctlm.Close()
+			want := prompt(fm, cpuFaultNone, true)
+			seqs := []lcppSeq{{ids[:pn], ids[pn : pn+decode], nil}}
+			for _, p := range prompts {
+				seqs = append(seqs, lcppSeq{p, steps, nil})
+			}
+			band := lcppBand(t, fixtureSource(testmodels.Path(file)), fm.Cfg.NLayer, want, seqs...)
 			run := func(f cpuFault, opts ...Option) ([][]float32, int64) {
 				t.Helper()
 				m := open(opts...)
@@ -387,32 +360,12 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 				return got, in
 			}
 			got, residentIn := run(cpuFaultNone)
-			float := true
-			for i := range ctl {
-				float = float && slices.Equal(ctl[i], want[i])
-			}
-			if float {
-				// A float mixture quantizes nothing and main's control is main:
-				// the rows' form is held to main within the float prompts'
-				// bound (TestGemma4ServesComposedOnCPU's), its reduction order
-				// over a call's rows not main's.
-				const floatBound = 1e-5
-				worst := 0.0
-				for i := range want {
-					worst = max(worst, logitNMSE(got[i], want[i]))
-				}
-				t.Logf("prompts of %d rows and a batch: the composed CPU's float mixture is %.3g from main at the worst", pn, worst)
-				if math.IsNaN(worst) || !(worst < floatBound) {
-					t.Fatalf("the composed CPU's float mixture's prompts are %.3g from main (bound %g)", worst, floatBound)
-				}
-			} else {
-				med, worst, widest := cpuBand(t, want, got, ctl)
-				t.Logf("prompts of %d rows and a batch: %.3f of main's spread at the median, worst NMSE %.3g where main's control reaches %.3g",
-					pn, med, worst, widest)
-				if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
-					t.Fatalf("the composed CPU's mixture prompts leave main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
-						med, bandRatio, worst, bandWorst, widest)
-				}
+			med, worst, widest := cpuBandTo(t, want, got, band)
+			t.Logf("prompts of %d rows and a batch: %.3f of the band at the median, worst NMSE %.3g where the band's widest is %.3g",
+				pn, med, worst, widest)
+			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
+				t.Fatalf("the composed CPU's mixture prompts leave the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+					med, bandRatio, worst, bandWorst, widest)
 			}
 			paged, pagedIn := run(cpuFaultNone, WithPageBudget(1))
 			if pagedIn <= residentIn {

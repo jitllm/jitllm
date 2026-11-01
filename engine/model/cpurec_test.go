@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -45,10 +44,10 @@ func TestComposedCPURecurrentPromptsServe(t *testing.T) {
 				m.setKVPageForTest(page)
 				return m
 			}
-			ref, ctlm, cm := open(), open(WithJITOptions(nn.WithActWindow(cpuControlWindow))), open()
-			defer ref.Close()
-			defer ctlm.Close()
+			fm, cm := cpuFloat(t, path, page), open()
+			defer fm.Close()
 			defer cm.Close()
+			src := fixtureSource(testmodels.Path(file))
 			linear := 0
 			for li := range cm.Cfg.NLayer {
 				if cm.Cfg.LayerKind(li).Recurrent() {
@@ -58,8 +57,8 @@ func TestComposedCPURecurrentPromptsServe(t *testing.T) {
 			if linear == 0 {
 				t.Fatalf("%s has no linear block", file)
 			}
-			ids := ref.Vocab.Encode(text, true)
-			run := func(m *Model, n int, f cpuFault, composed bool) [][]float32 {
+			ids := cm.Vocab.Encode(text, true)
+			run := func(m *Model, n int, f cpuFault) [][]float32 {
 				t.Helper()
 				if len(ids) < n+decode {
 					t.Fatalf("%d tokens, %d wanted", len(ids), n+decode)
@@ -78,27 +77,26 @@ func TestComposedCPURecurrentPromptsServe(t *testing.T) {
 					}
 					out = append(out, append([]float32(nil), lg...))
 				}
-				cpuServed(t, s, "a prompt", (1+decode)*m.Cfg.NLayer, composed)
+				cpuServed(t, s, "a prompt", (1+decode)*m.Cfg.NLayer, true)
 				whole, stepped := s.CPURecSteps()
-				if composed && n > 1 && (whole < linear || stepped != 0) {
+				if n > 1 && (whole < linear || stepped != 0) {
 					t.Fatalf("a prompt of %d: %d linear block steps ran whole and %d a row at a time, want at least %d whole and none a row at a time (%v)",
 						n, whole, stepped, linear, s.CPUFormErr())
 				}
-				if !composed && whole+stepped != 0 {
-					t.Fatalf("main's arm counted %d composed linear block steps", whole+stepped)
-				}
 				return out
 			}
-			var want, ctl, got [][]float32
+			var want, got [][]float32
+			var band []float64
 			for _, n := range lengths {
-				w, c, g := run(ref, n, cpuFaultNone, false), run(ctlm, n, cpuFaultNone, false), run(cm, n, cpuFaultNone, true)
-				med, worst, widest := cpuBand(t, w, g, c)
-				t.Logf("a prompt of %d: %.3f of main's spread at the median, worst NMSE %.3g where the control reaches %.3g", n, med, worst, widest)
-				want, ctl, got = append(want, w...), append(ctl, c...), append(got, g...)
+				w, g := run(fm, n, cpuFaultNone), run(cm, n, cpuFaultNone)
+				b := lcppBand(t, src, fm.Cfg.NLayer, w, lcppSeq{ids[:n], ids[n : n+decode], nil})
+				med, worst, widest := cpuBandTo(t, w, g, b)
+				t.Logf("a prompt of %d: %.3f of the band at the median, worst NMSE %.3g where the band's widest is %.3g", n, med, worst, widest)
+				want, band, got = append(want, w...), append(band, b...), append(got, g...)
 			}
-			med, worst, widest := cpuBand(t, want, got, ctl)
+			med, worst, widest := cpuBandTo(t, want, got, band)
 			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
-				t.Fatalf("the composed CPU's linear prompts leave main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+				t.Fatalf("the composed CPU's linear prompts leave the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
 			}
 			faults := []cpuFault{cpuFaultChunk}
@@ -108,9 +106,9 @@ func TestComposedCPURecurrentPromptsServe(t *testing.T) {
 			for _, f := range faults {
 				var bad [][]float32
 				for _, n := range lengths {
-					bad = append(bad, run(cm, n, f, true)...)
+					bad = append(bad, run(cm, n, f)...)
 				}
-				bm, bw, _ := cpuBand(t, want, bad, ctl)
+				bm, bw, _ := cpuBandTo(t, want, bad, band)
 				t.Logf("violation %d: median ratio %.3f, worst %.3g", f, bm, bw)
 				if bm <= bandRatio && bw <= bandWorst*widest {
 					t.Errorf("violation %d stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", f, bm, bw)

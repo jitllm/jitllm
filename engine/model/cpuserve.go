@@ -1664,6 +1664,9 @@ func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart, who
 	if f32 {
 		reg = c.reg32
 	}
+	if m.opt.cpuFloat {
+		reg = reg.WithoutInt8(jit.DeviceCPU).WithoutSplits(jit.DeviceCPU)
+	}
 	key, codes, err := reg.Form(req)
 	if err != nil {
 		return nil, err

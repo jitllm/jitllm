@@ -2,12 +2,12 @@ package model
 
 import (
 	"math"
+	"os"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 )
@@ -31,18 +31,15 @@ var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "
 	"synth-deepseek-dense" + q8Suffix, "synth-deepseek" + q8Suffix, "synth-deepseek-lite" + q8Suffix,
 	"synth-kimilinear" + q8Suffix, "kimik3/Kimi-K3-0.40B.Q8_0.gguf"}
 
-// TestComposedCPUBlocksServe runs each model's blocks on the CPU three ways,
-// teacher-forced on one token sequence: on main's kernels, on what the
-// composer forms for the CPU (its int8 form: activations quantized in
-// windows of 32, integer dots), and on main's kernels at another activation
-// window, main's own
-// spread (the control), the history in the State's KV pages. Every block
-// step must be served (served = steps x blocks, nothing declined, each block
-// composed once), and the composed logits held to main's within main's own
-// spread, by the band the card arms are held to (bandRatio, bandWorst): at
-// the median step no further from main than bandRatio times the control, at
-// the worst no further than bandWorst times the control's worst. Every
-// step's head is the CPU's composed head. Each violation -- the first
+// TestComposedCPUBlocksServe runs each model's blocks on the CPU as the
+// composer forms them (its int8 form: activations quantized in windows of
+// 32, integer dots), teacher-forced on one token sequence, the history in the
+// State's KV pages, and holds them to the CPU's float reference by
+// llama.cpp's spread from it (cpuReference, the user's decision): at the
+// median step no further than bandRatio times the band, at the worst no
+// further than bandWorst times its widest. Every block step must be served
+// (served = steps x blocks, nothing declined, each block composed once), and
+// every step's head is the CPU's composed head. Each violation -- the first
 // history page pointed at another slot, the first and the newest key rows
 // moved by one, the new key written a row early, the head reading another
 // row than the residual -- must leave the band.
@@ -51,39 +48,26 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 	for _, file := range cpuServedModels {
 		t.Run(file, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
-			ref, err := Open(path, noTune)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ref.Close()
-			ref.setKVPageForTest(page)
-			toks := cpuTokens(t, ref, steps)
-			want := cpuLogits(t, ref, toks, cpuFaultNone, false)
-			cm, err := Open(path, noTune, WithJITOptions(nn.WithActWindow(cpuControlWindow)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cm.Close()
-			cm.setKVPageForTest(page)
-			ctl := cpuLogits(t, cm, toks, cpuFaultNone, false)
 			m, err := Open(path, noTune)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer m.Close()
 			m.setKVPageForTest(page)
+			toks := cpuTokens(t, m, steps)
+			want, band := cpuReference(t, path, fixtureSource(testmodels.Path(file)), page, toks)
 			got := cpuLogits(t, m, toks, cpuFaultNone, true)
-			med, worst, widest := cpuBand(t, want, got, ctl)
+			med, worst, widest := cpuBandTo(t, want, got, band)
 			_, agree := cpuCompare(want, got)
-			t.Logf("over %d steps the composed CPU is %.3f of main's spread from main at the median, worst NMSE %.3g where main's control reaches %.3g; argmax agrees with main %d/%d",
+			t.Logf("over %d steps the composed CPU is %.3f of the band from the float reference at the median, worst NMSE %.3g where the band's widest is %.3g; argmax agrees with the reference %d/%d",
 				steps, med, worst, widest, agree, steps)
 			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
-				t.Fatalf("the composed CPU blocks leave main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+				t.Fatalf("the composed CPU blocks leave the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
 			}
 			for _, f := range append(cpuFaultsOf(t, m), cpuFaultHead) {
 				bad := cpuLogits(t, m, toks, f, true)
-				bm, bw, _ := cpuBand(t, want, bad, ctl)
+				bm, bw, _ := cpuBandTo(t, want, bad, band)
 				t.Logf("violation %d: median ratio %.3f, worst %.3g", f, bm, bw)
 				if bm <= bandRatio && bw <= bandWorst*widest {
 					t.Errorf("violation %d stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", f, bm, bw)
@@ -100,7 +84,7 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 				for _, u := range undo {
 					u()
 				}
-				bm, bw, _ := cpuBand(t, want, bad, ctl)
+				bm, bw, _ := cpuBandTo(t, want, bad, band)
 				t.Logf("%s in %d blocks: median ratio %.3f, worst %.3g", rw.what, len(undo), bm, bw)
 				if bm <= bandRatio && bw <= bandWorst*widest {
 					t.Errorf("%s stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", rw.what, bm, bw)
@@ -207,23 +191,102 @@ func cpuFaultsOf(t *testing.T, m *Model) []cpuFault {
 	return fs
 }
 
-// cpuControlWindow is the activation window main's control arm quantizes
-// over, in place of the one its weight types decide (32 or 256): its distance from main
-// is main's own int8 spread.
-const cpuControlWindow = 64
+// withCPUFloat opens a model whose CPU forms are the float reference
+// (modelOpts.cpuFloat).
+func withCPUFloat() Option { return func(l *loadOpts) { l.opt.cpuFloat = true } }
 
-// cpuBand is an arm's distance from main against the control's: the median
-// over the steps of their ratio, the arm's worst and the control's worst.
-func cpuBand(t *testing.T, want, got, ctl [][]float32) (med, worst, widest float64) {
+// cpuFloat opens the model at path with the CPU's float forms over an f32
+// history, pages of page positions (withCPUFloat): a gate's reference arm.
+func cpuFloat(t *testing.T, path string, page int) *Model {
 	t.Helper()
-	var ratios []float64
-	for i := range want {
-		ec, eg := logitNMSE(ctl[i], want[i]), logitNMSE(got[i], want[i])
-		if math.IsNaN(ec) || math.IsNaN(eg) || !(ec > 0) {
-			t.Fatalf("step %d: the control is %.3g from main and the arm %.3g: a degenerate control proves nothing", i, ec, eg)
+	fm, err := Open(path, noTune, WithKVF16(false), withCPUFloat())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm.setKVPageForTest(page)
+	return fm
+}
+
+// cpuReference is what a composed CPU arm of the model at path, its GGUF
+// source src, is held to on toks teacher-forced: the logits of the CPU's
+// float forms (cpuFloat) and each step's band (lcppBand).
+func cpuReference(t *testing.T, path, src string, page int, toks []int32) ([][]float32, []float64) {
+	t.Helper()
+	fm := cpuFloat(t, path, page)
+	defer fm.Close()
+	ref := cpuLogits(t, fm, toks, cpuFaultNone, true)
+	return ref, lcppBand(t, src, fm.Cfg.NLayer, ref, lcppSeq{toks[:1], toks[1:], nil})
+}
+
+// lcppSeq is one sequence llama.cpp is teacher-forced over: ids, then toks
+// a step each; rows picks which of its rows -- the prompt's last, then each
+// step's -- an arm's logits are, nil for every one.
+type lcppSeq struct {
+	ids, toks []int32
+	rows      []int
+}
+
+// lcppBand is each row's band around ref, the reference's logits for seqs'
+// rows in order: the wider of llama.cpp's CUDA and CPU arms' distances from
+// them (JITLLM_LCPP), no narrower than bandFloor of layers, or bandFloor
+// where llama.cpp does not read src (the user's decision).
+func lcppBand(t *testing.T, src string, layers int, ref [][]float32, seqs ...lcppSeq) []float64 {
+	t.Helper()
+	floor := bandFloor(layers)
+	band := make([]float64, len(ref))
+	for i := range band {
+		band[i] = floor
+	}
+	dir := os.Getenv("JITLLM_LCPP")
+	if dir == "" {
+		t.Fatal("JITLLM_LCPP is unset: it names a CUDA build of llama.cpp holding scripts/lcpplogits, the band's reference")
+	}
+	for _, ngl := range []int{99, 0} {
+		at := 0
+		for _, sq := range seqs {
+			lg, ok := lcppSteps(t, dir, src, sq.ids, sq.toks, ngl)
+			if !ok {
+				t.Logf("llama.cpp does not read %s: the band is the floor, %.3g", src, floor)
+				for i := range band {
+					band[i] = floor
+				}
+				return band
+			}
+			rows := sq.rows
+			if rows == nil {
+				rows = make([]int, len(lg))
+				for i := range rows {
+					rows[i] = i
+				}
+			}
+			for _, r := range rows {
+				if at >= len(ref) || r >= len(lg) || len(lg[r]) != len(ref[at]) {
+					t.Fatalf("llama.cpp's rows do not line up with the reference's: row %d of %d at %d of %d", r, len(lg), at, len(ref))
+				}
+				band[at] = max(band[at], logitNMSE(lg[r], ref[at]))
+				at++
+			}
 		}
-		ratios = append(ratios, eg/ec)
-		worst, widest = max(worst, eg), max(widest, ec)
+		if at != len(ref) {
+			t.Fatalf("llama.cpp gave %d rows where the reference has %d", at, len(ref))
+		}
+	}
+	return band
+}
+
+// cpuBandTo is an arm's distance from the reference against each step's
+// band: the median over the steps of their ratio, the arm's worst and the
+// band's widest.
+func cpuBandTo(t *testing.T, want, got [][]float32, band []float64) (med, worst, widest float64) {
+	t.Helper()
+	ratios := make([]float64, 0, len(want))
+	for i := range want {
+		eg := logitNMSE(got[i], want[i])
+		if math.IsNaN(eg) || !(band[i] > 0) {
+			t.Fatalf("step %d: the arm is %.3g from the reference, the band %.3g: a degenerate band proves nothing", i, eg, band[i])
+		}
+		ratios = append(ratios, eg/band[i])
+		worst, widest = max(worst, eg), max(widest, band[i])
 	}
 	slices.Sort(ratios)
 	return ratios[len(ratios)/2], worst, widest

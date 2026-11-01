@@ -58,23 +58,24 @@ func cpuFeatureFixtures() map[string][]c6Violation {
 }
 
 // TestComposedCPUFeaturesAreLoadBearing runs each of cpuFeatureFixtures on
-// the CPU device, every block composed for it, teacher-forced against main's
-// kernels: within 1e-5 of main's logits at every step (float weights, so
-// main at another activation window is no control), and each feature taken
-// out of the composed arm alone past 100 times its worst and past 1e-4.
+// the CPU device, every block composed for it, teacher-forced against the
+// CPU's float forms over the same history (withCPUFloat): within 1e-5 of
+// their logits at every step (float weights, so the two part only by their
+// reduction order), and each feature taken out of the composed arm alone
+// past 100 times its worst and past 1e-4.
 func TestComposedCPUFeaturesAreLoadBearing(t *testing.T) {
 	const steps, page, bound = 24, 32, 1e-5
 	for name, vs := range cpuFeatureFixtures() {
 		t.Run(name, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(name+".gguf"))
-			ref, err := Open(path, noTune)
+			ref, err := Open(path, noTune, withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer ref.Close()
 			ref.setKVPageForTest(page)
 			toks := cpuTokens(t, ref, steps)
-			want := cpuLogits(t, ref, toks, cpuFaultNone, false)
+			want := cpuLogits(t, ref, toks, cpuFaultNone, true)
 			m, err := Open(path, noTune)
 			if err != nil {
 				t.Fatal(err)
@@ -96,20 +97,20 @@ func TestComposedCPUFeaturesAreLoadBearing(t *testing.T) {
 				return w
 			}
 			worst := worstOf(cpuLogits(t, m, toks, cpuFaultNone, true))
-			t.Logf("the composed CPU's worst NMSE from main over %d steps: %.3g", steps, worst)
+			t.Logf("the composed CPU's worst NMSE from the float forms over %d steps: %.3g", steps, worst)
 			if !(worst < bound) {
-				t.Fatalf("the composed CPU is %.3g from main, bound %g", worst, bound)
+				t.Fatalf("the composed CPU is %.3g from the float forms, bound %g", worst, bound)
 			}
 			// A prompt through the rows' form, its decode after it.
-			pw := cpuPrompt(t, ref, toks, steps-4, 4, cpuFaultNone, false)
+			pw := cpuPrompt(t, ref, toks, steps-4, 4, cpuFaultNone, true)
 			pg := cpuPrompt(t, m, toks, steps-4, 4, cpuFaultNone, true)
 			pworst := 0.0
 			for i := range pw {
 				pworst = max(pworst, logitNMSE(pg[i], pw[i]))
 			}
-			t.Logf("a prompt of %d and its decode: worst NMSE %.3g from main", steps-4, pworst)
+			t.Logf("a prompt of %d and its decode: worst NMSE %.3g from the float forms", steps-4, pworst)
 			if !(pworst < bound) {
-				t.Fatalf("the composed CPU's prompt is %.3g from main, bound %g", pworst, bound)
+				t.Fatalf("the composed CPU's prompt is %.3g from the float forms, bound %g", pworst, bound)
 			}
 			for _, v := range vs {
 				undo := v.mut(m)

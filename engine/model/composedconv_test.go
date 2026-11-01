@@ -6,14 +6,14 @@ import "testing"
 // tower (Gemma 3n's MobileNet-V5): every block the front end states
 // (frontconv.go) composed for the CPU at its own grid and run over the
 // encode's own buffers, an attention's keys in the segment's arena. Every
-// block is stated and served. Its output is held to main's runner's after
+// block is stated and served. Its output is held to the CPU's float forms' after
 // ONE block at the composed tower's one-block bound and over the whole
 // encode at the device arm's whole-tower bound, every block's reading
 // logged; a warm composed encode allocates nothing; and the depthwise
 // filters bound transposed, each query's keys cut by one and each key
 // written a row early must part from the clean encode.
 func TestComposedConvTowerOnCPU(t *testing.T) {
-	ref, _ := openGemma3nV(t)
+	ref, _ := openGemma3nV(t, withCPUFloat())
 	defer ref.Close()
 	rtw := ref.Tower()
 	c := rtw.Cfg
@@ -72,7 +72,7 @@ func TestComposedConvTowerOnCPU(t *testing.T) {
 		t.Fatalf("the CPU served %d of the %d stated blocks, declines %v (form error %v)", served, stated, nonZero(declined[:]), s.CPUFormErr())
 	}
 	if len(got) != len(wantBlocks) {
-		t.Fatalf("%d block outputs against main's %d", len(got), len(wantBlocks))
+		t.Fatalf("%d block outputs against the reference's %d", len(got), len(wantBlocks))
 	}
 	nm0, w0 := nmseOf(got[0], wantBlocks[0])
 	worst, at := 0.0, -1
@@ -88,7 +88,7 @@ func TestComposedConvTowerOnCPU(t *testing.T) {
 		t.Fatalf("NMSE %.3e after ONE block (bound 5e-5)", nm0)
 	}
 	if !(nm < 1e-2) {
-		t.Fatalf("the composed CPU's encode is NMSE %.3e from main's (bound 1e-2)", nm)
+		t.Fatalf("the composed CPU's encode is NMSE %.3e from the float reference's (bound 1e-2)", nm)
 	}
 
 	s.vis.afterBlock = nil

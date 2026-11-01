@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
@@ -173,9 +172,9 @@ func linearRun(t *testing.T, m *Model, prompt, toks []int32, f cpuFault) [][]flo
 }
 
 // TestComposedCPUDeltaFeaturesAreLoadBearing holds a hybrid's decode on the
-// composed CPU, its linear blocks the composer's delta rule and its
-// attention blocks main's, to main's within main's spread
-// (TestComposedCPUBlocksServe's band), and drops each of the delta rule's
+// composed CPU, its linear blocks the composer's delta rule, to the CPU's
+// float reference within llama.cpp's spread from it (TestComposedCPUBlocksServe's
+// band), and drops each of the delta rule's
 // features from the statement in turn -- the decay, the output gate, the
 // key's norm, the convolution -- and binds each block to another block's
 // state (cpuFaultRec): each must leave the band.
@@ -191,24 +190,20 @@ func TestComposedCPUDeltaFeaturesAreLoadBearing(t *testing.T) {
 		m.setKVPageForTest(page)
 		return m
 	}
-	ref := open()
-	defer ref.Close()
-	toks := cpuTokens(t, ref, steps)
-	want := cpuLogits(t, ref, toks, cpuFaultNone, false)
-	cm := open(WithJITOptions(nn.WithActWindow(cpuControlWindow)))
-	defer cm.Close()
-	ctl := cpuLogits(t, cm, toks, cpuFaultNone, false)
+	src := fixtureSource(testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"))
 	m := open()
 	defer m.Close()
+	toks := cpuTokens(t, m, steps)
+	want, band := cpuReference(t, path, src, page, toks)
 	got := linearLogits(t, m, toks, cpuFaultNone)
-	med, worst, widest := cpuBand(t, want, got, ctl)
-	t.Logf("the composed delta rule: %.3f of main's spread at the median, worst NMSE %.3g where the control reaches %.3g", med, worst, widest)
+	med, worst, widest := cpuBandTo(t, want, got, band)
+	t.Logf("the composed delta rule: %.3f of the band at the median, worst NMSE %.3g where the band's widest is %.3g", med, worst, widest)
 	if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
-		t.Fatalf("the composed delta rule leaves main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+		t.Fatalf("the composed delta rule leaves the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 			med, bandRatio, worst, bandWorst, widest)
 	}
 	check := func(what string, bad [][]float32) {
-		bm, bw, _ := cpuBand(t, want, bad, ctl)
+		bm, bw, _ := cpuBandTo(t, want, bad, band)
 		t.Logf("%s: median ratio %.3f, worst %.3g", what, bm, bw)
 		if bm <= bandRatio && bw <= bandWorst*widest {
 			t.Errorf("%s stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", what, bm, bw)
@@ -230,7 +225,7 @@ func TestComposedCPUDeltaFeaturesAreLoadBearing(t *testing.T) {
 	// boundary, and the decode after it.
 	text := strings.Repeat("The river rose every spring until the bridges were islands, "+
 		"and the clerk counted barrels of salt on the upper floor. ", 60)
-	ids := ref.Vocab.Encode(text, true)[:700]
+	ids := m.Vocab.Encode(text, true)[:700]
 	run := func(m *Model) [][]float32 {
 		s := m.NewState(len(ids) + len(toks) + 1)
 		defer s.Close()
@@ -247,15 +242,18 @@ func TestComposedCPUDeltaFeaturesAreLoadBearing(t *testing.T) {
 		}
 		return out
 	}
-	pw, pc := run(ref), run(cm)
+	fm := cpuFloat(t, path, page)
+	defer fm.Close()
+	pw := run(fm)
+	pb := lcppBand(t, src, fm.Cfg.NLayer, pw, lcppSeq{ids, toks[:4], nil})
 	pg := linearRun(t, m, ids, toks[:4], cpuFaultNone)
-	pm, pwst, pwide := cpuBand(t, pw, pg, pc)
-	t.Logf("a prompt of %d and its decode: %.3f of main's spread at the median, worst NMSE %.3g where the control reaches %.3g", len(ids), pm, pwst, pwide)
+	pm, pwst, pwide := cpuBandTo(t, pw, pg, pb)
+	t.Logf("a prompt of %d and its decode: %.3f of the band at the median, worst NMSE %.3g where the band's widest is %.3g", len(ids), pm, pwst, pwide)
 	if !(pm <= bandRatio) || !(pwst <= bandWorst*pwide) {
-		t.Fatalf("the composed delta rule's prompt leaves main's band: median ratio %.3f, worst %.3g (bound %.1f x %.3g)", pm, pwst, bandWorst, pwide)
+		t.Fatalf("the composed delta rule's prompt leaves the band: median ratio %.3f, worst %.3g (bound %.1f x %.3g)", pm, pwst, bandWorst, pwide)
 	}
 	bad := linearRun(t, m, ids, toks[:4], cpuFaultChunk)
-	bm, bw, _ := cpuBand(t, pw, bad, pc)
+	bm, bw, _ := cpuBandTo(t, pw, bad, pb)
 	t.Logf("the recurrence dropped at each chunk boundary: median ratio %.3f, worst %.3g", bm, bw)
 	if bm <= bandRatio && bw <= bandWorst*pwide {
 		t.Errorf("the recurrence dropped at each chunk boundary stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", bm, bw)
