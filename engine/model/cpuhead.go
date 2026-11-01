@@ -131,9 +131,9 @@ func (hf *cpuHeadForm) formOf() (*cpuBlockForm, jit.Decline) {
 	return hf.f, hf.why
 }
 
-// formCPUGraph is graph g of the model's head on the CPU at rows rows
-// through the model's keyed cache: its weights the model's own
-// (jlm.DenseBlock), its inputs and outputs buffers of their own.
+// formCPUGraph is graph g on the CPU at rows rows through the model's keyed
+// cache: its weights its block's (the model's own, jlm.DenseBlock, for the
+// head's), its inputs and outputs buffers of their own.
 func (m *Model) formCPUGraph(s *State, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpuBlockForm, error) {
 	formats := map[jlm.Role]jlm.Type{}
 	f := m.Composing()
@@ -141,7 +141,7 @@ func (m *Model) formCPUGraph(s *State, g *graph.Graph, rows int, over map[jlm.Ro
 		for _, w := range o.Weight {
 			if t, ok := over[w.Role]; ok {
 				formats[w.Role] = t
-			} else if e, ok := f.Find(w.Role, jlm.DenseBlock, -1); ok {
+			} else if e, ok := f.Find(w.Role, int32(g.Block), -1); ok {
 				formats[w.Role] = e.Type
 			}
 		}

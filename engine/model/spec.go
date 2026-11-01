@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // Speculative decoding with the model's own multi-token-prediction block
@@ -532,26 +533,43 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 	d0 := c.NEmbd
 	sp.eh = grow32(sp.eh, n*st*2*d0)
 	sp.ze = grow32(sp.ze, n*st*d0)
-	e := sp.ze // the embeddings, before eh_proj overwrites them
-	for i, x := range toks {
-		if err := d.embedMTP(e[i*d0:(i+1)*d0], x); err != nil {
+	if st == 1 {
+		// The composed entry (mtpEntryGraph): the embeddings in eh, its rows
+		// in ze.
+		e := sp.eh[:n*d0]
+		for i, x := range toks {
+			if err := d.embedMTP(e[i*d0:(i+1)*d0], x); err != nil {
+				return err
+			}
+		}
+		if why := d.cpuMTPEntry(sp.ze[:n*d0], e, hs[:n*d0], n); why != jit.DeclineServes {
+			if why == jit.DeclineNotFormed && d.cpu.formErr != nil {
+				return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s (the first: %w)", sp.mli, jit.DeclineName(int(why)), d.cpu.formErr)
+			}
+			return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s", sp.mli, jit.DeclineName(int(why)))
+		}
+	} else {
+		e := sp.ze // the embeddings, before eh_proj overwrites them
+		for i, x := range toks {
+			if err := d.embedMTP(e[i*d0:(i+1)*d0], x); err != nil {
+				return err
+			}
+		}
+		for i := n - 1; i >= 0; i-- {
+			for k := 0; k < st; k++ {
+				row := sp.eh[(i*st+k)*2*d0 : (i*st+k+1)*2*d0]
+				if k == 0 {
+					d.rmsnorm(row[:d0], e[i*d0:(i+1)*d0], w.enorm, c.RMSEps)
+				} else {
+					copy(row[:d0], sp.eh[i*st*2*d0:i*st*2*d0+d0])
+				}
+				d.rmsnorm(row[d0:], hs[(i*st+k)*d0:(i*st+k+1)*d0], w.hnorm[k*d0:(k+1)*d0], c.RMSEps)
+			}
+		}
+		d.jit.NewInput()
+		if err := d.mm(sp.ze[:n*st*d0], w.ehProj, sp.eh[:n*st*2*d0], n*st); err != nil {
 			return err
 		}
-	}
-	for i := n - 1; i >= 0; i-- {
-		for k := 0; k < st; k++ {
-			row := sp.eh[(i*st+k)*2*d0 : (i*st+k+1)*2*d0]
-			if k == 0 {
-				d.rmsnorm(row[:d0], e[i*d0:(i+1)*d0], w.enorm, c.RMSEps)
-			} else {
-				copy(row[:d0], sp.eh[i*st*2*d0:i*st*2*d0+d0])
-			}
-			d.rmsnorm(row[d0:], hs[(i*st+k)*d0:(i*st+k+1)*d0], w.hnorm[k*d0:(k+1)*d0], c.RMSEps)
-		}
-	}
-	d.jit.NewInput()
-	if err := d.mm(sp.ze[:n*st*d0], w.ehProj, sp.eh[:n*st*2*d0], n*st); err != nil {
-		return err
 	}
 	if st > 1 {
 		d.q4In = sp.ze[:n*st*d0]

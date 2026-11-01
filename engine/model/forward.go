@@ -2264,12 +2264,8 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 	// scalar.
 	plan.HeadDim, plan.NKVHead, plan.NRot = c.HeadDimAt(li), c.NKVHeadAt(li), c.NRotAt(li)
 	// The block as ops, from the container: what a device serving it whole
-	// forms (front.go). nil where the front end states none -- a prediction
-	// block past the layers among them.
-	plan.Graph = nil
-	if b := s.m.frontGraphs().blocks; li < len(b) {
-		plan.Graph = b[li]
-	}
+	// forms (front.go), nil where the front end states none.
+	plan.Graph = s.m.Composing().BlockGraph(li)
 	plan.Sliding = c.GeomSplit() && c.SWA(li)
 	plan.BidirOff = c.BidirSWA && !c.SWA(li)
 	plan.VFromK, plan.OutScale = l.vFromK, l.outScale

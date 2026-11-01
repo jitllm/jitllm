@@ -141,13 +141,13 @@ func specGreedyDev(t *testing.T, m *Model, prompt []int32, n int, g *tier.GPU, o
 	onDev := st.GPULayers() == m.Cfg.NLayer && st.HeadOnDevice() && d.GPULayers() == 1 && d.HeadOnDevice()
 	y, err := sp.Start(prompt, nil)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v (the device's last error: %s)", err, g.Err())
 	}
 	out := []int32{y}
 	for len(out) < n {
 		ys, err := sp.Next(nil)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%v (the device's last error: %s)", err, g.Err())
 		}
 		out = append(out, ys...)
 	}

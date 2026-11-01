@@ -324,6 +324,7 @@ type cpuState struct {
 	streams cpuStreamsState
 	proj    cpuProjState
 	pool    cpuPoolState
+	mtp     cpuMTPState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -1406,6 +1407,7 @@ func (s *State) cpuPlace() {
 	s.cpuPlaceHead()
 	s.cpuPlaceStreams()
 	s.cpuPlacePool()
+	s.cpuPlaceMTP()
 }
 
 // cpuRelocated follows block li onto the CPU, composed for it there, or off
@@ -2597,6 +2599,11 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 		return convRoleWeight(l, r)
 	}
 	switch r {
+	case jlm.RoleNextnEHProj:
+		if l.mtp == nil {
+			return nil
+		}
+		return &l.mtp.ehProj
 	case jlm.RoleAttnQ:
 		return &l.wq
 	case jlm.RoleAttnK:
@@ -2772,6 +2779,14 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 		return convRoleVector(l, r)
 	}
 	switch r {
+	case jlm.RoleNextnENorm, jlm.RoleNextnHNorm:
+		if l.mtp == nil {
+			return nil
+		}
+		if r == jlm.RoleNextnENorm {
+			return l.mtp.enorm
+		}
+		return l.mtp.hnorm
 	case jlm.RoleAttnNorm:
 		return l.attnNorm
 	case jlm.RoleFFNNorm:

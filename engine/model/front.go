@@ -111,9 +111,18 @@ type frontSet struct {
 	towerEntryWhy, towerProjWhy Uncovered
 	// heads, headsWhy and headsErrs are an encoder's decision head blocks'
 	// (headBlockGraph), head block i at block NLayer+i.
-	heads       []*graph.Graph
-	headsWhy    []Uncovered
-	headsErrs   []error
+	heads     []*graph.Graph
+	headsWhy  []Uncovered
+	headsErrs []error
+	// mtp, mtpWhy and mtpErrs are the prediction blocks' bodies
+	// (frontmtp.go), prediction block i at block NLayer+i.
+	mtp     []*graph.Graph
+	mtpWhy  []Uncovered
+	mtpErrs []error
+	// mtpEntry and mtpEntryWhy are each prediction block's entry
+	// (mtpEntryGraph).
+	mtpEntry    []*graph.Graph
+	mtpEntryWhy []Uncovered
 	head, embed *graph.Graph
 	// headHidden is head writing the norm's rows too (nn.Head.HiddenGraph).
 	headHidden *graph.Graph
@@ -202,6 +211,9 @@ func (c composing) BlockGraph(li int) *graph.Graph {
 	if i := li - len(f.blocks); i >= 0 && i < len(f.heads) {
 		return f.heads[i]
 	}
+	if i := li - len(f.blocks); i >= 0 && i < len(f.mtp) {
+		return f.mtp[i]
+	}
 	if li < 0 || li >= len(f.blocks) {
 		return nil
 	}
@@ -275,6 +287,8 @@ func (m *Model) uncoveredAt(li int) (Uncovered, error) {
 		return f.why[li], f.errs[li]
 	case m.towerAt(li) < 0 && li >= len(f.why) && li < len(f.why)+len(f.heads):
 		return f.headsWhy[li-len(f.why)], f.headsErrs[li-len(f.why)]
+	case m.towerAt(li) < 0 && li >= len(f.why) && li < len(f.why)+len(f.mtp):
+		return f.mtpWhy[li-len(f.why)], f.mtpErrs[li-len(f.why)]
 	case m.towerAt(li) >= 0:
 		i := m.towerAt(li)
 		return f.towerWhy[i], f.towerErrs[i]
@@ -299,6 +313,14 @@ func (m *Model) frontGraphs() *frontSet {
 		s.heads, s.headsWhy, s.headsErrs = make([]*graph.Graph, nh), make([]Uncovered, nh), make([]error, nh)
 		for i := range nh {
 			s.heads[i], s.headsWhy[i], s.headsErrs[i] = m.headBlockGraph(n + i)
+		}
+	}
+	if np := m.Cfg.NMTP; np > 0 {
+		s.mtp, s.mtpWhy, s.mtpErrs = make([]*graph.Graph, np), make([]Uncovered, np), make([]error, np)
+		s.mtpEntry, s.mtpEntryWhy = make([]*graph.Graph, np), make([]Uncovered, np)
+		for i := range np {
+			s.mtp[i], s.mtpWhy[i], s.mtpErrs[i] = m.blockGraph(n + i)
+			s.mtpEntry[i], s.mtpEntryWhy[i], _ = m.mtpEntryGraph(n + i)
 		}
 	}
 	if t := m.tower; t != nil {
@@ -360,7 +382,7 @@ func (m *Model) inventory(block int32) (graph.Facts, bool) {
 	perExpert := false
 	for i := range m.container.Entries() {
 		e := &m.container.Entries()[i]
-		if e.Block != block || e.Role.Vision() {
+		if e.Block != block || e.Role.Vision() || nextnRole(e.Role) {
 			continue
 		}
 		if e.Index >= 0 {
