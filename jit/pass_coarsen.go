@@ -407,20 +407,34 @@ func (k *coarse) read(n *Kernel, i int, nd Node, coords []int) (int, bool) {
 		k.memo[key] = v
 		return v, true
 	}
+	// The value read is the last one written before the reader: a member
+	// that stores over what it reads (in place), or one after it, is not its
+	// producer, and taking it recursed without end.
+	var from *Kernel
+	var fs Store
+	own := false
 	for _, p := range k.members {
+		if p == n {
+			break
+		}
 		for _, s := range p.Stores {
 			if s.Barrier || s.Run || p.Bufs[s.Buf].Operand != o {
 				continue
 			}
 			if p.storesOwn(s) && nd.Ax != nil && len(nd.Ax) == len(p.Space) {
-				return k.produce(p, s, nd.Ax), true
-			}
-			if ix, ok := sameIndex(n, n.Nodes[i], p, s); ok && ix {
-				return k.produce(p, s, coords), true
+				from, fs, own = p, s, true
+			} else if ix, ok := sameIndex(n, n.Nodes[i], p, s); ok && ix {
+				from, fs, own = p, s, false
 			}
 		}
 	}
-	return 0, false
+	switch {
+	case from == nil:
+		return 0, false
+	case own:
+		return k.produce(from, fs, nd.Ax), true
+	}
+	return k.produce(from, fs, coords), true
 }
 
 // sameIndex reports whether n's load reads the place p's store writes, the
