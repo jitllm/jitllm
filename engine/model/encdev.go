@@ -261,6 +261,8 @@ func (s *State) encPlan(li int) *nn.LayerPlan {
 		ActWin:    s.jit.ActWindow(),
 		RMSEps:    c.RMSEps,
 		LayerNorm: true,
+		// The block as ops (front.go): what a device serving it whole forms.
+		Graph: m.Composing().BlockGraph(li),
 	}
 	enc := m.enc
 	if lf := enc.lf; lf != nil && li < len(lf.blocks) {
@@ -318,8 +320,6 @@ func (s *State) encPlan(li int) *nn.LayerPlan {
 	// attention reads the block input as it is.
 	p.PostResidNorm, p.NoPreNorm = true, true
 	p.Act, p.UngatedFFN = nn.ActGELU, true
-	// The block as ops (front.go): what a device serving it whole forms.
-	p.Graph = m.Composing().BlockGraph(li)
 	if enc.swiglu {
 		p.Act, p.UngatedFFN = nn.ActSiLU, false
 		p.NRot, p.RopeNeox = c.NRot, c.RopeNeox

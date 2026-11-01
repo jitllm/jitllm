@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -211,6 +212,55 @@ func equalInts(a, b []int) bool {
 	return true
 }
 
+// layaViolate states violation v in m's own statement until the returned
+// undo: the window, stated activation or head count the front end states the
+// blocks from, or the local rotary the rows' table is built from, so the CPU
+// and every device run the violated model. The type row is added outside the
+// blocks, by the Embedder alone.
+func layaViolate(t *testing.T, m *Model, v string) func() {
+	t.Helper()
+	c, mb, cc := m.Cfg, m.enc.mb, m.container.Config()
+	gated := func(gelu func(*jlm.ExprBuilder, jlm.Arg) jlm.Arg, g, u uint32) jlm.Expr {
+		var e jlm.ExprBuilder
+		e.Fn(jlm.FnMul, gelu(&e, jlm.Operand(g)), jlm.Operand(u))
+		return jlm.Expr{Terms: e.T}
+	}
+	erf := func(e *jlm.ExprBuilder, a jlm.Arg) jlm.Arg { return e.GELUErf(a) }
+	var undo func()
+	switch v {
+	case "no-window":
+		was := c.SWAWindow
+		c.SWAWindow = 1 << 20
+		undo = func() { c.SWAWindow = was }
+	case "one-base":
+		was := mb.ropeL
+		mb.ropeL = mb.ropeG
+		undo = func() { mb.ropeL = was }
+	case "up-gated", "tanh-gelu":
+		if len(cc.Acts) != 1 || !reflect.DeepEqual(cc.Acts[0], gated(erf, 0, 1)) {
+			t.Fatalf("Laya's stated activation is %+v, not gelu_erf(gate) * up", cc.Acts)
+		}
+		was := cc.Acts
+		bad := gated(erf, 1, 0)
+		if v == "tanh-gelu" {
+			bad = gated(func(e *jlm.ExprBuilder, a jlm.Arg) jlm.Arg { return e.GELUTanh(a) }, 0, 1)
+		}
+		cc.Acts = []jlm.Expr{bad}
+		undo = func() { cc.Acts = was }
+	case "encoder-heads":
+		was := mb.headHeads
+		mb.headHeads = c.NHead
+		undo = func() { mb.headHeads = was }
+	default:
+		return func() {}
+	}
+	m.restateTower()
+	return func() {
+		undo()
+		m.restateTower()
+	}
+}
+
 // TestLayaFeaturesAreLoadBearing removes each feature of the graph from the
 // fixture and requires the logits to leave the reference's by ten times the
 // gate's tolerance: a feature the gate cannot see is not gated (RULE 10). On
@@ -230,6 +280,7 @@ func TestLayaFeaturesAreLoadBearing(t *testing.T) {
 	}
 	state, qs := decisionRequest(t, filepath.Join("testdata", "decision", "support.json"))
 	run := func(t *testing.T, arm layaArm, v string) map[string][]float32 {
+		defer layaViolate(t, m, v)()
 		d, err := m.NewDecider(0)
 		if err != nil {
 			t.Fatal(err)
