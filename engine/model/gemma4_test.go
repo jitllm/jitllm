@@ -128,7 +128,9 @@ var gemma4Violations = map[string][]c6Violation{
 // gemma4EViolations are the E-models' features, one at a time.
 var gemma4EViolations = []c6Violation{
 	{"no per-layer embeddings", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.PLEDim = 0 })
+		undoC := cfgMut(m, func(c *Config) { c.PLEDim = 0 })
+		undoR := dropStored(m, jlm.RolePLEGate, jlm.RolePLEProj, jlm.RolePLEPostNorm)
+		return func() { undoR(); undoC() }
 	}},
 	// The sliding shared layer reads the first sliding layer's history rather
 	// than the last one's (transformers' store_full_length_kv); the global

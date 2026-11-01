@@ -125,17 +125,22 @@ var moe2Violations = map[string][]c6Violation{
 		// choice exactly one, and neither of these could move it.
 		{"a threshold of zero (each weight one)", mixerEps(1e-12)},
 		{"a threshold ten times wider", mixerEps(0.1)},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"no norm biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
+			undoL := eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
+			undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
+			return func() { undoR(); undoL() }
 		}},
 		{"no q/k/v/o biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv, l.bo = nil, nil, nil, nil })
+			undoL := eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv, l.bo = nil, nil, nil, nil })
+			undoR := dropStored(m, jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias, jlm.RoleAttnOutBias)
+			return func() { undoR(); undoL() }
 		}},
 		{"no head bias", func(m *Model) func() {
 			was := m.outB
 			m.outB = nil
-			return func() { m.outB = was }
+			undoR := dropStoredDense(m, jlm.RoleOutputBias)
+			return func() { undoR(); m.outB = was }
 		}},
 		{"no LongRoPE short factors", func(m *Model) func() {
 			was := m.rope.Freqs

@@ -418,7 +418,10 @@ func routerViolations(m *Model) []c6Violation {
 // mtpInTrunk runs the prediction blocks as more trunk blocks: what a converter
 // that did not set them aside would hand the engine.
 func mtpInTrunk(m *Model) func() {
-	return cfgMut(m, func(c *Config) { c.NLayer, c.NMTP = c.NLayer+c.NMTP, 0 })
+	undoC := cfgMut(m, func(c *Config) { c.NLayer, c.NMTP = c.NLayer+c.NMTP, 0 })
+	undoR := dropStored(m, jlm.RoleNextnEHProj, jlm.RoleNextnENorm, jlm.RoleNextnHNorm, jlm.RoleNextnHeadNorm,
+		jlm.RoleNextnHead, jlm.RoleNextnEmbd)
+	return func() { undoR(); undoC() }
 }
 
 // TestMoEFamiliesMatchTransformers holds each mixture family to transformers'

@@ -244,7 +244,10 @@ func noNormBiases(m *Model) func() {
 func rmsForLayerNorm(m *Model) func() {
 	undoC := cfgMut(m, func(c *Config) { c.LayerNorm = false })
 	undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
-	return func() { undoR(); undoC() }
+	undoD := dropStoredDense(m, jlm.RoleOutputNormBias)
+	was := m.outNormB
+	m.outNormB = nil
+	return func() { m.outNormB = was; undoD(); undoR(); undoC() }
 }
 
 // noFFNBiases takes an ungated FFN's two biases away, in the layers and as
@@ -353,6 +356,32 @@ func dropStored(m *Model, roles ...jlm.Role) func() {
 	})
 }
 
+// dropStoredDense is dropStored for the model-wide tensors (the head's),
+// over whatever the front end already reads in place of the container's.
+func dropStoredDense(m *Model, roles ...jlm.Role) func() {
+	fr := &m.front
+	fr.mu.Lock()
+	was := fr.restate
+	fr.restate = func(block int32, inv map[jlm.Role]graph.Shape) {
+		if was != nil {
+			was(block, inv)
+		}
+		if block == jlm.DenseBlock {
+			for _, r := range roles {
+				delete(inv, r)
+			}
+		}
+	}
+	fr.restated++
+	fr.mu.Unlock()
+	return func() {
+		fr.mu.Lock()
+		fr.restate = was
+		fr.restated++
+		fr.mu.Unlock()
+	}
+}
+
 // noQKVBias, noPostAttnNorm and noPostFFNNorm are blocks without those
 // tensors, in the model's layers and as the composer reads them.
 func noQKVBias(m *Model) func() {
@@ -386,21 +415,25 @@ func cfgMut(m *Model, f func(c *Config)) func() {
 // it and TestC6MatchesTransformers certifies nothing about it.
 var c6Violations = map[string][]c6Violation{
 	"synth-phi2": {
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
-		{"no attn_norm bias", func(m *Model) func() { return eachLayer(m, func(l *layer) { l.attnNormB = nil }) }},
-		{"no FFN biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.upB, l.downB = nil, nil })
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
+		{"no attn_norm bias", func(m *Model) func() {
+			undoL := eachLayer(m, func(l *layer) { l.attnNormB = nil })
+			undoR := dropStored(m, jlm.RoleAttnNormBias)
+			return func() { undoR(); undoL() }
 		}},
+		{"no FFN biases", noFFNBiases},
 		{"no q/k/v biases", noQKVBias},
 		{"no head bias", func(m *Model) func() {
 			was := m.outB
 			m.outB = nil
-			return func() { m.outB = was }
+			undoR := dropStoredDense(m, jlm.RoleOutputBias)
+			return func() { undoR(); m.outB = was }
 		}},
 		{"no output norm bias", func(m *Model) func() {
 			was := m.outNormB
 			m.outNormB = nil
-			return func() { m.outNormB = was }
+			undoR := dropStoredDense(m, jlm.RoleOutputNormBias)
+			return func() { undoR(); m.outNormB = was }
 		}},
 		{"serial residual", func(m *Model) func() {
 			undo := cfgMut(m, func(c *Config) { c.Parallel = false })
@@ -412,58 +445,58 @@ var c6Violations = map[string][]c6Violation{
 	"synth-starcoder": {
 		{"no position table", noPosTable},
 		{"rotary instead of none", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPosEnc = false }) }},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"no norm biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
+			undoL := eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
+			undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
+			return func() { undoR(); undoL() }
 		}},
-		{"no FFN biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.upB, l.downB = nil, nil })
-		}},
+		{"no FFN biases", noFFNBiases},
 		{"no k/v biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bk, l.bv = nil, nil })
+			undoL := eachLayer(m, func(l *layer) { l.bk, l.bv = nil, nil })
+			undoR := dropStored(m, jlm.RoleAttnKBias, jlm.RoleAttnVBias)
+			return func() { undoR(); undoL() }
 		}},
 	},
 	"synth-stablelm": {
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
 		{"NORM rotary for NEOX", hostNormRotary},
 		{"no q/k/v biases", noQKVBias},
 	},
 	"synth-stablelm-par": {
 		{"serial residual", serialFromShared},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 	},
 	"synth-starcoder2": {
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
 		{"NORM rotary for NEOX", hostNormRotary},
-		{"no FFN biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.upB, l.downB = nil, nil })
+		{"no FFN biases", noFFNBiases},
+		{"no o bias", func(m *Model) func() {
+			undoL := eachLayer(m, func(l *layer) { l.bo = nil })
+			undoR := dropStored(m, jlm.RoleAttnOutBias)
+			return func() { undoR(); undoL() }
 		}},
-		{"no o bias", func(m *Model) func() { return eachLayer(m, func(l *layer) { l.bo = nil }) }},
 	},
 	"synth-falcon": {
 		{"serial residual", serialFromShared},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"NORM rotary for NEOX", hostNormRotary},
 	},
 	"synth-falcon40": {
 		{"the two norms swapped", swapNorms},
-		{"one norm for both branches", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.ffnNorm, l.ffnNormB = nil, nil })
-		}},
+		{"one norm for both branches", oneNormForBoth},
 	},
 	"synth-nemotron": {
 		{"GELU for relu2", actSwap(nn.ActGELU)},
 		{"LayerNorm1p's 1 added again", onePlusAgain},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"NORM rotary for NEOX", hostNormRotary},
-		{"no FFN biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.upB, l.downB = nil, nil })
-		}},
+		{"no FFN biases", noFFNBiases},
 	},
 	"synth-commandr": {
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"serial residual", serialFromShared},
 		{"NEOX rotary for NORM", hostNeoxRotary},
 		{"no logit scale", logitScale},
@@ -471,7 +504,7 @@ var c6Violations = map[string][]c6Violation{
 	"synth-dbrx": {
 		{"no clip_qkv", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV = 0 }) }},
 		{"clip_qkv at twice its value", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV *= 2 }) }},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"NORM rotary for NEOX", hostNormRotary},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })

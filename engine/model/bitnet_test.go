@@ -180,10 +180,14 @@ func TestBitNetMatchesTransformers(t *testing.T) {
 // nothing about it.
 var bitnetViolations = []c6Violation{
 	{"no attention inner norm", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) { l.attnSubNorm = nil })
+		undoL := eachLayer(m, func(l *layer) { l.attnSubNorm = nil })
+		undoR := dropStored(m, jlm.RoleAttnSubNorm)
+		return func() { undoR(); undoL() }
 	}},
 	{"no FFN inner norm", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) { l.ffnSubNorm = nil })
+		undoL := eachLayer(m, func(l *layer) { l.ffnSubNorm = nil })
+		undoR := dropStored(m, jlm.RoleFFNSubNorm)
+		return func() { undoR(); undoL() }
 	}},
 	{"SiLU for relu2", actSwap(nn.ActSiLU)},
 	{"NORM rotary", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
