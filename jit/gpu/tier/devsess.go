@@ -608,6 +608,12 @@ func (g *devTier) cloneLane() (*lane, bool) {
 		g.dropLane(nl)
 		return nil, false
 	}
+	// Lane0's parts first, so the widths below find their forms and take
+	// only their instances.
+	if err := g.cloneParts(nl); err != nil {
+		g.LastErr = "a lane's composed parts: " + err.Error()
+		return fail()
+	}
 	sets := map[geoKey]geomSet{l0.geoCur: {bs: l0.bs, bbs: l0.bbs, promptW: l0.promptW, stepW: l0.stepW}}
 	for k, s := range l0.geoSets {
 		sets[k] = s
@@ -649,10 +655,6 @@ func (g *devTier) cloneLane() (*lane, bool) {
 			return fail()
 		}
 		nl.argmaxOut = b
-	}
-	if err := g.cloneParts(nl); err != nil {
-		g.LastErr = "a lane's composed parts: " + err.Error()
-		return fail()
 	}
 	return nl, true
 }

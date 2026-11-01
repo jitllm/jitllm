@@ -327,6 +327,9 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 		}
 		// Last, blocks stream to make the room (streamForRoom): weights read
 		// again every token, where history read again in passes could not.
+		if err != nil {
+			g.LastErr = "KV growth: " + err.Error()
+		}
 		if err != nil && !g.evictForRoom(sid, kp, l, count) {
 			if !errors.Is(err, ErrKVCapacity) || g.asking || !g.streamForRoom(kp.pageBytes(l)*uint64(want-l.n)) {
 				return err
