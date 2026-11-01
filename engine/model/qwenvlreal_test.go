@@ -225,11 +225,10 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 }
 
 // TestQwenVLWindowsSurviveQueryChunks runs Qwen2.5-VL-3B's tower on its
-// largest picture, whose score planes pass a device's vision budget, so every
-// block's attention runs in query chunks (tier.Stats.VisionAttnChunks) and
-// each chunk masks with its own rows' windows. The device is held to the host,
-// which never chunks; the violation is windows as wide as the image on the
-// device.
+// largest picture with every block's call served by the composer, each row
+// masked to its window of the picture, and its scratch under the picture's
+// score plane. The device is held to the host; the violation is windows as
+// wide as the image on the device.
 func TestQwenVLWindowsSurviveQueryChunks(t *testing.T) {
 	text := testmodels.Path("Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf")
 	proj := testmodels.Path("mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf")
@@ -278,12 +277,19 @@ func TestQwenVLWindowsSurviveQueryChunks(t *testing.T) {
 			}
 			defer gpu.Close()
 			ran++
-			before := gpu.Stats().VisionAttnChunks
+			s0, d0, _ := gpu.Stats().ServedPart(tier.ComposedTower)
 			got, placed := encode(gpu)
-			chunks := gpu.Stats().VisionAttnChunks - before
-			if chunks == 0 {
-				t.Fatalf("%d of %d tower blocks placed and no attention ran in query chunks: "+
-					"this arm proved nothing", placed, tw.Cfg.NLayer)
+			s1, d1, _ := gpu.Stats().ServedPart(tier.ComposedTower)
+			chunks := s1 - s0
+			if chunks == 0 || d1 != d0 {
+				t.Fatalf("%d of %d tower blocks placed, the composer served %d of their calls and declined %d: "+
+					"this arm proved nothing", placed, tw.Cfg.NLayer, chunks, d1-d0)
+			}
+			// The picture's score plane, every head's rows by rows, is what
+			// a form that attends in one pass of scores would hold.
+			plane := uint64(4 * tw.Cfg.NHead * tw.Cfg.Seq() * tw.Cfg.Seq())
+			if sb := gpu.Stats().ScratchBytes; sb >= plane {
+				t.Errorf("the device holds %d bytes of scratch, at least the picture's %d-byte score plane", sb, plane)
 			}
 			clean, _ := nmse32(want, got)
 			was := tw.Cfg.WinSize
@@ -291,8 +297,9 @@ func TestQwenVLWindowsSurviveQueryChunks(t *testing.T) {
 			wide, _ := encode(gpu)
 			tw.Cfg.WinSize = was
 			bad, _ := nmse32(want, wide)
-			t.Logf("%dx%d picture, %d of %d tower blocks placed, %d query chunks: NMSE %.3e against the host; "+
-				"windows as wide as the image %.3e", side, side, placed, tw.Cfg.NLayer, chunks, clean, bad)
+			t.Logf("%dx%d picture, %d of %d tower blocks placed, %d composed calls, %d bytes of scratch against a %d-byte score plane: "+
+				"NMSE %.3e against the host; windows as wide as the image %.3e", side, side, placed, tw.Cfg.NLayer, chunks,
+				gpu.Stats().ScratchBytes, plane, clean, bad)
 			if math.IsNaN(clean) || clean > 2e-2 {
 				t.Errorf("the chunked tower reads %.3e against the host", clean)
 			}
