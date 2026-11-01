@@ -2530,6 +2530,13 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 			}
 		}
 	}
+	// The composer is the only path: it serves every part, whatever a
+	// caller asks.
+	if cfg.Composed != ComposedStep {
+		closeAll()
+		return nil, fmt.Errorf("tier: Config.Composed is %#x: the composer is the only path and serves every part (ComposedStep, %#x)",
+			uint(cfg.Composed), uint(ComposedStep))
+	}
 	if len(slots) == 0 {
 		return nil, fmt.Errorf("tier: no devices")
 	}
