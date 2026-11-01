@@ -37,6 +37,7 @@ const (
 	UncoveredStreams
 	UncoveredRopeAxes
 	UncoveredNonCausal
+	UncoveredCentredConv
 	UncoveredTemp
 	UncoveredCompressed
 	UncoveredNGram
@@ -56,19 +57,20 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredExperts:     "routed experts weighted at their input over biased banks, in a latent of their own, or stored one matrix each",
 	UncoveredGeometry: "a value head of another width than the key's, a layer of its own rotary width turned by the model's rotary, " +
 		"or a block reading another's history of another shape than its attention's",
-	UncoveredSelect:     "an attention indexer or sparse key selection",
-	UncoveredStreams:    "several residual streams",
-	UncoveredRopeAxes:   "a rotary over position axes its sections do not state (a pair's halves turned apart)",
-	UncoveredNonCausal:  "non-causal attention",
-	UncoveredTemp:       "an attention temperature whose position offset is not a whole number",
-	UncoveredCompressed: "compressed or grouped attention",
-	UncoveredNGram:      "an n-gram embedding",
-	UncoveredAct:        "an activation the container does not state, or not over the block's operands",
-	UncoveredPooling:    "a pooled head (an embedding model's)",
-	UncoveredEmbedRows:  "input rows beyond the token's row, a scale and a position table",
-	UncoveredClamp:      "linears clamped to stored bounds",
-	UncoveredUnbound:    "stored tensors its graph does not bind",
-	UncoveredUnverified: "a graph that does not verify",
+	UncoveredSelect:      "an attention indexer or sparse key selection",
+	UncoveredStreams:     "several residual streams",
+	UncoveredRopeAxes:    "a rotary over position axes its sections do not state (a pair's halves turned apart)",
+	UncoveredNonCausal:   "non-causal attention",
+	UncoveredCentredConv: "a centred short convolution, which the call's runs cut",
+	UncoveredTemp:        "an attention temperature whose position offset is not a whole number",
+	UncoveredCompressed:  "compressed or grouped attention",
+	UncoveredNGram:       "an n-gram embedding",
+	UncoveredAct:         "an activation the container does not state, or not over the block's operands",
+	UncoveredPooling:     "a pooled head (an embedding model's)",
+	UncoveredEmbedRows:   "input rows beyond the token's row, a scale and a position table",
+	UncoveredClamp:       "linears clamped to stored bounds",
+	UncoveredUnbound:     "stored tensors its graph does not bind",
+	UncoveredUnverified:  "a graph that does not verify",
 }
 
 func (u Uncovered) String() string {
@@ -422,9 +424,8 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 	switch {
 	case c.Streams() > 1 && !c.statesStreams():
 		return UncoveredStreams
-	case c.NonCausal && c.mixerAt(li) != mixNone:
-		// A recurrent or convolution mixer reading both ways.
-		return UncoveredNonCausal
+	case c.CentredConv && c.mixerAt(li) == mixShortConv:
+		return UncoveredCentredConv
 	case c.NGramAt(li):
 		return UncoveredNGram
 	case m.container.Config().ActAt(li) == nil:

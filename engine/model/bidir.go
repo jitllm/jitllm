@@ -41,7 +41,7 @@ func (s *State) bidirStart(pos int) int {
 // every block's, or the sliding blocks' alone where the model's image rows
 // see each other on those (Config.BidirSWA).
 func (s *State) runsAt(li int) bool {
-	return len(s.bidir) > 0 && (!s.c.BidirSWA || s.c.SWA(li))
+	return len(s.bidir) > 0 && s.c.LayerKind(li).Attends() && (!s.c.BidirSWA || s.c.SWA(li))
 }
 
 // bidirChunk is a chunk's row count n, starting at position p0, moved so no

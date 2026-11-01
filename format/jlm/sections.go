@@ -469,6 +469,11 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if err := ngramValid(c); err != nil {
 		return nil, err
 	}
+	// The LFM2.5-Encoder trunk's convolution is centred; a container written
+	// before that was stated would read as a causal one.
+	if c.Arch == ArchLFM2Enc && !c.Flags2.Has(Flag2CentredConv) {
+		return nil, fmt.Errorf("jlm: an %v container states its convolution centred (Flag2CentredConv), and this one does not: convert it again", c.Arch)
+	}
 	// One kind per layer or none at all: a short array would leave the tail
 	// reading as LayerNone, and the graph would run nothing for those layers.
 	if n := len(c.LayerKinds); n != 0 && uint32(n) != c.NLayer {

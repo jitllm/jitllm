@@ -96,6 +96,7 @@ func d1OmniConfig(f *meta.File, head uint32) (*jlm.Config, error) {
 	c.NCtx = uint32(f.UintKey("decision.max_length", 16384))
 	c.Arch = jlm.ArchLFM2Enc
 	c.Flags |= jlm.FlagNonCausal
+	c.Flags2 |= jlm.Flag2CentredConv
 	return c, nil
 }
 
