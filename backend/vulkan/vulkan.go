@@ -183,6 +183,7 @@ type Ctx struct {
 	cores      int
 	coresFrom  string
 	threadRegs int
+	slots      int
 	inst       Instance
 	phys       PhysDevice
 	dev        Device
@@ -369,7 +370,7 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		return nil, err
 	}
 	c.sg = readSubgroups(c.phys, pick.apiVer, hasSizeCtl)
-	c.cores, c.coresFrom, c.threadRegs = readCores(c.phys, pick.apiVer)
+	c.cores, c.coresFrom, c.threadRegs, c.slots = readCores(c.phys, pick.apiVer)
 	c.sg.Off, c.sg.Forced = subgroupEnv(cfg)
 
 	// The tile features are likewise read before the device is made and

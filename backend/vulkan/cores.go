@@ -50,13 +50,19 @@ type amdCoreProps struct {
 	vgprAllocationGranularity uint32
 }
 
+// nvWarp is an NVIDIA warp's threads, which VK_NV_shader_sm_builtins counts
+// its residency in (shaderWarpsPerSM; its SubgroupSize builtin is 32).
+const nvWarp = 32
+
 // readCores asks the two vendor extensions for the compute-unit count; 0 and
 // an empty source when neither answers. VK_AMD_shader_core_properties states
 // a SIMD's registers and its most resident waves too, and regs is a lane's
 // share of them at that occupancy; VK_NV_shader_sm_builtins states none.
-func readCores(p PhysDevice, apiVer uint32) (cores int, from string, regs int) {
+// slots is the threads the device holds resident, each extension's units
+// times its most resident threads a unit, 0 where it does not say.
+func readCores(p PhysDevice, apiVer uint32) (cores int, from string, regs, slots int) {
 	if apiVer < apiVersionForProps {
-		return 0, "", 0
+		return 0, "", 0, 0
 	}
 	if ok, err := hasExtension(p, extSMBuiltins); err == nil && ok {
 		sp := onHeap[smBuiltinsProps]()
@@ -65,7 +71,7 @@ func readCores(p PhysDevice, apiVer uint32) (cores int, from string, regs int) {
 		vkGetPhysicalDeviceProperties2(p, up(&p2))
 		runtime.KeepAlive(sp)
 		if sp.smCount > 0 {
-			return int(sp.smCount), extSMBuiltins, 0
+			return int(sp.smCount), extSMBuiltins, 0, int(sp.smCount * sp.warpsPerS * nvWarp)
 		}
 	}
 	if ok, err := hasExtension(p, extAMDCoreProps); err == nil && ok {
@@ -78,15 +84,19 @@ func readCores(p PhysDevice, apiVer uint32) (cores int, from string, regs int) {
 			if ap.wavefrontsPerSimd > 0 {
 				regs = int(ap.vgprsPerSimd / ap.wavefrontsPerSimd)
 			}
-			return int(n), extAMDCoreProps, regs
+			return int(n), extAMDCoreProps, regs, int(n * ap.simdPerComputeUnit * ap.wavefrontsPerSimd * ap.wavefrontSize)
 		}
 	}
-	return 0, "", 0
+	return 0, "", 0, 0
 }
 
 // Cores is the device's compute-unit count and the extension that stated it,
 // or 0 and "" when no extension does.
 func (c *Ctx) Cores() (int, string) { return c.cores, c.coresFrom }
+
+// Slots is the threads the device holds resident as a vendor extension
+// states them (readCores), 0 where none does.
+func (c *Ctx) Slots() int { return c.slots }
 
 // ThreadRegisters is a lane's registers when its SIMD holds the most waves it
 // can, as a vendor extension states them, 0 where none does.

@@ -123,10 +123,10 @@ func (v *vkDev) API() string  { return "spirv" }
 // subgroupSize is neither.
 func (v *vkDev) GuaranteedLanes(w int) (bool, string) { return v.c.Subgroups().Guarantees(w) }
 
-// Slots is unknown on Vulkan: VkPhysicalDeviceLimits bounds a workgroup but says
-// nothing about how many the device holds resident. 0 means "use the caller's
-// default".
-func (v *vkDev) Slots() int { return 0 }
+// Slots is what a vendor extension states the device holds resident
+// (vulkan.Ctx.Slots): VkPhysicalDeviceLimits bounds a workgroup but says
+// nothing about residency. 0, "use the caller's default", where none does.
+func (v *vkDev) Slots() int { return v.c.Slots() }
 func (v *vkDev) Close() {
 	v.c.Close()
 	v.release(&ownedDevices)
