@@ -2,8 +2,10 @@ package model
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
@@ -392,8 +394,8 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 				a1, c1 := outside(s1)
 				if a1 != a0 || c1 != c0 {
 					t.Errorf("after the first round trip the device's buffers outside its scratch hold %d B "+
-						"(%+d) and its charges %d B (%+d): a move left a buffer or a charge behind",
-						a1, int64(a1)-int64(a0), c1, int64(c1)-int64(c0))
+						"(%+d) and its charges %d B (%+d): a move left a buffer or a charge behind (moved: %s)",
+						a1, int64(a1)-int64(a0), c1, int64(c1)-int64(c0), statsMoved(s0, s1))
 				}
 				if ds := int64(s1.ScratchBytes) - int64(s0.ScratchBytes); ds != 0 {
 					t.Logf("the first round trip grew the device's own scratch by %d B (%d lone matvec(s) served)",
@@ -494,4 +496,27 @@ func armGoroutines() int {
 	buf := make([]byte, 1<<20)
 	buf = buf[:runtime.Stack(buf, true)]
 	return runtime.NumGoroutine() - bytes.Count(buf, []byte("format/jlm.(*File).startIO.func1("))
+}
+
+// statsMoved names the integer fields of two snapshots that differ, with
+// the change.
+func statsMoved(a, b tier.Stats) string {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	var out []byte
+	for i := range va.NumField() {
+		fa, fb := va.Field(i), vb.Field(i)
+		var d int64
+		switch fa.Kind() {
+		case reflect.Int, reflect.Int64, reflect.Int32:
+			d = fb.Int() - fa.Int()
+		case reflect.Uint, reflect.Uint64, reflect.Uint32, reflect.Uintptr:
+			d = int64(fb.Uint()) - int64(fa.Uint())
+		default:
+			continue
+		}
+		if d != 0 {
+			out = fmt.Appendf(out, "%s %+d; ", va.Type().Field(i).Name, d)
+		}
+	}
+	return string(out)
 }

@@ -968,13 +968,20 @@ func (g *devTier) dropPart(sv *servedPart) {
 	}
 	if sv.f.refs--; sv.f.refs == 0 {
 		// A form over passes keeps the decode scratch's instance in its
-		// prompt map too (streamServed at one row).
+		// prompt map too (streamServed at one row); a split model's sets not
+		// in use hold theirs (geoSets).
 		g.eachLane(func(l *lane) {
-			if l.bs != nil {
-				g.dropPromptInst(l.bs, sv.f)
+			drop := func(bs *blockScratch, bbs map[int]*blockScratch) {
+				if bs != nil {
+					g.dropPromptInst(bs, sv.f)
+				}
+				for _, b := range bbs {
+					g.dropPromptInst(b, sv.f)
+				}
 			}
-			for _, bs := range l.bbs {
-				g.dropPromptInst(bs, sv.f)
+			drop(l.bs, l.bbs)
+			for _, s := range l.geoSets {
+				drop(s.bs, s.bbs)
 			}
 		})
 		delete(g.servedForms, sv.f.key)
