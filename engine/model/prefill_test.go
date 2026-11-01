@@ -103,9 +103,9 @@ func TestPrefillMatchesForward(t *testing.T) {
 		}
 		for _, dev := range stepDevices() {
 			for _, arm := range []struct {
-				name                   string
-				path                   string
-				parts                  tier.Parts
+				name           string
+				path           string
+				parts          tier.Parts
 				mixed, windows bool
 			}{{"composed", llama, parts, false, false}, {"windowed", gemma, parts, false, true},
 				{"tinyllama composed", tiny, parts, false, false}} {

@@ -5,7 +5,6 @@ import (
 	"math"
 	"strings"
 	"testing"
-
 )
 
 // A recurrent block's projections as GEMMs over a prompt chunk (linrows.go)
