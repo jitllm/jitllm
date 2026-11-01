@@ -1849,8 +1849,9 @@ func (g *devTier) callAxes(pos, R int, rag *ragStep) []int32 {
 	return g.ropeAxes[4*off : 4*(off+R)]
 }
 
-// spendAxes drops the caller's rotary positions once a call has run their
-// last row: a later call states its own or none.
+// spendAxes drops the caller's rotary positions once its call has run their
+// last row, at the call's end (layersFor, LayersRows): a later call states
+// its own or none. Callers hold g.mu.
 func (g *devTier) spendAxes(pos, R int, rag *ragStep) {
 	if rag != nil && len(rag.pos) > 0 {
 		pos = rag.pos[0]

@@ -6826,6 +6826,13 @@ func (g *devTier) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float
 	defer v.done()
 	ok := v.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
 	v.dropEmbed()
+	// The rows' rotary positions are the caller's call's: every submission it
+	// is cut into, and every block of it run alone, reads them.
+	if v.depth == 1 {
+		v.mu.Lock()
+		v.spendAxes(pos, n, nil)
+		v.mu.Unlock()
+	}
 	return ok
 }
 
@@ -7854,7 +7861,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	case bs.cs != nil:
 		g.RopeTableUploads += R
 	}
-	g.spendAxes(pos, rrows, rag)
 
 	// Retire recordings before the session opens: freeing one is a driver call
 	// that cannot nest inside a session. See dropGraph.
