@@ -1052,13 +1052,6 @@ func (s *State) kvAcc2(fast *nn.AttnSet, li, slot, kvh int, o0, o1, af0, af1 []f
 // path already short of memory. With NoStore a resident-only session pays
 // nothing beyond one no-op call per sealed page.
 
-// sealed reports whether page n of this layer can no longer change. Only the
-// page holding the newest position is mutable; everything behind it is final.
-func (s *kvPages) sealed(n, pos int) bool {
-	cur, _ := s.page(pos)
-	return n < cur
-}
-
 // pageBytes is one page's size in bytes.
 func (s *kvPages) pageBytes() uint64 { return uint64(s.pp) * 4 }
 
@@ -2327,11 +2320,6 @@ func (kc *kvCache) aliasPage(li, n int, key string) bool {
 	}
 	return true
 }
-
-// kvChunkProbes is the same set read backwards: the fills a restore asks for,
-// largest first, so an identical prompt hits on the first question and a shared
-// prefix on the next few: one Get per chunk, stopping at the first hit.
-func kvChunkProbes(max int) []int { return appendProbes(nil, max, kvChunk) }
 
 // appendProbes is kvChunkProbes into dst, at step: max, then every multiple
 // of step below it, largest first; a step of zero is max alone. A hybrid

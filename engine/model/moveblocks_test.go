@@ -248,31 +248,6 @@ func (s *State) placedOn(name string) []int {
 	return out
 }
 
-// moveAll moves the blocks to the named device, a KV-sharing group whole,
-// failing the test on an error.
-func (s *State) moveAll(t *testing.T, from, to string, blocks []int) BlockMove {
-	t.Helper()
-	var all BlockMove
-	done := map[int]bool{}
-	for _, li := range blocks {
-		lo, hi := s.kvSpan(li)
-		if done[lo] {
-			continue
-		}
-		done[lo] = true
-		mv, err := s.MoveBlocks(lo, hi, to)
-		if err != nil {
-			t.Fatalf("%s -> %s, blocks %d..%d: %v", from, to, lo, hi-1, err)
-		}
-		all.Moved = append(all.Moved, mv.Moved...)
-		all.Declined = append(all.Declined, mv.Declined...)
-		all.KVBytes += mv.KVBytes
-		all.RecBytes += mv.RecBytes
-		all.Path, all.Head = mv.Path, all.Head || mv.Head
-	}
-	return all
-}
-
 // TestBlocksMoveToADeviceAddedLater: a tier opened on one card takes a second
 // mid-sequence (tier.GPU.AddDevices), the blocks move onto it and back with
 // their history, and the logits stay in the band of a run that never moved --

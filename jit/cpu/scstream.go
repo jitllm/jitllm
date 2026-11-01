@@ -50,13 +50,6 @@ func scField[R comparable](o scOps[R], dst, cur, tmp R, sn int, min bool, next f
 	}
 }
 
-// scNeedsNext reports whether field (sn, min) reads the word after the
-// cursor's.
-func scNeedsNext(sn int, min bool) bool {
-	w, _, hi := kernels.ScField(sn, min)
-	return hi > 0 || w != scCursorWord(sn)
-}
-
 // avxSC is scOps on AVX2.
 func avxSC(a *Buf) scOps[Reg] {
 	return scOps[Reg]{shl: a.VPSLLD, shr: a.VPSRLD, or: a.VPOR}

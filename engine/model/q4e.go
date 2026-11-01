@@ -533,15 +533,6 @@ func (c *Config) q4eSigmoidGate() bool {
 	return c.DeltaSigmoidGate && c.q4eFault != q4eFaultSiLUGate
 }
 
-// f32Ones is n ones.
-func f32Ones(n int) []float32 {
-	v := make([]float32, n)
-	for i := range v {
-		v[i] = 1
-	}
-	return v
-}
-
 // invSqrt is 1/sqrt(n) as a float32.
 func invSqrt(n int) float32 { return float32(1 / math.Sqrt(float64(n))) }
 

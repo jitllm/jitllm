@@ -1017,11 +1017,6 @@ func LayerNormApplyRows(k, parts int, eps float32, bias bool, rows int) (*ir.Ker
 	return b.Done()
 }
 
-// layerNormMean re-sums the partials and divides by k.
-func layerNormMean(b *ir.Builder, pSum ir.Value, parts, k int) ir.Value {
-	return layerNormMeanAt(b, pSum, b.Const(ir.U32, 0), parts, k)
-}
-
 // layerNormMeanAt is layerNormMean for one row of a batch: base is that row's
 // first partial. Reading row 0's for every row normalises every patch by the
 // first patch's statistics, which is fluent and wrong.

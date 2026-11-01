@@ -384,14 +384,6 @@ func (e *Embedder) mbEncode(ids []int32) error {
 	return nil
 }
 
-// attend writes softmax(q k^T * scale) v into out for n query rows of nh
-// heads of hd, on set's kernels: row i reads keys [i-w, i+w] cut to [0,
-// keys) -- a window, or every key where w is keys. k and v are rows of the
-// residual's width.
-func (e *Embedder) attend(set *nn.AttnSet, out, q, k, v []float32, n, keys, w, nh, hd int, scale float32) {
-	e.attendSeqs(set, out, q, k, v, n, keys, w, nh, hd, scale, nil, nil)
-}
-
 // attendSeqs is attend over packed sequences: query i is row qpos[i] of
 // sequence qseq[i] and reads that sequence's keys inside its window. nil
 // qseq is one sequence, query i at row i.

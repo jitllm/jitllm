@@ -93,19 +93,6 @@ func (g *devTier) evictVictim(sid uint64, kp *kvPool) (seqID, bool) {
 	return best, found
 }
 
-// stepping reports that session other is in a call on this device -- its
-// pages taken and its table staged for a submission that has not completed --
-// and is not self, whose own call is the one asking. Its pages are not
-// evicted under it: the submission would read the dummy page where its
-// history was. Callers hold g.mu.
-func (g *devTier) stepping(other, self uint64) bool {
-	if other == self {
-		return false
-	}
-	ds := g.sess[other]
-	return ds != nil && ds.cur != nil
-}
-
 // evictableIn is how many pages eviction could free in layer l: every page
 // of every sequence evictVictim may choose, counted where it is spare in
 // every layer that holds it.

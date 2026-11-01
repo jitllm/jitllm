@@ -32,9 +32,6 @@ import (
 // 0); a step of several sequences reads the run descriptor below, whose
 // first words are these.
 
-// RecDescWords is the descriptor's length for seqs sequences, in u32 words.
-func RecDescWords(seqs int) int { return 1 + 2*seqs }
-
 // slotIn and slotOut read sequence j's slots from the descriptor.
 func slotIn(b *ir.Builder, pN, j ir.Value) ir.Value {
 	return b.Load(ir.U32, pN, b.Add(ir.U32, j, j), 1)

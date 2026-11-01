@@ -242,9 +242,6 @@ func packSub(qs []uint32, q []int32, qi qinfo, si, nrows, r int) {
 // a byte's fields are (packSub).
 func Fields(qi qinfo) int { return 8 / qi.bits }
 
-// FieldsOf is Fields for a format, for an emitter.
-func FieldsOf(q Quant) int { return Fields(q.info()) }
-
 // extract pulls one sub-block's integer quants out of a GGUF block, along with
 // the raw f16 bits of its super-scale and the integer per-sub-block scale.
 // It is the only place any format's bit layout is known.
@@ -451,8 +448,6 @@ func q3kScale(b []byte, s int) int8 {
 // F16 decodes an IEEE half, delegating to quant.DecodeHalf (one decoder; a
 // hand-written copy here once mishandled subnormals).
 func F16(u uint16) float32 { return float32(quant.DecodeHalf(u)) }
-
-func f16(u uint16) float32 { return F16(u) }
 
 // NarrowScales reports whether d is the scale: one scale per 32-wide block and
 // no per-sub-block one (Q4_0, Q5_0, Q5_1, Q8_0 and MXFP4). How many rows share

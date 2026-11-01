@@ -86,20 +86,6 @@ func (p *kvPagePool) put(kc *kvCache) {
 	}
 }
 
-// give takes one page back from a live session: the one a SharedStore
-// replaced with its own copy of the same bytes (kvCache.publishSealed).
-func (p *kvPagePool) give(b []float32) {
-	if p == nil || b == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.free == nil {
-		p.free = map[int][][]float32{}
-	}
-	p.keep(b, len(b))
-}
-
 // keep adds one page while the pool is under its limit. Callers hold p.mu.
 func (p *kvPagePool) keep(b []float32, pp int) {
 	if b == nil || len(b) != pp || p.bytes+4*uint64(pp) > p.limit {

@@ -61,9 +61,6 @@ func (l kvLayout) elemTag() string {
 	return "4"
 }
 
-// rowBytes is one head row's bytes at this layout's format.
-func (l kvLayout) rowBytes() int { return cpu.KVRowBytes(l.fmt, l.headDim) }
-
 func (l kvLayout) kvDim() int { return l.nKV * l.headDim }
 
 // Stride is the element distance between one head's consecutive positions, and

@@ -1224,13 +1224,6 @@ func (s *State) bswaTable(n, nrot int) []float32 {
 	return s.bcsSWA[:n*nrot]
 }
 
-func (s *State) bswaTableAt(i, nrot int) []float32 {
-	if s.bcsSWA == nil {
-		return nil
-	}
-	return s.bcsSWA[i*nrot : i*nrot+nrot]
-}
-
 // hostRows runs block li on the host for n rows of one sequence -- slot's,
 // positions p0.. -- reading and writing the residual in s.bx: the block body
 // prefill runs for a chunk, and the one a vision segment runs for an image

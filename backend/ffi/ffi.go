@@ -233,11 +233,6 @@ func Fn8[R any, A0 any, A1 any, A2 any, A3 any, A4 any, A5 any, A6 any, A7 any](
 	return bind8[R, A0, A1, A2, A3, A4, A5, A6, A7](prep(l, name, descOf[R](), descOf[A0](), descOf[A1](), descOf[A2](), descOf[A3](), descOf[A4](), descOf[A5](), descOf[A6](), descOf[A7]()))
 }
 
-// Fn9 binds a C function of 9 argument(s).
-func Fn9[R any, A0 any, A1 any, A2 any, A3 any, A4 any, A5 any, A6 any, A7 any, A8 any](l *Lib, name string) func(A0, A1, A2, A3, A4, A5, A6, A7, A8) R {
-	return bind9[R, A0, A1, A2, A3, A4, A5, A6, A7, A8](prep(l, name, descOf[R](), descOf[A0](), descOf[A1](), descOf[A2](), descOf[A3](), descOf[A4](), descOf[A5](), descOf[A6](), descOf[A7](), descOf[A8]()))
-}
-
 // Fn10 binds a C function of 10 argument(s).
 func Fn10[R any, A0 any, A1 any, A2 any, A3 any, A4 any, A5 any, A6 any, A7 any, A8 any, A9 any](l *Lib, name string) func(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9) R {
 	return bind10[R, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9](prep(l, name, descOf[R](), descOf[A0](), descOf[A1](), descOf[A2](), descOf[A3](), descOf[A4](), descOf[A5](), descOf[A6](), descOf[A7](), descOf[A8](), descOf[A9]()))
@@ -660,55 +655,6 @@ type frame9[R any, A0 any, A1 any, A2 any, A3 any, A4 any, A5 any, A6 any, A7 an
 	a7 A7
 	a8 A8
 	ps [9]unsafe.Pointer
-}
-
-func (f *frame9[R, A0, A1, A2, A3, A4, A5, A6, A7, A8]) init() {
-	f.ps = [9]unsafe.Pointer{unsafe.Pointer(&f.a0), unsafe.Pointer(&f.a1), unsafe.Pointer(&f.a2), unsafe.Pointer(&f.a3), unsafe.Pointer(&f.a4), unsafe.Pointer(&f.a5), unsafe.Pointer(&f.a6), unsafe.Pointer(&f.a7), unsafe.Pointer(&f.a8)}
-}
-
-// clear drops the values so a parked frame holds no caller pointer.
-func (f *frame9[R, A0, A1, A2, A3, A4, A5, A6, A7, A8]) clear() {
-	var zr R
-	f.r = zr
-	var z0 A0
-	f.a0 = z0
-	var z1 A1
-	f.a1 = z1
-	var z2 A2
-	f.a2 = z2
-	var z3 A3
-	f.a3 = z3
-	var z4 A4
-	f.a4 = z4
-	var z5 A5
-	f.a5 = z5
-	var z6 A6
-	f.a6 = z6
-	var z7 A7
-	f.a7 = z7
-	var z8 A8
-	f.a8 = z8
-}
-
-func bind9[R any, A0 any, A1 any, A2 any, A3 any, A4 any, A5 any, A6 any, A7 any, A8 any](p *prepared) func(A0, A1, A2, A3, A4, A5, A6, A7, A8) R {
-	s := newFrames[frame9[R, A0, A1, A2, A3, A4, A5, A6, A7, A8]]()
-	return func(a0 A0, a1 A1, a2 A2, a3 A3, a4 A4, a5 A5, a6 A6, a7 A7, a8 A8) R {
-		f, i := take(s)
-		f.a0 = a0
-		f.a1 = a1
-		f.a2 = a2
-		f.a3 = a3
-		f.a4 = a4
-		f.a5 = a5
-		f.a6 = a6
-		f.a7 = a7
-		f.a8 = a8
-		p.call(unsafe.Pointer(&f.r), f.ps[:])
-		r := f.r
-		f.clear()
-		s.release(i)
-		return r
-	}
 }
 
 type frame10[R any, A0 any, A1 any, A2 any, A3 any, A4 any, A5 any, A6 any, A7 any, A8 any, A9 any] struct {

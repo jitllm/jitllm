@@ -644,32 +644,6 @@ func (n *Kernel) Homes() []int {
 	return out
 }
 
-// reachesFold reports whether node i reads fold f.
-func (n *Kernel) reachesFold(i, f int) bool {
-	seen := map[int]bool{}
-	var walk func(i int) bool
-	walk = func(i int) bool {
-		if i == f {
-			return true
-		}
-		if seen[i] {
-			return false
-		}
-		seen[i] = true
-		nd := n.Nodes[i]
-		if nd.Op == OpFold {
-			return false
-		}
-		for _, a := range n.Operands(&nd) {
-			if walk(*a) {
-				return true
-			}
-		}
-		return false
-	}
-	return walk(i)
-}
-
 // depth is the length of the longest chain of operations node i is made
 // from, a sum and a leaf 0; an fma multiplying an fma only it reads (a
 // Horner step) adds none, as it needs no register more. A node made

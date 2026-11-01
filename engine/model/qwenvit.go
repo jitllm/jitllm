@@ -149,13 +149,6 @@ func (s *State) patchAt(r int) int {
 	return s.vis.ord[r]
 }
 
-// windowed reports whether block li attends inside windows: every block but
-// each WinPattern'th (llama.cpp: full when (il+1) % n_wa_pattern == 0).
-func (s *State) windowed(li int) bool {
-	p := s.vis.t.Cfg.WinPattern
-	return p > 0 && (li+1)%p != 0
-}
-
 // windowOrder lays a gh x gw patch grid out in window order: windows of
 // WinSize pixels (WinSize/PatchSz/Scale merge units on a side) row-major over
 // the merged grid, the merge units inside a window row-major, each unit's

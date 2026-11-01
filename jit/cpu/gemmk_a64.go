@@ -424,21 +424,6 @@ func a64KUnpackKonsts(t quant.Type, zero byte) []byte {
 	return nil
 }
 
-// inlineKonst is the GEMM's behaviour: materialise into scratch at each use.
-func inlineKonst(a *A64, scratch VReg) a64Konst {
-	return func(imm byte) VReg {
-		a.MOVI16b(scratch, imm)
-		return scratch
-	}
-}
-
-// emitA64KUnpack lays `sub` weight elements of one row's sub-block s into
-// consecutive registers starting at wdst, as signed bytes with the format's zero
-// point already removed, so SDOT can consume them directly.
-func (a *A64) emitA64KUnpack(t quant.Type, w XReg, qsBase, s, sub int32, zero byte, wdst, t0, t1, t2 VReg) {
-	a.emitA64KUnpackK(t, w, qsBase, s, sub, zero, wdst, t1, inlineKonst(a, t0), inlineKonst(a, t2))
-}
-
 func (a *A64) emitA64KUnpackK(t quant.Type, w XReg, qsBase, s, sub int32, zero byte, wdst, t1 VReg, kLo, kHi a64Konst) {
 	switch t {
 	case quant.Q6_K:

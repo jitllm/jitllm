@@ -91,12 +91,6 @@ func (g *devTier) buildTowerScratch(p *nn.LayerPlan) bool {
 	return true
 }
 
-// towerPlanes is the rows a tower scratch for rows rows is built at, and the
-// bytes of its score planes: initScratch's arithmetic, without building it.
-func (g *devTier) towerPlanes(p *nn.LayerPlan, rows int) (int, int64) {
-	return g.towerPlanesAt(p, rows, rows)
-}
-
 // towerPlanesAt is towerPlanes for a set of rows rows whose score rows are
 // keys wide: a row-chunked set's (LayersPhase), where keys is the picture's.
 func (g *devTier) towerPlanesAt(p *nn.LayerPlan, rows, keys int) (int, int64) {

@@ -169,12 +169,6 @@ func (a *A64) CSETMw(rd XReg, c A64Cond) {
 	a.w(0x5A9F03E0 | uint32(c^1)<<12 | uint32(rd))
 }
 
-// Bcond is b.cond l.
-func (a *A64) Bcond(c A64Cond, l int) { a.branch(0x54000000|uint32(c), 19, l) }
-
-// B is b l.
-func (a *A64) B(l int) { a.branch(0x14000000, 26, l) }
-
 // MOVconst is xd = v for any 64-bit v: a move of the half that sets the
 // most of it, by MOVZ or MOVN, then a MOVK for each half it leaves wrong.
 func (a *A64) MOVconst(rd XReg, v uint64) {

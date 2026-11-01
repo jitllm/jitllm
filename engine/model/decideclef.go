@@ -56,10 +56,6 @@ type clefBlock struct {
 	bUp, bDown         []float32
 }
 
-func (b *clefBlock) weights() []*tensor {
-	return []*tensor{&b.sq, &b.sk, &b.sv, &b.so, &b.cq, &b.ck, &b.cv, &b.co, &b.up, &b.down}
-}
-
 // clefHead is the joint schema head's weights.
 type clefHead struct {
 	hidW, hidB                  []float32
@@ -77,14 +73,6 @@ type clefHead struct {
 	// it: a LayerNorm with its bias, or (outLN false) an RMSNorm.
 	outLN    bool
 	outNormB []float32
-}
-
-func (h *clefHead) weights() []*tensor {
-	ws := []*tensor{&h.pMem, &h.pQ, &h.pOQ, &h.pG, &h.pOC, &h.pOL, &h.sc}
-	for i := range h.blocks {
-		ws = append(ws, h.blocks[i].weights()...)
-	}
-	return ws
 }
 
 // clefLoad reads Clef's head from the container, once per model.

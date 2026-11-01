@@ -287,9 +287,3 @@ func errStr(r CUresult) string {
 	}
 	return fmt.Sprintf("%s (CUresult=%d)", string(b), r)
 }
-
-func ck(r CUresult, what string) {
-	if r != 0 {
-		panic(fmt.Sprintf("%s failed: %s", what, errStr(r)))
-	}
-}

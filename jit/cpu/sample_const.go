@@ -1,7 +1,5 @@
 package cpu
 
-import "fmt"
-
 // The sampler's kernels: the shape rules and the scratch layout all three tiers
 // read. sample.go is the AVX2 tier, sse_sample.go the legacy-SSE one and
 // sample_a64.go NEON.
@@ -9,11 +7,6 @@ import "fmt"
 // They read MoETopKConsts() rather than a block of their own: the index
 // vector, the integer steps, INT_MAX, -Inf and the NaN filler are all there,
 // and one copy of a layout cannot drift.
-
-// sampleShapeErr is what every tier answers for a shape outside the contract.
-func sampleShapeErr(what string, n int) error {
-	return fmt.Errorf("jit: sampler %s: %d elements (want >= 1)", what, n)
-}
 
 // SampleSegLen is the segment length the ordering runs at, for a vocabulary of
 // n logits.

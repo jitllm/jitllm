@@ -3,26 +3,7 @@ package cpu
 import (
 	"errors"
 	"testing"
-
-	"github.com/jitllm/jitllm/format/quant"
 )
-
-// requireRowMajorExec skips a gate that emits and then runs a row-major kernel
-// on a CPU that cannot execute one. The emitters are host-pure (so cross-arch
-// disassembly gates can exist), so emitter success is not permission to call
-// the code. SupportedNative is the question nn asks, and keying on it rather
-// than GOARCH keeps the gate live wherever the path is.
-func requireRowMajorExec(t testing.TB, qt quant.Type) {
-	t.Helper()
-	if SupportedNative(qt) {
-		return
-	}
-	t.Skipf("ROW-MAJOR %v CANNOT BE EXECUTED ON THIS HOST (no AVX-VNNI) -- this "+
-		"gate covered nothing here. The emitter still produces the kernel, which "+
-		"is why the disassembly gates beside this one still run; only calling it "+
-		"is unsafe. The row-major family has no pre-VNNI form by decision "+
-		"(native_amd64.go); prevnni.go carries the packed family's AVX2 sequence.", qt)
-}
 
 // requireVNNIHost skips a gate that executes VPDPBUSD directly.
 func requireVNNIHost(t testing.TB) {

@@ -195,8 +195,6 @@ func (f *File) TensorBytes() uint64 {
 	return n
 }
 
-func alignUp(v, a uint64) uint64 { return (v + a - 1) &^ (a - 1) }
-
 // Arch is general.architecture: "llama", "gemma", "bert", ...
 // Every hyperparameter key is namespaced under it.
 func (f *File) Arch() string {

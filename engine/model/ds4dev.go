@@ -82,24 +82,6 @@ func (s *State) collapseStreams(x []float32, n int) error {
 	return s.altCollapse(x, n)
 }
 
-// rowStreams copies row i of a chunk x of n rows, stream-major, into one
-// row's streams (s.rowx), which it returns; back copies them into the chunk.
-func (s *State) rowStreams(x []float32, i, n int, back bool) []float32 {
-	c := s.m.Cfg
-	if len(s.rowx) < c.ResidW() {
-		s.rowx = make([]float32, c.ResidW())
-	}
-	for k := 0; k < c.Streams(); k++ {
-		one := c.stream(s.rowx, k, 1, 0)
-		if back {
-			copy(c.stream(x, k, n, i), one)
-		} else {
-			copy(one, c.stream(x, k, n, i))
-		}
-	}
-	return s.rowx[:c.ResidW()]
-}
-
 // ds4PlanOf is the model's DeepSeek V4 geometry as a device takes it, nil on
 // every other model.
 func ds4PlanOf(c *Config) *nn.DS4Plan {

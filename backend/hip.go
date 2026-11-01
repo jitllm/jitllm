@@ -388,13 +388,6 @@ type hipSession struct {
 	q *hipQueue
 }
 
-func (s *hipSession) stream() *hip.Stream {
-	if s.q == nil {
-		return nil
-	}
-	return s.q.st
-}
-
 func (s *hipSession) Write(b Buf, p []byte) error { return s.WriteAt(b, 0, p) }
 
 func (s *hipSession) WriteAt(b Buf, off int, p []byte) error {

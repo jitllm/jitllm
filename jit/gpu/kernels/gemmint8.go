@@ -50,13 +50,6 @@ func Int8OK(q Quant) bool {
 	return volta70Packed(q) && qtab[q].codes == nil
 }
 
-// int8Pos is where natural word w (k 4w..4w+3) of a row's 32-element trip
-// sits in shared memory: words w and w+4 side by side, so lane q of a
-// fragment reads both of its words -- k 4q.. and 16+4q.. -- as one 8-byte
-// load. For a 16-element sub-block those are the same lane's words of the
-// trip's two sub-blocks.
-func int8Pos(w int) int { return (w%4)*2 + w/4 }
-
 // GemmInt8 is the batched quantized matvec on the int8 matrix instruction
 // (m16n8k32, or m16n8k16 per 16-element sub-block; sm_80 on) with both
 // operands staged through shared memory, as llama.cpp's MMQ does: MatVecMMA's
