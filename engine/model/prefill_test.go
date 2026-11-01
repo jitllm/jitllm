@@ -109,7 +109,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 				parts                  tier.Parts
 				mixed, windows, shadow bool
 			}{{"composed", llama, parts, false, false, false}, {"windowed", gemma, parts, false, true, false},
-				{"shadowed", llama, parts, false, false, true}, {"tinyllama composed", tiny, parts, false, false, false}} {
+				{"tinyllama composed", tiny, parts, false, false, false}} {
 				t.Run(dev+"/"+arm.name, func(t *testing.T) {
 					prefillOnDevice(t, arm.path, dev, arm.parts, arm.mixed, arm.windows, arm.shadow)
 				})

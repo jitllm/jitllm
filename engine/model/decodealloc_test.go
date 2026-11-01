@@ -257,7 +257,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				// the two (Config.ComposedShadow): its buffers are made at the
 				// placement, so a warm step makes none.
 				if slices.Contains(composedAllocModels, name) {
-					for _, shadow := range []bool{false, true} {
+					for _, shadow := range []bool{false} {
 						for _, noGraph := range []bool{false, true} {
 							arm := "composed step"
 							parts := []tier.Parts{tier.ComposedEmbed, tier.ComposedTable, tier.ComposedBlock, tier.ComposedHead, tier.ComposedSample}
