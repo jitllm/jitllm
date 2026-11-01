@@ -10,7 +10,6 @@ import (
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // TestOpenRefusesAContainerThatStatesNoActivations holds Open, where the
@@ -44,13 +43,6 @@ func TestOpenRefusesAContainerThatStatesNoActivations(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "jitllm upgrade "+old) {
 		t.Fatalf("the refusal names no upgrade command: %v", err)
-	}
-	if !jit.ComposedByDefault {
-		m, err := Open(old, noTune)
-		if err != nil {
-			t.Fatalf("main's kernels refused the container: %v", err)
-		}
-		m.Close()
 	}
 	if changed, err := jlm.Restate(old, convert.StateStored); err != nil || !changed {
 		t.Fatalf("restating: changed %v, %v", changed, err)

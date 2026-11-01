@@ -353,8 +353,7 @@ func WithPersist(on bool, grid int) Option {
 
 // WithComposedShadow sets Config.ComposedShadow: the composer's form of each
 // block it would serve runs beside the tier's own kernels and is compared with
-// them at every step (Stats.ShadowWorst). It changes no answer, and needs
-// Config.Composed to ask for the blocks.
+// them at every step (Stats.ShadowWorst). It changes no answer.
 func WithComposedShadow() Option { return WithConfig(func(c *Config) { c.ComposedShadow = true }) }
 
 // WithPersistDeps is WithPersist with the persistent kernels' tasks ordered

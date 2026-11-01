@@ -248,7 +248,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					checkLinearRowsForm(t, m, g)
 				})
 				// Every block served whole by the composer, and the head
-				// (Config.Composed), on a tier of its own, with the prompt's
+				// on a tier of its own, with the prompt's
 				// row forms placed beside them (ComposedPrompt): its warm token
 				// allocates nothing either. Without the captured graph too,
 				// where every token runs the served code (a replayed

@@ -84,11 +84,8 @@ func TestMLAOnEveryDevice(t *testing.T) {
 							covered++
 						}
 					}
-					composed := gpu.Composed&tier.ComposedBlock != 0
-					if composed {
-						composedCovers(t, m, len(ids), wantPlaced, false, gpu)
-					}
-					if ps := gpu.Stats(); ps.PagedLaunches == 0 && (!composed || covered < wantPlaced) {
+					composedCovers(t, m, len(ids), wantPlaced, false, gpu)
+					if ps := gpu.Stats(); ps.PagedLaunches == 0 && covered < wantPlaced {
 						t.Fatalf("%s decoded %s through no paged attention: the latent cache was not paged",
 							name, spec)
 					}

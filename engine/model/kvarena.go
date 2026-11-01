@@ -218,18 +218,6 @@ func (s *kvPages) useArena(li, maxSeq int, arenaFor func(li, pp int, latent bool
 	return nil
 }
 
-// arenaSlot is page n's key and value where they are a slot of the arena,
-// nil where page n holds none.
-func (s *kvPages) arenaSlot(n int) (k, v []float32) {
-	if s.arena == nil || n >= len(s.k) {
-		return nil, nil
-	}
-	if i, ok := s.arena.slotOf(s.k[n]); ok {
-		return s.arena.page(i)
-	}
-	return nil, nil
-}
-
 // takeSlot is a fresh slot of the arena for a page this layer writes, held
 // by it, nil where the layer has no arena or every slot is taken.
 func (s *kvPages) takeSlot() (k, v []float32) {

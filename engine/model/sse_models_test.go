@@ -248,14 +248,8 @@ func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float
 			named = append(named, fmt.Sprintf("%d by %q", n, jit.Decline(d)))
 		}
 	}
-	// In a composed build the SSE arm is itself the composer's, so the
-	// comparison with main's SSE kernels is the default build's.
-	arm := "main's SSE kernels"
-	if jit.ComposedByDefault {
-		arm = "the composed build's own SSE arm"
-	}
-	t.Logf("composed CPU on the SSE tier: %d of %d block steps served, declined %v; worst max|dlogit| %.4g against %s (band %.4f)",
-		served, len(ids)*m.Cfg.NLayer, named, worst, arm, band)
+	t.Logf("composed CPU on the SSE tier: %d of %d block steps served, declined %v; worst max|dlogit| %.4g against its own SSE arm (band %.4f)",
+		served, len(ids)*m.Cfg.NLayer, named, worst, band)
 }
 
 func ssemMaxAbs(a, b []float32) float64 {

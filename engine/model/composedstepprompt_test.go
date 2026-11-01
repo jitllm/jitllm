@@ -126,17 +126,6 @@ func composedPromptAt(t *testing.T, m *Model, ids []int32, parts tier.Parts, til
 	return append([]float32(nil), got...), s0, g.Stats()
 }
 
-// promptBand holds a prompt's logits to the host's within the device band
-// and is their NMSE.
-func promptBand(t *testing.T, got, want []float32) float64 {
-	t.Helper()
-	nmse := promptNMSE(t, got, want)
-	if !(nmse < 2e-3) || Greedy(got) != Greedy(want) {
-		t.Fatalf("the prompt's logits NMSE %.3e against the host, argmax %d against %d", nmse, Greedy(got), Greedy(want))
-	}
-	return nmse
-}
-
 // promptNMSE is a prompt's logits' NMSE against the host's, every one
 // finite.
 func promptNMSE(t *testing.T, got, want []float32) float64 {

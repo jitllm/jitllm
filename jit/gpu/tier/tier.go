@@ -182,12 +182,6 @@ type Config struct {
 	// of its own instead of folding it into the next block's attention norm
 	// (the binary16 GEMM path's add-and-norm kernel): the A/B arm.
 	NoAddNormFold bool
-	// Composed is the parts of the model the composer serves in the tier's
-	// own submission (served.go): each block whole from its graph, and the
-	// head, in place of the tier's kernels for them. A part named here that
-	// the composer does not form fails the step, naming why; the tier's
-	// kernels never run in its place.
-	Composed Parts
 	// TierBlocks are blocks the caller keeps on the tier's own kernels where
 	// the composer would serve them, each declined by that name.
 	TierBlocks []int
@@ -772,7 +766,7 @@ type Stats struct {
 	KVGrows int
 	Served  int // matvecs served on the device
 	// PartsServed counts the parts the composer ran in the tier's
-	// submission, by part (Config.Composed): the steps emitted, not those a
+	// submission, by part (Parts): the steps emitted, not those a
 	// recording replayed.
 	PartsServed [numParts]int
 	// MatrixLaunches counts the launches of composed kernels formed on the
@@ -2512,9 +2506,6 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	// (PersistByDefaultForTest), so the regression gates run through it.
 	cfg.Persist = persistDefault
 	cfg.PersistDeps = persistDepsDefault
-	if jit.ComposedByDefault {
-		cfg.Composed = ComposedStep
-	}
 	// Gate2 is allowed by default; tuneFFN takes it per shape where it
 	// measures faster. On a V100 it read 1.008-1.028 of the two launches on
 	// Llama 1B, 3B and 8B.
@@ -2529,13 +2520,6 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 				s.Dev.Close()
 			}
 		}
-	}
-	// The composer is the only path: it serves every part, whatever a
-	// caller asks.
-	if cfg.Composed != ComposedStep {
-		closeAll()
-		return nil, fmt.Errorf("tier: Config.Composed is %#x: the composer is the only path and serves every part (ComposedStep, %#x)",
-			uint(cfg.Composed), uint(ComposedStep))
 	}
 	if len(slots) == 0 {
 		return nil, fmt.Errorf("tier: no devices")

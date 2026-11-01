@@ -394,8 +394,7 @@ type Head struct {
 	// Model is which model the head belongs to; see LayerPlan.Model.
 	Model uint64
 	// Graph is the head as ops from the model's front end, nil where it
-	// states none: what a device serving the head forms (tier
-	// Config.Composed).
+	// states none: what a device serving the head forms.
 	Graph *graph.Graph
 	// HiddenGraph is Graph writing the norm's rows too, its second output
 	// (graph.Head.Hidden): what a device serving the head forms, so a call
@@ -864,7 +863,7 @@ type LayerPlan struct {
 	// Graph is the block's graph of generic ops as the model's front end
 	// built it from the container (engine/model/front.go), nil for a block
 	// it states none of: what a device asks the composer to form when it
-	// serves the block whole (tier Config.Composed).
+	// serves the block whole.
 	Graph *graph.Graph
 	// Tables are the step's rotary tables as the front end states them (the
 	// model's rotary's, then the local layers' where SWAPeriod is set; nil

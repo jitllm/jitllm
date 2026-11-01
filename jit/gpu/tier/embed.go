@@ -50,32 +50,29 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	bs := g.bs
-	if g.Composed&ComposedEmbed != 0 {
-		if n == 0 || n > batchWidth || bs == nil {
-			return false
-		}
-		kind := partEmbed
-		if n > 1 || g.prompt {
-			kind = partEmbedRows
-		}
-		why := bs.embedServes()
-		if why == partServes {
-			why = bs.embedFits(ids, pos, dst)
-		}
-		if why == partServes && !g.embedBufs(bs) {
-			why = partNoRoom
-		}
-		if why != partServes {
-			g.PartsDeclined[kind]++
-			g.StepDeclines[why]++
-			return false
-		}
-		pe := &g.embBuf
-		pe.dst, pe.ids, pe.pos, pe.composed, pe.kind, pe.geo = dst, append(pe.ids[:0], ids...), pos, true, kind, g.geoCur
-		g.embPend = pe
-		return true
+	if n == 0 || n > batchWidth || bs == nil {
+		return false
 	}
-	return false
+	kind := partEmbed
+	if n > 1 || g.prompt {
+		kind = partEmbedRows
+	}
+	why := bs.embedServes()
+	if why == partServes {
+		why = bs.embedFits(ids, pos, dst)
+	}
+	if why == partServes && !g.embedBufs(bs) {
+		why = partNoRoom
+	}
+	if why != partServes {
+		g.PartsDeclined[kind]++
+		g.StepDeclines[why]++
+		return false
+	}
+	pe := &g.embBuf
+	pe.dst, pe.ids, pe.pos, pe.composed, pe.kind, pe.geo = dst, append(pe.ids[:0], ids...), pos, true, kind, g.geoCur
+	g.embPend = pe
+	return true
 }
 
 // embedFits is why the rows of tokens ids at positions pos onwards into dst
@@ -144,7 +141,7 @@ func (bs *blockScratch) embedOuts(s, R int) ([]backend.Buf, error) {
 // Callers hold mu.
 func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 	bs.embW, bs.posW, bs.embWhy = nil, nil, partServes
-	if g.Composed&ComposedEmbed == 0 || h.Embed == nil {
+	if h.Embed == nil {
 		return
 	}
 	bs.embW = bs.head

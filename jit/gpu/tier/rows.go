@@ -358,7 +358,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	// The composer's head over rows serves any count of them in the
 	// reserved width (servedHead): the tier's per-count projections are not
 	// built for it.
-	served := g.Composed&ComposedHead != 0 && bs == g.bbs[g.promptW] && g.rowsReserved() &&
+	served := bs == g.bbs[g.promptW] && g.rowsReserved() &&
 		g.bs.headServes(g.bs.hNorm, false, false) == partServes
 	if !served {
 		g.groupMV(g.headMV(), rowsHead.WantedRows(n), R)
@@ -2150,5 +2150,5 @@ func (s *gpuSession) ResetRecRows(rows []int) bool {
 // ragSampleServes says the composer writes a ragged step's tokens: asked
 // for the token and a prompt's rows, over the sample its head states.
 func (g *devTier) ragSampleServes() bool {
-	return g.Composed&ComposedSample != 0 && g.Composed&ComposedPrompt != 0 && g.bs != nil && g.bs.sampleGraph != nil
+	return g.bs != nil && g.bs.sampleGraph != nil
 }

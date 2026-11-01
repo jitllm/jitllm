@@ -653,7 +653,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 
 // composedAfterPicture decodes the golden's continuation after its picture
 // with the composer serving the step's tables, every block and the head the
-// front end states (Config.Composed), held to transformers as the tier is. A
+// front end states, held to transformers as the tier is. A
 // decode row after the picture turns at its own position, off its cache
 // position: the served table turns it by the positions on its axes the State
 // states for it (nn.RopeAxesDevice), and told one past them it must part from

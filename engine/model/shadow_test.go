@@ -33,7 +33,7 @@ type shadowRun struct {
 }
 
 // shadowDecode decodes toks teacher-forced after ids on a fresh tier of dev
-// whose composer forms every block (Config.Composed) and runs it beside the
+// whose composer forms every block and runs it beside the
 // tier's own kernels (tier.WithComposedShadow), reading every block's worst
 // drift after each step. float forms the composer's blocks with float
 // activations, the reference the tier's own distance is measured to.

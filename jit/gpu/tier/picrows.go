@@ -103,9 +103,6 @@ func (s *gpuSession) PrepRows(p *nn.RowsPart) bool {
 func (g *devTier) PrepRows(p *nn.RowsPart) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.Composed&ComposedRows == 0 {
-		return false
-	}
 	defer g.scratchWin().close()
 	was := g.prewarming
 	g.prewarming = true
@@ -127,10 +124,6 @@ func (g *devTier) PrepRows(p *nn.RowsPart) bool {
 func (g *devTier) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, out []float32) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.Composed&ComposedRows == 0 {
-		g.PartsUnasked[partRows]++
-		return false
-	}
 	defer g.scratchWin().close()
 	sv, err := g.servedRows(p)
 	if err != nil {

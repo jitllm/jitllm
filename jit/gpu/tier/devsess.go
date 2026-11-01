@@ -130,8 +130,8 @@ type devSess struct {
 	// table turns them by (served.go).
 	ropeAxes   []int32
 	ropeAxesAt int
-	// prompt says the session's calls are a prompt's (SetPrompt): the
-	// composer serves a step's parts and none of a prompt's (Config.Composed).
+	// prompt says the session's calls are a prompt's (SetPrompt): its blocks
+	// are asked as a prompt's (rowsKind).
 	prompt bool
 	// recSteps counts the linear blocks whose emitLinear completed with the
 	// submission still good, for the current Layers call: the measured answer

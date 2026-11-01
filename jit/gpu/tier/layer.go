@@ -2461,7 +2461,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// re-offer's too: a step would otherwise meet it first. Deferred first,
 	// it runs after the body's own deferred unlocks.
 	defer func() {
-		if placed && g.Composed&(ComposedBlock|ComposedPrompt) != 0 {
+		if placed {
 			g.mu.Lock()
 			g.prewarmComposedTables()
 			// A block whose composed part, or prompt part at the narrowest
@@ -2852,10 +2852,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// matvec runs.
 	// The composed block reads its experts in pages on the card: only a
 	// placement's own "host" sends them to the host.
-	composed := g.Composed&ComposedBlock != 0
-	hostExp := w.HostExperts != nil && (auto && mode == expHost ||
-		!composed && (g.HybridExperts && !(auto && mode == expCard) || auto && mode == expAuto && !g.NoHybrid))
-	stream := moe && (g.StreamExperts || auto) && slots < bank && (slots > 1 || hostExp || composed)
+	hostExp := w.HostExperts != nil && auto && mode == expHost
+	stream := moe && (g.StreamExperts || auto) && slots < bank
 	// A hybrid block that can hold an expert cache (Config.NoHybridCache)
 	// is placed as a streamed one -- the compact bank and its kernels on the
 	// card -- marked hybrid, so the cache sized after placement has kernels
@@ -3259,7 +3257,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 					// An auto-streamed block is placed on the plain bank;
 					// its cache comes after placement (sizeAutoCaches).
 					cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank,
-						!composed && (w.ExpGateB != nil || w.ExpUpB != nil || w.ExpDownB != nil))
+						false)
 				}
 				e = cslots
 			}
@@ -3321,11 +3319,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				case l.stream.host == nil || auto && mode == expCard:
 				case auto && mode == expHost:
 					l.stream.hybrid = true
-				case composed:
-				case g.HybridExperts:
-					l.stream.hybrid = true
-				default:
-					l.stream.hybrid = auto && !g.NoHybrid
 				}
 				l.stream.initCache(cslots, bank)
 				g.StreamBlocks++
@@ -4518,7 +4511,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	al(&bs.n, (rows+1)*4)
 	al(&bs.calls, 4)
 	al(&bs.headCalls, 4)
-	if p.NonCausal && p.Graph != nil && g.Composed&ComposedTower != 0 {
+	if p.NonCausal && p.Graph != nil {
 		al(&bs.pics, rows*kernels.PRowWords*4)
 		al(&bs.picsW, rows*kernels.PRowWords*4)
 		bs.picStage = make([]byte, rows*kernels.PRowWords*4)
@@ -6022,18 +6015,10 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if bs == nil || h == nil {
 		return false
 	}
-	// The tier's own head caps the logits before the host adds the bias, the
-	// other order of the model's head (bias, softcap, scale); the composed head
-	// keeps the model's order, and a step it declines with both is refused.
-	if h.Softcap != 0 && h.Bias != nil && g.Composed&ComposedHead == 0 {
-		g.LastErr = "the head states a final softcap and an output bias: the device caps before the host adds the bias, " +
-			"the other order of the model's head, so the head stays on the host"
-		return false
-	}
 	// The head as ops from the model's front end: what the composer serves.
 	bs.headGraph, bs.headHidden, bs.sampleGraph, bs.embedGraph = h.Graph, h.HiddenGraph, h.Sample, h.Embed
 	bs.sampleTopK, bs.pickGraph, bs.pickHead = h.SampleTopK, h.PickGraph, h.PickHead
-	h.GatherRow = g.Composed&ComposedEmbed != 0 && h.Embed != nil
+	h.GatherRow = h.Embed != nil
 	g.prepCollapse(bs, h)
 	// The head is the model's: a second State on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
@@ -6182,7 +6167,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// The output bias, for a head graph the composer serves that binds it. A
 	// head without it (no room, a bias of another width) is declined by name
 	// (partHeadBias) and the caller adds the bias.
-	if spec, ok := headShape(h.Graph); ok && spec.hasBias && g.Composed&ComposedHead != 0 && len(h.Bias) == h.W.Rows &&
+	if spec, ok := headShape(h.Graph); ok && spec.hasBias && len(h.Bias) == h.W.Rows &&
 		g.room(uint64(h.W.Rows*4)) {
 		if b, e := g.dev.Alloc(h.W.Rows * 4); e == nil {
 			if b.Write(f32b(h.Bias)) == nil {
@@ -6222,7 +6207,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		w := g.scratchWin() // the device's own word (scratch.go)
 		if b, e := g.dev.Alloc(4); e == nil {
 			g.argmaxOut = b
-			if g.Composed&ComposedSample == 0 || h.Sample == nil {
+			if h.Sample == nil {
 				if ak, e := kernels.Argmax(h.W.Rows); e == nil {
 					if c, e := g.dev.Compile(ak); e == nil {
 						g.argmaxK = c
@@ -7115,8 +7100,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		tierRuns := true
 		if R > 1 {
 			var e error
-			_, asks := g.rowsKind(R, rag != nil)
-			if tierRuns, e = g.promptDeclines(bs, lo, hi, asks); e != nil {
+			if tierRuns, e = g.promptDeclines(bs, lo, hi, true); e != nil {
 				return refuse("%v", e)
 			}
 		}
@@ -7252,7 +7236,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// non-causal segment's, whose rotary is the caller's table of its grid.
 	tableSrv, tableMulti := false, false
 	var raxes []byte
-	if g.Composed&ComposedTable != 0 && bs.cs != nil && p.NRot > 0 && !p.NonCausal && lo < hi && rrows >= 1 {
+	if bs.cs != nil && p.NRot > 0 && !p.NonCausal && lo < hi && rrows >= 1 {
 		if why := g.tableServes(bs, p, pos, rrows, rag); why != partServes {
 			g.PartsDeclined[partRope]++
 			g.StepDeclines[why]++
@@ -7333,8 +7317,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// ragged step's wanted rows or every row of a chunk. A prompt's call,
 	// its folded head too, asks only where the prompt is asked
 	// (ComposedPrompt).
-	composedHead := head != nil && g.Composed&ComposedHead != 0 &&
-		(!g.prompt || g.Composed&ComposedPrompt != 0)
+	composedHead := head != nil
 	if head != nil && hb.headCap != nil {
 		applied = nn.HeadCap
 	}
@@ -7359,11 +7342,11 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			DeclineName(int(headWhy)))
 	}
 	argmax := head != nil && head.ArgmaxOnly && g.argmaxOut != nil && R == 1 && left&nn.HeadBias == 0 &&
-		(g.argmaxK != nil || g.Composed&ComposedSample != 0 && rag == nil && !g.prompt && !fold && bs.sampleGraph != nil && head.Sample == bs.sampleGraph)
+		(g.argmaxK != nil || rag == nil && !g.prompt && !fold && bs.sampleGraph != nil && head.Sample == bs.sampleGraph)
 	sampleK, samplePen := 0, false
 	// The composer selects the sampler's candidates where it serves a step's
 	// token (ComposedSample) and the front end states them.
-	topKSrv := head != nil && g.Composed&ComposedSample != 0 && !g.prompt && bs.sampleTopK != nil && head.SampleTopK == bs.sampleTopK
+	topKSrv := head != nil && !g.prompt && bs.sampleTopK != nil && head.SampleTopK == bs.sampleTopK
 	if head != nil && !argmax && head.SampleK > 0 && R == 1 && rag == nil && !allRows && !fold &&
 		left&(nn.HeadBias|nn.HeadScale) == 0 && g.prepSample(head, topKSrv) {
 		sampleK, samplePen = head.SampleK, head.SampleArgs[0] > 0
@@ -7376,7 +7359,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// it serves the head, no stage is left after the projection and the
 	// picked rows' form is the head's own arithmetic at them, else the gather
 	// over the logits.
-	pickAsked := pickWant && g.Composed&ComposedSample != 0 && (!g.prompt || g.Composed&ComposedPrompt != 0)
+	pickAsked := pickWant
 	pickHeadSrv := pickAsked && composedHead && headWhy == partServes && hb.pickHead != nil && head.PickHead == hb.pickHead &&
 		hb.headCap == nil && head.Stages&(nn.HeadBias|nn.HeadScale) == 0 && !g.NoPickMV && hb.pickRowsExact()
 	pickSrv := pickAsked && !pickHeadSrv && hb.pickGraph != nil && head.PickGraph == hb.pickGraph
@@ -7387,11 +7370,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// candidates, or the label pick.
 	sampleSrv := false
 	ragSample := head != nil && (rag != nil || allRows)
-	if g.Composed&ComposedSample != 0 && head != nil && (argmax || sampleK > 0 || pick || ragSample) {
+	if head != nil && (argmax || sampleK > 0 || pick || ragSample) {
 		why := partServes
 		switch {
-		case ragSample && g.prompt && g.Composed&ComposedPrompt == 0:
-			g.PartsUnasked[partSample]++
 		case ragSample && (hb.sampleGraph == nil || head.Sample != hb.sampleGraph):
 			why = partNoSample
 		case ragSample:
@@ -7720,7 +7701,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	defer func() { g.launchTo.s = nil }()
 	lc := &launcher{to: &g.launchTo, err: &err, fsrc: &fsrc,
 		memoK: &actMemoK, memoSrc: &actMemoSrc, a: bs.a, ax: bs.ax, g: g}
-	if g.Census && g.Composed != 0 && g.sub.R == 1 && g.sub.rag == nil && !g.prompt {
+	if g.Census && g.sub.R == 1 && g.sub.rag == nil && !g.prompt {
 		if g.census == nil {
 			g.census = &launchCensus{n: map[string]int{}}
 		}
@@ -7961,38 +7942,28 @@ func (g *devTier) layersSession(s backend.Session) {
 			left := R > 1 && li < len(bs.left) && bs.left[li]
 			voltaOnly := R > 1 && rag == nil && !left && g.voltaBlock(l, R, bs.tok) && l.altRouter == nil && l.ds4 == nil &&
 				l.k3 == nil && l.q4e == nil
-			// The block the composer serves whole (Config.Composed): its graph
-			// from the model's front end, formed as one unit and launched on
-			// the block's own weights and history, in place of all of the
-			// tier's for it -- a decode step's, or a prompt's at its rows
-			// (ComposedPrompt): a chunk, or a one-row call of the prompt
-			// (nn.PromptDevice), never counted as a step. Without
-			// ComposedPrompt a prompt's calls ask for nothing.
+			// The block the composer serves whole: its graph from the model's
+			// front end, formed as one unit and launched on the block's own
+			// weights and history -- a decode step's, or a prompt's at its
+			// rows (ComposedPrompt): a chunk, or a one-row call of the prompt
+			// (nn.PromptDevice), never counted as a step.
 			// A ragged step's rows are a decode step of several sessions,
 			// each row at its own position and history (its descriptor):
 			// its blocks are asked as decode's, at the step's rows, and a
 			// prompt's ragged rows as the prompt's.
-			kind, asks := g.rowsKind(R, rag != nil)
-			asked, why := g.Composed&(1<<kind) != 0, partServes
+			kind := g.rowsKind(R, rag != nil)
 			// A non-causal call is a picture's rows, one run: its blocks are
-			// asked whole where the composer serves towers, at the call's rows.
+			// asked whole, at the call's rows.
 			if l.nonCausal {
-				kind, asked, asks = partTower, g.Composed&ComposedTower != 0, true
+				kind = partTower
 			}
-			switch {
-			case !asked:
-			case !asks:
-				g.PartsUnasked[partBlock]++
-				asked = false
-			default:
-				why = g.blockServes(l, li, p, bs, persist, kind == partPrompt)
-				if why == partServes && R > 1 {
-					why = l.expertsServe(nrow)
-				}
+			why := g.blockServes(l, li, p, bs, persist, kind == partPrompt)
+			if why == partServes && R > 1 {
+				why = l.expertsServe(nrow)
 			}
 			var sv, cp *servedPart
 			var inst *partInst
-			if asked && why == partServes {
+			if why == partServes {
 				var serr error
 				sv, inst, cp, serr = g.servedStep(bs, l, li, p, R, rag == nil || rag.oneSequence())
 				switch {
@@ -8026,7 +7997,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				addRes(pendX, pendY, bs.x)
 				pendX, pendY = nil, nil
 			}
-			if asked && why != partServes {
+			if why != partServes {
 				g.PartsDeclined[kind]++
 				g.BlockDeclines[why]++
 			}
@@ -8034,11 +8005,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// refused, never run on the tier's own kernels.
 			if inst == nil {
 				if err == nil {
-					reason := "the composer was not asked for it"
-					if asked {
-						reason = DeclineName(int(why))
-					}
-					err = fmt.Errorf("tier: the composer does not serve block %d at %d rows: %s", li, R, reason)
+					err = fmt.Errorf("tier: the composer does not serve block %d at %d rows: %s", li, R, DeclineName(int(why)))
 				}
 				continue
 			}
@@ -8101,16 +8068,14 @@ func (g *devTier) layersSession(s backend.Session) {
 		if collapse && err == nil {
 			err = g.runCollapse(lc, hb.collapse, bs, R)
 		}
-		// The head the composer serves (Config.Composed), where it is asked
-		// for this one: the step fails if it does not form. A graph that
+		// The head the composer serves: the step fails if it does not
+		// form. A graph that
 		// states the final softcap writes the capped logits, where the
 		// tier's own cap would have, and the tier's cap is not launched over
 		// them.
 		headSrv := key.headSrv
 		switch {
-		case head == nil || g.Composed&ComposedHead == 0 || headSrv:
-		case g.prompt && g.Composed&ComposedPrompt == 0:
-			g.PartsUnasked[partHead]++
+		case head == nil || headSrv:
 		default:
 			g.PartsDeclined[partHead]++
 			g.HeadDeclines[headWhy]++

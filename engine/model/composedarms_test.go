@@ -8,23 +8,22 @@ import (
 )
 
 // A principle gate's composed arm runs it again with the composer serving
-// every block and the head (Config.Composed), on a model the front end states
+// every block and the head, on a model the front end states
 // whole, and holds the arm to the gate's own bar and to the composer having
 // served (composedRan).
 
 // composedParts is what a composed arm asks the composer for.
 const composedParts = tier.ComposedStep
 
-// composedOf is the parts g's composer serves of m: what g asks it for
-// (Config.Composed, every part in a jitllmcomposed build), where the front
-// end states every block of m as ops, and nothing where it does not.
+// composedOf is the parts g's composer serves of m: every part where the
+// front end states every block of m as ops, and nothing where it does not.
 func composedOf(m *Model, g *tier.GPU) tier.Parts {
 	for li := range m.Cfg.NLayer {
 		if m.Uncovered(li) != Covered {
 			return 0
 		}
 	}
-	return g.Composed
+	return tier.ComposedStep
 }
 
 // composedNoGraph is the reason the tier declines a block the front end
@@ -41,10 +40,9 @@ const composedNoGraph = "no graph from the front end"
 // replays nothing a decline is counted from), at most that where it does not.
 // A sliding layer is served like any other, the tier declining only a graph
 // whose window is not the plan's, so a window decline fails here by its name.
-// A tier that is not asked for blocks is not checked.
 func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ...*tier.GPU) {
 	t.Helper()
-	if len(gs) == 0 || gs[0].Composed&tier.ComposedBlock == 0 {
+	if len(gs) == 0 {
 		return
 	}
 	covered := 0

@@ -1104,16 +1104,16 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 	return nil
 }
 
-// Parts names the parts of a model the composer serves (Config.Composed).
+// Parts names the parts of a model the composer serves, each counted apart
+// (Stats.ServedPart).
 type Parts uint16
 
 const (
 	ComposedHead Parts = 1 << partHead
 	// ComposedBlock serves a block whole from its graph (nn.LayerPlan.Graph).
 	ComposedBlock Parts = 1 << partBlock
-	// PartShadow selects the shadow arm's comparisons in Stats.ServedPart.
-	// Config.Composed takes no such bit: Config.ComposedShadow is its own
-	// switch.
+	// PartShadow selects the shadow arm's comparisons in Stats.ServedPart:
+	// Config.ComposedShadow is its switch.
 	PartShadow Parts = 1 << partShadow
 	// ComposedPrompt serves a prompt chunk's blocks whole at the chunk's
 	// rows: a form a width, as the tier keeps a scratch a width.
@@ -1133,8 +1133,8 @@ const (
 	// rows (Stats.ServedPart), apart from a decode step's.
 	PromptEmbed Parts = 1 << partEmbedRows
 	// PartCopy selects in Stats.ServedPart the copies of block outputs
-	// written apart from x (servedCopy). Config.Composed takes no such bit:
-	// a block the composer serves asks for one where it needs it.
+	// written apart from x (servedCopy): a block the composer serves asks
+	// for one where it needs it.
 	PartCopy Parts = 1 << partCopy
 	// ComposedTower serves a non-causal call's blocks whole from their
 	// graphs: a vision tower's, over a picture's rows (towerserve.go).
@@ -1878,7 +1878,7 @@ func (g *devTier) tableBinds(bs *blockScratch, i int) (cs, planes, pos backend.B
 // at a placement or where a width's scratch is built: a table met first at
 // a step formed inside it. Callers hold g.mu.
 func (g *devTier) formTables(bs *blockScratch) {
-	if g.NoPromptPrewarm || g.Composed&ComposedTable == 0 || bs == nil || bs.cs == nil || bs.p.NRot <= 0 || bs.p.NonCausal {
+	if g.NoPromptPrewarm || bs == nil || bs.cs == nil || bs.p.NRot <= 0 || bs.p.NonCausal {
 		return
 	}
 	for i := range bs.tableCount() {
@@ -2674,13 +2674,13 @@ func (g *devTier) prewarmComposed() {
 // Callers hold g.mu.
 func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	bs, l := g.bs, g.layers[li]
-	if g.NoPromptPrewarm || g.Composed&(ComposedBlock|ComposedPrompt) == 0 || bs == nil || bs.pkv == nil ||
+	if g.NoPromptPrewarm || bs == nil || bs.pkv == nil ||
 		g.kvp == nil || l == nil {
 		return ""
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	if g.Composed&ComposedBlock != 0 && g.blockServes(l, li, &bs.p, bs, false, false) == partServes {
+	if g.blockServes(l, li, &bs.p, bs, false, false) == partServes {
 		rcs := bs.cs
 		if bs.csSWA != nil && bs.p.LocalRope(li) {
 			rcs = bs.csSWA
@@ -2714,9 +2714,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	// Every prompt width the lane holds a scratch for, and a ragged step's:
 	// its first chunk or step forms and allocates nothing.
 	for _, bb := range g.bbs {
-		if g.rowsForms(bb) {
-			g.prewarmPromptBlock(bb, li)
-		}
+		g.prewarmPromptBlock(bb, li)
 	}
 	g.fitReserved()
 	// The shadow arm's comparison of the block's two outputs.
@@ -2765,7 +2763,7 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 // composer does not serve it, or what failed was not room. Callers hold g.mu.
 func (g *devTier) promptRoomless(li int) string {
 	bb, l := g.bbs[g.promptW], g.layers[li]
-	if bb == nil || l == nil || !g.rowsForms(bb) || g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
+	if bb == nil || l == nil || g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
 		return ""
 	}
 	bb.instNoRoom = false
@@ -2780,7 +2778,7 @@ func (g *devTier) promptRoomless(li int) string {
 // the scratch's instance of it held, both made here where they are not,
 // outside the submission. Callers hold g.mu.
 func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
-	if bb.rows < 2 || bb.pkv == nil || g.kvp == nil || !g.rowsForms(bb) ||
+	if bb.rows < 2 || bb.pkv == nil || g.kvp == nil ||
 		g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
 		return false
 	}
@@ -2880,9 +2878,6 @@ func rowSeqs(R int, one bool) int {
 // alone is composed in keeps them for the prompts the tier runs there.
 // Callers hold g.mu.
 func (g *devTier) promptHeld(l *layer, li int, bb *blockScratch) bool {
-	if g.Composed&ComposedPrompt == 0 && (g.stepW <= 0 || bb.rows != g.stepW) {
-		return false
-	}
 	return g.promptServed(l, li, bb)
 }
 
@@ -2918,15 +2913,14 @@ func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int, asks bool) (bool,
 }
 
 // rowsKind is the part a call of R rows asks of the composer for its
-// blocks, and whether it asks: a prompt's chunk, or with ComposedPrompt a
-// call of rows that is not a ragged step, is ComposedPrompt's; a ragged
-// decode step's rows and a one-row step are ComposedBlock's; a prompt
-// without ComposedPrompt asks nothing, its blocks the tier's.
-func (g *devTier) rowsKind(R int, rag bool) (partKind, bool) {
-	if (R > 1 || g.prompt) && (!rag || g.prompt) && g.Composed&ComposedPrompt != 0 {
-		return partPrompt, true
+// blocks: a prompt's chunk, or a call of rows that is not a ragged step, is
+// ComposedPrompt's; a ragged decode step's rows and a one-row step are
+// ComposedBlock's.
+func (g *devTier) rowsKind(R int, rag bool) partKind {
+	if (R > 1 || g.prompt) && (!rag || g.prompt) {
+		return partPrompt
 	}
-	return partBlock, g.Composed&ComposedBlock != 0 && !g.prompt && (rag || R == 1)
+	return partBlock
 }
 
 // declineTwins compiles block li's own batched kernels at bs's rows, which
@@ -2968,35 +2962,22 @@ func (g *devTier) promptForms(bb *blockScratch) {
 	g.prewarming = was || g.reserving
 	defer func() { g.prewarming = was }()
 	g.formTables(bb)
-	if !g.rowsForms(bb) {
-		return
-	}
 	// The input rows at bb's rows, where the composer gathers a chunk's.
-	if bs := g.bs; g.Composed&ComposedEmbed != 0 && bs != nil && bs.embedServes() == partServes && g.embedBufs(bs) {
+	if bs := g.bs; bs != nil && bs.embedServes() == partServes && g.embedBufs(bs) {
 		if _, err := g.servedEmbed(bs, bb.rows); err != nil {
 			g.LastErr = "the composed input rows: " + err.Error()
 		}
-	}
-	if g.Composed&ComposedPrompt == 0 {
-		return
 	}
 	for li := range g.layers {
 		g.prewarmPromptBlock(bb, li)
 	}
 }
 
-// rowsForms says the blocks are served at the rows of batched scratch bb:
-// a prompt's width where the prompt is asked (ComposedPrompt), and the
-// ragged step's (Config.StepRows) where the blocks are.
-func (g *devTier) rowsForms(bb *blockScratch) bool {
-	return g.Composed&ComposedPrompt != 0 || g.raggedAt(bb)
-}
-
 // raggedAt says the composer serves a ragged step's rows, any sequences'
 // mixed, at batched scratch bb's rows: the server's step width, or the
 // reserved width a ragged step runs in (reserveScratch).
 func (g *devTier) raggedAt(bb *blockScratch) bool {
-	return g.Composed&ComposedBlock != 0 && bb != nil && (g.stepW > 0 && bb.rows == g.stepW || bb == g.reservedFor(ComposedBlock))
+	return bb != nil && (g.stepW > 0 && bb.rows == g.stepW || bb == g.reservedFor(ComposedBlock))
 }
 
 // keyBound is a block form's key bound for a session of maxSeq positions.
@@ -3007,7 +2988,7 @@ func keyBound(maxSeq int) int { return (maxSeq + scoreGrain - 1) / scoreGrain * 
 // blocks: a head met first at a token formed inside it. Callers hold g.mu.
 func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	bs := g.bs
-	if !g.NoPromptPrewarm && g.Composed&ComposedSample != 0 && bs != nil && bs.sampleGraph != nil && g.argmaxOut != nil {
+	if !g.NoPromptPrewarm && bs != nil && bs.sampleGraph != nil && g.argmaxOut != nil {
 		g.prewarming = true
 		if _, err := g.servedSample(bs.sampleGraph); err != nil {
 			g.LastErr = "the composed sample: " + err.Error()
@@ -3015,7 +2996,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		g.prewarming = false
 	}
 	// A ragged step's tokens at each width the lane holds a scratch for.
-	if !g.NoPromptPrewarm && g.Composed&ComposedSample != 0 && bs != nil && bs.sampleGraph != nil {
+	if !g.NoPromptPrewarm && bs != nil && bs.sampleGraph != nil {
 		g.prewarming = true
 		for w := range g.bbs {
 			if _, err := g.servedSampleAt(bs.sampleGraph, w); err != nil {
@@ -3026,7 +3007,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	}
 	// The sampler's candidates and the label pick, one form each whatever
 	// k, the history and the labels.
-	if !g.NoPromptPrewarm && g.Composed&ComposedSample != 0 && bs != nil && g.argmaxOut != nil {
+	if !g.NoPromptPrewarm && bs != nil && g.argmaxOut != nil {
 		g.prewarming = true
 		for _, gr := range [...]*graph.Graph{bs.sampleTopK, bs.pickGraph} {
 			if gr == nil {
@@ -3053,7 +3034,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	// The input rows at one row, at every prompt width the lane holds a
 	// scratch for, and at every exact width a chunk's scratch is cut to
 	// (keepExact), as prewarmPromptWidths forms the blocks'.
-	if !g.NoPromptPrewarm && g.Composed&ComposedEmbed != 0 && bs != nil && bs.embedServes() == partServes && g.embedBufs(bs) {
+	if !g.NoPromptPrewarm && bs != nil && bs.embedServes() == partServes && g.embedBufs(bs) {
 		g.prewarming = true
 		form := func(rows int) {
 			if _, err := g.servedEmbed(bs, rows); err != nil {
@@ -3074,7 +3055,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		}
 		g.prewarming = false
 	}
-	if g.NoPromptPrewarm || g.Composed&ComposedHead == 0 || bs == nil || bs.head == nil ||
+	if g.NoPromptPrewarm || bs == nil || bs.head == nil ||
 		bs.headServes(bs.hNorm, false, false) != partServes {
 		return
 	}
@@ -3090,7 +3071,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 			return fmt.Sprintf("the composed head does not fit beside the blocks placed (%s)", err)
 		}
 	}
-	if g.Composed&ComposedSample != 0 && bs.pickHead != nil && bs.headCap == nil {
+	if bs.pickHead != nil && bs.headCap == nil {
 		if _, err := g.servedPickHead(bs, bs.hNorm); err != nil {
 			g.LastErr = "the composed pick head: " + err.Error()
 		}

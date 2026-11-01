@@ -630,9 +630,9 @@ func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int,
 }
 
 // autoStreams says a mixture of nExpert experts, nUsed a token, is one
-// AutoStream streams: a top-1 router only where the composer runs the block.
+// AutoStream streams.
 func (g *GPU) autoStreams(nExpert, nUsed int) bool {
-	return !g.NoAutoStream && len(g.devs) > 0 && nExpert > nUsed && nUsed >= 1 && (nUsed >= 2 || g.Composed&ComposedBlock != 0)
+	return !g.NoAutoStream && len(g.devs) > 0 && nExpert > nUsed && nUsed >= 1
 }
 
 // streamsInstead says block li, refused resident on every card, is a mixture
@@ -708,10 +708,7 @@ func (g *GPU) SetExpertMode(where string) int {
 	switch where {
 	case "host":
 		// The composed block has no host side to measure.
-		if g.Composed&ComposedBlock != 0 {
-			return 0
-		}
-		m = expHost
+		return 0
 	case "card":
 		m = expCard
 	}
@@ -1161,7 +1158,7 @@ func (g *GPU) ChunkRows() int {
 func (g *devTier) promptOneRow() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.Composed&ComposedPrompt != 0 && !g.ComposedWidths && !g.NoScratchReserve && g.promptW < 2 && len(g.layers) > 0
+	return !g.ComposedWidths && !g.NoScratchReserve && g.promptW < 2 && len(g.layers) > 0
 }
 
 // PipelineDepth is how many devices hold blocks (nn.Pipeliner): a prompt chunk

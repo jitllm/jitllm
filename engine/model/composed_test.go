@@ -16,7 +16,7 @@ import (
 )
 
 // composedDecode decodes toks teacher-forced after ids on a fresh tier of
-// dev serving the parts (Config.Composed), every block placed, and returns
+// dev serving the parts, every block placed, and returns
 // every step's logits, the tier's stats and its census of the launches of
 // its own kernels on the steps the composer was asked for.
 func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph, float bool, extra ...tier.Option) ([][]float32, tier.Stats, bool, map[string]int) {
@@ -502,7 +502,7 @@ const flashBlock = 32
 // TestComposedBlocksServe decodes dense models with each block served whole
 // by the composer from its graph (the model's front end's, from the
 // container), the prompt's blocks at the chunk's rows, and
-// the head, in main's runtime (Config.Composed), against the tier's own
+// the head, in main's runtime, against the tier's own
 // kernels: every block placed, with and without the captured graph, on each
 // prompt of servePanel (each of two chunks crossing several blocks of
 // positions) its last row and teacher-forced steps: 140 on crossingPrompt

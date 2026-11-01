@@ -22,7 +22,7 @@ import (
 // hold mu.
 func (g *devTier) prepCollapse(bs *blockScratch, h *nn.Head) {
 	bs.collapse, h.Collapses = nil, false
-	if g.Composed&ComposedHead == 0 || h.Collapse == nil || h.Graph == nil || bs.p.Streams() < 2 {
+	if h.Collapse == nil || h.Graph == nil || bs.p.Streams() < 2 {
 		return
 	}
 	if _, err := g.collapseParts(h.Collapse); err != nil {

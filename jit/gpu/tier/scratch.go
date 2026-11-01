@@ -317,7 +317,7 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 	// the tier's own step width reserves them: asked for at the first step
 	// they come from a card the blocks filled.
 	rowsHead := false
-	if g.Composed&ComposedBlock != 0 && !g.ComposedWidths {
+	if !g.ComposedWidths {
 		if g.StepRows > 0 {
 			want = max(want, roundUp(min(g.StepRows, batchWidth), 8))
 			rowsHead = true
@@ -487,7 +487,7 @@ func (g *devTier) rowsComposed(lo, hi int) bool {
 // composer as part run there, nil where they do not.
 func (g *devTier) reservedFor(part Parts) *blockScratch {
 	bb := g.bbs[g.promptW]
-	if g.promptW < 2 || bb == nil || g.Composed&part == 0 || g.ComposedWidths {
+	if g.promptW < 2 || bb == nil || g.ComposedWidths {
 		return nil
 	}
 	return bb
@@ -562,7 +562,7 @@ func (g *devTier) composedBlock(li int, bb *blockScratch) bool {
 func (g *devTier) fitReserved() {
 	for {
 		bb := g.bbs[g.promptW]
-		if bb == nil || !g.rowsForms(bb) || !bb.instNoRoom || !g.narrowReserved("the composer's buffers") {
+		if bb == nil || !bb.instNoRoom || !g.narrowReserved("the composer's buffers") {
 			break
 		}
 	}
@@ -792,5 +792,5 @@ func (g *devTier) noRoomFor(width int) bool {
 // width, and a block whose prompt declines compiles its own kernels at the
 // call (declineTwins), counted by reason.
 func (g *devTier) promptsReserved() bool {
-	return g.promptW >= 2 && g.Composed&ComposedPrompt != 0 && !g.ComposedWidths
+	return g.promptW >= 2 && !g.ComposedWidths
 }

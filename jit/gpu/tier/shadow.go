@@ -29,7 +29,7 @@ import (
 // shadowing says the shadow arm runs: it compares the forms of the blocks the
 // composer is asked for, so it needs them asked for.
 func (g *devTier) shadowing() bool {
-	return g.ComposedShadow && g.Composed&ComposedBlock != 0
+	return g.ComposedShadow
 }
 
 // shadowStep is the block the form ran beside, between the form's launch and
