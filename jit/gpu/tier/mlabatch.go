@@ -92,9 +92,7 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 	if p.NoPosEnc {
 		kern(&m.noPEK, func() (*ir.Kernel, error) { return kernels.CopyAtRows(rot, R) })
 	}
-	// The fault arm's rotations on a NoPE model (MLAFaultRotateNoPE).
-	rotate := !p.NoPosEnc || g.kb.mlaFault == MLAFaultRotateNoPE
-	if rotate {
+	if !p.NoPosEnc {
 		kern(&m.ropeK, func() (*ir.Kernel, error) { return kernels.RoPERows(1, rot, rot, p.RopeNeox, R) })
 	}
 	if m.qlr != 0 {
@@ -107,7 +105,7 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 	// The query's two halves, the absorb and the assembled row-wide query.
 	kern(&m.sliceNope, func() (*ir.Kernel, error) { return kernels.SliceRows(nope, p.HeadDim, 0, R*nh) })
 	kern(&m.slicePE, func() (*ir.Kernel, error) { return kernels.SliceRows(rot, p.HeadDim, nope, R*nh) })
-	if rotate {
+	if !p.NoPosEnc {
 		kern(&m.ropeQ, func() (*ir.Kernel, error) { return kernels.RoPERows(nh, rot, rot, p.RopeNeox, R) })
 	}
 	kern(&m.gatherNope, func() (*ir.Kernel, error) { return kernels.GatherRows(nope, nh*R, R*nh) })
@@ -118,13 +116,8 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 	// un-absorb's two reorderings.
 	kern(&m.acc, func() (*ir.Kernel, error) {
 		// gqa is NHead so that every head's value column is the row's own
-		// prefix -- decode's substitution (see the attnAcc builder), and its
-		// fault arm too.
-		gqa := nh
-		if g.kb.mlaFault == MLAFaultValueHeadMajor {
-			gqa = 1
-		}
-		return kernels.AttnAccTiled(nh, lat, row, gqa, bs.sstride, R, bs.atile)
+		// prefix -- decode's substitution (see the attnAcc builder).
+		return kernels.AttnAccTiled(nh, lat, row, nh, bs.sstride, R, bs.atile)
 	})
 	// Scores and accumulate on sm_70's tensor cores. The FMA tile walks the
 	// row in 4-byte loads a row apart (the layout is the cache's and cannot
@@ -148,11 +141,7 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 		}
 		m.scores70 = comp(kernels.AttnScoresMMA70(nh, row, row, nh, bs.sstride, g.scoreScale(p), R, 0,
 			volta70AttnMT, volta70AttnNT, 0))
-		gqa := nh
-		if g.kb.mlaFault == MLAFaultValueHeadMajor {
-			gqa = 1 // the tiled accumulate's fault arm, for the same gate
-		}
-		m.acc70 = comp(kernels.AttnAccMMA70(nh, lat, row, gqa, bs.sstride, R, volta70LatMT(lat), volta70AttnNT))
+		m.acc70 = comp(kernels.AttnAccMMA70(nh, lat, row, nh, bs.sstride, R, volta70LatMT(lat), volta70AttnNT))
 	}
 	kern(&m.gatherAcc, func() (*ir.Kernel, error) { return kernels.GatherRows(lat, nh*R, R*nh) })
 	kern(&m.quantAcc, func() (*ir.Kernel, error) { return kernels.Quantize(nh*R*lat, actWin) })
@@ -196,11 +185,7 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 			}
 		}
 		for gi := range tsel {
-			h := gi * groupTok / R
-			if g.kb.mlaFault == MLAFaultSheetOff {
-				h = (h + 1) % nh // decode's fault arm, for the same gate
-			}
-			tsel[gi] = uint32(h)
+			tsel[gi] = uint32(gi * groupTok / R)
 		}
 		for r := range qOff {
 			qOff[r] = uint32(r * nh * rot)

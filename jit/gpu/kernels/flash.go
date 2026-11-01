@@ -44,12 +44,6 @@ type FlashShape struct {
 	// MLA > 0 is the staged paged kernels' MLA layout: K one row-major region
 	// of Dim a position, V its first MLA elements.
 	MLA int
-	// MLAValueTail reads the MLA value from the row's last MLA elements
-	// instead of its first: a deliberate violation of the latent's one
-	// load-bearing layout fact, for the MLA gate (tier.MLAFaultValueHeadMajor
-	// on the paged path, where one V load serves every head and a head-major
-	// read cannot be expressed). Never set otherwise.
-	MLAValueTail bool
 	// KImm makes paged FlashDecodeKV address a tile's K as one base plus
 	// constant offsets rather than an index per dimension. Same addresses;
 	// the drivers disagree on which is fast, so the tier sets it per API.

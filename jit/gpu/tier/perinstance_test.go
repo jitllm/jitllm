@@ -14,7 +14,7 @@ import (
 func TestKnobsArePerTier(t *testing.T) {
 	pinned := []Option{WithDeviceTune(TuneOff), WithSplit(4), WithLanes(ir.SubgroupLanes),
 		WithBatchShape(BatchShape{RowT: 2, QTile: 2, AttnNT: 1, Parts: 32}), WithMMATile(2, 1),
-		WithCentering(false, 1), WithMLAFault(MLAFaultSheetOff), WithSkip("attn"),
+		WithCentering(false, 1), WithSkip("attn"),
 		WithPoisonScratch(true), WithMatVecAccSplit(3)}
 	plain := []Option{WithDeviceTune(TuneOff)}
 	open := func(opts []Option) (*devTier, *fakeDev) {
@@ -76,8 +76,7 @@ func TestKnobsArePerTier(t *testing.T) {
 			t.Errorf("pinned first=%v: both tiers emit a %d-op decode matvec; centering at "+
 				"MinTok 1 must change the pinned one", pinnedFirst, a)
 		}
-		if !p.kb.skip["attn"] || q.kb.skip["attn"] || p.kb.mlaFault != MLAFaultSheetOff ||
-			q.kb.mlaFault != MLAFaultNone || !p.kb.poisonScratch || q.kb.poisonScratch ||
+		if !p.kb.skip["attn"] || q.kb.skip["attn"] || !p.kb.poisonScratch || q.kb.poisonScratch ||
 			accSplitFor(64, 0, p.kb.mvAccSplit) != 3 || accSplitFor(64, 0, q.kb.mvAccSplit) == 3 {
 			t.Errorf("pinned first=%v: a knob leaked between tiers: pinned %+v, default %+v",
 				pinnedFirst, p.kb, q.kb)

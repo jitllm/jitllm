@@ -63,9 +63,6 @@ func PagedAttnAccMMA(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 	sp := prefillSpanOf(b, pRow, qryW, add(qryW, c(8*nt-1)))
 	dimW := mul(db, c(16*mt))
 	col := add(dimW, lg) // + 8x + 16i: the lane's A rows, dims of V
-	if s.MLAValueTail {
-		col = add(col, c(s.Dim-s.MLA))
-	}
 	if s.MLA == 0 {
 		col = add(mul(udiv(b, h, gqa), c(s.Dim)), col)
 	}

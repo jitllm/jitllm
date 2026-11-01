@@ -338,7 +338,7 @@ func (g *devTier) initPagedMLA(bs *blockScratch, comp func(*backend.Kernel, *ir.
 		}
 	}
 	pg.shape = kernels.FlashShape{Heads: p.NHead, KVHeads: 1, Dim: w, MLA: lat, Rows: rows,
-		Scale: g.scoreScale(p), Page: P, MLAValueTail: g.kb.mlaFault == MLAFaultValueHeadMajor}
+		Scale: g.scoreScale(p), Page: P}
 	if _, err := g.pagedPlanFor(bs, scoreGrain); err != nil {
 		return err
 	}

@@ -467,9 +467,6 @@ func PagedStagedAcc(s FlashShape) (*ir.Kernel, error) {
 	// The element (f32) or word (f16) this thread reads within a position's V
 	// row: its KV head's slice, or the MLA row's prefix.
 	col := j
-	if s.MLAValueTail {
-		col = add(j, u(s.Dim-s.MLA))
-	}
 	if s.MLA == 0 {
 		hb := mul(b.Div(ir.U32, h0, u(gqa)), u(s.Dim))
 		if s.F16 {

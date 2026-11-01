@@ -589,9 +589,6 @@ func PagedAttnAccTiled(s FlashShape, qt int) (*ir.Kernel, error) {
 	blocks := udiv(b, add(b.Sub(ir.U32, en, a8), u(blk-1)), blk)
 	blocks = b.Select(ir.U32, b.Lt(ir.U32, st, en), blocks, u(0))
 	col := j
-	if s.MLAValueTail {
-		col = add(j, u(s.Dim-s.MLA))
-	}
 	if s.MLA == 0 {
 		hb := mul(udiv(b, h, gqa), u(s.Dim))
 		if s.F16 {

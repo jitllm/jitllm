@@ -4591,11 +4591,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		pe := make([]uint32, p.NHead)
 		for h := 0; h < p.NHead; h++ {
 			id[h] = uint32(h)
-			if g.kb.mlaFault == MLAFaultSheetOff {
-				// Head h absorbs through head h+1's sheet: in bounds, finite,
-				// and a different model. See MLAFault.
-				id[h] = uint32((h + 1) % p.NHead)
-			}
 			abs[h] = uint32(h * bs.mlaRow)
 			pe[h] = uint32(h*bs.mlaRow + bs.mlaLat)
 		}
@@ -5065,13 +5060,8 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			// prefix. No split: the split's partial plane is sized from qdim.
 			if p.MLA() {
 				bs.accSplit = 1
-				// gqa is NHead so every head reads the row's own prefix; the fault arm
-				// makes it head-major instead.
-				gqa := p.NHead
-				if g.kb.mlaFault == MLAFaultValueHeadMajor {
-					gqa = 1
-				}
-				return kernels.AttnAcc(p.NHead, p.KVLoraRank, p.KVRow(), gqa, p.MaxSeq)
+				// gqa is NHead so every head reads the row's own prefix.
+				return kernels.AttnAcc(p.NHead, p.KVLoraRank, p.KVRow(), p.NHead, p.MaxSeq)
 			}
 			// The position split is a constant, not a tuned parameter: each thread's
 			// trip count is ceil((n - s)/S), zero for every split past n, so one S is

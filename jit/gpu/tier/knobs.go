@@ -35,7 +35,6 @@ type knobs struct {
 	mvMin         uint64          // bytes per crossing at which serving matvecs pays
 	mvMinSet      bool            // ... and whether a caller set it, since 0 is a value
 	arena         uint64          // packed-arena retention budget
-	mlaFault      MLAFault        // produce a wrong latent attention on purpose
 	scaleFault    ScaleFault      // drop one of Granite's scales on purpose
 	pageFault     PageFault       // read a routed expert's wrong page on purpose
 	cacheDir      string          // where the tuners' answers persist; "" keeps none
@@ -197,46 +196,6 @@ func WithSplitFault(on bool) Option { return func(o *openOpts) { o.kb.dropSegmen
 // only, leaving it in place for the matvecs. Config.NoMMA declines it
 // everywhere; this is the narrower bisection.
 func WithoutAttnMMA(on bool) Option { return func(o *openOpts) { o.kb.noAttnMMA = on } }
-
-// MLAFault is a deliberate violation of one of multi-head latent attention's
-// three load-bearing invariants. MLAFaultNone is the shipping path.
-//
-// It produces wrong answers on purpose so the gate comparing a placed MLA
-// block against the host can be shown to fire: each of these failures is
-// invisible to a shape check, an allocation ledger and a kernel gate.
-type MLAFault int
-
-const (
-	// MLAFaultNone is the engine.
-	MLAFaultNone MLAFault = iota
-	// MLAFaultSwapBanks absorbs through attn_v_b and un-absorbs through
-	// attn_k_b. It is the "W_k is not transposed" class expressed as something
-	// a test can force: the container stores attn_k_b ALREADY transposed and
-	// attn_v_b verbatim, so a tier that treated them alike -- or transposed the
-	// wrong one -- would compute exactly this, with every shape right.
-	MLAFaultSwapBanks
-	// MLAFaultValueHeadMajor reads the value as NHead heads of KVLoraRank
-	// inside the cache row -- head h at h*KVLoraRank -- instead of every head
-	// sharing the row's leading KVLoraRank floats. It is the mistake an
-	// ordinary head-major V cache invites; head 0 still reads the right floats.
-	MLAFaultValueHeadMajor
-	// MLAFaultSheetOff shifts the per-head sheet index of both absorb banks by
-	// one, so head h absorbs through head h+1's weights. Every read is in
-	// bounds, every value finite, and the model stays fluent.
-	MLAFaultSheetOff
-	// MLAFaultRotateNoPE rotates a NoPE model's rotary channels (Kimi-Linear
-	// keeps qk_rope_head_dim channels and never rotates them) in a batched
-	// chunk's and a ragged step's key and query (emitMLARows), as a positional
-	// model would. Exact at position 0, where the rotation is the identity, and
-	// wrong after. Decode does not take it, so its gates compare the batched
-	// path against decode a row at a time.
-	MLAFaultRotateNoPE
-)
-
-// WithMLAFault violates one of latent attention's invariants on purpose, so
-// that the gate comparing a placed MLA block against the host can be shown to
-// fire. MLAFaultNone is the default and the shipping path.
-func WithMLAFault(f MLAFault) Option { return func(o *openOpts) { o.kb.mlaFault = f } }
 
 // ScaleFault drops one of the scales a Granite model states (embedding_scale,
 // residual_scale, attention.scale) on the device, so the gate comparing its
