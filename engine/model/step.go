@@ -585,6 +585,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	}
 	s0.layerInputs(s0.bple[:rows*c.pleWidth()])
 	s0.tokenIDs(s0.stepTok)
+	s0.rowAxes(pos[0], 0, rows)
 	if !ss.LayersSessions(s0.lo, s0.hi, sess, pos, x, cs, csSWA, h) {
 		why := "no reason given"
 		if e, ok := s0.ld.(nn.ErrReporter); ok {
