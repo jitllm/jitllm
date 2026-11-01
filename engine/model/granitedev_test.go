@@ -25,14 +25,14 @@ import (
 // sessions step as rows against each alone (stepGate).
 //
 // Each scale is then dropped on the device arm and must part from the host by
-// ten times the band: the residual scale (tier.ScaleFaultResidual), the
-// attention scale at 1/sqrt(HeadDim) (ScaleFaultAttn), the embedding scale
-// the device's gather applies (ScaleFaultEmbd, where the prompt was gathered
-// on the device), and the logit divisor, which the host applies after the
-// device and which the arm skips by running with LogitScale 1. The greedy
-// gates cannot see the last: a positive divisor moves no argmax. The step's
-// own break is its residual fused into the projections unscaled
-// (ScaleFaultStepResidual).
+// ten times the band: the residual scale and the attention scale at
+// 1/sqrt(HeadDim), each as the model's statement of it, which the composer's
+// blocks read; the embedding scale the device's gather applies
+// (tier.ScaleFaultEmbd, where the prompt was gathered on the device); and the
+// logit divisor, which the host applies after the device and which the arm
+// skips by running with LogitScale 1. The greedy gates cannot see the last: a
+// positive divisor moves no argmax. The step's own break is its residual
+// scale not stated.
 //
 // JITLLM_GRANITE_MODELS names the models, comma-separated, under
 // $JITLLM_MODELS; the default is one dense and one mixture Granite.
@@ -112,8 +112,12 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 						opt  tier.Option
 						mut  func() func()
 					}{
-						{"residual scale dropped", tier.WithScaleFault(tier.ScaleFaultResidual), nil},
-						{"attention at 1/sqrt(head_dim)", tier.WithScaleFault(tier.ScaleFaultAttn), nil},
+						{"residual scale not stated", nil, func() func() {
+							return cfgMut(m, func(c *Config) { c.ResidualScale = 1 })
+						}},
+						{"attention at 1/sqrt(head_dim), stated", nil, func() func() {
+							return cfgMut(m, func(c *Config) { c.AttnScale = 1 / math.Sqrt(float64(c.HeadDim)) })
+						}},
 						{"logit divisor skipped", nil, func() func() {
 							keep := m.Cfg.LogitScale
 							m.Cfg.LogitScale = 1
@@ -179,9 +183,11 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 						stepBand = max(mixtureStepNMSE, denseStepBand*orderControl(t, m, dev))
 					}
 					r, _ := step()
-					rb, fused := step(tier.WithScaleFault(tier.ScaleFaultStepResidual))
+					undo := cfgMut(m, func(c *Config) { c.ResidualScale = 1 })
+					rb, _ := step()
+					undo()
 					t.Logf("step across sessions on %s: worst logit NMSE %.3e against each alone, band %.3e; with "+
-						"its residual fused unscaled %.3e (%d fused projections)", dev, r.worst, stepBand, rb.worst, fused)
+						"its residual scale not stated %.3e", dev, r.worst, stepBand, rb.worst)
 					if !(r.worst < stepBand) {
 						t.Fatalf("a Granite's step across sessions on %s parts from each session alone: NMSE %.3e, "+
 							"band %.3e", dev, r.worst, stepBand)
@@ -189,10 +195,9 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					if m.Cfg.MoE() {
 						need = max(stepBand, 10*r.worst)
 					}
-					if fused == 0 || !(rb.worst > need) {
-						t.Errorf("a step's residual fused unscaled: the step gate cannot see it -- NMSE %.3e against "+
-							"%.3e (band %.3e, clean step %.3e, %d fused projections)", rb.worst, need, stepBand,
-							r.worst, fused)
+					if !(rb.worst > need) {
+						t.Errorf("a step's residual scale not stated: the step gate cannot see it -- NMSE %.3e against "+
+							"%.3e (band %.3e, clean step %.3e)", rb.worst, need, stepBand, r.worst)
 					}
 					ran++
 				})
@@ -423,16 +428,12 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						opt  tier.Option
 						mut  func() func()
 					}{
-						{"residual scale dropped", tier.WithScaleFault(tier.ScaleFaultResidual), nil},
-						{"attention at 1/sqrt(head_dim)", tier.WithScaleFault(tier.ScaleFaultAttn), nil},
 						{"logit divisor skipped", nil, func() func() {
 							c.LogitScale = 1
 							return func() { c.LogitScale = 8 }
 						}},
-						// The same two scales as the model's statement of them, which
-						// reaches the composer's blocks as it reaches the tier's: a
-						// fault in the tier's kernels reaches the decode only where
-						// they are the tier's own.
+						// The residual and attention scales as the model's statement
+						// of them, which the composer's blocks read.
 						{"residual scale not stated", nil, func() func() {
 							return cfgMut(m, func(c *Config) { c.ResidualScale = 1 })
 						}},

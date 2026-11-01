@@ -2259,12 +2259,8 @@ func residScaled(p *nn.LayerPlan) bool { return p.ResidualScale != 0 && p.Residu
 
 // scoreScale is the attention score multiplier every kernel of p's attention
 // bakes: the plan's (nn.LayerPlan.Scale), which Granite's attention.scale and
-// YaRN's magnitude correction replace, or 1/sqrt(HeadDim) under
-// ScaleFaultAttn.
+// YaRN's magnitude correction replace.
 func (g *devTier) scoreScale(p *nn.LayerPlan) float32 {
-	if g.kb.scaleFault == ScaleFaultAttn {
-		return float32(1 / math.Sqrt(float64(p.HeadDim)))
-	}
 	return float32(p.Scale())
 }
 
@@ -7874,14 +7870,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	// the model scales its block outputs (residScaled): never fused into a
 	// projection or a norm, which carry no scale.
 	scaled := residScaled(p)
-	// resScaled keeps the projections from fusing the residual; only
-	// ScaleFaultStepResidual lets a ragged step's fuse it, unscaled.
+	// resScaled keeps the projections from fusing the residual.
 	addRes := func(x, y, out backend.Buf) {
 		if scaled {
-			if g.kb.scaleFault == ScaleFaultResidual {
-				lc.la(bs.addE, R*p.NEmbd, x, y, out)
-				return
-			}
 			lc.la(bs.addS, R*p.NEmbd, x, y, bs.rscale, out)
 			g.ResidScaled++
 			return

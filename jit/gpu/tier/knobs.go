@@ -197,29 +197,18 @@ func WithSplitFault(on bool) Option { return func(o *openOpts) { o.kb.dropSegmen
 // everywhere; this is the narrower bisection.
 func WithoutAttnMMA(on bool) Option { return func(o *openOpts) { o.kb.noAttnMMA = on } }
 
-// ScaleFault drops one of the scales a Granite model states (embedding_scale,
-// residual_scale, attention.scale) on the device, so the gate comparing its
-// placed blocks against the host can be shown to fire. Each leaves a fluent
-// model: a scale is one multiply, and nothing about a shape or a buffer moves.
-// ScaleFaultNone is the shipping path. (logit_scale divides the logits on the
-// host after the device, so it has no device arm to break.)
+// ScaleFault drops Granite's embedding_scale from the composed input rows'
+// graph on the device, so the gate comparing its placed blocks against the
+// host can be shown to fire. The residual and attention scales are the
+// model's statement, broken there (the gates' "not stated" arms).
+// ScaleFaultNone is the shipping path.
 type ScaleFault int
 
 const (
 	// ScaleFaultNone is the engine.
 	ScaleFaultNone ScaleFault = iota
-	// ScaleFaultResidual adds each block output to the residual unscaled.
-	ScaleFaultResidual
-	// ScaleFaultAttn scores attention at 1/sqrt(HeadDim) instead of the plan's
-	// scale, in every kernel that bakes one (devTier.scoreScale).
-	ScaleFaultAttn
 	// ScaleFaultEmbd gathers a prompt's embedding rows on the device unscaled.
 	ScaleFaultEmbd
-	// ScaleFaultStepResidual lets a step across sessions fuse its attention
-	// and FFN residual adds into the projections, unscaled, where decode and a
-	// prompt chunk keep the scaled add: the step alone parts from each session
-	// run alone.
-	ScaleFaultStepResidual
 )
 
 // WithScaleFault drops one of Granite's scales on the device on purpose.
