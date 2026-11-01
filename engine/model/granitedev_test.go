@@ -49,17 +49,17 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 			host := hostRun(t, m, seq, prompt, forced)
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					rowwise := func(split int) []tier.Option {
-						return []tier.Option{tier.WithSplit(split),
-							tier.WithConfig(func(c *tier.Config) { c.NoBatch = true })}
+					rowwise := func(unsplit bool) []tier.Option {
+						return []tier.Option{tier.WithConfig(func(c *tier.Config) { c.NoBatch, c.ComposedUnsplit = true, unsplit })}
 					}
-					// The order-only control: every token a row at a time at two
-					// splits, which moves nothing but the summation order.
-					rows, _, why := graniteRun(t, m, dev, seq, nil, slices.Concat(prompt, forced), rowwise(1))
+					// The order-only control: every token a row at a time, the
+					// composer's sums split and unsplit, which moves nothing but
+					// the summation order.
+					rows, _, why := graniteRun(t, m, dev, seq, nil, slices.Concat(prompt, forced), rowwise(false))
 					if why != "" {
 						t.Skip(why)
 					}
-					ctlRows, _, why := graniteRun(t, m, dev, seq, nil, slices.Concat(prompt, forced), rowwise(4))
+					ctlRows, _, why := graniteRun(t, m, dev, seq, nil, slices.Concat(prompt, forced), rowwise(true))
 					if why != "" {
 						t.Fatal(why)
 					}
