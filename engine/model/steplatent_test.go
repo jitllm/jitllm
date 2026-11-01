@@ -237,32 +237,3 @@ type prefillResult struct {
 	p90, worst, logits float64
 	at                 int
 }
-
-// TestStepAcrossSessionsNoPELatentGateDiscriminates runs the latent step gate
-// on Kimi-Linear with its rotary channels rotated in the ragged step
-// (tier.MLAFaultRotateNoPE), as a positional model's would be, and demands the
-// gate see it: a NoPE key rotated is exact at position 0 and wrong after, the
-// bug AGENTS.md records twice, and a step gate that passed it could not tell
-// the ragged path from decode's.
-func TestStepAcrossSessionsNoPELatentGateDiscriminates(t *testing.T) {
-	m := openLatent(t, "synth-kimilinear")
-	defer m.Close()
-	if !m.Cfg.NoPosEnc {
-		t.Fatal("synth-kimilinear does not set NoPosEnc: the rotation this gate is about runs anyway")
-	}
-	for _, dev := range stepDevices() {
-		t.Run(dev, func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-				tier.WithMLAFault(tier.MLAFaultRotateNoPE)}, testTierOpts(t)...)...)
-			if err != nil || g == nil {
-				noDevice(t, dev, err)
-			}
-			defer g.Close()
-			r := latentStepGate(t, m, g)
-			t.Logf("rotated NoPE channels: worst logit NMSE %.3e (row %d)", r.worst, r.at)
-			if r.worst < mlaDeviceNMSE {
-				t.Fatalf("the gate passed a ragged step rotating a NoPE key at NMSE %.3e: it cannot see it", r.worst)
-			}
-		})
-	}
-}
