@@ -861,7 +861,7 @@ func (s *gpuSession) RowsRoom(rows, seqs int, head *nn.Head) (bool, error) {
 func (s *gpuSession) RowsWidth(want int) int { return s.g.RowsWidth(want) }
 
 func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	defer s.leave(s.step())
+	defer s.leave(s.inputsTo(s.step()))
 	s.rows.in = s
 	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
 }
@@ -890,7 +890,7 @@ func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerDevice, pos []int
 		}
 		sid[i], slot[i] = o.sid, pos[i]
 	}
-	defer s.leave(s.step())
+	defer s.leave(s.inputsTo(s.step()))
 	s.rows.in = s
 	// A session is one sequence whose slots are its positions, so the span a
 	// sequence takes is no matter: every row's sequence is its session's 0.
