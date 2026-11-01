@@ -64,7 +64,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 				win       int
 			}
 			arms := []cpuArm{{"float", Default().WithoutInt8(DeviceCPU), host, false, 0}, {"int8", withCPUInt8(), host, false, 0},
-				{"int8 inexact division", withCPUInt8(), host, true, 0}}
+				{"int8 inexact division", withCPUInt8(), host, true, 0}, {"int8 with no lanes", withCPUInt8NoLanes(), host, false, 0}}
 			if vnni := uint64(x86.ISAVNNI); host&vnni != 0 {
 				arms = append(arms, cpuArm{"int8 without vnni", withCPUInt8(), host &^ vnni, false, 0})
 			}
@@ -422,6 +422,16 @@ func withCPUInt8() *Registry {
 	r := Default()
 	p := r.Profiles[DeviceCPU]
 	p.Int8 = &Int8Form{Window: 32, Word: 4, Sums: 16, UnsignedDot: uint64(x86.ISAVNNI), Slot: 16}
+	r.Profiles[DeviceCPU] = p
+	return r
+}
+
+// withCPUInt8NoLanes is withCPUInt8 with no loop across lanes, a float's
+// bits in the general registers (Kernel.Unvector).
+func withCPUInt8NoLanes() *Registry {
+	r := withCPUInt8()
+	p := r.Profiles[DeviceCPU]
+	p.Off = map[string]bool{Vectorize{}.Name(): true}
 	r.Profiles[DeviceCPU] = p
 	return r
 }

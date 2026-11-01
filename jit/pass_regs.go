@@ -180,6 +180,7 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	w := k.clone()
+	w.BitsGPR = w.Unvector && d.ISA&uint64(x86.ISASSE2) != 0
 	moved := map[int]bool{}
 	if p.Resident != nil {
 		w.residents(p.Resident, moved)
@@ -1338,7 +1339,7 @@ func (k *Kernel) VectorWords() map[int]bool {
 			if data(nd.A) && k.Nodes[nd.A].Op != OpConst {
 				set(nd.A)
 			}
-		case nd.Op == OpBitcast || nd.Op == OpCvtI32:
+		case nd.Op == OpBitcast && !k.BitsGPR || nd.Op == OpCvtI32:
 			if k.Nodes[nd.A].Type == ir.F32 {
 				set(i)
 			}

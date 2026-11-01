@@ -375,6 +375,8 @@ func (e *x86Lowerer) node(i int) {
 			a.VMOVDToX(e.reg(i), e.reg(nd.A))
 		case e.gpr(nd.A) && e.reg(i) != e.reg(nd.A):
 			a.MOVQ(e.reg(i), e.reg(nd.A))
+		case k.BitsGPR && k.Nodes[nd.A].Type == ir.F32 && e.gpr(i):
+			a.VMOVDFromX(e.reg(i), e.reg(nd.A))
 		case e.reg(i) != e.reg(nd.A):
 			// The operand is read again after: its bits in a register of
 			// their own.

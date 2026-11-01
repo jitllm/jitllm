@@ -63,6 +63,11 @@ type Kernel struct {
 	// loop's rows across lanes (Jam) they refused, Uncursored one whose
 	// form walking its buffers' addresses (Cursors) they refused.
 	Unpaired, Unwide, Uncursored bool
+	// Unvector is a kernel of a part whose vector form the registers refused
+	// with nothing else left to take apart: formed with no loop across lanes.
+	// BitsGPR is one whose float bits a bitcast takes go to the general
+	// registers, which spill: an Unvector kernel on an x86 device (Regs).
+	Unvector, BitsGPR bool
 	// Split is a kernel whose byte dots' runs HalfSplit cut, Unsplit one of
 	// a part whose cut form the registers refused.
 	Split, Unsplit bool

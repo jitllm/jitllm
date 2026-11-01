@@ -240,6 +240,8 @@ func (e *x86Lowerer) nodeSSE(i int) {
 			a.MOVDToX(e.reg(i), e.reg(nd.A))
 		case e.gpr(nd.A) && e.reg(i) != e.reg(nd.A):
 			a.MOVQ(e.reg(i), e.reg(nd.A))
+		case k.BitsGPR && k.Nodes[nd.A].Type == ir.F32 && e.gpr(i):
+			a.MOVDFromX(e.reg(i), e.reg(nd.A))
 		case e.reg(i) != e.reg(nd.A):
 			a.MOVAPS(e.reg(i), e.reg(nd.A))
 		}

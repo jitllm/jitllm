@@ -42,6 +42,9 @@ func (Vectorize) Name() string { return "vectorize" }
 
 func (p Vectorize) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
+		if k.Unvector {
+			return nil, false, nil
+		}
 		m := k.clone()
 		changed := false
 		for c := 0; c < len(m.Loops); c++ {

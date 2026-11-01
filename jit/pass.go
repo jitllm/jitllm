@@ -55,6 +55,12 @@ type Int8Form struct {
 }
 
 func (p Profile) run(ks []*Kernel, d Device) ([]*Kernel, error) {
+	if p.Off[Vectorize{}.Name()] {
+		// No loop across lanes: the form the registers' refusal leaves.
+		for _, k := range ks {
+			k.Unvector = true
+		}
+	}
 	for _, ps := range p.Passes {
 		if p.Off[ps.Name()] {
 			continue

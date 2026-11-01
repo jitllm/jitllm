@@ -118,14 +118,15 @@ type exprSplit struct {
 	// unwide those formed with no loop's rows across lanes (Jam),
 	// uncursored those formed indexing their buffers (Cursors), unsplit
 	// those formed with their dots' runs whole (HalfSplit), unstreamed
-	// those formed walking each row group through every sub-block (Streams).
-	unfused, unpaired, unwide, uncursored, unsplit map[int]bool
-	unstreamed, crowded                            map[KernelAt]bool
-	unjammed                                       map[int]int
+	// those formed walking each row group through every sub-block (Streams),
+	// unvector those formed with no loop across lanes (Vectorize).
+	unfused, unpaired, unwide, uncursored, unsplit, unvector map[int]bool
+	unstreamed, crowded                                      map[KernelAt]bool
+	unjammed                                                 map[int]int
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unvector: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
 }
 
 // splitRefused forms a part whose refused kernel walked a weight's planes
@@ -208,6 +209,16 @@ func (sp *exprSplit) splitRefused(err error) bool {
 		more = more || split
 	}
 	clear(sp.whole)
+	if more {
+		return true
+	}
+	// Nothing left to take apart: the part's kernels formed with no loop
+	// across lanes.
+	for _, of := range pe.Parts {
+		if !sp.unvector[of] {
+			sp.unvector[of], more = true, true
+		}
+	}
 	return more
 }
 
