@@ -1347,7 +1347,8 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	if !g.prewarming {
 		g.FormedAtStep++
 		g.FormedAtStepParts[sk.kind]++
-		g.LastErr = fmt.Sprintf("the composed %s formed at %d rows outside a placement", partNames[sk.kind], sk.rows)
+		g.LastErr = fmt.Sprintf("the composed %s formed at %d rows outside a placement (keys %d, seqs %d, stream %v, held %d)",
+			partNames[sk.kind], sk.rows, sk.keys, sk.seqs, sk.stream, sk.held)
 	}
 	if g.composer == nil {
 		g.composer = jit.Default()
