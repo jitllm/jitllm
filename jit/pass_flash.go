@@ -266,7 +266,7 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 			windowed = windowed || b.Operand == tableWindows
 		}
 	}
-	if dt.k.Nodes[dt.k.Positions.First].Op != OpLoad {
+	if dt.k.Nodes[dt.k.Positions.First].Op != OpLoad || windowed && dt.k.Nodes[dt.k.Positions.End].Op != OpLoad {
 		return nil, false
 	}
 	qx, kx, ok := products(dt)
@@ -362,7 +362,7 @@ type flashBuild struct {
 	scale    bool
 	sums     []int
 	windowed bool
-	end0     int
+	own0     int
 }
 
 func (b *flashBuild) side(m *member, row, kpos, inner int, subs map[Operand]int) *flashSide {
@@ -458,7 +458,11 @@ func (b *flashBuild) kernel() *Kernel {
 	first := b.side(b.dt, m.bin(OpMin, ir.U32, b.r0, b.last), 0, 0, nil).at(m, ps.First)
 	end := b.side(b.dt, b.rl, 0, 0, nil).at(m, ps.End)
 	if b.windowed {
-		b.end0 = b.side(b.dt, m.bin(OpMin, ir.U32, b.r0, b.last), 0, 0, nil).at(m, ps.End)
+		// The first row's own position, its descriptor's write word.
+		r := m.bin(OpMin, ir.U32, b.r0, b.last)
+		own := m.Nodes[b.side(b.dt, r, 0, 0, nil).at(m, ps.End)]
+		own.A = m.bin(OpAdd, U, m.bin(OpMul, U, r, m.u32(rowWords)), m.u32(rowWrite))
+		b.own0 = m.add(own)
 	}
 	span := m.add(Node{Op: OpSelect, Type: U, A: m.add(Node{Op: OpLess, Type: ir.Pred, A: first, B: end}), B: m.bin(OpSub, U, end, first), C: m.u32(0)})
 	blocks := m.bin(OpMax, U, m.bin(OpDiv, U, m.bin(OpAdd, U, span, m.u32(g.KB-1)), m.u32(g.KB)), m.u32(1))
@@ -520,14 +524,15 @@ func (b *flashBuild) stageBlock() {
 }
 
 // stageRow is the row whose descriptor addresses position kpos: the
-// tile's last, or in a windowed chain the row kpos is the last position
-// of, the first row for a position before it.
+// tile's last, or in a windowed chain the row at position kpos, the first
+// row for a position before it and the last past it. Not the row whose
+// range ends at kpos: a bidirectional run's rows all end at the run's end.
 func (b *flashBuild) stageRow(kpos int) int {
 	if !b.windowed {
 		return b.rl
 	}
 	U, m := ir.U32, b.m
-	own := m.bin(OpSub, U, b.end0, m.u32(1))
+	own := b.own0
 	past := m.add(Node{Op: OpSelect, Type: U, A: m.add(Node{Op: OpLess, Type: ir.Pred, A: own, B: kpos}), B: m.bin(OpSub, U, kpos, own), C: m.u32(0)})
 	return m.bin(OpMin, U, m.bin(OpAdd, U, b.r0, m.bin(OpMin, U, past, m.u32(b.g.TR-1))), b.last)
 }

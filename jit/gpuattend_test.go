@@ -29,12 +29,15 @@ type attendRowsCase struct {
 
 // attendInputs is what a gate's factors hold: the positions before the
 // chunk (2100 where 0), the factors' deviation (1 where 0; at 4 most
-// exponentials fall below binary16's normal range), and whether the row
-// and position factors share a large part whose dots cancel.
+// exponentials fall below binary16's normal range), whether the row and
+// position factors share a large part whose dots cancel, and the chunk's
+// rows [run[0], run[1]) that attend to the run's end, as a picture's rows
+// do, each window still starting from the row's own position.
 type attendInputs struct {
 	ctx    int
 	spread float64
 	cancel bool
+	run    [2]int
 }
 
 // TestComposedGPUAttendRows forms an appended history and the attention
@@ -87,6 +90,8 @@ func TestComposedGPUAttendRows(t *testing.T) {
 		{attendRowsCase{8, 2, 64, 0, false, true}, attendInputs{spread: 4}},
 		{attendRowsCase{8, 2, 128, 0, false, false}, attendInputs{ctx: 8192}},
 		{attendRowsCase{8, 2, 128, 0, true, true}, attendInputs{ctx: 8192}},
+		{attendRowsCase{12, 4, 64, 16, false, false}, attendInputs{run: [2]int{0, 20}}},
+		{attendRowsCase{8, 2, 64, 0, false, false}, attendInputs{run: [2]int{5, 20}}},
 	}
 	matrices, cuda := 0, false
 	for _, d := range devs {
@@ -101,8 +106,8 @@ func TestComposedGPUAttendRows(t *testing.T) {
 					matrices++
 				}
 				c, in := tc.c, tc.in
-				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v/ctx%d/spread%g/cancel%v", d.API(), matrix,
-					c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v, in.ctx, in.spread, in.cancel)
+				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v/ctx%d/spread%g/cancel%v/run%d-%d", d.API(), matrix,
+					c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v, in.ctx, in.spread, in.cancel, in.run[0], in.run[1])
 				t.Run(name, func(t *testing.T) { gpuAttendRows(t, d, c, in, matrix) })
 			}
 		}
@@ -241,6 +246,15 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 		}
 		return 0
 	}
+	// end is one past row r's last attended position; runOn off states the
+	// run's rows causal, the violation.
+	runOn := true
+	end := func(r int) int {
+		if runOn && r >= in.run[0] && r < in.run[1] {
+			return p0 + in.run[1]
+		}
+		return p0 + r + 1
+	}
 	// A sink near the log-sum-exp of the first row's scores holds about as
 	// much as the positions do, at any length and spread.
 	sinkv := make([]float32, c.heads)
@@ -263,13 +277,13 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	// and, where msq, the expected squared error the flash form's binary16
 	// operands add to it (flashErr).
 	row := func(r int, qr []float32, sinkOn, msq bool) ([]float64, float64) {
-		want, n := make([]float64, qw), p0+r+1-first(r)
+		want, n := make([]float64, qw), end(r)-first(r)
 		var mse float64
 		raw, wt := make([]float64, 0, n+1), make([]float64, 0, n+1)
 		for h := range c.heads {
 			kv, qh := h/(c.heads/c.kvh), qr[h*c.dim:(h+1)*c.dim]
 			raw = raw[:0]
-			for p := first(r); p <= p0+r; p++ {
+			for p := first(r); p < end(r); p++ {
 				var s float64
 				for e, x := range qh {
 					s += float64(x) * float64(ks[p][kv*c.dim+e])
@@ -302,9 +316,9 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	run := func(shift uint32, sv, q []float32) []float32 {
 		rows, win := make([]uint32, capRows*4), make([]uint32, capRows*4)
 		for r := range R {
-			p := uint32(p0 + r)
-			copy(rows[r*4:], []uint32{0, shift, p + 1, p})
-			copy(win[r*4:], []uint32{0, uint32(first(r)) + shift, p + 1, p})
+			p, e := uint32(p0+r), uint32(end(r))
+			copy(rows[r*4:], []uint32{0, shift, e, p})
+			copy(win[r*4:], []uint32{0, uint32(first(r)) + shift, e, p})
 		}
 		vals := map[graph.ValueID][]uint32{g.In[0]: f32w(k), g.In[1]: f32w(v), g.In[2]: f32w(q), g.Out[0]: poisoned(capRows * qw)}
 		tables := map[string][]uint32{"rows": rows, "rows.win": win, "rows.n": {uint32(R)}, "pages": pages,
@@ -371,6 +385,15 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	if c.sinks {
 		if e := nmse(run(0, make([]float32, c.heads), q), want, 0); !(e > max(1e-6, budget[0])) {
 			t.Errorf("with the sinks zeroed the NMSE is %.3e: the gate cannot see the sinks", e)
+		}
+	}
+	if in.run[1] > 0 {
+		runOn = false
+		causal := run(0, sinkv, q)
+		runOn = true
+		r := in.run[0]
+		if e := nmse(causal, want, r); !(e > max(1e-6, budget[r])) {
+			t.Errorf("with the run's rows causal row %d reads NMSE %.3e: the gate cannot see the run", r, e)
 		}
 	}
 	if flash != 1 {
