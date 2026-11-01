@@ -384,9 +384,8 @@ func WithKVHeadMajor(on bool) Option { return func(l *loadOpts) { l.opt.kvHeadMa
 // the composer forms for the CPU from the block's graph, its history in the
 // State's KV pages, each layer's held as one span the kernels address
 // (kvArena). A block step the composer does not serve runs main's kernels
-// and is counted by its reason (State.CPUBlockSteps). Off by default until
-// the composed CPU path passes the CPU's gates (composedCPUByDefault): the
-// cards go first, by the user's staging.
+// and is counted by its reason (State.CPUBlockSteps). On by default
+// (composedCPUByDefault).
 func WithComposedCPU(on bool) Option {
 	return func(l *loadOpts) { l.opt.composedCPU, l.opt.composedCPUSet = on, true }
 }
@@ -559,4 +558,4 @@ func (o *modelOpts) hybridSpinFor() time.Duration {
 
 // composedCPUByDefault is whether a model opened with no WithComposedCPU runs
 // its CPU blocks on the composer's kernels.
-const composedCPUByDefault = false
+const composedCPUByDefault = true
