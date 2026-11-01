@@ -51,7 +51,7 @@ func TestComposedCPURowsServe(t *testing.T) {
 				m.setKVPageForTest(page)
 				return m
 			}
-			ref, ctlm, cm := open(), open(WithJITOptions(nn.WithActWindow(cpuControlWindow))), open(WithComposedCPU(true))
+			ref, ctlm, cm := open(), open(WithJITOptions(nn.WithActWindow(cpuControlWindow))), open()
 			defer ref.Close()
 			defer ctlm.Close()
 			defer cm.Close()
@@ -329,7 +329,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 	}
 	for _, file := range files {
 		t.Run(file, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune, WithComposedCPU(true))
+			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune)
 			if err != nil {
 				t.Fatal(err)
 			}

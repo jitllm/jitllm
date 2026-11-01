@@ -112,7 +112,7 @@ func (m *Model) NewEmbedder() (*Embedder, error) {
 		e.st, e.jit = st, st.jit
 	} else if err := e.encoderJIT(); err != nil {
 		return nil, err
-	} else if m.opt.composedCPU {
+	} else {
 		// The blocks the composer runs on the CPU device run through the
 		// encoder's segment, as a device's do.
 		e.seg = m.encState(e.jit)

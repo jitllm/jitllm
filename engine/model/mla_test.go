@@ -185,7 +185,7 @@ func TestMLABatchMatchesDecode(t *testing.T) {
 
 func mlaBatchMatchesDecode(t *testing.T, name string, composed bool) {
 	t.Helper()
-	m := mlaOpen(t, name, WithComposedCPU(composed))
+	m := mlaOpen(t, name)
 	defer m.Close()
 	if !m.Cfg.MLA() {
 		t.Fatalf("%s is not an MLA model -- this gate proved nothing", name)

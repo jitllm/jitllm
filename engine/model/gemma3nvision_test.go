@@ -143,7 +143,7 @@ func TestGemma3nTowerMatchesTransformers(t *testing.T) {
 	// The CPU device's composed arm: every block the front end states run
 	// by the composer (frontconv.go), held to transformers' at the same
 	// bound, its blocks counted.
-	cm, _ := openGemma3nV(t, WithComposedCPU(true))
+	cm, _ := openGemma3nV(t)
 	defer cm.Close()
 	cs := cm.Tower().testState()
 	px, err := cs.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))

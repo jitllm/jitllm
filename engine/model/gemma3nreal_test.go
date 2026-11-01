@@ -74,7 +74,7 @@ func TestGemma3nRealMatchesTransformers(t *testing.T) {
 		t.Errorf("the real tower with symmetric padding reads %.3e against a clean %.3e: the gate cannot see it", bn, nm)
 	}
 	// The CPU device's composed arm on the real weights (frontconv.go).
-	cm, err := Open(jlmOfPair(t, text, proj), noTune, WithKVF16(false), WithComposedCPU(true))
+	cm, err := Open(jlmOfPair(t, text, proj), noTune, WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

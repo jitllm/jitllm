@@ -66,7 +66,7 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 			defer cm.Close()
 			cm.setKVPageForTest(page)
 			ctl := cpuLogits(t, cm, toks, cpuFaultNone, false)
-			m, err := Open(path, noTune, WithComposedCPU(true))
+			m, err := Open(path, noTune)
 			if err != nil {
 				t.Fatal(err)
 			}

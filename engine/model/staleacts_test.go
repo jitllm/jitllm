@@ -34,7 +34,7 @@ func TestOpenRefusesAContainerThatStatesNoActivations(t *testing.T) {
 	}); err != nil || !changed {
 		t.Fatalf("writing the container without its activations: changed %v, %v", changed, err)
 	}
-	m, err := Open(old, noTune, WithComposedCPU(true))
+	m, err := Open(old, noTune)
 	var up *UpgradeRequiredError
 	if !errors.As(err, &up) {
 		if m != nil {
@@ -55,7 +55,7 @@ func TestOpenRefusesAContainerThatStatesNoActivations(t *testing.T) {
 	if changed, err := jlm.Restate(old, convert.StateStored); err != nil || !changed {
 		t.Fatalf("restating: changed %v, %v", changed, err)
 	}
-	m, err = Open(old, noTune, WithComposedCPU(true))
+	m, err = Open(old, noTune)
 	if err != nil {
 		t.Fatalf("the upgraded container: %v", err)
 	}

@@ -59,7 +59,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 		// experts their rows pick.
 		for _, file := range append([]string{"Qwen3-0.6B-Q8_0.gguf"}, cpuMixtureRowsModels...) {
 			t.Run(file, func(t *testing.T) {
-				m, err := Open(jlmOf(t, testmodels.Path(file)), noTune, WithComposedCPU(true))
+				m, err := Open(jlmOf(t, testmodels.Path(file)), noTune)
 				if err != nil {
 					t.Fatal(err)
 				}

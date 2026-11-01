@@ -31,8 +31,7 @@ type encRun struct {
 	violation string
 	// audio says the segment is an audio tower's blocks (audiodev.go).
 	audio bool
-	// ncArena is where the composer runs the segment's CPU blocks
-	// (WithComposedCPU).
+	// ncArena is where the composer runs the segment's CPU blocks.
 	ncArena
 }
 
@@ -70,22 +69,17 @@ func (m *Model) encState(j *nn.JIT) *State {
 	s.jit = j
 	// The segment keeps no history: a non-causal block's keys live one call
 	// deep, on the device. The cache is the shape every State has, empty.
-	keys := 1
-	if m.opt.composedCPU {
-		// Where the composer runs blocks on the CPU, their keys live one
-		// block deep in the segment's arena (ncArena): one page of the rows.
-		keys = n
-	}
+	// The composer's CPU blocks keep their keys one block deep in the
+	// segment's arena (ncArena): one page of the rows.
+	keys := n
 	s.kvl = kvLayout{maxSeq: keys, nKV: c.NKVHead, headDim: c.HeadDim}
 	s.kv = newKVCacheRange(c, nextCacheID(), 1, s.kvl, nil, align(keys, kvKeyTile), s.lo, s.hi)
 	s.attnG = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, s.kvl.Stride(), cpu.KVF32)
 	s.attnL = s.attnG
 	s.attStride = attStride(1)
 	s.memBudget = sched.MemBudget()
-	if m.opt.composedCPU {
-		s.mapNC()
-		s.cpuPlace()
-	}
+	s.mapNC()
+	s.cpuPlace()
 	return s
 }
 

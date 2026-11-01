@@ -29,8 +29,8 @@ import (
 // declined by name (CPUBlockSteps), as the tier counts a card's.
 
 // CPUBlockSteps is how many block steps on the CPU the composer served, and
-// how many it declined, by reason (jit.DeclineName). With the composed CPU
-// off (WithComposedCPU) nothing is counted.
+// how many it declined, by reason (jit.DeclineName); a decline is the
+// step's error (cpuRefused).
 func (s *State) CPUBlockSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.served, s.cpu.declined
 }
@@ -643,7 +643,7 @@ func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, p
 		for b < hi && s.rowOwn[b] == o {
 			b++
 		}
-		if o.m != s.m || !o.m.opt.composedCPU {
+		if o.m != s.m {
 			return jit.DeclineSessions, nil
 		}
 		f, why := o.cpuRowsForm(li, l)
@@ -1368,9 +1368,6 @@ func (r *cpuRegion) groupRegion(w, lo, hi int) {
 // cpuPlace composes a new State's blocks on the CPU: each block of the
 // State's range no device holds, once, at its placement (cpuCompose).
 func (s *State) cpuPlace() {
-	if !s.m.opt.composedCPU {
-		return
-	}
 	// A segment's blocks are past the text model's in the one block space.
 	n := max(s.c.NLayer, s.hi)
 	s.cpu.blocks = make([]*cpuBlock, n)

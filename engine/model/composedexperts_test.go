@@ -255,7 +255,7 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 			cm.setKVPageForTest(page)
 			ctl := cpuLogits(t, cm, toks, cpuFaultNone, false)
 			run := func(f cpuFault, opts ...Option) ([][]float32, int64) {
-				m, err := Open(path, append([]Option{noTune, WithComposedCPU(true)}, opts...)...)
+				m, err := Open(path, append([]Option{noTune}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -382,7 +382,7 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 			ctlm.Close()
 			run := func(f cpuFault, opts ...Option) ([][]float32, int64) {
 				t.Helper()
-				m := open(append([]Option{WithComposedCPU(true)}, opts...)...)
+				m := open(opts...)
 				defer m.Close()
 				got := prompt(m, f, true)
 				_, in, _ := m.PageStats()
@@ -466,7 +466,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 					noDevice(t, dev, err)
 				}
 				defer g.Close()
-				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithComposedCPU(true), WithExperts("card"), WithStreamTrial(false))
+				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts("card"), WithStreamTrial(false))
 				if err != nil {
 					t.Fatal(err)
 				}

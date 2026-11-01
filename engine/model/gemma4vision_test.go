@@ -149,7 +149,7 @@ func TestGemma4PreprocessMatchesTheProcessor(t *testing.T) {
 // stored in the bounds.
 func TestGemma4TowerMatchesTransformers(t *testing.T) {
 	gemma4TowerMatchesTransformers(t)
-	t.Run("composed-cpu", func(t *testing.T) { gemma4TowerMatchesTransformers(t, WithComposedCPU(true)) })
+	t.Run("composed-cpu", func(t *testing.T) { gemma4TowerMatchesTransformers(t) })
 }
 
 func gemma4TowerMatchesTransformers(t *testing.T, opts ...Option) {

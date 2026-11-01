@@ -819,7 +819,7 @@ func (m *Model) encRoleVector(li int, r jlm.Role) []float32 {
 }
 
 // cpuRuns reports whether encoder block li runs on the composer's CPU
-// device: the Embedder's segment composed it there (WithComposedCPU).
+// device: the Embedder's segment composed it there.
 func (e *Embedder) cpuRuns(li int) bool {
 	s := e.seg
 	return s != nil && s.nc() != nil && s.nc().arena != nil && !s.devAt(li)

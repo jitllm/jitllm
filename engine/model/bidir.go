@@ -84,7 +84,7 @@ func (s *State) bidirTell(p0, n int) bool {
 }
 
 // ncArena is a non-causal segment's history on the CPU device
-// (WithComposedCPU), a tower's or an encoder's: its keys live one block
+// (cpuserve.go), a tower's or an encoder's: its keys live one block
 // deep, so every block borrows the one page in turn (lendNC), the pool its
 // form addresses (kvArena).
 type ncArena struct {

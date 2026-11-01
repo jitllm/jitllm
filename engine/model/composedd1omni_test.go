@@ -17,7 +17,7 @@ import (
 // of every encode counted one way or the other, the logits held to the
 // reference at the main gate's bound, and the head's rows made causal seen.
 func TestComposedD1OmniOnCPU(t *testing.T) {
-	m := openDecision(t, d1OmniModel, jlm.DecisionD1Omni, WithComposedCPU(true))
+	m := openDecision(t, d1OmniModel, jlm.DecisionD1Omni)
 	defer m.Close()
 	trunk, nb := m.enc.mb.trunk, m.encBlocks()
 	for li := range nb {

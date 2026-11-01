@@ -153,7 +153,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			// it serves there: every block step of the window served.
 			if slices.Contains(cpuServedModels, name) || slices.Contains(cpuExpertAllocModels, name) {
 				t.Run("host-composed", func(t *testing.T) {
-					mc, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false), WithComposedCPU(true))
+					mc, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -622,7 +622,7 @@ func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
 	if g != nil && s.GPULayers() < placed {
 		t.Fatalf("%d of the %d blocks placed on the device are still there after the window (%s): this arm measured the host", s.GPULayers(), placed, declinesOf(g.Stats()))
 	}
-	if m.opt.composedCPU {
+	{
 		if served, _ := s.CPUBlockSteps(); served != (warm+n)*m.Cfg.NLayer {
 			t.Fatalf("the composed CPU served %d of %d block steps (%v): this arm measured main's decode", served, (warm+n)*m.Cfg.NLayer, s.CPUFormErr())
 		}

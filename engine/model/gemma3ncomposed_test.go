@@ -41,7 +41,7 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 			defer ref.Close()
 			ref.setKVPageForTest(page)
 			want := cpuLogits(t, ref, toks, cpuFaultNone, false)
-			m, err := Open(path, noTune, WithComposedCPU(true))
+			m, err := Open(path, noTune)
 			if err != nil {
 				t.Fatal(err)
 			}

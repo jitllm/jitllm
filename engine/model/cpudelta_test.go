@@ -198,7 +198,7 @@ func TestComposedCPUDeltaFeaturesAreLoadBearing(t *testing.T) {
 	cm := open(WithJITOptions(nn.WithActWindow(cpuControlWindow)))
 	defer cm.Close()
 	ctl := cpuLogits(t, cm, toks, cpuFaultNone, false)
-	m := open(WithComposedCPU(true))
+	m := open()
 	defer m.Close()
 	got := linearLogits(t, m, toks, cpuFaultNone)
 	med, worst, widest := cpuBand(t, want, got, ctl)

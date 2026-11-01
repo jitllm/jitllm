@@ -446,7 +446,6 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 	var mopt []Option
 	topt := []tier.Option{}
 	if composed {
-		mopt = append(mopt, WithComposedCPU(true))
 		topt = append(topt, composedOpt(towerParts))
 	}
 	m0, tw0 := openTower(t, mopt...)

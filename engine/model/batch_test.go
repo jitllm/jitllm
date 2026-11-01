@@ -43,7 +43,7 @@ func TestBatchMatchesForward(t *testing.T) {
 			// The single sequences and the batch on the composed CPU's
 			// blocks: held to the shipped mode's bar.
 			t.Run("composed-cpu", func(t *testing.T) {
-				batchVsForward(t, path, false, noTune, WithComposedCPU(true))
+				batchVsForward(t, path, false, noTune)
 			})
 		})
 	}
@@ -51,7 +51,7 @@ func TestBatchMatchesForward(t *testing.T) {
 	// experts its rows pick.
 	for _, file := range cpuMixtureRowsModels {
 		t.Run("mixture/"+file+"/composed-cpu", func(t *testing.T) {
-			batchVsForward(t, testmodels.Path(file), false, noTune, WithComposedCPU(true))
+			batchVsForward(t, testmodels.Path(file), false, noTune)
 		})
 	}
 }
@@ -90,7 +90,7 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 			}
 			want[i] = append(want[i], append([]float32(nil), lg...))
 		}
-		if m.opt.composedCPU {
+		{
 			served, declined := s.CPUBlockSteps()
 			decServed += served / steps
 			for j, n := range declined {
@@ -133,7 +133,7 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 	// The batch's rows on the composed CPU's blocks: every step of every
 	// block the decode served, served, and declined only by a reason the
 	// decode declined the block by.
-	if m.opt.composedCPU {
+	{
 		served, declined := b.CPUBlockSteps()
 		for i, n := range declined {
 			if n > 0 && decDeclined[i] == 0 {

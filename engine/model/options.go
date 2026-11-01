@@ -115,11 +115,6 @@ type modelOpts struct {
 
 	// kvHeadMajor selects the head-major KV layout for States built afterwards.
 	kvHeadMajor bool
-	// composedCPU runs every block a State keeps on the CPU on what the
-	// composer forms for the CPU (WithComposedCPU).
-	composedCPU bool
-	// composedCPUSet is WithComposedCPU given, either way, over the verdict.
-	composedCPUSet bool
 	// kvType and kvTypeSet force the cache's format, overriding what
 	// nn.KVWidthPaysOff decides. Two fields because "not forced" and "forced
 	// to f32" are different states.
@@ -380,16 +375,6 @@ func WithCPU(listed bool) Option { return func(l *loadOpts) { l.opt.noCPU = !lis
 // A/B charges the scattered write (see kvLayout).
 func WithKVHeadMajor(on bool) Option { return func(l *loadOpts) { l.opt.kvHeadMajor = on } }
 
-// WithComposedCPU runs each block a State keeps on the CPU on the kernels
-// the composer forms for the CPU from the block's graph, its history in the
-// State's KV pages, each layer's held as one span the kernels address
-// (kvArena). A block step the composer does not serve runs main's kernels
-// and is counted by its reason (State.CPUBlockSteps). On by default
-// (composedCPUByDefault).
-func WithComposedCPU(on bool) Option {
-	return func(l *loadOpts) { l.opt.composedCPU, l.opt.composedCPUSet = on, true }
-}
-
 // WithKVF16 forces the cache width, overriding what nn.KVWidthPaysOff decides:
 // WithKVType(KVF16) or WithKVType(KVF32).
 func WithKVF16(on bool) Option {
@@ -555,7 +540,3 @@ func (o *modelOpts) hybridSpinFor() time.Duration {
 	}
 	return 2 * time.Millisecond
 }
-
-// composedCPUByDefault is whether a model opened with no WithComposedCPU runs
-// its CPU blocks on the composer's kernels.
-const composedCPUByDefault = true

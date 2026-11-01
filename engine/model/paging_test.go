@@ -46,7 +46,7 @@ func TestPagingDoesNotChangeTheAnswer(t *testing.T) {
 	// paged out and back binds its weights where they now are.
 	for _, name := range cpuServedModels {
 		t.Run(name+"/composed-cpu", func(t *testing.T) {
-			pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)), WithComposedCPU(true))
+			pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)))
 		})
 	}
 }
@@ -89,7 +89,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 				t.Fatal(err)
 			}
 		}
-		if m.opt.composedCPU {
+		{
 			// The prompt's chunks and the eight steps, every block of each.
 			served, declined := st.CPUBlockSteps()
 			for i, n := range declined {

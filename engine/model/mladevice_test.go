@@ -241,7 +241,7 @@ func declineList(st *State) []DeviceDecline { return st.DeviceDeclines() }
 func mlaCPUArm(t *testing.T, src string, ids []int32, want [][]float32) {
 	t.Helper()
 	t.Run("cpu", func(t *testing.T) {
-		m, err := Open(src, noTune, WithKVF16(false), WithComposedCPU(true))
+		m, err := Open(src, noTune, WithKVF16(false))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -298,7 +298,7 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 	want := teacherForce(t, m, ids)
 	// The same container with the CPU's blocks composed: the history moves
 	// between the card's pool and the CPU device's arena.
-	mc, err := Open(src, noTune, WithKVF16(false), WithComposedCPU(true))
+	mc, err := Open(src, noTune, WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

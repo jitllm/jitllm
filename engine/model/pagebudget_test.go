@@ -82,7 +82,7 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 			}
 		}
 	}
-	if tight.opt.composedCPU {
+	{
 		served, declined := b.CPUBlockSteps()
 		t.Logf("the composed CPU served %d block steps of the paged model; declined %v", served, declined)
 		if served == 0 {

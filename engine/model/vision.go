@@ -984,8 +984,8 @@ type visRun struct {
 	// block's keys are read only inside that block, so each block borrows the
 	// pair for its run and hands it on (lend, unlend).
 	kp, vp []float32
-	// ncArena is where the composer runs this State's CPU blocks
-	// (WithComposedCPU): one page of the picture, in place of kp and vp.
+	// ncArena is where the composer runs this State's CPU blocks: one page
+	// of the picture, in place of kp and vp.
 	ncArena
 	gather []float32
 	// px2 is the encode in progress's second frame (a video's temporal pair,
@@ -1145,10 +1145,8 @@ func (t *Tower) newState(j *nn.JIT, owned bool) *State {
 		v.hyLines = make([]float32, tc.MaxTokens()*h.lineWidth)
 	}
 	s.memBudget = sched.MemBudget()
-	if m.opt.composedCPU {
-		s.mapNC()
-		s.cpuPlace()
-	}
+	s.mapNC()
+	s.cpuPlace()
 	return s
 }
 

@@ -165,7 +165,7 @@ func auditRun(t *testing.T, m *Model) {
 // every block step is counted, served or declined by name -- all of them
 // served on the models the composer serves on the CPU (cpuServedModels).
 func auditComposedCPU(t *testing.T, name, path string) {
-	m, err := Open(path, WithComposedCPU(true))
+	m, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

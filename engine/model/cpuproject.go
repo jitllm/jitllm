@@ -237,7 +237,7 @@ func (s *State) cpuEntry(px []float32, n, first int) jit.Decline {
 			st.cardMiss++
 		}
 	}
-	if !s.m.opt.composedCPU || s.cpu.args == nil {
+	if s.cpu.args == nil {
 		return jit.DeclineCaller
 	}
 	f, why := st.entry.formOf()
@@ -380,7 +380,7 @@ func (s *State) cpuProject(patches []float32) ([]float32, jit.Decline) {
 	if out, ok := s.cardProject(patches, np, nt, windowed); ok {
 		return out, jit.DeclineServes
 	}
-	if !s.m.opt.composedCPU || s.cpu.args == nil {
+	if s.cpu.args == nil {
 		return nil, jit.DeclineCaller
 	}
 	hf, gf := &st.proj, &st.group
@@ -424,7 +424,7 @@ func (s *State) cpuProject(patches []float32) ([]float32, jit.Decline) {
 // cpuProjDeclined counts a picture whose projector the composed CPU path
 // declines before cpuProject is asked: the reason its forms hold.
 func (s *State) cpuProjDeclined() {
-	if !s.m.opt.composedCPU || s.cpu.args == nil {
+	if s.cpu.args == nil {
 		return
 	}
 	_, why := s.cpu.proj.proj.formOf()

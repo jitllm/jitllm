@@ -208,7 +208,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 // (forced) within band at every position.
 func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float32, band float64, opts ...Option) {
 	t.Helper()
-	m, err := Open(path, append(opts, WithComposedCPU(true))...)
+	m, err := Open(path, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

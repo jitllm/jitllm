@@ -13,14 +13,14 @@ import (
 // TestComposedLayaOnCPU is TestLayaMatchesReference's composed CPU arm:
 // Laya's ModernBERT trunk -- its local blocks in their symmetric windows at
 // their own rotary -- and its decision head's blocks, every one the front
-// end states, served by the composer on the CPU device (WithComposedCPU),
+// end states, served by the composer on the CPU device,
 // held to the reference's logits at the host arm's tolerance, the served
 // blocks counted (every block of every encode, none declined), and the
 // rows made causal seen. The type rows and the scorer stay main's.
 func TestComposedLayaOnCPU(t *testing.T) {
 	for _, c := range layaCases {
 		t.Run(c.name, func(t *testing.T) {
-			m := openDecision(t, c.gguf, jlm.DecisionLaya, WithComposedCPU(true))
+			m := openDecision(t, c.gguf, jlm.DecisionLaya)
 			defer m.Close()
 			trunk, nb := m.enc.mb.trunk, m.encBlocks()
 			if n := coveredBlocks(m); n != trunk {

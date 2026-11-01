@@ -41,7 +41,7 @@ func TestProjectorMatchesTransformers(t *testing.T) {
 }
 
 func projectorMatchesTransformers(t *testing.T, fam visionFamily, composed bool) {
-	m, tw := fam.open(t, WithComposedCPU(composed))
+	m, tw := fam.open(t)
 	defer m.Close()
 	c := tw.Cfg
 	x := projectorRows(c.Patches(), c.NEmbd)

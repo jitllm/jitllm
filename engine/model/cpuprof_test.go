@@ -43,7 +43,7 @@ func TestComposedCPUProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, composed := range []bool{false, true} {
-		m, err := Open(path, WithComposedCPU(composed), WithProfile(true))
+		m, err := Open(path, WithProfile(true))
 		if err != nil {
 			t.Fatal(err)
 		}

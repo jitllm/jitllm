@@ -46,7 +46,7 @@ func TestComposedCPUSelectsKeys(t *testing.T) {
 	ref.setKVPageForTest(page)
 	toks := cpuTokens(t, ref, steps)
 	want := cpuLogits(t, ref, toks, cpuFaultNone, false)
-	m, err := Open(path, noTune, WithComposedCPU(true))
+	m, err := Open(path, noTune)
 	if err != nil {
 		t.Fatal(err)
 	}

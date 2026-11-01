@@ -21,7 +21,6 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -1450,14 +1449,9 @@ func Open(path string, options ...Option) (*Model, error) {
 	// Where the composer serves, a container written before the converter
 	// stated its activations would run every block on the tier's own kernels
 	// and say nothing: refused, with the command that states them.
-	if !m.opt.composedCPUSet {
-		m.opt.composedCPU = composedCPUByDefault
-	}
-	if jit.ComposedByDefault || m.opt.composedCPU {
-		if err := m.statesActivations(path); err != nil {
-			m.Close()
-			return nil, err
-		}
+	if err := m.statesActivations(path); err != nil {
+		m.Close()
+		return nil, err
 	}
 	return m, nil
 }

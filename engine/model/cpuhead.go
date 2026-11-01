@@ -152,7 +152,7 @@ func (m *Model) formCPUGraph(s *State, g *graph.Graph, rows int, over map[jlm.Ro
 }
 
 // cpuHeadOn says the composed CPU path is on for this State.
-func (s *State) cpuHeadOn() bool { return s.m.opt.composedCPU && s.cpu.args != nil }
+func (s *State) cpuHeadOn() bool { return s.cpu.args != nil }
 
 // cpuHead runs the head on the CPU the composer's way: the norm of the row
 // x, its projection and what follows it into logits, and the norm's rows

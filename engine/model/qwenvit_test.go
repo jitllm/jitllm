@@ -71,12 +71,12 @@ const towerBound = 2e-3
 func TestQwenTowerMatchesTransformers(t *testing.T) {
 	for _, name := range towerFixtures() {
 		t.Run(name, func(t *testing.T) { qwenTowerMatchesTransformers(t, name) })
-		t.Run(name+"/composed-cpu", func(t *testing.T) { qwenTowerMatchesTransformers(t, name, WithComposedCPU(true)) })
+		t.Run(name+"/composed-cpu", func(t *testing.T) { qwenTowerMatchesTransformers(t, name) })
 	}
 }
 
 // qwenTowerMatchesTransformers is TestQwenTowerMatchesTransformers' gate
-// over fixture name opened with opts; on the composed CPU (WithComposedCPU)
+// over fixture name opened with opts; on the composed CPU
 // every tower block of the encode served by the composer, none declined.
 func qwenTowerMatchesTransformers(t *testing.T, name string, opts ...Option) {
 	m, g := openQVL(t, name, opts...)

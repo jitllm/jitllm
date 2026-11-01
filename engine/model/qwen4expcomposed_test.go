@@ -43,7 +43,7 @@ func TestQwen4ExpServesComposedOnCPU(t *testing.T) {
 			gm.Close()
 			toks := g.IDs
 			want := partCPULogits(t, ref, toks, cpuFaultNone, false, 0, 0)
-			m, err := Open(path, noTune, WithComposedCPU(true))
+			m, err := Open(path, noTune)
 			if err != nil {
 				t.Fatal(err)
 			}

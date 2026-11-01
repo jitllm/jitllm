@@ -9,7 +9,7 @@ import (
 )
 
 // An encoder's composed arms (bert, nomic-bert): every block the front end
-// states served by the composer on the CPU device (WithComposedCPU) and on
+// states served by the composer on the CPU device and on
 // each card (tier.ComposedTower: a non-causal call's blocks), held to main's
 // host encoder and to the references TestEmbeddingsMatchReference holds it
 // to, the served blocks counted -- as many as the encoder has, a text, none
@@ -114,7 +114,7 @@ func llamaCos(t *testing.T, g embedGolden, vs [][]float32, arm string) {
 }
 
 func TestComposedEncoderOnCPU(t *testing.T) {
-	gs, ms := encoderGoldens(t, WithComposedCPU(true))
+	gs, ms := encoderGoldens(t)
 	for i, g := range gs {
 		t.Run(g.Model, func(t *testing.T) {
 			ref := openEmbedModel(t, g)
@@ -212,7 +212,7 @@ func TestComposedEncoderOnCPU(t *testing.T) {
 const encParts = composedParts | tier.ComposedTower
 
 func TestComposedEncoderOnDevice(t *testing.T) {
-	gs, ms := encoderGoldens(t, WithComposedCPU(true))
+	gs, ms := encoderGoldens(t)
 	for i, g := range gs {
 		t.Run(g.Model, func(t *testing.T) {
 			m := ms[i]

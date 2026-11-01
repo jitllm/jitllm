@@ -241,7 +241,7 @@ func (s *State) mnConv(dst, src []float32, h, w, c, k, st int, wt tensor) error 
 // where the composed CPU path is on and serves it, counted served or
 // declined by name, main's runner otherwise.
 func (s *State) mnHostRun(li int) error {
-	if !s.m.opt.composedCPU || s.cpu.args == nil {
+	if s.cpu.args == nil {
 		return s.mnBlockRun(li)
 	}
 	if err := s.m.pageIn(li); err != nil {

@@ -35,7 +35,7 @@ func TestDeepseek4ServesComposedOnCPU(t *testing.T) {
 			}
 			defer ref.Close()
 			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, false, 0, 0)
-			m, err := Open(path, noTune, WithComposedCPU(true))
+			m, err := Open(path, noTune)
 			if err != nil {
 				t.Fatal(err)
 			}

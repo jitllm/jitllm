@@ -35,7 +35,7 @@ func TestComposedConvTowerOnCPU(t *testing.T) {
 	want = append([]float32(nil), want...)
 	hs.Close()
 
-	m, _ := openGemma3nV(t, WithComposedCPU(true))
+	m, _ := openGemma3nV(t)
 	defer m.Close()
 	tw := m.Tower()
 	stated, attn := 0, 0

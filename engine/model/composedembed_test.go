@@ -19,7 +19,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 	ran := 0
 	for _, g := range loadEmbedGoldens(t) {
 		t.Run(g.Model, func(t *testing.T) {
-			m := openEmbedModel(t, g, WithComposedCPU(true))
+			m := openEmbedModel(t, g)
 			if m.IsEncoder() {
 				t.Skip("an encoder: TestComposedEncoderOnCPU")
 			}

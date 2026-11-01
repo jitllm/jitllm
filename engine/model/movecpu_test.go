@@ -78,7 +78,7 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	opt := WithKVF16(false)
 	if composed {
 		// The composed CPU keeps its history binary16 (jit.Halves).
-		opt = WithComposedCPU(true)
+		opt = WithKVF16(true)
 	}
 	m, err := Open(path, opt)
 	if err != nil {

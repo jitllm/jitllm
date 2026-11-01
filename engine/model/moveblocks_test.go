@@ -69,7 +69,7 @@ func TestBlocksMoveBetweenDevices(t *testing.T) {
 	for _, name := range cpuServedModels {
 		path := jlmOf(t, testmodels.Path(name))
 		t.Run(name+"/composed-cpu", func(t *testing.T) {
-			blocksMoveBetweenDevices(t, path, moveWhole, 0, WithComposedCPU(true))
+			blocksMoveBetweenDevices(t, path, moveWhole, 0)
 		})
 	}
 }

@@ -195,11 +195,6 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 			if strings.HasPrefix(name, "Hunyuan-A13B") {
 				opts = append(opts, model.WithKVF16(false))
 			}
-			// JITLLM_GREEDY_COMPOSED_CPU=1 holds the CPU's blocks on what the
-			// composer forms for it to the same oracle.
-			if os.Getenv("JITLLM_GREEDY_COMPOSED_CPU") != "" {
-				opts = append(opts, model.WithComposedCPU(true))
-			}
 			m, err := model.Open(c, opts...)
 			if err != nil {
 				t.Skipf("open: %v", err)

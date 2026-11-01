@@ -12,7 +12,7 @@ import (
 )
 
 // A tower's composed arm on the CPU device: every tower block the front end
-// states (Uncovered) composed for the CPU (WithComposedCPU) and run over the
+// states (Uncovered) composed for the CPU and run over the
 // picture's rows as one run attending both ways, held to main's host tower
 // after ONE block (int8 activations compound past it) at the device arm's
 // bound, its whole encode at the device arm's whole-tower bound
@@ -71,7 +71,7 @@ func composedTowerOnCPU(t *testing.T, open func(testing.TB, ...Option) (*Model, 
 	want0, want := towerEncodeAt(t, hs, px)
 	hs.Close()
 
-	m, tw := open(t, noTune, WithComposedCPU(true))
+	m, tw := open(t, noTune)
 	defer m.Close()
 	if n := coveredTower(m); n != c.NLayer {
 		t.Fatalf("the front end states %d of %d tower blocks (block 0: %s, %v)", n, c.NLayer,
@@ -606,7 +606,7 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 				return append([]float32(nil), got...)
 			}
 			want := project(rtw, false)
-			m, tw := f.open(t, noTune, WithComposedCPU(true))
+			m, tw := f.open(t, noTune)
 			defer m.Close()
 			got := project(tw, true)
 			nm, worst := nmseOf(got, want)
@@ -694,8 +694,6 @@ func TestComposedPictureRowsEveryFamily(t *testing.T) {
 				wantP, s = project()
 				s.Close()
 			}
-			defer func(was bool) { m.opt.composedCPU = was }(m.opt.composedCPU)
-			m.opt.composedCPU = true
 			gotE, s := entry()
 			es, ed := s.CPUEntrySteps()
 			s.Close()

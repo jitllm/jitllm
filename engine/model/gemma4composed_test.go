@@ -123,7 +123,7 @@ func TestGemma4ServesComposedOnCPU(t *testing.T) {
 			defer ref.Close()
 			ref.setKVPageForTest(page)
 			want := cpuLogits(t, ref, toks, cpuFaultNone, false)
-			m, err := Open(path, noTune, WithComposedCPU(true))
+			m, err := Open(path, noTune)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -240,7 +240,7 @@ func TestGemma4PictureServesComposed(t *testing.T) {
 		ref, _ := openGemma4V(t, WithKVF16(true))
 		defer ref.Close()
 		want := g4vRun(t, ref, g, true)
-		m, _ := openGemma4V(t, WithKVF16(true), WithComposedCPU(true))
+		m, _ := openGemma4V(t, WithKVF16(true))
 		defer m.Close()
 		run := func(bidir bool) [][]float32 { return g4vRun(t, m, g, bidir) }
 		got := run(true)
