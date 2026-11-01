@@ -101,10 +101,10 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 									nb, d, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer, st.LastErr)
 							}
 							if nh, d, _ := st.ServedPart(tier.ComposedHead); headOn {
-								// Every decode step's head is served; the prompt's is not
-								// asked (no ComposedPrompt).
-								if nh != len(toks) || d != 0 {
-									t.Fatalf("the composer served the head %d times and declined it %d in %d steps", nh, d, len(toks))
+								// Every decode step's head is served, and the prompt's
+								// last row's.
+								if nh != len(toks)+1 || d != 0 {
+									t.Fatalf("the composer served the head %d times and declined it %d in %d steps and the prompt's last row", nh, d, len(toks))
 								}
 							}
 							var ratios []float64

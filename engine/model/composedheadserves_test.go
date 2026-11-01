@@ -57,10 +57,9 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 						t.Skipf("the head does not fit beside the blocks on %s", dev)
 					}
 					served, declined, _ := st.ServedPart(tier.ComposedHead)
-					// Every decode step's head; the prompt's is not asked (no
-					// ComposedPrompt).
-					if served != len(toks) || declined != 0 || st.FormedAtStep != 0 {
-						t.Fatalf("the composed head served %d of %d steps, was declined %d (%s) and %d formed at a step",
+					// Every decode step's head, and the prompt's last row's.
+					if served != len(toks)+1 || declined != 0 || st.FormedAtStep != 0 {
+						t.Fatalf("the composed head served %d of %d steps and the prompt's last row, was declined %d (%s) and %d formed at a step",
 							served, len(toks), declined, declinesOf(st), st.FormedAtStep)
 					}
 					if n := census["softcap"]; n != 0 {
