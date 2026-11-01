@@ -177,7 +177,8 @@ func TestGemma3TowerPagesThroughTheDevice(t *testing.T) {
 			p0 := g.Stats().PageIns
 			e, err := s.Encode(px)
 			if err != nil {
-				t.Fatalf("%s under %d bytes: %v (the device: %s)", spec, budget, err, g.Err())
+				t.Fatalf("%s under %d bytes: %v (the device: %s; chunk rows %d, chunked sets %d)", spec, budget, err, g.Err(),
+					g.TowerChunk(), g.Stats().TowerChunked)
 			}
 			return append([]float32(nil), e...), s.GPUBlocks(), g.Stats().PageIns - p0, used, true
 		}
