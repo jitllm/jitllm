@@ -80,6 +80,9 @@ func openPixtral(t testing.TB, opts ...Option) (*Model, *pixGolden) {
 // pixEncode preprocesses and encodes the golden's picture on a fresh state.
 func pixEncode(t *testing.T, tw *Tower, g *pixGolden, mut func(*State)) []float32 {
 	t.Helper()
+	// A violation's configuration reaches the composer through the graphs
+	// the front end states from it.
+	tw.model.restateTower()
 	ts := tw.testState()
 	defer ts.Close()
 	px, err := ts.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
