@@ -476,7 +476,7 @@ type towerArm struct {
 func towerArms() []towerArm {
 	var out []towerArm
 	for _, spec := range stepDevices() {
-		out = append(out, towerArm{spec, false}, towerArm{spec, true})
+		out = append(out, towerArm{spec, true})
 	}
 	return out
 }

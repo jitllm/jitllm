@@ -13,7 +13,7 @@ import (
 // served (composedRan).
 
 // composedParts is what a composed arm asks the composer for.
-const composedParts = tier.ComposedBlock | tier.ComposedHead
+const composedParts = tier.ComposedStep
 
 // composedArms are the arms a gate runs the model at path in: the tier's own
 // kernels, and the composer's where the front end states every block and the

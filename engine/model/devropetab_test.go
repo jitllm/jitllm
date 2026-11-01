@@ -200,7 +200,7 @@ func TestRopeTablePrefillChunkMatchesTheUpload(t *testing.T) {
 	}
 	ids = ids[:2*chunk]
 
-	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), mainKernels, tier.WithPoisonScratch(true))
+	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), wholeStep, tier.WithPoisonScratch(true))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

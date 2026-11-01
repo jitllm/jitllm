@@ -68,8 +68,8 @@ func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
 	}{{"default", nil, false},
 		// no-mma takes a binary16 tensor-core matvec (sm_70's m8n8k4, the
 		// m16n8 GEMM from sm_75); no-volta the dp4a tile.
-		{"no-mma", []tier.Option{mainKernels, tier.WithConfig(func(c *tier.Config) { c.NoMMA = true })}, true},
-		{"no-mma-no-volta", []tier.Option{mainKernels, tier.WithConfig(func(c *tier.Config) { c.NoMMA, c.NoVolta = true, true })}, false}} {
+		{"no-mma", []tier.Option{wholeStep, tier.WithConfig(func(c *tier.Config) { c.NoMMA = true })}, true},
+		{"no-mma-no-volta", []tier.Option{wholeStep, tier.WithConfig(func(c *tier.Config) { c.NoMMA, c.NoVolta = true, true })}, false}} {
 		got, after, volta := batchGreedy(t, m, ids, gen, seq, arm.opt)
 		// The arm that names the Volta kernel must have built it: a refused
 		// shape falls to dp4a and would pass this gate on the other kernel.

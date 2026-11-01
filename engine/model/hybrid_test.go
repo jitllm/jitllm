@@ -851,7 +851,7 @@ func TestPagedWeightsAreNeverServedStale(t *testing.T) {
 			}
 		}
 		// Pinned: see hybridDeviceNMSEOn.
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), mainKernels)
+		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), wholeStep)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

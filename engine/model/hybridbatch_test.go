@@ -105,7 +105,7 @@ func hybridBatchedPrefill(t *testing.T, m *Model) {
 		defer st.Close()
 		if dev {
 			spec := testdevices.One("gpu:0")
-			g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), mainKernels,
+			g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), wholeStep,
 				tier.WithPoisonScratch(true),
 				tier.WithConfig(func(cf *tier.Config) {
 					cf.NoBatch = noBatch

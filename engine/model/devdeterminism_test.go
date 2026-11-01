@@ -21,7 +21,7 @@ func TestTheSameWorkCrossesTheSeamEverySession(t *testing.T) {
 	// The crossing is forced on (WithMinMatVecBytes(0)): at the shipping
 	// threshold this fixture's matvecs all stay on the host and 0 == 0 proves
 	// nothing.
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), mainKernels,
+	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), wholeStep,
 		tier.WithMinMatVecBytes(0))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
@@ -70,7 +70,7 @@ func TestPoisonedScratchChangesNothing(t *testing.T) {
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 
 	run := func(poison bool) [][]float32 {
-		opts := []tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), mainKernels}
+		opts := []tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), wholeStep}
 		if poison {
 			opts = append(opts, tier.WithPoisonScratch(true))
 		}

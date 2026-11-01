@@ -40,7 +40,7 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 	run := func(stream func(*tier.Config)) ([][]float32, tier.Stats, int, uint64) {
 		t.Helper()
-		opts := []tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), mainKernels}
+		opts := []tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), wholeStep}
 		if stream != nil {
 			opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true; stream(c) }))
 		}
