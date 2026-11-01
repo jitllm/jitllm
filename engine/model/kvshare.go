@@ -64,6 +64,10 @@ type sharedPage struct {
 	aka  []kvStoreKey
 	b    []float32
 	refs int
+	// arena and slot are the arena slot b is, held for the entry, nil where
+	// b is memory of its own.
+	arena *kvArena
+	slot  int
 	// gone means Drop or Prune took it out of the index: no session can
 	// acquire it again, and it is forgotten once the last holder lets go.
 	gone bool
@@ -181,7 +185,7 @@ func (m *SharedStore) Refs(cacheId string, layer, index int) int {
 // already holds that page, the session gets the held copy (and keeps
 // ownership of b, which it gives back to its pool); otherwise b becomes the
 // held copy. Either way the session holds one reference to what is returned.
-func (m *SharedStore) publish(k kvStoreKey, b []float32) []float32 {
+func (m *SharedStore) publish(k kvStoreKey, b []float32, a *kvArena) []float32 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e := m.pages[k]; e != nil {
@@ -194,6 +198,13 @@ func (m *SharedStore) publish(k kvStoreKey, b []float32) []float32 {
 		m.retire(e)
 	}
 	e := m.add(k, b)
+	// A slot of an arena is held for the entry until it is forgotten.
+	if a != nil {
+		if i, ok := a.slotOf(b); ok {
+			a.hold(i)
+			e.arena, e.slot = a, i
+		}
+	}
 	e.refs++
 	return b
 }
@@ -307,6 +318,10 @@ func (m *SharedStore) forget(e *sharedPage) {
 	if m.held[&e.b[0]] == e {
 		delete(m.held, &e.b[0])
 		m.bytes -= 4 * uint64(len(e.b))
+		if e.arena != nil {
+			e.arena.drop(e.slot)
+			e.arena = nil
+		}
 	}
 }
 
@@ -397,8 +412,9 @@ func (s *kvPages) markShared(n int, on bool) {
 }
 
 // unshare drops this session's references to page n's shared memory and
-// leaves the slots for the caller to fill or nil. The bytes are untouched:
-// other sessions read them.
+// leaves the slots nil for the caller to fill. The bytes are untouched:
+// other sessions read them, and the page's arena slot is the store's, never
+// one the session lets go (releaseSlot).
 func (s *kvPages) unshare(n int) {
 	if !s.isShared(n) {
 		return
@@ -408,6 +424,7 @@ func (s *kvPages) unshare(n int) {
 		s.sh.release(s.v[n])
 	}
 	s.shared[n] = false
+	s.k[n], s.v[n] = nil, nil
 }
 
 // cow gives page n private copies of its shared memory before a write: the
@@ -420,13 +437,19 @@ func (s *kvPages) cow(n int) {
 	if s.cowFault {
 		return // the violation: write into the shared page in place
 	}
-	// From the layer's spare first, as a fresh page is (page0): the copy
-	// overwrites it whole.
-	k := s.page0()
+	// A slot of the layer's arena where it has one, where a composed CPU
+	// block reads it, else from the spare first as a fresh page is (page0):
+	// the copy overwrites it whole.
+	k, v := s.takeSlot()
+	if k == nil {
+		k = s.page0()
+		v = k
+		if !s.latent {
+			v = s.page0()
+		}
+	}
 	copy(k, s.k[n])
-	v := k
 	if !s.latent {
-		v = s.page0()
 		copy(v, s.v[n])
 	}
 	s.unshare(n)
@@ -460,19 +483,27 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 		return // restored from the store: already the held copy
 	}
 	// A page the store holds already: the session reads the held copy, and
-	// its own memory goes to its spare, where the next page it needs is taken
-	// from (page0).
-	if s.arenaPage(n) {
-		return
+	// its own memory goes back -- its arena slot, or to its spare, where the
+	// next page it needs is taken from (page0). A page of the arena becomes
+	// the store's copy with the slot held for it, so every session that
+	// restores it reads that slot (kvArena).
+	a := s.arena
+	if !s.arenaPage(n) {
+		a = nil
 	}
-	k := kc.share.publish(kvStoreKey{key, li * 2, n}, s.k[n])
-	if &k[0] != &s.k[n][0] {
-		s.spare = append(s.spare, s.k[n])
-	}
+	k := kc.share.publish(kvStoreKey{key, li * 2, n}, s.k[n], a)
 	v := k
 	if !s.latent {
-		v = kc.share.publish(kvStoreKey{key, li*2 + 1, n}, s.v[n])
-		if &v[0] != &s.v[n][0] {
+		v = kc.share.publish(kvStoreKey{key, li*2 + 1, n}, s.v[n], a)
+	}
+	switch {
+	case a != nil:
+		s.giveSlot(s.k[n])
+	default:
+		if &k[0] != &s.k[n][0] {
+			s.spare = append(s.spare, s.k[n])
+		}
+		if !s.latent && &v[0] != &s.v[n][0] {
 			s.spare = append(s.spare, s.v[n])
 		}
 	}

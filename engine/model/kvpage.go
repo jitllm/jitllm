@@ -192,8 +192,11 @@ type kvPages struct {
 	sh       *SharedStore
 	cowFault bool
 	// arena, where set, is where every page this layer grows lives
-	// (kvArena): a composed CPU block's pool.
-	arena *kvArena
+	// (kvArena): a composed CPU block's pool, the model's. reserved is the
+	// pages the State's context spans, and tab its page table (table).
+	arena    *kvArena
+	reserved int
+	tab      []uint32
 }
 
 // keyStart is the first key position pos attends on this layer: the window's
@@ -323,7 +326,7 @@ func (s *kvPages) grow(n int) {
 	// It refills a hole, not only the tail: eviction and a restored prefix
 	// leave nil slots inside the slice.
 	if s.k[n] == nil && s.v[n] == nil {
-		if k, v := s.arenaSlot(n); k != nil {
+		if k, v := s.takeSlot(); k != nil {
 			s.k[n], s.v[n] = k, v
 			return
 		}
@@ -1987,14 +1990,15 @@ func (kc *kvCache) fault(li, n int) error {
 	// leave zeros read back as keys the model never wrote. A layer with an
 	// arena reads the page back into its slot, where a composed CPU block
 	// addresses it (kvArena); a failed read hands the slot back zeroed.
-	k, v := s.arenaSlot(n)
-	if k == nil || s.latent {
+	var k, v []float32
+	if !s.latent {
+		k, v = s.takeSlot()
+	}
+	if k == nil {
 		k, v = make([]float32, s.pp), make([]float32, s.pp)
 	}
 	miss := func(err error) error {
-		if s.inArena(n, k) {
-			s.releaseSlot(n)
-		}
+		s.giveSlot(k)
 		return kc.miss(key, err)
 	}
 	kw := newSliceWriter(kvBytesOf(k))
@@ -2057,21 +2061,31 @@ func (kc *kvCache) faultFill(li, n, fill int) error {
 	if fill >= s.p || want <= 0 || want > s.pp {
 		return ErrNoPage
 	}
-	k := make([]float32, s.pp)
-	v := make([]float32, s.pp)
-	kw := newSliceWriter(kvBytesOf(k[:want]))
-	if err := kc.store.Get(key, li*2, n, kw); err != nil {
+	// Into a slot of the layer's arena where it has one, zero past the fill.
+	var k, v []float32
+	if !s.latent {
+		k, v = s.takeSlot()
+	}
+	if k == nil {
+		k, v = make([]float32, s.pp), make([]float32, s.pp)
+	}
+	miss := func(err error) error {
+		s.giveSlot(k)
 		return kc.miss(key, err)
 	}
+	kw := newSliceWriter(kvBytesOf(k[:want]))
+	if err := kc.store.Get(key, li*2, n, kw); err != nil {
+		return miss(err)
+	}
 	if kw.n != len(kw.b) {
-		return kc.miss(key, shortPage(li, n, kw.n, len(kw.b)))
+		return miss(shortPage(li, n, kw.n, len(kw.b)))
 	}
 	vw := newSliceWriter(kvBytesOf(v[:want]))
 	if err := kc.store.Get(key, li*2+1, n, vw); err != nil {
-		return kc.miss(key, err)
+		return miss(err)
 	}
 	if vw.n != len(vw.b) {
-		return kc.miss(key, shortPage(li, n, vw.n, len(vw.b)))
+		return miss(shortPage(li, n, vw.n, len(vw.b)))
 	}
 	s.k[n], s.v[n] = k, v
 	s.out[n] = false

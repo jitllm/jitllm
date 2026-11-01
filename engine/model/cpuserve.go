@@ -254,8 +254,7 @@ type cpuState struct {
 	served    int
 	declined  [jit.NumDeclines]int
 	formErr   error
-	pages     []uint32
-	// fpages is pages under cpuFaultPage (cpuFaultTable).
+	// fpages is a layer's page table under cpuFaultPage (cpuFaultTable).
 	fpages []uint32
 	rows   [4]uint32
 	zero   []uint32
@@ -513,7 +512,7 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 		}
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: s.cpu.pages,
+	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: pg.table(max(s.nseq, 1)),
 		recLi: s.cpuRecLi(li), recOf: s, side: s.ple}
 	if b.side != nil {
 		b.side = b.side[cb.sideOff:]
@@ -586,7 +585,6 @@ func (s *State) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, n
 	if n > f.keys {
 		return jit.DeclineSessions, nil
 	}
-	s.cpuPages(1)
 	a := s.nc()
 	a.run[0] = nn.KeyRun{Lo: 0, Hi: n}
 	runs := a.run[:]
@@ -716,7 +714,7 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 			clear(o.rconv[li][slot*s.dg.convStateLen():][:s.dg.convStateLen()])
 		}
 		*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1, kv: &s.kv.layers[li],
-			pages: s.cpu.pages, recLi: s.cpuRecLi(li), recOf: o}
+			pages: s.kv.layers[li].table(max(s.nseq, 1)), recLi: s.cpuRecLi(li), recOf: o}
 		if nrot > 0 {
 			b.cs = cs[r*nrot:]
 		}
@@ -887,7 +885,7 @@ func (s *State) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
 		s.cpuWritable(hl, p)
 		start, end = min(start, pg.keyStart(p)), max(end, p+1)
 	}
-	if end > f.keys || max(pg.arenaSlots(), 1)*max(s.nseq, 1) > len(s.cpu.pages) {
+	if end > f.keys {
 		return jit.DeclineSessions
 	}
 	if why := s.cpuReadable(hl, start, end-1); why != jit.DeclineServes {
@@ -898,21 +896,27 @@ func (s *State) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
 
 // cpuFaultTable is the page table a step of the layer whose pages pg
 // holds reads, its rows' history ending before end: under cpuFaultPage,
-// once the layer's first page is full, a table whose first page is the last
-// slot the layer's own arena holds, where that arena holds more than two --
-// its positions read another page's (or nothing). Each layer is pointed at
-// a slot its own arena holds, so a model whose arenas differ (a sliding
-// layer's beside a global one's) is reached.
+// once the layer's first page is full, a table whose first page is the
+// neighbouring slot of the layer's own arena -- its positions read another
+// page's (or nothing). Each layer is pointed into its own arena, so a model
+// whose arenas differ (a sliding layer's beside a global one's) is reached.
 func (s *State) cpuFaultTable(pg *kvPages, end int) []uint32 {
-	n := pg.arenaSlots() * max(s.nseq, 1)
-	if s.cpu.fault != cpuFaultPage || n <= 2 || n > len(s.cpu.pages) || pg.p == 0 || end <= pg.p+pg.p/4 {
-		return s.cpu.pages
+	nseq := max(s.nseq, 1)
+	t := pg.table(nseq)
+	n := len(t)
+	if s.cpu.fault != cpuFaultPage || n <= 2 || pg.p == 0 || end <= pg.p+pg.p/4 || pg.arena == nil {
+		return t
 	}
-	if len(s.cpu.fpages) != len(s.cpu.pages) {
-		s.cpu.fpages = make([]uint32, len(s.cpu.pages))
+	if len(s.cpu.fpages) != n {
+		s.cpu.fpages = make([]uint32, n)
 	}
-	copy(s.cpu.fpages, s.cpu.pages)
-	s.cpu.fpages[0] = s.cpu.pages[n-1]
+	copy(s.cpu.fpages, t)
+	slot := int(t[0]) / nseq
+	other := slot + 1
+	if other >= pg.arena.slots {
+		other = slot - 1
+	}
+	s.cpu.fpages[0] = uint32(other * nseq)
 	return s.cpu.fpages
 }
 
@@ -1437,7 +1441,6 @@ func (s *State) cpuCompose(li int) {
 		cb.rowsWhy = s.cpuFormDecline(err)
 	}
 	s.cpu.composed[li]++
-	s.cpuPages(s.kv.layers[s.c.KVSource(li)].arenaSlots())
 	if cb.rows != nil && len(s.cpu.rowsTab) < cpuRowsCap*4 {
 		s.cpu.rowsTab = make([]uint32, cpuRowsCap*4)
 		s.cpu.zero = make([]uint32, cpuRowsCap*4)
@@ -1455,23 +1458,6 @@ func (s *State) cpuFormDecline(err error) jit.Decline {
 		return d.why
 	}
 	return jit.DeclineNotFormed
-}
-
-// cpuPages lays out the page table the forms read for slots pages a
-// sequence: sequence q's table starts at q*slots, its page j the arena's
-// slot j holding q's positions -- the pool addressed a sequence's page at a
-// time, as a page holds every sequence's positions in order (kvLayout).
-func (s *State) cpuPages(slots int) {
-	nseq := max(s.nseq, 1)
-	if len(s.cpu.pages) >= slots*nseq {
-		return
-	}
-	s.cpu.pages = make([]uint32, slots*nseq)
-	for q := range nseq {
-		for j := range slots {
-			s.cpu.pages[q*slots+j] = uint32(j*nseq + q)
-		}
-	}
 }
 
 // cpuBlockOf is block li's composition on the CPU, made at its placement.
@@ -2894,8 +2880,11 @@ func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 
 // arenaSlots is how many pages the layer's arena holds, 0 for none.
 func (s *kvPages) arenaSlots() int {
-	if s.arena == nil {
+	switch {
+	case s.arena == nil:
 		return 0
+	case s.reserved > 0:
+		return s.reserved
 	}
 	return s.arena.slots
 }

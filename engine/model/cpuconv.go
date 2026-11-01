@@ -47,7 +47,6 @@ func (s *State) cpuComposeConv(li int, cb *cpuBlock) {
 			return
 		}
 		page = a.page
-		s.cpuPages(1)
 		if len(s.cpu.rowsTab) < rows*4 {
 			s.cpu.rowsTab = make([]uint32, rows*4)
 		}
@@ -98,7 +97,7 @@ func (s *State) cpuConvRun(li int) jit.Decline {
 			t[0], t[1], t[2], t[3] = 0, 0, uint32(pg.p), uint32(i)
 			s.cpuFaultRowWords(t)
 		}
-		bd.kv, bd.pages, bd.rows = pg, s.cpu.pages, s.cpu.rowsTab
+		bd.kv, bd.pages, bd.rows = pg, pg.table(max(s.nseq, 1)), s.cpu.rowsTab
 	}
 	s.cpu.call[0] = uint32(nin)
 	for i := range f.codes {

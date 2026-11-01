@@ -943,7 +943,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	s.kv = newKVCacheRange(c, nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
 	s.kv.usePool(&m.kvPool)
 	s.kv.reserve(s.maxSeq)
-	if err := s.kv.useArenas(s.maxSeq); err != nil {
+	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor); err != nil {
 		s.cpu.formErr = err
 	}
 	s.cpuPlace()

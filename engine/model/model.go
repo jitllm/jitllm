@@ -1252,6 +1252,10 @@ type Model struct {
 	step *stepBuf
 	// kvPool is the host KV pages closed States gave back (kvPagePool).
 	kvPool kvPagePool
+	// kvArenas is every State's composed CPU history, a layer and page size
+	// each (kvArenaFor).
+	kvArenas  map[kvArenaKey]*kvArena
+	kvArenaMu sync.Mutex
 	// cpuForms is the composed CPU blocks' forms (cpuserve.go).
 	cpuForms cpuForms
 
@@ -2122,6 +2126,7 @@ func (m *Model) Close() error {
 		o.ReleaseModel(m.id)
 	}
 	m.cpuForms.close()
+	m.unmapKVArenas()
 	err := m.container.Close()
 	m.devMu.Lock()
 	m.forgetters, m.owners = nil, nil
