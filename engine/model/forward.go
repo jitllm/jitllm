@@ -1687,7 +1687,7 @@ func (s *State) streamedAt(li int) bool { return li < len(s.streamedOn) && s.str
 func (s *State) newHead() *nn.Head {
 	c := s.c
 	f := s.m.frontGraphs()
-	h := &nn.Head{Model: s.m.id, Graph: f.cpuHead, HiddenGraph: f.cpuHidden, Sample: f.cpuSample, SampleTopK: f.cpuTopK, PickGraph: f.pick, PickHead: f.pickHead, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
+	h := &nn.Head{Model: s.m.id, Graph: f.cpuHead, HiddenGraph: f.cpuHidden, Sample: f.cpuSample, SampleTopK: f.cpuTopK, SampleWalk: f.cpuWalk, PickGraph: f.pick, PickHead: f.pickHead, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
 		Stages: s.m.headStages(), Bias: s.m.outB, NoCPU: !s.cpuListed()}
 	if !c.TiedEmbd && s.m.embd.e != nil {
@@ -3824,6 +3824,9 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		onDev, probe = choice.arm()
 		cs.mu.Unlock()
 	}
+	// The call's one uniform, whichever arm draws with it: the device's
+	// walk, the device's candidates, the CPU's walk or the logits.
+	u := float32(smp.uniform())
 	if onDev && smp.TopK > 0 && smp.TopK <= MaxTopK {
 		k := smp.TopK
 		s.sampleArgs = smp.DeviceArgs(s.sampleArgs)
@@ -3832,7 +3835,9 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 			s.sampleIDs = make([]uint32, k)
 		}
 		h.SampleK, h.SampleArgs, h.SampleVals, h.SampleIDs, h.Sampled = k, s.sampleArgs, s.sampleVals, s.sampleIDs[:k], false
-		defer func() { h.SampleK, h.Sampled = 0, false }()
+		topp, minp := smp.cuts()
+		h.Walk, h.WalkArgs, h.Token = true, [5]float32{float32(k), float32(1 / smp.Temp), topp, minp, u}, -1
+		defer func() { h.SampleK, h.Sampled, h.Walk = 0, false, false }()
 	}
 	t0 := time.Now()
 	logits, err := s.Forward(token)
@@ -3841,17 +3846,20 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	}
 	var tok int32
 	switch {
+	case onDev && h.Sampled && h.Token >= 0:
+		s.SampledOnDevice++
+		tok = h.Token
 	case onDev && h.Sampled:
 		s.SampledOnDevice++
-		tok = smp.SampleFrom(h.SampleVals, h.SampleIDs)
-	case h == nil && smp.TopK > 0 && smp.TopK <= MaxTopK && smp.Bounded(s.c.NVocab):
-		if vals, ids, ok := s.cpuCandidates(logits, smp, smp.TopK); ok {
-			tok = smp.SampleFrom(vals, ids)
+		tok = smp.sampleFromAt(h.SampleVals, h.SampleIDs, u)
+	case h == nil && smp.Bounded(s.c.NVocab):
+		if t, ok := s.cpuWalkToken(logits, smp, u); ok {
+			tok = t
 		} else {
-			tok = smp.Sample(logits)
+			tok = smp.sampleAt(logits, u)
 		}
 	default:
-		tok = smp.Sample(logits)
+		tok = smp.sampleAt(logits, u)
 	}
 	if choice != nil {
 		d := time.Since(t0)

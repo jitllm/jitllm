@@ -15,8 +15,8 @@ import (
 // (graph.Head over the row the streams collapse to, the norm, the
 // projection and what follows it), a step's several rows from its form of
 // cpuRowsCap rows, a label pick from the head projecting the picked rows
-// alone, and a greedy token or a top-k draw's candidates from what it forms
-// for the sampler's (graph.Sample, graph.SampleTopK). Every one is composed
+// alone, and a greedy token or a top-k draw's token from what it forms for
+// the sampler's (graph.Sample, graph.SampleWalk). Every one is composed
 // once for the State at its placement (cpuPlaceHead) and counted served or
 // declined by name (CPUHeadSteps, CPUSampleSteps); a step forms nothing.
 
@@ -25,15 +25,15 @@ import (
 type cpuHeadState struct {
 	// head is the head's form, hidden the one also writing the norm's
 	// rows, rows the latter at cpuRowsCap rows, pick the label pick's,
-	// sample the greedy sampler's and topK the candidates'.
-	head, hidden, rows, pick, sample, topK cpuHeadForm
+	// sample the greedy sampler's and walk a top-k draw's.
+	head, hidden, rows, pick, sample, walk cpuHeadForm
 	served, sampled                        int
 	declined, sampleDeclined               [jit.NumDeclines]int
 	token                                  [1]uint32
 	args                                   []uint32
 	pen                                    [1]uint32
-	vals                                   []float32
-	ids                                    []uint32
+	// walkArgs is the walk's words: k, 1/T, top-p, min-p and u.
+	walkArgs [5]float32
 	// hid is the rows' norm rows where the caller keeps none; xpad, lpad
 	// and hpad a call's last rows where the rows' form's units reach past
 	// them.
@@ -58,7 +58,7 @@ func (s *State) CPUHeadSteps() (served int, declined [jit.NumDeclines]int) {
 }
 
 // CPUSampleSteps is CPUHeadSteps for the composed samplers: a greedy token
-// or a top-k draw's candidates.
+// or a top-k draw's token.
 func (s *State) CPUSampleSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.head.sampled, s.cpu.head.sampleDeclined
 }
@@ -77,7 +77,7 @@ func (s *State) cpuPlaceHead() {
 	}
 	s.cpuComposeHead(&h.pick, fg.pickHead, none, 1)
 	s.cpuComposeHead(&h.sample, fg.cpuSample, jit.DeclineNoSample, 1)
-	s.cpuComposeHead(&h.topK, fg.cpuTopK, jit.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.walk, fg.cpuWalk, jit.DeclineNoSample, 1)
 	d, nv := s.c.NEmbd, s.c.NVocab
 	if f := h.rows.f; f != nil {
 		h.hid = make([]float32, f.rows*d)
@@ -88,9 +88,8 @@ func (s *State) cpuPlaceHead() {
 	if h.pick.f != nil {
 		h.pickIDs, h.pickVals = make([]uint32, nn.PickMax), make([]float32, nn.PickMax)
 	}
-	if h.topK.f != nil {
+	if h.walk.f != nil {
 		h.args = make([]uint32, 2+nn.SampleMaxHist)
-		h.vals, h.ids = make([]float32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK)
 	}
 }
 
@@ -311,22 +310,66 @@ func (s *State) cpuGreedy(logits []float32) (int32, bool) {
 	return int32(h.token[0]), true
 }
 
-// cpuCandidates is smp's k best candidates of logits after its repeat
-// penalty, best first, the lower id on a tie, from the CPU's composed
-// sampler, or false where it declines.
-func (s *State) cpuCandidates(logits []float32, smp *Sampler, k int) ([]float32, []uint32, bool) {
+// Sample is smp's token over logits, a row this State produced, from the
+// composed samplers on the CPU: the greedy token (graph.Sample) and a top-k
+// draw's (graph.SampleWalk), at the uniform the host sampler would draw, so
+// a seed draws what it does through Sampler.Sample. A draw they do not serve
+// -- no top-k, one past their bounds, a row of another width -- is the host
+// sampler's.
+func (s *State) Sample(smp *Sampler, logits []float32) int32 {
+	whole := len(logits) == s.c.NVocab
+	if smp == nil || smp.Temp <= 0 {
+		if t, ok := s.cpuGreedy(logits); whole && ok {
+			return t
+		}
+		return Greedy(logits)
+	}
+	if len(logits) == 0 {
+		return 0
+	}
+	u := float32(smp.uniform())
+	if whole && smp.Bounded(len(logits)) {
+		if t, ok := s.cpuWalkToken(logits, smp, u); ok {
+			return t
+		}
+	}
+	return smp.sampleAt(logits, u)
+}
+
+// cpuWalkToken is smp's top-k draw over logits from the CPU's composed walk
+// (graph.SampleWalk) at the uniform u smp drew for the call, or false where
+// it declines: a k or a history past the bounds the walk was formed for.
+func (s *State) cpuWalkToken(logits []float32, smp *Sampler, u float32) (int32, bool) {
 	if !s.cpuHeadOn() {
-		return nil, nil, false
+		return 0, false
 	}
 	h := &s.cpu.head
-	f, why := h.topK.formOf()
-	if why == jit.DeclineServes && (k > len(h.vals) || len(smp.hist) > nn.SampleMaxHist) {
+	f, why := h.walk.formOf()
+	if why == jit.DeclineServes && (smp.TopK > nn.SampleMaxK || len(smp.hist) > nn.SampleMaxHist) {
 		why = jit.DeclineCaller
 	}
 	if why != jit.DeclineServes {
 		h.sampleDeclined[why]++
-		return nil, nil, false
+		return 0, false
 	}
+	s.cpuStageSample(smp)
+	topp, minp := smp.cuts()
+	h.walkArgs = [5]float32{float32(smp.TopK), float32(1 / smp.Temp), topp, minp, u}
+	b := &s.cpu.bound
+	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.args[0]), unsafe.Pointer(&h.pen[0])
+	b.io[3], b.io[4] = unsafe.Pointer(&h.walkArgs[0]), unsafe.Pointer(&h.token[0])
+	for i := range f.codes {
+		s.cpuCall(b, &f.codes[i])
+	}
+	h.sampled++
+	return int32(h.token[0]), true
+}
+
+// cpuStageSample writes smp's argument words and penalty where the composed
+// samplers read them: the history, an id no row has past it.
+func (s *State) cpuStageSample(smp *Sampler) {
+	h := &s.cpu.head
 	s.sampleArgs = smp.DeviceArgs(s.sampleArgs)
 	for i := range h.args {
 		h.args[i] = math.MaxUint32
@@ -335,15 +378,6 @@ func (s *State) cpuCandidates(logits []float32, smp *Sampler, k int) ([]float32,
 		}
 	}
 	h.pen[0] = h.args[1]
-	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
-	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.args[0]), unsafe.Pointer(&h.pen[0])
-	b.io[3], b.io[4] = unsafe.Pointer(&h.vals[0]), unsafe.Pointer(&h.ids[0])
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
-	h.sampled++
-	return h.vals[:k], h.ids[:k], true
 }
 
 // cpuFormCount is how many forms the model's CPU cache holds, refused ones

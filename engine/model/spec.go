@@ -673,7 +673,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		var x int32
 		var px float64
 		if greedy {
-			x = Greedy(sp.dlog)
+			x = sp.t.Sample(nil, sp.dlog)
 			if sp.opt.minP > 0 {
 				px = float64(topProb(sp.dlog, &sp.dist))
 			}
@@ -758,7 +758,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 			if sp.tout.tokens != nil {
 				return sp.tout.tokens[j]
 			}
-			return Greedy(lg(j))
+			return sp.t.Sample(nil, lg(j))
 		}
 		for a < kd && tok(a) == drafts[a] && (sp.opt.stop == nil || !sp.opt.stop(drafts[a])) {
 			a++

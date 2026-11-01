@@ -137,8 +137,9 @@ type frontSet struct {
 	// graph of them did not verify.
 	expand, collapse *graph.Graph
 	streamsErr       error
-	// cpuSample and cpuTopK are sample and topK over cpuHead's logits.
-	cpuSample, cpuTopK *graph.Graph
+	// cpuSample, cpuTopK and cpuWalk are sample, topK and a top-k draw's
+	// walk over cpuHead's logits.
+	cpuSample, cpuTopK, cpuWalk *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
 	// sliding layers', as jit.Front states them (nil for one that turns
 	// nothing).
@@ -369,6 +370,8 @@ func (m *Model) frontGraphs() *frontSet {
 		s.cpuSample = sm.Build()
 		tk := graph.SampleTopK{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK, Hist: nn.SampleMaxHist}
 		s.cpuTopK = tk.Build()
+		wk := graph.SampleWalk{SampleTopK: tk}
+		s.cpuWalk = wk.Build()
 	}
 	f.set = s
 	return s

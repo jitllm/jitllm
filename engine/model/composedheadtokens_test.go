@@ -2,6 +2,7 @@ package model
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -237,13 +238,13 @@ func TestComposedHeadTokens(t *testing.T) {
 							// neighbouring id. Each must part the draws, every set
 							// still the composer's.
 							set := m.frontGraphs()
-							orig := set.cpuTopK
+							orig, origWalk := set.cpuTopK, set.cpuWalk
 							for _, v := range []struct {
 								name string
-								g    *graph.Graph
-							}{{"k+1", sampleShifted(orig)}, {"the penalty on the neighbouring id", sampleNeighbour(orig)}} {
+								f    func(*graph.Graph) *graph.Graph
+							}{{"k+1", sampleShifted}, {"the penalty on the neighbouring id", sampleNeighbour}} {
 								m.front.mu.Lock()
-								set.cpuTopK = v.g
+								set.cpuTopK, set.cpuWalk = v.f(orig), v.f(origWalk)
 								m.front.mu.Unlock()
 								vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 									tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
@@ -254,7 +255,7 @@ func TestComposedHeadTokens(t *testing.T) {
 								vn := composedSamples(vg.Stats())
 								vg.Close()
 								m.front.mu.Lock()
-								set.cpuTopK = orig
+								set.cpuTopK, set.cpuWalk = orig, origWalk
 								m.front.mu.Unlock()
 								t.Logf("violation, %s: %d of %d draws parted, %d sets selected by the composer", v.name, vp, gen, vn)
 								if vd == 0 || vn < int(vd) || vp == 0 {
@@ -283,13 +284,14 @@ func TestComposedHeadTokens(t *testing.T) {
 	}
 }
 
-// sampleShifted is the sampler's candidates graph keeping the k+1 best and
-// dropping the best: its last ranking one place wider, read from its second.
+// sampleShifted is a sampler graph (the candidates', or the walk over them)
+// keeping the k+1 best and dropping the best: the candidates' ranking one
+// place wider, read from its second.
 func sampleShifted(s *graph.Graph) *graph.Graph {
 	g := cloneGraph(s)
 	last := -1
 	for i, o := range g.Ops {
-		if o.Kind == graph.OpTopK {
+		if o.Kind == graph.OpTopK && len(o.Out) == 2 && strings.HasPrefix(g.Values[o.Out[1]].Name, "sample.vals.") {
 			last = i
 		}
 	}
@@ -306,8 +308,9 @@ func sampleShifted(s *graph.Graph) *graph.Graph {
 	return g
 }
 
-// sampleNeighbour is the sampler's candidates graph with every history id
-// moved to the next: the penalty on the neighbouring id.
+// sampleNeighbour is a sampler graph (the candidates', or the walk over
+// them) with every history id moved to the next: the penalty on the
+// neighbouring id.
 func sampleNeighbour(s *graph.Graph) *graph.Graph {
 	g := cloneGraph(s)
 	for i, o := range g.Ops {

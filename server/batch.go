@@ -791,7 +791,7 @@ func (lp *stepLoop) nextToken(r *row) bool {
 		lp.finish(r, FinishMaxTokens, "", nil)
 		return false
 	}
-	next := r.sampler.Sample(r.logits)
+	next := r.s.st.Sample(&r.sampler, r.logits)
 	if sampleTap != nil {
 		sampleTap(r.sampler.Temp, r.logits, next)
 	}

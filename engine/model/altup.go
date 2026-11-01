@@ -119,7 +119,7 @@ func (s *State) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32, n
 			s.head.Tokens = make([]int32, n)
 		}
 		for i := 0; i < n; i++ {
-			s.head.Tokens[i] = Greedy(logits[i*c.NVocab : (i+1)*c.NVocab])
+			s.head.Tokens[i] = s.Sample(nil, logits[i*c.NVocab:(i+1)*c.NVocab])
 		}
 	}
 	return nil

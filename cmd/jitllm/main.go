@@ -952,7 +952,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		}
 		next := pending
 		if next < 0 {
-			next = sm.Sample(logits)
+			next = st.Sample(sm, logits)
 		}
 		// JITLLM_FORCE_IDS decodes the given token ids in place of the
 		// sampled ones (teacher forcing), so two arms of an A/B whose

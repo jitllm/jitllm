@@ -208,9 +208,9 @@ type lane struct {
 	// argmaxOut is the device argmax's one word (PrepHead).
 	argmaxOut backend.Buf
 	// The composed sampler's buffers (sample.go), made the first time a
-	// call in this lane samples: the history and the k candidates that are
-	// read back.
-	sampleArgs, sampleV, sampleI backend.Buf
+	// call in this lane samples: the history, the k candidates that are
+	// read back, and a draw's walk words.
+	sampleArgs, sampleV, sampleI, sampleWalk backend.Buf
 	// samplePenalty is the composed sampler's penalty word, and sampleStage
 	// the argument words it reads, padded past the history (graph.SampleTopK).
 	samplePenalty backend.Buf
@@ -678,7 +678,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 // Callers hold g.mu inside a scratch window.
 func (g *devTier) shareHead(dst, src *blockScratch) bool {
 	dst.head, dst.mvHead, dst.headGraph, dst.sampleGraph = src.head, src.mvHead, src.headGraph, src.sampleGraph
-	dst.headHidden, dst.sampleTopK, dst.pickGraph, dst.pickHead = src.headHidden, src.sampleTopK, src.pickGraph, src.pickHead
+	dst.headHidden, dst.sampleTopK, dst.sampleWalk, dst.pickGraph, dst.pickHead = src.headHidden, src.sampleTopK, src.sampleWalk, src.pickGraph, src.pickHead
 	dst.hNorm, dst.hNormB, dst.hBias, dst.headCap = src.hNorm, src.hNormB, src.hBias, src.headCap
 	dst.embedGraph = src.embedGraph
 	dst.collapse = src.collapse
@@ -708,7 +708,7 @@ func unshareHead(dst *blockScratch) {
 	if dst == nil || !dst.headShared {
 		return
 	}
-	dst.head, dst.mvHead, dst.headGraph, dst.headHidden, dst.sampleGraph, dst.sampleTopK = nil, mv{}, nil, nil, nil, nil
+	dst.head, dst.mvHead, dst.headGraph, dst.headHidden, dst.sampleGraph, dst.sampleTopK, dst.sampleWalk = nil, mv{}, nil, nil, nil, nil, nil
 	dst.pickGraph, dst.pickHead = nil, nil
 	dst.hNorm, dst.hNormB, dst.hBias, dst.headCap = nil, nil, nil, nil
 	dst.headShared = false

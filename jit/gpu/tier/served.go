@@ -2065,8 +2065,9 @@ func (g *devTier) servedSample(gr *graph.Graph) (*servedPart, error) {
 
 // servedSampleAt is servedSample over rows rows of logits, a token each.
 func (g *devTier) servedSampleAt(gr *graph.Graph, rows int) (*servedPart, error) {
-	if gr == nil || !(len(gr.In) == 1 && len(gr.Out) == 1 || len(gr.In) == 3 && len(gr.Out) == 2 || len(gr.In) == 2 && len(gr.Out) == 1) {
-		return nil, errors.New("the composed sample: a graph that is not logits in and a token out, the sampler's candidates or the label pick")
+	if gr == nil || !(len(gr.In) == 1 && len(gr.Out) == 1 || len(gr.In) == 3 && len(gr.Out) == 2 || len(gr.In) == 2 && len(gr.Out) == 1 ||
+		len(gr.In) == 4 && len(gr.Out) == 1) {
+		return nil, errors.New("the composed sample: a graph that is not logits in and a token out, the sampler's candidates, its walk or the label pick")
 	}
 	sk := servedKey{kind: partSample, graph: gr, rows: rows}
 	return g.servedFor(sk, func() (composedPart, error) {
@@ -3017,16 +3018,16 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		}
 		g.prewarming = false
 	}
-	// The sampler's candidates and the label pick, one form each whatever
-	// k, the history and the labels.
+	// The sampler's candidates, its walk and the label pick, one form each
+	// whatever k, the cuts, the history and the labels.
 	if !g.NoPromptPrewarm && bs != nil && g.argmaxOut != nil {
 		g.prewarming = true
-		for _, gr := range [...]*graph.Graph{bs.sampleTopK, bs.pickGraph} {
+		for _, gr := range [...]*graph.Graph{bs.sampleTopK, bs.sampleWalk, bs.pickGraph} {
 			if gr == nil {
 				continue
 			}
 			if _, err := g.servedSample(gr); err != nil {
-				g.LastErr = "the composed sampler's candidates or label pick: " + err.Error()
+				g.LastErr = "the composed sampler's candidates, its walk or the label pick: " + err.Error()
 			}
 		}
 		g.prewarming = false

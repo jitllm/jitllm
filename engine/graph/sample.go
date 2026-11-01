@@ -110,42 +110,109 @@ func (s *SampleDraw) Build() *Graph {
 	ctr := b.In("sample.counter", 2)
 	b.G.Values[ctr].Elem = ElemU32
 	K := b.G.Values[vals].Width
-	f32 := func(name string, w int) Result { return Result{Name: name, Width: w} }
-	one := func(op OpKind, name string, w int, a Attrs, in ...ValueID) ValueID {
-		return b.Emit(op, in, []Result{f32(name, w)}, nil, a, nil, nil)[0]
-	}
-	mapc := func(fn MapFn, c float64, name string, w int, in ...ValueID) ValueID {
-		return one(OpMap, name, w, Attrs{Fn: fn, Const: c}, in...)
-	}
-	word := func(i int, name string) ValueID {
-		return one(OpSlice, name, 1, Attrs{Offset: i, Width: 1}, draw)
-	}
-	k, invT, topp, minp := word(0, "sample.k"), word(1, "sample.invtemp"), word(2, "sample.topp"), word(3, "sample.minp")
-	rank := b.Emit(OpRank, []ValueID{vals}, []Result{{Name: "sample.rank", Width: K, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
-	place := mapc(MapMul, 1, "sample.place.f", K, rank)
-	inK := mapc(MapLess, 0, "sample.ink", K, place, k)
-	v0 := one(OpReduce, "sample.v0", 1, Attrs{Fn: MapMax}, vals)
-	d := mapc(MapSub, 0, "sample.d", K, vals, v0)
-	e := mapc(MapMul, 0, "sample.e", K, mapc(MapExp, 0, "sample.ed", K, d), inK)
-	p := mapc(MapDiv, 0, "sample.p", K, e, one(OpReduce, "sample.sum", 1, Attrs{Fn: MapAdd}, e))
-	tp := one(OpTile, "sample.p.rows", K*K, Attrs{Span: K}, p)
-	tr := one(OpTile, "sample.place.rows", K*K, Attrs{Span: K}, place)
-	lower := mapc(MapMul, 0, "sample.lower", K*K, tp, mapc(MapLess, 0, "sample.lt", K*K, tr, place))
-	before := one(OpReduce, "sample.before", K, Attrs{Fn: MapAdd, Span: K}, lower)
-	keepP := mapc(MapLess, 0, "sample.keep.p", K, before, topp)
-	floor := mapc(MapMul, 0, "sample.floor", 1, one(OpReduce, "sample.pmax", 1, Attrs{Fn: MapMax}, p), minp)
-	under := mapc(MapLess, 0, "sample.under", K, p, floor)
-	keepM := mapc(MapAdd, 1, "sample.keep.m", K, mapc(MapMul, -1, "sample.under.neg", K, under))
-	first := mapc(MapLess, 1, "sample.first", K, place)
-	keep := mapc(MapMax, 0, "sample.keep", K, mapc(MapMul, 0, "sample.keep.pmk", K, mapc(MapMul, 0, "sample.keep.pm", K, keepP, keepM), inK), first)
-	u := one(OpUniform, "sample.u", K, Attrs{}, ids, ctr)
-	g := mapc(MapMul, -1, "sample.gumbel", K, mapc(MapLog, 0, "sample.lnlnu", K, mapc(MapMul, -1, "sample.nlnu", K, mapc(MapLog, 0, "sample.lnu", K, u))))
-	score := mapc(MapAdd, 0, "sample.score", K, mapc(MapMul, 0, "sample.dt", K, d, invT), g)
-	kept := mapc(MapWhere, math.Inf(-1), "sample.kept", K, keep, score)
-	best := b.Emit(OpTopK, []ValueID{kept}, []Result{{Name: "sample.best", Width: 1, Elem: ElemU32}, f32("sample.best.v", 1)}, nil, Attrs{TopK: 1}, nil, nil)
-	tok := b.Emit(OpTake, []ValueID{ids, best[0]}, []Result{{Name: "sample.token", Width: 1, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
-	b.Out(tok)
+	e := sampleEmitter{b}
+	_, d, keep := e.cuts(vals, draw)
+	invT := e.word(draw, 1, "sample.invtemp")
+	u := e.one(OpUniform, "sample.u", K, Attrs{}, ids, ctr)
+	g := e.mapc(MapMul, -1, "sample.gumbel", K, e.mapc(MapLog, 0, "sample.lnlnu", K, e.mapc(MapMul, -1, "sample.nlnu", K, e.mapc(MapLog, 0, "sample.lnu", K, u))))
+	score := e.mapc(MapAdd, 0, "sample.score", K, e.mapc(MapMul, 0, "sample.dt", K, d, invT), g)
+	kept := e.mapc(MapWhere, math.Inf(-1), "sample.kept", K, keep, score)
+	b.Out(e.token(ids, kept))
 	return b.G
+}
+
+// SampleWalk is SampleTopK's candidates drawn as the host's sampler draws
+// them: of the first k, top-p and then min-p over their softmax at
+// temperature 1, the best always kept, then the inverse-CDF walk at a uniform
+// u the caller draws over the survivors' softmax at the temperature -- the
+// first survivor whose mass up to and including it passes u times the
+// survivors' mass, the last survivor where rounding leaves none. Its inputs
+// are SampleTopK's, then sample.walk (k, 1/T, top-p, min-p as SampleDraw's,
+// then u); its output the token. The mass before each survivor is a KxK sum,
+// as top-p's.
+type SampleWalk struct {
+	SampleTopK
+}
+
+func (s *SampleWalk) Build() *Graph {
+	b := New()
+	vals, ids := s.emit(b)
+	walk := b.In("sample.walk", 5)
+	K := b.G.Values[vals].Width
+	e := sampleEmitter{b}
+	place, d, keep := e.cuts(vals, walk)
+	invT, u := e.word(walk, 1, "sample.invtemp"), e.word(walk, 4, "sample.u")
+	et := e.mapc(MapMul, 0, "sample.et", K, e.mapc(MapExp, 0, "sample.etd", K, e.mapc(MapMul, 0, "sample.dt", K, d, invT)), keep)
+	mass := e.one(OpReduce, "sample.mass", 1, Attrs{Fn: MapAdd}, et)
+	upto := e.mapc(MapAdd, 0, "sample.upto", K, e.before(et, place, "sample.walk"), et)
+	// past is upto > u*mass, as -upto < -(u*mass).
+	target := e.mapc(MapMul, -1, "sample.target.neg", 1, e.mapc(MapMul, 0, "sample.target", 1, u, mass))
+	past := e.mapc(MapLess, 0, "sample.past", K, e.mapc(MapMul, -1, "sample.upto.neg", K, upto), target)
+	land := e.mapc(MapMul, 0, "sample.land", K, past, keep)
+	// The first place landed on outranks every other (2K - place), and with
+	// none the last survivor (its place) outranks the cut (-1).
+	fall := e.mapc(MapWhere, -1, "sample.fall", K, keep, place)
+	hi := e.mapc(MapAdd, float64(2*K), "sample.hi", K, e.mapc(MapMul, -1, "sample.place.neg", K, place))
+	notLand := e.mapc(MapAdd, 1, "sample.notland", K, e.mapc(MapMul, -1, "sample.land.neg", K, land))
+	score := e.mapc(MapAdd, 0, "sample.walkscore", K, e.mapc(MapMul, 0, "sample.landscore", K, land, hi),
+		e.mapc(MapMul, 0, "sample.fallscore", K, notLand, fall))
+	b.Out(e.token(ids, score))
+	return b.G
+}
+
+// sampleEmitter is the ops SampleDraw and SampleWalk share on b.
+type sampleEmitter struct{ b *Builder }
+
+func (e sampleEmitter) one(op OpKind, name string, w int, a Attrs, in ...ValueID) ValueID {
+	return e.b.Emit(op, in, []Result{{Name: name, Width: w}}, nil, a, nil, nil)[0]
+}
+
+func (e sampleEmitter) mapc(fn MapFn, c float64, name string, w int, in ...ValueID) ValueID {
+	return e.one(OpMap, name, w, Attrs{Fn: fn, Const: c}, in...)
+}
+
+func (e sampleEmitter) word(v ValueID, i int, name string) ValueID {
+	return e.one(OpSlice, name, 1, Attrs{Offset: i, Width: 1}, v)
+}
+
+// before is each candidate's sum of x over the candidates of a lower place: a
+// KxK sum, each candidate's row of x with those of a lower place kept.
+func (e sampleEmitter) before(x, place ValueID, name string) ValueID {
+	K := e.b.G.Values[x].Width
+	tx := e.one(OpTile, name+".rows", K*K, Attrs{Span: K}, x)
+	tr := e.one(OpTile, name+".place.rows", K*K, Attrs{Span: K}, place)
+	lower := e.mapc(MapMul, 0, name+".lower", K*K, tx, e.mapc(MapLess, 0, name+".lt", K*K, tr, place))
+	return e.one(OpReduce, name+".before", K, Attrs{Fn: MapAdd, Span: K}, lower)
+}
+
+// cuts is the K candidates' (vals, best first) places, their distances from
+// the best, and whether each survives: among the first k (params' word 0),
+// top-p over the softmax at temperature 1 (word 2: a candidate survives while
+// the mass before it is under top-p) and min-p (word 3: while its
+// probability is at least min-p times the best's), the best always.
+func (e sampleEmitter) cuts(vals, params ValueID) (place, d, keep ValueID) {
+	K := e.b.G.Values[vals].Width
+	k, topp, minp := e.word(params, 0, "sample.k"), e.word(params, 2, "sample.topp"), e.word(params, 3, "sample.minp")
+	rank := e.b.Emit(OpRank, []ValueID{vals}, []Result{{Name: "sample.rank", Width: K, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
+	place = e.mapc(MapMul, 1, "sample.place.f", K, rank)
+	inK := e.mapc(MapLess, 0, "sample.ink", K, place, k)
+	v0 := e.one(OpReduce, "sample.v0", 1, Attrs{Fn: MapMax}, vals)
+	d = e.mapc(MapSub, 0, "sample.d", K, vals, v0)
+	ex := e.mapc(MapMul, 0, "sample.e", K, e.mapc(MapExp, 0, "sample.ed", K, d), inK)
+	p := e.mapc(MapDiv, 0, "sample.p", K, ex, e.one(OpReduce, "sample.sum", 1, Attrs{Fn: MapAdd}, ex))
+	keepP := e.mapc(MapLess, 0, "sample.keep.p", K, e.before(p, place, "sample"), topp)
+	floor := e.mapc(MapMul, 0, "sample.floor", 1, e.one(OpReduce, "sample.pmax", 1, Attrs{Fn: MapMax}, p), minp)
+	under := e.mapc(MapLess, 0, "sample.under", K, p, floor)
+	keepM := e.mapc(MapAdd, 1, "sample.keep.m", K, e.mapc(MapMul, -1, "sample.under.neg", K, under))
+	first := e.mapc(MapLess, 1, "sample.first", K, place)
+	keep = e.mapc(MapMax, 0, "sample.keep", K, e.mapc(MapMul, 0, "sample.keep.pmk", K, e.mapc(MapMul, 0, "sample.keep.pm", K, keepP, keepM), inK), first)
+	return place, d, keep
+}
+
+// token is the id of the largest of score.
+func (e sampleEmitter) token(ids, score ValueID) ValueID {
+	best := e.b.Emit(OpTopK, []ValueID{score}, []Result{{Name: "sample.best", Width: 1, Elem: ElemU32}, {Name: "sample.best.v", Width: 1}}, nil, Attrs{TopK: 1}, nil, nil)
+	return e.b.Emit(OpTake, []ValueID{ids, best[0]}, []Result{{Name: "sample.token", Width: 1, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
 }
 
 // Pick is the label pick over the head's logits: the logits at N ids, the

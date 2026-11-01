@@ -419,7 +419,7 @@ func (e *Engine) warm(lm *LoadedModel) error {
 	if err != nil {
 		return fmt.Errorf("server: warming %q: %w", lm.id, err)
 	}
-	if _, err := s.st.Forward(model.Greedy(lg)); err != nil {
+	if _, err := s.st.Forward(s.st.Sample(nil, lg)); err != nil {
 		return fmt.Errorf("server: warming %q: %w", lm.id, err)
 	}
 	lm.ttft.warmed.Store(true)

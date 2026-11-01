@@ -409,6 +409,10 @@ type Head struct {
 	// none: what a device serving SampleK forms, once, whatever k and the
 	// history's length.
 	SampleTopK *graph.Graph
+	// SampleWalk is a top-k draw's token over SampleTopK's candidates as ops
+	// from the front end (graph.SampleWalk): what a device serving Walk
+	// forms, once, whatever k, the cuts and the history's length.
+	SampleWalk *graph.Graph
 	// PickGraph is the label pick over the logits (graph.Pick at PickMax),
 	// and PickHead the head projecting the picked rows alone (graph.Head with
 	// Pick): what a device serving Pick forms, once, whatever the labels.
@@ -493,6 +497,12 @@ type Head struct {
 	SampleVals []float32
 	SampleIDs  []uint32
 	Sampled    bool
+	// Walk, with SampleK, asks for the draw's token in place of the
+	// candidates: SampleWalk at WalkArgs (k, 1/T, top-p +Inf where off,
+	// min-p 0 where off, and the caller's uniform). A tier that serves it
+	// sets Token and Sampled and reads back nothing else.
+	Walk     bool
+	WalkArgs [5]float32
 	// Pick, when non-empty, asks for the logits at these vocabulary ids alone
 	// in place of the row: a decision readout's label ids. A tier that serves
 	// it fills PickVals (as long as Pick at least), leaves Logits untouched

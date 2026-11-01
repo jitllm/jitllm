@@ -46,7 +46,7 @@ func (g *devTier) sampleBufs() bool {
 	if l.sampleArgs != nil {
 		return true
 	}
-	sizes := [...]int{4 * kernels.SampleArgsWords(sampleMaxHist), 4 * sampleMaxK, 4 * sampleMaxK, 4}
+	sizes := [...]int{4 * kernels.SampleArgsWords(sampleMaxHist), 4 * sampleMaxK, 4 * sampleMaxK, 4, 4 * len(nn.Head{}.WalkArgs)}
 	var bufs [len(sizes)]backend.Buf
 	for i, sz := range sizes {
 		b, err := g.dev.Alloc(sz)
@@ -59,7 +59,7 @@ func (g *devTier) sampleBufs() bool {
 		}
 		bufs[i] = b
 	}
-	l.sampleArgs, l.sampleV, l.sampleI, l.samplePenalty = bufs[0], bufs[1], bufs[2], bufs[3]
+	l.sampleArgs, l.sampleV, l.sampleI, l.samplePenalty, l.sampleWalk = bufs[0], bufs[1], bufs[2], bufs[3], bufs[4]
 	l.sampleStage = make([]byte, 4*kernels.SampleArgsWords(sampleMaxHist))
 	return true
 }
@@ -80,7 +80,7 @@ func (l *lane) stageSample(head *nn.Head) []byte {
 
 // freeSample gives back the lane's sampler buffers.
 func (l *lane) freeSample() {
-	for _, b := range [...]*backend.Buf{&l.sampleArgs, &l.sampleV, &l.sampleI, &l.samplePenalty} {
+	for _, b := range [...]*backend.Buf{&l.sampleArgs, &l.sampleV, &l.sampleI, &l.samplePenalty, &l.sampleWalk} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil

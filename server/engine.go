@@ -1947,7 +1947,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			if con != nil && n+1 != o.maskSkip {
 				lg = con.mask(logits)
 			}
-			next = sampler.Sample(lg)
+			next = s.st.Sample(&sampler, lg)
 			sampler.Observe(next)
 			// The model's raw distribution, before the grammar's mask, as
 			// before temperature and penalties: vLLM's default

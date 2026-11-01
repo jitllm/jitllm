@@ -87,11 +87,15 @@ func (s *Sampler) Sample(logits []float32) int32 {
 	if s == nil || s.Temp <= 0 {
 		return Greedy(logits)
 	}
-	n := len(logits)
-	if n == 0 {
+	if len(logits) == 0 {
 		return 0
 	}
-	s.seed()
+	return s.sampleAt(logits, float32(s.uniform()))
+}
+
+// sampleAt is Sample at the call's uniform u, drawn by the caller.
+func (s *Sampler) sampleAt(logits []float32, u float32) int32 {
+	n := len(logits)
 
 	// The repeat penalty first, on the logits, as llama.cpp does: a positive
 	// logit is divided by the penalty and a negative one multiplied. It is a
@@ -105,14 +109,9 @@ func (s *Sampler) Sample(logits []float32) int32 {
 		vals = s.pen
 	}
 
-	// One uniform draw per call: every round of a growth loop must use the
-	// same u, or the stream would advance by a data-dependent amount.
-	u := float32(s.rng.Float64())
-
-	minp, topp := float32(s.MinP), float32(math.Inf(1))
-	if s.TopP > 0 && s.TopP < 1 {
-		topp = float32(s.TopP)
-	}
+	// One uniform draw per call (u): every round of a growth loop must use
+	// the same u, or the stream would advance by a data-dependent amount.
+	topp, minp := s.cuts()
 	// With a top-k the distribution is the softmax over those k alone.
 	if s.TopK > 0 && s.TopK < n {
 		s.ord.Begin(vals)
@@ -273,14 +272,27 @@ func (s *Sampler) DeviceArgs(dst []uint32) []uint32 {
 	return append(dst, 0, math.Float32bits(1))
 }
 
+// cuts is top-p (+Inf where off) and min-p (0 where off) as the draw reads
+// them.
+func (s *Sampler) cuts() (topp, minp float32) {
+	topp = float32(math.Inf(1))
+	if s.TopP > 0 && s.TopP < 1 {
+		topp = float32(s.TopP)
+	}
+	return topp, float32(s.MinP)
+}
+
 // SampleFrom is Sample for a caller holding the top-k candidates already --
 // the k best (penalized) logits, best first, the lower id on a tie, as a
 // device's sampler returns them -- instead of the row. It draws the same
 // uniform Sample would, so for the same candidates and seed it returns the
 // same token.
 func (s *Sampler) SampleFrom(vals []float32, ids []uint32) int32 {
-	s.seed()
-	u := float32(s.rng.Float64())
+	return s.sampleFromAt(vals, ids, float32(s.uniform()))
+}
+
+// sampleFromAt is SampleFrom at the call's uniform u, drawn by the caller.
+func (s *Sampler) sampleFromAt(vals []float32, ids []uint32, u float32) int32 {
 	k := len(vals)
 	if k == 0 {
 		return 0

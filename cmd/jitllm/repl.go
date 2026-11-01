@@ -190,7 +190,7 @@ func replyTo(m *model.Model, st *model.State, sm *model.Sampler, ids []int32, n 
 	for i := 0; i < n && !stop.Load(); i++ {
 		next := pending
 		if next < 0 {
-			next = sm.Sample(logits)
+			next = st.Sample(sm, logits)
 		}
 		sm.Observe(next)
 		if m.Vocab.IsEOG(next) {

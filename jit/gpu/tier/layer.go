@@ -1630,9 +1630,11 @@ type blockScratch struct {
 	// sampleGraph is the greedy token over the head's logits as ops from the
 	// front end (nn.Head.Sample): what serving the argmax forms; sampleTopK
 	// the sampler's candidates (nn.Head.SampleTopK), what serving SampleK
-	// forms; pickGraph and pickHead the label pick over the logits and the
-	// head projecting the picked rows alone (nn.Head.PickGraph, PickHead).
-	sampleGraph, sampleTopK, pickGraph, pickHead *graph.Graph
+	// forms; sampleWalk a draw's token over them (nn.Head.SampleWalk), what
+	// serving Walk forms; pickGraph and pickHead the label pick over the
+	// logits and the head projecting the picked rows alone (nn.Head.PickGraph,
+	// PickHead).
+	sampleGraph, sampleTopK, sampleWalk, pickGraph, pickHead *graph.Graph
 	// headShared says head, mvHead, hNorm, hNormB, hBias and headCap are another
 	// scratch's -- lane0's, borrowed by a clone (shareHead) -- and are not
 	// freed or refunded with this one.
@@ -6003,7 +6005,7 @@ func (g *devTier) headGraphs(h *nn.Head) {
 		for _, d := range ds {
 			if d != nil {
 				d.headGraph, d.headHidden, d.sampleGraph, d.embedGraph = h.Graph, h.HiddenGraph, h.Sample, h.Embed
-				d.sampleTopK, d.pickGraph, d.pickHead = h.SampleTopK, h.PickGraph, h.PickHead
+				d.sampleTopK, d.sampleWalk, d.pickGraph, d.pickHead = h.SampleTopK, h.SampleWalk, h.PickGraph, h.PickHead
 			}
 		}
 	})
@@ -6686,8 +6688,10 @@ type graphKey struct {
 	argmax bool
 	// sampleK is the composed sampler's k (nn.Head.SampleK), 0 for none: its
 	// launches follow the head, so a recording without them cannot serve a
-	// call with them, nor one of another k.
+	// call with them, nor one of another k; walk says they end in the draw's
+	// token (nn.Head.Walk).
 	sampleK int
+	walk    bool
 	// pick says the head ends in the label pick's gather (nn.Head.Pick).
 	pick bool
 	// rag is a LayersRows step's sequence count, 0 for any other call: ragged
@@ -7343,10 +7347,14 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// The composer selects the sampler's candidates where it serves a step's
 	// token (ComposedSample) and the front end states them.
 	topKSrv := head != nil && !g.prompt && bs.sampleTopK != nil && head.SampleTopK == bs.sampleTopK
+	// The draw's token in place of its candidates (nn.Head.Walk), written
+	// where the argmax's is.
+	walk := head != nil && head.Walk && !g.prompt && g.argmaxOut != nil && bs.sampleWalk != nil && head.SampleWalk == bs.sampleWalk
 	if head != nil && !argmax && head.SampleK > 0 && R == 1 && rag == nil && !allRows && !fold &&
-		left&(nn.HeadBias|nn.HeadScale) == 0 && topKSrv && g.prepSample(head) {
+		left&(nn.HeadBias|nn.HeadScale) == 0 && (topKSrv || walk) && g.prepSample(head) {
 		sampleK = head.SampleK
 	}
+	walk = walk && sampleK > 0
 	// The label pick: one row's logits, a decode's or a folded chunk's last.
 	pickWant := head != nil && !argmax && sampleK == 0 && len(head.Pick) > 0 && rag == nil && !allRows &&
 		(R == 1 || fold) && left&(nn.HeadBias|nn.HeadScale) == 0
@@ -7438,7 +7446,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		ragHead = head.WantedRows(nrow)
 	}
 	key := graphKey{lo, hi, nCap, R, head != nil, g.TableSplit, g.ScalarSoftmax, g.flashOn(), g.KVF16,
-		ropeDev, argmax, sampleK, pick, ragN, ragRuns, par, pagedVar, ragHead, ragMap, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, g.GateUp2Force, g.NoAddNormFold, sid, g.NoFuse, g.NoActFuse, g.FFNForm, headSrv, tableSrv, sampleSrv, embedSrv, pickHeadSrv, pickSrv}
+		ropeDev, argmax, sampleK, walk, pick, ragN, ragRuns, par, pagedVar, ragHead, ragMap, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, g.GateUp2Force, g.NoAddNormFold, sid, g.NoFuse, g.NoActFuse, g.FFNForm, headSrv, tableSrv, sampleSrv, embedSrv, pickHeadSrv, pickSrv}
 	if lo == hi {
 		// The head alone reads no history, so the capacity is not part of
 		// what it records: keyed by it, prompts on either side of a growth
@@ -7492,7 +7500,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow, kvDim: kvDim, qdim: qdim,
 		kst: kst, nCap: nCap, rrows: rrows, sm: sm, smG: smG, smW: smW,
 		tableSrv: tableSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, raxes: raxes,
-		fold: fold, ropeDev: ropeDev, argmax: argmax, sampleK: sampleK, pick: pick, ragHead: ragHead, parOK: parOK,
+		fold: fold, ropeDev: ropeDev, argmax: argmax, sampleK: sampleK, walk: walk, pick: pick, ragHead: ragHead, parOK: parOK,
 		allRows: allRows, hNorm: hNorm, headWhy: headWhy, pickOnly: pickOnly,
 		pickHeadSrv: pickHeadSrv, pickSrv: pickSrv,
 		collapse:   collapse,
@@ -7605,7 +7613,7 @@ type submitArgs struct {
 	embedSrv       bool
 	raxes          []byte
 	sampleK        int
-	pick           bool
+	walk, pick     bool
 	parOK, allRows bool
 	hNorm          backend.Buf
 	// headWhy is why the composer is not asked for the head at this one-row
@@ -7648,7 +7656,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	hx, hcs, hcsSWA, pn, koffs, kposs, rposs := a.hx, a.hcs, a.hcsSWA, a.pn, a.koffs, a.kposs, a.rposs
 	p, rag, pe, key := a.p, a.rag, a.pe, a.key
 	R, nrow, kvDim, kst, rrows := a.R, a.nrow, a.kvDim, a.kst, a.rrows
-	fold, ropeDev, argmax, sampleK, pick := a.fold, a.ropeDev, a.argmax, a.sampleK, a.pick
+	fold, ropeDev, argmax, sampleK, walk, pick := a.fold, a.ropeDev, a.argmax, a.sampleK, a.walk, a.pick
 	tableSrv, sampleSrv, embedSrv, raxes := a.tableSrv, a.sampleSrv, a.embedSrv, a.raxes
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
 	headWhy, pickOnly, headCapped := a.headWhy, a.pickOnly, a.headCapped
@@ -8299,6 +8307,12 @@ func (g *devTier) layersSession(s backend.Session) {
 				err = serr
 			}
 			switch {
+			case sampleK > 0 && walk && sampleSrv && err == nil:
+				sv, serr := g.servedSample(bs.sampleWalk)
+				if serr == nil {
+					serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.headOut(), g.sampleArgs, g.samplePenalty, g.sampleWalk}, []backend.Buf{g.argmaxOut})
+				}
+				err = serr
 			case sampleK > 0 && sampleSrv && err == nil:
 				sv, serr := g.servedSample(bs.sampleTopK)
 				if serr == nil {
@@ -8489,6 +8503,9 @@ func (g *devTier) layersSession(s backend.Session) {
 		st := g.lane.stageSample(head)
 		w(g.sampleArgs, st)
 		w(g.samplePenalty, st[4:8])
+		if walk {
+			w(g.sampleWalk, f32b(head.WalkArgs[:]))
+		}
 	}
 	if pick {
 		// The ids change every question; the recording reads them.
@@ -8595,6 +8612,14 @@ func (g *devTier) layersSession(s backend.Session) {
 				err = s.Read(bs.ragOut(), f32b(head.Logits[:need]))
 			}
 		}
+		direct = true
+	case walk:
+		tok := g.subBytes.one[:]
+		if err = s.Read(g.argmaxOut, tok); err == nil {
+			head.Token = int32(binary.LittleEndian.Uint32(tok))
+		}
+		head.Sampled = err == nil
+		g.SampleReads++
 		direct = true
 	case sampleK > 0:
 		if err = s.Read(g.sampleV, f32b(head.SampleVals[:sampleK])); err == nil {
