@@ -14,10 +14,9 @@ import (
 // llama.cpp and between tiers compare argmax, so Temp == 0 short-circuits to
 // Greedy before any other field is read.
 //
-// The filters run in llama.cpp's order (penalty, top-k, top-p, min-p, then the
-// temperature), so a prompt behaves comparably across engines: top-p and min-p
-// cut the candidates' softmax at temperature 1, and the temperature shapes
-// only the draw over what survives them.
+// The filters run penalty, top-k, top-p, min-p, then the temperature: top-p
+// and min-p cut the candidates' softmax at temperature 1, and the temperature
+// shapes only the draw over what survives them.
 //
 // Every vocabulary-sized operation is generated code: the ordering is a
 // segmented selection that takes only as many candidates as the cuts consume

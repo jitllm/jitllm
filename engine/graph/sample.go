@@ -91,7 +91,7 @@ func (s *SampleTopK) emit(b *Builder) (vals, ids ValueID) {
 }
 
 // SampleDraw is SampleTopK's candidates drawn from where they are: of the
-// first k, in llama.cpp's order, top-p and then min-p over their softmax at
+// first k, top-p and then min-p over their softmax at
 // temperature 1, the best always kept, then a Gumbel-max at the temperature
 // -- the largest of (v - v0)/T - log(-log u) over the survivors, u each
 // candidate's OpUniform under the counter keyed by its id. Its inputs are

@@ -20,7 +20,7 @@ import (
 //
 // The candidates are then held to the definition rather than to the shared
 // draw: two thousand seeds drawn from the last step's candidates must all land
-// in what llama.cpp's order keeps of them -- top-p, then min-p, over their
+// in what the cuts keep of them -- top-p, then min-p, over their
 // softmax at temperature 1 -- computed here in float64. The host and device
 // arms share drawBounded, so only this half sees a broken cut.
 func TestForwardSampleMatchesSampleOverForward(t *testing.T) {
@@ -149,7 +149,7 @@ func forwardSampleMatches(t *testing.T, name string) {
 }
 
 // topPNucleus is the tokens a top-k/top-p/min-p draw over these candidates
-// may return, by llama.cpp's order in float64: their softmax at temperature
+// may return, cut before the temperature in float64: their softmax at temperature
 // 1, the smallest prefix whose mass reaches top-p, then min-p's floor against
 // the best -- the temperature shapes only the draw over what survives --
 // widened by one past the boundary, where float32 rounding may legitimately

@@ -202,7 +202,7 @@ func emitSampleSegMax(first, idsMem bool) []byte {
 // all three tiers' assemblers have, and K is the survivor count (about forty
 // on a normal top-k), not the vocabulary.
 //
-// The cuts follow llama.cpp's order: min-p is tested before the element joins
+// The cuts run min-p, then top-p: min-p is tested before the element joins
 // the cumulative and top-p after, so min-p stops at the first `p < MinP*p[0]`
 // having accumulated nothing of it and top-p cuts at i+1 on the first
 // `acc >= TopP`. The surviving mass is the cumulative at the cut, the same

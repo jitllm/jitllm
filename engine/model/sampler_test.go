@@ -326,8 +326,8 @@ func TestSamplerTopKThenTopP(t *testing.T) {
 	}
 }
 
-// TestSamplerCutsBeforeTheTemperature pins llama.cpp's order of the cuts and
-// the temperature: top-p and min-p read the softmax at temperature 1, and the
+// TestSamplerCutsBeforeTheTemperature pins the order of the cuts and the
+// temperature: top-p and min-p read the softmax at temperature 1, and the
 // temperature shapes only the draw over their survivors. At temperature 4 the
 // tempered softmax is flat enough that the same top-p would keep four of
 // these five and the same min-p all five; at temperature 1 each keeps two,

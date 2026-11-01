@@ -12,7 +12,7 @@ import (
 //
 // A rejection test needs p(x) and q(x) at the drafted token x, for the target
 // and the draft: the sampler's own distribution -- the penalty, the
-// temperature, and the cuts in llama.cpp's order -- not a raw softmax, or the
+// temperature, and the cuts before it -- not a raw softmax, or the
 // output is not distributed as plain sampling's.
 
 // specDist is one row's distribution under a Sampler: either the whole row's
