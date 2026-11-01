@@ -6164,6 +6164,15 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	g.headSrc, g.headNormHost = &h.W.Data[0], slices.Clone(h.Norm)
 	g.charge(uint64(len(h.Norm)*4 + h.W.Rows*4))
 	g.prepEmbed(bs, h)
+	// The input rows' tables are the head's: a head whose tables have no room
+	// is given back, so placement buys the room as it does for the head
+	// (placeHead), rather than met by its first step.
+	if bs.embWhy == partNoRoom {
+		g.giveBackHead(bs)
+		g.Declined++
+		g.LastErr = "the input rows' tables have no room beside the head and the blocks placed: " + g.LastErr
+		return false
+	}
 	// The output bias, for a head graph the composer serves that binds it. A
 	// head without it (no room, a bias of another width) is declined by name
 	// (partHeadBias) and the caller adds the bias.

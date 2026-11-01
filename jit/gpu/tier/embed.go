@@ -189,7 +189,10 @@ func (g *devTier) embedTable(w nn.Weight) (*resident, partDecline) {
 	if !ok || len(w.Data) == 0 {
 		return nil, partEmbedFormat
 	}
-	if len(g.stream) > 0 {
+	// A table already held costs nothing more: a head given back for room
+	// leaves its tables held (PrepHead).
+	held := g.res[resKey{block: -1, nrows: w.Rows, k: w.K, t: q, p: &w.Data[0]}]
+	if len(g.stream) > 0 && (held == nil || !held.ok) {
 		if now, after := g.slots(), g.slotsIfPerm(uint64(len(w.Data))); after < now {
 			return nil, partNoRoom
 		}
