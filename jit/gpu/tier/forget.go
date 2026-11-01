@@ -106,6 +106,34 @@ func (g *devTier) applyForget(lo, hi uintptr) {
 		g.stageBytes -= st.bytes()
 		g.Config.stage.give(st.bytes())
 	}
+	// The picture rows keep their weights and vectors by the host bytes too
+	// (rowsWeight, rowsVector): a weight freed above, or a vector of bytes
+	// the host let go, would be handed to the next model at those addresses.
+	// Their parts bound them, so they go as well.
+	rows := false
+	for k := range g.rows.w {
+		if in(k) {
+			delete(g.rows.w, k)
+			rows = true
+		}
+	}
+	for k, b := range g.rows.v {
+		if in((*byte)(unsafe.Pointer(k))) {
+			b.Free()
+			delete(g.rows.v, k)
+			rows = true
+		}
+	}
+	if rows {
+		g.eachLane(func(l *lane) {
+			for sk, sv := range l.served {
+				if sk.kind == partRows {
+					delete(l.served, sk)
+					g.dropPart(sv)
+				}
+			}
+		})
+	}
 	// A recording that launched the head names its buffers.
 	if head {
 		g.dropGraph()
