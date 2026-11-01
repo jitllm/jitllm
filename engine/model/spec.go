@@ -202,10 +202,13 @@ type Speculator struct {
 	snaps      []recSnap
 	pre        recSnap
 	eh, ze     []float32
-	rowTok     []int32
-	dist, qd   specDist
-	qdists     []specDist
-	smark      samplerMark
+	// epos is a draft step's rows' positions for its input rows (zero: the
+	// trunk's table carries none).
+	epos     []int
+	rowTok   []int32
+	dist, qd specDist
+	qdists   []specDist
+	smark    samplerMark
 
 	// What choose reads: per draft position, the drafts offered and accepted
 	// there, and the times a draft step and a verification took.
@@ -537,8 +540,17 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 		// The composed entry (mtpEntryGraph): the embeddings in eh, its rows
 		// in ze.
 		e := sp.eh[:n*d0]
-		for i, x := range toks {
-			if err := d.embedMTP(e[i*d0:(i+1)*d0], x); err != nil {
+		// The trunk's table through the composed input rows where the block
+		// reads it unscaled and nothing else rides the rows; else row by row.
+		rows := !w.ownEmbd && (c.EmbdScale == 0 || c.EmbdScale == 1) && d.m.posEmbd.e == nil && c.PLEDim == 0
+		if rows {
+			if len(sp.epos) < n {
+				sp.epos = make([]int, n)
+			}
+			rows = d.cpuEmbed(e, nil, toks, sp.epos[:n]) == jit.DeclineServes
+		}
+		for i := 0; i < n && !rows; i++ {
+			if err := d.embedMTP(e[i*d0:(i+1)*d0], toks[i]); err != nil {
 				return err
 			}
 		}

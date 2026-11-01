@@ -197,8 +197,10 @@ type State struct {
 	// model. bhf is its batched twin.
 	hf, bhf []float32
 	// prow is one row of scratch for a learned position table (starcoder);
-	// nil on every model without one.
+	// nil on every model without one. posIn says the step's input rows added
+	// it already (the composed graph's, embed).
 	prow   []float32
+	posIn  bool
 	q      []float32 // n_head * head_dim
 	kc, vc []float32 // one position's K and V
 	att    []float32 // attention scores for one head
@@ -2461,12 +2463,21 @@ func (s *State) prepDeviceRange(lo, n int) {
 	s.placeHead()
 }
 
-// embed writes the token's embedding into the residual stream.
+// embed writes the token's embedding into the residual stream: the input
+// rows' graph composed for the CPU (cpuembed.go), its scale, its position
+// row and its per-layer inputs with it.
 func (s *State) embed(token int32) error {
 	m, c := s.m, s.c
 	// On the host, unlike a prompt's rows: a device gather here measured
 	// slower (one row is usually cache-hot, and the launch sits on the
 	// token's critical path).
+	e := &s.cpu.embed
+	e.tok1[0], e.pos1[0] = token, s.pos
+	if s.cpuEmbed(s.x, s.ple, e.tok1[:], e.pos1[:]) == jit.DeclineServes {
+		s.posIn = m.posEmbd.e != nil
+		m.trace(-1, "embd", s.x)
+		return nil
+	}
 	if err := m.embedRow(s.x, int(token)); err != nil {
 		return err
 	}
@@ -3926,7 +3937,8 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 	if m.posEmbd.e != nil {
 		inner, pos := fill, s.pos
 		fill = func() error {
-			if err := inner(); err != nil {
+			s.posIn = false
+			if err := inner(); err != nil || s.posIn {
 				return err
 			}
 			return m.addPos(s.x, s.prow, pos)

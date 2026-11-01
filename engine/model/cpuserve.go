@@ -105,6 +105,8 @@ const (
 	// cpuArgPlanes is the block's rotary planes (nn.Rope.TabPlanes), which
 	// a kernel turning at positions of its own reads (cpuForms.planes).
 	cpuArgPlanes
+	// cpuArgTokens is the step's tokens, a word a row (cpuBound.tok).
+	cpuArgTokens
 )
 
 // cpuArg is one call word: its byte field in cpu.Args and where its value
@@ -325,6 +327,7 @@ type cpuState struct {
 	proj    cpuProjState
 	pool    cpuPoolState
 	mtp     cpuMTPState
+	embed   cpuEmbedState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -449,8 +452,8 @@ type cpuBound struct {
 	// inputs' then its outputs'.
 	io [cpuIO]unsafe.Pointer
 	// req is the step's request words (cpuArgRequest), pos its live rows,
-	// then a row's position (cpuArgPos).
-	req, pos []uint32
+	// then a row's position (cpuArgPos), tok its tokens (cpuArgTokens).
+	req, pos, tok []uint32
 }
 
 // cpuIO is the most inputs and outputs a graph apart from its residual
@@ -1305,6 +1308,8 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			p = unsafe.Pointer(&s.cpu.zero[0])
 		case cpuArgRequest:
 			p = unsafe.Pointer(&b.req[0])
+		case cpuArgTokens:
+			p = unsafe.Pointer(&b.tok[0])
 		case cpuArgPos:
 			p = unsafe.Pointer(&b.pos[0])
 		}
@@ -1408,6 +1413,7 @@ func (s *State) cpuPlace() {
 	s.cpuPlaceStreams()
 	s.cpuPlacePool()
 	s.cpuPlaceMTP()
+	s.cpuPlaceEmbed()
 }
 
 // cpuRelocated follows block li onto the CPU, composed for it there, or off
@@ -1895,6 +1901,8 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 					ar.src = cpuArgZero
 				case "request":
 					ar.src = cpuArgRequest
+				case "tokens":
+					ar.src = cpuArgTokens
 				case "rope.pos":
 					// A pooled readout reads its live count (cpuPoolState), any
 					// other graph its rows' positions (cpuBound.pos).
@@ -2557,6 +2565,10 @@ func streamIn(gr *graph.Graph, v graph.ValueID) int {
 func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 	if l == nil {
 		switch m := s.m; {
+		case li == cpuInputRows && r == jlm.RoleTokenEmbd:
+			return &m.embd
+		case li == cpuInputRows && r == jlm.RolePosEmbd:
+			return &m.posEmbd
 		case r == jlm.RoleOutput || r == jlm.RoleTokenEmbd:
 			return s.outW
 		case r == jlm.RoleStreamExpand && m.altProj.rows != 0:

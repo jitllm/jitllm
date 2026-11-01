@@ -1191,6 +1191,8 @@ type mtpWeights struct {
 	ehProj                 tensor
 	enorm, hnorm, headNorm []float32
 	head, embd             tensor
+	// ownEmbd says embd is the block's own table, not the trunk's.
+	ownEmbd bool
 }
 
 // expert is one of a MoE layer's experts, as three aliasing views of its layer's
@@ -3832,6 +3834,7 @@ func buildMTP(c *jlm.File, m *Model,
 			if w.embd, err = get(jlm.RoleNextnEmbd, bi, -1); err != nil {
 				return err
 			}
+			w.ownEmbd = true
 		}
 		for _, t := range []tensor{w.head, w.embd} {
 			if t.rows != cfg.NVocab || t.k != cfg.NEmbd {

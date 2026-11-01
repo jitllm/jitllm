@@ -364,7 +364,8 @@ func (s *State) spanSrc(spans []Span) ([]func(dst []float32) error, error) {
 	return src, nil
 }
 
-// embedInto is embed() writing somewhere other than s.x.
+// embedInto is embed() writing somewhere other than s.x. Prompt rows are
+// filled from the pool's workers (embedRun), so it reads no State scratch.
 func (s *State) embedInto(dst []float32, token int32) error {
 	m, c := s.m, s.c
 	if err := m.embedRow(dst, int(token)); err != nil {
@@ -449,6 +450,10 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 				s.tok = rowIDs[i]
 			}
 			if lg, err = s.forward(func() error {
+				if src == nil {
+					// A token's row, as a decode step embeds it.
+					return s.embed(ids[i])
+				}
 				if err := s.fillRow(src, ids, i, s.x); err != nil {
 					return err
 				}
@@ -593,17 +598,35 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		// Over the pool: in the packed layout one row's words are a
 		// vocabulary's width apart (see Model.embedRow), so each row is many
 		// cache misses, and rows are independent.
-		gathered := false
+		gathered, composedRows := false, false
 		refill := func() error {
 			// On the card when the block run starts there and the device
 			// gathers the step's input rows (nn.Head.GatherRow), or its tier
 			// gathers the tied embedding: far faster than the host (EmbedRows).
 			// Its input rows are the front end's, a position table's included.
-			gathered = false
+			gathered, composedRows = false, false
 			if ids != nil && s.head != nil && s.devAt(s.lo) &&
 				(s.head.GatherRow || s.c.TiedEmbd && c.PLEDim == 0 && m.posEmbd.e == nil) {
 				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(ids[base:base+n], p0, s.bx[:n*c.NEmbd]) {
 					gathered = true
+					return nil
+				}
+			}
+			// A chunk's token rows through the composed input rows, from this
+			// goroutine: the row, its scale, its position row and its
+			// per-layer inputs, which the wrappers below then leave be.
+			if src == nil {
+				var bple []float32
+				if c.PLEDim != 0 {
+					s.growBPLE(n)
+					bple = s.bple[:n*c.pleWidth()]
+				}
+				at := s.cpu.embed.positions(n)
+				for i := range at {
+					at[i] = p0 + i
+				}
+				if s.cpuEmbed(s.bx[:n*c.NEmbd], bple, ids[base:base+n], at) == jit.DeclineServes {
+					composedRows = true
 					return nil
 				}
 			}
@@ -614,7 +637,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		if c.PLEDim != 0 {
 			fill := refill
 			refill = func() error {
-				if err := fill(); err != nil {
+				if err := fill(); err != nil || composedRows {
 					return err
 				}
 				w := c.pleWidth()
@@ -678,7 +701,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		if m.posEmbd.e != nil {
 			fill := refill
 			refill = func() error {
-				if err := fill(); err != nil || gathered {
+				if err := fill(); err != nil || gathered || composedRows {
 					return err
 				}
 				for i := 0; i < n; i++ {

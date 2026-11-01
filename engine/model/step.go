@@ -518,23 +518,6 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		if p >= st.maxSeq {
 			return errFull{st.maxSeq, st.reqSeq}
 		}
-		row := x[i*c.NEmbd : (i+1)*c.NEmbd]
-		if err := m.embedRow(row, int(tok)); err != nil {
-			return err
-		}
-		if c.EmbdScale != 1 {
-			s0.scale(row, float32(c.EmbdScale))
-		}
-		if err := m.addPos(row, s0.prow, p); err != nil {
-			return err
-		}
-		if c.PLEDim != 0 {
-			w := c.pleWidth()
-			s0.growBPLE(rows)
-			if err := s0.pleInputs(s0.bple[i*w:(i+1)*w], tok, row); err != nil {
-				return err
-			}
-		}
 		s0.ropeRow(i, st.ropeOf(0, p))
 		sess, pos = append(sess, st.ld), append(pos, p)
 		s0.stepTok = append(s0.stepTok, tok)
@@ -556,6 +539,33 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 			}
 			if err := addRow(r, j); err != nil {
 				return nil, err
+			}
+		}
+	}
+	// The rows' input rows, scale, positions and per-layer inputs through the
+	// composed graph (cpuembed.go), or the old engine path where it declines.
+	var bple []float32
+	if c.PLEDim != 0 {
+		s0.growBPLE(rows)
+		bple = s0.bple[:rows*c.pleWidth()]
+	}
+	if s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos) != jit.DeclineServes {
+		for i, tok := range s0.stepTok {
+			row := x[i*c.NEmbd : (i+1)*c.NEmbd]
+			if err := m.embedRow(row, int(tok)); err != nil {
+				return nil, err
+			}
+			if c.EmbdScale != 1 {
+				s0.scale(row, float32(c.EmbdScale))
+			}
+			if err := m.addPos(row, s0.prow, pos[i]); err != nil {
+				return nil, err
+			}
+			if c.PLEDim != 0 {
+				w := c.pleWidth()
+				if err := s0.pleInputs(bple[i*w:(i+1)*w], tok, row); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

@@ -198,7 +198,15 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	cs, csSWA := s.bcs[:n*nrot], s.bswaTable(n, c.NRotSWA)
 
 	t0 := s.tick()
-	for i := 0; i < n; i++ {
+	// The rows' input rows, scale, positions and per-layer inputs through the
+	// composed graph (cpuembed.go), or the old engine path where it declines.
+	var bple []float32
+	if c.PLEDim != 0 {
+		s.growBPLE(n)
+		bple = s.bple[:n*c.pleWidth()]
+	}
+	composed := s.cpuEmbed(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]) == jit.DeclineServes
+	for i := 0; i < n && !composed; i++ {
 		row := s.bx[i*c.NEmbd : (i+1)*c.NEmbd]
 		if err := m.embedRow(row, int(tokens[i])); err != nil {
 			return nil, err
