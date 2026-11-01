@@ -89,8 +89,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 	// to the tier's kernels (Config.TierBlocks), so a chunk runs the two in
 	// turn; tinyllama's Q3_K blocks on the tier's kernels and the composer's;
 	// and gemma-3-1b's sliding layers over a prompt past their window,
-	// whose rows read the windowed descriptors; and the shadow arm, whose
-	// prompt the composer serves as well. The shipped mode's bar: a
+	// whose rows read the windowed descriptors. The shipped mode's bar: a
 	// block whose output a neighbour's held add overwrote, or a windowed row
 	// that read the whole history, misses it by orders.
 	t.Run("device", func(t *testing.T) {
@@ -107,11 +106,11 @@ func TestPrefillMatchesForward(t *testing.T) {
 				name                   string
 				path                   string
 				parts                  tier.Parts
-				mixed, windows, shadow bool
-			}{{"composed", llama, parts, false, false, false}, {"windowed", gemma, parts, false, true, false},
-				{"tinyllama composed", tiny, parts, false, false, false}} {
+				mixed, windows bool
+			}{{"composed", llama, parts, false, false}, {"windowed", gemma, parts, false, true},
+				{"tinyllama composed", tiny, parts, false, false}} {
 				t.Run(dev+"/"+arm.name, func(t *testing.T) {
-					prefillOnDevice(t, arm.path, dev, arm.parts, arm.mixed, arm.windows, arm.shadow)
+					prefillOnDevice(t, arm.path, dev, arm.parts, arm.mixed, arm.windows)
 				})
 			}
 		}
@@ -121,10 +120,9 @@ func TestPrefillMatchesForward(t *testing.T) {
 // prefillOnDevice is prefillVsForward on device dev, both sessions on one
 // tier asking the composer for parts, every odd block kept on the tier's
 // kernels where mixed, the prompt past the model's sliding window where
-// windows, the shadow arm on where shadow: the composer served every prompt
-// block step it was asked for and declined only the blocks kept, in the
-// shadow arm too, which compares a decode step's blocks.
-func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, windows, shadow bool) {
+// windows: the composer served every prompt block step it was asked for and
+// declined only the blocks kept.
+func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, windows bool) {
 	m, err := Open(jlmOf(t, path), noTune)
 	if err != nil {
 		t.Fatal(err)
@@ -150,9 +148,6 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 	// warms the widths up to 64, each a form of the composer's.
 	opts := []tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) { c.TierBlocks, c.PromptRows = keep, 64 })}
-	if shadow {
-		opts = append(opts, tier.WithComposedShadow())
-	}
 	g, err := tier.OpenWith(append(opts, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
