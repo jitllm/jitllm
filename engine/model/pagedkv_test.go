@@ -66,23 +66,6 @@ func logitNMSE(a, b []float32) float64 {
 	return num / den
 }
 
-// pagedBand is how many times the order-only control a device arm may sit from
-// the host. The device reads the same history through kernels that sum in
-// another order (the prefill scores in binary16 on the matrix units, split
-// partials merged, a window's tiles from the aligned position below it), and
-// how far an order change carries is the model's own property: measured, the
-// paged arm against itself at two split counts moves Llama-3.2-1B's logits by
-// NMSE ~2e-03 and gemma-3-1b's by ~6e-03. So the bound is that control,
-// measured in the same run, not a constant.
-const pagedBand = 4
-
-// pagedCase is one model TestPagedKVMatchesTheHost runs.
-type pagedCase struct {
-	file   string
-	repeat int  // prompt repetitions: gemma's must pass its 512-key window
-	f16    bool // V stored as packed binary16
-}
-
 // TestPagedKVBatchMatchesHost runs three sequences of different lengths as one
 // batch with every row's history in its own pages, and holds each row's
 // greedy tokens to the host's up to a tie -- the check that rows of one

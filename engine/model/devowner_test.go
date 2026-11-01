@@ -10,8 +10,8 @@ import (
 
 // ownerBound is what a model with every block on the host but its lone
 // matvecs on the device reads against the host alone, with headroom: the f32
-// reduction-order band of a few routers and gates (TestPagedWeightsAreNeverServedStale
-// reads 1e-4..5e-4 over eight blocks). Another model's blocks in place of
+// reduction-order band of a few routers and gates (1e-4..5e-4 measured over
+// eight blocks). Another model's blocks in place of
 // this one's read ~1.
 const ownerBound = 1e-2
 

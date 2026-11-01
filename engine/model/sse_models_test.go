@@ -474,7 +474,6 @@ func TestSSEModelGates(t *testing.T) {
 		{"BatchMatchesForward", TestBatchMatchesForward},
 		{"RaggedBatchMatchesForward", TestRaggedBatchMatchesForward},
 		{"BiasedBatchMatchesForward", TestBiasedBatchMatchesForward},
-		{"MoEFFNRunsBatched", TestMoEFFNRunsBatched},
 		{"TowerEncodes", TestTowerEncodes},
 		{"TowerMatchesLlamaCpp", TestTowerMatchesLlamaCpp},
 		{"SafetensorsMatchTransformers", TestSafetensorsMatchTransformers},

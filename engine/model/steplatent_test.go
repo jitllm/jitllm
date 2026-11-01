@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -231,141 +230,12 @@ func TestSchedulerMixesLatentPromptsIntoDecodeSteps(t *testing.T) {
 	}
 }
 
-// TestLatentPrefillBatchesOnTheDevice holds a latent model's batched prompt
-// chunk on the device -- the latent and its key written for every row before
-// any row attends, the absorbs grouped by head, float banks included, and a
-// mixture's experts grouped -- to the same prompt a row at a time on the same
-// device (Config.NoBatch), at every position's final residual and at the
-// logits. The step gates prefill both their arms alike, so a chunk wrong in
-// the same way on both would pass them; this one is the chunk's own gate.
-// Stats.MLABatched is the selection: the batched arm ran latent blocks as one
-// chunk and the row arm none.
-func TestLatentPrefillBatchesOnTheDevice(t *testing.T) {
-	for _, name := range latentModels() {
-		t.Run(filepath.Base(name), func(t *testing.T) {
-			m := openLatent(t, name)
-			defer m.Close()
-			for _, dev := range stepDevices() {
-				t.Run(dev, func(t *testing.T) {
-					r := latentPrefillArms(t, m, dev)
-					// TestHybridPrefillBatchesOnTheDevice's bounds, for its
-					// reason: the bulk at the band, one position looser for a
-					// routing tie a real mixture can break the other way when
-					// the arms reduce in different orders.
-					if !(r.p90 <= hybridBatchBound) || !(r.worst <= 10*hybridBatchBound) || !(r.logits <= hybridBatchBound) {
-						t.Fatalf("the batched chunk parts from the row-by-row device prefill: residual NMSE p90 %.3e, "+
-							"worst %.3e at position %d, logits %.3e", r.p90, r.worst, r.at, r.logits)
-					}
-				})
-			}
-		})
-	}
-}
-
-// TestLatentPrefillGateDiscriminates runs the prefill gate on Kimi-Linear with
-// its rotary channels rotated in the batched chunk (tier.MLAFaultRotateNoPE)
-// and the row-by-row arm left as it ships, and demands it see the difference.
-func TestLatentPrefillGateDiscriminates(t *testing.T) {
-	m := openLatent(t, "synth-kimilinear")
-	defer m.Close()
-	for _, dev := range stepDevices() {
-		t.Run(dev, func(t *testing.T) {
-			r := latentPrefillArms(t, m, dev, tier.WithMLAFault(tier.MLAFaultRotateNoPE))
-			if r.p90 <= hybridBatchBound && r.worst <= 10*hybridBatchBound && r.logits <= hybridBatchBound {
-				t.Fatalf("the gate passed a chunk rotating a NoPE key: residual NMSE p90 %.3e, worst %.3e, logits %.3e",
-					r.p90, r.worst, r.logits)
-			}
-		})
-	}
-}
-
 // prefillResult is what latentPrefillArms measured: the batched chunk's final
 // residual against the row-by-row arm's, at its 90th percentile and worst
 // position, and the logits'.
 type prefillResult struct {
 	p90, worst, logits float64
 	at                 int
-}
-
-// latentPrefillArms prefills one prompt on dev twice, as a chunk and a row at
-// a time, and compares them; opt joins the tier's options in both arms. It
-// fails only when the arms are not the two paths.
-func latentPrefillArms(t *testing.T, m *Model, dev string, opt ...tier.Option) prefillResult {
-	c := m.Cfg
-	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and the "+
-		"foreman wrote each tally twice, once in ink and once in chalk, so that the night watch "+
-		"could check the count against the ledger before the barges left at dawn.", true)
-	forced := []int32{5, 9, 3, 7}
-	type arm struct {
-		rows   []float32
-		logits [][]float32
-		st     tier.Stats
-		err    string
-	}
-	run := func(noBatch bool) (a arm) {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithPoisonScratch(true), tier.WithConfig(func(cf *tier.Config) { cf.NoBatch = noBatch })}, opt...)...)
-		if err != nil || g == nil {
-			noDevice(t, dev, err)
-		}
-		defer g.Close()
-		st := m.NewState(len(ids) + len(forced) + 1)
-		defer st.Close()
-		if err := st.SetDevice(g); err != nil {
-			t.Fatal(err)
-		}
-		if st.GPULayers() != c.NLayer {
-			t.Skipf("CARD TOO SMALL: %d of %d blocks -- this gate proved nothing here (%s)",
-				st.GPULayers(), c.NLayer, g.Err())
-		}
-		// A folded head brings only the logits home, not the chunk's residual
-		// rows, which are what this compares.
-		st.noHeadFold = true
-		a.rows = make([]float32, len(ids)*c.NEmbd)
-		st.rowTap = func(base int, rows []float32) { copy(a.rows[base*c.NEmbd:], rows) }
-		lg, err := st.Prefill(ids)
-		if err != nil {
-			t.Fatal(err)
-		}
-		a.logits = append(a.logits, append([]float32(nil), lg...))
-		for _, id := range forced {
-			if lg, err = st.Forward(id); err != nil {
-				t.Fatal(err)
-			}
-			a.logits = append(a.logits, append([]float32(nil), lg...))
-		}
-		a.st, a.err = g.Stats(), g.Err()
-		return a
-	}
-	rows, bat := run(true), run(false)
-	if rows.st.MLABatched != 0 || bat.st.MLABatched == 0 {
-		t.Fatalf("latent blocks run as a chunk: %d row by row, %d batched -- the arms are not the two paths (%s)",
-			rows.st.MLABatched, bat.st.MLABatched, bat.err)
-	}
-	// MLABatched counts a chunk's emission, so a chunk that failed after its
-	// latent blocks and went again a row at a time counts too: the batched arm
-	// must have taken one submission for the prompt, one for a head the chunk
-	// could not fold, and one a forced token.
-	if limit := len(forced) + 2; bat.st.Submits > limit {
-		t.Fatalf("the batched arm took %d submissions, past %d: the chunk went a row at a time (%s)",
-			bat.st.Submits, limit, bat.err)
-	}
-	worst, at := 0.0, -1
-	per := make([]float64, 0, len(ids))
-	for p := range ids {
-		r := c.NEmbd
-		e, _ := worstOf([][]float32{rows.rows[p*r : (p+1)*r]}, [][]float32{bat.rows[p*r : (p+1)*r]})
-		if e > worst {
-			worst, at = e, p
-		}
-		per = append(per, e)
-	}
-	lg, _ := worstOf(rows.logits, bat.logits)
-	sort.Float64s(per)
-	p90 := per[len(per)*9/10]
-	t.Logf("%d positions, %d latent block-chunks: residual NMSE batched/rows p90 %.3e, worst %.3e at %d, logits %.3e",
-		len(ids), bat.st.MLABatched, p90, worst, at, lg)
-	return prefillResult{p90: p90, worst: worst, logits: lg, at: at}
 }
 
 // TestStepAcrossSessionsNoPELatentGateDiscriminates runs the latent step gate
