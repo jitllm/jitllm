@@ -184,6 +184,12 @@ func (g *devTier) ReserveRows(n int) bool {
 		return false
 	}
 	want := visRowsFor(n, g.visMax)
+	if g.visKeys == 0 && n <= g.visCap && !g.towerHeld() {
+		// The whole set's composed parts are not held beside the blocks
+		// placed: the picture takes a chunked set.
+		g.visSmall = 0
+		return g.chunkTower(n, want)
+	}
 	if g.visKeys == 0 && (want == g.visCap || n <= g.visCap && 2*want > g.visCap) {
 		g.visSmall = 0
 		return true
@@ -274,7 +280,7 @@ func (g *devTier) chunkTower(n, want int) bool {
 		}
 		g.dropGraph()
 		g.visKeys = want
-		if g.towerAt(&plan, c) && (keep == 0 || g.slots() >= minSlots) {
+		if g.towerComposedAt(&plan, c) && (keep == 0 || g.slots() >= minSlots) {
 			g.TowerChunked++
 			return true
 		}
@@ -341,7 +347,7 @@ func (g *devTier) resizeTower(n, want int) bool {
 	prev, prevKeys := g.visCap, g.visKeys
 	g.dropGraph()
 	g.visKeys = 0 // a whole set
-	if g.towerAt(&plan, want) {
+	if g.towerComposedAt(&plan, want) {
 		// The estimate is an estimate: what the set really charged must
 		// still leave a streamed tower its slot, or the first page-in of
 		// the call fails the device mid-picture.
@@ -390,6 +396,35 @@ func (g *devTier) towerAt(p *nn.LayerPlan, rows int) bool {
 		g.bs = nil
 	}
 	return ok
+}
+
+// towerHeld reports that every tower block's composed part and its
+// instance at the set's rows are held (prewarmTower), forming them where they
+// fit. Callers hold g.mu.
+func (g *devTier) towerHeld() bool {
+	for li, l := range g.layers {
+		if l != nil && l.nonCausal && g.prewarmTower(li) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// towerComposedAt is towerAt holding every tower block's composed part at
+// the set's rows too, as their placement does (prewarmTower): a set whose
+// parts the budget does not hold is refused here, so a picture takes a
+// chunked set rather than meeting no room at its call. Callers hold g.mu
+// and dropped the graph.
+func (g *devTier) towerComposedAt(p *nn.LayerPlan, rows int) bool {
+	if !g.towerAt(p, rows) {
+		return false
+	}
+	if !g.towerHeld() {
+		g.dropScratch(g.bs)
+		g.bs = nil
+		return false
+	}
+	return true
 }
 
 // towerKVAt reallocates every tower k/v pair for visCap rows, moving its

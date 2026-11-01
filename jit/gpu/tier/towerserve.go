@@ -63,11 +63,17 @@ func (g *devTier) prewarmTower(li int) (roomless string) {
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	if _, _, _, err := g.towerStep(bs, l, li, &bs.p, bs.rows); err != nil {
+	_, inst, _, err := g.towerStep(bs, l, li, &bs.p, bs.rows)
+	if err != nil {
 		g.LastErr = "the composed tower block: " + err.Error()
 		if errors.As(err, new(partRoomError)) {
 			return fmt.Sprintf("tower block %d: its composed part does not fit beside the blocks placed (%s)", li, err)
 		}
+		return ""
+	}
+	if inst == nil {
+		// The scratch's instance the budget did not hold (promptInst named it).
+		return fmt.Sprintf("tower block %d: its composed part does not fit beside the blocks placed (%s)", li, g.LastErr)
 	}
 	return ""
 }
