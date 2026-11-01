@@ -1181,6 +1181,13 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 				"(pinned, or its history would not come home)", s.devCount())
 		}
 	}
+	// An empty binary16 cache steps down to the f32 the device holds, so a
+	// history that later moves between devices through the host comes back
+	// as it went (TestLayerRelocatesToAnotherDevice,
+	// TestMLAStepsTheKVDownAtTheRightWidths).
+	if d != nil && s.pos == 0 && s.kvFmt == cpu.KVF16 {
+		s.stepDownKVToF32()
+	}
 	// A borrowed JIT is the text State's, attached to its device by it.
 	if !s.borrowsJIT() {
 		s.jit.SetDevice(d)
@@ -3555,6 +3562,11 @@ func (s *State) stepDownKVToF32() {
 	s.kv.usePool(&s.m.kvPool)
 	s.kv.reserve(s.maxSeq)
 	s.kv.ns, s.kv.budget = old.ns, old.budget
+	// The CPU's blocks read the new cache: its arenas, and forms for f32.
+	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor); err != nil {
+		s.cpu.formErr = err
+	}
+	s.cpuPlace()
 }
 
 // seqPos and advance are the two places that know a position may be per row.
