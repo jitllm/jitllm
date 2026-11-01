@@ -285,7 +285,8 @@ func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks 
 			t.Fatalf("the composer served %d part steps and declined %d", n, d)
 		}
 		if f := after.FormedAtStep - before.FormedAtStep; f != 0 {
-			t.Fatalf("%d composed part(s) formed at a step: a lane did not hold its instance", f)
+			t.Fatalf("%d composed part(s) formed at a step: a lane did not hold its instance (by part %v; last %q)",
+				f, after.FormedAtStepParts, g.Err())
 		}
 		if err := lanesHold(g, blocks, parts, 2); err != nil {
 			t.Fatal(err)

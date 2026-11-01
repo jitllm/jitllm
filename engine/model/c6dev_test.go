@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -168,12 +169,16 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 // (composedCovers).
 func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Violation, preBound float64, counted bool) {
 	t.Helper()
+	// runErr is the error a run stopped at: a run refused by name, which a
+	// violation's run may be (the gate sees it), returns no logits.
+	var runErr error
 	decode := func(st *State) [][]float32 {
 		var out [][]float32
 		for _, id := range g.IDs {
 			lg, err := st.Forward(id)
 			if err != nil {
-				t.Fatal(err)
+				runErr = err
+				return nil
 			}
 			out = append(out, append([]float32(nil), lg...))
 		}
@@ -182,14 +187,19 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 	prefill := func(st *State) [][]float32 {
 		lg, err := st.Prefill(g.IDs)
 		if err != nil {
-			t.Fatal(err)
+			runErr = err
+			return nil
 		}
 		return [][]float32{append([]float32(nil), lg...)}
 	}
 	onHost := func(run func(*State) [][]float32) [][]float32 {
 		st := m.NewState(len(g.IDs) + 1)
 		defer st.Close()
-		return run(st)
+		out := run(st)
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+		return out
 	}
 	cmp := func(want, got [][]float32) (float64, int) {
 		worst, flips := 0.0, 0
@@ -249,6 +259,10 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 				}
 				t.Logf("placed: %d reserved rows (%s)", gpu.Stats().ReservedRows, gpu.Err())
 				got := run(st)
+				if err := runErr; err != nil {
+					runErr = nil
+					return nil, "refused: " + err.Error()
+				}
 				if n := st.GPULayers(); n != nl {
 					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())
 				}
@@ -308,6 +322,10 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 				undo := v.mut(m)
 				got, why := onDevice(decode, len(g.IDs), false)
 				undo()
+				if strings.HasPrefix(why, "refused: ") {
+					t.Logf("violation %q: %s -- refused by name, which the gate sees", v.name, why)
+					continue
+				}
 				if why != "" {
 					t.Errorf("%s: the device declined the violation rather than running it: %s", v.name, why)
 					continue

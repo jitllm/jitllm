@@ -97,8 +97,9 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 			t.Fatalf("%d block steps served and %d declined, where %d steps of %d covered blocks are %d served",
 				served, declined, len(toks), covered, want)
 		}
-		if heads, hd, _ := st.ServedPart(tier.ComposedHead); heads != len(toks) || hd != 0 {
-			t.Fatalf("%d head steps served and %d declined, where the %d steps are one-row steps (%s)", heads, hd, len(toks), declinesOf(st))
+		// Every step's head, and the prompt's last row's.
+		if heads, hd, _ := st.ServedPart(tier.ComposedHead); heads != len(toks)+1 || hd != 0 {
+			t.Fatalf("%d head steps served and %d declined, where the %d steps and the prompt's last row are %d (%s)", heads, hd, len(toks), len(toks)+1, declinesOf(st))
 		}
 		for i, k := range st.BlockDeclines {
 			if k > 0 {
