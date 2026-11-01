@@ -152,13 +152,16 @@ func TestGemma3nTowerOnDeviceMatchesHost(t *testing.T) {
 			if math.IsNaN(nm) || nm > 1e-3 {
 				t.Fatalf("%s: the tower on the device reads NMSE %.3e against the host", spec, nm)
 			}
+			// The host with its residual adds dropped from the graphs the
+			// front end states (the device's run above is clean).
 			for _, v := range []struct {
 				name string
-				f    mnFaultKind
-			}{{"symmetric padding", mnFaultSymmetric}, {"no residual adds", mnFaultNoResidual}} {
-				mnFault = v.f
+			}{{"no residual adds"}} {
+				tw.model.mnNoResidual = true
+				tw.model.restateTower()
 				bad := g3nvEncode(t, tw, g, nil)
-				mnFault = mnFaultNone
+				tw.model.mnNoResidual = false
+				tw.model.restateTower()
 				nb, _ := nmse32(bad, a.out)
 				t.Logf("%s against a host with %s: NMSE %.3e", spec, v.name, nb)
 				if !(nb > 10*nm && nb > 1e-3) {

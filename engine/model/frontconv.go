@@ -187,7 +187,7 @@ func (m *Model) convGraph(li int) (*graph.Graph, Uncovered, error) {
 	default:
 		return nil, UncoveredKind, fmt.Errorf("tower block %d holds %v: no convolution the front end states", li-m.tower.base, slices.Sorted(maps.Keys(f.Inventory)))
 	}
-	if bl.residual {
+	if bl.residual && !m.mnNoResidual {
 		y = b.Add(y, x)
 	}
 	b.Out(y)

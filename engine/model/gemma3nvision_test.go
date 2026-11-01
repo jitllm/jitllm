@@ -165,18 +165,25 @@ func TestGemma3nTowerMatchesTransformers(t *testing.T) {
 	// ten times the clean arm. (The embedder's sqrt(NEmbd) before its norm is
 	// invisible but for the norm's epsilon, so no gate can see it; it is the
 	// reference's, and kept.)
+	// The blocks' SAME padding is the composer's, from each convolution's
+	// taps and stride: no statement a violation could change, and the clean
+	// arm holds it to transformers. The residual adds are the model's
+	// statement (Model.mnNoResidual).
 	for _, v := range []struct {
 		name string
 		f    mnFaultKind
 	}{
-		{"symmetric padding in place of SAME", mnFaultSymmetric},
-		{"no residual adds", mnFaultNoResidual},
+		{"no residual adds", mnFaultNone},
 		{"the coarser stage upsampled transposed", mnFaultUpsampleT},
 		{"each pooling window's first row", mnFaultPoolFirst},
 	} {
 		mnFault = v.f
+		tw.model.mnNoResidual = v.f == mnFaultNone
+		tw.model.restateTower()
 		bad := g3nvEncode(t, tw, g, nil)
 		mnFault = mnFaultNone
+		tw.model.mnNoResidual = false
+		tw.model.restateTower()
 		nb, _ := nmse32(g.Image.EmbdA8, bad)
 		t.Logf("violation %q: NMSE %.3e", v.name, nb)
 		if !(nb > 10*clean && nb > towerBound) {

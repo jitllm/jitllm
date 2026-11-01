@@ -62,16 +62,19 @@ func TestGemma3nRealMatchesTransformers(t *testing.T) {
 	if math.IsNaN(nm) || nm > 3e-2 {
 		t.Fatalf("the real tower's rows read NMSE %.3e against transformers", nm)
 	}
-	// The violation on the real weights: PyTorch's symmetric padding.
-	mnFault = mnFaultSymmetric
+	// The violation on the real weights: the blocks' residual adds dropped
+	// from the graphs the front end states.
+	tw.model.mnNoResidual = true
+	tw.model.restateTower()
 	hv := tw.testState()
 	_, bad := encode(hv)
 	hv.Close()
-	mnFault = mnFaultNone
+	tw.model.mnNoResidual = false
+	tw.model.restateTower()
 	bn, _ := nmse32(want, bad)
-	t.Logf("with symmetric padding: NMSE %.3e", bn)
+	t.Logf("with no residual adds: NMSE %.3e", bn)
 	if !(bn > 10*nm) {
-		t.Errorf("the real tower with symmetric padding reads %.3e against a clean %.3e: the gate cannot see it", bn, nm)
+		t.Errorf("the real tower with no residual adds reads %.3e against a clean %.3e: the gate cannot see it", bn, nm)
 	}
 	// The CPU device's composed arm on the real weights (frontconv.go).
 	cm, err := Open(jlmOfPair(t, text, proj), noTune, WithKVF16(false))

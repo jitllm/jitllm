@@ -1204,6 +1204,9 @@ type Model struct {
 	// rotary, as every other q/k-normed model does. The rotation does not
 	// keep a head's RMS, so HunyuanVL's post-rotary norm is load-bearing.
 	xdKNormFirst bool
+	// mnNoResidual is a gate's violation: Gemma 3n's MobileNet blocks with
+	// their residual adds dropped from the graphs the front end states.
+	mnNoResidual bool
 	Cfg          *Config
 	Vocab        *tok.Vocab
 

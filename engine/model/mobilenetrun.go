@@ -19,11 +19,6 @@ type mnFaultKind uint8
 
 const (
 	mnFaultNone mnFaultKind = iota
-	// mnFaultSymmetric pads every window k/2 on both sides, PyTorch's
-	// static padding, in place of TF SAME's smaller half first.
-	mnFaultSymmetric
-	// mnFaultNoResidual drops every block's residual add.
-	mnFaultNoResidual
 	// mnFaultUpsampleT reads the coarser stage's row at the transposed
 	// position when the fusion adapter upsamples it.
 	mnFaultUpsampleT
@@ -141,9 +136,6 @@ func (s *State) mnPad(src []float32, h, w, c, k, st int) (wp int, sh cpu.DWShape
 	r := s.vis.mn
 	ho, top, _ := mnSame(h, k, st)
 	wo, left, _ := mnSame(w, k, st)
-	if mnFault == mnFaultSymmetric {
-		top, left = k/2, k/2
-	}
 	hp, wp := (ho-1)*st+k, (wo-1)*st+k
 	pad := r.pad[:hp*wp*c]
 	n := min(w, wp-left)
