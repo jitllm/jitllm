@@ -11,9 +11,10 @@ import (
 
 // TestGemma3nServesComposedOnCPU runs each Gemma 3n fixture on the CPU
 // device, every block composed for it over its four residual streams, each
-// bound at its offset in main's stream-major residual, teacher-forced on the
-// fixture's own ids against main's kernels: every block step and head
-// served, within 1e-5 of main's logits on decode and on a prompt with its
+// bound at its offset in the stream-major residual, teacher-forced on the
+// fixture's own ids against the CPU's float forms over the same history
+// (withCPUFloat): every block step and head served, within 1e-5 of their
+// logits on decode and on a prompt with its
 // decode, and each piece of the block taken out (gemma3nComposedViolations:
 // the prediction, the correction, the side branch, the gaussian top-k on no
 // block and on every block, the correction's scale) moving the composed
@@ -34,13 +35,13 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 			}
 			toks := g.IDs
 			path := jlmOf(t, testmodels.Path(fx.name+".gguf"))
-			ref, err := Open(path, noTune)
+			ref, err := Open(path, noTune, withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer ref.Close()
 			ref.setKVPageForTest(page)
-			want := cpuLogits(t, ref, toks, cpuFaultNone, false)
+			want := cpuLogits(t, ref, toks, cpuFaultNone, true)
 			m, err := Open(path, noTune)
 			if err != nil {
 				t.Fatal(err)
@@ -55,15 +56,15 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 			}
 			worst := worstFrom(want, cpuLogits(t, m, toks, cpuFaultNone, true))
 			n := len(toks) - 4
-			pw := cpuPrompt(t, ref, toks, n, 4, cpuFaultNone, false)
+			pw := cpuPrompt(t, ref, toks, n, 4, cpuFaultNone, true)
 			pg := cpuPrompt(t, m, toks, n, 4, cpuFaultNone, true)
 			pworst := 0.0
 			for i := range pw {
 				pworst = max(pworst, logitNMSE(pg[i], pw[i]))
 			}
-			t.Logf("the composed CPU from main: decode %.3g over %d steps, a prompt of %d and its decode %.3g", worst, len(toks), n, pworst)
+			t.Logf("the composed CPU from the float forms: decode %.3g over %d steps, a prompt of %d and its decode %.3g", worst, len(toks), n, pworst)
 			if !(worst < bound) || !(pworst < bound) {
-				t.Fatalf("the composed CPU is %.3g and %.3g from main, bound %g", worst, pworst, bound)
+				t.Fatalf("the composed CPU is %.3g and %.3g from the float forms, bound %g", worst, pworst, bound)
 			}
 			for _, v := range gemma3nComposedViolations() {
 				undo := v.mut(m)
