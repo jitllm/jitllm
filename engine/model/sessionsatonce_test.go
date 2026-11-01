@@ -556,7 +556,8 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 	for k, st := range sts {
 		if st.devCount() != m.Cfg.NLayer {
 			t.Fatalf("session %d holds %d of %d blocks on the device after the run: eviction must not "+
-				"move blocks home (%s)", k, st.devCount(), m.Cfg.NLayer, g.Err())
+				"move blocks home (%s; %d part(s) formed at a step, by part %v)", k, st.devCount(), m.Cfg.NLayer, g.Err(),
+				after.FormedAtStep-before.FormedAtStep, after.FormedAtStepParts)
 		}
 	}
 	r := evictArm{ev: after.KVEvictions - before.KVEvictions, passes: after.ComposedStreamPasses - before.ComposedStreamPasses}

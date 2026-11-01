@@ -998,7 +998,9 @@ func (g *devTier) promptInst(bs *blockScratch, f *partForm) *partInst {
 	}
 	in, err := g.instanceOn(f, bs)
 	if err != nil {
-		g.LastErr = "the composed prompt block: " + err.Error()
+		g.LastErr = fmt.Sprintf("the composed prompt block: %v (an instance at %d rows, over passes %v, at a placement %v; "+
+			"the lane's decode scratch %v, %d instance(s) held there, clone lane %v)",
+			err, bs.rows, f.passHi > 0, g.prewarming, bs == g.bs, len(bs.prompt), g.lane.clone)
 		if _, room := err.(partRoomError); room {
 			bs.instNoRoom = true
 		}
