@@ -602,49 +602,6 @@ func mergeShape(s kernels.FlashShape) kernels.FlashShape {
 	return s
 }
 
-// pagedDecode launches one layer's attention through the call's variant: q,
-// the layer's pools and table, the descriptors desc, into out; sink is the
-// layer's sinks (nil without). la launches at a thread count in groups of 128.
-func (pg *pagedScratch) pagedDecode(s backend.Session, lc *launcher,
-	q, k, v, n, out, tab, desc, sink backend.Buf) error {
-	vr := pg.cur
-	dst := out
-	if vr.merge != nil {
-		dst = pg.part
-	}
-	// The argument lists are arrays on the stack, sliced to the arity: a
-	// slice literal grown by append for the sinks was a heap object per layer
-	// of every gpt-oss token.
-	if vr.k != nil {
-		all := [8]backend.Buf{q, k, v, n, dst, tab, desc, sink}
-		args := all[:7]
-		if sink != nil {
-			args = all[:8]
-		}
-		if err := lc.launch(vr.k, vr.groups, vr.width, args...); err != nil {
-			return err
-		}
-	} else {
-		lc.la(vr.scores, vr.scoreT, q, k, n, pg.sc, tab, desc)
-		if err := lc.launch(vr.soft, vr.softG, 64, pg.sc, n, pg.wt, pg.part, tab, desc); err != nil {
-			return err
-		}
-		lc.la(vr.acc, vr.accT, pg.wt, v, n, pg.part, tab, desc)
-	}
-	if vr.merge != nil {
-		all := [3]backend.Buf{pg.part, out, sink}
-		ma := all[:2]
-		if sink != nil {
-			ma = all[:3]
-		}
-		if vr.mergeItems > 0 {
-			return lc.launch(vr.merge, vr.mergeItems, 32, ma...)
-		}
-		lc.la(vr.merge, vr.mergeT, ma...)
-	}
-	return nil
-}
-
 // seqEnd is one sequence a call writes and reads: every position below end
 // must have a page. start is the first position the call writes, or -1 for a
 // reservation that writes nothing yet: a windowed layer releases its pages

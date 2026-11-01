@@ -63,39 +63,6 @@ func (g *devTier) servedShadow(l *layer, n int) (*servedPart, error) {
 	return sv, err
 }
 
-// shadowBegin copies block li's input twice and runs its form on the second
-// copy, ahead of the tier's kernels, which sv is the form of. A form written
-// apart from its input (cp, servedCopy) writes into bs.h, which the tier's
-// kernels write after, and cp copies it over the second copy.
-func (g *devTier) shadowBegin(lc *launcher, bs *blockScratch, sv, cp *servedPart, l *layer, li int, sh *shadowStep) error {
-	switch {
-	case bs.shIn == nil || bs.shForm == nil || bs.copyRows == nil:
-		return fmt.Errorf("tier: the shadow arm has no copies of the input in this scratch")
-	case l.shadow == nil:
-		return fmt.Errorf("tier: block %d holds no shadow state", li)
-	case !sv.f.inPlace(0, 0) && cp == nil:
-		return fmt.Errorf("tier: the composed block %d reads x after writing its output over it", li)
-	}
-	cmp, err := g.servedShadow(l, bs.p.NEmbd)
-	if err != nil {
-		return err
-	}
-	lc.la(bs.copyRows, bs.p.NEmbd, bs.x, bs.shIn)
-	lc.la(bs.copyRows, bs.p.NEmbd, bs.x, bs.shForm)
-	if cp != nil {
-		if err := sv.run(g, lc, sv.inst, []backend.Buf{bs.shForm, bs.pleIn}, []backend.Buf{bs.h}); err != nil {
-			return err
-		}
-		if err := cp.run(g, lc, cp.inst, []backend.Buf{bs.h}, []backend.Buf{bs.shForm}); err != nil {
-			return err
-		}
-	} else if err := sv.run(g, lc, sv.inst, []backend.Buf{bs.shForm, bs.pleIn}, []backend.Buf{bs.shForm}); err != nil {
-		return err
-	}
-	sh.cmp, sh.l = cmp, l
-	return nil
-}
-
 // shadowEnd compares the output the tier's kernels wrote to bs.x with the
 // form's, against the block's input, into the block's state.
 func (g *devTier) shadowEnd(lc *launcher, bs *blockScratch, sh *shadowStep) error {

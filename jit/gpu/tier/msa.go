@@ -181,51 +181,6 @@ func (m *msaScratch) free() {
 	}
 }
 
-// msaKeyQuery runs the indexer's projections while bs.a/bs.ax hold the
-// block's normed input, their norms and the query's rotary, and assembles
-// k's normed heads kn and the key into one row each (m.kAll), which the
-// pool's writers then rotate and store.
-func (g *devTier) msaKeyQuery(lc *launcher, bs *blockScratch, l *layer, R int, kn, cs backend.Buf,
-	mvrun func(mv, *resident, backend.Buf)) error {
-	m := bs.pkv.msa
-	mvrun(l.mvIK, l.idxK, m.kRaw)
-	mvrun(l.mvMQ, l.idxQ, m.qRaw)
-	qg, qw := headNormGeom(m.qLanes, R*m.h)
-	if err := lc.launch(m.normQ, qg, qw, m.qRaw, l.nIdxQ, m.qn); err != nil {
-		return err
-	}
-	kg, kw := headNormGeom(m.kLanes, R)
-	if err := lc.launch(m.normK, kg, kw, m.kRaw, l.nIdxK, m.kn); err != nil {
-		return err
-	}
-	lc.la(m.copyQ, R*m.h*m.d, m.qn, m.qRot, m.qOff)
-	lc.la(m.ropeQ, R*m.h*bs.p.NRot/2, m.qn, cs, m.qOff, m.qRot)
-	lc.la(m.asmK, R*m.attnW, kn, m.kAll, m.allOff)
-	lc.la(m.asmI, R*m.d, m.kn, m.kAll, m.idxOff)
-	return nil
-}
-
-// msaAttend selects each row's blocks per kv group, gathers them and runs
-// the attention over the gathered pages: q the rotated queries, out the
-// heads' results. pl is the layer's pool, tab its table arena.
-func (g *devTier) msaAttend(s backend.Session, lc *launcher, R int, pk *pagedScratch, pl *kvLayerPool,
-	q, n, out backend.Buf) error {
-	m := pk.msa
-	lc.la(m.scores, R*m.h*m.tcap, m.qRot, pl.k, pl.tab, pk.pRow, m.score)
-	lc.la(m.bmax, R*m.h*m.nb, m.score, pk.pRow, m.bmx)
-	lc.la(m.sel, R*m.h*m.nb, m.bmx, pk.pRow, m.flag)
-	lc.la(m.compact, R*m.h*m.nb, m.flag, m.list)
-	lc.la(m.gatherK, R*m.attnW*m.k*m.blk, pl.k, pl.tab, pk.pRow, m.list, m.gk)
-	vw := m.attnW
-	if g.KVF16 {
-		vw /= 2
-	}
-	lc.la(m.gatherV, R*m.k*m.blk*vw, pl.v, pl.tab, pk.pRow, m.list, m.gv)
-	lc.la(m.desc, R*kernels.PRowWords, pk.pRow, m.gdesc)
-	g.MSASelects++
-	return pk.pagedDecode(s, lc, q, m.gk, m.gv, n, out, m.gtab, m.gdesc, nil)
-}
-
 // msaKeys is the most keys a gathered row attends: the call's, at most the
 // kept blocks.
 func msaKeys(p *nn.LayerPlan, keys int) int {

@@ -237,24 +237,6 @@ func (pk *pagedScratch) ragWrites(w func(backend.Buf, []byte)) {
 	}
 }
 
-// ragAttend launches the run table's flash prefill over the chunk rows,
-// through desc (the full or the windowed set).
-// With sinks (one split) it writes the partials and the mapped merge adds
-// the sink and writes the rows.
-func (pk *pagedScratch) ragAttend(lc *launcher, q, k, v, n, out, tab, desc, sink backend.Buf) error {
-	pf := pk.pf
-	fs := pf.fs
-	fs.Map, fs.Rows = true, pk.ragRows
-	if fs.Splits == 0 {
-		return lc.launch(pf.ragK[pk.ragRows], pf.ragGroups(fs), pf.ragThreads, q, k, v, n, out, tab, desc, pk.pMap)
-	}
-	if err := lc.launch(pf.ragK[pk.ragRows], pf.ragGroups(fs), pf.ragThreads, q, k, v, n, pf.part, tab, desc, pk.pMap); err != nil {
-		return err
-	}
-	lc.la(pf.ragMerge[pk.ragRows], pk.ragRows*fs.Heads*fs.Dim, pf.part, out, sink, pk.pMap)
-	return nil
-}
-
 // ragFree gives back the run table's buffers. They are a few words a row,
 // allocated as the recurrent seats' zeros are, outside the budget.
 func (pk *pagedScratch) ragFree() {
@@ -403,33 +385,6 @@ func (g *devTier) ragStagedVariant(bs *blockScratch, pf *pagedPrefill, chunk, n 
 	}
 	pf.ragVars[key] = v
 	return v, nil
-}
-
-// ragStagedAttend launches the staged run table over the table's rows: the
-// scores, the softmax (with the sink) and the accumulate, which writes out.
-// win picks the windowed descriptor set's bases and variant.
-func (pk *pagedScratch) ragStagedAttend(lc *launcher, q, k, v, n, out, tab, desc, sink backend.Buf, win bool) error {
-	pf := pk.pf
-	rs := &pk.ragSt[0]
-	if win {
-		rs = &pk.ragSt[1]
-	}
-	vr := rs.v
-	lc.la(vr.scores, vr.scoreT, q, k, n, pf.sc, tab, desc, pk.pMap, rs.buf)
-	// A fixed array, so a warm step's argument list allocates nothing.
-	var argv [9]backend.Buf
-	args := append(argv[:0], pf.sc, n, pf.wt, pf.part, tab, desc)
-	if vr.s.Sink {
-		args = append(args, sink)
-	}
-	args = append(args, pk.pMap, rs.buf)
-	err := lc.launch(vr.soft, vr.softG, vr.softW, args...)
-	clear(args)
-	if err != nil {
-		return err
-	}
-	lc.la(vr.acc, vr.accT, pf.wt, v, n, out, tab, desc, pk.pMap, rs.buf)
-	return nil
 }
 
 // ragKey is what a recording keys the ragged call's run table by: the

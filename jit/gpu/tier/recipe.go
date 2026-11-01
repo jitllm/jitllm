@@ -60,22 +60,6 @@ func ParseFFNForm(s string) (FFNForm, error) {
 	return 0, fmt.Errorf("tier: FFN recipe %q is not one of %v", s, ffnFormNames)
 }
 
-// ffnFormOf is the recipe block l's FFN asks for: the caller's, else the
-// block's verdict, else Gate2. The launch still checks that the block can
-// express it, and falls down the chain where it cannot.
-func (g *devTier) ffnFormOf(l *layer) FFNForm {
-	if g.FFNForm != FFNTuned {
-		return g.FFNForm
-	}
-	if g.GateUp2Force {
-		return FFNGate2
-	}
-	if l.ffnForm != FFNTuned {
-		return l.ffnForm
-	}
-	return FFNGate2
-}
-
 // recipeMargin is how much faster than the incumbent a challenger must time
 // to replace it: the trial resolves about 1%, and a tie keeps the incumbent.
 const recipeMargin = 0.99

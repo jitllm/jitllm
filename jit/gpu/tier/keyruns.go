@@ -288,20 +288,6 @@ func (g *devTier) winMaskLocked(bs *blockScratch) bool {
 	return true
 }
 
-// winOf is the windows of query chunk c for a windowed block l, the packed
-// sequences' runs for an unwindowed non-causal block when sequences are
-// packed (SetSeqRuns: a windowed block's windows are inside them already),
-// and nil for every other.
-func (bs *blockScratch) winOf(l *layer, c int) backend.Buf {
-	switch {
-	case l.windowed:
-		return bs.vwins[c]
-	case l.nonCausal && bs.vsegRows > 0:
-		return bs.vsegs[c]
-	}
-	return nil
-}
-
 // SetSeqRuns records the packed sequences for the non-causal calls that
 // follow on every device (nn.SeqRunsDevice).
 func (g *GPU) SetSeqRuns(runs []nn.KeyRun) bool {

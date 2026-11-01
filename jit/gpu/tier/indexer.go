@@ -150,47 +150,6 @@ func (ix *idxScratch) free() {
 	}
 }
 
-// idxKeyAndWeights runs the indexer's projections of the block input -- the
-// key and the heads' weights -- while bs.a/bs.ax hold its quantization, then
-// the key's norm and rotary, and writes the key into the pool row's tail.
-func (g *devTier) idxKeyAndWeights(lc *launcher, bs *blockScratch, l *layer, R int, pc *pagedCall,
-	mvrun func(mv, *resident, backend.Buf)) {
-	ix := pc.pk.idx
-	mvrun(l.mvIK, l.idxK, ix.kRaw)
-	mvrun(l.mvIW, l.idxProj, ix.wts)
-	lc.la(ix.lnPart, R*ix.parts, ix.kRaw, ix.kPart)
-	lc.la(ix.lnVar, R*ix.parts, ix.kRaw, ix.kPart, ix.kVar)
-	lc.la(ix.lnApply, R*ix.d, ix.kRaw, l.nIdxK, ix.kPart, ix.kVar, l.nIdxKB, ix.kn)
-	lc.la(ix.copyK, R*ix.d, ix.kn, ix.kRot, ix.kOff)
-	lc.la(ix.ropeK, R*bs.p.NRot/2, ix.kn, bs.cs, ix.kOff, ix.kRot)
-	lc.la(ix.writeK, R*ix.d, ix.kRot, pc.k, bs.zero, pc.tab, pc.pk.pRow)
-}
-
-// idxQuery runs the indexer's query projection while bs.a/bs.ax hold the
-// normed query latent's quantization, and its rotary.
-func (g *devTier) idxQuery(lc *launcher, bs *blockScratch, l *layer, R int, pc *pagedCall,
-	mvrun func(mv, *resident, backend.Buf)) {
-	ix := pc.pk.idx
-	mvrun(l.mvIQ, l.idxQB, ix.qRaw)
-	lc.la(ix.copyQ, R*ix.h*ix.d, ix.qRaw, ix.qRot, ix.qOff)
-	lc.la(ix.ropeQ, R*ix.h*bs.p.NRot/2, ix.qRaw, bs.cs, ix.qOff, ix.qRot)
-}
-
-// idxAttend selects each row's positions, gathers them and runs the MLA
-// attention over the gathered pages: q the row-wide absorbed queries, out
-// the latent-wide results. A call over evicted history was refused at its
-// preparation (the scores read every position through the table).
-func (g *devTier) idxAttend(s backend.Session, lc *launcher, R int, pc *pagedCall, q, n, out backend.Buf) error {
-	pk := pc.pk
-	ix := pk.idx
-	lc.la(ix.scores, R*ix.tcap, ix.qRot, ix.wts, pc.k, pc.tab, pk.pRow, ix.score)
-	lc.la(ix.sel, R*ix.tcap, ix.score, pk.pRow, ix.selBuf)
-	lc.la(ix.gather, R*ix.k*ix.w, pc.k, pc.tab, pk.pRow, ix.selBuf, ix.gk)
-	lc.la(ix.desc, R*kernels.PRowWords, pk.pRow, ix.gdesc)
-	g.IdxSelects++
-	return pk.pagedDecode(s, lc, q, ix.gk, ix.gk, n, out, ix.gtab, ix.gdesc, nil)
-}
-
 // idxKeys is the most keys a gathered row attends: the call's, at most the
 // top-k.
 func idxKeys(p *nn.LayerPlan, keys int) int {

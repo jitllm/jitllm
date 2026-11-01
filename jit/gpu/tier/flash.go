@@ -15,17 +15,6 @@ type flashVariant struct {
 	k, kW, merge   backend.Kernel
 }
 
-// flashFor is the variant for a decode over n keys (the graph's nCap).
-func (bs *blockScratch) flashFor(n int) *flashVariant {
-	want := bs.flashSplitFor(n)
-	for i := range bs.flashV {
-		if bs.flashV[i].splits >= want {
-			return &bs.flashV[i]
-		}
-	}
-	return &bs.flashV[len(bs.flashV)-1]
-}
-
 // flashSplitFor is the partition count for n keys. A forced split (FlashSplit)
 // is taken as given; otherwise it is the power of two nearest sqrt(n/8), capped
 // at ~1.6 workgroups an SM. A partition's serial work falls as n/splits while
