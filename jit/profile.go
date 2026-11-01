@@ -78,7 +78,7 @@ func gpuProfile() Profile {
 // FMA and F16C its narrow passes.
 func cpuProfile() Profile {
 	p := cpuWideProfile()
-	p.Narrow, p.Wide = cpuNarrow(p.Passes), uint64(x86.ISATierAVX2)
+	p.Narrow, p.Wide, p.Floor = cpuNarrow(p.Passes), uint64(x86.ISATierAVX2), uint64(x86.ISATierSSE)
 	return p
 }
 

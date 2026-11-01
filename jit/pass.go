@@ -18,16 +18,17 @@ type Profile struct {
 	ScanLoops bool
 	Passes    []Pass
 	Off       map[string]bool
-	// Narrow, where set, is the passes of a device whose stated ISA lacks
-	// any of Wide's bits: on x86, a host without AVX2, FMA and F16C forms
-	// its kernels four floats a vector.
-	Narrow []Pass
-	Wide   uint64
+	// Narrow, where set, is the passes of a device whose stated ISA holds
+	// Floor's bits and lacks any of Wide's: on x86, a host at the SSE tier
+	// without AVX2, FMA and F16C forms its kernels four floats a vector. An
+	// arm64 states neither.
+	Narrow      []Pass
+	Wide, Floor uint64
 }
 
 // on is the profile p forms by on device d.
 func (p Profile) on(d Device) Profile {
-	if p.Narrow != nil && d.ISA != 0 && d.ISA&p.Wide != p.Wide {
+	if p.Narrow != nil && d.ISA&p.Floor == p.Floor && d.ISA&p.Wide != p.Wide {
 		p.Passes, p.Narrow = p.Narrow, nil
 	}
 	return p
