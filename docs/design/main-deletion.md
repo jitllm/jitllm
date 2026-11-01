@@ -3,6 +3,15 @@
 An audit of be40b4cc. "Reached" is by a model, a default runtime condition or a shipped option once the build is flipped. M2 deletes only
 what nothing reaches (the commits below, in order); the last table is what stays, what reaches it, and the composer work that frees it.
 
+## State
+
+- Commit 1 is done: `Config.Composed` and `jit.ComposedByDefault` are gone, every tier serves every part, the CPU's
+  blocks are composed by default and `WithComposedCPU` is gone; the arms that ran `Composed=0` or a partial set were
+  rebased or deleted with their subject.
+- Commit 2 in part: the branches the pinned field decided (`layersSession`'s `asked`/`asks`, `promptHeld`'s
+  `ComposedPrompt` test, `rowsKind`'s `asks`, `promptDeclines`' unasked case) are gone. `TierBlocks` and `RopeTableHost`
+  remain, refused by Stage A when set.
+
 ## The flip is two switches
 
 - **Cards.** `tier.go:2509` already sets `Config.Composed = ComposedStep` under `jit.ComposedByDefault`. Pinning it removes what can lower it:

@@ -278,13 +278,11 @@ and every other caller of `swaTier`). `JITLLM_TEST_DEVICES` names their device:
 
 ## Running the device gates composed
 
-Every test binary opens every tier with the composer serving the blocks and
-the head (`Config.Composed`), and the CPU's blocks, unless a gate sets its own:
-the composer is the only path, and a part it declines is refused by name. The relocation, move and
-session gates carry a composed arm in every build as well, on the models the
-front end states whole, held to the composer having served
-(`composedRan`: part steps served, none formed at a step, no decline outside
-the arm's stated reasons):
+Every tier serves every part through the composer, and the CPU's blocks are
+the composer's too: there is no knob, and a part it declines is refused by
+name. The relocation, move and session gates hold the composer to having
+served (`composedRan`: part steps served, none formed at a step, no decline
+outside the arm's stated reasons):
 
     JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine/model -run TestBlocksMoveBetweenDevices
 
@@ -308,12 +306,17 @@ block bound with the shallow control past it too.
 - Its reference is llama.cpp, by the user's decision: each step's ratio is to the wider of
   llama.cpp's CUDA and CPU arms' distances from the float reference, and the worst-step bound is
   4x the widest of those arms (`scripts/lcpplogits`, built in `JITLLM_LCPP`, which the gate requires), each
-  teacher-forced on the panel. A model llama.cpp does not read is held to main's tier instead.
+  teacher-forced on the panel. A model llama.cpp does not read is held to the floor
+  (`bandFloor`).
+- The CPU gates (`TestComposedCPUBlocksServe`, the rows, recurrent, delta and expert-page gates)
+  take the same band against the CPU's float forms (`withCPUFloat`: no int8 form, no split sums,
+  an f32 history), each step's llama.cpp arms teacher-forced on the same tokens (`cpuReference`,
+  `lcppBand`). Float-weight fixtures (`TestComposedCPUFeaturesAreLoadBearing`,
+  `TestComposedCPUSelectsKeys`) are held to the float forms over the same history within 1e-5.
 
 ## The shadow arm
 
-`tier.WithComposedShadow()` (`Config.ComposedShadow`, beside a `Config.Composed`
-that asks for blocks) runs the composer's form of each block it would serve
+`tier.WithComposedShadow()` (`Config.ComposedShadow`) runs the composer's form of each block it would serve
 beside the tier's own kernels, at every one-row step, and a reduction the
 composer forms from generic ops (`graph.Drift`) writes the block's worst drift
 from the tier's output into a slot of its own, read back as

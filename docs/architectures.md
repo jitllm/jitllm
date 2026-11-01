@@ -17,8 +17,8 @@ A new architecture adds one row here and its narrative in
 | llama (Llama 2 and 3 declare it; ernie4_5 dense; `MixtralForCausalLM`) | the base block; ERNIE 4.5 dense is this graph exactly | `TestGreedyMatchesLlamaCpp`, `TestBatchMatchesForward`, `TestSafetensorsMatchTransformers` | MC "RULE 7: SEVEN architectures" |
 | qwen2 | biased q/k/v | `TestAttentionBiasesReachTheModel`, `TestDeviceMatchesHostOnABiasedModel`, `TestGreedyMatchesLlamaCpp` | MC "RULE 7q", "RULE 7f" |
 | qwen3 | per-head q/k norm | `TestGreedyMatchesLlamaCpp`, `TestSafetensorsMatchTransformers` | MC "RULE 7: SEVEN architectures" |
-| qwen3moe | softmax top-k mixture | `TestGreedyMatchesLlamaCpp`, `TestMoEFFNRunsBatched`, `TestSafetensorsMatchTransformers` | MC "RULE 14: MIXTURE OF EXPERTS" |
-| olmoe | mixture with a whole-projection q/k norm | `TestGreedyMatchesLlamaCpp`, `TestMoEFFNRunsBatched` | MC "RULE 7k" |
+| qwen3moe | softmax top-k mixture | `TestGreedyMatchesLlamaCpp`, `TestComposedCPUExpertPagesServe`, `TestSafetensorsMatchTransformers` | MC "RULE 14: MIXTURE OF EXPERTS" |
+| olmoe | mixture with a whole-projection q/k norm | `TestGreedyMatchesLlamaCpp` | MC "RULE 7k" |
 | gemma (Gemma 1) | embedding scale, GELU, NEOX rotary | `TestGreedyMatchesLlamaCpp` | MC "RULE 7 (original)" |
 | gemma2 | post-norms, attention and final softcap, sliding layers | `TestGemma2SoftcapOnDevice`, `TestFinalSoftcapReachesTheDeviceHead`, `TestSpecOverAFinalSoftcap` | GK "gemma2 never stepped" |
 | gemma3 | local/global layers, two rotary bases, a linearly scaled global rotary | `TestGemma3GlobalLayersAreLinearlyScaled`, `TestSlidingWindowIsHonouredEverywhere`, `TestSlidingWindowRunsOnTheDevice` | MC "gemma3 on the device" |
