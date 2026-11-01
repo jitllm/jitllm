@@ -126,18 +126,28 @@ func qvlSpans(g *qvlGolden, grid bool) []Span {
 // token but the last, which is what the golden records.
 func qvlRun(t *testing.T, st *State, g *qvlGolden, grid bool) [][]float32 {
 	t.Helper()
-	lg, err := st.PrefillMixed(qvlSpans(g, grid)...)
+	out, err := qvlRunErr(st, g, grid)
 	if err != nil {
 		t.Fatal(err)
+	}
+	return out
+}
+
+// qvlRunErr is qvlRun returning the error a run stopped at: a violation's run
+// may be refused by name.
+func qvlRunErr(st *State, g *qvlGolden, grid bool) ([][]float32, error) {
+	lg, err := st.PrefillMixed(qvlSpans(g, grid)...)
+	if err != nil {
+		return nil, err
 	}
 	out := [][]float32{append([]float32(nil), lg...)}
 	for _, id := range g.Cont[:len(g.Cont)-1] {
 		if lg, err = st.Forward(id); err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
 		out = append(out, append([]float32(nil), lg...))
 	}
-	return out
+	return out, nil
 }
 
 // qvlWorst is the worst NMSE of rows against the golden, and the argmax flips.

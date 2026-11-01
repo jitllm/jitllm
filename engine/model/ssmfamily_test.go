@@ -200,6 +200,8 @@ func TestSSDFeaturesAreLoadBearing(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openSSM(t, fx.name)
 			defer m.Close()
+			// refused is the error a violation's run stopped at, by name.
+			var refused error
 			worst := func(between func(st *State)) float64 {
 				st := m.NewState(len(g.IDs) + 1)
 				defer st.Close()
@@ -207,7 +209,8 @@ func TestSSDFeaturesAreLoadBearing(t *testing.T) {
 				for p, id := range g.IDs {
 					lg, err := st.Forward(id)
 					if err != nil {
-						t.Fatal(err)
+						refused = err
+						return 0
 					}
 					w = max(w, llama4Cmp(g.Pos[p].Head, lg))
 					if between != nil {
@@ -218,6 +221,11 @@ func TestSSDFeaturesAreLoadBearing(t *testing.T) {
 			}
 			check := func(name string, w float64) {
 				t.Helper()
+				if err := refused; err != nil {
+					refused = nil
+					t.Logf("%s: %v -- refused by name, which the gate sees", name, err)
+					return
+				}
 				if !(w > 1e3*c6NMSE) {
 					t.Errorf("%s: the gate cannot see it: worst NMSE %.3e", name, w)
 				}

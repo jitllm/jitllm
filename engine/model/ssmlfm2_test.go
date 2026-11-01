@@ -84,6 +84,17 @@ func lfm2Violations(bool) []c6Violation {
 					copy(w[t*n:(t+1)*n], l.ssmConv1d[(taps-1-t)*n:(taps-t)*n])
 				}
 				l.ssmConv1d = w
+				// The composer reads the file's layout, each channel's taps
+				// in a row (ssmConvTaps): reversed there too.
+				if ct := l.ssmConvTaps; ct.data != nil && ct.rows == n && ct.k == taps {
+					rv := make([]float32, n*taps)
+					for c := range n {
+						for t := range taps {
+							rv[c*taps+t] = w[t*n+c]
+						}
+					}
+					l.ssmConvTaps = f32Tensor(rv, n, taps)
+				}
 			})
 		}},
 		{"NORM rotary for NEOX", func(m *Model) func() {

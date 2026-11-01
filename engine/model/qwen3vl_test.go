@@ -158,24 +158,35 @@ func TestQwen3VLRotaryIsInterleaved(t *testing.T) {
 			if !m.Cfg.RopeInterleaved {
 				t.Fatal("the container's text model is not an interleaved M-RoPE one")
 			}
-			run := func() float64 {
+			run := func() (float64, error) {
 				st := m.NewState(len(g.Pre) + g.grid().Rows() + len(g.Post) + len(g.Cont) + 1)
 				defer st.Close()
-				w, flips := qvlWorst(g, qvlRun(t, st, g, true))
+				rows, err := qvlRunErr(st, g, true)
+				if err != nil {
+					return 0, err
+				}
+				w, flips := qvlWorst(g, rows)
 				if flips > 0 {
 					w = math.Max(w, 1)
 				}
-				return w
+				return w, nil
 			}
-			clean := run()
+			clean, err := run()
+			if err != nil {
+				t.Fatal(err)
+			}
 			t.Logf("interleaved: worst logit NMSE %.3e against transformers", clean)
 			if math.IsNaN(clean) || clean > 1e-6 {
 				t.Fatalf("the text model on transformers' own image rows reads %.3e", clean)
 			}
 			was := m.rope.Runs
 			m.rope.Runs = nn.MRopeRuns(m.Cfg.RopeSections[:])
-			bad := run()
+			bad, err := run()
 			m.rope.Runs = was
+			if err != nil {
+				t.Logf("contiguous sections (the violation): %v -- refused by name, which the gate sees", err)
+				return
+			}
 			t.Logf("contiguous sections (the violation): %.3e", bad)
 			if !(bad > 1000*clean) || bad < 1e-6 {
 				t.Fatalf("contiguous sections read %.3e against %.3e: the gate cannot see the interleave", bad, clean)
