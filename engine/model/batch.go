@@ -311,7 +311,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 				s.cpu.served++
 				continue
 			}
-			s.cpu.declined[why]++
+			return nil, s.cpuRefused(li, why)
 		}
 		// DeepSeek V4's block is its own (ds4.go): each row its sequence's
 		// slot, position and token.
@@ -708,22 +708,15 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	// which lead -- the widest matmul of the token, and the shape it likes.
 	// The CPU's composed head runs the wanted rows and applies every stage
 	// of the head's graph.
-	headed := !headOnDev && nlogit > 0 && s.cpuHeadRows(s.bx, s.blogits, nil, nlogit) == jit.DeclineServes
-	if !headOnDev && nlogit > 0 && !headed {
-		t0 = s.tick()
-		s.batchNormB(s.bh, s.bx, s.outNorm, m.outNormB, c.NEmbd, nlogit)
-		s.tock(opRMSNorm, t0)
-		if err := s.mm(s.blogits, *s.outW, s.bh, nlogit); err != nil {
-			return nil, err
+	if !headOnDev && nlogit > 0 {
+		if why := s.cpuHeadRows(s.bx, s.blogits, nil, nlogit); why != jit.DeclineServes {
+			return nil, cpuHeadRefused(why)
 		}
 	}
 	// The wanted rows' logits, which is one contiguous run of nlogit*NVocab:
 	// capped already where the device ran the head.
-	switch {
-	case headOnDev:
+	if headOnDev {
 		s.finishDevLogits(s.blogits[:nlogit*c.NVocab])
-	case !headed:
-		s.finishLogits(s.blogits[:nlogit*c.NVocab])
 	}
 	return s.blogits[:nlogit*c.NVocab], nil
 }

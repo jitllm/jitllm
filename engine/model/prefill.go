@@ -962,30 +962,15 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}
-	headed := false
+	why := jit.DeclineServes
 	if len(s.HostPick) > 0 {
-		headed = s.cpuPick(s.x) == jit.DeclineServes
+		why = s.cpuPick(s.x)
 	} else {
-		headed = s.cpuHead(s.x, s.logits, nil) == jit.DeclineServes
+		why = s.cpuHead(s.x, s.logits, nil)
 	}
-	if headed {
-		if err := s.kvCheck(); err != nil {
-			return nil, err
-		}
-		return s.logits, nil
+	if why != jit.DeclineServes {
+		return nil, cpuHeadRefused(why)
 	}
-	s.norm(s.h, s.x, s.outNorm, m.outNormB)
-	s.jit.NewInput()
-	if s.pickOnHost() {
-		if err := s.kvCheck(); err != nil {
-			return nil, err
-		}
-		return s.logits, nil
-	}
-	if err := s.mv(s.logits, *s.outW, s.h); err != nil {
-		return nil, err
-	}
-	s.finishLogits(s.logits)
 	// A page the store could not return fails the request. See kvFault.
 	if err := s.kvCheck(); err != nil {
 		return nil, err
@@ -1275,7 +1260,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 			s.cpu.served++
 			return nil
 		}
-		s.cpu.declined[why]++
+		return s.cpuRefused(li, why)
 	}
 	// DeepSeek V4's block is its own (ds4.go): the chunk's rows are
 	// successive positions of this slot, their tokens set by the caller.

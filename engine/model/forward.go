@@ -4177,7 +4177,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				m.trace(li, "ffn_resid", s.x)
 				continue
 			}
-			s.cpu.declined[why]++
+			return nil, s.cpuRefused(li, why)
 		}
 		s.fuseRun()
 		if c.DSV4() {
@@ -4650,33 +4650,20 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		}
 	}
 	// The CPU's composed head applies every stage of the head's graph.
-	headed := false
 	if !done {
 		var hidden []float32
 		if s.rows != nil && !c.Q4E() {
 			hidden = s.rows.hidden
 		}
-		headed = s.cpuHead(s.x, s.logits, hidden) == jit.DeclineServes
-	}
-	if !done && !headed {
-		s.norm(s.h, s.x, s.outNorm, m.outNormB)
-		s.jit.NewInput()
-		m.trace(-1, "out_norm", s.h)
-		if err := s.mv(s.logits, *s.outW, s.h); err != nil {
-			return nil, err
-		}
-		if s.rows != nil && !c.Q4E() {
-			copy(s.rows.hidden, s.h)
+		if why := s.cpuHead(s.x, s.logits, hidden); why != jit.DeclineServes {
+			return nil, cpuHeadRefused(why)
 		}
 	}
 	s.unfuse()
-	// After both arms: when the tier ran the head it also applied the final
-	// softcap, so that arm takes only the scale.
-	switch {
-	case done:
+	// The tier's head applied the final softcap, so it takes only the scale;
+	// the CPU's composed head applied every stage.
+	if done {
 		s.finishDevLogits(s.logits)
-	case !headed:
-		s.finishLogits(s.logits)
 	}
 	// Through advance, not s.pos++: Prefill reads bpos, so a Prefill after a
 	// Forward must see this token.

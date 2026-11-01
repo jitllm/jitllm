@@ -35,6 +35,20 @@ func (s *State) CPUBlockSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.served, s.cpu.declined
 }
 
+// cpuRefused counts the composer's decline of block li's step on the CPU and
+// is the step's error: the composer is the only path, so no other kernels run
+// the block.
+func (s *State) cpuRefused(li int, why jit.Decline) error {
+	s.cpu.declined[why]++
+	return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s", li, jit.DeclineName(int(why)))
+}
+
+// cpuHeadRefused is the composer's decline of the head on the CPU as the
+// step's error, as cpuRefused is a block's.
+func cpuHeadRefused(why jit.Decline) error {
+	return fmt.Errorf("model: the composer does not serve the head on the CPU: %s", jit.DeclineName(int(why)))
+}
+
 // CPURecSteps is how many steps of several rows the CPU's linear blocks
 // ran whole on their rows' form, and how many they stepped a row at a time.
 func (s *State) CPURecSteps() (whole, stepped int) { return s.cpu.recWhole, s.cpu.recStepped }
