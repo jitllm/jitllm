@@ -40,6 +40,9 @@ func (s *State) CPUBlockSteps() (served int, declined [jit.NumDeclines]int) {
 // the block.
 func (s *State) cpuRefused(li int, why jit.Decline) error {
 	s.cpu.declined[why]++
+	if why == jit.DeclineNotFormed && s.cpu.formErr != nil {
+		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the first: %w)", li, jit.DeclineName(int(why)), s.cpu.formErr)
+	}
 	return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s", li, jit.DeclineName(int(why)))
 }
 
