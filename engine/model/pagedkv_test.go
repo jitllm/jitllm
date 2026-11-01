@@ -19,42 +19,6 @@ func pagedOpts(page int) []tier.Option {
 	return []tier.Option{tier.WithConfig(func(c *tier.Config) { c.KVPage = page })}
 }
 
-// pagedRun prefills prompt on a device and then feeds the forced ids one at a
-// time, returning every step's logits (the prefill's first) and the tier's
-// counters. forced is the same for both arms, so the logits are comparable
-// position by position rather than only while the greedy chains agree.
-func pagedRun(t *testing.T, m *Model, seq int, prompt, forced []int32, opt []tier.Option) ([][]float32, tier.Stats) {
-	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
-	if err != nil || g == nil {
-		noDevice(t, "device", err)
-	}
-	defer g.Close()
-	st := m.NewState(seq)
-	defer st.Close()
-	if err := st.SetDevice(g); err != nil {
-		t.Fatal(err)
-	}
-	if st.devCount() != m.Cfg.NLayer || !st.HeadOnDevice() {
-		t.Fatalf("placed %d of %d blocks, head on the card %v: %s", st.devCount(), m.Cfg.NLayer, st.HeadOnDevice(), g.Err())
-	}
-	lg, err := st.Prefill(prompt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := [][]float32{slices.Clone(lg)}
-	for _, id := range forced {
-		if lg, err = st.Forward(id); err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, slices.Clone(lg))
-	}
-	if st.devCount() != m.Cfg.NLayer {
-		t.Fatalf("%d of %d blocks left the card during the run: %s", m.Cfg.NLayer-st.devCount(), m.Cfg.NLayer, g.Err())
-	}
-	return out, g.Stats()
-}
-
 // logitNMSE is |a-b|^2 / |b|^2 over one logit row.
 func logitNMSE(a, b []float32) float64 {
 	var num, den float64

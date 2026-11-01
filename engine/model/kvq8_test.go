@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // kvq8Models are the models the q8 cache gate runs: the smallest real llama
@@ -21,51 +20,6 @@ var kvq8Models = []string{
 	"lfm2/LFM2-350M-Q4_K_M.gguf",
 	"synth-gemma4.gguf",
 	"synth-gemma4-e.gguf",
-}
-
-// kvTeacherForce runs ids through a fresh State at t and returns every
-// position's logits. setup, when not nil, sees the State before its first
-// token.
-func kvTeacherForce(t *testing.T, m *Model, kt KVType, ids []int32, setup func(*State)) (*State, [][]float32) {
-	t.Helper()
-	if err := m.SetKVType(kt); err != nil {
-		t.Fatal(err)
-	}
-	defer m.ClearKVF16()
-	s := m.NewState(len(ids) + 1)
-	if setup != nil {
-		setup(s)
-	}
-	var outs [][]float32
-	for _, id := range ids {
-		out, err := s.Forward(id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		outs = append(outs, append([]float32(nil), out...))
-	}
-	return s, outs
-}
-
-// q8Twin makes s's f32 cache store every row rounded through q8_0
-// (kvLayout.q8Twin): the control arm a q8 cache must equal bit for bit.
-func q8Twin(s *State) {
-	c := s.c
-	hd := max(c.HeadDim, c.HeadDimSWA)
-	s.kvl.jit = s.jit
-	s.jit.ReserveKVQuant(hd)
-	s.kvl.q8Twin = make([]float32, (max(c.NKVHead, c.NKVHeadSWA)+1)*cpu.KVRowBytes(cpu.KVQ8, hd)/4)
-}
-
-// argmaxF is the index of the largest logit.
-func argmaxF(x []float32) int {
-	j := 0
-	for i := range x {
-		if x[i] > x[j] {
-			j = i
-		}
-	}
-	return j
 }
 
 // TestKVQ8RefusesByName: the caches a q8 row cannot express are refused at
