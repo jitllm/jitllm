@@ -2718,7 +2718,8 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 				g.LastErr = "the composed block's copy: " + err.Error()
 			}
 		}
-		if (!l.linear || l.withAttn) && !g.streamServed(l, li, bs) {
+		// A form that failed earlier was named then: prefixed once.
+		if was := g.LastErr; (!l.linear || l.withAttn) && !g.streamServed(l, li, bs) && g.LastErr != was {
 			g.LastErr = "the composed block over passes: " + g.LastErr
 		}
 	}
@@ -2764,7 +2765,7 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 	}
 	// Its form over passes too, as main's staged prefill holds its planes
 	// from the placement: a chunk over evicted history forms nothing.
-	if g.promptServed(l, li, bb) && (!l.linear || l.withAttn) && !g.streamServed(l, li, bb) {
+	if was := g.LastErr; g.promptServed(l, li, bb) && (!l.linear || l.withAttn) && !g.streamServed(l, li, bb) && g.LastErr != was {
 		g.LastErr = "the composed prompt block over passes: " + g.LastErr
 	}
 }
