@@ -2673,6 +2673,9 @@ func (g *devTier) prewarmComposed() {
 // does not build is named in LastErr and leaves the other blocks to form.
 // Callers hold g.mu.
 func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
+	if l := g.layers[li]; l != nil && l.nonCausal {
+		return g.prewarmTower(li)
+	}
 	bs, l := g.bs, g.layers[li]
 	if g.NoPromptPrewarm || bs == nil || bs.pkv == nil ||
 		g.kvp == nil || l == nil {

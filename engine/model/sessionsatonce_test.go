@@ -298,9 +298,11 @@ func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks 
 // instance of the composed part of each of blocks placed blocks, and of the
 // head where parts names it.
 func lanesHold(g *tier.GPU, blocks int, parts tier.Parts, lanes int) error {
+	// The head's two graphs: decode's, and the one a prompt's fold runs that
+	// writes the norm's rows too (nn.Head.HiddenGraph).
 	want := blocks
 	if parts&tier.ComposedHead != 0 {
-		want++
+		want += 2
 	}
 	for _, d := range g.LaneParts() {
 		if len(d) < lanes {

@@ -2,6 +2,8 @@ package tier
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -38,6 +40,36 @@ func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return jit.DeclineNotFormed
 	}
 	return partServes
+}
+
+// prewarmTower forms non-causal block li's part at its set's rows and holds
+// its buffers, at the block's placement: under a budget the pager would
+// otherwise give the room to the blocks it turns over, and the part meet none
+// at its first call. It reports why the part does not fit, "" where it fits
+// or the set does not hold the call's feeds yet. Callers hold g.mu.
+func (g *devTier) prewarmTower(li int) (roomless string) {
+	if g.NoPromptPrewarm {
+		return ""
+	}
+	if g.geoUsed {
+		prev := g.geoCur
+		g.useGeom(g.geomFor(li, li+1))
+		defer g.useGeom(prev)
+	}
+	bs, l := g.bs, g.layers[li]
+	if bs == nil || bs.pics == nil || bs.calls == nil || bs.cs == nil && rotates(l.graph) ||
+		g.tkv == nil || g.tkv.kc == nil || l.win != 0 || l.windowed {
+		return ""
+	}
+	g.prewarming = true
+	defer func() { g.prewarming = false }()
+	if _, _, _, err := g.towerStep(bs, l, li, &bs.p, bs.rows); err != nil {
+		g.LastErr = "the composed tower block: " + err.Error()
+		if errors.As(err, new(partRoomError)) {
+			return fmt.Sprintf("tower block %d: its composed part does not fit beside the blocks placed (%s)", li, err)
+		}
+	}
+	return ""
 }
 
 // rotates says graph gr turns rows by a rotary table.
