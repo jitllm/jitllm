@@ -1737,15 +1737,25 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 		for _, n := range c.Calls {
 			cc.n *= n
 		}
-		if rows > 1 && !c.Scan && !whole {
+		if rows > 1 && !c.Scan && !whole && (c.Live > 0 || len(c.Reach) > 0) {
 			// A form of several rows runs the units of its calls' leading
 			// axis the call's rows reach: a kernel not held to them would
 			// read and write rows past the call's. A scan's calls are its
 			// state's rows, each reading the call's rows its descriptor
-			// names.
+			// names; a kernel that holds no rows of a step (a table over the
+			// history) runs whole (jit.Code.LiveUnitsOf).
 			if c.Live == 0 || len(c.Calls) == 0 || c.Calls[0] != c.LiveUnits {
 				f.close()
-				return nil, fmt.Errorf("%s at %d rows: its calls %v hold no rows of a call (live %d of %d units)", c.Name, rows, c.Calls, c.Live, c.LiveUnits)
+				var binds []string
+				for _, b := range c.Binds {
+					n := fmt.Sprintf("%s/v%d/r%d", b.Operand.Name, b.Operand.Value, b.Operand.Role)
+					if b.Writes {
+						n += "(w)"
+					}
+					binds = append(binds, n)
+				}
+				return nil, fmt.Errorf("%s at %d rows: its calls %v hold no rows of a call (live %d of %d units; passes %v; binds %v)",
+					c.Name, rows, c.Calls, c.Live, c.LiveUnits, c.Passes, binds)
 			}
 			cc.live, cc.inner = jit.Code{Live: c.Live, LiveUnits: c.LiveUnits}, cc.n/c.Calls[0]
 			cc.tiles = c.TileMajor && cc.inner > 1
