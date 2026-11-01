@@ -66,6 +66,23 @@ func (c *Config) KVTypeRefusal(t KVType) error {
 	if t != KVQ8_0 {
 		return nil
 	}
+	switch {
+	case c.Indexer():
+		return fmt.Errorf("model: %s reads its lightning indexer's key from the cached row: "+
+			"a q8_0 KV cache is not implemented for it", c.Arch)
+	case c.MSA():
+		return fmt.Errorf("model: %s selects blocks by its indexer's cached key (MiniMax Sparse Attention): "+
+			"a q8_0 KV cache is not implemented for it", c.Arch)
+	case c.QSARatio != 0:
+		return fmt.Errorf("model: %s pools its QSA indexer's raw cached keys, which its references hold "+
+			"at f32: a q8_0 KV cache is not implemented for it", c.Arch)
+	case c.DSV4():
+		return fmt.Errorf("model: %s caches its compressor's pending inputs beside the key: "+
+			"a q8_0 KV cache is not implemented for it", c.Arch)
+	case c.MLA():
+		return fmt.Errorf("model: %s caches MLA's latent row, whose value is a prefix of the key's row: "+
+			"a q8_0 KV cache is not implemented for it", c.Arch)
+	}
 	// The composer is the only path, and it forms no q8_0 history yet.
 	return fmt.Errorf("model: %s: a q8_0 KV cache is not one the composer forms (binary16 and f32 are)", c.Arch)
 }
