@@ -15,28 +15,6 @@ import (
 // composedParts is what a composed arm asks the composer for.
 const composedParts = tier.ComposedStep
 
-// composedArms are the arms a gate runs the model at path in: the tier's own
-// kernels, and the composer's where the front end states every block and the
-// head. A model it does not state gets no composed arm, rather than one that
-// passes on the tier's kernels.
-func composedArms(t *testing.T, path string) []tier.Parts {
-	t.Helper()
-	m, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	if m.Uncovered(-1) != Covered {
-		return []tier.Parts{0}
-	}
-	for li := range m.Cfg.NLayer {
-		if m.Uncovered(li) != Covered {
-			return []tier.Parts{0}
-		}
-	}
-	return []tier.Parts{0, composedParts}
-}
-
 // composedOf is the parts g's composer serves of m: what g asks it for
 // (Config.Composed, every part in a jitllmcomposed build), where the front
 // end states every block of m as ops, and nothing where it does not.
@@ -47,20 +25,6 @@ func composedOf(m *Model, g *tier.GPU) tier.Parts {
 		}
 	}
 	return g.Composed
-}
-
-// composedArm is the subtest name of name's arm: name itself for the tier's
-// own kernels, so a gate's existing names select what they always did.
-func composedArm(name string, parts tier.Parts) string {
-	if parts == 0 {
-		return name
-	}
-	return name + "/composed"
-}
-
-// composedOpt is the tier option that asks the composer for parts.
-func composedOpt(parts tier.Parts) tier.Option {
-	return tier.WithConfig(func(c *tier.Config) { c.Composed = parts })
 }
 
 // composedNoGraph is the reason the tier declines a block the front end

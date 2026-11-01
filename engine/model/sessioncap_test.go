@@ -30,13 +30,7 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	for _, parts := range composedArms(t, path) {
-		if parts == 0 {
-			aBatchLeavesAnotherSessionAlone(t, m, 0)
-			continue
-		}
-		t.Run("composed", func(t *testing.T) { aBatchLeavesAnotherSessionAlone(t, m, parts) })
-	}
+	aBatchLeavesAnotherSessionAlone(t, m, composedParts)
 }
 
 // aBatchLeavesAnotherSessionAlone is TestABatchLeavesAnotherSessionAlone
@@ -44,7 +38,7 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 	const seq, rows, before, after = 256, 3, 3, 5
 	open := func(t *testing.T, spec string) *tier.GPU {
-		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
+		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

@@ -169,8 +169,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			if name == "Llama-3.2-1B-Instruct-Q4_K_M.gguf" {
 				t.Run("two-device", func(t *testing.T) {
 					d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(d[0] + "," + d[1]),
-						tier.WithConfig(func(c *tier.Config) { c.Composed = tier.ComposedStep })}, testTierOpts(t)...)...)
+					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, d[0]+","+d[1], err)
 					}
@@ -269,7 +268,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 							t.Run(fmt.Sprintf("%s/%s/no graph %v", spec, arm, noGraph), func(t *testing.T) {
 								opts := []tier.Option{tier.WithDevices(spec),
 									tier.WithConfig(func(c *tier.Config) {
-										c.Composed, c.NoGraph, c.PromptRows = tier.ComposedStep|tier.ComposedPrompt, noGraph, 64
+										c.NoGraph, c.PromptRows = noGraph, 64
 									})}
 								if shadow {
 									opts = append(opts, tier.WithComposedShadow())

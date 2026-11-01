@@ -269,7 +269,7 @@ func encDeviceArm(t *testing.T, m *Model, g embedGolden, spec string, n int) (af
 	t.Helper()
 	nb := m.encBlocks()
 	gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-		tier.WithDeviceTune(tier.TuneOff), composedOpt(encParts)}, testTierOpts(t)...)...)
+		tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

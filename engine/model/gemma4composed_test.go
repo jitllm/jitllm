@@ -265,7 +265,7 @@ func TestGemma4PictureServesComposed(t *testing.T) {
 			run := func(bidir bool) [][]float32 {
 				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 					tier.WithConfig(func(c *tier.Config) {
-						c.Composed, c.Census, c.NoGraph = tier.ComposedBlock|tier.ComposedPrompt|tier.ComposedHead, true, true
+						c.Census, c.NoGraph = true, true
 					})}, testTierOpts(t)...)...)
 				if err != nil || gpu == nil {
 					noDevice(t, dev, err)

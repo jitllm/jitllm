@@ -53,7 +53,7 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 	ran := 0
 	for _, arm := range towerArms() {
 		spec := arm.spec
-		g, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
+		g, err := tier.OpenWith(tier.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

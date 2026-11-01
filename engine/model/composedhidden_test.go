@@ -64,7 +64,7 @@ func TestComposedHeadWritesItsHidden(t *testing.T) {
 // It returns the normed rows read back and the tier's stats.
 func composedHidden(t *testing.T, m *Model, dev string, parts tier.Parts, k int, fold bool) ([]float32, tier.Stats) {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff), composedOpt(parts),
+	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) { c.PromptRows = 32 }))
 	if err != nil || g == nil {
 		noDevice(t, dev, err)

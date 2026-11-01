@@ -37,7 +37,7 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 		}{{"pos", tier.SetPagedFault}, {"alias", tier.SetPagedFault}, {"headrow", tier.SetRowsFault}} {
 			t.Run(dev+"/"+f.name, func(t *testing.T) {
 				f.arm(f.name)
-				got, _, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev), composedOpt(composedParts)})
+				got, _, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev)})
 				f.arm("")
 				composedRowsServed(t, m, lastBatchStats)
 				i, j, gap := composedRowsPart(t, m, ids, want, got)
@@ -89,7 +89,7 @@ func composedFoldParts(t *testing.T, m *Model, dev string) {
 	// Chunks of at most 32 rows: the device reserves and warms the widths up
 	// to 32, each a form of the composer's.
 	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-		composedOpt(composedParts|tier.ComposedPrompt), tier.WithConfig(func(c *tier.Config) { c.PromptRows = 32 }))
+		tier.WithConfig(func(c *tier.Config) { c.PromptRows = 32 }))
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}

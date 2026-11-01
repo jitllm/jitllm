@@ -136,7 +136,7 @@ type headArm struct {
 func (a *headArm) run(t *testing.T) {
 	t.Helper()
 	g, err := tier.OpenWith(tier.WithDevices(a.dev), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = a.parts, true }))
+		tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 	if err != nil || g == nil {
 		noDevice(t, a.dev, err)
 	}
@@ -261,7 +261,7 @@ func TestComposedHeadOps(t *testing.T) {
 						t.Run(arm.name, func(t *testing.T) {
 							// The composer's head, then the tier's own with the
 							// host finishing the logits.
-							for _, parts := range []tier.Parts{tier.ComposedHead, 0} {
+							for _, parts := range []tier.Parts{tier.ComposedHead} {
 								// The tier's own head caps before the host adds the bias,
 								// and the model's head biases first: without the composed
 								// head the tier leaves such a head on the host, which runs

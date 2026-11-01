@@ -146,7 +146,7 @@ func TestJanusOnDeviceMatchesHost(t *testing.T) {
 	ran := 0
 	for _, arm := range towerArms() {
 		spec := arm.spec
-		g, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
+		g, err := tier.OpenWith(tier.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

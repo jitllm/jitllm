@@ -18,7 +18,7 @@ const faultModel = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 
 func faultTier(t *testing.T, parts tier.Parts) *tier.GPU {
 	t.Helper()
-	o := append([]tier.Option{tier.WithDeviceTune(tier.TuneOff), composedOpt(parts)}, testTierOpts(t)...)
+	o := append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)
 	if testdevices.Selected() {
 		o = append(o, tier.WithDevices(testdevices.One("")))
 	}

@@ -191,10 +191,8 @@ func TestComposedExpertPagesServe(t *testing.T) {
 // first, would be a chunk with its streamed experts on the host.
 func TestComposedExpertPagesMove(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
-		// The tier's own kernels too: the moves are the tier's, whoever
-		// runs the blocks.
-		for _, parts := range []tier.Parts{0, tier.ComposedBlock} {
-			t.Run(composedArm(name, parts), func(t *testing.T) {
+		for _, parts := range []tier.Parts{tier.ComposedBlock} {
+			t.Run(name, func(t *testing.T) {
 				path := jlmOf(t, testmodels.Path(name))
 				blocksMoveBetweenDevicesWith(t, path, moveWhole, parts, func(st tier.Stats) {
 					if st.StreamFills == 0 || st.StreamBlocks == 0 {
@@ -461,7 +459,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
 		for _, dev := range stepDevices() {
 			t.Run(name+"/"+dev, func(t *testing.T) {
-				g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff), composedOpt(tier.ComposedBlock))
+				g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || g == nil {
 					noDevice(t, dev, err)
 				}
@@ -562,44 +560,42 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
 		for _, dev := range stepDevices() {
-			for _, parts := range []tier.Parts{0, tier.ComposedBlock} {
-				t.Run(composedArm(name, parts)+"/"+dev, func(t *testing.T) {
-					g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
-					if err != nil || g == nil {
-						noDevice(t, dev, err)
+			t.Run(name+"/"+dev, func(t *testing.T) {
+				g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
+				if err != nil || g == nil {
+					noDevice(t, dev, err)
+				}
+				defer g.Close()
+				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts("card"), WithStreamTrial(false),
+					WithPrefillForwardRows(16))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer m.Close()
+				prompt := m.Vocab.Encode("The capital of France is a city that", true)
+				var out [3][]float32
+				for i := range out {
+					st := m.NewState(len(prompt) + 2)
+					st.SetDeviceFallback(false)
+					if err := st.SetDevice(g); err != nil {
+						t.Fatal(err)
 					}
-					defer g.Close()
-					m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts("card"), WithStreamTrial(false),
-						WithPrefillForwardRows(16))
+					lg, err := st.Prefill(prompt)
 					if err != nil {
 						t.Fatal(err)
 					}
-					defer m.Close()
-					prompt := m.Vocab.Encode("The capital of France is a city that", true)
-					var out [3][]float32
-					for i := range out {
-						st := m.NewState(len(prompt) + 2)
-						st.SetDeviceFallback(false)
-						if err := st.SetDevice(g); err != nil {
-							t.Fatal(err)
-						}
-						lg, err := st.Prefill(prompt)
-						if err != nil {
-							t.Fatal(err)
-						}
-						out[i] = slices.Clone(lg)
-						st.Close()
+					out[i] = slices.Clone(lg)
+					st.Close()
+				}
+				if g.Stats().StreamBlocks == 0 {
+					t.Fatal("no block was streamed: the configuration under test was not selected")
+				}
+				for i := 1; i < len(out); i++ {
+					if !slices.Equal(out[0], out[i]) {
+						t.Fatalf("session %d's prompt is %.3e from the first's", i+1, logitNMSE(out[0], out[i]))
 					}
-					if g.Stats().StreamBlocks == 0 {
-						t.Fatal("no block was streamed: the configuration under test was not selected")
-					}
-					for i := 1; i < len(out); i++ {
-						if !slices.Equal(out[0], out[i]) {
-							t.Fatalf("session %d's prompt is %.3e from the first's", i+1, logitNMSE(out[0], out[i]))
-						}
-					}
-				})
-			}
+				}
+			})
 		}
 	}
 }
@@ -635,7 +631,7 @@ func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts tier.Part
 		probe := func(stream bool) tier.Stats {
 			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 				tier.WithConfig(func(c *tier.Config) {
-					c.Composed, c.NoGraph, c.Census, c.PromptRows = parts, noGraph, true, 64
+					c.NoGraph, c.Census, c.PromptRows = noGraph, true, 64
 					// Streamed at its floor: no cache, each block's plain bank
 					// of the selection's sheets. With no budget the caches
 					// sizeAutoCaches gives would take the card's whole room,

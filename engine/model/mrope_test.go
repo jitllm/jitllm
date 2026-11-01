@@ -666,7 +666,7 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 	t.Helper()
 	run := func(shift int32) ([][]float32, tier.Stats) {
 		cg, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = tier.ComposedStep, true }))
+			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 		if err != nil || cg == nil {
 			t.Fatalf("%s did not open for the composed decode: %v", spec, err)
 		}

@@ -39,7 +39,7 @@ func TestComposedHeadTokens(t *testing.T) {
 	for _, fx := range headFixtures {
 		t.Run(fx.name, func(t *testing.T) {
 			for _, dev := range stepDevices() {
-				for _, parts := range []tier.Parts{tier.ComposedHead | tier.ComposedSample, tier.ComposedHead, 0} {
+				for _, parts := range []tier.Parts{tier.ComposedHead | tier.ComposedSample} {
 					name := dev + "/own head"
 					switch {
 					case parts&tier.ComposedSample != 0:
@@ -48,8 +48,7 @@ func TestComposedHeadTokens(t *testing.T) {
 						name = dev + "/composed head"
 					}
 					t.Run(name, func(t *testing.T) {
-						g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-							tier.WithConfig(func(c *tier.Config) { c.Composed = parts }))
+						g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
 						if err != nil || g == nil {
 							noDevice(t, dev, err)
 						}
@@ -126,7 +125,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							set.cpuSample = negatedSample(orig)
 							m.front.mu.Unlock()
 							vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-								tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = parts, true }))
+								tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 							if err != nil || vg == nil {
 								t.Fatalf("%s did not open for the violation: %v", dev, err)
 							}
@@ -256,7 +255,7 @@ func TestComposedHeadTokens(t *testing.T) {
 								set.cpuTopK = v.g
 								m.front.mu.Unlock()
 								vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-									tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = parts, true }))
+									tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 								if err != nil || vg == nil {
 									t.Fatalf("%s did not open for the violation: %v", dev, err)
 								}

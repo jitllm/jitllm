@@ -40,7 +40,7 @@ type shadowRun struct {
 func shadowDecode(t *testing.T, m *Model, dev string, ids, toks []int32, noGraph, float bool, extra ...tier.Option) shadowRun {
 	t.Helper()
 	opts := append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff), tier.WithComposedShadow(),
-		tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph, c.ComposedFloat = tier.ComposedBlock, noGraph, float })},
+		tier.WithConfig(func(c *tier.Config) { c.NoGraph, c.ComposedFloat = noGraph, float })},
 		testTierOpts(t)...)
 	g, err := tier.OpenWith(append(opts, extra...)...)
 	if err != nil || g == nil {

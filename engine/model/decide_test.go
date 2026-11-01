@@ -204,8 +204,7 @@ func TestDecisionMatchesLlamaCpp(t *testing.T) {
 					m.SetKVF16(false)
 					var g *tier.GPU
 					for _, spec := range stepDevices() {
-						if d, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-							tier.WithConfig(func(c *tier.Config) { c.Composed = tier.ComposedStep | tier.ComposedPrompt })); err == nil && d != nil {
+						if d, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)); err == nil && d != nil {
 							g = d
 							break
 						}

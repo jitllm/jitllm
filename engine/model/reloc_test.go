@@ -273,9 +273,7 @@ func TestLayerRelocatesToAnotherDevice(t *testing.T) {
 	defer fusedRunsCheck(t, false)()
 	for _, name := range relocModels() {
 		path := jlmOf(t, testmodels.Path(name))
-		for _, parts := range composedArms(t, path) {
-			t.Run(composedArm(name, parts), func(t *testing.T) { layerRelocatesToAnotherDevice(t, path, parts) })
-		}
+		t.Run(name, func(t *testing.T) { layerRelocatesToAnotherDevice(t, path, composedParts) })
 	}
 }
 
@@ -288,12 +286,12 @@ func layerRelocatesToAnotherDevice(t *testing.T, path string, parts tier.Parts) 
 	// part at a knife-edge argmax whatever the relocation did (it read token
 	// 7 of tinyllama either way on a V100, on main and on a branch alike).
 	// An equality gate pins every knob its equality depends on (RULE 11c).
-	a, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
+	a, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || a == nil {
 		noDevice(t, "device", err)
 	}
 	defer a.Close()
-	b, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
+	b, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || b == nil {
 		noDevice(t, "second tier", err)
 	}

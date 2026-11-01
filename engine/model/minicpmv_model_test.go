@@ -378,7 +378,7 @@ func TestMiniCPMVOnDeviceMatchesHost(t *testing.T) {
 	ran := 0
 	for _, arm := range towerArms() {
 		spec := arm.spec
-		gd, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
+		gd, err := tier.OpenWith(tier.WithDevices(spec))
 		if err != nil || gd == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

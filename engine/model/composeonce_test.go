@@ -46,7 +46,7 @@ func TestPlacementComposesOnce(t *testing.T) {
 	}
 	open := func(t *testing.T, devices string) *tier.GPU {
 		opts := []tier.Option{tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) {
-			c.Composed, c.PromptRows, c.ComposedWidths = tier.ComposedStep|tier.ComposedPrompt, width, violate
+			c.PromptRows, c.ComposedWidths = width, violate
 		})}
 		if devices != "" {
 			opts = append(opts, tier.WithDevices(devices))

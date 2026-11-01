@@ -26,7 +26,7 @@ func TestComposedTowerOnDeviceSeesCausalRows(t *testing.T) {
 	tw.opt.towerGPULayers = 1
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec), composedOpt(towerParts))
+		g, err := tier.OpenWith(tier.WithDevices(spec))
 		if err != nil || g == nil {
 			continue
 		}

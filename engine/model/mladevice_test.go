@@ -109,71 +109,6 @@ func TestMLAOnEveryDevice(t *testing.T) {
 	}
 }
 
-// TestMLADeviceFaultsAreCaught runs the gate above against three DELIBERATE
-// violations of latent attention's invariants and requires every one of them to
-// be seen. Each is invisible to shape checks and kernel gates (swapped banks
-// can share a shape, a wrong offset reads finite values, an off-by-one sheet
-// reads a real head); only the whole model against the host sees them.
-func TestMLADeviceFaultsAreCaught(t *testing.T) {
-	ids := []int32{5, 11, 23, 41, 67, 89}
-	src := hfContainer(t, "synth-deepseek-dense")
-	m, err := Open(src, noTune, WithKVF16(false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	want := teacherForce(t, m, ids)
-	ran := 0
-	for _, spec := range stepDevices() {
-		if g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)); err == nil && g != nil {
-			g.Close()
-		} else {
-			t.Logf("%s: not present (%v)", spec, err)
-			continue
-		}
-		ran++
-		for _, f := range []struct {
-			name string
-			kind tier.MLAFault
-		}{
-			{"swap-the-absorb-banks", tier.MLAFaultSwapBanks},
-			{"value-head-major-in-the-row", tier.MLAFaultValueHeadMajor},
-			{"per-head-sheet-off-by-one", tier.MLAFaultSheetOff},
-		} {
-			t.Run(spec+"/"+f.name, func(t *testing.T) {
-				// The faults are in the tier's own latent kernels, which the arm
-				// runs whatever the build; the composer's violations are
-				// rewrites of its statement (TestComposedLatentViolations).
-				gpu, err := tier.OpenWith(tier.WithDevices(spec),
-					tier.WithDeviceTune(tier.TuneOff), tier.WithMLAFault(f.kind), composedOpt(0))
-				if err != nil || gpu == nil {
-					t.Fatalf("%s: %v", spec, err)
-				}
-				defer gpu.Close()
-				st := m.NewState(len(ids) + 1)
-				defer st.Close()
-				st.SetDeviceLayers(gpu, -1)
-				// The fault must be selected: a fault arm that declined every
-				// block would run the host and pass.
-				if n := st.GPULayers(); n != m.Cfg.NLayer {
-					t.Fatalf("the fault arm placed %d of %d blocks, so it ran the host: %v",
-						n, m.Cfg.NLayer, declineList(st))
-				}
-				got := runIDs(t, st, ids)
-				worst, worstD := worstOf(want, got)
-				if worst < mlaDeviceNMSE {
-					t.Fatalf("%s survived: worst logit NMSE %.3e, worst |dlogit| %.3f -- "+
-						"the gate does not see it", f.name, worst, worstD)
-				}
-				t.Logf("%s: caught at logit NMSE %.3e, |dlogit| %.3f", f.name, worst, worstD)
-			})
-		}
-	}
-	if ran == 0 {
-		t.Skip("no device on this host")
-	}
-}
-
 // mlaDeviceNMSE is the bound both the passing and the fault gates use. It is
 // the f32 reduction-order band between device and host, which grows with the
 // number of blocks below the seam; the violations land orders above it.
@@ -457,7 +392,7 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 			}
 			want := teacherForce(t, m, ids)
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), wholeStep)
+				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || gpu == nil {
 					continue
 				}

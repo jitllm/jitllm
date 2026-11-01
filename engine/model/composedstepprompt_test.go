@@ -11,27 +11,6 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// TestComposedStepPromptRunsPrefillAttention prefills a two-chunk prompt on a
-// device whose composer serves a step's parts and none of a prompt's
-// (tier.ComposedStep less tier.ComposedPrompt): the prompt's blocks are the
-// tier's, so its attention is the tier's prefill kernels, a chunk's rows
-// against the pages a launch, never the decode plan a row at a time
-// (Stats.PagedPrefillLaunches, every block of every chunk), and its logits
-// are the host's within the device band.
-func TestComposedStepPromptRunsPrefillAttention(t *testing.T) {
-	m, ids, want := composedPromptModel(t, "Qwen3-0.6B-Q8_0")
-	defer m.Close()
-	got, s0, s1 := composedPrompt(t, m, ids, tier.ComposedStep&^tier.ComposedPrompt)
-	n := s1.PagedPrefillLaunches - s0.PagedPrefillLaunches
-	chunks := (len(ids) + nn.MaxDevicePrefillChunk - 1) / nn.MaxDevicePrefillChunk
-	if n != chunks*m.Cfg.NLayer {
-		t.Fatalf("the prompt's attention ran the prefill kernels %d times, not once a block of each of its %d chunks (%d)",
-			n, chunks, chunks*m.Cfg.NLayer)
-	}
-	e := promptBand(t, got, want)
-	t.Logf("%d prefill attention launches, %d chunks of %d blocks, logits NMSE %.3e against the host", n, chunks, m.Cfg.NLayer, e)
-}
-
 // TestComposedPromptRunsOnTheMatrixUnit prefills a two-chunk prompt on a
 // device whose composer serves a step's parts and the prompt's
 // (tier.ComposedStep, the jitllmcomposed build's default): the prompt's
@@ -125,7 +104,7 @@ func matrixTileCount() int {
 // (tier.Config.MatrixTile).
 func composedPromptAt(t *testing.T, m *Model, ids []int32, parts tier.Parts, tile int) ([]float32, tier.Stats, tier.Stats) {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) { c.Composed, c.MatrixTile = parts, tile }))
+	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) { c.MatrixTile = tile }))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

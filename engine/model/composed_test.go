@@ -134,7 +134,7 @@ func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, p
 	// widths up to 64, each a form of the composer's where it serves them.
 	opts := append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) {
-			c.Composed, c.NoGraph, c.ComposedFloat, c.Census, c.PromptRows = parts, noGraph, float, true, 64
+			c.NoGraph, c.ComposedFloat, c.Census, c.PromptRows = noGraph, float, true, 64
 		})},
 		testTierOpts(t)...)
 	opts = append(opts, extra...)
@@ -286,8 +286,7 @@ func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 			defer m.Close()
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-						tier.WithConfig(func(c *tier.Config) { c.Composed = tier.ComposedStep })}, testTierOpts(t)...)...)
+					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, dev, err)
 					}
@@ -1023,7 +1022,7 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 					// counts are the steps'.
 					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 						tier.WithConfig(func(c *tier.Config) {
-							c.Composed, c.Census, c.NoGraph = tier.ComposedStep, true, true
+							c.Census, c.NoGraph = true, true
 						})},
 						testTierOpts(t)...)...)
 					if err != nil || g == nil {

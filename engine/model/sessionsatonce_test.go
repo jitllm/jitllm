@@ -175,23 +175,6 @@ func TestSessionsStepAtOnce(t *testing.T) {
 	defer m.Close()
 	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "vulkan:1", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true, 0)
-		})
-	}
-}
-
-// TestSessionsStepAtOnceComposed is TestSessionsStepAtOnce with the composer
-// serving the blocks and the head: each lane holds its own instance of the
-// device's forms, so the sessions' submissions run beside each other and
-// each still produces exactly what it produces alone.
-func TestSessionsStepAtOnceComposed(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
-		t.Run(spec, func(t *testing.T) {
 			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true, tier.ComposedBlock|tier.ComposedHead)
 		})
 	}
@@ -262,11 +245,7 @@ func atOncePlace(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32, b
 func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks int, beside bool, parts tier.Parts) {
 	t.Helper()
 	const seq = 256
-	var cfg func(*tier.Config)
-	if parts != 0 {
-		cfg = func(c *tier.Config) { c.Composed = parts }
-	}
-	g := atOnceTier(t, spec, cfg)
+	g := atOnceTier(t, spec, nil)
 	var alone [2]atOnceRun
 	for k := range prompts {
 		st, next := atOncePlace(t, m, g, seq, prompts[k], blocks)
@@ -610,26 +589,6 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 	for _, half := range []bool{false, true} {
 		for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
 			t.Run(fmt.Sprintf("%s/half=%v", spec, half), func(t *testing.T) {
-				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half, 0)
-			})
-		}
-	}
-}
-
-// TestSessionsRelocateAtOnceComposed is TestSessionsRelocateAtOnce with the
-// composer serving the blocks and the head: the relocating session's moves
-// free its blocks' instances in every lane and form them again at the
-// placement, beside the other session's composed submissions, and the hop
-// forms them on the second tier. No form is built at a step on either tier.
-func TestSessionsRelocateAtOnceComposed(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	for _, half := range []bool{false, true} {
-		for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
-			t.Run(fmt.Sprintf("%s/half=%v", spec, half), func(t *testing.T) {
 				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half, tier.ComposedBlock|tier.ComposedHead)
 			})
 		}
@@ -664,12 +623,8 @@ func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, hal
 	t.Helper()
 	const seq = 256
 	nl := m.Cfg.NLayer
-	var cfg func(*tier.Config)
-	if parts != 0 {
-		cfg = func(c *tier.Config) { c.Composed = parts }
-	}
-	g := atOnceTier(t, spec, cfg)
-	g2 := atOnceTier(t, spec, cfg)
+	g := atOnceTier(t, spec, nil)
+	g2 := atOnceTier(t, spec, nil)
 	place := func(prompt []int32, blocks int) (*State, int32) {
 		return atOncePlace(t, m, g, seq, prompt, blocks)
 	}

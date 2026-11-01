@@ -202,7 +202,6 @@ func TestKVEvictionRunsPastTheBudget(t *testing.T) {
 func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 	free := eg.run(t, false, nil)
 	got := eg.run(t, true, nil)
-	tierArm := eg.run(t, true, func(c *tier.Config) { c.Composed = 0 })
 	ref := eg.run(t, true, func(c *tier.Config) { c.ComposedFloat = true })
 	for name, r := range map[string]evictRun{"composed": got, "float reference": ref} {
 		for i, n := range r.st.BlockDeclines {
@@ -213,9 +212,6 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 		if r.st.ComposedStreamPasses == 0 {
 			t.Errorf("the %s arm ran no composed pass over the evicted history", name)
 		}
-	}
-	if tierArm.st.ComposedStreamPasses != 0 || tierArm.st.KVStreamPasses == 0 {
-		t.Errorf("main's tier arm: %d composed passes and %d streamed passes", tierArm.st.ComposedStreamPasses, tierArm.st.KVStreamPasses)
 	}
 	if got.after != got.resident {
 		t.Fatalf("%d of %d blocks on the card after the decode: eviction must not move blocks home (%s)",
@@ -262,13 +258,8 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 	if !(host < bound) {
 		t.Fatalf("worst logit NMSE %.3e against the host at step %d, past %.3e", host, hat, bound)
 	}
-	tw, tat := worstStep(got.logits, tierArm.logits)
 	rw, rat := worstStep(got.logits, ref.logits)
-	t.Logf("composed passes: %d, against main's tier squeezed %.3e (step %d), against the float reference squeezed %.3e (step %d)",
-		got.st.ComposedStreamPasses, tw, tat, rw, rat)
-	if !(tw < bound) {
-		t.Fatalf("worst logit NMSE %.3e against main's tier squeezed at step %d, past %.3e", tw, tat, bound)
-	}
+	t.Logf("composed passes: %d, against the float reference squeezed %.3e (step %d)", got.st.ComposedStreamPasses, rw, rat)
 	if !(rw < bound) {
 		t.Fatalf("worst logit NMSE %.3e against the float reference squeezed at step %d, past %.3e", rw, rat, bound)
 	}

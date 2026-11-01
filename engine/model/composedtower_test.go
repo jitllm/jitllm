@@ -329,7 +329,7 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 	hs.Close()
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec), composedOpt(towerParts))
+		g, err := tier.OpenWith(tier.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -354,8 +354,7 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 					served-s0, c.NLayer, declined, nonZero(st.BlockDeclines[:]), g.Err())
 			}
 			nm, worst := nmseOf(got, want)
-			t.Logf("%s, all %d blocks composed: projector output NMSE %.3e, max|d| %.4g; the tier's own kernels on the same picture %.3e",
-				spec, c.NLayer, nm, worst, tierTowerNMSE(t, tw, spec, px, want))
+			t.Logf("%s, all %d blocks composed: projector output NMSE %.3e, max|d| %.4g", spec, c.NLayer, nm, worst)
 			if !(nm < bound) {
 				t.Errorf("%s: the composed tower's encode reads NMSE %.3e against the host (bound %.0e)", spec, nm, bound)
 			}
@@ -433,27 +432,6 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 	}
 }
 
-// tierTowerNMSE is the whole encode of px with every block of tw on spec
-// run by the tier's own kernels, against want: what the composed arm's
-// reading is set beside.
-func tierTowerNMSE(t *testing.T, tw *Tower, spec string, px, want []float32) float64 {
-	t.Helper()
-	g, err := tier.OpenWith(tier.WithDevices(spec), composedOpt(0))
-	if err != nil || g == nil {
-		t.Fatalf("%s: %v", spec, err)
-	}
-	defer g.Close()
-	s := tw.testState()
-	defer s.Close()
-	s.SetDevice(g)
-	if n := s.GPUBlocks(); n != tw.Cfg.NLayer {
-		t.Fatalf("%s took %d of %d tower blocks on its own kernels (%s)", spec, n, tw.Cfg.NLayer, g.Err())
-	}
-	_, got := towerEncode(t, s, px)
-	nm, _ := nmseOf(got, want)
-	return nm
-}
-
 // TestComposedTowerOnDevice runs the device arm over the towers the tier
 // serves (tier.ComposedTower), Gemma 3's SigLIP among them: its 4096 rows
 // of 1152 are the flattened space whose live elements once wrapped 32 bits
@@ -465,47 +443,28 @@ func TestComposedTowerOnDevice(t *testing.T) {
 }
 
 // towerArm is one arm of a tower family's device gate: a device, its blocks
-// on the tier's own kernels or served by the composer (tier.ComposedStep,
-// tower blocks among its parts).
+// served by the composer.
 type towerArm struct {
-	spec     string
-	composed bool
+	spec string
 }
 
 // towerArms is each device's two arms.
 func towerArms() []towerArm {
 	var out []towerArm
 	for _, spec := range stepDevices() {
-		out = append(out, towerArm{spec, true})
+		out = append(out, towerArm{spec})
 	}
 	return out
 }
 
-func (a towerArm) String() string {
-	if a.composed {
-		return a.spec + "/composed"
-	}
-	return a.spec
-}
+func (a towerArm) String() string { return a.spec }
 
-// option is the tier option that asks for the arm's parts.
-func (a towerArm) option() tier.Option {
-	if a.composed {
-		return composedOpt(tier.ComposedStep)
-	}
-	return composedOpt(0)
-}
-
-// served runs encode and, in a composed arm, holds g's composer to having
-// served runs tower block runs in it and declined none: a composed arm whose
-// blocks ran on the tier's own kernels is no pass.
+// served runs encode and holds g's composer to having served runs tower
+// block runs in it and declined none.
 func (a towerArm) served(t *testing.T, g *tier.GPU, runs int, encode func()) {
 	t.Helper()
 	s0, d0, _ := g.Stats().ServedPart(tier.ComposedTower)
 	encode()
-	if !a.composed {
-		return
-	}
 	st := g.Stats()
 	s1, d1, u := st.ServedPart(tier.ComposedTower)
 	t.Logf("%s: %d tower block runs served by the composer, %d declined %v, %d unasked", a, s1-s0, d1-d0,

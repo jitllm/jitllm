@@ -445,9 +445,6 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 	const k = 4
 	var mopt []Option
 	topt := []tier.Option{}
-	if composed {
-		topt = append(topt, composedOpt(towerParts))
-	}
 	m0, tw0 := openTower(t, mopt...)
 	base := int(m0.container.H.NBlocks)
 	budget := 2 * m0.container.PageBytes(base)

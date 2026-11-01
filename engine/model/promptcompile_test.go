@@ -31,10 +31,8 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 		name     string
 		composed tier.Parts
 	}{
-		{"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", 0},
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", 0},
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", tier.ComposedBlock | tier.ComposedHead},
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt},
+		{"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", tier.ComposedStep},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", tier.ComposedStep},
 	} {
 		name := arm.name
 		p := testmodels.Path(name)
@@ -48,12 +46,9 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/tune%d/composed%d", name, tune, arm.composed), func(t *testing.T) {
 				g, err := tier.OpenWith(tier.WithDeviceTune(tune),
 					tier.WithConfig(func(c *tier.Config) {
-						c.NoPromptPrewarm, c.Composed = violate, arm.composed
 						// The composer forms a prompt block once, at the
 						// reserved width: the widest chunk here is 224 rows.
-						if arm.composed&tier.ComposedPrompt != 0 {
-							c.PromptRows = 256
-						}
+						c.NoPromptPrewarm, c.PromptRows = violate, 256
 					}))
 				if err != nil || g == nil {
 					t.Skipf("no GPU device: %v", err)
@@ -106,25 +101,20 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				t.Logf("%d compile(s) after placement; %d exact prompt chunk(s), %d width(s) warmed",
 					got, st.ExactPrompts, st.PromptWidthsWarmed)
 				// A prompt the composer serves runs in the reserved width, its
-				// rows the call's, and no other width is warmed; the tier's own
-				// kernels run each chunk at its own warmed width.
-				switch {
-				case arm.composed&tier.ComposedPrompt != 0 && (st.ExactPrompts != 0 || st.PromptWidthsWarmed != 0):
+				// rows the call's, and no other width is warmed.
+				if st.ExactPrompts != 0 || st.PromptWidthsWarmed != 0 {
 					t.Fatalf("with the composer serving the prompt, %d chunks ran at their own width and %d widths were warmed",
 						st.ExactPrompts, st.PromptWidthsWarmed)
-				case arm.composed&tier.ComposedPrompt == 0 && st.ExactPrompts < len(chunks):
-					t.Fatalf("%d of %d chunks ran at their own width: the warmed widths were not the ones used",
-						st.ExactPrompts, len(chunks))
 				}
 				if got != 0 {
 					t.Fatalf("%d kernel(s) compiled after the blocks were placed", got)
 				}
-				if served, _, _ := st.ServedPart(arm.composed); arm.composed != 0 && served == 0 {
+				if served, _, _ := st.ServedPart(arm.composed); served == 0 {
 					t.Fatalf("the composer served none of the parts asked of it: %s", g.Err())
 				}
 				// Every chunk's every block step the composer's, each at its
 				// own width's form.
-				if arm.composed&tier.ComposedPrompt != 0 {
+				{
 					np, dp, up := st.ServedPart(tier.ComposedPrompt)
 					if np != len(chunks)*m.Cfg.NLayer || dp != 0 || up != 0 {
 						t.Fatalf("the composer served %d block steps of %d chunks of %d blocks, declined %d and was not asked for %d: %s",
@@ -143,8 +133,6 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 							t.Fatalf("%d declined prompt block(s) compiled their own kernels at a chunk: %s", n, tier.DeclineName(i))
 						}
 					}
-				} else if st.PromptBlocksLeft != 0 {
-					t.Fatalf("with the prompt the tier's own, the placement left %d blocks' prompt kernels uncompiled", st.PromptBlocksLeft)
 				}
 				ran++
 			})

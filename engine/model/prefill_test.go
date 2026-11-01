@@ -108,10 +108,8 @@ func TestPrefillMatchesForward(t *testing.T) {
 				path                   string
 				parts                  tier.Parts
 				mixed, windows, shadow bool
-			}{{"tier", llama, 0, false, false, false}, {"composed", llama, parts, false, false, false},
-				{"mixed", llama, parts, true, false, false}, {"windowed tier", gemma, 0, false, true, false},
-				{"windowed", gemma, parts, false, true, false}, {"shadowed", llama, parts, false, false, true},
-				{"tinyllama tier", tiny, 0, false, false, false}, {"tinyllama composed", tiny, parts, false, false, false}} {
+			}{{"composed", llama, parts, false, false, false}, {"windowed", gemma, parts, false, true, false},
+				{"shadowed", llama, parts, false, false, true}, {"tinyllama composed", tiny, parts, false, false, false}} {
 				t.Run(dev+"/"+arm.name, func(t *testing.T) {
 					prefillOnDevice(t, arm.path, dev, arm.parts, arm.mixed, arm.windows, arm.shadow)
 				})
@@ -151,7 +149,7 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 	// The prompt goes in chunks of at most 64 rows: the device reserves and
 	// warms the widths up to 64, each a form of the composer's.
 	opts := []tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.Composed, c.TierBlocks, c.PromptRows = parts, keep, 64 })}
+		tier.WithConfig(func(c *tier.Config) { c.TierBlocks, c.PromptRows = keep, 64 })}
 	if shadow {
 		opts = append(opts, tier.WithComposedShadow())
 	}

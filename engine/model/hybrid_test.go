@@ -684,9 +684,6 @@ func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string, how hyDev) (float64,
 	if how.noGraph {
 		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 	}
-	if how.composed {
-		opts = append(opts, composedOpt(composedParts))
-	}
 	g, err := tier.OpenWith(opts...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
@@ -851,7 +848,7 @@ func TestPagedWeightsAreNeverServedStale(t *testing.T) {
 			}
 		}
 		// Pinned: see hybridDeviceNMSEOn.
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), wholeStep)
+		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

@@ -42,26 +42,13 @@ func TestBlocksMoveBetweenDevices(t *testing.T) {
 	names := append([]string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf"}, relocModels()...)
 	for _, name := range names {
 		path := jlmOf(t, testmodels.Path(name))
-		for _, parts := range composedArms(t, path) {
-			arms := []tier.Parts{parts}
-			// The whole step composed too: a decode row's and a prompt's input
-			// rows gathered by the composer on the head's card, wherever
-			// block 0 has moved.
-			if parts != 0 {
-				arms = append(arms, tier.ComposedStep)
-			}
-			for _, parts := range arms {
-				arm := composedArm(name, parts)
-				if parts == tier.ComposedStep {
-					arm = name + "/step"
-				}
-				t.Run(arm, func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveWhole, parts) })
-				t.Run(arm+"/host", func(t *testing.T) {
-					blocksMoveBetweenDevices(t, path, moveHost, parts, WithDirectMoves(false))
-				})
-				t.Run(arm+"/upper", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveUpper, parts) })
-			}
-		}
+		// A decode row's and a prompt's input rows gathered by the composer
+		// on the head's card, wherever block 0 has moved.
+		t.Run(name, func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveWhole, composedParts) })
+		t.Run(name+"/host", func(t *testing.T) {
+			blocksMoveBetweenDevices(t, path, moveHost, composedParts, WithDirectMoves(false))
+		})
+		t.Run(name+"/upper", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveUpper, composedParts) })
 	}
 	// With the composed CPU on: a block the State composed for the CPU at
 	// its placement there releases its composition as it goes to a card,
@@ -69,7 +56,7 @@ func TestBlocksMoveBetweenDevices(t *testing.T) {
 	for _, name := range cpuServedModels {
 		path := jlmOf(t, testmodels.Path(name))
 		t.Run(name+"/composed-cpu", func(t *testing.T) {
-			blocksMoveBetweenDevices(t, path, moveWhole, 0)
+			blocksMoveBetweenDevices(t, path, moveWhole, composedParts)
 		})
 	}
 }
@@ -89,7 +76,7 @@ func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts tier.Par
 // the tier's counts once the moves ran.
 func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts tier.Parts, check func(tier.Stats), opts ...Option) {
 	a, b := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
+	g, err := tier.OpenWith(tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a+","+b, err)
 	}

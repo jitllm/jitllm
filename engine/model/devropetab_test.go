@@ -59,7 +59,7 @@ func ropeTableMatchesTheUpload(t *testing.T, parts tier.Parts) {
 			// Poisoned scratch on both arms: position 0's sine plane is zero, so
 			// an unwritten table would read as correct from a zeroed buffer.
 			g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff),
-				tier.WithPoisonScratch(true), tier.WithConfig(func(c *tier.Config) { c.Composed = parts }))
+				tier.WithPoisonScratch(true))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}
@@ -200,7 +200,7 @@ func TestRopeTablePrefillChunkMatchesTheUpload(t *testing.T) {
 	}
 	ids = ids[:2*chunk]
 
-	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), wholeStep, tier.WithPoisonScratch(true))
+	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithPoisonScratch(true))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

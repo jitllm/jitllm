@@ -267,7 +267,7 @@ func TestLlama4OnDeviceMatchesHost(t *testing.T) {
 	ran := 0
 	for _, arm := range towerArms() {
 		spec := arm.spec
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), arm.option())
+		gpu, err := tier.OpenWith(tier.WithDevices(spec))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

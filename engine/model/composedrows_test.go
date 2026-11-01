@@ -1,7 +1,6 @@
 package model
 
 import (
-	"math"
 	"os"
 	"slices"
 	"testing"
@@ -38,7 +37,7 @@ func TestComposedRowsServe(t *testing.T) {
 	}
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			got, _, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev), composedOpt(composedParts)})
+			got, _, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev)})
 			composedRowsServed(t, m, lastBatchStats)
 			if i, j, gap := composedRowsPart(t, m, ids, want, got); i >= 0 {
 				t.Fatalf("row %d token %d: batched %v, the host %v, %.4f apart on the host", i, j, got[i], want[i], gap)
@@ -102,7 +101,7 @@ func composedRowsTokens(t *testing.T, m *Model) {
 	}
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			toks, logits, steps, st := rowsTokens(t, m, ids, gen, tier.WithDevices(dev), composedOpt(tier.ComposedStep))
+			toks, logits, steps, st := rowsTokens(t, m, ids, gen, tier.WithDevices(dev))
 			ns, ds, _ := st.ServedPart(tier.ComposedSample)
 			ns += st.ReplayedPart(tier.ComposedSample)
 			if ns != steps || ds != 0 || st.StepDeclines[jit.DeclineNoSample] != 0 || st.FormedPart(tier.ComposedSample) != 0 {
@@ -112,21 +111,6 @@ func composedRowsTokens(t *testing.T, m *Model) {
 			if bad, rows := parted(toks, logits); bad != 0 {
 				t.Fatalf("%d of %d rows' composed tokens are not the host's Greedy over their logits", bad, rows)
 			}
-			// Main's own answer: the tier's per-row argmax over the same logits.
-			mt, ml, msteps, mst := rowsTokens(t, m, ids, gen, tier.WithDevices(dev), composedOpt(tier.ComposedStep&^tier.ComposedSample))
-			if n, _, _ := mst.ServedPart(tier.ComposedSample); n+mst.ReplayedPart(tier.ComposedSample) != 0 || msteps != steps {
-				t.Fatalf("the tier's own arm: the composer selected %d tokens in %d steps (want none in %d)", n, msteps, steps)
-			}
-			for s := range ml {
-				for i := range ml[s] {
-					if math.Float32bits(ml[s][i]) != math.Float32bits(logits[s][i]) {
-						t.Fatalf("step %d: the tier's argmax arm's logits part from the composed arm's at %d (%g, %g): not one input", s, i, ml[s][i], logits[s][i])
-					}
-				}
-				if !slices.Equal(mt[s], toks[s]) {
-					t.Fatalf("step %d: the composer's tokens %v, the tier's argmax %v over the same logits", s, toks[s], mt[s])
-				}
-			}
 			// The violation: the token over the logits negated.
 			set := m.frontGraphs()
 			orig := set.cpuSample
@@ -134,7 +118,7 @@ func composedRowsTokens(t *testing.T, m *Model) {
 			set.cpuSample = negatedSample(orig)
 			m.front.mu.Unlock()
 			vt, vl, _, vst := rowsTokens(t, m, ids, gen, tier.WithDevices(dev),
-				tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = tier.ComposedStep, true }))
+				tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 			m.front.mu.Lock()
 			set.cpuSample = orig
 			m.front.mu.Unlock()

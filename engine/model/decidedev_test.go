@@ -378,7 +378,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						// given back first (as the violation's arm above).
 						composed := func(noPickMV bool) *tier.GPU {
 							return open(tier.WithBudget(need), tier.WithHostBudget(need), tier.WithConfig(func(c *tier.Config) {
-								c.Composed, c.NoPickMV = tier.ComposedStep|tier.ComposedPrompt, noPickMV
+								c.NoPickMV = noPickMV
 							}))
 						}
 						g := composed(false)
