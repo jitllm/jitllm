@@ -9891,3 +9891,21 @@ references hold at f32.
 **Found on the M4, not this model's**: `TestKVPagesRelocateWithTheLayer`
 opens no fused run there (0 of 624 asked for, and the same for
 synth-kimik3), so its fused-run check is red on arm64 whatever the model.
+
+## The sampler's order of the cuts and the temperature
+
+The engine held two orders. The device sampler (`jit/cpu/sample.go`, and the
+speculative sampler's distribution in `engine/model/specsample.go`) cut the
+top-k candidates by top-p and min-p over their softmax at temperature 1 and
+tempered only the draw over the survivors; the host's `Sampler` tempered
+first. The same seed drew from different sets on the two paths, and
+`TestForwardSampleMatchesSampleOverForward/Llama-3.2-1B` drew a token outside
+the host's nucleus on the device path.
+
+The host now follows the device: penalty, top-k, top-p, min-p, then the
+temperature, on every path. transformers' `generate` tempers first (its
+`TemperatureLogitsWarper` precedes the top-k, top-p and min-p warpers), so
+at a temperature other than 1 the two keep different candidates; at 4,
+tempering first keeps several more (`TestSamplerCutsBeforeTheTemperature`
+pins the order and fails on the old one). One order on every device was the
+user's decision; the forward-sample gate passes on the V100 with it.
