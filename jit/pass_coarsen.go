@@ -14,7 +14,8 @@ import (
 // kernel's nodes at the reading coordinates: a finer one at each element of
 // the thread's unit, a coarser reduction as each thread's partial over its
 // own terms exchanged through a workgroup slot and combined over its group's
-// slots. What is not a temporary is stored. Where the chain
+// slots. What is not a temporary is stored, and a temporary a kernel
+// outside the chain reads (the binary16 halves a matrix kernel stages). Where the chain
 // reads the last phase of a workgroup row -- one workgroup, so the phase
 // sees every element the row wrote -- it joins that row as a further phase,
 // the row's value recomputed from the phase's own expression.
@@ -35,7 +36,7 @@ func (c Coarsen) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if i > 0 && out[i-1].Work && out[i-1].Kind != PrimMatrix && out[i-1].Part == out[i].Part {
 			host = out[i-1]
 		}
-		m, ok := Coarsen{Unit: unit}.form(out[i:i+n], host, d, true)
+		m, ok := Coarsen{Unit: unit}.form(out[i:i+n], host, d, true, readOutside(out, i, n))
 		if !ok {
 			continue
 		}
@@ -57,6 +58,28 @@ func (c Coarsen) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		out = append(append(out[:i:i], m), out[i+n:]...)
 	}
 	return out, nil
+}
+
+// readOutside is what the kernels around ks[i:i+n] read: a member's
+// temporary one of them reads is stored, as a value is.
+func readOutside(ks []*Kernel, i, n int) map[Operand]bool {
+	read := map[Operand]bool{}
+	for j, k := range ks {
+		if j >= i && j < i+n {
+			continue
+		}
+		for _, nd := range k.Nodes {
+			if nd.Op == OpLoad {
+				read[k.Bufs[nd.Buf].Operand] = true
+			}
+		}
+		for _, l := range k.Loops {
+			for _, c := range l.Cursors {
+				read[k.Bufs[c.Buf].Operand] = true
+			}
+		}
+	}
+	return read
 }
 
 // terms is a member's finest elements: its elements times its loop's trips.
@@ -216,7 +239,7 @@ type coarse struct {
 	under, exchanged bool
 }
 
-func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool) (*Kernel, bool) {
+func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool, outside map[Operand]bool) (*Kernel, bool) {
 	lanes, warp := d.Lanes, d.warp()
 	E := 0
 	for _, k := range members {
@@ -307,7 +330,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool) (*K
 	k.local = k.m.add(Node{Op: OpLocal, Type: ir.U32, A: k.u})
 	for _, n := range members {
 		for _, s := range n.Stores {
-			if s.Barrier || s.Run || n.Bufs[s.Buf].Operand.Temp || k.err != nil {
+			if o := n.Bufs[s.Buf].Operand; s.Barrier || s.Run || o.Temp && !outside[o] || k.err != nil {
 				continue
 			}
 			for _, idx := range k.indices(n) {
@@ -334,7 +357,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool) (*K
 		return nil, false
 	}
 	if k.under && k.exchanged {
-		return c.form(members, host, d, false)
+		return c.form(members, host, d, false, outside)
 	}
 	if host != nil {
 		k.m.Stores = append(k.m.Stores, Store{Barrier: true, At: -1})
