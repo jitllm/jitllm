@@ -8015,6 +8015,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			if inst == nil {
 				if err == nil {
 					err = fmt.Errorf("tier: the composer does not serve block %d at %d rows: %s", li, R, DeclineName(int(why)))
+					if why == partNoRoom && g.LastErr != "" {
+						err = fmt.Errorf("%w (%s)", err, g.LastErr)
+					}
 				}
 				continue
 			}
