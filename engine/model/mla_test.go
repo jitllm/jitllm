@@ -178,7 +178,6 @@ func TestMLAPrefillMatchesDecode(t *testing.T) {
 // every block step served.
 func TestMLABatchMatchesDecode(t *testing.T) {
 	for _, name := range mlaFixtures() {
-		t.Run(name, func(t *testing.T) { mlaBatchMatchesDecode(t, name, false) })
 		t.Run(name+"/composed-cpu", func(t *testing.T) { mlaBatchMatchesDecode(t, name, true) })
 	}
 }

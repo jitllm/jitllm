@@ -211,27 +211,6 @@ func TestStepRunsChainGateDiscriminates(t *testing.T) {
 	}
 }
 
-// TestStepRunsOneRowHeadGateDiscriminates runs the one-row head's gate with
-// the head launched through decode's own kernel, which reads the wanted row's
-// sums where the next row's scales are, and demands it fails.
-//
-//	go test -tags jitllmfault ./engine/model -run TestStepRunsOneRowHeadGateDiscriminates
-func TestStepRunsOneRowHeadGateDiscriminates(t *testing.T) {
-	m := openStepDense(t)
-	defer m.Close()
-	for _, dev := range stepDevices() {
-		t.Run(dev, func(t *testing.T) {
-			tier.SetRowsFault("headone")
-			defer tier.SetRowsFault("")
-			w, at, ones := oneRowHeadGap(t, m, dev)
-			t.Logf("headone: %d one-row heads, worst logit NMSE %.3e (row %d)", ones, w, at)
-			if w < oneRowHeadNMSE {
-				t.Fatalf("the gate passed with the one-row head misreading its row, at NMSE %.3e", w)
-			}
-		})
-	}
-}
-
 // TestStagedPagedPrefillGateDiscriminates launches the staged prefill's softmax
 // 64 wide whatever its lanes, a width the kernel does not declare, and demands
 // every backend refuse it by the kernel's name and the prompt fail saying so.

@@ -240,7 +240,7 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 		for _, arm := range []struct {
 			name string
 			m    *Model
-		}{{spec, m}, {spec + "/composed-cpu", mc}} {
+		}{{spec + "/composed-cpu", mc}} {
 			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 			if err != nil || gpu == nil {
 				t.Logf("%s: not present (%v)", spec, err)

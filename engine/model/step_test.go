@@ -50,12 +50,11 @@ func stepAcrossSessions(t *testing.T, m *Model, spec string) {
 	}
 	defer g.Close()
 	r := stepGate(t, m, g, false)
-	// The configuration this gates: a step of up to four sequences runs the
-	// decode matvec with every token in one thread (tier.groupMV).
-	if g.Stats().RagGroupMV == 0 {
-		t.Fatalf("no few-sequence decode matvec ran: the step took the tiled twins (%s)", g.Err())
+	// The configuration this gates: the composer serves the step's rows, every
+	// sequence's, as one call of its blocks.
+	if n, d, _ := g.Stats().ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+		t.Fatalf("the composer served %d of the step's block steps and declined %d (%s)", n, d, g.Err())
 	}
-	t.Logf("%d few-sequence decode matvecs, %d sm_70 tensor-core matvecs", g.Stats().RagGroupMV, g.Stats().VoltaMV)
 	if bound := denseStepBand * ctl; !(r.worst < bound) {
 		t.Fatalf("a step across sessions disagrees with each session alone: NMSE %.3e at row %d, bound %.3e "+
 			"(%dx the order-only control)", r.worst, r.at, bound, denseStepBand)
@@ -472,26 +471,23 @@ const denseStepBand = 8
 
 // orderControl is the dense step gate's order-only control: stepGate's
 // sessions decoded alone on dev for as many steps, on tiers that differ only
-// in the matvec split they pin -- the same arithmetic summed in another order
-// and nothing else -- each fed the split-1 arm's greedy tokens, and the worst
-// logit NMSE of split 2, 4 and 8 against split 1. It runs before the gate
-// opens its own tier, so a card holds one placement of the model at a time.
-// It fails rather than return a control that moved nothing, which could size
-// no band.
+// in whether the composer cuts its sums into segments (Config.ComposedUnsplit)
+// -- the same arithmetic summed in another order and nothing else -- the
+// unsplit arm fed the split arm's greedy tokens, and the worst logit NMSE
+// between them. It runs before the gate opens its own tier, so a card holds
+// one placement of the model at a time. It fails rather than return a control
+// that moved nothing, which could size no band.
 //
-// Three order changes and not one, because a model's most sensitive row
-// answers each differently: SmolLM3-3B on the M4 moves its row 22 by 9.2e-03,
-// 7.1e-03 and 3.5e-02 at splits 2, 4 and 8 while its other 23 rows stay within
-// 2x of each other, and its step reads 6.2e-02 there -- 8.8x the split-4
-// control alone, and 1.27x it in geometric mean over the rows. One sample of
-// an order change is not the model's order sensitivity at its worst row.
+// The composer has this one order change to offer; the three split pins it
+// replaces were main's matvec's, sampled because a model's most sensitive
+// row answers each differently (SmolLM3-3B's row 22 on the M4).
 func orderControl(t *testing.T, m *Model, dev string) float64 {
 	t.Helper()
 	const steps = 8 // stepGate's
 	var fed [][]int32
-	arm := func(split int) [][]float32 {
+	arm := func(unsplit bool) [][]float32 {
 		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithSplit(split)}, testTierOpts(t)...)...)
+			tier.WithConfig(func(c *tier.Config) { c.ComposedUnsplit = unsplit })}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)
 		}
@@ -507,8 +503,8 @@ func orderControl(t *testing.T, m *Model, dev string) float64 {
 				t.Fatal(err)
 			}
 			if sts[i].GPULayers() != m.Cfg.NLayer || !sts[i].HeadOnDevice() {
-				t.Skipf("CARD TOO SMALL for the order-only control: %d of %d blocks at split %d (%s)",
-					sts[i].GPULayers(), m.Cfg.NLayer, split, g.Err())
+				t.Skipf("CARD TOO SMALL for the order-only control: %d of %d blocks, unsplit %v (%s)",
+					sts[i].GPULayers(), m.Cfg.NLayer, unsplit, g.Err())
 			}
 			lg, err := sts[i].Prefill(ids)
 			if err != nil {
@@ -532,17 +528,13 @@ func orderControl(t *testing.T, m *Model, dev string) float64 {
 		}
 		return out
 	}
-	a1 := arm(1)
-	w := 0.0
-	for _, sp := range []int{2, 4, 8} {
-		ax := arm(sp)
-		wx, at := worstStep(a1, ax)
-		if wx == 0 || math.IsNaN(wx) {
-			t.Fatalf("the order-only control at split %d moved nothing (%v): it cannot size the band", sp, wx)
-		}
-		t.Logf("order-only control (split 1 against %d, each session alone): worst logit NMSE %.3e (row %d); "+
-			"rows %s", sp, wx, at, stepRows(a1, ax))
-		w = max(w, wx)
+	a1 := arm(false)
+	ax := arm(true)
+	w, at := worstStep(a1, ax)
+	if w == 0 || math.IsNaN(w) {
+		t.Fatalf("the order-only control moved nothing (%v): it cannot size the band", w)
 	}
+	t.Logf("order-only control (split sums against unsplit, each session alone): worst logit NMSE %.3e (row %d); "+
+		"rows %s", w, at, stepRows(a1, ax))
 	return w
 }

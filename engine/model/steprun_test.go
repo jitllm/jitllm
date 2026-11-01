@@ -83,65 +83,6 @@ func TestStepRunsAdmitsAPromptBesideDecoding(t *testing.T) {
 	}
 }
 
-// TestStepRunsOneRowHeadMatchesTheBatchedHead is the gate on the ragged
-// step's one-row head: a step in which one row alone wants logits -- one
-// session decoding beside another's prompt chunk -- projects that row through
-// decode's own head matvec rather than a batched twin over every row. The
-// logits must match the batched head's for that row, which is the same step
-// with tier.Config.NoRagHeadOne. Stats.RagHeadOne is the selection check, on
-// both arms: the one-row path ran in the first and not in the second.
-func TestStepRunsOneRowHeadMatchesTheBatchedHead(t *testing.T) {
-	m := openStepDense(t)
-	defer m.Close()
-	for _, dev := range stepDevices() {
-		t.Run(dev, func(t *testing.T) {
-			w, at, ones := oneRowHeadGap(t, m, dev)
-			t.Logf("%d one-row heads: worst logit NMSE %.3e (row %d) against the batched head", ones, w, at)
-			if !(w < oneRowHeadNMSE) {
-				t.Fatalf("the one-row head disagrees with the batched head: NMSE %.3e at row %d", w, at)
-			}
-		})
-	}
-}
-
-// oneRowHeadNMSE bounds the one-row head against the batched head: the same
-// projection of the same row, summed in another order -- 0 to 3e-14 on most
-// backends -- and where the batched twin uses tensor cores it reads the
-// activation in binary16, 5.1e-5 from the int8 decode matvec. The violation (TestStepRunsOneRowHeadGateDiscriminates)
-// reads 2.8 to 3.3 on every backend.
-const oneRowHeadNMSE = 1e-3
-
-// oneRowHeadGap runs one session decoding beside another's prompt chunks
-// twice on dev, the one-row head on and off, and returns the worst logit NMSE
-// between the arms and how many one-row heads the first ran.
-func oneRowHeadGap(t *testing.T, m *Model, dev string) (float64, int, int) {
-	t.Helper()
-	plan := runsPlan{early: []string{"The capital of France is"},
-		late: "The clerk counted barrels of salt on the upper floor, and", chunk: 3, steps: 2}
-	run := func(off bool) ([][]float32, int) {
-		g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.NoRagHeadOne = off }))
-		if err != nil || g == nil {
-			noDevice(t, dev, err)
-		}
-		defer g.Close()
-		// The alone arm is only the teacher here: both arms read its tokens.
-		plan.alone(t, m, g)
-		got, _ := plan.together(t, m, g)
-		return got, g.Stats().RagHeadOne
-	}
-	on, ones := run(false)
-	off, none := run(true)
-	switch {
-	case ones == 0:
-		t.Fatal("no step ran the one-row head: every step projected through a batched twin")
-	case none != 0:
-		t.Fatalf("%d one-row heads ran with NoRagHeadOne set: the reference arm is the path under test", none)
-	}
-	w, at := worstStep(on, off)
-	return w, at, ones
-}
-
 // openStepDense opens the dense model the step gates run.
 func openStepDense(t *testing.T) *Model {
 	t.Helper()

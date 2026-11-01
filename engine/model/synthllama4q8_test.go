@@ -69,7 +69,7 @@ func TestSynthLlama4Q8MatchesTransformers(t *testing.T) {
 // TestSynthLlama4Q8BatchedPrefillOnDevice holds the device's BATCHED prefill on
 // the quantized fixture -- the one path the F32 fixture cannot reach, because a
 // float bank has no grouped mixture kernel -- against the host, and checks the
-// grouped mixture actually ran (by counter). The input-weighted mixture reads
+// composer served the prompt's blocks (by counter). The input-weighted mixture reads
 // each sorted column's weight through its (token, slot) pair; a wrong index is
 // a finite, plausible, different model.
 func TestSynthLlama4Q8BatchedPrefillOnDevice(t *testing.T) {
@@ -98,13 +98,13 @@ func TestSynthLlama4Q8BatchedPrefillOnDevice(t *testing.T) {
 			if n := st.GPULayers(); n != m.Cfg.NLayer {
 				t.Fatalf("%s took %d of %d blocks: %v %v", spec, n, m.Cfg.NLayer, st.DeviceDeclines(), gpu.Err())
 			}
-			before := gpu.Stats().GroupedMoE
+			n0, d0, _ := gpu.Stats().ServedPart(tier.ComposedPrompt)
 			got, err := st.Prefill(g.IDs)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n := gpu.Stats().GroupedMoE - before; n == 0 {
-				t.Fatalf("the grouped mixture never ran (%s), so this compared the per-row path", gpu.Err())
+			if n, d, _ := gpu.Stats().ServedPart(tier.ComposedPrompt); n == n0 || d != d0 {
+				t.Fatalf("the composer served %d of the prompt's block steps and declined %d (%s), so this compared no batched mixture", n-n0, d-d0, gpu.Err())
 			}
 			// The chunk must have stayed on the device: a demotion restarts it
 			// on the host, whose answer matches exactly.
@@ -116,7 +116,7 @@ func TestSynthLlama4Q8BatchedPrefillOnDevice(t *testing.T) {
 				t.Fatalf("batched prefill on %s: NMSE %.3e, argmax %d against the host's %d",
 					spec, nmse, Greedy(got), Greedy(want))
 			}
-			t.Logf("batched prefill on %s, grouped mixture ran: NMSE %.3e against the host", spec, nmse)
+			t.Logf("batched prefill on %s, the prompt's blocks composed: NMSE %.3e against the host", spec, nmse)
 		})
 	}
 	if ran == 0 {
