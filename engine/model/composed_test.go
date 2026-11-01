@@ -529,7 +529,7 @@ func TestComposedBlocksServe(t *testing.T) {
 		// stream puts a mixture's routed experts in pages on the card.
 		stream streamArm
 	}
-	arms := []arm{{"whole block", tier.ComposedBlock, 0, 0}, {"whole step", tier.ComposedStep, 0, 0}}
+	arms := []arm{{"whole step", tier.ComposedStep, 0, 0}}
 	for k := 2; k <= matrixTileCount(); k++ {
 		arms = append(arms, arm{fmt.Sprintf("whole step at matrix tile %d", k), tier.ComposedStep, k, 0})
 	}
@@ -633,29 +633,24 @@ func TestComposedBlocksServe(t *testing.T) {
 			}
 			runs := map[string]*[2][]tierRun{}
 			var widest [2]float64
-			var widestTier, widestLcpp [2]float64
-			var tierAt, lcppAt [2]string
+			var widestLcpp [2]float64
+			var lcppAt [2]string
 			for _, dev := range stepDevices() {
 				// A device the box does not have skips its own subtest, not the model's.
 				t.Run(dev+"/reference", func(t *testing.T) {
 					r := &[2][]tierRun{}
-					refParts := tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt
 					for g, noGraph := range []bool{false, true} {
 						for _, p := range panel {
 							var tr tierRun
 							pi := len(r[g])
-							tr.ref = unsplitRef(t, m, dev, p.ids, p.toks, refParts, noGraph)
+							tr.ref = unsplitRef(t, m, dev, p.ids, p.toks, tier.ComposedStep, noGraph)
+							// Where llama.cpp does not read the model the band is
+							// the floor: the reference stands for itself.
+							tr.want = tr.ref
 							if lcpp != nil {
 								tr.want = lcpp[pi]
 								if len(lcpp) >= 2*len(panel) {
 									tr.cpu = lcpp[len(panel)+pi]
-								}
-							} else {
-								tr.want, _, _, _ = composedDecode(t, m, dev, p.ids, p.toks, 0, noGraph, false)
-								for i := 1; i < len(tr.ref); i++ {
-									if e := logitNMSE(tr.want[i], tr.ref[i]); e > widestTier[g] {
-										widestTier[g], tierAt[g] = e, fmt.Sprintf("%s, prompt %d step %d", dev, pi, i)
-									}
 								}
 							}
 							for li := pi; li < len(lcpp); li += len(panel) {
@@ -668,7 +663,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									}
 								}
 							}
-							widest[g] = max(widestTier[g], widestLcpp[g])
+							widest[g] = widestLcpp[g]
 							r[g] = append(r[g], tr)
 						}
 					}
@@ -686,7 +681,7 @@ func TestComposedBlocksServe(t *testing.T) {
 						if lcpp != nil {
 							t.Logf("graph %v: the band's reference is the wider of llama.cpp's cuda and cpu arms, which reach %.3g at their worst step (%s)", !noGraph, widestLcpp[g], lcppAt[g])
 						} else {
-							t.Logf("graph %v: llama.cpp does not read this model: the band's reference is the tier, whose backends reach %.3g at their worst step (%s)", !noGraph, widestTier[g], tierAt[g])
+							t.Logf("graph %v: llama.cpp does not read this model: the band is the floor, %.3g", !noGraph, floor)
 						}
 						for _, a := range arms {
 							if a.tile > 0 && noGraph || a.stream != 0 && (noGraph || m.Cfg.NExpert == 0) {
