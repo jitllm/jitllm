@@ -37,7 +37,7 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 		}{{"pos", tier.SetPagedFault}, {"alias", tier.SetPagedFault}, {"headrow", tier.SetRowsFault}} {
 			t.Run(dev+"/"+f.name, func(t *testing.T) {
 				f.arm(f.name)
-				got, _, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev)})
+				got, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev)})
 				f.arm("")
 				composedRowsServed(t, m, lastBatchStats)
 				i, j, gap := composedRowsPart(t, m, ids, want, got)

@@ -528,12 +528,12 @@ func unclampTower(tw *Tower) func() {
 	}
 }
 
-// TestComposedProjectorOnCPU holds the projector ALONE, composed for the
-// CPU (towerProjOf), to main's on the same rows that are no picture: each
-// tower's regroup, pool, norm, matrices and activation and the window
-// order's put-back, counted served, and each family's violation of the op
-// it adds seen -- the regroup's slots swapped, the pool reading a group's
-// first patch alone, the merged rows left in the window order.
+// TestComposedProjectorOnCPU runs the projector ALONE, composed for the CPU
+// (towerProjOf), on rows that are no picture, counted served, and requires
+// each family's violation of the op it adds to move it: the regroup's slots
+// swapped, the pool reading a group's first patch alone, the merged rows left
+// in the window order. TestProjectorMatchesTransformers holds the clean
+// projector to the reference.
 func TestComposedProjectorOnCPU(t *testing.T) {
 	for _, f := range composedTowers() {
 		t.Run(f.name, func(t *testing.T) {
@@ -546,7 +546,7 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 			}
 			side := c.ImageSz / c.PatchSz
 			x := projectorRows(side*side, c.NEmbd)
-			project := func(tw *Tower, composed bool) []float32 {
+			project := func(tw *Tower) []float32 {
 				s := tw.testState()
 				defer s.Close()
 				s.windowOrder(side, side)
@@ -556,23 +556,14 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 				}
 				served, declined := s.CPUProjectorSteps()
 				why, werr := s.CPUProjectorUncovered()
-				if composed && served != 1 {
+				if served != 1 {
 					t.Fatalf("the composed projector served %d of 1 (declines %v; %s %v)", served, nonZero(declined[:]), why, werr)
-				}
-				if !composed && served != 0 {
-					t.Fatalf("main's arm ran the composed projector")
 				}
 				return append([]float32(nil), got...)
 			}
-			want := project(rtw, false)
+			want := project(rtw)
 			m, tw := f.open(t, noTune)
 			defer m.Close()
-			got := project(tw, true)
-			nm, worst := nmseOf(got, want)
-			t.Logf("the composed projector alone: NMSE %.3e, max|d| %.4g over %d rows", nm, worst, len(want)/c.ProjDim)
-			if !(nm < 1e-6) {
-				t.Fatalf("the composed projector alone reads NMSE %.3e from main's (bound 1e-6)", nm)
-			}
 			var vio string
 			switch {
 			case c.WinPattern > 0:
@@ -586,7 +577,7 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 				t.Logf("a projector of a patch a row adds no op to violate")
 				return
 			}
-			bad := project(tw, true)
+			bad := project(tw)
 			tw.Cfg.fault = towerFaultNone
 			nb, _ := nmseOf(bad, want)
 			t.Logf("violation (%s): NMSE %.3e", vio, nb)
@@ -595,7 +586,7 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 			}
 			if tw.projInNorm != nil {
 				tw.Cfg.fault = faultNoPatchNorm
-				bad := project(tw, true)
+				bad := project(tw)
 				tw.Cfg.fault = towerFaultNone
 				nb, _ := nmseOf(bad, want)
 				t.Logf("violation (no norm over each patch before the merge): NMSE %.3e", nb)

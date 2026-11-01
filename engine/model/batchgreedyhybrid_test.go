@@ -82,7 +82,7 @@ func batchAloneGate(t *testing.T, env, def, kind string, is func(Config) bool, e
 	for i, pr := range prompts {
 		ids[i] = m.Vocab.Encode(pr, true)
 		if exact {
-			one, _, _ := batchGreedy(t, m, ids[i:i+1], gen, seq, nil)
+			one, _ := batchGreedy(t, m, ids[i:i+1], gen, seq, nil)
 			want[i] = one[0]
 			continue
 		}
@@ -107,7 +107,7 @@ func batchAloneGate(t *testing.T, env, def, kind string, is func(Config) bool, e
 		st.Close()
 		g.Close()
 	}
-	got, after, _ := batchGreedy(t, m, ids, gen, seq, nil)
+	got, after := batchGreedy(t, m, ids, gen, seq, nil)
 	for i := range prompts {
 		if exact && !slices.Equal(got[i][:gen], want[i]) {
 			t.Fatalf("row %d: batched with four others %v, batched alone %v", i, got[i][:gen], want[i])
@@ -170,11 +170,11 @@ func TestSharedRecurrentStateMatchesTheDoubledOne(t *testing.T) {
 		ids = append(ids, m.Vocab.Encode(pr, true))
 	}
 	const gen, seq = 12, 64
-	want, _, _ := batchGreedy(t, m, ids, gen, seq, nil)
+	want, _ := batchGreedy(t, m, ids, gen, seq, nil)
 	if lastBatchStats.RecShared != 0 {
 		t.Fatalf("the doubled arm grew %d shared state(s)", lastBatchStats.RecShared)
 	}
-	got, _, _ := batchGreedy(t, m, ids, gen, seq, []tier.Option{
+	got, _ := batchGreedy(t, m, ids, gen, seq, []tier.Option{
 		tier.WithConfig(func(c *tier.Config) { c.SharedRec = true }),
 	})
 	shared := lastBatchStats.RecShared

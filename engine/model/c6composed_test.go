@@ -82,8 +82,8 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 	const promptLen = 3
 	ran := 0
 	want := hostLogits(t, m, ids)
-	// The prompt takes the batched path, which the composer is not asked
-	// for; each token after it is a one-row step it is.
+	// The prompt is the composer's prompt part (ComposedPrompt); each token
+	// after it is a one-row step (ComposedBlock).
 	prompt, toks := ids[:promptLen], ids[promptLen:]
 	run := func(t *testing.T, dev string) (worst float64, flips int) {
 		t.Helper()

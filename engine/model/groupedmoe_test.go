@@ -151,31 +151,13 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 		"%d paged prefill attentions (%d on sm_70's m8n8k4), last-row logit NMSE %.3e\n  batched %v\n  rows    %v",
 		name, batSt.GroupedMoE, batSt.GroupedVolta, batSt.MLABatched, batSt.PagedPrefillLaunches, batSt.PagedPrefill70,
 		nmse, batIDs, rowIDs)
-	if rowSt.GroupedMoE != 0 || batSt.GroupedMoE == 0 {
-		t.Fatalf("grouped mixture blocks: %d row by row, %d batched -- the arms are not the two paths (%s)",
-			rowSt.GroupedMoE, batSt.GroupedMoE, batErr)
-	}
-	if float && batSt.GroupedFloat == 0 {
-		t.Fatalf("%d grouped blocks and no float-bank matvec among them: the float form never ran (%s)",
-			batSt.GroupedMoE, batErr)
-	}
-	// On sm_70 the experts must have taken the tensor cores, or a device whose
-	// dense batched matvecs did is testing the dp4a grouped matvec while
-	// believing it tests GemmVolta.
-	if batSt.VoltaMV > 0 && os.Getenv("JITLLM_MOE_NOVOLTAMOE") == "" && batSt.GroupedVolta == 0 {
-		t.Fatalf("%d sm_70 tensor-core matvecs and 0 of the experts on them (%s)", batSt.VoltaMV, batErr)
-	}
-	// And the same for a latent block's attention: on sm_70 it runs on
-	// m8n8k4 over the paged latent rows (PagedAttnScoresMMA70 and its
-	// accumulate, mlabatch.go), and a chunk that fell to the FMA tile would
-	// pass this gate testing the other kernel.
-	if m.Cfg.MLA() && batSt.VoltaMV > 0 && os.Getenv("JITLLM_MOE_NOVOLTA") == "" && batSt.PagedPrefill70 == 0 {
-		t.Fatalf("%d batched latent blocks and no prefill attention on sm_70's tensor cores (%s)",
-			batSt.MLABatched, batErr)
-	}
-	if m.Cfg.MLA() && (rowSt.MLABatched != 0 || batSt.MLABatched == 0) {
-		t.Fatalf("batched latent blocks: %d row by row, %d batched -- the arms are not the two paths (%s)",
-			rowSt.MLABatched, batSt.MLABatched, batErr)
+	// The arms are the composer's prompt part at two widths: a chunk of one
+	// row at a time, and the prompt's rows batched in fewer chunks.
+	rp, _, _ := rowSt.ServedPart(tier.ComposedPrompt)
+	bp, _, _ := batSt.ServedPart(tier.ComposedPrompt)
+	if bp == 0 || bp >= rp {
+		t.Fatalf("composed prompt steps: %d one row at a time, %d batched -- the arms are not the two widths (%s)",
+			rp, bp, batErr)
 	}
 	if violate {
 		return nmse

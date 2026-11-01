@@ -3,7 +3,6 @@ package model
 import (
 	"math"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -59,26 +58,11 @@ func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
 		g.Close()
 	}
 
-	// Three arms: the matrix-instruction matvec where the card has one, and
-	// the two a card without one takes -- forced here.
 	for _, arm := range []struct {
-		name  string
-		opt   []tier.Option
-		volta bool
-	}{{"default", nil, false},
-		// no-mma takes a binary16 tensor-core matvec (sm_70's m8n8k4, the
-		// m16n8 GEMM from sm_75); no-volta the dp4a tile.
-		{"no-mma", []tier.Option{tier.WithConfig(func(c *tier.Config) { c.NoMMA = true })}, true},
-		{"no-mma-no-volta", []tier.Option{tier.WithConfig(func(c *tier.Config) { c.NoMMA, c.NoVolta = true, true })}, false}} {
-		got, after, volta := batchGreedy(t, m, ids, gen, seq, arm.opt)
-		// The arm that names the Volta kernel must have built it: a refused
-		// shape falls to dp4a and would pass this gate on the other kernel.
-		// Only PTX lowers the m8n8k4 shape; elsewhere (Metal, SPIR-V) the
-		// no-mma arm is the dp4a tile too, and must not claim otherwise.
-		if lowers := strings.Contains(lastBatchName, "[ptx]"); arm.name != "default" &&
-			(volta > 0) != (arm.volta && lowers) {
-			t.Fatalf("%s: %d matvecs on sm_70's f16 tensor cores", arm.name, volta)
-		}
+		name string
+		opt  []tier.Option
+	}{{"default", nil}} {
+		got, after := batchGreedy(t, m, ids, gen, seq, arm.opt)
 		// And a shorter State on the same card afterwards: the batch grew the
 		// device's capacity, and a later State's cache must be that wide or
 		// RoPERowsT writes past it (tier.capped).
@@ -148,7 +132,7 @@ var lastBatchName string
 // batchGreedy decodes every prompt together, a token per step, and returns
 // each row's first gen generated tokens, the first prompt decoded afterwards by
 // a single State on the same card, and the count of sm_70 tensor-core matvecs.
-func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier.Option) (got [][]int32, after []int32, volta int) {
+func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier.Option) (got [][]int32, after []int32) {
 	t.Helper()
 	g, err := tier.OpenWith(append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
 	if err != nil || g == nil {
@@ -188,7 +172,7 @@ func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier
 				}
 			}
 			lastBatchStats, lastBatchName = g.Stats(), g.Name()
-			return got, after, lastBatchStats.VoltaMV + lastBatchStats.GemmF16
+			return got, after
 		}
 		out, err := st.ForwardBatchGreedy(feed)
 		if err != nil {

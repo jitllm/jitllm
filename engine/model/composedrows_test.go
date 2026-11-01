@@ -37,7 +37,7 @@ func TestComposedRowsServe(t *testing.T) {
 	}
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			got, _, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev)})
+			got, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev)})
 			composedRowsServed(t, m, lastBatchStats)
 			if i, j, gap := composedRowsPart(t, m, ids, want, got); i >= 0 {
 				t.Fatalf("row %d token %d: batched %v, the host %v, %.4f apart on the host", i, j, got[i], want[i], gap)
