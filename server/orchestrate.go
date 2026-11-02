@@ -154,7 +154,7 @@ func instBlocks(lm *LoadedModel) int {
 func (e *Engine) place(s *Session, why orchWhy) int {
 	start := time.Now()
 	var got int
-	s.in().As(s.ms, func(in *model.Instance) {
+	s.in().Place(func(in *model.Instance) {
 		before := in.GPULayers()
 		in.PlaceBlocks(0, s.lm.m.Cfg.NLayer)
 		got = in.GPULayers() - before
@@ -211,7 +211,7 @@ func (e *Engine) demote(v *Session, forID string) bool {
 	defer v.mu.Unlock()
 	start := time.Now()
 	var mv model.BlockMove
-	v.in().As(v.ms, func(in *model.Instance) { mv, _ = in.MoveBlocks(0, v.lm.m.Cfg.NLayer, nn.CPU) })
+	v.in().Place(func(in *model.Instance) { mv, _ = in.MoveBlocks(0, v.lm.m.Cfg.NLayer, nn.CPU) })
 	n := len(mv.Moved)
 	// Every idle session of the instance brings its history home too, or its
 	// device view would keep the blocks on the card.

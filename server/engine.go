@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -296,15 +297,15 @@ func (e *Engine) nextID(prefix string) string {
 // LoadedModel is one model the Engine holds open: its model.Model, the
 // device tier its sessions share, and the sessions created on it.
 type LoadedModel struct {
-	id       string
-	path     string
-	name     string
-	m        *model.Model
+	id   string
+	path string
+	name string
+	m    *model.Model
 	// inst is the model's instance: its kernels composed at load for the
 	// placement the load states, served to every session (model.Serve).
 	inst *model.Instance
 	// instDev is the device inst was placed on, guarded by inst's lock.
-	instDev nn.Device
+	instDev  nn.Device
 	loadedAt time.Time
 
 	// dev is the tier, shared by every session of this model: the tier owns
@@ -759,11 +760,10 @@ func (e *Engine) makeInstance(lm *LoadedModel) error {
 			return err
 		}
 	}
-	width := e.cfg.MaxBatchRows
-	if width <= 0 {
-		width = model.MaxStepRows
-	}
-	if err := lm.m.Serve(in, width); err != nil {
+	// Every session leases the instance: how many rows a step carries is the
+	// step loop's (MaxBatchRows), and with batching off sessions still take
+	// turns a token at a time rather than a reply at a time.
+	if err := lm.m.Serve(in, math.MaxInt32); err != nil {
 		in.Close()
 		return err
 	}
@@ -2529,7 +2529,9 @@ func (s *Session) Inspect(f func(st *model.Instance)) {
 func (e *Engine) SetDeviceBlocks(s *Session, n int) int {
 	s.mu.Lock()
 	var got int
-	s.in().As(s.ms, func(in *model.Instance) { got = in.SetGPULayers(n) })
+	if err := s.in().Place(func(in *model.Instance) { got = in.SetGPULayers(n) }); err != nil {
+		got = s.in().GPULayers()
+	}
 	s.refresh()
 	s.mu.Unlock()
 	e.applyPageBudget(s.lm, nil)
@@ -2583,7 +2585,9 @@ func (s *Session) serveMove(final bool) {
 	if r.pm == nil {
 		var pm *model.PendingMove
 		var err error
-		s.in().As(s.ms, func(in *model.Instance) { pm, err = in.PrepareMove(r.first, r.last+1, r.to) })
+		if berr := s.in().Bind(s.ms, func(in *model.Instance) { pm, err = in.PrepareMove(r.first, r.last+1, r.to) }); berr != nil {
+			err = berr
+		}
 		if err != nil {
 			s.finishMove(r, moveRes{err: err})
 			return
@@ -2595,7 +2599,11 @@ func (s *Session) serveMove(final bool) {
 	if !final && !r.pm.Ready() {
 		return
 	}
-	mv, err := r.pm.Commit()
+	var mv model.BlockMove
+	var err error
+	if berr := s.in().Bind(s.ms, func(*model.Instance) { mv, err = r.pm.Commit() }); berr != nil {
+		err = berr
+	}
 	s.refresh()
 	s.finishMove(r, moveRes{mv, err})
 }
@@ -2710,7 +2718,7 @@ func (e *Engine) bindSessionLocked(s *Session) error {
 	// The device is the instance's: the first session to see it places the
 	// instance there, and every other finds it placed.
 	var err error
-	s.lm.inst.With(func(in *model.Instance) {
+	ierr := s.lm.inst.Place(func(in *model.Instance) {
 		if s.lm.instDev == dev {
 			return
 		}
@@ -2723,6 +2731,9 @@ func (e *Engine) bindSessionLocked(s *Session) error {
 			in.SetGPULayers(prev)
 		}
 	})
+	if err == nil {
+		err = ierr
+	}
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrPlacement, err)
 	}

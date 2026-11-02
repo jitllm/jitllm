@@ -68,7 +68,7 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 	start := time.Now()
 	sess.mu.Lock()
 	var perr error
-	sess.in().As(sess.ms, func(st *model.Instance) {
+	ierr := sess.in().Place(func(st *model.Instance) {
 		if len(want) == 0 {
 			// Everything on the CPU.
 			st.SetGPULayers(0)
@@ -89,6 +89,9 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 			st.SetHeadOnDevice(*m.HeadOnDevice)
 		}
 	})
+	if perr == nil {
+		perr = ierr
+	}
 	if perr != nil {
 		sess.mu.Unlock()
 		return nil, connect.NewError(connect.CodeFailedPrecondition, perr)
@@ -141,7 +144,9 @@ func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Requ
 	start := time.Now()
 	sess.mu.Lock()
 	var mv model.BlockMove
-	sess.in().As(sess.ms, func(st *model.Instance) { mv, err = st.MoveBlocks(first, last+1, to) })
+	if perr := sess.in().Place(func(st *model.Instance) { mv, err = st.MoveBlocks(first, last+1, to) }); perr != nil {
+		err = perr
+	}
 	sess.refresh()
 	sess.mu.Unlock()
 	dev := to

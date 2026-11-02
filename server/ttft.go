@@ -159,14 +159,13 @@ type ttft struct {
 	kv model.KVStore
 	ns string
 
-
 	inflight atomic.Int32
 	queueCap int
 
-	restored, computed                        atomic.Int64
+	restored, computed             atomic.Int64
 	sessionsOpened, sessionsClosed atomic.Int64
-	refused                                   atomic.Int64
-	warmed                                    atomic.Bool
+	refused                        atomic.Int64
+	warmed                         atomic.Bool
 }
 
 // initTTFT sets lm's memory cache and queue bound from the config.
@@ -237,13 +236,13 @@ func (e *Engine) MemCacheStats(lm *LoadedModel) MemCacheStats {
 		st = t.store.Stats()
 	}
 	return MemCacheStats{
-		Store:         st,
-		Restored:      t.restored.Load(),
-		Computed:      t.computed.Load(),
+		Store:          st,
+		Restored:       t.restored.Load(),
+		Computed:       t.computed.Load(),
 		SessionsOpened: t.sessionsOpened.Load(),
 		SessionsClosed: t.sessionsClosed.Load(),
-		Warmed:        t.warmed.Load(),
-		Refused:       t.refused.Load(),
+		Warmed:         t.warmed.Load(),
+		Refused:        t.refused.Load(),
 	}
 }
 

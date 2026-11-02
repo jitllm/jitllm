@@ -72,7 +72,9 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 			}
 			return cp
 		}
-		run := func(st *model.Instance, toks []int32) model.Run { return model.Run{Instance: st, Tokens: toks, Logits: true} }
+		run := func(st *model.Instance, toks []int32) model.Run {
+			return model.Run{Instance: st, Tokens: toks, Logits: true}
+		}
 		argmax := func(x []float32) int32 {
 			best := 0
 			for i, v := range x {
