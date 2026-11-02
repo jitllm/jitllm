@@ -22,13 +22,7 @@ import (
 // the nearest cut's distance from its threshold and u's point from an edge.
 func SampleCutRef(logits []float32, hist []int, pen, invT float32, topp, minp, u float64) (tok uint32, margin float64) {
 	v := append([]float32(nil), logits...)
-	for _, h := range hist {
-		if v[h] > 0 {
-			v[h] /= pen
-		} else {
-			v[h] *= pen
-		}
-	}
+	penalizeOnce(v, hist, pen)
 	n := len(v)
 	m := math.Inf(-1)
 	for i := range v {
@@ -101,7 +95,7 @@ func SampleCutRef(logits []float32, hist []int, pen, invT float32, topp, minp, u
 // uniforms, the token of every draw no float32 rounding can flip.
 func TestComposedCPUSampleCut(t *testing.T) {
 	const n, H = 300, 16
-	g := (&graph.SampleCut{NVocab: n, Hist: H}).Build()
+	g := (&graph.SampleCut{NVocab: n}).Build()
 	if err := graph.Verify(g, graph.Facts{}); err != nil {
 		t.Fatal(err)
 	}
@@ -123,16 +117,9 @@ func TestComposedCPUSampleCut(t *testing.T) {
 		for i, v := range logits {
 			lw[i] = math.Float32bits(v)
 		}
-		args := make([]uint32, 2+H)
-		args[0], args[1] = uint32(len(hist)), math.Float32bits(pen)
-		for i := 2; i < len(args); i++ {
-			args[i] = math.MaxUint32
-		}
-		for i, h := range hist {
-			args[2+i] = uint32(h)
-		}
+		win := windowWords(hist, n)
 		vals := map[graph.ValueID][]uint32{
-			in["logits"]: lw, in["sample.args"]: args, in["sample.penalty"]: {math.Float32bits(pen)},
+			in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {math.Float32bits(pen)},
 			in["sample.ids"]: append([]uint32(nil), ids...),
 			in["sample.cut"]: {math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u)},
 			tokV:             {0},
@@ -195,4 +182,89 @@ func TestComposedCPUSampleCut(t *testing.T) {
 		t.Fatalf("%d of %d draws decisive: the comparison sees too little", decisive, cases)
 	}
 	t.Logf("%d of %d cut draws decisive and right", decisive, cases)
+}
+
+// TestComposedCPUSampleCutTopK holds graph.SampleCut with TopK on the CPU
+// device to the host sampler's top-k draw at any k (SampleWalkRef over the
+// whole row, the penalty applied first): the k best, top-p and min-p over
+// their softmax at temperature 1, the walk over the survivors at 1/T, the
+// token of every draw no float32 rounding can flip.
+func TestComposedCPUSampleCutTopK(t *testing.T) {
+	const n, H = 300, 16
+	g := (&graph.SampleCut{NVocab: n, TopK: true}).Build()
+	if err := graph.Verify(g, graph.Facts{}); err != nil {
+		t.Fatal(err)
+	}
+	in := map[string]graph.ValueID{}
+	for _, v := range g.In {
+		in[g.Values[v].Name] = v
+	}
+	tokV := g.Out[0]
+	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]uint32, n)
+	for i := range ids {
+		ids[i] = uint32(i)
+	}
+	f := math.Float32bits
+	rng := rand.New(rand.NewSource(43))
+	decisive, cases := 0, 0
+	for c := range 300 {
+		l := make([]float32, n)
+		for i := range l {
+			l[i] = float32(rng.NormFloat64() * 3)
+		}
+		var hist []int
+		pen := float32(1)
+		if c%2 == 0 {
+			pen = 1.1 + 0.5*rng.Float32()
+			for range rng.Intn(H + 1) {
+				hist = append(hist, rng.Intn(n/10))
+			}
+		}
+		v := append([]float32(nil), l...)
+		penalizeOnce(v, hist, pen)
+		k := 2 + rng.Intn(n-2)
+		invT := float32(1 / (0.4 + 1.4*rng.Float64()))
+		topp, minp := math.Inf(1), 0.0
+		switch c % 4 {
+		case 0:
+			topp = float64(float32(0.3 + 0.69*rng.Float64()))
+		case 1:
+			minp = float64(float32(0.05 * rng.Float64()))
+		case 2:
+			topp, minp = float64(float32(0.5+0.49*rng.Float64())), float64(float32(0.02*rng.Float64()))
+		}
+		u := float64(float32(rng.Float64()))
+		want, margin := SampleWalkRef(v, n, k, float64(invT), topp, minp, u)
+		lw := make([]uint32, n)
+		for i, x := range l {
+			lw[i] = f(x)
+		}
+		win := windowWords(hist, n)
+		vals := map[graph.ValueID][]uint32{
+			in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {f(pen)},
+			in["sample.ids"]: append([]uint32(nil), ids...),
+			in["sample.cut"]: {f(invT), f(float32(topp)), f(float32(minp)), f(float32(u)), f(float32(k))},
+			tokV:             {0},
+		}
+		if err := runCPUValues(codes, g, vals, [3][]uint32{}); err != nil {
+			t.Fatal(err)
+		}
+		cases++
+		if margin < 1e-4 {
+			continue
+		}
+		decisive++
+		if got := vals[tokV][0]; got != want {
+			t.Fatalf("case %d (k %d, history %v at %.3f, 1/T %.3f, top-p %.4f, min-p %.4f, u %.6f): drew %d, want %d (margin %.3g)",
+				c, k, hist, pen, invT, topp, minp, u, got, want, margin)
+		}
+	}
+	if decisive < cases*8/10 {
+		t.Fatalf("%d of %d draws decisive: the comparison sees too little", decisive, cases)
+	}
+	t.Logf("%d of %d top-k draws decisive and right", decisive, cases)
 }

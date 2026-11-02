@@ -238,13 +238,13 @@ func TestComposedHeadTokens(t *testing.T) {
 							// neighbouring id. Each must part the draws, every set
 							// still the composer's.
 							set := m.frontGraphs()
-							orig, origWalk := set.cpuTopK, set.cpuWalk
+							origWalk := set.cpuWalk
 							for _, v := range []struct {
 								name string
 								f    func(*graph.Graph) *graph.Graph
 							}{{"k+1", sampleShifted}, {"the penalty on the neighbouring id", sampleNeighbour}} {
 								m.front.mu.Lock()
-								set.cpuTopK, set.cpuWalk = v.f(orig), v.f(origWalk)
+								set.cpuWalk = v.f(origWalk)
 								m.front.mu.Unlock()
 								vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 									tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
@@ -255,7 +255,7 @@ func TestComposedHeadTokens(t *testing.T) {
 								vn := composedSamples(vg.Stats())
 								vg.Close()
 								m.front.mu.Lock()
-								set.cpuTopK, set.cpuWalk = orig, origWalk
+								set.cpuWalk = origWalk
 								m.front.mu.Unlock()
 								t.Logf("violation, %s: %d of %d draws parted, %d sets selected by the composer", v.name, vp, gen, vn)
 								if vd == 0 || vn < int(vd) || vp == 0 {
@@ -308,25 +308,26 @@ func sampleShifted(s *graph.Graph) *graph.Graph {
 	return g
 }
 
-// sampleNeighbour is a sampler graph (the candidates', or the walk over
-// them) with every history id moved to the next: the penalty on the
-// neighbouring id.
+// sampleNeighbour is a sampler graph whose window (its second input) is
+// read one id on: the penalty on the token after each one the window holds.
 func sampleNeighbour(s *graph.Graph) *graph.Graph {
 	g := cloneGraph(s)
-	for i, o := range g.Ops {
-		if o.Kind != graph.OpMap || o.Attr.Fn != graph.MapEqual {
-			continue
+	win := g.In[1]
+	n := g.Values[win].Width
+	last, rest, rot := graph.ValueID(len(g.Values)), graph.ValueID(len(g.Values)+1), graph.ValueID(len(g.Values)+2)
+	g.Values = append(g.Values, graph.Value{Name: "win.last", Width: 1}, graph.Value{Name: "win.rest", Width: n - 1},
+		graph.Value{Name: "win.rot", Width: n})
+	for i := range g.Ops {
+		for x, v := range g.Ops[i].In {
+			if v == win {
+				g.Ops[i].In[x] = rot
+			}
 		}
-		// Each candidate's id less one against the history: the penalty
-		// lands on the id after each entry's.
-		cand := o.In[0]
-		less := graph.ValueID(len(g.Values))
-		g.Values = append(g.Values, graph.Value{Name: "cand.less", Width: g.Values[cand].Width})
-		g.Ops[i].In = []graph.ValueID{less, o.In[1]}
-		g.Ops = slices.Insert(g.Ops, i, graph.Op{Kind: graph.OpMap, In: []graph.ValueID{cand}, Out: []graph.ValueID{less},
-			Attr: graph.Attrs{Fn: graph.MapAdd, Const: -1}})
-		break
 	}
+	g.Ops = slices.Insert(g.Ops, 0,
+		graph.Op{Kind: graph.OpSlice, In: []graph.ValueID{win}, Out: []graph.ValueID{last}, Attr: graph.Attrs{Offset: n - 1, Width: 1}},
+		graph.Op{Kind: graph.OpSlice, In: []graph.ValueID{win}, Out: []graph.ValueID{rest}, Attr: graph.Attrs{Offset: 0, Width: n - 1}},
+		graph.Op{Kind: graph.OpConcat, In: []graph.ValueID{last, rest}, Out: []graph.ValueID{rot}})
 	return g
 }
 

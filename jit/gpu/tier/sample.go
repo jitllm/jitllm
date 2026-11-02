@@ -1,52 +1,40 @@
 package tier
 
 import (
-	"encoding/binary"
-
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
-// The device sampler (nn.Head.SampleK): after the head, the composed
-// sampler (graph.SampleTopK) applies the repeat penalty and selects k
-// candidates in the token's submission, and they are read back in place of
-// the vocabulary's logits. The softmax over them, the cuts and the draw are
-// the host sampler's (model.Sampler), on the same candidates it would have
-// chosen from the whole row.
+// The device sampler (nn.Head.SampleK): after the head, the composed walk
+// (graph.SampleWalk) draws a top-k draw's token in the token's submission
+// -- the penalty, the k best, the cuts and the walk at the caller's uniform
+// -- and the token is read back in place of the vocabulary's logits.
 
-// sampleMaxK is the largest k the device serves and sampleMaxHist the longest
-// history. They size the lane's buffers once, so a recording, which names
-// those buffers, never outlives a regrown one. They are this tier's choice,
-// not a device limit: a larger k or history reads the row back and the host
-// sampler selects from it, as it does with no top-k at all.
-const (
-	sampleMaxK    = nn.SampleMaxK
-	sampleMaxHist = nn.SampleMaxHist
-)
+// sampleMaxK is the largest k the device serves. It sizes nothing a
+// recording names; a larger k reads the row back and the CPU draws.
+const sampleMaxK = nn.SampleMaxK
 
 // prepSample readies this lane's buffers for head's sampler, false where its
-// k or history is past the bounds: the call reads the logits back. Callers
-// hold g.mu, outside any Session.
+// k is past the bound or its window is not a row over the vocabulary: the
+// call reads the logits back. Callers hold g.mu, outside any Session.
 func (g *devTier) prepSample(head *nn.Head) bool {
 	n, k := head.W.Rows, head.SampleK
-	if k < 1 || k >= n || k > sampleMaxK || len(head.SampleVals) < k || len(head.SampleIDs) < k ||
-		len(head.SampleArgs) < 2 || len(head.SampleArgs) > kernels.SampleArgsWords(sampleMaxHist) ||
-		int(head.SampleArgs[0]) != len(head.SampleArgs)-2 {
+	if k < 1 || k >= n || k > sampleMaxK || head.SamplePenalty != 1 && len(head.SampleWindow) != n {
 		return false
 	}
 	w := g.scratchWin()
 	defer w.close()
-	return g.sampleBufs()
+	return g.sampleBufs(n)
 }
 
-// sampleBufs makes this lane's sampler buffers, sized for the bounds.
-func (g *devTier) sampleBufs() bool {
+// sampleBufs makes this lane's sampler buffers for a vocabulary of n tokens,
+// false where they are another vocabulary's.
+func (g *devTier) sampleBufs(n int) bool {
 	l := g.lane
-	if l.sampleArgs != nil {
-		return true
+	if l.sampleWindow != nil {
+		return l.sampleN == n
 	}
-	sizes := [...]int{4 * kernels.SampleArgsWords(sampleMaxHist), 4 * sampleMaxK, 4 * sampleMaxK, 4, 4 * len(nn.Head{}.WalkArgs)}
+	sizes := [...]int{4 * n, 4, 4 * len(nn.Head{}.WalkArgs)}
 	var bufs [len(sizes)]backend.Buf
 	for i, sz := range sizes {
 		b, err := g.dev.Alloc(sz)
@@ -59,28 +47,13 @@ func (g *devTier) sampleBufs() bool {
 		}
 		bufs[i] = b
 	}
-	l.sampleArgs, l.sampleV, l.sampleI, l.samplePenalty, l.sampleWalk = bufs[0], bufs[1], bufs[2], bufs[3], bufs[4]
-	l.sampleStage = make([]byte, 4*kernels.SampleArgsWords(sampleMaxHist))
+	l.sampleWindow, l.samplePenalty, l.sampleWalk, l.sampleN = bufs[0], bufs[1], bufs[2], n
 	return true
-}
-
-// stageSample is head's argument words as the composed sampler reads them:
-// the count, the penalty's bits and the history, an id no row has past it.
-func (l *lane) stageSample(head *nn.Head) []byte {
-	b := l.sampleStage
-	for i := range len(b) / 4 {
-		w := uint32(0xffffffff)
-		if i < len(head.SampleArgs) {
-			w = head.SampleArgs[i]
-		}
-		binary.LittleEndian.PutUint32(b[4*i:], w)
-	}
-	return b
 }
 
 // freeSample gives back the lane's sampler buffers.
 func (l *lane) freeSample() {
-	for _, b := range [...]*backend.Buf{&l.sampleArgs, &l.sampleV, &l.sampleI, &l.samplePenalty, &l.sampleWalk} {
+	for _, b := range [...]*backend.Buf{&l.sampleWindow, &l.samplePenalty, &l.sampleWalk} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil

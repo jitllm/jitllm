@@ -97,17 +97,9 @@ type State struct {
 	// either way; only their geometry differs.
 	c   *Config
 	pos int
-	// sampleArgs, sampleVals and sampleIDs are ForwardSample's device
-	// sampler block and the candidates it returns, reused across tokens.
-	// SampledOnDevice counts the tokens whose candidates came home in place
-	// of the logits.
-	sampleArgs      []uint32
-	sampleVals      []float32
-	sampleIDs       []uint32
+	// SampledOnDevice counts the tokens drawn on the device, whose token
+	// came home in place of the logits.
 	SampledOnDevice int64
-	// SampleProbes counts the tokens ForwardSample timed to decide between
-	// the device and the host sampler (devsample.go).
-	SampleProbes int64
 	// parked and parkedSeam are Park's: the session is preempted, and the
 	// seam it held on the device. ParkedOut and ParkedIn count the KV pages
 	// Park sent to the store and Resume brought back (park.go).
@@ -1687,7 +1679,7 @@ func (s *State) streamedAt(li int) bool { return li < len(s.streamedOn) && s.str
 func (s *State) newHead() *nn.Head {
 	c := s.c
 	f := s.m.frontGraphs()
-	h := &nn.Head{Model: s.m.id, Graph: f.cpuHead, HiddenGraph: f.cpuHidden, Sample: f.cpuSample, SampleTopK: f.cpuTopK, SampleWalk: f.cpuWalk, PickGraph: f.pick, PickHead: f.pickHead, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
+	h := &nn.Head{Model: s.m.id, Graph: f.cpuHead, HiddenGraph: f.cpuHidden, Sample: f.cpuSample, SampleWalk: f.cpuWalk, PickGraph: f.pick, PickHead: f.pickHead, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
 		Stages: s.m.headStages(), Bias: s.m.outB, NoCPU: !s.cpuListed()}
 	if !c.TiedEmbd && s.m.embd.e != nil {
@@ -3813,62 +3805,34 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	h := s.head
 	onDev := h != nil && h.Left()&(nn.HeadBias|nn.HeadScale) == 0 && smp.Bounded(s.c.NVocab) &&
 		s.m.opt.devSample != DeviceSampleOff
-	// Auto: the key's verdict, or the probe's arm for this token
-	// (devsample.go). Both arms return the same token.
-	var choice *sampleChoice
-	probe := false
-	if onDev && s.m.opt.devSample == DeviceSampleAuto {
-		choice = s.sampleChoiceFor(s.sampleKeyOf(smp))
-		cs := &s.m.sampleChoices
-		cs.mu.Lock()
-		onDev, probe = choice.arm()
-		cs.mu.Unlock()
-	}
 	// The call's one uniform, whichever arm draws with it: the device's
 	// walk, the device's candidates, the CPU's walk or the logits.
 	u := float32(smp.uniform())
 	if onDev && smp.TopK > 0 && smp.TopK <= MaxTopK {
 		k := smp.TopK
-		s.sampleArgs = smp.DeviceArgs(s.sampleArgs)
-		s.sampleVals = grow32(s.sampleVals, k)
-		if cap(s.sampleIDs) < k {
-			s.sampleIDs = make([]uint32, k)
-		}
-		h.SampleK, h.SampleArgs, h.SampleVals, h.SampleIDs, h.Sampled = k, s.sampleArgs, s.sampleVals, s.sampleIDs[:k], false
 		topp, minp := smp.cuts()
-		h.Walk, h.WalkArgs, h.Token = true, [5]float32{float32(k), float32(1 / smp.Temp), topp, minp, u}, -1
-		defer func() { h.SampleK, h.Sampled, h.Walk = 0, false, false }()
+		h.SampleK, h.SamplePenalty, h.Sampled = k, smp.penalty(), false
+		h.SampleWindow = nil
+		if h.SamplePenalty != 1 {
+			h.SampleWindow = smp.window(s.c.NVocab)
+		}
+		h.WalkArgs, h.Token = [5]float32{float32(k), float32(1 / smp.Temp), topp, minp, u}, -1
+		defer func() { h.SampleK, h.Sampled = 0, false }()
 	}
-	t0 := time.Now()
 	logits, err := s.Forward(token)
 	if err != nil {
 		return 0, err
 	}
 	var tok int32
 	switch {
-	case onDev && h.Sampled && h.Token >= 0:
-		s.SampledOnDevice++
-		tok = h.Token
 	case onDev && h.Sampled:
 		s.SampledOnDevice++
-		tok = smp.sampleFromAt(h.SampleVals, h.SampleIDs, u)
-	case h == nil && smp.Bounded(s.c.NVocab):
-		if t, ok := s.cpuWalkToken(logits, smp, u); ok {
+		tok = h.Token
+	default:
+		if t, ok := s.cpuDraw(logits, smp, u); ok {
 			tok = t
 		} else {
 			tok = smp.sampleAt(logits, u)
-		}
-	default:
-		tok = smp.sampleAt(logits, u)
-	}
-	if choice != nil {
-		d := time.Since(t0)
-		cs := &s.m.sampleChoices
-		cs.mu.Lock()
-		choice.record(onDev, probe, d)
-		cs.mu.Unlock()
-		if probe {
-			s.SampleProbes++
 		}
 	}
 	return tok, nil

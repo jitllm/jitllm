@@ -262,7 +262,7 @@ func (sc *Scheduler) stepMixed(done []*Seq) ([]*Seq, error) {
 	}
 	nv := st.m.Cfg.NVocab
 	for r, s := range want {
-		s.Out = append(s.Out, s.pick(lg[r*nv:(r+1)*nv]))
+		s.Out = append(s.Out, s.pick(st, lg[r*nv:(r+1)*nv]))
 		if s.finished() {
 			done = append(done, sc.retire(s.slot))
 		}
@@ -346,11 +346,11 @@ func (sc *Scheduler) retire(i int) *Seq {
 	return s
 }
 
-func (s *Seq) pick(logits []float32) int32 {
+func (s *Seq) pick(st *State, logits []float32) int32 {
 	if s.Sample != nil {
 		return s.Sample(logits)
 	}
-	return Greedy(logits)
+	return st.Sample(nil, logits)
 }
 
 func (s *Seq) finished() bool {

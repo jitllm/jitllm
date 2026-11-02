@@ -14,7 +14,7 @@ import (
 )
 
 // SampleCase is one row the sampler's form is held to: its logits, the
-// history (Hist[:H] the real ids), the penalty and the form's bounds.
+// repeat window (its tokens, some repeated), the penalty and the form's k.
 type SampleCase struct {
 	Name    string
 	V, K, B int
@@ -78,21 +78,10 @@ func sampleOrder(l []float32) []int {
 	return ids
 }
 
-// SampleWant is the host sampler's candidates for c: the penalty applied
-// once per history entry in order, then the K best. neighbour applies each
-// entry's penalty to the next id instead, a violation.
-func SampleWant(c SampleCase, neighbour bool) ([]float32, []uint32) {
-	l := slices.Clone(c.Logits)
-	for _, id := range c.Hist {
-		if neighbour {
-			id = (id + 1) % uint32(c.V)
-		}
-		if v := l[id]; v > 0 {
-			l[id] = v / c.Pen
-		} else {
-			l[id] = v * c.Pen
-		}
-	}
+// SampleWant is the sampler's candidates for c: the penalty once on each
+// token the window holds (SamplePenalized), then the K best.
+func SampleWant(c SampleCase) ([]float32, []uint32) {
+	l := SamplePenalized(c.Logits, c.Hist, c.Pen)
 	k := min(c.K, c.V)
 	order := sampleOrder(l)[:k]
 	vals, ids := make([]float32, k), make([]uint32, k)
@@ -102,16 +91,40 @@ func SampleWant(c SampleCase, neighbour bool) ([]float32, []uint32) {
 	return vals, ids
 }
 
-// SampleArgs is c's argument words as the tier writes them: the count, the
-// penalty's bits, the ids, and past them an id no row has.
-func SampleArgs(c SampleCase) []uint32 {
-	w := make([]uint32, 2+c.B)
-	w[0], w[1] = uint32(len(c.Hist)), math.Float32bits(c.Pen)
-	for i := range c.B {
-		w[2+i] = 0xffffffff
-		if i < len(c.Hist) {
-			w[2+i] = c.Hist[i]
+// SamplePenalized is logits with the repeat penalty once on each token the
+// window holds, however often: a positive logit divided by pen, any other
+// multiplied by it.
+func SamplePenalized(logits []float32, window []uint32, pen float32) []float32 {
+	l := slices.Clone(logits)
+	done := map[uint32]bool{}
+	for _, id := range window {
+		if done[id] {
+			continue
 		}
+		done[id] = true
+		if v := l[id]; v > 0 {
+			l[id] = v / pen
+		} else {
+			l[id] = v * pen
+		}
+	}
+	return l
+}
+
+// SampleWindow is c's window as the forms read it (sample.window): each
+// token's count in it, a float's bits. shift moves every count to the next
+// id, a violation.
+func SampleWindow(c SampleCase, shift bool) []uint32 {
+	cnt := make([]float32, c.V)
+	for _, id := range c.Hist {
+		if shift {
+			id = (id + 1) % uint32(c.V)
+		}
+		cnt[id]++
+	}
+	w := make([]uint32, c.V)
+	for i, x := range cnt {
+		w[i] = math.Float32bits(x)
 	}
 	return w
 }
@@ -305,29 +318,6 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 		vals[v] = w[:n]
 	}
 	return nil
-}
-
-// SampleNeighbour is s with every history id moved to the next: the
-// penalty on the neighbouring id, a violation of the form.
-func SampleNeighbour(s *graph.Graph) *graph.Graph {
-	g := *s
-	g.Values = slices.Clone(s.Values)
-	g.Ops = slices.Clone(s.Ops)
-	for i, o := range g.Ops {
-		if o.Kind != graph.OpMap || o.Attr.Fn != graph.MapEqual {
-			continue
-		}
-		// Each candidate's id less one against the history: the penalty
-		// lands on the id after each entry's.
-		cand := o.In[0]
-		less := graph.ValueID(len(g.Values))
-		g.Values = append(g.Values, graph.Value{Name: "cand.less", Width: g.Values[cand].Width})
-		g.Ops[i].In = []graph.ValueID{less, o.In[1]}
-		g.Ops = slices.Insert(g.Ops, i, graph.Op{Kind: graph.OpMap, In: []graph.ValueID{cand}, Out: []graph.ValueID{less},
-			Attr: graph.Attrs{Fn: graph.MapAdd, Const: -1}})
-		break
-	}
-	return &g
 }
 
 // SampleTieHigh reports whether two kept places hold one value, the lower

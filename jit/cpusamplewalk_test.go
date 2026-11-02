@@ -69,7 +69,7 @@ func SampleWalkRef(logits []float32, K, k int, invT, topp, minp, u float64) (tok
 // margin: it lands on the best).
 func TestComposedCPUSampleWalk(t *testing.T) {
 	const n, K, H = 300, 16, 8
-	g := (&graph.SampleWalk{SampleTopK: graph.SampleTopK{NVocab: n, K: K, Hist: H}}).Build()
+	g := (&graph.SampleWalk{SampleTopK: graph.SampleTopK{NVocab: n, K: K}}).Build()
 	if err := graph.Verify(g, graph.Facts{}); err != nil {
 		t.Fatal(err)
 	}
@@ -82,18 +82,14 @@ func TestComposedCPUSampleWalk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := make([]uint32, 2+H)
-	args[1] = math.Float32bits(1)
-	for i := 2; i < len(args); i++ {
-		args[i] = n
-	}
+	win := make([]uint32, n)
 	walk := func(logits []float32, k int, invT, topp, minp, u float32) uint32 {
 		lw := make([]uint32, n)
 		for i, v := range logits {
 			lw[i] = math.Float32bits(v)
 		}
 		vals := map[graph.ValueID][]uint32{
-			in["logits"]: lw, in["sample.args"]: append([]uint32(nil), args...), in["sample.penalty"]: {math.Float32bits(1)},
+			in["logits"]: lw, in["sample.window"]: append([]uint32(nil), win...), in["sample.penalty"]: {math.Float32bits(1)},
 			in["sample.walk"]: {math.Float32bits(float32(k)), math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u)},
 			tokV:              {0},
 		}

@@ -56,10 +56,10 @@ func (d *specDist) prob(t int32) float32 {
 func (s *Sampler) dist(logits []float32, d *specDist) {
 	n := len(logits)
 	vals := logits
-	if s.RepeatPen > 1 && len(s.hoff) > 0 {
+	if s.RepeatPen > 1 && len(s.hist) > 0 {
 		d.vals = grow32(d.vals, n)
 		copy(d.vals, logits)
-		nn.SamplePenalty32JIT(d.vals, s.hoff, float32(s.RepeatPen))
+		nn.SamplePenalty32JIT(d.vals, s.distinct(), float32(s.RepeatPen))
 		vals = d.vals
 	}
 	bounded := s.TopK > 0 && s.TopK < n
@@ -146,15 +146,19 @@ func (s *Sampler) uniform() float64 {
 // observes drafted tokens past and then takes back.
 type samplerMark struct {
 	hist []int32
-	hoff []int64
 }
 
 func (s *Sampler) mark(m *samplerMark) {
 	m.hist = append(m.hist[:0], s.hist...)
-	m.hoff = append(m.hoff[:0], s.hoff...)
 }
 
+// restore takes the window back to m, its counts with it.
 func (s *Sampler) restore(m *samplerMark) {
+	for _, t := range s.hist {
+		s.win[t]--
+	}
 	s.hist = append(s.hist[:0], m.hist...)
-	s.hoff = append(s.hoff[:0], m.hoff...)
+	for _, t := range s.hist {
+		s.win[t]++
+	}
 }

@@ -4,6 +4,7 @@ package model
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/engine/graph"
 	"io"
 	"math"
 	"path/filepath"
@@ -1225,9 +1226,6 @@ type Model struct {
 	// writes only what moved (see sameSpan), so when the model fits the writes
 	// stop after the first token and concurrent sessions only ever read.
 	bind sync.Mutex
-	// sampleChoices is the device sampler's measured verdicts, per key
-	// (devsample.go).
-	sampleChoices sampleChoices
 	// chatTemplates are the chat templates compiled, by source: a request
 	// renders its model's template, not compiles it (chat.go).
 	chatTemplates sync.Map
@@ -1258,6 +1256,13 @@ type Model struct {
 	kvArenaMu sync.Mutex
 	// cpuForms is the composed CPU blocks' forms (cpuserve.go).
 	cpuForms cpuForms
+	// argmaxes is the greedy sampler's graph at each width a caller asked
+	// an argmax of (State.cpuArgmax), one graph a width so its form is
+	// composed once.
+	argmaxes struct {
+		mu sync.Mutex
+		g  map[int]*graph.Graph
+	}
 
 	// TokErr is why Vocab is nil, when it is. The weights still loaded.
 	TokErr error

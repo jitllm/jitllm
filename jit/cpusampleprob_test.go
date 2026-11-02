@@ -18,13 +18,7 @@ import (
 // It returns the probability and how far the cuts are from flipping.
 func sampleProbRef(logits []float32, hist []int, pen, invT float32, k int, topp, minp float64, x int) (p, margin float64) {
 	v := append([]float32(nil), logits...)
-	for _, h := range hist {
-		if v[h] > 0 {
-			v[h] /= pen
-		} else {
-			v[h] *= pen
-		}
-	}
+	penalizeOnce(v, hist, pen)
 	n := len(v)
 	order := make([]int, n)
 	for i := range order {
@@ -92,8 +86,8 @@ func TestComposedCPUSampleProb(t *testing.T) {
 		k    bool
 	}
 	for _, a := range []arm{
-		{"walk", (&graph.SampleWalk{SampleTopK: graph.SampleTopK{NVocab: n, K: K, Hist: H}, Prob: true}).Build(), true},
-		{"cut", (&graph.SampleCut{NVocab: n, Hist: H, Prob: true}).Build(), false},
+		{"walk", (&graph.SampleWalk{SampleTopK: graph.SampleTopK{NVocab: n, K: K}, Prob: true}).Build(), true},
+		{"cut", (&graph.SampleCut{NVocab: n, Prob: true}).Build(), false},
 	} {
 		t.Run(a.name, func(t *testing.T) {
 			g := a.g
@@ -105,7 +99,9 @@ func TestComposedCPUSampleProb(t *testing.T) {
 				in[g.Values[v].Name] = v
 			}
 			out := g.Out
-			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+			// Apart, as the engine forms it: the dense distribution would take the
+			// window's storage otherwise.
+			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(), Apart: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -119,16 +115,9 @@ func TestComposedCPUSampleProb(t *testing.T) {
 				for i, v := range l {
 					lw[i] = f(v)
 				}
-				args := make([]uint32, 2+H)
-				args[0], args[1] = uint32(len(hist)), f(pen)
-				for i := 2; i < len(args); i++ {
-					args[i] = math.MaxUint32
-				}
-				for i, h := range hist {
-					args[2+i] = uint32(h)
-				}
+				win := windowWords(hist, n)
 				vals := map[graph.ValueID][]uint32{
-					in["logits"]: lw, in["sample.args"]: args, in["sample.penalty"]: {f(pen)},
+					in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {f(pen)},
 				}
 				for _, o := range out {
 					vals[o] = make([]uint32, g.Values[o].Width)

@@ -741,6 +741,15 @@ func (d *Decider) labelScores(lg []float32, groups [][]int32) ([]float32, error)
 	return slices.Clone(s), err
 }
 
+// cpu is the State the decision's composed CPU forms run through: its
+// session, or an encoder's segment (Embedder.seg).
+func (d *Decider) cpu() *State {
+	if d.st != nil {
+		return d.st
+	}
+	return d.emb.seg
+}
+
 // labelScoresOf is one score per label group from the groups' logits, vals,
 // in the groups' order: a group scores by its largest logit (d1's code and
 // " "+code), which the generated argmax picks.
@@ -750,9 +759,9 @@ func (d *Decider) labelScoresOf(vals []float32, groups [][]int32, v int) ([]floa
 	for i, g := range groups {
 		gv := vals[at : at+len(g)]
 		at += len(g)
-		best, ok := nn.Argmax32JIT(gv)
-		if !ok {
-			return nil, fmt.Errorf("model: no generated argmax on this host")
+		best, err := d.cpu().cpuArgmax(gv)
+		if err != nil {
+			return nil, err
 		}
 		s[i] = gv[best]
 	}
@@ -1037,9 +1046,9 @@ func (d *Decider) answer(q *DecisionQuestion, variants [][]float32) (DecisionAns
 	for i, x := range acc {
 		a.Probs[i] = float64(x)
 	}
-	best, ok := nn.Argmax32JIT(acc)
-	if !ok {
-		return a, fmt.Errorf("model: no generated argmax on this host")
+	best, err := d.cpu().cpuArgmax(acc)
+	if err != nil {
+		return a, err
 	}
 	top := float64(acc[best])
 	if q.Type == jlm.QuestionChoice {

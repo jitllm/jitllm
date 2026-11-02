@@ -349,7 +349,7 @@ func sessionsRun(attach func(int) (*model.State, error), prompt []int32, k, n, r
 			if err != nil {
 				return err
 			}
-			sts[i], toks[i] = st, model.Greedy(lg)
+			sts[i], toks[i] = st, st.Sample(nil, lg)
 		}
 		backend.CUDAKernelTimes() // clear: only this arm's steps are reported
 		t0 := time.Now()
@@ -360,7 +360,7 @@ func sessionsRun(attach func(int) (*model.State, error), prompt []int32, k, n, r
 					return err
 				}
 				for i, lg := range lgs {
-					toks[i] = model.Greedy(lg)
+					toks[i] = sts[i].Sample(nil, lg)
 				}
 				continue
 			}
@@ -369,7 +369,7 @@ func sessionsRun(attach func(int) (*model.State, error), prompt []int32, k, n, r
 				if err != nil {
 					return err
 				}
-				toks[i] = model.Greedy(lg)
+				toks[i] = st.Sample(nil, lg)
 			}
 		}
 		rate, err := perSecond(fmt.Sprintf("%d sessions x tg%d", k, n), k*n, time.Since(t0))
@@ -497,7 +497,7 @@ func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int
 		if err != nil {
 			return 0, 0, err
 		}
-		model.Greedy(lg)
+		st.Sample(nil, lg)
 		compiled, tuned = backend.Compiles()-c0, tier.TuneTrials()-u0
 		return time.Since(t0), len(ids), nil
 	}

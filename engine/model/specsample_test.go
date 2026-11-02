@@ -18,16 +18,28 @@ import (
 // far from the trunk's distribution and mostly reject: the residual draw, the
 // acceptance ratio and the rollback all run. The violation -- taking every
 // draft without the ratio test -- leaves the block's distribution in the third
-// token, and must read far above the noise floor there.
+// token, and must read far above the noise floor there. It runs at
+// temperature 1 and at 0.6 with a top-p that cuts. Its floor is too wide to
+// see a distribution cut at the wrong temperature (the host's dist read 0.13
+// under a 0.48 floor): TestSpecDistIsTheDrawsDistribution holds that.
 func TestSpecSamplingKeepsTheDistribution(t *testing.T) {
 	m := openSpecModel(t, "synth-qwen35-hybrid-mtp.gguf", noTune, WithKVF16(false))
 	defer m.Close()
+	for _, c := range []struct {
+		name       string
+		temp, topP float64
+	}{{"T1", 1, 0.95}, {"T0.6 top-p 0.8", 0.6, 0.8}} {
+		t.Run(c.name, func(t *testing.T) { specKeepsTheDistribution(t, m, c.temp, c.topP) })
+	}
+}
+
+func specKeepsTheDistribution(t *testing.T, m *Model, temp, topP float64) {
 	prompt := m.Vocab.Encode("The capital of France is", true)
 	// top-k keeps each distribution on a handful of tokens, so a few thousand
 	// draws measure it; min-p and top-p run in the dist path too.
 	const draws, topK = 1500, 6
 	samp := func(seed int64) *Sampler {
-		return &Sampler{Temp: 1, TopK: topK, TopP: 0.95, Seed: seed}
+		return &Sampler{Temp: temp, TopK: topK, TopP: topP, Seed: seed}
 	}
 	plain := func(seed int64) []int32 {
 		st := m.NewState(len(prompt) + 8)
@@ -39,7 +51,7 @@ func TestSpecSamplingKeepsTheDistribution(t *testing.T) {
 		}
 		var out []int32
 		for len(out) < 3 {
-			y := sm.Sample(lg)
+			y := st.Sample(sm, lg)
 			sm.Observe(y)
 			out = append(out, y)
 			if lg, err = st.Forward(y); err != nil {

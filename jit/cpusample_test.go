@@ -135,10 +135,9 @@ func TestComposedCPUTopK(t *testing.T) {
 // TestComposedCPUSampleTopK forms the sampler's candidates
 // (graph.SampleTopK) on the CPU for every case (SampleCases), the ranked
 // form at selectMin and below and the selection form past it, and holds each to
-// the host sampler's candidates bit for bit in value and id, guard words
-// past every output, ties among the kept on some. The violation: the form
-// with the penalty on the id after each history entry's (SampleNeighbour)
-// parts on every case with a history.
+// the sampler's candidates bit for bit in value and id, guard words past
+// every output, ties among the kept on some. The violation: the window moved
+// to the next id (SampleWindow) parts on every case with a window.
 func TestComposedCPUSampleTopK(t *testing.T) {
 	ran, ties, want, selected := 0, 0, 0, 0
 	for _, c := range SampleCases() {
@@ -146,19 +145,19 @@ func TestComposedCPUSampleTopK(t *testing.T) {
 			selected++
 		}
 		want++
-		s := graph.SampleTopK{NVocab: c.V, K: c.K, Hist: c.B}
+		s := graph.SampleTopK{NVocab: c.V, K: c.K}
 		g := s.Build()
-		run := func(g *graph.Graph) ([]float32, []uint32) {
+		run := func(shift bool) ([]float32, []uint32) {
 			lw := make([]uint32, len(c.Logits))
 			for i, v := range c.Logits {
 				lw[i] = math.Float32bits(v)
 			}
-			vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: SampleArgs(c), g.In[2]: {math.Float32bits(c.Pen)}}
+			vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: SampleWindow(c, shift), g.In[2]: {math.Float32bits(c.Pen)}}
 			formOnCPU(t, g, vals)
 			return wordsF32(vals[g.Out[0]]), vals[g.Out[1]]
 		}
-		gv, gi := run(g)
-		wv, wi := SampleWant(c, false)
+		gv, gi := run(false)
+		wv, wi := SampleWant(c)
 		if bad := SampleMismatch(gv, gi, wv, wi); bad > 0 {
 			t.Errorf("%s: %d of %d places part from the host's; first %v %v, want %v %v", c.Name, bad, len(wv), gv[:min(4, len(gv))], gi[:min(4, len(gi))], wv[:min(4, len(wv))], wi[:min(4, len(wi))])
 			continue
@@ -167,9 +166,9 @@ func TestComposedCPUSampleTopK(t *testing.T) {
 			ties++
 		}
 		if len(c.Hist) > 0 {
-			bv, bi := run(SampleNeighbour(g))
+			bv, bi := run(true)
 			if SampleMismatch(bv, bi, wv, wi) == 0 {
-				t.Errorf("%s: the form with the history moved to the next id matches the host: the gate cannot see it", c.Name)
+				t.Errorf("%s: the window moved to the next id matches: the gate cannot see it", c.Name)
 			}
 		}
 		ran++

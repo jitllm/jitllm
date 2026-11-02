@@ -374,13 +374,9 @@ const (
 	HeadScale
 )
 
-// SampleMaxK and SampleMaxHist bound a device sampler (Head.SampleK, the
-// history in Head.SampleArgs): its candidates' form is made for them once,
-// and a larger k or history reads the logits back.
-const (
-	SampleMaxK    = 256
-	SampleMaxHist = 256
-)
+// SampleMaxK bounds a device sampler's k (Head.SampleK): its candidates'
+// form is made for it once, and a larger k reads the logits back.
+const SampleMaxK = 256
 
 // PickMax is the most ids a device's label pick (Head.Pick) reads: its
 // forms are made for it once, and a longer pick reads the logits back.
@@ -404,14 +400,10 @@ type Head struct {
 	// end (graph.Sample), nil where it states none: what a device serving
 	// the argmax forms.
 	Sample *graph.Graph
-	// SampleTopK is the sampler's candidates as ops from the front end
-	// (graph.SampleTopK at SampleMaxK and SampleMaxHist), nil where it states
-	// none: what a device serving SampleK forms, once, whatever k and the
-	// history's length.
-	SampleTopK *graph.Graph
-	// SampleWalk is a top-k draw's token over SampleTopK's candidates as ops
-	// from the front end (graph.SampleWalk): what a device serving Walk
-	// forms, once, whatever k, the cuts and the history's length.
+	// SampleWalk is a top-k draw's token as ops from the front end
+	// (graph.SampleWalk at SampleMaxK), nil where it states none: what a
+	// device serving SampleK forms, once, whatever k, the cuts and the
+	// repeat window.
 	SampleWalk *graph.Graph
 	// PickGraph is the label pick over the logits (graph.Pick at PickMax),
 	// and PickHead the head projecting the picked rows alone (graph.Head with
@@ -484,25 +476,20 @@ type Head struct {
 	// See model.State.ForwardGreedy.
 	ArgmaxOnly bool
 	Token      int32
-	// SampleK, when positive, asks for the sampler's candidates in place of
-	// the logits: the SampleK best of the row after the repeat penalty in
-	// SampleArgs ([count, the penalty's bits, the history's ids], the layout
-	// of kernels.SampleArgsWords), best first and the lower id on a tie --
-	// exactly the host sampler's top-k (model.Sampler). A tier that serves it
-	// fills SampleVals and SampleIDs, leaves Logits untouched and sets
-	// Sampled; one that cannot fills Logits as always. See
+	// SampleK, when positive, asks for a top-k draw's token in place of the
+	// logits: SampleWalk over the k best of the row after SamplePenalty, on
+	// each token whose count in SampleWindow (a row over the vocabulary) is
+	// above zero, at WalkArgs (k, 1/T, top-p +Inf where off, min-p 0 where
+	// off, and the caller's uniform) -- exactly the CPU's draw
+	// (model.State.Sample). A penalty of 1 leaves the row as it is, whatever
+	// the window holds. A tier that serves it sets Token and Sampled and
+	// leaves Logits untouched; one that cannot fills Logits as always. See
 	// model.State.ForwardSample.
-	SampleK    int
-	SampleArgs []uint32
-	SampleVals []float32
-	SampleIDs  []uint32
-	Sampled    bool
-	// Walk, with SampleK, asks for the draw's token in place of the
-	// candidates: SampleWalk at WalkArgs (k, 1/T, top-p +Inf where off,
-	// min-p 0 where off, and the caller's uniform). A tier that serves it
-	// sets Token and Sampled and reads back nothing else.
-	Walk     bool
-	WalkArgs [5]float32
+	SampleK       int
+	SampleWindow  []float32
+	SamplePenalty float32
+	Sampled       bool
+	WalkArgs      [5]float32
 	// Pick, when non-empty, asks for the logits at these vocabulary ids alone
 	// in place of the row: a decision readout's label ids. A tier that serves
 	// it fills PickVals (as long as Pick at least), leaves Logits untouched

@@ -31,6 +31,18 @@ func answerGate(t *testing.T, violation string) int {
 		t.Fatal("no code generator on this host")
 	}
 	defer j.Close()
+	// A State for the composed argmax the answer picks with.
+	path, ok := existingModel(models["stories260K"])
+	if !ok {
+		t.Fatalf("model not present: %s (nor its container)", models["stories260K"])
+	}
+	m, err := Open(jlmOf(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	st := m.NewState(8)
+	defer st.Close()
 	const guard = 64
 	sentinel := float32(math.NaN())
 	bad := 0
@@ -59,7 +71,7 @@ func answerGate(t *testing.T, violation string) int {
 			}
 			temp := float32(0.5 + rng.Float64()*2)
 			d := &Decider{kind: c.kind, cfg: &jlm.Config{DecisionTemps: []jlm.DecisionTemp{{Type: c.typ, T: temp}}},
-				emb: &Embedder{jit: j}, violation: violation}
+				m: m, st: st, emb: &Embedder{jit: j}, violation: violation}
 			d.acc, d.prob, d.row = make([]float32, n+guard), make([]float32, n+guard), make([]float32, n+guard)
 			d.ramp = make([]float32, n+guard)
 			for i := range d.ramp {

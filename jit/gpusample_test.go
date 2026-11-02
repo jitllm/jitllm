@@ -115,7 +115,7 @@ func runGraphValues(d backend.Device, codes []jit.Code, kerns []backend.Kernel, 
 }
 
 // sampleOnGPU forms the sampler's graph g on d under dv and runs c.
-func sampleOnGPU(t *testing.T, d backend.Device, dv jit.Device, g *graph.Graph, c jit.SampleCase) ([]float32, []uint32) {
+func sampleOnGPU(t *testing.T, d backend.Device, dv jit.Device, g *graph.Graph, c jit.SampleCase, shift bool) ([]float32, []uint32) {
 	t.Helper()
 	_, codes, err := jit.Default().Form(jit.Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: jit.Step{Rows: 1, Page: 64, Keys: 1}, Device: dv})
 	if err != nil {
@@ -130,7 +130,7 @@ func sampleOnGPU(t *testing.T, d backend.Device, dv jit.Device, g *graph.Graph, 
 	for i, v := range c.Logits {
 		lw[i] = math.Float32bits(v)
 	}
-	vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: jit.SampleArgs(c), g.In[2]: {math.Float32bits(c.Pen)}}
+	vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: jit.SampleWindow(c, shift), g.In[2]: {math.Float32bits(c.Pen)}}
 	if err := runGraphValues(d, codes, op.kerns, g, vals); err != nil {
 		t.Fatalf("%s: %v", c.Name, err)
 	}
@@ -143,11 +143,10 @@ func sampleOnGPU(t *testing.T, d backend.Device, dv jit.Device, g *graph.Graph, 
 
 // TestComposedGPUSampleTopK forms the sampler's candidates (graph.SampleTopK)
 // on every GPU device present, each at the division its device states, and
-// holds every case (jit.SampleCases) to the host sampler's candidates bit
-// for bit in value and id, guard words past every output, ties among the
-// kept on some. The violation: the form with the penalty on the id after
-// each history entry's (jit.SampleNeighbour) parts on every case with a
-// history.
+// holds every case (jit.SampleCases) to the sampler's candidates bit for
+// bit in value and id, guard words past every output, ties among the kept
+// on some. The violation: the window moved to the next id
+// (jit.SampleWindow) parts on every case with a window.
 func TestComposedGPUSampleTopK(t *testing.T) {
 	testlock.GPU(t)
 	devs := backend.Open()
@@ -161,10 +160,10 @@ func TestComposedGPUSampleTopK(t *testing.T) {
 			dv := gpuDevice(d)
 			ran, ties := 0, 0
 			for _, c := range cases {
-				s := graph.SampleTopK{NVocab: c.V, K: c.K, Hist: c.B}
+				s := graph.SampleTopK{NVocab: c.V, K: c.K}
 				g := s.Build()
-				gv, gi := sampleOnGPU(t, d, dv, g, c)
-				wv, wi := jit.SampleWant(c, false)
+				gv, gi := sampleOnGPU(t, d, dv, g, c, false)
+				wv, wi := jit.SampleWant(c)
 				if bad := jit.SampleMismatch(gv, gi, wv, wi); bad > 0 {
 					t.Errorf("%s: %d of %d places part from the host's; first %v %v, want %v %v", c.Name, bad, len(wv), gv[:min(4, len(gv))], gi[:min(4, len(gi))], wv[:min(4, len(wv))], wi[:min(4, len(wi))])
 					continue
@@ -173,9 +172,9 @@ func TestComposedGPUSampleTopK(t *testing.T) {
 					ties++
 				}
 				if len(c.Hist) > 0 {
-					bv, bi := sampleOnGPU(t, d, dv, jit.SampleNeighbour(g), c)
+					bv, bi := sampleOnGPU(t, d, dv, g, c, true)
 					if jit.SampleMismatch(bv, bi, wv, wi) == 0 {
-						t.Errorf("%s: the form with the history moved to the next id matches the host: the gate cannot see it", c.Name)
+						t.Errorf("%s: the window moved to the next id matches: the gate cannot see it", c.Name)
 					}
 				}
 				ran++

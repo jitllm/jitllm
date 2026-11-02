@@ -22,7 +22,7 @@ import (
 func TestCoarsenLeavesALongChainUnformed(t *testing.T) {
 	dev := jit.Device{Kind: jit.DeviceGPU, Slots: 30720, Lanes: 32, Units: 20, Regs: 42}
 	for _, v := range []int{65536, 131072} {
-		s := graph.SampleTopK{NVocab: v, K: 256, Hist: 256}
+		s := graph.SampleTopK{NVocab: v, K: 256}
 		g := s.Build()
 		type formed struct {
 			codes []jit.Code

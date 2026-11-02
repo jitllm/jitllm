@@ -16,7 +16,7 @@ import (
 // before the refusal was acted on -- are never built. The bound is the
 // allocation of the whole form.
 func TestCoarsenRefusesWithoutBuildingTheChain(t *testing.T) {
-	g := (&graph.SampleTopK{NVocab: 151552, K: 64, Hist: 64}).Build()
+	g := (&graph.SampleTopK{NVocab: 151552, K: 64}).Build()
 	dev := jit.Device{Kind: jit.DeviceGPU, Slots: 30720, Lanes: 32, Units: 20, Shared: 102400, ExactDiv: true, ExactArith: true}
 	var before, after runtime.MemStats
 	runtime.GC()

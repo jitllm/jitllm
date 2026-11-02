@@ -3019,16 +3019,16 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		}
 		g.prewarming = false
 	}
-	// The sampler's candidates, its walk and the label pick, one form each
-	// whatever k, the cuts, the history and the labels.
+	// The sampler's walk and the label pick, one form each whatever k, the
+	// cuts, the history and the labels.
 	if !g.NoPromptPrewarm && bs != nil && g.argmaxOut != nil {
 		g.prewarming = true
-		for _, gr := range [...]*graph.Graph{bs.sampleTopK, bs.sampleWalk, bs.pickGraph} {
+		for _, gr := range [...]*graph.Graph{bs.sampleWalk, bs.pickGraph} {
 			if gr == nil {
 				continue
 			}
 			if _, err := g.servedSample(gr); err != nil {
-				g.LastErr = "the composed sampler's candidates, its walk or the label pick: " + err.Error()
+				g.LastErr = "the composed sampler's walk or the label pick: " + err.Error()
 			}
 		}
 		g.prewarming = false

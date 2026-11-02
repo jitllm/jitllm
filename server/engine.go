@@ -508,8 +508,8 @@ type LoadOptions struct {
 	DeviceIDs       []string
 	MaxDeviceBlocks int // -1 means "as many as fit"
 	KVF16           *bool
-	// DeviceSample forces where a sampled token's candidates are selected
-	// (model.WithDeviceSample); the zero value, auto, measures.
+	// DeviceSample forces where a sampled token is drawn
+	// (model.WithDeviceSample); the zero value, auto, draws on the device wherever it serves.
 	DeviceSample model.DeviceSampleMode
 	// Placement pins blocks and the head to named devices, in the grammar of
 	// model.ParsePlacement ("0-15=cuda:0,16-31=vulkan:0"); the names are the

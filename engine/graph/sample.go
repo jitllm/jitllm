@@ -1,9 +1,6 @@
 package graph
 
-import (
-	"fmt"
-	"math"
-)
+import "math"
 
 // Sample is greedy sampling: the token of the largest logit, the lower of
 // two equal ones.
@@ -21,24 +18,15 @@ func (s *Sample) Build() *Graph {
 	return g
 }
 
-// SampleTopK is the sampler's candidates: the repeat penalty over a history
-// of at most Hist ids, applied once an entry as the host's sampler applies
-// it (a positive logit divided by the penalty, correctly rounded, any other
-// multiplied), then the K largest of the penalized row, largest first and
-// the lower id on a tie. Its inputs are the logits, the sampler's argument
-// words (a count, the penalty's bits, then the history's ids, an id no row
-// has past the count) and the penalty; its outputs the K values and their
-// ids. A request for k <= K reads the first k, and none of the form depends
-// on k or on the history's length: a penalty is above one and never raises
-// a value, so the K largest after it are among the K+Hist largest before it,
-// and those alone are penalized.
+// SampleTopK is the sampler's candidates: the repeat penalty over the row
+// (penalizedRow), then its K largest, largest first and the lower id on a
+// tie. Its inputs are the logits, sample.window (each token's count in the
+// repeat window, as floats) and sample.penalty; its outputs the K values and
+// their ids. A request for k <= K reads the first k, and none of the form
+// depends on k or on the window's length.
 type SampleTopK struct {
-	NVocab, K, Hist int
+	NVocab, K int
 }
-
-// sampleSteps is how many of the history's entries one expression of the
-// penalty applies.
-const sampleSteps = 16
 
 func (s *SampleTopK) Build() *Graph {
 	b := New()
@@ -49,85 +37,32 @@ func (s *SampleTopK) Build() *Graph {
 
 // emit is SampleTopK on b: its inputs, then the K values and their ids.
 func (s *SampleTopK) emit(b *Builder) (vals, ids ValueID) {
-	C := min(s.K+s.Hist, s.NVocab)
-	K := min(s.K, C)
+	K := min(s.K, s.NVocab)
 	l := b.In("logits", s.NVocab)
-	args := b.In("sample.args", 2+s.Hist)
-	b.G.Values[args].Elem = ElemU32
+	win := b.In("sample.window", s.NVocab)
 	pen := b.In("sample.penalty", 1)
-	u32 := func(name string, w int) Result { return Result{Name: name, Width: w, Elem: ElemU32} }
-	f32 := func(name string, w int) Result { return Result{Name: name, Width: w} }
-	hist := b.Emit(OpSlice, []ValueID{args}, []Result{u32("sample.history", s.Hist)}, nil, Attrs{Offset: 2, Width: s.Hist}, nil, nil)[0]
-	cand := b.Emit(OpTopK, []ValueID{l}, []Result{u32("sample.cand", C), f32("sample.cand.v", C)}, nil, Attrs{TopK: C}, nil, nil)
-	tiled := b.Emit(OpTile, []ValueID{hist}, []Result{u32("sample.history.tiled", C*s.Hist)}, nil, Attrs{Span: s.Hist}, nil, nil)[0]
-	seen := b.Emit(OpMap, []ValueID{cand[0], tiled}, []Result{f32("sample.seen", C*s.Hist)}, nil, Attrs{Fn: MapEqual}, nil, nil)[0]
-	count := b.Emit(OpReduce, []ValueID{seen}, []Result{f32("sample.count", C)}, nil, Attrs{Fn: MapAdd, Span: s.Hist}, nil, nil)[0]
-	v := penalize(b, cand[1], count, pen, s.Hist)
-	// Ranked by id first, so that the lower place of two equal values is the
-	// lower id.
-	negID := b.Emit(OpMap, []ValueID{cand[0]}, []Result{f32("sample.cand.negid", C)}, nil, Attrs{Fn: MapMul, Const: -1}, nil, nil)[0]
-	byID := b.Emit(OpTopK, []ValueID{negID}, []Result{u32("sample.byid", C), f32("sample.byid.v", C)}, nil, Attrs{TopK: C}, nil, nil)
-	pv := b.Emit(OpTake, []ValueID{v, byID[0]}, []Result{f32("sample.byid.pen", C)}, nil, Attrs{}, nil, nil)[0]
-	byIDs := b.Emit(OpTake, []ValueID{cand[0], byID[0]}, []Result{u32("sample.byid.ids", C)}, nil, Attrs{}, nil, nil)[0]
-	best := b.Emit(OpTopK, []ValueID{pv}, []Result{u32("sample.place", K), f32("sample.vals", K)}, nil, Attrs{TopK: K}, nil, nil)
-	out := b.Emit(OpTake, []ValueID{byIDs, best[0]}, []Result{u32("sample.ids", K)}, nil, Attrs{}, nil, nil)[0]
-	return best[1], out
+	v := penalizedRow(b, l, win, pen)
+	cand := b.Emit(OpTopK, []ValueID{v}, []Result{{Name: "sample.ids", Width: K, Elem: ElemU32}, {Name: "sample.vals", Width: K}}, nil,
+		Attrs{TopK: K}, nil, nil)
+	return cand[1], cand[0]
 }
 
-// penalize is v with the repeat penalty applied count times an element, as
-// the host's sampler applies it once a history entry: a positive value
-// divided by the penalty, correctly rounded, any other multiplied. Counts
-// past hist are not reached.
-func penalize(b *Builder, v, count, pen ValueID, hist int) ValueID {
-	w := b.G.Values[v].Width
-	for t0 := 0; t0 < hist; t0 += sampleSteps {
-		var terms []Term
-		cur := Arg{Kind: ArgIn, Index: 0}
-		for t := t0; t < min(t0+sampleSteps, hist); t++ {
-			n := len(terms)
-			terms = append(terms,
-				Term{Fn: MapDiv, Args: [3]Arg{cur, {Kind: ArgIn, Index: 2}}},
-				Term{Fn: MapMul, Args: [3]Arg{cur, {Kind: ArgIn, Index: 2}}},
-				Term{Fn: MapWhere, Args: [3]Arg{cur, {Kind: ArgTerm, Index: n}, {Kind: ArgTerm, Index: n + 1}}},
-				Term{Fn: MapLess, Args: [3]Arg{{Kind: ArgConst, Const: float64(t)}, {Kind: ArgIn, Index: 1}}},
-				Term{Fn: MapWhere, Args: [3]Arg{{Kind: ArgTerm, Index: n + 3}, {Kind: ArgTerm, Index: n + 2}, cur}})
-			cur = Arg{Kind: ArgTerm, Index: n + 4}
-		}
-		v = b.Emit(OpExpr, []ValueID{v, count, pen}, []Result{{Name: fmt.Sprintf("sample.penalized%d", t0/sampleSteps), Width: w}}, nil,
-			Attrs{Expr: terms, Exact: true}, nil, nil)[0]
+// penalizedRow is the repeat penalty over logits l: a token the window
+// holds (its count in win above zero) once, whatever its count -- a
+// positive logit divided by the penalty, correctly rounded, any other
+// multiplied by it -- and every other token as it is.
+func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
+	in := func(i int) Arg { return Arg{Kind: ArgIn, Index: i} }
+	term := func(i int) Arg { return Arg{Kind: ArgTerm, Index: i} }
+	terms := []Term{
+		{Fn: MapDiv, Args: [3]Arg{in(0), in(2)}},
+		{Fn: MapMul, Args: [3]Arg{in(0), in(2)}},
+		{Fn: MapWhere, Args: [3]Arg{in(0), term(0), term(1)}},
+		{Fn: MapLess, Args: [3]Arg{{Kind: ArgConst, Const: 0}, in(1)}},
+		{Fn: MapWhere, Args: [3]Arg{term(3), term(2), in(0)}},
 	}
-	return v
-}
-
-// SampleDraw is SampleTopK's candidates drawn from where they are: of the
-// first k, top-p and then min-p over their softmax at
-// temperature 1, the best always kept, then a Gumbel-max at the temperature
-// -- the largest of (v - v0)/T - log(-log u) over the survivors, u each
-// candidate's OpUniform under the counter keyed by its id. Its inputs are
-// SampleTopK's, then sample.draw (k, 1/T, top-p and min-p: top-p +Inf and
-// min-p 0 where off) and sample.counter (u32: the seed, then the position);
-// its output the token. Top-p's mass before each candidate is a KxK sum:
-// each candidate's row of the probabilities, those of a lower place kept.
-type SampleDraw struct {
-	SampleTopK
-}
-
-func (s *SampleDraw) Build() *Graph {
-	b := New()
-	vals, ids := s.emit(b)
-	draw := b.In("sample.draw", 4)
-	ctr := b.In("sample.counter", 2)
-	b.G.Values[ctr].Elem = ElemU32
-	K := b.G.Values[vals].Width
-	e := sampleEmitter{b}
-	_, d, keep := e.cuts(vals, draw)
-	invT := e.word(draw, 1, "sample.invtemp")
-	u := e.one(OpUniform, "sample.u", K, Attrs{}, ids, ctr)
-	g := e.mapc(MapMul, -1, "sample.gumbel", K, e.mapc(MapLog, 0, "sample.lnlnu", K, e.mapc(MapMul, -1, "sample.nlnu", K, e.mapc(MapLog, 0, "sample.lnu", K, u))))
-	score := e.mapc(MapAdd, 0, "sample.score", K, e.mapc(MapMul, 0, "sample.dt", K, d, invT), g)
-	kept := e.mapc(MapWhere, math.Inf(-1), "sample.kept", K, keep, score)
-	b.Out(e.token(ids, kept))
-	return b.G
+	return b.Emit(OpExpr, []ValueID{l, win, pen}, []Result{{Name: "sample.penalized", Width: b.G.Values[l].Width}}, nil,
+		Attrs{Expr: terms, Exact: true}, nil, nil)[0]
 }
 
 // SampleWalk is SampleTopK's candidates drawn as the host's sampler draws
@@ -136,8 +71,8 @@ func (s *SampleDraw) Build() *Graph {
 // u the caller draws over the survivors' softmax at the temperature -- the
 // first survivor whose mass up to and including it passes u times the
 // survivors' mass, the last survivor where rounding leaves none. Its inputs
-// are SampleTopK's, then sample.walk (k, 1/T, top-p, min-p as SampleDraw's,
-// then u); its output the token. The mass before each survivor is a KxK sum,
+// are SampleTopK's, then sample.walk (k, 1/T, top-p +Inf where off, min-p 0
+// where off, then u); its output the token. The mass before each survivor is a KxK sum,
 // as top-p's. With Prob the outputs are the distribution the draw draws
 // from (u unread): each candidate's share of the survivors' softmax at the
 // temperature (0 where it is cut), then the candidates' ids.
@@ -181,25 +116,24 @@ func (s *SampleWalk) Build() *Graph {
 // first, the lower id of two equal), walked at a uniform u the caller
 // draws -- the first token whose mass up to and including it passes u times
 // the row's mass, the last where rounding leaves none. Its inputs are
-// SampleTopK's logits, sample.args and sample.penalty, sample.ids (the row's
+// SampleTopK's logits, sample.window and sample.penalty, sample.ids (the row's
 // ids in order, u32) and sample.row (1/T, then u); its output the token. The
 // walk is a weighted selection over the row (sampleEmitter.selection): no
 // order of it is formed.
 type SampleRow struct {
-	NVocab, Hist int
+	NVocab int
 }
 
 func (s *SampleRow) Build() *Graph {
 	b := New()
 	l := b.In("logits", s.NVocab)
-	args := b.In("sample.args", 2+s.Hist)
-	b.G.Values[args].Elem = ElemU32
+	win := b.In("sample.window", s.NVocab)
 	pen := b.In("sample.penalty", 1)
 	ids := b.In("sample.ids", s.NVocab)
 	b.G.Values[ids].Elem = ElemU32
 	row := b.In("sample.row", 2)
 	e := sampleEmitter{b}
-	v := e.penalizedRow(l, ids, args, pen, s.Hist)
+	v := penalizedRow(b, l, win, pen)
 	invT, u := e.word(row, 0, "sample.invtemp"), e.word(row, 1, "sample.u")
 	q := e.softmax(e.mapc(MapMul, 0, "sample.scaled", s.NVocab, v, invT), "sample.q")
 	target := e.mapc(MapMul, 0, "sample.target", 1, u, e.one(OpReduce, "sample.mass", 1, Attrs{Fn: MapAdd}, q))
@@ -220,31 +154,48 @@ func (s *SampleRow) Build() *Graph {
 // sample.row; its output the token. With Prob the output is the
 // distribution the draw draws from (u unread), each token's probability:
 // its share of the survivors' softmax at the temperature where a cut fires,
-// of the row's where none does.
+// of the row's where none does. With TopK, sample.cut has a fifth word, k
+// (0 < k < NVocab), and the draw is the host's top-k draw past the bound
+// SampleWalk is formed for: the cuts read the softmax over the k best (the
+// k-th found by a selection counting tokens), and the survivors are walked
+// whether or not a cut fires.
 type SampleCut struct {
-	NVocab, Hist int
-	Prob         bool
+	NVocab     int
+	Prob, TopK bool
 }
 
 func (s *SampleCut) Build() *Graph {
 	b := New()
 	n := s.NVocab
 	l := b.In("logits", n)
-	args := b.In("sample.args", 2+s.Hist)
-	b.G.Values[args].Elem = ElemU32
+	win := b.In("sample.window", s.NVocab)
 	pen := b.In("sample.penalty", 1)
 	ids := b.In("sample.ids", n)
 	b.G.Values[ids].Elem = ElemU32
-	cut := b.In("sample.cut", 4)
+	words := 4
+	if s.TopK {
+		words = 5
+	}
+	cut := b.In("sample.cut", words)
 	e := sampleEmitter{b}
-	v := e.penalizedRow(l, ids, args, pen, s.Hist)
+	v := penalizedRow(b, l, win, pen)
 	invT, topp, minp, u := e.word(cut, 0, "sample.invtemp"), e.word(cut, 1, "sample.topp"), e.word(cut, 2, "sample.minp"), e.word(cut, 3, "sample.u")
 	id := e.mapc(MapMul, 1, "sample.idf", n, ids)
 	notv := func(name string, w int, x ValueID) ValueID {
 		return e.mapc(MapAdd, 1, name, w, e.mapc(MapMul, -1, name+".neg", w, x))
 	}
-	q1 := e.softmax(v, "sample.q1")
-	all := e.mapc(MapLess, 2, "sample.all", n, q1)
+	order := e.softmax(v, "sample.q1")
+	all := e.mapc(MapLess, 2, "sample.all", n, order)
+	// q1 is the probabilities the cuts read, over pool: the row, or the k
+	// best renormalized.
+	q1, pool := order, all
+	if s.TopK {
+		k := e.word(cut, 4, "sample.k")
+		kth := e.selection(order, id, all, all, e.mapc(MapAdd, -1, "sample.k.target", 1, k), false)
+		pool = e.upTo(order, id, kth, "sample.topk")
+		inK := e.mapc(MapMul, 0, "sample.q1k", n, order, pool)
+		q1 = e.mapc(MapDiv, 0, "sample.q1kn", n, inK, e.one(OpReduce, "sample.q1ksum", 1, Attrs{Fn: MapAdd}, inK))
+	}
 	// The best: the largest probability, the lowest id of those.
 	p0 := e.one(OpReduce, "sample.p0", 1, Attrs{Fn: MapMax}, q1)
 	atBest := e.mapc(MapEqual, 0, "sample.atbest", n, q1, p0)
@@ -258,17 +209,15 @@ func (s *SampleCut) Build() *Graph {
 	// the row's mass does.
 	mass1 := e.one(OpReduce, "sample.mass1", 1, Attrs{Fn: MapAdd}, q1)
 	topFired := notv("sample.topfired", 1, e.mapc(MapLess, 0, "sample.short", 1, mass1, topp))
-	edge := e.selection(q1, id, q1, all, topp, true)
-	edgeQ := e.one(OpReduce, "sample.edgeq", 1, Attrs{Fn: MapMax}, e.mapc(MapMul, 0, "sample.edgeqs", n, edge, q1))
-	edgeID := e.one(OpReduce, "sample.edgeid", 1, Attrs{Fn: MapMax}, e.mapc(MapMul, 0, "sample.edgeids", n, edge, id))
-	// Up to the edge: a larger probability, or the edge's and an id not past it.
-	above := e.mapc(MapLess, 0, "sample.above", n, e.mapc(MapMul, -1, "sample.q1neg", n, q1), e.mapc(MapMul, -1, "sample.edgeqneg", 1, edgeQ))
-	tie := e.mapc(MapMul, 0, "sample.tie", n, e.mapc(MapEqual, 0, "sample.attie", n, q1, edgeQ),
-		notv("sample.notpast", n, e.mapc(MapLess, 0, "sample.past", n, edgeID, id)))
-	upTo := e.mapc(MapMax, 0, "sample.upto", n, above, tie)
-	keepP := e.mapc(MapMax, 0, "sample.keepp", n, upTo, notv("sample.topoff", 1, topFired))
-	keep := e.mapc(MapMax, 0, "sample.keep", n, e.mapc(MapMul, 0, "sample.keeppm", n, keepP, notv("sample.above.floor", n, below)), best)
+	edge := e.selection(order, id, q1, pool, topp, true)
+	keepP := e.mapc(MapMax, 0, "sample.keepp", n, e.upTo(order, id, edge, "sample.edge"), notv("sample.topoff", 1, topFired))
+	keep := e.mapc(MapMax, 0, "sample.keep", n,
+		e.mapc(MapMul, 0, "sample.keeppmk", n, e.mapc(MapMul, 0, "sample.keeppm", n, keepP, notv("sample.above.floor", n, below)), pool), best)
 	fired := e.mapc(MapMax, 0, "sample.fired", 1, topFired, minFired)
+	if s.TopK {
+		// A top-k draw walks its survivors whether or not a cut fires.
+		fired = e.mapc(MapLess, 2, "sample.fired.k", 1, fired)
+	}
 	// The survivors' softmax at the temperature, walked in the cut's order.
 	scaled := e.mapc(MapMul, 0, "sample.scaled", n, v, invT)
 	top := e.one(OpReduce, "sample.top", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, math.Inf(-1), "sample.keptscaled", n, keep, scaled))
@@ -280,7 +229,11 @@ func (s *SampleCut) Build() *Graph {
 		return b.G
 	}
 	walkT := e.mapc(MapMul, 0, "sample.walk.target", 1, u, e.one(OpReduce, "sample.ptsum", 1, Attrs{Fn: MapAdd}, pt))
-	walk := e.selection(q1, id, pt, keep, walkT, false)
+	walk := e.selection(order, id, pt, keep, walkT, false)
+	if s.TopK {
+		b.Out(e.argmax(walk))
+		return b.G
+	}
 	// No cut anywhere: the row's walk.
 	rowT := e.mapc(MapMul, 0, "sample.row.target", 1, u, e.one(OpReduce, "sample.mass", 1, Attrs{Fn: MapAdd}, q))
 	row := e.selection(q, id, q, all, rowT, false)
@@ -289,7 +242,7 @@ func (s *SampleCut) Build() *Graph {
 	return b.G
 }
 
-// sampleEmitter is the ops SampleDraw, SampleWalk and SampleRow share on b.
+// sampleEmitter is the ops SampleWalk, SampleRow and SampleCut share on b.
 type sampleEmitter struct{ b *Builder }
 
 func (e sampleEmitter) one(op OpKind, name string, w int, a Attrs, in ...ValueID) ValueID {
@@ -352,42 +305,16 @@ func (e sampleEmitter) softmax(x ValueID, name string) ValueID {
 	return e.mapc(MapDiv, 0, name, w, ex, e.one(OpReduce, name+".sum", 1, Attrs{Fn: MapAdd}, ex))
 }
 
-// penalizedRow is the logits l with the repeat penalty of SampleTopK's args
-// and pen applied to the whole row: each history id's logit penalized once
-// an entry of it (penalize, over the history's own entries), every other as
-// it is. ids is the row's ids. The history is compared with the row a chunk
-// of sampleSteps entries at a time.
-func (e sampleEmitter) penalizedRow(l, ids, args, pen ValueID, hist int) ValueID {
-	n := e.b.G.Values[l].Width
-	u32 := func(name string, w int) Result { return Result{Name: name, Width: w, Elem: ElemU32} }
-	h := e.b.Emit(OpSlice, []ValueID{args}, []Result{u32("sample.history", hist)}, nil, Attrs{Offset: 2, Width: hist}, nil, nil)[0]
-	// Each entry's logit (an id past the row reads the row's last, and
-	// matches no id) and how many entries share its id.
-	raw := e.b.Emit(OpTake, []ValueID{l, h}, []Result{{Name: "sample.history.raw", Width: hist}}, nil, Attrs{}, nil, nil)[0]
-	tiled := e.b.Emit(OpTile, []ValueID{h}, []Result{u32("sample.history.tiled", hist*hist)}, nil, Attrs{Span: hist}, nil, nil)[0]
-	count := e.one(OpReduce, "sample.history.count", hist, Attrs{Fn: MapAdd, Span: hist},
-		e.mapc(MapEqual, 0, "sample.history.same", hist*hist, h, tiled))
-	pv := penalize(e.b, raw, count, pen, hist)
-	// Each token's penalized value where an entry names it, -Inf where none.
-	var m ValueID = -1
-	for c0 := 0; c0 < hist; c0 += sampleSteps {
-		k := min(sampleSteps, hist-c0)
-		hc := e.b.Emit(OpSlice, []ValueID{h}, []Result{u32("sample.history.chunk", k)}, nil, Attrs{Offset: c0, Width: k}, nil, nil)[0]
-		vc := e.one(OpSlice, "sample.history.pen", k, Attrs{Offset: c0, Width: k}, pv)
-		th := e.b.Emit(OpTile, []ValueID{hc}, []Result{u32("sample.history.row", n*k)}, nil, Attrs{Span: k}, nil, nil)[0]
-		tv := e.one(OpTile, "sample.history.rowpen", n*k, Attrs{Span: k}, vc)
-		hit := e.mapc(MapEqual, 0, "sample.history.hit", n*k, ids, th)
-		mc := e.one(OpReduce, "sample.history.named", n, Attrs{Fn: MapMax, Span: k},
-			e.mapc(MapWhere, math.Inf(-1), "sample.history.pick", n*k, hit, tv))
-		if m < 0 {
-			m = mc
-		} else {
-			m = e.mapc(MapMax, 0, "sample.history.max", n, m, mc)
-		}
-	}
-	// named is m > -Inf, as -m < +Inf.
-	named := e.mapc(MapLess, math.Inf(1), "sample.history.isnamed", n, e.mapc(MapMul, -1, "sample.history.neg", n, m))
-	return e.where("sample.penalizedrow", n, named, m, l)
+// upTo is the tokens at or before the one edge marks (a 0/1 over the row)
+// in key's order: a larger key, or the edge's and an id not past its.
+func (e sampleEmitter) upTo(key, id, edge ValueID, name string) ValueID {
+	n := e.b.G.Values[key].Width
+	edgeQ := e.one(OpReduce, name+".q", 1, Attrs{Fn: MapMax}, e.mapc(MapMul, 0, name+".qs", n, edge, key))
+	edgeID := e.one(OpReduce, name+".id", 1, Attrs{Fn: MapMax}, e.mapc(MapMul, 0, name+".ids", n, edge, id))
+	above := e.mapc(MapLess, 0, name+".above", n, e.mapc(MapMul, -1, name+".keyneg", n, key), e.mapc(MapMul, -1, name+".qneg", 1, edgeQ))
+	notPast := e.mapc(MapAdd, 1, name+".notpast", n, e.mapc(MapMul, -1, name+".pastneg", n, e.mapc(MapLess, 0, name+".past", n, edgeID, id)))
+	tie := e.mapc(MapMul, 0, name+".tie", n, e.mapc(MapEqual, 0, name+".attie", n, key, edgeQ), notPast)
+	return e.mapc(MapMax, 0, name, n, above, tie)
 }
 
 // argmax is the index of the largest of x, the lower of two equal (the

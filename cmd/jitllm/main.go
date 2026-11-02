@@ -377,7 +377,7 @@ func benchmark(path string, topts []tok.Option) error {
 	const nTok = 3
 	start := time.Now()
 	for i := 0; i < nTok; i++ {
-		if logits, err = st.Forward(model.Greedy(logits)); err != nil {
+		if logits, err = st.Forward(st.Sample(nil, logits)); err != nil {
 			return err
 		}
 	}
@@ -1767,8 +1767,9 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 		}
 	}
 	o = append(o, model.WithPreload(preload))
-	// JITLLM_DEVICE_SAMPLE=on|off forces where a sampled token's candidates
-	// are selected (model.WithDeviceSample); unset or auto measures.
+	// JITLLM_DEVICE_SAMPLE=on|off forces where a sampled token
+	// is drawn (model.WithDeviceSample); unset or auto draws on the device
+	// wherever it serves.
 	switch os.Getenv("JITLLM_DEVICE_SAMPLE") {
 	case "on":
 		o = append(o, model.WithDeviceSample(model.DeviceSampleOn))

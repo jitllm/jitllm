@@ -53,7 +53,7 @@ func TestComposedGPUCompilesSideBySide(t *testing.T) {
 			continue
 		}
 		ran++
-		s := graph.SampleTopK{NVocab: 37000, K: 256, Hist: 256}
+		s := graph.SampleTopK{NVocab: 37000, K: 256}
 		_, codes, err := jit.Default().Form(jit.Request{Graph: s.Build(), Part: jit.PartSample, Formats: map[jlm.Role]jlm.Type{},
 			Step: jit.Step{Rows: 1, Page: 64, Keys: 1}, Device: gpuDevice(d)})
 		if err != nil {

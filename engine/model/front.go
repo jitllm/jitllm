@@ -137,9 +137,14 @@ type frontSet struct {
 	// graph of them did not verify.
 	expand, collapse *graph.Graph
 	streamsErr       error
-	// cpuSample, cpuTopK and cpuWalk are sample, topK and a top-k draw's
-	// walk over cpuHead's logits.
-	cpuSample, cpuTopK, cpuWalk *graph.Graph
+	// cpuSample and cpuWalk are sample and a top-k draw's walk over
+	// cpuHead's logits; cpuRow and cpuCut the draw with no top-k, with no cut
+	// and with one; cpuWalkProb and cpuCutProb the distributions the walk and
+	// the cut draw from; cpuCutK and cpuCutKProb a top-k draw past the
+	// walk's bound and its distribution.
+	cpuSample, cpuWalk, cpuRow, cpuCut *graph.Graph
+	cpuWalkProb, cpuCutProb            *graph.Graph
+	cpuCutK, cpuCutKProb               *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
 	// sliding layers', as jit.Front states them (nil for one that turns
 	// nothing).
@@ -368,10 +373,21 @@ func (m *Model) frontGraphs() *frontSet {
 	if vocab(s.head) || vocab(s.cpuHead) {
 		sm := graph.Sample{NVocab: m.Cfg.NVocab}
 		s.cpuSample = sm.Build()
-		tk := graph.SampleTopK{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK, Hist: nn.SampleMaxHist}
-		s.cpuTopK = tk.Build()
+		tk := graph.SampleTopK{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK}
 		wk := graph.SampleWalk{SampleTopK: tk}
 		s.cpuWalk = wk.Build()
+		rw := graph.SampleRow{NVocab: m.Cfg.NVocab}
+		s.cpuRow = rw.Build()
+		ct := graph.SampleCut{NVocab: m.Cfg.NVocab}
+		s.cpuCut = ct.Build()
+		wp := graph.SampleWalk{SampleTopK: tk, Prob: true}
+		s.cpuWalkProb = wp.Build()
+		cp := graph.SampleCut{NVocab: m.Cfg.NVocab, Prob: true}
+		s.cpuCutProb = cp.Build()
+		ck := graph.SampleCut{NVocab: m.Cfg.NVocab, TopK: true}
+		s.cpuCutK = ck.Build()
+		ckp := graph.SampleCut{NVocab: m.Cfg.NVocab, TopK: true, Prob: true}
+		s.cpuCutKProb = ckp.Build()
 	}
 	f.set = s
 	return s

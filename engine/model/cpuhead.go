@@ -1,7 +1,7 @@
 package model
 
 import (
-	"math"
+	"fmt"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -25,15 +25,32 @@ import (
 type cpuHeadState struct {
 	// head is the head's form, hidden the one also writing the norm's
 	// rows, rows the latter at cpuRowsCap rows, pick the label pick's,
-	// sample the greedy sampler's and walk a top-k draw's.
-	head, hidden, rows, pick, sample, walk cpuHeadForm
-	served, sampled                        int
-	declined, sampleDeclined               [jit.NumDeclines]int
-	token                                  [1]uint32
-	args                                   []uint32
-	pen                                    [1]uint32
-	// walkArgs is the walk's words: k, 1/T, top-p, min-p and u.
+	// sample the greedy sampler's, walk a top-k draw's, row and cut a draw's
+	// with no top-k.
+	head, hidden, rows, pick, sample, walk, row, cut cpuHeadForm
+	// walkProb and cutProb are the distributions the walk and the cut draw
+	// from, probVals and probIDs the walk's; cutK and cutKProb a top-k
+	// draw past the walk's bound and its distribution.
+	walkProb, cutProb, cutK, cutKProb cpuHeadForm
+	cutKArgs                          [5]float32
+	probVals                          []float32
+	probIDs                           []uint32
+	served, sampled                   int
+	declined                          [jit.NumDeclines]int
+	sampleDeclined                    [jit.NumDeclines]int
+	token                             [1]uint32
+	// noWin is a window that holds no token, for a sampler with no
+	// penalty; pen is the penalty a draw reads.
+	noWin []float32
+	pen   [1]float32
+	// walkArgs is the walk's words: k, 1/T, top-p, min-p and u; rowArgs
+	// the row's (1/T, u) and cutArgs the cut's (1/T, top-p, min-p, u).
 	walkArgs [5]float32
+	rowArgs  [2]float32
+	cutArgs  [4]float32
+	// ids is the row's ids, 0 to the vocabulary's last, which the draws
+	// with no top-k read.
+	ids []uint32
 	// hid is the rows' norm rows where the caller keeps none; xpad, lpad
 	// and hpad a call's last rows where the rows' form's units reach past
 	// them.
@@ -78,6 +95,12 @@ func (s *State) cpuPlaceHead() {
 	s.cpuComposeHead(&h.pick, fg.pickHead, none, 1)
 	s.cpuComposeHead(&h.sample, fg.cpuSample, jit.DeclineNoSample, 1)
 	s.cpuComposeHead(&h.walk, fg.cpuWalk, jit.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.row, fg.cpuRow, jit.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.cut, fg.cpuCut, jit.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.walkProb, fg.cpuWalkProb, jit.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.cutProb, fg.cpuCutProb, jit.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.cutK, fg.cpuCutK, jit.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.cutKProb, fg.cpuCutKProb, jit.DeclineNoSample, 1)
 	d, nv := s.c.NEmbd, s.c.NVocab
 	if f := h.rows.f; f != nil {
 		h.hid = make([]float32, f.rows*d)
@@ -88,8 +111,17 @@ func (s *State) cpuPlaceHead() {
 	if h.pick.f != nil {
 		h.pickIDs, h.pickVals = make([]uint32, nn.PickMax), make([]float32, nn.PickMax)
 	}
-	if h.walk.f != nil {
-		h.args = make([]uint32, 2+nn.SampleMaxHist)
+	if h.walk.f != nil || h.row.f != nil || h.cut.f != nil || h.walkProb.f != nil || h.cutProb.f != nil || h.cutK.f != nil || h.cutKProb.f != nil {
+		h.noWin = make([]float32, nv)
+	}
+	if h.walkProb.f != nil {
+		h.probVals, h.probIDs = make([]float32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK)
+	}
+	if h.row.f != nil || h.cut.f != nil || h.cutProb.f != nil || h.cutK.f != nil || h.cutKProb.f != nil {
+		h.ids = make([]uint32, nv)
+		for i := range h.ids {
+			h.ids[i] = uint32(i)
+		}
 	}
 }
 
@@ -288,6 +320,37 @@ func (s *State) cpuPick(x []float32) jit.Decline {
 	return jit.DeclineServes
 }
 
+// cpuArgmax is the index of the largest of x, the lower of two equal, from
+// the composed greedy sampler at x's width (graph.Sample) on the CPU: a
+// decision's label scores, which are not a vocabulary's row. Its form is
+// composed once a width for the model, at the first ask of it.
+func (s *State) cpuArgmax(x []float32) (int, error) {
+	m := s.m
+	m.argmaxes.mu.Lock()
+	g := m.argmaxes.g[len(x)]
+	if g == nil {
+		sm := graph.Sample{NVocab: len(x)}
+		g = sm.Build()
+		if m.argmaxes.g == nil {
+			m.argmaxes.g = map[int]*graph.Graph{}
+		}
+		m.argmaxes.g[len(x)] = g
+	}
+	m.argmaxes.mu.Unlock()
+	f, err := m.formCPUGraph(s, g, 1, nil)
+	if err != nil {
+		return 0, fmt.Errorf("model: the composed argmax of %d: %w", len(x), err)
+	}
+	h := &s.cpu.head
+	b := &s.cpu.bound
+	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	b.io[0], b.io[1] = unsafe.Pointer(&x[0]), unsafe.Pointer(&h.token[0])
+	for i := range f.codes {
+		s.cpuCall(b, &f.codes[i])
+	}
+	return int(h.token[0]), nil
+}
+
 // cpuGreedy is the token of the largest of logits, the lower id of two
 // equal, from the CPU's composed sampler, or false where it declines.
 func (s *State) cpuGreedy(logits []float32) (int32, bool) {
@@ -328,12 +391,137 @@ func (s *State) Sample(smp *Sampler, logits []float32) int32 {
 		return 0
 	}
 	u := float32(smp.uniform())
-	if whole && smp.Bounded(len(logits)) {
-		if t, ok := s.cpuWalkToken(logits, smp, u); ok {
-			return t
-		}
+	if t, ok := s.cpuDraw(logits, smp, u); whole && ok {
+		return t
 	}
 	return smp.sampleAt(logits, u)
+}
+
+// cpuDraw is smp's sampled token over logits from the CPU's composed draws
+// at the uniform u smp drew for the call: a top-k draw's walk, or with no
+// top-k the row's or, where top-p or min-p is set, the cut's. False where
+// none serves it: a top-k past the walk's bound, a history past theirs.
+func (s *State) cpuDraw(logits []float32, smp *Sampler, u float32) (int32, bool) {
+	n := len(logits)
+	if smp.TopK > 0 && smp.TopK < n && smp.TopK <= nn.SampleMaxK {
+		return s.cpuWalkToken(logits, smp, u)
+	}
+	return s.cpuWideToken(logits, smp, u)
+}
+
+// dist fills d with the distribution smp draws from over logits (a row this
+// State's model produces), from the CPU's composed forms (cpuDist), the host
+// sampler's where they decline.
+func (s *State) dist(smp *Sampler, logits []float32, d *specDist) {
+	if !s.cpuDist(logits, smp, d) {
+		smp.dist(logits, d)
+	}
+}
+
+// topProb is the largest probability of logits' softmax: the draft's
+// confidence in its argmax, from the composed greedy sampler and the
+// distribution of a draw at temperature 1 with no cut.
+func (s *State) topProb(logits []float32, d *specDist) float32 {
+	one := Sampler{Temp: 1}
+	t, ok := s.cpuGreedy(logits)
+	if !ok || !s.cpuDist(logits, &one, d) {
+		return topProb(logits, d)
+	}
+	return d.prob(t)
+}
+
+// cpuDist fills d with the distribution smp draws from over logits, from
+// the CPU's composed forms: a top-k draw's candidates and their share of the
+// survivors (graph.SampleWalk with Prob), else every token's probability
+// (graph.SampleCut with Prob, the row's where no cut fires). False where
+// they decline.
+func (s *State) cpuDist(logits []float32, smp *Sampler, d *specDist) bool {
+	n := len(logits)
+	if !s.cpuHeadOn() || n != s.c.NVocab {
+		return false
+	}
+	h := &s.cpu.head
+	topK := smp.TopK > 0 && smp.TopK < n
+	bounded := topK && smp.TopK <= nn.SampleMaxK
+	hf := &h.cutProb
+	switch {
+	case bounded:
+		hf = &h.walkProb
+	case topK:
+		hf = &h.cutKProb
+	}
+	f, why := hf.formOf()
+	if why != jit.DeclineServes {
+		h.sampleDeclined[why]++
+		return false
+	}
+	win := s.cpuStageSample(smp)
+	topp, minp := smp.cuts()
+	b := &s.cpu.bound
+	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0])
+	if bounded {
+		h.walkArgs = [5]float32{float32(smp.TopK), float32(1 / smp.Temp), topp, minp, 0}
+		b.io[3], b.io[4], b.io[5] = unsafe.Pointer(&h.walkArgs[0]), unsafe.Pointer(&h.probVals[0]), unsafe.Pointer(&h.probIDs[0])
+	} else {
+		d.pall = grow32(d.pall, n)
+		words := unsafe.Pointer(&h.cutArgs[0])
+		h.cutArgs = [4]float32{float32(1 / smp.Temp), topp, minp, 0}
+		if topK {
+			words = unsafe.Pointer(&h.cutKArgs[0])
+			h.cutKArgs = [5]float32{float32(1 / smp.Temp), topp, minp, 0, float32(smp.TopK)}
+		}
+		b.io[3], b.io[4], b.io[5] = unsafe.Pointer(&h.ids[0]), words, unsafe.Pointer(&d.pall[0])
+	}
+	for i := range f.codes {
+		s.cpuCall(b, &f.codes[i])
+	}
+	h.sampled++
+	d.dense = !bounded
+	if bounded {
+		d.ids, d.p = d.ids[:0], d.p[:0]
+		for i, id := range h.probIDs {
+			d.ids, d.p = append(d.ids, int32(id)), append(d.p, h.probVals[i])
+		}
+	}
+	return true
+}
+
+// cpuWideToken is smp's draw with no top-k over logits from the CPU's
+// composed row (graph.SampleRow) or, where top-p or min-p is set, its cut
+// (graph.SampleCut), or with a top-k past the walk's bound the cut's top-k
+// variant, at the uniform u, or false where it declines.
+func (s *State) cpuWideToken(logits []float32, smp *Sampler, u float32) (int32, bool) {
+	if !s.cpuHeadOn() {
+		return 0, false
+	}
+	h := &s.cpu.head
+	topp, minp := smp.cuts()
+	hf, words := &h.row, unsafe.Pointer(&h.rowArgs[0])
+	h.rowArgs = [2]float32{float32(1 / smp.Temp), u}
+	switch n := len(logits); {
+	case smp.TopK > 0 && smp.TopK < n:
+		hf, words = &h.cutK, unsafe.Pointer(&h.cutKArgs[0])
+		h.cutKArgs = [5]float32{float32(1 / smp.Temp), topp, minp, u, float32(smp.TopK)}
+	case minp > 0 || topp < 1:
+		hf, words = &h.cut, unsafe.Pointer(&h.cutArgs[0])
+		h.cutArgs = [4]float32{float32(1 / smp.Temp), topp, minp, u}
+	}
+	f, why := hf.formOf()
+	if why != jit.DeclineServes {
+		h.sampleDeclined[why]++
+		return 0, false
+	}
+	win := s.cpuStageSample(smp)
+	b := &s.cpu.bound
+	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0])
+	b.io[3], b.io[4], b.io[5] = unsafe.Pointer(&h.ids[0]), words, unsafe.Pointer(&h.token[0])
+	for i := range f.codes {
+		s.cpuCall(b, &f.codes[i])
+	}
+	h.sampled++
+	return int32(h.token[0]), true
 }
 
 // cpuWalkToken is smp's top-k draw over logits from the CPU's composed walk
@@ -345,19 +533,19 @@ func (s *State) cpuWalkToken(logits []float32, smp *Sampler, u float32) (int32, 
 	}
 	h := &s.cpu.head
 	f, why := h.walk.formOf()
-	if why == jit.DeclineServes && (smp.TopK > nn.SampleMaxK || len(smp.hist) > nn.SampleMaxHist) {
+	if why == jit.DeclineServes && smp.TopK > nn.SampleMaxK {
 		why = jit.DeclineCaller
 	}
 	if why != jit.DeclineServes {
 		h.sampleDeclined[why]++
 		return 0, false
 	}
-	s.cpuStageSample(smp)
+	win := s.cpuStageSample(smp)
 	topp, minp := smp.cuts()
 	h.walkArgs = [5]float32{float32(smp.TopK), float32(1 / smp.Temp), topp, minp, u}
 	b := &s.cpu.bound
 	*b = cpuBound{own: s.cpuOwn(f), n: 1}
-	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.args[0]), unsafe.Pointer(&h.pen[0])
+	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0])
 	b.io[3], b.io[4] = unsafe.Pointer(&h.walkArgs[0]), unsafe.Pointer(&h.token[0])
 	for i := range f.codes {
 		s.cpuCall(b, &f.codes[i])
@@ -366,18 +554,16 @@ func (s *State) cpuWalkToken(logits []float32, smp *Sampler, u float32) (int32, 
 	return int32(h.token[0]), true
 }
 
-// cpuStageSample writes smp's argument words and penalty where the composed
-// samplers read them: the history, an id no row has past it.
-func (s *State) cpuStageSample(smp *Sampler) {
+// cpuStageSample writes smp's penalty where the composed samplers read it
+// and is the window row they read: smp's count row, or a row holding no
+// token where the penalty is off.
+func (s *State) cpuStageSample(smp *Sampler) unsafe.Pointer {
 	h := &s.cpu.head
-	s.sampleArgs = smp.DeviceArgs(s.sampleArgs)
-	for i := range h.args {
-		h.args[i] = math.MaxUint32
-		if i < len(s.sampleArgs) {
-			h.args[i] = s.sampleArgs[i]
-		}
+	h.pen[0] = smp.penalty()
+	if h.pen[0] == 1 {
+		return unsafe.Pointer(&h.noWin[0])
 	}
-	h.pen[0] = h.args[1]
+	return unsafe.Pointer(&smp.window(s.c.NVocab)[0])
 }
 
 // cpuFormCount is how many forms the model's CPU cache holds, refused ones

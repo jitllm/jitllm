@@ -38,10 +38,12 @@ type Sampler struct {
 
 	rng  *rand.Rand
 	hist []int32
-	// hoff is hist as byte offsets into a logits row, which is what the penalty
-	// kernel addresses with. It is built here rather than in the kernel because
-	// none of the three tiers' assemblers has a sign-extending 32-bit load into
-	// a general register.
+	// win is each token's count in hist, as the composed draws read the
+	// window (graph.SampleTopK's sample.window): the penalty falls once on a
+	// token whose count is above zero.
+	win []float32
+	// hoff is the window's tokens once each as byte offsets into a logits
+	// row, which main's penalty kernel addresses with (distinct).
 	hoff []int64
 
 	// The per-token working set, allocated on the first call and reused.
@@ -63,16 +65,61 @@ func (s *Sampler) Observe(t int32) {
 	if n <= 0 {
 		n = 64
 	}
-	// The window slides within its backing arrays: a slice cut from the
-	// front would leave each append less room, and grow it again every
-	// window or so of tokens.
+	// The window slides within its backing array: a slice cut from the front
+	// would leave each append less room, and grow it again every window or
+	// so of tokens.
 	if len(s.hist) >= n {
-		copy(s.hist, s.hist[len(s.hist)-n+1:])
-		copy(s.hoff, s.hoff[len(s.hoff)-n+1:])
-		s.hist, s.hoff = s.hist[:n-1], s.hoff[:n-1]
+		drop := len(s.hist) - n + 1
+		for _, e := range s.hist[:drop] {
+			s.win[e]--
+		}
+		copy(s.hist, s.hist[drop:])
+		s.hist = s.hist[:n-1]
 	}
 	s.hist = append(s.hist, t)
-	s.hoff = append(s.hoff, 4*int64(t))
+	s.reserve(int(t) + 1)
+	s.win[t]++
+}
+
+// reserve holds the window's count row at n tokens at least: the vocabulary,
+// once the engine draws, so a warm token grows nothing.
+func (s *Sampler) reserve(n int) {
+	if len(s.win) < n {
+		s.win = append(s.win, make([]float32, n-len(s.win))...)
+	}
+}
+
+// window is the count row over a vocabulary of n tokens.
+func (s *Sampler) window(n int) []float32 {
+	s.reserve(n)
+	return s.win[:n]
+}
+
+// penalty is the repeat penalty a draw applies, 1 where it applies none.
+func (s *Sampler) penalty() float32 {
+	if s.RepeatPen > 1 && len(s.hist) > 0 {
+		return float32(s.RepeatPen)
+	}
+	return 1
+}
+
+// distinct is the window's tokens once each, as byte offsets into a logits
+// row (hoff): main's penalty kernel penalizes once an offset. A token is
+// marked taken by its count's sign, restored after.
+func (s *Sampler) distinct() []int64 {
+	s.hoff = s.hoff[:0]
+	for _, t := range s.hist {
+		if s.win[t] > 0 {
+			s.hoff = append(s.hoff, 4*int64(t))
+			s.win[t] = -s.win[t]
+		}
+	}
+	for _, t := range s.hist {
+		if s.win[t] < 0 {
+			s.win[t] = -s.win[t]
+		}
+	}
+	return s.hoff
 }
 
 // sampleGrowStart is how many candidates the unbounded configuration takes
@@ -97,15 +144,14 @@ func (s *Sampler) Sample(logits []float32) int32 {
 func (s *Sampler) sampleAt(logits []float32, u float32) int32 {
 	n := len(logits)
 
-	// The repeat penalty first, on the logits, as llama.cpp does: a positive
-	// logit is divided by the penalty and a negative one multiplied. It is a
-	// scatter over the history; the copy keeps logits unmodified and is skipped
-	// when the penalty is off.
+	// The repeat penalty first, once on each token the window holds: a
+	// positive logit is divided by the penalty and a negative one multiplied.
+	// The copy keeps logits unmodified and is skipped when the penalty is off.
 	vals := logits
-	if s.RepeatPen > 1 && len(s.hoff) > 0 {
+	if s.RepeatPen > 1 && len(s.hist) > 0 {
 		s.pen = grow32(s.pen, n)
 		copy(s.pen, logits)
-		nn.SamplePenalty32JIT(s.pen, s.hoff, float32(s.RepeatPen))
+		nn.SamplePenalty32JIT(s.pen, s.distinct(), float32(s.RepeatPen))
 		vals = s.pen
 	}
 
@@ -219,8 +265,7 @@ func (s *Sampler) drawRow(vals []float32, u float32) int32 {
 // drawBounded is the end of a top-k draw: the candidates are the k best
 // logits in s.ids and s.p, best first. Top-p and min-p cut their softmax at
 // temperature 1, and the draw at u is over the survivors' softmax at the
-// temperature. Sample and SampleFrom both end here, so a device's candidates
-// draw what the host's would.
+// temperature.
 func (s *Sampler) drawBounded(have int, u float32) int32 {
 	topp := float32(math.Inf(1))
 	if s.TopP > 0 && s.TopP < 1 {
@@ -256,22 +301,6 @@ func (s *Sampler) Bounded(n int) bool {
 // draw sizes from it are held to this where they are sized.
 const MaxTopK = 1 << 20
 
-// DeviceArgs is the device sampler's argument block (kernels.SampleArgsWords):
-// the history's length, the penalty's bits and the history, which the device
-// penalizes exactly as Sample's scatter does -- once per entry, in order.
-// The history is empty when the penalty is off. dst is reused.
-func (s *Sampler) DeviceArgs(dst []uint32) []uint32 {
-	dst = dst[:0]
-	if s.RepeatPen > 1 && len(s.hist) > 0 {
-		dst = append(dst, uint32(len(s.hist)), math.Float32bits(float32(s.RepeatPen)))
-		for _, t := range s.hist {
-			dst = append(dst, uint32(t))
-		}
-		return dst
-	}
-	return append(dst, 0, math.Float32bits(1))
-}
-
 // cuts is top-p (+Inf where off) and min-p (0 where off) as the draw reads
 // them.
 func (s *Sampler) cuts() (topp, minp float32) {
@@ -280,30 +309,6 @@ func (s *Sampler) cuts() (topp, minp float32) {
 		topp = float32(s.TopP)
 	}
 	return topp, float32(s.MinP)
-}
-
-// SampleFrom is Sample for a caller holding the top-k candidates already --
-// the k best (penalized) logits, best first, the lower id on a tie, as a
-// device's sampler returns them -- instead of the row. It draws the same
-// uniform Sample would, so for the same candidates and seed it returns the
-// same token.
-func (s *Sampler) SampleFrom(vals []float32, ids []uint32) int32 {
-	return s.sampleFromAt(vals, ids, float32(s.uniform()))
-}
-
-// sampleFromAt is SampleFrom at the call's uniform u, drawn by the caller.
-func (s *Sampler) sampleFromAt(vals []float32, ids []uint32, u float32) int32 {
-	k := len(vals)
-	if k == 0 {
-		return 0
-	}
-	s.ids = grow32i(s.ids, k)
-	s.p = grow32(s.p, k)
-	copy(s.p, vals)
-	for i, id := range ids[:k] {
-		s.ids[i] = int32(id)
-	}
-	return s.drawBounded(k, u)
 }
 
 // seed starts the sampler's stream on first use.

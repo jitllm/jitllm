@@ -11,21 +11,15 @@ import (
 )
 
 // SampleRowRef is graph.SampleRow's definition, the host sampler's draw with
-// no top-k and no cut (model.Sampler's drawRow): the repeat penalty once a
-// history entry in float32, the row's softmax at 1/T in float64, its order
+// no top-k and no cut: the repeat penalty once on each token the window
+// holds, in float32 (penalizeOnce), the row's softmax at 1/T in float64, its order
 // (the larger first, the lower id of two equal), and the walk at u -- the
 // first token whose mass up to and including it passes u times the row's
 // mass, the last where none does. It returns the token and how far u's point
 // is from the nearest edge, as a share of the mass.
 func SampleRowRef(logits []float32, hist []int, pen float32, invT float32, u float64) (tok uint32, margin float64) {
 	v := append([]float32(nil), logits...)
-	for _, h := range hist {
-		if v[h] > 0 {
-			v[h] /= pen
-		} else {
-			v[h] *= pen
-		}
-	}
+	penalizeOnce(v, hist, pen)
 	n := len(v)
 	m := math.Inf(-1)
 	s := make([]float64, n)
@@ -58,6 +52,37 @@ func SampleRowRef(logits []float32, hist []int, pen float32, invT float32, u flo
 	return tok, margin
 }
 
+// penalizeOnce is v with the repeat penalty once on each token hist holds,
+// however often: a positive value divided by pen, any other multiplied.
+func penalizeOnce(v []float32, hist []int, pen float32) {
+	seen := map[int]bool{}
+	for _, h := range hist {
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		if v[h] > 0 {
+			v[h] /= pen
+		} else {
+			v[h] *= pen
+		}
+	}
+}
+
+// windowWords is hist as the forms read the repeat window (sample.window):
+// each of n tokens' count in it, a float's bits.
+func windowWords(hist []int, n int) []uint32 {
+	cnt := make([]float32, n)
+	for _, h := range hist {
+		cnt[h]++
+	}
+	w := make([]uint32, n)
+	for i, x := range cnt {
+		w[i] = math.Float32bits(x)
+	}
+	return w
+}
+
 // TestComposedCPUSampleRow holds graph.SampleRow on the CPU device to its
 // definition, the host sampler's draw with no top-k and no cut: over random
 // logits (some with values repeated, so the order's ties fall to the id),
@@ -66,7 +91,7 @@ func SampleRowRef(logits []float32, hist []int, pen float32, invT float32, u flo
 // edge of the cumulative mass by a margin float32 cannot cross.
 func TestComposedCPUSampleRow(t *testing.T) {
 	const n, H = 300, 16
-	g := (&graph.SampleRow{NVocab: n, Hist: H}).Build()
+	g := (&graph.SampleRow{NVocab: n}).Build()
 	if err := graph.Verify(g, graph.Facts{}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,16 +113,9 @@ func TestComposedCPUSampleRow(t *testing.T) {
 		for i, v := range logits {
 			lw[i] = math.Float32bits(v)
 		}
-		args := make([]uint32, 2+H)
-		args[0], args[1] = uint32(len(hist)), math.Float32bits(pen)
-		for i := 2; i < len(args); i++ {
-			args[i] = math.MaxUint32
-		}
-		for i, h := range hist {
-			args[2+i] = uint32(h)
-		}
+		win := windowWords(hist, n)
 		vals := map[graph.ValueID][]uint32{
-			in["logits"]: lw, in["sample.args"]: args, in["sample.penalty"]: {math.Float32bits(pen)},
+			in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {math.Float32bits(pen)},
 			in["sample.ids"]: append([]uint32(nil), ids...), in["sample.row"]: {math.Float32bits(invT), math.Float32bits(u)},
 			tokV: {0},
 		}

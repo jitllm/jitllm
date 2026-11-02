@@ -416,7 +416,7 @@ func (sp *Speculator) Start(prompt []int32, sm *Sampler) (int32, error) {
 	if err != nil {
 		return 0, err
 	}
-	y := sm.Sample(logits)
+	y := sp.t.Sample(sm, logits)
 	sm.Observe(y)
 	sp.stats.Emitted++
 	hw := c.specHidW()
@@ -675,7 +675,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		if greedy {
 			x = sp.t.Sample(nil, sp.dlog)
 			if sp.opt.minP > 0 {
-				px = float64(topProb(sp.dlog, &sp.dist))
+				px = float64(sp.t.topProb(sp.dlog, &sp.dist))
 			}
 			x = sp.oracleAt(int(sp.stats.Emitted)+i, x)
 		} else {
@@ -686,8 +686,8 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 				}
 			}
 			q := &sp.qdists[i]
-			sm.dist(dl, q)
-			x = sm.Sample(dl)
+			sp.t.dist(sm, dl, q)
+			x = sp.t.Sample(sm, dl)
 			px = float64(q.prob(x))
 		}
 		if sp.opt.minP > 0 && px < sp.opt.minP {
@@ -772,7 +772,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	} else {
 		sm.mark(&sp.smark)
 		for a < kd {
-			sm.dist(lg(a), &sp.dist)
+			sp.t.dist(sm, lg(a), &sp.dist)
 			px, qx := sp.dist.prob(drafts[a]), sp.qdists[a].prob(drafts[a])
 			if sp.fault == faultAcceptUnchecked || qx > 0 && sm.uniform() < float64(px)/float64(qx) {
 				sm.Observe(drafts[a])
@@ -784,7 +784,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		if a < kd {
 			y = sp.residual(sm, lg(a), a, drafts[a])
 		} else {
-			y = sm.Sample(lg(a))
+			y = sp.t.Sample(sm, lg(a))
 		}
 		sm.restore(&sp.smark)
 	}
@@ -901,7 +901,7 @@ func (sp *Speculator) decode(sm *Sampler, greedy bool) ([]int32, error) {
 		if err != nil {
 			return nil, err
 		}
-		y = sm.Sample(lg)
+		y = sp.t.Sample(sm, lg)
 	}
 	sm.Observe(y)
 	sp.next = y
@@ -967,7 +967,7 @@ func (sp *Speculator) residual(sm *Sampler, lg []float32, i int, x int32) int32 
 	}
 	var z int32
 	for n := 0; n < limit; n++ {
-		z = sm.Sample(lg)
+		z = sp.t.Sample(sm, lg)
 		pz, qz := float64(sp.dist.prob(z)), float64(q.prob(z))
 		if pz > 0 && sm.uniform() < 1-qz/pz {
 			return z

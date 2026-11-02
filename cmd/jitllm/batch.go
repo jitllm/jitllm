@@ -100,7 +100,7 @@ func batchCmd(args []string) error {
 				out = make([]int32, *nseq)
 			}
 			for i := range out {
-				out[i] = model.Greedy(st.BatchLogits(i))
+				out[i] = st.Sample(nil, st.BatchLogits(i))
 			}
 		}
 		return time.Since(t0), nil
