@@ -38,7 +38,7 @@ Sources by family: [CPU dispatch](../jit/cpu/emitters.go), [CPU orchestration](.
 | AVX-VNNI instruction | An AVX2 multiply/add dot-product sequence | [`HostDotKind` and dot emitter](../jit/cpu/prevnni.go) |
 | AVX2 host tier, but the SSE floor is available | Independent legacy SSE machine code for the supported operation set | [`EmittersFor` and SSE table](../jit/cpu/emitters.go) |
 | CPU wide/fused packed sweep | Row-tile and tail machine-code kernels | [`MatVecPacked`](../engine/nn/packed.go) |
-| Requested CPU token tile | A smaller successful generated tile; applicable per-token composition | [`packedmm.go`](../engine/nn/packedmm.go), [`State.mm`](../engine/model/prefill.go) |
+| Requested CPU token tile | A smaller successful generated tile; applicable per-token composition | [`packedmm.go`](../engine/nn/packedmm.go), [`Instance.mm`](../engine/model/prefill.go) |
 | GPU integer tensor-core kernel / lowering | Ordinary batched dot-product kernel generated from IR | `batchMV` → `batchMVDot4` in [layer.go](../jit/gpu/tier/layer.go) |
 | GPU attention matrix-instruction path | Tiled FMA score kernel, including sliding-window form | `initScratch` in [layer.go](../jit/gpu/tier/layer.go) |
 | Suitable GPU subgroup softmax | Scalar device kernel generated and compiled for the row shape | `pickSoftmax` in [layer.go](../jit/gpu/tier/layer.go) |

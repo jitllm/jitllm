@@ -371,6 +371,10 @@ func (s *Session) Lease() *Lease { return s.lease }
 // is: its pages to the model's pool, its device history to the device.
 func (s *Session) Close() {
 	s.Release()
+	if s.on != nil {
+		s.on.forget(s)
+		s.on = nil
+	}
 	if d, ok := s.ld.(nn.Session); ok {
 		d.Detach()
 	}

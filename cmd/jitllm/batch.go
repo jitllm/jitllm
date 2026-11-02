@@ -12,21 +12,18 @@ import (
 	"github.com/jitllm/jitllm/engine/model"
 )
 
-// batchCmd decodes one prompt as `-batch` independent sequences in lockstep on
-// one device (model.Instance.ForwardBatchGreedy, or ForwardBatch with -logits) and
-// reports the aggregate rate:
-// the concurrent-serving number, where run reports one conversation's.
+// batchCmd decodes one prompt as `-batch` sessions leasing one instance on one
+// device, continuously batched (model.Batcher), and reports the aggregate
+// rate: the concurrent-serving number, where run reports one conversation's.
 //
-// Every sequence gets the same prompt, fed a token per step like everything
-// after it. The rate is generated tokens over the whole wall, prompt included --
+// Every session gets the same prompt, admitted in chunks beside the decoding
+// rows. The rate is generated tokens over the whole wall, prompt included --
 // vLLM's end-to-end accounting, so the two print comparable numbers.
 func batchCmd(args []string) error {
 	fs := flag.NewFlagSet("batch", flag.ExitOnError)
 	dev := fs.String("devices", "gpu:0", "the one device every block and the head go on")
 	nseq := fs.Int("batch", 16, "sequences decoded together")
 	n := fs.Int("n", 128, "tokens to generate per sequence")
-	logits := fs.Bool("logits", false, "read every row's logits back and pick the token on the host "+
-		"(ForwardBatch), the path a sampled request takes, instead of the device's argmax")
 	cpuProf := fs.String("cpuprofile", "", "write a CPU profile here")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -63,65 +60,50 @@ func batchCmd(args []string) error {
 		return fmt.Errorf("batch needs a device; -devices %q opened none", *dev)
 	}
 	defer closeDev()
-	// decode runs the whole batch on a fresh instance and returns the wall.
-	// The same capacity both times, so the timed run grows nothing.
-	gen := *n
-	decode := func(n int) (time.Duration, error) {
-		st := m.NewBatch(*nseq, len(ids)+gen+1)
-		defer st.Close()
-		if err := st.SetDevice(d); err != nil {
-			return 0, err
+	// The instance is composed once, here; the sessions lease it.
+	capacity := len(ids) + *n + 1
+	in := m.NewInstance(capacity)
+	defer in.Close()
+	if err := in.SetDevice(d); err != nil {
+		return err
+	}
+	if in.GPULayers() != m.Cfg.NLayer || !in.HeadOnDevice() {
+		return fmt.Errorf("device %s took %d/%d blocks, head %v: batch needs all of them",
+			name, in.GPULayers(), m.Cfg.NLayer, in.HeadOnDevice())
+	}
+	pool := model.NewPool()
+	if err := pool.Serve(in, *nseq); err != nil {
+		return err
+	}
+	// decode runs the whole batch and returns the wall and the steps.
+	decode := func(n int) (time.Duration, int, error) {
+		b := m.NewBatcher(*nseq, capacity, model.BatchOver(pool))
+		defer b.Close()
+		for range *nseq {
+			b.Submit(&model.Seq{Prompt: ids, MaxTokens: n})
 		}
-		if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
-			return 0, fmt.Errorf("device %s took %d/%d blocks, head %v: batch needs all of them",
-				name, st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice())
+		t0, steps := time.Now(), 0
+		for retired := 0; retired < *nseq; steps++ {
+			done, err := b.Step()
+			if err != nil {
+				return 0, steps, err
+			}
+			retired += len(done)
 		}
-		feed := make([]int32, *nseq)
-		var out []int32
-		t0 := time.Now()
-		for step := 0; step < len(ids)+n-1; step++ {
-			for i := range feed {
-				if step < len(ids) {
-					feed[i] = ids[step]
-				} else {
-					feed[i] = out[i]
-				}
-			}
-			if !*logits {
-				if out, err = st.ForwardBatchGreedy(feed); err != nil {
-					return 0, err
-				}
-				continue
-			}
-			if _, err = st.ForwardBatch(feed); err != nil {
-				return 0, err
-			}
-			if out == nil {
-				out = make([]int32, *nseq)
-			}
-			for i := range out {
-				out[i] = st.Sample(nil, st.BatchLogits(i))
-			}
-		}
-		return time.Since(t0), nil
+		return time.Since(t0), steps, nil
 	}
 	// A warm-up first, as vLLM's and llama.cpp's benchmarks do: the first step
 	// compiles every ragged matvec and captures the graph.
-	if _, err := decode(4); err != nil {
+	if _, _, err := decode(4); err != nil {
 		return err
 	}
-	steps := len(ids) + *n - 1
-	el, err := decode(*n)
+	el, steps, err := decode(*n)
 	if err != nil {
 		return err
 	}
 	total := float64(*nseq * *n)
-	arm := "device argmax"
-	if *logits {
-		arm = "logits read back"
-	}
-	fmt.Printf("%d sequences x %d generated (+%d prompt steps, %s): %.2f tok/s aggregate, "+
-		"%.2f per sequence, %.2f ms per step\n", *nseq, *n, len(ids)-1, arm,
+	fmt.Printf("%d sequences x %d generated (%d steps, the prompt in chunks): %.2f tok/s aggregate, "+
+		"%.2f per sequence, %.2f ms per step\n", *nseq, *n, steps,
 		total/el.Seconds(), float64(*n)/el.Seconds(), el.Seconds()*1000/float64(steps))
 	return nil
 }

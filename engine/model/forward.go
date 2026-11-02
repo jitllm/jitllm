@@ -3570,6 +3570,7 @@ func (s *Instance) Reset() {
 	s.kv.retireTail(s.pos)
 	s.kv.reset()
 	s.kvErr.Store(nil)
+	s.kvRoom = 0
 	s.kvSkipped = 0
 }
 

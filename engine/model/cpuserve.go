@@ -631,6 +631,17 @@ func (s *Instance) cpuTable(li int, cs, csSWA []float32) ([]float32, int) {
 func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, nlogit int) (jit.Decline, error) {
 	cs, nrot := s.cpuTable(li, cs, csSWA)
 	n := len(pos)
+	// Every row's page is writable before any session's range is checked: a
+	// session's logit row leads its other rows in the step, and the range it
+	// reads holds the pages they write.
+	if hl := s.c.KVSource(li); s.kv.layers[hl].p > 0 {
+		lead := s.Session
+		for a := range n {
+			s.Session = s.rowOwn[a]
+			s.cpuWritable(hl, pos[a])
+		}
+		s.Session = lead
+	}
 	why, err := s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, n, false)
 	if why != jit.DeclineServes || err != nil {
 		return why, err

@@ -98,9 +98,9 @@ func (s *Instance) park() (ParkStats, error) {
 	return st, nil
 }
 
-// Resume undoes Park: every page Park evicted comes back from the store; the
-// history Park brought to the CPU goes back to the device when the session
-// next runs (use). It returns how many pages came back.
+// Resume undoes Park: every page Park evicted comes back from the store, and
+// the history Park brought to the CPU goes back to the device. It returns how
+// many pages came back.
 func (s *Instance) Resume() (int, error) {
 	if !s.parked {
 		return 0, nil
@@ -136,6 +136,13 @@ func (s *Instance) Resume() (int, error) {
 		s.kv.store, s.parkPrev = s.parkPrev, nil
 		for li := s.kv.lo; li < len(s.kv.layers); li++ {
 			s.kv.layers[li].lastSealed = 0
+		}
+	}
+	// The history Park brought home goes back where the instance places
+	// each block, through the session's own view of the device.
+	if s.ld != nil {
+		if err := s.comeBack(); err != nil {
+			return in, err
 		}
 	}
 	return in, nil

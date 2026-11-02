@@ -232,6 +232,37 @@ func leasedOn(runs []Run) (*Instance, error) {
 	return in, nil
 }
 
+// reserveRuns gives every run's session room on its device for the positions
+// its run reaches: a session stepping alone reserves its next position every
+// token (relocateFor), and a step across sessions runs every row through its
+// own session's history there. A session asks only when its run passes what
+// it holds, and then a page of positions ahead.
+func reserveRuns(runs []Run) error {
+	for i := range runs {
+		r := &runs[i]
+		se := r.sess()
+		if se.ld == nil || r.Instance.devCount() == 0 {
+			continue
+		}
+		n := len(r.Tokens)
+		if r.Spans != nil {
+			n = SpanPositions(r.Spans, r.Instance.c.NEmbd)
+		}
+		need := se.bpos[0] + n
+		if need <= se.kvRoom {
+			continue
+		}
+		room := min((need+63)&^63, se.limit)
+		if !se.ld.ReserveKV(room) {
+			if room = need; !se.ld.ReserveKV(room) {
+				return fmt.Errorf("model: the device has no room for run %d's %d positions of history", i, need)
+			}
+		}
+		se.kvRoom = room
+	}
+	return nil
+}
+
 // sess is the session whose history the run reads and writes.
 func (r *Run) sess() *Session {
 	if r.Session != nil {
@@ -267,6 +298,9 @@ func stepRunsOn(runs []Run, lone bool) ([][]float32, error) {
 		}
 		rows += len(r.Tokens)
 		pictures = pictures || r.Spans != nil || r.Encode != nil
+	}
+	if err := reserveRuns(runs); err != nil {
+		return nil, err
 	}
 	if pictures {
 		return stepPictures(runs)
@@ -539,6 +573,8 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	atomic.AddInt64(&s0.m.hostStepRows, int64(rows))
 	out := s0.stepOut(len(runs))
 	at := 0
+	lead := s0.Session
+	defer func() { s0.Session = lead }()
 	for i, r := range runs {
 		st, k := r.Instance, len(r.Tokens)
 		st.Session = r.sess()
@@ -706,6 +742,8 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	}
 	out := s0.stepOut(len(runs))
 	at := 0
+	lead := s0.Session
+	defer func() { s0.Session = lead }()
 	for i, r := range runs {
 		st, k := r.Instance, len(r.Tokens)
 		st.Session = r.sess()

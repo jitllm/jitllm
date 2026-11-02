@@ -27,7 +27,7 @@ matching evidence file and leave a pointer.
 | the pool, dispatch, the JIT's structure, benchmark harnesses, the measurement method | `docs/engineering-history/scheduling-and-measurement.md` |
 | CPU/GPU seam, VRAM budgets, what goes on the card, paging, the prefix cache | `docs/engineering-history/placement.md` |
 | what is open, and the levers shelved for being small | `docs/open-questions.md` |
-| the designs: block paging, device sessions, KV paging, vision as blocks, the coverage survey | `docs/design/` |
+| the designs: block paging, device sessions, KV paging, vision as blocks, the coverage survey; instances and sessions | `docs/design/` |
 | which models a test reads, and every model-selecting test variable | `docs/testing.md` |
 | every architecture, class and projector that converts, and the models each covers | `docs/models.md` (generated from the converter's lists) |
 | what this build converts, runs and serves, by machine; `jitllm doctor` | `docs/capabilities.md` (`docs/capabilities.json` is generated) |
@@ -744,6 +744,37 @@ Evidence: `docs/engineering-history/placement.md` ("RULE 12's tower case").
   usually zero, so reading memory nothing wrote is invisible until it is not.
   `0 * NaN` is NaN.
 
+## The shape: model, instance, session, scheduler
+
+Stated by the user, and the shape every entry point takes:
+
+1. **A model** is the weights, loaded once.
+2. **Composing makes an instance**: every kernel for one placement (which
+   device each block runs on, how heavily it pages). A model has as many
+   instances as the caller makes, each its own placement.
+3. **Composition happens only when an instance is made, relocated or tuned
+   at runtime** -- never in a prefill, a token or a draw, and never because a
+   session opened (`model.TestComposesOnlyWithAnInstance`,
+   `Model.CPUComposes`; the tier's `FormedAtStep`).
+4. **A session is a conversation's history** -- its own KV pages, recurrent
+   state, positions, logits and device view (`model.Session`). Opening one
+   composes nothing.
+5. **The scheduler leases a session an instance per phase** (prefill,
+   generate), the lease held for the whole phase and handed back
+   (`model.Scheduler`, swappable by `WithScheduler`; `model.Pool` is the
+   default). Prefill and generation may lease different instances; a session
+   moving between them moves only the blocks placed differently, the source
+   freed once the copy has landed.
+6. **Batching is many sessions leasing one instance**: each step carries every
+   decoding session's next token and prompts' chunks beside them, one pass
+   over the weights per instance (`model.StepRuns`, `model.Batcher`), rows
+   reassigned every step (`model.TestSessionsShareAnInstance`).
+7. **Relocating an instance moves the history of every session leasing it**;
+   parking a session moves its history alone and leaves the instance where it
+   is (`Instance.Park`, `Instance.Settle`).
+
+Evidence: `docs/design/instances-and-sessions.md`.
+
 ## Scope
 
 **jitllm is an inference OS, and orchestration is its core.** It should use every
@@ -783,9 +814,9 @@ into a call site.
 
 **What is missing is the PLURAL**: several devices at once rather than one,
 layer migration across devices rather than only to and from the host, and
-device-side paging. Not done, named rather than implied: concurrent sessions on
-one device (a session's calls are serialised there) and the sessions-per-device
-budget.
+device-side paging. Not done, named rather than implied: two instances putting
+one block on different cards of one tier (the tier keeps one route a block),
+and the sessions-per-device budget.
 
 - **The libraries read no environment.** Every knob is a `With...()` option;
   `cmd/jitllm` reads the `JITLLM_*` names and passes them through. The one file
@@ -794,13 +825,13 @@ budget.
   package's knobs by what it READS, not by a literal grep for `os.Getenv`. A
   `t.Setenv` of a migrated name reaches nothing and leaves a gate green on a
   configuration never selected.
-- **A session owns the sequence; the tier owns the model.** Two `model.State`s on
-  one tier each get their own KV history through `tier.GPU.Attach()`, which
-  satisfies `nn.LayerDevice` unchanged. Refusing a second State is not an option,
-  stated by the user: *"we can't refuse, jitllm is an inference os multimodel
-  multi devices multi instances"*. A session moving a block off a card leaves
-  it on the card for every other session using it
-  (`model.TestABatchLeavesAnotherSessionAlone`).
+- **A session owns its history; the instance owns the placement; the tier owns
+  the weights.** Each session's device history is its own view of the tier
+  (`tier.GPU.Attach()`), which satisfies `nn.LayerDevice` unchanged. Refusing a
+  second session is not an option, stated by the user: *"we can't refuse,
+  jitllm is an inference os multimodel multi devices multi instances"*. A
+  session's view letting a block go leaves it on the card for every other view
+  holding it (`model.TestABatchLeavesAnotherSessionAlone`).
 - **KV is never held twice.** Host storage follows ownership: a page lives on
   the host or on the device that owns it, never as a standing mirror of both,
   and a prefix shared between sessions is one page (`SharedStore`), not a copy

@@ -20,8 +20,10 @@ type Session struct {
 	kvFormat cpu.KVFmt
 	span     [2]int
 	lease    *Lease
-	// sched is the scheduler that leases the session.
+	// sched is the scheduler that leases the session; on the instance whose
+	// calls last ran for it (use), which Close hands its own session back.
 	sched Scheduler
+	on    *Instance
 	// held1 is the lease the default scheduler hands out, kept in the
 	// session so acquiring one allocates nothing.
 	held1 Lease
@@ -94,6 +96,9 @@ type Session struct {
 	ldQSA    nn.QSADevice
 	tier     nn.LayerDevice
 	held     []bool
+	// kvRoom is the positions ld holds room for (reserveRuns), 0 when not
+	// known.
+	kvRoom int
 	// away says the bound session's history is not where its instance
 	// places the blocks, held says where it is (Park).
 	away bool
@@ -123,6 +128,8 @@ func (s *Instance) use(sess *Session) error {
 		cur.held = append(cur.held[:0], s.onDev...)
 	}
 	s.Session = sess
+	sess.on = s
+	s.headTo(sess)
 	if err := s.attachTier(); err != nil {
 		return err
 	}
@@ -194,7 +201,7 @@ func (s *Instance) attachTier() error {
 		ld = a.Attach()
 	}
 	s.setLD(ld)
-	sess.tier = s.ldCand
+	sess.tier, sess.kvRoom = s.ldCand, 0
 	if !s.borrowsJIT() {
 		s.jit.SetDevice(ld)
 	}
@@ -204,6 +211,7 @@ func (s *Instance) attachTier() error {
 // moveHistory moves block li's history of the bound session to the device
 // s runs it on (dev) or to the CPU, and frees the side it left.
 func (s *Instance) moveHistory(li int, dev bool) error {
+	s.kvRoom = 0
 	if !dev {
 		if !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
 			return fmt.Errorf("model: block %d's history would not come to the CPU", li)
@@ -260,6 +268,32 @@ func (s *Instance) Settle(sess *Session) error {
 		err = s.comeBack()
 	})
 	return err
+}
+
+// forget lets go of sess, which is closing: the instance's calls run for
+// its own session again, its single matvecs through that session's view.
+func (s *Instance) forget(sess *Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Session != sess || s.own == nil {
+		return
+	}
+	s.Session = s.own
+	s.own.away = true
+	s.headTo(s.own)
+	if s.own.ld != nil && !s.borrowsJIT() {
+		s.jit.SetDevice(s.own.ld)
+	}
+}
+
+// headTo points the device's head at sess's logits: a token's projection
+// lands in the session the instance runs for.
+func (s *Instance) headTo(sess *Session) {
+	for _, h := range [2]*nn.Head{s.head, s.headReady} {
+		if h != nil && !h.RowLogits {
+			h.Logits = sess.logits
+		}
+	}
 }
 
 // With calls f with the instance locked: a read of its placement while
