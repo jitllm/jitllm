@@ -183,7 +183,10 @@ func cpuWideProfile() Profile {
 			Resident: map[int]int{0: 9, 1: 10, 2: 11, 3: 12, 4: 13, 5: 14, 6: 15, 7: 8, 9: 7},
 			Walks:    []int{int(x86.R11), int(x86.R8)}, Lanes: []int{1, 4}, Hoist: 8, Scalars: 6, Keep: 7},
 		// Intel's L2 streamer runs up to 20 lines ahead of a load.
-		Ahead{Trips: 2, Min: 2048, Outer: 1, Reach: 20 * 64, Lines: 8},
+		// Reach and Lines are x86 measurements; arm64 never ran its
+		// prefetches before (the lowering skipped them), and none is
+		// measured there that pays.
+		Ahead{Trips: 2, Min: 2048, Outer: 1, Reach: 20 * 64, Lines: 8, ISA: uint64(x86.ISASSE2)},
 	}}
 }
 

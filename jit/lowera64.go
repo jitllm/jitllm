@@ -82,6 +82,8 @@ func lowerA64(k *Kernel, d Device) (lw Lowered, err error) {
 			e.enter(en.I)
 		case EntryEnd:
 			e.leave(en.I)
+		case EntryAhead:
+			e.ahead(en.I)
 		}
 	}
 	if e.err != nil {
@@ -165,6 +167,18 @@ func (e *a64Lowerer) bare(m a64Mem) cpu.XReg {
 	}
 	e.addConstTo(a64Imm, m.base, int64(m.off))
 	return a64Imm
+}
+
+// ahead is a load hint for line i of k.Lines, as x86Lowerer's PREFETCHT0.
+func (e *a64Lowerer) ahead(i int) {
+	l := e.k.Lines[i]
+	nd := e.k.Nodes[l.Load]
+	m := e.addr(nd.Buf, nd.A, nd.Ptr).plus(l.Bytes)
+	if m.off < 0 || m.off%8 != 0 || m.off/8 > 4095 {
+		e.addConstTo(a64Imm, m.base, int64(m.off))
+		m = a64Mem{a64Imm, 0}
+	}
+	e.a.PRFM(m.base, m.off)
 }
 
 // addConstTo is dst = src + c.

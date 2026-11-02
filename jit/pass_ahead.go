@@ -21,6 +21,10 @@ type Ahead struct {
 	// runs ahead: lines a multiple of the L1's alias apart share one set,
 	// and a prefetch past its ways evicts lines before they are read.
 	Lines int
+	// ISA is the instruction sets (Device.ISA's bits) of the hosts whose
+	// prefetchers Reach and Lines were measured on; a device without them
+	// is asked no prefetch.
+	ISA uint64
 }
 
 // AheadLine is a sequence entry's prefetch: node Load's address Bytes on.
@@ -33,7 +37,7 @@ func (Ahead) Name() string { return "ahead" }
 
 func (p Ahead) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
-		if p.Trips <= 0 || k.Seq == nil || !k.readsWeight() {
+		if p.Trips <= 0 || d.ISA&p.ISA != p.ISA || k.Seq == nil || !k.readsWeight() {
 			return nil, false, nil
 		}
 		hs := k.Homes()

@@ -1,6 +1,7 @@
 package jit
 
 import (
+	"runtime"
 	"slices"
 	"testing"
 
@@ -17,7 +18,8 @@ import (
 // hardware prefetcher's reach (2048 rows over twelve), and to none where it
 // covers it (4096, but for Q8_0's f16 scale planes, two bytes a row: 684 B a
 // worker) or a trip moves it less than Min (16 rows): each prefetch is PREFETCHT0
-// (0F 18 /1), counted in the code.
+// (0F 18 /1), PRFM on arm64, counted in the code. Its reach is x86's: an arm64
+// host is asked none.
 func TestAheadPrefetchesTheWeightStream(t *testing.T) {
 	host := uint64(cpu.CPU().ISA())
 	for _, typ := range []quant.Type{quant.Q4_K, quant.Q8_0, quant.Q6_K} {
@@ -53,7 +55,7 @@ func TestAheadPrefetchesTheWeightStream(t *testing.T) {
 				}
 				on, ran := count(2)
 				off, _ := count(0)
-				want := rows == 2048 || rows == 4096 && typ == quant.Q8_0
+				want := (rows == 2048 || rows == 4096 && typ == quant.Q8_0) && runtime.GOARCH == "amd64"
 				if want != ran || want != (on > 0) || off != 0 {
 					t.Errorf("%v at %d rows, isa %#x: ahead ran %v with %d prefetches, %d at no trips; want prefetches %v", typ, rows, isa, ran, on, off, want)
 				}
@@ -63,9 +65,18 @@ func TestAheadPrefetchesTheWeightStream(t *testing.T) {
 }
 
 // prefetchesIn counts the PREFETCHT0 encodings in code: 0F 18 and a ModRM
-// byte whose reg field is 1.
+// byte whose reg field is 1; on arm64 its PRFM words.
 func prefetchesIn(code []byte) int {
 	n := 0
+	if runtime.GOARCH == "arm64" {
+		// prfm <op>, [xn, #imm]: 0xF98 in the top bits.
+		for i := 0; i+4 <= len(code); i += 4 {
+			if w := uint32(code[i]) | uint32(code[i+1])<<8 | uint32(code[i+2])<<16 | uint32(code[i+3])<<24; w&0xFFC00000 == 0xF9800000 {
+				n++
+			}
+		}
+		return n
+	}
 	for i := 0; i+2 < len(code); i++ {
 		if code[i] == 0x0F && code[i+1] == 0x18 && code[i+2]>>3&7 == 1 && code[i+2]>>6 != 3 {
 			n++
@@ -77,9 +88,10 @@ func prefetchesIn(code []byte) int {
 // TestAheadStaysWithinAnL1SetsWays holds a prompt matvec's prefetches over
 // 2048 rows, whose weight words are 8 KiB apart and so share one L1 set, to
 // at most Lines (8) of a stream's lines ahead, where two trips of Q4_K's,
-// Q6_K's and Q8_0's sub-blocks reach past it.
+// Q6_K's and Q8_0's sub-blocks reach past it: formed for an x86 host, with
+// and without VNNI, on any host (the pass's reach is x86's).
 func TestAheadStaysWithinAnL1SetsWays(t *testing.T) {
-	host := uint64(cpu.CPU().ISA())
+	host := uint64(x86.ISATierSSE | x86.ISASSE42 | x86.ISAPOPCNT | x86.ISATierAVX2 | x86.ISABMI2 | x86.ISAVNNI)
 	const rows, k, stride = 2048, 2048, 2048 / 8 * 32
 	for _, typ := range []quant.Type{quant.Q4_K, quant.Q8_0, quant.Q6_K} {
 		jt, _ := jlm.TypeOf(typ)
