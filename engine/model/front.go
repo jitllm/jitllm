@@ -40,7 +40,6 @@ const (
 	UncoveredCentredConv
 	UncoveredTemp
 	UncoveredCompressed
-	UncoveredNGram
 	UncoveredAct
 	UncoveredPooling
 	UncoveredEmbedRows
@@ -64,7 +63,6 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredCentredConv: "a centred short convolution, which the call's runs cut",
 	UncoveredTemp:        "an attention temperature whose position offset is not a whole number",
 	UncoveredCompressed:  "compressed or grouped attention",
-	UncoveredNGram:       "an n-gram embedding",
 	UncoveredAct:         "an activation the container does not state, or not over the block's operands",
 	UncoveredPooling:     "a pooled head (an embedding model's)",
 	UncoveredEmbedRows:   "input rows beyond the token's row, a scale and a position table",
@@ -467,8 +465,6 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 		return UncoveredStreams
 	case c.CentredConv && c.mixerAt(li) == mixShortConv:
 		return UncoveredCentredConv
-	case c.NGramAt(li):
-		return UncoveredNGram
 	case m.container.Config().ActAt(li) == nil:
 		return UncoveredAct
 	case !c.MoEAt(li):
@@ -644,6 +640,12 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// layer's input (the input rows' second output): the block reads its own.
 	if c.PLEDim != 0 {
 		b.In("ple", c.pleWidth())
+	}
+	// The n-gram block's streams take its embedding first (frontngram.go),
+	// its rows the block's side input.
+	if c.NGramAt(li) {
+		st.in = m.ngramStreams(b, st.in, matvec)
+		x = st.in[0]
 	}
 	attnIn := x
 	switch {

@@ -3910,6 +3910,12 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}
 		l := &m.layers[li]
 		s.fuseRun()
+		if c.NGramAt(li) {
+			s.tok1[0] = s.tok
+			if err := s.ngramForCPU(li, 1, nil, s.selfSlot0, s.tok1At); err != nil {
+				return nil, err
+			}
+		}
 		why, err := s.cpuStep(li, l, s.ropeTable(li, s.cs, s.csSWA, 0))
 		if err != nil {
 			return nil, err

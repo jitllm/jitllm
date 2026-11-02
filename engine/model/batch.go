@@ -178,6 +178,12 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		var err error
 		switch {
 		case c.LayerKind(li).Recurrent():
+			if c.NGramAt(li) {
+				s.q4.setRows(s, seq, tokens)
+				if err := s.ngramForCPU(li, n, causal, s.q4.rowsOwner, s.q4.callTok); err != nil {
+					return nil, err
+				}
+			}
 			why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, causal, -1, 0)
 		case len(s.rowOwn) > 0:
 			why, err = s.cpuSessions(li, l, s.bx[:n*c.ResidW()], cs, csSWA, seq, pos, nlogit)

@@ -92,7 +92,7 @@ func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(.
 		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{NB, P}, In: []Operand{planes, tableRopeKon}, Expr: tx.e,
 			Stores: []PrimStore{{Out: tab, Index: at, Value: cvs, Extent: 2 * NB * P},
 				{Out: tab, Index: tx.op(OpAdd, U, at, tx.u(1)), Value: svs, Extent: 2 * NB * P}},
-			Facts: Facts{Words: map[int][]uint32{1: ropeConsts()}, Extents: map[int]int{0: 8*stride + 1}, Quarter: quarter}})
+			Facts: Facts{Words: map[int][]uint32{1: ropeConsts()}, Extents: map[int]int{0: 8*stride + 1}, Quarter: quarter, Whole: true}})
 
 		// Each element of the mean turned with its pair's partner: NEOX
 		// pairs d and d+P, NORM pairs neighbours; the first of a pair

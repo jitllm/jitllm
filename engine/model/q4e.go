@@ -152,6 +152,9 @@ type q4eLayer struct {
 	// NGramConv taps, tap-major once loaded: tap t's channels at t*hcd).
 	ngKey, ngVal                    tensor
 	ngNormK, ngNormQ, ngNormC, ngCv []float32
+	// ngCvTaps is ngCv as the file stores it, a channel's taps contiguous:
+	// the composer's OpStateConv reads it so.
+	ngCvTaps tensor
 }
 
 func (h *q4eHC) tensors() [3]*tensor { return [3]*tensor{&h.down, &h.up, &h.inj} }
@@ -248,15 +251,7 @@ func loadQ4E(l *layer, bi int32, cfg *Config,
 			d.ngVal.k, d.ngVal.rows, len(d.ngNormK), len(d.ngNormQ), len(d.ngNormC), len(d.ngCv), w,
 			cfg.HCMult, cfg.NEmbd, kt)
 	}
-	// The source's [hcd, taps] (channel-major) is re-laid tap-major, so each
-	// tap is one vector of channels.
-	tm := make([]float32, len(d.ngCv))
-	for ch := 0; ch < hd; ch++ {
-		for t := 0; t < kt; t++ {
-			tm[t*hd+ch] = d.ngCv[ch*kt+t]
-		}
-	}
-	d.ngCv = tm
+	d.ngCvTaps = f32Tensor(d.ngCv, hd, kt)
 	return nil
 }
 

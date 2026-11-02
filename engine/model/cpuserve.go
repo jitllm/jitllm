@@ -527,7 +527,7 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) 
 	}
 	b := &s.cpu.bound
 	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: pg.table(max(s.nseq, 1)),
-		recLi: s.cpuRecLi(li), recOf: s.Session, side: s.ple}
+		recLi: s.cpuRecLi(li), recOf: s.Session, side: s.cpuSide(li)}
 	if b.side != nil {
 		b.side = b.side[cb.sideOff:]
 	}
@@ -565,7 +565,8 @@ func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []
 		return why, nil
 	}
 	cs, nrot := s.cpuTable(li, cs, csSWA)
-	return jit.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, s.bple, cs, nrot, seq, pos)
+	side, _ := s.cpuSideRows(li)
+	return jit.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, cs, nrot, seq, pos)
 }
 
 // cpuTowerRows runs tower block li on the CPU the composer's way over the
@@ -664,7 +665,8 @@ func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, po
 // [lo, hi) of a step across sessions, a run of one session's consecutive
 // rows at a time, on that session's form.
 func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, lo, hi int, run bool) (jit.Decline, error) {
-	d, pw := s.c.NEmbd, s.c.pleWidth()
+	d := s.c.NEmbd
+	rside, pw := s.cpuSideRows(li)
 	for a := lo; a < hi; {
 		o, b := s.rowOwn[a], a+1
 		for b < hi && s.rowOwn[b] == o {
@@ -687,8 +689,8 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 		oi.Session = o
 		if run {
 			var side []float32
-			if pw != 0 {
-				side = s.bple[a*pw:]
+			if pw != 0 && rside != nil {
+				side = rside[a*pw:]
 			}
 			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
 				oi.Session = lead
@@ -760,6 +762,9 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 		}
 		*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1, kv: pg,
 			pages: pg.table(max(s.nseq, 1)), recLi: s.cpuRecLi(li), recOf: o}
+		if rside, pw := s.cpuSideRows(li); pw != 0 && rside != nil {
+			b.side = rside[r*pw+cb.sideOff:]
+		}
 		if nrot > 0 {
 			b.cs = cs[r*nrot:]
 		}
@@ -822,7 +827,8 @@ func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32,
 	if why := s.cpuRowsReady(li, f, pos); why != jit.DeclineServes {
 		return why, nil
 	}
-	n, d, nrot, pw := len(pos), s.c.NEmbd, s.c.RopeW(), s.c.pleWidth()
+	n, d, nrot := len(pos), s.c.NEmbd, s.c.RopeW()
+	rside, pw := s.cpuSideRows(li)
 	if s.cpu.fault == cpuFaultChunk && base > 0 {
 		slot := seq[0]
 		clear(s.rstate[li][slot*s.dg.stateStride():][:s.dg.stateStride()])
@@ -837,7 +843,7 @@ func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32,
 				break
 			}
 		}
-		side := s.bple
+		side := rside
 		if pw != 0 && side != nil {
 			side = side[a*pw:]
 		}
@@ -1022,7 +1028,8 @@ func (s *Instance) cpuStash(f *cpuBlockForm, own [][]uint32, c int) {
 func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int, runs bool) error {
 	n := len(pos)
 	pg := &s.kv.layers[s.c.KVSource(li)]
-	d, ns, pw := s.c.NEmbd, s.c.Streams(), s.c.pleWidth()
+	d, ns := s.c.NEmbd, s.c.Streams()
+	_, pw := s.cpuSideRows(li)
 	so := s.cpuSideOff(li)
 	slots := max(pg.arenaSlots(), 1)
 	b := &s.cpu.bound
@@ -1564,7 +1571,7 @@ func (s *Instance) cpuWhy(li int) jit.Decline {
 		return jit.DeclineISA
 	case g == nil:
 		return jit.DeclineNoGraph
-	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && (c.PLEDim == 0 || s.ple == nil):
+	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && s.cpuSide(li) == nil:
 		return jit.DeclineFeeds
 	case c.MoEAt(li) && !s.cpuBanksPaged(li):
 		// The forms read a bank as one view of its experts in the host's
@@ -1612,6 +1619,27 @@ func sideAtBinding(gr *graph.Graph) int {
 		}
 	}
 	return off
+}
+
+// cpuSide is block li's side input of decode's row: the n-gram block's
+// gathered rows (ngramForCPU), the row's per-layer inputs on a model of
+// them, nil where the block has none.
+func (s *Instance) cpuSide(li int) []float32 {
+	if s.c.NGramAt(li) && s.q4 != nil && s.q4.ng != nil {
+		return s.q4.ng.emb
+	}
+	if s.c.PLEDim == 0 {
+		return nil
+	}
+	return s.ple
+}
+
+// cpuSideRows is cpuSide over a call's rows, and its width a row.
+func (s *Instance) cpuSideRows(li int) ([]float32, int) {
+	if s.c.NGramAt(li) && s.q4 != nil && s.q4.ng != nil {
+		return s.q4.ng.emb, s.c.NGramWidth()
+	}
+	return s.bple, s.c.pleWidth()
 }
 
 // cpuSideOff is block li's sideOff, 0 for a block not composed.
@@ -2921,6 +2949,12 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &h.ffn.up
 		case jlm.RoleHCFFNInject:
 			return &h.ffn.inj
+		case jlm.RoleNGramKey:
+			return &h.ngKey
+		case jlm.RoleNGramValue:
+			return &h.ngVal
+		case jlm.RoleNGramConv:
+			return &h.ngCvTaps
 		}
 	}
 	return nil
@@ -3114,6 +3148,12 @@ func (s *Instance) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 			return h.attn.norm
 		case jlm.RoleHCFFNNorm:
 			return h.ffn.norm
+		case jlm.RoleNGramNormKey:
+			return h.ngNormK
+		case jlm.RoleNGramNormQuery:
+			return h.ngNormQ
+		case jlm.RoleNGramNormConv:
+			return h.ngNormC
 		}
 	}
 	return nil

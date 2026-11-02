@@ -2240,6 +2240,14 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.hcFU
 	case jlm.RoleHCFFNInject:
 		return l.hcFI
+	case jlm.RoleNGramKey:
+		return l.ngKey
+	case jlm.RoleNGramValue:
+		return l.ngVal
+	case jlm.RoleNGramConv:
+		if l.q4e != nil && l.q4e.ngram {
+			return &l.q4e.ngTaps
+		}
 	case jlm.RoleIdxQ:
 		return l.idxQ
 	case jlm.RoleIdxQB:
@@ -2492,6 +2500,11 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 			return l.q4e.normA
 		}
 		return l.q4e.normF
+	case jlm.RoleNGramNormKey, jlm.RoleNGramNormQuery, jlm.RoleNGramNormConv:
+		if l.q4e == nil || !l.q4e.ngram {
+			return nil
+		}
+		return [...]backend.Buf{l.q4e.ngK, l.q4e.ngQ, l.q4e.ngC}[r-jlm.RoleNGramNormKey]
 	}
 	return nil
 }
