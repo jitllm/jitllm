@@ -53,7 +53,7 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 	mixed := matvec(n, jlm.RoleAttnQKV, g.chans)
 	conv := b.Emit(graph.OpStateConv, []graph.ValueID{mixed}, []graph.Result{{Name: "conv", Width: g.chans}},
 		[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: g.conv, Rows: g.chans}}, graph.Attrs{Taps: g.conv},
-		[]graph.StateRef{{Name: "rec.conv"}}, []graph.StateRef{{Name: "rec.conv", Version: 1}})[0]
+		[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0]
 	act := silu("conv.act", conv)
 	q := slice("q", act, 0, 0, qk, qk)
 	k := slice("k", act, 0, qk, qk, qk)
@@ -103,7 +103,7 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 
 	o := b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, decay, beta}, []graph.Result{{Name: "delta", Width: vh * dv}}, nil,
 		graph.Attrs{NHead: vh, NKVHead: kh, HeadDim: dk, Tiled: g.tiled, Span: stateSpan(c, vh*dv*dk)},
-		[]graph.StateRef{{Name: "rec.state"}}, []graph.StateRef{{Name: "rec.state", Version: 1}})[0]
+		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0]
 	o = b.HeadNorm(o, jlm.RoleSSMNorm, dv, c.RMSEps)
 	if g.chanDecay || c.DeltaSigmoidGate {
 		return sigmoidMul(b, "gated", z, o), nil

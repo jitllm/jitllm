@@ -105,8 +105,7 @@ func (k *Kernel) history() (Operand, bool) {
 	for _, b := range k.Bufs {
 		switch o := b.Operand; {
 		case o.Kind != OperandTable:
-		case o.Name == tableRows.Name, o.Name == tableWindows.Name, o.Name == tablePages.Name,
-			o.Name == tableKeys.Name, o.Name == tableValues.Name:
+		case o.Table == TableRows, o.Table == TableWindows, o.Table == TablePages, o.Table == TableKeys, o.Table == TableValues:
 			return o, true
 		}
 	}

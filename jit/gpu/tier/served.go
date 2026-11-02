@@ -6,7 +6,6 @@ import (
 	"maps"
 	"runtime"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -82,7 +81,7 @@ type composedPart struct {
 	formats map[jlm.Role]jlm.Type
 	weights map[jlm.Role]*resident
 	vectors map[jlm.Role]backend.Buf
-	tables  map[string]backend.Buf
+	tables  map[jit.TableKey]backend.Buf
 	// history, keys and page are a block's history layout and its step's
 	// key bound and page.
 	history    jit.History
@@ -170,7 +169,7 @@ type partArg struct {
 	i      int
 	role   jlm.Role
 	region int
-	table  string
+	table  jit.TableKey
 	// read and writes are whether the code reads and writes it
 	// (jit.Binding.Read, Writes): a binding is not always both.
 	read, writes bool
@@ -395,9 +394,9 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 				args = append(args, partArg{kind: partWeight, role: o.Role, region: o.Region})
 			case o.Kind == jit.OperandVector:
 				args = append(args, partArg{kind: partVector, role: o.Role})
-			case o.Kind == jit.OperandTable && sl.tables[o.Name] != nil:
-				args = append(args, partArg{kind: partTable, table: o.Name})
-			case o.Kind == jit.OperandTable && o.Name == expertTable && sl.paged != nil:
+			case o.Kind == jit.OperandTable && sl.tables[o.Key()] != nil:
+				args = append(args, partArg{kind: partTable, table: o.Key()})
+			case o.Kind == jit.OperandTable && o.Table == jit.TableExperts && sl.paged != nil:
 				// The banks' page table, the form's own: written each step
 				// before the codes that read it run (pagedRun).
 				i, ok := own[o]
@@ -463,12 +462,12 @@ func (f *partForm) passHalves() error {
 			if a.kind != partTable {
 				continue
 			}
-			switch a.table {
-			case "kv.k", "kv.v":
+			switch a.table.Table {
+			case jit.TableKeys, jit.TableValues:
 				if a.read && f.passLo < 0 {
 					f.passLo = ci
 				}
-			case "run.out":
+			case jit.TableRunOut:
 				if a.writes {
 					f.passHi = ci + 1
 				}
@@ -489,7 +488,7 @@ func (f *partForm) passHalves() error {
 			switch {
 			case !a.writes:
 			case a.kind == partIn || a.kind == partOut,
-				a.kind == partTable && a.table != "run.out" && a.table != "kv.k" && a.table != "kv.v",
+				a.kind == partTable && a.table.Table != jit.TableRunOut && a.table.Table != jit.TableKeys && a.table.Table != jit.TableValues,
 				a.kind == partOwn && read[a.i]:
 				return fmt.Errorf("the composer's kernel %d of a pass writes what a pass cannot run again over", ci)
 			}
@@ -690,9 +689,8 @@ func (ar *partArena) free() uint64 {
 	return n
 }
 
-// expertTable is the step's table of a bank held in pages, as the composer
-// names it (jit.Request.Paged).
-const expertTable = "experts"
+// tableKey is the step's table t, its one instance.
+func tableKey(t jit.Table) jit.TableKey { return jit.TableKey{Table: t} }
 
 // pagedHalves finds where a form over banks in pages is cut (partForm.split):
 // at its first code that binds a bank, with the selection those codes read
@@ -712,7 +710,7 @@ func (f *partForm) pagedHalves(gr *graph.Graph, vals map[graph.ValueID]int, own 
 		}
 	}
 	for o, i := range own {
-		if o.Kind == jit.OperandTable && o.Name == expertTable {
+		if o.Kind == jit.OperandTable && o.Table == jit.TableExperts {
 			f.table = i
 		}
 	}
@@ -1401,15 +1399,15 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	// A form of several rows reads the rows it runs from the call's word: a
 	// part whose call states none runs its form's every row.
-	if _, ok := sl.tables["rows.n"]; !ok {
+	if _, ok := sl.tables[tableKey(jit.TableCall)]; !ok {
 		every, err := g.everyRow()
 		if err != nil {
 			return nil, fail(err)
 		}
 		if sl.tables == nil {
-			sl.tables = map[string]backend.Buf{}
+			sl.tables = map[jit.TableKey]backend.Buf{}
 		}
-		sl.tables["rows.n"] = every
+		sl.tables[tableKey(jit.TableCall)] = every
 	}
 	key, codes, err := g.askPart(r, &sl, sk.rows)
 	if err != nil {
@@ -1734,11 +1732,16 @@ func (g *devTier) servedPickHead(bs *blockScratch, norm backend.Buf) (*servedPar
 }
 
 // tableName is the table gr writes: rope.cs, or rope.cs.i past the first.
-func tableName(gr *graph.Graph) string {
+func ropeIndex(gr *graph.Graph) (int, bool) {
 	if gr == nil || len(gr.Out) != 1 {
-		return ""
+		return 0, false
 	}
-	return gr.Values[gr.Out[0]].Name
+	for _, o := range gr.Ops {
+		if o.Kind == graph.OpRopeTable {
+			return o.Attr.Rotary, true
+		}
+	}
+	return 0, false
 }
 
 // tableAxes says gr is a table over several position axes, which reads each
@@ -1758,27 +1761,26 @@ func tableAxes(gr *graph.Graph) bool {
 func (g *devTier) servedTable(gr *graph.Graph, R int, cs, planes, pos backend.Buf) (*servedPart, error) {
 	sk := servedKey{kind: partRope, graph: gr, rows: R}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
-		name := tableName(gr)
-		if !strings.HasPrefix(name, "rope.cs") {
-			return composedPart{}, fmt.Errorf("the composed table writes %q, which is not a rotary table", name)
+		i, ok := ropeIndex(gr)
+		if !ok {
+			return composedPart{}, errors.New("the composed table is not a rotary table")
 		}
-		pn := "rope.pos"
+		pn := tableKey(jit.TablePos)
 		if tableAxes(gr) {
-			pn = "rope.pos.axes"
+			pn = tableKey(jit.TableAxisPos)
 		}
-		pl := "rope.planes" + strings.TrimPrefix(name, "rope.cs")
 		return composedPart{kind: partRope, part: jit.PartTable, graph: gr, formats: map[jlm.Role]jlm.Type{},
-			tables: map[string]backend.Buf{name: cs, pl: planes, pn: pos}}, nil
+			tables: map[jit.TableKey]backend.Buf{{Table: jit.TableAngles, Instance: i}: cs, {Table: jit.TablePlanes, Instance: i}: planes, pn: pos}}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	// Bound again every step, by the names the build gave them.
+	// Bound again every step, by the keys the build gave them.
 	for k := range sv.sl.tables {
-		switch {
-		case strings.HasPrefix(k, "rope.cs"):
+		switch k.Table {
+		case jit.TableAngles:
 			sv.sl.tables[k] = cs
-		case strings.HasPrefix(k, "rope.planes"):
+		case jit.TablePlanes:
 			sv.sl.tables[k] = planes
 		default:
 			sv.sl.tables[k] = pos
@@ -2005,9 +2007,9 @@ func (g *devTier) servedEmbed(bs *blockScratch, R int) (*servedPart, error) {
 			}
 		}
 		cp := composedPart{kind: partEmbed, part: jit.PartEmbed, graph: g.embedFault(gr), formats: formats, weights: weights,
-			vectors: vectors, tables: map[string]backend.Buf{"tokens": bs.embTok}}
+			vectors: vectors, tables: map[jit.TableKey]backend.Buf{tableKey(jit.TableTokens): bs.embTok}}
 		if bs.posW != nil {
-			cp.tables["rope.pos"] = bs.embPos
+			cp.tables[tableKey(jit.TablePos)] = bs.embPos
 		}
 		return cp, nil
 	})
@@ -2021,9 +2023,9 @@ func (g *devTier) servedEmbed(bs *blockScratch, R int) (*servedPart, error) {
 	for role := range sv.sl.vectors {
 		sv.sl.vectors[role] = bs.embSV[role]
 	}
-	sv.sl.tables["tokens"] = bs.embTok
-	if _, ok := sv.sl.tables["rope.pos"]; ok {
-		sv.sl.tables["rope.pos"] = bs.embPos
+	sv.sl.tables[tableKey(jit.TableTokens)] = bs.embTok
+	if _, ok := sv.sl.tables[tableKey(jit.TablePos)]; ok {
+		sv.sl.tables[tableKey(jit.TablePos)] = bs.embPos
 	}
 	return sv, nil
 }
@@ -2595,15 +2597,15 @@ func (g *devTier) bindRec(sv *servedPart, bs *blockScratch, sid uint64, l *layer
 		return false
 	}
 	t := sv.sl.tables
-	t["rec.conv"], t["rec.conv.out"] = l.pool.c[par], l.pool.c[1-par]
+	t[tableKey(jit.TableRecConv)], t[tableKey(jit.TableRecConvOut)] = l.pool.c[par], l.pool.c[1-par]
 	if g.recShared {
 		if bs.cRows == nil {
 			return false
 		}
-		t["rec.state"], t["rec.state.out"], t["rec.rows"] = l.pool.s[0], l.pool.s[0], bs.cRows
+		t[tableKey(jit.TableRecState)], t[tableKey(jit.TableRecStateOut)], t[tableKey(jit.TableRecRows)] = l.pool.s[0], l.pool.s[0], bs.cRows
 		return true
 	}
-	t["rec.state"], t["rec.state.out"] = l.pool.s[par], l.pool.s[1-par]
+	t[tableKey(jit.TableRecState)], t[tableKey(jit.TableRecStateOut)] = l.pool.s[par], l.pool.s[1-par]
 	return true
 }
 
@@ -3171,20 +3173,20 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 		gr.Block = 0
 		sl := composedPart{kind: kind, graph: &gr, formats: map[jlm.Role]jlm.Type{},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
-			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": kk, "kv.v": kv, "pages": tab, "rows": rows,
-				"rows.win": rowsW, "q.off": qOff, "rows.n": calls},
+			tables: map[jit.TableKey]backend.Buf{tableKey(jit.TableAngles): cs, tableKey(jit.TableKeys): kk, tableKey(jit.TableValues): kv, tableKey(jit.TablePages): tab, tableKey(jit.TableRows): rows,
+				tableKey(jit.TableWindows): rowsW, tableKey(jit.TableQOff): qOff, tableKey(jit.TableCall): calls},
 			history: poolHistory(geom),
 			keys:    keys, page: page, seqs: seqs, paged: l.paged()}
 		if run != nil {
 			sl.history.Passes = true
-			sl.tables["run.in"], sl.tables["run.out"] = run[0], run[1]
+			sl.tables[tableKey(jit.TableRunIn)], sl.tables[tableKey(jit.TableRunOut)] = run[0], run[1]
 		}
 		if readsPlanes(l.graph) {
 			pl := g.blockPlanes()
 			if pl == nil {
 				return sl, fmt.Errorf("the composed block %d turns by the rotary's planes, which the tier holds none of", li)
 			}
-			sl.tables["rope.planes"] = pl
+			sl.tables[tableKey(jit.TablePlanes)] = pl
 		}
 		if l.linear && l.pool != nil {
 			t := sl.tables
@@ -3193,8 +3195,8 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			if out == nil {
 				out = l.pool.s[0]
 			}
-			t["rec.state"], t["rec.state.out"], t["rec.conv"], t["rec.conv.out"] = l.pool.s[0], out, l.pool.c[0], l.pool.c[1]
-			t["rec.rows"] = rec
+			t[tableKey(jit.TableRecState)], t[tableKey(jit.TableRecStateOut)], t[tableKey(jit.TableRecConv)], t[tableKey(jit.TableRecConvOut)] = l.pool.s[0], out, l.pool.c[0], l.pool.c[1]
+			t[tableKey(jit.TableRecRows)] = rec
 		}
 		for _, o := range l.graph.Ops {
 			for _, w := range o.Weight {
@@ -3232,16 +3234,16 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 		sv.sl.vectors[r] = l.roleVector(r)
 	}
 	t := sv.sl.tables
-	t["rope.cs"], t["kv.k"], t["kv.v"], t["pages"], t["rows"], t["rows.win"], t["q.off"] = cs, kk, kv, tab, rows, rowsW, qOff
-	t["rows.n"] = calls
+	t[tableKey(jit.TableAngles)], t[tableKey(jit.TableKeys)], t[tableKey(jit.TableValues)], t[tableKey(jit.TablePages)], t[tableKey(jit.TableRows)], t[tableKey(jit.TableWindows)], t[tableKey(jit.TableQOff)] = cs, kk, kv, tab, rows, rowsW, qOff
+	t[tableKey(jit.TableCall)] = calls
 	if run != nil {
-		t["run.in"], t["run.out"] = run[0], run[1]
+		t[tableKey(jit.TableRunIn)], t[tableKey(jit.TableRunOut)] = run[0], run[1]
 	}
 	if l.linear {
-		t["rec.rows"] = rec
+		t[tableKey(jit.TableRecRows)] = rec
 	}
-	if _, ok := t["rope.planes"]; ok {
-		t["rope.planes"] = g.blockPlanes()
+	if _, ok := t[tableKey(jit.TablePlanes)]; ok {
+		t[tableKey(jit.TablePlanes)] = g.blockPlanes()
 	}
 	return sv, nil
 }

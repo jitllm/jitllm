@@ -884,7 +884,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	hist := graph.SharedHistory(c.KVSource(li))
 	if !shared {
-		hist = graph.StateRef{Name: "kv", Version: b.KVAppend(k, v, 0)}
+		hist = graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
 	}
 	scale := c.AttnScale
 	if scale == 0 {
@@ -1340,7 +1340,7 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueI
 		parts, width = append(parts, ik), row+id
 	}
 	krow := b.Emit(graph.OpConcat, parts, []graph.Result{{Name: "kv.row", Width: width}}, nil, graph.Attrs{}, nil, nil)[0]
-	hist := graph.StateRef{Name: "kv", Version: b.KVAppend(krow, krow, 0)}
+	hist := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(krow, krow, 0)}
 	scale := c.AttnScale
 	if scale == 0 {
 		scale = 1 / math.Sqrt(float64(hd))

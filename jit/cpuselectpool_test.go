@@ -137,7 +137,7 @@ func composedCPUSelectPooled(t *testing.T, pc pooledCase) {
 	n := pc.pos + 1
 	b := graph.New()
 	k, v := b.In("k", pc.W), b.In("v", pc.W)
-	h := graph.StateRef{Name: "kv", Version: b.KVAppend(k, v, 0)}
+	h := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
 	layout := graph.RopeNorm
 	if pc.Neox {
 		layout = graph.RopeNeox

@@ -99,6 +99,19 @@ func (p *packed) bank(sheet, sheets, stride int) {
 	}
 }
 
+// codesID is a code table's instance (TableCodes): its four words folded
+// (FNV-1a), so two formats' tables are two tables.
+func codesID(w []uint32) int {
+	h := uint64(14695981039346656037)
+	for _, x := range w {
+		for b := range 4 {
+			h ^= uint64(x >> (8 * b) & 0xff)
+			h *= 1099511628211
+		}
+	}
+	return int(h >> 1)
+}
+
 // Code is entry q of the format's code table, its sixteen bytes four words
 // of constants.
 func (p *packed) Code(t *[16]uint8, q int) int {
@@ -108,7 +121,7 @@ func (p *packed) Code(t *[16]uint8, q int) int {
 			w = append(w, uint32(t[i])|uint32(t[i+1])<<8|uint32(t[i+2])<<16|uint32(t[i+3])<<24)
 		}
 		p.codes = len(*p.in)
-		*p.in = append(*p.in, Operand{Kind: OperandTable, Name: fmt.Sprintf("codes.%x", w), Elem: ir.U32})
+		*p.in = append(*p.in, tableOp(TableCodes, codesID(w), ir.U32))
 		if p.facts.Words == nil {
 			p.facts.Words = map[int][]uint32{}
 		}

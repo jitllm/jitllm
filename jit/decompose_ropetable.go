@@ -3,7 +3,6 @@ package jit
 import (
 	"fmt"
 	"math"
-	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -17,11 +16,11 @@ import (
 // positions from tableAxisPos (the live row count, then ropeAxes positions a
 // row) and each pair's axis from a block the plan carries (tableAxes).
 var (
-	tablePos     = Operand{Kind: OperandTable, Name: "rope.pos", Elem: ir.U32}
-	tableAxisPos = Operand{Kind: OperandTable, Name: "rope.pos.axes", Elem: ir.U32}
-	tablePlanes  = Operand{Kind: OperandTable, Name: "rope.planes"}
-	tableAxes    = Operand{Kind: OperandTable, Name: "rope.axes", Elem: ir.U32}
-	tableRopeKon = Operand{Kind: OperandTable, Name: "rope.const", Elem: ir.U32}
+	tablePos     = tableOp(TablePos, 0, ir.U32)
+	tableAxisPos = tableOp(TableAxisPos, 0, ir.U32)
+	tablePlanes  = tableOp(TablePlanes, 0, ir.Void)
+	tableAxes    = tableOp(TableAxes, 0, ir.U32)
+	tableRopeKon = tableOp(TableRopeConst, 0, ir.U32)
 )
 
 const (
@@ -71,8 +70,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	P := o.Attr.NRot / 2
 	stride := (P + ropeLanes - 1) &^ (ropeLanes - 1)
 	R := c.Step.Rows
-	out := Operand{Kind: OperandTable, Name: c.Graph.Values[o.Out[0]].Name}
-	of := strings.TrimPrefix(out.Name, tableAngles.Name)
+	out := tableOp(TableAngles, o.Attr.Rotary, ir.Void)
 	var axes []uint32
 	if o.Attr.Cycle != 0 {
 		return nil, fmt.Errorf("a rotary table over a cycle of %d axes %v: its pairs' frequencies are its cycles' first pairs'", o.Attr.Cycle, o.Attr.CycleAxes)
@@ -102,7 +100,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		} else {
 			axis := x.load(3, p)
 			pos = x.load(0, x.op(OpAdd, U, x.op(OpAdd, U, row, axis), x.u(1)))
-			in = append(in, Operand{Kind: tableAxes.Kind, Name: tableAxes.Name + of, Elem: tableAxes.Elem})
+			in = append(in, tableOp(TableAxes, out.Instance, tableAxes.Elem))
 			ext[3], words[3] = P, axes
 		}
 		in[0] = tableAxisPos
@@ -127,7 +125,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 
 	var live exprs
 	live.load(0, live.u(0))
-	in[1] = Operand{Kind: OperandTable, Name: tablePlanes.Name + of}
+	in[1] = tableOp(TablePlanes, out.Instance, ir.Void)
 	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},
 		Facts: Facts{Rows: live.e, Words: words, Extents: ext,

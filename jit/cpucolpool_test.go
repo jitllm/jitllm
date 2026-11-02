@@ -60,7 +60,7 @@ func colPoolOracle(rows [][]float32, p, span, D, off, gate int, overlap bool, sh
 // TestComposedCPUColPool executes the composer's gated column pool
 // (graph.OpColPool, DeepSeek V4's compressor) on the CPU over a paged
 // binary16 history whose values are its keys, one row at a time, and its
-// entry appended to the entry history (graph.EntHistory, f32) at the slot
+// entry appended to the entry history (graph.StateEnt, f32) at the slot
 // the row's descriptor names, held to main's pool: windows of four of one
 // half (HCA's) and of two halves (CSA's), at a row closing its window and,
 // for CSA, the first window, which has no window before it. A window one
@@ -86,7 +86,7 @@ func composedCPUColPool(t *testing.T, pos int, overlap bool) {
 	off, gate := 16, 16+halves*D
 	b := graph.New()
 	k := b.In("k", W)
-	h := graph.StateRef{Name: "kv", Version: b.KVAppend(k, k, 0)}
+	h := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, k, 0)}
 	y := b.ColPool(h, graph.Attrs{HeadDim: D, Span: span, Offset: off, GateAt: gate, Width: W, Overlap: overlap})
 	b.EntAppend(y, 0)
 	b.Out(y)

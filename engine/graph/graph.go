@@ -50,7 +50,7 @@ const (
 	// are queries over keys and values other rows appended: a
 	// cross-attention. With In[1], an OpSelect's Out[0], each group of its
 	// query heads attends the positions the selection keeps for it alone.
-	// Reading a second history, an entry history (EntHistory, rows
+	// Reading a second history, an entry history (StateEnt, rows
 	// EntWidth wide), a row attends its window of the first and the entries
 	// its entry descriptor names under one softmax with the sinks, a
 	// selection keeping entries.
@@ -426,11 +426,45 @@ type Binding struct {
 	Sheets  int // a bank's experts, each a K x Rows sheet; 0 for one matrix
 }
 
-// StateRef is a version of the block's persistent state.
+// State is a block's persistent state an op reads or writes.
+type State uint8
+
+const (
+	// StateKV is the block's paged attention history.
+	StateKV State = iota
+	// StateEnt is the block's entry history: a second paged history, one
+	// row an entry its compressor folds, its values its keys.
+	StateEnt
+	// StateRecConv is a recurrent block's short convolution's tail.
+	StateRecConv
+	// StateRecState is a recurrent block's delta rule's or scan's state.
+	StateRecState
+)
+
+// StateRef is a version of the block's persistent state: State, and where
+// From is set, block From-1's (a block reading another's history).
 type StateRef struct {
-	Name    string // "kv"
+	State   State
+	From    int
 	Version int
 }
+
+var stateNames = [...]string{"kv", "ent", "rec.conv", "rec.state"}
+
+// String is the state's label, its version apart.
+func (r StateRef) String() string {
+	s := fmt.Sprintf("state%d", r.State)
+	if int(r.State) < len(stateNames) {
+		s = stateNames[r.State]
+	}
+	if r.From > 0 {
+		s += fmt.Sprintf(" of block %d", r.From-1)
+	}
+	return s
+}
+
+// key is the state r names, whatever its version.
+func (r StateRef) key() StateRef { return StateRef{State: r.State, From: r.From} }
 
 // Attrs are an op's parameters. Only those its kind defines are read; the
 // verifier refuses one set on a kind that does not define it.
@@ -487,6 +521,9 @@ type Attrs struct {
 	Positional bool
 	// Pooling is OpPool's: a jlm.Pooling.
 	Pooling uint8
+	// Rotary is OpRopeTable's: which of the model's rotaries the table is
+	// (RopeTable.Index), the step's table it writes.
+	Rotary int
 	// Grid is OpRopeTable's (RopeTable.Grid).
 	Grid bool
 	// Chain and Filter are OpPosResample's: the coordinate's convention
@@ -609,10 +646,10 @@ func (g *Graph) String() string {
 			fmt.Fprintf(&b, ", %s", w.Role)
 		}
 		for _, r := range o.Reads {
-			fmt.Fprintf(&b, ", reads %s@%d", r.Name, r.Version)
+			fmt.Fprintf(&b, ", reads %s@%d", r, r.Version)
 		}
 		for _, w := range o.Writes {
-			fmt.Fprintf(&b, ", writes %s@%d", w.Name, w.Version)
+			fmt.Fprintf(&b, ", writes %s@%d", w, w.Version)
 		}
 		b.WriteString(")\n")
 	}

@@ -2,7 +2,6 @@ package jit
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -21,23 +20,23 @@ const (
 // The step's tables: the rotary's cos and sin a row, the rows' descriptors,
 // the page table, the history's key and value pools.
 var (
-	tableAngles = Operand{Kind: OperandTable, Name: "rope.cs"}
-	tableQOff   = Operand{Kind: OperandTable, Name: "q.off", Elem: ir.U32}
-	tableRows   = Operand{Kind: OperandTable, Name: "rows", Elem: ir.U32}
+	tableAngles = tableOp(TableAngles, 0, ir.Void)
+	tableQOff   = tableOp(TableQOff, 0, ir.U32)
+	tableRows   = tableOp(TableRows, 0, ir.U32)
 	// tableWindows is the rows' descriptors with each row's window as its
 	// attended range (graph.Attrs.RowWindows).
-	tableWindows = Operand{Kind: OperandTable, Name: "rows.win", Elem: ir.U32}
-	tablePages   = Operand{Kind: OperandTable, Name: "pages", Elem: ir.U32}
+	tableWindows = tableOp(TableWindows, 0, ir.U32)
+	tablePages   = tableOp(TablePages, 0, ir.U32)
 	// tableCall is a call's rows, one word: the rows a form of several
 	// rows runs (CallRows).
-	tableCall   = Operand{Kind: OperandTable, Name: "rows.n", Elem: ir.U32}
-	tableKeys   = Operand{Kind: OperandTable, Name: "kv.k", PerPart: true}
-	tableValues = Operand{Kind: OperandTable, Name: "kv.v", PerPart: true}
+	tableCall   = tableOp(TableCall, 0, ir.U32)
+	tableKeys   = partTable(TableKeys)
+	tableValues = partTable(TableValues)
 	// The entry history's pool, descriptors and page table
-	// (graph.EntHistory): f32 rows, values in keys.
-	tableEntKeys  = Operand{Kind: OperandTable, Name: "ent.k", PerPart: true}
-	tableEntRows  = Operand{Kind: OperandTable, Name: "ent.rows", Elem: ir.U32}
-	tableEntPages = Operand{Kind: OperandTable, Name: "ent.pages", Elem: ir.U32}
+	// (graph.StateEnt): f32 rows, values in keys.
+	tableEntKeys  = partTable(TableEntKeys)
+	tableEntRows  = tableOp(TableEntRows, 0, ir.U32)
+	tableEntPages = tableOp(TableEntPages, 0, ir.U32)
 )
 
 // rotaryTable is the step's table a rotary op turns by: the model's one
@@ -53,7 +52,7 @@ func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
 			return Operand{}, fmt.Errorf("a rotary over the axes of sections %v (interleaved %v), where the model's table turns by sections %v (interleaved %v)",
 				a.Sections, a.Interleaved, c.Rotaries[0].Sections, c.Rotaries[0].Interleaved)
 		}
-		return Operand{Kind: OperandTable, Name: tableName(c.RotaryBase)}, nil
+		return tableOp(TableAngles, c.RotaryBase, ir.Void), nil
 	}
 	// A split rotary's table holds a pair an element.
 	nrot := a.NRot
@@ -69,7 +68,7 @@ func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
 	if found < 0 {
 		return Operand{}, fmt.Errorf("a rotary of %d at base %v over sections %v the model states no table of", a.NRot, a.Base, a.Sections)
 	}
-	return Operand{Kind: OperandTable, Name: tableName(c.RotaryBase + found)}, nil
+	return tableOp(TableAngles, c.RotaryBase+found, ir.Void), nil
 }
 
 // decomposeRope turns each head's first NRot elements in pairs by the
@@ -144,7 +143,7 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	in, facts := []Operand{c.value(o.In[0]), table}, Facts{}
 	if a.Shift > 0 {
 		stride := (pairs + ropeLanes - 1) &^ (ropeLanes - 1)
-		in = []Operand{c.value(o.In[0]), {Kind: OperandTable, Name: tablePlanes.Name + strings.TrimPrefix(table.Name, tableAngles.Name)}, tableRopeKon, tableRows}
+		in = []Operand{c.value(o.In[0]), tableOp(TablePlanes, table.Instance, ir.Void), tableRopeKon, tableRows}
 		facts = Facts{Words: map[int][]uint32{2: ropeConsts()}, Extents: map[int]int{1: 8*stride + 1, 3: R * rowWords}, Quarter: quarter}
 	}
 	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: in, Expr: x.e, Facts: facts,
@@ -175,7 +174,7 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 	pools := []Operand{tableKeys, tableValues}
 	layouts := [2]Pool{c.History.Keys, c.History.Values}
 	rows, pages := tableRows, tablePages
-	if len(o.Writes) == 1 && o.Writes[0].Name == graph.EntHistory {
+	if len(o.Writes) == 1 && o.Writes[0].State == graph.StateEnt {
 		if o.In[0] != o.In[1] {
 			return nil, fmt.Errorf("an entry whose value is not its key")
 		}
@@ -277,7 +276,7 @@ func StepWord(o Operand, w int, s Step) (float64, bool) {
 // descriptors are laid out as the rows', and a step states no window, so a
 // windowed attention is priced over its whole history: an upper bound.
 func historyWord(o Operand, w int, s Step) (float64, bool) {
-	if o.Kind == tablePages.Kind && o.Name == tablePages.Name {
+	if o.Kind == OperandTable && o.Table == TablePages {
 		return float64(w), true
 	}
 	if o.Kind != tableRows.Kind || o.Name != tableRows.Name && o.Name != tableWindows.Name {

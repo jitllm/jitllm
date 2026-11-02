@@ -107,18 +107,10 @@ type Model interface {
 	Segment() Model
 }
 
-// tableName is rotary i's table: rope.cs for the first, rope.cs.i past it.
-func tableName(i int) string {
-	if i == 0 {
-		return "rope.cs"
-	}
-	return fmt.Sprintf("rope.cs.%d", i)
-}
-
 // TableGraph is the step's table of rotary r, the model's i-th: its
 // PartTable part's graph.
 func TableGraph(r graph.Rotary, i int) *graph.Graph {
-	rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i), Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
+	rt := graph.RopeTable{NRot: r.NRot, Index: i, Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
 		Cycle: r.Cycle, CycleAxes: r.CycleAxes}
 	return rt.Build()
 }

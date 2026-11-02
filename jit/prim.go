@@ -67,6 +67,10 @@ type Operand struct {
 	// jlm.File.Span's order: its quants (an unquantized weight's values),
 	// its scales, its sub-scales.
 	Region int
+	// Table and Instance are which of the step's tables an OperandTable is
+	// (tableOp): what it is matched and bound by. Its Name is a label.
+	Table    Table
+	Instance int
 }
 
 // Expr is one node of a primitive's scalar function: an operation on earlier

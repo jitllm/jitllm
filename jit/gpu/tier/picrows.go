@@ -219,7 +219,7 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 	rs := &g.rows
 	sk := servedKey{kind: partRows, graph: p.Graph, rows: p.Rows}
 	if sv := g.served[sk]; sv != nil && rs.req != nil {
-		sv.sl.tables["request"], sv.sl.tables["rope.pos"] = rs.req, rs.pos
+		sv.sl.tables[tableKey(jit.TableRequest)], sv.sl.tables[tableKey(jit.TablePos)] = rs.req, rs.pos
 		return sv, nil
 	}
 	formats := map[jlm.Role]jlm.Type{}
@@ -252,12 +252,12 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 	}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		return composedPart{kind: partRows, graph: p.Graph, formats: formats, weights: weights, vectors: vectors, apart: true,
-			tables: map[string]backend.Buf{"request": rs.req, "rope.pos": rs.pos}}, nil
+			tables: map[jit.TableKey]backend.Buf{tableKey(jit.TableRequest): rs.req, tableKey(jit.TablePos): rs.pos}}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sv.sl.tables["request"], sv.sl.tables["rope.pos"] = rs.req, rs.pos
+	sv.sl.tables[tableKey(jit.TableRequest)], sv.sl.tables[tableKey(jit.TablePos)] = rs.req, rs.pos
 	return sv, nil
 }
 

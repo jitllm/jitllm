@@ -249,7 +249,7 @@ func (m *Model) towerGraph(li int) (*graph.Graph, Uncovered, error) {
 		v = b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: "v.norm", Width: kvDim}}, nil,
 			graph.Attrs{Eps: c.RMSEps, HeadDim: hd}, nil, nil)[0]
 	}
-	hist := graph.StateRef{Name: "kv", Version: b.KVAppend(k, v, 0)}
+	hist := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
 	// A windowed block's rows attend inside their window of the picture,
 	// each row's from the step's window descriptors.
 	att := b.AttendOf(q, hist, graph.Attrs{NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: hd, Scale: c.AttnScale, Bidir: true,

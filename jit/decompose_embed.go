@@ -8,11 +8,11 @@ import (
 )
 
 // tableTokens is the step's tokens, a word a row, which the engine writes.
-var tableTokens = Operand{Kind: OperandTable, Name: "tokens", Elem: ir.U32}
+var tableTokens = tableOp(TableTokens, 0, ir.U32)
 
 // tableRequest is a step's request, the caller's words: a decision's
 // question type, its marker count, then a marker row a step row.
-var tableRequest = Operand{Kind: OperandTable, Name: "request", Elem: ir.U32}
+var tableRequest = tableOp(TableRequest, 0, ir.U32)
 
 // Request words: the question type, the marker count, the first marker.
 const (

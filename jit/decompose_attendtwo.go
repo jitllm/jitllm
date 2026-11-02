@@ -23,7 +23,7 @@ type attendSeg struct {
 }
 
 // attendTwo is decomposeAttend over two histories (Reads[1] the entry
-// history, graph.EntHistory): for each, every attended key's dot with the
+// history, graph.StateEnt): for each, every attended key's dot with the
 // query, scaled, a selection's dropped positions and what the row does not
 // attend at the least float, and their maximum; the larger of the two
 // maxima; each history's weights by it, their sums and weighted values; and
@@ -31,7 +31,7 @@ type attendSeg struct {
 // exp(sink - max): one softmax over both, with the head's sink.
 func attendTwo(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.Reads) != 2 || o.Reads[1].Name != graph.EntHistory || a.Softcap != 0 || a.Bidir || a.RowWindows || a.EntWidth < a.NKVHead*a.HeadDim {
+	if len(o.Reads) != 2 || o.Reads[1].State != graph.StateEnt || a.Softcap != 0 || a.Bidir || a.RowWindows || a.EntWidth < a.NKVHead*a.HeadDim {
 		return nil, fmt.Errorf("an attention over %v, entries %d wide, softcap %v", o.Reads, a.EntWidth, a.Softcap)
 	}
 	kw := a.NKVHead * a.HeadDim

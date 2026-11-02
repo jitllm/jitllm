@@ -297,7 +297,7 @@ func sheetRow(o graph.Op, x *exprs, wo Operand, l jlm.TypeLayout, in *[]Operand,
 
 // tableExperts is the step's table of a bank held in pages: a word an
 // expert, the sheet of the held bank that holds it.
-var tableExperts = Operand{Kind: OperandTable, Name: "experts", Elem: ir.U32}
+var tableExperts = tableOp(TableExperts, 0, ir.U32)
 
 // pageOf is the sheet of o's bank that holds expert sheet, and how many
 // sheets the bank holds: where the call site holds the bank in pages

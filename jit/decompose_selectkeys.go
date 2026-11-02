@@ -3,8 +3,6 @@ package jit
 import (
 	"fmt"
 	"math"
-	"strconv"
-	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -41,7 +39,7 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	pool := c.History.Keys
 	keys, desc, pages := pool.operand(tableKeys), tableRows, tablePages
-	if o.Reads[0].Name == graph.EntHistory {
+	if o.Reads[0].State == graph.StateEnt {
 		// Over the entry history: its f32 pool, descriptors and pages.
 		pool = Pool{}
 		keys, desc, pages = tableEntKeys, tableEntRows, tableEntPages
@@ -49,10 +47,10 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	if err := pool.check(a.Width); err != nil {
 		return nil, err
 	}
-	if r := o.Reads[0].Name; strings.HasPrefix(r, "kv@") {
-		n, err := strconv.Atoi(strings.TrimPrefix(r, "kv@"))
-		if err != nil || c.Graph.Block < 0 {
-			return nil, fmt.Errorf("a selection over the history %q", r)
+	if f := o.Reads[0].From; f > 0 {
+		n := f - 1
+		if c.Graph.Block < 0 {
+			return nil, fmt.Errorf("a selection over block %d's history outside a block", n)
 		}
 		keys.Of = c.blockPart(n)
 	}

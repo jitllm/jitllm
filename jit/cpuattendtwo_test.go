@@ -41,8 +41,8 @@ func composedCPUAttendTwo(t *testing.T, csa bool) {
 	}
 	b := graph.New()
 	k := b.In("k", W)
-	h := graph.StateRef{Name: "kv", Version: b.KVAppend(k, k, 0)}
-	e := graph.StateRef{Name: graph.EntHistory}
+	h := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, k, 0)}
+	e := graph.StateRef{State: graph.StateEnt}
 	q := b.In("q", H*D)
 	a := graph.Attrs{NHead: H, NKVHead: 1, HeadDim: D, Scale: 0.25, Window: window, Width: W, EntWidth: EW}
 	var sel *graph.ValueID

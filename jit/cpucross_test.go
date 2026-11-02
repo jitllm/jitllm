@@ -17,7 +17,7 @@ import (
 // a picture's patches).
 func crossGraph(heads, kvh, dim int) *graph.Graph {
 	b := graph.New()
-	b.Out(b.CrossAttend(b.In("q", heads*dim), graph.StateRef{Name: "kv"}, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim,
+	b.Out(b.CrossAttend(b.In("q", heads*dim), graph.StateRef{State: graph.StateKV}, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim,
 		Scale: 1 / math.Sqrt(float64(dim))}))
 	return b.G
 }

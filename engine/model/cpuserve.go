@@ -1780,7 +1780,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 		// rw is each operand's use: 1 read, 2 written.
 		rw := map[jit.Operand]uint8{}
 		for _, bd := range c.Binds {
-			if o := bd.Operand; bd.Writes && o.Kind == jit.OperandTable && (o.Name == "kv.k" || o.Name == "kv.v") {
+			if o := bd.Operand; bd.Writes && o.Kind == jit.OperandTable && (o.Table == jit.TableKeys || o.Table == jit.TableValues) {
 				f.keysEnd = ci + 1
 			}
 			if o := bd.Operand; o.Kind == jit.OperandValue {
@@ -1874,38 +1874,38 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 			case o.Kind == jit.OperandVector:
 				ar.src, ar.role = cpuArgVector, o.Role
 			case o.Kind == jit.OperandTable:
-				switch o.Name {
-				case "rope.cs":
+				switch t := o.Table; {
+				case t == jit.TableAngles && o.Instance == 0:
 					ar.src = cpuArgRope
-				case "rope.planes":
+				case t == jit.TablePlanes && o.Instance == 0:
 					ar.src = cpuArgPlanes
-				case "kv.k":
+				case t == jit.TableKeys:
 					ar.src = cpuArgKeys
-				case "kv.v":
+				case t == jit.TableValues:
 					ar.src = cpuArgValues
-				case "pages":
+				case t == jit.TablePages:
 					ar.src = cpuArgPages
-				case "rows", "rows.win":
+				case t == jit.TableRows, t == jit.TableWindows:
 					// A row's descriptor is its own layer's: its range the
 					// layer's window where it has one (kvPages.keyStart).
 					ar.src = cpuArgRows
-				case "rows.n":
+				case t == jit.TableCall:
 					ar.src = cpuArgCall
-				case "rec.state", "rec.state.out":
+				case t == jit.TableRecState, t == jit.TableRecStateOut:
 					ar.src = cpuArgRecState
-				case "rec.conv":
+				case t == jit.TableRecConv:
 					ar.src = cpuArgRecConv
-				case "rec.conv.out":
+				case t == jit.TableRecConvOut:
 					ar.src = cpuArgRecConvOut
-				case "rec.rows":
+				case t == jit.TableRecRows:
 					ar.src = cpuArgRecRows
-				case "q.off":
+				case t == jit.TableQOff:
 					ar.src = cpuArgZero
-				case "request":
+				case t == jit.TableRequest:
 					ar.src = cpuArgRequest
-				case "tokens":
+				case t == jit.TableTokens:
 					ar.src = cpuArgTokens
-				case "rope.pos":
+				case t == jit.TablePos:
 					// A pooled readout reads its live count (cpuPoolState), any
 					// other graph its rows' positions (cpuBound.pos).
 					ar.src = cpuArgPos

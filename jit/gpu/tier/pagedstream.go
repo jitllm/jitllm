@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -335,8 +336,10 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 	copy(sv.in[:sv.n], in)
 	copy(sv.out[:sv.m], out)
 	in, out = sv.in[:sv.n], sv.out[:sv.m]
-	rows, rowsW := t["rows"], t["rows.win"]
-	defer func() { t["rows"], t["rows.win"], t["run.in"], t["run.out"] = rows, rowsW, pg.run[0], pg.run[1] }()
+	rows, rowsW := t[tableKey(jit.TableRows)], t[tableKey(jit.TableWindows)]
+	defer func() {
+		t[tableKey(jit.TableRows)], t[tableKey(jit.TableWindows)], t[tableKey(jit.TableRunIn)], t[tableKey(jit.TableRunOut)] = rows, rowsW, pg.run[0], pg.run[1]
+	}()
 	m0, err := sv.launchCodes(lc, inst, in, out, 0, f.passLo)
 	if err != nil {
 		return err
@@ -376,14 +379,14 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 			}
 			g.KVStreamPasses++
 		}
-		t["rows"] = st.desc[0][j]
-		t["rows.win"] = t["rows"]
+		t[tableKey(jit.TableRows)] = st.desc[0][j]
+		t[tableKey(jit.TableWindows)] = t[tableKey(jit.TableRows)]
 		if rowsW == pg.pRowW && len(st.desc[1]) > 0 {
-			t["rows.win"] = st.desc[1][j]
+			t[tableKey(jit.TableWindows)] = st.desc[1][j]
 		}
-		t["run.in"], t["run.out"] = pg.run[0], pg.run[1+j%2]
+		t[tableKey(jit.TableRunIn)], t[tableKey(jit.TableRunOut)] = pg.run[0], pg.run[1+j%2]
 		if j > 0 && !pagedFaulted("passfold") {
-			t["run.in"] = pg.run[1+(j+1)%2]
+			t[tableKey(jit.TableRunIn)] = pg.run[1+(j+1)%2]
 		}
 		m, err := sv.launchCodes(lc, inst, in, out, f.passLo, f.passHi)
 		if err != nil {
@@ -392,7 +395,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 		m0.matrix, m0.attend = m0.matrix+m.matrix, m0.attend+m.attend
 		g.ComposedStreamPasses++
 	}
-	t["rows"], t["rows.win"] = rows, rowsW
+	t[tableKey(jit.TableRows)], t[tableKey(jit.TableWindows)] = rows, rowsW
 	m, err := sv.launchCodes(lc, inst, in, out, f.passHi, len(f.codes))
 	if err != nil {
 		return err

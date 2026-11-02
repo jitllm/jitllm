@@ -182,12 +182,12 @@ func checkDeltaMixer(t *testing.T, m *Model, li int) {
 		t.Fatalf("block %d states %d state convolutions and %d delta rules, want one each", li, len(convs), len(rules))
 	}
 	if c := convs[0]; c.In[0] != readerOf(t, g, jlm.RoleAttnQKV).Out[0] || c.Attr.Taps != dg.conv ||
-		len(c.Writes) != 1 || c.Writes[0].Name != "rec.conv" {
+		len(c.Writes) != 1 || c.Writes[0].State != graph.StateRecConv {
 		t.Fatalf("block %d: the convolution %+v is not the mixed projection's over its own window of %d", li, c, dg.conv)
 	}
 	a := rules[0].Attr
 	if a.NHead != dg.vHeads || a.NKVHead != dg.kHeads || a.HeadDim != dg.kDim || a.Tiled != dg.tiled ||
-		len(rules[0].Writes) != 1 || rules[0].Writes[0].Name != "rec.state" {
+		len(rules[0].Writes) != 1 || rules[0].Writes[0].State != graph.StateRecState {
 		t.Fatalf("block %d: a delta rule of %+v over %+v, want the container's geometry", li, a, dg)
 	}
 	readerOf(t, g, jlm.RoleSSMOut)

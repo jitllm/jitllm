@@ -39,7 +39,7 @@ func TestComposedGPUCrossAttend(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/%dq%dkv%dd/Q%d/N%d", d.API(), heads, kvh, dim, Q, N), func(t *testing.T) {
 					pages := (N + page - 1) / page
 					b := graph.New()
-					b.Out(b.CrossAttend(b.In("q", heads*dim), graph.StateRef{Name: "kv"}, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim,
+					b.Out(b.CrossAttend(b.In("q", heads*dim), graph.StateRef{State: graph.StateKV}, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim,
 						Scale: 1 / math.Sqrt(float64(dim))}))
 					g := b.G
 					_, codes, err := jit.Default().Form(jit.Request{Graph: g, Step: jit.Step{Rows: Q, Page: page, Keys: pages * page}, History: jit.History{Keys: jit.Pool{Half: true}, Values: jit.Pool{Half: true}},

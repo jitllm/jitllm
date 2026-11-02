@@ -1,10 +1,10 @@
 package graph
 
-// RopeTable is a step's rotary table: NRot/2 pairs a row, the value named
-// Name ("rope.cs" where empty).
+// RopeTable is a step's rotary table: NRot/2 pairs a row, the table of the
+// model's rotary Index (Attrs.Rotary).
 type RopeTable struct {
-	NRot int
-	Name string
+	NRot  int
+	Index int
 	// Grid reads each row's position as a cell of the step's grid (the
 	// request's first word its width): a pair turns by the cell's row or
 	// its column, as the model's planes name for the pair.
@@ -37,13 +37,9 @@ type Rotary struct {
 
 func (r *RopeTable) Build() *Graph {
 	g := &Graph{Block: -1}
-	name := r.Name
-	if name == "" {
-		name = "rope.cs"
-	}
-	cs := g.value(name, r.NRot)
+	cs := g.value("rope.cs", r.NRot)
 	g.Out = []ValueID{cs}
-	g.op(Op{Kind: OpRopeTable, Out: []ValueID{cs}, Attr: Attrs{NRot: r.NRot, Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
+	g.op(Op{Kind: OpRopeTable, Out: []ValueID{cs}, Attr: Attrs{NRot: r.NRot, Rotary: r.Index, Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
 		Cycle: r.Cycle, CycleAxes: r.CycleAxes}})
 	return g
 }

@@ -103,14 +103,14 @@ func (s *Builder) HeadNorm(x ValueID, role jlm.Role, headDim int, eps float64) V
 // KVAppend writes k and v as the step's rows of the block's history: it
 // reads the history's version n and writes n+1, which it returns.
 func (s *Builder) KVAppend(k, v ValueID, n int) int {
-	s.G.op(Op{Kind: OpKVAppend, In: []ValueID{k, v}, Reads: []StateRef{{Name: "kv", Version: n}}, Writes: []StateRef{{Name: "kv", Version: n + 1}}})
+	s.G.op(Op{Kind: OpKVAppend, In: []ValueID{k, v}, Reads: []StateRef{{State: StateKV, Version: n}}, Writes: []StateRef{{State: StateKV, Version: n + 1}}})
 	return n + 1
 }
 
 // Attend is q's attention over the history's version n, of a's heads,
 // scale, window and softcap, with the per-head sinks of sinks where given.
 func (s *Builder) Attend(q ValueID, n int, a Attrs, sinks ...jlm.Role) ValueID {
-	return s.AttendOf(q, StateRef{Name: "kv", Version: n}, a, sinks...)
+	return s.AttendOf(q, StateRef{State: StateKV, Version: n}, a, sinks...)
 }
 
 // AttendOf is Attend over the history h: the block's own ("kv"), or block
@@ -138,7 +138,7 @@ func (s *Builder) Select(q ValueID, h StateRef, a Attrs, w ...ValueID) ValueID {
 // EntAppend writes k as the row's entry of the entry history ("ent") at
 // version n, the slot its descriptor names, and returns the next version.
 func (s *Builder) EntAppend(k ValueID, n int) int {
-	s.G.op(Op{Kind: OpKVAppend, In: []ValueID{k, k}, Reads: []StateRef{{Name: EntHistory, Version: n}}, Writes: []StateRef{{Name: EntHistory, Version: n + 1}}})
+	s.G.op(Op{Kind: OpKVAppend, In: []ValueID{k, k}, Reads: []StateRef{{State: StateEnt, Version: n}}, Writes: []StateRef{{State: StateEnt, Version: n + 1}}})
 	return n + 1
 }
 
@@ -193,12 +193,8 @@ func (s *Builder) CrossAttend(q ValueID, h StateRef, a Attrs) ValueID {
 	return s.AttendOf(q, h, a)
 }
 
-// EntHistory is a block's entry history: a second paged history, one row an
-// entry its compressor folds, its values its keys.
-const EntHistory = "ent"
-
 // SharedHistory is block n's history as another block reads it.
-func SharedHistory(n int) StateRef { return StateRef{Name: "kv@" + strconv.Itoa(n)} }
+func SharedHistory(n int) StateRef { return StateRef{State: StateKV, From: n + 1} }
 
 // NewBlock is block li's graph in this build's op language.
 func NewBlock(li int) *Builder { return &Builder{G: &Graph{Version: Version, Block: li}} }

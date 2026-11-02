@@ -286,7 +286,7 @@ func recurrentRuns(t *testing.T, d backend.Device, dev jit.Device) {
 		x := b.In("x", C)
 		b.Out(b.Emit(graph.OpStateConv, []graph.ValueID{x}, []graph.Result{{Name: "conv", Width: C}},
 			[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: T, Rows: C}}, graph.Attrs{Taps: T},
-			[]graph.StateRef{{Name: "rec.conv"}}, []graph.StateRef{{Name: "rec.conv", Version: 1}})[0])
+			[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0])
 		fr, err := formRec(d, dev, b.G, R, map[jlm.Role]jlm.Type{jlm.RoleSSMConv1d: jlm.TypeF32})
 		if err != nil {
 			t.Fatalf("%d taps over %d: %v", T, C, err)
@@ -339,7 +339,7 @@ func deltaGraphOf(s deltaShape) *graph.Graph {
 	v, d, beta := b.In("v", s.h*s.dv), b.In("decay", nd), b.In("beta", s.h)
 	b.Out(b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, d, beta}, []graph.Result{{Name: "o", Width: s.h * s.dv}}, nil,
 		graph.Attrs{NHead: s.h, NKVHead: s.kh, HeadDim: s.dk, Tiled: s.tiled, Additive: s.additive},
-		[]graph.StateRef{{Name: "rec.state"}}, []graph.StateRef{{Name: "rec.state", Version: 1}})[0])
+		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0])
 	return b.G
 }
 

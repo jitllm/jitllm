@@ -16,6 +16,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -8089,7 +8090,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// ones: one form whatever the count.
 			sv, serr := g.servedHead(hb, hNorm, bs.rows)
 			if serr == nil {
-				sv.rows, sv.sl.tables["rows.n"] = rows, bs.headCalls
+				sv.rows, sv.sl.tables[tableKey(jit.TableCall)] = rows, bs.headCalls
 				serr = sv.runHead(g, lc, bs.x, out, bs.h)
 			}
 			if err == nil {

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -68,12 +66,12 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		m := maskOf(c, o.In[1])
 		g.Mask, g.MaskGroups = &m, sel.Attr.NKVHead
 	}
-	// A block sharing another's history (the state kv@N) reads block N's
-	// pools as it left them.
-	if len(o.Reads) == 1 && strings.HasPrefix(o.Reads[0].Name, "kv@") {
-		n, err := strconv.Atoi(strings.TrimPrefix(o.Reads[0].Name, "kv@"))
-		if err != nil || c.Graph.Block < 0 {
-			return nil, fmt.Errorf("an attention over the history %q", o.Reads[0].Name)
+	// A block sharing another's history (graph.SharedHistory) reads that
+	// block's pools as it left them.
+	if len(o.Reads) == 1 && o.Reads[0].From > 0 {
+		n := o.Reads[0].From - 1
+		if c.Graph.Block < 0 {
+			return nil, fmt.Errorf("an attention over block %d's history outside a block", n)
 		}
 		g.Keys.Of, g.Values.Of = c.blockPart(n), c.blockPart(n)
 	}
@@ -223,8 +221,8 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 // The running partial of an attention read in passes: a row's heads, each
 // its weighted values, then their maximum, then their sum.
 var (
-	tableRunIn  = Operand{Kind: OperandTable, Name: "run.in"}
-	tableRunOut = Operand{Kind: OperandTable, Name: "run.out"}
+	tableRunIn  = tableOp(TableRunIn, 0, ir.Void)
+	tableRunOut = tableOp(TableRunOut, 0, ir.Void)
 )
 
 // foldsAPass reports whether p folds a pass into the running partial: a

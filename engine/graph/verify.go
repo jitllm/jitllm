@@ -57,7 +57,7 @@ func Verify(g *Graph, f Facts) error {
 		}
 		defined[id] = true
 	}
-	state := map[string]int{}
+	state := map[StateRef]int{}
 	for i, o := range g.Ops {
 		at := fmt.Sprintf("graph: block %d op %d (%s)", g.Block, i, o.Kind)
 		if o.Kind <= OpInvalid || o.Kind >= numOps {
@@ -102,15 +102,15 @@ func Verify(g *Graph, f Facts) error {
 			}
 		}
 		for _, r := range o.Reads {
-			if state[r.Name] != r.Version {
-				bad("%s: reads %s@%d where %s@%d is in force", at, r.Name, r.Version, r.Name, state[r.Name])
+			if state[r.key()] != r.Version {
+				bad("%s: reads %s@%d where %s@%d is in force", at, r, r.Version, r, state[r.key()])
 			}
 		}
 		for _, w := range o.Writes {
-			if w.Version != state[w.Name]+1 {
-				bad("%s: writes %s@%d over %s@%d", at, w.Name, w.Version, w.Name, state[w.Name])
+			if w.Version != state[w.key()]+1 {
+				bad("%s: writes %s@%d over %s@%d", at, w, w.Version, w, state[w.key()])
 			}
-			state[w.Name] = w.Version
+			state[w.key()] = w.Version
 		}
 		for _, w := range o.Weight {
 			s, ok := f.Inventory[w.Role]
@@ -211,7 +211,7 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: values at %d and gates at %d of %d columns (%d a row) in a row of %d", at, a.Offset, a.GateAt, a.HeadDim, n, a.Width)
 			}
 		case OpKVAppend:
-			if len(o.Writes) == 1 && o.Writes[0].Name == EntHistory && (len(o.In) != 2 || o.In[0] != o.In[1]) {
+			if len(o.Writes) == 1 && o.Writes[0].State == StateEnt && (len(o.In) != 2 || o.In[0] != o.In[1]) {
 				bad("%s: an entry whose value is not its key", at)
 			}
 		case OpUnfold:

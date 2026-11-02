@@ -178,7 +178,7 @@ func TestVerifierHoldsASelection(t *testing.T) {
 	build := func(a Attrs, cut func(g *Graph)) error {
 		b := NewBlock(0)
 		k := b.In("k", 48)
-		h := StateRef{Name: "kv", Version: b.KVAppend(k, k, 0)}
+		h := StateRef{State: StateKV, Version: b.KVAppend(k, k, 0)}
 		sel := b.Select(b.In("iq", 32), h, a, b.In("iw", 2))
 		b.Out(b.AttendSelected(b.In("q", 64), h, sel, Attrs{NHead: 4, NKVHead: 2, HeadDim: 16, Width: 48}))
 		if cut != nil {

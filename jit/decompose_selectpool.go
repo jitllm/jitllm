@@ -2,7 +2,6 @@ package jit
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -84,7 +83,7 @@ func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(.
 		if err != nil {
 			return nil, err
 		}
-		planes := Operand{Kind: OperandTable, Name: tablePlanes.Name + strings.TrimPrefix(table.Name, tableAngles.Name)}
+		planes := tableOp(TablePlanes, table.Instance, ir.Void)
 		tab := tmp("pooltab")
 		var tx exprs
 		tb, tp := tx.coord(0), tx.coord(1)

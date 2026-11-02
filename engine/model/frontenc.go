@@ -47,7 +47,7 @@ func (m *Model) headBlockGraph(li int) (*graph.Graph, Uncovered, error) {
 	q := b.MatVec(n, jlm.RoleAttnQ, d, stored(jlm.RoleAttnQBias)...)
 	k := b.MatVec(n, jlm.RoleAttnK, d, stored(jlm.RoleAttnKBias)...)
 	v := b.MatVec(n, jlm.RoleAttnV, d, stored(jlm.RoleAttnVBias)...)
-	hist := graph.StateRef{Name: "kv", Version: b.KVAppend(k, v, 0)}
+	hist := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
 	att := b.AttendOf(q, hist, graph.Attrs{NHead: heads, NKVHead: heads, HeadDim: hd, Scale: 1 / math.Sqrt(float64(hd)), Bidir: true})
 	x2 := b.Add(x, b.MatVec(att, jlm.RoleAttnOut, d, stored(jlm.RoleAttnOutBias)...))
 	n2 := ln(x2, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)

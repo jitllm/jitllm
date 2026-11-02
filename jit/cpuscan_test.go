@@ -61,7 +61,7 @@ func TestComposedCPUStateConvRows(t *testing.T) {
 		x := b.In("x", C)
 		b.Out(b.Emit(graph.OpStateConv, []graph.ValueID{x}, []graph.Result{{Name: "conv", Width: C}},
 			[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: T, Rows: C}}, graph.Attrs{Taps: T},
-			[]graph.StateRef{{Name: "rec.conv"}}, []graph.StateRef{{Name: "rec.conv", Version: 1}})[0])
+			[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0])
 		_, codes, err := Default().Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleSSMConv1d: jlm.TypeF32},
 			Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice()})
 		if err != nil {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -457,7 +458,7 @@ func (g *devTier) ragTokens(lc *launcher, bs, hb *blockScratch, n int, served bo
 	if err != nil {
 		return err
 	}
-	sv.rows, sv.sl.tables["rows.n"] = n, bs.headCalls
+	sv.rows, sv.sl.tables[tableKey(jit.TableCall)] = n, bs.headCalls
 	return sv.run(g, lc, sv.inst, []backend.Buf{bs.ragOut()}, []backend.Buf{bs.ragTok})
 }
 

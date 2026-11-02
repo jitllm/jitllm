@@ -3,7 +3,6 @@ package jit
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -60,7 +59,7 @@ const (
 	// at 1+r*RopeAxes+a.
 	SourceRopeAxisPositions
 	// SourceEntries, SourceEntRows and SourceEntPages are a part's entry
-	// history (graph.EntHistory): its pool, kept from step to step, f32, an
+	// history (graph.StateEnt): its pool, kept from step to step, f32, an
 	// entry's value its key; the rows' descriptors of it (their write slot
 	// the engine's: a row closing no window writes the slot of the entry it
 	// will close, which that row overwrites); its page table.
@@ -161,13 +160,42 @@ func (s StorageKeys) Key(o Operand) Operand {
 	return Operand{Kind: OperandValue, Of: at[0], Value: graph.ValueID(at[1])}
 }
 
-// tableSources is the source of each table the decompositions declare.
-var tableSources = map[string]Source{
-	tableRows.Name: SourceRows, tablePages.Name: SourcePages, tableQOff.Name: SourceQueryOffset,
-	tableEntKeys.Name: SourceEntries, tableEntRows.Name: SourceEntRows, tableEntPages.Name: SourceEntPages,
-	tablePos.Name: SourceRopePositions, tableAxisPos.Name: SourceRopeAxisPositions, tablePlanes.Name: SourceRopePlanes,
-	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableRequest.Name: SourceRequest, tableWindows.Name: SourceWindows, tableAngles.Name: SourceStep,
-	tableTokens.Name: SourceTokens,
+// tableSource is the source of table t, false for one no decomposition
+// declares a source of; every instance of a table shares its source.
+func tableSource(t Table) (Source, bool) {
+	switch t {
+	case TableRows:
+		return SourceRows, true
+	case TablePages:
+		return SourcePages, true
+	case TableQOff:
+		return SourceQueryOffset, true
+	case TableEntKeys:
+		return SourceEntries, true
+	case TableEntRows:
+		return SourceEntRows, true
+	case TableEntPages:
+		return SourceEntPages, true
+	case TablePos:
+		return SourceRopePositions, true
+	case TableAxisPos:
+		return SourceRopeAxisPositions, true
+	case TablePlanes:
+		return SourceRopePlanes, true
+	case TableKeys:
+		return SourceKeys, true
+	case TableValues:
+		return SourceValues, true
+	case TableRequest:
+		return SourceRequest, true
+	case TableWindows:
+		return SourceWindows, true
+	case TableAngles:
+		return SourceStep, true
+	case TableTokens:
+		return SourceTokens, true
+	}
+	return 0, false
 }
 
 // sourceOf is where storage key's contents come from: written says a kernel
@@ -179,19 +207,12 @@ func sourceOf(key Operand, written bool, words []uint32) (Source, error) {
 	case key.Kind == OperandWeight || key.Kind == OperandVector:
 		return SourceWeight, nil
 	case key.Kind == OperandTable:
-		name := key.Name
-		if strings.HasPrefix(name, "rec.") {
+		if key.Table.recurrent() {
 			return SourceState, nil
 		}
-		// A second rotary's table and planes are the first's sources.
-		for _, t := range []Operand{tableAngles, tablePlanes} {
-			if strings.HasPrefix(name, t.Name+".") {
-				name = t.Name
-			}
-		}
-		s, ok := tableSources[name]
+		s, ok := tableSource(key.Table)
 		if !ok {
-			return 0, fmt.Errorf("jit: table %q has no source", key.Name)
+			return 0, fmt.Errorf("jit: table %s has no source", key.Name)
 		}
 		return s, nil
 	case written:

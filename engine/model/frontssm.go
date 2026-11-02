@@ -13,7 +13,7 @@ func stateConv(b *graph.Builder, f graph.Facts, x graph.ValueID, taps int) graph
 	w := b.G.Values[x].Width
 	y := b.Emit(graph.OpStateConv, []graph.ValueID{x}, []graph.Result{{Name: "conv", Width: w}},
 		[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: taps, Rows: w}}, graph.Attrs{Taps: taps},
-		[]graph.StateRef{{Name: "rec.conv"}}, []graph.StateRef{{Name: "rec.conv", Version: 1}})[0]
+		[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0]
 	if s, ok := f.Inventory[jlm.RoleSSMConvBias]; ok {
 		y = mapRow(b, "conv.biased", graph.Attrs{Fn: graph.MapAdd}, []graph.Binding{{Role: jlm.RoleSSMConvBias, K: s.K, Rows: s.Rows}}, w, y)
 	}
@@ -46,7 +46,7 @@ func selectiveUpdate(b *graph.Builder, f graph.Facts, q, k, v, decay, dt graph.V
 	w := b.G.Values[v].Width
 	y := b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, decay, dt}, []graph.Result{{Name: "ssm.y", Width: w}}, nil,
 		graph.Attrs{NHead: heads, NKVHead: kHeads, HeadDim: kDim, Additive: true},
-		[]graph.StateRef{{Name: "rec.state"}}, []graph.StateRef{{Name: "rec.state", Version: 1}})[0]
+		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0]
 	s := f.Inventory[jlm.RoleSSMD]
 	skip := mapRow(b, "ssm.skip", graph.Attrs{Fn: graph.MapMul}, []graph.Binding{{Role: jlm.RoleSSMD, K: s.K, Rows: s.Rows}}, w, v)
 	return b.Add(y, skip)
@@ -157,6 +157,6 @@ func (m *Model) shortConvMixer(b *graph.Builder, n graph.ValueID,
 	bx := mul("bx", matvec(n, jlm.RoleSCB, w), matvec(n, jlm.RoleSCX, w))
 	conv := b.Emit(graph.OpStateConv, []graph.ValueID{bx}, []graph.Result{{Name: "conv", Width: w}},
 		[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: g.conv, Rows: w}}, graph.Attrs{Taps: g.conv},
-		[]graph.StateRef{{Name: "rec.conv"}}, []graph.StateRef{{Name: "rec.conv", Version: 1}})[0]
+		[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0]
 	return mul("cy", matvec(n, jlm.RoleSCC, w), conv), nil
 }

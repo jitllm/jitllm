@@ -115,7 +115,7 @@ func composedCPUSelect(t *testing.T, sc selectCase) {
 	if !sc.Latent {
 		v = b.In("v", sc.W)
 	}
-	h := graph.StateRef{Name: "kv", Version: b.KVAppend(k, v, 0)}
+	h := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
 	sa := graph.Attrs{NHead: sc.Hi, NKVHead: sc.G, HeadDim: sc.Di, Offset: sc.Off, Width: sc.W, Span: sc.B, TopK: sc.K, Local: sc.L}
 	iq := b.In("iq", sc.Hi*sc.Di)
 	var w []graph.ValueID

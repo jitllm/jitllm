@@ -16,11 +16,11 @@ import (
 // slots the step's recurrent descriptor names ("rec.rows": the rows, then
 // the slot read and the slot written).
 var (
-	tableRecState    = Operand{Kind: OperandTable, Name: "rec.state", PerPart: true}
-	tableRecStateOut = Operand{Kind: OperandTable, Name: "rec.state.out", PerPart: true}
-	tableRecConv     = Operand{Kind: OperandTable, Name: "rec.conv", PerPart: true}
-	tableRecConvOut  = Operand{Kind: OperandTable, Name: "rec.conv.out", PerPart: true}
-	tableRecRows     = Operand{Kind: OperandTable, Name: "rec.rows", Elem: ir.U32}
+	tableRecState    = partTable(TableRecState)
+	tableRecStateOut = partTable(TableRecStateOut)
+	tableRecConv     = partTable(TableRecConv)
+	tableRecConvOut  = partTable(TableRecConvOut)
+	tableRecRows     = tableOp(TableRecRows, 0, ir.U32)
 )
 
 // slotLen is a delta rule's state floats a sequence: its n, and the tail

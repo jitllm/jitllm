@@ -1,8 +1,6 @@
 package jit
 
 import (
-	"strings"
-
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
@@ -21,7 +19,7 @@ func (Halves) Name() string { return "halves" }
 // is not a recurrent state ("rec.") or an entry history ("ent."), which
 // every device keeps at f32.
 func (o Operand) history() bool {
-	return o.Kind == OperandTable && o.PerPart && !strings.HasPrefix(o.Name, "rec.") && !strings.HasPrefix(o.Name, "ent.")
+	return o.Kind == OperandTable && o.PerPart && !o.Table.recurrent() && !o.Table.entry()
 }
 
 func (p Halves) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
