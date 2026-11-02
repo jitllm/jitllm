@@ -316,9 +316,6 @@ type q4eScratch struct {
 	// rid is each row's token id for the n-gram block, -1 for a row with
 	// none (q4eRowIDs).
 	rid []int32
-	// marks is the call's rotary marks as a device takes them
-	// (qsaMarksToDevice), reused so a warm call allocates nothing.
-	marks []int32
 	// callState, callSlot and callIDs are a device call's rows (setCall).
 	callState *Instance
 	callSlot  int

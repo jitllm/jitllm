@@ -246,7 +246,6 @@ type Instance struct {
 	// allocation, and rowx one row's streams in a prefill's row-by-row
 	// device retry (rowStreams).
 	tok1    [1]int32
-	axes1   [4]int32
 	raxes   []int32
 	tokFill bool
 	// dmoe is Gemma 4's mixture block's scratch (Config.DenseMoE): the
@@ -672,7 +671,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		s.csSWA = make([]float32, nseq*c.NRotSWA)
 	}
 	s.bpos = make([]int, nseq)
-	s.rmarks = make([][]ropeMark, nseq)
+	s.rmarks = ropeMarks{}
 	s.allocRecurrent(nseq)
 	s.allocMLA()
 	s.allocMSA()
@@ -1083,10 +1082,11 @@ func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 		// rotary's planes, for a device that serves them (front.go).
 		Tables:      s.m.frontGraphs().tables,
 		RopeTabAxes: ropeAxesPlanes(&s.m.rope, c.NRot, c.RopeXD),
+		RopeMarks:   s.m.ropeMarksCap(s.maxSeq),
+		Rotaries:    composing{s.m.container, s.m}.Rotaries(),
 		RopeSplit:   c.RopeXD,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),
-		SWALocal:  c.periodLocal,
 		// DeepSeek V4's model-wide geometry (ds4dev.go).
 		DS4: ds4PlanOf(c),
 		// Read off the loaded weights, not the architecture name: the
@@ -1820,14 +1820,6 @@ func (s *Instance) offerRange(lo, hi int) {
 		}
 		// The block is read here, for the device, and its host page released
 		// once it is on the card: one block in flight, not the whole model.
-		// Ask before reading: a graph decline is a property of the plan, so a
-		// block the device will refuse costs no read.
-		if d, ok := ld.(nn.PlanDecliner); ok {
-			if why := d.DeclinePlan(s.planFor(li)); why != "" {
-				s.noteDecline(why)
-				continue
-			}
-		}
 		// Where the block's routed experts run, when a placement or the caller
 		// says: set before the size check, so a block placed with its experts
 		// off the card is not refused for a bank it will not hold.
@@ -3552,6 +3544,9 @@ func (s *Instance) ForwardEmbd(e []float32) ([]float32, error) {
 //	logits = Woutput · rmsnorm(x, output_norm)
 func (s *Instance) Forward(token int32) ([]float32, error) {
 	defer s.m.enterPager()()
+	if err := s.marksHeld(); err != nil {
+		return nil, err
+	}
 	if int(token) < 0 || int(token) >= s.c.NVocab {
 		return nil, errToken{token, s.c.NVocab}
 	}
@@ -3796,13 +3791,9 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 
 	// Each contiguous run of device blocks is one call (one upload, one
 	// download, one drain), not one call per block.
-	// The row's rotary position, which an image earlier in the sequence has
-	// moved off s.pos on an M-RoPE model (mrope.go).
-	rp := s.ropeOf(0, s.pos)
-	s.ropeFill(s.cs, rp)
-	if m.ropeSWA != nil {
-		s.jit.RopeTable(*m.ropeSWA, s.csSWA, rp)
-	}
+	// The row's rotary tables are the CPU's to make where a block runs
+	// there (cpuOneTable); a device makes its own.
+	s.cpu.oneFresh = false
 	// With the last block on the device the projection rides the same
 	// submission (folded); otherwise it is its own call below. Device runs sit
 	// inside the block loop, and the residual crosses the seam once per run.
@@ -3836,7 +3827,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			s.layerInputs(s.ple)
 			s.tok1[0] = s.tok
 			s.tokenIDs(s.tok1[:])
-			s.ropeAxes(s.pos, rp)
 			// Qwen3.8-Flash-Next's n-gram rows, when the run holds its n-gram
 			// block (q4edev.go).
 			if err := s.ngramToDevice(li, hi, 1, nil, s.selfSlot0, s.tok1At); err != nil {
@@ -3916,7 +3906,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 				return nil, err
 			}
 		}
-		why, err := s.cpuStep(li, l, s.ropeTable(li, s.cs, s.csSWA, 0))
+		why, err := s.cpuStep(li, l, s.cs)
 		if err != nil {
 			return nil, err
 		}
@@ -4089,7 +4079,7 @@ func swaPeriodFor(c *Config) int {
 // otherwise. It is a per-layer choice.
 func (s *Instance) ropeTable(li int, global, local []float32, tok int) []float32 {
 	c := s.c
-	if local != nil && c.SWA(li) {
+	if local != nil && c.ropeLocal(li) {
 		return local[tok*c.NRotSWA : (tok+1)*c.NRotSWA]
 	}
 	return global[tok*c.RopeW() : (tok+1)*c.RopeW()]
@@ -4200,39 +4190,10 @@ func (s *Instance) setLD(ld nn.LayerDevice) {
 	s.ldTokens, _ = ld.(nn.TokenDevice)
 	s.ldPrompt, _ = ld.(nn.PromptDevice)
 	s.ldNGram, _ = ld.(nn.NGramDevice)
-	s.ldQSA, _ = ld.(nn.QSADevice)
-	s.ldRope, _ = ld.(nn.RopeAxesDevice)
+	s.ldMarks, _ = ld.(nn.RopeMarksDevice)
+	s.rmarks.sent = s.rmarks.sent[:0]
+	s.sendMarks()
 	s.ldEmbed, _ = ld.(nn.EmbedDevice)
-}
-
-// ropeAxes tells the device the rotary positions of the one row of the call
-// about to be made at cache position pos (nn.RopeAxesDevice): rp on every
-// axis, the row's rotary position (ropeOf).
-func (s *Instance) ropeAxes(pos, rp int) {
-	if s.ldRope == nil {
-		return
-	}
-	s.axes1 = [4]int32{int32(rp), int32(rp), int32(rp), int32(rp)}
-	s.ldRope.SetRopeAxes(pos, s.axes1[:])
-}
-
-// rowAxes tells the device the rotary positions of the n batch rows from
-// row first of the call about to be made at cache position pos, its first
-// row's (nn.RopeAxesDevice), as ropeRow and ropeTableRow wrote them.
-func (s *Instance) rowAxes(pos, first, n int) {
-	if s.ldRope == nil || len(s.raxes) < 4*(first+n) {
-		return
-	}
-	s.ldRope.SetRopeAxes(pos, s.raxes[4*first:4*(first+n)])
-}
-
-// noteAxes records batch row j's rotary positions.
-func (s *Instance) noteAxes(j int, at [4]int32) {
-	if len(s.raxes) < 4*(j+1) {
-		need := 4 * max(j+1, len(s.bcs)/max(s.c.RopeW(), 1))
-		s.raxes = append(s.raxes, make([]int32, need-len(s.raxes))...)
-	}
-	copy(s.raxes[4*j:], at[:])
 }
 
 // layerInputs hands the device the rows' per-layer embedding inputs for the

@@ -166,29 +166,6 @@ func (g *devTier) dropOtherGeom() {
 	clear(g.geoSets)
 }
 
-// gemma4WhyNot names a Gemma 4 shape this tier declines.
-func gemma4WhyNot(p *nn.LayerPlan) string {
-	switch {
-	case p.GeomSplit && (p.MLA() || p.Recurrent.Conv > 0 || p.QKNormWide || p.AttnOutGate):
-		return "a sliding-layer geometry with latent attention, a recurrence, a whole-projection " +
-			"q/k norm or an attention out-gate"
-	case (p.VNorm || p.VFromK) && !p.QKNorm:
-		// v's norm runs on k's head-norm kernel.
-		return "a weightless v norm with no q/k norm to share a kernel with"
-	case p.VFromK && p.ClampKQV != 0:
-		return "v projected by k's weights under a q/k/v clamp"
-	case (p.PLEDim != 0 || p.KVShared || p.FFNWide) && !p.GeomSplit && p.AltUp == 0:
-		// The per-layer embedding's add goes back through the split model's
-		// copy kernel, and the scratch sets are the split model's. Gemma 3n's
-		// per-layer input goes through AltUp's own kernels (altup.go) and its
-		// KV sharing through each block's kvSrc, on one geometry.
-		return "per-layer embeddings, KV sharing or a wide FFN on a model with one attention geometry"
-	case p.DenseMoE && (p.NFFNShExp == 0 || p.ExpertWeightIn || p.MoEBias || p.ExpertSigmoid):
-		return "Gemma 4's dense-and-mixture block without its dense MLP, or with another router's features"
-	}
-	return ""
-}
-
 // SetLayerInputs takes the rows' per-layer embedding inputs for the next
 // call (nn.LayerInputDevice).
 func (g *devTier) SetLayerInputs(in []float32) {
@@ -212,7 +189,7 @@ func (s *gpuSession) inputsTo(ds []*devTier) []*devTier {
 
 // inputsOn hands the session's inputs to d alone.
 func (s *gpuSession) inputsOn(d *devTier) {
-	d.setInputs(s.sid, s.ple, s.ids, s.ng, s.marks, s.prompt, s.axes, s.axesAt)
+	d.setInputs(s.sid, s.ple, s.ids, s.ng, s.prompt)
 }
 
 // pleRows is the staged per-layer inputs, n floats: the caller's rows, then

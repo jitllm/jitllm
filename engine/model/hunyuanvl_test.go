@@ -24,7 +24,7 @@ func TestHunyuanVLTextMatchesTransformers(t *testing.T) {
 			mRopeMatchesTransformers(t, name)
 			m, g := openQVL(t, name)
 			defer m.Close()
-			if !m.Cfg.RopeXD || m.ropeB == nil {
+			if !m.Cfg.RopeXD {
 				t.Fatal("the container's text model is not an XD-RoPE one")
 			}
 			run := func() float64 {
@@ -37,17 +37,13 @@ func TestHunyuanVLTextMatchesTransformers(t *testing.T) {
 				return w
 			}
 			clean := run()
-			was := m.ropeB.Runs
-			m.ropeB.Runs = m.rope.Runs
-			perPair := run()
-			m.ropeB.Runs = was
 			m.xdKNormFirst = true
 			m.restateTower()
 			kFirst := run()
 			m.xdKNormFirst = false
 			m.restateTower()
-			t.Logf("clean %.3e; axes per pair (llama.cpp) %.3e; k normed before the rotary %.3e", clean, perPair, kFirst)
-			for what, bad := range map[string]float64{"axes per pair": perPair, "k normed first": kFirst} {
+			t.Logf("clean %.3e; k normed before the rotary %.3e", clean, kFirst)
+			for what, bad := range map[string]float64{"k normed first": kFirst} {
 				if !(bad > 1000*math.Max(clean, 1e-12)) {
 					t.Errorf("%s reads %.3e against %.3e: the gate cannot see it", what, bad, clean)
 				}
@@ -99,10 +95,12 @@ func TestHunyuanVLLaysTheImageOutAsTransformersDoes(t *testing.T) {
 			defer m.Close()
 			st := m.NewInstance(len(g.Pos4) + 1)
 			defer st.Close()
-			rows, next, err := st.spanRope(0, 0, qvlSpans(g, true))
+			sp := qvlSpans(g, true)
+			next, err := st.spanRope(0, 0, sp)
 			if err != nil {
 				t.Fatal(err)
 			}
+			rows := marksLayout(&st.rmarks, 0, 0, spanRows(m, sp))
 			if len(rows)+len(g.Cont) != len(g.Pos4) {
 				t.Fatalf("%d prompt rows and %d continuation, transformers lays out %d", len(rows), len(g.Cont),
 					len(g.Pos4))

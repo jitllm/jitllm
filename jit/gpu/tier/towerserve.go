@@ -97,7 +97,7 @@ func (g *devTier) towerStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan,
 	page := cpl.MaxSeq + 1
 	pl := &l.picPool
 	pl.geom, pl.k, pl.v, pl.tab = g.kvGeomOf(p), g.tkv.kc, g.tkv.vc, bs.zero
-	sv, err = g.servedBlock(l, li, bs.cs, pl, bs.pics, bs.picsW, bs.roff, bs.calls, nil, cpl.MaxSeq, page, R, 0)
+	sv, err = g.servedBlock(l, li, bs.cs, pl, bs.pics, bs.picsW, bs.roff, bs.calls, nil, cpl.MaxSeq, page, R, 0, nil)
 	if err != nil {
 		return nil, nil, nil, err
 	}

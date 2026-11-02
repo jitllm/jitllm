@@ -74,13 +74,7 @@ func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csS
 	}
 	defer v.done()
 	rs := &ragStep{pos: pos, slot: slot, seqLen: seqLen}
-	ok := v.layersRows(lo, hi, rs, x, cs, csSWA, head)
-	if v.depth == 1 {
-		v.mu.Lock()
-		v.spendAxes(0, 0, rs)
-		v.mu.Unlock()
-	}
-	return ok
+	return v.layersRows(lo, hi, rs, x, cs, csSWA, head)
 }
 
 // layersRows is LayersRows for rs's rows, each of its own session where

@@ -176,7 +176,7 @@ func (s *Instance) prefillMixedAt(slot int, spans ...Span) ([]float32, error) {
 	// at their grid coordinates and the text after it where the reference
 	// resumes it.
 	p0, total := s.seqPos(slot), len(src)
-	rp, next, err := s.spanRope(slot, p0, spans)
+	next, err := s.spanRope(slot, p0, spans)
 	if err != nil {
 		return nil, err
 	}
@@ -186,10 +186,10 @@ func (s *Instance) prefillMixedAt(slot int, spans ...Span) ([]float32, error) {
 	// Every row's id for the page keys: a named picture's rows are named as
 	// tokens are (spanKey), so the pages from here on can be sealed and found.
 	if slot == 0 && s.kv.ns != "" {
-		s.kv.note(p0, s.spanKey(p0, spans, rp)...)
+		s.kv.note(p0, s.spanKey(p0, spans)...)
 	}
 	defer s.tokensOf(spans)()
-	return s.prefillSrc(slot, src, nil, rp)
+	return s.prefillSrc(slot, src, nil)
 }
 
 // bidirRuns records the bidirectional runs of a mixed prompt, at the positions
@@ -338,7 +338,7 @@ func (s *Instance) prefillInto(slot int, tokens []int32) ([]float32, error) {
 	if slot == 0 {
 		s.kv.note(s.seqPos(0), tokens...)
 	}
-	return s.prefillSrc(slot, nil, tokens, nil)
+	return s.prefillSrc(slot, nil, tokens)
 }
 
 // ErrPrefillInterrupted is a prefill stopped between chunks because its
@@ -369,7 +369,10 @@ func (s *Instance) promptCalls(on bool) {
 // the tied embedding gather the rows itself (nn.EmbedDevice). rp, when not
 // nil, is every row's multi-axis rotary position (spanRope); nil rows advance
 // like text (ropeOf).
-func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []int32, rp [][4]int) ([]float32, error) {
+func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []int32) ([]float32, error) {
+	if err := s.marksHeld(); err != nil {
+		return nil, err
+	}
 	m, c := s.m, s.c
 	// src nil: every row is a vocabulary lookup of ids, with no function a
 	// row (prefillInto), so a warm prompt makes no closure per token.
@@ -667,15 +670,9 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 			return nil, err
 		}
 
-		// One rotary table per row, per chunk, shared by the device and every
-		// host layer, at the row's rotary position (mrope.go).
-		for i := 0; i < n; i++ {
-			if rp != nil {
-				s.ropeTableRow(i, rp[base+i])
-				continue
-			}
-			s.ropeRow(i, s.ropeOf(slot, p0+i))
-		}
+		// The chunk's rotary tables are the CPU's to make where a block runs
+		// there (cpuRowTables); a device makes its own.
+		s.cpu.tabsFresh = false
 		// Device blocks go as runs, not a prefix (see forward.go), each run as
 		// one batch so the weights are read once for n tokens.
 		for li := s.lo; li < s.hi; li++ {
@@ -759,7 +756,6 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 					}
 				}
 				s.layerInputs(s.bple[:n*c.pleWidth()])
-				s.rowAxes(p0, 0, n)
 				if s.callTell(p0, n) && s.ld.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
 					s.bswaTable(n, c.NRotSWA), fh) {
 					headDone = fh != nil
@@ -799,16 +795,15 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 				li = s.lo - 1
 				continue
 			}
-			// DeepSeek V4's hash blocks route by the chunk's tokens (-1 for a
-			// supplied embedding), which hostRows does not see.
-			if c.DSV4() {
-				s.growDS4(chunkRows)
-				for i := 0; i < n; i++ {
-					s.ds.rid[i] = -1
+			// A block routing by token reads the chunk's (-1 for a supplied
+			// embedding).
+			if c.NHashLayers > 0 {
+				s.cpuTokens(n, func(i int) int32 {
 					if rowIDs != nil {
-						s.ds.rid[i] = rowIDs[base+i]
+						return rowIDs[base+i]
 					}
-				}
+					return -1
+				})
 			}
 			// Qwen3.8-Flash-Next's n-gram block hashes the chunk's tokens
 			// (-1 for a supplied embedding).
@@ -900,10 +895,6 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 		return s.logits, nil
 	}
 	if s.head != nil && s.devCount() > 0 {
-		s.ropeFill(s.cs, s.ropeOf(slot, s.seqPos(slot)-1))
-		if m.ropeSWA != nil {
-			s.jit.RopeTable(*m.ropeSWA, s.csSWA, s.ropeOf(slot, s.seqPos(slot)-1))
-		}
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.seqPos(slot)-1, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), s.head) {
 			// The device ran the norm, the projection and gemma2's final
 			// softcap (nn.Head.Softcap); only the scale is left.
@@ -1131,28 +1122,6 @@ func (s *Instance) growBatch(chunk int) {
 type errEmptyPrompt struct{}
 
 func (errEmptyPrompt) Error() string { return "model: Prefill called with no tokens" }
-
-// ropeRow writes rotary position p's rows into row j of the batch tables:
-// the global one, and the local one where the architecture trains two bases.
-// p is the row's ROTARY position (ropeOf), not its cache position.
-// ropeFill writes the plain rotary table at position p into cs: NRot floats,
-// or under XD-RoPE the same table twice (a text row's halves turn alike).
-func (s *Instance) ropeFill(cs []float32, p int) {
-	n := s.c.NRot
-	s.jit.RopeTable(s.m.rope, cs[:n], p)
-	if s.c.RopeXD {
-		copy(cs[n:2*n], cs[:n])
-	}
-}
-
-func (s *Instance) ropeRow(j, p int) {
-	s.noteAxes(j, [4]int32{int32(p), int32(p), int32(p), int32(p)})
-	nrot, nrotSWA := s.c.RopeW(), s.c.NRotSWA
-	s.ropeFill(s.bcs[j*nrot:(j+1)*nrot], p)
-	if s.m.ropeSWA != nil {
-		s.jit.RopeTable(*s.m.ropeSWA, s.bcsSWA[j*nrotSWA:(j+1)*nrotSWA], p)
-	}
-}
 
 // bswaTable and bswaTableAt are swaTable for the batched path: the prefill
 // tables are per token, so the device gets the same n-row slice of the local

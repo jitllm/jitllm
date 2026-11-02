@@ -90,7 +90,28 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	ext := map[int]int{0: 1 + R, 1: 8*stride + 1}
 	words := map[int][]uint32{2: ropeConsts()}
 	var pos int
-	if axes != nil {
+	var live exprs
+	live.load(0, live.u(0))
+	switch {
+	case len(o.In) == 1:
+		// The rows' positions on the rotary's axes (OpRopePos): the pair's
+		// axis's, the live rows the rotary rows' count.
+		row := x.op(OpMul, U, r, x.u(uint32(ropeAxes)))
+		in[0], ext[0] = c.value(o.In[0]), R*ropeAxes
+		if axes == nil {
+			pos = x.load(0, row)
+		} else if a, one := oneAxis(axes); one {
+			pos = x.load(0, x.op(OpAdd, U, row, x.u(a)))
+		} else {
+			pos = x.load(0, x.op(OpAdd, U, row, x.load(3, p)))
+			in = append(in, tableOp(TableAxes, out.Instance, tableAxes.Elem))
+			ext[3], words[3] = P, axes
+		}
+		in = append(in, tableRopeRows)
+		live = exprs{}
+		live.load(len(in)-1, live.u(0))
+		ext[len(in)-1] = 1 + 2*R
+	case axes != nil:
 		// The pair's axis, then the row's position on it. A split whose
 		// pairs all turn by one axis reads that axis's position, its index
 		// one a caller can compute.
@@ -105,7 +126,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		}
 		in[0] = tableAxisPos
 		ext[0] = 1 + R*ropeAxes
-	} else {
+	default:
 		pos = x.load(0, x.op(OpAdd, U, r, x.u(1)))
 	}
 	if o.Attr.Grid {
@@ -123,8 +144,6 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	at := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(P))), p), x.u(2))
 	at1 := x.op(OpAdd, U, at, x.u(1))
 
-	var live exprs
-	live.load(0, live.u(0))
 	in[1] = tableOp(TablePlanes, out.Instance, ir.Void)
 	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},

@@ -161,3 +161,22 @@ func statedExprMut(f func([]jlm.Term)) func(*Model) func() {
 		}
 	}
 }
+
+// sigmoidScore restates m's router score as a sigmoid of the logits, the
+// container's statement and its config with it, and has the front end state
+// the blocks again.
+func sigmoidScore(m *Model) func() {
+	undoC := cfgMut(m, func(c *Config) { c.ExpertSqrtSoftplus, c.ExpertSigmoid = false, true })
+	c := m.container.Config()
+	was := c.RouterScore
+	s := *c
+	s.Flags2 &^= jlm.Flag2ExpertSqrtSoftplus
+	s.Flags |= jlm.FlagExpertSigmoid
+	c.RouterScore = convert.RouterScore(&s)
+	undo := m.restate(func(map[jlm.Role]graph.Shape) {})
+	return func() {
+		c.RouterScore = was
+		undo()
+		undoC()
+	}
+}

@@ -27,6 +27,7 @@ type knobs struct {
 	poisonKV      bool            // fill a fresh KV cache with NaN (RULE 13)
 	poisonScratch bool            // and the block scratch, its twin
 	dropSegments  bool            // every composed split sums all but its last segment
+	ropeFault     [2]int          // the rotary tables read each row at k times its position plus d
 	noAttnMMA     bool            // decline the matrix instruction for scores only
 	skip          map[string]bool // produce wrong answers on purpose; see WithSkip
 	batch         BatchShape      // the batched prefill's tile shape
@@ -191,6 +192,11 @@ func WithPoisonScratch(on bool) Option { return func(o *openOpts) { o.kb.poisonS
 // WithSplitFault has every split the composer forms sum its segments but the
 // last (jit.Registry.DropSegments): the violation a serving gate must fail on.
 func WithSplitFault(on bool) Option { return func(o *openOpts) { o.kb.dropSegments = on } }
+
+// WithRopeFault has the rotary tables read every row at k times its cache
+// position plus d (ropeRowsWords): the violation a served table must fail
+// on. k 0 is none.
+func WithRopeFault(k, d int) Option { return func(o *openOpts) { o.kb.ropeFault = [2]int{k, d} } }
 
 // WithoutAttnMMA declines the warp matrix instruction for the attention SCORES
 // only, leaving it in place for the matvecs. Config.NoMMA declines it

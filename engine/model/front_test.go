@@ -112,53 +112,30 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 	})
 }
 
-// TestFrontRefusesSeveralStreams holds every block of each model whose
-// residual is several streams the front end does not state (hyper-connections)
-// to a named refusal and no graph: every way to Covered passes a Streams
-// check, so the tier never meets a block of streams it cannot bind. Where the
-// block reaches that check the refusal is UncoveredStreams by name. Predicted
-// streams (TestGemma3nServesComposedOnCPU), a bank of checkpoints
-// (TestKimiK3ServesComposed) and streams read through a low-rank gate
-// (TestQwen4ExpServesComposedOnCPU) are stated.
-func TestFrontRefusesSeveralStreams(t *testing.T) {
-	byStreams := 0
-	for _, file := range []string{"synth-deepseek4.gguf"} {
-		t.Run(file, func(t *testing.T) {
-			m := frontModel(t, file)
-			if m.Cfg.Streams() < 2 {
-				t.Fatalf("%d residual streams: the fixture does not select the shape", m.Cfg.Streams())
-			}
-			streams := 0
-			for li := range m.Cfg.NLayer {
-				why := m.Uncovered(li)
-				if why == Covered || m.Composing().BlockGraph(li) != nil {
-					t.Fatalf("block %d of %d streams has a graph", li, m.Cfg.Streams())
-				}
-				if !namedReason(why) {
-					t.Fatalf("block %d is refused by %q, which is not a named reason", li, why)
-				}
-				if why == UncoveredStreams {
-					streams++
-				}
-			}
-			// A head over every stream is refused for them by name; the
-			// input rows write every stream (TestStreamRowsServeOnTheCard),
-			// and the collapse to one row is the CPU's and the card's
-			// (TestDeepseek4ServesComposedOnCPU).
-			blocks := streams
-			if why := m.Uncovered(-1); why != UncoveredStreams {
-				t.Fatalf("the head is refused by %q, want %q", why, UncoveredStreams)
-			}
-			streams++
-			if why, em := m.Uncovered(-2), m.frontGraphs().embed; why != Covered || em == nil || len(em.Out) != m.Cfg.Streams() {
-				t.Fatalf("the input rows are %q, want stated over every stream", why)
-			}
-			t.Logf("%d streams: %d of %d blocks refused for them, the rest earlier; the head too", m.Cfg.Streams(), blocks, m.Cfg.NLayer)
-			byStreams += streams
-		})
+// TestFrontStatesSeveralStreams holds a model of several residual streams
+// mixed by a Sinkhorn-normalised hyper-connection to its statement: every
+// block has a graph over every stream, the input rows write every stream,
+// and the head, which reads the streams' collapse (the CPU's and the
+// card's), is refused for them by name.
+func TestFrontStatesSeveralStreams(t *testing.T) {
+	m := frontModel(t, "synth-deepseek4.gguf")
+	if m.Cfg.Streams() < 2 || !m.Cfg.mixesStreamsSinkhorn() {
+		t.Fatalf("%d residual streams: the fixture does not select the shape", m.Cfg.Streams())
 	}
-	if byStreams == 0 {
-		t.Fatal("nothing is refused for its streams: the gate selects nothing")
+	for li := range m.Cfg.NLayer {
+		g := m.Composing().BlockGraph(li)
+		if why := m.Uncovered(li); why != Covered || g == nil {
+			t.Fatalf("block %d of %d streams is %q", li, m.Cfg.Streams(), why)
+		}
+		if len(g.In) < m.Cfg.Streams() || len(g.Out) != m.Cfg.Streams() {
+			t.Fatalf("block %d reads %d rows and writes %d, want every one of %d streams", li, len(g.In), len(g.Out), m.Cfg.Streams())
+		}
+	}
+	if why := m.Uncovered(-1); why != UncoveredStreams {
+		t.Fatalf("the head is refused by %q, want %q", why, UncoveredStreams)
+	}
+	if why, em := m.Uncovered(-2), m.frontGraphs().embed; why != Covered || em == nil || len(em.Out) != m.Cfg.Streams() {
+		t.Fatalf("the input rows are %q, want stated over every stream", why)
 	}
 }
 
@@ -177,7 +154,8 @@ func rotaryTables(parts []jit.Part) int {
 // names no model family.
 func TestFrontNamesNoFamily(t *testing.T) {
 	family := regexp.MustCompile(`(?i)gemma|llama|qwen|deepseek|kimi|mistral|mixtral|granite|hunyuan|minimax|nemotron|jamba|mamba|olmo|ernie|glm|bitnet|phi[0-9]|phimoe|gpt-?oss|falcon|starcoder|command-?r|cohere|stablelm|dbrx|exaone|smollm|arcee|seed_?oss|apertus|bailing|dots1|bert|lfm|clip|altup|laurel|jlm\.Arch|\.Arch\b`)
-	for _, file := range []string{"front.go", "frontdelta.go", "frontssm.go", "frontstreams.go", "fronttower.go", "frontenc.go"} {
+	for _, file := range []string{"front.go", "frontdelta.go", "frontssm.go", "frontstreams.go", "fronttower.go", "frontenc.go",
+		"frontsinkhorn.go", "frontngram.go", "frontcomp.go"} {
 		src, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)

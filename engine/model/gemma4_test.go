@@ -137,12 +137,11 @@ var gemma4EViolations = []c6Violation{
 	// one has no other source of its kind.
 	{"a shared layer reading an earlier source", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) {
-			c.kvSrcOf = func(li int) int {
-				if li == 4 {
-					return 1
-				}
-				return 2
+			c.kvSrcAt = make([]int, c.NLayer)
+			for li := range c.kvSrcAt {
+				c.kvSrcAt[li] = 2
 			}
+			c.kvSrcAt[4] = 1
 		})
 	}},
 	{"the per-layer embedding's post-norm unweighted", func(m *Model) func() {

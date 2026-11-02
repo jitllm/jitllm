@@ -57,10 +57,11 @@ type modernBERT struct {
 	sc, scOut          tensor
 	scB, scOutB        []float32
 	ropeG, ropeL       nn.Rope
-	// local is the blocks that attend inside the window, at the local base:
-	// all but every SWAPeriod'th from the first (nn.LayerPlan.SWALocal).
-	local func(li int) bool
 }
+
+// local says block li attends inside the window, at the local base: all but
+// every SWAPeriod'th from the first.
+func (mb *modernBERT) local(li int) bool { return li < len(mb.blocks) && !mb.blocks[li].global }
 
 func (b *mbBlock) weights() []*tensor {
 	return []*tensor{&b.wq, &b.wk, &b.wv, &b.wo, &b.gate, &b.up, &b.down}
@@ -144,7 +145,7 @@ func buildModernBERT(c *jlm.File, m *Model, enc *encoder) error {
 	m.rope, m.ropeSWA = mb.ropeG, &mb.ropeL
 	mb.blocks = make([]mbBlock, cfg.NLayer)
 	mb.trunk = len(mb.blocks)
-	mb.local = func(li int) bool { return li < len(mb.blocks) && !mb.blocks[li].global }
+
 	for i := range mb.blocks {
 		b, bi := &mb.blocks[i], int32(i)
 		b.global = cfg.SWAWindow == 0 || cfg.SWAPeriod <= 1 || i%cfg.SWAPeriod == 0

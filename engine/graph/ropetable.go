@@ -35,11 +35,48 @@ type Rotary struct {
 	CycleAxes   [4]uint8
 }
 
+// Build is the table's graph: each row's positions on the rotary axes from
+// its sequence's marks (OpRopePos), then the table over them; a grid's rows
+// read their cells as the step states them.
 func (r *RopeTable) Build() *Graph {
 	g := &Graph{Block: -1}
 	cs := g.value("rope.cs", r.NRot)
 	g.Out = []ValueID{cs}
-	g.op(Op{Kind: OpRopeTable, Out: []ValueID{cs}, Attr: Attrs{NRot: r.NRot, Rotary: r.Index, Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
+	var in []ValueID
+	if !r.Grid {
+		pos := g.value("rope.pos", 4)
+		g.Values[pos].Elem = ElemU32
+		g.op(Op{Kind: OpRopePos, Out: []ValueID{pos}})
+		in = []ValueID{pos}
+	}
+	g.op(Op{Kind: OpRopeTable, In: in, Out: []ValueID{cs}, Attr: Attrs{NRot: r.NRot, Rotary: r.Index, Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
 		Cycle: r.Cycle, CycleAxes: r.CycleAxes}})
 	return g
 }
+
+// A rotary mark's words (OpRopePos), MarkWords a mark; a sequence's marks
+// follow its count.
+const (
+	// MarkAt is the first cache position the mark covers, MarkBase the
+	// rotary position there, MarkKind how its rows turn.
+	MarkAt = iota
+	MarkBase
+	MarkKind
+	// MarkT, MarkH and MarkW are a grid's frames, rows and columns (under
+	// XD-RoPE the columns hold a row's line ends), MarkEnds an XD-RoPE
+	// picture's text-like rows before and after its grid, MarkIndex its
+	// ordinal in the sequence.
+	MarkT
+	MarkH
+	MarkW
+	MarkEnds
+	MarkIndex
+	MarkWords
+)
+
+// How a mark's rows turn (MarkKind).
+const (
+	MarkText = iota
+	MarkGrid
+	MarkGridXD
+)

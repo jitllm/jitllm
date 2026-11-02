@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -17,14 +18,12 @@ import (
 // s + H*W -- so from the first image on, a row's rotary position and its cache
 // position part (transformers' get_rope_index, llama.cpp's mtmd n_pos).
 //
-// Nothing about that is an image pipeline's: the positions ride the rows
-// through the one sequence. A prefill computes every row's coordinates from its
-// spans; the rows after it -- decode, a batch step, a ragged step, a
-// speculation -- take theirs from ropeOf, which reads the offset the prompt
-// left behind (a ropeMark). The rotation itself is every tier's own kernel over
-// a per-row table (nn.Rope.TableAt), so a device needs no knowledge of M-RoPE:
-// it is handed the host's table (Model.ropeTabPlanes), as every tier already
-// can be.
+// Nothing about that is an image pipeline's: a sequence carries its rotary
+// marks (graph.OpRopePos), written where a prompt's spans enter and dropped
+// where the sequence is rewound -- a picture's grid, the text after it -- and
+// every device computes a row's coordinates from its cache position and its
+// sequence's marks in the step's rotary table (jit.TableRopeMarks), the CPU
+// as a card does. No call hands a device a row's position on the axes.
 
 // ImageGrid is the shape of an embedding span's rows: T frames of H x W, in
 // raster order (t slowest, x fastest), after the projector's merge. A span with
@@ -54,24 +53,138 @@ func mropeSections(c *jlm.Config) (out [4]int) {
 	return out
 }
 
-// ropeMark says the rows of a slot from cache position at onwards that advance
-// like text turn at their cache position plus delta, until the next mark.
-type ropeMark struct{ at, delta int }
+// ropeMarks is a session's rotary marks (graph.OpRopePos) as the composed
+// rotary tables read them (jit.TableRopeMarks): a block a slot -- its count,
+// then its marks of graph.MarkWords words in order of first position -- at
+// at[slot] in buf, room[slot] marks large. A slot outgrowing its block moves
+// to one twice as large at buf's end; gen[slot] counts its changes, so a
+// device holding a copy is sent it again (sendMarks).
+type ropeMarks struct {
+	buf      []uint32
+	at, room []int
+	gen      []uint64
+	// sent is, per slot, one past the gen its device was last told.
+	sent []uint64
+}
 
-// ropeOf is the rotary position of a row of slot at cache position p that
-// advances like text: p itself until an image has moved them apart.
-func (s *Session) ropeOf(slot, p int) int {
-	if slot >= len(s.rmarks) {
-		return p
+// marksHeld is the device's failure to hold the marks it was last sent, once.
+func (s *Session) marksHeld() error {
+	err := s.markErr
+	s.markErr = nil
+	return err
+}
+
+// sendMarks tells the session's device every slot's marks that changed
+// since it last was (nn.RopeMarksDevice).
+func (s *Session) sendMarks() {
+	r := &s.rmarks
+	if s.ldMarks == nil {
+		return
 	}
-	ms := s.rmarks[slot]
-	for i := len(ms) - 1; i >= 0; i-- {
-		if ms[i].at <= p {
-			return p + ms[i].delta
+	for len(r.sent) < len(r.at) {
+		r.sent = append(r.sent, 0)
+	}
+	for i := range r.at {
+		if r.at[i] < 0 || r.sent[i] == r.gen[i]+1 {
+			continue
 		}
+		if err := s.ldMarks.SetSeqMarks(i, r.block(i)); err != nil {
+			s.markErr = err
+			continue
+		}
+		r.sent[i] = r.gen[i] + 1
+	}
+}
+
+// count is how many marks slot i holds.
+func (r *ropeMarks) count(i int) int {
+	if i >= len(r.at) || r.at[i] < 0 {
+		return 0
+	}
+	return int(r.buf[r.at[i]])
+}
+
+// mark is slot i's mark k.
+func (r *ropeMarks) mark(i, k int) []uint32 {
+	o := r.at[i] + 1 + k*graph.MarkWords
+	return r.buf[o : o+graph.MarkWords]
+}
+
+// block is slot i's count and marks, as a table reads them; nil for a slot
+// that holds no block.
+func (r *ropeMarks) block(i int) []uint32 {
+	if i >= len(r.at) || r.at[i] < 0 {
+		return nil
+	}
+	return r.buf[r.at[i] : r.at[i]+1+r.count(i)*graph.MarkWords]
+}
+
+// offset is where slot i's block starts in buf, its room made first.
+func (r *ropeMarks) offset(i int) int {
+	r.grow(i, 0)
+	return r.at[i]
+}
+
+// grow makes room for slot i to hold n marks.
+func (r *ropeMarks) grow(i, n int) {
+	for len(r.at) <= i {
+		r.at, r.room, r.gen = append(r.at, -1), append(r.room, 0), append(r.gen, 0)
+	}
+	if r.at[i] >= 0 && r.room[i] >= n {
+		return
+	}
+	room := max(4, 2*n)
+	at := len(r.buf)
+	r.buf = append(r.buf, make([]uint32, 1+room*graph.MarkWords)...)
+	if r.at[i] >= 0 {
+		copy(r.buf[at:], r.block(i))
+	}
+	r.at[i], r.room[i] = at, room
+}
+
+// add appends m to slot i's marks.
+func (r *ropeMarks) add(i int, m [graph.MarkWords]uint32) {
+	n := r.count(i)
+	r.grow(i, n+1)
+	copy(r.mark(i, n), m[:])
+	r.buf[r.at[i]] = uint32(n + 1)
+	r.gen[i]++
+}
+
+// rewind drops slot i's marks past cache position p, for a sequence rolled
+// back to p (its next row is written at p+1, or at p for a mark at p).
+func (r *ropeMarks) rewind(i, p int) {
+	n := r.count(i)
+	k := n
+	for k > 0 && int(r.mark(i, k-1)[graph.MarkAt]) > p {
+		k--
+	}
+	if k != n {
+		r.buf[r.at[i]] = uint32(k)
+		r.gen[i]++
+	}
+}
+
+// textAt is the rotary position a row of slot i at cache position p that
+// advances like text turns at, from the slot's marks: where a prompt's
+// spans start laying out.
+func (r *ropeMarks) textAt(i, p int) int {
+	for k := r.count(i) - 1; k >= 0; k-- {
+		m := r.mark(i, k)
+		if int(m[graph.MarkAt]) > p {
+			continue
+		}
+		if m[graph.MarkKind] == graph.MarkText {
+			return p - int(m[graph.MarkAt]) + int(m[graph.MarkBase])
+		}
+		return p
 	}
 	return p
 }
+
+// ropeOf is the rotary position of a row of slot at cache position p that
+// advances like text: p itself until an image has moved them apart.
+func (s *Session) ropeOf(slot, p int) int { return s.rmarks.textAt(slot, p) }
 
 // markRope records that slot's text-like rows from cache position at onwards
 // turn at their position plus delta, replacing every mark at or past at: the
@@ -81,148 +194,97 @@ func (s *Instance) markRope(slot, at, delta int) {
 	if s.ropeOf(slot, at) == at+delta {
 		return
 	}
-	s.rmarks[slot] = append(s.rmarks[slot], ropeMark{at, delta})
+	s.rmarks.add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(at), graph.MarkBase: uint32(at + delta), graph.MarkKind: graph.MarkText})
+	s.sendMarks()
 }
 
-// rewindRope forgets slot's marks past cache position p, for a sequence rolled
-// back to p (its next row is written at p+1, or at p for a mark at p).
+// rewindRope forgets slot's marks past cache position p.
 func (s *Instance) rewindRope(slot, p int) {
-	if slot >= len(s.rmarks) {
-		return
-	}
-	ms := s.rmarks[slot]
-	for len(ms) > 0 && ms[len(ms)-1].at > p {
-		ms = ms[:len(ms)-1]
-	}
-	s.rmarks[slot] = ms
-	if slot < len(s.ximg) {
-		at := s.ximg[slot]
-		for len(at) > 0 && at[len(at)-1] > p {
-			at = at[:len(at)-1]
-		}
-		s.ximg[slot] = at
-	}
+	s.rmarks.rewind(slot, p)
+	s.sendMarks()
 }
 
 // xdRope is spanRope under XD-RoPE (HunyuanVL, transformers' get_rope_index):
 // every row's first coordinate is its sequence position, nothing after an
 // image is shifted, and a picture's grid rows -- the newline column included
 // -- take (position, column, row, picture) on the four axes, the picture's
-// ordinal in the sequence; its begin and end rows are text-like. The slot's
-// pictures are recorded where they start, so a later prompt counts them.
-func (s *Instance) xdRope(slot, p0 int, spans []Span) (rows [][4]int, next int, err error) {
+// ordinal in the sequence; its begin and end rows are text-like. A picture
+// is a mark where it starts (graph.MarkGridXD), its ordinal the slot's
+// pictures before it.
+func (s *Instance) xdRope(slot, p0 int, spans []Span) (next int, err error) {
 	c := s.c
-	for len(s.ximg) <= slot {
-		s.ximg = append(s.ximg, nil)
-	}
 	s.rewindRope(slot, p0-1)
+	pics := 0
+	for k := range s.rmarks.count(slot) {
+		if s.rmarks.mark(slot, k)[graph.MarkKind] == graph.MarkGridXD {
+			pics++
+		}
+	}
 	r := p0
 	for i, sp := range spans {
 		n := sp.n(c.NEmbd)
 		if !sp.rows() || sp.Grid.zero() {
-			for j := 0; j < n; j++ {
-				rows = append(rows, [4]int{r + j, r + j, r + j, r + j})
-			}
 			r += n
 			continue
 		}
 		g := sp.Grid
 		if g.Rows() != n || g.T != 1 {
-			return nil, 0, fmt.Errorf("model: span %d is %d embedding rows and its grid %dx%dx%d (+%d, %d ends) is %d",
+			return 0, fmt.Errorf("model: span %d is %d embedding rows and its grid %dx%dx%d (+%d, %d ends) is %d",
 				i, n, g.T, g.H, g.W, g.Line, g.Ends, g.Rows())
 		}
-		idx := len(s.ximg[slot])
-		s.ximg[slot] = append(s.ximg[slot], r)
-		j := 0
-		text := func() {
-			rows = append(rows, [4]int{r + j, r + j, r + j, r + j})
-			j++
-		}
-		for e := 0; e < g.Ends; e++ {
-			text()
-		}
-		for y := 0; y < g.H; y++ {
-			for x := 0; x < g.W+g.Line; x++ {
-				rows = append(rows, [4]int{r + j, x, y, idx})
-				j++
-			}
-		}
-		for e := 0; e < g.Ends; e++ {
-			text()
-		}
+		s.rmarks.add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(r), graph.MarkKind: graph.MarkGridXD, graph.MarkT: 1,
+			graph.MarkH: uint32(g.H), graph.MarkW: uint32(g.W + g.Line), graph.MarkEnds: uint32(g.Ends), graph.MarkIndex: uint32(pics)})
+		pics++
 		r += n
 	}
-	return rows, r, nil
+	s.sendMarks()
+	return r, nil
 }
 
-// spanRope lays a mixed prompt's rows out on the rotary axes: rows[i] is row
-// i's (t, h, w), starting where the slot's next text row would turn (at cache
-// position p0), and next is the rotary position the row after the prompt
-// takes. nil rows means the model's rotary is single-axis and every row is
-// ropeOf's.
+// spanRope lays a mixed prompt's rows out on the rotary axes as slot's
+// marks, from cache position p0 where the slot's next text row would turn,
+// and says the rotary position the row after the prompt takes: an image's
+// rows a grid from the position its span starts at (graph.MarkGrid), the
+// text after it at that position plus max(H, W) (transformers'
+// get_rope_index: current_pos += max(h, w), whatever T). A single-axis
+// model's rows all advance like text, the image's too.
 //
 // An embedding span with no grid is rows that advance like text: the
 // embedding seam carries more than images (a vocabulary row looked up
 // elsewhere, TestPrefillMixedMatchesPrefill). An IMAGE without its grid is
-// therefore laid out sequentially, which is fluent and wrong -- the state this
-// replaced, and the violation model.TestMRopeMatchesTransformers runs -- so
-// every caller that holds an image passes its grid (ChatSpans does).
-func (s *Instance) spanRope(slot, p0 int, spans []Span) (rows [][4]int, next int, err error) {
+// therefore laid out sequentially, which is fluent and wrong -- the
+// violation model.TestMRopeMatchesTransformers runs -- so every caller that
+// holds an image passes its grid (ChatSpans does).
+func (s *Instance) spanRope(slot, p0 int, spans []Span) (next int, err error) {
 	c := s.c
 	if c.RopeXD {
 		return s.xdRope(slot, p0, spans)
 	}
 	r := s.ropeOf(slot, p0)
 	if len(s.m.rope.Runs) == 0 {
-		// Every row advances like text, the image's too.
 		for _, sp := range spans {
 			r += sp.n(c.NEmbd)
 		}
-		return nil, r, nil
+		return r, nil
 	}
+	s.rewindRope(slot, p0-1)
+	p := p0
 	for i, sp := range spans {
 		n := sp.n(c.NEmbd)
 		if !sp.rows() || sp.Grid.zero() {
-			for j := 0; j < n; j++ {
-				rows = append(rows, [4]int{r + j, r + j, r + j, r + j})
-			}
-			r += n
+			r, p = r+n, p+n
 			continue
 		}
 		g := sp.Grid
 		if g.Rows() != n {
-			return nil, 0, fmt.Errorf("model: span %d is %d embedding rows and its grid %dx%dx%d is %d",
+			return 0, fmt.Errorf("model: span %d is %d embedding rows and its grid %dx%dx%d is %d",
 				i, n, g.T, g.H, g.W, g.Rows())
 		}
-		for t := 0; t < g.T; t++ {
-			for y := 0; y < g.H; y++ {
-				for x := 0; x < g.W; x++ {
-					rows = append(rows, [4]int{r + t, r + y, r + x, r + t})
-				}
-			}
-		}
-		// transformers' get_rope_index: current_pos += max(h, w), whatever T.
-		r += max(g.H, g.W)
+		s.rmarks.add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(p), graph.MarkBase: uint32(r), graph.MarkKind: graph.MarkGrid,
+			graph.MarkT: uint32(g.T), graph.MarkH: uint32(g.H), graph.MarkW: uint32(g.W)})
+		r, p = r+max(g.H, g.W), p+n
+		s.rmarks.add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(p), graph.MarkBase: uint32(r), graph.MarkKind: graph.MarkText})
 	}
-	return rows, r, nil
-}
-
-// ropeTableRow writes the rotary rows of a row with an explicit multi-axis
-// position into row j of the batch tables: the plain table when its
-// coordinates agree (a text row, to the bit), the multi-axis one otherwise.
-func (s *Instance) ropeTableRow(j int, at [4]int) {
-	nrot, nrotSWA := s.c.RopeW(), s.c.NRotSWA
-	if at[0] == at[1] && at[1] == at[2] && at[2] == at[3] {
-		s.ropeRow(j, at[0])
-		return
-	}
-	s.noteAxes(j, [4]int32{int32(at[0]), int32(at[1]), int32(at[2]), int32(at[3])})
-	cs := s.bcs[j*nrot : (j+1)*nrot]
-	s.jit.RopeTableAt(s.m.rope, cs[:s.c.NRot], at[:])
-	if s.m.ropeB != nil {
-		s.jit.RopeTableAt(*s.m.ropeB, cs[s.c.NRot:], at[:])
-	}
-	if s.m.ropeSWA != nil {
-		s.jit.RopeTableAt(*s.m.ropeSWA, s.bcsSWA[j*nrotSWA:(j+1)*nrotSWA], at[:])
-	}
+	s.sendMarks()
+	return r, nil
 }

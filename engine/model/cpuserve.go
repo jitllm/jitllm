@@ -15,6 +15,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
@@ -70,6 +71,11 @@ const (
 	cpuArgVector
 	cpuArgRope
 	cpuArgKeys
+	cpuArgRopeRows
+	cpuArgRopeMarks
+	cpuArgEntKeys
+	cpuArgEntPages
+	cpuArgEntRows
 	cpuArgValues
 	cpuArgPages
 	cpuArgRows
@@ -128,6 +134,8 @@ type cpuArg struct {
 	// coordinate (jit.CallArg.Per), moves whether any does.
 	per   [2]int
 	moves bool
+	// inst is a rotary table's instance (cpuArgRope, cpuArgPlanes).
+	inst int
 }
 
 // cpuCode is one kernel of a form, mapped, and its call words; reads and
@@ -241,7 +249,8 @@ type cpuForms struct {
 	err   map[jit.Key]error
 	// planes is each block's rotary planes where a form of it reads them
 	// (cpuArgPlanes), set once under mu before the block's first call.
-	planes [][]float32
+	// tabPlanes is each rotary's planes (cpuTablePlanes).
+	tabPlanes [2][]float32
 }
 
 func (c *cpuForms) close() {
@@ -267,6 +276,22 @@ type cpuState struct {
 	fpages []uint32
 	rows   [4]uint32
 	zero   []uint32
+	// entRow and entTab are a block's entry descriptors (cpuEntBind), a
+	// decode's and a call's rows'.
+	entRow [4]uint32
+	entTab []uint32
+	// tok is the step's rows' tokens (cpuTokens), tok1 a decode's.
+	tok  []uint32
+	tok1 [1]uint32
+	// oneFresh and tabsFresh say the decode row's and the step's rows'
+	// rotary tables are made (cpuOneTable, cpuRowTables); tabSeq is the
+	// rows' slots as the tables read them.
+	oneFresh, tabsFresh bool
+	tabSeq              []int
+	// pos1 and posTab are a block's call's live rows then each row's
+	// position (cpuArgPos), a decode's and a call's.
+	pos1   [2]uint32
+	posTab []uint32
 	// rowsTab is a call's rows' descriptors at the rows' form, call its
 	// "rows.n" word, and rseq and rpos a step's rows' sequences and
 	// positions.
@@ -287,6 +312,7 @@ type cpuState struct {
 	// rows' form, recStepped those it stepped a row at a time.
 	recWhole, recStepped int
 	rseq, rpos           []int
+	onePos               [1]int
 	// sel is a call's experts as the pager's fault path takes them, picked
 	// marking those already in it, by expert (cpuExperts).
 	sel    []int32
@@ -335,6 +361,7 @@ type cpuState struct {
 	pool    cpuPoolState
 	mtp     cpuMTPState
 	embed   cpuEmbedState
+	tables  cpuTableState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -447,6 +474,16 @@ type cpuBound struct {
 	n      int
 	kv     *kvPages
 	pages  []uint32
+	// csSWA is the call's second rotary's table where the model trains one,
+	// ropeRows and ropeMarks a rotary table's call's rows and its session's
+	// marks (cpuTables).
+	csSWA               []float32
+	ropeRows, ropeMarks []uint32
+	// ent is the block's entries, entPages their table and entRows the
+	// rows' entry descriptors (cpuEntBind).
+	ent      *kvPages
+	entPages []uint32
+	entRows  []uint32
 	// recLi is the block whose recurrent states a linear block's step binds
 	// and recOf the session that holds them.
 	recLi int
@@ -516,6 +553,9 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) 
 	if why != jit.DeclineServes {
 		return why, nil
 	}
+	if err := s.cpuOneTable(); err != nil {
+		return jit.DeclineServes, err
+	}
 	// A block sharing another's history reads its source's pages.
 	hl := s.c.KVSource(li)
 	pg := &s.kv.layers[hl]
@@ -525,12 +565,20 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) 
 			return why, nil
 		}
 	}
+	if why := s.cpuEntReady(li, pos); why != jit.DeclineServes {
+		return why, nil
+	}
 	b := &s.cpu.bound
 	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: pg.table(max(s.nseq, 1)),
 		recLi: s.cpuRecLi(li), recOf: s.Session, side: s.cpuSide(li)}
 	if b.side != nil {
 		b.side = b.side[cb.sideOff:]
 	}
+	s.cpu.tok1[0] = uint32(s.tok)
+	s.cpu.pos1 = [2]uint32{1, uint32(pos)}
+	b.tok, b.pos, b.csSWA = s.cpu.tok1[:], s.cpu.pos1[:], s.csSWA
+	s.cpu.onePos[0] = pos
+	s.cpuEntBind(b, li, s.cpu.entRow[:], nil, s.cpu.onePos[:])
 	if why := s.cpuWeights(cb.f, li, l); why != jit.DeclineServes {
 		return why, nil
 	}
@@ -557,6 +605,9 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) 
 // cs, or says why not: through the rows' form, a call of at most its
 // capacity at a time, each row's history in its own sequence's pages.
 func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int) (jit.Decline, error) {
+	if err := s.cpuRowTables(seq, pos); err != nil {
+		return jit.DeclineServes, err
+	}
 	f, why := s.cpuRowsForm(li, l)
 	if why != jit.DeclineServes {
 		return why, nil
@@ -564,9 +615,8 @@ func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []
 	if why := s.cpuRowsReady(li, f, pos); why != jit.DeclineServes {
 		return why, nil
 	}
-	cs, nrot := s.cpuTable(li, cs, csSWA)
 	side, _ := s.cpuSideRows(li)
-	return jit.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, cs, nrot, seq, pos)
+	return jit.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), seq, pos)
 }
 
 // cpuTowerRows runs tower block li on the CPU the composer's way over the
@@ -583,8 +633,7 @@ func (s *Instance) cpuTowerRows(li int, l *layer, n int) (jit.Decline, error) {
 		}
 		wins = v.winRuns
 	}
-	cs, nrot := s.cpuTable(li, s.bcs, nil)
-	return s.cpuRunRows(li, l, s.bx[:n*s.c.ResidW()], n, cs, nrot, wins)
+	return s.cpuRunRows(li, l, s.bx[:n*s.c.ResidW()], n, s.bcs, s.c.RopeW(), wins)
 }
 
 // cpuRunRows runs non-causal block li on the CPU the composer's way over
@@ -615,16 +664,6 @@ func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32
 	return jit.DeclineServes, err
 }
 
-// cpuTable is the rotary table of a step's rows block li reads and its
-// width: the sliding layers' (csSWA) where the model turns them by a
-// rotary of their own.
-func (s *Instance) cpuTable(li int, cs, csSWA []float32) ([]float32, int) {
-	if csSWA != nil && s.c.SWA(li) {
-		return csSWA, s.c.NRotSWA
-	}
-	return cs, s.c.RopeW()
-}
-
 // cpuSessions is cpuRows for a step across sessions (stepHost): row i's
 // history is s.rowOwn[i]'s, its one sequence, and the first nlogit rows are
 // each a session's last. Each session runs its own rows on its own block's
@@ -634,7 +673,10 @@ func (s *Instance) cpuTable(li int, cs, csSWA []float32) ([]float32, int) {
 // logit rows first, so a session's last row reads the keys its earlier
 // rows wrote.
 func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, nlogit int) (jit.Decline, error) {
-	cs, nrot := s.cpuTable(li, cs, csSWA)
+	if err := s.cpuRowTables(seq, pos); err != nil {
+		return jit.DeclineServes, err
+	}
+	cs, nrot := s.bcs, s.c.RopeW()
 	n := len(pos)
 	// Every row's page is writable before any session's range is checked: a
 	// session's logit row leads its other rows in the step, and the range it
@@ -717,6 +759,9 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 // speculative rows' snapshot, which takes the row at a time, and the
 // restore points, where the rows' form ends a call.
 func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []int, base, p0 int) (jit.Decline, error) {
+	if err := s.cpuRowTables(seq, pos); err != nil {
+		return jit.DeclineServes, err
+	}
 	cb, why := s.cpuBlockOf(li)
 	if why != jit.DeclineServes {
 		return why, nil
@@ -767,6 +812,9 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 		}
 		if nrot > 0 {
 			b.cs = cs[r*nrot:]
+		}
+		if s.bcsSWA != nil {
+			b.csSWA = s.bcsSWA[r*s.c.NRotSWA:]
 		}
 		s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos[r])), uint32(pos[r] + 1), uint32(pos[r])}
 		s.cpu.recRows = [3]uint32{1, uint32(slot), uint32(slot)}
@@ -944,7 +992,7 @@ func (s *Instance) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline 
 	if why := s.cpuReadable(hl, start, end-1); why != jit.DeclineServes {
 		return why
 	}
-	return jit.DeclineServes
+	return s.cpuEntReady(li, pos...)
 }
 
 // cpuFaultTable is the page table a step of the layer whose pages pg
@@ -1077,6 +1125,26 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 		}
 		*b = cpuBound{li: li, l: l, own: s.cpuOwn(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
 			kv: pg, pages: s.cpuFaultTable(pg, end), side: bside}
+		if len(s.cpu.tok) > r0 {
+			b.tok = s.cpu.tok[r0:]
+		}
+		if s.bcsSWA != nil {
+			b.csSWA = s.bcsSWA[r0*s.c.NRotSWA:]
+		}
+		if len(s.cpu.posTab) < 1+f.rows {
+			s.cpu.posTab = make([]uint32, 1+f.rows)
+		}
+		s.cpu.posTab[0] = uint32(k)
+		for i := range f.rows {
+			s.cpu.posTab[1+i] = uint32(pos[r0+min(i, k-1)])
+		}
+		b.pos = s.cpu.posTab
+		if s.kv.entRate(li) > 0 {
+			if len(s.cpu.entTab) < len(s.cpu.rowsTab) {
+				s.cpu.entTab = make([]uint32, len(s.cpu.rowsTab))
+			}
+			s.cpuEntBind(b, li, s.cpu.entTab, seq[r0:r0+k], pos[r0:r0+k])
+		}
 		rec := s.c.LayerKind(li).Recurrent()
 		if rec {
 			b.recLi, b.recOf, b.rec = s.cpuRecLi(li), s.Session, s.cpuRecDesc(seq[r0:r0+k])
@@ -1347,10 +1415,23 @@ func (s *Instance) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			p = unsafe.Pointer(&s.cpuRoleVector(b.li, b.l, ar.role)[0])
 		case cpuArgRope:
 			p = unsafe.Pointer(&b.cs[0])
+			if ar.inst == 1 {
+				p = unsafe.Pointer(&b.csSWA[0])
+			}
 		case cpuArgPlanes:
-			p = unsafe.Pointer(&s.m.cpuForms.planes[b.li][0])
+			p = unsafe.Pointer(&s.m.cpuTablePlanes(ar.inst)[0])
+		case cpuArgRopeRows:
+			p = unsafe.Pointer(&b.ropeRows[0])
+		case cpuArgRopeMarks:
+			p = unsafe.Pointer(&b.ropeMarks[0])
 		case cpuArgKeys:
 			p = unsafe.Pointer(&b.kv.arena.k[0])
+		case cpuArgEntKeys:
+			p = unsafe.Pointer(&b.ent.arena.k[0])
+		case cpuArgEntPages:
+			p = unsafe.Pointer(&b.entPages[0])
+		case cpuArgEntRows:
+			p = unsafe.Pointer(&b.entRows[0])
 		case cpuArgValues:
 			p = unsafe.Pointer(&b.kv.arena.v[0])
 		case cpuArgPages:
@@ -1485,6 +1566,7 @@ func (s *Instance) cpuPlace() {
 	s.cpuPlacePool()
 	s.cpuPlaceMTP()
 	s.cpuPlaceEmbed()
+	s.cpuPlaceTables()
 }
 
 // cpuRelocated follows block li onto the CPU, composed for it there, or off
@@ -1699,6 +1781,10 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpuB
 			}
 			if e, ok := f.Find(w.Role, int32(li), -1); ok {
 				formats[w.Role] = e.Type
+				// A table the block lays out as float32 at load is read so.
+				if t := s.cpuRoleWeight(li, &m.layers[li], w.Role); w.Rows > 0 && t != nil && t.e == nil && t.typ == quant.F32 {
+					formats[w.Role] = jlm.TypeF32
+				}
 			} else if w.Rows == 0 {
 				// A vector a restatement adds is held as every vector is.
 				formats[w.Role] = jlm.TypeF32
@@ -1714,11 +1800,12 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpuB
 		Step:    jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.jit.ActWindow(), Seqs: max(s.nseq, 1)},
 		History: jit.History{ValuesInKeys: pg.latent},
 		Device:  s.composedCPU()}
-	fm, err := m.cpuFormOf(req, &gr, rows, false, false, s.kvl.fmt == cpu.KVF32)
-	if err == nil && readsPlanes(g) && !m.cpuPlanes(li) {
-		return nil, cpuDeclineError{jit.DeclineTable, fmt.Errorf("block %d turns by a rotary with no planes", li)}
+	// A text block turns by the rotary its rope ops state, of the model's
+	// (composing.Rotaries): each its own table, bound by instance.
+	if m.towerAt(li) < 0 {
+		req.Rotaries = composing{m.container, m}.Rotaries()
 	}
-	return fm, err
+	return m.cpuFormOf(req, &gr, rows, false, false, s.kvl.fmt == cpu.KVF32)
 }
 
 // readsPlanes reports whether a form of g reads the rotary's planes: a
@@ -1727,25 +1814,6 @@ func readsPlanes(g *graph.Graph) bool {
 	return slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
 		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0 || o.Kind == graph.OpRope && o.Attr.Shift > 0
 	})
-}
-
-// cpuPlanes sets block li's rotary planes (cpuArgPlanes) where they are not,
-// and reports whether the block has them.
-func (m *Model) cpuPlanes(li int) bool {
-	c := &m.cpuForms
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.planes == nil {
-		c.planes = make([][]float32, len(m.layers))
-	}
-	if li >= len(c.planes) {
-		return false
-	}
-	if c.planes[li] == nil {
-		r := m.ropeAt(li)
-		c.planes[li] = r.TabPlanes(r.NRot / 2)
-	}
-	return len(c.planes[li]) > 0
 }
 
 // cpuFormOf is req's form on the CPU, mapped once for the model by its Key;
@@ -1970,12 +2038,22 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 				ar.src, ar.role = cpuArgVector, o.Role
 			case o.Kind == jit.OperandTable:
 				switch t := o.Table; {
-				case t == jit.TableAngles && o.Instance == 0:
-					ar.src = cpuArgRope
-				case t == jit.TablePlanes && o.Instance == 0:
-					ar.src = cpuArgPlanes
+				case t == jit.TableAngles && o.Instance < 2:
+					ar.src, ar.inst = cpuArgRope, o.Instance
+				case t == jit.TablePlanes && o.Instance < 2:
+					ar.src, ar.inst = cpuArgPlanes, o.Instance
+				case t == jit.TableRopeRows:
+					ar.src = cpuArgRopeRows
+				case t == jit.TableRopeMarks:
+					ar.src = cpuArgRopeMarks
 				case t == jit.TableKeys:
 					ar.src = cpuArgKeys
+				case t == jit.TableEntKeys:
+					ar.src = cpuArgEntKeys
+				case t == jit.TableEntPages:
+					ar.src = cpuArgEntPages
+				case t == jit.TableEntRows:
+					ar.src = cpuArgEntRows
 				case t == jit.TableValues:
 					ar.src = cpuArgValues
 				case t == jit.TablePages:
@@ -2957,6 +3035,30 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &h.ngCvTaps
 		}
 	}
+	if d := l.ds4; d != nil {
+		switch r {
+		case jlm.RoleHCAttnFn:
+			return &d.attnFn
+		case jlm.RoleHCFFNFn:
+			return &d.ffnFn
+		case jlm.RoleAttnOutA:
+			return &d.woA
+		case jlm.RoleCompKV:
+			return &d.compKV
+		case jlm.RoleCompGate:
+			return &d.compGate
+		case jlm.RoleIdxCompKV:
+			return &d.idxCompKV
+		case jlm.RoleIdxCompGate:
+			return &d.idxCompGate
+		case jlm.RoleCompAPE:
+			return &d.compAPET
+		case jlm.RoleIdxCompAPE:
+			return &d.idxCompAPET
+		case jlm.RoleHashExperts:
+			return &d.hashT
+		}
+	}
 	return nil
 }
 
@@ -3154,6 +3256,22 @@ func (s *Instance) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 			return h.ngNormQ
 		case jlm.RoleNGramNormConv:
 			return h.ngNormC
+		}
+	}
+	if d := l.ds4; d != nil {
+		switch r {
+		case jlm.RoleHCAttnBase:
+			return d.attnBase
+		case jlm.RoleHCFFNBase:
+			return d.ffnBase
+		case jlm.RoleHCAttnScale:
+			return d.attnScale3
+		case jlm.RoleHCFFNScale:
+			return d.ffnScale3
+		case jlm.RoleCompNorm:
+			return d.compNorm
+		case jlm.RoleIdxCompNorm:
+			return d.idxCompNorm
 		}
 	}
 	return nil

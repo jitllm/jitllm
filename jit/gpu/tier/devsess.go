@@ -122,14 +122,10 @@ type devSess struct {
 	// ngHost is the rows' n-gram table rows for the next call (SetNGramRows),
 	// which Qwen3.8-Flash-Next's n-gram block reads (q4e.go).
 	ngHost []float32
-	// qsaMarks is the rows' rotary marks for the next call (SetRopeMarks),
-	// which a QSA block's pooled keys turn by (qsa.go).
-	qsaMarks []int32
-	// ropeAxes is the rows' rotary positions, four words a row, for the
-	// call at cache position ropeAxesAt (SetRopeAxes), which the composer's
-	// table turns them by (served.go).
-	ropeAxes   []int32
-	ropeAxesAt int
+	// markAt and markRoom are, per slot, where the session's rotary marks
+	// sit in the device's arena and how many words they may take
+	// (markArena).
+	markAt, markRoom []int
 	// prompt says the session's calls are a prompt's (SetPrompt): its blocks
 	// are asked as a prompt's (rowsKind).
 	prompt bool

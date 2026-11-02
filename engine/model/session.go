@@ -67,13 +67,10 @@ type Session struct {
 	// bpos is the sequence's position as a row of a step, one entry. pos
 	// stays the high-water mark: the maxSeq bound and Pos() read it.
 	bpos []int
-	// rmarks is, per slot, where an image has moved the rotary position of
-	// the rows after it off their cache position (mrope.go). Empty for every
-	// sequence that has seen no image, and on every single-axis model.
-	rmarks [][]ropeMark
-	// ximg is, per slot, the cache position each picture starts at under
-	// XD-RoPE, whose image rows carry the picture's ordinal (xdRope).
-	ximg      [][]int
+	// rmarks is, per slot, how the rows turn where an image has laid them
+	// out off their cache positions (mrope.go). Empty for every sequence
+	// that has seen no image, and on every single-axis model.
+	rmarks    ropeMarks
 	retireErr error // a device reset Retire or Reset could not make; see Retire
 	// ld is the session's view of its instance's device, which holds its
 	// history there; ldRoom to ldQSA are ld's optional faces, nil where it
@@ -88,11 +85,13 @@ type Session struct {
 	ldNamed  nn.NamedDevice
 	ldInputs nn.LayerInputDevice
 	ldTokens nn.TokenDevice
-	ldRope   nn.RopeAxesDevice
+	ldMarks  nn.RopeMarksDevice
+	// markErr is the device's failure to hold a sequence's rotary marks
+	// (sendMarks), which the next call returns (marksHeld).
+	markErr  error
 	ldEmbed  nn.EmbedDevice
 	ldPrompt nn.PromptDevice
 	ldNGram  nn.NGramDevice
-	ldQSA    nn.QSADevice
 	tier     nn.LayerDevice
 	held     []bool
 	// kvRoom is the positions ld holds room for (reserveRuns), 0 when not

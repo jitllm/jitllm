@@ -1439,11 +1439,11 @@ func (s *Instance) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 		}
 		s.bidir = s.bidir[:0]
 	}()
-	rp, next, err := s.spanRope(0, 0, spans)
+	next, err := s.spanRope(0, 0, spans)
 	if err != nil {
 		return nil, err
 	}
-	key := s.spanKey(0, spans, rp)
+	key := s.spanKey(0, spans)
 	s.markRope(0, rows, next-rows)
 	return s.prefillCachedKey(key, rows, func(n int) ([]float32, error) {
 		// Only now are the rows needed, and only from n on: a picture the
@@ -1461,13 +1461,9 @@ func (s *Instance) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 			return nil, err
 		}
 		defer undoDeep()
-		var tail [][4]int
-		if rp != nil {
-			tail = rp[n:]
-		}
 		defer s.tokensOf(enc)()
 		s.spanTok = s.spanTok[min(n, len(s.spanTok)):]
-		return s.prefillSrc(0, src[n:], nil, tail)
+		return s.prefillSrc(0, src[n:], nil)
 	})
 }
 
@@ -1475,7 +1471,7 @@ func (s *Instance) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 // p0 are named by: a token's own id, and for an image row a reference to the
 // row's name in the cache's table (kvCache.nameRow). It stops at the first
 // embedding span with no key, so it may be shorter than the prompt.
-func (s *Instance) spanKey(p0 int, spans []Span, rp [][4]int) []int32 {
+func (s *Instance) spanKey(p0 int, spans []Span) []int32 {
 	nembd := s.c.NEmbd
 	var key []int32
 	for _, sp := range spans {
@@ -1487,11 +1483,7 @@ func (s *Instance) spanKey(p0 int, spans []Span, rp [][4]int) []int32 {
 			return key
 		}
 		for i := 0; i < sp.n(nembd); i++ {
-			var at [4]int
-			if rp != nil {
-				at = rp[len(key)]
-			}
-			key = append(key, s.kv.nameRow(*sp.Key, i, at, p0+len(key)))
+			key = append(key, s.kv.nameRow(*sp.Key, i, sp.Grid, p0+len(key)))
 		}
 	}
 	return key
@@ -2999,28 +2991,21 @@ func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
 }
 
 // namedRow is one image row as the page keys see it: the picture's name, the
-// row's index in the run that name covers, and its rotary position where the
-// model's rotary is multi-axis (zero where a row's position is its index,
-// which the stream already says).
+// row's index in the run that name covers, and the run's grid. Its rotary
+// position follows from the grid and the prefix, which the key hashes
+// before it.
 type namedRow struct {
-	key ImageKey
-	row int32
-	at  [4]int32
+	key  ImageKey
+	row  int32
+	grid [5]int32
 }
 
-// namePosFault is a gate's violation: an image row's rotary position left
-// out of its name. False in every real run.
-var namePosFault bool
-
-// nameRow records image row row of the picture named k, at rotary position
-// at, as the row at cache position pos, and returns the id seq holds for it:
+// nameRow records image row row of the picture named k, laid out as grid g,
+// as the row at cache position pos, and returns the id seq holds for it:
 // negative, so no vocabulary id is one. A row named again at the same position
 // reuses its entry; the table never grows past the rows the sequence holds.
-func (kc *kvCache) nameRow(k ImageKey, row int, at [4]int, pos int) int32 {
-	r := namedRow{key: k, row: int32(row)}
-	if !namePosFault {
-		r.at = [4]int32{int32(at[0]), int32(at[1]), int32(at[2]), int32(at[3])}
-	}
+func (kc *kvCache) nameRow(k ImageKey, row int, g ImageGrid, pos int) int32 {
+	r := namedRow{key: k, row: int32(row), grid: [5]int32{int32(g.T), int32(g.H), int32(g.W), int32(g.Line), int32(g.Ends)}}
 	if pos < len(kc.seq) && kc.seq[pos] < 0 {
 		if i := int(-1 - kc.seq[pos]); i < len(kc.named) && kc.named[i] == r {
 			return kc.seq[pos]
@@ -3047,13 +3032,13 @@ func (kc *kvCache) writeSeq(h io.Writer, a, e int) {
 			continue
 		}
 		r := kc.named[-1-seq[0]]
-		var b [4 + 32 + 4 + 16]byte
+		var b [4 + 32 + 4 + 20]byte
 		// "IMG\xff" read as a little-endian int32 is negative, which no
 		// token id is, so no run of ids hashes to the tag.
 		copy(b[:4], "IMG\xff")
 		copy(b[4:36], r.key[:])
 		binary.LittleEndian.PutUint32(b[36:], uint32(r.row))
-		for j, v := range r.at {
+		for j, v := range r.grid {
 			binary.LittleEndian.PutUint32(b[40+4*j:], uint32(v))
 		}
 		h.Write(b[:])

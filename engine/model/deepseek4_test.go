@@ -129,9 +129,7 @@ var ds4Violations = []c6Violation{
 	{"a window of 7", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.SWAWindow-- })
 	}},
-	{"a sigmoid gate", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ExpertSqrtSoftplus, c.ExpertSigmoid = false, true })
-	}},
+	{"a sigmoid gate", sigmoidScore},
 	{"plain SwiGLU", actSwap(nn.ActSiLU)},
 }
 

@@ -74,6 +74,11 @@ var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "s
 // by the composer's name.
 type composedPart struct {
 	kind partKind
+	// rotaries is the model's rotaries a text block's rope ops pick their
+	// tables from (jit.Request.Rotaries), each bound by instance.
+	rotaries []graph.Rotary
+	// marks is the most rotary marks a sequence holds (jit.Step.Marks).
+	marks int
 	// part is what the composer is asked to form it as: a block's (the
 	// zero), a table's or a sampling's.
 	part    jit.PartKind
@@ -263,14 +268,15 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		g.Stats.MatrixTiled++
 	}
 	return r.Form(jit.Request{
-		Graph:   sl.graph,
-		Part:    sl.part,
-		Formats: sl.formats,
-		Paged:   sl.paged,
-		Apart:   sl.apart,
-		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin, Seqs: sl.seqs},
-		Device:  dev,
-		History: sl.history,
+		Graph:    sl.graph,
+		Part:     sl.part,
+		Formats:  sl.formats,
+		Paged:    sl.paged,
+		Apart:    sl.apart,
+		Step:     jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin, Seqs: sl.seqs, Marks: sl.marks},
+		Rotaries: sl.rotaries,
+		Device:   dev,
+		History:  sl.history,
 	})
 }
 
@@ -384,11 +390,14 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 					args = append(args, a)
 					continue
 				}
+				// Sized by its rows and by the widest binding of it: a code
+				// may reach past the rows' width (the CPU sizes it so too).
 				i, ok := vals[o.Value]
 				if !ok {
 					i = buf(4*rows*gr.Values[o.Value].Width, nil)
 					vals[o.Value] = i
 				}
+				f.own[i].n = max(f.own[i].n, int(bd.Bytes))
 				args = append(args, partArg{kind: partOwn, i: i})
 			case o.Kind == jit.OperandWeight && o.Region >= 0 && o.Region < 3:
 				args = append(args, partArg{kind: partWeight, role: o.Role, region: o.Region})
@@ -1182,7 +1191,6 @@ const (
 	partHeadOther    = jit.DeclineHeadOther
 	partNoTable      = jit.DeclineNoTable
 	partTableHeld    = jit.DeclineTableHeld
-	partNoAxes       = jit.DeclineNoAxes
 	partNoSample     = jit.DeclineNoSample
 	partNoEmbed      = jit.DeclineNoEmbed
 	partEmbedFormat  = jit.DeclineEmbedFormat
@@ -1758,32 +1766,32 @@ func tableAxes(gr *graph.Graph) bool {
 // servedTable is a call's rotary table gr served at R rows: writing cs, its
 // planes those the tier folded for it and its positions pos, the live row
 // count and then each row's (four a row over several axes).
-func (g *devTier) servedTable(gr *graph.Graph, R int, cs, planes, pos backend.Buf) (*servedPart, error) {
-	sk := servedKey{kind: partRope, graph: gr, rows: R}
+func (g *devTier) servedTable(gr *graph.Graph, R, marks int, cs, planes, rows backend.Buf) (*servedPart, error) {
+	sk := servedKey{kind: partRope, graph: gr, rows: R, keys: marks}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		i, ok := ropeIndex(gr)
 		if !ok {
 			return composedPart{}, errors.New("the composed table is not a rotary table")
 		}
-		pn := tableKey(jit.TablePos)
-		if tableAxes(gr) {
-			pn = tableKey(jit.TableAxisPos)
-		}
-		return composedPart{kind: partRope, part: jit.PartTable, graph: gr, formats: map[jlm.Role]jlm.Type{},
-			tables: map[jit.TableKey]backend.Buf{{Table: jit.TableAngles, Instance: i}: cs, {Table: jit.TablePlanes, Instance: i}: planes, pn: pos}}, nil
+		return composedPart{kind: partRope, part: jit.PartTable, graph: gr, formats: map[jlm.Role]jlm.Type{}, marks: marks,
+			tables: map[jit.TableKey]backend.Buf{{Table: jit.TableAngles, Instance: i}: cs, {Table: jit.TablePlanes, Instance: i}: planes,
+				tableKey(jit.TableRopeRows): rows, tableKey(jit.TableRopeMarks): g.marks.buf}}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	// Bound again every step, by the keys the build gave them.
+	// Bound again every step, by the keys the build gave them: the arena
+	// moves where a sequence's marks outgrow it.
 	for k := range sv.sl.tables {
 		switch k.Table {
 		case jit.TableAngles:
 			sv.sl.tables[k] = cs
 		case jit.TablePlanes:
 			sv.sl.tables[k] = planes
-		default:
-			sv.sl.tables[k] = pos
+		case jit.TableRopeRows:
+			sv.sl.tables[k] = rows
+		case jit.TableRopeMarks:
+			sv.sl.tables[k] = g.marks.buf
 		}
 	}
 	return sv, nil
@@ -1805,8 +1813,6 @@ func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos, R int, rag
 		switch {
 		case cs == nil || planes == nil || at == nil:
 			return partTableHeld
-		case tableAxes(gr) && g.callAxes(pos, R, rag) == nil:
-			return partNoAxes
 		}
 	}
 	return partServes
@@ -1841,45 +1847,17 @@ func scratchTable(bs *blockScratch, p *nn.LayerPlan, i int) *graph.Graph {
 	return p.Tables[i]
 }
 
-// callAxes is the rotary positions the caller states for a call of R rows at
-// cache position pos, four a row (nn.RopeAxesDevice), nil where it states
-// none for this call. A ragged step's are stated at its first row's.
-func (g *devTier) callAxes(pos, R int, rag *ragStep) []int32 {
-	if rag != nil && len(rag.pos) > 0 {
-		pos = rag.pos[0]
-	}
-	// A call the tier cuts into narrower ones takes its rows' positions from
-	// where its first row sits in the caller's.
-	off := pos - g.ropeAxesAt
-	if g.ropeAxes == nil || off < 0 || rag != nil && off != 0 || len(g.ropeAxes) < 4*(off+R) {
-		return nil
-	}
-	return g.ropeAxes[4*off : 4*(off+R)]
-}
-
-// spendAxes drops the caller's rotary positions once its call has run their
-// last row, at the call's end (layersFor, LayersRows): a later call states
-// its own or none. Callers hold g.mu.
-func (g *devTier) spendAxes(pos, R int, rag *ragStep) {
-	if rag != nil && len(rag.pos) > 0 {
-		pos = rag.pos[0]
-	}
-	if rag != nil || pos+R >= g.ropeAxesAt+len(g.ropeAxes)/4 {
-		g.ropeAxes = nil
-	}
-}
-
 // tableBinds is what table i of bs writes and reads: the global table cs or
 // the local one, its planes, and its positions (rope.pos, or over several
 // axes rope.pos.axes).
-func (g *devTier) tableBinds(bs *blockScratch, i int) (cs, planes, pos backend.Buf) {
+func (g *devTier) tableBinds(bs *blockScratch, i int) (cs, planes, rows backend.Buf) {
 	if i > 0 {
-		return bs.csSWA, bs.ropeTabSWA, bs.rpos
+		return bs.csSWA, bs.ropeTabSWA, bs.ropeRows
 	}
 	if gr := scratchTable(bs, &bs.p, 0); gr != nil && tableAxes(gr) {
-		return bs.cs, bs.ropeTabAxes, bs.rposAxes
+		return bs.cs, bs.ropeTabAxes, bs.ropeRows
 	}
-	return bs.cs, bs.ropeTab, bs.rpos
+	return bs.cs, bs.ropeTab, bs.ropeRows
 }
 
 // formTables forms bs's tables at its rows where the composer serves them,
@@ -1895,7 +1873,7 @@ func (g *devTier) formTables(bs *blockScratch) {
 		if gr == nil || cs == nil || planes == nil || at == nil {
 			continue
 		}
-		if _, err := g.servedTable(gr, bs.rows, cs, planes, at); err != nil {
+		if _, err := g.servedTable(gr, bs.rows, bs.p.RopeMarks, cs, planes, at); err != nil {
 			g.LastErr = "the composed table: " + err.Error()
 		}
 	}
@@ -2256,6 +2234,30 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.idxK
 	case jlm.RoleIdxProj:
 		return l.idxProj
+	case jlm.RoleAttnOutA:
+		return l.woA
+	case jlm.RoleCompKV:
+		return l.compKV
+	case jlm.RoleCompGate:
+		return l.compGate
+	case jlm.RoleIdxCompKV:
+		return l.idxCompKV
+	case jlm.RoleIdxCompGate:
+		return l.idxCompGate
+	}
+	if b := l.ds4; b != nil {
+		switch r {
+		case jlm.RoleHCAttnFn:
+			return &b.fnAR
+		case jlm.RoleHCFFNFn:
+			return &b.fnFR
+		case jlm.RoleCompAPE:
+			return &b.apeR
+		case jlm.RoleIdxCompAPE:
+			return &b.iapeR
+		case jlm.RoleHashExperts:
+			return &b.tableR
+		}
 	}
 	return nil
 }
@@ -2431,6 +2433,24 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.nQA
 	case jlm.RoleAttnKVANorm:
 		return l.nKVA
+	case jlm.RoleHCAttnBase, jlm.RoleHCAttnScale, jlm.RoleHCFFNBase, jlm.RoleHCFFNScale, jlm.RoleCompNorm, jlm.RoleIdxCompNorm:
+		b := l.ds4
+		if b == nil {
+			return nil
+		}
+		switch r {
+		case jlm.RoleHCAttnBase:
+			return b.bA
+		case jlm.RoleHCAttnScale:
+			return b.scA
+		case jlm.RoleHCFFNBase:
+			return b.bF
+		case jlm.RoleHCFFNScale:
+			return b.scF
+		case jlm.RoleCompNorm:
+			return b.norm
+		}
+		return b.inorm
 	case jlm.RoleRouterBias:
 		return l.routerB
 	case jlm.RoleExpGateBias:
@@ -2544,8 +2564,6 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partNoPool
 	case pk.prefill && !prompt:
 		return partPrefill
-	case !l.windowHeld(li, p):
-		return partWindow
 	}
 	return partServes
 }
@@ -2617,17 +2635,6 @@ func (g *devTier) bindRec(sv *servedPart, bs *blockScratch, sid uint64, l *layer
 	return true
 }
 
-// windowHeld says the window block l's graph states is the plan's for block
-// li, whose descriptors the tier stages (pagedStage), or one that cuts
-// nothing in the plan's session, where the full descriptors start where the
-// window would.
-func (l *layer) windowHeld(li int, p *nn.LayerPlan) bool {
-	if w := p.Window(li); w > 0 {
-		return l.win == w && l.chunked == p.SWAChunked
-	}
-	return l.win == 0 || l.win >= p.MaxSeq
-}
-
 // servedStep is block li's served part at this step of R rows and the
 // lane's instance it launches in, nil where the budget does not hold the
 // instance of a prompt's form.
@@ -2639,9 +2646,6 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 		return g.towerStep(bs, l, li, p, R)
 	}
 	rcs := bs.cs
-	if bs.csSWA != nil && p.LocalRope(li) {
-		rcs = bs.csSWA
-	}
 	qOff := bs.zero
 	if R > 1 {
 		qOff = bs.roff
@@ -2654,8 +2658,8 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 		}
 		keys = g.passKeys(bs, keys)
 	}
-	sv, err = g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, keys, g.kvp.p, R,
-		rowSeqs(R, one), run)
+	sv, err = g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(l), qOff, bs.calls, bs.dRows, keys, g.kvp.p, R,
+		rowSeqs(R, one), run, bs)
 	if err != nil {
 		if run != nil {
 			err = fmt.Errorf("%w: %w", errStreamForm, err)
@@ -2723,12 +2727,9 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	defer func() { g.prewarming = false }()
 	if g.blockServes(l, li, &bs.p, bs, false, false) == partServes {
 		rcs := bs.cs
-		if bs.csSWA != nil && bs.p.LocalRope(li) {
-			rcs = bs.csSWA
-		}
 		serve := func() (*servedPart, error) {
-			return g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
-				g.kvp.p, 1, 0)
+			return g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(l), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
+				g.kvp.p, 1, 0, bs)
 		}
 		sv, err := serve()
 		// At a placement the prompt's reserved width gives way first, as it
@@ -2825,9 +2826,6 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		return false
 	}
 	rcs := bb.cs
-	if bb.csSWA != nil && bb.p.LocalRope(li) {
-		rcs = bb.csSWA
-	}
 	// A call's rows are one sequence's in position order (a prompt's
 	// chunk), or at the ragged step's width any sequences': a form each,
 	// both formed here.
@@ -2835,8 +2833,8 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		if seqs == 0 && !g.raggedAt(bb) {
 			continue
 		}
-		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.dRows,
-			bb.p.MaxSeq, g.kvp.p, bb.rows, seqs)
+		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(l), bb.roff, bb.calls, bb.dRows,
+			bb.p.MaxSeq, g.kvp.p, bb.rows, seqs, bb)
 		if err != nil {
 			// A form that failed earlier was named then (servedFor).
 			if !errors.Is(err, errFormedEarlier) {
@@ -2864,17 +2862,19 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 // over a history read in passes: its forms over passes (servedStep's where
 // the call's history streams) formed, one a sequences form the rows take,
 // and the scratch's instance of each held, made here where they are not.
+// A block whose pool never evicts (kvLayerPool.noEvict: a selection reads its
+// whole history) is never read in passes, and has no form over them to make.
 // Callers hold g.mu, outside any submission.
 func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
+	if pl := g.kvp.layers[l.kvSrc]; pl != nil && pl.noEvict {
+		return true
+	}
 	run, err := g.runBufs(bb, l, li)
 	if err != nil {
 		g.LastErr = err.Error()
 		return false
 	}
 	rcs, qOff := bb.cs, bb.zero
-	if bb.csSWA != nil && bb.p.LocalRope(li) {
-		rcs = bb.csSWA
-	}
 	if bb.rows > 1 {
 		qOff = bb.roff
 	}
@@ -2882,8 +2882,8 @@ func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 		if seqs == 1 && bb.rows == 1 || seqs == 0 && bb.rows > 1 && !g.raggedAt(bb) {
 			continue
 		}
-		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), qOff, bb.calls, bb.dRows,
-			g.passKeys(bb, bb.p.MaxSeq), g.kvp.p, bb.rows, seqs, run)
+		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(l), qOff, bb.calls, bb.dRows,
+			g.passKeys(bb, bb.p.MaxSeq), g.kvp.p, bb.rows, seqs, run, bb)
 		if err != nil {
 			if !errors.Is(err, errFormedEarlier) {
 				g.LastErr = err.Error()
@@ -2913,16 +2913,6 @@ func rowSeqs(R int, one bool) int {
 	return 0
 }
 
-// promptHeld reports whether a placement leaves block li's own batched
-// kernels at bb's rows uncompiled: the composer serves its prompt or the
-// server's ragged step there (promptServed). They are compiled where the
-// block's rows decline (declineTwins). The reserved width a ragged step
-// alone is composed in keeps them for the prompts the tier runs there.
-// Callers hold g.mu.
-func (g *devTier) promptHeld(l *layer, li int, bb *blockScratch) bool {
-	return g.promptServed(l, li, bb)
-}
-
 // promptDeclines readies, before a prompt call's submission at bs's rows,
 // every block of [lo, hi) whose prompt the composer does not serve at this
 // call: the tier's own kernels the placement left it (declineTwins); where
@@ -2947,9 +2937,6 @@ func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int, asks bool) (bool,
 			// or fit: that is room or a bug to name, never main's kernels.
 			return true, fmt.Errorf("block %d: the composed prompt part: %s", li, g.LastErr)
 		}
-		if err := g.declineTwins(l, li, bs, why); err != nil {
-			return true, err
-		}
 	}
 	return tier, nil
 }
@@ -2963,31 +2950,6 @@ func (g *devTier) rowsKind(R int, rag bool) partKind {
 		return partPrompt
 	}
 	return partBlock
-}
-
-// declineTwins compiles block li's own batched kernels at bs's rows, which
-// the placement left to the composer (promptHeld) and its prompt now
-// declines (why): the block's matvecs, its fused operands and the staged
-// attention's span variants, counted by reason (Stats.DeclineBuilt).
-// Callers hold g.mu, outside any submission.
-func (g *devTier) declineTwins(l *layer, li int, bs *blockScratch, why partDecline) error {
-	if li >= len(bs.left) || !bs.left[li] {
-		return nil
-	}
-	for _, m := range l.batchedMVs() {
-		if m.kern == nil || m.slots > 0 {
-			continue
-		}
-		if _, ok := g.batchMV(*m, bs.rows, bs.tok); !ok {
-			return fmt.Errorf("tier: block %d's prompt declines (%s) and has no batched twin at %d rows",
-				li, why, bs.rows)
-		}
-	}
-	g.fusedTwins(bs, l)
-	g.spanVariants(bs)
-	bs.left[li] = false
-	g.DeclineBuilt[why]++
-	return nil
 }
 
 // promptForms forms every placed block's part at bb's rows where the
@@ -3151,14 +3113,15 @@ func poolHistory(k kvGeom) jit.History {
 // live positions need, a count it reads at run time (jit.Trips), so the
 // session's capacity is its key bound and no position compiles a form. A
 // prompt chunk's form is its width's, as the tier's kernels are.
-func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R, seqs int) (*servedPart, error) {
-	return g.servedBlockAs(l, li, cs, pl, rows, rowsW, qOff, calls, rec, maxSeq, page, R, seqs, nil)
+func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R, seqs int,
+	bs *blockScratch) (*servedPart, error) {
+	return g.servedBlockAs(l, li, cs, pl, rows, rowsW, qOff, calls, rec, maxSeq, page, R, seqs, nil, bs)
 }
 
 // servedBlockAs is servedBlock, its history read in passes where run, the
 // running partial's buffers, is set (jit.History.Passes).
 func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R, seqs int,
-	run []backend.Buf) (*servedPart, error) {
+	run []backend.Buf, bs *blockScratch) (*servedPart, error) {
 	keys := keyBound(maxSeq)
 	kind := partBlock
 	if R > 1 {
@@ -3189,13 +3152,11 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			sl.history.Passes = true
 			sl.tables[tableKey(jit.TableRunIn)], sl.tables[tableKey(jit.TableRunOut)] = run[0], run[1]
 		}
-		if readsPlanes(l.graph) {
-			pl := g.blockPlanes()
-			if pl == nil {
-				return sl, fmt.Errorf("the composed block %d turns by the rotary's planes, which the tier holds none of", li)
-			}
-			sl.tables[tableKey(jit.TablePlanes)] = pl
+		g.bindEnts(sl.tables, l, li, bs)
+		if bs != nil {
+			sl.rotaries = bs.p.Rotaries
 		}
+		g.bindRotaries(sl.tables, bs, cs, readsPlanes(l.graph))
 		if l.linear && l.pool != nil {
 			t := sl.tables
 			// The shared form holds one half, stepped in place (bindRec).
@@ -3250,10 +3211,29 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	if l.linear {
 		t[tableKey(jit.TableRecRows)] = rec
 	}
-	if _, ok := t[tableKey(jit.TablePlanes)]; ok {
-		t[tableKey(jit.TablePlanes)] = g.blockPlanes()
-	}
+	g.bindEnts(t, l, li, bs)
+	g.bindRotaries(t, bs, cs, readsPlanes(l.graph))
 	return sv, nil
+}
+
+// bindRotaries binds a block's rotary tables into t by instance, as its rope
+// ops pick them (jit.Request.Rotaries): the global table cs and, where the
+// model trains a second rotary, the sliding blocks', with their planes where
+// the block's graph reads them. Callers hold g.mu.
+func (g *devTier) bindRotaries(t map[jit.TableKey]backend.Buf, bs *blockScratch, cs backend.Buf, planes bool) {
+	t[jit.TableKey{Table: jit.TableAngles}] = cs
+	if bs == nil {
+		return
+	}
+	for i := range bs.tableCount() {
+		tab, pl, _ := g.tableBinds(bs, i)
+		if i > 0 {
+			t[jit.TableKey{Table: jit.TableAngles, Instance: i}] = tab
+		}
+		if planes && pl != nil {
+			t[jit.TableKey{Table: jit.TablePlanes, Instance: i}] = pl
+		}
+	}
 }
 
 // readsPlanes reports whether a form of g reads the rotary's planes: a

@@ -121,8 +121,8 @@ func (s *Instance) ds4Weights(li int, w *nn.LayerWeights) {
 	w.Wqa, w.Wqb = wt(l.wqa), wt(l.wqb)
 	w.QANorm, w.KVANorm = l.qaNorm, l.kvaNorm
 	w.HCAttnFn, w.HCFFNFn = wt(d.attnFn), wt(d.ffnFn)
-	w.HCAttnScale, w.HCAttnBase = d.attnScale, d.attnBase
-	w.HCFFNScale, w.HCFFNBase = d.ffnScale, d.ffnBase
+	w.HCAttnScale, w.HCAttnBase = d.attnScale3, d.attnBase
+	w.HCFFNScale, w.HCFFNBase = d.ffnScale3, d.ffnBase
 	w.WoA = wt(d.woA)
 	if s.m.Cfg.CompAt(li) != jlm.CompNone {
 		w.CompKV, w.CompGate = wt(d.compKV), wt(d.compGate)

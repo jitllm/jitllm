@@ -23,7 +23,9 @@ const (
 
 // decomposeEmbed is each row's token's row of the embedding (row 0 for an
 // id past a table that stops short of the vocabulary), or its position's
-// row of a position table, every element decoded from the weight's format.
+// row of a position table (the position modulo Span where set), every
+// element decoded from the weight's format: into an index row, each element
+// an index.
 func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Weight) != 1 || len(o.In) != 0 || len(o.Out) != 1 {
 		return nil, fmt.Errorf("an embedding of %d weights and %d inputs", len(o.Weight), len(o.In))
@@ -42,14 +44,21 @@ func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 	if o.Attr.Positional {
 		// The step's positions follow its live row count.
 		tok = x.load(0, x.op(OpAdd, ir.U32, r, x.u(1)))
+		if s := o.Attr.Span; s > 0 {
+			tok = x.op(OpRem, ir.U32, tok, x.u(uint32(s)))
+		}
 		in[0] = tablePos
 		facts.Extents[0] = R + 1
 	} else {
 		// A table may stop short of the ids: an id past it reads row 0.
 		tok = x.sel(ir.U32, x.op(OpLess, ir.Pred, tok, x.u(uint32(w.Rows))), tok, x.u(0))
 	}
-	if _, err := weightElement(&x, wo, w.Rows, W, &in, &facts, tok, i); err != nil {
+	v, err := weightElement(&x, wo, w.Rows, W, &in, &facts, tok, i)
+	if err != nil {
 		return nil, fmt.Errorf("an embedding of %s weights: %w", wo.Format, err)
+	}
+	if c.Graph.Values[o.Out[0]].Elem == graph.ElemU32 {
+		x.un(OpBitcast, ir.U32, x.un(OpCvtI32, ir.I32, v))
 	}
 	return []Prim{{Kind: PrimMap, Shape: []int{R, W}, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
 }

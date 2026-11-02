@@ -187,10 +187,12 @@ func mRopeLaysTheImageOutAsTransformersDoes(t *testing.T, name string) {
 	defer m.Close()
 	st := m.NewInstance(64)
 	defer st.Close()
-	rows, next, err := st.spanRope(0, 0, qvlSpans(g, true))
+	sp := qvlSpans(g, true)
+	next, err := st.spanRope(0, 0, sp)
 	if err != nil {
 		t.Fatal(err)
 	}
+	rows := marksLayout(&st.rmarks, 0, 0, spanRows(m, sp))
 	if len(rows)+len(g.Cont) != len(g.Pos) {
 		t.Fatalf("%d prompt rows and %d continuation, transformers lays out %d", len(rows), len(g.Cont), len(g.Pos))
 	}
@@ -472,24 +474,18 @@ func mRopePrefixCacheKeysOnPositions(t *testing.T, name string) {
 	}
 	swapped := []Span{spans[0], {Embd: spans[1].Embd, Grid: tg, Key: &key}, spans[2]}
 	probe := m.NewInstance(n)
-	rpA, _, _ := probe.spanRope(0, 0, spans)
-	rpB, _, _ := probe.spanRope(0, 0, swapped)
 	// The name the page keys hash for a whole prompt.
-	named := func(sp []Span, rp [][4]int) string {
-		k := probe.spanKey(0, sp, rp)
+	named := func(sp []Span) string {
+		k := probe.spanKey(0, sp)
 		probe.kv.seq = k
 		h := sha256.New()
 		probe.kv.writeSeq(h, 0, len(k))
 		return string(h.Sum(nil))
 	}
-	// Without positions the two prompts are the same rows under the same
-	// name, so a key without positions would hand one the other's pages; the
-	// positions must part them.
-	if named(spans, nil) != named(swapped, nil) {
-		t.Fatal("the two grids' rows differ without their positions, so this arm proves nothing about positions")
-	}
-	if named(spans, rpA) == named(swapped, rpB) {
-		t.Fatal("the two grids key the same with positions: the cache cannot tell them apart")
+	// The two prompts are the same tokens and the same picture's rows, apart
+	// only in the grid they are laid out as: their names must part.
+	if named(spans) == named(swapped) {
+		t.Fatal("the two grids key the same: the cache cannot tell them apart")
 	}
 	probe.Close()
 	other := open()
@@ -621,7 +617,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 			// ordinal says decode follows one.
 			switch {
 			case m.Cfg.RopeXD:
-				if len(st.ximg) == 0 || len(st.ximg[0]) == 0 {
+				if st.rmarks.count(0) == 0 {
 					t.Fatal("the prompt recorded no picture: this measured text decode")
 				}
 			case len(m.rope.Runs) > 0 && st.ropeOf(0, st.Pos()) == st.Pos():
@@ -680,7 +676,7 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 	t.Helper()
 	run := func(shift int32) ([][]float32, tier.Stats) {
 		cg, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }), tier.WithRopeFault(1, int(shift)))
 		if err != nil || cg == nil {
 			t.Fatalf("%s did not open for the composed decode: %v", spec, err)
 		}
@@ -690,9 +686,6 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 		st.SetDeviceLayers(cg, -1)
 		if got := st.GPULayers(); got != m.Cfg.NLayer {
 			t.Fatalf("composed: placed %d of %d blocks: %v", got, m.Cfg.NLayer, cg.Err())
-		}
-		if shift != 0 {
-			shiftAxes(shift)(st)
 		}
 		return qvlRun(t, st, g, true), cg.Stats()
 	}
@@ -729,7 +722,7 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 	// states and in the host's rotary alike. The rows after the picture
 	// must part from transformers.
 	if m.Cfg.RopeXD {
-		was, a, b := m.Cfg, m.rope.Runs, m.ropeB.Runs
+		was, a := m.Cfg, m.rope.Runs
 		c := *was
 		d := c.RopeSections[0] / 2
 		if d == 0 {
@@ -738,9 +731,9 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 		c.RopeSections[0] -= d
 		c.RopeSections[1] += d
 		m.Cfg = &c
-		m.rope.Runs, m.ropeB.Runs = nn.XDRopeRuns(c.RopeSections[:], c.NRot/2)
+		m.rope.Runs, _ = nn.XDRopeRuns(c.RopeSections[:], c.NRot/2)
 		bad, _ := run(0)
-		m.Cfg, m.rope.Runs, m.ropeB.Runs = was, a, b
+		m.Cfg, m.rope.Runs = was, a
 		wb, fb := qvlWorst(g, bad)
 		if !(wb > 1e3*max(w, 1e-12)) {
 			t.Fatalf("composed: with XD-RoPE's sections moved the worst NMSE is %.3e (%d flips) against %.3e: the gate cannot see the coordinates", wb, fb, w)
