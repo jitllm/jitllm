@@ -262,7 +262,7 @@ func (g *devTier) dropLaneScratch() {
 	for w := range g.bbs {
 		g.dropBatch(w)
 	}
-	freeScratch(g.bs)
+	g.dropScratch(g.bs)
 	g.bs = nil
 	for _, b := range []*backend.Buf{&g.partBuf, &g.f16Buf} {
 		if *b != nil {
