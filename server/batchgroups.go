@@ -84,7 +84,7 @@ func (lp *stepLoop) groupCount() int {
 	}
 	decoding := 0
 	for _, r := range lp.rows {
-		if r.prompting() || !r.s.st.Steppable() || r.s.movePending() {
+		if r.prompting() || !r.s.steppable() || r.s.movePending() {
 			return 1
 		}
 		decoding++
@@ -231,7 +231,7 @@ func (lp *stepLoop) launch(g *decGroup) bool {
 	lp.post.start()
 	runs := g.runs[:0]
 	for _, u := range units {
-		runs = append(runs, model.Run{Instance: u.r.s.st, Tokens: u.tokens, Logits: true})
+		runs = append(runs, model.Run{Session: u.r.s.ms, Tokens: u.tokens, Logits: true})
 	}
 	g.runs = runs
 	lp.stats.steps.Add(1)
@@ -274,7 +274,7 @@ func (lp *stepLoop) land(g *decGroup) {
 		lp.refused, lp.refusedFor = true, lp.shape
 		live := g.rows[:0]
 		for _, u := range g.units {
-			out, err := model.StepRuns([]model.Run{{Instance: u.r.s.st, Tokens: u.tokens, Logits: true}})
+			out, err := model.StepRuns([]model.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: true}})
 			if err != nil {
 				lp.finish(u.r, FinishError, "", err)
 				continue
@@ -298,7 +298,7 @@ func (lp *stepLoop) land(g *decGroup) {
 // state, so running its tokens again would apply them twice.
 func (g *decGroup) advanced() bool {
 	for _, u := range g.units {
-		if u.r.s.st.RecurrenceAdvanced() {
+		if u.r.s.recurrenceAdvanced() {
 			return true
 		}
 	}

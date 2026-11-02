@@ -179,9 +179,9 @@ func TestImageContinuesASession(t *testing.T) {
 		}
 		defer e.CloseSession(s.id)
 		turn(s.id, false, first, askPicture)
-		p1 := s.st.Pos()
+		p1 := s.ms.Pos()
 		got := turn(s.id, true, next, second)
-		return got, p1, s.st.Pos()
+		return got, p1, s.ms.Pos()
 	}
 	fresh := func(pic []byte) string {
 		s, err := e.CreateSession(SessionOptions{ModelID: lm.id})

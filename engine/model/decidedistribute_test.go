@@ -461,7 +461,7 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 					}
 					// The violation: a decoder's prompt chunks laid out at their
 					// positions reversed, so a row's history is not the prompt's
-					// (Scheduler.chunkPos); an encoder's packed sequences
+					// (Batcher.chunkPos); an encoder's packed sequences
 					// attending across one another.
 					if m.IsEncoder() {
 						d.emb.violation = "sequences-attend-across"

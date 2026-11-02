@@ -52,7 +52,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { gl.e.CloseSession(s.id) })
-			return s.st
+			return s.in()
 		}
 		// lone runs a step of one instance the server's way (model.StepRuns),
 		// its prompt through Prefill and a token through Forward.

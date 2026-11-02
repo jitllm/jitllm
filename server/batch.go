@@ -233,7 +233,11 @@ func newStepLoop(e *Engine, lm *LoadedModel) *stepLoop {
 		wake:        make(chan struct{}, 1),
 	}
 	lp.post = newStepPost(&lp.stats.postedTokens)
-	lp.chunkOf = func(r *row) int { return r.s.st.PromptChunk() }
+	lp.chunkOf = func(r *row) int {
+		n := 0
+		r.s.in().With(func(in *model.Instance) { n = in.PromptChunk() })
+		return n
+	}
 	go lp.run()
 	return lp
 }
@@ -351,7 +355,7 @@ func (r *row) isDone() bool {
 // (SetRelocate); from then on it is stepped alone.
 func (e *Engine) joins(s *Session) *stepLoop {
 	lp := s.lm.loop
-	if lp == nil || !stepsJointly(s.st) {
+	if lp == nil || !s.joinable() {
 		return nil
 	}
 	return lp
@@ -531,7 +535,7 @@ func (lp *stepLoop) admit() {
 					lp.mu.Lock()
 					continue
 				}
-				if !stepsJointly(r.s.st) && len(lp.rows) > 0 {
+				if !r.s.joinable() && len(lp.rows) > 0 {
 					// The card took back fewer of its blocks than it had: a
 					// split row steps alone and re-streams its history every
 					// token, and holds none of the card's room, so more would
@@ -583,7 +587,7 @@ func rowPages(r *row, pos, page int) int {
 		return 0
 	}
 	end := len(r.ids) + min(max(r.maxTokens, 0), r.resumedAt+admitLookahead)
-	if m := r.s.st.MaxSeq(); m > 0 {
+	if m := r.s.ms.Limit(); m > 0 {
 		end = min(end, m)
 	}
 	return max((end+page-1)/page-(pos+page-1)/page, 0)
@@ -614,7 +618,7 @@ func (lp *stepLoop) kvRoom() (room, page, promised int) {
 		return 0, 0, 0
 	}
 	for _, r := range lp.rows {
-		pos := r.s.st.Pos()
+		pos := r.s.ms.Pos()
 		if r.reset && !r.begun {
 			pos = 0 // its instance's old history goes at its first chunk
 		}
@@ -626,7 +630,7 @@ func (lp *stepLoop) kvRoom() (room, page, promised int) {
 // started queues a row's GenerateStarted (and its echo) once its prompt is in.
 func (r *row) started() {
 	lm := r.s.lm
-	devBlocks := r.s.st.GPULayers()
+	devBlocks := instBlocks(lm)
 	r.push(Event{Kind: EventStarted, Started: &Started{
 		SessionID:    r.s.id,
 		ModelID:      lm.id,
@@ -750,7 +754,12 @@ func (lp *stepLoop) sealPrompts() {
 		if j.r.isDone() {
 			continue // the loop never touches a retired row's instance
 		}
-		if err := j.r.s.st.SealPrompt(j.logits); err != nil {
+		in, err := j.r.s.ms.Hold(lp.ctx, model.PhasePrefill)
+		if err == nil {
+			err = in.SealPrompt(j.logits)
+			j.r.s.ms.Unhold(in)
+		}
+		if err != nil {
 			lp.finish(j.r, FinishError, "", err)
 		}
 	}
@@ -791,7 +800,13 @@ func (lp *stepLoop) nextToken(r *row) bool {
 		lp.finish(r, FinishMaxTokens, "", nil)
 		return false
 	}
-	next := r.s.st.Sample(&r.sampler, r.logits)
+	in, err := r.s.ms.Hold(lp.ctx, model.PhaseGenerate)
+	if err != nil {
+		lp.finish(r, FinishError, "", err)
+		return false
+	}
+	next := in.Sample(&r.sampler, r.logits)
+	r.s.ms.Unhold(in)
 	if sampleTap != nil {
 		sampleTap(r.sampler.Temp, r.logits, next)
 	}
@@ -848,7 +863,7 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 		// a sequence, or never began its prompt, keeps its history as it is.
 		if r.cancelled.Load() && (r.fresh || !r.begun) {
 			if r.fresh {
-				r.s.st.Reset()
+				r.s.reset(lp.ctx)
 			}
 			lp.finish(r, FinishCancelled, "", errPromptCancelled)
 			continue
@@ -883,7 +898,7 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 		}
 		if !r.begun {
 			if r.reset {
-				r.s.st.Reset()
+				r.s.reset(lp.ctx)
 			}
 			r.begun, r.promptStart = true, time.Now()
 		}
@@ -962,11 +977,12 @@ func (lp *stepLoop) allot(budget int) {
 func (lp *stepLoop) step(units []unit) {
 	joint, solo, npiped := lp.joint[:0], lp.solo[:0], 0
 	defer func() { lp.joint, lp.solo = joint[:0], solo[:0] }()
+	units = lp.leased(units)
 	for _, u := range units {
 		switch {
 		case u.alone:
 			npiped++
-		case stepsJointly(u.r.s.st):
+		case u.r.s.joinable():
 			joint = append(joint, u)
 		default:
 			solo = append(solo, u)
@@ -978,7 +994,7 @@ func (lp *stepLoop) step(units []unit) {
 		if !u.alone {
 			continue
 		}
-		out, err := model.StepRuns([]model.Run{{Instance: u.r.s.st, Tokens: u.tokens, Logits: u.logits}})
+		out, err := model.StepRuns([]model.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits}})
 		if err != nil {
 			lp.finish(u.r, FinishError, "", err)
 			continue
@@ -1005,7 +1021,7 @@ func (lp *stepLoop) step(units []unit) {
 		solo = append(solo, joint...)
 	}
 	for _, u := range solo {
-		out, err := model.StepRuns([]model.Run{{Instance: u.r.s.st, Tokens: u.tokens, Logits: u.logits}})
+		out, err := model.StepRuns([]model.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits}})
 		if err != nil {
 			lp.finish(u.r, FinishError, "", err)
 			continue
@@ -1017,6 +1033,25 @@ func (lp *stepLoop) step(units []unit) {
 	if timed && !(lp.refused && lp.refusedFor == lp.shape) {
 		lp.choice.observe(len(units)-npiped, chose, time.Since(t0))
 	}
+}
+
+// leased has every unit's session hold a lease for its phase -- a prompt's
+// chunk for prefill, a token for generation -- and returns the units whose
+// session got one; a unit whose lease fails ends its row.
+func (lp *stepLoop) leased(units []unit) []unit {
+	live := units[:0]
+	for _, u := range units {
+		p := model.PhaseGenerate
+		if u.prompt {
+			p = model.PhasePrefill
+		}
+		if err := u.r.s.ms.Acquire(lp.ctx, p); err != nil {
+			lp.finish(u.r, FinishError, "", err)
+			continue
+		}
+		live = append(live, u)
+	}
+	return live
 }
 
 func anyPrompt(units []unit) bool {
@@ -1036,7 +1071,7 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 	defer func() { clear(runs); lp.runs = runs[:0] }()
 	rows := 0
 	for _, u := range units {
-		runs = append(runs, model.Run{Instance: u.r.s.st, Tokens: u.tokens, Logits: u.logits})
+		runs = append(runs, model.Run{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits})
 		rows += len(u.tokens)
 	}
 	gpu := lp.lm.gpuTier()
@@ -1051,7 +1086,7 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 		// twice, so those rows end with the device's error.
 		advanced := false
 		for _, u := range units {
-			advanced = advanced || u.r.s.st.RecurrenceAdvanced()
+			advanced = advanced || u.r.s.recurrenceAdvanced()
 		}
 		if advanced {
 			for _, u := range units {
@@ -1182,16 +1217,21 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	// The row's prompt starts where the session is, or at 0 when it resets.
 	start := 0
 	if o.Continue {
-		start = s.st.Pos()
+		start = s.ms.Pos()
 	}
-	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-start-len(ids))
+	maxTokens := tokenLimit(o.MaxTokens, s.ms.Limit()-start-len(ids))
 	// The memory cache restores before the row is queued, on this goroutine
 	// (the caller reset the instance and attached the store), so the loop feeds
 	// only what it did not hold. It leaves at least one token to run: the row
 	// needs that token's logits.
 	restored := 0
 	if store {
-		n, err := s.st.RestorePrefix(ids)
+		in, err := s.ms.Hold(ctx, model.PhasePrefill)
+		if err != nil {
+			return err
+		}
+		n, err := in.RestorePrefix(ids)
+		s.ms.Unhold(in)
 		if err != nil {
 			return err
 		}
@@ -1327,7 +1367,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		Decode:           res.decode,
 		TokensPerSecond:  rate,
 		BytesPerToken:    lm.m.BytesPerToken(),
-		Position:         s.st.Pos(),
+		Position:         s.ms.Pos(),
 		Restored:         r.restored,
 	}})
 }

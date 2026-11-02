@@ -53,7 +53,7 @@ var ErrNoPage = errors.New("model: no such kv page")
 // cacheId is opaque to the engine and identifies one history. The caller can
 // make it content-addressed ("<model>/<sha256 of the prompt prefix>"), which
 // is how a later process finds an earlier one's pages; a counter or a
-// Scheduler row would address another prompt's pages. Two sessions sharing a
+// batch row would address another prompt's pages. Two sessions sharing a
 // key must share a token prefix, model, KV element width and page geometry.
 // The engine cannot check that. Implementations must be safe for concurrent
 // use.
@@ -699,7 +699,7 @@ func (s *kvPages) scatter(l kvLayout, slot, n int, k, v []float32) bool {
 
 // nextCacheID hands out a fresh identity for every session's history. It is
 // unique and deliberately not reusable: a session that wants its pages found
-// again names itself with SetCacheKey. It is not a Scheduler row, which admit
+// again names itself with SetCacheKey. It is not a batch row, which admit
 // reuses as soon as its sequence retires.
 var nextCacheID = func() func() string {
 	// A per-process nonce: a bare counter restarts in every process, and a
@@ -979,7 +979,7 @@ func kvBytesOf(p []float32) []byte {
 // Zero, the default, never evicts. A nonzero budget needs a store: trim only
 // evicts pages the store already holds, so without one the cap would silently
 // do nothing (and evicting anyway would lose history).
-func (s *Instance) SetKVBudget(b uint64) error {
+func (s *Session) SetKVBudget(b uint64) error {
 	if b > 0 {
 		if _, ok := s.kv.store.(NoStore); ok {
 			return fmt.Errorf("model: a KV budget needs a store to evict into -- " +
@@ -991,7 +991,7 @@ func (s *Instance) SetKVBudget(b uint64) error {
 }
 
 // SetKVStore hands the session a backing store for its pages.
-func (s *Instance) SetKVStore(st KVStore) {
+func (s *Session) SetKVStore(st KVStore) {
 	if st == nil {
 		st = NoStore{}
 	}
@@ -1028,6 +1028,11 @@ func (s *Instance) SetCacheKey(ns string) error {
 	}
 	// It wants a fresh sequence: mid-flight, the token log would restart at the
 	// current position and name every later page by a shifted window.
+	return s.Session.SetCacheKey(ns)
+}
+
+// SetCacheKey is Instance.SetCacheKey for the session's own history.
+func (s *Session) SetCacheKey(ns string) error {
 	if ns != "" && s.pos > 0 {
 		return fmt.Errorf("model: SetCacheKey wants a fresh sequence, this one is at "+
 			"position %d -- the tokens before it were never recorded and the pages "+
@@ -1040,12 +1045,12 @@ func (s *Instance) SetCacheKey(ns string) error {
 // KVRestored is how many prompt positions the last PrefillCached took from the
 // store instead of computing. Zero is a miss, and a caller that does not look at
 // it cannot tell a working cache from a silently useless one.
-func (s *Instance) KVRestored() int { return s.kvSkipped }
+func (s *Session) KVRestored() int { return s.kvSkipped }
 
 // CacheNamespace is what SetCacheKey named, or "" when content addressing is
 // off. A content-addressed session has no single key: its pages are one key
 // each (count them with FileStore.Total).
-func (s *Instance) CacheNamespace() string { return s.kv.ns }
+func (s *Session) CacheNamespace() string { return s.kv.ns }
 
 // RestoreKV pulls back every page the store holds under this session's key and
 // returns the number of positions that are now valid to attend over.
@@ -1838,22 +1843,22 @@ func (s *Instance) restoreKV(max int) (int, error) {
 
 // KVBytes is what this session's history holds resident right now. It grows with
 // the conversation and falls when pages are evicted; it is not a reservation.
-func (s *Instance) KVBytes() uint64 { return s.kv.Bytes() }
+func (s *Session) KVBytes() uint64 { return s.kv.Bytes() }
 
 // KVPageStats is pages written to the store, fetched back, and evicted.
-func (s *Instance) KVPageStats() (stored, fetched, evicted int64) {
+func (s *Session) KVPageStats() (stored, fetched, evicted int64) {
 	return s.kv.stored, s.kv.fetched, s.kv.evicted
 }
 
 // KVDeviceSyncFailures is how many placed blocks would not hand their history
 // back, so nothing was cached for them. It is not a store failure: the store
 // was never reached.
-func (s *Instance) KVDeviceSyncFailures() int64 { return s.kv.syncFailed }
+func (s *Session) KVDeviceSyncFailures() int64 { return s.kv.syncFailed }
 
 // KVPrefixUnmigratable is how many times a restored prefix had to be given up
 // because it could not be moved onto a device (or its recurrent summary was
 // missing): a reuse of 0 with a full store is otherwise unexplainable.
-func (s *Instance) KVPrefixUnmigratable() int64 { return s.kv.unmigratable }
+func (s *Session) KVPrefixUnmigratable() int64 { return s.kv.unmigratable }
 
 // KVStoreMismatches is how many pages came back the wrong shape and were dropped.
 // It is separate from KVStoreFailures because the causes differ: a mismatch is a

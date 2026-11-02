@@ -160,7 +160,7 @@ func TestCPUComposesOnce(t *testing.T) {
 			held("a second session's prompt and decode", s2, 0, 2*nl)
 			held("the first session beside the second", s, served, 0)
 
-			sc := NewRowScheduler(m, 4, 256)
+			sc := newTestBatcher(m, 4, 256)
 			defer sc.Close()
 			placed = m.cpuFormCount()
 			seqs := []*Seq{{Prompt: ids[:7], MaxTokens: 4}, {Prompt: ids[50:83], MaxTokens: 6},
@@ -184,9 +184,9 @@ func TestCPUComposesOnce(t *testing.T) {
 					t.Fatalf("sequence %d: %v", i, q.Err)
 				}
 			}
-			held("a batch of four sequences", sc.st, 0, steps*nl)
+			held("a batch of four sequences", sc.in, 0, steps*nl)
 			// Every decoding row's head in the batch on the CPU's head.
-			bh, bd := sc.st.CPUHeadSteps()
+			bh, bd := sc.in.CPUHeadSteps()
 			for why, n := range bd {
 				if n > 0 {
 					t.Fatalf("the batch: %d head step(s) declined to main's kernels: %s", n, jit.DeclineName(why))

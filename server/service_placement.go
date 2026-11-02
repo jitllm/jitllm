@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -63,27 +64,34 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 	// The caller placed this session: the orchestrator leaves it alone.
 	sess.pinned.Store(true)
 
+	// The placement is the instance's: every session leasing it moves with it.
 	start := time.Now()
 	sess.mu.Lock()
-	if len(want) == 0 {
-		// Everything on the CPU.
-		sess.st.SetGPULayers(0)
-	} else {
-		max := -1
-		if m.MaxDeviceBlocks != nil {
-			max = int(*m.MaxDeviceBlocks)
-		}
-		if max < 0 {
-			if err := sess.st.SetDeviceLayers(sess.lm.device(), -1); err != nil {
-				sess.mu.Unlock()
-				return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-			}
+	var perr error
+	sess.in().As(sess.ms, func(st *model.Instance) {
+		if len(want) == 0 {
+			// Everything on the CPU.
+			st.SetGPULayers(0)
 		} else {
-			sess.st.SetGPULayers(max)
+			max := -1
+			if m.MaxDeviceBlocks != nil {
+				max = int(*m.MaxDeviceBlocks)
+			}
+			if max < 0 {
+				if perr = st.SetDeviceLayers(sess.lm.device(), -1); perr != nil {
+					return
+				}
+			} else {
+				st.SetGPULayers(max)
+			}
 		}
-	}
-	if m.HeadOnDevice != nil {
-		sess.st.SetHeadOnDevice(*m.HeadOnDevice)
+		if m.HeadOnDevice != nil {
+			st.SetHeadOnDevice(*m.HeadOnDevice)
+		}
+	})
+	if perr != nil {
+		sess.mu.Unlock()
+		return nil, connect.NewError(connect.CodeFailedPrecondition, perr)
 	}
 	sess.refresh()
 	sess.mu.Unlock()
@@ -132,7 +140,8 @@ func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Requ
 
 	start := time.Now()
 	sess.mu.Lock()
-	mv, err := sess.st.MoveBlocks(first, last+1, to)
+	var mv model.BlockMove
+	sess.in().As(sess.ms, func(st *model.Instance) { mv, err = st.MoveBlocks(first, last+1, to) })
 	sess.refresh()
 	sess.mu.Unlock()
 	dev := to
@@ -170,7 +179,7 @@ func (s *PlacementService) SetRelocation(ctx context.Context, req *connect.Reque
 		return nil, connectErr(err)
 	}
 	sess.mu.Lock()
-	sess.st.SetRelocate(req.Msg.Enabled)
+	sess.in().With(func(st *model.Instance) { st.SetRelocate(req.Msg.Enabled) })
 	sess.refresh()
 	sess.mu.Unlock()
 	return connect.NewResponse(&v1.SetRelocationResponse{Enabled: req.Msg.Enabled}), nil
@@ -190,9 +199,11 @@ func (s *PlacementService) TuneSeam(ctx context.Context, req *connect.Request[v1
 			"session %q is host-only: there is no seam to tune", sess.id))
 	}
 	sess.mu.Lock()
-	sess.st.SetSeamTuning(true)
 	m := req.Msg
-	sess.st.SetSeamSchedule(int(m.WarmupTokens), int(m.TokensPerRun), int(m.Rounds))
+	sess.in().With(func(st *model.Instance) {
+		st.SetSeamTuning(true)
+		st.SetSeamSchedule(int(m.WarmupTokens), int(m.TokensPerRun), int(m.Rounds))
+	})
 	sess.refresh()
 	sess.mu.Unlock()
 

@@ -15,7 +15,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// TestSchedulerOnSplitPlacementsMatchesEachSequenceAlone runs the Scheduler
+// TestSchedulerOnSplitPlacementsMatchesEachSequenceAlone runs the Batcher
 // with the model split: half its blocks on a device and half on the host, and
 // spread over two devices. ForwardBatch runs the host's blocks itself and hands
 // each run of device blocks over as rows with their own slots; PrefillSeq does
@@ -87,8 +87,8 @@ func schedulerOnSplit(t *testing.T, p string) {
 	var sc uint64
 	if g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) { c.PromptRows = 8 })); err == nil && g != nil {
-		sz := NewRowScheduler(m, rows, seq)
-		if err := sz.st.SetDeviceLayers(g, -1); err == nil && g.Stats().BudgetUsed > m.WeightBytes() {
+		sz := newTestBatcher(m, rows, seq)
+		if err := sz.in.SetDeviceLayers(g, -1); err == nil && g.Stats().BudgetUsed > m.WeightBytes() {
 			sc = g.Stats().BudgetUsed - m.WeightBytes()
 		}
 		sz.Close()
@@ -126,7 +126,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 		devs int // devices that must hold blocks
 		host bool
 		// place, when set, is an explicit strict placement (WithPlacement),
-		// checked block by block after the Scheduler's instance takes it.
+		// checked block by block after the Batcher's instance takes it.
 		place map[int]Place
 		// paging turns device paging on: the budget holds a third of the
 		// model and blocks swap through its slots every step.
@@ -178,8 +178,8 @@ func schedulerOnSplit(t *testing.T, p string) {
 			want := make([][]int32, len(prompts))
 			for i := range prompts {
 				g := open(t, arm.spec, arm.paging)
-				one := NewRowScheduler(m, 1, seq)
-				if err := one.st.SetDeviceLayers(g, arm.max); err != nil {
+				one := newTestBatcher(m, 1, seq)
+				if err := one.in.SetDeviceLayers(g, arm.max); err != nil {
 					t.Fatal(err)
 				}
 				sq := &Seq{Prompt: ids[i], MaxTokens: gens[i]}
@@ -198,9 +198,9 @@ func schedulerOnSplit(t *testing.T, p string) {
 			}
 			g := open(t, arm.spec, arm.paging)
 			defer g.Close()
-			sc := NewRowScheduler(m, rows, seq)
+			sc := newTestBatcher(m, rows, seq)
 			defer sc.Close()
-			if err := sc.st.SetDeviceLayers(g, arm.max); err != nil {
+			if err := sc.in.SetDeviceLayers(g, arm.max); err != nil {
 				t.Fatal(err)
 			}
 			placed := g.Placed()
@@ -212,7 +212,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 				t.Fatalf("placed %v (head on device %d): %d devices hold blocks, want %d (%q)",
 					placed, g.HeadDevice(), n, arm.devs, g.Err())
 			}
-			dev, _ := sc.st.ld.(nn.NamedDevice)
+			dev, _ := sc.in.ld.(nn.NamedDevice)
 			for li, pl := range arm.place {
 				got := nn.CPU
 				if n, ok := dev.DeviceOf(li); ok {
@@ -222,7 +222,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 					t.Fatalf("block %d is on %s; the placement put it on %s", li, got, pl.On)
 				}
 			}
-			if got := sc.st.devCount(); arm.host != (got < m.Cfg.NLayer) || got == 0 {
+			if got := sc.in.devCount(); arm.host != (got < m.Cfg.NLayer) || got == 0 {
 				t.Fatalf("placed %d of %d blocks on devices; host blocks wanted: %v (%q)",
 					got, m.Cfg.NLayer, arm.host, g.Err())
 			}
@@ -236,7 +236,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 				}()
 			}
 			t.Logf("placed %v, %d of %d blocks in runs %v, head on a device: %v",
-				placed, sc.st.devCount(), m.Cfg.NLayer, sc.st.devRuns(), sc.st.HeadOnDevice())
+				placed, sc.in.devCount(), m.Cfg.NLayer, sc.in.devRuns(), sc.in.HeadOnDevice())
 			seqs := make([]*Seq, len(prompts))
 			for i := range prompts {
 				seqs[i] = &Seq{Prompt: ids[i], MaxTokens: gens[i]}

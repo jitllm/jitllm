@@ -60,7 +60,7 @@ func TestSessionKnobsReachTheStateOverHTTP(t *testing.T) {
 		if !s.cached {
 			t.Errorf("prompt_cache: the session has no prompt store")
 		}
-		if got := s.st.KVIsF16(); got != f16 {
+		if got := s.in().KVIsF16(); got != f16 {
 			t.Errorf("Config.KVF16 %v: the session's cache is f16=%v", f16, got)
 		}
 		// The store is used: a generate writes the prompt's pages.

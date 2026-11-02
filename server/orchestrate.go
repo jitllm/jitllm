@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -107,22 +108,23 @@ func (e *Engine) OrchCounts() (promotions, demotions, blocksUp, blocksHome int64
 // Unpin hands a session's placement back to the orchestrator.
 func (s *Session) Unpin() { s.pinned.Store(false) }
 
-// promote offers s's host blocks to its model's devices, demoting idle
-// sessions to make room when the cards decline. The caller holds s.mu.
+// promote offers the host blocks of the instance s runs on to its model's
+// devices, demoting other models' idle instances to make room when the cards
+// decline. The caller holds s.mu.
 func (e *Engine) promote(s *Session) error {
 	lm := s.lm
 	if e.cfg.NoOrchestrate || s.pinned.Load() || lm.callerPlaced || lm.device() == nil {
 		return nil
 	}
 	n := lm.m.Cfg.NLayer
-	if s.st.GPULayers() >= n {
+	if instBlocks(lm) >= n {
 		return nil
 	}
 	if err := e.bindSessionLocked(s); err != nil {
 		return nil // a session that cannot attach runs where it is
 	}
 	e.place(s, whyGenerating)
-	for s.st.GPULayers() < n {
+	for instBlocks(lm) < n {
 		v := e.demotionVictim(s)
 		if v == nil {
 			break
@@ -140,12 +142,23 @@ func (e *Engine) promote(s *Session) error {
 	return nil
 }
 
-// place offers s's host blocks to the cards and logs what landed.
+// instBlocks is how many blocks lm's instance runs on a device.
+func instBlocks(lm *LoadedModel) int {
+	var n int
+	lm.inst.With(func(in *model.Instance) { n = in.GPULayers() })
+	return n
+}
+
+// place offers the host blocks of the instance s runs on to the cards and
+// logs what landed.
 func (e *Engine) place(s *Session, why orchWhy) int {
 	start := time.Now()
-	before := s.st.GPULayers()
-	s.st.PlaceBlocks(0, s.lm.m.Cfg.NLayer)
-	got := s.st.GPULayers() - before
+	var got int
+	s.in().As(s.ms, func(in *model.Instance) {
+		before := in.GPULayers()
+		in.PlaceBlocks(0, s.lm.m.Cfg.NLayer)
+		got = in.GPULayers() - before
+	})
 	if got > 0 {
 		e.orch.note(OrchMove{At: start, Session: s.id, Model: s.lm.id, Blocks: got, Why: why,
 			Millis: float64(time.Since(start).Microseconds()) / 1000})
@@ -163,8 +176,10 @@ func (e *Engine) demotionVictim(s *Session) *Session {
 	defer e.mu.RUnlock()
 	var best *Session
 	for _, v := range e.sessions {
-		if v == s || v.closed.Load() || v.running.Load() || v.pinned.Load() || v.lm.callerPlaced || !v.lm.cpuListed ||
-			v.snapDevBlocks.Load() == 0 {
+		// One instance a model: demoting v's is demoting s's own model's
+		// when they share it.
+		if v == s || v.lm == s.lm || v.closed.Load() || v.running.Load() || v.pinned.Load() || v.lm.callerPlaced ||
+			!v.lm.cpuListed || v.snapDevBlocks.Load() == 0 || v.lm.anyRunning() {
 			continue
 		}
 		if best == nil || lessDeserving(v, best, s.lm) {
@@ -195,8 +210,12 @@ func (e *Engine) demote(v *Session, forID string) bool {
 	}
 	defer v.mu.Unlock()
 	start := time.Now()
-	mv, _ := v.st.MoveBlocks(0, v.lm.m.Cfg.NLayer, nn.CPU)
+	var mv model.BlockMove
+	v.in().As(v.ms, func(in *model.Instance) { mv, _ = in.MoveBlocks(0, v.lm.m.Cfg.NLayer, nn.CPU) })
 	n := len(mv.Moved)
+	// Every idle session of the instance brings its history home too, or its
+	// device view would keep the blocks on the card.
+	e.settle(v.lm)
 	v.refresh()
 	if n == 0 {
 		return false
@@ -204,6 +223,34 @@ func (e *Engine) demote(v *Session, forID string) bool {
 	e.orch.note(OrchMove{At: start, Session: v.id, Model: v.lm.id, Blocks: n, ToHost: true, Why: whyMakeRoom, For: forID,
 		Millis: float64(time.Since(start).Microseconds()) / 1000})
 	return true
+}
+
+// settle brings every idle session of lm under its instance's placement
+// (model.Instance.Settle).
+func (e *Engine) settle(lm *LoadedModel) {
+	e.mu.RLock()
+	ss := make([]*Session, 0, len(lm.sessions))
+	for _, s := range lm.sessions {
+		ss = append(ss, s)
+	}
+	e.mu.RUnlock()
+	for _, s := range ss {
+		if !s.mu.TryLock() {
+			continue
+		}
+		lm.inst.Settle(s.ms)
+		s.mu.Unlock()
+	}
+}
+
+// anyRunning says some session of lm is generating.
+func (lm *LoadedModel) anyRunning() bool {
+	for _, s := range lm.sessions {
+		if s.running.Load() {
+			return true
+		}
+	}
+	return false
 }
 
 // pbOrchestrator is the orchestrator's counters and recent moves for the

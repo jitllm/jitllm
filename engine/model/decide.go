@@ -143,9 +143,13 @@ type Decider struct {
 	// variants are answered together, so each keeps its own.
 	vscores [][]float32
 
-	// batch is the session DecideBatch runs a decoder readout's prompts in,
-	// placed where dev and devMax (SetDevice's) say.
-	batch  *RowScheduler
+	// batch is what DecideBatch runs a decoder readout's prompts in: a
+	// batcher over batchIn, an instance of its own placed where dev and
+	// devMax (SetDevice's) say, served by batchPool for batchRows sessions.
+	batch     *Batcher
+	batchIn   *Instance
+	batchPool *Pool
+	batchRows int
 	dev    nn.Device
 	devMax int
 	// jobs is DecideBatch's prompts, kept from batch to batch (batchJob).
@@ -305,7 +309,7 @@ func (d *Decider) Close() error {
 		return nil
 	}
 	if d.batch != nil {
-		d.batch.Close()
+		d.closeBatch()
 	}
 	return d.st.Close()
 }

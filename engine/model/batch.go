@@ -38,7 +38,7 @@ func (s *Instance) ForwardBatch(tokens []int32) ([]float32, error) {
 // forwardRows is one batch step over rows that need not be one per sequence:
 // row r is tokens[r] for the sequence in slot seq[r] at position pos[r]. A
 // sequence may take several rows, which is a prompt chunk riding in a decode
-// step (Scheduler): its positions in the step must be exactly its next ones,
+// step (Batcher): its positions in the step must be exactly its next ones,
 // bpos[seq].. upward, each once, in any row order. Every row writes its K and
 // V before any row attends, on the host and on the device, so a chunk's row
 // sees the rows of its own sequence at lower positions in the same step, and
@@ -252,7 +252,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	}
 
 	var devSlot []int
-	if s.devCount() > 0 {
+	if s.devCount() > 0 && len(s.rowOwn) == 0 {
 		devSlot = s.flatSlots(seq, pos)
 	}
 	// A recurrent block steps a sequence's summary one row at a time, so its
@@ -283,7 +283,11 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 					return nil, err
 				}
 			}
-			if err := s.rowsRun(li, hi, pos, devSlot, s.bx[:n*c.ResidW()], cs, csSWA,
+			run := s.rowsRun
+			if len(s.rowOwn) > 0 {
+				run = s.rowsSessions
+			}
+			if err := run(li, hi, pos, devSlot, s.bx[:n*c.ResidW()], cs, csSWA,
 				withHead, s.blogits[:nlogit*c.NVocab], nlogit); err != nil {
 				return nil, err
 			}

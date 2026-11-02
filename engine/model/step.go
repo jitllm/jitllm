@@ -436,7 +436,7 @@ func (s *Instance) HostRefusal() error {
 		return errStepBatched
 	case s.emb != nil:
 		return errStepEmbedder
-	case s.devCount() > 0 || s.head != nil:
+	case (s.devCount() > 0 || s.head != nil) && s.ldStep == nil:
 		return errHostOnDevice
 	case s.lo != 0 || s.hi != c.NLayer:
 		return errHostPartial
@@ -451,7 +451,7 @@ func (s *Instance) HostRefusal() error {
 
 // The conditions HostRefusal names beside StepRefusal's.
 var (
-	errHostOnDevice = errors.New("model: a device runs some of the instance's blocks or its head")
+	errHostOnDevice = errors.New("model: a device that steps no rows of different sessions runs some of the instance's blocks or its head")
 	errHostPartial  = errors.New("model: the instance runs part of the model (a prediction block)")
 	errHostCache    = errors.New("model: the architecture's cached rows are read per batch slot (MLA, an indexer, MSA, DeepSeek V4)")
 )

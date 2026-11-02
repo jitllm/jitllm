@@ -136,9 +136,6 @@ type Config struct {
 	// the cgroup's limit, the bound NUMA nodes' memory and what is available,
 	// less a slice, plus what this engine's models already hold.
 	HostBudget uint64
-	// SessionPool is how many reset instances each model keeps for model_id
-	// requests: zero is LoadOptions.Sessions (at least one), negative none.
-	SessionPool int
 	// MaxQueue is how many requests one model holds, running or waiting,
 	// before it refuses the next with ErrOverloaded: zero is 64, negative
 	// unbounded.
@@ -303,6 +300,11 @@ type LoadedModel struct {
 	path     string
 	name     string
 	m        *model.Model
+	// inst is the model's instance: its kernels composed at load for the
+	// placement the load states, served to every session (model.Serve).
+	inst *model.Instance
+	// instDev is the device inst was placed on, guarded by inst's lock.
+	instDev nn.Device
 	loadedAt time.Time
 
 	// dev is the tier, shared by every session of this model: the tier owns
@@ -403,6 +405,14 @@ func (lm *LoadedModel) finished(n int, prefill, decode time.Duration) {
 // physical device its tier opened, keyed on the device and not on the spec
 // text, so models loaded with `cuda` and `cuda:1` share card 1's gate and no
 // other. A model with no device runs on the host and queues there.
+// in is the instance the session runs on: its lease's, or its model's.
+func (s *Session) in() *model.Instance {
+	if l := s.ms.Lease(); l != nil {
+		return l.Instance
+	}
+	return s.lm.inst
+}
+
 func (lm *LoadedModel) device() nn.Device {
 	lm.devMu.RLock()
 	defer lm.devMu.RUnlock()
@@ -698,6 +708,13 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		// sessions) where it is.
 		callerPlaced: o.MaxDeviceBlocks >= 0 || len(o.DeviceIDs) == 1 && o.DeviceIDs[0] == "cpu",
 	}
+	if !m.IsEncoder() {
+		if err := e.makeInstance(lm); err != nil {
+			m.Close()
+			closeDev()
+			return nil, err
+		}
+	}
 	if e.cfg.MaxBatchRows != 1 {
 		lm.loop = newStepLoop(e, lm)
 	}
@@ -725,6 +742,34 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		}
 	}
 	return lm, nil
+}
+
+// makeInstance composes lm's instance for the placement its load states and
+// serves it to the model's sessions: the one composition a session of the
+// model sees.
+func (e *Engine) makeInstance(lm *LoadedModel) error {
+	in := lm.m.NewInstance(e.defaultMaxSeq(lm))
+	if dev := lm.device(); dev != nil {
+		max := lm.maxBlocks
+		if max == 0 {
+			max = -1
+		}
+		if err := in.SetDeviceLayers(dev, max); err != nil {
+			in.Close()
+			return err
+		}
+	}
+	width := e.cfg.MaxBatchRows
+	if width <= 0 {
+		width = model.MaxStepRows
+	}
+	if err := lm.m.Serve(in, width); err != nil {
+		in.Close()
+		return err
+	}
+	lm.inst, lm.instDev = in, lm.device()
+	e.applyPageBudget(lm, in)
+	return nil
 }
 
 // tierOptions are the options every tier of this server opens with, whether it
@@ -950,8 +995,10 @@ type Session struct {
 	id      string
 	modelID string
 	lm      *LoadedModel
-	st      *model.Instance
-	maxSeq  int
+	// ms is the session's history; it leases the model's instance (lm.inst)
+	// for each phase of a generate.
+	ms     *model.Session
+	maxSeq int
 
 	// mu serialises this session's own work. A session is one sequence, so two
 	// concurrent generates on it are a caller error rather than a queue.
@@ -1048,10 +1095,6 @@ type SessionOptions struct {
 	KVStore  model.KVStore
 	CacheKey string
 
-	// pooled takes an instance from the model's pool when one is idle: a
-	// model_id request's session, which asks for nothing a pooled instance
-	// could lack.
-	pooled bool
 	// Speculation is the default for generates that carry none.
 	Speculation Speculation
 	// PromptCache keeps the prompt prefixes in Config.PromptStore: the wire's
@@ -1130,55 +1173,45 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	}
 	e.mu.Unlock()
 
-	var st *model.Instance
-	if o.pooled {
-		st = e.takeIdle(lm)
-	}
-	reused := st != nil
-	if reused {
-		// Placed when it was built, and reset when it was pooled.
-		lm.ttft.statesReused.Add(1)
-	} else {
-		st = lm.m.NewInstance(maxSeq)
-		lm.ttft.statesCreated.Add(1)
-	}
+	// The session is a history on the model's instance, which was composed
+	// and placed at load: opening it composes nothing.
 	lm.attachMu.RLock()
 	defer lm.attachMu.RUnlock()
 	tierDev := lm.device()
-	if tierDev != nil && !reused {
-		max := o.MaxDeviceBlocks
-		if max == 0 {
-			max = lm.maxBlocks
-		}
-		if max == 0 {
-			max = -1
-		}
-		if err := st.SetDeviceLayers(tierDev, max); err != nil {
-			st.Close()
-			return nil, err
-		}
+	ms, err := lm.m.NewSession(maxSeq)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	if o.Relocate {
-		st.SetRelocate(true)
-	}
-	if o.KeepOffHost {
-		st.SetRelocate(false)
+	lm.ttft.sessionsOpened.Add(1)
+	// Placement is the instance's: a session's placement options move it, and
+	// every session leasing it with it.
+	if o.MaxDeviceBlocks != 0 || o.Relocate || o.KeepOffHost {
+		lm.inst.With(func(in *model.Instance) {
+			if o.MaxDeviceBlocks > 0 && tierDev != nil {
+				in.SetGPULayers(o.MaxDeviceBlocks)
+			}
+			if o.Relocate {
+				in.SetRelocate(true)
+			}
+			if o.KeepOffHost {
+				in.SetRelocate(false)
+			}
+		})
 	}
 	if o.KVStore != nil {
-		st.SetKVStore(o.KVStore)
+		ms.SetKVStore(o.KVStore)
 		if o.CacheKey != "" {
 			// A refused key leaves the process-local default: the cache still
 			// serves this run, just not the next one.
-			st.SetCacheKey(o.CacheKey)
+			ms.SetCacheKey(o.CacheKey)
 		}
 	}
-	e.applyPageBudget(lm, st)
 
 	s := &Session{
 		id:       id,
 		modelID:  lm.id,
 		lm:       lm,
-		st:       st,
+		ms:       ms,
 		maxSeq:   maxSeq,
 		sampling: o.Sampling,
 		created:  time.Now(),
@@ -1202,12 +1235,12 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	// an instance outliving its Model.
 	if e.models[lm.id] != lm {
 		e.mu.Unlock()
-		st.Close()
+		ms.Close()
 		return nil, fmt.Errorf("%w: model %q was unloaded", ErrNotFound, lm.called(o.modelName))
 	}
 	if _, ok := e.sessions[id]; ok {
 		e.mu.Unlock()
-		st.Close()
+		ms.Close()
 		return nil, fmt.Errorf("%w: session id %q", ErrExists, id)
 	}
 	e.sessions[id] = s
@@ -1242,26 +1275,28 @@ type blockHistory struct {
 
 // refresh republishes the snapshot. The caller MUST hold s.mu.
 func (s *Session) refresh() {
-	s.snapPos.Store(int32(s.st.Pos()))
-	s.snapKV.Store(s.st.KVBytes())
-	s.snapHist.Store(s.st.HistoryBytes())
-	s.snapDevBlocks.Store(int32(s.st.GPULayers()))
-	s.snapAt.Store(time.Now().UnixMilli())
-	s.snapBatched.Store(s.lm.loop != nil && stepsJointly(s.st))
-	blocks, settled := s.st.SeamTuned()
-	s.snapSeam.Store(int32(blocks))
-	s.snapSeamSettled.Store(settled)
-	s.snapPlacement.Store(&placementSnapshot{
-		runs:        s.st.DeviceBlocks(),
-		declines:    s.st.DeviceDeclines(),
-		headOnDev:   s.st.HeadOnDevice(),
-		demotions:   s.st.DeviceDemotions(),
-		relocations: s.st.Relocations(),
-		reclaims:    s.st.Reclaims(),
-		relocating:  s.st.Relocating(),
-		takenAt:     time.Now(),
-		on:          blocksOn(s.st, s.lm.m.Cfg.NLayer),
-		hist:        historyOf(s.st, s.lm.m.Cfg.NLayer),
+	s.in().As(s.ms, func(st *model.Instance) {
+		s.snapPos.Store(int32(st.Pos()))
+		s.snapKV.Store(st.KVBytes())
+		s.snapHist.Store(st.HistoryBytes())
+		s.snapDevBlocks.Store(int32(st.GPULayers()))
+		s.snapAt.Store(time.Now().UnixMilli())
+		s.snapBatched.Store(s.lm.loop != nil && stepsJointly(st))
+		blocks, settled := st.SeamTuned()
+		s.snapSeam.Store(int32(blocks))
+		s.snapSeamSettled.Store(settled)
+		s.snapPlacement.Store(&placementSnapshot{
+			runs:        st.DeviceBlocks(),
+			declines:    st.DeviceDeclines(),
+			headOnDev:   st.HeadOnDevice(),
+			demotions:   st.DeviceDemotions(),
+			relocations: st.Relocations(),
+			reclaims:    st.Reclaims(),
+			relocating:  st.Relocating(),
+			takenAt:     time.Now(),
+			on:          blocksOn(st, s.lm.m.Cfg.NLayer),
+			hist:        historyOf(st, s.lm.m.Cfg.NLayer),
+		})
 	})
 }
 
@@ -1355,7 +1390,42 @@ func (s *Session) close() {
 		s.parkView.Release()
 		s.parkView = nil
 	}
-	s.st.Close()
+	s.ms.Close()
+}
+
+// joinable says the instance the session runs on steps sessions' rows
+// together (stepsJointly), read under its lock.
+func (s *Session) joinable() bool {
+	ok := false
+	s.in().As(s.ms, func(in *model.Instance) { ok = stepsJointly(in) })
+	return ok
+}
+
+// steppable is joinable's device arm (model.Instance.Steppable).
+func (s *Session) steppable() bool {
+	ok := false
+	s.in().As(s.ms, func(in *model.Instance) { ok = in.Steppable() })
+	return ok
+}
+
+// recurrenceAdvanced is model.Instance.RecurrenceAdvanced of the session's
+// last step.
+func (s *Session) recurrenceAdvanced() bool {
+	ok := false
+	s.in().As(s.ms, func(in *model.Instance) { ok = in.RecurrenceAdvanced() })
+	return ok
+}
+
+// reset starts the session's sequence over, on the instance it leases for a
+// prompt.
+func (s *Session) reset(ctx context.Context) error {
+	in, err := s.ms.Hold(ctx, model.PhasePrefill)
+	if err != nil {
+		return err
+	}
+	in.Reset()
+	s.ms.Unhold(in)
+	return nil
 }
 
 func (s *Session) cancelGeneration() bool {
@@ -1688,6 +1758,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if s.closed.Load() {
 		return fmt.Errorf("%w: session %q is closed", ErrNotFound, s.id)
 	}
+	// The instance is leased for this generate's phases and handed back at its
+	// end: an idle session holds no lease, only its history.
+	defer s.ms.Release()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -1750,7 +1823,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			tail = o.Prompt.Spans[i].Tokens
 		}
 	}
-	if err := e.admitKV(s, npos+tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos()-npos)); err != nil {
+	if err := e.admitKV(s, npos+tokenLimit(o.MaxTokens, s.ms.Limit()-s.ms.Pos()-npos)); err != nil {
 		return err
 	}
 	// A conversation that is talking runs on a card whenever one can hold
@@ -1802,7 +1875,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	// record.
 	store := e.useStore(s, o) && !speculate
 	if !o.Continue {
-		s.st.Reset()
+		if err := s.reset(ctx); err != nil {
+			return err
+		}
 		if err := s.attachStore(store); err != nil {
 			return err
 		}
@@ -1825,8 +1900,8 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	// ---- prefill. A sequence that starts here stops between chunks when its
 	// client goes; one that continues keeps its history whole, so it does not.
 	if !o.Continue {
-		s.st.SetPrefillInterrupt(func() bool { return ctx.Err() != nil })
-		defer s.st.SetPrefillInterrupt(nil)
+		s.ms.SetPrefillInterrupt(func() bool { return ctx.Err() != nil })
+		defer s.ms.SetPrefillInterrupt(nil)
 		s.specRan = false
 	}
 	sampler := s.sampling
@@ -1839,13 +1914,20 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	var first int32
 	prompted := len(ids)
 	restored := 0
+	// The prefill runs on the instance the session leases for it, held for
+	// the whole prompt.
+	st, err := s.ms.Hold(ctx, model.PhasePrefill)
+	if err != nil {
+		return err
+	}
 	switch {
 	case speculate:
 		opts := []model.SpecOption{model.WithSpecDraft(spec.Draft)}
 		if !o.IgnoreEOS {
 			opts = append(opts, model.WithSpecStop(lm.m.Vocab.IsEOG))
 		}
-		if sp, err = s.st.Speculate(opts...); err != nil {
+		if sp, err = st.Speculate(opts...); err != nil {
+			s.ms.Unhold(st)
 			return fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
 		defer sp.Close()
@@ -1855,23 +1937,26 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		if o.Continue {
 			// A continued session's history holds its earlier pictures as
 			// rows already; the new spans follow them.
-			logits, err = s.st.PrefillMixed(o.Prompt.Spans...)
+			logits, err = st.PrefillMixed(o.Prompt.Spans...)
 		} else {
-			logits, err = s.st.PrefillCachedMixed(o.Prompt.Spans...)
+			logits, err = st.PrefillCachedMixed(o.Prompt.Spans...)
 		}
-		restored = s.st.KVRestored()
+		restored = s.ms.KVRestored()
 	case (s.cached || store) && !o.Continue:
-		logits, err = s.st.PrefillCached(ids)
-		restored = s.st.KVRestored()
+		logits, err = st.PrefillCached(ids)
+		restored = s.ms.KVRestored()
 	default:
-		logits, err = s.st.Prefill(ids)
+		logits, err = st.Prefill(ids)
 	}
 	if errors.Is(err, model.ErrPrefillInterrupted) {
 		// Part of a prompt nobody is waiting for: give the sequence back
 		// whole rather than leave it half-prefilled.
-		s.st.Reset()
+		st.Reset()
+		s.ms.Unhold(st)
 		return context.Cause(ctx)
 	}
+	devBlocks := st.GPULayers()
+	s.ms.Unhold(st)
 	if err != nil {
 		return err
 	}
@@ -1881,7 +1966,6 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	lm.tokensPrefilled.Add(int64(prompted))
 	prefill := time.Since(prefillStart)
 
-	devBlocks := s.st.GPULayers()
 	if err := emit(Event{Kind: EventStarted, Started: &Started{
 		SessionID:    s.id,
 		ModelID:      lm.id,
@@ -1909,9 +1993,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 
 	// ---- decode.
-	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos())
+	maxTokens := tokenLimit(o.MaxTokens, s.ms.Limit()-s.ms.Pos())
 
-	st := newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop)
+	text := newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop)
 	reason := FinishMaxTokens
 	stopMatched := ""
 	out := make([]int32, 0, min(maxTokens, 4096))
@@ -1947,7 +2031,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			if con != nil && n+1 != o.maskSkip {
 				lg = con.mask(logits)
 			}
-			next = s.st.Sample(&sampler, lg)
+			in, err := s.ms.Hold(ctx, model.PhaseGenerate)
+			if err != nil {
+				return err
+			}
+			next = in.Sample(&sampler, lg)
+			s.ms.Unhold(in)
 			sampler.Observe(next)
 			// The model's raw distribution, before the grammar's mask, as
 			// before temperature and penalties: vLLM's default
@@ -1962,7 +2051,13 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		case len(pend) == 0:
 			// Every token a round returns is observed into the sampler.
 			sp.Limit(maxTokens - n)
-			if pend, err = sp.Next(&sampler); err != nil {
+			in, err := s.ms.Hold(ctx, model.PhaseGenerate)
+			if err != nil {
+				return err
+			}
+			pend, err = sp.Next(&sampler)
+			s.ms.Unhold(in)
+			if err != nil {
 				return err
 			}
 		}
@@ -1978,7 +2073,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		// Every token is sent, its text empty while held back (a partial rune,
 		// or a possible stop string's start): a client counting ids must see
 		// all of them, as GenerateToken says.
-		chunk, hit, match := st.push(out)
+		chunk, hit, match := text.push(out)
 		if err := emit(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: n, Logprob: tlp}}); err != nil {
 			return err
 		}
@@ -1993,14 +2088,22 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		// A move between devices asked meanwhile is prepared and committed
 		// here, between two tokens (Engine.MoveBlocks).
 		s.serveMove(false)
+		in, err := s.ms.Hold(ctx, model.PhaseGenerate)
+		if err != nil {
+			return err
+		}
 		if con == nil && !o.Logprobs {
-			if pending, err = s.st.ForwardSample(next, &sampler); err != nil {
+			pending, err = in.ForwardSample(next, &sampler)
+			s.ms.Unhold(in)
+			if err != nil {
 				return err
 			}
 			continue
 		}
 		pending = -1
-		if logits, err = s.st.Forward(next); err != nil {
+		logits, err = in.Forward(next)
+		s.ms.Unhold(in)
+		if err != nil {
 			return err
 		}
 	}
@@ -2010,7 +2113,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	s.specRan = len(pend) > 0
 	if reason == FinishMaxTokens || reason == FinishEOS || reason == FinishCancelled {
 		// Flush whatever was being held back for a stop string that never came.
-		if tail := st.flush(); tail != "" {
+		if tail := text.flush(); tail != "" {
 			if err := emit(Event{Kind: EventToken, Token: &Token{ID: -1, Text: tail, Index: n}}); err != nil {
 				return err
 			}
@@ -2038,7 +2141,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		TokensPerSecond:  rate,
 		// Bytes per token makes the rate checkable against the read wall.
 		BytesPerToken: lm.m.BytesPerToken(),
-		Position:      s.st.Pos(),
+		Position:      s.ms.Pos(),
 		Restored:      restored,
 	}})
 }
@@ -2126,7 +2229,7 @@ func (e *Engine) resolveSession(o GenerateOptions) (*Session, bool, error) {
 	if o.ModelID == "" {
 		return nil, false, fmt.Errorf("%w: one of session_id or model_id is required", ErrInvalid)
 	}
-	s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID, modelName: o.ModelName, pooled: true})
+	s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID, modelName: o.ModelName})
 	if err != nil {
 		return nil, false, err
 	}
@@ -2200,7 +2303,13 @@ func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
 	if chat.HasSystem {
 		msgs = append([]model.ChatMessage{{Role: "system", Content: chat.System}}, msgs...)
 	}
-	sp, err := s.st.ChatPictureSpans(msgs, chat.Images, chat.Tools, chat.ToolChoice, chat.AddGenerationPrompt)
+	// The pictures are encoded on the instance the prompt will run on.
+	in, err := s.ms.Hold(context.Background(), model.PhasePrefill)
+	if err != nil {
+		return nil, err
+	}
+	sp, err := in.ChatPictureSpans(msgs, chat.Images, chat.Tools, chat.ToolChoice, chat.AddGenerationPrompt)
+	s.ms.Unhold(in)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
@@ -2404,21 +2513,23 @@ func (lm *LoadedModel) Model() *model.Model { return lm.m }
 // GPU is the model's device tier, nil for a host-only model.
 func (lm *LoadedModel) GPU() *tier.GPU { return lm.gpuTier() }
 
-// Inspect runs f with the session's instance under the session's lock, so it
-// never overlaps a generate: what a front end reads between turns (placement,
-// the prompt cache's counters) or does on the session's own JIT (a picture).
+// Inspect runs f with the session's instance, reading the session's
+// history, under the session's lock, so it never overlaps a generate: what a
+// front end reads between turns (placement, the prompt cache's counters).
 func (s *Session) Inspect(f func(st *model.Instance)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f(s.st)
+	s.in().As(s.ms, f)
 }
 
-// SetDeviceBlocks moves the seam: it asks the devices to hold n blocks of this
-// session and returns how many they took. Growing is best effort, and a shrink
+// SetDeviceBlocks moves the seam of the instance the session runs on: it asks
+// the devices to hold n of its blocks and returns how many they took, every
+// session leasing it moving with it. Growing is best effort, and a shrink
 // whose history cannot move leaves the seam where it was.
 func (e *Engine) SetDeviceBlocks(s *Session, n int) int {
 	s.mu.Lock()
-	got := s.st.SetGPULayers(n)
+	var got int
+	s.in().As(s.ms, func(in *model.Instance) { got = in.SetGPULayers(n) })
 	s.refresh()
 	s.mu.Unlock()
 	e.applyPageBudget(s.lm, nil)
@@ -2470,7 +2581,9 @@ func (s *Session) serveMove(final bool) {
 		return
 	}
 	if r.pm == nil {
-		pm, err := s.st.PrepareMove(r.first, r.last+1, r.to)
+		var pm *model.PendingMove
+		var err error
+		s.in().As(s.ms, func(in *model.Instance) { pm, err = in.PrepareMove(r.first, r.last+1, r.to) })
 		if err != nil {
 			s.finishMove(r, moveRes{err: err})
 			return
@@ -2558,8 +2671,6 @@ func (e *Engine) attachDevice(lm *LoadedModel, to string) error {
 	if !lm.holds(to) {
 		return fmt.Errorf("%w: %q is not a device of this server (the tier holds %v)", ErrPlacement, to, lm.devIDs())
 	}
-	// The pool's instances were placed before the tier changed.
-	e.dropIdle(lm)
 	return nil
 }
 
@@ -2596,14 +2707,26 @@ func (e *Engine) bindSessionLocked(s *Session) error {
 	if b := s.tier.Load(); dev == nil || (b != nil && b.d == dev) {
 		return nil
 	}
-	prev := s.st.GPULayers()
-	if err := s.st.SetDeviceLayers(dev, 0); err != nil {
+	// The device is the instance's: the first session to see it places the
+	// instance there, and every other finds it placed.
+	var err error
+	s.lm.inst.With(func(in *model.Instance) {
+		if s.lm.instDev == dev {
+			return
+		}
+		prev := in.GPULayers()
+		if err = in.SetDeviceLayers(dev, 0); err != nil {
+			return
+		}
+		s.lm.instDev = dev
+		if prev > 0 {
+			in.SetGPULayers(prev)
+		}
+	})
+	if err != nil {
 		return fmt.Errorf("%w: %v", ErrPlacement, err)
 	}
 	s.tier.Store(&tierBox{dev})
-	if prev > 0 {
-		s.st.SetGPULayers(prev)
-	}
 	s.refresh()
 	return nil
 }
@@ -2636,9 +2759,6 @@ func (e *Engine) MoveBlocks(ctx context.Context, s *Session, first, last int, to
 	}
 	s.move = r
 	s.moveMu.Unlock()
-	// The pool's instances are no sequence's, and would keep the blocks where
-	// they are (dropIdle).
-	e.dropIdle(s.lm)
 	tick := time.NewTicker(2 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -2730,7 +2850,6 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.Instance) {
 	if newest == nil && len(lm.sessions) == 0 {
 		minDev = 0 // no session has placed anything yet
 	}
-	kv += lm.idleKV()
 	e.mu.RUnlock()
 	// The model's host step scratch (model.Model.StepScratchBytes): one step's
 	// rows across sessions, held between steps for the next.

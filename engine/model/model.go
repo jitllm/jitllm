@@ -1202,8 +1202,8 @@ type expert struct{ gate, up, down tensor }
 
 // Model is a loaded transformer.
 type Model struct {
-	// insts is the instances the scheduler hands out (Serve).
-	insts instances
+	// insts is the model's pool: the instances it serves (Serve).
+	insts Pool
 	// bankWts caches bankWeight's Weight per bank entry; holdFree is the
 	// recycled sheet holds (sheetOf).
 	bankWts  sync.Map
@@ -1256,8 +1256,10 @@ type Model struct {
 	// each (kvArenaFor).
 	kvArenas  map[kvArenaKey]*kvArena
 	kvArenaMu sync.Mutex
-	// cpuForms is the composed CPU blocks' forms (cpuserve.go).
-	cpuForms cpuForms
+	// cpuForms is the composed CPU blocks' forms (cpuserve.go), and
+	// cpuComposes the times the composer was asked for one (CPUComposes).
+	cpuForms    cpuForms
+	cpuComposes atomic.Int64
 	// argmaxes is the greedy sampler's graph at each width a caller asked
 	// an argmax of (Instance.cpuArgmax), one graph a width so its form is
 	// composed once.

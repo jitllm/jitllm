@@ -112,7 +112,7 @@ func requireWholeOnDevice(t *testing.T, e *Engine, lm *LoadedModel) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	why, placed := s.st.StepRefusal(), s.st.GPULayers()
+	why, placed := s.in().StepRefusal(), s.in().GPULayers()
 	if err := e.CloseSession(s.id); err != nil {
 		t.Fatal(err)
 	}

@@ -40,8 +40,12 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 			// integers, where the sequence alone decodes through the tiled
 			// kernel's float chain (TuneOff pins it) -- qwen3moe and qwen2vl
 			// flipped five small-margin argmaxes on an arm64 host. The batch gate's
-			// exact mode takes the same option (TestBatchMatchesForward).
-			m, err := Open(jlmOf(t, path), noTune, noGEMM, WithJITOptions(nn.WithGEMMExact(true)))
+			// exact mode takes the same option (TestBatchMatchesForward). And an
+			// f32 cache: a session's rows read a binary16 history through the
+			// rows' form and alone through the one-row form, which round apart
+			// (qwen3moe, qwen35, qwen2vl); TestSessionsStepWithinTheBandOnF16KV
+			// holds the binary16 default to a band.
+			m, err := Open(jlmOf(t, path), noTune, noGEMM, WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -82,7 +86,7 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 				solo[r] = out
 			}
 
-			sc := NewRowScheduler(m, nseq, maxSeq)
+			sc := newTestBatcher(m, nseq, maxSeq)
 			defer sc.Close()
 			seqs := make([]*Seq, nreq)
 			for r := range prompts {
@@ -135,7 +139,7 @@ func TestSchedulerStopsOnStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	sc := NewRowScheduler(m, 2, 32)
+	sc := newTestBatcher(m, 2, 32)
 	defer sc.Close()
 	// Stop on whatever the first token turns out to be, so the sequence ends
 	// after exactly one token regardless of what the model says.
@@ -176,7 +180,7 @@ func TestSchedulerRejectsAnOversizedPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	sc := NewRowScheduler(m, 1, 16)
+	sc := newTestBatcher(m, 1, 16)
 	defer sc.Close()
 	big := make([]int32, 64) // longer than maxSeq
 	for i := range big {

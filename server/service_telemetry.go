@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/capabilities"
 	"github.com/jitllm/jitllm/internal/localserver"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -78,13 +79,18 @@ func (s *TelemetryService) snapshot(modelID, sessionID string) *v1.GetStatsRespo
 		// they are read only when the session is idle; a busy session
 		// reports zeros rather than race.
 		if !sess.running.Load() && sess.mu.TryLock() {
-			par, ser := sess.st.JIT().Regions()
-			b, l := sess.st.MoEDispatch()
-			bd, ld := sess.st.MoEDownDispatch()
+			var par, ser, b, l, bd, ld int64
+			var workers int
+			sess.in().With(func(st *model.Instance) {
+				par, ser = st.JIT().Regions()
+				b, l = st.MoEDispatch()
+				bd, ld = st.MoEDownDispatch()
+				workers = st.Workers()
+			})
 			ss.Pool = &v1.PoolStats{
 				ParallelRegions: par,
 				InlineRegions:   ser,
-				Workers:         int32(sess.st.Workers()),
+				Workers:         int32(workers),
 			}
 			ss.Mixture = &v1.MixtureStats{
 				BatchedDispatch:     b,

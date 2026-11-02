@@ -157,7 +157,7 @@ func loadGrouped(t *testing.T, name string, devs []string, n int) *groupedLoad {
 	if err != nil {
 		t.Fatal(err)
 	}
-	why, d := s.st.StepRefusal(), lm.gpuTier().PipelineDepth()
+	why, d := s.in().StepRefusal(), lm.gpuTier().PipelineDepth()
 	if err := e.CloseSession(s.id); err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func loadUnderLoad(t *testing.T, name string, devs []string, conc, maxSeq int) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	why, d := s.st.StepRefusal(), lm.gpuTier().PipelineDepth()
+	why, d := s.in().StepRefusal(), lm.gpuTier().PipelineDepth()
 	if err := e.CloseSession(s.id); err != nil {
 		t.Fatal(err)
 	}

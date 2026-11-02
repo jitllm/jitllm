@@ -93,7 +93,7 @@ func TestASessionDoesNotStarveThePager(t *testing.T) {
 	}
 	if !lm.m.PagesFit() {
 		t.Fatalf("creating one session of %d positions left the pager %d bytes: the budget was charged "+
-			"for the whole context's history up front", s.st.MaxSeq(), lm.m.PageBudget())
+			"for the whole context's history up front", s.ms.Limit(), lm.m.PageBudget())
 	}
 	o := GenerateOptions{SessionID: s.ID(), Prompt: Prompt{Kind: PromptText, Text: "Once upon a time"}, MaxTokens: 4}
 	if err := e.Generate(context.Background(), o, func(Event) error { return nil }); err != nil {

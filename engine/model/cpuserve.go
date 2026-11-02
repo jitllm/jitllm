@@ -1667,6 +1667,7 @@ func (m *Model) cpuPlanes(li int) bool {
 // cpuFormOf is req's form on the CPU, mapped once for the model by its Key;
 // whole is buildCPUForm's.
 func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart, whole, f32 bool) (*cpuBlockForm, error) {
+	m.cpuComposes.Add(1)
 	c := &m.cpuForms
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1703,6 +1704,11 @@ func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart, who
 	c.m[key] = fm
 	return fm, nil
 }
+
+// CPUComposes is how many times the composer was asked for a CPU form, a
+// form the model's cache held among them: what an instance's creation,
+// relocation or tuning moves, and a prefill or a generated token must not.
+func (m *Model) CPUComposes() int64 { return m.cpuComposes.Load() }
 
 // buildCPUForm maps codes and plans each call word's source: the graph's
 // input and output the residual, or with apart each an io place of its own.

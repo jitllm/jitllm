@@ -100,9 +100,13 @@ func (s *SessionService) ResetSession(ctx context.Context, req *connect.Request[
 	// Reset mutates the instance, so it waits for any generate in flight rather
 	// than racing it.
 	sess.mu.Lock()
-	sess.st.Reset()
+	err = sess.reset(ctx)
+	sess.ms.Release()
 	sess.refresh()
 	sess.mu.Unlock()
+	if err != nil {
+		return nil, connectErr(err)
+	}
 	return connect.NewResponse(&v1.ResetSessionResponse{Session: s.E.pbSession(sess)}), nil
 }
 

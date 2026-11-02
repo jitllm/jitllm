@@ -168,7 +168,7 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 // written by Forward with no lock, so the report must come from the snapshot
 // the session publishes under its own lock, never from the Instance.
 //
-// VIOLATION SIGNATURE. Read sess.st.SeamTuned() in TuneSeam's loop again and
+// VIOLATION SIGNATURE. Read the instance's SeamTuned() in TuneSeam's loop again and
 // this fails under -race with "WARNING: DATA RACE" between seamTuner.observe
 // (or finish) and Instance.SeamTuned.
 //

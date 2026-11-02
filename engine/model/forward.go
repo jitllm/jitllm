@@ -3433,12 +3433,12 @@ func (s *Instance) mv(out []float32, w tensor, x []float32) error {
 }
 
 // Pos is the number of positions already in the cache.
-func (s *Instance) Pos() int { return s.pos }
+func (s *Session) Pos() int { return s.pos }
 
 // PrefillRows is how many prompt rows this instance has run through its blocks
 // since it was made: a prompt restored from a prefix cache adds none, and a
 // one-row prompt (decode's path) adds one.
-func (s *Instance) PrefillRows() int { return s.promptRows }
+func (s *Session) PrefillRows() int { return s.promptRows }
 
 // stepDownKVToF32 narrows the cache from packed halves to f32 and rebuilds it.
 // It is a named method so a gate can reach it without a real card. The caller

@@ -17,7 +17,7 @@ import (
 
 // TestRaggedStepKernelSplit is the measurement docs/design/ragged-prefill.md
 // starts from: the same prompts as rows of one batch session's steps
-// (Scheduler, a ragged step) and each prompt alone (Prefill), every block on
+// (Batcher, a ragged step) and each prompt alone (Prefill), every block on
 // the device, with each kernel's device time taken by the backend's own
 // instrument (backend.SetCUDAKernelTiming, metal.SetKernelTiming). It
 // measures and asserts nothing (RULE 4), and runs only when JITLLM_SPLIT_MODEL
@@ -62,10 +62,10 @@ func TestRaggedStepKernelSplit(t *testing.T) {
 	if err := st.SetDeviceLayers(g, -1); err != nil || st.GPULayers() != m.Cfg.NLayer {
 		t.Fatalf("alone: %v, %d of %d blocks: %s", err, st.GPULayers(), m.Cfg.NLayer, g.Err())
 	}
-	sc := NewRowScheduler(m, np, seq)
+	sc := newTestBatcher(m, np, seq)
 	defer sc.Close()
-	if err := sc.st.SetDeviceLayers(g, -1); err != nil || sc.st.GPULayers() != m.Cfg.NLayer {
-		t.Fatalf("batch: %v, %d of %d blocks: %s", err, sc.st.GPULayers(), m.Cfg.NLayer, g.Err())
+	if err := sc.in.SetDeviceLayers(g, -1); err != nil || sc.in.GPULayers() != m.Cfg.NLayer {
+		t.Fatalf("batch: %v, %d of %d blocks: %s", err, sc.in.GPULayers(), m.Cfg.NLayer, g.Err())
 	}
 	alone := func() {
 		for _, p := range prompts {

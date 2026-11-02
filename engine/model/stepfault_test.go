@@ -172,7 +172,7 @@ func TestRecurrentPoolGateDiscriminates(t *testing.T) {
 // every row of a ragged step its own run -- a prompt chunk's rows each reading
 // its sequence's recurrent state from before the step -- and demands both see
 // it: the step across sessions (TestStepRunsAdmitsAPromptBesideDecoding) and
-// the Scheduler (TestSchedulerMixesPromptsIntoDecodeSteps).
+// the Batcher (TestSchedulerMixesPromptsIntoDecodeSteps).
 //
 //	go test -tags jitllmfault ./engine/model -run TestStepRunsChainGateDiscriminates
 func TestStepRunsChainGateDiscriminates(t *testing.T) {
@@ -205,7 +205,7 @@ func TestStepRunsChainGateDiscriminates(t *testing.T) {
 			w, i, j := c.worst(got)
 			t.Logf("chain: row %d parts at token %d, %.4f apart on the host", i, j, w)
 			if i < 0 || w <= c.tie {
-				t.Fatalf("the Scheduler gate passed with a chunk's rows not chaining (widest first difference %.4f)", w)
+				t.Fatalf("the Batcher gate passed with a chunk's rows not chaining (widest first difference %.4f)", w)
 			}
 		})
 	}

@@ -101,10 +101,10 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 	// B's tokens, from the host alone; a device run is held to them up to a
 	// tie (batchTie), since the two tiers round differently.
 	bIDs := func(t *testing.T, d *tier.GPU) ([][]int32, *Instance) {
-		sc := NewRowScheduler(m, rows, seq)
+		sc := newTestBatcher(m, rows, seq)
 		t.Cleanup(sc.Close)
 		if d != nil {
-			if err := sc.st.SetDevice(d); err != nil {
+			if err := sc.in.SetDevice(d); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -130,7 +130,7 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 			}
 			out[i] = s.Out
 		}
-		return out, sc.st
+		return out, sc.in
 	}
 	bWant, _ := bIDs(t, nil)
 	sameB := func(t *testing.T, got [][]int32) {

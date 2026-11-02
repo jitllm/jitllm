@@ -92,7 +92,7 @@ func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, 
 		}
 		if budgeted {
 			// Two sessions' full histories, measured on a probe Instance.
-			st := e.sessions["a"].st
+			st := e.sessions["a"].in()
 			per := st.PositionBytes()
 			if per == 0 {
 				t.Fatal("a position costs no bytes: the budget would be nothing")
@@ -118,7 +118,7 @@ func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, 
 			for _, id := range ids {
 				s := e.sessions[id]
 				if s.Parked() {
-					held += s.st.ParkedOut - s.st.ParkedIn
+					held += s.ms.ParkedOut - s.ms.ParkedIn
 				}
 			}
 			if in+held != out {

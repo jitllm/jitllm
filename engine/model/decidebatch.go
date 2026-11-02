@@ -12,7 +12,7 @@ import (
 // Decisions in a batch: several requests answered at once, as a server
 // answers the requests that arrived while it was busy with one. A decoder
 // readout's prompts -- every question and every variant of every request --
-// run as rows of one batch session (Scheduler), a step reading the weights
+// run as rows of one batch session (Batcher), a step reading the weights
 // once for every prompt in it, and each prompt's label logits are read where
 // its last row comes out. An encoder readout (Laya) packs its sequences into
 // encoder passes of up to layaPackRows rows: each sequence's rows attend
@@ -360,50 +360,62 @@ func (d *Decider) layaPacked(jobs []*batchJob) error {
 	return nil
 }
 
-// batchSession is the Decider's batch session, at least rows wide, placed on
-// the Decider's device as its own instance is. It is kept between batches; a
-// wider batch replaces it.
-func (d *Decider) batchSession(rows int) (*RowScheduler, error) {
-	if d.batch != nil && len(d.batch.live) >= rows {
+// batchSession is the Decider's batcher, at least rows wide, over an
+// instance of its own placed on the Decider's device as its own instance
+// is. It is kept between batches; a wider batch replaces it.
+func (d *Decider) batchSession(rows int) (*Batcher, error) {
+	if d.batch != nil && d.batchRows >= rows {
 		return d.batch, nil
 	}
 	if d.batch != nil {
-		d.batch.Close()
-		d.batch = nil
+		d.closeBatch()
 	}
-	sc := NewRowScheduler(d.m, rows, d.st.MaxSeq())
+	in := d.m.NewInstance(d.st.MaxSeq())
 	if d.dev != nil {
-		if err := sc.st.SetDeviceLayers(d.dev, d.devMax); err != nil {
-			sc.Close()
+		if err := in.SetDeviceLayers(d.dev, d.devMax); err != nil {
+			in.Close()
 			return nil, err
 		}
 	}
-	d.batch = sc
-	return sc, nil
+	pool := NewPool()
+	if err := pool.Serve(in, rows); err != nil {
+		in.Close()
+		return nil, err
+	}
+	d.batch, d.batchIn, d.batchPool, d.batchRows = d.m.NewBatcher(rows, d.st.MaxSeq(), BatchOver(pool)), in, pool, rows
+	return d.batch, nil
 }
 
-// BatchDeviceBlocks is how many blocks the Decider's batch session runs on a
-// device: 0 before a batch has run.
+// closeBatch closes the Decider's batcher and its instance.
+func (d *Decider) closeBatch() {
+	d.batch.Close()
+	d.batchPool.Unserve(d.batchIn)
+	d.batchIn.Close()
+	d.batch, d.batchIn, d.batchPool, d.batchRows = nil, nil, nil, 0
+}
+
+// BatchDeviceBlocks is how many blocks the Decider's batch instance runs on
+// a device: 0 before a batch has run.
 func (d *Decider) BatchDeviceBlocks() int {
-	if d.batch == nil {
+	if d.batchIn == nil {
 		return 0
 	}
-	return d.batch.st.GPULayers()
+	return d.batchIn.GPULayers()
 }
 
-// BatchStats is what the Decider's batch session has run.
-func (d *Decider) BatchStats() RowSchedulerStats {
+// BatchStats is what the Decider's batcher has run.
+func (d *Decider) BatchStats() BatcherStats {
 	if d.batch == nil {
-		return RowSchedulerStats{}
+		return BatcherStats{}
 	}
 	return d.batch.Stats()
 }
 
-// setBatchDevice follows the Decider's device with its batch session.
+// setBatchDevice follows the Decider's device with its batch instance.
 func (d *Decider) setBatchDevice(dev nn.Device, max int) error {
 	d.dev, d.devMax = dev, max
-	if d.batch == nil {
+	if d.batchIn == nil {
 		return nil
 	}
-	return d.batch.st.SetDeviceLayers(dev, max)
+	return d.batchIn.SetDeviceLayers(dev, max)
 }

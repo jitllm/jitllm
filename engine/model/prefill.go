@@ -400,7 +400,7 @@ var ErrPrefillInterrupted = errors.New("model: prefill interrupted")
 // prompt whose client has gone without waiting out the whole prefill. nil
 // removes it. f runs on the prefill's goroutine, between chunks, never
 // inside one.
-func (s *Instance) SetPrefillInterrupt(f func() bool) { s.interrupt = f }
+func (s *Session) SetPrefillInterrupt(f func() bool) { s.interrupt = f }
 
 // promptCalls tells the device whether the calls that follow are a prompt's
 // (nn.PromptDevice).

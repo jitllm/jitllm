@@ -118,7 +118,7 @@ func mixedArm(t *testing.T, m *Model, ids [][]int32, gens []int, spec string) {
 	t.Logf("violation: row %d parts at token %d, %.4f apart on the host", i, j, w)
 }
 
-// mixedCase is the Scheduler gate on one placement: the sequences' tokens
+// mixedCase is the Batcher gate on one placement: the sequences' tokens
 // alone, and how a scheduled run is compared against them.
 type mixedCase struct {
 	t    *testing.T
@@ -208,21 +208,21 @@ func (c *mixedCase) place(st *Instance, g *tier.GPU) {
 	}
 }
 
-// run schedules every sequence through one Scheduler, chunks at chunkPos's
+// run schedules every sequence through one Batcher, chunks at chunkPos's
 // positions where it is set, and returns each sequence's tokens, the
-// Scheduler's stats, whether a prompt was ever left part-fed between steps,
+// Batcher's stats, whether a prompt was ever left part-fed between steps,
 // and the rows that chained a device linear block's state after another row of
 // their own sequence (tier.Stats.RecChainRows).
-func (c *mixedCase) run(chunkPos func(base, j, k int) int) ([][]int32, RowSchedulerStats, bool, int) {
+func (c *mixedCase) run(chunkPos func(base, j, k int) int) ([][]int32, BatcherStats, bool, int) {
 	t := c.t
 	g := c.open()
 	if g != nil {
 		defer g.Close()
 	}
-	sc := NewRowScheduler(c.m, mixedRows, mixedSeq, WithPromptBudget(mixedBudget))
+	sc := newTestBatcher(c.m, mixedRows, mixedSeq, WithPromptBudget(mixedBudget))
 	defer sc.Close()
 	sc.chunkPos = chunkPos
-	c.place(sc.st, g)
+	c.place(sc.in, g)
 	seqs := make([]*Seq, len(c.ids))
 	for i := range c.ids {
 		seqs[i] = &Seq{Prompt: c.ids[i], MaxTokens: c.gens[i]}

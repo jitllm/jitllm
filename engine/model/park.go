@@ -5,10 +5,11 @@ import "fmt"
 // Parking is preemption for a session between tokens: Park gives back what the
 // session holds on the device and, with a store, its sealed host KV pages;
 // Resume takes them back. It is built from the two moves the five principles
-// already gate -- relocation (a block's KV pages and recurrent state move to the CPU
-// from the device and go back with the same answer, SetGPULayers) and KV
-// paging (a sealed page is evicted into the store and faulted back, trim and
-// fault) -- so a parked session resumes byte for byte where it stopped.
+// already gate -- a block's history moving between the device and the CPU
+// (migrateKV, migrateRec) and KV paging (a sealed page is evicted into the
+// store and faulted back, trim and fault) -- so a parked session resumes byte
+// for byte where it stopped. The instance's blocks stay where they are: other
+// sessions lease it.
 //
 // What stays: the session's recurrent state (one matrix per linear block, the
 // size of a page or two, and never stored) and its unsealed tail page. A
@@ -57,13 +58,25 @@ func (s *Instance) park() (ParkStats, error) {
 	if s.parked {
 		return st, nil
 	}
-	if n := s.devCount(); n > 0 {
-		s.parkedSeam = s.gpuLayers
-		if s.SetGPULayers(0); s.devCount() != 0 {
-			return st, fmt.Errorf("model: park: %d block(s) stay on the device (pinned, or its "+
-				"history would not come home)", s.devCount())
+	// The session's history on the device comes to the CPU; the instance's
+	// blocks stay where they are, for every session leasing it, and the
+	// history goes back up when the session next runs (use).
+	if s.devCount() > 0 {
+		sess := s.Session
+		if !sess.away {
+			sess.held = append(sess.held[:0], s.onDev...)
 		}
-		st.Blocks = n
+		for li := s.lo; li < s.hi; li++ {
+			if li >= len(sess.held) || !sess.held[li] {
+				continue
+			}
+			if err := s.moveHistory(li, false); err != nil {
+				return st, fmt.Errorf("model: park: %w", err)
+			}
+			sess.held[li] = false
+			st.Blocks++
+		}
+		sess.away = true
 	}
 	if _, ok := s.kv.store.(NoStore); ok {
 		s.parkStore = NewMemStore()
@@ -85,9 +98,9 @@ func (s *Instance) park() (ParkStats, error) {
 	return st, nil
 }
 
-// Resume undoes Park: every page Park evicted comes back from the store, then
-// the blocks it moved to the CPU are offered to the device again, their history
-// with them. It returns how many pages came back.
+// Resume undoes Park: every page Park evicted comes back from the store; the
+// history Park brought to the CPU goes back to the device when the session
+// next runs (use). It returns how many pages came back.
 func (s *Instance) Resume() (int, error) {
 	if !s.parked {
 		return 0, nil
@@ -125,15 +138,11 @@ func (s *Instance) Resume() (int, error) {
 			s.kv.layers[li].lastSealed = 0
 		}
 	}
-	if s.parkedSeam > 0 {
-		s.SetGPULayers(s.parkedSeam)
-		s.parkedSeam = 0
-	}
 	return in, nil
 }
 
 // Parked reports whether the session is parked.
-func (s *Instance) Parked() bool { return s.parked }
+func (s *Session) Parked() bool { return s.parked }
 
 // HistoryBytes is what this session's history occupies wherever it lives --
 // host pages and the device's alike -- at its current position, and

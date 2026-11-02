@@ -20,18 +20,19 @@ type Session struct {
 	kvFormat cpu.KVFmt
 	span     [2]int
 	lease    *Lease
+	// sched is the scheduler that leases the session.
+	sched Scheduler
 	// held1 is the lease the default scheduler hands out, kept in the
 	// session so acquiring one allocates nothing.
 	held1 Lease
 	pos   int
 	// logits is what the session's last step ended on.
 	logits []float32
-	// parked and parkedSeam are Park's: the session is preempted, and the
-	// seam it held on the device. ParkedOut and ParkedIn count the KV pages
-	// Park sent to the store and Resume brought back (park.go).
-	parked     bool
-	parkedSeam int
-	parkStore  *MemStore
+	// parked is Park's: the session is preempted. ParkedOut and ParkedIn
+	// count the KV pages Park sent to the store and Resume brought back
+	// (park.go).
+	parked    bool
+	parkStore *MemStore
 	// parkPrev is the store ParkInto swapped out, given back by Resume.
 	parkPrev            KVStore
 	ParkedOut, ParkedIn int64
@@ -93,6 +94,9 @@ type Session struct {
 	ldQSA    nn.QSADevice
 	tier     nn.LayerDevice
 	held     []bool
+	// away says the bound session's history is not where its instance
+	// places the blocks, held says where it is (Park).
+	away bool
 	// recMark is where the cached prompt in flight parts from the one before
 	// it (markParting), a restore point beside the spaced ones; recLast is
 	// that one's key.
@@ -113,9 +117,9 @@ type Session struct {
 // nothing.
 func (s *Instance) use(sess *Session) error {
 	if s.Session == sess {
-		return nil
+		return s.comeBack()
 	}
-	if cur := s.Session; cur != nil {
+	if cur := s.Session; cur != nil && !cur.away {
 		cur.held = append(cur.held[:0], s.onDev...)
 	}
 	s.Session = sess
@@ -128,6 +132,17 @@ func (s *Instance) use(sess *Session) error {
 	if s.kv.recAt != nil {
 		s.kv.recAt, s.kv.endsAt = s.recFns()
 	}
+	sess.away = true
+	return s.comeBack()
+}
+
+// comeBack brings the bound session's history to where s places each
+// block, when it is elsewhere (use, Park).
+func (s *Instance) comeBack() error {
+	sess := s.Session
+	if !sess.away || sess.parked {
+		return nil
+	}
 	for li := s.lo; li < s.hi; li++ {
 		want, has := s.devAt(li), li < len(sess.held) && sess.held[li]
 		if want == has {
@@ -136,7 +151,11 @@ func (s *Instance) use(sess *Session) error {
 		if err := s.moveHistory(li, want); err != nil {
 			return err
 		}
+		if li < len(sess.held) {
+			sess.held[li] = want
+		}
 	}
+	sess.away = false
 	return nil
 }
 
@@ -224,4 +243,47 @@ func (s *Instance) recFns() (func(int) bool, func(int) [kvEndSeats]uint8) {
 		s.fnRecAt, s.fnEndsAt = s.recPointAt, s.endsAt
 	}
 	return s.fnRecAt, s.fnEndsAt
+}
+
+// Limit is the most positions the session's history holds.
+func (s *Session) Limit() int { return s.limit }
+
+// Settle brings sess's history to where s places each block, sess need
+// hold no lease: after s moved blocks, so that no session's device view
+// keeps a block it no longer runs there.
+func (s *Instance) Settle(sess *Session) error {
+	var err error
+	s.As(sess, func(s *Instance) {
+		if sess.ld == nil && sess.tier == nil {
+			return // a session that never ran on a device holds nothing there
+		}
+		err = s.comeBack()
+	})
+	return err
+}
+
+// With calls f with the instance locked: a read of its placement while
+// sessions lease it.
+func (s *Instance) With(f func(*Instance)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f(s)
+}
+
+// As is With with the instance's calls reading and writing sess's history
+// where it is, sess need hold no lease: a read, a Park or a Resume of a
+// session that is not running. What f moves of it, its next run (use)
+// brings back under the instance's placement.
+func (s *Instance) As(sess *Session, f func(*Instance)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if prev := s.Session; prev != sess {
+		if !prev.away {
+			prev.held = append(prev.held[:0], s.onDev...)
+		}
+		sess.away = true
+		s.Session = sess
+		defer func() { s.Session = prev }()
+	}
+	f(s)
 }

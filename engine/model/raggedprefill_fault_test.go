@@ -89,9 +89,9 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 		t.Skipf("%s's prefill form has no run table yet: this gate proved nothing here", g.Name())
 	}
 	batch := func(t *testing.T, g *tier.GPU, fault string) ([][]float32, tier.Stats) {
-		sc := NewRowScheduler(m, len(prompts), seq)
+		sc := newTestBatcher(m, len(prompts), seq)
 		defer sc.Close()
-		place(t, sc.st, g)
+		place(t, sc.in, g)
 		got := make([][]float32, len(prompts))
 		seqs := make([]Seq, len(prompts))
 		for i := range seqs {

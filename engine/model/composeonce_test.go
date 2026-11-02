@@ -246,13 +246,13 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 	// Four prompts of more rows than the reserved width: the scheduler admits
 	// at most the reserved width a step.
 	seqLen := width + 64
-	sc := NewRowScheduler(m, 4, seqLen)
+	sc := newTestBatcher(m, 4, seqLen)
 	defer func() {
 		if !closed {
 			sc.Close()
 		}
 	}()
-	if err := sc.st.SetDevice(g); err != nil {
+	if err := sc.in.SetDevice(g); err != nil {
 		t.Fatal(err)
 	}
 	half := width / 2

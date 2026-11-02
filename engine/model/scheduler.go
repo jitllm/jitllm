@@ -19,10 +19,10 @@ const (
 	numPhases
 )
 
-// A Scheduler leases a session one of its model's instances for a phase and
-// takes it back. Many sessions hold leases on one instance at once, and the
-// instance's steps batch them (StepRuns); a session keeps its lease for the
-// whole phase. A model's scheduler is WithScheduler's, or the default one.
+// A Scheduler leases a session an instance for a phase and takes it back.
+// Many sessions hold leases on one instance at once, and the instance's
+// steps batch them (StepRuns, Batcher); a session keeps its lease for the
+// whole phase. A model's scheduler is WithScheduler's, or its Pool.
 type Scheduler interface {
 	// Acquire leases s an instance for phase p, waiting until one has room
 	// or ctx ends.
@@ -38,11 +38,22 @@ type Lease struct {
 	Phase    Phase
 }
 
-// WithScheduler makes sc the model's scheduler, in place of the default one.
+// WithScheduler makes sc the model's scheduler, in place of its Pool.
 func WithScheduler(sc Scheduler) Option { return func(l *loadOpts) { l.opt.sched = sc } }
 
-// served is an instance the model's scheduler hands out (Model.Serve): the
-// phases it is for and the sessions it batches at once.
+// Pool is the default Scheduler over a set of instances (Serve): it leases
+// the instance for the phase with the fewest leases that has room for the
+// session, one served for that phase alone first, and waits when none has.
+// A model has one (Model.Serve); NewPool makes another, for a Batcher of
+// its own (BatchOver).
+type Pool struct {
+	mu   sync.Mutex
+	list []*served
+	wake chan struct{}
+}
+
+// served is an instance a Pool hands out: the phases it is for and the
+// sessions it batches at once.
 type served struct {
 	in     *Instance
 	phases [numPhases]bool
@@ -50,22 +61,14 @@ type served struct {
 	leases int
 }
 
-// instances is the model's served instances and the default scheduler's
-// state over them.
-type instances struct {
-	mu   sync.Mutex
-	list []*served
-	wake chan struct{}
-}
+// NewPool is a Pool serving no instance yet.
+func NewPool() *Pool { return &Pool{} }
 
-// Serve hands instance in to the model's scheduler for phases (every phase
-// when none is named), batching up to width sessions at once (MaxStepRows
-// when width < 1). The instance was composed when it was made; serving it
-// composes nothing.
-func (m *Model) Serve(in *Instance, width int, phases ...Phase) error {
-	if in.m != m {
-		return fmt.Errorf("model: the instance is another model's")
-	}
+// Serve hands instance in to the pool for phases (every phase when none is
+// named), batching up to width sessions at once (MaxStepRows when width <
+// 1). The instance was composed when it was made; serving it composes
+// nothing.
+func (pl *Pool) Serve(in *Instance, width int, phases ...Phase) error {
 	if width < 1 {
 		width = MaxStepRows
 	}
@@ -81,63 +84,76 @@ func (m *Model) Serve(in *Instance, width int, phases ...Phase) error {
 		}
 		sv.phases[p] = true
 	}
-	m.insts.mu.Lock()
-	m.insts.list = append(m.insts.list, sv)
-	m.insts.wakeAll()
-	m.insts.mu.Unlock()
+	pl.mu.Lock()
+	pl.list = append(pl.list, sv)
+	pl.wakeAll()
+	pl.mu.Unlock()
 	return nil
 }
 
-// Unserve takes in back from the scheduler once no session leases it.
-func (m *Model) Unserve(in *Instance) error {
-	m.insts.mu.Lock()
-	defer m.insts.mu.Unlock()
-	for i, sv := range m.insts.list {
+// Unserve takes in back from the pool once no session leases it.
+func (pl *Pool) Unserve(in *Instance) error {
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	for i, sv := range pl.list {
 		if sv.in != in {
 			continue
 		}
 		if sv.leases > 0 {
 			return fmt.Errorf("model: %d session(s) still lease the instance", sv.leases)
 		}
-		m.insts.list = append(m.insts.list[:i], m.insts.list[i+1:]...)
+		pl.list = append(pl.list[:i], pl.list[i+1:]...)
 		return nil
 	}
 	return nil
 }
 
+// first is the pool's first instance, which lays out its sessions'
+// history (NewSession), nil while it serves none.
+func (pl *Pool) first() *Instance {
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	if len(pl.list) == 0 {
+		return nil
+	}
+	return pl.list[0].in
+}
+
+// NewSession opens a conversation of up to maxSeq positions leased from
+// the pool, its history laid out as the pool's instances' is. It composes
+// nothing.
+func (pl *Pool) NewSession(maxSeq int) (*Session, error) {
+	in := pl.first()
+	if in == nil {
+		return nil, fmt.Errorf("model: no instance is served (Serve)")
+	}
+	sess, err := in.NewSession(maxSeq)
+	if err != nil {
+		return nil, err
+	}
+	sess.sched = pl
+	return sess, nil
+}
+
 // wakeAll tells every Acquire waiting that the instances changed. Called
 // under mu.
-func (is *instances) wakeAll() {
-	if is.wake != nil {
-		close(is.wake)
-		is.wake = nil
+func (pl *Pool) wakeAll() {
+	if pl.wake != nil {
+		close(pl.wake)
+		pl.wake = nil
 	}
 }
 
-// scheduler is the model's: WithScheduler's, or the default one.
-func (m *Model) scheduler() Scheduler {
-	if m.opt.sched != nil {
-		return m.opt.sched
-	}
-	return defaultScheduler{m}
-}
-
-// defaultScheduler leases the served instance for the phase with the fewest
-// leases that has room for the session, one served for that phase alone
-// first, and waits when none has.
-type defaultScheduler struct{ m *Model }
-
-func (d defaultScheduler) Acquire(ctx context.Context, s *Session, p Phase) (*Lease, error) {
-	is := &d.m.insts
+func (pl *Pool) Acquire(ctx context.Context, s *Session, p Phase) (*Lease, error) {
 	for {
-		is.mu.Lock()
-		if len(is.list) == 0 {
-			is.mu.Unlock()
-			return nil, fmt.Errorf("model: no instance serves this model (Model.Serve)")
+		pl.mu.Lock()
+		if len(pl.list) == 0 {
+			pl.mu.Unlock()
+			return nil, fmt.Errorf("model: no instance is served (Serve)")
 		}
 		var best *served
 		fits := false
-		for _, sv := range is.list {
+		for _, sv := range pl.list {
 			if !sv.phases[p] || !sv.in.holds(s) {
 				continue
 			}
@@ -151,19 +167,23 @@ func (d defaultScheduler) Acquire(ctx context.Context, s *Session, p Phase) (*Le
 		}
 		if best != nil {
 			best.leases++
-			is.mu.Unlock()
+			pl.mu.Unlock()
 			s.held1 = Lease{Instance: best.in, Session: s, Phase: p}
 			return &s.held1, nil
 		}
 		if !fits {
-			is.mu.Unlock()
+			pl.mu.Unlock()
 			return nil, fmt.Errorf("model: no served instance holds a session of %d positions for phase %d", s.limit, p)
 		}
-		if is.wake == nil {
-			is.wake = make(chan struct{})
+		if err := ctx.Err(); err != nil {
+			pl.mu.Unlock()
+			return nil, err
 		}
-		w := is.wake
-		is.mu.Unlock()
+		if pl.wake == nil {
+			pl.wake = make(chan struct{})
+		}
+		w := pl.wake
+		pl.mu.Unlock()
 		select {
 		case <-w:
 		case <-ctx.Done():
@@ -172,17 +192,16 @@ func (d defaultScheduler) Acquire(ctx context.Context, s *Session, p Phase) (*Le
 	}
 }
 
-func (d defaultScheduler) Release(l *Lease) {
-	is := &d.m.insts
-	is.mu.Lock()
-	for _, sv := range is.list {
+func (pl *Pool) Release(l *Lease) {
+	pl.mu.Lock()
+	for _, sv := range pl.list {
 		if sv.in == l.Instance && sv.leases > 0 {
 			sv.leases--
 			break
 		}
 	}
-	is.wakeAll()
-	is.mu.Unlock()
+	pl.wakeAll()
+	pl.mu.Unlock()
 }
 
 // only says sv serves phase p and no other.
@@ -195,6 +214,25 @@ func (sv *served) only(p Phase) bool {
 	return true
 }
 
+// Serve hands instance in to the model's pool; see Pool.Serve.
+func (m *Model) Serve(in *Instance, width int, phases ...Phase) error {
+	if in.m != m {
+		return fmt.Errorf("model: the instance is another model's")
+	}
+	return m.insts.Serve(in, width, phases...)
+}
+
+// Unserve takes in back from the model's pool; see Pool.Unserve.
+func (m *Model) Unserve(in *Instance) error { return m.insts.Unserve(in) }
+
+// scheduler is the model's: WithScheduler's, or its pool.
+func (m *Model) scheduler() Scheduler {
+	if m.opt.sched != nil {
+		return m.opt.sched
+	}
+	return &m.insts
+}
+
 // holds says s's history fits instance s0: the same blocks, the same KV
 // format, and no more positions than it was composed for.
 func (s0 *Instance) holds(s *Session) bool {
@@ -202,21 +240,31 @@ func (s0 *Instance) holds(s *Session) bool {
 }
 
 // NewSession opens a conversation of up to maxSeq positions on the model's
-// served instances, its history laid out as theirs is. It composes nothing.
+// served instances, leased by the model's scheduler. It composes nothing.
 func (m *Model) NewSession(maxSeq int) (*Session, error) {
-	m.insts.mu.Lock()
-	var in *Instance
-	if len(m.insts.list) > 0 {
-		in = m.insts.list[0].in
-	}
-	m.insts.mu.Unlock()
+	in := m.insts.first()
 	if in == nil {
 		return nil, fmt.Errorf("model: no instance serves this model (Model.Serve)")
 	}
-	maxSeq = min(maxSeq, m.Cfg.NCtx)
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	return in.newHistory(maxSeq)
+	sess, err := in.NewSession(maxSeq)
+	if err != nil {
+		return nil, err
+	}
+	sess.sched = m.scheduler()
+	return sess, nil
+}
+
+// NewSession is a session of up to maxSeq positions laid out as s's history
+// is, leased by s's model's scheduler. It composes nothing.
+func (s *Instance) NewSession(maxSeq int) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.newHistory(min(maxSeq, s.m.Cfg.NCtx))
+	if err != nil {
+		return nil, err
+	}
+	sess.sched = s.m.scheduler()
+	return sess, nil
 }
 
 // newHistory is a session laid out as s's history is, of up to maxSeq
@@ -256,7 +304,7 @@ func (s *Session) Acquire(ctx context.Context, p Phase) error {
 		return nil
 	}
 	s.Release()
-	l, err := s.model.scheduler().Acquire(ctx, s, p)
+	l, err := s.scheduler().Acquire(ctx, s, p)
 	if err != nil {
 		return err
 	}
@@ -264,8 +312,16 @@ func (s *Session) Acquire(ctx context.Context, p Phase) error {
 	return nil
 }
 
+// scheduler is the session's: the one that leases it.
+func (s *Session) scheduler() Scheduler {
+	if s.sched != nil {
+		return s.sched
+	}
+	return s.model.scheduler()
+}
+
 // Run is Acquire, then a call of f with the instance running for the
-// session.
+// session. f must not call StepRuns: the instance is held for the call.
 func (s *Session) Run(ctx context.Context, p Phase, f func(in *Instance) error) error {
 	if err := s.Acquire(ctx, p); err != nil {
 		return err
@@ -279,13 +335,32 @@ func (s *Session) Run(ctx context.Context, p Phase, f func(in *Instance) error) 
 	return f(in)
 }
 
+// Hold is Acquire, then the instance locked and running for the session
+// until Unhold: for a caller that makes several calls on it in a row. It
+// allocates nothing. The caller must not call StepRuns while it holds it.
+func (s *Session) Hold(ctx context.Context, p Phase) (*Instance, error) {
+	if err := s.Acquire(ctx, p); err != nil {
+		return nil, err
+	}
+	in := s.lease.Instance
+	in.mu.Lock()
+	if err := in.use(s); err != nil {
+		in.mu.Unlock()
+		return nil, err
+	}
+	return in, nil
+}
+
+// Unhold lets go of the instance Hold returned.
+func (s *Session) Unhold(in *Instance) { in.mu.Unlock() }
+
 // Release hands the session's lease back to the scheduler. Its history
 // stays where it is.
 func (s *Session) Release() {
 	if s.lease == nil {
 		return
 	}
-	s.model.scheduler().Release(s.lease)
+	s.scheduler().Release(s.lease)
 	s.lease = nil
 }
 

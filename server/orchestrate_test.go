@@ -199,7 +199,7 @@ func (f *orchFixture) declines(id string) []any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []any
-	for _, d := range s.st.DeviceDeclines() {
+	for _, d := range s.in().DeviceDeclines() {
 		out = append(out, d)
 	}
 	return out

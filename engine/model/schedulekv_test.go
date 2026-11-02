@@ -7,16 +7,14 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestSchedulerUnderAKVBudgetMatchesOneWithout runs the Scheduler with small KV
-// pages, a store and a budget far under the history, so pages are sealed,
-// evicted and faulted back every step. It must give exactly the tokens of the
-// same Scheduler with no budget.
+// TestSchedulerUnderAKVBudgetMatchesOneWithout runs the Batcher with small KV
+// pages, and each session a store and a budget far under its history, so
+// pages are sealed, evicted and faulted back every step. It must give exactly
+// the tokens of the same Batcher with no budget.
 //
-// The sequences outnumber the rows, so a retired row is readmitted while the
-// others are pages ahead: the slowest row falls back to position 0 and writes
-// into pages the others have long since sealed and let go. A page holds every
-// row's slots, so a write into an evicted one that allocates instead of
-// faulting it back wipes the other rows' history there.
+// The sequences outnumber the instance's width, so a retired sequence's place
+// is taken while the others are pages ahead, every session paging its own
+// history beside theirs in the same steps.
 func TestSchedulerUnderAKVBudgetMatchesOneWithout(t *testing.T) {
 	p := testmodels.Path("tinyllama-1.1b-q3_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
@@ -39,16 +37,18 @@ func TestSchedulerUnderAKVBudgetMatchesOneWithout(t *testing.T) {
 			prompts[r][j] = int32((11 + r*457 + j*31) % m.Cfg.NVocab)
 		}
 	}
-	run := func(budget bool) ([][]int32, *Instance) {
-		sc := NewRowScheduler(m, rows, maxSeq)
-		t.Cleanup(sc.Close)
+	run := func(budget bool) ([][]int32, BatcherStats) {
+		var opts []BatcherOption
 		if budget {
-			sc.st.SetKVStore(NewMemStore())
-			// Two pages a layer's worth, against histories reaching five.
-			if err := sc.st.SetKVBudget(uint64(2*len(sc.st.kv.layers)) * sc.st.kv.layers[0].pageBytes() * 2); err != nil {
-				t.Fatal(err)
-			}
+			store := NewMemStore()
+			opts = append(opts, WithSessionSetup(func(s *Session) error {
+				s.SetKVStore(store)
+				// Two pages a layer's worth, against histories reaching five.
+				return s.SetKVBudget(uint64(2*len(s.kv.layers)) * s.kv.layers[0].pageBytes() * 2)
+			}))
 		}
+		sc := newTestBatcher(m, rows, maxSeq, opts...)
+		t.Cleanup(sc.Close)
 		seqs := make([]*Seq, len(prompts))
 		for r := range prompts {
 			seqs[r] = &Seq{Prompt: prompts[r], MaxTokens: gens[r]}
@@ -71,12 +71,12 @@ func TestSchedulerUnderAKVBudgetMatchesOneWithout(t *testing.T) {
 			}
 			out[r] = s.Out
 		}
-		return out, sc.st
+		return out, sc.Stats()
 	}
 	want, _ := run(false)
 	got, st := run(true)
 	// The configuration under test must be the one that ran.
-	stored, fetched, evicted := st.KVPageStats()
+	stored, fetched, evicted := st.KVStored, st.KVFetched, st.KVEvicted
 	if evicted == 0 || fetched == 0 {
 		t.Fatalf("%d page(s) stored, %d fetched, %d evicted: the budget never forced a "+
 			"page out and back, so this compared two resident runs", stored, fetched, evicted)

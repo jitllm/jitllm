@@ -6,43 +6,26 @@ import (
 	"sync"
 	"testing"
 
+	mdl "github.com/jitllm/jitllm/engine/model"
+
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
-// scratchBytes is the host scratch a model's instances hold -- pooled and in
-// live sessions -- and the scratch the model holds for host steps and the
-// next prompt: the engine's own byte counts, not the allocator's RSS.
+// scratchBytes is the host scratch the model's instance holds and the
+// scratch the model holds for host steps and the next prompt: the engine's
+// own byte counts, not the allocator's RSS. Sessions are histories and hold
+// none.
 func scratchBytes(e *Engine, lm *LoadedModel) (states, model uint64, n int) {
-	e.mu.Lock()
-	idle := append(lm.ttft.idle[:0:0], lm.ttft.idle...)
-	var live []*Session
-	for _, s := range lm.sessions {
-		live = append(live, s)
-	}
-	e.mu.Unlock()
-	for _, st := range idle {
-		states += st.ScratchBytes()
-	}
-	for _, s := range live {
-		s.mu.Lock()
-		states += s.st.ScratchBytes()
-		s.mu.Unlock()
-	}
-	return states, lm.m.StepScratchBytes(), len(idle) + len(live)
+	lm.inst.With(func(in *mdl.Instance) { states = in.ScratchBytes() })
+	return states, lm.m.StepScratchBytes(), 1
 }
 
 // TestHostBatchScratchDoesNotGrowWithRows: a burst of sixteen concurrent
 // generates on a host model, at the model's whole context, leaves the
-// model's instances -- pooled for the next requests -- holding no more step
-// scratch than one request alone left them, and the model one step's
-// scratch for the next host step: memory follows the rows in flight, not
-// the widest burst a pooled instance ever led. Counted on the engine's own
-// bytes (Instance.ScratchBytes, Model.StepScratchBytes).
-//
-// Against a step led by its first run's instance keeping the scratch it grew,
-// every pooled instance that ever led a step holds a step's rows -- and its
-// scores rows at the whole context -- and the instances' sum grows with the
-// burst.
+// model's instance holding no more step scratch than one request alone left
+// it, and the model one step's scratch for the next host step: memory follows
+// the rows in flight, not the widest burst the instance ever ran. Counted on
+// the engine's own bytes (Instance.ScratchBytes, Model.StepScratchBytes).
 func TestHostBatchScratchDoesNotGrowWithRows(t *testing.T) {
 	e, lm, c := hostBatchEngine(t, "Llama-3.2-1B-Instruct-Q4_K_M.jlm", Config{DefaultMaxSeq: -1, NoMemCache: true}) // -1: the model's whole context
 	base := strings.Repeat("The little dog ran to the park and played with a red ball. ", 10)

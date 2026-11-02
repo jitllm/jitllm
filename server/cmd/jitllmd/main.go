@@ -203,8 +203,6 @@ func serve(args []string) {
 	hostMem := fs.String("host-mem", "",
 		"host memory the loaded models divide, e.g. 64G (default: re-read at each load, eight tenths "+
 			"of the smallest of the cgroup limit, the bound NUMA nodes' memory and what is available)")
-	pool := fs.Int("session-pool", 0,
-		"reset sessions each model keeps for model_id requests; 0 is -sessions, -1 none")
 	maxQueue := fs.Int("max-queue", 0,
 		"requests one model holds, running or waiting, before it answers 429; 0 is 64, -1 unbounded")
 	retry := fs.Duration("retry-after", time.Second, "the Retry-After a 429 for a full queue names")
@@ -343,7 +341,6 @@ func serve(args []string) {
 		NoMemCache:    *noStore,
 		MemCacheBytes: storeBytes,
 		HostBudget:    hostBytes,
-		SessionPool:   *pool,
 		MaxQueue:      *maxQueue,
 		RetryAfter:    *retry,
 		WarmLoads:     *warm,

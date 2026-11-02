@@ -207,45 +207,41 @@ func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 	}
 }
 
-// TestPooledStatesAnswerAsFreshOnes alternates two prompts whose answers
-// differ on an engine that pools its instances and on one that does not: the
-// answers agree request for request (no history leaks from one request into
-// the next), the pool builds one instance and hands it out again, and the other
-// engine builds and closes one per request.
-func TestPooledStatesAnswerAsFreshOnes(t *testing.T) {
-	pooled, plm := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
-	fresh, flm := ttftEngine(t, smallModel, Config{NoMemCache: true, SessionPool: -1}, LoadOptions{})
-	x := pooled.encodeText(t, plm, "Once upon a time")
-	y := pooled.encodeText(t, plm, "The little dog ran to the park and")
+// TestSessionsAnswerAsFreshOnes alternates two prompts whose answers differ
+// on one engine and, each on an engine of its own, on fresh ones: the answers
+// agree request for request (no history leaks from one request's session into
+// the next on the model's one instance), every request opens a session and
+// closes it, and after the first none asks the composer for anything.
+func TestSessionsAnswerAsFreshOnes(t *testing.T) {
+	shared, slm := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
+	x := shared.encodeText(t, slm, "Once upon a time")
+	y := shared.encodeText(t, slm, "The little dog ran to the park and")
 	var answers [2][]int32
+	var composed int64
 	for i := 0; i < 6; i++ {
 		p := [][]int32{x, y}[i%2]
+		fresh, _ := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
 		want := generate(t, fresh, GenerateOptions{ModelID: "m", Prompt: idsPrompt(p), MaxTokens: 16})
-		got := generate(t, pooled, GenerateOptions{ModelID: "m", Prompt: idsPrompt(p), MaxTokens: 16})
+		got := generate(t, shared, GenerateOptions{ModelID: "m", Prompt: idsPrompt(p), MaxTokens: 16})
 		if !slices.Equal(want.ids, got.ids) {
-			t.Fatalf("request %d: a pooled State answered %v, a fresh one %v", i, got.ids, want.ids)
+			t.Fatalf("request %d: the shared instance answered %v, a fresh one %v", i, got.ids, want.ids)
 		}
 		answers[i%2] = got.ids
+		if i == 0 {
+			composed = slm.m.CPUComposes()
+		}
 	}
 	if slices.Equal(answers[0], answers[1]) {
 		t.Fatal("the two prompts have the same answer, so a leaked history could not show")
 	}
-	ps, fs := pooled.MemCacheStats(plm), fresh.MemCacheStats(flm)
-	if ps.StatesCreated != 1 || ps.StatesReused != 5 || ps.StatesClosed != 0 || ps.Pooled != 1 {
-		t.Fatalf("pooled engine: %+v; want one State built, reused five times, none closed", ps)
+	if n := slm.m.CPUComposes() - composed; n != 0 {
+		t.Fatalf("five requests after the first asked the composer %d times", n)
 	}
-	if fs.StatesCreated != 6 || fs.StatesClosed != 6 || fs.Pooled != 0 {
-		t.Fatalf("unpooled engine: %+v; want six built and six closed", fs)
+	if st := shared.MemCacheStats(slm); st.SessionsOpened != 6 || st.SessionsClosed != 6 {
+		t.Fatalf("%+v; want six sessions opened and six closed", st)
 	}
-	if n := len(pooled.Sessions()); n != 0 {
-		t.Fatalf("a pooled State is listed as %d open session(s)", n)
-	}
-	// An unload closes the pool.
-	if _, err := pooled.UnloadModel("m", false); err != nil {
-		t.Fatalf("an idle pool kept the model from unloading: %v", err)
-	}
-	if ps := pooled.MemCacheStats(plm); ps.StatesClosed != 1 || ps.Pooled != 0 {
-		t.Fatalf("after the unload: %+v", ps)
+	if n := len(shared.Sessions()); n != 0 {
+		t.Fatalf("a request's session is listed as %d open session(s)", n)
 	}
 }
 
@@ -258,25 +254,26 @@ func (e *Engine) encodeText(t *testing.T, lm *LoadedModel, s string) []int32 {
 	return ids
 }
 
-// TestAWarmLoadLeavesAPooledState: a load with Warm runs its prefill and
-// decode step on an instance that goes into the pool, so the first request
-// builds none; it stores nothing and counts nothing as served.
-func TestAWarmLoadLeavesAPooledState(t *testing.T) {
+// TestAWarmLoadRunsOnTheModelsInstance: a load with Warm runs its prefill
+// and decode step in a session on the model's instance, so the first request
+// composes nothing; it stores nothing and counts nothing as served.
+func TestAWarmLoadRunsOnTheModelsInstance(t *testing.T) {
 	e, lm := ttftEngine(t, smallModel, Config{}, LoadOptions{Warm: true})
 	st := e.MemCacheStats(lm)
-	if !st.Warmed || st.StatesCreated != 1 || st.Pooled != 1 {
-		t.Fatalf("after a warm load: %+v; want one State built and pooled", st)
+	if !st.Warmed || st.SessionsOpened != 1 || st.SessionsClosed != 1 {
+		t.Fatalf("after a warm load: %+v; want one session opened and closed", st)
 	}
 	if st.Store.Sets != 0 || lm.tokensPrefilled.Load() != 0 || lm.tokensGenerated.Load() != 0 {
 		t.Fatalf("the warm-up was counted as served or stored: %+v, %d prefilled", st, lm.tokensPrefilled.Load())
 	}
+	composed := lm.m.CPUComposes()
 	generate(t, e, GenerateOptions{ModelID: "m", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 4})
-	if st := e.MemCacheStats(lm); st.StatesCreated != 1 || st.StatesReused != 1 {
-		t.Fatalf("the first request after a warm load: %+v; want the warm State reused", st)
+	if n := lm.m.CPUComposes() - composed; n != 0 {
+		t.Fatalf("the first request after a warm load asked the composer %d times", n)
 	}
 
 	_, cold := ttftEngine(t, smallModel, Config{}, LoadOptions{})
-	if st := &cold.ttft; st.warmed.Load() || st.statesCreated.Load() != 0 {
+	if st := &cold.ttft; st.warmed.Load() || st.sessionsOpened.Load() != 0 {
 		t.Fatal("a load without Warm warmed")
 	}
 }
@@ -306,7 +303,7 @@ func TestAFullQueueIsRefusedWith429(t *testing.T) {
 			})
 	}()
 	<-holding
-	created := lm.ttft.statesCreated.Load()
+	created := lm.ttft.sessionsOpened.Load()
 
 	post := func(path, body string) *http.Response {
 		r, err := http.Post(c.url+path, "application/json", strings.NewReader(body))
@@ -333,8 +330,8 @@ func TestAFullQueueIsRefusedWith429(t *testing.T) {
 	}
 	_, err := c.inference.Complete(context.Background(), req(&v1.GenerateRequest{ModelId: "m", Prompt: text(story), MaxTokens: 2}))
 	wantCode(t, "Complete past a full queue", err, connect.CodeResourceExhausted)
-	if got := lm.ttft.statesCreated.Load(); got != created {
-		t.Fatalf("a refused request built %d State(s)", got-created)
+	if got := lm.ttft.sessionsOpened.Load(); got != created {
+		t.Fatalf("a refused request opened %d session(s)", got-created)
 	}
 	if st := e.MemCacheStats(lm); st.Refused != 5 {
 		t.Fatalf("refused %d, want 5", st.Refused)
@@ -360,11 +357,11 @@ func TestAFullQueueIsRefusedWith429(t *testing.T) {
 	}
 }
 
-// TestACancelledPrefillLeavesThePooledStateClean: a request whose client has
+// TestACancelledPrefillLeavesTheInstanceClean: a request whose client has
 // gone stops its prefill between chunks (ErrPrefillInterrupted becomes the
-// context's error, with no Started sent), and the instance it leaves in the pool
-// answers the next request as a fresh one.
-func TestACancelledPrefillLeavesThePooledStateClean(t *testing.T) {
+// context's error, with no Started sent), and the model's instance answers the
+// next request as a fresh engine does.
+func TestACancelledPrefillLeavesTheInstanceClean(t *testing.T) {
 	e, lm := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
 	p := longPrompt(lm.m)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -379,13 +376,10 @@ func TestACancelledPrefillLeavesThePooledStateClean(t *testing.T) {
 		t.Fatalf("the cancelled prefill counted %d positions", lm.tokensPrefilled.Load())
 	}
 	got := generate(t, e, GenerateOptions{ModelID: "m", Prompt: idsPrompt(p), MaxTokens: 8})
-	fresh, _ := ttftEngine(t, smallModel, Config{NoMemCache: true, SessionPool: -1}, LoadOptions{})
+	fresh, _ := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
 	want := generate(t, fresh, GenerateOptions{ModelID: "m", Prompt: idsPrompt(p), MaxTokens: 8})
 	if !slices.Equal(want.ids, got.ids) {
-		t.Fatalf("after a cancelled prefill the pooled State answered %v, a fresh one %v", got.ids, want.ids)
-	}
-	if st := e.MemCacheStats(lm); st.StatesReused != 1 {
-		t.Fatalf("%+v: the cancelled request's State was not pooled", st)
+		t.Fatalf("after a cancelled prefill the instance answered %v, a fresh engine %v", got.ids, want.ids)
 	}
 }
 
@@ -447,7 +441,10 @@ func TestACancelledRowLeavesItsPromptUnrun(t *testing.T) {
 		fed := 0
 		if begun {
 			fed = 4
-			if _, err := s.st.Prefill(p[:fed]); err != nil {
+			if err := s.ms.Run(context.Background(), model.PhasePrefill, func(in *model.Instance) error {
+				_, err := in.Prefill(p[:fed])
+				return err
+			}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -474,7 +471,7 @@ func TestACancelledRowLeavesItsPromptUnrun(t *testing.T) {
 		if !errors.Is(r.result.err, errPromptCancelled) || r.result.reason != FinishCancelled {
 			t.Fatalf("begun %v: the row ended %v, %v", begun, r.result.reason, r.result.err)
 		}
-		if pos := s.st.Pos(); pos != 0 {
+		if pos := s.ms.Pos(); pos != 0 {
 			t.Fatalf("begun %v: the cancelled row left its State at position %d", begun, pos)
 		}
 		e.CloseSession(s.id)

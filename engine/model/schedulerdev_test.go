@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// TestSchedulerOnDeviceMatchesEachSequenceAlone runs the Scheduler with every
+// TestSchedulerOnDeviceMatchesEachSequenceAlone runs the Batcher with every
 // block and the head on one device: each step one ragged step of the decoding
 // rows and a budget of prompt rows (the wanted rows' logits read back and
 // sampled on the host). There are more prompts than
@@ -85,11 +85,11 @@ func schedulerOnDeviceModel(t *testing.T, m *Model, open func(*testing.T) *tier.
 
 	g := open(t)
 	defer g.Close()
-	sc := NewRowScheduler(m, rows, seq)
+	sc := newTestBatcher(m, rows, seq)
 	defer sc.Close()
-	sc.st.SetDevice(g)
-	if sc.st.GPULayers() != m.Cfg.NLayer || !sc.st.HeadOnDevice() {
-		t.Fatalf("batch: placed %d of %d blocks: %q", sc.st.GPULayers(), m.Cfg.NLayer, g.Err())
+	sc.in.SetDevice(g)
+	if sc.in.GPULayers() != m.Cfg.NLayer || !sc.in.HeadOnDevice() {
+		t.Fatalf("batch: placed %d of %d blocks: %q", sc.in.GPULayers(), m.Cfg.NLayer, g.Err())
 	}
 	seqs := make([]*Seq, len(prompts))
 	for i := range prompts {

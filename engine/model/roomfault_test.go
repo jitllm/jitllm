@@ -13,22 +13,22 @@ import (
 // The paths a device short of room takes rather than failing a step, each
 // forced by tier.SetRoomFault and each held to a violation it must not
 // survive (RULE 10): a recurrent seat reset from host-written zeros, a
-// Scheduler clamped to the batched scratch the device holds (nn.RowsWidther),
+// Batcher clamped to the batched scratch the device holds (nn.RowsWidther),
 // and a step whose recurrent seats do not fit run with the blocks home
-// (nn.RowsRoomer, RowSchedulerStats.RoomToCPU). Every forced arm's tokens are the
+// (nn.RowsRoomer, BatcherStats.RoomToCPU). Every forced arm's tokens are the
 // host's.
 
 // roomBatch is the hybrid fixture's batch on the host: the tokens each forced
 // arm must give.
-func roomBatch(t *testing.T, m *Model, g *tier.GPU, width int) ([][]int32, RowSchedulerStats, error) {
+func roomBatch(t *testing.T, m *Model, g *tier.GPU, width int) ([][]int32, BatcherStats, error) {
 	t.Helper()
-	sc := NewRowScheduler(m, 3, 300, WithPromptBudget(width))
+	sc := newTestBatcher(m, 3, 300, WithPromptBudget(width))
 	defer sc.Close()
 	if g != nil {
-		if err := sc.st.SetDeviceLayers(g, -1); err != nil {
+		if err := sc.in.SetDeviceLayers(g, -1); err != nil {
 			t.Fatal(err)
 		}
-		if sc.st.GPULayers() == 0 {
+		if sc.in.GPULayers() == 0 {
 			t.Fatalf("no block on the device: %s", g.Err())
 		}
 	}
