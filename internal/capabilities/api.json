@@ -134,6 +134,11 @@
           "note": "speculative decoding on or off for this request; absent takes the session's"
         },
         {
+          "name": "jitllm_decode_groups",
+          "type": "integer",
+          "note": "at most this many decode groups while the request decodes on a model over several cards; 1 keeps every row in one step"
+        },
+        {
           "name": "response_format",
           "type": "array",
           "note": "text, json_object, or json_schema (json_schema.schema compiled to a grammar); a forced tool call takes precedence"
@@ -252,6 +257,11 @@
           "name": "jitllm_speculate",
           "type": "bool",
           "note": "speculative decoding on or off for this request; absent takes the session's"
+        },
+        {
+          "name": "jitllm_decode_groups",
+          "type": "integer",
+          "note": "at most this many decode groups while the request decodes on a model over several cards; 1 keeps every row in one step"
         },
         {
           "name": "response_format",
