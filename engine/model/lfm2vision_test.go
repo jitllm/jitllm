@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // LFM2-VL against transformers (scripts/lfm2visiongold.py): the processor's
@@ -269,25 +269,25 @@ func TestLFM2RealMatchesTransformers(t *testing.T) {
 
 			for _, arm := range towerArms() {
 				spec := arm.spec
-				gpu, err := tier.OpenWith(tier.WithDevices(spec))
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+				if err != nil || gpux == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
 				}
 				t.Run(arm.String(), func(t *testing.T) {
-					defer gpu.Close()
+					defer gpux.Close()
 					s := tw.testState()
 					defer s.Close()
-					s.SetDevice(gpu)
+					s.SetDevice(gpux)
 					if n := s.GPUBlocks(); n != c.NLayer {
-						t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, gpu.Err())
+						t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, gpux.Err())
 					}
 					_, _, pcs, err := tw.LFM2Pieces(decodeImage(t, path))
 					if err != nil {
 						t.Fatal(err)
 					}
 					var got []float32
-					arm.served(t, gpu, c.NLayer*len(pcs), func() { _, _, got, _ = lfm2Encode(t, tw, s, path) })
+					arm.served(t, gpux, c.NLayer*len(pcs), func() { _, _, got, _ = lfm2Encode(t, tw, s, path) })
 					dn, _ := nmseOf(got, emb)
 					tn, _ := nmse32(wantEmb, got)
 					t.Logf("%s, all %d blocks: NMSE %.3e against the host, %.3e against transformers",

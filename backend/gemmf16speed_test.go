@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestGemmF16Speed times GemmVolta's m16n8 form against MatVecMMA on

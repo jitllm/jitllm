@@ -5,9 +5,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 const k3GoldScript = "scripts/k3gold.py"
@@ -211,39 +211,39 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 	}
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			st := m.NewInstance(len(g.IDs) + 2)
 			defer st.Close()
-			st.SetDeviceLayers(gpu, -1)
+			st.SetDeviceLayers(gpux, -1)
 			if st.GPULayers() != nl || !st.HeadOnDevice() {
-				t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), nl, st.HeadOnDevice(), gpu.Err())
+				t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), nl, st.HeadOnDevice(), gpux.Err())
 			}
-			s0 := gpu.Stats()
+			s0 := gpux.Stats()
 			lg, err := st.Prefill(g.IDs)
 			if err != nil {
 				t.Fatal(err)
 			}
-			s1 := gpu.Stats()
+			s1 := gpux.Stats()
 			if _, err := st.Forward(Greedy(lg)); err != nil {
 				t.Fatal(err)
 			}
-			s2 := gpu.Stats()
+			s2 := gpux.Stats()
 			if composedByDefault {
 				// The composer runs each block whole: the prompt's chunk one
 				// served prompt part a block, a decode token one block step a
 				// block, none declined.
-				p0, pd0 := s0.ServedPart(tier.ComposedPrompt)
-				p1, pd1 := s1.ServedPart(tier.ComposedPrompt)
-				b1, bd1 := s1.ServedPart(tier.ComposedBlock)
-				b2, bd2 := s2.ServedPart(tier.ComposedBlock)
+				p0, pd0 := s0.ServedPart(gpu.ComposedPrompt)
+				p1, pd1 := s1.ServedPart(gpu.ComposedPrompt)
+				b1, bd1 := s1.ServedPart(gpu.ComposedBlock)
+				b2, bd2 := s2.ServedPart(gpu.ComposedBlock)
 				t.Logf("prefill of %d: %d prompt blocks served, %d declined; a decode token: %d block steps served, %d declined",
 					len(g.IDs), p1-p0, pd1-pd0, b2-b1, bd2-bd1)
 				if p1-p0 != nl || pd1 != pd0 {

@@ -3,11 +3,11 @@ package model
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // Qwen3.8-Flash-Next (transformers' Qwen4ExpForCausalLM, llama.cpp's
@@ -384,7 +384,7 @@ func (s *Instance) q4eExpand(x []float32, rows int) { s.q4eExpandAt(x, rows, 0) 
 // and those are laid into the chunk instead.
 func (s *Instance) q4eExpandAt(x []float32, rows, base int) {
 	c := s.m.Cfg
-	if s.q4In == nil && s.cpuExpand(x, rows) == jit.DeclineServes {
+	if s.q4In == nil && s.cpuExpand(x, rows) == composer.DeclineServes {
 		return
 	}
 	if s.q4In != nil {
@@ -488,7 +488,7 @@ func (s *Instance) q4eCollapse(x []float32, n int) error {
 	hc := &s.m.q4eHead.hc
 	if s.lo >= c.NLayer {
 		hc = &s.m.layers[s.lo].q4e.head
-	} else if s.cpuCollapse(x, n) == jit.DeclineServes {
+	} else if s.cpuCollapse(x, n) == composer.DeclineServes {
 		return nil
 	}
 	if err := s.hcMix(x, n, hc); err != nil {

@@ -8,9 +8,9 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestEveryModelRunsPreVNNI decodes and prefills every model under 2 GiB with

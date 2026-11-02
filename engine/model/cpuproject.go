@@ -3,11 +3,11 @@ package model
 import (
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // The tower's projector on the CPU device (towerProjOf): where the composed
@@ -25,7 +25,7 @@ type cpuProjState struct {
 	why      Uncovered
 	err      error
 	served   int
-	declined [jit.NumDeclines]int
+	declined [composer.NumDeclines]int
 	// req is the request's words: the grid's width, then a row's name a
 	// row (the regroup's patch, or the put-back's merged row). in, grp and
 	// out are a call's rows where a buffer it is handed stops short of the
@@ -42,7 +42,7 @@ type cpuProjState struct {
 	entryWhy      Uncovered
 	entryErr      error
 	entryServed   int
-	entryDeclined [jit.NumDeclines]int
+	entryDeclined [composer.NumDeclines]int
 	pos           []uint32
 	posW          tensor
 	px, x         []float32
@@ -78,7 +78,7 @@ func (s *Instance) picBufs() {
 		return
 	}
 	n := s.vis.t.Cfg.MaxSeq()
-	st.req, st.pos = make([]uint32, jit.RequestRows+n), make([]uint32, 1+n)
+	st.req, st.pos = make([]uint32, composer.RequestRows+n), make([]uint32, 1+n)
 }
 
 // picRowsParts is the instance's entry and projector as a card runs them.
@@ -178,7 +178,7 @@ func (s *Instance) prepPicRows() {
 }
 
 // CPUEntrySteps is CPUProjectorSteps for the rows entering the tower.
-func (s *Instance) CPUEntrySteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUEntrySteps() (served int, declined [composer.NumDeclines]int) {
 	return s.cpu.proj.entryServed, s.cpu.proj.entryDeclined
 }
 
@@ -197,7 +197,7 @@ func (s *Instance) cpuPlaceEntry() {
 	g, why, err := s.m.towerEntryOf()
 	st.entryWhy, st.entryErr = why, err
 	if why != Covered {
-		st.entry = cpuHeadForm{composed: true, why: jit.DeclineNoGraph}
+		st.entry = cpuHeadForm{composed: true, why: composer.DeclineNoGraph}
 		return
 	}
 	var over map[jlm.Role]jlm.Type
@@ -221,7 +221,7 @@ func (s *Instance) cpuPlaceEntry() {
 // cpuEntry writes the n rows entering the tower's first block into s.bx
 // from the picture px through the composed entry, the patches from row
 // first, or says why not.
-func (s *Instance) cpuEntry(px []float32, n, first int) jit.Decline {
+func (s *Instance) cpuEntry(px []float32, n, first int) composer.Decline {
 	st := &s.cpu.proj
 	v := s.vis
 	t, c := v.t, v.t.Cfg
@@ -230,30 +230,30 @@ func (s *Instance) cpuEntry(px []float32, n, first int) jit.Decline {
 	if rd := s.cardRows(s.lo); rd != nil && v.px2 == nil && tableRows {
 		if pr := s.picRowsParts(); pr.entry != nil && n <= pr.entry.Rows {
 			s.entryWords(n, first)
-			if rd.RunRows(pr.entry, n, st.req[:jit.RequestRows+n], st.pos[:1+n], px, s.bx[:n*c.NEmbd]) {
+			if rd.RunRows(pr.entry, n, st.req[:composer.RequestRows+n], st.pos[:1+n], px, s.bx[:n*c.NEmbd]) {
 				st.cardEntry++
-				return jit.DeclineServes
+				return composer.DeclineServes
 			}
 			st.cardMiss++
 		}
 	}
 	if s.cpu.args == nil {
-		return jit.DeclineCaller
+		return composer.DeclineCaller
 	}
 	f, why := st.entry.formOf()
-	if why == jit.DeclineServes {
+	if why == composer.DeclineServes {
 		why = s.cpuWeights(f, -1, nil)
 	}
 	switch {
-	case why != jit.DeclineServes:
+	case why != composer.DeclineServes:
 	case n > f.rows || v.px2 != nil:
-		why = jit.DeclineNoRoom
+		why = composer.DeclineNoRoom
 	case !tableRows:
 		// A table row per position the step names, and a patch per
 		// position: the two must name the same row.
-		why = jit.DeclineNoTable
+		why = composer.DeclineNoTable
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		st.entryDeclined[why]++
 		return why
 	}
@@ -281,7 +281,7 @@ func (s *Instance) cpuEntry(px []float32, n, first int) jit.Decline {
 		copy(s.bx[:n*E], out)
 	}
 	st.entryServed++
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // entryWords writes the entry's request (the grid's width) and its
@@ -305,7 +305,7 @@ func (s *Instance) entryWords(n, first int) {
 		}
 		st.pos[1+r] = uint32(at)
 	}
-	st.req[jit.RequestGrid] = uint32(gw)
+	st.req[composer.RequestGrid] = uint32(gw)
 }
 
 // bucketsAreRows says a gh x gw grid's position buckets (bucketPositions)
@@ -317,7 +317,7 @@ func bucketsAreRows(gh, gw, B int) bool {
 // CPUProjectorSteps is how many pictures the composed projector served on
 // the CPU, and how many it declined, by reason; with the composed CPU off
 // nothing is counted.
-func (s *Instance) CPUProjectorSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUProjectorSteps() (served int, declined [composer.NumDeclines]int) {
 	return s.cpu.proj.served, s.cpu.proj.declined
 }
 
@@ -335,7 +335,7 @@ func (s *Instance) cpuPlaceProjector() {
 	s.cpuPlaceEntry()
 	st.tp, st.why, st.err = s.m.towerProjOf(c.fault == towerFaultPoolCorner)
 	if st.why != Covered {
-		st.group = cpuHeadForm{composed: true, why: jit.DeclineNoGraph}
+		st.group = cpuHeadForm{composed: true, why: composer.DeclineNoGraph}
 		st.proj, st.win = st.group, st.group
 		return
 	}
@@ -343,11 +343,11 @@ func (s *Instance) cpuPlaceProjector() {
 	patches := c.MaxSeq()
 	merged := max(c.MaxTokens(), (patches+S*S-1)/(S*S))
 	if st.tp.group != nil {
-		s.cpuComposeHead(&st.group, st.tp.group, jit.DeclineNoGraph, patches)
+		s.cpuComposeHead(&st.group, st.tp.group, composer.DeclineNoGraph, patches)
 	}
-	s.cpuComposeHead(&st.proj, st.tp.proj, jit.DeclineNoGraph, merged)
+	s.cpuComposeHead(&st.proj, st.tp.proj, composer.DeclineNoGraph, merged)
 	if st.tp.win != nil {
-		s.cpuComposeHead(&st.win, st.tp.win, jit.DeclineNoGraph, merged)
+		s.cpuComposeHead(&st.win, st.tp.win, composer.DeclineNoGraph, merged)
 	}
 	unit := 1
 	for _, hf := range []*cpuHeadForm{&st.group, &st.proj, &st.win} {
@@ -366,7 +366,7 @@ func (s *Instance) cpuPlaceProjector() {
 // cpuProject projects the picture's np patch rows (behind the tower's last
 // norm, the class row dropped) through the composed projector into the
 // instance's output rows, or says why not.
-func (s *Instance) cpuProject(patches []float32) ([]float32, jit.Decline) {
+func (s *Instance) cpuProject(patches []float32) ([]float32, composer.Decline) {
 	st := &s.cpu.proj
 	v := s.vis
 	c := v.t.Cfg
@@ -378,10 +378,10 @@ func (s *Instance) cpuProject(patches []float32) ([]float32, jit.Decline) {
 	// A picture in the window order holds each group in consecutive rows.
 	windowed := v.ord != nil
 	if out, ok := s.cardProject(patches, np, nt, windowed); ok {
-		return out, jit.DeclineServes
+		return out, composer.DeclineServes
 	}
 	if s.cpu.args == nil {
-		return nil, jit.DeclineCaller
+		return nil, composer.DeclineCaller
 	}
 	hf, gf := &st.proj, &st.group
 	if windowed {
@@ -392,18 +392,18 @@ func (s *Instance) cpuProject(patches []float32) ([]float32, jit.Decline) {
 	}
 	proj, why := hf.formOf()
 	var group *cpuBlockForm
-	if why == jit.DeclineServes && gf != nil {
+	if why == composer.DeclineServes && gf != nil {
 		group, why = gf.formOf()
 	}
 	for _, f := range []*cpuBlockForm{group, proj} {
-		if why == jit.DeclineServes && f != nil {
+		if why == composer.DeclineServes && f != nil {
 			why = s.cpuWeights(f, -1, nil)
 		}
 	}
-	if why == jit.DeclineServes && (windowed && nt*S*S != np || group != nil && np > group.rows || nt > proj.rows) {
-		why = jit.DeclineNoRoom
+	if why == composer.DeclineServes && (windowed && nt*S*S != np || group != nil && np > group.rows || nt > proj.rows) {
+		why = composer.DeclineNoRoom
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		st.declined[why]++
 		return nil, why
 	}
@@ -418,7 +418,7 @@ func (s *Instance) cpuProject(patches []float32) ([]float32, jit.Decline) {
 	st.served++
 	out := v.out[:nt*c.ProjDim]
 	copy(out, st.out)
-	return out, jit.DeclineServes
+	return out, composer.DeclineServes
 }
 
 // cpuProjDeclined counts a picture whose projector the composed CPU path
@@ -428,7 +428,7 @@ func (s *Instance) cpuProjDeclined() {
 		return
 	}
 	_, why := s.cpu.proj.proj.formOf()
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		s.cpu.proj.declined[why]++
 	}
 }
@@ -444,7 +444,7 @@ func (s *Instance) projWords(gh, gw int, windowed bool) {
 	c := v.t.Cfg
 	S := max(c.Scale, 1)
 	nt := (gh / S) * (gw / S)
-	st.req[jit.RequestGrid] = uint32(gw)
+	st.req[composer.RequestGrid] = uint32(gw)
 	if S == 1 {
 		return
 	}
@@ -458,7 +458,7 @@ func (s *Instance) projWords(gh, gw int, windowed bool) {
 			if qwenNoUnwindow {
 				u = i
 			}
-			st.req[jit.RequestRows+u] = uint32(i)
+			st.req[composer.RequestRows+u] = uint32(i)
 		}
 		return
 	}
@@ -471,13 +471,13 @@ func (s *Instance) projWords(gh, gw int, windowed bool) {
 				if c.fault == towerFaultShuffleSwap {
 					slot = dx*S + dy
 				}
-				st.req[jit.RequestRows+g*S*S+slot] = uint32((gy*S+dy)*gw + gx*S + dx)
+				st.req[composer.RequestRows+g*S*S+slot] = uint32((gy*S+dy)*gw + gx*S + dx)
 			}
 		}
 	}
 	// The patches no whole group holds are regrouped from patch 0 and never
 	// read.
-	clear(st.req[jit.RequestRows+nt*S*S : jit.RequestRows+gh*gw])
+	clear(st.req[composer.RequestRows+nt*S*S : composer.RequestRows+gh*gw])
 }
 
 // cardProject is cpuProject on the card holding the tower's last block,
@@ -505,14 +505,14 @@ func (s *Instance) cardProject(patches []float32, np, nt int, windowed bool) ([]
 	s.projWords(gh, gw, windowed)
 	src := patches[:np*E]
 	if group != nil {
-		if !rd.RunRows(group, np, st.req[:jit.RequestRows+np], nil, src, st.cardGrp[:np*E]) {
+		if !rd.RunRows(group, np, st.req[:composer.RequestRows+np], nil, src, st.cardGrp[:np*E]) {
 			st.cardMiss++
 			return nil, false
 		}
 		src = st.cardGrp[:np*E]
 	}
 	out := s.vis.out[:nt*c.ProjDim]
-	if !rd.RunRows(proj, nt, st.req[:jit.RequestRows+nt], nil, src, out) {
+	if !rd.RunRows(proj, nt, st.req[:composer.RequestRows+nt], nil, src, out) {
 		st.cardMiss++
 		return nil, false
 	}

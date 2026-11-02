@@ -11,15 +11,15 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The statements the front end makes of the attention output gate, of an
@@ -31,9 +31,9 @@ import (
 // inputs under the same bound.
 
 // expBound is the relative error of the exp the composer builds on. It is a
-// degree-5 Taylor sum on the reduced argument |r| <= ln2/2 (jit/pass_exp.go),
+// degree-5 Taylor sum on the reduced argument |r| <= ln2/2 (composer/pass_exp.go),
 // whose remainder is 3.24e-6 of exp(r) at r = -ln2/2, and a few units in the
-// last place for the rest. Main's gate for its own exp (jit/cpu/exp_test.go)
+// last place for the rest. Main's gate for its own exp (engine/device/cpu/exp_test.go)
 // holds 3e-6 on the points it samples, which do not include that edge.
 const expBound = 3.5e-6
 
@@ -47,19 +47,19 @@ const guardBits = 0x7FC0DEAD
 // cpuForm forms g for the host's CPU. Its kernels write an output over an
 // input nothing reads after, which a block's residual relies on; here an output
 // is a buffer of the gate's own, so that pass is off.
-func cpuForm(t *testing.T, g *graph.Graph, roles []jlm.Role) []jit.Code {
+func cpuForm(t *testing.T, g *graph.Graph, roles []jlm.Role) []composer.Code {
 	t.Helper()
 	formats := map[jlm.Role]jlm.Type{}
 	for _, r := range roles {
 		formats[r] = jlm.TypeF32
 	}
-	reg := jit.Default().WithoutInt8(jit.DeviceCPU)
-	p := reg.Profiles[jit.DeviceCPU]
+	reg := composer.Default().WithoutInt8(composer.DeviceCPU)
+	p := reg.Profiles[composer.DeviceCPU]
 	p.Off = map[string]bool{"inplace": true}
-	reg.Profiles[jit.DeviceCPU] = p
-	_, codes, err := reg.Form(jit.Request{Graph: g, Formats: formats,
-		Step:   jit.Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
-		Device: jit.Device{Kind: jit.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+	reg.Profiles[composer.DeviceCPU] = p
+	_, codes, err := reg.Form(composer.Request{Graph: g, Formats: formats,
+		Step:   composer.Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
+		Device: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
 	if err != nil {
 		t.Fatalf("forming for the CPU: %v", err)
 	}
@@ -69,16 +69,16 @@ func cpuForm(t *testing.T, g *graph.Graph, roles []jlm.Role) []jit.Code {
 // cpuExec runs codes in order. A value in bufs is the caller's buffer, a
 // vector in vecs and a weight in planes the container's under its role, and
 // every other operand a block of NaN the form must write before it reads.
-func cpuExec(t *testing.T, codes []jit.Code, vecs map[jlm.Role][]float32, planes map[jlm.Role][3][]uint32, bufs map[graph.ValueID][]float32) {
+func cpuExec(t *testing.T, codes []composer.Code, vecs map[jlm.Role][]float32, planes map[jlm.Role][3][]uint32, bufs map[graph.ValueID][]float32) {
 	t.Helper()
 	words := func(f []float32) []uint32 { return unsafe.Slice((*uint32)(unsafe.Pointer(&f[0])), len(f)) }
-	reach := map[jit.Operand]int{}
+	reach := map[composer.Operand]int{}
 	for _, c := range codes {
 		for _, b := range c.Binds {
 			reach[b.Operand] = max(reach[b.Operand], int(b.Bytes)/4+16, 1<<10)
 		}
 	}
-	own := map[jit.Operand][]uint32{}
+	own := map[composer.Operand][]uint32{}
 	var keep [][]uint32
 	for _, c := range codes {
 		if c.CPU == nil {
@@ -104,13 +104,13 @@ func cpuExec(t *testing.T, codes []jit.Code, vecs map[jlm.Role][]float32, planes
 			switch {
 			case a.Words != nil:
 				w = append([]uint32(nil), a.Words...)
-			case o.Kind == jit.OperandValue && bufs[o.Value] != nil:
+			case o.Kind == composer.OperandValue && bufs[o.Value] != nil:
 				w = words(bufs[o.Value])
-			case o.Kind == jit.OperandVector && vecs[o.Role] != nil:
+			case o.Kind == composer.OperandVector && vecs[o.Role] != nil:
 				w = words(vecs[o.Role])
-			case o.Kind == jit.OperandWeight && o.Region >= 0 && o.Region < 3 && planes[o.Role][o.Region] != nil:
+			case o.Kind == composer.OperandWeight && o.Region >= 0 && o.Region < 3 && planes[o.Role][o.Region] != nil:
 				w = planes[o.Role][o.Region]
-			case o.Kind == jit.OperandVector || o.Kind == jit.OperandWeight:
+			case o.Kind == composer.OperandVector || o.Kind == composer.OperandWeight:
 				t.Fatalf("%s binds %+v, which the gate does not hold", c.Name, o)
 			default:
 				if own[o] == nil {
@@ -240,7 +240,7 @@ func naiveExpm1(g *graph.Graph) *graph.Graph {
 	for _, o := range g.Ops {
 		if o.Kind == graph.OpExpr {
 			// One map a term, as an expression whose one map the CPU's
-			// registers refuse is formed (jit.ErrRegisterPressure).
+			// registers refuse is formed (composer.ErrRegisterPressure).
 			o.Attr.Expr = naiveExpm1Terms(o.Attr.Expr)
 			out.Ops = append(out.Ops, exprAsMaps(o, &out.Values)...)
 			continue
@@ -554,7 +554,7 @@ func TestComposedCPUHeadSlices(t *testing.T) {
 
 // xieluEngineTol is the error the engine's gate allows the CPU xIELU kernel at
 // x, a few units in the last place of each term the result is a sum of: the
-// function jit/cpu's TestXIELUMatchesTheOracle holds main's kernel to, copied
+// function engine/device/cpu's TestXIELUMatchesTheOracle holds main's kernel to, copied
 // from it. The device kernel's gate (backend's TestXIELUMatchesTheOracle) takes
 // 2e-6 of the same sum, for the backend's own exp.
 func xieluEngineTol(x float64, p [4]float32) float64 {
@@ -579,7 +579,7 @@ func xieluTol(x float64, p [4]float32) float64 {
 	return t
 }
 
-// xieluNumbers are jit/cpu's three sets of the block's effective numbers
+// xieluNumbers are engine/device/cpu's three sets of the block's effective numbers
 // (alpha_p, alpha_n, beta, eps) and three of like size, an eps wide enough that
 // min(x, eps) clamps a visible band of inputs and alphas far apart so a swap is
 // loud.
@@ -588,7 +588,7 @@ var xieluNumbers = [][4]float32{
 	{0.9, 0.6, 0.5, -1e-6}, {1.3, 0.8, 0.4, -0.02}, {0.2, 1.1, 0.7, -0.5},
 }
 
-// xieluInputs mixes the regions the kernel distinguishes, as jit/cpu's gate
+// xieluInputs mixes the regions the kernel distinguishes, as engine/device/cpu's gate
 // does: the polynomial's [-1/2, 0], exp below it, values near zero where
 // expm1 - x cancels, the eps band, deep negatives where exp underflows, and
 // positives.
@@ -718,7 +718,7 @@ func TestComposedCPUXIELU(t *testing.T) {
 		g, x, y := xieluGraph(t, n)
 		codes := cpuForm(t, g, []jlm.Role{jlm.RoleXIELU})
 		t.Logf("%s: %d kernels", fam.name, len(codes))
-		run := func(codes []jit.Code, p [4]float32) []float32 {
+		run := func(codes []composer.Code, p [4]float32) []float32 {
 			row, back := guarded(n)
 			cpuExec(t, codes, map[jlm.Role][]float32{jlm.RoleXIELU: p[:]}, nil, map[graph.ValueID][]float32{x: fam.xs, y: row})
 			checkGuard(t, fam.name, back, n)
@@ -740,7 +740,7 @@ func TestComposedCPUXIELU(t *testing.T) {
 				t.Errorf("%s, numbers %v: main's kernel is %.3g of the bound from the oracle: the bound is not one the engine's kernel meets", fam.name, p, dm.bound)
 			}
 			for name, v := range map[string]struct {
-				codes []jit.Code
+				codes []composer.Code
 				p     [4]float32
 			}{
 				"the alphas exchanged":       {codes, [4]float32{p[1], p[0], p[2], p[3]}},

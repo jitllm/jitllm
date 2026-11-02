@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestBatchedMixturePrefillMatchesRowByRow prefills a mixture on the device in
@@ -74,13 +74,13 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	}
 	prompt = prompt[:plen]
 	const gen = 12
-	run := func(noBatch bool) ([]float32, []int32, tier.Stats, string) {
-		opts := []tier.Option{tier.WithDeviceTune(tier.TuneOff), tier.WithPoisonScratch(true)}
+	run := func(noBatch bool) ([]float32, []int32, gpu.Stats, string) {
+		opts := []gpu.Option{gpu.WithDeviceTune(gpu.TuneOff), gpu.WithPoisonScratch(true)}
 		if testdevices.Selected() {
-			opts = append(opts, tier.WithDevices(testdevices.Spec(""))) // a model bigger than one card
+			opts = append(opts, gpu.WithDevices(testdevices.Spec(""))) // a model bigger than one card
 		}
-		g, err := tier.OpenWith(append(opts,
-			tier.WithConfig(func(c *tier.Config) {
+		g, err := gpu.OpenWith(append(opts,
+			gpu.WithConfig(func(c *gpu.Config) {
 				c.NoBatch = noBatch
 				// The A/B for sm_70: its batched matvecs read f16 activations
 				// where every other path reads int8.
@@ -146,8 +146,8 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	t.Logf("%s: last-row logit NMSE %.3e\n  batched %v\n  rows    %v", name, nmse, batIDs, rowIDs)
 	// The arms are the composer's prompt part at two widths: a chunk of one
 	// row at a time, and the prompt's rows batched in fewer chunks.
-	rp, _ := rowSt.ServedPart(tier.ComposedPrompt)
-	bp, _ := batSt.ServedPart(tier.ComposedPrompt)
+	rp, _ := rowSt.ServedPart(gpu.ComposedPrompt)
+	bp, _ := batSt.ServedPart(gpu.ComposedPrompt)
 	if bp == 0 || bp >= rp {
 		t.Fatalf("composed prompt steps: %d one row at a time, %d batched -- the arms are not the two widths (%s)",
 			rp, bp, batErr)

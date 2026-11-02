@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // cpuRowsModels are the models whose prompts and batched steps the
@@ -283,7 +283,7 @@ func cpuSessionSteps(t *testing.T, m *Model, prompts [][]int32, steps []int32, c
 		served, declined := states[0].CPUBlockSteps()
 		for i, n := range declined {
 			if n > 0 {
-				t.Fatalf("a step across sessions: %d block steps declined: %s (%v)", n, jit.DeclineName(i), states[0].CPUFormErr())
+				t.Fatalf("a step across sessions: %d block steps declined: %s (%v)", n, composer.DeclineName(i), states[0].CPUFormErr())
 			}
 		}
 		if want := calls * m.Cfg.NLayer; served-before < want {
@@ -311,7 +311,7 @@ func cpuServed(t *testing.T, s *Instance, what string, want int, composed bool) 
 	}
 	for i, n := range declined {
 		if n > 0 {
-			t.Fatalf("%s: %d block steps declined: %s (%v)", what, n, jit.DeclineName(i), s.CPUFormErr())
+			t.Fatalf("%s: %d block steps declined: %s (%v)", what, n, composer.DeclineName(i), s.CPUFormErr())
 		}
 	}
 	if served < want {
@@ -348,7 +348,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 				w := s.c.ResidW()
 				for li := range m.Cfg.NLayer {
 					why, err := s.cpuRows(li, &m.layers[li], s.bx[:len(pos)*w], s.bcs, s.bcsSWA, seq, pos)
-					if err != nil || why != jit.DeclineServes {
+					if err != nil || why != composer.DeclineServes {
 						t.Fatalf("block %d: %v (%s)", li, err, why)
 					}
 				}

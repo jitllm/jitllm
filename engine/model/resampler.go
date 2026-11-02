@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // MiniCPM-V's projector: a perceiver resampler.

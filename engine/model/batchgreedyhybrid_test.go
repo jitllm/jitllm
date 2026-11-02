@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestForwardBatchGreedyHybridMatchesEachSequenceAlone is the batched-decode
@@ -141,7 +141,7 @@ func batchAloneGate(t *testing.T, env, def, kind string, is func(Config) bool, e
 }
 
 // TestSharedRecurrentStateMatchesTheDoubledOne: a batch whose recurrent states
-// are grown in the shared form (tier.Config.SharedRec -- one resident state a
+// are grown in the shared form (gpu.Config.SharedRec -- one resident state a
 // block, the device's next-state scratch and a copy back) decodes the same
 // tokens, bit for bit, as the double-buffered form. It is the form a wide batch
 // falls to when two halves do not fit (Qwen3.5-4B at 128 sequences on a 16 GB card),
@@ -174,8 +174,8 @@ func TestSharedRecurrentStateMatchesTheDoubledOne(t *testing.T) {
 	if lastBatchStats.RecShared != 0 {
 		t.Fatalf("the doubled arm grew %d shared state(s)", lastBatchStats.RecShared)
 	}
-	got, _ := batchGreedy(t, m, ids, gen, seq, []tier.Option{
-		tier.WithConfig(func(c *tier.Config) { c.SharedRec = true }),
+	got, _ := batchGreedy(t, m, ids, gen, seq, []gpu.Option{
+		gpu.WithConfig(func(c *gpu.Config) { c.SharedRec = true }),
 	})
 	shared := lastBatchStats.RecShared
 	if shared == 0 {

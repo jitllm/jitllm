@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // bitnetRealModels are the trained BitNet b1.58 checkpoints, each relative to
@@ -101,7 +101,7 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 					t.Errorf("Encode(%q) = %v, the reference's tokenizer %v", s.Text, got, s.Prompt)
 				}
 			}
-			arm := func(t *testing.T, gpu *tier.GPU) {
+			arm := func(t *testing.T, gpux *gpu.GPU) {
 				worst, flips, ties, agree, total, placed := 0.0, 0, 0, 0, 0, 0
 				for _, s := range g.Seqs {
 					ids := append(slices.Clone(s.Prompt), s.Cont[:len(s.Cont)-1]...)
@@ -132,13 +132,13 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 					}
 					state := func() *Instance {
 						st := m.NewInstance(len(ids) + 1)
-						if gpu != nil {
+						if gpux != nil {
 							// As many blocks as the card holds: every one on a card with
 							// room (a V100), a partial seam on a small one, which runs
 							// both tiers in one token. None placed proves nothing.
-							st.SetDeviceLayers(gpu, -1)
+							st.SetDeviceLayers(gpux, -1)
 							if st.GPULayers() == 0 {
-								t.Fatalf("placed none of %d blocks: %v", m.Cfg.NLayer, gpu.Err())
+								t.Fatalf("placed none of %d blocks: %v", m.Cfg.NLayer, gpux.Err())
 							}
 							placed = st.GPULayers()
 						}
@@ -202,13 +202,13 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 			})
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {
-					gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-						tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
-					if err != nil || gpu == nil {
+					gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+					if err != nil || gpux == nil {
 						t.Skipf("%s: not present (%v)", spec, err)
 					}
-					defer gpu.Close()
-					arm(t, gpu)
+					defer gpux.Close()
+					arm(t, gpux)
 				})
 			}
 		})

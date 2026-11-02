@@ -73,7 +73,7 @@ apart, and the k-quant model is the slow one.** Format is now the biggest single
 term. **A control is only valid while the thing it controls for is still the
 binding constraint.**
 
-**★ THE SASS SAYS THE SAME THING WITHOUT ANY RATIO.** `jit/gpu/cmd/ptxdump` +
+**★ THE SASS SAYS THE SAME THING WITHOUT ANY RATIO.** `engine/device/gpu/cmd/ptxdump` +
 ptxas + cuobjdump, tinyllama's shipping prefill shape (Q3_K, k=2048, rows=5632,
 NTok=128, MT=4, NT=4):
 
@@ -475,7 +475,7 @@ copy, scores, softmax, the weighted sum, the FFN gate, the residual add) is a ge
 residual stream never returns to the host inside a block.
 
 A block, not a token, for two reasons. The device never learns what a transformer is beyond one
-repeating unit -- `engine/model/` keeps the graph, and nothing in `jit/gpu` knows about embedding lookup,
+repeating unit -- `engine/model/` keeps the graph, and nothing in `engine/device/gpu` knows about embedding lookup,
 sampling or tied output weights. And **the CPU/GPU split falls out for free**: `PrepLayer` is per
 block and may decline, so a model too big for the card runs its first N blocks on the device and the
 rest on the CPU, with no separate placement policy. On a 4 GB card that is the difference between
@@ -565,7 +565,7 @@ per surplus thread -- both produced correct numbers in every head but the LAST, 
 clamp piles onto, so a spot check of head 0 passes and the failure reads like a GQA indexing bug.
 Aliasing is a property of the ops, so it is checked rather than remembered.
 
-**★ 12e. `jit/gpu/lowertest` ASSEMBLES EVERY SHIPPED KERNEL WITH THE VENDORS' OWN TOOLS.** PTX
+**★ 12e. `composer/lowertest` ASSEMBLES EVERY SHIPPED KERNEL WITH THE VENDORS' OWN TOOLS.** PTX
 refuses a divide with no rounding modifier, and nothing caught `div.f32` until a kernel that divides
 reached real hardware, where the entire symptom was `CUresult=218`, "a PTX JIT compilation failed",
 with no line number. The lowerers had unit tests for the ops they knew about; what was missing was a
@@ -1784,7 +1784,7 @@ ptx and spirv; `model.TestSlidingWindowRunsOnTheDevice` holds the model.
 - **Two unpinned tiers disagree with each other** by up to 5e-03 at early
   positions -- `tuneSplit` picks a reduction order per process. Read against the
   host, that looked like an all-local window bug. Pin with
-  `tier.WithDeviceTune(tier.TuneOff)`.
+  `gpu.WithDeviceTune(gpu.TuneOff)`.
 - **A narrowed window on a model not trained with it is chaos.** Phi-3.5 at 16
   keys on every layer: host 0.26 from transformers (loading the same GGUF),
   device 0.48, the two 0.02 apart -- every engine amplifying its own rounding.
@@ -1845,12 +1845,12 @@ at all -- which is RULE 8a's own failure mode: a graph change on the CPU alone
 removes the capability from the device, not as an error but as an absence.
 
 `kernels.RopeTable` is the fourth transcription of the host kernel that landed
-alongside it (jit/cpu/ropetab.go and its SSE and NEON twins are the other
+alongside it (engine/device/cpu/ropetab.go and its SSE and NEON twins are the other
 three): the same four-digit position decomposition, the same folded planes, the
 same degree 7/8 minimax pair on |r| <= pi/4. It calls nothing of the vendor's.
 The planes are DATA -- `nn.Rope.TabPlanes`, folded in float64 once per model at
-load -- so `jit/gpu/kernels` borrows nothing from `jit/cpu` but the layout,
-which moved down into `kernels/ropetab_const.go` because `jit/cpu` already
+load -- so `composer/kernels` borrows nothing from `engine/device/cpu` but the layout,
+which moved down into `kernels/ropetab_const.go` because `engine/device/cpu` already
 imports that package and the other direction is a cycle.
 
 **Measured against the host kernel's own table, on real hardware, all three
@@ -2178,7 +2178,7 @@ Phi-4-mini, gemma-3-12b, Qwen3-1.7B Q8_0 and gemma-2-9b sat at 0.957 / 0.977 /
     device timeline, nvprof --print-gpu-trace   5.83 vs 5.91 ms a token, kernels
                                                 5.44 vs 5.43, idle 0.39 vs 0.48
 
-`jitllm run` now prints "host per submission" (tier.Stats TSubStage /
+`jitllm run` now prints "host per submission" (gpu.Stats TSubStage /
 TSubLaunch / TSubRead / TCapture): Phi-4-mini reads stage 59 us, launch 232 us
 (26 of it three captures a 256-token run), read 4954 us. The launch looked like
 the idle the gap is made of; splitting it proved the card was not waiting on it.
@@ -2285,7 +2285,7 @@ V100, tg256, per token:
 | rope + KV copies | 312 | 273 | +39 |
 | SiLU (jitllm fuses it) | -- | 87 | -87 |
 
-`kernels.FlashDecodeKV` (tier.Config.FlashKV, `JITLLM_GPU_FLASH=2`, with
+`kernels.FlashDecodeKV` (gpu.Config.FlashKV, `JITLLM_GPU_FLASH=2`, with
 `JITLLM_GPU_FLASH_GROUP` / `_SPLIT`) is the shape `65317aa` named: a
 128-thread workgroup per (query-head group, key partition), threads over keys
 for the scores against one K load, block reductions, warps over keys and lanes
@@ -2366,7 +2366,7 @@ Against llama.cpp in that pass: Phi-4-mini 1.01, gemma-3-12b 1.02, gemma-2-9b
 oracle on 2,892 shapes (head widths 7/48/64/96/128/256, 2/4/8 warps, groups,
 splits, windows, sinks, softcap, f16 V), on the laptop's 3050 Ti and the V100;
 dropping one dimension slice from the fold fails 522 of the then 652.
-`tier.TestFlashAttentionModel` now runs the KV kernel on a placed model (per-depth
+`gpu.TestFlashAttentionModel` now runs the KV kernel on a placed model (per-depth
 split and split 3) against the staged path on CUDA and Vulkan; launching half
 the workgroups fails it at logit NMSE 0.11-2.7 with a greedy flip. Its
 fused-vs-staged NMSE takes one of two values (2.4e-13 or 1.9e-4 on stories15M),
@@ -2374,7 +2374,7 @@ swapping between CUDA and Vulkan as the width changes -- one int8 activation
 rounding flip, which that test's own comment already describes.
 
 **Defaults.** CUDA and Metal take the KV kernel unless `JITLLM_GPU_FLASH=0`
-(`tier.Config.NoFlashKV`); Vulkan was not measured and keeps the staged path.
+(`gpu.Config.NoFlashKV`); Vulkan was not measured and keeps the staged path.
 Metal, M4, same pass against llama.cpp b10985: tg128 Llama-3.2-1B 113.4 ->
 114.7 (0.983 of llama.cpp's 116.7), Qwen2-1.5B 89.9 -> 90.6 (0.988 of 91.5).
 Gated there by TestFlashDecodeKV and TestFlashAttentionModel. Kernel level,
@@ -2398,9 +2398,9 @@ kshim against event nodes there puts the matvecs level (10,279 against 10,282
 us a token, event overhead subtracted) and jitllm's elementwise chain ~250 us
 above llama.cpp's.
 
-### Figures moved out of jit/gpu/tier comments
+### Figures moved out of engine/device/gpu comments
 
-These figures stood in source comments under `jit/gpu/tier/` until a comment
+These figures stood in source comments under `engine/device/gpu/` until a comment
 cleanup trimmed them, and were recorded nowhere else. They are kept here
 verbatim, grouped by the symbol each one justified. Unnamed "this card" in the
 original comments is the laptop's RTX 3050 Ti; V100 is the 8x V100 server's
@@ -2652,7 +2652,7 @@ second process pay 0.108 ms instead of 36.7. One more constraint came out of the
 PTX emitter writes `.version 7.8`: nvcc 12.9 emitted `.version 8.8`, which driver 550.163.01 (CUDA
 12.4, maximum ISA 8.4) rejected at RUN time with "compiled with an unsupported toolchain".
 
-**Then the IR.** `jit/ir` is a typed IR (about two dozen ops on that day) lowered by three
+**Then the IR.** `composer/ir` is a typed IR (about two dozen ops on that day) lowered by three
 backends: `ptx` (run through `backend/cuda`), `spirv` (`backend/vulkan`) and `msl`
 (`backend/metal`). Verified on the RTX 3050 Ti (PTX and Vulkan), Intel Iris Xe, llvmpipe and the
 Apple M4. Three things it established:
@@ -2667,7 +2667,7 @@ Apple M4. Three things it established:
 3. **`spirv-val` is a gate, not a lint.** Two emitter bugs -- `OpVariable` with its result type and
    result id swapped, and `PackedVectorFormat4x8Bit` written as 1 where it is 0 -- each crashed
    NVIDIA's compiler inside `vkCreateComputePipelines` with a SIGSEGV and no diagnostic; the validator
-   named each in one line. `jit/spirv/spirv_test.go` runs it when it is installed.
+   named each in one line. `composer/spirv/spirv_test.go` runs it when it is installed.
 
 **Bit-exact across five GPU stacks and three vendors, not within tolerance.** int8 x int8 into int32 is
 integer arithmetic, so two correct backends agree to the last bit, and a tolerance would have hidden
@@ -2962,7 +2962,7 @@ launched 64 wide) is refused by name on cuda:0, vulkan:0 and vulkan:1
 (`TestStagedPagedPrefillGateDiscriminates`).
 
 To find any other kernel with the mismatch, every `engine/model` test that
-opens a device tier (270), and the `jit/gpu/tier` and `backend`
+opens a device tier (270), and the `engine/device/gpu` and `backend`
 packages, ran with every refusal logged: on the RTX 3050 Ti's cuda:0 and
 vulkan:0, and on the V100 box in eight slices, one card each (cuda:0 and
 vulkan:k), plus the tier package. The log held the deliberate violations and
@@ -3145,7 +3145,7 @@ tier chooses, so nothing else here has a decode rate behind it yet.
 ### The decode plan through the tier, and the harness bias it exposed
 
 With kernels.ChooseDecodePlan choosing each paged decode's path, splits,
-width and merge (jit/gpu/tier/pagedattn.go, pagedPlanFor), the V100 first read
+width and merge (engine/device/gpu/pagedattn.go, pagedPlanFor), the V100 first read
 2.7% slower than the old split rule at 512 keys -- and every single piece put
 back (splits, merge, vector V) read the same 0.972, as did two tiers holding
 the SAME plan. The harness was the variable: its one-tier A/A decoded 640
@@ -3467,7 +3467,7 @@ control. Every violation clears its band 10x or more (a mixture's step break:
 its band and 10x the clean step, below): residual dropped
 2.2-3.0, attention at 1/sqrt(head_dim) 0.87-2.9, embedding scale dropped
 2.0-2.5, logit divisor skipped 28-54, and a step whose rows fuse the residual
-unscaled (`tier.ScaleFaultStepResidual`, the step's own break, reachable only
+unscaled (`gpu.ScaleFaultStepResidual`, the step's own break, reachable only
 on quantized weights) 1.26-6.5.
 
 The attention scale needed no fix and got a correction anyway: the contiguous
@@ -3750,7 +3750,7 @@ at one lane. `prepRagLinear` now builds it at the device's lanes, and the
 refusal, `nn.RowsLinear`, `GPU.RowsLinear` and `State.rowsLinear` are deleted.
 The lane-group form stays wherever the subgroup is guaranteed.
 
-`tier.Config.ScalarLinearRows` forces the one-thread form on a device that has
+`gpu.Config.ScalarLinearRows` forces the one-thread form on a device that has
 the subgroup, so the form is gated on real hardware, and
 `Stats.LinearRowsScalar` counts the linear blocks a ragged step emitted on it:
 the model gates' `checkLinearRowsForm` demands it non-zero where the device
@@ -3902,7 +3902,7 @@ so `TestSoftwareVulkanIsDeclined` narrows it to lavapipe in a child process.
 **And the skip is loud now.** `enumerate` remembers the process's first device
 count and returns `vulkan.ErrDevicesVanished` for an enumeration that comes
 back shorter. `engine/model`'s device arms skip through `noDevice`, which fails
-on that error; `engine/model`, `backend` and `jit/gpu/tier` fail the
+on that error; `engine/model`, `backend` and `engine/device/gpu` fail the
 binary from `TestMain` when any enumeration shrank, for a skip `noDevice` does
 not reach. Against the unfixed engine the latent sequence that had skipped
 four Vulkan arms failed them ("was there earlier in this process and is gone
@@ -4132,7 +4132,7 @@ by Rowt -- gemma's widest per-layer matvec is 16384 rows, which is 2048 threads
 at Rowt=8. `Split` spends threads the other way, on k, and that is the axis that
 pays here.
 
-The knob survives as `tier.Config.DecodeRowt` (`JITLLM_GPU_ROWT`), default off,
+The knob survives as `gpu.Config.DecodeRowt` (`JITLLM_GPU_ROWT`), default off,
 with `Stats.RowtTiles`/`RowtPlain` beside it -- because the first three runs of
 this experiment measured NOTHING and looked exactly like a null result: the tile
 needs `Split == 1` and `tuneSplit` chooses the split first, so the knob reached
@@ -4681,7 +4681,7 @@ number without a counter.** RULE 10, caught by the counter rather than by care.
   INSTEAD OF ASSUMING ONE. A METAL DISPATCH COSTS 1.1 us, NOT 300.** `normApply`
   reads x, hNorm and part and writes h, so it is IDEMPOTENT: running it n extra
   times computes the same answer and costs exactly n extra tiny dispatches.
-  `tier.Config.HeadNormRepeat` does that, and the selection check is the
+  `gpu.Config.HeadNormRepeat` does that, and the selection check is the
   dispatch count itself -- **468 -> 669 at r=200, +201 for +200 requested**:
 
       r=0    468 dispatches   GPU 8.962 ms   104.60 tok/s
@@ -4718,7 +4718,7 @@ number without a counter.** RULE 10, caught by the counter rather than by care.
   with no other work to overlap it.
 
   ★★★ **AND THE HEAD-ONLY k-SPLIT WAS BUILT AND REFUTES IT TOO, MONOTONICALLY.**
-  `tier.Config.HeadSplit` pins the output projection's split alone and leaves
+  `gpu.Config.HeadSplit` pins the output projection's split alone and leaves
   every block matvec on the tuner, which the global knob could not do:
 
       tuned 8.930 ms   105.34 tok/s      16   9.113  +2.0%
@@ -4735,7 +4735,7 @@ number without a counter.** RULE 10, caught by the counter rather than by care.
   WALL -- THE SAME AS THE MODEL OVERALL. IT IS NOT ANOMALOUSLY SLOW, AND EVERY
   "65% of wall" READING OF IT IN THIS FILE WAS WRONG.** `mvrun` reads the
   head weights and the quantized activation and writes logits through its
-  partials, so it is IDEMPOTENT and `tier.Config.HeadMatvecRepeat` prices it the
+  partials, so it is IDEMPOTENT and `gpu.Config.HeadMatvecRepeat` prices it the
   way HeadNormRepeat priced a dispatch:
 
       r=0  9.014 ms    r=1  11.161    r=2  13.283    r=4  17.484
@@ -5256,7 +5256,7 @@ number without a counter.** RULE 10, caught by the counter rather than by care.
 
 - **★ A DEVICE BUFFER THAT IS NEVER FREED IS INVISIBLE TO EVERY PAGING GATE, AND
   WAS FOR THE LIFE OF THE TIER.** `func (b *fakeBuf) Free() {}` -- every fake
-  buffer in `jit/gpu/tier`'s tests discarded it, so the gates asserted a block
+  buffer in `engine/device/gpu`'s tests discarded it, so the gates asserted a block
   was PAGED OUT and never that its memory came BACK. Once fixed, it
   found four leaks immediately (Close never freeing g.layers, blockScratch
   having no free path at all, PrepLayer overwriting a resident block without
@@ -5305,7 +5305,7 @@ and falls by halves, so one fast submission cannot license a range a slow one
 showed would overrun. On the RTX a tower block over the same picture is
 milliseconds and the range stays whole after the probe.
 
-The gates: `tier.TestASubmissionIsCutAtItsRunTimeBudget` (the cut, its count
+The gates: `gpu.TestASubmissionIsCutAtItsRunTimeBudget` (the cut, its count
 and the residual against the uncut range, on the fake device; against a submit
 that ignores the budget it reads one submission) and, on the hardware,
 `model.TestMiniCPMVOnDeviceMatchesHost/vulkan:1` (5.1e-3 against 1.4) and
@@ -5330,7 +5330,7 @@ Qwen-family tower ran a block on any device here. Had it placed, every call
 would have run all 65536 rows for a picture of 1024: kernels bake their row
 count.
 
-`jit/gpu/tier/visrows.go`: the set is built for `visCap` rows, which `capped`
+`engine/device/gpu/visrows.go`: the set is built for `visCap` rows, which `capped`
 hands every tower plan as its MaxSeq. Placement starts at `visStart` (1024)
 or the tower's MaxSeq when smaller (a fixed-grid tower's picture).
 `ReserveRows` (`nn.RowsReserver`), called by `State.encodeBlocks` before a
@@ -5349,7 +5349,7 @@ set was built takes the set with it, and so does the last tower block out
 position rows, the resampled table's taps and rows) are sized by the picture
 too.
 
-Gates. `tier.TestATowerIsBuiltForItsPicture` (the fake device, a 65536-row
+Gates. `gpu.TestATowerIsBuiltForItsPicture` (the fake device, a 65536-row
 grid on a 256 MB card): placed at 1024 rows for 55,492,616 bytes, 164,315,156
 at 3072 for a 3000-row picture, the 65536-row grid refused with no buffer
 allocated, 19,374,088 at 512 for a 500-row picture, nothing live after the
@@ -5840,16 +5840,16 @@ replayed like a decode step, and a recording is the session's, so each new
 session captures it once (about 1 ms on the V100), and the head runs as its
 own call.
 
-## Measurements once cited in jit/gpu/tier's comments
+## Measurements once cited in engine/device/gpu's comments
 
 The tier's comments state the engineering reason and the class of card; the
 measurements they used to carry, with the machine that produced them, are
 here verbatim.
 
-- `groupTokMax` (`jit/gpu/tier/rows.go`): "Llama-3.1-8B Q4_K_M on a V100,
+- `groupTokMax` (`engine/device/gpu/rows.go`): "Llama-3.1-8B Q4_K_M on a V100,
   tok/s together, groupMV against the tiled twin: 2 sessions 203 / 146, 4
   307 / 270, 8 363 / 488."
-- `dropSession` (`jit/gpu/tier/layer.go`), on why the scratch's bound is not
+- `dropSession` (`engine/device/gpu/layer.go`), on why the scratch's bound is not
   reset: "(measured: pp512 on a V100 17.4k tok/s on the first prompt of a
   process and 13.7-14.0k on every one after)". The bisection is "The prompt
   lost 22% on the V100, and none of it was a kernel" above.
@@ -5876,15 +5876,15 @@ Each entry below is a comment that stood in the named source file,
 verbatim. The source keeps the contract, the layout and the invariants
 and points here for the derivation, the transcript and the reasons.
 
-### jit/gpu/kernels/ropetab_const.go
+### composer/kernels/ropetab_const.go
 
 The rotary table's constant block and its layout: the {cos, sin} pair per
 rotary pair, formed by a kernel rather than math.Cos/math.Sin in Go.
 
 One copy of the layout for four tiers (AVX2, SSE, NEON and the device): the
 layout is the ABI between the emitters and nn. It lives here rather than in
-jit/cpu because jit/cpu already imports this package, so a device kernel
-importing jit/cpu would close a cycle; jit/cpu/ropetab_const.go re-exports
+engine/device/cpu because engine/device/cpu already imports this package, so a device kernel
+importing engine/device/cpu would close a cycle; engine/device/cpu/ropetab_const.go re-exports
 every name.
 
 The precision lives in the constants. The angle is pos*g radians with pos up
@@ -6085,12 +6085,12 @@ Llama-3.2-1B Q4_K_M, worst first:
 `TestHotKernelsKeepTheirRegisters` holds the hot kernels that ran to no spill
 and a floor -- streaming kernels at least half an SM, GEMM and flash attention
 at least two resident workgroups -- and every host emitter but the red-zone
-stagers to no stack operand. Capped at 32 registers (`tier.WithCUDAMaxRegs`)
+stagers to no stack operand. Capped at 32 registers (`gpu.WithCUDAMaxRegs`)
 it reports 52 spilling kernels of 69 on sm_86; with a staging emitter taken
 off the list it names it.
 
 The batched GEMM now passes over a tile its compiler reports spilling
-(`tier.Config.SpillingTiles` is the other arm): on sm_70 q6_k takes the m4n2
+(`gpu.Config.SpillingTiles` is the other arm): on sm_70 q6_k takes the m4n2
 tile at 223 registers instead. `verify -ab spill`, V100, Llama-3.2-1B,
 four 512-token prompts a round, 21 rounds, pinned to the second socket: A/A
 1.0008 (refused both) and 1.0005 (allowed both); refused against allowed
@@ -6275,7 +6275,7 @@ drain, and the round trip of an intermediate through memory, not the launch.
 
 ## A persistent decode block: composed, bit-identical, and slower
 
-`Config.Persist` (`tier.WithPersist`, `JITLLM_GPU_PERSIST`) composes each
+`Config.Persist` (`gpu.WithPersist`, `JITLLM_GPU_PERSIST`) composes each
 decode block's launches into persistent kernels (`ir.Persist`,
 `tier/persist.go`): the launcher holds a block's launches, cuts them into runs
 the composer can take, and issues each run as one cooperative grid whose
@@ -6338,7 +6338,7 @@ Off by default (RULE 6: a clear regression).
 
 ## The dependency-counter block: correct, and slower than both
 
-`Config.PersistDeps` (`tier.WithPersistDeps`, `JITLLM_GPU_PERSIST=deps`;
+`Config.PersistDeps` (`gpu.WithPersistDeps`, `JITLLM_GPU_PERSIST=deps`;
 design in `docs/design/dep-block.md`) composes the same runs as the persistent
 block and orders them with completion counters (`ir.PersistDeps`): a task waits
 only on the tasks it reads or overwrites, a tile of an elementwise task only on
@@ -6373,7 +6373,7 @@ same tasks. Off by default (RULE 6: a clear regression).
 
 ## Gate and up in one launch: exact, and a loss past the 1B
 
-`Config.GateUpFuse` (`tier.WithGateUpFuse`, `JITLLM_GPU_GATEUP=1`) runs a
+`Config.GateUpFuse` (`gpu.WithGateUpFuse`, `JITLLM_GPU_GATEUP=1`) runs a
 dense gated FFN's gate and up as one `kernels.MatVecSegments` launch over
 their shared operand, and has down form act(gate)*up from the two rows and
 quantize it in its prologue (`kernels.ActIn.Gated`) with the residual add:
@@ -6580,7 +6580,7 @@ matches it: the output projection 7.6 us against 8.9, down 22.8 against
 22.3. The gap was launches the tier's authors fused by hand: 14 composed
 launches a block against 9, about 140 us against 90.
 
-- **Siblings** (`jit.Siblings`): independent kernels reading one input run as
+- **Siblings** (`composer.Siblings`): independent kernels reading one input run as
   one launch, each its own workgroups under a guard loop that runs once in
   them. q, k and v went from three launches (23.6 us) to one (13.2; the
   tier's `matvecseg` 9.9), gate and up from two (38.0) to one (30.4; the
@@ -6588,7 +6588,7 @@ launches a block against 9, about 140 us against 90.
   values made from the thread index alone were hoisted above every guard,
   live across all shares, and the merged q/k/v kernel needed more registers
   than a 1024-wide workgroup allows (`backend.ErrGroupTooWide`).
-- **The head's split** (`jit.Split` with Parts): it cut a reduction 64 ways
+- **The head's split** (`composer.Split` with Parts): it cut a reduction 64 ways
   whatever its rows, so the 128256-row output projection ran 8016 workgroups
   of 1024 threads, 383.6 us. A reduction whose elements fill the device's
   slots is not split: one row a thread, 1002 workgroups of 128, 261.5 us (the
@@ -6647,7 +6647,7 @@ row where the composer's reads two.
   and the kernel lowered without them. It lowers a store's loop inside its
   parent now, and fails on a store it never emits; the front-end test lowers
   every GPU kernel of the five models, and fails on that violation.
-- **A producer in its consumer's workgroups, again** (`jit.Prologue`, with
+- **A producer in its consumer's workgroups, again** (`composer.Prologue`, with
   the shuffle combines and guarded host phases above). Every producer site
   of a Llama block merged -- q/k/v, gate/up, the output projection and down,
   seven launches a block where there were eleven -- and the decode token's
@@ -6685,7 +6685,7 @@ row where the composer's reads two.
   used now, and `ir.Validate` holds every value to its loop -- one made
   inside a loop's body is not read after the loop closes, its phis aside --
   where the composer's lowering forms a kernel, not first where a backend
-  compiles it. Every kernel of `jit/gpu/kernels` keeps the rule; the
+  compiles it. Every kernel of `composer/kernels` keeps the rule; the
   front-end test fails with it on the kept index.
 - **What did not pay.** Prefetching each thread's first eight weight words
   before an int8 prologue (main's `ActIn.Prefetch`, as a pass) made the
@@ -6739,7 +6739,7 @@ row where the composer's reads two.
   for its 512. A launch with more workgroups than the device has
   multiprocessors states how many each must hold at once for one wave
   (`ir.Kernel.Resident`, PTX `.maxntid` and `.minnctapersm`; the tier
-  passes the multiprocessors as `jit.Device.Units`), and ptxas fits its
+  passes the multiprocessors as `composer.Device.Units`), and ptxas fits its
   registers to it: gate/up 32 registers, no spill, seven a multiprocessor.
   Unlike `.maxnreg 32` on every kernel, it asks only what the grid needs,
   and nothing of a launch that fits the device in one wave already.
@@ -6766,7 +6766,7 @@ row where the composer's reads two.
   amax/127 and inverse 1/d were the integer routines on every GPU, about
   100 instructions a thread, because one profile serves backends whose
   division is not the IEEE quotient (SPIR-V's OpFDiv is allowed 2.5 ulp).
-  `jit.Device.ExactDiv` states it per device: PTX's div.rn and a CPU's
+  `composer.Device.ExactDiv` states it per device: PTX's div.rn and a CPU's
   division are the quotient the routines compute, and the tier states it
   from the backend (`kernels.DivExact`). Device time 1861.9 to 1821.8 us a
   token, same box and rounds.
@@ -6934,7 +6934,7 @@ row where the composer's reads two.
   0.0425 at step 91, so rnj-1 fails it on CUDA by 11% and stays in
   formedModels. One alternative is untested: CUDA's split attention.
   SplitRange cuts a step's keys into max(1, ceil(keys/chunk), min(sq,
-  capped)) partitions (jit/geometry.go): sq is the square root of keys/8
+  capped)) partitions (composer/geometry.go): sq is the square root of keys/8
   rounded to a power of two, capped the splits the device's slots hold at
   1280 threads a query-head group (1 where the device reports no slots, as
   the V100's Vulkan does), and chunk the geometry's partition, 896 positions
@@ -7128,7 +7128,7 @@ row where the composer's reads two.
   CPU plans hold a reduce kernel the same pass declines ("a pair's later
   head with no twin"). Naming the decline at the pass fails that placement
   test, so the pass is left as it was.
-- **The shadow arm.** `tier.WithComposedShadow()` runs the composer's form of
+- **The shadow arm.** `gpu.WithComposedShadow()` runs the composer's form of
   each block it would serve beside the tier's own kernels, on a copy of the
   block's input, at every one-row step, issued or replayed from a recording.
   A comparison the composer forms from generic ops (`graph.Drift`: 14
@@ -7347,7 +7347,7 @@ row where the composer's reads two.
   composed prompt on three Q8_0 models and the windowed gemma-3-1b
   (promptModels), every block of the chunk served and its last row in the
   band, and the other served models' prompts to the tier's own logits, as
-  before. The change moves nothing to the heap in jit/gpu/tier or
+  before. The change moves nothing to the heap in engine/device/gpu or
   engine/model (`go build -gcflags=-m`, 96 lines before and after), and a
   warm decode token with the prompt's row forms placed allocates nothing:
   TestDecodeDoesNotAllocate on Llama-3.2-1B with ComposedPrompt on, 0
@@ -7472,7 +7472,7 @@ row where the composer's reads two.
     every input to 4e-7 and read 1.46e-6 past the Taylor window, at 3.7 times
     the bound. Past |x| = 1/2 expm1 is exp(x) - 1, and exp is the degree-5
     Taylor sum on a reduced argument |r| <= ln2/2 that main's kernels use
-    too (`jit/pass_exp.go`, `emitExpPS`): its remainder is 3.24e-6 of exp(r)
+    too (`composer/pass_exp.go`, `emitExpPS`): its remainder is 3.24e-6 of exp(r)
     at r = -ln2/2, so exp holds 3.5e-6 (read 1.54e-6), and exp(x) - 1
     multiplies that by e^x/|e^x - 1|, 2.54 at x = 1/2 and falling away, so the
     bound past the window is 2.6 x 3.5e-6 + 1 ulp = 9.2e-6. Within the window
@@ -7482,7 +7482,7 @@ row where the composer's reads two.
   - Main's xIELU gate did not sample the arguments where exp's remainder
     peaks, and its own kernel reads 1.59 of its bound there (x = -1.04, the
     edge of the reduced argument; 0.584 with exp's error added). It now does:
-    `TestXIELUAtTheExpEdges` (jit/cpu, avx2 and sse) runs the sixteen
+    `TestXIELUAtTheExpEdges` (engine/device/cpu, avx2 and sse) runs the sixteen
     arguments at both edges of eight ranges under `xieluTol` plus
     3.5e-6 |alpha_n| exp(m), and fails an exp a Taylor term short (caught on
     306 elements) and the other faults. The backend's gate (2e-6 of the
@@ -7518,11 +7518,11 @@ row where the composer's reads two.
     most 1.10 of the tier's distance at the median and 2.18 of the widest
     backend's at the worst (gemma-3-1b-it).
   - The escape analysis against seam-wip's head. `go build -gcflags=-m` over
-    `jit/gpu/tier`, `jit`, `engine/graph` and `engine/model` reads 41235
+    `engine/device/gpu`, `jit`, `engine/graph` and `engine/model` reads 41235
     heap diagnostics there and 41297 here. The 24 entries that differ are in
-    `jit/decompose_map.go` (a form), `engine/graph/verify.go` (the verifier)
+    `composer/decompose_map.go` (a form), `engine/graph/verify.go` (the verifier)
     and `engine/model/front.go` (the graph a model states), all built once;
-    none is in `jit/gpu/tier`, `jit/pass_regs.go` or a file a token runs.
+    none is in `engine/device/gpu`, `composer/pass_regs.go` or a file a token runs.
   - Logs. V100, `~/jitllm-test/gates/engine/model/`: `g5-*.out` the first
     commit's default build (`g5-serve-*`, `g5-c6-full`) and the new tree's
     composed build (`g5-violations-c`, `g5-hybrid-block-c`, `g5-hybrid-sib-c`,
@@ -7611,7 +7611,7 @@ row where the composer's reads two.
   kernels do (0.85 and 8.1e-03 against a clean 3e-14).
   The serving gate takes gemma-2-2b, granite-3.3-2b, granite-4.0-micro and
   falcon-7b with their heads served: no head is declined or unstated, and
-  the lists that held them, the headless front (jit.FrontHeadless) and
+  the lists that held them, the headless front (composer.FrontHeadless) and
   UncoveredClassic are gone, nothing reading them. On a V100 the composed block and head read a median 0.987,
   1.000, 0.994 and 1.003 of the tier's own distance from the float reference
   on CUDA (worst NMSE from the tier 0.052, 0.0036, 0.0174 and 3.9e-05) and
@@ -7644,7 +7644,7 @@ row where the composer's reads two.
   reads 1e-14 to 1e-12 over four rows at once (TestComposedCPUHead), and the
   original pass fails the same gate at 5e+05 to 8e+05 and 3.8 on the softcap.
   Escape analysis (go build -gcflags=-m, line numbers dropped) against the
-  tree before this work, over jit, jit/gpu/tier, engine/model, engine/nn and
+  tree before this work, over jit, engine/device/gpu, engine/model, engine/nn and
   engine/graph, adds no heap escape to forward.go, step.go, layer.go or
   launch.go: the additions are graph.Head.Build's thirteen (built once, then
   cached), two appends and a local in the cse sweep (formation) and one error
@@ -7741,8 +7741,8 @@ row where the composer's reads two.
   ComposedSample; ComposedStep is all five, the jitllmcomposed build's
   default and JITLLM_GPU_COMPOSED=1's), each formed at the placement or
   PrepHead from the front end's graph and counted served, replayed or
-  declined by name (Stats.StepDeclines). The table is jit.Front's PartTable
-  graph (jit.TableGraph), one per rotary the plan states
+  declined by name (Stats.StepDeclines). The table is composer.Front's PartTable
+  graph (composer.TableGraph), one per rotary the plan states
   (nn.LayerPlan.Tables), writing cs and csSWA where the tier's kernel did;
   it reads the planes the tier already holds, and a rotary over several
   axes has its planes in the plan too (RopeTabAxes, which RopeTab leaves
@@ -7801,7 +7801,7 @@ row where the composer's reads two.
   TestForwardSampleMatchesSampleOverForward, TestComposedPromptIsNotServed
   and TestComposedShadowHoldsEveryBlock (Llama-3.2-1B) pass.
   Escape analysis against the tree before this work (go build -gcflags=-m,
-  line numbers dropped, jit, jit/gpu/tier, engine/model, engine/nn,
+  line numbers dropped, jit, engine/device/gpu, engine/model, engine/nn,
   engine/graph) adds the forms' builds (their maps and a table's planes
   name, once a form), error paths, the placement's planes and table list,
   and appends onto the staging bytes the tier reuses (the rows' positions,
@@ -7866,7 +7866,7 @@ row where the composer's reads two.
   that read it, the SiLU's or a rotary's: single kernels of 25,071 ops in the
   int8 form and 17,675 to 103,666 in the float form of a Llama-3.2-1B block
   from 32 and 64 rows on. A pass on the naive nest, `RowTiles`
-  (`jit/pass_rowtiles.go`, after the int8 dot's fuse and before `Threads`),
+  (`composer/pass_rowtiles.go`, after the int8 dot's fuse and before `Threads`),
   cuts the leading axis of a sum over a weight matrix into tiles of T rows,
   T the most rows, a power of two dividing R and at most 16, that leave the
   launch four warps a multiprocessor (`Device.Units` times its lanes, or
@@ -7978,7 +7978,7 @@ row where the composer's reads two.
   GetRowsPacked), which is why float embeddings were declined. Now the input
   rows graph (nn.Head.Embed) is served at any row count a call carries: a
   decode row, a prompt chunk at its scratch's rows (counted apart, under
-  tier.PromptEmbed), and a promise no call takes, formed at the narrowest
+  gpu.PromptEmbed), and a promise no call takes, formed at the narrowest
   width the placement formed and read back (materializeComposed) -- which is
   also how a head on another card than block 0's hands the rows over: the
   head's card gathers, and block 0's uploads them as the residual crosses
@@ -8016,7 +8016,7 @@ row where the composer's reads two.
   parts from the CPU's by 2.46 while the stream models' rows are declined by
   name every step. TestDecodeDoesNotAllocate's composed arms on
   Llama-3.2-1B make no engine allocation with every row gathered, both
-  builds. Escape analysis against the tree before (jit/gpu/tier,
+  builds. Escape analysis against the tree before (engine/device/gpu,
   engine/model, engine/nn): the forms' builds, the fault rewrite, error paths
   and the staging bytes' growth, none on a warm step's path; the cross-card
   read-back's session closure allocates, as main's did. Open: the sampler's
@@ -8124,7 +8124,7 @@ row where the composer's reads two.
   `go build -gcflags=-m` over the four touched packages moves nothing more to
   the heap (247 lines either side).
 - No device is a default where blocks live. `model.WithCPU(listed)` says
-  whether the caller listed the CPU among its devices (`tier.AdmitsHost`:
+  whether the caller listed the CPU among its devices (`gpu.AdmitsHost`:
   `auto`, or a `-devices` list naming `cpu`); `cmd/jitllm run` and the
   server's `LoadModel` pass it from the spec. Listed, the engine may choose
   the CPU as any other device. Not listed, every choice the engine made for
@@ -8148,7 +8148,7 @@ row where the composer's reads two.
   step, 124 page-ins on cuda:0 and 126 on vulkan:2, the resident control's
   greedy token at every step (worst logit 0 on cuda:0, 0.469 on vulkan:2),
   and each block formed once on the card in the composed build
-  (`tier.Stats.BlockForms`, 144 page-ins) and once more after a caller's move
+  (`gpu.Stats.BlockForms`, 144 page-ins) and once more after a caller's move
   to the CPU and back; a 1 MiB card fails `SetDevice` naming every block.
   Its violations: the CPU listed spills 7 blocks (13 composed) and the check
   names them, and the first form of `pageOnCards`, which released the
@@ -8160,7 +8160,7 @@ row where the composer's reads two.
   history is the layer's host KV pages held as one off-heap span
   (`kvArena`), page n at slot n, so a declined step's main kernels and a
   composed step read one set of pages. The census is the tier's: the
-  decline names moved to `jit.Decline`, the tier's `partDecline` an alias
+  decline names moved to `composer.Decline`, the tier's `partDecline` an alias
   with its names and numbers unchanged, and the CPU's reasons appended
   (a windowed, latent, shared, recurrent or batched block, a history not
   binary16, a CPU below AVX2/FMA/F16C, a block not composed at placement);
@@ -8208,7 +8208,7 @@ row where the composer's reads two.
   wrote before the tail, of stories15M, synth-nemotron, synth-apertus and
   synth-gemma3n, upgrade to their fresh conversion but for the 20 bytes of
   the writer's name in the fingerprint). An expression forms one map; where the
-  register binding refuses a kernel for pressure (`jit.ErrRegisterPressure`,
+  register binding refuses a kernel for pressure (`composer.ErrRegisterPressure`,
   `PressureError` naming the parts), the largest expression formed whole in
   that part is formed a map a term and the run passed again, at compose time:
   xIELU binds whole on one element and as nine maps over a vector loop, and
@@ -8219,7 +8219,7 @@ row where the composer's reads two.
   zero it reads left out of the sequence (`beforeShare` counted every
   constant as made), so the lowering found "node 22 (const) has no register";
   a constant counts as made only where no entry makes it. The family-name
-  counter over jit/, engine/graph and front.go (names of families and of
+  counter over composer/, engine/graph and front.go (names of families and of
   activations, outside comments) went from 4 files to 0. `convert`'s
   `TestStatedActivationsAreTheReferences` holds nine statements (SiLU, GELU
   tanh and erf, squared ReLU, xIELU, the gaussian top-k, both clamped
@@ -8368,7 +8368,7 @@ row where the composer's reads two.
   TestBatchMatchesForward, TestRaggedBatchMatchesForward,
   TestForwardBatchGreedyMatchesEachSequenceAlone,
   TestSchedulerOnDeviceMatchesEachSequenceAlone and TestSpecLookupOnDevice
-  pass in the jitllmcomposed build. Escape analysis of jit/gpu/tier against
+  pass in the jitllmcomposed build. Escape analysis of engine/device/gpu against
   the tree before (go build -gcflags=-m, line numbers dropped) is unchanged.
   Open: TestABatchLeavesAnotherSessionAlone's composed arm forms 34 parts at
   B's first steps (a width no placement reserved, and the head at B's
@@ -8400,7 +8400,7 @@ row where the composer's reads two.
 - **A block is composed once for its device; a call's rows are an
   argument.** A GPU form of several rows is a capacity form: each kernel
   whose leading axis is the step's rows carries the capacity
-  (jit.Kernel.Capacity), reads the call's rows from one word (the table
+  (composer.Kernel.Capacity), reads the call's rows from one word (the table
   "rows.n") and is held to them by CallRows -- a kernel of independent
   threads has its threads clamped to the live elements, a kernel whose
   threads combine is held by its launch alone and may not bind the
@@ -8416,7 +8416,7 @@ row where the composer's reads two.
   33, 100, 511, 512, 513 and 2000 tokens with decode after each composed,
   compiled and built nothing (TestPlacementComposesOnce; its violation, a
   form at each chunk's grain width, builds a scratch at a 5-token prompt).
-  The capacity is still in jit.Key: the forms do not move with a call's
+  The capacity is still in composer.Key: the forms do not move with a call's
   rows, but their codes and schedules still read the capacity, and the CPU
   device's forms have none.
 - **Nothing composes, compiles or builds a scratch after placement.** A
@@ -8580,7 +8580,7 @@ row where the composer's reads two.
   cb858b79, the A/A 1.003); nvprof showed the tier's matvecs where
   cb858b79 ran the composer's. Open now returns an UpgradeRequiredError
   naming `jitllm upgrade` where the build composes by default
-  (jit.ComposedByDefault, which the tier's default reads) or the CPU device
+  (composer.ComposedByDefault, which the tier's default reads) or the CPU device
   composes, when the container states no activation and the front end
   refuses a block for wanting one (TestOpenRefusesAContainerThatStatesNoActivations,
   which fails with the check off). The same binary on that container and
@@ -8639,7 +8639,7 @@ row where the composer's reads two.
   form cannot hold to rows ("its calls [64 6] hold no rows of a call").
 - **Decode groups: a model over several cards decodes on every card at
   once.** A joint step runs card 1's blocks, then card 2's
-  (tier.GPU.layersRows), so with one step in flight one card works. The
+  (gpu.GPU.layersRows), so with one step in flight one card works. The
   server's step loop (server/batchgroups.go) now deals a multi-card model's
   decoding rows into one group per card holding blocks and steps each group
   on a long-lived worker of its own (model.StepJoint, the joint arm for a
@@ -8659,7 +8659,7 @@ row where the composer's reads two.
   another card runs another step's) went from 4 of 64 steps to 127 of 128
   on the laptop's two devices (RTX 3050 Ti under CUDA and Vulkan). Tokens:
   the loop groups by itself only where every block and the head run in the
-  composer's reserved width (tier.GPU.RowsComposed), one kernel for every
+  composer's reserved width (gpu.GPU.RowsComposed), one kernel for every
   row count; there TestBatchDecodeGroupsKeepTheTokens holds stories15M,
   Llama-3.2-1B and Qwen3-MOE-4x0.6B bit for bit between one group, a group
   per card and a group per row. The tier's own kernels are chosen per row
@@ -8768,7 +8768,7 @@ row where the composer's reads two.
   fix reverted fails it, and the tail moved by one element parts.
 - **A linear block's rows are a scan the composer forms.** The op language
   gains no op: OpDeltaRule and OpStateConv over a step of several rows
-  decompose into a new primitive, PrimScan (jit/generate_scan.go), and two
+  decompose into a new primitive, PrimScan (composer/generate_scan.go), and two
   maps. A scan's state rows are the value heads' rows, a workgroup of one
   subgroup each, every thread holding components lane, lane+32, ... as
   folds; it loops over the runs the step's run descriptor lists
@@ -9009,7 +9009,7 @@ row where the composer's reads two.
   coordinates); the tier read "binds" as "reads and writes", so a split's
   part kernel that binds the output and writes only its planes, and an
   epilogue that reads x only at the element it writes, were refused in
-  place (jit.Binding.AtElement; inPlace uses Read, Writes and it); and the
+  place (composer.Binding.AtElement; inPlace uses Read, Writes and it); and the
   converter stated a mixture with ungated expert banks as gated
   (convert/acts.go reads the banks). The CPU device steps a block that
   attends as well through its pages (cpuRecRows readies each row's
@@ -9291,7 +9291,7 @@ row where the composer's reads two.
   untiled.** Split now cuts a tiled form's sums within a workgroup by the
   segments one unit of its rows alone would take (groupSplitRows), each
   thread storing its segment's rows; where the device rounds every float
-  operation alone (PTX's .rn, jit.Device.ExactArith) the split's untiled
+  operation alone (PTX's .rn, composer.Device.ExactArith) the split's untiled
   form is formed beside it on the same operands, each row's sums cut and
   combined in the tiled one's order, and launched in its place at a call of
   at most four rows (Split.Few, Code.RunsAt). A row past the call's stores
@@ -9357,12 +9357,12 @@ row where the composer's reads two.
   That is main's path measured against itself, not the composer: the
   composer's own prompt forms are 5.1x slower than the tier's prefill on
   a lone 960-token prompt, having no tensor-core form on sm_70 (the m8n8k4
-  layout is not lowered in jit/ptx/tile.go). Gate:
+  layout is not lowered in composer/ptx/tile.go). Gate:
   TestComposedStepPromptRunsPrefillAttention (56 launches; 28 on the old
   code).
 - **A mixture's routed experts are served composed from pages, on the cards
   and on the CPU device.** The composer's expert matvec reads a bank held in
-  pages through a table of the step (`jit.Request.Paged`: each expert's
+  pages through a table of the step (`composer.Request.Paged`: each expert's
   sheet of the held bank, bounded by the sheets held) and a bank whose
   sheets lie a page apart at that stride (`Request.Strides`). On a card a
   streamed block (`Config.StreamExperts`, the tier's compact bank or its
@@ -9442,7 +9442,7 @@ row where the composer's reads two.
   probability on lev (V100, ptx), and the gate's equality (the picked labels
   answer the row's bit for bit) does not hold in a build that composes the
   prompts: the two forms are two orders of one Q8_0 sum (their output counts
-  differ, and the passes cut the reduction by the count, jit/pass_split.go;
+  differ, and the passes cut the reduction by the count, composer/pass_split.go;
   which pass moves the bits is not isolated), and on a random Q8_0 head of 4096 to 131072
   rows 45 to 54 of 64 picked rows differ from the whole matvec's row in the
   last bits, worst 6.1e-5 of a logit, on ptx and spirv alike. That is
@@ -9494,7 +9494,7 @@ row where the composer's reads two.
   the scaled row's projection over sqrt of its width, normed per layer
   slice, the sum over sqrt 2; an id past a table that stops short reads row
   0), and every block of such a model reads them as its second input
-  (jit.Front's feed): its own slice, gated by its stated activation over
+  (composer.Front's feed): its own slice, gated by its stated activation over
   its gate of the residual, projected, normed and added before the output
   scale. A block sharing another's history projects q alone and attends
   the state kv@N, which the attention's decomposition already resolved;
@@ -9633,9 +9633,9 @@ row where the composer's reads two.
   after its page and row faults.
 - **An attention over one sequence's rows runs on the matrix unit (the
   flash pass).** Where a prompt chunk's rows are one sequence's in
-  position order (jit.Step.Seqs, Heads.Seqs: a prompt call, or a ragged
+  position order (composer.Step.Seqs, Heads.Seqs: a prompt call, or a ragged
   step whose rows are one run, ragStep.oneSequence) and the device states
-  its matrix tile, jit.Flash forms the decomposed attention chain -- the
+  its matrix tile, composer.Flash forms the decomposed attention chain -- the
   chain SplitRange already matched, now one function both read
   (rangeChain) -- as one kernel: a workgroup takes 64 rows of the
   sequence and a head, 32 positions a block up to its last live row's
@@ -9685,7 +9685,7 @@ row where the composer's reads two.
   two ways: the split passes chose the segments by the form's own output
   count, so on a V100 the whole head of 65536 rows summed each row in two
   segments of 32 blocks and the 512 picked rows in 32 segments of two. A
-  selection's primitives now state the matrix it picks from (jit.Pick, set
+  selection's primitives now state the matrix it picks from (composer.Pick, set
   by the row-selected Q8_0 matvec), and Split decides its segments by the
   form over every row (Kernel.cutElements); the whole head's form is
   unchanged by construction (no Pick, the same elements). On a random Q8_0
@@ -9738,7 +9738,7 @@ row where the composer's reads two.
   and 3.0e-4, Qwen2.5-VL (windows) 4/4 at 3.3e-5 and 1.8e-3; a warm encode
   allocates nothing; the rows made causal read 6.8e-2, 1.5e-3, 0.12 and
   0.45. On a card the tier
-  serves a non-causal call's blocks when asked (tier.ComposedTower,
+  serves a non-causal call's blocks when asked (gpu.ComposedTower,
   towerserve.go): the rows' descriptors over the device's one transient
   pair as a page of the block's pool geometry, the windows the call staged
   as rows.win, a row-chunked set's phases as the descriptors' ends; a block
@@ -9753,7 +9753,7 @@ row where the composer's reads two.
   ComposedTower is not in ComposedStep: Gemma 3's SigLIP at 4096 rows reads
   NMSE 4.1 after one composed block on both card backends, where every
   tower of 1600 rows or fewer agrees (the attention past 2048 keys splits
-  into sequential partitions, jit/pass_splitrange.go, the first suspect;
+  into sequential partitions, composer/pass_splitrange.go, the first suspect;
   scoping the combine's shared loads to the partition loop did not move
   it). The projectors and the entry rows stay main's generated kernels.
 - **The matrix kernel at 1.11-1.34 of GemmVolta over a 128x128 tile, a
@@ -9804,13 +9804,13 @@ row where the composer's reads two.
   main's word for word. The gpt-oss rows PX recorded (0.051) and its server
   four times its CLI do not reproduce at the base: its server reads 276 ms a
   512-token prompt, its CLI 278 ms of kernels.
-- **The composer's CPU lowering has an arm64 target.** jit/lowercpu.go
-  lowered through jit/x86 only, so an arm64 host's CPU device ran no
+- **The composer's CPU lowering has an arm64 target.** composer/lowercpu.go
+  lowered through composer/x86 only, so an arm64 host's CPU device ran no
   composed block. The CPU profile is unchanged: each of its sixteen
   eight-lane vector registers is a NEON pair (lanes 0-3 in V2r, 4-7 in
   V2r+1) and each general register an X register, the argument block in X0
   as trampoline_arm64.s passes it, so every pass and the binder serve both
-  targets. Each node is lowered from the composer's IR through jit/cpu's A64
+  targets. Each node is lowered from the composer's IR through engine/device/cpu's A64
   encoder, which gains the instructions it emits (a64ops.go, pinned to
   llvm-mc's words); no second assembler and no main kernel. An operation
   within 128-bit lanes is its NEON operation on both halves, one that clears
@@ -9890,7 +9890,7 @@ row where the composer's reads two.
   minutes.
 - **The prompt's attention takes each block in its own trip, and its
   maps and halves fold away (Recompute, Same).** The flash loop states
-  StepsLast again (jit.Loop): its fold steps are made after the trip's
+  StepsLast again (composer.Loop): its fold steps are made after the trip's
   stores, behind its last barrier, so each trip adds its own block's
   weighted sums rather than the block before, and no step's values are
   held across the trip. Its element indices are the thread's own
@@ -9984,7 +9984,7 @@ row where the composer's reads two.
   is past 2^32, so the attention's merge wrote only the rows before 455
   (before 324 at 2100 rows) and left the rest as the scratch held them.
   The leading axis's whole rows now come apart from its remainder.
-  jit.TestComposedGPUAttendBidirRows holds a bidirectional run of 1024,
+  composer.TestComposedGPUAttendBidirRows holds a bidirectional run of 1024,
   2100 and 4096 rows at head 72 (and 2100 at 64) to the definition on
   ptx and spirv, in the general form and the single-sequence one: the
   running split serves head 72, the flash form head 64, both exact on rows
@@ -10189,7 +10189,7 @@ row where the composer's reads two.
   (TestComposedCPUAttend holds; with the readers outside, 0.198).
 - **Metal serves the composer's blocks, its matrix tile among them.**
   Metal states maxThreadgroupMemoryLength (32 KiB on the M4) as
-  jit.Device.Shared, and the workgroup geometry leaves the attention plane
+  composer.Device.Shared, and the workgroup geometry leaves the attention plane
   what is left beside the combines, Bind's per-trip sums and the running
   partials: the stage kernels had declared 34816 to 39424 bytes, which the
   driver refused, and a kernel past the device is now refused by name where
@@ -10264,7 +10264,7 @@ row where the composer's reads two.
   UncoveredNonCausal. On the CPU device (WithComposedCPU) the Embedder's
   segment State runs each block over the sequence's rows as one run, its
   history the segment's arena (ncArena, shared with the tower's); on a card
-  the tier serves the segment's non-causal call (tier.ComposedTower,
+  the tier serves the segment's non-causal call (gpu.ComposedTower,
   towerserve.go) as a tower's. On a V100 host's CPU, held to main's
   encoder: all-minilm-l6, mxbai-embed-large, nomic-embed-text and
   snowflake-arctic-embed-22m serve every block of every text (36, 144, 84,
@@ -10322,7 +10322,7 @@ row where the composer's reads two.
   activation, the window order put back), decided by the tensors the
   container holds and declined by name where it holds one no graph binds.
   The CPU forms them at the vision State's placement, a card runs them as
-  tier.ComposedRows (picrows.go). On the V100 host the CPU serves SmolVLM,
+  gpu.ComposedRows (picrows.go). On the V100 host the CPU serves SmolVLM,
   llava, Qwen2-VL and Qwen2.5-VL whole (entry, every block, projector:
   2.6e-7, 7.2e-8, 5.2e-8 and 7.3e-14 after block 0; 1.1e-3, 1.1e-3,
   1.1e-4, 1.2e-4 for the encode), cuda:0 and vulkan:0 those four and
@@ -10345,18 +10345,18 @@ row where the composer's reads two.
   runs twice (no first pass: 0.50 to 1.08 from the clean encode).
 - **The composer's CPU lowering emits for the SSE tier.** A CPU device
   whose stated ISA is short of AVX2, FMA and F16C forms by the profile's
-  Narrow passes (jit/profile.go: Jam and Vectorize at four lanes, no FMA,
+  Narrow passes (composer/profile.go: Jam and Vectorize at four lanes, no FMA,
   Halves keeping no NaN payload; an f32 cache forms without Halves, as on
   AVX2, Registry.WithoutHalves dropping it from both) and is lowered in the
-  legacy encodings through jit/x86's SSE ops (jit/lowercpu_sse.go): SSE4.1
+  legacy encodings through composer/x86's SSE ops (composer/lowercpu_sse.go): SSE4.1
   and SSSE3 at most, a product and a sum where AVX2 fuses them, binary16
   widened and narrowed in integer ops and one float multiply or add, a
   shift by a count a lane done a lane at a time in general registers, a
   memory operand loaded first (legacy SSE faults unaligned), and a scratch
   vector the kernel's registers leave none for borrowed below the red zone
-  and put back. jit.HostCPULowers takes the SSE tier, so an SSE host's
+  and put back. composer.HostCPULowers takes the SSE tier, so an SSE host's
   blocks are served where every one was declined by DeclineISA. The
-  VEX-leak gate is one package now (internal/ssegate, main's jit/cpu gate
+  VEX-leak gate is one package now (internal/ssegate, main's engine/device/cpu gate
   moved there), and TestComposedCPUGatesOnSSE runs the 20 composer CPU
   kernel gates on the SSE tier and reads every kernel they mapped back
   through objdump: on the laptop (forced) and natively on an Atom C3558,
@@ -10396,7 +10396,7 @@ row where the composer's reads two.
   register, even one gprs had put in a general register. The lowering then
   counted in the general register with the vector's number, RAX for the
   first: a count of words read down a column faulted on its address
-  (jit.TestComposedCPUWordSums). Words a jammed loop loads across lanes were
+  (composer.TestComposedCPUWordSums). Words a jammed loop loads across lanes were
   not vector words, so a jammed integer sum counted lane 0 alone. A sum read
   in another sum's step had its readers placed after its loop (Homes), and
   Order ran its step before them, unless the pair matched the carried-choice
@@ -10407,7 +10407,7 @@ row where the composer's reads two.
   several. With the lanes remade for a value that is also an address
   (3acc904c's), that still left the top-k selection's prefix counts wrong
   in 42984 to 134135 of a row's elements at blocks of 64 and 128
-  (jit.TestComposedCPULanesAsData). Each fix, reverted alone, fails its
+  (composer.TestComposedCPULanesAsData). Each fix, reverted alone, fails its
   gate.
 - The top-k selection counts in floats: each round's counts and each
   element's count within its block are sums of ones and 2^16s, exact below
@@ -10579,7 +10579,7 @@ row where the composer's reads two.
   on it), and an encode ends with Pool.Rest, which parks every worker at
   once, so none parks later inside the next measured call: pixtral, phi4
   and SmolVLM read 0 at count 3, an allocation planted in Encode reads 1.
-  A picture's entry and projector on a card (tier.ComposedRows) now form
+  A picture's entry and projector on a card (gpu.ComposedRows) now form
   where the tower's blocks are placed (PrepRows, at the offer), not at the
   first encode: TestComposedTowerOnDevice holds Stats.FormedPart(ComposedRows)
   to 0, and reads 3 with the prewarm taken out. The front end states four
@@ -10599,14 +10599,14 @@ row where the composer's reads two.
   (UDIV), which the patch gather needed to form there.
 - Latent attention composed on the CPU device. cpuWhy no longer declines a
   block whose history is latent: the CPU's form is asked with the cards'
-  latent layout (jit.History{ValuesInKeys}), so the latent row is read once
+  latent layout (composer.History{ValuesInKeys}), so the latent row is read once
   in the layer's arena, whose value span is its key span (mapKVArena), and
   the CPU binds the latent roles (wqa, wqb, wkva, wkb, wvb, their norms, and
   Kimi-K3's MLA output gate in a full block). DeepSeek-V3's grouped router
   found a binder gap: an outer loop's iteration read only by a store (the
   group rank written at its group) got no register on x86, so the block did
   not lower; the binder now counts a store's index and value as reads
-  (jit.TestCPUStoreReadsItsIteration fails without it). TestComposedCPUBlocksServe
+  (composer.TestCPUStoreReadsItsIteration fails without it). TestComposedCPUBlocksServe
   serves every block step of synth-deepseek-dense, synth-deepseek,
   synth-deepseek-lite and synth-kimilinear at Q8_0 and Kimi-K3-0.40B Q8_0,
   at 0.000, 0.000, 0.000, 0.000 and 0.155 of main's spread at the median
@@ -11062,7 +11062,7 @@ row where the composer's reads two.
   Prompt at 512 on node 1 (n=20, busy 0-2%, A/A 0.98-1.00): Llama 0.4130 -> 0.5092 and 0.4040 -> 0.5152, 159 -> 202 tok/s;
   Qwen3-0.6B Q8_0 0.6844 -> 0.9773 and 0.6921 -> 0.9737. Llama's profile: 4948 us a token against main's 2589, the matvec 4229 of it
   against 2261 (Q6_K's ffn_down 968, Q4_K's 501); weight tiles of 16 or 32 rows for 64 change nothing (5069, 5021).
-- A scratch each call writes alone is stated by the composer (jit.Binding.Own: every store at the point's own coordinates, or a flat index no two points share), and the CPU call site runs such a kernel on the pool: decode's attention dots, scale and softmax ran their calls on one core (Qwen3-0.6B Q8_0, 2533 + 161 us a token of 22.6 ms, main's attention 656).
+- A scratch each call writes alone is stated by the composer (composer.Binding.Own: every store at the point's own coordinates, or a flat index no two points share), and the CPU call site runs such a kernel on the pool: decode's attention dots, scale and softmax ran their calls on one core (Qwen3-0.6B Q8_0, 2533 + 161 us a token of 22.6 ms, main's attention 656).
   Node 1 of a V100 box (TestComposedCPUAB, n=20, A/A 1.004-1.016): composed over main 0.885 and 0.901 (IQR 3.1%, 4.1%), 27.7-28.9 -> 45.2-46.3 tok/s; the base reads 0.573 and 0.578 at IQR 23-38%, unquotable.
   Decided against by structure: the scale as the dots' epilogue (the head pairs sharing a key row are lost), the scale beside the softmax's max (a range loop iterates positions, TestComposedCPUAttendRows NMSE 1.0), a residual add in a CPU matvec's epilogue (the matvec loses its jam).
   A V100 decode block is nine composed kernels to main's eight or nine; the composed greedy token's one-workgroup argmax is 3.0 of a 1B token's 5.3 ms of kernels.
@@ -11129,7 +11129,7 @@ row where the composer's reads two.
   registers go to the copies read most a trip. Q4_K reloads no pointer a
   trip. E5-2680 v4, 14 threads, of main, five paired passes: 2048x8192
   0.70-0.87 to 0.78-0.89 (higher in each); 8192x2048 ~1.0; token unchanged.
-- A prologue is admitted by the device's launch cost (jit.Device.Launch, its probe row's Floor x Bandwidth: 1.69M words on a V100): its workgroups re-reading the producer's inputs cost G*(In-Read)-In-Out words. The 8B's down declines (2.99M), its o (0.34M) and the 1B's down (0.84M) take theirs.
+- A prologue is admitted by the device's launch cost (composer.Device.Launch, its probe row's Floor x Bandwidth: 1.69M words on a V100): its workgroups re-reading the producer's inputs cost G*(In-Read)-In-Out words. The 8B's down declines (2.99M), its o (0.34M) and the 1B's down (0.84M) take theirs.
   V100 CUDA, composed with the launch cost against without (32-token rounds, n=20, A/A 0.99-1.03): Llama-3.1-8B 1.0685 and 1.0737 (IQR 0.3-0.6%); Llama-3.2-1B 0.9994, gemma-3-4b 1.0020, Phi-3.5 0.9995, Qwen2.5-1.5B 1.0006. Composed over the tier (TestComposedPartsAB: each arm tuned into its own cache over 128 warm tokens, round 0 kept): 8B 0.950/0.946, 1B 0.953, gemma 0.908, Phi 0.933, Qwen2.5 0.746.
   The rest of the block's prologues decline by the same words: the flash merge into o (In 49k words at 1024 keys), each norm into its projections (2.07M words for q/k/v; a group sum besides). The CPU states its call (Launch x Bandwidth) and runs no prologue: Qwen3-0.6B Q8_0 on node 1, composed over main 0.897 (A/A 0.997).
 - A weight-stationary prompt pass (8 rows in lanes, the 64 tokens a run-time

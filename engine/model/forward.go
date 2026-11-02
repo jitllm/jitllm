@@ -16,9 +16,9 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // Per-op timing, armed by WithProfile. The counters are process-wide (OpProfile
@@ -1006,7 +1006,7 @@ func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 	// with history keeps its format and travels converted, widened on its way
 	// to the device and narrowed home (migrateKVAs), as a q8_0 one does. A
 	// Instance whose CPU blocks run composed keeps the binary16 its CPU device
-	// holds (jit.Halves), in the arenas its blocks were bound to, as a cache
+	// holds (composer.Halves), in the arenas its blocks were bound to, as a cache
 	// with history does.
 	// The history comes home before the device changes (or detaches), or the
 	// next tier would attend over empty buffers. SetGPULayers(0) is that walk
@@ -1155,7 +1155,7 @@ func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 	if pl, ok := ld.(nn.Placer); ok {
 		pl.BeginPlacement()
 		// The router spreads a model that fits over its devices instead of
-		// filling the first to the brim (tier.GPU.PlanBlocks).
+		// filling the first to the brim (gpu.GPU.PlanBlocks).
 		if pb, ok := ld.(nn.BlockPlanner); ok {
 			pb.PlanBlocks(hi, s.planExtra(hi))
 		}
@@ -1780,7 +1780,7 @@ func (s *Instance) offerRange(lo, hi int) {
 	if ld == nil {
 		return
 	}
-	// Offers go through this instance's own view (tier.GPU.Attach), which makes it
+	// Offers go through this instance's own view (gpu.GPU.Attach), which makes it
 	// the device's current session: an offer is where a block takes the session's
 	// history (KV pages, a linear block's recurrent state), filed under whichever
 	// session is current. Offered through the shared tier, a block took it for
@@ -1842,7 +1842,7 @@ func (s *Instance) offerRange(lo, hi int) {
 				// there instead when the device offers it: the base on the
 				// card, the routed experts sent per token. A placement that
 				// keeps the block home is honoured above, and the device can
-				// be told not to (tier.Config.NoAutoStream).
+				// be told not to (gpu.Config.NoAutoStream).
 				as, ok := ld.(nn.AutoStreamer)
 				if !ok || bank == 0 || !as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.meanBase()) {
 					s.noteDecline(why)
@@ -2334,7 +2334,7 @@ func (s *Instance) embed(token int32) error {
 	// token's critical path).
 	e := &s.cpu.embed
 	e.tok1[0], e.pos1[0] = token, s.pos
-	if s.cpuEmbed(s.x, s.ple, e.tok1[:], e.pos1[:]) == jit.DeclineServes {
+	if s.cpuEmbed(s.x, s.ple, e.tok1[:], e.pos1[:]) == composer.DeclineServes {
 		s.posIn = m.posEmbd.e != nil
 		m.trace(-1, "embd", s.x)
 		return nil
@@ -2430,7 +2430,7 @@ func (s *Instance) Relocating() bool { return s.relocate }
 func (s *Instance) Relocations() int { return s.devRelocated }
 
 // Spills is how many blocks moved onto a later device because the one holding
-// them could not grow its history (tier.GPU.SpillAfter).
+// them could not grow its history (gpu.GPU.SpillAfter).
 func (s *Instance) Spills() int { return s.devSpilled }
 
 // Reclaims is how many of those the device has since taken back.
@@ -2506,7 +2506,7 @@ func (s *Instance) relocateUntil(pos int, fits func() bool) {
 		}
 		// A later device first, whether or not SetRelocate is on: moving the
 		// block onto the next card keeps every run contiguous and costs no
-		// crossing. See tier.GPU.SpillAfter.
+		// crossing. See gpu.GPU.SpillAfter.
 		spilled := false
 		if sp != nil && sp.SpillAfter(li) {
 			s.unmarkOnDev(li)
@@ -3910,7 +3910,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if err != nil {
 			return nil, err
 		}
-		if why == jit.DeclineServes {
+		if why == composer.DeclineServes {
 			s.cpu.served++
 			m.trace(li, "ffn_resid", s.x)
 			continue
@@ -3957,7 +3957,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if s.rows != nil && !c.Q4E() {
 			hidden = s.rows.hidden
 		}
-		if why := s.cpuHead(s.x, s.logits, hidden); why != jit.DeclineServes {
+		if why := s.cpuHead(s.x, s.logits, hidden); why != composer.DeclineServes {
 			return nil, cpuHeadRefused(why)
 		}
 	}

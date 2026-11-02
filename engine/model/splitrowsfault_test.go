@@ -5,8 +5,8 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSplitRowsGateDiscriminates runs TestSplitRowsMatchTheHost's split arm
@@ -25,8 +25,8 @@ func TestSplitRowsGateDiscriminates(t *testing.T) {
 			}
 			defer m.Close()
 			ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Italy is Rome; Spain's", true)
-			tier.SetMoEFault("splitrowshost")
-			defer tier.SetMoEFault("")
+			gpu.SetMoEFault("splitrowshost")
+			defer gpu.SetMoEFault("")
 			worst, st := splitRowsCase(t, m, ids, md.blocks, false)
 			t.Logf("splitrowshost: worst NMSE %.2e over %d split row steps", worst, st.SplitRowSteps)
 			if st.SplitRowSteps == 0 || worst <= md.band {

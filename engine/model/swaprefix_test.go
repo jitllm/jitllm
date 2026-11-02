@@ -3,9 +3,9 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // prefixWindowFixtures are the models the prefix-cache window gate runs:
@@ -50,10 +50,10 @@ func TestPrefixCacheRestoresAWindowedLayer(t *testing.T) {
 					name = "host"
 				}
 				t.Run(name, func(t *testing.T) {
-					var g *tier.GPU
+					var g *gpu.GPU
 					if spec != "" {
 						var err error
-						g, err = tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+						g, err = gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec)}, testTierOpts(t)...)...)
 						if err != nil || g == nil {
 							noDevice(t, spec, err)
 						}

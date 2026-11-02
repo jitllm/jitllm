@@ -1408,7 +1408,7 @@ artifact of the bucket. The standing hypothesis is `nn.MatVec`'s `make([]float64
 would slow the MATVEC rather than the router. **Unverified.** "1.9x on the 30B" is the
 measured whole-token result, and 15.6 ms of router saving does not explain it.
 
-**★ AND jitllm's ROUTER IS ALREADY f32 ON THE DEVICE** (`jit/gpu/kernels/moe.go`'s `RouterMatVec`),
+**★ AND jitllm's ROUTER IS ALREADY f32 ON THE DEVICE** (`composer/kernels/moe.go`'s `RouterMatVec`),
 which makes a CPU-side float64-exactness contract inconsistent with the engine's own GPU tier. Most
 of jitllm is f32 already: every generated CPU kernel writes `Out *float32`. The float64 that remains is
 the residual CONTAINER and the reference tier -- and the reference tier must stay f64 because it is
@@ -1440,7 +1440,7 @@ Run against violations per RULE 12m: bfloat16-truncating the accumulator FAILS i
 elements from every row FAILS it. A gate that has never fired is not a gate.
 
 **★ 14u. THE ROUTER IS JIT-COMPILED ON THE CPU NOW, WHICH IS THE SYMMETRY THAT WAS MISSING.**
-`jit/gpu/kernels/moe.go` generated a `RouterMatVec` for the device while the host ran a Go loop, so
+`composer/kernels/moe.go` generated a `RouterMatVec` for the device while the host ran a Go loop, so
 jitllm JIT-compiled this matvec on the GPU and interpreted it on the CPU -- the ONLY matvec in the
 engine in that position. `gguf.F32` is in `cpu.Supported` and `emitF32MatVec` is the kernel.
 
@@ -1490,7 +1490,7 @@ constants, so it panicked with "index out of range [0] with length 0". `Supporte
 F32 instead, which is what amd64 already does (a switch, with per-format tests naming types
 explicitly). **A list used as both a capability set and a test fixture is two things.**
 
-**★ AND ADDING A TYPE TO `Supported` INHERITS NO TEST.** Every format in `jit/cpu` is covered by a
+**★ AND ADDING A TYPE TO `Supported` INHERITS NO TEST.** Every format in `engine/device/cpu` is covered by a
 test that names it explicitly (`gemm_test.go`, `unroll_test.go`, `accs_test.go`); not one iterates
 `Supported` generically. `TestF32MatVecMatchesReference` is the kernel-level NMSE gate the new entry
 would otherwise have gone without, and run against violations it reads NMSE 2.3e-1 when an
@@ -1514,7 +1514,7 @@ comparison rather than beside it.**
 so splitting at ONE point costs one crossing per token and an interleaved set costs one at every
 transition. So "which blocks" is really "how many", and within ONE model every layer is the same size
 and equally hot -- so a hotness ranking provably degenerates to "as many as fit", which is what the
-code already did. `tier.Place` earns its keep only where units differ: across models, or below the
+code already did. `gpu.Place` earns its keep only where units differ: across models, or below the
 layer. Wired at layer granularity for one model, it would be a policy in name only.
 
 **★ 14n. PACKING IS 80-86% OF PREPARING A BLOCK, AND IT IS THE ONLY PART THAT CAN OVERLAP A TOKEN.**
@@ -1716,7 +1716,7 @@ cold-cache comparison on a file this size is not measuring the engines.
 ## ★ RULE 7r: SAFETENSORS IS THE SECOND INPUT FORMAT, AND THE ROTARY PERMUTATION IS THE PART THAT LOOKS FINE WHEN IT IS WRONG
 
 Landed as `convert/safetensors/` plus `convert/safetensors.go` and `convert/hfvocab.go`. The
-container is unchanged, `jlm.Write` is unchanged, and nothing in `engine/model/`, `engine/nn/` or `jit/` moved:
+container is unchanged, `jlm.Write` is unchanged, and nothing in `engine/model/`, `engine/nn/` or `composer/` moved:
 a source format is a reader that fills a `jlm.Source`, which is what the Scope section already
 said and what this measured.
 
@@ -1991,7 +1991,7 @@ And the differing bytes are 47, all of them the **HOSTNAME**:
 plus one length field at offset 97 shifting by exactly 17 = 20-3. Every weight
 page, every vision block, every scale plane: byte-identical. The search for an
 arch-dependent code path was also a dead end by construction -- `go list -deps
-./convert` is quant, meta, sched, gguf, jit/gpu/{ir,kernels}, jlm, pretok,
+./convert` is quant, meta, sched, gguf, engine/device/gpu/{ir,kernels}, jlm, pretok,
 safetensors, and **not one of them has a `//go:build amd64/arm64` line or an
 `_amd64.go`/`_arm64.go` file**.
 
@@ -2094,7 +2094,7 @@ reproduces the fault. RULE 11b: a red gate for a real bug is the system working.
 ★ **AND THE LESSON IS RULE 11d's, AGAIN, WITH THE SAME COST.** This file already
 records arm64 decode producing garbage for every quantized model while eleven
 green kernel gates said nothing, because what was run on the M4 was `./engine/nn` and
-`./jit/cpu`. A vision branch merged with its gates green on one architecture is
+`./engine/device/cpu`. A vision branch merged with its gates green on one architecture is
 the identical omission, and the identical class of bug came out of it.
 
 ## ★★★★ qwen2vl AND qwen2vl_merger. THE EXPENSIVE PART WAS THE ORACLE, NOT THE ARCHITECTURE.
@@ -2342,7 +2342,7 @@ gemma3 did not reach the device at first -- it had been
 declining every block, and the reason was `tier.quantOf`, a second hand-written
 `quant.Type -> kernels.Quant` switch that had never heard of Q5_0, which
 gemma-3-1b's `attn_q` is. That is fixed and gated
-(`tier.TestEveryPackedFormatReachesTheDevice`).
+(`gpu.TestEveryPackedFormatReachesTheDevice`).
 
 What is left is a host-vs-device difference **on ONE block**, which is where it
 stops being reassociation. `model.TestDeviceMatchesHostOnABiasedModel` places a
@@ -4572,7 +4572,7 @@ about astronauts landing on the moon".
 
 A vision block is one submission, and its score and probability planes were
 rows x heads x stride: 1.07 GB each for gemma3, 2.15 GB with nothing else, so
-the 4 GB card placed none of 27 blocks. `jit/gpu/tier/visionattn.go` gathers a
+the 4 GB card placed none of 27 blocks. `engine/device/gpu/visionattn.go` gathers a
 chunk of query rows (`kernels.CopySpan`), runs the same score, softmax and
 accumulate kernels built for the chunk, and scatters the output back
 (`kernels.CopyAt`) whenever the planes exceed 128 MiB -- 16 chunks of 256 rows
@@ -5233,7 +5233,7 @@ blocks"). `tier.visionChunk` now always chunks over budget: the largest chunk
 that is a multiple of 16 and of both tiles and fits, a divisor when one is at
 least half that, and otherwise the scratch rounded up to whole chunks (5108
 rows at MoonViT's 16 heads: 27 chunks of 192 over 5184 rows).
-`tier.TestVisionAttentionAlwaysChunksOverBudget` runs the earlier rule as its
+`gpu.TestVisionAttentionAlwaysChunksOverBudget` runs the earlier rule as its
 violation, and the Kimi device gate asserts the chunks ran.
 
 ## HunyuanVL: XD-RoPE per element, and a merger with newline rows
@@ -5503,7 +5503,7 @@ fixture's split geometry):
       cuda:0   decode 1.185e-11, prefill 1.474e-06
       vulkan   decode 1.612e-11, prefill 7.993e-12
       metal    decode 3.638e-11, prefill 1.255e-05  (M4; 8.388e-12 with
-               tier.Config.NoFlashPrefill)
+               gpu.Config.NoFlashPrefill)
     grouped mixture prefill vs row by row   6 grouped blocks, 3.914e-06
     step, three sessions vs each alone      cuda 4.278e-12, vulkan 4.602e-12, metal 3.849e-12
     seam moves with three rows in flight    1.03e-05 after, three arms
@@ -5615,7 +5615,7 @@ transformers 3.768e-11; device against host, decode / prefill:
 
 CUDA's 9.079e-05 is its batched scores' binary16 operands (`Stats.AttnMMA`):
 Gemma 4's attention scale is 1, so a 512-wide score is unscaled and the
-operands' rounding reaches the logits. `tier.WithoutAttnMMA` takes it to
+operands' rounding reaches the logits. `gpu.WithoutAttnMMA` takes it to
 1.760e-10. On the real E2B the same switch moves `verify -prefill 96` only from
 2.60 to 2.38, so the model's band, not the operands, is the real-checkpoint
 term. The fixture's prefill bound is 2e-4 for that reason.
@@ -6449,7 +6449,7 @@ encode's time over the new one's, so above 1 is the runner faster:
                             scratch, so its batched one inherited an unprobed
                             softmax width and took the one-thread-per-head
                             kernel (2.6x on the tower's attention, located by
-                            pricing each phase with tier.WithSkip)
+                            pricing each phase with gpu.WithSkip)
     fixed                   A/A        SmolVLM host 1.018 (IQR/median 0.054),
                                        CUDA 0.997 (0.038)
                             SmolVLM    host 0.984 (0.033)   CUDA 1.016 (0.020)
@@ -6668,10 +6668,10 @@ and `PrepLayer` is called from `offerRange` and nowhere else in the package.
   runs with the prompt. One row at a time is causal by construction, so a chunk
   holding a run never takes the per-row retry.
 - **A vision block whose score planes exceed 128 MiB runs its attention in query
-  chunks on the device** (`jit/gpu/tier/visionattn.go`, `Stats.VisionAttnChunks`)
+  chunks on the device** (`engine/device/gpu/visionattn.go`, `Stats.VisionAttnChunks`)
   -- the whole image is still one submission and every row still sees every key.
   And every vision block on a device writes ONE shared k/v pair
-  (`jit/gpu/tier/transientkv.go`): a block's keys live only inside its own
+  (`engine/device/gpu/transientkv.go`): a block's keys live only inside its own
   submission, so a cache per block was a gigabyte of a 4 GB card for SigLIP's 27
   blocks.
 - **The processors' resize is generated code** (`nn.ResampleRowJIT`,
@@ -7065,7 +7065,7 @@ smoke-test import "succeeded" without loading the module that was broken.
 
 ★★★ **AND THE DEVICE TIER HAD THE SAME ROPE BUG, WHICH IS RULE 8a's POINT
 EXACTLY: A GRAPH CHANGE LANDED ON ONE TIER IS SILENTLY ABSENT FROM THE OTHER.**
-Fixing `engine/model/mla.go` alone left `jit/gpu/tier` rotating, and `jitllm verify
+Fixing `engine/model/mla.go` alone left `engine/device/gpu` rotating, and `jitllm verify
 -devices cuda:0` read **max|dlogit| 0.929 with 8 of 32 argmaxes flipped**
 against synth-deepseek's 0.00195 on the same command -- 475x, which is what
 separates a real bug from this file's own 0.2-0.94 reduction-order band. With
@@ -7349,14 +7349,14 @@ artefact that replaces it. Everything else in that table is still parsed.
   the one the weights were trained against.
 
   ★ **IT IS FOUR DEFINITIONS AND ONE NUMBER, ASSERTED.** `internal/oracle`,
-  the device IR in `jit/gpu/kernels`, `jit/cpu`'s Go constant and the WORD AT
+  the device IR in `composer/kernels`, `engine/device/cpu`'s Go constant and the WORD AT
   `moeSumFloor` in the block all three host emitters load from.
   `nn.TestRouterFloorMatchesTheKernel` compares all four -- including the block
   word rather than only the constant, because the block is what the kernel
   reads.
 
   ★ **AND THE FIXTURE THAT WOULD HAVE CAUGHT IT WAS ALREADY THERE, PASSING ON
-  A DEGENERATE COMPARE.** `jit/cpu`'s top-k gate has an `allZero` case and it
+  A DEGENERATE COMPARE.** `engine/device/cpu`'s top-k gate has an `allZero` case and it
   compared the kernel's NaN divisor against its own reference's NaN **by bit
   pattern**, which matched. RULE 10's "a degenerate oracle is a failure, not a
   pass", in a gate written years before the router it now covers.
@@ -7667,7 +7667,7 @@ logits exactly (x/1), which is where the weights kernel reads m1 and m2. The
 masks are the reference's f32 subtraction and division, so they are its masks
 bit for bit; a 0/0 gap (a zero logit beside a zero maximum) is kept, as
 torch's `masked_fill` keeps a NaN comparison. Against
-`internal/oracle.SparseMixer`, the kernel gates (`jit/cpu` and
+`internal/oracle.SparseMixer`, the kernel gates (`engine/device/cpu` and
 `backend`) catch every fault the reference can carry: no mask (97 of 98
 inputs), the first expert kept in the second softmax (98), the weights
 renormalised (98), the clamp dropped from the factor (4 -- it only matters
@@ -8321,7 +8321,7 @@ tap-major (ky, kx, c) at conversion and k padded to a whole block; a
 depthwise one is a generated row kernel on the host (`cpu.EmitDWConv`, AVX2,
 SSE and NEON) and a generated kernel on the device (`kernels.DWConv`). On a
 device a block is a PROGRAM: a list of launches over named buffers, built
-and compiled when the block is placed (`jit/gpu/tier/conv.go`), the matrices
+and compiled when the block is placed (`engine/device/gpu/conv.go`), the matrices
 in the block's ordinary slots so the pager pages it as it pages any block,
 and the buffers between launches one scratch every convolutional block
 shares, gone with the last of them. The pieces are the elementwise set every
@@ -8403,7 +8403,7 @@ bit-identical to that placement from the start on CUDA and Vulkan; 0
 allocations after a picture on the host, CUDA and Vulkan; a second turn
 restoring 288 of 306 positions with no tower block; a warm encode allocating
 nothing; the device ledger returned to the byte after a release
-(`tier.TestConvTowerReturnsEveryDeviceBuffer`, which fails at 195584 bytes
+(`gpu.TestConvTowerReturnsEveryDeviceBuffer`, which fails at 195584 bytes
 live against a scratch that is never freed).
 
 And through a device budget below the tower: every block streamed
@@ -8761,7 +8761,7 @@ decision.
 Only the resize's integer passes ran on generated code (`nn.ResampleRowJIT`);
 a census of the image path found Go loops over every pixel or patch around
 them, and two over transcendentals. Every one of those is a kernel now, on
-AVX2, SSE and NEON (`jit/cpu/imgproc_const.go` has the contracts,
+AVX2, SSE and NEON (`engine/device/cpu/imgproc_const.go` has the contracts,
 `engine/nn/image.go` the entry points), and what is still Go is geometry from
 a picture's sizes and the tower's constant tables.
 
@@ -8793,7 +8793,7 @@ preprocessing and 25 encodes) against the tree it landed in. The gates read what
 0 of 188,160, and every NMSE line of the Qwen, Pixtral, Phi-4, Gemma 4 and
 Gemma 3n preprocess gates is the number it printed before.
 
-Each kernel's gate is in jit/cpu, against its formula or its reference's own
+Each kernel's gate is in engine/device/cpu, against its formula or its reference's own
 code written out, on the native tier and the SSE tier beside it on amd64, and
 on NEON under qemu-aarch64: ragged sizes around every vector boundary, guards
 after the output (and between rows where the output is strided), the inputs
@@ -9492,7 +9492,7 @@ per request, every row's final residual kept through the prefill
 (`State.rowTap`, under an embedding mode that pools nothing so no output
 projection runs), and the head over them -- on the host's generated kernels,
 or on the device holding the output projection as a program of
-`kernels.DH*` launches (`jit/gpu/tier/dechead.go`). The random fixture
+`kernels.DH*` launches (`engine/device/gpu/dechead.go`). The random fixture
 (`scripts/clefgold.py fixture`: the release's classes, every parameter and
 persistent buffer random) is held to Clef's own code to 1.7e-6 on a logit,
 and llama.cpp agrees with both to the reference's rounding.
@@ -9703,7 +9703,7 @@ the same 251 positions and answers within 0.012
 
 On a device each FastConformer block is a convolutional-tower block
 (`nn.ConvConformer`), a program of generated kernels as Gemma 3n's
-MobileNet blocks are (`jit/gpu/tier/conv.go`): LayerNorm in three passes,
+MobileNet blocks are (`engine/device/gpu/conv.go`): LayerNorm in three passes,
 the matrices' batched twins with a bias launch after each, the macaron
 halves as `AddHalf`, the relative-position scores in one kernel
 (`kernels.RelPosScores`: both terms, the position table's row picked by the
@@ -9894,7 +9894,7 @@ synth-kimik3), so its fused-run check is red on arm64 whatever the model.
 
 ## The sampler's order of the cuts and the temperature
 
-The engine held two orders. The device sampler (`jit/cpu/sample.go`, and the
+The engine held two orders. The device sampler (`engine/device/cpu/sample.go`, and the
 speculative sampler's distribution in `engine/model/specsample.go`) cut the
 top-k candidates by top-p and min-p over their softmax at temperature 1 and
 tempered only the draw over the survivors; the host's `Sampler` tempered

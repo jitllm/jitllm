@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestBlocksPageOnTheListedCard: the CPU is a device the caller lists or does
@@ -20,7 +20,7 @@ import (
 // the card and the same greedy token at every step as the card holding the
 // whole model resident. Each block is composed once on the card however often
 // it pages, and once more when a caller moves it to the CPU and back
-// (tier.Stats.BlockForms). A budget below the slots a swap needs fails
+// (gpu.Stats.BlockForms). A budget below the slots a swap needs fails
 // SetDevice by name and leaves nothing placed.
 //
 // VIOLATION SIGNATURE. The same card and budget with the CPU listed spills the
@@ -48,13 +48,13 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 
 	// attach opens the card under budget (0: none) and an instance of a model
 	// with the CPU listed or not.
-	attach := func(t *testing.T, budget uint64, cpu bool) (*Model, *Instance, *tier.GPU, error) {
+	attach := func(t *testing.T, budget uint64, cpu bool) (*Model, *Instance, *gpu.GPU, error) {
 		t.Helper()
 		ds := spec
 		if budget > 0 {
 			ds += "=" + strconv.FormatUint(budget, 10)
 		}
-		g, err := tier.OpenWith(tier.WithDevices(ds), tier.WithDeviceTune(tier.TuneOff))
+		g, err := gpu.OpenWith(gpu.WithDevices(ds), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, ds, err)
 		}
@@ -150,7 +150,7 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 		if composedByDefault {
 			for i, n := range ps.BlockDeclines {
 				if n > 0 {
-					t.Errorf("the composer declined %d paged block step(s): %s", n, tier.DeclineName(i))
+					t.Errorf("the composer declined %d paged block step(s): %s", n, gpu.DeclineName(i))
 				}
 			}
 			if n := composedBlockSteps(g); n < ntok*nl {

@@ -3,8 +3,8 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSeamMovesWhileServing moves blocks between host and device mid-sequence
@@ -14,11 +14,11 @@ import (
 //
 // It compares migrated against static on one tier, not device against host
 // (they legitimately part on knife-edge argmaxes). Both arms share one
-// tier.GPU so the split tuner's reduction order is the same.
+// gpu.GPU so the split tuner's reduction order is the same.
 func TestSeamMovesWhileServing(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 
-	g, err := tier.Open(0)
+	g, err := gpu.Open(0)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -134,7 +134,7 @@ func TestSeamMovesWhileServing(t *testing.T) {
 func TestPagesMoveWhileADeviceHoldsBlocks(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 
-	g, err := tier.Open(0)
+	g, err := gpu.Open(0)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -279,19 +279,19 @@ func TestLayerRelocatesToAnotherDevice(t *testing.T) {
 
 // layerRelocatesToAnotherDevice is TestLayerRelocatesToAnotherDevice on one
 // model, with the composer serving parts.
-func layerRelocatesToAnotherDevice(t *testing.T, path string, parts tier.Parts) {
+func layerRelocatesToAnotherDevice(t *testing.T, path string, parts gpu.Parts) {
 
 	// Both tiers' split tuner off: each tier tunes its own splits, so two
 	// tuned tiers can sum a matvec in different orders, and the two arms then
 	// part at a knife-edge argmax whatever the relocation did (it read token
 	// 7 of tinyllama either way on a V100, on main and on a branch alike).
 	// An equality gate pins every knob its equality depends on (RULE 11c).
-	a, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+	a, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || a == nil {
 		noDevice(t, "device", err)
 	}
 	defer a.Close()
-	b, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+	b, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || b == nil {
 		noDevice(t, "second tier", err)
 	}

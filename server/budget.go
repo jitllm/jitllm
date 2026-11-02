@@ -17,7 +17,7 @@ const backgroundShare = 8
 // shares divides the host weight budget between the open models.
 //
 // Something here has to divide it because nothing in the engine does:
-// sched.MemBudget() is stateless and model.Open, tier.OpenWith and NewInstance
+// sched.MemBudget() is stateless and model.Open, gpu.OpenWith and NewInstance
 // each read it independently, so two models would each believe they hold the
 // machine. The cgroup then throttles into reclaim, and neither pager can see
 // the other model. (The vision tower avoided this by sharing one container

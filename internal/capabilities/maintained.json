@@ -41,7 +41,7 @@
     {
       "name": "cpu-amd64-avx2",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "engine/device/cpu",
       "implemented": true,
       "verified": [
         {"hardware": "Intel Core i9-12900HK laptop (AVX2, AVX-VNNI)", "evidence": ["TestGreedyMatchesLlamaCpp", "TestEveryModelRunsGenerated"]},
@@ -51,7 +51,7 @@
     {
       "name": "cpu-amd64-sse",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "engine/device/cpu",
       "implemented": true,
       "verified": [
         {"hardware": "Intel Atom (SSE4.2, no AVX)", "evidence": ["TestEveryModelRunsSSE", "TestGreedyMatchesLlamaCpp"]}
@@ -61,7 +61,7 @@
     {
       "name": "cpu-arm64",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "engine/device/cpu",
       "implemented": true,
       "verified": [
         {"hardware": "Apple M4", "evidence": ["TestGreedyMatchesLlamaCpp", "TestBatchMatchesForward", "TestEveryModelRunsGenerated"]}

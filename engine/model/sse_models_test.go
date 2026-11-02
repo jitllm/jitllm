@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // The SSE tier at the model level: every gate here forces the tier before a
@@ -236,8 +236,8 @@ func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float
 		t.Fatal("the composed CPU mapped no SSE-tier kernel")
 	}
 	served, declined := s.CPUBlockSteps()
-	if declined[jit.DeclineISA] != 0 || served == 0 {
-		t.Fatalf("on the SSE tier the composed CPU served %d block steps and declined %d by %q", served, declined[jit.DeclineISA], jit.DeclineISA)
+	if declined[composer.DeclineISA] != 0 || served == 0 {
+		t.Fatalf("on the SSE tier the composed CPU served %d block steps and declined %d by %q", served, declined[composer.DeclineISA], composer.DeclineISA)
 	}
 	if err := s.CPUFormErr(); err != nil {
 		t.Errorf("forming for the CPU on the SSE tier: %v", err)
@@ -245,7 +245,7 @@ func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float
 	var named []string
 	for d, n := range declined {
 		if n > 0 {
-			named = append(named, fmt.Sprintf("%d by %q", n, jit.Decline(d)))
+			named = append(named, fmt.Sprintf("%d by %q", n, composer.Decline(d)))
 		}
 	}
 	t.Logf("composed CPU on the SSE tier: %d of %d block steps served, declined %v; worst max|dlogit| %.4g against its own SSE arm (band %.4f)",

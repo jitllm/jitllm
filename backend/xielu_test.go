@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestXIELUMatchesTheOracle holds kernels.XIELU -- Apertus's ungated
@@ -44,7 +44,7 @@ func TestXIELUMatchesTheOracle(t *testing.T) {
 	}
 	// The arguments, for eight periods of a range reduction by ln2 below zero,
 	// where the reduced argument sits just inside either edge of [-ln2/2,
-	// ln2/2]: where a polynomial exp's remainder peaks (jit/cpu's gate holds
+	// ln2/2]: where a polynomial exp's remainder peaks (engine/device/cpu's gate holds
 	// the host kernels there). The device exp is the backend's own and is held
 	// to this bound, whatever it is built on.
 	for k := -1; k >= -8; k-- {

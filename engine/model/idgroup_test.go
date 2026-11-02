@@ -4,9 +4,9 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestIndexedGroupSplitOnDevice is the device gate on the expert matvecs'
@@ -36,22 +36,22 @@ func TestIndexedGroupSplitOnDevice(t *testing.T) {
 			}
 			defer m.Close()
 			ids := m.Vocab.Encode("The capital of France is Paris, and the capital of", true)
-			run := func(group bool) ([][]float32, tier.Stats) {
-				opts := []tier.Option{tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
-					tier.WithSplit(4)}
+			run := func(group bool) ([][]float32, gpu.Stats) {
+				opts := []gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
+					gpu.WithSplit(4)}
 				if group {
-					opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.ForceIndexedGroup = true }))
+					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.ForceIndexedGroup = true }))
 				}
-				gpu, err := tier.OpenWith(opts...)
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(opts...)
+				if err != nil || gpux == nil {
 					t.Skipf("no cuda device (%v)", err)
 				}
-				defer gpu.Close()
+				defer gpux.Close()
 				st := m.NewInstance(len(ids) + 1)
 				defer st.Close()
-				st.SetDeviceLayers(gpu, -1)
+				st.SetDeviceLayers(gpux, -1)
 				if n := st.GPULayers(); n != m.Cfg.NLayer {
-					t.Fatalf("the device took %d of %d blocks: %v", n, m.Cfg.NLayer, gpu.Err())
+					t.Fatalf("the device took %d of %d blocks: %v", n, m.Cfg.NLayer, gpux.Err())
 				}
 				var out [][]float32
 				for _, id := range ids {
@@ -62,9 +62,9 @@ func TestIndexedGroupSplitOnDevice(t *testing.T) {
 					out = append(out, append([]float32(nil), lg...))
 				}
 				if n := st.GPULayers(); n != m.Cfg.NLayer {
-					t.Fatalf("the session fell to the host: %v", gpu.Err())
+					t.Fatalf("the session fell to the host: %v", gpux.Err())
 				}
-				return out, gpu.Stats()
+				return out, gpux.Stats()
 			}
 			want, ws := run(false)
 			got, gs := run(true)

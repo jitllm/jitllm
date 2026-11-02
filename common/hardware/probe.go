@@ -2,7 +2,7 @@
 // do with it" -- the desktop equivalent of `jitllm hardware`.
 //
 // It reports rather than probing on its own account: every field is read from
-// where the engine reads it (sched, jit/cpu, backend.Open, tier), so the answer
+// where the engine reads it (sched, engine/device/cpu, backend.Open, tier), so the answer
 // cannot disagree with what a decode would do. Nothing is timed; the memory
 // wall is a separate, explicit button.
 //
@@ -21,12 +21,12 @@ import (
 	"sync"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 
 	"github.com/jitllm/jitllm/common/session"
 )
@@ -143,7 +143,7 @@ func Cached() (Report, bool) {
 // Probe reads the machine and caches the result.
 //
 // Call it from a worker, once, and not while a model is loaded: backend.Open
-// opens and closes every backend, which contends with a live tier.GPU. Calls
+// opens and closes every backend, which contends with a live gpu.GPU. Calls
 // are serialised here.
 func Probe() Report {
 	mu.Lock()
@@ -262,7 +262,7 @@ func describe(d backend.Device) GPU {
 
 // isa names what the native emitter emits, and whether this CPU can run it.
 //
-// jit/cpu probes the feature (CPUID leaf 7.1, AT_HWCAP or sysctl) and declines
+// engine/device/cpu probes the feature (CPUID leaf 7.1, AT_HWCAP or sysctl) and declines
 // the quantized row-major kernels when it is absent, so this is a measured
 // capability.
 func isa() string {
@@ -320,10 +320,10 @@ func (r Report) Machine() session.MachineReport {
 
 // ValidateSpec parses a device spec and says what it asks for.
 //
-// It is tier.ParseDevices, not a parser of this app's own, so the picker
+// It is gpu.ParseDevices, not a parser of this app's own, so the picker
 // cannot accept a spec the engine then refuses.
 func ValidateSpec(spec string) (string, error) {
-	es, err := tier.ParseDevices(spec)
+	es, err := gpu.ParseDevices(spec)
 	if err != nil {
 		return "", err
 	}
@@ -360,7 +360,7 @@ func ValidatePlacement(placement, spec string) error {
 	if err != nil {
 		return err
 	}
-	es, err := tier.ParseDevices(spec)
+	es, err := gpu.ParseDevices(spec)
 	if err != nil {
 		return err
 	}
@@ -401,7 +401,7 @@ func ValidateBudget(text string, fallback, gcCap uint64) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return "default: " + session.Bytes(fallback), nil
 	}
-	n, err := tier.ParseBytes(text)
+	n, err := gpu.ParseBytes(text)
 	if err != nil {
 		return "", err
 	}

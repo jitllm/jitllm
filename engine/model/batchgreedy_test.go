@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestForwardBatchGreedyMatchesEachSequenceAlone decodes several prompts of
@@ -60,7 +60,7 @@ func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
 
 	for _, arm := range []struct {
 		name string
-		opt  []tier.Option
+		opt  []gpu.Option
 	}{{"default", nil}} {
 		got, after := batchGreedy(t, m, ids, gen, seq, arm.opt)
 		// And a shorter instance on the same card afterwards: the batch grew the
@@ -103,7 +103,7 @@ func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
 // come out either way. At 0.05 the gate failed on a 0.157 flip that a change
 // to the activation quantizer's last bit moved onto row 0, with the two arms
 // still 0.47 apart a step on average either side of it. A row reading another
-// row's history (tier.SetPagedFault "alias") parts by far more.
+// row's history (gpu.SetPagedFault "alias") parts by far more.
 const batchTie = 1.0
 
 // hostGap is |logit(a) - logit(b)| on the host after the prompt and prefix.
@@ -123,18 +123,18 @@ func hostGap(t *testing.T, m *Model, prompt, prefix []int32, a, b int32) float64
 
 // lastBatchStats is the tier's Stats as batchGreedy's last run left them, for a
 // gate that has to assert which path ran.
-var lastBatchStats tier.Stats
+var lastBatchStats gpu.Stats
 
 // lastBatchName is the device batchGreedy's last run stepped on, as
-// tier.GPU.Name prints it: which backend took the batch.
+// gpu.GPU.Name prints it: which backend took the batch.
 var lastBatchName string
 
 // batchGreedy decodes every prompt together, a token per step, and returns
 // each row's first gen generated tokens, the first prompt decoded afterwards by
 // a single instance on the same card, and the count of sm_70 tensor-core matvecs.
-func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier.Option) (got [][]int32, after []int32) {
+func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []gpu.Option) (got [][]int32, after []int32) {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opt...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

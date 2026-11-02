@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestMLAOnEveryDevice runs Multi-head Latent Attention on the device, end to
@@ -52,17 +52,17 @@ func TestMLAOnEveryDevice(t *testing.T) {
 			ran++
 			mlaCPUArm(t, src, ids, want)
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				if err != nil || gpux == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
 				}
 				ran++
 				t.Run(spec, func(t *testing.T) {
-					defer gpu.Close()
+					defer gpux.Close()
 					st := m.NewInstance(len(ids) + 1)
 					defer st.Close()
-					st.SetDeviceLayers(gpu, -1)
+					st.SetDeviceLayers(gpux, -1)
 					if n := st.GPULayers(); n != wantPlaced {
 						t.Fatalf("%s took %d of %d placeable block(s) (%d in the model): %v",
 							spec, n, wantPlaced, m.Cfg.NLayer, declineList(st))
@@ -70,7 +70,7 @@ func TestMLAOnEveryDevice(t *testing.T) {
 					got := runIDs(t, st, ids)
 					if n := st.GPULayers(); n != wantPlaced {
 						t.Fatalf("the session fell to the host (%d blocks left): %v",
-							n, gpu.Err())
+							n, gpux.Err())
 					}
 					worst, worstD := compare(t, want, got)
 					// The latent history is paged like every other: a run that
@@ -84,14 +84,14 @@ func TestMLAOnEveryDevice(t *testing.T) {
 							covered++
 						}
 					}
-					composedCovers(t, m, len(ids), wantPlaced, false, gpu)
-					if ps := gpu.Stats(); ps.PagedLaunches == 0 && covered < wantPlaced {
+					composedCovers(t, m, len(ids), wantPlaced, false, gpux)
+					if ps := gpux.Stats(); ps.PagedLaunches == 0 && covered < wantPlaced {
 						t.Fatalf("%s decoded %s through no paged attention: the latent cache was not paged",
 							name, spec)
 					}
 					t.Logf("%s: %d of %d blocks on %s, %d positions, worst logit NMSE %.3e, "+
 						"worst |dlogit| %.3f, %d paged launches (%d staged)", name, wantPlaced, m.Cfg.NLayer, spec,
-						len(want), worst, worstD, gpu.Stats().PagedLaunches, gpu.Stats().PagedStagedLaunches)
+						len(want), worst, worstD, gpux.Stats().PagedLaunches, gpux.Stats().PagedStagedLaunches)
 					// Print the decline reasons: a missing feature and a full
 					// card want opposite responses.
 					for _, d := range declineList(st) {
@@ -241,15 +241,15 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 			name string
 			m    *Model
 		}{{spec + "/composed-cpu", mc}} {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-			if err != nil || gpu == nil {
+			gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+			if err != nil || gpux == nil {
 				t.Logf("%s: not present (%v)", spec, err)
 				continue
 			}
 			ran++
 			t.Run(arm.name, func(t *testing.T) {
-				defer gpu.Close()
-				mlaSeamMoves(t, arm.m, gpu, ids, want, arm.m == mc)
+				defer gpux.Close()
+				mlaSeamMoves(t, arm.m, gpux, ids, want, arm.m == mc)
 			})
 		}
 	}
@@ -261,11 +261,11 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 // mlaSeamMoves runs ids a third on the card gpu, a third on the CPU (every
 // block step of it served composed where composed is set), and a third back
 // on the card, against want.
-func mlaSeamMoves(t *testing.T, m *Model, gpu *tier.GPU, ids []int32, want [][]float32, composed bool) {
+func mlaSeamMoves(t *testing.T, m *Model, gpux *gpu.GPU, ids []int32, want [][]float32, composed bool) {
 	t.Helper()
 	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
-	st.SetDeviceLayers(gpu, -1)
+	st.SetDeviceLayers(gpux, -1)
 	if n := st.GPULayers(); n != m.Cfg.NLayer {
 		t.Fatalf("the card took %d of %d blocks: %v", n, m.Cfg.NLayer, declineList(st))
 	}
@@ -295,7 +295,7 @@ func mlaSeamMoves(t *testing.T, m *Model, gpu *tier.GPU, ids []int32, want [][]f
 	if composed {
 		for i, n := range declined {
 			if n > 0 {
-				t.Fatalf("the CPU's third: %d block steps declined: %s (%v)", n, jit.DeclineName(i), st.CPUFormErr())
+				t.Fatalf("the CPU's third: %d block steps declined: %s (%v)", n, composer.DeclineName(i), st.CPUFormErr())
 			}
 		}
 		if served-before != (b-a)*m.Cfg.NLayer {
@@ -311,7 +311,7 @@ func mlaSeamMoves(t *testing.T, m *Model, gpu *tier.GPU, ids []int32, want [][]f
 	}
 	if n := st.SetGPULayers(m.Cfg.NLayer); n != m.Cfg.NLayer {
 		t.Fatalf("regrowing the seam took %d of %d blocks: %v",
-			n, m.Cfg.NLayer, gpu.Err())
+			n, m.Cfg.NLayer, gpux.Err())
 	}
 	step(b, len(ids))
 	worst, worstD := compare(t, want, got)
@@ -333,18 +333,18 @@ func TestMLAOnADeviceWithPoisonedBuffers(t *testing.T) {
 	want := teacherForce(t, m, ids)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithPoisonKV(true), tier.WithPoisonScratch(true))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithPoisonKV(true), gpu.WithPoisonScratch(true))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			st := m.NewInstance(len(ids) + 1)
 			defer st.Close()
-			st.SetDeviceLayers(gpu, -1)
+			st.SetDeviceLayers(gpux, -1)
 			if n := st.GPULayers(); n != m.Cfg.NLayer {
 				t.Fatalf("%s took %d of %d blocks: %v", spec, n, m.Cfg.NLayer, declineList(st))
 			}
@@ -389,13 +389,13 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 			}
 			want := teacherForce(t, m, ids)
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				if err != nil || gpux == nil {
 					continue
 				}
 				ran++
 				t.Run(spec, func(t *testing.T) {
-					defer gpu.Close()
+					defer gpux.Close()
 					st := m.NewInstance(len(ids) + 1)
 					defer st.Close()
 					if !st.KVIsF16() {
@@ -404,7 +404,7 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 					}
 					// ONE block: the rest stay on the host and run the attention
 					// kernels the step-down emitted.
-					st.SetDeviceLayers(gpu, 1)
+					st.SetDeviceLayers(gpux, 1)
 					if n := st.GPULayers(); n != 1 {
 						t.Skipf("%s placed %d block(s), not 1", spec, n)
 					}
@@ -468,27 +468,27 @@ func TestNoPEMLAOnEveryDevice(t *testing.T) {
 	mlaCPUArm(t, src, ids, want)
 	ran := 1
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			st := m.NewInstance(len(ids) + 1)
 			defer st.Close()
-			st.SetDeviceLayers(gpu, -1)
+			st.SetDeviceLayers(gpux, -1)
 			if n := st.GPULayers(); n != wantPlaced {
 				for _, d := range declineList(st) {
 					t.Logf("  declined x%d: %s", d.Blocks, d.Why)
 				}
 				t.Fatalf("%s took %d of %d block(s), %d of them linear: %v (tier: %q)",
-					spec, n, wantPlaced, linear, declineList(st), gpu.Err())
+					spec, n, wantPlaced, linear, declineList(st), gpux.Err())
 			}
 			got := runIDs(t, st, ids)
 			if n := st.GPULayers(); n != wantPlaced {
-				t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())
+				t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpux.Err())
 			}
 			// The recurrence must have advanced: a linear block whose kernels
 			// never ran leaves the summary at zero and the model still answers.

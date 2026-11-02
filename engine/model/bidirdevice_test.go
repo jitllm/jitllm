@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestBidirRunOnDevice holds a device prefill of a prompt with an image to the
@@ -26,7 +26,7 @@ func TestBidirRunOnDevice(t *testing.T) {
 		return []Span{{Tokens: m.Vocab.Encode("Look:", true)}, {Embd: emb, Bidir: bidir},
 			{Tokens: m.Vocab.Encode(" This picture shows", false)}}
 	}
-	prefill := func(g *tier.GPU, bidir bool) ([]float32, int) {
+	prefill := func(g *gpu.GPU, bidir bool) ([]float32, int) {
 		sp := spans(bidir)
 		s := m.NewInstance(SpanPositions(sp, m.Cfg.NEmbd) + 1)
 		defer s.Close()
@@ -47,7 +47,7 @@ func TestBidirRunOnDevice(t *testing.T) {
 	t.Logf("host: causal image rows against bidirectional: logit NMSE %.3e", scale)
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

@@ -5,8 +5,8 @@ package nn
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // requireRowMajorHost skips a gate over the GGUF row-major family when this CPU

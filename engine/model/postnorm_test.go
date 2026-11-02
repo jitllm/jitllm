@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // lcppLogProbs runs llama-perplexity from dir on gguf over text with a context
@@ -265,7 +265,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			// on g when it is set, an f32 KV cache when f32, and the last
 			// block's post-FFN norm scaled by bend; it returns the log-softmax
 			// of the scored half.
-			decode := func(g *tier.GPU, f32 bool, bend float32, opts ...Option) [][]float32 {
+			decode := func(g *gpu.GPU, f32 bool, bend float32, opts ...Option) [][]float32 {
 				m, err := Open(path, append([]Option{noTune}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
@@ -329,8 +329,8 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			onHost := &Place{On: nn.CPU}
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-						tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)
 					}

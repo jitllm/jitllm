@@ -10,8 +10,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestLayoutRate prices the same weight in the two host layouts: GGUF's

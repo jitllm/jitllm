@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // namedReason reports whether u is a feature the front end names as not yet
@@ -28,7 +28,7 @@ func namedReason(u Uncovered) bool { return u > Covered && u < UncoveredUnbound 
 // Models with features the front end does not write yet are refused block by
 // block by a reason it names, never by a graph that fails to verify.
 func TestFrontStatesTheModelAsOps(t *testing.T) {
-	step := jit.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
+	step := composer.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
 	for _, file := range append(append(slices.Clone(servedModels), formedModels...), mixtureModels...) {
 		t.Run(file, func(t *testing.T) {
 			m := frontModel(t, file)
@@ -50,7 +50,7 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			if m.Cfg.LayerNorm != (hg.Ops[0].Kind == graph.OpLayerNorm) {
 				t.Fatalf("the head's first op is %v, where the model's norms are LayerNorm: %v", hg.Ops[0].Kind, m.Cfg.LayerNorm)
 			}
-			parts, err := jit.Front(f, false)
+			parts, err := composer.Front(f, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,13 +68,13 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			if got := rotaryTables(parts); got != wantTables {
 				t.Fatalf("%d rotary table part(s) of %d parts, where the model states %d rotar(ies)", got, len(parts), wantTables)
 			}
-			for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 8},
-				{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 1}, composedCPUDevice(6)} {
-				var run []jit.PartPlan
+			for _, d := range []composer.Device{{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 8},
+				{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 1}, composedCPUDevice(6)} {
+				var run []composer.PartPlan
 				for _, p := range parts {
-					run = append(run, jit.PartPlan{Part: p, Device: d})
+					run = append(run, composer.PartPlan{Part: p, Device: d})
 				}
-				reg := jit.Default()
+				reg := composer.Default()
 				ks, err := reg.Kernels(f, run, 0, step)
 				if err != nil {
 					t.Fatalf("%v: %v", d.Kind, err)
@@ -83,7 +83,7 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 				// cannot emit fails here, not first on a card.
 				// A device that guarantees no subgroup is given no op whose
 				// result depends on one.
-				if d.Kind == jit.DeviceGPU {
+				if d.Kind == composer.DeviceGPU {
 					for _, k := range ks {
 						l, err := reg.Lowerings[d.Kind].Lower(k, d)
 						if err != nil {
@@ -140,10 +140,10 @@ func TestFrontStatesSeveralStreams(t *testing.T) {
 }
 
 // rotaryTables is how many of parts are a rotary's table.
-func rotaryTables(parts []jit.Part) int {
+func rotaryTables(parts []composer.Part) int {
 	n := 0
 	for _, p := range parts {
-		if p.Kind == jit.PartTable {
+		if p.Kind == composer.PartTable {
 			n++
 		}
 	}

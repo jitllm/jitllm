@@ -5,9 +5,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSessionMovesBetweenInstances is the design's per-phase lease: a
@@ -31,8 +31,8 @@ func TestSessionMovesBetweenInstances(t *testing.T) {
 	if len(devs) != 2 {
 		t.Fatalf("two devices wanted, got %v", devs)
 	}
-	card := func(name string) *tier.GPU {
-		g, err := tier.OpenWith(tier.WithDevices(name), tier.WithDeviceTune(tier.TuneOff))
+	card := func(name string) *gpu.GPU {
+		g, err := gpu.OpenWith(gpu.WithDevices(name), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, name, err)
 		}
@@ -57,7 +57,7 @@ func TestSessionMovesBetweenInstances(t *testing.T) {
 	}
 	for _, arm := range []struct {
 		name         string
-		prefill, gen *tier.GPU
+		prefill, gen *gpu.GPU
 	}{{"cpu-then-card", nil, g0}, {"card-then-card", g0, g1}} {
 		t.Run(arm.name, func(t *testing.T) {
 			ref := m.NewInstance(seq)

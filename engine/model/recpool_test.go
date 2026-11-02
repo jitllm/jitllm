@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestRecurrentPoolKeepsASessionAcrossOthers: a hybrid device keeps every
@@ -64,7 +64,7 @@ func recPoolCase(t *testing.T, m *Model, dev string, shared bool, ids []int32, s
 	// decode prefills a session, then decodes steps tokens teacher-forced by
 	// fed (its own greedy choice when fed is nil). before runs ahead of its
 	// SetDevice and between after its prompt, when given.
-	decode := func(g *tier.GPU, fed []int32, before, between func()) ([][]float32, []int32) {
+	decode := func(g *gpu.GPU, fed []int32, before, between func()) ([][]float32, []int32) {
 		if before != nil {
 			before()
 		}

@@ -8,7 +8,7 @@ import (
 )
 
 // The spec picker is only worth having if it agrees with the engine, so the
-// validator is tier.ParseDevices itself. These gates cover the summary it
+// validator is gpu.ParseDevices itself. These gates cover the summary it
 // builds and what it refuses.
 
 func TestValidateSpecAcceptsTheGrammarAndSaysWhatItAsksFor(t *testing.T) {

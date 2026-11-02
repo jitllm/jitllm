@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Phi-4-reasoning-vision against transformers' own classes
@@ -263,7 +263,7 @@ func TestPhi4TowerMatchesTransformers(t *testing.T) {
 
 // p4vRun prefills the golden's prompt, the picture where "<image>" stood with
 // no markers, and decodes the continuation, on gpu when it is not nil.
-func p4vRun(t *testing.T, m *Model, g *p4vGolden, gpu *tier.GPU) [][]float32 {
+func p4vRun(t *testing.T, m *Model, g *p4vGolden, gpux *gpu.GPU) [][]float32 {
 	t.Helper()
 	st := m.NewInstance(8)
 	pic, err := st.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
@@ -277,12 +277,12 @@ func p4vRun(t *testing.T, m *Model, g *p4vGolden, gpu *tier.GPU) [][]float32 {
 	spans := []Span{{Tokens: g.Pre}, {Picture: pic}, {Tokens: g.Post}}
 	s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
 	defer s.Close()
-	if gpu != nil {
-		if err := s.SetDevice(gpu); err != nil {
+	if gpux != nil {
+		if err := s.SetDevice(gpux); err != nil {
 			t.Fatal(err)
 		}
 		if s.GPULayers() != m.Cfg.NLayer {
-			t.Fatalf("the device took %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpu.Err())
+			t.Fatalf("the device took %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpux.Err())
 		}
 	}
 	lg, err := s.PrefillMixed(spans...)
@@ -296,8 +296,8 @@ func p4vRun(t *testing.T, m *Model, g *p4vGolden, gpu *tier.GPU) [][]float32 {
 		}
 		out = append(out, append([]float32(nil), lg...))
 	}
-	if gpu != nil && s.GPULayers() != m.Cfg.NLayer {
-		t.Fatalf("after the prompt the device holds %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpu.Err())
+	if gpux != nil && s.GPULayers() != m.Cfg.NLayer {
+		t.Fatalf("after the prompt the device holds %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpux.Err())
 	}
 	return out
 }
@@ -328,14 +328,14 @@ func TestPhi4MatchesTransformersEndToEnd(t *testing.T) {
 		t.Fatalf("end to end: worst NMSE %.3e", w)
 	}
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
-			dev := p4vRun(t, m, g, gpu)
+			defer gpux.Close()
+			dev := p4vRun(t, m, g, gpux)
 			var worst float64
 			for i := range dev {
 				nm, _ := nmseOf(dev[i], got[i])
@@ -359,26 +359,26 @@ func TestPhi4TowerOnDeviceMatchesHost(t *testing.T) {
 	ran := 0
 	for _, arm := range towerArms() {
 		spec := arm.spec
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(arm.String(), func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			s := tw.testState()
 			defer s.Close()
-			s.SetDevice(gpu)
+			s.SetDevice(gpux)
 			if n := s.GPUBlocks(); n != tw.Cfg.NLayer {
-				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, tw.Cfg.NLayer, gpu.Err())
+				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, tw.Cfg.NLayer, gpux.Err())
 			}
 			px, err := s.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 			if err != nil {
 				t.Fatal(err)
 			}
 			var out []float32
-			arm.served(t, gpu, tw.Cfg.NLayer, func() {
+			arm.served(t, gpux, tw.Cfg.NLayer, func() {
 				e, err := s.Encode(px)
 				if err != nil {
 					t.Fatal(err)

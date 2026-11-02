@@ -3,8 +3,8 @@ package model
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // cpuTablesBlock is the block a call of the rotary tables' graphs binds: the
@@ -13,7 +13,7 @@ const cpuTablesBlock = -3
 
 // cpuTableState is the rotary tables' graphs (frontGraphs().tables) composed
 // for the CPU: a form a rotary of one row and one of a chunk's, and a call's
-// rows as the tables read them (jit.TableRopeRows): its live count, then a
+// rows as the tables read them (composer.TableRopeRows): its live count, then a
 // row's cache position and where its sequence's marks start.
 type cpuTableState struct {
 	one, many []cpuHeadForm
@@ -46,12 +46,12 @@ func (s *Instance) cpuPlaceTables() {
 func (s *Instance) cpuComposeTable(hf *cpuHeadForm, g *graph.Graph, rows int) {
 	*hf = cpuHeadForm{composed: true}
 	switch {
-	case !jit.HostCPULowers():
-		hf.why = jit.DeclineISA
+	case !composer.HostCPULowers():
+		hf.why = composer.DeclineISA
 	case g == nil:
-		hf.why = jit.DeclineNoGraph
+		hf.why = composer.DeclineNoGraph
 	default:
-		req := jit.Request{Graph: g, Step: jit.Step{Rows: rows, Page: 1, Keys: 1, Seqs: max(s.nseq, 1), Marks: s.m.ropeMarksCap(s.maxSeq),
+		req := composer.Request{Graph: g, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, Seqs: max(s.nseq, 1), Marks: s.m.ropeMarksCap(s.maxSeq),
 			ActWindow: s.jit.ActWindow()}, Device: s.composedCPU(), Apart: true}
 		f, err := s.m.cpuFormOf(req, g, rows, true, false, false)
 		if err != nil {
@@ -91,7 +91,7 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 			hf = &st.many[i]
 		}
 		f, why := hf.formOf()
-		if why != jit.DeclineServes {
+		if why != composer.DeclineServes {
 			return fmt.Errorf("model: the rotary table %d on the CPU: %s", i, why)
 		}
 		for r0 := 0; r0 < rows; {
@@ -130,7 +130,7 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 }
 
 // cpuTablePlanes is rotary table i's planes as its composed form reads them
-// (jit.TablePlanes): the model's rotary's, folded over its axes where it has
+// (composer.TablePlanes): the model's rotary's, folded over its axes where it has
 // several, or its sliding blocks'.
 func (m *Model) cpuTablePlanes(i int) []float32 {
 	c := &m.cpuForms

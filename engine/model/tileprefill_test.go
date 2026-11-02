@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestTilePrefillMatchesTheHost prefills real models with every block placed,
@@ -32,9 +32,9 @@ import (
 func TestTilePrefillMatchesTheHost(t *testing.T) {
 	// One tier per model: a tier's block scratch is built from the first
 	// model offered to it.
-	open := func(t *testing.T) *tier.GPU {
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.PreferTiles = true }))
+	open := func(t *testing.T) *gpu.GPU {
+		g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithConfig(func(c *gpu.Config) { c.PreferTiles = true }))
 		if err != nil || g == nil {
 			t.Skipf("no GPU: %v", err)
 		}

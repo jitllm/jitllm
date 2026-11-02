@@ -4,7 +4,7 @@
 //
 //	jitllm run -devices auto|all|cpu|gpu[:N]|cuda:0|vulkan:1[=BYTES],... [-vram BYTES] model.jlm prompt...
 //
-// jit/gpu is imported unconditionally. The drivers are dlopen'd rather than
+// engine/device/gpu is imported unconditionally. The drivers are dlopen'd rather than
 // linked, which is what keeps the build free of cgo.
 //
 // The verify subcommand decodes the same prompt on both tiers, compares token
@@ -37,11 +37,11 @@ import (
 
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -49,8 +49,8 @@ import (
 //
 // sched.DecodeCores picks the physical P-cores and the pool starts one worker
 // each, while GOMAXPROCS defaults to NumCPU. Several places size work off
-// GOMAXPROCS (jlm's reader fan-out, jit/gpu/kernels/pack.go,
-// jit/gpu/tier/tier.go), so the two must agree.
+// GOMAXPROCS (jlm's reader fan-out, composer/kernels/pack.go,
+// engine/device/gpu/tier.go), so the two must agree.
 //
 // It is set here rather than in sched because GOMAXPROCS is process-global and
 // a library must not take that decision from whatever embeds it. An explicit
@@ -438,7 +438,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 	// A -devices list without cpu (or auto) keeps every block on its devices,
 	// paging where they do not hold the model.
-	listed, err := tier.AdmitsHost(devSpec)
+	listed, err := gpu.AdmitsHost(devSpec)
 	if err != nil {
 		return err
 	}
@@ -493,7 +493,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		return fmt.Errorf("%s: %w", path, m.TokErr)
 	}
 	// The host budget is settled before the devices open: a device whose
-	// memory is the host's is carved out of it (tier.WithHostBudget).
+	// memory is the host's is carved out of it (gpu.WithHostBudget).
 	// A speculating session's verification is a ragged step of a few rows:
 	// its scratch is reserved at placement, or a card the blocks filled
 	// refuses it and the rows run padded to the prompt width.
@@ -510,7 +510,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// page-in repacks, which is slower than the upload it schedules. The
 	// arena gets what the host budget has left after the weights; a model too
 	// big for the host lands on zero and repacks. JITLLM_ARENA, when set, wins.
-	if g, ok := dev.(*tier.GPU); ok && place.Streams() && os.Getenv("JITLLM_ARENA") == "" {
+	if g, ok := dev.(*gpu.GPU); ok && place.Streams() && os.Getenv("JITLLM_ARENA") == "" {
 		if maxmem > m.WeightBytes() {
 			g.SetArena(maxmem - m.WeightBytes())
 		}
@@ -722,7 +722,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		// With no block placed, print the tier's own reason, so a capability
 		// gap does not read as a memory gap.
 		if st.GPULayers() == 0 {
-			if g, ok := dev.(*tier.GPU); ok {
+			if g, ok := dev.(*gpu.GPU); ok {
 				if why := g.Err(); why != "" {
 					fmt.Fprintf(os.Stderr, " -- %s", why)
 				}
@@ -905,7 +905,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// a block's weights are, never the ids.
 	shrink := uint64(0)
 	if v := os.Getenv("JITLLM_PAGE_SHRINK"); v != "" {
-		if b, e := tier.ParseBytes(v); e == nil {
+		if b, e := gpu.ParseBytes(v); e == nil {
 			shrink = b
 		}
 	}
@@ -940,7 +940,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 	for i := 0; i < n; i++ {
 		if shrink > 0 && i == 1 {
-			if g, ok := dev.(*tier.GPU); ok {
+			if g, ok := dev.(*gpu.GPU); ok {
 				kept, err := g.SetBudget(shrink)
 				if err != nil {
 					return err
@@ -1008,7 +1008,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// Say when the per-matvec seam was declined: the non-resident blocks ran
 	// wholly on the host, on purpose. The verdict is measured on the model's
 	// shapes, so it is only known after tokens have run.
-	if g, ok := dev.(*tier.GPU); ok && g.Stats().TooSmall > 0 {
+	if g, ok := dev.(*gpu.GPU); ok && g.Stats().TooSmall > 0 {
 		fmt.Fprintf(os.Stderr,
 			"%d matvecs stayed on the host: this model does not carry enough weight bytes "+
 				"per host/device crossing to pay for one\n", g.Stats().TooSmall)
@@ -1023,7 +1023,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if d := st.DeviceDemotions(); d > 0 {
 		// Include the tier's reason for the demotion.
 		why := ""
-		if g, ok := dev.(*tier.GPU); ok && g.Err() != "" {
+		if g, ok := dev.(*gpu.GPU); ok && g.Err() != "" {
 			why = ": " + g.Err()
 		}
 		ev := st.Evacuations()
@@ -1035,10 +1035,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		fmt.Fprintf(os.Stderr, "★ %d call(s) ended because a kernel did not build on the device; nothing was moved\n", n)
 	}
 	// Placement is not execution. The load banner says what each device holds;
-	// this says what each device ran and read back (tier.Stats.Blocks counts
+	// this says what each device ran and read back (gpu.Stats.Blocks counts
 	// only submissions whose output came back). It is printed for one device
 	// too, because a pager can place every block and still decline to compute.
-	if g, ok := dev.(*tier.GPU); ok {
+	if g, ok := dev.(*gpu.GPU); ok {
 		per := g.DevStats()
 		for i, n := range g.Placed() {
 			fmt.Fprintf(os.Stderr, "device %-44s %d block(s) placed, %d run, %d matvec(s)\n",
@@ -1089,7 +1089,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			}
 			if ds.HybridRuns > 0 {
 				fmt.Fprintf(os.Stderr, "hybrid experts: %d block-step(s) on the host, %.2f s\n", ds.HybridRuns, sec(ds.THybrid))
-				if g, ok := dev.(*tier.GPU); ok {
+				if g, ok := dev.(*gpu.GPU); ok {
 					if at, tw := g.CacheCoverage(); len(at) > 0 {
 						q := func(v []float64) string {
 							w := append([]float64(nil), v...)
@@ -1117,7 +1117,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// Say whether blocks paged, even when they did not: the slot count and
 	// page-in count separate a model that fits from one streaming through a
 	// few slots, which otherwise look identical from outside.
-	if g, ok := dev.(*tier.GPU); ok {
+	if g, ok := dev.(*gpu.GPU); ok {
 		if st := g.Stats(); st.Slots > 0 && (st.PageIns > 0 || st.PageOuts > 0 || st.Blocks > 0) {
 			// Zero page-ins with a streamed block means either the model fits
 			// or the budget is below the slot floor and blocks were declined;
@@ -1164,7 +1164,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 				st.Slots, st.PageIns, st.PageOuts, float64(st.PageBytes)/(1<<30), how)
 		}
 	}
-	if g, ok := dev.(*tier.GPU); ok {
+	if g, ok := dev.(*gpu.GPU); ok {
 		if as := g.ArenaStats(); as.Limit > 0 || as.Packs > 0 {
 			fmt.Fprintf(os.Stderr,
 				"arena %d packs, %d page-ins served, %.2f MiB retained of %.2f\n",
@@ -1975,7 +1975,7 @@ func jitOptions() []nn.Option {
 	return o
 }
 
-// cpuConfigure hands jit/cpu the process-wide knobs that are not per-JIT: a
+// cpuConfigure hands engine/device/cpu the process-wide knobs that are not per-JIT: a
 // perf map for the profiler, and the probes that deliberately slow a kernel so
 // one class of operation can be priced against another.
 func cpuConfigure() {
@@ -2188,7 +2188,7 @@ func misplacedFlag(fs *flag.FlagSet) error {
 // withDeviceErr adds the tier's own reason (for example a CUDA error code) to an
 // error a device run returned.
 func withDeviceErr(err error, dev nn.Device) error {
-	if g, ok := dev.(*tier.GPU); ok {
+	if g, ok := dev.(*gpu.GPU); ok {
 		if why := g.Err(); why != "" {
 			return fmt.Errorf("%w (the device said: %s)", err, why)
 		}

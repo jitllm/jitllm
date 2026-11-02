@@ -8,8 +8,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestHunyuanVLTextMatchesTransformers holds the text model to transformers'
@@ -183,19 +183,19 @@ func TestHunyuanVLTowerOnDeviceMatchesHost(t *testing.T) {
 			tw.opt.towerGPULayers = -1
 			ran := 0
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				if err != nil || gpux == nil {
 					t.Logf("%s: not present", spec)
 					continue
 				}
 				ran++
 				var blocks int
 				got, _ := qvlEncode(t, tw, g, func(s *Instance) {
-					s.SetDevice(gpu)
+					s.SetDevice(gpux)
 					blocks = s.GPUBlocks()
 				})
-				gpuErr := gpu.Err()
-				gpu.Close()
+				gpuErr := gpux.Err()
+				gpux.Close()
 				if blocks != tw.Cfg.NLayer {
 					t.Fatalf("%s took %d of %d tower blocks: %v", spec, blocks, tw.Cfg.NLayer, gpuErr)
 				}
@@ -262,18 +262,18 @@ func TestHunyuanVLRealTowerOnDevice(t *testing.T) {
 	tw.opt.towerGPULayers = -1
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present", spec)
 			continue
 		}
 		ran++
 		s := tw.testState()
-		s.SetDevice(gpu)
+		s.SetDevice(gpux)
 		got := encode(s)
-		blocks, gpuErr := s.GPUBlocks(), gpu.Err()
+		blocks, gpuErr := s.GPUBlocks(), gpux.Err()
 		s.Close()
-		gpu.Close()
+		gpux.Close()
 		if blocks != tw.Cfg.NLayer {
 			t.Fatalf("%s took %d of %d tower blocks: %v", spec, blocks, tw.Cfg.NLayer, gpuErr)
 		}

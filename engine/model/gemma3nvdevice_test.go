@@ -4,10 +4,10 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
-// Gemma 3n's MobileNet-V5 on the device (jit/gpu/tier/conv.go) against the
+// Gemma 3n's MobileNet-V5 on the device (engine/device/gpu/conv.go) against the
 // host, block by block and end to end.
 
 // g3nvBlocks is the host's tower over the golden's picture: the stem's output
@@ -41,25 +41,25 @@ type g3nvDevice struct {
 	worst float64
 	at    int
 	out   []float32
-	st    tier.Stats
+	st    gpu.Stats
 }
 
 // g3nvOnDevice runs the tower on spec opened with opts, every block placed:
 // block by block, each handed the host's input (stem, then host[i-1]), and
 // then the whole encode. ok is false when spec is not present.
 func g3nvOnDevice(t *testing.T, tw *Tower, g *g3nvGolden, spec string, stem []float32, host [][]float32,
-	opts ...tier.Option) (r g3nvDevice, ok bool) {
+	opts ...gpu.Option) (r g3nvDevice, ok bool) {
 	t.Helper()
-	gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, opts...)...)
-	if err != nil || gpu == nil {
+	gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec)}, opts...)...)
+	if err != nil || gpux == nil {
 		return r, false
 	}
-	defer gpu.Close()
+	defer gpux.Close()
 	s := tw.testState()
 	defer s.Close()
-	s.SetDevice(gpu)
+	s.SetDevice(gpux)
 	if n := s.GPUBlocks(); n != tw.Cfg.NLayer {
-		t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, tw.Cfg.NLayer, gpu.Err())
+		t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, tw.Cfg.NLayer, gpux.Err())
 	}
 	px, err := s.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	if err != nil {
@@ -95,12 +95,12 @@ func g3nvOnDevice(t *testing.T, tw *Tower, g *g3nvGolden, spec string, stem []fl
 			t.Fatalf("%s ran %d blocks and the host %d, of %d", spec, s.vis.devBlocks, s.vis.hostBlocks, len(host))
 		}
 	}()
-	before := gpu.Stats().ConvBlocks
+	before := gpux.Stats().ConvBlocks
 	out, err := s.Encode(px)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.st = gpu.Stats()
+	r.st = gpux.Stats()
 	if n := r.st.ConvBlocks - before; n != int64(tw.Cfg.NLayer) {
 		t.Fatalf("%s ran %d of %d tower blocks", spec, n, tw.Cfg.NLayer)
 	}
@@ -114,7 +114,7 @@ func g3nvOnDevice(t *testing.T, tw *Tower, g *g3nvGolden, spec string, stem []fl
 // or no residual adds the device must part, so the comparison sees both.
 //
 // Two arms, because the device has two arithmetics for a matrix's input.
-// The int8 arm pins tier.Config.NoVolta: every matrix reads the activation
+// The int8 arm pins gpu.Config.NoVolta: every matrix reads the activation
 // quantized to int8 as the host quantizes it, so a block reads the host's
 // output to 1e-6. The f16 arm pins NoMMA, which puts a CUDA card on sm_70's
 // binary16 twin (kernels.MatVecMMA70, GemmVolta) wherever PTX lowers it;
@@ -130,8 +130,8 @@ func TestGemma3nTowerOnDeviceMatchesHost(t *testing.T) {
 	tw := m.Tower()
 	stem, host := g3nvBlocks(t, tw, g)
 	want := g3nvEncode(t, tw, g, nil)
-	int8Arm := tier.WithConfig(func(c *tier.Config) { c.NoVolta = true })
-	f16Arm := tier.WithConfig(func(c *tier.Config) { c.NoMMA = true })
+	int8Arm := gpu.WithConfig(func(c *gpu.Config) { c.NoVolta = true })
+	f16Arm := gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = true })
 	ran := 0
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
@@ -222,52 +222,52 @@ func g3nvStreamed(t *testing.T, spec string, g *g3nvGolden, budget uint64, encod
 	probe, _ := openGemma3nV(t)
 	host := 2 * probe.container.PageBytes(int(probe.container.H.NBlocks))
 	probe.Close()
-	opts := []tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)}
+	opts := []gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)}
 	if budget > 0 {
-		opts = append(opts, tier.WithBudget(budget))
+		opts = append(opts, gpu.WithBudget(budget))
 	}
-	gpu, err := tier.OpenWith(opts...)
-	if err != nil || gpu == nil {
+	gpux, err := gpu.OpenWith(opts...)
+	if err != nil || gpux == nil {
 		return r, false
 	}
-	defer gpu.Close()
+	defer gpux.Close()
 	m, _ := openGemma3nV(t, WithPageBudget(host), WithPlacement(Placement{Rest: &Place{On: spec, Stream: true}}))
 	defer m.Close()
 	tw := m.Tower()
 	s := tw.testState()
 	defer s.Close()
-	r.before, r.limit = gpu.Budgets()[0].Used, gpu.Budgets()[0].Limit
-	if err := s.SetDevice(gpu); err != nil {
+	r.before, r.limit = gpux.Budgets()[0].Used, gpux.Budgets()[0].Limit
+	if err := s.SetDevice(gpux); err != nil {
 		t.Fatal(err)
 	}
 	if r.placed = s.GPUBlocks(); r.placed != tw.Cfg.NLayer || !encode {
 		return r, true
 	}
-	r.resident = r.placed - gpu.Stats().PageOuts
-	r.placedUsed = gpu.Budgets()[0].Used
+	r.resident = r.placed - gpux.Stats().PageOuts
+	r.placedUsed = gpux.Budgets()[0].Used
 	px, err := s.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	if err != nil {
 		t.Fatal(err)
 	}
-	c0 := gpu.Stats()
+	c0 := gpux.Stats()
 	_, ev := m.container.Faults()
 	out, err := s.Encode(px)
 	if err != nil {
 		r.err = err.Error()
 		return r, true
 	}
-	c1 := gpu.Stats()
+	c1 := gpux.Stats()
 	if n := c1.ConvBlocks - c0.ConvBlocks; n != int64(tw.Cfg.NLayer) {
 		t.Fatalf("%s ran %d of %d tower blocks", spec, n, tw.Cfg.NLayer)
 	}
 	_, ev0 := m.container.Faults()
 	r.out = append([]float32(nil), out...)
 	r.ins, r.outs, r.evictions = c1.PageIns-c0.PageIns, c1.PageOuts-c0.PageOuts, int(ev0-ev)
-	r.encodedUsed = gpu.Budgets()[0].Used
+	r.encodedUsed = gpux.Budgets()[0].Used
 	if err := s.SetDevice(nil); err != nil {
 		t.Fatal(err)
 	}
-	r.after = gpu.Budgets()[0].Used
+	r.after = gpux.Budgets()[0].Used
 	return r, true
 }
 

@@ -7,12 +7,12 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend/hip"
-	"github.com/jitllm/jitllm/jit/amdgpu"
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/amdgpu"
+	"github.com/jitllm/jitllm/composer/ir"
 )
 
 // hipDev is one AMD GPU through ROCm. Its kernels are jitllm's IR lowered to
-// LLVM IR (jit/amdgpu) and turned into a code object by comgr in process;
+// LLVM IR (composer/amdgpu) and turned into a code object by comgr in process;
 // see docs/design/amd-hip.md.
 //
 // HIP keeps a current device per OS thread, so every call runs inside
@@ -38,7 +38,7 @@ type hipDev struct {
 
 var errHIPClosed = errors.New("backend: hip: the device is closed")
 
-// HIPConfig is where ROCm is looked for; tier.WithROCm fills it.
+// HIPConfig is where ROCm is looked for; gpu.WithROCm fills it.
 type HIPConfig = hip.Config
 
 // hipRuntime is the loaded runtime per config, so enumerating and opening do

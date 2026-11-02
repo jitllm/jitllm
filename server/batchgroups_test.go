@@ -24,7 +24,7 @@ import (
 // of them.
 //
 // The loop groups by itself (DecodeGroups -1) only where the tier's steps are
-// one kernel for every row count (tier.GPU.RowsComposed); elsewhere the arm
+// one kernel for every row count (gpu.GPU.RowsComposed); elsewhere the arm
 // must not group at all, and the forced arms, whose tokens then move with
 // their step's rows, log where they part instead of holding them equal.
 //

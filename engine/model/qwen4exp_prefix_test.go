@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestPrefixCacheRestoresQwen4Exp: a prompt restored from the store goes on
@@ -21,19 +21,19 @@ func TestPrefixCacheRestoresQwen4Exp(t *testing.T) {
 	prompt := g.IDs[:len(g.IDs)-gen]
 	arms := append([]string{"host"}, stepDevices()...)
 	for _, arm := range arms {
-		var gpu *tier.GPU
+		var gpux *gpu.GPU
 		if arm != "host" {
 			var err error
-			gpu, err = tier.OpenWith(append([]tier.Option{tier.WithDevices(arm),
-				tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
-			if err != nil || gpu == nil {
+			gpux, err = gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(arm),
+				gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+			if err != nil || gpux == nil {
 				t.Logf("%s: not present (%v)", arm, err)
 				continue
 			}
 		}
 		t.Run(arm, func(t *testing.T) {
-			if gpu != nil {
-				defer gpu.Close()
+			if gpux != nil {
+				defer gpux.Close()
 			}
 			fs, err := NewFileStore(t.TempDir())
 			if err != nil {
@@ -43,10 +43,10 @@ func TestPrefixCacheRestoresQwen4Exp(t *testing.T) {
 				defer m.setKVPageForTest(page)()
 				s := m.NewInstance(len(g.IDs) + 1)
 				defer s.Close()
-				if gpu != nil {
-					s.SetDeviceLayers(gpu, -1)
+				if gpux != nil {
+					s.SetDeviceLayers(gpux, -1)
 					if s.GPULayers() != m.Cfg.NLayer {
-						t.Fatalf("placed %d of %d blocks: %v", s.GPULayers(), m.Cfg.NLayer, gpu.Err())
+						t.Fatalf("placed %d of %d blocks: %v", s.GPULayers(), m.Cfg.NLayer, gpux.Err())
 					}
 				}
 				s.SetKVStore(fs)

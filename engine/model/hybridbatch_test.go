@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestHybridPrefillBatchesOnTheDevice gates the chunked gated delta rule: a
@@ -93,7 +93,7 @@ func hybridBatchedPrefill(t *testing.T, m *Model) {
 	type arm struct {
 		rows   []float32 // [plen][NEmbd], the final residual at every position
 		logits [][]float32
-		st     tier.Stats
+		st     gpu.Stats
 		err    string
 	}
 	volta := os.Getenv("JITLLM_HYBRID_VOLTA") != ""
@@ -105,9 +105,9 @@ func hybridBatchedPrefill(t *testing.T, m *Model) {
 		defer st.Close()
 		if dev {
 			spec := testdevices.One("gpu:0")
-			g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-				tier.WithPoisonScratch(true),
-				tier.WithConfig(func(cf *tier.Config) {
+			g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+				gpu.WithPoisonScratch(true),
+				gpu.WithConfig(func(cf *gpu.Config) {
 					cf.NoBatch = noBatch
 					// sm_70's batched matvecs (off by default) read f16
 					// activations where every other path reads int8, which
@@ -158,8 +158,8 @@ func hybridBatchedPrefill(t *testing.T, m *Model) {
 
 	// The arms are the composer's prompt part at two widths: a chunk of one
 	// row at a time, and the prompt's rows batched in fewer chunks.
-	rp, _ := rows.st.ServedPart(tier.ComposedPrompt)
-	bp, _ := bat.st.ServedPart(tier.ComposedPrompt)
+	rp, _ := rows.st.ServedPart(gpu.ComposedPrompt)
+	bp, _ := bat.st.ServedPart(gpu.ComposedPrompt)
 	if bp == 0 || bp >= rp {
 		t.Fatalf("composed prompt steps: %d one row at a time, %d batched -- the arms are not the two widths (%s)",
 			rp, bp, bat.err)

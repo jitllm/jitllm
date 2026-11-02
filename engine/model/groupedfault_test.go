@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestBatchedMixtureFloatBanksDiscriminate runs the float-bank gate
@@ -17,8 +17,8 @@ import (
 func TestBatchedMixtureFloatBanksDiscriminate(t *testing.T) {
 	for _, name := range floatMoEModels {
 		t.Run(name, func(t *testing.T) {
-			tier.SetMoEFault("floatsrc")
-			defer tier.SetMoEFault("")
+			gpu.SetMoEFault("floatsrc")
+			defer gpu.SetMoEFault("")
 			nmse := batchedMixtureCase(t, name, true, true)
 			t.Logf("floatsrc: last-row logit NMSE %.3e between batched and row-by-row", nmse)
 			if math.IsNaN(nmse) || nmse < 1e-2 {

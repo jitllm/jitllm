@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // The block features the front end states as ops -- the gate on the
@@ -53,20 +53,20 @@ func readerOf(t *testing.T, g *graph.Graph, role jlm.Role) graph.Op {
 
 // formBlocks has the composer form each of blocks of m the front end states,
 // on its own, for a CPU and a GPU device, and lowers the GPU's: a block of a
-// model with unstated blocks cannot form as the whole model (jit.Front).
+// model with unstated blocks cannot form as the whole model (composer.Front).
 func formBlocks(t *testing.T, m *Model, blocks []int) {
 	t.Helper()
 	f := m.Composing()
-	step := jit.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
-	for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, composedCPUDevice(6)} {
-		reg := jit.Default()
+	step := composer.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
+	for _, d := range []composer.Device{{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, composedCPUDevice(6)} {
+		reg := composer.Default()
 		for _, li := range blocks {
-			run := []jit.PartPlan{{Part: jit.Part{Kind: jit.PartBlock, Block: li, Graph: f.BlockGraph(li)}, Device: d}}
+			run := []composer.PartPlan{{Part: composer.Part{Kind: composer.PartBlock, Block: li, Graph: f.BlockGraph(li)}, Device: d}}
 			ks, err := reg.Kernels(f, run, 0, step)
 			if err != nil {
 				t.Fatalf("%v: block %d: %v", d.Kind, li, err)
 			}
-			if d.Kind == jit.DeviceGPU {
+			if d.Kind == composer.DeviceGPU {
 				for _, k := range ks {
 					if _, err := reg.Lowerings[d.Kind].Lower(k, d); err != nil {
 						t.Fatalf("lowering %s of block %d: %v", k.Name, li, err)

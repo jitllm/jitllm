@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestPagedKVAB is the attention's end-to-end A/B: the decode plan
@@ -64,7 +64,7 @@ func TestPagedKVAB(t *testing.T) {
 
 	type arm struct {
 		name string
-		g    *tier.GPU
+		g    *gpu.GPU
 		dec  *Instance
 	}
 	closeArm := func(a *arm) {
@@ -81,8 +81,8 @@ func TestPagedKVAB(t *testing.T) {
 		}
 	}
 	open := func(name string, other bool) *arm {
-		opts := []tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) {
+		opts := []gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithConfig(func(c *gpu.Config) {
 				if other {
 					c.DecodePlanOff = planOff
 				}
@@ -90,9 +90,9 @@ func TestPagedKVAB(t *testing.T) {
 		// JITLLM_AB_BUDGET (MiB) splits a small card evenly: the arm opened
 		// first otherwise takes what it can and the second gets the rest.
 		if mib := num("JITLLM_AB_BUDGET", 0); mib > 0 {
-			opts = append(opts, tier.WithBudget(uint64(mib)<<20))
+			opts = append(opts, gpu.WithBudget(uint64(mib)<<20))
 		}
-		g, err := tier.OpenWith(opts...)
+		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

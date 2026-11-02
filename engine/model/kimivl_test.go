@@ -8,8 +8,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // kimiRealBound is how far the real tower may sit from Moonshot's run at the
@@ -112,18 +112,18 @@ func TestKimiVLTextMatchesTransformers(t *testing.T) {
 				t.Fatalf("the rows reversed read %.3e against %.3e: the gate cannot see their order", bad, host)
 			}
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				if err != nil || gpux == nil {
 					t.Logf("%s: not present", spec)
 					continue
 				}
 				st := m.NewInstance(n)
-				st.SetDeviceLayers(gpu, -1)
+				st.SetDeviceLayers(gpux, -1)
 				if got := st.GPULayers(); got != m.Cfg.NLayer {
-					t.Fatalf("%s placed %d of %d blocks: %v", spec, got, m.Cfg.NLayer, gpu.Err())
+					t.Fatalf("%s placed %d of %d blocks: %v", spec, got, m.Cfg.NLayer, gpux.Err())
 				}
 				w, flips := qvlWorst(g, run(st, g.Image.Embd))
-				gpu.Close()
+				gpux.Close()
 				t.Logf("every block and the head on %s: %.3e against Moonshot's model", spec, w)
 				if !(w < 1e-5) || flips > 0 {
 					t.Errorf("%s: worst NMSE %.3e, %d argmax flips", spec, w, flips)
@@ -207,13 +207,13 @@ func TestKimiVLRealTowerMatchesMoonshot(t *testing.T) {
 	}
 	defer m.Close()
 	tw := m.Tower()
-	encode := func(gpu *tier.GPU) []float32 {
+	encode := func(gpux *gpu.GPU) []float32 {
 		ts := tw.testState()
 		defer ts.Close()
-		if gpu != nil {
-			ts.SetDevice(gpu)
+		if gpux != nil {
+			ts.SetDevice(gpux)
 			if ts.GPUBlocks() != tw.Cfg.NLayer {
-				t.Fatalf("the device took %d of %d tower blocks: %v", ts.GPUBlocks(), tw.Cfg.NLayer, gpu.Err())
+				t.Fatalf("the device took %d of %d tower blocks: %v", ts.GPUBlocks(), tw.Cfg.NLayer, gpux.Err())
 			}
 		}
 		px, err := ts.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
@@ -246,13 +246,13 @@ func TestKimiVLRealTowerMatchesMoonshot(t *testing.T) {
 		t.Fatalf("the violation reads %.3e against %.3e: the gate cannot see it", bad, a8)
 	}
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present", spec)
 			continue
 		}
-		got := encode(gpu)
-		gpu.Close()
+		got := encode(gpux)
+		gpux.Close()
 		dh, _ := nmse32(host, got)
 		dm, _ := nmse32(g.Image.EmbdA8, got)
 		t.Logf("%s: every tower block placed, %.3e from the host, %.3e from Moonshot's", spec, dh, dm)

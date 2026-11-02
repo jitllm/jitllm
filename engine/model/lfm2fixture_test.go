@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // LFM2-VL against transformers' own Lfm2VlForConditionalGeneration at toy
@@ -149,14 +149,14 @@ func TestLFM2FixtureMatchesTransformers(t *testing.T) {
 		t.Fatalf("end to end: worst NMSE %.3e", w)
 	}
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
-			dev := lfm2FixRun(t, m, g, gpu)
+			defer gpux.Close()
+			dev := lfm2FixRun(t, m, g, gpux)
 			worst := 0.0
 			for i := range dev {
 				nm, _ := nmseOf(dev[i], got[i])
@@ -174,7 +174,7 @@ func TestLFM2FixtureMatchesTransformers(t *testing.T) {
 // tokens and the picture's run (LFM2Spans) -- holds every token id to the
 // processor's, prefills it and decodes the continuation; on gpu, every text
 // and tower block placed.
-func lfm2FixRun(t *testing.T, m *Model, g *lfm2FixGold, gpu *tier.GPU) [][]float32 {
+func lfm2FixRun(t *testing.T, m *Model, g *lfm2FixGold, gpux *gpu.GPU) [][]float32 {
 	t.Helper()
 	tw := m.Tower()
 	cols, rows, pieces, err := tw.LFM2Pieces(decodeImage(t, testmodels.Path(filepath.Join(lfm2Fixture+"-gold", "picture.png"))))
@@ -229,19 +229,19 @@ func lfm2FixRun(t *testing.T, m *Model, g *lfm2FixGold, gpu *tier.GPU) [][]float
 	}
 	s := m.NewInstance(len(g.IDs) + len(g.Cont) + 1)
 	defer s.Close()
-	if gpu != nil {
-		if err := s.SetDevice(gpu); err != nil {
+	if gpux != nil {
+		if err := s.SetDevice(gpux); err != nil {
 			t.Fatal(err)
 		}
 		if s.GPULayers() != m.Cfg.NLayer {
-			t.Fatalf("the device took %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpu.Err())
+			t.Fatalf("the device took %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpux.Err())
 		}
 		vs, err := s.Vision()
 		if err != nil {
 			t.Fatal(err)
 		}
 		if vs.GPUBlocks() != tw.Cfg.NLayer {
-			t.Fatalf("the device took %d of %d tower blocks (%s)", vs.GPUBlocks(), tw.Cfg.NLayer, gpu.Err())
+			t.Fatalf("the device took %d of %d tower blocks (%s)", vs.GPUBlocks(), tw.Cfg.NLayer, gpux.Err())
 		}
 	}
 	lg, err := s.PrefillMixed(spans...)

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestStepAcrossSessionsLatentMatchesEachAlone is the step gate on multi-head
@@ -42,8 +42,8 @@ func TestStepAcrossSessionsLatentMatchesEachAlone(t *testing.T) {
 				// wrote must not reach a real row (RULE 13).
 				for _, poison := range []bool{false, true} {
 					t.Run(fmt.Sprintf("%s/poisoned=%v", dev, poison), func(t *testing.T) {
-						g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-							tier.WithPoisonKV(poison), tier.WithPoisonScratch(poison)}, testTierOpts(t)...)...)
+						g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+							gpu.WithPoisonKV(poison), gpu.WithPoisonScratch(poison)}, testTierOpts(t)...)...)
 						if err != nil || g == nil {
 							noDevice(t, dev, err)
 						}
@@ -114,7 +114,7 @@ func TestStepRunsAdmitsALatentPrompt(t *testing.T) {
 // latentStepGate is stepGate on a latent model with the selection it needs:
 // every latent block of every joint step ran in the ragged step, and on a
 // hybrid every linear one across sessions as well.
-func latentStepGate(t *testing.T, m *Model, g *tier.GPU) stepResult {
+func latentStepGate(t *testing.T, m *Model, g *gpu.GPU) stepResult {
 	t.Helper()
 	s0 := g.Stats().RowsLatent
 	r := stepGate(t, m, g, m.Cfg.Hybrid())
@@ -192,7 +192,7 @@ func TestSchedulerOnDeviceLatent(t *testing.T) {
 			defer m.Close()
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					schedulerOnDeviceModel(t, m, func(t *testing.T) *tier.GPU { return stepTier(t, m, dev, false) })
+					schedulerOnDeviceModel(t, m, func(t *testing.T) *gpu.GPU { return stepTier(t, m, dev, false) })
 				})
 			}
 		})

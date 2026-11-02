@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // bitnetDevViolations are BitNet's features taken out of the model while only
@@ -124,7 +124,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -135,40 +135,40 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 			// layers -1 places every block and the head; n > 0 the first n
 			// and leaves the rest, the head included, on the host.
 			onDevice := func(run func(*Instance) [][]float32, layers int, f32Attn, noGraph bool) ([][]float32, string) {
-				opts := append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
+				opts := append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
 					testTierOpts(t)...)
 				if f32Attn {
-					opts = append(opts, tier.WithConfig(func(c *tier.Config) {
+					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) {
 						c.NoMMA, c.NoVolta, c.NoFlashPrefill = true, true, true
 					}))
 				}
 				if noGraph {
-					opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 				}
-				gpu, err := tier.OpenWith(opts...)
+				gpux, err := gpu.OpenWith(opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer gpu.Close()
+				defer gpux.Close()
 				st := m.NewInstance(len(g.IDs) + 1)
 				defer st.Close()
-				st.SetDeviceLayers(gpu, layers)
+				st.SetDeviceLayers(gpux, layers)
 				want := nl
 				if layers > 0 {
 					want = layers
 				}
 				if n := st.GPULayers(); n != want {
-					return nil, fmt.Sprintf("took %d of %d blocks: %v %v", n, want, st.DeviceDeclines(), gpu.Err())
+					return nil, fmt.Sprintf("took %d of %d blocks: %v %v", n, want, st.DeviceDeclines(), gpux.Err())
 				}
 				if layers < 0 && !st.HeadOnDevice() {
-					return nil, "the head stayed on the host: " + gpu.Err()
+					return nil, "the head stayed on the host: " + gpux.Err()
 				}
 				got := run(st)
 				if n := st.GPULayers(); n != want {
-					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())
+					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpux.Err())
 				}
 				if noGraph {
-					composedCovers(t, m, len(g.IDs), want, true, gpu)
+					composedCovers(t, m, len(g.IDs), want, true, gpux)
 				}
 				return got, ""
 			}

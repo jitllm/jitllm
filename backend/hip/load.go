@@ -6,7 +6,7 @@
 // libcuda: a binary built with CGO_ENABLED=0 runs on a host with ROCm and on
 // one without, and on the second it simply has no HIP devices. Nothing here
 // runs an external program -- no hipcc, clang, ld.lld or rocminfo. Kernels are
-// jitllm's own LLVM IR (jit/amdgpu), turned into a code object by comgr's
+// jitllm's own LLVM IR (composer/amdgpu), turned into a code object by comgr's
 // library actions (Compile), and devices are described by HIP calls alone.
 //
 // The package reads no environment. A caller that wants a ROCm outside the

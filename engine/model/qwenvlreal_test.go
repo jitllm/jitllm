@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestQwenVLRealMatchesTransformers holds a real Qwen-VL checkpoint, with a
@@ -75,12 +75,12 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 			// state is a text state, on gpu when one is given: placed before the
 			// tower, as the CLI places it, so a card too small for both gives
 			// the text model its blocks and the tower what is left.
-			state := func(gpu *tier.GPU) *Instance {
+			state := func(gpux *gpu.GPU) *Instance {
 				st := m.NewInstance(n)
-				if gpu != nil {
-					st.SetDevice(gpu)
+				if gpux != nil {
+					st.SetDevice(gpux)
 					if st.GPULayers() == 0 {
-						t.Fatalf("the device took no text block: %v", gpu.Err())
+						t.Fatalf("the device took no text block: %v", gpux.Err())
 					}
 				}
 				return st
@@ -125,14 +125,14 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 			// model on textGPU, placed first, and the tower on gpu. It reports
 			// false when the text model took the card and left the tower no
 			// room, which the caller answers by running the tower alone.
-			whole := func(t *testing.T, textGPU, gpu *tier.GPU) bool {
+			whole := func(t *testing.T, textGPU, gpux *gpu.GPU) bool {
 				st := state(textGPU)
 				defer st.Close()
 				tw := m.Tower()
 				ts := tw.testState()
 				defer ts.Close()
-				if gpu != nil {
-					ts.SetDevice(gpu)
+				if gpux != nil {
+					ts.SetDevice(gpux)
 				}
 				f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
 				if err != nil {
@@ -169,9 +169,9 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 				if math.IsNaN(worst) || worst > c.whole || wflips > 1 {
 					t.Errorf("end to end: worst NMSE %.3e, %d flips", worst, wflips)
 				}
-				if gpu != nil {
+				if gpux != nil {
 					placed, text := ts.GPUBlocks(), st.GPULayers()
-					st := gpu.Stats()
+					st := gpux.Stats()
 					t.Logf("tower on the device: %d of %d blocks placed, %d runs there and %d on the host; "+
 						"its set built for %d rows (the tower takes %d), %d bytes of scratch",
 						placed, tw.Cfg.NLayer, ts.vis.devBlocks, ts.vis.hostBlocks, st.TowerRows,
@@ -182,13 +182,13 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 					// take blocks.
 					if placed == 0 && textGPU != nil {
 						t.Logf("the text model took %d of %d blocks and left no room (%s): the tower runs alone",
-							text, m.Cfg.NLayer, gpu.Err())
+							text, m.Cfg.NLayer, gpux.Err())
 						return false
 					}
 					if placed == 0 || ts.vis.devBlocks != int64(placed) ||
 						ts.vis.hostBlocks != int64(tw.Cfg.NLayer-placed) {
 						t.Errorf("%d of %d tower blocks placed, %d ran on the device and %d on the host: %s",
-							placed, tw.Cfg.NLayer, ts.vis.devBlocks, ts.vis.hostBlocks, gpu.Err())
+							placed, tw.Cfg.NLayer, ts.vis.devBlocks, ts.vis.hostBlocks, gpux.Err())
 					}
 					// A picture of this size is a few thousand rows at most.
 					if st.TowerRows == 0 || st.TowerRows > 4096 {
@@ -201,18 +201,18 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 			t.Run("host", func(t *testing.T) { whole(t, nil, nil) })
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {
-					gpu, err := tier.OpenWith(tier.WithDevices(spec))
-					if err != nil || gpu == nil {
+					gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+					if err != nil || gpux == nil {
 						t.Skipf("%s: not present (%v)", spec, err)
 					}
-					ok := whole(t, gpu, gpu)
-					gpu.Close()
+					ok := whole(t, gpux, gpux)
+					gpux.Close()
 					if ok {
 						return
 					}
 					// A card of its own: the text model's weights are the
 					// model's on the tier, and stay there after its Instance.
-					alone, err := tier.OpenWith(tier.WithDevices(spec))
+					alone, err := gpu.OpenWith(gpu.WithDevices(spec))
 					if err != nil || alone == nil {
 						t.Fatalf("%s: reopening: %v", spec, err)
 					}
@@ -248,13 +248,13 @@ func TestQwenVLWindowsSurviveQueryChunks(t *testing.T) {
 			img.Set(x, y, color.RGBA{uint8(x * 255 / side), uint8(y * 255 / side), uint8((x ^ y) * 7), 255})
 		}
 	}
-	encode := func(gpu *tier.GPU) ([]float32, int) {
+	encode := func(gpux *gpu.GPU) ([]float32, int) {
 		ts := tw.testState()
 		defer ts.Close()
-		if gpu != nil {
-			ts.SetDevice(gpu)
+		if gpux != nil {
+			ts.SetDevice(gpux)
 			if ts.GPUBlocks() == 0 {
-				t.Fatalf("the device took no tower block: %v", gpu.Err())
+				t.Fatalf("the device took no tower block: %v", gpux.Err())
 			}
 		}
 		px, err := ts.PreprocessImage(img)
@@ -271,15 +271,15 @@ func TestQwenVLWindowsSurviveQueryChunks(t *testing.T) {
 	ran := 0
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec))
-			if err != nil || gpu == nil {
+			gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+			if err != nil || gpux == nil {
 				t.Skipf("%s: not present (%v)", spec, err)
 			}
-			defer gpu.Close()
+			defer gpux.Close()
 			ran++
-			s0, d0 := gpu.Stats().ServedPart(tier.ComposedTower)
-			got, placed := encode(gpu)
-			s1, d1 := gpu.Stats().ServedPart(tier.ComposedTower)
+			s0, d0 := gpux.Stats().ServedPart(gpu.ComposedTower)
+			got, placed := encode(gpux)
+			s1, d1 := gpux.Stats().ServedPart(gpu.ComposedTower)
 			chunks := s1 - s0
 			if chunks == 0 || d1 != d0 {
 				t.Fatalf("%d of %d tower blocks placed, the composer served %d of their calls and declined %d: "+
@@ -288,18 +288,18 @@ func TestQwenVLWindowsSurviveQueryChunks(t *testing.T) {
 			// The picture's score plane, every head's rows by rows, is what
 			// a form that attends in one pass of scores would hold.
 			plane := uint64(4 * tw.Cfg.NHead * tw.Cfg.Seq() * tw.Cfg.Seq())
-			if sb := gpu.Stats().ScratchBytes; sb >= plane {
+			if sb := gpux.Stats().ScratchBytes; sb >= plane {
 				t.Errorf("the device holds %d bytes of scratch, at least the picture's %d-byte score plane", sb, plane)
 			}
 			clean, _ := nmse32(want, got)
 			was := tw.Cfg.WinSize
 			tw.Cfg.WinSize = 1 << 20
-			wide, _ := encode(gpu)
+			wide, _ := encode(gpux)
 			tw.Cfg.WinSize = was
 			bad, _ := nmse32(want, wide)
 			t.Logf("%dx%d picture, %d of %d tower blocks placed, %d composed calls, %d bytes of scratch against a %d-byte score plane: "+
 				"NMSE %.3e against the host; windows as wide as the image %.3e", side, side, placed, tw.Cfg.NLayer, chunks,
-				gpu.Stats().ScratchBytes, plane, clean, bad)
+				gpux.Stats().ScratchBytes, plane, clean, bad)
 			if math.IsNaN(clean) || clean > 2e-2 {
 				t.Errorf("the chunked tower reads %.3e against the host", clean)
 			}

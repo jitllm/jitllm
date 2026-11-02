@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestResetZeroesTheDeviceRecurrentState holds a reused instance to a fresh one
@@ -21,14 +21,14 @@ func TestResetZeroesTheDeviceRecurrentState(t *testing.T) {
 			first, second := g.IDs[:half], g.IDs[half:]
 			ran := 0
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+					gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+				if err != nil || gpux == nil {
 					continue
 				}
 				ran++
 				t.Run(spec, func(t *testing.T) {
-					defer gpu.Close()
+					defer gpux.Close()
 					prefill := func(st *Instance, ids []int32) []float32 {
 						lg, err := st.Prefill(ids)
 						if err != nil {
@@ -38,9 +38,9 @@ func TestResetZeroesTheDeviceRecurrentState(t *testing.T) {
 					}
 					placed := func() *Instance {
 						st := m.NewInstance(len(g.IDs) + 1)
-						st.SetDeviceLayers(gpu, -1)
+						st.SetDeviceLayers(gpux, -1)
 						if n := st.GPULayers(); n != m.Cfg.NLayer {
-							t.Fatalf("placed %d of %d blocks: %v", n, m.Cfg.NLayer, gpu.Err())
+							t.Fatalf("placed %d of %d blocks: %v", n, m.Cfg.NLayer, gpux.Err())
 						}
 						return st
 					}

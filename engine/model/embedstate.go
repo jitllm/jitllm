@@ -3,9 +3,9 @@ package model
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // A decoder embedding model -- qwen3-embedding, EmbeddingGemma -- is the
@@ -89,7 +89,7 @@ func (e *embedMode) composed(s *Instance, base, n int) bool {
 	default:
 		if n != e.total {
 			if base == 0 {
-				s.cpu.pool.declined[jit.DeclinePrefill]++
+				s.cpu.pool.declined[composer.DeclinePrefill]++
 			}
 			return false
 		}

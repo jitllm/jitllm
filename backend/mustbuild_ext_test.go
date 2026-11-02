@@ -3,7 +3,7 @@ package backend_test
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/ir"
 )
 
 // mustBuild is b's kernel, the test failed where the builder recorded an

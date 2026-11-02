@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // TestDeepseek4ServesComposedOnCPU runs each DeepSeek V4 fixture on the CPU
@@ -49,7 +49,7 @@ func TestDeepseek4ServesComposedOnCPU(t *testing.T) {
 				}
 			}
 			run := func(f cpuFault) float64 {
-				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, 0, jit.DeclineNoGraph))
+				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, 0, composer.DeclineNoGraph))
 			}
 			worst := run(cpuFaultNone)
 			t.Logf("the composed CPU copies and collapse from main: worst NMSE %.3g over %d steps", worst, len(g.IDs))

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestPrefillMatchesForward is the gate for the whole batched path.
@@ -72,7 +72,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 					served += n
 					for i, k := range d {
 						if k > 0 {
-							t.Errorf("%d block steps declined: %s (%v)", k, jit.DeclineName(i), s.CPUFormErr())
+							t.Errorf("%d block steps declined: %s (%v)", k, composer.DeclineName(i), s.CPUFormErr())
 						}
 					}
 				}
@@ -91,7 +91,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 	// block whose output a neighbour's held add overwrote, or a windowed row
 	// that read the whole history, misses it by orders.
 	t.Run("device", func(t *testing.T) {
-		const parts = tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt
+		const parts = gpu.ComposedBlock | gpu.ComposedHead | gpu.ComposedPrompt
 		llama, gemma := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), testmodels.Path("gemma-3-1b-it-Q4_K_M.gguf")
 		tiny := testmodels.Path("tinyllama-1.1b-q3_K_M.gguf")
 		for _, p := range []string{llama, gemma, tiny} {
@@ -103,7 +103,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 			for _, arm := range []struct {
 				name    string
 				path    string
-				parts   tier.Parts
+				parts   gpu.Parts
 				windows bool
 			}{{"composed", llama, parts, false}, {"windowed", gemma, parts, true},
 				{"tinyllama composed", tiny, parts, false}} {
@@ -119,7 +119,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 // tier asking the composer for parts, the prompt past the model's sliding
 // window where windows: the composer served every prompt block step it was
 // asked for.
-func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, windows bool) {
+func prefillOnDevice(t *testing.T, path, dev string, parts gpu.Parts, windows bool) {
 	m, err := Open(jlmOf(t, path), noTune)
 	if err != nil {
 		t.Fatal(err)
@@ -139,9 +139,9 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, windows b
 	}
 	// The prompt goes in chunks of at most 64 rows: the device reserves and
 	// warms the widths up to 64, each a form of the composer's.
-	opts := []tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.PromptRows = 64 })}
-	g, err := tier.OpenWith(append(opts, testTierOpts(t)...)...)
+	opts := []gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 64 })}
+	g, err := gpu.OpenWith(append(opts, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}
@@ -161,22 +161,22 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, windows b
 	}
 	composedRan(t, parts, nil, g)
 	st := g.Stats()
-	np, dp := st.ServedPart(tier.ComposedPrompt)
+	np, dp := st.ServedPart(gpu.ComposedPrompt)
 	if per := m.Cfg.NLayer; np == 0 || np%per != 0 || dp != 0 {
 		t.Fatalf("the composer served %d block steps of the prompt, %d of a chunk, and declined %d", np, per, dp)
 	}
-	if hs, hd := st.ServedPart(tier.ComposedHead); parts&tier.ComposedHead != 0 && (hs == 0 || hd != 0) {
+	if hs, hd := st.ServedPart(gpu.ComposedHead); parts&gpu.ComposedHead != 0 && (hs == 0 || hd != 0) {
 		t.Fatalf("the composer served the head %d times and declined it %d (%s)", hs, hd, declinesOf(st))
 	}
 	// A device whose matrix unit takes the composer's tiles runs the
 	// prompt's projections there.
-	mx := st.MatrixPart(tier.ComposedPrompt)
+	mx := st.MatrixPart(gpu.ComposedPrompt)
 	if strings.HasPrefix(dev, "cuda") && mx == 0 {
 		t.Fatalf("%s: the prompt's %d composed block steps ran no kernel on the matrix unit", dev, np)
 	}
 	// And the prompt's attention, where a block's rows share their first
 	// position: every block's of these models but a sliding window's.
-	at := st.AttendPart(tier.ComposedPrompt)
+	at := st.AttendPart(gpu.ComposedPrompt)
 	if strings.HasPrefix(dev, "cuda") && at == 0 {
 		t.Fatalf("%s: the prompt's %d composed block steps ran no attention on the matrix unit", dev, np)
 	}

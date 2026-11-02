@@ -4,13 +4,13 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // kvArena is one layer's history pages as one span of memory outside the Go
 // heap: what a composed CPU block's attention addresses as a pool, through a
-// table of page slots, as a card's pool is (jit.History). The model holds one
+// table of page slots, as a card's pool is (composer.History). The model holds one
 // for each layer and page size (Model.kvArenaFor), so every session's pages and
 // the shared store's are slots of it, and a prefix shared between sessions is
 // one slot every holder's table names (kvPages.table). It is reserved once

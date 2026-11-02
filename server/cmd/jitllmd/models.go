@@ -10,7 +10,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -171,8 +171,8 @@ type loadOpts struct {
 func loadModel(ctx context.Context, c cli, cn *conn, o loadOpts) error {
 	req := &v1.LoadModelRequest{Path: o.path, ModelId: o.id, DeviceIds: csv(o.devices)}
 	if o.maxmem != "" {
-		// tier.ParseBytes, so -maxmem means what it means to `jitllm run`.
-		b, err := tier.ParseBytes(o.maxmem)
+		// gpu.ParseBytes, so -maxmem means what it means to `jitllm run`.
+		b, err := gpu.ParseBytes(o.maxmem)
 		if err != nil {
 			return usagef("-maxmem: %v", err)
 		}

@@ -6,8 +6,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // On arm64 no one packed matvec wins every shape, so each shape is timed. The

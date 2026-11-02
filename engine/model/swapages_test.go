@@ -7,10 +7,10 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // windowFixtures are the fixtures with windowed layers: exaone4's sliding
@@ -78,7 +78,7 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 			}
 			// run decodes toks one at a time, hashing every step's logits, and
 			// reports the peak resident pages of the windowed layers.
-			run := func(g *tier.GPU, keep, fault bool) (sums []uint64, last []float32, peak int, s *Instance, err error) {
+			run := func(g *gpu.GPU, keep, fault bool) (sums []uint64, last []float32, peak int, s *Instance, err error) {
 				s = m.NewInstance(maxSeq)
 				if g != nil {
 					if err := s.SetDevice(g); err != nil {
@@ -169,18 +169,18 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 
 // windowRun is one decode of TestWindowedLayersHoldTheirWindow: on g (nil for
 // the host), keeping every page (keep) or releasing the window's own (fault).
-type windowRun func(g *tier.GPU, keep, fault bool) (sums []uint64, last []float32, peak int, s *Instance, err error)
+type windowRun func(g *gpu.GPU, keep, fault bool) (sums []uint64, last []float32, peak int, s *Instance, err error)
 
 // windowOnDevice is the device arm: every block and the head placed, the
-// shipping tier against one that keeps every page (tier.Config.KVKeepWindow),
+// shipping tier against one that keeps every page (gpu.Config.KVKeepWindow),
 // bit for bit at every step, with the device's split tuner off so the two
 // tiers reduce in one order.
 func windowOnDevice(t *testing.T, m *Model, spec string, run windowRun, win []int, n, maxSeq int, host []float32) {
 	c := m.Cfg
-	open := func(keep bool) *tier.GPU {
-		o := append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.KVKeepWindow = keep })}, testTierOpts(t)...)
-		g, err := tier.OpenWith(o...)
+	open := func(keep bool) *gpu.GPU {
+		o := append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithConfig(func(c *gpu.Config) { c.KVKeepWindow = keep })}, testTierOpts(t)...)
+		g, err := gpu.OpenWith(o...)
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

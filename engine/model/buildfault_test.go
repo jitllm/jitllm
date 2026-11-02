@@ -7,22 +7,22 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 const faultModel = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 
-func faultTier(t *testing.T, parts tier.Parts) *tier.GPU {
+func faultTier(t *testing.T, parts gpu.Parts) *gpu.GPU {
 	t.Helper()
-	o := append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)
+	o := append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)
 	if testdevices.Selected() {
-		o = append(o, tier.WithDevices(testdevices.One("")))
+		o = append(o, gpu.WithDevices(testdevices.One("")))
 	}
-	g, err := tier.OpenWith(o...)
+	g, err := gpu.OpenWith(o...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -40,10 +40,10 @@ type faultRun struct {
 // buildFaultRun prefills a prompt and steps a few tokens on a device whose
 // composer cannot form a matvec, the failure reported as a build failure or,
 // for the violation, as the device failing.
-func buildFaultRun(t *testing.T, m *Model, parts tier.Parts, asDevice bool) faultRun {
+func buildFaultRun(t *testing.T, m *Model, parts gpu.Parts, asDevice bool) faultRun {
 	t.Helper()
-	tier.SetFormFault(true, graph.OpMatVec, asDevice)
-	defer tier.SetFormFault(false, 0, false)
+	gpu.SetFormFault(true, graph.OpMatVec, asDevice)
+	defer gpu.SetFormFault(false, 0, false)
 	g := faultTier(t, parts)
 	defer g.Close()
 	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is", true)
@@ -78,8 +78,8 @@ func TestBuildFailureMovesNothing(t *testing.T) {
 	defer m.Close()
 	for _, c := range []struct {
 		name  string
-		parts tier.Parts
-	}{{"block", tier.ComposedBlock}, {"head", tier.ComposedHead}} {
+		parts gpu.Parts
+	}{{"block", gpu.ComposedBlock}, {"head", gpu.ComposedHead}} {
 		t.Run(c.name, func(t *testing.T) {
 			r := buildFaultRun(t, m, c.parts, false)
 			var be *nn.BuildError

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestBatchSeamMovesCarryEveryRow: a batch's blocks moving between the device
@@ -84,7 +84,7 @@ func TestBatchSeamMovesCarryEveryRowOffCard(t *testing.T) {
 	}
 	t.Run("host", func(t *testing.T) {
 		batchSeamMovesWith(t, p, 1e-3, false, []Option{WithExperts("host"), WithStreamTrial(false)},
-			func(t *testing.T, st tier.Stats) {
+			func(t *testing.T, st gpu.Stats) {
 				if st.HybridRows == 0 {
 					t.Fatalf("no batched row ran its experts on the host (%d hybrid block-steps)", st.HybridRuns)
 				}
@@ -142,7 +142,7 @@ func batchSeamMoves(t *testing.T, p string, bound float64, relocate bool) {
 // handed each arm's device stats once its steps have run -- the count that
 // says the configuration under test was the one that ran (RULE 10).
 func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mopts []Option,
-	check func(t *testing.T, st tier.Stats)) {
+	check func(t *testing.T, st gpu.Stats)) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
@@ -238,9 +238,9 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			want := drive(host, func(int) {})
 			host.Close()
 
-			open := func(opts ...tier.Option) *tier.GPU {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("gpu:0"),
-					tier.WithDeviceTune(tier.TuneOff)}, opts...)...)
+			open := func(opts ...gpu.Option) *gpu.GPU {
+				g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices("gpu:0"),
+					gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
 				if err != nil || g == nil {
 					noDevice(t, "device", err)
 				}
@@ -267,9 +267,9 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 				ps.Close()
 				pg.Close()
 			}
-			var g *tier.GPU
+			var g *gpu.GPU
 			if arm.squeeze {
-				g = open(tier.WithBudget(squeezed))
+				g = open(gpu.WithBudget(squeezed))
 			} else {
 				g = open()
 			}
@@ -307,7 +307,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			// Steady state before the first move (every block placed, three
 			// rows grown) and after the first round trip.
 			const again = 13
-			var s0, s1 tier.Stats
+			var s0, s1 gpu.Stats
 			got := drive(st, func(step int) {
 				if len(arm.moves) > 0 && arm.start < 0 {
 					switch step {
@@ -387,7 +387,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 				// everywhere, the driver's rounding included.
 				// The composed prompt arenas are scratch too: a width's
 				// buffers every prompt form shares, grown to the widest.
-				outside := func(s tier.Stats) (alloc, charged uint64) {
+				outside := func(s gpu.Stats) (alloc, charged uint64) {
 					return s.Allocated - s.ScratchBytes - s.ComposedArena, s.BudgetUsed - s.RoundingBytes - s.ScratchBytes - s.ComposedArena
 				}
 				a0, c0 := outside(s0)
@@ -500,7 +500,7 @@ func armGoroutines() int {
 
 // statsMoved names the integer fields of two snapshots that differ, with
 // the change.
-func statsMoved(a, b tier.Stats) string {
+func statsMoved(a, b gpu.Stats) string {
 	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
 	var out []byte
 	for i := range va.NumField() {

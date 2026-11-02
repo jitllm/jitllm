@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSchedulerOnDeviceMatchesEachSequenceAlone runs the Batcher with every
@@ -42,7 +42,7 @@ func schedulerOnDevice(t *testing.T, p string) {
 // schedulerOnDeviceModel is the gate on an open model, every arm on a tier
 // open makes. A latent model's blocks must also have run as ragged rows
 // (Stats.RowsLatent).
-func schedulerOnDeviceModel(t *testing.T, m *Model, open func(*testing.T) *tier.GPU) {
+func schedulerOnDeviceModel(t *testing.T, m *Model, open func(*testing.T) *gpu.GPU) {
 	t.Helper()
 	var err error
 	prompts := []string{
@@ -116,8 +116,8 @@ func schedulerOnDeviceModel(t *testing.T, m *Model, open func(*testing.T) *tier.
 	// Each step's rows' greedy tokens are the composer's sample, none the
 	// tier's argmax.
 	st := g.Stats()
-	if ns, ds := st.ServedPart(tier.ComposedSample); ns+st.ReplayedPart(tier.ComposedSample) == 0 || ds != 0 {
-		t.Fatalf("the composer selected the tokens of %d steps and was declined %d (%s)", ns+st.ReplayedPart(tier.ComposedSample), ds, declinesOf(st))
+	if ns, ds := st.ServedPart(gpu.ComposedSample); ns+st.ReplayedPart(gpu.ComposedSample) == 0 || ds != 0 {
+		t.Fatalf("the composer selected the tokens of %d steps and was declined %d (%s)", ns+st.ReplayedPart(gpu.ComposedSample), ds, declinesOf(st))
 	}
 	if n := latentBlocks(m); n > 0 && g.Stats().RowsLatent == 0 {
 		t.Fatalf("%d latent block(s) and none ran in a ragged step: the schedule went somewhere else (%s)",

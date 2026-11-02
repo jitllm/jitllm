@@ -5,7 +5,7 @@ what nothing reaches (the commits below, in order); the last table is what stays
 
 ## State
 
-- Commit 1 is done: `Config.Composed` and `jit.ComposedByDefault` are gone, every tier serves every part, the CPU's
+- Commit 1 is done: `Config.Composed` and `composer.ComposedByDefault` are gone, every tier serves every part, the CPU's
   blocks are composed by default and `WithComposedCPU` is gone; the arms that ran `Composed=0` or a partial set were
   rebased or deleted with their subject.
 - Commit 2 in part: the branches the pinned field decided (`layersSession`'s `asked`/`asks`, `promptHeld`'s
@@ -14,7 +14,7 @@ what nothing reaches (the commits below, in order); the last table is what stays
 
 ## The flip is two switches
 
-- **Cards.** `tier.go:2509` already sets `Config.Composed = ComposedStep` under `jit.ComposedByDefault`. Pinning it removes what can lower it:
+- **Cards.** `tier.go:2509` already sets `Config.Composed = ComposedStep` under `composer.ComposedByDefault`. Pinning it removes what can lower it:
   `JITLLM_GPU_COMPOSED` (`cmd/jitllm/gpuopts.go:230-232`), `verdict.go` (`admitPlan`'s `ComposedAuto` switch), `WithComposedByVerdict` and
   `Config.ComposedAuto` (`knobs.go`, `tier.go:190`), `server/engine.go:741`, `nn.LayerPlan.ComposedOn` (`device.go:894`, `forward.go:1225`).
 - **CPU.** `ComposedByDefault` does not turn the CPU on: `Open` (`model.go:1453`) sets `composedCPU` only from `composedReady()&BackendCPU` or
@@ -63,7 +63,7 @@ attention to pick the composed KV width). Opt-in: q8_0 KV, head-major KV, Shared
 5. **The persistent decode path** (opt-in and reached by no default; it drops a feature, so decide before landing): `persist.go`, `persist_hook.go`,
    the launcher's persist hooks (`launch.go`), `persistSession` (`devsess.go`), `WithPersist`, `WithPersistDeps`, `Config.Persist*`,
    `gpuopts.go:193-200`, `cmd/jitllm/verify.go`'s persist arms, `engine/model/persist*_test.go`; then `ir.Persist`, `ir.PersistDeps` and the Dep ops'
-   lowering (`jit/ir/persist.go`, `depsync.go`, `jit/ptx/dep.go` and the spirv/msl cases) where grep finds no other caller.
+   lowering (`composer/ir/persist.go`, `depsync.go`, `composer/ptx/dep.go` and the spirv/msl cases) where grep finds no other caller.
 6. **Dead helpers:** `kernels.FieldsOf`. UNSURE: `kernels/unpack.go` and `arena.go` run only for `pre == nil` (`tier.matVec` behind `mvPays`,
    `PrewarmLayer`'s arena), unreachable for a `.jlm` today.
 
@@ -80,10 +80,10 @@ attention to pick the composed KV width). Opt-in: q8_0 KV, head-major KV, Shared
 | towers' non-causal branches, `visionattn.go`, phases; `conv.go`; `kevhead.go`, `dechead.go`; kernels conv, conformer, dechead | towerServes declines; MobileNet, FastConformer; readouts | composed conv towers and readouts |
 | `declineReason` and the `*WhyNot` (layer.go 2698-2990); tuners `gemmtune.go`, `actintune.go`, `split.go`, `recipe.go`, `mvPays`; main-only knobs and Config fields | main's kernels while any run | the runner |
 | CPU: `forward()` body, `rowsHost`, `hostRows`, `fuse.go`; `ds4*.go`, `q4e.go`, `ngram.go`, `qsa.go`, `mla.go`, `moe.go`; head and embed fallbacks (`State.embed` has no composed CPU arm); vision post-LN, deepstack, projectors, `mnFinish`, audio, encoders, `lfm2enc.go`, decision heads | V4, n-gram, MTP, old containers, CPU declines; always-main pieces | graphs for MTP, n-gram and V4 selection; refusing old containers; composed CPU embed and non-text |
-| CPU bodies only covered models use: `altup.go` (`altPredict`, `altCorrect`, `laurel`, `laurelJoin`, `gaussTopK`), `k3.go` (`k3AttnIn`, `k3FFNIn`, `k3Resid`, `k3MoE`, `k3MoEBatch`), `ple.go` (`pleApply`, `pleRows`), `delta.go` mixers, `linrows.go`, `regions.go`; nn `delta.go`, `ssd.go`, `GaussTopK32JIT`; jit/cpu `delta*`, `conv*`, `sse_hybrid.go` and their emitter fields | CPU declines (q8 KV, head-major, PageOut, Cut/NoWeight, Sessions, rows-form errors); `newStateRange` provisioning | composing or refusing each CPU decline; a composed KV-width rule |
+| CPU bodies only covered models use: `altup.go` (`altPredict`, `altCorrect`, `laurel`, `laurelJoin`, `gaussTopK`), `k3.go` (`k3AttnIn`, `k3FFNIn`, `k3Resid`, `k3MoE`, `k3MoEBatch`), `ple.go` (`pleApply`, `pleRows`), `delta.go` mixers, `linrows.go`, `regions.go`; nn `delta.go`, `ssd.go`, `GaussTopK32JIT`; engine/device/cpu `delta*`, `conv*`, `sse_hybrid.go` and their emitter fields | CPU declines (q8 KV, head-major, PageOut, Cut/NoWeight, Sessions, rows-form errors); `newStateRange` provisioning | composing or refusing each CPU decline; a composed KV-width rule |
 
 **Before the runner can go:** move out of `layer.go` what the composed path uses (`prepLayer`, `layersSession`'s served dispatch, `recDesc`
 staging, `pickStage`, `pickLanes`, `initKVCap`, the streamed fill); keep kernels' `Quant` and layouts, `pack.go`, `quantof.go`, `scstream.go`,
 `actkind.go`, `ropetab_const.go`, the off-heap and release files, `PRow*`, `PagedGatherPages`, `RecDescWords`, `SampleSlices`, `divrn.go`; move the
-backend probes (`gridprobe.go`, `subgroup.go`, `tile.go`, `MMAProbe`, `MMAVoltaProbe`); rebuild `jit/gpu/lowertest` on the composer's forms; rebase
+backend probes (`gridprobe.go`, `subgroup.go`, `tile.go`, `MMAProbe`, `MMAVoltaProbe`); rebuild `composer/lowertest` on the composer's forms; rebase
 the composer tests that use main's kernels as arms (`MatVec`, `GemmVolta*`, `GemmTile`, `SoftmaxRows`, `Reduce`, `ActF16T`) and `choose.go`'s probe.

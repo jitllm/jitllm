@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // embedDevCos is how close a device's embedding must sit to the host's: the
@@ -64,7 +64,7 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 			he.Close()
 			ran := 0
 			for _, spec := range stepDevices() {
-				probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || probe == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -73,29 +73,29 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 				ran++
 				t.Run(spec, func(t *testing.T) {
 					arm := func(n int) ([][]float32, int) {
-						gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-							tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+						gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 						if err != nil {
 							t.Fatal(err)
 						}
-						defer gpu.Close()
+						defer gpux.Close()
 						e, err := m.NewEmbedder()
 						if err != nil {
 							t.Fatal(err)
 						}
 						defer e.Close()
-						if err := e.SetDeviceLayers(gpu, n); err != nil {
+						if err := e.SetDeviceLayers(gpux, n); err != nil {
 							t.Fatal(err)
 						}
 						placed := e.DeviceBlocks()
 						if want := n; n < 0 && placed != nb || n >= 0 && placed != want {
-							t.Fatalf("placed %d blocks, offered %d of %d: %v %s", placed, n, nb, e.DeviceDeclines(), gpu.Err())
+							t.Fatalf("placed %d blocks, offered %d of %d: %v %s", placed, n, nb, e.DeviceDeclines(), gpux.Err())
 						}
 						// The device ran them: one submission a run of placed
 						// blocks a text, counted by the device itself.
-						s0 := gpu.Stats().Submits
+						s0 := gpux.Stats().Submits
 						out := embed(e)
-						if s := gpu.Stats().Submits - s0; s < len(g.Texts) {
+						if s := gpux.Stats().Submits - s0; s < len(g.Texts) {
 							t.Fatalf("%d submission(s) for %d texts: the placed blocks did not run on the device", s, len(g.Texts))
 						}
 						return out, placed

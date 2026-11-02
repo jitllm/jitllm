@@ -33,10 +33,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -241,7 +241,7 @@ func serve(args []string) {
 
 	var budget uint64
 	if *maxmem != "" {
-		b, err := tier.ParseBytes(*maxmem)
+		b, err := gpu.ParseBytes(*maxmem)
 		if err != nil {
 			fatal("-maxmem: %v", err)
 		}
@@ -250,18 +250,18 @@ func serve(args []string) {
 
 	var storeBytes uint64
 	if *storeMax != "" {
-		b, err := tier.ParseBytes(*storeMax)
+		b, err := gpu.ParseBytes(*storeMax)
 		if err != nil {
 			fatal("-mem-cache-max: %v", err)
 		}
 		storeBytes = b
 	}
 
-	imageBytes, err := tier.ParseBytes(*imageMax)
+	imageBytes, err := gpu.ParseBytes(*imageMax)
 	if err != nil {
 		fatal("-image-max: %v", err)
 	}
-	imageReqBytes, err := tier.ParseBytes(*imageReqMax)
+	imageReqBytes, err := gpu.ParseBytes(*imageReqMax)
 	if err != nil {
 		fatal("-image-max-request: %v", err)
 	}
@@ -283,7 +283,7 @@ func serve(args []string) {
 
 	var hostBytes uint64
 	if *hostMem != "" {
-		b, err := tier.ParseBytes(*hostMem)
+		b, err := gpu.ParseBytes(*hostMem)
 		if err != nil {
 			fatal("-host-mem: %v", err)
 		}
@@ -302,7 +302,7 @@ func serve(args []string) {
 	}
 	var store model.KVStore
 	if *kvCache != "" {
-		max, err := tier.ParseBytes(*kvCacheMax)
+		max, err := gpu.ParseBytes(*kvCacheMax)
 		if err != nil {
 			fatal("-kv-cache-max: %v", err)
 		}

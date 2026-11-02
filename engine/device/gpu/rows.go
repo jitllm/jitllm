@@ -1,0 +1,2114 @@
+package gpu
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"slices"
+
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/engine/nn"
+)
+
+// ragStep is one LayersRows call's rows, read by layersOnce while it runs.
+type ragStep struct {
+	pos, slot []int
+	// sid, when set, is each row's session: a step whose rows belong to
+	// different sessions (gpuSession.LayersSessions). Nil is self's.
+	sid []uint64
+	// self is the session making the call: every row's when sid is nil, and
+	// the one a device-wide choice made for the call (eviction, the
+	// recording's key) is made for.
+	self uint64
+	// seqLen is the positions one sequence of a session's batch spans
+	// (nn.RowsDevice): row r is sequence (slot[r]-pos[r])/seqLen of its
+	// session.
+	seqLen int
+	// runs is the rows grouped by sequence, each run's rows in position order,
+	// with each run's session and seat row (groupRuns), and sess the step's
+	// distinct sessions: what a linear block's recurrent descriptor is built
+	// from. Set for a step that runs a linear block or crosses sessions.
+	runs    [][]int
+	runSid  []uint64
+	runSeat []int
+	sess    []uint64
+	// keys is groupRuns' scratch, kept with the rest.
+	keys []runKey
+	// again says an earlier run of this step ran on the same device (a cut at
+	// a change of geometry, gemma4.go), so the step's rows are counted once.
+	again bool
+}
+
+// oneSequence reports whether the step's rows are one sequence's, in
+// position order.
+func (r *ragStep) oneSequence() bool {
+	for i := range r.pos {
+		if i == 0 {
+			continue
+		}
+		if r.pos[i] <= r.pos[i-1] || r.sid != nil && r.sid[i] != r.sid[0] ||
+			r.seqLen > 0 && (r.slot[i]-r.pos[i])/r.seqLen != (r.slot[0]-r.pos[0])/r.seqLen {
+			return false
+		}
+	}
+	return true
+}
+
+// LayersRows runs one step for len(pos) rows, every block and the head, and
+// fills head.Tokens with each row's greedy token and, with head.RowLogits, reads
+// each row's logits into head.Logits (see nn.RowsDevice). The rows may be
+// independent sequences or one sequence's prompt.
+//
+// It is batched prefill with different attention: the batched scratch runs the
+// matvecs and writes each row's K and V at its own offset, and each row then
+// reads its own sequence's keys (kernels.AttnScoresRagged/AttnAccRagged),
+// softmaxes over its own count and ends in its own argmax. N sequences cost
+// one pass over the weights instead of N.
+func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+	v := g.as(0)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	rs := &ragStep{pos: pos, slot: slot, seqLen: seqLen}
+	return v.layersRows(lo, hi, rs, x, cs, csSWA, head)
+}
+
+// layersRows is LayersRows for rs's rows, each of its own session where
+// rs.sid is set and of rs.self's otherwise.
+func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, head *nn.Head) bool {
+	fail := func(f string, a ...any) bool {
+		g.mu.Lock()
+		g.LastErr = fmt.Sprintf("rows: "+f, a...)
+		g.mu.Unlock()
+		return false
+	}
+	pos, slot, sid := rs.pos, rs.slot, rs.self
+	n := len(pos)
+	// Gemma 4: the range's geometry's scratch set (gemma4.go), as layersCall.
+	g.mu.Lock()
+	prev := g.geoCur
+	if g.geoUsed {
+		g.useGeom(g.geomFor(lo, hi))
+	}
+	g.mu.Unlock()
+	defer g.restoreGeom(prev)
+	switch {
+	case rowsFaulted("noswa"):
+		csSWA = nil
+	}
+	if n < 1 || len(slot) != n || lo < 0 || lo > hi || (lo == hi && head == nil) {
+		return fail("%d positions, %d slots, blocks [%d,%d)", n, len(slot), lo, hi)
+	}
+	if g.NoBatch {
+		return fail("NoBatch is set")
+	}
+	// A sequence's rows -- a prompt chunk beside the decoding rows -- must be
+	// its next positions in order, which a linear block's run chains through
+	// and which a step across sessions checks for its attention too: a repeat
+	// would write one position twice.
+	g.mu.Lock()
+	linear := g.linearIn(lo, hi)
+	var err error
+	if linear || rs.sid != nil {
+		err = g.groupRuns(sid, rs)
+	}
+	g.mu.Unlock()
+	if err != nil {
+		return fail("%v", err)
+	}
+	// Each row's sequence takes its own pages.
+	g.pgRows = g.pagedRows(sid, g.pgRows, n, n, 0, rs)
+	if !g.pagedAppendRows(sid, g.pgRows) {
+		return false
+	}
+	g.mu.Lock()
+	// A step the composer serves whole runs in the reserved width, its rows
+	// the call's, as a prompt does (rowsComposed): no width is built,
+	// formed or compiled for its count of rows, and a wider step is refused
+	// (RowsWidth admits none). So does a head over the rows on a device
+	// that holds none of the step's blocks.
+	composed := g.rowsComposed(lo, hi) || lo == hi && g.headReserved()
+	w := g.promptW
+	switch {
+	case composed && n > g.promptW:
+		g.mu.Unlock()
+		return fail("%d rows, more than the reserved width %d the composer serves", n, g.promptW)
+	case !composed:
+		w = g.rowsWidth(lo, n)
+	}
+	if w > batchWidth {
+		g.mu.Unlock()
+		return fail("%d rows, more than the batch width %d", n, batchWidth)
+	}
+	for li := lo; li < hi; li++ {
+		l := g.layers[li]
+		switch {
+		case l == nil || !l.ok:
+			g.mu.Unlock()
+			return fail("block %d is not on this device", li)
+		case l.nonCausal || l.stream != nil && !l.stream.hybrid:
+			g.mu.Unlock()
+			return fail("block %d is non-causal or streamed", li)
+		}
+	}
+	// A final softcap (gemma2) caps every row the head projects, as decode's
+	// head caps its one (prepRowsHead builds it from the step's head). A head
+	// whose cap disagrees with the one the device was given would be a
+	// different function from the sessions' decode.
+	if head != nil && g.bs != nil && (head.Softcap != 0) != (g.bs.headCap != nil) {
+		g.mu.Unlock()
+		return fail("the step's head has a final softcap of %g and the device's head was built "+
+			"with a cap %v", head.Softcap, g.bs.headCap != nil)
+	}
+	// The step's own width, or the reserved one when that does not fit.
+	ok := g.bs != nil && (head == nil || g.bs.head != nil && g.bs.head.ok)
+	if ok {
+		if !composed {
+			w = g.batchFor(w)
+		}
+		ok = w > 0 && g.prepRagged(g.bbs[w], head, n)
+	}
+	bs := g.bbs[w]
+	if ok {
+		g.RowsSteps++
+		g.RowsPadded += w - n
+	}
+	if ok && linear {
+		// A range the composer serves whole steps its runs in its own forms.
+		ok = (composed || g.prepRagLinear(bs, n)) && g.prepRecRows(sid, lo, hi, rs)
+	}
+	g.rag = rs
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.rag = nil
+		g.mu.Unlock()
+	}()
+	if !ok {
+		return false
+	}
+	if head != nil && len(head.Tokens) < n {
+		head.Tokens = make([]int32, n)
+	}
+	if !g.submit(sid, bs, lo, hi, 0, x, cs, csSWA, head) {
+		return false
+	}
+	g.mu.Lock()
+	if rs.sid != nil && !rs.again {
+		g.SessionRows += n
+	}
+	if linear {
+		nl := 0
+		for li := lo; li < hi; li++ {
+			if g.layers[li].linear {
+				nl++
+			}
+		}
+		g.RecChainRows += (n - len(rs.runs)) * nl
+	}
+	// Counted here rather than in emitMLARows, which a replayed recording
+	// does not run.
+	for li := lo; li < hi; li++ {
+		// l.mla is the model's: a hybrid's linear blocks carry it too.
+		if l := g.layers[li]; l.mla && !l.linear {
+			g.RowsLatent++
+		}
+	}
+	g.mu.Unlock()
+	return true
+}
+
+// rowsWidth is the width a ragged step of n rows from block lo runs at: n
+// rounded up to the row grain, the matrix instruction's 32 only where there
+// is one -- the dp4a twin (ragMV) and every attention tile take 8, and padding
+// to 32 would do 32 rows of work. One compile settles which this device has.
+// Callers hold g.mu.
+func (g *devTier) rowsWidth(lo, n int) int {
+	grain := batchGrain
+	if l := g.layers[lo]; l != nil && l.ok {
+		// The block's first projection: a latent block with a query latent
+		// has no mvq, and a linear block none of the attention's.
+		for _, m := range []mv{l.mvq, l.mvQA, l.mvKVA, l.mvSO} {
+			if m.kern != nil {
+				g.batchMV(m, batchGrain, 1)
+				break
+			}
+		}
+	}
+	if g.mmaOff || g.NoMMA {
+		grain = 8
+	}
+	return (n + grain - 1) / grain * grain
+}
+
+// prepRagged builds bs's ragged-decode set once, outside any session: Compile
+// and Alloc are driver calls a capture forbids. Callers hold g.mu. The head's
+// part (the batched projection and the per-row argmax) is built only for a
+// step that runs the head, and over the rows it wants (nn.Head.LogitRows).
+func (g *devTier) prepRagged(bs *blockScratch, rowsHead *nn.Head, n int) bool {
+	if bs == nil {
+		return false
+	}
+	defer g.scratchWin().close()
+	if bs.ragWalked != g.layerGen+1 || bs.ragWalkN != n {
+		if !g.prepRaggedBlocks(bs, n) {
+			return false
+		}
+		bs.ragWalked, bs.ragWalkN = g.layerGen+1, n
+	}
+	return g.prepRowsHead(bs, rowsHead, n)
+}
+
+// prepRaggedBlocks builds every block's part of bs's ragged-decode set for a
+// step of n rows: the one place its matvecs can be compiled (Compile is
+// refused inside a session), a map lookup a matvec once they are. prepRagged
+// walks it once until a block is placed or released or the retune rewrites
+// their matvecs (layerGen), so a warm step's walk is a comparison. Callers
+// hold g.mu.
+func (g *devTier) prepRaggedBlocks(bs *blockScratch, n int) bool {
+	if roomFaulted("nobuild") || roomFaulted("nobuild-room") {
+		g.LastErr = "rows: no ragged twin builds (roomFault)"
+		return false
+	}
+	// A step in the reserved width whose every block the composer serves
+	// runs none of the tier's twins: nothing is built for its count of rows.
+	composed := bs == g.bbs[g.promptW] && g.rowsReserved()
+	for _, l := range g.layers {
+		if l == nil || !l.ok || composed {
+			continue // a block of a split placement that another tier runs
+		}
+		// A block of another scratch set is built when its set's step is
+		// (gemma4.go): this set's batched scratch may not run it at all (a
+		// mixture block beside MiniMax-M3's dense lead).
+		if g.geoUsed && l.geo != g.geoCur {
+			continue
+		}
+		// A linear block's projections and the shared expert's too: every
+		// matvec a ragged block can launch, as prepBatch's list.
+		// A latent block's query, latent and output projections too; its
+		// absorb banks run grouped (prepBatch builds them).
+		for _, m := range []mv{l.mvq, l.mvk, l.mvv, l.mvo, l.mvg, l.mvu, l.mvd,
+			l.mvsg, l.mvsu, l.mvsd, l.mvSG, l.mvBA, l.mvSO, l.mvFA, l.mvFB, l.mvGA, l.mvGB,
+			l.mvpg, l.mvpp,
+			l.mvQA, l.mvQB, l.mvKVA,
+			l.mvIQ, l.mvIK, l.mvIW, l.mvLL, l.mvLR, l.mvMQ,
+			l.mvCKV, l.mvCG, l.mvICKV, l.mvICG} {
+			if m.kern == nil || m.slots > 0 {
+				continue
+			}
+			if _, ok := g.ragStepMV(m, bs.rows, n); !ok {
+				return false
+			}
+		}
+		if !g.ds4Twins(l, bs.rows) {
+			return false
+		}
+		// Decode's fusions over the step, where decode has them: built here
+		// because a session cannot compile, and declined (the separate
+		// launches serve) where a shape refuses.
+		g.groupKern(l.mvo, n, bs.rows, groupRes, 0)
+		g.groupKern(l.mvd, n, bs.rows, groupRes, 0)
+		g.groupKern(l.mvu, n, bs.rows, groupGate, bs.p.Act)
+		g.groupQKV(l, n, bs.rows)
+	}
+	return true
+}
+
+// prepRowsHead readies bs's per-row head -- the composer's head over the
+// rows a step wants, their logits and tokens -- once, outside any session.
+// A ragged step needs it, and so does a chunk whose head wants every row
+// (nn.Head.RowLogits on Layers). Callers hold g.mu.
+func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool {
+	defer g.scratchWin().close()
+	R := bs.rows
+	fail := func(err error) bool { g.LastErr = "rows: " + err.Error(); return false }
+	// A batch's rows read their history through the scratch's paged set
+	// (pagedDecode); what is left to build is the head.
+	if rowsHead == nil {
+		return true
+	}
+	head := g.bs.head
+	if need := g.rowsHeadNeed(bs, head.nrows, rowsHead.Softcap); need > 0 && !g.room(need) {
+		return fail(fmt.Errorf("the logits of %d rows need %d bytes, %d of %d used", R, need, g.used, g.limit))
+	}
+	// The composer's head over rows serves any count of them at bs's width
+	// (servedHead), formed here, outside any step; a head it does not serve
+	// is refused at the step, so the tier builds no projection of its own.
+	if g.bs.headServes(g.bs.hNorm, false, false) != partServes {
+		return fail(errors.New("the composer does not serve the head over rows"))
+	}
+	g.prewarming = true
+	_, err := g.servedHead(g.bs, g.bs.hNorm, R)
+	g.prewarming = false
+	if err != nil {
+		return fail(fmt.Errorf("the composed head over %d rows: %w", R, err))
+	}
+	if !bs.ragBuilt {
+		if !g.ragSampleServes() {
+			return fail(errors.New("the composer states no sample for the head"))
+		}
+		// reserveRowsHead may have allocated them at placement, from the
+		// plan's vocabulary; a head of another width replaces them.
+		if bs.ragLogits != nil && bs.ragVocab != head.nrows {
+			freeRagOut(bs)
+		}
+		if bs.ragLogits == nil {
+			if bs.ragLogits, err = g.dev.Alloc(R * head.nrows * 4); err == nil {
+				bs.ragVocab = head.nrows
+				bs.ragTok, err = g.dev.Alloc(R * 4)
+			}
+		}
+		if err != nil {
+			return fail(err)
+		}
+		bs.ragBuilt = true
+	}
+	// The final softcap over every row the head can project: the kernel is
+	// sized for R rows and launched over the wanted ones.
+	if c := rowsHead.Softcap; c != 0 {
+		if !g.prepRowsCap(bs, c) {
+			return false
+		}
+		if bs.ragCap == nil {
+			b, err := g.dev.Alloc(R * head.nrows * 4)
+			if err != nil {
+				return fail(err)
+			}
+			bs.ragCap = b
+		}
+	}
+	return true
+}
+
+// prepRowsCap compiles the final softcap c over bs's rows of the head's
+// logits where bs holds no kernel of it. Callers hold g.mu.
+func (g *devTier) prepRowsCap(bs *blockScratch, c float32) bool {
+	if c == 0 || bs.ragCapK != nil && bs.ragCapC == c {
+		return true
+	}
+	k, err := kernels.Softcap(bs.rows*g.bs.head.nrows, c)
+	if err != nil {
+		g.LastErr = "rows: " + err.Error()
+		return false
+	}
+	ck, err := g.compile(k)
+	if err != nil {
+		g.LastErr = "rows: " + err.Error()
+		return false
+	}
+	if bs.ragCapK != nil {
+		bs.ragCapK.Close()
+	}
+	bs.ragCapK, bs.ragCapC = ck, c
+	return true
+}
+
+// rowsHeadNeed is what prepRowsHead allocates for bs's per-row logits at a
+// head of nrows rows, the final softcap's twin included: nothing where they
+// are held at that width.
+func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int, softcap float32) uint64 {
+	if bs == nil {
+		return 0
+	}
+	var n uint64
+	fresh := bs.ragLogits == nil || bs.ragVocab != nrows
+	if fresh {
+		n += g.footprint(bs.rows*nrows*4) + g.footprint(bs.rows*4)
+	}
+	if softcap != 0 && (fresh || bs.ragCap == nil) {
+		n += g.footprint(bs.rows * nrows * 4)
+	}
+	return n
+}
+
+// prepRowsReserved builds the reserved width's per-row head where a ragged
+// step's rows run there (rowsReserved) -- the per-row argmax and the final
+// softcap, the composer's head writing the logits they read -- at placement
+// and at PrepHead, so no step compiles them. Callers hold g.mu.
+func (g *devTier) prepRowsReserved() {
+	bb := g.reservedFor(ComposedBlock)
+	if bb == nil || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsHeld() {
+		return
+	}
+	if !g.prepRowsHead(bb, &nn.Head{Softcap: g.bs.capC}, bb.rows) {
+		g.LastErr = "the reserved width's per-row head: " + g.LastErr
+	}
+}
+
+// ragTokens writes the greedy token of each of a step's n wanted rows of
+// logits into bs.ragTok: the composer's sample at the scratch's rows, its
+// rows the call's (headCalls).
+func (g *devTier) ragTokens(lc *launcher, bs, hb *blockScratch, n int, served bool) error {
+	if !served {
+		return errors.New("rows: the composed sample was not asked for the step's tokens")
+	}
+	sv, err := g.servedSampleAt(hb.sampleGraph, bs.rows)
+	if err != nil {
+		return err
+	}
+	sv.rows, sv.sl.tables[tableKey(composer.TableCall)] = n, bs.headCalls
+	return sv.run(g, lc, sv.inst, []backend.Buf{bs.ragOut()}, []backend.Buf{bs.ragTok})
+}
+
+// rowsCall is what a rows call keeps between its calls: its runs slice,
+// reused so a step allocates none, and why its last call failed, naming the
+// device (the devices' LastErr summed by Stats is whichever wrote last, not
+// the one that refused). The zero session's is the GPU's, a session's its own:
+// steps led by different sessions at once -- the server's decode groups --
+// share none of it.
+type rowsCall struct {
+	runs []run
+	err  string
+	// in is the session whose inputs (gpuSession.inputsTo) each device takes
+	// as the call reaches it, nil for none.
+	in *gpuSession
+}
+
+// LayersRows runs blocks [lo, hi) for the rows, one call per device run, the
+// residual crossing to the next device through x. Each row's history for a
+// block lives in the cache of the device that holds the block. The head rides
+// the last block's step where it is on that device, and is a step of its own
+// on the device holding it otherwise.
+func (g *GPU) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+	return g.layersRows(&g.rows, 0, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
+}
+
+// layersRows is LayersRows for session self, with each row's session, or nil
+// for self's; c is self's rows call.
+func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, sid []uint64, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+	beside := g.rowsCalls.Add(1) > 1
+	defer g.rowsCalls.Add(-1)
+	g.mu.Lock()
+	rs, ok := g.runsInto(c.runs, lo, hi)
+	c.runs = nil
+	why := ""
+	switch {
+	case lo == hi && head != nil && g.head != nil:
+		// The head alone (a hyper-connected model's, after the host's
+		// collapse): a step of its own on the head's device.
+		rs = append(rs[:0], run{dev: g.head, lo: hi, hi: hi, split: g.split})
+	case !ok || len(rs) == 0:
+		why = fmt.Sprintf("rows: blocks [%d,%d) are not all on devices", lo, hi)
+	case head != nil && g.head == nil:
+		why = "rows: no device holds the head"
+	}
+	// A head on another device than the last block's -- placed where the
+	// tail device had no room for it (PrepHead) -- or a last run outside the
+	// home scratch set (gemma4.go) leaves the projection to a step of its
+	// own on the head's device, the residual crossing through x, as Layers
+	// does.
+	if why == "" && head != nil {
+		if r := rs[len(rs)-1]; r.dev != g.head || r.geo != 0 {
+			rs = append(rs, run{dev: g.head, lo: hi, hi: hi, split: g.split})
+		}
+	}
+	c.err = why
+	g.mu.Unlock()
+	defer g.keepRuns(c, rs)
+	// The call's counts and causes start at zero, and the session's inputs
+	// go to each device, as the call reaches it (stageBegin): a device runs
+	// one step's stage at a time holding its lock, so touching a device
+	// another step is on would hold this one at its head until that stage
+	// ended, and steps led by different sessions would never overlap.
+	g.startRows(self, rs, !beside)
+	if why != "" {
+		g.startRest(self, rs, 0)
+		return false
+	}
+	for i, r := range rs {
+		var h *nn.Head
+		if i == len(rs)-1 {
+			h = head
+		}
+		// A step of its own on each device: its rows' grouping is the
+		// device's. The ragStep is the session's on that device, its slices
+		// reused.
+		g.stageBegin(r.dev)
+		if !slices.ContainsFunc(rs[:i], func(o run) bool { return o.dev == r.dev }) {
+			r.dev.startCall(self)
+			if c.in != nil {
+				c.in.inputsOn(r.dev)
+			}
+		}
+		v := r.dev.as(self)
+		if v == nil {
+			g.stageEnd(r.dev)
+			g.startRest(self, rs, i+1)
+			why = fmt.Sprintf("%s: no scratch for this session: %s", label(r.dev.dev, r.dev.ord), r.dev.stats().LastErr)
+			g.mu.Lock()
+			c.err = why
+			g.mu.Unlock()
+			return false
+		}
+		st := &v.stepRS
+		st.pos, st.slot, st.sid, st.self, st.seqLen = pos, slot, sid, self, seqLen
+		st.again = slices.ContainsFunc(rs[:i], func(o run) bool { return o.dev == r.dev })
+		c0, c1 := r.tables(cs, csSWA)
+		ok := v.layersRows(r.lo, r.hi, st, x, c0, c1, h)
+		v.done()
+		// The runs go too: a step that groups none (no linear block in its
+		// range, one session) would otherwise hand recDesc the last step's,
+		// whose rows index past this one's.
+		st.pos, st.slot, st.sid = nil, nil, nil
+		st.runs, st.runSid, st.runSeat, st.sess = st.runs[:0], st.runSid[:0], st.runSeat[:0], st.sess[:0]
+		g.stageEnd(r.dev)
+		if !ok {
+			g.startRest(self, rs, i+1)
+			why = fmt.Sprintf("%s, blocks [%d,%d): %s", label(r.dev.dev, r.dev.ord), r.lo, r.hi, r.dev.stats().LastErr)
+			g.mu.Lock()
+			c.err = why
+			g.mu.Unlock()
+			return false
+		}
+	}
+	return true
+}
+
+// startRows starts a rows call of session self over rs on the devices it
+// does not run on, which no step's stage holds: their counts and causes for
+// self go to zero, and every device's own cause too when no other rows call
+// is in flight (shared). The devices of rs start as the call reaches them.
+func (g *GPU) startRows(self uint64, rs []run, shared bool) {
+	for i := 0; ; i++ {
+		d := g.dev(i)
+		if d == nil {
+			return
+		}
+		if shared {
+			d.cause.Store(0)
+		}
+		if !slices.ContainsFunc(rs, func(o run) bool { return o.dev == d }) {
+			d.startCall(self)
+		}
+	}
+}
+
+// startRest starts the call on the devices of rs from rs[from] on that a
+// failed call never reached, so a step refused part way reads no count left
+// by an earlier one.
+func (g *GPU) startRest(self uint64, rs []run, from int) {
+	for j := from; j < len(rs); j++ {
+		d := rs[j].dev
+		if !slices.ContainsFunc(rs[:j], func(o run) bool { return o.dev == d }) {
+			d.startCall(self)
+		}
+	}
+}
+
+// keepRuns hands a rows call's runs slice back to c for its next call.
+func (g *GPU) keepRuns(c *rowsCall, rs []run) {
+	g.mu.Lock()
+	c.runs = rs
+	g.mu.Unlock()
+}
+
+// stageBegin waits for d to finish any other call's rows stage and marks one
+// running there, counting an overlap on d when another device is running
+// one: a call runs its stages one after another, so that stage is another
+// call's. A card runs one step's stage at a time, so steps led by different
+// sessions -- the server's decode groups -- that reach a card together go
+// through it one after the other and leave it offset by a stage, each on its
+// own card from then on, where a lane each would run them on the same card
+// at once and in step, and the other cards idle.
+func (g *GPU) stageBegin(d *devTier) {
+	d.stageMu.Lock()
+	g.stageMu.Lock()
+	other := g.stages > d.stages
+	g.stages++
+	d.stages++
+	g.stageMu.Unlock()
+	if other {
+		d.mu.Lock()
+		d.Stats.StageOverlaps++
+		d.mu.Unlock()
+	}
+}
+
+// stageEnd ends what stageBegin began.
+func (g *GPU) stageEnd(d *devTier) {
+	g.stageMu.Lock()
+	g.stages--
+	d.stages--
+	g.stageMu.Unlock()
+	d.stageMu.Unlock()
+}
+
+// RowsWidth is the widest step of at most want rows every device holding a
+// block can run (nn.RowsWidther): each device's batched scratch for it held
+// or built now (batchFor), halving the width until one fits; on a device
+// whose every block the composer serves in the reserved width, that width
+// (rowsReserved). 0 when none does, or no device holds a block.
+func (g *GPU) RowsWidth(want int) int {
+	w := min(want, batchWidth)
+	if roomFaulted("narrow-lie") {
+		return w
+	}
+	for _, d := range g.devs {
+		d.mu.Lock()
+		held := false
+		for _, l := range d.layers {
+			if l != nil && l.ok {
+				held = true
+				break
+			}
+		}
+		switch {
+		case held && d.rowsReserved():
+			// The composer serves every block in the reserved width at any
+			// count of rows up to it: nothing is built for the step.
+			w = min(w, d.promptW)
+		case held && d.bs != nil:
+			for w >= 8 {
+				r := (w + 7) / 8 * 8
+				if b := d.batchFor(r); b >= r {
+					break
+				}
+				w /= 2
+			}
+		}
+		d.mu.Unlock()
+		if w < 8 {
+			return 0
+		}
+	}
+	return w
+}
+
+// rowsRoom is RowsRoom for session sid: on every device holding a block, the
+// step's scratch (stepRoom) and, where a linear block is placed, the session's
+// recurrent seat for seqs sequences (growSeat); with head, the device holding
+// the head has its per-row head too. A scratch that does not build is an
+// error, not a shortage of room.
+func (g *GPU) rowsRoom(sid uint64, rows, seqs int, head *nn.Head) (bool, error) {
+	g.resetCause(sid, true)
+	if roomFaulted("noseat-lie") || roomFaulted("narrow-lie") {
+		return true, nil
+	}
+	g.mu.Lock()
+	hd := g.head
+	g.mu.Unlock()
+	for _, d := range g.devs {
+		v := d.as(sid)
+		if v == nil {
+			continue
+		}
+		h := head
+		if d != hd {
+			h = nil
+		}
+		v.mu.Lock()
+		lo, linear := -1, false
+		for li, l := range v.layers {
+			if l != nil && l.ok {
+				if lo < 0 {
+					lo = li
+				}
+				linear = linear || l.linear
+			}
+		}
+		ok, err := lo < 0 && h == nil, error(nil)
+		if !ok && v.bs != nil {
+			ok, err = v.stepRoom(lo, rows, h)
+			ok = ok && (!linear || v.growSeat(sid, seqs))
+		}
+		v.mu.Unlock()
+		v.done()
+		if err != nil {
+			return false, fmt.Errorf("%s: %w", label(d.dev, d.ord), err)
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// errStepBuild is a ragged step's scratch that did not build: a kernel the
+// device refused, a buffer the driver did not give, the head not on the
+// device. No relocation gives it room, so the step is refused by name.
+type errStepBuild struct{ why string }
+
+func (e errStepBuild) Error() string { return "the step's scratch does not build: " + e.why }
+
+// stepRoom reports whether a ragged step of n rows from block lo has its
+// scratch here: the batched scratch for the width it runs at (rowsWidth,
+// batchFor) and the ragged set the step builds in it (prepRagged), with
+// head's per-row head. They are built now, outside any session, and held to
+// the budget as a width built after placement is (prepBatch): a step whose
+// scratch would pass it has no room, and the caller relocates blocks to make
+// some rather than the device charging past its budget. The per-row head is
+// priced before it is asked for, a padded step's head being the scratch's
+// rows of logits. A set that does not build is an errStepBuild. Callers hold
+// g.mu.
+func (g *devTier) stepRoom(lo, n int, head *nn.Head) (bool, error) {
+	var w int
+	switch {
+	case g.rowsReserved() || lo < 0 && g.headReserved():
+		// The step runs in the reserved width (layersRows): nothing is
+		// built for its rows.
+		if n > g.promptW {
+			return false, errStepBuild{fmt.Sprintf("%d rows, more than the reserved width %d the composer serves", n, g.promptW)}
+		}
+		w = g.promptW
+	default:
+		if w = g.rowsWidth(lo, n); w > batchWidth {
+			return false, nil
+		}
+		if w = g.batchFor(w); w == 0 {
+			return false, nil
+		}
+	}
+	bs := g.bbs[w]
+	if head != nil {
+		if g.bs == nil || g.bs.head == nil || !g.bs.head.ok {
+			return false, errStepBuild{"the step's head is not on this device"}
+		}
+		if !g.rowsHeadRoom(bs, head) {
+			return false, nil
+		}
+	}
+	if !g.prepRagged(bs, head, n) {
+		if roomFaulted("nobuild-room") {
+			return false, nil
+		}
+		return false, errStepBuild{g.LastErr}
+	}
+	if g.NoScratchReserve || g.kvCompact(g.promisedBytes(), nil) {
+		return true, nil
+	}
+	g.LastErr = fmt.Sprintf("a %d-row step's scratch passes the budget (%d of %d bytes charged)", w, g.used, g.limit)
+	return false, nil
+}
+
+// rowsHeadRoom reports whether bs's per-row head for head fits the budget:
+// the logits every row of the scratch projects into, the tokens their argmax
+// writes and a final softcap's capped copy, as prepRowsHead allocates them,
+// priced as the card spends them beside the history promised to admitted
+// rows. What is built costs nothing, and a width reserved at placement had
+// them reserved with it (reserveRowsHead). Callers hold g.mu, with the head
+// on this device.
+func (g *devTier) rowsHeadRoom(bs *blockScratch, head *nn.Head) bool {
+	if g.NoScratchReserve {
+		return true
+	}
+	R, vocab := bs.rows, g.bs.head.nrows
+	// A head of another width than the one reserved gives back every buffer
+	// (prepRowsHead's freeRagOut) and asks for them all again.
+	fresh := !bs.ragBuilt && bs.ragLogits != nil && bs.ragVocab != vocab
+	var need uint64
+	if !bs.ragBuilt && (bs.ragLogits == nil || fresh) {
+		need += g.footprint(R*vocab*4) + g.footprint(R*4)
+	}
+	if c := head.Softcap; c != 0 && (fresh || bs.ragCap == nil && (bs.ragCapK == nil || bs.ragCapC != c)) {
+		need += g.footprint(R * vocab * 4)
+	}
+	if need == 0 || g.kvCompact(need+g.promisedBytes(), nil) {
+		return true
+	}
+	g.LastErr = fmt.Sprintf("a %d-row step's per-row head (%d bytes) does not fit the budget (%d of %d bytes charged)",
+		R, need, g.used, g.limit)
+	return false
+}
+
+// RowsRoom is rowsRoom for the zero session (nn.RowsRoomer).
+func (g *GPU) RowsRoom(rows, seqs int, head *nn.Head) (bool, error) {
+	return g.rowsRoom(0, rows, seqs, head)
+}
+
+// RowsRoom is the session's (nn.RowsRoomer): its recurrent seat is its own.
+func (s *gpuSession) RowsRoom(rows, seqs int, head *nn.Head) (bool, error) {
+	return s.g.rowsRoom(s.sid, rows, seqs, head)
+}
+
+// RowsWidth forwards the tier's (nn.RowsWidther): scratch is the device's,
+// not a session's.
+func (s *gpuSession) RowsWidth(want int) int { return s.g.RowsWidth(want) }
+
+func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+	defer s.leave(s.inputsTo(s.step()))
+	s.rows.in = s
+	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
+}
+
+// LayersSessions runs one step for rows of different sessions on this GPU, row
+// i being sess[i]'s sequence at pos[i] (nn.SessionStepper): every block's
+// weights are read once for all of them, where one session after another
+// reads them once each. Each row's history is its own session's. A session may
+// take several rows -- a prompt chunk beside the others' decoding -- which
+// must be its next positions, each once (devTier.groupRuns refuses a gap or a
+// repeat); every row's K and V are written before any row attends, so a
+// chunk's rows see each other causally.
+func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerDevice, pos []int, x, cs, csSWA []float32, head *nn.Head) bool {
+	// The session's own lists, reused: a session steps from one goroutine.
+	s.sidBuf = slices.Grow(s.sidBuf[:0], len(sess))[:len(sess)]
+	s.slotBuf = slices.Grow(s.slotBuf[:0], len(sess))[:len(sess)]
+	sid, slot := s.sidBuf, s.slotBuf
+	for i, d := range sess {
+		o, ok := d.(*gpuSession)
+		if !ok || o.g != s.g {
+			s.g.resetRecSteps(s.sid)
+			s.g.mu.Lock()
+			s.rows.err = fmt.Sprintf("sessions: row %d is not a session of this GPU", i)
+			s.g.mu.Unlock()
+			return false
+		}
+		sid[i], slot[i] = o.sid, pos[i]
+	}
+	defer s.leave(s.inputsTo(s.step()))
+	s.rows.in = s
+	// A session is one sequence whose slots are its positions, so the span a
+	// sequence takes is no matter: every row's sequence is its session's 0.
+	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, sid, 0, x, cs, csSWA, head)
+}
+
+// ragKey names a ragged step's compiled matvec in devTier.ragK: the kind of
+// kernel and the shape fields it is keyed on. A struct, where a formatted
+// string was built for every lookup -- every matvec of every step.
+type ragKey struct {
+	kind                               string
+	q                                  kernels.Quant
+	k, rows, ntok, r, tok, rowt, split int
+	off                                int // a tail launch's first token
+	tile                               [5]int
+	grp, bias                          bool
+	// epi and act are a few-sequence matvec's epilogue (groupKern).
+	epi groupEpi
+	act kernels.ActKind
+}
+
+// ragMV is a ragged step's batched twin of m, compiled on first use -- which
+// prepRagged makes happen outside any session, so inside one it is a lookup.
+//
+// On a device with a matrix instruction it is the prefill twin. Without one it
+// is not: the prefill twin's dp4a tile is sized for 128-row chunks and leaves a
+// small step's grid nearly empty. Here every token of the step is in one
+// thread, so a weight is read once, and k is split until the grid fills the
+// card, with a Reduce after.
+func (g *devTier) ragMV(m mv, ntok int) (mv, bool) {
+	if _, _, ok := g.mmaTile(m.rows, ntok); ok && !kernels.IsFloat(m.q) {
+		return g.intBatchMV(m, ntok, 1)
+	}
+	if bm, ok := g.voltaMV(m, ntok); ok && padOK(m, bm) {
+		return bm, true
+	}
+	// Tok 8; Rowt 2 below 64 rows and 4 from there, swept on a Volta-class card
+	// (Tok 4 and 16 lost at every width).
+	tok, rowt := min(ntok, 8), 2
+	if ntok >= 64 {
+		rowt = 4
+	}
+	if b := g.kb.batch; b.RagTok > 0 && ntok%b.RagTok == 0 {
+		tok = b.RagTok
+	}
+	if b := g.kb.batch; b.RagRowT > 0 {
+		rowt = b.RagRowT
+	}
+	for ntok%tok != 0 {
+		tok /= 2
+	}
+	for rowt > 1 && m.rows%rowt != 0 {
+		rowt /= 2
+	}
+	return g.dot4Split(m, ntok, tok, rowt, g.kb.batch.RagSplit)
+}
+
+// headOneMV is decode's head matvec -- its split and its Reduce -- reading the
+// first of R quantized rows, which is the one row of a ragged step that wants
+// the head (rows that want logits lead): one projection where a batched twin
+// would project every row of the step to read back one. The activation's
+// sums sit after every row's scales (kernels.MatVecShape.ActRows), which is
+// the only way it differs from decode's own kernel. Compiled on first use,
+// which prepRagged makes outside any session; false where the shape is
+// refused, and the batched twin serves.
+func (g *devTier) headOneMV(R int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	m := g.bs.mvHead
+	if g.NoRagHeadOne || m.kern == nil {
+		return mv{}, false
+	}
+	q, k := g.bs.head.t, g.bs.p.NEmbd
+	key := ragKey{kind: "headone", q: q, k: k, rows: m.rows, r: R, split: m.split}
+	c, ok := g.ragK[key]
+	if !ok {
+		ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: m.rows,
+			Split: m.split, ActRows: R})
+		if err == nil {
+			c, err = g.compile(ker)
+		}
+		if err != nil {
+			g.LastErr = "rows: the one-row head: " + err.Error()
+			c = nil
+		}
+		if g.ragK == nil {
+			g.ragK = map[ragKey]backend.Kernel{}
+		}
+		g.ragK[key] = c
+	}
+	if c == nil {
+		return mv{}, false
+	}
+	m.kern, m.alt = c, nil
+	return m, true
+}
+
+// ragStepMV is the matvec a ragged step of n live rows in a scratch of R
+// runs: the decode matvec over the n rows where it applies (groupMV), else
+// the batched twin over all R, padding included.
+func (g *devTier) ragStepMV(m mv, R, n int) (mv, bool) {
+	if bm, ok := g.groupMV(m, n, R); ok {
+		return bm, true
+	}
+	return g.ragMV(m, R)
+}
+
+// groupTokMax is the widest step groupMV takes: one thread carries every
+// token, so its dot products grow with the step and past four sequences the
+// tiled twins win: on an 8B Q4_K_M model groupMV leads at two and four
+// sessions and loses at eight (gpu-kernels.md, "Measurements once cited in
+// engine/device/gpu's comments").
+const groupTokMax = 4
+
+// groupMV is m's decode matvec carrying every token of a small step in one
+// thread: each weight word is read once for all the step's tokens. That is
+// llama.cpp's mul_mat_vec_q at ncols > 1, and on a card with no integer
+// matrix instruction it is what a step of a few sequences wants -- the
+// tensor-core and dp4a tiles read the weights at three quarters the rate,
+// pad to their tile and add a Reduce (and an f16 conversion) per matvec.
+//
+// It takes decode's own split, so each token sums its k segments as decode
+// does: unsplit where decode is unsplit (the head), and otherwise reduced in
+// the group whether decode reduces there or in a second launch -- the
+// partials are added in segment order either way, and the launch is saved. A
+// split the group cannot hold is declined, and the tiled twin serves it. The
+// activation holds R quantized rows, of which the step's ntok come first.
+func (g *devTier) groupMV(m mv, ntok, R int) (mv, bool) {
+	return g.groupKern(m, ntok, R, groupPlain, 0)
+}
+
+// groupEpi is the epilogue a groupMV launch carries, decode's own fusions
+// over every token of the step: the plain row, the residual added per token
+// (decode's mvres: the projection writes x + W*a), or act(gate)*up (decode's
+// mvgate). Without them a step pays an Add or an ActMul launch per block that
+// a decode token does not.
+type groupEpi int
+
+const (
+	groupPlain groupEpi = iota
+	groupRes
+	groupGate
+)
+
+// groupKern is groupMV with an epilogue; act is the gate's activation. The
+// residual form goes where decode built one (m.res: the attention output and
+// the FFN down projection, with no bias of their own). The gate form goes
+// wherever the gate is SiLU or GELU and the up projection has no bias: decode
+// fuses it only where its split writes the final row, and this kernel always
+// does, reducing its split in the group.
+func (g *devTier) groupKern(m mv, ntok, R int, epi groupEpi, act kernels.ActKind) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if ntok < 2 || ntok > groupTokMax || m.slots > 0 || kernels.IsFloat(m.q) || g.NoRagGroup {
+		return mv{}, false
+	}
+	switch {
+	case epi == groupRes && (m.res == nil || m.bias != nil || g.NoRagFuse),
+		epi == groupGate && (m.bias != nil || g.NoRagFuse || (act != kernels.ActSiLU && act != kernels.ActGELU)):
+		return mv{}, false
+	}
+	split := max(m.split, 1)
+	grp := split > 1
+	if grp && !kernels.GroupSplitOK(m.rows, split) {
+		return mv{}, false
+	}
+	key := ragKey{kind: "grp", q: m.q, k: m.k, rows: m.rows, ntok: ntok, r: R, split: split, grp: grp,
+		bias: m.bias != nil, epi: epi, act: act}
+	k, ok := g.ragK[key]
+	if !ok {
+		ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
+			Tok: ntok, ActRows: R, Split: split, GroupSplit: grp, Bias: m.bias != nil || epi == groupRes,
+			BiasRows: epi == groupRes, Gate: epi == groupGate, GateAct: act})
+		if err == nil {
+			k, err = g.compile(ker)
+		}
+		if err != nil {
+			k = nil
+		}
+		if g.ragK == nil {
+			g.ragK = map[ragKey]backend.Kernel{}
+		}
+		g.ragK[key] = k
+	}
+	if k == nil {
+		return mv{}, false
+	}
+	if epi == groupPlain {
+		g.RagGroupMV++
+	}
+	return mv{kern: k, rows: m.rows, split: split, groups: 1, group: grp, bias: m.bias, q: m.q, k: m.k}, true
+}
+
+// groupQKV is block l's q, k and v for a step of ntok rows in a scratch of R
+// as one kernels.MatVecSegments launch with every token in one thread --
+// decode's l.qkv over the step, at q's split as there, reduced in the group
+// -- or nil where the three cannot share one (fuseQKV's conditions, less the
+// one on decode's own split: this kernel always reduces in the group).
+func (g *devTier) groupQKV(l *layer, ntok, R int) (segLaunch, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if ntok < 2 || ntok > groupTokMax || g.NoRagGroup || g.NoRagFuse || g.NoSegFuse ||
+		l.mla || l.linear || l.nonCausal || l.wq == nil || l.wk == nil || l.wv == nil {
+		return segLaunch{}, false
+	}
+	split := max(l.mvq.split, 1)
+	grp := split > 1
+	ms := [3]mv{l.mvq, l.mvk, l.mvv}
+	sk := segShapeKey{k: l.mvq.k, ntok: ntok, r: R, split: split, grp: grp}
+	for i, m := range ms {
+		if m.kern == nil || m.slots > 0 || m.k != l.mvq.k || kernels.IsFloat(m.q) {
+			return segLaunch{}, false
+		}
+		sk.t[i], sk.rows[i], sk.bias[i] = m.q, m.rows, m.bias != nil
+	}
+	// A lookup on a struct, since an encode runs this every block of every
+	// step and a decode token allocates nothing.
+	if sl, ok := g.ragSeg[sk]; ok {
+		return sl, sl.kern != nil
+	}
+	var segs []kernels.MatVecShape
+	for _, m := range ms {
+		segs = append(segs, kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows,
+			Bias: m.bias != nil, NTok: ntok, Tok: ntok, ActRows: R})
+	}
+	if g.ragSeg == nil {
+		g.ragSeg = map[segShapeKey]segLaunch{}
+	}
+	blocks, w, err := kernels.SegmentsGrid(segs, split, grp)
+	if err != nil {
+		g.ragSeg[sk] = segLaunch{}
+		return segLaunch{}, false
+	}
+	key := fmt.Sprintf("%v/%d/%v", segs, split, grp)
+	k, ok := g.segKerns[key]
+	if !ok {
+		ker, err := kernels.MatVecSegments(segs, split, grp)
+		if err == nil {
+			k, err = g.compile(ker)
+		}
+		if err != nil {
+			g.LastErr = err.Error()
+			k = nil
+		}
+		if g.segKerns == nil {
+			g.segKerns = map[string]backend.Kernel{}
+		}
+		g.segKerns[key] = k
+	}
+	n := 0
+	for _, b := range blocks {
+		n += b
+	}
+	sl := segLaunch{kern: k, blocks: n, w: w}
+	g.ragSeg[sk] = sl
+	return sl, k != nil
+}
+
+// segShapeKey names a few-sequence step's q/k/v launch (groupQKV) by its three
+// shapes, the step and the split.
+type segShapeKey struct {
+	t                 [3]kernels.Quant
+	rows              [3]int
+	bias              [3]bool
+	k, ntok, r, split int
+	grp               bool
+}
+
+// dot4Split is the dp4a batched twin of m with k split until the grid holds
+// ~65536 threads (or split pinned when > 0), and the Reduce that sums it. The
+// Tok x Rowt tile divides the grid, so without the split a narrow projection
+// (1024 rows) runs nearly as long as one fourteen times its work.
+func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if split < 1 {
+		split = 1
+		for m.rows/rowt*(ntok/tok)*split < 1<<16 && split < 64 {
+			split *= 2
+		}
+	}
+	var c backend.Kernel
+	// A refused split is the descent working, not a failure: only the last
+	// refusal is recorded, and only when no split compiled. Recorded as it
+	// went, a narrow projection (Gemma 3n's LAuReL, k=64) left
+	// "Split=4 does not divide 2 sub-blocks" in LastErr on a model that ran
+	// fine.
+	refusal := ""
+	for ; split >= 1; split /= 2 {
+		key := ragKey{kind: "dot4", q: m.q, k: m.k, rows: m.rows, ntok: ntok, tok: tok, rowt: rowt, split: split,
+			bias: m.bias != nil}
+		k, ok := g.ragK[key]
+		if !ok {
+			// A split that does not divide the row's sub-blocks is refused
+			// by MatVec, and the next one down is tried.
+			ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
+				Tok: tok, Rowt: rowt, Split: split, Bias: m.bias != nil})
+			if err == nil {
+				k, err = g.compile(ker)
+			}
+			if err != nil {
+				refusal = err.Error()
+				k = nil
+			}
+			if g.ragK == nil {
+				g.ragK = map[ragKey]backend.Kernel{}
+			}
+			g.ragK[key] = k
+		}
+		if c = k; c != nil {
+			break
+		}
+	}
+	if c == nil {
+		if refusal != "" {
+			g.LastErr = refusal
+		}
+		return mv{}, false
+	}
+	out := mv{kern: c, rows: m.rows / rowt, split: split, groups: ntok / tok, bias: m.bias,
+		q: m.q, k: m.k, redN: m.rows * ntok}
+	if split > 1 {
+		if out.red = g.reduceKernel(m.rows*ntok, split); out.red == nil ||
+			!g.sizePart(m.rows*ntok*split) {
+			return mv{}, false
+		}
+	}
+	return out, true
+}
+
+// voltaMV is m's batched twin on sm_70's f16 tensor cores (kernels.MatVecMMA70)
+// and the ActF16 conversion it reads, or false where it does not apply: a card
+// with an integer matrix instruction takes that instead (batchMV asks first),
+// and a backend that does not lower the m8n8k4 shape refuses the compile, which
+// is remembered. On a Volta-class card it is ~2.3x the dp4a twin (MT=2 NT=4,
+// swept).
+func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if g.NoVolta || m.slots > 0 || !kernels.GemmVoltaOK(m.q) {
+		return mv{}, false
+	}
+	// A two-byte float weight takes the staged GEMM where the card lowers no
+	// m16n8 instruction (sm_70): the integer MMA, which decides mmaOff, never
+	// asks for a float, so it would wait on a refusal that does not come.
+	// Elsewhere it keeps its own batched kernel, unchanged.
+	if kernels.IsFloat(m.q) {
+		if g.f16GemmK() != 0 {
+			return mv{}, false
+		}
+	} else if !(g.mmaOff || g.NoMMA) {
+		return mv{}, false
+	}
+	if bm, ok := g.voltaGemm(m, ntok); ok {
+		return bm, true
+	}
+	// A float weight has the staged GEMM alone (GemmVoltaOK).
+	if !kernels.Volta70OK(m.q) {
+		return mv{}, false
+	}
+	mt, nt := 2, 4
+	for nt > 1 && ntok%(8*nt) != 0 {
+		nt /= 2
+	}
+	for mt > 1 && m.rows%(32*mt) != 0 {
+		mt /= 2
+	}
+	if ntok%(8*nt) != 0 || m.rows%(32*mt) != 0 {
+		return mv{}, false
+	}
+	// Split k until the grid holds ~1280 warps (sixteen an SM on an 80-SM
+	// card): the tile alone left the narrow projections 64-256 of them.
+	warps := (m.rows / (32 * mt)) * (ntok / (8 * nt))
+	split := g.kb.batch.Split
+	if split < 1 {
+		split = 1
+		for warps*split < 1280 && split < 16 {
+			split *= 2
+		}
+	}
+	var c backend.Kernel
+	for ; split >= 1; split /= 2 {
+		key := ragKey{kind: "volta", q: m.q, k: m.k, rows: m.rows, ntok: ntok, tok: mt, rowt: nt, split: split,
+			bias: m.bias != nil}
+		k, ok := g.ragK[key]
+		if !ok {
+			// A split that does not divide the sub-blocks is refused and the
+			// next one down tried; a backend without the shape refuses them all.
+			ker, err := kernels.MatVecMMA70(kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
+				MT: mt, NT: nt, Split: split, Bias: m.bias != nil})
+			if err == nil {
+				k, err = g.compile(ker)
+			}
+			if err != nil {
+				k = nil
+			}
+			if g.ragK == nil {
+				g.ragK = map[ragKey]backend.Kernel{}
+			}
+			g.ragK[key] = k
+		}
+		if c = k; c != nil {
+			break
+		}
+	}
+	if c == nil {
+		return mv{}, false
+	}
+	akey := ragKey{kind: "actf16", q: m.q, ntok: ntok, k: m.k}
+	a, ok := g.ragK[akey]
+	if !ok {
+		ker, err := kernels.ActF16(m.q, ntok, m.k)
+		if err == nil {
+			a, err = g.compile(ker)
+		}
+		if err != nil {
+			a = nil
+		}
+		g.ragK[akey] = a
+	}
+	if a == nil || !g.sizeF16(ntok*m.k*2) {
+		return mv{}, false
+	}
+	out := mv{kern: c, act: a, actN: ntok * m.k / 4, rows: m.rows, split: split, bias: m.bias,
+		q: m.q, k: m.k, threads: warps * split * 32, redN: m.rows * ntok}
+	if split > 1 {
+		if out.red = g.reduceKernel(m.rows*ntok, split); out.red == nil ||
+			!g.sizePart(m.rows*ntok*split) {
+			return mv{}, false
+		}
+	}
+	g.VoltaMV++
+	return out, true
+}
+
+// tileGemms are GemmTile's blockings, widest first, all four subgroups (runBatched
+// launches 128-thread workgroups); the narrower ones exist for a row or token
+// count the wider blocks do not divide.
+//
+// 64x64 leads 64x32 (llama.cpp's kernel_mul_mm block): a few percent faster on
+// Apple Silicon by TestGemmTileSpeed and in pp512.
+var tileGemms = []kernels.TileGemm{
+	{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 1, NT: 2, WM: 2, WN: 2},
+}
+
+// tileMV is m's batched twin as kernels.GemmTile (binary16 tiles on the
+// collective matrix unit, staged through workgroup memory) with the ActF16T
+// conversion it reads; false where the device does not lower it or no tile
+// divides the shape, and the next twin is asked.
+//
+// Whether the device lowers the collective tiles at all is asked once
+// (tilesOK) rather than by a refused compile per shape, and a refusal of a
+// built kernel is recorded once (tileOff): a property of the device, not the
+// shape. Where the device has the integer matrix instruction (MatVecMMA), that
+// runs first and this is not reached.
+func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if g.NoVolta || m.slots > 0 || !kernels.Volta70OK(m.q) || !g.tilesOK() {
+		return mv{}, false
+	}
+	sub, _, _, _ := kernels.Layout(m.q)
+	build := func(tl kernels.TileGemm, n int) (backend.Kernel, kernels.MatVecShape, bool) {
+		s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: n, Bias: m.bias != nil}
+		key := ragKey{kind: "gemmtile", q: m.q, k: m.k, rows: m.rows, ntok: n, off: tl.TokOff,
+			tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN, tl.KB}, bias: s.Bias}
+		c, ok := g.ragK[key]
+		if !ok {
+			ker, err := kernels.GemmTile(s, tl)
+			if err == nil {
+				c, err = g.compile(ker)
+			}
+			if err != nil {
+				g.tileOff, g.TileWhy = true, err.Error()
+				return nil, s, false
+			}
+			if g.ragK == nil {
+				g.ragK = map[ragKey]backend.Kernel{}
+			}
+			g.ragK[key] = c
+		}
+		return c, s, true
+	}
+	act := func() (backend.Kernel, bool) {
+		akey := ragKey{kind: "actf16t", q: m.q, ntok: ntok, k: m.k}
+		a, ok := g.ragK[akey]
+		if !ok {
+			ker, err := kernels.ActF16T(m.q, ntok, m.k)
+			if err == nil {
+				a, err = g.compile(ker)
+			}
+			if err != nil {
+				a = nil
+			}
+			if g.ragK == nil {
+				g.ragK = map[ragKey]backend.Kernel{}
+			}
+			g.ragK[akey] = a
+		}
+		return a, a != nil && g.sizeF16(ntok*m.k*2)
+	}
+	tall := g.tileTall()
+	for wi, tl := range tileGemms {
+		tl.KB = max(32/sub, 1)
+		tl.Tall = tall && tl.MT%2 == 0
+		if m.rows%tl.Rows() != 0 {
+			continue
+		}
+		// The widest block over the leading tokens and the first narrower
+		// one that divides the rest over the tail, rather than the narrower
+		// block over the whole prompt (416 tokens: 384 at 64 wide, 32 at 32).
+		lead, rest := ntok, 0
+		if ntok%tl.Toks() != 0 {
+			if g.NoTileTail || ntok < tl.Toks() {
+				continue
+			}
+			lead, rest = ntok-ntok%tl.Toks(), ntok%tl.Toks()
+		}
+		var tail *mvTail
+		if rest > 0 {
+			for _, tt := range tileGemms[wi+1:] {
+				tt.KB, tt.TokOff = tl.KB, lead
+				tt.Tall = tall && tt.MT%2 == 0
+				if m.rows%tt.Rows() != 0 || rest%tt.Toks() != 0 {
+					continue
+				}
+				tk, ts, ok := build(tt, rest)
+				if !ok {
+					return mv{}, false
+				}
+				// One tail per shape, kept: a ragged prompt asks for it on
+				// every call, and a fresh one each time allocates.
+				tkey := ragKey{kind: "gemmtail", q: m.q, k: m.k, rows: m.rows, ntok: rest, off: lead,
+					tile: [5]int{tt.MT, tt.NT, tt.WM, tt.WN, tt.KB}, bias: m.bias != nil}
+				if tail = g.tailK[tkey]; tail == nil {
+					tail = &mvTail{kern: tk, threads: kernels.GemmTileGroups(ts, tt) * tt.Threads()}
+					if g.tailK == nil {
+						g.tailK = map[ragKey]*mvTail{}
+					}
+					g.tailK[tkey] = tail
+				}
+				break
+			}
+			if tail == nil {
+				continue
+			}
+		}
+		c, s, ok := build(tl, lead)
+		if !ok {
+			return mv{}, false
+		}
+		a, ok := act()
+		if !ok {
+			return mv{}, false
+		}
+		g.TileMV++
+		if tail != nil {
+			g.TileTail++
+		}
+		return mv{kern: c, act: a, actT: true, actN: ntok * m.k / sub, rows: m.rows, split: 1, bias: m.bias,
+			q: m.q, k: m.k, threads: kernels.GemmTileGroups(s, tl) * tl.Threads(), redN: m.rows * ntok, tail: tail}, true
+	}
+	return mv{}, false
+}
+
+// voltaGemm is m's batched twin as kernels.GemmVolta, the shared-memory-staged
+// form of MatVecMMA70, with the ActF16T conversion it reads; false where no
+// tile divides the shape, and voltaMV then takes MatVecMMA70.
+//
+// k is staged 32 elements a trip (one sub-block of a 32-element format, two of
+// Q6_K's 16): four 16-byte chunks a row, the width the swizzle is built for,
+// keeping a double-buffered 128x128 block at 32 KiB. k is split only where the
+// grid is thin (kernels.VoltaSplit); a well-filled grid is fastest unsplit.
+func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if bm, ok := g.stagedGemm(m, ntok, kernels.VoltaTiles(), 0, 0); ok || !kernels.IsFloat(m.q) {
+		return bm, ok
+	}
+	// A float weight has no MatVecMMA70 behind this, so a row count no 96-
+	// or 128-row block divides (ModernBERT-large's 2624) takes a 64-row one.
+	return g.stagedGemm(m, ntok, voltaTiles64, 0, 0)
+}
+
+// voltaTiles64 are GemmVolta's 64-row blockings, for the float shapes
+// kernels.VoltaTiles leave to a slower kernel.
+var voltaTiles64 = []kernels.VoltaTile{{MT: 2, NT: 4, WM: 1, WN: 4}, {MT: 2, NT: 2, WM: 1, WN: 4}}
+
+// f16Tiles are GemmVolta's m16n8 blockings, widest first: four warps as 2x2,
+// each four m-tiles of 16 rows by up to eight n-tiles of 8 tokens, so a
+// 128-row block meets 128, 64 or 32 tokens. The 96- and 32-row blocks serve
+// matrices no 128-row block divides.
+var f16Tiles = []kernels.VoltaTile{
+	{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2},
+	{MT: 3, NT: 4, WM: 2, WN: 2}, {MT: 3, NT: 2, WM: 2, WN: 2},
+	{MT: 2, NT: 4, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 1, NT: 2, WM: 2, WN: 2},
+}
+
+// f16GemmK is the k of the m16n8 binary16 instruction this device lowers
+// (16 from sm_80, 8 on sm_75), or 0 where it lowers neither. Probed once by a
+// compile: the PTX target decides, and a refusal is the device's, not the
+// shape's. Callers hold g.mu.
+func (g *devTier) f16GemmK() int {
+	if g.f16K == 0 {
+		g.f16K = -1
+		if g.dev.API() == "ptx" {
+			for _, k := range []int{16, 8} {
+				ker, err := kernels.GemmVolta(kernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 32, NTok: 32},
+					kernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2, KB: 1, F16K: k})
+				if err != nil {
+					continue
+				}
+				if c, err := g.dev.Compile(ker); err == nil {
+					c.Close()
+					g.f16K = k
+					break
+				}
+			}
+		}
+	}
+	return max(g.f16K, 0)
+}
+
+// f16Gemm is m's batched twin as GemmVolta on the m16n8 binary16
+// instruction (sm_75 on): the weights dequantized once a workgroup into
+// shared memory with their scales folded in, the activations ActF16T's, and
+// the dot accumulated in float32 over the whole k. MatVecMMA reads both
+// operands from global memory inside its loop, re-dequantizes a weight for
+// every 32 tokens and pays a float epilogue per sub-block per instruction;
+// this form pays neither. False where the device lowers no m16n8 shape, the
+// format has no binary16 dequant, or no tile divides the shape. NoVolta
+// refuses it, as it refuses every binary16-activation twin.
+func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if g.NoVolta || m.slots > 0 || !kernels.Volta70OK(m.q) {
+		return mv{}, false
+	}
+	k := g.f16GemmK()
+	if k == 0 {
+		return mv{}, false
+	}
+	// About a workgroup an SM: a sixteenth of the threads the card holds
+	// resident (Slots, asked of the driver; 1536 or 2048 an SM, 128 a
+	// workgroup). The card decides it, not the shape: the 128x64 block gives
+	// a 1024x1024 projection at 512 rows 64 workgroups, three an SM of an
+	// RTX 3050 Ti's 20 and fewer than one an SM of a 142-SM card. The bar is
+	// sm_70's measured one (kernels.VoltaSplit: a V100's 128-row blocks were fastest
+	// unsplit from 64 workgroups on 80 SMs), not full residency: a staged
+	// block's shared memory holds an SM to a few of them anyway.
+	deep := g.Config.GemmDeep
+	if deep == 0 {
+		deep = gemmDeepDefault
+	}
+	if deep > 0 || deep == 0 && g.gemmDeep[splitKey{m.q, m.rows, m.k}] {
+		if bm, ok := g.stagedGemm(m, ntok, f16DeepTiles, k, g.dev.Slots()/16); ok {
+			g.Stats.GemmDeep++
+			return bm, true
+		}
+	}
+	return g.stagedGemm(m, ntok, f16Tiles, k, g.dev.Slots()/16)
+}
+
+// f16DeepTiles are the m16n8 blockings in llama.cpp MMQ's shape: eight warps
+// a workgroup and 64 elements of k a trip in one buffer (KB counts 32-element
+// steps here). They win on some shapes and lose on others, by card, so
+// tuneGemm times them against f16Tiles' pick per shape and gemmDeep records
+// where they won.
+var f16DeepTiles = []kernels.VoltaTile{
+	{MT: 4, NT: 4, WM: 2, WN: 4, KB: 2, Single: true}, {MT: 4, NT: 2, WM: 2, WN: 4, KB: 2, Single: true},
+}
+
+// gemmDeepDefault stands in for a Config.GemmDeep of 0; only a jitllmtest
+// build changes it (ForceGemmDeepForTest).
+var gemmDeepDefault int
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// fusedKern is a prompt chunk's fused operand kernel under key, compiled on
+// first use from build, or nil where the generator or the device refuses it
+// -- remembered, so the caller keeps its two launches without asking again.
+func (g *devTier) fusedKern(key ragKey, build func() (*ir.Kernel, error)) backend.Kernel {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if k, ok := g.ragK[key]; ok {
+		return k
+	}
+	ker, err := build()
+	var c backend.Kernel
+	if err == nil {
+		if c, err = g.compile(ker); err != nil {
+			c = nil
+		}
+	}
+	if g.ragK == nil {
+		g.ragK = map[ragKey]backend.Kernel{}
+	}
+	g.ragK[key] = c
+	return c
+}
+
+// rmsF16For is the RMSNorm that also writes m's binary16 operand
+// (kernels.RMSNormF16TRows; with add, x+y and its norm as bs.addRms), and
+// the conversion it stands in for: m's batched twin's ActF16T kernel, which
+// the caller names in the conversion memo so the GEMM finds its operand
+// written. nil where m's twin reads int8 (no conversion to save) or the MMA
+// twin's fragment layout (kernels.ActF16, not this kernel's), where the
+// norm is not RMSNorm's one launch, or NoOperandFuse.
+func (g *devTier) rmsF16For(bs *blockScratch, m mv, ntok int, add bool) (norm, conv backend.Kernel) {
+	if g.NoOperandFuse || m.kern == nil || bs.rms == nil || bs.normVar != nil {
+		return nil, nil
+	}
+	bm, ok := g.batchMV(m, ntok, bs.tok)
+	if !ok || bm.act == nil || !bm.actT || m.k != bs.p.NEmbd {
+		return nil, nil
+	}
+	kind := "rmsf16t"
+	if add {
+		kind = "addrmsf16t"
+	}
+	p := &bs.p
+	k := g.fusedKern(ragKey{kind: kind, q: bm.q, k: p.NEmbd, rows: bs.rows}, func() (*ir.Kernel, error) {
+		return kernels.RMSNormF16TRows(p.NEmbd, bs.rows, float32(p.RMSEps), false, add, bm.q, g.warpNorm())
+	})
+	if k == nil {
+		return nil, nil
+	}
+	return k, bm.act
+}
+
+// actF16For is the gated activation that writes m's binary16 operand
+// (kernels.ActMulF16T), the conversion it stands in for, and its thread
+// count; nil as rmsF16For.
+func (g *devTier) actF16For(bs *blockScratch, m mv, ntok int) (act, conv backend.Kernel, threads int) {
+	if g.NoOperandFuse || m.kern == nil {
+		return nil, nil, 0
+	}
+	bm, ok := g.batchMV(m, ntok, bs.tok)
+	if !ok || bm.act == nil || !bm.actT {
+		return nil, nil, 0
+	}
+	// ntok only clamps the last thread (RULE 13). Where a token's words are
+	// whole workgroups the launch has no surplus thread at any ntok, so one
+	// kernel at the scratch's width serves every chunk and is compiled once,
+	// ahead of the first prompt (prewarmPrompt); elsewhere it is per ntok.
+	kn := ntok
+	if (m.k/2)%128 == 0 && ntok <= bs.rows {
+		kn = bs.rows
+	}
+	k := g.fusedKern(ragKey{kind: "actmulf16t", q: bm.q, k: m.k, ntok: kn, act: bs.p.Act}, func() (*ir.Kernel, error) {
+		return kernels.ActMulF16T(bm.q, kn, m.k, bs.p.Act)
+	})
+	if k == nil {
+		return nil, nil, 0
+	}
+	return k, bm.act, kernels.ActMulF16TThreads(ntok, m.k)
+}
+
+// prewarmPrompt compiles, ahead of the first prompt, the fused binary16
+// operand kernels of every placed block at the reserved prompt width, which a
+// submission would otherwise compile on first use (the head's two prompt
+// kernels are prewarmHeadKernels'). A kernel a block turns out not to launch
+// is a compile spent at load, never a wrong answer. Callers hold g.mu.
+func (g *devTier) prewarmPrompt() {
+	if g.bs == nil || g.promptW <= 0 || g.bbs[g.promptW] == nil {
+		return
+	}
+	if g.NoPromptPrewarm {
+		return
+	}
+	g.prewarmFused(g.bbs[g.promptW])
+}
+
+// prewarmFused compiles bs's fused operand kernels for every placed block:
+// prewarmPrompt's at the reserved width, prewarmPromptWidths' at each exact
+// prompt width. Callers hold g.mu.
+func (g *devTier) prewarmFused(bs *blockScratch) {
+	tier := false
+	for li, l := range g.layers {
+		if l != nil && l.ok && (li >= len(bs.left) || !bs.left[li]) {
+			g.fusedTwins(bs, l)
+			tier = true
+		}
+	}
+	// A width whose every block the composer serves runs none of the tier's
+	// attention: its variants are a decline's work (declineTwins).
+	if tier {
+		g.spanVariants(bs)
+	}
+}
+
+// spanVariants compiles the staged attention's span variants
+// (prefillVariantAt), every span a chunk can reach at bs's capacity: a chunk
+// compiles the one its history needs otherwise.
+func (g *devTier) spanVariants(bs *blockScratch) {
+	if pg := bs.pkv; pg != nil && pg.pf != nil && pg.pf.flash == nil {
+		hi, _ := g.prefillPass()
+		if m := bs.p.MaxSeq; m > 0 && m < hi {
+			hi = m
+		}
+		for c := 64; ; c *= 2 {
+			if _, err := g.prefillVariantAt(bs, pg.pf, c, 0); err != nil || c >= hi {
+				break
+			}
+		}
+	}
+}
+
+// fusedTwins compiles block l's fused operand kernels at bs's rows.
+func (g *devTier) fusedTwins(bs *blockScratch, l *layer) {
+	R := bs.rows
+	g.rmsF16For(bs, l.mvq, R, false)
+	first := l.mvg
+	if first.kern == nil {
+		first = l.mvu
+	}
+	g.rmsF16For(bs, first, R, true)
+	g.actF16For(bs, l.mvd, R)
+}
+
+// int8GemmOn reports whether the device lowers GemmInt8, probed once by a
+// compile (the int8 m16n8k32 instruction is sm_80's). Callers hold g.mu.
+func (g *devTier) int8GemmOn() bool {
+	if g.i8Gemm == 0 {
+		g.i8Gemm = -1
+		if g.dev.API() == "ptx" {
+			ker, err := kernels.GemmInt8(kernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 32, NTok: 32},
+				kernels.Int8Tile{MT: 1, NT: 2, WM: 2, WN: 2})
+			if err == nil {
+				if c, err := g.dev.Compile(ker); err == nil {
+					c.Close()
+					g.i8Gemm = 1
+				}
+			}
+		}
+	}
+	return g.i8Gemm > 0
+}
+
+// int8Gemm is m's batched twin as kernels.GemmInt8: MatVecMMA's int8
+// arithmetic and its quantized activations, staged through shared memory as
+// GemmVolta stages, so a workgroup decodes a trip of its rows once for all
+// its tokens. Its blockings are f16Tiles' (the same 16-row m-tiles and 8-token
+// n-tiles), chosen by the same fill. False where the device lacks the
+// instruction, the format has no int8 decode, or no tile divides the shape.
+// Only Config.PreferGemmInt8 asks for it; NoMMA refuses it.
+func (g *devTier) int8Gemm(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if !g.PreferGemmInt8 || g.NoMMA || m.slots > 0 || !kernels.Int8OK(m.q) || !g.int8GemmOn() {
+		return mv{}, false
+	}
+	fill := g.dev.Slots() / 16
+	first := fillTile(f16Tiles, 16, m.rows, ntok, fill)
+	for i := -1; i < len(f16Tiles); i++ {
+		if i < 0 && first < 0 || i >= 0 && i == first {
+			continue
+		}
+		idx := i
+		if i < 0 {
+			idx = first
+		}
+		vt := f16Tiles[idx]
+		tl := kernels.Int8Tile{MT: vt.MT, NT: vt.NT, WM: vt.WM, WN: vt.WN}
+		if m.rows%tl.Rows() != 0 || ntok%tl.Toks() != 0 {
+			continue
+		}
+		trips := m.k / 32
+		split := fillSplit(trips, (m.rows/tl.Rows())*(ntok/tl.Toks())*tl.Threads(), fill)
+		if f := g.kb.batch.Split; f >= 1 {
+			split = f
+		}
+		var c backend.Kernel
+		for ; split >= 1; split /= 2 {
+			s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok, Split: split, Bias: m.bias != nil}
+			key := ragKey{kind: "gemmint8", q: m.q, k: m.k, rows: m.rows, ntok: ntok,
+				tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN}, split: split, bias: s.Bias}
+			k, ok := g.ragK[key]
+			if !ok {
+				ker, err := kernels.GemmInt8(s, tl)
+				if err == nil {
+					k, err = g.compile(ker)
+				}
+				if err != nil {
+					k = nil
+				}
+				if g.ragK == nil {
+					g.ragK = map[ragKey]backend.Kernel{}
+				}
+				g.ragK[key] = k
+			}
+			if c = k; c != nil {
+				break
+			}
+		}
+		if c == nil {
+			continue
+		}
+		s := kernels.MatVecShape{Rows: m.rows, NTok: ntok, Split: split}
+		out := mv{kern: c, rows: m.rows, split: split, bias: m.bias, q: m.q, k: m.k,
+			threads: kernels.GemmInt8Groups(s, tl) * tl.Threads(), width: tl.Threads(), redN: m.rows * ntok}
+		if split > 1 {
+			if out.red = g.reduceKernel(m.rows*ntok, split); out.red == nil ||
+				!g.sizePart(m.rows*ntok*split) {
+				return mv{}, false
+			}
+		}
+		g.GemmInt8++
+		return out, true
+	}
+	return mv{}, false
+}
+
+// fillTile is the tile stagedGemm tries first, on instruction f16k, for a grid of at least fill
+// threads: the first of tiles (widest first) that divides the shape and
+// reaches it, else the dividing tile with the most workgroups, whose grid a
+// k-split (fillSplit) then widens. -1 where none divides.
+func fillTile(tiles []kernels.VoltaTile, f16k, rows, ntok, fill int) int {
+	best, most := -1, 0
+	for i, tl := range tiles {
+		tl.F16K = f16k // an m-tile's rows depend on it
+		if rows%tl.Rows() != 0 || ntok%tl.Toks() != 0 {
+			continue
+		}
+		groups := (rows / tl.Rows()) * (ntok / tl.Toks())
+		if groups*tl.Threads() >= fill {
+			return i
+		}
+		if groups > most {
+			best, most = i, groups
+		}
+	}
+	return best
+}
+
+// fillSplit is the k-split that brings threads up to fill: doubled while the
+// grid is short of it and the halves still divide the trips, at most 8.
+func fillSplit(trips, threads, fill int) int {
+	split := 1
+	for threads*split < fill && trips%(2*split) == 0 && split < 8 {
+		split *= 2
+	}
+	return split
+}
+
+// stagedGemm builds m's GemmVolta twin from the first of tiles that divides
+// the shape and compiles, with instruction f16k (VoltaTile.F16K). With fill
+// > 0 the tile and split are chosen for a grid of at least fill threads
+// (fillTile, fillSplit) and the others are the fallbacks; with 0, tiles'
+// order and kernels.VoltaSplit decide. Callers hold g.mu.
+func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k, fill int) (mv, bool) {
+	sub, _, _, _ := kernels.Layout(m.q)
+	kbN := max(32/sub, 1)
+	first := -1
+	if fill > 0 {
+		first = fillTile(tiles, f16k, m.rows, ntok, fill)
+	}
+	// i = -1 is the fill's tile, then the list in order without it.
+	for i := -1; i < len(tiles); i++ {
+		if i < 0 && first < 0 || i >= 0 && i == first {
+			continue
+		}
+		idx := i
+		if i < 0 {
+			idx = first
+		}
+		tl := tiles[idx]
+		// A list's KB is the trip in 32-element steps (0 is one).
+		tl.KB, tl.F16K = kbN*max(tl.KB, 1), f16k
+		s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok, Bias: m.bias != nil}
+		if m.rows%tl.Rows() != 0 || ntok%tl.Toks() != 0 {
+			continue
+		}
+		groups := (m.rows / tl.Rows()) * (ntok / tl.Toks())
+		split := kernels.VoltaSplit(m.k/sub/kbN, groups)
+		if fill > 0 {
+			split = fillSplit(m.k/sub/kbN, groups*tl.Threads(), fill)
+		}
+		if f := g.kb.batch.Split; f >= 1 {
+			split = f
+		}
+		var c backend.Kernel
+		for ; split >= 1; split /= 2 {
+			s.Split = split
+			key := ragKey{kind: "gemmvolta", q: m.q, k: m.k, rows: m.rows, ntok: ntok,
+				tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN, tl.KB + 1000*b2i(tl.Single)}, split: split, bias: s.Bias, r: f16k}
+			k, ok := g.ragK[key]
+			if !ok {
+				ker, err := kernels.GemmVolta(s, tl)
+				if err == nil {
+					k, err = g.compile(ker)
+				}
+				if err != nil {
+					k = nil
+				}
+				// A tile the compiler could not fit in the register file is
+				// passed over for the next that divides the shape: on sm_70
+				// q6_k's m4n4 k2 tile hits 255 registers and spills.
+				if r, ok := backend.KernelResourcesOf(k); k != nil && ok && r.SpillBytes > 0 && !g.SpillingTiles {
+					k.Close()
+					k = nil
+					g.SpillRefused++
+				}
+				if g.ragK == nil {
+					g.ragK = map[ragKey]backend.Kernel{}
+				}
+				g.ragK[key] = k
+			}
+			if c = k; c != nil {
+				break
+			}
+		}
+		if c == nil {
+			continue
+		}
+		akey := ragKey{kind: "actf16t", q: m.q, ntok: ntok, k: m.k}
+		a, ok := g.ragK[akey]
+		if !ok {
+			ker, err := kernels.ActF16T(m.q, ntok, m.k)
+			if err == nil {
+				a, err = g.compile(ker)
+			}
+			if err != nil {
+				a = nil
+			}
+			g.ragK[akey] = a
+		}
+		if a == nil || !g.sizeF16(ntok*m.k*2) {
+			return mv{}, false
+		}
+		out := mv{kern: c, act: a, actT: true, actN: ntok * m.k / sub, rows: m.rows, split: split, bias: m.bias,
+			q: m.q, k: m.k, threads: kernels.GemmVoltaGroups(s, tl) * tl.Threads(), width: tl.Threads(), redN: m.rows * ntok, vt: tl}
+		if split > 1 {
+			if out.red = g.reduceKernel(m.rows*ntok, split); out.red == nil ||
+				!g.sizePart(m.rows*ntok*split) {
+				return mv{}, false
+			}
+		}
+		if f16k != 0 {
+			g.GemmF16++
+			return out, true
+		}
+		g.VoltaMV++
+		g.VoltaGemm++
+		return out, true
+	}
+	return mv{}, false
+}
+
+// prepRagLinear builds bs's linear-block kernels for a step of n rows, once per
+// size and outside any session. Callers hold g.mu.
+//
+// The rows are the step's runs (kernels' run forms): each sequence's rows at
+// consecutive positions chain through its one state, so a prompt chunk riding
+// beside decoding rows steps once a row, as a prefill would. Sized to the real
+// rows, not the padded width: the padding never reaches a state, and the next
+// states (recNext, in the shared form) are one a run.
+func (g *devTier) prepRagLinear(bs *blockScratch, n int) bool {
+	r := bs.rec
+	if r.Conv == 0 || bs.ragLin[n] != nil {
+		return true
+	}
+	fail := func(err error) bool { g.LastErr = "rows: " + err.Error(); return false }
+	// The scan's lanes are the device's promise: a lane group a state row
+	// where the subgroup is guaranteed, and where it is not -- llvmpipe, a
+	// Vulkan driver that will not pin the width -- one thread a row, the whole
+	// row in its registers and both dots summed serially. That is the same
+	// generator at one lane, with no shuffle in it, so it lowers on every
+	// backend. ScalarLinearRows takes it on a device that has the subgroup.
+	lanes := bs.qkLanes
+	if g.ScalarLinearRows {
+		lanes = 1
+	}
+	// A short convolution (LFM2) has no rule to scan: its run is the
+	// convolution and the shift alone.
+	var d kernels.DeltaScan
+	rk := &ragLinear{}
+	if !r.ShortConv {
+		d = deltaScanOf(r, n, lanes)
+		d.Runs = true
+		rk.perRun, rk.lanes = d.Threads()/n, d.ScanLanes()
+	}
+	eps := bs.p.RMSEps
+	if r.ChanDecay {
+		eps = 1e-6
+	}
+	var err error
+	for _, k := range []struct {
+		dst *backend.Kernel
+		mk  func() (*ir.Kernel, error)
+	}{
+		{&rk.delta, func() (*ir.Kernel, error) {
+			if r.ShortConv {
+				return nil, nil
+			}
+			if r.SSD {
+				return kernels.GatedDeltaFused(d, kernels.DeltaFuse{Chans: r.Chans, SSD: true})
+			}
+			if r.Mamba1 {
+				return kernels.GatedDeltaFused(d, kernels.DeltaFuse{Mamba1: true})
+			}
+			return kernels.GatedDeltaFused(d, kernels.DeltaFuse{Chans: r.Chans,
+				Eps: float32(eps / float64(r.KDim)), Scale: float32(1 / math.Sqrt(float64(r.KDim))),
+				BARep: r.VHeads / r.KHeads, Bound: r.DecayBound})
+		}},
+		{&rk.conv, func() (*ir.Kernel, error) { return kernels.Conv1dRowsRuns(r.Conv, r.Chans, n) }},
+		{&rk.shift, func() (*ir.Kernel, error) { return kernels.Conv1dShiftRuns(r.Conv, r.Chans, n) }},
+		{&rk.ngConv, func() (*ir.Kernel, error) {
+			// Qwen3.8-Flash-Next's n-gram convolution, each run's history
+			// moved on through its rows (q4e.go).
+			q := bs.p.Q4E
+			if q == nil || q.NGramWidth == 0 {
+				return nil, nil
+			}
+			hd, hist := q.HCMult*bs.p.NEmbd, q.NGramDil*(q.NGramConv-1)
+			return kernels.Q4ENGramConv(hd, q.NGramConv, q.NGramDil, n, r.StateLen, r.StateLen-hist*hd,
+				true, q.Fault == nn.Q4EFaultNoNGramConv)
+		}},
+	} {
+		var kk *ir.Kernel
+		if kk, err = k.mk(); err == nil && kk != nil {
+			*k.dst, err = g.compile(kk)
+		}
+		if err != nil {
+			for _, c := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {
+				if c != nil {
+					closeKern(c)
+				}
+			}
+			return fail(err)
+		}
+	}
+	if bs.ragLin == nil {
+		bs.ragLin = map[int]*ragLinear{}
+	}
+	bs.ragLin[n] = rk
+	return true
+}
+
+// ResetRecRows is resetRecRows for the zero session: a caller that never attached.
+func (g *devTier) ResetRecRows(rows []int) bool {
+	return g.resetRecRows(0, rows)
+}
+
+// resetRecRows zeroes the recurrent state (the conv window and the delta
+// state, in every half) of the given rows in every linear block of this
+// session: a row a new sequence takes must not start from the last one's
+// summary. It is a write per buffer, outside any submission.
+func (g *devTier) resetRecRows(sid uint64, rows []int) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	st, seated := g.recSeats[sid]
+	if !seated || len(rows) == 0 {
+		return true
+	}
+	ls := g.recLs[:0]
+	for _, l := range g.layers {
+		if l != nil && l.linear && l.recOf(sid) != nil {
+			ls = append(ls, l)
+		}
+	}
+	g.recLs = ls
+	defer clear(g.recLs)
+	for _, row := range rows {
+		if row < 0 || row >= st.rows {
+			continue // a row the batch has not grown to holds nothing yet
+		}
+		if err := g.recZeroLayers(ls, st.base+row, 1); err != nil {
+			g.LastErr = "rows: " + err.Error()
+			return false
+		}
+	}
+	return true
+}
+
+// RecMark is recMark for the zero session: a caller that never attached.
+func (g *GPU) RecMark() {
+	g.recMark(0)
+}
+
+// recMark marks the session's state on every device (nn.RecRewinder).
+func (g *GPU) recMark(sid uint64) {
+	for _, d := range g.devs {
+		d.recMark(sid)
+	}
+}
+
+// RecRewind is recRewind for the zero session: a caller that never attached.
+func (g *GPU) RecRewind() bool {
+	return g.recRewind(0)
+}
+
+// recRewind rewinds every device or none: every device is checked before any
+// flips, so a refusal on the second cannot leave the first rewound.
+func (g *GPU) recRewind(sid uint64) bool {
+	for _, d := range g.devs {
+		if _, ok := d.rewindable(sid); !ok {
+			return false
+		}
+	}
+	for _, d := range g.devs {
+		if !d.recRewind(sid) {
+			return false // checked above; a session's own state does not move between
+		}
+	}
+	return true
+}
+
+func (s *gpuSession) RecMark() {
+	defer s.leave(s.enter())
+	s.g.recMark(s.sid)
+}
+
+func (s *gpuSession) RecRewind() bool {
+	defer s.leave(s.enter())
+	return s.g.recRewind(s.sid)
+}
+
+// ResetRecRows is resetRecRows for the zero session: a caller that never attached.
+func (g *GPU) ResetRecRows(rows []int) bool {
+	return g.resetRecRows(0, rows)
+}
+
+// resetRecRows resets the rows on every device; see devTier.ResetRecRows.
+func (g *GPU) resetRecRows(sid uint64, rows []int) bool {
+	ok := true
+	for _, d := range g.devs {
+		ok = d.resetRecRows(sid, rows) && ok
+	}
+	return ok
+}
+
+func (s *gpuSession) ResetRecRows(rows []int) bool {
+	defer s.leave(s.enter())
+	return s.g.resetRecRows(s.sid, rows)
+}
+
+// ragSampleServes says the composer writes a ragged step's tokens: asked
+// for the token and a prompt's rows, over the sample its head states.
+func (g *devTier) ragSampleServes() bool {
+	return g.bs != nil && g.bs.sampleGraph != nil
+}

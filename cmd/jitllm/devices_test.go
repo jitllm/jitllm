@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // The -devices flag, at the CLI's own level: what it accepts, what it refuses,
@@ -73,7 +73,7 @@ func TestOpenDevicesNamesTwoDevicesAndPoolsThem(t *testing.T) {
 		t.Fatalf("-devices %q: %v", spec, err)
 	}
 	defer closeDev()
-	g := d.(*tier.GPU)
+	g := d.(*gpu.GPU)
 	t.Logf("-devices %q opened %q", spec, name)
 	t.Log(strings.TrimLeft(deviceBudgets(d), "\n"))
 	if g.Devices() != 2 {

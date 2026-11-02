@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
-// The IQ4_NL row decode (jit/cpu/iq4nl_x86.go has the contract): one row of
+// The IQ4_NL row decode (engine/device/cpu/iq4nl_x86.go has the contract): one row of
 // Qwen3.8-Flash-Next's n-gram table into floats, generated.
 
 var (

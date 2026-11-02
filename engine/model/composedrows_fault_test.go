@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestComposedRowsDiscriminate runs the composed rows' gates under each
@@ -34,10 +34,10 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 		for _, f := range []struct {
 			name string
 			arm  func(string)
-		}{{"pos", tier.SetPagedFault}, {"alias", tier.SetPagedFault}, {"headrow", tier.SetRowsFault}} {
+		}{{"pos", gpu.SetPagedFault}, {"alias", gpu.SetPagedFault}, {"headrow", gpu.SetRowsFault}} {
 			t.Run(dev+"/"+f.name, func(t *testing.T) {
 				f.arm(f.name)
-				got, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev)})
+				got, _ := batchGreedy(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev)})
 				f.arm("")
 				composedRowsServed(t, m, lastBatchStats)
 				i, j, gap := composedRowsPart(t, m, ids, want, got)
@@ -52,9 +52,9 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 		})
 		t.Run(dev+"/nohidden", func(t *testing.T) {
 			want, _ := composedHidden(t, m, dev, 0, composedHiddenRows, false)
-			tier.SetRowsFault("nohidden")
+			gpu.SetRowsFault("nohidden")
 			got, st := composedHidden(t, m, dev, composedParts, composedHiddenRows, false)
-			tier.SetRowsFault("")
+			gpu.SetRowsFault("")
 			if st.HiddenHeads == 0 {
 				t.Fatalf("no served head's normed rows were read back: the arm did not select the served head")
 			}
@@ -88,8 +88,8 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 func composedFoldParts(t *testing.T, m *Model, dev string) {
 	// Chunks of at most 32 rows: the device reserves and warms the widths up
 	// to 32, each a form of the composer's.
-	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.PromptRows = 32 }))
+	g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 32 }))
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}
@@ -116,13 +116,13 @@ func composedFoldParts(t *testing.T, m *Model, dev string) {
 		return append([]float32(nil), lg...), g.Stats().HeadFolds - before
 	}
 	want, _ := run(false)
-	tier.SetRowsFault("foldrow")
+	gpu.SetRowsFault("foldrow")
 	got, folds := run(true)
-	tier.SetRowsFault("")
+	gpu.SetRowsFault("")
 	if folds == 0 {
 		t.Fatalf("no head folded: the arm did not select the fold")
 	}
-	if hs, hd := g.Stats().ServedPart(tier.ComposedHead); hs == 0 || hd != 0 {
+	if hs, hd := g.Stats().ServedPart(gpu.ComposedHead); hs == 0 || hd != 0 {
 		t.Fatalf("the composer served the head %d times and declined it %d (%s)", hs, hd, declinesOf(g.Stats()))
 	}
 	nmse := logitNMSE(got, want)

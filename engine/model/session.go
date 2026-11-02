@@ -5,8 +5,8 @@ import (
 	"slices"
 	"sync/atomic"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // Session is one conversation's history: what moves with it from instance

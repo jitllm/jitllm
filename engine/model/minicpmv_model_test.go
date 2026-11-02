@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // MiniCPM-V 4.0, end to end: the GGUF pair converted into one container, the
@@ -378,7 +378,7 @@ func TestMiniCPMVOnDeviceMatchesHost(t *testing.T) {
 	ran := 0
 	for _, arm := range towerArms() {
 		spec := arm.spec
-		gd, err := tier.OpenWith(tier.WithDevices(spec))
+		gd, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || gd == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

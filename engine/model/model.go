@@ -17,9 +17,9 @@ import (
 
 	"github.com/jitllm/jitllm/engine/graph"
 
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -1923,7 +1923,7 @@ func (m *Model) BlockResident(li int) bool {
 // bytes is the host's share before a device on the host's own memory (an
 // integrated GPU, Apple Silicon) takes what it holds: the model subtracts that
 // itself, now and whenever a instance's placement moves it (hostheld.go), so a
-// caller never subtracts tier.GPU.HostReserved again.
+// caller never subtracts gpu.GPU.HostReserved again.
 func (m *Model) SetPageBudget(bytes uint64) int {
 	if m.container == nil {
 		return 0

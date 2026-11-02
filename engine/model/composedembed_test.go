@@ -3,8 +3,8 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // TestComposedEmbeddingDecoderOnCPU is the composed CPU arm of a decoder
@@ -75,7 +75,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 			_, vbad := encodeTexts(t, m, ve, g)
 			vs, vd := ve.st.CPUPoolSteps()
 			// A mean over a text of several chunks is main's (DeclinePrefill).
-			vs += vd[jit.DeclinePrefill]
+			vs += vd[composer.DeclinePrefill]
 			ve.Close()
 			m.Cfg.Pooling = was
 			cb := worstCos(vbad, want)

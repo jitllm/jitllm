@@ -5,8 +5,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestFusedMatchesTheTiledKernel holds the fused packed matvec to the same bits

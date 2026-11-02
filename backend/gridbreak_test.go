@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/msl"
-	"github.com/jitllm/jitllm/jit/ptx"
-	"github.com/jitllm/jitllm/jit/spirv"
+	"github.com/jitllm/jitllm/composer/msl"
+	"github.com/jitllm/jitllm/composer/ptx"
+	"github.com/jitllm/jitllm/composer/spirv"
 )
 
 // TestGridBarrierProbeSeesAnEarlyCrossing is the grid barrier gate's violation

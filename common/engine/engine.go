@@ -35,8 +35,8 @@ import (
 
 	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -77,9 +77,9 @@ type Engine struct {
 	m *model.Model
 	// sess is the chat's session on the active model.
 	sess *server.Session
-	// gpu is the active model's tier, nil on the host: only *tier.GPU can
+	// gpu is the active model's tier, nil on the host: only *gpu.GPU can
 	// answer "how much of each card is this model using".
-	gpu  *tier.GPU
+	gpu  *gpu.GPU
 	path string
 	// sessMax is the window this session was built for, so the decode loop can
 	// tell a context that filled from a cap that was reached.
@@ -377,7 +377,7 @@ func (e *Engine) activate(en *entry) error {
 	// -- only where the device choice lists the CPU, as the CLI's -relocate
 	// does. A choice of cards alone keeps the model off the CPU, so there the
 	// token takes the cards' refusal instead (model.WithCPU).
-	relocate, _ := tier.AdmitsHost(en.spec)
+	relocate, _ := gpu.AdmitsHost(en.spec)
 	o := server.SessionOptions{ModelID: en.lm.ID(), MaxSeq: window, KeepOffHost: !relocate}
 	cacheOff := "turned off in Settings"
 	if e.st.KVCache.Get() {
@@ -535,7 +535,7 @@ func blockMap(nLayer int, runs [][2]int, devOf func(li int) int, resident func(l
 
 // placementOf is blockMap for a live session. A block the tier cannot name a
 // device for is drawn on device 0 rather than dropped from the device count.
-func placementOf(m *model.Model, st *model.Instance, g *tier.GPU) []byte {
+func placementOf(m *model.Model, st *model.Instance, g *gpu.GPU) []byte {
 	ord := map[string]int{}
 	if g != nil {
 		for i, b := range g.Budgets() {
@@ -573,7 +573,7 @@ func placementOf(m *model.Model, st *model.Instance, g *tier.GPU) []byte {
 //
 // Budgets(), DevStats() and Placed() are parallel arrays indexed by device
 // ordinal, fastest first.
-func allocStat(m *model.Model, st *model.Instance, g *tier.GPU, nBlocks int) session.Allocation {
+func allocStat(m *model.Model, st *model.Instance, g *gpu.GPU, nBlocks int) session.Allocation {
 	a := session.Allocation{
 		HostUsed:   m.HostBytes(),
 		HostBudget: m.PageBudget(),

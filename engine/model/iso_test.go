@@ -6,19 +6,19 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // isoSetup opens the model and every device on the host.
-func isoSetup(t *testing.T) (*Model, *tier.GPU) {
+func isoSetup(t *testing.T) (*Model, *gpu.GPU) {
 	t.Helper()
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	m, err := Open(path)
 	if err != nil {
 		t.Skip(err)
 	}
-	g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		m.Close()
 		noDevice(t, "devices", err)
@@ -26,9 +26,9 @@ func isoSetup(t *testing.T) (*Model, *tier.GPU) {
 	return m, g
 }
 
-// TestTwoStatesOnOneTierShareAKVCache: two instances attached to the same tier.GPU
+// TestTwoStatesOnOneTierShareAKVCache: two instances attached to the same gpu.GPU
 // must not corrupt each other. Layers takes a position but no state identity,
-// so each session needs its own device KV cache (tier.GPU.Attach); interleaved
+// so each session needs its own device KV cache (gpu.GPU.Attach); interleaved
 // instances must match the same sequences run alone.
 func TestTwoStatesOnOneTierShareAKVCache(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
@@ -41,7 +41,7 @@ func TestTwoStatesOnOneTierShareAKVCache(t *testing.T) {
 	seqA := []int32{101, 202, 303, 404, 505, 606}
 	seqB := []int32{909, 808, 707, 606, 505, 404}
 
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

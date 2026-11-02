@@ -7,18 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Two instances on one tier step on the device at the same time: each is its
-// own session (tier.GPU.Attach), runs in a lane of its own and submits on a
-// queue of its own (jit/gpu/tier/devsess.go), and the device's shared state
-// waits only where it must (jit/gpu/tier/inflight.go). These gates hold the
+// own session (gpu.GPU.Attach), runs in a lane of its own and submits on a
+// queue of its own (engine/device/gpu/devsess.go), and the device's shared state
+// waits only where it must (engine/device/gpu/inflight.go). These gates hold the
 // sessions to the answers each gives alone, and check the configuration was
 // selected: their steps overlapped, and the device saw a submission start
-// while another's was running on the device (tier.Stats.RanBeside).
+// while another's was running on the device (gpu.Stats.RanBeside).
 
 // atOnceGen is how many tokens each session decodes in a gate.
 const atOnceGen = 48
@@ -41,13 +41,13 @@ func atOncePrompts(m *Model) [2][]int32 {
 
 // atOnceTier opens spec with the tuners off, so every arm runs the same
 // kernels in the same reduction order.
-func atOnceTier(t *testing.T, spec string, cfg func(*tier.Config)) *tier.GPU {
+func atOnceTier(t *testing.T, spec string, cfg func(*gpu.Config)) *gpu.GPU {
 	t.Helper()
-	opts := []tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)}
+	opts := []gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)}
 	if cfg != nil {
-		opts = append(opts, tier.WithConfig(cfg))
+		opts = append(opts, gpu.WithConfig(cfg))
 	}
-	g, err := tier.OpenWith(opts...)
+	g, err := gpu.OpenWith(opts...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}
@@ -57,7 +57,7 @@ func atOnceTier(t *testing.T, spec string, cfg func(*tier.Config)) *tier.GPU {
 
 // atOnceState places an instance wholly on g and prefills prompt, returning the
 // first greedy token.
-func atOnceState(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32) (*Instance, int32) {
+func atOnceState(t *testing.T, m *Model, g *gpu.GPU, seq int, prompt []int32) (*Instance, int32) {
 	t.Helper()
 	st := m.NewInstance(seq)
 	t.Cleanup(func() { st.Close() })
@@ -175,7 +175,7 @@ func TestSessionsStepAtOnce(t *testing.T) {
 	defer m.Close()
 	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "vulkan:1", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true, tier.ComposedBlock|tier.ComposedHead)
+			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true, gpu.ComposedBlock|gpu.ComposedHead)
 		})
 	}
 }
@@ -218,7 +218,7 @@ var hybridPrompts = [2][]int32{{1, 2, 3, 4, 5, 6, 7, 8}, {9, 3, 14, 1, 5, 9, 2, 
 // atOncePlace places a instance's first blocks on g -- every block and the head
 // through atOnceState -- and prefills prompt, returning the first greedy
 // token.
-func atOncePlace(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32, blocks int) (*Instance, int32) {
+func atOncePlace(t *testing.T, m *Model, g *gpu.GPU, seq int, prompt []int32, blocks int) (*Instance, int32) {
 	t.Helper()
 	if blocks == m.Cfg.NLayer {
 		return atOnceState(t, m, g, seq, prompt)
@@ -242,7 +242,7 @@ func atOncePlace(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32, b
 // alone and then both at once from two goroutines, and holds the run at once
 // to the runs alone. beside also demands that the device ran a submission
 // beside another's.
-func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks int, beside bool, parts tier.Parts) {
+func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks int, beside bool, parts gpu.Parts) {
 	t.Helper()
 	const seq = 256
 	g := atOnceTier(t, spec, nil)
@@ -301,11 +301,11 @@ func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks 
 // lanesHold is nil when g has at least lanes lanes and each holds an
 // instance of the composed part of each of blocks placed blocks, and of the
 // head where parts names it.
-func lanesHold(g *tier.GPU, blocks int, parts tier.Parts, lanes int) error {
+func lanesHold(g *gpu.GPU, blocks int, parts gpu.Parts, lanes int) error {
 	// The head's two graphs: decode's, and the one a prompt's fold runs that
 	// writes the norm's rows too (nn.Head.HiddenGraph).
 	want := blocks
-	if parts&tier.ComposedHead != 0 {
+	if parts&gpu.ComposedHead != 0 {
 		want += 2
 	}
 	for _, d := range g.LaneParts() {
@@ -481,7 +481,7 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 	t.Helper()
 	prompts := atOncePrompts(m)
 	const seq, gen = 128, 100
-	g := atOnceTier(t, spec, func(c *tier.Config) {
+	g := atOnceTier(t, spec, func(c *gpu.Config) {
 		c.KVPage = 64 // the smallest page: a short history is two
 	})
 	var alone [2]atOnceRun
@@ -596,7 +596,7 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 	for _, half := range []bool{false, true} {
 		for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
 			t.Run(fmt.Sprintf("%s/half=%v", spec, half), func(t *testing.T) {
-				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half, tier.ComposedBlock|tier.ComposedHead)
+				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half, gpu.ComposedBlock|gpu.ComposedHead)
 			})
 		}
 	}
@@ -626,7 +626,7 @@ func TestSessionsRelocateAtOnceHybrid(t *testing.T) {
 // relocateAtOnce is TestSessionsRelocateAtOnce's arm for m on spec. beside
 // demands that the device ran a submission beside another's; parts names
 // what the composer serves.
-func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, half, beside bool, parts tier.Parts) {
+func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, half, beside bool, parts gpu.Parts) {
 	t.Helper()
 	const seq = 256
 	nl := m.Cfg.NLayer
@@ -723,7 +723,7 @@ func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, hal
 			t.Fatal(err)
 		}
 		after2 := g2.Stats()
-		for k, s := range [2][2]tier.Stats{{before, after}, {before2, after2}} {
+		for k, s := range [2][2]gpu.Stats{{before, after}, {before2, after2}} {
 			n, d := s[1].ServedPart(parts)
 			n0, d0 := s[0].ServedPart(parts)
 			if n-n0 == 0 || d-d0 != 0 {
@@ -757,7 +757,7 @@ func TestModelsAndSessionsAtOnce(t *testing.T) {
 	const seq = 256
 	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			var gs []*tier.GPU
+			var gs []*gpu.GPU
 			for range ms {
 				gs = append(gs, atOnceTier(t, spec, nil))
 			}
@@ -778,7 +778,7 @@ func TestModelsAndSessionsAtOnce(t *testing.T) {
 				}
 				st.Close()
 			}
-			var before []tier.Stats
+			var before []gpu.Stats
 			for _, g := range gs {
 				before = append(before, g.Stats())
 			}

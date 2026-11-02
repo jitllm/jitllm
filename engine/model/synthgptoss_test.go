@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSynthGPTOSSMatchesTransformers holds the whole gpt-oss graph to
@@ -163,23 +163,23 @@ func TestSynthGPTOSSOnEveryDevice(t *testing.T) {
 	host.Close()
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			st := m.NewInstance(len(g.IDs) + 1)
 			defer st.Close()
-			st.SetDeviceLayers(gpu, -1)
+			st.SetDeviceLayers(gpux, -1)
 			if n := st.GPULayers(); n != m.Cfg.NLayer {
-				t.Fatalf("%s took %d of %d blocks: %v", spec, n, m.Cfg.NLayer, gpu.Err())
+				t.Fatalf("%s took %d of %d blocks: %v", spec, n, m.Cfg.NLayer, gpux.Err())
 			}
 			got := run(st)
 			if n := st.GPULayers(); n != m.Cfg.NLayer {
-				t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())
+				t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpux.Err())
 			}
 			worst := 0.0
 			for p := range want {

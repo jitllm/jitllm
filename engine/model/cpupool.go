@@ -3,7 +3,7 @@ package model
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // An embedding model's readout on the CPU device: the pooled, unit-length
@@ -17,7 +17,7 @@ import (
 type cpuPoolState struct {
 	form     cpuHeadForm
 	served   int
-	declined [jit.NumDeclines]int
+	declined [composer.NumDeclines]int
 	// pos is the positions table the form reads its live count from, in,
 	// out its staged rows and its pooled rows.
 	pos     []uint32
@@ -26,7 +26,7 @@ type cpuPoolState struct {
 
 // CPUPoolSteps is how many readouts the CPU's composed pool served, and
 // how many it declined, by reason.
-func (s *Instance) CPUPoolSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUPoolSteps() (served int, declined [composer.NumDeclines]int) {
 	return s.cpu.pool.served, s.cpu.pool.declined
 }
 
@@ -39,7 +39,7 @@ func (s *Instance) cpuPlacePool() {
 	}
 	p := &s.cpu.pool
 	rows := s.maxSeq
-	s.cpuComposeHead(&p.form, g, jit.DeclineNoGraph, rows)
+	s.cpuComposeHead(&p.form, g, composer.DeclineNoGraph, rows)
 	if p.form.f != nil {
 		p.pos = make([]uint32, rows+1)
 		p.in, p.out = make([]float32, rows*s.c.NEmbd), make([]float32, rows*g.Values[g.Out[0]].Width)
@@ -52,13 +52,13 @@ func (s *Instance) cpuPlacePool() {
 func (s *Instance) cpuPool(x []float32, n int, out []float32) bool {
 	p := &s.cpu.pool
 	f, why := p.form.formOf()
-	if why == jit.DeclineServes {
+	if why == composer.DeclineServes {
 		why = s.cpuWeights(f, -1, nil)
 	}
-	if why == jit.DeclineServes && n > len(p.pos)-1 {
-		why = jit.DeclineSessions
+	if why == composer.DeclineServes && n > len(p.pos)-1 {
+		why = composer.DeclineSessions
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		p.declined[why]++
 		return false
 	}

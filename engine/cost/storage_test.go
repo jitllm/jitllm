@@ -3,7 +3,7 @@ package cost
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // TestEveryStorageStatesWhatItsKernelsReach holds each storage the
@@ -16,17 +16,17 @@ import (
 // bound, not a measure.
 func TestEveryStorageStatesWhatItsKernelsReach(t *testing.T) {
 	f := composing(t, *composeModel+".jlm")
-	s := jit.Step{Rows: 1, Page: 64, Keys: 9}
-	for _, d := range []Device{{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}}} {
-		plan, err := jit.Default().Compose(f, s, func(jit.Part) jit.Device { return d.Device })
+	s := composer.Step{Rows: 1, Page: 64, Keys: 9}
+	for _, d := range []Device{{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}}} {
+		plan, err := composer.Default().Compose(f, s, func(composer.Part) composer.Device { return d.Device })
 		if err != nil {
 			t.Fatal(err)
 		}
-		ccs, err := EstimateCodes(jit.Default(), f, s, func(jit.Part) Device { return d }, true)
+		ccs, err := EstimateCodes(composer.Default(), f, s, func(composer.Part) Device { return d }, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var codes []jit.Code
+		var codes []composer.Code
 		for _, pp := range plan.Parts {
 			codes = append(codes, pp.Codes...)
 		}

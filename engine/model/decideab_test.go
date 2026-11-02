@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestDecisionDeviceAB is the paired, interleaved A/B harness for the
@@ -57,7 +57,7 @@ func TestDecisionDeviceAB(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			g, err := tier.OpenWith(tier.WithDevices(spec))
+			g, err := gpu.OpenWith(gpu.WithDevices(spec))
 			if err != nil || g == nil {
 				t.Fatalf("%s: %v", spec, err)
 			}
@@ -79,7 +79,7 @@ func TestDecisionDeviceAB(t *testing.T) {
 					case "pick":
 						a, b = newABArm(t, m, embed, g, "no-pick"), newABArm(t, m, embed, g, "")
 					case "batch-host", "batch-dev":
-						var dev *tier.GPU
+						var dev *gpu.GPU
 						if arm == "batch-dev" {
 							dev = g
 						}
@@ -156,12 +156,12 @@ type abArm struct {
 	stats abStats
 }
 
-// abStats sums the numeric counters of tier.Stats an arm's samples moved,
+// abStats sums the numeric counters of gpu.Stats an arm's samples moved,
 // so two arms that run different device work show where (the counters are
 // the device's, and the arms take turns, so each sample's delta is its own).
 type abStats map[string]float64
 
-func (s *abStats) add(before, after tier.Stats) {
+func (s *abStats) add(before, after gpu.Stats) {
 	if *s == nil {
 		*s = abStats{}
 	}
@@ -193,7 +193,7 @@ func (s abStats) differ(o abStats) string {
 	return strings.Join(out, "")
 }
 
-func newABArm(t *testing.T, m *Model, embed bool, g *tier.GPU, violation string) abArm {
+func newABArm(t *testing.T, m *Model, embed bool, g *gpu.GPU, violation string) abArm {
 	t.Helper()
 	a := abArm{m: m}
 	if embed {

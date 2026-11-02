@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestGemma2SoftcapOnDevice runs gemma-2-2b with every block on the device
@@ -48,7 +48,7 @@ func TestGemma2SoftcapOnDevice(t *testing.T) {
 	want := run(host)
 	host.Close()
 
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

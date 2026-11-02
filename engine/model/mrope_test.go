@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // qvlFixtures are the Qwen-VL family fixtures scripts/qwenvlgold.py writes:
@@ -281,25 +281,25 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			run := func(grid bool) ([][]float32, error) {
 				st := m.NewInstance(n)
 				defer st.Close()
-				st.SetDeviceLayers(gpu, -1)
+				st.SetDeviceLayers(gpux, -1)
 				if got := st.GPULayers(); got != m.Cfg.NLayer || !st.HeadOnDevice() {
 					return nil, fmt.Errorf("placed %d of %d blocks, head %v: %v %v", got, m.Cfg.NLayer,
-						st.HeadOnDevice(), st.DeviceDeclines(), gpu.Err())
+						st.HeadOnDevice(), st.DeviceDeclines(), gpux.Err())
 				}
 				rows, err := qvlRunErr(st, g, grid)
 				if err != nil {
-					return nil, fmt.Errorf("%w (the device: %s)", err, gpu.Err())
+					return nil, fmt.Errorf("%w (the device: %s)", err, gpux.Err())
 				}
 				return rows, nil
 			}
@@ -316,8 +316,8 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 			// The device must not build the table from a row's CACHE position,
 			// which is the image at sequential positions: the composer's is
 			// served at the positions the instance states, or the host's goes up.
-			s := gpu.Stats()
-			if served, _ := s.ServedPart(tier.ComposedTable); s.RopeTables != 0 || s.RopeTableUploads == 0 && served == 0 {
+			s := gpux.Stats()
+			if served, _ := s.ServedPart(gpu.ComposedTable); s.RopeTables != 0 || s.RopeTableUploads == 0 && served == 0 {
 				t.Fatalf("the device built %d rotary rows and took %d from the host (%q): an M-RoPE table "+
 					"built from cache positions is the violation", s.RopeTables, s.RopeTableUploads, s.RopeTableWhy)
 			}
@@ -335,9 +335,9 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 			// slot, the continuation as ragged rows beside a text sequence.
 			b := newSessBatch(m, 2, n)
 			defer b.Close()
-			b.SetDeviceLayers(gpu, -1)
+			b.SetDeviceLayers(gpux, -1)
 			if got := b.GPULayers(); got != m.Cfg.NLayer {
-				t.Fatalf("the batch placed %d of %d blocks: %v", got, m.Cfg.NLayer, gpu.Err())
+				t.Fatalf("the batch placed %d of %d blocks: %v", got, m.Cfg.NLayer, gpux.Err())
 			}
 			if _, err := b.PrefillSeq(0, g.Pre); err != nil {
 				t.Fatal(err)
@@ -364,8 +364,8 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 			a, c := m.NewInstance(n), m.NewInstance(n)
 			defer a.Close()
 			defer c.Close()
-			a.SetDeviceLayers(gpu, -1)
-			c.SetDeviceLayers(gpu, -1)
+			a.SetDeviceLayers(gpux, -1)
+			c.SetDeviceLayers(gpux, -1)
 			if _, err := c.Prefill(g.Pre); err != nil {
 				t.Fatal(err)
 			}
@@ -539,13 +539,13 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 	t.Run("relocation", func(t *testing.T) {
 		ran := 0
 		for _, spec := range stepDevices() {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-			if err != nil || gpu == nil {
+			gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+			if err != nil || gpux == nil {
 				continue
 			}
 			ran++
 			func() {
-				defer gpu.Close()
+				defer gpux.Close()
 				st := m.NewInstance(n)
 				defer st.Close()
 				lg, err := st.PrefillMixed(qvlSpans(g, true)...)
@@ -559,12 +559,12 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 					// history the image wrote moves with its blocks.
 					switch i {
 					case 1:
-						st.SetDeviceLayers(gpu, -1)
+						st.SetDeviceLayers(gpux, -1)
 						if st.GPULayers() != m.Cfg.NLayer {
-							t.Fatalf("%s: moved %d of %d blocks: %v", spec, st.GPULayers(), m.Cfg.NLayer, gpu.Err())
+							t.Fatalf("%s: moved %d of %d blocks: %v", spec, st.GPULayers(), m.Cfg.NLayer, gpux.Err())
 						}
 					case 1 + half:
-						st.SetDeviceLayers(gpu, 0)
+						st.SetDeviceLayers(gpux, 0)
 						if st.GPULayers() != 0 {
 							t.Fatalf("%s: %d blocks stayed on the device", spec, st.GPULayers())
 						}
@@ -588,7 +588,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 	})
 
 	t.Run("allocation", func(t *testing.T) {
-		arm := func(t *testing.T, gpu *tier.GPU) {
+		arm := func(t *testing.T, gpux *gpu.GPU) {
 			// decodeAllocs' window: positions 160..223, past the device's
 			// first 128-position score grain (crossing one re-captures the
 			// launch graph) and short of 256, where the host's KV cache
@@ -599,8 +599,8 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 			warm := 160 - prompt
 			st := m.NewInstance(prompt + warm + win + 8)
 			defer st.Close()
-			if gpu != nil {
-				if err := st.SetDevice(gpu); err != nil {
+			if gpux != nil {
+				if err := st.SetDevice(gpux); err != nil {
 					t.Fatal(err)
 				}
 				if st.GPULayers() == 0 {
@@ -628,9 +628,9 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 					t.Fatal(err)
 				}
 			}
-			var c0 tier.Stats
-			if gpu != nil {
-				c0 = gpu.Stats()
+			var c0 gpu.Stats
+			if gpux != nil {
+				c0 = gpux.Stats()
 			}
 			r0 := m.container.Reads()
 			w := countAllocs(func() {
@@ -641,8 +641,8 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 				}
 			})
 			captures := 0
-			if gpu != nil {
-				captures = gpu.Stats().Captures - c0.Captures
+			if gpux != nil {
+				captures = gpux.Stats().Captures - c0.Captures
 			}
 			allocVerdict(t, fmt.Sprintf("decode after an image, %d of %d blocks placed", st.GPULayers(), m.Cfg.NLayer),
 				w, win, m.container.Reads()-r0, captures)
@@ -650,12 +650,12 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 		t.Run("host", func(t *testing.T) { arm(t, nil) })
 		for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
 			t.Run(spec, func(t *testing.T) {
-				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec)}, testTierOpts(t)...)...)
+				if err != nil || gpux == nil {
 					t.Skipf("%s: not present (%v)", spec, err)
 				}
-				defer gpu.Close()
-				arm(t, gpu)
+				defer gpux.Close()
+				arm(t, gpux)
 			})
 		}
 	})
@@ -674,9 +674,9 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 // part from transformers.
 func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n int) {
 	t.Helper()
-	run := func(shift int32) ([][]float32, tier.Stats) {
-		cg, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }), tier.WithRopeFault(1, int(shift)))
+	run := func(shift int32) ([][]float32, gpu.Stats) {
+		cg, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }), gpu.WithRopeFault(1, int(shift)))
 		if err != nil || cg == nil {
 			t.Fatalf("%s did not open for the composed decode: %v", spec, err)
 		}
@@ -704,7 +704,7 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 	}
 	// Every step's tables and the picture prompt's chunks', each a whole set.
 	steps, tabs := len(g.Cont)-1, composedTables(m)
-	nt, dt := stats.ServedPart(tier.ComposedTable)
+	nt, dt := stats.ServedPart(gpu.ComposedTable)
 	switch {
 	case nt < (steps+1)*tabs || nt%tabs != 0 || dt != 0:
 		t.Fatalf("composed: %d tables served and %d calls declined (%s), where %d steps and the prompt's chunks of %d tables are at least %d",
@@ -740,12 +740,12 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 		}
 		t.Logf("composed: XD-RoPE's sections moved reach %.3e against transformers (%d flips)", wb, fb)
 	}
-	nb, db := stats.ServedPart(tier.ComposedBlock)
+	nb, db := stats.ServedPart(gpu.ComposedBlock)
 	if nb != steps*stated || db != steps*(m.Cfg.NLayer-stated) {
 		t.Fatalf("composed: %d block steps served and %d declined, where %d steps of %d stated and %d other blocks are %d and %d",
 			nb, db, steps, stated, m.Cfg.NLayer-stated, steps*stated, steps*(m.Cfg.NLayer-stated))
 	}
-	nh, dh := stats.ServedPart(tier.ComposedHead)
+	nh, dh := stats.ServedPart(gpu.ComposedHead)
 	t.Logf("composed after the picture: worst %.3e; %d tables served, %d declined; %d of %d blocks stated, %d block steps served, %d declined %v; head served %d, declined %d",
 		w, nt, dt, stated, m.Cfg.NLayer, nb, db, why, nh, dh)
 }

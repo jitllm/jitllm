@@ -5,7 +5,7 @@ package model
 //
 // It is separate from residency on purpose: residency keeps a last-touch token
 // for eviction and exists only when the model does not fit; placement
-// (tier.Place) needs a rate per unit whether or not it fits.
+// (gpu.Place) needs a rate per unit whether or not it fits.
 //
 // It is measured rather than shipped because the hot set depends on the
 // workload (prose and code prompts share little of it; see

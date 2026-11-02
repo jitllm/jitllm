@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // hotFloor is the occupancy a hot kernel family must keep on a device, as a
@@ -35,11 +35,11 @@ var hotFloors = []hotFloor{
 
 // hostStagers are the host emitters that address the stack by design: the
 // k-quant matvecs keep loop-invariant bases and a block's unpacked scales in
-// the System V red zone (jit/cpu/matvec.go, "The loop-invariant bases live in
+// the System V red zone (engine/device/cpu/matvec.go, "The loop-invariant bases live in
 // the RED ZONE"), and the SSE packed tile stages its scale planes there
-// (jit/cpu/sse_packed.go). Every other host kernel holds its values in
+// (engine/device/cpu/sse_packed.go). Every other host kernel holds its values in
 // registers, and one that starts addressing the stack has outgrown the file.
-// The set is every emitter in jit/cpu that writes At(RSP, ...).
+// The set is every emitter in engine/device/cpu that writes At(RSP, ...).
 var hostStagers = map[string]bool{
 	"cpu.emitMatVec4":              true,
 	"cpu.emitQ3KMatVec":            true,
@@ -84,9 +84,9 @@ func hotKernelFaults(ks []backend.KernelResources) (faults []string, checked int
 
 // runForRegisters runs decode and the batched prefill on a CUDA tier opened
 // with opts and returns what each kernel it compiled cost the card.
-func runForRegisters(t *testing.T, m *Model, opts ...tier.Option) []backend.KernelResources {
+func runForRegisters(t *testing.T, m *Model, opts ...gpu.Option) []backend.KernelResources {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff)}, opts...)...)
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
 	if err != nil || g == nil {
 		noDevice(t, "CUDA device", err)
 	}
@@ -159,7 +159,7 @@ func TestHotKernelsKeepTheirRegisters(t *testing.T) {
 		t.Logf("%d host emitters checked", len(ks))
 	})
 	t.Run("violation", func(t *testing.T) {
-		faults, checked := hotKernelFaults(runForRegisters(t, m, tier.WithCUDAMaxRegs(32)))
+		faults, checked := hotKernelFaults(runForRegisters(t, m, gpu.WithCUDAMaxRegs(32)))
 		if checked == 0 {
 			t.Fatal("no hot kernel was compiled: the gate checked nothing")
 		}

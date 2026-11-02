@@ -2,7 +2,7 @@ package probe
 
 import (
 	"github.com/jitllm/jitllm/engine/cost"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // hostLanes is a NEON vector's floats.

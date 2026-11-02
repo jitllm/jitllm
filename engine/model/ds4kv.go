@@ -3,7 +3,7 @@ package model
 import (
 	"errors"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // DeepSeek V4's compressed history (ds4.go): a compressed block keeps, beside

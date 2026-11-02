@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // testImage lives in testdata so the test runs on every checkout.
@@ -561,12 +561,12 @@ func TestTowerOnDeviceMatchesHost(t *testing.T) {
 	want := after0(host)
 	host.Close()
 
-	// Every backend on this host, not just the one tier.Open would pick:
+	// Every backend on this host, not just the one gpu.Open would pick:
 	// lowertest proves the kernels assemble on all three, only this proves they
 	// run. Absent backends are logged and skipped.
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

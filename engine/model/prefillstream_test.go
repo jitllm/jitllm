@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // prefillStreamNMSE is the bound a device arm's logits are held to against
@@ -76,13 +76,13 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 	// the card. done frees the arm.
 	type arm struct {
 		st       *Instance
-		g        *tier.GPU
+		g        *gpu.GPU
 		resident int
 		got      [][]float32
 		done     func()
 	}
 	run := func(t *testing.T, mode PrefillStream) (a arm, why string) {
-		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

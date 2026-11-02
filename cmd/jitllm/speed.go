@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // speedCmd is llama-bench's pp/tg measurement: a prompt of -p tokens and a
@@ -253,7 +253,7 @@ func speedCmd(args []string) error {
 			// JITLLM_SPEED_WALL=1: the decode as a fraction of the card's read
 			// wall, measured here (RULE 1). The bytes are the resident
 			// weights, each read once a token by a dense decode.
-			if g, ok := d.(*tier.GPU); ok && os.Getenv("JITLLM_SPEED_WALL") == "1" {
+			if g, ok := d.(*gpu.GPU); ok && os.Getenv("JITLLM_SPEED_WALL") == "1" {
 				if wall, wname, werr := deviceReadWall("ptx", 2048, 21); werr != nil {
 					fmt.Printf("read wall: %v\n", werr)
 				} else {
@@ -455,7 +455,7 @@ func rates(v []float64) string {
 
 // deviceErr is the tier's last refusal, or "" for a device that has none.
 func deviceErr(d nn.Device) string {
-	if g, ok := d.(*tier.GPU); ok {
+	if g, ok := d.(*gpu.GPU); ok {
 		return g.Err()
 	}
 	return ""
@@ -492,13 +492,13 @@ func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps 
 		defer st.Close()
 		// Ready: the blocks are placed, every kernel compiled and the tuners
 		// done. What follows, to the first token, must do none of either.
-		c0, u0 := backend.Compiles(), tier.TuneTrials()
+		c0, u0 := backend.Compiles(), gpu.TuneTrials()
 		lg, err := st.Prefill(ids)
 		if err != nil {
 			return 0, 0, err
 		}
 		st.Sample(nil, lg)
-		compiled, tuned = backend.Compiles()-c0, tier.TuneTrials()-u0
+		compiled, tuned = backend.Compiles()-c0, gpu.TuneTrials()-u0
 		return time.Since(t0), len(ids), nil
 	}
 	el, _, err := first()
@@ -520,7 +520,7 @@ func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps 
 	}
 	tStart := t00.Sub(procStart)
 	fmt.Printf("load %.1f ms (start %.0f + open %.0f + devices %.0f + attach %.0f)   ttft-loaded %.1f ms (ready to the first token; %d compiles, %d tuner trials after ready; %d background tuner trials so far)\n",
-		ms(tStart+tOpen+tDev+tAttach), ms(tStart), ms(tOpen), ms(tDev), ms(tAttach), ms(el-tAttach), compiled, tuned, tier.BackgroundTuneTrials())
+		ms(tStart+tOpen+tDev+tAttach), ms(tStart), ms(tOpen), ms(tDev), ms(tAttach), ms(el-tAttach), compiled, tuned, gpu.BackgroundTuneTrials())
 	var warm []float64
 	ntok := 0
 	for r := 0; r < reps; r++ {

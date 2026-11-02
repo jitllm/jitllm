@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // unifiedFake is a device on the host's memory that takes every block offered
@@ -135,8 +135,8 @@ func TestPageBudgetFollowsARealIntegratedGPU(t *testing.T) {
 	}
 	defer m.Close()
 	const budget = 8 << 30
-	g, err := tier.OpenWith(tier.WithDevices("vulkan:"+strconv.Itoa(sel)),
-		tier.WithHostBudget(budget), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices("vulkan:"+strconv.Itoa(sel)),
+		gpu.WithHostBudget(budget), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil {
 		t.Fatalf("open the integrated GPU: %v", err)
 	}

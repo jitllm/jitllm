@@ -116,7 +116,7 @@ func modelFree() bool {
 	// forcing hooks, so the SSE tier's kernels run on an AVX2 runner. amd64
 	// only: the tier does not exist elsewhere.
 	if runtime.GOARCH == "amd64" {
-		runs = append(runs, testRun{"sse-tier", root, []string{"-tags", "jitllmtest", "./jit/cpu", "./engine/nn"}})
+		runs = append(runs, testRun{"sse-tier", root, []string{"-tags", "jitllmtest", "./engine/device/cpu", "./engine/nn"}})
 	}
 	runs = append(runs, testRun{"server", filepath.Join(root, "server"), []string{"./..."}})
 	runs = append(runs, testRun{"common", filepath.Join(root, "common"), []string{"./..."}})

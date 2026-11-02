@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestStagedGemmPrefillMatchesTheHost prefills real models on CUDA with every
@@ -73,8 +73,8 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 				deep   int
 			}{{"int8", false, -1}, {"binary16", true, -1}, {"binary16-deep", true, 1}} {
 				t.Run(arm.name, func(t *testing.T) {
-					g, err := tier.OpenWith(tier.WithAPI("ptx"), tier.WithDeviceTune(tier.TuneOff),
-						tier.WithConfig(func(c *tier.Config) { c.PreferGemmInt8, c.GemmDeep = !arm.noInt8, arm.deep }))
+					g, err := gpu.OpenWith(gpu.WithAPI("ptx"), gpu.WithDeviceTune(gpu.TuneOff),
+						gpu.WithConfig(func(c *gpu.Config) { c.PreferGemmInt8, c.GemmDeep = !arm.noInt8, arm.deep }))
 					if err != nil || g == nil {
 						noDevice(t, "cuda", err)
 					}
@@ -94,7 +94,7 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 }
 
 // stagedGemmArm is one arm of TestStagedGemmPrefillMatchesTheHost on g.
-func stagedGemmArm(t *testing.T, m *Model, g *tier.GPU, seq int, run func(*Instance) [][]float32, want [][]float32, noInt8 bool, deep int) {
+func stagedGemmArm(t *testing.T, m *Model, g *gpu.GPU, seq int, run func(*Instance) [][]float32, want [][]float32, noInt8 bool, deep int) {
 	t.Helper()
 	dev := m.NewInstance(seq)
 	dev.SetDevice(g)

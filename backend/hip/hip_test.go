@@ -120,7 +120,7 @@ func TestNoExternalCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := 0
-	for _, top := range []string{"jit", "backend", "engine", "format", "tok", "convert"} {
+	for _, top := range []string{"composer", "backend", "engine", "format", "tok", "convert"} {
 		err := filepath.WalkDir(filepath.Join(root, top), func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err

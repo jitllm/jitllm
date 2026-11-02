@@ -6,8 +6,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // Speculative decoding with the model's own multi-token-prediction block
@@ -547,18 +547,18 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 			if len(sp.epos) < n {
 				sp.epos = make([]int, n)
 			}
-			rows = d.cpuEmbed(e, nil, toks, sp.epos[:n]) == jit.DeclineServes
+			rows = d.cpuEmbed(e, nil, toks, sp.epos[:n]) == composer.DeclineServes
 		}
 		for i := 0; i < n && !rows; i++ {
 			if err := d.embedMTP(e[i*d0:(i+1)*d0], toks[i]); err != nil {
 				return err
 			}
 		}
-		if why := d.cpuMTPEntry(sp.ze[:n*d0], e, hs[:n*d0], n); why != jit.DeclineServes {
-			if why == jit.DeclineNotFormed && d.cpu.formErr != nil {
-				return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s (the first: %w)", sp.mli, jit.DeclineName(int(why)), d.cpu.formErr)
+		if why := d.cpuMTPEntry(sp.ze[:n*d0], e, hs[:n*d0], n); why != composer.DeclineServes {
+			if why == composer.DeclineNotFormed && d.cpu.formErr != nil {
+				return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s (the first: %w)", sp.mli, composer.DeclineName(int(why)), d.cpu.formErr)
 			}
-			return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s", sp.mli, jit.DeclineName(int(why)))
+			return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s", sp.mli, composer.DeclineName(int(why)))
 		}
 	} else {
 		e := sp.ze // the embeddings, before eh_proj overwrites them
@@ -1179,7 +1179,7 @@ func topProb(logits []float32, d *specDist) float32 {
 // SpecRows is the most rows one verification pass carries when the count of
 // drafts is the adaptive search's (a lookup draft and the deepest model
 // draft, and the row they follow). A device reserves a ragged step's scratch
-// of this many rows at placement (tier.Config.StepRows): a card the blocks
+// of this many rows at placement (gpu.Config.StepRows): a card the blocks
 // filled refuses a narrow scratch built later, and a verify of three rows
 // then runs every kernel that does not cut to its rows over the reserved
 // prompt width. A fixed WithSpecDraft deeper than this runs in the next

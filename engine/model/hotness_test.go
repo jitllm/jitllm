@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestHotnessIsAProbability holds the measured profile to the shape tier.Place
+// TestHotnessIsAProbability holds the measured profile to the shape gpu.Place
 // needs: every expert's Uses in [0,1], and NExpertUsed of them per token.
 //
 // It guards the denominator: Uses is a per-token probability and attention is

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestMatVecGate2IsTheTwoLaunches: a Gate2 matvec -- gate's row and up's row

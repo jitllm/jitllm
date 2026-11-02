@@ -13,14 +13,14 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/vulkan"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // hardware reports what compute this machine offers jitllm.
 //
 // It reports rather than probes: every line is read from where the engine reads
-// it (sched for topology, jit/cpu for what the emitter generates, backend.Open
+// it (sched for topology, engine/device/cpu for what the emitter generates, backend.Open
 // for devices), so it cannot disagree with what a decode does. Nothing is
 // timed; `jitllm bench` prints the memory wall.
 func hardware() error {
@@ -89,7 +89,7 @@ func reportMem() {
 var fastPath = quant.PackedTypes
 
 func reportJIT() {
-	// Show what a run would emit: jit/cpu reads no environment, so apply the
+	// Show what a run would emit: engine/device/cpu reads no environment, so apply the
 	// same pins a run would.
 	num := func(k string) int {
 		n, _ := strconv.Atoi(os.Getenv(k))
@@ -133,9 +133,9 @@ func reportJIT() {
 }
 
 // isa names what the row-major emitter emits, and whether this CPU can run it.
-// jit/cpu probes (CPUID leaf 7.1 EAX[4] on amd64, AT_HWCAP or sysctl on arm64)
+// engine/device/cpu probes (CPUID leaf 7.1 EAX[4] on amd64, AT_HWCAP or sysctl on arm64)
 // On amd64 SupportedNative declines when the feature is absent; arm64 widens
-// SDOT instead (jit/cpu/sdotemu.go) and runs every kernel. This line is about
+// SDOT instead (engine/device/cpu/sdotemu.go) and runs every kernel. This line is about
 // the GGUF row-major family only; the packed line is what a container runs.
 func isa() string {
 	switch cpu.NativeArch() {
@@ -167,7 +167,7 @@ func reportGPU() {
 	// backend.Open is reached without a tier here, so JITLLM_GPU_VERBOSE has to
 	// be handed to it directly: the package reads no environment.
 	backend.SetVerbose(os.Getenv("JITLLM_GPU_VERBOSE") != "")
-	// The same call tier.Open makes. Opening and closing every backend is
+	// The same call gpu.Open makes. Opening and closing every backend is
 	// covered by backend.TestCloseThenSpawnThreads.
 	hipCfg := backend.HIPConfig{Path: rocmDir()}
 	devs := backend.OpenWith(backend.Opts{HIP: hipCfg})

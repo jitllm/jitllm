@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // TestEveryTowerRunsSSE runs every tower family's preprocessing and encode on

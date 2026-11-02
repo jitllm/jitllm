@@ -122,7 +122,7 @@ func TestRunRefusesContradictoryFlagsBeforeLoading(t *testing.T) {
 		{[]string{"-system", "be terse", absent, "hi"}, "-system needs -chat"},
 		{[]string{"-placement-strict", absent, "hi"}, "-placement-strict needs -placement"},
 		{[]string{"-placement", "0:host", absent, "hi"}, "is not SEL=WHERE"},
-		{[]string{"-relocate", "-devices", "cuda:0", absent, "hi"}, "-relocate moves blocks to the host"},
+		{[]string{"-relocate", "-devices", "cuda:0", absent, "hi"}, "-relocate moves blocks to the CPU"},
 		{[]string{"-tokenizer", filepath.Join(t.TempDir(), "no-tokenizer.json"), absent, "hi"}, "no-tokenizer.json"},
 	} {
 		err := runCmd(tc.args)

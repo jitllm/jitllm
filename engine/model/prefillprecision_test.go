@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestPrefillPrecisionArms is a probe (JITLLM_PREC_MODEL=<file>) for reading
@@ -63,9 +63,9 @@ func TestPrefillPrecisionArms(t *testing.T) {
 		defer s.Close()
 		return run(s)
 	}
-	dev := func(noBatch bool, opts ...tier.Option) [][]float32 {
-		opts = append(opts, tier.WithDeviceTune(tier.TuneOff), tier.WithSplit(1), tier.WithAttnAccSplit(1))
-		g, err := tier.OpenWith(opts...)
+	dev := func(noBatch bool, opts ...gpu.Option) [][]float32 {
+		opts = append(opts, gpu.WithDeviceTune(gpu.TuneOff), gpu.WithSplit(1), gpu.WithAttnAccSplit(1))
+		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -85,9 +85,9 @@ func TestPrefillPrecisionArms(t *testing.T) {
 		t.Logf("arm noBatch=%v: VoltaGemm %d, GemmF16 %d, attention on the matrix unit %v", noBatch, st.VoltaGemm, st.GemmF16, st.AttnMMA)
 		return out
 	}
-	noVolta := tier.WithConfig(func(c *tier.Config) { c.NoVolta = true })
+	noVolta := gpu.WithConfig(func(c *gpu.Config) { c.NoVolta = true })
 	all := map[string][][]float32{
-		"reference":     dev(false, tier.WithoutAttnMMA(true)),
+		"reference":     dev(false, gpu.WithoutAttnMMA(true)),
 		"batched-volta": dev(false),
 		"batched-dp4a":  dev(false, noVolta),
 		"per-token":     dev(true),

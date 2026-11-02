@@ -4,10 +4,10 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestBlocksMoveToTheCPUAndBack: the CPU is a device like the cards, and one
@@ -43,7 +43,7 @@ func composedMoves(t *testing.T, st *Instance, n, half int, devices bool, ntok, 
 	served, declined := st.CPUBlockSteps()
 	for i, k := range declined {
 		if k > 0 {
-			t.Errorf("%d block steps declined on the CPU: %s (%v)", k, jit.DeclineName(i), st.CPUFormErr())
+			t.Errorf("%d block steps declined on the CPU: %s (%v)", k, composer.DeclineName(i), st.CPUFormErr())
 		}
 	}
 	if !devices {
@@ -69,7 +69,7 @@ func composedMoves(t *testing.T, st *Instance, n, half int, devices bool, ntok, 
 
 func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	a, b := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a+","+b, err)
 	}
@@ -77,7 +77,7 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	distinctCards(t, g)
 	opt := WithKVF16(false)
 	if composed {
-		// The composed CPU keeps its history binary16 (jit.Halves).
+		// The composed CPU keeps its history binary16 (composer.Halves).
 		opt = WithKVF16(true)
 	}
 	m, err := Open(path, opt)

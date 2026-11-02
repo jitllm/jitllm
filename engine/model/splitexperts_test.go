@@ -6,8 +6,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSplitExpertsMatchTheHost holds the split -- a hybrid block whose card
@@ -93,7 +93,7 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 				// halfway through: the caches go before any block does.
 				yield bool
 				// predict sends each block's predicted experts ahead of its
-				// router (tier.Config.SplitPredict).
+				// router (gpu.Config.SplitPredict).
 				predict int
 			}{{"tight", k + 1, false, 0}, {"auto", 0, false, 0}, {"yield", 0, true, 0}, {"predict", 0, false, k},
 				{"none", -1, false, 0}} {
@@ -101,14 +101,14 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 					if arm.yield && !md.split {
 						t.Skip("a float bank keeps no cache to give back")
 					}
-					var st tier.Stats
+					var st gpu.Stats
 					var got [][]float32
 					var placed int
 					func() {
 						s := m.NewInstance(len(ids) + 2)
 						defer s.Close()
-						g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
-							tier.WithConfig(func(c *tier.Config) {
+						g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff),
+							gpu.WithConfig(func(c *gpu.Config) {
 								c.StreamExperts, c.HybridExperts, c.StreamCacheSlots = true, true, arm.slots
 								c.SplitAdmit = k
 								c.SplitPredict = arm.predict
@@ -230,8 +230,8 @@ func TestHybridShortPromptTakesTheDecodePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.StreamExperts, c.HybridExperts = true, true }))
+	g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.StreamExperts, c.HybridExperts = true, true }))
 	if err != nil || g == nil {
 		noDevice(t, "gpu:0", err)
 	}

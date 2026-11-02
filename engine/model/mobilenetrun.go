@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // The MobileNet-V5 tower's encode on the host (mobilenet.go has the tower).
@@ -212,13 +212,13 @@ func (s *Instance) mnConv(dst, src []float32, h, w, c, k, st int, wt tensor) err
 // counted served, or refuses it by name.
 func (s *Instance) mnHostRun(li int) error {
 	if s.cpu.args == nil {
-		return s.cpuRefused(li, jit.DeclineCaller)
+		return s.cpuRefused(li, composer.DeclineCaller)
 	}
 	if err := s.m.pageIn(li); err != nil {
 		return err
 	}
 	why := s.cpuConvRun(li)
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		return s.cpuRefused(li, why)
 	}
 	s.cpu.served++

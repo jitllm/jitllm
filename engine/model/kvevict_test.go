@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // evictRun is one arm of the eviction gate: the model placed whole on the
@@ -17,7 +17,7 @@ import (
 // home, and a teacher-forced decode far past what the pool holds.
 type evictRun struct {
 	logits   [][]float32
-	st       tier.Stats
+	st       gpu.Stats
 	resident int
 	after    int
 	// turnPasses is how many streamed passes the second prompt took, and
@@ -113,9 +113,9 @@ func (eg *evictGate) second(t *testing.T, st *Instance) [][]float32 {
 // open is an arm's device and instance, the model wholly placed and the prompt
 // in; squeeze then holds the budget at a few pages of slack. cfg, where set,
 // changes the arm's device configuration.
-func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*tier.Config)) (*tier.GPU, *Instance, int) {
-	g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) {
+func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config)) (*gpu.GPU, *Instance, int) {
+	g, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) {
 			c.KVPage = 64 // the smallest page: several over a short history
 			c.StagedDecode = true
 			if cfg != nil {
@@ -153,7 +153,7 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*tier.Config)) (*
 	return g, st, resident
 }
 
-func (eg *evictGate) run(t *testing.T, squeeze bool, cfg func(*tier.Config)) evictRun {
+func (eg *evictGate) run(t *testing.T, squeeze bool, cfg func(*gpu.Config)) evictRun {
 	g, st, resident := eg.open(t, squeeze, cfg)
 	r := evictRun{resident: resident}
 	for _, id := range eg.ids {
@@ -202,11 +202,11 @@ func TestKVEvictionRunsPastTheBudget(t *testing.T) {
 func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 	free := eg.run(t, false, nil)
 	got := eg.run(t, true, nil)
-	ref := eg.run(t, true, func(c *tier.Config) { c.ComposedFloat = true })
+	ref := eg.run(t, true, func(c *gpu.Config) { c.ComposedFloat = true })
 	for name, r := range map[string]evictRun{"composed": got, "float reference": ref} {
 		for i, n := range r.st.BlockDeclines {
 			if n > 0 {
-				t.Errorf("the %s arm declined %d block step(s): %s", name, n, tier.DeclineName(i))
+				t.Errorf("the %s arm declined %d block step(s): %s", name, n, gpu.DeclineName(i))
 			}
 		}
 		if r.st.ComposedStreamPasses == 0 {

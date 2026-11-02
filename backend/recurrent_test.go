@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestRecurrentKernelsOnEveryDevice runs the hybrid's recurrent kernels on real

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // TestHardwareTableIsGenerated holds the compiled-in hardware table to the
@@ -102,7 +102,7 @@ func TestRendererWritesEveryField(t *testing.T) {
 // thread, and a thread's speed is not a card's bandwidth.)
 func TestEveryKnownHardwarePrices(t *testing.T) {
 	f := composing(t, *composeModel+".jlm")
-	s := jit.Step{Rows: 1, Page: 64, Keys: 9}
+	s := composer.Step{Rows: 1, Page: 64, Keys: 9}
 	type priced struct {
 		name string
 		bw   float64
@@ -110,7 +110,7 @@ func TestEveryKnownHardwarePrices(t *testing.T) {
 	}
 	var gpus []priced
 	for _, p := range Hardware() {
-		c, err := Estimate(jit.Default(), f, s, func(jit.Part) Device { return p.Device })
+		c, err := Estimate(composer.Default(), f, s, func(composer.Part) Device { return p.Device })
 		if err != nil {
 			t.Errorf("%s on %s: %v", p.Name, p.API, err)
 			continue
@@ -119,7 +119,7 @@ func TestEveryKnownHardwarePrices(t *testing.T) {
 			t.Errorf("%s on %s: %+v", p.Name, p.API, c)
 		}
 		t.Logf("%-42s %-6s %9.1f us a step, %8.1f us of it memory", p.Name, p.API, c.Seconds*1e6, c.MemSeconds*1e6)
-		if p.Device.Kind == jit.DeviceGPU {
+		if p.Device.Kind == composer.DeviceGPU {
 			gpus = append(gpus, priced{p.Name, p.Device.Bandwidth, c.MemSeconds})
 		}
 	}

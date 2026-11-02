@@ -22,7 +22,7 @@ import (
 // marks (graph.OpRopePos), written where a prompt's spans enter and dropped
 // where the sequence is rewound -- a picture's grid, the text after it -- and
 // every device computes a row's coordinates from its cache position and its
-// sequence's marks in the step's rotary table (jit.TableRopeMarks), the CPU
+// sequence's marks in the step's rotary table (composer.TableRopeMarks), the CPU
 // as a card does. No call hands a device a row's position on the axes.
 
 // ImageGrid is the shape of an embedding span's rows: T frames of H x W, in
@@ -54,7 +54,7 @@ func mropeSections(c *jlm.Config) (out [4]int) {
 }
 
 // ropeMarks is a session's rotary marks (graph.OpRopePos) as the composed
-// rotary tables read them (jit.TableRopeMarks): a block a slot -- its count,
+// rotary tables read them (composer.TableRopeMarks): a block a slot -- its count,
 // then its marks of graph.MarkWords words in order of first position -- at
 // at[slot] in buf, room[slot] marks large. A slot outgrowing its block moves
 // to one twice as large at buf's end; gen[slot] counts its changes, so a

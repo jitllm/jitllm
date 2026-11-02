@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestStreamedExpertBankMatchesTheResidentOne compares a mixture's routed bank
@@ -38,13 +38,13 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 	}
 
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
-	run := func(stream func(*tier.Config)) ([][]float32, tier.Stats, int, uint64) {
+	run := func(stream func(*gpu.Config)) ([][]float32, gpu.Stats, int, uint64) {
 		t.Helper()
-		opts := []tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}
+		opts := []gpu.Option{gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff)}
 		if stream != nil {
-			opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true; stream(c) }))
+			opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.StreamExperts = true; stream(c) }))
 		}
-		g, err := tier.OpenWith(opts...)
+		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -77,30 +77,30 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 	// path (StreamDirect, StreamGathered, StreamOverlaps).
 	arms := []struct {
 		name    string
-		cfg     func(*tier.Config)
+		cfg     func(*gpu.Config)
 		direct  bool
 		overlap bool
 	}{
-		{"gathered", func(c *tier.Config) { c.StreamGroups = 1; c.StreamCacheSlots = -1 }, false, false},
-		{"gathered, four groups", func(c *tier.Config) { c.StreamGroups = 4; c.StreamCacheSlots = -1 }, false, true},
-		{"direct, pageable", func(c *tier.Config) {
+		{"gathered", func(c *gpu.Config) { c.StreamGroups = 1; c.StreamCacheSlots = -1 }, false, false},
+		{"gathered, four groups", func(c *gpu.Config) { c.StreamGroups = 4; c.StreamCacheSlots = -1 }, false, true},
+		{"direct, pageable", func(c *gpu.Config) {
 			c.StreamDirectBytes = 1
 			c.StreamGroups = 1
 			c.StreamNoPin = true
 			c.StreamCacheSlots = -1
 		}, true, false},
-		{"direct", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1; c.StreamCacheSlots = -1 }, true, false},
-		{"direct, a piece a half", func(c *tier.Config) {
+		{"direct", func(c *gpu.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1; c.StreamCacheSlots = -1 }, true, false},
+		{"direct, a piece a half", func(c *gpu.Config) {
 			c.StreamDirectBytes = 1
 			c.StreamGroups = 1
 			c.StreamPinHalf = 1
 			c.StreamCacheSlots = -1
 		}, true, false},
-		{"expert cache", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1 }, true, false},
-		{"expert cache, four groups", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 4 }, true, true},
-		{"expert cache sized after placement", func(c *tier.Config) { c.StreamGroups = 1 }, true, false},
-		{"expert cache, prefetch", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1; c.StreamPrefetch = true }, true, false},
-		{"direct, four groups", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 4; c.StreamCacheSlots = -1 }, true, true},
+		{"expert cache", func(c *gpu.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1 }, true, false},
+		{"expert cache, four groups", func(c *gpu.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 4 }, true, true},
+		{"expert cache sized after placement", func(c *gpu.Config) { c.StreamGroups = 1 }, true, false},
+		{"expert cache, prefetch", func(c *gpu.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1; c.StreamPrefetch = true }, true, false},
+		{"direct, four groups", func(c *gpu.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 4; c.StreamCacheSlots = -1 }, true, true},
 	}
 	for _, arm := range arms {
 		t.Run(arm.name, func(t *testing.T) {
@@ -109,8 +109,8 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 	}
 }
 
-func streamedMatches(t *testing.T, run func(func(*tier.Config)) ([][]float32, tier.Stats, int, uint64),
-	cfg func(*tier.Config), direct, overlap bool, ids []int32, want [][]float32, rs tier.Stats, rp int, rb uint64) {
+func streamedMatches(t *testing.T, run func(func(*gpu.Config)) ([][]float32, gpu.Stats, int, uint64),
+	cfg func(*gpu.Config), direct, overlap bool, ids []int32, want [][]float32, rs gpu.Stats, rp int, rb uint64) {
 	got, ss, sp, sb := run(cfg)
 	if direct && (ss.StreamDirect == 0 || ss.StreamGathered != 0) {
 		t.Fatalf("%d planes sent direct and %d gathered: the direct path did not run alone",
@@ -131,7 +131,7 @@ func streamedMatches(t *testing.T, run func(func(*tier.Config)) ([][]float32, ti
 	// A cache of 13 sheets for a selection of 10 out of 512 both hits and
 	// evicts over eight tokens; a cache arm that did neither tested the plain
 	// bank.
-	var c tier.Config
+	var c gpu.Config
 	cfg(&c)
 	if c.StreamCacheSlots >= 0 && (ss.StreamCacheHits == 0 || ss.StreamCacheMisses == 0 || ss.StreamCacheShort != 0) {
 		t.Fatalf("expert cache: %d hits, %d misses, %d blocks without room: the cache did not run",
@@ -204,8 +204,8 @@ func streamedMatches(t *testing.T, run func(func(*tier.Config)) ([][]float32, ti
 }
 
 // noPin reports whether an arm's configuration turns page-locked transfers off.
-func noPin(cfg func(*tier.Config)) bool {
-	var c tier.Config
+func noPin(cfg func(*gpu.Config)) bool {
+	var c gpu.Config
 	cfg(&c)
 	return c.StreamNoPin
 }
@@ -213,7 +213,7 @@ func noPin(cfg func(*tier.Config)) bool {
 // pinsHost reports whether the gate's device can page-lock host memory, which
 // is CUDA's alone (backend.HostPinner).
 func pinsHost(t *testing.T) bool {
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"))
+	g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"))
 	if err != nil || g == nil {
 		return false
 	}
@@ -245,10 +245,10 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 		t.Fatal("the fixture has no mixture block")
 	}
 	trials := 0
-	run := func(opts ...tier.Option) ([][]float32, tier.Stats, int) {
+	run := func(opts ...gpu.Option) ([][]float32, gpu.Stats, int) {
 		t.Helper()
-		opts = append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}, opts...)
-		g, err := tier.OpenWith(opts...)
+		opts = append([]gpu.Option{gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff)}, opts...)
+		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -278,7 +278,7 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	}
 	// Between the base and the whole block, with room for scratch: every
 	// mixture block is refused resident and fits streamed.
-	budget := tier.WithBudget(biggest - 1)
+	budget := gpu.WithBudget(biggest - 1)
 	t.Logf("mixture block %d bytes, base %d; device budget %d", biggest, base, biggest-1)
 	// The auto arm sizes its cache after placement, so it holds the same
 	// blocks as the forced arm, which streams them with no cache at all.
@@ -292,11 +292,11 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 		t.Fatalf("the default auto-streamed run made %d hybrid block-steps and %d fills, want card fills alone",
 			hs.HybridRuns, hs.StreamFills)
 	}
-	got, ss, sp := run(budget, tier.WithConfig(func(c *tier.Config) { c.NoHybrid = true }))
+	got, ss, sp := run(budget, gpu.WithConfig(func(c *gpu.Config) { c.NoHybrid = true }))
 	// The bar is the forced streamed placement on the same budget: the same
 	// blocks on the card, so bit equality holds (a resident arm places more
 	// blocks and differs in the device-host band).
-	want, fs, fp := run(budget, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true; c.NoAutoStream = true }))
+	want, fs, fp := run(budget, gpu.WithConfig(func(c *gpu.Config) { c.StreamExperts = true; c.NoAutoStream = true }))
 	if fp != sp || fs.StreamBlocks != ss.StreamBlocks {
 		t.Fatalf("auto placed %d blocks (%d streamed), forced streaming %d (%d)", sp, ss.StreamBlocks, fp, fs.StreamBlocks)
 	}
@@ -317,7 +317,7 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	// The trial runs through to a decision: the blocks go home and come back
 	// streamed between its runs, and every token stays finite.
 	{
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), budget)
+		g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff), budget)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -351,13 +351,13 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	// A budget that holds one mixture block resident but not every one: the
 	// rest are refused for room, and stream instead of going home.
 	{
-		_, rs2, rp2 := run(tier.WithBudget(biggest * 3 / 2))
+		_, rs2, rp2 := run(gpu.WithBudget(biggest * 3 / 2))
 		if rs2.StreamBlocks == 0 || rp2 < 2 {
 			t.Fatalf("a card with room for one resident block: %d placed, %d streamed -- the "+
 				"blocks refused for room went to the host", rp2, rs2.StreamBlocks)
 		}
 	}
-	_, ns, _ := run(budget, tier.WithConfig(func(c *tier.Config) { c.NoAutoStream = true }))
+	_, ns, _ := run(budget, gpu.WithConfig(func(c *gpu.Config) { c.NoAutoStream = true }))
 	if ns.StreamBlocks != 0 {
 		t.Fatalf("NoAutoStream streamed %d blocks", ns.StreamBlocks)
 	}

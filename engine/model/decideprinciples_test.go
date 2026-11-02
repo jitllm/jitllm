@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // The five principles on the decision models (AGENTS.md). JIT and no Go
@@ -19,12 +19,12 @@ import (
 // JITLLM_ALLOC_MODELS' default).
 
 // decisionDevices opens each device present, tuning off; they close with t.
-func decisionDevices(t *testing.T) []*tier.GPU {
+func decisionDevices(t *testing.T) []*gpu.GPU {
 	t.Helper()
-	var out []*tier.GPU
+	var out []*gpu.GPU
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			continue
 		}
@@ -83,7 +83,7 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 			// noneFits lets a budget below one of the model's blocks place
 			// nothing (Kev's BF16 blocks are above the smallest budgets).
 			noneFits := false
-			moved := func(t *testing.T, g *tier.GPU, lose bool) ([]float32, int) {
+			moved := func(t *testing.T, g *gpu.GPU, lose bool) ([]float32, int) {
 				rp.start()
 				rows0 := d.st.PrefillRows()
 				if _, err := d.st.Prefill(ids[:a]); err != nil {
@@ -149,8 +149,8 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 			// The small budgets are the test models' (openjev's is 45 MB).
 			budgeted := 0
 			for _, mb := range []uint64{16, 32, 64, 128, 500, 700, 900, 1200, 1600, 2400} {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(stepDevices()[0]),
-					tier.WithDeviceTune(tier.TuneOff), tier.WithBudget(mb << 20)}, testTierOpts(t)...)...)
+				g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(stepDevices()[0]),
+					gpu.WithDeviceTune(gpu.TuneOff), gpu.WithBudget(mb << 20)}, testTierOpts(t)...)...)
 				if err != nil {
 					t.Fatal(err)
 				}

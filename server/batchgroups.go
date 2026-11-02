@@ -7,7 +7,7 @@ import (
 )
 
 // Decode groups: a model whose blocks are on several cards runs a joint step
-// one card after another (tier.GPU.layersRows), so with one step in flight
+// one card after another (gpu.GPU.layersRows), so with one step in flight
 // only one card works. The loop then splits the decoding rows into groups,
 // one per card holding blocks (Config.DecodeGroups), and steps each group on
 // its own long-lived worker: as group 0 moves on from card 1 to card 2,
@@ -28,7 +28,7 @@ import (
 // group of one included, so a row's arithmetic is the same in one group or
 // many wherever a step's kernels do not depend on its row count -- where the
 // composer serves every block and the head in its reserved width
-// (tier.GPU.RowsComposed). The tier's own kernels are chosen per row count,
+// (gpu.GPU.RowsComposed). The tier's own kernels are chosen per row count,
 // so there the loop does not group by itself: a row's tokens would move with
 // the rows that share its step. A count the caller forces groups anyway.
 //
@@ -95,7 +95,7 @@ func (lp *stepLoop) groupCount() int {
 	n := lp.groupsCfg
 	if n <= 0 {
 		// By itself the loop splits rows only where the device's steps are
-		// one kernel for every row count (tier.GPU.RowsComposed): elsewhere a
+		// one kernel for every row count (gpu.GPU.RowsComposed): elsewhere a
 		// row's tokens would move with the rows that share its step.
 		if !gpu.RowsComposed() {
 			return 1
@@ -253,7 +253,7 @@ func (lp *stepLoop) launch(g *decGroup) bool {
 // land moves g's rows on by the step its worker ran. A step the device
 // refused before any row advanced runs its rows alone, as stepJoint's does,
 // and the refusal ends grouped decoding until the rows change. Alone a row
-// runs the one-at-a-time path, which is no rows stage (tier.GPU.stageBegin),
+// runs the one-at-a-time path, which is no rows stage (gpu.GPU.stageBegin),
 // so decodeGrouped lands such a group only once no other group steps.
 func (lp *stepLoop) land(g *decGroup) {
 	defer func() {

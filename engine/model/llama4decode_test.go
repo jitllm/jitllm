@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSynthLlama4Q8DecodeOnDevice holds the device's DECODE mixture on the
@@ -21,23 +21,23 @@ func TestSynthLlama4Q8DecodeOnDevice(t *testing.T) {
 	host := m.NewInstance(len(g.IDs) + 1)
 	want := runIDs(t, host, g.IDs)
 	host.Close()
-	gpu, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithSplit(4), tier.WithConfig(func(c *tier.Config) { c.ForceIndexedGroup = true }))
-	if err != nil || gpu == nil {
+	gpux, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithSplit(4), gpu.WithConfig(func(c *gpu.Config) { c.ForceIndexedGroup = true }))
+	if err != nil || gpux == nil {
 		t.Skipf("no cuda device (%v)", err)
 	}
-	defer gpu.Close()
+	defer gpux.Close()
 	st := m.NewInstance(len(g.IDs) + 1)
 	defer st.Close()
-	st.SetDeviceLayers(gpu, -1)
+	st.SetDeviceLayers(gpux, -1)
 	if n := st.GPULayers(); n != m.Cfg.NLayer {
-		t.Fatalf("the device took %d of %d blocks: %v %v", n, m.Cfg.NLayer, st.DeviceDeclines(), gpu.Err())
+		t.Fatalf("the device took %d of %d blocks: %v %v", n, m.Cfg.NLayer, st.DeviceDeclines(), gpux.Err())
 	}
 	got := runIDs(t, st, g.IDs)
 	if n := st.GPULayers(); n != m.Cfg.NLayer {
-		t.Fatalf("the session fell to the host: %v", gpu.Err())
+		t.Fatalf("the session fell to the host: %v", gpux.Err())
 	}
-	if n := gpu.Stats().IndexedGroup; n == 0 {
+	if n := gpux.Stats().IndexedGroup; n == 0 {
 		t.Fatal("no expert matvec ran in-group, so the fusable configuration was never selected")
 	}
 	worst := 0.0

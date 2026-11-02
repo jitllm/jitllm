@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestConcurrentMultiDeviceDoesNotLeak runs several instances at once, with the
@@ -18,7 +18,7 @@ import (
 // come back after each cycle: several instances sharing a tier, devices sharing a
 // host budget, pools sharing cores. Concurrency is the point: sched.Pool.Do is
 // single-caller, which is safe only because each instance builds its own JIT, and
-// a shared tier.GPU tests devTier's locking.
+// a shared gpu.GPU tests devTier's locking.
 //
 // It checks the live heap, the device byte ledger, the driver objects the
 // engine owns, file descriptors, threads and goroutines, because they fail
@@ -38,7 +38,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 		defer m.Close()
 
 		// Every device the host reports, not just the fastest.
-		g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff))
+		g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, "devices", err)
 		}
@@ -117,7 +117,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 				"%d more of free KV pool): a session's buffers are not returned",
 				st.Allocated, st0.Allocated, grew)
 		}
-		charged := func(s tier.Stats) uint64 { return s.BudgetUsed - s.RoundingBytes }
+		charged := func(s gpu.Stats) uint64 { return s.BudgetUsed - s.RoundingBytes }
 		if charged(st) > charged(st0)+grew {
 			t.Errorf("the device's budget charges %d bytes after every instance closed (%d at placement, "+
 				"%d more of free KV pool), the driver's rounding apart: a session's charge is not refunded",

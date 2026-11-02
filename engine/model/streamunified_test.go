@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // unifiedCandidates are the devices that may share the host's memory, in the
@@ -34,11 +34,11 @@ func TestStreamedContainerOnAUnifiedDevice(t *testing.T) {
 	third, nl := probe.WeightBytes()/3, probe.Cfg.NLayer
 	probe.Close()
 
-	var g *tier.GPU
+	var g *gpu.GPU
 	var name string
 	for _, c := range testdevices.Within(unifiedCandidates) {
-		d, err := tier.OpenWith(tier.WithDevices(c+"="+strconv.FormatUint(third, 10)),
-			tier.WithDeviceTune(tier.TuneOff), tier.WithArena(1<<30))
+		d, err := gpu.OpenWith(gpu.WithDevices(c+"="+strconv.FormatUint(third, 10)),
+			gpu.WithDeviceTune(gpu.TuneOff), gpu.WithArena(1<<30))
 		if err != nil || d == nil {
 			continue
 		}

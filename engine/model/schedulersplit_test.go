@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSchedulerOnSplitPlacementsMatchesEachSequenceAlone runs the Batcher
@@ -62,8 +62,8 @@ func schedulerOnSplit(t *testing.T, p string) {
 	for i, pr := range prompts {
 		ids[i] = m.Vocab.Encode(pr, true)
 	}
-	open := func(t *testing.T, spec string, paging bool) *tier.GPU {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
+	open := func(t *testing.T, spec string, paging bool) *gpu.GPU {
+		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
 			testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
@@ -85,8 +85,8 @@ func schedulerOnSplit(t *testing.T, p string) {
 	// halves the scratch until blocks fit, so a share taken at a wider one
 	// left room for every block and the paging arm paged nothing.
 	var sc uint64
-	if g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.PromptRows = 8 })); err == nil && g != nil {
+	if g, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 8 })); err == nil && g != nil {
 		sz := newTestBatcher(m, rows, seq)
 		if err := sz.in.SetDeviceLayers(g, -1); err == nil && g.Stats().BudgetUsed > m.WeightBytes() {
 			sc = g.Stats().BudgetUsed - m.WeightBytes()

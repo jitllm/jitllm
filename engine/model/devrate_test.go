@@ -11,8 +11,8 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/metal"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestDeviceDecodeRate prices a device tier against the host on the same model
@@ -37,7 +37,7 @@ func TestDeviceDecodeRate(t *testing.T) {
 	defer m.Close()
 
 	prof := false
-	rate := func(g *tier.GPU, max int) (float64, int) {
+	rate := func(g *gpu.GPU, max int) (float64, int) {
 		s := m.NewInstance(256)
 		defer s.Close()
 		blocks := 0
@@ -104,21 +104,21 @@ func TestDeviceDecodeRate(t *testing.T) {
 		ms1.NumGC-ms0.NumGC, (float64(ms1.HeapReleased)-float64(ms0.HeapReleased))/(1<<20))
 	// Knobs. tier reads no environment, so a pinned setting has to be passed as
 	// an option.
-	opts := []tier.Option{tier.WithDevices(spec)}
+	opts := []gpu.Option{gpu.WithDevices(spec)}
 	if v := os.Getenv("JITLLM_DEV_SPLIT"); v != "" {
 		n := 0
 		fmt.Sscanf(v, "%d", &n)
-		opts = append(opts, tier.WithSplit(n))
+		opts = append(opts, gpu.WithSplit(n))
 		t.Logf("  split PINNED to %d", n)
 	}
 	if os.Getenv("JITLLM_DEV_NOGROUP") != "" {
-		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoGroupSplit = true }))
+		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.NoGroupSplit = true }))
 		t.Logf("  in-group split reduction REFUSED; the global partial buffer and its Reduce launch stand")
 	}
 	if os.Getenv("JITLLM_DEV_VERBOSE") != "" {
 		// There is no GroupSplit counter, so the tuner's own "in-group" lines
 		// are the evidence that the knob selected a different kernel.
-		opts = append(opts, tier.WithVerbose(true))
+		opts = append(opts, gpu.WithVerbose(true))
 	}
 	// The row tile. RowtSplitTiles is what says the tile-and-split combination
 	// ran: a shape the tuner sends to Split == 1 tiles without it.
@@ -127,7 +127,7 @@ func TestDeviceDecodeRate(t *testing.T) {
 		if err != nil || n < 1 {
 			t.Fatalf("JITLLM_DEV_ROWT=%q is not a positive integer", v)
 		}
-		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.DecodeRowt = n }))
+		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.DecodeRowt = n }))
 	}
 	// The unretained command buffer is a measurement, not a setting: it prices
 	// whether fixed per-token device time is work or retain/release bookkeeping.
@@ -141,33 +141,33 @@ func TestDeviceDecodeRate(t *testing.T) {
 		if err != nil || n < 1 {
 			t.Fatalf("JITLLM_DEV_HEADSPLIT=%q is not a positive integer", v)
 		}
-		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.HeadSplit = n }))
+		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.HeadSplit = n }))
 	}
 	if os.Getenv("JITLLM_DEV_PERLAYER") != "" {
-		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.PerLayerSubmit = true }))
+		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.PerLayerSubmit = true }))
 	}
 	if v := os.Getenv("JITLLM_DEV_MVREPEAT"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
 			t.Fatalf("JITLLM_DEV_MVREPEAT=%q is not a non-negative integer", v)
 		}
-		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.HeadMatvecRepeat = n }))
+		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.HeadMatvecRepeat = n }))
 	}
 	if v := os.Getenv("JITLLM_DEV_NORMREPEAT"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
 			t.Fatalf("JITLLM_DEV_NORMREPEAT=%q is not a non-negative integer", v)
 		}
-		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.HeadNormRepeat = n }))
+		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.HeadNormRepeat = n }))
 	}
 	if os.Getenv("JITLLM_DEV_RESIDENCY") != "" {
 		backend.SetMetalResidency(true)
 	}
 	if os.Getenv("JITLLM_DEV_FORCEGROUP") != "" {
-		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.ForceGroupSplit = true }))
+		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.ForceGroupSplit = true }))
 		t.Logf("  in-group split reduction FORCED on every eligible shape")
 	}
-	g, err := tier.OpenWith(opts...)
+	g, err := gpu.OpenWith(opts...)
 	if err != nil || g == nil {
 		t.Logf("%s: not present (%v)", spec, err)
 		t.Logf("host %.2f tok/s = %.1f GB/s%s over %.0f MiB of weights",
@@ -272,14 +272,14 @@ func TestDeviceDecodeRate(t *testing.T) {
 			gn1, gb1 := metal.GPUBusy()
 			_, _, dl1 := metal.SubmitTimes()
 			const nTok = 36
-			gpu, disp := 0.0, 0.0
+			gpux, disp := 0.0, 0.0
 			if gb1 > gb0 {
-				gpu = float64(gn1-gn0) / 1e6 / nTok
+				gpux = float64(gn1-gn0) / 1e6 / nTok
 				disp = float64(dl1-dl0) / nTok
 			}
 			t.Logf("  %3d of %d layers on the card: %8.2f tok/s  (%.3f ms/token, "+
 				"GPU %.3f ms/token over %.0f dispatches)",
-				n, m.Cfg.NLayer, r, 1000/r, gpu, disp)
+				n, m.Cfg.NLayer, r, 1000/r, gpux, disp)
 		}
 	}
 	// The token split in two with no fitted parameter: CPU timers bound only

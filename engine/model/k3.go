@@ -3,11 +3,11 @@ package model
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // Kimi-K3's text model (jlm.ArchKimiK3), transcribed from Moonshot's
@@ -325,7 +325,7 @@ func (s *Instance) k3Collapse(x []float32, n int) error {
 	if c.k3Fault == k3FaultNoHeadMix {
 		return nil
 	}
-	if s.cpuCollapse(x, n) == jit.DeclineServes {
+	if s.cpuCollapse(x, n) == composer.DeclineServes {
 		return nil
 	}
 	in, err := s.k3Mix(x, n, c.resBankFinal(), s.m.resOutT)

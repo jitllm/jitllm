@@ -3,7 +3,7 @@ package model
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // cpuMTPState is a draft instance's prediction block entry composed for the CPU
@@ -14,12 +14,12 @@ type cpuMTPState struct {
 	// rows, where the call is shorter than the unit.
 	pad      []float32
 	served   int
-	declined [jit.NumDeclines]int
+	declined [composer.NumDeclines]int
 }
 
 // CPUMTPSteps is how many rows the composed prediction block entry served on
 // the CPU, and how many it declined, by reason.
-func (s *Instance) CPUMTPSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUMTPSteps() (served int, declined [composer.NumDeclines]int) {
 	return s.cpu.mtp.served, s.cpu.mtp.declined
 }
 
@@ -33,8 +33,8 @@ func (s *Instance) cpuPlaceMTP() {
 		return
 	}
 	g := fg.mtpEntry[i]
-	s.cpuComposeHead(&st.one, g, jit.DeclineNoGraph, 1)
-	s.cpuComposeHead(&st.many, g, jit.DeclineNoGraph, cpuRowsCap)
+	s.cpuComposeHead(&st.one, g, composer.DeclineNoGraph, 1)
+	s.cpuComposeHead(&st.many, g, composer.DeclineNoGraph, cpuRowsCap)
 	u := 1
 	for _, hf := range []*cpuHeadForm{&st.one, &st.many} {
 		if hf.f != nil {
@@ -47,9 +47,9 @@ func (s *Instance) cpuPlaceMTP() {
 // cpuMTPEntry writes `rows` rows of z, the rows the prediction block reads,
 // from the rows of e (each token's embedding) and x (the trunk's hidden
 // rows) through the composed entry, or says why not.
-func (s *Instance) cpuMTPEntry(z, e, x []float32, rows int) jit.Decline {
+func (s *Instance) cpuMTPEntry(z, e, x []float32, rows int) composer.Decline {
 	if !s.cpuHeadOn() {
-		return jit.DeclineCaller
+		return composer.DeclineCaller
 	}
 	st := &s.cpu.mtp
 	hf := &st.one
@@ -57,10 +57,10 @@ func (s *Instance) cpuMTPEntry(z, e, x []float32, rows int) jit.Decline {
 		hf = &st.many
 	}
 	f, why := hf.formOf()
-	if why == jit.DeclineServes {
+	if why == composer.DeclineServes {
 		why = s.cpuWeights(f, s.lo, &s.m.layers[s.lo])
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		st.declined[why] += rows
 		return why
 	}
@@ -99,5 +99,5 @@ func (s *Instance) cpuMTPEntry(z, e, x []float32, rows int) jit.Decline {
 		r0 += k
 	}
 	st.served += rows
-	return jit.DeclineServes
+	return composer.DeclineServes
 }

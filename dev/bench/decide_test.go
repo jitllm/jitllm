@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -67,13 +67,13 @@ func decideBenchRequests(t *testing.T) []model.DecisionRequest {
 
 // decideBenchDevice is the device the device arms run on, nil when none is
 // named.
-func decideBenchDevice(t *testing.T) *tier.GPU {
+func decideBenchDevice(t *testing.T) *gpu.GPU {
 	t.Helper()
 	spec := os.Getenv("JITLLM_DECIDE_BENCH_DEVICE")
 	if spec == "" {
 		return nil
 	}
-	g, err := tier.OpenWith(tier.WithDevices(spec))
+	g, err := gpu.OpenWith(gpu.WithDevices(spec))
 	if err != nil || g == nil {
 		t.Fatalf("%s: %v", spec, err)
 	}
@@ -82,7 +82,7 @@ func decideBenchDevice(t *testing.T) *tier.GPU {
 
 // newBenchDecider is a Decider placed on g, every block it takes (nil: the
 // host).
-func newBenchDecider(t *testing.T, m *model.Model, g *tier.GPU) *model.Decider {
+func newBenchDecider(t *testing.T, m *model.Model, g *gpu.GPU) *model.Decider {
 	t.Helper()
 	d, err := m.NewDecider(4096)
 	if err != nil {
@@ -141,7 +141,7 @@ func TestDecideBatchIsNotSlowerThanAlone(t *testing.T) {
 	}
 	for _, arm := range []struct {
 		name string
-		g    *tier.GPU
+		g    *gpu.GPU
 	}{{"host", nil}, {"device", g}} {
 		if arm.name == "device" && g == nil {
 			continue

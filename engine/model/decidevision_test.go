@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -130,26 +130,26 @@ func TestD1DecidesOverPicturesAsItsReference(t *testing.T) {
 	}
 
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			dd, err := m.NewDecider(4096)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer dd.Close()
-			if err := dd.SetDevice(gpu, -1); err != nil {
+			if err := dd.SetDevice(gpux, -1); err != nil {
 				t.Fatal(err)
 			}
 			// Every block where the card holds the model (the V100s); on a
 			// smaller card the partial seam the bar asks for as well, the
 			// count asserted and printed.
 			n := dd.DeviceBlocks()
-			t.Logf("%s holds %d of %d text blocks (%s)", spec, n, m.Cfg.NLayer, gpu.Err())
+			t.Logf("%s holds %d of %d text blocks (%s)", spec, n, m.Cfg.NLayer, gpux.Err())
 			if n == 0 {
 				t.Fatalf("%s took no text block, so this arm ran on the host", spec)
 			}

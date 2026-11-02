@@ -134,7 +134,7 @@ recipe can buy without adding traffic.
 
 ## The first slice, as built
 
-`jit/gpu/tier/recipe.go`. `timeRecipes` is the one trial: N arms
+`engine/device/gpu/recipe.go`. `timeRecipes` is the one trial: N arms
 interleaved in one process, the order rotated each round, 20 paired rounds
 after one discarded, each challenger's per-round ratio to the incumbent,
 median and IQR gate. `tuneActIn` runs on it (its three sites, two recipes

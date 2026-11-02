@@ -1,6 +1,6 @@
 package model
 
-import "github.com/jitllm/jitllm/jit"
+import "github.com/jitllm/jitllm/composer"
 
 // A compressing block's entries (ds4kv.go) as the composed CPU binds them:
 // an arena like a layer's history, reserved one entry past those the
@@ -33,14 +33,14 @@ func (kc *kvCache) entWrite(li, pos int) int {
 // cpuEntReady makes the entry pages block li's rows at pos write and read
 // resident in the entries' arena, or says why they are not: each row's
 // entry (or the sink) written, every entry before the last row's read.
-func (s *Instance) cpuEntReady(li int, pos ...int) jit.Decline {
+func (s *Instance) cpuEntReady(li int, pos ...int) composer.Decline {
 	r := s.kv.entRate(li)
 	if r == 0 {
-		return jit.DeclineServes
+		return composer.DeclineServes
 	}
 	e := &s.kv.ent[li]
 	if e.arena == nil {
-		return jit.DeclinePageOut
+		return composer.DeclinePageOut
 	}
 	end := 0
 	for _, p := range pos {
@@ -51,10 +51,10 @@ func (s *Instance) cpuEntReady(li int, pos ...int) jit.Decline {
 	}
 	for n := 0; n*e.p < end; n++ {
 		if !e.arenaPage(n) {
-			return jit.DeclinePageOut
+			return composer.DeclinePageOut
 		}
 	}
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // cpuEntBind binds block li's entries to b for its rows of sequences seq at

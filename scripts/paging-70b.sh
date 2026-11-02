@@ -57,7 +57,7 @@
 #   executed     ★ THE ONE THE OTHER THREE CANNOT COVER. A pager that swapped
 #                every block in and then DECLINED every compute places NLayer of
 #                NLayer, prints every page counter, runs on the host and answers
-#                in English. So this reads tier.Stats.Blocks -- incremented after
+#                in English. So this reads gpu.Stats.Blocks -- incremented after
 #                a submission RETURNED and its output was copied back -- and
 #                requires NLayer per forward pass, not merely more than zero.
 #                violation: --violate declines (shrink the budget below the slot
@@ -230,7 +230,7 @@ run() {
 }
 ids()   { sed -n 's/^ids \(\[.*\]\)$/\1/p' "$OUT/$1" | tail -1; }
 seam()  { sed -n 's/^device .*: \([0-9][0-9]*\)\/\([0-9][0-9]*\) blocks.*/\1 \2/p' "$OUT/$1" | tail -1; }
-# ★ FROM tier.Stats, NOT FROM A PLACEMENT LINE. "N block(s) placed, R run" is
+# ★ FROM gpu.Stats, NOT FROM A PLACEMENT LINE. "N block(s) placed, R run" is
 # cmd/jitllm printing Stats.Blocks, which is incremented after the submission
 # returned and its output was read back -- the only counter that separates a
 # block held on a card from a block computed on it.
@@ -398,7 +398,7 @@ PY
 read -r verdict msg <<<"$(sed 's/|/ /' "$OUT/arith")"
 [ "$verdict" = PASS ] && ok "arithmetic: $msg" || bad "arithmetic: $msg"
 
-# ★ EXECUTION, FROM tier.Stats.Blocks. NLayer per forward pass is the claim: the
+# ★ EXECUTION, FROM gpu.Stats.Blocks. NLayer per forward pass is the claim: the
 # card ran every block of every token, not "some blocks sometimes".
 WANT=$(( ${atot:-0} * PASSES ))
 AE=$(execd after)

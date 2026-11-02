@@ -34,7 +34,7 @@ func deviceGates(lm *LoadedModel) []string {
 // physical device, so a model loaded with `cuda` (every card) and one loaded
 // with `cuda:1` serialise on card 1 -- the one scratch set they would both
 // use -- while models on disjoint cards run at once. The keys are the ones
-// tier.Hardware gives a three-card host (TestHardwareIsOneKeyPerPhysicalDevice).
+// gpu.Hardware gives a three-card host (TestHardwareIsOneKeyPerPhysicalDevice).
 //
 // VIOLATION SIGNATURE. Key gateIDs on the spec text (lm.deviceIDs) and this
 // fails with "cuda and cuda:1 ran on card 1 at once".

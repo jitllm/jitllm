@@ -7,8 +7,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend/hip"
+	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // hipOrSkip opens HIP device 0, or skips by name: without an AMD card the

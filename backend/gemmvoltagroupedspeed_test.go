@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestGemmVoltaGroupedSpeed times the grouped tensor-core GEMM against the

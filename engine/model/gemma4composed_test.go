@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // gemma4Composed are the Gemma 4 fixtures the front end states whole: the
@@ -54,17 +54,17 @@ func TestGemma4ServesComposed(t *testing.T) {
 						return w
 					}
 					tierOut, _, _, _ := composedDecode(t, m, dev, prompt, toks, 0, true, false)
-					got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedStep, true, false)
-					served, td := st.ServedPart(tier.ComposedTable)
-					served += st.ReplayedPart(tier.ComposedTable)
-					nb, db := st.ServedPart(tier.ComposedBlock)
-					np, dp := st.ServedPart(tier.ComposedPrompt)
+					got, st, _, _ := composedDecode(t, m, dev, prompt, toks, gpu.ComposedStep, true, false)
+					served, td := st.ServedPart(gpu.ComposedTable)
+					served += st.ReplayedPart(gpu.ComposedTable)
+					nb, db := st.ServedPart(gpu.ComposedBlock)
+					np, dp := st.ServedPart(gpu.ComposedPrompt)
 					t.Logf("%s: the tables served %d times, declined %d; block steps served %d, declined %d; the prompt's %d served, %d declined (%s)",
 						dev, served, td, nb, db, np, dp, declinesOf(st))
-					if want := (len(toks) + 1) * composedTables(m); served < want || td != 0 || st.StepDeclines[jit.DeclineNoTable] != 0 {
+					if want := (len(toks) + 1) * composedTables(m); served < want || td != 0 || st.StepDeclines[composer.DeclineNoTable] != 0 {
 						t.Fatalf("the tables served %d times (want at least %d, a table a geometry's run of each step and the prompt) and declined %d", served, want, td)
 					}
-					if n := st.FormedPart(tier.ComposedTable); n != 0 {
+					if n := st.FormedPart(gpu.ComposedTable); n != 0 {
 						t.Fatalf("%d table(s) formed at a step, not at the placement (%s)", n, st.LastErr)
 					}
 					hostW, tierW := from(got, host, promptLen-1), from(got, tierOut, 0)
@@ -72,7 +72,7 @@ func TestGemma4ServesComposed(t *testing.T) {
 					if !(hostW < bound) || !(tierW < bound) {
 						t.Fatalf("the composed step is %.3e from the host and %.3e from main's tier, bound %g", hostW, tierW, bound)
 					}
-					bad, _, _, _ := composedDecodeWith(t, m, dev, prompt, toks, tier.ComposedStep, true, false, nil, tier.WithRopeFault(2, 16))
+					bad, _, _, _ := composedDecodeWith(t, m, dev, prompt, toks, gpu.ComposedStep, true, false, nil, gpu.WithRopeFault(2, 16))
 					badW := from(bad, host, promptLen-1)
 					t.Logf("%s: every row's table at twice its position and 16 past: %.3e from the host", dev, badW)
 					if !(badW > 100*hostW) || !(badW > 10*bound) {
@@ -81,8 +81,8 @@ func TestGemma4ServesComposed(t *testing.T) {
 					// The per-layer inputs' tables are the host's: the device
 					// declines the input rows that read them, by name.
 					if m.Cfg.PLEDim != 0 {
-						ne, de := st.ServedPart(tier.ComposedEmbed)
-						dw := st.StepDeclines[jit.DeclineEmbedWeight]
+						ne, de := st.ServedPart(gpu.ComposedEmbed)
+						dw := st.StepDeclines[composer.DeclineEmbedWeight]
 						t.Logf("%s: the input rows served %d times, declined %d (%d for the per-layer tables)", dev, ne, de, dw)
 						if ne != 0 || dw == 0 {
 							t.Fatalf("the input rows served %d times and declined %d times for the per-layer tables: the gap moved", ne, dw)
@@ -176,7 +176,7 @@ func TestGemma4PictureServesComposed(t *testing.T) {
 
 	t.Run("cpu", func(t *testing.T) {
 		const bound = 1e-5
-		// The history at the CPU's own binary16 (jit.Halves) in both arms.
+		// The history at the CPU's own binary16 (composer.Halves) in both arms.
 		ref, _ := openGemma4V(t, WithKVF16(true))
 		defer ref.Close()
 		want := g4vRun(t, ref, g, true)
@@ -189,7 +189,7 @@ func TestGemma4PictureServesComposed(t *testing.T) {
 		t.Logf("the composed CPU: %d block steps served, worst logit NMSE %.3e from main", served, worst)
 		for i, n := range declined {
 			if n != 0 {
-				t.Fatalf("%d block step(s) declined: %s", n, jit.DeclineName(i))
+				t.Fatalf("%d block step(s) declined: %s", n, composer.DeclineName(i))
 			}
 		}
 		if served == 0 || !(worst < bound) {
@@ -201,28 +201,28 @@ func TestGemma4PictureServesComposed(t *testing.T) {
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
 			const bound = 1e-3
-			var st tier.Stats
+			var st gpu.Stats
 			run := func(bidir bool) [][]float32 {
-				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-					tier.WithConfig(func(c *tier.Config) {
+				gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+					gpu.WithConfig(func(c *gpu.Config) {
 						c.Census, c.NoGraph = true, true
 					})}, testTierOpts(t)...)...)
-				if err != nil || gpu == nil {
+				if err != nil || gpux == nil {
 					noDevice(t, dev, err)
 				}
-				defer gpu.Close()
-				out := g4vRunOn(t, host, g, bidir, gpu)
-				st = gpu.Stats()
+				defer gpux.Close()
+				out := g4vRunOn(t, host, g, bidir, gpux)
+				st = gpux.Stats()
 				return out
 			}
 			worst := worstFrom(want, run(true))
-			blocks, bd := st.ServedPart(tier.ComposedBlock)
-			prompt, pd := st.ServedPart(tier.ComposedPrompt)
+			blocks, bd := st.ServedPart(gpu.ComposedBlock)
+			prompt, pd := st.ServedPart(gpu.ComposedPrompt)
 			t.Logf("%s: %d decode and %d prompt block steps served (%d and %d declined); worst logit NMSE %.3e from the host",
 				dev, blocks, prompt, bd, pd, worst)
 			for i, k := range st.BlockDeclines {
 				if k > 0 {
-					t.Fatalf("%d block step(s) declined because %s", k, tier.DeclineName(i))
+					t.Fatalf("%d block step(s) declined because %s", k, gpu.DeclineName(i))
 				}
 			}
 			if want := (len(g.Cont) - 1) * host.Cfg.NLayer; blocks != want || bd != 0 || prompt == 0 || pd != 0 {

@@ -1,8 +1,8 @@
 package backend
 
 import (
-	"github.com/jitllm/jitllm/jit/ir"
-	"github.com/jitllm/jitllm/jit/ptx"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/ptx"
 )
 
 // TileShape is one collective multiply-accumulate: an M x K by K x N product
@@ -38,7 +38,7 @@ func LowersTile(d Device, s TileShape) (bool, string) {
 }
 
 // TileQuadPairs reports whether d lowers the collective tiles in sm_70's
-// quad-pair layout (jit/ptx/tile.go): one m8n8k4 a pair, four pairs a warp
+// quad-pair layout (composer/ptx/tile.go): one m8n8k4 a pair, four pairs a warp
 // each on its own 4 of k, so a tile multiplies at the unit's full rate only
 // where its k is a multiple of 16, and a k of 8 runs half the pairs on zeros.
 func TileQuadPairs(d Device) bool {

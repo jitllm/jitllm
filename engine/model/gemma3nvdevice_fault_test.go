@@ -5,7 +5,7 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestGemma3nTowerPagesThroughTheDeviceStale is the violation of
@@ -24,8 +24,8 @@ func TestGemma3nTowerPagesThroughTheDeviceStale(t *testing.T) {
 				t.Skipf("%s: not present", spec)
 			}
 			ran++
-			tier.SetPagedFault("stale")
-			defer tier.SetPagedFault("")
+			gpu.SetPagedFault("stale")
+			defer gpu.SetPagedFault("")
 			got, budget := g3nvPaged(t, spec, g, ref)
 			if got.err != "" {
 				t.Logf("%s, %d bytes, stale page-ins: the encode failed: %s", spec, budget, got.err)

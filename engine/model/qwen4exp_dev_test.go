@@ -3,8 +3,8 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestQwen4ExpOnEveryDevice runs each fixture with every block and the head
@@ -42,36 +42,36 @@ func TestQwen4ExpDeviceRunsTheChunkWhole(t *testing.T) {
 	for _, spec := range stepDevices() {
 		// A replayed graph issues a token's launches without emitting them,
 		// and the counters count emits: graphs off, so every call counts.
-		gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-			tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) { c.NoGraph = true })},
+		gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+			gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true })},
 			testTierOpts(t)...)...)
-		if err != nil || gpu == nil {
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			st := m.NewInstance(len(g.IDs) + 2)
 			defer st.Close()
-			st.SetDeviceLayers(gpu, -1)
+			st.SetDeviceLayers(gpux, -1)
 			if st.GPULayers() != nl {
-				t.Fatalf("placed %d of %d blocks: %v %v", st.GPULayers(), nl, st.DeviceDeclines(), gpu.Err())
+				t.Fatalf("placed %d of %d blocks: %v %v", st.GPULayers(), nl, st.DeviceDeclines(), gpux.Err())
 			}
-			s0 := gpu.Stats()
+			s0 := gpux.Stats()
 			lg, err := st.Prefill(g.IDs)
 			if err != nil {
 				t.Fatal(err)
 			}
-			s1 := gpu.Stats()
+			s1 := gpux.Stats()
 			if _, err := st.Forward(Greedy(lg)); err != nil {
 				t.Fatal(err)
 			}
-			s2 := gpu.Stats()
-			ps0, pd0 := s0.ServedPart(tier.ComposedPrompt)
-			ps1, pd1 := s1.ServedPart(tier.ComposedPrompt)
-			bs1, bd1 := s1.ServedPart(tier.ComposedBlock)
-			bs2, bd2 := s2.ServedPart(tier.ComposedBlock)
+			s2 := gpux.Stats()
+			ps0, pd0 := s0.ServedPart(gpu.ComposedPrompt)
+			ps1, pd1 := s1.ServedPart(gpu.ComposedPrompt)
+			bs1, bd1 := s1.ServedPart(gpu.ComposedBlock)
+			bs2, bd2 := s2.ServedPart(gpu.ComposedBlock)
 			t.Logf("prefill of %d: %d composed block steps, %d declined; a decode token: %d, %d (%d QSA blocks)",
 				len(g.IDs), ps1-ps0, pd1-pd0, bs2-bs1, bd2-bd1, qsa)
 			if ps1-ps0 < nl || (ps1-ps0)%nl != 0 || pd1 != pd0 || bs2-bs1 != nl || bd2 != bd1 {
@@ -129,24 +129,24 @@ func TestQwen4ExpQSATurnsByTheMarks(t *testing.T) {
 	plain := host(0)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			for _, delta := range []int{-3, 5} {
 				want := host(delta)
 				if moved := nmse(plain, want); !(moved > 1e-4) {
 					t.Fatalf("delta %d: the mark moves the host's logits by %.3e, which no gate could see", delta, moved)
 				}
 				st := m.NewInstance(len(g.IDs) + 1)
-				st.SetDeviceLayers(gpu, -1)
+				st.SetDeviceLayers(gpux, -1)
 				if st.GPULayers() != m.Cfg.NLayer {
-					t.Fatalf("placed %d of %d blocks: %v", st.GPULayers(), m.Cfg.NLayer, gpu.Err())
+					t.Fatalf("placed %d of %d blocks: %v", st.GPULayers(), m.Cfg.NLayer, gpux.Err())
 				}
 				got := run(st, delta)
 				st.Close()

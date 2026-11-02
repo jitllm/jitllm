@@ -56,7 +56,7 @@ The generated compute layer is real capability: it supplies the operation when a
 |---|---|---|
 | x86-64 SSE | Native executable bytes | SSE2/SSE3/SSSE3/SSE4.1 baseline; optional generators may decline. |
 | x86-64 AVX2 | Native executable bytes, optionally AVX-VNNI dot sequences | AVX2/FMA/F16C baseline. AVX-512 detection exists, but no AVX-512 compute tier is selected. |
-| ARM64 | Native NEON executable bytes | Packed quantized dot kernels use SDOT where the chip has FEAT_DotProd and widen it to SMULL/SADDLP/ADDP where it does not (`jit/cpu/sdotemu.go`); the two give the same bits. |
+| ARM64 | Native NEON executable bytes | Packed quantized dot kernels use SDOT where the chip has FEAT_DotProd and widen it to SMULL/SADDLP/ADDP where it does not (`engine/device/cpu/sdotemu.go`); the two give the same bits. |
 | CUDA | Generated PTX loaded by the driver | Fragment MMA paths are available where their format, shape and target requirements pass. |
 | Vulkan | Generated SPIR-V and a runtime compute pipeline | Ordinary compute paths work independently of fragment MMA. Collective matrix support in the lowerer is not the same as production `MatVecMMA` dispatch. |
 | Metal | Generated MSL compiled into a runtime pipeline | Dot-product arithmetic and scalar/subgroup compute are generated. Collective tile support likewise does not imply every production projection uses it. |

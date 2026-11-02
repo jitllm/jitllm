@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // negatedSample is sample over the logits negated: the token of the
@@ -40,16 +40,16 @@ func TestComposedHeadTokens(t *testing.T) {
 	for _, fx := range headFixtures {
 		t.Run(fx.name, func(t *testing.T) {
 			for _, dev := range stepDevices() {
-				for _, parts := range []tier.Parts{tier.ComposedHead | tier.ComposedSample} {
+				for _, parts := range []gpu.Parts{gpu.ComposedHead | gpu.ComposedSample} {
 					name := dev + "/own head"
 					switch {
-					case parts&tier.ComposedSample != 0:
+					case parts&gpu.ComposedSample != 0:
 						name = dev + "/composed head and token"
 					case parts != 0:
 						name = dev + "/composed head"
 					}
 					t.Run(name, func(t *testing.T) {
-						g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
+						g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
 						if err != nil || g == nil {
 							noDevice(t, dev, err)
 						}
@@ -68,7 +68,7 @@ func TestComposedHeadTokens(t *testing.T) {
 						m.opt.devSample = DeviceSampleOn
 						stages := m.headStages()
 						ids := headTokens(m)
-						newStateOn := func(g *tier.GPU) *Instance {
+						newStateOn := func(g *gpu.GPU) *Instance {
 							st := m.NewInstance(len(ids) + gen + 4)
 							st.SetDeviceFallback(false)
 							if err := st.SetDevice(g); err != nil {
@@ -111,9 +111,9 @@ func TestComposedHeadTokens(t *testing.T) {
 						if served != wantServed {
 							t.Fatalf("the device selected %d of %d greedy tokens, want %d (stages %03b, parts %d)", served, len(ids), wantServed, stages, parts)
 						}
-						if parts&tier.ComposedSample != 0 {
-							ns, ds := g.Stats().ServedPart(tier.ComposedSample)
-							ns += g.Stats().ReplayedPart(tier.ComposedSample)
+						if parts&gpu.ComposedSample != 0 {
+							ns, ds := g.Stats().ServedPart(gpu.ComposedSample)
+							ns += g.Stats().ReplayedPart(gpu.ComposedSample)
 							if ns != served || ds != 0 {
 								t.Fatalf("the composer selected %d of the %d greedy tokens the device did and was declined %d (%s)", ns, served, ds, declinesOf(g.Stats()))
 							}
@@ -125,8 +125,8 @@ func TestComposedHeadTokens(t *testing.T) {
 							m.front.mu.Lock()
 							set.cpuSample = negatedSample(orig)
 							m.front.mu.Unlock()
-							vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-								tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+							vg, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+								gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 							if err != nil || vg == nil {
 								t.Fatalf("%s did not open for the violation: %v", dev, err)
 							}
@@ -159,7 +159,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							m.front.mu.Lock()
 							set.cpuSample = orig
 							m.front.mu.Unlock()
-							if vn, _ := vg.Stats().ServedPart(tier.ComposedSample); vn != len(ids) {
+							if vn, _ := vg.Stats().ServedPart(gpu.ComposedSample); vn != len(ids) {
 								t.Fatalf("the violation's tier selected %d of %d tokens: it did not run the negated pick (%s)", vn, len(ids), declinesOf(vg.Stats()))
 							}
 							if parted == 0 {
@@ -179,7 +179,7 @@ func TestComposedHeadTokens(t *testing.T) {
 						// device selected. hide clears the head's stages from the
 						// first, so that nothing tells the device a stage is the
 						// host's to apply.
-						drawsOn := func(g *tier.GPU, hide bool) (parted int, onDev int64) {
+						drawsOn := func(g *gpu.GPU, hide bool) (parted int, onDev int64) {
 							c, d := newStateOn(g), newStateOn(g)
 							defer c.Close()
 							defer d.Close()
@@ -226,7 +226,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							t.Fatalf("the device selected %d of %d sampled tokens, want %d (stages %03b, parts %d)", onDev, gen, wantSampled, stages, parts)
 						}
 						t.Logf("%d greedy tokens (%d on the device) and %d sampled tokens (%d on the device), stages %03b", len(ids), served, gen, onDev, stages)
-						if parts&tier.ComposedSample != 0 {
+						if parts&gpu.ComposedSample != 0 {
 							// The composer selects every candidate set the device
 							// does: one form, whatever k and the history.
 							if n := composedSamples(g.Stats()) - before; n != int(onDev) {
@@ -246,8 +246,8 @@ func TestComposedHeadTokens(t *testing.T) {
 								m.front.mu.Lock()
 								set.cpuWalk = v.f(origWalk)
 								m.front.mu.Unlock()
-								vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-									tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+								vg, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+									gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 								if err != nil || vg == nil {
 									t.Fatalf("%s did not open for the violation: %v", dev, err)
 								}
@@ -333,7 +333,7 @@ func sampleNeighbour(s *graph.Graph) *graph.Graph {
 
 // composedSamples is how many steps the composer selected a token or the
 // sampler's candidates in, emitted or replayed.
-func composedSamples(s tier.Stats) int {
-	n, _ := s.ServedPart(tier.ComposedSample)
-	return n + s.ReplayedPart(tier.ComposedSample)
+func composedSamples(s gpu.Stats) int {
+	n, _ := s.ServedPart(gpu.ComposedSample)
+	return n + s.ReplayedPart(gpu.ComposedSample)
 }

@@ -1,0 +1,72 @@
+//go:build amd64 && jitllmtest
+
+package composer
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/jitllm/jitllm/composer/x86"
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/internal/ssegate"
+)
+
+// TestComposedCPUGatesOnSSE runs every composer CPU gate with the host taken
+// as the SSE tier (SSE4.1 and SSSE3, no AVX): each forms by the narrow
+// profile and runs in the legacy encodings, held to the same oracles, and
+// every kernel it mapped is read back through objdump for a VEX leak. On an
+// SSE-only host the force changes nothing and the kernels run natively.
+func TestComposedCPUGatesOnSSE(t *testing.T) {
+	old := cpu.ForceTierForTest(cpu.TierSSE)
+	defer cpu.ForceTierForTest(old)
+	if cpu.HostTier() != cpu.TierSSE || cpu.CPU().ISA()&cpu.ISAAVX2 != 0 {
+		t.Fatalf("forcing the SSE tier left the host at %v, ISA %v", cpu.HostTier(), cpu.CPU().ISA())
+	}
+	gates := []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"MatVec", TestComposedCPUMatVec},
+		{"HonoursTheDevicesISA", TestComposedCPUHonoursTheDevicesISA},
+		{"RowsMatVec", TestComposedCPURowsMatVec},
+		{"Equal", TestComposedCPUEqual},
+		{"Attend", TestComposedCPUAttend},
+		{"AttendRows", TestComposedCPUAttendRows},
+		{"CrossAttend", TestComposedCPUCrossAttend},
+		{"Clamp", TestComposedCPUClamp},
+		{"Rope", TestComposedCPURope},
+		{"ExpertPages", TestComposedCPUExpertPages},
+		{"Rank", TestComposedCPURank},
+		{"TopK", TestComposedCPUTopK},
+		{"SampleTopK", TestComposedCPUSampleTopK},
+		{"SampleGreedy", TestComposedCPUSampleGreedy},
+		{"DeltaRule", TestComposedCPUDeltaRule},
+		{"StateConv", TestComposedCPUStateConv},
+		{"LayerNorm", TestComposedCPULayerNorm},
+		{"Head", TestComposedCPUHead},
+		{"HeadStoresItsOutputs", TestCPUHeadStoresItsOutputs},
+		{"AZeroInEveryLoop", TestAZeroIsMadeInEveryLoopThatReadsIt},
+		{"JamStoresAtAFlatIndex", TestCPUJamStoresAtAFlatIndex},
+		{"JamLooksUpByAWeightWord", TestCPUJamLooksUpByAWeightWord},
+	}
+	for _, g := range gates {
+		sseKernels.Lock()
+		sseKernels.codes = map[string]bool{}
+		sseKernels.Unlock()
+		t.Run(g.name, func(t *testing.T) {
+			g.run(t)
+			sseKernels.Lock()
+			codes := sseKernels.codes
+			sseKernels.Unlock()
+			n := 0
+			for c := range codes {
+				if need, _ := x86.KernelISA([]byte(c)); need&x86.ISATierAVX2 != 0 {
+					t.Errorf("a kernel declared %v on the SSE tier", need)
+				}
+				ssegate.Require(t, fmt.Sprintf("%s-%d", g.name, n), []byte(c))
+				n++
+			}
+			t.Logf("%d SSE kernels read back", n)
+		})
+	}
+}

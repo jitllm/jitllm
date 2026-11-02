@@ -9,12 +9,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestDecodeDoesNotAllocate holds a warm decode token at ZERO heap
@@ -169,7 +169,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			if name == "Llama-3.2-1B-Instruct-Q4_K_M.gguf" {
 				t.Run("two-device", func(t *testing.T) {
 					d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
+					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, d[0]+","+d[1], err)
 					}
@@ -184,7 +184,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					decodeAllocs(t, m2, g)
 					st := g.Stats()
 					backs := st.EmbedReadBacks - r0.EmbedReadBacks
-					n, _ := st.ServedPart(tier.ComposedEmbed)
+					n, _ := st.ServedPart(gpu.ComposedEmbed)
 					if backs < 64 || n < 64 {
 						t.Fatalf("%d rows read back and %d composed on %s for blocks on %s: the arm did not cross devices (%s)",
 							backs, n, d[0], d[1], declinesOf(st))
@@ -234,7 +234,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			})
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)
 					}
@@ -254,13 +254,13 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				// recording runs none of it).
 				if slices.Contains(composedAllocModels, name) {
 					for _, noGraph := range []bool{false, true} {
-						parts := []tier.Parts{tier.ComposedEmbed, tier.ComposedTable, tier.ComposedBlock, tier.ComposedHead, tier.ComposedSample}
+						parts := []gpu.Parts{gpu.ComposedEmbed, gpu.ComposedTable, gpu.ComposedBlock, gpu.ComposedHead, gpu.ComposedSample}
 						t.Run(fmt.Sprintf("%s/composed step/no graph %v", spec, noGraph), func(t *testing.T) {
-							opts := []tier.Option{tier.WithDevices(spec),
-								tier.WithConfig(func(c *tier.Config) {
+							opts := []gpu.Option{gpu.WithDevices(spec),
+								gpu.WithConfig(func(c *gpu.Config) {
 									c.NoGraph, c.PromptRows = noGraph, 64
 								})}
-							gc, err := tier.OpenWith(append(opts, testTierOpts(t)...)...)
+							gc, err := gpu.OpenWith(append(opts, testTierOpts(t)...)...)
 							if err != nil || gc == nil {
 								noDevice(t, spec, err)
 							}
@@ -354,7 +354,7 @@ const (
 // stepAllocs is decodeAllocs for StepRuns: three sessions on g, every block
 // and the head on the device so the runs go as rows of one ragged step, in
 // the shape mode names.
-func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
+func stepAllocs(t *testing.T, m *Model, g *gpu.GPU, mode stepMode) {
 	prompts := []string{"The capital of France is", "Water boils at a temperature of",
 		"The clerk counted barrels of salt on the upper floor, and"}
 	// As decodeAllocs: the window sits inside one 128-position grain, past the
@@ -442,7 +442,7 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 	//
 	// The head's device counts it too: a card with no room for the
 	// projection beside the blocks leaves it to another device (PrepHead),
-	// where it is the step's own submission (tier.GPU.LayersRows).
+	// where it is the step's own submission (gpu.GPU.LayersRows).
 	d1, placed, hd := g.DevStats(), g.Placed(), g.HeadDevice()
 	for i := range d1 {
 		w := want
@@ -480,7 +480,7 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 // host ran in the window, for an arm's selection check.
 // greedyAllocs is decodeAllocs's window decoded by ForwardGreedy, the token
 // selected on the device: a warm one allocates nothing.
-func greedyAllocs(t *testing.T, m *Model, g *tier.GPU) {
+func greedyAllocs(t *testing.T, m *Model, g *gpu.GPU) {
 	const warm, n = 160, 64
 	s := m.NewInstance(warm + n + 8)
 	defer s.Close()
@@ -512,7 +512,7 @@ func greedyAllocs(t *testing.T, m *Model, g *tier.GPU) {
 // penalty over a history that grows every token, on a tier whose composer
 // serves the token: the composer's one form selects every one of the
 // window's candidate sets.
-func sampledAllocs(t *testing.T, m *Model, g *tier.GPU) {
+func sampledAllocs(t *testing.T, m *Model, g *gpu.GPU) {
 	const warm, n = 160, 64
 	was := m.opt.devSample
 	m.opt.devSample = DeviceSampleOn
@@ -551,7 +551,7 @@ func sampledAllocs(t *testing.T, m *Model, g *tier.GPU) {
 	allocVerdict(t, "sampled decode", w, n, m.container.Reads()-r0, c1.Captures-c0.Captures)
 }
 
-func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
+func decodeAllocs(t *testing.T, m *Model, g *gpu.GPU) decodeWindow {
 	// The window is positions warm..warm+n-1, inside one of the device's
 	// 128-position score grains (tier's scoreGrain): crossing one re-captures
 	// the launch graph, which allocates its wrappers once per 128 positions
@@ -585,7 +585,7 @@ func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
 	if err := prefaultExperts(m); err != nil {
 		t.Fatal(err)
 	}
-	var c0 tier.Stats
+	var c0 gpu.Stats
 	if g != nil {
 		c0 = g.Stats()
 	}
@@ -870,7 +870,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer m.Close()
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("gpu:0")}, testTierOpts(t)...)...)
+					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices("gpu:0")}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, "gpu:0", err)
 					}
@@ -896,7 +896,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 							where, s1.HybridRuns-s0.HybridRuns, s1.StreamFills-s0.StreamFills)
 					}
 					// A packed bank's hybrid blocks keep an expert cache on the
-					// card (tier.Config.NoHybridCache), so the split ran too.
+					// card (gpu.Config.NoHybridCache), so the split ran too.
 					if where == "host" && !strings.HasPrefix(name, "synth") && s1.SplitRuns == s0.SplitRuns {
 						t.Fatalf("experts host: no split block-step -- the card's expert cache never ran")
 					}
@@ -924,7 +924,7 @@ func TestStepAllocsUnderABudget(t *testing.T) {
 	spec := testdevices.One("vulkan")
 	for _, mib := range []uint64{112, 128} {
 		t.Run(fmt.Sprint(mib, "MiB"), func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec), tier.WithBudget(mib << 20)},
+			g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec), gpu.WithBudget(mib << 20)},
 				testTierOpts(t)...)...)
 			if err != nil || g == nil {
 				noDevice(t, spec, err)

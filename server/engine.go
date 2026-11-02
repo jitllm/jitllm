@@ -25,9 +25,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -101,7 +101,7 @@ type Config struct {
 	ROCm string
 
 	// TuneCache is the directory the device tuners keep their answers in
-	// (tier.WithTuneCache), or empty for none. jitllmd passes the user cache
+	// (gpu.WithTuneCache), or empty for none. jitllmd passes the user cache
 	// directory.
 	TuneCache string
 
@@ -227,7 +227,7 @@ type Engine struct {
 	// orch is the orchestrator's record of the moves it made.
 	orch orchestrator
 	// pools is the per-card budget every tier the engine opens shares.
-	pools *tier.PoolRegistry
+	pools *gpu.PoolRegistry
 
 	// devices is the hardware probe, taken once. See devices.go for why it is
 	// not re-taken on every list.
@@ -250,7 +250,7 @@ func New(cfg Config) *Engine {
 	// One fetch bound for the whole server, shared by every surface.
 	cfg.Images = cfg.Images.ready()
 	return &Engine{
-		pools:    tier.NewPoolRegistry(),
+		pools:    gpu.NewPoolRegistry(),
 		cfg:      cfg,
 		started:  time.Now(),
 		models:   map[string]*LoadedModel{},
@@ -319,7 +319,7 @@ type LoadedModel struct {
 	// its tier when a session first asks to move to a device.
 	devMu     sync.RWMutex
 	dev       nn.Device
-	gpu       *tier.GPU
+	gpu       *gpu.GPU
 	closeDev  func()
 	deviceIDs []string
 	// callerPlaced is a model whose placement the load named (orchestrate.go).
@@ -420,7 +420,7 @@ func (lm *LoadedModel) device() nn.Device {
 	return lm.dev
 }
 
-func (lm *LoadedModel) gpuTier() *tier.GPU {
+func (lm *LoadedModel) gpuTier() *gpu.GPU {
 	lm.devMu.RLock()
 	defer lm.devMu.RUnlock()
 	return lm.gpu
@@ -461,9 +461,9 @@ func (lm *LoadedModel) gateIDs() []string {
 
 // deviceGateKeys is the gate key of every device a tier opened -- the
 // physical identity it already dedupes on, or the backend and ordinal where
-// the backend reports none (tier.Hardware) -- and records the ids a caller may
+// the backend reports none (gpu.Hardware) -- and records the ids a caller may
 // name each device by, so GetDeviceQueue and ListSessions find its gate.
-func (e *Engine) deviceGateKeys(g *tier.GPU) []string {
+func (e *Engine) deviceGateKeys(g *gpu.GPU) []string {
 	hw := g.Hardware()
 	keys := make([]string, 0, len(hw))
 	e.gateMu.Lock()
@@ -530,7 +530,7 @@ type LoadOptions struct {
 	// instead of placing that block where the engine would have.
 	PlacementStrict bool
 	// Sessions is how many concurrent sessions every placed linear block
-	// reserves a recurrent pair for (tier.Config.Sessions); attention history
+	// reserves a recurrent pair for (gpu.Config.Sessions); attention history
 	// is paged and reserves nothing. 0 and 1 are one: a second session then
 	// gets what the first left over, and on a full card that is the host.
 	Sessions int
@@ -543,7 +543,7 @@ type LoadOptions struct {
 	// tierConfig adjusts the tier after Sessions is set. Tests use it to put
 	// the device into a configuration a gate has to run (a joint step the
 	// device refuses); nothing on the wire reaches it.
-	tierConfig func(*tier.Config)
+	tierConfig func(*gpu.Config)
 }
 
 // DeviceError is a load that failed on the devices it named rather than on
@@ -627,7 +627,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 
 	var (
 		dev      nn.Device
-		gpu      *tier.GPU
+		gpux     *gpu.GPU
 		closeDev = func() {}
 		devIDs   []string
 		hwIDs    []string
@@ -636,7 +636,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	if g, err := e.openTier(o.DeviceIDs, o.Sessions, o.tierConfig, hostBudget); err != nil {
 		return nil, err
 	} else if g != nil {
-		dev, gpu, closeDev = g, g, g.Close
+		dev, gpux, closeDev = g, g, g.Close
 		devIDs = normaliseDeviceIDs(o.DeviceIDs)
 		hwIDs = resolveDeviceIDs(devIDs, g.Hardware())
 		gateKeys = e.deviceGateKeys(g)
@@ -644,7 +644,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 
 	// A list of cards alone keeps every block on them, paging where they do
 	// not hold the model; auto and a list naming cpu let the engine choose it.
-	cpuListed, err := tier.AdmitsHost(strings.Join(DefaultDevices(o.DeviceIDs), ","))
+	cpuListed, err := gpu.AdmitsHost(strings.Join(DefaultDevices(o.DeviceIDs), ","))
 	if err != nil {
 		closeDev()
 		return nil, &DeviceError{err}
@@ -661,7 +661,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 			closeDev()
 			return nil, &DeviceError{err}
 		}
-		if err := namedDevicesOpen(pl, gpu); err != nil {
+		if err := namedDevicesOpen(pl, gpux); err != nil {
 			closeDev()
 			return nil, &DeviceError{err}
 		}
@@ -693,7 +693,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		m:         m,
 		loadedAt:  time.Now(),
 		dev:       dev,
-		gpu:       gpu,
+		gpu:       gpux,
 		closeDev:  closeDev,
 		deviceIDs: devIDs,
 		hwIDs:     hwIDs,
@@ -774,16 +774,16 @@ func (e *Engine) makeInstance(lm *LoadedModel) error {
 
 // tierOptions are the options every tier of this server opens with, whether it
 // opens (openTier) or takes a device later (attachDevice).
-func (e *Engine) tierOptions(sessions int, tierConfig func(*tier.Config), hostBudget uint64) []tier.Option {
-	return []tier.Option{
-		tier.WithROCm(e.cfg.ROCm),
-		tier.WithTuneCache(e.cfg.TuneCache),
-		tier.WithLazyTune(e.cfg.TuneCache != ""),
-		tier.WithHostBudget(hostBudget),
+func (e *Engine) tierOptions(sessions int, tierConfig func(*gpu.Config), hostBudget uint64) []gpu.Option {
+	return []gpu.Option{
+		gpu.WithROCm(e.cfg.ROCm),
+		gpu.WithTuneCache(e.cfg.TuneCache),
+		gpu.WithLazyTune(e.cfg.TuneCache != ""),
+		gpu.WithHostBudget(hostBudget),
 		// Every model's tier spends one card's memory once, so the room one
 		// model gives back is the next one's (orchestrate.go).
-		tier.WithPoolRegistry(e.pools),
-		tier.WithConfig(func(c *tier.Config) {
+		gpu.WithPoolRegistry(e.pools),
+		gpu.WithConfig(func(c *gpu.Config) {
 			c.Sessions = sessions
 			// The step loop (newStepLoop) runs steps of up to MaxStepRows
 			// rows: the device reserves their scratch at placement, or a card
@@ -803,12 +803,12 @@ func (e *Engine) tierOptions(sessions int, tierConfig func(*tier.Config), hostBu
 // a spec that names a device asked for that device, and silently answering on
 // the CPU would be a wrong answer with a right shape. LoadModel opens the
 // model's tier with it, and attachDevice opens one for a model that had none.
-func (e *Engine) openTier(ids []string, sessions int, tierConfig func(*tier.Config), hostBudget uint64) (*tier.GPU, error) {
+func (e *Engine) openTier(ids []string, sessions int, tierConfig func(*gpu.Config), hostBudget uint64) (*gpu.GPU, error) {
 	spec := strings.Join(ids, ",")
 	if spec == "" || spec == HostGateID {
 		return nil, nil
 	}
-	es, err := tier.ParseDevices(spec)
+	es, err := gpu.ParseDevices(spec)
 	if err != nil {
 		return nil, &DeviceError{err}
 	}
@@ -819,7 +819,7 @@ func (e *Engine) openTier(ids []string, sessions int, tierConfig func(*tier.Conf
 	if !wantsDevice {
 		return nil, nil
 	}
-	g, err := tier.OpenWith(append(e.tierOptions(sessions, tierConfig, hostBudget), tier.WithDevices(spec))...)
+	g, err := gpu.OpenWith(append(e.tierOptions(sessions, tierConfig, hostBudget), gpu.WithDevices(spec))...)
 	if err != nil {
 		if len(es) != 1 || es[0].API != "auto" {
 			return nil, &DeviceError{err}
@@ -841,7 +841,7 @@ func DefaultDevices(ids []string) []string {
 
 // resolveDeviceIDs names the devices a tier opened, so a session of the model
 // can be moved between them by id.
-func resolveDeviceIDs(ids []string, hw []tier.Hardware) []string {
+func resolveDeviceIDs(ids []string, hw []gpu.Hardware) []string {
 	// The ids the tier opened, by name, whatever was asked: a selector, a
 	// "gpu:0" ordinal or a bare backend. attachDevice joins a new device to
 	// this list, and a selector cannot be listed beside another device.
@@ -1135,7 +1135,7 @@ func (o *SessionOptions) check(store model.KVStore) error {
 
 // CreateSession builds a model.Instance and offers its blocks to the model's
 // tier. The tier's Attach gives this instance its own device session, which is
-// what makes two sessions on one card correct -- see tier.GPU.Attach.
+// what makes two sessions on one card correct -- see gpu.GPU.Attach.
 func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	if err := o.check(e.cfg.PromptStore); err != nil {
 		return nil, err
@@ -2511,7 +2511,7 @@ func (s *Session) ModelID() string { return s.modelID }
 func (lm *LoadedModel) Model() *model.Model { return lm.m }
 
 // GPU is the model's device tier, nil for a host-only model.
-func (lm *LoadedModel) GPU() *tier.GPU { return lm.gpuTier() }
+func (lm *LoadedModel) GPU() *gpu.GPU { return lm.gpuTier() }
 
 // Inspect runs f with the session's instance, reading the session's
 // history, under the session's lock, so it never overlaps a generate: what a
@@ -2619,7 +2619,7 @@ func (s *Session) finishMove(r *moveReq, res moveRes) {
 }
 
 // attachDevice makes the device named part of the model's tier. A model that
-// has a tier takes the device with tier.GPU.AddDevices, so its weights are not
+// has a tier takes the device with gpu.GPU.AddDevices, so its weights are not
 // held twice; one loaded host-only gets a tier opened for it (openTier, as
 // LoadModel does). Either way the tier's device list is read without a lock
 // by every placement and step, so every session of the model is held off it
@@ -2683,7 +2683,7 @@ func (e *Engine) attachDevice(lm *LoadedModel, to string) error {
 }
 
 // tierNames is the devices a tier holds, by their own ids.
-func tierNames(g *tier.GPU) []string {
+func tierNames(g *gpu.GPU) []string {
 	hw := g.Hardware()
 	out := make([]string, 0, len(hw))
 	for _, h := range hw {
@@ -2803,7 +2803,7 @@ func (e *Engine) MoveBlocks(ctx context.Context, s *Session, first, last int, to
 // hostWeightShare is what the HOST may spend on paged weights, given a total
 // budget: the dense region never pages, and skipping that subtraction
 // double-spends -- a budget one page short costs a read every token. What a
-// tier on the host's own memory holds (tier.GPU.HostReserved) is not taken
+// tier on the host's own memory holds (gpu.GPU.HostReserved) is not taken
 // here: Model.SetPageBudget takes it off itself, and again whenever a block
 // moves, so taking it here too would count it twice.
 func (lm *LoadedModel) hostWeightShare(total uint64) uint64 {
@@ -2901,7 +2901,7 @@ func (e *Engine) defaultMaxSeq(lm *LoadedModel) int {
 // namedDevicesOpen refuses a placement that names a device the load did not
 // open: it would otherwise load and fail at the first session, far from the
 // setting that caused it.
-func namedDevicesOpen(pl model.Placement, g *tier.GPU) error {
+func namedDevicesOpen(pl model.Placement, g *gpu.GPU) error {
 	open := map[string]bool{"host": true}
 	if g != nil {
 		for _, h := range g.Hardware() {

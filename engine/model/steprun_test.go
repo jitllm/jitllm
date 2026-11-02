@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestStepRunsAdmitsAPromptBesideDecoding is the gate on a step across
@@ -115,7 +115,7 @@ func (p *runsPlan) chunks(n int) int { return (n + p.chunk - 1) / p.chunk }
 // alone runs every session by itself on g, and returns the logits the joint
 // arm must give, in its order: step by step, each early session's, then the
 // late session's where its run wanted them.
-func (p *runsPlan) alone(t *testing.T, m *Model, g *tier.GPU) [][]float32 {
+func (p *runsPlan) alone(t *testing.T, m *Model, g *gpu.GPU) [][]float32 {
 	t.Helper()
 	late := m.Vocab.Encode(p.late, true)
 	total := p.chunks(len(late)) + p.steps
@@ -170,7 +170,7 @@ func (p *runsPlan) alone(t *testing.T, m *Model, g *tier.GPU) [][]float32 {
 
 // together runs the plan through StepRuns on g, teacher-forced by alone's
 // tokens, and returns the logits in alone's order and how many rows ran.
-func (p *runsPlan) together(t *testing.T, m *Model, g *tier.GPU) ([][]float32, int) {
+func (p *runsPlan) together(t *testing.T, m *Model, g *gpu.GPU) ([][]float32, int) {
 	t.Helper()
 	late := m.Vocab.Encode(p.late, true)
 	nc := p.chunks(len(late))
@@ -219,7 +219,7 @@ func (p *runsPlan) together(t *testing.T, m *Model, g *tier.GPU) ([][]float32, i
 
 // placed is an instance of maxSeq positions with every block and the head on g,
 // or the gate skips naming the card; with g nil, an instance on the host.
-func (p *runsPlan) placed(t *testing.T, m *Model, g *tier.GPU, maxSeq int) *Instance {
+func (p *runsPlan) placed(t *testing.T, m *Model, g *gpu.GPU, maxSeq int) *Instance {
 	t.Helper()
 	st := m.NewInstance(maxSeq)
 	// No tier is the host arm (hoststep_test.go): the instance stays home.

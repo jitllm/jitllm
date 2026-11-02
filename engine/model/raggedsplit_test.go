@@ -11,8 +11,8 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/metal"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestRaggedStepKernelSplit is the measurement docs/design/ragged-prefill.md
@@ -45,7 +45,7 @@ func TestRaggedStepKernelSplit(t *testing.T) {
 	// No recordings: a replayed graph's kernels are timed one replay late,
 	// and a ragged step's shapes rarely repeat, so a recorded arm's split
 	// would miss most of its launches. Both arms issue every launch.
-	g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+	g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 	if err != nil || g == nil {
 		t.Fatalf("%s: %v", spec, err)
 	}

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // relocationModel opens the model the relocation gates run, and measures what a
@@ -29,7 +29,7 @@ func relocationModel(t *testing.T) (*Model, []int32, uint64) {
 	}
 	t.Cleanup(func() { m.Close() })
 	ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 200), true)[:relocN]
-	probe, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), onePage)
+	probe, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff), onePage)
 	if err != nil || probe == nil {
 		noDevice(t, "device", err)
 	}
@@ -46,10 +46,10 @@ func relocationModel(t *testing.T) (*Model, []int32, uint64) {
 	return m, ids, probe.Bytes()
 }
 
-// onePage makes a device reserve one page of history (tier.Config.KVReserve)
+// onePage makes a device reserve one page of history (gpu.Config.KVReserve)
 // rather than the context it is asked for, so a context past it has to GROW --
 // which is what these gates exist to exercise.
-var onePage = tier.WithConfig(func(c *tier.Config) { c.KVReserve = relocPage })
+var onePage = gpu.WithConfig(func(c *gpu.Config) { c.KVReserve = relocPage })
 
 // relocN positions run past relocPage, the tier's first capacity (onePage),
 // and relocTail of them run after the second gate hands the device back.
@@ -57,9 +57,9 @@ const relocN, relocPage, relocTail = 336, 256, 16
 
 // relocTier is a device with room for every block and one page of history: the
 // doubling (~1 MiB a block on this model) does not fit.
-func relocTier(t *testing.T, used uint64) *tier.GPU {
+func relocTier(t *testing.T, used uint64) *gpu.GPU {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithBudget(used+2<<20), onePage)
+	g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff), gpu.WithBudget(used+2<<20), onePage)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -165,7 +165,7 @@ func TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt(t *testing.T) {
 // refusals name blocks [0, len(firstCard)) whatever the card actually holds.
 // One card is enough to exercise what two would, and it runs on every host.
 type refusing struct {
-	*tier.GPU
+	*gpu.GPU
 	firstCard []int
 }
 

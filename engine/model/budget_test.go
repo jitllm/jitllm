@@ -79,7 +79,7 @@ func TestDeviceBudgetAccounting(t *testing.T) {
 	t.Logf("STORAGE  expert banks %s   dense region %s   total %s",
 		gib(sumExp), mib(dense), gib(sumBase+sumExp+dense))
 
-	// STORAGE: a streamed placement (tier.Config.StreamExperts) costs the
+	// STORAGE: a streamed placement (gpu.Config.StreamExperts) costs the
 	// container base plus the compact bank of NExpertUsed sheets of gate, up and
 	// down that the device holds for the routed experts.
 	var sheet uint64

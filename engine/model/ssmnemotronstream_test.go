@@ -6,8 +6,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestUngatedStreamedBankMatchesTheResidentOne is
@@ -21,7 +21,7 @@ import (
 func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("synth-nemotronhmoe-q8.gguf"))
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
-	run := func(stream bool) ([][]float32, tier.Stats, int) {
+	run := func(stream bool) ([][]float32, gpu.Stats, int) {
 		t.Helper()
 		m, err := Open(path, noTune)
 		if err != nil {
@@ -32,11 +32,11 @@ func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 		if !m.container.CanEvict() {
 			t.Fatalf("a budget of two pages evicts nothing: the sheets would never be read")
 		}
-		opts := []tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}
+		opts := []gpu.Option{gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff)}
 		if stream {
-			opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true }))
+			opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.StreamExperts = true }))
 		}
-		g, err := tier.OpenWith(opts...)
+		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestGemma3nServesComposedOnCPU runs each Gemma 3n fixture on the CPU
@@ -126,7 +126,7 @@ func gemma3nComposedViolations() []c6Violation {
 // TestGemma3nServesComposed holds the composer to each Gemma 3n fixture's
 // blocks on every device present: the residual's streams bound as views at
 // their offsets in the stream-major residual on the card, every block step
-// served, decode and a prompt's rows (tier.ComposedPrompt), within the
+// served, decode and a prompt's rows (gpu.ComposedPrompt), within the
 // device band of the host's logits, and each piece of the block taken out
 // (gemma3nComposedViolations) moving them past 100 times the clean worst and
 // past 1e-4. The input rows over every stream and the per-layer inputs, and
@@ -163,13 +163,13 @@ func TestGemma3nServesComposed(t *testing.T) {
 			prompt, toks := ids[:promptLen], ids[promptLen:]
 			run := func(t *testing.T, dev string) float64 {
 				t.Helper()
-				parts := tier.ComposedBlock | tier.ComposedPrompt
+				parts := gpu.ComposedBlock | gpu.ComposedPrompt
 				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, parts, true, false)
-				served, declined := st.ServedPart(tier.ComposedBlock)
+				served, declined := st.ServedPart(gpu.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))
 				}
-				np, dp := st.ServedPart(tier.ComposedPrompt)
+				np, dp := st.ServedPart(gpu.ComposedPrompt)
 				if np == 0 || dp != 0 {
 					t.Fatalf("the prompt's blocks served %d times and declined %d (%s)", np, dp, declinesOf(st))
 				}

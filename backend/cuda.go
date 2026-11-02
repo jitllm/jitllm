@@ -11,8 +11,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend/cuda"
-	"github.com/jitllm/jitllm/jit/ir"
-	"github.com/jitllm/jitllm/jit/ptx"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/ptx"
 )
 
 // cudaDev owns the device from one goroutine and serialises every call onto it.

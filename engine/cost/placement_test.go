@@ -4,7 +4,7 @@ import (
 	"flag"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 var composeModel = flag.String("compose-model", "synth-ernie45", "the fixture the estimates price")
@@ -14,15 +14,19 @@ var composeModel = flag.String("compose-model", "synth-ernie45", "the fixture th
 // estimate of the placement it returns.
 func TestSuggestPlacesFromTheIR(t *testing.T) {
 	f := composing(t, *composeModel+".jlm")
-	r := jit.Default()
-	gpu := Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
-	cpu := Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
-	s := jit.Step{Rows: 1, Page: 64, Keys: 5}
+	r := composer.Default()
+	gpu := Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
+	cpu := Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
+	s := composer.Step{Rows: 1, Page: 64, Keys: 5}
 	forced := map[string]Placement{
-		"card":          func(jit.Part) Device { return gpu },
-		"host":          func(jit.Part) Device { return cpu },
-		"head on host":  func(p jit.Part) Device { return map[bool]Device{true: cpu, false: gpu}[p.Kind == jit.PartHead] },
-		"table on host": func(p jit.Part) Device { return map[bool]Device{true: cpu, false: gpu}[p.Kind == jit.PartTable] },
+		"card": func(composer.Part) Device { return gpu },
+		"host": func(composer.Part) Device { return cpu },
+		"head on host": func(p composer.Part) Device {
+			return map[bool]Device{true: cpu, false: gpu}[p.Kind == composer.PartHead]
+		},
+		"table on host": func(p composer.Part) Device {
+			return map[bool]Device{true: cpu, false: gpu}[p.Kind == composer.PartTable]
+		},
 	}
 	p, c, err := Suggest(r, f, s, []Device{gpu, cpu})
 	if err != nil {
@@ -48,7 +52,7 @@ func TestSuggestPlacesFromTheIR(t *testing.T) {
 		}
 		t.Logf("%-13s %+v", name, e)
 	}
-	parts, _ := jit.Front(f, false)
+	parts, _ := composer.Front(f, false)
 	for _, part := range parts {
 		t.Logf("suggested: %s on %d", part, p(part).Kind)
 	}
@@ -59,16 +63,16 @@ func TestSuggestPlacesFromTheIR(t *testing.T) {
 // its placement put it.
 func TestEngineTakesOrForcesThePlacement(t *testing.T) {
 	f := composing(t, *composeModel+".jlm")
-	r := jit.Default()
-	gpu := Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
-	cpu := Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
-	s := jit.Step{Rows: 1, Page: 64, Keys: 5}
+	r := composer.Default()
+	gpu := Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
+	cpu := Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
+	s := composer.Step{Rows: 1, Page: 64, Keys: 5}
 	suggested, _, err := Suggest(r, f, s, []Device{gpu, cpu})
 	if err != nil {
 		t.Fatal(err)
 	}
-	forced := func(p jit.Part) Device {
-		if p.Kind == jit.PartSample {
+	forced := func(p composer.Part) Device {
+		if p.Kind == composer.PartSample {
 			return cpu
 		}
 		return gpu

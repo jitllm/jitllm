@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // The gates of docs/design/vision-as-blocks.md: a picture runs through the
@@ -402,7 +402,7 @@ func TestImageEncodeStepsBesideDecode(t *testing.T) {
 	t.Run("host", func(t *testing.T) { check(t, nil) })
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(tier.WithDevices(spec))
+			g, err := gpu.OpenWith(gpu.WithDevices(spec))
 			if err != nil || g == nil {
 				t.Skipf("%s: not present (%v)", spec, err)
 			}
@@ -444,7 +444,7 @@ func TestTowerEncodeResumesAcrossARelocation(t *testing.T) {
 func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, opts ...Option) (*Model, *Tower), composed bool) {
 	const k = 4
 	var mopt []Option
-	topt := []tier.Option{}
+	topt := []gpu.Option{}
 	m0, tw0 := openTower(t, mopt...)
 	base := int(m0.container.H.NBlocks)
 	budget := 2 * m0.container.PageBytes(base)
@@ -453,7 +453,7 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 	m0.Close()
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, topt...)...)
+			g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec)}, topt...)...)
 			if err != nil || g == nil {
 				t.Skipf("%s: not present (%v)", spec, err)
 			}
@@ -488,14 +488,14 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 				t.Skipf("%s placed %d tower blocks: the relocation needs more than %d", spec, sb.GPUBlocks(), k)
 			}
 			side := twb.Cfg.ImageSz / twb.Cfg.PatchSz
-			s0, _ := g.Stats().ServedPart(tier.ComposedTower)
+			s0, _ := g.Stats().ServedPart(gpu.ComposedTower)
 			if err := sb.encodeBegin(px, side, side); err != nil {
 				t.Fatal(err)
 			}
 			if done, err := sb.encodeBlocks(k); err != nil || done {
 				t.Fatalf("the first step: done %v, %v", done, err)
 			}
-			s1, _ := g.Stats().ServedPart(tier.ComposedTower)
+			s1, _ := g.Stats().ServedPart(gpu.ComposedTower)
 			if err := sb.SetDevice(nil); err != nil {
 				t.Fatal(err)
 			}
@@ -507,7 +507,7 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 			}
 			if composed {
 				served, declined := sb.CPUBlockSteps()
-				s2, _ := g.Stats().ServedPart(tier.ComposedTower)
+				s2, _ := g.Stats().ServedPart(gpu.ComposedTower)
 				t.Logf("%s: the composer served %d tower blocks on the device before the move, %d on the CPU after it (declines %v)",
 					spec, s1-s0, served, nonZero(declined[:]))
 				if s1-s0 != k || s2 != s1 || served != n-k {

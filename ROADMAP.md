@@ -19,7 +19,7 @@ file says only where each item stands and what is left.
   reads only the experts a token routes to, 3.10x on Moonlight-16B-A3B under a
   6 GB budget.
 - **On the device** the indexed matvec splits over k (1.31x on
-  Qwen3-MoE-4x0.6B), and a streamed placement (`tier.Config.StreamExperts`)
+  Qwen3-MoE-4x0.6B), and a streamed placement (`gpu.Config.StreamExperts`)
   uploads only the routed sheets, so Qwen3-Next-80B places 48 of 48 blocks on a
   2 GiB card.
 - **gpt-oss is supported**, on the host and every device backend, with MXFP4 stored natively (container v24).
@@ -71,7 +71,7 @@ Done:
   a budget, on the CPU, on a card and across a seam.
 - **Ragged positions.** Each row has its own position, rotary table, KV pages
   and attention length.
-- **Several sessions on one device tier.** `tier.GPU.Attach` gives each
+- **Several sessions on one device tier.** `gpu.GPU.Attach` gives each
   session its own KV history on the card, and their rows step together.
 
 **Was next: fold prefill into the decode step** (the Batcher's prompt budget,
@@ -143,7 +143,7 @@ comes before any code.
 Distributed inference across machines. The interface belongs in core with no
 dependency on libp2p or any transport; an implementation lives outside, the
 dependency pointing inward -- the shape `nn.Device` already has (declared in
-`engine/nn`, implemented in `jit/gpu`).
+`engine/nn`, implemented in `engine/device/gpu`).
 
 What that protects: `go.mod` has one require (goffi) and libp2p is about 150
 modules; and there is no cgo, since goffi reaches the drivers through dlopen.
@@ -250,7 +250,7 @@ of the gain (GEMM 1.03x -> 0.24x). Neither idea below is measured here.
    1-bit BitDelta GEMM (3.34x) builds the fp16 operands in registers -- a bit
    permutation plus one `lop3` that sets sign bits of a packed constant --
    instead of unpack, convert, store to shared memory and reload. Check
-   whether the device prefill GEMM (`jit/gpu/kernels/mma.go`) stages
+   whether the device prefill GEMM (`composer/kernels/mma.go`) stages
    unpacked weights through shared memory; if it does, unpacking Q4_K/Q6_K
    directly into the mma fragments is a prefill lever, not a decode one.
 

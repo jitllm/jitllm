@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // Source is a model, described in this format's own terms, ready to be
@@ -208,7 +208,7 @@ const minGroupBytes = 64 << 10
 // ceil(k/n) of them per plane), so the rule is the largest n whose group
 // still clears minGroupBytes. On Qwen3-Next-80B that gives three, which is
 // where the measured dose peaked. A container is written where it runs (see
-// Fingerprint); tier.Config.StreamGroups overrides it.
+// Fingerprint); gpu.Config.StreamGroups overrides it.
 func streamGroupsFor(es []Entry, used int) uint32 {
 	if used < 2 {
 		return 1

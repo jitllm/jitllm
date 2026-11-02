@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestGraniteOnEveryDevice holds a Granite model with every block and the head
@@ -28,7 +28,7 @@ import (
 // ten times the band: the residual scale and the attention scale at
 // 1/sqrt(HeadDim), each as the model's statement of it, which the composer's
 // blocks read; the embedding scale the device's gather applies
-// (tier.ScaleFaultEmbd, where the prompt was gathered on the device); and the
+// (gpu.ScaleFaultEmbd, where the prompt was gathered on the device); and the
 // logit divisor, which the host applies after the device and which the arm
 // skips by running with LogitScale 1. The greedy gates cannot see the last: a
 // positive divisor moves no argmax. The step's own break is its residual
@@ -49,8 +49,8 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 			host := hostRun(t, m, seq, prompt, forced)
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					rowwise := func(unsplit bool) []tier.Option {
-						return []tier.Option{tier.WithConfig(func(c *tier.Config) { c.NoBatch, c.ComposedUnsplit = true, unsplit })}
+					rowwise := func(unsplit bool) []gpu.Option {
+						return []gpu.Option{gpu.WithConfig(func(c *gpu.Config) { c.NoBatch, c.ComposedUnsplit = true, unsplit })}
 					}
 					// The order-only control: every token a row at a time, the
 					// composer's sums split and unsplit, which moves nothing but
@@ -89,7 +89,7 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					}
 					// The scaled add is the tier's own, or the composer's block or
 					// prompt block, whose add carries the scale as its factor.
-					if composed, _ := cs.ServedPart(tier.ComposedBlock | tier.ComposedPrompt); cs.ResidScaled == 0 && composed == 0 {
+					if composed, _ := cs.ServedPart(gpu.ComposedBlock | gpu.ComposedPrompt); cs.ResidScaled == 0 && composed == 0 {
 						t.Fatalf("no residual add took the scale (Stats.ResidScaled 0): the scaled path was not selected")
 					}
 					worst := 0.0
@@ -109,7 +109,7 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					// Each scale dropped, on the chunk arm.
 					violations := []struct {
 						name string
-						opt  tier.Option
+						opt  gpu.Option
 						mut  func() func()
 					}{
 						{"residual scale not stated", nil, func() func() {
@@ -127,12 +127,12 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					if cs.EmbedLaunches > 0 {
 						violations = append(violations, struct {
 							name string
-							opt  tier.Option
+							opt  gpu.Option
 							mut  func() func()
-						}{"embedding scale dropped", tier.WithScaleFault(tier.ScaleFaultEmbd), nil})
+						}{"embedding scale dropped", gpu.WithScaleFault(gpu.ScaleFaultEmbd), nil})
 					}
 					for _, v := range violations {
-						var opts []tier.Option
+						var opts []gpu.Option
 						if v.opt != nil {
 							opts = append(opts, v.opt)
 						}
@@ -161,9 +161,9 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					// does not. The step's fused projections exist only for
 					// quantized weights, which is why this arm is here and not
 					// on the f32 fixtures.
-					step := func(opts ...tier.Option) (stepResult, int) {
-						g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
-							tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t), opts)...)
+					step := func(opts ...gpu.Option) (stepResult, int) {
+						g, err := gpu.OpenWith(slices.Concat([]gpu.Option{gpu.WithDevices(dev),
+							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t), opts)...)
 						if err != nil || g == nil {
 							t.Fatalf("no %s for the step: %v", dev, err)
 						}
@@ -262,12 +262,12 @@ func openGranite(t *testing.T, name string) *Model {
 // tier's counters. A non-empty reason is a placement that is not every block
 // and the head, which the caller skips or fails on.
 func graniteRun(t *testing.T, m *Model, dev string, seq int, prompt, forced []int32,
-	opts []tier.Option) ([][]float32, tier.Stats, string) {
+	opts []gpu.Option) ([][]float32, gpu.Stats, string) {
 	t.Helper()
-	g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff)},
+	g, err := gpu.OpenWith(slices.Concat([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)},
 		testTierOpts(t), opts)...)
 	if err != nil || g == nil {
-		return nil, tier.Stats{}, "no " + dev + " here"
+		return nil, gpu.Stats{}, "no " + dev + " here"
 	}
 	defer g.Close()
 	st := m.NewInstance(seq)
@@ -276,7 +276,7 @@ func graniteRun(t *testing.T, m *Model, dev string, seq int, prompt, forced []in
 		t.Fatal(err)
 	}
 	if st.devCount() != m.Cfg.NLayer || !st.HeadOnDevice() {
-		return nil, tier.Stats{}, "CARD TOO SMALL: " + g.Err()
+		return nil, gpu.Stats{}, "CARD TOO SMALL: " + g.Err()
 	}
 	var out [][]float32
 	if prompt != nil {
@@ -363,9 +363,9 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 			ran := 0
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					onDevice := func(run func(*Instance) [][]float32, opts ...tier.Option) ([][]float32, tier.Stats) {
-						g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
-							tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t), opts)...)
+					onDevice := func(run func(*Instance) [][]float32, opts ...gpu.Option) ([][]float32, gpu.Stats) {
+						g, err := gpu.OpenWith(slices.Concat([]gpu.Option{gpu.WithDevices(dev),
+							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t), opts)...)
 						if err != nil || g == nil {
 							noDevice(t, dev, err)
 						}
@@ -395,7 +395,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						got, s := onDevice(arm.run)
 						// The scaled add is the tier's own, or the composer's block or
 						// prompt block, whose add carries the scale as its factor.
-						composed, _ := s.ServedPart(tier.ComposedBlock | tier.ComposedPrompt)
+						composed, _ := s.ServedPart(gpu.ComposedBlock | gpu.ComposedPrompt)
 						if s.ResidScaled == 0 && composed == 0 {
 							t.Fatalf("%s: no residual add took the scale -- the scaled path was not selected", arm.name)
 						}
@@ -408,8 +408,8 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						worst = max(worst, w)
 					}
 					// Three sessions stepping as rows, against each alone.
-					g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
-						tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t))...)
+					g, err := gpu.OpenWith(slices.Concat([]gpu.Option{gpu.WithDevices(dev),
+						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t))...)
 					if err != nil || g == nil {
 						noDevice(t, dev, err)
 					}
@@ -422,7 +422,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 					}
 					for _, v := range []struct {
 						name string
-						opt  tier.Option
+						opt  gpu.Option
 						mut  func() func()
 					}{
 						{"logit divisor skipped", nil, func() func() {
@@ -438,7 +438,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 							return cfgMut(m, func(c *Config) { c.AttnScale = 1 / math.Sqrt(float64(c.HeadDim)) })
 						}},
 					} {
-						var opts []tier.Option
+						var opts []gpu.Option
 						if v.opt != nil {
 							opts = append(opts, v.opt)
 						}

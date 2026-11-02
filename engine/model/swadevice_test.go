@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // swaSlice is how many logits per position a per-token run keeps: a slice is
@@ -22,7 +22,7 @@ const swaSlice = 4096
 // a batched one (Prefill returns nothing else). It fails if the device let go
 // of a block, since the instance would silently finish on the host, and where the
 // composer serves the blocks, unless it ran every block of every token.
-func swaRun(t *testing.T, m *Model, g *tier.GPU, ids []int32, batched bool) [][]float32 {
+func swaRun(t *testing.T, m *Model, g *gpu.GPU, ids []int32, batched bool) [][]float32 {
 	t.Helper()
 	// One size for every arm, so no arm's result depends on the order the
 	// arms ran in (TestATierServesALargerSecondSession covers that order).
@@ -96,13 +96,13 @@ func swaMedian(a, b [][]float32, from int) float64 {
 
 // swaTier opens a device with the split tuner pinned; unpinned, it picks a
 // reduction order per process and two tiers disagree with each other.
-func swaTier(t *testing.T) *tier.GPU {
+func swaTier(t *testing.T) *gpu.GPU {
 	t.Helper()
-	o := append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)
+	o := append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)
 	if testdevices.Selected() {
-		o = append(o, tier.WithDevices(testdevices.One("")))
+		o = append(o, gpu.WithDevices(testdevices.One("")))
 	}
-	g, err := tier.OpenWith(o...)
+	g, err := gpu.OpenWith(o...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -111,15 +111,15 @@ func swaTier(t *testing.T) *tier.GPU {
 
 // testTierOpts is the device options every device gate here opens its tier
 // with on top of its own: JITLLM_VK_MAXGROUPS lowers the workgroups one Vulkan
-// dispatch carries (tier.WithVulkanMaxGroups), so a whole model runs through
+// dispatch carries (gpu.WithVulkanMaxGroups), so a whole model runs through
 // split launches on a device whose own limit nothing reaches, and
 // JITLLM_SCALAR_LINEAR_ROWS forces a hybrid's ragged linear steps onto the
 // scan's one-thread form (scalarLinearRows).
-func testTierOpts(t *testing.T) []tier.Option {
+func testTierOpts(t *testing.T) []gpu.Option {
 	t.Helper()
-	var o []tier.Option
+	var o []gpu.Option
 	if scalarLinearRows() {
-		o = append(o, tier.WithConfig(func(c *tier.Config) { c.ScalarLinearRows = true }))
+		o = append(o, gpu.WithConfig(func(c *gpu.Config) { c.ScalarLinearRows = true }))
 	}
 	v := os.Getenv("JITLLM_VK_MAXGROUPS")
 	if v == "" {
@@ -129,12 +129,12 @@ func testTierOpts(t *testing.T) []tier.Option {
 	if err != nil || n == 0 {
 		t.Fatalf("JITLLM_VK_MAXGROUPS=%q: want a positive count of workgroups", v)
 	}
-	return append(o, tier.WithVulkanMaxGroups(uint32(n)))
+	return append(o, gpu.WithVulkanMaxGroups(uint32(n)))
 }
 
 // scalarLinearRows reports JITLLM_SCALAR_LINEAR_ROWS, which puts a hybrid's
 // ragged linear steps on the scan's one-thread form on a device that has the
-// subgroup (tier.Config.ScalarLinearRows): how that form, which a device
+// subgroup (gpu.Config.ScalarLinearRows): how that form, which a device
 // without one runs, is gated on real hardware.
 func scalarLinearRows() bool { return os.Getenv("JITLLM_SCALAR_LINEAR_ROWS") != "" }
 

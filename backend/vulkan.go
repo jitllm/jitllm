@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/jitllm/jitllm/backend/vulkan"
-	"github.com/jitllm/jitllm/jit/ir"
-	"github.com/jitllm/jitllm/jit/spirv"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/spirv"
 )
 
 type vkDev struct {

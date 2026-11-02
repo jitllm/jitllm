@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestSynthLlama4OnEveryDevice runs the Llama 4 fixture with every block and the
@@ -78,7 +78,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -89,23 +89,23 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 			// A fresh tier per arm: a warm tier's scratch is the first plan's,
 			// so planConflict would refuse a violation instead of running it.
 			onDevice := func(c *Config, run func(*Instance) [][]float32) ([][]float32, string) {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer gpu.Close()
+				defer gpux.Close()
 				m.Cfg = c
 				defer func() { m.Cfg = &cfg }()
 				st := m.NewInstance(len(g.IDs) + 1)
 				defer st.Close()
-				st.SetDeviceLayers(gpu, -1)
+				st.SetDeviceLayers(gpux, -1)
 				if n := st.GPULayers(); n != c.NLayer {
 					return nil, fmt.Sprintf("took %d of %d blocks: %v %v", n, c.NLayer,
-						st.DeviceDeclines(), gpu.Err())
+						st.DeviceDeclines(), gpux.Err())
 				}
 				got := run(st)
 				if n := st.GPULayers(); n != c.NLayer {
-					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())
+					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpux.Err())
 				}
 				return got, ""
 			}
@@ -129,14 +129,14 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 			// chunk, temperature table and kernels (planUnion widens none), so
 			// a second session with another Llama 4 shape must be refused.
 			func() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer gpu.Close()
+				defer gpux.Close()
 				first := m.NewInstance(len(g.IDs) + 1)
 				defer first.Close()
-				first.SetDeviceLayers(gpu, -1)
+				first.SetDeviceLayers(gpux, -1)
 				if first.GPULayers() != cfg.NLayer {
 					t.Fatalf("the first session placed %d blocks", first.GPULayers())
 				}
@@ -146,7 +146,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 				defer func() { m.Cfg = &cfg }()
 				second := m.NewInstance(len(g.IDs) + 1)
 				defer second.Close()
-				second.SetDeviceLayers(gpu, -1)
+				second.SetDeviceLayers(gpux, -1)
 				if n := second.GPULayers(); n != 0 {
 					t.Errorf("a session with a sliding window was placed on a tier built for a "+
 						"chunk: %d blocks", n)

@@ -3,7 +3,7 @@ package model
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // cpuInputRows is the block a call of the input rows' graph binds: the
@@ -25,12 +25,12 @@ type cpuEmbedState struct {
 	// pad holds a call's outputs where it is shorter than its form's unit.
 	pad      []float32
 	served   int
-	declined [jit.NumDeclines]int
+	declined [composer.NumDeclines]int
 }
 
 // CPUEmbedSteps is how many input rows the composed CPU served, and how many
 // it declined, by reason.
-func (s *Instance) CPUEmbedSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUEmbedSteps() (served int, declined [composer.NumDeclines]int) {
 	return s.cpu.embed.served, s.cpu.embed.declined
 }
 
@@ -39,9 +39,9 @@ func (s *Instance) CPUEmbedSteps() (served int, declined [jit.NumDeclines]int) {
 // declined by name.
 func (s *Instance) cpuPlaceEmbed() {
 	st := &s.cpu.embed
-	g, why := s.m.frontGraphs().embed, jit.DeclineNoEmbed
+	g, why := s.m.frontGraphs().embed, composer.DeclineNoEmbed
 	if g != nil && s.c.Streams() > 1 {
-		g, why = nil, jit.DeclineEmbedStreams
+		g, why = nil, composer.DeclineEmbedStreams
 	}
 	s.cpuComposeHead(&st.one, g, why, 1)
 	s.cpuComposeHead(&st.many, g, why, cpuRowsCap)
@@ -66,9 +66,9 @@ func (st *cpuEmbedState) positions(n int) []int {
 // cpuEmbed writes the input rows of toks, at positions pos, into the rows
 // of x and, where the model has them, their per-layer inputs into the rows
 // of ple, through the composed graph, or says why not.
-func (s *Instance) cpuEmbed(x, ple []float32, toks []int32, pos []int) jit.Decline {
+func (s *Instance) cpuEmbed(x, ple []float32, toks []int32, pos []int) composer.Decline {
 	if !s.cpuHeadOn() {
-		return jit.DeclineCaller
+		return composer.DeclineCaller
 	}
 	st := &s.cpu.embed
 	rows := len(toks)
@@ -77,10 +77,10 @@ func (s *Instance) cpuEmbed(x, ple []float32, toks []int32, pos []int) jit.Decli
 		hf = &st.many
 	}
 	f, why := hf.formOf()
-	if why == jit.DeclineServes {
+	if why == composer.DeclineServes {
 		why = s.cpuWeights(f, cpuInputRows, nil)
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		st.declined[why] += rows
 		return why
 	}
@@ -124,5 +124,5 @@ func (s *Instance) cpuEmbed(x, ple []float32, toks []int32, pos []int) jit.Decli
 		r0 += k
 	}
 	st.served += rows
-	return jit.DeclineServes
+	return composer.DeclineServes
 }

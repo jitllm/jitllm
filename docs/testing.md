@@ -158,7 +158,7 @@ sweep by name and are never resolved.
 | | `model.BenchmarkGemmaDecode` | one model file | `gemma-2b.gguf` |
 | `JITLLM_ROUTE_MODEL` | `model.TestRoutingLocality`, `TestHotnessIsAProbability` | a mixture-of-experts model file | test skips |
 | `JITLLM_MLA_MODEL` | `model.TestMLAPrefillMatchesDecode`, `TestMLABatchMatchesDecode` | a real MLA model (name or path) | the synth-deepseek fixtures |
-| `JITLLM_DEV_MODEL` | `jit/gpu/tier.TestContainerAgreesHostAndDevice` | one file name in the directory | first present of tinyllama, Llama-3.2-1B, Qwen3-MoE, gemma-2b, olmoe |
+| `JITLLM_DEV_MODEL` | `engine/device/gpu.TestContainerAgreesHostAndDevice` | one file name in the directory | first present of tinyllama, Llama-3.2-1B, Qwen3-MoE, gemma-2b, olmoe |
 | `JITLLM_LABELCOST_MODEL` | `model.TestRegionLabelCost` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
 | `JITLLM_LABELRATE_MODEL` | `model.TestRegionLabelRate` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
 | `JITLLM_KVPERF_MODEL` | `model.TestPagedKVCost` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
@@ -265,7 +265,7 @@ which reads no environment) maps these onto the `backend.Opts` `Open` uses:
 
     JITLLM_VK_DEVICE=1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./backend/ -count=1
 
-The `model` device gates take the same limit, as `tier.WithVulkanMaxGroups`:
+The `model` device gates take the same limit, as `gpu.WithVulkanMaxGroups`:
 `JITLLM_VK_MAXGROUPS` reaches every tier the step gates
 (`TestStepAcrossSessions*`) and the
 default-device gates open (`TestSchedulerOnDevice*`, `TestSlidingWindowRunsOnTheDevice`
@@ -274,7 +274,7 @@ and every other caller of `swaTier`). `JITLLM_TEST_DEVICES` names their device:
     JITLLM_TEST_DEVICES=vulkan:1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./engine/model -run 'TestSchedulerOnDevice' -count=1
 
 `cmd/jitllm` reads `JITLLM_VK_DEVICE` and `JITLLM_VK_MAXGROUPS` too, as
-`tier.WithVulkanDevice` and `tier.WithVulkanMaxGroups`.
+`gpu.WithVulkanDevice` and `gpu.WithVulkanMaxGroups`.
 
 ## Running the device gates composed
 
@@ -316,7 +316,7 @@ block bound with the shallow control past it too.
 
 ## The shadow arm
 
-`tier.WithComposedShadow()` (`Config.ComposedShadow`) runs the composer's form of each block it would serve
+`gpu.WithComposedShadow()` (`Config.ComposedShadow`) runs the composer's form of each block it would serve
 beside the tier's own kernels, at every one-row step, and a reduction the
 composer forms from generic ops (`graph.Drift`) writes the block's worst drift
 from the tier's output into a slot of its own, read back as

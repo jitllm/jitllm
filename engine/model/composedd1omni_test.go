@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // TestComposedD1OmniOnCPU is TestD1OmniMatchesReference's composed CPU
@@ -70,9 +70,9 @@ func TestComposedD1OmniOnCPU(t *testing.T) {
 	served, declined := seg.CPUBlockSteps()
 	t.Logf("d1-omni: %d head block runs served on the composed CPU, declines %v (form error %v, arena %v, %d rows); worst logit difference %.2e (bound 3e-4)",
 		served, nonZero(declined[:]), seg.CPUFormErr(), seg.nc().arena != nil, seg.maxSeq, clean)
-	if served != (nb-trunk)*encodes || declined[jit.DeclineNoGraph] != trunk*encodes || len(nonZero(declined[:])) != 1 {
+	if served != (nb-trunk)*encodes || declined[composer.DeclineNoGraph] != trunk*encodes || len(nonZero(declined[:])) != 1 {
 		t.Fatalf("%d encodes: %d head block runs served (want %d), declines %v (want %d trunk blocks' %s)", encodes, served,
-			(nb-trunk)*encodes, nonZero(declined[:]), trunk*encodes, jit.DeclineName(int(jit.DeclineNoGraph)))
+			(nb-trunk)*encodes, nonZero(declined[:]), trunk*encodes, composer.DeclineName(int(composer.DeclineNoGraph)))
 	}
 	if clean > 3e-4 {
 		t.Errorf("worst logit difference %.2e from the reference (bound 3e-4)", clean)

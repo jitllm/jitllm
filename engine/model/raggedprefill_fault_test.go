@@ -7,9 +7,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestRaggedStepAttendsAsAPrefill holds a batch session's prompt chunks,
@@ -51,19 +51,19 @@ func TestRaggedStepAttendsAsAPrefill(t *testing.T) {
 // FlashPrefillTile's run table) where they lower.
 func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 	const seq = 400
-	open := func(t *testing.T, noRag bool) *tier.GPU {
-		o := append(testTierOpts(t), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.NoRagPrefill, c.PreferTiles = noRag, tiles }))
+	open := func(t *testing.T, noRag bool) *gpu.GPU {
+		o := append(testTierOpts(t), gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithConfig(func(c *gpu.Config) { c.NoRagPrefill, c.PreferTiles = noRag, tiles }))
 		if testdevices.Selected() {
-			o = append(o, tier.WithDevices(testdevices.One("")))
+			o = append(o, gpu.WithDevices(testdevices.One("")))
 		}
-		g, err := tier.OpenWith(o...)
+		g, err := gpu.OpenWith(o...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
 		return g
 	}
-	place := func(t *testing.T, st *Instance, g *tier.GPU) {
+	place := func(t *testing.T, st *Instance, g *gpu.GPU) {
 		if err := st.SetDeviceLayers(g, -1); err != nil || st.GPULayers() != m.Cfg.NLayer {
 			t.Fatalf("%v: %d of %d blocks placed: %s", err, st.GPULayers(), m.Cfg.NLayer, g.Err())
 		}
@@ -88,7 +88,7 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 	if g.Stats().RagForms == 0 {
 		t.Skipf("%s's prefill form has no run table yet: this gate proved nothing here", g.Name())
 	}
-	batch := func(t *testing.T, g *tier.GPU, fault string) ([][]float32, tier.Stats) {
+	batch := func(t *testing.T, g *gpu.GPU, fault string) ([][]float32, gpu.Stats) {
 		sc := newTestBatcher(m, len(prompts), seq)
 		defer sc.Close()
 		place(t, sc.in, g)
@@ -101,8 +101,8 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 			}}
 			sc.Submit(&seqs[i])
 		}
-		tier.SetRowsFault(fault)
-		defer tier.SetRowsFault("")
+		gpu.SetRowsFault(fault)
+		defer gpu.SetRowsFault("")
 		s0 := g.Stats()
 		for sc.Pending() > 0 || sc.Live() > 0 {
 			done, err := sc.Step()

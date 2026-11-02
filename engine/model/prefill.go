@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // MaxPrefillChunk sizes the batched scratch. The width used is tuned per
@@ -579,7 +579,7 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 				for i := range at {
 					at[i] = p0 + i
 				}
-				if s.cpuEmbed(s.bx[:n*c.NEmbd], bple, ids[base:base+n], at) == jit.DeclineServes {
+				if s.cpuEmbed(s.bx[:n*c.NEmbd], bple, ids[base:base+n], at) == composer.DeclineServes {
 					composedRows = true
 					return nil
 				}
@@ -912,13 +912,13 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}
-	why := jit.DeclineServes
+	why := composer.DeclineServes
 	if len(s.HostPick) > 0 {
 		why = s.cpuPick(s.x)
 	} else {
 		why = s.cpuHead(s.x, s.logits, nil)
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		return nil, cpuHeadRefused(why)
 	}
 	// A page the store could not return fails the request. See kvFault.
@@ -1148,7 +1148,7 @@ func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) er
 		return err
 	}
 	l := &m.layers[li]
-	why := jit.DeclineBidir
+	why := composer.DeclineBidir
 	if s.vis != nil {
 		var err error
 		if why, err = s.cpuTowerRows(li, l, n); err != nil {
@@ -1181,7 +1181,7 @@ func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) er
 			return err
 		}
 	}
-	if why == jit.DeclineServes {
+	if why == composer.DeclineServes {
 		s.cpu.served++
 		return nil
 	}

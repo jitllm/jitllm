@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestGemmDeepSweep times GemmVolta's m16n8 tiles on Llama-3.1-8B

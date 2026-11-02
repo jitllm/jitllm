@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestDecisionBatchOfOnePromptRunsAlone sends a batch of one request with one
@@ -37,7 +37,7 @@ func TestDecisionBatchOfOnePromptRunsAlone(t *testing.T) {
 				t.Fatalf("%s carries no noul question", decisionRequests[0])
 			}
 			reqs := []DecisionRequest{{State: state, Questions: one}}
-			arms := []*tier.GPU{nil}
+			arms := []*gpu.GPU{nil}
 			arms = append(arms, decisionDevices(t)...)
 			for _, g := range arms {
 				name := "host"

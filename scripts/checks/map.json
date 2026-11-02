@@ -29,7 +29,7 @@
       "note": "the CLI: flags, environment, doctor, capabilities"
     },
     "jit-cpu": {
-      "module": ".", "packages": ["./jit/cpu/..."], "cap": "8G",
+      "module": ".", "packages": ["./engine/device/cpu/..."], "cap": "8G",
       "note": "every host emitter against the oracle at ragged widths (RULE 8), and no assembly but the trampolines"
     },
     "nn": {
@@ -74,7 +74,7 @@
       "note": "every graph feature on the device, every block placed against the host (RULE 11c)"
     },
     "gpu-lowering": {
-      "module": ".", "packages": ["./jit/ir/...", "./jit/ptx/...", "./jit/spirv/...", "./jit/msl/...", "./jit/amdgpu/...", "./jit/gpu/lowertest/...", "./jit/gpu/kernels/..."], "cap": "8G",
+      "module": ".", "packages": ["./composer/ir/...", "./composer/ptx/...", "./composer/spirv/...", "./composer/msl/...", "./composer/amdgpu/...", "./composer/lowertest/...", "./composer/kernels/..."], "cap": "8G",
       "note": "the IR and its four lowerings; runs with no GPU"
     },
     "gpu-backend": {
@@ -83,7 +83,7 @@
       "note": "the backends against the oracle on a real device"
     },
     "composer": {
-      "module": ".", "packages": ["./jit", "./jit/x86/...", "./engine/graph/...", "./engine/cost/...", "./engine/probe/..."], "cap": "16G",
+      "module": ".", "packages": ["./composer", "./composer/x86/...", "./engine/graph/...", "./engine/cost/...", "./engine/probe/..."], "cap": "16G",
       "note": "the composer: the graph, its lowering and passes, the one keyed cache, the estimator and the hardware probes"
     },
     "composed": {
@@ -92,7 +92,7 @@
       "note": "the composer serving the tier's blocks and heads: every block served, none formed at a step, forms charged and freed, sessions side by side, moves; every device gate runs composed (docs/testing.md)"
     },
     "gpu-tier": {
-      "module": ".", "packages": ["./jit/gpu/tier/..."], "cap": "16G",
+      "module": ".", "packages": ["./engine/device/gpu/..."], "cap": "16G",
       "needs": {"device": true},
       "note": "placement, budgets and multi-device"
     },
@@ -128,23 +128,23 @@
     {"prefix": "engine/nn/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["nn", "jit-cpu", "model-correctness", "five-principles", "vet"]},
     {"prefix": "engine/grammar/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["nn", "server", "vet"]},
     {"prefix": "engine/sched/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["sched", "five-principles", "vet"]},
-    {"prefix": "jit/cpu/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["jit-cpu", "nn", "model-correctness", "five-principles", "vet"]},
-    {"prefix": "jit/ir/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/ptx/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/spirv/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/msl/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/amdgpu/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/lowertest/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/kernels/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "five-principles", "vet"]},
+    {"prefix": "engine/device/cpu/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["jit-cpu", "nn", "model-correctness", "five-principles", "vet"]},
+    {"prefix": "composer/ir/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "composer/ptx/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "composer/spirv/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "composer/msl/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "composer/amdgpu/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
+    {"prefix": "composer/lowertest/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
+    {"prefix": "composer/kernels/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "five-principles", "vet"]},
     {"prefix": "backend/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "relocation", "capabilities", "vet"]},
     {"prefix": "backend/cuda/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
     {"prefix": "backend/vulkan/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
     {"prefix": "backend/metal/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
     {"prefix": "backend/hip/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-backend", "vet"]},
     {"prefix": "backend/ffi/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/tier/", "evidence": "docs/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "composed", "vet"]},
-    {"prefix": "jit/x86/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["composer", "vet"]},
-    {"prefix": "jit/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
+    {"prefix": "engine/device/gpu/", "evidence": "docs/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "composed", "vet"]},
+    {"prefix": "composer/x86/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["composer", "vet"]},
+    {"prefix": "composer/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
     {"prefix": "engine/graph/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
     {"prefix": "engine/cost/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "vet"]},
     {"prefix": "engine/probe/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "vet"]},
