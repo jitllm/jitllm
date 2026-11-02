@@ -161,13 +161,14 @@ func TestCPUPromptRunsFourRowsACall(t *testing.T) {
 }
 
 // TestCPUByteDotsSumInSixteenBits holds a prompt's matvec of unsigned
-// weight bytes, formed for a host without VNNI, to summing its byte dots'
+// weight bytes, formed for an AVX2 host without VNNI on any host (only x86's
+// lowering sums in sixteen bits), to summing its byte dots'
 // pairs in sixteen bits for runs of them, widened once a run: on Q4_K's
 // nibbles a sub-block's eight words are one run, 8*2*15*127 within an
 // int16; on Q6_K's six bits two words are, a sub-block's later words runs of
 // their own (HalfSplit) and no dot widened alone; Q8_0's signed bytes make none.
 func TestCPUByteDotsSumInSixteenBits(t *testing.T) {
-	isa := uint64(cpu.CPU().ISA()) &^ uint64(x86.ISAVNNI)
+	isa := uint64(x86.ISATierSSE | x86.ISASSE42 | x86.ISAPOPCNT | x86.ISATierAVX2 | x86.ISABMI2)
 	for _, c := range []struct {
 		typ  quant.Type
 		most int

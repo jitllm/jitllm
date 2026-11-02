@@ -288,7 +288,7 @@ func (e *a64Lowerer) node(i int) {
 			e.splat(r, e.addr(s.Buf, s.A, s.Ptr))
 			return
 		}
-		if x.gpr(nd.A) {
+		if x.gpr(nd.A) || x.gprMask(nd.A) {
 			g := e.xr(nd.A)
 			a.DUPsW(lo(r), g)
 			a.DUPsW(hi(r), g)
@@ -790,6 +790,17 @@ func (e *a64Lowerer) store(i int) {
 		e.vaccess(cpu.A64StrQ, lo(r), m)
 	case e.k.Bufs[s.Buf].Half:
 		e.vaccess(cpu.A64StrH, lo(r), m)
+	case wide && s.Step > 1:
+		// A jammed store whose lanes are Step elements apart: lane by lane,
+		// as x86Lowerer.store makes it.
+		for h, v := range pair(r) {
+			t := e.temp(v)
+			for l := range 4 {
+				e.a.DUPs4lane(t, v, uint8(l))
+				e.vaccess(cpu.A64StrS, t, m.plus(int32((4*h+l)*s.Step*4)))
+			}
+			e.release(t)
+		}
 	case wide:
 		e.vaccess(cpu.A64StrQ, lo(r), m)
 		e.vaccess(cpu.A64StrQ, hi(r), m.plus(16))
