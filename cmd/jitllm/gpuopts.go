@@ -272,10 +272,6 @@ func gpuOptions() []tier.Option {
 		{"JITLLM_GPU_STREAM_NOPIN", set("JITLLM_GPU_STREAM_NOPIN"), func(c *tier.Config) { c.StreamNoPin = true }},
 		{"JITLLM_GPU_STREAM_GROUPS", num("JITLLM_GPU_STREAM_GROUPS") > 0,
 			func(c *tier.Config) { c.StreamGroups = num("JITLLM_GPU_STREAM_GROUPS") }},
-		// =0 uploads the host's rotary table instead of building it on the
-		// device; as with JITLLM_GPU_GRAPH, the arm turns a default off.
-		{"JITLLM_GPU_ROPETAB", os.Getenv("JITLLM_GPU_ROPETAB") == "0",
-			func(c *tier.Config) { c.RopeTableHost = true }},
 	}
 	for _, f := range flags {
 		if f.on {

@@ -29,14 +29,6 @@ type linTol struct{ abs, rel float64 }
 
 var linExact = map[string]linTol{}
 
-var linShipped = map[string]linTol{
-	"proj":   {0, 0.6},
-	"state":  {0, 0.1},
-	"conv":   {0, 0.1},
-	"logits": {0, 0.2},
-	"cont":   {0, 0.25},
-}
-
 // linEnv is the worst error seen per category, relative to the reference's
 // largest magnitude in the same vector, and the bounds it holds them to.
 type linEnv struct {

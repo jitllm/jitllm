@@ -1395,11 +1395,7 @@ type Model struct {
 	// address: the pager tells them when a frame's bytes change (forgetCopies).
 	// owners are the devices holding this model's blocks, released at Close.
 	// Both guarded by devMu, since a page-in on any session reads forgetters.
-	devMu sync.Mutex
-	// hyState is the host executor a device's hybrid blocks run their routed
-	// experts on (Model.hostExperts), made on first use, under hyMu.
-	hyMu       sync.Mutex
-	hyState    *Instance
+	devMu      sync.Mutex
 	forgetters []nn.CopyForgetter
 	owners     []nn.ModelOwner
 }

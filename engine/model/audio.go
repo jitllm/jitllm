@@ -366,11 +366,10 @@ func (m *Model) audioPageIn(j int) error {
 // audioRun is an Embedder's audio scratch, grown to the longest clip seen
 // and kept, so a warm clip of a size seen before allocates nothing.
 type audioRun struct {
-	cap                                    int
 	sig, frames, re, im, mel, melT         []float32
 	pre                                    []float32
 	pad0, col, x0, pad1, x1, x2, pad2, x3  []float32
-	x4, x5, x6                             []float32
+	x4, x5                                 []float32
 	x, h, q, k, v, qu, qv, p, t, ff, g, cv []float32
 	att, bd, acc                           []float32
 	tapRows                                []float32

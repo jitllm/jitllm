@@ -2,7 +2,6 @@ package tier
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -470,7 +469,7 @@ func (g *devTier) promptComposed(lo, hi int) bool {
 	if lo >= hi {
 		return g.reservedFor(ComposedPrompt) != nil
 	}
-	return g.rangeComposed(lo, hi, ComposedPrompt, true)
+	return g.rangeComposed(lo, hi, ComposedPrompt)
 }
 
 // rowsComposed is promptComposed for a ragged step over blocks [lo, hi): its
@@ -478,9 +477,9 @@ func (g *devTier) promptComposed(lo, hi int) bool {
 // prompt's.
 func (g *devTier) rowsComposed(lo, hi int) bool {
 	if g.prompt {
-		return g.rangeComposed(lo, hi, ComposedPrompt, false)
+		return g.rangeComposed(lo, hi, ComposedPrompt)
 	}
-	return g.rangeComposed(lo, hi, ComposedBlock, false)
+	return g.rangeComposed(lo, hi, ComposedBlock)
 }
 
 // reservedFor is the reserved width's scratch where calls asked of the
@@ -501,23 +500,14 @@ func (g *devTier) headReserved() bool {
 }
 
 // rangeComposed reports whether the composer serves, as part, every block of
-// [lo, hi) in the reserved width (composedBlock). With kept, a block the
-// caller keeps on the tier's kernels (Config.TierBlocks) runs there too, its
-// kernels at that width compiled at placement, as a prompt the composer
-// does not hold runs (promptHeld).
-func (g *devTier) rangeComposed(lo, hi int, part Parts, kept bool) bool {
+// [lo, hi) in the reserved width (composedBlock).
+func (g *devTier) rangeComposed(lo, hi int, part Parts) bool {
 	bb := g.reservedFor(part)
 	if bb == nil || lo >= hi {
 		return false
 	}
 	served := false
 	for li := lo; li < hi; li++ {
-		if kept && slices.Contains(g.TierBlocks, li) {
-			if l := g.layers[li]; l == nil || !l.ok {
-				return false
-			}
-			continue
-		}
 		if !g.composedBlock(li, bb) {
 			return false
 		}

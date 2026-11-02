@@ -77,7 +77,6 @@ type moeGroup struct {
 	// ones the unit weights the downs are then combined at. nil otherwise.
 	actMulW       backend.Kernel
 	colPair, ones backend.Buf
-	colPairH      []uint32
 	// ewScale is Gemma 4's per-expert weight factor (nn.LayerPlan.DenseMoE),
 	// writing rwS; nil elsewhere.
 	ewScale backend.Kernel

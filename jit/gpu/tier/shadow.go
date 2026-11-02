@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
 )
 
@@ -32,13 +31,6 @@ func (g *devTier) shadowing() bool {
 	return g.ComposedShadow
 }
 
-// shadowStep is the block the form ran beside, between the form's launch and
-// the comparison that waits for the tier's output.
-type shadowStep struct {
-	cmp *servedPart
-	l   *layer
-}
-
 // The comparison's inputs and its output, in the order of graph.Drift: the
 // block's input, the tier's output, the form's, and the state, which the
 // output replaces in place.
@@ -61,14 +53,6 @@ func (g *devTier) servedShadow(l *layer, n int) (*servedPart, error) {
 		err = fmt.Errorf("the composed shadow reads its state after writing the new one")
 	}
 	return sv, err
-}
-
-// shadowEnd compares the output the tier's kernels wrote to bs.x with the
-// form's, against the block's input, into the block's state.
-func (g *devTier) shadowEnd(lc *launcher, bs *blockScratch, sh *shadowStep) error {
-	cmp, l := sh.cmp, sh.l
-	*sh = shadowStep{}
-	return cmp.run(g, lc, cmp.inst, []backend.Buf{bs.shIn, bs.x, bs.shForm, l.shadow}, []backend.Buf{l.shadow})
 }
 
 // shadowStats fills s with every placed block's worst drift and the steps

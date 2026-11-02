@@ -35,11 +35,7 @@ func sigmoidGate(b *graph.Builder, g, v graph.ValueID, width int) graph.ValueID 
 
 // reluSquaredTerms and siluTerms are two activations a fault swaps one for
 // the other.
-var (
-	reluSquaredTerms = []graph.Term{term(graph.MapMax, argIn(0), argK(0)), term(graph.MapMul, argTerm(0), argTerm(0))}
-	siluTerms        = []graph.Term{term(graph.MapSub, argK(0), argIn(0)), term(graph.MapExp, argTerm(0)),
-		term(graph.MapAdd, argK(1), argTerm(1)), term(graph.MapDiv, argIn(0), argTerm(2))}
-)
+var ()
 
 // statedViolations are m's stated activations taken apart where the composer
 // reads them, the host computing the clean model: a constant moved, a

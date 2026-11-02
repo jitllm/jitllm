@@ -228,13 +228,3 @@ func (m *mlaBatch) free() {
 		}
 	}
 }
-
-// pagedCall is one layer's paged history as an MLA block's emitter needs it:
-// the pool's buffer (the latent rows; the value is their prefix), the table
-// arena and the call's descriptors.
-type pagedCall struct {
-	pk        *pagedScratch
-	pl        *kvLayerPool
-	k         backend.Buf
-	tab, desc backend.Buf
-}

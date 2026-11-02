@@ -99,8 +99,7 @@ type Decider struct {
 	labelTexts []string
 	maxOptions int
 
-	scores []float32
-	input  int
+	input int
 	// pick is a question's label ids, the groups flattened, and pickVals
 	// their logits: picked on the device where the head is there
 	// (nn.Head.Pick), gathered from the row where it is not. picked counts

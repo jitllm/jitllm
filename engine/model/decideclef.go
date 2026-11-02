@@ -212,14 +212,13 @@ type clefPrompt struct {
 	// ids is the prompt's token per row, a picture's rows standing as its
 	// processor's pad token; spans is the prompt as it is prefilled when it
 	// carries pictures (nil when it does not).
-	ids    []int32
-	spans  []Span
-	qs     []clefSpan
-	qtype  []int32
-	opts   []clefSpan
-	owner  []int32
-	nopts  []int // options per question
-	pieces [][]int32
+	ids   []int32
+	spans []Span
+	qs    []clefSpan
+	qtype []int32
+	opts  []clefSpan
+	owner []int32
+	nopts []int // options per question
 }
 
 // clefOrder is the order a question's options are shown in, as indexes into

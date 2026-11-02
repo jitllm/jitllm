@@ -219,8 +219,6 @@ func (s *Instance) moeReduce(out, w []float32, n int) {
 
 // expRead is one layer's routed read handed to the instance's reader.
 type expRead struct {
-	li  int
-	sel []int32
 }
 
 // f32Bytes is a float32 slice addressed as the bytes a kernel reads. The

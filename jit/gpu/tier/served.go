@@ -1796,9 +1796,6 @@ func (g *devTier) servedTable(gr *graph.Graph, R int, cs, planes, pos backend.Bu
 // row's positions on them, which the caller states for the call (callAxes).
 // Callers hold g.mu.
 func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos, R int, rag *ragStep) partDecline {
-	if g.RopeTableHost {
-		return partCaller
-	}
 	for i := range bs.tableCount() {
 		gr := scratchTable(bs, p, i)
 		if gr == nil || gr.Values[gr.Out[0]].Width != bs.p.RopeW() {
@@ -2515,8 +2512,6 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return l.expertsServe(1)
 	case !l.weightsHeld():
 		return partNoWeight
-	case slices.Contains(g.TierBlocks, li):
-		return partCaller
 	case persist:
 		return partPersist
 	case len(g.kb.skip) != 0:

@@ -270,45 +270,6 @@ func TestStepAcrossSessionsSoftcapGateDiscriminates(t *testing.T) {
 	}
 }
 
-// TestStepAcrossSessionsLocalRopeGateDiscriminates runs the step gate on
-// gemma-3-1b with the step's local layers handed the global rotary table
-// ("swatab"), where the device uploads the host's tables
-// (Config.RopeTableHost) so the table reaches the kernels, and demands it
-// fail: a local layer rotated at the wrong base must not pass for its own.
-//
-//	go test -tags jitllmfault ./engine/model -run TestStepAcrossSessionsLocalRopeGateDiscriminates
-func TestStepAcrossSessionsLocalRopeGateDiscriminates(t *testing.T) {
-	m, err := Open(stepArchPath(t, "gemma-3-1b-it-Q4_K_M.gguf"), noTune, WithKVF16(false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	for _, dev := range stepDevices() {
-		for _, fault := range []string{"", "swatab"} {
-			t.Run(fmt.Sprintf("%s/%q", dev, fault), func(t *testing.T) {
-				bound := denseStepBand * orderControl(t, m, dev)
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-					tier.WithConfig(func(c *tier.Config) { c.RopeTableHost = true })}, testTierOpts(t)...)...)
-				if err != nil || g == nil {
-					noDevice(t, dev, err)
-				}
-				defer g.Close()
-				tier.SetRowsFault(fault)
-				defer tier.SetRowsFault("")
-				r := stepGate(t, m, g, false)
-				t.Logf("%q, host tables: worst logit NMSE %.3e (row %d), %.2gx the bound %.3e", fault, r.worst, r.at,
-					r.worst/bound, bound)
-				switch {
-				case fault == "" && !(r.worst < bound):
-					t.Fatalf("the clean arm with the host's tables reads NMSE %.3e", r.worst)
-				case fault != "" && r.worst < bound:
-					t.Fatalf("the gate passed with the local layers on the global table, at NMSE %.3e", r.worst)
-				}
-			})
-		}
-	}
-}
-
 // TestStepAcrossSessionsLlama4GateDiscriminates runs the step gate on the
 // Llama 4 and Cohere2 fixtures with each of Llama 4's attention and mixture
 // features taken out of the ragged step alone -- the unrotated layers rotated

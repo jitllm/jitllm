@@ -138,7 +138,6 @@ func (g *devTier) initK3(bs *blockScratch) error {
 	}
 	x := &k3Scratch{streams: s, score: map[int]backend.Kernel{}, mixK: map[int]backend.Kernel{},
 		post: map[int]backend.Kernel{}}
-	bs.k3 = x
 	var err error
 	comp := func(dst *backend.Kernel, mk func() (*ir.Kernel, error)) {
 		if err != nil {

@@ -351,22 +351,14 @@ type streamBank struct {
 	// nExpert is the bank's expert count, so a cache can be set up after
 	// placement (GPU.sizeAutoCaches).
 	nExpert int
-	// The cross-layer prefetch (prefetch): the experts it reads, whether a
-	// read is in flight, its join and its error.
-	pfWant []uint32
 	// spec hands the host's read service a guess and nil abandons the
 	// unstarted ones (nn.LayerWeights.SpeculateExperts).
 	spec func(sel []uint32)
 	// host is the block's routed experts on the host (hybrid execution), and
 	// hin, hw and hout its input, weights and output, reused every token.
-	host          func(sel []uint32, w, in, out []float32) error
-	hybrid        bool // the experts run on the host (runHost), not sent
-	li            int  // the block, for the session's host side (hostFor)
-	hin, hw, hout []float32
-	hsel          []uint32
-	// rowSel and rowW are a split step's misses for the host (splitRows).
-	rowSel []uint32
-	rowW   []float32
+	host   func(sel []uint32, w, in, out []float32) error
+	hybrid bool // the experts run on the host (runHost), not sent
+	li     int  // the block, for the session's host side (hostFor)
 	// The split (hybrid with a cache): heat counts each expert's selections,
 	// halved every heatHalf tokens; hit marks which of this token's
 	// selection the cache holds; dw is the card's weights (a miss's zeroed),
@@ -376,14 +368,6 @@ type streamBank struct {
 	// owned counts the tokens st.own has counted, for its halving.
 	owned uint64
 	hit   []bool
-	dw    []float32
-	msel  []uint32
-	mw    []float32
-	// pred is this block's selection as the previous block's probe predicted
-	// it (Config.StreamProbe), valid while havePred; score compares it with
-	// the real one and clears it.
-	pred     []uint32
-	havePred bool
 	// tab is a composed step's page table (servedPart.pagedRun): each
 	// expert's sheet of the bank, reused every token; rsel the selections
 	// of a call of several rows.
@@ -497,10 +481,6 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 	return err
 }
 
-// noExpert holds a hit's place in the host's share of a split step: an id no
-// expert has, which the host's expert-major pass matches to nothing.
-const noExpert = ^uint32(0)
-
 // hostSide is a session's host side for one hybrid block: a row at a time,
 // and a chunk's rows expert-major.
 type hostSide struct {
@@ -584,10 +564,6 @@ func (st *streamBank) lookup(g *devTier) {
 // weight, for a session that hands the tier none (nn.LayerWeights.ExpertUses
 // is the model's, which halves its own).
 const heatHalf = 256
-
-// heatMargin is the floor of the hysteresis a miss clears to take an occupied
-// slot: twice the slot expert's selections and this many more.
-const heatMargin = 2
 
 // count adds this token's selection, which the card routed, to uses -- the
 // session's own counts of the block's experts (nn.LayerWeights.ExpertUses,
@@ -1208,7 +1184,6 @@ func (g *devTier) streamStage(m, pl, n int) []byte {
 type mvTail struct {
 	kern    backend.Kernel
 	threads int
-	width   int
 }
 
 type mv struct {
@@ -1674,9 +1649,8 @@ type blockScratch struct {
 	// mg is a batched scratch's mixture half, or nil (see moegroup.go).
 	mg *moeGroup
 	// mlab is a batched scratch's latent-attention half, or nil (mlabatch.go).
-	mlab       *mlaBatch
-	scoresMMA  backend.Kernel // the tensor-core scores kernel, or nil
-	scoresWarp bool           // scores is MLA's warp-per-pair kernel: NHead*nCap groups of 32
+	mlab      *mlaBatch
+	scoresMMA backend.Kernel // the tensor-core scores kernel, or nil
 	// scoresW and scoresMMAW are the same two kernels for a sliding-window
 	// layer (LayerPlan.Window), built only when the plan has a window. The mask
 	// is in the scores alone; softmax and accumulate are shared. See
@@ -1689,32 +1663,17 @@ type blockScratch struct {
 	// kernels above that read a contiguous cache are not built.
 	pkv                               *pagedScratch
 	flashPart                         backend.Buf
-	flashWidth                        int // the decode attention's workgroup
 	flashChunk, flashForced, flashCap int // flashSplitFor's inputs
 	// ds4 is DeepSeek V4's set (ds4.go), nil on every other model.
 	ds4 *ds4Scratch
 	// q4e is Qwen3.8-Flash-Next's set (q4e.go), nil on every other model.
 	q4e *q4eScratch
-	// k3 is Kimi-K3's set (k3.go), nil on every other model.
-	k3 *k3Scratch
 
-	scoresW, scoresMMAW backend.Kernel
-	// scores70/scores70W/acc70 are the batched attention on sm_70's m8n8k4
-	// (kernels.AttnScoresMMA70/AttnAccMMA70), for a device whose m16n8k16 f16
-	// scores kernel does not lower. acc70 walks 32-row groups, so atile is 32.
-	scores70, scores70W, acc70 backend.Kernel
+	scoresW backend.Kernel
 	// mla70 says a batched latent block's attention runs on sm_70's m8n8k4
 	// (mlabatch.go): its accumulate walks 32-row groups too, so the softmax
 	// this scratch builds takes atile 32 for it (mla70Attn).
 	mla70 bool
-	// fp70/fp70W are the same attention as one kernel (kernels.FlashPrefill70),
-	// the second for a sliding-window layer; nil where it does not take the
-	// shape, and the three above run instead.
-	fp70, fp70W backend.Kernel
-	// fpT/fpTW are that one kernel on a collective matrix unit
-	// (kernels.FlashPrefillTile, Metal), blocked by fpTile.
-	fpT, fpTW backend.Kernel
-	fpTile    kernels.FlashTile
 	// The ragged-decode set (rows.go): attention whose rows are different
 	// sequences, a per-row softmax, the head's batched twin and a per-row argmax.
 	// ragBuilt says prepRowsHead built the set; the composer's sample
@@ -1722,7 +1681,6 @@ type blockScratch struct {
 	ragBuilt          bool
 	ragLogits, ragTok backend.Buf
 	ragVocab          int // the rows of ragLogits a row holds
-	ragHead           mv
 	sstride           int // the score row stride; padded at rows > 1
 	// arows is how many query rows one pass of the attention kernels takes:
 	// rows, except for a vision block whose score planes would be too large,
@@ -1794,14 +1752,8 @@ type blockScratch struct {
 	att, prob, xb backend.Buf
 	// attCap holds the capped scores for an architecture with an attention
 	// softcap (gemma2): out of place, since no kernel may write what it reads.
-	attCap  backend.Buf
-	softcap backend.Kernel
-	// attWin holds a windowed vision block's masked scores (WindowMaskRows)
-	// for one attention pass, vwins each pass's rows' windows as lo, hi pairs
-	// (one buffer per query chunk, visionattn.go) and vwinRows how many rows
-	// the windows cover (setWindows). Built on the first windows a non-causal
-	// call hands this scratch; nil on every other.
-	attWin   backend.Buf
+	attCap   backend.Buf
+	softcap  backend.Kernel
 	vwins    []backend.Buf
 	winMask  backend.Kernel
 	vwinRows int
@@ -1821,7 +1773,6 @@ type blockScratch struct {
 	// every other plan.
 	clampK                    [14]backend.Kernel
 	cin, cout, gClamp, uClamp backend.Buf
-	clampQ, clampKV           backend.Kernel
 	g, u, act                 backend.Buf
 	cs, n, koff, zero         backend.Buf
 	// calls is a call's rows, one word: what a composed form of several
@@ -1845,20 +1796,16 @@ type blockScratch struct {
 	// per-model folded planes (nn.Rope.TabPlanes) and ropeConst the constant
 	// block, uploaded once; rpos is the R positions, the only input rewritten per
 	// token. ropeTable is nil wherever the table is uploaded instead (a vision
-	// block, a refused compile, or Config.RopeTableHost).
+	// block, or a refused compile).
 	ropeTab, ropeTabSWA backend.Buf
 	ropeConst, rpos     backend.Buf
 	// ropeTabAxes and rposAxes are what the composer's table over several
 	// position axes reads (nn.LayerPlan.RopeTabAxes): its planes, and the
 	// live row count then each row's four positions.
-	ropeTabAxes, rposAxes  backend.Buf
-	ropeTable              backend.Kernel
-	ropeNPairs             int
-	quantE, quantF, quantQ backend.Kernel
-	// quantAct is ActMul and quantF in one launch (kernels.QuantizeAct), nil
-	// for an ungated FFN or an activation ActMul has no gated form of.
-	quantAct            backend.Kernel
-	normPart, normApply backend.Kernel
+	ropeTabAxes, rposAxes backend.Buf
+	ropeTable             backend.Kernel
+	ropeNPairs            int
+	quantF, quantQ        backend.Kernel
 	// A vision block normalises with LayerNorm, which is three kernels: the mean,
 	// the variance about it, then the apply. The passes cannot fuse because
 	// E[x^2]-E[x]^2 cancels in f32 on a ViT residual whose mean dwarfs its
@@ -1869,21 +1816,14 @@ type blockScratch struct {
 	part2   backend.Buf // LayerNorm's variance partials, nil otherwise
 	// copyK puts k in the cache for a block with no rotary, in the transposed
 	// layout RoPERowsT would have written. nil unless NonCausal with no rotary.
-	copyK, copyQ             backend.Kernel
-	ropeQ, ropeK, copyV      backend.Kernel
+	copyK                    backend.Kernel
+	ropeK, copyV             backend.Kernel
 	scores, softmax, attnAcc backend.Kernel
-	// qNorm/kNorm normalise each head of q and k before RoPE; nil unless the
-	// architecture has them. qn/kn are their out-of-place destinations, which
-	// the IR requires (AGENTS.md RULE 13: no kernel reads a buffer it writes).
-	qNorm, kNorm backend.Kernel
 	// Llama 4's weightless q/k norm rides qNorm/kNorm with a weight of ones,
 	// before the rotary rather than after: a weightless norm commutes with a
 	// rotation, so the device keeps its one norm site. l4Ones is that
 	// HeadDim-wide weight; nil unless QKL2Norm.
-	l4Ones backend.Buf
-	// qTemp scales an unrotated layer's query by Llama 4's temperature, looked
-	// up in tempTab by the row's causal count; nil unless AttnTempScale.
-	qTemp   backend.Kernel
+	l4Ones  backend.Buf
 	tempTab backend.Buf
 	// qt is a rotated layer's query scaled by mistral3's temperature, which
 	// applies on every layer (NoPEGlobal unset); nil otherwise.
@@ -1891,38 +1831,21 @@ type blockScratch struct {
 	// copyRows copies rows of the residual into h where a block has no
 	// pre-norm (nn.LayerPlan.NoPreNorm); nil otherwise.
 	copyRows backend.Kernel
-	// actMulW is ActMul for a mixture that weights the expert's input, and
-	// wOnes the unit weights its down projections are then combined at.
-	actMulW backend.Kernel
-	wOnes   backend.Buf
-	// qkPart/qkApply replace them for a wide q/k norm (olmoe: one RMSNorm over
-	// all of q), where HeadNorm's single 32-lane group per vector is several
-	// times slower than the block norm's partitioned pair. One pair serves q and
-	// k, so it is built only where they are the same width: a GQA OLMo 2 takes
-	// HeadNormRows.
-	qkPart, qkApply backend.Kernel
-	// qkRms is that wide norm as one whole-row RMSNorm launch per vector (the
-	// kernel bs.rms is), two launches a layer where the pair took four.
-	qkRms backend.Kernel
+	wOnes    backend.Buf
 	// rms and addRms are the whole RMSNorm in one launch of R groups of
 	// kernels.RMSNormGroup -- rms for the norm closure, addRms for a residual
 	// add followed by the FFN norm. nil for a LayerNorm (vision) block.
-	rms, addRms backend.Kernel
+	rms backend.Kernel
 	// rmsQ and addRmsQ are rms and addRms that also write the quantized
 	// activation quantE would (kernels.RMSNormQuantRows): one launch where the
 	// norm and the quantize were two. nil where they cannot be built.
-	rmsQ, addRmsQ backend.Kernel
-	// subQA and subQF are BitNet's inner norms fused with the quantize wo and
-	// down read (kernels.RMSNormQuantRows at qdim and NFFN, the row window),
-	// writing the normed rows to sub. nil elsewhere.
-	subQA, subQF backend.Kernel
-	sub          backend.Buf
-	qn, kn       backend.Buf
+	rmsQ   backend.Kernel
+	sub    backend.Buf
+	qn, kn backend.Buf
 	// krot is XD-RoPE's k turned row-major, before its norm (RopeSplit): the
 	// whole head, since XD-RoPE turns every dimension (model.build refuses a
 	// partial one).
 	krot, kroff backend.Buf
-	ropeKRow    backend.Kernel
 	// Gemma 4's: vn is v after its weightless norm (hdOnes is the weight),
 	// and one is the 1.0 a block's output scalar copies back with. nil
 	// elsewhere.
@@ -1934,92 +1857,44 @@ type blockScratch struct {
 	// streams is, by a step's rows, each residual stream of x as a view at
 	// its offset (x is stream-major), the inputs and the outputs a block of
 	// several streams binds (servedStreams).
-	streams                    map[int][2][]backend.Buf
-	pleSlice, pleAct, pleQuant backend.Kernel
+	streams map[int][2][]backend.Buf
 	// Gemma 3n's AltUp and LAuReL (nn.LayerPlan.AltUp, altup.go): the
 	// router's modalities, every stream's prediction, the corrected streams,
 	// LAuReL's branch and its rank-wide middle; a sparse block's gate
 	// statistics and its gaussian top-k (gParts partials a row). nil elsewhere.
-	altM, altPred, altB, altLaur, altLT           backend.Buf
-	gPartB, gVarB, gg                             backend.Buf
-	altRoute, altPredictK, altCorrectK, altFinish backend.Kernel
-	altMul, altCopy, laurelJoin, laurelQuant      backend.Kernel
-	gPart, gVar, gApply                           backend.Kernel
-	gParts                                        int
+	altM, altPred, altB, altLaur, altLT backend.Buf
+	gPartB, gVarB, gg                   backend.Buf
+	gParts                              int
 	// Gemma 4's mixture block (nn.LayerPlan.DenseMoE): hr is the router's
 	// input rows, rwS the routed weights times each expert's factor
 	// (ewScale). nil elsewhere.
-	hr, rwS backend.Buf
-	ewScale backend.Kernel
-	// qwen3next's attention out-gate. The q projection is double width and its
-	// second half, interleaved per head, gates the attention output through a
-	// sigmoid before the o projection. splitQG deinterleaves bs.q into qg and
-	// ogate; sigMul writes sigma(ogate)*xb into ogated, out of place (RULE 13).
-	splitQG, sigMul   backend.Kernel
-	qg, ogate, ogated backend.Buf
-	// qwen3next's shared expert, whose gate is one logit per row. shsum is a
-	// separate destination because the fold reads the routed sum in bs.mvOut
-	// (RULE 13).
-	shRouterK, shActMul, shQuant, shAdd backend.Kernel
-	// routeWidth is bs.route's workgroup: one warp for kernels.ExpertRouteWarp,
-	// ExpertRouteWidth(NExpert) for kernels.ExpertRoute.
-	routeWidth                             int
+	hr, rwS                                backend.Buf
+	qg, ogate, ogated                      backend.Buf
 	shg, shu, shact, shout, shlogit, shsum backend.Buf
-	nShExp                                 int
-	// A linear block's half of the submission. Every one is out of place, which
-	// is what makes the recurrence legal: the conv reads the old window and
-	// writes a new one, and the delta rule reads the old state and writes the
-	// other half of its recPair. dMixed is the fused q|k|v the conv reads and
-	// dConv what it writes, separate for the same reason.
-	convRows, convShift, ssmSiLU backend.Kernel
-	splitGates, deltaGate        backend.Kernel
-	qkNorm, qkScale, deltaStep   backend.Kernel
-	outNorm, outActMul           backend.Kernel
-	sliceQ, sliceK, sliceV       backend.Kernel
-	dMixed, dConv, dZ, dBA       backend.Buf
-	// quantD quantizes the gated delta output for the SSM output projection.
-	// It is a separate kernel from quantF because Quantize bakes its element
-	// count and VHeads*VDim is not NFFN.
-	quantD                       backend.Kernel
-	dBRaw, dAlpha, dDecay, dBeta backend.Buf
+	dMixed, dConv, dZ, dBA                 backend.Buf
 	// KDA's extras: the rank-r temporary its two low-rank gates project
 	// through with its own quantized activation, and the half of DeltaGate's
 	// output pair each of its two launches is not for.
 	dLowRank, dLRa, dLRax, dGateWaste backend.Buf
-	quantLR, deltaGateChan            backend.Kernel
-	deltaStepChan, outSigMul          backend.Kernel
 	// deltaScan is the gated delta rule over a whole chunk in one launch
 	// (kernels.GatedDeltaScan): every token of the chunk steps the state,
 	// which GatedDeltaStep -- one token -- cannot. scanThreads is its grid.
-	deltaScan   backend.Kernel
-	scanThreads int
+	deltaScan backend.Kernel
 	// deltaFused is deltaScan with everything from the convolution's output to
 	// the rule folded in (kernels.GatedDeltaFused); built where the device has
 	// a subgroup, and then the eleven kernels it replaces are not launched.
 	deltaFused backend.Kernel
-	// ssdScan is Mamba-2's whole update at this scratch's rows
-	// (kernels.GatedDeltaFused with SSD), from the convolution's raw output
-	// and the dt projection to the output and the next state, at any row
-	// count and any lanes; ssdNorm its grouped gated norm (ssdNormL the lanes
-	// it was built at), and copyRes the copy a block with no FFN ends with,
-	// moving the residual back from bs.x2.
-	ssdScan, ssdNorm, copyRes backend.Kernel
-	ssdNormL                  int
+	ssdNormL   int
 	// Mamba-1's (nn.RecurrentPlan.Mamba1): the convolution's bias and SiLU,
 	// dt's quantization over the rank, the dt and B/C norms (built at
 	// m1NormDtL and m1NormBCL lanes) and the whole scan; its buffers are dt's
 	// normed bottleneck and B and C before and after their norms.
-	m1Bias, m1Quant, m1NormDt, m1NormBC, m1Scan backend.Kernel
-	m1NormDtL, m1NormBCL                        int
-	m1LowN, m1B, m1C, m1BN, m1CN                backend.Buf
+	m1Scan               backend.Kernel
+	m1NormDtL, m1NormBCL int
+	m1LowN               backend.Buf
 	// side is a block's mixer output where the block runs attention beside it
 	// (Falcon-H1): the two halves are summed into bs.h before the residual.
 	side backend.Buf
-	// LFM2's short convolution: its two gates' rows (scB, scC), B*x (scBx),
-	// C times the convolution (scY) and the plain product that forms both
-	// (scMul, kernels.ActMul with the identity).
-	scB, scC, scBx, scY backend.Buf
-	scMul               backend.Kernel
 	// convCentred is an LFM2 encoder's convolution (kernels.Conv3Centred),
 	// and vwinAll every row's window in one buffer, the taps' bounds
 	// (setWindowsLocked writes it beside the per-pass vwins).
@@ -2029,10 +1904,9 @@ type blockScratch struct {
 	// convolution and the fused rule over the step's runs, each a sequence's
 	// rows at consecutive positions (kernels' run forms), built for the real
 	// row count so a padded row never reaches a state.
-	ragLin               map[int]*ragLinear
-	dQ, dQn, dK, dKn, dV backend.Buf
-	dOut, dOutN, dAct    backend.Buf
-	dRows, dScale        backend.Buf
+	ragLin        map[int]*ragLinear
+	dOut          backend.Buf
+	dRows, dScale backend.Buf
 	// cRows is the composer's recurrent descriptor in the shared form.
 	cRows backend.Buf
 	rec   nn.RecurrentPlan
@@ -2040,32 +1914,12 @@ type blockScratch struct {
 	// 32 where the device guarantees a subgroup that wide, 1 where it does not
 	// (devTier.pickLanes, as for the softmax). qkWidth is the launch width -- the
 	// group is the subgroup at 32, a plain 64-wide grid at 1.
-	qkLanes, qkWidth int
+	qkLanes int
 	// qNormL, kNormL, qkNormL and outNormL are the lanes each head norm was
 	// built at, which is not always qkLanes: headLanes drops a head that is not
 	// a whole number of subgroups to the scalar twin. The launch geometry has
 	// to follow the kernel (headNormGeom), not the device.
 	qNormL, kNormL, qkNormL, outNormL int
-	// Multi-head latent attention's half of the submission, every buffer out of
-	// place (RULE 13). The cache row is lat+rot wide, the absorbed query is that
-	// same width per head, and the attention result is lat wide per head, so the
-	// score and accumulate kernels are built for two widths over one buffer (see
-	// kvPair.value).
-	//
-	// mlaAbsRaw is the absorb's slot-major output (NHead x lat) and mlaAbs the
-	// row-wide query the scores read (NHead x row): an indexed matvec writes slot
-	// j at j*Rows and cannot use stride row, so the copies interleave the rotary
-	// halves in.
-	mlaSliceNope, mlaSlicePE, mlaSliceKPE backend.Kernel
-	mlaRopeQ, mlaRopeK                    backend.Kernel
-	mlaQuantNope, mlaQuantAcc             backend.Kernel
-	mlaQuantOut, mlaQuantQA               backend.Kernel
-	mlaNormQAPart, mlaNormQAApply         backend.Kernel
-	mlaNormKVPart, mlaNormKVApply         backend.Kernel
-	mlaCopyAbs, mlaCopyPE, mlaCopyLat     backend.Kernel
-	// mlaNoPEQ/mlaNoPEK stand in for mlaRopeQ/mlaRopeK on a NoPE model: the
-	// same writes, unrotated. See nn.LayerPlan.NoPosEnc.
-	mlaNoPEQ, mlaNoPEK                backend.Kernel
 	mlaQA, mlaQAn, mlaQAPart          backend.Buf
 	mlaKV, mlaKVn, mlaKVPart          backend.Buf
 	mlaNope, mlaPE, mlaPErot, mlaKPE  backend.Buf
@@ -2083,25 +1937,9 @@ type blockScratch struct {
 	mlaRow, mlaLat, mlaRot int
 	mlaNopeW               int
 	// attnRed reduces attnAcc's partial sums when accSplit > 1.
-	attnRed               backend.Kernel
-	accSplit              int
-	actMul, actMulE, addE backend.Kernel
-	// addS is the residual add of a scaled block output, x + s*out, and
-	// rscale the one-element s it reads (Granite's residual_scale); both nil
-	// where the plan carries no residual scale (residScaled).
-	addS   backend.Kernel
-	rscale backend.Buf
-	// scaleX multiplies a block's output row by its scalar (Gemma 4's
-	// layer_scalar), out of place: x to h by the block's own scalar, h back
-	// to x by bs.one. nil where the plan has no split geometry.
-	scaleX backend.Kernel
-	// MoE. eg/eu/eact are Slots x NFFNExp, edown is Slots x NEmbd, and rlogits
-	// is NExpert wide. rsel/rtop are NExpertUsed+1 long: ExpertRank's spare
-	// slot is where every unselected thread stores, since the IR has no
-	// conditional store.
-	rank, weights, combine  backend.Kernel
-	route                   backend.Kernel // rank+weights in one launch, the plain softmax route
-	quantX                  backend.Kernel
+	attnRed                 backend.Kernel
+	accSplit                int
+	rscale                  backend.Buf
 	rlogits, rsel, rtop, rw backend.Buf
 	// rwProbe is the cross-layer probe's routing weights, kept off rw, which
 	// holds the block's own until its combine reads them.
@@ -2112,16 +1950,10 @@ type blockScratch struct {
 	rwHit, esplit, hsum backend.Buf
 	// rselPred is the next block's predicted selection (Config.SplitPredict).
 	rselPred backend.Buf
-	// The V3 family's grouped selection: gscore writes one score per expert
-	// group into rgs, gmask writes the masked selection plane into rbm, and
-	// rank then counts over rbm instead of over the logits. Both are nil on
-	// every ungrouped router, which is every mixture but DeepSeek-V3's.
-	gscore, gmask backend.Kernel
-	rgs, rbm      backend.Buf
+	rgs, rbm backend.Buf
 	// MoEBias only: the biased router logits and the three expert outputs with
 	// their experts' biases added, each out of place (RULE 13).
 	rlogitsB, egB, euB, edownB backend.Buf
-	rbias, ebiasFF, ebiasD     backend.Kernel
 	// noSink is NHead of -inf: the sink a block without sinks passes to a
 	// scratch whose softmax takes one, since exp(-inf) adds nothing. sinkProbe
 	// is the probe's own sink row (softmaxAgreesAt).
@@ -2130,12 +1962,11 @@ type blockScratch struct {
 	// with, since its k sheets are already the k the router chose and in the
 	// order it chose them. Written once here rather than per token, and nil on
 	// a device with no streamed block.
-	ident                   backend.Buf
-	eg, eu, eact, edown     backend.Buf
-	nExpert, nUsed, nFFNExp int
-	hx, hcs, hcsSWA         []float32
-	hraw                    []byte
-	hout                    []float32
+	ident               backend.Buf
+	eg, eu, eact, edown backend.Buf
+	hx, hcs, hcsSWA     []float32
+	hraw                []byte
+	hout                []float32
 	// The softmax launch geometry, which is the one kernel whose shape is not
 	// "one thread per output": 32 lanes per head when the device carries a
 	// subgroup shuffle, one thread per head when it does not.
@@ -4000,9 +3831,7 @@ func nanFill(n int) []byte {
 // cs/csSWA, so a device without the kernel uploads the table and computes the
 // same logits. Only a silent absence would be wrong, hence the recorded reason.
 // The planes depend on the model, not the position, so they go up once and a
-// token writes four bytes a row instead of NRot*4. It is built even under
-// Config.RopeTableHost so `jitllm verify -ab ropetab` can alternate both arms
-// in one process.
+// token writes four bytes a row instead of NRot*4.
 func (g *devTier) initRopeTable(bs *blockScratch, p *nn.LayerPlan, rows int) error {
 	why := func(f string, a ...any) error {
 		g.RopeTableWhy = fmt.Sprintf(f, a...)
@@ -4188,7 +4017,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	// device-side out-of-bounds write, not a Go panic. A mixture quantizes
 	// NExpertUsed*NFFNExp, which is not p.NFFN (the dense width), so it is
 	// computed rather than assumed.
-	bs.nExpert, bs.nUsed, bs.nFFNExp = p.NExpert, p.NExpertUsed, p.NFFNExp
 	moeWide := 0
 	if p.NExpert > 0 {
 		moeWide = p.NExpertUsed * p.NFFNExp
@@ -4315,7 +4143,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		al(&bs.qt, rows*qdim*4)
 	}
 	if p.NFFNShExp > 0 {
-		bs.nShExp = p.NFFNShExp
 		al(&bs.shg, rows*p.NFFNShExp*4)
 		al(&bs.shu, rows*p.NFFNShExp*4)
 		al(&bs.shact, rows*p.NFFNShExp*4)
@@ -4412,11 +4239,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		if r.WithAttn {
 			al(&bs.side, rows*p.NEmbd*4)
 		}
-		if r.ShortConv {
-			for _, b := range []*backend.Buf{&bs.scB, &bs.scC, &bs.scBx, &bs.scY} {
-				al(b, rows*r.Chans*4)
-			}
-		}
 		al(&bs.dMixed, rows*r.Chans*4)
 		al(&bs.dConv, rows*r.Chans*4)
 		al(&bs.dZ, rows*r.VHeads*r.VDim*4)
@@ -4427,12 +4249,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		if r.ChanDecay {
 			nGate = r.VHeads * r.KDim
 		}
-		for _, b := range []*backend.Buf{&bs.dAlpha, &bs.dDecay} {
-			al(b, rows*nGate*4)
-		}
-		for _, b := range []*backend.Buf{&bs.dBRaw, &bs.dBeta} {
-			al(b, rows*r.VHeads*4)
-		}
 		if r.Mamba1 {
 			// dt's bottleneck before and after its norm, its quantization (a
 			// scale per 32 and a sum per 16, as bs.ax), and B and C before
@@ -4441,9 +4257,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			al(&bs.m1LowN, rows*r.Rank*4)
 			al(&bs.dLRa, rows*pad32(r.Rank))
 			al(&bs.dLRax, 3*rows*(pad32(r.Rank)/32)*4)
-			for _, b := range []*backend.Buf{&bs.m1B, &bs.m1C, &bs.m1BN, &bs.m1CN} {
-				al(b, rows*r.KDim*4)
-			}
 		}
 		if r.ChanDecay {
 			// The rank IS KDim: KDA's f_a_proj and g_a_proj both project to
@@ -4455,15 +4268,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			al(&bs.dLRa, rows*pad32(r.KDim))
 			al(&bs.dLRax, 3*rows*(pad32(r.KDim)/32)*4)
 			al(&bs.dGateWaste, rows*nGate*4)
-		}
-		// q and k ping-pong between two buffers each: every device kernel is out
-		// of place, and slice -> norm -> scale needs only a swap per step.
-		qkDim := r.KHeads * r.KDim
-		for _, b := range []*backend.Buf{&bs.dQ, &bs.dQn, &bs.dK, &bs.dKn} {
-			al(b, rows*qkDim*4)
-		}
-		for _, b := range []*backend.Buf{&bs.dV, &bs.dOutN, &bs.dAct} {
-			al(b, rows*r.VHeads*r.VDim*4)
 		}
 		// 1/sqrt(kDim), written once: it is geometry, and kernels.Scale takes its
 		// factor from a one-element buffer.
@@ -4649,20 +4453,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	// variant of two kernels this device gets, and it is one answer for the
 	// device rather than one per kernel.
 	bs.qkLanes = g.pickLanes()
-	bs.qkWidth = bs.qkLanes
-	if bs.qkLanes == 1 {
-		bs.qkWidth = scalarWidth
-	}
-	// HeadNorm's warp form also needs a head that is a whole number of
-	// subgroups; otherwise the kernel build fails and surfaces as a misleading
-	// budget decline. headLanes drops such a head to the scalar form (the gated
-	// delta rule's KDim/VDim can be any width).
-	headLanes := func(width int) int {
-		if bs.qkLanes == ir.SubgroupLanes && width%ir.SubgroupLanes != 0 {
-			return 1
-		}
-		return bs.qkLanes
-	}
 	// The per-kernel lanes, set when each head norm is built; see qNormL.
 	bs.qNormL, bs.kNormL, bs.qkNormL, bs.outNormL = bs.qkLanes, bs.qkLanes, bs.qkLanes, bs.qkLanes
 	type job struct {
@@ -4670,53 +4460,11 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		make func() (*ir.Kernel, error)
 	}
 	jobs := []job{
-		// Each quantizer's window is clamped to its own row, as the host
-		// clamps it: a session window wider than a row (a per-token model's)
-		// must not take the next row's maximum.
-		{&bs.quantE, func() (*ir.Kernel, error) {
-			if p.KPad > 0 {
-				return kernels.QuantizePadded(rows, p.NEmbd, p.KPad, kernels.ClampWindow(actWin, p.KPad))
-			}
-			return kernels.Quantize(rows*p.NEmbd, kernels.ClampWindow(actWin, p.NEmbd))
-		}},
 		{&bs.quantF, func() (*ir.Kernel, error) {
 			if p.NFFN == 0 {
 				return nil, nil
 			}
 			return kernels.Quantize(rows*p.NFFN, kernels.ClampWindow(actWin, p.NFFN))
-		}},
-		{&bs.subQA, func() (*ir.Kernel, error) {
-			if !p.SubNorm {
-				return nil, nil
-			}
-			return g.rmsQuantRows()(qdim, rows, float32(p.RMSEps), false, false, kernels.ClampWindow(actWin, qdim))
-		}},
-		{&bs.subQF, func() (*ir.Kernel, error) {
-			if !p.SubNorm {
-				return nil, nil
-			}
-			return g.rmsQuantRows()(p.NFFN, rows, float32(p.RMSEps), false, false, kernels.ClampWindow(actWin, p.NFFN))
-		}},
-		{&bs.quantAct, func() (*ir.Kernel, error) {
-			if ungatedFFN(p) || p.NFFN == 0 {
-				return nil, nil
-			}
-			// Optional: an activation with no gated form keeps two launches.
-			if k, err := kernels.QuantizeAct(rows*p.NFFN, kernels.ClampWindow(actWin, p.NFFN), p.Act); err == nil {
-				return k, nil
-			}
-			return nil, nil
-		}},
-		// Quantize bakes its element count, so the gated delta output
-		// (VHeads*VDim wide, not NFFN) and the attention output (nHead*headDim,
-		// not NEmbd) each get their own quantizer. Borrowing a kernel of another
-		// width quantizes the wrong number of elements and runs fluently wrong.
-		{&bs.quantD, func() (*ir.Kernel, error) {
-			r := cp.Recurrent
-			if r.Conv == 0 {
-				return nil, nil
-			}
-			return quantizeRows(rows, r.VHeads*r.VDim, kernels.ClampWindow(actWin, pad32(r.VHeads*r.VDim)))
 		}},
 		{&bs.quantQ, func() (*ir.Kernel, error) {
 			if w := qPad(p, qdim); w != qdim {
@@ -4724,25 +4472,11 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			return kernels.Quantize(rows*qdim, kernels.ClampWindow(actWin, qdim))
 		}},
-		// The norm is two kernels (RMSNorm) or three (LayerNorm: mean, variance
-		// about it, apply); see blockScratch.normVar.
-		{&bs.normPart, func() (*ir.Kernel, error) {
-			if lnBlock(p) {
-				return kernels.LayerNormPartRows(p.NEmbd, bs.parts, rows)
-			}
-			return kernels.NormPartRows(p.NEmbd, bs.parts, rows)
-		}},
 		{&bs.rms, func() (*ir.Kernel, error) {
 			if lnBlock(p) {
 				return nil, nil
 			}
 			return g.rmsRows()(p.NEmbd, rows, float32(p.RMSEps), false, false)
-		}},
-		{&bs.addRms, func() (*ir.Kernel, error) {
-			if lnBlock(p) {
-				return nil, nil
-			}
-			return g.rmsRows()(p.NEmbd, rows, float32(p.RMSEps), false, true)
 		}},
 		{&bs.rmsQ, func() (*ir.Kernel, error) {
 			if lnBlock(p) {
@@ -4755,17 +4489,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			return nil, nil
 		}},
-		{&bs.addRmsQ, func() (*ir.Kernel, error) {
-			if lnBlock(p) {
-				return nil, nil
-			}
-			// Optional: a width the window does not tile keeps the two
-			// launches rather than failing the scratch.
-			if k, err := g.rmsQuantRows()(p.NEmbd, rows, float32(p.RMSEps), false, true, kernels.ClampWindow(actWin, p.NEmbd)); err == nil {
-				return k, nil
-			}
-			return nil, nil
-		}},
 		{&bs.copyRows, func() (*ir.Kernel, error) {
 			// A block with no pre-norm copies the residual into h instead, and
 			// the shadow arm copies a block's input.
@@ -4773,28 +4496,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			return kernels.Restride(rows, p.NEmbd, p.NEmbd, p.NEmbd)
-		}},
-		{&bs.normApply, func() (*ir.Kernel, error) {
-			if lnBlock(p) {
-				return kernels.LayerNormApplyRows(p.NEmbd, bs.parts, float32(p.RMSEps), true, rows)
-			}
-			return kernels.NormApplyRows(p.NEmbd, bs.parts, float32(p.RMSEps), false, rows)
-		}},
-		// RoPE is not generated at all for a vision block with no rotary (NRot
-		// is zero), so it cannot be launched by mistake. A ViT with a 2-D
-		// rotary (Qwen2-VL, Pixtral) is the text block's rotation over a table
-		// the host built per patch from its grid coordinates (nn.Rope.TableAt):
-		// the kernels do not know a position has two axes.
-		{&bs.ropeQ, func() (*ir.Kernel, error) {
-			// MLA rotates through its own pair (mlaRopeQ/mlaRopeK): its rotary
-			// halves are the tail of each query head and one shared key.
-			if (p.NonCausal && p.NRot == 0) || p.MLA() {
-				return nil, nil
-			}
-			if p.RopeSplit {
-				return kernels.RoPERowsSplit(p.NHead, p.HeadDim, p.NRot, rows, 0)
-			}
-			return kernels.RoPERows(p.NHead, p.HeadDim, p.NRot, p.RopeNeox, rows)
 		}},
 		{&bs.ropeK, func() (*ir.Kernel, error) {
 			if (p.NonCausal && p.NRot == 0) || p.MLA() {
@@ -4804,15 +4505,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil // ropeKRow
 			}
 			return kernels.RoPERowsT(p.NKVHead, p.HeadDim, p.NRot, p.RopeNeox, rows, g.kStride(p))
-		}},
-		{&bs.ropeKRow, func() (*ir.Kernel, error) {
-			// XD-RoPE's k is normed after the rotary, so it turns row-major
-			// into bs.krot and reaches the cache, contiguous or paged, through
-			// copyK.
-			if !p.RopeSplit {
-				return nil, nil
-			}
-			return kernels.RoPERowsSplit(p.NKVHead, p.HeadDim, p.NRot, rows, 0)
 		}},
 
 		{&bs.normVar, func() (*ir.Kernel, error) {
@@ -4836,25 +4528,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			return kernels.CopyAtRows(kvDim, rows)
 		}},
-		{&bs.qTemp, func() (*ir.Kernel, error) {
-			if p.AttnTempScale == 0 {
-				return nil, nil
-			}
-			return kernels.ScaleRowsByCount(rows, qdim, int(p.AttnTempFloor),
-				int(p.AttnTempOffset), len(l4TempTab(p)))
-		}},
-		{&bs.actMulW, func() (*ir.Kernel, error) {
-			if !p.ExpertWeightIn || p.NExpert == 0 {
-				return nil, nil
-			}
-			return kernels.ActMulWeighted(p.NExpertUsed*p.NFFNExp, p.NFFNExp, p.Act, false)
-		}},
-		{&bs.copyQ, func() (*ir.Kernel, error) {
-			if p.MLA() || !partialRotary(p) {
-				return nil, nil
-			}
-			return kernels.CopyAtRows(qdim, rows)
-		}},
 		{&bs.copyV, func() (*ir.Kernel, error) {
 			// MLA writes no V at all: the value is the key row's own prefix.
 			if p.MLA() {
@@ -4864,129 +4537,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return kernels.CopyAtF16(kvDim)
 			}
 			return kernels.CopyAtRows(kvDim, rows)
-		}},
-		// MLA's own sequence, built from existing kernels: the absorb is the
-		// indexed matvec, scores and accumulate are the ordinary two at two widths,
-		// and the rest are slices, rotations and copies.
-		{&bs.mlaSliceNope, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			// q's nope half is the head of each head and its rotary half the
-			// tail, at a stride of HeadDim. Both are compacted, because the
-			// absorb wants one contiguous activation per head at stride nope
-			// and the rotation wants nRot pairs from a base.
-			return kernels.SliceRows(bs.mlaNopeW, p.HeadDim, 0, p.NHead)
-		}},
-		{&bs.mlaSlicePE, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			return kernels.SliceRows(bs.mlaRot, p.HeadDim, bs.mlaNopeW, p.NHead)
-		}},
-		{&bs.mlaSliceKPE, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			// The key's rotary half is the tail of the kv_a output, one for the
-			// whole layer (the "mqa" in kv_a_proj_with_mqa).
-			return kernels.SliceRows(bs.mlaRot, bs.mlaRow, bs.mlaLat, 1)
-		}},
-		{&bs.mlaRopeQ, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			// NHead "heads" of exactly nRot, because the halves were compacted
-			// above -- so the rotation is over the whole of each one.
-			return kernels.RoPERows(p.NHead, bs.mlaRot, bs.mlaRot, p.RopeNeox, 1)
-		}},
-		{&bs.mlaRopeK, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			// It rotates straight into the cache at this position's row plus the
-			// latent's width; RoPERows takes its destination offset from a buffer.
-			return kernels.RoPERows(1, bs.mlaRot, bs.mlaRot, p.RopeNeox, 1)
-		}},
-		{&bs.mlaCopyLat, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			return kernels.CopyAt(bs.mlaLat)
-		}},
-		// A NoPE MLA model (Kimi-Linear) still writes both destinations the rope
-		// kernels would, so these copies replace them rather than a skipped launch.
-		{&bs.mlaNoPEQ, func() (*ir.Kernel, error) {
-			if !p.MLA() || !p.NoPosEnc {
-				return nil, nil
-			}
-			return kernels.CopyAt(p.NHead * bs.mlaRot)
-		}},
-		{&bs.mlaNoPEK, func() (*ir.Kernel, error) {
-			if !p.MLA() || !p.NoPosEnc {
-				return nil, nil
-			}
-			return kernels.CopyAt(bs.mlaRot)
-		}},
-		{&bs.mlaCopyAbs, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			return kernels.CopyAtRows(bs.mlaLat, p.NHead)
-		}},
-		{&bs.mlaCopyPE, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			return kernels.CopyAtRows(bs.mlaRot, p.NHead)
-		}},
-		{&bs.mlaQuantNope, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			return kernels.Quantize(p.NHead*bs.mlaNopeW, actWin)
-		}},
-		{&bs.mlaQuantAcc, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			return kernels.Quantize(p.NHead*bs.mlaLat, actWin)
-		}},
-		{&bs.mlaQuantOut, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			return kernels.Quantize(p.NHead*p.HeadDimV, actWin)
-		}},
-		{&bs.mlaNormKVPart, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			return kernels.NormPart(bs.mlaLat, bs.mlaParts)
-		}},
-		{&bs.mlaNormKVApply, func() (*ir.Kernel, error) {
-			if !p.MLA() {
-				return nil, nil
-			}
-			return kernels.NormApply(bs.mlaLat, bs.mlaParts, latentEps(p), false)
-		}},
-		{&bs.mlaQuantQA, func() (*ir.Kernel, error) {
-			if !p.MLA() || p.QLoraRank == 0 {
-				return nil, nil
-			}
-			return kernels.Quantize(p.QLoraRank, actWin)
-		}},
-		{&bs.mlaNormQAPart, func() (*ir.Kernel, error) {
-			if !p.MLA() || p.QLoraRank == 0 {
-				return nil, nil
-			}
-			return kernels.NormPart(p.QLoraRank, bs.mlaQAParts)
-		}},
-		{&bs.mlaNormQAApply, func() (*ir.Kernel, error) {
-			if !p.MLA() || p.QLoraRank == 0 {
-				return nil, nil
-			}
-			return kernels.NormApply(p.QLoraRank, bs.mlaQAParts, latentEps(p), false)
 		}},
 		{&bs.scores, func() (*ir.Kernel, error) {
 			// MLA's scores are MQA over the whole cache row in the existing kernel's
@@ -4999,7 +4549,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				// one walks the whole 576-wide row serially (see
 				// kernels.AttnScoresWarp).
 				if rows == 1 && g.pickLanes() == ir.SubgroupLanes {
-					bs.scoresWarp = true
 					return kernels.AttnScoresWarp(p.NHead, p.KVRow(), p.KVRow(), p.NHead,
 						bs.sstride, g.scoreScale(p))
 				}
@@ -5025,9 +4574,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if bs.arows == rows && g.volta70Attn(bs, kvDim, gqa, scale) {
 				return nil, nil
 			}
-			// The one-kernel form on Metal's matrix unit where it takes the
-			// shape; the FMA tiles below stay built as everything else's path.
-			g.flashTileAttn(bs, kvDim, gqa, scale)
 			return kernels.AttnScoresTiled(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale,
 				bs.arows, bs.qtile, bs.ktile, g.kStride(p))
 		}},
@@ -5039,16 +4585,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			if bs.scoresMMA != nil {
-				k, err := kernels.AttnScoresMMAW(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride,
-					scale, bs.arows, g.kStride(p), g.tiles.attnNT, windowArg(p))
-				if err == nil {
-					if c, e := g.dev.Compile(k); e == nil {
-						bs.scoresMMAW = c
-						return nil, nil
-					}
-				}
-				// A refusal falls through to the windowed FMA tile, which the
-				// launch takes whenever scoresMMAW is nil.
+				return nil, nil
 			}
 			return kernels.AttnScoresTiledW(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale,
 				bs.arows, bs.qtile, bs.ktile, g.kStride(p), windowArg(p))
@@ -5093,439 +4630,24 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			return kernels.Reduce(qdim, bs.accSplit)
 		}},
-		{&bs.shRouterK, func() (*ir.Kernel, error) {
-			if p.NFFNShExp == 0 {
-				return nil, nil
-			}
-			return kernels.SharedRouterLogits(rows, p.NEmbd)
-		}},
-		{&bs.shActMul, func() (*ir.Kernel, error) {
-			if p.NFFNShExp == 0 {
-				return nil, nil
-			}
-			if ungatedFFN(p) {
-				return kernels.Act(rows*p.NFFNShExp, p.Act)
-			}
-			return kernels.ActMul(rows*p.NFFNShExp, p.Act)
-		}},
-		{&bs.shQuant, func() (*ir.Kernel, error) {
-			if p.NFFNShExp == 0 {
-				return nil, nil
-			}
-			return kernels.Quantize(rows*p.NFFNShExp, actWin)
-		}},
-		{&bs.shAdd, func() (*ir.Kernel, error) {
-			if p.NFFNShExp == 0 {
-				return nil, nil
-			}
-			return kernels.SharedExpertAdd(p.NEmbd, rows)
-		}},
-		{&bs.splitQG, func() (*ir.Kernel, error) {
-			if !p.AttnOutGate {
-				return nil, nil
-			}
-			return kernels.SplitHeadGate(p.NHead, p.HeadDim, rows)
-		}},
 		{&bs.softcap, func() (*ir.Kernel, error) {
 			if p.AttnSoftcap == 0 {
 				return nil, nil
 			}
 			return kernels.Softcap(bs.arows*p.NHead*bs.sstride, p.AttnSoftcap)
 		}},
-		{&bs.clampQ, func() (*ir.Kernel, error) {
-			if p.ClampKQV == 0 {
-				return nil, nil
-			}
-			return kernels.Clamp(rows*qdim, p.ClampKQV)
-		}},
-		{&bs.clampKV, func() (*ir.Kernel, error) {
-			if p.ClampKQV == 0 {
-				return nil, nil
-			}
-			return kernels.Clamp(rows*kvDim, p.ClampKQV)
-		}},
-		{&bs.sigMul, func() (*ir.Kernel, error) {
-			if !p.AttnOutGate {
-				return nil, nil
-			}
-			return kernels.SigmoidMul(rows * qdim)
-		}},
-		{&bs.qkPart, func() (*ir.Kernel, error) {
-			if !p.QKNorm || !p.QKNormWide || p.NKVHead != p.NHead || (p.NHead*p.HeadDim)%bs.parts != 0 {
-				return nil, nil
-			}
-			return kernels.NormPartRows(p.NHead*p.HeadDim, bs.parts, rows)
-		}},
-		{&bs.qkApply, func() (*ir.Kernel, error) {
-			if !p.QKNorm || !p.QKNormWide || p.NKVHead != p.NHead || (p.NHead*p.HeadDim)%bs.parts != 0 {
-				return nil, nil
-			}
-			return kernels.NormApplyRows(p.NHead*p.HeadDim, bs.parts, float32(p.RMSEps), false, rows)
-		}},
-		{&bs.qkRms, func() (*ir.Kernel, error) {
-			if !p.QKNorm || !p.QKNormWide || p.NKVHead != p.NHead || g.NoQKRms {
-				return nil, nil
-			}
-			return g.rmsRows()(p.NHead*p.HeadDim, rows, float32(p.RMSEps), false, false)
-		}},
-		// A whole-projection norm (olmoe) is HeadNormRows with one group of the
-		// whole width, each of q and k its own projection's.
-		{&bs.qNorm, func() (*ir.Kernel, error) {
-			if !p.QKNorm && !p.QKL2Norm {
-				return nil, nil
-			}
-			if p.QKNorm && p.QKNormWide {
-				w := p.NHead * p.HeadDim
-				bs.qNormL = headLanes(w)
-				return kernels.HeadNormRows(1, w, p.RMSEps, rows, bs.qNormL)
-			}
-			bs.qNormL = headLanes(p.HeadDim)
-			return kernels.HeadNormRows(p.NHead, p.HeadDim, p.RMSEps, rows, bs.qNormL)
-		}},
-		{&bs.kNorm, func() (*ir.Kernel, error) {
-			if !p.QKNorm && !p.QKL2Norm {
-				return nil, nil
-			}
-			if p.QKNorm && p.QKNormWide {
-				w := p.NKVHead * p.HeadDim
-				bs.kNormL = headLanes(w)
-				return kernels.HeadNormRows(1, w, p.RMSEps, rows, bs.kNormL)
-			}
-			bs.kNormL = headLanes(p.HeadDim)
-			return kernels.HeadNormRows(p.NKVHead, p.HeadDim, p.RMSEps, rows, bs.kNormL)
-		}},
-		{&bs.actMul, func() (*ir.Kernel, error) {
-			if ungatedFFN(p) {
-				// Ungated: the activation alone replaces ActMul's product, which
-				// would read a bs.g nothing wrote. xIELU's numbers are each
-				// block's buffer (layer.xielu).
-				if p.Act == kernels.ActXIELU {
-					return kernels.XIELU(rows * p.NFFN)
-				}
-				return kernels.Act(rows*p.NFFN, p.Act)
-			}
-			if p.NFFN == 0 {
-				return nil, nil
-			}
-			return kernels.ActMul(rows*p.NFFN, p.Act)
-		}},
-		// A second activation kernel because the element count is baked and a
-		// DeepSeek has both shapes in one model (dense lead blocks, then
-		// mixtures), while the scratch is one per tier.
-		{&bs.actMulE, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 {
-				return nil, nil
-			}
-			// One SwiGLU over all the slots at once: they are contiguous
-			// and elementwise, so the slot boundary does not matter. Ungated
-			// experts (Nemotron 3) take the activation alone.
-			if ungatedFFN(p) {
-				return kernels.Act(p.NExpertUsed*p.NFFNExp, p.Act)
-			}
-			return kernels.ActMul(p.NExpertUsed*p.NFFNExp, p.Act)
-		}},
-		{&bs.rank, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 {
-				return nil, nil
-			}
-			return kernels.ExpertRank(routeOf(p))
-		}},
-		{&bs.weights, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 {
-				return nil, nil
-			}
-			return kernels.ExpertWeights(routeOf(p))
-		}},
-		{&bs.pleSlice, func() (*ir.Kernel, error) {
-			if p.PLEDim == 0 {
-				return nil, nil
-			}
-			return kernels.PLESlice(rows, p.PLEWidth, p.PLEDim)
-		}},
-		{&bs.pleAct, func() (*ir.Kernel, error) {
-			if p.PLEDim == 0 {
-				return nil, nil
-			}
-			return kernels.ActMul(rows*p.PLEDim, p.Act)
-		}},
-		{&bs.pleQuant, func() (*ir.Kernel, error) {
-			if p.PLEDim == 0 {
-				return nil, nil
-			}
-			return quantizeRows(rows, p.PLEDim, actWin)
-		}},
-		{&bs.ewScale, func() (*ir.Kernel, error) {
-			if !p.DenseMoE {
-				return nil, nil
-			}
-			return kernels.ExpertWeightScale(1, p.NExpertUsed)
-		}},
-		{&bs.route, func() (*ir.Kernel, error) {
-			r := routeOf(p)
-			// The fused route renormalises or softmaxes all; sparsemixer's weights
-			// are their own kernel (kernels.ExpertWeights).
-			if p.NExpert == 0 || r.Gated() || r.Bias || r.Grouped() || r.SparseMixer != 0 ||
-				kernels.ExpertRouteWidth(p.NExpert) == 0 {
-				return nil, nil
-			}
-			// One warp for the renormalised route where the device has one: the
-			// thread-per-expert form walks every logit. Same selection and weights
-			// (kernels.ExpertRouteWarp).
-			if r.Norm && bs.qkLanes == ir.SubgroupLanes {
-				if k, err := kernels.ExpertRouteWarp(r); err == nil {
-					bs.routeWidth = ir.SubgroupLanes
-					return k, nil
-				}
-			}
-			bs.routeWidth = kernels.ExpertRouteWidth(p.NExpert)
-			return kernels.ExpertRoute(r)
-		}},
-		{&bs.gscore, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 || p.ExpertGroups <= 1 {
-				return nil, nil
-			}
-			return kernels.ExpertGroupScore(routeOf(p))
-		}},
-		{&bs.gmask, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 || p.ExpertGroups <= 1 {
-				return nil, nil
-			}
-			return kernels.ExpertGroupMask(routeOf(p))
-		}},
-		{&bs.rbias, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 || !p.MoEBias {
-				return nil, nil
-			}
-			return kernels.Add(p.NExpert)
-		}},
-		{&bs.ebiasFF, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 || !p.MoEBias {
-				return nil, nil
-			}
-			return kernels.IndexedBiasAdd(p.NExpertUsed, p.NFFNExp)
-		}},
-		{&bs.ebiasD, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 || !p.MoEBias {
-				return nil, nil
-			}
-			return kernels.IndexedBiasAdd(p.NExpertUsed, p.NEmbd)
-		}},
-		{&bs.combine, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 {
-				return nil, nil
-			}
-			return kernels.ExpertCombine(p.ExpWidth(), p.NExpertUsed)
-		}},
-		{&bs.quantX, func() (*ir.Kernel, error) {
-			if p.NExpert == 0 {
-				return nil, nil
-			}
-			// The SwiGLU product, quantized per slot: Slots independent
-			// vectors of NFFNExp, laid out contiguously, which is exactly what
-			// MatVecShape.SlotAct then reads.
-			return kernels.Quantize(p.NExpertUsed*p.NFFNExp, actWin)
-		}},
-		{&bs.addE, func() (*ir.Kernel, error) { return kernels.Add(rows * p.NEmbd) }},
-		{&bs.addS, func() (*ir.Kernel, error) {
-			if !residScaled(p) {
-				return nil, nil
-			}
-			return kernels.AddScaled(rows * p.NEmbd)
-		}},
-		{&bs.scaleX, func() (*ir.Kernel, error) {
-			if !p.GeomSplit {
-				return nil, nil
-			}
-			return kernels.Scale(rows * p.NEmbd)
-		}},
-		// Mamba-1's: the convolution's bias and SiLU, dt's quantization, the
-		// three norms (dt over the rank, B and C over the state), and the
-		// whole scan in one launch.
-		{&bs.m1Bias, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || !r.Mamba1 {
-				return nil, nil
-			}
-			return kernels.BiasAct(r.Chans, rows, kernels.ActSiLU)
-		}},
-		{&bs.m1Quant, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || !r.Mamba1 {
-				return nil, nil
-			}
-			return quantizeRows(rows, r.Rank, actWin)
-		}},
-		{&bs.m1NormDt, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || !r.Mamba1 {
-				return nil, nil
-			}
-			bs.m1NormDtL = headLanes(r.Rank)
-			return kernels.HeadNormRows(1, r.Rank, p.RMSEps, rows, bs.m1NormDtL)
-		}},
-		{&bs.m1NormBC, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || !r.Mamba1 {
-				return nil, nil
-			}
-			bs.m1NormBCL = headLanes(r.KDim)
-			return kernels.HeadNormRows(1, r.KDim, p.RMSEps, rows, bs.m1NormBCL)
-		}},
 		{&bs.m1Scan, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || !r.Mamba1 {
 				return nil, nil
 			}
 			d := deltaScanOf(r, rows, bs.qkLanes)
-			bs.scanThreads = d.Threads()
 			return kernels.GatedDeltaFused(d, kernels.DeltaFuse{Mamba1: true})
-		}},
-		// Mamba-2's: the whole update in one launch, its grouped norm, and the
-		// copy a mixer-only block ends with.
-		{&bs.ssdScan, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || !r.SSD {
-				return nil, nil
-			}
-			d := deltaScanOf(r, rows, bs.qkLanes)
-			bs.scanThreads = d.Threads()
-			return kernels.GatedDeltaFused(d, kernels.DeltaFuse{Chans: r.Chans, SSD: true})
-		}},
-		{&bs.ssdNorm, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || !r.SSD || r.NoNorm {
-				return nil, nil
-			}
-			w := r.VHeads * r.VDim / r.NormGroups
-			bs.ssdNormL = headLanes(w)
-			return kernels.GroupNormRows(r.NormGroups, w, p.RMSEps, rows, bs.ssdNormL)
-		}},
-		{&bs.copyRes, func() (*ir.Kernel, error) {
-			if !r.SSD && !r.Mamba1 {
-				return nil, nil
-			}
-			return kernels.Restride(rows, p.NEmbd, p.NEmbd, p.NEmbd)
-		}},
-		// The linear block's kernels, each nil when the model has no such block.
-		{&bs.convRows, func() (*ir.Kernel, error) {
-			if r.Conv == 0 {
-				return nil, nil
-			}
-			return kernels.Conv1dRows(r.Conv, r.Chans, rows)
-		}},
-		{&bs.scMul, func() (*ir.Kernel, error) {
-			if !r.ShortConv {
-				return nil, nil
-			}
-			return kernels.ActMul(rows*r.Chans, kernels.ActIdentity)
 		}},
 		{&bs.convCentred, func() (*ir.Kernel, error) {
 			if !r.Centred {
 				return nil, nil
 			}
 			return kernels.Conv3Centred(r.Chans, rows)
-		}},
-		{&bs.convShift, func() (*ir.Kernel, error) {
-			if r.Conv == 0 {
-				return nil, nil
-			}
-			return kernels.Conv1dShift(r.Conv, r.Chans, rows)
-		}},
-		{&bs.ssmSiLU, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			return kernels.Act(rows*r.Chans, kernels.ActSiLU)
-		}},
-		{&bs.splitGates, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			return kernels.SplitDeltaGatesRows(r.KHeads, r.VHeads/r.KHeads, rows)
-		}},
-		{&bs.deltaGate, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			return kernels.DeltaGateRows(r.VHeads, rows)
-		}},
-		// KDA's gate kernels: two launches because decay runs over VHeads*KDim
-		// channels and beta over VHeads heads. DeltaGate computes both, so each
-		// launch keeps the half it wants and sends the other to dGateWaste.
-		{&bs.deltaGateChan, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || !r.ChanDecay {
-				return nil, nil
-			}
-			if r.DecayBound != 0 {
-				// Kimi-K3's lower-bounded decay, the same params.
-				return kernels.DeltaDecayBoundRows(r.VHeads*r.KDim, rows, r.DecayBound)
-			}
-			return kernels.DeltaGateRows(r.VHeads*r.KDim, rows)
-		}},
-		{&bs.quantLR, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || !r.ChanDecay {
-				return nil, nil
-			}
-			return quantizeRows(rows, r.KDim, actWin)
-		}},
-		{&bs.deltaStepChan, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || !r.ChanDecay {
-				return nil, nil
-			}
-			return kernels.GatedDeltaStepChan(r.VHeads, r.VDim, r.KDim, r.VHeads/r.KHeads)
-		}},
-		{&bs.outSigMul, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || !(r.ChanDecay || r.SigmoidGate) {
-				return nil, nil
-			}
-			// SigmoidMul, not ActMul: KimiLinearRMSNormGated applies out*sigma(z)
-			// where qwen3next applies out*SiLU(z), which differ by a factor of z.
-			return kernels.SigmoidMul(rows * r.VHeads * r.VDim)
-		}},
-		{&bs.sliceQ, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			return kernels.SliceRows(r.KHeads*r.KDim, r.Chans, 0, rows)
-		}},
-		{&bs.sliceK, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			return kernels.SliceRows(r.KHeads*r.KDim, r.Chans, r.KHeads*r.KDim, rows)
-		}},
-		{&bs.sliceV, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			return kernels.SliceRows(r.VHeads*r.VDim, r.Chans, 2*r.KHeads*r.KDim, rows)
-		}},
-		{&bs.qkNorm, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			// The L2 norm is an RMSNorm with a unit weight and eps/n, one launch per
-			// operand. KDA's l2norm hardcodes eps 1e-6 added to the sum (not
-			// rms_norm_eps); dividing by KDim turns it into the mean form.
-			// engine/model/delta.go's kdaL2Eps is the same number.
-			eps := p.RMSEps
-			if r.ChanDecay {
-				eps = 1e-6
-			}
-			bs.qkNormL = headLanes(r.KDim)
-			return kernels.HeadNormRows(r.KHeads, r.KDim, eps/float64(r.KDim),
-				rows, bs.qkNormL)
-		}},
-		{&bs.qkScale, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			return kernels.Scale(rows * r.KHeads * r.KDim)
-		}},
-		{&bs.deltaStep, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			if r.KeyTiled && r.TailLen > 0 {
-				return kernels.GatedDeltaStepTiledStride(r.VHeads, r.VDim, r.KDim, r.KHeads, r.StateLen)
-			}
-			if r.KeyTiled {
-				return kernels.GatedDeltaStepTiled(r.VHeads, r.VDim, r.KDim, r.KHeads)
-			}
-			return kernels.GatedDeltaStep(r.VHeads, r.VDim, r.KDim, r.VHeads/r.KHeads)
 		}},
 		// The chunk's delta rule: GatedDeltaStep steps one token, so a batched
 		// submission needs the scan. Decode takes it too where the device has a
@@ -5552,7 +4674,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if r.ChanDecay {
 				eps = 1e-6
 			}
-			bs.scanThreads = d.Threads()
 			return kernels.GatedDeltaFused(d, kernels.DeltaFuse{Chans: r.Chans,
 				Eps: float32(eps / float64(r.KDim)), Scale: float32(1 / math.Sqrt(float64(r.KDim))),
 				BARep: r.VHeads / r.KHeads, Bound: r.DecayBound})
@@ -5565,21 +4686,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if rows == 1 && d.ScanLanes() == 1 {
 				return nil, nil
 			}
-			bs.scanThreads = d.Threads()
 			return kernels.GatedDeltaScan(d)
-		}},
-		{&bs.outNorm, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			bs.outNormL = headLanes(r.VDim)
-			return kernels.HeadNormRows(r.VHeads, r.VDim, p.RMSEps, rows, bs.outNormL)
-		}},
-		{&bs.outActMul, func() (*ir.Kernel, error) {
-			if r.Conv == 0 {
-				return nil, nil
-			}
-			return kernels.ActMul(rows*r.VHeads*r.VDim, kernels.ActSiLU)
 		}},
 	}
 	for _, j := range altJobs(bs, p, rows, actWin) {
@@ -6232,6 +5339,14 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		g.giveBackHead(bs)
 		g.Declined++
 		g.LastErr = why
+		return false
+	}
+	// A head the composer does not serve on this device runs on the CPU
+	// device's composed head, never on the tier's own kernels.
+	if why := bs.headServes(bs.hNorm, false, false); why != partServes {
+		g.giveBackHead(bs)
+		g.Declined++
+		g.LastErr = fmt.Sprintf("the composer does not serve the head on this device (%s)", DeclineName(int(why)))
 		return false
 	}
 	g.prepRowsReserved()
@@ -7203,7 +6318,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			top = max(top, v+1)
 		}
 	}
-	ropeDev := bs.ropeTable != nil && !g.RopeTableHost && rrows >= 1 &&
+	ropeDev := bs.ropeTable != nil && rrows >= 1 &&
 		pos >= 0 && top <= kernels.RopeTabMaxPos
 	// QSA's marks, each row's pictures (qsa.go).
 	if bs.pkv != nil {
@@ -7655,7 +6770,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	fold, ropeDev, argmax, sampleK, pick := a.fold, a.ropeDev, a.argmax, a.sampleK, a.pick
 	tableSrv, sampleSrv, embedSrv, raxes := a.tableSrv, a.sampleSrv, a.embedSrv, a.raxes
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
-	headWhy, pickOnly, headCapped := a.headWhy, a.pickOnly, a.headCapped
+	pickOnly, headCapped := a.pickOnly, a.headCapped
 	pickHeadSrv, pickSrv := a.pickHeadSrv, a.pickSrv
 	collapse := a.collapse
 	var err error
@@ -7705,159 +6820,6 @@ func (g *devTier) layersSession(s backend.Session) {
 		defer func() { g.launchTo.census = nil }()
 	}
 
-	// lamv launches a decode matvec at its own workgroup width: an in-group
-	// split is 32 rows by Split segments (kernels.GroupSplitWidth), every
-	// other matvec 128. The thread count is the same either way.
-	lamv := func(m mv, k backend.Kernel, threads int, bufs ...backend.Buf) {
-		w := 128
-		if m.group {
-			w = kernels.GroupSplitWidth(m.split)
-		} else if m.width > 0 && k == m.kern {
-			w = m.width
-		}
-		if err == nil {
-			err = lc.launch(k, (threads+w-1)/w, w, bufs...)
-		}
-	}
-	// dOf is what a matvec takes in the scale-plane slot.
-	dOf := func(r *resident) backend.Buf {
-		if !kernels.IsFloat(r.t) {
-			return r.d
-		}
-		if fsrc == nil && err == nil {
-			err = fmt.Errorf("tier: a %v matvec ran before any activation was quantized", r.t)
-		}
-		return fsrc
-	}
-	// runBatched launches a batched twin: straight into dst, or, when it
-	// splits k (a ragged step on a card with no matrix instruction; see
-	// ragMV), into the partials and a Reduce over every row of every token.
-	runBatched := func(bm mv, r *resident, dst, a, ax, d, f backend.Buf) {
-		if bm.act != nil {
-			// sm_70's tensor-core twin reads the float activation as f16.
-			//
-			// Once per source and layout, not once per matvec: q, k and v read
-			// one normed row, as do gate and up. A layout is the kernel (Q6_K's
-			// step order is not Q4_K's).
-			if bm.act != actMemoK || f != actMemoSrc {
-				lc.la(bm.act, bm.actN, f, g.f16Buf)
-				g.ActF16Launches++
-			}
-			memoK, memoSrc := bm.act, f
-			defer func() { actMemoK, actMemoSrc = memoK, memoSrc }()
-			out := dst
-			if bm.split > 1 {
-				out = g.partBuf
-			}
-			if bm.bias != nil {
-				lc.law(bm.kern, bm.threads, bm.width, r.qs, d, r.sc, g.f16Buf, out, bm.bias)
-			} else {
-				lc.law(bm.kern, bm.threads, bm.width, r.qs, d, r.sc, g.f16Buf, out)
-			}
-			if t := bm.tail; t != nil {
-				if bm.bias != nil {
-					lc.law(t.kern, t.threads, t.width, r.qs, d, r.sc, g.f16Buf, out, bm.bias)
-				} else {
-					lc.law(t.kern, t.threads, t.width, r.qs, d, r.sc, g.f16Buf, out)
-				}
-			}
-			if bm.split > 1 {
-				lc.la(bm.red, bm.redN, g.partBuf, dst)
-			}
-			return
-		}
-		n := bm.threads
-		if n == 0 {
-			n = bm.rows * bm.groups * max(bm.split, 1)
-		}
-		out := dst
-		if bm.split > 1 && !bm.group {
-			out = g.partBuf
-		}
-		if bm.bias != nil {
-			lamv(bm, bm.kern, n, r.qs, d, r.sc, a, ax, out, bm.bias)
-		} else {
-			lamv(bm, bm.kern, n, r.qs, d, r.sc, a, ax, out)
-		}
-		if bm.split > 1 && !bm.group {
-			lc.la(bm.red, bm.redN, g.partBuf, dst)
-		}
-	}
-	mvrun := func(m mv, r *resident, dst backend.Buf) {
-		if R > 1 {
-			// The batched twin has no split arm: a prefill chunk already has token
-			// parallelism, so MatVec refuses NTok > 1 with Split > 1.
-			bm, ok := g.batchMV(m, R, bs.tok)
-			if rag != nil {
-				bm, ok = g.ragStepMV(m, R, len(rag.pos))
-			}
-			if !ok {
-				if err == nil {
-					err = errNoBatch
-				}
-				return
-			}
-			runBatched(bm, r, dst, bs.a, bs.ax, dOf(r), fsrc)
-			return
-		}
-		if g.TableSplit && m.alt != nil {
-			m = *m.alt
-		}
-		out := dst
-		if m.split > 1 && !m.group {
-			out = g.partBuf
-		}
-		// The grid divides by the row tile; an oversized one is silent, since
-		// surplus threads clamp to the last work item.
-		n := m.rows * m.split
-		if m.rowt > 1 {
-			n /= m.rowt
-		}
-		if m.bias != nil {
-			lamv(m, m.kern, n, r.qs, dOf(r), r.sc, bs.a, bs.ax, out, m.bias)
-		} else {
-			lamv(m, m.kern, n, r.qs, dOf(r), r.sc, bs.a, bs.ax, out)
-		}
-		if m.split > 1 && !m.group {
-			lc.la(m.red, m.rows, g.partBuf, dst)
-		}
-	}
-	// skip holds WithSkip's bisection probes (scores, softmax, acc, attn, ffn,
-	// ...), which produce wrong tokens on purpose: skipping a phase and
-	// re-timing the prompt prices it without serialising the stream.
-	skip := map[string]bool{}
-	if R > 1 {
-		for k := range g.kb.skip {
-			skip[k] = true
-		}
-	}
-	// laRows launches one RMSNormGroup-thread group per row.
-	laRows := func(k backend.Kernel, bufs ...backend.Buf) {
-		actMemoK, actMemoSrc = nil, nil
-		if err == nil {
-			err = lc.launch(k, R, kernels.RMSNormGroup, bufs...)
-		}
-	}
-	// norm is RMSNorm or LayerNorm, decided by the block once; LayerNorm has
-	// a pass in between, a bias, and an apply reading two partial arrays.
-	norm := func(src, w, wb backend.Buf) {
-		// No pre-norm (OLMo 2): the branch reads the residual as it is.
-		if w == nil {
-			lc.la(bs.copyRows, R*p.NEmbd, src, bs.h)
-			return
-		}
-		if bs.rms != nil && bs.normVar == nil && wb == nil {
-			laRows(bs.rms, src, w, bs.h)
-			return
-		}
-		lc.la(bs.normPart, R*bs.parts, src, bs.part)
-		if bs.normVar != nil {
-			lc.la(bs.normVar, R*bs.parts, src, bs.part, bs.part2)
-			lc.la(bs.normApply, R*p.NEmbd, src, w, bs.part, bs.part2, wb, bs.h)
-			return
-		}
-		lc.la(bs.normApply, R*p.NEmbd, src, w, bs.part, bs.h)
-	}
 	// Scanned rather than counted on the tier, so no release path can let a
 	// counter drift.
 	streamed := false
@@ -7866,19 +6828,6 @@ func (g *devTier) layersSession(s backend.Session) {
 		if l := g.layers[li]; l != nil && (l.stream != nil || (R > 1 && l.router != nil)) {
 			streamed = true
 		}
-	}
-	// addRes is a block's residual add, out = x + y, with y scaled first where
-	// the model scales its block outputs (residScaled): never fused into a
-	// projection or a norm, which carry no scale.
-	scaled := residScaled(p)
-	// resScaled keeps the projections from fusing the residual.
-	addRes := func(x, y, out backend.Buf) {
-		if scaled {
-			lc.la(bs.addS, R*p.NEmbd, x, y, bs.rscale, out)
-			g.ResidScaled++
-			return
-		}
-		lc.la(bs.addE, R*p.NEmbd, x, y, out)
 	}
 	// emit issues the whole token's launches. It is a closure so the same code
 	// both runs the sequence and records it: one source for both means a graph
@@ -7908,31 +6857,11 @@ func (g *devTier) layersSession(s backend.Session) {
 		if ropeDev {
 			g.ds4Tables(lc, bs, R)
 		}
-		// A block-end residual add held for the next block's attention norm
-		// to do in its own launch (foldAddNorm): x = pendX + pendY.
-		var pendX, pendY backend.Buf
-		// The block the shadow arm ran its form beside, until the tier's
-		// kernels have written its output and it is compared (shadow.go).
-		var sh shadowStep
 		for li := lo; li < hi; li++ {
-			if sh.cmp != nil {
-				if serr := g.shadowEnd(lc, bs, &sh); err == nil {
-					err = serr
-				}
-			}
 			l := g.layers[li]
 			// The previous block's held launches go out; this block's are
 			// held when it is one the path takes.
 			lc.persistBlock(persist && !streamed && persistable(l, bs))
-			// A block whose every batched matvec is on sm_70's f16 path never reads
-			// the int8 activation, so it skips the quantize: the norm runs alone and
-			// fsrc names the float row the ActF16 conversion reads.
-			// Not an AltUp block, whose LAuReL branch quantizes between the norm
-			// and the attention. Not asked of a block the placement left to
-			// the composer (promptHeld): its matvecs have no twins to ask.
-			left := R > 1 && li < len(bs.left) && bs.left[li]
-			voltaOnly := R > 1 && rag == nil && !left && g.voltaBlock(l, R, bs.tok) && l.altRouter == nil && l.ds4 == nil &&
-				l.k3 == nil && l.q4e == nil
 			// The block the composer serves whole: its graph from the model's
 			// front end, formed as one unit and launched on the block's own
 			// weights and history -- a decode step's, or a prompt's at its
@@ -7980,13 +6909,6 @@ func (g *devTier) layersSession(s backend.Session) {
 						cp.rows = nrow
 					}
 				}
-			}
-			// A held add this block's norm will not take runs alone first: a
-			// block the composer serves or shadows takes none, its graph
-			// reading x whole.
-			if pendX != nil && (inst != nil || !g.foldTakes(l, R, voltaOnly, skip)) {
-				addRes(pendX, pendY, bs.x)
-				pendX, pendY = nil, nil
 			}
 			if why != partServes {
 				g.PartsDeclined[kind]++
@@ -8051,14 +6973,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				continue
 			}
 		}
-		if sh.cmp != nil {
-			if serr := g.shadowEnd(lc, bs, &sh); err == nil {
-				err = serr
-			}
-		}
-		if pendX != nil {
-			addRes(pendX, pendY, bs.x)
-		}
 		if collapse && err == nil {
 			err = g.runCollapse(lc, hb.collapse, bs, R)
 		}
@@ -8067,14 +6981,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		// states the final softcap writes the capped logits, where the
 		// tier's own cap would have, and the tier's cap is not launched over
 		// them.
-		headSrv := key.headSrv
-		switch {
-		case head == nil || headSrv:
-		default:
-			g.PartsDeclined[partHead]++
-			g.HeadDeclines[headWhy]++
-		}
-		if head != nil && (rag != nil || allRows) && headSrv {
+		if head != nil && (rag != nil || allRows) {
 			// The wanted rows (they lead) at their own count, written where
 			// the tier's projection writes them, then capped and picked as
 			// it does.
@@ -8102,58 +7009,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if err == nil {
 				err = g.ragTokens(lc, bs, hb, ragHead, sampleSrv)
 			}
-		} else if head != nil && (rag != nil || allRows) {
-			// The output norm, the projection of the rows that want logits
-			// (they lead) and a per-row argmax over them: their tokens and
-			// logits are read back. A chunk asking for every row's logits
-			// (nn.Head.RowLogits on Layers) takes the same tail.
-			hr := g.bs.head
-			norm(bs.x, hNorm, g.bs.hNormB)
-			lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
-			one, oneOK := mv{}, false
-			if ragHead == 1 {
-				one, oneOK = g.headOneMV(R) // compiled by prepRagged
-			}
-			if m := one; oneOK {
-				// One row: decode's head matvec at decode's split, reading
-				// the activation's first row -- the wanted row's -- and
-				// writing that row's logits, the first of ragLogits. A
-				// batched twin would project every row of the step to read
-				// back one.
-				if rowsFaulted("headone") {
-					// Decode's own kernel, which takes the sums to follow
-					// the first row's scales: they follow all R rows'.
-					m.kern = g.bs.mvHead.kern
-				}
-				out := bs.ragLogits
-				if m.split > 1 && !m.group {
-					out = g.partBuf
-				}
-				nt := m.rows * m.split
-				if m.rowt > 1 {
-					nt /= m.rowt
-				}
-				lamv(m, m.kern, nt, hr.qs, dOf(hr), hr.sc, bs.a, bs.ax, out)
-				if m.split > 1 && !m.group {
-					lc.la(m.red, m.rows, g.partBuf, bs.ragLogits)
-				}
-			} else {
-				hm := bs.ragHead
-				if gm, ok := g.groupMV(g.headMV(), ragHead, R); ok {
-					hm = gm // the wanted rows only
-				}
-				runBatched(hm, hr, bs.ragLogits, bs.a, bs.ax, dOf(hr), fsrc)
-			}
-			// The final softcap, then the argmax over the capped rows: over
-			// the wanted rows only, as the one-row and few-row heads project
-			// nothing past them, and no row past them is read.
-			if bs.ragCapK != nil && !rowsFaulted("nocap") {
-				lc.la(bs.ragCapK, ragHead*hr.nrows, bs.ragLogits, bs.ragCap)
-			}
-			if err == nil {
-				err = g.ragTokens(lc, bs, hb, ragHead, sampleSrv)
-			}
-		} else if fold && headSrv {
+		} else if fold {
 			// The chunk's last row, into the decode scratch, and decode's
 			// head on it.
 			lc.la(hb.spanK, p.NEmbd, bs.x, hb.x, hb.spanOff)
@@ -8185,57 +7041,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			}
 			g.HeadFolds++
-		} else if fold {
-			// The chunk's last row, into the decode scratch, and the decode
-			// scratch's head sequence on it -- mvrun's one-row arm, spelled
-			// out because mvrun's R is the chunk's.
-			hr := hb.head
-			lc.la(hb.spanK, p.NEmbd, bs.x, hb.x, hb.spanOff)
-			switch {
-			case hNorm == nil:
-				lc.la(hb.copyRows, p.NEmbd, hb.x, hb.h)
-			case hb.normVar != nil:
-				// A LayerNorm head (C6): the mean, the variance about it, and
-				// the apply with the norm's bias, as the one-row head's norm.
-				lc.la(hb.normPart, hb.parts, hb.x, hb.part)
-				lc.la(hb.normVar, hb.parts, hb.x, hb.part, hb.part2)
-				lc.la(hb.normApply, p.NEmbd, hb.x, hNorm, hb.part, hb.part2, hb.hNormB, hb.h)
-			default:
-				lc.la(hb.normPart, hb.parts, hb.x, hb.part)
-				lc.la(hb.normApply, p.NEmbd, hb.x, hNorm, hb.part, hb.h)
-			}
-			lc.la(hb.quantE, kernels.QuantizeThreads(p.NEmbd/32), hb.h, hb.a, hb.ax)
-			// The label pick projects the picked rows alone (pickMV).
-			pickOnly := pick && g.pickMV != nil && hb.headCap == nil
-			if pickOnly {
-				lc.la(g.pickMV, pickMax, hr.qs, hr.d, hr.sc, hb.a, hb.ax, g.pickOut, g.pickIDs)
-				g.PickRows++
-			}
-			m := hb.mvHead
-			if g.TableSplit && m.alt != nil {
-				m = *m.alt
-			}
-			out := hb.logits
-			if m.split > 1 && !m.group {
-				out = g.partBuf
-			}
-			n := m.rows * m.split
-			if m.rowt > 1 {
-				n /= m.rowt
-			}
-			if !pickOnly {
-				lamv(m, m.kern, n, hr.qs, hr.d, hr.sc, hb.a, hb.ax, out)
-				if m.split > 1 && !m.group {
-					lc.la(m.red, m.rows, g.partBuf, hb.logits)
-				}
-				if hb.headCap != nil {
-					lc.la(hb.headCap, m.rows, hb.logits, hb.logitsCap)
-				}
-				if pick && err == nil {
-					err = g.runPick(lc, hb, pickSrv)
-				}
-			}
-			g.HeadFolds++
 		} else if head != nil {
 			// The output norm and the vocabulary projection, in the same
 			// submission: the residual stream is never read back.
@@ -8244,7 +7049,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				if err == nil {
 					err = g.runPickHead(lc, bs, hNorm, bs.x)
 				}
-			} else if headSrv {
+			} else {
 				out := bs.logits
 				if headCapped && bs.headCap != nil {
 					out, capped = bs.logitsCap, true
@@ -8255,40 +7060,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				if err == nil {
 					err = serr
-				}
-			} else {
-				if hNorm == nil {
-					// No output norm: the row as it is.
-					lc.la(bs.copyRows, R*p.NEmbd, bs.x, bs.h)
-				} else if bs.normVar != nil {
-					// A LayerNorm head (C6): its mean, variance and apply, with
-					// the output norm's bias (zeros where the file has none).
-					norm(bs.x, hNorm, bs.hNormB)
-				} else {
-					lc.la(bs.normPart, R*bs.parts, bs.x, bs.part)
-				}
-				// HeadNormRepeat is a probe, not a feature: normApply is idempotent, so
-				// each repeat costs exactly one extra tiny dispatch, which prices whether
-				// the head's fixed per-token cost is dispatch structure or work (see the
-				// Metal entries in AGENTS.md).
-				if bs.normVar == nil && hNorm != nil {
-					for r := 0; r < g.HeadNormRepeat; r++ {
-						lc.la(bs.normApply, p.NEmbd, bs.x, hNorm, bs.part, bs.h)
-					}
-					lc.la(bs.normApply, p.NEmbd, bs.x, hNorm, bs.part, bs.h)
-				}
-				lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
-				// HeadMatvecRepeat is the same idempotent-repeat probe on the head
-				// matvec, pricing it by repetition.
-				if pickOnly {
-					// The label pick projects the picked rows alone (pickMV).
-					lc.la(g.pickMV, pickMax, bs.head.qs, bs.head.d, bs.head.sc, bs.a, bs.ax, g.pickOut, g.pickIDs)
-					g.PickRows++
-				} else {
-					for r := 0; r < g.HeadMatvecRepeat; r++ {
-						mvrun(bs.mvHead, bs.head, bs.logits)
-					}
-					mvrun(bs.mvHead, bs.head, bs.logits)
 				}
 			}
 			if bs.headCap != nil && !capped {
@@ -9771,11 +8542,6 @@ func (g *devTier) kStride(p *nn.LayerPlan) int {
 	return p.MaxSeq + 1
 }
 
-// devKVPage is the granule the device's capacity grows in. It matches the
-// host's page so a block's cache has the same shape on both sides of the seam
-// and MigrateKV stays a straight copy of a position range.
-const devKVPage = 256
-
 // capped is the plan with MaxSeq replaced by what this device is actually built
 // for. Every kernel build, every allocation and every bound goes through it. It
 // also caps the score scratch (rows*NHead*sstride*4 twice), which at a long
@@ -10059,14 +8825,6 @@ func nonCausalConflict(bs *blockScratch, p *nn.LayerPlan) string {
 	return ""
 }
 
-// kvGrow is one session's cache on one text block, and the buffers a growth
-// replaces it with.
-type kvGrow struct {
-	li     int
-	kvp    *kvPair
-	nk, nv backend.Buf
-}
-
 // kvCacheBytes is one session's K and V cache for one block at capacity c.
 func (g *devTier) kvCacheBytes(p *nn.LayerPlan, c int) (cache, vcache int) {
 	cache = (c + 1) * p.KVRow() * 4
@@ -10167,10 +8925,6 @@ func (g *devTier) initKVCap(p *nn.LayerPlan) {
 	g.paged, g.kvCap = true, p.MaxSeq
 }
 
-// devKVReserve is how many positions of history a device reserves up front,
-// before growing (see initKVCap).
-const devKVReserve = 2048
-
 // DeclinePlan answers nn.PlanDecliner: would this tier refuse a block of this
 // shape, before anyone reads its weights? Empty means it would not.
 //
@@ -10224,11 +8978,10 @@ const volta70AccMT = 1
 // checks lat >= 32 first.
 func volta70LatMT(dims int) int { return min(dims/32, 4) }
 
-// volta70Attn builds bs's batched attention on sm_70's m8n8k4, both products,
-// or neither: the scores alone would still need the accumulate's 32-row group
-// in the softmax, and the pair is gated as a pair. It is for a device that
-// lowers MMAVolta and not m16n8k16 (the caller tried that first), with the
-// transposed f32 K cache these read; anything else keeps the FMA tiles.
+// volta70Attn reports whether bs's batched attention takes sm_70's m8n8k4 --
+// a device that lowers MMAVolta and not m16n8k16 (the caller tried that
+// first), with the transposed f32 K cache -- and sets the softmax's group to
+// that tile's 32 query rows.
 func (g *devTier) volta70Attn(bs *blockScratch, kvDim, gqa int, scale float32) bool {
 	p := &bs.p
 	kst := g.kStride(p)
@@ -10237,53 +8990,8 @@ func (g *devTier) volta70Attn(bs *blockScratch, kvDim, gqa int, scale float32) b
 		p.HeadDim%32 != 0 || bs.rows%(8*volta70AttnNT) != 0 || bs.sstride%4 != 0 {
 		return false
 	}
-	comp := func(k *ir.Kernel, err error) backend.Kernel {
-		if err != nil {
-			return nil
-		}
-		c, err := g.compile(k)
-		if err != nil {
-			return nil
-		}
-		return c
-	}
-	sk := comp(kernels.AttnScoresMMA70(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale, bs.rows, kst,
-		volta70AttnMT, volta70AttnNT, 0))
-	ak := comp(kernels.AttnAccMMA70(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, bs.rows,
-		volta70AccMT, volta70AttnNT))
-	var sw backend.Kernel
-	if p.SWAWindow > 0 {
-		sw = comp(kernels.AttnScoresMMA70(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale, bs.rows, kst,
-			volta70AttnMT, volta70AttnNT, windowArg(p)))
-	}
-	if sk == nil || ak == nil || (p.SWAWindow > 0 && sw == nil) {
-		for _, k := range []backend.Kernel{sk, ak, sw} {
-			if k != nil {
-				closeKern(k)
-			}
-		}
-		return false
-	}
-	bs.scores70, bs.acc70, bs.scores70W = sk, ak, sw
 	bs.atile = 8 * volta70AttnNT
 	g.AttnMMA = true
-	// The one-kernel form where it takes the shape (no sinks, no chunked
-	// window); the pair above stays built as everyone else's path and
-	// NoFlashPrefill's arm.
-	if !g.NoFlashPrefill && !p.AttnSinks && !p.SWAChunked && bs.rows%kernels.FlashPrefill70Rows == 0 {
-		fs := kernels.FlashPrefill70Shape{Heads: p.NHead, KVHeads: p.NHead / gqa, Dim: p.HeadDim, Rows: bs.rows,
-			KStride: kst, Scale: scale, Softcap: p.AttnSoftcap}
-		fk := comp(kernels.FlashPrefill70(fs))
-		var fw backend.Kernel
-		if fk != nil && p.SWAWindow > 0 {
-			fs.Window = p.SWAWindow
-			if fw = comp(kernels.FlashPrefill70(fs)); fw == nil {
-				closeKern(fk)
-				fk = nil
-			}
-		}
-		bs.fp70, bs.fp70W = fk, fw
-	}
 	return true
 }
 
@@ -10296,73 +9004,6 @@ func (g *devTier) mla70Attn(p *nn.LayerPlan, rows int) bool {
 	return !g.NoVolta && !g.kb.noAttnMMA && !g.KVF16 && rows%(8*volta70AttnNT) == 0 &&
 		32*volta70AttnMT <= maxKeyTile && p.KVRow()%4 == 0 && lat >= 32 &&
 		lat%(32*volta70LatMT(lat)) == 0 && g.sm70()
-}
-
-// voltaBlock reports whether every matvec of block l runs, at this batch width,
-// as sm_70's f16 twin (voltaMV), which reads the float activation through
-// ActF16 and never the int8 one. A lookup: batchMV's twins are compiled by
-// prepBatch before any session.
-func (g *devTier) voltaBlock(l *layer, ntok, tok int) bool {
-	if l.router != nil || l.linear || l.mla || l.stream != nil || l.clampB != nil {
-		return false
-	}
-	n := 0
-	for _, m := range []mv{l.mvq, l.mvk, l.mvv, l.mvo, l.mvg, l.mvu, l.mvd} {
-		if m.kern == nil {
-			continue
-		}
-		bm, ok := g.batchMV(m, ntok, tok)
-		if !ok || bm.act == nil {
-			return false
-		}
-		n++
-	}
-	return n > 0
-}
-
-// flashTileAttn builds kernels.FlashPrefillTile for a batched block where it
-// takes the shape: a device that lowers the collective tiles (tilesOK), the
-// transposed float32 K cache and float32 V, no sinks and no chunked window, a
-// chunk that is a whole number of the kernel's query blocks. It leaves fpT nil
-// otherwise, and the three-kernel path runs.
-func (g *devTier) flashTileAttn(bs *blockScratch, kvDim, gqa int, scale float32) {
-	p := &bs.p
-	kst := g.kStride(p)
-	if g.NoFlashPrefill || g.KVF16 || bs.rows <= 1 || kst <= 0 || !g.tileF32() ||
-		p.MLA() || p.NonCausal || p.AttnSinks || p.SWAChunked || kvDim%4 != 0 {
-		return
-	}
-	// Only at the 32-row blocking, as measured on Apple Silicon: a workgroup
-	// re-stages K and V for every block of query rows, so a narrower block
-	// (wide heads) lost to the three kernels. Staging K/V once per shared kv
-	// head would fix the wide heads, but the float32 output in workgroup memory
-	// leaves no room.
-	t, ok := kernels.FlashTileFor(p.HeadDim)
-	if !ok || t.SG < 4 || bs.rows%t.Rows() != 0 {
-		return
-	}
-	comp := func(k *ir.Kernel, err error) backend.Kernel {
-		if err != nil {
-			return nil
-		}
-		c, err := g.compile(k)
-		if err != nil {
-			return nil
-		}
-		return c
-	}
-	fs := kernels.FlashPrefill70Shape{Heads: p.NHead, KVHeads: p.NHead / gqa, Dim: p.HeadDim, Rows: bs.rows,
-		KStride: kst, Scale: scale, Softcap: p.AttnSoftcap}
-	fk := comp(kernels.FlashPrefillTile(fs, t))
-	var fw backend.Kernel
-	if fk != nil && p.SWAWindow > 0 {
-		fs.Window = p.SWAWindow
-		if fw = comp(kernels.FlashPrefillTile(fs, t)); fw == nil {
-			closeKern(fk)
-			fk = nil
-		}
-	}
-	bs.fpT, bs.fpTW, bs.fpTile = fk, fw, t
 }
 
 // spanKernel builds the decode scratch's row copy the folded head reads (a

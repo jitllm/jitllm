@@ -47,10 +47,7 @@ func (f *JIT) GatedSSD(o, state, b, c, x []float32, decay, dt, d float32, rows, 
 }
 
 // ssdGateOnce guards Mamba-2's gate kernel, shape-free like the delta gate.
-var (
-	ssdGateOnce tierOnce
-	ssdGateK    [cpu.NumTiers]*cpu.Code
-)
+var ()
 
 // AddSelScan generates Mamba-1's selective scan for one state size,
 // provisioned per model like AddSSD.

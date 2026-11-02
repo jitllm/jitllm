@@ -904,7 +904,7 @@ type LayerPlan struct {
 	// configuration), so both tiers derive the table from the same constants.
 	// nil for a block with no rotary, and RopeTabSWA is nil wherever SWAPeriod
 	// is zero. A tier may ignore them and upload the finished cs/csSWA tables
-	// instead; see tier.Config.RopeTableHost.
+	// instead.
 	RopeTab, RopeTabSWA []float32
 	// RopeSplit is XD-RoPE (HunyuanVL): each NEOX pair's two elements turn by
 	// tables of their own, so a row's table is two of NRot floats (A then B;

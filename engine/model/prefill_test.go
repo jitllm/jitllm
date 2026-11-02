@@ -83,12 +83,10 @@ func TestPrefillMatchesForward(t *testing.T) {
 			})
 		}
 	})
-	// On each device, both sessions on one tier: the tier's own kernels; the
-	// composer serving the decode's blocks, the prompt's at the chunk's rows
-	// and the head (ComposedPrompt); and the same with every other block left
-	// to the tier's kernels (Config.TierBlocks), so a chunk runs the two in
-	// turn; tinyllama's Q3_K blocks on the tier's kernels and the composer's;
-	// and gemma-3-1b's sliding layers over a prompt past their window,
+	// On each device, both sessions on one tier: the composer serving the
+	// decode's blocks, the prompt's at the chunk's rows and the head
+	// (ComposedPrompt); tinyllama's Q3_K blocks; and gemma-3-1b's sliding
+	// layers over a prompt past their window,
 	// whose rows read the windowed descriptors. The shipped mode's bar: a
 	// block whose output a neighbour's held add overwrote, or a windowed row
 	// that read the whole history, misses it by orders.
@@ -103,14 +101,14 @@ func TestPrefillMatchesForward(t *testing.T) {
 		}
 		for _, dev := range stepDevices() {
 			for _, arm := range []struct {
-				name           string
-				path           string
-				parts          tier.Parts
-				mixed, windows bool
-			}{{"composed", llama, parts, false, false}, {"windowed", gemma, parts, false, true},
-				{"tinyllama composed", tiny, parts, false, false}} {
+				name    string
+				path    string
+				parts   tier.Parts
+				windows bool
+			}{{"composed", llama, parts, false}, {"windowed", gemma, parts, true},
+				{"tinyllama composed", tiny, parts, false}} {
 				t.Run(dev+"/"+arm.name, func(t *testing.T) {
-					prefillOnDevice(t, arm.path, dev, arm.parts, arm.mixed, arm.windows)
+					prefillOnDevice(t, arm.path, dev, arm.parts, arm.windows)
 				})
 			}
 		}
@@ -118,20 +116,15 @@ func TestPrefillMatchesForward(t *testing.T) {
 }
 
 // prefillOnDevice is prefillVsForward on device dev, both sessions on one
-// tier asking the composer for parts, every odd block kept on the tier's
-// kernels where mixed, the prompt past the model's sliding window where
-// windows: the composer served every prompt block step it was asked for and
-// declined only the blocks kept.
-func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, windows bool) {
+// tier asking the composer for parts, the prompt past the model's sliding
+// window where windows: the composer served every prompt block step it was
+// asked for.
+func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, windows bool) {
 	m, err := Open(jlmOf(t, path), noTune)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	var keep []int
-	for li := 1; mixed && li < m.Cfg.NLayer; li += 2 {
-		keep = append(keep, li)
-	}
 	minTok := 0
 	if windows {
 		if m.Cfg.SWAWindow == 0 {
@@ -147,7 +140,7 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 	// The prompt goes in chunks of at most 64 rows: the device reserves and
 	// warms the widths up to 64, each a form of the composer's.
 	opts := []tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.TierBlocks, c.PromptRows = keep, 64 })}
+		tier.WithConfig(func(c *tier.Config) { c.PromptRows = 64 })}
 	g, err := tier.OpenWith(append(opts, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
@@ -166,14 +159,10 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 	if parts == 0 {
 		return
 	}
-	var allow []string
-	if mixed {
-		allow = []string{"the caller keeps it on the tier's kernels"}
-	}
-	composedRan(t, parts, allow, g)
+	composedRan(t, parts, nil, g)
 	st := g.Stats()
 	np, dp := st.ServedPart(tier.ComposedPrompt)
-	if per := m.Cfg.NLayer - len(keep); np == 0 || np%per != 0 || dp != 0 && !mixed {
+	if per := m.Cfg.NLayer; np == 0 || np%per != 0 || dp != 0 {
 		t.Fatalf("the composer served %d block steps of the prompt, %d of a chunk, and declined %d", np, per, dp)
 	}
 	if hs, hd := st.ServedPart(tier.ComposedHead); parts&tier.ComposedHead != 0 && (hs == 0 || hd != 0) {
@@ -191,8 +180,8 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 	if strings.HasPrefix(dev, "cuda") && at == 0 {
 		t.Fatalf("%s: the prompt's %d composed block steps ran no attention on the matrix unit", dev, np)
 	}
-	t.Logf("the composer served %d block steps of the prompt (%d launches on the matrix unit, %d of them attentions), the tier's kernels %d blocks a step",
-		np, mx+at, at, len(keep))
+	t.Logf("the composer served %d block steps of the prompt (%d launches on the matrix unit, %d of them attentions)",
+		np, mx+at, at)
 }
 
 // prefillVsForward compares Prefill against a Forward loop. exact demands bit

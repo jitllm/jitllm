@@ -37,10 +37,3 @@ func RoPE32JIT(x []float32, hd int, cs []float32, neox bool) {
 	}
 	c.(*cpu.Code).Call(&cpu.Args{Out: &x[0], AScale: &cs[0], Rows: int64(len(x) / hd)})
 }
-
-type ropeSplitKey struct {
-	t        cpu.Tier
-	hd, nrot int
-}
-
-var ropeSplits sync.Map

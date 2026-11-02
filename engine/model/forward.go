@@ -97,9 +97,7 @@ type Instance struct {
 	// bidirAll makes a mixed prompt's every row one bidirectional run
 	// (bidirRuns): a non-causal decoder's prompt with pictures in it.
 	bidirAll bool
-	// rlBases and rlEnds are relocateRows' per-sequence spans.
-	rlBases, rlEnds []int
-	m               *Model
+	m        *Model
 	// pending is the move between devices PrepareMove started and no Commit
 	// or Cancel has ended (moveblocks.go).
 	pending *PendingMove
@@ -138,14 +136,8 @@ type Instance struct {
 	// ServedOnE counts the times a prefill was placed on the E-cores' pool beside a
 	// decoding session (serving.go): what a gate reads to know the split ran.
 	ServedOnE int64
-	// grp is groupOf's call, reused; groupOff keeps a fused run's matvecs
-	// one region each (SetMatVecGroups); Grouped counts the group calls.
-	grp      nn.MVGroup
-	groupOff bool
-	// aheads is the fused runs' lookahead sets, one per (block, op), and
-	// lookOff turns the lookahead off (fuse.go).
-	aheads  []nn.AheadSet
-	lookOff bool
+	groupOff  bool
+	lookOff   bool
 	// residFold lets the o and down groups add their rows into the
 	// residual (WithResidualFold).
 	residFold bool
@@ -210,14 +202,7 @@ type Instance struct {
 	// The shared expert's scratch. Its width is NFFNShExp, a different key
 	// from the routed experts'.
 	shGate, shUp, shOut []float32
-	// The shared expert run behind the routed read (moe): the block and row
-	// it is for, the read's join and error, and its weight once computed.
-	shOverlap  *layer
-	shOverlapH []float32
-	expWG      sync.WaitGroup
-	expReq     chan expRead
-	expErr     error
-	shW        float32
+	expReq              chan expRead
 	// hyOrd and hyW are hostExperts' selection in ascending id and its
 	// weights in that order, kept so a token allocates neither.
 	hyOrd []int32
@@ -234,13 +219,9 @@ type Instance struct {
 	// them, with those streamed to make room for the head (streamForHead).
 	autoStreamed int
 	streamedOn   []bool
-	shReady      bool
 	// ShOverlaps counts mixture layers whose shared expert ran behind the
 	// routed read: the selection check for WithSharedOverlap.
 	ShOverlaps int
-	// sg is the shared expert's one-logit gate and a constant 1, the operands
-	// of a one-element generated sigmoid (see sharedExpert).
-	sg [2]float32
 	// ple is this token's per-layer embedding inputs (Config.PLEDim), pleT
 	// the table row they are built from, pleG and pleO a block's gate and
 	// projection, and bple a batched chunk's inputs, one row each. See ple.go.
@@ -251,7 +232,6 @@ type Instance struct {
 	// are a chunk's.
 	xa, altPred, altH, altM, altC, altOnes []float32
 	altInn, altLaur, altLT, altExp, altXC  []float32
-	baltPred, baltLaur                     []float32
 	// ds is DeepSeek V4's scratch (ds4.go); xa is its streams too. tok is
 	// the token a decode step embeds, -1 for a supplied embedding: DeepSeek
 	// V4's hash blocks route by it.
@@ -266,7 +246,6 @@ type Instance struct {
 	// allocation, and rowx one row's streams in a prefill's row-by-row
 	// device retry (rowStreams).
 	tok1    [1]int32
-	rowx    []float32
 	axes1   [4]int32
 	raxes   []int32
 	tokFill bool
@@ -386,17 +365,7 @@ type Instance struct {
 	// tailPos is a ragged tail step's positions, kept so the step allocates
 	// nothing once grown.
 	tailPos []int
-	// rtTook, rtStart and rtSeen are rowsTake's scratch, kept from step to step.
-	rtTook, rtStart []int
-	// retireRow is Retire's one row, handed to the device without a slice
-	// made each time; rrBases, rrEnds and rrFlat are relocateRows' and
-	// flatSlots', and rrSD the device relocateRows reserves on.
-	retireRow       [1]int
-	rrBases, rrEnds []int
-	rrFlat          []int
-	rrSD            nn.SeqKVDevice
-	rrFits          func() bool
-	rtSeen          []bool
+	rrFlat  []int
 	// relocate hands the device's highest block to the host when its history
 	// cannot grow, rather than letting the token fail. See SetRelocate.
 	relocate     bool
@@ -452,8 +421,6 @@ type Instance struct {
 	// mlaG and bmlaG are Kimi-K3's MLA output gate (mla.go), one row and a
 	// chunk's; nil where no block has one.
 	mlaG, bmlaG []float32
-	// mlaAbsLooped counts absorb steps that fell back to one matvec per head.
-	mlaAbsLooped atomic.Int64
 	// DeepSeek V3.2's lightning indexer (indexer.go); nil unless
 	// Config.Indexer(). idxAttn scores the cached rows' indexer tails.
 	idxQ, idxW, idxTmp, idxScore, idxBias []float32
@@ -498,11 +465,8 @@ type Instance struct {
 	bx, bh, bq, bxb []float32
 	bk, bv          []float32
 	bgate, bup      []float32
-	// bclamp is a clipped linear's clamped input (Gemma 4's tower,
-	// clampIn), grown on first use; nil on every other model.
-	bclamp    []float32
-	bqf, bxbf []float32
-	battf     []float32 // per-token score rows, at rowsStride
+	bqf, bxbf       []float32
+	battf           []float32 // per-token score rows, at rowsStride
 
 	// jit is the generated-code tier.
 	jit *nn.JIT
@@ -534,9 +498,6 @@ type Instance struct {
 	// stepb is the model's step scratch holder while this instance leads a
 	// host step (borrowStep).
 	stepb *stepBuf
-	// ra and raRun are a ragged step's attention fan-out (rowsHost).
-	ra    rowsAttn
-	raRun func(lo, hi int)
 	// rowCausal is a ragged step's rows in position order (rowsHost).
 	rowCausal []int
 	// onDev[li] says block li runs on a device: the truth for execution, where
@@ -559,11 +520,7 @@ type Instance struct {
 	// HostPicked says the last prefill did. A decision readout sets them.
 	HostPick     []int32
 	HostPickVals []float32
-	// pickView and pickTmp are pickOnHost's view of a slot's rows and their
-	// projections, kept here so a warm pick allocates nothing.
-	pickView   nn.Packed
-	pickTmp    [8]float32
-	HostPicked bool
+	HostPicked   bool
 	// cs is the rotary table for the current position: NRot floats, filled once
 	// per token and read by every head and by the device blocks.
 	cs []float32

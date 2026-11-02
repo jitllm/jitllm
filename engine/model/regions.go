@@ -15,20 +15,9 @@ import (
 // one set of fields serves every call; each is cleared of its slices
 // afterwards so the instance pins no caller's buffer.
 type regions struct {
-	elem   elemRegion
-	attn   attnRegion
-	delta  deltaRegion
-	mamba1 mamba1Region
-	rows   rowRegion
-	embed  embedRegion
-	pattn  prefAttnRegion
-}
-
-// mamba1Region is Mamba-1's selective scan fanned out over channels
-// (Instance.mamba1Scan).
-type mamba1Region struct {
-	st, a, d []float32
-	fn       func(lo, hi int)
+	elem  elemRegion
+	rows  rowRegion
+	embed embedRegion
 }
 
 // elemOp is which elementwise op an elemRegion runs.
@@ -88,33 +77,6 @@ func (s *Instance) elemChunk(lo, hi int) {
 			nn.Axpy32JIT(j.a[a:b], s.moeDown[e*n+a:e*n+b], w)
 		}
 	}
-}
-
-// attnRegion is decode's attention fan-out over heads: the arguments the
-// region reads, filled by forward before each dispatch (see Instance.attnHeads).
-type attnRegion struct {
-	l                     *layer
-	li, gqa, qw, ow, hd   int
-	astride, pair, w0, an int
-	mla                   bool
-	scale, softcap        float32
-	qbuf, obuf, xb, atf   []float32
-	// bias is the lightning indexer's selection over the window (indexer.go),
-	// nil where every position is read. bstride is the distance between kv
-	// groups' rows of it: zero for DeepSeek V3.2's one selection, the scores
-	// stride for MiniMax-M3's one per group (msa.go).
-	bias    []float32
-	bstride int
-	fast    *nn.AttnSet
-	fn      func(lo, hi int)
-}
-
-// deltaRegion is the gated delta rule's fan-out over value heads (Instance.delta).
-type deltaRegion struct {
-	st, q, k, v []float32
-	// d is a Mamba-2 block's skip, one per value head; nil on the delta rule.
-	d  []float32
-	fn func(lo, hi int)
 }
 
 // rowOp is which per-row op a rowRegion runs.
@@ -253,19 +215,4 @@ func (s *Instance) fillRow(src []func(dst []float32) error, ids []int32, i int, 
 		return s.embedInto(dst, ids[i])
 	}
 	return src[i](dst)
-}
-
-// prefAttnRegion is a prompt chunk's attention fan-out over its rows
-// (Instance.hostRows): the arguments each row reads, filled before the dispatch.
-type prefAttnRegion struct {
-	l                         *layer
-	li, kvli, slot, p0, n     int
-	qDim, qw, ow, hd, gqa     int
-	astride, mstride          int
-	mla, bidir                bool
-	scale                     float64
-	bq, bxb, qsrc, odst, attf []float32
-	masks                     [][]float32
-	fast                      *nn.AttnSet
-	fn                        func(lo, hi int)
 }

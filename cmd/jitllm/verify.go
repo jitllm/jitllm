@@ -867,15 +867,6 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		if os.Getenv("JITLLM_AB_AA") == "1" {
 			b = bench.Case{Name: "operand by its own launch (A/A)", Fn: func(it int) { g.NoActFuse = true; step(it) }}
 		}
-	case "ropetab":
-		// Refuse rather than compare a knob that reached nothing: a device
-		// with no rotary-table kernel uploads on both arms.
-		if w := g.Stats().RopeTableWhy; w != "" {
-			panic(fmt.Errorf("this device uploads the rotary table either way (%s); "+
-				"there is nothing to compare", w))
-		}
-		a = bench.Case{Name: "table uploaded from the host", Fn: func(it int) { g.RopeTableHost = true; step(it) }}
-		b = bench.Case{Name: "table built on the device", Fn: func(it int) { g.RopeTableHost = false; step(it) }}
 	case "persist":
 		// Both arms keep their recording (the graph key carries the arm), so
 		// no round pays for the other's capture or composition.
