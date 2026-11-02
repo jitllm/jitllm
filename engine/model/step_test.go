@@ -301,10 +301,6 @@ func stepGate(t *testing.T, m *Model, g *tier.GPU, apart bool) stepResult {
 				t.Fatal(err)
 			}
 			if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
-				// A block the device does not implement is not a small card.
-				if why := g.DeclinePlan(st.planFor(0)); why != "" {
-					t.Skipf("THE DEVICE DECLINES THE BLOCK: %s -- this gate proved nothing here", why)
-				}
 				t.Skipf("CARD TOO SMALL: %d of %d blocks, head %v -- this gate proved nothing here (%s)",
 					st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), g.Err())
 			}

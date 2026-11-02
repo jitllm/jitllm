@@ -55,7 +55,8 @@ func (m *Model) ngramStreams(b *graph.Builder, xs []graph.ValueID,
 	gvs := b.Emit(graph.OpConcat, gv, []graph.Result{{Name: "ng.gvs", Width: hd}}, nil, graph.Attrs{}, nil, nil)[0]
 	g := c.delta()
 	at := b.G.StateVersion(graph.StateRecState)
-	conv := b.Emit(graph.OpStateConv, []graph.ValueID{norm("ng.conv.in", gvs, jlm.RoleNGramNormConv)},
+	convIn := norm("ng.conv.in", gvs, jlm.RoleNGramNormConv)
+	conv := b.Emit(graph.OpStateConv, []graph.ValueID{convIn},
 		[]graph.Result{{Name: "ng.conv", Width: hd}},
 		[]graph.Binding{{Role: jlm.RoleNGramConv, K: c.NGramConv, Rows: hd}},
 		graph.Attrs{Taps: c.NGramConv, Dil: c.NGram, Offset: g.vHeads*g.vDim*g.kDim + c.NGram - 1,

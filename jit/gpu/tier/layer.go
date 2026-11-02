@@ -1645,11 +1645,7 @@ type blockScratch struct {
 	qtile, ktile, atile int
 	// bytes is what building this scratch allocated, by the device's count
 	// (0 where it keeps none).
-	bytes int64
-	// mg is a batched scratch's mixture half, or nil (see moegroup.go).
-	mg *moeGroup
-	// mlab is a batched scratch's latent-attention half, or nil (mlabatch.go).
-	mlab      *mlaBatch
+	bytes     int64
 	scoresMMA backend.Kernel // the tensor-core scores kernel, or nil
 	// scoresW and scoresMMAW are the same two kernels for a sliding-window
 	// layer (LayerPlan.Window), built only when the plan has a window. The mask
@@ -1666,8 +1662,6 @@ type blockScratch struct {
 	flashChunk, flashForced, flashCap int // flashSplitFor's inputs
 	// ds4 is DeepSeek V4's set (ds4.go), nil on every other model.
 	ds4 *ds4Scratch
-	// q4e is Qwen3.8-Flash-Next's set (q4e.go), nil on every other model.
-	q4e *q4eScratch
 
 	scoresW backend.Kernel
 	// mla70 says a batched latent block's attention runs on sm_70's m8n8k4
@@ -1803,9 +1797,13 @@ type blockScratch struct {
 	// position axes reads (nn.LayerPlan.RopeTabAxes): its planes, and the
 	// live row count then each row's four positions.
 	ropeTabAxes, rposAxes backend.Buf
-	ropeTable             backend.Kernel
-	ropeNPairs            int
-	quantF, quantQ        backend.Kernel
+	// ropeRows is the call's rows as the composed rotary tables read them
+	// (ropeRowsWords): two words a row past the count. rowPos is their
+	// positions as a block reads them (rowPosWords).
+	ropeRows, rowPos backend.Buf
+	ropeTable        backend.Kernel
+	ropeNPairs       int
+	quantF, quantQ   backend.Kernel
 	// A vision block normalises with LayerNorm, which is three kernels: the mean,
 	// the variance about it, then the apply. The passes cannot fuse because
 	// E[x^2]-E[x]^2 cancels in f32 on a ViT residual whose mean dwarfs its
@@ -1854,6 +1852,9 @@ type blockScratch struct {
 	// staged per submission, a block's gate, its slice of the inputs, their
 	// product and the projection back. nil elsewhere.
 	pleIn, pleG, pleS, pleA, pleO backend.Buf
+	// rowTok is the call's rows' tokens, which a block routing by token reads
+	// (SetTokenIDs), a word a row.
+	rowTok backend.Buf
 	// streams is, by a step's rows, each residual stream of x as a view at
 	// its offset (x is stream-major), the inputs and the outputs a block of
 	// several streams binds (servedStreams).
@@ -1884,14 +1885,12 @@ type blockScratch struct {
 	// the rule folded in (kernels.GatedDeltaFused); built where the device has
 	// a subgroup, and then the eleven kernels it replaces are not launched.
 	deltaFused backend.Kernel
-	ssdNormL   int
 	// Mamba-1's (nn.RecurrentPlan.Mamba1): the convolution's bias and SiLU,
 	// dt's quantization over the rank, the dt and B/C norms (built at
 	// m1NormDtL and m1NormBCL lanes) and the whole scan; its buffers are dt's
 	// normed bottleneck and B and C before and after their norms.
-	m1Scan               backend.Kernel
-	m1NormDtL, m1NormBCL int
-	m1LowN               backend.Buf
+	m1Scan backend.Kernel
+	m1LowN backend.Buf
 	// side is a block's mixer output where the block runs attention beside it
 	// (Falcon-H1): the two halves are summed into bs.h before the residual.
 	side backend.Buf
@@ -1989,96 +1988,6 @@ func (g *devTier) prepLayerFor(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerW
 	return g.prepLayer(sid, li, p, w, false)
 }
 
-// declineReason names the graph feature this tier cannot run, or "" when it can
-// run the block's shape. A string rather than a bool so the reason survives: a
-// full card, a missing kernel and an unknown graph want opposite responses.
-func declineReason(p *nn.LayerPlan) string {
-	// The router's gating shape, declined by name: a kernel gate on ExpertRank
-	// proves the kernel, not that the tier asked for the right gating function.
-	if p.NExpert > 0 {
-		if r := routerWhyNot(p); r != "" {
-			return r
-		}
-	}
-	// MLA runs; what is left is a shape check (a tier that does not implement
-	// MLA still declines on KVLoraRank alone).
-	if r := mlaWhyNot(p); r != "" {
-		return r
-	}
-	if r := llama4WhyNot(p); r != "" {
-		return r
-	}
-	if r := gemma4WhyNot(p); r != "" {
-		return r
-	}
-	if r := msaWhyNot(p); r != "" {
-		return r
-	}
-	if r := ds4WhyNot(p); r != "" {
-		return r
-	}
-	if r := k3WhyNot(p); r != "" {
-		return r
-	}
-	if r := q4eWhyNot(p); r != "" {
-		return r
-	}
-	switch {
-	case p.Recurrent.Centred && (!p.NonCausal || !p.Recurrent.ShortConv || p.Recurrent.Conv != 3 || !p.Windowed):
-		// The centred convolution reads its neighbours through the call's row
-		// windows (kernels.Conv3Centred): a non-causal call is the whole
-		// sequence, and the windows are where the taps stop.
-		return "a centred convolution outside a windowed non-causal short convolution of three taps"
-	case p.NonCausal && (p.Parallel || p.Recurrent.Conv > 0 && !p.Recurrent.Centred || p.MLA() || p.NExpert > 0 ||
-		p.AttnSinks):
-		// A non-causal call is one submission of the block body's plain
-		// attention over its runs; these features are built only on the causal
-		// paths, and no non-causal model has them.
-		return "a non-causal block with a parallel residual, a recurrence, latent attention, experts or sinks"
-	case p.Windowed && !p.NonCausal:
-		return "windowed key runs on a causal block"
-	case p.PostResidNorm && (!p.NonCausal || !p.NoPreNorm || !p.LayerNorm):
-		// The norms after the residual adds are wired into the non-causal
-		// block (BERT's encoder): its attention reads the residual through
-		// the no-pre-norm copy, and its norms are LayerNorms.
-		return "post-residual norms on a block other than a non-causal LayerNorm one with no pre-norm"
-	case p.Clamps && (!p.NonCausal || p.ClampKQV != 0 || p.AttnOutGate || ungatedFFN(p)):
-		// The clipped linears are wired into the non-causal block's plain
-		// q/k/v, its output projection and a gated MLP: Gemma 4's tower, the
-		// one block that has them.
-		return "clipped linears on a block other than a non-causal one with a gated MLP"
-	case p.ClampKQV != 0 && (p.AttnOutGate || p.MLA()):
-		// The clamp is wired into the plain q/k/v path; an out-gate splits the
-		// double-width q first and MLA projects through its own sequence. No
-		// architecture combines them.
-		return "a q/k/v clamp with an attention out-gate or latent attention"
-	case p.Recurrent.Conv > 0 && p.Recurrent.KHeads == 0 && !p.Recurrent.ShortConv:
-		// The gated delta rule runs (recPair gives every kernel an out-of-place
-		// state); what is left is a shape check.
-		return "a linear-attention block with no key heads"
-	case p.Recurrent.Mamba1 && p.Recurrent.Rank <= 0:
-		return fmt.Sprintf("a Mamba-1 dt rank of %d", p.Recurrent.Rank)
-	case p.Recurrent.WithAttn && (!p.Recurrent.SSD || p.MLA() || p.NoFFN):
-		// The sum is built for Falcon-H1's shape alone: Mamba-2 beside plain
-		// attention, then an FFN.
-		return "attention beside a recurrent mixer in a shape no architecture has"
-	case p.Recurrent.SSD && (p.Recurrent.ChanDecay || p.Recurrent.KeyTiled):
-		// Mamba-2's update has one decay a head and grouped keys; neither
-		// switch exists on any Mamba-2, and the fused form refuses both.
-		return "Mamba-2's update with a per-channel decay or tiled keys"
-	case p.Recurrent.SSD && !p.Recurrent.NoNorm && (p.Recurrent.NormGroups <= 0 ||
-		(p.Recurrent.VHeads*p.Recurrent.VDim)%p.Recurrent.NormGroups != 0):
-		return fmt.Sprintf("a Mamba-2 gated norm of %d groups over %d channels",
-			p.Recurrent.NormGroups, p.Recurrent.VHeads*p.Recurrent.VDim)
-	case !actHasKernel(p):
-		// Every activation the host bakes has a device kernel (quick-GELU
-		// for CLIP towers, swiglu-oai for gpt-oss); what is left is a kind in a
-		// shape it does not exist in -- a gated kind in an ungated block.
-		return "the " + p.Act.String() + " activation in a " + map[bool]string{true: "ungated", false: "gated"}[ungatedFFN(p)] + " block"
-	}
-	return ""
-}
-
 // residScaled reports a plan whose block outputs are scaled before their
 // residual adds (Granite's residual_scale). Such a block takes neither the
 // projection's fused residual (mvres: the bias slot has no scale) nor the
@@ -2093,29 +2002,6 @@ func residScaled(p *nn.LayerPlan) bool { return p.ResidualScale != 0 && p.Residu
 // YaRN's magnitude correction replace.
 func (g *devTier) scoreScale(p *nn.LayerPlan) float32 {
 	return float32(p.Scale())
-}
-
-// llama4WhyNot names the Llama 4 attention or mixture feature this tier cannot
-// run, or "". Each is fluent when skipped (a sliding mask is exact inside
-// the first chunk, a rotated NoPE layer at position 0), so the block goes to the CPU
-// by name rather than running wrong (RULE 8a). What remains are combinations no
-// model ships: an input-weighted mixture with expert biases, and a chunk on an
-// MLA or vision block. A temperature on every layer (mistral3's form) runs:
-// the rotated layers scale q into qt before the rotary.
-func llama4WhyNot(p *nn.LayerPlan) string {
-	switch {
-	case p.AttnTempScale != 0 && (p.AttnTempFloor < 1 || p.AttnTempOffset < 0 ||
-		p.AttnTempFloor != float32(int(p.AttnTempFloor)) || p.AttnTempOffset != float32(int(p.AttnTempOffset))):
-		return fmt.Sprintf("an attention temperature floor %g / offset %g that is not a whole count",
-			p.AttnTempFloor, p.AttnTempOffset)
-	case p.ExpertWeightIn && p.MoEBias:
-		return "a routed weight on the input of a biased expert"
-	case p.ExpertWeightIn && p.NExpert > 0 && p.Act != kernels.ActSiLU && p.Act != kernels.ActGELU:
-		return "a routed weight on the input of a " + p.Act.String() + " expert"
-	case (p.SWAChunked || p.NoPEGlobal || p.QKL2Norm) && (p.MLA() || p.NonCausal):
-		return "Llama 4's attention on a latent or non-causal block"
-	}
-	return ""
 }
 
 // l4TempTab is Llama 4's attention temperature as a table over the integer
@@ -2140,32 +2026,6 @@ func windowArg(p *nn.LayerPlan) int {
 	return p.SWAWindow
 }
 
-// routerWhyNot names the mixture gating this tier cannot express, or "". The
-// answer comes from the kernels (kernels.MoERouteWhyNot), so a missing gating
-// feature is a device kernel owed, not a refused capability.
-func routerWhyNot(p *nn.LayerPlan) string {
-	if p.NExpert == 0 {
-		return ""
-	}
-	return kernels.MoERouteWhyNot(routeOf(p))
-}
-
-// routeOf is the plan's router as the kernels describe one: one translation,
-// so the decline and the kernel cannot disagree.
-func routeOf(p *nn.LayerPlan) kernels.MoERoute {
-	// DeepSeek V4 selects through a per-row plane on every block (ds4.go):
-	// its selection bias, or a hash block's table.
-	ds4 := p.DS4 != nil
-	return kernels.MoERoute{
-		NExpert: p.NExpert, K: p.NExpertUsed,
-		Sigmoid: p.ExpertSigmoid, Bias: p.ExpertSelBias || ds4,
-		SqrtSoftplus: ds4 && p.DS4.ExpertSqrtSoftplus, RowBias: ds4,
-		NGroup: p.ExpertGroups, NGroupUsed: p.ExpertGroupsUsed,
-		Norm: !p.NoExpertNorm, Scale: float32(p.ExpertScale),
-		SparseMixer: p.ExpertSparseMixer,
-	}
-}
-
 // subFor is the activation sub-block a matvec of this format and width needs,
 // or 0 for the format's own. It is float-only: a quantized format's scales are
 // laid out against its sub-block (see kernels.MatVecShape.Sub), while a float
@@ -2174,46 +2034,6 @@ func routeOf(p *nn.LayerPlan) kernels.MoERoute {
 // itself, and a ragged width past 32 (KDA's output at two heads of 40), where
 // it narrows to the widest of 16, 8 and 4 that divides k.
 func subFor(q kernels.Quant, k int) int { return kernels.FloatSub(q, k) }
-
-// mlaWhyNot names the MLA shape this tier cannot express, or "". Each is a
-// width, so each is a kernel owed rather than a refusal (RULE 8): the
-// 32-element granule of kernels.Quantize and of the norm's partial reduction.
-// The batched arm is refused separately, at submission (see layersOnce), so a
-// correct decode stays on the device.
-func mlaWhyNot(p *nn.LayerPlan) string {
-	if !p.MLA() {
-		return ""
-	}
-	if p.IdxHeads != 0 && p.NoPosEnc {
-		return "DeepSeek Sparse Attention's lightning indexer on a model with no rotary"
-	}
-	nope := p.HeadDim - p.NRot
-	if nope <= 0 {
-		return fmt.Sprintf("multi-head latent attention with %d rotary dimensions of a %d-wide "+
-			"key head, which leaves no nope half to absorb W_k into", p.NRot, p.HeadDim)
-	}
-	if p.NRot%2 != 0 || p.NRot == 0 {
-		return fmt.Sprintf("multi-head latent attention with %d rotary dimensions, which the "+
-			"rotation needs to be an even non-zero count", p.NRot)
-	}
-	for _, v := range []struct {
-		n    int
-		what string
-	}{
-		{p.NHead * nope, "the compacted nope half of the query"},
-		{p.NHead * p.KVLoraRank, "the per-head attention result"},
-		{p.NHead * p.HeadDimV, "the un-absorbed attention output"},
-		{p.QLoraRank, "the query latent"},
-	} {
-		// QLoraRank is 0 on the one-step query, which is not a shape at all.
-		if v.n != 0 && v.n%32 != 0 {
-			return fmt.Sprintf("multi-head latent attention where %s is %d elements: the "+
-				"activation quantizer bakes a multiple of 32 and this tier has no narrower one",
-				v.what, v.n)
-		}
-	}
-	return ""
-}
 
 // lnBlock reports whether the block's norms are LayerNorms: a vision tower's,
 // or a classic text block's (C6, nn.LayerPlan.LayerNorm). Every other block
@@ -2224,30 +2044,6 @@ func lnBlock(p *nn.LayerPlan) bool { return p.LayerNorm }
 // activation alone, down -- a vision tower's MLP, or a classic text block's
 // (C6: phi-2, starcoder, falcon, nemotron).
 func ungatedFFN(p *nn.LayerPlan) bool { return p.UngatedFFN }
-
-// actHasKernel reports whether kernels.Act (an ungated FFN) or kernels.ActMul
-// (every gated FFN) bakes the plan's activation.
-func actHasKernel(p *nn.LayerPlan) bool {
-	// A block with no FFN runs no activation.
-	if p.NoFFN {
-		return true
-	}
-	set := kernels.Gated[:]
-	if ungatedFFN(p) {
-		// xIELU reads its numbers from a buffer (kernels.XIELU), so it is in
-		// no baked set.
-		if p.Act == kernels.ActXIELU {
-			return true
-		}
-		set = kernels.Ungated[:]
-	}
-	for _, k := range set {
-		if k == p.Act {
-			return true
-		}
-	}
-	return false
-}
 
 // declineWeights names a weight this tier cannot express, or "" when every one
 // of them is expressible. declineReason is its twin for the plan: the plan says
@@ -2337,10 +2133,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		return g.prepConv(li, p, w, mayPage)
-	}
-	if r := declineReason(p); r != "" {
-		g.LastErr = fmt.Sprintf("block %d: %s", li, r)
-		return false
 	}
 	// A row range of a packed tensor cannot be expressed: the device layout
 	// interleaves rows, resident() uploads QS/D/SC whole, and MatVecShape has no
@@ -3937,6 +3729,31 @@ func (g *devTier) initRopeAxes(bs *blockScratch, p *nn.LayerPlan, rows int) erro
 	return nil
 }
 
+// initRopeRows holds the rows the composed rotary tables read (ropeRowsWords),
+// staged every call, and makes the device's marks arena (markArena).
+func (g *devTier) initRopeRows(bs *blockScratch, p *nn.LayerPlan, rows int) error {
+	if p.NonCausal || p.NRot <= 0 || bs.cs == nil {
+		return nil
+	}
+	b, err := g.dev.Alloc((1 + 2*rows) * 4)
+	if err != nil {
+		return err
+	}
+	bs.ropeRows = b
+	return g.growMarks(1)
+}
+
+// initRowPos holds the rows' positions a block reads (rowPosWords), staged
+// every call.
+func (g *devTier) initRowPos(bs *blockScratch, rows int) error {
+	b, err := g.dev.Alloc((1 + rows) * 4)
+	if err != nil {
+		return err
+	}
+	bs.rowPos = b
+	return nil
+}
+
 // initScratch allocates and compiles everything that does not depend on which
 // block is running.
 func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
@@ -4232,6 +4049,12 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	if err == nil {
 		err = g.initRopeAxes(bs, p, rows)
 	}
+	if err == nil {
+		err = g.initRopeRows(bs, p, rows)
+	}
+	if err == nil {
+		err = g.initRowPos(bs, rows)
+	}
 	// A linear block's scratch, sized from the plan's own geometry. al() is a
 	// no-op at zero, so other architectures allocate nothing here.
 	if r := cp.Recurrent; r.Conv > 0 {
@@ -4352,6 +4175,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	if q := p.Q4E; p.PLEDim == 0 && q != nil && q.NGramWidth != 0 {
 		al(&bs.pleIn, rows*q.NGramWidth*4)
 	}
+	al(&bs.rowTok, rows*4)
 	if p.PLEDim != 0 {
 		al(&bs.pleIn, rows*p.PLEWidth*4)
 		al(&bs.pleG, rows*p.PLEDim*4)
@@ -4737,11 +4561,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			freeScratch(bs)
 			return nil
 		}
-		if err := g.initDS4(bs); err != nil {
-			g.LastErr = "DeepSeek V4: " + err.Error()
-			freeScratch(bs)
-			return nil
-		}
 	} else {
 		if !g.pickSoftmax(bs) {
 			return nil
@@ -4758,22 +4577,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	bs.hraw = make([]byte, rows*p.ResidW()*4)
 	bs.hout = unsafe.Slice((*float32)(unsafe.Pointer(&bs.hraw[0])), rows*p.ResidW())
-	if rows > 1 && p.NExpert > 0 {
-		bs.mg = g.newMoeGroup(p, rows)
-	}
-	if err := g.initK3(bs); err != nil {
-		g.LastErr = "Kimi-K3: " + err.Error()
-		freeScratch(bs)
-		return nil
-	}
-	if err := g.initQ4E(bs); err != nil {
-		g.LastErr = "Qwen3.8-Flash-Next: " + err.Error()
-		freeScratch(bs)
-		return nil
-	}
-	if rows > 1 && p.MLA() {
-		bs.mlab = g.newMLABatch(bs, p, rows)
-	}
 	return bs
 }
 
@@ -5380,13 +5183,6 @@ func (g *devTier) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float
 	defer v.done()
 	ok := v.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
 	v.dropEmbed()
-	// The rows' rotary positions are the caller's call's: every submission it
-	// is cut into, and every block of it run alone, reads them.
-	if v.depth == 1 {
-		v.mu.Lock()
-		v.spendAxes(pos, n, nil)
-		v.mu.Unlock()
-	}
 	return ok
 }
 
@@ -6022,14 +5818,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			g.LastErr = fmt.Sprintf("block %d is paged out", li)
 			return false
 		}
-		// A latent block without a batched scratch refuses the submission, not
-		// the block: Layers then runs the chunk's rows one at a time on this
-		// device, keeping decode here. The batched arm is emitMLARows.
-		if l.mla && bs.rows > 1 && bs.mlab == nil {
-			g.LastErr = fmt.Sprintf("block %d: multi-head latent attention has no batched "+
-				"scratch here, so a %d-row chunk goes one row at a time", li, bs.rows)
-			return false
-		}
 		// A ragged step's rows are different sequences, or different positions
 		// of one, each reading its own history through its descriptor: only the
 		// paged latent cache has one (the contiguous cache is one sequence's).
@@ -6236,15 +6024,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			if e := g.pagedStreamPrep(sid, bs, pk.rows, pf); e != nil {
 				return refuse("paged attention: %v", e)
 			}
-			// The lightning indexer scores every position through the
-			// table, which a streamed pass does not hold.
-			if pk.st != nil && pk.idx != nil {
-				return refuse("the lightning indexer reads the whole history and part of it is evicted")
-			}
-			// So do MiniMax-M3's and QSA's block selections (msa.go, qsa.go).
-			if pk.st != nil && (pk.msa != nil || pk.qsa != nil) {
-				return refuse("the block selection reads the whole history and part of it is evicted")
-			}
 		}
 		if tierRuns {
 			// A block declined: the variant's kernels, and the streaming
@@ -6324,36 +6103,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	}
 	ropeDev := bs.ropeTable != nil && rrows >= 1 &&
 		pos >= 0 && top <= kernels.RopeTabMaxPos
-	// QSA's marks, each row's pictures (qsa.go).
-	if bs.pkv != nil {
-		if e := g.qsaStage(bs.pkv.qsa, R); e != nil {
-			return refuse("QSA: %v", e)
-		}
-	}
-	// DeepSeek V4's entries rotate at positions of their own, which only the
-	// device's table builds; its keys are read through the paged pool.
-	if bs.ds4 != nil && lo < hi {
-		pk := bs.pkv
-		switch {
-		case !ropeDev:
-			return refuse("DeepSeek V4's entries rotate at positions of their own, which needs the " +
-				"device's rotary table")
-		case pk == nil || pk.cur == nil:
-			return refuse("DeepSeek V4 reads its keys through the paged pool, and this call holds none")
-		case pk.st != nil:
-			return refuse("DeepSeek V4's window and entries are read through their tables and part " +
-				"of the history is evicted")
-		}
-		if e := g.ds4Stage(bs, lo, hi, pk.rows); e != nil {
-			return refuse("%v", e)
-		}
-	}
 	// The call's tables the composer serves (ComposedTable) at its rows,
 	// which write cs and csSWA where the tier's own table would. A call of
 	// the head alone (a model whose host collapses its streams between the
 	// blocks and the head) turns nothing and is not asked for them, nor is a
 	// non-causal segment's, whose rotary is the caller's table of its grid.
-	tableSrv, tableMulti := false, false
+	tableSrv := false
 	var raxes []byte
 	if bs.cs != nil && p.NRot > 0 && !p.NonCausal && lo < hi && rrows >= 1 {
 		if why := g.tableServes(bs, p, pos, rrows, rag); why != partServes {
@@ -6361,37 +6116,15 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			g.StepDeclines[why]++
 			return refuse("the composer does not serve the rotary tables: %s", DeclineName(int(why)))
 		} else {
-			tableSrv, tableMulti = true, tableAxes(scratchTable(bs, p, 0))
+			tableSrv = true
 		}
 	}
 	var rposs []byte
 	switch {
-	case tableSrv && tableMulti:
-		axes := g.callAxes(pos, rrows, rag)
-		raxes = binary.LittleEndian.AppendUint32(g.subBytes.raxes[:0], uint32(rrows))
-		for _, v := range axes {
-			raxes = binary.LittleEndian.AppendUint32(raxes, uint32(v))
-		}
-		g.subBytes.raxes = raxes
 	case tableSrv:
-		// Each row's rotary position where the caller states the call's,
-		// else its cache position, which is the same on a rotary over one
-		// axis; a row past the live ones is never read.
-		axes := g.callAxes(pos, rrows, rag)
-		rposs = binary.LittleEndian.AppendUint32(g.subBytes.rposs[:0], uint32(rrows))
-		for r := 0; r < R; r++ {
-			at := pos
-			switch {
-			case r >= rrows:
-			case axes != nil:
-				at = int(axes[4*r])
-			case rag != nil:
-				at = rag.pos[r]
-			default:
-				at = pos + r
-			}
-			rposs = binary.LittleEndian.AppendUint32(rposs, uint32(at))
-		}
+		// Each row's cache position and its sequence's marks: the tables
+		// turn it by its positions on the axes they compute from them.
+		raxes = g.ropeRowsWords(sid, pos, rrows, R, rag)
 	case ropeDev:
 		rposs = append(g.subBytes.rposs[:0], u32one(uint32(rrows))...)
 		for r := 0; r < R; r++ {
@@ -6844,7 +6577,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		case tableSrv:
 			for i := range bs.tableCount() {
 				cs, planes, at := g.tableBinds(bs, i)
-				sv, serr := g.servedTable(scratchTable(bs, p, i), R, cs, planes, at)
+				sv, serr := g.servedTable(scratchTable(bs, p, i), R, p.RopeMarks, cs, planes, at)
 				if serr == nil {
 					serr = sv.run(g, lc, sv.inst, nil, nil)
 				}
@@ -6857,9 +6590,6 @@ func (g *devTier) layersSession(s backend.Session) {
 			if bs.csSWA != nil {
 				lc.la(bs.ropeTable, rrows*bs.ropeNPairs, bs.csSWA, bs.ropeTabSWA, bs.ropeConst, bs.rpos)
 			}
-		}
-		if ropeDev {
-			g.ds4Tables(lc, bs, R)
 		}
 		for li := lo; li < hi; li++ {
 			l := g.layers[li]
@@ -7226,6 +6956,12 @@ func (g *devTier) layersSession(s backend.Session) {
 	}
 	// Input rows over every stream write the per-layer inputs too
 	// (embedOuts).
+	if bs.rowTok != nil && len(g.tokIDs) > 0 {
+		w(bs.rowTok, g.tokWords(R))
+	}
+	if bs.rowPos != nil {
+		w(bs.rowPos, g.rowPosWords(pos, nrow, R, rag))
+	}
 	switch q := p.Q4E; {
 	case bs.pleIn != nil && p.PLEDim == 0 && q != nil && q.NGramWidth != 0:
 		w(bs.pleIn, f32b(g.sideRows(g.ngHost, R*q.NGramWidth)))
@@ -7234,7 +6970,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	}
 	switch {
 	case raxes != nil:
-		w(bs.rposAxes, raxes)
+		w(bs.ropeRows, raxes)
 	case ropeDev || tableSrv:
 		// Four bytes a row in place of NRot*4; the table never crosses the bus.
 		w(bs.rpos, rposs)
@@ -7298,15 +7034,13 @@ func (g *devTier) layersSession(s backend.Session) {
 	if kst > 0 {
 		w(bs.kpos, kposs)
 	}
-	bs.ds4.ds4Writes(w)
-	if bs.pkv != nil {
-		bs.pkv.qsa.qsaWrites(w)
-	}
-	g.q4eWrites(bs.q4e, w)
 	if pk := bs.pkv; pk != nil && pk.cur != nil {
 		w(pk.pRow, u32view(pk.desc))
 		if len(pk.descW) > 0 {
 			w(pk.pRowW, u32view(pk.descW))
+		}
+		for _, e := range pk.ents {
+			w(e.buf, u32view(e.words))
 		}
 		if pk.prefill {
 			pk.pf.prefillWrites(w)
@@ -7315,17 +7049,6 @@ func (g *devTier) layersSession(s backend.Session) {
 		if pk.st != nil {
 			pk.st.writes(w)
 		}
-	}
-	if bs.mlab != nil && R > 1 {
-		// The batched twin of mlaPOff below: each row's rotary key sits at
-		// its own cache row plus KVLoraRank -- a padded row's in the trash
-		// slot, where its latent went.
-		po := g.subBytes.mlaPOff[:0]
-		for r := 0; r < R; r++ {
-			po = binary.LittleEndian.AppendUint32(po, binary.LittleEndian.Uint32(koffs[4*r:])+uint32(bs.mlab.lat))
-		}
-		g.subBytes.mlaPOff = po
-		w(bs.mlab.pOff, po)
 	}
 	if bs.mlaPOff != nil {
 		// The rotary key's slot inside this position's row: bs.koff holds
@@ -7437,8 +7160,10 @@ type stagingBytes struct {
 	pn, koffs, kposs, rposs []byte
 	raxes                   []byte // a table over several axes' positions
 	tok                     []byte // a ragged step's tokens, read back
-	mlaPOff                 []byte // a batched latent attention's rotary key slots
 	embIDs                  []byte // a prompt chunk's ids for the gather on the card (embIDs)
+	ropeRows                []byte // the rows as the rotary tables read them (ropeRowsWords)
+	rowPos                  []byte // the rows' positions a block reads (rowPosWords)
+	rowTok                  []byte // the rows' tokens a block routing by token reads (tokWords)
 	embPos                  []byte // the composer's gather's positions (embedWords)
 	one                     [4]byte
 	calls, headCalls        [4]byte // a call's rows (blockScratch.calls, headCalls)
@@ -8121,8 +7846,9 @@ func scoreStride(p *nn.LayerPlan, rows int) int {
 // weight traffic is set by Tok alone.
 const batchWidth = nn.MaxDevicePrefillChunk
 
-// prepBatch builds the batched scratch and the batched twin of every matvec,
-// on the first prompt that asks for one rather than at PrepLayer time.
+// prepBatch builds the batched scratch and the composer's prompt forms at
+// its width, on the first prompt that asks for one rather than at PrepLayer
+// time.
 //
 // It is lazy because the scratch costs VRAM (mostly score buffers) that a
 // decode-only process never uses, and separate because Alloc and Compile cannot
@@ -8176,7 +7902,6 @@ func (g *devTier) prepBatch(width int) bool {
 	// would refuse every later batched prompt. The compiled kernels live in
 	// g.kerns keyed by shape, which holds every width; batKern is then a map
 	// lookup, safe inside a Session.
-	tok := g.bbs[width].tok
 	bb := g.bbs[width]
 	// The walk is ~25 kernel lookups a block, every prompt (0.9 ms of a
 	// 512-row Qwen3-0.6B prompt on a Volta-class card); it only has something
@@ -8185,140 +7910,10 @@ func (g *devTier) prepBatch(width int) bool {
 		return true
 	}
 	// The composer's prompt forms at this width and their instances
-	// (ComposedPrompt): a block it serves compiles none of its own batched
-	// kernels here.
+	// (ComposedPrompt).
 	g.promptForms(bb)
-	// g.layers is keyed by block index and holds only this device's blocks.
-	n := 0
-	for li := range g.layers {
-		n = max(n, li+1)
-	}
-	if len(bb.left) < n {
-		bb.left = make([]bool, n)
-	} else {
-		clear(bb.left)
-	}
-	for li, l := range g.layers {
-		if l == nil || !l.ok {
-			continue
-		}
-		held := g.promptHeld(l, li, bb)
-		// Only this scratch set's blocks: another set's are prepared with its
-		// own batched scratch (gemma4.go), which this one may not be able to
-		// run -- MiniMax-M3's dense lead set has no mixture scratch for the
-		// blocks after it.
-		if g.geoUsed && l.geo != g.geoCur {
-			continue
-		}
-		// A recurrent block batches through GatedDeltaScan (or the fused rule,
-		// or Mamba-1's scan); a scratch that could not build one refuses here.
-		if l.linear && !bb.rec.ShortConv && bb.deltaScan == nil && bb.deltaFused == nil && bb.m1Scan == nil {
-			g.LastErr = "tier: batched prefill: no chunked delta rule for a recurrent block"
-			return false
-		}
-		// Every matvec a batched block can launch (prepLayer's list), or the rest
-		// would compile lazily inside the session.
-		for _, m := range l.batchedMVs() {
-			if m.kern == nil {
-				continue
-			}
-			if held && m.slots == 0 {
-				bb.left[li] = true
-				continue
-			}
-			if m.slots > 0 && l.mla && (m == &l.mvKB || m == &l.mvVB) {
-				// MLA's absorb banks run grouped with the head as the expert
-				// (mlabatch.go): every head's run is the whole chunk. A float
-				// bank reads the float activation (emitMLARows' grouped).
-				if bb.mlab == nil {
-					return false
-				}
-				if _, ok := g.groupedMV(*m, bb.mlab.nh, bb.mlab.nh*width); !ok {
-					return false
-				}
-				continue
-			}
-			if m.slots > 0 {
-				// A mixture runs grouped (moegroup.go): a streamed bank holds
-				// only the selection.
-				mg := bb.mg
-				// A hybrid block routes the rows on the device and runs their
-				// experts on the host, or, with an expert cache, the cached ones
-				// on the card through the grouped kernels over the cache
-				// (emitGroupedMoE, streamBank.splitRows): built here for every
-				// hybrid block, since a cache may be sized after placement. A
-				// kernel the shape refuses leaves that block's rows on the host.
-				hybrid := mg != nil && l.stream != nil && l.stream.hybrid
-				if hybrid {
-					if mg.volta && !kernels.IsFloat(m.q) {
-						bias, nsrc := moeVoltaArgs(l, m, mg)
-						g.voltaGroupedMV(*m, mg.nExp, mg.p, mg.unit, bias, nsrc)
-					} else if !mg.volta && !kernels.IsFloat(m.q) {
-						g.groupedMV(*m, mg.nExp, mg.p)
-					}
-					continue
-				}
-				if mg == nil || l.stream != nil {
-					// Named either way: a refusal with a stale LastErr reads as
-					// some other block's failure.
-					g.LastErr = "tier: batched mixture: a streamed bank"
-					if mg == nil {
-						g.LastErr = fmt.Sprintf("tier: batched mixture: a block has experts and this "+
-							"%d-row scratch has no mixture set", width)
-					}
-					return false
-				}
-				// A float bank has no scales to quantize against: the grouped
-				// matvec reads the sorted float rows (moeFloatHalf), on
-				// sm_70 too, where the tensor-core twin takes no float.
-				if kernels.IsFloat(m.q) {
-					if !g.moeFloatHalf(mg, &bb.p) {
-						return false
-					}
-					if _, ok := g.groupedMV(*m, mg.nExp, mg.p); !ok {
-						return false
-					}
-					continue
-				}
-				// On sm_70 the tensor-core twin or nothing: the scratch holds no
-				// dp4a half there (newMoeGroup), so a bank without a Volta form
-				// refuses the batch and the chunk goes row by row.
-				if mg.volta {
-					bias, nsrc := moeVoltaArgs(l, m, mg)
-					if _, ok := g.voltaGroupedMV(*m, mg.nExp, mg.p, mg.unit, bias, nsrc); !ok {
-						return false
-					}
-					continue
-				}
-				if _, ok := g.groupedMV(*m, mg.nExp, mg.p); !ok {
-					return false
-				}
-				continue
-			}
-			if _, ok := g.batchMV(*m, width, tok); !ok {
-				return false
-			}
-		}
-	}
-	// DeepSeek V4's grouped output at this width (ds4.go).
-	for _, l := range g.layers {
-		if l != nil && l.ok && !g.ds4Twins(l, width) {
-			return false
-		}
-	}
 	bb.walked = g.layerGen + 1
 	return true
-}
-
-// batchedMVs is every matvec a batched block can launch.
-func (l *layer) batchedMVs() [43]*mv {
-	return [...]*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd,
-		&l.mvsg, &l.mvsu, &l.mvsd, &l.mvSG, &l.mvBA, &l.mvSO,
-		&l.mvQA, &l.mvQB, &l.mvKVA, &l.mvKB, &l.mvVB,
-		&l.mvFA, &l.mvFB, &l.mvGA, &l.mvGB, &l.mvpg, &l.mvpp,
-		&l.mvIQ, &l.mvIK, &l.mvIW, &l.mvLL, &l.mvLR, &l.mvSI, &l.mvMQ,
-		&l.mvCKV, &l.mvCG, &l.mvICKV, &l.mvICG,
-		&l.mvHAD, &l.mvHAU, &l.mvHAI, &l.mvHFD, &l.mvHFU, &l.mvHFI, &l.mvNGK, &l.mvNGV}
 }
 
 // batchGrain is the coarsest granularity every batched kernel divides: the
@@ -8370,17 +7965,6 @@ func unblockedRow(p *nn.LayerPlan, rows int) string {
 		return fmt.Sprintf(why, p.NFFN, "the MLP's width")
 	}
 	return ""
-}
-
-// quantizeRows is the quantizer of rows activations n wide: Quantize over
-// them where n is a whole number of blocks, QuantizePadded with a zero tail
-// where it is not (launch QuantizeThreads(rows*pad32(n)/32)). The window is
-// clamped to the padded row, as the host's ragged quantizer clamps it.
-func quantizeRows(rows, n, win int) (*ir.Kernel, error) {
-	if n%32 == 0 {
-		return kernels.Quantize(rows*n, win)
-	}
-	return kernels.QuantizePadded(rows, n, pad32(n), kernels.ClampWindow(win, pad32(n)))
 }
 
 // ePad is the width a block's residual-reading matrices quantize their
@@ -8674,7 +8258,7 @@ func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 	// A window is a mask: a session that never reaches it computes the same
 	// thing through the windowed kernels.
 	if b.SWAWindow > 0 && a.SWAWindow == 0 {
-		a.SWAWindow, a.SWALocal, grew = b.SWAWindow, b.SWALocal, true
+		a.SWAWindow, grew = b.SWAWindow, true
 	}
 	// The mixture: DeepSeek's first blocks are dense, so the first block this
 	// tier sees may allocate no MoE buffers. A mixture scratch serves a dense
@@ -8931,13 +8515,6 @@ func (g *devTier) initKVCap(p *nn.LayerPlan) {
 	// scratch is built for the whole context once and every session shares it.
 	g.paged, g.kvCap = true, p.MaxSeq
 }
-
-// DeclinePlan answers nn.PlanDecliner: would this tier refuse a block of this
-// shape, before anyone reads its weights? Empty means it would not.
-//
-// It is declineReason itself, so the cheap check and the one after the upload
-// cannot disagree.
-func (g *GPU) DeclinePlan(p *nn.LayerPlan) string { return declineReason(p) }
 
 // partialRotary reports that this block rotates only part of each head, so the
 // untouched tail has to be copied into the rope's destination before the rope

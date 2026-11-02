@@ -85,36 +85,6 @@ func (c *Config) CompRateAt(li int) int {
 	return 0
 }
 
-// ds4Row is where the parts of a DeepSeek V4 block's cached row are: the key,
-// then (a compressed block) the compressor's kv and gate, then (CSA) the
-// indexer compressor's, each coff heads wide.
-type ds4Row struct {
-	hd, ihd, coff, width int
-	kv, gate, ikv, igate int
-}
-
-// ds4RowAt is block li's row.
-func (c *Config) ds4RowAt(li int) ds4Row {
-	r := ds4Row{hd: c.HeadDim, ihd: c.IdxHeadDim, width: c.HeadDim}
-	switch c.CompAt(li) {
-	case jlm.CompHCA:
-		r.coff = 1
-	case jlm.CompCSA:
-		r.coff = 2
-	default:
-		return r
-	}
-	r.kv = r.hd
-	r.gate = r.kv + r.coff*r.hd
-	r.width = r.gate + r.coff*r.hd
-	if c.CompAt(li) == jlm.CompCSA {
-		r.ikv = r.width
-		r.igate = r.ikv + 2*r.ihd
-		r.width = r.igate + 2*r.ihd
-	}
-	return r
-}
-
 // EntRowAt is one entry of block li: the compressed key, then on a CSA block
 // the indexer's. Zero on a block with no compressor.
 func (c *Config) EntRowAt(li int) int {
@@ -136,7 +106,10 @@ func ds4Config(out *Config, c *jlm.Config) error {
 		}
 		return nil
 	}
-	out.SWARopePlain = true
+	out.SWARopePlain, out.RopeTail, out.AttnDerope, out.QHeadNormBare = true, true, true, true
+	if out.LatentNormEps == 0 {
+		out.LatentNormEps = out.RMSEps
+	}
 	out.ExpertSqrtSoftplus = c.Flags2.Has(jlm.Flag2ExpertSqrtSoftplus)
 	switch {
 	case out.HCMult != ds4Streams || out.HCIters < 1 || !(out.HCEps > 0):
@@ -205,6 +178,11 @@ type ds4Layer struct {
 	// hash is a hash-routed block's token table, NExpertUsed ids per token as
 	// floats; nil on a block that routes by its scores.
 	hash []float32
+	// The tables a composed block binds as matrices -- the token table,
+	// the position biases, a row a token or a place in the window -- and the
+	// hyper-connections' three scales as stored.
+	hashT, compAPET, idxCompAPET tensor
+	attnScale3, ffnScale3        []float32
 }
 
 // tensors is every matrix the block holds beyond the common ones, for
@@ -249,6 +227,11 @@ func loadDS4(l *layer, bi int32, cfg *Config, get func(jlm.Role, int32, int32) (
 			return fmt.Errorf("model: block %d's hyper-connection is %dx%d, base %d, scale %d; want %dx%d, "+
 				"%d and 3", bi, x.dfn.rows, x.dfn.k, len(*x.dbase), len(s), mix, flat, mix)
 		}
+		if x.fn == jlm.RoleHCAttnFn {
+			d.attnScale3 = s
+		} else {
+			d.ffnScale3 = s
+		}
 		*x.dscale = hcScales(s, h)
 	}
 	if l.qaNorm, err = vec(jlm.RoleAttnQANorm, bi); err != nil {
@@ -278,7 +261,7 @@ func loadDS4(l *layer, bi int32, cfg *Config, get func(jlm.Role, int32, int32) (
 			l.wk.k, len(l.kvaNorm), l.wo.rows, l.wo.k, len(l.sinks))
 	}
 	if r := cfg.CompRateAt(int(bi)); r != 0 {
-		coff := cfg.ds4RowAt(int(bi)).coff
+		coff := cfg.compRowAt(int(bi)).coff
 		if d.compKV, err = get(jlm.RoleCompKV, bi, -1); err != nil {
 			return err
 		}
@@ -297,6 +280,7 @@ func loadDS4(l *layer, bi int32, cfg *Config, get func(jlm.Role, int32, int32) (
 				"%d rows, %d and %d", bi, d.compKV.rows, d.compKV.k, d.compGate.rows, len(d.compAPE),
 				len(d.compNorm), coff*hd, r*coff*hd, hd)
 		}
+		d.compAPET = f32Tensor(d.compAPE, r, coff*hd)
 	}
 	if cfg.CompAt(int(bi)) == jlm.CompCSA {
 		ihd, r := cfg.IdxHeadDim, cfg.CompRateCSA
@@ -325,6 +309,7 @@ func loadDS4(l *layer, bi int32, cfg *Config, get func(jlm.Role, int32, int32) (
 				"bias %d, norm %d", bi, l.idxQB.rows, l.idxQB.k, l.idxProj.rows, l.idxProj.k,
 				d.idxCompKV.rows, d.idxCompGate.rows, len(d.idxCompAPE), len(d.idxCompNorm))
 		}
+		d.idxCompAPET = f32Tensor(d.idxCompAPE, r, 2*ihd)
 	}
 	if int(bi) < cfg.NHashLayers {
 		if d.hash, err = vec(jlm.RoleHashExperts, bi); err != nil {
@@ -334,6 +319,7 @@ func loadDS4(l *layer, bi int32, cfg *Config, get func(jlm.Role, int32, int32) (
 			return fmt.Errorf("model: block %d's token table holds %d ids, want %d tokens of %d", bi,
 				len(d.hash), cfg.NVocab, cfg.NExpertUsed)
 		}
+		d.hashT = f32Tensor(d.hash, cfg.NVocab, cfg.NExpertUsed)
 		if l.expProbsB != nil {
 			return fmt.Errorf("model: block %d routes by token id and carries a selection bias", bi)
 		}

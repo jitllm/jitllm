@@ -2,13 +2,11 @@ package tier
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // DeepSeek V4 on the device (nn.LayerPlan.DS4; engine/model/ds4.go is the
@@ -43,38 +41,6 @@ import (
 // block's rows, keyed apart from every block index.
 func entKey(li int) int { return -1 - li }
 
-// ds4WhyNot names a DeepSeek V4 shape this tier declines, or "".
-func ds4WhyNot(p *nn.LayerPlan) string {
-	d := p.DS4
-	if d == nil {
-		return ""
-	}
-	gw := 0
-	if d.OGroups > 0 {
-		gw = p.NHead / d.OGroups * p.HeadDim
-	}
-	switch {
-	case d.HCMult != kernels.DS4Streams:
-		return fmt.Sprintf("DeepSeek V4 with %d hyper-connection streams (the mixer is unrolled for %d)",
-			d.HCMult, kernels.DS4Streams)
-	case p.NKVHead != 1 || p.QLoraRank == 0 || p.MLA() || d.Window <= 0 || p.RopeNeox ||
-		p.NRot <= 0 || p.NRot%2 != 0 || p.NRot > p.HeadDim:
-		return "DeepSeek V4 attention of a shape the kernels are not built for"
-	case d.OGroups <= 0 || p.NHead%d.OGroups != 0 || p.QLoraRank%32 != 0 || gw%32 != 0 ||
-		(d.OGroups*d.OLoraRank)%32 != 0:
-		return fmt.Sprintf("DeepSeek V4's query latent of %d and output groups of %d into %d: the "+
-			"activation quantizer works in 32-element blocks", p.QLoraRank, gw, d.OLoraRank)
-	case p.Comp == nn.DS4CompCSA && (d.IdxHeads == 0 || d.IdxTopK == 0 || d.IdxHeadDim < p.NRot ||
-		d.RateAt(p.Comp) == 0):
-		return "a CSA block with no indexer"
-	case p.Comp == nn.DS4CompHCA && d.RateAt(p.Comp) == 0:
-		return "an HCA block with no rate"
-	case p.NExpert == 0 || p.NFFNShExp == 0:
-		return "a DeepSeek V4 block without its mixture"
-	}
-	return ""
-}
-
 // ds4Block is one DeepSeek V4 block's vectors beyond the common ones; its
 // matrices are the layer's residents (woA, compKV, ...).
 type ds4Block struct {
@@ -87,6 +53,10 @@ type ds4Block struct {
 	ape, norm, iape, inorm backend.Buf
 	// table is a hash block's token table, ids as floats.
 	table backend.Buf
+	// The F32 tables as a composed block binds them: the hyper-connections'
+	// fn, the position biases (a row a place in the window) and the token
+	// table (a row a token).
+	fnAR, fnFR, apeR, iapeR, tableR resident
 }
 
 func (b *ds4Block) bufs() []backend.Buf {
@@ -135,8 +105,8 @@ func (g *devTier) prepDS4(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 		want int
 		dst  *backend.Buf
 	}{
-		{"attention scale", w.HCAttnScale, mix, &b.scA}, {"attention base", w.HCAttnBase, mix, &b.bA},
-		{"mixture scale", w.HCFFNScale, mix, &b.scF}, {"mixture base", w.HCFFNBase, mix, &b.bF},
+		{"attention scale", w.HCAttnScale, 3, &b.scA}, {"attention base", w.HCAttnBase, mix, &b.bA},
+		{"mixture scale", w.HCFFNScale, 3, &b.scF}, {"mixture base", w.HCFFNBase, mix, &b.bF},
 		{"query latent norm", w.QANorm, p.QLoraRank, &l.nQA}, {"key norm", w.KVANorm, hd, &l.nKVA},
 	}
 	if p.Comp != nn.DS4CompNone {
@@ -187,6 +157,12 @@ func (g *devTier) prepDS4(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 	up(&b.fnA, fa)
 	up(&b.fnF, ff)
 	l.auxBytes += uint64(2 * 4 * len(fa))
+	f32r := func(qs backend.Buf, rows, k int) resident {
+		return resident{qs: qs, nrows: rows, k: k, t: kernels.Float32, ok: qs != nil}
+	}
+	b.fnAR, b.fnFR = f32r(b.fnA, mix, s*n), f32r(b.fnF, mix, s*n)
+	b.apeR, b.iapeR = f32r(b.ape, b.rate, coff*hd), f32r(b.iape, b.rate, 2*ihd)
+	b.tableR = f32r(b.table, p.Vocab, p.NExpertUsed)
 	l.ds4 = b
 	return ""
 }
@@ -194,322 +170,7 @@ func (g *devTier) prepDS4(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 // ds4Scratch is a scratch's DeepSeek V4 buffers and kernels (bs.ds4), built
 // for its rows and every kind of block the model has.
 type ds4Scratch struct {
-	rows, kmax, ppr int
-	// The hyper-connections.
-	flat, flatn, mix, hc, coll backend.Buf
-	onesFlat, onesHD           backend.Buf
-	hcFlat, hcRms, hcFn        backend.Kernel
-	hcMix, hcColl, hcPost      backend.Kernel
-	// The attention's projections, norms and rotations.
-	qa, qan, q, qn, qr  backend.Buf
-	kraw, kn, kr        backend.Buf
-	ckv, cg, cgA        backend.Buf
-	ikv, ig, igA, iw    backend.Buf
-	iq, iqr             backend.Buf
-	pe, pen, per        backend.Buf
-	ipe, ipen, iper     backend.Buf
-	rmsQ, rmsHeads      backend.Kernel
-	rmsHD, rmsIHD       backend.Kernel
-	quantQA, quantOA    backend.Kernel
-	ropeQ, ropeK, ropeI backend.Kernel
-	ropeIQ, ropeIE      backend.Kernel
-	// Per compression kind (nn.DS4Comp*): the row's writers, the bias adds,
-	// the pools, the entry writers, the gather and its descriptors, and each
-	// kind's entry rotary table and its positions.
-	kinds [3]*ds4Kind
-	// The indexer: the entries' descriptors, the scores and the selection.
-	edesc, score, sel     backend.Buf
-	entDesc, idxSc, idxSl backend.Kernel
-	// The gathered keys, their table (the identity) and descriptors, the
-	// attention's output, it rotated back, the groups' outputs and their
-	// selection (the identity, per row).
-	gk, gtab, gdesc backend.Buf
-	ao, aor, oa     backend.Buf
-	oSel            backend.Buf
-	// The router's per-row selection bias, the zeros a score-routed hash
-	// block reads under the fault, and the rows' token ids.
-	rbias, zeroB, ids    backend.Buf
-	routeHash, routeCopy backend.Kernel
-	noSink               backend.Buf
-	// idsStage is the token ids' per-call staging.
-	idsStage []uint32
-}
-
-// ds4Kind is one compression kind's kernels in a scratch.
-type ds4Kind struct {
-	rate, row, ent, coff   int
-	wK, wKV, wG, wIKV, wIG backend.Kernel
-	ape, apeI              backend.Kernel
-	pool, poolI            backend.Kernel
-	entW, entWI            backend.Kernel
-	gather, desc           backend.Kernel
-	csE, erpos             backend.Buf
-	posStage               []uint32
-}
-
-// ds4Keys is a kind's key choice under the plan's fault.
-func ds4Keys(d *nn.DS4Plan, comp int) kernels.DS4Keys {
-	k := kernels.DS4Keys{Window: d.Window, Rate: d.RateAt(comp)}
-	switch {
-	case comp == nn.DS4CompNone || d.Fault == nn.DS4FaultWindowOnly:
-		k.None = true
-	case comp == nn.DS4CompHCA || d.Fault == nn.DS4FaultAllEntries:
-		k.All = true
-	default:
-		k.TopK = d.IdxTopK
-	}
-	return k
-}
-
-// ds4KMax is the most keys one row of kind comp reads at a plan of maxSeq.
-func ds4KMax(d *nn.DS4Plan, comp, maxSeq int) int {
-	k := ds4Keys(d, comp)
-	n := d.Window
-	switch {
-	case k.None:
-	case k.All:
-		n += maxSeq/k.Rate + 1
-	default:
-		n += k.TopK
-	}
-	return n
-}
-
-// initDS4 builds bs's DeepSeek V4 set. Callers hold g.mu.
-func (g *devTier) initDS4(bs *blockScratch) error {
-	p := &bs.p
-	d := p.DS4
-	if d == nil {
-		return nil
-	}
-	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
-	R, P := bs.rows, g.kvPage()
-	s, n := d.HCMult, p.NEmbd
-	mix := (2 + s) * s
-	H, hd, nr := p.NHead, p.HeadDim, p.NRot
-	ih, ihd := d.IdxHeads, d.IdxHeadDim
-	actWin := p.ActWin
-	if actWin <= 0 {
-		actWin = 32
-	}
-	x := &ds4Scratch{rows: R}
-	bs.ds4 = x
-	for _, comp := range []int{nn.DS4CompNone, nn.DS4CompCSA, nn.DS4CompHCA} {
-		x.kmax = max(x.kmax, ds4KMax(d, comp, p.MaxSeq))
-	}
-	x.ppr = kernels.DS4GatherPages(x.kmax, P)
-	var err error
-	comp := func(dst *backend.Kernel, mk func() (*ir.Kernel, error)) {
-		if err != nil {
-			return
-		}
-		var k *ir.Kernel
-		if k, err = mk(); err != nil {
-			return
-		}
-		*dst, err = g.compile(k)
-	}
-	al := func(dst *backend.Buf, n int) {
-		if err == nil && n > 0 {
-			*dst, err = g.dev.Alloc(n * 4)
-		}
-	}
-	iters := d.HCIters
-	if d.Fault == nn.DS4FaultCombSoftmax {
-		iters = 0
-	}
-	comp(&x.hcFlat, func() (*ir.Kernel, error) { return kernels.HCFlat(n, R) })
-	comp(&x.hcRms, func() (*ir.Kernel, error) { return kernels.RMSNormRows(s*n, R, float32(p.RMSEps), false, false) })
-	comp(&x.hcFn, func() (*ir.Kernel, error) { return kernels.RouterMatVecTok(mix, s*n, R, false) })
-	comp(&x.hcMix, func() (*ir.Kernel, error) { return kernels.HCMix(R, iters, d.HCEps) })
-	comp(&x.hcColl, func() (*ir.Kernel, error) { return kernels.HCCollapse(n, R) })
-	comp(&x.hcPost, func() (*ir.Kernel, error) { return kernels.HCPost(n, R, d.Fault == nn.DS4FaultCombRows) })
-	eps := float32(p.RMSEps)
-	comp(&x.rmsQ, func() (*ir.Kernel, error) { return kernels.RMSNormRows(p.QLoraRank, R, eps, false, false) })
-	comp(&x.rmsHeads, func() (*ir.Kernel, error) { return kernels.RMSNormRows(hd, R*H, eps, false, false) })
-	comp(&x.rmsHD, func() (*ir.Kernel, error) { return kernels.RMSNormRows(hd, R, eps, false, false) })
-	comp(&x.quantQA, func() (*ir.Kernel, error) { return kernels.Quantize(R*p.QLoraRank, actWin) })
-	comp(&x.quantOA, func() (*ir.Kernel, error) { return kernels.Quantize(R*d.OGroups*d.OLoraRank, actWin) })
-	comp(&x.ropeQ, func() (*ir.Kernel, error) { return kernels.RoPETail(H, hd, nr, R, false) })
-	comp(&x.ropeK, func() (*ir.Kernel, error) { return kernels.RoPETail(1, hd, nr, R, false) })
-	comp(&x.ropeI, func() (*ir.Kernel, error) { return kernels.RoPETail(H, hd, nr, R, true) })
-	if ih > 0 {
-		comp(&x.rmsIHD, func() (*ir.Kernel, error) { return kernels.RMSNormRows(ihd, R, eps, false, false) })
-		comp(&x.ropeIQ, func() (*ir.Kernel, error) { return kernels.RoPETail(ih, ihd, nr, R, false) })
-		comp(&x.ropeIE, func() (*ir.Kernel, error) { return kernels.RoPETail(1, ihd, nr, R, false) })
-	}
-	// The indexer's score scale, a load-time constant (1/sqrt of its heads
-	// times their width, as the host's).
-	idxScale := float32(1 / math.Sqrt(float64(max(ihd*ih, 1))))
-	for _, c := range []int{nn.DS4CompNone, nn.DS4CompCSA, nn.DS4CompHCA} {
-		rate := d.RateAt(c)
-		if c != nn.DS4CompNone && rate == 0 {
-			continue
-		}
-		k := &ds4Kind{rate: rate, row: d.RowAt(c, hd), ent: d.EntRowAt(c, hd)}
-		k.coff = map[int]int{nn.DS4CompHCA: 1, nn.DS4CompCSA: 2}[c]
-		x.kinds[c] = k
-		kv, gt := hd, hd+k.coff*hd
-		ikv, ig := gt+k.coff*hd, gt+k.coff*hd+2*ihd
-		comp(&k.wK, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(hd, R, P, k.row, 0, false) })
-		keys := ds4Keys(d, c)
-		comp(&k.gather, func() (*ir.Kernel, error) {
-			re := k.ent
-			if re == 0 {
-				re = hd // bound, never read
-			}
-			return kernels.DS4Gather(R, x.kmax, hd, P, k.row, re, keys)
-		})
-		comp(&k.desc, func() (*ir.Kernel, error) { return kernels.DS4Desc(R, x.kmax, P, keys) })
-		if c == nn.DS4CompNone {
-			continue
-		}
-		cw := k.coff * hd
-		noOv := d.Fault == nn.DS4FaultNoOverlap
-		comp(&k.wKV, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(cw, R, P, k.row, kv, false) })
-		comp(&k.wG, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(cw, R, P, k.row, gt, false) })
-		comp(&k.ape, func() (*ir.Kernel, error) { return kernels.DS4ApeAdd(cw, rate, R) })
-		comp(&k.pool, func() (*ir.Kernel, error) {
-			return kernels.DS4Pool(R, P, k.row, kv, gt, hd, rate, c == nn.DS4CompCSA, noOv)
-		})
-		comp(&k.entW, func() (*ir.Kernel, error) { return kernels.DS4EntWrite(hd, R, P, k.ent, 0, rate) })
-		al(&k.csE, R*nr)
-		al(&k.erpos, R+1)
-		k.posStage = make([]uint32, R+1)
-		if c != nn.DS4CompCSA {
-			continue
-		}
-		comp(&k.wIKV, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(2*ihd, R, P, k.row, ikv, false) })
-		comp(&k.wIG, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(2*ihd, R, P, k.row, ig, false) })
-		comp(&k.apeI, func() (*ir.Kernel, error) { return kernels.DS4ApeAdd(2*ihd, rate, R) })
-		comp(&k.poolI, func() (*ir.Kernel, error) {
-			return kernels.DS4Pool(R, P, k.row, ikv, ig, ihd, rate, true, noOv)
-		})
-		comp(&k.entWI, func() (*ir.Kernel, error) { return kernels.DS4EntWrite(ihd, R, P, k.ent, hd, rate) })
-		tcap := p.MaxSeq/rate + 1
-		comp(&x.entDesc, func() (*ir.Kernel, error) { return kernels.DS4EntDesc(R, rate) })
-		comp(&x.idxSc, func() (*ir.Kernel, error) {
-			return kernels.IdxScoresPaged(R, ih, ihd, tcap, P, k.ent, hd, idxScale)
-		})
-		comp(&x.idxSl, func() (*ir.Kernel, error) { return kernels.IdxSelect(R, tcap, d.IdxTopK) })
-		al(&x.edesc, R*kernels.PRowWords)
-		al(&x.score, R*tcap)
-		al(&x.sel, R*(d.IdxTopK+1))
-	}
-	if x.sel == nil {
-		al(&x.sel, R) // bound by the gathers of a model with no CSA block, never read
-	}
-	comp(&x.routeCopy, func() (*ir.Kernel, error) { return kernels.DS4RouteBias(p.NExpert, 0, 0, R, false) })
-	if p.Vocab > 0 {
-		comp(&x.routeHash, func() (*ir.Kernel, error) {
-			return kernels.DS4RouteBias(p.NExpert, p.NExpertUsed, p.Vocab, R, true)
-		})
-	}
-	al(&x.flat, R*s*n)
-	al(&x.flatn, R*s*n)
-	al(&x.mix, R*mix)
-	al(&x.hc, R*mix)
-	al(&x.coll, R*n)
-	al(&x.onesFlat, s*n)
-	al(&x.onesHD, max(hd, ihd))
-	al(&x.qa, R*p.QLoraRank)
-	al(&x.qan, R*p.QLoraRank)
-	al(&x.q, R*H*hd)
-	al(&x.qn, R*H*hd)
-	al(&x.qr, R*H*hd)
-	al(&x.kraw, R*hd)
-	al(&x.kn, R*hd)
-	al(&x.kr, R*hd)
-	al(&x.ckv, R*2*hd)
-	al(&x.cg, R*2*hd)
-	al(&x.cgA, R*2*hd)
-	al(&x.pe, R*hd)
-	al(&x.pen, R*hd)
-	al(&x.per, R*hd)
-	if ih > 0 {
-		al(&x.ikv, R*2*ihd)
-		al(&x.ig, R*2*ihd)
-		al(&x.igA, R*2*ihd)
-		al(&x.iw, R*ih)
-		al(&x.iq, R*ih*ihd)
-		al(&x.iqr, R*ih*ihd)
-		al(&x.ipe, R*ihd)
-		al(&x.ipen, R*ihd)
-		al(&x.iper, R*ihd)
-	}
-	al(&x.gk, R*x.ppr*P*hd)
-	al(&x.gtab, R*x.ppr)
-	al(&x.gdesc, R*kernels.PRowWords)
-	al(&x.ao, R*H*hd)
-	al(&x.aor, R*H*hd)
-	al(&x.oa, R*d.OGroups*d.OLoraRank)
-	al(&x.oSel, R*d.OGroups)
-	al(&x.rbias, R*p.NExpert)
-	al(&x.zeroB, p.NExpert)
-	al(&x.ids, R)
-	al(&x.noSink, H)
-	if err != nil {
-		return err
-	}
-	x.idsStage = make([]uint32, R)
-	ones := make([]float32, max(s*n, hd, ihd))
-	for i := range ones {
-		ones[i] = 1
-	}
-	tab := make([]uint32, R*x.ppr)
-	for i := range tab {
-		tab[i] = uint32(i)
-	}
-	sel := make([]uint32, R*d.OGroups)
-	for i := range sel {
-		sel[i] = uint32(i % d.OGroups)
-	}
-	ninf := make([]float32, H)
-	for i := range ninf {
-		ninf[i] = float32(math.Inf(-1))
-	}
-	for _, w := range []struct {
-		b backend.Buf
-		v []byte
-	}{{x.onesFlat, f32b(ones[:s*n])}, {x.onesHD, f32b(ones[:max(hd, ihd)])}, {x.gtab, u32view(tab)},
-		{x.oSel, u32view(sel)}, {x.zeroB, make([]byte, 4*p.NExpert)}, {x.noSink, f32b(ninf)}} {
-		if err := w.b.Write(w.v); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// free releases the set's kernels and buffers.
-func (x *ds4Scratch) free() {
-	if x == nil {
-		return
-	}
-	ks := []backend.Kernel{x.hcFlat, x.hcRms, x.hcFn, x.hcMix, x.hcColl, x.hcPost, x.rmsQ, x.rmsHeads,
-		x.rmsHD, x.rmsIHD, x.quantQA, x.quantOA, x.ropeQ, x.ropeK, x.ropeI, x.ropeIQ, x.ropeIE,
-		x.entDesc, x.idxSc, x.idxSl, x.routeHash, x.routeCopy}
-	bs := []backend.Buf{x.flat, x.flatn, x.mix, x.hc, x.coll, x.onesFlat, x.onesHD, x.qa, x.qan, x.q, x.qn,
-		x.qr, x.kraw, x.kn, x.kr, x.ckv, x.cg, x.cgA, x.ikv, x.ig, x.igA, x.iw, x.iq, x.iqr, x.pe, x.pen,
-		x.per, x.ipe, x.ipen, x.iper, x.edesc, x.score, x.sel, x.gk, x.gtab, x.gdesc, x.ao, x.aor, x.oa,
-		x.oSel, x.rbias, x.zeroB, x.ids, x.noSink}
-	for _, k := range x.kinds {
-		if k == nil {
-			continue
-		}
-		ks = append(ks, k.wK, k.wKV, k.wG, k.wIKV, k.wIG, k.ape, k.apeI, k.pool, k.poolI, k.entW, k.entWI,
-			k.gather, k.desc)
-		bs = append(bs, k.csE, k.erpos)
-	}
-	for _, k := range ks {
-		if k != nil {
-			closeKern(k)
-		}
-	}
-	for _, b := range bs {
-		if b != nil {
-			b.Free()
-		}
-	}
+	kmax int
 }
 
 // ds4KeyCap is the paged attention's key bound for a DeepSeek V4 scratch: a
@@ -572,74 +233,3 @@ func (g *devTier) SetTokenIDs(ids []int32) {
 // SetTokenIDs keeps the rows' token ids for this session's next call, which
 // hands them to every device it holds (inputsTo).
 func (s *gpuSession) SetTokenIDs(ids []int32) { s.ids = ids }
-
-// ds4Stage is the call's DeepSeek V4 staging: each row's token id and, per
-// compressed kind, the position of the entry the row closes (its rotary
-// table's), written with the call's other per-token writes. A padded row
-// stages zeros. It refuses a supplied embedding on a block that routes by
-// token. Callers hold g.mu.
-func (g *devTier) ds4Stage(bs *blockScratch, lo, hi int, rows []pagedRow) error {
-	x := bs.ds4
-	if x == nil {
-		return nil
-	}
-	hash := false
-	for li := lo; li < hi; li++ {
-		if l := g.layers[li]; l != nil && l.ds4 != nil && l.ds4.hash {
-			hash = true
-		}
-	}
-	for r := range x.idsStage {
-		x.idsStage[r] = 0
-		if r >= len(rows) || rows[r].pad {
-			continue
-		}
-		if hash {
-			if r >= len(g.tokIDs) || g.tokIDs[r] < 0 {
-				return fmt.Errorf("row %d has no token id, and a block routes by token (SetTokenIDs)", r)
-			}
-			x.idsStage[r] = uint32(g.tokIDs[r])
-		}
-	}
-	for _, k := range x.kinds {
-		if k == nil || k.rate == 0 {
-			continue
-		}
-		k.posStage[0] = uint32(len(rows))
-		for r := range rows {
-			at := 0
-			if !rows[r].pad {
-				at = max((rows[r].pos+1)/k.rate-1, 0) * k.rate
-			}
-			k.posStage[r+1] = uint32(at)
-		}
-	}
-	return nil
-}
-
-// ds4Writes writes the staging ds4Stage filled.
-func (x *ds4Scratch) ds4Writes(w func(backend.Buf, []byte)) {
-	if x == nil {
-		return
-	}
-	w(x.ids, u32view(x.idsStage))
-	for _, k := range x.kinds {
-		if k != nil && k.erpos != nil {
-			w(k.erpos, u32view(k.posStage))
-		}
-	}
-}
-
-// ds4Tables builds the call's entry rotary tables on the device, one per
-// compressed kind, from the positions ds4Writes staged.
-func (g *devTier) ds4Tables(lc *launcher, bs *blockScratch, R int) {
-	x := bs.ds4
-	if x == nil {
-		return
-	}
-	for _, k := range x.kinds {
-		if k != nil && k.csE != nil {
-			lc.la(bs.ropeTable, R*bs.ropeNPairs, k.csE, bs.ropeTab, bs.ropeConst, k.erpos)
-		}
-	}
-}

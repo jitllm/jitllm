@@ -26,6 +26,9 @@ type Step struct {
 	// runs over (its patches and the rows before them), 0 for a plan that
 	// composes no vision segment.
 	Picture int
+	// Marks is the most rotary marks a sequence holds (graph.OpRopePos), 0
+	// for a model whose rows all turn at their cache positions.
+	Marks int
 }
 
 // stepOf is the step a part of segment seg is composed for: a vision
@@ -34,7 +37,7 @@ func (s Step) stepOf(seg Segment) Step {
 	if seg != SegmentVision {
 		return s
 	}
-	return Step{Rows: s.Picture, Page: s.Page, Keys: s.Picture, ActWindow: s.ActWindow, Seqs: 1, Picture: s.Picture}
+	return Step{Rows: s.Picture, Page: s.Page, Keys: s.Picture, ActWindow: s.ActWindow, Seqs: 1, Picture: s.Picture, Marks: s.Marks}
 }
 
 // Histories is how many histories a step's rows read: Seqs, or a row's

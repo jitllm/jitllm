@@ -26,7 +26,6 @@ const (
 	DeclineHeadOther
 	DeclineNoTable
 	DeclineTableHeld
-	DeclineNoAxes
 	DeclineNoSample
 	DeclineNoEmbed
 	DeclineEmbedFormat
@@ -69,7 +68,6 @@ var declineNames = [NumDeclines]string{
 	DeclineHeadOther:    "a head graph of another State than the offered one",
 	DeclineNoTable:      "no table graph from the front end",
 	DeclineTableHeld:    "a table whose planes or positions the tier does not hold",
-	DeclineNoAxes:       "a table over several axes with no rotary positions for the row",
 	DeclineNoSample:     "no sample graph from the front end",
 	DeclineNoEmbed:      "no input rows graph from the front end",
 	DeclineEmbedFormat:  "input rows in a format with no container type",

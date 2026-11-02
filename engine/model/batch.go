@@ -117,12 +117,9 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	}
 	s.tock(opResid, t0)
 
-	// At each row's rotary position, which an image earlier in its sequence
-	// has moved off its cache position (mrope.go).
-	for i := 0; i < n; i++ {
-		o, slot := s.rowOwner(i, seq)
-		s.ropeRow(i, o.ropeOf(slot, pos[i]))
-	}
+	// The step's rotary tables are the CPU's to make where a block runs
+	// there (cpuRowTables); a device makes its own.
+	s.cpu.tabsFresh = false
 
 	var devSlot []int
 	if s.devCount() > 0 && len(s.rowOwn) == 0 {
@@ -176,6 +173,9 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		l := &m.layers[li]
 		var why jit.Decline
 		var err error
+		if c.NHashLayers > 0 && li == s.lo {
+			s.cpuTokens(n, func(i int) int32 { return tokens[i] })
+		}
 		switch {
 		case c.LayerKind(li).Recurrent():
 			if c.NGramAt(li) {

@@ -144,9 +144,10 @@ const (
 	OpRopeTable
 	// OpEmbed is a step's input rows: each row's token's row of Weight[0],
 	// the token a word of the step's own a row; where Positional, each
-	// row's position's row (a learned position table); where Request, the
-	// row the step's request names, every row's (a decision's question
-	// type's).
+	// row's position's row (a learned position table), the position modulo
+	// Span where Span is set; where Request, the row the step's request
+	// names, every row's (a decision's question type's). Into an index row
+	// (ElemU32), each element is an index: a token's experts.
 	OpEmbed
 	// OpStateConv is a causal depthwise convolution of In[0] over the
 	// block's window, the last Taps-1 rows it saw: each channel's Taps taps
@@ -286,10 +287,21 @@ const (
 	// at or past In[0]'s width naming none. Two indices naming one element
 	// carry equal values. Out[0] In[0]'s width. A primitive.
 	OpPut
+	// OpRopePos is each row's position on each of four rotary axes, from
+	// its cache position and its sequence's rotary marks (the step's rows'
+	// positions and the sequences' marks, as the engine keeps them): the
+	// last mark at or before the position says how the row turns -- as
+	// text (MarkText), at the position plus the mark's base less its first
+	// position on every axis; as a cell of a picture's grid (MarkGrid), its
+	// frame, row and column after the mark's base; as an XD-RoPE picture's
+	// (MarkGridXD), its position, column, row and the picture's ordinal --
+	// and a row before every mark turns at its position. Out[0] is four
+	// indices a row. A primitive.
+	OpRopePos
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash", "unfold", "uniform", "put"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash", "unfold", "uniform", "put", "rope_pos"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

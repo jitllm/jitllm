@@ -56,12 +56,17 @@ const (
 	TableRecRows
 	// TableCodes is a packed weight's codes, Instance the word they unpack.
 	TableCodes
+	// TableRopeRows is the step's rows as the rotary positions read them
+	// (each row's cache position and its sequence's marks), TableRopeMarks
+	// the sequences' rotary marks (graph.OpRopePos).
+	TableRopeRows
+	TableRopeMarks
 	numTables
 )
 
 var tableNames = [numTables]string{"", "rows", "rows.win", "rows.n", "pages", "kv.k", "kv.v", "ent.k", "ent.rows", "ent.pages", "q.off",
 	"rope.cs", "rope.planes", "rope.pos", "rope.pos.axes", "rope.axes", "rope.const", "tokens", "request", "experts", "run.in", "run.out",
-	"rec.state", "rec.state.out", "rec.conv", "rec.conv.out", "rec.rows", "codes"}
+	"rec.state", "rec.state.out", "rec.conv", "rec.conv.out", "rec.rows", "codes", "rope.rows", "rope.marks"}
 
 func (t Table) String() string {
 	if t < numTables {

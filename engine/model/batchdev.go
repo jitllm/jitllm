@@ -63,7 +63,6 @@ func (s *Instance) rowsRun(lo, hi int, pos, slot []int, x, cs, csSWA []float32, 
 		defer func() { h.RowLogits, h.Logits, h.LogitRows = false, keep, 0 }()
 	}
 	s.layerInputs(s.bple[:len(pos)*s.c.pleWidth()])
-	s.rowAxes(pos[0], 0, len(pos))
 	if !rd.LayersRows(lo, hi, pos, slot, s.maxSeq, x, cs, csSWA, h) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {
@@ -96,7 +95,6 @@ func (s *Instance) rowsSessions(lo, hi int, pos, _ []int, x, cs, csSWA []float32
 	}
 	defer func() { s.stepSess = clearDevs(views) }()
 	s.layerInputs(s.bple[:len(pos)*s.c.pleWidth()])
-	s.rowAxes(pos[0], 0, len(pos))
 	if !ss.LayersSessions(lo, hi, views, pos, x, cs, csSWA, h) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {

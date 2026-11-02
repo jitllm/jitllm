@@ -68,15 +68,14 @@ func TestQwen4ExpDeviceRunsTheChunkWhole(t *testing.T) {
 				t.Fatal(err)
 			}
 			s2 := gpu.Stats()
-			t.Logf("prefill of %d: %d mixes, %d n-gram, %d selections; a decode token: %d, %d, %d",
-				len(g.IDs), s1.Q4EMixes-s0.Q4EMixes, s1.Q4ENGram-s0.Q4ENGram, s1.QSASelects-s0.QSASelects,
-				s2.Q4EMixes-s1.Q4EMixes, s2.Q4ENGram-s1.Q4ENGram, s2.QSASelects-s1.QSASelects)
-			for _, d := range [][2]tier.Stats{{s0, s1}, {s1, s2}} {
-				if d[1].Q4EMixes-d[0].Q4EMixes != 2*nl || d[1].Q4ENGram-d[0].Q4ENGram != 1 ||
-					d[1].QSASelects-d[0].QSASelects != qsa {
-					t.Fatalf("a call did not run every block's mixes, the n-gram block and every selection " +
-						"on the device in one submission")
-				}
+			ps0, pd0 := s0.ServedPart(tier.ComposedPrompt)
+			ps1, pd1 := s1.ServedPart(tier.ComposedPrompt)
+			bs1, bd1 := s1.ServedPart(tier.ComposedBlock)
+			bs2, bd2 := s2.ServedPart(tier.ComposedBlock)
+			t.Logf("prefill of %d: %d composed block steps, %d declined; a decode token: %d, %d (%d QSA blocks)",
+				len(g.IDs), ps1-ps0, pd1-pd0, bs2-bs1, bd2-bd1, qsa)
+			if ps1-ps0 < nl || (ps1-ps0)%nl != 0 || pd1 != pd0 || bs2-bs1 != nl || bd2 != bd1 {
+				t.Fatalf("the composer did not serve every block of the prompt and of the decode token on the device")
 			}
 		})
 	}

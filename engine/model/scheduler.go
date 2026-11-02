@@ -298,7 +298,7 @@ func (s *Instance) newHistory(maxSeq int) (*Session, error) {
 	}
 	sess.bpos = make([]int, 1)
 	sess.logits = make([]float32, s.c.NVocab)
-	sess.rmarks = make([][]ropeMark, 1)
+	sess.rmarks = ropeMarks{}
 	if s.rconv != nil {
 		sess.rconv = make([][]float32, len(s.rconv))
 		sess.rstate = make([][]float32, len(s.rstate))

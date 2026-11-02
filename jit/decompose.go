@@ -24,6 +24,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpKVAppend:     decomposeKVAppend,
 		graph.OpAttend:       decomposeAttend,
 		graph.OpRopeTable:    decomposeRopeTable,
+		graph.OpRopePos:      decomposeRopePos,
 		graph.OpTopK:         decomposeTopK,
 		graph.OpReduce:       decomposeReduce,
 		graph.OpTake:         decomposeTake,

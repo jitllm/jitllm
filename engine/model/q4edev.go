@@ -66,7 +66,6 @@ func (s *Instance) q4eWeights(li int, w *nn.LayerWeights) {
 func (s *Instance) ngramToDevice(lo, hi, n int, order []int, owner func(r int) (*Session, int),
 	tok func(r int) int32) error {
 	c := s.m.Cfg
-	s.qsaMarksToDevice(lo, hi, n, owner)
 	li := c.NGramBlock - 1
 	if c.NGramBlock == 0 || li < lo || li >= hi {
 		return nil
@@ -106,39 +105,6 @@ func (s *Instance) ngramForCPU(li, n int, order []int, owner func(r int) (*Sessi
 	}
 	s.growQ4E(n)
 	return s.ngramRows(li, n, order, owner, tok)
-}
-
-// qsaMarksToDevice hands the device each of n rows' rotary marks -- where a
-// picture moved its sequence's positions, which a QSA block's pooled keys
-// turn by (qsa.go's ropeOf) -- when [lo, hi) holds a QSA block: per row its
-// count, then its (position, delta) pairs.
-func (s *Instance) qsaMarksToDevice(lo, hi, n int, owner func(r int) (*Session, int)) {
-	c := s.m.Cfg
-	if s.ldQSA == nil || c.QSARatio == 0 {
-		return
-	}
-	any := false
-	for li := lo; li < hi && !any; li++ {
-		any = c.QSAAt(li)
-	}
-	if !any {
-		return
-	}
-	g := s.q4
-	m := g.marks[:0]
-	for r := 0; r < n; r++ {
-		o, sl := owner(r)
-		var ms []ropeMark
-		if sl < len(o.rmarks) {
-			ms = o.rmarks[sl]
-		}
-		m = append(m, int32(len(ms)))
-		for _, k := range ms {
-			m = append(m, int32(k.at), int32(k.delta))
-		}
-	}
-	g.marks = m
-	s.ldQSA.SetRopeMarks(m)
 }
 
 // ngramUndo is one sequence's predecessors before ngramToDevice moved them.

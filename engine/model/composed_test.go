@@ -24,28 +24,6 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 	return composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, float, nil, extra...)
 }
 
-// axesShift states each row's rotary positions as k times the instance's, and
-// a call's first row d past that: the violation of a served table that turns
-// a row by the positions it is told. A shift of every row alike moves no
-// position against another, which a rotary cannot see.
-type axesShift struct {
-	nn.RopeAxesDevice
-	k, d int32
-	buf  []int32
-}
-
-func (a *axesShift) SetRopeAxes(pos int, at []int32) {
-	a.buf = a.buf[:0]
-	for i, v := range at {
-		w := a.k * v
-		if i < 4 {
-			w += a.d
-		}
-		a.buf = append(a.buf, w)
-	}
-	a.RopeAxesDevice.SetRopeAxes(pos, a.buf)
-}
-
 // unsplit forms a reference's sums with no split (Config.ComposedUnsplit):
 // a split an arm forms wrong is not the reference's too.
 var unsplit = tier.WithConfig(func(c *tier.Config) { c.ComposedUnsplit = true })
@@ -108,20 +86,6 @@ func shiftEmbed(d, p, vocab int) func(*Instance) {
 	return func(s *Instance) {
 		if s.ldEmbed != nil {
 			s.ldEmbed = &tokenShift{EmbedDevice: s.ldEmbed, d: int32(d), vocab: int32(vocab), p: p}
-		}
-	}
-}
-
-// shiftAxes has the instance tell its device every row's rotary positions d
-// past their own.
-func shiftAxes(d int32) func(*Instance) { return stretchAxes(1, d) }
-
-// stretchAxes has the instance tell its device every row's rotary positions as
-// k times their own, a call's first row d past that (axesShift).
-func stretchAxes(k, d int32) func(*Instance) {
-	return func(s *Instance) {
-		if s.ldRope != nil {
-			s.ldRope = &axesShift{RopeAxesDevice: s.ldRope, k: k, d: d}
 		}
 	}
 }
@@ -902,7 +866,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								// Kimi-Linear's latent attention) reads no position:
 								// there is nothing for the violation to move.
 								if a.parts&tier.ComposedTable != 0 && !m.container.Config().Flags.Has(jlm.FlagNoPosEnc) {
-									violated("every row told twice its position and 16 past", tier.ComposedTable, stretchAxes(2, 16))
+									violated("every row's table at twice its position and 16 past", tier.ComposedTable, nil, tier.WithRopeFault(2, 16))
 								}
 								if ne, _ := st0.ServedPart(tier.ComposedEmbed); ne > 0 {
 									violated("every row gathered at the next token's", tier.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))

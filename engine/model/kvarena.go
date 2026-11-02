@@ -317,5 +317,5 @@ func (kc *kvCache) useArenas(maxSeq int, arenaFor func(li, pp int, latent bool, 
 			return err
 		}
 	}
-	return nil
+	return kc.useEntArenas(maxSeq, arenaFor)
 }

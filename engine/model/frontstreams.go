@@ -38,6 +38,11 @@ type streams struct {
 	gated bool
 	cur   []graph.ValueID
 	w     graph.ValueID
+	// sinkhorn is streams each sublayer reads through a Sinkhorn-normalised
+	// mixer (mixesStreamsSinkhorn), post and comb the sublayer's placement
+	// and stream mix (sinkhornMix); cur as gated's.
+	sinkhorn   bool
+	post, comb graph.ValueID
 }
 
 // predictsStreams says the model's several residual streams are predicted
@@ -87,7 +92,8 @@ func (c *Config) gatesStreams() bool {
 // Sinkhorn-normalised per row (HCMult streams, no low-rank gate): its input
 // rows are S copies of the embedding, and its head reads the streams
 // weighted by sigmoid(scale * (F norm(xs)) + base) + eps, norm an RMS norm
-// with no weight over the streams side by side. Its blocks are not stated.
+// with no weight over the streams side by side; its blocks each sublayer's
+// (sinkhornMix).
 
 // mixesStreamsSinkhorn says the model's streams are mixed per row by a
 // Sinkhorn-normalised mixer, and nothing else carries a stream.
@@ -116,7 +122,7 @@ func (m *Model) sinkhornCollapse(b *graph.Builder, xs []graph.ValueID) graph.Val
 
 // statesStreams says the front end states the model's residual streams.
 func (c *Config) statesStreams() bool {
-	return c.predictsStreams() || c.mixesStreams() || c.gatesStreams()
+	return c.predictsStreams() || c.mixesStreams() || c.gatesStreams() || c.mixesStreamsSinkhorn()
 }
 
 // gatedMix is the sublayer input the low-rank gate reads from the streams
@@ -441,4 +447,14 @@ func (m *Model) plainActAt(li int) *jlm.Expr {
 		li = c.NSparse
 	}
 	return m.container.Config().ActAt(li)
+}
+
+// keepBound is x with v read and weighed by zero: a gate's violation that
+// drops what v computes keeps the tensors v reads bound, as the container
+// stores them. v must be finite.
+func keepBound(b *graph.Builder, x, v graph.ValueID) graph.ValueID {
+	z := b.Emit(graph.OpReduce, []graph.ValueID{v}, []graph.Result{{Name: "kept", Width: 1}}, nil,
+		graph.Attrs{Fn: graph.MapAdd}, nil, nil)[0]
+	z = mapRow(b, "kept.zero", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, 1, z)
+	return mapRow(b, "kept.in", graph.Attrs{Fn: graph.MapAdd}, nil, b.G.Values[x].Width, x, z)
 }

@@ -57,14 +57,8 @@ type gpuSession struct {
 	ids []int32
 	// ng is the rows' n-gram table rows (SetNGramRows).
 	ng []float32
-	// marks is the rows' rotary marks (SetRopeMarks).
-	marks []int32
 	// prompt says the calls are a prompt's (SetPrompt).
 	prompt bool
-	// axes and axesAt are the rows' rotary positions and the cache position
-	// they are of (SetRopeAxes).
-	axes   []int32
-	axesAt int
 }
 
 // SetPrompt says whether the session's calls that follow are a prompt's

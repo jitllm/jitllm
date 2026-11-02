@@ -197,9 +197,15 @@ var decisionDevViolations = map[string]decisionDevViolation{
 	"clef-fixture": {"the device head's joint score gated off", clefDevGateOff},
 	"laya": {"every block global on the device", func(m *Model) func() {
 		mb := m.enc.mb
-		was := mb.local
-		mb.local = func(int) bool { return false }
-		return func() { mb.local = was }
+		was := make([]bool, len(mb.blocks))
+		for i := range mb.blocks {
+			was[i], mb.blocks[i].global = mb.blocks[i].global, true
+		}
+		return func() {
+			for i := range mb.blocks {
+				mb.blocks[i].global = was[i]
+			}
+		}
 	}},
 }
 

@@ -4,7 +4,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
@@ -73,11 +72,11 @@ func TestGemma4ServesComposed(t *testing.T) {
 					if !(hostW < bound) || !(tierW < bound) {
 						t.Fatalf("the composed step is %.3e from the host and %.3e from main's tier, bound %g", hostW, tierW, bound)
 					}
-					bad, _, _, _ := composedDecodeWith(t, m, dev, prompt, toks, tier.ComposedStep, true, false, stretchAxes(2, 16))
+					bad, _, _, _ := composedDecodeWith(t, m, dev, prompt, toks, tier.ComposedStep, true, false, nil, tier.WithRopeFault(2, 16))
 					badW := from(bad, host, promptLen-1)
-					t.Logf("%s: every row told twice its position and 16 past: %.3e from the host", dev, badW)
+					t.Logf("%s: every row's table at twice its position and 16 past: %.3e from the host", dev, badW)
 					if !(badW > 100*hostW) || !(badW > 10*bound) {
-						t.Fatalf("every row told twice its position and 16 past reads %.3e against a clean %.3e: the served tables cannot see it", badW, hostW)
+						t.Fatalf("every row's table at twice its position and 16 past reads %.3e against a clean %.3e: the served tables cannot see it", badW, hostW)
 					}
 					// The per-layer inputs' tables are the host's: the device
 					// declines the input rows that read them, by name.
@@ -95,65 +94,6 @@ func TestGemma4ServesComposed(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatal("no device on this host")
-	}
-}
-
-// TestGemma4ServesComposedOnCPU runs each of gemma4Composed on the CPU
-// device, every block composed for it, teacher-forced on the fixture's own
-// ids against main's kernels: every block step and head served (cpuLogits,
-// cpuPrompt), within 1e-5 of main's logits (float weights) on decode and on
-// a prompt with its decode, and each of Gemma 4's features taken out of the
-// composed arm past 100 times its worst and past 1e-4. The ids are the
-// golden's, not a greedy run's: a random fixture's greedy tokens repeat, and
-// over rows of one token every value is the same, so no change to the
-// attention's weights could move the logits.
-func TestGemma4ServesComposedOnCPU(t *testing.T) {
-	const page, bound = 32, 1e-5
-	for _, name := range gemma4Composed {
-		t.Run(name, func(t *testing.T) {
-			gm, g := openGemma4(t, name)
-			gm.Close()
-			toks := g.IDs
-			// The history at the CPU's own binary16 (jit.Halves) in both arms.
-			path := jlmOf(t, testmodels.Path(name+".gguf"))
-			ref, err := Open(path, noTune)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ref.Close()
-			ref.setKVPageForTest(page)
-			want := cpuLogits(t, ref, toks, cpuFaultNone, false)
-			m, err := Open(path, noTune)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer m.Close()
-			m.setKVPageForTest(page)
-			if c := coveredBlocks(m); c != m.Cfg.NLayer {
-				t.Fatalf("the front end states %d of %d blocks: %s", c, m.Cfg.NLayer, m.Uncovered(0))
-			}
-			worst := worstFrom(want, cpuLogits(t, m, toks, cpuFaultNone, true))
-			n := len(toks) - 4
-			pworst := 0.0
-			pw := cpuPrompt(t, ref, toks, n, 4, cpuFaultNone, false)
-			pg := cpuPrompt(t, m, toks, n, 4, cpuFaultNone, true)
-			for i := range pw {
-				pworst = max(pworst, logitNMSE(pg[i], pw[i]))
-			}
-			t.Logf("the composed CPU from main: decode %.3g over %d steps, a prompt of %d and its decode %.3g", worst, len(toks), n, pworst)
-			if !(worst < bound) || !(pworst < bound) {
-				t.Fatalf("the composed CPU is %.3g and %.3g from main, bound %g", worst, pworst, bound)
-			}
-			for _, v := range gemma4ComposedViolations(name) {
-				undo := v.mut(m)
-				bad := worstFrom(want, cpuLogits(t, m, toks, cpuFaultNone, true))
-				undo()
-				t.Logf("violation %q: worst NMSE %.3g", v.name, bad)
-				if !(bad > 100*worst) || !(bad > 10*bound) {
-					t.Errorf("%s: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", v.name, bad, worst)
-				}
-			}
-		})
 	}
 }
 

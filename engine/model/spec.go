@@ -475,7 +475,7 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 		}
 	}
 	t.noHeadFold = true
-	lg, err := t.prefillSrc(0, embedSrc(t, prompt), prompt, nil)
+	lg, err := t.prefillSrc(0, embedSrc(t, prompt), prompt)
 	t.rowTap, t.noHeadFold = nil, false
 	if err != nil {
 		return nil, nil, err

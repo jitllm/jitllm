@@ -438,7 +438,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredGeometry
 	// A picture moves the rotary of the positions after it (marks), which a
 	// pooled selection turning blocks at their first positions does not read.
-	case c.IdxHeads != 0 && (c.QSARatio != 0 && m.tower != nil || len(c.CompKinds) != 0):
+	case c.IdxHeads != 0 && c.QSARatio != 0 && m.tower != nil:
 		return UncoveredSelect
 	case c.Streams() > 1 && !c.statesStreams():
 		return UncoveredStreams
@@ -450,8 +450,6 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredNonCausal
 	case c.AttnTempScale != 0 && (c.AttnTempOffs < 0 || c.AttnTempOffs != math.Trunc(c.AttnTempOffs)):
 		return UncoveredTemp
-	case len(c.CompKinds) != 0 || c.OGroups != 0:
-		return UncoveredCompressed
 	}
 	return m.uncoveredRest(li)
 }
@@ -497,7 +495,7 @@ func (m *Model) stores(li int, role jlm.Role) bool {
 // ropeAt is the rotary layer li turns by: the sliding layers' where the
 // model trains two and li slides, the model's own otherwise.
 func (m *Model) ropeAt(li int) nn.Rope {
-	if m.ropeSWA != nil && m.Cfg.SWA(li) {
+	if m.ropeSWA != nil && m.Cfg.ropeLocal(li) {
 		return *m.ropeSWA
 	}
 	return m.rope
@@ -628,7 +626,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// own and runs on stream 0's prediction (frontstreams.go).
 	var st *streams
 	if c.statesStreams() {
-		st = &streams{in: []graph.ValueID{x}, mixed: c.mixesStreams(), gated: c.gatesStreams()}
+		st = &streams{in: []graph.ValueID{x}, mixed: c.mixesStreams(), gated: c.gatesStreams(), sinkhorn: c.mixesStreamsSinkhorn()}
 		for k := 1; k < c.Streams(); k++ {
 			st.in = append(st.in, b.In(fmt.Sprintf("x.%d", k), d))
 		}
@@ -653,6 +651,8 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		attnIn = m.bankMix(b, f, st.in[1:1+c.resBank(li, false)], x, jlm.RoleAttnResScore)
 	case st != nil && st.gated:
 		attnIn, st.w = m.gatedMix(b, f, st.in, jlm.RoleHCAttnNorm, jlm.RoleHCAttnDown, jlm.RoleHCAttnUp, jlm.RoleHCAttnInject)
+	case st != nil && st.sinkhorn:
+		attnIn, st.post, st.comb = m.sinkhornMix(b, st.in, jlm.RoleHCAttnFn, jlm.RoleHCAttnBase, jlm.RoleHCAttnScale)
 	case st != nil:
 		st.pred = m.predicted(b, f, st.in)
 		x, attnIn = st.pred[0], st.pred[0]
@@ -712,11 +712,15 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// its keys and values are the ones its source block wrote.
 	shared := c.KVShared(li)
 	vFromK := m.layers[li].vFromK
+	// A block storing neither v nor a reason to take k's projection for it
+	// reads its key as attended, after the key's norm and rotary, as its
+	// value.
+	keyValue := !shared && !vFromK && !has(jlm.RoleAttnV)
 	var k, v graph.ValueID
 	if !shared {
 		k = matvec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
 		v = k
-		if !vFromK {
+		if !vFromK && !keyValue {
 			v = matvec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
 		}
 	}
@@ -755,12 +759,20 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// turned apart do not keep a head's RMS.
 	postQ := c.QKNormAt(li) && c.QKNormPost
 	postK := postQ && c.RopeXD && c.RopeAt(li) && !shared && !m.xdKNormFirst
+	if c.QHeadNormBare {
+		q = ones(q, "q.bare")
+	}
+	// A key norm stored beside no key latent is the key's own.
+	if !shared && has(jlm.RoleAttnKVANorm) && !has(jlm.RoleAttnKVA) {
+		k = b.Norm(k, jlm.RoleAttnKVANorm, c.RMSEps)
+	}
 	// onK is f over k where the block writes keys of its own.
 	onK := func(f func(graph.ValueID) graph.ValueID) {
 		if !shared {
 			k = f(k)
 		}
 	}
+	var ropeA graph.Attrs
 	switch {
 	case postK:
 	case postQ:
@@ -783,6 +795,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		a := graph.Attrs{HeadDim: hd, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
 		a.Sections, a.Interleaved = m.ropeAxes(r)
+		if c.RopeTail {
+			a.Offset = hd - r.NRot
+		}
+		ropeA = a
 		q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qdim}}, nil, a, nil, nil)[0]
 		onK(func(k graph.ValueID) graph.ValueID {
 			return b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
@@ -800,6 +816,9 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	if c.VNorm && !shared {
 		v = ones(v, "v.norm")
+	}
+	if keyValue {
+		v = k
 	}
 	// The attention temperature, 1 + s ln(1 + floor((pos + o) / f)) at the
 	// row's history position, multiplies q: the scores are linear in it.
@@ -884,6 +903,11 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 					Sections: qsa.Sections, Interleaved: qsa.Interleaved}, nil, nil)[0]
 		}
 	}
+	compresses := c.CompAt(li) != jlm.CompNone && !shared
+	if compresses {
+		k = m.compressedRow(b, li, n, k, matvec)
+		v, rowW = k, b.G.Values[k].Width
+	}
 	hist := graph.SharedHistory(c.KVSource(li))
 	if !shared {
 		hist = graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
@@ -897,7 +921,19 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
 	var att graph.ValueID
-	if selects {
+	if compresses {
+		a.Width = rowW
+		sinks := stored(jlm.RoleAttnSinks)
+		if c.ds4Fault == ds4FaultNoSinks {
+			sinks = nil
+		}
+		att = m.compressedAttend(b, li, n, qIn, q, hist, a, ropeA, matvec, sinks)
+		if c.ds4Fault == ds4FaultNoSinks {
+			kept := b.Emit(graph.OpSlice, nil, []graph.Result{{Name: "sinks", Width: c.NHead}},
+				[]graph.Binding{{Role: jlm.RoleAttnSinks, K: c.NHead}}, graph.Attrs{Width: c.NHead}, nil, nil)[0]
+			att = keepBound(b, att, kept)
+		}
+	} else if selects {
 		a.Width = rowW
 		sel := b.Select(iq, hist, graph.Attrs{NHead: c.IdxHeads, NKVHead: c.IdxHeads, HeadDim: c.IdxHeadDim, Offset: kvDim, Width: rowW,
 			Span: c.IdxBlock, TopK: c.IdxTopK, Local: c.IdxLocal})
@@ -908,6 +944,13 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		att = b.AttendSelected(q, hist, sel, a, stored(jlm.RoleAttnSinks)...)
 	} else {
 		att = b.AttendOf(q, hist, a, stored(jlm.RoleAttnSinks)...)
+	}
+	// A value that is its key carries the key's rotation: turned back at
+	// the query's position.
+	if c.AttnDerope && c.RopeAt(li) && c.ds4Fault != ds4FaultNoDerope {
+		ra := ropeA
+		ra.Inverse = true
+		att = b.Emit(graph.OpRope, []graph.ValueID{att}, []graph.Result{{Name: "att.derope", Width: qdim}}, nil, ra, nil, nil)[0]
 	}
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)
@@ -937,6 +980,15 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		return b.Norm(v, r, c.RMSEps)
 	}
 	att = norm(att, jlm.RoleAttnSubNorm)
+	if oa, ok := f.Inventory[jlm.RoleAttnOutA]; ok && c.OGroups > 0 {
+		g := c.OGroups
+		rank := oa.Rows
+		if oa.Sheets == 0 {
+			rank = oa.Rows / g
+		}
+		att = b.Emit(graph.OpExpertMatVec, []graph.ValueID{att}, []graph.Result{{Name: "att.groups", Width: g * rank}},
+			[]graph.Binding{{Role: jlm.RoleAttnOutA, K: oa.K, Rows: rank, Sheets: g}}, graph.Attrs{}, nil, nil)[0]
+	}
 	proj := matvec(att, out, d, stored(jlm.RoleAttnOutBias)...)
 	for _, s := range side {
 		proj = b.Add(proj, s)
@@ -944,9 +996,12 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	// Streams read through a gate take the sublayer's output each at its
 	// weight; x2 is then none of them.
 	var x2 graph.ValueID
-	if st != nil && st.gated {
+	switch {
+	case st != nil && st.gated:
 		st.cur = m.placed(b, st.in, st.w, norm(proj, jlm.RolePostAttnNorm))
-	} else {
+	case st != nil && st.sinkhorn:
+		st.cur = m.sinkhornPlace(b, st.in, st.post, st.comb, norm(proj, jlm.RolePostAttnNorm))
+	default:
 		x2 = postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	}
 	if _, ok := c.resCheckpoint(li); ok && st != nil && st.mixed {
@@ -956,7 +1011,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		x2 = mapRow(b, "joined", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt2}, nil, d, b.Add(x2, st.side))
 	}
 	if !c.MoEAt(li) && !has(jlm.RoleFFNUp) && !has(jlm.RoleFFNDown) {
-		if st != nil && st.gated {
+		if st != nil && (st.gated || st.sinkhorn) {
 			b.Out(st.cur...)
 			return verified(b, f)
 		}
@@ -983,6 +1038,8 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		ffnIn = m.bankMix(b, f, st.bankAfter(c, li), x2, jlm.RoleFFNResScore)
 	case st != nil && st.gated:
 		ffnIn, st.w = m.gatedMix(b, f, st.cur, jlm.RoleHCFFNNorm, jlm.RoleHCFFNDown, jlm.RoleHCFFNUp, jlm.RoleHCFFNInject)
+	case st != nil && st.sinkhorn:
+		ffnIn, st.post, st.comb = m.sinkhornMix(b, st.cur, jlm.RoleHCFFNFn, jlm.RoleHCFFNBase, jlm.RoleHCFFNScale)
 	}
 	n2 := preNorm(ffnIn, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
 	if _, own := f.Inventory[jlm.RoleFFNNorm]; c.Parallel && !own {
@@ -1010,6 +1067,10 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	}
 	if st != nil && st.gated {
 		b.Out(m.placed(b, st.cur, st.w, norm(ffn, jlm.RolePostFFNNorm))...)
+		return verified(b, f)
+	}
+	if st != nil && st.sinkhorn {
+		b.Out(m.sinkhornPlace(b, st.cur, st.post, st.comb, norm(ffn, jlm.RolePostFFNNorm))...)
 		return verified(b, f)
 	}
 	if st != nil && st.mixed {
@@ -1164,7 +1225,21 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 			[]graph.Result{{Name: "router.group.rank", Width: g, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
 		choose = mapc("router.kept", graph.MapWhere, math.Inf(-1), E, nil, mapc("router.group.kept", graph.MapLess, float64(kept), g, nil, rank), choose)
 	}
-	sel, _ := topk("router", choose, K, 0, K)
+	var sel graph.ValueID
+	_, hashed := f.Inventory[jlm.RoleHashExperts]
+	switch {
+	case hashed && c.ds4Fault == ds4FaultScoreRoute:
+		table := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "router.hash", Width: K}},
+			[]graph.Binding{{Role: jlm.RoleHashExperts, K: K, Rows: c.NVocab}}, graph.Attrs{}, nil, nil)[0]
+		sel, _ = topk("router", keepBound(b, choose, table), K, 0, K)
+	case hashed:
+		// A block routing by token id reads its experts from the token's
+		// row of its table; its scores weigh them.
+		sel = b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "router.hash", Width: K, Elem: graph.ElemU32}},
+			[]graph.Binding{{Role: jlm.RoleHashExperts, K: K, Rows: c.NVocab}}, graph.Attrs{}, nil, nil)[0]
+	default:
+		sel, _ = topk("router", choose, K, 0, K)
+	}
 	take := func(name string, v graph.ValueID) graph.ValueID {
 		return b.Emit(graph.OpTake, []graph.ValueID{v, sel}, []graph.Result{{Name: name, Width: K}}, nil, graph.Attrs{}, nil, nil)[0]
 	}
@@ -1529,7 +1604,10 @@ func (m *Model) perLayerInputs(b *graph.Builder, f graph.Facts, x graph.ValueID)
 func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	f, _ := m.inventory(jlm.DenseBlock)
-	_, types := f.Inventory[jlm.RoleTokenTypes]
+	// Token types the input rows add are a table of n_embd-wide rows; a
+	// vector of them is a head's (clef's fields), which the rows never read.
+	tt, types := f.Inventory[jlm.RoleTokenTypes]
+	types = types && tt.K == c.NEmbd && tt.Rows > 0
 	switch {
 	case c.Streams() > 1 && !c.mixesStreams() && !m.expandsStreams():
 		return nil, UncoveredStreams, nil

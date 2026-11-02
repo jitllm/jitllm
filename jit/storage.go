@@ -66,12 +66,19 @@ const (
 	SourceEntries
 	SourceEntRows
 	SourceEntPages
+	// SourceRopeRows is the step's live row count, then each row's cache
+	// position and the word its sequence's rotary marks start at;
+	// SourceRopeMarks every sequence's marks, a count then Step.Marks marks
+	// of graph.MarkWords words, kept from step to step and written where a
+	// sequence's spans change (graph.OpRopePos).
+	SourceRopeRows
+	SourceRopeMarks
 	numSources
 )
 
 var sourceNames = [numSources]string{"step", "weight", "input", "rows", "pages", "query offset",
 	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state", "request", "windows",
-	"rotary axis positions", "entries", "entry rows", "entry pages"}
+	"rotary axis positions", "entries", "entry rows", "entry pages", "rotary rows", "rotary marks"}
 
 func (s Source) String() string {
 	if s < numSources {
@@ -194,6 +201,10 @@ func tableSource(t Table) (Source, bool) {
 		return SourceStep, true
 	case TableTokens:
 		return SourceTokens, true
+	case TableRopeRows:
+		return SourceRopeRows, true
+	case TableRopeMarks:
+		return SourceRopeMarks, true
 	}
 	return 0, false
 }

@@ -4,7 +4,6 @@ package model
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/engine/graph"
 	"io"
 	"math"
 	"path/filepath"
@@ -15,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/engine/graph"
 
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
@@ -165,6 +166,16 @@ type Config struct {
 	// rotate at their base unscaled (llama.cpp's olmo2 builder passes
 	// attn_factor 1 there, transformers builds them a default rotary).
 	SWARopePlain bool
+	// RopeTail turns each head's last NRot elements rather than its first,
+	// a head being [unturned | turned] (DeepSeek V4).
+	RopeTail bool
+	// AttnDerope turns the attention's output back at the query's position
+	// before the output projection: a value that is its key carries the
+	// key's rotation (DeepSeek V4).
+	AttnDerope bool
+	// QHeadNormBare RMS-norms each query head with no weight after the
+	// query's projection (DeepSeek V4's q_b_norm).
+	QHeadNormBare bool
 
 	// Rotary scaling; see jlm.Config. YarnFactor 0 is no YaRN and RopeLinear 0
 	// no linear interpolation. Both scale the global rotary only.
@@ -311,8 +322,9 @@ type Config struct {
 	// gaussian top-k on their FFN gate at SparseStd deviations.
 	PredStreams, NSparse int
 	SparseStd            float32
-	// kvSrcOf replaces KVSource's choice, for a gate's violation only.
-	kvSrcOf func(li int) int
+	// kvSrcAt replaces KVSource's choice for the shared blocks, a source a
+	// block (nil: none), for a gate's violation only.
+	kvSrcAt []int
 	// noRouter marks the blocks of a mixture model that carry no router:
 	// Nemotron 3's mixer-only layers and Jamba's dense blocks between its
 	// mixtures. MoEAt is false there. Read off the container at build(), nil
@@ -348,6 +360,17 @@ func (c *Config) RopeAt(il int) bool {
 // wherever a window exists, so every windowed model reads as before.
 func (c *Config) periodLocal(il int) bool {
 	return c.SWAPeriod > 0 && il%c.SWAPeriod < c.SWAPeriod-1
+}
+
+// ropeLocal says block il turns by the sliding blocks' rotary where the
+// model holds one: a sliding block, but for one that compresses its history
+// (compRope).
+func (c *Config) ropeLocal(il int) bool { return c.SWA(il) && !c.compRope(il) }
+
+// compRope says block il compresses its history and turns by the model's
+// own rotary, its entries'.
+func (c *Config) compRope(il int) bool {
+	return c.CompAt(il) != jlm.CompNone && c.ds4Fault != ds4FaultMainRope
 }
 
 // AttnWindow is the key range layer il attends to from position pos: w0 is
@@ -453,10 +476,10 @@ func (c *Config) KVRowAt(li int) int {
 	if c.extraKVHead(li) {
 		return (c.NKVHead + 1) * c.HeadDim
 	}
-	if c.DSV4() {
-		// The key, and on a compressed block the compressor's pending
-		// inputs (ds4.go).
-		return c.ds4RowAt(li).width
+	if len(c.CompKinds) != 0 {
+		// The key, and on a compressing block the compressor's inputs
+		// (compRowAt).
+		return c.compRowAt(li).width
 	}
 	return c.KVDimAt(li)
 }
@@ -525,8 +548,8 @@ func (c *Config) KVSource(li int) int {
 	if !c.KVShared(li) {
 		return li
 	}
-	if c.kvSrcOf != nil {
-		return c.kvSrcOf(li)
+	if li < len(c.kvSrcAt) {
+		return c.kvSrcAt[li]
 	}
 	for j := c.NLayer - c.NKVShared - 1; j >= 0; j-- {
 		if c.SWA(j) == c.SWA(li) {
@@ -1314,9 +1337,6 @@ type Model struct {
 	// ropeSWA is the LOCAL layers' rotary where an architecture trains two
 	// bases, and nil where it trains one -- which is every model but gemma3.
 	ropeSWA *nn.Rope
-	// ropeB is XD-RoPE's second table: the runs of each NEOX pair's second
-	// half (nn.XDRopeRuns), rope's being the first halves'; nil elsewhere.
-	ropeB *nn.Rope
 	// ds4Head is DeepSeek V4's stream collapse before the head (ds4.go).
 	ds4Head *ds4Head
 	// q4eHead is Qwen3.8-Flash-Next's head mix and ngram its n-gram table.
@@ -3059,9 +3079,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			return nil, fmt.Errorf("model: %s: XD-RoPE needs NEOX pairs, rope sections and the whole head "+
 				"turned (NRot %d of %d)", cfg.Arch, cfg.NRot, cfg.HeadDim)
 		}
-		b := m.rope
-		m.rope.Runs, b.Runs = nn.XDRopeRuns(cfg.RopeSections[:], cfg.NRot/2)
-		m.ropeB = &b
+		m.rope.Runs, _ = nn.XDRopeRuns(cfg.RopeSections[:], cfg.NRot/2)
 	}
 	if cfg.QKL2Norm || cfg.VNorm {
 		m.onesHD = make([]float32, cfg.MaxHeadDim())

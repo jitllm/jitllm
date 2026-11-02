@@ -602,15 +602,6 @@ func (p *LayerPlan) Scale() float64 {
 	return 1 / math.Sqrt(float64(p.HeadDim))
 }
 
-// RopeAt reports whether block li rotates q and k. Llama 4's global layers do
-// not (NoPEGlobal), and neither does any block of a NoPosEnc model.
-func (p *LayerPlan) RopeAt(li int) bool {
-	if p.NoPosEnc {
-		return false
-	}
-	return !(p.NoPEGlobal && p.SWALocal != nil && !p.SWALocal(li))
-}
-
 // KVWindowSlack is how far behind its window a windowed layer's history is
 // kept, in positions, on the host and on every device: a page wholly below
 // the window start of the slowest row's position minus this is released.
@@ -619,29 +610,6 @@ func (p *LayerPlan) RopeAt(li int) bool {
 // host trusts history the device returns only from the window start of
 // (its last position - 1 - KVWindowSlack), which this margin guarantees.
 const KVWindowSlack = 64
-
-// LocalRope reports whether block li rotates by the local table (csSWA):
-// the blocks SWALocal names when it is set -- ModernBERT's are all but every
-// SWAPeriod'th from the first, which the period's own expression does not
-// say -- and otherwise the SWAPeriod pattern's.
-func (p *LayerPlan) LocalRope(li int) bool {
-	if p.SWAPeriod <= 0 {
-		return false
-	}
-	if p.SWALocal != nil {
-		return p.SWALocal(li)
-	}
-	return li%p.SWAPeriod < p.SWAPeriod-1
-}
-
-// Window is block li's sliding window in keys, or 0 when it attends its whole
-// causal history.
-func (p *LayerPlan) Window(li int) int {
-	if p.SWAWindow <= 0 || p.SWALocal == nil || !p.SWALocal(li) {
-		return 0
-	}
-	return p.SWAWindow
-}
 
 // DS4Plan is DeepSeek V4's model-wide geometry (model.Config.DSV4), the same
 // on every block of the model: the hyper-connections, the grouped output
@@ -769,14 +737,6 @@ type NGramDevice interface {
 	SetNGramRows(rows []float32)
 }
 
-// QSADevice is a device that runs Qwen3.8-Flash-Next's QSA blocks: before a
-// call the host hands over each row's rotary marks (where a picture moved the
-// positions after it, and by how much), in the call's row order: the row's
-// count, then its (position, delta) pairs.
-type QSADevice interface {
-	SetRopeMarks(marks []int32)
-}
-
 // K3Fault names a piece of Kimi-K3's graph a gate takes out.
 type K3Fault uint8
 
@@ -871,6 +831,12 @@ type LayerPlan struct {
 	// cache position.
 	Tables      []*graph.Graph
 	RopeTabAxes []float32
+	// RopeMarks is the most rotary marks a sequence holds (graph.OpRopePos),
+	// 0 where every row turns at its cache position.
+	RopeMarks int
+	// Rotaries is the model's rotaries, the tables a text block's rope ops
+	// pick by what they state (jit.Request.Rotaries).
+	Rotaries []graph.Rotary
 	// KPad is the width the block's matrices that read the residual or the
 	// attention's output were packed at, when NEmbd is not a whole number of
 	// 32-element blocks (a tower 144 wide, packed at 160 with zero columns
@@ -893,11 +859,8 @@ type LayerPlan struct {
 	// device reserving those per-row logits reserves their capped twin for.
 	FinalSoftcap float32
 	// SWAPeriod is the repeating local/global layer pattern, 0 when the
-	// architecture has one kind of layer. Layer il is local when
-	// il%SWAPeriod < SWAPeriod-1 (model.Config.SWA's expression), or where
-	// SWALocal is set when it says so (LocalRope). It picks
-	// between the two rotary tables Layers is handed, because gemma3 trains its
-	// local and global layers at different rotary bases.
+	// architecture has one kind of layer: a model of two rotary bases
+	// (gemma3) whose blocks' rope ops each state theirs (Rotaries).
 	SWAPeriod int
 	// RopeTab and RopeTabSWA are the folded rotary constant planes a device
 	// builds its own table from (Rope.TabPlanes of the global and the local
@@ -911,16 +874,10 @@ type LayerPlan struct {
 	// RopeW) and the rotation does not keep a head's RMS -- k's norm follows
 	// it, as q's does.
 	RopeSplit bool
-	// SWAWindow is how many keys a sliding-window layer attends to, and
-	// SWALocal says which blocks those are: the blocks the SWAPeriod does not
-	// leave global (model.Config.periodLocal), which are also the ones that
-	// rotate under NoPEGlobal -- with SWAWindow 0 (SmolLM3) that is all they
-	// mean. Both zero/nil for an architecture whose every layer sees its whole
-	// history.
-	// Separate from SWAPeriod, which is zero for single-base windowed models
-	// such as gemma2 and phi3. See Window.
+	// SWAWindow is how many keys a sliding-window layer attends to, zero for
+	// an architecture whose every layer sees its whole history; which blocks
+	// slide each block's graph states (its attention's Window).
 	SWAWindow int
-	SWALocal  func(li int) bool
 
 	// PostNorm says the block RMSNorms the attention output and the FFN output
 	// before each residual add -- gemma2 and gemma3's two extra norms.
@@ -1090,7 +1047,8 @@ type LayerPlan struct {
 	//
 	// SWAChunked makes a windowed layer attend within an aligned chunk of
 	// SWAWindow keys -- floor(pos/W)*W through pos -- rather than the last W.
-	// NoPEGlobal takes the rotary off every layer SWALocal leaves global.
+	// NoPEGlobal takes the rotary off the global layers (their graphs turn
+	// nothing).
 	// QKL2Norm RMSNorms each head of q and k with no weight on the layers that
 	// rotate. AttnTemp* scale the query of an unrotated layer by
 	// 1 + s*ln(1 + floor((pos+o)/f)).
@@ -1535,12 +1493,12 @@ type TokenDevice interface {
 	SetTokenIDs(ids []int32)
 }
 
-// RopeAxesDevice is an optional LayerDevice told the rotary positions of
-// the rows of the next call at cache position pos: four words a row, its
-// position on each axis (on a one-axis rotary, or a text row, the same four),
-// which an image earlier in the sequence moves off the cache position.
-type RopeAxesDevice interface {
-	SetRopeAxes(pos int, at []int32)
+// RopeMarksDevice is an optional LayerDevice told a sequence's rotary marks
+// where they change (graph.OpRopePos): slot's count, then its marks of
+// graph.MarkWords words. Its rotary tables turn each row by its cache
+// position and its sequence's marks, so no call states a row's positions.
+type RopeMarksDevice interface {
+	SetSeqMarks(slot int, block []uint32) error
 }
 
 // PromptDevice is an optional LayerDevice told that the calls that follow
@@ -1861,14 +1819,6 @@ type RecRowsDevice interface {
 type RecRewinder interface {
 	RecMark()
 	RecRewind() bool
-}
-
-// PlanDecliner is an optional LayerDevice that can answer from the plan alone
-// whether it would take a block, before the caller pays to read its weights.
-// A graph decline is a property of the shape, and offering a block costs a
-// page-in, so this lets placement skip reading blocks the device will refuse.
-type PlanDecliner interface {
-	DeclinePlan(p *LayerPlan) string
 }
 
 // SizeDecliner is an optional LayerDevice that can answer from a block's

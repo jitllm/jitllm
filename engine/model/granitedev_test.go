@@ -276,9 +276,6 @@ func graniteRun(t *testing.T, m *Model, dev string, seq int, prompt, forced []in
 		t.Fatal(err)
 	}
 	if st.devCount() != m.Cfg.NLayer || !st.HeadOnDevice() {
-		if why := g.DeclinePlan(st.planFor(0)); why != "" {
-			return nil, tier.Stats{}, "THE DEVICE DECLINES THE BLOCK: " + why
-		}
 		return nil, tier.Stats{}, "CARD TOO SMALL: " + g.Err()
 	}
 	var out [][]float32

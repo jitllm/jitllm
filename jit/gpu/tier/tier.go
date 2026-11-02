@@ -838,40 +838,18 @@ type Stats struct {
 	// GroupedMoE counts mixture blocks a batched chunk ran grouped by expert
 	// (moegroup.go) rather than one row at a time.
 	GroupedMoE int
-	// GroupedFloat counts the grouped expert matvecs a batched mixture ran
-	// over a float bank (F32, F16, BF16): the selection check for that form.
-	GroupedFloat int
 	// MLABatched counts latent-attention blocks a batched chunk ran as one
 	// submission (mlabatch.go) rather than one row at a time.
 	MLABatched int
 	// IdxSelects counts the lightning indexer's selections a device ran
 	// (DeepSeek V3.2, indexer.go): one per attention call of an indexer block.
 	IdxSelects int
-	// MSASelects counts MiniMax Sparse Attention's block selections a device
-	// ran (msa.go): one per attention call of a selecting block.
-	MSASelects int
-	// QSASelects counts QSA block selections a device ran (qsa.go): one per
-	// attention call of a Qwen3.8-Flash-Next block.
-	QSASelects int
-	// AltUpBlocks counts Gemma 3n blocks a device ran its AltUp prediction
-	// for (altup.go).
-	AltUpBlocks int
 	// DS4Blocks counts DeepSeek V4 attention halves a device ran, and DS4HC
 	// its hyper-connection mixes (ds4.go).
 	DS4Blocks, DS4HC int
 	// K3Mixes counts Kimi-K3 residual-attention mixes a device ran, and
 	// K3Latent its latent mixtures (k3.go).
 	K3Mixes, K3Latent int
-	// Q4EMixes counts Qwen3.8-Flash-Next hyper-connection mixes a device
-	// ran, and Q4ENGram its n-gram embeddings (q4e.go).
-	Q4EMixes, Q4ENGram int
-	// LinearBatched counts recurrent (linear-attention) blocks a batched chunk
-	// ran through the chunked delta rule (kernels.GatedDeltaScan) rather than
-	// one row at a time.
-	LinearBatched int
-	// LinearFused counts recurrent blocks whose rule ran as ONE launch from the
-	// convolution's output (kernels.GatedDeltaFused) -- decode or chunk.
-	LinearFused int
 	// RecShared counts recurrent pools sized in the shared form (recpool.go):
 	// one resident state a slot and the device's next-state scratch.
 	RecShared int
@@ -889,8 +867,8 @@ type Stats struct {
 	// launch and whose down formed act(gate)*up (Config.GateUpFuse).
 	GateUpFused int
 	// GateUpWhy is why the last block's gate and up could not be fused.
-	GateUpWhy                              string
-	RagQKVFused, RagResFused, RagGateFused int
+	GateUpWhy   string
+	RagResFused int
 	// GateUp2Runs counts gated FFNs whose gate and up ran as one Gate2
 	// launch (Config.GateUp2).
 	GateUp2Runs int
@@ -966,9 +944,6 @@ type Stats struct {
 	// and QuantSkipped the int8 quantizes a block skipped because every
 	// matvec reading them was on sm_70's f16 path, which reads the float.
 	ActF16Launches, QuantSkipped int
-	// ResidualFused counts projections that wrote x + W*a themselves, with
-	// the residual in the bias slot, instead of a separate Add launch.
-	ResidualFused int
 	// ResidScaled counts residual adds that scaled the block output first
 	// (Granite's residual_scale, kernels.AddScaled): the selection check that
 	// a scaled model's blocks took the scaled add rather than a fused one.
@@ -981,16 +956,6 @@ type Stats struct {
 	// split reduction, by mkkID or retuneIndexed: the selection check for a
 	// gate on that kernel.
 	IndexedGroup int
-	// SegFused counts launches of a fuseSegs pair (MLA's q with kv_a, a shared
-	// expert's gate with up) -- once per launch, so a recorded graph counts
-	// its recording only.
-	SegFused int
-	// MoEFused counts expert matvec launches with a fused epilogue (fuseMoE),
-	// once per launch, so a recorded graph counts its recording only.
-	MoEFused int
-	// QKRms counts wide q/k norms run as whole-row RMSNorm launches, once per
-	// block launched, so a recorded graph counts its recording only.
-	QKRms int
 	// RopeTables counts rotary table rows built on the device and
 	// RopeTableUploads the rows uploaded from the host, cumulative over the
 	// session; a model with two rotary bases charges two rows per position.
@@ -1107,8 +1072,6 @@ type Stats struct {
 	// instruction, whose operands are binary16 -- so the caller's gate has to be
 	// NMSE and token ids rather than bit equality.
 	AttnMMA bool
-	// FlashLaunches counts encoded fused-attention launches (not graph replays).
-	FlashLaunches int
 	// FusedLaunches counts encoded launches of a kernel that stands for
 	// several (kernels.RoPEQKVPaged), not graph replays: the selection check
 	// that the fused form ran rather than its parts.
@@ -1126,9 +1089,6 @@ type Stats struct {
 	// PagedLaunches counts encoded paged-attention launches: the check that a
 	// paged run read its history through the pool.
 	PagedLaunches int
-	// PagedPrefillLaunches counts layer attentions of a prefill chunk that ran
-	// the paged prefill kernels (pagedprefill.go) rather than FlashDecodeKV.
-	PagedPrefillLaunches int
 	// KVEvictions counts pages sent to host memory (kvevict.go), one per layer-page.
 	KVEvictions int
 	// KVStageReads counts page reads the card refused a buffer for, which
@@ -1149,9 +1109,6 @@ type Stats struct {
 	RecPointsKept, RecPointsLoaded int
 	// KVStreamPasses counts attention passes over evicted history.
 	KVStreamPasses int
-	// StagedPasses counts attention passes of streamed calls: those over
-	// evicted history and those past Config.StagedPassKeys on the card.
-	StagedPasses int
 	// ComposedStreamPasses counts the passes of composed blocks over
 	// evicted history (streamRun).
 	ComposedStreamPasses int
@@ -1187,11 +1144,6 @@ type Stats struct {
 	// recurrent state in one launch: the selection check that a hybrid's step
 	// across sessions did not leave its recurrence to anything else.
 	SessionLinear int
-	// LinearRowsScalar counts linear blocks ragged steps ran on the scan's
-	// one-thread form (prepRagLinear) rather than a lane group a state row:
-	// the selection check that a device without a guaranteed subgroup -- or
-	// one forced by ScalarLinearRows -- stepped its rows through that form.
-	LinearRowsScalar int
 	// RecChainRows counts rows that stepped a linear block's recurrent state
 	// after another row of their own sequence in the same ragged step -- a
 	// prompt chunk's rows past its first, once per linear block: the selection
@@ -1224,10 +1176,6 @@ type Stats struct {
 	// PagedStagedLaunches counts decode attentions that ran the staged
 	// kernels rather than FlashDecodeKV (kernels.ChooseDecodePlan).
 	PagedStagedLaunches int
-	// PagedPrefill70 counts those prefill launches on sm_70's m8n8k4 pair
-	// (PagedAttnScoresMMA70/PagedAttnAccMMA70): the selection check that a
-	// prompt on an sm_70 card took the tensor cores, latent blocks included.
-	PagedPrefill70 int
 	// PagedAccMMA counts prefill launches whose accumulate ran on the m16n8k8
 	// binary16 instruction (kernels.PagedAttnAccMMA, sm_75 on): the selection
 	// check that the weighted sum of V left the FMA tiles.
@@ -1243,9 +1191,6 @@ type Stats struct {
 	// RagForms counts batched scratches built with a flash prefill that has a
 	// run-table form: where it is 0, ragged steps keep the decode plan.
 	RagForms int
-	// PagedPrefillPasses counts the passes those launches ran over a history
-	// longer than one launch attends -- the selection check for the fold.
-	PagedPrefillPasses int
 	// EmbedLaunches counts prompt chunks whose rows the device gathered from
 	// the tied head (EmbedRows) -- the selection check that the host lookup
 	// was actually skipped.
@@ -1266,10 +1211,6 @@ type Stats struct {
 	// FlashPrefills counts batched attention launches of a one-kernel form
 	// (kernels.FlashPrefill70, FlashPrefillTile), paged or not.
 	FlashPrefills int
-	// VisionAttnChunks counts the query chunks vision blocks ran their
-	// attention in (visionattn.go) -- the selection check that a large image's
-	// score planes were sized for a chunk.
-	VisionAttnChunks int
 	// MMAWhy is what the device said when it refused the matrix instruction.
 	MMAWhy string
 	// TileMV counts batched matvecs built as kernels.GemmTile (binary16 tiles
@@ -1309,8 +1250,8 @@ type Stats struct {
 	// TEmit is the CPU time spent encoding launches, as opposed to waiting for
 	// the device: the ceiling on what an indirect command buffer (which removes
 	// only the encoding) could buy on a backend with no recording.
-	TEmit                         time.Duration
-	TStage, TLaunch, TRead, TConv time.Duration
+	TEmit                  time.Duration
+	TStage, TLaunch, TConv time.Duration
 	// Packs is PackWeights calls this device made outside the arena: every
 	// pack when the arena is off and the ones it declined when it is on. Only
 	// the sum with ArenaStats.Packs answers "did the pack run once"
@@ -1476,7 +1417,6 @@ func (s *Stats) add(o Stats) {
 	if o.GateUpWhy != "" {
 		s.GateUpWhy = o.GateUpWhy
 	}
-	s.RagQKVFused += o.RagQKVFused
 	s.RagResFused += o.RagResFused
 	s.PersistLaunches += o.PersistLaunches
 	s.PersistParts += o.PersistParts
@@ -1488,7 +1428,6 @@ func (s *Stats) add(o Stats) {
 	if o.PersistWhy != "" {
 		s.PersistWhy = o.PersistWhy
 	}
-	s.RagGateFused += o.RagGateFused
 	s.GateUp2Runs += o.GateUp2Runs
 	s.Gate2InRuns += o.Gate2InRuns
 	s.FFNTimed += o.FFNTimed
@@ -1497,20 +1436,12 @@ func (s *Stats) add(o Stats) {
 	s.SampleReads += o.SampleReads
 	s.PickReads += o.PickReads
 	s.GroupedMoE += o.GroupedMoE
-	s.GroupedFloat += o.GroupedFloat
 	s.MLABatched += o.MLABatched
 	s.IdxSelects += o.IdxSelects
-	s.MSASelects += o.MSASelects
-	s.QSASelects += o.QSASelects
-	s.AltUpBlocks += o.AltUpBlocks
 	s.DS4Blocks += o.DS4Blocks
 	s.DS4HC += o.DS4HC
 	s.K3Mixes += o.K3Mixes
 	s.K3Latent += o.K3Latent
-	s.Q4EMixes += o.Q4EMixes
-	s.Q4ENGram += o.Q4ENGram
-	s.LinearBatched += o.LinearBatched
-	s.LinearFused += o.LinearFused
 	s.RecShared += o.RecShared
 	s.VoltaGemm += o.VoltaGemm
 	s.GemmF16 += o.GemmF16
@@ -1528,13 +1459,9 @@ func (s *Stats) add(o Stats) {
 	s.MLAAcc70 += o.MLAAcc70
 	s.ActF16Launches += o.ActF16Launches
 	s.QuantSkipped += o.QuantSkipped
-	s.ResidualFused += o.ResidualFused
 	s.ResidScaled += o.ResidScaled
 	s.RowtSplitTiles += o.RowtSplitTiles
 	s.IndexedGroup += o.IndexedGroup
-	s.SegFused += o.SegFused
-	s.MoEFused += o.MoEFused
-	s.QKRms += o.QKRms
 	s.RopeTables += o.RopeTables
 	s.RopeTableUploads += o.RopeTableUploads
 	if o.RopeTableWhy != "" {
@@ -1590,7 +1517,6 @@ func (s *Stats) add(o Stats) {
 	s.TPrewarm += o.TPrewarm
 	s.Captures += o.Captures
 	s.AttnMMA = s.AttnMMA || o.AttnMMA
-	s.FlashLaunches += o.FlashLaunches
 	s.FusedLaunches += o.FusedLaunches
 	s.ActInLaunches += o.ActInLaunches
 	s.ActInSaved += o.ActInSaved
@@ -1598,7 +1524,6 @@ func (s *Stats) add(o Stats) {
 	s.ActInTimed += o.ActInTimed
 	s.ActInKept += o.ActInKept
 	s.PagedLaunches += o.PagedLaunches
-	s.PagedPrefillLaunches += o.PagedPrefillLaunches
 	s.PagedStagedLaunches += o.PagedStagedLaunches
 	s.KVEvictions += o.KVEvictions
 	s.KVStageReads += o.KVStageReads
@@ -1609,7 +1534,6 @@ func (s *Stats) add(o Stats) {
 	s.RecPointsKept += o.RecPointsKept
 	s.RecPointsLoaded += o.RecPointsLoaded
 	s.KVStreamPasses += o.KVStreamPasses
-	s.StagedPasses += o.StagedPasses
 	s.ComposedStreamPasses += o.ComposedStreamPasses
 	s.PipelinePieces += o.PipelinePieces
 	s.StageOverlaps += o.StageOverlaps
@@ -1618,7 +1542,6 @@ func (s *Stats) add(o Stats) {
 	s.LanesWaited += o.LanesWaited
 	s.SessionRows += o.SessionRows
 	s.SessionLinear += o.SessionLinear
-	s.LinearRowsScalar += o.LinearRowsScalar
 	s.RecChainRows += o.RecChainRows
 	s.RowsLatent += o.RowsLatent
 	s.RecAligns += o.RecAligns
@@ -1627,12 +1550,10 @@ func (s *Stats) add(o Stats) {
 	s.RecZeroCopies += o.RecZeroCopies
 	s.RecZeroSource += o.RecZeroSource
 	s.RecZeroHost += o.RecZeroHost
-	s.PagedPrefill70 += o.PagedPrefill70
 	s.PagedAccMMA += o.PagedAccMMA
 	s.FlashPrefill80 += o.FlashPrefill80
 	s.RagPrefills += o.RagPrefills
 	s.RagForms += o.RagForms
-	s.PagedPrefillPasses += o.PagedPrefillPasses
 	s.EmbedLaunches += o.EmbedLaunches
 	s.EmbedReadBacks += o.EmbedReadBacks
 	s.HeadFolds += o.HeadFolds
@@ -1640,7 +1561,6 @@ func (s *Stats) add(o Stats) {
 	s.TowerPhases += o.TowerPhases
 	s.PickRows += o.PickRows
 	s.FlashPrefills += o.FlashPrefills
-	s.VisionAttnChunks += o.VisionAttnChunks
 	if o.MMAWhy != "" {
 		s.MMAWhy = o.MMAWhy
 	}
@@ -1668,7 +1588,6 @@ func (s *Stats) add(o Stats) {
 	s.TEmit += o.TEmit
 	s.TStage += o.TStage
 	s.TLaunch += o.TLaunch
-	s.TRead += o.TRead
 	s.TConv += o.TConv
 	s.Packs += o.Packs
 	// Slots sums: two devices with three slots each hold six blocks between
@@ -1842,6 +1761,8 @@ func (g *devTier) refund(n uint64) {
 // scratch they run in is a lane (devsess.go); a devTier is the three seen
 // together.
 type devShared struct {
+	// marks is every sequence's rotary marks on the device (markArena).
+	marks markArena
 	// onDev is how many submissions are inside the backend's session on this
 	// device right now, and ranBeside how many began while another was
 	// (Stats.RanBeside); see runSub.
@@ -2153,7 +2074,6 @@ type devShared struct {
 	ffnWin     map[string]FFNForm
 	actInTrial bool
 	ragKerns   map[moeKernKey]backend.Kernel // a batched mixture's grouped matvecs (moegroup.go)
-	moeVolta   map[moeVoltaKey]moeVoltaMV    // their tensor-core twins; see voltaGroupedMV
 	ragK       map[ragKey]backend.Kernel     // a ragged step's matvecs; see ragMV
 	tailK      map[ragKey]*mvTail            // tileMV's second launches, one per shape
 	qkvK       map[string]*qkvSeg            // a prompt chunk's q/k/v grids; see qkvGemm
@@ -2811,7 +2731,6 @@ func freeScratch(bs *blockScratch) {
 	if bs == nil {
 		return
 	}
-	bs.mg.free() // a pointer, which the field walk below does not follow
 	bs.arena.free()
 	bs.arena = nil
 	freeFlash(bs) // a slice, likewise
@@ -2836,9 +2755,6 @@ func freeScratch(bs *blockScratch) {
 	}
 	bs.vsegs = nil
 	freePaged(bs.pkv)
-	bs.mlab.free()
-	bs.ds4.free()
-	bs.q4e.free()
 	for n, rk := range bs.ragLin { // a map, which the walk does not follow either
 		for _, k := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {
 			if k != nil {
@@ -2942,25 +2858,12 @@ func (g *devTier) setRecSteps(sid uint64, n int) {
 
 // setInputs hands session sid's per-layer inputs and token ids to this device
 // for its next call (gpuSession.inputsTo).
-func (g *devTier) setInputs(sid uint64, ple []float32, ids []int32, ng []float32, marks []int32, prompt bool, axes []int32, axesAt int) {
+func (g *devTier) setInputs(sid uint64, ple []float32, ids []int32, ng []float32, prompt bool) {
 	g.mu.Lock()
 	ds := g.sessOf(sid)
-	ds.pleHost, ds.tokIDs, ds.ngHost, ds.qsaMarks, ds.prompt = ple, ids, ng, marks, prompt
-	ds.ropeAxes, ds.ropeAxesAt = axes, axesAt
+	ds.pleHost, ds.tokIDs, ds.ngHost, ds.prompt = ple, ids, ng, prompt
 	g.mu.Unlock()
 }
-
-// SetRopeAxes takes the rotary positions of the rows of the next call at
-// cache position pos (nn.RopeAxesDevice).
-func (g *devTier) SetRopeAxes(pos int, at []int32) {
-	g.mu.Lock()
-	g.ropeAxes, g.ropeAxesAt = at, pos
-	g.mu.Unlock()
-}
-
-// SetRopeAxes keeps the rows' rotary positions for this session's next call,
-// which hands them to every device it holds (inputsTo).
-func (s *gpuSession) SetRopeAxes(pos int, at []int32) { s.axes, s.axesAt = at, pos }
 
 func (g *devTier) Close() {
 	// The layers go first, through ReleaseLayers (the refunds, freeRaw, the

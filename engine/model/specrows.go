@@ -144,7 +144,7 @@ func (s *Instance) stepRows(src []func(dst []float32) error, ids []int32, out *r
 		h.ArgmaxOnly, h.Token = true, -1
 		defer func() { h.ArgmaxOnly = false }()
 	}
-	lg, err := s.prefillSrc(0, src, ids, nil)
+	lg, err := s.prefillSrc(0, src, ids)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func (s *Instance) stepRowsDevice(src []func(dst []float32) error, ids []int32, 
 		if err := m.addPos(row, s.prow, pos[j]); err != nil {
 			return err
 		}
-		s.ropeRow(j, s.ropeOf(0, pos[j]))
+		s.cpu.tabsFresh = false
 	}
 	s.relocateFor(p0 + n)
 	rd, _ := s.onRowsDevice()
@@ -257,7 +257,6 @@ func (s *Instance) stepRowsDevice(src []func(dst []float32) error, ids []int32, 
 		}
 		defer func() { h.RowLogits, h.Logits, h.LogitRows, h.Hidden = false, keep, 0, nil }()
 	}
-	s.rowAxes(pos[0], 0, n)
 	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, s.bx[:n*c.NEmbd], s.bcs[:n*nrot], s.bswaTable(n, c.NRotSWA), h) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {
@@ -422,7 +421,7 @@ func (s *Instance) stepRowsStreams(src []func(dst []float32) error, ids []int32,
 		if err := m.addPos(row, s.prow, pos[i]); err != nil {
 			return err
 		}
-		s.ropeRow(i, s.ropeOf(0, pos[i]))
+		s.cpu.tabsFresh = false
 	}
 	s.relocateFor(p0 + n)
 	rd, _ := s.onRowsDevice()

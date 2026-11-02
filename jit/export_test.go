@@ -3,9 +3,12 @@ package jit
 // What the external tests reach of the package's internals.
 
 var (
-	EntryName            = entryName
-	GPULowering Lowering = gpuLowering{}
+	EntryName              = entryName
+	GPULowering   Lowering = gpuLowering{}
+	RopePosOracle          = ropePosOracle
 )
+
+type RopeMark = ropeMark
 
 // WeightLoads is the weight words a launch of req's form at its capacity
 // loads: each live load of a weight operand a thread makes, times the trips

@@ -65,6 +65,9 @@ type pagedScratch struct {
 	// allocates nothing.
 	rows        []pagedRow
 	desc, descW []uint32
+	// ents is the rows' entry descriptors, a set a rate the blocks fold
+	// their entries at (entdesc.go).
+	ents []entDesc
 	// cur is the variant the current call runs, chosen before the submission
 	// (pagedPrep) and read by layersOnce; nil when this session holds no
 	// attention block here. A call the composer serves whole stages the
@@ -98,12 +101,6 @@ type pagedScratch struct {
 	// st is the current call's pass over evicted history (pagedstream.go), nil
 	// when every page it reads is resident.
 	st *pagedStream
-	// idx is DeepSeek V3.2's lightning indexer (indexer.go), nil without one.
-	idx *idxScratch
-	// msa is MiniMax-M3's block selection (msa.go), nil without one.
-	msa *msaScratch
-	// qsa is a QSA block's selection (qsa.go), nil elsewhere.
-	qsa *qsaScratch
 	// stream is what st points at when set, and streamD each descriptor set's
 	// words for every pass, written with the call's staged writes
 	// (pagedStream.writes): both reused call to call, so a decode token that
@@ -270,18 +267,6 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 			return err
 		}
 	}
-	// A selecting block attends over gathered pages, whose descriptors the
-	// prefill kernels do not read: a chunk takes the decode plan row by row.
-	if p.MSA() {
-		if err := g.initMSA(bs, rows, P, comp); err != nil {
-			return err
-		}
-	}
-	if p.QSA() {
-		if err := g.initQSA(bs, rows, P, comp); err != nil {
-			return err
-		}
-	}
 	if _, err := g.pagedPlanFor(bs, scoreGrain); err != nil {
 		return err
 	}
@@ -332,11 +317,6 @@ func (g *devTier) initPagedMLA(bs *blockScratch, comp func(*backend.Kernel, *ir.
 	// wide; there is no prefill kernel over them, so a chunk takes the
 	// decode plan row by row.
 	w := lat + rot
-	if p.IdxHeads != 0 {
-		if err := g.initIdx(bs, rows, P, row, w, comp); err != nil {
-			return err
-		}
-	}
 	pg.shape = kernels.FlashShape{Heads: p.NHead, KVHeads: 1, Dim: w, MLA: lat, Rows: rows,
 		Scale: g.scoreScale(p), Page: P}
 	if _, err := g.pagedPlanFor(bs, scoreGrain); err != nil {
@@ -361,6 +341,9 @@ func (g *devTier) initPagedDS4(bs *blockScratch) error {
 		return err
 	}
 	pg.pRow = b
+	if err := g.initEntDescs(pg, bs.rows, p.DS4.RateCSA, p.DS4.RateHCA); err != nil {
+		return err
+	}
 	// The windowed descriptors are staged for every windowed plan
 	// (pagedStage); the gathers read the window from the full ones.
 	if p.SWAWindow > 0 {
@@ -388,9 +371,6 @@ func freePaged(pg *pagedScratch) {
 		v.close()
 	}
 	pg.pf.free()
-	pg.msa.free()
-	pg.qsa.free()
-	pg.idx.free()
 	for _, ss := range pg.streams {
 		ss.close()
 	}
@@ -409,6 +389,9 @@ func freePaged(pg *pagedScratch) {
 		if b != nil {
 			b.Free()
 		}
+	}
+	for _, e := range pg.ents {
+		e.buf.Free()
 	}
 }
 
@@ -878,12 +861,13 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 			pg.descW = append(pg.descW, o, lo, last, uint32(r.pos))
 		}
 	}
+	pg.stageEnts(kp, rows)
 }
 
-// windowDesc is the descriptors block li's decode attention reads under
-// plan p: the windowed ones on a windowed block, the full ones elsewhere.
-func (pg *pagedScratch) windowDesc(p *nn.LayerPlan, li int) backend.Buf {
-	if p.Window(li) > 0 && !pagedFaulted("window") {
+// windowDesc is the descriptors block l's attention reads: the windowed ones
+// where its graph attends a window, the full ones elsewhere.
+func (pg *pagedScratch) windowDesc(l *layer) backend.Buf {
+	if l.win > 0 && !pagedFaulted("window") {
 		return pg.pRowW
 	}
 	return pg.pRow
@@ -949,7 +933,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 		return err
 	}
 	// The window paged attention applies to this block (pagedStage's descW).
-	kp.layers[li].win, kp.layers[li].chunked = p.Window(li), p.SWAChunked
+	kp.layers[li].win, kp.layers[li].chunked = l.win, l.chunked
 	// DeepSeek V4's rows and entries are read through their tables by the
 	// gathers, which a streamed pass does not serve: they never leave.
 	// So does a selection over the whole history (the lightning indexer,

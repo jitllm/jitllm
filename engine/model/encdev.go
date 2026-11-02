@@ -304,7 +304,7 @@ func (s *Instance) encPlan(li int) *nn.LayerPlan {
 		// The local blocks rotate by the local table (Layers' csSWA) and
 		// attend inside their row windows; block 0 has no attention norm.
 		p.SWAPeriod = int(c.SWAPeriod)
-		p.SWALocal = mb.local
+		p.Rotaries = composing{m.container, m}.Rotaries()
 		p.Windowed = mb.local(li)
 		p.NoPreNorm = true
 		switch v {
@@ -313,7 +313,7 @@ func (s *Instance) encPlan(li int) *nn.LayerPlan {
 		case "no-window":
 			p.Windowed = false
 		case "one-base":
-			p.SWALocal = func(int) bool { return false }
+			p.Rotaries = p.Rotaries[:1]
 		}
 		return p
 	}
