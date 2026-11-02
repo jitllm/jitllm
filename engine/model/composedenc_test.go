@@ -207,10 +207,6 @@ func TestComposedEncoderOnCPU(t *testing.T) {
 	}
 }
 
-// encParts is what an encoder gate's composed arm asks of a tier: the
-// non-causal call's blocks (tier.ComposedTower).
-const encParts = composedParts | tier.ComposedTower
-
 func TestComposedEncoderOnDevice(t *testing.T) {
 	gs, ms := encoderGoldens(t)
 	for i, g := range gs {

@@ -228,11 +228,3 @@ func TestSchedulerMixesLatentPromptsIntoDecodeSteps(t *testing.T) {
 		})
 	}
 }
-
-// prefillResult is what latentPrefillArms measured: the batched chunk's final
-// residual against the row-by-row arm's, at its 90th percentile and worst
-// position, and the logits'.
-type prefillResult struct {
-	p90, worst, logits float64
-	at                 int
-}

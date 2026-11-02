@@ -162,8 +162,6 @@ type mnRun struct {
 	attKD    int
 	chunk    int
 	fn       func(lo, hi int)
-	// provisioned says the JIT has every depthwise shape.
-	provisioned bool
 }
 
 const (

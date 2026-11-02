@@ -36,7 +36,7 @@ import (
 // scratch (pagedScratch.msa).
 type msaScratch struct {
 	h, d, k, blk, tcap, nb, ppr, kvRow, attnW int
-	qNorm, kNorm, qLanes, kLanes              int
+	qLanes, kLanes                            int
 	normQ, normK                              backend.Kernel
 	copyQ, ropeQ, asmK, asmI                  backend.Kernel
 	scores, bmax, sel, compact                backend.Kernel

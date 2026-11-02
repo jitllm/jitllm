@@ -1001,7 +1001,6 @@ type visRun struct {
 	// one key run [0, n) of a block that attends over the whole picture:
 	// both kept here so an encode allocates nothing.
 	posRows []int32
-	whole   [2]int
 	// winRuns is segs as the device takes them (nn.KeyRunDevice).
 	winRuns []nn.KeyRun
 	out     []float32 // [Tokens][ProjDim]

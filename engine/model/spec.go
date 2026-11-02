@@ -204,11 +204,11 @@ type Speculator struct {
 	eh, ze     []float32
 	// epos is a draft step's rows' positions for its input rows (zero: the
 	// trunk's table carries none).
-	epos     []int
-	rowTok   []int32
-	dist, qd specDist
-	qdists   []specDist
-	smark    samplerMark
+	epos   []int
+	rowTok []int32
+	dist   specDist
+	qdists []specDist
+	smark  samplerMark
 
 	// What choose reads: per draft position, the drafts offered and accepted
 	// there, and the times a draft step and a verification took.

@@ -238,18 +238,3 @@ func (errBatchDevice) Error() string {
 	return "model: a batch runs on a device only with every block and the head on one device " +
 		"that runs ragged rows; this placement splits the model, and a split device holds one sequence's KV cache"
 }
-
-// rowsAttn is a ragged step's attention fan-out over (row, head) units, one
-// block's: what rowsHost hands the pool.
-type rowsAttn struct {
-	s                               *Instance
-	l                               *layer
-	li, kvli, unitHeads, nh         int
-	seq, pos                        []int
-	qsrc, odst, bq, bxb, bathf      []float32
-	astride, qw, ow, hd, qDim, gqaN int
-	mla                             bool
-	scale                           float64
-	masks                           [][]float32
-	mstride                         int
-}

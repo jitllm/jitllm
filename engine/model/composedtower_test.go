@@ -301,11 +301,6 @@ func towerDeclines() map[string][2]bool {
 	}
 }
 
-// towerParts is what a tower gate's composed arm asks of a tier: blocks,
-// the head, the tower's blocks (tier.ComposedTower) and its entry and
-// projector (tier.ComposedRows).
-const towerParts = composedParts | tier.ComposedTower | tier.ComposedRows
-
 // composedTowerOnDevices is the device arm of the composed tower: on each
 // device, a tier asked for towers (towerParts), every tower block placed
 // and served by the composer -- as many served block runs as the tower has

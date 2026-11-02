@@ -182,9 +182,6 @@ type Config struct {
 	// of its own instead of folding it into the next block's attention norm
 	// (the binary16 GEMM path's add-and-norm kernel): the A/B arm.
 	NoAddNormFold bool
-	// TierBlocks are blocks the caller keeps on the tier's own kernels where
-	// the composer would serve them, each declined by that name.
-	TierBlocks []int
 	// ComposedFloat forms the served parts with float activations, no
 	// int8 form: the reference a gate holds the int8 forms and the tier's
 	// own kernels to.
@@ -434,13 +431,6 @@ type Config struct {
 	// HeadSplit pins the k-split of the output projection only, 0 meaning the
 	// tuner's choice. See prepHead.
 	HeadSplit int
-
-	// RopeTableHost uploads the host's rotary table instead of building it on
-	// the device. It is both the A/B arm and the fallback: Layers is handed
-	// the finished cs/csSWA tables too, so a device that cannot build the
-	// kernel computes the same bytes by the other route. See
-	// Stats.RopeTableWhy.
-	RopeTableHost bool
 
 	// HeadMatvecRepeat runs the output projection this many extra times. Like
 	// HeadNormRepeat it is idempotent; it prices the head matvec, which a
@@ -1893,9 +1883,6 @@ type devShared struct {
 	pin    [2][]byte
 	noPin  bool
 	pieces []sheetPiece
-	// swapsLeft is this token's Config.SplitSwaps still to spend, and swapLi
-	// the block that last admitted (streamBank.admit).
-	swapsLeft, swapLi int
 	// adm is admissions queued for flushAdmits (their items in admItems),
 	// admPub those sent on the copy queue and not yet taken into use, upRing
 	// the page-locked ring they go through and ringUsed its fill.
@@ -2851,7 +2838,6 @@ func freeScratch(bs *blockScratch) {
 	freePaged(bs.pkv)
 	bs.mlab.free()
 	bs.ds4.free()
-	bs.k3.free()
 	bs.q4e.free()
 	for n, rk := range bs.ragLin { // a map, which the walk does not follow either
 		for _, k := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {

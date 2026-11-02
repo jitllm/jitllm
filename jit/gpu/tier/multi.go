@@ -1237,7 +1237,7 @@ func (g *GPU) rowsComposedWalk() bool {
 				continue
 			}
 			placed = true
-			if !d.rangeComposed(li, li+1, ComposedBlock, false) {
+			if !d.rangeComposed(li, li+1, ComposedBlock) {
 				ok = false
 				break
 			}

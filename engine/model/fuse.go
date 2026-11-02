@@ -64,10 +64,6 @@ var fusedRunsTotal atomic.Int64
 // has nothing to say about fusion either way.
 var fuseTriesTotal atomic.Int64
 
-// aheadOps is how many lookahead sets a block has: what it reads after its
-// q/k/v, after its o, after its gate/up and after its down.
-const aheadOps = 4
-
 // SetLookahead turns the fused runs' lookahead on or off for this instance's
 // decode tokens (WithLookahead is the model-wide default).
 func (s *Instance) SetLookahead(on bool) { s.lookOff = !on }

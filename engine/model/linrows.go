@@ -21,22 +21,9 @@ package model
 // linRows is one chunk's projections for the block being run. on is set only
 // between linearPre and linearPost.
 type linRows struct {
-	on bool
-	r  int
 	// ref is WithLinearRowByRow, copied when the instance is made; a test sets
 	// it on one of two instances over one model.
 	ref bool
-	// mixed is the convolved projection (wq, or ssm_in); z the output gate
-	// (or KDA's gate through its rank-kDim pair, or the short convolution's
-	// B); braw beta's logits (qwen3next's interleaved ba, KDA's b, Mamba-2's
-	// dt, the short convolution's C); alpha KDA's forget gate; low and low2
-	// KDA's two rank-kDim intermediates.
-	mixed, z, braw, alpha, low, low2 []float32
-	// zo is each row's gated output, the output projection's input, and
-	// out the n rows it writes.
-	zo []float32
-	// traceName is the name the block traces its output under.
-	traceName string
 	// chunks counts the block-chunks run batched, so a gate can assert the
 	// arm it compared was the one selected.
 	chunks int64

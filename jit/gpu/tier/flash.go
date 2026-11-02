@@ -52,7 +52,7 @@ func (g *devTier) initFlash(bs *blockScratch) (err error) {
 	}
 	shape := kernels.FlashShape{Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Rows: bs.rows,
 		KStride: g.kStride(p), Scale: g.scoreScale(p), Softcap: p.AttnSoftcap, F16: g.KVF16, Sink: p.AttnSinks}
-	build, width := kernels.FlashAttention, 32
+	build := kernels.FlashAttention
 	groups := func(s kernels.FlashShape) int { return p.NHead * max(1, s.Splits) }
 	// FlashAttention holds no partition in shared memory: any split covers.
 	bs.flashChunk, bs.flashForced, bs.flashCap = p.MaxSeq+1, max(1, g.FlashSplit), 1
@@ -61,7 +61,7 @@ func (g *devTier) initFlash(bs *blockScratch) (err error) {
 			shape.Group = g.FlashGroup
 		}
 		shape.Warps = g.FlashWarps
-		build, width, groups = kernels.FlashDecodeKV, kernels.FlashKVWidth(shape), kernels.FlashKVGroups
+		build, groups = kernels.FlashDecodeKV, kernels.FlashKVGroups
 		shape.Splits = 1
 		bs.flashChunk, bs.flashForced = kernels.FlashKVChunk(shape), g.FlashSplit
 		slots := g.dev.Slots()
@@ -70,7 +70,6 @@ func (g *devTier) initFlash(bs *blockScratch) (err error) {
 		}
 		bs.flashCap = max(1, slots/1280/max(1, kernels.FlashKVGroups(shape)))
 	}
-	bs.flashWidth = width
 	// One variant per split any count up to MaxSeq selects.
 	// flashSplitFor only grows with n, so walking every count collects them.
 	var splits []int

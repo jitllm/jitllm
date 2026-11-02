@@ -169,10 +169,6 @@ func (t *Tower) loadGemma4V(f *jlm.File, get func(jlm.Role, int32) (tensor, erro
 	return nil
 }
 
-// gemma4ClampFault skips every clamp: a gate's violation, false in every real
-// run.
-var gemma4ClampFault bool
-
 // The clamped matrices' slots in a block's bounds.
 const (
 	clampQ = iota

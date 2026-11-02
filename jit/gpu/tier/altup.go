@@ -6,7 +6,6 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
@@ -67,27 +66,7 @@ func altJobs(bs *blockScratch, p *nn.LayerPlan, rows, actWin int) []kernJob {
 	if p.AltUp == 0 {
 		return nil
 	}
-	s, d, rank := p.AltUp, p.NEmbd, p.LaurelRank
-	gparts := bs.gParts
-	jobs := []kernJob{
-		{&bs.altRoute, func() (*ir.Kernel, error) { return kernels.AltUpRoute(rows, d, s) }},
-		{&bs.altPredictK, func() (*ir.Kernel, error) { return kernels.AltUpPredict(rows, d, s) }},
-		{&bs.altCorrectK, func() (*ir.Kernel, error) { return kernels.AltUpCorrect(rows, d, s) }},
-		{&bs.altFinish, func() (*ir.Kernel, error) { return kernels.AltUpFinish(rows, d, s) }},
-		{&bs.altMul, func() (*ir.Kernel, error) { return kernels.MulRows(rows, d) }},
-		{&bs.altCopy, func() (*ir.Kernel, error) { return kernels.Restride(rows, d, d, d) }},
-		{&bs.laurelJoin, func() (*ir.Kernel, error) { return kernels.LaurelJoin(rows * d) }},
-		{&bs.laurelQuant, func() (*ir.Kernel, error) { return kernels.Quantize(rows*rank, actWin) }},
-	}
-	if p.Sparse {
-		jobs = append(jobs,
-			kernJob{&bs.gPart, func() (*ir.Kernel, error) { return kernels.LayerNormPartRows(p.NFFN, gparts, rows) }},
-			kernJob{&bs.gVar, func() (*ir.Kernel, error) { return kernels.LayerNormVarRows(p.NFFN, gparts, rows) }},
-			kernJob{&bs.gApply, func() (*ir.Kernel, error) {
-				return kernels.GaussTopKApplyRows(p.NFFN, gparts, p.SparseStd, rows)
-			}})
-	}
-	return jobs
+	return nil
 }
 
 // allocAltUp allocates an AltUp scratch's buffers through al.

@@ -23,8 +23,8 @@ type hcMixKey struct {
 }
 
 // hcMixes caches the mixer per (tier, rounds, head), hcConsts its constant
-// block per eps (by bits), and colPools the pool per tier.
-var hcMixes, hcConsts, colPools sync.Map
+// block per eps (by bits).
+var hcMixes, hcConsts sync.Map
 
 // HCStreams is the stream count the mixer is built for.
 const HCStreams = cpu.HCStreams

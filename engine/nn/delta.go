@@ -156,7 +156,4 @@ func DeltaGate32JIT(decay, beta, alpha, dt, b, a []float32) {
 	gateK[tier].Call(&args)
 }
 
-var (
-	boundOnce tierOnce
-	boundK    [cpu.NumTiers]*cpu.Code
-)
+var ()

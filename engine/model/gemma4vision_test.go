@@ -143,26 +143,18 @@ func TestGemma4PreprocessMatchesTheProcessor(t *testing.T) {
 // TestGemma4TowerMatchesTransformers holds the head's rows to transformers'
 // tower and embedder at the engine's arithmetic, with the clipped linears'
 // bounds binding on a tenth of every matrix's values; each piece of the
-// family's taken out moves it far past the bound. Its composed arm runs the
-// tower on the composed CPU, every block served, each encode's graphs stated
-// from the configuration as it stands (restateTower) and the clamps' violation
-// stored in the bounds.
+// family's taken out moves it far past the bound. The tower runs on the
+// composed CPU, every block served, each encode's graphs stated from the
+// configuration as it stands (restateTower) and the clamps' violation stored
+// in the bounds.
 func TestGemma4TowerMatchesTransformers(t *testing.T) {
-	gemma4TowerMatchesTransformers(t)
-	t.Run("composed-cpu", func(t *testing.T) { gemma4TowerMatchesTransformers(t) })
-}
-
-func gemma4TowerMatchesTransformers(t *testing.T, opts ...Option) {
-	m, g := openGemma4V(t, opts...)
+	m, g := openGemma4V(t)
 	defer m.Close()
 	tw := m.Tower()
-	composed := len(opts) > 0
 	got, served := g4vEncodeServed(t, tw, g)
-	if composed {
-		t.Logf("composed CPU: %d tower block runs served", served)
-		if served != tw.Cfg.NLayer {
-			t.Fatalf("the composed CPU served %d of the tower's %d blocks", served, tw.Cfg.NLayer)
-		}
+	t.Logf("composed CPU: %d tower block runs served", served)
+	if served != tw.Cfg.NLayer {
+		t.Fatalf("the composed CPU served %d of the tower's %d blocks", served, tw.Cfg.NLayer)
 	}
 	if len(got) != len(g.Image.EmbdA8) {
 		t.Fatalf("%d values, transformers' %d", len(got), len(g.Image.EmbdA8))
@@ -183,13 +175,7 @@ func gemma4TowerMatchesTransformers(t *testing.T, opts ...Option) {
 		set  func() func()
 		weak bool
 	}{
-		{"no clamps", func() func() {
-			if composed {
-				return unclampTower(tw)
-			}
-			gemma4ClampFault = true
-			return func() { gemma4ClampFault = false }
-		}, false},
+		{"no clamps", func() func() { return unclampTower(tw) }, false},
 		{"no pool (each group's first patch)", func() func() {
 			tw.Cfg.fault = towerFaultPoolCorner
 			return func() { tw.Cfg.fault = towerFaultNone }

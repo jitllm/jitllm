@@ -278,13 +278,7 @@ func (g *devTier) winMaskLocked(bs *blockScratch) bool {
 		g.LastErr = fmt.Sprintf("windowed runs: %s declined the mask: %v", g.dev.API(), err)
 		return false
 	}
-	att, err := g.dev.Alloc(ar * bs.p.NHead * bs.sstride * 4)
-	if err != nil {
-		closeKern(c)
-		g.LastErr = "windowed runs: " + err.Error()
-		return false
-	}
-	bs.winMask, bs.attWin = c, att
+	bs.winMask = c
 	return true
 }
 

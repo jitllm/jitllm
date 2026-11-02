@@ -103,8 +103,6 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	g.mu.Unlock()
 	defer g.restoreGeom(prev)
 	switch {
-	case rowsFaulted("swatab") && csSWA != nil:
-		csSWA = cs
 	case rowsFaulted("noswa"):
 		csSWA = nil
 	}
@@ -922,14 +920,6 @@ func (g *devTier) ragMV(m mv, ntok int) (mv, bool) {
 		rowt /= 2
 	}
 	return g.dot4Split(m, ntok, tok, rowt, g.kb.batch.RagSplit)
-}
-
-// headMV is the decode head projection as groupMV reads it: its split, its
-// format and its k.
-func (g *devTier) headMV() mv {
-	m := g.bs.mvHead
-	m.q, m.k = g.bs.head.t, g.bs.p.NEmbd
-	return m
 }
 
 // headOneMV is decode's head matvec -- its split and its Reduce -- reading the
