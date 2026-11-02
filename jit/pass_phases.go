@@ -6,7 +6,8 @@ import "github.com/jitllm/jitllm/jit/ir"
 // same width as one launch: each kernel a phase of the workgroup, a barrier
 // between two, its elements its threads' as its own launch dealt them.
 // Params caps the launch's bound buffers (the parameter list a backend
-// launches with).
+// launches with), and a device stating fewer (Device.Buffers) caps its
+// own.
 type Phases struct {
 	Params int
 }
@@ -44,23 +45,45 @@ func (p Phases) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			j++
 		}
+		var k *Kernel
+		for ; j-i >= 2; j-- {
+			if k = p.merge(ks[i:j]); d.Buffers == 0 || k.bound() <= d.Buffers {
+				break
+			}
+		}
 		if j-i < 2 {
 			out = append(out, ks[i])
 			continue
 		}
-		k := &Kernel{Name: "phases", Kind: PrimReduce, Space: []int{ks[i].Group}, Group: ks[i].Group, Part: ks[i].Part,
-			Of: ks[i].Of, Apart: ks[i].Apart, Passes: []string{p.Name()}}
-		for n, m := range ks[i:j] {
-			if n > 0 {
-				k.Stores = append(k.Stores, Store{Barrier: true, At: -1})
-			}
-			p.phase(k, m)
-		}
-		k.compact()
 		out = append(out, k)
 		i = j - 1
 	}
 	return out, nil
+}
+
+// merge is ks as one launch, each a phase of it.
+func (p Phases) merge(ks []*Kernel) *Kernel {
+	k := &Kernel{Name: "phases", Kind: PrimReduce, Space: []int{ks[0].Group}, Group: ks[0].Group, Part: ks[0].Part,
+		Of: ks[0].Of, Apart: ks[0].Apart, Passes: []string{p.Name()}}
+	for n, m := range ks {
+		if n > 0 {
+			k.Stores = append(k.Stores, Store{Barrier: true, At: -1})
+		}
+		p.phase(k, m)
+	}
+	k.compact()
+	return k
+}
+
+// bound is the buffers k's launch binds: each but workgroup memory.
+func (k *Kernel) bound() int {
+	n := 0
+	for _, b := range k.Bufs {
+		if b.Kind != BufShared {
+			n++
+		}
+	}
+	return n
 }
 
 // phaseable says k launches one workgroup and states nothing a launch of

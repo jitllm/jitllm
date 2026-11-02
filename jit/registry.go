@@ -76,6 +76,9 @@ type Device struct {
 	// Launch is the words its memory serves while one launch holds it, as
 	// its probe measured; 0 where nothing did.
 	Launch int
+	// Buffers, where known, is the buffers one launch binds at most
+	// (backend.Bindings): Phases merges no launch past it.
+	Buffers int
 }
 
 // warp is the threads a combine by lane shuffles takes whole on d: its

@@ -162,6 +162,19 @@ type MultiprocessorDevice interface{ Multiprocessors() int }
 // memory one multiprocessor holds for the workgroups resident on it.
 type SharedMemoryDevice interface{ SharedPerMultiprocessor() int }
 
+// BindingDevice is a Device that can say how many buffers one launch binds
+// at most.
+type BindingDevice interface{ Bindings() int }
+
+// Bindings is the buffers one launch on d binds at most, 0 where d states
+// no limit.
+func Bindings(d Device) int {
+	if b, ok := d.(BindingDevice); ok {
+		return b.Bindings()
+	}
+	return 0
+}
+
 // ConcurrentCompiler is a Device whose Compile may be called from several
 // goroutines at once, each compile running beside the others.
 type ConcurrentCompiler interface{ ConcurrentCompile() bool }

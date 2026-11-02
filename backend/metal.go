@@ -90,6 +90,10 @@ func (m *mtlDev) Slots() int { return 0 }
 
 func (m *mtlDev) Multiprocessors() int { return metal.GPUCores() }
 
+// Bindings is the entries of a kernel function's buffer argument table, 31
+// on every Apple GPU family (Metal feature set tables).
+func (m *mtlDev) Bindings() int { return 31 }
+
 // SharedPerMultiprocessor is -maxThreadgroupMemoryLength, the one figure
 // Metal states: what a threadgroup may declare. It stands for what a core
 // holds for its resident threadgroups, so never more than a core holds.
