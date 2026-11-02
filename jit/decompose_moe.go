@@ -77,6 +77,37 @@ func decomposeTake(o graph.Op, c *Context) ([]Prim, error) {
 		Expr: x.e, Facts: Facts{Extents: map[int]int{0: R * W}}}}, nil
 }
 
+// decomposePut is a row copied to a scratch a slot wider, each value stored
+// at its index there (one past the row, the slot, at none), and the row
+// copied back.
+func decomposePut(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 3 || len(o.Out) != 1 {
+		return nil, fmt.Errorf("a put of %d operands", len(o.In))
+	}
+	U := ir.U32
+	R, W, K := c.Step.Rows, c.width(o.In[0]), c.width(o.In[1])
+	row := c.value(o.In[0])
+	put := Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + ".put", Elem: row.Elem}
+	var a exprs
+	ar, ai := a.coord(0), a.coord(1)
+	v := a.at(0, []int{R, W}, ar, ai)
+	var b exprs
+	br, bj := b.coord(0), b.coord(1)
+	ix := b.at(0, []int{R, K}, br, bj)
+	at := b.op(OpAdd, U, b.op(OpMul, U, br, b.u(uint32(W+1))),
+		b.sel(U, b.op(OpLess, ir.Pred, ix, b.u(uint32(W))), ix, b.u(uint32(W))))
+	val := b.at(1, []int{R, K}, br, bj)
+	var d exprs
+	d.at(0, []int{R, W + 1}, d.coord(0), d.coord(1))
+	return []Prim{
+		{Kind: PrimMap, Shape: []int{R, W}, In: []Operand{row}, Expr: a.e,
+			Stores: []PrimStore{{Out: put, Ax: []int{ar, ai}, Ext: []int{R, W + 1}, Value: v}}},
+		{Kind: PrimMap, Shape: []int{R, K}, In: []Operand{c.value(o.In[1]), c.value(o.In[2])}, Expr: b.e,
+			Stores: []PrimStore{{Out: put, Index: at, Value: val, Extent: R * (W + 1)}}},
+		{Kind: PrimMap, Shape: []int{R, W}, In: []Operand{put}, Out: c.value(o.Out[0]), Expr: d.e},
+	}, nil
+}
+
 // decomposeTopKRanked is the TopK largest of each group: each element's
 // rank among its group -- how many are larger, or equal and before it --
 // then each of the K places the index and the value of the element ranked

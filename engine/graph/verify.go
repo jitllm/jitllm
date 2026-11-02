@@ -228,6 +228,15 @@ func Verify(g *Graph, f Facts) error {
 			case g.Values[o.In[0]].Elem != ElemU32 || g.Values[o.In[1]].Elem != ElemU32 || g.Values[o.Out[0]].Elem != ElemF32:
 				bad("%s: keys and a counter not of words, or uniforms not of floats", at)
 			}
+		case OpPut:
+			switch {
+			case len(o.In) != 3 || len(o.Out) != 1 || len(o.Weight) != 0:
+				bad("%s: %d inputs into %d outputs", at, len(o.In), len(o.Out))
+			case width(o.In[1]) != width(o.In[2]) || width(o.Out[0]) != width(o.In[0]):
+				bad("%s: %d indices and %d values into a row of %d, out %d", at, width(o.In[1]), width(o.In[2]), width(o.In[0]), width(o.Out[0]))
+			case g.Values[o.In[1]].Elem != ElemU32 || g.Values[o.In[2]].Elem != g.Values[o.In[0]].Elem:
+				bad("%s: indices not of words, or values not of the row's elements", at)
+			}
 		case OpPosition:
 			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || o.Attr.Offset < 0 || o.Attr.Span < 0 {
 				bad("%s: %d inputs into %d outputs, offset %d and span %d", at, len(o.In), len(o.Out), o.Attr.Offset, o.Attr.Span)

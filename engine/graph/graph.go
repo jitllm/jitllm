@@ -277,10 +277,15 @@ const (
 	// Out[0] one float a key. A primitive: a sampler's draw, the same on
 	// every device.
 	OpUniform
+	// OpPut is In[0] with In[2]'s elements in place: element j of In[2]
+	// takes the place of In[0]'s element at index j of In[1] (u32), an index
+	// at or past In[0]'s width naming none. Two indices naming one element
+	// carry equal values. Out[0] In[0]'s width. A primitive.
+	OpPut
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash", "unfold", "uniform"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash", "unfold", "uniform", "put"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
