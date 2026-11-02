@@ -1005,14 +1005,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if grow && dev != nil {
 		fmt.Fprintf(os.Stderr, "seam grew to %d/%d blocks\n", st.GPULayers(), c.NLayer)
 	}
-	// Say when the per-matvec seam was declined: the non-resident blocks ran
-	// wholly on the host, on purpose. The verdict is measured on the model's
-	// shapes, so it is only known after tokens have run.
-	if g, ok := dev.(*gpu.GPU); ok && g.Stats().TooSmall > 0 {
-		fmt.Fprintf(os.Stderr,
-			"%d matvecs stayed on the host: this model does not carry enough weight bytes "+
-				"per host/device crossing to pay for one\n", g.Stats().TooSmall)
-	}
 	if n := 0; n > 0 {
 		fmt.Fprintf(os.Stderr, "%d block(s) moved onto a later device so the context fits there\n", n)
 	}
@@ -1041,8 +1033,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if g, ok := dev.(*gpu.GPU); ok {
 		per := g.DevStats()
 		for i, n := range g.Placed() {
-			fmt.Fprintf(os.Stderr, "device %-44s %d block(s) placed, %d run, %d matvec(s)\n",
-				per[i].Device, n, per[i].Blocks, per[i].Served)
+			served, _ := per[i].ServedPart(gpu.EveryPart)
+			fmt.Fprintf(os.Stderr, "device %-44s %d block(s) placed, %d run, %d composed part step(s)\n",
+				per[i].Device, n, per[i].Blocks, served)
 		}
 		fmt.Fprintf(os.Stderr, "device %-44s %d block(s) of %d, whatever no device took\n",
 			"host", c.NLayer-st.GPULayers(), c.NLayer)
@@ -1050,13 +1043,11 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		// device's own compute: page-in happens in submit(), outside
 		// layersOnce, so TLayer bounds what overlapping a page-in with compute
 		// could buy.
-		if ds := g.Stats(); ds.TPack > 0 || ds.TUpload > 0 || ds.TUnpack > 0 || ds.TLayer > 0 {
+		if ds := g.Stats(); ds.TPack > 0 || ds.TUpload > 0 || ds.TLayer > 0 {
 			sec := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1e6 }
 			fmt.Fprintf(os.Stderr,
-				"device cost: pack %.2f s, upload %.2f s, device unpack %.2f s, block compute %.2f s"+
-					"  (%.2f GiB uploaded raw, %.2f GiB landed on the card)\n",
-				sec(ds.TPack), sec(ds.TUpload), sec(ds.TUnpack), sec(ds.TLayer),
-				float64(ds.UnpackBytes)/(1<<30), float64(ds.PageBytes)/(1<<30))
+				"device cost: pack %.2f s, upload %.2f s, block compute %.2f s  (%.2f GiB landed on the card)\n",
+				sec(ds.TPack), sec(ds.TUpload), sec(ds.TLayer), float64(ds.PageBytes)/(1<<30))
 			// The stream line splits a streamed mixture's suspension by wall
 			// (drain, host read, upload); a CPU profile cannot, because the
 			// reads overlap. The rotary line says which arm built the table.
@@ -1064,10 +1055,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 				us := func(d time.Duration) float64 { return float64(d.Microseconds()) / float64(ds.Submits) }
 				fmt.Fprintf(os.Stderr, "host per submission: stage %.1f us, launch %.1f us (%.1f of it %d capture(s)), read %.1f us over %d\n",
 					us(ds.TSubStage), us(ds.TSubLaunch), us(ds.TCapture), ds.Captures, us(ds.TSubRead), ds.Submits)
-			}
-			if ds.RopeTables > 0 || ds.RopeTableUploads > 0 {
-				fmt.Fprintf(os.Stderr, "rotary table: %d row(s) built on the device, %d uploaded\n",
-					ds.RopeTables, ds.RopeTableUploads)
 			}
 			if ds.TStreamRead > 0 || ds.TStreamPut > 0 || ds.TStreamWait > 0 {
 				fmt.Fprintf(os.Stderr,
@@ -1087,30 +1074,17 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.StreamCacheSize, ds.StreamCacheHits, ds.StreamCacheMisses,
 					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort, ds.AutoMeanBase)
 			}
-			if ds.HybridRuns > 0 {
-				fmt.Fprintf(os.Stderr, "hybrid experts: %d block-step(s) on the host, %.2f s\n", ds.HybridRuns, sec(ds.THybrid))
-				if g, ok := dev.(*gpu.GPU); ok {
-					if at, tw := g.CacheCoverage(); len(at) > 0 {
-						q := func(v []float64) string {
-							w := append([]float64(nil), v...)
-							slices.Sort(w)
-							return fmt.Sprintf("%.0f/%.0f/%.0f%%", 100*w[0], 100*w[len(w)/2], 100*w[len(w)-1])
-						}
-						fmt.Fprintf(os.Stderr, "cache coverage: the hottest experts a cache holds carry %s of a block's selections (min/median/max over %d blocks); twice the slots %s\n",
-							q(at), len(at), q(tw))
-					}
+			if at, tw := g.CacheCoverage(); len(at) > 0 {
+				q := func(v []float64) string {
+					w := append([]float64(nil), v...)
+					slices.Sort(w)
+					return fmt.Sprintf("%.0f/%.0f/%.0f%%", 100*w[0], 100*w[len(w)/2], 100*w[len(w)-1])
 				}
-				if ds.SplitRuns > 0 || ds.SplitAdmits > 0 || ds.TLateWrite > 0 {
-					fmt.Fprintf(os.Stderr, "split experts: %d block-step(s) split, %d expert(s) run on the card, host %.2f s, %d taken into the caches in %.2f s; host sums written back in %.2f s\n",
-						ds.SplitRuns, ds.SplitHits, sec(ds.TSplitHost), ds.SplitAdmits, sec(ds.TAdmit), sec(ds.TLateWrite))
-				}
+				fmt.Fprintf(os.Stderr, "cache coverage: the hottest experts a cache holds carry %s of a block's selections (min/median/max over %d blocks); twice the slots %s\n",
+					q(at), len(at), q(tw))
 			}
-			if ds.StreamPrefetched > 0 {
-				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) guessed\n", ds.StreamPrefetched)
-			}
-			if ds.ProbeExperts > 0 || ds.ProbeFused > 0 {
-				fmt.Fprintf(os.Stderr, "cross-layer probe: %d of %d routed experts predicted (%.1f%%), %d probe(s) skipped on a fused route\n",
-					ds.ProbeHits, ds.ProbeExperts, 100*float64(ds.ProbeHits)/max(float64(ds.ProbeExperts), 1), ds.ProbeFused)
+			if ds.SplitAdmits > 0 {
+				fmt.Fprintf(os.Stderr, "expert caches: %d expert(s) taken in, in %.2f s\n", ds.SplitAdmits, sec(ds.TAdmit))
 			}
 		}
 	}
@@ -1143,21 +1117,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 				how = fmt.Sprintf(", %d served from the packed arena and %d repacked "+
 					"(JITLLM_ARENA=<bytes> retains packs; %.2f MiB of %.2f used)",
 					as.Hits, st.Packs, float64(as.Bytes)/(1<<20), float64(as.Limit)/(1<<20))
-			}
-			// Tensors unpacked on the device appear in neither number above.
-			// Reported outside the page-in branch so a model that fits shows
-			// the load-time saving too. The bytes are the raw bytes that crossed.
-			if st.Unpacks > 0 || st.NoUnpackKernel > 0 || st.NoUnpackRoom > 0 {
-				why := ""
-				if st.NoUnpackKernel+st.NoUnpackRoom > 0 {
-					why = fmt.Sprintf(" (%d have no device unpack, %d had no room: %s)",
-						st.NoUnpackKernel, st.NoUnpackRoom, st.UnpackWhy)
-				}
-				how += fmt.Sprintf("; %d tensor(s) uploaded RAW and unpacked on the "+
-					"device, %.2f GiB in %s, staging %.2f MiB%s",
-					st.Unpacks, float64(st.UnpackBytes)/(1<<30),
-					st.TUnpack.Round(time.Millisecond),
-					float64(st.StageVRAM)/(1<<20), why)
 			}
 			fmt.Fprintf(os.Stderr,
 				"paging %d block slot(s), %d page-in(s), %d page-out(s), %.2f GiB moved%s\n",
@@ -2091,7 +2050,7 @@ func prefillImage(st *model.Instance, m *model.Model, tw *model.Tower, pic *pict
 // the page size, which devices are in play, how many blocks they took, and what
 // an integrated device carved out of the same RAM. A budget that holds every
 // host block is the fully resident configuration; paging simply never fires.
-func setPageBudget(m *model.Model, st *model.Instance, dev nn.Device, maxmem uint64) {
+func setPageBudget(m *model.Model, st *model.Instance, dev nn.LayerDevice, maxmem uint64) {
 	page := m.PageSize()
 	if page == 0 {
 		return // not a container; nothing is paged
@@ -2187,7 +2146,7 @@ func misplacedFlag(fs *flag.FlagSet) error {
 
 // withDeviceErr adds the tier's own reason (for example a CUDA error code) to an
 // error a device run returned.
-func withDeviceErr(err error, dev nn.Device) error {
+func withDeviceErr(err error, dev nn.LayerDevice) error {
 	if g, ok := dev.(*gpu.GPU); ok {
 		if why := g.Err(); why != "" {
 			return fmt.Errorf("%w (the device said: %s)", err, why)

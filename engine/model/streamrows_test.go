@@ -67,7 +67,7 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 			decode := func(t *testing.T, dev string, after func(*Instance)) float64 {
 				t.Helper()
 				var collapses bool
-				got, st, _, _ := composedDecodeWith(t, m, dev, prompt, toks, parts, true, false, func(s *Instance) {
+				got, st, _ := composedDecodeWith(t, m, dev, prompt, toks, parts, true, false, func(s *Instance) {
 					collapses = s.head != nil && s.head.Collapses
 					if after != nil {
 						after(s)

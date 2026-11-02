@@ -4,9 +4,9 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
@@ -23,7 +23,7 @@ var prevnniShapes = []prevnniShape{{256, 512}, {200, 512}, {128, 1024}}
 func packOne(t *testing.T, gt quant.Type, nrows, k int) *Packed {
 	t.Helper()
 	rng := rand.New(rand.NewSource(int64(nrows*1000 + k)))
-	q, _ := kernels.QuantOf(gt)
+	q, _ := layout.QuantOf(gt)
 	nb := uint64(nrows*k) / gt.BlockElems()
 	bb := gt.BlockBytes()
 	src := make([]byte, nb*bb)
@@ -36,7 +36,7 @@ func packOne(t *testing.T, gt quant.Type, nrows, k int) *Packed {
 	if !quant.PlantScales(gt, src, 0) {
 		t.Fatalf("%s: no scale planter -- add it rather than testing noise", gt)
 	}
-	qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+	qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}

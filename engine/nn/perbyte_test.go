@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -59,14 +59,14 @@ func TestPerByteCost(t *testing.T) {
 			t.Logf("%-5s no packed kernel on this architecture", qt)
 			continue
 		}
-		q, ok := kernels.QuantOf(qt)
+		q, ok := layout.QuantOf(qt)
 		if !ok {
 			continue
 		}
 		// The row count is derived from the packer (PackedWords carries the d
 		// and SC planes and the row-pairing), not from bits per weight.
 		const probe = 64
-		nq, nd, nsc, err := kernels.PackedWords(q, probe, k)
+		nq, nd, nsc, err := layout.PackedWords(q, probe, k)
 		if err != nil {
 			t.Fatalf("%s: %v", qt, err)
 		}
@@ -93,7 +93,7 @@ func TestPerByteCost(t *testing.T) {
 		if !quant.PlantScales(qt, src, 0) {
 			t.Fatalf("%s: no scale planter", qt)
 		}
-		qs, d, sc, err := kernels.PackWeights(q, src, rows, k)
+		qs, d, sc, err := layout.PackWeights(q, src, rows, k)
 		if err != nil {
 			t.Fatalf("%s: %v", qt, err)
 		}
@@ -219,7 +219,7 @@ func TestShapeCost(t *testing.T) {
 		}
 	}
 	for _, sh := range shapes {
-		q, ok := kernels.QuantOf(sh.t)
+		q, ok := layout.QuantOf(sh.t)
 		if !ok || !cpu.PackedSupported(sh.t) {
 			t.Logf("%v: no packed kernel", sh.t)
 			continue
@@ -239,7 +239,7 @@ func TestShapeCost(t *testing.T) {
 		if !quant.PlantScales(sh.t, src, 0) {
 			t.Fatalf("%s: no scale planter", sh.t)
 		}
-		qs, d, sc, err := kernels.PackWeights(q, src, packed, sh.k)
+		qs, d, sc, err := layout.PackWeights(q, src, packed, sh.k)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -139,7 +139,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 					testTierOpts(t)...)
 				if f32Attn {
 					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) {
-						c.NoMMA, c.NoVolta, c.NoFlashPrefill = true, true, true
+						c.NoMMA = true
 					}))
 				}
 				if noGraph {

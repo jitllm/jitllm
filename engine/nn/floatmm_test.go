@@ -54,7 +54,7 @@ func TestMatMulFloatMatchesMatVec(t *testing.T) {
 			}
 			want := make([]float32, nrows)
 			for tok := 0; tok < ntok; tok++ {
-				if !j.MatVecHost(want, typ, w, x[tok*k:(tok+1)*k], nrows, k) {
+				if !j.MatVec(want, typ, w, x[tok*k:(tok+1)*k], nrows, k) {
 					t.Fatal("no matvec")
 				}
 				for r := range want {

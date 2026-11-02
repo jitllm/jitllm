@@ -147,7 +147,7 @@ type Prim struct {
 }
 
 // Scan is a scan's descriptor and state. The descriptor is input Desc, in
-// kernels.RunDescWords' layout: the row count, each run's slot read and
+// RunDescWords' layout: the row count, each run's slot read and
 // slot written, each run's first entry of the order list and its rows, the
 // order list (the step's rows, run after run), each row's entry and run.
 // Init is the node of a component at its run's start, Next the node of it

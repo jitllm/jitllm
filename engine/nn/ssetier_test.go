@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -55,7 +55,7 @@ func TestForcedSSETierSelectsSSEKernels(t *testing.T) {
 		{"widen/f16", func() { Row32JIT(make([]float32, n), quant.F16, halves, 0, n) },
 			func() error { _, err := sse.Widen(false); return err }},
 		{"packed_row/Q4_K", func() { RowPacked32JIT(make([]float32, 256), quant.Q4_K, pk, 3, 8, 256) },
-			func() error { q, _ := kernels.QuantOf(quant.Q4_K); _, err := sse.PackedRow(q); return err }},
+			func() error { q, _ := layout.QuantOf(quant.Q4_K); _, err := sse.PackedRow(q); return err }},
 		{"delta_gate", func() {
 			DeltaGate32JIT(make([]float32, n), make([]float32, n), gate[0], gate[1], gate[2], gate[3])
 		}, errOf(sse.DeltaGate)},

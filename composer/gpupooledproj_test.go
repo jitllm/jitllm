@@ -11,9 +11,9 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
@@ -55,8 +55,8 @@ func TestComposedGPUPooledProjection(t *testing.T) {
 	formats := map[jlm.Role]jlm.Type{jlm.RoleVProj: q8, jlm.RoleVProjNorm: jlm.TypeF32}
 
 	rng := rand.New(rand.NewSource(37))
-	wq := tiledWeights(quant.Q8_0, kernels.Q8_0, N, E, rng)
-	qs, dw, sc, err := kernels.PackWeights(kernels.Q8_0, wq, N, E)
+	wq := tiledWeights(quant.Q8_0, layout.Q8_0, N, E, rng)
+	qs, dw, sc, err := layout.PackWeights(layout.Q8_0, wq, N, E)
 	if err != nil {
 		t.Fatal(err)
 	}

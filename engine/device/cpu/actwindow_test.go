@@ -3,7 +3,7 @@ package cpu
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -16,9 +16,9 @@ func TestActWindowFollowsTheBlock(t *testing.T) {
 	}
 	narrow := 0
 	for _, g := range quant.PackedTypes {
-		q, _ := kernels.QuantOf(g)
+		q, _ := layout.QuantOf(g)
 		want := 256
-		if kernels.NarrowScales(q) {
+		if layout.NarrowScales(q) {
 			want, narrow = Q8Block, narrow+1
 		}
 		if got := WideActWindow([]quant.Type{quant.Q4_K, g}); got != want {

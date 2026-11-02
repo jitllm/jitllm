@@ -9,7 +9,6 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
@@ -272,18 +271,6 @@ func TestRealKernelsPastTheGroupLimit(t *testing.T) {
 			} {
 				restrideCase(t, g.d, fmt.Sprintf("restride/%dx%d", c[0], c[1]), c[0], c[1], c[2], c[3])
 			}
-			t.Run("matvec/split4", func(t *testing.T) {
-				matvecCaseFull(t, g.d, kernels.Q4_K, 2048, 2048, 4, true, 1, false)
-			})
-			t.Run("matvec/groupsplit16", func(t *testing.T) {
-				if !kernels.GroupSplitOK(2048, 16) {
-					t.Fatal("2048 rows at split 16 is not an in-group split")
-				}
-				matvecCaseFull(t, g.d, kernels.Q4_K, 2048, 2048, 16, true, 1, true)
-			})
-			t.Run("matvec/rowt2", func(t *testing.T) {
-				matvecCaseFull(t, g.d, kernels.Q4_K, 2048, 2048, 1, false, 2, false)
-			})
 			if _, after, _ := backend.VulkanGroups(g.d); after-before < 10 {
 				t.Fatalf("%d dispatches across every case at a limit of %d: the split was not taken",
 					after-before, tinyGroups)

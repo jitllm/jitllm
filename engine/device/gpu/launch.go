@@ -1,8 +1,6 @@
 package gpu
 
 import (
-	"sync"
-
 	"github.com/jitllm/jitllm/backend"
 )
 
@@ -22,32 +20,14 @@ type launcher struct {
 	// session escapes into its own Launch, and as a field here it would carry
 	// the pointers to the caller's locals below to the heap with it.
 	to *launchTo
-	// err is the submission's latched error; la launches nothing once it is
-	// set.
+	// err is the submission's latched error.
 	err *error
-	// la's bookkeeping, shared with layersSession: fsrc is the float buffer
-	// the current int8 activation was quantized from, recognised by a launch
-	// that writes (a, ax), and memoK/memoSrc the ActF16 memo every launch
-	// through la forgets.
-	fsrc    *backend.Buf
-	memoK   *backend.Kernel
-	memoSrc *backend.Buf
-	a, ax   backend.Buf
 	// g is the submission's device view, for the persistent path's plans
 	// (persist.go).
 	g *devTier
 }
 
-// launch is s.Launch through the reused buffer list, counted where the
-// submission takes a census.
-func (l *launcher) launch(k backend.Kernel, groups, width int, bufs ...backend.Buf) error {
-	if c := l.to.census; c != nil {
-		c.count(k)
-	}
-	return l.issue(k, groups, width, bufs...)
-}
-
-// issue is launch without the census: the composer's own forms.
+// issue launches one of the composer's forms' kernels.
 func (l *launcher) issue(k backend.Kernel, groups, width int, bufs ...backend.Buf) error {
 	t := l.to
 	if ps := t.ps; ps != nil && ps.on {
@@ -66,24 +46,6 @@ func (l *launcher) issue(k backend.Kernel, groups, width int, bufs ...backend.Bu
 	return err
 }
 
-// launchCensus is the tier's own kernels launched on the one-row steps the
-// composer is asked for, by the name each was compiled under: what main still
-// runs where the composer serves (Config.Census).
-type launchCensus struct {
-	mu sync.Mutex
-	n  map[string]int
-}
-
-func (c *launchCensus) count(k backend.Kernel) {
-	name := "?"
-	if nk, ok := k.(backend.NamedKernel); ok {
-		name = nk.Name()
-	}
-	c.mu.Lock()
-	c.n[name]++
-	c.mu.Unlock()
-}
-
 // launchTo is where a launcher sends its launches: the submission's session
 // and the buffer list reused across submissions.
 type launchTo struct {
@@ -95,33 +57,7 @@ type launchTo struct {
 	// what is held.
 	ps    *persister
 	psess persistSession
-	// census, where set, counts the submission's launches of the tier's own
-	// kernels (Config.Census). Here and not on the launcher: a pointer the
-	// launch hands on from the launcher itself would take every local a
-	// launcher points at to the heap, four objects a token.
-	census *launchCensus
 }
 
 // leave drops the session once its submission is done.
 func (t *launchTo) leave() { t.s = nil }
-
-// la is the ordinary launch: threads in groups of 128, nothing once the
-// submission has failed.
-func (l *launcher) la(k backend.Kernel, threads int, bufs ...backend.Buf) {
-	l.law(k, threads, 0, bufs...)
-}
-
-// law is la in workgroups of width threads (0 is 128): a staged GEMM's
-// workgroup is its tile's warps, which an eight-warp tile makes 256.
-func (l *launcher) law(k backend.Kernel, threads, width int, bufs ...backend.Buf) {
-	if width <= 0 {
-		width = 128
-	}
-	*l.memoK, *l.memoSrc = nil, nil
-	if *l.err == nil {
-		*l.err = l.launch(k, (threads+width-1)/width, width, bufs...)
-	}
-	if len(bufs) == 3 && bufs[1] == l.a && bufs[2] == l.ax {
-		*l.fsrc = bufs[0]
-	}
-}

@@ -412,7 +412,7 @@ func (d *Decider) BatchStats() BatcherStats {
 }
 
 // setBatchDevice follows the Decider's device with its batch instance.
-func (d *Decider) setBatchDevice(dev nn.Device, max int) error {
+func (d *Decider) setBatchDevice(dev nn.LayerDevice, max int) error {
 	d.dev, d.devMax = dev, max
 	if d.batchIn == nil {
 		return nil

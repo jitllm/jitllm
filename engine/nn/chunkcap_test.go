@@ -6,8 +6,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -22,7 +22,7 @@ func TestChunkBytesCapNarrowsAndKeepsTheAnswer(t *testing.T) {
 	if !cpu.PackedSupported(gt) {
 		t.Fatalf("%s lost its packed kernel", gt)
 	}
-	q, _ := kernels.QuantOf(gt)
+	q, _ := layout.QuantOf(gt)
 	rng := rand.New(rand.NewSource(11))
 	nb := uint64(nrows*k) / gt.BlockElems()
 	bb := gt.BlockBytes()
@@ -37,7 +37,7 @@ func TestChunkBytesCapNarrowsAndKeepsTheAnswer(t *testing.T) {
 			src[b*bb+uint64(o)], src[b*bb+uint64(o)+1] = 0x00, 0x3C // 1.0
 		}
 	}
-	qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+	qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}

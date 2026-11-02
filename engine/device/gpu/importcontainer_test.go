@@ -5,8 +5,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/layout"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // TestAContainerWeightIsNotRepackedOnAUnifiedDevice offers a block whose
@@ -17,7 +18,7 @@ import (
 // payload, it reads it as GGUF blocks, so it must not be asked at all, and the
 // bytes the device holds must be the container's own.
 func TestAContainerWeightIsNotRepackedOnAUnifiedDevice(t *testing.T) {
-	d := &impDev{unified: true, align: int(kernels.HostAlign())}
+	d := &impDev{unified: true, align: int(offheap.HostAlign())}
 	g, err := New([]Slot{{Dev: d, Bytes: 1 << 30}}, WithDeviceTune(TuneOff))
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +80,7 @@ func containerBlock(t *testing.T, p *nn.LayerPlan) (*nn.LayerWeights, uint64) {
 		if !ok {
 			t.Fatalf("%v has no device format", x.T)
 		}
-		qs, dw, sc, err := kernels.PackWeights(q, x.Data, x.Rows, x.K)
+		qs, dw, sc, err := layout.PackWeights(q, x.Data, x.Rows, x.K)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -99,7 +100,7 @@ func containerBlock(t *testing.T, p *nn.LayerPlan) (*nn.LayerWeights, uint64) {
 func TestAContainerBlockIsPricedInFullOnAUnifiedDevice(t *testing.T) {
 	p := arenaPlan()
 	w, weights := containerBlock(t, p)
-	d := &impDev{unified: true, align: int(kernels.HostAlign())}
+	d := &impDev{unified: true, align: int(offheap.HostAlign())}
 	g, err := New([]Slot{{Dev: d, Bytes: weights / 2}}, WithDeviceTune(TuneOff))
 	if err != nil {
 		t.Fatal(err)

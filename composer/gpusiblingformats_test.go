@@ -11,9 +11,9 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testlock"
 )
@@ -45,9 +45,9 @@ func TestComposedGPUSiblingsOfTwoFormats(t *testing.T) {
 				in := b.In("x", K)
 				var outs []graph.ValueID
 				for i, r := range roles {
-					qt, kt, jt := quant.Q4_K, kernels.Q4_K, jlm.TypeQ4S
+					qt, kt, jt := quant.Q4_K, layout.Q4_K, jlm.TypeQ4S
 					if r == jlm.RoleAttnV {
-						qt, kt, jt = quant.Q6_K, kernels.Q6_K, jlm.TypeQ6S
+						qt, kt, jt = quant.Q6_K, layout.Q6_K, jlm.TypeQ6S
 					}
 					weights[r], formats[r], formats[biases[i]] = packed(t, qt, kt, rows[i], K, rng), jt, jlm.TypeF32
 					bias := make([]float32, rows[i])
@@ -202,9 +202,9 @@ func formWith(t *testing.T, r *composer.Registry, g *graph.Graph, formats map[jl
 	return codes
 }
 
-func packed(t *testing.T, qt quant.Type, kt kernels.Quant, rows, k int, rng *rand.Rand) [3][]uint32 {
+func packed(t *testing.T, qt quant.Type, kt layout.Quant, rows, k int, rng *rand.Rand) [3][]uint32 {
 	t.Helper()
-	qs, dw, sc, err := kernels.PackWeights(kt, tiledWeights(qt, kt, rows, k, rng), rows, k)
+	qs, dw, sc, err := layout.PackWeights(kt, tiledWeights(qt, kt, rows, k, rng), rows, k)
 	if err != nil {
 		t.Fatal(err)
 	}

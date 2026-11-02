@@ -1,4 +1,4 @@
-// Package tier is jitllm's GPU decode tier: an nn.Device backed by the generated device kernels (engine/device/gpu).
+// Package tier is jitllm's GPU decode tier: an nn.LayerDevice backed by the generated device kernels (engine/device/gpu).
 //
 // gpu.GPU is a router over one devTier per card, each with its own residency
 // map, budget, kernels, staging buffers and lock. It places a model's blocks
@@ -20,11 +20,12 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/offheap"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -35,7 +36,7 @@ type resident struct {
 	qs, d, sc backend.Buf
 	nrows     int
 	k         int
-	t         kernels.Quant
+	t         layout.Quant
 	ok        bool // false = declined, do not retry
 	// why is the decline's reason, given again to whoever asks for the
 	// declined tensor later, so a second offer names it too.
@@ -50,7 +51,7 @@ type resident struct {
 	// is what makes bytes() zero. pk is that arena entry, which the arena
 	// keeps mapped until the buffers are freed (kernels.Arena.Unimport).
 	imported bool
-	pk       *kernels.Packed
+	pk       *Packed
 }
 
 // bytes is what this tensor occupies on the device, from its shape rather than
@@ -65,7 +66,7 @@ func (r *resident) bytes() uint64 {
 	if r == nil || !r.ok || r.imported || r.shared {
 		return 0
 	}
-	qs, d, sc, err := kernels.PackedWords(r.t, r.nrows, r.k)
+	qs, d, sc, err := layout.PackedWords(r.t, r.nrows, r.k)
 	if err != nil {
 		return 0
 	}
@@ -87,56 +88,7 @@ type resKey struct {
 	block, slot int
 	p           *byte // nil for a block-keyed entry
 	nrows, k    int
-	t           kernels.Quant
-}
-
-// kernKey identifies a compiled matvec. bias is part of the key because
-// MatVecShape.Bias adds a parameter: a biased and an unbiased matvec of one
-// shape are different kernels, and CUDA does not check launch arity, so a
-// mix-up would silently drop the bias.
-type kernKey struct {
-	t     kernels.Quant
-	k     int
-	rows  int
-	split int
-	bias  bool
-	// rowt is how many rows one thread carries. It is its own field because
-	// split already carries two encodings (the MMA path's negative one and the
-	// batched path's), and a third would collide silently.
-	rowt int
-	// group is the in-group split reduction: the kernel writes the final row
-	// instead of a partial plane, a different output contract.
-	group bool
-	// gated is a Gate matvec (kernels.MatVecShape.Gate) and act its activation:
-	// one more parameter and a different output, so its own entry.
-	gated bool
-	act   kernels.ActKind
-	// gate2 is a Gate2 matvec: the gate's weight as a second stream.
-	gate2 bool
-}
-
-// chooseSplit picks how many threads share a row: the fallback table when the
-// measured split (tuneSplit) is off or cannot measure. Fitted to a sweep on one
-// card (cmd/mvbench): splitting hurts a shape that already fills the card, and
-// the peak sits nearer twice the thread slots than one times, so the rule is
-// "reach about 2x the slots, cap at 32".
-//
-// pin is WithSplit's width. Summing S partials is a different float order from
-// summing the blocks in sequence, so pinning it to 1 attributes a token
-// divergence to the split rather than to a kernel bug.
-func chooseSplit(rows, nb, pin int) int {
-	if n := pin; n >= 1 {
-		for n > 1 && nb%n != 0 {
-			n /= 2
-		}
-		return n
-	}
-	const slots = 30720 // a small Ampere card's resident threads: 20 SMs x 1536
-	split := 1
-	for split < 32 && rows*split < 2*slots && nb%(split*2) == 0 {
-		split *= 2
-	}
-	return split
+	t           layout.Quant
 }
 
 // The tier's state is split into per-device and shared explicitly, because a
@@ -158,30 +110,12 @@ var _ nn.LayerDevice = (*devTier)(nil)
 // Config is the tier's shared settings. Every field is written by the caller
 // (or once at Open) and read by every device under that device's lock.
 type Config struct {
-	// Verify recomputes every served matvec on the host and reports the first
-	// shapes that disagree. Slow; a debugging tool, not a mode to ship in.
-	Verify bool
 	// NoBatch has the caller send one prompt row a call (ChunkRows): the
 	// way to tell a batching bug from an f32 tie, and the A/B control.
 	NoBatch bool
 	// NoTail pads every chunk to the full batch width instead of generating a
 	// narrower kernel set for a ragged tail; the A/B arm for that.
 	NoTail bool
-	// NoKT refuses the transposed device K cache, leaving [position][head][dim].
-	NoKT bool
-	// NoFuse issues each fused kernel's parts one launch at a time
-	// (kernels.RoPEQKVPaged's three writers): the per-op reference path, the
-	// A/B arm and the bisection switch for a fused kernel.
-	NoFuse bool
-	// NoActFuse keeps the decode matvecs reading an operand quantized by a
-	// launch of its own (Quantize, RMSNormQuantRows) instead of building it in
-	// their prologue (kernels.ActIn): the A/B arm and bisection switch for
-	// the operand prologue alone. NoFuse turns it off too.
-	NoActFuse bool
-	// NoAddNormFold keeps a prompt chunk's block-end residual add a launch
-	// of its own instead of folding it into the next block's attention norm
-	// (the binary16 GEMM path's add-and-norm kernel): the A/B arm.
-	NoAddNormFold bool
 	// ComposedFloat forms the served parts with float activations, no
 	// int8 form: the reference a gate holds the int8 forms and the tier's
 	// own kernels to.
@@ -207,77 +141,13 @@ type Config struct {
 	// count the device does not hold whole -- not a power of two, or wider
 	// than the lanes it guarantees -- is refused.
 	ComposedLanes int
-	// Census counts the tier's own launches by kernel name on the one-row
-	// steps the composer is asked for (GPU.Census): what still runs main's
-	// kernels where the composer serves.
-	Census bool
-	// GateUp2 runs a dense gated FFN's gate and up as one Gate2 matvec
-	// (kernels.MatVecShape.Gate2): each workgroup sums its rows of both
-	// matrices over the one operand and writes act(gate)*up: the bits the
-	// gate's launch and up's gated launch write on PTX (kernels.Gate2Exact),
-	// the reduction-order band elsewhere. On by default, taken per shape where
-	// this device's tuner finds it faster (tuneFFN).
-	GateUp2 bool
-	// QKVGemm runs a prompt chunk's q, k and v as one GemmVoltaSegments grid
-	// instead of three binary16 GEMMs (each free to split k and reduce). Off
-	// by default: on a V100 it read 0.992-0.994 of the three on Llama-3.2-1B
-	// (gpu-kernels.md, "q, k and v as one prompt GEMM grid").
-	QKVGemm bool
-	// GateUp2Force runs Gate2 wherever the shape has it, whatever this
-	// device's tuner chose (gateUp2Pick): the A/B arm and the gates.
-	GateUp2Force bool
-	// ActInPrefetch is how many weight words each thread of an operand-prologue
-	// matvec prefetches before its prologue (kernels.ActIn.Prefetch): 0 is the
-	// default (8), -1 none.
-	ActInPrefetch int
-	// ActInSites picks which matvecs take the operand prologue, a bit each:
-	// 1 q/k/v, 2 the attention output, 4 gate and up, 8 down; 0 is the
-	// default set. The A/B and bisection switch per site.
-	ActInSites int
-	// NoMMA refuses the warp matrix instruction, leaving the dp4a tile. It is
-	// the bisection switch for a wrong answer that only the matrix path shows.
+	// NoMMA forms no kernel on the device's matrix unit (composedMatrix). The
+	// bisection switch for a wrong answer only the matrix unit shows.
 	NoMMA bool
-	// NoVolta refuses sm_70's f16 tensor-core matvec (kernels.MatVecMMA70),
-	// which a card without the integer matrix instruction -- or NoMMA -- takes
-	// before the dp4a tile, and the m16n8 binary16 GEMM (devTier.f16Gemm) that
-	// sm_75 and later take before MatVecMMA. The A/B arm and the bisection
-	// switch for both.
-	//
-	// It refuses Metal's kernels.GemmTile too (tileMV, tileMoE): both are the
-	// binary16-activation twin of the int8 matvec, and a gate that holds the
-	// device to the int8 path's precision (model's hybrid batch gate) asks for
-	// that with this one knob on every backend.
-	NoVolta bool
-	// NoOperandFuse keeps a prompt chunk's norm and gated activation apart
-	// from the GEMM operand they feed: RMSNorm then ActF16T, ActMul then
-	// ActF16T or Quantize, instead of RMSNormF16TRows, ActMulF16T and
-	// QuantizeAct (the same bits in one launch). The A/B arm and the
-	// bisection switch.
-	NoOperandFuse bool
-	// PreferGemmInt8 puts a prompt chunk's matvecs on the staged int8 GEMM
-	// (kernels.GemmInt8, sm_80 on) ahead of the m16n8 binary16 GEMM. Off by
-	// default: on an L4 and an A100 the binary16 GEMM read Llama-3.2-1B's
-	// prompt at 0.75 and 0.91 of llama.cpp where this one read 0.67 and 0.78
-	// (gpu-kernels.md "The sm_80+ prompt"). The A/B arm.
-	PreferGemmInt8 bool
-	// GemmDeep forces the deep m16n8 tiles (f16DeepTiles) on every prompt
-	// GEMM shape they divide (1) or off (-1); 0 leaves it to tuneGemm's
-	// measurement. The A/B arm and the gate's selection switch.
-	GemmDeep int
 	// MatrixTile forces the composer's matrix tile on every prompt
 	// projection, the profile's k'th (its own, then composer.Matrix.Tiles); 0
 	// leaves it to the composer's model. The gates' selection switch.
 	MatrixTile int
-	// PreferTiles puts the collective-tile prompt kernels (kernels.GemmTile,
-	// kernels.FlashPrefillTile) ahead of a backend's own -- the m16n8 GEMMs
-	// and FlashPrefill80 on CUDA -- wherever the device lowers the tiles. Off
-	// by default: it is the arm that gates and measures the IR path on a card
-	// that has a faster special case.
-	PreferTiles bool
-	// NoTileTail keeps GemmTile to one blocking that divides the whole prompt
-	// rather than the widest block plus a tail launch (tileMV): the A/B arm
-	// and the bisection switch.
-	NoTileTail bool
 	// NoExactPrompt runs a prompt chunk in the batched scratch batchFor picks
 	// (a power of two) rather than one built at the chunk's own grain width:
 	// the A/B arm and the bisection switch.
@@ -292,29 +162,6 @@ type Config struct {
 	// prompt of each width (prewarmPromptWidths): the violation arm of the
 	// gate that a placed model's prompts compile nothing.
 	NoPromptPrewarm bool
-	// NoVoltaMoE keeps a batched mixture's expert matvecs on the dp4a grouped
-	// kernel where sm_70's grouped GemmVolta -- or Metal's grouped GemmTile --
-	// would run them (moegroup.go): the A/B arm for that, and its bisection
-	// switch.
-	NoVoltaMoE bool
-	// NoRagGroup keeps a decode step of a few sequences off the decode matvec
-	// that carries every token in one thread (groupMV), on the tiled twins it
-	// replaced: the A/B arm for it, and its bisection switch.
-	NoRagGroup bool
-	// NoRagFuse runs a few-sequence step's q/k/v, residual adds and gated
-	// activation as separate launches where decode fuses them (groupKern,
-	// groupQKV): the A/B arm for those fusions, and the reference their gate
-	// compares against.
-	NoRagFuse bool
-	// NoRagHeadOne projects a ragged step's one wanted row through the head's
-	// batched twin over every row of the step, where it would run decode's own
-	// head matvec on that row alone: the A/B arm for it, and the reference its
-	// gate compares against.
-	NoRagHeadOne bool
-	// KVReserve is how many positions of history a device reserves up front
-	// before it grows a page at a time; 0 is devKVReserve (see initKVCap).
-	// devKVPage reproduces the one-page start a growth gate needs.
-	KVReserve int
 	// Sessions is how many concurrent sessions each placed linear block
 	// reserves a recurrent pair for; 0 and 1 are one. See devTier.reserved.
 	// Without it the first instance fills the card and a second finds no room for
@@ -322,56 +169,9 @@ type Config struct {
 	// nothing per session: its history is paged, and a session takes pages as
 	// it writes rows.
 	Sessions int
-	// FlashAttention enables experimental generated online attention for GPU decode.
-	// Prefill, MLA, vision and devices without guaranteed 32-lane subgroups use
-	// the staged path. Configure before placing layers; default is disabled.
-	FlashAttention bool
-	// FlashKV runs that decode attention as kernels.FlashDecodeKV -- one
-	// workgroup per KV head and key partition, serving the GQA group -- in
-	// place of kernels.FlashAttention's one warp per query head. It implies
-	// FlashAttention; FlashSplit is then a floor, raised until every key of
-	// MaxSeq has a partition to land in.
-	FlashKV bool
-	// FlashGroup is FlashKV's query heads per workgroup (kernels.FlashShape.Group);
-	// 0 serves a whole GQA group, 1 one head.
-	FlashGroup int
-	// NoFlashKV keeps decode attention on the staged kernels (scores, softmax,
-	// split accumulate, reduce) on CUDA and Metal, where FlashKV is the default.
-	NoFlashKV bool
-	// FlashWarps is FlashKV's workgroup width in warps
-	// (kernels.FlashShape.Warps); 0 is the kernel's default.
-	FlashWarps int
 	// SharedRec keeps the device's recurrent pools in the shared form even
 	// when two halves would fit -- the other arm of that form's gates.
 	SharedRec bool
-	// NoFlashPrefill keeps batched attention on its three-kernel form (scores,
-	// softmax, accumulate) instead of kernels.FlashPrefill70 on sm_70 and
-	// kernels.FlashPrefillTile on Metal -- the other arm of those kernels'
-	// gates and measurements.
-	NoFlashPrefill bool
-	// NoRagPrefill keeps a ragged step's prompt chunks on the decode plan, a
-	// row at a time, instead of the run-table flash prefill
-	// (raggedprefill.go) -- the other arm of its gates and measurements.
-	NoRagPrefill bool
-	// SpillingTiles lets the batched GEMM run a tile whose kernel spills
-	// registers to local memory. By default a tile the device's compiler
-	// reports spilling (backend.KernelResources.SpillBytes) is passed over
-	// for the next one that divides the shape; this is the other arm.
-	SpillingTiles bool
-	// DecodePlanOff puts pieces of kernels.ChooseDecodePlan back as the tier
-	// had them before it, for the plan's A/B: 1 the split count (the square
-	// root, the cap rounded down, the default width), 2 the group-per-item
-	// merge, 4 no vector V loads; 7 is the whole old rule. It always decodes
-	// through FlashDecodeKV.
-	DecodePlanOff int
-	// StagedDecode runs every paged decode through the staged kernels, the
-	// path kernels.ChooseDecodePlan takes only at depth: the gates' way to
-	// run it on a short history, and the other arm of the plan's A/B.
-	StagedDecode bool
-	// PrefillPass is the most keys one staged paged prefill launch attends
-	// before the history goes in passes (pagedprefill.go); 0 is
-	// prefillPassW. Rounded up to 64, and past 256 to a multiple of 256.
-	PrefillPass int
 	// KVStreamPages forces how many evicted pages one pass over evicted
 	// history uploads (kvevict.go); 0 is every free page the layer has.
 	KVStreamPages int
@@ -382,60 +182,10 @@ type Config struct {
 	// V100 for a 256-row chunk of a 131072-position Llama 3.1); a row deeper
 	// than this goes in passes over its pages, folded (pagedstream.go).
 	StagedPassKeys int
-	// FlashSplit sets parallel key partitions for generated attention (0/1: one).
-	// Configure before placing layers; each partition needs a small partial buffer.
-	FlashSplit int
-	// TableSplit runs the fitted chooseSplit width instead of the measured one,
-	// which is the other arm of that comparison.
-	TableSplit bool
 
-	// NoGroupSplit refuses the in-group split reduction, leaving the global
-	// partial buffer and its Reduce launch: the bisection switch for a kernel
-	// whose correctness depends on the workgroup size matching the declaration
-	// (ir.Shared, ir.Barrier).
-	NoGroupSplit bool
-	// ForceGroupSplit selects the in-group reduction for every eligible shape
-	// without consulting the tuner, the only way to hold the split fixed and
-	// vary the reduction (a pinned WithSplit makes tuneSplit return before it
-	// records a verdict, so the in-group path would silently not run).
-	ForceGroupSplit bool
-	// ForceIndexedGroup is ForceGroupSplit for the expert (indexed) matvecs
-	// alone, at whatever split they were built with. It is separate so a gate
-	// can vary the expert reduction with every dense kernel held identical.
-	ForceIndexedGroup bool
-	// NoSegFuse keeps MLA's q/kv_a and a shared expert's gate/up as separate
-	// launches (fuseSegs): the other arm of that fusion's gate and A/B.
-	NoSegFuse bool
-	// NoMoEFuse keeps a mixture's expert epilogues -- the gated activation
-	// and the expert biases -- as separate launches (fuseMoE).
-	NoMoEFuse bool
-	// NoWarpNorm keeps the whole-row RMSNorm on its shared-memory tree where
-	// the subgroup-shuffle reduction would otherwise be taken (warpNorm).
-	NoWarpNorm bool
-	// NoQKRms keeps a wide q/k norm (olmoe) on the partitioned part/apply
-	// pair instead of one whole-row RMSNorm launch per vector.
-	NoQKRms bool
-	// DecodeRowt is how many rows one decode thread carries; 0 and 1 mean one.
-	// Decode has no token columns to reuse a weight across, so this buys no
-	// traffic: it buys independent accumulator chains and more consecutive
-	// bytes per lane (the tile's rows are adjacent), while the split puts back
-	// the threads the tile divides. Whether it pays is a property of the
-	// device, so it is a field `jitllm verify -ab` can alternate.
-	DecodeRowt int
 
-	// HeadNormRepeat runs the output norm's apply pass this many extra times
-	// before the real one: a measurement instrument that prices a dispatch.
-	// normApply reads x, hNorm and part and writes h, so it is idempotent.
-	HeadNormRepeat int
 
-	// HeadSplit pins the k-split of the output projection only, 0 meaning the
-	// tuner's choice. See prepHead.
-	HeadSplit int
 
-	// HeadMatvecRepeat runs the output projection this many extra times. Like
-	// HeadNormRepeat it is idempotent; it prices the head matvec, which a
-	// per-command-buffer clock cannot localise.
-	HeadMatvecRepeat int
 
 	// KVF16 stores the V cache as packed binary16 instead of float32, halving
 	// both the bytes AttnAcc reads per position and the VRAM the cache holds.
@@ -484,12 +234,6 @@ type Config struct {
 	// It is forced rather than chosen by placement, so a gate or an A/B can
 	// select the streamed path on a model that would fit.
 	StreamExperts bool
-	// StreamFixedSel makes a streamed block fill its compact bank with experts
-	// 0..k-1 instead of the ones the router chose, skipping the Sync and the
-	// readback that make the selection known. It produces wrong tokens on
-	// purpose: it is a measurement instrument that prices the mid-block
-	// suspension, never a mode to run in.
-	StreamFixedSel bool
 	// StreamGroups is how many pieces a streamed block's selection is uploaded
 	// in, so that group g's PCIe transfer overlaps group g+1's file read. 1 is
 	// serial read-then-upload, and is what a host with no PrefetchExperts gets;
@@ -517,56 +261,15 @@ type Config struct {
 	// block's stated cache gives that block the plain bank
 	// (Stats.StreamCacheShort).
 	StreamCacheSlots int
-	// StreamPrefetch runs the cross-layer probe (StreamProbe's launches) at
-	// each streamed block's suspension and starts reading the next block's
-	// predicted experts into host frames behind this block's transfers. Host
-	// reads only; see streamBank.prefetch.
-	StreamPrefetch bool
-	// HybridExperts runs a streamed block's routed experts on the host
-	// (nn.LayerWeights.HostExperts) instead of sending their sheets: the
-	// block's base, router and shared experts stay on the card, and the
-	// experts' input and output vectors are all that cross the bus.
-	HybridExperts bool
-	// NoHybrid sends an auto-streamed block's expert sheets to the card
-	// instead of running its experts on the host, which is that block's
-	// default (GPU.AutoStream).
-	NoHybrid bool
-	// NoSplitRows runs every expert of a hybrid block's step of several rows
-	// on the host, as before the split covered them: the control arm of
-	// streamBank.splitRows, which runs the rows' cached experts on the card.
-	NoSplitRows bool
 	// NoHybridCache gives a hybrid block no expert cache on the card. With
 	// one (the default, sized from the room left after placement), the
 	// experts the cache holds run on the card while the host runs the rest
 	// of the selection beside them, and the cache keeps the block's most
 	// selected experts (streamBank.split).
 	NoHybridCache bool
-	// SplitAdmit is how many experts a hybrid block's cache takes in a
-	// token at most; 0 is 2.
-	SplitAdmit int
-	// SplitSwaps is how many occupied cache slots change hands in a token,
-	// over every block; 0 is 8, negative none. A sheet sent is a host copy
-	// and a transfer on the token's path. On Qwen3.8-Flash-Next over a V100,
-	// alternating, warm: 8 read 22.2 and 22.7 tok/s, 2 read 17.1 and 20.2,
-	// none 20.3 and 20.4.
-	SplitSwaps int
-	// SplitPredict is how many experts a hybrid block's cache takes in ahead
-	// of its router, predicted by its router over the block before's row; 0
-	// (the default) predicts nothing.
-	SplitPredict int
 	// NoAutoStream leaves a mixture block that no device can hold resident
 	// on the host, as before GPU.AutoStream, instead of streaming it.
 	NoAutoStream bool
-	// StreamProbe runs, at each streamed block's suspension, the next block's
-	// router over this block's normed row and scores its top-k against the
-	// selection that block then makes (Stats.ProbeHits): the measurement of a
-	// cross-layer expert prefetch. It costs a router launch and a round trip a
-	// block, so it is an instrument, never a mode to run in.
-	StreamProbe bool
-	// StreamSelLog, when set, is handed every streamed block's selection as it
-	// is read back (block index, the k expert ids in rank order). The slice is
-	// reused; copy it to keep it.
-	StreamSelLog func(block int, sel []uint32)
 	// Persist composes each decode block's launches into persistent kernels
 	// (persist.go): one cooperative grid per run of launches, phases
 	// separated by a grid barrier, the per-op kernels' own bodies. Off by
@@ -583,16 +286,6 @@ type Config struct {
 	// PersistGrid caps a persistent kernel's grid below the co-residency
 	// limit; zero takes the limit, or the widest launch's groups when fewer.
 	PersistGrid int
-	// GateUpFuse runs a dense gated FFN's gate and up as one launch over
-	// their shared operand (kernels.MatVecSegments) and has down form
-	// act(gate)*up and quantize it in its prologue: three launches where there
-	// were four, every row reduced as before. Off by default.
-	GateUpFuse bool
-	// FFNForm forces the recipe every dense gated FFN runs (recipe.go):
-	// FFNTuned, the zero value, takes the per-shape verdict tuneFFN timed on
-	// this card, or Gate2 where nothing was timed. A forced recipe a block
-	// cannot express runs the next one down the chain (gate2in, gate2, two).
-	FFNForm FFNForm
 	// NoGraph issues the token's launches one driver call at a time instead of
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.
@@ -600,21 +293,6 @@ type Config struct {
 	// NoTowerChunks refuses a picture whose whole non-causal set does not fit
 	// rather than running it row-chunked (chunkTower, LayersPhase).
 	NoTowerChunks bool
-	// NoPickMV runs the label pick as the head's whole matvec and a gather
-	// (the arm before kernels.MatVec's PickOf), for the A/B.
-	NoPickMV bool
-	// ScalarSoftmax runs the thread-per-head softmax instead of the warp
-	// reduction, the other arm of that comparison. It is ignored on a device
-	// that did not pass pickSoftmax's check, where the scalar kernel runs
-	// anyway.
-	ScalarSoftmax bool
-	// ScalarLinearRows builds a linear block's ragged step -- a batch's, a
-	// step across sessions, a speculation's -- on the scan's one-thread form
-	// (a thread a state row, no subgroup) even where the device guarantees 32
-	// lanes: the form a device without the guarantee runs, selected on one
-	// that has it so the form is gated on real hardware. Set before the first
-	// step; it is read when a step's kernels are built.
-	ScalarLinearRows bool
 	// KVKeepWindow keeps a windowed layer's pages behind its window instead
 	// of releasing them (devTier.windowPages): the other arm of that
 	// comparison, which must give the same logits bit for bit.
@@ -634,14 +312,8 @@ type Config struct {
 	// batched prefill geometry resolved from them, and center the weight
 	// centering its emitters are built with. Per tier, never package state:
 	// two models in one process keep their own.
-	kb     knobs
-	tiles  tiles
-	center kernels.Center
-	// mvMin is the average weight bytes per crossing at which serving matvecs
-	// one at a time breaks even. It is a property of the link and the model,
-	// not a card; each device accumulates its own sample against it. See
-	// mvPays.
-	mvMin uint64
+	kb    knobs
+	tiles tiles
 	// failAt and the per-device calls counter are always zero unless built with
 	// -tags jitllmfault.
 	failAt []int
@@ -655,18 +327,11 @@ type Config struct {
 	// full card, asks for.
 	FillFirst bool
 
-	// NoUnpack refuses the device unpack, so every tensor is packed on the host
-	// and uploaded packed: the A/B arm, a field so both arms live in one
-	// process. The device unpack ships by default, unlike Paging, because it is
-	// the same bytes reaching the same buffers by a cheaper route
-	// (TestUnpackMatchesHostPacker).
-	NoUnpack bool
-
 	// arena is the packed arena: every block's weights in the device layout,
 	// host-resident, so a block paged back onto a card is a DMA rather than a
 	// repack. It is shared by every device because the bytes are one heap. Its
 	// retention budget is zero by default; see kernels.NewArena and SetArena.
-	arena *kernels.Arena
+	arena *Arena
 	// stage is the host memory held by packs prepared and not yet uploaded,
 	// across every device (one heap, so one pool; see Pool). Its limit is 0,
 	// unbounded, because StageLimit is settable after Open; Prewarm compares
@@ -688,14 +353,8 @@ type Stats struct {
 	// LastErr, which the last writer wins (a later prefill refusal would
 	// overwrite why a block was declined).
 	DeclineWhy string
-	NoKernel   int // matvecs refused because their format has no lone-matvec kernel
-	// Failed counts matvec kernels (and their split reductions) the device
-	// would not compile. A shape counts once: the failure is cached, and every
-	// later matvec of that shape is refused without another attempt.
-	Failed   int
-	TooSmall int // matvecs refused because one crossing costs more than they save
-	LastErr  string
-	Declined int // tensors refused because the VRAM budget was already spent
+	LastErr    string
+	Declined   int // tensors refused because the VRAM budget was already spent
 	// ConvBlocks is convolutional tower blocks run on the device (conv.go).
 	ConvBlocks int64
 	NoRoom     int // tensors the DEVICE refused: something else is using the card
@@ -754,7 +413,6 @@ type Stats struct {
 	// gave it, and the way to tell "the pool was big enough" from "growth
 	// never ran".
 	KVGrows int
-	Served  int // matvecs served on the device
 	// PartsServed counts the parts the composer ran in the tier's
 	// submission, by part (Parts): the steps emitted, not those a
 	// recording replayed.
@@ -780,15 +438,10 @@ type Stats struct {
 	// parts in, by part: what PartsServed, counted where a step is emitted,
 	// does not see.
 	PartsReplayed [numParts]int
-	// BlockDeclines and HeadDeclines are PartsDeclined's block and head
-	// steps by reason (DeclineName).
-	BlockDeclines, HeadDeclines [numPartDeclines]int
+	// BlockDeclines is PartsDeclined's block steps by reason (DeclineName).
+	BlockDeclines [numPartDeclines]int
 	// StepDeclines is PartsDeclined's table and sample steps by reason.
 	StepDeclines [numPartDeclines]int
-	// DeclineBuilt counts, by reason, the prompt blocks whose own batched
-	// kernels were compiled at a call because their prompt declined there:
-	// the placement compiles none for a block the composer serves.
-	DeclineBuilt [numPartDeclines]int
 	// FormedAtStep counts the parts formed at a step rather than at a
 	// placement or PrepHead: a form a step met first, built inside it.
 	FormedAtStep int
@@ -830,54 +483,9 @@ type Stats struct {
 	// bytes at their address changed (Forget): the selection check that a
 	// refilled frame reached the device at all.
 	Forgotten int
-	// RowtTiles and RowtPlain count decode matvecs built with and without the
-	// row tile: the selection check, since "the tile made no difference" and
-	// "the tile never ran" are otherwise the same number.
-	RowtTiles int
-	RowtPlain int
-	// GroupedMoE counts mixture blocks a batched chunk ran grouped by expert
-	// (moegroup.go) rather than one row at a time.
-	GroupedMoE int
-	// MLABatched counts latent-attention blocks a batched chunk ran as one
-	// submission (mlabatch.go) rather than one row at a time.
-	MLABatched int
-	// IdxSelects counts the lightning indexer's selections a device ran
-	// (DeepSeek V3.2, indexer.go): one per attention call of an indexer block.
-	IdxSelects int
-	// DS4Blocks counts DeepSeek V4 attention halves a device ran, and DS4HC
-	// its hyper-connection mixes (ds4.go).
-	DS4Blocks, DS4HC int
-	// K3Mixes counts Kimi-K3 residual-attention mixes a device ran, and
-	// K3Latent its latent mixtures (k3.go).
-	K3Mixes, K3Latent int
 	// RecShared counts recurrent pools sized in the shared form (recpool.go):
 	// one resident state a slot and the device's next-state scratch.
 	RecShared int
-	// VoltaMV counts batched matvecs built on sm_70's f16 tensor cores
-	// (kernels.MatVecMMA70); a refused shape falls to dp4a with the same answer.
-	VoltaMV int
-	// RagGroupMV counts a few-sequence decode step's matvecs run as the decode
-	// matvec with every token in one thread (groupMV) rather than a tiled twin.
-	RagGroupMV int
-	// RagQKVFused, RagResFused and RagGateFused count a few-sequence step's
-	// launches that carried decode's fusions over every token: q/k/v in one
-	// launch, the residual added by the projection, and act(gate)*up written
-	// by the up projection.
-	// GateUpFused counts dense gated FFNs whose gate and up ran as one
-	// launch and whose down formed act(gate)*up (Config.GateUpFuse).
-	GateUpFused int
-	// GateUpWhy is why the last block's gate and up could not be fused.
-	GateUpWhy   string
-	RagResFused int
-	// GateUp2Runs counts gated FFNs whose gate and up ran as one Gate2
-	// launch (Config.GateUp2).
-	GateUp2Runs int
-	// Gate2InRuns counts gated FFNs whose norm, gate and up ran as one
-	// launch (the gate2in recipe).
-	Gate2InRuns int
-	// FFNTimed and FFNKept count the FFN shape keys tuneFFN decided on this
-	// card and those whose verdict is not the device's default recipe.
-	FFNTimed, FFNKept int
 	// PersistLaunches counts persistent kernels launched (Config.Persist),
 	// PersistParts the per-op launches they ran, PersistPhases their
 	// grid-barrier-separated phases, PersistCompiles the compositions built
@@ -899,77 +507,12 @@ type Stats struct {
 	// PickReads counts heads whose label pick ran on the device and read
 	// back the picked logits instead of the vocabulary (nn.Head.Pick).
 	PickReads int
-	// VoltaGemm counts those of them that are the shared-memory-staged
-	// kernels.GemmVolta rather than MatVecMMA70.
-	VoltaGemm int
-	// SpillRefused counts GemmVolta tiles compiled and passed over because
-	// the compiler reported them spilling (Config.SpillingTiles).
-	SpillRefused int
-	// GemmF16 counts batched matvecs built as GemmVolta on the m16n8 binary16
-	// instruction (sm_75 on, devTier.f16Gemm) rather than MatVecMMA.
-	GemmF16 int
-	// GemmDeep counts those built on the deep tiles (f16DeepTiles).
-	GemmDeep int
 	// MatrixTiled counts the composed parts formed at a forced matrix tile
 	// (Config.MatrixTile).
 	MatrixTiled int
-	// GemmInt8 counts batched matvecs built as kernels.GemmInt8, the staged
-	// int8 GEMM (sm_80 on, devTier.int8Gemm).
-	GemmInt8 int
-	// NormF16, ActF16Fused and QuantActs count a prompt chunk's fused operand
-	// launches: a norm that wrote the binary16 GEMM's operand
-	// (RMSNormF16TRows), a gated activation that did (ActMulF16T), and one
-	// that quantized for the int8 matvec (QuantizeAct). Each is a conversion
-	// launch, and a pass over the float row, that did not run.
-	NormF16, ActF16Fused, QuantActs int
-	// AddNormFolded counts block-end residual adds a prompt chunk folded
-	// into the next block's attention norm (Config.NoAddNormFold).
-	AddNormFolded int
-	// QKVGemm counts prompt chunks' q/k/v projections run as one
-	// GemmVoltaSegments grid (Config.QKVGemm).
-	QKVGemmRuns int
 	// KVPrewarmPages counts pages a pool grew ahead of its history
 	// (PrewarmKV): the growth a instance's first prompt no longer pays.
 	KVPrewarmPages int
-	// GroupedVolta counts a batched mixture's expert matvecs run as grouped
-	// GemmVolta on sm_70's tensor cores, or grouped GemmTile on Metal, rather
-	// than the dp4a grouped matvec.
-	GroupedVolta int
-	// MLAScores70 counts batched latent-attention scores run on sm_70's
-	// m8n8k4 over the row-major latent cache rather than the FMA tile.
-	MLAScores70 int
-	// MLAAcc70 counts the same blocks' accumulates on m8n8k4.
-	MLAAcc70 int
-	// ActF16Launches counts the f16 conversions batched sm_70 matvecs ran,
-	// and QuantSkipped the int8 quantizes a block skipped because every
-	// matvec reading them was on sm_70's f16 path, which reads the float.
-	ActF16Launches, QuantSkipped int
-	// ResidScaled counts residual adds that scaled the block output first
-	// (Granite's residual_scale, kernels.AddScaled): the selection check that
-	// a scaled model's blocks took the scaled add rather than a fused one.
-	ResidScaled int
-	// RowtSplitTiles counts the ones built with both a tile and a k-split, the
-	// combination with its own addressing (the partial-sum row is
-	// splitSeg*Rows + baseRow + j), which RowtTiles alone cannot show ran.
-	RowtSplitTiles int
-	// IndexedGroup counts expert (indexed) matvecs built with the in-group
-	// split reduction, by mkkID or retuneIndexed: the selection check for a
-	// gate on that kernel.
-	IndexedGroup int
-	// RopeTables counts rotary table rows built on the device and
-	// RopeTableUploads the rows uploaded from the host, cumulative over the
-	// session; a model with two rotary bases charges two rows per position.
-	// An upload is charged the whole staged table (the batch width, padding
-	// included) and the kernel only the valid rows, so on a padded chunk the
-	// arms report different totals for the same work. They are the selection
-	// check: the two tables agree to one ulp by design, so no output
-	// comparison can say which ran.
-	RopeTables       int
-	RopeTableUploads int
-	// RopeTableWhy is what stopped the device from building its own table, or
-	// "" where it builds one. A block is never declined for this (the host's
-	// table is a correct answer), so the reason is kept here.
-	RopeTableWhy string
 	// StreamFills counts blocks whose routed bank was assembled from the
 	// router's own selection this token, and StreamBlocks counts placements of
 	// such a block, cumulative like Blocks and Captures. They are the selection
@@ -1016,34 +559,17 @@ type Stats struct {
 	// and missing from a block's expert cache; StreamCacheShort counts blocks
 	// given the plain bank for want of room.
 	StreamCacheHits, StreamCacheMisses, StreamCacheShort int
-	// HybridRuns counts streamed blocks whose experts ran on the host
-	// (Config.HybridExperts), and THybrid the wall of those host calls.
-	HybridRuns int
-	// HybridRows counts rows of batched chunks whose experts ran on the host.
-	HybridRows int
-	THybrid    time.Duration
-	// SplitRuns counts hybrid block-steps that ran part of their selection
-	// on the card from its expert cache (streamBank.split), SplitHits the
-	// experts run there, SplitAdmits the experts the caches took in, and
-	// TSplitHost the host's share of those steps' wall.
 	// CachesDropped counts expert caches given back for room (dropCaches),
 	// and CacheBytes is what the caches sized after placement hold now.
-	CachesDropped                     int
-	CacheBytes                        uint64
-	SplitRuns, SplitHits, SplitAdmits int
-	// SplitRowSteps counts the block-steps of several rows whose experts were
-	// split between the cache and the host (streamBank.splitRows).
-	SplitRowSteps int
+	CachesDropped int
+	CacheBytes    uint64
+	// SplitAdmits counts the experts the caches took in.
+	SplitAdmits int
 	// SplitQueued counts admitted sheets sent on the copy queue beside the
 	// launches (backend.Uploader) rather than in their order.
 	SplitQueued int
-	// SplitPredicted counts the experts sent ahead on a prediction.
-	SplitPredicted int
-	TSplitHost     time.Duration
-	// TLateWrite is the wall of writing the host's expert sum back after
-	// the card's queued work (the hits, the shared expert), and TAdmit of
-	// taking experts into the caches.
-	TLateWrite, TAdmit time.Duration
+	// TAdmit is the wall of taking experts into the caches.
+	TAdmit time.Duration
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
@@ -1055,12 +581,6 @@ type Stats struct {
 	StreamPinHalfTuned, StreamDirectTuned int
 	// AutoMeanBase is the model's mean mixture base GPU.AutoStream was told.
 	AutoMeanBase uint64
-	// StreamPrefetched counts experts the cross-layer prefetch guessed.
-	StreamPrefetched int
-	// ProbeHits of ProbeExperts routed experts were in the previous block's
-	// cross-layer prediction (Config.StreamProbe); ProbeFused counts probes
-	// skipped because the route fuses the rank with the weights.
-	ProbeHits, ProbeExperts, ProbeFused int
 	// TPrewarm is packing done off the main loop, kept apart from TPack
 	// because only TPack is on the critical path.
 	TPrewarm time.Duration
@@ -1068,27 +588,6 @@ type Stats struct {
 	// per prompt plus one per scoreGrain tokens is the design, and one per
 	// token means the key is moving and the recording is pure overhead.
 	Captures int
-	// AttnMMA reports that the batched scores kernel runs on the warp matrix
-	// instruction, whose operands are binary16 -- so the caller's gate has to be
-	// NMSE and token ids rather than bit equality.
-	AttnMMA bool
-	// FusedLaunches counts encoded launches of a kernel that stands for
-	// several (kernels.RoPEQKVPaged), not graph replays: the selection check
-	// that the fused form ran rather than its parts.
-	FusedLaunches int
-	// ActInLaunches counts encoded matvec launches that built their own operand
-	// (kernels.ActIn), and ActInSaved the norm or quantize launches they
-	// replaced: the selection check that the prologue ran.
-	ActInLaunches, ActInSaved int
-	// ActInDeclined counts prologue kernels the device would not launch at
-	// their width (backend.ErrGroupTooWide): those shapes keep two launches.
-	ActInDeclined int
-	// ActInTimed and ActInKept count the sites tuneActIn decided on this card
-	// (from the cache or a trial) and the ones where the prologue won.
-	ActInTimed, ActInKept int
-	// PagedLaunches counts encoded paged-attention launches: the check that a
-	// paged run read its history through the pool.
-	PagedLaunches int
 	// KVEvictions counts pages sent to host memory (kvevict.go), one per layer-page.
 	KVEvictions int
 	// KVStageReads counts page reads the card refused a buffer for, which
@@ -1173,24 +672,6 @@ type Stats struct {
 	// RecZeroHost counts seat zeroings written from the host because the
 	// kept zeros could not be had on the device (recZeroLayers).
 	RecZeroHost int
-	// PagedStagedLaunches counts decode attentions that ran the staged
-	// kernels rather than FlashDecodeKV (kernels.ChooseDecodePlan).
-	PagedStagedLaunches int
-	// PagedAccMMA counts prefill launches whose accumulate ran on the m16n8k8
-	// binary16 instruction (kernels.PagedAttnAccMMA, sm_75 on): the selection
-	// check that the weighted sum of V left the FMA tiles.
-	PagedAccMMA int
-	// FlashPrefill80 counts prompt attention launches of
-	// kernels.FlashPrefill80, scores, softmax and accumulate in one kernel
-	// on m16n8k16 (sm_80 on).
-	FlashPrefill80 int
-	// RagPrefills counts run-table prefill launches inside ragged steps
-	// (raggedprefill.go): the selection check that a step's prompt chunks
-	// attended as a prefill rather than through the decode plan.
-	RagPrefills int
-	// RagForms counts batched scratches built with a flash prefill that has a
-	// run-table form: where it is 0, ragged steps keep the decode plan.
-	RagForms int
 	// EmbedLaunches counts prompt chunks whose rows the device gathered from
 	// the tied head (EmbedRows) -- the selection check that the host lookup
 	// was actually skipped.
@@ -1208,19 +689,6 @@ type Stats struct {
 	// PickRows counts label picks the head ran as the picked rows' own
 	// projection (pickMV) instead of the whole head and a gather.
 	PickRows int
-	// FlashPrefills counts batched attention launches of a one-kernel form
-	// (kernels.FlashPrefill70, FlashPrefillTile), paged or not.
-	FlashPrefills int
-	// MMAWhy is what the device said when it refused the matrix instruction.
-	MMAWhy string
-	// TileMV counts batched matvecs built as kernels.GemmTile (binary16 tiles
-	// on Metal's simdgroup_matrix), and TileWhy is what the device said if it
-	// refused them.
-	TileMV  int
-	TileWhy string
-	// TileTail counts the GemmTile matvecs built as a wide block plus a tail
-	// launch at a token offset.
-	TileTail int
 	// ExactPrompts counts prompt chunks run in a scratch of their own grain
 	// width rather than a wider one they pad.
 	ExactPrompts int
@@ -1231,14 +699,6 @@ type Stats struct {
 	// reserved one included, whose own batched kernels the placement left
 	// uncompiled for the composer serves their prompt there (promptHeld).
 	PromptBlocksLeft int
-	// SoftmaxLanes is 32 when the device passed pickSoftmax's on-device check
-	// of the warp reduction, and 1 when it fell back to a thread per head. The
-	// two produce slightly different floats (a tree sum against a sequential
-	// one), so a token divergence wants to know which ran.
-	SoftmaxLanes int
-	// SoftmaxWhy says why the scalar kernel is running, because "the check
-	// failed" and "not offered on this backend" are different facts.
-	SoftmaxWhy string
 	// Lanes is the subgroup width this device guarantees for the kernels whose
 	// arithmetic needs one: 32, or 1 meaning "no promise, use the scalar
 	// twins". LanesWhy is the device's own words for a refusal. It is the
@@ -1250,8 +710,7 @@ type Stats struct {
 	// TEmit is the CPU time spent encoding launches, as opposed to waiting for
 	// the device: the ceiling on what an indirect command buffer (which removes
 	// only the encoding) could buy on a backend with no recording.
-	TEmit                  time.Duration
-	TStage, TLaunch, TConv time.Duration
+	TEmit time.Duration
 	// Packs is PackWeights calls this device made outside the arena: every
 	// pack when the arena is off and the ones it declined when it is on. Only
 	// the sum with ArenaStats.Packs answers "did the pack run once"
@@ -1260,33 +719,15 @@ type Stats struct {
 
 	// Prepacked is tensors that were already in the device layout (a converted
 	// jlm container), and PrepackedBytes is what those uploads moved. Every
-	// tensor upload is a pack, an unpack or a prepack; a converted model must
-	// show Packs and Unpacks at zero and this at every tensor, since the ids
-	// would be identical if something were still rebuilding the layout.
+	// tensor upload is a pack or a prepack; a converted model must show Packs
+	// at zero and this at every tensor, since the ids would be identical if
+	// something were still rebuilding the layout.
 	Prepacked      int
 	PrepackedBytes uint64
-
-	// Unpacks is tensors uploaded raw and unpacked by a device kernel, and
-	// UnpackBytes is the GGUF bytes those uploads moved. It is non-zero only
-	// when a card really did the extraction; a tier that kept packing on the
-	// host would otherwise look identical.
-	Unpacks     int
-	UnpackBytes uint64
-	// NoUnpackKernel is tensors the host packed because their format has no
-	// device unpack (or NoUnpack is set), and NoUnpackRoom is tensors it
-	// packed because the staging would not hold them (the budget refused the
-	// buffer, or the tensor is wider than any block's; see rawCap). One is a
-	// kernel to write, the other a budget. UnpackWhy is the reason in the
-	// kernel table's own words (kernels.UnpackWhyNot).
-	NoUnpackKernel int
-	NoUnpackRoom   int
-	UnpackWhy      string
-	// StageVRAM is what the raw staging buffer costs this device right now,
-	// the number the slot arithmetic moves by.
-	StageVRAM uint64
-	// TUnpack is time inside the unpack launch, as opposed to TUpload's
-	// transfer, so a slow page-in says which half it is.
-	TUnpack time.Duration
+	// RopeTableUploads is the rotary table rows taken from the caller rather
+	// than computed on the device: a picture's rows, whose table is the
+	// caller's of its grid.
+	RopeTableUploads int
 
 	// Slots is how many blocks' weights this device can hold at once: the
 	// paging capacity, not the placement (see page.go). Reported even when
@@ -1301,9 +742,7 @@ type Stats struct {
 	// PageOuts is a block's weights freed to make room for another block; a
 	// model that fits must read zero.
 	PageOuts int
-	// PageBytes is the device-resident bytes those page-ins brought back. It is
-	// not what crossed the link: a covered format uploads raw GGUF bytes
-	// (UnpackBytes) and unpacks on the card.
+	// PageBytes is the device-resident bytes those page-ins brought back.
 	PageBytes uint64
 	// Imports is packed tensors this device wrapped instead of copying (a
 	// unified heap). ImportBytes is what those wrappers would have cost had
@@ -1330,11 +769,9 @@ func (s *Stats) add(o Stats) {
 			s.Device += " + " + o.Device
 		}
 	}
-	s.NoKernel += o.NoKernel
 	if s.DeclineWhy == "" {
 		s.DeclineWhy = o.DeclineWhy
 	}
-	s.Failed += o.Failed
 	if o.ComposedLanes > 0 && (s.ComposedLanes == 0 || o.ComposedLanes < s.ComposedLanes) {
 		s.ComposedLanes = o.ComposedLanes
 	}
@@ -1347,9 +784,7 @@ func (s *Stats) add(o Stats) {
 	}
 	for i := range s.BlockDeclines {
 		s.BlockDeclines[i] += o.BlockDeclines[i]
-		s.HeadDeclines[i] += o.HeadDeclines[i]
 		s.StepDeclines[i] += o.StepDeclines[i]
-		s.DeclineBuilt[i] += o.DeclineBuilt[i]
 	}
 	s.FormedAtStep += o.FormedAtStep
 	for i := range s.FormedAtStepParts {
@@ -1378,7 +813,6 @@ func (s *Stats) add(o Stats) {
 		s.ShadowWorst[i] = max(s.ShadowWorst[i], w)
 		s.ShadowSteps[i] += o.ShadowSteps[i]
 	}
-	s.TooSmall += o.TooSmall
 	s.Forgotten += o.Forgotten
 	if o.LastErr != "" {
 		s.LastErr = o.LastErr
@@ -1387,6 +821,7 @@ func (s *Stats) add(o Stats) {
 	s.ConvBlocks += o.ConvBlocks
 	s.NoRoom += o.NoRoom
 	s.SessionDeclines += o.SessionDeclines
+	s.RopeTableUploads += o.RopeTableUploads
 	s.Prepacked += o.Prepacked
 	s.PrepackedBytes += o.PrepackedBytes
 	s.KVBytes += o.KVBytes
@@ -1407,17 +842,6 @@ func (s *Stats) add(o Stats) {
 	s.PromptSplits += o.PromptSplits
 	s.RecBytes += o.RecBytes
 	s.KVGrows += o.KVGrows
-	s.Served += o.Served
-	s.RowtTiles += o.RowtTiles
-	s.RowtPlain += o.RowtPlain
-	s.VoltaMV += o.VoltaMV
-	s.SpillRefused += o.SpillRefused
-	s.RagGroupMV += o.RagGroupMV
-	s.GateUpFused += o.GateUpFused
-	if o.GateUpWhy != "" {
-		s.GateUpWhy = o.GateUpWhy
-	}
-	s.RagResFused += o.RagResFused
 	s.PersistLaunches += o.PersistLaunches
 	s.PersistParts += o.PersistParts
 	s.PersistPhases += o.PersistPhases
@@ -1428,45 +852,12 @@ func (s *Stats) add(o Stats) {
 	if o.PersistWhy != "" {
 		s.PersistWhy = o.PersistWhy
 	}
-	s.GateUp2Runs += o.GateUp2Runs
-	s.Gate2InRuns += o.Gate2InRuns
-	s.FFNTimed += o.FFNTimed
-	s.FFNKept += o.FFNKept
 	s.RagHeadOne += o.RagHeadOne
 	s.SampleReads += o.SampleReads
 	s.PickReads += o.PickReads
-	s.GroupedMoE += o.GroupedMoE
-	s.MLABatched += o.MLABatched
-	s.IdxSelects += o.IdxSelects
-	s.DS4Blocks += o.DS4Blocks
-	s.DS4HC += o.DS4HC
-	s.K3Mixes += o.K3Mixes
-	s.K3Latent += o.K3Latent
 	s.RecShared += o.RecShared
-	s.VoltaGemm += o.VoltaGemm
-	s.GemmF16 += o.GemmF16
-	s.GemmDeep += o.GemmDeep
 	s.MatrixTiled += o.MatrixTiled
-	s.GemmInt8 += o.GemmInt8
-	s.NormF16 += o.NormF16
-	s.AddNormFolded += o.AddNormFolded
-	s.QKVGemmRuns += o.QKVGemmRuns
-	s.ActF16Fused += o.ActF16Fused
-	s.QuantActs += o.QuantActs
 	s.KVPrewarmPages += o.KVPrewarmPages
-	s.GroupedVolta += o.GroupedVolta
-	s.MLAScores70 += o.MLAScores70
-	s.MLAAcc70 += o.MLAAcc70
-	s.ActF16Launches += o.ActF16Launches
-	s.QuantSkipped += o.QuantSkipped
-	s.ResidScaled += o.ResidScaled
-	s.RowtSplitTiles += o.RowtSplitTiles
-	s.IndexedGroup += o.IndexedGroup
-	s.RopeTables += o.RopeTables
-	s.RopeTableUploads += o.RopeTableUploads
-	if o.RopeTableWhy != "" {
-		s.RopeTableWhy = o.RopeTableWhy
-	}
 	s.StreamFills += o.StreamFills
 	s.StreamRowFills += o.StreamRowFills
 	s.StreamOverlaps += o.StreamOverlaps
@@ -1491,40 +882,18 @@ func (s *Stats) add(o Stats) {
 	s.StreamCacheHits += o.StreamCacheHits
 	s.StreamCacheMisses += o.StreamCacheMisses
 	s.StreamCacheShort += o.StreamCacheShort
-	s.HybridRuns += o.HybridRuns
-	s.HybridRows += o.HybridRows
-	s.THybrid += o.THybrid
-	s.SplitRuns += o.SplitRuns
-	s.SplitRowSteps += o.SplitRowSteps
 	s.CachesDropped += o.CachesDropped
 	s.CacheBytes += o.CacheBytes
-	s.SplitHits += o.SplitHits
 	s.SplitAdmits += o.SplitAdmits
 	s.SplitQueued += o.SplitQueued
-	s.SplitPredicted += o.SplitPredicted
-	s.TSplitHost += o.TSplitHost
-	s.TLateWrite += o.TLateWrite
 	s.TAdmit += o.TAdmit
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
 	s.StreamPinHalfTuned = max(s.StreamPinHalfTuned, o.StreamPinHalfTuned)
 	s.StreamDirectTuned = max(s.StreamDirectTuned, o.StreamDirectTuned)
 	s.AutoMeanBase = max(s.AutoMeanBase, o.AutoMeanBase)
-	s.StreamPrefetched += o.StreamPrefetched
-	s.ProbeHits += o.ProbeHits
-	s.ProbeExperts += o.ProbeExperts
-	s.ProbeFused += o.ProbeFused
 	s.TPrewarm += o.TPrewarm
 	s.Captures += o.Captures
-	s.AttnMMA = s.AttnMMA || o.AttnMMA
-	s.FusedLaunches += o.FusedLaunches
-	s.ActInLaunches += o.ActInLaunches
-	s.ActInSaved += o.ActInSaved
-	s.ActInDeclined += o.ActInDeclined
-	s.ActInTimed += o.ActInTimed
-	s.ActInKept += o.ActInKept
-	s.PagedLaunches += o.PagedLaunches
-	s.PagedStagedLaunches += o.PagedStagedLaunches
 	s.KVEvictions += o.KVEvictions
 	s.KVStageReads += o.KVStageReads
 	s.KVWindowReleased += o.KVWindowReleased
@@ -1550,34 +919,15 @@ func (s *Stats) add(o Stats) {
 	s.RecZeroCopies += o.RecZeroCopies
 	s.RecZeroSource += o.RecZeroSource
 	s.RecZeroHost += o.RecZeroHost
-	s.PagedAccMMA += o.PagedAccMMA
-	s.FlashPrefill80 += o.FlashPrefill80
-	s.RagPrefills += o.RagPrefills
-	s.RagForms += o.RagForms
 	s.EmbedLaunches += o.EmbedLaunches
 	s.EmbedReadBacks += o.EmbedReadBacks
 	s.HeadFolds += o.HeadFolds
 	s.TowerChunked += o.TowerChunked
 	s.TowerPhases += o.TowerPhases
 	s.PickRows += o.PickRows
-	s.FlashPrefills += o.FlashPrefills
-	if o.MMAWhy != "" {
-		s.MMAWhy = o.MMAWhy
-	}
-	s.TileMV += o.TileMV
-	s.TileTail += o.TileTail
 	s.ExactPrompts += o.ExactPrompts
 	s.PromptWidthsWarmed += o.PromptWidthsWarmed
 	s.PromptBlocksLeft += o.PromptBlocksLeft
-	if o.TileWhy != "" {
-		s.TileWhy = o.TileWhy
-	}
-	if o.SoftmaxLanes > 0 && (s.SoftmaxLanes == 0 || o.SoftmaxLanes < s.SoftmaxLanes) {
-		s.SoftmaxLanes = o.SoftmaxLanes
-	}
-	if o.SoftmaxWhy != "" {
-		s.SoftmaxWhy = o.SoftmaxWhy
-	}
 	if o.Lanes > 0 && (s.Lanes == 0 || o.Lanes < s.Lanes) {
 		s.Lanes = o.Lanes
 	}
@@ -1586,9 +936,6 @@ func (s *Stats) add(o Stats) {
 	}
 	s.TLayer += o.TLayer
 	s.TEmit += o.TEmit
-	s.TStage += o.TStage
-	s.TLaunch += o.TLaunch
-	s.TConv += o.TConv
 	s.Packs += o.Packs
 	// Slots sums: two devices with three slots each hold six blocks between
 	// them. DevStats still says where they are.
@@ -1599,16 +946,6 @@ func (s *Stats) add(o Stats) {
 	s.PageBytes += o.PageBytes
 	s.Imports += o.Imports
 	s.ImportBytes += o.ImportBytes
-	s.Unpacks += o.Unpacks
-	s.UnpackBytes += o.UnpackBytes
-	s.NoUnpackKernel += o.NoUnpackKernel
-	s.NoUnpackRoom += o.NoUnpackRoom
-	// StageVRAM sums: each device holds its own staging buffer.
-	s.StageVRAM += o.StageVRAM
-	s.TUnpack += o.TUnpack
-	if o.UnpackWhy != "" {
-		s.UnpackWhy = o.UnpackWhy
-	}
 }
 
 // Pool is a weight budget that every device spending the same bytes shares.
@@ -1923,11 +1260,9 @@ type devShared struct {
 	recShared    bool
 	recS, recC   int
 	// recNext is the one "next state" buffer the shared form writes, sized
-	// for the widest step that needed it; recCopies holds the CopySlots
-	// kernels that read it back, by slot width and sequence count.
+	// for the widest step that needed it.
 	recNext      backend.Buf
 	recNextBytes uint64
-	recCopies    map[[2]int]backend.Kernel
 	// snapList is the copies snapRec queued for flushSnaps, and snapCount
 	// the points they keep: kept, so a snapshot allocates nothing.
 	snapList  []backend.CopyRange
@@ -1954,14 +1289,6 @@ type devShared struct {
 	// every step reads (placement, a release, a migration) takes it
 	// exclusively (gpuSession.enter). See docs/design/device-sessions.md.
 	busy sync.RWMutex
-	// convTo is the convolutional blocks' launch target (convOnce), the
-	// device's and not a session's: their calls are one at a time
-	// (GPU.convMu).
-	convTo launchTo
-	// convCall is the convolutional submission's arguments, and convFn its
-	// method value, made once (conv.go).
-	convCall convCallArgs
-	convFn   func(backend.Session)
 	// roomGen moves every time this device may have gained room: a refund, or
 	// a budget raised. A caller that gave blocks up reads it to know when
 	// asking for them back could succeed. See GPU.RoomGen.
@@ -1980,18 +1307,8 @@ type devShared struct {
 	pool    *Pool
 	// ord is this device's place in the tier's order, fastest first, and part
 	// of its label.
-	ord   int
-	kerns map[kernKey]backend.Kernel
-	// idKerns is the indexed matvecs, by their whole shape; see idKernel.
-	idKerns map[kernels.MatVecShape]backend.Kernel
-	res     map[resKey]*resident
-	splits  map[splitKey]int
-	// gemmDeep is tuneGemm's verdict per prompt GEMM shape: true where the
-	// deep m16n8 tiles (f16DeepTiles) measured faster than f16Tiles' pick.
-	gemmDeep map[splitKey]bool
-	// groupSplit records, per shape, whether tuneSplit found the in-group
-	// reduction faster than the partial-buffer one.
-	groupSplit map[splitKey]bool
+	ord int
+	res map[resKey]*resident
 	// actWin is the activation amax window the CPU tier chose; see
 	// nn.JIT.SetDevice. Zero means the default 32. It is copied per device
 	// rather than kept in Config because it is written after Open and read on
@@ -1999,11 +1316,6 @@ type devShared struct {
 	actWin int
 	// recCap caches whether sessions can capture: 0 unknown, 1 yes, -1 no.
 	recCap int
-	// mvc is matVec's call (mvCall), run on the device's view under mu; mvTo
-	// its launch target and mvPart its partial sums. They are matVec's own and
-	// not a lane's: a matvec a host block offers runs while a session's
-	// submission holds whichever lane it took.
-	mvc mvCall
 	// servedForms are the forms of the parts the composer serves, by the
 	// composer's Key, every lane's (served.go). prewarming says a placement
 	// or PrepHead is forming them (Stats.FormedAtStep).
@@ -2012,27 +1324,28 @@ type devShared struct {
 	// copyGraphs are the copies over x by row width (servedCopy), each one
 	// graph so its part keys alike every step.
 	copyGraphs map[int]*graph.Graph
+	// takeGraphs are the folded head's row takes by width (servedRowTake).
+	takeGraphs map[int]*graph.Graph
 	// blockForms is Stats.BlockForms, this device's.
 	blockForms []int
 	// everyRows is the word a served part whose call states no rows reads
 	// (everyRow).
 	everyRows backend.Buf
-	// census is Config.Census's count, made at the first step it counts.
-	census   *launchCensus
-	composer *composer.Registry
+	composer  *composer.Registry
 	// composerFloat is composer with no int8 form (Config.ComposedFloat),
 	// and no split where Config.ComposedUnsplit.
 	composerFloat *composer.Registry
 	// composerPasses is composer for forms over a history read in passes
 	// (composer.Registry.ForPasses).
 	composerPasses *composer.Registry
-	mvTo           launchTo
 	// embTo is the composer's gather made real on its own
 	// (materializeComposed).
 	embTo launchTo
 	embRd embRead
 	// rows is the picture rows apart from their blocks (picrows.go).
-	rows      rowsState
+	rows rowsState
+	// conv is the convolutional blocks' activation (convblock.go).
+	conv      convScratch
 	mvPart    backend.Buf
 	mvPartCap int
 	used      uint64
@@ -2047,71 +1360,19 @@ type devShared struct {
 	aCap, axCap, outCap int
 	xfBuf               backend.Buf // a float weight's activation
 	xfCap               int
-	reduce              map[[2]int]backend.Kernel
-	retunedAt           int // len(layers) at the last retuneDecode
-	// The background split tuner (WithLazyTune): its queue, whether its
-	// goroutine runs, Close's stop, and the goroutine to wait for.
-	tuneQ       []tuneJob
-	tuneRunning bool
-	tuneStop    bool
-	tuneWG      sync.WaitGroup
 	// lastSub is when the device last started or finished a submission
 	// (unix ns): the background tuner waits for tuneQuiet past it.
-	lastSub   atomic.Int64
-	restrides map[[4]int]backend.Kernel // kernels.Restride by shape; see copyKVAcrossStride
-	// gatherTab is a gather's table as written, the count and then the
-	// pages (gatherInto, readStaged), reused.
-	gatherTab []uint32
-	segKerns  map[string]backend.Kernel // kernels.MatVecSegments by shapes; see fuseQKV
-	// actInWin is tuneActIn's verdict per operand-prologue site key: true where
-	// the prologue measured faster than the two launches on this card.
-	// actInTrial makes fuseActIn build every candidate for that measurement.
-	actInWin map[string]bool
-	// gu2Win is tuneFFN's verdict per up-projection shape: Gate2 or
-	// the two launches.
-	gu2Win map[splitKey]bool
-	// ffnWin is tuneFFN's verdict per FFN shape key (recipe.go).
-	ffnWin     map[string]FFNForm
-	actInTrial bool
-	ragKerns   map[moeKernKey]backend.Kernel // a batched mixture's grouped matvecs (moegroup.go)
-	ragK       map[ragKey]backend.Kernel     // a ragged step's matvecs; see ragMV
-	tailK      map[ragKey]*mvTail            // tileMV's second launches, one per shape
-	qkvK       map[string]*qkvSeg            // a prompt chunk's q/k/v grids; see qkvGemm
-	kshared    map[string]backend.Kernel     // scratch kernels by content; see compileShared
-	pcache     *persistCache                 // composed persistent kernels; see persist.go
-	// convK, conv and convN are the convolutional blocks' kernels, their
-	// shared scratch and how many hold it (conv.go).
-	convK map[convKey]backend.Kernel
-	conv  convScratch
-	// dh is Clef's decision head on this device (dechead.go), and ClefHeads
-	// how many requests it has answered.
-	dh        dhState
-	ClefHeads int64
-	// kh is Kev's pointer head on this device (kevhead.go) on dh's kernels,
-	// and KevHeads how many questions it has answered.
-	kh       khState
-	KevHeads int64
-	convN    int
-	ragSeg   map[segShapeKey]segLaunch // a few-sequence step's q/k/v; see groupQKV
-	// pickK is the label pick's gather over the head's rows (pick.go).
-	pickK backend.Kernel
-	// pickMV projects the picked rows of the head alone (kernels.MatVec's
-	// PickOf), in place of the head's whole matvec and pickK's gather; nil
-	// where the head's format or a cap needs the whole row.
-	pickMV backend.Kernel
+	lastSub atomic.Int64
+	// gatherCopies is a page gather's copy list (gatherInto), reused.
+	gatherCopies []backend.CopyRange
+	pcache       *persistCache // composed persistent kernels; see persist.go
+	ClefHeads    int64
+	KevHeads     int64
 
 	// Host-side scratch, reused rather than allocated per matvec.
 	hostRaw []byte
 	hostOut []float32 // a view over hostRaw, for the readback
 
-	// mv accumulates the sample that decides whether serving matvecs one at a
-	// time pays on this device, per session, so the verdict is a property of
-	// the model rather than of how much the tier has seen since it opened. The
-	// threshold is shared (Config.mvMin). See mvPays and
-	// model.TestTheSameWorkCrossesTheSeamEverySession.
-	mv map[uint64]*mvState
-
-	bad map[string]int // Verify's disagreeing shapes
 
 	stage      map[resKey]*staged
 	stageBytes uint64
@@ -2151,14 +1412,6 @@ type devShared struct {
 	// The device unpack's staging: one buffer holding the widest covered
 	// tensor's raw GGUF bytes while the kernel reads them, charged like any
 	// other non-pageable allocation. See unpack.go.
-	rawBuf   backend.Buf
-	rawBytes uint64
-	// rawCap is the largest staging this device will hold: the widest covered
-	// tensor of a block it has been offered. A wider tensor (the output
-	// projection, a lone matvec) is packed on the host instead, since it is
-	// uploaded once and never paged.
-	rawCap uint64
-	unks   map[unpackKey]backend.Kernel
 	// kvCap is the scratch's position capacity: what every kernel in g.bs
 	// bakes as its stride and score-row width. Every session shares the one
 	// scratch, so it grows toward the longest context any session asked for
@@ -2177,38 +1430,12 @@ type devShared struct {
 	// because no kernel bakes a capacity.
 	paged bool
 	kvp   *kvPool
-	// mmaOff records that this device has no integer matrix instruction, so the
-	// first refusal is the last: it is a property of the backend, not of a
-	// shape.
-	mmaOff bool
-	// tileOff records that this device refused kernels.GemmTile; see tileMV.
-	tileOff bool
-	// prefillRefused are the staged prefill forms this device refused to
-	// compile, by row width (initPagedPrefill).
-	prefillRefused map[prefillRefusal]struct{}
-	// tileCap is the collective-tile probe (tilesOK): 0 not yet asked, 1 the
-	// device lowers the 8x8 f16 tile GemmTile and FlashPrefillTile multiply
-	// in, -1 it does not.
-	tileCap int8
-	// tileTallCap is tileTall's probe, in tileCap's terms.
-	tileTallCap int8
-	// tileF32Cap is tileF32's probe, in tileCap's terms.
-	tileF32Cap int8
 	// matrixCap is composedMatrix's probe, in tileCap's terms, scaleCap
 	// composedScale's.
 	matrixCap, scaleCap int8
 	// launch is launchWords' answer, asked once where launchSet.
 	launch    int
 	launchSet bool
-	// voltaMoE is the grouped tensor-core mixture's probe (voltaOn): 0 not yet
-	// asked, 1 this device runs it, -1 it does not.
-	voltaMoE int8
-	// f16K is f16GemmK's probe: 0 not yet asked, -1 no m16n8 binary16
-	// instruction, else its k.
-	f16K int
-	// i8Gemm is int8GemmOn's probe: 0 not yet asked, 1 the device lowers
-	// GemmInt8, -1 it does not.
-	i8Gemm int8
 }
 
 // GPU serves decode matvecs and whole blocks from one or more devices. It is a
@@ -2235,6 +1462,11 @@ type GPU struct {
 	// devs is every device, in the order they were opened (AddDevices
 	// appends).
 	devs []*devTier
+	// convMu serialises ConvLayers' runs and its activation crossing the
+	// host between cards (convblock.go).
+	convMu   sync.Mutex
+	convRuns []run
+	convTmp  [2][]float32
 	// rowsComp is RowsComposed's last answer and what it rested on: the
 	// devices' placement generations, their count and the head's device.
 	// Under mu, as is rowsWalks, the walks it made (Stats.RowsComposedWalks).
@@ -2278,14 +1510,6 @@ type GPU struct {
 	head *devTier
 	// runBuf is layersCall's runs slice between calls; see layersCall.
 	runBuf []run
-	// convTmp is ConvLayers' activation between two devices' runs, and convMu
-	// holds a ConvLayers call whole: the activation stays on each card between
-	// its submissions, in the scratch every convolutional block there shares
-	// (conv.go), so two sessions' calls go one after the other.
-	convTmp [2][]float32
-	// convRuns is ConvLayers' runs, reused under convMu.
-	convRuns []run
-	convMu   sync.Mutex
 	// rows is the zero session's rows call (rowsCall); a session's is its
 	// own, so steps led by different sessions share none of it.
 	rows rowsCall
@@ -2384,24 +1608,18 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	cfg := &Config{
 		kb:      o.kb,
 		tiles:   tilesFor(o.kb),
-		center:  o.kern,
-		mvMin:   mvMinBytes(o.kb),
 		failAt:  faultAt(),
 		panicAt: faultPanicAt(),
 		stage:   NewPool("host stage", 0),
 		// Always built, budgeted at zero: the structure exists from load, and
 		// the budget decides whether anything is retained. At zero (the
 		// default) Pack declines immediately.
-		arena: kernels.NewArena(o.kb.arena),
+		arena: NewArena(o.kb.arena),
 	}
 	// A jitllmtest build can make the persistent path every tier's default
 	// (PersistByDefaultForTest), so the regression gates run through it.
 	cfg.Persist = persistDefault
 	cfg.PersistDeps = persistDepsDefault
-	// Gate2 is allowed by default; tuneFFN takes it per shape where it
-	// measures faster. On a V100 it read 1.008-1.028 of the two launches on
-	// Llama 1B, 3B and 8B.
-	cfg.GateUp2 = true
 	cfg.Profile = func(d backend.Device) (cost.Profile, bool) { return cost.Known(hw.GPUName(d), d.API()) }
 	for _, f := range o.cfg {
 		f(cfg)
@@ -2444,20 +1662,16 @@ func (g *GPU) addSlot(i int, s Slot) {
 	}
 	cnt, _ := s.Dev.(backend.AllocCounter)
 	g.devs = append(g.devs, newDevice(&devShared{
-		Config:     cfg,
-		tot:        Stats{Device: label(s.Dev, i)},
-		dev:        s.Dev,
-		cnt:        cnt,
-		pool:       pool,
-		why:        why,
-		ord:        i,
-		name:       DeviceName(s.Name),
-		kerns:      map[kernKey]backend.Kernel{},
-		res:        map[resKey]*resident{},
-		splits:     map[splitKey]int{},
-		groupSplit: map[splitKey]bool{},
-		reduce:     map[[2]int]backend.Kernel{},
-		limit:      limit,
+		Config: cfg,
+		tot:    Stats{Device: label(s.Dev, i)},
+		dev:    s.Dev,
+		cnt:    cnt,
+		pool:   pool,
+		why:    why,
+		ord:    i,
+		name:   DeviceName(s.Name),
+		res:    map[resKey]*resident{},
+		limit:  limit,
 	}))
 	// The zero-copy path is guarded on UnifiedMemory, not on the extension:
 	// a discrete card may also advertise VK_EXT_external_memory_host, and
@@ -2500,24 +1714,6 @@ func (g *GPU) Stats() Stats {
 	s.RowsComposedWalks = g.rowsWalks
 	g.mu.Unlock()
 	return s
-}
-
-// Census is every device's Config.Census: the tier's own launches by kernel
-// name on the one-row steps the composer was asked for.
-func (g *GPU) Census() map[string]int {
-	out := map[string]int{}
-	for _, d := range g.devs {
-		d.mu.Lock()
-		if c := d.census; c != nil {
-			c.mu.Lock()
-			for k, v := range c.n {
-				out[k] += v
-			}
-			c.mu.Unlock()
-		}
-		d.mu.Unlock()
-	}
-	return out
 }
 
 // LaneParts is, device by device, how many blocks and heads each lane holds
@@ -2621,85 +1817,6 @@ func (d *devTier) stats() Stats {
 // Pools reports every distinct budget the tier spends from.
 func (g *GPU) Pools() []*Pool { return g.pools }
 
-// mvSample is how many matvec offers mvPays serves before deciding.
-//
-// mvPays decides, once per model, whether serving matvecs one at a time is
-// worth a host/device crossing each. It is all or nothing: the break-even is
-// ~3.3 MB of weights per crossing (a lone matvec pays quantize, upload, launch
-// and readback), but applying it per tensor regressed, because q, k and v share
-// one uploaded activation and declining one of them puts the upload back. So
-// the average bytes per crossing over the model decides. See
-// docs/engineering-history/placement.md for the measurements.
-//
-// The sample is taken by serving (a crossing cannot be priced without paying
-// for one), about two layers. What reaches this path is whatever placement left
-// on the host, so the verdict can differ with the seam.
-//
-// WithMinMatVecBytes overrides the threshold; zero restores the unpriced
-// behaviour. cmd/jitllm fills it from JITLLM_MV_MIN_KB.
-const mvSample = 64
-
-// Callers hold g.mu: this is one more test inside the lock MatVec already takes,
-// not a second acquisition.
-func (g *devTier) mvPays(sid uint64, bytes int) bool {
-	// The sample is per session, not per device: latched per device, the
-	// verdict depended on how many matvecs the device had been offered since
-	// it opened, so two instances on one tier computed the same token with
-	// different kernels (model.TestHybridSecondSessionMatchesTheFirst). Per
-	// session every instance samples the same weights in the same order and
-	// reaches the same verdict, and keeps it (TestMVPaysDoesNotDrift).
-	mv := g.mvFor(sid)
-	if mv.verdict == 0 {
-		mv.seen += uint64(bytes)
-		mv.offers++
-		if mv.offers < mvSample {
-			return true
-		}
-		if mv.seen/uint64(mv.offers) >= g.mvMin {
-			mv.verdict = 1
-		} else {
-			mv.verdict = -1
-		}
-	}
-	if mv.verdict < 0 {
-		g.TooSmall++
-		return false
-	}
-	return true
-}
-
-// mvState is one session's running sample for the crossing verdict.
-type mvState struct {
-	seen    uint64
-	offers  uint64
-	verdict int8
-}
-
-// mvFor is the sampling state of session sid, created on first use. Callers
-// hold g.mu, like everything else mvPays touches.
-func (g *devTier) mvFor(sid uint64) *mvState {
-	if g.mv == nil {
-		g.mv = map[uint64]*mvState{}
-	}
-	m := g.mv[sid]
-	if m == nil {
-		m = &mvState{}
-		g.mv[sid] = m
-	}
-	return m
-}
-
-// mvMinBytes is that break-even, in bytes: a constant derived from three rates
-// measured on one box (host read, device read, seam). A faster link moves it
-// down, making the guard conservative; a much dearer seam would make it decline
-// too little. Measuring the three at open is the unbuilt alternative.
-func mvMinBytes(kb knobs) uint64 {
-	if kb.mvMinSet {
-		return kb.mvMin
-	}
-	return 3300 << 10
-}
-
 // SetActWindow tells the tier which activation amax window this session uses,
 // so its host-side quantize matches the CPU tier's byte for byte.
 func (g *devTier) SetActWindow(w int) {
@@ -2733,7 +1850,6 @@ func freeScratch(bs *blockScratch) {
 	}
 	bs.arena.free()
 	bs.arena = nil
-	freeFlash(bs) // a slice, likewise
 	// Both slices may hold nil where an allocation failed part-way, which is
 	// how a card too small for a tower's planes reaches here.
 	for _, b := range bs.qoffs {
@@ -2742,18 +1858,6 @@ func freeScratch(bs *blockScratch) {
 		}
 	}
 	bs.qoffs = nil
-	for _, b := range bs.vwins { // the windows' per-chunk buffers, likewise
-		if b != nil {
-			b.Free()
-		}
-	}
-	bs.vwins = nil
-	for _, b := range bs.vsegs { // the packed sequences' buffers, likewise
-		if b != nil {
-			b.Free()
-		}
-	}
-	bs.vsegs = nil
 	freePaged(bs.pkv)
 	for n, rk := range bs.ragLin { // a map, which the walk does not follow either
 		for _, k := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {
@@ -2870,8 +1974,7 @@ func (g *devTier) Close() {
 	// decline tombstones, freeStale) rather than a second copy of that walk.
 	// A driver that reclaims the context on close would hide a leak here, but
 	// a unified-memory device would not. It takes g.mu, hence before the lock
-	// below. The background tuner stops first: it times resident weights.
-	g.stopTune()
+	// below.
 	g.releaseEveryLayer()
 
 	g.mu.Lock()
@@ -2887,8 +1990,6 @@ func (g *devTier) Close() {
 	// runs on one.
 	g.quiesce()
 	g.partsClose()
-	g.khClose() // before dhClose: its programs launch dh's kernels
-	g.dhClose()
 	for _, ds := range g.sess {
 		ds.closeQueue()
 	}
@@ -2904,16 +2005,6 @@ func (g *devTier) Close() {
 			g.upRing = nil
 		}
 	}
-	// nil entries are compile failures, cached so they are not retried; Close
-	// on one would panic.
-	for _, k := range g.kerns {
-		if k != nil {
-			closeKern(k)
-		}
-	}
-	for _, k := range g.idKerns {
-		closeKern(k)
-	}
 	for _, r := range g.res {
 		if r.ok {
 			r.qs.Free()
@@ -2923,14 +2014,6 @@ func (g *devTier) Close() {
 			}
 		}
 	}
-	for _, k := range g.reduce {
-		if k != nil {
-			closeKern(k)
-		}
-	}
-	for _, k := range g.restrides {
-		closeKern(k)
-	}
 	// Every layer left the pool with its block; what remains is the pool
 	// itself and its charge.
 	g.freeKVPool(g.kvp)
@@ -2939,55 +2022,17 @@ func (g *devTier) Close() {
 		g.argmaxOut.Free()
 	}
 	g.lane0.freeSample()
-	g.closePick()
 	g.lane0.freePick()
 	g.closeRows()
-	for _, k := range g.recCopies {
-		closeKern(k)
-	}
 	g.freeAltNorms()
 	if g.recNext != nil {
 		g.recNext.Free()
-	}
-	for _, k := range g.segKerns {
-		if k != nil {
-			closeKern(k)
-		}
-	}
-	for _, k := range g.ragKerns {
-		if k != nil {
-			closeKern(k)
-		}
-	}
-	for _, k := range g.ragK {
-		if k != nil {
-			closeKern(k)
-		}
-	}
-	for _, k := range g.convK {
-		if k != nil {
-			closeKern(k)
-		}
-	}
-	for _, s := range g.qkvK {
-		if s != nil {
-			closeKern(s.kern)
-		}
-	}
-	for _, k := range g.unks {
-		if k != nil {
-			closeKern(k)
-		}
 	}
 	g.dropGraph()
 	// The block scratches, which nothing else frees (see freeScratch), and
 	// the staging, refunded as they go.
 	g.dropAllScratch()
-	g.closeShared()
 	g.closePersistCache()
-	if g.rawBuf != nil {
-		g.rawBuf.Free()
-	}
 	g.dev.Close()
 }
 
@@ -3021,161 +2066,14 @@ func (g *devTier) dropGraph() {
 // Session.
 func (g *devTier) freeStale() { freeStaleOf(g.lane) }
 
-// quantOf forwards to kernels.QuantOf rather than keeping a second per-format
-// list, which went stale when a format was added. It answers for the device
-// kernels, not the packer: a format the device cannot decode is false here
-// (kernels.DeviceWhyNot says why). A float weight (F32, F16, BF16) is served
-// too; the device reads its raw rows (kernels.FloatOf).
-func quantOf(t quant.Type) (kernels.Quant, bool) {
-	if q, ok := kernels.FloatOf(t); ok {
+// quantOf forwards to layout.QuantOf rather than keeping a second per-format
+// list, which went stale when a format was added. A float weight (F32, F16,
+// BF16) is served too; the device reads its raw rows (layout.FloatOf).
+func quantOf(t quant.Type) (layout.Quant, bool) {
+	if q, ok := layout.FloatOf(t); ok {
 		return q, true
 	}
-	q, ok := kernels.QuantOf(t)
-	return q, ok && kernels.DeviceWhyNot(q) == ""
-}
-
-// decline says why a device would not serve a matvec, which decides whether
-// asking the next device is worth anything: noKernel and tooSmall are facts
-// about the tensor or model, noRoom and failed about this card. GPU.MatVec is
-// the only caller that acts on the difference.
-type decline uint8
-
-const (
-	served   decline = iota
-	noKernel         // the quant format has no GPU kernel: the same on every device
-	tooSmall         // the crossing does not pay for this model: the same everywhere
-	noRoom           // this card is full, or refused the allocation
-	failed           // this card could not compile or could not launch
-)
-
-// MatVec implements nn.Device for one device, for the zero session. It
-// returns false for anything it cannot serve, and the caller then runs the CPU
-// path unchanged. GPU.MatVec is what a caller with several devices uses.
-func (g *devTier) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
-	return g.matVec(0, out, t, w, x, nrows, k) == served
-}
-
-func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []float32, nrows, k int) decline {
-	// A quantized weight reaches a lone matvec only in the source's row-major
-	// layout, which no container carries (nn.RowMajorQuantCalls).
-	q, ok := quantOf(t)
-	if !ok || !kernels.IsFloat(q) || k%q.Elems() != 0 || nrows <= 0 || len(w) == 0 {
-		g.mu.Lock()
-		g.NoKernel++
-		g.mu.Unlock()
-		return noKernel
-	}
-	// A matvec served alone pays a whole host/device crossing, and whether that
-	// pays is a property of the model (mvPays); unpriced, it made partial
-	// placements slower than no device at all.
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if !g.mvPays(sid, len(w)) {
-		return tooSmall
-	}
-
-	r := g.resident(-1, 0, q, w, nrows, k, nil)
-	if r == nil || !r.ok {
-		// resident() has already counted this as Declined (the budget) or
-		// NoRoom (the card), and either way another card may have the room.
-		return noRoom
-	}
-	split := chooseSplit(nrows, k/32, g.kb.split)
-	kern := g.kernel(q, k, nrows, split, 1, false)
-	if kern == nil {
-		return failed
-	}
-	var red backend.Kernel
-	if split > 1 {
-		if red = g.reduceKernel(nrows, split); red == nil {
-			split, kern = 1, g.kernel(q, k, nrows, 1, 1, false)
-			if kern == nil {
-				return failed
-			}
-		}
-	}
-	t0 := time.Now()
-	// Buffers are sized outside the session: Alloc takes its own ownership hop
-	// and cannot nest inside one.
-	ok = g.prepare(nrows, k)
-	if !ok || !g.sizeMVPart(nrows*split) || (kernels.IsFloat(q) && !g.sizeXF(k)) {
-		return noRoom
-	}
-	t1 := time.Now()
-
-	// One ownership hop for the whole matvec: two uploads, a launch and a
-	// readback batched in one Session.
-	g.mvc = mvCall{float: kernels.IsFloat(q), r: r, x: x, nrows: nrows, k: k,
-		split: split, kern: kern, red: red}
-	if g.mvcFn == nil {
-		g.mvcFn = g.matVecSession
-	}
-	g.dev.Session(g.mvcFn)
-	err := g.mvc.err
-	g.mvc = mvCall{}
-	if err != nil {
-		return failed
-	}
-	t3 := time.Now()
-	f := g.hostOut[:nrows]
-	for i := range f {
-		out[i] = f[i]
-	}
-	g.TStage += t1.Sub(t0)
-	g.TLaunch += t3.Sub(t1)
-	g.TConv += time.Since(t3)
-	if g.Verify {
-		g.verify(out, t, w, x, nrows, k)
-	}
-	g.Served++
-	return served
-}
-
-// mvCall is one matVec's device side, handed to matVecSession through the
-// devTier rather than captured by a closure: the function a Session runs
-// escapes, so a closure over the call's locals was a heap object on every
-// matvec a host block offered (a mixture's router, every token). g.mu is held
-// across the call.
-type mvCall struct {
-	float           bool
-	r               *resident
-	x               []float32
-	nrows, k, split int
-	kern, red       backend.Kernel
-	err             error
-}
-
-// matVecSession is a float weight's matVec Session: the activation's
-// upload, a launch and a readback.
-func (g *devTier) matVecSession(sess backend.Session) {
-	c := &g.mvc
-	k, nrows, split := c.k, c.nrows, c.split
-	dst := g.outBuf
-	if split > 1 {
-		dst = g.mvPart
-	}
-	// A float weight reads the float activation in the scale plane's slot
-	// (kernels.MatVec), written every call: it is k floats.
-	d := c.r.d
-	if c.float {
-		if c.err = sess.Write(g.xfBuf, f32b(c.x[:k])); c.err != nil {
-			return
-		}
-		d = g.xfBuf
-	}
-	lc := launcher{to: &g.mvTo}
-	g.mvTo.s = sess
-	defer func() { g.mvTo.s = nil }()
-	if c.err = lc.launch(c.kern, (nrows*split+127)/128, 128,
-		c.r.qs, d, c.r.sc, g.aBuf, g.axBuf, dst); c.err != nil {
-		return
-	}
-	if split > 1 {
-		if c.err = lc.launch(c.red, (nrows+127)/128, 128, g.mvPart, g.outBuf); c.err != nil {
-			return
-		}
-	}
-	c.err = sess.Read(g.outBuf, g.hostRaw[:nrows*4])
+	return layout.QuantOf(t)
 }
 
 // importing reports that a page-in on this device is a descriptor update rather
@@ -3185,7 +2083,7 @@ func (g *devTier) matVecSession(sess backend.Session) {
 // alignment must also be one the arena provides, or the driver would refuse
 // every array one call at a time.
 func (g *devTier) importing() bool {
-	return g.imp != nil && g.impAlign > 0 && g.impAlign <= kernels.HostAlign() &&
+	return g.imp != nil && g.impAlign > 0 && g.impAlign <= offheap.HostAlign() &&
 		g.arena.Limit() > 0
 }
 
@@ -3196,7 +2094,7 @@ func (g *devTier) importing() bool {
 // the address, to be a multiple of the alignment (len(v)*4 is a refusal on
 // Vulkan and a silent nil on Metal). The arena pads every array inside its own
 // region. A partial import is unwound rather than kept.
-func (g *devTier) importPacked(r *resident, p *kernels.Packed) bool {
+func (g *devTier) importPacked(r *resident, p *Packed) bool {
 	bufs := [3]backend.Buf{}
 	ok := true
 	for i, v := range [][]uint32{p.QS, p.D, p.SC} {
@@ -3211,7 +2109,7 @@ func (g *devTier) importPacked(r *resident, p *kernels.Packed) bool {
 			bufs[i] = b
 			continue
 		}
-		b, err := g.imp.Import(kernels.Ptr(v), int(kernels.PaddedBytes(len(v))))
+		b, err := g.imp.Import(Ptr(v), int(PaddedBytes(len(v))))
 		if err != nil {
 			g.LastErr = "import: " + err.Error()
 			ok = false
@@ -3238,7 +2136,7 @@ func (g *devTier) importPacked(r *resident, p *kernels.Packed) bool {
 // block is the caller's block index, or -1 for a tensor that is not part of one
 // (the output projection, a lone matvec offered by the host tier). It is a tag
 // telling the arena which entries to release together, and nothing else.
-func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k int, pre *nn.Packed) *resident {
+func (g *devTier) resident(block, slot int, q layout.Quant, w []byte, nrows, k int, pre *nn.Packed) *resident {
 	g.applyForgets()
 	key := resKey{block: block, slot: slot, nrows: nrows, k: k, t: q}
 	if block < 0 {
@@ -3267,7 +2165,7 @@ func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k 
 	// Price it before packing it: declining after a pack costs a full read and
 	// fresh host memory to learn the answer is no. PackedWords is the same
 	// arithmetic with no allocation (TestPackedWordsMatchesPack).
-	pq, pd, psc, err := kernels.PackedWords(q, nrows, k)
+	pq, pd, psc, err := layout.PackedWords(q, nrows, k)
 	if err != nil {
 		g.LastErr = "PackedWords " + q.String() + ": " + err.Error()
 		return r
@@ -3307,7 +2205,7 @@ func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k 
 	// arena budget (TestAContainerWeightIsNotRepackedOnAUnifiedDevice). They
 	// are copied below, which also lets the pager reuse the frame they came
 	// from; a wrapper over a frame would read the next block's bytes.
-	var pk *kernels.Packed
+	var pk *Packed
 	if pre == nil && g.importing() {
 		tp := time.Now()
 		p, aerr := g.arena.Pack(block, q, w, nrows, k)
@@ -3369,17 +2267,7 @@ func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k 
 		return r
 	}
 
-	// The device unpack comes before the arena: the upload is roughly the file's
-	// bytes and the card extracts far faster than the host packs (see
-	// kernels.Unpack and arena.go). It is below the importing() branch because
-	// on a unified heap the pack is the device buffer, so the arena wins there.
-	// A false is a counted fallback (NoUnpackKernel, NoUnpackRoom), not a
-	// decline: the host path below produces the same bytes.
-	if g.unpackInto(r, q, w, nrows, k) {
-		g.charge(need)
-		return r
-	}
-	// Then the arena: a tensor it holds is a map lookup and a DMA of bytes
+	// The arena: a tensor it holds is a map lookup and a DMA of bytes
 	// already in the device layout, and one it does not hold is packed into it
 	// when it has budget, so the next page-in is that lookup. nil is not an
 	// error: the arena is off (the default) or full.
@@ -3409,7 +2297,7 @@ func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k 
 	if qs == nil {
 		tp := time.Now()
 		var err error
-		qs, dw, scw, err = kernels.PackWeights(q, w, nrows, k)
+		qs, dw, scw, err = layout.PackWeights(q, w, nrows, k)
 		g.TPack += time.Since(tp)
 		g.Packs++
 		if err != nil {
@@ -3455,12 +2343,12 @@ func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k 
 // residentSheets allocates a bank's three planes and fills them from its
 // expert pages: sheet x of each plane at x times one sheet's bytes, which is
 // exactly the buffer a contiguous bank would have uploaded.
-func (g *devTier) residentSheets(r *resident, q kernels.Quant, nrows, k int, pre *nn.Packed) bool {
+func (g *devTier) residentSheets(r *resident, q layout.Quant, nrows, k int, pre *nn.Packed) bool {
 	if pre.Sheets <= 0 || nrows%pre.Sheets != 0 {
 		g.LastErr = fmt.Sprintf("tier: %d rows do not split into %d sheets", nrows, pre.Sheets)
 		return false
 	}
-	sq, sd, ssc, err := kernels.PackedWords(q, nrows/pre.Sheets, k)
+	sq, sd, ssc, err := layout.PackedWords(q, nrows/pre.Sheets, k)
 	if err != nil {
 		g.LastErr = err.Error()
 		return false
@@ -3597,137 +2485,6 @@ func (g *devTier) allocBytes(v []byte) (backend.Buf, error) {
 	return b, nil
 }
 
-func (g *devTier) kernel(q kernels.Quant, k, rows, split, rowt int, bias bool) backend.Kernel {
-	return g.kernelMode(q, k, rows, split, rowt, bias, false)
-}
-
-// kernelMode is kernel with the in-group split reduction selectable. See
-// kernels.MatVecShape.GroupSplit: it removes the partial buffer and the Reduce
-// launch, which wins on small matvecs and loses on big-k ones, so it is chosen
-// per shape by tuneSplit rather than switched on.
-func (g *devTier) kernelMode(q kernels.Quant, k, rows, split, rowt int, bias, groupSplit bool) backend.Kernel {
-	kk := kernKey{q, k, rows, split, bias, rowt, groupSplit, false, 0, false}
-	if c, ok := g.kerns[kk]; ok {
-		return c
-	}
-	ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
-		Bias: bias, Rowt: rowt, GroupSplit: groupSplit})
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		return nil
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		// A compile failure is recorded, not swallowed, so a silent fallback
-		// to the CPU is visible.
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		g.Failed++
-		return nil
-	}
-	g.kerns[kk] = c
-	return c
-}
-
-// idKernel is an indexed matvec -- an expert bank, or MLA's per-head absorb
-// bank -- from the device-wide cache, compiling on a miss. Every block of a
-// mixture asks for the same few shapes, so they share one kernel, which Close
-// closes: a kernel compiled per block and kept by the block was closed by
-// nothing, since ReleaseLayers leaves kernels to the caches.
-func (g *devTier) idKernel(s kernels.MatVecShape) (backend.Kernel, error) {
-	if c, ok := g.idKerns[s]; ok {
-		return c, nil
-	}
-	ker, err := kernels.MatVec(s)
-	if err != nil {
-		return nil, err
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		return nil, err
-	}
-	if g.idKerns == nil {
-		g.idKerns = map[kernels.MatVecShape]backend.Kernel{}
-	}
-	g.idKerns[s] = c
-	return c, nil
-}
-
-// gatedKernel is kernelMode's Gate variant: the matvec writes act(gate)*row.
-// nil where the shape has no final-row form (a partial-writing split).
-func (g *devTier) gatedKernel(q kernels.Quant, k, rows, split int, groupSplit bool, act kernels.ActKind) backend.Kernel {
-	if split > 1 && !groupSplit {
-		return nil
-	}
-	kk := kernKey{t: q, k: k, rows: rows, split: split, rowt: 1, group: groupSplit, gated: true, act: act}
-	if c, ok := g.kerns[kk]; ok {
-		return c
-	}
-	ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
-		GroupSplit: groupSplit, Gate: true, GateAct: act})
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		return nil
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		g.Failed++
-		return nil
-	}
-	g.kerns[kk] = c
-	return c
-}
-
-// gate2Kernel is the FFN up projection summing the gate's row beside its own
-// and writing act(gate)*up (kernels.MatVecShape.Gate2), or nil where the
-// backend cannot make it exact or the split writes partials.
-func (g *devTier) gate2Kernel(q kernels.Quant, k, rows, split int, groupSplit bool, act kernels.ActKind) backend.Kernel {
-	if split > 1 && !groupSplit || kernels.IsFloat(q) {
-		return nil
-	}
-	kk := kernKey{t: q, k: k, rows: rows, split: split, rowt: 1, group: groupSplit, gate2: true, act: act}
-	if c, ok := g.kerns[kk]; ok {
-		return c
-	}
-	ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
-		GroupSplit: groupSplit, Gate2: true, GateAct: act})
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		return nil
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		g.Failed++
-		return nil
-	}
-	g.kerns[kk] = c
-	return c
-}
-
-// reduceKernel compiles the second pass that sums a row's partial results.
-func (g *devTier) reduceKernel(rows, split int) backend.Kernel {
-	// A build reached from inside a submission takes g.mu (subLock).
-	defer g.subUnlock(g.subLock())
-	key := [2]int{rows, split}
-	if c, ok := g.reduce[key]; ok {
-		return c
-	}
-	ker, err := kernels.Reduce(rows, split)
-	if err != nil {
-		g.reduce[key] = nil
-		return nil
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		g.reduce[key], g.LastErr = nil, err.Error()
-		g.Failed++
-		return nil
-	}
-	g.reduce[key] = c
-	return c
-}
-
 // sizeF16 grows f16Buf to n bytes, dropping any recording that names the old
 // one, under regrow's rules.
 func (g *devTier) sizeF16(n int) bool { return g.regrow(&g.f16Buf, &g.f16Cap, n, 1, true, false) }
@@ -3794,16 +2551,6 @@ func (g *devTier) regrow(dst *backend.Buf, have *int, n, unit int, drop, poison 
 	return false
 }
 
-// prepare makes sure every device buffer a float weight's matvec binds is
-// big enough. It performs no device calls except Alloc, so the caller can run
-// the transfers inside one session. A float weight's kernel reads the raw f32
-// activation out of the scale plane's slot and never looks at the int8
-// planes, but its signature binds them whatever the weight's format, so they
-// are sized and never written.
-func (g *devTier) prepare(nrows, k int) bool {
-	return g.sizeOut(nrows) && g.sizeAct(k/4, 3*(k/32))
-}
-
 // Reserve sizes every per-call scratch buffer once, for the largest shape the
 // model contains (known at load), so nothing grows on the serving path. That
 // avoids a free and Alloc inside a token, a dropGraph each time a buffer moves,
@@ -3835,9 +2582,6 @@ func (g *devTier) sizeAct(na, nax int) bool {
 	return g.regrow(&g.aBuf, &g.aCap, na, 4, false, true) && g.regrow(&g.axBuf, &g.axCap, nax, 4, false, false)
 }
 
-// sizeXF grows the float activation buffer a float weight's matvec reads.
-func (g *devTier) sizeXF(k int) bool { return g.regrow(&g.xfBuf, &g.xfCap, k, 4, false, true) }
-
 // sizeOut grows the readback buffer. nrows is baked into the kernel, so there
 // is nothing to publish to the device.
 func (g *devTier) sizeOut(nrows int) bool {
@@ -3862,51 +2606,6 @@ func f32b(v []float32) []byte {
 		return nil
 	}
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*4)
-}
-
-// verify recomputes the matvec in float64 from the dequantized weights and
-// records any shape whose GPU answer disagrees. It compares in situ, which
-// catches faults in what the tier does between calls that a kernel tested in
-// isolation cannot show.
-func (g *devTier) verify(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) {
-	if g.bad == nil {
-		g.bad = map[string]int{}
-	}
-	// NMSE over the whole output, not per-row relative error: a long dot
-	// product is often near zero by cancellation, and a relative error against
-	// a near-zero denominator is unbounded.
-	ref := make([]float64, k)
-	var sse, sy2 float64
-	worst, at := 0.0, -1
-	for r := 0; r < nrows; r++ {
-		rowBytes := len(w) / nrows
-		if err := quant.Dequant(t, w[r*rowBytes:(r+1)*rowBytes], ref); err != nil {
-			return
-		}
-		var want float64
-		for i := 0; i < k; i++ {
-			want += ref[i] * float64(x[i])
-		}
-		d := float64(out[r]) - want
-		sse += d * d
-		sy2 += want * want
-		if ad := d * d; ad > worst {
-			worst, at = ad, r
-		}
-	}
-	nmse := 0.0
-	if sy2 > 0 {
-		nmse = sse / sy2
-	}
-	key := fmt.Sprintf("%s %dx%d", t, nrows, k)
-	if g.bad[key] == 0 {
-		g.bad[key] = 1
-		verdict := "OK"
-		if nmse > 1e-10 {
-			verdict = "EXCEEDS 1e-10"
-		}
-		fmt.Printf("  VERIFY: %-18s NMSE %.3e  %s  (worst row %d)\n", key, nmse, verdict, at)
-	}
 }
 
 // blockBytes is what a whole block would cost on the device, in bytes, counting
@@ -3955,7 +2654,7 @@ func (g *devTier) blockBytes(ws []nn.Weight) (uint64, bool) {
 // staged is a pack that has been done but not uploaded.
 type staged struct {
 	qs, d, sc []uint32
-	t         kernels.Quant
+	t         layout.Quant
 	nrows, k  int
 }
 
@@ -3984,7 +2683,7 @@ func (s *staged) bytes() uint64 { return uint64(len(s.qs)+len(s.d)+len(s.sc)) * 
 // overlap decoding; the lock covers only the map operations. It is bounded by
 // StageLimit, since a stage is host memory nothing uses yet; over the cap it
 // declines and the work happens on the main loop.
-func (g *devTier) prewarm(block int, q kernels.Quant, w []byte, nrows, k int) bool {
+func (g *devTier) prewarm(block int, q layout.Quant, w []byte, nrows, k int) bool {
 	if len(w) == 0 {
 		return false
 	}
@@ -3994,13 +2693,6 @@ func (g *devTier) prewarm(block int, q kernels.Quant, w []byte, nrows, k int) bo
 	if g.res[key] != nil || (g.stage != nil && g.stage[key] != nil) {
 		g.mu.Unlock()
 		return false // already resident, or already staged
-	}
-	// A format the device unpacks has no host pack to move off the main loop:
-	// resident() asks unpackInto before takeStage, so a stage would only hold
-	// host memory until DropStage.
-	if g.canUnpack(q) {
-		g.mu.Unlock()
-		return false
 	}
 	g.mu.Unlock()
 
@@ -4039,7 +2731,7 @@ func (g *devTier) prewarm(block int, q kernels.Quant, w []byte, nrows, k int) bo
 	g.packing = append(g.packing, pk)
 	g.mu.Unlock()
 	t0 = time.Now()
-	qs, d, sc, err := kernels.PackWeights(q, w, nrows, k)
+	qs, d, sc, err := layout.PackWeights(q, w, nrows, k)
 	took := time.Since(t0)
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -4117,13 +2809,13 @@ const maxGraphs = 8
 //
 // A shape that does not match an existing bank gets its own, so a model whose
 // blocks differ is correct rather than refused.
-func (g *devTier) sharedCompact(which int, q kernels.Quant, rows, k, slots int) (*resident, [3]int, bool) {
+func (g *devTier) sharedCompact(which int, q layout.Quant, rows, k, slots int) (*resident, [3]int, bool) {
 	// which is in the key because gate and up have the same shape: without it
 	// they would share one buffer and the gate matvec would read the up
 	// weights (TestStreamedExpertBankMatchesTheResidentOne).
 	key := resKey{block: -(2 + which), slot: slots, nrows: rows, k: k, t: q}
 	if r, ok := g.res[key]; ok {
-		pq, pd, psc, err := kernels.PackedWords(q, rows, k)
+		pq, pd, psc, err := layout.PackedWords(q, rows, k)
 		if err != nil {
 			return nil, [3]int{}, false
 		}
@@ -4149,9 +2841,9 @@ func (g *devTier) sharedCompact(which int, q kernels.Quant, rows, k, slots int) 
 //
 // It is not in g.res: a compact bank is a block's scratch, and sharing it
 // through that map would hand a token another block's experts.
-func (g *devTier) residentCompact(q kernels.Quant, rows, k, slots int) (*resident, [3]int, bool) {
+func (g *devTier) residentCompact(q layout.Quant, rows, k, slots int) (*resident, [3]int, bool) {
 	var sh [3]int
-	pq, pd, psc, err := kernels.PackedWords(q, rows, k)
+	pq, pd, psc, err := layout.PackedWords(q, rows, k)
 	if err != nil {
 		g.LastErr = "PackedWords " + q.String() + ": " + err.Error()
 		return nil, sh, false

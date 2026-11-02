@@ -82,12 +82,9 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 		g, err := gpu.OpenWith(append(opts,
 			gpu.WithConfig(func(c *gpu.Config) {
 				c.NoBatch = noBatch
-				// The A/B for sm_70: its batched matvecs read f16 activations
-				// where every other path reads int8.
-				c.NoVolta = os.Getenv("JITLLM_MOE_NOVOLTA") != ""
-				// And the A/B for the experts alone: the dp4a grouped matvec
-				// where sm_70's grouped GemmVolta would run them.
-				c.NoVoltaMoE = os.Getenv("JITLLM_MOE_NOVOLTAMOE") != ""
+				// The A/B for the matrix unit: its forms read binary16
+				// activations where every other path reads int8.
+				c.NoMMA = os.Getenv("JITLLM_MOE_NOMATRIX") != ""
 			}))...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)

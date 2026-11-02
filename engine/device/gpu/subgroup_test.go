@@ -112,9 +112,6 @@ func TestSubgroupSelectionIsByGuarantee(t *testing.T) {
 				t.Fatalf("device promises %d lanes and the tier settled on %d (%s)",
 					want, one.Lanes, one.LanesWhy)
 			}
-			if one.bs.qkLanes != want {
-				t.Fatalf("the per-head norm runs %d lanes, want %d", one.bs.qkLanes, want)
-			}
 			// The block must also run: the scalar arm's launch geometry
 			// differs, and getting it wrong leaves heads uncomputed rather
 			// than erroring.
@@ -123,7 +120,7 @@ func TestSubgroupSelectionIsByGuarantee(t *testing.T) {
 			if !one.Layers(0, 1, 0, 1, x, cs, nil, nil) {
 				t.Fatalf("Layers: %s", one.LastErr)
 			}
-			t.Logf("chose %d-lane kernels, block ran: headnorm=%d", one.Lanes, one.bs.qkLanes)
+			t.Logf("chose %d-lane kernels, block ran", one.Lanes)
 		})
 	}
 }
@@ -167,9 +164,8 @@ func TestSelectionFollowsTheGuaranteeWhenPinningIsOff(t *testing.T) {
 			if !one.PrepLayer(0, p, qkWeights(p)) {
 				t.Fatalf("%s: PrepLayer declined: %s", d.Name(), one.LastErr)
 			}
-			if one.Lanes != want || one.bs.qkLanes != want {
-				t.Fatalf("%s: unpinned promise is %d lanes; tier=%d headnorm=%d (%s)",
-					d.Name(), want, one.Lanes, one.bs.qkLanes, why)
+			if one.Lanes != want {
+				t.Fatalf("%s: unpinned promise is %d lanes; tier=%d (%s)", d.Name(), want, one.Lanes, why)
 			}
 			x := make([]float32, p.NEmbd)
 			cs := make([]float32, p.NRot)

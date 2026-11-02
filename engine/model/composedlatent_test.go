@@ -139,8 +139,8 @@ func TestComposedLatentViolations(t *testing.T) {
 			parts := gpu.ComposedBlock
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					want, _, _, _ := composedDecode(t, m, dev, ids, toks, 0, false, false)
-					ref, _, _, _ := composedDecode(t, m, dev, ids, toks, gpu.ComposedBlock|gpu.ComposedHead, false, true)
+					want, _, _ := composedDecode(t, m, dev, ids, toks, 0, false, false)
+					ref, _, _ := composedDecode(t, m, dev, ids, toks, gpu.ComposedBlock|gpu.ComposedHead, false, true)
 					widest := 0.0
 					for i := 1; i < len(ref); i++ {
 						widest = max(widest, logitNMSE(want[i], ref[i]))
@@ -158,7 +158,7 @@ func TestComposedLatentViolations(t *testing.T) {
 						slices.Sort(ratios)
 						return ratios[len(ratios)/2], worst
 					}
-					got, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, false, false)
+					got, st, _ := composedDecode(t, m, dev, ids, toks, parts, false, false)
 					// Every step runs every latent block, emitted or replayed in a
 					// recording, and declines the rest for no graph alone.
 					n, _ := st.ServedPart(parts)
@@ -193,7 +193,7 @@ func TestComposedLatentViolations(t *testing.T) {
 							}
 							undo = append(undo, u)
 						}
-						bad, bst, _, _ := composedDecode(t, m, dev, ids, toks, parts, false, false)
+						bad, bst, _ := composedDecode(t, m, dev, ids, toks, parts, false, false)
 						for _, u := range undo {
 							u()
 						}

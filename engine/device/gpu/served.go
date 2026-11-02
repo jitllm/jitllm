@@ -12,10 +12,10 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -61,12 +61,15 @@ const (
 	// partCollapse is the row a head reads from every residual stream
 	// (collapse.go).
 	partCollapse
+	// partConv is a convolutional tower's block whole, at its input grid's
+	// rows (convblock.go).
+	partConv
 	numParts
 )
 
 var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block",
 	partRope: "table", partSample: "sample", partEmbed: "input rows", partEmbedRows: "prompt input rows", partCopy: "copy",
-	partTower: "tower block", partRows: "picture rows", partCollapse: "streams' collapse"}
+	partTower: "tower block", partRows: "picture rows", partCollapse: "streams' collapse", partConv: "convolutional block"}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
@@ -192,17 +195,17 @@ const (
 // jlmType is a resident's format as the container names it: a packed type,
 // or a float weight the device keeps verbatim, row-major, as the container
 // does.
-func jlmType(q kernels.Quant) (jlm.Type, bool) {
+func jlmType(q layout.Quant) (jlm.Type, bool) {
 	switch q {
-	case kernels.Float32:
+	case layout.Float32:
 		return jlm.TypeF32, true
-	case kernels.Float16:
+	case layout.Float16:
 		return jlm.TypeF16, true
-	case kernels.BFloat16:
+	case layout.BFloat16:
 		return jlm.TypeBF16, true
 	}
 	for _, t := range quant.PackedTypes {
-		if k, ok := kernels.QuantOf(t); ok && k == q {
+		if k, ok := layout.QuantOf(t); ok && k == q {
 			return jlm.TypeOf(t)
 		}
 	}
@@ -255,9 +258,9 @@ func (g *devTier) askPart(r *composer.Registry, sl *composedPart, rows int) (com
 	}
 	g.Stats.ComposedLanes = lanes
 	dev := composer.Device{Kind: composer.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
-		Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
-		Matrix: g.composedMatrix(), HalfPairs: kernels.HalfPairs(g.dev.API()),
-		VectorLoads: kernels.VectorLoads(g.dev.API()), Shared: sharedPerUnit(g.dev), Launch: g.launchWords(),
+		Regs: threadRegs(g.dev), ExactDiv: composer.ExactDivOn(g.dev.API()), ExactArith: composer.ExactArithOn(g.dev.API()),
+		Matrix: g.composedMatrix(), HalfPairs: composer.HalfPairsOn(g.dev.API()),
+		VectorLoads: composer.VectorLoadsOn(g.dev.API()), Shared: sharedPerUnit(g.dev), Launch: g.launchWords(),
 		Buffers: backend.Bindings(g.dev)}
 	if dev.Matrix[0] > 0 {
 		dev.Fragment = backend.Fragment(g.dev)
@@ -289,7 +292,7 @@ func (g *devTier) askPart(r *composer.Registry, sl *composedPart, rows int) (com
 // to it -- a matrix-unit attention the reference shared would move both
 // alike, wrong or right.
 func (g *devTier) composedMatrix() [3]int {
-	if g.ComposedFloat {
+	if g.ComposedFloat || g.NoMMA {
 		return [3]int{}
 	}
 	s := backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32}
@@ -1162,6 +1165,12 @@ const (
 	// CollapsedHead counts the collapse of every stream a head reads, which
 	// the composer serves where it serves the head (ComposedHead).
 	CollapsedHead Parts = 1 << partCollapse
+	// ComposedConv serves a convolutional tower's blocks whole from their
+	// graphs (convblock.go).
+	ComposedConv Parts = 1 << partConv
+	// EveryPart is every part the composer serves, for a count over all of
+	// them.
+	EveryPart Parts = 1<<numParts - 2
 	// ComposedStep is every part of a step: its input rows, tables, blocks
 	// (a prompt chunk's and a picture's among them), head and token.
 	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedPrompt | ComposedTower | ComposedRows | ComposedHead | ComposedSample
@@ -1639,7 +1648,7 @@ func (bs *blockScratch) headServes(norm backend.Buf, pickOnly, persist bool) par
 	switch {
 	case !ok || !hok || hh != hs || len(bs.headHidden.Out) != 2:
 		return partHeadShape
-	case norm == nil || hs.layerNorm != (bs.normVar != nil) || hs.hasNormBias && bs.hNormB == nil:
+	case norm == nil || hs.layerNorm != lnBlock(&bs.p) || hs.hasNormBias && bs.hNormB == nil:
 		return partHeadNorm
 	case hs.hasBias && bs.hBias == nil:
 		return partHeadBias
@@ -2562,8 +2571,6 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 	case pk == nil || g.kvp == nil || g.kvp.layers[l.kvSrc] == nil:
 		// A block sharing another's history reads its source's pool.
 		return partNoPool
-	case pk.prefill && !prompt:
-		return partPrefill
 	}
 	return partServes
 }
@@ -2913,34 +2920,6 @@ func rowSeqs(R int, one bool) int {
 	return 0
 }
 
-// promptDeclines readies, before a prompt call's submission at bs's rows,
-// every block of [lo, hi) whose prompt the composer does not serve at this
-// call: the tier's own kernels the placement left it (declineTwins); where
-// the call asks nothing of the composer (rowsKind), every block. It reports
-// whether any block of the range runs them. Callers hold g.mu,
-// outside any submission.
-func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int, asks bool) (bool, error) {
-	tier := false
-	for li := lo; li < hi; li++ {
-		l := g.layers[li]
-		if l == nil || !l.ok || asks && g.promptServed(l, li, bs) {
-			continue
-		}
-		tier = true
-		why := g.blockServes(l, li, &bs.p, bs, false, true)
-		switch {
-		case why != partServes:
-		case !asks:
-			why = partCaller
-		default:
-			// The composer serves the block and its prompt part did not form
-			// or fit: that is room or a bug to name, never main's kernels.
-			return true, fmt.Errorf("block %d: the composed prompt part: %s", li, g.LastErr)
-		}
-	}
-	return tier, nil
-}
-
 // rowsKind is the part a call of R rows asks of the composer for its
 // blocks: a prompt's chunk, or a call of rows that is not a ragged step, is
 // ComposedPrompt's; a ragged decode step's rows and a one-row step are
@@ -3075,7 +3054,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 			return fmt.Sprintf("the composed head does not fit beside the blocks placed (%s)", err)
 		}
 	}
-	if bs.pickHead != nil && bs.headCap == nil {
+	if bs.pickHead != nil {
 		if _, err := g.servedPickHead(bs, bs.hNorm); err != nil {
 			g.LastErr = "the composed pick head: " + err.Error()
 		}
@@ -3242,14 +3221,4 @@ func readsPlanes(g *graph.Graph) bool {
 	return slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
 		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0 || o.Kind == graph.OpRope && o.Attr.Shift > 0
 	})
-}
-
-// blockPlanes is the model's rotary planes a block's form reads ("rope.planes"):
-// the global table's, nil where the tier holds none.
-func (g *devTier) blockPlanes() backend.Buf {
-	if g.bs == nil {
-		return nil
-	}
-	_, pl, _ := g.tableBinds(g.bs, 0)
-	return pl
 }

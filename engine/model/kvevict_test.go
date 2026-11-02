@@ -117,7 +117,6 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config)) (*g
 	g, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) {
 			c.KVPage = 64 // the smallest page: several over a short history
-			c.StagedDecode = true
 			if cfg != nil {
 				cfg(c)
 			}

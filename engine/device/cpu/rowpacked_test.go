@@ -3,14 +3,15 @@
 package cpu_test
 
 import (
-	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"math/rand"
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/internal/oracle"
+
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -22,7 +23,7 @@ import (
 func TestPackedRowMatchesTheLayout(t *testing.T) {
 	ran := 0
 	for _, gt := range quant.PackedTypes {
-		q, ok := kernels.QuantOf(gt)
+		q, ok := layout.QuantOf(gt)
 		if !ok {
 			t.Fatalf("%s has no device layout", gt)
 		}
@@ -37,7 +38,7 @@ func TestPackedRowMatchesTheLayout(t *testing.T) {
 		if !quant.PlantScales(gt, src, 0) {
 			t.Fatalf("%s: no scale planter", gt)
 		}
-		qs32, d32, sc32, err := kernels.PackWeights(q, src, nrows, k)
+		qs32, d32, sc32, err := layout.PackWeights(q, src, nrows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,8 +51,8 @@ func TestPackedRowMatchesTheLayout(t *testing.T) {
 		qs, d, sc := b(qs32), b(d32), b(sc32)
 		konst := cpu.PackedRowConsts(q)
 		scratch := make([]byte, cpu.PackedRowScratch)
-		perSuper, _ := kernels.ScaleLayout(q)
-		sub, _, _, _ := kernels.Layout(q)
+		perSuper, _ := layout.ScaleLayout(q)
+		sub, _, _, _ := layout.Layout(q)
 		for r := 0; r < nrows; r++ {
 			want := make([]float32, k)
 			if err := oracle.RowPacked(want, q, qs, d, sc, r, nrows, k); err != nil {
@@ -61,7 +62,7 @@ func TestPackedRowMatchesTheLayout(t *testing.T) {
 			for i := k; i < len(got); i++ {
 				got[i] = -3
 			}
-			di, slot := kernels.DIndex(q, 0, nrows, r)
+			di, slot := layout.DIndex(q, 0, nrows, r)
 			pd := di*4 + slot*cpu.DRowBytes(gt)
 			args := cpu.Args{
 				Out: &got[0], W: &qs[r*4], RowStr: int64(nrows * 4),

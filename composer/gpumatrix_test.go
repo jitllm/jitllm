@@ -11,9 +11,9 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
@@ -51,7 +51,7 @@ func matrixDevices(t *testing.T) (map[string]backend.Device, func()) {
 
 // matrixWeights is rows of k of t, random, with finite scales near one; a
 // binary16 matrix's elements normal.
-func matrixWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
+func matrixWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []byte {
 	if t != quant.F16 {
 		return tiledWeights(t, q, rows, k, rng)
 	}
@@ -103,16 +103,16 @@ func TestComposedGPUMatrix(t *testing.T) {
 						td := dev
 						td.Tile = tile
 						jt, ok := jlm.TypeOf(typ)
-						q, qok := kernels.QuantOf(typ)
+						q, qok := layout.QuantOf(typ)
 						if typ == quant.F16 {
-							jt, q, ok, qok = jlm.TypeF16, kernels.Float16, true, true
+							jt, q, ok, qok = jlm.TypeF16, layout.Float16, true, true
 						}
 						if !ok || !qok {
 							t.Fatalf("%v has no container type or kernel format", typ)
 						}
 						what := fmt.Sprintf("%v/%d outputs of %d at %v", typ, n, k, tile)
 						w := matrixWeights(typ, q, n, k, rng)
-						qs, dw, sc, err := kernels.PackWeights(q, w, n, k)
+						qs, dw, sc, err := layout.PackWeights(q, w, n, k)
 						if err != nil {
 							t.Fatal(err)
 						}

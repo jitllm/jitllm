@@ -5,7 +5,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // EmitPackedRow generates the dequantization of one row of a packed tensor:
@@ -25,12 +25,12 @@ import (
 //	K        super-blocks
 //	Scr      PackedRowConsts(q)
 //	Scratch  64 bytes of the caller's
-func EmitPackedRow(q kernels.Quant) ([]byte, error) {
-	sub, bits, _, biasArray := kernels.Layout(q)
-	hi := kernels.HiPlane(q)
-	perSuper, _ := kernels.ScaleLayout(q)
-	signed := kernels.SignedPayload(q)
-	codes := kernels.Codes(q) != nil
+func EmitPackedRow(q layout.Quant) ([]byte, error) {
+	sub, bits, _, biasArray := layout.Layout(q)
+	hi := layout.HiPlane(q)
+	perSuper, _ := layout.ScaleLayout(q)
+	signed := layout.SignedPayload(q)
+	codes := layout.Codes(q) != nil
 	if sub%8 != 0 || (bits != 2 && bits != 4 && bits != 8) || perSuper < 1 || bits == 2 && (sub != 32 || hi != 0 || codes) {
 		return nil, fmt.Errorf("jit: EmitPackedRow: %v has no row kernel shape", q)
 	}
@@ -71,7 +71,7 @@ func EmitPackedRow(q kernels.Quant) ([]byte, error) {
 			// eight bytes would run off the end on a tensor's last row.
 			a.VPINSRBLoad(Y6, Y6, At(R9, 0), 0)
 			a.VPSLLD(Y6, Y6, 23)
-		} else if kernels.D32(q) {
+		} else if layout.D32(q) {
 			a.VMOVSSLoad(Y6, At(R9, 0)) // TQ2_F32: the word is the scale
 		} else {
 			a.VPINSRWLoad(Y6, Y6, At(R9, 0), 0)
@@ -82,7 +82,7 @@ func EmitPackedRow(q kernels.Quant) ([]byte, error) {
 			a.VPINSRWLoad(Y7, Y7, At(R9, 2), 0)
 			a.VCVTPH2PSReg(Y7, Y7) // dmin
 		}
-		if kernels.ScStream(q) {
+		if layout.ScStream(q) {
 			// Container v27's stream (scstream.go); the next word is RowStr on.
 			next := func(r Reg) { a.VMOVSSLoad(r, Idx(R10, R8, 1, 0)) }
 			a.VMOVSSLoad(Y1, At(R10, 0))

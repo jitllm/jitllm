@@ -11,10 +11,10 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -48,7 +48,7 @@ func newHeadWeights(t *testing.T, rng *rand.Rand) *headWeights {
 		return v
 	}
 	h.norm, h.normB, h.outB = vec(headEmbd, 1, 0.3), vec(headEmbd, 0, 0.5), vec(headVocab, 0, 1)
-	qs, d, sc, err := kernels.PackWeights(kernels.Float32, h.w, headVocab, headEmbd)
+	qs, d, sc, err := layout.PackWeights(layout.Float32, h.w, headVocab, headEmbd)
 	if err != nil {
 		t.Fatal(err)
 	}

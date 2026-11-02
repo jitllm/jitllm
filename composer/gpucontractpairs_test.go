@@ -9,9 +9,9 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -28,7 +28,7 @@ func TestComposedGPUContractPairs(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	w := map[jlm.Role][]byte{}
 	for _, r := range []jlm.Role{jlm.RoleFFNGate, jlm.RoleFFNUp} {
-		w[r] = tiledWeights(quant.F32, kernels.Float32, F, K, rng)
+		w[r] = tiledWeights(quant.F32, layout.Float32, F, K, rng)
 	}
 	x := make([]float32, K)
 	for i := range x {
@@ -115,7 +115,7 @@ func TestComposedGPUContractPairs(t *testing.T) {
 						out = bf
 					}
 				case o.Kind == composer.OperandWeight:
-					qs, dw, sc, err := kernels.PackWeights(kernels.Float32, w[o.Role], F, K)
+					qs, dw, sc, err := layout.PackWeights(layout.Float32, w[o.Role], F, K)
 					if err != nil {
 						t.Fatal(err)
 					}

@@ -5,7 +5,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // A linear block's recurrent state is a session's, like an attention history,
@@ -768,7 +768,7 @@ type runKey struct {
 // recDesc is the recurrent descriptor the running call stages: for a chunk or
 // a decode, the real row count and session sid's one slot pair
 // (kernels.RecDescWords); for a ragged step, the run descriptor
-// (kernels.RunDescWords) over the step's runs (groupRuns), each run's slots
+// (composer.RunDescWords) over the step's runs (groupRuns), each run's slots
 // being its sequence's seat row of its session's seat. In the shared form a
 // run's out slot is its place in recNext -- but for the composer's forms
 // (inPlace), which step the one state in place: each run's slot written is
@@ -804,7 +804,7 @@ func (g *devTier) recDesc(sid uint64, nrow int, inPlace bool) []byte {
 		// kernels and the composer's (a run a sequence) read the one staging.
 		in, out := slots(sid, 0, 0)
 		n := max(nrow, 1)
-		w := words(kernels.RunDescWords(n))
+		w := words(composer.RunDescWords(n))
 		w[0] = uint32(nrow)
 		for j := range n {
 			w[1+2*j], w[2+2*j] = in, out
@@ -819,7 +819,7 @@ func (g *devTier) recDesc(sid uint64, nrow int, inPlace bool) []byte {
 		return u32view(w)
 	}
 	n, S := len(rag.pos), len(rag.runs)
-	w := words(kernels.RunDescWords(n))
+	w := words(composer.RunDescWords(n))
 	w[0] = uint32(nrow)
 	at := 0
 	for j := 0; j < n; j++ {
@@ -840,29 +840,6 @@ func (g *devTier) recDesc(sid uint64, nrow int, inPlace bool) []byte {
 		}
 	}
 	return u32view(w)
-}
-
-// slotCopy is CopySlots for w-float slots over rows sequences, compiled on
-// first use -- outside any session, which ensureRecNext and alignRec are.
-// Callers hold g.mu.
-func (g *devTier) slotCopy(w, rows int) (backend.Kernel, error) {
-	key := [2]int{w, rows}
-	if k, ok := g.recCopies[key]; ok {
-		return k, nil
-	}
-	kk, err := kernels.CopySlots(w, rows)
-	if err != nil {
-		return nil, err
-	}
-	k, err := g.compile(kk)
-	if err != nil {
-		return nil, err
-	}
-	if g.recCopies == nil {
-		g.recCopies = map[[2]int]backend.Kernel{}
-	}
-	g.recCopies[key] = k
-	return k, nil
 }
 
 // linearIn reports whether any block in [lo, hi) is a linear one. Callers

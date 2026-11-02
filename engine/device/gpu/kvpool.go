@@ -7,7 +7,6 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // ErrKVCapacity is a device that cannot give a sequence another page of
@@ -70,14 +69,13 @@ type kvLayerPool struct {
 	// charged is what the layer holds against the budget: its buffers at n
 	// pages, its table arena and its read reserve.
 	charged uint64
-	// stage and stageTab are the reserve a read of the layer's pages goes
-	// through when the card refuses a buffer for it (readPages): one page of
-	// the wider half, and the gather's one-id table. They are made with the
-	// layer, while the card has room, and charged with it: a park or an
-	// eviction runs on a full card, which is exactly when an allocation for
-	// the read is refused (a 4 GiB card whose budget the server set past
-	// what the driver had free).
-	stage, stageTab backend.Buf
+	// stage is the reserve a read of the layer's pages goes through when the
+	// card refuses a buffer for it (readPages): one page of the wider half.
+	// It is made with the layer, while the card has room, and charged with
+	// it: a park or an eviction runs on a full card, which is exactly when an
+	// allocation for the read is refused (a 4 GiB card whose budget the
+	// server set past what the driver had free).
+	stage backend.Buf
 	// sh is the layer's pages the prefix cache names (kvshare.go).
 	sh sharedIDs
 	// floor is the fewest pages a shrink leaves: the dummy and a page for each
@@ -225,33 +223,17 @@ func (g *devTier) addKVLayer(kp *kvPool, li int, geom kvGeom, n int) error {
 	return nil
 }
 
-// kvStageBytes is a layer's read reserve: a page of its wider half and a
-// one-id table.
+// kvStageBytes is a layer's read reserve: a page of its wider half.
 func kvStageBytes(geom kvGeom, p int) uint64 {
-	return uint64(max(geom.kWords(p), geom.vWords(p))+1) * 4
+	return uint64(max(geom.kWords(p), geom.vWords(p))) * 4
 }
 
-// makeStage gives l its read reserve and compiles the one-page gathers it
-// runs, so a read through it compiles and allocates nothing. Callers hold
-// g.mu.
+// makeStage gives l its read reserve, so a read through it allocates
+// nothing. Callers hold g.mu.
 func (g *devTier) makeStage(l *kvLayerPool, p int) error {
-	kw, vw := l.geom.kWords(p), l.geom.vWords(p)
 	var err error
-	if l.stage, err = g.dev.Alloc(max(kw, vw) * 4); err != nil {
-		return err
-	}
-	if l.stageTab, err = g.dev.Alloc(8); err != nil {
-		return err
-	}
-	for _, w := range []int{kw, vw} {
-		if w == 0 {
-			continue
-		}
-		if _, err = g.gatherKernel(w); err != nil {
-			return err
-		}
-	}
-	return nil
+	l.stage, err = g.dev.Alloc(max(l.geom.kWords(p), l.geom.vWords(p)) * 4)
+	return err
 }
 
 // maxBuffer is the device's largest buffer, 0 when it has no such limit; a
@@ -815,50 +797,17 @@ func writePagesIn(b backend.Buf, host []byte, words int, order []uint32) error {
 	return nil
 }
 
-// gatherInto copies pages order[j] of src, words each, to page j of dst. The
-// kernel is a page's words', compiled where the pool layer is made
-// (makeStage) and reading the count from its table: no count compiles one.
+// gatherInto copies pages order[j] of src, words each, to page j of dst:
+// one device copy a page, run as one list.
 func (g *devTier) gatherInto(src, dst backend.Buf, order []uint32, words int) error {
-	n := len(order)
-	if n == 0 {
-		return nil
+	cs := g.gatherCopies[:0]
+	for j, id := range order {
+		cs = append(cs, backend.CopyRange{Dst: dst, DstOff: j * words * 4, Src: src, SrcOff: int(id) * words * 4, N: words * 4})
 	}
-	k, err := g.gatherKernel(words)
-	if err != nil {
-		return err
-	}
-	tab, err := g.dev.Alloc((n + 1) * 4)
-	if err != nil {
-		return err
-	}
-	defer tab.Free()
-	g.gatherTab = append(append(g.gatherTab[:0], uint32(n)), order...)
-	if err := tab.Write(u32view(g.gatherTab)); err != nil {
-		return err
-	}
-	return k.Launch((n*words+127)/128, 128, src, dst, tab)
-}
-
-// gatherKernel is the gather of pages of words each, compiled once and kept
-// with the restrides.
-func (g *devTier) gatherKernel(words int) (backend.Kernel, error) {
-	key := [4]int{-1, words, 0, 0}
-	if k := g.restrides[key]; k != nil {
-		return k, nil
-	}
-	ker, err := kernels.PagedGatherPages(words)
-	if err != nil {
-		return nil, err
-	}
-	k, err := g.compile(ker)
-	if err != nil {
-		return nil, err
-	}
-	if g.restrides == nil {
-		g.restrides = map[[4]int]backend.Kernel{}
-	}
-	g.restrides[key] = k
-	return k, nil
+	g.gatherCopies = cs
+	err := backend.CopyAll(g.dev, cs)
+	clear(cs)
+	return err
 }
 
 // freeKVLayer frees one layer's buffers and refunds its charge, and forgets
@@ -873,10 +822,7 @@ func (g *devTier) freeKVLayer(l *kvLayerPool) {
 func freeLayerBufs(l *kvLayerPool) {
 	freeKV2(l.k, l.v)
 	freeKV2(l.tab, l.stage)
-	if l.stageTab != nil {
-		l.stageTab.Free()
-	}
-	l.k, l.v, l.tab, l.stage, l.stageTab = nil, nil, nil, nil, nil
+	l.k, l.v, l.tab, l.stage = nil, nil, nil, nil
 	l.sh = sharedIDs{}
 }
 

@@ -317,9 +317,9 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 			// which is the image at sequential positions: the composer's is
 			// served at the positions the instance states, or the host's goes up.
 			s := gpux.Stats()
-			if served, _ := s.ServedPart(gpu.ComposedTable); s.RopeTables != 0 || s.RopeTableUploads == 0 && served == 0 {
-				t.Fatalf("the device built %d rotary rows and took %d from the host (%q): an M-RoPE table "+
-					"built from cache positions is the violation", s.RopeTables, s.RopeTableUploads, s.RopeTableWhy)
+			if served, _ := s.ServedPart(gpu.ComposedTable); s.RopeTableUploads == 0 && served == 0 {
+				t.Fatalf("the device composed no rotary table and took none from the host: an M-RoPE table "+
+					"built from cache positions is the violation")
 			}
 			composedAfterPicture(t, m, g, spec, n)
 			viol, err := run(false)

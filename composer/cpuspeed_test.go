@@ -13,11 +13,11 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/composer/x86"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -51,10 +51,10 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 	}
 	rng := rand.New(rand.NewSource(5))
 	for _, typ := range []quant.Type{quant.Q4_K, quant.Q8_0, quant.Q6_K, quant.Q4_0} {
-		q, _ := kernels.QuantOf(typ)
+		q, _ := layout.QuantOf(typ)
 		jt, _ := jlm.TypeOf(typ)
 		w := cpuTestWeights(typ, q, rows, k, rng)
-		qs, d, sc, err := kernels.PackWeights(q, w, rows, k)
+		qs, d, sc, err := layout.PackWeights(q, w, rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}

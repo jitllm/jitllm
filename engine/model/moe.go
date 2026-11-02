@@ -425,8 +425,6 @@ func (s *Instance) hostExpertsRows(li int, sel []uint32, w, in, out []float32, r
 		}
 		return nil
 	}
-	s.hostOnly = true
-	defer func() { s.hostOnly = false }()
 	if len(s.bsel) < rows*k {
 		s.bsel = make([]int32, rows*k)
 		s.bw = make([]float32, rows*k)
@@ -487,8 +485,6 @@ func (s *Instance) hostExperts(li int, sel []uint32, w, in, out []float32) error
 		}
 		s.hyOrd[j], s.hyW[j] = int32(e), w[i]
 	}
-	s.hostOnly = true
-	defer func() { s.hostOnly = false }()
 	// A bank not split into expert pages lives in the block's own page, which
 	// nothing else on the host has reason to keep in: read the selected
 	// sheets' ranges of it (a no-op for a bank in expert pages).

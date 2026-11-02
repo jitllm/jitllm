@@ -11,7 +11,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -350,7 +350,7 @@ func TestPackedRowSSEIsTheAVX2KernelBitForBit(t *testing.T) {
 	em := EmittersFor(TierSSE)
 	ran, compared := 0, 0
 	for _, gt := range quant.PackedTypes {
-		q, ok := kernels.QuantOf(gt)
+		q, ok := layout.QuantOf(gt)
 		if !ok {
 			t.Fatalf("%s has no device layout", gt)
 		}
@@ -362,8 +362,8 @@ func TestPackedRowSSEIsTheAVX2KernelBitForBit(t *testing.T) {
 		} else {
 			tw = f2AVX2Twin(t, tb)
 		}
-		sub, _, _, _ := kernels.Layout(q)
-		perSuper, _ := kernels.ScaleLayout(q)
+		sub, _, _, _ := layout.Layout(q)
+		perSuper, _ := layout.ScaleLayout(q)
 		superE := sub * perSuper
 		k := 3 * superE
 		if k < 96 {
@@ -378,7 +378,7 @@ func TestPackedRowSSEIsTheAVX2KernelBitForBit(t *testing.T) {
 		if !quant.PlantScales(gt, src, 0) {
 			t.Fatalf("%s: no scale planter", gt)
 		}
-		qs32, d32, sc32, err := kernels.PackWeights(q, src, nrows, k)
+		qs32, d32, sc32, err := layout.PackWeights(q, src, nrows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -395,7 +395,7 @@ func TestPackedRowSSEIsTheAVX2KernelBitForBit(t *testing.T) {
 				subnormal++
 			}
 		}
-		if subnormal == 0 && !kernels.D32(q) { // an f32 scale has no f16 to be subnormal
+		if subnormal == 0 && !layout.D32(q) { // an f32 scale has no f16 to be subnormal
 			t.Fatalf("%s: no subnormal f16 scale in the d plane -- the path this gate exists for was not exercised", gt)
 		}
 		konst := PackedRowConsts(q)
@@ -404,7 +404,7 @@ func TestPackedRowSSEIsTheAVX2KernelBitForBit(t *testing.T) {
 			if err := oracle.RowPacked(want, q, qs, d, sc, r, nrows, k); err != nil {
 				t.Fatal(err)
 			}
-			di, slot := kernels.DIndex(q, 0, nrows, r)
+			di, slot := layout.DIndex(q, 0, nrows, r)
 			pd := di*4 + slot*DRowBytes(gt)
 			run := func(c *Code) []float32 {
 				got := make([]float32, k+8)
@@ -603,7 +603,7 @@ func TestSSEFamily2TableServesItsEmitters(t *testing.T) {
 		check(fmt.Sprintf("rope/%v", neox), g, ge, w, we)
 	}
 	for _, gt := range quant.PackedTypes {
-		q, _ := kernels.QuantOf(gt)
+		q, _ := layout.QuantOf(gt)
 		g, ge := em.PackedRow(q)
 		w, we := EmitPackedRowSSE(q)
 		check("packed_row/"+gt.String(), g, ge, w, we)

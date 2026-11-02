@@ -87,10 +87,11 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					if why != "" {
 						t.Fatal(why)
 					}
-					// The scaled add is the tier's own, or the composer's block or
-					// prompt block, whose add carries the scale as its factor.
-					if composed, _ := cs.ServedPart(gpu.ComposedBlock | gpu.ComposedPrompt); cs.ResidScaled == 0 && composed == 0 {
-						t.Fatalf("no residual add took the scale (Stats.ResidScaled 0): the scaled path was not selected")
+					// The composer's block or prompt block carries the scale as its
+					// add's factor.
+					composed, _ := cs.ServedPart(gpu.ComposedBlock | gpu.ComposedPrompt)
+					if composed == 0 {
+						t.Fatalf("no block step composed: the scaled add was not selected")
 					}
 					worst := 0.0
 					for i := range host {
@@ -101,8 +102,8 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 						worst = max(worst, e)
 					}
 					t.Logf("GRANITE %s on %s: %d prompt tokens, %d decoded: worst logit NMSE %.3e against the "+
-						"host, band %.3e (order-only control %.3e), %d scaled residual adds, %d embedding gathers",
-						name, dev, len(prompt), gen, worst, band, ctl, cs.ResidScaled, cs.EmbedLaunches)
+						"host, band %.3e (order-only control %.3e), %d composed block steps, %d embedding gathers",
+						name, dev, len(prompt), gen, worst, band, ctl, composed, cs.EmbedLaunches)
 					if !(worst < band) {
 						t.Fatalf("a Granite on %s parts from the host: worst logit NMSE %.3e, band %.3e", dev, worst, band)
 					}
@@ -161,15 +162,14 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					// does not. The step's fused projections exist only for
 					// quantized weights, which is why this arm is here and not
 					// on the f32 fixtures.
-					step := func(opts ...gpu.Option) (stepResult, int) {
+					step := func(opts ...gpu.Option) stepResult {
 						g, err := gpu.OpenWith(slices.Concat([]gpu.Option{gpu.WithDevices(dev),
 							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t), opts)...)
 						if err != nil || g == nil {
 							t.Fatalf("no %s for the step: %v", dev, err)
 						}
 						defer g.Close()
-						r := stepGate(t, m, g, false)
-						return r, g.Stats().RagResFused
+						return stepGate(t, m, g, false)
 					}
 					// A mixture's step takes the every-architecture step gate's
 					// mixture bound (stepBound): 5e-2, or eight times its own
@@ -182,9 +182,9 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					if m.Cfg.MoE() {
 						stepBand = max(mixtureStepNMSE, denseStepBand*orderControl(t, m, dev))
 					}
-					r, _ := step()
+					r := step()
 					undo := cfgMut(m, func(c *Config) { c.ResidualScale = 1 })
-					rb, _ := step()
+					rb := step()
 					undo()
 					t.Logf("step across sessions on %s: worst logit NMSE %.3e against each alone, band %.3e; with "+
 						"its residual scale not stated %.3e", dev, r.worst, stepBand, rb.worst)
@@ -393,15 +393,15 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						bound float64
 					}{{"decode", decode, wantDec, 1e-6}, {"prefill", prefill, wantPre, 1e-5}} {
 						got, s := onDevice(arm.run)
-						// The scaled add is the tier's own, or the composer's block or
-						// prompt block, whose add carries the scale as its factor.
+						// The composer's block or prompt block carries the scale as
+						// its add's factor.
 						composed, _ := s.ServedPart(gpu.ComposedBlock | gpu.ComposedPrompt)
-						if s.ResidScaled == 0 && composed == 0 {
+						if composed == 0 {
 							t.Fatalf("%s: no residual add took the scale -- the scaled path was not selected", arm.name)
 						}
 						w := worstOf(arm.want, got)
 						t.Logf("%s, %d blocks and the head on %s: worst logit NMSE %.3e against the host "+
-							"(%d scaled residual adds, %d block steps composed)", arm.name, m.Cfg.NLayer, dev, w, s.ResidScaled, composed)
+							"(%d block steps composed)", arm.name, m.Cfg.NLayer, dev, w, composed)
 						if !(w < arm.bound) {
 							t.Fatalf("%s: worst logit NMSE %.3e against the host, bound %.0e", arm.name, w, arm.bound)
 						}

@@ -1,15 +1,15 @@
 package cpu
 
 import (
-	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"math/rand"
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/oracle"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The kernel is gated against the packed reference here, and the reference
@@ -19,17 +19,17 @@ import (
 var packedFormats = func() (fs []struct {
 	name string
 	g    quant.Type
-	k    kernels.Quant
+	k    layout.Quant
 }) {
 	for _, g := range quant.PackedTypes {
-		k, ok := kernels.QuantOf(g)
+		k, ok := layout.QuantOf(g)
 		if !ok {
 			panic(g.String() + " is in quant.PackedTypes and has no device layout")
 		}
 		fs = append(fs, struct {
 			name string
 			g    quant.Type
-			k    kernels.Quant
+			k    layout.Quant
 		}{g.String(), g, k})
 	}
 	return fs
@@ -71,7 +71,7 @@ func TestPackedKernelMatchesReference(t *testing.T) {
 			if !quant.PlantScales(f.g, src, 0) {
 				t.Fatalf("%s: no scale planter -- add it rather than testing noise", f.name)
 			}
-			qs, d, sc, err := kernels.PackWeights(f.k, src, nrows, k)
+			qs, d, sc, err := layout.PackWeights(f.k, src, nrows, k)
 			if err != nil {
 				t.Fatal(err)
 			}

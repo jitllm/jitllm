@@ -22,8 +22,6 @@ func recFaulted(string) bool { return false }
 
 func rowsFaulted(string) bool { return false }
 
-func moeFaulted(string) bool { return false }
-
 func roomFaulted(string) bool { return false }
 
 func (g *devTier) rewriteComposer(*composer.Registry) {}

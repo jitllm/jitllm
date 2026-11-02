@@ -99,7 +99,6 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 		{"expert cache", func(c *gpu.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1 }, true, false},
 		{"expert cache, four groups", func(c *gpu.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 4 }, true, true},
 		{"expert cache sized after placement", func(c *gpu.Config) { c.StreamGroups = 1 }, true, false},
-		{"expert cache, prefetch", func(c *gpu.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1; c.StreamPrefetch = true }, true, false},
 		{"direct, four groups", func(c *gpu.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 4; c.StreamCacheSlots = -1 }, true, true},
 	}
 	for _, arm := range arms {
@@ -142,13 +141,6 @@ func streamedMatches(t *testing.T, run func(func(*gpu.Config)) ([][]float32, gpu
 	}
 	if c.StreamCacheSlots < 0 && ss.StreamCacheSize != 0 {
 		t.Fatalf("an arm with the cache off has a %d-sheet cache", ss.StreamCacheSize)
-	}
-	if c.StreamPrefetch && (ss.StreamPrefetched == 0 || ss.ProbeExperts == 0) {
-		t.Fatalf("the prefetch arm read %d experts ahead and scored %d: it did not run",
-			ss.StreamPrefetched, ss.ProbeExperts)
-	}
-	if !c.StreamPrefetch && ss.StreamPrefetched != 0 {
-		t.Fatalf("an arm without the prefetch read %d experts ahead", ss.StreamPrefetched)
 	}
 	if overlap != (ss.StreamOverlaps > 0) {
 		t.Fatalf("%d reads issued behind a transfer, want overlap %v", ss.StreamOverlaps, overlap)
@@ -284,15 +276,12 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	// blocks as the forced arm, which streams them with no cache at all.
 	// The fixture's scratch leaves this budget no room for a cache, so the
 	// cache's sizing is TestStreamedExpertBankMatchesTheResidentOne's.
-	// By default the composed block streams an auto-streamed block's experts
-	// to pages on the card; only a placement's own "host" runs them on the
-	// host. The bit-equality arm sends the sheets, as the forced placement
-	// does.
-	if _, hs, _ := run(budget); hs.HybridRuns != 0 || hs.StreamFills == 0 {
-		t.Fatalf("the default auto-streamed run made %d hybrid block-steps and %d fills, want card fills alone",
-			hs.HybridRuns, hs.StreamFills)
+	// The composed block streams an auto-streamed block's experts to pages
+	// on the card.
+	got, ss, sp := run(budget)
+	if ss.StreamFills == 0 {
+		t.Fatalf("the auto-streamed run made no fills: its experts were not streamed to the card")
 	}
-	got, ss, sp := run(budget, gpu.WithConfig(func(c *gpu.Config) { c.NoHybrid = true }))
 	// The bar is the forced streamed placement on the same budget: the same
 	// blocks on the card, so bit equality holds (a resident arm places more
 	// blocks and differs in the device-host band).

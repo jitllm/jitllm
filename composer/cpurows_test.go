@@ -7,10 +7,10 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -93,16 +93,16 @@ func TestComposedCPURowsMatVec(t *testing.T) {
 	rng := rand.New(rand.NewSource(9))
 	right := 0
 	for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
-		q, ok := kernels.QuantOf(typ)
+		q, ok := layout.QuantOf(typ)
 		if typ == quant.F32 {
-			q, ok = kernels.Float32, true
+			q, ok = layout.Float32, true
 		}
 		jt, jok := jlm.TypeOf(typ)
 		if !ok || !jok {
 			continue
 		}
 		w := cpuTestWeights(typ, q, rows, k, rng)
-		qs, d, sc, err := kernels.PackWeights(q, w, rows, k)
+		qs, d, sc, err := layout.PackWeights(q, w, rows, k)
 		if err != nil {
 			t.Fatalf("%v: %v", typ, err)
 		}

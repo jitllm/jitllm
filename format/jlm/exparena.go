@@ -3,7 +3,7 @@ package jlm
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // The expert pages' frames, where the host reserves address space: one
@@ -28,7 +28,7 @@ func (f *File) expFrame(li int, size uint64) []byte {
 			f.expNone = true
 			return nil
 		}
-		b, mapped, err := kernels.ReserveOffHeap(int(n))
+		b, mapped, err := offheap.ReserveOffHeap(int(n))
 		if err != nil || !mapped {
 			f.expNone = true
 			return nil
@@ -62,7 +62,7 @@ func (f *File) inExp(b []byte) bool {
 // hold f.mu.
 func (f *File) dropExp(b []byte) {
 	f.retire(b)
-	kernels.DropOffHeap(b[:cap(b)])
+	offheap.DropOffHeap(b[:cap(b)])
 	f.expHeld -= uint64(cap(b))
 	offHeapBytes.Add(-int64(cap(b)))
 }
@@ -71,7 +71,7 @@ func (f *File) dropExp(b []byte) {
 // frame of it.
 func (f *File) unmapExp() {
 	if f.exp != nil {
-		kernels.UnmapOffHeap(f.exp)
+		offheap.UnmapOffHeap(f.exp)
 		offHeapBytes.Add(-int64(f.expHeld))
 		f.exp, f.expHeld = nil, 0
 	}

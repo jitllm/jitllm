@@ -149,7 +149,7 @@ type Decider struct {
 	batchIn   *Instance
 	batchPool *Pool
 	batchRows int
-	dev       nn.Device
+	dev       nn.LayerDevice
 	devMax    int
 	// jobs is DecideBatch's prompts, kept from batch to batch (batchJob).
 	jobs []*batchJob
@@ -319,7 +319,7 @@ func (d *Decider) Close() error {
 // readout's prompts then prefill there and its label logits come from the
 // device's head; an encoder readout's blocks are placed the same way
 // (Embedder.SetDevice).
-func (d *Decider) SetDevice(dev nn.Device, max int) error {
+func (d *Decider) SetDevice(dev nn.LayerDevice, max int) error {
 	if d.emb != nil {
 		if err := d.emb.SetDeviceLayers(dev, max); err != nil {
 			return err
@@ -1127,7 +1127,7 @@ func (d *Decider) dot(x, w []float32) (float32, error) {
 	j := d.jit()
 	// The Decider's own word: a local one escapes through the call.
 	b := unsafe.Slice((*byte)(unsafe.Pointer(&w[0])), 4*len(w))
-	if !j.MatVecHost(d.dotOut[:], quant.F32, b, x, 1, len(x)) {
+	if !j.MatVec(d.dotOut[:], quant.F32, b, x, 1, len(x)) {
 		return 0, fmt.Errorf("model: no generated f32 matvec of width %d on this host", len(x))
 	}
 	return d.dotOut[0], nil

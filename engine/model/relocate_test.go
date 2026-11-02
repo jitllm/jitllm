@@ -29,7 +29,7 @@ func relocationModel(t *testing.T) (*Model, []int32, uint64) {
 	}
 	t.Cleanup(func() { m.Close() })
 	ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 200), true)[:relocN]
-	probe, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff), onePage)
+	probe, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || probe == nil {
 		noDevice(t, "device", err)
 	}
@@ -46,12 +46,7 @@ func relocationModel(t *testing.T) (*Model, []int32, uint64) {
 	return m, ids, probe.Bytes()
 }
 
-// onePage makes a device reserve one page of history (gpu.Config.KVReserve)
-// rather than the context it is asked for, so a context past it has to GROW --
-// which is what these gates exist to exercise.
-var onePage = gpu.WithConfig(func(c *gpu.Config) { c.KVReserve = relocPage })
-
-// relocN positions run past relocPage, the tier's first capacity (onePage),
+// relocN positions run past relocPage, the history pool's first page,
 // and relocTail of them run after the second gate hands the device back.
 const relocN, relocPage, relocTail = 336, 256, 16
 
@@ -59,7 +54,7 @@ const relocN, relocPage, relocTail = 336, 256, 16
 // doubling (~1 MiB a block on this model) does not fit.
 func relocTier(t *testing.T, used uint64) *gpu.GPU {
 	t.Helper()
-	g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff), gpu.WithBudget(used+2<<20), onePage)
+	g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff), gpu.WithBudget(used+2<<20))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

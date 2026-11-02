@@ -107,12 +107,6 @@ type devSess struct {
 	// bidir is the full key runs the next causal Layers calls honour
 	// (keyruns.go). Guarded by mu.
 	bidir []nn.KeyRun
-	// winSegs is setWindows' [lo, hi) pairs, kept so a picture's windows
-	// allocate nothing past the first. Guarded by mu.
-	winSegs []int
-	// winBuf is the windows' upload, one [lo, hi) word pair a row, kept for
-	// the same reason: a warm call stages them again and allocates nothing.
-	winBuf []byte
 	// pleHost is the rows' per-layer embedding inputs for the next call
 	// (SetLayerInputs) and pleStage their padded staging.
 	pleHost, pleStage []float32
@@ -245,9 +239,8 @@ type devTier struct {
 	*devSess
 	*lane
 	*Stats
-	// subFn and mvcFn are layersSession and matVecSession bound to this view,
-	// built once (layersOnce, matVec).
-	subFn, mvcFn func(backend.Session)
+	// subFn is layersSession bound to this view, built once (layersOnce).
+	subFn func(backend.Session)
 }
 
 // newDevice builds the device's view over sh: lane0, the zero session, and
@@ -620,7 +613,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 			return fail()
 		}
 		for w, src := range s.bbs {
-			if src == nil || !v.prepBatch(w) || !v.reservePaged(v.bbs[w]) {
+			if src == nil || !v.prepBatch(w) {
 				return fail()
 			}
 			if src.ragLogits != nil && !v.reserveRowsHead(v.bbs[w], &src.p) {
@@ -672,7 +665,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 func (g *devTier) shareHead(dst, src *blockScratch) bool {
 	dst.head, dst.mvHead, dst.headGraph, dst.sampleGraph = src.head, src.mvHead, src.headGraph, src.sampleGraph
 	dst.headHidden, dst.sampleWalk, dst.pickGraph, dst.pickHead = src.headHidden, src.sampleWalk, src.pickGraph, src.pickHead
-	dst.hNorm, dst.hNormB, dst.hBias, dst.headCap = src.hNorm, src.hNormB, src.hBias, src.headCap
+	dst.hNorm, dst.hNormB, dst.hBias = src.hNorm, src.hNormB, src.hBias
 	dst.embedGraph = src.embedGraph
 	dst.collapse = src.collapse
 	dst.embSW, dst.embSV = src.embSW, src.embSV
@@ -683,12 +676,6 @@ func (g *devTier) shareHead(dst, src *blockScratch) bool {
 	if dst.logits, err = g.dev.Alloc(n * 4); err != nil {
 		g.LastErr = "a lane's logits: " + err.Error()
 		return false
-	}
-	if src.logitsCap != nil {
-		if dst.logitsCap, err = g.dev.Alloc(n * 4); err != nil {
-			g.LastErr = "a lane's capped logits: " + err.Error()
-			return false
-		}
 	}
 	dst.hRaw = make([]byte, n*4)
 	dst.hOut = unsafe.Slice((*float32)(unsafe.Pointer(&dst.hRaw[0])), n)
@@ -703,7 +690,7 @@ func unshareHead(dst *blockScratch) {
 	}
 	dst.head, dst.mvHead, dst.headGraph, dst.headHidden, dst.sampleGraph, dst.sampleWalk = nil, mv{}, nil, nil, nil, nil
 	dst.pickGraph, dst.pickHead = nil, nil
-	dst.hNorm, dst.hNormB, dst.hBias, dst.headCap = nil, nil, nil, nil
+	dst.hNorm, dst.hNormB, dst.hBias = nil, nil, nil
 	dst.headShared = false
 }
 

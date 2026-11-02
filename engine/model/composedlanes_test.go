@@ -58,7 +58,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 				t.Run(dev+"/reference", func(t *testing.T) {
 					r := &devRun{}
 					var st gpu.Stats
-					r.want, st, _, _ = composedDecode(t, m, dev, ids, toks, 0, true, false)
+					r.want, st, _ = composedDecode(t, m, dev, ids, toks, 0, true, false)
 					r.ref = unsplitRef(t, m, dev, ids, toks, parts, true)
 					r.lanes = st.Lanes
 					for i := 1; i < len(r.ref); i++ {
@@ -92,7 +92,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 					}
 					for _, a := range arms {
 						t.Run(a.name, func(t *testing.T) {
-							got, st, headOn, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, a.opts...)
+							got, st, headOn := composedDecode(t, m, dev, ids, toks, parts, true, false, a.opts...)
 							if st.ComposedLanes != a.lanes {
 								t.Fatalf("the composer formed for %d lanes, not %d: the arm did not select its subgroup", st.ComposedLanes, a.lanes)
 							}
@@ -139,7 +139,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 								t.Errorf("at %d lanes the composed parts are %.3g at the median of the tier's distance from the float reference and %.3g at their worst, where the tier's backends reach %.3g (bounds %.1f and %.1fx)",
 									a.lanes, med, worst, widest, bandRatio, bandWorst)
 							}
-							cut, cst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, append(a.opts, gpu.WithSplitFault(true))...)
+							cut, cst, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, append(a.opts, gpu.WithSplitFault(true))...)
 							if nb, d := cst.ServedPart(gpu.ComposedBlock); nb == 0 || d != 0 {
 								t.Fatalf("with every split's last segment dropped the composer served %d block steps and declined %d", nb, d)
 							}
@@ -156,7 +156,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 							} else {
 								t.Logf("with every split's last segment dropped: median ratio %.3g, worst %.3g against the band's %.3g", cmed, cworst, bandWorst*widest)
 							}
-							poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false,
+							poisoned, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false,
 								append(a.opts, gpu.WithPoisonScratch(true), gpu.WithPoisonKV(true))...)
 							for i := range got {
 								if !slices.Equal(poisoned[i], got[i]) {

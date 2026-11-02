@@ -94,21 +94,21 @@ func TestComposedExpertPagesServe(t *testing.T) {
 							t.Fatal(err)
 						}
 						defer m.Close()
-						got, st, _, _ := composedDecode(t, m, dev, ids, toks, gpu.ComposedBlock, false, false, opts...)
+						got, st, _ := composedDecode(t, m, dev, ids, toks, gpu.ComposedBlock, false, false, opts...)
 						_, in, _ := m.PageStats()
 						return got, st, in
 					}
 					stream := func(slots int) gpu.Option {
 						return gpu.WithConfig(func(c *gpu.Config) {
-							c.StreamExperts, c.StreamCacheSlots, c.HybridExperts, c.NoHybrid = true, slots, false, true
+							c.StreamExperts, c.StreamCacheSlots = true, slots
 						})
 					}
 					// A card that does not hold every bank whole streams the
 					// rest by default: the reference is then those blocks' banks
 					// in pages, served like the whole ones.
 					want, whole, _ := decode(t, false)
-					if n, d := whole.ServedPart(gpu.ComposedBlock); n == 0 || d != 0 || whole.HybridRuns != 0 {
-						t.Fatalf("the default placement served %d block steps, declined %d and ran %d on the host (%s)", n, d, whole.HybridRuns, declinesOf(whole))
+					if n, d := whole.ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
+						t.Fatalf("the default placement served %d block steps and declined %d (%s)", n, d, declinesOf(whole))
 					}
 					if whole.StreamBlocks > 0 {
 						t.Logf("the card holds %d blocks streamed by default, %d fills", whole.StreamBlocks, whole.StreamFills)
@@ -584,14 +584,14 @@ func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts gpu.Parts
 		probe := func(stream bool) gpu.Stats {
 			g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 				gpu.WithConfig(func(c *gpu.Config) {
-					c.NoGraph, c.Census, c.PromptRows = noGraph, true, 64
+					c.NoGraph, c.PromptRows = noGraph, 64
 					// Streamed at its floor: no cache, each block's plain bank
 					// of the selection's sheets. With no budget the caches
 					// sizeAutoCaches gives would take the card's whole room,
 					// every expert on Qwen3-MOE-4x0.6B; under the arm's budget
 					// they take what the budget leaves.
 					if stream {
-						c.StreamExperts, c.HybridExperts, c.NoHybrid, c.StreamCacheSlots = true, false, true, -1
+						c.StreamExperts, c.StreamCacheSlots = true, -1
 					}
 				})},
 				testTierOpts(t)...)...)
@@ -633,15 +633,14 @@ func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts gpu.Parts
 	case streamCache:
 		e, k := int(m.Cfg.NExpert), int(m.Cfg.NExpertUsed)
 		return []gpu.Option{gpu.WithConfig(func(c *gpu.Config) {
-			c.StreamExperts, c.StreamCacheSlots, c.HybridExperts, c.NoHybrid = true, min(e, max(2*k, e/2)), false, true
+			c.StreamExperts, c.StreamCacheSlots = true, min(e, max(2*k, e/2))
 		})}
 	}
 	return nil
 }
 
-// streamSelected fails t unless a run of arm a streamed its mixture blocks,
-// ran none of their experts on the host, and with a cache filled a call of
-// several rows at once.
+// streamSelected fails t unless a run of arm a streamed its mixture blocks
+// and with a cache filled a call of several rows at once.
 func streamSelected(t *testing.T, st gpu.Stats, a streamArm) {
 	t.Helper()
 	switch {
@@ -650,8 +649,6 @@ func streamSelected(t *testing.T, st gpu.Stats, a streamArm) {
 			"(%d bytes used: scratch %d, composed %d, KV pool %d; %d declined (%s), %d page-ins, %d page-outs)",
 			st.StreamBlocks, st.StreamFills, st.BudgetUsed, st.ScratchBytes, st.ComposedBytes, st.KVPoolBytes,
 			st.Declined, st.DeclineWhy, st.PageIns, st.PageOuts)
-	case st.HybridRuns != 0:
-		t.Fatalf("%d block steps ran their experts on the host", st.HybridRuns)
 	case a == streamCache && st.StreamRowFills == 0:
 		t.Fatalf("no call of several rows filled its pages (%d fills)", st.StreamFills)
 	}

@@ -13,10 +13,10 @@ import (
 
 	"github.com/jitllm/jitllm/composer/x86"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -42,16 +42,16 @@ func TestComposedCPUMatVec(t *testing.T) {
 			k = 2048
 		}
 		for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
-			q, ok := kernels.QuantOf(typ)
+			q, ok := layout.QuantOf(typ)
 			if typ == quant.F32 {
-				q, ok = kernels.Float32, true
+				q, ok = layout.Float32, true
 			}
 			jt, jok := jlm.TypeOf(typ)
 			if !ok || !jok {
 				continue
 			}
 			w := cpuTestWeights(typ, q, rows, k, rng)
-			qs, d, sc, err := kernels.PackWeights(q, w, rows, k)
+			qs, d, sc, err := layout.PackWeights(q, w, rows, k)
 			if err != nil {
 				t.Fatalf("%v: %v", typ, err)
 			}
@@ -471,7 +471,7 @@ func cpuNMSE(got, want []float32) float64 {
 }
 
 // cpuTestWeights is random rows of t with finite scales near one.
-func cpuTestWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
+func cpuTestWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []byte {
 	if t == quant.F32 {
 		b := make([]byte, 4*rows*k)
 		for i := 0; i < rows*k; i++ {
@@ -479,18 +479,18 @@ func cpuTestWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) 
 		}
 		return b
 	}
-	f16At := map[kernels.Quant][]int{
-		kernels.Q4_0: {0}, kernels.Q8_0: {0}, kernels.Q5_0: {0}, kernels.Q5_1: {0, 2},
-		kernels.Q4_K: {0, 2}, kernels.Q5_K: {0, 2}, kernels.Q3_K: {108}, kernels.Q6_K: {208}, kernels.TQ2: {64},
+	f16At := map[layout.Quant][]int{
+		layout.Q4_0: {0}, layout.Q8_0: {0}, layout.Q5_0: {0}, layout.Q5_1: {0, 2},
+		layout.Q4_K: {0, 2}, layout.Q5_K: {0, 2}, layout.Q3_K: {108}, layout.Q6_K: {208}, layout.TQ2: {64},
 	}
 	nblk, bb := k/q.Elems(), q.BlockBytes()
 	raw := make([]byte, rows*nblk*bb)
 	rng.Read(raw)
 	for i := 0; i < rows*nblk; i++ {
 		switch {
-		case q == kernels.MXFP4:
+		case q == layout.MXFP4:
 			raw[i*bb] = byte(120 + rng.Intn(10))
-		case q == kernels.TQ2F:
+		case q == layout.TQ2F:
 			bin.LittleEndian.PutUint32(raw[i*bb+64:], math.Float32bits(0.5+rng.Float32()))
 		default:
 			for _, off := range f16At[q] {
@@ -512,16 +512,16 @@ func TestComposedCPUHonoursTheDevicesISA(t *testing.T) {
 	r := Default().WithoutInt8(DeviceCPU)
 	right := 0
 	for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
-		q, ok := kernels.QuantOf(typ)
+		q, ok := layout.QuantOf(typ)
 		if typ == quant.F32 {
-			q, ok = kernels.Float32, true
+			q, ok = layout.Float32, true
 		}
 		jt, jok := jlm.TypeOf(typ)
 		if !ok || !jok {
 			continue
 		}
 		w := cpuTestWeights(typ, q, rows, k, rng)
-		qs, d, sc, err := kernels.PackWeights(q, w, rows, k)
+		qs, d, sc, err := layout.PackWeights(q, w, rows, k)
 		if err != nil {
 			t.Fatalf("%v: %v", typ, err)
 		}

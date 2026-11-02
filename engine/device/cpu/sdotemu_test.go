@@ -10,7 +10,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -85,7 +85,7 @@ func dotFamilies(t *testing.T) map[string][]byte {
 		add("fused/"+w.String(), code, err)
 		code, err = EmitA64PackedMatVecFusedWin(w, 16, 0, 256)
 		add("fusedwin/"+w.String(), code, err)
-		q, _ := kernels.QuantOf(w)
+		q, _ := layout.QuantOf(w)
 		k := PackedOuterElems(w) * 2
 		group := packedFusedGroupK(q)
 		for tok := 1; tok <= MaxTiledTokensA64(w); tok++ {
@@ -238,7 +238,7 @@ type packedRun struct{ out, ref []float32 }
 // runPackedGuarded runs a container decode kernel over nrows rows of k with a
 // NaN-poisoned output and a guard after it, and returns the output and the
 // oracle's. The output accumulates (out[r] +=), so it starts at zero.
-func runPackedGuarded(t *testing.T, code []byte, g quant.Type, kq kernels.Quant, rows, nrows, k int) packedRun {
+func runPackedGuarded(t *testing.T, code []byte, g quant.Type, kq layout.Quant, rows, nrows, k int) packedRun {
 	t.Helper()
 	kern := mustMap(t, code)
 	defer kern.Close()
@@ -251,7 +251,7 @@ func runPackedGuarded(t *testing.T, code []byte, g quant.Type, kq kernels.Quant,
 	if !quant.PlantScales(g, src, 0) {
 		t.Fatalf("%s: no scale planter", g)
 	}
-	qs, d, sc, err := kernels.PackWeights(kq, src, nrows, k)
+	qs, d, sc, err := layout.PackWeights(kq, src, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,9 +380,9 @@ func TestNoDotProdChainsTheDecodeDots(t *testing.T) {
 		{"fusedwin", func(w quant.Type) ([]byte, error) { return EmitA64PackedMatVecFusedWin(w, 16, 0, 256) }},
 	}
 	for _, w := range quant.PackedTypes {
-		q, _ := kernels.QuantOf(w)
-		sub, bits, _, _ := kernels.Layout(q)
-		hi := kernels.HiPlane(q)
+		q, _ := layout.QuantOf(w)
+		sub, bits, _, _ := layout.Layout(q)
+		hi := layout.HiPlane(q)
 		bound := 4.0
 		switch {
 		case bits == 4 && (hi == 0 || sub*hi/32 == 1):

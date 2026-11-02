@@ -118,9 +118,6 @@ func swaTier(t *testing.T) *gpu.GPU {
 func testTierOpts(t *testing.T) []gpu.Option {
 	t.Helper()
 	var o []gpu.Option
-	if scalarLinearRows() {
-		o = append(o, gpu.WithConfig(func(c *gpu.Config) { c.ScalarLinearRows = true }))
-	}
 	v := os.Getenv("JITLLM_VK_MAXGROUPS")
 	if v == "" {
 		return o
@@ -131,12 +128,6 @@ func testTierOpts(t *testing.T) []gpu.Option {
 	}
 	return append(o, gpu.WithVulkanMaxGroups(uint32(n)))
 }
-
-// scalarLinearRows reports JITLLM_SCALAR_LINEAR_ROWS, which puts a hybrid's
-// ragged linear steps on the scan's one-thread form on a device that has the
-// subgroup (gpu.Config.ScalarLinearRows): how that form, which a device
-// without one runs, is gated on real hardware.
-func scalarLinearRows() bool { return os.Getenv("JITLLM_SCALAR_LINEAR_ROWS") != "" }
 
 // TestSlidingWindowRunsOnTheDevice holds a device to the host past a sliding
 // window, in both the per-token and the batched paths. The no-window control is

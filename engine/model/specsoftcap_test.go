@@ -183,7 +183,7 @@ func openSpecCapped(t *testing.T, path string) (*Model, float64) {
 // worst logit NMSE of a verified row against decode at its position. noCap
 // skips the cap in the host's verify head (rowsOut.noCap). On a device the
 // steps must run as ragged rows (Instance.rowsVerifiable), the per-row head.
-func specVerifyCapped(t *testing.T, m *Model, dev nn.Device, prompt, toks []int32, noCap bool) float64 {
+func specVerifyCapped(t *testing.T, m *Model, dev nn.LayerDevice, prompt, toks []int32, noCap bool) float64 {
 	t.Helper()
 	const k = 4
 	toks = toks[:len(toks)/k*k]

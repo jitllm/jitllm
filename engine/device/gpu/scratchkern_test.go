@@ -49,23 +49,3 @@ func TestFreeScratchClosesEveryKernel(t *testing.T) {
 			"every KV grow", closed, want)
 	}
 }
-
-// TestFreeScratchLeavesCachedKernelsOpen: scratch kernels are owned by the
-// scratch, but matvec kernels come from g.kerns, a device-wide cache keyed by
-// shape and shared by every scratch. They reach the scratch inside mv, which
-// freeScratch's type filter skips; recursing into struct fields would close a
-// kernel the cache still hands out.
-func TestFreeScratchLeavesCachedKernelsOpen(t *testing.T) {
-	closed := 0
-	shared := &countKern{closed: &closed}
-	bs := &blockScratch{mvHead: mv{kern: shared, red: shared}}
-
-	freeScratch(bs)
-
-	if closed != 0 {
-		t.Errorf("freeScratch closed a kernel reached through mv %d time(s). Those come "+
-			"from g.kerns, which is keyed by SHAPE and shared across every scratch on "+
-			"the device -- closing one here leaves the cache handing a closed kernel to "+
-			"the next block of that shape", closed)
-	}
-}

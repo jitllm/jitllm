@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -88,7 +88,7 @@ type Emitters struct {
 	// RoPESplit is XD-RoPE's rotation (HunyuanVL): NEOX pairs whose halves
 	// turn by tables of their own (EmitRoPESplit).
 	RoPESplit func(hd, nrot int) ([]byte, error)
-	PackedRow func(q kernels.Quant) ([]byte, error)
+	PackedRow func(q layout.Quant) ([]byte, error)
 	Widen     func(bf16 bool) ([]byte, error)
 	// NarrowF16 is Widen's inverse for binary16, the f16 KV cache's store:
 	// Args.K whole units of ElemLanes and Args.Rows singles of float32 (W)

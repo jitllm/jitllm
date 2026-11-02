@@ -11,7 +11,6 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	hw "github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
@@ -19,6 +18,7 @@ import (
 	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // The CPU is a device like a card: a block placed on it runs what the
@@ -906,7 +906,7 @@ func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32,
 	return composer.DeclineServes, nil
 }
 
-// cpuRecDesc is the run descriptor (kernels.RunDescWords' layout) of a
+// cpuRecDesc is the run descriptor (composer.RunDescWords' layout) of a
 // call's rows of sequences seq: a run a sequence, its rows in the call's
 // order, its slot read and written the sequence's; the entries past the
 // runs repeat the last.
@@ -1297,7 +1297,7 @@ func (s *Instance) cpuOwn(f *cpuBlockForm) [][]uint32 {
 // ownWords is n words of an own buffer, zeroed.
 func (s *Instance) ownWords(n int) []uint32 {
 	if n >= cpuOwnOffHeap {
-		if m, mapped, err := kernels.MapOffHeap(4 * n); err == nil && mapped {
+		if m, mapped, err := offheap.MapOffHeap(4 * n); err == nil && mapped {
 			s.cpu.mapped = append(s.cpu.mapped, m)
 			return unsafe.Slice((*uint32)(unsafe.Pointer(&m[0])), n)
 		}
@@ -1308,7 +1308,7 @@ func (s *Instance) ownWords(n int) []uint32 {
 // unmapOwn returns the own buffers held off the heap.
 func (s *Instance) unmapOwn() {
 	for _, m := range s.cpu.mapped {
-		kernels.UnmapOffHeap(m)
+		offheap.UnmapOffHeap(m)
 	}
 	s.cpu.mapped, s.cpu.own = nil, nil
 }

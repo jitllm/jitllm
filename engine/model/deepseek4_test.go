@@ -234,9 +234,8 @@ func TestDeepseek4MixedPromptOnEveryDevice(t *testing.T) {
 				}
 				s0 := gpux.Stats()
 				lg, err := st.PrefillMixed(spans...)
-				if err == nil && gpux.Stats().DS4Blocks-s0.DS4Blocks != nl {
-					t.Fatalf("the prompt did not run as one submission of every block (%d attention halves)",
-						gpux.Stats().DS4Blocks-s0.DS4Blocks)
+				if n := servedSince(s0, gpux.Stats(), gpu.ComposedPrompt); err == nil && n != nl {
+					t.Fatalf("the prompt did not run as one composed step of every block (%d block steps)", n)
 				}
 				return slices.Clone(lg), err
 			}
@@ -306,16 +305,13 @@ func TestDeepseek4DeviceRunsTheChunkWhole(t *testing.T) {
 				t.Fatal(err)
 			}
 			s2 := gpux.Stats()
-			t.Logf("prefill of %d: %d attention halves, %d mixes, %d selections, %d grouped mixtures; a "+
-				"decode token: %d attention halves, %d mixes", len(g.IDs), s1.DS4Blocks-s0.DS4Blocks,
-				s1.DS4HC-s0.DS4HC, s1.IdxSelects-s0.IdxSelects, s1.GroupedMoE-s0.GroupedMoE,
-				s2.DS4Blocks-s1.DS4Blocks, s2.DS4HC-s1.DS4HC)
-			if d := s1.DS4Blocks - s0.DS4Blocks; d != nl || s1.DS4HC-s0.DS4HC != 2*nl ||
-				s1.IdxSelects-s0.IdxSelects != csa || s1.GroupedMoE == s0.GroupedMoE {
-				t.Fatalf("the prompt did not run as one batched submission of every block")
+			pre, dec := servedSince(s0, s1, gpu.ComposedPrompt), servedSince(s1, s2, gpu.ComposedBlock)
+			t.Logf("prefill of %d: %d composed block steps; a decode token: %d", len(g.IDs), pre, dec)
+			if pre != nl {
+				t.Fatalf("the prompt did not run as one composed step of every block (%d of %d)", pre, nl)
 			}
-			if s2.DS4Blocks-s1.DS4Blocks != nl || s2.DS4HC-s1.DS4HC != 2*nl {
-				t.Fatalf("a decode token did not run every block on the device")
+			if dec != nl {
+				t.Fatalf("a decode token did not run every block on the device (%d of %d)", dec, nl)
 			}
 		})
 	}
@@ -368,8 +364,8 @@ func TestDeepseek4LongChunksOnEveryDevice(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if d := gpux.Stats().DS4Blocks - s0.DS4Blocks; dev && d != nl*chunks {
-						t.Fatalf("%d rows: %d attention halves on the device, want %d chunk(s) of every block (the "+
+					if d := servedSince(s0, gpux.Stats(), gpu.ComposedPrompt); dev && d != nl*chunks {
+						t.Fatalf("%d rows: %d composed block steps on the device, want %d chunk(s) of every block (the "+
 							"device: %q)", n, d, chunks, gpux.Err())
 					}
 					return slices.Clone(lg)

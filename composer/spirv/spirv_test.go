@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/composer/spirv"
 )
 
@@ -15,10 +15,7 @@ import (
 // operand order. A shuffle carries an execution scope and a mask, both <id>s,
 // so swapping them assembles and shuffles by the wrong distance.
 func TestShuffleEncoding(t *testing.T) {
-	k, err := kernels.SoftmaxRows(8, 64, 32, 1, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	k := shuffleKernel(t)
 	b, err := spirv.Emit(k)
 	if err != nil {
 		t.Fatal(err)
@@ -83,11 +80,7 @@ func TestShuffleEncoding(t *testing.T) {
 
 	// And the fallback kernel must not ask the device for a capability it does
 	// not use: that is the whole point of having a fallback.
-	sc, err := kernels.SoftmaxRows(8, 64, 1, 1, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err = spirv.Emit(sc)
+	b, err = spirv.Emit(anchorKernel(t, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +97,7 @@ func TestShuffleEncoding(t *testing.T) {
 // with a runtime count reads a descriptor at its entry, ahead of every loop,
 // and keeps it alive through that loop's count; one whose first access is not
 // inside such a loop is emitted without it. See anchorFor: without it llvmpipe
-// faults on kernels.MatVecSegments, which spirv-val and the validation layer
+// faulted on a segmented matvec's first loop, which spirv-val and the validation layer
 // both pass.
 func TestDescriptorAnchor(t *testing.T) {
 	const (
@@ -115,23 +108,11 @@ func TestDescriptorAnchor(t *testing.T) {
 		opULessThan   = 176
 		opLoopMerge   = 246
 	)
-	sh := kernels.MatVecShape{T: kernels.Q4_K, K: 512, Rows: 64}
-	seg, err := kernels.MatVecSegments([]kernels.MatVecShape{sh, sh}, 1, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain, err := kernels.MatVec(sh)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, c := range []struct {
 		name   string
 		anchor bool
-	}{{"segments", true}, {"plain", false}} {
-		k := seg
-		if !c.anchor {
-			k = plain
-		}
+	}{{"loop first", true}, {"load first", false}} {
+		k := anchorKernel(t, c.anchor)
 		b, err := spirv.Emit(k)
 		if err != nil {
 			t.Fatal(err)
@@ -189,4 +170,50 @@ func words(t *testing.T, b []byte) []uint32 {
 		t.Fatalf("magic is %#x, not SPIR-V", w[0])
 	}
 	return w
+}
+
+// shuffleKernel is a softmax row's two butterflies over a subgroup: the
+// maximum, then the sum, each by xor shuffles of masks 1 to 16.
+func shuffleKernel(t *testing.T) *ir.Kernel {
+	b := ir.New("shuffle", [3]int{32, 1, 1})
+	in, out := b.Param("in", ir.F32), b.Param("out", ir.F32)
+	v := b.Load(ir.F32, in, b.TID(), 0)
+	m := v
+	for _, s := range []int64{1, 2, 4, 8, 16} {
+		m = b.Max(ir.F32, m, b.ShuffleXor(ir.F32, m, s))
+	}
+	e := b.Exp(b.Sub(ir.F32, v, m))
+	sum := e
+	for _, s := range []int64{1, 2, 4, 8, 16} {
+		sum = b.Add(ir.F32, sum, b.ShuffleXor(ir.F32, sum, s))
+	}
+	b.Store(out, b.TID(), b.Div(ir.F32, e, sum), 0)
+	k, err := b.Done()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// anchorKernel is a kernel whose first buffer access is inside a loop of a
+// runtime count (loop), or one that loads before any loop.
+func anchorKernel(t *testing.T, loop bool) *ir.Kernel {
+	b := ir.New("anchor", [3]int{32, 1, 1})
+	in, n, out := b.Param("in", ir.F32), b.Param("n", ir.U32), b.Param("out", ir.F32)
+	var first ir.Value
+	if !loop {
+		first = b.Load(ir.F32, in, b.TID(), 0)
+	}
+	b.LoopN(b.Load(ir.U32, n, b.Const(ir.U32, 0), 0))
+	v := b.Load(ir.F32, in, b.TID(), 0)
+	if !loop {
+		v = b.Add(ir.F32, v, first)
+	}
+	b.Store(out, b.TID(), v, 0)
+	b.EndLoop()
+	k, err := b.Done()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }

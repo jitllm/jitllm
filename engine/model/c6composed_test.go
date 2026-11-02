@@ -91,7 +91,7 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 		if covered != m.Cfg.NLayer {
 			t.Fatalf("the front end states %d of %d blocks: %s %v", covered, m.Cfg.NLayer, m.Uncovered(0), m.UncoveredErr(0))
 		}
-		got, st, _, _ := composedDecode(t, m, dev, prompt, toks, gpu.ComposedBlock|gpu.ComposedHead, true, false)
+		got, st, _ := composedDecode(t, m, dev, prompt, toks, gpu.ComposedBlock|gpu.ComposedHead, true, false)
 		served, declined := st.ServedPart(gpu.ComposedBlock)
 		if want := len(toks) * covered; served != want || declined != 0 {
 			t.Fatalf("%d block steps served and %d declined, where %d steps of %d covered blocks are %d served",
@@ -158,7 +158,7 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 func wholeStepC6(t *testing.T, m *Model, dev string, prompt, toks []int32, want [][]float32, bound float64) {
 	t.Helper()
 	decode := func(after func(*Instance)) (worst float64, flips int) {
-		got, st, _, _ := composedDecodeWith(t, m, dev, prompt, toks, gpu.ComposedStep, true, false, after)
+		got, st, _ := composedDecodeWith(t, m, dev, prompt, toks, gpu.ComposedStep, true, false, after)
 		ne, de := st.ServedPart(gpu.ComposedEmbed)
 		np, dp := st.ServedPart(gpu.PromptEmbed)
 		if ne != len(toks) || de != 0 || np == 0 || dp != 0 {

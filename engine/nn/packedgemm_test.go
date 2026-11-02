@@ -7,8 +7,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -196,7 +196,7 @@ func TestPackedGEMMMatchesTheRowLoopExactly(t *testing.T) {
 // are, so only the payload is extreme.
 func packMax(t *testing.T, gt quant.Type, nrows, k int) *Packed {
 	t.Helper()
-	q, _ := kernels.QuantOf(gt)
+	q, _ := layout.QuantOf(gt)
 	nb := uint64(nrows*k) / gt.BlockElems()
 	src := make([]byte, nb*gt.BlockBytes())
 	fill := byte(0xFF)
@@ -209,7 +209,7 @@ func packMax(t *testing.T, gt quant.Type, nrows, k int) *Packed {
 	if !quant.PlantScales(gt, src, 0) {
 		t.Fatalf("%s: no scale planter", gt)
 	}
-	qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+	qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}

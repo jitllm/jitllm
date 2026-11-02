@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // The device's own buffers -- the block scratches, the batched prompt's and
@@ -43,8 +43,8 @@ func (g *devTier) footprint(n int) uint64 {
 
 // planesFootprint is what a packed q tensor of rows x k costs the budget in
 // its three buffers, rounding included.
-func (g *devTier) planesFootprint(q kernels.Quant, rows, k int) (uint64, error) {
-	qs, d, sc, err := kernels.PackedWords(q, rows, k)
+func (g *devTier) planesFootprint(q layout.Quant, rows, k int) (uint64, error) {
+	qs, d, sc, err := layout.PackedWords(q, rows, k)
 	if err != nil {
 		return 0, err
 	}
@@ -322,7 +322,7 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 			rowsHead = true
 		}
 	} else if sw := g.stepRows(); sw > 0 && g.stepW != sw {
-		if g.prepBatch(sw) && g.reserveRowsHead(g.bbs[sw], p) && g.reservePaged(g.bbs[sw]) && g.room(need) {
+		if g.prepBatch(sw) && g.reserveRowsHead(g.bbs[sw], p) && g.room(need) {
 			g.stepW = sw
 		} else {
 			g.LastErr = fmt.Sprintf("a %d-row ragged step's scratch does not fit the budget beside the decode scratch (%d of %d bytes charged)",
@@ -334,7 +334,7 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 		return
 	}
 	for w := want; w >= batchGrain; w = w / 2 / batchGrain * batchGrain {
-		if g.prepBatch(w) && g.reservePaged(g.bbs[w]) && (!rowsHead || g.reserveRowsHead(g.bbs[w], p)) && g.room(need) {
+		if g.prepBatch(w) && (!rowsHead || g.reserveRowsHead(g.bbs[w], p)) && g.room(need) {
 			g.promptW = w
 			g.placeGen.Add(1)
 			return
@@ -343,30 +343,6 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 			g.dropBatch(w)
 		}
 	}
-}
-
-// reservePaged builds bs's paged attention plan for the deepest history it
-// can reach, so its partials and planes are at their widest before the blocks
-// are placed: they grow with the key count (pagedPlanFor), and a chunk deep in
-// a conversation would otherwise ask a full card for them. Shallower plans
-// then compile into buffers already that size. Callers hold g.mu.
-//
-// It builds one plan, at the deepest keys: a plan whose split count fell as
-// its keys grew would still grow its partials at the step; walk every key
-// count if one ever does.
-func (g *devTier) reservePaged(bs *blockScratch) bool {
-	if bs == nil {
-		return false
-	}
-	if bs.pkv == nil {
-		return true
-	}
-	defer g.scratchWin().close()
-	if _, err := g.pagedPlanFor(bs, roundUp(max(bs.p.MaxSeq, 1), scoreGrain)); err != nil {
-		g.LastErr = "paged attention: " + err.Error()
-		return false
-	}
-	return true
 }
 
 // reserveRowsHead allocates a ragged step's per-row logits and tokens at
@@ -386,10 +362,6 @@ func (g *devTier) reserveRowsHead(bs *blockScratch, p *nn.LayerPlan) bool {
 		bs.ragVocab = p.Vocab
 		bs.ragTok, err = g.dev.Alloc(bs.rows * 4)
 	}
-	// The capped twin a final softcap writes (prepRowsHead compiles the cap).
-	if err == nil && p.FinalSoftcap != 0 {
-		bs.ragCap, err = g.dev.Alloc(bs.rows * p.Vocab * 4)
-	}
 	if err != nil {
 		freeRagOut(bs)
 		g.LastErr = "rows: " + err.Error()
@@ -398,20 +370,15 @@ func (g *devTier) reserveRowsHead(bs *blockScratch, p *nn.LayerPlan) bool {
 	return true
 }
 
-// freeRagOut frees a ragged step's per-row logits and tokens, and the capped
-// logits with the cap built for their width.
+// freeRagOut frees a ragged step's per-row logits and tokens.
 func freeRagOut(bs *blockScratch) {
-	for _, b := range []*backend.Buf{&bs.ragLogits, &bs.ragTok, &bs.ragCap} {
+	for _, b := range []*backend.Buf{&bs.ragLogits, &bs.ragTok} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil
 		}
 	}
-	if bs.ragCapK != nil {
-		bs.ragCapK.Close()
-		bs.ragCapK = nil
-	}
-	bs.ragVocab, bs.ragCapC = 0, 0
+	bs.ragVocab = 0
 }
 
 // batchFor is the batched scratch a chunk or step of width w runs in: its own
@@ -575,7 +542,7 @@ func (g *devTier) narrowReserved(beside string) bool {
 	g.prewarming = true
 	defer func() { g.prewarming = was }()
 	g.dropBatch(g.promptW)
-	if !g.prepBatch(w) || !g.reservePaged(g.bbs[w]) || !g.reserveRowsHead(g.bbs[w], &g.bs.p) {
+	if !g.prepBatch(w) || !g.reserveRowsHead(g.bbs[w], &g.bs.p) {
 		g.dropBatch(w)
 		g.LastErr = fmt.Sprintf("no reserved width of %d rows builds beside the blocks placed", w)
 		return false
@@ -626,12 +593,6 @@ func (g *devTier) rowsReserved() bool {
 // switched off, has nothing to warm.
 func (g *GPU) prewarmPromptWidths() {
 	for _, d := range g.devs {
-		// The decode retune compiles its candidate splits; run at the first
-		// token it put those compiles, on a cold shader cache seconds of
-		// them, inside the decode. Placement is done, so it runs here.
-		if !d.NoPromptPrewarm {
-			d.retuneDecode()
-		}
 		d.mu.Lock()
 		d.prewarmPromptWidths()
 		d.mu.Unlock()
@@ -645,8 +606,6 @@ func (g *devTier) prewarmPromptWidths() {
 		return
 	}
 	g.prewarmHeadKernels()
-	g.prewarmPrompt()
-	g.prewarmDecodePlans()
 	g.prewarmComposed()
 	if bb := g.bbs[g.promptW]; bb != nil {
 		g.PromptBlocksLeft += countLeft(bb)
@@ -666,7 +625,6 @@ func (g *devTier) prewarmPromptWidths() {
 		if g.prepBatch(w) {
 			g.PromptWidthsWarmed++
 			g.PromptBlocksLeft += countLeft(g.bbs[w])
-			g.prewarmFused(g.bbs[w])
 		}
 		g.dropBatch(w)
 	}
@@ -683,52 +641,36 @@ func countLeft(bs *blockScratch) int {
 	return n
 }
 
-// prewarmDecodePlans builds the decode scratch's attention plan at every key
-// count its history can reach (pagedPlanFor follows the count, rounded to
-// scoreGrain), in every causal scratch set (gemma4.go): the plans differ in
-// split count at a few depths only, and one met first at a token would
-// compile inside it. Callers hold g.mu.
-func (g *devTier) prewarmDecodePlans() {
-	home := g.geoCur
-	defer g.useGeom(home)
-	for _, k := range append([]geoKey{home}, g.geoKeys()...) {
-		g.useGeom(k)
-		if g.bs != nil && !g.bs.p.NonCausal {
-			g.prewarmDecodePlansOf(g.bs)
-		}
-	}
-}
-
-// prewarmDecodePlansOf is prewarmDecodePlans for the decode scratch bs.
-// Callers hold g.mu.
-func (g *devTier) prewarmDecodePlansOf(bs *blockScratch) {
-	if bs == nil || bs.pkv == nil {
-		return
-	}
-	defer g.scratchWin().close()
-	for keys := scoreGrain; ; keys += scoreGrain {
-		if _, err := g.pagedPlanFor(bs, keys); err != nil {
-			g.LastErr = "paged attention: " + err.Error()
-			return
-		}
-		if keys >= bs.p.MaxSeq {
-			return
-		}
-	}
-}
-
-// prewarmHeadKernels builds the decode scratch's prompt-only kernel, which a
-// first prompt would build otherwise: the row copy the folded head reads. PrepHead calls it
-// once the head is resident; placement may end before the head is offered.
-// Callers hold g.mu.
+// prewarmHeadKernels forms the decode scratch's prompt-only part, which a
+// first prompt would form otherwise: the row take the folded head reads, at
+// every width a chunk runs -- each prompt width the placement warms, the
+// reserved one and the step's. PrepHead calls it once the head is resident;
+// placement may end before the head is offered. Callers hold g.mu.
 func (g *devTier) prewarmHeadKernels() {
 	hb := g.bs
-	if g.NoPromptPrewarm || hb == nil || hb.head == nil || !hb.head.ok || kernels.IsFloat(hb.head.t) {
+	if g.NoPromptPrewarm || hb == nil || hb.head == nil || !hb.head.ok || hb.p.NEmbd != hb.head.k {
 		return
 	}
-	if hb.p.NEmbd == hb.head.k {
-		if err := g.spanKernel(hb); err != nil {
-			g.LastErr = "the folded head's row copy: " + err.Error()
+	if err := g.foldReqBuf(hb); err != nil {
+		g.LastErr = "the folded head's row take: " + err.Error()
+		return
+	}
+	was := g.prewarming
+	g.prewarming = true
+	defer func() { g.prewarming = was }()
+	widths := []int{g.promptW, g.stepW}
+	if grain := g.promptGrain(); !g.NoExactPrompt && grain > 0 {
+		for w := grain; w < g.promptW; w += grain {
+			widths = append(widths, w)
+		}
+	}
+	for _, w := range widths {
+		if w < 2 {
+			continue
+		}
+		if _, err := g.servedRowTake(hb, hb.p.NEmbd, w); err != nil {
+			g.LastErr = "the folded head's row take: " + err.Error()
+			return
 		}
 	}
 }

@@ -353,8 +353,13 @@ func stepGate(t *testing.T, m *Model, g *gpu.GPU, apart bool) stepResult {
 		switch err := st.StepRefusal(); err {
 		case nil:
 		case errStepNoHead, errStepSplit:
-			// Placed whole and then moved: the prompts' history took the room
-			// (relocation), which is a card too small for this gate.
+			// Placed whole and then moved: a device that failed the prompt
+			// is a failure, the prompts' history taking the room
+			// (relocation) a card too small for this gate.
+			if n := st.DeviceDemotions(); n > 0 {
+				t.Fatalf("session %d's prompt failed on the device %d time(s) and moved the model home: %v (%s)",
+					i, n, err, g.Err())
+			}
 			t.Skipf("CARD TOO SMALL: session %d's prompt moved part of the model home: %v (%s) -- this gate "+
 				"proved nothing here", i, err, g.Err())
 		default:

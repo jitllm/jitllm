@@ -128,11 +128,6 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 						t.Fatalf("the placement left %d blocks' prompt kernels to the composer, %d wanted (%d widths warmed and the reserved one)",
 							st.PromptBlocksLeft, want, st.PromptWidthsWarmed)
 					}
-					for i, n := range st.DeclineBuilt {
-						if n != 0 {
-							t.Fatalf("%d declined prompt block(s) compiled their own kernels at a chunk: %s", n, gpu.DeclineName(i))
-						}
-					}
 				}
 				ran++
 			})

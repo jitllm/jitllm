@@ -9,9 +9,9 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
@@ -213,7 +213,7 @@ func TestComposedGPUHead(t *testing.T) {
 							w[i] = float32(rng.NormFloat64() / 8)
 							binary.LittleEndian.PutUint32(raw[4*i:], math.Float32bits(w[i]))
 						}
-						qs, dw, sc, err := kernels.PackWeights(kernels.Float32, raw, sh.v, sh.k)
+						qs, dw, sc, err := layout.PackWeights(layout.Float32, raw, sh.v, sh.k)
 						if err != nil {
 							t.Fatal(err)
 						}

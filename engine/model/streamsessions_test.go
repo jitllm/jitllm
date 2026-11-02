@@ -60,7 +60,6 @@ const streamStride = 97
 func manySessionsStream(t *testing.T, m *Model, spec string) {
 	g := atOnceTier(t, spec, func(c *gpu.Config) {
 		c.KVPage = 64
-		c.StagedDecode = true
 	})
 	const n, seq, gen, steps = 12, 1024, 128, 600
 	words := strings.Repeat("The clerk counted barrels of salt on the upper floor while rain fell. ", 60)

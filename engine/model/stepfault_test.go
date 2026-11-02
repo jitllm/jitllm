@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
@@ -47,11 +46,9 @@ func TestStepAcrossSessionsHybridGateDiscriminates(t *testing.T) {
 }
 
 // TestStepAcrossSessionsMixtureGateDiscriminates runs the mixture step gate
-// with every bank's down reading the gate's output and demands it fail: the
-// grouped expert path the step takes must be what the gate compares, on the
-// dp4a form and on sm_70's tensor cores alike. The violation follows the
-// bank's format -- "downsrc" for a quantized bank, "floatsrc" for a float one
-// (the synth fixtures) -- since each is the other's no-op.
+// with every expert down bank of a joint step's form reading the experts'
+// gate output (gpu.SetMoEFault) and demands it lands outside the band: a
+// gate green with the grouped path's wiring broken proves nothing about it.
 //
 //	go test -tags jitllmfault ./engine/model -run TestStepAcrossSessionsMixtureGateDiscriminates
 func TestStepAcrossSessionsMixtureGateDiscriminates(t *testing.T) {
@@ -61,57 +58,21 @@ func TestStepAcrossSessionsMixtureGateDiscriminates(t *testing.T) {
 			defer m.Close()
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
+					gpu.SetMoEFault(true)
+					defer gpu.SetMoEFault(false)
 					g := stepTier(t, m, dev, false)
 					defer g.Close()
-					fault := downFault(t, m)
-					gpu.SetMoEFault(fault)
-					defer gpu.SetMoEFault("")
 					r := stepGate(t, m, g, false)
 					mixtureStepChecks(t, m, r)
-					t.Logf("%s: worst logit NMSE %.3e (row %d)", fault, r.worst, r.at)
+					t.Logf("worst logit NMSE %.3e (row %d)", r.worst, r.at)
 					if math.IsNaN(r.worst) || r.worst < mixtureStepNMSE {
-						t.Fatalf("the gate reads NMSE %.3e with every down reading the gate's output: it "+
+						t.Fatalf("the gate reads NMSE %.3e with every joint step's down bank reading the experts' gate: it "+
 							"cannot see the grouped path's wiring", r.worst)
 					}
 				})
 			}
 		})
 	}
-}
-
-// downFault is the moeFault that puts a wrong source under m's down banks:
-// "floatsrc" when every mixture block's down bank is float, "downsrc" when
-// every one is quantized. A model with both fails, naming it: one fault would
-// leave half its blocks unbroken and the other half's gate unproven.
-func downFault(t *testing.T, m *Model) string {
-	t.Helper()
-	nf, nq := 0, 0
-	for li := range m.layers {
-		l := &m.layers[li]
-		if !m.Cfg.MoEAt(li) {
-			continue
-		}
-		_, isFloat := kernels.FloatOf(l.down.typ)
-		_, isQuant := kernels.QuantOf(l.down.typ)
-		switch {
-		case isFloat:
-			nf++
-		case isQuant:
-			nq++
-		default:
-			t.Fatalf("block %d's down bank is %v, which no device kernel reads", li, l.down.typ)
-		}
-	}
-	switch {
-	case nf > 0 && nq > 0:
-		t.Fatalf("%d float and %d quantized down banks: one violation cannot break both", nf, nq)
-	case nf > 0:
-		return "floatsrc"
-	case nq > 0:
-		return "downsrc"
-	}
-	t.Fatal("no mixture block: the gate has no bank to break")
-	return ""
 }
 
 // TestStepAcrossSessionsLatentGateDiscriminates runs the latent step gate with
@@ -282,10 +243,9 @@ func TestStepAcrossSessionsLlama4GateDiscriminates(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		rows []string
-		moe  []string
 	}{
-		{"synth-llama4.gguf", []string{"nope", "notemp", "nowin"}, []string{"wout"}},
-		{"synth-cohere2.gguf", []string{"nope", "nowin"}, nil},
+		{"synth-llama4.gguf", []string{"nope", "notemp", "nowin"}},
+		{"synth-cohere2.gguf", []string{"nope", "nowin"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			m, err := Open(stepArchPath(t, c.name), noTune, WithKVF16(false))
@@ -309,9 +269,6 @@ func TestStepAcrossSessionsLlama4GateDiscriminates(t *testing.T) {
 				}
 				for _, f := range c.rows {
 					run(f, gpu.SetRowsFault)
-				}
-				for _, f := range c.moe {
-					run(f, gpu.SetMoEFault)
 				}
 			}
 		})
@@ -362,9 +319,9 @@ func TestComposedPromptChainGateDiscriminates(t *testing.T) {
 	parts := gpu.ComposedBlock | gpu.ComposedHead | gpu.ComposedPrompt
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			want, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
+			want, st, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
 			gpu.SetRecFault("chain")
-			got, fst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
+			got, fst, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
 			gpu.SetRecFault("")
 			for _, s := range []gpu.Stats{st, fst} {
 				if n, d := s.ServedPart(gpu.ComposedPrompt); n < m.Cfg.NLayer || d != 0 {

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/tok"
 )
@@ -77,7 +77,7 @@ func TestConvertedBytesEqualThePacker(t *testing.T) {
 				for dd := 2; dd < int(e.NDim); dd++ {
 					rows *= int(e.Dims[dd])
 				}
-				wq, wd, wsc, err := kernels.PackWeights(q, want, rows, e.K())
+				wq, wd, wsc, err := layout.PackWeights(q, want, rows, e.K())
 				if err != nil {
 					t.Fatalf("%s: pack: %v", e.Name, err)
 				}

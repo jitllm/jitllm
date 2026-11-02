@@ -11,7 +11,6 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -262,7 +261,7 @@ func gpuRope(d backend.Device) ropeRunner {
 		if m, ok := d.(backend.MultiprocessorDevice); ok {
 			units = m.Multiprocessors()
 		}
-		codes := composedRopeCodes(t, composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, ExactDiv: kernels.DivExact(d.API())},
+		codes := composedRopeCodes(t, composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, ExactDiv: composer.ExactDivOn(d.API())},
 			rope, sections, interleaved, rows)
 		gg := newGPU(t, d)
 		defer gg.free()
@@ -363,4 +362,29 @@ func cpuRope(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, rows
 	}
 	runtime.KeepAlive(keep)
 	return unguard(t, out, n)
+}
+
+// ropeTabOracle is the table in float64, formed the way the float64 table the
+// kernel replaced formed it: the same frequency recurrence rather than a fresh
+// Pow per pair, so a difference here is about the kernel and not about two
+// different sets of frequencies.
+func ropeTabOracle(r nn.Rope, pos, npairs int) []float64 {
+	out := make([]float64, 2*npairs)
+	step := math.Pow(r.Base, -2/float64(r.NRot))
+	ms := r.Scale
+	if ms == 0 {
+		ms = 1
+	}
+	f := 1.0
+	for p := 0; p < npairs; p++ {
+		g := f
+		if p < len(r.Freqs) {
+			g /= float64(r.Freqs[p])
+		}
+		th := float64(pos) * g
+		out[2*p] = float64(float32(math.Cos(th) * ms))
+		out[2*p+1] = float64(float32(math.Sin(th) * ms))
+		f *= step
+	}
+	return out
 }

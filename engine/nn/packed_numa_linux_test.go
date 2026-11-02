@@ -8,10 +8,10 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // interleaved copies b into fresh anonymous memory whose pages alternate over
@@ -21,11 +21,11 @@ func interleaved(t *testing.T, b []byte, nodes []int) []byte {
 	if len(b) == 0 {
 		return b
 	}
-	m, mapped, err := kernels.MapOffHeap(len(b))
+	m, mapped, err := offheap.MapOffHeap(len(b))
 	if err != nil || !mapped {
 		t.Skipf("no anonymous mapping here: %v", err)
 	}
-	t.Cleanup(func() { kernels.UnmapOffHeap(m) })
+	t.Cleanup(func() { offheap.UnmapOffHeap(m) })
 	mask := make([]uint64, 1+nodes[len(nodes)-1]/64)
 	for _, n := range nodes {
 		mask[n/64] |= 1 << uint(n%64)

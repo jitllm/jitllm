@@ -6,7 +6,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // MemStore keeps pages in host memory, keyed by (cache, layer, index).
@@ -269,7 +269,7 @@ func readBack(page io.Reader) (*memBack, error) {
 
 // newBack is memory for n bytes, off the Go heap where the platform maps it.
 func newBack(n int) *memBack {
-	b, mapped, err := kernels.MapOffHeap(n)
+	b, mapped, err := offheap.MapOffHeap(n)
 	if err != nil || len(b) < n {
 		b, mapped = make([]byte, n), false
 	}
@@ -278,7 +278,7 @@ func newBack(n int) *memBack {
 
 func releaseBack(b *memBack) {
 	if b.mapped {
-		kernels.UnmapOffHeap(b.b)
+		offheap.UnmapOffHeap(b.b)
 	}
 }
 

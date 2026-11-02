@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
-
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // GEMMPad is the bytes EmitPackedMatMulStationary expects after each token's
@@ -25,12 +24,12 @@ const GEMMPad = 64
 // super-blocks in integers at this activation window and dot sequence -- the
 // form that is bounded against the fused kernel rather than equal to it.
 func StationaryIntAcc(t quant.Type, win int, dk DotKind) bool {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok || dk != DotVEX {
 		return false
 	}
-	sub, _, _, biasArray := kernels.Layout(q)
-	perSuper, _ := kernels.ScaleLayout(q)
+	sub, _, _, biasArray := layout.Layout(q)
+	perSuper, _ := layout.ScaleLayout(q)
 	return perSuper > 1 && win >= sub*perSuper && (biasArray || sub == Q8Block/2)
 }
 
@@ -109,7 +108,7 @@ func EmitPackedMatMulStationary(t quant.Type, k, nrows, win int, dk DotKind) ([]
 	case signed:
 		umax = 128 // |w| through VPSIGNB/VPABSB; see dotEmitter.signed
 	case codes:
-		for _, c := range kernels.Codes(q) {
+		for _, c := range layout.Codes(q) {
 			umax = max(umax, int(c))
 		}
 	default:

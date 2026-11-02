@@ -6,8 +6,8 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
-// A lone matvec's weight is uploaded once and keyed on its address (resKey.p),
-// and so is its pack in the arena and a prewarm's stage. The host's pager hands
+// A block's weight is uploaded once and keyed on its address (resKey.p), and
+// so is its pack in the arena and a prewarm's stage. The host's pager hands
 // one address to block after block: a frame refilled, or memory given back and
 // mapped again. Forget is the host saying so, and every copy keyed inside the
 // range goes; see docs/engineering-history/placement.md 15v.

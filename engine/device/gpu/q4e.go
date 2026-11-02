@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // Qwen3.8-Flash-Next on the device (nn.LayerPlan.Q4E; engine/model/q4e.go is
@@ -96,7 +96,7 @@ func (g *devTier) prepQ4E(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 		l.auxBytes += uint64(4 * v.want)
 	}
 	if b.ngram {
-		b.ngTaps = resident{qs: b.ngConv, nrows: hd, k: q.NGramConv, t: kernels.Float32, ok: true}
+		b.ngTaps = resident{qs: b.ngConv, nrows: hd, k: q.NGramConv, t: layout.Float32, ok: true}
 	}
 	l.q4e = b
 	return ""

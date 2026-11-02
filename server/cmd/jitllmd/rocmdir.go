@@ -21,13 +21,3 @@ func rocmDir() string {
 	}
 	return ""
 }
-
-// tuneCacheDir is the device tuners' cache directory under the user cache
-// directory, or "" when the host has none.
-func tuneCacheDir() string {
-	d, err := os.UserCacheDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(d, "jitllm")
-}

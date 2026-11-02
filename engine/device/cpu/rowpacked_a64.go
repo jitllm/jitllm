@@ -5,19 +5,19 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // EmitPackedRow is the NEON twin of the amd64 row dequantization; see
 // rowpacked.go for the contract. Four elements per vector; the secondary
 // plane's per-lane shift is USHL by the NEGATED table, since NEON has only a
 // variable left shift and a negative count shifts right.
-func EmitPackedRow(q kernels.Quant) ([]byte, error) {
-	sub, bits, _, biasArray := kernels.Layout(q)
-	hi := kernels.HiPlane(q)
-	perSuper, _ := kernels.ScaleLayout(q)
-	signed := kernels.SignedPayload(q)
-	codes := kernels.Codes(q) != nil
+func EmitPackedRow(q layout.Quant) ([]byte, error) {
+	sub, bits, _, biasArray := layout.Layout(q)
+	hi := layout.HiPlane(q)
+	perSuper, _ := layout.ScaleLayout(q)
+	signed := layout.SignedPayload(q)
+	codes := layout.Codes(q) != nil
 	if sub%8 != 0 || (bits != 2 && bits != 4 && bits != 8) || perSuper < 1 || bits == 2 && (sub != 32 || hi != 0 || codes) {
 		return nil, fmt.Errorf("jit: EmitPackedRow: %v has no row kernel shape", q)
 	}
@@ -60,7 +60,7 @@ func EmitPackedRow(q kernels.Quant) ([]byte, error) {
 			a.UXTL8h(6, 6)
 			a.UXTL4s(6, 6)
 			a.SHL4s(6, 6, 23)
-		} else if kernels.D32(q) {
+		} else if layout.D32(q) {
 			a.LDRs(6, X9, 0) // TQ2_F32: the word is the scale
 		} else {
 			a.LDRh(6, X9, 0)
@@ -70,7 +70,7 @@ func EmitPackedRow(q kernels.Quant) ([]byte, error) {
 			a.LDRh(7, X9, 2)
 			a.FCVTL(7, 7) // dmin
 		}
-		if kernels.ScStream(q) {
+		if layout.ScStream(q) {
 			// Container v27's SC stream (scstream.go); X3 addresses the next
 			// word, RowStr on, and V5 is the straddle's scratch.
 			next := func(r VReg) {

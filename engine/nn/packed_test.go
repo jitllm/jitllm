@@ -1,15 +1,16 @@
 package nn
 
 import (
-	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"math/rand"
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/internal/oracle"
+
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
@@ -66,7 +67,7 @@ func TestPackedMatVecTailAgrees(t *testing.T) {
 				continue
 			}
 			rng := rand.New(rand.NewSource(int64(nrows)))
-			q, _ := kernels.QuantOf(gt)
+			q, _ := layout.QuantOf(gt)
 			nb := uint64(nrows*k) / gt.BlockElems()
 			bb := gt.BlockBytes()
 			src := make([]byte, nb*bb)
@@ -82,7 +83,7 @@ func TestPackedMatVecTailAgrees(t *testing.T) {
 				t.Fatalf("%s: no scale planter, so its blocks would carry random "+
 					"scales -- add it rather than testing noise", gt)
 			}
-			qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+			qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -158,7 +159,7 @@ func TestPackedMatVecTailAgrees(t *testing.T) {
 				}
 				quant.PlantScales(gt, one, 0)
 				copy(one, src[lo*rowB:nrows*rowB]) // the planter touched these too
-				qs1, d1, sc1, err := kernels.PackWeights(q, one, cpu.PackedTail, k)
+				qs1, d1, sc1, err := layout.PackWeights(q, one, cpu.PackedTail, k)
 				if err != nil {
 					t.Fatal(err)
 				}

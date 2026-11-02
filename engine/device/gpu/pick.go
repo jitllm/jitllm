@@ -4,14 +4,13 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The label pick (nn.Head.Pick): after the head, the logits at a handful of
-// vocabulary ids are gathered on the device (kernels.GatherRows, rows of one
-// float) and those alone are read back in place of the vocabulary's. A decision
+// vocabulary ids are gathered on the device by the composer's form and those
+// alone are read back in place of the vocabulary's. A decision
 // model's readout reads a question's label ids (model.Decider): a few
 // hundred bytes where the row is the vocabulary's 65536-151936 floats.
 
@@ -21,42 +20,15 @@ import (
 // caller gathers there.
 const pickMax = nn.PickMax
 
-// prepPick readies the pick for head: the device's gather over its rows,
-// unless the composer picks (composed), and this lane's buffers. False
-// leaves the call to read the logits back. Callers hold g.mu, outside any
-// Session.
+// prepPick readies the pick for head where the composer picks (composed):
+// this lane's buffers. False leaves the call to read the logits back.
+// Callers hold g.mu, outside any Session.
 func (g *devTier) prepPick(head *nn.Head, composed bool) bool {
-	n, k := head.W.Rows, len(head.Pick)
-	if k < 1 || k > pickMax || len(head.PickVals) < k {
+	if k := len(head.Pick); !composed || k < 1 || k > pickMax || len(head.PickVals) < k {
 		return false
 	}
 	w := g.scratchWin()
 	defer w.close()
-	if composed {
-		return g.pickBufs()
-	}
-	if g.pickK == nil {
-		kk, err := kernels.GatherRows(1, pickMax, n)
-		if err != nil {
-			g.LastErr = "the label pick: " + err.Error()
-			return false
-		}
-		c, err := g.compile(kk)
-		if err != nil {
-			g.LastErr = "the label pick: " + err.Error()
-			return false
-		}
-		g.pickK = c
-	}
-	// The picked rows' own projection, compiled once for the head here:
-	// outside any session, where Compile is allowed. A float head keeps the
-	// whole matvec and the gather.
-	if hr := g.headRes(); hr != nil && g.pickMV == nil && !g.NoPickMV && !kernels.IsFloat(hr.t) {
-		if c, err := g.idKernel(kernels.MatVecShape{Center: g.center, T: hr.t, K: hr.k, Rows: pickMax,
-			Split: 1, PickOf: hr.nrows}); err == nil {
-			g.pickMV = c
-		}
-	}
 	return g.pickBufs()
 }
 
@@ -110,30 +82,8 @@ func (l *lane) freePick() {
 	}
 }
 
-// closePick closes the device's gather: it is built for a head's rows, so it
-// goes with the model.
-func (g *devTier) closePick() {
-	if g.pickK != nil {
-		g.pickK.Close()
-		g.pickK = nil
-	}
-}
-
-// headRes is the head's resident weights, nil while no head is placed.
-func (g *devTier) headRes() *resident {
-	if g.bs == nil {
-		return nil
-	}
-	return g.bs.head
-}
-
-// runPick is the label pick over bs's logits into the lane's: the
-// composer's gather (composed), or the tier's.
-func (g *devTier) runPick(lc *launcher, bs *blockScratch, composed bool) error {
-	if !composed {
-		lc.la(g.pickK, pickMax, bs.headOut(), g.pickIDs, g.pickOut)
-		return nil
-	}
+// runPick is the composer's label pick over bs's logits into the lane's.
+func (g *devTier) runPick(lc *launcher, bs *blockScratch) error {
 	sv, err := g.servedSample(bs.pickGraph)
 	if err != nil {
 		return err

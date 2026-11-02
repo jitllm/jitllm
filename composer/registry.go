@@ -343,9 +343,11 @@ func (r *Registry) decomposeOps(c *Context, of int) ([]Prim, error) {
 			return nil, fmt.Errorf("op %d (%s) has no decomposition", i, o.Kind)
 		}
 		oc := c
-		if o.Kind != graph.OpConv && o.Kind != graph.OpUnfold && gridRows(c.Graph, o) {
+		if o.Kind != graph.OpConv && o.Kind != graph.OpUnfold && o.Kind != graph.OpTakeRows && gridRows(c.Graph, o) {
 			// A row-wise op over a grid of rows of its own runs at that
-			// grid's rows (Verify holds its every value to one grid): the
+			// grid's rows (Verify holds its every value to one grid; a
+			// convolution, an unfold and a row take read their input's
+			// rows and write their own themselves): the
 			// step's rows are the grid's for its decomposition. An op that
 			// reads rows across values of other grids is not formed.
 			if !gridRowWise(o) {

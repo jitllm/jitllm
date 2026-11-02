@@ -57,7 +57,7 @@ func openLookupModel(t *testing.T, name string, opts ...Option) *Model {
 
 // lookupGreedy is n tokens through a lookup Speculator, on dev when it is not
 // nil.
-func lookupGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.Device, fault specFault,
+func lookupGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.LayerDevice, fault specFault,
 	oracle []int32, opts ...SpecOption) ([]int32, SpecStats) {
 	t.Helper()
 	size := len(prompt) + 5*n + 8

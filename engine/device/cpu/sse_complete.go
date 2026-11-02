@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -112,7 +112,7 @@ var sseProbes = []sseProbe{
 	{"NGramHash", func(em *Emitters) error { _, err := em.NGramHash(3, 8, true); return err }},
 	{"RowIQ4NL", func(em *Emitters) error { return probe0(em.RowIQ4NL) }},
 	{"PackedRow", func(em *Emitters) error {
-		q, _ := kernels.QuantOf(quant.Q4_K)
+		q, _ := layout.QuantOf(quant.Q4_K)
 		_, err := em.PackedRow(q)
 		return err
 	}},

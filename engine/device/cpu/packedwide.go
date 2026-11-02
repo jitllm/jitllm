@@ -5,9 +5,8 @@ package cpu
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
-
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // PackedWideGroup is how many rows one iteration of the wide kernel's row loop
@@ -39,7 +38,7 @@ const PackedWideBudget = 16 << 10
 //	K       outer steps
 //	Scratch [rows] int32, this worker's private integer accumulators
 func EmitPackedMatVecWide(t quant.Type, dk DotKind) ([]byte, error) {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return nil, fmt.Errorf("jit: EmitPackedMatVecWide: %s has no device layout", t)
 	}
@@ -56,16 +55,16 @@ func EmitPackedMatVecWide(t quant.Type, dk DotKind) ([]byte, error) {
 	if NarrowD(t) {
 		return nil, fmt.Errorf("jit: EmitPackedMatVecWide: %s packs two rows to a d word; use the fused kernel", t)
 	}
-	if _, bits, _, _ := kernels.Layout(q); bits == 2 {
+	if _, bits, _, _ := layout.Layout(q); bits == 2 {
 		// Unreachable for the same reason; its two activation registers hold
 		// a nibble pair, and a 2-bit plane has four fields a byte.
 		return nil, fmt.Errorf("jit: EmitPackedMatVecWide: %s has a 2-bit plane; use the fused kernel", t)
 	}
-	sub, bits, biasK, biasArray := kernels.Layout(q)
-	perSuper, scOff := kernels.ScaleLayout(q)
-	signed := kernels.SignedPayload(q)
+	sub, bits, biasK, biasArray := layout.Layout(q)
+	perSuper, scOff := layout.ScaleLayout(q)
+	signed := layout.SignedPayload(q)
 	// pw primary words then hw secondary ones; see qinfo.hi and packSub.
-	hiW := kernels.HiPlane(q)
+	hiW := layout.HiPlane(q)
 	pw, hw := sub*bits/32, sub*hiW/32
 	halfSub := sub / 2
 	const vec = 32
@@ -78,7 +77,7 @@ func EmitPackedMatVecWide(t quant.Type, dk DotKind) ([]byte, error) {
 	if biasArray {
 		perWord, stride = 2, 16
 	}
-	stream := kernels.ScStream(q)
+	stream := layout.ScStream(q)
 
 	// Held for the whole kernel; the rest are working registers.
 	const (
@@ -253,7 +252,7 @@ func EmitPackedMatVecWide(t quant.Type, dk DotKind) ([]byte, error) {
 			rowLoop(func() {
 				for g := 0; g < grp; g++ {
 					off := int32(g * vec)
-					if kernels.D32(q) {
+					if layout.D32(q) {
 						a.VMOVDQULoad(wb, Idx(R8, R15, 1, off)) // the d word is the scale
 					} else {
 						a.VMOVDQULoad(wa, Idx(R8, R15, 1, off)) // the d word
@@ -303,7 +302,7 @@ func EmitPackedMatVecWide(t quant.Type, dk DotKind) ([]byte, error) {
 							scField(avxSC(&a), wa, wc, wc, sn, true, nextSC)
 							a.VCVTDQ2PS(wa, wa)
 							a.VMULPS(tmp, tmp, wa) // dmin * m
-						} else if !kernels.MinInD(q) { // Q5_1's m is one
+						} else if !layout.MinInD(q) { // Q5_1's m is one
 							a.VPSLLD(wa, wc, 16-sh)
 							a.VPSRLD(wa, wa, 24)
 							a.VCVTDQ2PS(wa, wa)

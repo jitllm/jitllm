@@ -83,8 +83,8 @@ func prefillAgainstHost(t *testing.T, lengths []int, opts ...gpu.Option) {
 			num += d * d
 			den += float64(want[i]) * float64(want[i])
 		}
-		t.Logf("n=%d: logit NMSE %.3e, argmax %d (host %d), batched attention on the matrix unit: %v",
-			n, num/den, argmaxID(got), argmaxID(want), g.Stats().AttnMMA)
+		t.Logf("n=%d: logit NMSE %.3e, argmax %d (host %d), %d attention launches on the matrix unit",
+			n, num/den, argmaxID(got), argmaxID(want), g.Stats().AttendPart(gpu.EveryPart))
 		if num/den > 1e-2 {
 			t.Fatalf("n=%d: logit NMSE %.3e against the host", n, num/den)
 		}

@@ -7,9 +7,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
 )
@@ -31,7 +31,7 @@ func (f *JIT) MatVecPacked(out []float32, t quant.Type, p *Packed, x []float32, 
 	// packed at the next one, the activation's tail quantized as zeros
 	// (ragged.go).
 	x, k = x[:k], raggedK(t, k)
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return false
 	}
@@ -201,9 +201,9 @@ func (f *JIT) MatVecPacked(out []float32, t quant.Type, p *Packed, x []float32, 
 // exactly PackedTail rows and running THAT through MatVecPacked, so the window
 // gets whatever kernel a real tensor of that size gets -- which is what makes
 // its rows bit-identical to the same rows computed in place.
-func (f *JIT) packedWindow(out []float32, q kernels.Quant, p *Packed, t quant.Type, x []float32, stride, k, lo, n int) error {
+func (f *JIT) packedWindow(out []float32, q layout.Quant, p *Packed, t quant.Type, x []float32, stride, k, lo, n int) error {
 	to := cpu.PackedTail
-	nq, nd, nsc, err := kernels.PackedWords(q, to, k)
+	nq, nd, nsc, err := layout.PackedWords(q, to, k)
 	if err != nil {
 		return err
 	}
@@ -220,7 +220,7 @@ func (f *JIT) packedWindow(out []float32, q kernels.Quant, p *Packed, t quant.Ty
 	if nsc > 0 {
 		w.SC = grow(&f.winSC, nsc*4)
 	}
-	if err := kernels.RowWindow(q, p.QS, p.D, p.SC, stride, k, lo, n, to, w.QS, w.D, w.SC); err != nil {
+	if err := layout.RowWindow(q, p.QS, p.D, p.SC, stride, k, lo, n, to, w.QS, w.D, w.SC); err != nil {
 		return err
 	}
 	res := f.winOut[:]
@@ -387,7 +387,7 @@ func (f *JIT) fusedSlices(t quant.Type, k, nrows, per int) int {
 
 // fusedSliced runs the fused kernel over s k-slices x pool/s row chunks, slice
 // 0 into out and the rest into partials that are added in afterwards.
-func (f *JIT) fusedSliced(fused *cpu.Code, t quant.Type, q kernels.Quant, p *Packed, out []float32,
+func (f *JIT) fusedSliced(fused *cpu.Code, t quant.Type, q layout.Quant, p *Packed, out []float32,
 	row, stride, nrows, k, s int) {
 	grp := grpOf(t)
 	groups := nrows / grp
@@ -439,7 +439,7 @@ type fusedCall struct {
 	grp, dRowByte int
 }
 
-func (f *JIT) newFusedCall(code *cpu.Code, t quant.Type, q kernels.Quant, k, rows int) fusedCall {
+func (f *JIT) newFusedCall(code *cpu.Code, t quant.Type, q layout.Quant, k, rows int) fusedCall {
 	step := cpu.PackedOuterElems(t)
 	fc := fusedCall{f: f, code: code, t: t, step: step, nsup: k / step,
 		piece: f.fusedPiece(t, k, rows), grp: grpOf(t), dRowByte: cpu.DRowBytes(t)}
@@ -507,8 +507,8 @@ func (f *JIT) fusedPiece(t quant.Type, k, rows int) int {
 // superWords is how many 32-bit words one super-block of one row occupies in
 // the payload plane and in the SC plane: the row-strided distance, in words,
 // from one super-block to the next. Derived from the packer's own arithmetic.
-func superWords(q kernels.Quant, step int) (qs, sc int) {
-	nq, _, nsc, err := kernels.PackedWords(q, 64, step)
+func superWords(q layout.Quant, step int) (qs, sc int) {
+	nq, _, nsc, err := layout.PackedWords(q, 64, step)
 	if err != nil {
 		panic(fmt.Sprintf("nn: superWords: %v", err))
 	}

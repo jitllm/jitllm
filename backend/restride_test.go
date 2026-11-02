@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestRestrideMovesExactlyTheBlock: every word of a rows x cols block lands at
@@ -47,7 +46,7 @@ func restrideCase(t *testing.T, d backend.Device, name string, rows, cols, ss, d
 		binary.LittleEndian.PutUint32(dst[4*i:], poison)
 	}
 	binary.LittleEndian.PutUint32(dst[4*n:], guard)
-	kern, err := kernels.Restride(rows, cols, ss, ds)
+	kern, err := Restride(rows, cols, ss, ds)
 	if err != nil {
 		t.Fatal(err)
 	}

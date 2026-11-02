@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -33,7 +33,7 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 				if tn.e == nil || len(tn.data) == 0 {
 					return
 				}
-				if _, ok := kernels.QuantOf(tn.typ); !ok {
+				if _, ok := layout.QuantOf(tn.typ); !ok {
 					// F32/F16 norms, biases and routers have no packed layout.
 					verbatim++
 					return
@@ -66,7 +66,7 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 			}
 
 			// The embedding lookup must take the packed branch.
-			if _, ok := kernels.QuantOf(m.embd.typ); ok && m.embd.packed == nil {
+			if _, ok := layout.QuantOf(m.embd.typ); ok && m.embd.packed == nil {
 				t.Fatal("the embedding is quantised and not packed")
 			}
 			dst := make([]float32, m.Cfg.NEmbd)
@@ -102,7 +102,7 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 			if w.e == nil || len(w.data) == 0 {
 				continue
 			}
-			if _, ok := kernels.QuantOf(w.typ); !ok {
+			if _, ok := layout.QuantOf(w.typ); !ok {
 				continue
 			}
 			if w.packed == nil || len(w.packed.QS) == 0 {

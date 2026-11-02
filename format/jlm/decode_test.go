@@ -6,7 +6,7 @@ import (
 	"math/rand/v2"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -68,7 +68,7 @@ func TestDecodeMatchesThePacker(t *testing.T) {
 		k := 2 * l.Sub * l.SuperSub
 		k = max(k, q.Elems())
 		k = (k + q.Elems() - 1) / q.Elems() * q.Elems()
-		nq, nd, nsc, err := kernels.PackedWords(q, rows, k)
+		nq, nd, nsc, err := layout.PackedWords(q, rows, k)
 		if err != nil {
 			t.Fatalf("%s: %v", c, err)
 		}

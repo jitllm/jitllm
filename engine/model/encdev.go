@@ -94,7 +94,7 @@ func (s *Instance) borrowsJIT() bool {
 // SetDeviceLayers places the encoder's blocks on d through its segment instance
 // (Instance.SetDeviceLayers): max caps how many are offered, -1 offers every one.
 // A decoder embedding model's session is placed the same way.
-func (e *Embedder) SetDeviceLayers(d nn.Device, max int) error {
+func (e *Embedder) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	if e.st != nil {
 		// A bidirectional decoder's (EmbeddingGemma's) blocks are planned
 		// non-causal (planFor) and placed the same way.

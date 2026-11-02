@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -38,7 +38,7 @@ func TestPackedBatchABBA(t *testing.T) {
 		gt := quant.Q8_0
 		nrows, k, ntok := sh.nrows, sh.k, sh.ntok
 		rng := rand.New(rand.NewSource(1))
-		q, _ := kernels.QuantOf(gt)
+		q, _ := layout.QuantOf(gt)
 		nb := uint64(nrows*k) / gt.BlockElems()
 		bb := gt.BlockBytes()
 		src := make([]byte, nb*bb)
@@ -48,7 +48,7 @@ func TestPackedBatchABBA(t *testing.T) {
 		for b := uint64(0); b < nb; b++ {
 			src[b*bb], src[b*bb+1] = 0x00, 0x3C
 		}
-		qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+		qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -412,11 +412,11 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			mx = g.Stats().MatrixPart(gpu.ComposedTower) - mx
 			nm0, worst0 := nmseOf(got0, want0)
 			bound0 := 5e-5
-			if st := g.Stats(); st.VoltaGemm+st.GemmF16 > 0 || mx > 0 || spec == "metal" {
+			if mx > 0 || spec == "metal" {
 				bound0 = 5e-4
 			}
-			t.Logf("%s, after block 0 composed: NMSE %.3e, max|d| %.4g (bound %.0e; %d binary16 tier GEMMs, %d composed matrix launches; tower chunk %d, %d phase calls)",
-				spec, nm0, worst0, bound0, g.Stats().VoltaGemm+g.Stats().GemmF16, mx, g.TowerChunk(), g.Stats().TowerPhases)
+			t.Logf("%s, after block 0 composed: NMSE %.3e, max|d| %.4g (bound %.0e; %d composed matrix launches; tower chunk %d, %d phase calls)",
+				spec, nm0, worst0, bound0, mx, g.TowerChunk(), g.Stats().TowerPhases)
 			if !(nm0 < bound0) {
 				t.Fatalf("%s: NMSE %.3e after ONE composed block (bound %.0e)", spec, nm0, bound0)
 			}

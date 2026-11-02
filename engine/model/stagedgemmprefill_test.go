@@ -12,22 +12,20 @@ import (
 
 // TestStagedGemmPrefillMatchesTheHost prefills real models on CUDA with every
 // block placed and holds the prompt's logits AND the decode that reads the
-// chunk's KV to the host, in two arms: Config.PreferGemmInt8, whose prompt
-// matvecs are the staged int8 GEMM (kernels.GemmInt8, sm_80 on), and the
-// default, whose are the staged binary16 GEMM on the m16n8 instruction
-// (GemmVolta's F16K, sm_75 on). The chunk's attention accumulates on m16n8k8
-// (kernels.PagedAttnAccMMA) behind the m16n8k16 scores in both.
+// chunk's KV to the host, in two arms: the composer's prompt forms on the
+// card's matrix unit (the default where the card lowers a tile), and with
+// none on it (Config.NoMMA), whose projections read int8 activations as the
+// host's do.
 //
-// The models cover the formats and features the GEMMs carry: Q4_K/Q6_K,
-// Q3_K beside Q4_K/Q5_K/Q6_K (Q3_K has neither decode and keeps MatVecMMA in
-// the same block), Q8_0, biased q/k/v, Q4_0, the hybrid's projections and a
-// mixture's dense ones. Stats().GemmInt8, GemmF16 and PagedAccMMA are the
-// selection checks, since MatVecMMA and the FMA tiles also answer correctly;
-// a card whose PTX target has an instruction and built nothing on it fails.
+// The models cover the formats and features the forms carry: Q4_K/Q6_K,
+// Q3_K beside Q4_K/Q5_K/Q6_K, Q8_0, biased q/k/v, Q4_0, the hybrid's
+// projections and a mixture's dense ones. The selection checks are every
+// block of the prompt served by the composer and the matrix unit's launches
+// (Stats.MatrixPart): some in the default arm on a card that lowers a tile,
+// none in the other.
 //
-// The host and the int8 arm use int8 activations and the binary16 arm
-// binary16, so the bar is the tile's: NMSE under 2e-2 and an argmax that
-// agrees or is a tie (tieMargin). The split tuner is pinned off (RULE 11c).
+// The bar is the tile's: NMSE under 2e-2 and an argmax that agrees or is a
+// tie (tieMargin). The split tuner is pinned off (RULE 11c).
 func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 	ran := 0
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf",
@@ -68,21 +66,20 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 			want := run(host)
 			host.Close()
 			for _, arm := range []struct {
-				name   string
-				noInt8 bool
-				deep   int
-			}{{"int8", false, -1}, {"binary16", true, -1}, {"binary16-deep", true, 1}} {
+				name     string
+				noMatrix bool
+			}{{"matrix unit", false}, {"no matrix unit", true}} {
 				t.Run(arm.name, func(t *testing.T) {
 					g, err := gpu.OpenWith(gpu.WithAPI("ptx"), gpu.WithDeviceTune(gpu.TuneOff),
-						gpu.WithConfig(func(c *gpu.Config) { c.PreferGemmInt8, c.GemmDeep = !arm.noInt8, arm.deep }))
+						gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = arm.noMatrix }))
 					if err != nil || g == nil {
 						noDevice(t, "cuda", err)
 					}
 					defer g.Close()
 					if !strings.Contains(g.Name(), "[ptx]") {
-						t.Skipf("the device is %s; the staged GEMMs are CUDA's", g.Name())
+						t.Skipf("the device is %s; this gate is CUDA's", g.Name())
 					}
-					stagedGemmArm(t, m, g, len(ids)+8, run, want, arm.noInt8, arm.deep)
+					stagedGemmArm(t, m, g, len(ids)+8, run, want, arm.noMatrix)
 				})
 			}
 			ran++
@@ -94,8 +91,9 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 }
 
 // stagedGemmArm is one arm of TestStagedGemmPrefillMatchesTheHost on g.
-func stagedGemmArm(t *testing.T, m *Model, g *gpu.GPU, seq int, run func(*Instance) [][]float32, want [][]float32, noInt8 bool, deep int) {
+func stagedGemmArm(t *testing.T, m *Model, g *gpu.GPU, seq int, run func(*Instance) [][]float32, want [][]float32, noMatrix bool) {
 	t.Helper()
+	s0 := g.Stats()
 	dev := m.NewInstance(seq)
 	dev.SetDevice(g)
 	if dev.GPULayers() != m.Cfg.NLayer {
@@ -132,49 +130,19 @@ func stagedGemmArm(t *testing.T, m *Model, g *gpu.GPU, seq int, run func(*Instan
 				i, ga, wa, want[i][wa]-want[i][ga])
 		}
 	}
-	// After the comparison, so a run with a GEMM switched off still prints
-	// the other arm's numbers.
+	// After the comparison, so an arm that selected nothing still prints the
+	// other's numbers.
 	st := g.Stats()
+	prompt, matrix := servedSince(s0, st, gpu.ComposedPrompt), st.MatrixPart(gpu.EveryPart)-s0.MatrixPart(gpu.EveryPart)
 	sm := ptxTargetSM(g.Name())
-	t.Logf("%s: %d matvecs on the int8 GEMM, %d on the m16n8 binary16 GEMM, %d on sm_70's; "+
-		"%d attention accumulates on m16n8k8", g.Name(), st.GemmInt8, st.GemmF16, st.VoltaMV, st.PagedAccMMA)
+	t.Logf("%s: %d composed prompt block steps, %d launches on the matrix unit", g.Name(), prompt, matrix)
 	switch {
-	case !noInt8 && sm >= 80 && st.GemmInt8 == 0:
-		t.Fatalf("%s lowers the int8 m16n8k32 instruction and built no GemmInt8: MatVecMMA answered", g.Name())
-	case (noInt8 || sm < 80) && sm >= 75 && st.GemmF16 == 0:
-		t.Fatalf("%s lowers the m16n8 binary16 instruction and built no GEMM on it: the int8 twin answered", g.Name())
-	case noInt8 && st.GemmInt8 != 0:
-		t.Fatalf("no GemmInt8 asked and %d GemmInt8 matvecs: the arm is not the binary16 GEMM", st.GemmInt8)
-	case deep > 0 && sm >= 75 && st.GemmDeep == 0:
-		t.Fatalf("the deep m16n8 tiles forced and none built: the arm is the shipping tile")
-	case deep < 0 && st.GemmDeep != 0:
-		t.Fatalf("the deep m16n8 tiles forced off and %d built", st.GemmDeep)
-	}
-	t.Logf("%d of the binary16 GEMMs on the deep tiles", st.GemmDeep)
-	t.Logf("%d FlashPrefill80 launches; fused operands: %d norms and %d activations wrote binary16, %d activations quantized",
-		st.FlashPrefill80, st.NormF16, st.ActF16Fused, st.QuantActs)
-	// From sm_80 the prompt's attention is FlashPrefill80 wherever a head is
-	// 256 wide or less (gemma-2b's 256 splits its dims over two warps), and
-	// the staged kernels with the m16n8k8 accumulate past it; a hybrid's
-	// attention blocks and a mixture's take them as well.
-	if sm >= 80 {
-		if m.Cfg.HeadDim <= 256 && m.Cfg.HeadDimSWA <= 256 && st.FlashPrefill80 == 0 {
-			t.Fatalf("%s: head width %d and no FlashPrefill80: the staged kernels answered", g.Name(), m.Cfg.HeadDim)
-		}
-		if st.FlashPrefill80+st.PagedAccMMA == 0 {
-			t.Fatalf("%s: no prompt attention on the matrix unit's accumulate: the FMA tiles answered", g.Name())
-		}
-	}
-	// The operands their producers write: a block whose matvecs are all a
-	// binary16 GEMM (QuantSkipped counts them) has its norms and its
-	// activation write the operand; any other gated block on the int8 path
-	// quantizes in its activation's launch. A dense gated FFN is in every
-	// model here.
-	switch {
-	case st.QuantSkipped > 0 && st.NormF16+st.ActF16Fused == 0:
-		t.Fatalf("%d blocks ran every matvec as a binary16 GEMM and no norm or activation wrote their operand", st.QuantSkipped)
-	case st.GemmInt8 > 0 && st.QuantActs == 0 && m.Cfg.NExpert == 0:
-		t.Fatalf("%d int8 GEMMs and no activation quantized in its own launch", st.GemmInt8)
+	case prompt < m.Cfg.NLayer:
+		t.Fatalf("%d composed prompt block steps for %d blocks: the prompt took another path", prompt, m.Cfg.NLayer)
+	case noMatrix && matrix != 0:
+		t.Fatalf("no matrix unit asked and %d launches on it: the arm is not the int8 one", matrix)
+	case !noMatrix && sm >= 70 && matrix == 0:
+		t.Fatalf("%s lowers the binary16 tile and the composer formed nothing on it", g.Name())
 	}
 }
 

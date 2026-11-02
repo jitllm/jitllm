@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 )
@@ -57,6 +56,10 @@ func (g *devTier) prewarmTower(li int) (roomless string) {
 		defer g.useGeom(prev)
 	}
 	bs, l := g.bs, g.layers[li]
+	if l.conv != nil {
+		// Formed at its placement (prepConv).
+		return ""
+	}
 	if bs == nil || bs.pics == nil || bs.calls == nil || bs.cs == nil && rotates(l.graph) ||
 		g.tkv == nil || g.tkv.kc == nil || l.win != 0 || l.windowed {
 		return ""
@@ -121,17 +124,17 @@ func picRow(d []byte, at, lo, hi, phase int) {
 	if rowsFaulted("piccausal") {
 		hi = min(hi, at+1)
 	}
-	binary.LittleEndian.PutUint32(d[4*kernels.PRowTab:], 0)
-	binary.LittleEndian.PutUint32(d[4*kernels.PRowStart:], uint32(min(lo, at)))
-	binary.LittleEndian.PutUint32(d[4*kernels.PRowEnd:], uint32(hi))
-	binary.LittleEndian.PutUint32(d[4*kernels.PRowWrite:], uint32(at))
+	binary.LittleEndian.PutUint32(d[4*composer.RowTab:], 0)
+	binary.LittleEndian.PutUint32(d[4*composer.RowStart:], uint32(min(lo, at)))
+	binary.LittleEndian.PutUint32(d[4*composer.RowEnd:], uint32(hi))
+	binary.LittleEndian.PutUint32(d[4*composer.RowWrite:], uint32(at))
 }
 
 // picDesc is the descriptors of a call's n rows from position pos: each row
 // attends the picture's rows, the call's where it is not a phase of a
 // row-chunked block (keys rows where it is).
 func (bs *blockScratch) picDesc(pos, n, phase, keys int) []byte {
-	b, w := bs.picStage, 4*kernels.PRowWords
+	b, w := bs.picStage, 4*composer.RowWords
 	end := pos + n
 	if phase == 2 {
 		end = keys
@@ -146,7 +149,7 @@ func (bs *blockScratch) picDesc(pos, n, phase, keys int) []byte {
 // (graph.Attrs.RowWindows): its own run where the windows are a row each,
 // else the run holding it; the picture where no run holds it.
 func (bs *blockScratch) picWinDesc(pos, n, phase, keys int, runs []nn.KeyRun, perRow bool) []byte {
-	b, w := bs.picStageW, 4*kernels.PRowWords
+	b, w := bs.picStageW, 4*composer.RowWords
 	end := pos + n
 	if phase == 2 {
 		end = keys

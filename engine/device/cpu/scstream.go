@@ -1,6 +1,8 @@
 package cpu
 
-import "github.com/jitllm/jitllm/composer/kernels"
+import (
+	"github.com/jitllm/jitllm/format/layout"
+)
 
 // The host readers of container v27's SC stream (kernels.ScStream: Q4_K and
 // Q5_K's sixteen 6-bit scale/min fields in three words a super-block). Every
@@ -11,7 +13,7 @@ import "github.com/jitllm/jitllm/composer/kernels"
 
 // scCursorWord is the stream word the SC cursor holds while sub-block sn runs:
 // the one its scale starts in.
-func scCursorWord(sn int) int { w, _, _ := kernels.ScField(sn, false); return w }
+func scCursorWord(sn int) int { w, _, _ := layout.ScField(sn, false); return w }
 
 // scStep reports whether the SC cursor steps one plane stride after sub-block
 // sn of a super-block's eight: when the next sub-block's scale starts in the
@@ -29,7 +31,7 @@ type scOps[R comparable] struct {
 // argument. tmp is written only when the field straddles, and must differ
 // from dst; dst may be cur.
 func scField[R comparable](o scOps[R], dst, cur, tmp R, sn int, min bool, next func(R)) {
-	w, b, hi := kernels.ScField(sn, min)
+	w, b, hi := layout.ScField(sn, min)
 	switch rel := w - scCursorWord(sn); {
 	case rel == 0 && hi == 0:
 		o.shl(dst, cur, byte(26-b))

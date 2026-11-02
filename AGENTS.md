@@ -50,7 +50,7 @@ gate below before it counts.
 
 | principle | what it means | the gate |
 |---|---|---|
-| **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`; device paths through `kernels`/IR only |
+| **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`; device code only from the composer's forms (no hand-written kernels) |
 | **No Go compute** | no arithmetic a token runs is a Go loop; a missing kernel is a BASIC generated kernel, never a fallback (RULE 8) | `TestNoProductionCodeImportsTheOracle`, `model.TestEveryModelRunsGenerated` |
 | **Relocation** | any block, its KV pages and its recurrent state can move between any two devices, the CPU among them, mid-sequence, with the same answer; no device is a default where blocks live, and every move names its destination | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamMovesTheSummaryToTheCPU`; decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes` |
 | **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place: no page held by a session and the prefix cache both, no host copy of a card's history), `TestBlocksPageOnTheListedCard` (cards listed without the CPU, `WithCPU(false)`, page the model on themselves and nothing runs on the CPU); decision models: `TestDecisionPagesWithTheSameAnswer`, `TestLayaPagesWithTheSameAnswer` |
@@ -166,7 +166,7 @@ it stood in AGENTS.md", "The 0.90 and 0.70 readings").
 ## RULE 2f: the Go collector is part of the engine's budget.
 
 Page frames and the dense region are anonymous mappings outside the Go heap
-(`kernels.MapOffHeap`), outside the collector's goal, its memory-limit
+(`offheap.MapOffHeap`), outside the collector's goal, its memory-limit
 arithmetic and its marking. Page frames are permanently live, so on the heap a
 budget close to the memory limit leaves the collector a goal it can never reach:
 on Qwen3-Next-80B it was 42.5% of the CPU, and the cliff is sharp (8.34 GiB of
@@ -659,7 +659,7 @@ SSE TIER").
 ## RULE 11c: the kernels are gated. The tier's wiring of them is not.
 
 **A new graph feature is not on the device until an end-to-end gate runs a model
-that HAS it, every block placed, against the host.** A gate on `kernels.MatVec`
+that HAS it, every block placed, against the host.** A gate on a composed form
 proves the kernel and says nothing about whether the tier asked for the right
 one; a kernel gate and a host gate can both be green while the tier wires them
 wrongly. Declining a block is not the answer to a packing choice of the file:

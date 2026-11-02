@@ -164,8 +164,6 @@ type JIT struct {
 	ghalf    []int32
 	gout     []float32
 	gscratch []float32
-	// device is the optional GPU tier; nil is the normal case.
-	device Device
 	gtile  map[rateKey]gemmTile
 	gtune  map[rateKey]*gemmTuner
 	ptune  *duelTuner
@@ -933,30 +931,12 @@ func (f *JIT) EndPrefillE() {
 // false when it cannot: no kernel for this type, a shape the kernel does not
 // handle, or scratch too small.
 func (f *JIT) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
-	return f.matVec(out, t, w, x, nrows, k, true)
-}
-
-// MatVecHost is MatVec without the device offer: the host kernel, whatever is
-// attached. It is for weights of a block the host is running; the device's
-// per-matvec staging buffers are per device, not per session, so offering them
-// lets two sessions disturb each other's logits.
-func (f *JIT) MatVecHost(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
-	return f.matVec(out, t, w, x, nrows, k, false)
-}
-
-func (f *JIT) matVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int, offer bool) bool {
 	if f == nil {
 		return false
 	}
 	// A quantized weight here is the source format's row-major layout on an
 	// inference path; see engine/nn/rowmajor.go.
 	countRowMajor(t)
-	// The accelerator gets first refusal, before any CPU-side setup. It declines
-	// by returning false and the CPU path below runs untouched, which is what
-	// makes this safe to attach unconditionally.
-	if offer && f.device != nil && f.device.MatVec(out, t, w, x, nrows, k) {
-		return true
-	}
 	// F32, F16 and BF16 are one generated kernel at every k (the kernel takes
 	// the remainder itself). Mixture routers, Qwen3-Next's BF16 shared-expert
 	// gate and small HF models' matrices ride here. The router's selection is

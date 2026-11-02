@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -385,7 +384,7 @@ func (g *devTier) towerAt(p *nn.LayerPlan, rows int) bool {
 		g.dropScratch(g.bs)
 		g.bs = nil
 		g.visCap = rows
-		return g.buildTowerScratch(p) && g.towerKVAt(p) && g.towerTwins()
+		return g.buildTowerScratch(p) && g.towerKVAt(p)
 	}()
 	if ok && g.overBudget() {
 		g.LastErr = fmt.Sprintf("the tower's set at %d rows passes the budget: %d of %d used", rows, g.used, g.limit)
@@ -458,58 +457,6 @@ func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
 		if l != nil && l.geo == g.geoCur && l.kvBytes > 0 {
 			l.kvBytes = uint64(cache + vcache)
 		}
-	}
-	return true
-}
-
-// towerTwins builds every tower block's batched twins at the scratch's rows,
-// which PrepLayer builds for a placed block and a resize must build for all:
-// a Compile from inside a submission deadlocks. Callers hold g.mu.
-func (g *devTier) towerTwins() bool {
-	for li, l := range g.layers {
-		if l == nil || l.geo != g.geoCur {
-			continue
-		}
-		for _, m := range []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd, &l.mvSG, &l.mvBA, &l.mvSO} {
-			if m.kern == nil {
-				continue
-			}
-			if _, ok := g.batchMV(*m, g.bs.rows, g.bs.tok); !ok {
-				g.LastErr = fmt.Sprintf("non-causal block %d: no batched twin at %d rows", li, g.bs.rows)
-				return false
-			}
-		}
-		// A block's own activation bakes the set's rows too.
-		if l.actK != nil {
-			l.actK.Close()
-			l.actK = nil
-		}
-		if !g.ownActKern(l) {
-			return false
-		}
-	}
-	return true
-}
-
-// ownActKern builds non-causal block l's own activation kernel at the set's
-// rows, where its MLP's gating or activation is not the set's (layer.actK):
-// the set's bs.actMul bakes the first block's. Callers hold g.mu with the
-// non-causal set in use.
-func (g *devTier) ownActKern(l *layer) bool {
-	bs := g.bs
-	if bs == nil || (l.ungated == ungatedFFN(&bs.p) && l.act == bs.p.Act) {
-		return true
-	}
-	k, err := kernels.ActMul(bs.rows*l.nffn, l.act)
-	if l.ungated {
-		k, err = kernels.Act(bs.rows*l.nffn, l.act)
-	}
-	if err == nil {
-		l.actK, err = g.compile(k)
-	}
-	if err != nil {
-		g.LastErr = fmt.Sprintf("a non-causal block's own %s activation: %v", l.act, err)
-		return false
 	}
 	return true
 }

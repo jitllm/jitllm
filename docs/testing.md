@@ -259,7 +259,7 @@ which reads no environment) maps these onto the `backend.Opts` `Open` uses:
 | variable | effect | unset |
 |---|---|---|
 | `JITLLM_VK_DEVICE` | the Vulkan device every `backend.Open` takes, by index or name substring (`1` is the Iris Xe beside the RTX here) | the default rule's pick |
-| `JITLLM_ROCM` | the ROCm library directory the HIP backend loads from (`backend`, `lowertest`, `hip` and `server` tests; `jitllm` and `jitllmd` too); with no AMD card, comgr alone runs the offline code object gate (docs/design/amd-hip.md) | the default search: the loader, `/opt/rocm/lib`, `/opt/rocm-*/lib` |
+| `JITLLM_ROCM` | the ROCm library directory the HIP backend loads from (`backend`, `hip` and `server` tests, and `engine/model`'s `TestComposedFormsLowerForAMDGPU`; `jitllm` and `jitllmd` too); with no AMD card, comgr alone runs that offline code object gate over the composer's forms (docs/design/amd-hip.md) | the default search: the loader, `/opt/rocm/lib`, `/opt/rocm-*/lib` |
 | `JITLLM_VK_MAXGROUPS` | workgroups per Vulkan dispatch, below the device's own `maxComputeWorkGroupCount`; `7` sends nearly every launch in the suite through a split dispatch | the device's own |
 | `JITLLM_VK_VALIDATION` | the prefix the Khronos validation layer is installed under, for `backend.TestSplitLaunchesAreValidVulkanUsage`; `apt-get download vulkan-validationlayers && dpkg-deb -x` the `.deb` into DIR and pass `DIR/usr` | `/usr`, else the test skips |
 

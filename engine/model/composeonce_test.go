@@ -178,11 +178,10 @@ func composesOnce(t *testing.T, m *Model, g *gpu.GPU, width int, to string) {
 			t.Fatalf("%s composed %d form(s) of %d kernel(s), built %d scratch(es) and compiled %d kernel(s) after the placement %v",
 				what, f, k, sb, c, compiled)
 		}
-		// A prompt block that declines at a chunk compiles the tier's own
-		// kernels there (declineTwins), and a part formed at a step names
-		// itself: neither runs after the placement.
-		if d, a := sumCounts(st.DeclineBuilt[:])-sumCounts(st0.DeclineBuilt[:]), st.FormedAtStep-st0.FormedAtStep; d != 0 || a != 0 {
-			t.Fatalf("%s: %d prompt block(s) declined and built the tier's kernels, %d part(s) formed at a step", what, d, a)
+		// A part formed at a step names itself: none runs after the
+		// placement.
+		if a := st.FormedAtStep - st0.FormedAtStep; a != 0 {
+			t.Fatalf("%s: %d part(s) formed at a step", what, a)
 		}
 	}
 	prompts := func(s *Instance, off int, lengths []int) int {

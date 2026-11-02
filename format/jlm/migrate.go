@@ -6,7 +6,7 @@ import (
 	"math"
 	"os"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // Container migrations. The reader opens one version (Version); a container
@@ -121,11 +121,11 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 	type plane struct{ off, per uint64 }
 	var planes []plane
 	if q, ok := packerOf(e.Type); ok {
-		nq, nd, nsc, err := kernels.PackedWords(q, int(rows), e.K())
+		nq, nd, nsc, err := layout.PackedWords(q, int(rows), e.K())
 		if err != nil {
 			return nil, err
 		}
-		if f.ver < 27 && kernels.ScStream(q) {
+		if f.ver < 27 && layout.ScStream(q) {
 			// v26 spent a word on two sub-blocks' pairs, four a super-block.
 			nsc = int(rows) * e.K() / 256 * scWords26
 		}
@@ -329,7 +329,7 @@ func migrate26(path string) error {
 	for i := range f.tab {
 		e := &f.tab[i]
 		t := f.carried(e)
-		if q, ok := packerOf(e.Type); ok && kernels.ScStream(q) {
+		if q, ok := packerOf(e.Type); ok && layout.ScStream(q) {
 			t.Load = func() ([]byte, error) { return f.restream26(e, q) }
 		}
 		src.Tensors = append(src.Tensors, t)
@@ -342,20 +342,20 @@ func migrate26(path string) error {
 // sub-blocks 2w and 2w+1: the scale in bits 0-7 and 16-23, the minimum in
 // 8-15 and 24-31. v27 word w of super-block s is sc[(s*3+w)*rows+r], each
 // field where kernels.ScField puts it.
-func (f *File) restream26(e *Entry, q kernels.Quant) ([]byte, error) {
+func (f *File) restream26(e *Entry, q layout.Quant) ([]byte, error) {
 	b, err := f.storedBytes(e)
 	if err != nil {
 		return nil, err
 	}
 	sheets, rows := sheetsOf(e.Dims, e.NDim)
-	nq, nd, nsc, err := kernels.PackedWords(q, int(rows), e.K())
+	nq, nd, nsc, err := layout.PackedWords(q, int(rows), e.K())
 	if err != nil {
 		return nil, err
 	}
 	nsuper := e.K() / 256
 	old := int(rows) * nsuper * scWords26
 	head := (nq + nd) * 4 * int(sheets)
-	if len(b) != head+old*4*int(sheets) || nsc != int(rows)*nsuper*kernels.ScStreamWords {
+	if len(b) != head+old*4*int(sheets) || nsc != int(rows)*nsuper*layout.ScStreamWords {
 		return nil, fmt.Errorf("jlm: %s: %d stored bytes for a v26 %v of %d sheets of %d rows",
 			e.Name, len(b), e.Type, sheets, rows)
 	}
@@ -367,7 +367,7 @@ func (f *File) restream26(e *Entry, q kernels.Quant) ([]byte, error) {
 		dst := out[head+sh*nsc*4:]
 		for r := 0; r < int(rows); r++ {
 			for s := 0; s < nsuper; s++ {
-				var ws [kernels.ScStreamWords]uint32
+				var ws [layout.ScStreamWords]uint32
 				for sub := 0; sub < 8; sub++ {
 					si := s*8 + sub
 					v := le.Uint32(in[4*((si/2)*int(rows)+r):])
@@ -376,7 +376,7 @@ func (f *File) restream26(e *Entry, q kernels.Quant) ([]byte, error) {
 					scPut26(&ws, sub, true, uint8(v>>(lane+8)))
 				}
 				for w, v := range ws {
-					le.PutUint32(dst[4*((s*kernels.ScStreamWords+w)*int(rows)+r):], v)
+					le.PutUint32(dst[4*((s*layout.ScStreamWords+w)*int(rows)+r):], v)
 				}
 			}
 		}
@@ -386,8 +386,8 @@ func (f *File) restream26(e *Entry, q kernels.Quant) ([]byte, error) {
 
 // scPut26 ORs a 6-bit field into a super-block's stream words, where
 // kernels.ScField places it.
-func scPut26(ws *[kernels.ScStreamWords]uint32, sub int, min bool, v uint8) {
-	w, b, hi := kernels.ScField(sub, min)
+func scPut26(ws *[layout.ScStreamWords]uint32, sub int, min bool, v uint8) {
+	w, b, hi := layout.ScField(sub, min)
 	ws[w] |= uint32(v&63) << uint(b)
 	if hi > 0 {
 		ws[w+1] |= uint32(v&63) >> uint(6-hi)

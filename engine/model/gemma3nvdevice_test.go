@@ -114,24 +114,23 @@ func g3nvOnDevice(t *testing.T, tw *Tower, g *g3nvGolden, spec string, stem []fl
 // or no residual adds the device must part, so the comparison sees both.
 //
 // Two arms, because the device has two arithmetics for a matrix's input.
-// The int8 arm pins gpu.Config.NoVolta: every matrix reads the activation
-// quantized to int8 as the host quantizes it, so a block reads the host's
-// output to 1e-6. The f16 arm pins NoMMA, which puts a CUDA card on sm_70's
-// binary16 twin (kernels.MatVecMMA70, GemmVolta) wherever PTX lowers it;
-// that twin is what a V100 ships and Metal's GemmTile is the same twin.
-// It reads the activation unquantized, so it parts from the host by the
-// host's own int8 rounding -- block 3 at 1.6e-4 on a V100, where the int8
-// arm reads 3.8e-9 -- and the falsifiable form of it is the reference's rows
-// at Q8_0 weights and f32 activations (EmbdQ8): the f16 arm must read closer
-// to them than the int8 arm does.
+// The int8 arm pins gpu.Config.NoMMA: the composer forms nothing on the
+// matrix unit, every matrix reads the activation quantized to int8 as the
+// host quantizes it, so a block reads the host's output to 1e-6. The f16 arm
+// is the default where the card lowers a binary16 tile (a V100, Metal's
+// simdgroup matrix): it reads the activation unquantized, so it parts from
+// the host by the host's own int8 rounding -- block 3 at 1.6e-4 on a V100 --
+// and the falsifiable form of it is the reference's rows at Q8_0 weights and
+// f32 activations (EmbdQ8): the f16 arm must read closer to them than the
+// int8 arm does.
 func TestGemma3nTowerOnDeviceMatchesHost(t *testing.T) {
 	m, g := openGemma3nV(t)
 	defer m.Close()
 	tw := m.Tower()
 	stem, host := g3nvBlocks(t, tw, g)
 	want := g3nvEncode(t, tw, g, nil)
-	int8Arm := gpu.WithConfig(func(c *gpu.Config) { c.NoVolta = true })
-	f16Arm := gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = true })
+	int8Arm := gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = true })
+	f16Arm := gpu.WithConfig(func(*gpu.Config) {})
 	ran := 0
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
@@ -140,8 +139,8 @@ func TestGemma3nTowerOnDeviceMatchesHost(t *testing.T) {
 				t.Skipf("%s: not present", spec)
 			}
 			ran++
-			if n := a.st.VoltaMV + a.st.TileMV + a.st.GemmF16; n != 0 {
-				t.Fatalf("%s: the int8 arm built %d matvecs on binary16 activations", spec, n)
+			if n := a.st.MatrixPart(gpu.EveryPart); n != 0 {
+				t.Fatalf("%s: the int8 arm made %d launches on the matrix unit", spec, n)
 			}
 			t.Logf("%s, int8: block by block worst NMSE %.3e at block %d against the host", spec, a.worst, a.at)
 			if math.IsNaN(a.worst) || a.worst > 1e-6 {
@@ -170,15 +169,15 @@ func TestGemma3nTowerOnDeviceMatchesHost(t *testing.T) {
 			}
 
 			f, _ := g3nvOnDevice(t, tw, g, spec, stem, host, f16Arm)
-			if f.st.VoltaMV+f.st.TileMV+f.st.GemmF16 == 0 {
-				t.Logf("%s: no binary16 twin on this device; its int8 arm is what it ships", spec)
+			if f.st.MatrixPart(gpu.EveryPart) == 0 {
+				t.Logf("%s: no binary16 tile on this device; its int8 arm is what it ships", spec)
 				return
 			}
 			fh, _ := nmse32(want, f.out)
 			fq, _ := nmse32(g.Image.EmbdQ8, f.out)
 			aq, _ := nmse32(g.Image.EmbdQ8, a.out)
-			t.Logf("%s, f16 (%d matvecs): block by block worst NMSE %.3e at block %d, all blocks %.3e against the host; "+
-				"against f32 activations %.3e, the int8 arm %.3e", spec, f.st.VoltaMV+f.st.TileMV+f.st.GemmF16, f.worst, f.at, fh, fq, aq)
+			t.Logf("%s, f16 (%d launches on the matrix unit): block by block worst NMSE %.3e at block %d, all blocks %.3e against the host; "+
+				"against f32 activations %.3e, the int8 arm %.3e", spec, f.st.MatrixPart(gpu.EveryPart), f.worst, f.at, fh, fq, aq)
 			if math.IsNaN(f.worst) || f.worst > 1e-3 || math.IsNaN(fh) || fh > 1e-3 {
 				t.Fatalf("%s: the binary16 twin reads %.3e at block %d and %.3e over the tower against the host",
 					spec, f.worst, f.at, fh)

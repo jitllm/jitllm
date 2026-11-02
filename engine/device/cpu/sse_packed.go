@@ -5,9 +5,8 @@ package cpu
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
-
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // The SSE tier's packed matvec: the 64-row tile, the 8-row tail and the fused
@@ -73,7 +72,7 @@ type ssePackedFormat struct {
 }
 
 func newSSEPackedFormat(t quant.Type, who string) (ssePackedFormat, error) {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return ssePackedFormat{}, fmt.Errorf("jit: %s: %s has no device layout", who, t)
 	}
@@ -86,13 +85,13 @@ func newSSEPackedFormat(t quant.Type, who string) (ssePackedFormat, error) {
 	if err != nil {
 		return ssePackedFormat{}, err
 	}
-	f := ssePackedFormat{t: t, codes: codes, narrow: NarrowD(t), e8m0: E8M0D(t), stream: kernels.ScStream(q),
-		d32: kernels.D32(q)}
-	f.sub, f.bits, f.biasK, f.biasArray = kernels.Layout(q)
-	f.perSuper, f.scOff = kernels.ScaleLayout(q)
-	f.signed = kernels.SignedPayload(q)
-	f.minD = kernels.MinInD(q)
-	f.hi = kernels.HiPlane(q)
+	f := ssePackedFormat{t: t, codes: codes, narrow: NarrowD(t), e8m0: E8M0D(t), stream: layout.ScStream(q),
+		d32: layout.D32(q)}
+	f.sub, f.bits, f.biasK, f.biasArray = layout.Layout(q)
+	f.perSuper, f.scOff = layout.ScaleLayout(q)
+	f.signed = layout.SignedPayload(q)
+	f.minD = layout.MinInD(q)
+	f.hi = layout.HiPlane(q)
 	f.pw, f.hw, f.halfSub = f.sub*f.bits/32, f.sub*f.hi/32, f.sub/2
 	f.perWord, f.stride = perWordOf(f.biasArray), strideOf(f.biasArray)
 	if f.bits != 2 && f.bits != 4 && f.bits != 8 {

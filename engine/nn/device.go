@@ -13,41 +13,21 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// Device is an optional accelerator that can serve a decode matvec.
-//
-// It is declared here and implemented in engine/device/gpu so that the core module keeps
-// no dependency on the FFI layer: go.mod has one require and there is no cgo
-// (goffi reaches the drivers through dlopen).
-//
-// MatVec returns false for anything it cannot serve (an unsupported quant type,
-// a shape it has no kernel for, a weight it has not uploaded) and the caller
-// runs the CPU path. A nil Device and a Device that declines are the same.
-type Device interface {
-	// MatVec computes out[0:nrows] = W x, or returns false to decline.
-	// w is the raw GGUF tensor bytes, so the Device owns any residency and
-	// repacking it needs, keyed on the pointer it was handed. The pointer is
-	// the identity: a caller may offer only bytes that stay at that address,
-	// unchanged, until it tells the Device otherwise (CopyForgetter). A
-	// pager's reused frame does not stay.
-	MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool
-}
-
-// SetDevice attaches an accelerator. Passing nil detaches it.
-func (f *JIT) SetDevice(d Device) {
+// ShareActWindow hands d this JIT's activation window where d quantizes
+// activations itself (ActWindower): a device and the host that quantize with
+// two windows do not agree on token ids. A device that never quantizes has no
+// opinion, and nil is no device.
+func (f *JIT) ShareActWindow(d LayerDevice) {
 	if f == nil {
 		return
 	}
-	f.device = d
-	// A device that quantizes activations host-side has to use this session's
-	// window or the two tiers will not agree on token ids. Optional, because a
-	// device that never quantizes has no opinion.
 	if w, ok := d.(ActWindower); ok {
 		w.SetActWindow(f.actWindow)
 	}
 }
 
 // Weight is one matvec's operand: the raw GGUF bytes plus the shape that reads
-// them. The Device keys residency on the pointer, exactly as MatVec does.
+// them. A device keys residency on the pointer.
 type Weight struct {
 	T    quant.Type
 	Data []byte
@@ -1196,8 +1176,6 @@ type RecurrentPlan struct {
 // its first N blocks on the device and the rest on the CPU with no separate
 // mechanism for the seam.
 type LayerDevice interface {
-	Device
-
 	// PrepLayer uploads block li's weights and scratch. It returns false if the
 	// block will not fit, or a quant type has no kernel, in which case that
 	// block and every later one runs on the CPU.
@@ -1691,11 +1669,11 @@ type NamedDevice interface {
 // uses (SetActWindow).
 type ActWindower interface{ SetActWindow(n int) }
 
-// CopyForgetter is a Device that keeps copies of the weights MatVec was handed,
+// CopyForgetter is a device that keeps copies of the weights it was handed,
 // keyed on their address, and can be told that the bytes at an address range
 // are no longer the ones it copied: a pager's frame refilled with another
 // block, or memory given back. It drops every copy inside [p, p+n). A caller
-// may offer a weight whose address is reused only to a Device it tells.
+// may hand a weight whose address is reused only to a device it tells.
 //
 // Forget may be called on any goroutine, from inside a page-in the device
 // itself started, and while no session is open; it must not block on the

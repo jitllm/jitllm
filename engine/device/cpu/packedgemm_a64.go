@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -17,12 +17,12 @@ import (
 // sub-block scale one instruction on NEON, so unlike amd64 there is no dot
 // sequence for which the float form is cheaper.
 func StationaryIntAccA64(t quant.Type, win int) bool {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return false
 	}
-	sub, _, _, biasArray := kernels.Layout(q)
-	perSuper, _ := kernels.ScaleLayout(q)
+	sub, _, _, biasArray := layout.Layout(q)
+	perSuper, _ := layout.ScaleLayout(q)
 	return perSuper > 1 && win >= sub*perSuper && (biasArray || sub == Q8Block/2)
 }
 

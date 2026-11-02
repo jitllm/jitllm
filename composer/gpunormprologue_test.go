@@ -8,9 +8,9 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testlock"
 )
@@ -88,7 +88,7 @@ func TestComposedGPUNormPrologueRuns(t *testing.T) {
 	const K, Q, KV = 2048, 1024, 0
 	rng := rand.New(rand.NewSource(5))
 	weights := map[jlm.Role][3][]uint32{}
-	weights[jlm.RoleAttnQ] = packed(t, quant.Q4_K, kernels.Q4_K, Q, K, rng)
+	weights[jlm.RoleAttnQ] = packed(t, quant.Q4_K, layout.Q4_K, Q, K, rng)
 	w := make([]float32, K)
 	x := make([]float32, K)
 	for i := range w {

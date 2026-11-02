@@ -4,27 +4,21 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestWrittenParamsNamesTheOutputs holds the mask a concurrent Metal encoder
-// orders dispatches by: GemmTile stores through scalar, vector and tile ops
-// into shared memory, and into its output alone among its parameters; a
-// kernel storing into two parameters reports both.
+// orders dispatches by: a kernel storing into shared memory and into one
+// parameter reports that parameter alone, and one storing into two reports
+// both.
 func TestWrittenParamsNamesTheOutputs(t *testing.T) {
-	k, err := kernels.GemmTile(kernels.MatVecShape{T: kernels.Q4_K, K: 512, Rows: 64, NTok: 32},
-		kernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := -1
-	for i, p := range k.Params {
-		if p.Name == "pOut" {
-			out = i
-		}
-	}
-	if got, want := k.WrittenParams(), uint64(1)<<uint(out); out < 0 || got != want {
-		t.Fatalf("GemmTile writes %b, want only pOut (%b)", got, want)
+	s := ir.New("shared", [3]int{32, 1, 1})
+	in, out := s.Param("in", ir.F32), s.Param("out", ir.F32)
+	sh := s.Shared("sh", ir.F32, 32)
+	s.Store(sh, s.TID(), s.Load(ir.F32, in, s.TID(), 0), 0)
+	s.Barrier()
+	s.Store(out, s.TID(), s.Load(ir.F32, sh, s.TID(), 0), 0)
+	if got := mustBuild(t, s).WrittenParams(); got != 0b10 {
+		t.Fatalf("a kernel storing into shared memory and out reports %b, want 10", got)
 	}
 
 	b := ir.New("two", [3]int{32, 1, 1})

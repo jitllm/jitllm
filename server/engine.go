@@ -100,11 +100,6 @@ type Config struct {
 	// for the default search (backend/hip). jitllmd fills it from JITLLM_ROCM.
 	ROCm string
 
-	// TuneCache is the directory the device tuners keep their answers in
-	// (gpu.WithTuneCache), or empty for none. jitllmd passes the user cache
-	// directory.
-	TuneCache string
-
 	// DefaultMaxSeq is the KV capacity a session gets when it asks for none.
 	// Zero takes the model's own context length.
 	DefaultMaxSeq int
@@ -305,7 +300,7 @@ type LoadedModel struct {
 	// placement the load states, served to every session (model.Serve).
 	inst *model.Instance
 	// instDev is the device inst was placed on, guarded by inst's lock.
-	instDev  nn.Device
+	instDev  nn.LayerDevice
 	loadedAt time.Time
 
 	// dev is the tier, shared by every session of this model: the tier owns
@@ -318,7 +313,7 @@ type LoadedModel struct {
 	// written only by attachDevice, under devMu: a model loaded host-only gets
 	// its tier when a session first asks to move to a device.
 	devMu     sync.RWMutex
-	dev       nn.Device
+	dev       nn.LayerDevice
 	gpu       *gpu.GPU
 	closeDev  func()
 	deviceIDs []string
@@ -414,7 +409,7 @@ func (s *Session) in() *model.Instance {
 	return s.lm.inst
 }
 
-func (lm *LoadedModel) device() nn.Device {
+func (lm *LoadedModel) device() nn.LayerDevice {
 	lm.devMu.RLock()
 	defer lm.devMu.RUnlock()
 	return lm.dev
@@ -626,7 +621,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	}
 
 	var (
-		dev      nn.Device
+		dev      nn.LayerDevice
 		gpux     *gpu.GPU
 		closeDev = func() {}
 		devIDs   []string
@@ -777,8 +772,6 @@ func (e *Engine) makeInstance(lm *LoadedModel) error {
 func (e *Engine) tierOptions(sessions int, tierConfig func(*gpu.Config), hostBudget uint64) []gpu.Option {
 	return []gpu.Option{
 		gpu.WithROCm(e.cfg.ROCm),
-		gpu.WithTuneCache(e.cfg.TuneCache),
-		gpu.WithLazyTune(e.cfg.TuneCache != ""),
 		gpu.WithHostBudget(hostBudget),
 		// Every model's tier spends one card's memory once, so the room one
 		// model gives back is the next one's (orchestrate.go).
@@ -2693,7 +2686,7 @@ func tierNames(g *gpu.GPU) []string {
 }
 
 // tierBox holds a tier behind an atomic pointer.
-type tierBox struct{ d nn.Device }
+type tierBox struct{ d nn.LayerDevice }
 
 // bindSession attaches the session's instance to the model's current tier when it
 // is on another (or on none), keeping as many blocks on a device as it had.

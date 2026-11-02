@@ -3,9 +3,9 @@
 package nn
 
 import (
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
@@ -61,7 +61,7 @@ func (f *JIT) MatVecPackedGroup(g *MVGroup) bool {
 		if p == nil || len(p.QS) == 0 || len(g.Out[i]) < nrows || nrows <= 0 {
 			return false
 		}
-		q, ok := kernels.QuantOf(t)
+		q, ok := layout.QuantOf(t)
 		if !ok {
 			return false
 		}
