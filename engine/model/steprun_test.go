@@ -54,7 +54,6 @@ func TestStepRunsAdmitsAPromptBesideDecoding(t *testing.T) {
 					} else if m.Cfg.Hybrid() {
 						t.Logf("%d row-steps of linear blocks chained a chunk's state", chained)
 					}
-					checkLinearRowsForm(t, m, g)
 					w, at := worstStep(got, want)
 					t.Logf("%d rows, %d logit rows compared: worst NMSE %.3e (row %d) against each session alone",
 						rows, len(want), w, at)

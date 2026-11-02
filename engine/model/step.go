@@ -207,6 +207,14 @@ func stepRuns(runs []Run, lone bool) ([][]float32, error) {
 		if err := in.use(runs[0].Session); err != nil {
 			return nil, err
 		}
+		lg, err := stepRunsOn(runs, lone)
+		if err == nil {
+			// A step is every session's token: the seam's tuner and the grow
+			// path count it as Forward counts its own.
+			in.growStep()
+			in.seamStep()
+		}
+		return lg, err
 	}
 	return stepRunsOn(runs, lone)
 }

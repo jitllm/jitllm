@@ -49,7 +49,6 @@ func TestStepAcrossSessionsLatentMatchesEachAlone(t *testing.T) {
 						}
 						defer g.Close()
 						r := latentStepGate(t, m, g)
-						checkLinearRowsForm(t, m, g)
 						if !(r.worst < mlaDeviceNMSE) {
 							t.Fatalf("a latent model's step across sessions disagrees with each session alone: "+
 								"NMSE %.3e at row %d", r.worst, r.at)

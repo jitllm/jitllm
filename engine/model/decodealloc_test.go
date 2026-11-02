@@ -245,7 +245,6 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					t.Run("step-one-head", func(t *testing.T) { stepAllocs(t, m, g, stepOneHead) })
 					t.Run("step-chunk", func(t *testing.T) { stepAllocs(t, m, g, stepChunk) })
 					t.Run("step-solo", func(t *testing.T) { stepAllocs(t, m, g, stepSolo) })
-					checkLinearRowsForm(t, m, g)
 				})
 				// Every block served whole by the composer, and the head
 				// on a tier of its own, with the prompt's

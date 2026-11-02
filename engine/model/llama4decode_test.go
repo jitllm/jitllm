@@ -45,10 +45,9 @@ func TestSynthLlama4Q8DecodeOnDevice(t *testing.T) {
 		nmse := llama4Cmp(f64s(want[p]), got[p])
 		worst = math.Max(worst, nmse)
 		if math.IsNaN(nmse) || !(nmse < 1e-6) {
-			t.Fatalf("pos %d: NMSE %.3e, argmax %d against the host's %d (%d fused expert launches)",
-				p, nmse, Greedy(got[p]), Greedy(want[p]), gpu.Stats().MoEFused)
+			t.Fatalf("pos %d: NMSE %.3e, argmax %d against the host's %d",
+				p, nmse, Greedy(got[p]), Greedy(want[p]))
 		}
 	}
-	t.Logf("decode on cuda matches the host at %d positions, worst NMSE %.3e, %d fused expert launches",
-		len(want), worst, gpu.Stats().MoEFused)
+	t.Logf("decode on cuda matches the host at %d positions, worst NMSE %.3e", len(want), worst)
 }

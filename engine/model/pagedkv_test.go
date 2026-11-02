@@ -79,7 +79,7 @@ func TestPagedKVBatchMatchesHost(t *testing.T) {
 			break
 		}
 	}
-	t.Logf("%d rows, %d tokens each, %d paged launches", len(ids), gen, lastBatchStats.PagedLaunches)
+	t.Logf("%d rows, %d tokens each", len(ids), gen)
 }
 
 // firstModel is the first of |-separated file names present in the model

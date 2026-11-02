@@ -180,8 +180,10 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 func TestTuneSeamReadsTheSessionsSnapshot(t *testing.T) {
 	e := New(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
 	t.Cleanup(e.Close)
-	if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, deviceModel), ModelID: "dev", DeviceIDs: []string{"gpu:0"}}); err != nil {
-		t.Skipf("NO DEVICE: loading onto -devices gpu:0 failed (%v) -- this gate proved nothing", err)
+	// The tuner's seams leave blocks on the CPU, so the CPU is listed: a list
+	// of cards alone keeps every block on them and leaves no seam to tune.
+	if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, deviceModel), ModelID: "dev", DeviceIDs: []string{"gpu:0", "cpu"}}); err != nil {
+		t.Skipf("NO DEVICE: loading onto -devices gpu:0,cpu failed (%v) -- this gate proved nothing", err)
 	}
 	c := serveEngine(t, e)
 	ctx := context.Background()

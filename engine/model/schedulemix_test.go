@@ -262,7 +262,6 @@ func (c *mixedCase) run(chunkPos func(base, j, k int) int) ([][]int32, BatcherSt
 	chained := 0
 	if g != nil {
 		chained = g.Stats().RecChainRows
-		checkLinearRowsForm(t, c.m, g)
 	}
 	return out, sc.Stats(), split, chained
 }

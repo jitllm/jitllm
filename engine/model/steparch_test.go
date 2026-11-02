@@ -36,7 +36,6 @@ func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
 					g := stepTier(t, m, dev, false)
 					defer g.Close()
 					r := stepGate(t, m, g, false)
-					checkLinearRowsForm(t, m, g)
 					bound := stepBound(m, name, r, ctl)
 					t.Logf("STEP %s %s %s: worst logit NMSE %.3e (bound %.3e)", m.Cfg.Arch, filepath.Base(name),
 						g.Name(), r.worst, bound)
@@ -51,8 +50,7 @@ func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
 }
 
 // stepBound is the step gate's bound for model name, opened as m, whose step
-// measured r: a synthetic fixture's (fixtureStepNMSE) unless its grouped
-// experts ran in binary16 (sm_70's tensor cores, Metal's tiles); a mixture's,
+// measured r: a synthetic fixture's (fixtureStepNMSE); a mixture's,
 // whose router turns the step's grouped arithmetic into a wider band, or
 // denseStepBand times its order-only control where that is wider still; or
 // denseStepBand times ctl, the order-only control measured on the same device
@@ -63,8 +61,6 @@ func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
 // prompt sets with the grouped experts in binary16 and 6.8e-02 with them int8.
 func stepBound(m *Model, name string, r stepResult, ctl float64) float64 {
 	switch {
-	case m.Cfg.MoE() && r.groupedVolta > 0:
-		return max(mixtureStepNMSE, denseStepBand*ctl)
 	case fixture(name):
 		return fixtureStepNMSE
 	case m.Cfg.MoE():

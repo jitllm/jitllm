@@ -22,7 +22,7 @@ import (
 // row-by-row device path (Config.NoBatch, the single-row oracle) and to the
 // host. Every position, because a chunked recurrence that drops the padded
 // tail or restarts at a boundary gets row 0 of each chunk right and drifts from
-// there. Stats.LinearBatched asserts the scan actually ran.
+// there.
 //
 // Fixtures: the three qwen3next shapes (dense, routed mixture, tiled key
 // pairing) and Kimi-Linear's (per-channel decay, latent full blocks).
@@ -197,9 +197,9 @@ func hybridBatchedPrefill(t *testing.T, m *Model) {
 	}
 	sort.Float64s(per)
 	p50, p90 := per[len(per)/2], per[len(per)*9/10]
-	t.Logf("%d positions, %d recurrent block-chunks through the scan: residual NMSE "+
+	t.Logf("%d positions: residual NMSE "+
 		"batched/rows p50 %.3e p90 %.3e worst %.3e at %d; batched/host worst %.3e at %d, rows/host %.3e",
-		plen, bat.st.LinearBatched, p50, p90, worstRows, wrAt, worstHost, whAt, worstOracle)
+		plen, p50, p90, worstRows, wrAt, worstHost, whAt, worstOracle)
 	var lgs, lgh, lgr string
 	worstLg := 0.0
 	for i := range bat.logits {

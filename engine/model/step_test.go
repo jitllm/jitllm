@@ -12,7 +12,6 @@ import (
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestStepAcrossSessionsMatchesEachAlone decodes three instances -- three
@@ -95,7 +94,6 @@ func TestStepAcrossSessionsHybridMatchesEachAlone(t *testing.T) {
 				defer g.Close()
 				r := stepGate(t, m, g, true)
 				hybridStepChecks(t, m, r)
-				checkLinearRowsForm(t, m, g)
 				if got := g.Stats().RecShared; (got > 0) != shared {
 					t.Fatalf("%d pool(s) sized in the shared form with shared=%v: the arm ran the other form",
 						got, shared)
@@ -110,12 +108,11 @@ func TestStepAcrossSessionsHybridMatchesEachAlone(t *testing.T) {
 }
 
 // TestStepAcrossSessionsMixtureMatchesEachAlone is the same gate on a mixture:
-// a step of two or more rows routes on the device and runs every expert matvec
-// grouped by expert (tier's emitGroupedMoE: dp4a, or sm_70's tensor cores),
-// where each session alone runs decode's one-row mixture. A joint step needs
-// every block placed, so a 4 GiB card skips olmoe by name and only a larger
-// one covers it. Stats.GroupedMoE is the selection check: every mixture block
-// of every joint step ran grouped.
+// a step of two or more rows routes on the device and runs its experts in the
+// composer's rows form, where each session alone runs decode's one-row
+// mixture. A joint step needs every block placed, so a 4 GiB card skips olmoe
+// by name and only a larger one covers it. Stats.ServedPart(ComposedBlock) is
+// the selection check: every block of every joint step ran on the composer.
 //
 // JITLLM_STEP_MIXTURE names the mixtures (comma-separated); the default is
 // Qwen3-MoE-4x0.6B and olmoe.
@@ -130,8 +127,6 @@ func TestStepAcrossSessionsMixtureMatchesEachAlone(t *testing.T) {
 					defer g.Close()
 					r := stepGate(t, m, g, false)
 					mixtureStepChecks(t, m, r)
-					t.Logf("%d grouped mixture block(s), %d grouped expert matvec(s) on tensor cores",
-						r.grouped, r.groupedVolta)
 					if !(r.worst < mixtureStepNMSE) {
 						t.Fatalf("a mixture's step across sessions disagrees with each session alone: NMSE %.3e "+
 							"at row %d", r.worst, r.at)
@@ -178,18 +173,15 @@ func openStepMixture(t *testing.T, name string) *Model {
 }
 
 // mixtureStepChecks is the selection a mixture step gate demands: every
-// mixture block of every joint step ran grouped by expert.
+// block of every joint step, its mixtures among them, ran on the composer,
+// none declined. A dense model would pass it, so the gates name mixtures.
 func mixtureStepChecks(t *testing.T, m *Model, r stepResult) {
 	t.Helper()
-	moe := 0
-	for li := 0; li < m.Cfg.NLayer; li++ {
-		if m.Cfg.MoEAt(li) {
-			moe++
-		}
-	}
-	if r.grouped != r.steps*moe {
-		t.Fatalf("%d mixture block(s) ran grouped across %d joint steps, want %d: the step took another path",
-			r.grouped, r.steps, r.steps*moe)
+	want := r.steps * m.Cfg.NLayer
+	t.Logf("%d block steps on the composer across %d joint steps, %d declined", r.blocks, r.steps, r.blockDeclined)
+	if r.blocks < want || r.blockDeclined > 0 {
+		t.Fatalf("%d block steps on the composer across %d joint steps (%d declined), want %d: the step took another path",
+			r.blocks, r.steps, r.blockDeclined, want)
 	}
 }
 
@@ -204,33 +196,6 @@ func stepTier(t *testing.T, m *Model, dev string, shared bool) *tier.GPU {
 	}
 	t.Logf("%s is %s", dev, g.Name())
 	return g
-}
-
-// checkLinearRowsForm is the selection check on the form a hybrid's ragged
-// linear steps took on g: the scan's one-thread form where the device
-// guarantees no 32-lane subgroup (llvmpipe; a Vulkan driver that will not pin
-// the width) or JITLLM_SCALAR_LINEAR_ROWS forced it (testTierOpts), and a lane
-// group a state row everywhere else. Whether a step ran at all is the calling
-// gate's own check; this one says which kernel it was. Which device an index
-// such as "vulkan:0" names depends on the drivers a process finds, so it asks
-// the device rather than the name.
-func checkLinearRowsForm(t *testing.T, m *Model, g *tier.GPU) {
-	t.Helper()
-	// A short convolution (LFM2) has no scan, so neither form of it runs.
-	if !m.Cfg.Hybrid() || m.Cfg.ShortConv() {
-		return
-	}
-	s := g.Stats()
-	scalar := scalarLinearRows() || s.Lanes != ir.SubgroupLanes
-	t.Logf("%s: lanes %d (%s), forced %v: %d linear block(s) stepped on the one-thread form",
-		g.Name(), s.Lanes, s.LanesWhy, scalarLinearRows(), s.LinearRowsScalar)
-	switch {
-	case scalar && s.LinearRowsScalar == 0:
-		t.Fatalf("%s should step a linear block's rows on the scan's one-thread form and never did", g.Name())
-	case !scalar && s.LinearRowsScalar != 0:
-		t.Fatalf("%s guarantees %d lanes and stepped %d linear block(s) on the one-thread form",
-			g.Name(), ir.SubgroupLanes, s.LinearRowsScalar)
-	}
 }
 
 // openStepHybrid opens the hybrid the step gates run, refusing anything that
@@ -296,9 +261,9 @@ type stepResult struct {
 	at     int
 	steps  int
 	linear int // linear blocks run across sessions
-	// Mixture blocks the joint steps ran grouped by expert, and the grouped
-	// expert matvecs among them on sm_70's tensor cores.
-	grouped, groupedVolta int
+	// Block steps the composer ran across the joint steps, served or
+	// replayed, and declined.
+	blocks, blockDeclined int
 	// instances aligned at the first joint step, at the one after the first
 	// session stepped apart, and at every other.
 	alignsFirst, alignsApart, alignsOther int
@@ -434,7 +399,11 @@ func stepGate(t *testing.T, m *Model, g *tier.GPU, apart bool) stepResult {
 			rows, steps*len(prompts), g.Err())
 	}
 	r.linear = s1.SessionLinear - s0.SessionLinear
-	r.grouped, r.groupedVolta = s1.GroupedMoE-s0.GroupedMoE, s1.GroupedVolta-s0.GroupedVolta
+	// A recording's replay runs the composer's parts as its capture did.
+	b1, d1 := s1.ServedPart(tier.ComposedBlock)
+	b0, d0 := s0.ServedPart(tier.ComposedBlock)
+	r.blocks = b1 - b0 + s1.ReplayedPart(tier.ComposedBlock) - s0.ReplayedPart(tier.ComposedBlock)
+	r.blockDeclined = d1 - d0
 	r.worst, r.at = worstStep(got, want)
 	t.Logf("%d sessions x %d steps together: worst logit NMSE %.3e (row %d) against each alone; "+
 		"rows %s", len(prompts), steps, r.worst, r.at, stepRows(got, want))

@@ -12,14 +12,11 @@ import (
 )
 
 // TestBatchedMixturePrefillMatchesRowByRow prefills a mixture on the device in
-// batched chunks -- the router run for the whole chunk, the (token, slot) pairs
-// sorted by expert, the experts run grouped -- and one row at a time
-// (Config.NoBatch), and demands the same logits and the same continuation.
-// Stats.GroupedMoE is the selection check: without it a refused batch falls
-// back to rows and the comparison is of one path against itself. On a latent
-// (MLA) model -- the DeepSeek-V2 family -- Stats.MLABatched is the second one:
-// its attention is batched too (tier's mlabatch.go), and a chunk that refused
-// it went one row at a time through every block, mixture included.
+// batched chunks and one row at a time (Config.NoBatch), and demands the same
+// logits and the same continuation. The selection check is the composer's
+// prompt part at the two widths (ServedPart(ComposedPrompt)): without it a
+// refused batch runs one row at a time and the comparison is of one path
+// against itself.
 //
 // JITLLM_MOE_MODEL names another container (the GPU test host carries olmoe,
 // the 30B and DeepSeek-V2-Lite).
@@ -33,8 +30,7 @@ func TestBatchedMixturePrefillMatchesRowByRow(t *testing.T) {
 
 // floatMoEModels are mixtures whose expert banks are float: the Qwen3.5 hybrid
 // mixture with a prediction block (scripts/mtpgold.py) in F32, F16 and BF16,
-// every weight of each in that format. Their banks run through the grouped
-// matvec's float form (Stats.GroupedFloat), on every card.
+// every weight of each in that format, on every card.
 var floatMoEModels = []string{"synth-qwen35moe-hybrid-mtp.gguf", "synth-qwen35moe-hybrid-mtp-f16.gguf",
 	"synth-qwen35moe-hybrid-mtp-bf16.gguf", "synth-glm4moe.gguf",
 	"synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-minimaxm2.gguf",
@@ -147,10 +143,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 		num, den = num+d*d, den+float64(rowLg[i])*float64(rowLg[i])
 	}
 	nmse := num / den
-	t.Logf("%s: %d grouped blocks (%d expert matvecs on sm_70 tensor cores), %d batched latent blocks, "+
-		"%d paged prefill attentions (%d on sm_70's m8n8k4), last-row logit NMSE %.3e\n  batched %v\n  rows    %v",
-		name, batSt.GroupedMoE, batSt.GroupedVolta, batSt.MLABatched, batSt.PagedPrefillLaunches, batSt.PagedPrefill70,
-		nmse, batIDs, rowIDs)
+	t.Logf("%s: last-row logit NMSE %.3e\n  batched %v\n  rows    %v", name, nmse, batIDs, rowIDs)
 	// The arms are the composer's prompt part at two widths: a chunk of one
 	// row at a time, and the prompt's rows batched in fewer chunks.
 	rp, _ := rowSt.ServedPart(tier.ComposedPrompt)

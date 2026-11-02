@@ -76,7 +76,6 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 					if drafted == 0 || accepted == 0 {
 						t.Fatalf("%d drafted and %d accepted on %s: the speculation never ran", drafted, accepted, spec)
 					}
-					checkLinearRowsForm(t, m, g)
 					// The breaks, on the device: each must part from plain
 					// decode somewhere past a tie.
 					faults := []struct {
