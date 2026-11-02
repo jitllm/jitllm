@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestAFullCardSpillsABlockOntoTheNextOne runs a prompt whose history outgrows
@@ -37,7 +37,7 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 		prompt = append(prompt, m.Vocab.Encode("The capital of France is Paris. Water boils at 100 degrees. ", false)...)
 	}
 	const gen = 8
-	run := func(g *tier.GPU) (*Instance, []int32) {
+	run := func(g *gpu.GPU) (*Instance, []int32) {
 		st := m.NewInstance(len(prompt) + gen + 1)
 		if g != nil {
 			st.SetDevice(g)
@@ -62,7 +62,7 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 	// JITLLM_SPILL_BUDGET).
 	first := spillBudget(380_000_000)
 	// open tries cuda:0 beside each second device, capping the ones caps names.
-	open := func(caps map[string]uint64) *tier.GPU {
+	open := func(caps map[string]uint64) *gpu.GPU {
 		for _, second := range testdevices.Within([]string{"cuda:1", "vulkan:1"}) {
 			spec := ""
 			for _, name := range []string{"cuda:0", second} {
@@ -76,8 +76,8 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 			}
 			// Fill-first: the proportional plan leaves every card room for the
 			// batched prefill's scratch, far more than this history grows by.
-			d, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-				tier.WithConfig(func(c *tier.Config) { c.FillFirst = true }))
+			d, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+				gpu.WithConfig(func(c *gpu.Config) { c.FillFirst = true }))
 			if err == nil && d != nil && len(d.Placed()) == 2 {
 				return d
 			}

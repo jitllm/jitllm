@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestBatchedPrefillInAStateSizedToThePrompt prefills on the device with a
@@ -21,14 +21,14 @@ func TestBatchedPrefillInAStateSizedToThePrompt(t *testing.T) {
 }
 
 // TestBatchedPrefillWithABinary16VCache is the same comparison with the
-// device's V cache in binary16 (tier.Config.KVF16, JITLLM_KV_F16=1). Such a
+// device's V cache in binary16 (gpu.Config.KVF16, JITLLM_KV_F16=1). Such a
 // chunk goes down the per-row device path, which reads the layout it wrote;
 // the batched scratch reads V as float32.
 func TestBatchedPrefillWithABinary16VCache(t *testing.T) {
-	prefillAgainstHost(t, []int{336}, tier.WithConfig(func(c *tier.Config) { c.KVF16 = true }))
+	prefillAgainstHost(t, []int{336}, gpu.WithConfig(func(c *gpu.Config) { c.KVF16 = true }))
 }
 
-func prefillAgainstHost(t *testing.T, lengths []int, opts ...tier.Option) {
+func prefillAgainstHost(t *testing.T, lengths []int, opts ...gpu.Option) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
@@ -38,7 +38,7 @@ func prefillAgainstHost(t *testing.T, lengths []int, opts ...tier.Option) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := tier.OpenWith(opts...)
+	g, err := gpu.OpenWith(opts...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

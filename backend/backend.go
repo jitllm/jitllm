@@ -17,14 +17,14 @@ import (
 
 	"github.com/jitllm/jitllm/backend/metal"
 	"github.com/jitllm/jitllm/backend/vulkan"
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/ir"
 )
 
 // verbose traces every backend's open attempt, and the tier's device probe and
 // ordering, to stderr. The package reads no environment; tier sets it.
 var verbose bool
 
-// SetVerbose turns the open/probe trace on. tier.WithVerbose calls it.
+// SetVerbose turns the open/probe trace on. gpu.WithVerbose calls it.
 func SetVerbose(on bool) { verbose = on }
 
 // Verbose reports whether the trace is on.

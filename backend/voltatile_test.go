@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
-	"github.com/jitllm/jitllm/jit/ptx"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/composer/ptx"
 )
 
 // voltaTileCase is one TestVoltaTilesMatchTheReference kernel: D = A*B + C
@@ -25,7 +25,7 @@ type voltaTileCase struct {
 }
 
 // TestVoltaTilesMatchTheReference forces sm_70's lowering of the collective
-// tiles (the m8n8k4 quad-pair layout, jit/ptx/tile.go) on every CUDA device
+// tiles (the m8n8k4 quad-pair layout, composer/ptx/tile.go) on every CUDA device
 // of sm_70 or later -- a card runs PTX built for an older target -- and holds
 // each case to a float64 product over small integers, where binary16
 // operands and float32 sums are exact, so the compare is equality. The cases

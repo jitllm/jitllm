@@ -9,14 +9,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // The decision readouts on a device (RULE 11c): each decision model's answers
 // with every block placed, and with a seam that leaves blocks home, against
 // the host's on the same bytes, on every device present. The device's split
-// tuner is off (tier.TuneOff), so its reduction order is fixed for the run.
+// tuner is off (gpu.TuneOff), so its reduction order is fixed for the run.
 //
 // decisionDevTol is how far a probability may move between the host and a
 // device: the f32 reduction-order band of the label logits (0.2-0.9 of a
@@ -63,21 +63,21 @@ func decideOn(t *testing.T, m *Model, dev nn.Device, n int, ok func(placed int) 
 		d.violation = violation[0]
 	}
 	why := ""
-	gpu, _ := dev.(*tier.GPU)
+	gpux, _ := dev.(*gpu.GPU)
 	if dev != nil {
 		if err := d.SetDevice(dev, n); err != nil {
 			// A strict placement a card has no room for is the card's size,
 			// not the engine's answer (pplx-decider's half and head on one
 			// 16 GB card).
-			if gpu != nil {
+			if gpux != nil {
 				// The decline's own account (the head's "needs N, M of L
 				// used") is the error; the tier's last error may be another's.
-				cardTooSmall(t, gpu.Err()+" "+err.Error(), "%v", err)
+				cardTooSmall(t, gpux.Err()+" "+err.Error(), "%v", err)
 			}
 			t.Fatal(err)
 		}
-		if gpu != nil {
-			why = gpu.Err()
+		if gpux != nil {
+			why = gpux.Err()
 		}
 		if d.st != nil {
 			why = fmt.Sprintf("%v %s", d.st.DeviceDeclines(), why)
@@ -90,8 +90,8 @@ func decideOn(t *testing.T, m *Model, dev nn.Device, n int, ok func(placed int) 
 		return nil, placed, why, 0
 	}
 	var s0 int
-	if gpu != nil {
-		s0 = gpu.Stats().Submits
+	if gpux != nil {
+		s0 = gpux.Stats().Submits
 	}
 	var out [][]DecisionAnswer
 	for _, req := range decisionRequests {
@@ -107,9 +107,9 @@ func decideOn(t *testing.T, m *Model, dev nn.Device, n int, ok func(placed int) 
 	}
 	// The device ran them: at least one submission a prompt, counted by the
 	// device itself.
-	if gpu != nil && placed > 0 && gpu.Stats().Submits-s0 < len(decisionRequests) {
+	if gpux != nil && placed > 0 && gpux.Stats().Submits-s0 < len(decisionRequests) {
 		t.Fatalf("%d submission(s) for %d requests: the placed blocks did not run on the device",
-			gpu.Stats().Submits-s0, len(decisionRequests))
+			gpux.Stats().Submits-s0, len(decisionRequests))
 	}
 	// Clef has no labels to pick: what the device took is its head, one
 	// request at a time.
@@ -226,7 +226,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 			nb := decisionBlocks(m)
 			ran := 0
 			for _, spec := range stepDevices() {
-				probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || probe == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -234,9 +234,9 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 				probe.Close()
 				ran++
 				t.Run(spec, func(t *testing.T) {
-					open := func(extra ...tier.Option) *tier.GPU {
-						g, err := tier.OpenWith(append(append([]tier.Option{tier.WithDevices(spec),
-							tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...), extra...)...)
+					open := func(extra ...gpu.Option) *gpu.GPU {
+						g, err := gpu.OpenWith(append(append([]gpu.Option{gpu.WithDevices(spec),
+							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...), extra...)...)
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -277,7 +277,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						if composedByDefault {
 							need += 1 << 30
 						}
-						g := open(tier.WithBudget(need), tier.WithHostBudget(need))
+						g := open(gpu.WithBudget(need), gpu.WithHostBudget(need))
 						t.Logf("every-block budget %d bytes", need)
 						defer g.Close()
 						all := func(n int) bool { return n == nb }
@@ -324,7 +324,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 								t.Fatalf("no prompt's labels were picked on %s: the head's whole row came home", spec)
 							}
 							// And by the picked rows' own projection, not the whole
-							// head and a gather (tier.Config.NoPickMV's arm).
+							// head and a gather (gpu.Config.NoPickMV's arm).
 							if n := g.Stats().PickRows; n == 0 {
 								t.Fatalf("%d prompts picked on %s, none by the picked rows' projection", picked, spec)
 							}
@@ -382,8 +382,8 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						need += need/8 + 1<<30
 						// Each run on a device of its own, the last one's room
 						// given back first (as the violation's arm above).
-						composed := func(noPickMV bool) *tier.GPU {
-							return open(tier.WithBudget(need), tier.WithHostBudget(need), tier.WithConfig(func(c *tier.Config) {
+						composed := func(noPickMV bool) *gpu.GPU {
+							return open(gpu.WithBudget(need), gpu.WithHostBudget(need), gpu.WithConfig(func(c *gpu.Config) {
 								c.NoPickMV = noPickMV
 							}))
 						}
@@ -399,7 +399,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 							t.Errorf("the answers moved %.5f from the host's, past %.3f", worst, tol)
 						}
 						st := g.Stats()
-						served, declined := st.ServedPart(tier.ComposedSample)
+						served, declined := st.ServedPart(gpu.ComposedSample)
 						t.Logf("composed, every block on %s: worst difference from the host %.5f; %d prompts picked, %d picks by the composer (%d by the picked rows' projection), %d declined (%s); the composer's instances hold %d bytes",
 							spec, worst, picked, served, st.PickRows, declined, declinesOf(st), st.ComposedBytes)
 						if m.IsEncoder() || c.kind == jlm.DecisionClef || c.kind == jlm.DecisionKev {
@@ -433,7 +433,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 							cardTooSmall(t, why, "%s held %d of %d blocks in the composed gather arm", spec, n, nb)
 						}
 						gs := gg.Stats()
-						gn, gd := gs.ServedPart(tier.ComposedSample)
+						gn, gd := gs.ServedPart(gpu.ComposedSample)
 						if gp == 0 || gn != gp || gd != 0 || gs.PickRows != 0 {
 							t.Fatalf("the gather arm: %d prompts picked, %d by the composer, %d declined, %d by the picked rows' projection (%s)", gp, gn, gd, gs.PickRows, declinesOf(gs))
 						}
@@ -508,7 +508,7 @@ func TestClefHeadLayerNormOnEveryDevice(t *testing.T) {
 	all := func(n int) bool { return n == nb }
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -516,8 +516,8 @@ func TestClefHeadLayerNormOnEveryDevice(t *testing.T) {
 		probe.Close()
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-				tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+			g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+				gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 			if err != nil {
 				t.Fatal(err)
 			}

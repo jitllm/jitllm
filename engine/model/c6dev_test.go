@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // c6DevViolations are the kit's features taken out of the model while only the
@@ -104,16 +104,16 @@ func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 		want[p] = Greedy(lg)
 	}
 	host.Close()
-	gpu, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
-	if err != nil || gpu == nil {
+	gpux, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
+	if err != nil || gpux == nil {
 		noDevice(t, "device", err)
 	}
-	defer gpu.Close()
+	defer gpux.Close()
 	st := m.NewInstance(len(g.IDs) + 1)
 	defer st.Close()
-	st.SetDevice(gpu)
+	st.SetDevice(gpux)
 	if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
-		t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), gpu.Err())
+		t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), gpux.Err())
 	}
 	for p, id := range g.IDs {
 		got, err := st.ForwardGreedy(id)
@@ -126,7 +126,7 @@ func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 	}
 	b := newSessBatch(m, 2, len(g.IDs)+1)
 	defer b.Close()
-	b.SetDevice(gpu)
+	b.SetDevice(gpux)
 	if _, err := b.ForwardBatchGreedy([]int32{g.IDs[0], g.IDs[1]}); err == nil {
 		t.Error("ForwardBatchGreedy ran a model with a head bias; its per-row argmax never sees the bias")
 	}
@@ -225,7 +225,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -238,36 +238,36 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 			// composer runs where it serves blocks the front end states.
 			// noGraph issues every step itself, which counts the declines.
 			onDevice := func(run func(*Instance) [][]float32, steps int, noGraph bool) ([][]float32, string) {
-				opts := append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)
+				opts := append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)
 				if noGraph {
-					opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 				}
-				gpu, err := tier.OpenWith(opts...)
+				gpux, err := gpu.OpenWith(opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer gpu.Close()
+				defer gpux.Close()
 				st := m.NewInstance(len(g.IDs) + 1)
 				defer st.Close()
-				st.SetDeviceLayers(gpu, -1)
+				st.SetDeviceLayers(gpux, -1)
 				if n := st.GPULayers(); n != nl {
 					return nil, fmt.Sprintf("took %d of %d blocks: %v %v", n, nl,
-						st.DeviceDeclines(), gpu.Err())
+						st.DeviceDeclines(), gpux.Err())
 				}
 				if !st.HeadOnDevice() {
-					return nil, "the head stayed on the host: " + gpu.Err()
+					return nil, "the head stayed on the host: " + gpux.Err()
 				}
-				t.Logf("placed: %d reserved rows (%s)", gpu.Stats().ReservedRows, gpu.Err())
+				t.Logf("placed: %d reserved rows (%s)", gpux.Stats().ReservedRows, gpux.Err())
 				got := run(st)
 				if err := runErr; err != nil {
 					runErr = nil
 					return nil, "refused: " + err.Error()
 				}
 				if n := st.GPULayers(); n != nl {
-					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())
+					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpux.Err())
 				}
-				if counted || composedOf(m, gpu) != 0 {
-					composedCovers(t, m, steps, nl, noGraph, gpu)
+				if counted || composedOf(m, gpux) != 0 {
+					composedCovers(t, m, steps, nl, noGraph, gpux)
 				}
 				return got, ""
 			}

@@ -3,9 +3,9 @@ package probe
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer/x86"
 	"github.com/jitllm/jitllm/engine/cost"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/x86"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // sse is whether this host runs the SSE tier: its measuring kernels are the

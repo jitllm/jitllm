@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestQwenVLMatchesLlamaCppTeacherForced runs a real Qwen-VL checkpoint on a
@@ -80,14 +80,14 @@ func TestQwenVLMatchesLlamaCppTeacherForced(t *testing.T) {
 // the host arm, then each device's.
 func qvlTeacherForce(t *testing.T, m *Model, prompt, image, replyText, realFirst string) {
 	reply := m.Vocab.Encode(replyText, false)
-	arm := func(t *testing.T, gpu *tier.GPU) {
+	arm := func(t *testing.T, gpux *gpu.GPU) {
 		tw := m.Tower()
 		ts := tw.testState()
 		defer ts.Close()
-		if gpu != nil {
-			ts.SetDevice(gpu)
+		if gpux != nil {
+			ts.SetDevice(gpux)
 			if ts.GPUBlocks() != tw.Cfg.NLayer {
-				t.Fatalf("the device took %d of %d tower blocks: %v", ts.GPUBlocks(), tw.Cfg.NLayer, gpu.Err())
+				t.Fatalf("the device took %d of %d tower blocks: %v", ts.GPUBlocks(), tw.Cfg.NLayer, gpux.Err())
 			}
 		}
 		f, err := os.Open(filepath.Join("testdata", image))
@@ -110,10 +110,10 @@ func qvlTeacherForce(t *testing.T, m *Model, prompt, image, replyText, realFirst
 		}
 		st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(reply) + 2)
 		defer st.Close()
-		if gpu != nil {
-			st.SetDevice(gpu)
+		if gpux != nil {
+			st.SetDevice(gpux)
 			if st.GPULayers() == 0 {
-				t.Fatalf("the device took no text block: %v", gpu.Err())
+				t.Fatalf("the device took no text block: %v", gpux.Err())
 			}
 		}
 		lg, err := st.PrefillMixed(spans...)
@@ -152,12 +152,12 @@ func qvlTeacherForce(t *testing.T, m *Model, prompt, image, replyText, realFirst
 	t.Run("host", func(t *testing.T) { arm(t, nil) })
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec))
-			if err != nil || gpu == nil {
+			gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+			if err != nil || gpux == nil {
 				t.Skipf("%s: not present (%v)", spec, err)
 			}
-			defer gpu.Close()
-			arm(t, gpu)
+			defer gpux.Close()
+			arm(t, gpux)
 		})
 	}
 }

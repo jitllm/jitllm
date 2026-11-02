@@ -299,7 +299,7 @@ func StartProbe(sh *app.Shell) {
 
 // Reprobe re-reads the machine even if it has been read before. It refuses
 // while a model is loaded: backend.Open opens and closes every backend, which
-// contends with a live tier.GPU. The button is disabled too, but a caller is
+// contends with a live gpu.GPU. The button is disabled too, but a caller is
 // not a button.
 func Reprobe(sh *app.Shell) {
 	if sh == nil || sh.Store == nil || sh.Store.Loaded.Get() {

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestSplitHeadGateMatchesTheHostDeinterleave runs the q/gate split on every

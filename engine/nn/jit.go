@@ -13,8 +13,8 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // gemmKey identifies a prefill kernel: quantization, blocks per row, and the

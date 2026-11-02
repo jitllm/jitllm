@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestPlacement holds WithPlacement to what it promises: blocks and the head
@@ -23,9 +23,9 @@ func TestPlacement(t *testing.T) {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	path := jlmOf(t, p)
-	attach := func(t *testing.T, spec string, pl Placement) (*Model, *Instance, *tier.GPU, error) {
+	attach := func(t *testing.T, spec string, pl Placement) (*Model, *Instance, *gpu.GPU, error) {
 		t.Helper()
-		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

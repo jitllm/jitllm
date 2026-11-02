@@ -5,7 +5,7 @@ package probe
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // TestHostMeasuresSSE runs the host probe's SSE kernels on any x86 host,

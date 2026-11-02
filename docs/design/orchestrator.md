@@ -14,7 +14,7 @@ ones that went quiet. Every decision is one a caller can force or forbid.
   and into a store), lowest priority then least recently used, and the parked
   session resumes byte for byte. It moves history, never weights, and never
   across models.
-- Plasticity in the engine: `tier.GPU.AddDevices` (a running model takes a
+- Plasticity in the engine: `gpu.GPU.AddDevices` (a running model takes a
   card), `State.MoveBlocks` (any block range to any device, the CPU ("cpu")
   among them, with its history; `State.PlaceBlocks` is it from the CPU with
   the tier choosing the card), binary16 histories that travel converted.
@@ -47,7 +47,7 @@ on a full card (SetRelocation) keeps working underneath.
 **One budget per card.** A server holds a tier per model, and each tier used
 to size its own pool for a card from what was free when it opened, so the room
 one model gave back stayed out of another's reach. Every tier the engine opens
-takes its cards' pools from one `tier.PoolRegistry`, keyed by the card's
+takes its cards' pools from one `gpu.PoolRegistry`, keyed by the card's
 identity: a card's memory is spent once across models.
 
 **Visible.** Every orchestrated move is recorded -- session, model, blocks,
@@ -72,7 +72,7 @@ Defaults on: the server reaches the best placement without user tuning.
   another model talks; with the orchestrator off nothing moves.
 - `TestBatchASessionNotWhollyOnTheDeviceRunsAlone`: a session held to two
   device blocks stays at two.
-- `tier.TestTwoModelsShareACardThroughTheRegistry` (engine/model): the
+- `gpu.TestTwoModelsShareACardThroughTheRegistry` (engine/model): the
   second model takes the room the first gives back.
 - The engine's gates hold a moved history to the unmoved one exactly
   (`TestAnyRangeMovesWithItsHistory`, `TestABinary16HistoryMovesToTheDevice`).

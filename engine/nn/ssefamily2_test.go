@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestFamily2RunsOnTheForcedSSETier drives every nn entry point of the SSE

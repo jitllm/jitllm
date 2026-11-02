@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // gemma3Prompt is natural text, so the model is on-distribution at every
@@ -132,7 +132,7 @@ func TestDeviceMatchesHostOnABiasedModel(t *testing.T) {
 			t.Logf("%s: host-vs-host NMSE %.3e at position %d of %d, max|d| %.4f",
 				c.name, base, baseAt, len(toks), baseWorst)
 
-			g, err := tier.Open(0)
+			g, err := gpu.Open(0)
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}

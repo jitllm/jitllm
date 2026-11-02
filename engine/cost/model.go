@@ -4,8 +4,8 @@ import (
 	"math"
 	"slices"
 
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/ir"
 )
 
 // Class is a kind of instruction an estimate counts against a device's
@@ -130,7 +130,7 @@ func (c Cost) add(o Cost) Cost {
 // what each leaves in the device's caches for the next.
 type costModel struct {
 	d Device
-	s jit.Step
+	s composer.Step
 	// reach is, by buffer, the bytes the last kernel estimated reaches
 	// past its address.
 	reach map[int]int64
@@ -138,13 +138,13 @@ type costModel struct {
 	// bytes: a reuse distance stack.
 	recent []touch
 	// keys is the storage each operand lands in.
-	keys jit.StorageKeys
+	keys composer.StorageKeys
 }
 
 // touch is an operand's bytes or, where code is set, a kernel's code.
 type touch struct {
-	o     jit.Operand
-	code  *jit.Kernel
+	o     composer.Operand
+	code  *composer.Kernel
 	bytes int64
 }
 
@@ -189,7 +189,7 @@ func (m *costModel) serve(x touch) [4]float64 {
 	return out
 }
 
-func (m *costModel) touch(o jit.Operand, bytes int64) {
+func (m *costModel) touch(o composer.Operand, bytes int64) {
 	m.touchOf(touch{o: o, bytes: bytes})
 }
 
@@ -207,8 +207,8 @@ func (m *costModel) touchOf(x touch) {
 const sectorBytes = 32
 
 // lineBytes is the bytes a cache moves at once: a host's line, a GPU L1's.
-func lineBytes(kind jit.DeviceKind) int64 {
-	if kind == jit.DeviceGPU {
+func lineBytes(kind composer.DeviceKind) int64 {
+	if kind == composer.DeviceGPU {
 		return 128
 	}
 	return 64
@@ -217,8 +217,8 @@ func lineBytes(kind jit.DeviceKind) int64 {
 // codeBytes is the bytes an instruction of a device's code takes on
 // average: x86's encodings with their VEX prefixes, and a GPU's fixed
 // sixteen.
-func codeBytes(kind jit.DeviceKind) int64 {
-	if kind == jit.DeviceGPU {
+func codeBytes(kind composer.DeviceKind) int64 {
+	if kind == composer.DeviceGPU {
 		return 16
 	}
 	return 6
@@ -227,7 +227,7 @@ func codeBytes(kind jit.DeviceKind) int64 {
 // code is the bytes of kernel k's code: an instruction for each live node
 // and store in each copy an unrolling made of its loop, and a loop's count
 // and branch.
-func (e *estimator) code(live map[int]bool, kind jit.DeviceKind) int64 {
+func (e *estimator) code(live map[int]bool, kind composer.DeviceKind) int64 {
 	k := e.k
 	copies := func(h int) int64 {
 		n := int64(1)
@@ -283,7 +283,7 @@ func (m *costModel) chain(e *estimator, live map[int]bool, words map[int]bool) f
 	k := e.k
 	var out float64
 	for f, nd := range k.Nodes {
-		if !live[f] || nd.Op != jit.OpFold || nd.At < 0 {
+		if !live[f] || nd.Op != composer.OpFold || nd.At < 0 {
 			continue
 		}
 		memo := map[int]float64{}
@@ -305,7 +305,7 @@ func (m *costModel) chain(e *estimator, live map[int]bool, words map[int]bool) f
 				return -1
 			}
 			switch {
-			case x.Op == jit.OpLoad:
+			case x.Op == composer.OpLoad:
 				best += m.d.Caches[0].Latency
 			default:
 				if cl, ok := classOf(k, i, words); ok {
@@ -345,7 +345,7 @@ func (m *costModel) critical(e *estimator, live, words map[int]bool, reads map[i
 			}
 		}
 		switch {
-		case nd.Op == jit.OpLoad:
+		case nd.Op == composer.OpLoad:
 			d += reads[nd.Buf]
 		case e.folded(i):
 		default:
@@ -391,7 +391,7 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 		}
 		memo[i] = false
 		nd := k.Nodes[i]
-		v := nd.Op == jit.OpFold
+		v := nd.Op == composer.OpFold
 		for _, a := range k.Operands(&nd) {
 			v = v || carried(*a)
 		}
@@ -404,7 +404,7 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 			return 0, 0
 		}
 		cl, ok := classOf(k, i, words)
-		if nd.Op == jit.OpLoad {
+		if nd.Op == composer.OpLoad {
 			cl, ok = ClassMem, true
 		}
 		if !ok {
@@ -414,7 +414,7 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 			issue = 1 / r
 		}
 		delay = m.d.Delay[cl]
-		if nd.Op == jit.OpLoad {
+		if nd.Op == composer.OpLoad {
 			if lat, ok := reads[nd.Buf]; ok {
 				delay = lat
 			}
@@ -496,7 +496,7 @@ func (m *costModel) exposed(e *estimator, live map[int]bool, wait map[int]float6
 	elems := float64(max(1, k.Elements()))
 	var out float64
 	for i, nd := range k.Nodes {
-		if !live[i] || nd.Op != jit.OpLoad || k.Bufs[nd.Buf].Kind == jit.BufShared {
+		if !live[i] || nd.Op != composer.OpLoad || k.Bufs[nd.Buf].Kind == composer.BufShared {
 			continue
 		}
 		out = max(out, e.runs(i)/elems*wait[nd.Buf]/max(1, m.d.Overlap))
@@ -507,7 +507,7 @@ func (m *costModel) exposed(e *estimator, live map[int]bool, wait map[int]float6
 // wait is the longest chain of dependent reads in kernel k: each load
 // waits for the loads its index reads, then for the levels its buffer is
 // served from, each by its share.
-func (m *costModel) wait(k *jit.Kernel, live map[int]bool, served map[int][4]float64) float64 {
+func (m *costModel) wait(k *composer.Kernel, live map[int]bool, served map[int][4]float64) float64 {
 	memo := make([]float64, len(k.Nodes))
 	state := make([]uint8, len(k.Nodes))
 	var chain func(i int) float64
@@ -521,7 +521,7 @@ func (m *costModel) wait(k *jit.Kernel, live map[int]bool, served map[int][4]flo
 		for _, a := range k.Operands(&nd) {
 			w = max(w, chain(*a))
 		}
-		if nd.Op == jit.OpLoad {
+		if nd.Op == composer.OpLoad {
 			for l, f := range served[nd.Buf] {
 				w += f * m.latency(l)
 			}
@@ -539,10 +539,10 @@ func (m *costModel) wait(k *jit.Kernel, live map[int]bool, served map[int][4]flo
 }
 
 // cost is kernel k's estimate in the run.
-func (m *costModel) cost(k *jit.Kernel) Cost {
+func (m *costModel) cost(k *composer.Kernel) Cost {
 	e := estimator{k: k, s: m.s, trips: map[int]float64{}, homes: k.Homes()}
 	threads := float64(1)
-	if m.d.Kind == jit.DeviceGPU {
+	if m.d.Kind == composer.DeviceGPU {
 		threads = float64(max(1, k.Elements()))
 		if k.Work {
 			threads *= float64(max(1, k.Group))
@@ -581,12 +581,12 @@ func (m *costModel) cost(k *jit.Kernel) Cost {
 			continue
 		}
 		n := e.runs(i)
-		if nd.Op == jit.OpLoad {
-			if k.Bufs[nd.Buf].Kind == jit.BufShared {
+		if nd.Op == composer.OpLoad {
+			if k.Bufs[nd.Buf].Kind == composer.BufShared {
 				continue
 			}
 			w := e.width(i, nd.Buf)
-			if m.d.Kind == jit.DeviceGPU {
+			if m.d.Kind == composer.DeviceGPU {
 				if st := e.laneStride(i); st > w {
 					over += n * (min(st, sectorBytes) - min(w, sectorBytes))
 				}
@@ -600,11 +600,11 @@ func (m *costModel) cost(k *jit.Kernel) Cost {
 		}
 	}
 	for _, s := range k.Stores {
-		if s.Barrier || s.Run || k.Bufs[s.Buf].Kind == jit.BufShared {
+		if s.Barrier || s.Run || k.Bufs[s.Buf].Kind == composer.BufShared {
 			continue
 		}
 		n := e.within(s.At)
-		b := float64(jit.ElemBytes(k.Bufs[s.Buf]))
+		b := float64(composer.ElemBytes(k.Bufs[s.Buf]))
 		w := b
 		if s.At >= 0 {
 			w = b * float64(max(1, max(k.Loops[s.At].Lanes, k.Loops[s.At].Wide)))
@@ -631,7 +631,7 @@ func (m *costModel) cost(k *jit.Kernel) Cost {
 			m.reach[b] = int64(u.touched)
 		}
 		if shape := buf.Shape; shape != nil {
-			n := int64(jit.ElemBytes(buf))
+			n := int64(composer.ElemBytes(buf))
 			for _, x := range shape {
 				n *= int64(x)
 			}
@@ -680,7 +680,7 @@ func (m *costModel) cost(k *jit.Kernel) Cost {
 		c.Served[l] += int64(over)
 		c.MemSeconds += over / m.rate(l, threads)
 	}
-	if m.d.Kind == jit.DeviceGPU {
+	if m.d.Kind == composer.DeviceGPU {
 		c.MemSeconds = 0
 		var through float64
 		for l := len(c.Served) - 1; l >= 0; l-- {
@@ -695,7 +695,7 @@ func (m *costModel) cost(k *jit.Kernel) Cost {
 	}
 	c.MemSeconds += start
 	share := 1.0
-	if m.d.Kind == jit.DeviceGPU && m.d.Units > 0 {
+	if m.d.Kind == composer.DeviceGPU && m.d.Units > 0 {
 		groups := max(1, k.Elements())
 		if !k.Work {
 			groups = (groups + max(1, k.Group) - 1) / max(1, k.Group)
@@ -714,7 +714,7 @@ func (m *costModel) cost(k *jit.Kernel) Cost {
 	}
 	c.LaunchSeconds = m.d.Launch
 	c.WaitSeconds = m.wait(k, live, served)
-	if m.d.Kind == jit.DeviceGPU {
+	if m.d.Kind == composer.DeviceGPU {
 		c.WaitSeconds = max(c.WaitSeconds, m.exposed(&e, live, reads))
 	}
 	code := touch{code: k, bytes: e.code(live, m.d.Kind)}
@@ -725,12 +725,12 @@ func (m *costModel) cost(k *jit.Kernel) Cost {
 	}
 	m.touchOf(code)
 	c.ChainSeconds = max(m.chain(&e, live, words), m.critical(&e, live, words, reads))
-	if m.d.Kind == jit.DeviceGPU {
+	if m.d.Kind == composer.DeviceGPU {
 		c.ChainSeconds = max(c.ChainSeconds, m.inOrder(&e, live, words, reads))
 	}
 	work := max(c.MemSeconds, c.ComputeSeconds, c.WaitSeconds, c.ChainSeconds) + c.FetchSeconds
 	c.Seconds = work + c.LaunchSeconds
-	if m.d.Kind == jit.DeviceGPU {
+	if m.d.Kind == composer.DeviceGPU {
 		c.FloorSeconds = m.d.Floor
 		c.Seconds = max(work+c.FloorSeconds, c.LaunchSeconds)
 	}
@@ -750,8 +750,8 @@ func (m *costModel) fit(bytes int64) int {
 
 // estimator counts how often a kernel's code runs at a step.
 type estimator struct {
-	k       *jit.Kernel
-	s       jit.Step
+	k       *composer.Kernel
+	s       composer.Step
 	trips   map[int]float64
 	homes   []int
 	unknown int
@@ -858,7 +858,7 @@ func (e *estimator) countByElem(c int) bool {
 			}
 			seen[i] = true
 			nd := k.Nodes[i]
-			if nd.Op == jit.OpCoord {
+			if nd.Op == composer.OpCoord {
 				reads = true
 				return
 			}
@@ -893,19 +893,19 @@ func (e *estimator) footprint(ix, ax []int, h, b int) float64 {
 		seen[i] = true
 		nd := k.Nodes[i]
 		switch nd.Op {
-		case jit.OpCoord:
+		case composer.OpCoord:
 			axes[nd.A] = true
-		case jit.OpIter:
+		case composer.OpIter:
 			for c := nd.At; c >= 0; c = k.Loops[c].Parent {
 				loops[c] = true
 			}
-		case jit.OpThread, jit.OpLocal:
+		case composer.OpThread, composer.OpLocal:
 			thread = true
-		case jit.OpFlat:
+		case composer.OpFlat:
 			flat = true
-		case jit.OpParam:
+		case composer.OpParam:
 			// A call's word: its coordinate along the calls' space
-			// (jit.Workers), or the node that computes it.
+			// (composer.Workers), or the node that computes it.
 			for _, a := range k.Args {
 				if a.Buf < 0 && a.Field == int(nd.Imm) {
 					if a.Coord > 0 {
@@ -916,7 +916,7 @@ func (e *estimator) footprint(ix, ax []int, h, b int) float64 {
 				}
 			}
 		}
-		if nd.Op == jit.OpLoad && nd.Ax == nil {
+		if nd.Op == composer.OpLoad && nd.Ax == nil {
 			walk(nd.A)
 			return
 		}
@@ -1008,36 +1008,36 @@ func (e *estimator) eval(i, depth int) (float64, bool) {
 		return 0
 	}
 	switch nd.Op {
-	case jit.OpConst, jit.OpLength:
+	case composer.OpConst, composer.OpLength:
 		return float64(nd.Imm), true
-	case jit.OpCoord:
+	case composer.OpCoord:
 		if nd.A < len(e.elem) {
 			return float64(e.elem[nd.A]), true
 		}
 		return 0, true
-	case jit.OpThread, jit.OpLocal:
+	case composer.OpThread, composer.OpLocal:
 		return float64(e.lane), true
-	case jit.OpFlat:
+	case composer.OpFlat:
 		x := 0
 		for a, c := range e.elem {
 			x = x*max(1, k.Space[a]) + c
 		}
 		return float64(x), true
-	case jit.OpIter:
+	case composer.OpIter:
 		return 0, true
-	case jit.OpSpan:
+	case composer.OpSpan:
 		if nd.Imm == 1 {
 			return float64(min(e.s.Page, e.s.Keys)), true
 		}
 		return 0, true
-	case jit.OpParam:
+	case composer.OpParam:
 		for _, a := range k.Args {
 			if a.Buf < 0 && a.Field == int(nd.Imm) && a.Node > 0 {
 				return e.eval(a.Node-1, depth+1)
 			}
 		}
 		return 0, false
-	case jit.OpLoad:
+	case composer.OpLoad:
 		if nd.Ax != nil {
 			return 0, false
 		}
@@ -1055,8 +1055,8 @@ func (e *estimator) eval(i, depth int) (float64, bool) {
 			}
 			ix += off
 		}
-		return jit.StepWord(buf.Operand, int(ix), e.s)
-	case jit.OpSelect:
+		return composer.StepWord(buf.Operand, int(ix), e.s)
+	case composer.OpSelect:
 		p, ok := e.eval(nd.A, depth+1)
 		if !ok {
 			return 0, false
@@ -1065,39 +1065,39 @@ func (e *estimator) eval(i, depth int) (float64, bool) {
 			return e.eval(nd.B, depth+1)
 		}
 		return e.eval(nd.C, depth+1)
-	case jit.OpLess:
+	case composer.OpLess:
 		return bin(func(a, b float64) float64 { return truth(a < b) })
-	case jit.OpEq:
+	case composer.OpEq:
 		return bin(func(a, b float64) float64 { return truth(a == b) })
-	case jit.OpAdd:
+	case composer.OpAdd:
 		return bin(func(a, b float64) float64 { return a + b })
-	case jit.OpSub:
+	case composer.OpSub:
 		return bin(func(a, b float64) float64 { return max(0, a-b) })
-	case jit.OpMul:
+	case composer.OpMul:
 		return bin(func(a, b float64) float64 { return a * b })
-	case jit.OpDiv:
+	case composer.OpDiv:
 		return bin(func(a, b float64) float64 {
 			if b == 0 {
 				return 0
 			}
 			return float64(int64(a) / int64(b))
 		})
-	case jit.OpRem:
+	case composer.OpRem:
 		return bin(func(a, b float64) float64 {
 			if b == 0 {
 				return 0
 			}
 			return float64(int64(a) % int64(b))
 		})
-	case jit.OpShr:
+	case composer.OpShr:
 		return bin(func(a, b float64) float64 { return float64(int64(a) >> uint(b)) })
-	case jit.OpShl:
+	case composer.OpShl:
 		return bin(func(a, b float64) float64 { return float64(int64(a) << uint(b)) })
-	case jit.OpAnd:
+	case composer.OpAnd:
 		return bin(func(a, b float64) float64 { return float64(int64(a) & int64(b)) })
-	case jit.OpMin:
+	case composer.OpMin:
 		return bin(func(a, b float64) float64 { return min(a, b) })
-	case jit.OpMax:
+	case composer.OpMax:
 		return bin(func(a, b float64) float64 { return max(a, b) })
 	}
 	return 0, false
@@ -1148,22 +1148,22 @@ func (e *estimator) ival(i, depth int) span {
 	a := func() span { return e.ival(nd.A, depth+1) }
 	b := func() span { return e.ival(nd.B, depth+1) }
 	switch nd.Op {
-	case jit.OpConst, jit.OpLength:
+	case composer.OpConst, composer.OpLength:
 		return span{float64(nd.Imm), float64(nd.Imm)}
-	case jit.OpCoord:
+	case composer.OpCoord:
 		return span{0, float64(max(1, k.Space[nd.A]) - 1)}
-	case jit.OpThread, jit.OpLocal:
+	case composer.OpThread, composer.OpLocal:
 		return span{0, float64(max(1, k.Group) - 1)}
-	case jit.OpFlat:
+	case composer.OpFlat:
 		return span{0, float64(max(1, k.Elements()*max(1, k.Group)) - 1)}
-	case jit.OpIter:
+	case composer.OpIter:
 		return span{0, max(0, e.maxTrips(nd.At)-1)}
-	case jit.OpParam:
+	case composer.OpParam:
 		if v, ok := e.eval(i, 0); ok {
 			return span{v, v}
 		}
 		return anywhere
-	case jit.OpLoad:
+	case composer.OpLoad:
 		if nd.Ax != nil {
 			return anywhere
 		}
@@ -1182,54 +1182,54 @@ func (e *estimator) ival(i, depth int) span {
 			off += v
 		}
 		for x := w.lo; x <= w.hi; x++ {
-			v, ok := jit.StepWord(buf.Operand, int(x+off), e.s)
+			v, ok := composer.StepWord(buf.Operand, int(x+off), e.s)
 			if !ok {
 				return anywhere
 			}
 			out.lo, out.hi = min(out.lo, v), max(out.hi, v)
 		}
 		return out
-	case jit.OpAdd:
+	case composer.OpAdd:
 		x, y := a(), b()
 		return span{x.lo + y.lo, x.hi + y.hi}
-	case jit.OpSub:
+	case composer.OpSub:
 		x, y := a(), b()
 		return span{max(0, x.lo-y.hi), max(0, x.hi-y.lo)}
-	case jit.OpMul:
+	case composer.OpMul:
 		x, y := a(), b()
 		return span{x.lo * y.lo, x.hi * y.hi}
-	case jit.OpDiv, jit.OpShr:
+	case composer.OpDiv, composer.OpShr:
 		x, y := a(), b()
-		if nd.Op == jit.OpShr {
+		if nd.Op == composer.OpShr {
 			y = span{math.Exp2(y.lo), math.Exp2(y.hi)}
 		}
 		if y.lo <= 0 {
 			return anywhere
 		}
 		return span{math.Floor(x.lo / y.hi), math.Floor(x.hi / y.lo)}
-	case jit.OpShl:
+	case composer.OpShl:
 		x, y := a(), b()
 		return span{x.lo * math.Exp2(y.lo), x.hi * math.Exp2(y.hi)}
-	case jit.OpRem:
+	case composer.OpRem:
 		x, y := a(), b()
 		if y.lo == y.hi && y.lo > 0 && math.Floor(x.lo/y.lo) == math.Floor(x.hi/y.lo) {
 			m := math.Floor(x.lo/y.lo) * y.lo
 			return span{x.lo - m, x.hi - m}
 		}
 		return span{0, max(0, y.hi-1)}
-	case jit.OpAnd:
+	case composer.OpAnd:
 		x, y := a(), b()
 		return span{0, min(x.hi, y.hi)}
-	case jit.OpMin:
+	case composer.OpMin:
 		x, y := a(), b()
 		return span{min(x.lo, y.lo), min(x.hi, y.hi)}
-	case jit.OpMax:
+	case composer.OpMax:
 		x, y := a(), b()
 		return span{max(x.lo, y.lo), max(x.hi, y.hi)}
-	case jit.OpSelect:
+	case composer.OpSelect:
 		x, y := e.ival(nd.B, depth+1), e.ival(nd.C, depth+1)
 		return span{min(x.lo, y.lo), max(x.hi, y.hi)}
-	case jit.OpFold:
+	case composer.OpFold:
 		if e.folding == nil {
 			e.folding = map[int]bool{}
 		}
@@ -1256,7 +1256,7 @@ func (e *estimator) constant(i int) bool {
 		seen[i] = true
 		nd := k.Nodes[i]
 		switch nd.Op {
-		case jit.OpCoord, jit.OpThread, jit.OpLocal, jit.OpFlat, jit.OpIter, jit.OpFold:
+		case composer.OpCoord, composer.OpThread, composer.OpLocal, composer.OpFlat, composer.OpIter, composer.OpFold:
 			return false
 		}
 		for _, a := range k.Operands(&nd) {
@@ -1290,9 +1290,9 @@ func (e *estimator) folded(i int) bool {
 	nd := k.Nodes[i]
 	ok := true
 	switch nd.Op {
-	case jit.OpConst:
-	case jit.OpLoad, jit.OpParam, jit.OpLength, jit.OpCoord, jit.OpThread, jit.OpLocal, jit.OpFlat, jit.OpIter, jit.OpFold, jit.OpSpan, jit.OpLanes,
-		jit.OpGroupSum, jit.OpGroupMax, jit.OpExchange:
+	case composer.OpConst:
+	case composer.OpLoad, composer.OpParam, composer.OpLength, composer.OpCoord, composer.OpThread, composer.OpLocal, composer.OpFlat, composer.OpIter, composer.OpFold, composer.OpSpan, composer.OpLanes,
+		composer.OpGroupSum, composer.OpGroupMax, composer.OpExchange:
 		ok = false
 	default:
 		for _, a := range k.Operands(&nd) {
@@ -1379,7 +1379,7 @@ func (e *estimator) laneStride(i int) float64 {
 	if !ok {
 		return 0
 	}
-	return math.Abs(b-a) * float64(jit.ElemBytes(k.Bufs[nd.Buf]))
+	return math.Abs(b-a) * float64(composer.ElemBytes(k.Bufs[nd.Buf]))
 }
 
 // reach is the bytes load i's places span: its index's hull in elements
@@ -1390,16 +1390,16 @@ func (e *estimator) reach(i, ix int, ax []int, b int, w float64) span {
 		return anywhere
 	}
 	h := e.hull([]int{ix}, ax, b)
-	eb := float64(jit.ElemBytes(e.k.Bufs[b]))
+	eb := float64(composer.ElemBytes(e.k.Bufs[b]))
 	return span{h.lo * eb, h.hi*eb + w}
 }
 
-func (e *estimator) storeReach(s jit.Store, w float64) span {
+func (e *estimator) storeReach(s composer.Store, w float64) span {
 	if s.Ptr > 0 || e.walked(s.At, s.Buf) {
 		return anywhere
 	}
 	h := e.hull([]int{s.Ix}, s.Ax, s.Buf)
-	eb := float64(jit.ElemBytes(e.k.Bufs[s.Buf]))
+	eb := float64(composer.ElemBytes(e.k.Bufs[s.Buf]))
 	return span{h.lo * eb, h.hi*eb + w}
 }
 
@@ -1407,9 +1407,9 @@ func (e *estimator) storeReach(s jit.Store, w float64) span {
 // buffer's elements in a vector loop, one element else.
 func (e *estimator) width(i, b int) float64 {
 	k := e.k
-	w := float64(jit.ElemBytes(k.Bufs[b]))
+	w := float64(composer.ElemBytes(k.Bufs[b]))
 	h := e.homes[i]
-	if h >= 0 && k.Nodes[i].Op == jit.OpLoad && k.Varies(i, h) {
+	if h >= 0 && k.Nodes[i].Op == composer.OpLoad && k.Varies(i, h) {
 		w *= float64(max(1, max(k.Loops[h].Lanes, k.Loops[h].Wide)))
 	}
 	return w
@@ -1417,26 +1417,26 @@ func (e *estimator) width(i, b int) float64 {
 
 // classOf is the class node i's instruction counts in, false for a value
 // that is no instruction: a constant, a coordinate, an argument word.
-func classOf(k *jit.Kernel, i int, words map[int]bool) (Class, bool) {
+func classOf(k *composer.Kernel, i int, words map[int]bool) (Class, bool) {
 	nd := k.Nodes[i]
 	switch nd.Op {
-	case jit.OpConst, jit.OpCoord, jit.OpIter, jit.OpFold, jit.OpParam, jit.OpLength, jit.OpSpan, jit.OpLanes, jit.OpThread, jit.OpLocal, jit.OpFlat:
+	case composer.OpConst, composer.OpCoord, composer.OpIter, composer.OpFold, composer.OpParam, composer.OpLength, composer.OpSpan, composer.OpLanes, composer.OpThread, composer.OpLocal, composer.OpFlat:
 		return 0, false
-	case jit.OpGroupSum, jit.OpGroupMax, jit.OpExchange:
+	case composer.OpGroupSum, composer.OpGroupMax, composer.OpExchange:
 		return ClassGroup, true
-	case jit.OpHSum, jit.OpHMax, jit.OpHMin, jit.OpShuffle, jit.OpBroadcast, jit.OpZip, jit.OpUnpack, jit.OpUpper, jit.OpDupEven, jit.OpDupOdd, jit.OpSwapPairs, jit.OpFirstLane:
+	case composer.OpHSum, composer.OpHMax, composer.OpHMin, composer.OpShuffle, composer.OpBroadcast, composer.OpZip, composer.OpUnpack, composer.OpUpper, composer.OpDupEven, composer.OpDupOdd, composer.OpSwapPairs, composer.OpFirstLane:
 		return ClassLanes, true
-	case jit.OpDot4:
+	case composer.OpDot4:
 		return ClassInt, true
-	case jit.OpDiv, jit.OpSqrt, jit.OpExp, jit.OpCvtF32, jit.OpCvtI32, jit.OpRoundI32, jit.OpHalf, jit.OpWidenHalf:
+	case composer.OpDiv, composer.OpSqrt, composer.OpExp, composer.OpCvtF32, composer.OpCvtI32, composer.OpRoundI32, composer.OpHalf, composer.OpWidenHalf:
 		if nd.Type == ir.F32 || k.Nodes[nd.A].Type == ir.F32 || words[i] {
 			return ClassSpecial, true
 		}
-		if nd.Op == jit.OpDiv && k.Nodes[nd.B].Op != jit.OpConst {
+		if nd.Op == composer.OpDiv && k.Nodes[nd.B].Op != composer.OpConst {
 			return ClassSpecial, true
 		}
-	case jit.OpRem:
-		if k.Nodes[nd.B].Op != jit.OpConst {
+	case composer.OpRem:
+		if k.Nodes[nd.B].Op != composer.OpConst {
 			return ClassSpecial, true
 		}
 	}

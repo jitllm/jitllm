@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/tok"
 )
 

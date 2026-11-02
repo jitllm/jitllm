@@ -3,10 +3,10 @@ package model
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // DeepSeek V4 (transformers' DeepseekV4ForCausalLM, llama.cpp's
@@ -497,7 +497,7 @@ func (s *Instance) growDS4(n int) {
 
 // ds4Expand copies each row's embedding (stream 0) into the other streams.
 func (s *Instance) ds4Expand(x []float32, rows int) {
-	if s.cpuExpand(x, rows) == jit.DeclineServes {
+	if s.cpuExpand(x, rows) == composer.DeclineServes {
 		return
 	}
 	c := s.m.Cfg
@@ -523,7 +523,7 @@ func (s *Instance) hcCollapse(dst, flat, pre []float32) {
 func (s *Instance) ds4Collapse(x []float32, n int) error {
 	c, g, hd := s.m.Cfg, s.ds, s.m.ds4Head
 	h, d := c.HCMult, c.NEmbd
-	if c.ds4Fault != ds4FaultHeadMean && s.cpuCollapse(x, n) == jit.DeclineServes {
+	if c.ds4Fault != ds4FaultHeadMean && s.cpuCollapse(x, n) == composer.DeclineServes {
 		return nil
 	}
 	for r := 0; r < n; r++ {

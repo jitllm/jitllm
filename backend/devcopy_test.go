@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestDeviceCopyMovesExactlyTheRange: Device.Copy is how a recurrent pool's

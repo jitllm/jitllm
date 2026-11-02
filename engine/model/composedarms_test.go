@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // A principle gate's composed arm runs it again with the composer serving
@@ -13,21 +13,21 @@ import (
 // served (composedRan).
 
 // composedParts is what a composed arm asks the composer for.
-const composedParts = tier.ComposedStep
+const composedParts = gpu.ComposedStep
 
 // composedOf is the parts g's composer serves of m: every part where the
 // front end states every block of m as ops, and nothing where it does not.
-func composedOf(m *Model, g *tier.GPU) tier.Parts {
+func composedOf(m *Model, g *gpu.GPU) gpu.Parts {
 	for li := range m.Cfg.NLayer {
 		if m.Uncovered(li) != Covered {
 			return 0
 		}
 	}
-	return tier.ComposedStep
+	return gpu.ComposedStep
 }
 
 // composedNoGraph is the reason the tier declines a block the front end
-// states no graph for (tier.DeclineName).
+// states no graph for (gpu.DeclineName).
 const composedNoGraph = "no graph from the front end"
 
 // composedCovers is a composed tier's check of one fixture's decode, by the
@@ -40,7 +40,7 @@ const composedNoGraph = "no graph from the front end"
 // replays nothing a decline is counted from), at most that where it does not.
 // A sliding layer is served like any other, the tier declining only a graph
 // whose window is not the plan's, so a window decline fails here by its name.
-func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ...*tier.GPU) {
+func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ...*gpu.GPU) {
 	t.Helper()
 	if len(gs) == 0 {
 		return
@@ -61,7 +61,7 @@ func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ..
 		formed += s.FormedAtStep
 		for i, k := range s.BlockDeclines {
 			if k > 0 {
-				declined[tier.DeclineName(i)] += k
+				declined[gpu.DeclineName(i)] += k
 			}
 		}
 	}
@@ -91,8 +91,8 @@ func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ..
 
 // composedRan fails t unless the composer, asked for parts on the tiers gs,
 // served part steps, formed none at a step and declined none for a reason
-// outside allow (tier.DeclineName).
-func composedRan(t *testing.T, parts tier.Parts, allow []string, gs ...*tier.GPU) {
+// outside allow (gpu.DeclineName).
+func composedRan(t *testing.T, parts gpu.Parts, allow []string, gs ...*gpu.GPU) {
 	t.Helper()
 	if parts == 0 {
 		return
@@ -106,7 +106,7 @@ func composedRan(t *testing.T, parts tier.Parts, allow []string, gs ...*tier.GPU
 		formed += s.FormedAtStep
 		for i := range s.BlockDeclines {
 			if k := s.BlockDeclines[i] + s.HeadDeclines[i]; k > 0 {
-				declined[tier.DeclineName(i)] += k
+				declined[gpu.DeclineName(i)] += k
 			}
 		}
 	}
@@ -126,12 +126,12 @@ func composedRan(t *testing.T, parts tier.Parts, allow []string, gs ...*tier.GPU
 
 // composedBlockSteps is the block steps the composer ran on the tiers gs:
 // those it emitted and those a recording of them replayed.
-func composedBlockSteps(gs ...*tier.GPU) int {
+func composedBlockSteps(gs ...*gpu.GPU) int {
 	n := 0
 	for _, g := range gs {
 		s := g.Stats()
-		b, _ := s.ServedPart(tier.ComposedBlock)
-		n += b + s.ReplayedPart(tier.ComposedBlock)
+		b, _ := s.ServedPart(gpu.ComposedBlock)
+		n += b + s.ReplayedPart(gpu.ComposedBlock)
 	}
 	return n
 }
@@ -140,9 +140,9 @@ func composedBlockSteps(gs ...*tier.GPU) int {
 // tiers gs, ran want block steps past the before already counted
 // (composedBlockSteps) -- every one-row step of every block a decode placed
 // -- formed none at a step and declined none.
-func composedBlocksRan(t *testing.T, parts tier.Parts, before, want int, gs ...*tier.GPU) {
+func composedBlocksRan(t *testing.T, parts gpu.Parts, before, want int, gs ...*gpu.GPU) {
 	t.Helper()
-	if parts&tier.ComposedBlock == 0 {
+	if parts&gpu.ComposedBlock == 0 {
 		return
 	}
 	declined, formed := map[string]int{}, 0
@@ -151,7 +151,7 @@ func composedBlocksRan(t *testing.T, parts tier.Parts, before, want int, gs ...*
 		formed += s.FormedAtStep
 		for i, k := range s.BlockDeclines {
 			if k > 0 {
-				declined[tier.DeclineName(i)] += k
+				declined[gpu.DeclineName(i)] += k
 			}
 		}
 	}

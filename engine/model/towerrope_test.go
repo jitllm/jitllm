@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestRotaryTowerOnDeviceMatchesHost runs the Qwen-VL towers on each device
@@ -68,34 +68,34 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 		// sized to the picture, and the fixture's picture's planes fit any
 		// budget a card would pick, so the gate takes the budget below one
 		// query row's planes: every pass is the smallest chunk, on any card.
-		cfg := func(*tier.Config) {}
+		cfg := func(*gpu.Config) {}
 		if c.Kind == jlm.ProjKimiVL {
-			cfg = func(cf *tier.Config) { cf.VisionPlaneBudget = 1 }
+			cfg = func(cf *gpu.Config) { cf.VisionPlaneBudget = 1 }
 		}
-		open := func() *tier.GPU {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
-			if err != nil || gpu == nil {
+		open := func() *gpu.GPU {
+			gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(cfg))
+			if err != nil || gpux == nil {
 				return nil
 			}
-			return gpu
+			return gpux
 		}
-		gpu := open()
-		if gpu == nil {
+		gpux := open()
+		if gpux == nil {
 			t.Logf("%s: not present", spec)
 			continue
 		}
 		ran++
 		t.Run(arm.String(), func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			// The whole tower on the device.
 			tw.opt.towerGPULayers = -1
 			all := tw.testState()
-			all.SetDevice(gpu)
+			all.SetDevice(gpux)
 			if all.GPUBlocks() != c.NLayer {
-				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, all.GPUBlocks(), c.NLayer, gpu.Err())
+				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, all.GPUBlocks(), c.NLayer, gpux.Err())
 			}
 			var gotAll []float32
-			arm.served(t, gpu, c.NLayer, func() { _, gotAll = encode(all) })
+			arm.served(t, gpux, c.NLayer, func() { _, gotAll = encode(all) })
 			all.Close()
 			whole, _ := nmse32(want, gotAll)
 			if math.IsNaN(whole) || whole > towerBound {
@@ -103,12 +103,12 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 			}
 			tw.opt.towerGPULayers = 1
 			s := tw.testState()
-			s.SetDevice(gpu)
-			uploads := gpu.Stats().RopeTableUploads
+			s.SetDevice(gpux)
+			uploads := gpux.Stats().RopeTableUploads
 			var got0 []float32
-			arm.served(t, gpu, 1, func() { got0, _ = encode(s) })
+			arm.served(t, gpux, 1, func() { got0, _ = encode(s) })
 			s.Close()
-			if gpu.Stats().RopeTableUploads == uploads {
+			if gpux.Stats().RopeTableUploads == uploads {
 				t.Fatal("the device took no rotary table for the tower's block: it did not rotate")
 			}
 			clean, _ := nmse32(want0, got0)
@@ -207,16 +207,16 @@ func TestTextHeadBesideItsTowerOnTheDevice(t *testing.T) {
 			host.Close()
 			ran := 0
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				if err != nil || gpux == nil {
 					t.Logf("%s: not present", spec)
 					continue
 				}
 				ran++
 				st := m.NewInstance(len(ids) + 1)
-				st.SetDevice(gpu)
+				st.SetDevice(gpux)
 				ts := m.Tower().testState()
-				ts.SetDevice(gpu)
+				ts.SetDevice(gpux)
 				if st.GPULayers() != m.Cfg.NLayer || ts.GPUBlocks() == 0 {
 					t.Fatalf("%s placed %d of %d text and %d tower blocks: the gate needs both", spec,
 						st.GPULayers(), m.Cfg.NLayer, ts.GPUBlocks())
@@ -225,7 +225,7 @@ func TestTextHeadBesideItsTowerOnTheDevice(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s: %v", spec, err)
 				}
-				if e := gpu.Err(); e != "" {
+				if e := gpux.Err(); e != "" {
 					t.Fatalf("%s: the device refused part of the prompt: %s", spec, e)
 				}
 				nm, _ := nmse32(want, got)
@@ -236,7 +236,7 @@ func TestTextHeadBesideItsTowerOnTheDevice(t *testing.T) {
 				}
 				ts.Close()
 				st.Close()
-				gpu.Close()
+				gpux.Close()
 			}
 			if ran == 0 {
 				t.Skip("no device on this host")

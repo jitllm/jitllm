@@ -5,10 +5,10 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // The llava-phi-3 gates: a CLIP tower with a class token, a pre-loop
@@ -255,7 +255,7 @@ func TestLlavaTowerRunsOnTheDevice(t *testing.T) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

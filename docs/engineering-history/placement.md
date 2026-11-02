@@ -14,7 +14,7 @@
 
 ## ★ RULE 15: PLACEMENT IS A RANKING BY READS PER RESIDENT BYTE, AND THE UNIT IS NOT ALWAYS A BLOCK.
 
-`jit/gpu/tier/place.go` already says the ranking: placing a unit removes
+`engine/device/gpu/place.go` already says the ranking: placing a unit removes
 `Uses*Bytes` of per-token host traffic and costs `Bytes` of device memory, so
 value per cost is **Uses alone** -- how many times per token each of those bytes
 is read. Not Uses/Bytes, which over-values whatever is small.
@@ -131,7 +131,7 @@ three are structural rather than economic:
    Metal it is a net LOSS: a Session is one command buffer and `Commit` waits,
    so 47 extra command buffers is 13.6 ms/token.
 
-**What replaces it is `tier.Place` wired to real hotness** -- attention AND the
+**What replaces it is `gpu.Place` wired to real hotness** -- attention AND the
 head AND the hot experts, ranked, for the same 47 seams. `Place` is written and
 tested and has NO non-test caller. Two things it needs first: a `KindHead`, since
 the densest unit in the model has no UnitKind, and `Unit.Bytes` for an attention
@@ -166,7 +166,7 @@ expert served that way costs 222 us where the host takes 87. Expert paging needs
 a path that puts a whole LAYER's selected experts in one submission before its
 economics change, and that is a different feature from paging.
 
-**★ WHICH ALSO SAYS WHY `tier.Place` IS STILL UNWIRED, AND IT IS NOT NEGLECT.**
+**★ WHICH ALSO SAYS WHY `gpu.Place` IS STILL UNWIRED, AND IT IS NOT NEGLECT.**
 Its ranking is right and its four `UnitKind`s are not equally executable:
 `KindAttn` needed attention-only placement, which 15c found does not work; `KindExpert` loses
 on the line above; `KindFFN` has no path at all. The only sub-block unit that
@@ -597,7 +597,7 @@ a device kernel outright -- so this needs TWO state buffers and a swap"*.
 issues is out of place. `kernels.GatedDeltaStep`, `Conv1dRows`, `Conv1dShift`
 and `DeltaGate` were built, lowered on all three backends and gated against the
 host the whole time, with nothing in the tier calling them --
-`tier.TestDeclineNamesTheGraphFeature` recorded that as *"the honest state
+`gpu.TestDeclineNamesTheGraphFeature` recorded that as *"the honest state
 rather than an oversight"*, which is how a task reads as a property.
 
 `emitLinear` transcribes `engine/model/delta.go`'s order: the fused q|k|v projection,
@@ -658,7 +658,7 @@ for, it is the HOST. And it was not academic -- Qwen3-Next-80B's page is
 the host side arriving on the device.
 
 What one slot does not buy is the overlap, which is a rate and not an admission
-rule. `tier.TestOneSlotStillPages` replaces `TestBelowTwoSlotsDeclinesAndSaysSo`
+rule. `gpu.TestOneSlotStillPages` replaces `TestBelowTwoSlotsDeclinesAndSaysSo`
 and asserts the opposite of it: 8 page-ins, 11 page-outs, 8 block-runs over two
 tokens of four blocks, every block on the device.
 
@@ -683,7 +683,7 @@ identically on the commit before any of this work:
     vulkan  no error at all -- "The capital of France is... (a) (a(("
 
 ★ **WHY NOTHING SAW IT: EVERY PAGING GATE RUNS ON A FAKE DEVICE.**
-`jit/gpu/tier`'s pager is covered by `fakeDev` and `recBuf`, whose device memory
+`engine/device/gpu`'s pager is covered by `fakeDev` and `recBuf`, whose device memory
 is a Go slice nothing else reuses -- so a page-in that reads the wrong host
 bytes copies them faithfully and every counter agrees. RULE 11c in the pager:
 the kernels were gated and the tier's wiring of them was not, one level down
@@ -1307,7 +1307,7 @@ plane is 16384 B, so n=3 moves four sheets = 64 KiB and clears it while n=4
 moves three = 48 KiB and does not. **Three is exactly where the dose turns
 over**, so the arithmetic PREDICTS the measurement rather than being fitted to
 it. `jlm.streamGroupsFor` computes it, `Header.StreamGroups` carries it, and
-`tier.Config.StreamGroups` still overrides.
+`gpu.Config.StreamGroups` still overrides.
 
 ★ **THE ONE NUMBER THAT IS A PROPERTY OF THE MACHINE IS SAID SO.**
 `minGroupBytes = 64 KiB` is where the per-call cost turns over on this box's
@@ -1330,7 +1330,7 @@ hand-written list of 58 fields and `StreamOverlaps` fell off it, so the run
 printed `0 overlapped read(s)` while the host read fell 10.00 -> 7.00 s and the
 decode went 1.91 -> 2.18. **A selection check that is itself broken is worse
 than none: it reports the wrong answer confidently.**
-`tier.TestStatsAddSumsEveryCounter` walks every field `Stats` HAS by reflection
+`gpu.TestStatsAddSumsEveryCounter` walks every field `Stats` HAS by reflection
 and demands `add()` moved it -- asserting the fields someone remembered to
 assert is the same omission one level up. Against the violation it names the
 field.
@@ -1510,7 +1510,7 @@ doubling does not fit, the history grows to the largest page multiple that
 does and still holds the position; only when not even one page fits does the
 device refuse. A card with room for 768 positions used to refuse at 513 --
 demoting every block by default, or relocating one -- for room it would not
-need for another 255 tokens. `tier.TestKVGrowsToWhatFitsBeforeRefusing`:
+need for another 255 tokens. `gpu.TestKVGrowsToWhatFitsBeforeRefusing`:
 512 -> 768 where 1024 does not fit, and the refusal at 800 leaves the tier
 untouched. Red against doubling-only (refused at 600, cap 512).
 
@@ -1523,7 +1523,7 @@ reads `true then false` against that violation.
 **On several cards the highest block is on the wrong one.** Blocks fill the
 fastest card first, so the model's top sits on the last card while the first is
 the one out of room, and relocating the top emptied the last card before it
-touched the first. `tier.GPU.Refused` names the refusing device's blocks and
+touched the first. `gpu.GPU.Refused` names the refusing device's blocks and
 `State.relocationVictim` takes the highest of those. The host block it leaves
 between two device runs costs no crossing: the residual already comes home
 between two devices.
@@ -1565,7 +1565,7 @@ a 64-token prompt after a 272-token sequence gets every block back (4.0e-04
 against the host, band 4.0e-04); a budget raised at position 320 brings the
 block back at the next token with its history (3.8e-04). Red against no trim
 (`0 reclaim(s), 15 of 16`) and against a reclaim that does not send the history
-up (**2.5e-01** -- fluent, wrong). `tier.TestTrimAndDetachGiveRoomBack` fails
+up (**2.5e-01** -- fluent, wrong). `gpu.TestTrimAndDetachGiveRoomBack` fails
 against a trim under a second session and against a no-op detach.
 
 ★ **STILL OPEN: a release is not per-session.** `ReleaseLayers` frees every
@@ -1613,7 +1613,7 @@ because the tail of the bank is still being discovered, and falling.
 **★ THE INSTRUMENT THIS NEEDED DID NOT EXIST AND IS THE HALF WORTH KEEPING.**
 Every host "GiB/s" in this tree was a FLOOR over a wall that includes compute --
 `PhaseRow.Rate`'s own comment says so, and only the device path had
-`tier.Stats.TStreamRead`. `jlm.File.ReadWait` is the wall a CALLER spent blocked
+`gpu.Stats.TStreamRead`. `jlm.File.ReadWait` is the wall a CALLER spent blocked
 in `EnsureRanges` (the reads run in goroutines and the caller blocks on
 `wg.Wait`, so it is serial decode time by construction), `phRead` feeds it to
 the phase meter on every host run, and `model.Model.ExpertIO` separates the
@@ -1782,7 +1782,7 @@ which have at most one card per model.** Under-merging over-counts memory;
 over-merging deletes hardware, and only the second is unrecoverable.
 
 So the gate that matters most is the one this hardware cannot produce:
-`tier.TestTwoIdenticalCardsAreNotMerged` fabricates two devices with the SAME
+`gpu.TestTwoIdenticalCardsAreNotMerged` fabricates two devices with the SAME
 name and DIFFERENT UUIDs and requires both to survive. Against the name match it
 reads *"two cards with one name became 1 device(s) after 1 merge(s): half the
 machine's VRAM (3.00 GiB) would go unused"*.
@@ -1842,7 +1842,7 @@ still out of place for the kernel, one scratch for the device rather than one a
 block. The form is decided for the WHOLE batch in LayersRows: grown block by
 block, the first blocks took two halves and left the last none (refused at
 14,480 of 14,809 MiB). Gate: `model.TestSharedRecurrentStateMatchesTheDoubledOne`
-(tier.Config.SharedRec forces the form; tokens bit-identical to the doubled
+(gpu.Config.SharedRec forces the form; tokens bit-identical to the doubled
 form, Stats.RecShared asserts the form ran; without the copy back row 0 parts
 at token 3).
 
@@ -1853,9 +1853,9 @@ llama.cpp `llama-batched-bench` in the same pass:
     jitllm   757.8   973.1  1177.8  1294.3   (128 was refused)
     llama.cpp 656.3  843.6   730.0   934.5
 
-### Figures moved out of jit/gpu/tier comments
+### Figures moved out of engine/device/gpu comments
 
-These figures stood in source comments under `jit/gpu/tier/` until a comment
+These figures stood in source comments under `engine/device/gpu/` until a comment
 cleanup trimmed them, and were recorded nowhere else. They are kept here
 verbatim, grouped by the symbol each one justified. "This box" is the laptop
 (RTX 3050 Ti 4 GiB, Iris Xe, 31 GiB RAM); V100s are the 8x V100 server's.
@@ -2243,7 +2243,7 @@ refilled. What is built instead closes the contract from both sides:
                          The callback runs after f.mu is dropped and before the
                          page-in reads anything into the frame.
     nn.CopyForgetter     Forget(p, n): the device drops every copy keyed in
-                         [p, p+n) -- tier.GPU drops the lone matvec's upload
+                         [p, p+n) -- gpu.GPU drops the lone matvec's upload
                          (freed and refunded, Stats.Forgotten), a prewarm stage,
                          an arena pack (kept mapped while a device imports it,
                          kernels.Arena.Unimport), and spoils a pack in flight.
@@ -2262,7 +2262,7 @@ EQUAL the unbudgeted arm with both serving the same 36 matvecs on the device and
 31 copies forgotten as frames were refilled (the selection check that page
 weights reached the device at all). With `Forget` removed from
 `Model.forgetCopies` it fails at **NMSE 9.354e-01**, the original reading.
-`tier.TestForgetFreesTheCopiesInItsRange` holds the ledger (the copy's buffers
+`gpu.TestForgetFreesTheCopiesInItsRange` holds the ledger (the copy's buffers
 freed, its charge refunded, the neighbouring weight kept, the queued path
 applied by the next lookup), `jlm.TestRecycleNamesEveryFrameItRefills` the
 pager (claim, reuse, release and Close named, never under the lock), and
@@ -2285,7 +2285,7 @@ the first offer and refuses another model's blocks, head and prewarm by name
 built from its plan (`nn.ModelOwner.ReleaseModel`), after which the next model
 is admitted onto a device that has seen nothing. `model.TestATierServesOneModel`
 (refused, 5.966e-06 against its host run; admitted after the first closes) and
-`tier.TestATierRefusesASecondModel` (every buffer returned) are the gates. The
+`gpu.TestATierRefusesASecondModel` (every buffer returned) are the gates. The
 amplification gate still opens a tier per arm, which is now a choice rather than
 the only correct arrangement.
 
@@ -2310,9 +2310,9 @@ block was priced at **0 bytes** against a 331,776-byte upload; the discount now
 applies only to weights the arena would hold.
 
     gate                                                    fixed         order restored
-    tier.TestAContainerWeightIsNotRepackedOnAUnifiedDevice  device bytes  declined, "need 36864,
+    gpu.TestAContainerWeightIsNotRepackedOnAUnifiedDevice  device bytes  declined, "need 36864,
                                                             = the spans   have 32768"
-    tier.TestAContainerBlockIsPricedInFullOnAUnifiedDevice  priced in     priced at 0
+    gpu.TestAContainerBlockIsPricedInFullOnAUnifiedDevice  priced in     priced at 0
                                                             full          (discount restored)
     model.TestStreamedContainerOnAUnifiedDevice  M4 Metal   16/16 streamed, 0 of 16, the arena
                                                  Iris Xe    first token   error above
@@ -2331,7 +2331,7 @@ gemma-2-2b's chunk was refused by `cuMemAlloc` and the prompt went a row at a
 time (0 folds, `TestPrefillFoldsTheHead`), and a server step of
 `model.MaxStepRows` rows on a full card was an error.
 
-`jit/gpu/tier/scratch.go` charges them and reserves them.
+`engine/device/gpu/scratch.go` charges them and reserves them.
 
 **Charged by measurement.** Every backend counts the bytes its buffers hold
 (`backend.AllocCounter`), and a window around every build or free of a scratch
@@ -2341,7 +2341,7 @@ charges or refunds the difference, less whatever `charge`/`refund` moved
 inside it (a page or a weight already priced). Pricing each buffer by hand is
 the walk `freeScratch` stopped trusting. A device left with no block and no
 head drops its scratches and staging, so a release still returns every byte
-(`tier.TestTheScratchIsChargedAndReturned`).
+(`gpu.TestTheScratchIsChargedAndReturned`).
 
 **Reserved at placement.** The first text block, before its own weights,
 builds decode's scratch, the prompt chunk's at `Config.PromptRows` (default
@@ -2397,7 +2397,7 @@ the card. `AllocCounter.Footprint` counts the rounded bytes and
 `devTier.settleRounding` charges the difference after every charge, refund and
 scratch window and before every room check; a block is admitted and paged in
 at its buffers' footprint (`FootprintOf`), or the rounding pushes its last
-tensors over the budget mid-upload (`tier.TestTheDriversRoundingIsCharged`).
+tensors over the budget mid-upload (`gpu.TestTheDriversRoundingIsCharged`).
 
 **So gemma-2-2b's fold on the laptop's cuda:0 is a card too small, by bytes:**
 the 26 blocks, the 512-row scratch and the rounding charge 1,820,459,008 of a
@@ -2414,13 +2414,13 @@ and the tied gemma head folds wherever its bytes fit.
                     refused grow left it nil under every launch built against
                     it -- a Vulkan panic in the refused chunk's narrower
                     fallback. The old size comes back.
-                    tier.TestARefusedGrowKeepsTheOldBuffer (nil, 0 floats
+                    gpu.TestARefusedGrowKeepsTheOldBuffer (nil, 0 floats
                     against the restore removed)
     compactViaHost  a KV layer grown through the host freed its pair, and a
                     refused new pair left the layer bufferless for the next
                     grow to read a nil buffer (a panic). The history goes back
                     in at its old size.
-                    tier.TestAKVGrowTheCardRefusesKeepsTheHistory
+                    gpu.TestAKVGrowTheCardRefusesKeepsTheHistory
     initScratch     every refusal part-way through a build was a plain
                     `return nil` that kept what it had allocated. It frees it.
     unified share   on darwin `sched.MemBudget` is 0, so a Metal device's
@@ -2429,7 +2429,7 @@ and the tied gemma head folds wherever its bytes fit.
                     blocks on the M4. An unknown host takes the unified
                     device's own figure (recommendedMaxWorkingSetSize),
                     quartered as a known host is.
-                    tier.TestAnUnknownHostTakesTheUnifiedDevicesOwnFigure
+                    gpu.TestAnUnknownHostTakesTheUnifiedDevicesOwnFigure
 
 ## ★ 15y. CHARGING THE ROUNDING LEFT TWO READERS AT THE BYTES: THE SLOT COUNT AND THE LEDGER'S OWN REPORT.
 
@@ -2464,7 +2464,7 @@ kernel a word for a plane a format does not have (Q4_0's and Q8_0's scales;
 `resident`, `allocBytes`), and `planesFootprint` priced it at zero -- a page
 short per empty plane, so a page-in sized by it ran out of room on its last
 tensor. Found by the tier gate written for the slots,
-`tier.TestASlotIsCountedAtTheFootprint`: every budget a 64 KiB-page fake
+`gpu.TestASlotIsCountedAtTheFootprint`: every budget a 64 KiB-page fake
 reports a slot on must run a token's every block on the device. It fails
 against the slot priced at bytes ("reports 2 slot(s) and the token was
 refused") and against the empty plane at zero ("reports 4 slot(s) ... Q4_0
@@ -2580,7 +2580,7 @@ with the spare taken out the host arm of synth-exaone4 reads 12 over 64 tokens.
 ## ★ 16a. AN INTEGRATED GPU HOLDING NO BLOCK COST THE HOST A QUARTER OF ITS BUDGET. THE HOST LOSES WHAT THE DEVICE HOLDS NOW, AND IT FOLLOWS PLACEMENT.
 
 A bare `-devices gpu` or `vulkan` opens every GPU, so on the laptop it opens
-the Iris Xe beside the RTX 3050 Ti. `tier.GPU.HostReserved` was the unified
+the Iris Xe beside the RTX 3050 Ti. `gpu.GPU.HostReserved` was the unified
 devices' limits capped at their pool -- by default a quarter of the host
 budget -- and every caller took it off the page budget once, at load. The
 Iris Xe that held nothing still cost the pager 1.62 GiB.
@@ -2602,7 +2602,7 @@ Iris Xe that held nothing still cost the pager 1.62 GiB.
 
 ★ **THE GATES, EACH RUN AGAINST ITS VIOLATION:**
 
-    tier.TestHostLosesOnlyWhatAUnifiedDeviceHolds   fake iGPU, 6.20 GiB ceiling
+    gpu.TestHostLosesOnlyWhatAUnifiedDeviceHolds   fake iGPU, 6.20 GiB ceiling
       held by the host     0 with no block; 381704, 728840, 1075976, 1423112
                            bytes with 1..4 blocks; 728840 after two come home
       old HostReserved     6.20 GiB with no block placed: FAIL
@@ -2674,7 +2674,7 @@ scratch set. The gate was keyed on the -devices entry as written: once a bare
 took different gates for the same card 1, and `cuda:0` beside `vulkan:0`
 (one card under two APIs) never serialised either.
 
-    key        tier.GPU.Hardware: the identity the tier already dedupes on
+    key        gpu.GPU.Hardware: the identity the tier already dedupes on
                (the device UUID CUDA and Vulkan both report), or the backend
                and ordinal where the backend reports none ("vulkan:3")
     gates      LoadedModel.gateKeys, one per device the tier opened; a
@@ -2691,7 +2691,7 @@ took different gates for the same card 1, and `cuda:0` beside `vulkan:0`
       cuda, cuda:0 and vulkan:0 -> uuid:ef8b0a84..., the Iris Xe vulkan:1 ->
       uuid:8680a646...; the first three wait for each other, the iGPU does not
       keyed on the text    gates [cuda cpu] and [cuda:0 cpu] ran at once: FAIL
-    tier.TestHardwareIsOneKeyPerPhysicalDevice   the fake host of devspec_test:
+    gpu.TestHardwareIsOneKeyPerPhysicalDevice   the fake host of devspec_test:
       cuda's three keys distinct, cuda:1's among them, vulkan:1 (card 1 again)
       the same key, the iGPU its own, the UUID-less llvmpipe "vulkan:3"
 
@@ -2703,7 +2703,7 @@ under `stream cost: upload`, and ~1.4 GiB/s of apparent PCIe. That line was one
 timer around three different things. The measurement that splits it, before
 anything was built:
 
-- **Instrument.** `tier.Stats.TStreamSheet`, `TStreamCopy`, `TStreamH2D` and
+- **Instrument.** `gpu.Stats.TStreamSheet`, `TStreamCopy`, `TStreamH2D` and
   `StreamBytes` split `streamBank.put` into finding each routed sheet in the
   host pager, gathering it into the staging buffer and the host-to-device
   copy. `Config.StreamProbe` (`JITLLM_GPU_PROBE`) runs, at every streamed
@@ -2823,7 +2823,7 @@ so no row is a ratio). "Decode" is the run's own decode line over 32 tokens.
   load read 1.16 GiB (was 55.43) and the run took 3m19.8s wall (was 25m06s),
   every mixture block refused from the tensor table (`nn.SizeDecliner`).
 - **The default now streams such a block** (`nn.AutoStreamer`,
-  `tier.GPU.AutoStream`), with a cache sized by `autoCacheSlots` (18 on this
+  `gpu.GPU.AutoStream`), with a cache sized by `autoCacheSlots` (18 on this
   box). Two runs: 78/93 blocks on the cards (15 on the host: the auto run's
   cards held 10 blocks each where the forced `STREAM=1 STREAM_CACHE=18` run
   held up to 16 -- not yet explained), prompt 36.9-41.5 s, decode 3.51-3.66
@@ -2938,7 +2938,7 @@ converter change is warranted by these numbers.
 
 Where a mixture block's routed experts run is now a placement like any other:
 `model.WithExperts("host"|"card")`, `-placement N=DEV%host` / `%card`,
-`tier.WithHybridExperts`, `tier.WithAutoStream`, and the choice is kept on every
+`gpu.WithHybridExperts`, `gpu.WithAutoStream`, and the choice is kept on every
 device (`nn.ExpertPlacer`), so a block that hops tiers, goes home and comes back
 keeps it (`TestOffCardExpertsRelocate`, which counts the off-card runs at each
 destination and fails when a returning block arrives unmarked). The stream trial
@@ -3495,7 +3495,7 @@ which part. The four rows above are what actually divides it.
 ★★★★ **AND THE STREAMED PATH IS 6.8x FASTER FOR READING TEN OF 512 EXPERTS
 INSTEAD OF ALL OF THEM, WHICH NEEDED NO FORMAT CHANGE.**
 `-devices gpu:0 JITLLM_GPU_STREAM=1` places a mixture's blocks WITHOUT their
-routed bank (`tier.Config.StreamExperts`): gate, up and down hold NExpertUsed
+routed bank (`gpu.Config.StreamExperts`): gate, up and down hold NExpertUsed
 sheets each, and the submission SUSPENDS after ExpertRank to read the selection
 home, upload those sheets and resume. Qwen3-Next-80B, 34 of 48 blocks placed,
 same binary, same prompt:
@@ -3595,7 +3595,7 @@ wrong about the conclusion: `recPair` is the two buffers and the swap, and every
 kernel `emitLinear` issues is out of place. `kernels.GatedDeltaStep`,
 `Conv1dRows`, `Conv1dShift` and `DeltaGate` were built, lowered on all three
 backends and gated against the host the whole time, with no tier code calling
-them -- the state `tier.TestDeclineNamesTheGraphFeature` recorded as "the honest
+them -- the state `gpu.TestDeclineNamesTheGraphFeature` recorded as "the honest
 state rather than an oversight". So `-devices gpu:0` put 36 of 48 blocks on the
 CPU and reported it as a graph the device does not implement.
 
@@ -3807,7 +3807,7 @@ none. `dropCaches` gives caches back, the last block's first, whenever
 `roomOrReclaim` is short and before `trim` pages a block out
 (`Stats.CachesDropped`); a block without its cache runs on the plain bank it
 was placed on. A float bank (the qwen4exp fixture's) has no packed sheets and
-keeps the plain hybrid path. `tier.WithHybridCache(false)` /
+keeps the plain hybrid path. `gpu.WithHybridCache(false)` /
 `JITLLM_GPU_HYBRID_CACHE=0` keeps the plain hybrid path everywhere.
 
 Gates: `TestSplitExpertsMatchTheHost` (Kimi-K3-0.40B Q8_0, the latent
@@ -3886,7 +3886,7 @@ were the session's alone ("two sessions' pages never alias",
 device-kv-paging.md), so a device block's history went home to be cached and
 came back up to be restored -- on the V100 a warm d1 decision took 2x a cold
 one, most of it those migrations. A layer's page now carries the cache's key
-and a count of the sequences holding it (`jit/gpu/tier/kvshare.go`): sealing
+and a count of the sequences holding it (`engine/device/gpu/kvshare.go`): sealing
 names it (`PublishKV`), a restore puts it into the sequence's table
 (`MapKV`), a write into one copies that page on the card first (`cowPages`),
 a sequence letting it go drops its hold, and the unheld named pages are the
@@ -4135,7 +4135,7 @@ the host, and device-side paging.
 
 ★ **THE CONTROL SURFACE IS DONE, AND "done" MEANS THE LIBRARIES READ
 NO ENVIRONMENT AT ALL.** Sixty-seven JITLLM_* names were read inside `sched`,
-`nn`, `gguf`, `bench`, `jit/cpu`, `jit/gpu/{tier,backend,vulkan,kernels}` and
+`nn`, `gguf`, `bench`, `engine/device/cpu`, `engine/device/gpu/{tier,backend,vulkan,kernels}` and
 `model` -- many at package-variable initialisation, which no caller could reach
 even in principle. They are `With...()` options now:
 
@@ -4167,7 +4167,7 @@ package; `ResetForTest` resets them now. `tier`'s subgroup gate caught the other
 between two devices in one loop (it is per device now, `vulkan.OpenDeviceWith`). Every `Setenv` of a migrated name is gone from the tree.
 
 ★ **THE DEVICE TIER HELD ONE SEQUENCE AND NOTHING SAID SO, AND IT PRODUCED WRONG
-TOKENS. FIXED** (`tier.GPU.Attach`, `docs/design/device-sessions.md`).
+TOKENS. FIXED** (`gpu.GPU.Attach`, `docs/design/device-sessions.md`).
 `l.kc`/`l.vc` -- the attention history -- sat on the tier's per-BLOCK layer, and
 `nn.LayerDevice.Layers` carries a POSITION and no state identity, so two
 `model.State`s on one tier wrote the same cache at the same positions. Measured
@@ -4179,7 +4179,7 @@ Serial single-State use -- everything the engine ships and every board row above
 Refusing the second State was the other option and the user refused it by name:
 *"we can't refuse, jitllm is an inference os multimodel multi devices multi
 intances"*. A SESSION owns the sequence; the TIER owns the model.
-`tier.GPU.Attach()` returns a view satisfying `nn.LayerDevice` UNCHANGED, so
+`gpu.GPU.Attach()` returns a view satisfying `nn.LayerDevice` UNCHANGED, so
 neither `nn` nor `model` widened.
 
 Three more came out of the same afternoon, each now its own gate:

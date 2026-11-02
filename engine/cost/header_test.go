@@ -3,9 +3,9 @@ package cost
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // header is a model as a node another node routes to would send it: the
@@ -41,7 +41,7 @@ func (h header) EmbedGraph() *graph.Graph { return h.embed }
 
 func (h header) Rotaries() []graph.Rotary { return h.rotaries }
 func (h header) Tower() bool              { return false }
-func (h header) Segment() jit.Model       { return nil }
+func (h header) Segment() composer.Model  { return nil }
 
 func (h header) Find(role jlm.Role, block, index int32) (*jlm.Entry, bool) {
 	e, ok := h.by[[3]int32{int32(role), block, index}]
@@ -63,16 +63,16 @@ func TestHeaderPricesAsTheContainer(t *testing.T) {
 	for li := range int(cfg.NLayer) {
 		h.blocks = append(h.blocks, f.BlockGraph(li))
 	}
-	d := Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 163840, Lanes: 32}, Units: 80, Bandwidth: 869e9, Launch: 2.9e-6, Floor: 7.5e-6}
+	d := Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 163840, Lanes: 32}, Units: 80, Bandwidth: 869e9, Launch: 2.9e-6, Floor: 7.5e-6}
 	d.Caches[1] = Cache{Bytes: 6 << 20, Rate: Rate{Total: 3.1e12}, Latency: 1.46e-7}
 	d.Rates[ClassFloat] = Rate{Thread: 0.7e9, Total: 7.8e12}
-	s := jit.Step{Rows: 1, Page: 64, Keys: 9}
-	on := func(jit.Part) Device { return d }
-	want, err := Estimate(jit.Default(), f, s, on)
+	s := composer.Step{Rows: 1, Page: 64, Keys: 9}
+	on := func(composer.Part) Device { return d }
+	want, err := Estimate(composer.Default(), f, s, on)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := Estimate(jit.Default(), h, s, on)
+	got, err := Estimate(composer.Default(), h, s, on)
 	if err != nil {
 		t.Fatal(err)
 	}

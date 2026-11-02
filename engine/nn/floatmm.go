@@ -3,8 +3,8 @@
 package nn
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // The float GEMM: a batch of ntok activation rows through an F32, F16 or BF16

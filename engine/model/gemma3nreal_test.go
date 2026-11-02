@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestGemma3nRealMatchesTransformers holds Gemma 3n E2B's real MobileNet-V5
@@ -95,19 +95,19 @@ func TestGemma3nRealMatchesTransformers(t *testing.T) {
 	}
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			s := tw.testState()
 			defer s.Close()
-			s.SetDevice(gpu)
+			s.SetDevice(gpux)
 			if n := s.GPUBlocks(); n != c.NLayer {
-				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, gpu.Err())
+				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, gpux.Err())
 			}
 			_, got := encode(s)
 			dn, dw := nmseOf(got, rows)

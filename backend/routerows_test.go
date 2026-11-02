@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestRouteRowsMatchOneRow routes R tokens in one launch of each router kernel

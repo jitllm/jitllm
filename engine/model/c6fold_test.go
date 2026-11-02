@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestPrefillFoldsALayerNormHead holds the folded head to a LayerNorm model
@@ -34,28 +34,28 @@ func TestPrefillFoldsALayerNormHead(t *testing.T) {
 	ran := 0
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-			if err != nil || gpu == nil {
+			gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+			if err != nil || gpux == nil {
 				noDevice(t, spec, err)
 			}
-			defer gpu.Close()
+			defer gpux.Close()
 			run := func(fold bool) ([]float32, int) {
 				st := m.NewInstance(len(ids) + 4)
 				defer st.Close()
 				st.SetDeviceFallback(false)
-				if err := st.SetDevice(gpu); err != nil {
+				if err := st.SetDevice(gpux); err != nil {
 					t.Fatal(err)
 				}
 				if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
-					t.Fatalf("placed %d of %d blocks, head %v: %s", st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), gpu.Err())
+					t.Fatalf("placed %d of %d blocks, head %v: %s", st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), gpux.Err())
 				}
 				st.noHeadFold = !fold
-				before := gpu.Stats().HeadFolds
+				before := gpux.Stats().HeadFolds
 				lg, err := st.Prefill(ids)
 				if err != nil {
 					t.Fatal(err)
 				}
-				return append([]float32(nil), lg...), gpu.Stats().HeadFolds - before
+				return append([]float32(nil), lg...), gpux.Stats().HeadFolds - before
 			}
 			want, tailFolds := run(false)
 			got, folds := run(true)

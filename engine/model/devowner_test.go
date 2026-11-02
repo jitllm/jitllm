@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // ownerBound is what a model with every block on the host but its lone
@@ -68,7 +68,7 @@ func TestATierServesOneModel(t *testing.T) {
 	}
 
 	// Pinned: see hybridDeviceNMSEOn.
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

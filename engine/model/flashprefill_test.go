@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestFlashPrefillMatchesThreeKernels prefills a two-chunk prompt on the device
 // with the chunk's attention as one kernel (kernels.FlashPrefill70, or
 // FlashPrefill80 and its m16n8k8 twin where the card has m16n8) and with
-// the scores/softmax/accumulate trio it replaces (tier.Config.NoFlashPrefill),
+// the scores/softmax/accumulate trio it replaces (gpu.Config.NoFlashPrefill),
 // and holds the two to each other and the flash arm to the host.
 //
 // Two bounds, because the arms are not the same arithmetic: the one kernel
@@ -54,7 +54,7 @@ func flashPrefillMatches(t *testing.T, name string) {
 	host.Close()
 
 	run := func(noFlash bool) ([]float32, int, int) {
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) { c.NoFlashPrefill = noFlash }))
+		g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(func(c *gpu.Config) { c.NoFlashPrefill = noFlash }))
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

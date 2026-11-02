@@ -11,11 +11,11 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestTeacherForcedAgainstReference feeds a fixed id sequence and compares the
@@ -84,12 +84,12 @@ func TestTeacherForcedAgainstReference(t *testing.T) {
 	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	if spec := testdevices.One(""); spec != "" {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer gpu.Close()
-		st.SetDeviceLayers(gpu, -1)
+		defer gpux.Close()
+		st.SetDeviceLayers(gpux, -1)
 		t.Logf("%d of %d blocks on %s", st.GPULayers(), m.Cfg.NLayer, spec)
 	}
 	top2 := func(v []float32) (int, float32) {

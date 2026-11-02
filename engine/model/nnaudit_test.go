@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // TestEveryModelRunsGenerated drives every model available through all three
@@ -187,7 +187,7 @@ func auditComposedCPU(t *testing.T, name, path string) {
 	for i, n := range declined {
 		total += n
 		if n > 0 {
-			named = append(named, fmt.Sprintf("%d %s", n, jit.DeclineName(i)))
+			named = append(named, fmt.Sprintf("%d %s", n, composer.DeclineName(i)))
 		}
 	}
 	if want := steps * m.Cfg.NLayer; total != want {

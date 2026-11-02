@@ -12,8 +12,8 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/convert/gguf"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestMatVecRealWeights runs the GPU kernel over real model tensors of every

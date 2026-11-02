@@ -74,7 +74,7 @@ var orchTurns = []string{story, " and then", " until"}
 // each turn's first token: the history travels, nothing is recomputed or
 // refused.
 //
-// VIOLATION SIGNATURE. Without the shared pool (tier.WithPoolRegistry) the
+// VIOLATION SIGNATURE. Without the shared pool (gpu.WithPoolRegistry) the
 // second model never gets a block; without promote, a session demoted once
 // stays home ("b holds 0 blocks after its turn"); a history dropped on a
 // move parts a reply from its control.

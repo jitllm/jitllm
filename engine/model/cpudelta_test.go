@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // deltaRewrite is a violation of a linear block's statement: a rewrite of
@@ -155,8 +155,8 @@ func linearRun(t *testing.T, m *Model, prompt, toks []int32, f cpuFault) [][]flo
 	}
 	served, declined := s.CPUBlockSteps()
 	for i, n := range declined {
-		if n > 0 && jit.Decline(i) != jit.DeclineNoGraph {
-			t.Fatalf("%d block steps declined: %s (%v)", n, jit.DeclineName(i), s.CPUFormErr())
+		if n > 0 && composer.Decline(i) != composer.DeclineNoGraph {
+			t.Fatalf("%d block steps declined: %s (%v)", n, composer.DeclineName(i), s.CPUFormErr())
 		}
 	}
 	// A prompt's chunk is one block step of each block, its rows the

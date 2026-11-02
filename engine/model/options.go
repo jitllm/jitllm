@@ -115,7 +115,7 @@ type modelOpts struct {
 	// test sets it (setKVPageForTest).
 	kvPage int
 	// cpuFloat forms the CPU's blocks and head as the float reference: no
-	// int8 form and every sum in its loop's order (jit.Registry.WithoutInt8,
+	// int8 form and every sum in its loop's order (composer.Registry.WithoutInt8,
 	// WithoutSplits). Only a test sets it, for a gate's reference arm.
 	cpuFloat bool
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestRMSNormRowsMatchesFloat64: the one-launch norm against a float64

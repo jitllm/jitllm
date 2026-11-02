@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestTwoDevicesAgreeWithTheHost splits ONE model's blocks across TWO distinct
@@ -33,8 +33,8 @@ func TestTwoDevicesAgreeWithTheHost(t *testing.T) {
 	// the first card takes everything. It is derived from the model so another
 	// fixture still splits.
 	cap3 := m.PageSize()*uint64(m.Cfg.NLayer)/3 + m.PageSize()
-	g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithBudget(cap3))
+	g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithBudget(cap3))
 	if err != nil || g == nil {
 		noDevice(t, "devices", err)
 	}
@@ -118,8 +118,8 @@ func TestTheSeamMovesAcrossTwoDevices(t *testing.T) {
 	// Not the host: the device/host reduction-order band is as wide as a
 	// migration bug on a short prompt.
 	ref := func() ([][]float32, []int) {
-		g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithBudget(cap3))
+		g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithBudget(cap3))
 		if err != nil || g == nil {
 			noDevice(t, "devices", err)
 		}
@@ -141,8 +141,8 @@ func TestTheSeamMovesAcrossTwoDevices(t *testing.T) {
 			busy, placed)
 	}
 
-	g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithBudget(cap3))
+	g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithBudget(cap3))
 	if err != nil || g == nil {
 		noDevice(t, "devices", err)
 	}
@@ -209,8 +209,8 @@ func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 
 	// Half the model per device, plus the dense region the head lives in.
 	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + m.HostBytes()/4
-	g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithBudget(cap2))
+	g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithBudget(cap2))
 	if err != nil || g == nil {
 		noDevice(t, "devices", err)
 	}
@@ -271,8 +271,8 @@ func TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice(t *testing.T) {
 	want := teacherForce(t, m, ids)
 
 	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + m.HostBytes()/4
-	g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithBudget(cap2))
+	g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithBudget(cap2))
 	if err != nil || g == nil {
 		noDevice(t, "devices", err)
 	}
@@ -357,7 +357,7 @@ func TestAWidePromptPipelinesAcrossTwoDevices(t *testing.T) {
 	host.Close()
 
 	cap3 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + 2*m.PageSize()
-	g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff), tier.WithBudget(cap3))
+	g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithBudget(cap3))
 	if err != nil || g == nil {
 		noDevice(t, "devices", err)
 	}

@@ -10,7 +10,7 @@ statement about code that exists.
     a discrete card      pages by COPY, through slots, as the rest of this file
                          describes -- and the copy is now of the RAW
                          GGUF BYTES, with the bit extraction done by a kernel on
-                         the card (jit/gpu/kernels/unpack.go, Q4_K). The host
+                         the card (composer/kernels/unpack.go, Q4_K). The host
                          repack that was 88% of a 70B token is gone from the
                          covered formats and the GGUF mapping is the backing
                          store, so that case needs no arena and no spill file
@@ -28,13 +28,13 @@ statement about code that exists.
     device sm_86 [ptx]: 2/80 blocks, 1.22 GiB resident
 
 The card ran 2.5% of the model and idled through the other 97.5%, on precisely
-the model that needed an accelerator. `jit/gpu/tier` DECLINED a block that did
+the model that needed an accelerator. `engine/device/gpu` DECLINED a block that did
 not fit and the block fell to the host PERMANENTLY -- placement decided once, at
 load. So an accelerator smaller than the model bought almost nothing.
 
 ## What landed
 
-`jit/gpu/tier/page.go`. A device holds N block slots; a block that does not fit
+`engine/device/gpu/page.go`. A device holds N block slots; a block that does not fit
 evicts another block instead of being declined.
 
     slots = (budget - the permanent parts) / the WIDEST block's packed weights
@@ -205,7 +205,7 @@ spent ONCE, by the arena, in host RAM. So:
 
 - an imported tensor charges the device and its pool **nothing**
   (`resident.bytes` returns 0), because charging it would be the double-count
-  `tier.Pool` exists to prevent -- and would decline blocks to protect memory
+  `gpu.Pool` exists to prevent -- and would decline blocks to protect memory
   nobody is going to spend;
 - `GPU.HostReserved` gained the arena's retention budget, so the HOST subtracts
   those bytes from its own. That term was missing entirely: the pool stopped two
@@ -333,7 +333,7 @@ raw staging buffer -- and it cost ZERO slots: three either way.
     ids identical in both, and identical to -devices cpu:
       [128000 791 6864 315 9822 374 264 3363 430 374]
 
-**The 40x is `tier.Stats.Blocks`, not a placement line, and that distinction is
+**The 40x is `gpu.Stats.Blocks`, not a placement line, and that distinction is
 the whole gate.** 400 = 80 blocks x 5 passes, counted after each submission
 returned and its output was read back. "80/80 blocks placed" is ALSO true of a
 pager that swapped every block in and then declined every compute -- a run that
@@ -526,9 +526,9 @@ card runs the model at all, and on this model the knob has two settings.
 
 ## The gates
 
-    jit/gpu/tier/page_test.go   six gates, each run against a violation in
+    engine/device/gpu/page_test.go   six gates, each run against a violation in
                                    the same function, failure text logged
-    jit/gpu/tier/import_test.go five gates on the zero-copy path: what is
+    engine/device/gpu/import_test.go five gates on the zero-copy path: what is
                                    wrapped, what is charged, what the pager does
                                    with a block it cannot reclaim, what SetBudget
                                    does to one, and the arena's term in
@@ -541,7 +541,7 @@ card runs the model at all, and on this model the knob has two settings.
                                    violation, not a control
     backend/metal/import_test.go    -contents must BE the pointer handed in,
                                    plus the four shapes the driver refuses
-    jit/gpu/kernels/arena_test.go   every packed array starts AND ends on a
+    composer/kernels/arena_test.go   every packed array starts AND ends on a
                                    HostAlign() boundary; the length half is what
                                    Apple Silicon needs
     engine/sched/cyclic_test.go        the policy, simulated: MRU keeps a prefix and

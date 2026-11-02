@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // The hardware table compiled into the engine, and the command that
@@ -65,8 +65,8 @@ func RenderHardware(ps []Profile) ([]byte, error) {
 // the composite around it.
 func literal(v reflect.Value, elided bool) string {
 	switch x := v.Interface().(type) {
-	case jit.DeviceKind:
-		if x == jit.DeviceCPU {
+	case composer.DeviceKind:
+		if x == composer.DeviceCPU {
 			return "jit.DeviceCPU"
 		}
 		return "jit.DeviceGPU"
@@ -90,7 +90,7 @@ func literal(v reflect.Value, elided bool) string {
 		var fields []string
 		for i := range t.NumField() {
 			f := v.Field(i)
-			if f.IsZero() && f.Type() != reflect.TypeFor[jit.DeviceKind]() {
+			if f.IsZero() && f.Type() != reflect.TypeFor[composer.DeviceKind]() {
 				continue
 			}
 			fields = append(fields, t.Field(i).Name+": "+literal(f, false))
@@ -134,7 +134,7 @@ func typeName(t reflect.Type) string {
 		}
 		return "[" + n + "]" + typeName(t.Elem())
 	}
-	if t.PkgPath() == reflect.TypeFor[jit.Device]().PkgPath() {
+	if t.PkgPath() == reflect.TypeFor[composer.Device]().PkgPath() {
 		return "jit." + t.Name()
 	}
 	return t.Name()

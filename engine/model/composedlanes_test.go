@@ -7,8 +7,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // laneModels is what the lane gate decodes: heads 48, 64 and 128 wide, one,
@@ -26,7 +26,7 @@ var laneModels = []string{"stories15M-q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gg
 // A subgroup wider than the device guarantees is refused, never formed.
 func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 	const bandRatio, bandWorst = 1.5, 4.0
-	parts := tier.ComposedBlock | tier.ComposedHead
+	parts := gpu.ComposedBlock | gpu.ComposedHead
 	ran := 0
 	for _, file := range laneModels {
 		t.Run(file, func(t *testing.T) {
@@ -57,7 +57,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 			for _, dev := range stepDevices() {
 				t.Run(dev+"/reference", func(t *testing.T) {
 					r := &devRun{}
-					var st tier.Stats
+					var st gpu.Stats
 					r.want, st, _, _ = composedDecode(t, m, dev, ids, toks, 0, true, false)
 					r.ref = unsplitRef(t, m, dev, ids, toks, parts, true)
 					r.lanes = st.Lanes
@@ -76,9 +76,9 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 					type arm struct {
 						name  string
 						lanes int
-						opts  []tier.Option
+						opts  []gpu.Option
 					}
-					arms := []arm{{"the device's own lanes", r.lanes, nil}, {"WithLanes(1)", 1, []tier.Option{tier.WithLanes(1)}}}
+					arms := []arm{{"the device's own lanes", r.lanes, nil}, {"WithLanes(1)", 1, []gpu.Option{gpu.WithLanes(1)}}}
 					for _, l := range []int{1, 8, 32} {
 						if l == r.lanes {
 							continue
@@ -88,7 +88,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 							continue
 						}
 						arms = append(arms, arm{fmt.Sprintf("%d lanes", l), l,
-							[]tier.Option{tier.WithConfig(func(c *tier.Config) { c.ComposedLanes = l })}})
+							[]gpu.Option{gpu.WithConfig(func(c *gpu.Config) { c.ComposedLanes = l })}})
 					}
 					for _, a := range arms {
 						t.Run(a.name, func(t *testing.T) {
@@ -96,11 +96,11 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 							if st.ComposedLanes != a.lanes {
 								t.Fatalf("the composer formed for %d lanes, not %d: the arm did not select its subgroup", st.ComposedLanes, a.lanes)
 							}
-							if nb, d := st.ServedPart(tier.ComposedBlock); nb != len(toks)*m.Cfg.NLayer || d != 0 {
+							if nb, d := st.ServedPart(gpu.ComposedBlock); nb != len(toks)*m.Cfg.NLayer || d != 0 {
 								t.Fatalf("the composer served %d block steps and declined %d where %d steps of %d blocks are %d (%s)",
 									nb, d, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer, st.LastErr)
 							}
-							if nh, d := st.ServedPart(tier.ComposedHead); headOn {
+							if nh, d := st.ServedPart(gpu.ComposedHead); headOn {
 								// Every decode step's head is served, and the prompt's
 								// last row's.
 								if nh != len(toks)+1 || d != 0 {
@@ -139,8 +139,8 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 								t.Errorf("at %d lanes the composed parts are %.3g at the median of the tier's distance from the float reference and %.3g at their worst, where the tier's backends reach %.3g (bounds %.1f and %.1fx)",
 									a.lanes, med, worst, widest, bandRatio, bandWorst)
 							}
-							cut, cst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, append(a.opts, tier.WithSplitFault(true))...)
-							if nb, d := cst.ServedPart(tier.ComposedBlock); nb == 0 || d != 0 {
+							cut, cst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, append(a.opts, gpu.WithSplitFault(true))...)
+							if nb, d := cst.ServedPart(gpu.ComposedBlock); nb == 0 || d != 0 {
 								t.Fatalf("with every split's last segment dropped the composer served %d block steps and declined %d", nb, d)
 							}
 							var cr []float64
@@ -157,7 +157,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 								t.Logf("with every split's last segment dropped: median ratio %.3g, worst %.3g against the band's %.3g", cmed, cworst, bandWorst*widest)
 							}
 							poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false,
-								append(a.opts, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))...)
+								append(a.opts, gpu.WithPoisonScratch(true), gpu.WithPoisonKV(true))...)
 							for i := range got {
 								if !slices.Equal(poisoned[i], got[i]) {
 									t.Fatalf("step %d: at %d lanes, with every buffer poisoned the logits change (%.3g): a composed kernel reads what nothing wrote",

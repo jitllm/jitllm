@@ -5,8 +5,8 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestParsePlacementExperts: %host and %card name where a block's experts run,
@@ -28,7 +28,7 @@ func TestParsePlacementExperts(t *testing.T) {
 
 // runExperts runs ids through m, its blocks on tier g (the host alone when g
 // is nil), and returns the logits.
-func runExperts(t *testing.T, m *Model, g *tier.GPU, ids []int32) [][]float32 {
+func runExperts(t *testing.T, m *Model, g *gpu.GPU, ids []int32) [][]float32 {
 	t.Helper()
 	s := m.NewInstance(32)
 	defer s.Close()
@@ -69,7 +69,7 @@ func TestExpertPlacementIsHonoured(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+			g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, "gpu:0", err)
 			}
@@ -119,14 +119,14 @@ func TestOffCardExpertsRelocate(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			open := func() *tier.GPU {
-				g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+			open := func() *gpu.GPU {
+				g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || g == nil {
 					noDevice(t, "gpu:0", err)
 				}
 				return g
 			}
-			count := func(g *tier.GPU) int {
+			count := func(g *gpu.GPU) int {
 				if where == "host" {
 					return g.Stats().HybridRuns
 				}
@@ -205,7 +205,7 @@ func TestHybridPrefillMatchesTheHost(t *testing.T) {
 		t.Skip("MODEL MISSING: kimik3/Kimi-K3-0.40B.Q8_0.gguf -- this gate proved nothing")
 	}
 	prompt := []int32{1008, 10484, 318, 15383, 387, 17374, 13, 646, 606, 142957}
-	prefill := func(m *Model, g *tier.GPU) []float32 {
+	prefill := func(m *Model, g *gpu.GPU) []float32 {
 		s := m.NewInstance(32)
 		defer s.Close()
 		if g != nil {
@@ -234,8 +234,8 @@ func TestHybridPrefillMatchesTheHost(t *testing.T) {
 			defer m.Close()
 			// Streamed, so the card arm's bank is a token's sheets even where
 			// the whole bank would fit.
-			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
-				tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true }))
+			g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff),
+				gpu.WithConfig(func(c *gpu.Config) { c.StreamExperts = true }))
 			if err != nil || g == nil {
 				noDevice(t, "gpu:0", err)
 			}
@@ -291,7 +291,7 @@ func TestTopOneRouterRunsHybrid(t *testing.T) {
 	if m.Cfg.NExpertUsed != 1 {
 		t.Fatalf("the fixture routes %d experts; this gate is about a top-1 router", m.Cfg.NExpertUsed)
 	}
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "gpu:0", err)
 	}

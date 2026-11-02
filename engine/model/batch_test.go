@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // TestBatchMatchesForward holds ForwardBatch to the decode path it batches.
@@ -79,7 +79,7 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 	// CPU the block steps of a step it served, summed over the rows, and
 	// what it declined.
 	want := make([][][]float32, nseq)
-	decServed, decDeclined := 0, [jit.NumDeclines]int{}
+	decServed, decDeclined := 0, [composer.NumDeclines]int{}
 	for i := range streams {
 		s := m.NewInstance(steps + 1)
 		for _, id := range streams[i] {
@@ -100,7 +100,7 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 			for j, n := range declined {
 				total += n
 				if n > 0 {
-					t.Logf("row %d: %d block steps declined: %s", i, n, jit.DeclineName(j))
+					t.Logf("row %d: %d block steps declined: %s", i, n, composer.DeclineName(j))
 				}
 			}
 			if total != steps*m.Cfg.NLayer {
@@ -137,7 +137,7 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 		served, declined := b.CPUBlockSteps()
 		for i, n := range declined {
 			if n > 0 && decDeclined[i] == 0 {
-				t.Errorf("the batch declined %d block steps the decode served: %s (%v)", n, jit.DeclineName(i), b.CPUFormErr())
+				t.Errorf("the batch declined %d block steps the decode served: %s (%v)", n, composer.DeclineName(i), b.CPUFormErr())
 			}
 		}
 		if want := steps * decServed / nseq; served != want {

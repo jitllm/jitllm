@@ -11,8 +11,8 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -217,7 +217,7 @@ func pagerBudget(ctx context.Context, c cli, cn *conn, modelID, maxmem string) e
 		printResidency(c.out, "  ", resp.Msg.GetResidency())
 		return nil
 	}
-	b, err := tier.ParseBytes(maxmem)
+	b, err := gpu.ParseBytes(maxmem)
 	if err != nil {
 		return usagef("-maxmem: %v", err)
 	}

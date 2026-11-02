@@ -3,14 +3,14 @@ package oracle
 import "fmt"
 
 // PackGEMMActivations is the reference the generated activation packer
-// (EmitPackAct, run by jit/cpu.PackActJIT) is gated against: tokens [lo, hi)
+// (EmitPackAct, run by engine/device/cpu.PackActJIT) is gated against: tokens [lo, hi)
 // and k-blocks [blo, bhi) of x, [tok][k] row-major, quantized and laid out as
 // EmitGEMMWindow reads them; blo < 0 is every block.
 //
 // dst[(g*tok+n)*4+c] is token n's element 4g+c, so eight tokens' four k
 // values form one contiguous 32-byte operand. sum carries bias*sum(q) per
 // (block, token), the correction for reading the weights as unsigned
-// (jit/cpu.BiasC); half, where wantHalf, the same per sixteen-element half.
+// (engine/device/cpu.BiasC); half, where wantHalf, the same per sixteen-element half.
 // window is the amax window, which must match the decode path's.
 func PackGEMMActivations(dst []int8, scale []float32, sum, half []int32, x []float32, tok, k, lo, hi, blo, bhi, window, bias int, wantHalf bool) error {
 	wantHalf = wantHalf && half != nil

@@ -521,7 +521,7 @@
     {
       "name": "cpu-amd64-avx2",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "engine/device/cpu",
       "implemented": true,
       "verified": [
         {
@@ -542,7 +542,7 @@
     {
       "name": "cpu-amd64-sse",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "engine/device/cpu",
       "implemented": true,
       "verified": [
         {
@@ -558,7 +558,7 @@
     {
       "name": "cpu-arm64",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "engine/device/cpu",
       "implemented": true,
       "verified": [
         {

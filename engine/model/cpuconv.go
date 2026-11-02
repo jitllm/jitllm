@@ -3,8 +3,8 @@ package model
 import (
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // A convolutional tower block on the CPU device (frontconv.go): composed
@@ -20,11 +20,11 @@ func (s *Instance) cpuComposeConv(li int, cb *cpuBlock) {
 	l := &s.m.layers[li]
 	g := s.m.Composing().BlockGraph(li)
 	switch {
-	case !jit.HostCPULowers():
-		cb.why = jit.DeclineISA
+	case !composer.HostCPULowers():
+		cb.why = composer.DeclineISA
 		return
 	case g == nil:
-		cb.why = jit.DeclineNoGraph
+		cb.why = composer.DeclineNoGraph
 		return
 	}
 	vi := int32(li - s.m.tower.base)
@@ -43,7 +43,7 @@ func (s *Instance) cpuComposeConv(li int, cb *cpuBlock) {
 	if s.kv.layers[li].p > 0 {
 		a := s.nc()
 		if a == nil || a.arena == nil {
-			cb.why = jit.DeclineNoRoom
+			cb.why = composer.DeclineNoRoom
 			return
 		}
 		page = a.page
@@ -51,30 +51,30 @@ func (s *Instance) cpuComposeConv(li int, cb *cpuBlock) {
 			s.cpu.rowsTab = make([]uint32, rows*4)
 		}
 	}
-	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: page, Keys: page, ActWindow: s.jit.ActWindow()},
+	req := composer.Request{Graph: g, Formats: formats, Step: composer.Step{Rows: rows, Page: page, Keys: page, ActWindow: s.jit.ActWindow()},
 		Device: s.composedCPU(), Apart: true}
 	f, err := s.m.cpuFormOf(req, g, rows, true, true, false)
 	if err != nil {
 		cb.why = s.cpuFormDecline(err)
 		return
 	}
-	cb.graph, cb.f, cb.why = g, f, jit.DeclineServes
+	cb.graph, cb.f, cb.why = g, f, composer.DeclineServes
 	s.cpu.composed[li]++
 }
 
 // cpuConvRun runs convolutional block li on the CPU the composer's way
 // over the encode's activation, its output into the other half, or says
 // why not.
-func (s *Instance) cpuConvRun(li int) jit.Decline {
+func (s *Instance) cpuConvRun(li int) composer.Decline {
 	cb := s.cpu.blocks[li]
 	if cb == nil {
-		return jit.DeclineUnplaced
+		return composer.DeclineUnplaced
 	}
-	if cb.why != jit.DeclineServes {
+	if cb.why != composer.DeclineServes {
 		return cb.why
 	}
 	l, f := &s.m.layers[li], cb.f
-	if why := s.cpuWeights(f, li, l); why != jit.DeclineServes {
+	if why := s.cpuWeights(f, li, l); why != composer.DeclineServes {
 		return why
 	}
 	r, b := s.vis.mn, l.mn
@@ -82,14 +82,14 @@ func (s *Instance) cpuConvRun(li int) jit.Decline {
 	u := max(f.unit, 1)
 	x, y := r.act[r.cur], r.act[1-r.cur]
 	if r.h != b.hin || r.w != b.win || r.c != b.cin || len(x) < (nin+u-1)/u*u*b.cin || len(y) < (nout+u-1)/u*u*b.cout {
-		return jit.DeclineNoRoom
+		return composer.DeclineNoRoom
 	}
 	bd := &s.cpu.bound
 	*bd = cpuBound{li: li, l: l, own: s.cpuOwn(f), n: nin}
 	bd.io[0], bd.io[1] = unsafe.Pointer(&x[0]), unsafe.Pointer(&y[0])
 	if pg := &s.kv.layers[li]; pg.p > 0 {
 		if !s.lendNC(li) {
-			return jit.DeclineNoRoom
+			return composer.DeclineNoRoom
 		}
 		defer s.unlend(li)
 		for i := range nin {
@@ -104,7 +104,7 @@ func (s *Instance) cpuConvRun(li int) jit.Decline {
 		s.cpuCall(bd, &f.codes[i])
 	}
 	s.mnHandOver(li, y[:nout*b.cout])
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // mnPages is a convolutional tower's history: an attention block's keys

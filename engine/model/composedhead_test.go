@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // headOracle is the head of m over the final residual x as the oracle computes
@@ -118,13 +118,13 @@ func headTokens(m *Model) []int32 {
 type headArm struct {
 	fx         headFixture
 	dev        string
-	parts      tier.Parts
+	parts      gpu.Parts
 	xs         [][]float32
 	lnb, outB  []float32
 	want, cfg  func(c *Config)
 	mut        func(m *Model) func()
 	worst      float64
-	stats      tier.Stats
+	stats      gpu.Stats
 	applied    []nn.HeadStage
 	steps      int
 	stagesWant nn.HeadStage
@@ -135,8 +135,8 @@ type headArm struct {
 
 func (a *headArm) run(t *testing.T) {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithDevices(a.dev), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+	g, err := gpu.OpenWith(gpu.WithDevices(a.dev), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 	if err != nil || g == nil {
 		noDevice(t, a.dev, err)
 	}
@@ -190,7 +190,7 @@ func (a *headArm) run(t *testing.T) {
 // in the model's order -- with every block and the head on the device, held to
 // the oracle over the final residuals of the host's blocks, which the device's
 // differ from by the f32 reduction order alone. The head
-// runs as the composer's graph (tier.ComposedHead), and then as the tier's own
+// runs as the composer's graph (gpu.ComposedHead), and then as the tier's own
 // kernels beside the host's finishing of the logits: the same logits either
 // way, and nothing applied twice (nn.Head.Applied). Each op taken out of the
 // composed head -- the softcap dropped, the scale inverted, the bias negated,
@@ -261,7 +261,7 @@ func TestComposedHeadOps(t *testing.T) {
 						t.Run(arm.name, func(t *testing.T) {
 							// The composer's head, then the tier's own with the
 							// host finishing the logits.
-							for _, parts := range []tier.Parts{tier.ComposedHead} {
+							for _, parts := range []gpu.Parts{gpu.ComposedHead} {
 								// The tier's own head caps before the host adds the bias,
 								// and the model's head biases first: without the composed
 								// head the tier leaves such a head on the host, which runs
@@ -270,7 +270,7 @@ func TestComposedHeadOps(t *testing.T) {
 								refused := arm.cap != 0 && outB != nil && parts == 0
 								a := &headArm{fx: fx, dev: dev, parts: parts, xs: xs, lnb: lnb, outB: outB, want: set, cfg: set, refused: refused}
 								a.run(t)
-								n, d := a.stats.ServedPart(tier.ComposedHead)
+								n, d := a.stats.ServedPart(gpu.ComposedHead)
 								if refused {
 									if n != 0 || d != 0 || !(a.worst < bound) {
 										t.Fatalf("parts %d: a head the tier refuses: %d composed head steps served, %d declined, %.3e from the oracle, bound %.0e",
@@ -340,9 +340,9 @@ func TestComposedHeadOps(t *testing.T) {
 							continue
 						}
 						t.Run(v.name, func(t *testing.T) {
-							a := &headArm{fx: fx, dev: dev, parts: tier.ComposedHead, xs: xs, lnb: lnb, outB: outB, want: full, cfg: v.cfg, mut: v.mut}
+							a := &headArm{fx: fx, dev: dev, parts: gpu.ComposedHead, xs: xs, lnb: lnb, outB: outB, want: full, cfg: v.cfg, mut: v.mut}
 							a.run(t)
-							n, d := a.stats.ServedPart(tier.ComposedHead)
+							n, d := a.stats.ServedPart(gpu.ComposedHead)
 							if n != a.steps || d != 0 {
 								t.Fatalf("the composed head served %d of %d steps and was declined %d: %s", n, a.steps, d, declinesOf(a.stats))
 							}
@@ -369,7 +369,7 @@ func TestComposedHeadOps(t *testing.T) {
 // composer serves wrong, and a head that is not stated at all is refused by
 // name.
 func TestComposedHeadForms(t *testing.T) {
-	step := jit.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
+	step := composer.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
 	for _, fx := range headFixtures {
 		t.Run(fx.name, func(t *testing.T) {
 			m := fx.open(t)
@@ -411,13 +411,13 @@ func TestComposedHeadForms(t *testing.T) {
 				t.Errorf("the head's norm is %v for LayerNorm %v, it states %d softcap(s) and ends in %v %v by %v: want one softcap and a scale of 1/8",
 					gr.Ops[0].Kind, m.Cfg.LayerNorm, caps, last.Kind, last.Attr.Fn, last.Attr.Const)
 			}
-			for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, composedCPUDevice(6)} {
-				_, codes, err := jit.Default().Form(jit.Request{Graph: gr, Formats: formats, Step: step, Device: d})
+			for _, d := range []composer.Device{{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, composedCPUDevice(6)} {
+				_, codes, err := composer.Default().Form(composer.Request{Graph: gr, Formats: formats, Step: step, Device: d})
 				if err != nil {
 					t.Fatalf("%v: %v", d.Kind, err)
 				}
 				for _, c := range codes {
-					if d.Kind == jit.DeviceGPU && c.GPU == nil || d.Kind == jit.DeviceCPU && c.CPU == nil {
+					if d.Kind == composer.DeviceGPU && c.GPU == nil || d.Kind == composer.DeviceCPU && c.CPU == nil {
 						t.Errorf("%v: %s has no code for the device", d.Kind, c.Name)
 					}
 				}

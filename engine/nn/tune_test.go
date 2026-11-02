@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // The tuner decides which generated kernel every matvec reaches for, so its

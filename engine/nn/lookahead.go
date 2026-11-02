@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // AheadSet is the weights a fused run reads next: the matrices of the op after

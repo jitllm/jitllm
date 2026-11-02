@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestStepNMSEBand is the instrument denseStepBand was set from, not a gate:
@@ -25,7 +25,7 @@ import (
 //	together=n  the first n sessions through Step (n <= 4 runs decode's matvec
 //	            per token, groupMV; past that the tiled twins)
 //	nofuse      four sessions through Step with decode's fusions apart
-//	            (tier.Config.NoRagFuse)
+//	            (gpu.Config.NoRagFuse)
 //
 // It reports each arm's worst, median and per-step-range worst, so a band that
 // grows with the position, the row count or the model's depth shows as one.
@@ -56,8 +56,8 @@ func stepBand(t *testing.T, m *Model, dev string) {
 		"In 1905, Albert Einstein published", "The recipe calls for two cups of",
 		"def fibonacci(n):", "The three primary colors are"}
 	const steps = 32
-	open := func(opts ...tier.Option) *tier.GPU {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff)},
+	open := func(opts ...gpu.Option) *gpu.GPU {
+		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)},
 			append(opts, testTierOpts(t)...)...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)
@@ -65,7 +65,7 @@ func stepBand(t *testing.T, m *Model, dev string) {
 		return g
 	}
 	// session opens prompt i's instance on g (the host where nil) and prefills it.
-	session := func(g *tier.GPU, i int) (*Instance, []float32) {
+	session := func(g *gpu.GPU, i int) (*Instance, []float32) {
 		ids := m.Vocab.Encode(prompts[i], true)
 		st := m.NewInstance(len(ids) + steps + 2)
 		if g != nil {
@@ -85,7 +85,7 @@ func stepBand(t *testing.T, m *Model, dev string) {
 	// alone decodes every session on g by itself, fed toks, or its own greedy
 	// chain where toks is nil, and returns [session][step] logits and the
 	// tokens fed.
-	alone := func(g *tier.GPU, toks [][]int32) ([][][]float32, [][]int32) {
+	alone := func(g *gpu.GPU, toks [][]int32) ([][][]float32, [][]int32) {
 		out := make([][][]float32, len(prompts))
 		fed := make([][]int32, len(prompts))
 		for i := range prompts {
@@ -108,7 +108,7 @@ func stepBand(t *testing.T, m *Model, dev string) {
 		}
 		return out, fed
 	}
-	together := func(g *tier.GPU, n int, toks [][]int32) [][][]float32 {
+	together := func(g *gpu.GPU, n int, toks [][]int32) [][][]float32 {
 		sts := make([]*Instance, n)
 		for i := range sts {
 			sts[i], _ = session(g, i)
@@ -161,7 +161,7 @@ func stepBand(t *testing.T, m *Model, dev string) {
 	host, _ := alone(nil, toks)
 	report("host", host, ref)
 	for _, sp := range []int{1, 4} {
-		g := open(tier.WithSplit(sp))
+		g := open(gpu.WithSplit(sp))
 		got, _ := alone(g, toks)
 		g.Close()
 		report(fmt.Sprintf("split=%d", sp), got, ref)
@@ -174,7 +174,7 @@ func stepBand(t *testing.T, m *Model, dev string) {
 		g.Close()
 		report(fmt.Sprintf("together=%d", n), got, ref)
 	}
-	g = open(tier.WithConfig(func(c *tier.Config) { c.NoRagFuse = true }))
+	g = open(gpu.WithConfig(func(c *gpu.Config) { c.NoRagFuse = true }))
 	got := together(g, 4, toks)
 	g.Close()
 	report("nofuse=4", got, ref)

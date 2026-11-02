@@ -1,7 +1,7 @@
 # A native AMD backend: HIP through goffi, kernels from the IR
 
 **Status: built and gated offline; not yet run on an AMD card.** The binding
-(`backend/hip`), the lowering (`jit/amdgpu`), the device (`backend.hipDev`)
+(`backend/hip`), the lowering (`composer/amdgpu`), the device (`backend.hipDev`)
 and the `hip:N` naming through the tier, the CLI and the server are in. Every
 kernel `lowertest` registers (125) compiles to a code object for gfx90a, gfx942,
 gfx1030, gfx1100 and gfx1201 through comgr with no GPU present, under comgr 3
@@ -25,7 +25,7 @@ Two more, stated by the user and binding:
    HIP calls (`hipGetDeviceCount`, `hipGetDevicePropertiesR0600` for
    `gcnArchName`, `hipDeviceGetAttribute`, `hipDeviceGetUuid`). Gate:
    `hip.TestNoExternalCommands` refuses an `os/exec` import in every
-   production file under `jit/`, `engine/`, `format/`, `tok/` and `convert/`
+   production file under `composer/`, `engine/`, `format/`, `tok/` and `convert/`
    (the commands under `cmd/`, `ui/` and `scripts/` are programs, not the
    engine).
 2. **ROCm is discovered and loaded at run time**, as `backend/cuda` finds
@@ -33,7 +33,7 @@ Two more, stated by the user and binding:
    `libamd_comgr.so.3`, `.so.2`, `.so`), through the loader's own search path,
    then `/opt/rocm/lib`, every `/opt/rocm-*/lib` newest version first, and
    `/usr/lib/x86_64-linux-gnu`. An explicit directory is `hip.Config.Path`,
-   reached through `tier.WithROCm` and filled by `cmd/jitllm` and `jitllmd`
+   reached through `gpu.WithROCm` and filled by `cmd/jitllm` and `jitllmd`
    from `JITLLM_ROCM` (the libraries read no environment). A named directory
    is the ONLY one tried. Absent or unloadable ROCm is zero HIP devices and
    never an error; the build stays `CGO_ENABLED=0`, and one binary runs with or
@@ -56,7 +56,7 @@ There were two ways to hand comgr something to turn into a code object:
 
 **LLVM IR, as text.** It is what PTX is to ptxas: a virtual-register assembly
 the vendor's back end owns instruction selection, register allocation and
-scheduling for -- exactly the division `jit/ir`'s package comment draws ("the
+scheduling for -- exactly the division `composer/ir`'s package comment draws ("the
 device driver owns instruction selection, register allocation and scheduling on
 every target"). Writing GCN assembly would mean writing that back end, four
 times over (gfx9, gfx10, gfx11, gfx12 differ in encodings, wave size and hazards).
@@ -204,8 +204,8 @@ are named: `jitllm hardware`, `jitllmd`'s device listing (`Backend: "hip"`,
 `BACKEND_HIP` on the wire), `LoadOptions.DeviceIDs`, `-devices` and the gates.
 The full order, for one card reachable several ways: CUDA > Metal > HIP > Vulkan.
 
-Three cases, each gated with a fake loader path (`tier.TestHIPIsTheDefaultForAnAMDCardWithROCm`,
-`tier.TestNoROCmIsVulkanAndNotAnError`, `tier.TestAnExplicitHIPRequestFailsNamingTheCause`,
+Three cases, each gated with a fake loader path (`gpu.TestHIPIsTheDefaultForAnAMDCardWithROCm`,
+`gpu.TestNoROCmIsVulkanAndNotAnError`, `gpu.TestAnExplicitHIPRequestFailsNamingTheCause`,
 `backend.TestExplicitHIPWithoutROCmIsAnError`, `server.TestNoROCmListsNoHIPDevice`):
 
 1. ROCm present: `hip:N` is listed, and the default set takes it over the
@@ -262,7 +262,7 @@ The offline gate needs only comgr. ROCm's packages extract without root:
 
     curl -O https://repo.radeon.com/rocm/apt/6.4.1/pool/main/c/comgr/comgr_3.0.0.60401-83~24.04_amd64.deb
     dpkg-deb -x comgr_*.deb rocm
-    JITLLM_ROCM=$PWD/rocm/opt/rocm-6.4.1/lib ./scripts/cap 8G -- go test ./jit/gpu/lowertest -run AMDGPU
+    JITLLM_ROCM=$PWD/rocm/opt/rocm-6.4.1/lib ./scripts/cap 8G -- go test ./composer/lowertest -run AMDGPU
 
 ## Running the gates on a host with an AMD card
 

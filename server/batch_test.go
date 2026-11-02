@@ -15,8 +15,8 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -62,7 +62,7 @@ const tieMargin = 0.5
 // sessions sessions, or skips naming why. The loop must exist: a device model
 // that did not get one would run every gate below on the one-at-a-time path
 // and compare it with itself.
-func batchEngine(t *testing.T, name string, cfg Config, sessions int, tc func(*tier.Config)) (*Engine, *LoadedModel, clients) {
+func batchEngine(t *testing.T, name string, cfg Config, sessions int, tc func(*gpu.Config)) (*Engine, *LoadedModel, clients) {
 	t.Helper()
 	path := modelPath(t, name)
 	cfg.Probe, cfg.Version = oneCardProbe, "test"
@@ -693,14 +693,14 @@ func replayPair(t *testing.T, lm *LoadedModel, maxSeq int, sp model.Sampler, sub
 }
 
 // TestBatchARefusedJointStepRunsTheRowsAlone: a device that refuses steps
-// across sessions (tier.Config.NoBatch, refused before anything runs) costs
+// across sessions (gpu.Config.NoBatch, refused before anything runs) costs
 // the batch its shared step and nothing else: every row runs alone, comes out
 // identical to its run alone, and the refusal is counted once for the rows it
 // was refused for rather than once a step. Against a loop that treats the
 // refusal as the requests' error, every request fails.
 func TestBatchARefusedJointStepRunsTheRowsAlone(t *testing.T) {
 	eachBatchModel(t, func(t *testing.T, name string) {
-		e, lm, c := batchEngine(t, name, Config{}, 3, func(c *tier.Config) { c.NoBatch = true })
+		e, lm, c := batchEngine(t, name, Config{}, 3, func(c *gpu.Config) { c.NoBatch = true })
 		const gen = 12
 		alone := make([]completion, 2)
 		for i := range alone {

@@ -3,8 +3,8 @@ package model
 import (
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // kvLayout is where a (sequence slot, position, kv head) lives in the host KV

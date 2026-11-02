@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // deviceReadWall measures the first device of api's read bandwidth in this

@@ -7,8 +7,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend/metal"
-	"github.com/jitllm/jitllm/jit/ir"
-	"github.com/jitllm/jitllm/jit/msl"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/msl"
 )
 
 type mtlDev struct {

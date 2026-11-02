@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSessionsFollowTheirInstanceAcrossSeamMoves: an instance's blocks
@@ -125,7 +125,7 @@ func sessionSeamMoves(t *testing.T, p string, bound float64) {
 		{"grow", 0, []move{{first, cfg.NLayer}}},
 	} {
 		t.Run(arm.name, func(t *testing.T) {
-			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+			g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}

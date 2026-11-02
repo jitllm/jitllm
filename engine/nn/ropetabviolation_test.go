@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // The rotary table's violations: a gate that has never fired is not a gate.

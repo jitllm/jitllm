@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // openSynthLlama4Q8 is the Q8_0 twin of the fixture (Q8=1 scripts/llama4gold.py):
@@ -84,32 +84,32 @@ func TestSynthLlama4Q8BatchedPrefillOnDevice(t *testing.T) {
 	host.Close()
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			st := m.NewInstance(len(g.IDs) + 1)
 			defer st.Close()
-			st.SetDeviceLayers(gpu, -1)
+			st.SetDeviceLayers(gpux, -1)
 			if n := st.GPULayers(); n != m.Cfg.NLayer {
-				t.Fatalf("%s took %d of %d blocks: %v %v", spec, n, m.Cfg.NLayer, st.DeviceDeclines(), gpu.Err())
+				t.Fatalf("%s took %d of %d blocks: %v %v", spec, n, m.Cfg.NLayer, st.DeviceDeclines(), gpux.Err())
 			}
-			n0, d0 := gpu.Stats().ServedPart(tier.ComposedPrompt)
+			n0, d0 := gpux.Stats().ServedPart(gpu.ComposedPrompt)
 			got, err := st.Prefill(g.IDs)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n, d := gpu.Stats().ServedPart(tier.ComposedPrompt); n == n0 || d != d0 {
-				t.Fatalf("the composer served %d of the prompt's block steps and declined %d (%s), so this compared no batched mixture", n-n0, d-d0, gpu.Err())
+			if n, d := gpux.Stats().ServedPart(gpu.ComposedPrompt); n == n0 || d != d0 {
+				t.Fatalf("the composer served %d of the prompt's block steps and declined %d (%s), so this compared no batched mixture", n-n0, d-d0, gpux.Err())
 			}
 			// The chunk must have stayed on the device: a demotion restarts it
 			// on the host, whose answer matches exactly.
 			if n, d := st.GPULayers(), st.DeviceDemotions(); n != m.Cfg.NLayer || d != 0 {
-				t.Fatalf("the prefill fell to the host: %d blocks placed, %d demotions (%s)", n, d, gpu.Err())
+				t.Fatalf("the prefill fell to the host: %d blocks placed, %d demotions (%s)", n, d, gpux.Err())
 			}
 			nmse := llama4Cmp(f64s(want), got)
 			if math.IsNaN(nmse) || !(nmse < 1e-2) || Greedy(got) != Greedy(want) {

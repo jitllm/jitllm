@@ -8,10 +8,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 

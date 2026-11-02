@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/tok"
 )
 

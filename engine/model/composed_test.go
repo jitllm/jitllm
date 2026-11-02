@@ -8,36 +8,36 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // composedDecode decodes toks teacher-forced after ids on a fresh tier of
 // dev serving the parts, every block placed, and returns
 // every step's logits, the tier's stats and its census of the launches of
 // its own kernels on the steps the composer was asked for.
-func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph, float bool, extra ...tier.Option) ([][]float32, tier.Stats, bool, map[string]int) {
+func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts gpu.Parts, noGraph, float bool, extra ...gpu.Option) ([][]float32, gpu.Stats, bool, map[string]int) {
 	t.Helper()
 	return composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, float, nil, extra...)
 }
 
 // unsplit forms a reference's sums with no split (Config.ComposedUnsplit):
 // a split an arm forms wrong is not the reference's too.
-var unsplit = tier.WithConfig(func(c *tier.Config) { c.ComposedUnsplit = true })
+var unsplit = gpu.WithConfig(func(c *gpu.Config) { c.ComposedUnsplit = true })
 
 // unsplitRef is the float reference of parts on dev, formed with no split:
 // its blocks all served, and every split's last segment dropped leaves it
 // bit for bit, so a split an arm forms wrong is not the reference's too.
-func unsplitRef(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph bool) [][]float32 {
+func unsplitRef(t *testing.T, m *Model, dev string, ids, toks []int32, parts gpu.Parts, noGraph bool) [][]float32 {
 	t.Helper()
 	ref, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit)
-	if n, d := st.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+	if n, d := st.ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the float reference served its blocks %d times and declined them %d (%s)", n, d, declinesOf(st))
 	}
-	cut, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit, tier.WithSplitFault(true))
+	cut, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit, gpu.WithSplitFault(true))
 	for i := range cut {
 		if !slices.Equal(cut[i], ref[i]) {
 			t.Fatalf("step %d: with every split's last segment dropped the float reference moves (NMSE %.3g): it forms through the composer's splits", i, logitNMSE(cut[i], ref[i]))
@@ -92,17 +92,17 @@ func shiftEmbed(d, p, vocab int) func(*Instance) {
 
 // composedDecodeWith is composedDecode with after applied to the instance once
 // its device is attached.
-func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph, float bool, after func(*Instance), extra ...tier.Option) ([][]float32, tier.Stats, bool, map[string]int) {
+func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, parts gpu.Parts, noGraph, float bool, after func(*Instance), extra ...gpu.Option) ([][]float32, gpu.Stats, bool, map[string]int) {
 	t.Helper()
 	// The prompt is one chunk of a few rows: every arm reserves and warms the
 	// widths up to 64, each a form of the composer's where it serves them.
-	opts := append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) {
+	opts := append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) {
 			c.NoGraph, c.ComposedFloat, c.Census, c.PromptRows = noGraph, float, true, 64
 		})},
 		testTierOpts(t)...)
 	opts = append(opts, extra...)
-	g, err := tier.OpenWith(opts...)
+	g, err := gpu.OpenWith(opts...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}
@@ -250,7 +250,7 @@ func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 			defer m.Close()
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, dev, err)
 					}
@@ -275,18 +275,18 @@ func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 }
 
 // declinesOf is every decline the tier counted, the head's and the blocks',
-// by name (tier.DeclineName).
-func declinesOf(st tier.Stats) string {
+// by name (gpu.DeclineName).
+func declinesOf(st gpu.Stats) string {
 	var out []string
 	for i := range st.HeadDeclines {
 		if k := st.HeadDeclines[i]; k > 0 {
-			out = append(out, fmt.Sprintf("head %d: %s", k, tier.DeclineName(i)))
+			out = append(out, fmt.Sprintf("head %d: %s", k, gpu.DeclineName(i)))
 		}
 		if k := st.BlockDeclines[i]; k > 0 {
-			out = append(out, fmt.Sprintf("blocks %d: %s", k, tier.DeclineName(i)))
+			out = append(out, fmt.Sprintf("blocks %d: %s", k, gpu.DeclineName(i)))
 		}
 		if k := st.StepDeclines[i]; k > 0 {
-			out = append(out, fmt.Sprintf("tables and tokens %d: %s", k, tier.DeclineName(i)))
+			out = append(out, fmt.Sprintf("tables and tokens %d: %s", k, gpu.DeclineName(i)))
 		}
 	}
 	if len(out) == 0 {
@@ -382,10 +382,10 @@ func TestComposedBlocksServeApart(t *testing.T) {
 			}
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					parts := tier.ComposedBlock | tier.ComposedHead
+					parts := gpu.ComposedBlock | gpu.ComposedHead
 					got, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
-					served, declined := st.ServedPart(tier.ComposedBlock)
-					copies, _ := st.ServedPart(tier.PartCopy)
+					served, declined := st.ServedPart(gpu.ComposedBlock)
+					copies, _ := st.ServedPart(gpu.PartCopy)
 					if served != len(toks)*m.Cfg.NLayer || declined != 0 {
 						t.Fatalf("%d block steps served and %d declined of %d: %s",
 							served, declined, len(toks)*m.Cfg.NLayer, declinesOf(st))
@@ -393,7 +393,7 @@ func TestComposedBlocksServeApart(t *testing.T) {
 					if copies == 0 {
 						t.Fatalf("no copy over x in %d block steps: the gate selected no block written apart", served)
 					}
-					poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
+					poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, gpu.WithPoisonScratch(true), gpu.WithPoisonKV(true))
 					for i := range got {
 						for _, v := range got[i] {
 							if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
@@ -487,17 +487,17 @@ const flashBlock = 32
 func TestComposedBlocksServe(t *testing.T) {
 	type arm struct {
 		name  string
-		parts tier.Parts
+		parts gpu.Parts
 		tile  int
 		// stream puts a mixture's routed experts in pages on the card.
 		stream streamArm
 	}
-	arms := []arm{{"whole step", tier.ComposedStep, 0, 0}}
+	arms := []arm{{"whole step", gpu.ComposedStep, 0, 0}}
 	for k := 2; k <= matrixTileCount(); k++ {
-		arms = append(arms, arm{fmt.Sprintf("whole step at matrix tile %d", k), tier.ComposedStep, k, 0})
+		arms = append(arms, arm{fmt.Sprintf("whole step at matrix tile %d", k), gpu.ComposedStep, k, 0})
 	}
-	arms = append(arms, arm{"whole step, experts streamed under a budget", tier.ComposedStep, 0, streamBudget},
-		arm{"whole step, experts cached in pages", tier.ComposedStep, 0, streamCache})
+	arms = append(arms, arm{"whole step, experts streamed under a budget", gpu.ComposedStep, 0, streamBudget},
+		arm{"whole step, experts cached in pages", gpu.ComposedStep, 0, streamCache})
 	for f, by := range budgetElsewhere {
 		if !slices.Contains(servedModels, by) {
 			t.Fatalf("%s's budget arm runs on %s, which the gate does not serve", f, by)
@@ -606,7 +606,7 @@ func TestComposedBlocksServe(t *testing.T) {
 						for _, p := range panel {
 							var tr tierRun
 							pi := len(r[g])
-							tr.ref = unsplitRef(t, m, dev, p.ids, p.toks, tier.ComposedStep, noGraph)
+							tr.ref = unsplitRef(t, m, dev, p.ids, p.toks, gpu.ComposedStep, noGraph)
 							// Where llama.cpp does not read the model the band is
 							// the floor: the reference stands for itself.
 							tr.want = tr.ref
@@ -659,27 +659,27 @@ func TestComposedBlocksServe(t *testing.T) {
 								name = "no graph/" + a.name
 							}
 							t.Run(name, func(t *testing.T) {
-								parts := a.parts | tier.ComposedPrompt
-								tile := tier.WithConfig(func(c *tier.Config) { c.MatrixTile = a.tile })
+								parts := a.parts | gpu.ComposedPrompt
+								tile := gpu.WithConfig(func(c *gpu.Config) { c.MatrixTile = a.tile })
 								ctx := 0
 								for _, p := range panel {
 									ctx = max(ctx, len(p.ids)+len(p.toks)+4)
 								}
 								sopts := streamOpts(t, m, dev, a.stream, parts, noGraph, ctx)
 								var band, offBand panelBand
-								var st0 tier.Stats
+								var st0 gpu.Stats
 								var got0 [][]float32
 								for pi, p := range panel {
 									ids, toks := p.ids, p.toks
 									want, ref := runs[dev][g][pi].want, runs[dev][g][pi].ref
-									got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, append([]tier.Option{tile}, sopts...)...)
+									got, st, headOn, census := composedDecode(t, m, dev, ids, toks, parts, noGraph, false, append([]gpu.Option{tile}, sopts...)...)
 									if pi == 0 {
 										st0, got0 = st, got
 									}
 									if a.stream != 0 {
 										streamSelected(t, st, a.stream)
 									}
-									if a.tile > 0 && st.MatrixPart(tier.ComposedPrompt) > 0 && st.MatrixTiled == 0 {
+									if a.tile > 0 && st.MatrixPart(gpu.ComposedPrompt) > 0 && st.MatrixTiled == 0 {
 										t.Fatalf("the prompt ran on the matrix unit with no part formed at tile %d", a.tile)
 									}
 									// Every form was built at the placement or PrepHead.
@@ -689,12 +689,12 @@ func TestComposedBlocksServe(t *testing.T) {
 									// Every part the arm asks for served, and none declined: a
 									// head the device does not hold (it did not fit beside the
 									// blocks) is named, not demanded.
-									for _, k := range []tier.Parts{tier.ComposedTable, tier.ComposedBlock, tier.ComposedHead, tier.ComposedPrompt} {
+									for _, k := range []gpu.Parts{gpu.ComposedTable, gpu.ComposedBlock, gpu.ComposedHead, gpu.ComposedPrompt} {
 										if parts&k == 0 {
 											continue
 										}
 										n, d := st.ServedPart(k)
-										if k == tier.ComposedHead && !headOn {
+										if k == gpu.ComposedHead && !headOn {
 											if pi == 0 {
 												t.Logf("the head runs at home here (it does not fit beside the blocks): the composed head has nothing to serve")
 											}
@@ -707,8 +707,8 @@ func TestComposedBlocksServe(t *testing.T) {
 									// Every step runs every block, emitted or replayed in a
 									// recording, so a block the composer did not serve shows
 									// in the count.
-									blocks, _ := st.ServedPart(tier.ComposedBlock)
-									if replayed := st.ReplayedPart(tier.ComposedBlock); blocks+replayed != len(toks)*m.Cfg.NLayer {
+									blocks, _ := st.ServedPart(gpu.ComposedBlock)
+									if replayed := st.ReplayedPart(gpu.ComposedBlock); blocks+replayed != len(toks)*m.Cfg.NLayer {
 										t.Fatalf("the composer ran %d block steps (%d of them replayed) where %d steps of %d blocks are %d",
 											blocks+replayed, replayed, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 									}
@@ -716,11 +716,11 @@ func TestComposedBlocksServe(t *testing.T) {
 									// the plan states, none declined; a
 									// prompt's tail too short for a chunk runs as a step and
 									// writes its own.
-									if a.parts&tier.ComposedTable != 0 {
-										nt, tableDeclined := st.ServedPart(tier.ComposedTable)
-										np, _ := st.ServedPart(tier.ComposedPrompt)
+									if a.parts&gpu.ComposedTable != 0 {
+										nt, tableDeclined := st.ServedPart(gpu.ComposedTable)
+										np, _ := st.ServedPart(gpu.ComposedPrompt)
 										calls := len(toks) + np/m.Cfg.NLayer
-										if replayed := st.ReplayedPart(tier.ComposedTable); tableDeclined != 0 || nt+replayed < calls*composedTables(m) {
+										if replayed := st.ReplayedPart(gpu.ComposedTable); tableDeclined != 0 || nt+replayed < calls*composedTables(m) {
 											t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps and %d prompt chunks of %d tables; %d declined, %d capture(s), last error %q",
 												nt+replayed, replayed, len(toks), np/m.Cfg.NLayer, composedTables(m), tableDeclined, st.Captures, st.LastErr)
 										}
@@ -729,10 +729,10 @@ func TestComposedBlocksServe(t *testing.T) {
 									// the head where it is the embedding and from the token
 									// embedding the device holds beside it where it is not
 									// (tinyllama, stories15M), and the prompt's rows too.
-									if a.parts&tier.ComposedEmbed != 0 {
-										ne, de := st.ServedPart(tier.ComposedEmbed)
-										ne += st.ReplayedPart(tier.ComposedEmbed)
-										np, dp := st.ServedPart(tier.PromptEmbed)
+									if a.parts&gpu.ComposedEmbed != 0 {
+										ne, de := st.ServedPart(gpu.ComposedEmbed)
+										ne += st.ReplayedPart(gpu.ComposedEmbed)
+										np, dp := st.ServedPart(gpu.PromptEmbed)
 										switch {
 										case ne+de != len(toks):
 											t.Fatalf("the input rows of %d steps served %d times and declined %d", len(toks), ne, de)
@@ -747,11 +747,11 @@ func TestComposedBlocksServe(t *testing.T) {
 									}
 									// Every step's head, and the prompt's once.
 									wantHeads := len(toks) + 1
-									heads, headDeclined := st.ServedPart(tier.ComposedHead)
-									if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
+									heads, headDeclined := st.ServedPart(gpu.ComposedHead)
+									if replayed := st.ReplayedPart(gpu.ComposedHead); a.parts&gpu.ComposedHead != 0 && headOn &&
 										heads+replayed != wantHeads {
 										t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps and the prompt (%d asked); %d declined, %d folds, %d capture(s)",
-											heads+replayed, replayed, len(toks), parts&tier.ComposedPrompt, headDeclined, st.HeadFolds, st.Captures)
+											heads+replayed, replayed, len(toks), parts&gpu.ComposedPrompt, headDeclined, st.HeadFolds, st.Captures)
 									}
 									if noGraph {
 										if pi == 0 {
@@ -759,23 +759,23 @@ func TestComposedBlocksServe(t *testing.T) {
 										}
 										// With the blocks and the head the composer's, what the tier
 										// still launches on a step is the residual list, nothing more.
-										if a.parts&tier.ComposedHead != 0 && headOn {
+										if a.parts&gpu.ComposedHead != 0 && headOn {
 											for k := range census {
 												if !slices.Contains(composedResidue, k) {
 													t.Fatalf("the tier launched its own %s on a step the composer served whole (%v)", k, census)
 												}
 											}
 										}
-										if nb, _ := st.ServedPart(tier.ComposedBlock); nb != len(toks)*m.Cfg.NLayer {
+										if nb, _ := st.ServedPart(gpu.ComposedBlock); nb != len(toks)*m.Cfg.NLayer {
 											t.Fatalf("the composer served %d block steps where %d steps of %d blocks are %d",
 												nb, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 										}
-										if nh, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && nh != wantHeads {
-											t.Fatalf("the composer served the head %d times in %d steps and the prompt (%d asked)", nh, len(toks), parts&tier.ComposedPrompt)
+										if nh, _ := st.ServedPart(gpu.ComposedHead); a.parts&gpu.ComposedHead != 0 && headOn && nh != wantHeads {
+											t.Fatalf("the composer served the head %d times in %d steps and the prompt (%d asked)", nh, len(toks), parts&gpu.ComposedPrompt)
 										}
 									}
 									// The prompt's every block step served, in whole chunks.
-									if np, dp := st.ServedPart(tier.ComposedPrompt); np < m.Cfg.NLayer || np%m.Cfg.NLayer != 0 || dp != 0 {
+									if np, dp := st.ServedPart(gpu.ComposedPrompt); np < m.Cfg.NLayer || np%m.Cfg.NLayer != 0 || dp != 0 {
 										t.Fatalf("the composer served %d block steps of the prompt and declined %d, where every chunk is %d blocks (%s)",
 											np, dp, m.Cfg.NLayer, st.LastErr)
 									}
@@ -822,7 +822,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								// band the arm is held to on the panel: the instance's
 								// statement of the step changed under the served part,
 								// k the part.
-								violated := func(what string, k tier.Parts, after func(*Instance), extra ...tier.Option) {
+								violated := func(what string, k gpu.Parts, after func(*Instance), extra ...gpu.Option) {
 									var bad panelBand
 									for pi, p := range panel {
 										ref := runs[dev][g][pi].ref
@@ -865,22 +865,22 @@ func TestComposedBlocksServe(t *testing.T) {
 								// applies no positional encoding (FlagNoPosEnc,
 								// Kimi-Linear's latent attention) reads no position:
 								// there is nothing for the violation to move.
-								if a.parts&tier.ComposedTable != 0 && !m.container.Config().Flags.Has(jlm.FlagNoPosEnc) {
-									violated("every row's table at twice its position and 16 past", tier.ComposedTable, nil, tier.WithRopeFault(2, 16))
+								if a.parts&gpu.ComposedTable != 0 && !m.container.Config().Flags.Has(jlm.FlagNoPosEnc) {
+									violated("every row's table at twice its position and 16 past", gpu.ComposedTable, nil, gpu.WithRopeFault(2, 16))
 								}
-								if ne, _ := st0.ServedPart(tier.ComposedEmbed); ne > 0 {
-									violated("every row gathered at the next token's", tier.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))
+								if ne, _ := st0.ServedPart(gpu.ComposedEmbed); ne > 0 {
+									violated("every row gathered at the next token's", gpu.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))
 								}
-								violated("every split's last segment dropped", tier.ComposedBlock, nil, tile, tier.WithSplitFault(true))
+								violated("every split's last segment dropped", gpu.ComposedBlock, nil, tile, gpu.WithSplitFault(true))
 								if a.stream != 0 {
-									violated("every page table swapping two experts", tier.ComposedBlock, nil, tier.WithPageFault(tier.PageFaultSwap))
-									violated("every block's pages left as the last call filled them", tier.ComposedBlock, nil, tier.WithPageFault(tier.PageFaultStale))
+									violated("every page table swapping two experts", gpu.ComposedBlock, nil, gpu.WithPageFault(gpu.PageFaultSwap))
+									violated("every block's pages left as the last call filled them", gpu.ComposedBlock, nil, gpu.WithPageFault(gpu.PageFaultStale))
 								}
 								// Every buffer filled with NaN at allocation: a
 								// composed kernel reading what nothing wrote shows
 								// as a changed logit.
-								if a.parts&tier.ComposedHead != 0 {
-									poisoned, _, _, _ := composedDecode(t, m, dev, panel[0].ids, panel[0].toks, parts, noGraph, false, slices.Concat([]tier.Option{tile, tier.WithPoisonScratch(true), tier.WithPoisonKV(true)}, sopts)...)
+								if a.parts&gpu.ComposedHead != 0 {
+									poisoned, _, _, _ := composedDecode(t, m, dev, panel[0].ids, panel[0].toks, parts, noGraph, false, slices.Concat([]gpu.Option{tile, gpu.WithPoisonScratch(true), gpu.WithPoisonKV(true)}, sopts)...)
 									for i := range got0 {
 										if !slices.Equal(poisoned[i], got0[i]) {
 											t.Fatalf("step %d: with every buffer poisoned the logits change: a composed kernel reads what nothing wrote", i)
@@ -920,20 +920,20 @@ func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
 	defer m.Close()
 	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and the river rose", true)
 	toks := m.Vocab.Encode(" every spring until the bridges were islands and the town kept its boats", false)
-	parts := tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt
+	parts := gpu.ComposedBlock | gpu.ComposedHead | gpu.ComposedPrompt
 	ran := 0
 	for _, dev := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
 		t.Run(dev, func(t *testing.T) {
 			want, wst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
 			got, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false,
-				tier.WithConfig(func(c *tier.Config) { c.SharedRec = true }))
+				gpu.WithConfig(func(c *gpu.Config) { c.SharedRec = true }))
 			if wst.RecShared != 0 || st.RecShared == 0 {
 				t.Fatalf("the doubled arm grew %d shared state(s) and the shared arm %d: the gate compared one form with itself",
 					wst.RecShared, st.RecShared)
 			}
-			for _, s := range []tier.Stats{wst, st} {
-				np, dp := s.ServedPart(tier.ComposedPrompt)
-				nb, db := s.ServedPart(tier.ComposedBlock)
+			for _, s := range []gpu.Stats{wst, st} {
+				np, dp := s.ServedPart(gpu.ComposedPrompt)
+				nb, db := s.ServedPart(gpu.ComposedBlock)
 				if np < m.Cfg.NLayer || dp != 0 || nb < len(toks)*m.Cfg.NLayer || db != 0 {
 					t.Fatalf("the composer served %d prompt block steps (%d declined) and %d decode block steps (%d declined): %s",
 						np, dp, nb, db, declinesOf(s))
@@ -984,8 +984,8 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 				run := func(withhold bool) (heads, left, blocks, prompt int) {
 					// Without a recording every step runs every part, so the
 					// counts are the steps'.
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-						tier.WithConfig(func(c *tier.Config) {
+					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+						gpu.WithConfig(func(c *gpu.Config) {
 							c.Census, c.NoGraph = true, true
 						})},
 						testTierOpts(t)...)...)
@@ -1018,11 +1018,11 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 						}
 					}
 					st := g.Stats()
-					heads, declined := st.ServedPart(tier.ComposedHead)
+					heads, declined := st.ServedPart(gpu.ComposedHead)
 					left = declined
-					blocks, _ = st.ServedPart(tier.ComposedBlock)
+					blocks, _ = st.ServedPart(gpu.ComposedBlock)
 					var pd int
-					prompt, pd = st.ServedPart(tier.ComposedPrompt)
+					prompt, pd = st.ServedPart(gpu.ComposedPrompt)
 					left += pd
 					if !withhold {
 						for k := range g.Census() {

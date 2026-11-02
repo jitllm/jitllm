@@ -22,22 +22,23 @@ import (
 // hole shaped like it.
 var goComputeAllowed = map[string]string{
 	// Measurement, not model arithmetic: timing statistics and accounting.
-	"jit/gpu/tier/split.go:timeSequences": "median/IQR of the split tuner's timings",
-	"jit/gpu/tier/recipe.go:timeRecipes":  "per-round ratios, median and IQR of the recipe tuner's timings",
-	"engine/model/hotness.go:ExpertUses":  "expert-use accounting for the report",
+	"engine/device/gpu/split.go:timeSequences": "median/IQR of the split tuner's timings",
+	"engine/device/gpu/recipe.go:timeRecipes":  "per-round ratios, median and IQR of the recipe tuner's timings",
+	"engine/model/hotness.go:ExpertUses":       "expert-use accounting for the report",
 	// Diagnostics that compare the device against a reference, off by default.
-	"jit/gpu/tier/tier.go:verify":           "Config verify: a device matvec against the dequantized reference, a debugging knob",
-	"jit/gpu/tier/layer.go:softmaxAgreesAt": "a load-time probe: whether the subgroup softmax agrees with the plain one on this card",
+	"engine/device/gpu/tier.go:verify":           "Config verify: a device matvec against the dequantized reference, a debugging knob",
+	"engine/device/gpu/layer.go:softmaxAgreesAt": "a load-time probe: whether the subgroup softmax agrees with the plain one on this card",
 	// Constants built once at load from the config, like the tables a kernel is
 	// compiled with.
 	"engine/nn/ropetable.go:buildRopeTab":      "the rotary table's folded constant planes, once per configuration",
 	"engine/nn/ropetable.go:YarnFreqs":         "YaRN's per-dimension frequencies, once per configuration",
-	"jit/gpu/tier/layer.go:l4TempTab":          "Llama 4's attention-temperature table, once per plan",
+	"engine/device/gpu/layer.go:l4TempTab":     "Llama 4's attention-temperature table, once per plan",
 	"engine/model/image.go:bilinearTaps":       "the resize's resampling matrix: geometry from the image's sizes, once per image",
 	"engine/model/imageproc.go:aaFloats":       "the antialiased resize's filter taps: geometry from the image's sizes, once per image (and once per grid for Phi-4's position table)",
 	"engine/model/imageproc.go:aaWeights":      "the same taps in fixed point, and the precision they share: geometry from the image's sizes, once per image",
 	"engine/model/imageproc.go:normLUT":        "the normalisation's 256-entry table per channel, from the tower's mean and std",
 	"engine/model/llama4vision.go:bf16NormLUT": "the bfloat16 normalisation's 256-entry table per channel, from the tower's mean and std",
+	"engine/graph/sample.go:selection":         "the draw's graph: the binade thresholds it states as constants, once when the graph is built",
 	// Geometry of a picture or a grid, from its sizes alone: no pixel and no
 	// activation is read.
 	"engine/model/slices.go:slicedGrid":       "MiniCPM-V's slice grid: which cols x rows best matches the picture's aspect, from its width and height",
@@ -69,7 +70,7 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 	// walking the parent of the repository.
 	t.Chdir(root)
 	found := map[string][]int{}
-	for _, pkg := range []string{"engine/model", "engine/nn", "jit/gpu/tier", "backend", "engine/sched", "jit/cpu", "jit/gpu/kernels", "jit", "engine/graph"} {
+	for _, pkg := range []string{"engine/model", "engine/nn", "engine/device/gpu", "backend", "engine/sched", "engine/device/cpu", "composer/kernels", "composer", "engine/graph"} {
 		fset := token.NewFileSet()
 		ents, err := os.ReadDir(filepath.Join(root, pkg))
 		if err != nil {

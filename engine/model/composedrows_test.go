@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // composedRowsPrompts are prompts of different lengths, so a ragged step's
@@ -37,7 +37,7 @@ func TestComposedRowsServe(t *testing.T) {
 	}
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			got, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev)})
+			got, _ := batchGreedy(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev)})
 			composedRowsServed(t, m, lastBatchStats)
 			if i, j, gap := composedRowsPart(t, m, ids, want, got); i >= 0 {
 				t.Fatalf("row %d token %d: batched %v, the host %v, %.4f apart on the host", i, j, got[i], want[i], gap)
@@ -47,7 +47,7 @@ func TestComposedRowsServe(t *testing.T) {
 }
 
 // TestComposedRowsTokens decodes composedRowsPrompts together on each
-// device with every part asked of the composer (tier.ComposedStep), every
+// device with every part asked of the composer (gpu.ComposedStep), every
 // row's logits read back: each ragged step's greedy tokens are the
 // composer's sample over its rows, served at every step and declined at
 // none, and each row's token is the host's Greedy over that row's logits,
@@ -101,12 +101,12 @@ func composedRowsTokens(t *testing.T, m *Model) {
 	}
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			toks, logits, steps, st := rowsTokens(t, m, ids, gen, tier.WithDevices(dev))
-			ns, ds := st.ServedPart(tier.ComposedSample)
-			ns += st.ReplayedPart(tier.ComposedSample)
-			if ns != steps || ds != 0 || st.StepDeclines[jit.DeclineNoSample] != 0 || st.FormedPart(tier.ComposedSample) != 0 {
+			toks, logits, steps, st := rowsTokens(t, m, ids, gen, gpu.WithDevices(dev))
+			ns, ds := st.ServedPart(gpu.ComposedSample)
+			ns += st.ReplayedPart(gpu.ComposedSample)
+			if ns != steps || ds != 0 || st.StepDeclines[composer.DeclineNoSample] != 0 || st.FormedPart(gpu.ComposedSample) != 0 {
 				t.Fatalf("the composer selected the tokens of %d of %d ragged steps, declined %d, formed %d at a step (%s; last error %q)",
-					ns, steps, ds, st.FormedPart(tier.ComposedSample), declinesOf(st), st.LastErr)
+					ns, steps, ds, st.FormedPart(gpu.ComposedSample), declinesOf(st), st.LastErr)
 			}
 			if bad, rows := parted(toks, logits); bad != 0 {
 				t.Fatalf("%d of %d rows' composed tokens are not the host's Greedy over their logits", bad, rows)
@@ -117,12 +117,12 @@ func composedRowsTokens(t *testing.T, m *Model) {
 			m.front.mu.Lock()
 			set.cpuSample = negatedSample(orig)
 			m.front.mu.Unlock()
-			vt, vl, _, vst := rowsTokens(t, m, ids, gen, tier.WithDevices(dev),
-				tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+			vt, vl, _, vst := rowsTokens(t, m, ids, gen, gpu.WithDevices(dev),
+				gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 			m.front.mu.Lock()
 			set.cpuSample = orig
 			m.front.mu.Unlock()
-			vn, _ := vst.ServedPart(tier.ComposedSample)
+			vn, _ := vst.ServedPart(gpu.ComposedSample)
 			bad, rows := parted(vt, vl)
 			if vn == 0 || bad == 0 {
 				t.Fatalf("over the logits negated the composer selected %d steps' tokens and %d of %d rows part: the gate cannot see a wrong pick", vn, bad, rows)
@@ -136,9 +136,9 @@ func composedRowsTokens(t *testing.T, m *Model) {
 // rowsTokens decodes ids together for gen tokens a row on a fresh tier of
 // opts, every row's logits read back each step: each step's rows' device
 // tokens and logits, how many steps ran, and the tier's stats.
-func rowsTokens(t *testing.T, m *Model, ids [][]int32, gen int, opts ...tier.Option) (toks [][]int32, logits [][]float32, steps int, st tier.Stats) {
+func rowsTokens(t *testing.T, m *Model, ids [][]int32, gen int, opts ...gpu.Option) (toks [][]int32, logits [][]float32, steps int, st gpu.Stats) {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opts...)...)
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -197,11 +197,11 @@ func composedRowsModel(t *testing.T) *Model {
 
 // composedRowsServed holds a batch's stats to the composer having served
 // block steps of every block and heads, and declined none.
-func composedRowsServed(t *testing.T, m *Model, st tier.Stats) {
+func composedRowsServed(t *testing.T, m *Model, st gpu.Stats) {
 	t.Helper()
-	nb, db := st.ServedPart(tier.ComposedBlock)
-	nh, dh := st.ServedPart(tier.ComposedHead)
-	nb += st.ReplayedPart(tier.ComposedBlock)
+	nb, db := st.ServedPart(gpu.ComposedBlock)
+	nh, dh := st.ServedPart(gpu.ComposedHead)
+	nb += st.ReplayedPart(gpu.ComposedBlock)
 	if nb == 0 || nb%m.Cfg.NLayer != 0 || db != 0 || nh == 0 || dh != 0 {
 		t.Fatalf("the composer served %d block steps of %d blocks and %d heads, and declined %d and %d (%s; last error %q)",
 			nb, m.Cfg.NLayer, nh, db, dh, declinesOf(st), st.LastErr)

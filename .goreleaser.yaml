@@ -207,7 +207,7 @@ snapshot:
 #
 # With no secrets set this block is disabled and the darwin binaries keep the
 # ad-hoc signature Go's linker gives every darwin/arm64 binary. That signature
-# carries no hardened runtime, and jit/cpu/exec_darwin.go measures that such a
+# carries no hardened runtime, and engine/device/cpu/exec_darwin.go measures that such a
 # binary runs generated code with no codesign step at all. The release
 # workflow's smoke job runs the shipped darwin archive on a macOS runner to
 # prove it for each release.

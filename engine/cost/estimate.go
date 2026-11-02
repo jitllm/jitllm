@@ -5,25 +5,25 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // Former is what pricing needs of the composer: a run of a model's parts as
 // final IR. A registry forms it; a cache of kernels formed before can serve
 // it too.
 type Former interface {
-	Kernels(m jit.Model, run []jit.PartPlan, first int, s jit.Step) ([]*jit.Kernel, error)
+	Kernels(m composer.Model, run []composer.PartPlan, first int, s composer.Step) ([]*composer.Kernel, error)
 }
 
 // Composer is a Former that also lowers the kernels it forms, for an
 // estimate held beside the code it prices.
 type Composer interface {
 	Former
-	Lower(ks []*jit.Kernel, d jit.Device) ([]jit.PartCode, error)
+	Lower(ks []*composer.Kernel, d composer.Device) ([]composer.PartCode, error)
 }
 
 // Estimate is placement p's cost at step s, from the IR r forms of model f.
-func Estimate(r Former, f jit.Model, s jit.Step, p Placement) (Cost, error) {
+func Estimate(r Former, f composer.Model, s composer.Step, p Placement) (Cost, error) {
 	parts, run, devs, err := placed(f, p)
 	if err != nil {
 		return Cost{}, err
@@ -37,7 +37,7 @@ func Estimate(r Former, f jit.Model, s jit.Step, p Placement) (Cost, error) {
 		}
 		ks, err := r.Kernels(f, run[i:j], i, s)
 		errs = append(errs, err)
-		m := costModel{d: devs[i], s: s, keys: jit.NewStorageKeys(parts)}
+		m := costModel{d: devs[i], s: s, keys: composer.NewStorageKeys(parts)}
 		for _, k := range ks {
 			total = total.add(m.cost(k))
 		}
@@ -51,16 +51,16 @@ func Estimate(r Former, f jit.Model, s jit.Step, p Placement) (Cost, error) {
 
 // placed is model f's parts on placement p: each part's plan for the
 // composer, and the device it is priced on.
-func placed(f jit.Model, p Placement) ([]jit.Part, []jit.PartPlan, []Device, error) {
-	parts, err := jit.Front(f, false)
+func placed(f composer.Model, p Placement) ([]composer.Part, []composer.PartPlan, []Device, error) {
+	parts, err := composer.Front(f, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	run := make([]jit.PartPlan, len(parts))
+	run := make([]composer.PartPlan, len(parts))
 	devs := make([]Device, len(parts))
 	for i, part := range parts {
 		devs[i] = p(part)
-		run[i] = jit.PartPlan{Part: part, Device: devs[i].Device}
+		run[i] = composer.PartPlan{Part: part, Device: devs[i].Device}
 	}
 	return parts, run, devs, nil
 }
@@ -73,13 +73,13 @@ func placed(f jit.Model, p Placement) ([]jit.Part, []jit.PartPlan, []Device, err
 // operand for every value the estimate takes as one buffer, a block's
 // residual the one the block before it wrote.
 type CodeCost struct {
-	Code    jit.Code
+	Code    composer.Code
 	Part    int
 	Device  Device
 	Cost    Cost
 	Values  map[int]uint64
 	Reach   map[int]int64
-	Storage map[int]jit.Operand
+	Storage map[int]composer.Operand
 	Binds   []BindCost
 }
 
@@ -87,7 +87,7 @@ type CodeCost struct {
 // the storage it is, the bytes the code reaches in it, and the constants it
 // holds, where it is a block of them.
 type BindCost struct {
-	Storage jit.Operand
+	Storage composer.Operand
 	Reach   int64
 	Words   []uint32
 }
@@ -97,7 +97,7 @@ type BindCost struct {
 // state of decoding, the caches as a step before this one left them; else
 // with nothing the step reads in any cache, as after reads of more than
 // the caches hold.
-func EstimateCodes(r Composer, f jit.Model, s jit.Step, p Placement, steady bool) ([]CodeCost, error) {
+func EstimateCodes(r Composer, f composer.Model, s composer.Step, p Placement, steady bool) ([]CodeCost, error) {
 	parts, run, devs, err := placed(f, p)
 	if err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ func EstimateCodes(r Composer, f jit.Model, s jit.Step, p Placement, steady bool
 		d := devs[i]
 		ks, err := r.Kernels(f, run[i:j], i, s)
 		errs = append(errs, err)
-		m := costModel{d: d, s: s, keys: jit.NewStorageKeys(parts)}
+		m := costModel{d: d, s: s, keys: composer.NewStorageKeys(parts)}
 		for _, k := range ks {
 			if steady {
 				m.cost(k)
@@ -120,18 +120,18 @@ func EstimateCodes(r Composer, f jit.Model, s jit.Step, p Placement, steady bool
 		}
 		for _, k := range ks {
 			c := m.cost(k)
-			codes, err := r.Lower([]*jit.Kernel{k}, d.Device)
+			codes, err := r.Lower([]*composer.Kernel{k}, d.Device)
 			if err != nil || len(codes) != 1 {
 				errs = append(errs, err)
 				continue
 			}
 			e := estimator{k: k, s: s, trips: map[int]float64{}, homes: k.Homes()}
-			cc := CodeCost{Code: codes[0].Code, Part: k.Of, Device: d, Cost: c, Values: map[int]uint64{}, Reach: map[int]int64{}, Storage: map[int]jit.Operand{}}
+			cc := CodeCost{Code: codes[0].Code, Part: k.Of, Device: d, Cost: c, Values: map[int]uint64{}, Reach: map[int]int64{}, Storage: map[int]composer.Operand{}}
 			for b, buf := range k.Bufs {
-				if buf.Kind == jit.BufShared {
+				if buf.Kind == composer.BufShared {
 					continue
 				}
-				n := int64(jit.ElemBytes(buf))
+				n := int64(composer.ElemBytes(buf))
 				for _, x := range buf.Shape {
 					n *= int64(x)
 				}
@@ -153,7 +153,7 @@ func EstimateCodes(r Composer, f jit.Model, s jit.Step, p Placement, steady bool
 							w = v
 						}
 					}
-					if v, ok := jit.StepWord(k.Bufs[a.Buf].Operand, int(w), s); ok {
+					if v, ok := composer.StepWord(k.Bufs[a.Buf].Operand, int(w), s); ok {
 						cc.Values[a.Field] = uint64(v)
 					}
 				default:
@@ -170,7 +170,7 @@ func EstimateCodes(r Composer, f jit.Model, s jit.Step, p Placement, steady bool
 
 // seam is what carrying part a's boundary value to the next part costs,
 // a on device da and the next on db, where the two devices differ.
-func seam(a jit.Part, da, db Device, s jit.Step) Cost {
+func seam(a composer.Part, da, db Device, s composer.Step) Cost {
 	if da == db || len(a.Graph.Out) == 0 {
 		return Cost{}
 	}
@@ -185,11 +185,11 @@ func seam(a jit.Part, da, db Device, s jit.Step) Cost {
 // Suggest is plan mode: a placement over devices at step s, each part on
 // the device that makes the model's estimate least, the seams' transfers
 // counted.
-func Suggest(r Former, f jit.Model, s jit.Step, devices []Device) (Placement, Cost, error) {
+func Suggest(r Former, f composer.Model, s composer.Step, devices []Device) (Placement, Cost, error) {
 	if len(devices) == 0 {
 		return nil, Cost{}, fmt.Errorf("cost: no device to place on")
 	}
-	parts, err := jit.Front(f, false)
+	parts, err := composer.Front(f, false)
 	if err != nil {
 		return nil, Cost{}, err
 	}
@@ -198,12 +198,12 @@ func Suggest(r Former, f jit.Model, s jit.Step, devices []Device) (Placement, Co
 	for i, part := range parts {
 		own[i] = make([]Cost, m)
 		for j, d := range devices {
-			ks, err := r.Kernels(f, []jit.PartPlan{{Part: part, Device: d.Device}}, i, s)
+			ks, err := r.Kernels(f, []composer.PartPlan{{Part: part, Device: d.Device}}, i, s)
 			if err != nil {
 				own[i][j] = Cost{Seconds: 1e30}
 				continue
 			}
-			m := costModel{d: d, s: s, keys: jit.NewStorageKeys(parts)}
+			m := costModel{d: d, s: s, keys: composer.NewStorageKeys(parts)}
 			for _, k := range ks {
 				own[i][j] = own[i][j].add(m.cost(k))
 			}
@@ -243,7 +243,7 @@ func Suggest(r Former, f jit.Model, s jit.Step, devices []Device) (Placement, Co
 		for i, part := range parts {
 			at[[2]int{int(part.Kind), part.Block}] = devices[pick[i]]
 		}
-		return func(p jit.Part) Device { return at[[2]int{int(p.Kind), p.Block}] }
+		return func(p composer.Part) Device { return at[[2]int{int(p.Kind), p.Block}] }
 	}
 	// The search prices each part alone, but a run of parts on one device
 	// shares what the parts alone do not: a boundary fused, a value read

@@ -499,7 +499,7 @@ of the device, *"the naive fallback is still jitted on the chosen device"*.
   missing extensions (`nn.HostRefusal`), and a host with no code generator at
   all refuses too (`nn.Available`).
 - **No pregenerated assembly.** The only `.s` files in the project are the
-  Go-to-generated-code call boundary, `jit/cpu/trampoline_{amd64,arm64}.s`
+  Go-to-generated-code call boundary, `engine/device/cpu/trampoline_{amd64,arm64}.s`
   (stated by the user). Every kernel is emitted at run time for the
   host in front of it. `cpu.TestNoAssemblyBesidesTheTrampolines` enforces it.
 - **Gate the tail.** Every kernel gate sweeps ragged widths (1 through a few
@@ -534,7 +534,7 @@ precision").
 ## RULE 8a: a BLOCK is the unit, and it must stay orchestrable.
 
 The device never learns what a transformer is beyond one repeating unit:
-`engine/model/` keeps the graph and nothing in `jit/gpu` knows about embedding lookup,
+`engine/model/` keeps the graph and nothing in `engine/device/gpu` knows about embedding lookup,
 sampling or tied output weights. That is what makes `PrepLayer` able to decline
 per block, and it is why a model too big for the card runs its first N blocks on
 the device and the rest on the host.
@@ -827,7 +827,7 @@ and the sessions-per-device budget.
   configuration never selected.
 - **A session owns its history; the instance owns the placement; the tier owns
   the weights.** Each session's device history is its own view of the tier
-  (`tier.GPU.Attach()`), which satisfies `nn.LayerDevice` unchanged. Refusing a
+  (`gpu.GPU.Attach()`), which satisfies `nn.LayerDevice` unchanged. Refusing a
   second session is not an option, stated by the user: *"we can't refuse,
   jitllm is an inference os multimodel multi devices multi instances"*. A
   session's view letting a block go leaves it on the card for every other view
@@ -863,6 +863,10 @@ and the sessions-per-device budget.
   measures a path that no longer exists.
 - **The test suite converts** (`engine/model/jlm_helper_test.go`) because it has
   to run what ships; an open error is a failure, never a `t.Skipf`.
+- **`composer/` generates code and never runs a model** (stated by the user).
+  The passes, the lowerings and every device's emitters live there; what runs
+  a model is the devices' runtimes under `engine/device/`, the CPU's beside
+  the cards' because the CPU is a device.
 - **Three GPU backends, one interface.** CUDA, Vulkan and Metal are reached
   through goffi (`backend/ffi`) with no cgo, one `backend.Device` interface over
   three implementations. **Do not add a fourth abstraction in advance of a second

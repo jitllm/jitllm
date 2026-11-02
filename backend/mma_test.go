@@ -9,8 +9,8 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestMMAFragmentLayout pins the warp-level matrix instruction's fragment

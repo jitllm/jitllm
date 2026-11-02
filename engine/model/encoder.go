@@ -5,10 +5,10 @@ import (
 	"math"
 	"runtime"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -833,7 +833,7 @@ func (e *Embedder) cpuRun(li, n int, x, cs []float32) (bool, error) {
 	s := e.seg
 	l := &e.m.layers[li]
 	if !s.lendNC(li) {
-		s.cpu.declined[jit.DeclinePageOut]++
+		s.cpu.declined[composer.DeclinePageOut]++
 		return false, nil
 	}
 	nrot := 0
@@ -847,7 +847,7 @@ func (e *Embedder) cpuRun(li, n int, x, cs []float32) (bool, error) {
 	}
 	why, err := s.cpuRunRows(li, l, x, n, cs, nrot, wins)
 	s.unlend(li)
-	if err != nil || why != jit.DeclineServes {
+	if err != nil || why != composer.DeclineServes {
 		if err == nil {
 			s.cpu.declined[why]++
 		}
@@ -866,8 +866,8 @@ func (e *Embedder) cpuDecline(li int) {
 	}
 	s := e.seg
 	_, why := s.cpuBlockOf(li)
-	if why == jit.DeclineServes {
-		why = jit.DeclineCaller
+	if why == composer.DeclineServes {
+		why = composer.DeclineCaller
 	}
 	s.cpu.declined[why]++
 }

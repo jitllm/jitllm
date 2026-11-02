@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestStepAcrossSessionsMatchesEachAlone decodes three instances -- three
@@ -42,7 +42,7 @@ func TestStepAcrossSessionsMatchesEachAlone(t *testing.T) {
 
 func stepAcrossSessions(t *testing.T, m *Model, spec string) {
 	ctl := orderControl(t, m, spec)
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
 		testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
@@ -51,7 +51,7 @@ func stepAcrossSessions(t *testing.T, m *Model, spec string) {
 	r := stepGate(t, m, g, false)
 	// The configuration this gates: the composer serves the step's rows, every
 	// sequence's, as one call of its blocks.
-	if n, d := g.Stats().ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+	if n, d := g.Stats().ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the composer served %d of the step's block steps and declined %d (%s)", n, d, g.Err())
 	}
 	if bound := denseStepBand * ctl; !(r.worst < bound) {
@@ -78,7 +78,7 @@ func stepAcrossSessions(t *testing.T, m *Model, spec string) {
 // every joint step.
 //
 // Both forms of the pools run: two halves of every state, and the shared form
-// (tier.Config.SharedRec: one state a slot, the step writing the device's
+// (gpu.Config.SharedRec: one state a slot, the step writing the device's
 // next-state scratch and a copy taking each row's home).
 //
 // It runs on every device named in JITLLM_TEST_DEVICES (comma-separated,
@@ -187,10 +187,10 @@ func mixtureStepChecks(t *testing.T, m *Model, r stepResult) {
 
 // stepTier opens dev for a step gate on m, its recurrent pools in the shared
 // form when asked, or skips naming the device.
-func stepTier(t *testing.T, m *Model, dev string, shared bool) *tier.GPU {
+func stepTier(t *testing.T, m *Model, dev string, shared bool) *gpu.GPU {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.SharedRec = shared })}, testTierOpts(t)...)...)
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.SharedRec = shared })}, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}
@@ -278,7 +278,7 @@ var stepPrompts = []string{"The capital of France is", "Water boils at a tempera
 // the joint arm against each session alone. With apart, the first session
 // decodes one token on its own halfway through, in both arms. It fails if
 // Step did not run every row across sessions.
-func stepGate(t *testing.T, m *Model, g *tier.GPU, apart bool) stepResult {
+func stepGate(t *testing.T, m *Model, g *gpu.GPU, apart bool) stepResult {
 	t.Helper()
 	prompts := stepPrompts
 	const steps, mid = 8, 4
@@ -396,9 +396,9 @@ func stepGate(t *testing.T, m *Model, g *tier.GPU, apart bool) stepResult {
 	}
 	r.linear = s1.SessionLinear - s0.SessionLinear
 	// A recording's replay runs the composer's parts as its capture did.
-	b1, d1 := s1.ServedPart(tier.ComposedBlock)
-	b0, d0 := s0.ServedPart(tier.ComposedBlock)
-	r.blocks = b1 - b0 + s1.ReplayedPart(tier.ComposedBlock) - s0.ReplayedPart(tier.ComposedBlock)
+	b1, d1 := s1.ServedPart(gpu.ComposedBlock)
+	b0, d0 := s0.ServedPart(gpu.ComposedBlock)
+	r.blocks = b1 - b0 + s1.ReplayedPart(gpu.ComposedBlock) - s0.ReplayedPart(gpu.ComposedBlock)
 	r.blockDeclined = d1 - d0
 	r.worst, r.at = worstStep(got, want)
 	t.Logf("%d sessions x %d steps together: worst logit NMSE %.3e (row %d) against each alone; "+
@@ -451,8 +451,8 @@ func orderControl(t *testing.T, m *Model, dev string) float64 {
 	const steps = 8 // stepGate's
 	var fed [][]int32
 	arm := func(unsplit bool) [][]float32 {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.ComposedUnsplit = unsplit })}, testTierOpts(t)...)...)
+		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithConfig(func(c *gpu.Config) { c.ComposedUnsplit = unsplit })}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)
 		}

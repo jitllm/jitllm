@@ -23,7 +23,7 @@ The complete exported generator index is in [kernel-inventory.csv](kernel-invent
 
 | Column | Meaning | How it is derived |
 |---|---|---|
-| `kind` | `cpu`: a machine-code generator. `gpu`: an IR-kernel constructor. | `cpu` is a top-level exported `func Emit…` in `jit/cpu` whose result is `[]byte` or `([]byte, error)`; `gpu` is a top-level exported func in `jit/gpu/kernels` whose result carries `*ir.Kernel`. Test files and methods are excluded. |
+| `kind` | `cpu`: a machine-code generator. `gpu`: an IR-kernel constructor. | `cpu` is a top-level exported `func Emit…` in `engine/device/cpu` whose result is `[]byte` or `([]byte, error)`; `gpu` is a top-level exported func in `composer/kernels` whose result carries `*ir.Kernel`. Test files and methods are excluded. |
 | `symbol` | The function name. | As declared. A name implemented once per architecture appears once per declaration. |
 | `file`, `line` | Where the declaration is. | Path from the repository root and the line of its `func`. |
 | `build_constraint` | Which builds compile it. | The file's `//go:build` expression, else its GOOS/GOARCH filename suffix, else `all`. |
@@ -32,8 +32,8 @@ The complete exported generator index is in [kernel-inventory.csv](kernel-invent
 Counts describe source entry points, not distinct mathematical operations or compiled binaries:
 
 - The CPU dispatch table has **41 code-generator slots**, plus three capability/width queries (`RowMajorSupported`, `PackedSupported`, `MaxTiledTokens`) and the `RowMajorGGUF` flag.
-- `jit/cpu` contains **164 exported byte-generator declarations**, representing **102 unique names** across architecture implementations, wrappers, and refusal stubs. This includes generators outside the dispatch table.
-- `jit/gpu/kernels` contains **104 exported IR-kernel constructors**, including convenience wrappers and probes.
+- `engine/device/cpu` contains **164 exported byte-generator declarations**, representing **102 unique names** across architecture implementations, wrappers, and refusal stubs. This includes generators outside the dispatch table.
+- `composer/kernels` contains **104 exported IR-kernel constructors**, including convenience wrappers and probes.
 
 The index excludes individual assembler instruction methods and private helpers already reached through these generators. Those compiler building blocks are covered separately below. Host-side packing, file I/O, scheduling, and reference arithmetic are distinguished from generated execution kernels.
 
@@ -103,7 +103,7 @@ All names here are runtime IR constructors. Their complete signatures and source
 | Raw-weight preparation | `Unpack` | Q4_K device unpacking into the packed layout. This is separate from consuming already prepared `.jlm` weights. |
 | Capability / bandwidth probes | `MMAProbe`, `MMAVoltaProbe`, `TileProbe`, `StreamWide`, `StreamWideSpread` | Matrix capability tests (`MMAVoltaProbe` pins the sm_70 lane layout) and memory-access probes. They are generated kernels, but not model-forward operations. |
 
-Four constructors have no non-test caller outside `jit/gpu/kernels`: the single-row `HeadNorm` and the probes `MMAProbe`, `MMAVoltaProbe`, `TileProbe`. `StreamWide`/`StreamWideSpread` are reached from `dev/tools/mvbench` and `SoftmaxRows` only from `dev/tools/ptxdump`; every other constructor is called from `jit/gpu/tier`. (`--summary` prints this per constructor.)
+Four constructors have no non-test caller outside `composer/kernels`: the single-row `HeadNorm` and the probes `MMAProbe`, `MMAVoltaProbe`, `TileProbe`. `StreamWide`/`StreamWideSpread` are reached from `dev/tools/mvbench` and `SoftmaxRows` only from `dev/tools/ptxdump`; every other constructor is called from `engine/device/gpu`. (`--summary` prints this per constructor.)
 
 GPU source files: [`matvec.go`](../jit/gpu/kernels/matvec.go), [`mma.go`](../jit/gpu/kernels/mma.go), [`mma70.go`](../jit/gpu/kernels/mma70.go), [`gemm70.go`](../jit/gpu/kernels/gemm70.go), [`gemmtile.go`](../jit/gpu/kernels/gemmtile.go), [`elem.go`](../jit/gpu/kernels/elem.go), [`getrows.go`](../jit/gpu/kernels/getrows.go), [`attn.go`](../jit/gpu/kernels/attn.go), [`attn70.go`](../jit/gpu/kernels/attn70.go), [`flash.go`](../jit/gpu/kernels/flash.go), [`flashkv.go`](../jit/gpu/kernels/flashkv.go), [`flash70.go`](../jit/gpu/kernels/flash70.go), [`flashtile.go`](../jit/gpu/kernels/flashtile.go), [`argmax.go`](../jit/gpu/kernels/argmax.go), [`ropetab.go`](../jit/gpu/kernels/ropetab.go), [`moe.go`](../jit/gpu/kernels/moe.go), [`moesort.go`](../jit/gpu/kernels/moesort.go), [`moegroup.go`](../jit/gpu/kernels/moegroup.go), [`recurrent.go`](../jit/gpu/kernels/recurrent.go), [`unpack.go`](../jit/gpu/kernels/unpack.go), [`tile.go`](../jit/gpu/kernels/tile.go).
 
@@ -170,13 +170,13 @@ Sources: [`cpu/asm.go`](../jit/cpu/asm.go), [`cpu/a64.go`](../jit/cpu/a64.go), [
 
 - “Runtime-generated kernels” is accurate for the kernel inventory. It does not mean every line of tokenization, image preprocessing, packing, paging, data movement, or orchestration is JIT-compiled.
 - Core compute fallback is generally another generated implementation or composition of generated operations. It is not the float64 interpreted inference tier described by some old comments.
-- In release builds, missing activation-quantize or rotary-table generation does not silently enter the historical Go loop. `jit/cpu/quantgo.go` and `engine/nn/ropego.go` reject that path; the comparison implementations are behind `jitllmtest`.
+- In release builds, missing activation-quantize or rotary-table generation does not silently enter the historical Go loop. `engine/device/cpu/quantgo.go` and `engine/nn/ropego.go` reject that path; the comparison implementations are behind `jitllmtest`.
 - Greedy selection calls generated `Argmax32JIT`; the old scan described in some comments is gone. Routing and sampling likewise require generated kernels.
 - Raw-layout GEMM's `PackActJIT` still has a Go packing helper when no packing code is supplied. Conversion and host preparation also contain ordinary Go arithmetic. These are separate from claiming a general interpreted model execution tier.
 - `.jlm` stores prepared weight layouts. It reduces paging/repacking overhead; executable CPU/GPU kernels and layer execution are built by the runtime.
 
 ## Verification in this inventory
 
-The CSV is the script's output over the tree it was committed with. As a check on the derivation, the script was compared against the previous hand-assembled CSV: every row that names a declaration still present reproduces exactly apart from its line number, and the only rows it drops are the declarations since removed (`GEMM` and `Stream` in `jit/gpu/kernels`, the `jit/gpu/handptx` PTX text generator).
+The CSV is the script's output over the tree it was committed with. As a check on the derivation, the script was compared against the previous hand-assembled CSV: every row that names a declaration still present reproduces exactly apart from its line number, and the only rows it drops are the declarations since removed (`GEMM` and `Stream` in `composer/kernels`, the `engine/device/gpu/handptx` PTX text generator).
 
 No tests were run for this refresh. The focused test run recorded with the previous snapshot (emitter-table completeness, SSE ISA separation, packed and tiled generator coverage, cross-backend lowering) belonged to that snapshot and is not carried forward as evidence for this one. The family descriptions and the prose sections above are read from the source and its doc comments, not measured; no benchmark results are part of this inventory.

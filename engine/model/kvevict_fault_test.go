@@ -5,7 +5,7 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestKVEvictionGateDiscriminates runs the eviction gate's squeezed arm with
@@ -14,8 +14,8 @@ import (
 func TestKVEvictionGateDiscriminates(t *testing.T) {
 	eg := newEvictGate(t)
 	free := eg.run(t, false, nil)
-	tier.SetPagedFault("stream")
-	defer tier.SetPagedFault("")
+	gpu.SetPagedFault("stream")
+	defer gpu.SetPagedFault("")
 	got := eg.run(t, true, nil)
 	if got.st.KVStreamPasses == 0 {
 		t.Fatal("no streamed pass ran: the violation was never exercised")
@@ -33,8 +33,8 @@ func TestKVEvictionGateDiscriminates(t *testing.T) {
 func TestComposedPassFoldDiscriminates(t *testing.T) {
 	eg := newEvictGate(t)
 	free := eg.run(t, false, nil)
-	tier.SetPagedFault("passfold")
-	defer tier.SetPagedFault("")
+	gpu.SetPagedFault("passfold")
+	defer gpu.SetPagedFault("")
 	got := eg.run(t, true, nil)
 	if got.st.ComposedStreamPasses == 0 {
 		t.Fatal("no composed pass ran: the violation was never exercised")

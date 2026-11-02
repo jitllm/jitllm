@@ -5,9 +5,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // packSheet builds one valid packed weight of (nrows, k). Scales vary per block

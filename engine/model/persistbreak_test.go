@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer/ptx"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
-	"github.com/jitllm/jitllm/jit/ptx"
 )
 
 // TestPersistentDecodeSeesABrokenBarrier is TestPersistentDecodeMatchesPerOp's
@@ -54,13 +54,13 @@ func persistBroken(t *testing.T, deps bool, brk func() func()) {
 	defer m.Close()
 	ids := m.Vocab.Encode("The river rose every spring until the bridges were islands, and", true)
 	const steps = 8
-	run := func(persist bool) ([][]float32, tier.Stats) {
-		mode := tier.WithPersist(persist, 0)
+	run := func(persist bool) ([][]float32, gpu.Stats) {
+		mode := gpu.WithPersist(persist, 0)
 		if deps {
-			mode = tier.WithPersistDeps(persist, 0)
+			mode = gpu.WithPersistDeps(persist, 0)
 		}
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), mode,
-			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+		g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff), mode,
+			gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 		if err != nil || g == nil {
 			t.Skipf("no GPU: %v", err)
 		}

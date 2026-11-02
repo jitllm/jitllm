@@ -7,9 +7,9 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // gemmShapes are the weight-stationary GEMM's gate shapes. The row counts are

@@ -39,7 +39,7 @@ func (s *Instance) rowsRefusal() error {
 }
 
 // headWithLastBlock is the head on a device and the last block on one, which
-// is what a rows step takes the projection with (tier.GPU.LayersRows): on the
+// is what a rows step takes the projection with (gpu.GPU.LayersRows): on the
 // last block's device it rides that block's step, and on another -- the card
 // holding the blocks had no room for it -- it is a step of its own there.
 func (s *Instance) headWithLastBlock() bool {

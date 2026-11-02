@@ -8,8 +8,8 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestSSEAttnUnderTheForcedTier is the attention family's nn gate: with the

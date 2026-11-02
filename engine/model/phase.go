@@ -46,7 +46,7 @@ func (r PhaseRow) Rate() float64 {
 func (r PhaseRow) OverRead() bool { return r.Read > 0 }
 
 // ReadTime supplies the phase's read time to the next Mark, from a cumulative
-// counter the caller owns such as tier.Stats.TStreamRead.
+// counter the caller owns such as gpu.Stats.TStreamRead.
 func (p *PhaseMeter) ReadTime(total time.Duration) {
 	p.rd = total
 	if !p.rdSet {

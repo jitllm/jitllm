@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // hostEmbed hides nn.EmbedDevice, so the same device prefills with the rows
@@ -59,11 +59,11 @@ func TestPrefillEmbedsOnTheDevice(t *testing.T) {
 		t.Run(name, func(t *testing.T) { embedsOnTheDevice(t, name) })
 	}
 	t.Run("Llama-3.2-1B-Instruct-Q4_K_M/nobatch", func(t *testing.T) {
-		embedsOnTheDevice(t, "Llama-3.2-1B-Instruct-Q4_K_M", tier.WithConfig(func(c *tier.Config) { c.NoBatch = true }))
+		embedsOnTheDevice(t, "Llama-3.2-1B-Instruct-Q4_K_M", gpu.WithConfig(func(c *gpu.Config) { c.NoBatch = true }))
 	})
 }
 
-func embedsOnTheDevice(t *testing.T, name string, opts ...tier.Option) {
+func embedsOnTheDevice(t *testing.T, name string, opts ...gpu.Option) {
 	p := testmodels.Path(name + ".jlm")
 	if src := testmodels.Path(name + ".gguf"); fileExists(src) {
 		p = jlmOf(t, src)
@@ -79,7 +79,7 @@ func embedsOnTheDevice(t *testing.T, name string, opts ...tier.Option) {
 	if !m.Cfg.TiedEmbd {
 		t.Fatalf("%s is not tied: the gather has no head to read from", name)
 	}
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opts...)...)
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

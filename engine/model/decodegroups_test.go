@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // groupedStepAllocs is the server's decode groups (server/batchgroups.go) as
@@ -18,7 +18,7 @@ import (
 // JITLLM_TEST_DEVICES names them.
 func groupedStepAllocs(t *testing.T, path string, opts ...Option) {
 	d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, d[0]+","+d[1], err)
 	}
@@ -128,7 +128,7 @@ func groupedStepAllocs(t *testing.T, path string, opts ...Option) {
 // not waiting for each other -- for TestPlacementComposesOnce's census: rows
 // are a run-time argument of every composed form, so groups of any width
 // compose nothing.
-func groupedCensus(t *testing.T, m *Model, g *tier.GPU, ids []int32) {
+func groupedCensus(t *testing.T, m *Model, g *gpu.GPU, ids []int32) {
 	t.Helper()
 	const steps = 16
 	var groups [2][]Run

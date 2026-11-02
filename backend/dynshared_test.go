@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/ir"
-	"github.com/jitllm/jitllm/jit/ptx"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/ptx"
 )
 
 // TestSharedPastTheStaticLimit runs, on every CUDA device, a workgroup whose

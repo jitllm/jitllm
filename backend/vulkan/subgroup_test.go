@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/ir"
-	"github.com/jitllm/jitllm/jit/spirv"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/spirv"
 )
 
 // shuffleModule is the smallest kernel that needs a 32-lane subgroup: one

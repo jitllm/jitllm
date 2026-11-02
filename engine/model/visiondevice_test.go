@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // The gemma3 and internvl towers on every device backend: every block placed,
@@ -53,7 +53,7 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 	ran := 0
 	for _, arm := range towerArms() {
 		spec := arm.spec
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -113,10 +113,10 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 			if s.GPUBlocks() != 1 {
 				t.Fatalf("asked for 1 device block, got %d", s.GPUBlocks())
 			}
-			s1, mx := g.Stats().Submits, g.Stats().MatrixPart(tier.ComposedTower)
+			s1, mx := g.Stats().Submits, g.Stats().MatrixPart(gpu.ComposedTower)
 			var got0 []float32
 			arm.served(t, g, 1, func() { got0, _ = encode(s) })
-			mx = g.Stats().MatrixPart(tier.ComposedTower) - mx
+			mx = g.Stats().MatrixPart(gpu.ComposedTower) - mx
 			if g.Stats().Submits == s1 {
 				t.Fatalf("%s: block 0's encode submitted nothing to the device", spec)
 			}
@@ -157,11 +157,11 @@ func TestGemma3TowerPagesThroughTheDevice(t *testing.T) {
 	ran := 0
 	for _, spec := range stepDevices() {
 		run := func(budget uint64) (out []float32, placed, ins int, used uint64, ok bool) {
-			opts := []tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)}
+			opts := []gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)}
 			if budget > 0 {
-				opts = append(opts, tier.WithBudget(budget))
+				opts = append(opts, gpu.WithBudget(budget))
 			}
-			g, err := tier.OpenWith(opts...)
+			g, err := gpu.OpenWith(opts...)
 			if err != nil || g == nil {
 				return nil, 0, 0, 0, false
 			}
@@ -237,11 +237,11 @@ func TestTowerChunksUnderABudget(t *testing.T) {
 	ran := 0
 	for _, spec := range stepDevices() {
 		run := func(budget uint64) (out []float32, placed, chunked, phases int, used uint64, ok bool) {
-			opts := []tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)}
+			opts := []gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)}
 			if budget > 0 {
-				opts = append(opts, tier.WithBudget(budget))
+				opts = append(opts, gpu.WithBudget(budget))
 			}
-			g, err := tier.OpenWith(opts...)
+			g, err := gpu.OpenWith(opts...)
 			if err != nil || g == nil {
 				return
 			}

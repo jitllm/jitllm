@@ -3,9 +3,9 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestPromptFormsFitTheWorkgroupsMemory forms every block of each served
@@ -41,9 +41,9 @@ func TestPromptFormsFitTheWorkgroupsMemory(t *testing.T) {
 				gr.Block = 0
 				for _, rows := range []int{1, 64, 512} {
 					for _, lanes := range []int{32, 1} {
-						_, codes, err := jit.Default().Form(jit.Request{Graph: &gr, Formats: formats,
-							Step:   jit.Step{Rows: rows, Page: 64, Keys: 2048, ActWindow: 32},
-							Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: lanes}})
+						_, codes, err := composer.Default().Form(composer.Request{Graph: &gr, Formats: formats,
+							Step:   composer.Step{Rows: rows, Page: 64, Keys: 2048, ActWindow: 32},
+							Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: lanes}})
 						if err != nil {
 							t.Fatalf("block %d at %d rows, %d lanes: %v", li, rows, lanes, err)
 						}

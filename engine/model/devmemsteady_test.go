@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestDeviceMemoryHoldsSteadyAcrossMoves walks a decoding model's seam home and
@@ -34,13 +34,13 @@ func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	parts := tier.ComposedBlock | tier.ComposedHead
+	parts := gpu.ComposedBlock | gpu.ComposedHead
 	t.Run(fmt.Sprintf("composed%d", parts), func(t *testing.T) { memoryAcrossMoves(t, m, parts) })
 }
 
-func memoryAcrossMoves(t *testing.T, m *Model, parts tier.Parts) {
-	opts := []tier.Option{tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff)}
-	g, err := tier.OpenWith(opts...)
+func memoryAcrossMoves(t *testing.T, m *Model, parts gpu.Parts) {
+	opts := []gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff)}
+	g, err := gpu.OpenWith(opts...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

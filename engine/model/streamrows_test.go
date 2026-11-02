@@ -5,9 +5,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestStreamRowsServeOnTheCard holds the composer to the input rows and the
@@ -59,9 +59,9 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 			host.Close()
 			prompt, toks := g.IDs[:promptLen], g.IDs[promptLen:]
 			heads := len(toks)
-			parts := tier.ComposedEmbed | tier.ComposedHead
+			parts := gpu.ComposedEmbed | gpu.ComposedHead
 			if tc.blocks {
-				parts |= tier.ComposedBlock | tier.ComposedPrompt
+				parts |= gpu.ComposedBlock | gpu.ComposedPrompt
 				heads++
 			}
 			decode := func(t *testing.T, dev string, after func(*Instance)) float64 {
@@ -73,10 +73,10 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 						after(s)
 					}
 				})
-				ne, de := st.ServedPart(tier.ComposedEmbed)
-				nc, dc := st.ServedPart(tier.CollapsedHead)
-				nh, dh := st.ServedPart(tier.ComposedHead)
-				nb, db := st.ServedPart(tier.ComposedBlock)
+				ne, de := st.ServedPart(gpu.ComposedEmbed)
+				nc, dc := st.ServedPart(gpu.CollapsedHead)
+				nh, dh := st.ServedPart(gpu.ComposedHead)
+				nb, db := st.ServedPart(gpu.ComposedBlock)
 				t.Logf("%s: %d input rows, %d collapses, %d heads and %d block steps served; declined %d, %d, %d, %d (%s)",
 					dev, ne, nc, nh, nb, de, dc, dh, db, declinesOf(st))
 				switch {
@@ -89,9 +89,9 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 						nc, nh, dc, dh, len(toks)+1, heads)
 				case tc.blocks && (nb != len(toks)*m.Cfg.NLayer || db != 0):
 					t.Fatalf("%d block steps served and %d declined, want %d", nb, db, len(toks)*m.Cfg.NLayer)
-				case st.StepDeclines[jit.DeclineEmbedStreams] != 1:
+				case st.StepDeclines[composer.DeclineEmbedStreams] != 1:
 					t.Fatalf("the prompt's rows declined %d times for %q, want once",
-						st.StepDeclines[jit.DeclineEmbedStreams], jit.DeclineName(int(jit.DeclineEmbedStreams)))
+						st.StepDeclines[composer.DeclineEmbedStreams], composer.DeclineName(int(composer.DeclineEmbedStreams)))
 				case st.FormedAtStep != 0:
 					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
 				}

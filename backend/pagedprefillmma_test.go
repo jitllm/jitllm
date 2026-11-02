@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // prefillValue is the width a shape's accumulate runs at.

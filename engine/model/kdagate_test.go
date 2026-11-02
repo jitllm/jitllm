@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // kdaUngated is a linear block's graph with its output read as it is: the
@@ -48,8 +48,8 @@ func TestKimiLinearKDAGateIsLoadBearing(t *testing.T) {
 			ran++
 			want, _, _, _ := composedDecode(t, m, dev, ids, toks, 0, true, false)
 			run := func() float64 {
-				got, st, _, _ := composedDecode(t, m, dev, ids, toks, tier.ComposedBlock, true, false)
-				served, declined := st.ServedPart(tier.ComposedBlock)
+				got, st, _, _ := composedDecode(t, m, dev, ids, toks, gpu.ComposedBlock, true, false)
+				served, declined := st.ServedPart(gpu.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))
 				}

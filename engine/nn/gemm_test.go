@@ -11,8 +11,8 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestGEMMScaling asks whether the prefill kernel's single-core rate survives

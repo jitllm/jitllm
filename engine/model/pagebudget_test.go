@@ -3,9 +3,9 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // TestOpenHonoursAPageBudget asserts the budget reaches the reader before the
@@ -88,9 +88,9 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 		if served == 0 {
 			t.Error("the composed CPU served no block step of the paged model")
 		}
-		for _, why := range []jit.Decline{jit.DeclineStream, jit.DeclineNoRoom} {
+		for _, why := range []composer.Decline{composer.DeclineStream, composer.DeclineNoRoom} {
 			if declined[why] > 0 {
-				t.Errorf("the composed CPU declined %d block step(s): %s", declined[why], jit.DeclineName(int(why)))
+				t.Errorf("the composed CPU declined %d block step(s): %s", declined[why], composer.DeclineName(int(why)))
 			}
 		}
 	}

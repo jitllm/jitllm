@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestServedPanicFailsTheStep panics inside a served step's submission on
@@ -36,7 +36,7 @@ func TestServedPanicFailsTheStep(t *testing.T) {
 		for _, dev := range stepDevices() {
 			t.Run(dev+"/"+at, func(t *testing.T) {
 				t.Setenv("JITLLM_DEVICE_PANIC_AT", at)
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+				g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					noDevice(t, dev, err)
 				}

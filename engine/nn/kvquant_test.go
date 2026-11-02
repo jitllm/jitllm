@@ -8,10 +8,10 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestQuantizeKVRowsMatchesTheOracle holds the q8 cache's append to

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // pagedKVPage is the page the gates run at: the smallest the kernels take, so
@@ -15,8 +15,8 @@ import (
 const pagedKVPage = 64
 
 // pagedOpts is the tier configuration of a paged arm at page size page.
-func pagedOpts(page int) []tier.Option {
-	return []tier.Option{tier.WithConfig(func(c *tier.Config) { c.KVPage = page })}
+func pagedOpts(page int) []gpu.Option {
+	return []gpu.Option{gpu.WithConfig(func(c *gpu.Config) { c.KVPage = page })}
 }
 
 // logitNMSE is |a-b|^2 / |b|^2 over one logit row.
@@ -54,8 +54,8 @@ func TestPagedKVBatchMatchesHost(t *testing.T) {
 		ids[i] = m.Vocab.Encode(s, true)
 	}
 	const gen, seq = 12, 256
-	got, after := batchGreedy(t, m, ids, gen, seq, append([]tier.Option{tier.WithDevices("gpu:0")}, pagedOpts(pagedKVPage)...))
-	if n, d := lastBatchStats.ServedPart(tier.ComposedBlock); n == 0 || d != 0 {
+	got, after := batchGreedy(t, m, ids, gen, seq, append([]gpu.Option{gpu.WithDevices("gpu:0")}, pagedOpts(pagedKVPage)...))
+	if n, d := lastBatchStats.ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the composer served %d of the batch's block steps and declined %d", n, d)
 	}
 	for i := range ids {

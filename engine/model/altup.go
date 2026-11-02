@@ -3,9 +3,9 @@ package model
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // Gemma 3n's AltUp and LAuReL (Config.PredStreams), transcribed from transformers'
@@ -104,7 +104,7 @@ func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32
 		return err
 	}
 	s.growBatch(n)
-	if s.cpuHeadRows(s.bx, logits, nil, nlogit) != jit.DeclineServes {
+	if s.cpuHeadRows(s.bx, logits, nil, nlogit) != composer.DeclineServes {
 		s.altHeadNorm(nlogit)
 		if err := s.mm(logits, *s.outW, s.bh, nlogit); err != nil {
 			return err
@@ -225,7 +225,7 @@ func (s *Instance) allocAltUp() {
 // altExpand fills streams 1.. of each of `rows` rows from stream 0, the
 // scaled embedding.
 func (s *Instance) altExpand(x []float32, rows int) error {
-	if s.cpuExpand(x, rows) == jit.DeclineServes {
+	if s.cpuExpand(x, rows) == composer.DeclineServes {
 		return nil
 	}
 	m, c := s.m, s.m.Cfg
@@ -247,7 +247,7 @@ func (s *Instance) altExpand(x []float32, rows int) error {
 // altCollapse writes each row's head input into stream 0: the mean of
 // stream 0 and each unembedded stream matched to stream 0's magnitude.
 func (s *Instance) altCollapse(x []float32, rows int) error {
-	if s.cpuCollapse(x, rows) == jit.DeclineServes {
+	if s.cpuCollapse(x, rows) == composer.DeclineServes {
 		return nil
 	}
 	m, c := s.m, s.m.Cfg

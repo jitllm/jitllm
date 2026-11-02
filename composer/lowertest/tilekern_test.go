@@ -1,0 +1,85 @@
+package lowertest
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/composer/msl"
+	"github.com/jitllm/jitllm/composer/ptx"
+)
+
+// TestTileKernelsAssemble lowers the shipped collective-tile kernels
+// (kernels.GemmTile, its grouped form, kernels.FlashPrefillTile) to PTX at
+// sm_70 (the quad-pair m8n8k4 layout), sm_75 and sm_86 and assembles them with
+// ptxas, and to MSL. They are not in
+// all() because SPIR-V does not lower a tile carried across a loop or staged
+// in workgroup memory, which both need; the backend gates run them on the
+// devices that do.
+func TestTileKernelsAssemble(t *testing.T) {
+	ptxas, _ := exec.LookPath("ptxas")
+	dir := t.TempDir()
+	ks := map[string]*ir.Kernel{}
+	for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q4_0} {
+		sub, _, _, _ := kernels.Layout(q)
+		tl := kernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: max(32/sub, 1)}
+		k, err := kernels.GemmTile(kernels.MatVecShape{T: q, K: 1024, Rows: 128, NTok: 64, Bias: true}, tl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ks["gemmtile/"+q.String()] = k
+		k, err = kernels.GemmTile(kernels.MatVecShape{T: q, K: 1024, Rows: 128, NTok: 64, Experts: 4}, tl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ks["gemmtile-grouped/"+q.String()] = k
+	}
+	for _, hd := range []int{64, 128} {
+		ft, _ := kernels.FlashTileFor(hd)
+		k, err := kernels.FlashPrefillTile(kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: hd,
+			Rows: 64, KStride: 4096, Scale: .125}, ft)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ks[fmt.Sprintf("flashtile/d%d", hd)] = k
+	}
+	for name, k := range ks {
+		t.Run(name, func(t *testing.T) {
+			if _, err := msl.Emit(k); err != nil {
+				t.Fatalf("msl: %v", err)
+			}
+			for _, sm := range []string{"sm_70", "sm_75", "sm_86"} {
+				src, err := ptx.Lower(k, sm)
+				if strings.HasPrefix(name, "flashtile") && sm != "sm_86" {
+					// float32 operands are three tf32 products, sm_80 on.
+					if err == nil {
+						t.Fatalf("ptx %s lowered float32 operands", sm)
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatalf("ptx %s: %v", sm, err)
+				}
+				if ptxas == "" {
+					continue
+				}
+				f := filepath.Join(dir, strings.ReplaceAll(name, "/", "_")+sm+".ptx")
+				if err := os.WriteFile(f, []byte(src), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if out, err := exec.Command(ptxas, "--gpu-name", sm, f,
+					"-o", f+".cubin").CombinedOutput(); err != nil {
+					t.Fatalf("ptxas %s: %v\n%s", sm, err, out)
+				}
+			}
+		})
+	}
+	if ptxas == "" {
+		t.Log("ptxas not installed: PTX is lowered but not assembled")
+	}
+}

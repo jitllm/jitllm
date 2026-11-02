@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Phi-4-reasoning-vision-15B itself: the published Q4_K_M text model and f16
@@ -128,18 +128,18 @@ func TestPhi4RealMatchesTransformers(t *testing.T) {
 			defer func(mp int) { tw.Cfg.MaxPixels = mp }(tw.Cfg.MaxPixels)
 			tw.Cfg.MaxPixels = gh * gw * c.PatchSz * c.PatchSz
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec))
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+				if err != nil || gpux == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
 				}
 				t.Run(spec, func(t *testing.T) {
-					defer gpu.Close()
+					defer gpux.Close()
 					s := tw.testState()
 					defer s.Close()
-					s.SetDevice(gpu)
+					s.SetDevice(gpux)
 					if n := s.GPUBlocks(); n != c.NLayer {
-						t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, gpu.Err())
+						t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, gpux.Err())
 					}
 					_, got := encode(s)
 					dn, _ := nmseOf(got, emb)

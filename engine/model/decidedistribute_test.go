@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Relocation between devices and distribution over them, on the decision
@@ -22,11 +22,11 @@ import (
 
 // moveTier opens moveDevices' two devices as one tier, tuning off; it closes
 // with t.
-func moveTier(t *testing.T) (*tier.GPU, string, string) {
+func moveTier(t *testing.T) (*gpu.GPU, string, string) {
 	t.Helper()
 	a, b := moveDevices(t)
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(a + "," + b),
-		tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(a + "," + b),
+		gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, a+","+b, err)
 	}
@@ -312,7 +312,7 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 			}
 			bad := DecisionRequest{State: reqs[0].State} // no questions: refused alone
 			reqs = append(reqs[:1], append([]DecisionRequest{bad}, reqs[1:]...)...)
-			arms := []*tier.GPU{nil}
+			arms := []*gpu.GPU{nil}
 			arms = append(arms, decisionDevices(t)...)
 			for _, g := range arms {
 				name := "host"

@@ -3,27 +3,27 @@ package cost
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // estimateRun is each kernel's estimate when the whole model runs on d at
 // step s, in order.
-func estimateRun(t *testing.T, d Device, s jit.Step) ([]*jit.Kernel, []Cost) {
+func estimateRun(t *testing.T, d Device, s composer.Step) ([]*composer.Kernel, []Cost) {
 	t.Helper()
 	f := composing(t, *composeModel+".jlm")
-	parts, err := jit.Front(f, false)
+	parts, err := composer.Front(f, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var run []jit.PartPlan
+	var run []composer.PartPlan
 	for _, p := range parts {
-		run = append(run, jit.PartPlan{Part: p, Device: d.Device})
+		run = append(run, composer.PartPlan{Part: p, Device: d.Device})
 	}
-	ks, err := jit.Default().Kernels(f, run, 0, s)
+	ks, err := composer.Default().Kernels(f, run, 0, s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := costModel{d: d, s: s, keys: jit.NewStorageKeys(parts)}
+	m := costModel{d: d, s: s, keys: composer.NewStorageKeys(parts)}
 	var cs []Cost
 	for _, k := range ks {
 		cs = append(cs, m.cost(k))
@@ -32,10 +32,10 @@ func estimateRun(t *testing.T, d Device, s jit.Step) ([]*jit.Kernel, []Cost) {
 }
 
 var (
-	testCPU = Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Thread: 15e9, Launch: 50e-9,
+	testCPU = Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Thread: 15e9, Launch: 50e-9,
 		Caches: [3]Cache{{Bytes: 32 << 10, Rate: Rate{Thread: 100e9}}, {Bytes: 1 << 20, Rate: Rate{Thread: 50e9}}, {Bytes: 12 << 20, Rate: Rate{Thread: 30e9}}},
 		Rates:  [NumClasses]Rate{ClassFloat: {Thread: 8e9}}}
-	testGPU = Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Thread: 2e7, Launch: 4e-6,
+	testGPU = Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Thread: 2e7, Launch: 4e-6,
 		Caches: [3]Cache{{Bytes: 6 << 20, Rate: Rate{Total: 2.5e12}}}, Rates: [NumClasses]Rate{ClassFloat: {Total: 14e12}}}
 )
 
@@ -43,7 +43,7 @@ var (
 // trips from the step on both devices.
 func TestEstimateDecidesEveryTrip(t *testing.T) {
 	for _, d := range []Device{testCPU, testGPU} {
-		_, cs := estimateRun(t, d, jit.Step{Rows: 1, Page: 64, Keys: 5})
+		_, cs := estimateRun(t, d, composer.Step{Rows: 1, Page: 64, Keys: 5})
 		for i, c := range cs {
 			if c.Unknown > 0 {
 				t.Errorf("%v kernel %d: %d loops whose trips the step does not decide", d.Kind, i, c.Unknown)
@@ -59,7 +59,7 @@ func TestEstimateGrowsWithTheHistory(t *testing.T) {
 	for _, d := range []Device{testCPU, testGPU} {
 		var bytes []int64
 		for _, keys := range []int{8, 16, 24} {
-			_, cs := estimateRun(t, d, jit.Step{Rows: 1, Page: 64, Keys: keys})
+			_, cs := estimateRun(t, d, composer.Step{Rows: 1, Page: 64, Keys: keys})
 			var n int64
 			for _, c := range cs {
 				n += c.Bytes
@@ -77,7 +77,7 @@ func TestEstimateGrowsWithTheHistory(t *testing.T) {
 // wrote to its caches where the device has them, and to its memory where
 // it has none.
 func TestEstimateServesReuseFromCache(t *testing.T) {
-	s := jit.Step{Rows: 1, Page: 64, Keys: 5}
+	s := composer.Step{Rows: 1, Page: 64, Keys: 5}
 	_, cached := estimateRun(t, testCPU, s)
 	bare := testCPU
 	bare.Caches = [3]Cache{}
@@ -100,14 +100,14 @@ func TestEstimateServesReuseFromCache(t *testing.T) {
 // writes and the row it reads.
 func TestEstimateReadsTheHeadOnce(t *testing.T) {
 	for _, d := range []Device{testCPU, testGPU} {
-		ks, cs := estimateRun(t, d, jit.Step{Rows: 1, Page: 64, Keys: 5})
+		ks, cs := estimateRun(t, d, composer.Step{Rows: 1, Page: 64, Keys: 5})
 		var weight, out, got int64
 		for i, k := range ks {
 			for _, b := range k.Bufs {
-				if b.Operand.Kind != jit.OperandWeight || b.Shape == nil {
+				if b.Operand.Kind != composer.OperandWeight || b.Shape == nil {
 					continue
 				}
-				n := int64(jit.ElemBytes(b))
+				n := int64(composer.ElemBytes(b))
 				for _, x := range b.Shape {
 					n *= int64(x)
 				}

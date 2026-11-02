@@ -12,7 +12,7 @@ const HostGateID = "cpu"
 
 // gate records which sessions are running on one device (or the host). It
 // does not queue them: two sessions on one card are correct at once (each
-// holds its own history through tier.GPU.Attach, and the tier takes its
+// holds its own history through gpu.GPU.Attach, and the tier takes its
 // scratch one step at a time), and two on the host take turns on one shared
 // pool a region at a time (sched.Shared). So a generate is never held behind
 // another one for its whole length; it interleaves with it token by token.

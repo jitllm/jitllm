@@ -10,7 +10,7 @@ import (
 )
 
 // TestStepRowsAreTheirOwn: on a model split over two devices whose steps are
-// one kernel for every row count (tier.GPU.RowsComposed), a session's logits
+// one kernel for every row count (gpu.GPU.RowsComposed), a session's logits
 // are bit for bit the same whatever other sessions share its steps -- its
 // prompt alone or beside another's, its decode alone, beside a shorter
 // history or beside a longer one, its prompt in chunks of any size -- which is

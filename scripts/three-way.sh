@@ -19,7 +19,7 @@
 #              garbage, or that declines every block while reporting success,
 #              gives a run that looks exactly like a working one.
 #              violation: --violate ids (compare against a doctored reference)
-#   devices    both devices RAN blocks, not merely held them. tier.Stats.Blocks
+#   devices    both devices RAN blocks, not merely held them. gpu.Stats.Blocks
 #              counts submissions that returned and whose output was copied back,
 #              per device, so "placed 6, run 0" is visible.
 #              violation: --violate one-device

@@ -43,7 +43,7 @@ type Turn struct {
 
 // MachineReport is the hardware probe, taken once at startup. It is cached
 // because backend.Open opens and closes every backend, and re-probing while a
-// tier.GPU is live contends for the same devices.
+// gpu.GPU is live contends for the same devices.
 type MachineReport struct {
 	Probed bool
 	Err    string

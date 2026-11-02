@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestABatchLeavesAnotherSessionAlone puts two instances on one tier: a single
@@ -35,10 +35,10 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 
 // aBatchLeavesAnotherSessionAlone is TestABatchLeavesAnotherSessionAlone
 // with the composer serving parts.
-func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
+func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts gpu.Parts) {
 	const seq, rows, before, after = 256, 3, 3, 5
-	open := func(t *testing.T, spec string) *tier.GPU {
-		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+	open := func(t *testing.T, spec string) *gpu.GPU {
+		g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}
@@ -55,7 +55,7 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 
 	// attachA places A alone and prefills it; step decodes one greedy token
 	// and returns a copy of the logits it came from.
-	attachA := func(t *testing.T, g *tier.GPU) (*Instance, func() []float32) {
+	attachA := func(t *testing.T, g *gpu.GPU) (*Instance, func() []float32) {
 		a := m.NewInstance(seq)
 		t.Cleanup(func() { a.Close() })
 		if err := a.SetDevice(g); err != nil {
@@ -103,7 +103,7 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 	// most B's sessions held on the card at once, read after each step: a
 	// session's history goes with it when its sequence retires.
 	var bPeak uint64
-	bIDs := func(t *testing.T, d *tier.GPU) ([][]int32, *Instance) {
+	bIDs := func(t *testing.T, d *gpu.GPU) ([][]int32, *Instance) {
 		sc := newTestBatcher(m, rows, seq)
 		t.Cleanup(sc.Close)
 		if d != nil {
@@ -160,7 +160,7 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 	}
 	// run interleaves: A decodes, B runs to completion on the same tier, A
 	// decodes on. It checks A's history and logits and returns B's Instance.
-	run := func(t *testing.T, g *tier.GPU) *Instance {
+	run := func(t *testing.T, g *gpu.GPU) *Instance {
 		a, step := attachA(t, g)
 		var got [][]float32
 		for i := 0; i < before; i++ {

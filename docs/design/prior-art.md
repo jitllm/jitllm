@@ -15,7 +15,7 @@ Why it is likely relevant given where jitllm is:
   compilation path, which is the same bet jitllm makes with one IR lowered to
   PTX, SPIR-V and MSL. How it handles per-target divergence is directly
   applicable -- jitllm has ZERO per-target specialisation today (measured:
-  no `case "ptx"` anywhere in `jit/gpu/kernels`), and a 1.80x gap
+  no `case "ptx"` anywhere in `composer/kernels`), and a 1.80x gap
   between CUDA and Vulkan on the SAME card that is entirely software.
 - Anything it does about device memory residency and streaming weights bears on
   `docs/design/block-paging.md`, which is a spec and not yet built.
@@ -102,8 +102,8 @@ response tokens, so there is no prefill/decode split. The paper claims no arithm
 records that, with top-k or top-p in the behaviour policy, exact importance sampling is not recoverable
 from its RL replay metadata.
 
-What it bears on here: jitllm keeps two device kernels for one set of weights (`jit/gpu/kernels/matvec.go` for
-decode, `jit/gpu/kernels/mma.go` for prefill), and changes have reached one and not the other three times
+What it bears on here: jitllm keeps two device kernels for one set of weights (`composer/kernels/matvec.go` for
+decode, `composer/kernels/mma.go` for prefill), and changes have reached one and not the other three times
 (`docs/engineering-history/gpu-kernels.md`); RLT is the architectural version of removing that seam. There are no trained
 weights, no GGUF and no reference implementation, so under RULE 7 there is nothing to run or gate
 against.

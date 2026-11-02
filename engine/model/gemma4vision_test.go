@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Gemma 4's vision against transformers' own Gemma4ForConditionalGeneration
@@ -217,7 +217,7 @@ func g4vRun(t *testing.T, m *Model, g *g4vGolden, bidir bool) [][]float32 {
 
 // g4vRunOn is g4vRun with the session on gpu (nil is the host): the text
 // model's blocks and the tower's.
-func g4vRunOn(t *testing.T, m *Model, g *g4vGolden, bidir bool, gpu *tier.GPU) [][]float32 {
+func g4vRunOn(t *testing.T, m *Model, g *g4vGolden, bidir bool, gpux *gpu.GPU) [][]float32 {
 	t.Helper()
 	st := m.NewInstance(8)
 	pic, err := st.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
@@ -232,12 +232,12 @@ func g4vRunOn(t *testing.T, m *Model, g *g4vGolden, bidir bool, gpu *tier.GPU) [
 		{Picture: pic, Bidir: bidir}, {Tokens: append([]int32{g.EOI}, g.Post...)}}
 	s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
 	defer s.Close()
-	if gpu != nil {
-		if err := s.SetDevice(gpu); err != nil {
+	if gpux != nil {
+		if err := s.SetDevice(gpux); err != nil {
 			t.Fatal(err)
 		}
 		if s.GPULayers() != m.Cfg.NLayer {
-			t.Fatalf("the device took %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpu.Err())
+			t.Fatalf("the device took %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpux.Err())
 		}
 	}
 	lg, err := s.PrefillMixed(spans...)
@@ -253,8 +253,8 @@ func g4vRunOn(t *testing.T, m *Model, g *g4vGolden, bidir bool, gpu *tier.GPU) [
 	}
 	// A device that refused the prompt hands its blocks home and the host
 	// answers: the arm proves nothing unless every block is still placed.
-	if gpu != nil && s.GPULayers() != m.Cfg.NLayer {
-		t.Fatalf("after the prompt the device holds %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpu.Err())
+	if gpux != nil && s.GPULayers() != m.Cfg.NLayer {
+		t.Fatalf("after the prompt the device holds %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpux.Err())
 	}
 	return out
 }
@@ -303,14 +303,14 @@ func TestGemma4MatchesTransformersEndToEnd(t *testing.T) {
 	// too (LayerPlan.BidirOff), held to the host's logits, and the violation
 	// -- every layer bidirectional -- far from them.
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		t.Run(spec, func(t *testing.T) {
-			dev := g4vRunOn(t, m, g, true, gpu)
-			gpu.Close()
+			dev := g4vRunOn(t, m, g, true, gpux)
+			gpux.Close()
 			var worst float64
 			for i := range dev {
 				nm, _ := nmseOf(dev[i], got[i])
@@ -322,7 +322,7 @@ func TestGemma4MatchesTransformersEndToEnd(t *testing.T) {
 			// The violation on a device of its own, the first closed so the
 			// two do not split the card's budget: the blocks the first
 			// placement prepared carry the plan they were prepared with.
-			gpu2, err := tier.OpenWith(tier.WithDevices(spec))
+			gpu2, err := gpu.OpenWith(gpu.WithDevices(spec))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -353,19 +353,19 @@ func TestGemma4OnDeviceMatchesHost(t *testing.T) {
 	ran := 0
 	for _, arm := range towerArms() {
 		spec := arm.spec
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(arm.String(), func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			s := tw.testState()
 			defer s.Close()
-			s.SetDevice(gpu)
+			s.SetDevice(gpux)
 			if n := s.GPUBlocks(); n != tw.Cfg.NLayer {
-				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, tw.Cfg.NLayer, gpu.Err())
+				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, tw.Cfg.NLayer, gpux.Err())
 			}
 			enc := func() []float32 {
 				px, err := s.PreprocessImage(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
@@ -379,7 +379,7 @@ func TestGemma4OnDeviceMatchesHost(t *testing.T) {
 				return append([]float32(nil), out...)
 			}
 			var got []float32
-			arm.served(t, gpu, tw.Cfg.NLayer, func() { got = enc() })
+			arm.served(t, gpux, tw.Cfg.NLayer, func() { got = enc() })
 			nm, worst := nmseOf(got, want)
 			t.Logf("%s, all %d blocks: NMSE %.3e, max|d| %.4f against the host", spec, tw.Cfg.NLayer, nm, worst)
 			if math.IsNaN(nm) || math.IsInf(nm, 0) || nm > 1e-3 {

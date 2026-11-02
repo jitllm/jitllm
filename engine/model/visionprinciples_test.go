@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // The five principles for the gemma3 and internvl towers (AGENTS.md): their
@@ -91,9 +91,9 @@ func TestVisionDecodeDoesNotAllocate(t *testing.T) {
 			}
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
-					var g *tier.GPU
+					var g *gpu.GPU
 					if spec != "host" {
-						if g, err = tier.OpenWith(tier.WithDevices(spec)); err != nil || g == nil {
+						if g, err = gpu.OpenWith(gpu.WithDevices(spec)); err != nil || g == nil {
 							t.Skipf("%s: not present (%v)", spec, err)
 						}
 						defer g.Close()
@@ -120,7 +120,7 @@ func TestVisionDecodeDoesNotAllocate(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					var c0 tier.Stats
+					var c0 gpu.Stats
 					if g != nil {
 						c0 = g.Stats()
 					}

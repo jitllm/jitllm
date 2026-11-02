@@ -1,6 +1,6 @@
 // Package ssegate is the SSE tier's VEX-leak gate, shared by every x86
-// assembler's tests: main's SSE kernels (jit/cpu) and the composer's
-// (jit/x86 through jit's CPU lowering).
+// assembler's tests: main's SSE kernels (engine/device/cpu) and the composer's
+// (composer/x86 through jit's CPU lowering).
 //
 // It reads a kernel's bytes back through objdump, which shares no code with
 // either encoder, and fails on anything a pre-AVX host would fault on: a VEX or
@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/x86"
+	"github.com/jitllm/jitllm/composer/x86"
 )
 
 // mnemonicISA classifies every mnemonic an SSE-tier kernel may contain by

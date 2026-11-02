@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 const ds4GoldScript = "scripts/ds4gold.py"
@@ -216,27 +216,27 @@ func TestDeepseek4MixedPromptOnEveryDevice(t *testing.T) {
 	nl := m.Cfg.NLayer
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			run := func(spans ...Span) ([]float32, error) {
 				st := m.NewInstance(len(ids) + 2)
 				defer st.Close()
-				st.SetDeviceLayers(gpu, -1)
+				st.SetDeviceLayers(gpux, -1)
 				if st.GPULayers() != nl || !st.HeadOnDevice() {
-					t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), nl, st.HeadOnDevice(), gpu.Err())
+					t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), nl, st.HeadOnDevice(), gpux.Err())
 				}
-				s0 := gpu.Stats()
+				s0 := gpux.Stats()
 				lg, err := st.PrefillMixed(spans...)
-				if err == nil && gpu.Stats().DS4Blocks-s0.DS4Blocks != nl {
+				if err == nil && gpux.Stats().DS4Blocks-s0.DS4Blocks != nl {
 					t.Fatalf("the prompt did not run as one submission of every block (%d attention halves)",
-						gpu.Stats().DS4Blocks-s0.DS4Blocks)
+						gpux.Stats().DS4Blocks-s0.DS4Blocks)
 				}
 				return slices.Clone(lg), err
 			}
@@ -281,31 +281,31 @@ func TestDeepseek4DeviceRunsTheChunkWhole(t *testing.T) {
 	}
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			st := m.NewInstance(len(g.IDs) + 2)
 			defer st.Close()
-			st.SetDeviceLayers(gpu, -1)
+			st.SetDeviceLayers(gpux, -1)
 			if st.GPULayers() != nl || !st.HeadOnDevice() {
-				t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), nl, st.HeadOnDevice(), gpu.Err())
+				t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), nl, st.HeadOnDevice(), gpux.Err())
 			}
-			s0 := gpu.Stats()
+			s0 := gpux.Stats()
 			lg, err := st.Prefill(g.IDs)
 			if err != nil {
 				t.Fatal(err)
 			}
-			s1 := gpu.Stats()
+			s1 := gpux.Stats()
 			if _, err := st.Forward(Greedy(lg)); err != nil {
 				t.Fatal(err)
 			}
-			s2 := gpu.Stats()
+			s2 := gpux.Stats()
 			t.Logf("prefill of %d: %d attention halves, %d mixes, %d selections, %d grouped mixtures; a "+
 				"decode token: %d attention halves, %d mixes", len(g.IDs), s1.DS4Blocks-s0.DS4Blocks,
 				s1.DS4HC-s0.DS4HC, s1.IdxSelects-s0.IdxSelects, s1.GroupedMoE-s0.GroupedMoE,
@@ -338,15 +338,15 @@ func TestDeepseek4LongChunksOnEveryDevice(t *testing.T) {
 	nl := m.Cfg.NLayer
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			for _, n := range []int{96, 300, 705} {
 				ids := make([]int32, n)
 				for i := range ids {
@@ -356,21 +356,21 @@ func TestDeepseek4LongChunksOnEveryDevice(t *testing.T) {
 					st := m.NewInstance(n + 1)
 					defer st.Close()
 					chunks := (n + nn.MaxDevicePrefillChunk - 1) / nn.MaxDevicePrefillChunk
-					s0 := gpu.Stats()
+					s0 := gpux.Stats()
 					if dev {
-						st.SetDeviceLayers(gpu, -1)
+						st.SetDeviceLayers(gpux, -1)
 						if st.GPULayers() != nl || !st.HeadOnDevice() {
 							t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), nl, st.HeadOnDevice(),
-								gpu.Err())
+								gpux.Err())
 						}
 					}
 					lg, err := st.Prefill(ids)
 					if err != nil {
 						t.Fatal(err)
 					}
-					if d := gpu.Stats().DS4Blocks - s0.DS4Blocks; dev && d != nl*chunks {
+					if d := gpux.Stats().DS4Blocks - s0.DS4Blocks; dev && d != nl*chunks {
 						t.Fatalf("%d rows: %d attention halves on the device, want %d chunk(s) of every block (the "+
-							"device: %q)", n, d, chunks, gpu.Err())
+							"device: %q)", n, d, chunks, gpux.Err())
 					}
 					return slices.Clone(lg)
 				}

@@ -2,15 +2,15 @@ package model
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"math"
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // moveDevices is the two devices of one tier the device-to-device gates move
@@ -68,15 +68,15 @@ const (
 	moveUpper
 )
 
-func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts tier.Parts, opts ...Option) {
+func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts gpu.Parts, opts ...Option) {
 	blocksMoveBetweenDevicesWith(t, path, arm, parts, nil, opts...)
 }
 
 // blocksMoveBetweenDevicesWith is blocksMoveBetweenDevices with check given
 // the tier's counts once the moves ran.
-func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts tier.Parts, check func(tier.Stats), opts ...Option) {
+func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts gpu.Parts, check func(gpu.Stats), opts ...Option) {
 	a, b := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a+","+b, err)
 	}
@@ -213,10 +213,10 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts tier
 	if check != nil {
 		check(g.Stats())
 	}
-	if parts&tier.ComposedEmbed != 0 {
+	if parts&gpu.ComposedEmbed != 0 {
 		st := g.Stats()
-		n, d := st.ServedPart(tier.ComposedEmbed)
-		np, dp := st.ServedPart(tier.PromptEmbed)
+		n, d := st.ServedPart(gpu.ComposedEmbed)
+		np, dp := st.ServedPart(gpu.PromptEmbed)
 		if n == 0 || d != 0 || np == 0 || dp != 0 {
 			t.Fatalf("the composer gathered %d steps' rows (%d declined) and %d prompts' (%d declined): %s", n, d, np, dp, declinesOf(st))
 		}
@@ -236,13 +236,13 @@ func (s *Instance) placedOn(name string) []int {
 }
 
 // TestBlocksMoveToADeviceAddedLater: a tier opened on one card takes a second
-// mid-sequence (tier.GPU.AddDevices), the blocks move onto it and back with
+// mid-sequence (gpu.GPU.AddDevices), the blocks move onto it and back with
 // their history, and the logits stay in the band of a run that never moved --
 // the plasticity a running model needs to reach a card it was not opened with,
 // without a second tier holding its weights twice.
 func TestBlocksMoveToADeviceAddedLater(t *testing.T) {
 	a, b := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices(a), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a, err)
 	}
@@ -334,7 +334,7 @@ func TestBlocksMoveToADeviceAddedLater(t *testing.T) {
 // give up the f16 cache to keep its plasticity.
 func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 	a, _ := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices(a), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a, err)
 	}
@@ -410,7 +410,7 @@ func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 // and every token stays in the band of a host run that never moved.
 func TestAnyRangeMovesWithItsHistory(t *testing.T) {
 	a, _ := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices(a), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a, err)
 	}
@@ -497,7 +497,7 @@ func TestAnyRangeMovesWithItsHistory(t *testing.T) {
 }
 
 // TestTwoModelsShareACardThroughTheRegistry: two models, each with its own
-// tier, on one card whose shared pool (tier.WithPoolRegistry) cannot hold
+// tier, on one card whose shared pool (gpu.WithPoolRegistry) cannot hold
 // both: the second places what the card has left; when the first brings its
 // blocks home the second takes the room. Without the registry each tier keeps
 // the budget it opened with and the room the first gave back stays out of the
@@ -506,18 +506,18 @@ func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
 	a, _ := moveDevices(t)
 	for _, shared := range []bool{true, false} {
 		t.Run(fmt.Sprintf("shared=%v", shared), func(t *testing.T) {
-			var reg *tier.PoolRegistry
-			opts := []tier.Option{tier.WithDevices(a + "=1G"), tier.WithDeviceTune(tier.TuneOff)}
+			var reg *gpu.PoolRegistry
+			opts := []gpu.Option{gpu.WithDevices(a + "=1G"), gpu.WithDeviceTune(gpu.TuneOff)}
 			if shared {
-				reg = tier.NewPoolRegistry()
-				opts = append(opts, tier.WithPoolRegistry(reg))
+				reg = gpu.NewPoolRegistry()
+				opts = append(opts, gpu.WithPoolRegistry(reg))
 			}
-			ga, err := tier.OpenWith(opts...)
+			ga, err := gpu.OpenWith(opts...)
 			if err != nil || ga == nil {
 				noDevice(t, a, err)
 			}
 			defer ga.Close()
-			gb, err := tier.OpenWith(opts...)
+			gb, err := gpu.OpenWith(opts...)
 			if err != nil {
 				t.Fatal(err)
 			}

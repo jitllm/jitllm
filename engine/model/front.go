@@ -7,13 +7,13 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 )
 
-// The model as the composer reads it (jit.Model): its container, and the
+// The model as the composer reads it (composer.Model): its container, and the
 // graph of generic ops of each block, the head and the input rows, built from
 // what the container states and nothing else: no graph here asks what family
 // a model is. A block whose features the op language does not state yet has
@@ -144,7 +144,7 @@ type frontSet struct {
 	cpuWalkProb, cpuCutProb            *graph.Graph
 	cpuCutK, cpuCutKProb               *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
-	// sliding layers', as jit.Front states them (nil for one that turns
+	// sliding layers', as composer.Front states them (nil for one that turns
 	// nothing).
 	tables []*graph.Graph
 	// pick is the label pick over the logits, pickHead the head projecting
@@ -205,7 +205,7 @@ type composing struct {
 
 // Composing is the model as the composer reads it: its container and the
 // graphs built from it.
-func (m *Model) Composing() jit.Model { return composing{m.container, m} }
+func (m *Model) Composing() composer.Model { return composing{m.container, m} }
 
 func (c composing) BlockGraph(li int) *graph.Graph {
 	f := c.m.frontGraphs()
@@ -264,7 +264,7 @@ func (m *Model) rotaryOf(r nn.Rope) graph.Rotary {
 
 func (c composing) Tower() bool { return false }
 
-func (c composing) Segment() jit.Model { return nil }
+func (c composing) Segment() composer.Model { return nil }
 
 // Uncovered is why block li has no graph, Covered for a block that has one;
 // li of -1 is the head's, -2 the input rows'.
@@ -356,7 +356,7 @@ func (m *Model) frontGraphs() *frontSet {
 	for i, r := range (composing{m.container, m}).Rotaries() {
 		var t *graph.Graph
 		if r.NRot > 0 {
-			t = jit.TableGraph(r, i)
+			t = composer.TableGraph(r, i)
 		}
 		s.tables = append(s.tables, t)
 	}

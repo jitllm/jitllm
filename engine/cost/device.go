@@ -5,12 +5,12 @@
 // price any device, its own or another's.
 package cost
 
-import "github.com/jitllm/jitllm/jit"
+import "github.com/jitllm/jitllm/composer"
 
 // Device is a device as the composer forms kernels for it and as an
 // estimate weighs it.
 type Device struct {
-	jit.Device
+	composer.Device
 	// Units is the multiprocessors a GPU runs workgroups on, 0 where
 	// nothing measured them.
 	Units int
@@ -41,10 +41,10 @@ func (d Device) LaunchWords() int {
 }
 
 // Placement is the device each part of a model is priced on.
-type Placement func(jit.Part) Device
+type Placement func(composer.Part) Device
 
 // Composer is placement p as the composer places parts: on the devices
 // alone, what they cost aside.
-func (p Placement) Composer() jit.Placement {
-	return func(part jit.Part) jit.Device { return p(part).Device }
+func (p Placement) Composer() composer.Placement {
+	return func(part composer.Part) composer.Device { return p(part).Device }
 }

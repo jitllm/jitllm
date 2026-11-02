@@ -4,7 +4,7 @@ The estimator prices the composer's final IR, before anything is lowered or
 run: the tool a tuner, a placement search, an auto-tuner and a router ask
 "which form, where, at what cost". It lives outside the composer, in
 `engine/cost`, and runs no model code. It reads a model as its header (the
-configuration and tensor index, `jit.Model`; a container is one) and a
+configuration and tensor index, `composer.Model`; a container is one) and a
 device as numbers: a profile from the hardware table compiled into the
 engine, one per hardware model and backend, so any node prices any device
 in the table without the hardware -- ahead of sending a request to another
@@ -16,7 +16,7 @@ estimator.
 - `engine/cost/model.go` -- the model; `engine/cost/estimate.go` --
   `Estimate`, `Suggest` and `EstimateCodes` (each call's estimate beside
   the values, reaches and storage it assumed), over a `Former` (the
-  composer's `*jit.Registry`, or a cache of kernels formed before).
+  composer's `*composer.Registry`, or a cache of kernels formed before).
 - `engine/cost/hardware_table.go` -- the table, `cost.Known(name, api)`;
   `go run ./scripts/genhardware -probe engine/cost/hardware_table.go` probes
   a machine into it, merging by the file's syntax (an entry replaced by its
@@ -123,7 +123,7 @@ larger than the caches lives in.
 ## Open
 
 - **A short loop on many threads reads low.** The argmax split across the
-  device (`jit.SplitExtreme`: 1024 segments of 101 logits, their 1024
+  device (`composer.SplitExtreme`: 1024 segments of 101 logits, their 1024
   results in 32 groups, then one) reads 0.71-0.76 of its segments' kernel on
   the V100 and 0.18 on the M4, where 1024 threads walk 101 loads each.
 - **One warp of straight-line code.** A quantize kernel of about 2,300 PTX

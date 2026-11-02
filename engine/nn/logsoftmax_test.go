@@ -6,8 +6,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestLogSoftmaxMatchesTheOracle holds LogSoftmax32JIT to the f64 definition

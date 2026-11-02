@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestFirstPromptDoesNotGrowTheKVPool: an instance that places every block on a
@@ -41,11 +41,11 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer m.Close()
-		opts := []tier.Option{tier.WithDeviceTune(tier.TuneOff)}
+		opts := []gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}
 		if budget > 0 {
-			opts = append(opts, tier.WithBudget(budget))
+			opts = append(opts, gpu.WithBudget(budget))
 		}
-		g, err := tier.OpenWith(opts...)
+		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

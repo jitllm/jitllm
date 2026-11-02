@@ -6,14 +6,14 @@ import (
 	"io"
 	"sort"
 
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // registerReport prints what each compiled kernel cost the host and each
 // device, worst first: spill, then occupancy (or vector registers named),
 // then registers.
-func registerReport(w io.Writer, host []cpu.KernelRegs, devs []tier.DeviceKernels, asJSON bool) error {
+func registerReport(w io.Writer, host []cpu.KernelRegs, devs []gpu.DeviceKernels, asJSON bool) error {
 	sort.SliceStable(host, func(a, b int) bool {
 		if host[a].StackRefs != host[b].StackRefs {
 			return host[a].StackRefs > host[b].StackRefs
@@ -36,8 +36,8 @@ func registerReport(w io.Writer, host []cpu.KernelRegs, devs []tier.DeviceKernel
 		e := json.NewEncoder(w)
 		e.SetIndent("", "  ")
 		return e.Encode(struct {
-			Host    []cpu.KernelRegs     `json:"host"`
-			Devices []tier.DeviceKernels `json:"devices"`
+			Host    []cpu.KernelRegs    `json:"host"`
+			Devices []gpu.DeviceKernels `json:"devices"`
 		}{host, devs})
 	}
 	fmt.Fprintf(w, "\nhost\n  %-48s %5s %8s %6s %7s %5s\n", "emitter", "isa", "vec/file", "stack", "bytes", "emits")

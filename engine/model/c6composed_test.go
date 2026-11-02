@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // classicFixtures are the classic-transformer fixtures (LayerNorm, a
@@ -91,19 +91,19 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 		if covered != m.Cfg.NLayer {
 			t.Fatalf("the front end states %d of %d blocks: %s %v", covered, m.Cfg.NLayer, m.Uncovered(0), m.UncoveredErr(0))
 		}
-		got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock|tier.ComposedHead, true, false)
-		served, declined := st.ServedPart(tier.ComposedBlock)
+		got, st, _, _ := composedDecode(t, m, dev, prompt, toks, gpu.ComposedBlock|gpu.ComposedHead, true, false)
+		served, declined := st.ServedPart(gpu.ComposedBlock)
 		if want := len(toks) * covered; served != want || declined != 0 {
 			t.Fatalf("%d block steps served and %d declined, where %d steps of %d covered blocks are %d served",
 				served, declined, len(toks), covered, want)
 		}
 		// Every step's head, and the prompt's last row's.
-		if heads, hd := st.ServedPart(tier.ComposedHead); heads != len(toks)+1 || hd != 0 {
+		if heads, hd := st.ServedPart(gpu.ComposedHead); heads != len(toks)+1 || hd != 0 {
 			t.Fatalf("%d head steps served and %d declined, where the %d steps and the prompt's last row are %d (%s)", heads, hd, len(toks), len(toks)+1, declinesOf(st))
 		}
 		for i, k := range st.BlockDeclines {
 			if k > 0 {
-				t.Fatalf("%d block step(s) declined because %s", k, tier.DeclineName(i))
+				t.Fatalf("%d block step(s) declined because %s", k, gpu.DeclineName(i))
 			}
 		}
 		if st.FormedAtStep != 0 {
@@ -158,9 +158,9 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 func wholeStepC6(t *testing.T, m *Model, dev string, prompt, toks []int32, want [][]float32, bound float64) {
 	t.Helper()
 	decode := func(after func(*Instance)) (worst float64, flips int) {
-		got, st, _, _ := composedDecodeWith(t, m, dev, prompt, toks, tier.ComposedStep, true, false, after)
-		ne, de := st.ServedPart(tier.ComposedEmbed)
-		np, dp := st.ServedPart(tier.PromptEmbed)
+		got, st, _, _ := composedDecodeWith(t, m, dev, prompt, toks, gpu.ComposedStep, true, false, after)
+		ne, de := st.ServedPart(gpu.ComposedEmbed)
+		np, dp := st.ServedPart(gpu.PromptEmbed)
 		if ne != len(toks) || de != 0 || np == 0 || dp != 0 {
 			t.Fatalf("the composer gathered %d of %d steps' rows (%d declined) and the prompt's %d times (%d declined): %s",
 				ne, len(toks), de, np, dp, declinesOf(st))

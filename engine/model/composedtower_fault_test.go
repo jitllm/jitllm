@@ -5,7 +5,7 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestComposedTowerOnDeviceSeesCausalRows runs the composed device tower's
@@ -26,7 +26,7 @@ func TestComposedTowerOnDeviceSeesCausalRows(t *testing.T) {
 	tw.opt.towerGPULayers = 1
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || g == nil {
 			continue
 		}
@@ -34,14 +34,14 @@ func TestComposedTowerOnDeviceSeesCausalRows(t *testing.T) {
 		t.Run(spec, func(t *testing.T) {
 			defer g.Close()
 			read := func(fault string) float64 {
-				tier.SetRowsFault(fault)
-				defer tier.SetRowsFault("")
+				gpu.SetRowsFault(fault)
+				defer gpu.SetRowsFault("")
 				s := tw.testState()
 				defer s.Close()
 				s.SetDevice(g)
-				s0, _ := g.Stats().ServedPart(tier.ComposedTower)
+				s0, _ := g.Stats().ServedPart(gpu.ComposedTower)
 				got0, _ := towerEncodeAt(t, s, px)
-				if n, _ := g.Stats().ServedPart(tier.ComposedTower); n-s0 != 1 {
+				if n, _ := g.Stats().ServedPart(gpu.ComposedTower); n-s0 != 1 {
 					t.Fatalf("%s: the composer served %d tower block runs, want the one placed (%s)", spec, n-s0, g.Err())
 				}
 				nm, _ := nmseOf(got0, want0)

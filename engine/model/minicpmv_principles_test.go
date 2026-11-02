@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // The five principles on a sliced tower: its blocks page under a budget and
@@ -82,7 +82,7 @@ func TestMiniCPMVTowerRelocates(t *testing.T) {
 	tw := m.Tower()
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -131,7 +131,7 @@ func TestMiniCPMVDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 	defer m.Close()
 	tw := m.Tower()
 	img := decodeImage(t, mcvPhoto)
-	run := func(t *testing.T, g *tier.GPU) {
+	run := func(t *testing.T, g *gpu.GPU) {
 		lay, err := tw.Layout(img.Bounds().Dx(), img.Bounds().Dy())
 		if err != nil {
 			t.Fatal(err)
@@ -168,7 +168,7 @@ func TestMiniCPMVDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		var c0 tier.Stats
+		var c0 gpu.Stats
 		if g != nil {
 			c0 = g.Stats()
 		}
@@ -190,7 +190,7 @@ func TestMiniCPMVDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 	t.Run("host", func(t *testing.T) { run(t, nil) })
 	for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+			g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec)}, testTierOpts(t)...)...)
 			if err != nil || g == nil {
 				noDevice(t, spec, err)
 			}

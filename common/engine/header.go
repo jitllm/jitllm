@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // header is what the session header says about the running model: its name,
@@ -104,7 +104,7 @@ func (e *Engine) headerNow() header {
 }
 
 // placedOn names the card holding blocks, and counts the cards that do.
-func placedOn(g *tier.GPU) (string, int) {
+func placedOn(g *gpu.GPU) (string, int) {
 	budgets, placed := g.Budgets(), g.Placed()
 	name, n := "", 0
 	for i, b := range budgets {

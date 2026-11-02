@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestResetClearsTheRecurrentSummary checks Reset makes a hybrid's sequence
@@ -17,7 +17,7 @@ func TestResetClearsTheRecurrentSummary(t *testing.T) {
 	t.Run("cpu", func(t *testing.T) { resetCase(t, m, nil) })
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
+			g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, dev, err)
 			}
@@ -28,7 +28,7 @@ func TestResetClearsTheRecurrentSummary(t *testing.T) {
 }
 
 // resetCase is the gate on g's devices, or on the CPU where g is nil.
-func resetCase(t *testing.T, m *Model, g *tier.GPU) {
+func resetCase(t *testing.T, m *Model, g *gpu.GPU) {
 	place := func(s *Instance) {
 		if g == nil {
 			return

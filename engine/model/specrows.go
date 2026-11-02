@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // The instance half of speculative decoding (spec.go): one call that runs rows of
@@ -316,7 +316,7 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 		if !c.Q4E() { // its hidden state is the residual, taken in q4eCollapse
 			hidden = r.hidden[:cnt*c.NEmbd]
 		}
-		if s.cpuHeadRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt) == jit.DeclineServes {
+		if s.cpuHeadRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt) == composer.DeclineServes {
 			return s.kvCheck()
 		}
 	}
@@ -481,7 +481,7 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 		}
 	}
 	s.growBatch(n)
-	if s.cpuHeadRows(s.bx, logits, nil, nlogit) == jit.DeclineServes {
+	if s.cpuHeadRows(s.bx, logits, nil, nlogit) == composer.DeclineServes {
 		return nil
 	}
 	s.altHeadNorm(nlogit)

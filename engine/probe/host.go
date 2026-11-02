@@ -10,10 +10,10 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/cost"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // The host probe's measuring kernels are generated per architecture: each
@@ -35,7 +35,7 @@ func Host() (cost.Device, error) {
 		return cost.Device{}, err
 	}
 	workers := max(1, len(sched.PCores()))
-	d := cost.Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: workers, Lanes: hostLanes(), ExactDiv: true}}
+	d := cost.Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: workers, Lanes: hostLanes(), ExactDiv: true}}
 	sizes, err := cacheSizes()
 	if err != nil {
 		return d, err

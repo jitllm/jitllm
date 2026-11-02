@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestPlacedPromptsCompileNothing holds the ready boundary for a prompt: once
@@ -29,10 +29,10 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 	ran := 0
 	for _, arm := range []struct {
 		name     string
-		composed tier.Parts
+		composed gpu.Parts
 	}{
-		{"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", tier.ComposedStep},
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", tier.ComposedStep},
+		{"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", gpu.ComposedStep},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", gpu.ComposedStep},
 	} {
 		name := arm.name
 		p := testmodels.Path(name)
@@ -42,10 +42,10 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				continue
 			}
 		}
-		for _, tune := range []tier.TuneMode{tier.TuneOff, tier.TuneAuto} {
+		for _, tune := range []gpu.TuneMode{gpu.TuneOff, gpu.TuneAuto} {
 			t.Run(fmt.Sprintf("%s/tune%d/composed%d", name, tune, arm.composed), func(t *testing.T) {
-				g, err := tier.OpenWith(tier.WithDeviceTune(tune),
-					tier.WithConfig(func(c *tier.Config) {
+				g, err := gpu.OpenWith(gpu.WithDeviceTune(tune),
+					gpu.WithConfig(func(c *gpu.Config) {
 						// The composer forms a prompt block once, at the
 						// reserved width: the widest chunk here is 224 rows.
 						c.NoPromptPrewarm, c.PromptRows = violate, 256
@@ -115,7 +115,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				// Every chunk's every block step the composer's, each at its
 				// own width's form.
 				{
-					np, dp := st.ServedPart(tier.ComposedPrompt)
+					np, dp := st.ServedPart(gpu.ComposedPrompt)
 					if np != len(chunks)*m.Cfg.NLayer || dp != 0 {
 						t.Fatalf("the composer served %d block steps of %d chunks of %d blocks and declined %d: %s",
 							np, len(chunks), m.Cfg.NLayer, dp, g.Err())
@@ -130,7 +130,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 					}
 					for i, n := range st.DeclineBuilt {
 						if n != 0 {
-							t.Fatalf("%d declined prompt block(s) compiled their own kernels at a chunk: %s", n, tier.DeclineName(i))
+							t.Fatalf("%d declined prompt block(s) compiled their own kernels at a chunk: %s", n, gpu.DeclineName(i))
 						}
 					}
 				}

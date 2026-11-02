@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // raggedBound is TestRaggedTowerOnDeviceMatchesHost's NMSE bound.
@@ -60,22 +60,22 @@ func TestRaggedTowerOnDeviceMatchesHost(t *testing.T) {
 	defer func(was int) { tw.opt.towerGPULayers = was }(tw.opt.towerGPULayers)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present", spec)
 			continue
 		}
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
+			defer gpux.Close()
 			for _, n := range []int{-1, 1} {
 				tw.opt.towerGPULayers = n
 				s := tw.testState()
-				s.SetDevice(gpu)
+				s.SetDevice(gpux)
 				placed := s.GPUBlocks()
 				if placed == 0 || n == -1 && placed != tw.Cfg.NLayer {
 					s.Close()
-					t.Fatalf("%s took %d of %d tower blocks (%s)", spec, placed, tw.Cfg.NLayer, gpu.Err())
+					t.Fatalf("%s took %d of %d tower blocks (%s)", spec, placed, tw.Cfg.NLayer, gpux.Err())
 				}
 				got := encode(s)
 				s.Close()

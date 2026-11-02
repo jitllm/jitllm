@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // principleFixtures are the architectures whose gates of the five principles
@@ -89,7 +89,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 			served, declined := st.CPUBlockSteps()
 			for i, n := range declined {
 				if n > 0 {
-					t.Fatalf("%d block steps declined on the composed CPU: %s (%v)", n, jit.DeclineName(i), st.CPUFormErr())
+					t.Fatalf("%d block steps declined on the composed CPU: %s (%v)", n, composer.DeclineName(i), st.CPUFormErr())
 				}
 			}
 			if nl := m.Cfg.NLayer; served < 9*nl || served%nl != 0 {

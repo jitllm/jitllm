@@ -3,7 +3,7 @@ package jlm
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // The expert pages' frames, where the host reserves address space: one

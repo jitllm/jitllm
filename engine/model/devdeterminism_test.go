@@ -3,12 +3,12 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestPoisonedScratchChangesNothing: no kernel may read a scratch region it did
 // not write. A fresh device buffer is usually zero, the identity for a sum, so
-// such a read is latent; tier.WithPoisonScratch fills block scratch and
+// such a read is latent; gpu.WithPoisonScratch fills block scratch and
 // crossing buffers with NaN so it fails inside one session.
 func TestPoisonedScratchChangesNothing(t *testing.T) {
 	m := hybridModelOpt(t, hyOpt{moe: true, deep: true})
@@ -16,11 +16,11 @@ func TestPoisonedScratchChangesNothing(t *testing.T) {
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 
 	run := func(poison bool) [][]float32 {
-		opts := []tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}
+		opts := []gpu.Option{gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff)}
 		if poison {
-			opts = append(opts, tier.WithPoisonScratch(true))
+			opts = append(opts, gpu.WithPoisonScratch(true))
 		}
-		g, err := tier.OpenWith(opts...)
+		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

@@ -10,15 +10,15 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/kernels"
 	hw "github.com/jitllm/jitllm/engine/cost"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The CPU is a device like a card: a block placed on it runs what the
@@ -31,27 +31,27 @@ import (
 // declined by name (CPUBlockSteps), as the tier counts a card's.
 
 // CPUBlockSteps is how many block steps on the CPU the composer served, and
-// how many it declined, by reason (jit.DeclineName); a decline is the
+// how many it declined, by reason (composer.DeclineName); a decline is the
 // step's error (cpuRefused).
-func (s *Instance) CPUBlockSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUBlockSteps() (served int, declined [composer.NumDeclines]int) {
 	return s.cpu.served, s.cpu.declined
 }
 
 // cpuRefused counts the composer's decline of block li's step on the CPU and
 // is the step's error: the composer is the only path, so no other kernels run
 // the block.
-func (s *Instance) cpuRefused(li int, why jit.Decline) error {
+func (s *Instance) cpuRefused(li int, why composer.Decline) error {
 	s.cpu.declined[why]++
-	if why == jit.DeclineNotFormed && s.cpu.formErr != nil {
-		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the first: %w)", li, jit.DeclineName(int(why)), s.cpu.formErr)
+	if why == composer.DeclineNotFormed && s.cpu.formErr != nil {
+		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the first: %w)", li, composer.DeclineName(int(why)), s.cpu.formErr)
 	}
-	return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s", li, jit.DeclineName(int(why)))
+	return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s", li, composer.DeclineName(int(why)))
 }
 
 // cpuHeadRefused is the composer's decline of the head on the CPU as the
 // step's error, as cpuRefused is a block's.
-func cpuHeadRefused(why jit.Decline) error {
-	return fmt.Errorf("model: the composer does not serve the head on the CPU: %s", jit.DeclineName(int(why)))
+func cpuHeadRefused(why composer.Decline) error {
+	return fmt.Errorf("model: the composer does not serve the head on the CPU: %s", composer.DeclineName(int(why)))
 }
 
 // CPURecSteps is how many steps of several rows the CPU's linear blocks
@@ -92,7 +92,7 @@ const (
 	cpuArgRecState
 	cpuArgRecConv
 	cpuArgRecConvOut
-	// cpuArgShare is the rows a call of a Share code takes (jit.Code.Share).
+	// cpuArgShare is the rows a call of a Share code takes (composer.Code.Share).
 	cpuArgShare
 	cpuArgRecRows
 	// cpuArgPoolPos is the positions table a pooled readout reads its live
@@ -131,7 +131,7 @@ type cpuArg struct {
 	// stream is the residual stream a cpuArgX address is in.
 	stream int
 	// per is the elements the address moves a unit of each call
-	// coordinate (jit.CallArg.Per), moves whether any does.
+	// coordinate (composer.CallArg.Per), moves whether any does.
 	per   [2]int
 	moves bool
 	// inst is a rotary table's instance (cpuArgRope, cpuArgPlanes).
@@ -149,12 +149,12 @@ type cpuCode struct {
 	n             int
 	// serial is a kernel over calls that write a buffer every call shares.
 	serial bool
-	// live is the code's hold on a call's rows (jit.Code's Live and
+	// live is the code's hold on a call's rows (composer.Code's Live and
 	// LiveUnits): a call of rows rows runs the units of the leading axis
-	// they reach, each of inner calls (jit.RowCalls).
-	live  jit.Code
+	// they reach, each of inner calls (composer.RowCalls).
+	live  composer.Code
 	inner int
-	// tiles is a kernel whose inner calls tile a weight (jit.Code.TileMajor):
+	// tiles is a kernel whose inner calls tile a weight (composer.Code.TileMajor):
 	// its calls run a tile for every live row before the next tile.
 	tiles bool
 	// name is the composer's name for the kernel; nanos and runs its time
@@ -177,8 +177,8 @@ type cpuCode struct {
 	chain, units int
 	sliced       []cpuSlice
 	// share is the code's hold on a weight's rows sized at the launch
-	// (jit.Code.Share).
-	share jit.Code
+	// (composer.Code.Share).
+	share composer.Code
 }
 
 type cpuSlice struct {
@@ -203,7 +203,7 @@ type cpuBlockForm struct {
 	// keys the positions of a sequence's history it attends at most.
 	rows, keys int
 	// unit is the most rows a unit of a kernel's leading axis holds
-	// (jit.RowJam): a call's rows past a whole number of them are run
+	// (composer.RowJam): a call's rows past a whole number of them are run
 	// from a copy of the residual, so a unit's rows past the call's write
 	// no other rows.
 	unit int
@@ -242,11 +242,11 @@ func (f *cpuBlockForm) close() {
 // are asked of.
 type cpuForms struct {
 	mu  sync.Mutex
-	reg *jit.Registry
-	// reg32 is reg with histories kept at f32 (jit.Registry.WithoutHalves).
-	reg32 *jit.Registry
-	m     map[jit.Key]*cpuBlockForm
-	err   map[jit.Key]error
+	reg *composer.Registry
+	// reg32 is reg with histories kept at f32 (composer.Registry.WithoutHalves).
+	reg32 *composer.Registry
+	m     map[composer.Key]*cpuBlockForm
+	err   map[composer.Key]error
 	// planes is each block's rotary planes where a form of it reads them
 	// (cpuArgPlanes), set once under mu before the block's first call.
 	// tabPlanes is each rotary's planes (cpuTablePlanes).
@@ -270,7 +270,7 @@ type cpuState struct {
 	blocks    []*cpuBlock
 	composed  []int
 	served    int
-	declined  [jit.NumDeclines]int
+	declined  [composer.NumDeclines]int
 	formErr   error
 	// fpages is a layer's page table under cpuFaultPage (cpuFaultTable).
 	fpages []uint32
@@ -435,9 +435,9 @@ type cpuBlock struct {
 	// starts in each row: the call binds the side input there, so blocks
 	// that differ by their slice alone share a form.
 	sideOff int
-	why     jit.Decline
+	why     composer.Decline
 	// rowsWhy is why the rows' form is not served, where it is not.
-	rowsWhy jit.Decline
+	rowsWhy composer.Decline
 }
 
 // cpuRowsCap is the rows the CPU's form of several rows is composed for: a
@@ -505,13 +505,13 @@ type cpuBound struct {
 const cpuIO = 6
 
 // composedCPUDevice is the CPU as the composer forms for it.
-func composedCPUDevice(workers int) jit.Device {
-	return jit.Device{Kind: jit.DeviceCPU, Slots: max(workers, 1), Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+func composedCPUDevice(workers int) composer.Device {
+	return composer.Device{Kind: composer.DeviceCPU, Slots: max(workers, 1), Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
 }
 
 // composedCPU is this instance's CPU as the composer forms for it, its launch
 // cost its probe row's.
-func (s *Instance) composedCPU() jit.Device {
+func (s *Instance) composedCPU() composer.Device {
 	workers := 1
 	if s.jit != nil {
 		workers = s.jit.Workers()
@@ -548,24 +548,24 @@ func (s *Instance) cpuFaultRowWords(t []uint32) {
 
 // cpuStep runs block li on the CPU the composer's way, or says why not. The
 // residual is s.x; the rotary table cs.
-func (s *Instance) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
+func (s *Instance) cpuStep(li int, l *layer, cs []float32) (composer.Decline, error) {
 	cb, why := s.cpuBlockOf(li)
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		return why, nil
 	}
 	if err := s.cpuOneTable(); err != nil {
-		return jit.DeclineServes, err
+		return composer.DeclineServes, err
 	}
 	// A block sharing another's history reads its source's pages.
 	hl := s.c.KVSource(li)
 	pg := &s.kv.layers[hl]
 	pos := s.pos
 	if pg.p > 0 {
-		if why := s.cpuHistory(hl, pos); why != jit.DeclineServes {
+		if why := s.cpuHistory(hl, pos); why != composer.DeclineServes {
 			return why, nil
 		}
 	}
-	if why := s.cpuEntReady(li, pos); why != jit.DeclineServes {
+	if why := s.cpuEntReady(li, pos); why != composer.DeclineServes {
 		return why, nil
 	}
 	b := &s.cpu.bound
@@ -579,7 +579,7 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) 
 	b.tok, b.pos, b.csSWA = s.cpu.tok1[:], s.cpu.pos1[:], s.csSWA
 	s.cpu.onePos[0] = pos
 	s.cpuEntBind(b, li, s.cpu.entRow[:], nil, s.cpu.onePos[:])
-	if why := s.cpuWeights(cb.f, li, l); why != jit.DeclineServes {
+	if why := s.cpuWeights(cb.f, li, l); why != composer.DeclineServes {
 		return why, nil
 	}
 	s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos)), uint32(pos + 1), uint32(pos)}
@@ -592,38 +592,38 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) 
 		s.cpuFaultRowWords(s.cpu.rows[:])
 	}
 	if err := s.cpuForm(b, cb.f, li); err != nil {
-		return jit.DeclineServes, err
+		return composer.DeclineServes, err
 	}
 	if pg.p > 0 && pos+1 > pg.written {
 		pg.written = pos + 1
 	}
-	return jit.DeclineServes, nil
+	return composer.DeclineServes, nil
 }
 
 // cpuRows runs block li on the CPU the composer's way for the n rows of x,
 // row i at position pos[i] of sequence seq[i], its rotary table the i-th of
 // cs, or says why not: through the rows' form, a call of at most its
 // capacity at a time, each row's history in its own sequence's pages.
-func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int) (jit.Decline, error) {
+func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int) (composer.Decline, error) {
 	if err := s.cpuRowTables(seq, pos); err != nil {
-		return jit.DeclineServes, err
+		return composer.DeclineServes, err
 	}
 	f, why := s.cpuRowsForm(li, l)
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		return why, nil
 	}
-	if why := s.cpuRowsReady(li, f, pos); why != jit.DeclineServes {
+	if why := s.cpuRowsReady(li, f, pos); why != composer.DeclineServes {
 		return why, nil
 	}
 	side, _ := s.cpuSideRows(li)
-	return jit.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), seq, pos)
+	return composer.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), seq, pos)
 }
 
 // cpuTowerRows runs tower block li on the CPU the composer's way over the
 // picture's n rows in s.bx, one run of rows attending both ways (bidir.go),
 // or says why not. Its history is the instance's arena page, lent to the block
 // for its run.
-func (s *Instance) cpuTowerRows(li int, l *layer, n int) (jit.Decline, error) {
+func (s *Instance) cpuTowerRows(li int, l *layer, n int) (composer.Decline, error) {
 	v := s.vis
 	var wins []nn.KeyRun
 	if s.visWindowed(li) {
@@ -641,13 +641,13 @@ func (s *Instance) cpuTowerRows(li int, l *layer, n int) (jit.Decline, error) {
 // each window a run its rows attend inside; cs is the rows' rotary table,
 // nrot wide. Its history is the segment's arena (ncArena), lent to the
 // block for its run.
-func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, wins []nn.KeyRun) (jit.Decline, error) {
+func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, wins []nn.KeyRun) (composer.Decline, error) {
 	f, why := s.cpuRowsForm(li, l)
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		return why, nil
 	}
 	if n > f.keys {
-		return jit.DeclineSessions, nil
+		return composer.DeclineSessions, nil
 	}
 	a := s.nc()
 	a.run[0] = nn.KeyRun{Lo: 0, Hi: n}
@@ -661,7 +661,7 @@ func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32
 	seq, pos := s.cpuRowsOf(0, 0, n)
 	err := s.cpuRowsRun(li, l, f, x, n*s.c.NEmbd, nil, cs, nrot, seq, pos)
 	s.bidir, s.cpu.runWindows = nil, false
-	return jit.DeclineServes, err
+	return composer.DeclineServes, err
 }
 
 // cpuSessions is cpuRows for a step across sessions (stepHost): row i's
@@ -672,9 +672,9 @@ func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32
 // session's consecutive rows run one after another, the rows after the
 // logit rows first, so a session's last row reads the keys its earlier
 // rows wrote.
-func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, nlogit int) (jit.Decline, error) {
+func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, nlogit int) (composer.Decline, error) {
 	if err := s.cpuRowTables(seq, pos); err != nil {
-		return jit.DeclineServes, err
+		return composer.DeclineServes, err
 	}
 	cs, nrot := s.bcs, s.c.RopeW()
 	n := len(pos)
@@ -694,7 +694,7 @@ func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, po
 		}
 	}
 	why, err := s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, n, false)
-	if why != jit.DeclineServes || err != nil {
+	if why != composer.DeclineServes || err != nil {
 		return why, err
 	}
 	if why, err = s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, nlogit, n, true); err != nil {
@@ -706,7 +706,7 @@ func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, po
 // cpuOwnerRuns makes ready (run unset) or runs block li over the rows
 // [lo, hi) of a step across sessions, a run of one session's consecutive
 // rows at a time, on that session's form.
-func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, lo, hi int, run bool) (jit.Decline, error) {
+func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, lo, hi int, run bool) (composer.Decline, error) {
 	d := s.c.NEmbd
 	rside, pw := s.cpuSideRows(li)
 	for a := lo; a < hi; {
@@ -715,7 +715,7 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 			b++
 		}
 		if o.model != s.m {
-			return jit.DeclineSessions, nil
+			return composer.DeclineSessions, nil
 		}
 		// A row of another instance runs on that instance's form, composed
 		// for its history; a session leasing s, on s's with its history bound.
@@ -724,7 +724,7 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 			oi = s.rowInst[a]
 		}
 		f, why := oi.cpuRowsForm(li, l)
-		if why != jit.DeclineServes {
+		if why != composer.DeclineServes {
 			return why, nil
 		}
 		lead := oi.Session
@@ -736,16 +736,16 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 			}
 			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
 				oi.Session = lead
-				return jit.DeclineServes, err
+				return composer.DeclineServes, err
 			}
-		} else if why := oi.cpuRowsReady(li, f, pos[a:b]); why != jit.DeclineServes {
+		} else if why := oi.cpuRowsReady(li, f, pos[a:b]); why != composer.DeclineServes {
 			oi.Session = lead
 			return why, nil
 		}
 		oi.Session = lead
 		a = b
 	}
-	return jit.DeclineServes, nil
+	return composer.DeclineServes, nil
 }
 
 // cpuRecRows runs linear block li over the n rows of x, or says why not:
@@ -758,17 +758,17 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 // base -1 for none) keep each row's summary as main's row loop does: the
 // speculative rows' snapshot, which takes the row at a time, and the
 // restore points, where the rows' form ends a call.
-func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []int, base, p0 int) (jit.Decline, error) {
+func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []int, base, p0 int) (composer.Decline, error) {
 	if err := s.cpuRowTables(seq, pos); err != nil {
-		return jit.DeclineServes, err
+		return composer.DeclineServes, err
 	}
 	cb, why := s.cpuBlockOf(li)
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		return why, nil
 	}
 	if f := s.cpuRecWhole(li, l, cb, seq, pos, order, base); f != nil {
 		why, err := s.cpuRecRun(li, l, f, x, cs, seq, pos, base, p0)
-		if why == jit.DeclineServes && err == nil {
+		if why == composer.DeclineServes && err == nil {
 			s.cpu.recWhole++
 		}
 		return why, err
@@ -776,7 +776,7 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 	if len(pos) > 1 {
 		s.cpu.recStepped++
 	}
-	if why := s.cpuWeights(cb.f, li, l); why != jit.DeclineServes {
+	if why := s.cpuWeights(cb.f, li, l); why != composer.DeclineServes {
 		return why, nil
 	}
 	// x is stream-major: row r's stream k at (k*rows + r)*n_embd.
@@ -796,7 +796,7 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 		pg := &s.kv.layers[li]
 		// A block that attends as well writes and reads the row's history.
 		if pg.p > 0 {
-			if why := s.cpuHistory(li, pos[r]); why != jit.DeclineServes {
+			if why := s.cpuHistory(li, pos[r]); why != composer.DeclineServes {
 				s.Session = lead
 				return why, nil
 			}
@@ -821,7 +821,7 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 		s.cpu.call[0] = 1
 		if err := s.cpuForm(b, cb.f, li); err != nil {
 			s.Session = lead
-			return jit.DeclineServes, err
+			return composer.DeclineServes, err
 		}
 		if pg.p > 0 && pos[r]+1 > pg.written {
 			pg.written = pos[r] + 1
@@ -832,7 +832,7 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 			s.recRowPoint(li, slot, p0+r+1)
 		}
 	}
-	return jit.DeclineServes, nil
+	return composer.DeclineServes, nil
 }
 
 // cpuRecWhole is block li's rows' form where the step's rows run on it
@@ -861,7 +861,7 @@ func (s *Instance) cpuRecWhole(li int, l *layer, cb *cpuBlock, seq, pos, order [
 		}
 		last[q] = pos[i]
 	}
-	if s.cpuWeights(cb.rows, li, l) != jit.DeclineServes {
+	if s.cpuWeights(cb.rows, li, l) != composer.DeclineServes {
 		return nil
 	}
 	return cb.rows
@@ -871,8 +871,8 @@ func (s *Instance) cpuRecWhole(li int, l *layer, cb *cpuBlock, seq, pos, order [
 // call at most f's rows; a prompt's (base its first row in the prompt, p0
 // its first position) end a call at each restore point inside them and seal
 // it there.
-func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, seq, pos []int, base, p0 int) (jit.Decline, error) {
-	if why := s.cpuRowsReady(li, f, pos); why != jit.DeclineServes {
+func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, seq, pos []int, base, p0 int) (composer.Decline, error) {
+	if why := s.cpuRowsReady(li, f, pos); why != composer.DeclineServes {
 		return why, nil
 	}
 	n, d, nrot := len(pos), s.c.NEmbd, s.c.RopeW()
@@ -896,14 +896,14 @@ func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32,
 			side = side[a*pw:]
 		}
 		if err := s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
-			return jit.DeclineServes, err
+			return composer.DeclineServes, err
 		}
 		if base >= 0 {
 			s.recRowPoint(li, seq[a], p0+b)
 		}
 		a = b
 	}
-	return jit.DeclineServes, nil
+	return composer.DeclineServes, nil
 }
 
 // cpuRecDesc is the run descriptor (kernels.RunDescWords' layout) of a
@@ -956,28 +956,28 @@ func (s *Instance) cpuRecLi(li int) int {
 
 // cpuRowsForm is block li's rows' form, its weights the block's, or why
 // not.
-func (s *Instance) cpuRowsForm(li int, l *layer) (*cpuBlockForm, jit.Decline) {
+func (s *Instance) cpuRowsForm(li int, l *layer) (*cpuBlockForm, composer.Decline) {
 	cb, why := s.cpuBlockOf(li)
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		return nil, why
 	}
 	if cb.rows == nil {
 		return nil, cb.rowsWhy
 	}
-	if why := s.cpuWeights(cb.rows, li, l); why != jit.DeclineServes {
+	if why := s.cpuWeights(cb.rows, li, l); why != composer.DeclineServes {
 		return nil, why
 	}
-	return cb.rows, jit.DeclineServes
+	return cb.rows, composer.DeclineServes
 }
 
 // cpuRowsReady makes the pages of the history the rows at pos write and
 // read resident, in block li's arena, or says why f cannot run them: a
 // history past f's key bound, a page outside the arena.
-func (s *Instance) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
+func (s *Instance) cpuRowsReady(li int, f *cpuBlockForm, pos []int) composer.Decline {
 	hl := s.c.KVSource(li)
 	pg := &s.kv.layers[hl]
 	if pg.p == 0 {
-		return jit.DeclineServes
+		return composer.DeclineServes
 	}
 	// Every row's page is written before any is read: a step's rows stand
 	// in any order, and a page holds every sequence's positions.
@@ -987,9 +987,9 @@ func (s *Instance) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline 
 		start, end = min(start, pg.keyStart(p)), max(end, p+1)
 	}
 	if end > f.keys {
-		return jit.DeclineSessions
+		return composer.DeclineSessions
 	}
-	if why := s.cpuReadable(hl, start, end-1); why != jit.DeclineServes {
+	if why := s.cpuReadable(hl, start, end-1); why != composer.DeclineServes {
 		return why
 	}
 	return s.cpuEntReady(li, pos...)
@@ -1213,7 +1213,7 @@ func (s *Instance) cpuRowsOf(slot, p0, n int) (seq, pos []int) {
 
 // cpuHistory makes the pages block li's step reads and writes resident,
 // in the layer's arena, or says why they are not.
-func (s *Instance) cpuHistory(li, pos int) jit.Decline {
+func (s *Instance) cpuHistory(li, pos int) composer.Decline {
 	s.cpuWritable(li, pos)
 	return s.cpuReadable(li, s.kv.layers[li].keyStart(pos), pos)
 }
@@ -1229,20 +1229,20 @@ func (s *Instance) cpuWritable(li, pos int) {
 
 // cpuReadable makes the pages of block li's positions [start, pos]
 // resident, in the layer's arena, or says why they are not.
-func (s *Instance) cpuReadable(li, start, pos int) jit.Decline {
+func (s *Instance) cpuReadable(li, start, pos int) composer.Decline {
 	pg := &s.kv.layers[li]
 	n, _ := pg.page(pos)
 	s.kvEnsureWindow(li, start, pos-start)
 	for p := start / pg.p; p <= n; p++ {
 		if !pg.arenaPage(p) {
-			return jit.DeclinePageOut
+			return composer.DeclinePageOut
 		}
 	}
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // cpuWeights says every weight f binds is one block l holds whole.
-func (s *Instance) cpuWeights(f *cpuBlockForm, li int, l *layer) jit.Decline {
+func (s *Instance) cpuWeights(f *cpuBlockForm, li int, l *layer) composer.Decline {
 	for i := range f.codes {
 		for _, a := range f.codes[i].args {
 			switch a.src {
@@ -1250,25 +1250,25 @@ func (s *Instance) cpuWeights(f *cpuBlockForm, li int, l *layer) jit.Decline {
 				if jlm.ExpertBank(a.role) {
 					// A bank is read in the host's expert pages (cpuBanksPaged).
 					if li >= len(s.cpu.banks) || s.cpu.banks[li][a.role-jlm.RoleExpGateBank][a.region] == nil {
-						return jit.DeclineNoWeight
+						return composer.DeclineNoWeight
 					}
 					continue
 				}
 				w := s.cpuRoleWeight(li, l, a.role)
 				if w == nil || w.packed == nil && len(w.data) == 0 {
-					return jit.DeclineNoWeight
+					return composer.DeclineNoWeight
 				}
 				if p := w.packed; p != nil && (p.Row != 0 || p.Stride != 0 && p.Stride != w.rows || p.Sheet != nil) {
-					return jit.DeclineCutWeight
+					return composer.DeclineCutWeight
 				}
 			case cpuArgVector:
 				if len(s.cpuRoleVector(li, l, a.role)) == 0 {
-					return jit.DeclineNoWeight
+					return composer.DeclineNoWeight
 				}
 			}
 		}
 	}
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // cpuOwnOffHeap is the words past which an own buffer is anonymous memory
@@ -1592,7 +1592,7 @@ func (s *Instance) cpuCompose(li int) {
 		return
 	}
 	cb.why = s.cpuWhy(li)
-	if cb.why != jit.DeclineServes {
+	if cb.why != composer.DeclineServes {
 		return
 	}
 	f, err := s.m.formCPUBlock(s, li, cb, 1)
@@ -1613,7 +1613,7 @@ func (s *Instance) cpuCompose(li int) {
 
 // cpuFormDecline is the reason a form's error declines its block by, the
 // first error kept (CPUFormErr).
-func (s *Instance) cpuFormDecline(err error) jit.Decline {
+func (s *Instance) cpuFormDecline(err error) composer.Decline {
 	if s.cpu.formErr == nil {
 		s.cpu.formErr = err
 	}
@@ -1621,13 +1621,13 @@ func (s *Instance) cpuFormDecline(err error) jit.Decline {
 	if errors.As(err, &d) {
 		return d.why
 	}
-	return jit.DeclineNotFormed
+	return composer.DeclineNotFormed
 }
 
 // cpuBlockOf is block li's composition on the CPU, made at its placement.
-func (s *Instance) cpuBlockOf(li int) (*cpuBlock, jit.Decline) {
+func (s *Instance) cpuBlockOf(li int) (*cpuBlock, composer.Decline) {
 	if li >= len(s.cpu.blocks) || s.cpu.blocks[li] == nil {
-		return nil, jit.DeclineUnplaced
+		return nil, composer.DeclineUnplaced
 	}
 	cb := s.cpu.blocks[li]
 	return cb, cb.why
@@ -1640,7 +1640,7 @@ func (s *Instance) CPUCompositions() []int { return s.cpu.composed }
 
 // cpuWhy is what keeps block li off the composer's CPU path before it is
 // asked: what its graph and history need that the CPU device does not hold.
-func (s *Instance) cpuWhy(li int) jit.Decline {
+func (s *Instance) cpuWhy(li int) composer.Decline {
 	c := s.c
 	g := s.m.Composing().BlockGraph(li)
 	// A block sharing another's history reads its source's pages.
@@ -1649,26 +1649,26 @@ func (s *Instance) cpuWhy(li int) jit.Decline {
 		return s.cpuTowerWhy(g)
 	}
 	switch {
-	case !jit.HostCPULowers():
-		return jit.DeclineISA
+	case !composer.HostCPULowers():
+		return composer.DeclineISA
 	case g == nil:
-		return jit.DeclineNoGraph
+		return composer.DeclineNoGraph
 	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && s.cpuSide(li) == nil:
-		return jit.DeclineFeeds
+		return composer.DeclineFeeds
 	case c.MoEAt(li) && !s.cpuBanksPaged(li):
 		// The forms read a bank as one view of its experts in the host's
 		// expert pages (jlm.File.BankView); a bank with none is not read.
-		return jit.DeclineExperts
+		return composer.DeclineExperts
 	case c.LayerKind(li).Recurrent() && (li >= len(s.rstate) || s.rstate[li] == nil || s.rconv[li] == nil):
-		return jit.DeclineRecurrent
+		return composer.DeclineRecurrent
 	case s.kvl.fmt != cpu.KVF16 && s.kvl.fmt != cpu.KVF32:
-		// The CPU's profile keeps a history binary16 itself (jit.Halves),
+		// The CPU's profile keeps a history binary16 itself (composer.Halves),
 		// or at f32 without that pass.
-		return jit.DeclineKVFormat
+		return composer.DeclineKVFormat
 	case pg.p > 0 && pg.arena == nil:
-		return jit.DeclinePageOut
+		return composer.DeclinePageOut
 	}
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // sideAtBinding moves the offset of every slice of gr's side input (its
@@ -1736,23 +1736,23 @@ func (s *Instance) cpuSideOff(li int) int {
 // encoder's): its history is the block's run's own, written and read inside
 // the one call over the segment's rows (lendNC), so no other path reads its
 // format, and its page is the instance's arena.
-func (s *Instance) cpuTowerWhy(g *graph.Graph) jit.Decline {
+func (s *Instance) cpuTowerWhy(g *graph.Graph) composer.Decline {
 	switch {
-	case !jit.HostCPULowers():
-		return jit.DeclineISA
+	case !composer.HostCPULowers():
+		return composer.DeclineISA
 	case g == nil:
-		return jit.DeclineNoGraph
+		return composer.DeclineNoGraph
 	case len(g.Out) != 1 || len(g.In) != 1:
-		return jit.DeclineFeeds
+		return composer.DeclineFeeds
 	case s.nc().arena == nil:
-		return jit.DeclinePageOut
+		return composer.DeclinePageOut
 	}
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // cpuDeclineError is a form the CPU device refuses by a named reason.
 type cpuDeclineError struct {
-	why jit.Decline
+	why composer.Decline
 	err error
 }
 
@@ -1796,9 +1796,9 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpuB
 	if a := s.nc(); a != nil {
 		page = a.page
 	}
-	req := jit.Request{Graph: &gr, Formats: formats, Strides: m.cpuStrides(li, g),
-		Step:    jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.jit.ActWindow(), Seqs: max(s.nseq, 1)},
-		History: jit.History{ValuesInKeys: pg.latent},
+	req := composer.Request{Graph: &gr, Formats: formats, Strides: m.cpuStrides(li, g),
+		Step:    composer.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.jit.ActWindow(), Seqs: max(s.nseq, 1)},
+		History: composer.History{ValuesInKeys: pg.latent},
 		Device:  s.composedCPU()}
 	// A text block turns by the rotary its rope ops state, of the model's
 	// (composing.Rotaries): each its own table, bound by instance.
@@ -1818,24 +1818,24 @@ func readsPlanes(g *graph.Graph) bool {
 
 // cpuFormOf is req's form on the CPU, mapped once for the model by its Key;
 // whole is buildCPUForm's.
-func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart, whole, f32 bool) (*cpuBlockForm, error) {
+func (m *Model) cpuFormOf(req composer.Request, gr *graph.Graph, rows int, apart, whole, f32 bool) (*cpuBlockForm, error) {
 	m.cpuComposes.Add(1)
 	c := &m.cpuForms
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.reg == nil {
-		c.reg = jit.Default()
-		c.reg32 = c.reg.WithoutHalves(jit.DeviceCPU)
+		c.reg = composer.Default()
+		c.reg32 = c.reg.WithoutHalves(composer.DeviceCPU)
 	}
 	if c.m == nil {
-		c.m, c.err = map[jit.Key]*cpuBlockForm{}, map[jit.Key]error{}
+		c.m, c.err = map[composer.Key]*cpuBlockForm{}, map[composer.Key]error{}
 	}
 	reg := c.reg
 	if f32 {
 		reg = c.reg32
 	}
 	if m.opt.cpuFloat {
-		reg = reg.WithoutInt8(jit.DeviceCPU).WithoutSplits(jit.DeviceCPU)
+		reg = reg.WithoutInt8(composer.DeviceCPU).WithoutSplits(composer.DeviceCPU)
 	}
 	key, codes, err := reg.Form(req)
 	if err != nil {
@@ -1866,7 +1866,7 @@ func (m *Model) CPUComposes() int64 { return m.cpuComposes.Load() }
 // input and output the residual, or with apart each an io place of its own.
 // A whole form is run at its rows and no fewer (a convolutional block's,
 // over its grid), so its kernels need not be held to a call's rows.
-func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool) (*cpuBlockForm, error) {
+func buildCPUForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole bool) (*cpuBlockForm, error) {
 	if apart && len(gr.In)+len(gr.Out) > cpuIO {
 		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), cpuIO)
 	}
@@ -1877,11 +1877,11 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 	// A kernel's constant block is its own: two kernels' blocks may share a
 	// name and hold different words.
 	type ownKey struct {
-		o    jit.Operand
+		o    composer.Operand
 		code int
 	}
 	own := map[ownKey]int{}
-	ownOf := func(o jit.Operand, code, words int, consts []uint32) int {
+	ownOf := func(o composer.Operand, code, words int, consts []uint32) int {
 		key := ownKey{o, -1}
 		if consts != nil {
 			key.code = code
@@ -1903,7 +1903,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 			f.close()
 			return nil, fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		cc := cpuCode{calls: c.Calls, n: 1, name: c.Name, share: jit.Code{Share: c.Share, ShareUnit: c.ShareUnit}}
+		cc := cpuCode{calls: c.Calls, n: 1, name: c.Name, share: composer.Code{Share: c.Share, ShareUnit: c.ShareUnit}}
 		if c.Share > 0 && len(c.Calls) != 1 {
 			f.close()
 			return nil, fmt.Errorf("%s: a share of rows over calls %v", c.Name, c.Calls)
@@ -1917,7 +1917,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 			// read and write rows past the call's. A scan's calls are its
 			// state's rows, each reading the call's rows its descriptor
 			// names; a kernel that holds no rows of a step (a table over the
-			// history) runs whole (jit.Code.LiveUnitsOf).
+			// history) runs whole (composer.Code.LiveUnitsOf).
 			if c.Live == 0 || len(c.Calls) == 0 || c.Calls[0] != c.LiveUnits {
 				f.close()
 				var binds []string
@@ -1931,22 +1931,22 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 				return nil, fmt.Errorf("%s at %d rows: its calls %v hold no rows of a call (live %d of %d units; passes %v; binds %v)",
 					c.Name, rows, c.Calls, c.Live, c.LiveUnits, c.Passes, binds)
 			}
-			cc.live, cc.inner = jit.Code{Live: c.Live, LiveUnits: c.LiveUnits}, cc.n/c.Calls[0]
+			cc.live, cc.inner = composer.Code{Live: c.Live, LiveUnits: c.LiveUnits}, cc.n/c.Calls[0]
 			cc.tiles = c.TileMajor && cc.inner > 1
 			f.unit = max(f.unit, c.Live/c.LiveUnits)
 		}
-		bytes := map[jit.Operand]int64{}
-		reach := map[jit.Operand][]int{}
+		bytes := map[composer.Operand]int64{}
+		reach := map[composer.Operand][]int{}
 		for _, r := range c.Reach {
 			reach[r.Operand] = r.Per
 		}
 		// rw is each operand's use: 1 read, 2 written.
-		rw := map[jit.Operand]uint8{}
+		rw := map[composer.Operand]uint8{}
 		for _, bd := range c.Binds {
-			if o := bd.Operand; bd.Writes && o.Kind == jit.OperandTable && (o.Table == jit.TableKeys || o.Table == jit.TableValues) {
+			if o := bd.Operand; bd.Writes && o.Kind == composer.OperandTable && (o.Table == composer.TableKeys || o.Table == composer.TableValues) {
 				f.keysEnd = ci + 1
 			}
-			if o := bd.Operand; o.Kind == jit.OperandValue {
+			if o := bd.Operand; o.Kind == composer.OperandValue {
 				if k := streamIn(gr, o.Value); k >= 0 && bd.Read {
 					cc.reads |= 1 << k
 				}
@@ -1963,12 +1963,12 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 			if bd.Writes {
 				rw[o] |= 2
 			}
-			if bd.Writes && bd.Operand.Kind == jit.OperandScratch && !bd.Own && !callsOwnScratch(c, bd.Operand, bd.Bytes) {
+			if bd.Writes && bd.Operand.Kind == composer.OperandScratch && !bd.Own && !callsOwnScratch(c, bd.Operand, bd.Bytes) {
 				cc.serial = true
 			}
 			if bd.Writes {
 				n := o.Name
-				if o.Kind == jit.OperandValue && int(o.Value) < len(gr.Values) {
+				if o.Kind == composer.OperandValue && int(o.Value) < len(gr.Values) {
 					n = gr.Values[o.Value].Name
 				}
 				cc.desc += " " + n
@@ -2010,17 +2010,17 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 				return nil, fmt.Errorf("%s: an offset of %v the caller computes", c.Name, o)
 			case a.Words != nil:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, len(a.Words), a.Words)
-			case apart && o.Kind == jit.OperandValue && slices.Contains(gr.In, o.Value):
+			case apart && o.Kind == composer.OperandValue && slices.Contains(gr.In, o.Value):
 				ar.src, ar.i = cpuArgIO, slices.Index(gr.In, o.Value)
-			case apart && o.Kind == jit.OperandValue && slices.Contains(gr.Out, o.Value):
+			case apart && o.Kind == composer.OperandValue && slices.Contains(gr.Out, o.Value):
 				ar.src, ar.i = cpuArgIO, len(gr.In)+slices.Index(gr.Out, o.Value)
-			case o.Kind == jit.OperandValue && streamIn(gr, o.Value) >= 0:
+			case o.Kind == composer.OperandValue && streamIn(gr, o.Value) >= 0:
 				ar.src, ar.stream = cpuArgX, streamIn(gr, o.Value)
-			case o.Kind == jit.OperandValue && slices.Contains(gr.Out, o.Value):
+			case o.Kind == composer.OperandValue && slices.Contains(gr.Out, o.Value):
 				ar.src, ar.stream = cpuArgX, slices.Index(gr.Out, o.Value)
-			case o.Kind == jit.OperandValue && len(gr.In) == len(gr.Out)+1 && o.Value == gr.In[len(gr.Out)]:
+			case o.Kind == composer.OperandValue && len(gr.In) == len(gr.Out)+1 && o.Value == gr.In[len(gr.Out)]:
 				ar.src = cpuArgSide
-			case o.Kind == jit.OperandValue:
+			case o.Kind == composer.OperandValue:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, max(gr.Values[o.Value].Width, int(bytes[o]/4))+a.Offset, nil)
 				switch o.Value {
 				case selV:
@@ -2030,55 +2030,55 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 						wOwn[o.Value] = ar.i
 					}
 				}
-			case o.Kind == jit.OperandScratch:
+			case o.Kind == composer.OperandScratch:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, int(bytes[o]/4)+a.Offset+1, nil)
-			case o.Kind == jit.OperandWeight && o.Region >= 0 && o.Region < 3:
+			case o.Kind == composer.OperandWeight && o.Region >= 0 && o.Region < 3:
 				ar.src, ar.role, ar.region = cpuArgWeight, o.Role, uint8(o.Region)
-			case o.Kind == jit.OperandVector:
+			case o.Kind == composer.OperandVector:
 				ar.src, ar.role = cpuArgVector, o.Role
-			case o.Kind == jit.OperandTable:
+			case o.Kind == composer.OperandTable:
 				switch t := o.Table; {
-				case t == jit.TableAngles && o.Instance < 2:
+				case t == composer.TableAngles && o.Instance < 2:
 					ar.src, ar.inst = cpuArgRope, o.Instance
-				case t == jit.TablePlanes && o.Instance < 2:
+				case t == composer.TablePlanes && o.Instance < 2:
 					ar.src, ar.inst = cpuArgPlanes, o.Instance
-				case t == jit.TableRopeRows:
+				case t == composer.TableRopeRows:
 					ar.src = cpuArgRopeRows
-				case t == jit.TableRopeMarks:
+				case t == composer.TableRopeMarks:
 					ar.src = cpuArgRopeMarks
-				case t == jit.TableKeys:
+				case t == composer.TableKeys:
 					ar.src = cpuArgKeys
-				case t == jit.TableEntKeys:
+				case t == composer.TableEntKeys:
 					ar.src = cpuArgEntKeys
-				case t == jit.TableEntPages:
+				case t == composer.TableEntPages:
 					ar.src = cpuArgEntPages
-				case t == jit.TableEntRows:
+				case t == composer.TableEntRows:
 					ar.src = cpuArgEntRows
-				case t == jit.TableValues:
+				case t == composer.TableValues:
 					ar.src = cpuArgValues
-				case t == jit.TablePages:
+				case t == composer.TablePages:
 					ar.src = cpuArgPages
-				case t == jit.TableRows, t == jit.TableWindows:
+				case t == composer.TableRows, t == composer.TableWindows:
 					// A row's descriptor is its own layer's: its range the
 					// layer's window where it has one (kvPages.keyStart).
 					ar.src = cpuArgRows
-				case t == jit.TableCall:
+				case t == composer.TableCall:
 					ar.src = cpuArgCall
-				case t == jit.TableRecState, t == jit.TableRecStateOut:
+				case t == composer.TableRecState, t == composer.TableRecStateOut:
 					ar.src = cpuArgRecState
-				case t == jit.TableRecConv:
+				case t == composer.TableRecConv:
 					ar.src = cpuArgRecConv
-				case t == jit.TableRecConvOut:
+				case t == composer.TableRecConvOut:
 					ar.src = cpuArgRecConvOut
-				case t == jit.TableRecRows:
+				case t == composer.TableRecRows:
 					ar.src = cpuArgRecRows
-				case t == jit.TableQOff:
+				case t == composer.TableQOff:
 					ar.src = cpuArgZero
-				case t == jit.TableRequest:
+				case t == composer.TableRequest:
 					ar.src = cpuArgRequest
-				case t == jit.TableTokens:
+				case t == composer.TableTokens:
 					ar.src = cpuArgTokens
-				case t == jit.TablePos:
+				case t == composer.TablePos:
 					// A pooled readout reads its live count (cpuPoolState), any
 					// other graph its rows' positions (cpuBound.pos).
 					ar.src = cpuArgPos
@@ -2087,7 +2087,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 					}
 				default:
 					f.close()
-					return nil, cpuDeclineError{jit.DeclineTable, fmt.Errorf("%s reads the table %s", c.Name, o.Name)}
+					return nil, cpuDeclineError{composer.DeclineTable, fmt.Errorf("%s reads the table %s", c.Name, o.Name)}
 				}
 			default:
 				f.close()
@@ -2316,7 +2316,7 @@ func (f *cpuBlockForm) shareOwn(wrote, read []ownUse) {
 // is, and the code reaching no more of o than its calls' slices; an axis of
 // one call moves nothing. A scratch some call's address does not move along
 // is every call's.
-func callsOwnScratch(c jit.Code, o jit.Operand, bytes int64) bool {
+func callsOwnScratch(c composer.Code, o composer.Operand, bytes int64) bool {
 	if len(c.Calls) == 0 {
 		return false
 	}
@@ -2378,7 +2378,7 @@ func (f *cpuBlockForm) joinPhases() {
 }
 
 // slice records the rows of buffer b a call reaches alone along the one
-// axis of its calls past a single call (jit.Code.Reach), -1 for none.
+// axis of its calls past a single call (composer.Code.Reach), -1 for none.
 func (c *cpuCode) slice(b cpuBuf, reach []int) {
 	per := -1
 	if ax := oneAxis(c.calls); ax >= 0 && ax < len(reach) && reach[ax] > 0 {

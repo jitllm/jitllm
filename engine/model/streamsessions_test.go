@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestManySessionsStreamTheirHistory is a server's step loop in miniature,
@@ -58,7 +58,7 @@ func streamSample(lg []float32) []float32 {
 const streamStride = 97
 
 func manySessionsStream(t *testing.T, m *Model, spec string) {
-	g := atOnceTier(t, spec, func(c *tier.Config) {
+	g := atOnceTier(t, spec, func(c *gpu.Config) {
 		c.KVPage = 64
 		c.StagedDecode = true
 	})

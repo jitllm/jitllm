@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestSixtyFourRequestsWhoseHistoryStreams is the load that killed jitllmd on
@@ -97,7 +97,7 @@ func sixtyFour(t *testing.T, waves int, admitAll bool, level ...int) []waveCount
 	e := New(cfg)
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: []string{"gpu:0"},
-		tierConfig: func(c *tier.Config) { c.KVPage = 64 }})
+		tierConfig: func(c *gpu.Config) { c.KVPage = 64 }})
 	if err != nil {
 		t.Fatalf("loading %s onto -devices gpu:0: %v", name, err)
 	}

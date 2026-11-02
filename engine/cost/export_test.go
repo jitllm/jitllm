@@ -3,14 +3,14 @@ package cost
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
-var composeOpen func(*testing.T, string) jit.Model
+var composeOpen func(*testing.T, string) composer.Model
 
-func SetComposeOpen(f func(*testing.T, string) jit.Model) { composeOpen = f }
+func SetComposeOpen(f func(*testing.T, string) composer.Model) { composeOpen = f }
 
-func composing(t *testing.T, name string) jit.Model {
+func composing(t *testing.T, name string) composer.Model {
 	t.Helper()
 	return composeOpen(t, name)
 }

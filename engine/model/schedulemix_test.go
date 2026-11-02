@@ -4,9 +4,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSchedulerMixesPromptsIntoDecodeSteps is the gate on chunked admission: a
@@ -28,7 +28,7 @@ import (
 //
 // It runs a dense model and a hybrid. A hybrid's chunk steps its sequence's
 // one recurrent state a row at a time in position order, which on a device is
-// the run forms of the linear kernels (tier.Stats.RecChainRows, the selection
+// the run forms of the linear kernels (gpu.Stats.RecChainRows, the selection
 // check there: a chunk's rows past its first chained through its state).
 // JITLLM_TEST_DEVICES names the devices; the default is
 // every one this project has.
@@ -184,11 +184,11 @@ func newMixedCase(t *testing.T, m *Model, ids [][]int32, gens []int, spec string
 	return c
 }
 
-func (c *mixedCase) open() *tier.GPU {
+func (c *mixedCase) open() *gpu.GPU {
 	if c.spec == "" {
 		return nil
 	}
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(c.spec), tier.WithDeviceTune(tier.TuneOff)},
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(c.spec), gpu.WithDeviceTune(gpu.TuneOff)},
 		testTierOpts(c.t)...)...)
 	if err != nil || g == nil {
 		noDevice(c.t, c.spec, err)
@@ -197,7 +197,7 @@ func (c *mixedCase) open() *tier.GPU {
 	return g
 }
 
-func (c *mixedCase) place(st *Instance, g *tier.GPU) {
+func (c *mixedCase) place(st *Instance, g *gpu.GPU) {
 	if g == nil {
 		return
 	}
@@ -212,7 +212,7 @@ func (c *mixedCase) place(st *Instance, g *tier.GPU) {
 // positions where it is set, and returns each sequence's tokens, the
 // Batcher's stats, whether a prompt was ever left part-fed between steps,
 // and the rows that chained a device linear block's state after another row of
-// their own sequence (tier.Stats.RecChainRows).
+// their own sequence (gpu.Stats.RecChainRows).
 func (c *mixedCase) run(chunkPos func(base, j, k int) int) ([][]int32, BatcherStats, bool, int) {
 	t := c.t
 	g := c.open()

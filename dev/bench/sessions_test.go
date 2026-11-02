@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The perf floors of sessions running at once, beside the correctness gates
@@ -164,7 +164,7 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		t.Skipf("NO CUDA DEVICE (%v): this floor proved nothing", err)
 	}

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -128,8 +128,8 @@ func TestDecisionReusesThePrefix(t *testing.T) {
 			reqs := boardsFor(t, m, 4)
 			t.Run("host", func(t *testing.T) { decisionPrefixGate(t, m, nil, "", 0, reqs, 0) })
 			for _, spec := range stepDevices() {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+				g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+					gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -150,9 +150,9 @@ func TestDecisionReusesThePrefix(t *testing.T) {
 // restored prefix starts the rest of the prompt at another row. The violation
 // must move an answer past tol.
 // With every block on a device the violation is the card's own: a write
-// into a page the cache names lands in it in place (tier.Config.KVCowFault),
+// into a page the cache names lands in it in place (gpu.Config.KVCowFault),
 // under every sequence that maps it.
-func decisionPrefixGate(t *testing.T, m *Model, g *tier.GPU, spec string, n int, reqs [][]byte, tol float64) {
+func decisionPrefixGate(t *testing.T, m *Model, g *gpu.GPU, spec string, n int, reqs [][]byte, tol float64) {
 	open := func(store *SharedStore) *Decider {
 		d, err := m.NewDecider(4096)
 		if err != nil {
@@ -193,7 +193,7 @@ func decisionPrefixGate(t *testing.T, m *Model, g *tier.GPU, spec string, n int,
 	if cold.PromptRestored() != 0 {
 		t.Fatalf("a Decider with no store restored %d positions", cold.PromptRestored())
 	}
-	var st0 tier.Stats
+	var st0 gpu.Stats
 	if g != nil {
 		st0 = g.Stats()
 	}
@@ -286,16 +286,16 @@ func decisionPrefixGate(t *testing.T, m *Model, g *tier.GPU, spec string, n int,
 
 // devicePrefixViolation holds that the card's copy-on-write is load-bearing:
 // on a tier whose writes land in a named page in place
-// (tier.Config.KVCowFault), a prompt that parts inside a page another
+// (gpu.Config.KVCowFault), a prompt that parts inside a page another
 // prompt's history shares must change that history. A ends inside a page; B
 // and D each continue it differently, restored at A's end and writing on
 // past it into the page they share; B again, one token on, restores B's
 // history and reads D's rows there. Its logits must move from a cold run's.
 // The prompts are ids rather than boards so the parting lands inside a page
 // on every device, whatever its page size and chunk.
-func devicePrefixViolation(t *testing.T, m *Model, g *tier.GPU, spec string, n int) {
-	gv, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.KVCowFault = true })}, testTierOpts(t)...)...)
+func devicePrefixViolation(t *testing.T, m *Model, g *gpu.GPU, spec string, n int) {
+	gv, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.KVCowFault = true })}, testTierOpts(t)...)...)
 	if err != nil || gv == nil {
 		t.Fatalf("%s: the violation's tier: %v", spec, err)
 	}
@@ -311,7 +311,7 @@ func devicePrefixViolation(t *testing.T, m *Model, g *tier.GPU, spec string, n i
 	b := append(append([]int32(nil), a...), ids(2000, 3, 300)...)
 	d := append(append([]int32(nil), a...), ids(3000, 5, 300)...)
 	b2 := append(append([]int32(nil), b...), 42)
-	open := func(on *tier.GPU, store *SharedStore) *Instance {
+	open := func(on *gpu.GPU, store *SharedStore) *Instance {
 		st := m.NewInstance(4096)
 		if err := st.SetDeviceLayers(on, n); err != nil {
 			t.Fatal(err)
@@ -329,7 +329,7 @@ func devicePrefixViolation(t *testing.T, m *Model, g *tier.GPU, spec string, n i
 	// run is B2's largest logit difference from a cold run's on the same
 	// tier, after A, B and D went through one shared store, and the
 	// positions they restored.
-	run := func(on *tier.GPU) (float64, int, []float32) {
+	run := func(on *gpu.GPU) (float64, int, []float32) {
 		cold := open(on, nil)
 		want, err := cold.Prefill(b2)
 		if err != nil {
@@ -425,8 +425,8 @@ func TestDecisionWithAPrefixDoesNotAllocate(t *testing.T) {
 			reqs := boardsFor(t, m, 3)
 			t.Run("host", func(t *testing.T) { prefixAllocs(t, m, nil, reqs) })
 			for _, spec := range stepDevices() {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+				g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+					gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -442,7 +442,7 @@ func TestDecisionWithAPrefixDoesNotAllocate(t *testing.T) {
 
 // prefixAllocs holds a warm pass of board prompts through the shared store,
 // every block on g when there is one, to zero engine allocations.
-func prefixAllocs(t *testing.T, m *Model, g *tier.GPU, reqs [][]byte) {
+func prefixAllocs(t *testing.T, m *Model, g *gpu.GPU, reqs [][]byte) {
 	d, err := m.NewDecider(4096)
 	if err != nil {
 		t.Fatal(err)

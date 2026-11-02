@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestDecisionDoesNotAllocate is the allocation principle on the decision
@@ -30,8 +30,8 @@ func TestDecisionDoesNotAllocate(t *testing.T) {
 			}
 			t.Run("host", func(t *testing.T) { decisionAllocs(t, m, nil, 0) })
 			for _, spec := range stepDevices() {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+				g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+					gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -100,7 +100,7 @@ func decisionPrompts(t *testing.T, d *Decider) []decisionPrompt {
 
 // decisionAllocs places n of a Decider's blocks on g (-1: every one; nil: the
 // host) and holds a warm pass over every prompt at zero engine allocations.
-func decisionAllocs(t *testing.T, m *Model, g *tier.GPU, n int) {
+func decisionAllocs(t *testing.T, m *Model, g *gpu.GPU, n int) {
 	d, err := m.NewDecider(4096)
 	if err != nil {
 		t.Fatal(err)

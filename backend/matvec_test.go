@@ -10,8 +10,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestMatVecMatchesReference holds the GPU decode matvec to jitllm's CPU bar:

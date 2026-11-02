@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
-// TestGCNotBlocked is jit/cpu's invariant I3, measured -- a timing
+// TestGCNotBlocked is engine/device/cpu's invariant I3, measured -- a timing
 // assertion, so it lives here beside the other perf floors rather than in the
 // correctness gates (AGENTS.md RULE 4). A goroutine inside generated code
 // cannot be async-preempted (runtime.findfunc fails for a PC outside Go's

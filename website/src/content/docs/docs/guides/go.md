@@ -82,7 +82,7 @@ Open the devices with the device tier and hand them to a state. The spec is the 
 ```go
 import "github.com/jitllm/jitllm/jit/gpu/tier"
 
-g, err := tier.OpenWith(tier.WithDevices("auto"))
+g, err := gpu.OpenWith(gpu.WithDevices("auto"))
 if err != nil {
 	log.Printf("no GPU (%v); running on the CPU", err)
 } else {

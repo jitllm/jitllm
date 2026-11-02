@@ -5,7 +5,7 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestComposedEncoderOnDeviceSeesCausalRows runs the composed device
@@ -24,16 +24,16 @@ func TestComposedEncoderOnDeviceSeesCausalRows(t *testing.T) {
 			he.Close()
 			ran := 0
 			for _, spec := range stepDevices() {
-				probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || probe == nil {
 					continue
 				}
 				probe.Close()
 				ran++
 				got0, _ := encDeviceArm(t, m, g, spec, 1)
-				tier.SetRowsFault("piccausal")
+				gpu.SetRowsFault("piccausal")
 				bad0, _ := encDeviceArm(t, m, g, spec, 1)
-				tier.SetRowsFault("")
+				gpu.SetRowsFault("")
 				n0, nbad := worstNMSE(got0, want0), worstNMSE(bad0, want0)
 				t.Logf("%s: clean NMSE %.3e after block 0, causal rows %.3e", spec, n0, nbad)
 				if !(nbad > 100*n0) || !(nbad > 5e-4) {

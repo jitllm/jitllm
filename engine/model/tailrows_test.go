@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestShortChunkRunsAsRaggedStep holds a prompt whose last chunk is a few rows
@@ -40,7 +40,7 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 		st := m.NewInstance(n + 16)
 		defer st.Close()
 		if dev {
-			g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+			g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}

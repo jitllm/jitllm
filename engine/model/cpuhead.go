@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // The head and the sampler on the CPU device: where no card holds the head,
@@ -36,8 +36,8 @@ type cpuHeadState struct {
 	probVals                          []float32
 	probIDs                           []uint32
 	served, sampled                   int
-	declined                          [jit.NumDeclines]int
-	sampleDeclined                    [jit.NumDeclines]int
+	declined                          [composer.NumDeclines]int
+	sampleDeclined                    [composer.NumDeclines]int
 	token                             [1]uint32
 	// noWin is a window that holds no token, for a sampler with no
 	// penalty; pen is the penalty a draw reads.
@@ -64,19 +64,19 @@ type cpuHeadState struct {
 type cpuHeadForm struct {
 	composed bool
 	f        *cpuBlockForm
-	why      jit.Decline
+	why      composer.Decline
 }
 
 // CPUHeadSteps is how many head rows the CPU's composed head served, and
 // how many it declined, by reason. With the composed CPU off nothing is
 // counted.
-func (s *Instance) CPUHeadSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUHeadSteps() (served int, declined [composer.NumDeclines]int) {
 	return s.cpu.head.served, s.cpu.head.declined
 }
 
 // CPUSampleSteps is CPUHeadSteps for the composed samplers: a greedy token
 // or a top-k draw's token.
-func (s *Instance) CPUSampleSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUSampleSteps() (served int, declined [composer.NumDeclines]int) {
 	return s.cpu.head.sampled, s.cpu.head.sampleDeclined
 }
 
@@ -85,22 +85,22 @@ func (s *Instance) CPUSampleSteps() (served int, declined [jit.NumDeclines]int) 
 func (s *Instance) cpuPlaceHead() {
 	h := &s.cpu.head
 	fg := s.m.frontGraphs()
-	s.cpuComposeHead(&h.head, fg.cpuHead, jit.DeclineNoGraph, 1)
-	s.cpuComposeHead(&h.hidden, fg.cpuHidden, jit.DeclineNoGraph, 1)
-	s.cpuComposeHead(&h.rows, fg.cpuHidden, jit.DeclineNoGraph, cpuRowsCap)
-	none := jit.DeclineNoGraph
+	s.cpuComposeHead(&h.head, fg.cpuHead, composer.DeclineNoGraph, 1)
+	s.cpuComposeHead(&h.hidden, fg.cpuHidden, composer.DeclineNoGraph, 1)
+	s.cpuComposeHead(&h.rows, fg.cpuHidden, composer.DeclineNoGraph, cpuRowsCap)
+	none := composer.DeclineNoGraph
 	if fg.cpuHead != nil {
-		none = jit.DeclineHeadBias
+		none = composer.DeclineHeadBias
 	}
 	s.cpuComposeHead(&h.pick, fg.pickHead, none, 1)
-	s.cpuComposeHead(&h.sample, fg.cpuSample, jit.DeclineNoSample, 1)
-	s.cpuComposeHead(&h.walk, fg.cpuWalk, jit.DeclineNoSample, 1)
-	s.cpuComposeHead(&h.row, fg.cpuRow, jit.DeclineNoSample, 1)
-	s.cpuComposeHead(&h.cut, fg.cpuCut, jit.DeclineNoSample, 1)
-	s.cpuComposeHead(&h.walkProb, fg.cpuWalkProb, jit.DeclineNoSample, 1)
-	s.cpuComposeHead(&h.cutProb, fg.cpuCutProb, jit.DeclineNoSample, 1)
-	s.cpuComposeHead(&h.cutK, fg.cpuCutK, jit.DeclineNoSample, 1)
-	s.cpuComposeHead(&h.cutKProb, fg.cpuCutKProb, jit.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.sample, fg.cpuSample, composer.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.walk, fg.cpuWalk, composer.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.row, fg.cpuRow, composer.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.cut, fg.cpuCut, composer.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.walkProb, fg.cpuWalkProb, composer.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.cutProb, fg.cpuCutProb, composer.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.cutK, fg.cpuCutK, composer.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.cutKProb, fg.cpuCutKProb, composer.DeclineNoSample, 1)
 	d, nv := s.c.NEmbd, s.c.NVocab
 	if f := h.rows.f; f != nil {
 		h.hid = make([]float32, f.rows*d)
@@ -127,7 +127,7 @@ func (s *Instance) cpuPlaceHead() {
 
 // cpuComposeHead composes graph g for the CPU at rows rows into hf, or
 // says why not: none where the front end states no graph.
-func (s *Instance) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none jit.Decline, rows int) {
+func (s *Instance) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none composer.Decline, rows int) {
 	s.cpuComposeHeadAs(hf, g, rows, nil)
 	if g == nil {
 		hf.why = none
@@ -139,10 +139,10 @@ func (s *Instance) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none jit.Decl
 func (s *Instance) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) {
 	*hf = cpuHeadForm{composed: true}
 	switch {
-	case !jit.HostCPULowers():
-		hf.why = jit.DeclineISA
+	case !composer.HostCPULowers():
+		hf.why = composer.DeclineISA
 	case g == nil:
-		hf.why = jit.DeclineNoGraph
+		hf.why = composer.DeclineNoGraph
 	default:
 		f, err := s.m.formCPUGraph(s, g, rows, over)
 		if err != nil {
@@ -155,9 +155,9 @@ func (s *Instance) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, o
 
 // formOf is hf's form, or why it does not serve: not composed at the
 // instance's placement, or declined there.
-func (hf *cpuHeadForm) formOf() (*cpuBlockForm, jit.Decline) {
+func (hf *cpuHeadForm) formOf() (*cpuBlockForm, composer.Decline) {
 	if !hf.composed {
-		return nil, jit.DeclineUnplaced
+		return nil, composer.DeclineUnplaced
 	}
 	return hf.f, hf.why
 }
@@ -177,7 +177,7 @@ func (m *Model) formCPUGraph(s *Instance, g *graph.Graph, rows int, over map[jlm
 			}
 		}
 	}
-	req := jit.Request{Graph: g, Formats: formats, Step: jit.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: s.jit.ActWindow()},
+	req := composer.Request{Graph: g, Formats: formats, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: s.jit.ActWindow()},
 		Device: s.composedCPU(), Apart: true}
 	return m.cpuFormOf(req, g, rows, true, false, false)
 }
@@ -188,9 +188,9 @@ func (s *Instance) cpuHeadOn() bool { return s.cpu.args != nil }
 // cpuHead runs the head on the CPU the composer's way: the norm of the row
 // x, its projection and what follows it into logits, and the norm's rows
 // into hidden where it is given, or says why not.
-func (s *Instance) cpuHead(x, logits, hidden []float32) jit.Decline {
+func (s *Instance) cpuHead(x, logits, hidden []float32) composer.Decline {
 	if !s.cpuHeadOn() {
-		return jit.DeclineCaller
+		return composer.DeclineCaller
 	}
 	h := &s.cpu.head
 	hf := &h.head
@@ -198,10 +198,10 @@ func (s *Instance) cpuHead(x, logits, hidden []float32) jit.Decline {
 		hf = &h.hidden
 	}
 	f, why := hf.formOf()
-	if why == jit.DeclineServes {
+	if why == composer.DeclineServes {
 		why = s.cpuWeights(f, -1, nil)
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		h.declined[why]++
 		return why
 	}
@@ -218,7 +218,7 @@ func (s *Instance) cpuHead(x, logits, hidden []float32) jit.Decline {
 		s.cpuCall(b, &f.codes[i])
 	}
 	h.served++
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // cpuHeadRows is the head over the first n rows of x, NEmbd apart, into the
@@ -226,16 +226,16 @@ func (s *Instance) cpuHead(x, logits, hidden []float32) jit.Decline {
 // of it), through the rows' form a call of at most its rows, or says why
 // not. A call's rows past a whole number of the form's units run from
 // copies, so its units write no row past the caller's.
-func (s *Instance) cpuHeadRows(x, logits, hidden []float32, n int) jit.Decline {
+func (s *Instance) cpuHeadRows(x, logits, hidden []float32, n int) composer.Decline {
 	if !s.cpuHeadOn() {
-		return jit.DeclineCaller
+		return composer.DeclineCaller
 	}
 	h := &s.cpu.head
 	f, why := h.rows.formOf()
-	if why == jit.DeclineServes {
+	if why == composer.DeclineServes {
 		why = s.cpuWeights(f, -1, nil)
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		h.declined[why] += n
 		return why
 	}
@@ -263,7 +263,7 @@ func (s *Instance) cpuHeadRows(x, logits, hidden []float32, n int) jit.Decline {
 		r0 += k
 	}
 	h.served += n
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // cpuHeadCall runs the rows' form f over k rows of x into logits and the
@@ -284,20 +284,20 @@ func (s *Instance) cpuHeadCall(f *cpuBlockForm, x, logits, hidden unsafe.Pointer
 // cpuPick is the label pick on the CPU: the head projecting the instance's
 // picked ids (HostPick) alone from the row x into HostPickVals, the
 // logits left as they were, or why not.
-func (s *Instance) cpuPick(x []float32) jit.Decline {
+func (s *Instance) cpuPick(x []float32) composer.Decline {
 	s.HostPicked = false
 	if !s.cpuHeadOn() {
-		return jit.DeclineCaller
+		return composer.DeclineCaller
 	}
 	h := &s.cpu.head
 	f, why := h.pick.formOf()
-	if why == jit.DeclineServes {
+	if why == composer.DeclineServes {
 		why = s.cpuWeights(f, -1, nil)
 	}
-	if why == jit.DeclineServes && (len(s.HostPick) > len(h.pickIDs) || len(s.HostPickVals) < len(s.HostPick)) {
-		why = jit.DeclineCaller
+	if why == composer.DeclineServes && (len(s.HostPick) > len(h.pickIDs) || len(s.HostPickVals) < len(s.HostPick)) {
+		why = composer.DeclineCaller
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		h.declined[why]++
 		return why
 	}
@@ -317,7 +317,7 @@ func (s *Instance) cpuPick(x []float32) jit.Decline {
 	copy(s.HostPickVals, h.pickVals[:len(s.HostPick)])
 	s.HostPicked = true
 	h.served++
-	return jit.DeclineServes
+	return composer.DeclineServes
 }
 
 // cpuArgmax is the index of the largest of x, the lower of two equal, from
@@ -359,7 +359,7 @@ func (s *Instance) cpuGreedy(logits []float32) (int32, bool) {
 	}
 	h := &s.cpu.head
 	f, why := h.sample.formOf()
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		h.sampleDeclined[why]++
 		return 0, false
 	}
@@ -451,7 +451,7 @@ func (s *Instance) cpuDist(logits []float32, smp *Sampler, d *specDist) bool {
 		hf = &h.cutKProb
 	}
 	f, why := hf.formOf()
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		h.sampleDeclined[why]++
 		return false
 	}
@@ -508,7 +508,7 @@ func (s *Instance) cpuWideToken(logits []float32, smp *Sampler, u float32) (int3
 		h.cutArgs = [4]float32{float32(1 / smp.Temp), topp, minp, u}
 	}
 	f, why := hf.formOf()
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		h.sampleDeclined[why]++
 		return 0, false
 	}
@@ -533,10 +533,10 @@ func (s *Instance) cpuWalkToken(logits []float32, smp *Sampler, u float32) (int3
 	}
 	h := &s.cpu.head
 	f, why := h.walk.formOf()
-	if why == jit.DeclineServes && smp.TopK > nn.SampleMaxK {
-		why = jit.DeclineCaller
+	if why == composer.DeclineServes && smp.TopK > nn.SampleMaxK {
+		why = composer.DeclineCaller
 	}
-	if why != jit.DeclineServes {
+	if why != composer.DeclineServes {
 		h.sampleDeclined[why]++
 		return 0, false
 	}

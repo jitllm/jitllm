@@ -3,7 +3,7 @@ package model
 import (
 	"slices"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/composer"
 )
 
 // rowOwner is the session whose history row i of a ragged step reads and
@@ -78,7 +78,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		s.growBPLE(n)
 		bple = s.bple[:n*c.pleWidth()]
 	}
-	composed := s.cpuEmbed(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]) == jit.DeclineServes
+	composed := s.cpuEmbed(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]) == composer.DeclineServes
 	for i := 0; i < n && !composed; i++ {
 		row := s.bx[i*c.NEmbd : (i+1)*c.NEmbd]
 		if err := m.embedRow(row, int(tokens[i])); err != nil {
@@ -171,7 +171,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 			return nil, err
 		}
 		l := &m.layers[li]
-		var why jit.Decline
+		var why composer.Decline
 		var err error
 		if c.NHashLayers > 0 && li == s.lo {
 			s.cpuTokens(n, func(i int) int32 { return tokens[i] })
@@ -193,7 +193,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		if err != nil {
 			return nil, err
 		}
-		if why == jit.DeclineServes {
+		if why == composer.DeclineServes {
 			s.cpu.served++
 			continue
 		}
@@ -226,7 +226,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	// The CPU's composed head runs the wanted rows and applies every stage
 	// of the head's graph.
 	if !headOnDev && nlogit > 0 {
-		if why := s.cpuHeadRows(s.bx, s.blogits, nil, nlogit); why != jit.DeclineServes {
+		if why := s.cpuHeadRows(s.bx, s.blogits, nil, nlogit); why != composer.DeclineServes {
 			return nil, cpuHeadRefused(why)
 		}
 	}

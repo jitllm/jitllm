@@ -6,17 +6,17 @@ import (
 
 	"github.com/jitllm/jitllm/engine/sched"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// One binary: importing jit/gpu costs only libc and libdl, since the CUDA,
+// One binary: importing engine/device/gpu costs only libc and libdl, since the CUDA,
 // Vulkan and Metal drivers are dlopen'd. The no-cgo property is untouched:
 // goffi reaches the drivers through dlopen.
 
 // openDevices resolves -devices. The flag is plural because a host can have
 // several cards and the placement question is "which of them", not "GPU or
-// not". tier.ParseDevices is the grammar:
+// not". gpu.ParseDevices is the grammar:
 //
 //	auto                 one device, measured -- and no GPU is a CPU machine
 //	all, gpu             every distinct device on the host, fastest first
@@ -41,7 +41,7 @@ func openDevices(spec string, vram, hostBudget uint64, streamGroups, stepRows in
 	if hostBudget == 0 {
 		hostBudget = sched.MemBudget()
 	}
-	es, err := tier.ParseDevices(spec)
+	es, err := gpu.ParseDevices(spec)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -54,18 +54,18 @@ func openDevices(spec string, vram, hostBudget uint64, streamGroups, stepRows in
 	if !device {
 		return nil, func() {}, "cpu", nil
 	}
-	base := []tier.Option{
-		tier.WithDevices(spec),
-		tier.WithBudget(vram),
-		tier.WithHostBudget(hostBudget),
+	base := []gpu.Option{
+		gpu.WithDevices(spec),
+		gpu.WithBudget(vram),
+		gpu.WithHostBudget(hostBudget),
 	}
 	if streamGroups > 0 {
-		base = append(base, tier.WithConfig(func(c *tier.Config) { c.StreamGroupsStart = streamGroups }))
+		base = append(base, gpu.WithConfig(func(c *gpu.Config) { c.StreamGroupsStart = streamGroups }))
 	}
 	if stepRows > 0 {
-		base = append(base, tier.WithConfig(func(c *tier.Config) { c.StepRows = stepRows }))
+		base = append(base, gpu.WithConfig(func(c *gpu.Config) { c.StepRows = stepRows }))
 	}
-	g, err := tier.OpenWith(append(base, gpuOptions()...)...)
+	g, err := gpu.OpenWith(append(base, gpuOptions()...)...)
 	if err != nil {
 		// auto is the only spec for which a missing GPU is not an error:
 		// anything that names a device asked for that device.
@@ -81,7 +81,7 @@ func openDevices(spec string, vram, hostBudget uint64, streamGroups, stepRows in
 // Relocating moves blocks to the CPU, and a spec that names only cards asked
 // for them and nothing else (model.WithCPU).
 func relocatable(spec string) error {
-	ok, err := tier.AdmitsHost(spec)
+	ok, err := gpu.AdmitsHost(spec)
 	if err != nil || ok {
 		return err
 	}
@@ -92,7 +92,7 @@ func relocatable(spec string) error {
 // deviceStats is what the tier will admit about a run, which matters because
 // "over the configured budget" and "the card is full" are opposite facts.
 func deviceStats(d nn.Device) string {
-	g, ok := d.(*tier.GPU)
+	g, ok := d.(*gpu.GPU)
 	if !ok {
 		return ""
 	}
@@ -194,7 +194,7 @@ func deviceStats(d nn.Device) string {
 // hostReserved is how much of the host's weight budget the tier may fill with
 // device weights: nonzero only when a device's memory IS the host's.
 func hostReserved(d nn.Device) uint64 {
-	if g, ok := d.(*tier.GPU); ok {
+	if g, ok := d.(*gpu.GPU); ok {
 		return g.HostReserved()
 	}
 	return 0
@@ -206,7 +206,7 @@ func hostReserved(d nn.Device) uint64 {
 // The pool is named on every line: two 6 GiB budgets are 12 GiB on two cards
 // but come off the host's own budget for an integrated GPU.
 func deviceBudgets(d nn.Device) string {
-	g, ok := d.(*tier.GPU)
+	g, ok := d.(*gpu.GPU)
 	if !ok {
 		return ""
 	}

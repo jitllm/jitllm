@@ -7,9 +7,9 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestAttnAccIntoSplitsBitIdentically: accumulating a window in pieces must give

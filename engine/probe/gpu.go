@@ -10,10 +10,10 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/metal"
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/cost"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // GPU measures device d: what a launch costs the host and a kernel the
@@ -45,7 +45,7 @@ import (
 // device's clock where the backend has one.
 func GPU(d backend.Device) (cost.Device, error) {
 	const lanes, width = 32, 256
-	out := cost.Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: kernels.DivExact(d.API())}}
+	out := cost.Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: kernels.DivExact(d.API())}}
 	if out.Slots == 0 {
 		out.Slots = defaultSlots
 	}

@@ -150,7 +150,7 @@ So:
 **★ 3b. THE RULE IS ENFORCED BY A HOOK, BECAUSE WRITING IT DOWN DID NOT WORK.**
 
 It was violated twice on the same day, killing the desktop both times. The second time the offending
-command was `gofmt -w jit/ && go test ./jit/ -run='TestEncodings|TestObjdump'` — two trivial tests,
+command was `gofmt -w composer/ && go test ./composer/ -run='TestEncodings|TestObjdump'` — two trivial tests,
 which is exactly why it felt safe. It is not the test that is heavy, it is `go test`: the package
 gets compiled first, at whatever parallelism the toolchain feels like.
 
@@ -649,7 +649,7 @@ sampler and the greedy step are off the device's path at these rates.
 Two start-up costs found on the way, neither per token:
 
 - **A cold tune cache tunes only part of the decode in a `run` process.** The
-  background split tuner (tier.WithLazyTune) times a trial only after 50 ms of
+  background split tuner (gpu.WithLazyTune) times a trial only after 50 ms of
   device quiet, and a `run` has that only before its prompt: on a V100 with an
   empty cache one `run` tuned 3 of the 1B's 6 decode shapes and a `speed`
   process all 6. The rest run the table's split until a later process tunes
@@ -1675,7 +1675,7 @@ shared pools (154 -> 106). It is the trade, and `WithServingSplit(false)` /
 Both cases are work proposed or built beside machinery that already did it.
 
 - **A device expert cache.** It was proposed as new work. `streamBank` in
-  `jit/gpu/tier/layer.go` already is one: the host side of a block whose routed
+  `engine/device/gpu/layer.go` already is one: the host side of a block whose routed
   experts are assembled per token, with its own residency. The task was to read
   it and extend it, not to write a second cache beside it.
 - **Decision prefixes.** The decision branch reused the prefix cache through

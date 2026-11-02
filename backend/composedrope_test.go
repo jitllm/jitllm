@@ -9,12 +9,12 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestComposedRopeTableOverAxes runs the composer's rotary table over one
@@ -74,9 +74,9 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 	}
 	// Each row's position on each axis: the axes apart, and every digit of
 	// the decomposition reached.
-	at := make([][jit.RopeAxes]int, rows)
+	at := make([][composer.RopeAxes]int, rows)
 	for r := range at {
-		at[r] = [jit.RopeAxes]int{37 + r, 1000 + 3*r, 70003 + 11*r, 1<<27 + 5*r}
+		at[r] = [composer.RopeAxes]int{37 + r, 1000 + 3*r, 70003 + 11*r, 1<<27 + 5*r}
 	}
 	ran := 0
 	for _, tc := range cases {
@@ -152,7 +152,7 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 				cross = 0
 			}
 			for r := range cross {
-				var flat [jit.RopeAxes][]float32
+				var flat [composer.RopeAxes][]float32
 				for a, p := range at[r] {
 					flat[a] = run(t, plain, [4]int{}, false, 1, []uint32{1, uint32(p)})
 				}
@@ -166,7 +166,7 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 			}
 			// The violation: two axes that turn pairs, their positions swapped.
 			var used []int
-			for a := range jit.RopeAxes {
+			for a := range composer.RopeAxes {
 				for _, b := range axis {
 					if a == b {
 						used = append(used, a)
@@ -182,7 +182,7 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 			x, y := used[len(used)-2], used[len(used)-1]
 			bad := append([]uint32(nil), pos...)
 			for r := range rows {
-				bad[1+r*jit.RopeAxes+x], bad[1+r*jit.RopeAxes+y] = bad[1+r*jit.RopeAxes+y], bad[1+r*jit.RopeAxes+x]
+				bad[1+r*composer.RopeAxes+x], bad[1+r*composer.RopeAxes+y] = bad[1+r*composer.RopeAxes+y], bad[1+r*composer.RopeAxes+x]
 			}
 			swapped := run(t, rope, tc.sections, tc.interleaved, rows, bad)
 			apart := 0.0
@@ -207,10 +207,10 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 // returns the table, its guard checked.
 type ropeRunner func(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, rows int, pos []uint32) []float32
 
-func composedRopeCodes(t *testing.T, d jit.Device, rope nn.Rope, sections [4]int, interleaved bool, rows int) []jit.Code {
+func composedRopeCodes(t *testing.T, d composer.Device, rope nn.Rope, sections [4]int, interleaved bool, rows int) []composer.Code {
 	t.Helper()
 	rt := graph.RopeTable{NRot: rope.NRot, Sections: sections, Interleaved: interleaved}
-	_, codes, err := jit.Default().Form(jit.Request{Graph: rt.Build(), Part: jit.PartTable, Step: jit.Step{Rows: rows, Page: 64, Keys: 1}, Device: d})
+	_, codes, err := composer.Default().Form(composer.Request{Graph: rt.Build(), Part: composer.PartTable, Step: composer.Step{Rows: rows, Page: 64, Keys: 1}, Device: d})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func gpuRope(d backend.Device) ropeRunner {
 		if m, ok := d.(backend.MultiprocessorDevice); ok {
 			units = m.Multiprocessors()
 		}
-		codes := composedRopeCodes(t, jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, ExactDiv: kernels.DivExact(d.API())},
+		codes := composedRopeCodes(t, composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, ExactDiv: kernels.DivExact(d.API())},
 			rope, sections, interleaved, rows)
 		gg := newGPU(t, d)
 		defer gg.free()
@@ -282,9 +282,9 @@ func gpuRope(d backend.Device) ropeRunner {
 				switch {
 				case b.Words != nil:
 					bufs = append(bufs, gg.up(u32bytes(b.Words)))
-				case o.Kind == jit.OperandTable && tables[o.Name] != nil:
+				case o.Kind == composer.OperandTable && tables[o.Name] != nil:
 					bufs = append(bufs, tables[o.Name])
-				case o.Kind == jit.OperandScratch:
+				case o.Kind == composer.OperandScratch:
 					bufs = append(bufs, gg.up(make([]byte, max(4, b.Bytes))))
 				default:
 					k.Close()
@@ -312,7 +312,7 @@ func gpuRope(d backend.Device) ropeRunner {
 // words say.
 func cpuRope(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, rows int, pos []uint32) []float32 {
 	t.Helper()
-	codes := composedRopeCodes(t, jit.Device{Kind: jit.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true},
+	codes := composedRopeCodes(t, composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true},
 		rope, sections, interleaved, rows)
 	n := rows * rope.NRot
 	out := guardedTable(n)
@@ -345,7 +345,7 @@ func cpuRope(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, rows
 			words := a.Words
 			switch o := a.Operand; {
 			case words != nil:
-			case o.Kind == jit.OperandTable && tables[o.Name] != nil:
+			case o.Kind == composer.OperandTable && tables[o.Name] != nil:
 				words = tables[o.Name]
 			default:
 				code.Close()

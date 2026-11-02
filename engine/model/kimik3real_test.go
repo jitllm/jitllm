@@ -8,10 +8,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // k3RealGolden is scripts/k3gold.py's real-<name> golden: Moonshot's remote
@@ -150,7 +150,7 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 					t.Errorf("Encode(%q) = %v, the reference's tokenizer %v", s.Text, got, s.Prompt)
 				}
 			}
-			arm := func(t *testing.T, gpu *tier.GPU) {
+			arm := func(t *testing.T, gpux *gpu.GPU) {
 				worst, flips, ties := 0.0, 0, 0
 				by := map[string]float64{}
 				for _, s := range g.Seqs {
@@ -179,11 +179,11 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 					}
 					state := func() *Instance {
 						st := m.NewInstance(len(ids) + 1)
-						if gpu != nil {
-							st.SetDeviceLayers(gpu, -1)
+						if gpux != nil {
+							st.SetDeviceLayers(gpux, -1)
 							if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
 								t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), m.Cfg.NLayer,
-									st.HeadOnDevice(), gpu.Err())
+									st.HeadOnDevice(), gpux.Err())
 							}
 						}
 						return st
@@ -247,13 +247,13 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 			})
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {
-					gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-						tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
-					if err != nil || gpu == nil {
+					gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+					if err != nil || gpux == nil {
 						t.Skipf("%s: not present (%v)", spec, err)
 					}
-					defer gpu.Close()
-					arm(t, gpu)
+					defer gpux.Close()
+					arm(t, gpux)
 				})
 			}
 		})

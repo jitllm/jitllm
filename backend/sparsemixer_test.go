@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestSparseMixerWeightsMatchTheOracle holds the device's sparsemixer route --

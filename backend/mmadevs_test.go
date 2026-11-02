@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/ir"
 )
 
 // mmaDevices is the devices that can compile an ir.OpMMA, asked once each, so a

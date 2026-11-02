@@ -7,8 +7,8 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/metal"
+	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestConcurrentEncoderKeepsTheChain holds Metal's concurrent encoder

@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestASpeculatingRunVerifiesAtTheReservedStepWidth: a verification is a
-// ragged step of a few rows. With tier.Config.StepRows at SpecRows the
+// ragged step of a few rows. With gpu.Config.StepRows at SpecRows the
 // device reserved that step's scratch at placement, so on a card the
 // placement filled every verification runs at the reserved width. The
 // violation is the same budget without the reservation: the narrow scratch is
@@ -22,8 +22,8 @@ func TestASpeculatingRunVerifiesAtTheReservedStepWidth(t *testing.T) {
 
 func specStepFits(t *testing.T, m *Model, spec string) {
 	prompt := m.Vocab.Encode(strings.Repeat("The clerk counted barrels of salt on the upper floor. ", 40), true)
-	cfg := func(reserve bool) func(*tier.Config) {
-		return func(c *tier.Config) {
+	cfg := func(reserve bool) func(*gpu.Config) {
+		return func(c *gpu.Config) {
 			if reserve {
 				c.StepRows = SpecRows()
 			}
@@ -31,7 +31,7 @@ func specStepFits(t *testing.T, m *Model, spec string) {
 	}
 	// run returns the budget spent before the first verification and the
 	// stats after twelve rounds.
-	run := func(limit uint64, reserve bool) (uint64, tier.Stats) {
+	run := func(limit uint64, reserve bool) (uint64, gpu.Stats) {
 		g := fitTier(t, spec, limit, cfg(reserve))
 		defer g.Close()
 		st := m.NewInstance(len(prompt) + 64)

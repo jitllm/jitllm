@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The gates for the paged KV kernels (docs/design/device-kv-paging.md). Every

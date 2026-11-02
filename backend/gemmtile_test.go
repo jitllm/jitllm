@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // gemmTileCases are the shapes TestGemmTileMatchesTheReference sweeps: every

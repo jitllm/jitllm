@@ -15,7 +15,7 @@ import (
 
 // Device is an optional accelerator that can serve a decode matvec.
 //
-// It is declared here and implemented in jit/gpu so that the core module keeps
+// It is declared here and implemented in engine/device/gpu so that the core module keeps
 // no dependency on the FFI layer: go.mod has one require and there is no cgo
 // (goffi reaches the drivers through dlopen).
 //
@@ -835,7 +835,7 @@ type LayerPlan struct {
 	// 0 where every row turns at its cache position.
 	RopeMarks int
 	// Rotaries is the model's rotaries, the tables a text block's rope ops
-	// pick by what they state (jit.Request.Rotaries).
+	// pick by what they state (composer.Request.Rotaries).
 	Rotaries []graph.Rotary
 	// KPad is the width the block's matrices that read the residual or the
 	// attention's output were packed at, when NEmbd is not a whole number of
@@ -1565,7 +1565,7 @@ type RowsRoomer interface {
 }
 
 // KVShareDevice is a device whose KV pages the prefix cache can name and map
-// (jit/gpu/tier/kvshare.go): PublishKV names the session's page of block li
+// (engine/device/gpu/kvshare.go): PublishKV names the session's page of block li
 // by key, held by the session; MapKV puts the page key names into the
 // session's page, the sequence then written to end at least, no byte moved,
 // and is false when no page answers to key. A write into a named page copies
@@ -1579,7 +1579,7 @@ type KVShareDevice interface {
 }
 
 // RecShareDevice is a device that keeps a linear block's restore points where
-// its state lives (jit/gpu/tier/recshare.go): SnapRec copies the session's
+// its state lives (engine/device/gpu/recshare.go): SnapRec copies the session's
 // state of block li into the snapshot named key, HasRec says one is kept, and
 // LoadRec copies it into the session's state. Nothing crosses the bus.
 type RecShareDevice interface {
@@ -1623,7 +1623,7 @@ type KVPrewarmer interface {
 
 // BlockMover is a NamedDevice that moves a placed block to another of its
 // devices itself, the session's history copied from the source's pages into
-// the target's without a round trip through host memory (tier.GPU, move.go).
+// the target's without a round trip through host memory (gpu.GPU, move.go).
 type BlockMover interface {
 	// StageBlock prepares block li on the named device -- weights uploaded,
 	// kernels built, room for positions of history -- without routing it
@@ -1794,7 +1794,7 @@ type BlockHolder interface{ HoldsBlock(li int) bool }
 // last call, which decides whether a failed step may restart on the host.
 type RecStepper interface{ RecSteps() int }
 
-// Session is the device view one model.Instance holds (tier.GPU.Attach): the
+// Session is the device view one model.Instance holds (gpu.GPU.Attach): the
 // session's own history on the device, apart from the model's weights.
 type Session interface {
 	// Detach gives back everything the session holds on every device.

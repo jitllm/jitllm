@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // clefPictureTol bounds a Clef request with pictures or a video against the
@@ -82,18 +82,18 @@ func TestClefMediaMatchesReference(t *testing.T) {
 			}
 			a8 := g
 			a8.Logits = g.LogitsA8
-			run := func(t *testing.T, gpu *tier.GPU, imgs []image.Image, vids []VideoFrames) (*clefPrompt, []float32) {
+			run := func(t *testing.T, gpux *gpu.GPU, imgs []image.Image, vids []VideoFrames) (*clefPrompt, []float32) {
 				d, err := m.NewDecider(4096)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer d.Close()
-				if gpu != nil {
-					if err := d.SetDevice(gpu, -1); err != nil {
+				if gpux != nil {
+					if err := d.SetDevice(gpux, -1); err != nil {
 						t.Fatal(err)
 					}
 					if d.DeviceBlocks() != m.Cfg.NLayer {
-						t.Fatalf("the device took %d of %d blocks (%s)", d.DeviceBlocks(), m.Cfg.NLayer, gpu.Err())
+						t.Fatalf("the device took %d of %d blocks (%s)", d.DeviceBlocks(), m.Cfg.NLayer, gpux.Err())
 					}
 				}
 				if err := d.Prepare(req.State, req.Questions, len(imgs)); err != nil {
@@ -122,8 +122,8 @@ func TestClefMediaMatchesReference(t *testing.T) {
 				}
 				return p, out
 			}
-			check := func(t *testing.T, gpu *tier.GPU) (float64, float64) {
-				p, got := run(t, gpu, imgs, vids)
+			check := func(t *testing.T, gpux *gpu.GPU) (float64, float64) {
+				p, got := run(t, gpux, imgs, vids)
 				if len(p.ids) != len(g.IDs) {
 					t.Fatalf("the prompt is %d rows, the reference's %d", len(p.ids), len(g.IDs))
 				}
@@ -169,14 +169,14 @@ func TestClefMediaMatchesReference(t *testing.T) {
 				}
 			}
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
-				if err != nil || gpu == nil {
+				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				if err != nil || gpux == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
 				}
 				t.Run(spec, func(t *testing.T) {
-					defer gpu.Close()
-					w, _ := check(t, gpu)
+					defer gpux.Close()
+					w, _ := check(t, gpux)
 					t.Logf("%s, every block: worst logit %.2e from the reference", spec, w)
 					if w > clefPictureTol {
 						t.Fatalf("%s: worst logit %.2e", spec, w)

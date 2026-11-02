@@ -594,7 +594,7 @@ func rowPages(r *row, pos, page int) int {
 }
 
 // kvRoom is admission's budget, in positions: the card's room for history
-// (tier.GPU.KVRoom) less promised, what the admitted rows are still promised,
+// (gpu.GPU.KVRoom) less promised, what the admitted rows are still promised,
 // and the page both are counted in. A page of 0 is no bound: a model on the
 // host, or no history on the card to price.
 //
@@ -606,7 +606,7 @@ func rowPages(r *row, pos, page int) int {
 // rows ahead of it to retire, or above fairness level 0 for rows past their
 // time slice to be parked (batchfair.go); the first row is
 // always admitted, so nothing waits on a card that holds none. The promise
-// goes to the tier too (tier.GPU.PromiseKV), so a batched scratch built
+// goes to the tier too (gpu.GPU.PromiseKV), so a batched scratch built
 // after admission does not take the pages it was made on.
 func (lp *stepLoop) kvRoom() (room, page, promised int) {
 	g := lp.lm.gpuTier()

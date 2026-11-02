@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Janus-Pro-1B: a SigLIP-L tower on one 384 square, llava's two-matrix
@@ -146,7 +146,7 @@ func TestJanusOnDeviceMatchesHost(t *testing.T) {
 	ran := 0
 	for _, arm := range towerArms() {
 		spec := arm.spec
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

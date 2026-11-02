@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestFusedKSplitIsBitIdentical walks the fused decode matvec's k in pieces --

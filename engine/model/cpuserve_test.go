@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // cpuServedModels are the models whose every block the composer serves on
@@ -331,7 +331,7 @@ func cpuLogits(t *testing.T, m *Model, toks []int32, f cpuFault, composed bool) 
 	if composed {
 		for i, n := range declined {
 			if n > 0 {
-				t.Errorf("%d block steps declined: %s (%v)", n, jit.DeclineName(i), s.CPUFormErr())
+				t.Errorf("%d block steps declined: %s (%v)", n, composer.DeclineName(i), s.CPUFormErr())
 			}
 		}
 		if want := len(toks) * m.Cfg.NLayer; served != want {
@@ -347,7 +347,7 @@ func cpuLogits(t *testing.T, m *Model, toks []int32, f cpuFault, composed bool) 
 		heads, hdecl := s.CPUHeadSteps()
 		for i, n := range hdecl {
 			if n > 0 {
-				t.Errorf("%d head steps declined: %s (%v)", n, jit.DeclineName(i), s.CPUFormErr())
+				t.Errorf("%d head steps declined: %s (%v)", n, composer.DeclineName(i), s.CPUFormErr())
 			}
 		}
 		if heads != len(toks) {
@@ -366,7 +366,7 @@ func cpuLogits(t *testing.T, m *Model, toks []int32, f cpuFault, composed bool) 
 			rows, sdecl := s.CPUStreamSteps()
 			for i, n := range sdecl {
 				if n > 0 {
-					t.Errorf("%d rows of the streams' expansion or collapse declined: %s (%v)", n, jit.DeclineName(i), s.CPUFormErr())
+					t.Errorf("%d rows of the streams' expansion or collapse declined: %s (%v)", n, composer.DeclineName(i), s.CPUFormErr())
 				}
 			}
 			if rows != graphs*len(toks) {

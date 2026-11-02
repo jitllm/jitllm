@@ -6,8 +6,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // splitRowsModels are the packed mixtures the split-rows gate runs: a hybrid
@@ -31,7 +31,7 @@ var splitRowsModels = []struct {
 // worst logit NMSE of those rows against the host's decode of the same ids,
 // with the device's counters. noSplit is the control arm: every expert of the
 // step on the host.
-func splitRowsCase(t *testing.T, m *Model, ids []int32, blocks int, noSplit bool) (float64, tier.Stats) {
+func splitRowsCase(t *testing.T, m *Model, ids []int32, blocks int, noSplit bool) (float64, gpu.Stats) {
 	t.Helper()
 	c := m.Cfg
 	n := len(ids)
@@ -49,8 +49,8 @@ func splitRowsCase(t *testing.T, m *Model, ids []int32, blocks int, noSplit bool
 	}()
 	s := m.NewInstance(n + 2)
 	defer s.Close()
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(cf *tier.Config) {
+	g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(cf *gpu.Config) {
 			cf.StreamExperts, cf.HybridExperts = true, true
 			cf.SplitAdmit, cf.NoSplitRows = c.NExpertUsed, noSplit
 		}))

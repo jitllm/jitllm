@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestAct32JITRunsEveryUngatedKind calls the entry point for every ungated

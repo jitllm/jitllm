@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/ptx"
+	"github.com/jitllm/jitllm/composer/ptx"
 )
 
 // TestDepCountersSeeABrokenWait is TestDepCountersOrderTheChain's violation

@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
-	"github.com/jitllm/jitllm/jit/ir"
 )
 
 func verifyCmd(args []string) error {
@@ -65,9 +65,9 @@ func verifyCmd(args []string) error {
 	// hybrid that difference is amplified past any useful diff. It goes before
 	// gpuOptions so JITLLM_GPU_TUNE still overrides it; the rate below is
 	// therefore a fitted-split rate.
-	g, err := tier.OpenWith(append([]tier.Option{
-		tier.WithDevices(*dev), tier.WithBudget(*vram),
-		tier.WithDeviceTune(tier.TuneOff)}, gpuOptions()...)...)
+	g, err := gpu.OpenWith(append([]gpu.Option{
+		gpu.WithDevices(*dev), gpu.WithBudget(*vram),
+		gpu.WithDeviceTune(gpu.TuneOff)}, gpuOptions()...)...)
 	if err != nil {
 		return err
 	}
@@ -213,7 +213,7 @@ func verifyCmd(args []string) error {
 //
 // The length is deliberately not a multiple of the batch width: the ragged last
 // chunk writes K and V past the prompt, and decode must overwrite them.
-func prefillDiff(m *model.Model, g *tier.GPU, ntok, n int) error {
+func prefillDiff(m *model.Model, g *gpu.GPU, ntok, n int) error {
 	if ntok < 2 {
 		return fmt.Errorf("verify -prefill: want at least 2 tokens")
 	}
@@ -406,7 +406,7 @@ func isFinite(v float32) bool {
 // localise a disagreement: one tie broken differently changes every later id.
 // Per position, the margin between the top two logits says whether a flip is a
 // computation error or a tie.
-func forcedDiff(m *model.Model, g *tier.GPU, n int, doMigrate bool, band float64) error {
+func forcedDiff(m *model.Model, g *gpu.GPU, n int, doMigrate bool, band float64) error {
 	cs := m.NewInstance(n + 16)
 	defer cs.Close()
 	gs := m.NewInstance(n + 16)
@@ -568,7 +568,7 @@ func forcedDiff(m *model.Model, g *tier.GPU, n int, doMigrate bool, band float64
 // faults are not per-token costs. Correctness is forcedDiff's job, not this
 // one's -- a free-running chain is the right thing to TIME and the wrong thing
 // to DIFF.
-func benchRun(m *model.Model, dev *tier.GPU, n int) float64 {
+func benchRun(m *model.Model, dev *gpu.GPU, n int) float64 {
 	s := m.NewInstance(n + 16)
 	defer s.Close()
 	if dev != nil {
@@ -612,7 +612,7 @@ func benchRun(m *model.Model, dev *tier.GPU, n int) float64 {
 //
 // The state is sized for the whole run rather than reset back to depth,
 // because re-prefilling to depth would be timed as part of an arm.
-func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
+func abRun(m *model.Model, g *gpu.GPU, which string, n, rounds, depth int) {
 	s := m.NewInstance(depth + rounds*n*2 + 16)
 	defer s.Close()
 	// attnchunk and attnpair compare host attention layouts, which do not run
@@ -681,9 +681,9 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		// Setting both alike is the A/A self-control; swapping them prices
 		// which tier is which.
 		aAllow := os.Getenv("JITLLM_AB_SPILL_A") != "0"
-		g2, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("cuda:0"),
-			tier.WithDeviceTune(tier.TuneOff)}, append(gpuOptions(),
-			tier.WithConfig(func(c *tier.Config) { c.SpillingTiles = aAllow }))...)...)
+		g2, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices("cuda:0"),
+			gpu.WithDeviceTune(gpu.TuneOff)}, append(gpuOptions(),
+			gpu.WithConfig(func(c *gpu.Config) { c.SpillingTiles = aAllow }))...)...)
 		if err != nil {
 			panic(err)
 		}
@@ -724,8 +724,8 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		// its own. 0 caps nothing, which makes this the A/A self-control: two
 		// tiers, two instances, the same kernels.
 		maxRegs, _ := strconv.Atoi(os.Getenv("JITLLM_AB_MAXREGS"))
-		g2, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("cuda:0"),
-			tier.WithDeviceTune(tier.TuneOff)}, append(gpuOptions(), tier.WithCUDAMaxRegs(maxRegs))...)...)
+		g2, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices("cuda:0"),
+			gpu.WithDeviceTune(gpu.TuneOff)}, append(gpuOptions(), gpu.WithCUDAMaxRegs(maxRegs))...)...)
 		if err != nil {
 			panic(err)
 		}
@@ -935,16 +935,16 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		a = bench.Case{Name: "gate, up gated", Fn: func(it int) { g.GateUp2 = false; step(it) }}
 		b = bench.Case{Name: "gate and up in one Gate2 launch", Fn: func(it int) { g.GateUp2, g.GateUp2Force = true, true; step(it) }}
 	case "ffn", "ffn-aa":
-		// The FFN site's recipes (tier.FFNForm): JITLLM_VERIFY_FFN names the
+		// The FFN site's recipes (gpu.FFNForm): JITLLM_VERIFY_FFN names the
 		// challenger (gate2in by default) against Gate2.
-		f, err := tier.ParseFFNForm(os.Getenv("JITLLM_VERIFY_FFN"))
-		if err != nil || f == tier.FFNTuned {
-			f = tier.FFNGate2In
+		f, err := gpu.ParseFFNForm(os.Getenv("JITLLM_VERIFY_FFN"))
+		if err != nil || f == gpu.FFNTuned {
+			f = gpu.FFNGate2In
 		}
 		if which == "ffn-aa" {
-			f = tier.FFNGate2
+			f = gpu.FFNGate2
 		}
-		a = bench.Case{Name: "FFN recipe gate2", Fn: func(it int) { g.FFNForm = tier.FFNGate2; step(it) }}
+		a = bench.Case{Name: "FFN recipe gate2", Fn: func(it int) { g.FFNForm = gpu.FFNGate2; step(it) }}
 		b = bench.Case{Name: "FFN recipe " + f.String(), Fn: func(it int) { g.FFNForm = f; step(it) }}
 		defer func() {
 			st := g.Stats()

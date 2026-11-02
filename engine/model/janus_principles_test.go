@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Janus-Pro's tower under the five principles: it pages under a budget with
@@ -57,7 +57,7 @@ func TestJanusTowerRelocates(t *testing.T) {
 	tw := m.Tower()
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -97,7 +97,7 @@ func TestJanusDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 	m := openJanus(t, noTune)
 	defer m.Close()
 	tw := m.Tower()
-	run := func(t *testing.T, g *tier.GPU) {
+	run := func(t *testing.T, g *gpu.GPU) {
 		ts := tw.testState()
 		if g != nil {
 			ts.SetDevice(g)
@@ -128,7 +128,7 @@ func TestJanusDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		var c0 tier.Stats
+		var c0 gpu.Stats
 		if g != nil {
 			c0 = g.Stats()
 		}
@@ -150,7 +150,7 @@ func TestJanusDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 	t.Run("host", func(t *testing.T) { run(t, nil) })
 	for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+			g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec)}, testTierOpts(t)...)...)
 			if err != nil || g == nil {
 				noDevice(t, spec, err)
 			}

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // int8Tiles are the GemmInt8 blockings TestMatVecMMAMatchesDot4 sweeps on

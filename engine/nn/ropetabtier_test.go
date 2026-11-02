@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // skipOnAnSSEHost skips a gate that warms the host's own tier and then forces

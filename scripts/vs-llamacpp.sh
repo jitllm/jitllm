@@ -334,7 +334,7 @@ jitllm_pp_warm() { ${PIN[@]+"${PIN[@]}"} "$JITLLM" speed -devices "$JITLLM_DEV" 
 # loads a second, and prompt tokens a second of the ttft span. The file is in
 # the page cache after the token-count probe, which serves llama.cpp's mmap;
 # jitllm reads the container with O_DIRECT and gets no help from it. jitllm's
-# tuning cache is whatever this host holds (tier.WithTuneCache); the header
+# tuning cache is whatever this host holds (gpu.WithTuneCache); the header
 # says how many tuner trials the probe run timed.
 lcpp_comp() { ${PIN[@]+"${PIN[@]}"} "$LCPP/llama-completion" -m "$MODEL" "${LCPP_ARGS[@]}" -n 1 -no-cnv --no-warmup --log-timestamps --log-prefix -p "$PP" </dev/null 2>&1; }
 # lcpp_stamp PATTERN: seconds of the first log line matching PATTERN; llama.cpp

@@ -3,7 +3,7 @@ package backend
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/ir"
 )
 
 // GridLimited is a Device that can say how many workgroups of a kernel with a

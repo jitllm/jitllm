@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // ballast fills a card from a second context until free bytes remain, so a
@@ -115,12 +115,12 @@ func fitModel(t *testing.T) *Model {
 }
 
 // fitTier opens spec with cfg at a budget of limit bytes (0: the card's own).
-func fitTier(t *testing.T, spec string, limit uint64, cfg func(*tier.Config)) *tier.GPU {
+func fitTier(t *testing.T, spec string, limit uint64, cfg func(*gpu.Config)) *gpu.GPU {
 	t.Helper()
 	if limit > 0 {
 		spec = fmt.Sprintf("%s=%d", spec, limit)
 	}
-	g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
+	g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(cfg))
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}
@@ -163,8 +163,8 @@ func promptFits(t *testing.T, m *Model, spec string) {
 	ids := m.Vocab.Encode(text, true)[:700]
 	// Sizing: the whole model on the open card, with and without the
 	// reservation.
-	size := func(reserve bool) tier.Stats {
-		g := fitTier(t, spec, 0, func(c *tier.Config) { c.NoScratchReserve = !reserve })
+	size := func(reserve bool) gpu.Stats {
+		g := fitTier(t, spec, 0, func(c *gpu.Config) { c.NoScratchReserve = !reserve })
 		defer g.Close()
 		st := m.NewInstance(len(ids) + 16)
 		defer st.Close()
@@ -185,8 +185,8 @@ func promptFits(t *testing.T, m *Model, spec string) {
 	// Room for the whole model and its decode scratch, and not the prompt's:
 	// the violation fills the card, the reservation places fewer blocks.
 	limit := sv.BudgetUsed + slack
-	run := func(reserve bool) (tier.Stats, int, error) {
-		g := fitTier(t, spec, limit, func(c *tier.Config) { c.NoScratchReserve = !reserve })
+	run := func(reserve bool) (gpu.Stats, int, error) {
+		g := fitTier(t, spec, limit, func(c *gpu.Config) { c.NoScratchReserve = !reserve })
 		defer g.Close()
 		b.fill(t, limit+slack)
 		defer b.empty()
@@ -245,8 +245,8 @@ func stepFits(t *testing.T, m *Model, spec string) {
 		t.Fatalf("the prompt is %d tokens; the gate needs %d", len(prompt), MaxStepRows)
 	}
 	chunk, lead := prompt[:MaxStepRows-1], m.Vocab.Encode("The capital of France is", true)
-	cfgFor := func(reserve bool) func(*tier.Config) {
-		return func(c *tier.Config) {
+	cfgFor := func(reserve bool) func(*gpu.Config) {
+		return func(c *gpu.Config) {
 			c.Sessions = 2
 			if reserve {
 				c.StepRows = MaxStepRows
@@ -256,7 +256,7 @@ func stepFits(t *testing.T, m *Model, spec string) {
 		}
 	}
 	// open places two sessions and readies the decoding one.
-	open := func(g *tier.GPU) (a, d *Instance, next int32, err error) {
+	open := func(g *gpu.GPU) (a, d *Instance, next int32, err error) {
 		a, d = m.NewInstance(len(chunk)+8), m.NewInstance(len(lead)+8)
 		for _, st := range []*Instance{a, d} {
 			if err = st.SetDevice(g); err != nil {
@@ -269,7 +269,7 @@ func stepFits(t *testing.T, m *Model, spec string) {
 		}
 		return
 	}
-	size := func(reserve bool) tier.Stats {
+	size := func(reserve bool) gpu.Stats {
 		g := fitTier(t, spec, 0, cfgFor(reserve))
 		defer g.Close()
 		a, d, _, err := open(g)
@@ -295,7 +295,7 @@ func stepFits(t *testing.T, m *Model, spec string) {
 	// the full card is asked for, and whether the driver happens to have it
 	// depends on the slack.
 	var grew int64
-	run := func(reserve bool) (tier.Stats, int, bool, error) {
+	run := func(reserve bool) (gpu.Stats, int, bool, error) {
 		g := fitTier(t, spec, 0, cfgFor(reserve))
 		defer g.Close()
 		a, d, next, err := open(g)

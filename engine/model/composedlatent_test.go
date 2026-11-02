@@ -5,9 +5,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // latentRewrite is a violation of a latent attention block's statement,
@@ -136,11 +136,11 @@ func TestComposedLatentViolations(t *testing.T) {
 			for i := range toks {
 				toks[i] = int32((int(ids[i%len(ids)])*7 + i) % m.Vocab.Size())
 			}
-			parts := tier.ComposedBlock
+			parts := gpu.ComposedBlock
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
 					want, _, _, _ := composedDecode(t, m, dev, ids, toks, 0, false, false)
-					ref, _, _, _ := composedDecode(t, m, dev, ids, toks, tier.ComposedBlock|tier.ComposedHead, false, true)
+					ref, _, _, _ := composedDecode(t, m, dev, ids, toks, gpu.ComposedBlock|gpu.ComposedHead, false, true)
 					widest := 0.0
 					for i := 1; i < len(ref); i++ {
 						widest = max(widest, logitNMSE(want[i], ref[i]))
@@ -165,8 +165,8 @@ func TestComposedLatentViolations(t *testing.T) {
 					n += st.ReplayedPart(parts)
 					declined := 0
 					for i, k := range st.BlockDeclines {
-						if k > 0 && tier.DeclineName(i) != composedNoGraph {
-							t.Fatalf("the composer declined %d block step(s): %s", k, tier.DeclineName(i))
+						if k > 0 && gpu.DeclineName(i) != composedNoGraph {
+							t.Fatalf("the composer declined %d block step(s): %s", k, gpu.DeclineName(i))
 						}
 						declined += k
 					}

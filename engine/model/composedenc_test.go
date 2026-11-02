@@ -4,13 +4,13 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // An encoder's composed arms (bert, nomic-bert): every block the front end
 // states served by the composer on the CPU device and on
-// each card (tier.ComposedTower: a non-causal call's blocks), held to main's
+// each card (gpu.ComposedTower: a non-causal call's blocks), held to main's
 // host encoder and to the references TestEmbeddingsMatchReference holds it
 // to, the served blocks counted -- as many as the encoder has, a text, none
 // declined -- and each arm run against a violation once. An encoder is
@@ -225,7 +225,7 @@ func TestComposedEncoderOnDevice(t *testing.T) {
 			he.Close()
 			ran := 0
 			for _, spec := range stepDevices() {
-				probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || probe == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -264,33 +264,33 @@ func TestComposedEncoderOnDevice(t *testing.T) {
 func encDeviceArm(t *testing.T, m *Model, g embedGolden, spec string, n int) (after0, out [][]float32) {
 	t.Helper()
 	nb := m.encBlocks()
-	gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-		tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+	gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+		gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer gpu.Close()
+	defer gpux.Close()
 	e, err := m.NewEmbedder()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer e.Close()
-	if err := e.SetDeviceLayers(gpu, n); err != nil {
+	if err := e.SetDeviceLayers(gpux, n); err != nil {
 		t.Fatal(err)
 	}
 	placed := e.DeviceBlocks()
 	if n < 0 && placed != nb || n >= 0 && placed != n {
-		t.Fatalf("placed %d blocks, offered %d of %d: %v %s", placed, n, nb, e.DeviceDeclines(), gpu.Err())
+		t.Fatalf("placed %d blocks, offered %d of %d: %v %s", placed, n, nb, e.DeviceDeclines(), gpux.Err())
 	}
-	s0, _ := gpu.Stats().ServedPart(tier.ComposedTower)
+	s0, _ := gpux.Stats().ServedPart(gpu.ComposedTower)
 	after0, out = encodeTexts(t, m, e, g)
-	st := gpu.Stats()
-	served, declined := st.ServedPart(tier.ComposedTower)
+	st := gpux.Stats()
+	served, declined := st.ServedPart(gpu.ComposedTower)
 	t.Logf("%s: %d of %d blocks placed, %d block runs served by the composer, %d declined %v (%s)",
-		spec, placed, nb, served-s0, declined, nonZero(st.BlockDeclines[:]), gpu.Err())
+		spec, placed, nb, served-s0, declined, nonZero(st.BlockDeclines[:]), gpux.Err())
 	if served-s0 != placed*len(g.Texts) || declined != 0 {
 		t.Fatalf("%s: the composer served %d of %d block runs, declined %d %v (%s)", spec,
-			served-s0, placed*len(g.Texts), declined, nonZero(st.BlockDeclines[:]), gpu.Err())
+			served-s0, placed*len(g.Texts), declined, nonZero(st.BlockDeclines[:]), gpux.Err())
 	}
 	if e.seg.nc() == nil || e.seg.nc().arena == nil {
 		return after0, out

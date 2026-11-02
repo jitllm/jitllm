@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Gemma 3n's vision against transformers' own Gemma3nForConditionalGeneration
@@ -195,7 +195,7 @@ func TestGemma3nTowerMatchesTransformers(t *testing.T) {
 // g3nvRun prefills the golden's prompt, the picture a span between its
 // markers, and decodes the continuation, with the tower and the text model
 // on gpu when it is not nil.
-func g3nvRun(t *testing.T, m *Model, g *g3nvGolden, gpu *tier.GPU) [][]float32 {
+func g3nvRun(t *testing.T, m *Model, g *g3nvGolden, gpux *gpu.GPU) [][]float32 {
 	t.Helper()
 	st := m.NewInstance(8)
 	pic, err := st.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
@@ -211,14 +211,14 @@ func g3nvRun(t *testing.T, m *Model, g *g3nvGolden, gpu *tier.GPU) [][]float32 {
 	s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
 	defer s.Close()
 	var before int64
-	if gpu != nil {
-		if err := s.SetDevice(gpu); err != nil {
+	if gpux != nil {
+		if err := s.SetDevice(gpux); err != nil {
 			t.Fatal(err)
 		}
 		if s.GPULayers() != m.Cfg.NLayer {
-			t.Fatalf("the device took %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpu.Err())
+			t.Fatalf("the device took %d of %d text blocks (%s)", s.GPULayers(), m.Cfg.NLayer, gpux.Err())
 		}
-		before = gpu.Stats().ConvBlocks
+		before = gpux.Stats().ConvBlocks
 		// The host arm's rows are cached under the picture's key.
 		m.imgCache.clearForTest()
 	}
@@ -226,9 +226,9 @@ func g3nvRun(t *testing.T, m *Model, g *g3nvGolden, gpu *tier.GPU) [][]float32 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gpu != nil {
-		if n := gpu.Stats().ConvBlocks - before; n != int64(m.Tower().Cfg.NLayer) {
-			t.Fatalf("the device ran %d of %d tower blocks (%s)", n, m.Tower().Cfg.NLayer, gpu.Err())
+	if gpux != nil {
+		if n := gpux.Stats().ConvBlocks - before; n != int64(m.Tower().Cfg.NLayer) {
+			t.Fatalf("the device ran %d of %d tower blocks (%s)", n, m.Tower().Cfg.NLayer, gpux.Err())
 		}
 	}
 	out := [][]float32{append([]float32(nil), lg...)}
@@ -275,14 +275,14 @@ func TestGemma3nMatchesTransformersEndToEnd(t *testing.T) {
 	}
 	// Both halves on each device: the tower's blocks and the text model's.
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
-		if err != nil || gpu == nil {
+		gpux, err := gpu.OpenWith(gpu.WithDevices(spec))
+		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
 		}
 		t.Run(spec, func(t *testing.T) {
-			defer gpu.Close()
-			dev := g3nvRun(t, m, g, gpu)
+			defer gpux.Close()
+			dev := g3nvRun(t, m, g, gpux)
 			var worst float64
 			for i := range dev {
 				nm, _ := nmseOf(dev[i], got[i])

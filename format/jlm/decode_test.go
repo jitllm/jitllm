@@ -6,9 +6,9 @@ import (
 	"math/rand/v2"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // gv is a value of the Go evaluator: an integer's bits or a float.

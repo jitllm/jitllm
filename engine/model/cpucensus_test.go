@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestCPUComposesOnce holds the CPU device to the census the cards are held
@@ -68,7 +68,7 @@ func TestCPUComposesOnce(t *testing.T) {
 				served, declined := s.CPUBlockSteps()
 				for why, n := range declined {
 					if n > 0 {
-						t.Errorf("%s: %d block step(s) declined to main's kernels: %s (%v)", what, n, jit.DeclineName(why), s.CPUFormErr())
+						t.Errorf("%s: %d block step(s) declined to main's kernels: %s (%v)", what, n, composer.DeclineName(why), s.CPUFormErr())
 					}
 				}
 				for li, n := range s.CPUCompositions() {
@@ -127,7 +127,7 @@ func TestCPUComposesOnce(t *testing.T) {
 			// composed head, both decode tokens from its samplers.
 			for _, c := range []struct {
 				what  string
-				steps func() (int, [jit.NumDeclines]int)
+				steps func() (int, [composer.NumDeclines]int)
 				want  int
 			}{
 				{"head", s.CPUHeadSteps, len(tc.lengths) * (1 + decode)},
@@ -136,7 +136,7 @@ func TestCPUComposesOnce(t *testing.T) {
 				got, declined := c.steps()
 				for why, n := range declined {
 					if n > 0 {
-						t.Errorf("%d %s step(s) declined to main's kernels: %s (%v)", n, c.what, jit.DeclineName(why), s.CPUFormErr())
+						t.Errorf("%d %s step(s) declined to main's kernels: %s (%v)", n, c.what, composer.DeclineName(why), s.CPUFormErr())
 					}
 				}
 				if got != c.want {
@@ -189,7 +189,7 @@ func TestCPUComposesOnce(t *testing.T) {
 			bh, bd := sc.in.CPUHeadSteps()
 			for why, n := range bd {
 				if n > 0 {
-					t.Fatalf("the batch: %d head step(s) declined to main's kernels: %s", n, jit.DeclineName(why))
+					t.Fatalf("the batch: %d head step(s) declined to main's kernels: %s", n, composer.DeclineName(why))
 				}
 			}
 			if bh < steps {
@@ -201,7 +201,7 @@ func TestCPUComposesOnce(t *testing.T) {
 			// the rest not again, and nothing composed after it.
 			t.Run("relocation", func(t *testing.T) {
 				dev := testdevices.Take(t, 1, "cuda:0")[0]
-				g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
+				g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || g == nil {
 					noDevice(t, dev, err)
 				}
@@ -239,7 +239,7 @@ func TestCPUComposesOnce(t *testing.T) {
 					served, declined := r.CPUBlockSteps()
 					for why, n := range declined {
 						if n > 0 {
-							t.Fatalf("%s: %d block step(s) declined: %s (%v)", what, n, jit.DeclineName(why), r.CPUFormErr())
+							t.Fatalf("%s: %d block step(s) declined: %s (%v)", what, n, composer.DeclineName(why), r.CPUFormErr())
 						}
 					}
 					for li, n := range r.CPUCompositions() {

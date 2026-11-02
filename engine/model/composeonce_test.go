@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestPlacementComposesOnce holds the composer's census on Llama-3.2-1B and
@@ -44,14 +44,14 @@ func TestPlacementComposesOnce(t *testing.T) {
 		}
 		width = w
 	}
-	open := func(t *testing.T, devices string) *tier.GPU {
-		opts := []tier.Option{tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) {
+	open := func(t *testing.T, devices string) *gpu.GPU {
+		opts := []gpu.Option{gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(func(c *gpu.Config) {
 			c.PromptRows, c.ComposedWidths = width, violate
 		})}
 		if devices != "" {
-			opts = append(opts, tier.WithDevices(devices))
+			opts = append(opts, gpu.WithDevices(devices))
 		}
-		g, err := tier.OpenWith(opts...)
+		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			t.Fatalf("no GPU device: %v", err)
 		}
@@ -113,7 +113,7 @@ var composeOnceModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qw
 // composesOnce is TestPlacementComposesOnce's census of m on g. With to set,
 // the relocation moves the blocks on the first one's device to it; without,
 // the upper half goes to the CPU and back.
-func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
+func composesOnce(t *testing.T, m *Model, g *gpu.GPU, width int, to string) {
 	lengths := []int{1, 5, 33, 100, 511, 512, 513, 2000}
 	const decode = 2
 	total := 0
@@ -187,7 +187,7 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 	}
 	prompts := func(s *Instance, off int, lengths []int) int {
 		t.Helper()
-		served0, _ := g.Stats().ServedPart(tier.ComposedPrompt)
+		served0, _ := g.Stats().ServedPart(gpu.ComposedPrompt)
 		steps := 0
 		for _, n := range lengths {
 			l, err := s.Prefill(ids[off : off+n])
@@ -206,7 +206,7 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 				steps += (n + width - 1) / width * nl
 			}
 		}
-		np, dp := g.Stats().ServedPart(tier.ComposedPrompt)
+		np, dp := g.Stats().ServedPart(gpu.ComposedPrompt)
 		if np-served0 < steps || dp != 0 {
 			t.Fatalf("the composer served %d prompt block steps of the %d the chunks hold and declined %d: %s",
 				np-served0, steps, dp, g.Err())

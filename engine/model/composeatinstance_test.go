@@ -102,7 +102,7 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 
 // TestComposesOnlyWithAnInstanceOnACard is TestComposesOnlyWithAnInstance
 // with the instance on a card: sessions' prompts and tokens, alone and stepped
-// together, form no part on the card at a step (tier.Stats.FormedAtStep) and
+// together, form no part on the card at a step (gpu.Stats.FormedAtStep) and
 // ask the CPU composer for nothing; the card formed its parts when the
 // instance was placed.
 func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {

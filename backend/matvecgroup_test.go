@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestGroupEpiloguesAreTheSeparateLaunches: a few-sequence step's matvec with

@@ -6,12 +6,12 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestHybridExpertsMatchTheHost runs Kimi-K3-0.40B with every block on the
-// device and the routed experts on the host (tier.Config.HybridExperts), and
+// device and the routed experts on the host (gpu.Config.HybridExperts), and
 // holds it to the host-only run: the same greedy token at every position and
 // logits within the device's f32 band (RULE 11c), the hybrid path counted as
 // taken. A latent mixture is the case that matters: the experts' input is the
@@ -41,14 +41,14 @@ func TestHybridExpertsMatchTheHost(t *testing.T) {
 		return out
 	}
 	want := host()
-	stats := func(cfg func(*tier.Config)) ([][]float32, tier.Stats, int) {
-		var st tier.Stats
+	stats := func(cfg func(*gpu.Config)) ([][]float32, gpu.Stats, int) {
+		var st gpu.Stats
 		var got [][]float32
 		var placed int
 		func() {
 			s := m.NewInstance(32)
 			defer s.Close()
-			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
+			g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(cfg))
 			if err != nil || g == nil {
 				noDevice(t, "gpu:0", err)
 			}
@@ -66,7 +66,7 @@ func TestHybridExpertsMatchTheHost(t *testing.T) {
 		}()
 		return got, st, placed
 	}
-	got, st, placed := stats(func(c *tier.Config) { c.StreamExperts, c.HybridExperts, c.StreamCacheSlots = true, true, -1 })
+	got, st, placed := stats(func(c *gpu.Config) { c.StreamExperts, c.HybridExperts, c.StreamCacheSlots = true, true, -1 })
 	if placed == 0 || st.HybridRuns == 0 || st.StreamFills != 0 {
 		t.Fatalf("%d blocks placed, %d hybrid block-steps, %d fills: the hybrid path did not run alone",
 			placed, st.HybridRuns, st.StreamFills)

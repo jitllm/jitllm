@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestHybridDecodeIsCaptured: a fully placed hybrid's decode must be recorded
@@ -15,7 +15,7 @@ import (
 // capture and silently disables graphs.
 func TestHybridDecodeIsCaptured(t *testing.T) {
 	m := hybridModelOpt(t, hyOpt{tiled: true})
-	g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		t.Skipf("no cuda device: %v", err)
 	}

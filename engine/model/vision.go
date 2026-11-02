@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -1318,7 +1318,7 @@ func (s *Instance) encodeBegin(px []float32, gh, gw int) error {
 	s.growVision(n)
 
 	x := s.bx[:n*E]
-	if s.cpuEntry(px, n, first) != jit.DeclineServes {
+	if s.cpuEntry(px, n, first) != composer.DeclineServes {
 		if err := s.entryRows(px, gh, gw, n, first, cls); err != nil {
 			return err
 		}
@@ -1761,7 +1761,7 @@ func (s *Instance) visAttendHead(li, h, w0, w1 int, scale float32) {
 func (s *Instance) project(patches []float32) ([]float32, error) {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
-	if out, why := s.cpuProject(patches); why == jit.DeclineServes {
+	if out, why := s.cpuProject(patches); why == composer.DeclineServes {
 		return out, nil
 	}
 	switch c.Kind {
@@ -2072,7 +2072,7 @@ func (s *Instance) visPlan(li int) *nn.LayerPlan {
 		NEmbd:     c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: c.HeadDim,
 		NFFN: c.NFFN, MaxSeq: tc.MaxSeq(),
 		// The segment's own activation, as the host reads it. A device that
-		// cannot emit this kind declines the block; see tier.PrepLayer.
+		// cannot emit this kind declines the block; see gpu.PrepLayer.
 		Act: c.Act,
 		// The JIT's window, not a constant: both tiers must quantize the
 		// activation the same way (see nn.LayerPlan.ActWin).

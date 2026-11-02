@@ -6,9 +6,9 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSpecGreedyOnDevice is the contract on a device: the trunk and the
@@ -34,8 +34,8 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 			ran := 0
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-						tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)
 					}
@@ -122,7 +122,7 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 
 // specGreedyDev is specGreedy with the trunk and the draft on g, and whether
 // every block of both and the trunk's head landed there.
-func specGreedyDev(t *testing.T, m *Model, prompt []int32, n int, g *tier.GPU, oracle []int32,
+func specGreedyDev(t *testing.T, m *Model, prompt []int32, n int, g *gpu.GPU, oracle []int32,
 	opts ...SpecOption) ([]int32, SpecStats, bool) {
 	t.Helper()
 	st := m.NewInstance(len(prompt) + n + 8)
@@ -155,7 +155,7 @@ func specGreedyDev(t *testing.T, m *Model, prompt []int32, n int, g *tier.GPU, o
 
 // specFaultDev is specGreedyDev with one of the breaks in force, three drafts
 // a round.
-func specFaultDev(t *testing.T, m *Model, prompt []int32, n int, g *tier.GPU, fault specFault, oracle []int32) []int32 {
+func specFaultDev(t *testing.T, m *Model, prompt []int32, n int, g *gpu.GPU, fault specFault, oracle []int32) []int32 {
 	t.Helper()
 	st := m.NewInstance(len(prompt) + 5*n + 8) // as specGreedy's, for the breaks
 	defer st.Close()
@@ -199,7 +199,7 @@ func specFaultDev(t *testing.T, m *Model, prompt []int32, n int, g *tier.GPU, fa
 //     chunk, a last four-row step and decode agree exactly at that position;
 //   - the host, decoding the same prefix: the device's own band against it. A
 //     margin-only judge would call a flip inside that band a defect.
-func devFlip(t *testing.T, m *Model, g *tier.GPU, prompt, prefix []int32, a, b int32) (gap, perturb float64) {
+func devFlip(t *testing.T, m *Model, g *gpu.GPU, prompt, prefix []int32, a, b int32) (gap, perturb float64) {
 	t.Helper()
 	all := append(append([]int32(nil), prompt...), prefix...)
 	decode := func(dev nn.Device) []float32 {

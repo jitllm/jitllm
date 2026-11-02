@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/ir"
 )
 
 // TestQueuesRunSessionsAtOnce: two sessions, each on a queue of its own, run

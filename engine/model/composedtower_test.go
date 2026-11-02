@@ -7,8 +7,8 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // A tower's composed arm on the CPU device: every tower block the front end
@@ -95,7 +95,7 @@ func composedTowerOnCPU(t *testing.T, open func(testing.TB, ...Option) (*Model, 
 	es, ed := s.CPUEntrySteps()
 	ewhy, eerr := s.CPUEntryUncovered()
 	t.Logf("composed CPU entry: %d pictures served, declines %v (%s %v)", es, nonZero(ed[:]), ewhy, eerr)
-	if es != statedRows(ewhy) && !bucketDeclined(c, es, ed[jit.DeclineNoTable]) {
+	if es != statedRows(ewhy) && !bucketDeclined(c, es, ed[composer.DeclineNoTable]) {
 		t.Fatalf("the CPU's composed entry served %d of the encode's 1 picture (declines %v; %s %v)", es, nonZero(ed[:]), ewhy, eerr)
 	}
 	nmse0, worst0 := nmseOf(got0, want0)
@@ -168,7 +168,7 @@ func nonZero(d []int) map[string]int {
 	out := map[string]int{}
 	for i, n := range d {
 		if n != 0 {
-			out[jit.DeclineName(i)] = n
+			out[composer.DeclineName(i)] = n
 		}
 	}
 	return out
@@ -324,7 +324,7 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 	hs.Close()
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := gpu.OpenWith(gpu.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -338,10 +338,10 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			if n := all.GPUBlocks(); n != c.NLayer {
 				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, g.Err())
 			}
-			s0, _ := g.Stats().ServedPart(tier.ComposedTower)
+			s0, _ := g.Stats().ServedPart(gpu.ComposedTower)
 			_, got := towerEncode(t, all, px)
 			st := g.Stats()
-			served, declined := st.ServedPart(tier.ComposedTower)
+			served, declined := st.ServedPart(gpu.ComposedTower)
 			t.Logf("%s: %d tower block runs served by the composer, %d declined %v (%s)", spec,
 				served-s0, declined, nonZero(st.BlockDeclines[:]), g.Err())
 			if served-s0 != c.NLayer || declined != 0 {
@@ -354,10 +354,10 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 				t.Errorf("%s: the composed tower's encode reads NMSE %.3e against the host (bound %.0e)", spec, nm, bound)
 			}
 			ce, cp, miss := all.CardRowsSteps()
-			rs, rd := g.Stats().ServedPart(tier.ComposedRows)
+			rs, rd := g.Stats().ServedPart(gpu.ComposedRows)
 			t.Logf("%s: the card served the entry of %d pictures and the projector of %d, %d parts missed; %d picture-row parts served, %d declined; %d picture-row parts and %d parts in all formed at the encode (%s)",
-				spec, ce, cp, miss, rs, rd, st.FormedPart(tier.ComposedRows), st.FormedAtStep, g.Err())
-			if n := st.FormedPart(tier.ComposedRows); n != 0 {
+				spec, ce, cp, miss, rs, rd, st.FormedPart(gpu.ComposedRows), st.FormedAtStep, g.Err())
+			if n := st.FormedPart(gpu.ComposedRows); n != 0 {
 				t.Fatalf("%s: %d picture-row parts formed at the encode, not at the placement (%s)", spec, n, g.Err())
 			}
 			_, ewhy, _ := m.towerEntryOf()
@@ -407,9 +407,9 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			}
 			// The block's binary16 matrix forms -- the composer's, as main's
 			// binary16 GEMMs on its own tier -- take the binary16 bound.
-			mx := g.Stats().MatrixPart(tier.ComposedTower)
+			mx := g.Stats().MatrixPart(gpu.ComposedTower)
 			got0, _ := towerEncodeAt(t, one, px)
-			mx = g.Stats().MatrixPart(tier.ComposedTower) - mx
+			mx = g.Stats().MatrixPart(gpu.ComposedTower) - mx
 			nm0, worst0 := nmseOf(got0, want0)
 			bound0 := 5e-5
 			if st := g.Stats(); st.VoltaGemm+st.GemmF16 > 0 || mx > 0 || spec == "metal" {
@@ -428,9 +428,9 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 }
 
 // TestComposedTowerOnDevice runs the device arm over the towers the tier
-// serves (tier.ComposedTower), Gemma 3's SigLIP among them: its 4096 rows
+// serves (gpu.ComposedTower), Gemma 3's SigLIP among them: its 4096 rows
 // of 1152 are the flattened space whose live elements once wrapped 32 bits
-// (jit.TestComposedGPUAttendBidirRows).
+// (composer.TestComposedGPUAttendBidirRows).
 func TestComposedTowerOnDevice(t *testing.T) {
 	for _, f := range composedTowers() {
 		t.Run(f.name, func(t *testing.T) { composedTowerOnDevices(t, f.open, f.bound) })
@@ -456,12 +456,12 @@ func (a towerArm) String() string { return a.spec }
 
 // served runs encode and holds g's composer to having served runs tower
 // block runs in it and declined none.
-func (a towerArm) served(t *testing.T, g *tier.GPU, runs int, encode func()) {
+func (a towerArm) served(t *testing.T, g *gpu.GPU, runs int, encode func()) {
 	t.Helper()
-	s0, d0 := g.Stats().ServedPart(tier.ComposedTower)
+	s0, d0 := g.Stats().ServedPart(gpu.ComposedTower)
 	encode()
 	st := g.Stats()
-	s1, d1 := st.ServedPart(tier.ComposedTower)
+	s1, d1 := st.ServedPart(gpu.ComposedTower)
 	t.Logf("%s: %d tower block runs served by the composer, %d declined %v", a, s1-s0, d1-d0,
 		nonZero(st.BlockDeclines[:]))
 	if s1-s0 != runs || d1 != d0 {
@@ -643,7 +643,7 @@ func TestComposedPictureRowsEveryFamily(t *testing.T) {
 			es, ed := s.CPUEntrySteps()
 			s.Close()
 			var ps int
-			var pd [jit.NumDeclines]int
+			var pd [composer.NumDeclines]int
 			if pw == Covered {
 				gotP, s = project()
 				ps, pd = s.CPUProjectorSteps()
@@ -651,8 +651,8 @@ func TestComposedPictureRowsEveryFamily(t *testing.T) {
 			}
 			// A bucketed table names its rows by the grid: where they are not
 			// the grid's own rows the entry is declined by name.
-			if ew == Covered && es == 0 && c.PosBuckets > 0 && ed[jit.DeclineNoTable] == 1 {
-				t.Logf("entry: declined, %s: a %d-bucket table over this grid", jit.DeclineName(int(jit.DeclineNoTable)), c.PosBuckets)
+			if ew == Covered && es == 0 && c.PosBuckets > 0 && ed[composer.DeclineNoTable] == 1 {
+				t.Logf("entry: declined, %s: a %d-bucket table over this grid", composer.DeclineName(int(composer.DeclineNoTable)), c.PosBuckets)
 			} else if ew == Covered {
 				nm, worst := nmseOf(gotE, wantE)
 				t.Logf("entry: served %d, NMSE %.3e, max|d| %.4g", es, nm, worst)

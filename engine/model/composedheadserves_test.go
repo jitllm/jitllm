@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // headServedModels are checkpoints whose heads the composer serves where their
@@ -52,11 +52,11 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
 					want, _, _, _ := composedDecode(t, m, dev, ids, toks, 0, true, false)
-					got, st, headOn, census := composedDecode(t, m, dev, ids, toks, tier.ComposedHead, true, false)
+					got, st, headOn, census := composedDecode(t, m, dev, ids, toks, gpu.ComposedHead, true, false)
 					if !headOn {
 						t.Skipf("the head does not fit beside the blocks on %s", dev)
 					}
-					served, declined := st.ServedPart(tier.ComposedHead)
+					served, declined := st.ServedPart(gpu.ComposedHead)
 					// Every decode step's head, and the prompt's last row's.
 					if served != len(toks)+1 || declined != 0 || st.FormedAtStep != 0 {
 						t.Fatalf("the composed head served %d of %d steps and the prompt's last row, was declined %d (%s) and %d formed at a step",

@@ -7,8 +7,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Pixtral's and Llama 4's vision under the five principles: the tower pages
@@ -197,7 +197,7 @@ func TestVisionFamDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 			defer m.Close()
 			msgs := []ChatMessage{{Role: "user", Content: "What is this?", Images: 1}}
 			spans := f.spans(t, m, msgs, img)
-			run := func(t *testing.T, gpu *tier.GPU) {
+			run := func(t *testing.T, gpux *gpu.GPU) {
 				// Past the device's launch-sequence capture, so the window
 				// replays it, and inside one 128-position score grain and one
 				// 256-position KV page, so it crosses neither (crossing a grain
@@ -211,8 +211,8 @@ func TestVisionFamDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 				warm := 96 + (256+136-(pos+96)%256)%256
 				s := m.NewInstance(pos + warm + n + 8)
 				defer s.Close()
-				if gpu != nil {
-					if err := s.SetDevice(gpu); err != nil {
+				if gpux != nil {
+					if err := s.SetDevice(gpux); err != nil {
 						t.Fatal(err)
 					}
 					if s.GPULayers() == 0 {
@@ -227,9 +227,9 @@ func TestVisionFamDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				var c0 tier.Stats
-				if gpu != nil {
-					c0 = gpu.Stats()
+				var c0 gpu.Stats
+				if gpux != nil {
+					c0 = gpux.Stats()
 				}
 				r0 := m.container.Reads()
 				w := countAllocs(func() {
@@ -240,8 +240,8 @@ func TestVisionFamDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 					}
 				})
 				captures := 0
-				if gpu != nil {
-					captures = gpu.Stats().Captures - c0.Captures
+				if gpux != nil {
+					captures = gpux.Stats().Captures - c0.Captures
 				}
 				allocVerdict(t, fmt.Sprintf("after a picture, %d of %d blocks placed", s.GPULayers(), m.Cfg.NLayer),
 					w, n, m.container.Reads()-r0, captures)
@@ -249,12 +249,12 @@ func TestVisionFamDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 			t.Run("host", func(t *testing.T) { run(t, nil) })
 			for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
 				t.Run(spec, func(t *testing.T) {
-					gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
-					if err != nil || gpu == nil {
+					gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec)}, testTierOpts(t)...)...)
+					if err != nil || gpux == nil {
 						noDevice(t, spec, err)
 					}
-					defer gpu.Close()
-					run(t, gpu)
+					defer gpux.Close()
+					run(t, gpux)
 				})
 			}
 		})

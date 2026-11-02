@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestPerByteCost prices every packed format at equal bytes on the host

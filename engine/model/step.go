@@ -6,8 +6,8 @@ import (
 	"slices"
 	"sync/atomic"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit"
 )
 
 // Step decodes one token for each instance at once, tokens[i] for states[i], and
@@ -698,7 +698,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		s0.growBPLE(rows)
 		bple = s0.bple[:rows*c.pleWidth()]
 	}
-	if s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos) != jit.DeclineServes {
+	if s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos) != composer.DeclineServes {
 		for i, tok := range s0.stepTok {
 			row := x[i*c.NEmbd : (i+1)*c.NEmbd]
 			if err := m.embedRow(row, int(tok)); err != nil {
@@ -757,7 +757,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		if err := s0.collapseStreams(x, rows); err != nil {
 			return nil, err
 		}
-		headed = s0.cpuHeadRows(s0.bx, logits, nil, nlogit) == jit.DeclineServes
+		headed = s0.cpuHeadRows(s0.bx, logits, nil, nlogit) == composer.DeclineServes
 		if !headed {
 			s0.altHeadNorm(nlogit)
 			if err := s0.mm(logits, *s0.outW, s0.bh, nlogit); err != nil {

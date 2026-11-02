@@ -3,9 +3,9 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // kvDuplicates counts the pages of st's history held twice: a page the
@@ -74,7 +74,7 @@ func TestKVIsHeldOnce(t *testing.T) {
 	for i := range prompt {
 		prompt[i] = int32(1000 + i*7)
 	}
-	chat := func(t *testing.T, g *tier.GPU, share func(*Instance) error) int {
+	chat := func(t *testing.T, g *gpu.GPU, share func(*Instance) error) int {
 		dup := 0
 		for turn := range 2 {
 			st := m.NewInstance(4096)
@@ -105,7 +105,7 @@ func TestKVIsHeldOnce(t *testing.T) {
 		}
 		return dup
 	}
-	decide := func(t *testing.T, g *tier.GPU) int {
+	decide := func(t *testing.T, g *gpu.GPU) int {
 		d, err := m.NewDecider(4096)
 		if err != nil {
 			t.Fatal(err)
@@ -132,7 +132,7 @@ func TestKVIsHeldOnce(t *testing.T) {
 		}
 		return dup
 	}
-	arms := func(t *testing.T, g *tier.GPU) {
+	arms := func(t *testing.T, g *gpu.GPU) {
 		// A store of the arm's own: one the host arm filled would hold the
 		// device arm's pages under the same names, and count as a copy.
 		shared := NewSharedStore()
@@ -151,16 +151,16 @@ func TestKVIsHeldOnce(t *testing.T) {
 			declined := map[string]int{}
 			for i, n := range s.BlockDeclines {
 				if n > 0 {
-					declined[tier.DeclineName(i)] = n
+					declined[gpu.DeclineName(i)] = n
 				}
 			}
 			t.Logf("the composer served %d block steps on the card; declined %v", composedBlockSteps(g), declined)
 			if composedBlockSteps(g) == 0 {
 				t.Error("the composer served no block step on the card")
 			}
-			for _, why := range []jit.Decline{jit.DeclineStream, jit.DeclineNoRoom} {
+			for _, why := range []composer.Decline{composer.DeclineStream, composer.DeclineNoRoom} {
 				if n := s.BlockDeclines[why]; n > 0 {
-					t.Errorf("the composer declined %d block step(s) on the card: %s", n, jit.DeclineName(int(why)))
+					t.Errorf("the composer declined %d block step(s) on the card: %s", n, composer.DeclineName(int(why)))
 				}
 			}
 		}
@@ -177,8 +177,8 @@ func TestKVIsHeldOnce(t *testing.T) {
 	}
 	t.Run("host", func(t *testing.T) { arms(t, nil) })
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

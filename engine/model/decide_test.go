@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -202,9 +202,9 @@ func TestDecisionMatchesLlamaCpp(t *testing.T) {
 				// composer's forms, against the same golden.
 				t.Run(req+"/composed", func(t *testing.T) {
 					m.SetKVF16(false)
-					var g *tier.GPU
+					var g *gpu.GPU
 					for _, spec := range stepDevices() {
-						if d, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)); err == nil && d != nil {
+						if d, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)); err == nil && d != nil {
 							g = d
 							break
 						}
@@ -229,7 +229,7 @@ func TestDecisionMatchesLlamaCpp(t *testing.T) {
 					}
 					checkDecisions(t, qs, ans, gold, c.tol, !c.ownConfidence)
 					st := g.Stats()
-					served, declined := st.ServedPart(tier.ComposedSample)
+					served, declined := st.ServedPart(gpu.ComposedSample)
 					t.Logf("%d device blocks; %d prompts picked, %d picks by the composer, %d declined (%s)", d.DeviceBlocks(), d.picked, served, declined, declinesOf(st))
 					if c.kind != jlm.DecisionClef && c.kind != jlm.DecisionKev && (d.picked == 0 || served != d.picked || declined != 0) {
 						t.Fatalf("%d prompts picked, %d by the composer, %d declined", d.picked, served, declined)

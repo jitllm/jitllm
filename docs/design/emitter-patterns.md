@@ -18,7 +18,7 @@ An important correction to the requested inventory: **this checkout has no AVX-5
 
 ### Host emitters
 
-All filenames in this table are relative to `jit/cpu/`; numbers following filenames are their line counts.
+All filenames in this table are relative to `engine/device/cpu/`; numbers following filenames are their line counts.
 
 | Tier | Family | Files and lines | Total |
 |---|---|---|---:|
@@ -53,11 +53,11 @@ Additional host infrastructure, excluded from that subtotal:
 | Dot-product instruction selection | `prevnni.go` — **237** |
 | Shared layouts, constants and shape policies | `actkind.go` 32; `elem_const.go` 124; `imgproc_const.go` 327; `resample_const.go` 88; `ropetab_const.go` 87; `rowconst.go` 46; `rowmode.go` 13; `sample_const.go` 87; `topk_const.go` 210; `sparsemixer_const.go` 63; `xielu_const.go` 45; `hc_const.go` 40; `dplane.go` 53; `scstream.go` 71; `fusedgroup.go` 72; `codes.go` 33 — **1,391** |
 
-All non-test Go files directly under `jit/cpu` total **31,883 lines**. The remaining 3,302 lines are dispatch, mapping/execution, probes, drivers, hooks and unsupported-platform wrappers. They are not counted as template-removal opportunities.
+All non-test Go files directly under `engine/device/cpu` total **31,883 lines**. The remaining 3,302 lines are dispatch, mapping/execution, probes, drivers, hooks and unsupported-platform wrappers. They are not counted as template-removal opportunities.
 
 ### Device emitters
 
-All filenames below are relative to `jit/gpu/kernels/`.
+All filenames below are relative to `composer/kernels/`.
 
 **The ordinary families produce shared IR once for all three backends.** They must not be counted three times. Matrix-unit variants differ: fragment MMA is PTX-only; collective tiles target MSL/SPIR-V, subject to supported shapes. The capability split is explicitly tested in [mmacap_test.go:14](../../jit/gpu/lowertest/mmacap_test.go).
 
@@ -78,16 +78,16 @@ Additional device-kernel support:
 - **761 lines:** `actkind.go` 139, `config.go` 23, `decodeplan.go` 142, `divrn.go` 102, `quantof.go` 32, `ropetab_const.go` 171, `scstream.go` 85, `tile.go` 67.
 - **1,318 lines:** packing/allocation and test switches: `pack.go` 649, `arena.go` 529, `arena_unix.go` 43, `arena_other.go` 27, `benchknob.go` 26, `benchknob_off.go` 7, `pagedfault.go` 29, `pagedfault_off.go` 8.
 
-All non-test Go files directly under `jit/gpu/kernels` total **17,703 lines**.
+All non-test Go files directly under `composer/kernels` total **17,703 lines**.
 
 ### IR and backend lowering
 
 | Layer/backend | Files and lines | Total |
 |---|---|---:|
-| Typed IR, builder, validation, fragment/collective matrix contracts | `jit/ir/ir.go` 757; `tile.go` 410 | 1,167 |
-| CUDA/PTX | `jit/ptx/lower.go` 486; `buf.go` 121 | 607 |
-| Vulkan/SPIR-V | `jit/spirv/lower.go` 695; `spirv.go` 141; `tile.go` 236 | 1,072 |
-| Metal/MSL | `jit/msl/msl.go` 472; `tile.go` 140 | 612 |
+| Typed IR, builder, validation, fragment/collective matrix contracts | `composer/ir/ir.go` 757; `tile.go` 410 | 1,167 |
+| CUDA/PTX | `composer/ptx/lower.go` 486; `buf.go` 121 | 607 |
+| Vulkan/SPIR-V | `composer/spirv/lower.go` 695; `spirv.go` 141; `tile.go` 236 | 1,072 |
+| Metal/MSL | `composer/msl/msl.go` 472; `tile.go` 140 | 612 |
 
 These lowerers are already the shared backend mechanism. I would leave them outside the initial factoring effort. PTX performs an ordered walk of IR; driver compilation owns physical allocation and scheduling ([lower.go:9](../../jit/ptx/lower.go)).
 

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // Violations for TestUnpackMatchesHostPacker (RULE 10): each is a one-field

@@ -2,7 +2,7 @@
 
 package cost
 
-import "github.com/jitllm/jitllm/jit"
+import "github.com/jitllm/jitllm/composer"
 
 var hardware = []Profile{
 	{
@@ -10,8 +10,8 @@ var hardware = []Profile{
 		API:    "amd64",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceCPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceCPU,
 				Slots:    6,
 				Lanes:    8,
 				ExactDiv: true,
@@ -98,8 +98,8 @@ var hardware = []Profile{
 		API:    "arm64",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceCPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceCPU,
 				Slots:    4,
 				Lanes:    4,
 				ExactDiv: true,
@@ -174,8 +174,8 @@ var hardware = []Profile{
 		API:    "msl",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:  jit.DeviceGPU,
+			Device: composer.Device{
+				Kind:  composer.DeviceGPU,
 				Slots: 16384,
 				Lanes: 32,
 			},
@@ -244,8 +244,8 @@ var hardware = []Profile{
 		API:    "amd64",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceCPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceCPU,
 				Slots:    4,
 				Lanes:    4,
 				ExactDiv: true,
@@ -321,8 +321,8 @@ var hardware = []Profile{
 		API:    "amd64",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceCPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceCPU,
 				Slots:    14,
 				Lanes:    8,
 				ExactDiv: true,
@@ -406,8 +406,8 @@ var hardware = []Profile{
 		API:    "amd64",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceCPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceCPU,
 				Slots:    4,
 				Lanes:    8,
 				ExactDiv: true,
@@ -492,8 +492,8 @@ var hardware = []Profile{
 		API:    "ptx",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceGPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceGPU,
 				Slots:    221184,
 				Lanes:    32,
 				ExactDiv: true,
@@ -563,8 +563,8 @@ var hardware = []Profile{
 		API:    "ptx",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceGPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceGPU,
 				Slots:    30720,
 				Lanes:    32,
 				ExactDiv: true,
@@ -634,8 +634,8 @@ var hardware = []Profile{
 		API:    "ptx",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceGPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceGPU,
 				Slots:    270336,
 				Lanes:    32,
 				ExactDiv: true,
@@ -705,8 +705,8 @@ var hardware = []Profile{
 		API:    "ptx",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceGPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceGPU,
 				Slots:    89088,
 				Lanes:    32,
 				ExactDiv: true,
@@ -776,8 +776,8 @@ var hardware = []Profile{
 		API:    "ptx",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceGPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceGPU,
 				Slots:    40960,
 				Lanes:    32,
 				ExactDiv: true,
@@ -847,8 +847,8 @@ var hardware = []Profile{
 		API:    "ptx",
 		Source: "probe",
 		Device: Device{
-			Device: jit.Device{
-				Kind:     jit.DeviceGPU,
+			Device: composer.Device{
+				Kind:     composer.DeviceGPU,
 				Slots:    163840,
 				Lanes:    32,
 				ExactDiv: true,

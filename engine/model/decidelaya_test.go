@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -49,7 +49,7 @@ var layaCases = []struct {
 // of the encoder and its head on one device (encdev.go), tuning off.
 type layaArm struct {
 	name string
-	gpu  *tier.GPU // nil: the host
+	gpu  *gpu.GPU // nil: the host
 }
 
 // layaArms is the host and each device present; the devices close with t.
@@ -57,8 +57,8 @@ func layaArms(t *testing.T) []layaArm {
 	t.Helper()
 	arms := []layaArm{{name: "host"}}
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -111,7 +111,7 @@ func layaExpressible(m *Model, violation string) int {
 // the host's tolerance: the f32 reduction order of the device's own kernels
 // over 28 blocks (the checkpoint) or 2 (the fixture), and on a V100 the
 // binary16 operands of sm_70's prompt kernels: the fixture there reads 2.6e-4,
-// and 1e-6 with tier.Config.NoMMA and NoVolta, which take them away.
+// and 1e-6 with gpu.Config.NoMMA and NoVolta, which take them away.
 var layaDevTol = map[string]float64{"fixture": 4e-4, "laya": 0.035}
 
 func TestLayaMatchesReference(t *testing.T) {

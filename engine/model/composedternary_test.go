@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/composer/x86"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/x86"
 )
 
 // The statement of a projection over int8 inputs per token (graph's
@@ -87,16 +87,16 @@ func perRowWant(t *testing.T, typ quant.Type, w []byte, x []float32, rows, k, wi
 // device's form (TestComposedGPUTernaryPerToken, jit) forms every shape.
 func TestComposedTernaryMatVecPerToken(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
-	int8Reg := jit.Default()
-	p := int8Reg.Profiles[jit.DeviceCPU]
-	p.Int8 = &jit.Int8Form{Window: 32, Word: 4, Sums: 16, UnsignedDot: uint64(x86.ISAVNNI)}
-	int8Reg.Profiles[jit.DeviceCPU] = p
+	int8Reg := composer.Default()
+	p := int8Reg.Profiles[composer.DeviceCPU]
+	p.Int8 = &composer.Int8Form{Window: 32, Word: 4, Sums: 16, UnsignedDot: uint64(x86.ISAVNNI)}
+	int8Reg.Profiles[composer.DeviceCPU] = p
 	arms := []struct {
 		name string
-		reg  *jit.Registry
+		reg  *composer.Registry
 		int8 bool
 	}{
-		{"decoded", jit.Default().WithoutInt8(jit.DeviceCPU), false},
+		{"decoded", composer.Default().WithoutInt8(composer.DeviceCPU), false},
 		{"int8", int8Reg, true},
 	}
 	right, evens, unformed := map[string]int{}, map[string]int{}, map[string]string{}
@@ -140,12 +140,12 @@ func TestComposedTernaryMatVecPerToken(t *testing.T) {
 					for _, arm := range arms {
 						name := fmt.Sprintf("%v/k %d/%d rows/%d tokens/%s", typ, k, rows, tokens, arm.name)
 						reg := arm.reg
-						pr := reg.Profiles[jit.DeviceCPU]
+						pr := reg.Profiles[composer.DeviceCPU]
 						pr.Off = map[string]bool{"inplace": true}
-						reg.Profiles[jit.DeviceCPU] = pr
-						_, formed, err := reg.Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleAttnQ: jt},
-							Step:   jit.Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32},
-							Device: jit.Device{Kind: jit.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+						reg.Profiles[composer.DeviceCPU] = pr
+						_, formed, err := reg.Form(composer.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleAttnQ: jt},
+							Step:   composer.Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32},
+							Device: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
 						if err != nil {
 							unformed[name] = err.Error()
 							continue
@@ -234,13 +234,13 @@ func TestComposedQuantMapsMatchTheReference(t *testing.T) {
 		x := b.In("x", len(xs))
 		y := mapOver(b, "y", graph.Attrs{Fn: cs.fn, Const: cs.k}, nil, x)
 		b.Out(y)
-		reg := jit.Default().WithoutInt8(jit.DeviceCPU)
-		p := reg.Profiles[jit.DeviceCPU]
+		reg := composer.Default().WithoutInt8(composer.DeviceCPU)
+		p := reg.Profiles[composer.DeviceCPU]
 		p.Off = map[string]bool{"inplace": true}
-		reg.Profiles[jit.DeviceCPU] = p
-		_, codes, err := reg.Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{},
-			Step:   jit.Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
-			Device: jit.Device{Kind: jit.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+		reg.Profiles[composer.DeviceCPU] = p
+		_, codes, err := reg.Form(composer.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{},
+			Step:   composer.Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
+			Device: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

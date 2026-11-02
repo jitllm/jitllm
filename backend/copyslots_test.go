@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestCopySlotsMovesTheNamedSlots: CopySlots is how the shared recurrent form

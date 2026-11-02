@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSpecOverAFinalSoftcap is speculation over a model with a final logit
@@ -83,9 +83,9 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 					// Each cap on a tier of its own: a tier's head is built
 					// for the cap it first saw.
 					bound := specCapBound(t, m, spec, prompt, want)
-					open := func() *tier.GPU {
-						g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-							tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+					open := func() *gpu.GPU {
+						g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 						if err != nil || g == nil {
 							noDevice(t, spec, err)
 						}
@@ -135,7 +135,7 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 // uncapped ones 2 and up.
 func specCapBound(t *testing.T, m *Model, spec string, prompt, toks []int32) float64 {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
 		testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)

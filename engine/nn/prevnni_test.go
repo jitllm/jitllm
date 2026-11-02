@@ -6,8 +6,8 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // prevnniShape is a (rows, k) the packed family actually meets: 256 rows is a

@@ -259,7 +259,7 @@ var gemma4DevViolations = map[string][]c6Violation{
 //
 // The mixture block's prefill takes a wider bound: it reads 1.255e-05 on Metal
 // and 1.5e-06 on CUDA, and 8.388e-12 on Metal with the binary16 attention
-// tiles off (tier.Config.NoFlashPrefill), so the band is the tiles' -- 1.159e-06
+// tiles off (gpu.Config.NoFlashPrefill), so the band is the tiles' -- 1.159e-06
 // on the dense fixture -- amplified by the post-norms that rescale each
 // branch to unit RMS whatever its size.
 func TestGemma4OnEveryDevice(t *testing.T) {
@@ -275,7 +275,7 @@ func TestGemma4OnEveryDevice(t *testing.T) {
 				// CUDA's batched scores take binary16 operands (Stats.AttnMMA),
 				// and Gemma 4's attention scale of 1 leaves a 512-wide score
 				// unscaled: 9.079e-05 on CUDA, 1.760e-10 with f32 scores
-				// (tier.WithoutAttnMMA), 3.2e-11 on Vulkan.
+				// (gpu.WithoutAttnMMA), 3.2e-11 on Vulkan.
 				pre = 2e-4
 			}
 			fixtureOnEveryDeviceWithin(t, m, g, gemma4DevViolations[fx.name], pre)
