@@ -8,7 +8,7 @@ import (
 )
 
 // readoutPrompt is a decoder readout's prompt as the principle gates run it
-// in pieces: start readies the State, the caller prefills ids in as many
+// in pieces: start readies the instance, the caller prefills ids in as many
 // calls as it likes, and finish reads the scores from the last call's logits
 // -- a label readout's label logits, or Clef's head over every row the calls
 // kept.

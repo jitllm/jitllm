@@ -208,7 +208,7 @@ func loadK3Head(m *Model, cfg *Config, vec func(jlm.Role, int32) ([]float32, err
 	return nil
 }
 
-// k3Scratch is a State's Kimi-K3 buffers, grown to the widest call so a warm
+// k3Scratch is a instance's Kimi-K3 buffers, grown to the widest call so a warm
 // decode token and a warm step allocate nothing.
 type k3Scratch struct {
 	rows int
@@ -222,8 +222,8 @@ type k3Scratch struct {
 	lat, latAcc, latUp []float32
 }
 
-// allocK3 sizes a State's Kimi-K3 buffers for one row, and its streams.
-func (s *State) allocK3() {
+// allocK3 sizes a instance's Kimi-K3 buffers for one row, and its streams.
+func (s *Instance) allocK3() {
 	c := s.m.Cfg
 	if !c.ResAttn() && c.ExpertLatent == 0 {
 		return
@@ -241,7 +241,7 @@ func (s *State) allocK3() {
 }
 
 // growK3 sizes the per-row buffers for n rows.
-func (s *State) growK3(n int) {
+func (s *Instance) growK3(n int) {
 	c, g := s.m.Cfg, s.k3
 	if g == nil || g.rows >= n {
 		return
@@ -259,7 +259,7 @@ func (s *State) growK3(n int) {
 
 // k3Expand empties the bank of n rows of x: a token's checkpoints are its
 // own, and none exists before block 0.
-func (s *State) k3Expand(x []float32, rows int) {
+func (s *Instance) k3Expand(x []float32, rows int) {
 	c := s.m.Cfg
 	for r := 0; r < rows; r++ {
 		for k := 1; k < c.Streams(); k++ {
@@ -273,7 +273,7 @@ func (s *State) k3Expand(x []float32, rows int) {
 // sum_j p_j v_j with p the softmax of sum(w * rmsnorm(v_j)). It returns the
 // rows' mixes, n_embd each, contiguous -- stream 0 itself when the bank is
 // empty, where the softmax over one value is exactly one.
-func (s *State) k3Mix(x []float32, n, nb int, w tensor) ([]float32, error) {
+func (s *Instance) k3Mix(x []float32, n, nb int, w tensor) ([]float32, error) {
 	c, g := s.m.Cfg, s.k3
 	d := c.NEmbd
 	if nb == 0 || c.k3Fault == k3FaultNoBank {
@@ -320,7 +320,7 @@ func (s *State) k3Mix(x []float32, n, nb int, w tensor) ([]float32, error) {
 
 // k3Collapse is the head's mix for n rows of x over the whole bank, written
 // into stream 0, where the output norm reads it.
-func (s *State) k3Collapse(x []float32, n int) error {
+func (s *Instance) k3Collapse(x []float32, n int) error {
 	c := s.m.Cfg
 	if c.k3Fault == k3FaultNoHeadMix {
 		return nil
@@ -339,7 +339,7 @@ func (s *State) k3Collapse(x []float32, n int) error {
 // k3Plan adjusts block li's plan for Kimi-K3: the residual attention's mixes
 // and checkpoint, the latent mixture's width, KDA's decay bound and the MLA
 // latent norms' epsilon (Kimi-Linear's too).
-func (s *State) k3Plan(li int, plan *nn.LayerPlan) {
+func (s *Instance) k3Plan(li int, plan *nn.LayerPlan) {
 	c := s.m.Cfg
 	plan.LatentNormEps = c.LatentNormEps
 	if c.LayerKind(li).Recurrent() {

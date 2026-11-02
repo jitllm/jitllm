@@ -64,8 +64,8 @@ func TestPrefillMatchesForward(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer m.Close()
-				var states []*State
-				prefillVsForwardModel(t, m, false, 0, func(s *State) { states = append(states, s) })
+				var states []*Instance
+				prefillVsForwardModel(t, m, false, 0, func(s *Instance) { states = append(states, s) })
 				served := 0
 				for _, s := range states {
 					n, d := s.CPUBlockSteps()
@@ -153,7 +153,7 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 		noDevice(t, dev, err)
 	}
 	defer g.Close()
-	prefillVsForwardModel(t, m, false, minTok, func(s *State) {
+	prefillVsForwardModel(t, m, false, minTok, func(s *Instance) {
 		// A device that fails is an error here, never a sequence finished at home.
 		s.SetDeviceFallback(false)
 		if err := s.SetDevice(g); err != nil {
@@ -222,10 +222,10 @@ func prefillVsForwardOpts(t *testing.T, path string, exact bool, extra ...Option
 // prefillVsForwardModel compares m's Prefill against a Forward loop, each
 // session given to attach first where it is not nil, over a prompt of at
 // least minTok tokens where minTok is not 0.
-func prefillVsForwardModel(t *testing.T, m *Model, exact bool, minTok int, attach func(*State)) {
+func prefillVsForwardModel(t *testing.T, m *Model, exact bool, minTok int, attach func(*Instance)) {
 	var err error
-	newState := func(n int) *State {
-		s := m.NewState(n)
+	newState := func(n int) *Instance {
+		s := m.NewInstance(n)
 		if attach != nil {
 			attach(s)
 		}

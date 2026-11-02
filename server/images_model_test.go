@@ -22,11 +22,11 @@ const visionModel = "SmolVLM-256M-Instruct-Q8_0-vlm.jlm"
 const askPicture = "What is in this picture? Answer in one sentence."
 
 // engineRun is the engine's own image run, built without either shim: the
-// picture preprocessed on a State of the model, the prompt laid out by the
+// picture preprocessed on an instance of the model, the prompt laid out by the
 // model's ChatSpansImages, and a greedy generate of those spans.
 func engineRun(t *testing.T, e *Engine, lm *LoadedModel, pics ...[]byte) (string, []model.Span) {
 	t.Helper()
-	st := lm.m.NewState(64)
+	st := lm.m.NewInstance(64)
 	defer st.Close()
 	var imgs []model.Image
 	for _, pic := range pics {

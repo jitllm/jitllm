@@ -82,7 +82,7 @@ func splitEnv(t *testing.T) (path string, rounds, burn int) {
 //     prefiller, seeing a session decoding, prefills on the E-cores' own pool
 //     and lock, its threads at the E-core QoS class.
 //
-// Each turn opens a State per session, prefills the decoder to the depth,
+// Each turn opens an instance per session, prefills the decoder to the depth,
 // starts the prefiller on plen-token prompts in a loop, and times run decoded
 // tokens while it runs; the prefiller's rate is what it finished in that time.
 // Decode ratios are base/split time: above 1, split decodes faster.
@@ -121,9 +121,9 @@ func TestServingSplitAB(t *testing.T) {
 		m    *Model
 	}
 	turn := func(a arm) result {
-		d := a.m.NewState(depth + run + 64)
+		d := a.m.NewInstance(depth + run + 64)
 		defer d.Close()
-		s := a.m.NewState(plen + 8)
+		s := a.m.NewInstance(plen + 8)
 		defer s.Close()
 		if _, err := d.Prefill(prompt); err != nil {
 			t.Fatal(err)
@@ -240,7 +240,7 @@ func TestServingSplitSingleSessionUnchanged(t *testing.T) {
 	type result struct{ dec, pre float64 }
 	var onE int64
 	turn := func(m *Model) result {
-		s := m.NewState(plen + run + 64)
+		s := m.NewInstance(plen + run + 64)
 		defer s.Close()
 		t0 := time.Now()
 		if _, err := s.Prefill(prompt); err != nil {
@@ -307,12 +307,12 @@ func TestServingSplitIsTakenBesideADecoderOnly(t *testing.T) {
 		prompt[i] = int32(1 + (i*37)%200)
 	}
 	// beside runs a decoder in the background and prefills prompt on another
-	// State of the same model, returning the prefill's logits and its
+	// Instance of the same model, returning the prefill's logits and its
 	// placement count.
 	beside := func(m *Model) ([]float32, int64) {
-		d := m.NewState(4096)
+		d := m.NewInstance(4096)
 		defer d.Close()
-		s := m.NewState(256)
+		s := m.NewInstance(256)
 		defer s.Close()
 		var stop atomic.Bool
 		var wg sync.WaitGroup
@@ -338,7 +338,7 @@ func TestServingSplitIsTakenBesideADecoderOnly(t *testing.T) {
 		return lg, s.ServedOnE
 	}
 	alone := func(m *Model) ([]float32, int64) {
-		s := m.NewState(256)
+		s := m.NewInstance(256)
 		defer s.Close()
 		l, err := s.Prefill(prompt)
 		if err != nil {

@@ -64,7 +64,7 @@ func TestABBatchThroughput(t *testing.T) {
 	// input keeps every round doing identical work.
 	tok := int32(min(1000, m.Cfg.NVocab-1))
 
-	single := m.NewState(depth + iters + 1)
+	single := m.NewInstance(depth + iters + 1)
 	defer single.Close()
 	seed(t, single, tok, depth)
 	aFn := func(n int) {
@@ -124,7 +124,7 @@ func unstable(r bench.Result) string {
 	return "   UNSTABLE -- do not quote"
 }
 
-func seed(t *testing.T, s *State, tok int32, depth int) {
+func seed(t *testing.T, s *Instance, tok int32, depth int) {
 	t.Helper()
 	for i := 0; i < depth; i++ {
 		if _, err := s.Forward(tok); err != nil {
@@ -170,7 +170,7 @@ func TestBatchProfile(t *testing.T) {
 			100*float64(tot)/float64(took.Nanoseconds()), line)
 	}
 
-	s := m.NewState(depth + iters + 1)
+	s := m.NewInstance(depth + iters + 1)
 	defer s.Close()
 	seed(t, s, tok, depth)
 	show("single", 1, func() {

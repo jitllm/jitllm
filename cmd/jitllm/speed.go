@@ -20,7 +20,7 @@ import (
 )
 
 // speedCmd is llama-bench's pp/tg measurement: a prompt of -p tokens and a
-// greedy decode of -n, each timed on its own, -r times on fresh States after
+// greedy decode of -n, each timed on its own, -r times on fresh instances after
 // one untimed warm-up of both.
 //
 // run's "prompt" figure is not a prefill rate: the first prompt of a process
@@ -95,9 +95,9 @@ func speedCmd(args []string) error {
 	for i := range prompt {
 		prompt[i] = seed[i%len(seed)]
 	}
-	// attach puts a fresh State of n positions on the device.
-	attach := func(n int) (*model.State, error) {
-		st := m.NewState(n)
+	// attach puts a fresh instance of n positions on the device.
+	attach := func(n int) (*model.Instance, error) {
+		st := m.NewInstance(n)
 		if d != nil {
 			if err := st.SetDevice(d); err != nil {
 				st.Close()
@@ -107,7 +107,7 @@ func speedCmd(args []string) error {
 		return st, nil
 	}
 	one := func(timed bool) (pp, tg time.Duration, err error) {
-		// The prompt's State is closed before the decode's is opened: two
+		// The prompt's instance is closed before the decode's is opened: two
 		// live sessions each hold a KV cache on every card, and the tier does
 		// not budget a second one. llama-bench's pp and tg are separate runs.
 		st, err := attach(*p + 1)
@@ -165,7 +165,7 @@ func speedCmd(args []string) error {
 		if err != nil {
 			return 0, 0, err
 		}
-		// The decode starts on a fresh State at position 1, as llama-bench's
+		// The decode starts on a fresh instance at position 1, as llama-bench's
 		// tg does, so it is not a decode at the prompt's depth. Speculation
 		// starts from the seed sentence instead: a prediction block's
 		// acceptance is a property of the text, and a one-token prompt has
@@ -333,11 +333,11 @@ func medianF32(v []float32) float32 {
 // with prompt, decode n tokens a round, alternately one session after another
 // and all together through model.Step. Each arm's rate is the k sessions'
 // tokens over its wall.
-func sessionsRun(attach func(int) (*model.State, error), prompt []int32, k, n, reps int) error {
+func sessionsRun(attach func(int) (*model.Instance, error), prompt []int32, k, n, reps int) error {
 	var alone, together []float64
 	for r := 0; r < 2*reps; r++ {
 		joint := r%2 == 1
-		sts := make([]*model.State, k)
+		sts := make([]*model.Instance, k)
 		toks := make([]int32, k)
 		for i := range sts {
 			// Closed at the end of the round; an error ends the process.
@@ -477,7 +477,7 @@ func ttftText(m *model.Model, p int) string {
 // the process's -- the container opened, the blocks placed and uploaded, the
 // kernels compiled -- and each after it is a fresh session on the loaded
 // model: tokenize, take pages, prefill, sample.
-func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int, t00 time.Time, tOpen, tDev time.Duration) error {
+func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps int, t00 time.Time, tOpen, tDev time.Duration) error {
 	text := ttftText(m, p)
 	var tAttach time.Duration
 	var compiled, tuned int64
@@ -537,10 +537,10 @@ func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int
 }
 
 // warmHonest refuses a timed prompt that was not the whole prompt computed
-// from nothing: a fresh State at position 0 that ran every row through its
+// from nothing: a fresh instance at position 0 that ran every row through its
 // blocks (none restored from a prefix cache) and handed back the last row's
 // logits, which the device must have finished to return.
-func warmHonest(st *model.State, n int, logits []float32, vocab int) error {
+func warmHonest(st *model.Instance, n int, logits []float32, vocab int) error {
 	switch {
 	case st.KVRestored() != 0:
 		return fmt.Errorf("speed: the timed prompt restored %d position(s) from a prefix cache", st.KVRestored())

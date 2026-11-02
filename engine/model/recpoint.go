@@ -12,7 +12,7 @@ import "github.com/jitllm/jitllm/engine/nn"
 // takes the first one whose pages and every summary are both there.
 //
 // Beside the spaced points, one at the position a prompt parts from the one
-// the State ran before it (recMark): the end of what they share, which the
+// the instance ran before it (recMark): the end of what they share, which the
 // prompt after this one is likely to share too -- a request's state before
 // each of its questions, a conversation before its newest turn -- so that
 // prompt resumes exactly there and not at the spaced point below it.
@@ -23,7 +23,7 @@ import "github.com/jitllm/jitllm/engine/nn"
 // page. On LFM2 (a short convolution's two rows a block) it is kvChunk; on a
 // gated delta rule, whose state is megabytes a block, the page. Zero on a
 // model with no recurrence or no pages.
-func (s *State) recEvery() int {
+func (s *Instance) recEvery() int {
 	if s.recEv != 0 {
 		return max(s.recEv, 0)
 	}
@@ -57,7 +57,7 @@ func (s *State) recEvery() int {
 // afresh, so a restore probing every chunk hashes the prompt once), any other
 // the partial page's named by its fill (pageKeyFill), as restoreKV reads
 // them.
-func (s *State) recPointKey(pos int) (string, int) {
+func (s *Instance) recPointKey(pos int) (string, int) {
 	p := s.recurrentBoundary()
 	al := s.attnLayer()
 	if p == 0 || al < 0 || pos <= 0 {
@@ -75,7 +75,7 @@ func (s *State) recPointKey(pos int) (string, int) {
 // recPointsOn says this prefill keeps restore points: a single sequence
 // under a cache namespace with a store, on a hybrid, outside a speculation
 // step (whose rows may be rolled back).
-func (s *State) recPointsOn() bool {
+func (s *Instance) recPointsOn() bool {
 	if s.rconv == nil || s.kv.ns == "" || s.batched || s.rows != nil {
 		return false
 	}
@@ -85,8 +85,8 @@ func (s *State) recPointsOn() bool {
 
 // sealRecLayer stores layer li's summary as it is in rconv/rstate, as the
 // restore point at pos. The two are written as one entry through a buffer
-// kept on the State, so a warm prompt allocates nothing for it.
-func (s *State) sealRecLayer(li, pos int) bool {
+// kept on the instance, so a warm prompt allocates nothing for it.
+func (s *Instance) sealRecLayer(li, pos int) bool {
 	key, idx := s.recPointKey(pos)
 	if key == "" {
 		return false
@@ -115,7 +115,7 @@ func (s *State) sealRecLayer(li, pos int) bool {
 // recRowPoint is the host row loop's half: after the row that leaves the
 // sequence at pos, a host linear block's summary is a restore point when pos
 // is one.
-func (s *State) recRowPoint(li, slot, pos int) {
+func (s *Instance) recRowPoint(li, slot, pos int) {
 	if slot != 0 || !s.recPointsOn() || !s.recPoint(pos) {
 		return
 	}
@@ -124,14 +124,14 @@ func (s *State) recRowPoint(li, slot, pos int) {
 
 // recPoint says pos is a restore point of this prefill: a multiple of
 // recEvery, or the mark.
-func (s *State) recPoint(pos int) bool {
+func (s *Instance) recPoint(pos int) bool {
 	r := s.recEvery()
 	return r > 0 && pos > 0 && (pos%r == 0 || pos == s.recMark)
 }
 
 // markParting sets recMark for a cached prompt named by key: where it parts
 // from the last one, when that is inside it. The key is kept for the next.
-func (s *State) markParting(key []int32) {
+func (s *Instance) markParting(key []int32) {
 	s.recMark = 0
 	if s.rconv == nil {
 		return
@@ -152,7 +152,7 @@ func (s *State) markParting(key []int32) {
 // linear block's summary is read back from the device and stored as the
 // point (its row loop runs there, out of recRowPoint's reach). pos is where
 // the chunk ended.
-func (s *State) recChunkPoint(slot, pos int) {
+func (s *Instance) recChunkPoint(slot, pos int) {
 	if slot != 0 || !s.recPointsOn() || !s.recPoint(pos) || s.devCount() == 0 || s.ld == nil {
 		return
 	}
@@ -172,7 +172,7 @@ func (s *State) recChunkPoint(slot, pos int) {
 
 // sealRecOnDevice keeps the point at pos of every block whose device keeps
 // its restore points, in one call (nn.RecShareDevice.SnapRecs).
-func (s *State) sealRecOnDevice(pos int) bool {
+func (s *Instance) sealRecOnDevice(pos int) bool {
 	key, _ := s.recPointKey(pos)
 	if key == "" {
 		return false
@@ -194,7 +194,7 @@ func (s *State) sealRecOnDevice(pos int) bool {
 // recPointAt reports whether every linear block's summary for position pos is
 // in the store, and leaves them in rconv/rstate when it is: the probe a
 // restore asks before it takes a fill.
-func (s *State) recPointAt(pos int) bool {
+func (s *Instance) recPointAt(pos int) bool {
 	key, idx := s.recPointKey(pos)
 	return key != "" && s.faultRecurrentAt(idx, key, false)
 }
@@ -202,7 +202,7 @@ func (s *State) recPointAt(pos int) bool {
 // aliasMark names the shared pages the mark falls inside by the mark's fill
 // (pageKeyFill), once the prompt has run past it: the restore of exactly
 // that prefix, which a spaced point below it would miss.
-func (s *State) aliasMark(from, pos int) {
+func (s *Instance) aliasMark(from, pos int) {
 	m := s.recMark
 	if !s.recPointsOn() || s.kv.share == nil || m <= from || m >= pos {
 		return
@@ -217,7 +217,7 @@ func (s *State) aliasMark(from, pos int) {
 // recDev is the device keeping block li's restore points when the session
 // shares through the prefix cache and the device keeps them
 // (nn.RecShareDevice), nil otherwise.
-func (s *State) recDev(li int) nn.RecShareDevice {
+func (s *Instance) recDev(li int) nn.RecShareDevice {
 	if s.kv.share == nil || !s.devAt(li) {
 		return nil
 	}

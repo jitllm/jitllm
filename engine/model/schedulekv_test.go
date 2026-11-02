@@ -39,8 +39,8 @@ func TestSchedulerUnderAKVBudgetMatchesOneWithout(t *testing.T) {
 			prompts[r][j] = int32((11 + r*457 + j*31) % m.Cfg.NVocab)
 		}
 	}
-	run := func(budget bool) ([][]int32, *State) {
-		sc := NewScheduler(m, rows, maxSeq)
+	run := func(budget bool) ([][]int32, *Instance) {
+		sc := NewRowScheduler(m, rows, maxSeq)
 		t.Cleanup(sc.Close)
 		if budget {
 			sc.st.SetKVStore(NewMemStore())

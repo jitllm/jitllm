@@ -98,7 +98,7 @@ func batchEngine(t *testing.T, name string, cfg Config, sessions int, tc func(*t
 // figure is machine-wide (backend.cudaDev.Mem): another process holding the
 // card -- another test binary, another session's jitllmd -- leaves the model
 // split between the card and the host, and a split session is stepped alone
-// (State.StepRefusal), correctly. Those gates then failed far from the cause,
+// (Instance.StepRefusal), correctly. Those gates then failed far from the cause,
 // as "did not run as a row", and looked like an order dependence between
 // tests in this package: they failed after the TestBatch* gates and passed
 // alone only because the card happened to be freer on the second run. Nothing
@@ -185,7 +185,7 @@ func batchStats(t *testing.T, c clients) *v1.BatchStats {
 // prompt and prefix: the host is the reference that is in neither arm.
 func hostGap(t *testing.T, m *model.Model, prompt, prefix []int32, a, b int32) float64 {
 	t.Helper()
-	st := m.NewState(len(prompt) + len(prefix) + 1)
+	st := m.NewInstance(len(prompt) + len(prefix) + 1)
 	defer st.Close()
 	lg, err := st.Prefill(append(append([]int32{}, prompt...), prefix...))
 	if err != nil {
@@ -226,7 +226,7 @@ func sameAsAlone(t *testing.T, m *model.Model, what, prompt string, got, want []
 //
 // Against a step that feeds row i the token of row i+1, every row parts from
 // its alone run by whole logits at its second token. Against a loop that
-// steps each row with State.Forward, the outputs match and JointSteps and
+// steps each row with Instance.Forward, the outputs match and JointSteps and
 // SessionRows stay at zero.
 func TestBatchConcurrentGreedyGeneratesShareSteps(t *testing.T) {
 	eachBatchModel(t, func(t *testing.T, name string) {
@@ -388,7 +388,7 @@ type streamed struct {
 // run to max_tokens exactly as they do alone. Run twice, the second round
 // ends with the device's ledger where the first left it. Against a cancel
 // that retires the whole step, the other two stop short and are cancelled
-// with it; against a closed session whose State is not closed, the ledger
+// with it; against a closed session whose instance is not closed, the ledger
 // keeps its history.
 func TestBatchCancelOneRowLeavesTheOthers(t *testing.T) {
 	eachBatchModel(t, func(t *testing.T, name string) {
@@ -651,8 +651,8 @@ func replayPair(t *testing.T, lm *LoadedModel, maxSeq int, sp model.Sampler, sub
 	t.Helper()
 	// The server's sessions' capacity: a plan's capacity can choose a
 	// different attention kernel, which is a different reduction order.
-	open := func() *model.State {
-		st := lm.m.NewState(maxSeq)
+	open := func() *model.Instance {
+		st := lm.m.NewInstance(maxSeq)
 		t.Cleanup(func() { st.Close() })
 		if err := st.SetDeviceLayers(lm.dev, -1); err != nil {
 			t.Fatal(err)
@@ -666,8 +666,8 @@ func replayPair(t *testing.T, lm *LoadedModel, maxSeq int, sp model.Sampler, sub
 	// The loop resets a session before a generate that does not continue it.
 	a.Reset()
 	b.Reset()
-	out, err := model.StepRuns([]model.Run{{State: a, Tokens: subjPrompt, Logits: true},
-		{State: b, Tokens: compPrompt, Logits: true}})
+	out, err := model.StepRuns([]model.Run{{Instance: a, Tokens: subjPrompt, Logits: true},
+		{Instance: b, Tokens: compPrompt, Logits: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -681,9 +681,9 @@ func replayPair(t *testing.T, lm *LoadedModel, maxSeq int, sp model.Sampler, sub
 		if j == len(subj)-1 {
 			break
 		}
-		runs := []model.Run{{State: a, Tokens: subj[j : j+1], Logits: true}}
+		runs := []model.Run{{Instance: a, Tokens: subj[j : j+1], Logits: true}}
 		if j < len(comp) {
-			runs = append(runs, model.Run{State: b, Tokens: comp[j : j+1], Logits: true})
+			runs = append(runs, model.Run{Instance: b, Tokens: comp[j : j+1], Logits: true})
 		}
 		if out, err = model.StepRuns(runs); err != nil {
 			t.Fatal(err)

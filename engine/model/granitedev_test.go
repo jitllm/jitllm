@@ -270,7 +270,7 @@ func graniteRun(t *testing.T, m *Model, dev string, seq int, prompt, forced []in
 		return nil, tier.Stats{}, "no " + dev + " here"
 	}
 	defer g.Close()
-	st := m.NewState(seq)
+	st := m.NewInstance(seq)
 	defer st.Close()
 	if err := st.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -328,7 +328,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 			c.ResidualScale, c.LogitScale, c.EmbdScale = 0.22, 8, 12
 			c.AttnScale = 1 / float64(c.HeadDim)
 			ids := m.Vocab.Encode("The capital of France is a city on the river", true)
-			decode := func(st *State) [][]float32 {
+			decode := func(st *Instance) [][]float32 {
 				var out [][]float32
 				for _, id := range ids {
 					lg, err := st.Forward(id)
@@ -339,15 +339,15 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 				}
 				return out
 			}
-			prefill := func(st *State) [][]float32 {
+			prefill := func(st *Instance) [][]float32 {
 				lg, err := st.Prefill(ids)
 				if err != nil {
 					t.Fatal(err)
 				}
 				return [][]float32{slices.Clone(lg)}
 			}
-			onHost := func(run func(*State) [][]float32) [][]float32 {
-				st := m.NewState(len(ids) + 1)
+			onHost := func(run func(*Instance) [][]float32) [][]float32 {
+				st := m.NewInstance(len(ids) + 1)
 				defer st.Close()
 				return run(st)
 			}
@@ -366,14 +366,14 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 			ran := 0
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					onDevice := func(run func(*State) [][]float32, opts ...tier.Option) ([][]float32, tier.Stats) {
+					onDevice := func(run func(*Instance) [][]float32, opts ...tier.Option) ([][]float32, tier.Stats) {
 						g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
 							tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t), opts)...)
 						if err != nil || g == nil {
 							noDevice(t, dev, err)
 						}
 						defer g.Close()
-						st := m.NewState(len(ids) + 1)
+						st := m.NewInstance(len(ids) + 1)
 						defer st.Close()
 						if err := st.SetDevice(g); err != nil {
 							t.Fatal(err)
@@ -391,7 +391,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 					worst := 0.0
 					for _, arm := range []struct {
 						name  string
-						run   func(*State) [][]float32
+						run   func(*Instance) [][]float32
 						want  [][]float32
 						bound float64
 					}{{"decode", decode, wantDec, 1e-6}, {"prefill", prefill, wantPre, 1e-5}} {

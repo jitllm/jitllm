@@ -221,7 +221,7 @@ func TestBitNetFeaturesAreLoadBearing(t *testing.T) {
 	worstOf := func(t *testing.T, m *Model) float64 {
 		t.Helper()
 		worst := 0.0
-		st := m.NewState(len(g.IDs) + 1)
+		st := m.NewInstance(len(g.IDs) + 1)
 		defer st.Close()
 		for p, id := range g.IDs {
 			lg, err := st.Forward(id)

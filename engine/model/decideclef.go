@@ -556,7 +556,7 @@ func (d *Decider) clefForward(p *clefPrompt, out []float32) error {
 	return d.clefHead(p, out)
 }
 
-// clefBegin readies the State to keep every row of p's prefill (one call or
+// clefBegin readies the instance to keep every row of p's prefill (one call or
 // several, as a relocation mid-prompt runs it) and clefEnd stops it.
 func (d *Decider) clefBegin(p *clefPrompt) {
 	r, s := d.clef, d.st

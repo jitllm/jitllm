@@ -26,9 +26,9 @@ func (s *PlacementService) GetPlacement(ctx context.Context, req *connect.Reques
 }
 
 // SetPlacement moves the seam. It takes the session's lock, so it waits for
-// a generate to finish rather than mutating the State mid-Forward.
+// a generate to finish rather than mutating the instance mid-Forward.
 // reach makes every device named part of the session's model's tier and puts
-// the session's State on it: how a model loaded host-only, or without the
+// the session's instance on it: how a model loaded host-only, or without the
 // device asked for, is moved there later (Engine.attachDevice).
 func (s *PlacementService) reach(sess *Session, ids ...string) error {
 	for _, id := range ids {
@@ -96,7 +96,7 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 
 // RelocateBlocks moves a contiguous block range while serving, to any device
 // of the session's tier or to the CPU ("cpu"), each block's history with it
-// (model.State.MoveBlocks).
+// (model.Instance.MoveBlocks).
 //
 // A range wholly on devices that names a card moves there through
 // Engine.MoveBlocks, so a generating session keeps generating while the
@@ -214,7 +214,7 @@ func (s *PlacementService) TuneSeam(ctx context.Context, req *connect.Request[v1
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-tick.C:
-			// The snapshot, not the State: Forward writes the tuner with no
+			// The snapshot, not the instance: Forward writes the tuner with no
 			// lock, so it is read as of the session's last refresh.
 			blocks, settled := int(sess.snapSeam.Load()), sess.snapSeamSettled.Load()
 			if blocks == lastBlocks && !settled {

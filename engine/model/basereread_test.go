@@ -27,7 +27,7 @@ func TestTheDeviceCallbackDoesNotRereadTheBase(t *testing.T) {
 	if c.H.NBlocks == 0 {
 		t.Skip("the fixture has no block pages, so there is nothing to re-read")
 	}
-	s := m.NewState(64)
+	s := m.NewInstance(64)
 	defer s.Close()
 
 	sel := []uint32{3, 1, uint32(m.Cfg.NExpert - 1), 2}

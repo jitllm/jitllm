@@ -97,7 +97,7 @@ func (s *SessionService) ResetSession(ctx context.Context, req *connect.Request[
 	if err != nil {
 		return nil, connectErr(err)
 	}
-	// Reset mutates the State, so it waits for any generate in flight rather
+	// Reset mutates the instance, so it waits for any generate in flight rather
 	// than racing it.
 	sess.mu.Lock()
 	sess.st.Reset()

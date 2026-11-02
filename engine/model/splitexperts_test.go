@@ -75,7 +75,7 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 			defer m.Close()
 			want := make([][]float32, 0, len(ids))
 			func() {
-				s := m.NewState(len(ids) + 2)
+				s := m.NewInstance(len(ids) + 2)
 				defer s.Close()
 				for _, id := range ids {
 					l, err := s.Forward(id)
@@ -105,7 +105,7 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 					var got [][]float32
 					var placed int
 					func() {
-						s := m.NewState(len(ids) + 2)
+						s := m.NewInstance(len(ids) + 2)
 						defer s.Close()
 						g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
 							tier.WithConfig(func(c *tier.Config) {
@@ -239,7 +239,7 @@ func TestHybridShortPromptTakesTheDecodePath(t *testing.T) {
 	short := []int32{1008, 10484, 318, 15383, 387}
 	long := append(append([]int32(nil), short...), 17374, 13, 646, 1008, 10484, 318, 15383)
 	prompt := func(ids []int32) int {
-		s := m.NewState(len(ids) + 2)
+		s := m.NewInstance(len(ids) + 2)
 		defer s.Close()
 		s.SetDeviceLayers(g, m.Cfg.NLayer)
 		if s.GPULayers() == 0 {

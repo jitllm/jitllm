@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestStateSampleIsComposed requires every token State.Sample draws on the
+// TestStateSampleIsComposed requires every token Instance.Sample draws on the
 // CPU device to come from the composed draws (cpuDraw: the top-k walk, and
 // with no top-k the row and the cut, graph.SampleRow and graph.SampleCut),
 // counted served and none declined, over the logits of a real model, the
@@ -20,7 +20,7 @@ import (
 // 14332 where the definition lands on 476, 5.3e-5 of the mass from an edge),
 // unless its point sits closer to an edge than float32 rounding reaches; nine
 // in ten must be decisive. The graphs' exactness is jit's
-// TestComposedCPUSampleRow/Cut/Walk; this gate says State.Sample runs them
+// TestComposedCPUSampleRow/Cut/Walk; this gate says Instance.Sample runs them
 // with the inputs the sampler draws from.
 func TestStateSampleIsComposed(t *testing.T) {
 	if _, err := os.Stat(models["stories15M"]); err != nil {
@@ -43,7 +43,7 @@ func TestStateSampleIsComposed(t *testing.T) {
 		{"top-k past the walk", Sampler{Temp: 0.9, TopK: 1000, TopP: 0.97, RepeatPen: 1.2, Seed: 23}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			st := m.NewState(96)
+			st := m.NewInstance(96)
 			defer st.Close()
 			composed, host, peek := c.smp, c.smp, c.smp
 			lg, err := st.Prefill([]int32{1, 450, 3014, 471, 263})

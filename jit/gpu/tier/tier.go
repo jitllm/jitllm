@@ -320,7 +320,7 @@ type Config struct {
 	KVReserve int
 	// Sessions is how many concurrent sessions each placed linear block
 	// reserves a recurrent pair for; 0 and 1 are one. See devTier.reserved.
-	// Without it the first State fills the card and a second finds no room for
+	// Without it the first instance fills the card and a second finds no room for
 	// its own state, so its blocks run on the host. An attention block reserves
 	// nothing per session: its history is paged, and a session takes pages as
 	// it writes rows.
@@ -961,7 +961,7 @@ type Stats struct {
 	// GemmVoltaSegments grid (Config.QKVGemm).
 	QKVGemmRuns int
 	// KVPrewarmPages counts pages a pool grew ahead of its history
-	// (PrewarmKV): the growth a State's first prompt no longer pays.
+	// (PrewarmKV): the growth a instance's first prompt no longer pays.
 	KVPrewarmPages int
 	// GroupedVolta counts a batched mixture's expert matvecs run as grouped
 	// GemmVolta on sm_70's tensor cores, or grouped GemmTile on Metal, rather
@@ -2036,7 +2036,7 @@ type devShared struct {
 	recLs []*layer
 	// headSrc is the first byte of the projection the resident head was
 	// uploaded from, and headNormHost the norm it was built with: what a
-	// second State's PrepHead is compared against (adoptHead). altNorms are
+	// second instance's PrepHead is compared against (adoptHead). altNorms are
 	// the other norms that head serves (headnorm.go).
 	headSrc      *byte
 	headNormHost []float32
@@ -2737,9 +2737,9 @@ const mvSample = 64
 func (g *devTier) mvPays(sid uint64, bytes int) bool {
 	// The sample is per session, not per device: latched per device, the
 	// verdict depended on how many matvecs the device had been offered since
-	// it opened, so two States on one tier computed the same token with
+	// it opened, so two instances on one tier computed the same token with
 	// different kernels (model.TestHybridSecondSessionMatchesTheFirst). Per
-	// session every State samples the same weights in the same order and
+	// session every instance samples the same weights in the same order and
 	// reaches the same verdict, and keeps it (TestMVPaysDoesNotDrift).
 	mv := g.mvFor(sid)
 	if mv.verdict == 0 {

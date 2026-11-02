@@ -20,27 +20,27 @@ import (
 // decoding is not split: it keeps the P and E cores, exactly as before, and so
 // does a session alone. See nn.JIT.BeginPrefillE.
 
-// servingGrace is how long after its last token a State still counts as
+// servingGrace is how long after its last token an instance still counts as
 // decoding: a streaming client's gaps between tokens are short against it, and
 // a session that has stopped is not held against the next prefill for long.
 const servingGrace = 250 * time.Millisecond
 
 var servingEpoch = time.Now()
 
-// live is the model's open States, for a prefill to ask whether another is
+// live is the model's open instances, for a prefill to ask whether another is
 // decoding.
 type live struct {
 	mu sync.Mutex
-	s  []*State
+	s  []*Instance
 }
 
-func (l *live) add(s *State) {
+func (l *live) add(s *Instance) {
 	l.mu.Lock()
 	l.s = append(l.s, s)
 	l.mu.Unlock()
 }
 
-func (l *live) remove(s *State) {
+func (l *live) remove(s *Instance) {
 	l.mu.Lock()
 	for i, o := range l.s {
 		if o == s {
@@ -53,17 +53,17 @@ func (l *live) remove(s *State) {
 
 // touch records that s is decoding now. One clock read and a store, so a warm
 // token still allocates nothing.
-func (s *State) touch() { s.ranAt.Store(int64(time.Since(servingEpoch)) + 1) }
+func (s *Instance) touch() { s.ranAt.Store(int64(time.Since(servingEpoch)) + 1) }
 
 // decoding reports whether s ran a token within servingGrace.
-func (s *State) decoding() bool {
+func (s *Instance) decoding() bool {
 	t := s.ranAt.Load()
 	return t != 0 && time.Since(servingEpoch)-time.Duration(t-1) < servingGrace
 }
 
-// othersDecoding reports whether a State of this model other than s is
+// othersDecoding reports whether an instance of this model other than s is
 // decoding.
-func (s *State) othersDecoding() bool {
+func (s *Instance) othersDecoding() bool {
 	l := &s.m.live
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -77,7 +77,7 @@ func (s *State) othersDecoding() bool {
 
 // splitWanted is whether s's next prefill chunk goes to the E-cores: the model
 // allows it (WithServingSplit) and another session is decoding.
-func (s *State) splitWanted() bool {
+func (s *Instance) splitWanted() bool {
 	return !s.m.opt.noServingSplit && s.othersDecoding()
 }
 
@@ -85,7 +85,7 @@ func (s *State) splitWanted() bool {
 // decoder that starts mid-prompt moves the rest of the prompt to the E-cores,
 // and one that stops brings it back.
 type prefillPlace struct {
-	s       *State
+	s       *Instance
 	started bool
 	onE     bool
 	low     sched.Lowered

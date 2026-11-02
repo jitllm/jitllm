@@ -9,10 +9,10 @@ import (
 )
 
 // The resident head is the model's: one projection per device, and a second
-// State on this tier finds it placed. A multi-token-prediction block projects
+// Instance on this tier finds it placed. A multi-token-prediction block projects
 // through the same matrix with its own head norm, so the head carries more
 // than one norm: the one it was built with, and one more per norm another
-// State brings. The projection is never duplicated -- it is the large part.
+// Instance brings. The projection is never duplicated -- it is the large part.
 
 // altNorm is a head norm other than the one the head was built with.
 type altNorm struct {
@@ -59,7 +59,7 @@ func (g *devTier) adoptHead(h *nn.Head) bool {
 	return true
 }
 
-// joinHead is PrepHead for a head another State placed: adoptHead under the
+// joinHead is PrepHead for a head another instance placed: adoptHead under the
 // tier's lock, without the graph drop a fresh head's upload needs.
 func (g *devTier) joinHead(h *nn.Head) bool {
 	g.mu.Lock()

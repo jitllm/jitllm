@@ -177,8 +177,8 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 							}
 						}
 					}
-					state := func() *State {
-						st := m.NewState(len(ids) + 1)
+					state := func() *Instance {
+						st := m.NewInstance(len(ids) + 1)
 						if gpu != nil {
 							st.SetDeviceLayers(gpu, -1)
 							if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
@@ -224,7 +224,7 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 				}
 				// The free-running read: the host's greedy text from each prompt.
 				for _, s := range g.Seqs {
-					st := m.NewState(len(s.Prompt) + len(s.Cont) + 1)
+					st := m.NewInstance(len(s.Prompt) + len(s.Cont) + 1)
 					lg, err := st.Prefill(s.Prompt)
 					if err != nil {
 						t.Fatal(err)
@@ -299,7 +299,7 @@ func k3RealViolate(t *testing.T, m *Model, g *k3RealGolden, bound float64) {
 			worst := 0.0
 			for _, s := range g.Seqs {
 				ids := append(slices.Clone(s.Prompt), s.Cont[:len(s.Cont)-1]...)
-				st := m.NewState(len(ids) + 1)
+				st := m.NewInstance(len(ids) + 1)
 				for p, id := range ids {
 					lg, err := st.Forward(id)
 					if err != nil {

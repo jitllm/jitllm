@@ -142,7 +142,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			for j := range ids {
 				ids[j] = int32((7 + j*13) % c.NVocab)
 			}
-			ref := m.NewState(steps + 1)
+			ref := m.NewInstance(steps + 1)
 			defer ref.Close()
 			var want []float32
 			for _, id := range ids {
@@ -197,7 +197,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 					inv[jlm.RoleAttnVBias] = graph.Shape{K: c.KVDim()}
 					inv[jlm.RoleAttnOutBias] = graph.Shape{K: c.NEmbd}
 				})()
-				ref := pm.NewState(steps + 1)
+				ref := pm.NewInstance(steps + 1)
 				defer ref.Close()
 				var w []float32
 				for _, id := range ids {
@@ -205,7 +205,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				pre := pm.NewState(steps + 1)
+				pre := pm.NewInstance(steps + 1)
 				defer pre.Close()
 				g, err := pre.Prefill(ids)
 				if err != nil {
@@ -231,7 +231,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 func logitsOf(t *testing.T, m *Model, ids []int32) []float32 {
 	t.Helper()
 	nn.ResetForTest()
-	st := m.NewState(len(ids) + 8)
+	st := m.NewInstance(len(ids) + 8)
 	defer st.Close()
 	var out []float32
 	var err error
@@ -272,7 +272,7 @@ func TestPrefillAfterForwardContinues(t *testing.T) {
 			}
 
 			// All five through Forward, one at a time.
-			ref := m.NewState(len(ids) + 4)
+			ref := m.NewInstance(len(ids) + 4)
 			defer ref.Close()
 			var want []float32
 			for _, id := range ids {
@@ -281,7 +281,7 @@ func TestPrefillAfterForwardContinues(t *testing.T) {
 				}
 			}
 			// The same five: two decoded, then three PREFILLED on top.
-			mix := m.NewState(len(ids) + 4)
+			mix := m.NewInstance(len(ids) + 4)
 			defer mix.Close()
 			for _, id := range ids[:2] {
 				if _, err = mix.Forward(id); err != nil {

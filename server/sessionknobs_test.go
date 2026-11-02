@@ -12,7 +12,7 @@ import (
 )
 
 // TestSessionKnobsReachTheStateOverHTTP: the session knobs SessionOptions
-// carries are on CreateSession's wire, they reach the State, and a value no
+// carries are on CreateSession's wire, they reach the instance, and a value no
 // session can be made from is a 400 over plain HTTP, not a 500 and not a
 // silent default. The server-wide KV width reaches a load that names none.
 //

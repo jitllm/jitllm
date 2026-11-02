@@ -124,7 +124,7 @@ func qvlSpans(g *qvlGolden, grid bool) []Span {
 // qvlRun prefills the golden's prompt into st and decodes its continuation,
 // returning the logits at the prompt's last row and after each continuation
 // token but the last, which is what the golden records.
-func qvlRun(t *testing.T, st *State, g *qvlGolden, grid bool) [][]float32 {
+func qvlRun(t *testing.T, st *Instance, g *qvlGolden, grid bool) [][]float32 {
 	t.Helper()
 	out, err := qvlRunErr(st, g, grid)
 	if err != nil {
@@ -135,7 +135,7 @@ func qvlRun(t *testing.T, st *State, g *qvlGolden, grid bool) [][]float32 {
 
 // qvlRunErr is qvlRun returning the error a run stopped at: a violation's run
 // may be refused by name.
-func qvlRunErr(st *State, g *qvlGolden, grid bool) ([][]float32, error) {
+func qvlRunErr(st *Instance, g *qvlGolden, grid bool) ([][]float32, error) {
 	lg, err := st.PrefillMixed(qvlSpans(g, grid)...)
 	if err != nil {
 		return nil, err
@@ -185,7 +185,7 @@ func TestMRopeLaysTheImageOutAsTransformersDoes(t *testing.T) {
 func mRopeLaysTheImageOutAsTransformersDoes(t *testing.T, name string) {
 	m, g := openQVL(t, name)
 	defer m.Close()
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 	rows, next, err := st.spanRope(0, 0, qvlSpans(g, true))
 	if err != nil {
@@ -241,7 +241,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 		}
 		return w
 	}
-	st := m.NewState(n)
+	st := m.NewInstance(n)
 	host := check("host", qvlRun(t, st, g, true))
 	st.Close()
 
@@ -268,7 +268,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 	batch := check("batch slot", rows)
 
 	// The violation.
-	st = m.NewState(n)
+	st = m.NewInstance(n)
 	bad, _ := qvlWorst(g, qvlRun(t, st, g, false))
 	st.Close()
 	if !(bad > 1e4*math.Max(host, 1e-12)) {
@@ -288,7 +288,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 		t.Run(spec, func(t *testing.T) {
 			defer gpu.Close()
 			run := func(grid bool) ([][]float32, error) {
-				st := m.NewState(n)
+				st := m.NewInstance(n)
 				defer st.Close()
 				st.SetDeviceLayers(gpu, -1)
 				if got := st.GPULayers(); got != m.Cfg.NLayer || !st.HeadOnDevice() {
@@ -313,7 +313,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 			}
 			// The device must not build the table from a row's CACHE position,
 			// which is the image at sequential positions: the composer's is
-			// served at the positions the State states, or the host's goes up.
+			// served at the positions the instance states, or the host's goes up.
 			s := gpu.Stats()
 			if served, _ := s.ServedPart(tier.ComposedTable); s.RopeTables != 0 || s.RopeTableUploads == 0 && served == 0 {
 				t.Fatalf("the device built %d rotary rows and took %d from the host (%q): an M-RoPE table "+
@@ -359,7 +359,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 
 			// The continuation through StepRuns, one joint ragged step with a
 			// second session decoding text beside it.
-			a, c := m.NewState(n), m.NewState(n)
+			a, c := m.NewInstance(n), m.NewInstance(n)
 			defer a.Close()
 			defer c.Close()
 			a.SetDeviceLayers(gpu, -1)
@@ -372,15 +372,15 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 				t.Fatal(err)
 			}
 			// Both sessions must take the JOINT arm, or this is decode twice.
-			for _, s := range []*State{a, c} {
+			for _, s := range []*Instance{a, c} {
 				if err := s.StepRefusal(); err != nil {
 					t.Fatalf("a session is not steppable, so StepRuns would run it alone: %v", err)
 				}
 			}
 			srows := [][]float32{append([]float32(nil), lg...)}
 			for _, id := range g.Cont[:len(g.Cont)-1] {
-				out, err := StepRuns([]Run{{State: c, Tokens: []int32{g.Pre[0]}, Logits: true},
-					{State: a, Tokens: []int32{id}, Logits: true}})
+				out, err := StepRuns([]Run{{Instance: c, Tokens: []int32{g.Pre[0]}, Logits: true},
+					{Instance: a, Tokens: []int32{id}, Logits: true}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -415,13 +415,13 @@ func mRopePrefixCacheKeysOnPositions(t *testing.T, name string) {
 	defer m.Close()
 	n := len(g.Pre) + g.grid().Rows() + len(g.Post) + len(g.Cont) + 1
 	store := NewMemStore()
-	open := func() *State {
-		st := m.NewState(n)
+	open := func() *Instance {
+		st := m.NewInstance(n)
 		st.SetKVStore(store)
 		mustKey(t, st, name+"/mrope")
 		return st
 	}
-	run := func(st *State, spans []Span) [][]float32 {
+	run := func(st *Instance, spans []Span) [][]float32 {
 		lg, err := st.PrefillCachedMixed(spans...)
 		if err != nil {
 			t.Fatal(err)
@@ -471,7 +471,7 @@ func mRopePrefixCacheKeysOnPositions(t *testing.T, name string) {
 		}
 	}
 	swapped := []Span{spans[0], {Embd: spans[1].Embd, Grid: tg, Key: &key}, spans[2]}
-	probe := m.NewState(n)
+	probe := m.NewInstance(n)
 	rpA, _, _ := probe.spanRope(0, 0, spans)
 	rpB, _, _ := probe.spanRope(0, 0, swapped)
 	// The name the page keys hash for a whole prompt.
@@ -524,7 +524,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 		m1, _ := openQVL(t, name)
 		defer m1.Close()
 		m1.SetPageBudget(m1.PageSize())
-		st := m1.NewState(n)
+		st := m1.NewInstance(n)
 		defer st.Close()
 		w, flips := qvlWorst(g, qvlRun(t, st, g, true))
 		frames, faults, _ := m1.PageStats()
@@ -550,7 +550,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 			ran++
 			func() {
 				defer gpu.Close()
-				st := m.NewState(n)
+				st := m.NewInstance(n)
 				defer st.Close()
 				lg, err := st.PrefillMixed(qvlSpans(g, true)...)
 				if err != nil {
@@ -601,7 +601,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 			const win = 64
 			prompt := len(g.Pre) + g.grid().Rows() + len(g.Post)
 			warm := 160 - prompt
-			st := m.NewState(prompt + warm + win + 8)
+			st := m.NewInstance(prompt + warm + win + 8)
 			defer st.Close()
 			if gpu != nil {
 				if err := st.SetDevice(gpu); err != nil {
@@ -669,7 +669,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 // with the composer serving the step's tables, every block and the head the
 // front end states, held to transformers as the tier is. A
 // decode row after the picture turns at its own position, off its cache
-// position: the served table turns it by the positions on its axes the State
+// position: the served table turns it by the positions on its axes the instance
 // states for it (nn.RopeAxesDevice), and told one past them it must part from
 // transformers. Each step serves the table and every stated block once and
 // declines every other block by name, every step run without a recording so
@@ -685,7 +685,7 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 			t.Fatalf("%s did not open for the composed decode: %v", spec, err)
 		}
 		defer cg.Close()
-		st := m.NewState(n)
+		st := m.NewInstance(n)
 		defer st.Close()
 		st.SetDeviceLayers(cg, -1)
 		if got := st.GPULayers(); got != m.Cfg.NLayer {

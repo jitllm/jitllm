@@ -62,7 +62,7 @@ func fusionCeiling(t *testing.T, path string) {
 		t.Skipf("cannot load: %v", err)
 	}
 	defer m.Close()
-	s := m.NewState(256)
+	s := m.NewInstance(256)
 	defer s.Close()
 	// The ceiling is of the per-op path: a fused run (fuse.go) is what it
 	// prices, and with it on the counters below would read one region a token.

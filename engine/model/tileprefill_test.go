@@ -61,7 +61,7 @@ func TestTilePrefillMatchesTheHost(t *testing.T) {
 				"and the clerk counted barrels of salt on the upper floor. ", 40)
 			ids := m.Vocab.Encode(text, true)[:200]
 			drive := []int32{ids[3], ids[17], ids[40], ids[7]}
-			run := func(s *State) [][]float32 {
+			run := func(s *Instance) [][]float32 {
 				l, err := s.Prefill(ids)
 				if err != nil {
 					t.Fatal(err)
@@ -75,13 +75,13 @@ func TestTilePrefillMatchesTheHost(t *testing.T) {
 				}
 				return out
 			}
-			host := m.NewState(len(ids) + 8)
+			host := m.NewInstance(len(ids) + 8)
 			want := run(host)
 			host.Close()
 
 			g := open(t)
 			defer g.Close()
-			dev := m.NewState(len(ids) + 8)
+			dev := m.NewInstance(len(ids) + 8)
 			dev.SetDevice(g)
 			if dev.GPULayers() != m.Cfg.NLayer {
 				dev.Close()

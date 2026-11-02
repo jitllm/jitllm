@@ -57,12 +57,12 @@ func TestRaggedStepKernelSplit(t *testing.T) {
 	}
 	seq := ntok + 8*np + 8
 
-	st := m.NewState(seq)
+	st := m.NewInstance(seq)
 	defer st.Close()
 	if err := st.SetDeviceLayers(g, -1); err != nil || st.GPULayers() != m.Cfg.NLayer {
 		t.Fatalf("alone: %v, %d of %d blocks: %s", err, st.GPULayers(), m.Cfg.NLayer, g.Err())
 	}
-	sc := NewScheduler(m, np, seq)
+	sc := NewRowScheduler(m, np, seq)
 	defer sc.Close()
 	if err := sc.st.SetDeviceLayers(g, -1); err != nil || sc.st.GPULayers() != m.Cfg.NLayer {
 		t.Fatalf("batch: %v, %d of %d blocks: %s", err, sc.st.GPULayers(), m.Cfg.NLayer, g.Err())

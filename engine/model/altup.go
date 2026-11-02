@@ -31,7 +31,7 @@ import (
 // and the head reads the mean of x_0 and each mag(U_k x_k, x_0).
 //
 // The streams are carried STREAM-MAJOR: for `rows` rows, stream k of row r is
-// at (k*rows + r)*n_embd. State.x is stream 0 of the one-row residual State.xa,
+// at (k*rows + r)*n_embd. Instance.x is stream 0 of the one-row residual Instance.xa,
 // and a chunk's s.bx holds its n rows' streams the same way, so every n_embd
 // kernel that reads the residual reads stream 0 untouched and a device is
 // handed the whole residual as one slice (Config.ResidW).
@@ -56,7 +56,7 @@ func (c *Config) stream(x []float32, k, rows, r int) []float32 {
 }
 
 // resid is the one-row residual a device is handed: every stream.
-func (s *State) resid() []float32 {
+func (s *Instance) resid() []float32 {
 	if s.xa != nil {
 		return s.xa
 	}
@@ -68,7 +68,7 @@ func (s *State) resid() []float32 {
 // and the head on the host over the streams' mean, finished as the device's
 // is (the final softcap; the caller adds the rest). With no logits wanted the
 // rows' greedy tokens go to the head's Tokens, as the device's argmax would.
-func (s *State) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32, n int, logits []float32,
+func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32, n int, logits []float32,
 	nlogit int) error {
 	c := s.m.Cfg
 	x := s.bx[:n*c.ResidW()]
@@ -128,7 +128,7 @@ func (s *State) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32, n
 // altHeadNorm is the output norm of a chunk's first n rows into s.bh, row by
 // row: a step's handful of rows, where batchNormB's pool closure would cost
 // a warm step an allocation.
-func (s *State) altHeadNorm(n int) {
+func (s *Instance) altHeadNorm(n int) {
 	d := s.m.Cfg.NEmbd
 	for i := 0; i < n; i++ {
 		s.norm(s.bh[i*d:(i+1)*d], s.bx[i*d:(i+1)*d], s.outNorm, s.m.outNormB)
@@ -200,7 +200,7 @@ func loadAltUpLayer(l *layer, bi int32, cfg *Config,
 }
 
 // allocAltUp sizes the decode token's AltUp scratch.
-func (s *State) allocAltUp() {
+func (s *Instance) allocAltUp() {
 	c := s.m.Cfg
 	if c.PredStreams == 0 {
 		return
@@ -225,7 +225,7 @@ func (s *State) allocAltUp() {
 
 // altExpand fills streams 1.. of each of `rows` rows from stream 0, the
 // scaled embedding.
-func (s *State) altExpand(x []float32, rows int) error {
+func (s *Instance) altExpand(x []float32, rows int) error {
 	if s.cpuExpand(x, rows) == jit.DeclineServes {
 		return nil
 	}
@@ -247,7 +247,7 @@ func (s *State) altExpand(x []float32, rows int) error {
 
 // altCollapse writes each row's head input into stream 0: the mean of
 // stream 0 and each unembedded stream matched to stream 0's magnitude.
-func (s *State) altCollapse(x []float32, rows int) error {
+func (s *Instance) altCollapse(x []float32, rows int) error {
 	if s.cpuCollapse(x, rows) == jit.DeclineServes {
 		return nil
 	}

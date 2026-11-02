@@ -23,7 +23,7 @@ import (
 //
 // It is not a decoder: no KV cache, no persistent position, no logits. A
 // sequence goes in whole and one vector comes out, so it is reached through
-// an Embedder rather than NewState.
+// an Embedder rather than NewInstance.
 
 // encBlock is one post-norm encoder block.
 type encBlock struct {
@@ -278,7 +278,7 @@ func buildEncoder(c *jlm.File, m *Model) error {
 	enc.planPages(c)
 	m.enc = enc
 	// One zero entry a block: the encoder's blocks are encBlock's, and the
-	// segment State a device places them through (encdev.go) indexes the
+	// segment instance a device places them through (encdev.go) indexes the
 	// model's block list.
 	m.layers = make([]layer, m.encBlocks())
 	return nil
@@ -469,7 +469,7 @@ func (e *Embedder) mm(out []float32, w tensor, x []float32, n int) error {
 }
 
 // encRegions is an Embedder's pool regions with their arguments in fields and
-// the function each hands the pool built once, as State's regions are: a
+// the function each hands the pool built once, as instance's regions are: a
 // closure literal over a call's locals escapes into the pool's job, a heap
 // object per region, every block of every sequence.
 type encRegions struct {
@@ -619,7 +619,7 @@ func (e *Embedder) vecItems(lo, hi int) {
 
 // buildEncoderModel is build() for an encoder container: the config, the
 // vocabulary, and the encoder graph. There is no output projection and no
-// decoder layer, so m.layers stays empty and NewState is refused by name.
+// decoder layer, so m.layers stays empty and NewInstance is refused by name.
 func buildEncoderModel(c *jlm.File, options ...tok.Option) (*Model, error) {
 	cfg, err := configFrom(c.Config())
 	if err != nil {

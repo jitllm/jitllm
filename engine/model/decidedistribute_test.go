@@ -13,7 +13,7 @@ import (
 )
 
 // Relocation between devices and distribution over them, on the decision
-// models: the device-to-device move (State.MoveBlocks) mid-prompt and between
+// models: the device-to-device move (Instance.MoveBlocks) mid-prompt and between
 // questions, blocks split across two cards and across the host and two cards,
 // and a batch of requests against each alone. The two devices are
 // JITLLM_TEST_DEVICES' first two (moveDevices): two cards of one backend run the same
@@ -41,9 +41,9 @@ func sameKernels(a, b string) bool {
 	return strings.SplitN(a, ":", 2)[0] == strings.SplitN(b, ":", 2)[0]
 }
 
-// decisionSegment is the State a Decider places its blocks through: a
+// decisionSegment is the instance a Decider places its blocks through: a
 // decoder's own, an encoder's segment.
-func decisionSegment(d *Decider) *State {
+func decisionSegment(d *Decider) *Instance {
 	if d.emb != nil {
 		return d.emb.seg
 	}
@@ -435,7 +435,7 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 					if c.kind == jlm.DecisionClef || c.kind == jlm.DecisionKev {
 						// Clef and Kev answer a request in passes of their own (its
 						// head reads every row, which a batch session's rows do
-						// not give back). The violation: the State not reset
+						// not give back). The violation: the instance not reset
 						// between the batch's requests, so each runs after the
 						// last one's rows.
 						d.violation = "no-reset"

@@ -64,7 +64,7 @@ func TestASessionWithAStoreReusesItsPrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 		var n int
-		s.Inspect(func(st *model.State) { n = st.KVRestored() })
+		s.Inspect(func(st *model.Instance) { n = st.KVRestored() })
 		return n
 	}
 	if n := run(); n != 0 {

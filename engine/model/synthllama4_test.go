@@ -115,7 +115,7 @@ func TestSynthLlama4MatchesTransformers(t *testing.T) {
 	}
 
 	worst := 0.0
-	st := m.NewState(len(g.IDs) + 1)
+	st := m.NewInstance(len(g.IDs) + 1)
 	for p, id := range g.IDs {
 		lg, err := st.Forward(id)
 		if err != nil {
@@ -125,7 +125,7 @@ func TestSynthLlama4MatchesTransformers(t *testing.T) {
 	}
 	st.Close()
 	for n := 1; n <= len(g.IDs); n++ {
-		pf := m.NewState(len(g.IDs) + 1)
+		pf := m.NewInstance(len(g.IDs) + 1)
 		lg, err := pf.Prefill(g.IDs[:n])
 		if err != nil {
 			t.Fatal(err)
@@ -179,7 +179,7 @@ func TestSynthLlama4FeaturesAreLoadBearing(t *testing.T) {
 			v.mut(&c)
 			m.Cfg = &c
 			defer func() { m.Cfg = &cfg }()
-			st := m.NewState(len(g.IDs) + 1)
+			st := m.NewInstance(len(g.IDs) + 1)
 			defer st.Close()
 			worst := 0.0
 			for p, id := range g.IDs {

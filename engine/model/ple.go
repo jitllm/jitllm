@@ -28,7 +28,7 @@ func (c *Config) pleWidth() int { return c.NLayer * c.PLEDim }
 
 // pleInputs writes one row's per-layer inputs into dst from its token and its
 // scaled embedding x.
-func (s *State) pleInputs(dst []float32, token int32, x []float32) error {
+func (s *Instance) pleInputs(dst []float32, token int32, x []float32) error {
 	m, c := s.m, s.c
 	p, w := c.PLEDim, c.pleWidth()
 	t := s.pleT[:w]
@@ -58,7 +58,7 @@ func (s *State) pleInputs(dst []float32, token int32, x []float32) error {
 
 // growPLE sizes the per-layer embedding scratch. A model without them gets
 // none.
-func (s *State) growPLE() {
+func (s *Instance) growPLE() {
 	c := s.c
 	if c.PLEDim == 0 || s.ple != nil {
 		return
@@ -73,7 +73,7 @@ func (s *State) growPLE() {
 // kvGroupOffered reports whether block li may be offered by offerRange(lo,
 // hi): any block outside a KV-sharing group, or one whose every group member
 // is on a device already or offered by the same call.
-func (s *State) kvGroupOffered(li, lo, hi int) bool {
+func (s *Instance) kvGroupOffered(li, lo, hi int) bool {
 	c := s.c
 	if c.NKVShared == 0 {
 		return true
@@ -92,7 +92,7 @@ func (s *State) kvGroupOffered(li, lo, hi int) bool {
 
 // kvSpan is the blocks that must be offered with block li: li alone, or the
 // span of its KV-sharing group, source to last reader.
-func (s *State) kvSpan(li int) (lo, hi int) {
+func (s *Instance) kvSpan(li int) (lo, hi int) {
 	c := s.c
 	lo, hi = li, li+1
 	if c.NKVShared == 0 {
@@ -114,7 +114,7 @@ func (s *State) kvSpan(li int) (lo, hi int) {
 // relocation that took one member to the CPU -- moves to the CPU whole, with the source's
 // history. The device declines a reader whose source it does not hold (tier)
 // and offerRange offers a group only whole, so this is the third half.
-func (s *State) fixKVGroups() {
+func (s *Instance) fixKVGroups() {
 	c := s.c
 	if c.NKVShared == 0 || s.ld == nil {
 		return
@@ -144,7 +144,7 @@ func (s *State) fixKVGroups() {
 
 // growBPLE sizes a batched chunk's per-layer inputs for n rows. Grows, never
 // shrinks.
-func (s *State) growBPLE(n int) {
+func (s *Instance) growBPLE(n int) {
 	if w := n * s.c.pleWidth(); len(s.bple) < w {
 		s.bple = make([]float32, w)
 	}

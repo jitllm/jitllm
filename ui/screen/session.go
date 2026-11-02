@@ -13,7 +13,7 @@ import (
 )
 
 // The chat screen. It holds nothing itself: one *model.Model and one
-// *model.State stay open in the engine across many turns, and this screen is
+// *model.Instance stay open in the engine across many turns, and this screen is
 // the prompt box, the streaming view and the stats strip around them.
 
 // ChatRequest and ChatMessage are re-exported; see [session.ChatRequest].

@@ -71,8 +71,8 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 			compared := 0
 			for _, c := range cases {
 				ids := m.Vocab.Encode(c.Prompt, true)
-				st := m.NewState(len(ids) + c.N + 1)
-				defer st.Close() // a State owns a pinned pool; see container_test.go
+				st := m.NewInstance(len(ids) + c.N + 1)
+				defer st.Close() // an instance owns a pinned pool; see container_test.go
 				var logits []float32
 				for _, id := range ids {
 					if logits, err = st.Forward(id); err != nil {
@@ -131,7 +131,7 @@ func TestKVCacheConsistency(t *testing.T) {
 	ids := m.Vocab.Encode("Once upon a time", true)
 
 	run := func() []float32 {
-		st := m.NewState(len(ids) + 1)
+		st := m.NewInstance(len(ids) + 1)
 		defer st.Close()
 		var lg []float32
 		for _, id := range ids {
@@ -148,11 +148,11 @@ func TestKVCacheConsistency(t *testing.T) {
 		}
 	}
 
-	// Closed: a State left open keeps its JIT's view of the P-cores' crew for
+	// Closed: an instance left open keeps its JIT's view of the P-cores' crew for
 	// the life of the process, and a later gate's decode is then never that
 	// crew's only user, so no run of it fuses (TestKVPagesRelocateWithTheLayer
 	// opened none, on every model, whenever this ran first).
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	for _, id := range ids {
 		if _, err = st.Forward(id); err != nil {
@@ -179,7 +179,7 @@ func TestStateRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	st := m.NewState(2)
+	st := m.NewInstance(2)
 	defer st.Close()
 	if _, err := st.Forward(int32(m.Cfg.NVocab)); err == nil {
 		t.Error("Forward accepted an out-of-range token")

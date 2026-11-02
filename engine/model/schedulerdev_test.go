@@ -62,7 +62,7 @@ func schedulerOnDeviceModel(t *testing.T, m *Model, open func(*testing.T) *tier.
 	for i, pr := range prompts {
 		ids[i] = m.Vocab.Encode(pr, true)
 		g := open(t)
-		st := m.NewState(seq)
+		st := m.NewInstance(seq)
 		st.SetDevice(g)
 		if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
 			t.Fatalf("solo: placed %d of %d blocks: %q", st.GPULayers(), m.Cfg.NLayer, g.Err())
@@ -85,7 +85,7 @@ func schedulerOnDeviceModel(t *testing.T, m *Model, open func(*testing.T) *tier.
 
 	g := open(t)
 	defer g.Close()
-	sc := NewScheduler(m, rows, seq)
+	sc := NewRowScheduler(m, rows, seq)
 	defer sc.Close()
 	sc.st.SetDevice(g)
 	if sc.st.GPULayers() != m.Cfg.NLayer || !sc.st.HeadOnDevice() {

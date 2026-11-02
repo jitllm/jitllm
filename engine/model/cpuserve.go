@@ -21,24 +21,24 @@ import (
 
 // The CPU is a device like a card: a block placed on it runs what the
 // composer forms for it from the block's graph (Model.Composing), through
-// the one keyed cache, on the State's own buffers -- the residual, the
+// the one keyed cache, on the instance's own buffers -- the residual, the
 // block's weights and vectors by role, its rotary table and its history in
 // the host's KV pages (kvArena) -- each kernel mapped once for the model and
 // called through the trampoline, the calls of a kernel over heads spread
-// over the State's pool. Every block step on the CPU is counted served or
+// over the instance's pool. Every block step on the CPU is counted served or
 // declined by name (CPUBlockSteps), as the tier counts a card's.
 
 // CPUBlockSteps is how many block steps on the CPU the composer served, and
 // how many it declined, by reason (jit.DeclineName); a decline is the
 // step's error (cpuRefused).
-func (s *State) CPUBlockSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUBlockSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.served, s.cpu.declined
 }
 
 // cpuRefused counts the composer's decline of block li's step on the CPU and
 // is the step's error: the composer is the only path, so no other kernels run
 // the block.
-func (s *State) cpuRefused(li int, why jit.Decline) error {
+func (s *Instance) cpuRefused(li int, why jit.Decline) error {
 	s.cpu.declined[why]++
 	if why == jit.DeclineNotFormed && s.cpu.formErr != nil {
 		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the first: %w)", li, jit.DeclineName(int(why)), s.cpu.formErr)
@@ -54,11 +54,11 @@ func cpuHeadRefused(why jit.Decline) error {
 
 // CPURecSteps is how many steps of several rows the CPU's linear blocks
 // ran whole on their rows' form, and how many they stepped a row at a time.
-func (s *State) CPURecSteps() (whole, stepped int) { return s.cpu.recWhole, s.cpu.recStepped }
+func (s *Instance) CPURecSteps() (whole, stepped int) { return s.cpu.recWhole, s.cpu.recStepped }
 
 // CPUFormErr is the first error the composer gave forming a block of this
-// State's model for the CPU, nil for none.
-func (s *State) CPUFormErr() error { return s.cpu.formErr }
+// instance's model for the CPU, nil for none.
+func (s *Instance) CPUFormErr() error { return s.cpu.formErr }
 
 // The argument sources of a composed CPU kernel's call words.
 const (
@@ -252,7 +252,7 @@ func (c *cpuForms) close() {
 	c.m = nil
 }
 
-// cpuState is a State's composed CPU blocks: each block's form and its own
+// cpuState is a instance's composed CPU blocks: each block's form and its own
 // buffers, the history tables, and the census.
 type cpuState struct {
 	launch    int
@@ -304,7 +304,7 @@ type cpuState struct {
 	// stashing says which pass is running.
 	stash    []uint32
 	stashing uint8
-	// runWindows says each run of the State's (bidir) is a window its rows
+	// runWindows says each run of the instance's (bidir) is a window its rows
 	// attend inside, none of the positions before it: a tower's windowed
 	// block's (cpuTowerRows).
 	runWindows bool
@@ -354,7 +354,7 @@ const (
 	// cpuFaultChunk starts each prompt chunk after the first from a summary
 	// of zeros: the recurrence not carried across the chunk boundary.
 	cpuFaultChunk
-	// cpuFaultHead binds the head's input to the State's norm row in place
+	// cpuFaultHead binds the head's input to the instance's norm row in place
 	// of the residual.
 	cpuFaultHead
 	// cpuFaultExpert makes resident and holds another expert's page than
@@ -415,7 +415,7 @@ const cpuRowsCap = 64
 
 // cpuRegion is the kernel a pool region calls, its calls the region's range.
 type cpuRegion struct {
-	s    *State
+	s    *Instance
 	b    *cpuBound
 	c    *cpuCode
 	live int
@@ -444,9 +444,9 @@ type cpuBound struct {
 	kv     *kvPages
 	pages  []uint32
 	// recLi is the block whose recurrent states a linear block's step binds
-	// and recOf the State that holds them.
+	// and recOf the session that holds them.
 	recLi int
-	recOf *State
+	recOf *Session
 	// rec, where set, is the call's run descriptor in place of recRows.
 	rec []uint32
 	// side is the bound rows' per-layer inputs, a row each (cpuArgSide).
@@ -468,9 +468,9 @@ func composedCPUDevice(workers int) jit.Device {
 	return jit.Device{Kind: jit.DeviceCPU, Slots: max(workers, 1), Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
 }
 
-// composedCPU is this State's CPU as the composer forms for it, its launch
+// composedCPU is this instance's CPU as the composer forms for it, its launch
 // cost its probe row's.
-func (s *State) composedCPU() jit.Device {
+func (s *Instance) composedCPU() jit.Device {
 	workers := 1
 	if s.jit != nil {
 		workers = s.jit.Workers()
@@ -488,9 +488,9 @@ func (s *State) composedCPU() jit.Device {
 	return d
 }
 
-// cpuFaultRowWords applies the State's key-row fault to one row's
+// cpuFaultRowWords applies the instance's key-row fault to one row's
 // descriptor (first key, end, write row), the step's first row left whole.
-func (s *State) cpuFaultRowWords(t []uint32) {
+func (s *Instance) cpuFaultRowWords(t []uint32) {
 	if t[3] == 0 {
 		return
 	}
@@ -507,7 +507,7 @@ func (s *State) cpuFaultRowWords(t []uint32) {
 
 // cpuStep runs block li on the CPU the composer's way, or says why not. The
 // residual is s.x; the rotary table cs.
-func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
+func (s *Instance) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 	cb, why := s.cpuBlockOf(li)
 	if why != jit.DeclineServes {
 		return why, nil
@@ -523,7 +523,7 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 	}
 	b := &s.cpu.bound
 	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: pg.table(max(s.nseq, 1)),
-		recLi: s.cpuRecLi(li), recOf: s, side: s.ple}
+		recLi: s.cpuRecLi(li), recOf: s.Session, side: s.ple}
 	if b.side != nil {
 		b.side = b.side[cb.sideOff:]
 	}
@@ -552,7 +552,7 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 // row i at position pos[i] of sequence seq[i], its rotary table the i-th of
 // cs, or says why not: through the rows' form, a call of at most its
 // capacity at a time, each row's history in its own sequence's pages.
-func (s *State) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int) (jit.Decline, error) {
+func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int) (jit.Decline, error) {
 	f, why := s.cpuRowsForm(li, l)
 	if why != jit.DeclineServes {
 		return why, nil
@@ -566,9 +566,9 @@ func (s *State) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int
 
 // cpuTowerRows runs tower block li on the CPU the composer's way over the
 // picture's n rows in s.bx, one run of rows attending both ways (bidir.go),
-// or says why not. Its history is the State's arena page, lent to the block
+// or says why not. Its history is the instance's arena page, lent to the block
 // for its run.
-func (s *State) cpuTowerRows(li int, l *layer, n int) (jit.Decline, error) {
+func (s *Instance) cpuTowerRows(li int, l *layer, n int) (jit.Decline, error) {
 	v := s.vis
 	var wins []nn.KeyRun
 	if s.visWindowed(li) {
@@ -587,7 +587,7 @@ func (s *State) cpuTowerRows(li int, l *layer, n int) (jit.Decline, error) {
 // each window a run its rows attend inside; cs is the rows' rotary table,
 // nrot wide. Its history is the segment's arena (ncArena), lent to the
 // block for its run.
-func (s *State) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, wins []nn.KeyRun) (jit.Decline, error) {
+func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, wins []nn.KeyRun) (jit.Decline, error) {
 	f, why := s.cpuRowsForm(li, l)
 	if why != jit.DeclineServes {
 		return why, nil
@@ -613,7 +613,7 @@ func (s *State) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, n
 // cpuTable is the rotary table of a step's rows block li reads and its
 // width: the sliding layers' (csSWA) where the model turns them by a
 // rotary of their own.
-func (s *State) cpuTable(li int, cs, csSWA []float32) ([]float32, int) {
+func (s *Instance) cpuTable(li int, cs, csSWA []float32) ([]float32, int) {
 	if csSWA != nil && s.c.SWA(li) {
 		return csSWA, s.c.NRotSWA
 	}
@@ -628,7 +628,7 @@ func (s *State) cpuTable(li int, cs, csSWA []float32) ([]float32, int) {
 // session's consecutive rows run one after another, the rows after the
 // logit rows first, so a session's last row reads the keys its earlier
 // rows wrote.
-func (s *State) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, nlogit int) (jit.Decline, error) {
+func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, nlogit int) (jit.Decline, error) {
 	cs, nrot := s.cpuTable(li, cs, csSWA)
 	n := len(pos)
 	why, err := s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, n, false)
@@ -644,31 +644,36 @@ func (s *State) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos [
 // cpuOwnerRuns makes ready (run unset) or runs block li over the rows
 // [lo, hi) of a step across sessions, a run of one session's consecutive
 // rows at a time, on that session's form.
-func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, lo, hi int, run bool) (jit.Decline, error) {
+func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, lo, hi int, run bool) (jit.Decline, error) {
 	d, pw := s.c.NEmbd, s.c.pleWidth()
 	for a := lo; a < hi; {
 		o, b := s.rowOwn[a], a+1
 		for b < hi && s.rowOwn[b] == o {
 			b++
 		}
-		if o.m != s.m {
+		if o.model != s.m {
 			return jit.DeclineSessions, nil
 		}
-		f, why := o.cpuRowsForm(li, l)
+		f, why := s.cpuRowsForm(li, l)
 		if why != jit.DeclineServes {
 			return why, nil
 		}
+		lead := s.Session
+		s.Session = o
 		if run {
 			var side []float32
 			if pw != 0 {
 				side = s.bple[a*pw:]
 			}
-			if err := o.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
+			if err := s.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
+				s.Session = lead
 				return jit.DeclineServes, err
 			}
-		} else if why := o.cpuRowsReady(li, f, pos[a:b]); why != jit.DeclineServes {
+		} else if why := s.cpuRowsReady(li, f, pos[a:b]); why != jit.DeclineServes {
+			s.Session = lead
 			return why, nil
 		}
+		s.Session = lead
 		a = b
 	}
 	return jit.DeclineServes, nil
@@ -676,7 +681,7 @@ func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, p
 
 // cpuRecRows runs linear block li over the n rows of x, or says why not:
 // on its rows' form, the scan stepping each sequence's rows in order, where
-// the step's rows of each sequence stand in order and all are this State's
+// the step's rows of each sequence stand in order and all are this instance's
 // (cpuRecWhole); else on its form of one row, a row at a time in order
 // (each row's index; 0.. where order is nil), each stepping its own
 // sequence's recurrent state -- its owner's, as rowOwner names it. A
@@ -684,7 +689,7 @@ func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, p
 // base -1 for none) keep each row's summary as main's row loop does: the
 // speculative rows' snapshot, which takes the row at a time, and the
 // restore points, where the rows' form ends a call.
-func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []int, base, p0 int) (jit.Decline, error) {
+func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []int, base, p0 int) (jit.Decline, error) {
 	cb, why := s.cpuBlockOf(li)
 	if why != jit.DeclineServes {
 		return why, nil
@@ -746,10 +751,10 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 }
 
 // cpuRecWhole is block li's rows' form where the step's rows run on it
-// whole: several rows, all this State's, in causal order, each sequence's
+// whole: several rows, all this instance's, in causal order, each sequence's
 // rows in order of position, and no speculative snapshot to take after
 // each row; nil where not.
-func (s *State) cpuRecWhole(li int, l *layer, cb *cpuBlock, seq, pos, order []int, base int) *cpuBlockForm {
+func (s *Instance) cpuRecWhole(li int, l *layer, cb *cpuBlock, seq, pos, order []int, base int) *cpuBlockForm {
 	if len(pos) < 2 || cb.rows == nil || len(s.rowOwn) > 0 || base >= 0 && s.rows != nil {
 		return nil
 	}
@@ -781,7 +786,7 @@ func (s *State) cpuRecWhole(li int, l *layer, cb *cpuBlock, seq, pos, order []in
 // call at most f's rows; a prompt's (base its first row in the prompt, p0
 // its first position) end a call at each restore point inside them and seal
 // it there.
-func (s *State) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, seq, pos []int, base, p0 int) (jit.Decline, error) {
+func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, seq, pos []int, base, p0 int) (jit.Decline, error) {
 	if why := s.cpuRowsReady(li, f, pos); why != jit.DeclineServes {
 		return why, nil
 	}
@@ -819,7 +824,7 @@ func (s *State) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, se
 // call's rows of sequences seq: a run a sequence, its rows in the call's
 // order, its slot read and written the sequence's; the entries past the
 // runs repeat the last.
-func (s *State) cpuRecDesc(seq []int) []uint32 {
+func (s *Instance) cpuRecDesc(seq []int) []uint32 {
 	k := len(seq)
 	if len(s.cpu.recDesc) < 1+7*k {
 		s.cpu.recDesc = make([]uint32, 1+7*max(k, cpuRowsCap))
@@ -851,7 +856,7 @@ func (s *State) cpuRecDesc(seq []int) []uint32 {
 
 // cpuRecLi is the block whose recurrent state block li's step binds: its
 // own, or under cpuFaultRec the first linear block's.
-func (s *State) cpuRecLi(li int) int {
+func (s *Instance) cpuRecLi(li int) int {
 	if s.cpu.fault != cpuFaultRec {
 		return li
 	}
@@ -865,7 +870,7 @@ func (s *State) cpuRecLi(li int) int {
 
 // cpuRowsForm is block li's rows' form, its weights the block's, or why
 // not.
-func (s *State) cpuRowsForm(li int, l *layer) (*cpuBlockForm, jit.Decline) {
+func (s *Instance) cpuRowsForm(li int, l *layer) (*cpuBlockForm, jit.Decline) {
 	cb, why := s.cpuBlockOf(li)
 	if why != jit.DeclineServes {
 		return nil, why
@@ -882,7 +887,7 @@ func (s *State) cpuRowsForm(li int, l *layer) (*cpuBlockForm, jit.Decline) {
 // cpuRowsReady makes the pages of the history the rows at pos write and
 // read resident, in block li's arena, or says why f cannot run them: a
 // history past f's key bound, a page outside the arena.
-func (s *State) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
+func (s *Instance) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
 	hl := s.c.KVSource(li)
 	pg := &s.kv.layers[hl]
 	if pg.p == 0 {
@@ -910,7 +915,7 @@ func (s *State) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
 // neighbouring slot of the layer's own arena -- its positions read another
 // page's (or nothing). Each layer is pointed into its own arena, so a model
 // whose arenas differ (a sliding layer's beside a global one's) is reached.
-func (s *State) cpuFaultTable(pg *kvPages, end int) []uint32 {
+func (s *Instance) cpuFaultTable(pg *kvPages, end int) []uint32 {
 	nseq := max(s.nseq, 1)
 	t := pg.table(nseq)
 	n := len(t)
@@ -931,13 +936,13 @@ func (s *State) cpuFaultTable(pg *kvPages, end int) []uint32 {
 }
 
 // cpuRowsRun runs block li's rows' form f over the rows of x, their history
-// the State's, a call of at most f's capacity at a time. A bidirectional
+// the instance's, a call of at most f's capacity at a time. A bidirectional
 // run (bidir.go) counts its rows' keys to its end; where the step takes
 // more calls than one, the form's codes through its last history write
 // (keysEnd) first run over every row, each reading only the keys before
 // it, so that every call's rows then read all of them. Where those codes
 // write the residual too they run over a copy of it.
-func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int) error {
+func (s *Instance) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int) error {
 	runs := s.runsAt(li) && s.bidirIn(pos[0], len(pos))
 	if runs && len(pos) > f.rows {
 		keys := f.keysEnd
@@ -958,7 +963,7 @@ func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, strid
 
 // cpuStash saves (stashSave) or restores (stashLoad) call c's values form
 // f's codes before keysEnd write and the rest read (cpuBlockForm.cross).
-func (s *State) cpuStash(f *cpuBlockForm, own [][]uint32, c int) {
+func (s *Instance) cpuStash(f *cpuBlockForm, own [][]uint32, c int) {
 	at := 0
 	for _, i := range f.cross {
 		at += len(own[i]) * c
@@ -983,7 +988,7 @@ func (s *State) cpuStash(f *cpuBlockForm, own [][]uint32, c int) {
 // rows' per-layer inputs, nil for a model of none. A form over banks
 // (cpuBlockForm.split) holds the experts each call's rows pick, from its
 // selection to the call's end (cpuExperts).
-func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int, runs bool) error {
+func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int, runs bool) error {
 	n := len(pos)
 	pg := &s.kv.layers[s.c.KVSource(li)]
 	d, ns, pw := s.c.NEmbd, s.c.Streams(), s.c.pleWidth()
@@ -1036,7 +1041,7 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []
 			kv: pg, pages: s.cpuFaultTable(pg, end), side: bside}
 		rec := s.c.LayerKind(li).Recurrent()
 		if rec {
-			b.recLi, b.recOf, b.rec = s.cpuRecLi(li), s, s.cpuRecDesc(seq[r0:r0+k])
+			b.recLi, b.recOf, b.rec = s.cpuRecLi(li), s.Session, s.cpuRecDesc(seq[r0:r0+k])
 			if n := len(s.rconv[b.recLi]); len(s.cpu.convOut) < n {
 				s.cpu.convOut = make([]float32, n)
 			}
@@ -1088,8 +1093,8 @@ func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []
 }
 
 // cpuRowsOf is the sequences and positions of a chunk's n rows of slot
-// from position p0, in the State's own rows.
-func (s *State) cpuRowsOf(slot, p0, n int) (seq, pos []int) {
+// from position p0, in the instance's own rows.
+func (s *Instance) cpuRowsOf(slot, p0, n int) (seq, pos []int) {
 	if cap(s.cpu.rpos) < n {
 		s.cpu.rseq, s.cpu.rpos = make([]int, n), make([]int, n)
 	}
@@ -1102,13 +1107,13 @@ func (s *State) cpuRowsOf(slot, p0, n int) (seq, pos []int) {
 
 // cpuHistory makes the pages block li's step reads and writes resident,
 // in the layer's arena, or says why they are not.
-func (s *State) cpuHistory(li, pos int) jit.Decline {
+func (s *Instance) cpuHistory(li, pos int) jit.Decline {
 	s.cpuWritable(li, pos)
 	return s.cpuReadable(li, s.kv.layers[li].keyStart(pos), pos)
 }
 
 // cpuWritable makes the page block li writes pos into resident and its own.
-func (s *State) cpuWritable(li, pos int) {
+func (s *Instance) cpuWritable(li, pos int) {
 	pg := &s.kv.layers[li]
 	s.kvWritable(li, pos)
 	n, _ := pg.page(pos)
@@ -1118,7 +1123,7 @@ func (s *State) cpuWritable(li, pos int) {
 
 // cpuReadable makes the pages of block li's positions [start, pos]
 // resident, in the layer's arena, or says why they are not.
-func (s *State) cpuReadable(li, start, pos int) jit.Decline {
+func (s *Instance) cpuReadable(li, start, pos int) jit.Decline {
 	pg := &s.kv.layers[li]
 	n, _ := pg.page(pos)
 	s.kvEnsureWindow(li, start, pos-start)
@@ -1131,7 +1136,7 @@ func (s *State) cpuReadable(li, start, pos int) jit.Decline {
 }
 
 // cpuWeights says every weight f binds is one block l holds whole.
-func (s *State) cpuWeights(f *cpuBlockForm, li int, l *layer) jit.Decline {
+func (s *Instance) cpuWeights(f *cpuBlockForm, li int, l *layer) jit.Decline {
 	for i := range f.codes {
 		for _, a := range f.codes[i].args {
 			switch a.src {
@@ -1160,8 +1165,8 @@ func (s *State) cpuWeights(f *cpuBlockForm, li int, l *layer) jit.Decline {
 	return jit.DeclineServes
 }
 
-// cpuOwn is form f's own buffers for this State.
-func (s *State) cpuOwn(f *cpuBlockForm) [][]uint32 {
+// cpuOwn is form f's own buffers for this Instance.
+func (s *Instance) cpuOwn(f *cpuBlockForm) [][]uint32 {
 	if b, ok := s.cpu.own[f]; ok {
 		return b
 	}
@@ -1178,7 +1183,7 @@ func (s *State) cpuOwn(f *cpuBlockForm) [][]uint32 {
 }
 
 // cpuCall runs one kernel of a block: once, or over its calls on the pool.
-func (s *State) cpuCall(b *cpuBound, c *cpuCode) {
+func (s *Instance) cpuCall(b *cpuBound, c *cpuCode) {
 	if s.prof {
 		t0 := time.Now()
 		s.cpu.t0, s.cpu.maxStart = t0, 0
@@ -1191,7 +1196,7 @@ func (s *State) cpuCall(b *cpuBound, c *cpuCode) {
 	s.cpuLaunch(b, c)
 }
 
-func (s *State) cpuLaunch(b *cpuBound, c *cpuCode) {
+func (s *Instance) cpuLaunch(b *cpuBound, c *cpuCode) {
 	n, live := c.n, 0
 	if c.live.Live > 0 {
 		live = c.live.LiveUnitsOf(b.n)
@@ -1237,7 +1242,7 @@ func (c *cpuCode) callAt(i, live int) int {
 }
 
 // cpuWords writes call at's words of kernel c into a.
-func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
+func (s *Instance) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 	base := unsafe.Pointer(a)
 	rows, _ := c.share.ShareRows(s.cpu.part)
 	for i := range c.args {
@@ -1346,7 +1351,7 @@ func cpuCoord(calls []int, at, ax int) int {
 	return at % calls[ax]
 }
 
-// region runs the calls [lo, hi) of the kernel the State's run names, on
+// region runs the calls [lo, hi) of the kernel the instance's run names, on
 // worker w's words.
 func (r *cpuRegion) region(w, lo, hi int) {
 	a := &r.s.cpu.args[w]
@@ -1360,7 +1365,7 @@ func (r *cpuRegion) region(w, lo, hi int) {
 	}
 }
 
-func (s *State) cpuProfCall(c *cpuCode, a *cpu.Args) {
+func (s *Instance) cpuProfCall(c *cpuCode, a *cpu.Args) {
 	t := time.Now()
 	c.code.Call(a)
 	off := int64(t.Sub(s.cpu.t0))
@@ -1381,9 +1386,9 @@ func (r *cpuRegion) groupRegion(w, lo, hi int) {
 	r.s.cpuGroupRun(&r.s.cpu.args[w], r.b, r.g, lo, hi)
 }
 
-// cpuPlace composes a new State's blocks on the CPU: each block of the
-// State's range no device holds, once, at its placement (cpuCompose).
-func (s *State) cpuPlace() {
+// cpuPlace composes a new instance's blocks on the CPU: each block of the
+// instance's range no device holds, once, at its placement (cpuCompose).
+func (s *Instance) cpuPlace() {
 	// A segment's blocks are past the text model's in the one block space.
 	n := max(s.c.NLayer, s.hi)
 	s.cpu.blocks = make([]*cpuBlock, n)
@@ -1421,7 +1426,7 @@ func (s *State) cpuPlace() {
 
 // cpuRelocated follows block li onto the CPU, composed for it there, or off
 // it, its composition released.
-func (s *State) cpuRelocated(li int, onCPU bool) {
+func (s *Instance) cpuRelocated(li int, onCPU bool) {
 	if li < 0 || li >= len(s.cpu.blocks) {
 		return
 	}
@@ -1434,7 +1439,7 @@ func (s *State) cpuRelocated(li int, onCPU bool) {
 
 // cpuCompose composes block li for the CPU device: its form, through the
 // model's keyed cache, and its bindings, counted (CPUCompositions).
-func (s *State) cpuCompose(li int) {
+func (s *Instance) cpuCompose(li int) {
 	cb := &cpuBlock{}
 	s.cpu.blocks[li] = cb
 	if s.m.layers[li].mn != nil {
@@ -1463,7 +1468,7 @@ func (s *State) cpuCompose(li int) {
 
 // cpuFormDecline is the reason a form's error declines its block by, the
 // first error kept (CPUFormErr).
-func (s *State) cpuFormDecline(err error) jit.Decline {
+func (s *Instance) cpuFormDecline(err error) jit.Decline {
 	if s.cpu.formErr == nil {
 		s.cpu.formErr = err
 	}
@@ -1475,7 +1480,7 @@ func (s *State) cpuFormDecline(err error) jit.Decline {
 }
 
 // cpuBlockOf is block li's composition on the CPU, made at its placement.
-func (s *State) cpuBlockOf(li int) (*cpuBlock, jit.Decline) {
+func (s *Instance) cpuBlockOf(li int) (*cpuBlock, jit.Decline) {
 	if li >= len(s.cpu.blocks) || s.cpu.blocks[li] == nil {
 		return nil, jit.DeclineUnplaced
 	}
@@ -1484,13 +1489,13 @@ func (s *State) cpuBlockOf(li int) (*cpuBlock, jit.Decline) {
 }
 
 // CPUCompositions is how many times each block was composed for the CPU in
-// this State: once at its placement there, and once more for each
+// this instance: once at its placement there, and once more for each
 // relocation back to it.
-func (s *State) CPUCompositions() []int { return s.cpu.composed }
+func (s *Instance) CPUCompositions() []int { return s.cpu.composed }
 
 // cpuWhy is what keeps block li off the composer's CPU path before it is
 // asked: what its graph and history need that the CPU device does not hold.
-func (s *State) cpuWhy(li int) jit.Decline {
+func (s *Instance) cpuWhy(li int) jit.Decline {
 	c := s.c
 	g := s.m.Composing().BlockGraph(li)
 	// A block sharing another's history reads its source's pages.
@@ -1554,7 +1559,7 @@ func sideAtBinding(gr *graph.Graph) int {
 }
 
 // cpuSideOff is block li's sideOff, 0 for a block not composed.
-func (s *State) cpuSideOff(li int) int {
+func (s *Instance) cpuSideOff(li int) int {
 	if li < len(s.cpu.blocks) && s.cpu.blocks[li] != nil {
 		return s.cpu.blocks[li].sideOff
 	}
@@ -1564,8 +1569,8 @@ func (s *State) cpuSideOff(li int) int {
 // cpuTowerWhy is cpuWhy for a block of a non-causal segment (a tower's or an
 // encoder's): its history is the block's run's own, written and read inside
 // the one call over the segment's rows (lendNC), so no other path reads its
-// format, and its page is the State's arena.
-func (s *State) cpuTowerWhy(g *graph.Graph) jit.Decline {
+// format, and its page is the instance's arena.
+func (s *Instance) cpuTowerWhy(g *graph.Graph) jit.Decline {
 	switch {
 	case !jit.HostCPULowers():
 		return jit.DeclineISA
@@ -1590,9 +1595,9 @@ func (e cpuDeclineError) Error() string {
 }
 
 // formCPUBlock is block li's form on the CPU at rows rows through the
-// model's keyed cache: its history the State's sequences' pages
-// (cpuPages), each a history of the State's context.
-func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBlockForm, error) {
+// model's keyed cache: its history the session's sequences' pages
+// (cpuPages), each a history of the instance's context.
+func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpuBlockForm, error) {
 	g := m.Composing().BlockGraph(li)
 	cb.graph = g
 	gr := *g
@@ -2403,7 +2408,7 @@ func (f *cpuBlockForm) bankHalves(gr *graph.Graph, rows int) error {
 
 // cpuBanksPaged says block li's routed banks are each one view of its
 // experts in the host's expert pages (jlm.File.BankView).
-func (s *State) cpuBanksPaged(li int) bool {
+func (s *Instance) cpuBanksPaged(li int) bool {
 	l := &s.m.layers[li]
 	if s.m.container == nil || l.legacyExperts {
 		return false
@@ -2459,7 +2464,7 @@ func (m *Model) bankTensor(li int, r jlm.Role) *tensor {
 // resident and held between its halves -- the pager's own fault path
 // (ensureExperts), each read from the file where the budget evicted it --
 // and counted as the host's own mixture counts them.
-func (s *State) cpuForm(b *cpuBound, f *cpuBlockForm, li int) error {
+func (s *Instance) cpuForm(b *cpuBound, f *cpuBlockForm, li int) error {
 	if f.split <= 0 {
 		s.cpuCalls(b, f.codes)
 		return nil
@@ -2483,7 +2488,7 @@ func (s *State) cpuForm(b *cpuBound, f *cpuBlockForm, li int) error {
 // own fault path (ensureExperts), each read from the file where the budget
 // evicted it -- and counts them resident as main's mixture does. s.cpu.sel
 // is the experts held, in the order the rows first pick them.
-func (s *State) cpuExperts(b *cpuBound, f *cpuBlockForm, li, n int) error {
+func (s *Instance) cpuExperts(b *cpuBound, f *cpuBlockForm, li, n int) error {
 	k := f.selN / max(f.rows, 1)
 	picks := b.own[f.sel][:n*k]
 	ne := s.c.NExpert
@@ -2532,7 +2537,7 @@ func (s *State) cpuExperts(b *cpuBound, f *cpuBlockForm, li, n int) error {
 
 // cpuCalls runs kernels cs in order, each with those its phase joins
 // (cpuBlockForm.joinPhases).
-func (s *State) cpuCalls(b *cpuBound, cs []cpuCode) {
+func (s *Instance) cpuCalls(b *cpuBound, cs []cpuCode) {
 	for i := 0; i < len(cs); i++ {
 		c := &cs[i]
 		if c.chain > 0 {
@@ -2577,7 +2582,7 @@ func (s *State) cpuCalls(b *cpuBound, cs []cpuCode) {
 
 // cpuGroup runs the kernels g as one phase over the pool: their calls one
 // space, in order of the kernels.
-func (s *State) cpuGroup(b *cpuBound, g []cpuCode) {
+func (s *Instance) cpuGroup(b *cpuBound, g []cpuCode) {
 	s.cpu.part = s.Workers()
 	s.cpu.ends = s.cpu.ends[:0]
 	n := 0
@@ -2604,7 +2609,7 @@ func (s *State) cpuGroup(b *cpuBound, g []cpuCode) {
 
 // cpuChain runs the kernels g as one phase over the pool, units units:
 // a unit its calls of each kernel in turn (chainPhases).
-func (s *State) cpuChain(b *cpuBound, g []cpuCode, units int) {
+func (s *Instance) cpuChain(b *cpuBound, g []cpuCode, units int) {
 	s.cpu.part = s.Workers()
 	if s.jit == nil || s.jit.Workers() <= 1 {
 		s.cpuChainRun(&s.cpu.args[0], b, g, units, 0, units)
@@ -2619,7 +2624,7 @@ func (s *State) cpuChain(b *cpuBound, g []cpuCode, units int) {
 }
 
 // cpuChainRun runs the units [lo, hi) of the kernels g's phase on a.
-func (s *State) cpuChainRun(a *cpu.Args, b *cpuBound, g []cpuCode, units, lo, hi int) {
+func (s *Instance) cpuChainRun(a *cpu.Args, b *cpuBound, g []cpuCode, units, lo, hi int) {
 	for u := lo; u < hi; u++ {
 		for k := range g {
 			q := g[k].n / units
@@ -2638,7 +2643,7 @@ func (r *cpuRegion) chainRegion(w, lo, hi int) {
 }
 
 // cpuGroupRun runs the calls [lo, hi) of the kernels g's one space on a.
-func (s *State) cpuGroupRun(a *cpu.Args, b *cpuBound, g []cpuCode, lo, hi int) {
+func (s *Instance) cpuGroupRun(a *cpu.Args, b *cpuBound, g []cpuCode, lo, hi int) {
 	ends := s.cpu.ends
 	k := 0
 	for i := lo; i < hi; i++ {
@@ -2692,7 +2697,7 @@ func streamIn(gr *graph.Graph, v graph.ValueID) int {
 // cpuRoleWeight is block li's (l's) matrix of role r, nil for one it does
 // not hold; with no block, the head's. An encoder segment's blocks hold
 // theirs in the encoder (encRoleWeight).
-func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
+func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 	if l == nil {
 		switch m := s.m; {
 		case li == cpuInputRows && r == jlm.RoleTokenEmbd:
@@ -2861,7 +2866,7 @@ func (s *State) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 
 // cpuRoleVector is block li's (l's) vector of role r, nil for one it does
 // not hold; with no block, the head's.
-func (s *State) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
+func (s *Instance) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 	if l == nil {
 		switch r {
 		case jlm.RoleOutputNorm:

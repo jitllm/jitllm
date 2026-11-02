@@ -23,7 +23,7 @@ func TestPlacement(t *testing.T) {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	path := jlmOf(t, p)
-	attach := func(t *testing.T, spec string, pl Placement) (*Model, *State, *tier.GPU, error) {
+	attach := func(t *testing.T, spec string, pl Placement) (*Model, *Instance, *tier.GPU, error) {
 		t.Helper()
 		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
@@ -34,12 +34,12 @@ func TestPlacement(t *testing.T) {
 			g.Close()
 			t.Fatal(err)
 		}
-		st := m.NewState(64)
+		st := m.NewInstance(64)
 		err = st.SetDevice(g)
 		t.Cleanup(func() { st.Close(); g.Close(); m.Close() })
 		return m, st, g, err
 	}
-	on := func(st *State, li int) string {
+	on := func(st *Instance, li int) string {
 		if n, ok := st.ld.(nn.NamedDevice).DeviceOf(li); ok {
 			return n
 		}
@@ -63,7 +63,7 @@ func TestPlacement(t *testing.T) {
 			t.Errorf("head on %q (%v), named vulkan:1", n, ok)
 		}
 		// And it computes the model: the same greedy tokens as the host.
-		host := m.NewState(64)
+		host := m.NewInstance(64)
 		defer host.Close()
 		ids := m.Vocab.Encode("The capital of France is", true)
 		a, err := st.Prefill(ids)
@@ -107,7 +107,7 @@ func TestPlacement(t *testing.T) {
 		if st.devCount() != nl {
 			t.Fatalf("streamed %d of %d blocks: %s", st.devCount(), nl, g.Err())
 		}
-		host := m.NewState(64)
+		host := m.NewInstance(64)
 		defer host.Close()
 		ids := m.Vocab.Encode("The capital of France is", true)
 		a, err := st.Prefill(ids)

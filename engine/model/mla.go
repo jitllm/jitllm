@@ -27,9 +27,9 @@ import (
 // KVLoraRank. kvPages.latent aliases the two caches and nn.AddAttnKV emits the
 // kernels at the two widths.
 
-// allocMLA sizes the per-State buffers one MLA token needs, so a decode token
+// allocMLA sizes the per-instance buffers one MLA token needs, so a decode token
 // allocates nothing here.
-func (s *State) allocMLA() {
+func (s *Instance) allocMLA() {
 	c := s.c
 	if !c.MLA() {
 		return
@@ -66,7 +66,7 @@ func (s *State) allocMLA() {
 // operations and their order are mlaProject's.
 
 // growMLABatch sizes the per-chunk MLA buffers.
-func (s *State) growMLABatch(chunk int) {
+func (s *Instance) growMLABatch(chunk int) {
 	c := s.c
 	if !c.MLA() || len(s.bmlaAbs) >= chunk*c.NHead*(c.KVLoraRank+c.NRot) {
 		return
@@ -90,7 +90,7 @@ func (s *State) growMLABatch(chunk int) {
 
 // attnWidths is the key and value widths the attention kernels are emitted
 // for. They differ only under MLA, where a score covers the whole cached row
-// and the accumulation only its latent prefix. NewState and stepDownKVToF32
+// and the accumulation only its latent prefix. NewInstance and stepDownKVToF32
 // must both derive them here.
 func (c *Config) attnWidths() (hdK, hdV int) {
 	if c.KVLoraRank != 0 {

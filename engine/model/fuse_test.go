@@ -27,7 +27,7 @@ func fuseModels() []string {
 	return names
 }
 
-// fusedDecode greedy-decodes n tokens from a fixed prompt on a fresh State,
+// fusedDecode greedy-decodes n tokens from a fixed prompt on a fresh instance,
 // fused or per op, and returns every step's token and logits, with the pool
 // regions and fused phases the decode tokens ran.
 type fuseArm struct {
@@ -43,7 +43,7 @@ type fuseArm struct {
 
 func fusedDecode(t *testing.T, m *Model, fused bool, n int, resid bool) fuseArm {
 	t.Helper()
-	s := m.NewState(128)
+	s := m.NewInstance(128)
 	defer s.Close()
 	s.SetBlockFusion(fused)
 	s.SetResidualFold(resid)

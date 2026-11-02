@@ -13,7 +13,7 @@ import (
 )
 
 // TestCPUComposesOnce holds the CPU device to the census the cards are held
-// to (TestPlacementComposesOnce): every block a State keeps on the CPU is
+// to (TestPlacementComposesOnce): every block an instance keeps on the CPU is
 // composed for it once, at its placement, and serves every step after it --
 // prompts of every length and their decode, a second session, a scheduler's
 // batch of several sequences -- declining none to main's kernels. Each phase
@@ -60,7 +60,7 @@ func TestCPUComposesOnce(t *testing.T) {
 			// the CPU once, nothing declined, nothing formed since the last
 			// placement, and at least want more block steps served than
 			// before.
-			held := func(what string, s *State, before, want int) int {
+			held := func(what string, s *Instance, before, want int) int {
 				t.Helper()
 				if got := m.cpuFormCount(); got != placed {
 					t.Errorf("%s: %d CPU form(s) made at a step, after the placement's %d", what, got-placed, placed)
@@ -86,7 +86,7 @@ func TestCPUComposesOnce(t *testing.T) {
 				return served
 			}
 
-			s := m.NewState(total + 128)
+			s := m.NewInstance(total + 128)
 			defer s.Close()
 			placed = m.cpuFormCount()
 			if got := len(s.CPUCompositions()); got != nl {
@@ -147,7 +147,7 @@ func TestCPUComposesOnce(t *testing.T) {
 				t.FailNow()
 			}
 
-			s2 := m.NewState(512)
+			s2 := m.NewInstance(512)
 			defer s2.Close()
 			placed = m.cpuFormCount()
 			l, err := s2.Prefill(ids[:100])
@@ -160,7 +160,7 @@ func TestCPUComposesOnce(t *testing.T) {
 			held("a second session's prompt and decode", s2, 0, 2*nl)
 			held("the first session beside the second", s, served, 0)
 
-			sc := NewScheduler(m, 4, 256)
+			sc := NewRowScheduler(m, 4, 256)
 			defer sc.Close()
 			placed = m.cpuFormCount()
 			seqs := []*Seq{{Prompt: ids[:7], MaxTokens: 4}, {Prompt: ids[50:83], MaxTokens: 6},
@@ -206,7 +206,7 @@ func TestCPUComposesOnce(t *testing.T) {
 					noDevice(t, dev, err)
 				}
 				defer g.Close()
-				r := m.NewState(512)
+				r := m.NewInstance(512)
 				defer r.Close()
 				if err := r.SetDeviceLayers(g, 0); err != nil {
 					t.Fatal(err)

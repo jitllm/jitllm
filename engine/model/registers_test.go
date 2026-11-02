@@ -91,7 +91,7 @@ func runForRegisters(t *testing.T, m *Model, opts ...tier.Option) []backend.Kern
 		noDevice(t, "CUDA device", err)
 	}
 	defer g.Close()
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 	if err := st.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestHotKernelsKeepTheirRegisters(t *testing.T) {
 	defer m.Close()
 
 	t.Run("host", func(t *testing.T) {
-		st := m.NewState(64)
+		st := m.NewInstance(64)
 		defer st.Close()
 		lg, err := st.Prefill(m.Vocab.Encode(strings.Repeat("The capital of France is Paris. ", 5), true))
 		if err != nil {

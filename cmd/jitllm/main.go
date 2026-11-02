@@ -364,7 +364,7 @@ func benchmark(path string, topts []tok.Option) error {
 
 	// Decode, one token at a time.
 	ids := m.Vocab.Encode("The capital of France is", true)
-	st := m.NewState(len(ids) + 8)
+	st := m.NewInstance(len(ids) + 8)
 	defer st.Close()
 	var logits []float32
 	for _, id := range ids {
@@ -607,7 +607,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		extra = model.SpanPositions(spans, m.Cfg.NEmbd) - len(ids)
 	}
 	// Whether the pool spins or parks between regions is decided per token by
-	// the engine, by whether the token paged anything in (model.State.forward);
+	// the engine, by whether the token paged anything in (model.Instance.forward);
 	// JITLLM_SPIN_US still fixes it.
 	// No -n: generate until the model ends its reply, in a session as long as
 	// the model's context, as the server's sessions are by default. KV pages
@@ -628,7 +628,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if wp := os.Getenv("JITLLM_WARMUP_PROMPT"); wp != "" {
 		wids = m.Vocab.Encode(wp, true)
 	}
-	st := m.NewState(max(len(ids)+extra, len(wids)) + n + 1)
+	st := m.NewInstance(max(len(ids)+extra, len(wids)) + n + 1)
 	defer st.Close()
 	var kvStore *model.FileStore
 	// The KV store is attached before the device is chosen. The namespace
@@ -687,10 +687,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		fmt.Fprintln(os.Stderr)
 		// Over budget on a mixture of experts is the case jitllm can do something
 		// about: keep the experts the router keeps asking for, drop the rest.
-		// The full budget: State.SetMemBudget takes what a device on the host's
+		// The full budget: Instance.SetMemBudget takes what a device on the host's
 		// memory holds off it itself, once the device has placed its blocks and
 		// whenever they move -- so an embedder that never reads HostReserved
-		// still cannot double-spend the machine. See State.hostBudget.
+		// still cannot double-spend the machine. See Instance.hostBudget.
 		st.SetMemBudget(maxmem)
 		if _, bud := st.Resident(); bud > 0 {
 			fmt.Fprintf(os.Stderr, "         managing expert residency: %.2f GiB of expert budget\n",
@@ -784,7 +784,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 
 	// JITLLM_WARMUP=k runs the prompt and -n greedy tokens k times on this
-	// State, untimed, and resets it before the run that is measured: the
+	// Instance, untimed, and resets it before the run that is measured: the
 	// expert caches fill and the tuners settle as a server's would. The
 	// device's counters printed at the end include the warm-ups.
 	if k, _ := strconv.Atoi(os.Getenv("JITLLM_WARMUP")); k > 0 && sp == nil && imgPath == "" && kvCacheDir == "" {
@@ -2036,11 +2036,11 @@ func tokenizeCmd(args []string) error {
 }
 
 // prefillImage prefills a prompt that holds a picture. The picture is rows of
-// the prompt (model.Picture): the prefill runs the State's vision segment over
+// the prompt (model.Picture): the prefill runs the instance's vision segment over
 // it -- the tower's blocks through the one runner and placement -- or the
 // model's image cache answers, and with cached set the prefix cache restores
 // past it, since its rows are named by the picture itself.
-func prefillImage(st *model.State, m *model.Model, tw *model.Tower, pic *picture, spans []model.Span,
+func prefillImage(st *model.Instance, m *model.Model, tw *model.Tower, pic *picture, spans []model.Span,
 	cached bool) ([]float32, error) {
 	if err := pic.preprocess(st); err != nil {
 		return nil, err
@@ -2091,7 +2091,7 @@ func prefillImage(st *model.State, m *model.Model, tw *model.Tower, pic *picture
 // the page size, which devices are in play, how many blocks they took, and what
 // an integrated device carved out of the same RAM. A budget that holds every
 // host block is the fully resident configuration; paging simply never fires.
-func setPageBudget(m *model.Model, st *model.State, dev nn.Device, maxmem uint64) {
+func setPageBudget(m *model.Model, st *model.Instance, dev nn.Device, maxmem uint64) {
 	page := m.PageSize()
 	if page == 0 {
 		return // not a container; nothing is paged

@@ -57,7 +57,7 @@ func TestFinalSoftcapReachesTheDeviceHead(t *testing.T) {
 	const bound = 1e-8
 
 	// The folded path: every block placed, the head in the same submission.
-	dev := m.NewState(len(ids) + 1)
+	dev := m.NewInstance(len(ids) + 1)
 	defer dev.Close()
 	dev.SetDevice(g)
 	if dev.GPULayers() != m.Cfg.NLayer || !dev.HeadOnDevice() {
@@ -82,11 +82,11 @@ func TestFinalSoftcapReachesTheDeviceHead(t *testing.T) {
 	// ForwardGreedy under the cap: the device must serve the token (the argmax
 	// runs after nn.Head.Softcap) and match Greedy over Forward's logits. The
 	// count of device-served tokens says the configuration was selected.
-	gs := m.NewState(len(ids) + 1)
+	gs := m.NewInstance(len(ids) + 1)
 	defer gs.Close()
 	gs.SetDevice(g)
 	if gs.GPULayers() != m.Cfg.NLayer || !gs.HeadOnDevice() {
-		t.Skipf("the greedy State did not get every block and the head: %s", g.Err())
+		t.Skipf("the greedy instance did not get every block and the head: %s", g.Err())
 	}
 	served := 0
 	for p, id := range ids {
@@ -111,11 +111,11 @@ func TestFinalSoftcapReachesTheDeviceHead(t *testing.T) {
 	}
 
 	// Prefill's device-head tail.
-	ps := m.NewState(len(ids) + 1)
+	ps := m.NewInstance(len(ids) + 1)
 	defer ps.Close()
 	ps.SetDevice(g)
 	if !ps.HeadOnDevice() {
-		t.Skipf("the prefill State did not get the head on the device: %s", g.Err())
+		t.Skipf("the prefill instance did not get the head on the device: %s", g.Err())
 	}
 	got, err := ps.Prefill(ids)
 	if err != nil {

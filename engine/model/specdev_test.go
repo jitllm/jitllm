@@ -126,7 +126,7 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 func specGreedyDev(t *testing.T, m *Model, prompt []int32, n int, g *tier.GPU, oracle []int32,
 	opts ...SpecOption) ([]int32, SpecStats, bool) {
 	t.Helper()
-	st := m.NewState(len(prompt) + n + 8)
+	st := m.NewInstance(len(prompt) + n + 8)
 	defer st.Close()
 	if err := st.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func specGreedyDev(t *testing.T, m *Model, prompt []int32, n int, g *tier.GPU, o
 // a round.
 func specFaultDev(t *testing.T, m *Model, prompt []int32, n int, g *tier.GPU, fault specFault, oracle []int32) []int32 {
 	t.Helper()
-	st := m.NewState(len(prompt) + 5*n + 8) // as specGreedy's, for the breaks
+	st := m.NewInstance(len(prompt) + 5*n + 8) // as specGreedy's, for the breaks
 	defer st.Close()
 	if err := st.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -204,7 +204,7 @@ func devFlip(t *testing.T, m *Model, g *tier.GPU, prompt, prefix []int32, a, b i
 	t.Helper()
 	all := append(append([]int32(nil), prompt...), prefix...)
 	decode := func(dev nn.Device) []float32 {
-		st := m.NewState(len(all) + 2)
+		st := m.NewInstance(len(all) + 2)
 		defer st.Close()
 		if dev != nil {
 			if err := st.SetDevice(dev); err != nil {
@@ -225,7 +225,7 @@ func devFlip(t *testing.T, m *Model, g *tier.GPU, prompt, prefix []int32, a, b i
 	ld := decode(g)
 	gap = math.Abs(float64(ld[a] - ld[b]))
 	perturb = maxAbsDiff(ld, decode(nil))
-	ch := m.NewState(len(all) + 2)
+	ch := m.NewInstance(len(all) + 2)
 	defer ch.Close()
 	if err := ch.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func devFlip(t *testing.T, m *Model, g *tier.GPU, prompt, prefix []int32, a, b i
 	perturb = max(perturb, maxAbsDiff(ld, lb))
 	c := m.Cfg
 	for step := 2; step <= specMaxRows && step <= len(prefix); step++ {
-		rs := m.NewState(len(all) + 2)
+		rs := m.NewInstance(len(all) + 2)
 		if err := rs.SetDevice(g); err != nil {
 			t.Fatal(err)
 		}

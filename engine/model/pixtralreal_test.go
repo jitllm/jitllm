@@ -43,7 +43,7 @@ func TestPixtralRealMatchesTransformers(t *testing.T) {
 	wantPx := readF32(t, filepath.Join(dir, "photo.pixels.f32"))
 	want := readF32(t, filepath.Join(dir, "photo.features.f32"))
 	img := goldPicture(t, "photo")
-	encode := func(s *State) ([]float32, []float32) {
+	encode := func(s *Instance) ([]float32, []float32) {
 		px, err := s.PreprocessImage(img)
 		if err != nil {
 			t.Fatal(err)

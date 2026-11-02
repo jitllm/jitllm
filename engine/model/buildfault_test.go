@@ -47,7 +47,7 @@ func buildFaultRun(t *testing.T, m *Model, parts tier.Parts, asDevice bool) faul
 	g := faultTier(t, parts)
 	defer g.Close()
 	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is", true)
-	st := m.NewState(len(ids) + 8)
+	st := m.NewInstance(len(ids) + 8)
 	defer st.Close()
 	st.SetDevice(g)
 	r := faultRun{before: st.GPULayers()}
@@ -67,7 +67,7 @@ func buildFaultRun(t *testing.T, m *Model, parts tier.Parts, asDevice bool) faul
 // TestBuildFailureMovesNothing fails the composer's form of every matvec (a
 // rewrite of its registry) and demands the call that needed the form return
 // the named nn.BuildError with no block moved, none demoted, none relocated.
-// The violation reports the same failure as the device failing: the State must
+// The violation reports the same failure as the device failing: the instance must
 // then demote, which proves the gate can tell the two apart (RULE 10).
 func TestBuildFailureMovesNothing(t *testing.T) {
 	p := testmodels.Path(faultModel)
@@ -117,7 +117,7 @@ func TestDeviceFaultAtDecodeEvacuatesAndIsCounted(t *testing.T) {
 	}
 	defer m.Close()
 	const token = 1000
-	host := m.NewState(8)
+	host := m.NewInstance(8)
 	defer host.Close()
 	want, err := host.Forward(token)
 	if err != nil {
@@ -128,7 +128,7 @@ func TestDeviceFaultAtDecodeEvacuatesAndIsCounted(t *testing.T) {
 	t.Setenv("JITLLM_DEVICE_FAIL_AT", "1")
 	g := faultTier(t, 0)
 	defer g.Close()
-	dev := m.NewState(8)
+	dev := m.NewInstance(8)
 	defer dev.Close()
 	dev.SetDevice(g)
 	if dev.GPULayers() != m.Cfg.NLayer {

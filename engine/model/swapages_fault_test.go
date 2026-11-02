@@ -27,7 +27,7 @@ func TestWindowReleaseGateDiscriminates(t *testing.T) {
 	defer m.Close()
 	const maxSeq = 1024
 	decode := func(g *tier.GPU) ([]uint64, error) {
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		if err := s.SetDevice(g); err != nil {
 			t.Fatal(err)

@@ -182,14 +182,14 @@ func openSpecCapped(t *testing.T, path string) (*Model, float64) {
 // logits (stepRows, the verification Speculator.Next runs), and returns the
 // worst logit NMSE of a verified row against decode at its position. noCap
 // skips the cap in the host's verify head (rowsOut.noCap). On a device the
-// steps must run as ragged rows (State.rowsVerifiable), the per-row head.
+// steps must run as ragged rows (Instance.rowsVerifiable), the per-row head.
 func specVerifyCapped(t *testing.T, m *Model, dev nn.Device, prompt, toks []int32, noCap bool) float64 {
 	t.Helper()
 	const k = 4
 	toks = toks[:len(toks)/k*k]
 	c := m.Cfg
-	open := func() *State {
-		st := m.NewState(len(prompt) + len(toks) + 2)
+	open := func() *Instance {
+		st := m.NewInstance(len(prompt) + len(toks) + 2)
 		if dev != nil {
 			if err := st.SetDevice(dev); err != nil {
 				t.Fatal(err)

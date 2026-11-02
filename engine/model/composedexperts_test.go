@@ -425,7 +425,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 				toks := cpuTokens(t, m, ntok+1)
 				nl := m.Cfg.NLayer
 				run := func(move bool) ([][]float32, int, [jit.NumDeclines]int) {
-					st := m.NewState(ntok + 2)
+					st := m.NewInstance(ntok + 2)
 					defer st.Close()
 					st.SetDeviceFallback(false)
 					if err := st.SetDevice(g); err != nil {
@@ -457,7 +457,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 				}
 				want, _, _ := run(false)
 				// The two devices' spread: the sequence on the CPU alone.
-				cs := m.NewState(ntok + 2)
+				cs := m.NewInstance(ntok + 2)
 				widest := 0.0
 				for i, tk := range toks[:ntok] {
 					lg, err := cs.Forward(tk)
@@ -507,7 +507,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 // The prompt goes through the decode path in every session
 // (WithPrefillForwardRows). Left unset, a model takes a chunk for the first
 // prompt, its streamed experts run on the host, and the decode path from the
-// second on, once a device has run host experts (State.forwardRowsFor): the
+// second on, once a device has run host experts (Instance.forwardRowsFor): the
 // two paths part by the host's and the card's arithmetic (5.7e-04 to 8.4e-03
 // on the V100) and sessions two and three agree bit for bit.
 func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
@@ -528,7 +528,7 @@ func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
 				prompt := m.Vocab.Encode("The capital of France is a city that", true)
 				var out [3][]float32
 				for i := range out {
-					st := m.NewState(len(prompt) + 2)
+					st := m.NewInstance(len(prompt) + 2)
 					st.SetDeviceFallback(false)
 					if err := st.SetDevice(g); err != nil {
 						t.Fatal(err)
@@ -601,7 +601,7 @@ func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts tier.Part
 			defer g.Close()
 			defer func(on bool) { m.opt.headPlace = on }(m.opt.headPlace)
 			m.opt.headPlace = false
-			s := m.NewState(ctx)
+			s := m.NewInstance(ctx)
 			defer s.Close()
 			s.SetDeviceFallback(false)
 			if err := s.SetDevice(g); err != nil {

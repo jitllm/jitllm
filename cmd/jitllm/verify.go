@@ -61,7 +61,7 @@ func verifyCmd(args []string) error {
 	}
 	defer m.Close()
 	// The split tuner is pinned: a k-split is the f32 reduction order, so two
-	// States that tuned separately differ in the last bits, and on a deep
+	// instances that tuned separately differ in the last bits, and on a deep
 	// hybrid that difference is amplified past any useful diff. It goes before
 	// gpuOptions so JITLLM_GPU_TUNE still overrides it; the rate below is
 	// therefore a fitted-split rate.
@@ -237,13 +237,13 @@ func prefillDiff(m *model.Model, g *tier.GPU, ntok, n int) error {
 
 	arm := func(noBatch bool) ([][]float32, error) {
 		g.NoBatch = noBatch
-		s := m.NewState(ntok + n + 16)
+		s := m.NewInstance(ntok + n + 16)
 		defer s.Close()
 		if err := s.SetDevice(g); err != nil {
 			return nil, err
 		}
 		// Hand the blocks back before the next arm: a tier holds one KV cache
-		// per block, and a second State's PrepLayer would decline on budget.
+		// per block, and a second instance's PrepLayer would decline on budget.
 		defer s.SetGPULayers(0)
 		if s.GPULayers() == 0 {
 			return nil, fmt.Errorf("verify -prefill: the device took no blocks: %s", g.Err())
@@ -407,9 +407,9 @@ func isFinite(v float32) bool {
 // Per position, the margin between the top two logits says whether a flip is a
 // computation error or a tie.
 func forcedDiff(m *model.Model, g *tier.GPU, n int, doMigrate bool, band float64) error {
-	cs := m.NewState(n + 16)
+	cs := m.NewInstance(n + 16)
 	defer cs.Close()
-	gs := m.NewState(n + 16)
+	gs := m.NewInstance(n + 16)
 	defer gs.Close()
 	if err := gs.SetDevice(g); err != nil {
 		return err
@@ -431,8 +431,8 @@ func forcedDiff(m *model.Model, g *tier.GPU, n int, doMigrate bool, band float64
 	// cache or a replayed graph over freed buffers yields plausible logits. The
 	// pattern walks the seam down to zero and back up to where it started.
 	//
-	// This State's own placement is printed: a full card can give this second
-	// State fewer blocks than the benchmark session.
+	// This instance's own placement is printed: a full card can give this second
+	// Instance fewer blocks than the benchmark session.
 	full := gs.GPULayers()
 	fmt.Printf("  teacher-forced arm: %d block(s) on the device, runs %v\n",
 		full, gs.DeviceBlocks())
@@ -569,7 +569,7 @@ func forcedDiff(m *model.Model, g *tier.GPU, n int, doMigrate bool, band float64
 // one's -- a free-running chain is the right thing to TIME and the wrong thing
 // to DIFF.
 func benchRun(m *model.Model, dev *tier.GPU, n int) float64 {
-	s := m.NewState(n + 16)
+	s := m.NewInstance(n + 16)
 	defer s.Close()
 	if dev != nil {
 		if err := s.SetDevice(dev); err != nil {
@@ -606,14 +606,14 @@ func benchRun(m *model.Model, dev *tier.GPU, n int) float64 {
 	return float64(n) / time.Since(start).Seconds()
 }
 
-// abRun runs a paired A/B of `which`, interleaved in one process on one State,
+// abRun runs a paired A/B of `which`, interleaved in one process on one instance,
 // starting at a context depth of `depth`. Depth matters for attention arms,
 // which are a small share of a token at short context.
 //
 // The state is sized for the whole run rather than reset back to depth,
 // because re-prefilling to depth would be timed as part of an arm.
 func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
-	s := m.NewState(depth + rounds*n*2 + 16)
+	s := m.NewInstance(depth + rounds*n*2 + 16)
 	defer s.Close()
 	// attnchunk and attnpair compare host attention layouts, which do not run
 	// at all with the blocks on a device; every other arm needs the device.
@@ -640,7 +640,7 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 	// measurement at a depth, keep rounds*n*2 small against depth.
 	fmt.Printf("  context runs %d..%d over the whole A/B (-depth is the START)\n",
 		depth, min(depth+rounds*n*2, lim))
-	runOn := func(s *model.State, iters int) {
+	runOn := func(s *model.Instance, iters int) {
 		tok := int32(1)
 		for i := 0; i < iters; i++ {
 			logits, err := s.Forward(tok)
@@ -688,7 +688,7 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 			panic(err)
 		}
 		defer g2.Close()
-		s2 := m.NewState(n + 16)
+		s2 := m.NewInstance(n + 16)
 		defer s2.Close()
 		if err := s2.SetDevice(g2); err != nil {
 			panic(err)
@@ -699,7 +699,7 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		}
 		// bench.AB hands each arm -n as its iteration count, which here is
 		// the prompt length; a round is four prompts instead.
-		pre := func(st *model.State, _ int) {
+		pre := func(st *model.Instance, _ int) {
 			for i := 0; i < 4; i++ {
 				st.Reset()
 				if _, err := st.Prefill(ids); err != nil {
@@ -720,9 +720,9 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		}()
 	case "regs":
 		// B is a second tier on the same card whose every CUDA kernel is
-		// capped at JITLLM_AB_MAXREGS registers (.maxnreg), with a State of
+		// capped at JITLLM_AB_MAXREGS registers (.maxnreg), with an instance of
 		// its own. 0 caps nothing, which makes this the A/A self-control: two
-		// tiers, two States, the same kernels.
+		// tiers, two instances, the same kernels.
 		maxRegs, _ := strconv.Atoi(os.Getenv("JITLLM_AB_MAXREGS"))
 		g2, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("cuda:0"),
 			tier.WithDeviceTune(tier.TuneOff)}, append(gpuOptions(), tier.WithCUDAMaxRegs(maxRegs))...)...)
@@ -730,7 +730,7 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 			panic(err)
 		}
 		defer g2.Close()
-		s2 := m.NewState(depth + rounds*n*2 + 16)
+		s2 := m.NewInstance(depth + rounds*n*2 + 16)
 		defer s2.Close()
 		if err := s2.SetDevice(g2); err != nil {
 			panic(err)
@@ -764,8 +764,8 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		a = bench.Case{Name: "1 head per task", Fn: func(it int) { s.SetAttnChunk(1); step(it) }}
 		b = bench.Case{Name: fmt.Sprintf("%d heads per task", bc), Fn: func(it int) { s.SetAttnChunk(bc); step(it) }}
 	case "kvlayout":
-		// The KV layout is baked at NewState, so it cannot be alternated
-		// inside one State. This case exists only to say so.
+		// The KV layout is baked at NewInstance, so it cannot be alternated
+		// inside one Instance. This case exists only to say so.
 		panic(fmt.Errorf("use -kvlayout, not -ab kvlayout: the layout is fixed " +
 			"when a State is created, so it cannot be alternated inside one"))
 	case "attnpair":

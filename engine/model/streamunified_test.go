@@ -59,7 +59,7 @@ func TestStreamedContainerOnAUnifiedDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 	if err := st.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestStreamedContainerOnAUnifiedDevice(t *testing.T) {
 		t.Fatalf("the arena was asked to pack container weights: %d packs, %d hits, %d declines",
 			as.Packs, as.Hits, as.Declines)
 	}
-	host := m.NewState(64)
+	host := m.NewInstance(64)
 	defer host.Close()
 	ids := m.Vocab.Encode("The capital of France is", true)
 	a, err := st.Prefill(ids)

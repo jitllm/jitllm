@@ -32,8 +32,8 @@ const (
 const mnColRows = 4096
 
 // mnGrow sizes the encode's working memory for the tower, once, and puts
-// every depthwise shape and the attention kernels in the State's JIT.
-func (s *State) mnGrow() {
+// every depthwise shape and the attention kernels in the instance's JIT.
+func (s *Instance) mnGrow() {
 	v := s.vis
 	if v.mn != nil {
 		return
@@ -101,7 +101,7 @@ func (s *State) mnGrow() {
 
 // mnBegin is encodeBegin for the tower: the picture through the stem into the
 // encode's activation, and the encode in progress set to its first block.
-func (s *State) mnBegin(px []float32) error {
+func (s *Instance) mnBegin(px []float32) error {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	mt := t.mn
@@ -132,7 +132,7 @@ func (s *State) mnBegin(px []float32) error {
 // mnPad copies src (h x w rows of c) into r.pad, zero-bordered for a k x k
 // window at stride st under SAME padding, and returns the padded row's
 // width in samples and the depthwise row shape.
-func (s *State) mnPad(src []float32, h, w, c, k, st int) (wp int, sh cpu.DWShape) {
+func (s *Instance) mnPad(src []float32, h, w, c, k, st int) (wp int, sh cpu.DWShape) {
 	r := s.vis.mn
 	ho, top, _ := mnSame(h, k, st)
 	wo, left, _ := mnSame(w, k, st)
@@ -154,7 +154,7 @@ func (s *State) mnPad(src []float32, h, w, c, k, st int) (wp int, sh cpu.DWShape
 }
 
 // mnItems is one chunk of the tower's pool region.
-func (s *State) mnItems(lo, hi int) {
+func (s *Instance) mnItems(lo, hi int) {
 	r := s.vis.mn
 	switch r.op {
 	case mnOpDW:
@@ -179,7 +179,7 @@ func (s *State) mnItems(lo, hi int) {
 // mnConv is a full k x k convolution of src (h x w rows of c) at stride st
 // under SAME padding, into dst: an im2col tile of output positions, tap-major
 // as the converter laid the weight out, and the packed matmul over it.
-func (s *State) mnConv(dst, src []float32, h, w, c, k, st int, wt tensor) error {
+func (s *Instance) mnConv(dst, src []float32, h, w, c, k, st int, wt tensor) error {
 	r := s.vis.mn
 	ho, _, _ := mnSame(h, k, st)
 	wo, _, _ := mnSame(w, k, st)
@@ -210,7 +210,7 @@ func (s *State) mnConv(dst, src []float32, h, w, c, k, st int, wt tensor) error 
 
 // mnHostRun runs block li of the tower on the CPU in the composer's form,
 // counted served, or refuses it by name.
-func (s *State) mnHostRun(li int) error {
+func (s *Instance) mnHostRun(li int) error {
 	if s.cpu.args == nil {
 		return s.cpuRefused(li, jit.DeclineCaller)
 	}
@@ -227,7 +227,7 @@ func (s *State) mnHostRun(li int) error {
 
 // mnHandOver makes block li's output y, in the activation's other half,
 // the encode's activation, and keeps it where the fusion adapter reads it.
-func (s *State) mnHandOver(li int, y []float32) {
+func (s *Instance) mnHandOver(li int, y []float32) {
 	v := s.vis
 	r, b := v.mn, s.m.layers[li].mn
 	r.cur = 1 - r.cur
@@ -240,7 +240,7 @@ func (s *State) mnHandOver(li int, y []float32) {
 // mnDevRun runs blocks [lo, hi) of the tower on the device: the encode's
 // activation up, the last block's output back into the other half, and the
 // fusion adapter's first input back as its block writes it.
-func (s *State) mnDevRun(lo, hi int) error {
+func (s *Instance) mnDevRun(lo, hi int) error {
 	v := s.vis
 	r := v.mn
 	b0, b1 := s.m.layers[lo].mn, s.m.layers[hi-1].mn
@@ -273,7 +273,7 @@ func (s *State) mnDevRun(lo, hi int) error {
 
 // mnFinish is encodeFinish for the tower: the fusion adapter over the last
 // two stages' outputs, then the embedder.
-func (s *State) mnFinish() ([]float32, error) {
+func (s *Instance) mnFinish() ([]float32, error) {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	mt, r := t.mn, v.mn

@@ -28,7 +28,7 @@ func TestHunyuanVLTextMatchesTransformers(t *testing.T) {
 				t.Fatal("the container's text model is not an XD-RoPE one")
 			}
 			run := func() float64 {
-				st := m.NewState(len(g.Pre) + g.grid().Rows() + len(g.Post) + len(g.Cont) + 1)
+				st := m.NewInstance(len(g.Pre) + g.grid().Rows() + len(g.Post) + len(g.Cont) + 1)
 				defer st.Close()
 				w, flips := qvlWorst(g, qvlRun(t, st, g, true))
 				if flips > 0 {
@@ -97,7 +97,7 @@ func TestHunyuanVLLaysTheImageOutAsTransformersDoes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m, g := openQVL(t, name)
 			defer m.Close()
-			st := m.NewState(len(g.Pos4) + 1)
+			st := m.NewInstance(len(g.Pos4) + 1)
 			defer st.Close()
 			rows, next, err := st.spanRope(0, 0, qvlSpans(g, true))
 			if err != nil {
@@ -192,7 +192,7 @@ func TestHunyuanVLTowerOnDeviceMatchesHost(t *testing.T) {
 				}
 				ran++
 				var blocks int
-				got, _ := qvlEncode(t, tw, g, func(s *State) {
+				got, _ := qvlEncode(t, tw, g, func(s *Instance) {
 					s.SetDevice(gpu)
 					blocks = s.GPUBlocks()
 				})
@@ -241,7 +241,7 @@ func TestHunyuanVLRealTowerOnDevice(t *testing.T) {
 	defer m.Close()
 	tw := m.Tower()
 	tw.Cfg.MaxPixels = 1024 * 1024
-	encode := func(s *State) []float32 {
+	encode := func(s *Instance) []float32 {
 		f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
 		if err != nil {
 			t.Fatal(err)
@@ -291,7 +291,7 @@ func TestHunyuanVLRealTowerOnDevice(t *testing.T) {
 	}
 }
 
-// TestHunyuanVLPictureCountsItsNewlineAndEndRows holds State.Picture -- the
+// TestHunyuanVLPictureCountsItsNewlineAndEndRows holds Instance.Picture -- the
 // path `jitllm run -image` and the server take -- to the golden's grid: a
 // picture is H*(W+1)+2 rows, which the header-sized prompt (GridFor,
 // GridRows) and the preprocessed picture must agree on. Counting the merged
@@ -301,7 +301,7 @@ func TestHunyuanVLPictureCountsItsNewlineAndEndRows(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m, g := openQVL(t, name)
 			defer m.Close()
-			st := m.NewState(len(g.Pre) + g.grid().Rows() + len(g.Post) + 1)
+			st := m.NewInstance(len(g.Pre) + g.grid().Rows() + len(g.Post) + 1)
 			defer st.Close()
 			pc, err := st.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 			if err != nil {

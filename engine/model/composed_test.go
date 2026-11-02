@@ -24,7 +24,7 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 	return composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, float, nil, extra...)
 }
 
-// axesShift states each row's rotary positions as k times the State's, and
+// axesShift states each row's rotary positions as k times the instance's, and
 // a call's first row d past that: the violation of a served table that turns
 // a row by the positions it is told. A shift of every row alike moves no
 // position against another, which a rotary cannot see.
@@ -98,37 +98,37 @@ func (e *tokenShift) EmbedRows(ids []int32, pos int, dst []float32) bool {
 	return e.EmbedDevice.EmbedRows(e.ids, pos+e.p, dst)
 }
 
-// shiftTokens has the State promise its device every row's gather d tokens
+// shiftTokens has the instance promise its device every row's gather d tokens
 // past its own.
-func shiftTokens(d, vocab int) func(*State) { return shiftEmbed(d, 0, vocab) }
+func shiftTokens(d, vocab int) func(*Instance) { return shiftEmbed(d, 0, vocab) }
 
-// shiftEmbed has the State promise its device every row's gather d tokens
+// shiftEmbed has the instance promise its device every row's gather d tokens
 // and p positions past its own.
-func shiftEmbed(d, p, vocab int) func(*State) {
-	return func(s *State) {
+func shiftEmbed(d, p, vocab int) func(*Instance) {
+	return func(s *Instance) {
 		if s.ldEmbed != nil {
 			s.ldEmbed = &tokenShift{EmbedDevice: s.ldEmbed, d: int32(d), vocab: int32(vocab), p: p}
 		}
 	}
 }
 
-// shiftAxes has the State tell its device every row's rotary positions d
+// shiftAxes has the instance tell its device every row's rotary positions d
 // past their own.
-func shiftAxes(d int32) func(*State) { return stretchAxes(1, d) }
+func shiftAxes(d int32) func(*Instance) { return stretchAxes(1, d) }
 
-// stretchAxes has the State tell its device every row's rotary positions as
+// stretchAxes has the instance tell its device every row's rotary positions as
 // k times their own, a call's first row d past that (axesShift).
-func stretchAxes(k, d int32) func(*State) {
-	return func(s *State) {
+func stretchAxes(k, d int32) func(*Instance) {
+	return func(s *Instance) {
 		if s.ldRope != nil {
 			s.ldRope = &axesShift{RopeAxesDevice: s.ldRope, k: k, d: d}
 		}
 	}
 }
 
-// composedDecodeWith is composedDecode with after applied to the State once
+// composedDecodeWith is composedDecode with after applied to the instance once
 // its device is attached.
-func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph, float bool, after func(*State), extra ...tier.Option) ([][]float32, tier.Stats, bool, map[string]int) {
+func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph, float bool, after func(*Instance), extra ...tier.Option) ([][]float32, tier.Stats, bool, map[string]int) {
 	t.Helper()
 	// The prompt is one chunk of a few rows: every arm reserves and warms the
 	// widths up to 64, each a form of the composer's where it serves them.
@@ -143,7 +143,7 @@ func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, p
 		noDevice(t, dev, err)
 	}
 	defer g.Close()
-	s := m.NewState(len(ids) + len(toks) + 4)
+	s := m.NewInstance(len(ids) + len(toks) + 4)
 	defer s.Close()
 	// A device that fails is an error here, never a sequence finished at home.
 	s.SetDeviceFallback(false)
@@ -180,7 +180,7 @@ func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, p
 // phi3, falcon and apertus classes, the dense latent attention fixtures
 // (DeepSeek-V3's block at f32, and under YaRN), and the text models of qwen2vl
 // and qwen3vl. Those state their rotaries over several position axes, which
-// the served table turns each row by as the State states them; on a text row every axis's
+// the served table turns each row by as the instance states them; on a text row every axis's
 // position is the same, so serving them here says the blocks and the table
 // are served at text positions. TestMRopeMatchesTransformers decodes after a
 // picture, where the rotary positions leave the cache's. And the mixtures:
@@ -291,7 +291,7 @@ func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 						noDevice(t, dev, err)
 					}
 					defer g.Close()
-					s := m.NewState(64)
+					s := m.NewInstance(64)
 					defer s.Close()
 					if err := s.SetDevice(g); err != nil {
 						t.Fatal(err)
@@ -855,10 +855,10 @@ func TestComposedBlocksServe(t *testing.T) {
 								}
 								t.Logf("one position off the composed %s: median ratio %.3g (per prompt %.3g), worst %.3g against the band's %.3g", a.name, offBand.median(), offBand.meds, offBand.worst, bandWorst*wide)
 								// A part the composer serves wrong must fall outside the
-								// band the arm is held to on the panel: the State's
+								// band the arm is held to on the panel: the instance's
 								// statement of the step changed under the served part,
 								// k the part.
-								violated := func(what string, k tier.Parts, after func(*State), extra ...tier.Option) {
+								violated := func(what string, k tier.Parts, after func(*Instance), extra ...tier.Option) {
 									var bad panelBand
 									for pi, p := range panel {
 										ref := runs[dev][g][pi].ref
@@ -882,7 +882,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									t.Logf("with %s: median ratio %.3g (per prompt %.3g), worst %.3g against the band's %.3g", what, bad.median(), bad.meds, bad.worst, bandWorst*wide)
 								}
 								// The served tables turn each row by the positions the
-								// State states for it; the gathered row is the token's.
+								// Instance states for it; the gathered row is the token's.
 								// The positions are not one off: the band is relative to
 								// the tier's own distance from the float reference, and
 								// on stories15M that distance is wide (0.14 at its
@@ -995,7 +995,7 @@ func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
 // runs as one ragged step, so either way the prompt's last-row head is a
 // one-row call of its own, which the composed head serves: no call is left
 // declined. Each decode step after it serves every block once; the
-// prompt reaches the device as a prompt, never as steps. With the State not
+// prompt reaches the device as a prompt, never as steps. With the instance not
 // telling the device the calls are a prompt's (the violation) a ragged prompt
 // runs as a step, which the gate must see; a chunk is a prompt by its shape,
 // and its run must not change.
@@ -1029,7 +1029,7 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 						noDevice(t, dev, err)
 					}
 					defer g.Close()
-					s := m.NewState(rows + steps + 4)
+					s := m.NewInstance(rows + steps + 4)
 					defer s.Close()
 					s.SetDeviceFallback(false)
 					if err := s.SetDevice(g); err != nil {

@@ -13,10 +13,10 @@ import (
 // Embeddings: a sequence in, one L2-normalised vector out.
 //
 // One API serves two kinds of model. An encoder (BERT, nomic-bert) has no
-// decoder State and runs encode(); a decoder embedding model (qwen3-embedding,
+// decoder instance and runs encode(); a decoder embedding model (qwen3-embedding,
 // EmbeddingGemma) is a language model whose container says how to pool its
 // last residual and whether attention is bidirectional, and runs through
-// State.embedPrefill. The same three lines serve both:
+// Instance.embedPrefill. The same three lines serve both:
 //
 //	e, _ := m.NewEmbedder()
 //	defer e.Close()
@@ -31,10 +31,10 @@ const embedMaxSeq = 8192
 type Embedder struct {
 	m   *Model
 	jit *nn.JIT
-	st  *State // a decoder embedding model's session; nil for an encoder
-	// seg is an encoder's segment State, the one its blocks are placed on a
+	st  *Instance // a decoder embedding model's session; nil for an encoder
+	// seg is an encoder's segment instance, the one its blocks are placed on a
 	// device through (encdev.go); nil until a device is attached.
-	seg *State
+	seg *Instance
 	// wins is the row windows a ModernBERT local block is handed (devPrepare).
 	wins []nn.KeyRun
 
@@ -54,9 +54,9 @@ type Embedder struct {
 	// sees its stages' rows -- the gates' bisection hook.
 	aud      audioRun
 	audioTap func(stage string, rows []float32)
-	// audSeg is the audio tower's segment State, the one its blocks are
+	// audSeg is the audio tower's segment instance, the one its blocks are
 	// placed on a device through (audiodev.go); nil until a device is.
-	audSeg *State
+	audSeg *Instance
 
 	// rg is the pool regions the host's blocks run (encRegions).
 	rg encRegions
@@ -90,7 +90,7 @@ func (m *Model) Pooling() jlm.Pooling { return m.Cfg.Pooling }
 func (m *Model) IsEmbedding() bool { return m.Cfg.Pooling != jlm.PoolNone }
 
 // IsEncoder reports whether the model is an encoder (BERT, nomic-bert): it has
-// no decoder State, so NewEmbedder is its only path and NewState refuses it.
+// no decoder instance, so NewEmbedder is its only path and NewInstance refuses it.
 func (m *Model) IsEncoder() bool { return m.enc != nil }
 
 // NewEmbedder builds the working memory Embed needs. A model whose container
@@ -108,14 +108,14 @@ func (m *Model) NewEmbedder() (*Embedder, error) {
 	e := &Embedder{m: m}
 	c := m.Cfg
 	if m.enc == nil {
-		st := m.NewState(min(c.NCtx, embedMaxSeq))
+		st := m.NewInstance(min(c.NCtx, embedMaxSeq))
 		e.st, e.jit = st, st.jit
 	} else if err := e.encoderJIT(); err != nil {
 		return nil, err
 	} else {
 		// The blocks the composer runs on the CPU device run through the
 		// encoder's segment, as a device's do.
-		e.seg = m.encState(e.jit)
+		e.seg = m.encInstance(e.jit)
 	}
 	e.ones = make([]float32, c.NEmbd)
 	for i := range e.ones {

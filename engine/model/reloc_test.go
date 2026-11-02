@@ -40,7 +40,7 @@ func TestSeamMovesWhileServing(t *testing.T) {
 	// i: where it is a tie, host and device may pick either.
 	var margin []float32
 	run := func(move func(i, full int) int) ([]int32, []int) {
-		st := m.NewState(len(in) + ntok + 1)
+		st := m.NewInstance(len(in) + ntok + 1)
 		defer st.Close()
 		st.SetDevice(g)
 		full := st.GPULayers()
@@ -151,7 +151,7 @@ func TestPagesMoveWhileADeviceHoldsBlocks(t *testing.T) {
 			m.SetPageBudget(uint64(frames) * m.PageSize())
 		}
 		in := m.Vocab.Encode("The capital of France is", true)
-		st := m.NewState(len(in) + ntok + 1)
+		st := m.NewInstance(len(in) + ntok + 1)
 		defer st.Close()
 		st.SetDeviceLayers(g, devLayers)
 		took := st.GPULayers()
@@ -216,7 +216,7 @@ func TestPageBudgetResizesWhileServing(t *testing.T) {
 		}
 		defer m.Close()
 		in := m.Vocab.Encode("The capital of France is", true)
-		st := m.NewState(len(in) + ntok + 1)
+		st := m.NewInstance(len(in) + ntok + 1)
 		defer st.Close()
 		logits, err := st.Prefill(in)
 		if err != nil {
@@ -309,7 +309,7 @@ func layerRelocatesToAnotherDevice(t *testing.T, path string, parts tier.Parts) 
 	// hop moves the sequence from tier a to tier b after the first token, so
 	// the history has to follow.
 	run := func(hop bool) ([]int32, []int) {
-		st := m.NewState(len(in) + ntok + 1)
+		st := m.NewInstance(len(in) + ntok + 1)
 		defer st.Close()
 		st.SetDevice(a)
 		placed := []int{st.GPULayers()}

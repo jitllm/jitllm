@@ -17,7 +17,7 @@ var shareModels = []string{"stories15M-q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M
 type shareRun struct {
 	toks   []int32
 	logits [][]float32
-	s      *State
+	s      *Instance
 }
 
 // shareScript is the sharing gate's workload: a system prompt of three pages
@@ -42,11 +42,11 @@ func sharePrompt(m *Model, i int) []int32 {
 }
 
 // shareSession runs session i: Prefill (store nil) or PrefillCached through
-// store, sharing when share is set, then gen greedy tokens. The State stays
+// store, sharing when share is set, then gen greedy tokens. The instance stays
 // open for the caller.
 func shareSession(t *testing.T, m *Model, i int, store KVStore, share bool) shareRun {
 	t.Helper()
-	s := m.NewState(sharePrefix + shareSuffix + shareGen + 16)
+	s := m.NewInstance(sharePrefix + shareSuffix + shareGen + 16)
 	prompt := sharePrompt(m, i)
 	var lg []float32
 	var err error
@@ -193,7 +193,7 @@ func TestSharedPrefixIsHeldOnce(t *testing.T) {
 }
 
 // firstAttn is the first layer of s that keeps pages.
-func firstAttn(s *State) int {
+func firstAttn(s *Instance) int {
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		if s.kv.layers[li].p > 0 {
 			return li
@@ -296,7 +296,7 @@ func TestShareKVRefusesByName(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			s := m.NewState(64)
+			s := m.NewInstance(64)
 			defer s.Close()
 			mustKey(t, s, "share-gate")
 			if err := s.ShareKV(st); err == nil || !strings.Contains(err.Error(), c.why) {

@@ -44,7 +44,7 @@ func TestSynthLlama4Q8MatchesTransformers(t *testing.T) {
 	m, g := openSynthLlama4Q8(t)
 	defer m.Close()
 	worst, agree := 0.0, 0
-	st := m.NewState(len(g.IDs) + 1)
+	st := m.NewInstance(len(g.IDs) + 1)
 	defer st.Close()
 	for p, id := range g.IDs {
 		lg, err := st.Forward(id)
@@ -75,7 +75,7 @@ func TestSynthLlama4Q8MatchesTransformers(t *testing.T) {
 func TestSynthLlama4Q8BatchedPrefillOnDevice(t *testing.T) {
 	m, g := openSynthLlama4Q8(t)
 	defer m.Close()
-	host := m.NewState(len(g.IDs) + 1)
+	host := m.NewInstance(len(g.IDs) + 1)
 	want, err := host.Prefill(g.IDs)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestSynthLlama4Q8BatchedPrefillOnDevice(t *testing.T) {
 		ran++
 		t.Run(spec, func(t *testing.T) {
 			defer gpu.Close()
-			st := m.NewState(len(g.IDs) + 1)
+			st := m.NewInstance(len(g.IDs) + 1)
 			defer st.Close()
 			st.SetDeviceLayers(gpu, -1)
 			if n := st.GPULayers(); n != m.Cfg.NLayer {

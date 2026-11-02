@@ -12,7 +12,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// Two States on one tier step on the device at the same time: each is its
+// Two instances on one tier step on the device at the same time: each is its
 // own session (tier.GPU.Attach), runs in a lane of its own and submits on a
 // queue of its own (jit/gpu/tier/devsess.go), and the device's shared state
 // waits only where it must (jit/gpu/tier/inflight.go). These gates hold the
@@ -55,11 +55,11 @@ func atOnceTier(t *testing.T, spec string, cfg func(*tier.Config)) *tier.GPU {
 	return g
 }
 
-// atOnceState places a State wholly on g and prefills prompt, returning the
+// atOnceState places an instance wholly on g and prefills prompt, returning the
 // first greedy token.
-func atOnceState(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32) (*State, int32) {
+func atOnceState(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32) (*Instance, int32) {
 	t.Helper()
-	st := m.NewState(seq)
+	st := m.NewInstance(seq)
 	t.Cleanup(func() { st.Close() })
 	if err := st.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func atOnceState(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32) (
 }
 
 // decode runs n greedy steps from next into r.
-func (r *atOnceRun) decode(st *State, next int32, n int) error {
+func (r *atOnceRun) decode(st *Instance, next int32, n int) error {
 	for range n {
 		t0 := time.Now()
 		lg, err := st.Forward(next)
@@ -93,7 +93,7 @@ func (r *atOnceRun) decode(st *State, next int32, n int) error {
 
 // atOnce decodes every state from its first token, one goroutine each,
 // started together.
-func atOnce(t *testing.T, sts []*State, next []int32, n int) []atOnceRun {
+func atOnce(t *testing.T, sts []*Instance, next []int32, n int) []atOnceRun {
 	t.Helper()
 	runs := make([]atOnceRun, len(sts))
 	errs := make([]error, len(sts))
@@ -156,7 +156,7 @@ func overlaps(a, b atOnceRun) int {
 }
 
 // TestSessionsStepAtOnce is the gate for sessions stepping at once: two
-// States of stories15M, every block and the head on one device, decode from
+// instances of stories15M, every block and the head on one device, decode from
 // two goroutines together, and each produces exactly the ids and logits it
 // produces alone on the same tier. Their steps overlap on the wall clock and
 // the device ran submissions beside one another (RanBeside): run with a
@@ -215,15 +215,15 @@ var hybridAtOnce = []struct {
 // vocabulary is hyVocab ids with no text behind them.
 var hybridPrompts = [2][]int32{{1, 2, 3, 4, 5, 6, 7, 8}, {9, 3, 14, 1, 5, 9, 2, 6}}
 
-// atOncePlace places a State's first blocks on g -- every block and the head
+// atOncePlace places a instance's first blocks on g -- every block and the head
 // through atOnceState -- and prefills prompt, returning the first greedy
 // token.
-func atOncePlace(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32, blocks int) (*State, int32) {
+func atOncePlace(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32, blocks int) (*Instance, int32) {
 	t.Helper()
 	if blocks == m.Cfg.NLayer {
 		return atOnceState(t, m, g, seq, prompt)
 	}
-	st := m.NewState(seq)
+	st := m.NewInstance(seq)
 	t.Cleanup(func() { st.Close() })
 	if err := st.SetDeviceLayers(g, blocks); err != nil {
 		t.Fatal(err)
@@ -255,7 +255,7 @@ func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks 
 		st.Close()
 	}
 	before := g.Stats()
-	var sts []*State
+	var sts []*Instance
 	var next []int32
 	for k := range prompts {
 		st, n := atOncePlace(t, m, g, seq, prompts[k], blocks)
@@ -342,8 +342,8 @@ func TestSessionsPageAtOnce(t *testing.T) {
 			for li := range m.Cfg.NLayer {
 				g.Stream(li, true)
 			}
-			place := func(prompt []int32) (*State, int32) {
-				st := m.NewState(seq)
+			place := func(prompt []int32) (*Instance, int32) {
+				st := m.NewInstance(seq)
 				t.Cleanup(func() { st.Close() })
 				if err := st.SetDeviceLayers(g, m.Cfg.NLayer); err != nil {
 					t.Fatal(err)
@@ -375,7 +375,7 @@ func TestSessionsPageAtOnce(t *testing.T) {
 			// every token, under the other session's submissions.
 			a, na := place(prompts[0])
 			b, nb := place(prompts[1])
-			first := atOnce(t, []*State{a, b}, []int32{na, nb}, 1)
+			first := atOnce(t, []*Instance{a, b}, []int32{na, nb}, 1)
 			hi := g.Stats().BudgetUsed
 			if _, err := g.SetBudget(hi); err != nil || g.Stats().Slots < 2 {
 				t.Fatalf("the budget the sessions charged (%d bytes) leaves %d slot(s): %v %s", hi,
@@ -397,7 +397,7 @@ func TestSessionsPageAtOnce(t *testing.T) {
 				t.Fatalf("%d slot(s) for %d blocks: the budget does not page", s, m.Cfg.NLayer)
 			}
 			before := g.Stats()
-			rest := atOnce(t, []*State{a, b}, []int32{first[0].ids[0], first[1].ids[0]}, gen-1)
+			rest := atOnce(t, []*Instance{a, b}, []int32{first[0].ids[0], first[1].ids[0]}, gen-1)
 			after := g.Stats()
 			for k := range rest {
 				got := first[k]
@@ -494,7 +494,7 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 		}
 		st.Close()
 	}
-	sts := make([]*State, len(prompts))
+	sts := make([]*Instance, len(prompts))
 	for k := range prompts {
 		sts[k], _ = atOnceState(t, m, g, seq, prompts[k])
 	}
@@ -632,7 +632,7 @@ func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, hal
 	nl := m.Cfg.NLayer
 	g := atOnceTier(t, spec, nil)
 	g2 := atOnceTier(t, spec, nil)
-	place := func(prompt []int32, blocks int) (*State, int32) {
+	place := func(prompt []int32, blocks int) (*Instance, int32) {
 		return atOncePlace(t, m, g, seq, prompt, blocks)
 	}
 	bBlocks := nl
@@ -641,7 +641,7 @@ func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, hal
 	}
 	// moves is the relocating session's run: at step 8 half its blocks
 	// go home, at 16 they come back, at 24 it hops to g2.
-	moves := func(st *State, next int32, r *atOnceRun) error {
+	moves := func(st *Instance, next int32, r *atOnceRun) error {
 		for i := range atOnceGen {
 			switch i {
 			case 8:
@@ -782,7 +782,7 @@ func TestModelsAndSessionsAtOnce(t *testing.T) {
 			for _, g := range gs {
 				before = append(before, g.Stats())
 			}
-			var sts []*State
+			var sts []*Instance
 			var next []int32
 			for _, s := range all {
 				st, n := atOnceState(t, ms[s.m], gs[s.m], seq, prompt(s))

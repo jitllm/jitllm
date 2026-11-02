@@ -33,7 +33,7 @@ func moveDevices(t *testing.T) (string, string) {
 // (PrepareMove) and commits it at the first token the target is ready, the
 // history copied device to device: it asserts the direct path ran and the
 // blocks were staged. The host arm (WithDirectMoves(false)) is the control
-// the direct path is measured against: every history through the State's
+// the direct path is measured against: every history through the instance's
 // cache. The upper arm moves only the upper half, so the output projection
 // stays behind on a device that no longer holds the last block: the
 // projection's own submission, which no placement reached before a block
@@ -50,7 +50,7 @@ func TestBlocksMoveBetweenDevices(t *testing.T) {
 		})
 		t.Run(name+"/upper", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveUpper, composedParts) })
 	}
-	// With the composed CPU on: a block the State composed for the CPU at
+	// With the composed CPU on: a block the instance composed for the CPU at
 	// its placement there releases its composition as it goes to a card,
 	// and the moves between the cards are the same moves.
 	for _, name := range cpuServedModels {
@@ -95,7 +95,7 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts tier
 	// run feeds ids (nil: its own greedy picks) and moves the blocks at
 	// moveAt and back at backAt when move is set.
 	run := func(ids []int32, move bool) ([]int32, [][]float32, []BlockMove) {
-		st := m.NewState(maxSeq)
+		st := m.NewInstance(maxSeq)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -224,8 +224,8 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts tier
 	}
 }
 
-// placedOn lists the blocks the named device holds for this State.
-func (s *State) placedOn(name string) []int {
+// placedOn lists the blocks the named device holds for this Instance.
+func (s *Instance) placedOn(name string) []int {
 	var out []int
 	for li := s.lo; li < s.hi; li++ {
 		if at, ok := s.DeviceOf(li); ok && at == nn.DeviceName(name) {
@@ -256,7 +256,7 @@ func TestBlocksMoveToADeviceAddedLater(t *testing.T) {
 	const ntok, moveAt, backAt = 10, 3, 7
 	prompt := m.Vocab.Encode("The capital of France is a city that", true)
 	run := func(ids []int32, move bool) [][]float32 {
-		st := m.NewState(len(prompt) + ntok + 1)
+		st := m.NewInstance(len(prompt) + ntok + 1)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -347,7 +347,7 @@ func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 	const ntok, upAt, homeAt = 10, 3, 7
 	prompt := m.Vocab.Encode("The capital of France is a city that", true)
 	run := func(ids []int32, move bool) [][]float32 {
-		st := m.NewState(len(prompt) + ntok + 1)
+		st := m.NewInstance(len(prompt) + ntok + 1)
 		defer st.Close()
 		if st.kvFmt != cpu.KVF16 {
 			t.Skipf("the host cache is %v, not binary16: this gate proved nothing", st.kvFmt)
@@ -424,7 +424,7 @@ func TestAnyRangeMovesWithItsHistory(t *testing.T) {
 	const ntok, placeAt, holeAt, homeAt = 12, 3, 6, 9
 	prompt := m.Vocab.Encode("The capital of France is a city that", true)
 	run := func(ids []int32, move bool) [][]float32 {
-		st := m.NewState(len(prompt) + ntok + 1)
+		st := m.NewInstance(len(prompt) + ntok + 1)
 		defer st.Close()
 		if move {
 			if err := st.SetDevice(g); err != nil {
@@ -532,7 +532,7 @@ func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer mb.Close()
-			sa, sb := ma.NewState(64), mb.NewState(64)
+			sa, sb := ma.NewInstance(64), mb.NewInstance(64)
 			defer sa.Close()
 			defer sb.Close()
 			if err := sa.SetDevice(ga); err != nil {

@@ -44,7 +44,7 @@ func TestPrefillPrecisionArms(t *testing.T) {
 	for i := range drive {
 		drive[i] = ids[(i*29)%len(ids)]
 	}
-	run := func(s *State) [][]float32 {
+	run := func(s *Instance) [][]float32 {
 		l, err := s.Prefill(ids)
 		if err != nil {
 			t.Fatal(err)
@@ -59,7 +59,7 @@ func TestPrefillPrecisionArms(t *testing.T) {
 		return out
 	}
 	host := func() [][]float32 {
-		s := m.NewState(len(ids) + 32)
+		s := m.NewInstance(len(ids) + 32)
 		defer s.Close()
 		return run(s)
 	}
@@ -71,7 +71,7 @@ func TestPrefillPrecisionArms(t *testing.T) {
 		}
 		defer g.Close()
 		g.NoBatch = noBatch
-		s := m.NewState(len(ids) + 32)
+		s := m.NewInstance(len(ids) + 32)
 		defer s.Close()
 		s.SetDevice(g)
 		if s.GPULayers() != m.Cfg.NLayer {

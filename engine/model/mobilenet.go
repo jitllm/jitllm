@@ -105,7 +105,7 @@ type mnTower struct {
 	// ones is the unweighted norm's weight, ProjDim of them.
 	ones []float32
 	// dw is every depthwise row shape the tower runs, provisioned into a
-	// State's JIT before its first encode.
+	// instance's JIT before its first encode.
 	dw []cpu.DWShape
 	// hard is the text embedding of the hard vision tokens from hardOff on
 	// (jlm.RoleVMNHardEmbd), ProjDim floats a token; nil when the container

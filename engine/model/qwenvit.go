@@ -108,7 +108,7 @@ func (c TowerConfig) GridFor(w, h int) (ImageGrid, error) {
 // which Preprocess says by itself: it is for a caller that preprocessed on
 // another state. A dynamic tower takes any size of whole merge units within
 // its bounds; a fixed one takes only its square.
-func (s *State) SetImageSize(w, h int) error {
+func (s *Instance) SetImageSize(w, h int) error {
 	c := s.vis.t.Cfg
 	u := c.PatchSz * max(c.Scale, 1)
 	switch {
@@ -125,7 +125,7 @@ func (s *State) SetImageSize(w, h int) error {
 }
 
 // patchGrid is the current image's patch grid.
-func (s *State) patchGrid() (gh, gw int) {
+func (s *Instance) patchGrid() (gh, gw int) {
 	if s.vis.gh > 0 {
 		return s.vis.gh, s.vis.gw
 	}
@@ -135,14 +135,14 @@ func (s *State) patchGrid() (gh, gw int) {
 
 // Grid is the embeddings' grid of the image this state last preprocessed (or
 // will encode): where its rows turn on an M-RoPE text model.
-func (s *State) Grid() ImageGrid {
+func (s *Instance) Grid() ImageGrid {
 	gh, gw := s.patchGrid()
 	sc := max(s.vis.t.Cfg.Scale, 1)
 	return s.vis.t.Cfg.gridOf(gh/sc, gw/sc)
 }
 
 // patchAt is the raster patch row r holds.
-func (s *State) patchAt(r int) int {
+func (s *Instance) patchAt(r int) int {
 	if s.vis.ord == nil {
 		return r
 	}
@@ -154,7 +154,7 @@ func (s *State) patchAt(r int) int {
 // the merged grid, the merge units inside a window row-major, each unit's
 // Scale x Scale patches in consecutive rows, dy outer. segs is each window's
 // row range. A tower with no windows keeps raster order.
-func (s *State) windowOrder(gh, gw int) {
+func (s *Instance) windowOrder(gh, gw int) {
 	c := s.vis.t.Cfg
 	if c.WinPattern == 0 {
 		s.vis.ord, s.vis.segs = nil, nil
@@ -190,7 +190,7 @@ var qwenNoUnwindow bool
 // order of the merged grid: transformers' reverse_indices, llama.cpp's
 // get_rows(window_idx). Merged row i of the window order is merge unit
 // ord[i*Scale^2]'s, whose raster unit is its patch's (y/Scale, x/Scale).
-func (s *State) unwindow(dst, src []float32, nt int) {
+func (s *Instance) unwindow(dst, src []float32, nt int) {
 	c := s.vis.t.Cfg
 	if qwenNoUnwindow {
 		copy(dst[:nt*c.ProjDim], src[:nt*c.ProjDim])

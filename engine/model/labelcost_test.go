@@ -34,7 +34,7 @@ func TestRegionLabelCost(t *testing.T) {
 	perToken := func(labels bool, n int) (allocs, bytes float64, regions float64) {
 		was := sched.SetRegionLabels(labels)
 		defer sched.SetRegionLabels(was)
-		s := m.NewState(64)
+		s := m.NewInstance(64)
 		defer s.Close()
 		for i := 0; i < 8; i++ {
 			if _, err := s.Forward(int32(5 + i)); err != nil {
@@ -103,7 +103,7 @@ func TestRegionLabelRate(t *testing.T) {
 	sample := func(labels bool) float64 {
 		was := sched.SetRegionLabels(labels)
 		defer sched.SetRegionLabels(was)
-		s := m.NewState(128)
+		s := m.NewInstance(128)
 		defer s.Close()
 		for i := 0; i < 8; i++ {
 			if _, err := s.Forward(int32(5 + i)); err != nil {

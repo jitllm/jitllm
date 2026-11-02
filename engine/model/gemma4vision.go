@@ -195,7 +195,7 @@ var gemma4RowFirst bool
 // unweighted RMSNorm, and the projection. Every arithmetic step is a
 // generated kernel; the standardisation's per-channel scale is each pooled
 // row times the scale vector, the gated kernel's identity product.
-func (s *State) projectGemma4V(patches []float32) ([]float32, error) {
+func (s *Instance) projectGemma4V(patches []float32) ([]float32, error) {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	h := t.g4

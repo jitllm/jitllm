@@ -81,7 +81,7 @@ func TestGraniteMatchesLlamaCppValues(t *testing.T) {
 					lOut0 = append(lOut0, ends(v))
 				}
 			})
-			st := m.NewState(8)
+			st := m.NewInstance(8)
 			defer st.Close()
 			var logits []float32
 			for _, id := range ids {

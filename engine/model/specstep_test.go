@@ -34,7 +34,7 @@ func specStepFits(t *testing.T, m *Model, spec string) {
 	run := func(limit uint64, reserve bool) (uint64, tier.Stats) {
 		g := fitTier(t, spec, limit, cfg(reserve))
 		defer g.Close()
-		st := m.NewState(len(prompt) + 64)
+		st := m.NewInstance(len(prompt) + 64)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)

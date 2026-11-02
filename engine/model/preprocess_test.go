@@ -16,7 +16,7 @@ func preprocess(tw *Tower, r io.Reader) ([]float32, error) {
 
 // preprocessSized is preprocess with the picture's resized grid, which a
 // dynamic-resolution tower's Encode on another state needs
-// (State.SetImageSize) and its prompt is laid out by.
+// (Instance.SetImageSize) and its prompt is laid out by.
 func preprocessSized(tw *Tower, r io.Reader) ([]float32, [2]int, error) {
 	ts := tw.testState()
 	defer ts.Close()

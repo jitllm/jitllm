@@ -34,7 +34,7 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 		ch := i % 3
 		px[i] = float32((float64(px[i]) - c.Mean[ch]) / c.Std[ch])
 	}
-	encode := func(s *State) (after0, out []float32) {
+	encode := func(s *Instance) (after0, out []float32) {
 		s.vis.afterBlock = func(li int, x []float32) {
 			if li == 0 && after0 == nil {
 				after0 = append([]float32(nil), x...)
@@ -93,7 +93,7 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 				t.Errorf("%s: the whole tower on the device reads NMSE %.3e against the host", spec, nm)
 			}
 			// Relocation: the blocks come home through the one placement path
-			// (State.SetDevice releases them) and the host's answer is the
+			// (Instance.SetDevice releases them) and the host's answer is the
 			// host's again, bit for bit.
 			if err := all.SetDevice(nil); err != nil {
 				t.Fatalf("%s: bringing the tower home: %v", spec, err)
@@ -225,7 +225,7 @@ func TestGemma3TowerPagesThroughTheDevice(t *testing.T) {
 // budgets that cannot hold a picture's whole non-causal set beside the tower
 // (streamed, so its blocks page through what is left): the device builds the
 // set row-chunked (tier chunkTower) and the tower runs each block in two
-// phases a chunk at a time (State.towerLayers). Every block must run on the
+// phases a chunk at a time (Instance.towerLayers). Every block must run on the
 // device, the set must be chunked and its phases run, and the projector
 // output must be the whole set's within the GEMMs' row-count band -- a
 // chunk's queries over its own chunk's keys alone, or a key written at the

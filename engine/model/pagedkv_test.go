@@ -74,7 +74,7 @@ func TestPagedKVBatchMatchesHost(t *testing.T) {
 	for j := range want0 {
 		if after[j] != want0[j] {
 			if gap := hostGap(t, m, ids[0], want0[:j], want0[j], after[j]); gap > batchTie {
-				t.Fatalf("the single State after the batch, token %d: %d, host %d, %.4f apart", j, after[j], want0[j], gap)
+				t.Fatalf("the single instance after the batch, token %d: %d, host %d, %.4f apart", j, after[j], want0[j], gap)
 			}
 			break
 		}
@@ -98,7 +98,7 @@ func firstModel(names string) string {
 // forced ids, every step's logits.
 func hostRun(t *testing.T, m *Model, seq int, prompt, forced []int32) [][]float32 {
 	t.Helper()
-	st := m.NewState(seq)
+	st := m.NewInstance(seq)
 	defer st.Close()
 	var lg []float32
 	var err error
@@ -120,7 +120,7 @@ func hostRun(t *testing.T, m *Model, seq int, prompt, forced []int32) [][]float3
 // hostGreedy is prompt's first gen greedy tokens on the host.
 func hostGreedy(t *testing.T, m *Model, prompt []int32, gen int) []int32 {
 	t.Helper()
-	st := m.NewState(len(prompt) + gen + 1)
+	st := m.NewInstance(len(prompt) + gen + 1)
 	defer st.Close()
 	var next int32
 	var err error

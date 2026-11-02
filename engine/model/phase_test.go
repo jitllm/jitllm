@@ -17,7 +17,7 @@ func TestPhaseMeterAccountsForEveryByte(t *testing.T) {
 	// One frame for eight blocks, so decode re-faults and the row is not zero.
 	m.container.SetBudget(m.container.PageBytes(0))
 
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 
 	before := m.BytesRead()

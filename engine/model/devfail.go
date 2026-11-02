@@ -12,7 +12,7 @@ const nFailCauses = int(nn.FailFault) + 1
 
 // devCause is what kind of refusal the device's last call was. A device that
 // does not say is a decline.
-func (s *State) devCause() nn.FailCause {
+func (s *Instance) devCause() nn.FailCause {
 	if c, ok := s.ld.(nn.CauseReporter); ok {
 		return c.ErrCause()
 	}
@@ -23,7 +23,7 @@ func (s *State) devCause() nn.FailCause {
 // fault. A kernel that did not build and a decline -- a limit, or a form the
 // device does not serve -- are answered by no move: the caller returns the
 // error. Only a fault moves blocks (demoteAll).
-func (s *State) refusal(li int) error {
+func (s *Instance) refusal(li int) error {
 	why := strings.TrimPrefix(s.devWhy(), ": ")
 	switch s.devCause() {
 	case nn.FailBuild:
@@ -47,7 +47,7 @@ func (e errDeclined) Error() string {
 	return fmt.Sprintf("model: the device declined block %d: %s", e.layer, e.why)
 }
 
-// Evacuations is every way work left a device since the State began, by why.
+// Evacuations is every way work left a device since the instance began, by why.
 // A fault is a driver error or a device lost, and only a fault moves work. A
 // kernel that did not build and a decline move nothing: they are counted
 // (BuildRefused, Declined) and the call ends with the error. A relocation
@@ -65,8 +65,8 @@ type Evacuations struct {
 	Declined int
 }
 
-// Evacuations reads the State's counters of work moved off a device.
-func (s *State) Evacuations() Evacuations {
+// Evacuations reads the instance's counters of work moved off a device.
+func (s *Instance) Evacuations() Evacuations {
 	return Evacuations{
 		DemotedFault:   s.demotedBy[nn.FailFault],
 		DemotedDecline: s.demotedBy[nn.FailDecline],

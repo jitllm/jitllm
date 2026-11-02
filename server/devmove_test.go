@@ -110,10 +110,10 @@ func TestBlocksMoveBetweenDevicesThroughThePlacementService(t *testing.T) {
 }
 
 // TestAMoveRunsPastThePool: a model loaded warm with the default session
-// pool keeps the warm-up's State in the pool, reset and holding no sequence
+// pool keeps the warm-up's instance in the pool, reset and holding no sequence
 // but still on every block it was placed on. A move between devices runs
 // anyway: the tier moves a block only when no other session is on it, and
-// the pooled State kept jitllmd's relocation demo from moving anything
+// the pooled instance kept jitllmd's relocation demo from moving anything
 // ("another session is using it") until -session-pool -1.
 func TestAMoveRunsPastThePool(t *testing.T) {
 	devs := testdevices.Take(t, 2, "cuda:0,vulkan:1")

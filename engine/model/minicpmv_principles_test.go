@@ -14,7 +14,7 @@ import (
 
 // mcvEncodePhoto encodes the photo's overview, a 45x23-patch grid, and returns
 // the projector's output.
-func mcvEncodePhoto(t *testing.T, tw *Tower, s *State) []float32 {
+func mcvEncodePhoto(t *testing.T, tw *Tower, s *Instance) []float32 {
 	t.Helper()
 	px, gh, gw := mcvOverview(t, tw, s)
 	out, err := s.EncodeGrid(px, gh, gw)
@@ -26,7 +26,7 @@ func mcvEncodePhoto(t *testing.T, tw *Tower, s *State) []float32 {
 
 // mcvOverview is the photo's overview, resampled and normalised by the
 // engine's own picture path: a 45x23-patch grid.
-func mcvOverview(t testing.TB, tw *Tower, s *State) ([]float32, int, int) {
+func mcvOverview(t testing.TB, tw *Tower, s *Instance) ([]float32, int, int) {
 	t.Helper()
 	img := decodeImage(t, mcvPhoto)
 	lay, err := tw.Layout(img.Bounds().Dx(), img.Bounds().Dy())
@@ -150,7 +150,7 @@ func TestMiniCPMVDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 			t.Fatal(err)
 		}
 		const warm, n = 96, 48
-		s := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + warm + n + 8)
+		s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + warm + n + 8)
 		defer s.Close()
 		if g != nil {
 			if err := s.SetDevice(g); err != nil {

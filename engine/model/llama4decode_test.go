@@ -18,7 +18,7 @@ import (
 func TestSynthLlama4Q8DecodeOnDevice(t *testing.T) {
 	m, g := openSynthLlama4Q8(t)
 	defer m.Close()
-	host := m.NewState(len(g.IDs) + 1)
+	host := m.NewInstance(len(g.IDs) + 1)
 	want := runIDs(t, host, g.IDs)
 	host.Close()
 	gpu, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
@@ -27,7 +27,7 @@ func TestSynthLlama4Q8DecodeOnDevice(t *testing.T) {
 		t.Skipf("no cuda device (%v)", err)
 	}
 	defer gpu.Close()
-	st := m.NewState(len(g.IDs) + 1)
+	st := m.NewInstance(len(g.IDs) + 1)
 	defer st.Close()
 	st.SetDeviceLayers(gpu, -1)
 	if n := st.GPULayers(); n != m.Cfg.NLayer {

@@ -130,7 +130,7 @@ func TestQwen2VLDescribesAnImage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		st := m.NewState(len(pre) + len(emb)/tw.Cfg.ProjDim + len(post) + 40)
+		st := m.NewInstance(len(pre) + len(emb)/tw.Cfg.ProjDim + len(post) + 40)
 		defer st.Close()
 		logits, err := st.PrefillMixed(Span{Tokens: pre}, Span{Embd: emb, Grid: ts.Grid()}, Span{Tokens: post})
 		if err != nil {

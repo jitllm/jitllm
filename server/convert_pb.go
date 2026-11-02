@@ -195,7 +195,7 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 	}
 }
 
-// pbSession reads only the published snapshot and the atomics: model.State is
+// pbSession reads only the published snapshot and the atomics: model.Instance is
 // one sequence written by Forward with no lock, so a stats handler must never
 // touch it while a generate is in flight. See the snap* fields on session.
 func (e *Engine) pbSession(s *Session) *v1.Session {
@@ -260,7 +260,7 @@ func (e *Engine) pbPlacement(s *Session) *v1.Placement {
 			onDev[i] = true
 		}
 	}
-	// The tier names the device each block is on (model.State.DeviceOf);
+	// The tier names the device each block is on (model.Instance.DeviceOf);
 	// with one device the id is the one the model was loaded with, which
 	// is also what an unnamed device reports.
 	single := ""

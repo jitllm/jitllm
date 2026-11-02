@@ -40,7 +40,7 @@ func TestPrefillFoldsALayerNormHead(t *testing.T) {
 			}
 			defer gpu.Close()
 			run := func(fold bool) ([]float32, int) {
-				st := m.NewState(len(ids) + 4)
+				st := m.NewInstance(len(ids) + 4)
 				defer st.Close()
 				st.SetDeviceFallback(false)
 				if err := st.SetDevice(gpu); err != nil {

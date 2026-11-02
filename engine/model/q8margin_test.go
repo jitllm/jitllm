@@ -64,7 +64,7 @@ func TestQ8RouterMargins(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer m.Close()
-		st := m.NewState(len(gold.IDs) + 1)
+		st := m.NewInstance(len(gold.IDs) + 1)
 		defer st.Close()
 		var out []rec
 		for _, id := range gold.IDs {

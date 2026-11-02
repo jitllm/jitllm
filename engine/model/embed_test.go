@@ -26,7 +26,7 @@ import (
 //
 // The models live in $JITLLM_MODELS/embed/ and NOT beside the generators, on
 // purpose: every sweep over *.gguf in the model directory builds a decoder
-// State, and an encoder has none.
+// Instance, and an encoder has none.
 
 // embedCosBound is the gate. A cosine is scale-free and what a vector index
 // ranks by, so it is the quantity to bound; 0.9999 is the bar the work was

@@ -9,7 +9,7 @@ import (
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
-// scratchBytes is the host scratch a model's States hold -- pooled and in
+// scratchBytes is the host scratch a model's instances hold -- pooled and in
 // live sessions -- and the scratch the model holds for host steps and the
 // next prompt: the engine's own byte counts, not the allocator's RSS.
 func scratchBytes(e *Engine, lm *LoadedModel) (states, model uint64, n int) {
@@ -33,15 +33,15 @@ func scratchBytes(e *Engine, lm *LoadedModel) (states, model uint64, n int) {
 
 // TestHostBatchScratchDoesNotGrowWithRows: a burst of sixteen concurrent
 // generates on a host model, at the model's whole context, leaves the
-// model's States -- pooled for the next requests -- holding no more step
+// model's instances -- pooled for the next requests -- holding no more step
 // scratch than one request alone left them, and the model one step's
 // scratch for the next host step: memory follows the rows in flight, not
-// the widest burst a pooled State ever led. Counted on the engine's own
-// bytes (State.ScratchBytes, Model.StepScratchBytes).
+// the widest burst a pooled instance ever led. Counted on the engine's own
+// bytes (Instance.ScratchBytes, Model.StepScratchBytes).
 //
-// Against a step led by its first run's State keeping the scratch it grew,
-// every pooled State that ever led a step holds a step's rows -- and its
-// scores rows at the whole context -- and the States' sum grows with the
+// Against a step led by its first run's instance keeping the scratch it grew,
+// every pooled instance that ever led a step holds a step's rows -- and its
+// scores rows at the whole context -- and the instances' sum grows with the
 // burst.
 func TestHostBatchScratchDoesNotGrowWithRows(t *testing.T) {
 	e, lm, c := hostBatchEngine(t, "Llama-3.2-1B-Instruct-Q4_K_M.jlm", Config{DefaultMaxSeq: -1, NoMemCache: true}) // -1: the model's whole context
@@ -73,7 +73,7 @@ func TestHostBatchScratchDoesNotGrowWithRows(t *testing.T) {
 	states, model, n := scratchBytes(e, lm)
 	t.Logf("after one request: %d State(s) hold %.1f MiB, the model %.1f MiB; after a %d-row burst: %d State(s) hold %.1f MiB, the model %.1f MiB",
 		n0, mib(idleStates), mib(idleModel), burst, n, mib(states), mib(model))
-	// Each State may hold what one request alone left its State holding.
+	// Each instance may hold what one request alone left its instance holding.
 	if per := idleStates / uint64(max(n0, 1)); states > per*uint64(n)+(1<<20) {
 		t.Fatalf("the pooled States hold %.1f MiB of scratch after the burst, against %.1f MiB after one request: "+
 			"the scratch grew with the rows", mib(states), mib(idleStates))

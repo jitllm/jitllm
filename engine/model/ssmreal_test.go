@@ -141,7 +141,7 @@ func TestSSMRealModelsTeacherForced(t *testing.T) {
 						}
 					}
 				}
-				st := m.NewState(len(ids) + len(want) + 1)
+				st := m.NewInstance(len(ids) + len(want) + 1)
 				lg, err := st.Prefill(ids)
 				if err != nil {
 					t.Fatal(err)

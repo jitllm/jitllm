@@ -64,7 +64,7 @@ func lookupGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.Device, 
 	if c := m.Cfg.NCtx; c > 0 {
 		size = min(size, c)
 	}
-	st := m.NewState(size)
+	st := m.NewInstance(size)
 	defer st.Close()
 	if dev != nil {
 		if err := st.SetDevice(dev); err != nil {
@@ -249,7 +249,7 @@ func TestSpecLookupOnDevice(t *testing.T) {
 						prompt := m.Vocab.Encode(text, true)
 						n := lookupTokens(m, prompt, n)
 						want := plainGreedy(t, m, prompt, n, g)
-						st := m.NewState(len(prompt) + n + 8)
+						st := m.NewInstance(len(prompt) + n + 8)
 						if err := st.SetDevice(g); err != nil {
 							t.Fatal(err)
 						}

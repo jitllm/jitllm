@@ -22,10 +22,10 @@ import (
 //
 //   - Time slices. A decoding row that has generated its quantum of tokens
 //     since it was admitted or resumed is parked when a request is waiting
-//     for its row or its room (model.State.Park: its blocks' KV and recurrent
+//     for its row or its room (model.Instance.Park: its blocks' KV and recurrent
 //     state from the card, its sealed pages into a store), and the
 //     waiting request is admitted in its place. The parked row waits in the
-//     same queue and resumes byte for byte (State.Resume) when its turn comes;
+//     same queue and resumes byte for byte (Instance.Resume) when its turn comes;
 //     its next token is sampled from the logits it held, so its answer is the
 //     one it would have given unparked. The quantum shrinks with the level,
 //     from fairQuantumMax tokens at 1 to fairQuantumMin at 100.
@@ -205,7 +205,7 @@ func (lp *stepLoop) victims(r *row, need, room, page int) []*row {
 // lp.mu held.
 func (lp *stepLoop) parkRow(r *row) error {
 	// The next token is sampled from these logits after the resume; the
-	// State's buffer behind them may be reused meanwhile.
+	// instance's buffer behind them may be reused meanwhile.
 	r.held = append(r.held[:0], r.logits...)
 	r.logits = r.held
 	if lp.parkDropsLogits {

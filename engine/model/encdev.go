@@ -12,7 +12,7 @@ import (
 // and a decision head after it) are non-causal blocks: a sequence goes in
 // whole, every row attends over the call's rows, and the keys die with the
 // block -- what a vision tower's blocks are. So they reach a device the way a
-// tower's do, through the one placement path: a State over the encoder's
+// tower's do, through the one placement path: an instance over the encoder's
 // blocks (the segment, as Tower.newState builds one over the tower's) whose
 // SetDeviceLayers offers each block (offerRange), with the plan and weights
 // planFor and layerWeightsAt read here, and whose devAt says where each runs.
@@ -24,7 +24,7 @@ import (
 // symmetric window of its own per row (nn.RowWindowDevice), its rotary the
 // local table handed as Layers' csSWA (nn.LayerPlan.LocalRope).
 
-// encRun marks a State as an encoder segment's. violation is the Embedder's
+// encRun marks an instance as an encoder segment's. violation is the Embedder's
 // (a feature of the graph a test removes), read when the blocks are offered
 // so the device runs without it too; empty everywhere but those tests.
 type encRun struct {
@@ -56,19 +56,20 @@ func (m *Model) encMaxRows() int {
 	return m.Cfg.NCtx
 }
 
-// encState is the segment State an Embedder places its encoder through, on
+// encInstance is the segment instance an Embedder places its encoder through, on
 // the Embedder's JIT, which it borrows: the device's single matvecs are not
 // the encoder's, whose host half runs on the Embedder's own kernels.
-func (m *Model) encState(j *nn.JIT) *State {
+func (m *Model) encInstance(j *nn.JIT) *Instance {
 	c := m.Cfg
 	n := m.encMaxRows()
-	s := &State{m: m, c: c, lo: 0, hi: m.encBlocks(), maxSeq: n, reqSeq: n, nseq: 1,
+	s := &Instance{Session: &Session{model: m}, m: m, c: c, lo: 0, hi: m.encBlocks(), maxSeq: n, reqSeq: n, nseq: 1,
 		prof: m.opt.profile, outW: &tensor{}, relocate: true}
+	s.own = s.Session
 	s.holdCPURuns()
 	s.enc = &encRun{}
 	s.jit = j
 	// The segment keeps no history: a non-causal block's keys live one call
-	// deep, on the device. The cache is the shape every State has, empty.
+	// deep, on the device. The cache is the shape every instance has, empty.
 	// The composer's CPU blocks keep their keys one block deep in the
 	// segment's arena (ncArena): one page of the rows.
 	keys := n
@@ -83,15 +84,15 @@ func (m *Model) encState(j *nn.JIT) *State {
 	return s
 }
 
-// borrowsJIT reports whether this State runs on another's JIT (a vision
-// segment's on its text State's, an encoder segment's on its Embedder's),
+// borrowsJIT reports whether this instance runs on another's JIT (a vision
+// segment's on its text instance's, an encoder segment's on its Embedder's),
 // which that owner attaches to a device and closes.
-func (s *State) borrowsJIT() bool {
+func (s *Instance) borrowsJIT() bool {
 	return (s.vis != nil && s.vis.borrowed) || s.enc != nil
 }
 
-// SetDeviceLayers places the encoder's blocks on d through its segment State
-// (State.SetDeviceLayers): max caps how many are offered, -1 offers every one.
+// SetDeviceLayers places the encoder's blocks on d through its segment instance
+// (Instance.SetDeviceLayers): max caps how many are offered, -1 offers every one.
 // A decoder embedding model's session is placed the same way.
 func (e *Embedder) SetDeviceLayers(d nn.Device, max int) error {
 	if e.st != nil {
@@ -103,7 +104,7 @@ func (e *Embedder) SetDeviceLayers(d nn.Device, max int) error {
 		if d == nil {
 			return nil
 		}
-		e.seg = e.m.encState(e.jit)
+		e.seg = e.m.encInstance(e.jit)
 	}
 	e.seg.enc.violation = e.violation
 	return e.seg.SetDeviceLayers(d, max)
@@ -248,7 +249,7 @@ func (m *Model) encZeros(n int) []float32 {
 }
 
 // encPlan is encoder block li's plan for a device.
-func (s *State) encPlan(li int) *nn.LayerPlan {
+func (s *Instance) encPlan(li int) *nn.LayerPlan {
 	if s.enc.audio {
 		return s.audPlan(li)
 	}
@@ -330,7 +331,7 @@ func (s *State) encPlan(li int) *nn.LayerPlan {
 }
 
 // encWeights is encoder block li's weights for a device.
-func (s *State) encWeights(li int) nn.LayerWeights {
+func (s *Instance) encWeights(li int) nn.LayerWeights {
 	if s.enc.audio {
 		return s.audWeights(li)
 	}

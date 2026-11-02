@@ -18,16 +18,16 @@ import (
 //
 //   - The memory cache. Every loaded model keeps one bounded model.MemStore,
 //     and every generate that starts its sequence prefills through it
-//     (State.PrefillCached), so a chat's second turn or a system prompt
+//     (Instance.PrefillCached), so a chat's second turn or a system prompt
 //     another request already ran restores its prefix instead of computing
 //     it. The store is a share of the model's host budget, taken out of
 //     what the pager may hold (applyPageBudget).
-//   - The State pool. A model_id request ran on a State built for it and
+//   - The instance pool. A model_id request ran on an instance built for it and
 //     closed after it; Close quiesces the device and retires its recordings,
-//     and a fresh State grows its batch scratch again. A finished request's
-//     State is reset and kept for the next, up to a bound.
+//     and a fresh instance grows its batch scratch again. A finished request's
+//     instance is reset and kept for the next, up to a bound.
 //   - Warm-up at load (LoadOptions.Warm): a short prefill and a decode step
-//     on a pooled State, so the first request does not pay the JIT's
+//     on a pooled instance, so the first request does not pay the JIT's
 //     emission and the device's first recordings.
 //   - Admission: a bounded count of requests per model, past which a request
 //     is refused with ErrOverloaded (429 and Retry-After over HTTP) rather
@@ -132,13 +132,13 @@ const defaultMaxQueue = 64
 // a backgrounded model keeps (backgroundShare).
 const storeShare = 8
 
-// MemCacheStats is a model's memory cache and State pool, as counted.
+// MemCacheStats is a model's memory cache and instance pool, as counted.
 type MemCacheStats struct {
 	Store model.MemStoreStats
 	// Restored and Computed are prompt positions taken from the store and
 	// prefilled, over every generate that started its sequence.
 	Restored, Computed int64
-	// StatesCreated, StatesReused and StatesClosed count model.States built,
+	// StatesCreated, StatesReused and StatesClosed count model.instances built,
 	// handed out again from the pool, and closed.
 	StatesCreated, StatesReused, StatesClosed int64
 	Pooled                                    int
@@ -154,14 +154,14 @@ type ttft struct {
 	// shared is the model's pages held once (model.SharedStore), which its
 	// Deciders share through: nil with Config.NoMemCache.
 	shared *model.SharedStore
-	// kv is what a State is pointed at: the memory cache, or the memory cache
+	// kv is what an instance is pointed at: the memory cache, or the memory cache
 	// over Config.PromptStore (layered) when the server has one.
 	kv model.KVStore
 	ns string
 
-	// idle is the pool: reset States waiting for a request. Guarded by the
+	// idle is the pool: reset instances waiting for a request. Guarded by the
 	// Engine's mu, as lm.sessions is.
-	idle    []*model.State
+	idle    []*model.Instance
 	poolCap int
 
 	inflight atomic.Int32
@@ -194,7 +194,7 @@ func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 		t.poolCap = e.cfg.SessionPool
 	default:
 		// As many as the device reserved a history for: one more pooled
-		// State would take its history on the host.
+		// Instance would take its history on the host.
 		t.poolCap = max(o.Sessions, 1)
 	}
 	switch {
@@ -266,8 +266,8 @@ func (e *Engine) MemCacheStats(lm *LoadedModel) MemCacheStats {
 	}
 }
 
-// takeIdle pops a pooled State, or nil.
-func (e *Engine) takeIdle(lm *LoadedModel) *model.State {
+// takeIdle pops a pooled instance, or nil.
+func (e *Engine) takeIdle(lm *LoadedModel) *model.Instance {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	n := len(lm.ttft.idle)
@@ -280,7 +280,7 @@ func (e *Engine) takeIdle(lm *LoadedModel) *model.State {
 }
 
 // releaseEphemeral ends a model_id request's session: unregistered as
-// CloseSession does, and its State reset into the pool when there is room
+// CloseSession does, and its instance reset into the pool when there is room
 // and the model is still loaded, closed otherwise.
 func (e *Engine) releaseEphemeral(s *Session) {
 	e.mu.Lock()
@@ -306,18 +306,18 @@ func (e *Engine) releaseEphemeral(s *Session) {
 }
 
 // pool resets st and keeps it for the next request, reporting false when the
-// pool is full or the model is gone (the caller closes it then). A State
+// pool is full or the model is gone (the caller closes it then). An instance
 // whose blocks a placement call moved is not kept: the next request must get
-// the model's default placement, as a fresh State would.
-func (e *Engine) pool(lm *LoadedModel, st *model.State) bool {
-	// A parked State is not pooled: its history is in a store, not reset.
+// the model's default placement, as a fresh instance would.
+func (e *Engine) pool(lm *LoadedModel, st *model.Instance) bool {
+	// A parked instance is not pooled: its history is in a store, not reset.
 	if lm.ttft.poolCap == 0 || st.Parked() || !stepsJointly(st) && lm.loop != nil {
 		return false
 	}
 	st.SetPrefillInterrupt(nil)
 	st.Reset()
 	st.GiveBackHistory()
-	// The store is attached per request (useStore); an idle State holds none.
+	// The store is attached per request (useStore); an idle instance holds none.
 	st.SetKVStore(nil)
 	st.SetCacheKey("")
 	e.mu.Lock()
@@ -329,8 +329,8 @@ func (e *Engine) pool(lm *LoadedModel, st *model.State) bool {
 	return true
 }
 
-// closeIdle closes every pooled State and the memory cache. The model is
-// already unpublished, so nothing returns a State to the pool after it.
+// closeIdle closes every pooled instance and the memory cache. The model is
+// already unpublished, so nothing returns an instance to the pool after it.
 func (e *Engine) closeIdle(lm *LoadedModel) {
 	e.dropIdle(lm)
 	if lm.ttft.store != nil {
@@ -338,11 +338,11 @@ func (e *Engine) closeIdle(lm *LoadedModel) {
 	}
 }
 
-// dropIdle closes every pooled State. A pooled State is reset and holds no
+// dropIdle closes every pooled Instance. A pooled instance is reset and holds no
 // sequence, but it is still a session of the tier on every block it was
 // placed on, and the tier moves a block between devices only when no other
 // session is on it (its history would be freed with the source's copy): left
-// in the pool, the warm-up's State alone kept every move from running. The
+// in the pool, the warm-up's instance alone kept every move from running. The
 // pool fills again from the next model_id requests, placed where the blocks
 // are then.
 func (e *Engine) dropIdle(lm *LoadedModel) {
@@ -356,7 +356,7 @@ func (e *Engine) dropIdle(lm *LoadedModel) {
 	}
 }
 
-// idleKV is the history the pooled States hold. e.mu held.
+// idleKV is the history the pooled instances hold. e.mu held.
 func (lm *LoadedModel) idleKV() uint64 {
 	var kv uint64
 	for _, st := range lm.ttft.idle {
@@ -374,8 +374,8 @@ func (e *Engine) useStore(s *Session, o GenerateOptions) bool {
 	return s.lm.ttft.store != nil && !o.Continue && !s.cached
 }
 
-// attachStore points s's State at the model's store for one generate, or
-// takes it away. The State is at position 0 (the caller reset it).
+// attachStore points s's instance at the model's store for one generate, or
+// takes it away. The instance is at position 0 (the caller reset it).
 func (s *Session) attachStore(on bool) error {
 	if !on {
 		if s.storeOn {
@@ -395,7 +395,7 @@ func (s *Session) attachStore(on bool) error {
 	return nil
 }
 
-// warm runs what a first request would on a pooled State: a short prefill and
+// warm runs what a first request would on a pooled instance: a short prefill and
 // one decode step, so the JIT's kernels for those shapes are emitted and the
 // device's first recordings made before a request waits on them. Nothing is
 // counted as served and nothing goes into the memory cache.

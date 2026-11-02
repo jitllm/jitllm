@@ -131,7 +131,7 @@ func TestRoutingLocality(t *testing.T) {
 			"equations, while proteins fold into shapes that determine what they do."
 	}
 	ids := m.Vocab.Encode(prompt, true)
-	s := m.NewState(len(ids) + nTok + 1)
+	s := m.NewInstance(len(ids) + nTok + 1)
 	defer s.Close()
 	var lg []float32
 	for _, id := range ids {

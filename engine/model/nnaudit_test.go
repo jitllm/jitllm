@@ -143,7 +143,7 @@ func auditRun(t *testing.T, m *Model) {
 			return
 		}
 	}
-	s := m.NewState(16)
+	s := m.NewInstance(16)
 	logits, err := s.Forward(1)
 	if err != nil {
 		t.Fatalf("Forward: %v", err)
@@ -172,7 +172,7 @@ func auditComposedCPU(t *testing.T, name, path string) {
 	defer m.Close()
 	auditRun(t, m)
 	const steps = 3
-	s := m.NewState(16)
+	s := m.NewInstance(16)
 	defer s.Close()
 	for i := range steps {
 		lg, err := s.Forward(int32(1 + i))

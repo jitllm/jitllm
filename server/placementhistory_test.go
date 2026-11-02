@@ -13,7 +13,7 @@ import (
 // TestPlacementReportsEachBlocksHistoryCost: the placement carries, per block,
 // what its history costs (a fixed state plus bytes a kept position), so a
 // client can draw the history a move carries at any position. The costs,
-// priced at the session's position, must add up to what the State itself
+// priced at the session's position, must add up to what the instance itself
 // counts as history -- a field that was zero, or one that disagreed with the
 // move's own arithmetic, would draw a bar the move never carried.
 func TestPlacementReportsEachBlocksHistoryCost(t *testing.T) {
@@ -36,7 +36,7 @@ func TestPlacementReportsEachBlocksHistoryCost(t *testing.T) {
 	}
 	var pos int
 	var want uint64
-	s.Inspect(func(st *model.State) { pos, want = st.Pos(), st.HistoryBytes() })
+	s.Inspect(func(st *model.Instance) { pos, want = st.Pos(), st.HistoryBytes() })
 	var got uint64
 	for _, b := range pl.Msg.GetPlacement().GetBlocks() {
 		n := pos

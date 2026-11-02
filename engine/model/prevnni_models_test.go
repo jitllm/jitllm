@@ -52,12 +52,12 @@ func TestEveryModelRunsPreVNNI(t *testing.T) {
 			for i := range ids {
 				ids[i] = int32(1 + i)
 			}
-			s := m.NewState(64)
+			s := m.NewInstance(64)
 			defer s.Close()
 			if _, err := s.Prefill(ids); err != nil {
 				t.Fatal(err)
 			}
-			d := m.NewState(64)
+			d := m.NewInstance(64)
 			defer d.Close()
 			for i := 0; i < 3; i++ {
 				if _, err := d.Forward(int32(1 + i)); err != nil {

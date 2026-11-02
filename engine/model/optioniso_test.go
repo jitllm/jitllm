@@ -10,7 +10,7 @@ import (
 // TestTwoModelsKeepTheirOwnLoadOptions checks two models in one process each
 // keep their own load options, rather than the second Open reconfiguring the
 // first through package state (a silent failure). The three knobs are read back
-// through the State APIs that consume them, and the arms must disagree on
+// through the instance APIs that consume them, and the arms must disagree on
 // every one.
 func TestTwoModelsKeepTheirOwnLoadOptions(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
@@ -49,7 +49,7 @@ func TestTwoModelsKeepTheirOwnLoadOptions(t *testing.T) {
 	}()
 
 	for i, a := range arms {
-		s := ms[i].NewState(32)
+		s := ms[i].NewInstance(32)
 		if got := s.AttnPair(); got != a.pair {
 			t.Errorf("%s: AttnPair() = %d, want %d -- it read the other model's option",
 				a.name, got, a.pair)
@@ -147,7 +147,7 @@ func TestConcurrentOpenKeepsEachModelsOptions(t *testing.T) {
 		}
 	}()
 	for i, m := range ms {
-		s := m.NewState(32)
+		s := m.NewInstance(32)
 		if got, want := s.AttnPair(), 3*(i%2); got != want {
 			t.Errorf("model %d: AttnPair() = %d, want %d", i, got, want)
 		}

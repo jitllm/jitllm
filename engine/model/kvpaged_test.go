@@ -39,7 +39,7 @@ func TestPagedKVIsTokenIdenticalToOnePage(t *testing.T) {
 
 	run := func(page int) ([]int32, int, int64) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		out := make([]int32, 0, gen)
 		var lg []float32
@@ -131,7 +131,7 @@ func TestKVStoreRoundTripChangesNoToken(t *testing.T) {
 
 	run := func(store KVStore, budget uint64) ([]int32, int64, int64, int64) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		if store != nil {
 			s.SetKVStore(store)
@@ -214,7 +214,7 @@ func TestFileStoreRoundTripChangesNoToken(t *testing.T) {
 
 	run := func(store KVStore, budget uint64) ([]int32, int64, int64, int64, string) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		if store != nil {
 			s.SetKVStore(store)
@@ -376,7 +376,7 @@ func TestAShortPageFailsTheRequest(t *testing.T) {
 	}
 	ts := &truncStore{FileStore: fs, bad: map[kvStoreKey]bool{}}
 
-	s := m.NewState(96)
+	s := m.NewInstance(96)
 	defer s.Close()
 	s.SetKVStore(ts)
 	mustBudget(t, s, 1<<10) // small enough that sealed pages are evicted
@@ -455,7 +455,7 @@ func TestPrefixCacheSkipsWhatTheStoreHolds(t *testing.T) {
 	// run returns the generated tokens and how many positions came from the store.
 	run := func(cached bool) ([]int32, int) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		s.SetKVStore(fs)
 		mustKey(t, s, key)
@@ -510,7 +510,7 @@ func TestPrefixCacheSkipsWhatTheStoreHolds(t *testing.T) {
 	// A different key must miss: reuse keyed on nothing is reuse of anything.
 	func() {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		s.SetKVStore(fs)
 		mustKey(t, s, key+"-other")
@@ -538,7 +538,7 @@ func TestEvictionActuallyLowersKVBytes(t *testing.T) {
 
 	const maxSeq, page = 128, 8
 	defer m.setKVPageForTest(page)()
-	s := m.NewState(maxSeq)
+	s := m.NewInstance(maxSeq)
 	defer s.Close()
 	s.SetKVStore(NewMemStore())
 
@@ -697,7 +697,7 @@ func TestPrefixCacheSurvivesTheProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.setKVPageForTest(8)()
-	s := m.NewState(256)
+	s := m.NewInstance(256)
 	defer s.Close()
 	s.SetKVStore(fs)
 	mustKey(t, s, "tinyllama/q3_K_M/xproc")
@@ -737,14 +737,14 @@ func TestPrefixCacheSurvivesTheProcess(t *testing.T) {
 
 // mustBudget fails the test when a budget is refused, which is how a gate that
 // forgot to attach a store finds out rather than silently measuring no eviction.
-func mustBudget(t *testing.T, s *State, b uint64) {
+func mustBudget(t *testing.T, s *Instance, b uint64) {
 	t.Helper()
 	if err := s.SetKVBudget(b); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func mustKey(t *testing.T, s *State, ns string) {
+func mustKey(t *testing.T, s *Instance, ns string) {
 	t.Helper()
 	if err := s.SetCacheKey(ns); err != nil {
 		t.Fatal(err)
@@ -825,7 +825,7 @@ func TestPrefixSolverFindsTheLongestSharedPrefix(t *testing.T) {
 	// run returns the generated tokens and how many positions the solver found.
 	run := func(prompt []int32, useNS bool) ([]int32, int) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		s.SetKVStore(fs)
 		if useNS {
@@ -881,7 +881,7 @@ func TestPrefixSolverFindsTheLongestSharedPrefix(t *testing.T) {
 // TestDefaultCacheIDIsNotGuessableAcrossProcesses: a session with NO namespace
 // must not address another process's pages.
 //
-// A per-process counter ("session-1") made a second process's first State find
+// A per-process counter ("session-1") made a second process's first instance find
 // the first process's pages on disk, mixing two histories silently.
 func TestDefaultCacheIDIsNotGuessableAcrossProcesses(t *testing.T) {
 	dir := os.Getenv("JITLLM_XPROC_ANON")
@@ -914,7 +914,7 @@ func TestDefaultCacheIDIsNotGuessableAcrossProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.setKVPageForTest(8)()
-	s := m.NewState(128)
+	s := m.NewInstance(128)
 	defer s.Close()
 	s.SetKVStore(fs) // and deliberately NO SetCacheKey
 	prompt := make([]int32, 40)
@@ -967,7 +967,7 @@ func TestNamespaceSurvivesTheF16StepDown(t *testing.T) {
 	}
 	defer m.Close()
 	defer m.setKVPageForTest(8)()
-	s := m.NewState(128)
+	s := m.NewInstance(128)
 	defer s.Close()
 	// A budget needs somewhere to spill, and the budget is half of what must
 	// survive the rebuild.
@@ -1009,12 +1009,12 @@ func TestBatchRefusesACacheNamespace(t *testing.T) {
 			"pages named after row 0's tokens that hold every row's slots, and which " +
 			"PrefillCached refuses to read back")
 	}
-	// A single-sequence State still accepts one, or the refusal is not about
+	// A single-sequence instance still accepts one, or the refusal is not about
 	// batching.
-	s := m.NewState(32)
+	s := m.NewInstance(32)
 	defer s.Close()
 	if err := s.SetCacheKey("tinyllama/q3_K_M/f32"); err != nil {
-		t.Fatalf("a single-sequence State was refused a namespace: %v", err)
+		t.Fatalf("a single-sequence instance was refused a namespace: %v", err)
 	}
 }
 
@@ -1187,7 +1187,7 @@ func TestDeviceHistoryIsPulledDownAndSealed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s := m.NewState(128)
+		s := m.NewInstance(128)
 		defer s.Close()
 		s.SetKVStore(fs)
 		mustKey(t, s, "tinyllama/q3_K_M/devsync")
@@ -1205,7 +1205,7 @@ func TestDeviceHistoryIsPulledDownAndSealed(t *testing.T) {
 			}
 			dev.kv[li*2], dev.kv[li*2+1] = k, v
 		}
-		// The placement is the set the State marks, not a count.
+		// The placement is the set the instance marks, not a count.
 		s.setLD(dev)
 		for li := 0; li < 4; li++ {
 			s.markOnDev(li)
@@ -1275,7 +1275,7 @@ func TestHybridReusesBothHalvesOfItsHistory(t *testing.T) {
 
 	run := func(store KVStore, ns string) ([]int32, int) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		if store != nil {
 			s.SetKVStore(store)
@@ -1461,7 +1461,7 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType) {
 			t.Fatal(err)
 		}
 		defer m.ClearKVF16()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		if s.KVType() != kt {
 			t.Fatalf("asked for a %v cache and got %v", kt, s.KVType())
@@ -1561,9 +1561,9 @@ func TestKVBudgetWithoutAStoreIsRefused(t *testing.T) {
 	}
 	defer m.Close()
 	// The page size is read when the cache is built, so it must be in effect
-	// before NewState or nothing ever seals.
+	// before NewInstance or nothing ever seals.
 	defer m.setKVPageForTest(8)()
-	s := m.NewState(128)
+	s := m.NewInstance(128)
 	defer s.Close()
 
 	if err := s.SetKVBudget(1 << 20); err == nil {
@@ -1692,7 +1692,7 @@ func TestPagedKVIsTokenIdenticalOnEveryModel(t *testing.T) {
 
 			run := func(page int) []int32 {
 				defer m.setKVPageForTest(page)()
-				s := m.NewState(maxSeq)
+				s := m.NewInstance(maxSeq)
 				defer s.Close()
 				var lg []float32
 				for _, id := range prompt {
@@ -1722,7 +1722,7 @@ func TestPagedKVIsTokenIdenticalOnEveryModel(t *testing.T) {
 			// while testing nothing.
 			func() {
 				defer m.setKVPageForTest(8)()
-				s := m.NewState(maxSeq)
+				s := m.NewInstance(maxSeq)
 				defer s.Close()
 				for _, id := range prompt {
 					if _, err := s.Forward(id); err != nil {
@@ -1773,7 +1773,7 @@ func TestPrefixCacheHoldsAPromptShorterThanAPage(t *testing.T) {
 	}
 	run := func() ([]int32, int) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		s.SetKVStore(fs)
 		mustKey(t, s, "short/prompt")
@@ -1848,7 +1848,7 @@ func TestPrefixCacheReusesASharedPrefix(t *testing.T) {
 	}
 	run := func(p []int32, cached bool) ([]int32, int) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		if cached {
 			s.SetKVStore(fs)
@@ -1930,7 +1930,7 @@ func TestMemStoreFillsServeASharedPrefix(t *testing.T) {
 	store := &fillCountingStore{MemStore: ms}
 	run := func(p []int32, cached bool) ([]int32, int) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		if cached {
 			s.SetKVStore(store)

@@ -17,7 +17,7 @@ import (
 
 // bidirEnd is the end of the run holding position pos, or 0 when pos is in
 // none.
-func (s *State) bidirEnd(pos int) int {
+func (s *Instance) bidirEnd(pos int) int {
 	for _, r := range s.bidir {
 		if pos >= r.Lo && pos < r.Hi {
 			return r.Hi
@@ -28,7 +28,7 @@ func (s *State) bidirEnd(pos int) int {
 
 // bidirStart is the start of the run holding position pos, 0 when pos is
 // in none.
-func (s *State) bidirStart(pos int) int {
+func (s *Instance) bidirStart(pos int) int {
 	for _, r := range s.bidir {
 		if pos >= r.Lo && pos < r.Hi {
 			return r.Lo
@@ -37,17 +37,17 @@ func (s *State) bidirStart(pos int) int {
 	return 0
 }
 
-// runsAt reports whether block li's attention honours the State's runs:
+// runsAt reports whether block li's attention honours the instance's runs:
 // every block's, or the sliding blocks' alone where the model's image rows
 // see each other on those (Config.BidirSWA).
-func (s *State) runsAt(li int) bool {
+func (s *Instance) runsAt(li int) bool {
 	return len(s.bidir) > 0 && s.c.LayerKind(li).Attends() && (!s.c.BidirSWA || s.c.SWA(li))
 }
 
 // bidirChunk is a chunk's row count n, starting at position p0, moved so no
 // run is cut: a run that would straddle the end is left to the next chunk when
 // rows come before it, and taken whole (past n) when it starts the chunk.
-func (s *State) bidirChunk(p0, n int) int {
+func (s *Instance) bidirChunk(p0, n int) int {
 	for _, r := range s.bidir {
 		if r.Lo < p0+n && r.Hi > p0+n {
 			if r.Lo > p0 {
@@ -60,7 +60,7 @@ func (s *State) bidirChunk(p0, n int) int {
 }
 
 // bidirIn reports whether a run lies in the chunk [p0, p0+n).
-func (s *State) bidirIn(p0, n int) bool {
+func (s *Instance) bidirIn(p0, n int) bool {
 	for _, r := range s.bidir {
 		if r.Lo < p0+n && r.Hi > p0 {
 			return true
@@ -72,7 +72,7 @@ func (s *State) bidirIn(p0, n int) bool {
 // bidirTell hands the runs to the device before a chunk's blocks run there,
 // and reports whether it can honour them; a device that cannot must not run a
 // chunk holding one, since its causal answer would be fluent and wrong.
-func (s *State) bidirTell(p0, n int) bool {
+func (s *Instance) bidirTell(p0, n int) bool {
 	kd, ok := s.ld.(nn.KeyRunDevice)
 	if !s.bidirIn(p0, n) {
 		if ok {
@@ -99,8 +99,8 @@ type ncArena struct {
 	causalFault bool
 }
 
-// nc is the State's non-causal segment's arena, nil for a State of none.
-func (s *State) nc() *ncArena {
+// nc is the instance's non-causal segment's arena, nil for an instance of none.
+func (s *Instance) nc() *ncArena {
 	switch {
 	case s.vis != nil:
 		return &s.vis.ncArena
@@ -110,10 +110,10 @@ func (s *State) nc() *ncArena {
 	return nil
 }
 
-// mapNC maps the arena of a segment State: one page of the segment's rows
+// mapNC maps the arena of a segment instance: one page of the segment's rows
 // at the widest key row of its blocks that keep one (a convolution block
 // keeps none).
-func (s *State) mapNC() {
+func (s *Instance) mapNC() {
 	a := s.nc()
 	p, row := 0, 0
 	for li := s.lo; li < len(s.kv.layers); li++ {
@@ -139,8 +139,8 @@ func (s *State) mapNC() {
 }
 
 // lendNC hands the segment's arena to block li for its run, reporting
-// whether the State has one.
-func (s *State) lendNC(li int) bool {
+// whether the instance has one.
+func (s *Instance) lendNC(li int) bool {
 	a, pg := s.nc(), &s.kv.layers[li]
 	if a == nil || a.arena == nil || pg.p == 0 {
 		return false
@@ -152,7 +152,7 @@ func (s *State) lendNC(li int) bool {
 }
 
 // unmapNC releases the segment's arena.
-func (s *State) unmapNC() {
+func (s *Instance) unmapNC() {
 	if a := s.nc(); a != nil && a.arena != nil {
 		a.arena.unmap()
 		a.arena = nil

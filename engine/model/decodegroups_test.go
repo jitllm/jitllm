@@ -46,7 +46,7 @@ func groupedStepAllocs(t *testing.T, path string, opts ...Option) {
 	toks := make([][1]int32, len(prompts))
 	for i, pr := range prompts {
 		ids := m.Vocab.Encode(pr, true)
-		st := m.NewState(len(ids) + warm + n + 8)
+		st := m.NewInstance(len(ids) + warm + n + 8)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -58,7 +58,7 @@ func groupedStepAllocs(t *testing.T, path string, opts ...Option) {
 		if _, err := st.Prefill(ids); err != nil {
 			t.Fatal(err)
 		}
-		groups[i%2] = append(groups[i%2], Run{State: st, Tokens: toks[i][:], Logits: true})
+		groups[i%2] = append(groups[i%2], Run{Instance: st, Tokens: toks[i][:], Logits: true})
 	}
 	if depth := g.PipelineDepth(); depth != 2 {
 		t.Fatalf("the blocks are on %d device(s), want 2", depth)
@@ -134,7 +134,7 @@ func groupedCensus(t *testing.T, m *Model, g *tier.GPU, ids []int32) {
 	var groups [2][]Run
 	toks := make([][1]int32, 4)
 	for i := range toks {
-		st := m.NewState(256)
+		st := m.NewInstance(256)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -144,7 +144,7 @@ func groupedCensus(t *testing.T, m *Model, g *tier.GPU, ids []int32) {
 			t.Fatal(err)
 		}
 		toks[i][0] = argmaxID(l)
-		groups[i%2] = append(groups[i%2], Run{State: st, Tokens: toks[i][:], Logits: true})
+		groups[i%2] = append(groups[i%2], Run{Instance: st, Tokens: toks[i][:], Logits: true})
 	}
 	o0 := g.Stats().StageOverlaps
 	var wg sync.WaitGroup

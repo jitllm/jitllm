@@ -46,7 +46,7 @@ func memoryAcrossMoves(t *testing.T, m *Model, parts tier.Parts) {
 	}
 	defer g.Close()
 	const cycles, steps = 6, 6
-	st := m.NewState(16 + cycles*steps + 1)
+	st := m.NewInstance(16 + cycles*steps + 1)
 	defer st.Close()
 	st.SetDevice(g)
 	full := st.GPULayers()

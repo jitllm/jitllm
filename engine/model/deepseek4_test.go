@@ -183,7 +183,7 @@ func TestDeepseek4FeaturesAreLoadBearing(t *testing.T) {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()
-					st := m.NewState(len(g.IDs) + 1)
+					st := m.NewInstance(len(g.IDs) + 1)
 					defer st.Close()
 					worst := 0.0
 					for p, id := range g.IDs {
@@ -228,7 +228,7 @@ func TestDeepseek4MixedPromptOnEveryDevice(t *testing.T) {
 		t.Run(spec, func(t *testing.T) {
 			defer gpu.Close()
 			run := func(spans ...Span) ([]float32, error) {
-				st := m.NewState(len(ids) + 2)
+				st := m.NewInstance(len(ids) + 2)
 				defer st.Close()
 				st.SetDeviceLayers(gpu, -1)
 				if st.GPULayers() != nl || !st.HeadOnDevice() {
@@ -292,7 +292,7 @@ func TestDeepseek4DeviceRunsTheChunkWhole(t *testing.T) {
 		ran++
 		t.Run(spec, func(t *testing.T) {
 			defer gpu.Close()
-			st := m.NewState(len(g.IDs) + 2)
+			st := m.NewInstance(len(g.IDs) + 2)
 			defer st.Close()
 			st.SetDeviceLayers(gpu, -1)
 			if st.GPULayers() != nl || !st.HeadOnDevice() {
@@ -355,7 +355,7 @@ func TestDeepseek4LongChunksOnEveryDevice(t *testing.T) {
 					ids[i] = int32(3 + (i*11)%61)
 				}
 				run := func(dev bool) []float32 {
-					st := m.NewState(n + 1)
+					st := m.NewInstance(n + 1)
 					defer st.Close()
 					chunks := (n + nn.MaxDevicePrefillChunk - 1) / nn.MaxDevicePrefillChunk
 					s0 := gpu.Stats()

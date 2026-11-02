@@ -71,7 +71,7 @@ func TestMLARunsUnderAPageBudget(t *testing.T) {
 // teacherForce decodes ids one at a time and returns every position's logits.
 func teacherForce(t *testing.T, m *Model, ids []int32) [][]float32 {
 	t.Helper()
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	out := make([][]float32, 0, len(ids))
 	for _, id := range ids {
@@ -144,7 +144,7 @@ func TestMLAPrefillMatchesDecode(t *testing.T) {
 			ids := []int32{5, 11, 23, 41, 67, 89, 101, 127, 151, 173}
 			want := teacherForce(t, m, ids)
 
-			ps := m.NewState(len(ids) + 1)
+			ps := m.NewInstance(len(ids) + 1)
 			defer ps.Close()
 			got, err := ps.Prefill(ids)
 			if err != nil {
@@ -203,7 +203,7 @@ func mlaBatchMatchesDecode(t *testing.T, name string, composed bool) {
 
 	want := make([][]float32, nseq)
 	for i := range streams {
-		s := m.NewState(steps + 1)
+		s := m.NewInstance(steps + 1)
 		for _, id := range streams[i] {
 			lg, err := s.Forward(id)
 			if err != nil {
@@ -295,7 +295,7 @@ func TestAttnScaleReachesEveryPath(t *testing.T) {
 		return num / den
 	}
 
-	ps := m.NewState(len(ids) + 1)
+	ps := m.NewInstance(len(ids) + 1)
 	defer ps.Close()
 	got, err := ps.Prefill(ids)
 	if err != nil {

@@ -25,7 +25,7 @@ func TestDemotedDevicePrefillFinishesOnTheCPU(t *testing.T) {
 	}
 	// Both arms on the same arithmetic: the tuner off (a pack width is a
 	// summation order) and an f32 KV cache (a device steps an f16 one down to
-	// f32 before it places a block, so the demoted State holds f32).
+	// f32 before it places a block, so the demoted instance holds f32).
 	m, err := Open(jlmOf(t, p), noTune, WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestDemotedDevicePrefillFinishesOnTheCPU(t *testing.T) {
 	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is Berlin, "+
 		"and the capital of Italy is", true)
 
-	host := m.NewState(len(ids) + 8)
+	host := m.NewInstance(len(ids) + 8)
 	defer host.Close()
 	want, err := host.Prefill(ids)
 	if err != nil {
@@ -48,7 +48,7 @@ func TestDemotedDevicePrefillFinishesOnTheCPU(t *testing.T) {
 		noDevice(t, "device", err)
 	}
 	defer g.Close()
-	dev := m.NewState(len(ids) + 8)
+	dev := m.NewInstance(len(ids) + 8)
 	defer dev.Close()
 	dev.SetDevice(g)
 	if dev.GPULayers() != m.Cfg.NLayer {

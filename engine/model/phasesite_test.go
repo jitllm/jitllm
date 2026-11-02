@@ -30,7 +30,7 @@ func TestPhaseSites(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	s := m.NewState(64)
+	s := m.NewInstance(64)
 	defer s.Close()
 	for i := 0; i < 4; i++ {
 		if _, err := s.Forward(int32(3 + i)); err != nil {

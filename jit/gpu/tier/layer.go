@@ -180,7 +180,7 @@ type layer struct {
 	nResid, nResidB backend.Buf
 	nQ, nK          backend.Buf // per-head q/k RMSNorm weights (qwen3), nil otherwise
 	// The KV cache is per sequence, not per block: nn.LayerDevice.Layers carries a
-	// position and no state identity, so two model.States sharing one pair would
+	// position and no state identity, so two model.instances sharing one pair would
 	// silently corrupt each other. See docs/design/device-sessions.md.
 	//
 	// kv is keyed by session id; the weights, norms and biases above are the
@@ -2141,7 +2141,7 @@ type blockScratch struct {
 	// subgroup shuffle, one thread per head when it does not.
 	smGroups, smWidth int
 	// softmaxAlt is the thread-per-head kernel kept alongside the warp one, so
-	// GPU.ScalarSoftmax can alternate them in one process on one State. It is nil
+	// GPU.ScalarSoftmax can alternate them in one process on one Instance. It is nil
 	// when the warp kernel did not win the check.
 	softmaxAlt              backend.Kernel
 	smAltGroups, smAltWidth int
@@ -2484,7 +2484,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}()
 	// The host side of a hybrid block is the offering session's: a placed
 	// block is shared by every session that attaches, and each runs its experts
-	// on its own State (runHost looks it up by the call's session). Recorded
+	// on its own instance (runHost looks it up by the call's session). Recorded
 	// before anything can decline, so a block another session placed still
 	// learns this one's.
 	if w != nil && w.HostExperts != nil {
@@ -3817,7 +3817,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		cache, vcache = g.kvCacheBytes(p, cp.MaxSeq)
 		// One cache per session. PrepLayer runs for a session (sid), so
 		// this allocates for whichever sequence is placing blocks; a second
-		// State placing the same block reuses the shared weights above and gets
+		// Instance placing the same block reuses the shared weights above and gets
 		// its own history. A non-causal block takes the device's one shared
 		// pair instead (transientkv.go), and charges nothing of its own.
 		kvp = &kvPair{}
@@ -5996,7 +5996,7 @@ func (g *devTier) dropHeadScratch(bs *blockScratch) {
 
 // headGraphs records the head as ops from the model's front end, what the
 // composer serves: the model's, so every lane's and every geometry set's. A
-// later State of the model, its graphs restated, offers them. Callers hold
+// later instance of the model, its graphs restated, offers them. Callers hold
 // g.mu.
 func (g *devTier) headGraphs(h *nn.Head) {
 	g.eachLane(func(l *lane) {
@@ -6026,7 +6026,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	g.headGraphs(h)
 	h.GatherRow = h.Embed != nil
 	g.prepCollapse(bs, h)
-	// The head is the model's: a second State on this tier finds it placed.
+	// The head is the model's: a second instance on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
 	// first ones, leaking both and charging the budget twice.
 	if bs.head != nil && bs.head.ok && bs.mvHead.rows == h.W.Rows {
@@ -6442,7 +6442,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		}
 		// Every fallback below cuts x by rows, which a stream-major residual
 		// (AltUp's, DeepSeek V4's) is not: such a chunk is refused whole, and
-		// the State runs it on the host.
+		// the instance runs it on the host.
 		if dbs != nil && dbs.p.Streams() > 1 && (head != nil && noFold || !ok || bbs == nil) {
 			g.LastErr = fmt.Sprintf("a %d-row chunk of %d streams this device would have to cut by rows", n,
 				dbs.p.Streams())
@@ -6813,7 +6813,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	g.prologueHeld = true
 	defer func() { g.prologueHeld = false }()
 	// An empty range is legal only with a head: the projection under a partial
-	// seam. Every refusal records why, since the State's answer to false is a
+	// seam. Every refusal records why, since the instance's answer to false is a
 	// silent restart on the host.
 	refuse := func(f string, a ...any) bool {
 		g.LastErr = fmt.Sprintf(f, a...)
@@ -8969,7 +8969,7 @@ func (g *devTier) dropSession(sid uint64) {
 	defer g.mu.Unlock()
 	delete(g.hostFns, sid)
 	// The crossing sample is this session's too, and session ids never repeat,
-	// so a map left to grow is a leak of one small struct per closed State.
+	// so a map left to grow is a leak of one small struct per closed Instance.
 	delete(g.mv, sid)
 	freed := false
 	for li, l := range g.layers {
@@ -9038,7 +9038,7 @@ func (g *devTier) MigrateRec(li int, conv, state []float32, toDevice bool) bool 
 }
 
 // migrateRec moves block li's recurrent summary between host and device.
-// model.State.rconv/rstate are what every host consumer reads (including the
+// model.Instance.rconv/rstate are what every host consumer reads (including the
 // -kv-cache seal), and a placed linear block never touches them, so without this
 // a cached restore would resume from a summary that never saw the prompt. It
 // reads half cur, the state as of the last completed token, at the session's

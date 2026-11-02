@@ -22,7 +22,7 @@ const embedDevCosQuant = 1 - 1e-3
 
 // TestEmbeddingsOnEveryDevice runs every embedding model -- the BERT family
 // through its encoder segment, a decoder (qwen3-embedding, EmbeddingGemma)
-// through its State, EmbeddingGemma's blocks planned non-causal -- with
+// through its instance, EmbeddingGemma's blocks planned non-causal -- with
 // every encoder block on each device present, and with half of them, against
 // the host and against the references TestEmbeddingsMatchReference holds the
 // host to -- the encoder's segment through the one placement path
@@ -35,7 +35,7 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 		t.Run(g.Model, func(t *testing.T) {
 			m := openEmbedModel(t, g)
 			// A decoder embedding model (qwen3-embedding, EmbeddingGemma)
-			// places its State's blocks; its history is f32 on the device.
+			// places its instance's blocks; its history is f32 on the device.
 			nb := m.encBlocks()
 			bound := embedDevCos
 			if g.Model == "qwen3-embedding-0.6b" {

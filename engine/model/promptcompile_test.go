@@ -12,7 +12,7 @@ import (
 )
 
 // TestPlacedPromptsCompileNothing holds the ready boundary for a prompt: once
-// a State's blocks are placed, prompts of several chunk widths (each run in a
+// a instance's blocks are placed, prompts of several chunk widths (each run in a
 // scratch of its own grain width) and the decode after them compile no
 // kernel. Every width's kernels were built at the end of the placement
 // (tier.prewarmPromptWidths); a compile here would land in a time to first
@@ -70,7 +70,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				if len(ids) < total {
 					t.Fatalf("%d prompt tokens, %d wanted", len(ids), total)
 				}
-				s := m.NewState(total + 8)
+				s := m.NewInstance(total + 8)
 				defer s.Close()
 				if err := s.SetDevice(g); err != nil {
 					t.Fatal(err)

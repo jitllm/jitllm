@@ -39,7 +39,7 @@ func openFDs(t *testing.T) int {
 }
 
 // TestModelOpenCloseDoesNotLeak drives the whole host path -- container, pager,
-// JIT, worker pool, State -- through repeated open/close and requires the
+// JIT, worker pool, instance -- through repeated open/close and requires the
 // process to come back.
 //
 // Between sched's pool gate and the tier's device-buffer gate sit the page
@@ -56,7 +56,7 @@ func TestModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			t.Skip(err)
 		}
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		if _, err := s.Forward(1); err != nil {
 			t.Fatal(err)
 		}
@@ -74,7 +74,7 @@ func TestModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d: %v", i, err)
 		}
-		s := m.NewState(32)
+		s := m.NewInstance(32)
 		for k := 0; k < 4; k++ {
 			if _, err := s.Forward(int32(1 + k)); err != nil {
 				t.Fatalf("round %d: %v", i, err)
@@ -140,7 +140,7 @@ func TestPagedModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			t.Skip(err)
 		}
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		if _, err := s.Forward(1); err != nil {
 			t.Fatal(err)
 		}
@@ -158,7 +158,7 @@ func TestPagedModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d: %v", i, err)
 		}
-		s := m.NewState(24)
+		s := m.NewInstance(24)
 		for k := 0; k < 3; k++ {
 			if _, err := s.Forward(int32(1 + k)); err != nil {
 				t.Fatalf("round %d: %v", i, err)

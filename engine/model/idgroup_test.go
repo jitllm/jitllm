@@ -47,7 +47,7 @@ func TestIndexedGroupSplitOnDevice(t *testing.T) {
 					t.Skipf("no cuda device (%v)", err)
 				}
 				defer gpu.Close()
-				st := m.NewState(len(ids) + 1)
+				st := m.NewInstance(len(ids) + 1)
 				defer st.Close()
 				st.SetDeviceLayers(gpu, -1)
 				if n := st.GPULayers(); n != m.Cfg.NLayer {

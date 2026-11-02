@@ -108,7 +108,7 @@ func qvlTeacherForce(t *testing.T, m *Model, prompt, image, replyText, realFirst
 		if err != nil {
 			t.Fatal(err)
 		}
-		st := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + len(reply) + 2)
+		st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(reply) + 2)
 		defer st.Close()
 		if gpu != nil {
 			st.SetDevice(gpu)

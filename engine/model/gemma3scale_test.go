@@ -42,7 +42,7 @@ func TestGemma3GlobalLayersAreLinearlyScaled(t *testing.T) {
 		}
 	})
 	ids := m.Vocab.Encode("The capital", true)
-	st := m.NewState(8)
+	st := m.NewInstance(8)
 	defer st.Close()
 	for _, id := range ids {
 		if _, err := st.Forward(id); err != nil {

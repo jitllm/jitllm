@@ -91,7 +91,7 @@ func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, 
 			}
 		}
 		if budgeted {
-			// Two sessions' full histories, measured on a probe State.
+			// Two sessions' full histories, measured on a probe Instance.
 			st := e.sessions["a"].st
 			per := st.PositionBytes()
 			if per == 0 {

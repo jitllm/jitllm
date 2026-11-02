@@ -175,7 +175,7 @@ func (lm *LoadedModel) takeEmbedder() (*model.Embedder, error) {
 		return nil, err
 	}
 	// Its blocks go where a session's would: an encoder's through its
-	// segment, a decoder's through its State.
+	// segment, a decoder's through its Instance.
 	if lm.device() != nil {
 		if err := x.SetDeviceLayers(lm.device(), lm.deviceBlocks()); err != nil {
 			x.Close()
@@ -188,7 +188,7 @@ func (lm *LoadedModel) takeEmbedder() (*model.Embedder, error) {
 
 // giveEmbedder returns an embedder to the free list, or closes it when the
 // model is being unloaded -- before the model, which is the order the engine
-// requires of everything holding a State.
+// requires of everything holding a Instance.
 func (lm *LoadedModel) giveEmbedder(x *model.Embedder) {
 	lm.embMu.Lock()
 	defer lm.embMu.Unlock()

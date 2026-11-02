@@ -65,7 +65,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 			m.SetPageBudget(uint64(frames) * m.PageSize())
 		}
 		in := m.Vocab.Encode("The capital of France is", true)
-		st := m.NewState(len(in) + 8 + 1)
+		st := m.NewInstance(len(in) + 8 + 1)
 		defer st.Close()
 		logits, err := st.Prefill(in)
 		if err != nil {
@@ -108,7 +108,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 		t.Fatal(err)
 	}
 	if m0.opt.kvTypeSet {
-		s := m0.NewState(8)
+		s := m0.NewInstance(8)
 		got := s.KVType()
 		s.Close()
 		if got != m0.opt.kvType {

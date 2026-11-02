@@ -46,9 +46,9 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 	card := nn.DeviceName(spec)
 	const ntok = 8
 
-	// attach opens the card under budget (0: none) and a State of a model
+	// attach opens the card under budget (0: none) and an instance of a model
 	// with the CPU listed or not.
-	attach := func(t *testing.T, budget uint64, cpu bool) (*Model, *State, *tier.GPU, error) {
+	attach := func(t *testing.T, budget uint64, cpu bool) (*Model, *Instance, *tier.GPU, error) {
 		t.Helper()
 		ds := spec
 		if budget > 0 {
@@ -63,13 +63,13 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 			g.Close()
 			t.Fatal(err)
 		}
-		st := m.NewState(64)
+		st := m.NewInstance(64)
 		err = st.SetDevice(g)
 		t.Cleanup(func() { st.Close(); g.Close(); m.Close() })
 		return m, st, g, err
 	}
 	// offCard is every block not on the card.
-	offCard := func(st *State) []string {
+	offCard := func(st *Instance) []string {
 		var off []string
 		locs := st.Locations()
 		for li := st.lo; li < st.hi; li++ {
@@ -81,7 +81,7 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 	}
 	// run generates ntok tokens, teacher-forced on ids when given, checking
 	// where every block is after each step.
-	run := func(t *testing.T, m *Model, st *State, ids []int32) ([]int32, [][]float32) {
+	run := func(t *testing.T, m *Model, st *Instance, ids []int32) ([]int32, [][]float32) {
 		t.Helper()
 		check := func(step int) {
 			if off := offCard(st); len(off) > 0 {

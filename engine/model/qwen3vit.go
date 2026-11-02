@@ -98,7 +98,7 @@ func (c TowerConfig) RowWidth() int { return c.ProjDim * (1 + len(c.Deep)) }
 // v.lerpTab and then added, as it adds them. The taps and weights are each
 // reference's own float32 arithmetic (axisChain) on generated code: AxisTaps
 // per axis, LerpGrid for their outer product.
-func (s *State) posLerp(x []float32, gh, gw, n int) {
+func (s *Instance) posLerp(x []float32, gh, gw, n int) {
 	v := s.vis
 	c := v.t.Cfg
 	E, side := c.NEmbd, c.PosSide
@@ -185,7 +185,7 @@ func (c TowerConfig) axisChain(size int, f nn.AxisFilter) [9]float32 {
 // lerpRows is rows lo..hi-1 of posLerp: each row's position row, the
 // weighted sum of its patch's table rows (j.side of them, each a plane j.gw
 // apart), added into it.
-func (s *State) lerpRows(lo, hi int) {
+func (s *Instance) lerpRows(lo, hi int) {
 	j := &s.rg.rows
 	d := j.dim
 	for i := lo; i < hi; i++ {
@@ -212,7 +212,7 @@ func (c TowerConfig) tapAfter(b int) int {
 
 // deepstackAt runs tap k's merger over the residual x of the encode in
 // progress, into its rows of v.out.
-func (s *State) deepstackAt(k int, x []float32) error {
+func (s *Instance) deepstackAt(k int, x []float32) error {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	d := &t.deep[k]

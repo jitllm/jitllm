@@ -45,7 +45,7 @@ func TestTwoDevicesAgreeWithTheHost(t *testing.T) {
 	t.Logf("%d device(s), %.1f MiB budget each, %d block(s) of %.1f MiB",
 		len(g.Placed()), float64(cap3)/(1<<20), m.Cfg.NLayer, float64(m.PageSize())/(1<<20))
 
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	st.SetDeviceLayers(g, -1)
 
@@ -124,7 +124,7 @@ func TestTheSeamMovesAcrossTwoDevices(t *testing.T) {
 			noDevice(t, "devices", err)
 		}
 		defer g.Close()
-		st := m.NewState(len(ids) + 1)
+		st := m.NewInstance(len(ids) + 1)
 		defer st.Close()
 		st.SetDeviceLayers(g, -1)
 		return runIDs(t, st, ids), g.Placed()
@@ -147,7 +147,7 @@ func TestTheSeamMovesAcrossTwoDevices(t *testing.T) {
 		noDevice(t, "devices", err)
 	}
 	defer g.Close()
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	st.SetDeviceLayers(g, -1)
 	full := st.GPULayers()
@@ -219,7 +219,7 @@ func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 		t.Skip("this host has one device")
 	}
 
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	st.SetDeviceLayers(g, -1)
 	placed := g.Placed()
@@ -280,7 +280,7 @@ func TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice(t *testing.T) {
 	if len(g.Placed()) < 2 {
 		t.Skip("this host has one device")
 	}
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	st.SetDeviceLayers(g, -1)
 	placed := g.Placed()
@@ -338,7 +338,7 @@ func TestAWidePromptPipelinesAcrossTwoDevices(t *testing.T) {
 	defer m.Close()
 	ids := m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands, "+
 		"and the clerk counted barrels of salt on the upper floor. ", 60), true)[:1300]
-	run := func(st *State) [][]float32 {
+	run := func(st *Instance) [][]float32 {
 		lg, err := st.Prefill(ids)
 		if err != nil {
 			t.Fatal(err)
@@ -352,7 +352,7 @@ func TestAWidePromptPipelinesAcrossTwoDevices(t *testing.T) {
 		}
 		return out
 	}
-	host := m.NewState(len(ids) + 8)
+	host := m.NewInstance(len(ids) + 8)
 	want := run(host)
 	host.Close()
 
@@ -365,7 +365,7 @@ func TestAWidePromptPipelinesAcrossTwoDevices(t *testing.T) {
 	if n := len(g.Placed()); n < 2 {
 		t.Skipf("this host enumerates %d distinct device(s); the gate needs two", n)
 	}
-	st := m.NewState(len(ids) + 8)
+	st := m.NewInstance(len(ids) + 8)
 	defer st.Close()
 	st.SetDevice(g)
 	if st.GPULayers() != m.Cfg.NLayer {

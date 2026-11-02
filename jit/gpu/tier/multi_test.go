@@ -625,7 +625,7 @@ func init() {
 	}
 }
 
-// TestASecondSessionFindsTheBlocksWhereTheFirstLeftThem: a second State
+// TestASecondSessionFindsTheBlocksWhereTheFirstLeftThem: a second instance
 // re-offers every block the first placed, and each must land on the device
 // already holding it rather than being uploaded again from the cursor.
 func TestASecondSessionFindsTheBlocksWhereTheFirstLeftThem(t *testing.T) {
@@ -808,7 +808,7 @@ func TestAFullTailSendsTheHeadToACardWithRoom(t *testing.T) {
 
 // TestANarrowLatentIsNotALatentTile: mla70Attn must answer false, not divide by
 // zero, for a latent narrower than one 32-dim warp tile (a panic under the
-// device lock deadlocked State.Close).
+// device lock deadlocked Instance.Close).
 func TestANarrowLatentIsNotALatentTile(t *testing.T) {
 	g, _, p := fakeTier(t)
 	for _, lat := range []int{1, 16, 31} {

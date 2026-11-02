@@ -36,7 +36,7 @@ func TestOverlongContextIsReportedNotFatal(t *testing.T) {
 		name := filepath.Base(p)
 		want := m.Cfg.NCtx
 
-		s := m.NewState(want * 10)
+		s := m.NewInstance(want * 10)
 		asked, got, clamped := s.ContextClamped()
 		if !clamped || asked != want*10 || got != want {
 			t.Errorf("%s: asked %d got %d clamped %v, want asked %d got %d clamped true",
@@ -70,7 +70,7 @@ func TestOverlongContextIsReportedNotFatal(t *testing.T) {
 
 		// An in-range request must not be reported as clamped, or the notice
 		// becomes noise.
-		s2 := m.NewState(min(16, want))
+		s2 := m.NewInstance(min(16, want))
 		if _, _, c := s2.ContextClamped(); c {
 			t.Errorf("%s: an in-range request reported as clamped", name)
 		}

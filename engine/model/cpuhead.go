@@ -11,16 +11,16 @@ import (
 )
 
 // The head and the sampler on the CPU device: where no card holds the head,
-// the State's logits come from what the composer forms for the head's graph
+// the session's logits come from what the composer forms for the head's graph
 // (graph.Head over the row the streams collapse to, the norm, the
 // projection and what follows it), a step's several rows from its form of
 // cpuRowsCap rows, a label pick from the head projecting the picked rows
 // alone, and a greedy token or a top-k draw's token from what it forms for
 // the sampler's (graph.Sample, graph.SampleWalk). Every one is composed
-// once for the State at its placement (cpuPlaceHead) and counted served or
+// once for the instance at its placement (cpuPlaceHead) and counted served or
 // declined by name (CPUHeadSteps, CPUSampleSteps); a step forms nothing.
 
-// cpuHeadState is a State's composed head and samplers on the CPU and
+// cpuHeadState is a instance's composed head and samplers on the CPU and
 // their census.
 type cpuHeadState struct {
 	// head is the head's form, hidden the one also writing the norm's
@@ -70,19 +70,19 @@ type cpuHeadForm struct {
 // CPUHeadSteps is how many head rows the CPU's composed head served, and
 // how many it declined, by reason. With the composed CPU off nothing is
 // counted.
-func (s *State) CPUHeadSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUHeadSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.head.served, s.cpu.head.declined
 }
 
 // CPUSampleSteps is CPUHeadSteps for the composed samplers: a greedy token
 // or a top-k draw's token.
-func (s *State) CPUSampleSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUSampleSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.head.sampled, s.cpu.head.sampleDeclined
 }
 
 // cpuPlaceHead composes the head's and the samplers' graphs for the CPU
-// device, at the State's placement, with the buffers their calls bind.
-func (s *State) cpuPlaceHead() {
+// device, at the instance's placement, with the buffers their calls bind.
+func (s *Instance) cpuPlaceHead() {
 	h := &s.cpu.head
 	fg := s.m.frontGraphs()
 	s.cpuComposeHead(&h.head, fg.cpuHead, jit.DeclineNoGraph, 1)
@@ -127,7 +127,7 @@ func (s *State) cpuPlaceHead() {
 
 // cpuComposeHead composes graph g for the CPU at rows rows into hf, or
 // says why not: none where the front end states no graph.
-func (s *State) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none jit.Decline, rows int) {
+func (s *Instance) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none jit.Decline, rows int) {
 	s.cpuComposeHeadAs(hf, g, rows, nil)
 	if g == nil {
 		hf.why = none
@@ -136,7 +136,7 @@ func (s *State) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none jit.Decline
 
 // cpuComposeHeadAs is cpuComposeHead with the formats over states the
 // weights of its roles are held in, in place of the container's.
-func (s *State) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) {
+func (s *Instance) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) {
 	*hf = cpuHeadForm{composed: true}
 	switch {
 	case !jit.HostCPULowers():
@@ -154,7 +154,7 @@ func (s *State) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, over
 }
 
 // formOf is hf's form, or why it does not serve: not composed at the
-// State's placement, or declined there.
+// instance's placement, or declined there.
 func (hf *cpuHeadForm) formOf() (*cpuBlockForm, jit.Decline) {
 	if !hf.composed {
 		return nil, jit.DeclineUnplaced
@@ -165,7 +165,7 @@ func (hf *cpuHeadForm) formOf() (*cpuBlockForm, jit.Decline) {
 // formCPUGraph is graph g on the CPU at rows rows through the model's keyed
 // cache: its weights its block's (the model's own, jlm.DenseBlock, for the
 // head's), its inputs and outputs buffers of their own.
-func (m *Model) formCPUGraph(s *State, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpuBlockForm, error) {
+func (m *Model) formCPUGraph(s *Instance, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpuBlockForm, error) {
 	formats := map[jlm.Role]jlm.Type{}
 	f := m.Composing()
 	for _, o := range g.Ops {
@@ -182,13 +182,13 @@ func (m *Model) formCPUGraph(s *State, g *graph.Graph, rows int, over map[jlm.Ro
 	return m.cpuFormOf(req, g, rows, true, false, false)
 }
 
-// cpuHeadOn says the composed CPU path is on for this State.
-func (s *State) cpuHeadOn() bool { return s.cpu.args != nil }
+// cpuHeadOn says the composed CPU path is on for this Instance.
+func (s *Instance) cpuHeadOn() bool { return s.cpu.args != nil }
 
 // cpuHead runs the head on the CPU the composer's way: the norm of the row
 // x, its projection and what follows it into logits, and the norm's rows
 // into hidden where it is given, or says why not.
-func (s *State) cpuHead(x, logits, hidden []float32) jit.Decline {
+func (s *Instance) cpuHead(x, logits, hidden []float32) jit.Decline {
 	if !s.cpuHeadOn() {
 		return jit.DeclineCaller
 	}
@@ -226,7 +226,7 @@ func (s *State) cpuHead(x, logits, hidden []float32) jit.Decline {
 // of it), through the rows' form a call of at most its rows, or says why
 // not. A call's rows past a whole number of the form's units run from
 // copies, so its units write no row past the caller's.
-func (s *State) cpuHeadRows(x, logits, hidden []float32, n int) jit.Decline {
+func (s *Instance) cpuHeadRows(x, logits, hidden []float32, n int) jit.Decline {
 	if !s.cpuHeadOn() {
 		return jit.DeclineCaller
 	}
@@ -268,7 +268,7 @@ func (s *State) cpuHeadRows(x, logits, hidden []float32, n int) jit.Decline {
 
 // cpuHeadCall runs the rows' form f over k rows of x into logits and the
 // norm's rows hidden.
-func (s *State) cpuHeadCall(f *cpuBlockForm, x, logits, hidden unsafe.Pointer, k int) {
+func (s *Instance) cpuHeadCall(f *cpuBlockForm, x, logits, hidden unsafe.Pointer, k int) {
 	b := &s.cpu.bound
 	*b = cpuBound{own: s.cpuOwn(f), n: k}
 	b.io[0], b.io[1], b.io[2] = x, logits, hidden
@@ -281,10 +281,10 @@ func (s *State) cpuHeadCall(f *cpuBlockForm, x, logits, hidden unsafe.Pointer, k
 	}
 }
 
-// cpuPick is the label pick on the CPU: the head projecting the State's
+// cpuPick is the label pick on the CPU: the head projecting the instance's
 // picked ids (HostPick) alone from the row x into HostPickVals, the
 // logits left as they were, or why not.
-func (s *State) cpuPick(x []float32) jit.Decline {
+func (s *Instance) cpuPick(x []float32) jit.Decline {
 	s.HostPicked = false
 	if !s.cpuHeadOn() {
 		return jit.DeclineCaller
@@ -324,7 +324,7 @@ func (s *State) cpuPick(x []float32) jit.Decline {
 // the composed greedy sampler at x's width (graph.Sample) on the CPU: a
 // decision's label scores, which are not a vocabulary's row. Its form is
 // composed once a width for the model, at the first ask of it.
-func (s *State) cpuArgmax(x []float32) (int, error) {
+func (s *Instance) cpuArgmax(x []float32) (int, error) {
 	m := s.m
 	m.argmaxes.mu.Lock()
 	g := m.argmaxes.g[len(x)]
@@ -353,7 +353,7 @@ func (s *State) cpuArgmax(x []float32) (int, error) {
 
 // cpuGreedy is the token of the largest of logits, the lower id of two
 // equal, from the CPU's composed sampler, or false where it declines.
-func (s *State) cpuGreedy(logits []float32) (int32, bool) {
+func (s *Instance) cpuGreedy(logits []float32) (int32, bool) {
 	if !s.cpuHeadOn() {
 		return 0, false
 	}
@@ -373,13 +373,13 @@ func (s *State) cpuGreedy(logits []float32) (int32, bool) {
 	return int32(h.token[0]), true
 }
 
-// Sample is smp's token over logits, a row this State produced, from the
+// Sample is smp's token over logits, a row this instance produced, from the
 // composed samplers on the CPU: the greedy token (graph.Sample) and a top-k
 // draw's (graph.SampleWalk), at the uniform the host sampler would draw, so
 // a seed draws what it does through Sampler.Sample. A draw they do not serve
 // -- no top-k, one past their bounds, a row of another width -- is the host
 // sampler's.
-func (s *State) Sample(smp *Sampler, logits []float32) int32 {
+func (s *Instance) Sample(smp *Sampler, logits []float32) int32 {
 	whole := len(logits) == s.c.NVocab
 	if smp == nil || smp.Temp <= 0 {
 		if t, ok := s.cpuGreedy(logits); whole && ok {
@@ -401,7 +401,7 @@ func (s *State) Sample(smp *Sampler, logits []float32) int32 {
 // at the uniform u smp drew for the call: a top-k draw's walk, or with no
 // top-k the row's or, where top-p or min-p is set, the cut's. False where
 // none serves it: a top-k past the walk's bound, a history past theirs.
-func (s *State) cpuDraw(logits []float32, smp *Sampler, u float32) (int32, bool) {
+func (s *Instance) cpuDraw(logits []float32, smp *Sampler, u float32) (int32, bool) {
 	n := len(logits)
 	if smp.TopK > 0 && smp.TopK < n && smp.TopK <= nn.SampleMaxK {
 		return s.cpuWalkToken(logits, smp, u)
@@ -410,9 +410,9 @@ func (s *State) cpuDraw(logits []float32, smp *Sampler, u float32) (int32, bool)
 }
 
 // dist fills d with the distribution smp draws from over logits (a row this
-// State's model produces), from the CPU's composed forms (cpuDist), the host
+// instance's model produces), from the CPU's composed forms (cpuDist), the host
 // sampler's where they decline.
-func (s *State) dist(smp *Sampler, logits []float32, d *specDist) {
+func (s *Instance) dist(smp *Sampler, logits []float32, d *specDist) {
 	if !s.cpuDist(logits, smp, d) {
 		smp.dist(logits, d)
 	}
@@ -421,7 +421,7 @@ func (s *State) dist(smp *Sampler, logits []float32, d *specDist) {
 // topProb is the largest probability of logits' softmax: the draft's
 // confidence in its argmax, from the composed greedy sampler and the
 // distribution of a draw at temperature 1 with no cut.
-func (s *State) topProb(logits []float32, d *specDist) float32 {
+func (s *Instance) topProb(logits []float32, d *specDist) float32 {
 	one := Sampler{Temp: 1}
 	t, ok := s.cpuGreedy(logits)
 	if !ok || !s.cpuDist(logits, &one, d) {
@@ -435,7 +435,7 @@ func (s *State) topProb(logits []float32, d *specDist) float32 {
 // survivors (graph.SampleWalk with Prob), else every token's probability
 // (graph.SampleCut with Prob, the row's where no cut fires). False where
 // they decline.
-func (s *State) cpuDist(logits []float32, smp *Sampler, d *specDist) bool {
+func (s *Instance) cpuDist(logits []float32, smp *Sampler, d *specDist) bool {
 	n := len(logits)
 	if !s.cpuHeadOn() || n != s.c.NVocab {
 		return false
@@ -491,7 +491,7 @@ func (s *State) cpuDist(logits []float32, smp *Sampler, d *specDist) bool {
 // composed row (graph.SampleRow) or, where top-p or min-p is set, its cut
 // (graph.SampleCut), or with a top-k past the walk's bound the cut's top-k
 // variant, at the uniform u, or false where it declines.
-func (s *State) cpuWideToken(logits []float32, smp *Sampler, u float32) (int32, bool) {
+func (s *Instance) cpuWideToken(logits []float32, smp *Sampler, u float32) (int32, bool) {
 	if !s.cpuHeadOn() {
 		return 0, false
 	}
@@ -527,7 +527,7 @@ func (s *State) cpuWideToken(logits []float32, smp *Sampler, u float32) (int32, 
 // cpuWalkToken is smp's top-k draw over logits from the CPU's composed walk
 // (graph.SampleWalk) at the uniform u smp drew for the call, or false where
 // it declines: a k or a history past the bounds the walk was formed for.
-func (s *State) cpuWalkToken(logits []float32, smp *Sampler, u float32) (int32, bool) {
+func (s *Instance) cpuWalkToken(logits []float32, smp *Sampler, u float32) (int32, bool) {
 	if !s.cpuHeadOn() {
 		return 0, false
 	}
@@ -557,7 +557,7 @@ func (s *State) cpuWalkToken(logits []float32, smp *Sampler, u float32) (int32, 
 // cpuStageSample writes smp's penalty where the composed samplers read it
 // and is the window row they read: smp's count row, or a row holding no
 // token where the penalty is off.
-func (s *State) cpuStageSample(smp *Sampler) unsafe.Pointer {
+func (s *Instance) cpuStageSample(smp *Sampler) unsafe.Pointer {
 	h := &s.cpu.head
 	h.pen[0] = smp.penalty()
 	if h.pen[0] == 1 {

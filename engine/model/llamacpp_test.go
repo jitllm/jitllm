@@ -209,7 +209,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 			tie := func(p, why string) { ties = append(ties, fmt.Sprintf("%q: %s", p, why)) }
 			for _, prompt := range prompts {
 				ids := m.Vocab.Encode(prompt, true)
-				st := m.NewState(len(ids) + n + 1)
+				st := m.NewInstance(len(ids) + n + 1)
 				defer st.Close()
 				logits, err := st.Prefill(ids)
 				if err != nil {
@@ -321,7 +321,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 				// argmax with a margin because only llama.cpp's ids, not its
 				// logits, are available.
 				if len(want) > 0 {
-					fst := m.NewState(len(ids) + len(want) + 1)
+					fst := m.NewInstance(len(ids) + len(want) + 1)
 					fl, ferr := fst.Prefill(ids)
 					if ferr != nil {
 						t.Fatal(ferr)

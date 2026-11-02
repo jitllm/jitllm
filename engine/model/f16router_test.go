@@ -66,7 +66,7 @@ func TestF16RouterOnTheDevice(t *testing.T) {
 		if routers == 0 {
 			t.Fatal("no block carries a router -- this gate proved nothing")
 		}
-		// The entries say F16 too: a State generates one host kernel per type
+		// The entries say F16 too: an instance generates one host kernel per type
 		// the container lists, so without this the host arm has no F16 matvec.
 		if f16 {
 			ty, ok := jlm.TypeOf(quant.F16)
@@ -80,7 +80,7 @@ func TestF16RouterOnTheDevice(t *testing.T) {
 			}
 		}
 		host := func() [][]float32 {
-			st := m.NewState(32)
+			st := m.NewInstance(32)
 			defer st.Close()
 			var out [][]float32
 			for _, id := range ids {
@@ -98,7 +98,7 @@ func TestF16RouterOnTheDevice(t *testing.T) {
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		st := m.NewState(32)
+		st := m.NewInstance(32)
 		defer st.Close()
 		// Four blocks, not all: a router read at the wrong width misroutes
 		// every token of every placed block, and four fit a shared card.

@@ -20,7 +20,7 @@ type kvLayout struct {
 	// offset handed out is a whole number of head rows, and a row of any
 	// format fills whole float32 slots (cpu.KVRowBytes).
 	fmt cpu.KVFmt
-	// jit is the append's quantizer, set when fmt is q8 (State.kvl).
+	// jit is the append's quantizer, set when fmt is q8 (Instance.kvl).
 	jit *nn.JIT
 	// q8Twin makes an f32 cache store every row rounded through q8_0 and
 	// widened back: the values a q8 cache's kernels read, in the f32 cache's
@@ -103,11 +103,11 @@ func (l kvLayout) store(dst []float32, src []float32) {
 	}
 }
 
-// kvlAt is layer li's layout: the State's own at the layer's geometry, which
+// kvlAt is layer li's layout: the instance's own at the layer's geometry, which
 // differs from kvl only where the sliding layers attend at their own head
 // width and kv heads (Config.GeomSplit). MLA's one cached row is the same on
 // every layer.
-func (s *State) kvlAt(li int) kvLayout { return s.kvl.atLayer(s.c, li) }
+func (s *Instance) kvlAt(li int) kvLayout { return s.kvl.atLayer(s.c, li) }
 
 // atLayer is l at layer li's geometry; kvlAt has the cases. The page sizes
 // (newKVCacheRange) read it too, since a q8 row's bytes depend on the layer's
@@ -127,14 +127,14 @@ func (l kvLayout) atLayer(c *Config, li int) kvLayout {
 
 // kvlMSA is an MSA block's layout: the indexer's key is one more kv head
 // after the attention's, so the row is (NKVHead+1)*HeadDim (msa.go).
-func (s *State) kvlMSA() kvLayout {
+func (s *Instance) kvlMSA() kvLayout {
 	l := s.kvl
 	l.nKV++
 	return l
 }
 
 // kvlSWA is the sliding layers' layout.
-func (s *State) kvlSWA() kvLayout {
+func (s *Instance) kvlSWA() kvLayout {
 	l := s.kvl
 	l.nKV, l.headDim = s.c.NKVHeadSWA, s.c.HeadDimSWA
 	return l
@@ -144,7 +144,7 @@ func (s *State) kvlSWA() kvLayout {
 // decided: the JIT's default (the global layers' geometry, AddAttnKV) for
 // every layer, and a second set baked at the sliding layers' head width and
 // stride where the two geometries differ.
-func (s *State) provisionAttn() {
+func (s *Instance) provisionAttn() {
 	s.attnG = s.jit.Attn()
 	s.attnL = s.attnG
 	if c := s.c; c.GeomSplit() {

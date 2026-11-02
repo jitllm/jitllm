@@ -15,7 +15,7 @@ import (
 // TestSixtyFourRequestsWhoseHistoryStreams is the load that killed jitllmd on
 // a V100 (httpbench at 64 concurrent requests, Llama 3.1 8B) and then failed
 // 172 of 256 requests there: 64 completions at once over HTTP, twice -- the
-// second wave on the pooled States the first left -- with the card's budget
+// second wave on the pooled instances the first left -- with the card's budget
 // held below what their histories take. Admission (stepLoop.kvRoom) keeps the
 // admitted rows' histories on the card and holds the rest back until rows
 // retire, so the rows that run step together: every request completes, the

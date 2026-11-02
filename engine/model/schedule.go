@@ -6,7 +6,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
-// Scheduler runs many sequences over one batch session: it admits queued
+// RowScheduler runs many sequences over one batch session: it admits queued
 // prompts into free rows, steps every live row through one pass over the
 // weights, and retires rows that finish.
 //
@@ -26,16 +26,16 @@ import (
 // sequence's one state, the k-th row reading the state the row before it left
 // (the device's run forms, tier.Stats.RecChainRows). Rows with no sequence in
 // them cost nothing: only the live sequences' rows run. Changing the width
-// means a new State and KV cache.
-type Scheduler struct {
-	st   *State
+// means a new instance and KV cache.
+type RowScheduler struct {
+	st   *Instance
 	live []*Seq // one entry per row; nil is free
 	q    []*Seq
 	qh   int // the first queued sequence of q not yet admitted
 	// budget is the prompt tokens one step may carry; see WithPromptBudget.
 	budget   int
 	admitted int // admissions so far, which orders the prompts
-	stats    SchedulerStats
+	stats    RowSchedulerStats
 	// chunkPos, when set, is where a prompt chunk's row j goes, given the
 	// chunk's first position and its length. Nil in every Scheduler but a
 	// gate's violation: it is how the gate shows that a chunk laid out at the
@@ -49,9 +49,9 @@ type Scheduler struct {
 	done          []*Seq // what Step returns
 }
 
-// SchedulerStats is what Steps have run: a caller -- or a gate -- sees
+// RowSchedulerStats is what Steps have run: a caller -- or a gate -- sees
 // admission working rather than infers it from the tokens.
-type SchedulerStats struct {
+type RowSchedulerStats struct {
 	// Steps is the batch steps run.
 	Steps int
 	// PromptRows is prompt tokens run inside steps. MixedRows is those of them
@@ -66,8 +66,8 @@ type SchedulerStats struct {
 	RoomToCPU int
 }
 
-// SchedulerOption configures a Scheduler (NewScheduler).
-type SchedulerOption func(*Scheduler)
+// RowSchedulerOption configures a Scheduler (NewScheduler).
+type RowSchedulerOption func(*RowScheduler)
 
 // WithPromptBudget caps the prompt tokens one Step carries beside the
 // decoding rows. Smaller keeps each step -- the decoding rows' time between
@@ -80,8 +80,8 @@ type SchedulerOption func(*Scheduler)
 // costs the same passes over the weights its prefill would have cost alone, at
 // the same width, and each decoding row waits one pass rather than the whole
 // prompt.
-func WithPromptBudget(n int) SchedulerOption {
-	return func(sc *Scheduler) { sc.budget = n }
+func WithPromptBudget(n int) RowSchedulerOption {
+	return func(sc *RowScheduler) { sc.budget = n }
 }
 
 // Seq is one sequence's progress through the scheduler.
@@ -110,10 +110,10 @@ type Seq struct {
 	adm int
 }
 
-// NewScheduler wraps a batch session of nseq rows. A step runs only the rows
+// NewRowScheduler wraps a batch session of nseq rows. A step runs only the rows
 // that hold a sequence, so a free row needs no token.
-func NewScheduler(m *Model, nseq, maxSeq int, opts ...SchedulerOption) *Scheduler {
-	sc := &Scheduler{st: m.NewBatch(nseq, maxSeq), live: make([]*Seq, nseq)}
+func NewRowScheduler(m *Model, nseq, maxSeq int, opts ...RowSchedulerOption) *RowScheduler {
+	sc := &RowScheduler{st: m.NewBatch(nseq, maxSeq), live: make([]*Seq, nseq)}
 	for _, o := range opts {
 		o(sc)
 	}
@@ -121,13 +121,13 @@ func NewScheduler(m *Model, nseq, maxSeq int, opts ...SchedulerOption) *Schedule
 }
 
 // Submit queues a sequence. It is admitted by a later Step, when a row frees.
-func (sc *Scheduler) Submit(s *Seq) { sc.q = append(sc.q, s) }
+func (sc *RowScheduler) Submit(s *Seq) { sc.q = append(sc.q, s) }
 
 // Pending is how many sequences are queued but not yet admitted.
-func (sc *Scheduler) Pending() int { return len(sc.q) - sc.qh }
+func (sc *RowScheduler) Pending() int { return len(sc.q) - sc.qh }
 
 // Live is how many rows hold a sequence.
-func (sc *Scheduler) Live() int {
+func (sc *RowScheduler) Live() int {
 	n := 0
 	for _, s := range sc.live {
 		if s != nil {
@@ -138,14 +138,14 @@ func (sc *Scheduler) Live() int {
 }
 
 // Stats is what the Steps so far have run.
-func (sc *Scheduler) Stats() SchedulerStats {
+func (sc *RowScheduler) Stats() RowSchedulerStats {
 	st := sc.stats
 	st.RoomToCPU = sc.st.roomToCPU
 	return st
 }
 
 // Close releases the session.
-func (sc *Scheduler) Close() { sc.st.Close() }
+func (sc *RowScheduler) Close() { sc.st.Close() }
 
 // Step admits what it can, runs one batch step, and returns the sequences that
 // retired during it.
@@ -153,7 +153,7 @@ func (sc *Scheduler) Close() { sc.st.Close() }
 // A step with no live rows and nothing queued does no work and returns none,
 // so a caller may poll it. The slice is the Scheduler's, good until the next
 // Step.
-func (sc *Scheduler) Step() ([]*Seq, error) {
+func (sc *RowScheduler) Step() ([]*Seq, error) {
 	// A sequence whose admission failed has retired too, with Err set: it is
 	// returned here, or a caller waiting for it would wait forever.
 	clear(sc.done[:cap(sc.done)])
@@ -171,8 +171,8 @@ func (sc *Scheduler) Step() ([]*Seq, error) {
 // The rows that want logits lead -- each decoding row, and the last row of
 // each chunk that ends its prompt -- so the head projects only them; a chunk's
 // other rows follow. Row order is free: every row names its sequence and
-// position (State.forwardRows).
-func (sc *Scheduler) stepMixed(done []*Seq) ([]*Seq, error) {
+// position (Instance.forwardRows).
+func (sc *RowScheduler) stepMixed(done []*Seq) ([]*Seq, error) {
 	st := sc.st
 	// The step's rows and the sequence each logit row samples for, in the
 	// Scheduler's own slices: a step allocates nothing once they are grown.
@@ -282,7 +282,7 @@ type promptChunk struct {
 }
 
 // promptBudget is the prompt tokens a step may carry; see WithPromptBudget.
-func (sc *Scheduler) promptBudget() int {
+func (sc *RowScheduler) promptBudget() int {
 	if sc.budget > 0 {
 		return sc.budget
 	}
@@ -302,7 +302,7 @@ func (sc *Scheduler) promptBudget() int {
 
 // admit fills free rows from the queue, oldest first, and returns the
 // sequences that failed admission. A prompt runs in the steps that follow.
-func (sc *Scheduler) admit(done []*Seq) []*Seq {
+func (sc *RowScheduler) admit(done []*Seq) []*Seq {
 	for i := range sc.live {
 		if sc.Pending() == 0 {
 			return done
@@ -338,7 +338,7 @@ func (sc *Scheduler) admit(done []*Seq) []*Seq {
 	return done
 }
 
-func (sc *Scheduler) retire(i int) *Seq {
+func (sc *RowScheduler) retire(i int) *Seq {
 	s := sc.live[i]
 	s.Done = true
 	sc.live[i] = nil
@@ -346,7 +346,7 @@ func (sc *Scheduler) retire(i int) *Seq {
 	return s
 }
 
-func (s *Seq) pick(st *State, logits []float32) int32 {
+func (s *Seq) pick(st *Instance, logits []float32) int32 {
 	if s.Sample != nil {
 		return s.Sample(logits)
 	}

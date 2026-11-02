@@ -316,7 +316,7 @@ func TestHybridRuns(t *testing.T) {
 	if !m.Cfg.Hybrid() {
 		t.Fatal("the container's layer map did not survive the load")
 	}
-	s := m.NewState(16)
+	s := m.NewInstance(16)
 	defer s.Close()
 	before := append([]float32(nil), s.rstate[0]...)
 	lg, err := s.Forward(3)
@@ -345,7 +345,7 @@ func TestHybridRuns(t *testing.T) {
 // conversation. A KV cache fails this on the second token.
 func TestHybridStateIsConstantInContext(t *testing.T) {
 	m := hybridModel(t)
-	s := m.NewState(32)
+	s := m.NewInstance(32)
 	defer s.Close()
 	want := len(s.rstate[0]) + len(s.rconv[0])
 	for i := 0; i < 8; i++ {
@@ -364,7 +364,7 @@ func TestHybridPrefillMatchesForward(t *testing.T) {
 	m := hybridModel(t)
 	ids := []int32{3, 9, 1, 14, 6, 2, 11, 4}
 
-	a := m.NewState(32)
+	a := m.NewInstance(32)
 	defer a.Close()
 	var want []float32
 	for _, id := range ids {
@@ -374,7 +374,7 @@ func TestHybridPrefillMatchesForward(t *testing.T) {
 		}
 		want = lg
 	}
-	b := m.NewState(32)
+	b := m.NewInstance(32)
 	defer b.Close()
 	got, err := b.Prefill(ids)
 	if err != nil {
@@ -396,7 +396,7 @@ func TestHybridBatchMatchesForward(t *testing.T) {
 	}
 	want := make([][]float32, nseq)
 	for i := range streams {
-		s := m.NewState(steps + 1)
+		s := m.NewInstance(steps + 1)
 		for _, id := range streams[i] {
 			lg, err := s.Forward(id)
 			if err != nil {
@@ -444,7 +444,7 @@ func hyClose(t *testing.T, what string, want, got []float32) {
 
 // hyCloseState compares the recurrent state itself, which is what the logits
 // only see through one more layer of mixing.
-func hyCloseState(t *testing.T, a, b *State) {
+func hyCloseState(t *testing.T, a, b *Instance) {
 	t.Helper()
 	for li := range a.rstate {
 		if a.rstate[li] == nil {
@@ -529,7 +529,7 @@ func TestLinearBlockIsDeclinedForItsOwnReason(t *testing.T) {
 		t.Fatalf("block 0 is %v; this gate needs a linear block first, which is also the "+
 			"arrangement that makes offerRange stop at it", c.LayerKind(0))
 	}
-	s := m.NewState(8)
+	s := m.NewInstance(8)
 	defer s.Close()
 
 	// The plan the linear arm of offerRange builds, reproduced from the same
@@ -665,7 +665,7 @@ func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string, how hyDev) (float64,
 	}
 
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
-	host := m.NewState(16)
+	host := m.NewInstance(16)
 	defer host.Close()
 	want := make([][]float32, len(ids))
 	for i, id := range ids {
@@ -693,7 +693,7 @@ func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string, how hyDev) (float64,
 		defer m.rewriteBlocks(t, how.rewrite)()
 	}
 
-	dev := m.NewState(16)
+	dev := m.NewInstance(16)
 	defer dev.Close()
 	// Every block of the fixture, linear ones included.
 	dev.SetDeviceLayers(g, m.Cfg.NLayer)
@@ -768,9 +768,9 @@ func TestHybridDeviceErrorIsAmplification(t *testing.T) {
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		host := m.NewState(16)
+		host := m.NewInstance(16)
 		defer host.Close()
-		dev := m.NewState(16)
+		dev := m.NewInstance(16)
 		defer dev.Close()
 		dev.SetDeviceLayers(g, 1)
 		if dev.GPULayers() != 1 {
@@ -846,7 +846,7 @@ func hybridPrefillOnDevice(t *testing.T, o hyOpt) {
 	defer g.Close()
 
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
-	host := m.NewState(32)
+	host := m.NewInstance(32)
 	defer host.Close()
 	want, err := host.Prefill(ids)
 	if err != nil {
@@ -854,7 +854,7 @@ func hybridPrefillOnDevice(t *testing.T, o hyOpt) {
 	}
 	want = append([]float32(nil), want...)
 
-	dev := m.NewState(32)
+	dev := m.NewInstance(32)
 	defer dev.Close()
 	dev.SetDeviceLayers(g, 4)
 	if dev.GPULayers() == 0 {
@@ -889,7 +889,7 @@ func hybridPrefillOnDevice(t *testing.T, o hyOpt) {
 }
 
 // TestHybridSecondSessionIsClean runs two device sessions over one tier the way
-// `jitllm verify` does: one State generates and is closed, then a second
+// `jitllm verify` does: one instance generates and is closed, then a second
 // attaches and is diffed against the host. A placement that leaks or a graph
 // that outlives its recorder shows up only on the second.
 func TestHybridSecondSessionIsClean(t *testing.T) {
@@ -914,7 +914,7 @@ func hybridSecondSession(t *testing.T, offered int) {
 	defer g.Close()
 
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
-	host := m.NewState(16)
+	host := m.NewInstance(16)
 	defer host.Close()
 	want := make([][]float32, len(ids))
 	for i, id := range ids {
@@ -925,7 +925,7 @@ func hybridSecondSession(t *testing.T, offered int) {
 		want[i] = append([]float32(nil), l...)
 	}
 
-	first := m.NewState(16)
+	first := m.NewInstance(16)
 	first.SetDeviceLayers(g, offered)
 	if first.GPULayers() != offered {
 		n := first.GPULayers()
@@ -939,7 +939,7 @@ func hybridSecondSession(t *testing.T, offered int) {
 	}
 	first.Close()
 
-	second := m.NewState(16)
+	second := m.NewInstance(16)
 	defer second.Close()
 	second.SetDeviceLayers(g, offered)
 	if n := second.GPULayers(); n != offered {
@@ -981,7 +981,7 @@ func TestHybridSecondSessionOnAFullCard(t *testing.T) {
 	defer m.Close()
 
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
-	host := m.NewState(16)
+	host := m.NewInstance(16)
 	defer host.Close()
 	want := make([][]float32, len(ids))
 	for i, id := range ids {
@@ -997,7 +997,7 @@ func TestHybridSecondSessionOnAFullCard(t *testing.T) {
 	if err != nil || probe == nil {
 		noDevice(t, "device", err)
 	}
-	warm := m.NewState(16)
+	warm := m.NewInstance(16)
 	warm.SetDeviceLayers(probe, 8)
 	placed := warm.GPULayers()
 	used := probe.Bytes()
@@ -1014,13 +1014,13 @@ func TestHybridSecondSessionOnAFullCard(t *testing.T) {
 	}
 	defer g.Close()
 
-	first := m.NewState(16)
+	first := m.NewInstance(16)
 	first.SetDeviceLayers(g, 8)
 	if first.GPULayers() == 0 {
 		first.Close()
 		t.Skipf("the budget of %d bytes held no block: %s", used, g.Err())
 	}
-	second := m.NewState(16)
+	second := m.NewInstance(16)
 	defer second.Close()
 	second.SetDeviceLayers(g, 8)
 	t.Logf("budget %d B: first session placed %d block(s), second placed %d",
@@ -1075,9 +1075,9 @@ func hybridGrowth(t *testing.T, o hyOpt, want int) {
 
 	m := hybridModelOpt(t, o)
 	defer m.Close()
-	host := m.NewState(48)
+	host := m.NewInstance(48)
 	defer host.Close()
-	dev := m.NewState(48)
+	dev := m.NewInstance(48)
 	defer dev.Close()
 	// Offer exactly what this gate wants rather than trusting a budget to refuse
 	// the rest: the seam is a contiguous prefix, so the placement does not
@@ -1157,7 +1157,7 @@ func TestHybridSecondSessionMatchesTheFirst(t *testing.T) {
 		if sessions > 1 {
 			// A session that exists before the one under test, as benchRun is
 			// to forcedDiff.
-			warm := m.NewState(16)
+			warm := m.NewInstance(16)
 			warm.SetDeviceLayers(g, 2)
 			if warm.GPULayers() != 2 {
 				n := warm.GPULayers()
@@ -1171,7 +1171,7 @@ func TestHybridSecondSessionMatchesTheFirst(t *testing.T) {
 			}
 			warm.Close()
 		}
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		defer s.Close()
 		// Two, asked for by count.
 		s.SetDeviceLayers(g, 2)
@@ -1239,7 +1239,7 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 	// Two tokens, not eight: residency is tracked in 1 MiB chunks, so the bank is
 	// only partly read while expert selections are far fewer than chunks. This
 	// page is ~7 chunks and one expert runs per token.
-	cycle := m.NewState(16)
+	cycle := m.NewInstance(16)
 	for _, id := range []int32{1, 2} {
 		if _, err := cycle.Forward(id); err != nil {
 			t.Fatalf("host: %v", err)
@@ -1254,7 +1254,7 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 	want := make([][]float32, len(ids))
-	host := m.NewState(16)
+	host := m.NewInstance(16)
 	for i, id := range ids {
 		l, err := host.Forward(id)
 		if err != nil {
@@ -1266,7 +1266,7 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 
 	// The device attaches after that decode; one attached first reads every
 	// frame fresh and cannot show this.
-	dev := m.NewState(16)
+	dev := m.NewInstance(16)
 	defer dev.Close()
 	dev.SetDeviceLayers(g, 8)
 	if dev.GPULayers() == 0 {
@@ -1319,7 +1319,7 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 		defer g.Close()
 		m := hybridModelOpt(t, opt)
 		defer m.Close()
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		defer s.Close()
 		s.SetDeviceLayers(g, n)
 		return s.GPULayers(), g.Bytes()
@@ -1342,7 +1342,7 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		defer s.Close()
 		before := m.container.ChunksIn()
 		s.SetDeviceLayers(g, 8)
@@ -1394,7 +1394,7 @@ func devicePagingUnderHostPager(t *testing.T, o hyOpt) {
 		t.Skip("the host page budget did not apply, so only one pager is live")
 	}
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
-	host := m.NewState(16)
+	host := m.NewInstance(16)
 	defer host.Close()
 	want := make([][]float32, len(ids))
 	for i, id := range ids {
@@ -1413,7 +1413,7 @@ func devicePagingUnderHostPager(t *testing.T, o hyOpt) {
 	for li := 0; li < m.Cfg.NLayer; li++ {
 		g.Stream(li, true)
 	}
-	dev := m.NewState(16)
+	dev := m.NewInstance(16)
 	defer dev.Close()
 	dev.SetDeviceLayers(g, m.Cfg.NLayer)
 	if dev.GPULayers() == 0 {
@@ -1516,7 +1516,7 @@ func TestPlacedBlockSurvivesAKVCacheRoundTrip(t *testing.T) {
 					noDevice(t, "device", err)
 				}
 				defer g.Close()
-				s := m.NewState(64)
+				s := m.NewInstance(64)
 				defer s.Close()
 				s.SetDeviceLayers(g, 1)
 				if s.GPULayers() != 1 {

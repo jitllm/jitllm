@@ -47,7 +47,7 @@ func TestGPTOSSMatchesLlamaCppIntermediates(t *testing.T) {
 		}
 		sums[fmt.Sprintf("%s-%d", name, l)] = s
 	})
-	st := m.NewState(8)
+	st := m.NewInstance(8)
 	defer st.Close()
 	logits, err := st.Forward(976)
 	if err != nil {

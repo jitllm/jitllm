@@ -101,7 +101,7 @@ func hybridBatchedPrefill(t *testing.T, m *Model) {
 	// would already have been copied out.
 	run := func(dev, noBatch bool) (a arm) {
 		a.rows = make([]float32, plen*c.NEmbd)
-		st := m.NewState(plen + len(forced) + 1)
+		st := m.NewInstance(plen + len(forced) + 1)
 		defer st.Close()
 		if dev {
 			spec := testdevices.One("gpu:0")

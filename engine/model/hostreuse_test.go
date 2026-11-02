@@ -9,15 +9,15 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestReusedPromptScratchIsNotRead is the gate on a closed State's prompt
-// scratch (hostBatch) and history pages (kvPagePool) serving the next State
+// TestReusedPromptScratchIsNotRead is the gate on a closed session's prompt
+// scratch (hostBatch) and history pages (kvPagePool) serving the next instance
 // on the same model.
 //
-// The next State's prompt and decode must be bit-identical to the first
-// State's, which ran on fresh memory -- with every handed-back float set to
-// NaN first, so a read of anything the new State did not write shows up as a
+// The next session's prompt and decode must be bit-identical to the first
+// instance's, which ran on fresh memory -- with every handed-back float set to
+// NaN first, so a read of anything the new instance did not write shows up as a
 // NaN or a changed logit rather than as a plausible number. And it checks the
-// reuse was SELECTED (RULE 10): the new State's scratch is the poisoned array
+// reuse was SELECTED (RULE 10): the new instance's scratch is the poisoned array
 // and its history came out of the pool, or the comparison proves nothing.
 func TestReusedPromptScratchIsNotRead(t *testing.T) {
 	paths := []string{benchModel(t)}
@@ -42,7 +42,7 @@ func reusedScratchGate(t *testing.T, path string) {
 	const ctx, steps = 256, 12
 
 	run := func(ids []int32) [][]float32 {
-		s := m.NewState(ctx)
+		s := m.NewInstance(ctx)
 		defer s.Close()
 		lg, err := s.Prefill(ids)
 		if err != nil {
@@ -62,7 +62,7 @@ func reusedScratchGate(t *testing.T, path string) {
 	want := run(short) // fresh memory: nothing handed back yet
 	run(long)          // a different, longer history fills the scratch
 
-	// Poison everything a closed State handed back.
+	// Poison everything a closed instance handed back.
 	m.spareMu.Lock()
 	if m.spare == nil || m.spare.host.bh == nil {
 		m.spareMu.Unlock()
@@ -92,13 +92,13 @@ func reusedScratchGate(t *testing.T, path string) {
 		t.Fatal("no history pages were handed back to the model")
 	}
 
-	s := m.NewState(ctx)
+	s := m.NewInstance(ctx)
 	lg, err := s.Prefill(short)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if unsafe.SliceData(s.bh) != poisoned {
-		t.Fatal("the new State's prompt scratch is not the handed-back set: the reuse was not selected")
+		t.Fatal("the new session's prompt scratch is not the handed-back set: the reuse was not selected")
 	}
 	if m.kvPool.bytes >= pooled {
 		t.Fatalf("the pool still holds %d of %d bytes: the new history did not come from it", m.kvPool.bytes, pooled)

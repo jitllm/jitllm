@@ -68,7 +68,7 @@ func loadIndexer(l *layer, bi int32, cfg *Config,
 }
 
 // allocIndexer sizes the decode token's indexer buffers.
-func (s *State) allocIndexer() {
+func (s *Instance) allocIndexer() {
 	c := s.m.Cfg
 	if !c.Indexer() {
 		return
@@ -82,7 +82,7 @@ func (s *State) allocIndexer() {
 }
 
 // growIndexerRows sizes a chunk's: each row's query, weights and mask.
-func (s *State) growIndexerRows(n int) {
+func (s *Instance) growIndexerRows(n int) {
 	c := s.m.Cfg
 	if !c.Indexer() || len(s.bidxW) >= n*c.IdxHeads {
 		return

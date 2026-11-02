@@ -68,7 +68,7 @@ func TestDecodeRowTileAgreesWithPlainRows(t *testing.T) {
 		}
 		defer g.Close()
 		ids := m.Vocab.Encode(prompt, true)
-		st := m.NewState(len(ids) + n + 1)
+		st := m.NewInstance(len(ids) + n + 1)
 		defer st.Close()
 		st.SetDeviceLayers(g, -1)
 		placed := st.GPULayers()

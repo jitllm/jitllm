@@ -171,10 +171,10 @@ func (s SpecStats) TokensPerRound() float64 {
 }
 
 // Speculator drafts with a model's prediction block and verifies with the
-// trunk. It drives a single-sequence State it does not own, and a draft State
+// trunk. It drives a single-sequence instance it does not own, and a draft instance
 // over the prediction block that it does.
 type Speculator struct {
-	t, d *State
+	t, d *Instance
 	opt  specOpts
 	mode SpecRollback
 	// mtp is the prediction block's own weights; mli its block index. Both
@@ -304,7 +304,7 @@ const (
 // single sequence with no history yet, and the model must carry a prediction
 // block. A device the session is on is attached to the draft as well, so the
 // prediction block runs where the trunk does when it fits.
-func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
+func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 	m, c := s.m, s.c
 	var o specOpts
 	for _, f := range opts {
@@ -323,7 +323,7 @@ func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
 	case c.DSV4():
 		// Its prediction blocks are hyper-connected as its trunk is, and the
 		// draft path runs an ordinary block; and its pooled history folds rows
-		// in as they arrive, which State.rewind does not take back. Not
+		// in as they arrive, which Instance.rewind does not take back. Not
 		// built, so refused by name, whoever drafts.
 		return nil, fmt.Errorf("model: speculation on %s is not built", c.Arch)
 	case s.batched || s.nseq != 1:
@@ -341,7 +341,7 @@ func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
 		// where the trunk can verify, and the round's last token -- decided,
 		// not yet fed -- has its draft row at the position the trunk will feed
 		// it at, which on a full context is one past the trunk's last.
-		sp.d = m.newStateRange(1, s.maxSeq+1, c.NLayer, c.NLayer+1)
+		sp.d = m.newInstanceRange(1, s.maxSeq+1, c.NLayer, c.NLayer+1)
 		sp.d.relocate = false
 		if s.device != nil {
 			if err := sp.d.SetDevice(s.device); err != nil {
@@ -382,7 +382,7 @@ func (sp *Speculator) Limit(n int) { sp.limit = max(n, 0) }
 
 // Draft is the draft session, for its placement and counters.
 // It is nil where prompt lookup drafts.
-func (sp *Speculator) Draft() *State { return sp.d }
+func (sp *Speculator) Draft() *Instance { return sp.d }
 
 // Stats is what this Speculator has done so far.
 func (sp *Speculator) Stats() SpecStats {
@@ -504,7 +504,7 @@ func (c *Config) specHidW() int {
 }
 
 // embedSrc is a prompt's rows as the trunk's prefill reads them.
-func embedSrc(s *State, ids []int32) []func(dst []float32) error {
+func embedSrc(s *Instance, ids []int32) []func(dst []float32) error {
 	src := make([]func(dst []float32) error, len(ids))
 	for i, id := range ids {
 		id := id
@@ -598,7 +598,7 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 // embedMTP is token x's row of the table the prediction block reads: its own
 // where it carries one, the trunk's otherwise. llama.cpp's graph_mtp applies
 // no embedding scale here, and neither does this.
-func (s *State) embedMTP(dst []float32, x int32) error {
+func (s *Instance) embedMTP(dst []float32, x int32) error {
 	e := &s.m.layers[s.lo].mtp.embd
 	if int(x) < 0 || int(x) >= e.rows {
 		return errToken{x, s.c.NVocab}

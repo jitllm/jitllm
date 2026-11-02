@@ -44,7 +44,7 @@ func forwardGreedyMatches(t *testing.T, name string) {
 	run := func(greedy bool) (out []int32, served int) {
 		g := swaTier(t)
 		defer g.Close()
-		st := m.NewState(256)
+		st := m.NewInstance(256)
 		defer st.Close()
 		st.SetDevice(g)
 		// A card the desktop shares, or an iGPU's quarter of a capped host,

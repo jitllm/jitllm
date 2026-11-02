@@ -116,7 +116,7 @@ func (c TowerConfig) gridOf(h, w int) ImageGrid {
 
 // projectHunyuan is HunyuanVL's merger over a picture's raster of patch rows
 // into v.out: H*(W+1)+2 rows of ProjDim.
-func (s *State) projectHunyuan(patches []float32) ([]float32, error) {
+func (s *Instance) projectHunyuan(patches []float32) ([]float32, error) {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	h := t.hy

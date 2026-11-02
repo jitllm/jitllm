@@ -102,7 +102,7 @@ func TestVisionDecodeDoesNotAllocate(t *testing.T) {
 					// 128-position score grain over the window (decodeAllocs).
 					const warm, n = 24, 64
 					pos := SpanPositions(spans, m.Cfg.NEmbd)
-					s := m.NewState(pos + warm + n + 8)
+					s := m.NewInstance(pos + warm + n + 8)
 					defer s.Close()
 					if g != nil {
 						if err := s.SetDevice(g); err != nil {

@@ -17,7 +17,7 @@ import (
 
 // TestGenerateLogprobsAreTheModelsRawDistribution: the logprobs a generate
 // reports at every sampled token are the oracle's log-softmax of the logits
-// the model produced there, before temperature -- replayed on a fresh State of
+// the model produced there, before temperature -- replayed on a fresh instance of
 // the same model from the token ids the generate returned.
 func TestGenerateLogprobsAreTheModelsRawDistribution(t *testing.T) {
 	e, lm, _ := loadedEngine(t, smallModel, "small", LoadOptions{})
@@ -51,7 +51,7 @@ func TestGenerateLogprobsAreTheModelsRawDistribution(t *testing.T) {
 	if len(ids) != prompt {
 		t.Fatalf("the prompt encodes to %d tokens here and %d in the generate", len(ids), prompt)
 	}
-	st := lm.m.NewState(len(ids) + len(steps) + 1)
+	st := lm.m.NewInstance(len(ids) + len(steps) + 1)
 	defer st.Close()
 	logits, err := st.Prefill(ids)
 	if err != nil {

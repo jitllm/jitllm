@@ -263,12 +263,12 @@ func vmats(l *layer) []*tensor {
 // segment reads. The blocks themselves are the model's, m.layers[base,
 // base+NLayer): ordinary layers in the one block space, paged by the one pager,
 // offered through the one placement, and run by the one runner (hostRows) on a
-// State whose configuration is the segment's (cfg).
+// Instance whose configuration is the segment's (cfg).
 type Tower struct {
 	// container is the jlm the tower was read from.
 	container *jlm.File
-	// jit is the model's WithJITOptions set, so a State the tower makes on its
-	// own (no text State to share a JIT with) is configured as the text
+	// jit is the model's WithJITOptions set, so an instance the tower makes on its
+	// own (no text instance to share a JIT with) is configured as the text
 	// model's is.
 	jit []nn.Option
 	// opt points at the model's options. A pointer and not a copy, because
@@ -280,7 +280,7 @@ type Tower struct {
 	// base is the first vision block in the model's block space: the
 	// container's NBlocks, past every text and prediction block.
 	base int
-	// cfg is the segment's block geometry, the Config a vision State runs
+	// cfg is the segment's block geometry, the Config a vision instance runs
 	// with (TowerConfig.segConfig).
 	cfg *Config
 
@@ -947,10 +947,10 @@ func (t *Tower) packedWeights() error {
 }
 
 // ---------------------------------------------------------------------------
-// The forward pass: a State over the vision segment.
+// The forward pass: an instance over the vision segment.
 //
 // An image is a sequence of patch rows through the model's own runner. The
-// State that encodes it is a State like any other -- the same block body
+// Instance that encodes it is an instance like any other -- the same block body
 // (hostRows), the same JIT, the same KV pages, the same device placement --
 // over the vision blocks and with the segment's configuration. What is the
 // tower's own is the entry (patches to rows) and the head (rows to the text
@@ -958,7 +958,7 @@ func (t *Tower) packedWeights() error {
 // their piece, or on a windowed block (Qwen2.5-VL) to every row of their
 // window, rather than causally.
 
-// visRun is what an encode needs on a State beyond its blocks' scratch: the
+// visRun is what an encode needs on an instance beyond its blocks' scratch: the
 // picture's grid and window order, the entry's and the head's buffers, the
 // bidirectional attention's per-head scratch, and the tracer hooks.
 type visRun struct {
@@ -984,7 +984,7 @@ type visRun struct {
 	// block's keys are read only inside that block, so each block borrows the
 	// pair for its run and hands it on (lend, unlend).
 	kp, vp []float32
-	// ncArena is where the composer runs this State's CPU blocks: one page
+	// ncArena is where the composer runs this instance's CPU blocks: one page
 	// of the picture, in place of kp and vp.
 	ncArena
 	gather []float32
@@ -1018,8 +1018,8 @@ type visRun struct {
 	// mn is the MobileNet-V5 tower's working memory (mobilenetrun.go), nil
 	// for every other projector.
 	mn *mnRun
-	// borrowed says the JIT is a text State's (State.Vision), so
-	// closing this State leaves it.
+	// borrowed says the JIT is a text instance's (Instance.Vision), so
+	// closing this instance leaves it.
 	borrowed bool
 	// afterBlock, when set, receives the residual after each block, by its
 	// index in the segment (-1 is the entry's rows): the tower's tracer, for
@@ -1039,7 +1039,7 @@ type visRun struct {
 	// fault breaks one step on purpose, for the gates that must be seen to
 	// fail (RULE 10). Zero in every real run.
 	fault towerFault
-	// hostBlocks and devBlocks count the block runs this State has made on
+	// hostBlocks and devBlocks count the block runs this instance has made on
 	// each side, which is what a gate reads to know an encode went through
 	// the runner and the placement rather than around them.
 	hostBlocks, devBlocks int64
@@ -1070,7 +1070,7 @@ func (v *visRun) stage(name string, x []float32) {
 	}
 }
 
-// release drops the State's hold on the transient K/V pair.
+// release drops the instance's hold on the transient K/V pair.
 func (v *visRun) release() { v.kp, v.vp = nil, nil }
 
 // towerQT is the query tile the bidirectional attention asks for. Eight costs
@@ -1079,18 +1079,19 @@ func (v *visRun) release() { v.kp, v.vp = nil, nil }
 // either way.
 const towerQT = 8
 
-// newState is a State over the vision segment, for encoding pictures, on the
-// JIT j: a text State's (State.Vision), so a model has one JIT and one worker
-// pool however many segments a session runs. owned says the State closes j
+// newState is an instance over the vision segment, for encoding pictures, on the
+// JIT j: a text instance's (Instance.Vision), so a model has one JIT and one worker
+// pool however many segments a session runs. owned says the instance closes j
 // with itself. Its blocks are offered to a device through its own SetDevice,
-// which is State.SetDevice: the one placement path.
-func (t *Tower) newState(j *nn.JIT, owned bool) *State {
+// which is Instance.SetDevice: the one placement path.
+func (t *Tower) newState(j *nn.JIT, owned bool) *Instance {
 	m, c, tc := t.model, t.cfg, t.Cfg
 	n := tc.MaxSeq()
 	// relocate: a picture the device cannot hold takes tower blocks home
 	// (reserveTowerRows), as a history that does not fit takes text blocks.
-	s := &State{m: m, c: c, lo: t.base, hi: t.base + tc.NLayer,
+	s := &Instance{Session: &Session{model: m}, m: m, c: c, lo: t.base, hi: t.base + tc.NLayer,
 		maxSeq: n, reqSeq: n, nseq: 1, prof: m.opt.profile, outW: &tensor{}, relocate: true}
+	s.own = s.Session
 	s.holdCPURuns()
 	v := &visRun{t: t, attStride: nn.SoftmaxPad(n), borrowed: !owned}
 	s.vis = v
@@ -1151,9 +1152,9 @@ func (t *Tower) newState(j *nn.JIT, owned bool) *State {
 }
 
 // lend hands the transient K/V pair to block li for its run: the page every
-// vision block writes and reads in turn, allocated once per State -- the
-// arena's, where the State has one, so a composed block addresses it.
-func (s *State) lend(li int) {
+// vision block writes and reads in turn, allocated once per instance -- the
+// arena's, where the instance has one, so a composed block addresses it.
+func (s *Instance) lend(li int) {
 	v, pg := s.vis, &s.kv.layers[li]
 	if pg.p == 0 {
 		return
@@ -1169,7 +1170,7 @@ func (s *State) lend(li int) {
 }
 
 // unlend takes the pair back from block li once its attention has run.
-func (s *State) unlend(li int) {
+func (s *Instance) unlend(li int) {
 	if pg := &s.kv.layers[li]; len(pg.k) > 0 {
 		pg.k[0], pg.v[0] = nil, nil
 		pg.written = 0
@@ -1180,7 +1181,7 @@ func (s *State) unlend(li int) {
 // visWindowed reports whether vision block li attends inside windows: every
 // block but each WinPattern'th (llama.cpp: full when (il+1) % n_wa_pattern ==
 // 0), counted from the segment's first block.
-func (s *State) visWindowed(li int) bool { return s.vis.t.Cfg.windowedAt(li - s.lo) }
+func (s *Instance) visWindowed(li int) bool { return s.vis.t.Cfg.windowedAt(li - s.lo) }
 
 // windowedAt reports whether tower block i attends inside windows.
 func (c TowerConfig) windowedAt(i int) bool {
@@ -1199,9 +1200,9 @@ func (c TowerConfig) windowedAt(i int) bool {
 // Preprocess produces them, and returns their embeddings in the same order;
 // each square is its own pass through the blocks, since attention never
 // crosses a tile.
-func (s *State) Encode(px []float32) ([]float32, error) {
+func (s *Instance) Encode(px []float32) ([]float32, error) {
 	if s.vis == nil {
-		return nil, fmt.Errorf("model: Encode on a State that is not the vision segment's (State.Vision)")
+		return nil, fmt.Errorf("model: Encode on an instance that is not the vision segment's (Instance.Vision)")
 	}
 	defer s.m.enterPager()()
 	// An encode is a burst of regions: its workers park at its end.
@@ -1210,7 +1211,7 @@ func (s *State) Encode(px []float32) ([]float32, error) {
 }
 
 // encode is Encode for a caller that holds the pager (enterPager).
-func (s *State) encode(px []float32) ([]float32, error) {
+func (s *Instance) encode(px []float32) ([]float32, error) {
 	c := s.vis.t.Cfg
 	if c.Dynamic() {
 		gh, gw := s.patchGrid()
@@ -1236,7 +1237,7 @@ func (s *State) encode(px []float32) ([]float32, error) {
 }
 
 // encodeOne is Encode for one square.
-func (s *State) encodeOne(px []float32) ([]float32, error) {
+func (s *Instance) encodeOne(px []float32) ([]float32, error) {
 	side := s.vis.t.Cfg.ImageSz / s.vis.t.Cfg.PatchSz
 	return s.encodeGrid(px, side, side)
 }
@@ -1245,13 +1246,13 @@ func (s *State) encodeOne(px []float32) ([]float32, error) {
 // (gh*PatchSz) x (gw*PatchSz) pixels, [y][x][channel]. Only a tower whose
 // position table is read by bucket (TowerConfig.PosBuckets) or whose grid
 // follows the picture takes a grid other than its square one.
-func (s *State) EncodeGrid(px []float32, gh, gw int) ([]float32, error) {
+func (s *Instance) EncodeGrid(px []float32, gh, gw int) ([]float32, error) {
 	defer s.m.enterPager()()
 	return s.encodeGrid(px, gh, gw)
 }
 
 // encodeGrid is EncodeGrid for a caller that holds the pager.
-func (s *State) encodeGrid(px []float32, gh, gw int) ([]float32, error) {
+func (s *Instance) encodeGrid(px []float32, gh, gw int) ([]float32, error) {
 	if err := s.encodeBegin(px, gh, gw); err != nil {
 		return nil, err
 	}
@@ -1265,9 +1266,9 @@ func (s *State) encodeGrid(px []float32, gh, gw int) ([]float32, error) {
 // encodeBegin is an encode's first part: the picture's rows, out of the
 // entry (the patch embedding, the class row, the positions, the pre-norm)
 // into s.bx, and the encode in progress set to its first block.
-func (s *State) encodeBegin(px []float32, gh, gw int) error {
+func (s *Instance) encodeBegin(px []float32, gh, gw int) error {
 	if s.vis == nil {
-		return fmt.Errorf("model: EncodeGrid on a State that is not the vision segment's")
+		return fmt.Errorf("model: EncodeGrid on an instance that is not the vision segment's")
 	}
 	v := s.vis
 	t, c := v.t, v.t.Cfg
@@ -1339,7 +1340,7 @@ func (s *State) encodeBegin(px []float32, gh, gw int) error {
 
 // entryRows is the rows entering the tower's first block, main's way:
 // the n rows of s.bx, the patches from row first, the class row at cls.
-func (s *State) entryRows(px []float32, gh, gw, n, first, cls int) error {
+func (s *Instance) entryRows(px []float32, gh, gw, n, first, cls int) error {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	E := c.NEmbd
@@ -1460,7 +1461,7 @@ type encodeProg struct {
 // body, the residual crossing once per seam. Where a block runs is decided
 // when it runs: a block the placement moved between two calls runs where it
 // went.
-func (s *State) encodeBlocks(max int) (bool, error) {
+func (s *Instance) encodeBlocks(max int) (bool, error) {
 	v := s.vis
 	p, c := &v.prog, v.t.Cfg
 	if !p.on {
@@ -1572,7 +1573,7 @@ func (s *State) encodeBlocks(max int) (bool, error) {
 // picture too large for what is left of the card encodes on the host rather
 // than out of memory -- and come back through reclaim when the device
 // reports room.
-func (s *State) reserveTowerRows(n int) {
+func (s *Instance) reserveTowerRows(n int) {
 	rr, ok := s.ld.(nn.RowsReserver)
 	if !ok || s.devCount() == 0 {
 		return
@@ -1581,9 +1582,9 @@ func (s *State) reserveTowerRows(n int) {
 }
 
 // encodeFinish runs the head over the encode whose blocks have all run: the
-// post-LayerNorm and the projector. The rows are this State's own buffer,
+// post-LayerNorm and the projector. The rows are this instance's own buffer,
 // which the next encode overwrites.
-func (s *State) encodeFinish() ([]float32, error) {
+func (s *Instance) encodeFinish() ([]float32, error) {
 	v := s.vis
 	p, t, c := v.prog, v.t, v.t.Cfg
 	v.prog = encodeProg{}
@@ -1632,9 +1633,9 @@ func (s *State) encodeFinish() ([]float32, error) {
 	return v.out[:len(out)*(1+len(c.Deep))], nil
 }
 
-// growVision sizes the State's block scratch for n rows of the segment. The
-// text State's spare buffers are another shape, so none are taken.
-func (s *State) growVision(n int) {
+// growVision sizes the instance's block scratch for n rows of the segment. The
+// text instance's spare buffers are another shape, so none are taken.
+func (s *Instance) growVision(n int) {
 	c := s.c
 	if len(s.bx) < n*c.NEmbd {
 		s.bx = make([]float32, n*c.NEmbd)
@@ -1644,7 +1645,7 @@ func (s *State) growVision(n int) {
 }
 
 // visPrepRows is rows lo..hi-1 of visPrep.
-func (s *State) visPrepRows(lo, hi int) {
+func (s *Instance) visPrepRows(lo, hi int) {
 	c, li := s.c, s.rg.rows.li
 	hd, qDim, kvDim := c.HeadDimAt(li), c.QDimAt(li), c.KVDimAt(li)
 	pg := &s.kv.layers[li]
@@ -1681,7 +1682,7 @@ func (s *State) visPrepRows(lo, hi int) {
 
 // visAttendHead is one head's attention for the queries [w0, w1) over the
 // keys [w0, w1).
-func (s *State) visAttendHead(li, h, w0, w1 int, scale float32) {
+func (s *Instance) visAttendHead(li, h, w0, w1 int, scale float32) {
 	c, v := s.c, s.vis
 	m := w1 - w0
 	qd := c.NHead * c.HeadDim
@@ -1758,7 +1759,7 @@ func (s *State) visAttendHead(li, h, w0, w1 int, scale float32) {
 // project runs the projector over one picture's patch rows, [Patches][NEmbd]
 // with the class row already dropped. It is the end of EncodeGrid and its own
 // method so a gate can hold it to the reference on inputs of its choosing.
-func (s *State) project(patches []float32) ([]float32, error) {
+func (s *Instance) project(patches []float32) ([]float32, error) {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	if out, why := s.cpuProject(patches); why == jit.DeclineServes {
@@ -1901,13 +1902,13 @@ func (t *Tower) projAct() nn.ActKind {
 
 // visNorm applies the tower's norm -- a LayerNorm, or an RMSNorm on a tower
 // whose blocks carry them (TowerConfig.RMS) -- to each of n rows, on the pool.
-func (s *State) visNorm(y, x, w, b []float32, n int) {
+func (s *Instance) visNorm(y, x, w, b []float32, n int) {
 	c := s.vis.t.Cfg
 	s.normRows(y, x, w, b, c.NEmbd, n, !c.RMS, c.Eps, s.rowChunk(n, c.NEmbd))
 }
 
 // visBiasRows adds b to each of n rows of width len(b), the rows on the pool.
-func (s *State) visBiasRows(out, b []float32, n int) {
+func (s *Instance) visBiasRows(out, b []float32, n int) {
 	if b == nil {
 		return
 	}
@@ -1918,7 +1919,7 @@ func (s *State) visBiasRows(out, b []float32, n int) {
 // the sum of each Scale x Scale block of patch rows, one multiply by
 // 1/Scale^2 (exact: a power of two), which is ggml's pool_2d order, then the
 // RMSNorm.
-func (s *State) poolRows(lo, hi int) {
+func (s *Instance) poolRows(lo, hi int) {
 	j, v := &s.rg.rows, s.vis
 	t, c := v.t, v.t.Cfg
 	w, side := j.dim, j.side
@@ -1961,7 +1962,7 @@ func elemChunk(items, workers int) int {
 
 // rowChunk is elemChunk for a loop whose unit is a ROW of `width` elements:
 // 1024 rows at chunk 1 is 1024 atomic claims around one kernel call each.
-func (s *State) rowChunk(rows, width int) int {
+func (s *Instance) rowChunk(rows, width int) int {
 	if !s.worthPooling(rows * width) {
 		return rows // one chunk: the pool runs it on the caller
 	}
@@ -1973,7 +1974,7 @@ func (s *State) rowChunk(rows, width int) int {
 // region dispatch of ~3 us and a speedup of ~3 that is ~4.5 us of serial work,
 // expressed in elements at a conservative streaming rate. It reads the model's
 // WithTowerTiling.
-func (s *State) worthPooling(elems int) bool {
+func (s *Instance) worthPooling(elems int) bool {
 	if !s.m.opt.elemPool {
 		return false
 	}
@@ -1982,17 +1983,17 @@ func (s *State) worthPooling(elems int) bool {
 	return elems >= crossoverUs*elemsPerUs
 }
 
-// Regions reports how many elementwise/matmul passes this State dispatched to
+// Regions reports how many elementwise/matmul passes this instance dispatched to
 // the pool and how many ran inline, which is what prices a dispatch-bound
 // encode. See sched.Pool.Regions.
-func (s *State) Regions() (parallel, serial int64) { return s.jit.Regions() }
+func (s *Instance) Regions() (parallel, serial int64) { return s.jit.Regions() }
 
 // ResetRegions zeroes the counters so a measurement can exclude the warm-up
 // encode, which pays for codegen and first-touch faults that no later one does.
-func (s *State) ResetRegions() { s.jit.ResetRegions() }
+func (s *Instance) ResetRegions() { s.jit.ResetRegions() }
 
-// GPUBlocks is how many of this State's blocks a device took.
-func (s *State) GPUBlocks() int { return s.devCount() }
+// GPUBlocks is how many of this instance's blocks a device took.
+func (s *Instance) GPUBlocks() int { return s.devCount() }
 
 // towerRope is the ViT's 2-D rotary as a multi-axis table (nn.Rope.Runs): a
 // half-head rotary whose HeadDim/4 frequencies turn the first quarter of a
@@ -2021,7 +2022,7 @@ func (c TowerConfig) towerRope() nn.Rope {
 // (grid row, grid column) on towerRope's two axes -- built once per grid by
 // the generated table kernel. The text block's rotation turns q and k by it
 // (attnPrep) on the host, and the device by the same rows (Layers' cs).
-func (s *State) visRope(n int) []float32 {
+func (s *Instance) visRope(n int) []float32 {
 	v := s.vis
 	c := v.t.Cfg
 	gh, gw := s.patchGrid()
@@ -2062,7 +2063,7 @@ func (s *State) visRope(n int) []float32 {
 // one, a per-row rotary (NRot over Layers' cs) or none -- and NonCausal, so a
 // call over the block is the picture's rows as one run, its windowed blocks
 // inside the windows the call was handed (nn.KeyRunDevice).
-func (s *State) visPlan(li int) *nn.LayerPlan {
+func (s *Instance) visPlan(li int) *nn.LayerPlan {
 	c, tc := s.c, s.vis.t.Cfg
 	l := &s.m.layers[li]
 	plan := &nn.LayerPlan{
@@ -2103,7 +2104,7 @@ func (s *State) visPlan(li int) *nn.LayerPlan {
 }
 
 // visWeights is vision block li's weights for a device.
-func (s *State) visWeights(li int) nn.LayerWeights {
+func (s *Instance) visWeights(li int) nn.LayerWeights {
 	l := &s.m.layers[li]
 	w := nn.LayerWeights{
 		AttnNorm: l.attnNorm, AttnNormB: l.attnNormB,
@@ -2126,11 +2127,11 @@ func (s *State) visWeights(li int) nn.LayerWeights {
 	return w
 }
 
-// Vision is the State this session encodes pictures in: a State over the
-// model's vision segment, on this State's JIT and pool, its blocks offered to
-// this State's device through the one placement path (State.SetDevice). It is
-// made on first use and closed with this State.
-func (s *State) Vision() (*State, error) {
+// Vision is the instance this session encodes pictures in: an instance over the
+// model's vision segment, on this instance's JIT and pool, its blocks offered to
+// this instance's device through the one placement path (Instance.SetDevice). It is
+// made on first use and closed with this Instance.
+func (s *Instance) Vision() (*Instance, error) {
 	if s.vis != nil {
 		return s, nil
 	}
@@ -2155,7 +2156,7 @@ func (s *State) Vision() (*State, error) {
 // row-chunked because the whole picture's did not fit (nn.RowChunker) --
 // block by block, every chunk's phase 1 before any chunk's phase 2. x and cs
 // are the picture's rows; cs may be nil (a tower with no rotary).
-func (s *State) towerLayers(li, hi, n int, x, cs []float32) bool {
+func (s *Instance) towerLayers(li, hi, n int, x, cs []float32) bool {
 	rc, ok := s.ld.(nn.RowChunker)
 	c := 0
 	if ok {
@@ -2195,7 +2196,7 @@ func (s *State) towerLayers(li, hi, n int, x, cs []float32) bool {
 
 // towerChunkX is phase 1's scratch for one chunk's rows, kept on the vision
 // segment so a warm encode allocates nothing.
-func (s *State) towerChunkX(n int) []float32 {
+func (s *Instance) towerChunkX(n int) []float32 {
 	if cap(s.vis.chunkX) < n {
 		s.vis.chunkX = make([]float32, n)
 	}

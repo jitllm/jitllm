@@ -10,7 +10,7 @@ import (
 
 // TestDecisionBatchOfOnePromptRunsAlone sends a batch of one request with one
 // question -- what a server's lone request is -- and holds it to Decide's
-// answer, run on the Decider's own State: the batch session takes no step. A
+// answer, run on the Decider's own instance: the batch session takes no step. A
 // lone prompt stepped through the batch session reads every logit of its row
 // back where Decide reads the labels' alone, and on the V100 that put lev's
 // /v1/systemone p50 at 84 ms against Decide's 42. The violation runs it as a

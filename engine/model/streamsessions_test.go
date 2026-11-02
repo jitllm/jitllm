@@ -14,9 +14,9 @@ import (
 // TestManySessionsStreamTheirHistory is a server's step loop in miniature,
 // the shape that crashed jitllmd at 64 concurrent requests on a V100: many
 // sessions stepping together through StepRuns on one device whose KV budget
-// their histories outgrow, requests finishing and their pooled States reset
+// their histories outgrow, requests finishing and their pooled instances reset
 // and taking a new prompt while the others decode, relocation on. Pages go
-// home and stream back under every mix of joint steps, one-State calls,
+// home and stream back under every mix of joint steps, one-instance calls,
 // blocks moving and sequences restarting lower than their evicted history.
 //
 // Every request is then replayed alone on the same tier with the budget
@@ -66,7 +66,7 @@ func manySessionsStream(t *testing.T, m *Model, spec string) {
 	words := strings.Repeat("The clerk counted barrels of salt on the upper floor while rain fell. ", 60)
 	all := m.Vocab.Encode(words, true)
 	type live struct {
-		st   *State
+		st   *Instance
 		next int32
 		left int
 		req  *streamReq
@@ -77,7 +77,7 @@ func manySessionsStream(t *testing.T, m *Model, spec string) {
 			done = append(done, l.req)
 		}
 		if l.st == nil {
-			l.st = m.NewState(seq)
+			l.st = m.NewInstance(seq)
 			if err := l.st.SetDevice(g); err != nil {
 				t.Fatal(err)
 			}
@@ -85,7 +85,7 @@ func manySessionsStream(t *testing.T, m *Model, spec string) {
 		} else {
 			l.st.Reset()
 		}
-		// Each prompt starts at its own word, so a request reusing a State
+		// Each prompt starts at its own word, so a request reusing an instance
 		// writes rows that differ from the history it left: a stale page reads
 		// as another text, not the same one.
 		off := 1 + (k*7)%13
@@ -114,9 +114,9 @@ func manySessionsStream(t *testing.T, m *Model, spec string) {
 	for step := 0; step < steps; step++ {
 		runs := make([]Run, n)
 		for k, s := range ss {
-			runs[k] = Run{State: s.st, Tokens: []int32{s.next}, Logits: true}
+			runs[k] = Run{Instance: s.st, Tokens: []int32{s.next}, Logits: true}
 		}
-		// A step the device refuses runs its rows one State at a time, as
+		// A step the device refuses runs its rows one instance at a time, as
 		// the server's step loop does.
 		out, err := StepRuns(runs)
 		if err != nil {
@@ -154,7 +154,7 @@ func manySessionsStream(t *testing.T, m *Model, spec string) {
 	if _, err := g.SetBudget(before.BudgetUsed + 1<<30); err != nil {
 		t.Fatal(err)
 	}
-	alone := m.NewState(seq)
+	alone := m.NewInstance(seq)
 	defer alone.Close()
 	if err := alone.SetDevice(g); err != nil {
 		t.Fatal(err)

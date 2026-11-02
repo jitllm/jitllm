@@ -83,7 +83,7 @@ var phi4PosTransposed, phi4NoResize, phi4Bicubic bool
 // separable, PyTorch's antialiasing taps in float, each sum a generated axpy
 // over a whole row of channels. Kept for the last grid, so a second picture
 // of the same size allocates nothing.
-func (s *State) phi4Table(gh, gw int) []float32 {
+func (s *Instance) phi4Table(gh, gw int) []float32 {
 	v := s.vis
 	if phi4NoResize {
 		return v.t.posW

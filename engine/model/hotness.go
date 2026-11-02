@@ -21,7 +21,7 @@ type Hotness struct {
 	overflow bool
 }
 
-func (s *State) initHotness() {
+func (s *Instance) initHotness() {
 	c := s.c
 	if !c.MoE() {
 		return
@@ -85,7 +85,7 @@ func (h *Hotness) layer(li int) []uint32 {
 // The token count is returned so the caller can decide how much evidence it
 // wants: over one token every selected expert reads 1.0, a confident and
 // nearly worthless profile.
-func (s *State) ExpertUses() (uses []float64, tokens int) {
+func (s *Instance) ExpertUses() (uses []float64, tokens int) {
 	h := s.hot
 	if h == nil || h.tokens == 0 {
 		return nil, 0

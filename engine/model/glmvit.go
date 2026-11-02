@@ -112,7 +112,7 @@ func (t *Tower) loadGLM4V(c0 *jlm.File, get func(jlm.Role, int32) (tensor, error
 // projectGLM is GLM-4.xV's projector over one picture's patch rows (the
 // post-norm already applied): the 2x2 merge, linear, LayerNorm, GELU and the
 // gated MLP, into v.out.
-func (s *State) projectGLM(patches []float32) ([]float32, error) {
+func (s *Instance) projectGLM(patches []float32) ([]float32, error) {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	g := t.glm

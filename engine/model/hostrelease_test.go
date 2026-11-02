@@ -38,7 +38,7 @@ func TestPlacedBlocksGiveTheirHostPagesBack(t *testing.T) {
 				noDevice(t, "device", err)
 			}
 			defer g.Close()
-			st := m.NewState(64)
+			st := m.NewInstance(64)
 			defer st.Close()
 			st.SetDevice(g)
 			if st.GPULayers() != m.Cfg.NLayer {

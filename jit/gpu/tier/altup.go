@@ -28,7 +28,7 @@ import (
 //	         the scale; AltUpFinish adds it to every other stream into bs.x
 //
 // The head reads the streams' mean, which the host takes: Layers never folds
-// the head into an AltUp submission (the State calls the head alone).
+// the head into an AltUp submission (the instance calls the head alone).
 
 // streamRows copies a residual of `from` rows into one of `to` rows: the
 // first min(to, from) rows of every stream, each stream at its own row count

@@ -87,7 +87,7 @@ func batchAloneGate(t *testing.T, env, def, kind string, is func(Config) bool, e
 			continue
 		}
 		g := swaTier(t)
-		st := m.NewState(seq)
+		st := m.NewInstance(seq)
 		st.SetDevice(g)
 		if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
 			t.Fatalf("solo: placed %d of %d blocks: %q", st.GPULayers(), m.Cfg.NLayer, g.Err())
@@ -115,7 +115,7 @@ func batchAloneGate(t *testing.T, env, def, kind string, is func(Config) bool, e
 	}
 	for j := 0; j < len(after) && !exact; j++ {
 		if after[j] != want[0][j] {
-			t.Fatalf("a single State after the batch, token %d: %d, alone %d\ngot  %v\nwant %v",
+			t.Fatalf("a single instance after the batch, token %d: %d, alone %d\ngot  %v\nwant %v",
 				j, after[j], want[0][j], after, want[0])
 		}
 	}

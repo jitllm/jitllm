@@ -135,7 +135,7 @@ func TestMiniMaxM3FeaturesAreLoadBearing(t *testing.T) {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()
-					st := m.NewState(len(g.IDs) + 1)
+					st := m.NewInstance(len(g.IDs) + 1)
 					defer st.Close()
 					worst := 0.0
 					for p, id := range g.IDs {

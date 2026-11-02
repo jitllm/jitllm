@@ -364,7 +364,7 @@ func checkDecisions(t *testing.T, qs []DecisionQuestion, ans []DecisionAnswer, g
 	t.Logf("worst difference from llama.cpp: %.5f", worst)
 }
 
-// TestDecisionPicksOnTheCPU holds the host's label pick (State.pickOnHost):
+// TestDecisionPicksOnTheCPU holds the host's label pick (Instance.pickOnHost):
 // each decoder readout's prompts project the labels' rows alone on the host
 // (counted, so a pick that never ran is a failure), its answers are the whole
 // head's within the matvec's reduction order, and a pick one row past each

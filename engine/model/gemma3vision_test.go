@@ -202,7 +202,7 @@ func TestBidirRunIsNeverCut(t *testing.T) {
 		if len(pre)%64 == 0 {
 			t.Fatalf("the image starts on a chunk boundary (%d): nothing would cut it", len(pre))
 		}
-		s := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + 1)
+		s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + 1)
 		defer s.Close()
 		s.bidirCutFault = cut
 		lg, err := s.PrefillMixed(spans...)

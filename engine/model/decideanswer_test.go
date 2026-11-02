@@ -31,7 +31,7 @@ func answerGate(t *testing.T, violation string) int {
 		t.Fatal("no code generator on this host")
 	}
 	defer j.Close()
-	// A State for the composed argmax the answer picks with.
+	// An instance for the composed argmax the answer picks with.
 	path, ok := existingModel(models["stories260K"])
 	if !ok {
 		t.Fatalf("model not present: %s (nor its container)", models["stories260K"])
@@ -41,7 +41,7 @@ func answerGate(t *testing.T, violation string) int {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	st := m.NewState(8)
+	st := m.NewInstance(8)
 	defer st.Close()
 	const guard = 64
 	sentinel := float32(math.NaN())

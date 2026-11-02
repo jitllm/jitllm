@@ -9,7 +9,7 @@ import (
 
 // Backend is everything the two HTTP compatibility shims are allowed to use.
 // Keeping it this narrow keeps them adapters (they cannot reach a
-// model.State), and lets tests script a token stream to gate SSE framing,
+// model.Instance), and lets tests script a token stream to gate SSE framing,
 // stop strings and flushing without loading a model.
 type Backend interface {
 	// Generate is the one generate path. Both shims call this and nothing else

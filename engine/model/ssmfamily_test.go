@@ -202,8 +202,8 @@ func TestSSDFeaturesAreLoadBearing(t *testing.T) {
 			defer m.Close()
 			// refused is the error a violation's run stopped at, by name.
 			var refused error
-			worst := func(between func(st *State)) float64 {
-				st := m.NewState(len(g.IDs) + 1)
+			worst := func(between func(st *Instance)) float64 {
+				st := m.NewInstance(len(g.IDs) + 1)
 				defer st.Close()
 				w := 0.0
 				for p, id := range g.IDs {
@@ -236,7 +236,7 @@ func TestSSDFeaturesAreLoadBearing(t *testing.T) {
 				check(v.name, worst(nil))
 				undo()
 			}
-			check("the convolution window not carried", worst(func(st *State) {
+			check("the convolution window not carried", worst(func(st *Instance) {
 				for _, r := range st.rconv {
 					clear(r)
 				}
@@ -244,7 +244,7 @@ func TestSSDFeaturesAreLoadBearing(t *testing.T) {
 			if m.Cfg.ShortConv() {
 				return // the window is a short convolution's only state
 			}
-			check("the state not carried", worst(func(st *State) {
+			check("the state not carried", worst(func(st *Instance) {
 				for _, r := range st.rstate {
 					clear(r)
 				}

@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
-// Clef's head on a device (nn.ClefHeadDevice): when the State's output
+// Clef's head on a device (nn.ClefHeadDevice): when the instance's output
 // projection is on a device -- every block placed there -- the head follows
 // it. The rows the prefill handed over go up whole, with the request's
 // pooling rows, option owners, type rows, mask and each option's lexical mean
@@ -59,7 +59,7 @@ func (m *Model) clefDevHead() *nn.ClefHead {
 	return dh
 }
 
-// clefOnDevice runs the head on the State's device when its output
+// clefOnDevice runs the head on the instance's device when its output
 // projection is there. ok false with no error: the host runs it.
 func (d *Decider) clefOnDevice(p *clefPrompt, out []float32) (bool, error) {
 	s := d.st

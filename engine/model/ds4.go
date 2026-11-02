@@ -392,7 +392,7 @@ func loadDS4Head(m *Model, cfg *Config, get func(jlm.Role, int32, int32) (tensor
 	return nil
 }
 
-// ds4Scratch is a State's DeepSeek V4 buffers: per row of a call (grown to the
+// ds4Scratch is a instance's DeepSeek V4 buffers: per row of a call (grown to the
 // widest call, so a warm decode token and a warm step allocate nothing) and
 // per attention row.
 type ds4Scratch struct {
@@ -426,8 +426,8 @@ type ds4Scratch struct {
 	attn, idxAttn *nn.AttnSet
 }
 
-// allocDS4 sizes a State's DeepSeek V4 buffers for one row, and its streams.
-func (s *State) allocDS4() {
+// allocDS4 sizes a instance's DeepSeek V4 buffers for one row, and its streams.
+func (s *Instance) allocDS4() {
 	c := s.m.Cfg
 	if !c.DSV4() {
 		return
@@ -486,7 +486,7 @@ func (s *State) allocDS4() {
 }
 
 // growDS4 sizes the per-row buffers for n rows.
-func (s *State) growDS4(n int) {
+func (s *Instance) growDS4(n int) {
 	c, g := s.m.Cfg, s.ds
 	if g == nil || g.rows >= n {
 		return
@@ -510,7 +510,7 @@ func (s *State) growDS4(n int) {
 }
 
 // ds4Expand copies each row's embedding (stream 0) into the other streams.
-func (s *State) ds4Expand(x []float32, rows int) {
+func (s *Instance) ds4Expand(x []float32, rows int) {
 	if s.cpuExpand(x, rows) == jit.DeclineServes {
 		return
 	}
@@ -524,7 +524,7 @@ func (s *State) ds4Expand(x []float32, rows int) {
 }
 
 // hcCollapse writes sum_k pre[k] * stream k of flat into dst.
-func (s *State) hcCollapse(dst, flat, pre []float32) {
+func (s *Instance) hcCollapse(dst, flat, pre []float32) {
 	d := len(dst)
 	clear(dst)
 	for k := range pre {
@@ -534,7 +534,7 @@ func (s *State) hcCollapse(dst, flat, pre []float32) {
 
 // ds4Collapse is the head's stream collapse for n rows of x, written into
 // stream 0 of each row, where the output norm reads it.
-func (s *State) ds4Collapse(x []float32, n int) error {
+func (s *Instance) ds4Collapse(x []float32, n int) error {
 	c, g, hd := s.m.Cfg, s.ds, s.m.ds4Head
 	h, d := c.HCMult, c.NEmbd
 	if c.ds4Fault != ds4FaultHeadMean && s.cpuCollapse(x, n) == jit.DeclineServes {

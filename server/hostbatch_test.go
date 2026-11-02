@@ -267,7 +267,7 @@ func sampledBatchParts(t *testing.T, name string) (int, []int32, []int32) {
 }
 
 // TestHostBatchLongPromptTakesItsPipelinedChunk: a long prompt admitted while
-// two rows decode, on a State whose prefill pipelines (here told so: chunkOf
+// two rows decode, on an instance whose prefill pipelines (here told so: chunkOf
 // reports a pipelined chunk wider than the step's budget), runs as pipelined
 // chunks beside the joint step rather than cut at the budget -- counted, one
 // chunk for a prompt the budget cuts into several -- and every row still

@@ -42,7 +42,7 @@ func specKeepsTheDistribution(t *testing.T, m *Model, temp, topP float64) {
 		return &Sampler{Temp: temp, TopK: topK, TopP: topP, Seed: seed}
 	}
 	plain := func(seed int64) []int32 {
-		st := m.NewState(len(prompt) + 8)
+		st := m.NewInstance(len(prompt) + 8)
 		defer st.Close()
 		sm := samp(seed)
 		lg, err := st.Prefill(prompt)
@@ -69,7 +69,7 @@ func specKeepsTheDistribution(t *testing.T, m *Model, temp, topP float64) {
 	// acceptance ratio and residual decide the third token -- the one a
 	// violation must move.
 	trunkAfter := func(ctx []int32) []float32 {
-		st := m.NewState(len(prompt) + len(ctx) + 2)
+		st := m.NewInstance(len(prompt) + len(ctx) + 2)
 		defer st.Close()
 		lg, err := st.Prefill(append(append([]int32(nil), prompt...), ctx...))
 		if err != nil {
@@ -78,7 +78,7 @@ func specKeepsTheDistribution(t *testing.T, m *Model, temp, topP float64) {
 		return append([]float32(nil), lg...)
 	}
 	spec := func(seed int64, fault specFault) ([]int32, SpecStats) {
-		st := m.NewState(len(prompt) + 16)
+		st := m.NewInstance(len(prompt) + 16)
 		defer st.Close()
 		sp, err := st.Speculate(WithSpecDraft(2))
 		if err != nil {

@@ -171,7 +171,7 @@ func TestJanusOnDeviceMatchesHost(t *testing.T) {
 			n := visNMSE(t, "embeddings", got, want)
 			// One block alone, where both tiers' int8 roundings have not yet
 			// compounded: the bound that sees a wrong graph (vision_test.go's).
-			after0 := func(s *State) []float32 {
+			after0 := func(s *Instance) []float32 {
 				var x0 []float32
 				s.vis.afterBlock = func(li int, x []float32) {
 					if li == 0 && x0 == nil {
@@ -230,7 +230,7 @@ func TestJanusDescribesAnImage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		st := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + 48)
+		st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + 48)
 		defer st.Close()
 		logits, err := st.PrefillMixed(spans...)
 		if err != nil {

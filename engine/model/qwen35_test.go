@@ -20,7 +20,7 @@ func TestHybridDecodeIsCaptured(t *testing.T) {
 		t.Skipf("no cuda device: %v", err)
 	}
 	defer g.Close()
-	s := m.NewState(32)
+	s := m.NewInstance(32)
 	defer s.Close()
 	s.SetDeviceLayers(g, m.Cfg.NLayer)
 	if s.GPULayers() != m.Cfg.NLayer {
@@ -71,7 +71,7 @@ func TestDeltaKeyTiledIsTheDeltaRulesPairing(t *testing.T) {
 	}
 
 	run := func(m *Model) [][]float32 {
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		defer s.Close()
 		var out [][]float32
 		for _, id := range []int32{1, 2, 3, 4, 5} {

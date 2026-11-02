@@ -129,7 +129,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				if !anyPackedBlock(mn) {
 					t.Skip("every block weight is float: there is no fused packed matvec to run node-affine")
 				}
-				s := mn.NewState(8)
+				s := mn.NewInstance(8)
 				nodes, _ := s.jit.NUMA()
 				s.Close()
 				if nodes < 2 {
@@ -224,7 +224,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer m.ClearKVF16()
-				s := m.NewState(8)
+				s := m.NewInstance(8)
 				q8 := s.KVType() == KVQ8_0
 				s.Close()
 				if !q8 {
@@ -312,7 +312,7 @@ func TestLongDecodeDoesNotAllocate(t *testing.T) {
 	// Past four pages, and short of the next page boundary over the window so
 	// no page is committed inside it.
 	const ctx, warm, n = 5*kvPageTarget + 16, 16, 64
-	s := m.NewState(ctx + warm + n + 8)
+	s := m.NewInstance(ctx + warm + n + 8)
 	defer s.Close()
 	ids := make([]int32, ctx)
 	for i := range ids {
@@ -369,7 +369,7 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 	toks := make([][]int32, len(prompts))
 	for i, pr := range prompts {
 		ids := m.Vocab.Encode(pr, true)
-		st := m.NewState(len(ids) + chunk*(warm+n) + 8)
+		st := m.NewInstance(len(ids) + chunk*(warm+n) + 8)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -389,7 +389,7 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 			k, logits = chunk, false
 		}
 		toks[i] = make([]int32, k)
-		runs = append(runs, Run{State: st, Tokens: toks[i], Logits: logits})
+		runs = append(runs, Run{Instance: st, Tokens: toks[i], Logits: logits})
 	}
 	if mode == stepSolo {
 		runs = runs[:1]
@@ -407,15 +407,15 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 	for k := range warm {
 		step(k)
 	}
-	// The placement is checked again after the warm-up: a State whose
+	// The placement is checked again after the warm-up: an instance whose
 	// history outgrew what the card had left hands its blocks home
 	// (SetRelocate), which is the answer a too-small card gives, not a
 	// failure of the step -- but it is said, with what moved.
 	if mode != stepSolo {
 		for k, r := range runs {
-			if err := r.State.StepRefusal(); err != nil && r.State.Relocations() > 0 {
+			if err := r.Instance.StepRefusal(); err != nil && r.Instance.Relocations() > 0 {
 				t.Skipf("CARD TOO SMALL after the warm-up: run %d moved %d block(s) home (%v), so the "+
-					"step cannot be joint -- this arm proved nothing", k, r.State.Relocations(), err)
+					"step cannot be joint -- this arm proved nothing", k, r.Instance.Relocations(), err)
 			}
 		}
 	}
@@ -453,8 +453,8 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 		if got := d1[i].SessionRows - d0[i].SessionRows; got != w {
 			why := make([]string, len(runs))
 			for k, r := range runs {
-				why[k] = fmt.Sprint(r.State.StepRefusal())
-				if k > 0 && r.State.ldCand != runs[0].State.ldCand {
+				why[k] = fmt.Sprint(r.Instance.StepRefusal())
+				if k > 0 && r.Instance.ldCand != runs[0].Instance.ldCand {
 					why[k] += " (another device candidate than run 0's)"
 				}
 			}
@@ -476,14 +476,14 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 		m.container.Reads()-r0, g.Stats().Captures-c0.Captures)
 }
 
-// decodeAllocs decodes warm tokens on a fresh State -- on g when it is not
+// decodeAllocs decodes warm tokens on a fresh instance -- on g when it is not
 // nil -- and fails on any heap allocation a token makes. It returns what the
 // host ran in the window, for an arm's selection check.
 // greedyAllocs is decodeAllocs's window decoded by ForwardGreedy, the token
 // selected on the device: a warm one allocates nothing.
 func greedyAllocs(t *testing.T, m *Model, g *tier.GPU) {
 	const warm, n = 160, 64
-	s := m.NewState(warm + n + 8)
+	s := m.NewInstance(warm + n + 8)
 	defer s.Close()
 	if err := s.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -518,7 +518,7 @@ func sampledAllocs(t *testing.T, m *Model, g *tier.GPU) {
 	was := m.opt.devSample
 	m.opt.devSample = DeviceSampleOn
 	defer func() { m.opt.devSample = was }()
-	s := m.NewState(warm + n + 8)
+	s := m.NewInstance(warm + n + 8)
 	defer s.Close()
 	if err := s.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -560,7 +560,7 @@ func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
 	// short of position 256, where the host's KV cache commits its next page:
 	// growth, paid once per page of context, not per token.
 	const warm, n = 160, 64
-	s := m.NewState(warm + n + 8)
+	s := m.NewInstance(warm + n + 8)
 	defer s.Close()
 	if g != nil {
 		if err := s.SetDevice(g); err != nil {
@@ -882,7 +882,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 					}
 					// The selection check, on a state of its own: the windows'
 					// states are gone and their counts with them.
-					st := m.NewState(8)
+					st := m.NewInstance(8)
 					defer st.Close()
 					st.SetDeviceLayers(g, m.Cfg.NLayer)
 					s0 := g.Stats()
@@ -957,7 +957,7 @@ func TestPagedDecodeDoesNotAllocate(t *testing.T) {
 			}
 			defer m.Close()
 			const warm, n = 32, 32
-			s := m.NewState(warm + n + 8)
+			s := m.NewInstance(warm + n + 8)
 			defer s.Close()
 			for i := range warm {
 				if _, err := s.Forward(int32(5 + i)); err != nil {

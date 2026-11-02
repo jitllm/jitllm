@@ -134,7 +134,7 @@ func align(n, to int) int {
 	return ((n + to - 1) / to) * to
 }
 
-// kvPages is one layer's paged history for one State.
+// kvPages is one layer's paged history for one Instance.
 //
 // A page holds every sequence slot, laid out as the flat cache was with maxSeq
 // replaced by P, so kvLayout addresses within a page unchanged.
@@ -157,12 +157,12 @@ type kvPages struct {
 	// would store those zeros as history.
 	written int
 	// out[n] marks a page trim evicted with history still in it. A write into
-	// it faults it back first (State.kvWritable): in a batch the page holds
+	// it faults it back first (Instance.kvWritable): in a batch the page holds
 	// every row's slots, and a readmitted row writes into pages the others
 	// sealed long ago, so allocating a zeroed one would wipe their history.
 	// A page dropped on purpose (a restore, a truncation) is not out.
 	out []bool
-	// pool is where a growing page comes from: the pages a closed State on
+	// pool is where a growing page comes from: the pages a closed instance on
 	// the same model gave back, or a fresh one. nil is always fresh.
 	pool *kvPagePool
 	// win is a sliding or chunked layer's window, 0 for a layer that reads its
@@ -193,7 +193,7 @@ type kvPages struct {
 	cowFault bool
 	// arena, where set, is where every page this layer grows lives
 	// (kvArena): a composed CPU block's pool, the model's. reserved is the
-	// pages the State's context spans, and tab its page table (table).
+	// pages the instance's context spans, and tab its page table (table).
 	arena    *kvArena
 	reserved int
 	tab      []uint32
@@ -223,7 +223,7 @@ func (s *kvPages) liveFrom(low int) int {
 }
 
 // release hands every page below liveFrom(low) to spare. Callers pass the
-// lowest position any row with history still writes (State.advance), so no
+// lowest position any row with history still writes (Instance.advance), so no
 // row reads a released page again.
 //
 // fault is a gate's violation: the page the window starts in goes too, with
@@ -424,7 +424,7 @@ func (s *kvPages) span(pos, end int) kvSpan {
 	return kvSpan{page: pg, first: off, n: min(s.p-off, end-pos)}
 }
 
-// kvCache is a State's whole history: one kvPages per layer, plus the identity
+// kvCache is a instance's whole history: one kvPages per layer, plus the identity
 // the store knows it by.
 type kvCache struct {
 	id     string
@@ -459,7 +459,7 @@ type kvCache struct {
 	// point needs a summary as well as pages. See sealRecurrentTail.
 	recurrent bool
 	// recAt asks whether a hybrid's every summary is stored for a position
-	// (State.recPointAt), and mark is the State's recMark for the restore in
+	// (Instance.recPointAt), and mark is the instance's recMark for the restore in
 	// flight.
 	recAt func(pos int) bool
 	mark  int
@@ -468,14 +468,14 @@ type kvCache struct {
 	pubLi, pubPage []int32
 	pubKey         []string
 	// devAt is the device a block's history lives on when it names its
-	// pages (State.kvDevAt), set by ShareKV; mapEnd is the position a page
+	// pages (Instance.kvDevAt), set by ShareKV; mapEnd is the position a page
 	// mapped there is written to, and mapped counts the planes mapped.
 	devAt  func(li int) nn.KVShareDevice
 	mapEnd int
 	mapped int64
 	// chunked is how far aliasChunks has named this sequence's shared pages.
 	chunked int
-	// endsAt is State.endsAt, the prompt ends kept past a chunk boundary,
+	// endsAt is Instance.endsAt, the prompt ends kept past a chunk boundary,
 	// set with recAt.
 	endsAt func(c int) [kvEndSeats]uint8
 	// ck is chunkKey's: the key of every whole kvChunk of seq so far, in
@@ -495,7 +495,7 @@ type kvCache struct {
 	// bytes before it returns: kept, so sealing allocates nothing.
 	rd bytes.Reader
 	// lo is the first block this cache holds pages for: zero for a trunk, the
-	// first prediction block for a draft State (State.lo). layers is indexed by
+	// first prediction block for a draft instance (Instance.lo). layers is indexed by
 	// block, so the slice runs from zero and the blocks below lo stay empty.
 	lo int
 	// keepWindow and relFault are the window gate's two arms beside the
@@ -506,7 +506,7 @@ type kvCache struct {
 	// a windowed layer's coverage is walked from zero, as a full layer's is.
 	walkWindow bool
 	// share is the store this session's sealed pages are held once in
-	// (State.ShareKV), nil when it shares nothing; shareRefused counts the
+	// (Instance.ShareKV), nil when it shares nothing; shareRefused counts the
 	// device moves a shared page refused.
 	share        *SharedStore
 	shareRefused int64
@@ -516,8 +516,8 @@ func newKVCache(c *Config, id string, nseq int, l kvLayout, store KVStore, pin i
 	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer)
 }
 
-// newKVCacheRange is newKVCache for a State that runs blocks [lo, hi) of its
-// model (State.lo): the pages are indexed by block, and the blocks below lo
+// newKVCacheRange is newKVCache for an instance that runs blocks [lo, hi) of its
+// model (Instance.lo): the pages are indexed by block, and the blocks below lo
 // have none.
 func newKVCacheRange(c *Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int) *kvCache {
 	if store == nil {
@@ -697,7 +697,7 @@ func (s *kvPages) scatter(l kvLayout, slot, n int, k, v []float32) bool {
 	return true
 }
 
-// nextCacheID hands out a fresh identity for every State's history. It is
+// nextCacheID hands out a fresh identity for every session's history. It is
 // unique and deliberately not reusable: a session that wants its pages found
 // again names itself with SetCacheKey. It is not a Scheduler row, which admit
 // reuses as soon as its sequence retires.
@@ -721,7 +721,7 @@ var nextCacheID = func() func() string {
 //
 // It gathers the pages into one contiguous run on the way out and scatters
 // them back on the way in (see gather).
-func (s *State) migrateKV(li, pos int, toDevice bool) bool {
+func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 	// A KV-sharing block has no history of its own: it reads its source's,
 	// which moves with the source (fixKVGroups keeps them together).
 	if s.ld == nil || s.c.KVShared(li) {
@@ -791,7 +791,7 @@ func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
 // while it held the block is quantized as the host would have quantized it.
 // The device holds float32 pages: a q8 cache resident on a device is not
 // implemented (kvtype.go).
-func (s *State) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDevice bool, move func() bool) bool {
+func (s *Instance) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDevice bool, move func() bool) bool {
 	rows := n * kvl.nKV
 	// A binary16 history's rows are halves two to a slot.
 	halves := func(x []float32) []uint16 {
@@ -832,7 +832,7 @@ func (s *State) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDevic
 // device positions, up to the end of the last row with history. Each row
 // contributes its own live prefix, bpos[r], which is why the high-water
 // s.pos is not used; the gaps between rows are positions nothing reads.
-func (s *State) migrateKVRows(li int, toDevice bool) bool {
+func (s *Instance) migrateKVRows(li int, toDevice bool) bool {
 	pg := &s.kv.layers[li]
 	if sd, ok := s.ld.(nn.SeqKVDevice); ok && sd.PerSequenceKV() {
 		return s.migrateKVSeqs(sd, li, toDevice)
@@ -888,7 +888,7 @@ func (s *State) migrateKVRows(li int, toDevice bool) bool {
 // as its own sequence (nn.SeqKVDevice): every row with history moves on its
 // own, by the base of its slots, and nothing is reserved -- the device takes
 // the pages a row's positions need as it loads them.
-func (s *State) migrateKVSeqs(sd nn.SeqKVDevice, li int, toDevice bool) bool {
+func (s *Instance) migrateKVSeqs(sd nn.SeqKVDevice, li int, toDevice bool) bool {
 	pg := &s.kv.layers[li]
 	kvl := s.kvlAt(li)
 	for r, p := range s.bpos {
@@ -919,7 +919,7 @@ func (s *State) migrateKVSeqs(sd nn.SeqKVDevice, li int, toDevice bool) bool {
 // A batch moves every row at once: rconv/rstate hold the rows back to back,
 // row r at r*convStateLen and r*deltaStateLen, which is the device's own
 // per-row layout (nn.LayerDevice.MigrateRec).
-func (s *State) migrateRec(li int, toDevice bool) bool {
+func (s *Instance) migrateRec(li int, toDevice bool) bool {
 	if s.ld == nil || s.rconv == nil || li >= len(s.rconv) || s.rconv[li] == nil {
 		return true // an attention block, or a session with no recurrence
 	}
@@ -931,7 +931,7 @@ func (s *State) migrateRec(li int, toDevice bool) bool {
 // Qwen3.8-Flash-Next's n-gram predecessors, which the host hashes whichever
 // side runs the block, so the device's copy of them is never the live one
 // and a migration to the CPU keeps the host's.
-func (s *State) migrateRecLayer(li int, toDevice bool) bool {
+func (s *Instance) migrateRecLayer(li int, toDevice bool) bool {
 	if toDevice || !s.c.NGramAt(li) {
 		return s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], toDevice)
 	}
@@ -979,7 +979,7 @@ func kvBytesOf(p []float32) []byte {
 // Zero, the default, never evicts. A nonzero budget needs a store: trim only
 // evicts pages the store already holds, so without one the cap would silently
 // do nothing (and evicting anyway would lose history).
-func (s *State) SetKVBudget(b uint64) error {
+func (s *Instance) SetKVBudget(b uint64) error {
 	if b > 0 {
 		if _, ok := s.kv.store.(NoStore); ok {
 			return fmt.Errorf("model: a KV budget needs a store to evict into -- " +
@@ -991,7 +991,7 @@ func (s *State) SetKVBudget(b uint64) error {
 }
 
 // SetKVStore hands the session a backing store for its pages.
-func (s *State) SetKVStore(st KVStore) {
+func (s *Instance) SetKVStore(st KVStore) {
 	if st == nil {
 		st = NoStore{}
 	}
@@ -1019,7 +1019,7 @@ func (s *State) SetKVStore(st KVStore) {
 // (shared public prefix, private tail) is not built.
 //
 // Call it before the first token.
-func (s *State) SetCacheKey(ns string) error {
+func (s *Instance) SetCacheKey(ns string) error {
 	// A batched page holds every row's slots, so no single row's tokens can
 	// name it.
 	if ns != "" && s.nseq > 1 {
@@ -1040,12 +1040,12 @@ func (s *State) SetCacheKey(ns string) error {
 // KVRestored is how many prompt positions the last PrefillCached took from the
 // store instead of computing. Zero is a miss, and a caller that does not look at
 // it cannot tell a working cache from a silently useless one.
-func (s *State) KVRestored() int { return s.kvSkipped }
+func (s *Instance) KVRestored() int { return s.kvSkipped }
 
 // CacheNamespace is what SetCacheKey named, or "" when content addressing is
 // off. A content-addressed session has no single key: its pages are one key
 // each (count them with FileStore.Total).
-func (s *State) CacheNamespace() string { return s.kv.ns }
+func (s *Instance) CacheNamespace() string { return s.kv.ns }
 
 // RestoreKV pulls back every page the store holds under this session's key and
 // returns the number of positions that are now valid to attend over.
@@ -1055,7 +1055,7 @@ func (s *State) CacheNamespace() string { return s.kv.ns }
 // Layers with more coverage are truncated rather than kept, or their high
 // lastSealed would stop seal() offering the rewritten pages and the store
 // would keep serving stale ones. A linear layer's summary is restored
-// separately (State.faultRecurrentAt).
+// separately (Instance.faultRecurrentAt).
 // A hybrid restores no further than limit: its summaries are at given
 // positions and cannot be shortened, so it asks for the points at or under
 // it rather than clamping a longer prefix (restoreKV).
@@ -1087,11 +1087,11 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 		pg := &kc.layers[li]
 		if pg.p == 0 {
 			// A linear layer has no pages; its summary is restored by
-			// State.faultRecurrentAt. Coverage is over the attention layers.
+			// Instance.faultRecurrentAt. Coverage is over the attention layers.
 			continue
 		}
 		// Drop residency first so the probe asks the store: fault() returns nil
-		// for a resident page, and a reused State's leftovers would count as
+		// for a resident page, and a reused instance's leftovers would count as
 		// hits.
 		pg.dropResident()
 		if !kc.covers(li) {
@@ -1253,7 +1253,7 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 
 // dropResident lets every resident page go, its memory to spare for the
 // faults a restore makes next (keepOnReset): a restore asks the store, and a
-// reused State's leftovers would otherwise count as hits.
+// reused instance's leftovers would otherwise count as hits.
 func (s *kvPages) dropResident() {
 	for n := range s.k {
 		s.keepOnReset(n)
@@ -1267,7 +1267,7 @@ func (s *kvPages) dropResident() {
 // mark, the points a hybrid keeps.
 //
 // Past each chunk boundary it asks the prompt ends the store says were kept
-// there (State.noteEnd): a point at a prompt's end inside a chunk -- where
+// there (Instance.noteEnd): a point at a prompt's end inside a chunk -- where
 // the next chat turn parts from -- is otherwise on no boundary a probe names.
 func (kc *kvCache) recFloor(limit int) int {
 	kc.probes = appendProbes(kc.probes, limit, kvChunk)
@@ -1386,7 +1386,7 @@ func (kc *kvCache) dropTail(n int) {
 // the skipped tokens produced those pages, which the key (see SetCacheKey)
 // asserts. RoPE is applied before the cache write, so a stored key carries its
 // absolute position and only a prefix is reusable.
-func (s *State) PrefillCached(tokens []int32) ([]float32, error) {
+func (s *Instance) PrefillCached(tokens []int32) ([]float32, error) {
 	defer s.m.enterPager()()
 	if s.batched {
 		return nil, errBatch{}
@@ -1416,7 +1416,7 @@ func (s *State) PrefillCached(tokens []int32) ([]float32, error) {
 // 3's image rows) is restored whole or not at all: its rows' history depends
 // on rows after them, which the run's name covers, and a restore that ended
 // inside it would leave the tail a chunk that cuts the run.
-func (s *State) PrefillCachedMixed(spans ...Span) ([]float32, error) {
+func (s *Instance) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 	defer s.m.enterPager()()
 	if s.batched {
 		return nil, errBatch{}
@@ -1476,7 +1476,7 @@ func (s *State) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 // p0 are named by: a token's own id, and for an image row a reference to the
 // row's name in the cache's table (kvCache.nameRow). It stops at the first
 // embedding span with no key, so it may be shorter than the prompt.
-func (s *State) spanKey(p0 int, spans []Span, rp [][4]int) []int32 {
+func (s *Instance) spanKey(p0 int, spans []Span, rp [][4]int) []int32 {
 	nembd := s.c.NEmbd
 	var key []int32
 	for _, sp := range spans {
@@ -1503,7 +1503,7 @@ func (s *State) spanKey(p0 int, spans []Span, rp [][4]int) []int32 {
 // a mixed one (PrefillCachedMixed) a token's id or an image row's name. A key
 // shorter than the prompt restores no further than it reaches. run prefills
 // the rows from n on, after the restore.
-func (s *State) prefillCachedKey(key []int32, rows int, run func(n int) ([]float32, error)) ([]float32, error) {
+func (s *Instance) prefillCachedKey(key []int32, rows int, run func(n int) ([]float32, error)) ([]float32, error) {
 	s.markParting(key)
 	n, full, err := s.restoreKey(key, rows, true)
 	if err != nil {
@@ -1528,11 +1528,11 @@ func (s *State) prefillCachedKey(key []int32, rows int, run func(n int) ([]float
 // RestorePrefix is the restore half of PrefillCached: it restores the
 // longest prefix of tokens the store holds under this session's key, leaving
 // at least the last token to run, and returns how many positions it took.
-// The State is then at that position, and the caller runs tokens[n:] by any
+// The instance is then at that position, and the caller runs tokens[n:] by any
 // path that records its ids (Prefill, Forward, StepRuns) and calls SealPrompt
 // with the last logits, so the next request finds this prompt too. A server's
 // step loop restores this way and then runs the rest as a row.
-func (s *State) RestorePrefix(tokens []int32) (int, error) {
+func (s *Instance) RestorePrefix(tokens []int32) (int, error) {
 	defer s.m.enterPager()()
 	if s.batched {
 		return 0, errBatch{}
@@ -1553,7 +1553,7 @@ func (s *State) RestorePrefix(tokens []int32) (int, error) {
 // PrefillCached calls it itself; a caller that restored with RestorePrefix
 // calls it once the rest of the prompt has run. Without a store or a cache
 // key it does nothing.
-func (s *State) SealPrompt(lg []float32) error {
+func (s *Instance) SealPrompt(lg []float32) error {
 	if err := s.syncKVFromDevice(); err != nil {
 		return err
 	}
@@ -1581,15 +1581,14 @@ func (s *State) SealPrompt(lg []float32) error {
 }
 
 // restoreKey restores what the store holds of a prompt of rows rows named by
-// key and advances the State past it, returning the positions restored and,
+// key and advances the instance past it, returning the positions restored and,
 // for a whole-prompt hit when logits says the caller can take one, the
 // logits the prompt ended on. Without them a whole-prompt hit gives its last
 // position back, so something is left to run.
-func (s *State) restoreKey(key []int32, rows int, logits bool) (int, []float32, error) {
+func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float32, error) {
 	tokens := key
 	if s.kv.recurrent && s.kv.recAt == nil {
-		s.kv.recAt = s.recPointAt
-		s.kv.endsAt = s.endsAt
+		s.kv.recAt, s.kv.endsAt = s.recFns()
 	}
 	s.kv.mark = s.recMark
 	if staleKeyFault != nil {
@@ -1613,7 +1612,7 @@ func (s *State) restoreKey(key []int32, rows int, logits bool) (int, []float32, 
 	}
 	full := []float32(nil)
 	if n == rows {
-		// Into the State's own logits, which a prefill would have written.
+		// Into the instance's own logits, which a prefill would have written.
 		if lg := s.logits; logits && len(lg) >= s.c.NVocab && s.faultLogits(n, lg[:s.c.NVocab]) {
 			full = lg[:s.c.NVocab]
 		} else {
@@ -1693,7 +1692,7 @@ var staleKeyFault func(key []int32) []int32
 // offloaded model would store nothing. It runs once, after the prompt, not per
 // token, to keep device round trips off decode; positions generated after it
 // are not stored for placed blocks.
-func (s *State) syncKVFromDevice() error {
+func (s *Instance) syncKVFromDevice() error {
 	if s.devCount() == 0 || s.kv.ns == "" || s.pos == 0 {
 		return nil
 	}
@@ -1728,7 +1727,7 @@ func (s *State) syncKVFromDevice() error {
 // syncRecFromDevice brings every placed linear block's summary into the host's
 // rconv/rstate, where every host consumer reads it: the recurrent twin of
 // syncKVFromDevice.
-func (s *State) syncRecFromDevice() error {
+func (s *Instance) syncRecFromDevice() error {
 	if s.rconv == nil || s.devCount() == 0 || s.ld == nil {
 		return nil
 	}
@@ -1748,7 +1747,7 @@ func (s *State) syncRecFromDevice() error {
 
 // pushRecToDevice sends every placed linear block's restored summary back to
 // the device that runs it. It is syncRecFromDevice with the arrow reversed.
-func (s *State) pushRecToDevice() bool {
+func (s *Instance) pushRecToDevice() bool {
 	if s.rconv == nil || s.devCount() == 0 || s.ld == nil {
 		return true
 	}
@@ -1766,7 +1765,7 @@ func (s *State) pushRecToDevice() bool {
 // restoreKV restores at most max positions, which is how the caller keeps a
 // token to actually run: a prompt entirely in cache still has to produce
 // logits, and Prefill of nothing is an error.
-func (s *State) restoreKV(max int) (int, error) {
+func (s *Instance) restoreKV(max int) (int, error) {
 	n, tail, err := s.kv.restore(max)
 	if err != nil {
 		return 0, err
@@ -1839,33 +1838,33 @@ func (s *State) restoreKV(max int) (int, error) {
 
 // KVBytes is what this session's history holds resident right now. It grows with
 // the conversation and falls when pages are evicted; it is not a reservation.
-func (s *State) KVBytes() uint64 { return s.kv.Bytes() }
+func (s *Instance) KVBytes() uint64 { return s.kv.Bytes() }
 
 // KVPageStats is pages written to the store, fetched back, and evicted.
-func (s *State) KVPageStats() (stored, fetched, evicted int64) {
+func (s *Instance) KVPageStats() (stored, fetched, evicted int64) {
 	return s.kv.stored, s.kv.fetched, s.kv.evicted
 }
 
 // KVDeviceSyncFailures is how many placed blocks would not hand their history
 // back, so nothing was cached for them. It is not a store failure: the store
 // was never reached.
-func (s *State) KVDeviceSyncFailures() int64 { return s.kv.syncFailed }
+func (s *Instance) KVDeviceSyncFailures() int64 { return s.kv.syncFailed }
 
 // KVPrefixUnmigratable is how many times a restored prefix had to be given up
 // because it could not be moved onto a device (or its recurrent summary was
 // missing): a reuse of 0 with a full store is otherwise unexplainable.
-func (s *State) KVPrefixUnmigratable() int64 { return s.kv.unmigratable }
+func (s *Instance) KVPrefixUnmigratable() int64 { return s.kv.unmigratable }
 
 // KVStoreMismatches is how many pages came back the wrong shape and were dropped.
 // It is separate from KVStoreFailures because the causes differ: a mismatch is a
 // stale or foreign cache directory and costs a prefill, a failure is a store that
 // cannot write and costs the budget.
-func (s *State) KVStoreMismatches() int64 { return s.kv.mismatched }
+func (s *Instance) KVStoreMismatches() int64 { return s.kv.mismatched }
 
 // KVStoreFailures is how many times a write-through was refused by the store. A
 // store that is failing every Set is otherwise indistinguishable from no store
 // at all: the budget stops working and nothing else changes.
-func (s *State) KVStoreFailures() int64 { return s.kv.failed }
+func (s *Instance) KVStoreFailures() int64 { return s.kv.failed }
 
 // seal offers every page of every layer that has just become immutable to the
 // store, once each.
@@ -2246,7 +2245,7 @@ func (kc *kvCache) aliasPage(li, n int, key string) bool {
 
 // appendProbes is kvChunkProbes into dst, at step: max, then every multiple
 // of step below it, largest first; a step of zero is max alone. A hybrid
-// probes at its restore points' spacing (State.recEvery).
+// probes at its restore points' spacing (Instance.recEvery).
 func appendProbes(dst []int, max, step int) []int {
 	out := dst[:0]
 	if max <= 0 {
@@ -2294,7 +2293,7 @@ func (kc *kvCache) sealTail(pos int) int {
 	}
 	// A sharing session names its sealed pages by the chunks of history they
 	// hold; the page it is still writing is its own until it lets the
-	// sequence go (State.Reset, kvCache.retireTail).
+	// sequence go (Instance.Reset, kvCache.retireTail).
 	if kc.share != nil {
 		return kc.aliasChunks(pos)
 	}
@@ -2411,7 +2410,7 @@ func (w *sliceWriter) Write(p []byte) (int, error) {
 
 // kvFault brings a page back if it was evicted. On a resident-only session -- no
 // store, no budget -- it is one nil compare.
-func (s *State) kvFault(li, page int) bool {
+func (s *Instance) kvFault(li, page int) bool {
 	pg := &s.kv.layers[li]
 	if page < len(pg.k) && pg.k[page] != nil {
 		return true
@@ -2430,7 +2429,7 @@ func (s *State) kvFault(li, page int) bool {
 // kvWritable brings back the page pos falls in before it is written, when trim
 // evicted it with history still in it. On a session with no budget it is one
 // bounds check.
-func (s *State) kvWritable(li, pos int) {
+func (s *Instance) kvWritable(li, pos int) {
 	pg := &s.kv.layers[li]
 	if pg.p == 0 {
 		return
@@ -2650,7 +2649,7 @@ func (kc *kvCache) note(pos int, ids ...int32) {
 	kc.seq = append(kc.seq, ids...)
 }
 
-// reset drops every page and forgets what was sealed, so a State that is being
+// reset drops every page and forgets what was sealed, so an instance that is being
 // reused starts with nothing resident and nothing claimed.
 //
 // The token stream goes with the pages, because it names them: paths that
@@ -2677,7 +2676,7 @@ func (kc *kvCache) reset() {
 }
 
 // keepOnReset lets page n go as reset does, its memory kept in spare for the
-// next sequence to grow into: a State reused prompt after prompt (a Decider's)
+// next sequence to grow into: an instance reused prompt after prompt (a Decider's)
 // would otherwise hand the collector its whole history each time and make it
 // again. A layer with no window keeps what it held; a windowed layer what its
 // window turns over (spareMax), so it still holds its window and not the
@@ -2702,7 +2701,7 @@ func (s *kvPages) keepOnReset(n int) {
 // residence, on one goroutine, before the attention heads fan out. Faulting
 // from inside the pool is a data race (extend can reallocate the slice another
 // worker holds), so residency is decided here and workers only read.
-func (s *State) kvEnsureWindow(li, w0, want int) {
+func (s *Instance) kvEnsureWindow(li, w0, want int) {
 	pg := &s.kv.layers[li]
 	if pg.p == 0 {
 		return
@@ -2725,7 +2724,7 @@ func (s *State) kvEnsureWindow(li, w0, want int) {
 // it. Every entry point calls it before returning logits, so it is also where a
 // step's placement moves (growth, relocation, a demotion, the KV a device grew)
 // reach the host's budgets (followHost).
-func (s *State) kvCheck() error {
+func (s *Instance) kvCheck() error {
 	s.followHost()
 	if p := s.kvErr.Swap(nil); p != nil {
 		return *p
@@ -2741,12 +2740,12 @@ func (s *State) kvCheck() error {
 //
 // It rides the same KVStore: the layer index is offset past the k and v range
 // (2*NLayer + li), so no interface changes and a store sees one more page kind.
-func (s *State) recurrentLayer(li int) int { return 2*s.c.NLayer + li }
+func (s *Instance) recurrentLayer(li int) int { return 2*s.c.NLayer + li }
 
 // logitsLayer is the store index the prompt's final logits go under. The
 // attention planes take 0..2*NLayer-1 and the recurrent summaries the NLayer
 // after them, so this sits past both and cannot collide with either.
-func (s *State) logitsLayer() int { return 3 * s.c.NLayer }
+func (s *Instance) logitsLayer() int { return 3 * s.c.NLayer }
 
 // sealLogits stores the logits the prompt ended on, under the same fill-named
 // key as its partial page.
@@ -2754,7 +2753,7 @@ func (s *State) logitsLayer() int { return 3 * s.c.NLayer }
 // It makes a fully cached prompt possible: with the logits stored there is
 // nothing left to run, which a hybrid needs because its summary cannot be
 // shortened by one position. The cost is one vocabulary row per prompt.
-func (s *State) sealLogits(pos int, lg []float32) {
+func (s *Instance) sealLogits(pos int, lg []float32) {
 	if s.kv.ns == "" || pos <= 0 || len(lg) == 0 {
 		return
 	}
@@ -2777,7 +2776,7 @@ func (s *State) sealLogits(pos int, lg []float32) {
 }
 
 // faultLogits reads back what sealLogits wrote, or reports that it cannot.
-func (s *State) faultLogits(pos int, out []float32) bool {
+func (s *Instance) faultLogits(pos int, out []float32) bool {
 	al := s.attnLayer()
 	if al < 0 || s.kv.ns == "" || pos <= 0 || len(out) == 0 {
 		return false
@@ -2802,7 +2801,7 @@ func (s *State) faultLogits(pos int, out []float32) bool {
 // recurrentBoundary is the page size the snapshots are aligned to: the
 // attention layers' page, since the linear ones have none and the two halves
 // must be restorable at the same position.
-func (s *State) recurrentBoundary() int {
+func (s *Instance) recurrentBoundary() int {
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		if p := s.kv.layers[li].p; p > 0 {
 			return p
@@ -2817,7 +2816,7 @@ func (s *State) recurrentBoundary() int {
 // Exactly, because a summary cannot be sliced: the state for boundary n exists
 // only when the position is n*p, which is why prefill snaps its chunk width to
 // the boundary when a hybrid is being cached.
-func (s *State) sealRecurrent(pos int) {
+func (s *Instance) sealRecurrent(pos int) {
 	if s.rconv == nil || s.kv.ns == "" || pos == 0 {
 		return
 	}
@@ -2848,7 +2847,7 @@ func (s *State) sealRecurrent(pos int) {
 // sealRecurrentTail snapshots the recurrent summary at a prompt boundary rather
 // than at a page boundary, under the same fill-named key sealTail uses: a
 // restored partial page needs a matching summary or no tail at all.
-func (s *State) sealRecurrentTail(pos int) {
+func (s *Instance) sealRecurrentTail(pos int) {
 	if s.rconv == nil || s.kv.ns == "" || pos == 0 {
 		return
 	}
@@ -2877,7 +2876,7 @@ func (s *State) sealRecurrentTail(pos int) {
 
 // endsLayer is the store index the prompt ends past a chunk boundary go
 // under, past the logits' (logitsLayer).
-func (s *State) endsLayer() int { return 3*s.c.NLayer + 1 }
+func (s *Instance) endsLayer() int { return 3*s.c.NLayer + 1 }
 
 // kvEndSeats is how many prompt ends one chunk boundary remembers.
 const kvEndSeats = 4
@@ -2885,9 +2884,9 @@ const kvEndSeats = 4
 // noteEnd tells the store a restore point was kept at pos, inside a chunk:
 // under the chunk boundary before it, the fills past that boundary points
 // were kept at, newest first, packed in one word. Through the store, so a
-// State that never saw the prompt -- a chat's next turn -- finds it
+// Instance that never saw the prompt -- a chat's next turn -- finds it
 // (kvCache.recFloor), whatever the store is.
-func (s *State) noteEnd(pos int) {
+func (s *Instance) noteEnd(pos int) {
 	c := pos / kvChunk * kvChunk
 	if c == 0 || c == pos {
 		return
@@ -2914,7 +2913,7 @@ func (s *State) noteEnd(pos int) {
 }
 
 // endsAt is what noteEnd told the store past chunk boundary c: no fill is 0.
-func (s *State) endsAt(c int) [kvEndSeats]uint8 {
+func (s *Instance) endsAt(c int) [kvEndSeats]uint8 {
 	var e [kvEndSeats]uint8
 	key := s.kv.chunkKey(c)
 	if key == "" {
@@ -2929,7 +2928,7 @@ func (s *State) endsAt(c int) [kvEndSeats]uint8 {
 }
 
 // attnLayer is any layer with pages, so that pageKey has a page size to hash.
-func (s *State) attnLayer() int {
+func (s *Instance) attnLayer() int {
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		if s.kv.layers[li].p > 0 {
 			return li
@@ -2942,7 +2941,7 @@ func (s *State) attnLayer() int {
 // under key -- a boundary's page key, or a partial page's, which is named by
 // its fill rather than by a boundary (see sealRecurrentTail). All of them or
 // none: a hybrid with half its summaries restored is worse than one with none.
-func (s *State) faultRecurrentAt(n int, key string, apply bool) bool {
+func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
 	if s.rconv == nil {
 		return true
 	}
@@ -2960,7 +2959,7 @@ func (s *State) faultRecurrentAt(n int, key string, apply bool) bool {
 			return false
 		}
 	}
-	// Staged in buffers the State keeps, one a block, and applied only once
+	// Staged in buffers the instance keeps, one a block, and applied only once
 	// every layer has answered, so a failure half way leaves the session's
 	// own summaries untouched.
 	if s.recStage == nil {

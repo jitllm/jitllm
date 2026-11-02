@@ -20,7 +20,7 @@ func BenchmarkGemmaDecode(b *testing.B) {
 	}
 	defer m.Close()
 	ids := m.Vocab.Encode("The capital of France is", true)
-	st := m.NewState(len(ids) + b.N + 2)
+	st := m.NewInstance(len(ids) + b.N + 2)
 	defer st.Close()
 	var lg []float32
 	for _, id := range ids {

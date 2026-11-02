@@ -124,9 +124,9 @@ func (g *GPU) dev(i int) *devTier {
 }
 
 // RecSteps is how many linear blocks advanced across every device during the
-// last Layers or rows call made on the GPU itself (session 0). A State steps on
-// a session of its own and counts there: ask the State
-// (model.State.RecurrenceAdvanced), never this. See devTier.recSteps.
+// last Layers or rows call made on the GPU itself (session 0). An instance steps on
+// a session of its own and counts there: ask the instance
+// (model.Instance.RecurrenceAdvanced), never this. See devTier.recSteps.
 func (g *GPU) RecSteps() int {
 	return g.recStepsOf(0)
 }
@@ -299,7 +299,7 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 	}
 	defer done()
 	// A block already on a device is offered there first. The weights are the
-	// tier's, not the State's, so a second State re-offers blocks the first
+	// tier's, not the instance's, so a second instance re-offers blocks the first
 	// placed; starting from the cursor (left on the last device) would upload
 	// duplicates onto the tail card until it filled.
 	g.mu.Lock()
@@ -1477,7 +1477,7 @@ func (g *GPU) PrepHead(h *nn.Head) bool {
 		return false
 	}
 	defer done()
-	// Placed already, by another State of this model: one head serves them all,
+	// Placed already, by another instance of this model: one head serves them all,
 	// and placing a second on another card would orphan the first.
 	g.mu.Lock()
 	hd := g.head

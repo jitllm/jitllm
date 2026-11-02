@@ -458,7 +458,7 @@ type Head struct {
 	// Applied is which Stages the device applied to the logits in the call
 	// that last ran this head, set by every such call: HeadCap where it
 	// capped them, and with it HeadBias and HeadScale where it served Graph.
-	// The caller applies the rest (State.finishDevLogits). A device asked for
+	// The caller applies the rest (Instance.finishDevLogits). A device asked for
 	// the token (ArgmaxOnly) of a head whose bias it leaves to the caller, or
 	// for the candidates (SampleK) or the picked labels (Pick) of one whose
 	// bias or scale it leaves, declines the request and returns the logits, as
@@ -473,7 +473,7 @@ type Head struct {
 	// ArgmaxOnly asks for the next greedy token alone. A tier that can serves
 	// it on the device and sets Token, leaving Logits untouched; one that
 	// cannot fills Logits as always and leaves Token as the caller set it (-1).
-	// See model.State.ForwardGreedy.
+	// See model.Instance.ForwardGreedy.
 	ArgmaxOnly bool
 	Token      int32
 	// SampleK, when positive, asks for a top-k draw's token in place of the
@@ -481,10 +481,10 @@ type Head struct {
 	// each token whose count in SampleWindow (a row over the vocabulary) is
 	// above zero, at WalkArgs (k, 1/T, top-p +Inf where off, min-p 0 where
 	// off, and the caller's uniform) -- exactly the CPU's draw
-	// (model.State.Sample). A penalty of 1 leaves the row as it is, whatever
+	// (model.Instance.Sample). A penalty of 1 leaves the row as it is, whatever
 	// the window holds. A tier that serves it sets Token and Sampled and
 	// leaves Logits untouched; one that cannot fills Logits as always. See
-	// model.State.ForwardSample.
+	// model.Instance.ForwardSample.
 	SampleK       int
 	SampleWindow  []float32
 	SamplePenalty float32
@@ -1549,7 +1549,7 @@ type RopeAxesDevice interface {
 // speculation step's rows when they go as a prompt chunk) -- its chunks, a
 // chunk's rows retried one at a time, the head over its last row -- and a
 // batch slot's prompt, its last token's one-row step included. A one-row
-// call is not a step by its width alone. A prompt the State runs as decode
+// call is not a step by its width alone. A prompt the instance runs as decode
 // steps, a token at a time, is steps.
 type PromptDevice interface {
 	SetPrompt(on bool)
@@ -1658,7 +1658,7 @@ type SeqKVDevice interface {
 // written into it. PrewarmKV makes room for positions more positions in every
 // placed block's pool where the device's budget has it free -- without paging
 // weights out and without giving the pages to any sequence -- so the first
-// prompt a State runs does not grow the pool inside its own time.
+// prompt an instance runs does not grow the pool inside its own time.
 type KVPrewarmer interface {
 	PrewarmKV(positions int)
 }
@@ -1761,13 +1761,13 @@ type ErrReporter interface{ Err() string }
 // HostReserver is how many bytes of the host's memory the device holds now (an
 // integrated GPU's blocks, KV and scratch), which the host's page and expert
 // budgets leave room for. It moves with placement, so the model re-reads it
-// whenever a block moves (Model.SetPageBudget, State.SetMemBudget).
+// whenever a block moves (Model.SetPageBudget, Instance.SetMemBudget).
 type HostReserver interface{ HostReserved() uint64 }
 
-// Attacher hands out a view carrying one State's own history (a session).
+// Attacher hands out a view carrying one session's own history (a session).
 type Attacher interface{ Attach() LayerDevice }
 
-// Placer brackets a State's whole offer sequence, so two placing at once do
+// Placer brackets a instance's whole offer sequence, so two placing at once do
 // not interleave against one budget.
 type Placer interface {
 	BeginPlacement()
@@ -1836,8 +1836,8 @@ type BlockHolder interface{ HoldsBlock(li int) bool }
 // last call, which decides whether a failed step may restart on the host.
 type RecStepper interface{ RecSteps() int }
 
-// Session is the device view one model.State holds (tier.GPU.Attach): the
-// State's own history on the device, apart from the model's weights.
+// Session is the device view one model.Instance holds (tier.GPU.Attach): the
+// session's own history on the device, apart from the model's weights.
 type Session interface {
 	// Detach gives back everything the session holds on every device.
 	Detach()
@@ -1909,7 +1909,7 @@ type ExpertModer interface {
 	SetExpertMode(where string) int
 }
 
-// CPU is the CPU's device name: a block a State runs on the CPU is at CPU as
+// CPU is the CPU's device name: a block an instance runs on the CPU is at CPU as
 // one a card runs is at that card's name.
 const CPU = "cpu"
 

@@ -75,8 +75,8 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 			// state is a text state, on gpu when one is given: placed before the
 			// tower, as the CLI places it, so a card too small for both gives
 			// the text model its blocks and the tower what is left.
-			state := func(gpu *tier.GPU) *State {
-				st := m.NewState(n)
+			state := func(gpu *tier.GPU) *Instance {
+				st := m.NewInstance(n)
 				if gpu != nil {
 					st.SetDevice(gpu)
 					if st.GPULayers() == 0 {
@@ -85,7 +85,7 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 				}
 				return st
 			}
-			runOn := func(st *State, img Span) [][]float32 {
+			runOn := func(st *Instance, img Span) [][]float32 {
 				lg, err := st.PrefillMixed(Span{Tokens: g.Pre}, img, Span{Tokens: g.Post})
 				if err != nil {
 					t.Fatal(err)
@@ -211,7 +211,7 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 						return
 					}
 					// A card of its own: the text model's weights are the
-					// model's on the tier, and stay there after its State.
+					// model's on the tier, and stay there after its Instance.
 					alone, err := tier.OpenWith(tier.WithDevices(spec))
 					if err != nil || alone == nil {
 						t.Fatalf("%s: reopening: %v", spec, err)

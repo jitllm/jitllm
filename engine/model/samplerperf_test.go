@@ -57,7 +57,7 @@ func TestSamplerPerf(t *testing.T) {
 		t.Fatalf("cannot load %s: %v", path, err)
 	}
 	defer m.Close()
-	st := m.NewState(2048)
+	st := m.NewInstance(2048)
 	defer st.Close()
 	for i := 0; i < 8; i++ {
 		if _, err := st.Forward(int32(1 + i%16)); err != nil {

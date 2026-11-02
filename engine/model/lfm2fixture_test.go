@@ -227,7 +227,7 @@ func lfm2FixRun(t *testing.T, m *Model, g *lfm2FixGold, gpu *tier.GPU) [][]float
 	if at != len(g.IDs) {
 		t.Fatalf("%d positions, the processor's %d", at, len(g.IDs))
 	}
-	s := m.NewState(len(g.IDs) + len(g.Cont) + 1)
+	s := m.NewInstance(len(g.IDs) + len(g.Cont) + 1)
 	defer s.Close()
 	if gpu != nil {
 		if err := s.SetDevice(gpu); err != nil {

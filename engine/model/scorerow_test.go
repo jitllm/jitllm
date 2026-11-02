@@ -11,7 +11,7 @@ import (
 )
 
 // TestBatchedPrefillInAStateSizedToThePrompt prefills on the device with a
-// State only four positions longer than the prompt, and demands the host's
+// Instance only four positions longer than the prompt, and demands the host's
 // logits. The tight sizing is the point: a batched scores kernel writes its last
 // key tile past the causal width, and the score row pad (maxKeyTile) must cover
 // the widest tile (sm_70's AttnScoresMMA70 tiles 64 keys), or near MaxSeq the
@@ -48,7 +48,7 @@ func prefillAgainstHost(t *testing.T, lengths []int, opts ...tier.Option) {
 	all := m.Vocab.Encode(text, true)
 	for _, n := range lengths {
 		ids := all[:n]
-		host := m.NewState(n + 4)
+		host := m.NewInstance(n + 4)
 		want, err := host.Prefill(ids)
 		if err != nil {
 			t.Fatal(err)
@@ -56,7 +56,7 @@ func prefillAgainstHost(t *testing.T, lengths []int, opts ...tier.Option) {
 		want = append([]float32(nil), want...)
 		host.Close()
 
-		dev := m.NewState(n + 4)
+		dev := m.NewInstance(n + 4)
 		dev.SetDevice(g)
 		if dev.GPULayers() != m.Cfg.NLayer {
 			dev.Close()

@@ -117,6 +117,6 @@ func placedOn(g *tier.GPU) (string, int) {
 
 // deviceBlocks is how many of the chat session's blocks a device holds.
 func (e *Engine) deviceBlocks() (n int) {
-	e.inspect(func(st *model.State) { n = st.GPULayers() })
+	e.inspect(func(st *model.Instance) { n = st.GPULayers() })
 	return n
 }

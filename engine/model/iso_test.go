@@ -26,10 +26,10 @@ func isoSetup(t *testing.T) (*Model, *tier.GPU) {
 	return m, g
 }
 
-// TestTwoStatesOnOneTierShareAKVCache: two States attached to the same tier.GPU
+// TestTwoStatesOnOneTierShareAKVCache: two instances attached to the same tier.GPU
 // must not corrupt each other. Layers takes a position but no state identity,
 // so each session needs its own device KV cache (tier.GPU.Attach); interleaved
-// States must match the same sequences run alone.
+// instances must match the same sequences run alone.
 func TestTwoStatesOnOneTierShareAKVCache(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	m, err := Open(path)
@@ -51,7 +51,7 @@ func TestTwoStatesOnOneTierShareAKVCache(t *testing.T) {
 	// device differ by f32 reduction order, which would fold noise into the
 	// thing under test.
 	ref := func(seq []int32) []float32 {
-		s := m.NewState(32)
+		s := m.NewInstance(32)
 		defer s.Close()
 		s.SetDevice(g)
 		var lg []float32
@@ -64,9 +64,9 @@ func TestTwoStatesOnOneTierShareAKVCache(t *testing.T) {
 	}
 	wantA, wantB := ref(seqA), ref(seqB)
 
-	a := m.NewState(32)
+	a := m.NewInstance(32)
 	defer a.Close()
-	b := m.NewState(32)
+	b := m.NewInstance(32)
 	defer b.Close()
 	a.SetDevice(g)
 	b.SetDevice(g)
@@ -117,16 +117,16 @@ func TestTwoStatesOnOneTierShareAKVCache(t *testing.T) {
 // TestConcurrentPlacementPlacesAsManyBlocks: attaching from several goroutines
 // must place what attaching serially places.
 //
-// The assertion is the count: States that lose the race run on the host with
+// The assertion is the count: instances that lose the race run on the host with
 // every answer right.
-// BeginPlacement/EndPlacement bracket the whole offer sequence so each State
+// BeginPlacement/EndPlacement bracket the whole offer sequence so each instance
 // sees a budget nobody else is spending.
 func TestConcurrentPlacementPlacesAsManyBlocks(t *testing.T) {
 	m, g := isoSetup(t)
 	defer m.Close()
 	defer g.Close()
 
-	solo := m.NewState(32)
+	solo := m.NewInstance(32)
 	solo.SetDevice(g)
 	want := solo.GPULayers()
 	solo.Close()
@@ -135,9 +135,9 @@ func TestConcurrentPlacementPlacesAsManyBlocks(t *testing.T) {
 	}
 
 	const n = 4
-	ss := make([]*State, n)
+	ss := make([]*Instance, n)
 	for i := range ss {
-		ss[i] = m.NewState(32)
+		ss[i] = m.NewInstance(32)
 		defer ss[i].Close()
 	}
 	var wg sync.WaitGroup

@@ -25,8 +25,8 @@ func TestParkTakesTheCardHistoryOffAndBack(t *testing.T) {
 	defer g.Close()
 	prompt := m.Vocab.Encode("Once upon a time", true)
 	const half, n = 20, 40
-	start := func() *State {
-		st := m.NewState(256)
+	start := func() *Instance {
+		st := m.NewInstance(256)
 		st.SetDevice(g)
 		if st.GPULayers() != m.Cfg.NLayer {
 			st.Close()

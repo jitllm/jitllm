@@ -41,7 +41,7 @@ func TestPrefixCacheRestoresQwen4Exp(t *testing.T) {
 			}
 			run := func() ([][]float32, int) {
 				defer m.setKVPageForTest(page)()
-				s := m.NewState(len(g.IDs) + 1)
+				s := m.NewInstance(len(g.IDs) + 1)
 				defer s.Close()
 				if gpu != nil {
 					s.SetDeviceLayers(gpu, -1)

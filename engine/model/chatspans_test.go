@@ -51,7 +51,7 @@ func TestChatSpansFollowTheTemplate(t *testing.T) {
 		t.Fatalf("spans\n  got  %v\n  want %v", got, want)
 	}
 	// The embedding span is the caller's slice, not a copy: the CLI sizes a
-	// State from these spans and encodes into it afterwards.
+	// Instance from these spans and encodes into it afterwards.
 	for _, sp := range spans {
 		if sp.Embd != nil && &sp.Embd[0] != &emb[0] {
 			t.Error("the image span copied the embeddings instead of referring to them")
@@ -129,7 +129,7 @@ func TestChatSpansDescribeAnImage(t *testing.T) {
 				if n == 0 {
 					n = 32
 				}
-				st := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + n + 8)
+				st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + n + 8)
 				defer st.Close()
 				logits, err := st.PrefillMixed(spans...)
 				if err != nil {

@@ -34,7 +34,7 @@ func TestClosingADeviceLeavesNoKernelOpen(t *testing.T) {
 				t.Run(dev, func(t *testing.T) {
 					before := len(vulkan.Orphans())
 					g := stepTier(t, m, dev, false)
-					st := m.NewState(len(ids) + 8)
+					st := m.NewInstance(len(ids) + 8)
 					if err := st.SetDevice(g); err != nil {
 						st.Close()
 						g.Close()

@@ -98,7 +98,7 @@ func composedFoldParts(t *testing.T, m *Model, dev string) {
 		"and the clerk counted barrels of salt on the upper floor. ", 8)
 	ids := m.Vocab.Encode(text, true)[:40]
 	run := func(fold bool) ([]float32, int) {
-		st := m.NewState(len(ids) + 4)
+		st := m.NewInstance(len(ids) + 4)
 		defer st.Close()
 		st.SetDeviceFallback(false)
 		if err := st.SetDevice(g); err != nil {

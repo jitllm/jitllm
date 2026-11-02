@@ -17,7 +17,7 @@ import (
 // blocks, and their embeddings rows of the same prefill.
 
 // Layout is how one picture is cut, decided from its size alone, so the
-// prompt (and the State it sizes) can be built before a pixel is resampled.
+// prompt (and the instance it sizes) can be built before a pixel is resampled.
 type Layout struct {
 	W, H   int   // the picture's own size
 	Pieces []Box // the overview first, then the slices row by row

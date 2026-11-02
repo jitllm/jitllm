@@ -104,7 +104,7 @@ func openD1VL(t testing.TB, opts ...Option) *Model {
 // lfm2Encode runs every piece of the picture through s's tower: the pixels,
 // the tower's rows before the projector, and the projector's rows, each
 // piece's back to back.
-func lfm2Encode(t *testing.T, tw *Tower, s *State, path string) (px, vit, emb []float32, pieces int) {
+func lfm2Encode(t *testing.T, tw *Tower, s *Instance, path string) (px, vit, emb []float32, pieces int) {
 	t.Helper()
 	_, _, pcs, err := tw.LFM2Pieces(decodeImage(t, path))
 	if err != nil {

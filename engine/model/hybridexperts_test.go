@@ -28,7 +28,7 @@ func TestHybridExpertsMatchTheHost(t *testing.T) {
 	defer m.Close()
 	ids := []int32{1008, 10484, 318, 15383, 387, 17374, 13, 646}
 	host := func() [][]float32 {
-		s := m.NewState(32)
+		s := m.NewInstance(32)
 		defer s.Close()
 		var out [][]float32
 		for _, id := range ids {
@@ -46,7 +46,7 @@ func TestHybridExpertsMatchTheHost(t *testing.T) {
 		var got [][]float32
 		var placed int
 		func() {
-			s := m.NewState(32)
+			s := m.NewInstance(32)
 			defer s.Close()
 			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
 			if err != nil || g == nil {

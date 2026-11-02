@@ -567,9 +567,9 @@ func (f *JIT) ensureTuners() {
 // ensureTunersLocked is ensureTuners with prefillDuels held.
 //
 // A duel in progress belongs to the process, not to the JIT that started it:
-// every model.State builds its own JIT and only a settled answer reaches the
+// every model.Instance builds its own JIT and only a settled answer reaches the
 // disk cache, so a duel longer than one prompt would restart forever. Keyed
-// like the answer (shapes and cores), the next State continues it.
+// like the answer (shapes and cores), the next instance continues it.
 func (f *JIT) ensureTunersLocked() {
 	if f.ptune != nil {
 		return

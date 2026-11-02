@@ -21,7 +21,7 @@ import (
 
 // patchPair adds the second frame's term to the patch rows x, the first
 // frame's already in them from gather (np rows of k pk, pw pixels across).
-func (s *State) patchPair(x, gather []float32, pw, np, pk int) error {
+func (s *Instance) patchPair(x, gather []float32, pw, np, pk int) error {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	if t.patchW1.e == nil {

@@ -43,7 +43,7 @@ func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
 			n, m.Cfg.NLayer)
 	}
 
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 	g, err := tier.OpenWith(tier.WithDevices("gpu:0"))
 	if err != nil || g == nil {

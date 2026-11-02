@@ -8,7 +8,7 @@ import (
 )
 
 // A session is one sequence; a tier is one model. The per-sequence state (the
-// KV cache, the recurrent state) belongs to the session, so several model.States
+// KV cache, the recurrent state) belongs to the session, so several model.instances
 // can share one tier's weights without writing each other's history. See
 // docs/design/device-sessions.md.
 //
@@ -28,12 +28,12 @@ import (
 
 var nextSession atomic.Uint64
 
-// Attach returns a device view bound to a fresh session. Every State that wants
+// Attach returns a device view bound to a fresh session. Every instance that wants
 // its own attention history calls it; two views on one GPU share the model's
 // weights and kernels and nothing else.
 //
 // The zero session -- a caller that uses *GPU directly -- still works and is
-// exactly the single-State behaviour every existing gate measures.
+// exactly the single-instance behaviour every existing gate measures.
 func (g *GPU) Attach() nn.LayerDevice {
 	return &gpuSession{g: g, sid: nextSession.Add(1)}
 }
@@ -251,7 +251,7 @@ func (s *gpuSession) TrimKV(pos int) bool {
 
 // Detach gives back everything this session holds on every device -- its
 // attention history and its recurrent state on every block -- and leaves the
-// model's weights for the sessions still using them. Without it a closed State
+// model's weights for the sessions still using them. Without it a closed instance
 // would keep its history on the card for the life of the tier.
 func (s *gpuSession) Detach() {
 	defer s.leave(s.enter())

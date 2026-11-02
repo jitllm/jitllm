@@ -57,7 +57,7 @@ func TestC6ServesComposed(t *testing.T) {
 // hostLogits is the host's logits at each of ids, one row at a time.
 func hostLogits(t *testing.T, m *Model, ids []int32) [][]float32 {
 	t.Helper()
-	host := m.NewState(len(ids) + 1)
+	host := m.NewInstance(len(ids) + 1)
 	defer host.Close()
 	var out [][]float32
 	for _, id := range ids {
@@ -157,7 +157,7 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 // position table each row at the next position's, must fall outside it.
 func wholeStepC6(t *testing.T, m *Model, dev string, prompt, toks []int32, want [][]float32, bound float64) {
 	t.Helper()
-	decode := func(after func(*State)) (worst float64, flips int) {
+	decode := func(after func(*Instance)) (worst float64, flips int) {
 		got, st, _, _ := composedDecodeWith(t, m, dev, prompt, toks, tier.ComposedStep, true, false, after)
 		ne, de := st.ServedPart(tier.ComposedEmbed)
 		np, dp := st.ServedPart(tier.PromptEmbed)
@@ -185,7 +185,7 @@ func wholeStepC6(t *testing.T, m *Model, dev string, prompt, toks []int32, want 
 	t.Logf("the whole step on %s: worst logit NMSE %.3e, every row gathered by the composer", dev, worst)
 	type violation struct {
 		name  string
-		after func(*State)
+		after func(*Instance)
 	}
 	vs := []violation{{"every row gathered at the next token's", shiftEmbed(1, 0, m.Vocab.Size())}}
 	if m.posEmbd.e != nil {

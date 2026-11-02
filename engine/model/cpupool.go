@@ -13,7 +13,7 @@ import (
 // first word (graph.OpPool); the rows it reads are a staged copy of the
 // segment's, every row the form reaches held.
 
-// cpuPoolState is a State's composed readout and its census.
+// cpuPoolState is a instance's composed readout and its census.
 type cpuPoolState struct {
 	form     cpuHeadForm
 	served   int
@@ -26,13 +26,13 @@ type cpuPoolState struct {
 
 // CPUPoolSteps is how many readouts the CPU's composed pool served, and
 // how many it declined, by reason.
-func (s *State) CPUPoolSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUPoolSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.pool.served, s.cpu.pool.declined
 }
 
 // cpuPlacePool composes the model's readout for the CPU at the segment's
 // rows, with the buffers its call binds.
-func (s *State) cpuPlacePool() {
+func (s *Instance) cpuPlacePool() {
 	g := s.m.frontGraphs().pool
 	if g == nil {
 		return
@@ -49,7 +49,7 @@ func (s *State) cpuPlacePool() {
 // cpuPool reads the pooled, unit-length row of x's n rows into out on the
 // CPU the composer's way, reporting whether it served it; a decline is
 // counted by name.
-func (s *State) cpuPool(x []float32, n int, out []float32) bool {
+func (s *Instance) cpuPool(x []float32, n int, out []float32) bool {
 	p := &s.cpu.pool
 	f, why := p.form.formOf()
 	if why == jit.DeclineServes {

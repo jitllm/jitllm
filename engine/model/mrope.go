@@ -60,7 +60,7 @@ type ropeMark struct{ at, delta int }
 
 // ropeOf is the rotary position of a row of slot at cache position p that
 // advances like text: p itself until an image has moved them apart.
-func (s *State) ropeOf(slot, p int) int {
+func (s *Session) ropeOf(slot, p int) int {
 	if slot >= len(s.rmarks) {
 		return p
 	}
@@ -76,7 +76,7 @@ func (s *State) ropeOf(slot, p int) int {
 // markRope records that slot's text-like rows from cache position at onwards
 // turn at their position plus delta, replacing every mark at or past at: the
 // sequence is being written from there.
-func (s *State) markRope(slot, at, delta int) {
+func (s *Instance) markRope(slot, at, delta int) {
 	s.rewindRope(slot, at-1)
 	if s.ropeOf(slot, at) == at+delta {
 		return
@@ -86,7 +86,7 @@ func (s *State) markRope(slot, at, delta int) {
 
 // rewindRope forgets slot's marks past cache position p, for a sequence rolled
 // back to p (its next row is written at p+1, or at p for a mark at p).
-func (s *State) rewindRope(slot, p int) {
+func (s *Instance) rewindRope(slot, p int) {
 	if slot >= len(s.rmarks) {
 		return
 	}
@@ -110,7 +110,7 @@ func (s *State) rewindRope(slot, p int) {
 // -- take (position, column, row, picture) on the four axes, the picture's
 // ordinal in the sequence; its begin and end rows are text-like. The slot's
 // pictures are recorded where they start, so a later prompt counts them.
-func (s *State) xdRope(slot, p0 int, spans []Span) (rows [][4]int, next int, err error) {
+func (s *Instance) xdRope(slot, p0 int, spans []Span) (rows [][4]int, next int, err error) {
 	c := s.c
 	for len(s.ximg) <= slot {
 		s.ximg = append(s.ximg, nil)
@@ -167,7 +167,7 @@ func (s *State) xdRope(slot, p0 int, spans []Span) (rows [][4]int, next int, err
 // therefore laid out sequentially, which is fluent and wrong -- the state this
 // replaced, and the violation model.TestMRopeMatchesTransformers runs -- so
 // every caller that holds an image passes its grid (ChatSpans does).
-func (s *State) spanRope(slot, p0 int, spans []Span) (rows [][4]int, next int, err error) {
+func (s *Instance) spanRope(slot, p0 int, spans []Span) (rows [][4]int, next int, err error) {
 	c := s.c
 	if c.RopeXD {
 		return s.xdRope(slot, p0, spans)
@@ -210,7 +210,7 @@ func (s *State) spanRope(slot, p0 int, spans []Span) (rows [][4]int, next int, e
 // ropeTableRow writes the rotary rows of a row with an explicit multi-axis
 // position into row j of the batch tables: the plain table when its
 // coordinates agree (a text row, to the bit), the multi-axis one otherwise.
-func (s *State) ropeTableRow(j int, at [4]int) {
+func (s *Instance) ropeTableRow(j int, at [4]int) {
 	nrot, nrotSWA := s.c.RopeW(), s.c.NRotSWA
 	if at[0] == at[1] && at[1] == at[2] && at[2] == at[3] {
 		s.ropeRow(j, at[0])

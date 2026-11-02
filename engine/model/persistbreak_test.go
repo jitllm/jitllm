@@ -65,7 +65,7 @@ func persistBroken(t *testing.T, deps bool, brk func() func()) {
 			t.Skipf("no GPU: %v", err)
 		}
 		defer g.Close()
-		s := m.NewState(len(ids) + steps + 4)
+		s := m.NewInstance(len(ids) + steps + 4)
 		defer s.Close()
 		if err := s.SetDevice(g); err != nil {
 			t.Fatal(err)

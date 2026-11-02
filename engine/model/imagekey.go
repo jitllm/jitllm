@@ -94,7 +94,7 @@ func b2i(b bool) int {
 }
 
 // imageCache is the vision segment's output rows by ImageKey: a model's, so
-// every State of it shares what any of them encoded. Least recently used
+// every instance of it shares what any of them encoded. Least recently used
 // entries go first once the bytes pass the budget; an entry is immutable, and
 // what a caller gets is a copy.
 type imageCache struct {
@@ -163,15 +163,15 @@ func (m *Model) ImageCacheStats() (hits, misses int64) {
 }
 
 // EncodeImage is Encode through the model's image cache: the picture px --
-// preprocessed, its grid the one this State last preprocessed or was told --
+// preprocessed, its grid the one this instance last preprocessed or was told --
 // is named (ImageKey), and a name seen before returns its rows without a
 // block running. The rows are the caller's.
 //
 // Encode itself always runs the tower: a gate comparing two placements of the
 // same picture must not be answered by the cache.
-func (s *State) EncodeImage(px []float32) (Image, error) {
+func (s *Instance) EncodeImage(px []float32) (Image, error) {
 	if s.vis == nil {
-		return Image{}, fmt.Errorf("model: EncodeImage on a State that is not the vision segment's")
+		return Image{}, fmt.Errorf("model: EncodeImage on an instance that is not the vision segment's")
 	}
 	gh, gw := s.patchGrid()
 	rows, k, err := s.encodeNamed(px, gh, gw, func() ([]float32, error) { return s.Encode(px) })
@@ -185,12 +185,12 @@ func (s *State) EncodeImage(px []float32) (Image, error) {
 
 // encodeNamed names the pixels px of a gh x gw grid and answers from the image
 // cache, or runs encode and keeps what it returns. The rows are a copy.
-func (s *State) encodeNamed(px []float32, gh, gw int, encode func() ([]float32, error)) ([]float32, ImageKey, error) {
+func (s *Instance) encodeNamed(px []float32, gh, gw int, encode func() ([]float32, error)) ([]float32, ImageKey, error) {
 	return s.encodeNamedKey(s.vis.t.Cfg.imageKey(px, gh, gw), gh, gw, encode)
 }
 
 // encodeNamedKey is encodeNamed for pixels already named k.
-func (s *State) encodeNamedKey(k ImageKey, gh, gw int, encode func() ([]float32, error)) ([]float32, ImageKey, error) {
+func (s *Instance) encodeNamedKey(k ImageKey, gh, gw int, encode func() ([]float32, error)) ([]float32, ImageKey, error) {
 	// A gate's violation breaks the tower on purpose and must run it: the
 	// cache would answer with the clean rows.
 	if s.vis.fault != towerFaultNone || s.vis.t.Cfg.fault != towerFaultNone || qwenNoUnwindow || mnFault != mnFaultNone {

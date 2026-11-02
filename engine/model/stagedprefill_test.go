@@ -7,7 +7,7 @@ import (
 )
 
 // TestStagedPagedPrefillMatchesDecode prefills a prompt on the device as one
-// chunk and, in a second State, a token at a time, and demands the same last
+// chunk and, in a second instance, a token at a time, and demands the same last
 // logits, on a model whose attention head (256 wide) has no one-kernel flash
 // prefill on any backend here; the composer serves the chunk.
 //

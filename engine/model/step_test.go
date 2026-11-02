@@ -15,7 +15,7 @@ import (
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
-// TestStepAcrossSessionsMatchesEachAlone decodes three States -- three
+// TestStepAcrossSessionsMatchesEachAlone decodes three instances -- three
 // sessions on one device, three different prompts -- once a token at a time
 // each, and once together through Step, and demands the same logits: each row
 // of the joint step must read its own session's history and no other.
@@ -299,7 +299,7 @@ type stepResult struct {
 	// Mixture blocks the joint steps ran grouped by expert, and the grouped
 	// expert matvecs among them on sm_70's tensor cores.
 	grouped, groupedVolta int
-	// States aligned at the first joint step, at the one after the first
+	// instances aligned at the first joint step, at the one after the first
 	// session stepped apart, and at every other.
 	alignsFirst, alignsApart, alignsOther int
 }
@@ -308,7 +308,7 @@ type stepResult struct {
 var stepPrompts = []string{"The capital of France is", "Water boils at a temperature of",
 	"The clerk counted barrels of salt on the upper floor, and"}
 
-// stepGate decodes three prompts on g once a State at a time and once
+// stepGate decodes three prompts on g once an instance at a time and once
 // together through Step, teacher-forced, and returns the worst logit NMSE of
 // the joint arm against each session alone. With apart, the first session
 // decodes one token on its own halfway through, in both arms. It fails if
@@ -317,16 +317,16 @@ func stepGate(t *testing.T, m *Model, g *tier.GPU, apart bool) stepResult {
 	t.Helper()
 	prompts := stepPrompts
 	const steps, mid = 8, 4
-	// arm opens a State per prompt and prefills it. It returns the States
+	// arm opens an instance per prompt and prefills it. It returns the instances
 	// and each one's next token. The alone arm's are closed as soon as its
 	// logits are taken, so a card holds one arm's histories at a time.
-	closed := map[*State]bool{}
-	arm := func() ([]*State, []int32) {
-		var sts []*State
+	closed := map[*Instance]bool{}
+	arm := func() ([]*Instance, []int32) {
+		var sts []*Instance
 		var next []int32
 		for _, pr := range prompts {
 			ids := m.Vocab.Encode(pr, true)
-			st := m.NewState(len(ids) + steps + 2)
+			st := m.NewInstance(len(ids) + steps + 2)
 			t.Cleanup(func() {
 				if !closed[st] {
 					st.Close()
@@ -386,7 +386,7 @@ func stepGate(t *testing.T, m *Model, g *tier.GPU, apart bool) stepResult {
 		closed[st] = true
 	}
 	together, _ := arm()
-	// The selection named before anything runs: a State StepRuns would take
+	// The selection named before anything runs: an instance StepRuns would take
 	// alone says why, where the row count below could only say that it did.
 	for i, st := range together {
 		switch err := st.StepRefusal(); err {
@@ -493,11 +493,11 @@ func orderControl(t *testing.T, m *Model, dev string) float64 {
 		}
 		defer g.Close()
 		var out [][]float32
-		sts := make([]*State, len(stepPrompts))
+		sts := make([]*Instance, len(stepPrompts))
 		next := make([]int32, len(stepPrompts))
 		for i, pr := range stepPrompts {
 			ids := m.Vocab.Encode(pr, true)
-			sts[i] = m.NewState(len(ids) + steps + 2)
+			sts[i] = m.NewInstance(len(ids) + steps + 2)
 			defer sts[i].Close()
 			if err := sts[i].SetDevice(g); err != nil {
 				t.Fatal(err)

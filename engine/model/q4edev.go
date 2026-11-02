@@ -11,7 +11,7 @@ import (
 // hands over before a call that runs the n-gram block.
 
 // q4ePlan fills block li's Qwen3.8-Flash-Next fields of plan.
-func (s *State) q4ePlan(li int, plan *nn.LayerPlan) {
+func (s *Instance) q4ePlan(li int, plan *nn.LayerPlan) {
 	c := s.m.Cfg
 	if !c.Q4E() {
 		return
@@ -38,7 +38,7 @@ func (s *State) q4ePlan(li int, plan *nn.LayerPlan) {
 }
 
 // q4eWeights adds block li's Qwen3.8-Flash-Next tensors to w.
-func (s *State) q4eWeights(li int, w *nn.LayerWeights) {
+func (s *Instance) q4eWeights(li int, w *nn.LayerWeights) {
 	l := &s.m.layers[li]
 	d := l.q4e
 	if d == nil {
@@ -59,11 +59,11 @@ func (s *State) q4eWeights(li int, w *nn.LayerWeights) {
 }
 
 // ngramToDevice hashes and gathers the n-gram rows of n rows -- row r the
-// next position of sequence slot(r) of State owner(r) with token tok(r) --
+// next position of sequence slot(r) of instance owner(r) with token tok(r) --
 // and hands them to the device that runs the n-gram block of [lo, hi), when
 // one does. order is the rows in each sequence's position order (nil for
 // 0..n-1). The host keeps the predecessors whichever side runs the block.
-func (s *State) ngramToDevice(lo, hi, n int, order []int, owner func(r int) (*State, int),
+func (s *Instance) ngramToDevice(lo, hi, n int, order []int, owner func(r int) (*Session, int),
 	tok func(r int) int32) error {
 	c := s.m.Cfg
 	s.qsaMarksToDevice(lo, hi, n, owner)
@@ -82,7 +82,7 @@ func (s *State) ngramToDevice(lo, hi, n int, order []int, owner func(r int) (*St
 	g.undo = g.undo[:0]
 	for r := 0; r < n; r++ {
 		o, sl := owner(r)
-		prev, _ := o.ngramState(li, sl)
+		prev, _ := s.ngramStateOf(o, li, sl)
 		i := len(g.undo)
 		g.undo = append(g.undo, ngramUndo{o: o, slot: sl})
 		copy(g.undoPrev[i*np:(i+1)*np], prev)
@@ -99,7 +99,7 @@ func (s *State) ngramToDevice(lo, hi, n int, order []int, owner func(r int) (*St
 // picture moved its sequence's positions, which a QSA block's pooled keys
 // turn by (qsa.go's ropeOf) -- when [lo, hi) holds a QSA block: per row its
 // count, then its (position, delta) pairs.
-func (s *State) qsaMarksToDevice(lo, hi, n int, owner func(r int) (*State, int)) {
+func (s *Instance) qsaMarksToDevice(lo, hi, n int, owner func(r int) (*Session, int)) {
 	c := s.m.Cfg
 	if s.ldQSA == nil || c.QSARatio == 0 {
 		return
@@ -130,14 +130,14 @@ func (s *State) qsaMarksToDevice(lo, hi, n int, owner func(r int) (*State, int))
 
 // ngramUndo is one sequence's predecessors before ngramToDevice moved them.
 type ngramUndo struct {
-	o    *State
+	o    *Session
 	slot int
 }
 
 // ngramUndoRows puts back the predecessors ngramToDevice moved on, for a
 // device call that failed and whose rows the host runs instead. A sequence
 // with several rows in the call is put back to the first row's.
-func (s *State) ngramUndoRows() {
+func (s *Instance) ngramUndoRows() {
 	c := s.m.Cfg
 	if s.q4 == nil || s.q4.ng == nil || c.NGramBlock == 0 {
 		return
@@ -145,21 +145,21 @@ func (s *State) ngramUndoRows() {
 	g, np, li := s.q4.ng, c.NGram-1, c.NGramBlock-1
 	for i := len(g.undo) - 1; i >= 0; i-- {
 		u := g.undo[i]
-		prev, _ := u.o.ngramState(li, u.slot)
+		prev, _ := s.ngramStateOf(u.o, li, u.slot)
 		copy(prev, g.undoPrev[i*np:(i+1)*np])
 	}
 	g.undo = g.undo[:0]
 }
 
-// selfSlot0 is a one-row call's owner: this State's sequence 0.
-func (s *State) selfSlot0(int) (*State, int) { return s, 0 }
+// selfSlot0 is a one-row call's owner: this session's sequence 0.
+func (s *Instance) selfSlot0(int) (*Session, int) { return s.Session, 0 }
 
 // tok1At is a one-row call's token, which tokenIDs was handed too.
-func (s *State) tok1At(int) int32 { return s.tok1[0] }
+func (s *Instance) tok1At(int) int32 { return s.tok1[0] }
 
 // setCall names the rows of a call over one sequence for ngramToDevice:
-// sequence slot of State o, row i's token ids[i] (-1 past ids).
-func (g *q4eScratch) setCall(o *State, slot int, ids []int32) {
+// sequence slot of instance o, row i's token ids[i] (-1 past ids).
+func (g *q4eScratch) setCall(o *Instance, slot int, ids []int32) {
 	if g == nil {
 		return
 	}
@@ -167,7 +167,7 @@ func (g *q4eScratch) setCall(o *State, slot int, ids []int32) {
 }
 
 // callOwner and callTok are setCall's rows.
-func (g *q4eScratch) callOwner(int) (*State, int) { return g.callState, g.callSlot }
+func (g *q4eScratch) callOwner(int) (*Session, int) { return g.callState.Session, g.callSlot }
 
 func (g *q4eScratch) callTok(r int) int32 {
 	if r < len(g.callIDs) {
@@ -177,31 +177,31 @@ func (g *q4eScratch) callTok(r int) int32 {
 }
 
 // setRows names a batch's rows for ngramToDevice: row i is sequence seq[i]
-// (of the State rowOwner says) with token ids[i].
-func (g *q4eScratch) setRows(o *State, seq []int, ids []int32) {
+// (of the instance rowOwner says) with token ids[i].
+func (g *q4eScratch) setRows(o *Instance, seq []int, ids []int32) {
 	g.callState, g.callSeq, g.callIDs = o, seq, ids
 }
 
-func (g *q4eScratch) rowsOwner(i int) (*State, int) { return g.callState.rowOwner(i, g.callSeq) }
+func (g *q4eScratch) rowsOwner(i int) (*Session, int) { return g.callState.rowOwner(i, g.callSeq) }
 
 // setStep names a device step's rows for ngramToDevice: row i is the
-// sequence whose slot base slot[i] is (a multiple of maxSeq), or the State a
+// sequence whose slot base slot[i] is (a multiple of maxSeq), or the instance a
 // multi-session step names, with token ids[i].
-func (g *q4eScratch) setStep(o *State, pos, slot []int, ids []int32) {
+func (g *q4eScratch) setStep(o *Instance, pos, slot []int, ids []int32) {
 	g.callState, g.callPos, g.callSlots, g.callIDs = o, pos, slot, ids
 }
 
-func (g *q4eScratch) stepOwner(i int) (*State, int) {
+func (g *q4eScratch) stepOwner(i int) (*Session, int) {
 	s := g.callState
 	if len(s.rowOwn) > 0 {
 		return s.rowOwn[i], 0
 	}
-	return s, g.callSlots[i] / s.maxSeq
+	return s.Session, g.callSlots[i] / s.maxSeq
 }
 
 // causalOrder is the rows of a step in position order, stable: each
 // sequence's rows in the order it wrote them.
-func (s *State) causalOrder(pos []int) []int {
+func (s *Instance) causalOrder(pos []int) []int {
 	o := slices.Grow(s.rowCausal[:0], len(pos))[:len(pos)]
 	s.rowCausal = o
 	for i := range o {

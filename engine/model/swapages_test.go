@@ -78,8 +78,8 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 			}
 			// run decodes toks one at a time, hashing every step's logits, and
 			// reports the peak resident pages of the windowed layers.
-			run := func(g *tier.GPU, keep, fault bool) (sums []uint64, last []float32, peak int, s *State, err error) {
-				s = m.NewState(maxSeq)
+			run := func(g *tier.GPU, keep, fault bool) (sums []uint64, last []float32, peak int, s *Instance, err error) {
+				s = m.NewInstance(maxSeq)
 				if g != nil {
 					if err := s.SetDevice(g); err != nil {
 						t.Fatal(err)
@@ -169,7 +169,7 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 
 // windowRun is one decode of TestWindowedLayersHoldTheirWindow: on g (nil for
 // the host), keeping every page (keep) or releasing the window's own (fault).
-type windowRun func(g *tier.GPU, keep, fault bool) (sums []uint64, last []float32, peak int, s *State, err error)
+type windowRun func(g *tier.GPU, keep, fault bool) (sums []uint64, last []float32, peak int, s *Instance, err error)
 
 // windowOnDevice is the device arm: every block and the head placed, the
 // shipping tier against one that keeps every page (tier.Config.KVKeepWindow),

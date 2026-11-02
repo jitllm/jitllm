@@ -83,10 +83,10 @@ func TestRopeTableDose(t *testing.T) {
 	for i := range ids {
 		ids[i] = int32(1 + i%64)
 	}
-	// One State with the flag toggled per round, so the two arms share one
+	// One instance with the flag toggled per round, so the two arms share one
 	// JIT, one KV cache and one warm-up.
 	m.jit = []nn.Option{nn.WithTune(nn.TuneOff), nn.WithQuietTuner(true)}
-	st := m.NewState(prompt + decode + 8)
+	st := m.NewInstance(prompt + decode + 8)
 	defer st.Close()
 
 	step := func(goLoop bool) {

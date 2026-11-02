@@ -53,7 +53,7 @@ type seamTuner struct {
 // a placement must not flap between two nearly-equal answers.
 const SeamTuneMargin = 1.05
 
-func (s *State) initSeamTuner() {
+func (s *Instance) initSeamTuner() {
 	if s.ld == nil || s.gpuLayers <= s.lo {
 		return
 	}
@@ -85,7 +85,7 @@ func (s *State) initSeamTuner() {
 // On Kimi-K3 over eight V100s the two decoded within a few percent of each
 // other while the streamed one prefilled 1.5x faster (placement.md 16c), so
 // which wins is a property of the box, the disk and the link, not a rule.
-func (s *State) initStreamTrial() {
+func (s *Instance) initStreamTrial() {
 	// Two of its arms run on the CPU, a destination only a caller that
 	// listed it lets the engine try.
 	if s.ld == nil || s.gpuLayers <= s.lo || !s.cpuListed() {
@@ -127,7 +127,7 @@ func (s *State) initStreamTrial() {
 //
 // Deciding takes about warmup + rounds*4*perRun tokens and four migrations.
 // Off is the default and leaves the load-time placement as it is.
-func (s *State) SetSeamTuning(on bool) {
+func (s *Instance) SetSeamTuning(on bool) {
 	if !on {
 		// The stream trial is not the seam tuner and has its own switch
 		// (WithStreamTrial): turning seam tuning off leaves it running.
@@ -147,7 +147,7 @@ func (s *State) SetSeamTuning(on bool) {
 // WithSeamTuneSchedule does for every session of the model; a non-positive
 // value keeps what the tuner has. It shapes the tuner SetSeamTuning armed and
 // does nothing to the stream trial, whose schedule is the load's.
-func (s *State) SetSeamSchedule(warmup, perRun, rounds int) {
+func (s *Instance) SetSeamSchedule(warmup, perRun, rounds int) {
 	t := s.seam
 	if t == nil || t.trial {
 		return
@@ -164,7 +164,7 @@ func (s *State) SetSeamSchedule(warmup, perRun, rounds int) {
 }
 
 // SeamTuned reports the placement the tuner settled on, and whether it settled.
-func (s *State) SeamTuned() (blocks int, settled bool) {
+func (s *Instance) SeamTuned() (blocks int, settled bool) {
 	if s.seam == nil {
 		return s.gpuLayers, false
 	}
@@ -173,7 +173,7 @@ func (s *State) SeamTuned() (blocks int, settled bool) {
 
 // seamStep runs one token's worth of the tuner. Called once per token, after
 // the token is complete.
-func (s *State) seamStep() {
+func (s *Instance) seamStep() {
 	t := s.seam
 	if t == nil || !t.on || t.settled {
 		return
@@ -222,7 +222,7 @@ func (t *seamTuner) armWant() int {
 	return t.chal
 }
 
-func (t *seamTuner) observe(s *State, rate float64) {
+func (t *seamTuner) observe(s *Instance, rate float64) {
 	q := t.turn % 4
 	t.quad[q] = rate
 	if t.verbose {
@@ -306,7 +306,7 @@ type trialArm struct {
 // place puts candidate c in force and reports whether the device gave it:
 // the seam tuner's block count, or the trial's arm -- whose expert choice
 // takes a fresh placement, since a block takes it when it is placed.
-func (t *seamTuner) place(s *State, c int) bool {
+func (t *seamTuner) place(s *Instance, c int) bool {
 	if !t.trial {
 		return s.SetGPULayers(c) == c
 	}
@@ -330,7 +330,7 @@ func (t *seamTuner) place(s *State, c int) bool {
 	return s.SetGPULayers(a.blocks) == a.blocks
 }
 
-func (t *seamTuner) finish(s *State, why string) {
+func (t *seamTuner) finish(s *Instance, why string) {
 	t.settled = true
 	t.why = why
 	if t.verbose {

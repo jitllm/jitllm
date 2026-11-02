@@ -10,7 +10,7 @@ import (
 // TestPrefillForwardRowsIsTheForwardLoop: with WithPrefillForwardRows(n), a
 // prompt of up to n tokens is the decode path's Forward over each token --
 // the same logits, bit for bit -- and a longer one, or any prompt without the
-// option, still takes the batched chunk (State.forwardPrompts counts which).
+// option, still takes the batched chunk (Instance.forwardPrompts counts which).
 func TestPrefillForwardRowsIsTheForwardLoop(t *testing.T) {
 	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune, WithPrefillForwardRows(6))
 	if err != nil {
@@ -18,7 +18,7 @@ func TestPrefillForwardRowsIsTheForwardLoop(t *testing.T) {
 	}
 	defer m.Close()
 	loop := func(ids []int32) []float32 {
-		s := m.NewState(len(ids) + 2)
+		s := m.NewInstance(len(ids) + 2)
 		defer s.Close()
 		var lg []float32
 		for _, id := range ids {
@@ -29,7 +29,7 @@ func TestPrefillForwardRowsIsTheForwardLoop(t *testing.T) {
 		return slices.Clone(lg)
 	}
 	pre := func(ids []int32, forward int) []float32 {
-		s := m.NewState(len(ids) + 2)
+		s := m.NewInstance(len(ids) + 2)
 		defer s.Close()
 		lg, err := s.Prefill(ids)
 		if err != nil {
@@ -53,7 +53,7 @@ func TestPrefillForwardRowsIsTheForwardLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m2.Close()
-	s := m2.NewState(len(short) + 2)
+	s := m2.NewInstance(len(short) + 2)
 	defer s.Close()
 	if _, err := s.Prefill(short); err != nil {
 		t.Fatal(err)

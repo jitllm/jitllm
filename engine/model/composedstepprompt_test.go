@@ -72,7 +72,7 @@ func composedPromptModel(t *testing.T, name string) (*Model, []int32, []float32)
 	text := strings.Repeat("The river rose every spring until the bridges were islands, "+
 		"and the clerk counted barrels of salt on the upper floor. ", 40)
 	ids := m.Vocab.Encode(text, true)[:700]
-	host := m.NewState(len(ids) + 4)
+	host := m.NewInstance(len(ids) + 4)
 	want, err := host.Prefill(ids)
 	if err != nil {
 		m.Close()
@@ -109,7 +109,7 @@ func composedPromptAt(t *testing.T, m *Model, ids []int32, parts tier.Parts, til
 		noDevice(t, "device", err)
 	}
 	t.Cleanup(g.Close)
-	st := m.NewState(len(ids) + 4)
+	st := m.NewInstance(len(ids) + 4)
 	t.Cleanup(func() { st.Close() })
 	st.SetDevice(g)
 	if st.GPULayers() != m.Cfg.NLayer {

@@ -10,10 +10,10 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// TestFirstPromptDoesNotGrowTheKVPool: a State that places every block on a
+// TestFirstPromptDoesNotGrowTheKVPool: an instance that places every block on a
 // device grows the device's KV pools ahead (PrewarmKV), so its first prompt
 // of one chunk grows none of them -- Stats.KVGrows does not move across the
-// Prefill -- and answers exactly as the same State without the prewarm,
+// Prefill -- and answers exactly as the same instance without the prewarm,
 // whose first prompt does grow them (the violation arm, which must move the
 // counter or the gate proves nothing). With a budget that leaves no room past
 // the blocks, the prewarm takes nothing and places the same blocks as no
@@ -51,7 +51,7 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 		}
 		defer g.Close()
 		in := ids(m)
-		st := m.NewState(len(in) + 16)
+		st := m.NewInstance(len(in) + 16)
 		defer st.Close()
 		st.SetDevice(g)
 		before := g.Stats()
@@ -84,7 +84,7 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 		}
 	}
 	// A budget exactly what placement spent without the prewarm, and a page's
-	// room more: the prewarm finds no room, takes nothing, and the State
+	// room more: the prewarm finds no room, takes nothing, and the instance
 	// places what the same budget places without it -- it grows into what placement left,
 	// never into a block's room or past the budget.
 	tight := off.used + 1<<16

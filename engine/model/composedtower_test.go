@@ -33,7 +33,7 @@ func coveredTower(m *Model) int {
 // towerEncode is s's residual after tower block 0 and its encode of px;
 // the residual is nil where block 0 ends no run of s's (a device's range
 // past it).
-func towerEncode(t *testing.T, s *State, px []float32) (after0, out []float32) {
+func towerEncode(t *testing.T, s *Instance, px []float32) (after0, out []float32) {
 	t.Helper()
 	s.vis.afterBlock = func(li int, x []float32) {
 		if li == 0 && after0 == nil {
@@ -48,7 +48,7 @@ func towerEncode(t *testing.T, s *State, px []float32) (after0, out []float32) {
 }
 
 // towerEncodeAt is towerEncode where block 0 ends a run.
-func towerEncodeAt(t *testing.T, s *State, px []float32) (after0, out []float32) {
+func towerEncodeAt(t *testing.T, s *Instance, px []float32) (after0, out []float32) {
 	t.Helper()
 	after0, out = towerEncode(t, s, px)
 	if after0 == nil {
@@ -374,7 +374,7 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			// The violations of the card's picture rows, each against the clean
 			// composed encode: a patch row gathered from the next patch, then
 			// the projector's own op.
-			vio := func(name string, set func(s *State), unset func()) {
+			vio := func(name string, set func(s *Instance), unset func()) {
 				bs := tw.testState()
 				defer bs.Close()
 				bs.SetDevice(g)
@@ -389,17 +389,17 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 				}
 			}
 			if ce == 1 {
-				vio("each row the next patch", func(s *State) { s.cpu.fault = cpuFaultEntryRows }, func() {})
+				vio("each row the next patch", func(s *Instance) { s.cpu.fault = cpuFaultEntryRows }, func() {})
 			}
 			switch {
 			case cp == 0:
 			case c.WinPattern > 0:
-				vio("the merged rows left in the window order", func(*State) { qwenNoUnwindow = true }, func() { qwenNoUnwindow = false })
+				vio("the merged rows left in the window order", func(*Instance) { qwenNoUnwindow = true }, func() { qwenNoUnwindow = false })
 			case c.Scale > 1 && tw.projW.k == c.NEmbd:
 				tw.Cfg.fault = towerFaultPoolCorner
-				vio("the pool reads a group's first patch alone", func(*State) {}, func() { tw.Cfg.fault = towerFaultNone })
+				vio("the pool reads a group's first patch alone", func(*Instance) {}, func() { tw.Cfg.fault = towerFaultNone })
 			case c.Scale > 1:
-				vio("the regroup's slots swapped", func(*State) { tw.Cfg.fault = towerFaultShuffleSwap }, func() { tw.Cfg.fault = towerFaultNone })
+				vio("the regroup's slots swapped", func(*Instance) { tw.Cfg.fault = towerFaultShuffleSwap }, func() { tw.Cfg.fault = towerFaultNone })
 			}
 
 			defer func(was int) { tw.opt.towerGPULayers = was }(tw.opt.towerGPULayers)
@@ -613,7 +613,7 @@ func TestComposedPictureRowsEveryFamily(t *testing.T) {
 			_, ew, ee := m.towerEntryOf()
 			_, pw, pe := m.towerProjOf(false)
 			px := rainbow(c.ImageSz)
-			entry := func() ([]float32, *State) {
+			entry := func() ([]float32, *Instance) {
 				s := tw.testState()
 				var out []float32
 				s.vis.afterBlock = func(li int, x []float32) {
@@ -628,7 +628,7 @@ func TestComposedPictureRowsEveryFamily(t *testing.T) {
 			}
 			side := c.ImageSz / c.PatchSz
 			rows := projectorRows(side*side, c.NEmbd)
-			project := func() ([]float32, *State) {
+			project := func() ([]float32, *Instance) {
 				s := tw.testState()
 				s.windowOrder(side, side)
 				got, err := s.project(append([]float32(nil), rows...))

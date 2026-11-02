@@ -25,7 +25,7 @@ func TestPoisonedScratchChangesNothing(t *testing.T) {
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		defer s.Close()
 		s.SetDeviceLayers(g, 2)
 		if s.GPULayers() != 2 {

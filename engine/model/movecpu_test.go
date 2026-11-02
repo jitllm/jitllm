@@ -36,9 +36,9 @@ func TestBlocksMoveToTheCPUAndBack(t *testing.T) {
 // composedMoves holds st's composed CPU census to the moves: on the control
 // the prompt's and every decode step of every block served; on the moved
 // run each block
-// composed at the State's placement, again at the move to the CPU and once
+// composed at the instance's placement, again at the move to the CPU and once
 // more for the upper half, and the block steps between the moves served.
-func composedMoves(t *testing.T, st *State, n, half int, devices bool, ntok, toCPU, toB, halfCPU, toA int) {
+func composedMoves(t *testing.T, st *Instance, n, half int, devices bool, ntok, toCPU, toB, halfCPU, toA int) {
 	t.Helper()
 	served, declined := st.CPUBlockSteps()
 	for i, k := range declined {
@@ -90,7 +90,7 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	prompt := m.Vocab.Encode("The capital of France is a city that", true)
 
 	// where fails unless every block of [lo, hi) is on dev, by both reads.
-	where := func(st *State, lo, hi int, dev string) {
+	where := func(st *Instance, lo, hi int, dev string) {
 		t.Helper()
 		locs := st.Locations()
 		for li := lo; li < hi; li++ {
@@ -99,7 +99,7 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 			}
 		}
 	}
-	move := func(st *State, lo, hi int, to string) BlockMove {
+	move := func(st *Instance, lo, hi int, to string) BlockMove {
 		t.Helper()
 		mv, err := st.MoveBlocks(lo, hi, to)
 		if err != nil {
@@ -113,7 +113,7 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	}
 	half := n / 2
 	run := func(ids []int32, devices bool) [][]float32 {
-		st := m.NewState(len(prompt) + ntok + 1)
+		st := m.NewInstance(len(prompt) + ntok + 1)
 		defer st.Close()
 		if composed {
 			defer func() { composedMoves(t, st, n, half, devices, ntok, toCPU, toB, halfCPU, toA) }()

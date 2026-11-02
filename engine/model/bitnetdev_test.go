@@ -62,7 +62,7 @@ func TestBitNetOnEveryDevice(t *testing.T) {
 // the composer served.
 type bitnetArm struct {
 	name    string
-	run     func(*State) [][]float32
+	run     func(*Instance) [][]float32
 	want    [][]float32
 	layers  int
 	f32Attn bool
@@ -76,7 +76,7 @@ const bitnetDevPrefill = 2e-2
 
 func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 	t.Helper()
-	decode := func(st *State) [][]float32 {
+	decode := func(st *Instance) [][]float32 {
 		var out [][]float32
 		for _, id := range g.IDs {
 			lg, err := st.Forward(id)
@@ -87,15 +87,15 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 		}
 		return out
 	}
-	prefill := func(st *State) [][]float32 {
+	prefill := func(st *Instance) [][]float32 {
 		lg, err := st.Prefill(g.IDs)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return [][]float32{append([]float32(nil), lg...)}
 	}
-	onHost := func(run func(*State) [][]float32) [][]float32 {
-		st := m.NewState(len(g.IDs) + 1)
+	onHost := func(run func(*Instance) [][]float32) [][]float32 {
+		st := m.NewInstance(len(g.IDs) + 1)
 		defer st.Close()
 		return run(st)
 	}
@@ -134,7 +134,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 		t.Run(spec, func(t *testing.T) {
 			// layers -1 places every block and the head; n > 0 the first n
 			// and leaves the rest, the head included, on the host.
-			onDevice := func(run func(*State) [][]float32, layers int, f32Attn, noGraph bool) ([][]float32, string) {
+			onDevice := func(run func(*Instance) [][]float32, layers int, f32Attn, noGraph bool) ([][]float32, string) {
 				opts := append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
 					testTierOpts(t)...)
 				if f32Attn {
@@ -150,7 +150,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 					t.Fatal(err)
 				}
 				defer gpu.Close()
-				st := m.NewState(len(g.IDs) + 1)
+				st := m.NewInstance(len(g.IDs) + 1)
 				defer st.Close()
 				st.SetDeviceLayers(gpu, layers)
 				want := nl

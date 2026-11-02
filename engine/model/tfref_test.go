@@ -81,7 +81,7 @@ func TestTeacherForcedAgainstReference(t *testing.T) {
 		}
 		return out
 	}
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	if spec := testdevices.One(""); spec != "" {
 		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))

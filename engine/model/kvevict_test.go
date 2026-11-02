@@ -70,7 +70,7 @@ func newEvictGateOf(t *testing.T, name string) *evictGate {
 	eg := &evictGate{m: m}
 	eg.prompt = m.Vocab.Encode(strings.Repeat("The clerk counted barrels of salt on the upper floor. ", 3), true)[:24]
 	eg.turn = m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands. ", 10), false)[:100]
-	st := m.NewState(eg.seq())
+	st := m.NewInstance(eg.seq())
 	defer st.Close()
 	lg, err := st.Prefill(eg.prompt)
 	if err != nil {
@@ -95,7 +95,7 @@ func (eg *evictGate) seq() int {
 }
 
 // second runs the second prompt and evictTurnSteps greedy steps after it.
-func (eg *evictGate) second(t *testing.T, st *State) [][]float32 {
+func (eg *evictGate) second(t *testing.T, st *Instance) [][]float32 {
 	lg, err := st.Prefill(eg.turn)
 	if err != nil {
 		t.Fatalf("the second prompt: %v", err)
@@ -110,10 +110,10 @@ func (eg *evictGate) second(t *testing.T, st *State) [][]float32 {
 	return out
 }
 
-// open is an arm's device and State, the model wholly placed and the prompt
+// open is an arm's device and instance, the model wholly placed and the prompt
 // in; squeeze then holds the budget at a few pages of slack. cfg, where set,
 // changes the arm's device configuration.
-func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*tier.Config)) (*tier.GPU, *State, int) {
+func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*tier.Config)) (*tier.GPU, *Instance, int) {
 	g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) {
 			c.KVPage = 64 // the smallest page: several over a short history
@@ -126,7 +126,7 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*tier.Config)) (*
 		noDevice(t, "device", err)
 	}
 	t.Cleanup(g.Close)
-	st := eg.m.NewState(eg.seq())
+	st := eg.m.NewInstance(eg.seq())
 	t.Cleanup(func() { st.Close() })
 	if err := st.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -304,11 +304,11 @@ func TestKVEvictionStreamsWithoutAllocating(t *testing.T) {
 
 // TestKVEvictionRewindsIntoAnEvictedPage: a history whose oldest pages went
 // home is taken back to a position inside one of them -- a speculative
-// rollback, a pooled State's next prompt -- and decoded forward through
+// rollback, a pooled instance's next prompt -- and decoded forward through
 // another text. The page the position lies inside comes back to the card with
 // its home copy, whose rows below the position are still the history, and the
 // pages past it are released for the new rows; every step is held to a host
-// State that took the same ids. Before the tier learned of rewinds, the new
+// Instance that took the same ids. Before the tier learned of rewinds, the new
 // rows landed on the dummy page under an evicted page's id and the stream
 // uploaded the old copy over them (NMSE 0.92 at the seventh step), and with a
 // layer joining later streamDecode indexed past its home copies: the jitllmd
@@ -330,7 +330,7 @@ func TestKVEvictionRewindsIntoAnEvictedPage(t *testing.T) {
 	// it are another text, so a page read from its old copy reads wrong.
 	const p = 64 + 17
 	next := append(append([]int32(nil), eg.turn...), eg.turn...)
-	host := eg.m.NewState(eg.seq())
+	host := eg.m.NewInstance(eg.seq())
 	defer host.Close()
 	if _, err := host.Prefill(eg.prompt); err != nil {
 		t.Fatal(err)

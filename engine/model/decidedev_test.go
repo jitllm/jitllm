@@ -349,7 +349,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						}
 						// A fresh device, with g's room given back first: the
 						// clean arm's blocks stay resident on g for whoever
-						// attaches next (a decoder State's Close leaves them),
+						// attaches next (a decoder instance's Close leaves them),
 						// and would be shared rather than offered.
 						g.Close()
 						gv := open()

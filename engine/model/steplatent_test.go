@@ -84,7 +84,7 @@ func TestStepRunsAdmitsALatentPrompt(t *testing.T) {
 					got, rows := plan.together(t, m, g)
 					s1 := g.Stats()
 					if n := s1.SessionRows - s0.SessionRows; n != rows {
-						t.Fatalf("%d rows ran across sessions, want %d: StepRuns went one State after another (%s)",
+						t.Fatalf("%d rows ran across sessions, want %d: StepRuns went one instance after another (%s)",
 							n, rows, g.Err())
 					}
 					if s1.RowsLatent == s0.RowsLatent {

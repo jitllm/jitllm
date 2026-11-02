@@ -39,10 +39,10 @@ func TestKVF16IsSelectedAndRuns(t *testing.T) {
 		for i := range ids {
 			ids[i] %= int32(m.Cfg.NVocab)
 		}
-		run := func(f16 bool) (*State, [][]float32) {
+		run := func(f16 bool) (*Instance, [][]float32) {
 			m.SetKVF16(f16)
 			defer m.SetKVF16(false)
-			s := m.NewState(32)
+			s := m.NewInstance(32)
 			var outs [][]float32
 			for _, id := range ids {
 				out, err := s.Forward(id)
@@ -116,7 +116,7 @@ func TestKVF16IsSelectedAndRuns(t *testing.T) {
 		// And the tuner's own answer, unforced: it takes f16 only when the f16
 		// kernel costs no more, so amd64 and arm64 can differ.
 		m.ClearKVF16()
-		auto := m.NewState(32)
+		auto := m.NewInstance(32)
 		t.Logf("%-30s unforced: KVWidthPaysOff -> f16=%v", name, auto.KVIsF16())
 		auto.Close()
 		m.SetKVF16(false)

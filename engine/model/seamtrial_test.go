@@ -58,7 +58,7 @@ func TestStreamTrialTriesEveryArm(t *testing.T) {
 // load's schedule.
 func TestSeamScheduleReachesTheSessionsTuner(t *testing.T) {
 	runs := func(rounds int) int {
-		s := &State{seam: &seamTuner{on: true, cands: []int{93, 0}, best: 93, chal: 0, warmup: 32, perRun: 24, rounds: 3}}
+		s := &Instance{seam: &seamTuner{on: true, cands: []int{93, 0}, best: 93, chal: 0, warmup: 32, perRun: 24, rounds: 3}}
 		s.SetSeamSchedule(0, 7, rounds)
 		if s.seam.warmup != 32 || s.seam.perRun != 7 {
 			t.Fatalf("schedule warmup %d perRun %d: want 32 kept and 7 taken", s.seam.warmup, s.seam.perRun)
@@ -72,7 +72,7 @@ func TestSeamScheduleReachesTheSessionsTuner(t *testing.T) {
 	if a, b := runs(0), runs(6); b <= a {
 		t.Fatalf("six rounds decided in %d runs, three in %d: the session's rounds did not reach the tuner", b, a)
 	}
-	tr := &State{seam: &seamTuner{trial: true, rounds: 3}}
+	tr := &Instance{seam: &seamTuner{trial: true, rounds: 3}}
 	tr.SetSeamSchedule(1, 1, 9)
 	if tr.seam.rounds != 3 {
 		t.Fatal("a session's schedule reshaped the stream trial")

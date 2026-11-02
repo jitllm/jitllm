@@ -9,7 +9,7 @@ import (
 
 // stateBytes is everything a session's next token reads of its history on the
 // host: every resident KV page, key and value, and the recurrent state.
-func stateBytes(s *State) []byte {
+func stateBytes(s *Instance) []byte {
 	var b bytes.Buffer
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		pg := &s.kv.layers[li]
@@ -30,7 +30,7 @@ func stateBytes(s *State) []byte {
 }
 
 // decodeIDs is n greedy tokens from wherever st stands, starting at next.
-func decodeIDs(t *testing.T, st *State, next int32, n int) ([]int32, int32) {
+func decodeIDs(t *testing.T, st *Instance, next int32, n int) ([]int32, int32) {
 	t.Helper()
 	var out []int32
 	for range n {
@@ -77,7 +77,7 @@ func TestParkResumesByteForByte(t *testing.T) {
 			n := ctx - len(prompt) - 4
 			half := n / 2
 			solo := func() []int32 {
-				st := m.NewState(ctx)
+				st := m.NewInstance(ctx)
 				defer st.Close()
 				st.SetKVStore(NewMemStore())
 				lg, err := st.Prefill(prompt)
@@ -89,7 +89,7 @@ func TestParkResumesByteForByte(t *testing.T) {
 			}
 			want := solo()
 
-			st := m.NewState(ctx)
+			st := m.NewInstance(ctx)
 			defer st.Close()
 			if arm.store {
 				st.SetKVStore(NewMemStore())

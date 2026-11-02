@@ -87,7 +87,7 @@ func TestMTPMatchesReference(t *testing.T) {
 func mtpLogits(t *testing.T, m *Model, ids []int32, fault int) [][]float32 {
 	t.Helper()
 	c := m.Cfg
-	st := m.NewState(len(ids) + 8)
+	st := m.NewInstance(len(ids) + 8)
 	defer st.Close()
 	sp, err := st.Speculate(WithSpecDraft(1))
 	if err != nil {

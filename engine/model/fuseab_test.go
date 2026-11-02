@@ -13,10 +13,10 @@ import (
 
 // TestBlockFusionAB is fused host decode (sched.Pool.Fuse) against the per-op
 // path, in one process, interleaved (RULE 2): an A/A of the fused arm against
-// itself first, then the comparison twice. Both arms are one State, its fusion
+// itself first, then the comparison twice. Both arms are one instance, its fusion
 // switched before each arm's run of tokens (SetBlockFusion), so they share a
 // pool, a cache and a history, and the depth grows alike under both; a second
-// State beside it would be another user of the cores and close fusion to both.
+// Instance beside it would be another user of the cores and close fusion to both.
 // Each arm is checked to have run the path it names. Ratios are per-op/fused
 // time: above 1, fused decode is faster.
 //
@@ -44,7 +44,7 @@ func TestBlockFusionAB(t *testing.T) {
 	}
 	defer m.Close()
 	// Six comparisons of rounds+1 turns of two arms each, run tokens a turn.
-	s := m.NewState(depth + 6*2*(rounds+1)*run + 8)
+	s := m.NewInstance(depth + 6*2*(rounds+1)*run + 8)
 	defer s.Close()
 	prompt := make([]int32, depth)
 	for i := range prompt {

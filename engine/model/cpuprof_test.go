@@ -47,7 +47,7 @@ func TestComposedCPUProfile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		st := m.NewState(warm + toks + 64)
+		st := m.NewInstance(warm + toks + 64)
 		prompt := m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands. ", 1+pp/8), true)[:pp]
 		l, err := st.Prefill(m.Vocab.Encode("The river rose every spring until", true))
 		if err != nil {

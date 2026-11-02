@@ -55,7 +55,7 @@ const prefillStreamMargin = 1.05
 // prefillStreamer is one prompt's streaming: which blocks it moved, what it
 // measured and what it decided.
 type prefillStreamer struct {
-	s        *State
+	s        *Instance
 	nd       nn.NamedDevice
 	mode     PrefillStream
 	chunk    int   // the chunk about to run
@@ -72,13 +72,13 @@ type prefillStreamer struct {
 
 // PrefillStreams reports how many prompts streamed their host blocks through
 // the device and how many measured the host faster and kept them.
-func (s *State) PrefillStreams() (streamed, kept int) { return s.pfStreamed, s.pfKept }
+func (s *Instance) PrefillStreams() (streamed, kept int) { return s.pfStreamed, s.pfKept }
 
 // newPrefillStreamer is nil where nothing could stream: no device that places
 // by name, every block already on it, none on it at all (the card declined
 // the model), a batch row, an embedding run, or a prompt too short to measure
 // on (auto).
-func (s *State) newPrefillStreamer(chunks int, bidir bool) *prefillStreamer {
+func (s *Instance) newPrefillStreamer(chunks int, bidir bool) *prefillStreamer {
 	mode := s.m.opt.prefillStream
 	if mode == PrefillStreamOff || s.ld == nil || s.batched || bidir || s.emb != nil || s.rows != nil {
 		return nil

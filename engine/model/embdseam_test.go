@@ -99,7 +99,7 @@ func TestForwardEmbdMatchesForward(t *testing.T) {
 		ids := promptIDs(m, 6)
 		ids = seamTokens(m, ids, 0, len(ids))
 
-		a := m.NewState(64)
+		a := m.NewInstance(64)
 		defer a.Close()
 		var want []float32
 		var err error
@@ -109,7 +109,7 @@ func TestForwardEmbdMatchesForward(t *testing.T) {
 			}
 		}
 
-		b := m.NewState(64)
+		b := m.NewInstance(64)
 		defer b.Close()
 		e := embdRows(t, m, ids)
 		row := func(i int) []float32 { return e[i*m.Cfg.NEmbd : (i+1)*m.Cfg.NEmbd] }
@@ -119,7 +119,7 @@ func TestForwardEmbdMatchesForward(t *testing.T) {
 		// references cannot (refusesIDless); a one-row span naming its id is
 		// the same decode.
 		if routesByID(m) {
-			refusesIDless(t, m, func(s *State) error {
+			refusesIDless(t, m, func(s *Instance) error {
 				_, err := s.ForwardEmbd(row(0))
 				return err
 			})
@@ -144,11 +144,11 @@ func routesByID(m *Model) bool { return m.Cfg.NHashLayers > 0 }
 // supplied embedding with no id is refused by name, not routed somewhere.
 // transformers' DeepseekV4HashRouter indexes tid2eid by input_ids, which
 // inputs_embeds alone do not give it, and llama.cpp's deepseek4 builder
-// gathers the table at the batch's tokens. The run is a State of its own, so a
+// gathers the table at the batch's tokens. The run is an instance of its own, so a
 // refusal half way through a block leaves nothing behind for the gate.
-func refusesIDless(t *testing.T, m *Model, run func(*State) error) {
+func refusesIDless(t *testing.T, m *Model, run func(*Instance) error) {
 	t.Helper()
-	s := m.NewState(64)
+	s := m.NewInstance(64)
 	defer s.Close()
 	if err := run(s); err == nil || !strings.Contains(err.Error(), "routes by token id") {
 		t.Fatalf("an embedding row with no token id on a model that routes by it: %v, want a refusal naming it", err)
@@ -166,7 +166,7 @@ func TestPrefillMixedMatchesPrefill(t *testing.T) {
 		cut1, cut2 := 7, 19
 		ids = seamTokens(m, ids, cut1, cut2)
 
-		a := m.NewState(64)
+		a := m.NewInstance(64)
 		defer a.Close()
 		want, err := a.Prefill(ids)
 		if err != nil {
@@ -179,7 +179,7 @@ func TestPrefillMixedMatchesPrefill(t *testing.T) {
 		// their ids, and runs them naming them; a wrong name routes them
 		// elsewhere, which the logits must show.
 		if routesByID(m) {
-			refusesIDless(t, m, func(s *State) error {
+			refusesIDless(t, m, func(s *Instance) error {
 				_, err := s.PrefillMixed(Span{Tokens: ids[:cut1]}, mid, Span{Tokens: ids[cut2:]})
 				return err
 			})
@@ -187,7 +187,7 @@ func TestPrefillMixedMatchesPrefill(t *testing.T) {
 			for i := range wrong {
 				wrong[i] = ids[cut1+i] + 1
 			}
-			w := m.NewState(64)
+			w := m.NewInstance(64)
 			bad, err := w.PrefillMixed(Span{Tokens: ids[:cut1]}, Span{Embd: e, Tokens: wrong}, Span{Tokens: ids[cut2:]})
 			if err != nil {
 				t.Fatal(err)
@@ -198,7 +198,7 @@ func TestPrefillMixedMatchesPrefill(t *testing.T) {
 			w.Close()
 			mid.Tokens = ids[cut1:cut2]
 		}
-		b := m.NewState(64)
+		b := m.NewInstance(64)
 		defer b.Close()
 		got, err := b.PrefillMixed(
 			Span{Tokens: ids[:cut1]},

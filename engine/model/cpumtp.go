@@ -6,7 +6,7 @@ import (
 	"github.com/jitllm/jitllm/jit"
 )
 
-// cpuMTPState is a draft State's prediction block entry composed for the CPU
+// cpuMTPState is a draft instance's prediction block entry composed for the CPU
 // (mtpEntryGraph): a form of one row and one of a chunk's.
 type cpuMTPState struct {
 	one, many cpuHeadForm
@@ -19,13 +19,13 @@ type cpuMTPState struct {
 
 // CPUMTPSteps is how many rows the composed prediction block entry served on
 // the CPU, and how many it declined, by reason.
-func (s *State) CPUMTPSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUMTPSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.mtp.served, s.cpu.mtp.declined
 }
 
-// cpuPlaceMTP composes the entry of the prediction block a draft State
+// cpuPlaceMTP composes the entry of the prediction block a draft instance
 // starts at, if it starts at one.
-func (s *State) cpuPlaceMTP() {
+func (s *Instance) cpuPlaceMTP() {
 	st := &s.cpu.mtp
 	fg := s.m.frontGraphs()
 	i := s.lo - s.c.NLayer
@@ -47,7 +47,7 @@ func (s *State) cpuPlaceMTP() {
 // cpuMTPEntry writes `rows` rows of z, the rows the prediction block reads,
 // from the rows of e (each token's embedding) and x (the trunk's hidden
 // rows) through the composed entry, or says why not.
-func (s *State) cpuMTPEntry(z, e, x []float32, rows int) jit.Decline {
+func (s *Instance) cpuMTPEntry(z, e, x []float32, rows int) jit.Decline {
 	if !s.cpuHeadOn() {
 		return jit.DeclineCaller
 	}

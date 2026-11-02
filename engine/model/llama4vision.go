@@ -225,7 +225,7 @@ func bf16NormLUT(mean, std [3]float64) (lut [3][256]float32) {
 // projectLlama4 is the adapter and the projector over a tile's patch rows
 // (the class row, last, left off): the 2x2 shuffle, a matrix and a GELU,
 // another and another GELU, then the projector's matrix.
-func (s *State) projectLlama4(patches []float32) ([]float32, error) {
+func (s *Instance) projectLlama4(patches []float32) ([]float32, error) {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	gh, gw := s.patchGrid()
@@ -291,7 +291,7 @@ func (t *Tower) loadLlama4(get func(jlm.Role, int32) (tensor, error)) error {
 // Llama4Pieces cuts img into Llama 4's tiles -- the canvas's, row-major, then
 // the global tile -- each a picture of its own, named, and the canvas's rows
 // and columns, which Llama4Spans lays out. The image kernels are the
-// process's rather than a State's, so it needs no State.
+// process's rather than a instance's, so it needs no Instance.
 func (t *Tower) Llama4Pieces(img image.Image) (rows, cols int, pieces []*Picture, err error) {
 	c := t.Cfg
 	if c.Kind != jlm.ProjLlama4 {

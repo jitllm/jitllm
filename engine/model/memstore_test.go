@@ -91,7 +91,7 @@ func TestABoundedStoreChangesNoToken(t *testing.T) {
 	}
 	run := func(st KVStore) ([]int32, int) {
 		defer m.setKVPageForTest(page)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		var lg []float32
 		var err error
@@ -148,7 +148,7 @@ func TestABoundedStoreChangesNoToken(t *testing.T) {
 
 // TestAnInterruptedPrefillStopsBetweenChunks: an interrupt that answers true
 // after the first chunk stops the prefill there with ErrPrefillInterrupted,
-// and the State, reset, answers as a fresh one does.
+// and the instance, reset, answers as a fresh one does.
 func TestAnInterruptedPrefillStopsBetweenChunks(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	m, err := Open(path)
@@ -156,7 +156,7 @@ func TestAnInterruptedPrefillStopsBetweenChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	s := m.NewState(2048)
+	s := m.NewInstance(2048)
 	defer s.Close()
 	prompt := make([]int32, 0, 3*MaxPrefillChunk)
 	for i := 0; i < cap(prompt); i++ {

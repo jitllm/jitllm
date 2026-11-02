@@ -19,7 +19,7 @@ import (
 // cmdPlace is PlacementService, whole: the seam, relocation, seam tuning and
 // the pager, forcible from outside the process.
 //
-// Placement is per session (SetDeviceLayers is a method on model.State), so
+// Placement is per session (SetDeviceLayers is a method on model.Instance), so
 // -session is the usual argument; a model's default does not move a running
 // session. -model addresses the pager, which is per model.
 func cmdPlace(ctx context.Context, c cli, args []string) error {

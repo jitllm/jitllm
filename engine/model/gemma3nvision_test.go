@@ -66,7 +66,7 @@ func g3nvGold(t testing.TB, name string) []float32 {
 }
 
 // g3nvEncode is the tower's rows for the golden's picture, on a fresh vision
-// State; tap, when set, sees each block's output by index.
+// Instance; tap, when set, sees each block's output by index.
 func g3nvEncode(t *testing.T, tw *Tower, g *g3nvGolden, tap func(i int, x []float32)) []float32 {
 	t.Helper()
 	s := tw.testState()
@@ -197,7 +197,7 @@ func TestGemma3nTowerMatchesTransformers(t *testing.T) {
 // on gpu when it is not nil.
 func g3nvRun(t *testing.T, m *Model, g *g3nvGolden, gpu *tier.GPU) [][]float32 {
 	t.Helper()
-	st := m.NewState(8)
+	st := m.NewInstance(8)
 	pic, err := st.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	st.Close()
 	if err != nil {
@@ -208,7 +208,7 @@ func g3nvRun(t *testing.T, m *Model, g *g3nvGolden, gpu *tier.GPU) [][]float32 {
 	}
 	spans := []Span{{Tokens: append(append([]int32(nil), g.Pre...), g.BOI)},
 		{Picture: pic}, {Tokens: append([]int32{g.EOI}, g.Post...)}}
-	s := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
+	s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
 	defer s.Close()
 	var before int64
 	if gpu != nil {

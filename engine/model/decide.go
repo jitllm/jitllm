@@ -75,7 +75,7 @@ func (m *Model) Decision() jlm.DecisionKind {
 // certainly yes, read at the first nine codes.
 const levRatings = 9
 
-// Decider asks a decision model questions. It holds one State and is one
+// Decider asks a decision model questions. It holds one instance and is one
 // request at a time; build one per concurrent caller.
 type Decider struct {
 	// kev is Kev's head scratch (decidekev.go).
@@ -91,7 +91,7 @@ type Decider struct {
 	m       *Model
 	cfg     *jlm.Config
 	kind    jlm.DecisionKind
-	st      *State
+	st      *Instance
 	tpl     *jinja.Template
 
 	// lev: the single-token codes A..Z, AA..ZZ, in order, and their ids.
@@ -138,14 +138,14 @@ type Decider struct {
 	// omniClip is the clip as the tower reads it.
 	omniSpoken bool
 	omniClip   []float32
-	omniVis    *State
+	omniVis    *Instance
 	// vscores is each variant's scores (variantScores): a question's
 	// variants are answered together, so each keeps its own.
 	vscores [][]float32
 
 	// batch is the session DecideBatch runs a decoder readout's prompts in,
 	// placed where dev and devMax (SetDevice's) say.
-	batch  *Scheduler
+	batch  *RowScheduler
 	dev    nn.Device
 	devMax int
 	// jobs is DecideBatch's prompts, kept from batch to batch (batchJob).
@@ -228,7 +228,7 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 		}
 		d.maxOptions = len(d.labels)
 	case jlm.DecisionClef:
-		d.st = m.NewState(maxSeq)
+		d.st = m.NewInstance(maxSeq)
 		if err := d.clefInit(); err != nil {
 			d.st.Close()
 			return nil, err
@@ -245,12 +245,12 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 		m.mbBind()
 		// The trunk blocks the composer runs on the CPU device run through
 		// the encoder's segment, as a device's do.
-		d.emb.seg = m.encState(d.emb.jit)
+		d.emb.seg = m.encInstance(d.emb.jit)
 		return d, nil
 	default:
 		return nil, fmt.Errorf("model: decision readout %v has no implementation", kind)
 	}
-	d.st = m.NewState(maxSeq)
+	d.st = m.NewInstance(maxSeq)
 	if kind == jlm.DecisionKev {
 		if err := d.kevInit(); err != nil {
 			d.st.Close()
@@ -261,7 +261,7 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 }
 
 // SetPromptCache has the Decider's prompts share their KV pages through st,
-// under the namespace ns (State.SetCacheKey, State.ShareKV): what a prompt
+// under the namespace ns (Instance.SetCacheKey, Instance.ShareKV): what a prompt
 // seals is held once in st, and a prompt that starts as an earlier one did --
 // the same system prompt, the same state up to where it changed -- aliases
 // those pages, its recurrent summaries restored beside them, and prefills only
@@ -270,7 +270,7 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 // An encoder readout (Laya, d1-omni) and a decoder whose attention sees the
 // whole prompt (vllm-d3) attend both ways, so no row's history is a prefix's;
 // Clef keeps every row's final residual, which the cache does not hold. Each
-// runs as before, uncached, and SetPromptCache says so with false: a State
+// runs as before, uncached, and SetPromptCache says so with false: an instance
 // left naming its pages would publish them for nothing, and keep the names
 // queued. A block on a device shares its pages there (nn.KVShareDevice). A
 // nil st turns sharing off.
@@ -295,7 +295,7 @@ func (d *Decider) SetPromptCache(st *SharedStore, ns string) (bool, error) {
 // back to this Decider's prompts in all, instead of prefilling them.
 func (d *Decider) PromptRestored() int { return d.restored }
 
-// Close releases the Decider's State.
+// Close releases the Decider's Instance.
 func (d *Decider) Close() error {
 	if d.emb != nil {
 		if d.omniVis != nil {
@@ -311,7 +311,7 @@ func (d *Decider) Close() error {
 }
 
 // SetDevice places the Decider's blocks on d through the one placement path
-// (State.SetDeviceLayers): max caps how many are offered, -1 offers every
+// (Instance.SetDeviceLayers): max caps how many are offered, -1 offers every
 // block and lets the device's memory decide, and nil detaches. A decoder
 // readout's prompts then prefill there and its label logits come from the
 // device's head; an encoder readout's blocks are placed the same way
@@ -581,7 +581,7 @@ func (d *Decider) forwardSpans(spans []Span, groups [][]int32, v int) ([]float32
 		defer func() { h.Pick, h.PickVals = nil, nil }()
 	}
 	// Where the head runs on the host, the same pick there: the labels'
-	// rows alone (State.pickOnHost).
+	// rows alone (Instance.pickOnHost).
 	if d.violation != "no-pick" {
 		if cap(d.pickVals) < len(flat) {
 			d.pickVals = make([]float32, len(flat))
@@ -600,7 +600,7 @@ func (d *Decider) forwardSpans(spans []Span, groups [][]int32, v int) ([]float32
 	text := len(spans) == 1 && spans[0].Picture == nil && spans[0].Embd == nil
 	// The prefix cache, when the Decider shares through it: the longest
 	// prefix an earlier prompt left is restored and the rest prefilled
-	// (State.PrefillCached). Not for a readout that attends both ways over the
+	// (Instance.PrefillCached). Not for a readout that attends both ways over the
 	// whole prompt: no prefix of it is a prefix's history.
 	cached := d.st.CacheNamespace() != "" && !d.nonCausal()
 	switch {
@@ -741,9 +741,9 @@ func (d *Decider) labelScores(lg []float32, groups [][]int32) ([]float32, error)
 	return slices.Clone(s), err
 }
 
-// cpu is the State the decision's composed CPU forms run through: its
+// cpu is the instance the decision's composed CPU forms run through: its
 // session, or an encoder's segment (Embedder.seg).
-func (d *Decider) cpu() *State {
+func (d *Decider) cpu() *Instance {
 	if d.st != nil {
 		return d.st
 	}

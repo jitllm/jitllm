@@ -16,7 +16,7 @@ import (
 // goes through here a token per step as well; the rows are independent in
 // position, so rows with different prompt lengths simply sit at different
 // positions.
-func (s *State) ForwardBatchGreedy(tokens []int32) ([]int32, error) {
+func (s *Instance) ForwardBatchGreedy(tokens []int32) ([]int32, error) {
 	defer s.m.enterPager()()
 	if err := s.batchStepOK(tokens); err != nil {
 		return nil, err
@@ -39,7 +39,7 @@ func (s *State) ForwardBatchGreedy(tokens []int32) ([]int32, error) {
 // caller can sample. The logits land in s.blogits, as the host path leaves
 // them. The rows' history and positions are the device's to keep apart: each
 // row's slot names its sequence and its position its place in it.
-func (s *State) forwardRowsDevice(tokens []int32, seq, pos, took []int, nlogit int) ([]float32, error) {
+func (s *Instance) forwardRowsDevice(tokens []int32, seq, pos, took []int, nlogit int) ([]float32, error) {
 	nv := s.c.NVocab
 	// A row's worth at least: rowsStep reads nil logits as a greedy step,
 	// which runs the head that a step wanting none was given no room for
@@ -60,8 +60,8 @@ func (s *State) forwardRowsDevice(tokens []int32, seq, pos, took []int, nlogit i
 // the context, and each slot's positions exactly its next ones, bpos.. up to
 // the rows it takes, each once. A gap would leave a position no row wrote and
 // a later one attends; a repeat would write one position twice.
-func (s *State) rowsTake(seq, pos []int) ([]int, error) {
-	// The State's own scratch, kept from step to step: took is the
+func (s *Instance) rowsTake(seq, pos []int) ([]int, error) {
+	// The instance's own scratch, kept from step to step: took is the
 	// caller's until the next step.
 	s.rtTook = slices.Grow(s.rtTook[:0], s.nseq)[:s.nseq]
 	s.rtStart = slices.Grow(s.rtStart[:0], s.nseq)[:s.nseq]
@@ -98,7 +98,7 @@ func (s *State) rowsTake(seq, pos []int) ([]int, error) {
 // and the first nlogit want logits: what has to fit is each stepping
 // sequence's next took[q] positions and the step's own room. A step whose
 // scratch does not build is its error, returned rather than relocated for.
-func (s *State) relocateRows(took []int, rows, nlogit int) error {
+func (s *Instance) relocateRows(took []int, rows, nlogit int) error {
 	if s.ld == nil {
 		return nil
 	}
@@ -133,7 +133,7 @@ func (s *State) relocateRows(took []int, rows, nlogit int) error {
 		s.relocateUntil(end, room)
 		return buildErr
 	}
-	// The State's own slices, so a warm step allocates nothing.
+	// The instance's own slices, so a warm step allocates nothing.
 	bases, ends := s.rlBases[:0], s.rlEnds[:0]
 	for q, k := range took {
 		if k > 0 {
@@ -150,7 +150,7 @@ func (s *State) relocateRows(took []int, rows, nlogit int) error {
 
 // flatSlots is each row's place in the device's flat history, sequence q's
 // position p at q*maxSeq+p (nn.RowsDevice).
-func (s *State) flatSlots(seq, pos []int) []int {
+func (s *Instance) flatSlots(seq, pos []int) []int {
 	s.rrFlat = slices.Grow(s.rrFlat[:0], len(seq))[:len(seq)]
 	slot := s.rrFlat
 	for r, q := range seq {
@@ -161,7 +161,7 @@ func (s *State) flatSlots(seq, pos []int) []int {
 
 // advanceSeqs moves slot q on by the took[q] positions its rows wrote, and
 // s.pos to the furthest.
-func (s *State) advanceSeqs(took []int) {
+func (s *Instance) advanceSeqs(took []int) {
 	s.pos = 0
 	for q, k := range took {
 		s.bpos[q] += k
@@ -175,7 +175,7 @@ func (s *State) advanceSeqs(took []int) {
 // so it runs as its own one-row step and the chunk before it reads back none.
 // A recurrent block steps the rows in position order through the slot's one
 // state, as a prefill would (nn.RowsDevice).
-func (s *State) prefillSeqDevice(slot int, tokens []int32) ([]float32, error) {
+func (s *Instance) prefillSeqDevice(slot int, tokens []int32) ([]float32, error) {
 	if len(tokens) == 0 {
 		return nil, errEmptyPrompt{}
 	}
@@ -214,7 +214,7 @@ func (s *State) prefillSeqDevice(slot int, tokens []int32) ([]float32, error) {
 }
 
 // batchStepOK is the checks every device batch step makes before it runs.
-func (s *State) batchStepOK(tokens []int32) error {
+func (s *Instance) batchStepOK(tokens []int32) error {
 	c := s.c
 	if !s.batched {
 		return errBatch{}
@@ -240,12 +240,12 @@ func (s *State) batchStepOK(tokens []int32) error {
 // onRowsDevice is the device a batch step can run on: every block and the head
 // on one device that runs ragged rows. A final softcap rides the head there
 // as it does in decode (the tier caps each row's logits before its argmax).
-func (s *State) onRowsDevice() (nn.RowsDevice, bool) {
+func (s *Instance) onRowsDevice() (nn.RowsDevice, bool) {
 	return s.ldRows, s.rowsRefusal() == nil
 }
 
 // rowsRefusal is why onRowsDevice is false, nil where it is true.
-func (s *State) rowsRefusal() error {
+func (s *Instance) rowsRefusal() error {
 	switch {
 	case s.ldRows == nil:
 		return errStepNoRows
@@ -261,7 +261,7 @@ func (s *State) rowsRefusal() error {
 // is what a rows step takes the projection with (tier.GPU.LayersRows): on the
 // last block's device it rides that block's step, and on another -- the card
 // holding the blocks had no room for it -- it is a step of its own there.
-func (s *State) headWithLastBlock() bool {
+func (s *Instance) headWithLastBlock() bool {
 	return s.head != nil && s.devAt(s.hi-1)
 }
 
@@ -270,7 +270,7 @@ func (s *State) headWithLastBlock() bool {
 // (rowsHost), both where the head rides the last block -- or nil where the
 // host projects: a stream-major residual's head (altRowsStep), a step that
 // wants no logits. It is what the step's room is asked for (nn.RowsRoomer).
-func (s *State) stepHead(nlogit int) *nn.Head {
+func (s *Instance) stepHead(nlogit int) *nn.Head {
 	if nlogit == 0 || s.c.streamHead() || s.devCount() == 0 || !s.headWithLastBlock() {
 		return nil
 	}
@@ -281,7 +281,7 @@ func (s *State) stepHead(nlogit int) *nn.Head {
 // (pos[i], slot[i]), whose residual is x; with head it also takes the
 // projection and reads the first nlogit rows' logits into logits. The host runs
 // the blocks around it through its own batched path.
-func (s *State) rowsRun(lo, hi int, pos, slot []int, x, cs, csSWA []float32, head bool, logits []float32, nlogit int) error {
+func (s *Instance) rowsRun(lo, hi int, pos, slot []int, x, cs, csSWA []float32, head bool, logits []float32, nlogit int) error {
 	rd := s.ldRows
 	if rd == nil {
 		return errBatchDevice{}
@@ -306,7 +306,7 @@ func (s *State) rowsRun(lo, hi int, pos, slot []int, x, cs, csSWA []float32, hea
 }
 
 // rowsAtBpos is every row at its own next position.
-func (s *State) rowsAtBpos() (pos, slot []int) {
+func (s *Instance) rowsAtBpos() (pos, slot []int) {
 	pos, slot = make([]int, s.nseq), make([]int, s.nseq)
 	for i := range pos {
 		pos[i], slot[i] = s.bpos[i], i*s.maxSeq+s.bpos[i]
@@ -314,7 +314,7 @@ func (s *State) rowsAtBpos() (pos, slot []int) {
 	return pos, slot
 }
 
-func (s *State) advanceRows() {
+func (s *Instance) advanceRows() {
 	s.pos = 0
 	for i := range s.bpos {
 		s.bpos[i]++
@@ -325,7 +325,7 @@ func (s *State) advanceRows() {
 // rowsStep runs tokens[i] at (pos[i], slot[i]) through every block and the
 // head on the device. logits, when non-nil, receives the first nlogit rows' raw
 // logits; a step with logits and nlogit 0 wants none, and runs no head.
-func (s *State) rowsStep(tokens []int32, pos, slot []int, logits []float32, nlogit int) error {
+func (s *Instance) rowsStep(tokens []int32, pos, slot []int, logits []float32, nlogit int) error {
 	m, c := s.m, s.c
 	rd, ok := s.onRowsDevice()
 	if !ok {

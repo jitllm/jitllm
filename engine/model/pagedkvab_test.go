@@ -16,7 +16,7 @@ import (
 // (kernels.ChooseDecodePlan) against pieces of the rule before it, in one
 // process, interleaved (RULE 2), a two-tier A/A control first and the
 // comparison twice. Each arm is its own tier on the same card, with its own
-// State, so the two never share a pool or a scratch. It is what measured the
+// Instance, so the two never share a pool or a scratch. It is what measured the
 // paged history against the contiguous cache it replaced
 // (docs/engineering-history/gpu-kernels.md, "The decode plan through the tier").
 //
@@ -24,9 +24,9 @@ import (
 //	  [JITLLM_DEV=gpu] [JITLLM_AB_DEPTH=512] [JITLLM_AB_ROUNDS=20] [JITLLM_WALL=GB/s]
 //	  [JITLLM_AB_BUDGET=MiB per arm] [JITLLM_AB_VS=planoff[:N]]
 //
-// Decode: both States prefilled to the depth, then each round decodes a run of
+// Decode: both instances prefilled to the depth, then each round decodes a run of
 // tokens, so the depth grows alike in both arms. Prefill: each round a fresh
-// State prefills the depth's worth of prompt. Ratios are other/plan time:
+// Instance prefills the depth's worth of prompt. Ratios are other/plan time:
 // above 1, the plan is faster.
 func TestPagedKVAB(t *testing.T) {
 	if os.Getenv("JITLLM_PAGED_AB") == "" {
@@ -65,7 +65,7 @@ func TestPagedKVAB(t *testing.T) {
 	type arm struct {
 		name string
 		g    *tier.GPU
-		dec  *State
+		dec  *Instance
 	}
 	closeArm := func(a *arm) {
 		a.dec.Close()
@@ -96,7 +96,7 @@ func TestPagedKVAB(t *testing.T) {
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}
-		s := m.NewState(seq)
+		s := m.NewInstance(seq)
 		if err := s.SetDevice(g); err != nil {
 			t.Fatal(err)
 		}
@@ -120,7 +120,7 @@ func TestPagedKVAB(t *testing.T) {
 	prefill := func(a *arm) bench.Case {
 		return bench.Case{Name: a.name, Fn: func(iters int) {
 			for i := 0; i < iters; i++ {
-				s := m.NewState(depth + 1)
+				s := m.NewInstance(depth + 1)
 				if err := s.SetDevice(a.g); err != nil {
 					t.Fatal(err)
 				}

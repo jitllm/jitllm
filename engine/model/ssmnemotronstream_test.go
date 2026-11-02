@@ -41,7 +41,7 @@ func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		defer s.Close()
 		s.SetDeviceLayers(g, m.Cfg.NLayer)
 		placed := s.GPULayers()

@@ -284,8 +284,8 @@ func noQKNorm(m *Model) func() {
 
 // hostNormRotary pairs the host's rotary (2i, 2i+1) where the model pairs
 // (i, i+NRot/2). The pairing is read twice: the table built at Open (the
-// model's nn.Rope) and the rotation a State runs, which takes the segment's
-// config (State.c) since the vision runner; both are flipped, or the flip
+// model's nn.Rope) and the rotation an instance runs, which takes the segment's
+// config (Instance.c) since the vision runner; both are flipped, or the flip
 // reaches neither path and the violation measures nothing.
 func hostNormRotary(m *Model) func() { return hostRotary(m, false) }
 
@@ -475,7 +475,7 @@ func TestMoEFamilyFeaturesAreLoadBearing(t *testing.T) {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()
-					st := m.NewState(len(g.IDs) + 1)
+					st := m.NewInstance(len(g.IDs) + 1)
 					defer st.Close()
 					worst := 0.0
 					for p, id := range g.IDs {
@@ -554,7 +554,7 @@ func pagesWithTheSameAnswer(t *testing.T, ids []int32, src string) {
 		}
 		defer m.Close()
 		var out [][]float32
-		st := m.NewState(len(ids) + 1)
+		st := m.NewInstance(len(ids) + 1)
 		for _, id := range ids {
 			lg, err := st.Forward(id)
 			if err != nil {
@@ -563,7 +563,7 @@ func pagesWithTheSameAnswer(t *testing.T, ids []int32, src string) {
 			out = append(out, slices.Clone(lg))
 		}
 		st.Close()
-		pf := m.NewState(len(ids) + 1)
+		pf := m.NewInstance(len(ids) + 1)
 		lg, err := pf.Prefill(ids)
 		if err != nil {
 			t.Fatal(err)

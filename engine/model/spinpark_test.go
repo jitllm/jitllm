@@ -35,7 +35,7 @@ func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 	if !c.CanEvict() {
 		t.Fatal("a budget one page short of the model and the pager cannot evict: this proved nothing")
 	}
-	st := m.NewState(96)
+	st := m.NewInstance(96)
 	defer st.Close()
 	lg, err := st.Prefill(m.Vocab.Encode("The capital of France is", true))
 	if err != nil {

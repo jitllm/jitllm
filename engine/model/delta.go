@@ -150,7 +150,7 @@ func (g deltaGeom) stateStride() int { return g.deltaStateLen() + g.tail }
 //
 // It is per sequence, like the KV cache: a batched session's rows share the
 // weights and nothing else.
-func (s *State) allocRecurrent(nseq int) {
+func (s *Instance) allocRecurrent(nseq int) {
 	c := s.c
 	if !c.Hybrid() || !s.linearIn() {
 		return
@@ -204,10 +204,10 @@ func (s *State) allocRecurrent(nseq int) {
 	}
 }
 
-// linearIn reports whether any block this State runs is a linear one. A draft
-// State over a prediction block runs attention alone, so it keeps no summary
+// linearIn reports whether any block this instance runs is a linear one. A draft
+// Instance over a prediction block runs attention alone, so it keeps no summary
 // and recurrent() is false for it.
-func (s *State) linearIn() bool {
+func (s *Instance) linearIn() bool {
 	for li := s.lo; li < s.hi; li++ {
 		if s.c.LayerKind(li).Recurrent() {
 			return true
@@ -219,7 +219,7 @@ func (s *State) linearIn() bool {
 // ResetRecurrent clears one row's recurrent state, which is what retiring a
 // sequence means for a linear layer: there is no per-position cache to
 // invalidate, only a running summary to forget.
-func (s *State) ResetRecurrent(row int) {
+func (s *Instance) ResetRecurrent(row int) {
 	for li := range s.rconv {
 		if s.rconv[li] == nil {
 			continue
@@ -233,12 +233,15 @@ func (s *State) ResetRecurrent(row int) {
 
 // recTail is sequence slot's tail of layer li's recurrent state (recTailLen),
 // after its delta-rule state; empty on a model with none.
-func (s *State) recTail(li, slot int) []float32 {
-	if s.dg.tail == 0 || s.rstate == nil || s.rstate[li] == nil {
+func (s *Instance) recTail(li, slot int) []float32 { return s.recTailOf(s.Session, li, slot) }
+
+// recTailOf is recTail of session o's state.
+func (s *Instance) recTailOf(o *Session, li, slot int) []float32 {
+	if s.dg.tail == 0 || o.rstate == nil || o.rstate[li] == nil {
 		return nil
 	}
 	n := s.dg.stateStride()
-	return s.rstate[li][slot*n+s.dg.deltaStateLen() : (slot+1)*n]
+	return o.rstate[li][slot*n+s.dg.deltaStateLen() : (slot+1)*n]
 }
 
 // recTailLen is what each linear block's recurrent state carries per

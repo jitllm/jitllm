@@ -444,7 +444,7 @@ func TestEmbedConcurrentRequestsAreCorrect(t *testing.T) {
 
 // TestEmbedRefusesWhatCannotEmbed: a generative container is refused by name
 // on both paths, and an encoder refuses a decoder session rather than taking
-// the server down with NewState's panic.
+// the server down with NewInstance's panic.
 func TestEmbedRefusesWhatCannotEmbed(t *testing.T) {
 	gen := testmodels.Path("stories260K.jlm")
 	fresh.Must(t, gen)

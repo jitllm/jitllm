@@ -270,7 +270,7 @@ func newDevice(sh *devShared) *devTier {
 // caller pairs it with done. A call already holding one (an entry reached
 // from inside another, for the same session) keeps it. nil when no lane can
 // be had -- every lane busy and a clone does not fit the budget: the caller
-// refuses, and the State runs on the host. Callers must not hold g.mu.
+// refuses, and the instance runs on the host. Callers must not hold g.mu.
 func (g *devTier) as(sid uint64) *devTier {
 	g.mu.Lock()
 	defer g.mu.Unlock()

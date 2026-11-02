@@ -122,7 +122,7 @@ func (c TowerConfig) kimiPadded(w, h int) (pw, ph int, err error) {
 
 // preprocessKimi is Kimi-VL's processor: the picture resampled only past the
 // patch limit, padded black, then normalised. It sets the grid Encode runs.
-func (s *State) preprocessKimi(src rgb8) ([]float32, error) {
+func (s *Instance) preprocessKimi(src rgb8) ([]float32, error) {
 	c := s.vis.t.Cfg
 	pw, ph, err := c.kimiPadded(src.w, src.h)
 	if err != nil {

@@ -87,7 +87,7 @@ func (c *Config) KVTypeRefusal(t KVType) error {
 	return fmt.Errorf("model: %s: a q8_0 KV cache is not one the composer forms (binary16 and f32 are)", c.Arch)
 }
 
-// SetKVType forces the cache's format for States this model creates
+// SetKVType forces the cache's format for instances this model creates
 // afterwards; ClearKVF16 hands the choice back to the tuner.
 func (m *Model) SetKVType(t KVType) error {
 	if err := m.Cfg.KVTypeRefusal(t); err != nil {
@@ -97,8 +97,8 @@ func (m *Model) SetKVType(t KVType) error {
 	return nil
 }
 
-// KVType is the format this State's cache holds.
-func (s *State) KVType() KVType {
+// KVType is the format this session's cache holds.
+func (s *Instance) KVType() KVType {
 	switch s.kvFmt {
 	case cpu.KVF16:
 		return KVF16
@@ -108,11 +108,11 @@ func (s *State) KVType() KVType {
 	return KVF32
 }
 
-// KVBytesPerToken is what one position of history costs in this State's
+// KVBytesPerToken is what one position of history costs in this instance's
 // cache, summed over every layer that keeps one: the format's row bytes times
 // the layer's kv heads, K and V (an MLA row once). A recurrent layer costs
 // nothing a position.
-func (s *State) KVBytesPerToken() int {
+func (s *Instance) KVBytesPerToken() int {
 	n := 0
 	for li := s.lo; li < s.hi && li < len(s.kv.layers); li++ {
 		if s.kv.layers[li].p == 0 || s.c.KVShared(li) {

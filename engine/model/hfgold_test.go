@@ -125,7 +125,7 @@ func TestSafetensorsMatchTransformers(t *testing.T) {
 			if len(gold.Tok) == 0 {
 				t.Error("golden has no tokenizer half -- regenerate with scripts/hfgold.py")
 			}
-			st := m.NewState(len(gold.IDs) + 1)
+			st := m.NewInstance(len(gold.IDs) + 1)
 			defer st.Close()
 			worst := 0.0
 			for p, id := range gold.IDs {

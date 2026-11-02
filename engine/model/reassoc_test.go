@@ -33,10 +33,10 @@ func TestGreedyDivergenceControl(t *testing.T) {
 		"of Spain is Madrid, and the capital of Portugal is", true)
 
 	run := func(pack int) []int32 {
-		// Per-State options: NewState builds its own JIT from m.jit, so the two
+		// Per-instance options: NewInstance builds its own JIT from m.jit, so the two
 		// widths are two emitted kernels in ONE process.
 		m.jit = []nn.Option{nn.WithPackWidth(pack), nn.WithTune(nn.TuneOff)}
-		s := m.NewState(len(ids) + 64)
+		s := m.NewInstance(len(ids) + 64)
 		defer s.Close()
 		var lg []float32
 		for _, id := range ids {

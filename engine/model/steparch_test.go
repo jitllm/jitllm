@@ -14,7 +14,7 @@ import (
 // model of every architecture the model directory carries: three sessions
 // decode together through Step, teacher-forced, against each session alone. A
 // model that does not step as rows is a failure that names the refusal
-// (State.StepRefusal), never a quiet fallback to one session after another --
+// (Instance.StepRefusal), never a quiet fallback to one session after another --
 // which gives the same answer at a pass over the weights per session, and so is
 // invisible to every gate that compares logits. A model the card cannot hold
 // whole skips by name, and so does one whose block the device declines.
@@ -201,7 +201,7 @@ func TestStepRowsRefuseAShortLocalRopeTable(t *testing.T) {
 		t.Run(dev, func(t *testing.T) {
 			g := stepTier(t, m, dev, false)
 			defer g.Close()
-			st := m.NewState(16)
+			st := m.NewInstance(16)
 			defer st.Close()
 			if err := st.SetDevice(g); err != nil {
 				t.Fatal(err)

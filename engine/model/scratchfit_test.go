@@ -166,7 +166,7 @@ func promptFits(t *testing.T, m *Model, spec string) {
 	size := func(reserve bool) tier.Stats {
 		g := fitTier(t, spec, 0, func(c *tier.Config) { c.NoScratchReserve = !reserve })
 		defer g.Close()
-		st := m.NewState(len(ids) + 16)
+		st := m.NewInstance(len(ids) + 16)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -190,7 +190,7 @@ func promptFits(t *testing.T, m *Model, spec string) {
 		defer g.Close()
 		b.fill(t, limit+slack)
 		defer b.empty()
-		st := m.NewState(len(ids) + 16)
+		st := m.NewInstance(len(ids) + 16)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			return g.Stats(), 0, err
@@ -256,9 +256,9 @@ func stepFits(t *testing.T, m *Model, spec string) {
 		}
 	}
 	// open places two sessions and readies the decoding one.
-	open := func(g *tier.GPU) (a, d *State, next int32, err error) {
-		a, d = m.NewState(len(chunk)+8), m.NewState(len(lead)+8)
-		for _, st := range []*State{a, d} {
+	open := func(g *tier.GPU) (a, d *Instance, next int32, err error) {
+		a, d = m.NewInstance(len(chunk)+8), m.NewInstance(len(lead)+8)
+		for _, st := range []*Instance{a, d} {
 			if err = st.SetDevice(g); err != nil {
 				return
 			}
@@ -314,7 +314,7 @@ func stepFits(t *testing.T, m *Model, spec string) {
 		defer b.empty()
 		joint := a.Steppable() && d.Steppable()
 		before := g.Stats().ScratchBytes
-		_, err = StepRuns([]Run{{State: a, Tokens: chunk, Logits: true}, {State: d, Tokens: []int32{next}, Logits: true}})
+		_, err = StepRuns([]Run{{Instance: a, Tokens: chunk, Logits: true}, {Instance: d, Tokens: []int32{next}, Logits: true}})
 		grew = int64(g.Stats().ScratchBytes) - int64(before)
 		return g.Stats(), a.GPULayers(), joint, err
 	}

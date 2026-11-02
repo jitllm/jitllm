@@ -72,7 +72,7 @@ func openGolden(t *testing.T, dir, script, name string) (*Model, *c6Golden) {
 func c6Worst(t *testing.T, m *Model, g *c6Golden, check func(what string, p int, lg []float32) float64) float64 {
 	t.Helper()
 	worst := 0.0
-	st := m.NewState(len(g.IDs) + 1)
+	st := m.NewInstance(len(g.IDs) + 1)
 	for p, id := range g.IDs {
 		lg, err := st.Forward(id)
 		if err != nil {
@@ -82,7 +82,7 @@ func c6Worst(t *testing.T, m *Model, g *c6Golden, check func(what string, p int,
 	}
 	st.Close()
 	for n := 1; n <= len(g.IDs); n++ {
-		pf := m.NewState(len(g.IDs) + 1)
+		pf := m.NewInstance(len(g.IDs) + 1)
 		lg, err := pf.Prefill(g.IDs[:n])
 		if err != nil {
 			t.Fatal(err)
@@ -532,7 +532,7 @@ func TestC6FeaturesAreLoadBearing(t *testing.T) {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()
-					st := m.NewState(len(g.IDs) + 1)
+					st := m.NewInstance(len(g.IDs) + 1)
 					defer st.Close()
 					worst := 0.0
 					for p, id := range g.IDs {

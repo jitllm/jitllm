@@ -46,8 +46,8 @@ func TestContainerRunsOnTheCPU(t *testing.T) {
 		t.Fatalf("no tokenizer: %v", m.TokErr)
 	}
 	ids := m.Vocab.Encode("The capital of France is", true)
-	st := m.NewState(len(ids) + 8 + 1)
-	// Closed: a State owns a worker pool, and a leaked one keeps threads
+	st := m.NewInstance(len(ids) + 8 + 1)
+	// Closed: an instance owns a worker pool, and a leaked one keeps threads
 	// spinning on the same cores for the rest of the test binary.
 	defer st.Close()
 	logits, err := st.Prefill(ids)

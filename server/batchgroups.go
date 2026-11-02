@@ -231,7 +231,7 @@ func (lp *stepLoop) launch(g *decGroup) bool {
 	lp.post.start()
 	runs := g.runs[:0]
 	for _, u := range units {
-		runs = append(runs, model.Run{State: u.r.s.st, Tokens: u.tokens, Logits: true})
+		runs = append(runs, model.Run{Instance: u.r.s.st, Tokens: u.tokens, Logits: true})
 	}
 	g.runs = runs
 	lp.stats.steps.Add(1)
@@ -274,7 +274,7 @@ func (lp *stepLoop) land(g *decGroup) {
 		lp.refused, lp.refusedFor = true, lp.shape
 		live := g.rows[:0]
 		for _, u := range g.units {
-			out, err := model.StepRuns([]model.Run{{State: u.r.s.st, Tokens: u.tokens, Logits: true}})
+			out, err := model.StepRuns([]model.Run{{Instance: u.r.s.st, Tokens: u.tokens, Logits: true}})
 			if err != nil {
 				lp.finish(u.r, FinishError, "", err)
 				continue

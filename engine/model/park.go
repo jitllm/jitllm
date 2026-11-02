@@ -14,7 +14,7 @@ import "fmt"
 // size of a page or two, and never stored) and its unsealed tail page. A
 // session with no store of its own parks into a private MemStore that Resume
 // empties, so its pages are held once, in the store or in the cache, never in
-// both. A parked State must not step: the caller parks between tokens, never
+// both. A parked instance must not step: the caller parks between tokens, never
 // in one.
 
 // ParkStats counts what a Park moved.
@@ -25,8 +25,8 @@ type ParkStats struct {
 	Blocks, PagesOut int
 }
 
-// Park preempts the session. Parking a parked State does nothing.
-func (s *State) Park() (ParkStats, error) {
+// Park preempts the session. Parking a parked instance does nothing.
+func (s *Instance) Park() (ParkStats, error) {
 	return s.park()
 }
 
@@ -36,7 +36,7 @@ func (s *State) Park() (ParkStats, error) {
 // session is parked -- and Resume faults them back from st and gives the
 // session its own store back. A server parks into a view of its model's
 // memory cache that holds what it is given until Resume (MemStore.Pinned).
-func (s *State) ParkInto(st KVStore) (ParkStats, error) {
+func (s *Instance) ParkInto(st KVStore) (ParkStats, error) {
 	if s.parked {
 		return ParkStats{}, nil
 	}
@@ -52,7 +52,7 @@ func (s *State) ParkInto(st KVStore) (ParkStats, error) {
 	return ps, err
 }
 
-func (s *State) park() (ParkStats, error) {
+func (s *Instance) park() (ParkStats, error) {
 	var st ParkStats
 	if s.parked {
 		return st, nil
@@ -88,7 +88,7 @@ func (s *State) park() (ParkStats, error) {
 // Resume undoes Park: every page Park evicted comes back from the store, then
 // the blocks it moved to the CPU are offered to the device again, their history
 // with them. It returns how many pages came back.
-func (s *State) Resume() (int, error) {
+func (s *Instance) Resume() (int, error) {
 	if !s.parked {
 		return 0, nil
 	}
@@ -133,20 +133,20 @@ func (s *State) Resume() (int, error) {
 }
 
 // Parked reports whether the session is parked.
-func (s *State) Parked() bool { return s.parked }
+func (s *Instance) Parked() bool { return s.parked }
 
 // HistoryBytes is what this session's history occupies wherever it lives --
 // host pages and the device's alike -- at its current position, and
 // PositionBytes what one more position adds. An admission budget is priced
 // in them: KVBytes counts only the host's resident pages, which a session on
 // the device or a parked one does not hold.
-func (s *State) HistoryBytes() uint64 { return s.historyAt(s.pos) }
+func (s *Instance) HistoryBytes() uint64 { return s.historyAt(s.pos) }
 
-func (s *State) PositionBytes() uint64 { return s.historyAt(s.pos+1) - s.historyAt(s.pos) }
+func (s *Instance) PositionBytes() uint64 { return s.historyAt(s.pos+1) - s.historyAt(s.pos) }
 
 // historyAt is HistoryBytes at position pos: every attending layer's pages
 // up to pos, a windowed layer's capped at its window and a page.
-func (s *State) historyAt(pos int) uint64 {
+func (s *Instance) historyAt(pos int) uint64 {
 	var b uint64
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		b += s.blockHistoryAt(li, pos)

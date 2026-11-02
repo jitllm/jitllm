@@ -68,7 +68,7 @@ func l4vPieces(t *testing.T, tw *Tower, g *l4vGolden) (rows, cols int, ps []*Pic
 	return rows, cols, ps
 }
 
-// l4vEncode runs every tile of ps through a fresh vision State and returns
+// l4vEncode runs every tile of ps through a fresh vision instance and returns
 // their rows back to back.
 func l4vEncode(t *testing.T, tw *Tower, ps []*Picture) []float32 {
 	t.Helper()
@@ -213,7 +213,7 @@ func l4vSpans(t *testing.T, m *Model, g *l4vGolden, ps []*Picture) []Span {
 }
 
 // TestLlama4MatchesTransformersEndToEnd is the whole model from the pixels:
-// the tiles spans of the prompt, encoded by the prefill on the State's own
+// the tiles spans of the prompt, encoded by the prefill on the instance's own
 // vision segment, against transformers' logits with its tower at the
 // engine's arithmetic (the f32 reference is reported).
 func TestLlama4MatchesTransformersEndToEnd(t *testing.T) {
@@ -221,7 +221,7 @@ func TestLlama4MatchesTransformersEndToEnd(t *testing.T) {
 	defer m.Close()
 	_, _, ps := l4vPieces(t, m.Tower(), g)
 	run := func(spans []Span) [][]float32 {
-		st := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
+		st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
 		defer st.Close()
 		lg, err := st.PrefillMixed(spans...)
 		if err != nil {
@@ -301,7 +301,7 @@ func TestLlama4OnDeviceMatchesHost(t *testing.T) {
 	}
 }
 
-func l4vEncodeOn(t *testing.T, s *State, ps []*Picture) []float32 {
+func l4vEncodeOn(t *testing.T, s *Instance, ps []*Picture) []float32 {
 	t.Helper()
 	var out []float32
 	for _, p := range ps {

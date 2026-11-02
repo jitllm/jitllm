@@ -16,7 +16,7 @@ import (
 // history or beside a longer one, its prompt in chunks of any size -- which is
 // what lets the decode groups split rows without moving a token.
 //
-// The one-at-a-time path (model.StepRuns of one State: Prefill's tier
+// The one-at-a-time path (model.StepRuns of one instance: Prefill's tier
 // kernels, Forward's one-row form) is other arithmetic, and the server's
 // loop moves a row onto it whenever the row steps alone, so a row's tokens
 // still follow the schedule: those arms are measured and logged as the gap
@@ -46,7 +46,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 		}
 		long := min(900, int(c.NCtx)-dec-2)
 		a, b, l := mk(1, 61), mk(2, 29), mk(3, long)
-		state := func() *model.State {
+		state := func() *model.Instance {
 			s, err := gl.e.CreateSession(SessionOptions{ModelID: gl.lm.id})
 			if err != nil {
 				t.Fatal(err)
@@ -54,7 +54,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 			t.Cleanup(func() { gl.e.CloseSession(s.id) })
 			return s.st
 		}
-		// lone runs a step of one State the server's way (model.StepRuns),
+		// lone runs a step of one instance the server's way (model.StepRuns),
 		// its prompt through Prefill and a token through Forward.
 		lone := false
 		step := func(runs ...model.Run) [][]float32 {
@@ -72,7 +72,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 			}
 			return cp
 		}
-		run := func(st *model.State, toks []int32) model.Run { return model.Run{State: st, Tokens: toks, Logits: true} }
+		run := func(st *model.Instance, toks []int32) model.Run { return model.Run{Instance: st, Tokens: toks, Logits: true} }
 		argmax := func(x []float32) int32 {
 			best := 0
 			for i, v := range x {
@@ -102,7 +102,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 				}
 				pa = pa[len(pa)-1:]
 			}
-			sts := make([]*model.State, len(others))
+			sts := make([]*model.Instance, len(others))
 			runs := []model.Run{}
 			next := make([]int32, len(others)+1)
 			for i, o := range others {

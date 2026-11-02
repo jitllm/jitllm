@@ -27,7 +27,7 @@ func TestPrefillRegionProbe(t *testing.T) {
 		t.Skipf("cannot load: %v", err)
 	}
 	defer m.Close()
-	s := m.NewState(1024)
+	s := m.NewInstance(1024)
 	defer s.Close()
 	ids := make([]int32, 512)
 	for i := range ids {
@@ -36,7 +36,7 @@ func TestPrefillRegionProbe(t *testing.T) {
 	if _, err := s.Prefill(ids[:8]); err != nil { // warm
 		t.Fatal(err)
 	}
-	s2 := m.NewState(1024)
+	s2 := m.NewInstance(1024)
 	defer s2.Close()
 	s2.jit.ResetRegions()
 	start := time.Now()

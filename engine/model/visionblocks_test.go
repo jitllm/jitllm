@@ -20,7 +20,7 @@ import (
 
 // TestVisionRunsAsBlocksOfTheModel is the structural gate: the tower's blocks
 // are the model's layers, an encode runs every one of them through the
-// runner's block body on the text State's JIT, and nothing in the package
+// runner's block body on the text instance's JIT, and nothing in the package
 // offers a block to a device but the one placement path.
 func TestVisionRunsAsBlocksOfTheModel(t *testing.T) {
 	m, tw := openTower(t)
@@ -30,7 +30,7 @@ func TestVisionRunsAsBlocksOfTheModel(t *testing.T) {
 		t.Fatalf("the vision blocks are not the model's blocks %d..%d (layers %d)",
 			tw.base, tw.base+c.NLayer, len(m.layers))
 	}
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 	vs, err := st.Vision()
 	if err != nil {
@@ -40,7 +40,7 @@ func TestVisionRunsAsBlocksOfTheModel(t *testing.T) {
 		t.Fatal("the vision segment runs on a JIT of its own: a second kernel cache")
 	}
 	if again, _ := st.Vision(); again != vs {
-		t.Fatal("a second Vision call made a second vision State")
+		t.Fatal("a second Vision call made a second vision instance")
 	}
 	if _, err := vs.Encode(rainbow(c.ImageSz)); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestVisionRunsAsBlocksOfTheModel(t *testing.T) {
 	if got := int(vs.vis.hostBlocks); got != c.NLayer {
 		t.Fatalf("%d of %d tower blocks ran through the runner's block body", got, c.NLayer)
 	}
-	t.Logf("%d tower blocks at %d..%d of the block space, %d run by hostRows on the text State's JIT",
+	t.Logf("%d tower blocks at %d..%d of the block space, %d run by hostRows on the text instance's JIT",
 		c.NLayer, tw.base, tw.base+c.NLayer, vs.vis.hostBlocks)
 }
 
@@ -114,7 +114,7 @@ func prepLayerCallers(t *testing.T) []string {
 func TestImageCacheSkipsTheTower(t *testing.T) {
 	m, tw := openTower(t)
 	defer m.Close()
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 	vs, err := st.Vision()
 	if err != nil {
@@ -200,7 +200,7 @@ func TestTwoTurnImageChatRestoresPastThePicture(t *testing.T) {
 	}
 	side := tw.Cfg.ImageSz / tw.Cfg.PatchSz
 	run := func(store KVStore, msgs []ChatMessage, pix []float32, named bool) result {
-		st := m.NewState(512)
+		st := m.NewInstance(512)
 		defer st.Close()
 		st.SetKVStore(store)
 		mustKey(t, st, "vision-as-blocks/two-turn")
@@ -310,9 +310,9 @@ func TestImageEncodeStepsBesideDecode(t *testing.T) {
 	}
 	run := func(t *testing.T, g nn.Device, joint bool, blocks int) arm {
 		var a arm
-		var sts [2]*State
+		var sts [2]*Instance
 		for i := range sts {
-			sts[i] = m.NewState(64)
+			sts[i] = m.NewInstance(64)
 			defer sts[i].Close()
 			if g != nil {
 				if err := sts[i].SetDevice(g); err != nil {
@@ -323,7 +323,7 @@ func TestImageEncodeStepsBesideDecode(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		pic := m.NewState(64)
+		pic := m.NewInstance(64)
 		defer pic.Close()
 		if g != nil {
 			if err := pic.SetDevice(g); err != nil {
@@ -349,9 +349,9 @@ func TestImageEncodeStepsBesideDecode(t *testing.T) {
 		}
 		enc := &Encode{Picture: picture, Blocks: blocks}
 		for range steps {
-			runs := []Run{{State: sts[0], Tokens: tok[:1], Logits: true}, {State: sts[1], Tokens: tok[1:], Logits: true}}
+			runs := []Run{{Instance: sts[0], Tokens: tok[:1], Logits: true}, {Instance: sts[1], Tokens: tok[1:], Logits: true}}
 			if joint && !enc.Done {
-				runs = append(runs, Run{State: pic, Encode: enc})
+				runs = append(runs, Run{Instance: pic, Encode: enc})
 			}
 			out, err := StepRuns(runs)
 			if err != nil {
@@ -363,7 +363,7 @@ func TestImageEncodeStepsBesideDecode(t *testing.T) {
 			}
 		}
 		for joint && !enc.Done {
-			if _, err := StepRuns([]Run{{State: pic, Encode: enc}}); err != nil {
+			if _, err := StepRuns([]Run{{Instance: pic, Encode: enc}}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -533,14 +533,14 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 }
 
 // TestWarmImageEncodeDoesNotAllocate: a second encode of a picture on a
-// warm vision State makes no engine heap allocation, for every tower family:
+// warm vision instance makes no engine heap allocation, for every tower family:
 // the runner's block body, the entry and the projector programs alike.
 func TestWarmImageEncodeDoesNotAllocate(t *testing.T) {
 	for _, f := range towerFamilies() {
 		t.Run(f.name, func(t *testing.T) {
 			m, tw := f.open(t)
 			defer m.Close()
-			st := m.NewState(64)
+			st := m.NewInstance(64)
 			defer st.Close()
 			vs, err := st.Vision()
 			if err != nil {

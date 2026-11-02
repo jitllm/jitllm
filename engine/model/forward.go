@@ -43,14 +43,14 @@ const (
 
 var opNames = [nOps]string{"matvec", "rmsnorm", "rope", "attention", "activation", "residual", "router"}
 
-func (s *State) tick() int64 {
+func (s *Instance) tick() int64 {
 	if !s.prof {
 		return 0
 	}
 	return time.Now().UnixNano()
 }
 
-func (s *State) tock(op opID, t0 int64) {
+func (s *Instance) tock(op opID, t0 int64) {
 	if s.prof {
 		opNanos[op].Add(time.Now().UnixNano() - t0)
 	}
@@ -76,10 +76,22 @@ func ResetProfile() {
 	}
 }
 
-// State is one generation session: the KV cache plus the scratch buffers the
-// forward pass reuses. One State is one conversation; it is not safe to share.
-type State struct {
-	// cpu is the blocks this State runs on the CPU as the composer forms
+// Instance is one generation session: the KV cache plus the scratch buffers the
+// forward pass reuses. One Instance is one conversation; it is not safe to share.
+type Instance struct {
+	*Session
+	// own is the session the instance was made with, which its Close
+	// closes; Session is the one its calls run for (use).
+	own *Session
+	// mu is held by a call running on the instance: sessions leasing it run
+	// one call at a time, or together as one step's rows (StepRuns).
+	mu sync.Mutex
+	// fnDevAt, fnRecAt and fnEndsAt are s's methods a session's cache asks
+	// through, made once so binding a session (use) allocates nothing.
+	fnDevAt  func(li int) nn.KVShareDevice
+	fnRecAt  func(pos int) bool
+	fnEndsAt func(c int) [kvEndSeats]uint8
+	// cpu is the blocks this instance runs on the CPU as the composer forms
 	// them (cpuserve.go).
 	cpu cpuState
 	// bidirAll makes a mixed prompt's every row one bidirectional run
@@ -91,43 +103,33 @@ type State struct {
 	// pending is the move between devices PrepareMove started and no Commit
 	// or Cancel has ended (moveblocks.go).
 	pending *PendingMove
-	// c is the configuration of the segment this State runs: the text model's
+	// c is the configuration of the segment this instance runs: the text model's
 	// (m.Cfg) for every session a caller makes, the vision tower's for the
-	// State an image is encoded in (vision.go). The blocks are the model's
+	// Instance an image is encoded in (vision.go). The blocks are the model's
 	// either way; only their geometry differs.
-	c   *Config
-	pos int
+	c *Config
 	// SampledOnDevice counts the tokens drawn on the device, whose token
 	// came home in place of the logits.
 	SampledOnDevice int64
-	// parked and parkedSeam are Park's: the session is preempted, and the
-	// seam it held on the device. ParkedOut and ParkedIn count the KV pages
-	// Park sent to the store and Resume brought back (park.go).
-	parked     bool
-	parkedSeam int
-	parkStore  *MemStore
-	// parkPrev is the store ParkInto swapped out, given back by Resume.
-	parkPrev            KVStore
-	ParkedOut, ParkedIn int64
-	// outNorm and outW are the head this State projects through: the model's
+	// outNorm and outW are the head this instance projects through: the model's
 	// output norm and projection for a trunk, a prediction block's own head
 	// norm (and the trunk's projection, or the block's own copy) for a draft.
 	// outW points at the tensor rather than copying it: a block's own head
 	// is paged, and a page-in rebinds the model's copy.
 	outNorm []float32
 	outW    *tensor
-	// lo and hi are the blocks this State runs, [lo, hi): the trunk, [0,
+	// lo and hi are the blocks this instance runs, [lo, hi): the trunk, [0,
 	// NLayer), for every session a caller makes, and a multi-token-prediction
-	// block for the draft State speculation drives (newDraftState). Block
+	// block for the draft instance speculation drives (newDraftState). Block
 	// indices stay the model's -- the KV cache, the device's placement and the
-	// pager all address block li as li -- so a draft State and its trunk share
+	// pager all address block li as li -- so a draft instance and its trunk share
 	// one device without colliding.
 	lo, hi int
 
 	// rg is the pool regions a decode token runs, with their functions built
 	// once (see regions).
 	rg regions
-	// fuseOff runs this State's decode one pool region per op
+	// fuseOff runs this instance's decode one pool region per op
 	// (WithBlockFusion, SetBlockFusion); fused is whether a fused run of host
 	// blocks is open (fuse.go), and FusedRuns counts the runs opened.
 	fuseOff   bool
@@ -149,39 +151,15 @@ type State struct {
 	residFold bool
 	Grouped   int64
 
-	// kv is the paged KV history (see engine/model/kvpage.go). Pages are committed as
-	// the sequence reaches them rather than reserved for the whole context.
-	kv *kvCache
-	// vis is the vision segment's run: set on a State over the tower's blocks
-	// (State.Vision), nil on every text State.
+	// vis is the vision segment's run: set on an instance over the tower's blocks
+	// (Instance.Vision), nil on every text Instance.
 	vis *visRun
-	// visState is the vision State a text State encodes its pictures in
+	// visState is the vision instance a text instance encodes its pictures in
 	// (Vision), nil until the first picture.
-	visState *State
-	// enc is an encoder segment's run: set on the State an Embedder places
+	visState *Instance
+	// enc is an encoder segment's run: set on the instance an Embedder places
 	// its encoder's blocks through (encdev.go), nil everywhere else.
 	enc *encRun
-	// kvErr is the first page fault of the current step that could not be
-	// recovered. It is set inside a pool closure, which has no error path, and
-	// drained by kvCheck at the entry point.
-	kvErr atomic.Pointer[error]
-	// spanTok is every row's token of the mixed prompt being prefilled, -1
-	// for a row that has none (tokensOf): what a model with per-layer
-	// embeddings, or DeepSeek V4's hash blocks, read where the prefill has no
-	// ids. nil outside one.
-	spanTok []int32
-	// kvSkipped is what the last PrefillCached restored rather than computed.
-	kvSkipped int
-	// promptRows counts the prompt rows this State ran through its blocks, over
-	// its life (PrefillRows): what a benchmark checks to show a prompt was
-	// computed, not restored.
-	promptRows int
-	// forwardPrompts counts the prompts run a token at a time through the
-	// decode path (WithPrefillForwardRows).
-	forwardPrompts int
-	// interrupt, when set, is asked before every prefill chunk
-	// (SetPrefillInterrupt).
-	interrupt func() bool
 
 	x, h, xb []float32 // residual stream and two same-width scratch vectors
 	// hf is a parallel block's FFN input (C6): the block input normed for the
@@ -206,7 +184,6 @@ type State struct {
 	// is reading.
 	attStride int
 	gate, up  []float32
-	logits    []float32
 	maxSeq    int
 	reqSeq    int       // what the caller asked for; > maxSeq when the model is shorter
 	kvFmt     cpu.KVFmt // the KV cache's element format
@@ -220,7 +197,7 @@ type State struct {
 	// SwiGLU over all of them is one more. Expert i occupies
 	// [i*moePad, i*moePad+NFFNExp); the slack between NFFNExp and moePad is
 	// allocated zero, written by nothing but the activation (silu(0)*0 = 0) and
-	// read by nothing, so it stays zero for the life of the State.
+	// read by nothing, so it stays zero for the life of the Instance.
 	// The per-expert paths take [:NFFNExp], which is what they always had.
 	moePad int
 	// Scratch for the batch: the k*2 sheets and their outputs, reused so a
@@ -288,31 +265,11 @@ type State struct {
 	// tok1 hands a decode step's token to the device (tokenIDs) without an
 	// allocation, and rowx one row's streams in a prefill's row-by-row
 	// device retry (rowStreams).
-	tok1 [1]int32
-	rowx []float32
-	// ldInputs is the device's per-layer input face (nn.LayerInputDevice),
-	// asserted once in setLD; nil where it has none. ldTokens is its token
-	// face (nn.TokenDevice).
-	ldInputs nn.LayerInputDevice
-	ldTokens nn.TokenDevice
-	// ldRope is its rotary-position face (nn.RopeAxesDevice), and axes1 the
-	// one row's positions it is handed; raxes are the batch rows', four a
-	// row, as ropeRow and ropeTableRow write their tables.
-	ldRope nn.RopeAxesDevice
-	axes1  [4]int32
-	raxes  []int32
-	// ldEmbed is its gather face (nn.EmbedDevice), and tokFill says the
-	// token being stepped fills its row from the embedding (Forward), which
-	// the device may gather instead (embedOnDevice).
-	ldEmbed nn.EmbedDevice
+	tok1    [1]int32
+	rowx    []float32
+	axes1   [4]int32
+	raxes   []int32
 	tokFill bool
-	// ldPrompt is its prompt face (nn.PromptDevice): told when the calls
-	// are a chunked prompt's.
-	ldPrompt nn.PromptDevice
-	// ldNGram is its n-gram face (nn.NGramDevice), Qwen3.8-Flash-Next's.
-	ldNGram nn.NGramDevice
-	// ldQSA is its QSA face (nn.QSADevice), Qwen3.8-Flash-Next's.
-	ldQSA nn.QSADevice
 	// dmoe is Gemma 4's mixture block's scratch (Config.DenseMoE): the
 	// router's input and the mixture's sum, each NEmbd wide. See denseMoE.
 	dmoe [2][]float32
@@ -321,9 +278,9 @@ type State struct {
 	// denseMoERows.
 	rowsOfChunk bool
 	// expHold pins a layer's routed expert pages while its FFN reads them;
-	// one per State, reused every layer of every token.
+	// one per instance, reused every layer of every token.
 	expHold expertHold
-	// spareHost is a closed State's prompt scratch, taken from the model with
+	// spareHost is a closed session's prompt scratch, taken from the model with
 	// its promptBuf, for growBatch and growMoEBatch to grow into.
 	spareHost hostBatch
 	// traceLayer is the block moe() is running, for traceExperts.
@@ -354,8 +311,7 @@ type State struct {
 	// rstate one vDim x kDim matrix per value head, both constant in the
 	// context length. Indexed [layer][row*len + i], nil for a full-attention
 	// layer and for non-hybrids. dg carries the geometry.
-	dg            deltaGeom
-	rconv, rstate [][]float32
+	dg deltaGeom
 	// The delta rule's scratch, allocated only for a hybrid. dOut is per
 	// value head so the heads can run in parallel without sharing.
 	dMixed, dZ, dBA              []float32
@@ -462,22 +418,10 @@ type State struct {
 	// code they were. The KV cache is strided by sequence first: sequence j's
 	// position p is k[li][(j*maxSeq+p)*kvDim].
 	nseq int
-	// bpos is a position per row, which is what makes a batch ragged. It is
-	// always allocated, one entry even for a single sequence (NewBatch(1) is
-	// legal). s.pos stays the high-water mark across rows: the maxSeq bound
-	// and Pos() want the furthest row.
-	bpos []int
-	// rmarks is, per slot, where an image has moved the rotary position of
-	// the rows after it off their cache position (mrope.go). Empty for every
-	// sequence that has seen no image, and on every single-axis model.
-	rmarks [][]ropeMark
-	// ximg is, per slot, the cache position each picture starts at under
-	// XD-RoPE, whose image rows carry the picture's ordinal (xdRope).
-	ximg [][]int
-	// batched is whether this State came from NewBatch, which nseq cannot say
+	// batched is whether this instance came from NewBatch, which nseq cannot say
 	// at a width of one. It is what decides which API a session accepts.
 	batched bool
-	// kvl is where this State's KV cache puts things; see kvLayout. It is the
+	// kvl is where this session's KV cache puts things; see kvLayout. It is the
 	// global layers' layout; kvlAt is any layer's.
 	kvl kvLayout
 	// attnG and attnL are the attention kernel sets of the global and the
@@ -534,7 +478,6 @@ type State struct {
 	// counter for both would read "batched" while half the FFN looped.
 	moeDownBatched, moeDownLooped atomic.Int64
 	blogits                       []float32 // nseq * NVocab, ForwardBatch's output
-	retireErr                     error     // a device reset Retire or Reset could not make; see Retire
 	allRows                       []int     // 0..nseq-1, the rows Reset zeroes on a device
 	// placing is true while SetDeviceLayers offers blocks, when WithPlacement's
 	// map applies; placeErr is what it could not do.
@@ -564,23 +507,13 @@ type State struct {
 	jit *nn.JIT
 
 	// device is the device SetDeviceLayers was handed, before Attach made ld a
-	// session of it: what a draft State attaches to (Speculate).
-	device nn.Device
-	// ld runs whole blocks on an accelerator; gpuLayers is how many it accepted,
-	// always a prefix. cs is the per-position rotary table those blocks read.
-	ld        nn.LayerDevice
+	// session of it: what a draft instance attaches to (Speculate).
+	device    nn.Device
 	gpuLayers int
-	// ldRoom, ldSpill, ldStep, ldRows and ldNamed are ld's optional
-	// faces, nil where it has none; set with ld, because a step asks for them.
-	ldRoom  nn.RoomReporter
-	ldSpill nn.Spiller
-	ldStep  nn.SessionStepper
-	ldRows  nn.RowsDevice
 	// roomToCPU counts batch steps whose device had no room for them, so the
 	// blocks moved to the CPU device before the step (relocateRows, forwardRows).
 	roomToCPU int
-	ldNamed   nn.NamedDevice
-	// The lists a step this State leads reuses (step.go): Step's runs, the
+	// The lists a step this instance leads reuses (step.go): Step's runs, the
 	// rows' sessions and positions, the wanted rows' logits and the result.
 	stepRuns   []Run
 	stepSess   []nn.LayerDevice
@@ -588,16 +521,16 @@ type State struct {
 	stepTok    []int32
 	stepLogits []float32
 	stepRes    [][]float32
-	// A step across host sessions (stepHost) this State leads: each row's
+	// A step across host sessions (stepHost) this instance leads: each row's
 	// session, whether the row is its session's furthest (the one that
 	// faults its attention window in), and each row's slot, always 0.
-	rowOwn []*State
+	rowOwn []*Session
 	rowWin []bool
 	rowSeq []int
 	// batchSeq and batchPos are a ForwardBatch step's rows' slots and
 	// positions.
 	batchSeq, batchPos []int
-	// stepb is the model's step scratch holder while this State leads a
+	// stepb is the model's step scratch holder while this instance leads a
 	// host step (borrowStep).
 	stepb *stepBuf
 	// ra and raRun are a ragged step's attention fan-out (rowsHost).
@@ -611,7 +544,7 @@ type State struct {
 	// sizes and seamtune moves), while a hybrid whose kinds alternate can have
 	// placed blocks with a prefix of zero.
 	onDev []bool
-	// cpuHeld says this State is counted in m.cpuUse for the blocks of
+	// cpuHeld says this instance is counted in m.cpuUse for the blocks of
 	// [lo, hi) it does not place, from its making until Close.
 	cpuHeld bool
 	// head is non-nil when the device also runs the output norm and the
@@ -654,7 +587,7 @@ type State struct {
 	rowsPos []int
 	// q4In is a Qwen3.8-Flash-Next prediction block's draft rows, every
 	// stream, row-major: laid into the residual in place of the embedding's
-	// copies (q4eExpandAt). nil on every other State.
+	// copies (q4eExpandAt). nil on every other Instance.
 	q4In []float32
 
 	// emb is set for the length of one Embedder.Embed on a decoder embedding
@@ -694,49 +627,37 @@ type State struct {
 	// endWord is the one word noteEnd and endsAt move a boundary's prompt
 	// ends through.
 	endWord [1]float32
-	// recMark is where the cached prompt in flight parts from the one before
-	// it (markParting), a restore point beside the spaced ones; recLast is
-	// that one's key.
-	recMark int
-	recLast []int32
 	// recBatch is sealRecOnDevice's block list, kept.
 	recBatch []int32
-	// recPrefill says a chunked prefill is running, which keeps its restore
-	// points itself (recRowPoint).
-	recPrefill bool
 	// recStage is faultRecurrentAt's staging, a buffer a linear block.
 	recStage [][]float32
-
-	// ranAt is when this State last started a decode token, in nanoseconds
-	// past servingEpoch plus one (0: never); see serving.go.
-	ranAt atomic.Int64
 }
 
-// NewState allocates a session able to hold maxSeq positions.
-func (m *Model) NewState(maxSeq int) *State { return m.newState(1, maxSeq) }
+// NewInstance allocates a session able to hold maxSeq positions.
+func (m *Model) NewInstance(maxSeq int) *Instance { return m.newInstance(1, maxSeq) }
 
 // NewBatch allocates nseq independent sessions that step together, one token
 // each per ForwardBatch. They share one pass over the weights, which is the
 // whole point: decode is memory-bound, so the second sequence is nearly free.
 // Each row carries its own position (bpos).
-func (m *Model) NewBatch(nseq, maxSeq int) *State {
-	s := m.newState(max(nseq, 1), maxSeq)
+func (m *Model) NewBatch(nseq, maxSeq int) *Instance {
+	s := m.newInstance(max(nseq, 1), maxSeq)
 	s.batched = true
 	return s
 }
 
-func (m *Model) newState(nseq, maxSeq int) *State {
-	return m.newStateRange(nseq, maxSeq, 0, m.Cfg.NLayer)
+func (m *Model) newInstance(nseq, maxSeq int) *Instance {
+	return m.newInstanceRange(nseq, maxSeq, 0, m.Cfg.NLayer)
 }
 
-// newStateRange is newState over blocks [lo, hi) of the model; see State.lo.
-func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
-	// An encoder has no decoder layers, no cache and no logits, so a State
+// newInstanceRange is newState over blocks [lo, hi) of the model; see Instance.lo.
+func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
+	// An encoder has no decoder layers, no cache and no logits, so an instance
 	// over it would run zero blocks and project nothing: refused by name
-	// rather than handed back empty. NewState has no error return, and this
+	// rather than handed back empty. NewInstance has no error return, and this
 	// is a caller's contract violation, not a runtime condition.
 	if m.enc != nil {
-		panic(fmt.Sprintf("model: %s is an encoder; embed with NewEmbedder, it has no decoder State", m.Cfg.Arch))
+		panic(fmt.Sprintf("model: %s is an encoder; embed with NewEmbedder, it has no decoder instance", m.Cfg.Arch))
 	}
 	m.states.Add(1)
 	c := m.Cfg
@@ -746,13 +667,14 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	if maxSeq > c.NCtx {
 		maxSeq = c.NCtx
 	}
-	s := &State{m: m, c: m.Cfg, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
+	s := &Instance{Session: &Session{model: m}, m: m, c: m.Cfg, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
 		devFallback: true, relocate: true, prof: m.opt.profile, outNorm: m.outNorm, outW: &m.output,
 		fuseOff: m.opt.noFuse, groupOff: m.opt.noGroups, lookOff: m.opt.noLook,
 		residFold: m.opt.residFold}
+	s.own = s.Session
 	s.holdCPURuns()
 	m.live.add(s)
-	// A State over a prediction block projects through that block's head.
+	// An instance over a prediction block projects through that block's head.
 	if lo < len(m.layers) {
 		if w := m.layers[lo].mtp; w != nil {
 			s.outNorm, s.outW = w.headNorm, &w.head
@@ -901,6 +823,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	}
 	s.jit.AddAttnKV(hdK, hdV, s.kvl.Stride(), want)
 	s.kvFmt, s.kvl.fmt = want, want
+	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
 	if want == cpu.KVQ8 {
 		s.kvl.jit = s.jit
 		s.jit.ReserveKVQuant(max(c.HeadDim, c.HeadDimSWA))
@@ -938,7 +861,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 // It is callable at any time, which a service needs: tightening the budget
 // demotes on the next token, loosening it stops evicting, and the hotness
 // counts and resident set are kept either way.
-func (s *State) SetMemBudget(bytes uint64) {
+func (s *Instance) SetMemBudget(bytes uint64) {
 	s.memBudget, s.memBudgetAsked = bytes, true
 	s.applyMemBudget()
 }
@@ -947,7 +870,7 @@ func (s *State) SetMemBudget(bytes uint64) {
 // SetMemBudget was given, less the share of it a device on the host's own memory
 // is allowed to fill. It is what a report should print, because it is the number
 // the residency manager is working to.
-func (s *State) HostBudget() uint64 {
+func (s *Instance) HostBudget() uint64 {
 	b, _ := s.hostBudget()
 	return b
 }
@@ -958,7 +881,7 @@ func (s *State) HostBudget() uint64 {
 // thrash rather than fail. The tier reports what it holds through HostReserved
 // and this subtracts it. It is an optional interface so model/ need not know
 // what a backend is; a discrete card leaves the budget unchanged.
-func (s *State) hostBudget() (host, device uint64) {
+func (s *Instance) hostBudget() (host, device uint64) {
 	host = s.memBudget
 	d, ok := s.dev().(nn.HostReserver)
 	if !ok {
@@ -977,7 +900,7 @@ func (s *State) hostBudget() (host, device uint64) {
 // applyMemBudget pushes the host's share at the two managers that spend it. It
 // is re-run when a device is attached and whenever what it holds moves
 // (followHost), because those are what change the answer.
-func (s *State) applyMemBudget() {
+func (s *Instance) applyMemBudget() {
 	host, _ := s.hostBudget()
 	if s.memBudgetAsked {
 		s.initResidency(host) // recomputes the expert share of the new budget
@@ -985,9 +908,9 @@ func (s *State) applyMemBudget() {
 }
 
 // dev is the attached accelerator, or nil. ldCand rather than ld because ld is
-// this State's session view (nn.Attacher) and ldCand the device itself, which is
+// this instance's session view (nn.Attacher) and ldCand the device itself, which is
 // what answers HostReserved.
-func (s *State) dev() nn.LayerDevice {
+func (s *Instance) dev() nn.LayerDevice {
 	if s.ldCand != nil {
 		return s.ldCand
 	}
@@ -995,9 +918,12 @@ func (s *State) dev() nn.LayerDevice {
 }
 
 // Close releases the generated kernels and detaches the device session. Every
-// State must be closed before its Model (`defer m.Close()` then
+// Instance must be closed before its Model (`defer m.Close()` then
 // `defer st.Close()` gives that order).
-func (s *State) Close() error {
+func (s *Instance) Close() error {
+	if s.own != nil {
+		s.Session = s.own
+	}
 	s.m.live.remove(s)
 	// A move prepared and never committed gives its target's copies back.
 	if s.pending != nil {
@@ -1007,13 +933,13 @@ func (s *State) Close() error {
 		close(s.expReq)
 		s.expReq = nil
 	}
-	// The vision State runs on this State's JIT, so it goes first.
+	// The vision instance runs on this instance's JIT, so it goes first.
 	if s.visState != nil {
 		s.visState.Close()
 		s.visState = nil
 	}
-	// A vision State's blocks run once per picture, so the card they were
-	// placed on gets its room back with the State: its text sessions' blocks
+	// A vision instance's blocks run once per picture, so the card they were
+	// placed on gets its room back with the instance: its text sessions' blocks
 	// run every token. Through the session view, so another session's hold on
 	// the same blocks keeps them there.
 	if (s.vis != nil || s.enc != nil) && s.ld != nil && s.devCount() > 0 {
@@ -1025,16 +951,16 @@ func (s *State) Close() error {
 		d.Detach()
 	}
 	// The history the device gave back was host memory on an integrated GPU,
-	// and the model's pages get it back once no State holds the device.
+	// and the model's pages get it back once no instance holds the device.
 	s.holdHost(nil)
-	// A vision State's K/V pair is lent to its first block, so the pool takes
+	// A vision instance's K/V pair is lent to its first block, so the pool takes
 	// it back with the rest of the cache.
 	if s.vis != nil && s.vis.kp != nil {
 		s.lend(s.lo)
 	}
 	s.m.kvPool.put(s.kv)
 	s.unmapNC()
-	// The blocks this State ran on the host no longer need their pages for
+	// The blocks this instance ran on the host no longer need their pages for
 	// it. Close may be called twice; cpuHeld makes the second a no-op.
 	if s.cpuHeld {
 		s.cpuHeld = false
@@ -1048,8 +974,8 @@ func (s *State) Close() error {
 	if s.enc != nil {
 		return nil
 	}
-	// A vision State's prompt buffers are the tower's shape, which no text
-	// State could take; and a JIT it borrowed is the text State's to close.
+	// A vision session's prompt buffers are the tower's shape, which no text
+	// Instance could take; and a JIT it borrowed is the text instance's to close.
 	if s.vis != nil {
 		s.vis.release()
 		if s.vis.borrowed {
@@ -1061,13 +987,13 @@ func (s *State) Close() error {
 	return s.jit.Close()
 }
 
-// SetDevice attaches an optional accelerator to this State's matvecs. Nil, the
+// SetDevice attaches an optional accelerator to this instance's matvecs. Nil, the
 // default, is the CPU-only engine.
 //
 // A Device that can run whole blocks is offered every layer (see offerRange),
 // and what it takes is decided by the device's own memory rather than by a
 // separate placement policy.
-func (s *State) SetDevice(d nn.Device) error {
+func (s *Instance) SetDevice(d nn.Device) error {
 	// The bisection knob for a tower (WithTowerGPULayers): how many of its
 	// blocks are offered.
 	if s.vis != nil && s.m.opt.towerGPULayers >= 0 {
@@ -1123,14 +1049,14 @@ func ropeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
 //
 // WithPlacement's map is applied here. The error reports a placement that
 // named a device not attached, a strict one that could not be met (nothing is
-// placed then), and a device this State cannot move onto at all.
-func (s *State) SetDeviceLayers(d nn.Device, max int) error {
+// placed then), and a device this instance cannot move onto at all.
+func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 	// MigrateKV moves float32: a binary16 or q8_0 history travels converted
-	// (State.migrateKVAs).
+	// (Instance.migrateKVAs).
 	// An empty binary16 cache steps down to the f32 the device holds; one
 	// with history keeps its format and travels converted, widened on its way
 	// to the device and narrowed home (migrateKVAs), as a q8_0 one does. A
-	// State whose CPU blocks run composed keeps the binary16 its CPU device
+	// Instance whose CPU blocks run composed keeps the binary16 its CPU device
 	// holds (jit.Halves), in the arenas its blocks were bound to, as a cache
 	// with history does.
 	// The history comes home before the device changes (or detaches), or the
@@ -1152,7 +1078,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	if d != nil && s.pos == 0 && s.kvFmt == cpu.KVF16 {
 		s.stepDownKVToF32()
 	}
-	// A borrowed JIT is the text State's, attached to its device by it.
+	// A borrowed JIT is the text instance's, attached to its device by it.
 	if !s.borrowsJIT() {
 		s.jit.SetDevice(d)
 	}
@@ -1164,7 +1090,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	// will, both budgets are re-divided for it.
 	s.holdHost(d)
 	defer s.followHost()
-	// The vision State this one encodes pictures in follows it to the device.
+	// The vision instance this one encodes pictures in follows it to the device.
 	if s.visState != nil {
 		if err := s.visState.SetDevice(d); err != nil {
 			return err
@@ -1248,15 +1174,15 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		hi = s.lo + max
 	}
 	// The device stays attached even when it took nothing, so the seam can
-	// grow later. One session per State: a tier offering Attach hands back a
-	// view carrying this State's own KV cache (see
-	// docs/design/device-sessions.md); two States must not share one cache.
+	// grow later. One session per instance: a tier offering Attach hands back a
+	// view carrying this instance's own KV cache (see
+	// docs/design/device-sessions.md); two instances must not share one cache.
 	if a, ok := ld.(nn.Attacher); ok {
 		ld = a.Attach()
 		// The single matvecs are the session's too: the tier's crossing
 		// verdict is sampled per session, and offered through the tier itself
-		// they land on its zero session, which outlives every State, so a
-		// second State would inherit the first's sample and run the same
+		// they land on its zero session, which outlives every instance, so a
+		// second instance would inherit the first's sample and run the same
 		// token with different kernels
 		// (TestHybridSecondSessionMatchesTheFirst).
 		if !s.borrowsJIT() {
@@ -1273,7 +1199,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	// reserved above); followHost takes off what the offers add.
 	s.setLD(ld)
 	s.applyMemBudget()
-	// The whole offer sequence is one decision: bracketed, so two States
+	// The whole offer sequence is one decision: bracketed, so two instances
 	// attaching at once do not interleave their offers against one budget.
 	if pl, ok := ld.(nn.Placer); ok {
 		pl.BeginPlacement()
@@ -1360,12 +1286,12 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 // reserveRows makes the devices hold every row's history before any is
 // written. A batch's rows sit at slot*maxSeq+pos in each block's cache, so it
 // needs nseq*maxSeq positions where one sequence grows into maxSeq. The
-// capacity is this State's own (a tier session's), so no other State's caches
-// grow; what the cards cannot hold comes home for this State alone -- a
-// session's release leaves blocks another State is using where they are -- and
+// capacity is this instance's own (a tier session's), so no other session's caches
+// grow; what the cards cannot hold comes home for this instance alone -- a
+// session's release leaves blocks another instance is using where they are -- and
 // with nothing written yet nothing has to move. A strict placement fails
 // instead, since that would move a block it named.
-func (s *State) reserveRows() error {
+func (s *Instance) reserveRows() error {
 	// A device that pages per sequence takes each row's pages as it writes
 	// them; a whole-context reservation is the contiguous cache's.
 	if sd, ok := s.ld.(nn.SeqKVDevice); ok && sd.PerSequenceKV() {
@@ -1384,7 +1310,7 @@ func (s *State) reserveRows() error {
 }
 
 // placeOf is the placement WithPlacement names for block li.
-func (s *State) placeOf(li int) (Place, bool) {
+func (s *Instance) placeOf(li int) (Place, bool) {
 	if p := s.m.opt.place; p != nil {
 		if pl, ok := p.Blocks[li]; ok {
 			return pl, true
@@ -1397,7 +1323,7 @@ func (s *State) placeOf(li int) (Place, bool) {
 }
 
 // pinnedOnDev reports a device block WithPlacement pinned there.
-func (s *State) pinnedOnDev(li int) bool {
+func (s *Instance) pinnedOnDev(li int) bool {
 	pl, ok := s.placeOf(li)
 	return ok && pl.Pin && !onCPU(pl.On) && s.devAt(li)
 }
@@ -1405,7 +1331,7 @@ func (s *State) pinnedOnDev(li int) bool {
 // finishPlacement checks a strict placement against where every named block
 // and the head landed, undoing all of it when one missed, and pins what the
 // map pins.
-func (s *State) finishPlacement() error {
+func (s *Instance) finishPlacement() error {
 	p := s.m.opt.place
 	if p == nil || s.ld == nil {
 		return nil
@@ -1462,7 +1388,7 @@ func (s *State) finishPlacement() error {
 	}
 	// The device's pin is a residency pin -- never a victim -- which a
 	// streamed block cannot have; its Pin keeps it on its device through this
-	// State's moves instead (pinnedOnDev).
+	// instance's moves instead (pinnedOnDev).
 	pin, _ := s.ld.(nn.NamedDevice)
 	for li := s.lo; li < s.hi; li++ {
 		if pl, named := s.placeOf(li); named && pl.Pin && !pl.Stream && !onCPU(pl.On) && s.devAt(li) && pin != nil {
@@ -1486,7 +1412,7 @@ const seamCrossBytes = 2 << 20
 // every token, while a mixture block's expert banks are
 // read a fraction of the time. Releasing from the end keeps the placed blocks a
 // contiguous prefix, and a trailing block is the cheapest to give up.
-func (s *State) placeHead() {
+func (s *Instance) placeHead() {
 	// WithHeadPlacement(false) leaves the projection on the host -- the other
 	// arm of the placement comparison, and the way to bisect a divergence to it.
 	if s.ld == nil || s.head != nil || s.outW.data == nil || !s.m.opt.headPlace {
@@ -1598,8 +1524,8 @@ func (s *State) placeHead() {
 // token, while what a token reads of them costs less than what is left of
 // budget, the head's read at home (placeHead). It reports the block, or false
 // where none is left to stream or the device takes it neither way.
-func (s *State) streamForHead(budget *uint64) (int, bool) {
-	// Asked of the shared tier, the block offered through this State's view,
+func (s *Instance) streamForHead(budget *uint64) (int, bool) {
+	// Asked of the shared tier, the block offered through this instance's view,
 	// as placement does (offerRange).
 	as, ok := s.ldCand.(nn.AutoStreamer)
 	if !ok || s.pos > 0 {
@@ -1631,7 +1557,7 @@ func (s *State) streamForHead(budget *uint64) (int, bool) {
 
 // residentAgain puts the blocks streamForHead streamed back resident, the
 // head not having fitted.
-func (s *State) residentAgain(streamed []int) {
+func (s *Instance) residentAgain(streamed []int) {
 	for _, li := range slices.Backward(streamed) {
 		s.ld.ReleaseLayers(li, li+1)
 		s.unmarkOnDev(li)
@@ -1641,7 +1567,7 @@ func (s *State) residentAgain(streamed []int) {
 }
 
 // unstream takes block li's stream mark off and offers it resident.
-func (s *State) unstream(li int) {
+func (s *Instance) unstream(li int) {
 	if ep, ok := s.ldCand.(nn.ExpertPlacer); ok {
 		ep.PlaceExperts(li, "")
 	}
@@ -1651,7 +1577,7 @@ func (s *State) unstream(li int) {
 
 // offerAgain offers block li to the device as placement does, and marks it
 // placed where the device takes it.
-func (s *State) offerAgain(li int) bool {
+func (s *Instance) offerAgain(li int) bool {
 	plan, w, err := s.blockOffer(li)
 	if err != nil {
 		return false
@@ -1665,7 +1591,7 @@ func (s *State) offerAgain(li int) bool {
 }
 
 // markStreamed records whether placement streamed block li.
-func (s *State) markStreamed(li int, on bool) {
+func (s *Instance) markStreamed(li int, on bool) {
 	if s.streamedOn == nil {
 		s.streamedOn = make([]bool, len(s.m.layers))
 	}
@@ -1673,10 +1599,10 @@ func (s *State) markStreamed(li int, on bool) {
 }
 
 // streamedAt says placement streamed block li.
-func (s *State) streamedAt(li int) bool { return li < len(s.streamedOn) && s.streamedOn[li] }
+func (s *Instance) streamedAt(li int) bool { return li < len(s.streamedOn) && s.streamedOn[li] }
 
 // newHead is the output projection as a device takes it.
-func (s *State) newHead() *nn.Head {
+func (s *Instance) newHead() *nn.Head {
 	c := s.c
 	f := s.m.frontGraphs()
 	h := &nn.Head{Model: s.m.id, Graph: f.cpuHead, HiddenGraph: f.cpuHidden, Sample: f.cpuSample, SampleWalk: f.cpuWalk, PickGraph: f.pick, PickHead: f.pickHead, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
@@ -1705,7 +1631,7 @@ func (s *State) newHead() *nn.Head {
 }
 
 // placeHeadOn puts the projection on the named device, as WithPlacement asks.
-func (s *State) placeHeadOn(name string) bool {
+func (s *Instance) placeHeadOn(name string) bool {
 	po, ok := s.ld.(nn.NamedDevice)
 	if !ok {
 		s.placeErr = fmt.Errorf("model: the placement names %q for the head, and this "+
@@ -1727,7 +1653,7 @@ func (s *State) placeHeadOn(name string) bool {
 // layerWeightsAt gathers block li's weights as the device wants them. It does
 // not set Ensure -- the caller does, because Ensure calls back into here. It is
 // shared by the offer and by every device page-in, which must agree.
-func (s *State) layerWeightsAt(li int) nn.LayerWeights {
+func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
 	if s.vis != nil {
 		return s.visWeights(li)
 	}
@@ -1819,7 +1745,7 @@ func (s *State) layerWeightsAt(li int) nn.LayerWeights {
 // matters because a host page is a reused frame: slices kept from placement
 // would read whichever block the host faulted into it last. pageIn comes first
 // because ensureBlockExperts reads into the page.
-func (s *State) ensureLayer(li int) func(*nn.LayerWeights) error {
+func (s *Instance) ensureLayer(li int) func(*nn.LayerWeights) error {
 	return func(dst *nn.LayerWeights) error {
 		if err := s.m.pageIn(li); err != nil {
 			return err
@@ -1845,7 +1771,7 @@ func (s *State) ensureLayer(li int) func(*nn.LayerWeights) error {
 // ensureSelected is ensureLayer for a caller that knows which experts it wants.
 // Same three steps -- page in, read, re-point -- with the bank read narrowed to
 // the routed sheets. See nn.LayerWeights.EnsureExperts.
-func (s *State) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error {
+func (s *Instance) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error {
 	return func(dst *nn.LayerWeights, sel []uint32) error {
 		// The device's callback: a placed block's own weights are on the card,
 		// so pageInSelected reads only the routed sheets. See selectedRanges.
@@ -1873,7 +1799,7 @@ func (s *State) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error {
 // It must not bind (so it is not pageInSelected): it runs on another goroutine
 // while the tier uses m.layers[li]'s spans. EnsureRanges is safe because
 // jlm.File locks and makeRoom never evicts the block being faulted in.
-func (s *State) prefetchSelected(li int) func([]uint32) error {
+func (s *Instance) prefetchSelected(li int) func([]uint32) error {
 	return func(sel []uint32) error {
 		if !s.c.MoE() {
 			return nil
@@ -1886,7 +1812,7 @@ func (s *State) prefetchSelected(li int) func([]uint32) error {
 // sheets the previous block predicted, read in the background by the
 // container's workers and never waited for (jlm.File.Speculate). A bank that
 // is not in expert pages has nothing to guess at.
-func (s *State) speculateSelected(li int) func([]uint32) {
+func (s *Instance) speculateSelected(li int) func([]uint32) {
 	return func(sel []uint32) {
 		if s.c.MoE() {
 			s.m.speculateExperts(li, sel)
@@ -1898,17 +1824,17 @@ func (s *State) speculateSelected(li int) func([]uint32) {
 // stays on the host and the rest are still offered (placement is a set; see
 // onDev); the seam is the prefix of what was accepted. A tier that cannot run a
 // block says so by name through DeclinePlan.
-func (s *State) offerRange(lo, hi int) {
+func (s *Instance) offerRange(lo, hi int) {
 	ld := s.ldCand
 	if ld == nil {
 		return
 	}
-	// Offers go through this State's own view (tier.GPU.Attach), which makes it
+	// Offers go through this instance's own view (tier.GPU.Attach), which makes it
 	// the device's current session: an offer is where a block takes the session's
 	// history (KV pages, a linear block's recurrent state), filed under whichever
 	// session is current. Offered through the shared tier, a block took it for
-	// the last session to make any call -- with two States placing at once, the
-	// other one -- and this State's first token found no recurrent state and
+	// the last session to make any call -- with two instances placing at once, the
+	// other one -- and this instance's first token found no recurrent state and
 	// demoted every block to the host.
 	adm := s.ld
 	if adm == nil {
@@ -2092,7 +2018,7 @@ func (s *State) offerRange(lo, hi int) {
 
 // prepOffered offers block li to the device MoveBlocks names (offerOn), or to
 // the tier's choice when it names none.
-func (s *State) prepOffered(adm nn.LayerDevice, li int, plan *nn.LayerPlan, w *nn.LayerWeights) (bool, error) {
+func (s *Instance) prepOffered(adm nn.LayerDevice, li int, plan *nn.LayerPlan, w *nn.LayerWeights) (bool, error) {
 	if s.offerOn == "" {
 		return adm.PrepLayer(li, plan, w), nil
 	}
@@ -2107,7 +2033,7 @@ func (s *State) prepOffered(adm nn.LayerDevice, li int, plan *nn.LayerPlan, w *n
 // heldOnOffer reports whether a block another session holds is where offerOn
 // asks for it. A held block is attached where it is, so one held elsewhere is
 // offered to offerOn whole, and the tier says why it cannot move.
-func (s *State) heldOnOffer(adm nn.LayerDevice, li int) bool {
+func (s *Instance) heldOnOffer(adm nn.LayerDevice, li int) bool {
 	if s.offerOn == "" {
 		return true
 	}
@@ -2122,7 +2048,7 @@ func (s *State) heldOnOffer(adm nn.LayerDevice, li int) bool {
 // releasePlacedPage gives back the host page of block li once a device holds
 // it, or tells the devices to drop their lone-matvec copies of a page that
 // stays. offerRange and MoveBlocks share it.
-func (s *State) releasePlacedPage(ld nn.LayerDevice, li int) {
+func (s *Instance) releasePlacedPage(ld nn.LayerDevice, li int) {
 	l := &s.m.layers[li]
 	// The block is on the card, so the host gives up its page; pageIn
 	// re-reads it if the seam later moves the block back. Asked, not
@@ -2131,8 +2057,8 @@ func (s *State) releasePlacedPage(ld nn.LayerDevice, li int) {
 	// draft step (Speculator.draftRows), and re-reading the page for it
 	// would cost a block of I/O a step.
 	if r, ok := ld.(nn.HostPageReleaser); ok && r.ReleasesHostPage(li) && l.mtp == nil {
-		// Under bind, as pageIn binds: another State may be binding or
-		// reading this block's spans while this one places it. A State
+		// Under bind, as pageIn binds: another instance may be binding or
+		// reading this block's spans while this one places it. An instance
 		// that runs the block on the CPU keeps it bound (cpuUse): it
 		// faults the block in once and then reads its spans unlocked
 		// through every matvec of the block.
@@ -2158,7 +2084,7 @@ func (s *State) releasePlacedPage(ld nn.LayerDevice, li int) {
 // it: the block's plan and its weights with every callback. offerRange and
 // MoveBlocks share it, so a block moved between devices is offered exactly as
 // a placement offers it.
-func (s *State) blockOffer(li int) (nn.LayerPlan, nn.LayerWeights, error) {
+func (s *Instance) blockOffer(li int) (nn.LayerPlan, nn.LayerWeights, error) {
 	w, err := s.blockWeights(li)
 	if err != nil {
 		return nn.LayerPlan{}, nn.LayerWeights{}, err
@@ -2170,9 +2096,9 @@ func (s *State) blockOffer(li int) (nn.LayerPlan, nn.LayerWeights, error) {
 }
 
 // blockWeights is blockOffer's weights: the page read and every callback set.
-// It reads the model and nothing of the State's placement, so a move's
-// staging runs it beside the State's own tokens (PendingMove).
-func (s *State) blockWeights(li int) (nn.LayerWeights, error) {
+// It reads the model and nothing of the instance's placement, so a move's
+// staging runs it beside the instance's own tokens (PendingMove).
+func (s *Instance) blockWeights(li int) (nn.LayerWeights, error) {
 	if err := s.m.pageIn(li); err != nil {
 		return nn.LayerWeights{}, err
 	}
@@ -2209,10 +2135,10 @@ func (s *State) blockWeights(li int) (nn.LayerWeights, error) {
 }
 
 // planExtra is what a placement of blocks [0,hi) must leave room for besides
-// their weights (nn.BlockPlanner): the history this State's context will hold
+// their weights (nn.BlockPlanner): the history this instance's context will hold
 // on its attention blocks, counted as float32 K and V (MLA's latent row), and
 // the output projection. A recurrent block's state is fixed and small.
-func (s *State) planExtra(hi int) uint64 {
+func (s *Instance) planExtra(hi int) uint64 {
 	c := s.c
 	hdK, hdV := c.attnWidths()
 	perPos := uint64(c.NKVHead*(hdK+hdV)) * 4
@@ -2231,7 +2157,7 @@ func (s *State) planExtra(hi int) uint64 {
 // planFor is the block's plan with no weights in it: s.plan adjusted for what
 // this block is. Nothing here reads the block's page, so nn.PlanDecliner can
 // answer before the page-in.
-func (s *State) planFor(li int) *nn.LayerPlan {
+func (s *Instance) planFor(li int) *nn.LayerPlan {
 	c := s.c
 	plan := s.plan
 	if s.vis != nil {
@@ -2329,7 +2255,7 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 
 // markOnDev records that a device accepted block li, and recomputes gpuLayers
 // as the contiguous placed prefix (with holes, "li + 1" is not a length).
-func (s *State) markOnDev(li int) {
+func (s *Instance) markOnDev(li int) {
 	if s.onDev == nil {
 		s.onDev = make([]bool, len(s.m.layers))
 	}
@@ -2346,7 +2272,7 @@ func (s *State) markOnDev(li int) {
 
 // unmarkOnDev records that block li went back to the host, and is markOnDev's
 // twin: the prefix ends at the first block not placed.
-func (s *State) unmarkOnDev(li int) {
+func (s *Instance) unmarkOnDev(li int) {
 	if s.onDev[li] {
 		s.cpuRun(li, 1)
 	}
@@ -2355,7 +2281,7 @@ func (s *State) unmarkOnDev(li int) {
 }
 
 // placedFrom lists the placed blocks at index lo and above.
-func (s *State) placedFrom(lo int) []int {
+func (s *Instance) placedFrom(lo int) []int {
 	var out []int
 	for li := lo; li < len(s.onDev); li++ {
 		if s.onDev[li] {
@@ -2366,7 +2292,7 @@ func (s *State) placedFrom(lo int) []int {
 }
 
 // clearOnDev forgets the whole placement.
-func (s *State) clearOnDev() {
+func (s *Instance) clearOnDev() {
 	for i := range s.onDev {
 		if s.onDev[i] {
 			s.cpuRun(i, 1)
@@ -2383,7 +2309,7 @@ func (s *State) clearOnDev() {
 // shrinkOnDev gives every block from n up back to the host, and is what a
 // caller that writes `s.gpuLayers = n` means: the seam moved down, so
 // the blocks above it are no longer placed anywhere.
-func (s *State) shrinkOnDev(n int) {
+func (s *Instance) shrinkOnDev(n int) {
 	for i := n; i < len(s.onDev); i++ {
 		if s.onDev[i] {
 			s.cpuRun(i, 1)
@@ -2395,18 +2321,18 @@ func (s *State) shrinkOnDev(n int) {
 	}
 }
 
-// holdCPURuns counts this State in m.cpuUse for every block of [lo, hi): a
-// State with no device attached runs them all on the CPU device, so its card
+// holdCPURuns counts this instance in m.cpuUse for every block of [lo, hi): a
+// Instance with no device attached runs them all on the CPU device, so its card
 // prefix is empty.
-func (s *State) holdCPURuns() {
+func (s *Instance) holdCPURuns() {
 	s.gpuLayers = s.lo
 	s.m.cpuRuns(s.lo, s.hi, 1)
 	s.cpuHeld = true
 }
 
-// cpuRun moves this State's count on block li in m.cpuUse by d, as the
+// cpuRun moves this instance's count on block li in m.cpuUse by d, as the
 // block leaves (-1) or moves to (+1) the CPU device for it.
-func (s *State) cpuRun(li, d int) {
+func (s *Instance) cpuRun(li, d int) {
 	s.cpuRelocated(li, d > 0)
 	if s.cpuHeld && li >= s.lo && li < s.hi {
 		s.m.cpuRuns(li, li+1, int32(d))
@@ -2414,12 +2340,12 @@ func (s *State) cpuRun(li, d int) {
 }
 
 // devAt reports whether block li runs on a device.
-func (s *State) devAt(li int) bool { return li < len(s.onDev) && s.onDev[li] }
+func (s *Instance) devAt(li int) bool { return li < len(s.onDev) && s.onDev[li] }
 
 // devRuns is the placement as maximal contiguous runs, the unit
 // nn.LayerDevice.Layers takes. Each run is one seam crossing (the residual goes
 // up and comes back), so alternating tiers is priced rather than refused.
-func (s *State) devRuns() [][2]int {
+func (s *Instance) devRuns() [][2]int {
 	var out [][2]int
 	for li := 0; li < len(s.onDev); {
 		if !s.onDev[li] {
@@ -2438,7 +2364,7 @@ func (s *State) devRuns() [][2]int {
 
 // devCount is how many blocks a device took, which is what a caller asking
 // "how much of this model is on the card" means.
-func (s *State) devCount() int {
+func (s *Instance) devCount() int {
 	n := 0
 	for _, v := range s.onDev {
 		if v {
@@ -2450,7 +2376,7 @@ func (s *State) devCount() int {
 
 // prepDeviceRange grows the device's prefix to n blocks. A binary16 history
 // travels widened, as SetDeviceLayers' does (migrateKVAs).
-func (s *State) prepDeviceRange(lo, n int) {
+func (s *Instance) prepDeviceRange(lo, n int) {
 	s.offerRange(lo, n)
 	s.placeHead()
 }
@@ -2458,7 +2384,7 @@ func (s *State) prepDeviceRange(lo, n int) {
 // embed writes the token's embedding into the residual stream: the input
 // rows' graph composed for the CPU (cpuembed.go), its scale, its position
 // row and its per-layer inputs with it.
-func (s *State) embed(token int32) error {
+func (s *Instance) embed(token int32) error {
 	m, c := s.m, s.c
 	// On the host, unlike a prompt's rows: a device gather here measured
 	// slower (one row is usually cache-hot, and the launch sits on the
@@ -2492,17 +2418,17 @@ func (s *State) embed(token int32) error {
 //
 // A service would rather serve slowly than fail; a benchmark wants the error,
 // since a run silently finished on the CPU produces a meaningless number.
-func (s *State) SetDeviceFallback(on bool) { s.devFallback = on }
+func (s *Instance) SetDeviceFallback(on bool) { s.devFallback = on }
 
 // fallsBack reports whether a device failure moves the blocks to the CPU
 // (demoteAll) rather than failing the step.
-func (s *State) fallsBack() bool { return s.devFallback && s.cpuListed() }
+func (s *Instance) fallsBack() bool { return s.devFallback && s.cpuListed() }
 
 // demoteAll moves every device block and its history to the CPU device.
 //
 // The history moves before the blocks do: releasing first would free the only
 // copy of their keys and values.
-func (s *State) demoteAll() bool {
+func (s *Instance) demoteAll() bool {
 	cause := s.devCause()
 	// The set, not the prefix: a hybrid's prefix can be zero with blocks
 	// placed.
@@ -2535,12 +2461,12 @@ func (s *State) demoteAll() bool {
 // DeviceDemotions is how many times the device failed and its blocks were moved
 // to the host. Non-zero means this session's rate is not comparable with one
 // that kept the card.
-func (s *State) DeviceDemotions() int { return s.devDemoted }
+func (s *Instance) DeviceDemotions() int { return s.devDemoted }
 
 // TailRowChunks is how many few-row prompt chunks this session ran on the
 // device as one ragged step of their rows rather than as a batched chunk
 // (tailrows.go).
-func (s *State) TailRowChunks() int { return s.tailRowChunks }
+func (s *Instance) TailRowChunks() int { return s.tailRowChunks }
 
 // SetRelocate chooses what happens when the device cannot grow its attention
 // history to the next position: hand its highest block to the host and ask
@@ -2552,20 +2478,20 @@ func (s *State) TailRowChunks() int { return s.tailRowChunks }
 // safe on a hybrid (which cannot restart a token; see errRecurRetry): nothing
 // has run when a block moves, so its history and summary come home at a token
 // boundary.
-func (s *State) SetRelocate(on bool) { s.relocate = on }
+func (s *Instance) SetRelocate(on bool) { s.relocate = on }
 
 // Relocating reports whether SetRelocate is on.
-func (s *State) Relocating() bool { return s.relocate }
+func (s *Instance) Relocating() bool { return s.relocate }
 
 // Relocations is how many blocks SetRelocate has handed to the host.
-func (s *State) Relocations() int { return s.devRelocated }
+func (s *Instance) Relocations() int { return s.devRelocated }
 
 // Spills is how many blocks moved onto a later device because the one holding
 // them could not grow its history (tier.GPU.SpillAfter).
-func (s *State) Spills() int { return s.devSpilled }
+func (s *Instance) Spills() int { return s.devSpilled }
 
 // Reclaims is how many of those the device has since taken back.
-func (s *State) Reclaims() int { return s.devReclaimed }
+func (s *Instance) Reclaims() int { return s.devReclaimed }
 
 // relocateFor is SetRelocate's pre-flight: while the device cannot hold `pos`
 // positions of history, a block comes home -- the highest one on the device
@@ -2575,7 +2501,7 @@ func (s *State) Reclaims() int { return s.devReclaimed }
 // (devTier.regrowKV) and grows to whatever fits before refusing at all
 // (devTier.kvFit), so an ask is cheap and a block moves only when not even one
 // more page fits.
-func (s *State) relocateFor(pos int) {
+func (s *Instance) relocateFor(pos int) {
 	if s.ld == nil {
 		return
 	}
@@ -2603,7 +2529,7 @@ func (s *State) relocateFor(pos int) {
 // relocateUntil moves blocks off the device -- to a later card, or home under
 // SetRelocate -- until fits says the history the next step writes has room.
 // pos is the positions the step needs, for reclaim.
-func (s *State) relocateUntil(pos int, fits func() bool) {
+func (s *Instance) relocateUntil(pos int, fits func() bool) {
 	// Before and after: a block a relocation takes home may part a KV-sharing
 	// group (fixKVGroups).
 	s.fixKVGroups()
@@ -2658,11 +2584,11 @@ func (s *State) relocateUntil(pos int, fits func() bool) {
 	}
 }
 
-// relocateToCPU moves block li to the CPU device for this State and
+// relocateToCPU moves block li to the CPU device for this instance and
 // remembers it, so that reclaim offers it back once the device reports room.
-// The block's history must already be in this State's cache (or never have
+// The block's history must already be in this session's cache (or never have
 // been written).
-func (s *State) relocateToCPU(li int) {
+func (s *Instance) relocateToCPU(li int) {
 	s.ld.ReleaseLayers(li, li+1)
 	s.unmarkOnDev(li)
 	// -gpu-grow would adopt the block straight back next token.
@@ -2682,7 +2608,7 @@ func (s *State) relocateToCPU(li int) {
 // detaches, a budget is raised, or a shorter fresh prompt shrinks the history
 // (relocateFresh), not when this session's own relocation frees room. A block
 // that fits but leaves no room for pos is given straight back.
-func (s *State) reclaim(pos int) {
+func (s *Instance) reclaim(pos int) {
 	if s.moved == nil || s.roomGen() == s.roomSeen {
 		return
 	}
@@ -2736,7 +2662,7 @@ func (s *State) reclaim(pos int) {
 //
 // Only a prompt that needs less gives room back, so a chat turn (which
 // re-prefills the whole conversation) does not bounce blocks.
-func (s *State) relocateFresh(total int) {
+func (s *Instance) relocateFresh(total int) {
 	if !s.relocate || s.ld == nil || s.nseq != 1 || s.pos != 0 || !slices.Contains(s.moved, true) {
 		return
 	}
@@ -2747,7 +2673,7 @@ func (s *State) relocateFresh(total int) {
 }
 
 // roomGen is the device's room report, or 0 from a device that makes none.
-func (s *State) roomGen() uint64 {
+func (s *Instance) roomGen() uint64 {
 	if s.ldRoom != nil {
 		return s.ldRoom.RoomGen()
 	}
@@ -2762,7 +2688,7 @@ func (s *State) roomGen() uint64 {
 // the fastest card first). Taking from the card that refused leaves a host
 // block between two device runs, which costs no extra crossing: the residual
 // already comes home between devices.
-func (s *State) relocationVictim() int {
+func (s *Instance) relocationVictim() int {
 	li := -1
 	if r, ok := s.ld.(nn.RefusalReporter); ok {
 		for _, b := range r.Refused() {
@@ -2916,7 +2842,7 @@ func wt(t tensor) nn.Weight {
 // SetHeadOnDevice chooses whether the output norm and the vocabulary projection
 // run in the same submission as the blocks, so a paired A/B can alternate the
 // two in one process; the device keeps the weights resident either way.
-func (s *State) SetHeadOnDevice(on bool) {
+func (s *Instance) SetHeadOnDevice(on bool) {
 	if on {
 		s.head = s.headReady
 		return
@@ -2925,11 +2851,11 @@ func (s *State) SetHeadOnDevice(on bool) {
 }
 
 // HeadOnDevice reports whether the device is running the token's tail.
-func (s *State) HeadOnDevice() bool { return s.head != nil }
+func (s *Instance) HeadOnDevice() bool { return s.head != nil }
 
 // AttnChunk is how many query heads one pool task claims in decode attention,
 // and SetAttnChunk sets it. Zero means the shipping default of one.
-func (s *State) AttnChunk() int {
+func (s *Instance) AttnChunk() int {
 	if s.attnChunk < 1 {
 		return 1
 	}
@@ -2938,12 +2864,12 @@ func (s *State) AttnChunk() int {
 
 // SetAttnChunk sets how many query heads one pool task claims in decode
 // attention (see AttnChunk); below one means the default.
-func (s *State) SetAttnChunk(n int) { s.attnChunk = n }
+func (s *Instance) SetAttnChunk(n int) { s.attnChunk = n }
 
-// The KV layout and width are per model (modelOpts), set before the States
+// The KV layout and width are per model (modelOpts), set before the instances
 // that use them are created, since the attention kernels bake the stride.
 
-// SetKVF16 forces the cache width for States this model creates afterwards,
+// SetKVF16 forces the cache width for instances this model creates afterwards,
 // overriding what KVWidthPaysOff decides. For the A/B harness and the gates.
 func (m *Model) SetKVF16(on bool) {
 	m.opt.kvType, m.opt.kvTypeSet = KVF32, true
@@ -2959,7 +2885,7 @@ func (m *Model) ClearKVF16() { m.opt.kvTypeSet = false }
 // the width forced to f16 (WithKVF16), when the model's head dimension has no
 // generated attention kernel and the f32 fallbacks have to be able to read the
 // cache.
-func (s *State) KVIsF16() bool { return s.kvFmt == cpu.KVF16 }
+func (s *Instance) KVIsF16() bool { return s.kvFmt == cpu.KVF16 }
 
 // attnPairShipped is what ships: share both the K walk and the V walk between
 // each pair of query heads. It is neutral at shallow depth and a win where
@@ -2971,7 +2897,7 @@ const attnPairShipped = 3
 // the accumulation, 3 both. The halves are separable because they walk
 // different arrays (K and V) with different register costs. Zero means unset
 // and takes the default; a negative value means explicitly none.
-func (s *State) AttnPair() int {
+func (s *Instance) AttnPair() int {
 	switch {
 	case s.attnPair == 0:
 		return s.m.opt.attnPair
@@ -2986,22 +2912,22 @@ func (s *State) AttnPair() int {
 // a decode means the paired path was never taken -- the normal answer for an
 // odd gqa, and a defect for an even one. A test that does not check it passes
 // vacuously on any model whose heads cannot pair.
-func (s *State) AttnPaired() int64 { return s.attnPaired.Load() }
+func (s *Instance) AttnPaired() int64 { return s.attnPaired.Load() }
 
-// SetAttnPair selects this State's paired attention kernels, as AttnPair
+// SetAttnPair selects this instance's paired attention kernels, as AttnPair
 // reads them: 1 the scores, 2 the accumulation, 3 both, 0 the model's
 // default, negative none.
-func (s *State) SetAttnPair(v int) { s.attnPair = v }
+func (s *Instance) SetAttnPair(v int) { s.attnPair = v }
 
 // rmsnorm runs the generated norm.
-func (s *State) rmsnorm(y, x, w []float32, eps float64) { nn.RMSNorm32JIT(y, x, w, eps) }
+func (s *Instance) rmsnorm(y, x, w []float32, eps float64) { nn.RMSNorm32JIT(y, x, w, eps) }
 
 // actmulAll applies the activation across a whole FFN width, on the pool.
 //
 // The split is by vector: the ragged remainder rides with the last chunk, and
 // the tail is bit-identical to the vector body (TestElementwiseEveryWidth), so
 // Forward and Prefill compute the same FFN however the work is divided.
-func (s *State) actmulAll(gate, up []float32, act nn.ActKind) {
+func (s *Instance) actmulAll(gate, up []float32, act nn.ActKind) {
 	v := len(gate) / nn.ElemLanes
 	if v == 0 {
 		s.actmul(gate, up, act)
@@ -3013,11 +2939,11 @@ func (s *State) actmulAll(gate, up []float32, act nn.ActKind) {
 }
 
 // actmul runs the generated activation.
-func (s *State) actmul(gate, up []float32, act nn.ActKind) { nn.ActMul32JIT(gate, up, act) }
+func (s *Instance) actmul(gate, up []float32, act nn.ActKind) { nn.ActMul32JIT(gate, up, act) }
 
 // actAll is actmulAll for an ungated FFN (C6): the activation alone, in
 // place, split by vector exactly as actmulAll splits it.
-func (s *State) actAll(x []float32, act nn.ActKind) {
+func (s *Instance) actAll(x []float32, act nn.ActKind) {
 	v := len(x) / nn.ElemLanes
 	if v == 0 {
 		nn.Act32JIT(x, act)
@@ -3041,7 +2967,7 @@ func (m *Model) lnBias(b []float32) []float32 {
 
 // norm is the text graph's norm: an RMSNorm, or on a classic block (C6) a
 // LayerNorm with its bias (b may be nil -- command-r's has none).
-func (s *State) norm(y, x, w, b []float32) {
+func (s *Instance) norm(y, x, w, b []float32) {
 	c := s.c
 	// A block with no pre-norm (OLMo 2, EXAONE 4) feeds its input as it is;
 	// the loader admits that only where the block's post-norms stand in.
@@ -3061,7 +2987,7 @@ func (s *State) norm(y, x, w, b []float32) {
 func ffnPad(n int) int { return (n + nn.ElemLanes - 1) &^ (nn.ElemLanes - 1) }
 
 // softmax runs the generated softmax over the first n entries of row.
-func (s *State) softmax(row []float32, n int) { nn.Softmax32JIT(row, n) }
+func (s *Instance) softmax(row []float32, n int) { nn.Softmax32JIT(row, n) }
 
 // attStride rounds a score row's stride up to a whole vector, so the padding
 // the generated softmax writes stays inside the row it belongs to.
@@ -3071,13 +2997,13 @@ func attStride(maxSeq int) int { return (maxSeq + 15) &^ 15 }
 // chunk, bathf for a batch step) when their rows reach keys below reach.
 //
 // Those buffers hold a row per token or per (row, head), so sized at maxSeq
-// they were the largest thing a State allocated: a 170-token prompt on a
+// they were the largest thing an instance allocated: a 170-token prompt on a
 // 131072-position context held 89 MB of scores for keys it could not reach,
-// and a server keeps a State per concurrent request. The reach they are sized
+// and a server keeps an instance per concurrent request. The reach they are sized
 // for grows by doubling, from scoreReachMin, up to maxSeq, so a sequence
 // re-sizes them a handful of times in its life and a warm step at a steady
 // reach allocates nothing.
-func (s *State) rowsStride(reach int) int {
+func (s *Instance) rowsStride(reach int) int {
 	if reach > s.scoreReach {
 		r := max(s.scoreReach, scoreReachMin)
 		for r < reach {
@@ -3108,7 +3034,7 @@ func (m *Model) sinkSlot() int {
 // residual_scale as the alpha, which is why every block output goes through
 // here; a mixture gets it through the routed scale and the shared expert's
 // weight instead.
-func (s *State) addInto(dst, src []float32) {
+func (s *Instance) addInto(dst, src []float32) {
 	n, a := len(dst), float32(s.c.ResidualScale)
 	if n >= 4096 {
 		j := &s.rg.elem
@@ -3122,7 +3048,7 @@ func (s *State) addInto(dst, src []float32) {
 // finishLogits applies whatever the model does to its logits after the head:
 // gemma2's final softcap and Granite's logit_scale, which divides. No model
 // has both. Every path that produces logits ends here, the device's included.
-func (s *State) finishLogits(x []float32) {
+func (s *Instance) finishLogits(x []float32) {
 	s.headBias(x)
 	softcap(x, s.c.FinalSoftcap)
 	s.scaleLogits(x)
@@ -3133,7 +3059,7 @@ func (s *State) finishLogits(x []float32) {
 // device that served the head's graph applied the bias and the scale too, and
 // says so (nn.Head.Applied); applying either again is a different function.
 // No model has both a head bias and a final softcap, so the order is safe.
-func (s *State) finishDevLogits(x []float32) {
+func (s *Instance) finishDevLogits(x []float32) {
 	var applied nn.HeadStage
 	if s.head != nil {
 		applied = s.head.Applied
@@ -3143,7 +3069,7 @@ func (s *State) finishDevLogits(x []float32) {
 
 // finishApplied is finishDevLogits for a device that applied the stages a of
 // the head: the one a step across sessions ran for all of them.
-func (s *State) finishApplied(x []float32, a nn.HeadStage) {
+func (s *Instance) finishApplied(x []float32, a nn.HeadStage) {
 	if a&nn.HeadBias == 0 {
 		s.headBias(x)
 	}
@@ -3173,38 +3099,38 @@ func (m *Model) headStages() nn.HeadStage {
 //
 // It goes first, before any cap or scale, and is added here so every arm that
 // makes logits (host, device head, batch) gets it exactly once.
-func (s *State) headBias(x []float32) {
+func (s *Instance) headBias(x []float32) {
 	if s.m.outB != nil {
 		s.addBiasRows(x, s.m.outB, len(x)/s.c.NVocab)
 	}
 }
 
 // scaleLogits is Granite's logit_scale, which divides.
-func (s *State) scaleLogits(x []float32) {
+func (s *Instance) scaleLogits(x []float32) {
 	if c := s.c; c.LogitScale != 1 {
 		s.scale(x, float32(1/c.LogitScale))
 	}
 }
 
 // axpy runs the generated dst += alpha*src.
-func (s *State) axpy(dst, src []float32, alpha float32) { nn.Axpy32JIT(dst, src, alpha) }
+func (s *Instance) axpy(dst, src []float32, alpha float32) { nn.Axpy32JIT(dst, src, alpha) }
 
 // scale multiplies a vector in place, on generated code.
-func (s *State) scale(x []float32, alpha float32) { nn.Scale32JIT(x, alpha) }
+func (s *Instance) scale(x []float32, alpha float32) { nn.Scale32JIT(x, alpha) }
 
 // softcap applies x = c*tanh(x/c) in place, generated; a no-op at c == 0.
 func softcap(x []float32, c float32) { nn.Softcap32JIT(x, c) }
 
 // JIT is this state's generated-code tier: its vision segment runs on it
-// (State.Vision), so a model has one JIT and one worker pool a session.
-func (s *State) JIT() *nn.JIT { return s.jit }
+// (Instance.Vision), so a model has one JIT and one worker pool a session.
+func (s *Instance) JIT() *nn.JIT { return s.jit }
 
 // GPULayers is how many blocks a device took, which is the set and not the
 // prefix: on a hybrid the two differ and the count is what a caller means.
-func (s *State) GPULayers() int { return s.devCount() }
+func (s *Instance) GPULayers() int { return s.devCount() }
 
 // noteDecline records why one block did not go to a device.
-func (s *State) noteDecline(why string) {
+func (s *Instance) noteDecline(why string) {
 	if s.declines == nil {
 		s.declines = map[string]int{}
 	}
@@ -3214,7 +3140,7 @@ func (s *State) noteDecline(why string) {
 // DeviceDeclines is how many blocks each device refused, by reason, most
 // numerous first. A placement is not explained by the blocks it took: without
 // this, a capability gap and a memory gap look identical.
-func (s *State) DeviceDeclines() []DeviceDecline {
+func (s *Instance) DeviceDeclines() []DeviceDecline {
 	out := make([]DeviceDecline, 0, len(s.declines))
 	for why, n := range s.declines {
 		out = append(out, DeviceDecline{Why: why, Blocks: n})
@@ -3237,7 +3163,7 @@ type DeviceDecline struct {
 // DeviceBlocks names the placed blocks as the contiguous runs the submission
 // uses; a count cannot say which ones, and whether the last block is placed
 // decides whether the head can ride the same submission.
-func (s *State) DeviceBlocks() [][2]int { return s.devRuns() }
+func (s *Instance) DeviceBlocks() [][2]int { return s.devRuns() }
 
 // SetGPUTarget asks for n blocks on the device eventually, growing a little at
 // a time instead of all at once.
@@ -3251,7 +3177,7 @@ func (s *State) DeviceBlocks() [][2]int { return s.devRuns() }
 //
 // Zero disables growth. It does not shrink -- SetGPULayers does that,
 // immediately, because giving memory back should not be gradual.
-func (s *State) SetGPUTarget(n int) {
+func (s *Instance) SetGPUTarget(n int) {
 	if n > s.hi {
 		n = s.hi
 	}
@@ -3262,7 +3188,7 @@ func (s *State) SetGPUTarget(n int) {
 //
 // One block, not as many as are ready, so no single token carries the whole
 // upload.
-func (s *State) growStep() {
+func (s *Instance) growStep() {
 	if s.ld == nil || s.gpuTarget <= s.gpuLayers {
 		return
 	}
@@ -3289,7 +3215,7 @@ func (s *State) growStep() {
 // touches the device can overlap decoding, while packing (most of the cost)
 // can. A later SetGPULayers finds the packs waiting and only uploads. It is
 // optional.
-func (s *State) PrewarmGPU(n int) <-chan struct{} {
+func (s *Instance) PrewarmGPU(n int) <-chan struct{} {
 	done := make(chan struct{})
 	if s.ldCand == nil || n <= s.gpuLayers {
 		close(done)
@@ -3341,7 +3267,7 @@ func (s *State) PrewarmGPU(n int) <-chan struct{} {
 //
 // Shrinking is exact and growing is best-effort: giving memory back always
 // succeeds, while growing needs room and PrepLayer may decline any block.
-func (s *State) SetGPULayers(n int) int {
+func (s *Instance) SetGPULayers(n int) int {
 	if s.ld == nil {
 		return 0
 	}
@@ -3417,21 +3343,21 @@ func (s *State) SetGPULayers(n int) int {
 
 // Accelerated reports which quantization types this session runs on generated
 // code.
-func (s *State) Accelerated() []quant.Type { return s.jit.Types() }
+func (s *Instance) Accelerated() []quant.Type { return s.jit.Types() }
 
 // Workers is how many worker threads the fast tier uses.
-func (s *State) Workers() int { return s.jit.Workers() }
+func (s *Instance) Workers() int { return s.jit.Workers() }
 
-// MixtureAffine is how many of this State's host mixture regions ran on the
+// MixtureAffine is how many of this instance's host mixture regions ran on the
 // NUMA nodes holding their experts (nn.JIT.MixtureAffine).
-func (s *State) MixtureAffine() int64 { return s.jit.MixtureAffine() }
+func (s *Instance) MixtureAffine() int64 { return s.jit.MixtureAffine() }
 
 // Shapes is how many shape-specialized kernels were generated for this model.
-func (s *State) Shapes() int { return s.jit.Shapes() }
+func (s *Instance) Shapes() int { return s.jit.Shapes() }
 
 // addBias adds b to out when b is present; the nil test is one branch per
 // projection rather than per element.
-func (s *State) addBias(out, b []float32) {
+func (s *Instance) addBias(out, b []float32) {
 	if b == nil {
 		return
 	}
@@ -3439,7 +3365,7 @@ func (s *State) addBias(out, b []float32) {
 }
 
 // addBiasRows is addBias over a batch of n rows of width len(b).
-func (s *State) addBiasRows(out, b []float32, n int) {
+func (s *Instance) addBiasRows(out, b []float32, n int) {
 	if b == nil {
 		return
 	}
@@ -3458,7 +3384,7 @@ func (s *State) addBiasRows(out, b []float32, n int) {
 
 // mv runs one matvec on generated code. There is no fallback: a decline is an
 // error naming the tensor.
-func (s *State) mv(out []float32, w tensor, x []float32) error {
+func (s *Instance) mv(out []float32, w tensor, x []float32) error {
 	s.mvCalls++
 	t0 := s.tick()
 	defer func() { s.tock(opMatVec, t0) }()
@@ -3507,17 +3433,17 @@ func (s *State) mv(out []float32, w tensor, x []float32) error {
 }
 
 // Pos is the number of positions already in the cache.
-func (s *State) Pos() int { return s.pos }
+func (s *Instance) Pos() int { return s.pos }
 
-// PrefillRows is how many prompt rows this State has run through its blocks
+// PrefillRows is how many prompt rows this instance has run through its blocks
 // since it was made: a prompt restored from a prefix cache adds none, and a
 // one-row prompt (decode's path) adds one.
-func (s *State) PrefillRows() int { return s.promptRows }
+func (s *Instance) PrefillRows() int { return s.promptRows }
 
 // stepDownKVToF32 narrows the cache from packed halves to f32 and rebuilds it.
 // It is a named method so a gate can reach it without a real card. The caller
 // owns the pos == 0 precondition: the pages are rebuilt, not reinterpreted.
-func (s *State) stepDownKVToF32() {
+func (s *Instance) stepDownKVToF32() {
 	s.kvFmt, s.kvl.fmt, s.kvl.jit = cpu.KVF32, cpu.KVF32, nil
 	// attnWidths, not Cfg.HeadDim: on MLA the key and value widths differ
 	// from HeadDim (TestMLAStepsTheKVDownAtTheRightWidths).
@@ -3539,9 +3465,9 @@ func (s *State) stepDownKVToF32() {
 }
 
 // seqPos and advance are the two places that know a position may be per row.
-func (s *State) seqPos(slot int) int { return s.bpos[slot] }
+func (s *Instance) seqPos(slot int) int { return s.bpos[slot] }
 
-func (s *State) advance(slot, n int) {
+func (s *Instance) advance(slot, n int) {
 	s.bpos[slot] += n
 	if s.bpos[slot] > s.pos {
 		s.pos = s.bpos[slot] // the high water mark; see bpos
@@ -3565,7 +3491,7 @@ func (s *State) advance(slot, n int) {
 // zero has none -- retired, or not yet admitted -- and whatever it writes it
 // writes into pages of its own positions, which grow fresh if they were
 // released; counting it would keep every page of the batch forever.
-func (s *State) liveLow() int {
+func (s *Instance) liveLow() int {
 	low := -1
 	for _, p := range s.bpos {
 		if p > 0 && (low < 0 || p < low) {
@@ -3577,7 +3503,7 @@ func (s *State) liveLow() int {
 
 // lowPos is the slowest row's position -- the point before which no row can
 // still write. It is what seal and trim are allowed to consider immutable.
-func (s *State) lowPos() int {
+func (s *Instance) lowPos() int {
 	low := s.bpos[0]
 	for _, p := range s.bpos[1:] {
 		if p < low {
@@ -3588,18 +3514,18 @@ func (s *State) lowPos() int {
 }
 
 // SeqPos is row i's position. For a single-sequence session it is Pos().
-func (s *State) SeqPos(i int) int { return s.bpos[i] }
+func (s *Instance) SeqPos(i int) int { return s.bpos[i] }
 
-// GiveBackHistory gives the pages a reset State still holds on its devices
+// GiveBackHistory gives the pages a reset instance still holds on its devices
 // back to their pools: Reset only rewinds the position, and its next prompt
-// releases them as it starts writing. An idle State -- a server's pooled one
+// releases them as it starts writing. An idle instance -- a server's pooled one
 // -- holding a finished request's history keeps that room from every other
 // session: a scheduler admitting by the devices' free room (tier.GPU.KVRoom)
 // then admitted one row at a time once a round of requests had ended
 // (Qwen3-30B-A3B over two V100s at 64 requests: 105 rows a step in the first
-// round, 5 in the next). A State that has run since its Reset keeps its
+// round, 5 in the next). An instance that has run since its Reset keeps its
 // history.
-func (s *State) GiveBackHistory() {
+func (s *Instance) GiveBackHistory() {
 	if s.pos != 0 || s.nseq != 1 || s.ld == nil {
 		return
 	}
@@ -3613,7 +3539,7 @@ func (s *State) GiveBackHistory() {
 // It clears the pages and, on a hybrid, the recurrent summary, not only the
 // positions: either left behind would give the next sequence the previous
 // one's history.
-func (s *State) Reset() {
+func (s *Instance) Reset() {
 	s.pos = 0
 	for i := range s.bpos {
 		s.bpos[i] = 0
@@ -3654,7 +3580,7 @@ func (s *State) Reset() {
 // has no position to rewind, so its running summary for the row is zeroed, on
 // the host and on any device holding a linear block; a failure there is kept
 // and returned by the next batch step.
-func (s *State) Retire(i int) {
+func (s *Instance) Retire(i int) {
 	if i < 0 || i >= s.nseq {
 		return
 	}
@@ -3689,7 +3615,7 @@ func (s *State) Retire(i int) {
 // e is the residual stream, not a vocabulary row: EmbdScale is not applied
 // here, so projected image features are not scaled twice. A caller reproducing
 // the token path applies the scale itself (TestForwardEmbdMatchesForward).
-func (s *State) ForwardEmbd(e []float32) ([]float32, error) {
+func (s *Instance) ForwardEmbd(e []float32) ([]float32, error) {
 	if len(e) != s.c.NEmbd {
 		return nil, fmt.Errorf("model: ForwardEmbd: embedding is %d wide, want %d", len(e), s.c.NEmbd)
 	}
@@ -3718,7 +3644,7 @@ func (s *State) ForwardEmbd(e []float32) ([]float32, error) {
 //	    h = rmsnorm(x, ffn_norm)
 //	    x += Wdown · (act(Wgate h) * Wup h)
 //	logits = Woutput · rmsnorm(x, output_norm)
-func (s *State) Forward(token int32) ([]float32, error) {
+func (s *Instance) Forward(token int32) ([]float32, error) {
 	defer s.m.enterPager()()
 	if int(token) < 0 || int(token) >= s.c.NVocab {
 		return nil, errToken{token, s.c.NVocab}
@@ -3739,7 +3665,7 @@ func (s *State) Forward(token int32) ([]float32, error) {
 // which gathers it itself (nn.EmbedDevice) where the front end states the
 // step's input rows (nn.Head.Embed, which GatherRow answers). The host's
 // fill runs only if the device fails the token.
-func (s *State) embedOnDevice() bool {
+func (s *Instance) embedOnDevice() bool {
 	if !s.tokFill || s.ldEmbed == nil || s.head == nil || !s.head.GatherRow || s.lo != 0 || !s.devAt(0) {
 		return false
 	}
@@ -3761,7 +3687,7 @@ func (s *State) embedOnDevice() bool {
 // It works under a final softcap too: the device head caps before its argmax
 // (tanh saturates in float32 and can tie logits), so its token is Greedy over
 // exactly the logits Forward would return.
-func (s *State) ForwardGreedy(token int32) (int32, error) {
+func (s *Instance) ForwardGreedy(token int32) (int32, error) {
 	h := s.head
 	// A device that leaves the head's bias to the host (finishLogits) declines
 	// the request, and the logits come home (nn.Head.Applied).
@@ -3798,7 +3724,7 @@ func (s *State) ForwardGreedy(token int32) (int32, error) {
 // than before it, so such a head is sampled from the logits that come home;
 // the device declines the request itself in any call that would leave either.
 // A greedy smp is ForwardGreedy.
-func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
+func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	if smp == nil || smp.Temp <= 0 {
 		return s.ForwardGreedy(token)
 	}
@@ -3842,12 +3768,12 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 //
 // fill is a closure because the device-failure path calls it again to restart
 // the token on the host (Layers may have written part of s.x).
-func (s *State) forward(fill func() error) ([]float32, error) {
+func (s *Instance) forward(fill func() error) ([]float32, error) {
 	s.touch()
-	// A State that led a host step across sessions lent the model its gate
+	// An instance that led a host step across sessions lent the model its gate
 	// scratch (returnStep -> takeHostBatch), and the token it runs alone
 	// afterwards reads one query-gate row it no longer holds. It is made once;
-	// a State that does not lead holds it from NewState.
+	// an instance that does not lead holds it from NewInstance.
 	if c := s.c; c.AttnOutGate {
 		qd, n := c.NHead*c.HeadDim, len(s.bpos)
 		if cap(s.qgate) < n*2*qd {
@@ -4222,7 +4148,7 @@ func TopK(logits []float32, k int) []Cand {
 // architecture has one base. The device gets a range of blocks in one
 // submission, so it needs both tables and the period to choose between them;
 // see nn.LayerPlan.SWAPeriod.
-func (s *State) swaTable(nrot int) []float32 {
+func (s *Instance) swaTable(nrot int) []float32 {
 	if s.csSWA == nil {
 		return nil
 	}
@@ -4252,7 +4178,7 @@ func swaPeriodFor(c *Config) int {
 // ropeTable picks the rotary table layer li was trained with: the local one on
 // a sliding layer of an architecture with two bases (gemma3), the global one
 // otherwise. It is a per-layer choice.
-func (s *State) ropeTable(li int, global, local []float32, tok int) []float32 {
+func (s *Instance) ropeTable(li int, global, local []float32, tok int) []float32 {
 	c := s.c
 	if local != nil && c.SWA(li) {
 		return local[tok*c.NRotSWA : (tok+1)*c.NRotSWA]
@@ -4263,7 +4189,7 @@ func (s *State) ropeTable(li int, global, local []float32, tok int) []float32 {
 // narrow copies one run of f32 into the f32 cache.
 func narrow(dst []float32, src []float32) { copy(dst, src) }
 
-// errDevice is a device failure the State cannot continue past on the host.
+// errDevice is a device failure the instance cannot continue past on the host.
 // why is the device's own reason (nn.ErrReporter), so a refusal the backend
 // names -- a kernel launched at a width it does not declare, say -- reaches the
 // caller by that name rather than as "the accelerator failed".
@@ -4294,7 +4220,7 @@ func (e errRecurRetry) Error() string {
 
 // devWhy is the device's own reason for its last failure, as ": reason", or ""
 // when it gives none.
-func (s *State) devWhy() string {
+func (s *Instance) devWhy() string {
 	if e, ok := s.ld.(nn.ErrReporter); ok && e.Err() != "" {
 		return ": " + e.Err()
 	}
@@ -4303,22 +4229,22 @@ func (s *State) devWhy() string {
 
 // recurrent reports that this session carries a linear block's running state,
 // which is what makes re-running a block from the embeddings unsound.
-func (s *State) recurrent() bool { return s.rconv != nil || s.rstate != nil }
+func (s *Instance) recurrent() bool { return s.rconv != nil || s.rstate != nil }
 
 // RecurrenceAdvanced reports whether the device call that just failed had
-// already advanced one of this State's linear blocks, so running its tokens
-// again would apply them twice. It asks the State's own device session, which
-// is where the count lives: the GPU's own count is session 0's, and a State
-// steps on a session of its own. A joint step counts on the State that led it,
-// so a caller asks every State in the step.
-func (s *State) RecurrenceAdvanced() bool { return s.recurrent() && s.recStepped() != 0 }
+// already advanced one of this instance's linear blocks, so running its tokens
+// again would apply them twice. It asks the instance's own device session, which
+// is where the count lives: the GPU's own count is session 0's, and an instance
+// steps on a session of its own. A joint step counts on the instance that led it,
+// so a caller asks every instance in the step.
+func (s *Instance) RecurrenceAdvanced() bool { return s.recurrent() && s.recStepped() != 0 }
 
 // recStepped is how many placed linear blocks advanced during the submission
 // that just failed. Zero means nothing moved and the host restart is sound; it
 // is -1 when the tier cannot say, which is read as "assume it did". It is
 // measured because both positional proxies (the run's start, or "any linear
 // block placed") are wrong in one direction or the other.
-func (s *State) recStepped() int {
+func (s *Instance) recStepped() int {
 	rs, ok := s.ld.(nn.RecStepper)
 	if !ok {
 		return -1 // a tier that cannot say; treat any failure as unsafe
@@ -4329,7 +4255,7 @@ func (s *State) recStepped() int {
 // devLinear reports that at least one linear block is on a device right now
 // (the set, not the prefix), so a failed submission may have advanced a
 // summary the host cannot rewind.
-func (s *State) devLinear() bool {
+func (s *Instance) devLinear() bool {
 	if s.rconv == nil {
 		return false
 	}
@@ -4342,19 +4268,19 @@ func (s *State) devLinear() bool {
 }
 
 // MaxSeq is how many positions this session preallocated its KV cache for.
-func (s *State) MaxSeq() int { return s.maxSeq }
+func (s *Instance) MaxSeq() int { return s.maxSeq }
 
 // ContextClamped reports whether the model's context is shorter than what was
 // asked for, and by how much, so a caller can refuse rather than run short.
-func (s *State) ContextClamped() (asked, got int, clamped bool) {
+func (s *Instance) ContextClamped() (asked, got int, clamped bool) {
 	return s.reqSeq, s.maxSeq, s.reqSeq > s.maxSeq
 }
 
-// setLD sets the State's layer device and the optional faces a token and a
+// setLD sets the instance's layer device and the optional faces a token and a
 // step ask it for, asserted once here: an interface-to-interface assertion
 // caches its answer in a heap object at a random later call, which made a
 // decode token's allocation count nondeterministic.
-func (s *State) setLD(ld nn.LayerDevice) {
+func (s *Instance) setLD(ld nn.LayerDevice) {
 	s.ld = ld
 	s.ldRoom, _ = ld.(nn.RoomReporter)
 	s.ldSpill, _ = ld.(nn.Spiller)
@@ -4373,7 +4299,7 @@ func (s *State) setLD(ld nn.LayerDevice) {
 // ropeAxes tells the device the rotary positions of the one row of the call
 // about to be made at cache position pos (nn.RopeAxesDevice): rp on every
 // axis, the row's rotary position (ropeOf).
-func (s *State) ropeAxes(pos, rp int) {
+func (s *Instance) ropeAxes(pos, rp int) {
 	if s.ldRope == nil {
 		return
 	}
@@ -4384,7 +4310,7 @@ func (s *State) ropeAxes(pos, rp int) {
 // rowAxes tells the device the rotary positions of the n batch rows from
 // row first of the call about to be made at cache position pos, its first
 // row's (nn.RopeAxesDevice), as ropeRow and ropeTableRow wrote them.
-func (s *State) rowAxes(pos, first, n int) {
+func (s *Instance) rowAxes(pos, first, n int) {
 	if s.ldRope == nil || len(s.raxes) < 4*(first+n) {
 		return
 	}
@@ -4392,7 +4318,7 @@ func (s *State) rowAxes(pos, first, n int) {
 }
 
 // noteAxes records batch row j's rotary positions.
-func (s *State) noteAxes(j int, at [4]int32) {
+func (s *Instance) noteAxes(j int, at [4]int32) {
 	if len(s.raxes) < 4*(j+1) {
 		need := 4 * max(j+1, len(s.bcs)/max(s.c.RopeW(), 1))
 		s.raxes = append(s.raxes, make([]int32, need-len(s.raxes))...)
@@ -4403,7 +4329,7 @@ func (s *State) noteAxes(j int, at [4]int32) {
 // layerInputs hands the device the rows' per-layer embedding inputs for the
 // call about to be made (nn.LayerInputDevice). Nothing where the model has
 // none.
-func (s *State) layerInputs(in []float32) {
+func (s *Instance) layerInputs(in []float32) {
 	if s.ldInputs != nil && s.c.PLEDim != 0 {
 		s.ldInputs.SetLayerInputs(in)
 	}

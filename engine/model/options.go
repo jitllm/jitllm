@@ -13,12 +13,14 @@ import (
 // passes them in as With...() options.
 //
 // The knobs are per model, not process-wide: a server loading several models
-// must not have one State read another model's attention schedule or cache
+// must not have one instance read another model's attention schedule or cache
 // width. engine/model/optioniso_test.go is the gate.
 
 // modelOpts is the resolved set of per-model knobs. It is copied onto the Model
 // at Open and onto the Tower beside it, so two models cannot collide.
 type modelOpts struct {
+	// sched is WithScheduler's.
+	sched Scheduler
 	// devSample is WithDeviceSample's setting (devsample.go).
 	devSample DeviceSampleMode
 	// profile arms the per-op nanosecond counters OpProfile reports. The
@@ -54,7 +56,7 @@ type modelOpts struct {
 	// noStreamTrial keeps an auto-streamed placement without measuring it
 	// against the host; see WithStreamTrial.
 	noStreamTrial bool
-	// hostMoves sends every move between devices through the State's cache
+	// hostMoves sends every move between devices through the session's cache
 	// and stages nothing ahead (WithDirectMoves).
 	hostMoves bool
 	// noKVPrewarm leaves a device's KV pools at their first frame after
@@ -172,8 +174,8 @@ func WithLookahead(on bool) Option { return func(l *loadOpts) { l.opt.noLook = !
 // (Llama-3.2-1B), unresolved, so it is not on until a row shows it gains.
 func WithResidualFold(on bool) Option { return func(l *loadOpts) { l.opt.residFold = on } }
 
-// SetResidualFold is WithResidualFold for one State.
-func (s *State) SetResidualFold(on bool) { s.residFold = on }
+// SetResidualFold is WithResidualFold for one Instance.
+func (s *Instance) SetResidualFold(on bool) { s.residFold = on }
 
 // WithSharedOverlap sets whether a latent mixture's shared experts run while
 // its routed experts are read from the container, instead of after. On by
@@ -226,19 +228,19 @@ func WithExperts(where string) Option { return func(l *loadOpts) { l.opt.experts
 func WithStreamTrialAA(on bool) Option { return func(l *loadOpts) { l.opt.trialAA = on } }
 
 // WithDirectMoves sets whether a block moving between two devices
-// (State.MoveBlocks, PrepareMove) is prepared on its target while the
+// (Instance.MoveBlocks, PrepareMove) is prepared on its target while the
 // sequence keeps generating and has its history copied device to device. Off,
-// every move brings the history home to the State's cache and up again, with
+// every move brings the history home to the session's cache and up again, with
 // the target prepared inside the pause: the arm the direct path is measured
 // against. On by default.
 func WithDirectMoves(on bool) Option { return func(l *loadOpts) { l.opt.hostMoves = !on } }
 
 // WithStreamTrial sets whether a placement that streamed mixture blocks no
 // card could hold resident is measured against running them on the host
-// (State.initStreamTrial) and the faster kept. On by default.
+// (Instance.initStreamTrial) and the faster kept. On by default.
 func WithStreamTrial(on bool) Option { return func(l *loadOpts) { l.opt.noStreamTrial = !on } }
 
-// WithKVPrewarm sets whether a State that places blocks on a device grows the
+// WithKVPrewarm sets whether an instance that places blocks on a device grows the
 // device's KV pools ahead, by one prompt chunk, into the room placement left
 // (nn.KVPrewarmer), so its first prompt does not grow them inside its own
 // time. On by default; off is the A/B arm.
@@ -307,7 +309,7 @@ type Placement struct {
 	// Head places the output projection; nil leaves it to the engine.
 	Head *Place
 	// Strict makes it all or nothing: a named block or head that cannot go
-	// where it is named fails State.SetDevice and nothing is placed. Best
+	// where it is named fails Instance.SetDevice and nothing is placed. Best
 	// effort (false) puts such a block where the engine would have, and the
 	// decline is reported. Naming a device that is not attached is an error
 	// either way.
@@ -333,7 +335,7 @@ func (p *Placement) Streams() bool {
 }
 
 // WithPlacement places blocks and the head where the map says whenever a
-// device is attached (State.SetDevice).
+// device is attached (Instance.SetDevice).
 func WithPlacement(p Placement) Option {
 	// "host" is the CPU's older spelling.
 	cpu := func(pl Place) Place {
@@ -362,7 +364,7 @@ func WithPlacement(p Placement) Option {
 // this model's blocks. Listed (the default, and what a device spec of "auto"
 // or one naming cpu means), the engine may choose it as any other device: a
 // block no card takes, a block relocation or a fault moves off a card. Not
-// listed, a block runs on the cards attached (State.SetDevice) and on nothing
+// listed, a block runs on the cards attached (Instance.SetDevice) and on nothing
 // else: one that no card holds resident pages through a card's slots, every
 // block streamed (Place.Stream), and a block that cannot run there even paged
 // fails the placement by name. A fault or a history the cards cannot grow is
@@ -381,7 +383,7 @@ func WithKVF16(on bool) Option {
 	return WithKVType(t)
 }
 
-// WithKVType forces the KV cache's format for States this model creates
+// WithKVType forces the KV cache's format for instances this model creates
 // afterwards (kvtype.go has the formats and what each refuses).
 func WithKVType(t KVType) Option {
 	return func(l *loadOpts) { l.opt.kvType, l.opt.kvTypeSet = t, true }

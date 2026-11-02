@@ -208,9 +208,9 @@ func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 }
 
 // TestPooledStatesAnswerAsFreshOnes alternates two prompts whose answers
-// differ on an engine that pools its States and on one that does not: the
+// differ on an engine that pools its instances and on one that does not: the
 // answers agree request for request (no history leaks from one request into
-// the next), the pool builds one State and hands it out again, and the other
+// the next), the pool builds one instance and hands it out again, and the other
 // engine builds and closes one per request.
 func TestPooledStatesAnswerAsFreshOnes(t *testing.T) {
 	pooled, plm := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
@@ -259,7 +259,7 @@ func (e *Engine) encodeText(t *testing.T, lm *LoadedModel, s string) []int32 {
 }
 
 // TestAWarmLoadLeavesAPooledState: a load with Warm runs its prefill and
-// decode step on a State that goes into the pool, so the first request
+// decode step on an instance that goes into the pool, so the first request
 // builds none; it stores nothing and counts nothing as served.
 func TestAWarmLoadLeavesAPooledState(t *testing.T) {
 	e, lm := ttftEngine(t, smallModel, Config{}, LoadOptions{Warm: true})
@@ -362,7 +362,7 @@ func TestAFullQueueIsRefusedWith429(t *testing.T) {
 
 // TestACancelledPrefillLeavesThePooledStateClean: a request whose client has
 // gone stops its prefill between chunks (ErrPrefillInterrupted becomes the
-// context's error, with no Started sent), and the State it leaves in the pool
+// context's error, with no Started sent), and the instance it leaves in the pool
 // answers the next request as a fresh one.
 func TestACancelledPrefillLeavesThePooledStateClean(t *testing.T) {
 	e, lm := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
@@ -429,7 +429,7 @@ func TestACancelledRequestDoesNoPromptWorkOnAnyPath(t *testing.T) {
 // which the check at Generate's entry cannot reach -- a row the loop admitted
 // before its request saw the context go (the request's select between
 // admission and cancellation picks either when both are ready). Its prompt,
-// begun or not, is not fed; it pushes no GenerateStarted; its State is reset;
+// begun or not, is not fed; it pushes no GenerateStarted; its instance is reset;
 // and it ends with errPromptCancelled, which generateBatched turns into the
 // context's error.
 func TestACancelledRowLeavesItsPromptUnrun(t *testing.T) {

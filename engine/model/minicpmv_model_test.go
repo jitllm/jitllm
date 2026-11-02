@@ -364,7 +364,7 @@ func TestMiniCPMVOnDeviceMatchesHost(t *testing.T) {
 	c := tw.Cfg
 	host := tw.testState()
 	px, gh, gw := mcvOverview(t, tw, host) // the overview: 45x23 patches
-	encode := func(s *State) ([]float32, []float32) {
+	encode := func(s *Instance) ([]float32, []float32) {
 		var vit []float32
 		s.vis.beforeProj = func(x []float32) { vit = append(vit[:0], x...) }
 		emb, err := s.EncodeGrid(px, gh, gw)
@@ -406,7 +406,7 @@ func TestMiniCPMVOnDeviceMatchesHost(t *testing.T) {
 			}
 			// And one block alone, before the roundings compound: the bound
 			// that sees a wrong graph on this grid.
-			after0 := func(s *State) []float32 {
+			after0 := func(s *Instance) []float32 {
 				var x0 []float32
 				s.vis.afterBlock = func(li int, x []float32) {
 					if li == 0 && x0 == nil {
@@ -467,7 +467,7 @@ func TestMiniCPMVDescribesAnImage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		st := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + 48)
+		st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + 48)
 		defer st.Close()
 		logits, err := st.PrefillMixed(spans...)
 		if err != nil {

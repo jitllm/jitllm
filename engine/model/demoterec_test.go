@@ -23,7 +23,7 @@ func TestShrinkingTheSeamMovesTheSummaryToTheCPU(t *testing.T) {
 	}
 
 	ids := []int32{1, 2, 3, 4, 5, 6}
-	host := m.NewState(16)
+	host := m.NewInstance(16)
 	defer host.Close()
 	want := make([][]float32, len(ids))
 	for i, id := range ids {
@@ -41,7 +41,7 @@ func TestShrinkingTheSeamMovesTheSummaryToTheCPU(t *testing.T) {
 	}
 	defer g.Close()
 
-	dev := m.NewState(16)
+	dev := m.NewInstance(16)
 	defer dev.Close()
 	dev.SetDeviceLayers(g, m.Cfg.NLayer)
 	runs := dev.DeviceBlocks()

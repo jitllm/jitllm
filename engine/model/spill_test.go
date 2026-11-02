@@ -12,7 +12,7 @@ import (
 
 // TestAFullCardSpillsABlockOntoTheNextOne runs a prompt whose history outgrows
 // the first card of two, and demands the first card hand its highest block to
-// the second (State.Spills) instead of demoting the model -- with the tokens
+// the second (Instance.Spills) instead of demoting the model -- with the tokens
 // the host produces. With only the first card full the second has room; with
 // both full the block comes home (a relocation).
 //
@@ -37,8 +37,8 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 		prompt = append(prompt, m.Vocab.Encode("The capital of France is Paris. Water boils at 100 degrees. ", false)...)
 	}
 	const gen = 8
-	run := func(g *tier.GPU) (*State, []int32) {
-		st := m.NewState(len(prompt) + gen + 1)
+	run := func(g *tier.GPU) (*Instance, []int32) {
+		st := m.NewInstance(len(prompt) + gen + 1)
 		if g != nil {
 			st.SetDevice(g)
 		}
@@ -92,7 +92,7 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 	if probe == nil {
 		t.Skip("no two devices -- this gate proved nothing")
 	}
-	pst := m.NewState(len(prompt) + gen + 1)
+	pst := m.NewInstance(len(prompt) + gen + 1)
 	if err := pst.SetDevice(probe); err != nil {
 		t.Fatal(err)
 	}

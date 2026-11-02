@@ -11,7 +11,7 @@ import (
 // A block moving between two devices of one tier: the target takes the block
 // (staged ahead, or prepared now), the session's history is copied from the
 // source's pages into pages the target allocates, the route switches and the
-// source frees the block. The history never passes through the State's cache:
+// source frees the block. The history never passes through the session's cache:
 // it goes card to card (backend.PeerCopier) where the backend can, and
 // otherwise through a host buffer in chunks, the read of one overlapping the
 // write of the last.
@@ -239,7 +239,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 		}
 	}
 	// Both paged is what a page copy needs; a device keeping the contiguous
-	// cache is moved through the State's cache instead.
+	// cache is moved through the session's cache instead.
 	if !src.paged || !d.paged {
 		d.ReleaseLayers(li, li+1)
 		g.mu.Lock()
@@ -276,7 +276,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 // block, its entries' (entKey). It reports the slowest path any part took and
 // the bytes copied. Pages copy raw when both pools page alike; otherwise the
 // history is read into the device-independent row layout and written again
-// (pagedMigrate), still without the State's cache.
+// (pagedMigrate), still without the session's cache.
 func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64, error) {
 	sv, dv := src.as(sid), dst.as(sid)
 	if sv == nil || dv == nil {
@@ -315,7 +315,7 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 		}
 		for o := range spl.owned {
 			if o.sid == sid && o.base != 0 {
-				return "", 0, errNotDirect // a batch's rows: the State moves them
+				return "", 0, errNotDirect // a batch's rows: the instance moves them
 			}
 		}
 		dpl := dkp.layers[key]

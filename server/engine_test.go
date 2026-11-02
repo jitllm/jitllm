@@ -22,7 +22,7 @@ import (
 )
 
 // These gates run the six Connect services against a REAL engine: a container
-// is opened, sessions hold model.States, and tokens are decoded. The fake
+// is opened, sessions hold model.instances, and tokens are decoded. The fake
 // backend in fake_test.go cannot reach any of that -- the services other than
 // InferenceService take an *Engine, not a Backend.
 //
@@ -532,7 +532,7 @@ func TestListSessionsFiltersByModelAndDevice(t *testing.T) {
 	}
 }
 
-// TestUnloadingAModelWithALiveSessionNeedsForce: every State must be closed
+// TestUnloadingAModelWithALiveSessionNeedsForce: every instance must be closed
 // before its Model, so an unload that would orphan one is refused, and force
 // closes them first. With the victims check removed the plain unload succeeds
 // and the session is left holding a closed model.
@@ -1031,12 +1031,12 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 }
 
 // refusingDevice is a device that serves nothing. It stands in for a tier so
-// SetPlacement reaches State.SetDeviceLayers on a model loaded host-only.
+// SetPlacement reaches Instance.SetDeviceLayers on a model loaded host-only.
 type refusingDevice struct{}
 
 func (refusingDevice) MatVec([]float32, quant.Type, []byte, []float32, int, int) bool { return false }
 
-// TestARefusedPlacementLeavesTheSessionUsable: when the State refuses the move
+// TestARefusedPlacementLeavesTheSessionUsable: when the instance refuses the move
 // -- here a binary16 KV cache that already holds history, which cannot migrate
 // -- SetPlacement returns FailedPrecondition, and the session's lock must be
 // released on that path too, or the next call on the session hangs.
@@ -1056,7 +1056,7 @@ func TestARefusedPlacementLeavesTheSessionUsable(t *testing.T) {
 	lm.dev, lm.deviceIDs = refusingDevice{}, []string{"fake:0"}
 	defer func() { lm.dev, lm.deviceIDs = nil, nil }()
 
-	// A binary16 history is converted on its way to a device, so the State no
+	// A binary16 history is converted on its way to a device, so the instance no
 	// longer refuses; the session goes on holding its lock to the end of the call.
 	if _, err = c.placement.SetPlacement(ctx, req(&v1.SetPlacementRequest{SessionId: "p", DeviceIds: []string{"fake:0"}})); err != nil {
 		t.Fatalf("SetPlacement with an f16 history: %v", err)

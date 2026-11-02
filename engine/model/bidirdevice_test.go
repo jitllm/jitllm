@@ -28,7 +28,7 @@ func TestBidirRunOnDevice(t *testing.T) {
 	}
 	prefill := func(g *tier.GPU, bidir bool) ([]float32, int) {
 		sp := spans(bidir)
-		s := m.NewState(SpanPositions(sp, m.Cfg.NEmbd) + 1)
+		s := m.NewInstance(SpanPositions(sp, m.Cfg.NEmbd) + 1)
 		defer s.Close()
 		if g != nil {
 			if err := s.SetDevice(g); err != nil {

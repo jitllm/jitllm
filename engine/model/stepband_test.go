@@ -64,10 +64,10 @@ func stepBand(t *testing.T, m *Model, dev string) {
 		}
 		return g
 	}
-	// session opens prompt i's State on g (the host where nil) and prefills it.
-	session := func(g *tier.GPU, i int) (*State, []float32) {
+	// session opens prompt i's instance on g (the host where nil) and prefills it.
+	session := func(g *tier.GPU, i int) (*Instance, []float32) {
 		ids := m.Vocab.Encode(prompts[i], true)
-		st := m.NewState(len(ids) + steps + 2)
+		st := m.NewInstance(len(ids) + steps + 2)
 		if g != nil {
 			if err := st.SetDevice(g); err != nil {
 				t.Fatal(err)
@@ -109,7 +109,7 @@ func stepBand(t *testing.T, m *Model, dev string) {
 		return out, fed
 	}
 	together := func(g *tier.GPU, n int, toks [][]int32) [][][]float32 {
-		sts := make([]*State, n)
+		sts := make([]*Instance, n)
 		for i := range sts {
 			sts[i], _ = session(g, i)
 			defer sts[i].Close()

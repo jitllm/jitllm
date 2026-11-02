@@ -18,7 +18,7 @@ import (
 // as the server's JSON is.
 //
 // The window runs every prompt of both requests once, after two warm passes
-// over the same prompts, so the Decider's scratch, its State's pages and the
+// over the same prompts, so the Decider's scratch, its session's pages and the
 // device's buffers are at their size.
 func TestDecisionDoesNotAllocate(t *testing.T) {
 	for _, c := range decisionCases {

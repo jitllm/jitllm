@@ -6,14 +6,14 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
-// regions is the per-State form of the pool regions a decode token runs every
+// regions is the per-instance form of the pool regions a decode token runs every
 // layer, with the function each hands the pool built once -- engine/nn's
 // hotRegions, for the graph's own regions. A closure literal over a call's
 // locals escapes into the pool's job and is a heap object per region, which is
 // how a warm token came to allocate per region
-// (TestDecodeDoesNotAllocate). A State runs one region at a time, so
+// (TestDecodeDoesNotAllocate). An instance runs one region at a time, so
 // one set of fields serves every call; each is cleared of its slices
-// afterwards so the State pins no caller's buffer.
+// afterwards so the instance pins no caller's buffer.
 type regions struct {
 	elem   elemRegion
 	attn   attnRegion
@@ -25,7 +25,7 @@ type regions struct {
 }
 
 // mamba1Region is Mamba-1's selective scan fanned out over channels
-// (State.mamba1Scan).
+// (Instance.mamba1Scan).
 type mamba1Region struct {
 	st, a, d []float32
 	fn       func(lo, hi int)
@@ -56,7 +56,7 @@ type elemRegion struct {
 
 // elemRun dispatches the elementwise region described by s.rg.elem over its v
 // vectors, and clears its slices afterwards.
-func (s *State) elemRun() {
+func (s *Instance) elemRun() {
 	j := &s.rg.elem
 	if j.fn == nil {
 		j.fn = s.elemChunk
@@ -66,7 +66,7 @@ func (s *State) elemRun() {
 }
 
 // elemChunk is one chunk of the elementwise region.
-func (s *State) elemChunk(lo, hi int) {
+func (s *Instance) elemChunk(lo, hi int) {
 	j := &s.rg.elem
 	lanes := nn.ElemLanes
 	a, b := lo*lanes, hi*lanes
@@ -91,7 +91,7 @@ func (s *State) elemChunk(lo, hi int) {
 }
 
 // attnRegion is decode's attention fan-out over heads: the arguments the
-// region reads, filled by forward before each dispatch (see State.attnHeads).
+// region reads, filled by forward before each dispatch (see Instance.attnHeads).
 type attnRegion struct {
 	l                     *layer
 	li, gqa, qw, ow, hd   int
@@ -109,7 +109,7 @@ type attnRegion struct {
 	fn      func(lo, hi int)
 }
 
-// deltaRegion is the gated delta rule's fan-out over value heads (State.delta).
+// deltaRegion is the gated delta rule's fan-out over value heads (Instance.delta).
 type deltaRegion struct {
 	st, q, k, v []float32
 	// d is a Mamba-2 block's skip, one per value head; nil on the delta rule.
@@ -151,7 +151,7 @@ type rowRegion struct {
 
 // rowRun dispatches the row region described by s.rg.rows over n items in
 // chunks of chunk, and clears its slices afterwards.
-func (s *State) rowRun(n, chunk int) {
+func (s *Instance) rowRun(n, chunk int) {
 	j := &s.rg.rows
 	if j.fn == nil {
 		j.fn = s.rowItems
@@ -161,7 +161,7 @@ func (s *State) rowRun(n, chunk int) {
 }
 
 // rowItems is one chunk of the row region.
-func (s *State) rowItems(lo, hi int) {
+func (s *Instance) rowItems(lo, hi int) {
 	j := &s.rg.rows
 	d := j.dim
 	switch j.op {
@@ -205,7 +205,7 @@ func (s *State) rowItems(lo, hi int) {
 	}
 }
 
-// embedRegion is a prompt chunk's embedding rows over the pool (State.embedRun):
+// embedRegion is a prompt chunk's embedding rows over the pool (Instance.embedRun):
 // row base+i of the prompt into row i of s.bx, from src[base+i] or, where src
 // is nil, ids[base+i]'s vocabulary row. err is the first row's failure.
 type embedRegion struct {
@@ -219,7 +219,7 @@ type embedRegion struct {
 
 // embedRun fills the chunk's n rows from prompt row base on, and returns the
 // first failure.
-func (s *State) embedRun(src []func(dst []float32) error, ids []int32, base, n int) error {
+func (s *Instance) embedRun(src []func(dst []float32) error, ids []int32, base, n int) error {
 	j := &s.rg.embed
 	if j.fn == nil {
 		j.fn = s.embedItems
@@ -232,7 +232,7 @@ func (s *State) embedRun(src []func(dst []float32) error, ids []int32, base, n i
 }
 
 // embedItems is one chunk of the embedding region: rows lo..hi-1.
-func (s *State) embedItems(lo, hi int) {
+func (s *Instance) embedItems(lo, hi int) {
 	j, w := &s.rg.embed, s.c.NEmbd
 	for i := lo; i < hi; i++ {
 		if err := s.fillRow(j.src, j.ids, j.base+i, s.bx[i*w:(i+1)*w]); err != nil {
@@ -248,7 +248,7 @@ func (s *State) embedItems(lo, hi int) {
 
 // fillRow writes prompt row i into dst: src[i]'s, or ids[i]'s vocabulary row
 // where src is nil.
-func (s *State) fillRow(src []func(dst []float32) error, ids []int32, i int, dst []float32) error {
+func (s *Instance) fillRow(src []func(dst []float32) error, ids []int32, i int, dst []float32) error {
 	if src == nil {
 		return s.embedInto(dst, ids[i])
 	}
@@ -256,7 +256,7 @@ func (s *State) fillRow(src []func(dst []float32) error, ids []int32, i int, dst
 }
 
 // prefAttnRegion is a prompt chunk's attention fan-out over its rows
-// (State.hostRows): the arguments each row reads, filled before the dispatch.
+// (Instance.hostRows): the arguments each row reads, filled before the dispatch.
 type prefAttnRegion struct {
 	l                         *layer
 	li, kvli, slot, p0, n     int

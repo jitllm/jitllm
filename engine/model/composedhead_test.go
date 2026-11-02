@@ -155,7 +155,7 @@ func (a *headArm) run(t *testing.T) {
 		defer a.mut(m)()
 	}
 	a.stagesWant = m.headStages()
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	st.SetDeviceFallback(false)
 	if err := st.SetDevice(g); err != nil {
@@ -215,7 +215,7 @@ func TestComposedHeadOps(t *testing.T) {
 			// The residuals the head takes: the host's blocks, which every
 			// device arm runs too. The oracle reproduces the host's own head
 			// from them, or neither the residual nor the oracle is right.
-			host := ref.NewState(len(ids) + 1)
+			host := ref.NewInstance(len(ids) + 1)
 			var xs [][]float32
 			amax := 0.0
 			for p, id := range ids {

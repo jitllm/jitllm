@@ -47,7 +47,7 @@ func TestHybridImageChatRestoresAtItsEnd(t *testing.T) {
 		toks        []int32
 	}
 	run := func(store KVStore, named bool) result {
-		st := m.NewState(256)
+		st := m.NewInstance(256)
 		defer st.Close()
 		if store != nil {
 			st.SetKVStore(store)

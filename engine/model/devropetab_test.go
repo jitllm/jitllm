@@ -74,7 +74,7 @@ func ropeTableMatchesTheUpload(t *testing.T, parts tier.Parts) {
 			run := func(host bool) ([]int32, [][]float32, tier.Stats) {
 				g.RopeTableHost = host
 				before := g.Stats()
-				s := m.NewState(64)
+				s := m.NewInstance(64)
 				defer s.Close()
 				s.SetDevice(g)
 				if s.GPULayers() != m.Cfg.NLayer {
@@ -210,7 +210,7 @@ func TestRopeTablePrefillChunkMatchesTheUpload(t *testing.T) {
 	run := func(host bool) ([]float32, tier.Stats) {
 		g.RopeTableHost = host
 		before := g.Stats()
-		s := m.NewState(2*chunk + 1)
+		s := m.NewInstance(2*chunk + 1)
 		defer s.Close()
 		s.SetDevice(g)
 		if s.GPULayers() != m.Cfg.NLayer {

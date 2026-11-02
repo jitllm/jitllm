@@ -45,7 +45,7 @@ func flashPrefillMatches(t *testing.T, name string) {
 		"and the clerk counted barrels of salt on the upper floor. ", 40)
 	ids := m.Vocab.Encode(text, true)[:700]
 
-	host := m.NewState(len(ids) + 4)
+	host := m.NewInstance(len(ids) + 4)
 	want, err := host.Prefill(ids)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func flashPrefillMatches(t *testing.T, name string) {
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		st := m.NewState(len(ids) + 4)
+		st := m.NewInstance(len(ids) + 4)
 		defer st.Close()
 		st.SetDevice(g)
 		if st.GPULayers() != m.Cfg.NLayer {

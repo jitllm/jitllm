@@ -93,7 +93,7 @@ func TestDeviceMatchesHostOnABiasedModel(t *testing.T) {
 						c.name, c.prompt, toks)
 				}
 			}
-			run := func(st *State) [][]float32 {
+			run := func(st *Instance) [][]float32 {
 				var out [][]float32
 				for _, tk := range toks {
 					l, err := st.Forward(tk)
@@ -105,7 +105,7 @@ func TestDeviceMatchesHostOnABiasedModel(t *testing.T) {
 				return out
 			}
 			hostRun := func() [][]float32 {
-				st := m.NewState(32)
+				st := m.NewInstance(32)
 				defer st.Close()
 				return run(st)
 			}
@@ -125,7 +125,7 @@ func TestDeviceMatchesHostOnABiasedModel(t *testing.T) {
 			}
 
 			// The A/A self-control, run first: two host runs are not
-			// bit-identical (each State's JIT tunes its own pack width), so the
+			// bit-identical (each instance's JIT tunes its own pack width), so the
 			// bound must sit above this floor.
 			want := hostRun()
 			base, baseWorst, baseAt := worstOf(hostRun(), want)
@@ -138,7 +138,7 @@ func TestDeviceMatchesHostOnABiasedModel(t *testing.T) {
 			}
 			defer g.Close()
 
-			dev := m.NewState(32)
+			dev := m.NewInstance(32)
 			defer dev.Close()
 			// One block, so a difference is that block's and not accumulated
 			// tie-breaking.

@@ -180,7 +180,7 @@ func rainbow(n int) []float32 {
 
 // towerTrace runs one encode and keeps a copy of every traced point: the
 // stages by name and block li's output as "layer_out-li".
-func towerTrace(t testing.TB, s *State, px []float32) map[string][]float32 {
+func towerTrace(t testing.TB, s *Instance, px []float32) map[string][]float32 {
 	t.Helper()
 	got := map[string][]float32{}
 	s.vis.afterBlock = func(li int, x []float32) {

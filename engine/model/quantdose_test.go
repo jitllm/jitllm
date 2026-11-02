@@ -38,10 +38,10 @@ func TestQuantActDose(t *testing.T) {
 		ids[i] = int32(1 + i%64)
 	}
 
-	mk := func(goLoop bool) *State {
+	mk := func(goLoop bool) *Instance {
 		m.jit = []nn.Option{nn.WithTune(nn.TuneOff), nn.WithQuietTuner(true),
 			nn.WithProfile(true), nn.WithQuantActGo(goLoop)}
-		st := m.NewState(prompt + decode + 8)
+		st := m.NewInstance(prompt + decode + 8)
 		// Warm: kernels are mapped and pack widths settle on the first pass.
 		st.Reset()
 		logits, err := st.Prefill(ids)
@@ -62,7 +62,7 @@ func TestQuantActDose(t *testing.T) {
 
 	// One round: a fixed prompt and decode steps, from position zero every
 	// time so every round attends over the same history.
-	step := func(st *State) func(int) {
+	step := func(st *Instance) func(int) {
 		return func(n int) {
 			for i := 0; i < n; i++ {
 				st.Reset()
@@ -81,7 +81,7 @@ func TestQuantActDose(t *testing.T) {
 
 	// The selection check, around one round of each arm, before the timed
 	// comparison: the counters are process-wide.
-	census := func(st *State) (wide, narrow, goLoop int64) {
+	census := func(st *Instance) (wide, narrow, goLoop int64) {
 		cpu.ResetQuantActStats()
 		step(st)(1)
 		return cpu.QuantActStats()
@@ -105,7 +105,7 @@ func TestQuantActDose(t *testing.T) {
 	// The statistic is the quantize phase (nn.ProfileNanos), the only thing
 	// that differs; the whole-token wall is too noisy to resolve it and is
 	// reported but not the claim.
-	phase := func(st *State) (quant, wall time.Duration) {
+	phase := func(st *Instance) (quant, wall time.Duration) {
 		nn.ResetProfile()
 		t0 := time.Now()
 		step(st)(1)

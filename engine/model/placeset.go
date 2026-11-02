@@ -6,14 +6,14 @@ import (
 )
 
 // PlaceBlocks is MoveBlocks from the CPU with the tier choosing the card:
-// the blocks of [lo, hi) this State runs on the CPU go to whichever attached
+// the blocks of [lo, hi) this instance runs on the CPU go to whichever attached
 // device takes them, with their history, wherever they sit in the stack. A
 // block already on a device is left alone; one every device declines stays
 // on the CPU and the others are still placed. It reports how many blocks it
 // placed.
 //
 // Call it between tokens, like every placement call.
-func (s *State) PlaceBlocks(lo, hi int) (int, error) {
+func (s *Instance) PlaceBlocks(lo, hi int) (int, error) {
 	if s.ld == nil {
 		return 0, fmt.Errorf("model: no device attached (SetDevice first)")
 	}
@@ -28,7 +28,7 @@ func (s *State) PlaceBlocks(lo, hi int) (int, error) {
 // placeFromCPU puts the CPU blocks of [lo, hi) on the device named to ("" the
 // tier's choice) through the offer path, and their history after them. It
 // reports the blocks placed.
-func (s *State) placeFromCPU(lo, hi int, to string) ([]int, error) {
+func (s *Instance) placeFromCPU(lo, hi int, to string) ([]int, error) {
 	if s.ld == nil {
 		return nil, fmt.Errorf("model: no device attached (SetDevice first)")
 	}
@@ -76,7 +76,7 @@ func (s *State) placeFromCPU(lo, hi int, to string) ([]int, error) {
 // relocation's. A pinned block refuses the call before anything moves; a
 // block whose history will not come to the CPU stays where it is, and the
 // call reports it.
-func (s *State) moveToCPU(lo, hi int) (mv BlockMove, err error) {
+func (s *Instance) moveToCPU(lo, hi int) (mv BlockMove, err error) {
 	if s.ld == nil {
 		return mv, nil
 	}

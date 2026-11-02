@@ -37,7 +37,7 @@ func TestEveryTowerRunsSSE(t *testing.T) {
 	run := func(t *testing.T, f towerFamily) arm {
 		m, tw := f.open(t)
 		defer m.Close()
-		st := m.NewState(64)
+		st := m.NewInstance(64)
 		defer st.Close()
 		var a arm
 		var first *Picture

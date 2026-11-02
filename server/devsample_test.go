@@ -42,7 +42,7 @@ func rowComesHome(t *testing.T, mode model.DeviceSampleMode) {
 		head bool
 	}
 	read := func() (c count) {
-		s.Inspect(func(st *model.State) {
+		s.Inspect(func(st *model.Instance) {
 			c = count{st.SampledOnDevice, st.HeadOnDevice()}
 		})
 		return c

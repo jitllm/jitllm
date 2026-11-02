@@ -75,13 +75,13 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 		}
 	}
 
-	// The single-sequence answer, one State per row, and on the composed
+	// The single-sequence answer, one instance per row, and on the composed
 	// CPU the block steps of a step it served, summed over the rows, and
 	// what it declined.
 	want := make([][][]float32, nseq)
 	decServed, decDeclined := 0, [jit.NumDeclines]int{}
 	for i := range streams {
-		s := m.NewState(steps + 1)
+		s := m.NewInstance(steps + 1)
 		for _, id := range streams[i] {
 			lg, err := s.Forward(id)
 			if err != nil {
@@ -280,11 +280,11 @@ func raggedVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 		}
 	}
 
-	// The oracle: one State per row, Reset at the step the batch retires that
+	// The oracle: one instance per row, Reset at the step the batch retires that
 	// row.
 	want := make([][][]float32, nseq)
 	for i := range streams {
-		s := m.NewState(steps + 1)
+		s := m.NewInstance(steps + 1)
 		for j, id := range streams[i] {
 			if j == retireAt[i] {
 				s.Reset()
@@ -355,7 +355,7 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 			// Token equality needs the exact arm, as TestBatchMatchesForward's
 			// exact mode: on arm64 the batch's rows run MatMulPacked's fused
 			// kernel, which sums a k-quant super-block in integers, where the
-			// single State decodes through the tiled kernel's float chain
+			// single instance decodes through the tiled kernel's float chain
 			// (TuneOff pins it); qwen2vl's admitted row parted at step 5.
 			m, err := Open(jlmOf(t, path), noTune, WithJITOptions(nn.WithGEMMExact(true)))
 			if err != nil {
@@ -376,8 +376,8 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 				after[j] = id(admit, plen+j)
 			}
 
-			// The oracle: one State, the same prompt, the same continuation.
-			one := m.NewState(maxSeq)
+			// The oracle: one instance, the same prompt, the same continuation.
+			one := m.NewInstance(maxSeq)
 			pl, err := one.Prefill(prompt)
 			if err != nil {
 				one.Close()
@@ -432,7 +432,7 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 			}
 			for j := range want {
 				if got[j] != want[j] {
-					t.Errorf("step %d: admitted row %d, single State %d", j, got[j], want[j])
+					t.Errorf("step %d: admitted row %d, single instance %d", j, got[j], want[j])
 				}
 			}
 		})
@@ -440,7 +440,7 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 }
 
 // TestPrefillSeqRefusesASingleSession keeps the two entry points from being
-// mixed: PrefillSeq on a one-sequence State would silently mean Prefill, and
+// mixed: PrefillSeq on a one-sequence instance would silently mean Prefill, and
 // Prefill on a batch would fill row 0 only.
 func TestPrefillSeqRefusesASingleSession(t *testing.T) {
 	path := models["stories260K"]
@@ -454,7 +454,7 @@ func TestPrefillSeqRefusesASingleSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	s := m.NewState(32)
+	s := m.NewInstance(32)
 	defer s.Close()
 	if _, err := s.PrefillSeq(0, []int32{1, 2, 3}); err == nil {
 		t.Error("PrefillSeq on a single-sequence session should be refused")

@@ -11,8 +11,8 @@ import (
 // spend. The host gives up what such a device HOLDS -- its blocks, KV pages
 // and scratch, as nn.HostReserver reports them -- and not what it may grow
 // into: an iGPU opened by a bare `-devices gpu` that took no block costs the
-// host nothing. What it holds moves whenever a block moves, so the State that
-// moved it re-divides both budgets (State.followHost).
+// host nothing. What it holds moves whenever a block moves, so the instance that
+// moved it re-divides both budgets (Instance.followHost).
 
 // pageAsk is the page budget as the caller set it (Model.SetPageBudget, or the
 // open-time budget), before what the attached host-memory devices hold comes
@@ -22,7 +22,7 @@ type pageAsk struct {
 	// bytes is the caller's budget; zero is unlimited.
 	bytes uint64
 	// devs is every attached device that reports a host holding, counted by
-	// how many States attached it: one tier serves every session of a model,
+	// how many instances attached it: one tier serves every session of a model,
 	// and it is subtracted once.
 	devs map[nn.HostReserver]int
 }
@@ -78,8 +78,8 @@ func (m *Model) followHostHeld() {
 	}
 }
 
-// holdOnHost counts d against the page budget while a State has it attached;
-// unholdOnHost is its release. Neither re-divides: the State does, once its
+// holdOnHost counts d against the page budget while an instance has it attached;
+// unholdOnHost is its release. Neither re-divides: the instance does, once its
 // placement is settled (followHost).
 func (m *Model) holdOnHost(d nn.HostReserver) {
 	m.pages.mu.Lock()
@@ -98,9 +98,9 @@ func (m *Model) unholdOnHost(d nn.HostReserver) {
 	}
 }
 
-// holdHost makes d the device this State counts against the host's budgets,
+// holdHost makes d the device this instance counts against the host's budgets,
 // releasing the one it had, and re-divides the page budget for the change.
-func (s *State) holdHost(d nn.Device) {
+func (s *Instance) holdHost(d nn.Device) {
 	if s.hostRes != nil {
 		s.m.unholdOnHost(s.hostRes)
 		s.hostRes = nil
@@ -118,11 +118,11 @@ func (s *State) holdHost(d nn.Device) {
 const noHostSeen = ^uint64(0)
 
 // followHost re-reads what the attached device holds of the host's memory and,
-// when it moved, re-divides the two budgets that pay for it: this State's
+// when it moved, re-divides the two budgets that pay for it: this instance's
 // expert residency and the model's pages. It runs after every placement call
 // and at the end of every forward entry point (kvCheck), where a block moved by
 // growth, relocation or a demotion has settled. Unchanged, it is one read.
-func (s *State) followHost() {
+func (s *Instance) followHost() {
 	if s.hostRes == nil {
 		return
 	}

@@ -9,7 +9,7 @@ import (
 // TestResetClearsTheRecurrentSummary checks Reset makes a hybrid's sequence
 // fresh, forgetting the recurrent summary (a linear block's whole history) as
 // well as positions and pages, on the CPU and with every block on each test
-// device. The bar is bit equality against a never-used State on the same
+// device. The bar is bit equality against a never-used instance on the same
 // placement, since the arithmetic is identical.
 func TestResetClearsTheRecurrentSummary(t *testing.T) {
 	m := hybridModelOpt(t, hyOpt{moe: true, layers: 8})
@@ -29,7 +29,7 @@ func TestResetClearsTheRecurrentSummary(t *testing.T) {
 
 // resetCase is the gate on g's devices, or on the CPU where g is nil.
 func resetCase(t *testing.T, m *Model, g *tier.GPU) {
-	place := func(s *State) {
+	place := func(s *Instance) {
 		if g == nil {
 			return
 		}
@@ -40,7 +40,7 @@ func resetCase(t *testing.T, m *Model, g *tier.GPU) {
 			t.Fatalf("the device took %d of %d blocks: %s", s.GPULayers(), m.Cfg.NLayer, g.Err())
 		}
 	}
-	fresh := m.NewState(64)
+	fresh := m.NewInstance(64)
 	defer fresh.Close()
 	if !fresh.recurrent() {
 		t.Fatal("this fixture has no recurrent blocks, so the gate proves nothing")
@@ -55,7 +55,7 @@ func resetCase(t *testing.T, m *Model, g *tier.GPU) {
 	wantCopy := append([]float32(nil), want...)
 
 	// A second state, dirtied with a DIFFERENT sequence, then reset.
-	used := m.NewState(64)
+	used := m.NewInstance(64)
 	defer used.Close()
 	place(used)
 	if _, err := used.Prefill([]int32{7, 8, 9, 10, 11, 12}); err != nil {

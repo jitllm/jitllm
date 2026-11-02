@@ -13,11 +13,11 @@ import (
 // The tower's projector on the CPU device (towerProjOf): where the composed
 // CPU path is on, a picture's patch rows are regrouped and projected by
 // what the composer forms for the projector's graphs, each composed once at
-// the vision State's placement at the most rows a picture holds, and every
+// the vision instance's placement at the most rows a picture holds, and every
 // picture counted served or declined by name (CPUProjectorSteps); main's
 // projector runs one it declines.
 
-// cpuProjState is a vision State's composed projector and its census.
+// cpuProjState is a vision instance's composed projector and its census.
 type cpuProjState struct {
 	group, proj, win cpuHeadForm
 	tp               towerProj
@@ -65,14 +65,14 @@ type picRows struct {
 
 // CardRowsSteps is how many pictures a card served the composed entry and
 // projector of, and how many parts it was asked for and did not run.
-func (s *State) CardRowsSteps() (entry, proj, missed int) {
+func (s *Instance) CardRowsSteps() (entry, proj, missed int) {
 	st := &s.cpu.proj
 	return st.cardEntry, st.cardProj, st.cardMiss
 }
 
 // picBufs holds the request and position words, each made once for the
 // tower's most rows.
-func (s *State) picBufs() {
+func (s *Instance) picBufs() {
 	st := &s.cpu.proj
 	if st.req != nil {
 		return
@@ -81,8 +81,8 @@ func (s *State) picBufs() {
 	st.req, st.pos = make([]uint32, jit.RequestRows+n), make([]uint32, 1+n)
 }
 
-// picRowsParts is the State's entry and projector as a card runs them.
-func (s *State) picRowsParts() *picRows {
+// picRowsParts is the instance's entry and projector as a card runs them.
+func (s *Instance) picRowsParts() *picRows {
 	pr := &s.cpu.proj.cards
 	if pr.built {
 		return pr
@@ -147,7 +147,7 @@ func (s *State) picRowsParts() *picRows {
 
 // cardRows is the card a picture's rows run on where its block li is on
 // one, nil otherwise.
-func (s *State) cardRows(li int) nn.PictureRowsDevice {
+func (s *Instance) cardRows(li int) nn.PictureRowsDevice {
 	if s.ld == nil || !s.devAt(li) {
 		return nil
 	}
@@ -155,10 +155,10 @@ func (s *State) cardRows(li int) nn.PictureRowsDevice {
 	return rd
 }
 
-// prepPicRows forms a vision State's entry and projector on the card
+// prepPicRows forms a vision instance's entry and projector on the card
 // holding its tower's first or last block, at the placement that put it
 // there.
-func (s *State) prepPicRows() {
+func (s *Instance) prepPicRows() {
 	if s.vis == nil {
 		return
 	}
@@ -178,19 +178,19 @@ func (s *State) prepPicRows() {
 }
 
 // CPUEntrySteps is CPUProjectorSteps for the rows entering the tower.
-func (s *State) CPUEntrySteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUEntrySteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.proj.entryServed, s.cpu.proj.entryDeclined
 }
 
 // CPUEntryUncovered is CPUProjectorUncovered for the rows entering the
 // tower.
-func (s *State) CPUEntryUncovered() (Uncovered, error) {
+func (s *Instance) CPUEntryUncovered() (Uncovered, error) {
 	return s.cpu.proj.entryWhy, s.cpu.proj.entryErr
 }
 
 // cpuPlaceEntry composes the tower's entry for the CPU at the vision
-// State's placement.
-func (s *State) cpuPlaceEntry() {
+// instance's placement.
+func (s *Instance) cpuPlaceEntry() {
 	st := &s.cpu.proj
 	t := s.vis.t
 	c := t.Cfg
@@ -221,7 +221,7 @@ func (s *State) cpuPlaceEntry() {
 // cpuEntry writes the n rows entering the tower's first block into s.bx
 // from the picture px through the composed entry, the patches from row
 // first, or says why not.
-func (s *State) cpuEntry(px []float32, n, first int) jit.Decline {
+func (s *Instance) cpuEntry(px []float32, n, first int) jit.Decline {
 	st := &s.cpu.proj
 	v := s.vis
 	t, c := v.t, v.t.Cfg
@@ -287,7 +287,7 @@ func (s *State) cpuEntry(px []float32, n, first int) jit.Decline {
 // entryWords writes the entry's request (the grid's width) and its
 // positions: the live rows, then each row's -- a patch row's its patch's
 // plus first.
-func (s *State) entryWords(n, first int) {
+func (s *Instance) entryWords(n, first int) {
 	st := &s.cpu.proj
 	s.picBufs()
 	gh, gw := s.patchGrid()
@@ -317,17 +317,17 @@ func bucketsAreRows(gh, gw, B int) bool {
 // CPUProjectorSteps is how many pictures the composed projector served on
 // the CPU, and how many it declined, by reason; with the composed CPU off
 // nothing is counted.
-func (s *State) CPUProjectorSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUProjectorSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.proj.served, s.cpu.proj.declined
 }
 
 // CPUProjectorUncovered is why the front end states no projector graphs
-// for the State's tower, Covered where it does.
-func (s *State) CPUProjectorUncovered() (Uncovered, error) { return s.cpu.proj.why, s.cpu.proj.err }
+// for the instance's tower, Covered where it does.
+func (s *Instance) CPUProjectorUncovered() (Uncovered, error) { return s.cpu.proj.why, s.cpu.proj.err }
 
 // cpuPlaceProjector composes the projector's graphs for the CPU at the
-// vision State's placement, with the buffers their calls bind.
-func (s *State) cpuPlaceProjector() {
+// vision instance's placement, with the buffers their calls bind.
+func (s *Instance) cpuPlaceProjector() {
 	st := &s.cpu.proj
 	t := s.vis.t
 	c := t.Cfg
@@ -365,8 +365,8 @@ func (s *State) cpuPlaceProjector() {
 
 // cpuProject projects the picture's np patch rows (behind the tower's last
 // norm, the class row dropped) through the composed projector into the
-// State's output rows, or says why not.
-func (s *State) cpuProject(patches []float32) ([]float32, jit.Decline) {
+// instance's output rows, or says why not.
+func (s *Instance) cpuProject(patches []float32) ([]float32, jit.Decline) {
 	st := &s.cpu.proj
 	v := s.vis
 	c := v.t.Cfg
@@ -423,7 +423,7 @@ func (s *State) cpuProject(patches []float32) ([]float32, jit.Decline) {
 
 // cpuProjDeclined counts a picture whose projector the composed CPU path
 // declines before cpuProject is asked: the reason its forms hold.
-func (s *State) cpuProjDeclined() {
+func (s *Instance) cpuProjDeclined() {
 	if s.cpu.args == nil {
 		return
 	}
@@ -437,7 +437,7 @@ func (s *State) cpuProjDeclined() {
 // merged row's patches where the rows are in raster order (merged row g's
 // slot dy*S+dx the patch at (gy*S+dy, gx*S+dx)), or each raster merged
 // row's window-order row where they are in the window order.
-func (s *State) projWords(gh, gw int, windowed bool) {
+func (s *Instance) projWords(gh, gw int, windowed bool) {
 	st := &s.cpu.proj
 	s.picBufs()
 	v := s.vis
@@ -482,7 +482,7 @@ func (s *State) projWords(gh, gw int, windowed bool) {
 
 // cardProject is cpuProject on the card holding the tower's last block,
 // false where none does or it does not run the parts.
-func (s *State) cardProject(patches []float32, np, nt int, windowed bool) ([]float32, bool) {
+func (s *Instance) cardProject(patches []float32, np, nt int, windowed bool) ([]float32, bool) {
 	rd := s.cardRows(s.hi - 1)
 	if rd == nil {
 		return nil, false
@@ -523,7 +523,7 @@ func (s *State) cardProject(patches []float32, np, nt int, windowed bool) ([]flo
 // cpuProjRows is the first rows rows of x, each width wide, as a call
 // binds them: x where it holds the rows the forms' units reach, else its
 // rows copied into pad.
-func (s *State) cpuProjRows(x, pad []float32, rows, width int) []float32 {
+func (s *Instance) cpuProjRows(x, pad []float32, rows, width int) []float32 {
 	u := s.cpu.proj.unit
 	n := (rows + u - 1) / u * u * width
 	if cap(x) >= n {
@@ -534,7 +534,7 @@ func (s *State) cpuProjRows(x, pad []float32, rows, width int) []float32 {
 }
 
 // cpuProjRun runs form f over rows rows of in into out, one call.
-func (s *State) cpuProjRun(f *cpuBlockForm, in, out []float32, rows int) {
+func (s *Instance) cpuProjRun(f *cpuBlockForm, in, out []float32, rows int) {
 	b := &s.cpu.bound
 	*b = cpuBound{own: s.cpuOwn(f), n: rows, req: s.cpu.proj.req}
 	b.io[0], b.io[1] = unsafe.Pointer(&in[0]), unsafe.Pointer(&out[0])

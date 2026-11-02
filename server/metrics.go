@@ -68,7 +68,7 @@ func (e *Engine) serveMetrics(w http.ResponseWriter, r *http.Request) {
 			func(lm *LoadedModel) float64 { _, _, out := lm.m.PageStats(); return float64(out) }},
 		{"jitllm_page_read_bytes_total", "counter", "Bytes the pager read from the container.",
 			func(lm *LoadedModel) float64 { return float64(lm.m.BytesRead()) }},
-		// The memory cache, the State pool and admission (ttft.go).
+		// The memory cache, the instance pool and admission (ttft.go).
 		{"jitllm_mem_cache_hits_total", "counter", "Pages the model's memory cache served.",
 			func(lm *LoadedModel) float64 { return float64(e.MemCacheStats(lm).Store.Hits) }},
 		{"jitllm_mem_cache_misses_total", "counter", "Pages asked of the model's memory cache that it did not hold.",

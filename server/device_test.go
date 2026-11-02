@@ -164,13 +164,13 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 }
 
 // TestTuneSeamReadsTheSessionsSnapshot: TuneSeam's ticker reports what the
-// tuner settled on while the session generates. model.State's tuner is
+// tuner settled on while the session generates. model.Instance's tuner is
 // written by Forward with no lock, so the report must come from the snapshot
-// the session publishes under its own lock, never from the State.
+// the session publishes under its own lock, never from the Instance.
 //
 // VIOLATION SIGNATURE. Read sess.st.SeamTuned() in TuneSeam's loop again and
 // this fails under -race with "WARNING: DATA RACE" between seamTuner.observe
-// (or finish) and State.SeamTuned.
+// (or finish) and Instance.SeamTuned.
 //
 // Batching is off: the tuner advances once per Forward, and a session that
 // decodes as a row of the step loop never reaches it. The model's whole

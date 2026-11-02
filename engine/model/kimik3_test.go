@@ -136,7 +136,7 @@ func TestKimiK3FeaturesAreLoadBearing(t *testing.T) {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()
-					st := m.NewState(len(g.IDs) + 1)
+					st := m.NewInstance(len(g.IDs) + 1)
 					defer st.Close()
 					worst := 0.0
 					for p, id := range g.IDs {
@@ -220,7 +220,7 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 		ran++
 		t.Run(spec, func(t *testing.T) {
 			defer gpu.Close()
-			st := m.NewState(len(g.IDs) + 2)
+			st := m.NewInstance(len(g.IDs) + 2)
 			defer st.Close()
 			st.SetDeviceLayers(gpu, -1)
 			if st.GPULayers() != nl || !st.HeadOnDevice() {

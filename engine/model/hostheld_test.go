@@ -58,7 +58,7 @@ func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
 		t.Fatalf("with no device the page budget is %d, want the %d it was given", noDevice, uint64(budget))
 	}
 
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 	st.SetMemBudget(budget)
 	dev := &unifiedFake{perBlock: per, held: map[int]bool{}}
@@ -92,7 +92,7 @@ func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
 
 	// A second session on the same device: the device is subtracted once,
 	// for what it holds, and it stays subtracted while either session has it.
-	st2 := m.NewState(64)
+	st2 := m.NewInstance(64)
 	if err := st2.SetDeviceLayers(dev, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestPageBudgetFollowsARealIntegratedGPU(t *testing.T) {
 	}
 	defer g.Close()
 	m.SetPageBudget(budget)
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 
 	// held is what the device's ledger says it holds of the host's memory.

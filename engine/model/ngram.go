@@ -36,7 +36,7 @@ type ngramTable struct {
 	rowBytes int
 }
 
-// ngramScratch is a State's n-gram buffers.
+// ngramScratch is a instance's n-gram buffers.
 type ngramScratch struct {
 	rows int
 	// per row: the hashed table rows, the gathered embedding, its key and
@@ -55,7 +55,7 @@ type ngramScratch struct {
 }
 
 // allocNGram sizes the n-gram buffers for one row.
-func (s *State) allocNGram() {
+func (s *Instance) allocNGram() {
 	c := s.m.Cfg
 	if c.NGramBlock == 0 {
 		return
@@ -74,7 +74,7 @@ func (s *State) allocNGram() {
 }
 
 // growNGram sizes the per-row buffers for n rows.
-func (s *State) growNGram(n int) {
+func (s *Instance) growNGram(n int) {
 	c := s.m.Cfg
 	g := s.q4.ng
 	if g == nil || g.rows >= n {
@@ -92,18 +92,23 @@ func (s *State) growNGram(n int) {
 
 // ngramState is sequence slot's n-gram state in block li: its predecessors
 // and its convolution history, after every slot's delta-rule state.
-func (s *State) ngramState(li, slot int) (prev, hist []float32) {
+func (s *Instance) ngramState(li, slot int) (prev, hist []float32) {
+	return s.ngramStateOf(s.Session, li, slot)
+}
+
+// ngramStateOf is ngramState of session o's state.
+func (s *Instance) ngramStateOf(o *Session, li, slot int) (prev, hist []float32) {
 	c := s.m.Cfg
-	st := s.recTail(li, slot)
+	st := s.recTailOf(o, li, slot)
 	return st[:c.NGram-1], st[c.NGram-1:]
 }
 
 // ngramRows hashes each of n rows' n-gram and gathers its table rows into
 // g.emb, NGramWidth a row, moving each sequence's predecessors on: row r is
-// the next position of sequence slot of the State owner(r) returns, with
+// the next position of sequence slot of the instance owner(r) returns, with
 // token tok(r) (-1 for none, which hashes as the picture placeholder), and
 // order is the rows in each sequence's position order (nil for 0..n-1).
-func (s *State) ngramRows(li, n int, order []int, owner func(r int) (*State, int), tok func(r int) int32) error {
+func (s *Instance) ngramRows(li, n int, order []int, owner func(r int) (*Session, int), tok func(r int) int32) error {
 	c, g := s.m.Cfg, s.q4.ng
 	w, rd := c.NGramWidth(), c.NGramRowDim
 	for oi := 0; oi < n; oi++ {
@@ -112,7 +117,7 @@ func (s *State) ngramRows(li, n int, order []int, owner func(r int) (*State, int
 			r = order[oi]
 		}
 		o, sl := owner(r)
-		prev, _ := o.ngramState(li, sl)
+		prev, _ := s.ngramStateOf(o, li, sl)
 		t := tok(r)
 		if t < 0 {
 			t = c.NGramImage
@@ -128,7 +133,7 @@ func (s *State) ngramRows(li, n int, order []int, owner func(r int) (*State, int
 		for i := range prev {
 			prev[i] = math.Float32frombits(g.hnext[i])
 		}
-		if o == s && sl == 0 {
+		if o == s.Session && sl == 0 {
 			s.rows.snapTail(s, li, r, 0, prev)
 		}
 		for hh, row := range g.idx {

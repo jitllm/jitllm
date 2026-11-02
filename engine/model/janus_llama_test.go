@@ -94,7 +94,7 @@ func TestJanusTeacherForcedMatchesLlamaCpp(t *testing.T) {
 		t.Errorf("the prompt is %d positions; llama.cpp's was 591", n)
 	}
 	ref := m.Vocab.Encode(janusLlamaAnswer, false)
-	st := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + len(ref) + 2)
+	st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(ref) + 2)
 	defer st.Close()
 	logits, err := st.PrefillMixed(spans...)
 	if err != nil {

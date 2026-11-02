@@ -52,7 +52,7 @@ func TestImageWithToolsRendersAndForces(t *testing.T) {
 		t.Fatalf("%s carries no vision tower", toolVisionModel)
 	}
 	quad := readTestdata(t, "quad-and-disc.png")
-	st := lm.m.NewState(64)
+	st := lm.m.NewInstance(64)
 	defer st.Close()
 	msgs := []model.ChatMessage{{Role: "user", Content: "Describe the picture.", Images: 1}}
 	with, err := st.ChatPictureSpans(msgs, []image.Image{decodePic(t, quad)}, []byte(forcedTools), model.ToolChoice{}, true)

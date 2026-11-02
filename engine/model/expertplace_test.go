@@ -30,7 +30,7 @@ func TestParsePlacementExperts(t *testing.T) {
 // is nil), and returns the logits.
 func runExperts(t *testing.T, m *Model, g *tier.GPU, ids []int32) [][]float32 {
 	t.Helper()
-	s := m.NewState(32)
+	s := m.NewInstance(32)
 	defer s.Close()
 	if g != nil {
 		s.SetDeviceLayers(g, m.Cfg.NLayer)
@@ -137,7 +137,7 @@ func TestOffCardExpertsRelocate(t *testing.T) {
 				a, b := open(), open()
 				defer a.Close()
 				defer b.Close()
-				s := m.NewState(ntok + 2)
+				s := m.NewInstance(ntok + 2)
 				defer s.Close()
 				s.SetDeviceLayers(a, m.Cfg.NLayer)
 				n := s.GPULayers()
@@ -206,7 +206,7 @@ func TestHybridPrefillMatchesTheHost(t *testing.T) {
 	}
 	prompt := []int32{1008, 10484, 318, 15383, 387, 17374, 13, 646, 606, 142957}
 	prefill := func(m *Model, g *tier.GPU) []float32 {
-		s := m.NewState(32)
+		s := m.NewInstance(32)
 		defer s.Close()
 		if g != nil {
 			s.SetDeviceLayers(g, m.Cfg.NLayer)

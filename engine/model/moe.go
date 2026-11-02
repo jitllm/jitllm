@@ -42,7 +42,7 @@ import (
 // It declines whenever the batch is not uniform: gate and up must share a
 // type, a shape and the fused kernel's row-group alignment. See AGENTS.md
 // ("batched CPU MoE dispatch") for the measurements.
-func (s *State) moeFFN(l *layer, ord []int32, h, out []float32, dw []float32) (bool, error) {
+func (s *Instance) moeFFN(l *layer, ord []int32, h, out []float32, dw []float32) (bool, error) {
 	c := s.c
 	m := len(ord)
 	if m < 2 || s.moePad == 0 || len(s.moeGate) < m*s.moePad ||
@@ -187,7 +187,7 @@ func (s *State) moeFFN(l *layer, ord []int32, h, out []float32, dw []float32) (b
 // function since both are linear, and keeps h's single shared quantization.
 // The bias is added after, where W(w*h)+b puts it. It is not w*silu(g)*u:
 // silu(w*g)*(w*u) is a different curve.
-func (s *State) weightIn(w float32, gate, up []float32) float32 {
+func (s *Instance) weightIn(w float32, gate, up []float32) float32 {
 	if !s.c.ExpertWeightIn {
 		return w
 	}
@@ -203,7 +203,7 @@ func (s *State) weightIn(w float32, gate, up []float32) float32 {
 // Each worker owns a disjoint row range and walks the experts ascending inside
 // it, so every element sees exactly the per-expert loop's sequence of adds
 // (see moe()).
-func (s *State) moeReduce(out, w []float32, n int) {
+func (s *Instance) moeReduce(out, w []float32, n int) {
 	lanes := nn.ElemLanes
 	v := n / lanes
 	if v == 0 {
@@ -217,7 +217,7 @@ func (s *State) moeReduce(out, w []float32, n int) {
 	s.elemRun()
 }
 
-// expRead is one layer's routed read handed to the State's reader.
+// expRead is one layer's routed read handed to the instance's reader.
 type expRead struct {
 	li  int
 	sel []int32
@@ -236,7 +236,7 @@ func f32Bytes(v []float32) []byte {
 
 // traceExperts hands the tracer each selected expert's row of buf, laid out
 // at stride pad, as "name/e". A nil check when no tracer is installed.
-func (s *State) traceExperts(ord []int32, name string, buf []float32, pad, n int) {
+func (s *Instance) traceExperts(ord []int32, name string, buf []float32, pad, n int) {
 	if s.m.tracer == nil {
 		return
 	}
@@ -257,7 +257,7 @@ func expBias(b []float32, e, n int) []float32 {
 // MoEDispatch reports how many mixture FFNs ran batched (one region per stage)
 // and how many ran as the per-expert loop. A model with no mixture reports
 // (0, 0); a nonzero second number means the fallback ran.
-func (s *State) MoEDispatch() (batched, looped int64) {
+func (s *Instance) MoEDispatch() (batched, looped int64) {
 	return s.moeBatched.Load(), s.moeLooped.Load()
 }
 
@@ -266,7 +266,7 @@ func (s *State) MoEDispatch() (batched, looped int64) {
 //
 // A separate counter, because the loop computes the same answer and only a
 // counter can show which path ran.
-func (s *State) MoEDownDispatch() (batched, looped int64) {
+func (s *Instance) MoEDownDispatch() (batched, looped int64) {
 	return s.moeDownBatched.Load(), s.moeDownLooped.Load()
 }
 
@@ -286,7 +286,7 @@ func (m *Model) expSelBias() []float32 {
 // moeBatchExpert runs expert e of a prefill chunk's layer over every row that
 // selected it, adding each result into that row's residual. The caller holds
 // the expert's page.
-func (s *State) moeBatchExpert(l *layer, e int, h, resid []float32, n int) error {
+func (s *Instance) moeBatchExpert(l *layer, e int, h, resid []float32, n int) error {
 	c := s.c
 	k := c.NExpertUsed
 	x := &l.experts[e]
@@ -354,12 +354,12 @@ func (s *State) moeBatchExpert(l *layer, e int, h, resid []float32, n int) error
 
 // growMoEBatch sizes the per-expert gather moeBatchExpert runs a chunk of n
 // rows through. Grows, never shrinks.
-func (s *State) growMoEBatch(n int) {
+func (s *Instance) growMoEBatch(n int) {
 	c := s.c
 	if len(s.bmRow) >= n {
 		return
 	}
-	// A previous State's set where it is big enough; see hostBatch.
+	// A previous instance's set where it is big enough; see hostBatch.
 	h := s.spareHost
 	s.spareHost.bmRow = nil
 	if cap(h.bmRow) >= n {
@@ -379,7 +379,7 @@ func (s *State) growMoEBatch(n int) {
 // block with no mixture, and for a mixture whose experts read anything but
 // the one vector they are given (a dense MLP beside them, per-expert scales,
 // ungated experts): those stay whole on one tier.
-func (s *State) hostExpertsFor(li int) func(sel []uint32, w, in, out []float32) error {
+func (s *Instance) hostExpertsFor(li int) func(sel []uint32, w, in, out []float32) error {
 	c := s.c
 	if !c.MoEAt(li) || c.DenseMoE || s.m.layers[li].ungatedExp {
 		return nil
@@ -389,7 +389,7 @@ func (s *State) hostExpertsFor(li int) func(sel []uint32, w, in, out []float32) 
 
 // hostExpertsRowsFor is block li's nn.LayerWeights.HostExpertsRows, nil where
 // hostExpertsFor is.
-func (s *State) hostExpertsRowsFor(li int) func(sel []uint32, w, in, out []float32, rows, k int) error {
+func (s *Instance) hostExpertsRowsFor(li int) func(sel []uint32, w, in, out []float32, rows, k int) error {
 	if s.hostExpertsFor(li) == nil {
 		return nil
 	}
@@ -408,7 +408,7 @@ const hostRowsByRow = 8
 // selections and weights: each expert the chunk chose is read once and run
 // over its rows as one batch (moeBatchExpert), summed into out in ascending
 // expert id, rows ascending -- the order the host's own batched mixture sums.
-func (s *State) hostExpertsRows(li int, sel []uint32, w, in, out []float32, rows, k int) error {
+func (s *Instance) hostExpertsRows(li int, sel []uint32, w, in, out []float32, rows, k int) error {
 	c := s.c
 	l := &s.m.layers[li]
 	if k != c.NExpertUsed {
@@ -470,7 +470,7 @@ func (s *State) hostExpertsRows(li int, sel []uint32, w, in, out []float32, rows
 // that order), the pages read, and moeFFN over in into out. It is moe() from
 // its selection on, with the device's selection and weights in place of the
 // host router's.
-func (s *State) hostExperts(li int, sel []uint32, w, in, out []float32) error {
+func (s *Instance) hostExperts(li int, sel []uint32, w, in, out []float32) error {
 	l := &s.m.layers[li]
 	if l.ungatedExp {
 		return fmt.Errorf("model: block %d: ungated experts do not run split across tiers", li)
@@ -520,7 +520,7 @@ func (s *State) hostExperts(li int, sel []uint32, w, in, out []float32) error {
 // moeLoop is moeFFN's fallback, one generated matvec per expert and
 // projection, summing each expert's weighted output into out: the path a
 // mixture with no fused expert kernel takes (an F32 bank).
-func (s *State) moeLoop(l *layer, ord []int32, ow []float32, h, out []float32) error {
+func (s *Instance) moeLoop(l *layer, ord []int32, ow []float32, h, out []float32) error {
 	c := s.c
 	// The fallback loops the down projection too, so it is counted here;
 	// moeFFN returned before reaching its own counter.

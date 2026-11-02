@@ -14,7 +14,7 @@
 // both.
 //
 // It is one worker rather than a goroutine per job because the objects are not
-// safe to share: model.State holds a sequence and a conversion beside a decode
+// safe to share: model.Instance holds a sequence and a conversion beside a decode
 // would contend for the same pool and pager. A single command channel makes "a
 // long job cannot overlap a decode" true by construction.
 package engine
@@ -229,7 +229,7 @@ func (e *Engine) releaseSession() {
 }
 
 // inspect runs f on the chat session's State between turns.
-func (e *Engine) inspect(f func(st *model.State)) {
+func (e *Engine) inspect(f func(st *model.Instance)) {
 	if e.sess != nil {
 		e.sess.Inspect(f)
 	}
@@ -415,7 +415,7 @@ func (e *Engine) activate(en *entry) error {
 	e.pictures = nil
 	var blocks []byte
 	var alloc session.Allocation
-	e.inspect(func(st *model.State) {
+	e.inspect(func(st *model.Instance) {
 		blocks = placementOf(m, st, e.gpu)
 		alloc = allocStat(m, st, e.gpu, m.Cfg.NLayer)
 	})
@@ -535,7 +535,7 @@ func blockMap(nLayer int, runs [][2]int, devOf func(li int) int, resident func(l
 
 // placementOf is blockMap for a live session. A block the tier cannot name a
 // device for is drawn on device 0 rather than dropped from the device count.
-func placementOf(m *model.Model, st *model.State, g *tier.GPU) []byte {
+func placementOf(m *model.Model, st *model.Instance, g *tier.GPU) []byte {
 	ord := map[string]int{}
 	if g != nil {
 		for i, b := range g.Budgets() {
@@ -573,7 +573,7 @@ func placementOf(m *model.Model, st *model.State, g *tier.GPU) []byte {
 //
 // Budgets(), DevStats() and Placed() are parallel arrays indexed by device
 // ordinal, fastest first.
-func allocStat(m *model.Model, st *model.State, g *tier.GPU, nBlocks int) session.Allocation {
+func allocStat(m *model.Model, st *model.Instance, g *tier.GPU, nBlocks int) session.Allocation {
 	a := session.Allocation{
 		HostUsed:   m.HostBytes(),
 		HostBudget: m.PageBudget(),
@@ -635,7 +635,7 @@ func pagerStat(m *model.Model) session.PagerStat {
 // Relocate moves the seam: it asks the device to hold n blocks and publishes
 // what it actually took.
 //
-// It is queued, not called: model.State has no mutex and nothing may overlap a
+// It is queued, not called: model.Instance has no mutex and nothing may overlap a
 // decode, so the command channel puts this between turns. It must not copy
 // Stop's shortcut, which bypasses the queue on purpose.
 //
@@ -653,12 +653,12 @@ func (e *Engine) Relocate(n int) {
 			return
 		}
 		var was int
-		e.inspect(func(st *model.State) { was = st.GPULayers() })
+		e.inspect(func(st *model.Instance) { was = st.GPULayers() })
 		got := e.srv.SetDeviceBlocks(e.sess, n)
 		nb := e.m.Cfg.NLayer
 		var blocks []byte
 		var alloc session.Allocation
-		e.inspect(func(st *model.State) {
+		e.inspect(func(st *model.Instance) {
 			blocks = placementOf(e.m, st, e.gpu)
 			alloc = allocStat(e.m, st, e.gpu, nb)
 		})
@@ -738,7 +738,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	ph := e.m.NewPhaseMeter()
 	ph.Mark("load")
 	var moved0 int
-	e.inspect(func(st *model.State) { moved0 = st.Relocations() })
+	e.inspect(func(st *model.Instance) { moved0 = st.Relocations() })
 	_, _, outs0 := e.m.PageStats()
 
 	// The session resets before every turn (server.Engine.Generate): a chat
@@ -842,7 +842,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	var reused, prompted int
 	var fails int64
 	var moved int
-	e.inspect(func(st *model.State) {
+	e.inspect(func(st *model.Instance) {
 		reused, fails, moved = st.KVRestored(), st.KVStoreFailures(), st.Relocations()-moved0
 	})
 	prompted = e.lastPromptTok
@@ -871,7 +871,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	pager.TurnOuts = pager.PageOuts - outs0
 	var alloc session.Allocation
 	var blocks []byte
-	e.inspect(func(st *model.State) {
+	e.inspect(func(st *model.Instance) {
 		alloc = allocStat(e.m, st, e.gpu, e.m.Cfg.NLayer)
 		blocks = placementOf(e.m, st, e.gpu)
 	})
@@ -988,7 +988,7 @@ func (e *Engine) picture(path string) (*model.Picture, error) {
 		return nil, err
 	}
 	var pc *model.Picture
-	e.inspect(func(st *model.State) { pc, err = st.Picture(img) })
+	e.inspect(func(st *model.Instance) { pc, err = st.Picture(img) })
 	return pc, err
 }
 
@@ -1138,12 +1138,12 @@ func kvStatus(reused, prompted int, fails int64) string {
 // turn just finished. They read the session directly and so must be called
 // when no generation is in flight, which a test after pump() is.
 func (e *Engine) lastReused() (n int) {
-	e.inspect(func(st *model.State) { n = st.KVRestored() })
+	e.inspect(func(st *model.Instance) { n = st.KVRestored() })
 	return n
 }
 
 func (e *Engine) lastFailures() (n int64) {
-	e.inspect(func(st *model.State) { n = st.KVStoreFailures() })
+	e.inspect(func(st *model.Instance) { n = st.KVStoreFailures() })
 	return n
 }
 

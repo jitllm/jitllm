@@ -23,7 +23,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 	m, g := openSynthLlama4(t)
 	defer m.Close()
 	cfg := *m.Cfg
-	decode := func(st *State) [][]float32 {
+	decode := func(st *Instance) [][]float32 {
 		var out [][]float32
 		for _, id := range g.IDs {
 			lg, err := st.Forward(id)
@@ -34,17 +34,17 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 		}
 		return out
 	}
-	prefill := func(st *State) [][]float32 {
+	prefill := func(st *Instance) [][]float32 {
 		lg, err := st.Prefill(g.IDs)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return [][]float32{append([]float32(nil), lg...)}
 	}
-	onHost := func(c *Config, run func(*State) [][]float32) [][]float32 {
+	onHost := func(c *Config, run func(*Instance) [][]float32) [][]float32 {
 		m.Cfg = c
 		defer func() { m.Cfg = &cfg }()
-		st := m.NewState(len(g.IDs) + 1)
+		st := m.NewInstance(len(g.IDs) + 1)
 		defer st.Close()
 		return run(st)
 	}
@@ -88,7 +88,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 		t.Run(spec, func(t *testing.T) {
 			// A fresh tier per arm: a warm tier's scratch is the first plan's,
 			// so planConflict would refuse a violation instead of running it.
-			onDevice := func(c *Config, run func(*State) [][]float32) ([][]float32, string) {
+			onDevice := func(c *Config, run func(*Instance) [][]float32) ([][]float32, string) {
 				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil {
 					t.Fatal(err)
@@ -96,7 +96,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 				defer gpu.Close()
 				m.Cfg = c
 				defer func() { m.Cfg = &cfg }()
-				st := m.NewState(len(g.IDs) + 1)
+				st := m.NewInstance(len(g.IDs) + 1)
 				defer st.Close()
 				st.SetDeviceLayers(gpu, -1)
 				if n := st.GPULayers(); n != c.NLayer {
@@ -109,7 +109,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 				}
 				return got, ""
 			}
-			clean := func(name string, run func(*State) [][]float32, want [][]float32) float64 {
+			clean := func(name string, run func(*Instance) [][]float32, want [][]float32) float64 {
 				c := cfg
 				got, why := onDevice(&c, run)
 				if why != "" {
@@ -134,7 +134,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer gpu.Close()
-				first := m.NewState(len(g.IDs) + 1)
+				first := m.NewInstance(len(g.IDs) + 1)
 				defer first.Close()
 				first.SetDeviceLayers(gpu, -1)
 				if first.GPULayers() != cfg.NLayer {
@@ -144,7 +144,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 				other.SWAChunked = false
 				m.Cfg = &other
 				defer func() { m.Cfg = &cfg }()
-				second := m.NewState(len(g.IDs) + 1)
+				second := m.NewInstance(len(g.IDs) + 1)
 				defer second.Close()
 				second.SetDeviceLayers(gpu, -1)
 				if n := second.GPULayers(); n != 0 {

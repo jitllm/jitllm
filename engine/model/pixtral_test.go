@@ -78,7 +78,7 @@ func openPixtral(t testing.TB, opts ...Option) (*Model, *pixGolden) {
 }
 
 // pixEncode preprocesses and encodes the golden's picture on a fresh state.
-func pixEncode(t *testing.T, tw *Tower, g *pixGolden, mut func(*State)) []float32 {
+func pixEncode(t *testing.T, tw *Tower, g *pixGolden, mut func(*Instance)) []float32 {
 	t.Helper()
 	// A violation's configuration reaches the composer through the graphs
 	// the front end states from it.
@@ -198,10 +198,10 @@ func TestPixtralTowerMatchesTransformers(t *testing.T) {
 	t.Logf("%d break rows, each [IMG_BREAK]'s embedding exactly", len(breaks)/d)
 	for _, v := range []struct {
 		name string
-		mut  func(*State)
+		mut  func(*Instance)
 		set  func() func()
 	}{
-		{"no 2-D rotary", func(s *State) {
+		{"no 2-D rotary", func(s *Instance) {
 			gh, gw := s.patchGrid()
 			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
 			for i := 0; i < len(s.vis.ropeSC); i += 2 {
@@ -258,7 +258,7 @@ func pixWorst(want []pixLogits, rows [][]float32) (float64, int) {
 // decodes its continuation, returning the logits the golden records.
 func pixRun(t *testing.T, m *Model, g *pixGolden, img Span, rows int) [][]float32 {
 	t.Helper()
-	st := m.NewState(len(g.Pre) + rows + len(g.Post) + len(g.Cont) + 1)
+	st := m.NewInstance(len(g.Pre) + rows + len(g.Post) + len(g.Cont) + 1)
 	defer st.Close()
 	lg, err := st.PrefillMixed(Span{Tokens: g.Pre}, img, Span{Tokens: g.Post})
 	if err != nil {
@@ -275,7 +275,7 @@ func pixRun(t *testing.T, m *Model, g *pixGolden, img Span, rows int) [][]float3
 }
 
 // TestPixtralMatchesTransformersEndToEnd is the whole model from the pixels:
-// the picture a span of the prompt, encoded by the prefill on the State's own
+// the picture a span of the prompt, encoded by the prefill on the instance's own
 // vision segment, against Mistral3ForConditionalGeneration's logits with its
 // tower at the engine's arithmetic (the toy text model amplifies the int8's
 // 6e-3 on the rows to 0.2 of the logits, so the f32 reference is reported
@@ -284,7 +284,7 @@ func pixRun(t *testing.T, m *Model, g *pixGolden, img Span, rows int) [][]float3
 func TestPixtralMatchesTransformersEndToEnd(t *testing.T) {
 	m, g := openPixtral(t)
 	defer m.Close()
-	st := m.NewState(8)
+	st := m.NewInstance(8)
 	pic, err := st.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	st.Close()
 	if err != nil {
@@ -318,7 +318,7 @@ func TestPixtralMatchesTransformersEndToEnd(t *testing.T) {
 	// The violation: the break rows left out, so every grid row after the
 	// first sits one position early.
 	pixtralNoBreaks = true
-	vs := m.NewState(8)
+	vs := m.NewInstance(8)
 	bad, err := vs.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	vs.Close()
 	if err != nil {
@@ -344,7 +344,7 @@ func TestPixtralOnDeviceMatchesHost(t *testing.T) {
 	defer m.Close()
 	tw := m.Tower()
 	img := goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
-	encode := func(s *State) []float32 {
+	encode := func(s *Instance) []float32 {
 		px, err := s.PreprocessImage(img)
 		if err != nil {
 			t.Fatal(err)

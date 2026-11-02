@@ -87,7 +87,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 	var sc uint64
 	if g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) { c.PromptRows = 8 })); err == nil && g != nil {
-		sz := NewScheduler(m, rows, seq)
+		sz := NewRowScheduler(m, rows, seq)
 		if err := sz.st.SetDeviceLayers(g, -1); err == nil && g.Stats().BudgetUsed > m.WeightBytes() {
 			sc = g.Stats().BudgetUsed - m.WeightBytes()
 		}
@@ -126,7 +126,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 		devs int // devices that must hold blocks
 		host bool
 		// place, when set, is an explicit strict placement (WithPlacement),
-		// checked block by block after the Scheduler's State takes it.
+		// checked block by block after the Scheduler's instance takes it.
 		place map[int]Place
 		// paging turns device paging on: the budget holds a third of the
 		// model and blocks swap through its slots every step.
@@ -178,7 +178,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 			want := make([][]int32, len(prompts))
 			for i := range prompts {
 				g := open(t, arm.spec, arm.paging)
-				one := NewScheduler(m, 1, seq)
+				one := NewRowScheduler(m, 1, seq)
 				if err := one.st.SetDeviceLayers(g, arm.max); err != nil {
 					t.Fatal(err)
 				}
@@ -198,7 +198,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 			}
 			g := open(t, arm.spec, arm.paging)
 			defer g.Close()
-			sc := NewScheduler(m, rows, seq)
+			sc := NewRowScheduler(m, rows, seq)
 			defer sc.Close()
 			if err := sc.st.SetDeviceLayers(g, arm.max); err != nil {
 				t.Fatal(err)

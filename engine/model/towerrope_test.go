@@ -39,7 +39,7 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 	img := goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
 	// encode runs the tower on s and returns the residual after block 0 and
 	// the output.
-	encode := func(s *State) ([]float32, []float32) {
+	encode := func(s *Instance) ([]float32, []float32) {
 		var b0 []float32
 		s.vis.afterBlock = func(li int, x []float32) {
 			if li == 0 && b0 == nil { // block -1 is the embedding
@@ -124,7 +124,7 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 
 			// The violations, each on a tier of its own: one that already holds
 			// the block keeps the plan it prepared it with.
-			viol := func(what string, setup func(), undo func(), compare func(*State) float64) {
+			viol := func(what string, setup func(), undo func(), compare func(*Instance) float64) {
 				gv := open()
 				defer gv.Close()
 				v := tw.testState()
@@ -147,7 +147,7 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 				}
 			}
 			viol("no rotary in the block's plan", func() { tw.Cfg.Rope = false }, func() { tw.Cfg.Rope = true },
-				func(v *State) float64 {
+				func(v *Instance) float64 {
 					b0, _ := encode(v)
 					nm, _ := nmse32(want0, b0)
 					return nm
@@ -157,7 +157,7 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 				// rotates the wrong elements together.
 				viol("NEOX pairing in the block's plan", func() { tw.cfg.RopeNeox = true },
 					func() { tw.cfg.RopeNeox = false },
-					func(v *State) float64 {
+					func(v *Instance) float64 {
 						b0, _ := encode(v)
 						nm, _ := nmse32(want0, b0)
 						return nm
@@ -168,7 +168,7 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 				// patch where the host attends inside windows.
 				was := c.WinSize
 				viol("the windows ignored", func() { tw.opt.towerGPULayers = -1 }, func() {},
-					func(v *State) float64 {
+					func(v *Instance) float64 {
 						tw.Cfg.WinSize = 1 << 20
 						defer func() { tw.Cfg.WinSize = was }()
 						_, out := encode(v)
@@ -186,7 +186,7 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 }
 
 // TestTextHeadBesideItsTowerOnTheDevice: with the text model's blocks and
-// some of its tower's on one device, and the tower's State still holding
+// some of its tower's on one device, and the tower's instance still holding
 // them, a prompt runs its head on the device too. The head-only call names
 // one past the text model's last block, which is the tower's first; read as
 // the run's first block it made the device refuse the head as a non-causal
@@ -198,7 +198,7 @@ func TestTextHeadBesideItsTowerOnTheDevice(t *testing.T) {
 			m, g := openQVL(t, name)
 			defer m.Close()
 			ids := append(append([]int32(nil), g.Pre...), g.Post...)
-			host := m.NewState(len(ids) + 1)
+			host := m.NewInstance(len(ids) + 1)
 			want, err := host.Prefill(ids)
 			if err != nil {
 				t.Fatal(err)
@@ -213,7 +213,7 @@ func TestTextHeadBesideItsTowerOnTheDevice(t *testing.T) {
 					continue
 				}
 				ran++
-				st := m.NewState(len(ids) + 1)
+				st := m.NewInstance(len(ids) + 1)
 				st.SetDevice(gpu)
 				ts := m.Tower().testState()
 				ts.SetDevice(gpu)

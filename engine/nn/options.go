@@ -57,7 +57,7 @@ type Config struct {
 
 	// Accs pins how many independent accumulator chains a k-quant matvec
 	// carries (1..4); 0 takes cpu.BestAccs. A measurement instrument, per JIT
-	// so two States in one process can carry different values for an A/B.
+	// so two instances in one process can carry different values for an A/B.
 	Accs int
 
 	// NoGEMM makes MatMul always decline, so prefill falls back to a per-token

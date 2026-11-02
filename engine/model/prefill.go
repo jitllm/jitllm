@@ -15,7 +15,7 @@ const MaxPrefillChunk = nn.MaxHostPrefillChunk
 
 // chunkWidth is how many rows one prompt chunk runs: the host's chunk, or the
 // device's where the session places blocks.
-func (s *State) chunkWidth() int {
+func (s *Instance) chunkWidth() int {
 	if s.devCount() > 0 {
 		return s.deviceChunk()
 	}
@@ -29,7 +29,7 @@ func (s *State) chunkWidth() int {
 // them once per chunk, so arithmetic intensity rises with the batch. The graph
 // is identical to Forward's: every matvec becomes a matmul over the chunk, and
 // attention stays per token because token i attends only up to p0+i.
-func (s *State) Prefill(tokens []int32) ([]float32, error) {
+func (s *Instance) Prefill(tokens []int32) ([]float32, error) {
 	defer s.m.enterPager()()
 	if s.batched {
 		return nil, errBatch{}
@@ -45,7 +45,7 @@ func (s *State) Prefill(tokens []int32) ([]float32, error) {
 // (a non-causal decoder's, vllm-d3's): PrefillMixed's one bidirectional run,
 // through the token path, so a warm prompt allocates nothing (the mixed
 // path's per-row sources do).
-func (s *State) prefillBidir(tokens []int32) ([]float32, error) {
+func (s *Instance) prefillBidir(tokens []int32) ([]float32, error) {
 	defer s.m.enterPager()()
 	if s.batched {
 		return nil, errBatch{}
@@ -78,7 +78,7 @@ func (s *State) prefillBidir(tokens []int32) ([]float32, error) {
 //
 // The row must be at position 0, i.e. a retired slot; Retire is the only thing
 // that resets a row's positions.
-func (s *State) PrefillSeq(slot int, tokens []int32) ([]float32, error) {
+func (s *Instance) PrefillSeq(slot int, tokens []int32) ([]float32, error) {
 	defer s.m.enterPager()()
 	if !s.batched {
 		return nil, errBatch{}
@@ -111,7 +111,7 @@ func (s *State) PrefillSeq(slot int, tokens []int32) ([]float32, error) {
 // embeddings -- one of them. Embd is n*NEmbd floats laid out row-major, and is
 // the residual stream rather than a vocabulary row -- EmbdScale is not applied
 // to it, for the reason ForwardEmbd's comment gives. A Picture is rows the
-// State's vision segment encodes when the span is prefilled (picture.go), and
+// instance's vision segment encodes when the span is prefilled (picture.go), and
 // its Grid and Key are the span's.
 //
 // An Embd span may carry Tokens too, one per row: the ids its rows embed,
@@ -182,12 +182,12 @@ func named(spans []Span) []Span {
 // PrefillMixed prefills a prompt made of token runs, pictures and precomputed
 // embedding runs. It is the prefill half of the embedding seam; see
 // ForwardEmbd.
-func (s *State) PrefillMixed(spans ...Span) ([]float32, error) {
+func (s *Instance) PrefillMixed(spans ...Span) ([]float32, error) {
 	return s.PrefillSeqMixed(0, spans...)
 }
 
 // PrefillSeqMixed is PrefillMixed into one batch slot.
-func (s *State) PrefillSeqMixed(slot int, spans ...Span) ([]float32, error) {
+func (s *Instance) PrefillSeqMixed(slot int, spans ...Span) ([]float32, error) {
 	defer s.m.enterPager()()
 	spans, err := s.pictureRows(named(spans), 0)
 	if err != nil {
@@ -238,7 +238,7 @@ func (s *State) PrefillSeqMixed(slot int, spans ...Span) ([]float32, error) {
 // bidirRuns records the bidirectional runs of a mixed prompt, at the positions
 // they will occupy. Single sequence only: a batch slot's rows go through the
 // device as a causal prefill (nn.RowsDevice), which has no run to widen.
-func (s *State) bidirRuns(slot int, spans []Span) error {
+func (s *Instance) bidirRuns(slot int, spans []Span) error {
 	c := s.c
 	p := s.seqPos(slot)
 	if s.bidirAll {
@@ -280,7 +280,7 @@ func (s *State) bidirRuns(slot int, spans []Span) error {
 // with none -- for a model that reads the token past the embedding (per-layer
 // embeddings, ple.go; DeepSeek V4's hash blocks, ds4.go), and returns its
 // reset. A no-op elsewhere.
-func (s *State) tokensOf(spans []Span) func() {
+func (s *Instance) tokensOf(spans []Span) func() {
 	if s.c.PLEDim == 0 && s.c.NHashLayers == 0 {
 		return func() {}
 	}
@@ -301,7 +301,7 @@ func (s *State) tokensOf(spans []Span) func() {
 // loop indexes it the same way it indexes tokens. An embedding span's Tokens
 // name its rows' ids and are not looked up; a picture carrying tokens is a
 // caller bug and is refused rather than resolved by precedence.
-func (s *State) spanSrc(spans []Span) ([]func(dst []float32) error, error) {
+func (s *Instance) spanSrc(spans []Span) ([]func(dst []float32) error, error) {
 	c := s.c
 	total := 0
 	for i, sp := range spans {
@@ -365,8 +365,8 @@ func (s *State) spanSrc(spans []Span) ([]func(dst []float32) error, error) {
 }
 
 // embedInto is embed() writing somewhere other than s.x. Prompt rows are
-// filled from the pool's workers (embedRun), so it reads no State scratch.
-func (s *State) embedInto(dst []float32, token int32) error {
+// filled from the pool's workers (embedRun), so it reads no instance scratch.
+func (s *Instance) embedInto(dst []float32, token int32) error {
 	m, c := s.m, s.c
 	if err := m.embedRow(dst, int(token)); err != nil {
 		return err
@@ -377,7 +377,7 @@ func (s *State) embedInto(dst []float32, token int32) error {
 	return nil
 }
 
-func (s *State) prefillInto(slot int, tokens []int32) ([]float32, error) {
+func (s *Instance) prefillInto(slot int, tokens []int32) ([]float32, error) {
 	c := s.c
 	for _, id := range tokens {
 		if int(id) < 0 || int(id) >= c.NVocab {
@@ -392,7 +392,7 @@ func (s *State) prefillInto(slot int, tokens []int32) ([]float32, error) {
 
 // ErrPrefillInterrupted is a prefill stopped between chunks because its
 // interrupt (SetPrefillInterrupt) asked. The sequence holds the chunks that
-// ran and nothing after them; the caller resets it before reusing the State.
+// ran and nothing after them; the caller resets it before reusing the Instance.
 var ErrPrefillInterrupted = errors.New("model: prefill interrupted")
 
 // SetPrefillInterrupt has every chunked prefill ask f before each chunk and
@@ -400,11 +400,11 @@ var ErrPrefillInterrupted = errors.New("model: prefill interrupted")
 // prompt whose client has gone without waiting out the whole prefill. nil
 // removes it. f runs on the prefill's goroutine, between chunks, never
 // inside one.
-func (s *State) SetPrefillInterrupt(f func() bool) { s.interrupt = f }
+func (s *Instance) SetPrefillInterrupt(f func() bool) { s.interrupt = f }
 
 // promptCalls tells the device whether the calls that follow are a prompt's
 // (nn.PromptDevice).
-func (s *State) promptCalls(on bool) {
+func (s *Instance) promptCalls(on bool) {
 	if s.ldPrompt != nil {
 		s.ldPrompt.SetPrompt(on)
 	}
@@ -418,7 +418,7 @@ func (s *State) promptCalls(on bool) {
 // the tied embedding gather the rows itself (nn.EmbedDevice). rp, when not
 // nil, is every row's multi-axis rotary position (spanRope); nil rows advance
 // like text (ropeOf).
-func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int32, rp [][4]int) ([]float32, error) {
+func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []int32, rp [][4]int) ([]float32, error) {
 	m, c := s.m, s.c
 	// src nil: every row is a vocabulary lookup of ids, with no function a
 	// row (prefillInto), so a warm prompt makes no closure per token.
@@ -1003,7 +1003,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 // mm is the batched matvec seam, mirroring mv. A false from MatMul is a
 // supported answer -- there is no GEMM for this quantization yet, or the batch
 // is too small to pay -- and the loop below produces identical tokens.
-func (s *State) mm(out []float32, w tensor, x []float32, ntok int) error {
+func (s *Instance) mm(out []float32, w tensor, x []float32, ntok int) error {
 	// The batched path is timed here; the fallback is timed by each s.mv, so a
 	// defer over the whole call would count it twice.
 	t0 := s.tick()
@@ -1028,17 +1028,17 @@ func (s *State) mm(out []float32, w tensor, x []float32, ntok int) error {
 	return nil
 }
 
-// batchNormB is batchNorm with the norm's bias, and it is State.norm per row:
+// batchNormB is batchNorm with the norm's bias, and it is Instance.norm per row:
 // a LayerNorm on a classic block (C6), an RMSNorm everywhere else.
-func (s *State) batchNormB(dst, src, weight, bias []float32, dim, ntok int) {
+func (s *Instance) batchNormB(dst, src, weight, bias []float32, dim, ntok int) {
 	s.normRows(dst, src, weight, bias, dim, ntok, s.c.LayerNorm, s.c.RMSEps, 1)
 	s.jit.NewInput()
 }
 
-// normRows is State.norm over ntok rows of width dim on the pool, chunk rows
+// normRows is Instance.norm over ntok rows of width dim on the pool, chunk rows
 // at a time: a LayerNorm with its bias where ln is set, an RMSNorm otherwise,
 // a copy where there is no weight.
-func (s *State) normRows(dst, src, weight, bias []float32, dim, ntok int, ln bool, eps float64, chunk int) {
+func (s *Instance) normRows(dst, src, weight, bias []float32, dim, ntok int, ln bool, eps float64, chunk int) {
 	j := &s.rg.rows
 	j.op, j.dst, j.src, j.w, j.b, j.dim, j.ln, j.eps = rowNorm, dst, src, weight, bias, dim, ln, eps
 	s.rowRun(ntok, chunk)
@@ -1046,7 +1046,7 @@ func (s *State) normRows(dst, src, weight, bias []float32, dim, ntok int, ln boo
 
 // axpyRows adds alpha*b to each of n rows of dst, b one row of width dim or,
 // where idx is set, the table whose row idx[r] goes to row r.
-func (s *State) axpyRows(dst, b []float32, idx []int32, dim, n, chunk int, alpha float32) {
+func (s *Instance) axpyRows(dst, b []float32, idx []int32, dim, n, chunk int, alpha float32) {
 	j := &s.rg.rows
 	j.op, j.dst, j.b, j.idx, j.dim, j.alpha = rowAxpy, dst, b, idx, dim, alpha
 	s.rowRun(n, chunk)
@@ -1056,13 +1056,13 @@ func (s *State) axpyRows(dst, b []float32, idx []int32, dim, n, chunk int, alpha
 // the residual rows it uploads and downloads and the rotary rows beside them.
 //
 // Nothing else: growBatch's full host set is tens of MB at the device's chunk
-// width, and allocating it cost a fresh State measurable time per prompt.
+// width, and allocating it cost a fresh instance measurable time per prompt.
 // deviceChunk is the prompt chunk a device takes: MaxDevicePrefillChunk, or
 // pipelineChunks of them when every block is on a device that crosses
 // several cards, so the cards can work on different pieces at once
 // (nn.Pipeliner). Only then: host blocks between device runs take the chunk
 // whole.
-func (s *State) deviceChunk() int {
+func (s *Instance) deviceChunk() int {
 	if l, ok := s.ld.(nn.ChunkLimiter); ok && l.ChunkRows() > 0 {
 		return l.ChunkRows()
 	}
@@ -1078,7 +1078,7 @@ func (s *State) deviceChunk() int {
 // Deeper pipelines (more cards) gain from more pieces.
 const pipelineChunks = 4
 
-func (s *State) growDeviceBatch(chunk int) {
+func (s *Instance) growDeviceBatch(chunk int) {
 	c := s.c
 	if len(s.bx) >= chunk*c.ResidW() {
 		return
@@ -1099,13 +1099,13 @@ func (s *State) growDeviceBatch(chunk int) {
 	}
 }
 
-// promptBuf is a State's prompt buffers -- a chunk's residual rows and its
-// rotary tables -- kept by the model when the State closes. A request is a
-// fresh State, and allocating these per request cost a 512-row prompt about
+// promptBuf is a session's prompt buffers -- a chunk's residual rows and its
+// rotary tables -- kept by the model when the instance closes. A request is a
+// fresh instance, and allocating these per request cost a 512-row prompt about
 // a fifth of its time (a fresh 4 MiB heap span faults in page by page;
 // gpu-kernels.md, "The prompt lost 22%").
 //
-// One spare serves serial requests; concurrent States on one model would
+// One spare serves serial requests; concurrent instances on one model would
 // need a free list.
 type promptBuf struct {
 	bx, bcs, bcsSWA []float32
@@ -1121,9 +1121,9 @@ func (m *Model) takeSpare() *promptBuf {
 	return b
 }
 
-// keepSpare gives a closing State's prompt buffers to the model, keeping the
+// keepSpare gives a closing session's prompt buffers to the model, keeping the
 // larger of them and any it already holds.
-func (s *State) keepSpare() {
+func (s *Instance) keepSpare() {
 	if s.bx == nil {
 		return
 	}
@@ -1136,8 +1136,8 @@ func (s *State) keepSpare() {
 	s.bx, s.bcs, s.bcsSWA = nil, nil, nil
 }
 
-// allOnDevice reports whether every block of this State runs on a device.
-func (s *State) allOnDevice() bool {
+// allOnDevice reports whether every block of this instance runs on a device.
+func (s *Instance) allOnDevice() bool {
 	for li := s.lo; li < s.hi; li++ {
 		if !s.devAt(li) {
 			return false
@@ -1146,14 +1146,14 @@ func (s *State) allOnDevice() bool {
 	return true
 }
 
-func (s *State) growBatch(chunk int) {
+func (s *Instance) growBatch(chunk int) {
 	c := s.c
 	qDim := c.MaxQDim()
 	s.growDeviceBatch(chunk)
 	if len(s.bh) >= chunk*max(c.NEmbd, qDim) {
 		return
 	}
-	// A previous State's set where it is big enough (hostBatch); scratch
+	// A previous instance's set where it is big enough (hostBatch); scratch
 	// allocates what is not.
 	h := s.spareHost
 	s.spareHost.bh = nil
@@ -1164,7 +1164,7 @@ func (s *State) growBatch(chunk int) {
 	s.bv = scratch(h.bv, chunk*c.MaxKVDim(), 0)
 	// Padded, so the ragged tail of a width that is not a whole number of
 	// vectors has somewhere legal to go and the generated activation serves
-	// every width (see State.actmul).
+	// every width (see Instance.actmul).
 	// An ungated vision MLP has no gate: every tower's but Qwen2.5-VL's and
 	// Pixtral's.
 	if s.vis == nil || s.vis.t.Cfg.Gated {
@@ -1200,7 +1200,7 @@ func (errEmptyPrompt) Error() string { return "model: Prefill called with no tok
 // p is the row's ROTARY position (ropeOf), not its cache position.
 // ropeFill writes the plain rotary table at position p into cs: NRot floats,
 // or under XD-RoPE the same table twice (a text row's halves turn alike).
-func (s *State) ropeFill(cs []float32, p int) {
+func (s *Instance) ropeFill(cs []float32, p int) {
 	n := s.c.NRot
 	s.jit.RopeTable(s.m.rope, cs[:n], p)
 	if s.c.RopeXD {
@@ -1208,7 +1208,7 @@ func (s *State) ropeFill(cs []float32, p int) {
 	}
 }
 
-func (s *State) ropeRow(j, p int) {
+func (s *Instance) ropeRow(j, p int) {
 	s.noteAxes(j, [4]int32{int32(p), int32(p), int32(p), int32(p)})
 	nrot, nrotSWA := s.c.RopeW(), s.c.NRotSWA
 	s.ropeFill(s.bcs[j*nrot:(j+1)*nrot], p)
@@ -1220,7 +1220,7 @@ func (s *State) ropeRow(j, p int) {
 // bswaTable and bswaTableAt are swaTable for the batched path: the prefill
 // tables are per token, so the device gets the same n-row slice of the local
 // one that it gets of the global one. nil where the architecture has one base.
-func (s *State) bswaTable(n, nrot int) []float32 {
+func (s *Instance) bswaTable(n, nrot int) []float32 {
 	if s.bcsSWA == nil {
 		return nil
 	}
@@ -1233,7 +1233,7 @@ func (s *State) bswaTable(n, nrot int) []float32 {
 // (vision.go), whose rows attend over their key runs instead of causally.
 // base is the chunk's first row in the prompt and chunkRows the scratch the
 // chunk is sized for.
-func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error {
+func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error {
 	m, c := s.m, s.c
 	s.growBatch(chunkRows)
 	// Same fault as decode: a block is a page and visiting it brings
@@ -1279,7 +1279,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 // forwardRowsFor is the longest prompt run through the decode path: the
 // caller's WithPrefillForwardRows, else hostRowsByRow once a device has run
 // this model's experts on the host, else one.
-func (s *State) forwardRowsFor() int {
+func (s *Instance) forwardRowsFor() int {
 	switch {
 	case s.m.opt.forwardRowsSet:
 		return s.m.opt.forwardRows

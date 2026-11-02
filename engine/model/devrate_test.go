@@ -38,7 +38,7 @@ func TestDeviceDecodeRate(t *testing.T) {
 
 	prof := false
 	rate := func(g *tier.GPU, max int) (float64, int) {
-		s := m.NewState(256)
+		s := m.NewInstance(256)
 		defer s.Close()
 		blocks := 0
 		if g != nil {
@@ -184,7 +184,7 @@ func TestDeviceDecodeRate(t *testing.T) {
 	}
 	// Probe that the device arm actually runs on the device: a declined block
 	// leaves the host doing it, correctly and slowly.
-	probe := m.NewState(256)
+	probe := m.NewInstance(256)
 	probe.SetDeviceLayers(g, -1)
 	for i := 0; i < 8; i++ {
 		if _, err := probe.Forward(int32(1 + i)); err != nil {

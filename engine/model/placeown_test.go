@@ -5,24 +5,24 @@ import (
 	"testing"
 )
 
-// TestConcurrentPlacementGivesEachStateItsOwnHistory: States attaching to one
+// TestConcurrentPlacementGivesEachStateItsOwnHistory: instances attaching to one
 // tier at once must each come away with their own history on every block they
 // placed, so each one's first prompt runs where it was placed.
 //
 // A block takes a session's history when it is offered -- a linear block's
 // recurrent state, an attention block's KV -- and the device files it under
 // whichever session is current. The offers went through the shared tier
-// (State.ldCand) rather than the State's own view, so the current session was
-// whichever had made the last call: with two States placing at once, a block
-// found the OTHER State's history already there and gave this one none. The
-// placement still counted every block, and the State's first prompt then
+// (Instance.ldCand) rather than the instance's own view, so the current session was
+// whichever had made the last call: with two instances placing at once, a block
+// found the OTHER session's history already there and gave this one none. The
+// placement still counted every block, and the instance's first prompt then
 // failed on the device ("block 0 has no recurrent state for session N") and
 // demoted every block to the host -- correct tokens, from the host, which is
 // how a server creating sessions per request ran most of them there.
 //
-// The assertion is per State after its first prompt: every block still on the
+// The assertion is per instance after its first prompt: every block still on the
 // device and no demotion. Against offers made through the shared tier, one of
-// each pair of States demotes in nearly every round.
+// each pair of instances demotes in nearly every round.
 func TestConcurrentPlacementGivesEachStateItsOwnHistory(t *testing.T) {
 	m := openStepHybrid(t)
 	defer m.Close()
@@ -33,9 +33,9 @@ func TestConcurrentPlacementGivesEachStateItsOwnHistory(t *testing.T) {
 			defer g.Close()
 			const rounds, n = 4, 3
 			for round := range rounds {
-				ss := make([]*State, n)
+				ss := make([]*Instance, n)
 				for i := range ss {
-					ss[i] = m.NewState(64)
+					ss[i] = m.NewInstance(64)
 				}
 				var wg sync.WaitGroup
 				for _, s := range ss {
@@ -60,7 +60,7 @@ func TestConcurrentPlacementGivesEachStateItsOwnHistory(t *testing.T) {
 					s.Close()
 				}
 			}
-			t.Logf("%d rounds of %d States placed at once kept every block through their first prompt", rounds, n)
+			t.Logf("%d rounds of %d instances placed at once kept every block through their first prompt", rounds, n)
 		})
 	}
 }

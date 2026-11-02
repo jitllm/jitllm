@@ -87,7 +87,7 @@ var specPrompts = []string{
 // plainGreedy is n tokens of greedy decode after prompt.
 func plainGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.Device) []int32 {
 	t.Helper()
-	st := m.NewState(len(prompt) + n + 8)
+	st := m.NewInstance(len(prompt) + n + 8)
 	defer st.Close()
 	if dev != nil {
 		if err := st.SetDevice(dev); err != nil {
@@ -115,7 +115,7 @@ func specGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.Device, fa
 	t.Helper()
 	// A break that keeps rejected rows moves the trunk on by every drafted
 	// row while emitting one: room for a round's worth of rows a token.
-	st := m.NewState(len(prompt) + 5*n + 8)
+	st := m.NewInstance(len(prompt) + 5*n + 8)
 	defer st.Close()
 	if dev != nil {
 		if err := st.SetDevice(dev); err != nil {

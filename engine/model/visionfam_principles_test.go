@@ -26,14 +26,14 @@ type visionFam struct {
 	open func(t testing.TB, opts ...Option) (*Model, image.Image)
 	// spans is msgs with img laid out in the family's own markers.
 	spans func(t *testing.T, m *Model, msgs []ChatMessage, img image.Image) []Span
-	// encode is the tower's rows for img on a fresh vision State.
+	// encode is the tower's rows for img on a fresh vision Instance.
 	encode func(t *testing.T, m *Model, img image.Image) []float32
 }
 
 // pictureSpans is msgs with img laid out by ChatSpansImages: a family whose
 // picture is one span between its markers.
 func pictureSpans(t *testing.T, m *Model, msgs []ChatMessage, img image.Image) []Span {
-	st := m.NewState(8)
+	st := m.NewInstance(8)
 	p, err := st.Picture(img)
 	st.Close()
 	if err != nil {
@@ -47,7 +47,7 @@ func pictureSpans(t *testing.T, m *Model, msgs []ChatMessage, img image.Image) [
 }
 
 // pictureEncode is the tower's rows for img, preprocessed and encoded on a
-// fresh vision State.
+// fresh vision Instance.
 func pictureEncode(t *testing.T, m *Model, img image.Image) []float32 {
 	s := m.Tower().testState()
 	defer s.Close()
@@ -97,7 +97,7 @@ var visionFams = []visionFam{
 			return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
 		},
 		spans: func(t *testing.T, m *Model, msgs []ChatMessage, img image.Image) []Span {
-			st := m.NewState(8)
+			st := m.NewInstance(8)
 			p, err := st.Picture(img)
 			st.Close()
 			if err != nil {
@@ -209,7 +209,7 @@ func TestVisionFamDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 				const n = 48
 				pos := SpanPositions(spans, m.Cfg.NEmbd)
 				warm := 96 + (256+136-(pos+96)%256)%256
-				s := m.NewState(pos + warm + n + 8)
+				s := m.NewInstance(pos + warm + n + 8)
 				defer s.Close()
 				if gpu != nil {
 					if err := s.SetDevice(gpu); err != nil {
@@ -287,7 +287,7 @@ func TestVisionFamTwoTurnChatRestoresPastThePicture(t *testing.T) {
 			}
 			run := func(store KVStore, msgs []ChatMessage, pic image.Image) result {
 				spans := f.spans(t, m, msgs, pic)
-				st := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + 16)
+				st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + 16)
 				defer st.Close()
 				st.SetKVStore(store)
 				mustKey(t, st, "vision-families/two-turn")

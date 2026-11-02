@@ -60,7 +60,7 @@ func TestMLAOnEveryDevice(t *testing.T) {
 				ran++
 				t.Run(spec, func(t *testing.T) {
 					defer gpu.Close()
-					st := m.NewState(len(ids) + 1)
+					st := m.NewInstance(len(ids) + 1)
 					defer st.Close()
 					st.SetDeviceLayers(gpu, -1)
 					if n := st.GPULayers(); n != wantPlaced {
@@ -111,7 +111,7 @@ func TestMLAOnEveryDevice(t *testing.T) {
 // number of blocks below the seam; the violations land orders above it.
 const mlaDeviceNMSE = 1e-2
 
-func runIDs(t *testing.T, st *State, ids []int32) [][]float32 {
+func runIDs(t *testing.T, st *Instance, ids []int32) [][]float32 {
 	t.Helper()
 	out := make([][]float32, 0, len(ids))
 	for _, id := range ids {
@@ -160,7 +160,7 @@ func compare(t *testing.T, want, got [][]float32) (float64, float64) {
 	return worst, worstD
 }
 
-func declineList(st *State) []DeviceDecline { return st.DeviceDeclines() }
+func declineList(st *Instance) []DeviceDecline { return st.DeviceDeclines() }
 
 // mlaCPUArm runs ids teacher-forced on the CPU device composed, from the
 // container src: every block step served and composed once, the logits
@@ -179,7 +179,7 @@ func mlaCPUArm(t *testing.T, src string, ids []int32, want [][]float32) {
 		}
 		defer m.Close()
 		run := func(f cpuFault) [][]float32 {
-			st := m.NewState(len(ids) + 1)
+			st := m.NewInstance(len(ids) + 1)
 			defer st.Close()
 			st.cpu.fault = f
 			got := runIDs(t, st, ids)
@@ -263,7 +263,7 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 // on the card, against want.
 func mlaSeamMoves(t *testing.T, m *Model, gpu *tier.GPU, ids []int32, want [][]float32, composed bool) {
 	t.Helper()
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	st.SetDeviceLayers(gpu, -1)
 	if n := st.GPULayers(); n != m.Cfg.NLayer {
@@ -301,7 +301,7 @@ func mlaSeamMoves(t *testing.T, m *Model, gpu *tier.GPU, ids []int32, want [][]f
 		if served-before != (b-a)*m.Cfg.NLayer {
 			t.Fatalf("the CPU served %d block steps of the %d its third runs", served-before, (b-a)*m.Cfg.NLayer)
 		}
-		// Composed at the State's placement and once more on the move
+		// Composed at the instance's placement and once more on the move
 		// back, never at a step.
 		for li, n := range st.CPUCompositions() {
 			if n != 2 {
@@ -342,7 +342,7 @@ func TestMLAOnADeviceWithPoisonedBuffers(t *testing.T) {
 		ran++
 		t.Run(spec, func(t *testing.T) {
 			defer gpu.Close()
-			st := m.NewState(len(ids) + 1)
+			st := m.NewInstance(len(ids) + 1)
 			defer st.Close()
 			st.SetDeviceLayers(gpu, -1)
 			if n := st.GPULayers(); n != m.Cfg.NLayer {
@@ -396,7 +396,7 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 				ran++
 				t.Run(spec, func(t *testing.T) {
 					defer gpu.Close()
-					st := m.NewState(len(ids) + 1)
+					st := m.NewInstance(len(ids) + 1)
 					defer st.Close()
 					if !st.KVIsF16() {
 						t.Fatal("the cache is not f16, so no step-down happens and " +
@@ -476,7 +476,7 @@ func TestNoPEMLAOnEveryDevice(t *testing.T) {
 		ran++
 		t.Run(spec, func(t *testing.T) {
 			defer gpu.Close()
-			st := m.NewState(len(ids) + 1)
+			st := m.NewInstance(len(ids) + 1)
 			defer st.Close()
 			st.SetDeviceLayers(gpu, -1)
 			if n := st.GPULayers(); n != wantPlaced {

@@ -297,10 +297,10 @@ func TestGemma4PictureServesComposed(t *testing.T) {
 }
 
 // cpuSteps is the composed CPU's block steps over g's picture prompt and its
-// decode, in a State of its own.
+// decode, in an instance of its own.
 func cpuSteps(t *testing.T, m *Model, g *g4vGolden) (int, []int) {
 	t.Helper()
-	st := m.NewState(8)
+	st := m.NewInstance(8)
 	pic, err := st.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	st.Close()
 	if err != nil {
@@ -308,7 +308,7 @@ func cpuSteps(t *testing.T, m *Model, g *g4vGolden) (int, []int) {
 	}
 	spans := []Span{{Tokens: append(append([]int32(nil), g.Pre...), g.BOI)},
 		{Picture: pic, Bidir: true}, {Tokens: append([]int32{g.EOI}, g.Post...)}}
-	s := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
+	s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
 	defer s.Close()
 	if _, err := s.PrefillMixed(spans...); err != nil {
 		t.Fatal(err)

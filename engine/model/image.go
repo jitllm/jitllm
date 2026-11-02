@@ -26,7 +26,7 @@ import (
 // normalised by the tower's own mean and std: ImageSz x ImageSz for a
 // fixed-size tower, and for a dynamic-resolution one (Qwen-VL) the size
 // TowerConfig.ResizeTo picks, which also sets the grid Encode runs (Grid).
-func (s *State) Preprocess(r io.Reader) ([]float32, error) {
+func (s *Instance) Preprocess(r io.Reader) ([]float32, error) {
 	img, _, err := image.Decode(r)
 	if err != nil {
 		return nil, fmt.Errorf("model: Preprocess: %w", err)
@@ -59,7 +59,7 @@ func ImageSize(path string) (w, h int, err error) {
 // against a constant 1 appended to every input row (Ry's rows sum to one).
 // A dense matvec over a two-tap matrix is sw times a gather's work, which is
 // milliseconds once per image.
-func (s *State) PreprocessImage(img image.Image) ([]float32, error) {
+func (s *Instance) PreprocessImage(img image.Image) ([]float32, error) {
 	// The resampling filter is the reference's. transformers' Qwen-VL processor
 	// resizes with Pillow's BICUBIC, and so do MiniCPM-V's and Janus-Pro's:
 	// one resampler serves all of them (rgb8.resizePIL, Pillow's own fixed
@@ -80,7 +80,7 @@ func (s *State) PreprocessImage(img image.Image) ([]float32, error) {
 // preprocessPIL is a dynamic-resolution tower's processor: the picture resized
 // to ResizeTo's grid with Pillow's BICUBIC, then rescaled and normalised. It
 // sets the grid Encode runs.
-func (s *State) preprocessPIL(img image.Image) ([]float32, error) {
+func (s *Instance) preprocessPIL(img image.Image) ([]float32, error) {
 	c := s.vis.t.Cfg
 	src := toRGB8(img)
 	if src.w <= 0 || src.h <= 0 {
@@ -106,7 +106,7 @@ type tapsFunc func(n, src, k int, scale, shift float32) []float32
 
 // preprocessWith is PreprocessImage with the resampling filter named, which
 // is how a gate runs the wrong one.
-func (s *State) preprocessWith(img image.Image, taps tapsFunc) ([]float32, error) {
+func (s *Instance) preprocessWith(img image.Image, taps tapsFunc) ([]float32, error) {
 	c := s.vis.t.Cfg
 	if c.Projector == jlm.ProjJanus.String() {
 		return s.letterbox(img)
@@ -182,7 +182,7 @@ func (s *State) preprocessWith(img image.Image, taps tapsFunc) ([]float32, error
 }
 
 // resizeRows runs the horizontal pass, one generated matvec per source row.
-func (s *State) resizeRows(dst, rx, src []float32, nw, kx, sh int) error {
+func (s *Instance) resizeRows(dst, rx, src []float32, nw, kx, sh int) error {
 	for y := 0; y < sh; y++ {
 		if !s.jit.MatVec(dst[y*nw:(y+1)*nw], quant.F32, f32Bytes(rx), src[y*kx:(y+1)*kx], nw, kx) {
 			return fmt.Errorf("model: Preprocess: no generated F32 matvec at k=%d", kx)
@@ -250,7 +250,7 @@ func clampi(v, lo, hi int) int {
 // llama.cpp's fixed-size port takes ceil() of each side where the processor
 // rounds; the two agree whenever the fraction is under a half, and for every
 // square picture.
-func (s *State) letterbox(img image.Image) ([]float32, error) {
+func (s *Instance) letterbox(img image.Image) ([]float32, error) {
 	c := s.vis.t.Cfg
 	src := toRGB8(img)
 	n := c.ImageSz

@@ -13,11 +13,11 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// TestConcurrentMultiDeviceDoesNotLeak runs several States at once, with the
+// TestConcurrentMultiDeviceDoesNotLeak runs several instances at once, with the
 // blocks spread over every device the host has, and requires the process to
-// come back after each cycle: several States sharing a tier, devices sharing a
+// come back after each cycle: several instances sharing a tier, devices sharing a
 // host budget, pools sharing cores. Concurrency is the point: sched.Pool.Do is
-// single-caller, which is safe only because each State builds its own JIT, and
+// single-caller, which is safe only because each instance builds its own JIT, and
 // a shared tier.GPU tests devTier's locking.
 //
 // It checks the live heap, the device byte ledger, the driver objects the
@@ -44,12 +44,12 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 		}
 		defer g.Close()
 
-		// States are built and attached serially, forwards run concurrently:
+		// instances are built and attached serially, forwards run concurrently:
 		// sessions are admitted one at a time and then served together, as a
 		// server does. (Concurrent construction is gated by
 		// nn.TestConcurrentNewJITKeepsEachJITsOptions and
 		// TestConcurrentOpenKeepsEachModelsOptions.)
-		ss := make([]*State, workers)
+		ss := make([]*Instance, workers)
 		// Closed explicitly, not by defer, so the device ledger can be read
 		// while the tier is still open.
 		closed := false
@@ -63,7 +63,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 			}
 		}()
 		for w := range ss {
-			ss[w] = m.NewState(48)
+			ss[w] = m.NewInstance(48)
 			ss[w].SetDevice(g)
 		}
 		st0 := g.Stats()
@@ -109,17 +109,17 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 		closed = true
 		st := g.Stats()
 		if st.KVBytes != 0 {
-			t.Errorf("%d bytes of attention history held after every State closed", st.KVBytes)
+			t.Errorf("%d bytes of attention history held after every instance closed", st.KVBytes)
 		}
 		grew := st.KVPoolBytes - min(st.KVPoolBytes, st0.KVPoolBytes)
 		if st.Allocated > st0.Allocated+grew {
-			t.Errorf("the device's buffers hold %d bytes after every State closed (%d at placement, "+
+			t.Errorf("the device's buffers hold %d bytes after every instance closed (%d at placement, "+
 				"%d more of free KV pool): a session's buffers are not returned",
 				st.Allocated, st0.Allocated, grew)
 		}
 		charged := func(s tier.Stats) uint64 { return s.BudgetUsed - s.RoundingBytes }
 		if charged(st) > charged(st0)+grew {
-			t.Errorf("the device's budget charges %d bytes after every State closed (%d at placement, "+
+			t.Errorf("the device's budget charges %d bytes after every instance closed (%d at placement, "+
 				"%d more of free KV pool), the driver's rounding apart: a session's charge is not refunded",
 				charged(st), charged(st0), grew)
 		}
@@ -149,7 +149,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	own1 := backend.OwnedNow()
 	heap1 := liveHeap()
 
-	t.Logf("%d cycles x %d concurrent States on every device: live heap %d -> %d KiB (%+d), "+
+	t.Logf("%d cycles x %d concurrent instances on every device: live heap %d -> %d KiB (%+d), "+
 		"goroutines %d -> %d, driver objects owned %+v -> %+v",
 		rounds, workers, heap0/1024, heap1/1024, (int64(heap1)-int64(heap0))/1024,
 		g0, g1, own0, own1)
@@ -174,7 +174,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	// queue kept. The Go Ms are the runtime's pool: it makes one when every M
 	// is busy or blocked in a driver call and destroys one only under a
 	// goroutine that exits locked to it, so their count is the high-water of
-	// goroutines blocked in the drivers at once. Four States on every device
+	// goroutines blocked in the drivers at once. Four instances on every device
 	// push it up a step at a time over the first twenty-odd cycles (22 -> 27
 	// over 24 cycles on the laptop, the steps at no fixed cycle) and then hold
 	// it; that was the "OS threads 20 -> 25" this test used to fail on. A
@@ -190,7 +190,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	// HeapAlloc right after runtime.GC() is what a leak is: bytes still
 	// reachable. The scavenger cannot move it and it needs no sleep to settle.
 	if grow := int64(heap1) - int64(heap0); grow > 24<<20 {
-		t.Errorf("live heap grew %d KiB over %d cycles (%d KiB per cycle): a State, "+
+		t.Errorf("live heap grew %d KiB over %d cycles (%d KiB per cycle): an instance, "+
 			"a pool or a device view is still reachable after Close",
 			grow/1024, rounds, grow/1024/int64(rounds))
 	}

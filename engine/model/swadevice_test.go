@@ -20,13 +20,13 @@ const swaSlice = 4096
 // swaRun prefills ids and returns logits on the device when g is non-nil: every
 // position's first swaSlice logits for a per-token run, the last position's for
 // a batched one (Prefill returns nothing else). It fails if the device let go
-// of a block, since the State would silently finish on the host, and where the
+// of a block, since the instance would silently finish on the host, and where the
 // composer serves the blocks, unless it ran every block of every token.
 func swaRun(t *testing.T, m *Model, g *tier.GPU, ids []int32, batched bool) [][]float32 {
 	t.Helper()
 	// One size for every arm, so no arm's result depends on the order the
 	// arms ran in (TestATierServesALargerSecondSession covers that order).
-	st := m.NewState(swaMaxSeq)
+	st := m.NewInstance(swaMaxSeq)
 	defer st.Close()
 	placed, before := 0, 0
 	if g != nil {
@@ -250,7 +250,7 @@ func TestATierServesALargerSecondSession(t *testing.T) {
 
 	g := swaTier(t)
 	defer g.Close()
-	a := m.NewState(short)
+	a := m.NewInstance(short)
 	defer a.Close()
 	a.SetDevice(g)
 	if a.GPULayers() != m.Cfg.NLayer {

@@ -73,7 +73,7 @@ func TestLogprobsMatchTheOracle(t *testing.T) {
 	defer m.Close()
 	ids := m.Vocab.Encode("Once upon a time, there was a little dog", true)
 	const gen, n = 12, 20
-	st := m.NewState(len(ids) + gen + 1)
+	st := m.NewInstance(len(ids) + gen + 1)
 	defer st.Close()
 	logits, err := st.Prefill(ids)
 	if err != nil {

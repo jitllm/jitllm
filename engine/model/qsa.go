@@ -24,7 +24,7 @@ import (
 // does not; a positive scale on a sum of ReLUs selects the same blocks, and
 // the engine takes llama.cpp's.
 
-// qsaScratch is a State's QSA buffers.
+// qsaScratch is a instance's QSA buffers.
 type qsaScratch struct {
 	q, key           []float32 // the decode row's query heads and raw key
 	pooled           []float32 // every complete block's key
@@ -66,7 +66,7 @@ func loadQSA(l *layer, bi int32, cfg *Config,
 }
 
 // allocQSA sizes the decode token's selection buffers.
-func (s *State) allocQSA() {
+func (s *Instance) allocQSA() {
 	c := s.m.Cfg
 	if c.QSARatio == 0 {
 		return
@@ -86,7 +86,7 @@ func (s *State) allocQSA() {
 }
 
 // growQSARows sizes a chunk's: each row's query, key and mask.
-func (s *State) growQSARows(n int) {
+func (s *Instance) growQSARows(n int) {
 	c := s.m.Cfg
 	g := s.qsa()
 	if g == nil || g.rows >= n {
@@ -99,7 +99,7 @@ func (s *State) growQSARows(n int) {
 	g.masks = make([][]float32, n)
 }
 
-func (s *State) qsa() *qsaScratch {
+func (s *Instance) qsa() *qsaScratch {
 	if s.q4 == nil {
 		return nil
 	}

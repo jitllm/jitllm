@@ -47,7 +47,7 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 				t.Fatalf("the front end states the input rows over %d streams as %v (%s) and the collapse as %v",
 					m.Cfg.Streams(), f.embed != nil, f.embedWhy, f.collapse != nil)
 			}
-			host := m.NewState(len(g.IDs) + 1)
+			host := m.NewInstance(len(g.IDs) + 1)
 			var want [][]float32
 			for _, id := range g.IDs {
 				l, err := host.Forward(id)
@@ -64,10 +64,10 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 				parts |= tier.ComposedBlock | tier.ComposedPrompt
 				heads++
 			}
-			decode := func(t *testing.T, dev string, after func(*State)) float64 {
+			decode := func(t *testing.T, dev string, after func(*Instance)) float64 {
 				t.Helper()
 				var collapses bool
-				got, st, _, _ := composedDecodeWith(t, m, dev, prompt, toks, parts, true, false, func(s *State) {
+				got, st, _, _ := composedDecodeWith(t, m, dev, prompt, toks, parts, true, false, func(s *Instance) {
 					collapses = s.head != nil && s.head.Collapses
 					if after != nil {
 						after(s)
@@ -114,7 +114,7 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 						t.Fatalf("worst logit NMSE %.3g against the host, bound %g", worst, bound)
 					}
 					for _, v := range streamRowsViolations(t, m) {
-						var after func(*State)
+						var after func(*Instance)
 						undo := func() {}
 						if v.state != nil {
 							after = v.state
@@ -138,12 +138,12 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 }
 
 // streamViolation is a violation of the input rows or the collapse over
-// several streams: the front end's graphs rewritten (mut), or the State's
+// several streams: the front end's graphs rewritten (mut), or the instance's
 // device wrapped (state).
 type streamViolation struct {
 	name  string
 	mut   func(m *Model) func()
-	state func(*State)
+	state func(*Instance)
 }
 
 // streamRowsViolations are m's input rows' streams past the first written

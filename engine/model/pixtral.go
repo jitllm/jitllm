@@ -166,7 +166,7 @@ var pixtralNoBreaks bool
 // run): the shuffle and the merger when the tower merges, llava's MLP, and the
 // merged grid's rows written out with a break row after each grid row but the
 // last.
-func (s *State) projectPixtral(patches []float32) ([]float32, error) {
+func (s *Instance) projectPixtral(patches []float32) ([]float32, error) {
 	v := s.vis
 	t, c := v.t, v.t.Cfg
 	gh, gw := s.patchGrid()

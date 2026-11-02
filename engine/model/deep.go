@@ -35,7 +35,7 @@ func splitDeep(rows []float32, n, wide int) (embd, deep []float32) {
 // deepRuns records the deepstack rows of spans, whose prefill starts at the
 // spans' row from (a restore covered the rows before it). It returns the
 // reset.
-func (s *State) deepRuns(spans []Span, from int) (func(), error) {
+func (s *Instance) deepRuns(spans []Span, from int) (func(), error) {
 	s.deep = s.deep[:0]
 	at := 0
 	for i, sp := range spans {
@@ -62,7 +62,7 @@ func (s *State) deepRuns(spans []Span, from int) (func(), error) {
 
 // deepIn reports whether the prefill rows [base, base+n) hold a deepstack row
 // still to be added after block li.
-func (s *State) deepIn(li, base, n int) bool {
+func (s *Instance) deepIn(li, base, n int) bool {
 	for _, r := range s.deep {
 		if li-s.lo < r.taps && r.lo < base+n && r.hi > base {
 			return true
@@ -73,7 +73,7 @@ func (s *State) deepIn(li, base, n int) bool {
 
 // addDeep adds, after block li has run over the prefill rows [base, base+n)
 // in s.bx, each deepstack run's tap li into the rows it holds there.
-func (s *State) addDeep(li, base, n int) {
+func (s *Instance) addDeep(li, base, n int) {
 	k, E := li-s.lo, s.c.NEmbd
 	for _, r := range s.deep {
 		lo, hi := max(r.lo, base), min(r.hi, base+n)

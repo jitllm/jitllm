@@ -70,7 +70,7 @@ func TestSynthGPTOSSMatchesTransformers(t *testing.T) {
 		}
 		t.Logf("%s pos %2d: NMSE %.2e, argmax %d (transformers %d)", what, p, nmse, am, want.Argmax)
 	}
-	st := m.NewState(len(g.IDs) + 1)
+	st := m.NewInstance(len(g.IDs) + 1)
 	defer st.Close()
 	for p, id := range g.IDs {
 		logits, err := st.Forward(id)
@@ -79,7 +79,7 @@ func TestSynthGPTOSSMatchesTransformers(t *testing.T) {
 		}
 		cmp("forward", p, logits)
 	}
-	pf := m.NewState(len(g.IDs) + 1)
+	pf := m.NewInstance(len(g.IDs) + 1)
 	defer pf.Close()
 	logits, err := pf.Prefill(g.IDs)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestSynthGPTOSSOnEveryDevice(t *testing.T) {
 		}
 		l.expDownB, l.expUpB = db, ub
 	}
-	run := func(st *State) [][]float32 {
+	run := func(st *Instance) [][]float32 {
 		var out [][]float32
 		for _, id := range g.IDs {
 			lg, err := st.Forward(id)
@@ -158,7 +158,7 @@ func TestSynthGPTOSSOnEveryDevice(t *testing.T) {
 		}
 		return out
 	}
-	host := m.NewState(len(g.IDs) + 1)
+	host := m.NewInstance(len(g.IDs) + 1)
 	want := run(host)
 	host.Close()
 	ran := 0
@@ -171,7 +171,7 @@ func TestSynthGPTOSSOnEveryDevice(t *testing.T) {
 		ran++
 		t.Run(spec, func(t *testing.T) {
 			defer gpu.Close()
-			st := m.NewState(len(g.IDs) + 1)
+			st := m.NewInstance(len(g.IDs) + 1)
 			defer st.Close()
 			st.SetDeviceLayers(gpu, -1)
 			if n := st.GPULayers(); n != m.Cfg.NLayer {

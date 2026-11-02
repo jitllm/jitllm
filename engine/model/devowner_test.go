@@ -26,7 +26,7 @@ func TestATierServesOneModel(t *testing.T) {
 	b := hybridModelOpt(t, hyOpt{moe: true, layers: 4, seed: 11})
 	n := b.Cfg.NLayer
 
-	logits := func(s *State) [][]float32 {
+	logits := func(s *Instance) [][]float32 {
 		var out [][]float32
 		for _, id := range ids {
 			l, err := s.Forward(id)
@@ -56,11 +56,11 @@ func TestATierServesOneModel(t *testing.T) {
 		}
 		return w
 	}
-	hb := b.NewState(16)
+	hb := b.NewInstance(16)
 	want := logits(hb)
 	hb.Close()
 	if d := worst(want, func() [][]float32 {
-		ha := a.NewState(16)
+		ha := a.NewInstance(16)
 		defer ha.Close()
 		return logits(ha)
 	}()); d < 0.1 {
@@ -74,7 +74,7 @@ func TestATierServesOneModel(t *testing.T) {
 	}
 	defer g.Close()
 
-	sa := a.NewState(16)
+	sa := a.NewInstance(16)
 	if err := sa.SetDeviceLayers(g, n); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestATierServesOneModel(t *testing.T) {
 		t.Skipf("the device took no block of the first model: %s", g.Err())
 	}
 
-	sb := b.NewState(16)
+	sb := b.NewInstance(16)
 	if err := sb.SetDeviceLayers(g, n); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestATierServesOneModel(t *testing.T) {
 			t.Fatalf("device %d still holds %d block(s) after the first model closed", dev, held)
 		}
 	}
-	sb = b.NewState(16)
+	sb = b.NewInstance(16)
 	defer sb.Close()
 	if err := sb.SetDeviceLayers(g, n); err != nil {
 		t.Fatal(err)

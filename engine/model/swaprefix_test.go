@@ -60,7 +60,7 @@ func TestPrefixCacheRestoresAWindowedLayer(t *testing.T) {
 						defer g.Close()
 					}
 					run := func(st KVStore, p []int32, walk bool) ([]int32, int, uint64) {
-						s := m.NewState(maxSeq)
+						s := m.NewInstance(maxSeq)
 						defer s.Close()
 						if g != nil {
 							if err := s.SetDevice(g); err != nil {

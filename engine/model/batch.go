@@ -17,7 +17,7 @@ import (
 // Attention is the one op that differs: Prefill's rows are one sequence at
 // successive positions, while a batch's rows are different sequences, each
 // attending into its own cache at its own position.
-func (s *State) ForwardBatch(tokens []int32) ([]float32, error) {
+func (s *Instance) ForwardBatch(tokens []int32) ([]float32, error) {
 	if !s.batched {
 		return nil, errBatch{}
 	}
@@ -50,7 +50,7 @@ func (s *State) ForwardBatch(tokens []int32) ([]float32, error) {
 // cost a chunk's worth of projections and, on a device, their readback.
 //
 // Each sequence's position moves on by the rows it took.
-func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float32, error) {
+func (s *Instance) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float32, error) {
 	defer s.m.enterPager()()
 	c := s.c
 	if !s.batched {
@@ -133,21 +133,21 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 	return lg, nil
 }
 
-// rowOwner is the State whose history row i of a ragged step reads and
+// rowOwner is the session whose history row i of a ragged step reads and
 // writes, and the slot there: the batch's own slot seq[i], or in a step across
 // sessions (stepHost) the row's own session, whose one sequence is slot 0.
-func (s *State) rowOwner(i int, seq []int) (*State, int) {
+func (s *Instance) rowOwner(i int, seq []int) (*Session, int) {
 	if len(s.rowOwn) > 0 {
 		return s.rowOwn[i], 0
 	}
-	return s, seq[i]
+	return s.Session, seq[i]
 }
 
 // rowsHost runs a ragged step's blocks and head and returns the wanted rows'
 // logits; the caller moves the positions on. seqs is how many sequences the
 // rows hold: a step of one row per sequence fans attention out over (row,
 // head) units.
-func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]float32, error) {
+func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]float32, error) {
 	m, c := s.m, s.c
 	n := len(tokens)
 	// The ragged head applies the final softcap itself, as decode's head does.
@@ -180,7 +180,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	}
 	astride := s.rowsStride(reach)
 	// Across sessions a row's reach is its own session's, which may run
-	// past the leading State's context, where rowsStride stops.
+	// past the leading instance's context, where rowsStride stops.
 	if len(s.rowOwn) > 0 && astride < attStride(reach+s.m.sinkSlot()) {
 		r := scoreReachMin
 		for r < reach {
@@ -356,7 +356,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 }
 
 // BatchLogits is row i of the last ForwardBatch.
-func (s *State) BatchLogits(i int) []float32 {
+func (s *Instance) BatchLogits(i int) []float32 {
 	nv := s.c.NVocab
 	return s.blogits[i*nv : (i+1)*nv]
 }
@@ -389,7 +389,7 @@ func (errBatchDevice) Error() string {
 // rowsAttn is a ragged step's attention fan-out over (row, head) units, one
 // block's: what rowsHost hands the pool.
 type rowsAttn struct {
-	s                               *State
+	s                               *Instance
 	l                               *layer
 	li, kvli, unitHeads, nh         int
 	seq, pos                        []int

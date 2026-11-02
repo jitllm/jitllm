@@ -97,7 +97,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		st := m.NewState(len(prompt) + gen + 1)
+		st := m.NewInstance(len(prompt) + gen + 1)
 		defer st.Close()
 		st.SetDevice(g)
 		if st.GPULayers() != m.Cfg.NLayer {
@@ -133,7 +133,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	}
 	if os.Getenv("JITLLM_MOE_HOST") != "" {
 		// Which arm is further from the host, measured rather than guessed.
-		st := m.NewState(len(prompt) + 1)
+		st := m.NewInstance(len(prompt) + 1)
 		hl, err := st.Prefill(prompt)
 		st.Close()
 		if err != nil {
@@ -187,7 +187,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 // hostArgmax is the host's greedy choice after the prompt and prefix.
 func hostArgmax(t *testing.T, m *Model, prompt, prefix []int32) int32 {
 	t.Helper()
-	st := m.NewState(len(prompt) + len(prefix) + 1)
+	st := m.NewInstance(len(prompt) + len(prefix) + 1)
 	defer st.Close()
 	lg, err := st.Prefill(append(append([]int32{}, prompt...), prefix...))
 	if err != nil {

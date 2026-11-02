@@ -92,7 +92,7 @@ func (m *Model) kevDevHead() *nn.KevHead {
 	return m.kevDev
 }
 
-// kevOnDevice runs the head on the State's device when its output projection
+// kevOnDevice runs the head on the instance's device when its output projection
 // is there: the pointer row and the option rows go up, the scores come back.
 // false: the host's generated head runs it. A device that has no room for
 // the head declines it as it declines a block (kevDevWhy says why); the
@@ -217,7 +217,7 @@ func (d *Decider) kevRows(ids []int32, mk []int, v int) ([]float32, error) {
 	return d.kevHead(ids, v)
 }
 
-// kevBegin readies the State for a prompt whose option ends are at mk: every
+// kevBegin readies the instance for a prompt whose option ends are at mk: every
 // row it prefills, in as many calls as it likes, is kept for the head.
 func (d *Decider) kevBegin(mk []int) {
 	r, s := d.kev, d.st

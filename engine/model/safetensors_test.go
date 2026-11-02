@@ -47,8 +47,8 @@ func greedy(t testing.TB, path, prompt string, n int) (ids []int32, margins []fl
 		t.Fatalf("no tokenizer: %v", m.TokErr)
 	}
 	in := m.Vocab.Encode(prompt, true)
-	st := m.NewState(len(in) + n + 1)
-	// A State owns a worker pool; leaking one leaves DecodeCores() threads
+	st := m.NewInstance(len(in) + n + 1)
+	// An instance owns a worker pool; leaking one leaves DecodeCores() threads
 	// spinning for the rest of the test binary.
 	defer st.Close()
 	logits, err := st.Prefill(in)

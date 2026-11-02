@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestSpecDistIsTheDrawsDistribution holds State.dist -- the distribution
+// TestSpecDistIsTheDrawsDistribution holds Instance.dist -- the distribution
 // speculative sampling accepts and resamples by -- to the one Sample draws
 // from, in float64 (distRef): over a real model's logits, at temperatures
 // either side of 1 with top-p and min-p cutting, with a top-k (within the
@@ -24,7 +24,7 @@ func TestSpecDistIsTheDrawsDistribution(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	st := m.NewState(32)
+	st := m.NewInstance(32)
 	defer st.Close()
 	lg, err := st.Prefill([]int32{1, 450, 3014, 471, 263})
 	if err != nil {

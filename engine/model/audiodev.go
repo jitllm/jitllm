@@ -10,8 +10,8 @@ import (
 // The audio tower's blocks on a device: each FastConformer block is one
 // convolutional-tower block (nn.ConvConformer), a program of generated
 // kernels over a scratch of the longest clip's rows, placed through an
-// encoder segment State over the audio blocks (the one placement path,
-// State.offerRange) and run by ConvLayers, the clip's rows on the card from
+// encoder segment instance over the audio blocks (the one placement path,
+// Instance.offerRange) and run by ConvLayers, the clip's rows on the card from
 // block to block. The front end, the subsampling, the adapter and the
 // residual correction stay on the host.
 
@@ -46,10 +46,10 @@ func (a *audioTower) audioPE(r int) []float32 {
 	return pe
 }
 
-// audState is the segment State the audio blocks are placed through, on the
+// audInstance is the segment instance the audio blocks are placed through, on the
 // Embedder's JIT.
-func (m *Model) audState(j *nn.JIT) *State {
-	s := m.encState(j)
+func (m *Model) audInstance(j *nn.JIT) *Instance {
+	s := m.encInstance(j)
 	s.lo, s.hi = m.audioFirst(), m.audioFirst()+len(m.audio.blocks)
 	// The (empty) cache over this segment's blocks, as encState makes the
 	// encoder's: a history no block keeps.
@@ -61,7 +61,7 @@ func (m *Model) audState(j *nn.JIT) *State {
 }
 
 // audPlan is audio block li's plan for a device.
-func (s *State) audPlan(li int) *nn.LayerPlan {
+func (s *Instance) audPlan(li int) *nn.LayerPlan {
 	a := s.m.audio
 	cf := &a.cfg
 	d := int(cf.NEmbd)
@@ -78,7 +78,7 @@ func (s *State) audPlan(li int) *nn.LayerPlan {
 }
 
 // audWeights is audio block li's weights for a device.
-func (s *State) audWeights(li int) nn.LayerWeights {
+func (s *Instance) audWeights(li int) nn.LayerWeights {
 	a := s.m.audio
 	b := &a.blocks[li-s.m.audioFirst()]
 	w := nn.LayerWeights{
@@ -103,7 +103,7 @@ func (s *State) audWeights(li int) nn.LayerWeights {
 	return w
 }
 
-// setAudioDevice places the audio blocks on d through their segment State,
+// setAudioDevice places the audio blocks on d through their segment instance,
 // every one the device takes; nil takes them to the CPU.
 func (e *Embedder) setAudioDevice(d nn.Device) error {
 	if e.m.audio == nil {
@@ -113,7 +113,7 @@ func (e *Embedder) setAudioDevice(d nn.Device) error {
 		if d == nil {
 			return nil
 		}
-		e.audSeg = e.m.audState(e.jit)
+		e.audSeg = e.m.audInstance(e.jit)
 	}
 	e.audSeg.enc.violation = e.violation
 	return e.audSeg.SetDeviceLayers(d, -1)

@@ -13,8 +13,8 @@ import (
 )
 
 // TestABKQuantAccsEndToEnd tests accumulator-chain differences in decode,
-// at the shipping thread count. Each State gets its own emitted kernel via
-// nn.WithAccs set between NewState calls.
+// at the shipping thread count. Each instance gets its own emitted kernel via
+// nn.WithAccs set between NewInstance calls.
 func TestABKQuantAccsEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("opens a model")
@@ -31,10 +31,10 @@ func TestABKQuantAccsEndToEnd(t *testing.T) {
 
 	const rounds, iters = 21, 8
 	ids := m.Vocab.Encode("The capital of France is", true)
-	// One arm: a State plus the logits it last produced. bench.AB alternates
+	// One arm: an instance plus the logits it last produced. bench.AB alternates
 	// them, so each advances its own position and its own KV cache.
 	type arm struct {
-		st *State
+		st *Instance
 		lg []float32
 	}
 	mk := func(accs string) *arm {
@@ -44,7 +44,7 @@ func TestABKQuantAccsEndToEnd(t *testing.T) {
 		}
 		// WithTune(TuneOff) keeps the pack tuner out of the measurement.
 		m.jit = []nn.Option{nn.WithAccs(n), nn.WithTune(nn.TuneOff)}
-		st := m.NewState(len(ids) + rounds*iters*2 + 8)
+		st := m.NewInstance(len(ids) + rounds*iters*2 + 8)
 		a := &arm{st: st}
 		for _, id := range ids {
 			if a.lg, err = st.Forward(id); err != nil {

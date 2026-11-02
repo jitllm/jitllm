@@ -23,8 +23,8 @@ package model
 type linRows struct {
 	on bool
 	r  int
-	// ref is WithLinearRowByRow, copied when the State is made; a test sets
-	// it on one of two States over one model.
+	// ref is WithLinearRowByRow, copied when the instance is made; a test sets
+	// it on one of two instances over one model.
 	ref bool
 	// mixed is the convolved projection (wq, or ssm_in); z the output gate
 	// (or KDA's gate through its rank-kDim pair, or the short convolution's

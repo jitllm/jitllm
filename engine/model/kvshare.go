@@ -31,10 +31,10 @@ import (
 //     restore's truncation, a window's release, Close), never handed to the
 //     session's page pool, which would recycle memory others still read.
 //   - A shared page does not move to a device for one of its holders: the
-//     block stays on the host (State.migrateKV refuses, counted by
+//     block stays on the host (Instance.migrateKV refuses, counted by
 //     KVSharedRefusals). A device page shared between sessions is not
 //     implemented; a session with blocks on a device does not share
-//     (State.ShareKV).
+//     (Instance.ShareKV).
 //   - A recurrent layer's summary is not paged by position: it is kept as a
 //     restore point beside the pages (recpoint.go), a copy of a state that
 //     moves on, through the store's Get and Set. A batch is refused: its
@@ -337,7 +337,7 @@ func (m *SharedStore) forget(e *sharedPage) {
 // implemented).
 // UnshareKV ends ShareKV: the session's references go, and it keeps no store
 // and no namespace. The sequence starts over (Reset).
-func (s *State) UnshareKV() {
+func (s *Instance) UnshareKV() {
 	if s.kv.share == nil {
 		return
 	}
@@ -350,7 +350,7 @@ func (s *State) UnshareKV() {
 	s.kv.ns = ""
 }
 
-func (s *State) ShareKV(st *SharedStore) error {
+func (s *Instance) ShareKV(st *SharedStore) error {
 	switch {
 	case st == nil:
 		return fmt.Errorf("model: ShareKV wants a store")
@@ -368,7 +368,7 @@ func (s *State) ShareKV(st *SharedStore) error {
 	}
 	s.kv.store, s.kv.share = st, st
 	if s.kv.devAt == nil {
-		s.kv.devAt = s.kvDevAt
+		s.kv.devAt = s.devAtFn()
 	}
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		s.kv.layers[li].sh = st
@@ -378,7 +378,7 @@ func (s *State) ShareKV(st *SharedStore) error {
 
 // KVSharedBytes is what this session reads from pages it shares: held once
 // in its SharedStore, and not counted by KVBytes.
-func (s *State) KVSharedBytes() uint64 {
+func (s *Instance) KVSharedBytes() uint64 {
 	var n uint64
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		n += s.kv.layers[li].sharedBytes()
@@ -388,7 +388,7 @@ func (s *State) KVSharedBytes() uint64 {
 
 // KVSharedRefusals is how many times a block holding shared pages was kept
 // off a device: a shared page does not move for one of its holders.
-func (s *State) KVSharedRefusals() int64 { return s.kv.shareRefused }
+func (s *Instance) KVSharedRefusals() int64 { return s.kv.shareRefused }
 
 // isShared says page n aliases a SharedStore's page.
 func (s *kvPages) isShared(n int) bool { return n < len(s.shared) && s.shared[n] }
@@ -557,14 +557,14 @@ func (kc *kvCache) unshareAll() {
 }
 
 // kvShareDevice says the session's device names and maps its kv pages.
-func (s *State) kvShareDevice() bool {
+func (s *Instance) kvShareDevice() bool {
 	_, ok := s.ld.(nn.KVShareDevice)
 	return ok
 }
 
 // kvDevAt is the device holding block li's history when it names its pages
 // (nn.KVShareDevice), nil when the block is on the host.
-func (s *State) kvDevAt(li int) nn.KVShareDevice {
+func (s *Instance) kvDevAt(li int) nn.KVShareDevice {
 	if !s.devAt(li) {
 		return nil
 	}

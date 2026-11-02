@@ -50,7 +50,7 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 				"and the clerk counted barrels of salt on the upper floor. ", 40)
 			ids := m.Vocab.Encode(text, true)[:200]
 			drive := []int32{ids[3], ids[17], ids[40], ids[7]}
-			run := func(s *State) [][]float32 {
+			run := func(s *Instance) [][]float32 {
 				l, err := s.Prefill(ids)
 				if err != nil {
 					t.Fatal(err)
@@ -64,7 +64,7 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 				}
 				return out
 			}
-			host := m.NewState(len(ids) + 8)
+			host := m.NewInstance(len(ids) + 8)
 			want := run(host)
 			host.Close()
 			for _, arm := range []struct {
@@ -94,9 +94,9 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 }
 
 // stagedGemmArm is one arm of TestStagedGemmPrefillMatchesTheHost on g.
-func stagedGemmArm(t *testing.T, m *Model, g *tier.GPU, seq int, run func(*State) [][]float32, want [][]float32, noInt8 bool, deep int) {
+func stagedGemmArm(t *testing.T, m *Model, g *tier.GPU, seq int, run func(*Instance) [][]float32, want [][]float32, noInt8 bool, deep int) {
 	t.Helper()
-	dev := m.NewState(seq)
+	dev := m.NewInstance(seq)
 	dev.SetDevice(g)
 	if dev.GPULayers() != m.Cfg.NLayer {
 		dev.Close()

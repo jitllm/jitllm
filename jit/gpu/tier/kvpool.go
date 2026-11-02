@@ -39,7 +39,7 @@ func (k kvGeom) vWords(p int) int {
 }
 
 // seqID names a sequence: a session, and the base of its rows' slots (0 for a
-// single State).
+// single instance).
 type seqID struct {
 	sid  uint64
 	base int

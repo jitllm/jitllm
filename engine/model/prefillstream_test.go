@@ -52,7 +52,7 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 			strconv.FormatUint(probe.WeightBytes()/2+room*probe.WeightBytes()/uint64(probeLayers), 10)
 	}
 	spec := specFor(0)
-	host := probe.NewState(len(prompt) + gen + 1)
+	host := probe.NewInstance(len(prompt) + gen + 1)
 	want := []([]float32){}
 	lg, err := host.Prefill(prompt)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 	// configuration the gate tests: no blocks left on the host or none on
 	// the card. done frees the arm.
 	type arm struct {
-		st       *State
+		st       *Instance
 		g        *tier.GPU
 		resident int
 		got      [][]float32
@@ -91,7 +91,7 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 			g.Close()
 			t.Fatal(err)
 		}
-		st := m.NewState(len(prompt) + gen + 1)
+		st := m.NewInstance(len(prompt) + gen + 1)
 		var once sync.Once
 		done := func() { once.Do(func() { st.Close(); g.Close(); m.Close() }) }
 		t.Cleanup(done)

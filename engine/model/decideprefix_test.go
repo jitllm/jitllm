@@ -311,8 +311,8 @@ func devicePrefixViolation(t *testing.T, m *Model, g *tier.GPU, spec string, n i
 	b := append(append([]int32(nil), a...), ids(2000, 3, 300)...)
 	d := append(append([]int32(nil), a...), ids(3000, 5, 300)...)
 	b2 := append(append([]int32(nil), b...), 42)
-	open := func(on *tier.GPU, store *SharedStore) *State {
-		st := m.NewState(4096)
+	open := func(on *tier.GPU, store *SharedStore) *Instance {
+		st := m.NewInstance(4096)
 		if err := st.SetDeviceLayers(on, n); err != nil {
 			t.Fatal(err)
 		}

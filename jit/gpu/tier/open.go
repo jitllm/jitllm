@@ -1037,7 +1037,7 @@ func (g *GPU) Budgets() []Budget {
 // the devices on the host's memory have charged to their pool (blocks, KV
 // pages, scratch, the driver's rounding), plus the packed arena's limit. The
 // host takes it off its own budgets (model.Model.SetPageBudget,
-// model.State.SetMemBudget), and it moves with placement: an integrated GPU
+// model.Instance.SetMemBudget), and it moves with placement: an integrated GPU
 // holding nothing costs the host nothing, however large the pool it may grow
 // into. Zero when no device is on the host's memory and the arena is off.
 //

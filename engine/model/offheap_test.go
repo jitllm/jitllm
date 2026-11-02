@@ -39,7 +39,7 @@ func offHeapGate(t *testing.T, path string) {
 			m.Close()
 			t.Fatalf("off-heap %v, but the model mapped %d bytes", off, jlm.OffHeapBytes()-base)
 		}
-		s := m.NewState(64)
+		s := m.NewInstance(64)
 		ids := m.Vocab.Encode("The capital of France is", true)
 		lg, err := s.Prefill(ids)
 		if err != nil {
@@ -94,7 +94,7 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 	}
 	budget := 3 * m.PageSize()
 	m.SetPageBudget(budget)
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	lg, err := st.Prefill(m.Vocab.Encode("The capital of France is", true))
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 	}
 	const steps = 10
 	decode := func(m *Model) []int32 {
-		st := m.NewState(64)
+		st := m.NewInstance(64)
 		defer st.Close()
 		lg, err := st.Prefill(m.Vocab.Encode("The capital of France is", true))
 		if err != nil {

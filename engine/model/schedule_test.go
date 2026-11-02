@@ -64,7 +64,7 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 			// The oracle: each sequence alone, greedy, same budget.
 			solo := make([][]int32, nreq)
 			for r := range prompts {
-				s := m.NewState(maxSeq)
+				s := m.NewInstance(maxSeq)
 				lg, err := s.Prefill(prompts[r])
 				if err != nil {
 					s.Close()
@@ -82,7 +82,7 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 				solo[r] = out
 			}
 
-			sc := NewScheduler(m, nseq, maxSeq)
+			sc := NewRowScheduler(m, nseq, maxSeq)
 			defer sc.Close()
 			seqs := make([]*Seq, nreq)
 			for r := range prompts {
@@ -135,7 +135,7 @@ func TestSchedulerStopsOnStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	sc := NewScheduler(m, 2, 32)
+	sc := NewRowScheduler(m, 2, 32)
 	defer sc.Close()
 	// Stop on whatever the first token turns out to be, so the sequence ends
 	// after exactly one token regardless of what the model says.
@@ -176,7 +176,7 @@ func TestSchedulerRejectsAnOversizedPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	sc := NewScheduler(m, 1, 16)
+	sc := NewRowScheduler(m, 1, 16)
 	defer sc.Close()
 	big := make([]int32, 64) // longer than maxSeq
 	for i := range big {

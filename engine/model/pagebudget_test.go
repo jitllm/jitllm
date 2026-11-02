@@ -61,7 +61,7 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 	// And the paged model answers identically: residency is a memory decision,
 	// never an arithmetic one.
 	ids := []int32{1, 7, 3, 11}
-	a, b := full.NewState(16), tight.NewState(16)
+	a, b := full.NewInstance(16), tight.NewInstance(16)
 	defer a.Close()
 	defer b.Close()
 	for _, id := range ids {
@@ -163,7 +163,7 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string) {
 	// is the only variable.
 	want := make([][]float32, nseq)
 	for i := range streams {
-		st := tight.NewState(steps + 1)
+		st := tight.NewInstance(steps + 1)
 		for _, id := range streams[i] {
 			lg, err := st.Forward(id)
 			if err != nil {

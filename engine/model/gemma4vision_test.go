@@ -233,7 +233,7 @@ func g4vRun(t *testing.T, m *Model, g *g4vGolden, bidir bool) [][]float32 {
 // model's blocks and the tower's.
 func g4vRunOn(t *testing.T, m *Model, g *g4vGolden, bidir bool, gpu *tier.GPU) [][]float32 {
 	t.Helper()
-	st := m.NewState(8)
+	st := m.NewInstance(8)
 	pic, err := st.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	st.Close()
 	if err != nil {
@@ -244,7 +244,7 @@ func g4vRunOn(t *testing.T, m *Model, g *g4vGolden, bidir bool, gpu *tier.GPU) [
 	}
 	spans := []Span{{Tokens: append(append([]int32(nil), g.Pre...), g.BOI)},
 		{Picture: pic, Bidir: bidir}, {Tokens: append([]int32{g.EOI}, g.Post...)}}
-	s := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
+	s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
 	defer s.Close()
 	if gpu != nil {
 		if err := s.SetDevice(gpu); err != nil {

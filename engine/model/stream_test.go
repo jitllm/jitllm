@@ -49,7 +49,7 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		defer s.Close()
 		s.SetDeviceLayers(g, m.Cfg.NLayer)
 		placed := s.GPULayers()
@@ -253,7 +253,7 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		defer s.Close()
 		s.SetDeviceLayers(g, m.Cfg.NLayer)
 		// An auto-streamed placement arms the trial against the host; a
@@ -321,7 +321,7 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
-		s := m.NewState(64)
+		s := m.NewInstance(64)
 		s.SetDeviceLayers(g, m.Cfg.NLayer)
 		// The CLI turns seam tuning off after placement; that must not
 		// disarm the trial.

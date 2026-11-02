@@ -2,14 +2,14 @@ package model
 
 import "sync"
 
-// kvPagePool is the host KV pages closed States gave back, by page size, for
-// the next State's history to grow into.
+// kvPagePool is the host KV pages closed instances gave back, by page size, for
+// the next session's history to grow into.
 //
-// A request is a fresh State, and its history was a fresh make per page, the
+// A request is a fresh instance, and its history was a fresh make per page, the
 // largest thing such a request allocates. Handed back, the pages cost the
 // collector nothing per request.
 //
-// It holds at most one State's worth -- the largest history any single State
+// It holds at most one instance's worth -- the largest history any single instance
 // has handed back -- so a burst of concurrent sessions does not leave its
 // peak resident after it ends. A reused page is cleared: make's zeros are what
 // every reader of an unwritten position has always seen.

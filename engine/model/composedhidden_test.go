@@ -73,7 +73,7 @@ func composedHidden(t *testing.T, m *Model, dev string, parts tier.Parts, k int,
 	c := m.Cfg
 	prompt := m.Vocab.Encode("The capital of France is", true)
 	rows := m.Vocab.Encode(" Paris, and the capital of Spain is Madrid", false)[:k]
-	s := m.NewState(len(prompt) + len(rows) + 4)
+	s := m.NewInstance(len(prompt) + len(rows) + 4)
 	defer s.Close()
 	s.SetDeviceFallback(false)
 	if err := s.SetDevice(g); err != nil {

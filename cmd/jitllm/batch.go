@@ -13,7 +13,7 @@ import (
 )
 
 // batchCmd decodes one prompt as `-batch` independent sequences in lockstep on
-// one device (model.State.ForwardBatchGreedy, or ForwardBatch with -logits) and
+// one device (model.Instance.ForwardBatchGreedy, or ForwardBatch with -logits) and
 // reports the aggregate rate:
 // the concurrent-serving number, where run reports one conversation's.
 //
@@ -63,7 +63,7 @@ func batchCmd(args []string) error {
 		return fmt.Errorf("batch needs a device; -devices %q opened none", *dev)
 	}
 	defer closeDev()
-	// decode runs the whole batch on a fresh State and returns the wall.
+	// decode runs the whole batch on a fresh instance and returns the wall.
 	// The same capacity both times, so the timed run grows nothing.
 	gen := *n
 	decode := func(n int) (time.Duration, error) {

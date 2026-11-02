@@ -68,7 +68,7 @@ func recPoolCase(t *testing.T, m *Model, dev string, shared bool, ids []int32, s
 		if before != nil {
 			before()
 		}
-		st := m.NewState(len(ids) + steps + 1)
+		st := m.NewInstance(len(ids) + steps + 1)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -116,8 +116,8 @@ func recPoolCase(t *testing.T, m *Model, dev string, shared bool, ids []int32, s
 		reads += r1 - r0
 	}
 	// arrive seats another session and prefills pr; leave closes one.
-	arrive := func(pr string) *State {
-		o := m.NewState(16)
+	arrive := func(pr string) *Instance {
+		o := m.NewInstance(16)
 		noHost(func() {
 			if err := o.SetDevice(g); err != nil {
 				t.Fatal(err)
@@ -128,14 +128,14 @@ func recPoolCase(t *testing.T, m *Model, dev string, shared bool, ids []int32, s
 		}
 		return o
 	}
-	leave := func(o *State) {
+	leave := func(o *Instance) {
 		noHost(func() {
 			if err := o.Close(); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
-	var ahead *State
+	var ahead *Instance
 	with, _ := decode(g, fed, func() { ahead = arrive("Once upon a time") }, func() {
 		// Slots: ahead 0, this session 1. Two arrivals at 2 and 3 grow
 		// every pool twice, carrying the run [0,2) and then [0,3); ahead

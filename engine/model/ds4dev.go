@@ -21,7 +21,7 @@ func (c *Config) streamHead() bool { return c.PredStreams != 0 || c.DSV4() || c.
 // cpuRoleVector): a device's for the streams' expansion in the input rows
 // and their collapse before the head. nil where g is, or binds a tensor the
 // model does not hold.
-func (s *State) streamsPart(g *graph.Graph) *nn.RowsPart {
+func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
 	if g == nil {
 		return nil
 	}
@@ -52,7 +52,7 @@ func (s *State) streamsPart(g *graph.Graph) *nn.RowsPart {
 
 // expandStreams fills every stream of n rows of x from its embedding in
 // stream 0.
-func (s *State) expandStreams(x []float32, n int) error {
+func (s *Instance) expandStreams(x []float32, n int) error {
 	if s.m.Cfg.DSV4() {
 		s.ds4Expand(x, n)
 		return nil
@@ -69,7 +69,7 @@ func (s *State) expandStreams(x []float32, n int) error {
 }
 
 // collapseStreams writes the head's input into stream 0 of n rows of x.
-func (s *State) collapseStreams(x []float32, n int) error {
+func (s *Instance) collapseStreams(x []float32, n int) error {
 	if s.m.Cfg.DSV4() {
 		return s.ds4Collapse(x, n)
 	}
@@ -100,7 +100,7 @@ func ds4PlanOf(c *Config) *nn.DS4Plan {
 // ds4Plan adjusts block li's plan for DeepSeek V4: its compression and its
 // routing, the query latent, and no other model's indexer (the DS4Plan
 // carries this one's).
-func (s *State) ds4Plan(li int, plan *nn.LayerPlan) {
+func (s *Instance) ds4Plan(li int, plan *nn.LayerPlan) {
 	c := s.m.Cfg
 	if !c.DSV4() {
 		return
@@ -112,7 +112,7 @@ func (s *State) ds4Plan(li int, plan *nn.LayerPlan) {
 }
 
 // ds4Weights adds block li's DeepSeek V4 tensors to w.
-func (s *State) ds4Weights(li int, w *nn.LayerWeights) {
+func (s *Instance) ds4Weights(li int, w *nn.LayerWeights) {
 	l := &s.m.layers[li]
 	d := l.ds4
 	if d == nil {
@@ -139,16 +139,16 @@ func (s *State) ds4Weights(li int, w *nn.LayerWeights) {
 // tokenIDs hands the device the rows' token ids for the call about to be
 // made (nn.TokenDevice): DeepSeek V4's hash blocks route by them. Nothing
 // where no block does.
-func (s *State) tokenIDs(ids []int32) {
+func (s *Instance) tokenIDs(ids []int32) {
 	if s.ldTokens != nil && s.m.Cfg.NHashLayers > 0 {
 		s.ldTokens.SetTokenIDs(ids)
 	}
 }
 
 // migrateEnt moves a DeepSeek V4 block's entries beside its rows: every
-// sequence of the State that has history, row r's pos[r] positions closing
+// sequence of the instance that has history, row r's pos[r] positions closing
 // pos[r]/rate entries. Nothing on a block that keeps none.
-func (s *State) migrateEnt(li int, pos []int, base func(r int) int, toDevice bool) bool {
+func (s *Instance) migrateEnt(li int, pos []int, base func(r int) int, toDevice bool) bool {
 	rate := s.kv.entRate(li)
 	if rate == 0 {
 		return true

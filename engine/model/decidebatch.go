@@ -245,7 +245,7 @@ func (d *Decider) runJobs(jobs []*batchJob) error {
 	}
 	if (len(jobs) == 1 || d.nonCausal()) && d.violation != "batch-alone" {
 		// One prompt has no rows to share a step with: it runs as Decide
-		// runs it, on the Decider's own State, where the head reads back
+		// runs it, on the Decider's own instance, where the head reads back
 		// the label logits alone (forwardSpans) rather than a row's every
 		// logit, and no batch session is stepped. A non-causal model's
 		// prompts each run so too: a batch slot's rows attend causally
@@ -294,7 +294,7 @@ func (d *Decider) runJobs(jobs []*batchJob) error {
 //
 // A Decider with a prompt cache (SetPromptCache) runs its requests alone
 // as well: a batch session's page holds every row's slots, so no row's
-// tokens name it (State.SetCacheKey), and alone each prompt restores what it
+// tokens name it (Instance.SetCacheKey), and alone each prompt restores what it
 // shares with the last and prefills the rest.
 func (d *Decider) batchAlone() bool {
 	if d.kind == jlm.DecisionLaya || d.kind == jlm.DecisionClef || d.st == nil || d.violation == "batch-alone" {
@@ -361,9 +361,9 @@ func (d *Decider) layaPacked(jobs []*batchJob) error {
 }
 
 // batchSession is the Decider's batch session, at least rows wide, placed on
-// the Decider's device as its own State is. It is kept between batches; a
+// the Decider's device as its own instance is. It is kept between batches; a
 // wider batch replaces it.
-func (d *Decider) batchSession(rows int) (*Scheduler, error) {
+func (d *Decider) batchSession(rows int) (*RowScheduler, error) {
 	if d.batch != nil && len(d.batch.live) >= rows {
 		return d.batch, nil
 	}
@@ -371,7 +371,7 @@ func (d *Decider) batchSession(rows int) (*Scheduler, error) {
 		d.batch.Close()
 		d.batch = nil
 	}
-	sc := NewScheduler(d.m, rows, d.st.MaxSeq())
+	sc := NewRowScheduler(d.m, rows, d.st.MaxSeq())
 	if d.dev != nil {
 		if err := sc.st.SetDeviceLayers(d.dev, d.devMax); err != nil {
 			sc.Close()
@@ -392,9 +392,9 @@ func (d *Decider) BatchDeviceBlocks() int {
 }
 
 // BatchStats is what the Decider's batch session has run.
-func (d *Decider) BatchStats() SchedulerStats {
+func (d *Decider) BatchStats() RowSchedulerStats {
 	if d.batch == nil {
-		return SchedulerStats{}
+		return RowSchedulerStats{}
 	}
 	return d.batch.Stats()
 }

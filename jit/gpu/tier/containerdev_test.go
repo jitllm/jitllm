@@ -65,7 +65,7 @@ func TestContainerAgreesHostAndDevice(t *testing.T) {
 		}
 		defer m.Close()
 		ids := m.Vocab.Encode(prompt, true)
-		st := m.NewState(len(ids) + n + 1)
+		st := m.NewInstance(len(ids) + n + 1)
 		defer st.Close()
 		placed := 0
 		if dev {

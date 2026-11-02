@@ -503,7 +503,7 @@ func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	// sched.WithCores. Nothing between them reads the environment.
 	//
 	// The pool is a view of the process's workers for these cores (sched.Shared):
-	// every State builds a JIT, and two States each with workers of their own
+	// every instance builds a JIT, and two instances each with workers of their own
 	// would be two pools spinning on the same cores. Views take turns a region
 	// at a time, so sessions on one host run beside each other.
 	f.pool = sched.Shared(sched.DecodeCores(cfg.Sched...), cfg.Sched...)

@@ -33,7 +33,7 @@ func TestGemma2SoftcapOnDevice(t *testing.T) {
 	// like-for-like: working ~5e-3, the cap skipped ~6e-2, the bound between.
 	m.Cfg.AttnSoftcap = 2
 	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is", true)
-	run := func(st *State) [][]float32 {
+	run := func(st *Instance) [][]float32 {
 		var out [][]float32
 		for _, id := range ids {
 			lg, err := st.Forward(id)
@@ -44,7 +44,7 @@ func TestGemma2SoftcapOnDevice(t *testing.T) {
 		}
 		return out
 	}
-	host := m.NewState(64)
+	host := m.NewInstance(64)
 	want := run(host)
 	host.Close()
 
@@ -53,7 +53,7 @@ func TestGemma2SoftcapOnDevice(t *testing.T) {
 		noDevice(t, "device", err)
 	}
 	defer g.Close()
-	dev := m.NewState(64)
+	dev := m.NewInstance(64)
 	defer dev.Close()
 	dev.SetDeviceLayers(g, -1)
 	if n := dev.GPULayers(); n != m.Cfg.NLayer {

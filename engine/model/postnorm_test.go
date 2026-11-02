@@ -278,7 +278,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 				if m.Vocab.AddBOS && m.Vocab.BOS >= 0 {
 					tk[0] = int32(m.Vocab.BOS)
 				}
-				s := m.NewState(nctx)
+				s := m.NewInstance(nctx)
 				defer s.Close()
 				if g != nil {
 					if err := s.SetDevice(g); err != nil {

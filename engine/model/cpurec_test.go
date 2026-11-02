@@ -63,7 +63,7 @@ func TestComposedCPURecurrentPromptsServe(t *testing.T) {
 				if len(ids) < n+decode {
 					t.Fatalf("%d tokens, %d wanted", len(ids), n+decode)
 				}
-				s := m.NewState(n + decode + 1)
+				s := m.NewInstance(n + decode + 1)
 				defer s.Close()
 				s.cpu.fault = f
 				lg, err := s.Prefill(ids[:n])

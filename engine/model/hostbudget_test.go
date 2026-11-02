@@ -50,7 +50,7 @@ func TestHostBudgetLosesWhatAnIntegratedDeviceHolds(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer m.Close()
-	st := m.NewState(64)
+	st := m.NewInstance(64)
 	defer st.Close()
 
 	const budget = 24 << 30

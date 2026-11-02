@@ -39,11 +39,11 @@ func kimiTowerGate(t *testing.T, tw *Tower, g *qvlGolden, clean float64) {
 	t.Helper()
 	for _, v := range []struct {
 		name  string
-		mut   func(*State)
+		mut   func(*Instance)
 		fault towerFault
 		neox  bool
 	}{
-		{"no 2-D rotary", func(s *State) {
+		{"no 2-D rotary", func(s *Instance) {
 			gh, gw := s.patchGrid()
 			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
 			for i := 0; i < len(s.vis.ropeSC); i += 2 {
@@ -82,7 +82,7 @@ func TestKimiVLTextMatchesTransformers(t *testing.T) {
 			m, g := openQVL(t, name)
 			defer m.Close()
 			n := len(g.Pre) + g.grid().Rows() + len(g.Post) + len(g.Cont) + 1
-			run := func(st *State, embd []float32) [][]float32 {
+			run := func(st *Instance, embd []float32) [][]float32 {
 				defer st.Close()
 				lg, err := st.PrefillMixed(Span{Tokens: g.Pre}, Span{Embd: embd, Grid: g.grid()}, Span{Tokens: g.Post})
 				if err != nil {
@@ -97,7 +97,7 @@ func TestKimiVLTextMatchesTransformers(t *testing.T) {
 				}
 				return out
 			}
-			host, flips := qvlWorst(g, run(m.NewState(n), g.Image.Embd))
+			host, flips := qvlWorst(g, run(m.NewInstance(n), g.Image.Embd))
 			if !(host < c6NMSE) || flips > 0 {
 				t.Fatalf("host: worst NMSE %.3e against Moonshot's model (bound %.0e), %d argmax flips", host, c6NMSE, flips)
 			}
@@ -106,7 +106,7 @@ func TestKimiVLTextMatchesTransformers(t *testing.T) {
 			for r := 0; r < len(rev)/E; r++ {
 				copy(rev[r*E:], g.Image.Embd[len(rev)-(r+1)*E:len(rev)-r*E])
 			}
-			bad, _ := qvlWorst(g, run(m.NewState(n), rev))
+			bad, _ := qvlWorst(g, run(m.NewInstance(n), rev))
 			t.Logf("host %.3e; the image's rows reversed (the violation) %.3e", host, bad)
 			if !(bad > 1e4*math.Max(host, 1e-12)) {
 				t.Fatalf("the rows reversed read %.3e against %.3e: the gate cannot see their order", bad, host)
@@ -117,7 +117,7 @@ func TestKimiVLTextMatchesTransformers(t *testing.T) {
 					t.Logf("%s: not present", spec)
 					continue
 				}
-				st := m.NewState(n)
+				st := m.NewInstance(n)
 				st.SetDeviceLayers(gpu, -1)
 				if got := st.GPULayers(); got != m.Cfg.NLayer {
 					t.Fatalf("%s placed %d of %d blocks: %v", spec, got, m.Cfg.NLayer, gpu.Err())

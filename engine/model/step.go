@@ -10,11 +10,11 @@ import (
 	"github.com/jitllm/jitllm/jit"
 )
 
-// Step decodes one token for each State at once, tokens[i] for states[i], and
-// returns each State's logits, which stay valid until that State's next step.
+// Step decodes one token for each instance at once, tokens[i] for states[i], and
+// returns each session's logits, which stay valid until that instance's next step.
 // It is StepRuns with every run one token long and every run's logits wanted.
 // The returned slice is states[0]'s, as StepRuns' is its first run's.
-func Step(states []*State, tokens []int32) ([][]float32, error) {
+func Step(states []*Instance, tokens []int32) ([][]float32, error) {
 	if len(states) != len(tokens) {
 		return nil, fmt.Errorf("model: %d states and %d tokens", len(states), len(tokens))
 	}
@@ -25,38 +25,44 @@ func Step(states []*State, tokens []int32) ([][]float32, error) {
 	s0.stepRuns = slices.Grow(s0.stepRuns[:0], len(states))[:len(states)]
 	runs := s0.stepRuns
 	for i, st := range states {
-		runs[i] = Run{State: st, Tokens: tokens[i : i+1], Logits: true}
+		runs[i] = Run{Instance: st, Tokens: tokens[i : i+1], Logits: true}
 	}
 	out, err := StepRuns(runs)
 	clear(runs)
 	return out, err
 }
 
-// Run is one State's part of a step across sessions (StepRuns): Tokens are
-// the State's next len(Tokens) positions -- one token for a session that is
+// Run is one instance's part of a step across sessions (StepRuns): Tokens are
+// the instance's next len(Tokens) positions -- one token for a session that is
 // decoding, a chunk of its prompt for one being admitted -- and Logits says
 // whether the caller wants the logits after the last of them. A decoding
 // session does; a prompt chunk that does not end its prompt does not, and its
 // rows then cost no projection of the head.
 //
 // A run may carry a picture instead, or as well: Encode is a picture the
-// State encodes in its vision segment in this step -- part of the tower or all
+// Instance encodes in its vision segment in this step -- part of the tower or all
 // of it -- and Spans, in place of Tokens, is a chunk of a mixed prompt (tokens
-// and a picture's rows) the State prefills in this step.
+// and a picture's rows) the instance prefills in this step.
+//
+// A run names its session (Session), which holds a lease on the instance
+// the step runs on (Session.Acquire); every session of one StepRuns leases
+// the same instance, and StepRuns sets the run's instance to it. A run of an
+// instance's own session names the instance (instance) instead.
 type Run struct {
-	State  *State
-	Tokens []int32
-	Spans  []Span
-	Logits bool
-	Encode *Encode
+	Instance   *Instance
+	Session *Session
+	Tokens  []int32
+	Spans   []Span
+	Logits  bool
+	Encode  *Encode
 }
 
-// Encode is a picture encoded in the steps of StepRuns: its State's vision
+// Encode is a picture encoded in the steps of StepRuns: its instance's vision
 // segment runs the tower's blocks over the picture's rows in the same step the
 // other sessions decode in, and an encode may be spread over several steps by
 // blocks -- never by rows, which attend to each other.
 type Encode struct {
-	// Picture is the picture to encode (State.Picture).
+	// Picture is the picture to encode (Instance.Picture).
 	Picture *Picture
 	// Blocks is the most tower blocks one step runs; zero runs the rest.
 	Blocks int
@@ -73,7 +79,7 @@ type Encode struct {
 }
 
 // step advances the encode by one step's blocks on st's vision segment.
-func (e *Encode) step(st *State) error {
+func (e *Encode) step(st *Instance) error {
 	if e.Done {
 		return nil
 	}
@@ -127,44 +133,44 @@ func (e *Encode) step(st *State) error {
 
 // begin starts the encode's current pass: the whole picture for every tower
 // but a tiling one, whose squares are each their own pass.
-func (e *Encode) begin(vs *State, one int) error {
+func (e *Encode) begin(vs *Instance, one int) error {
 	p := e.Picture
 	return vs.encodeBegin(p.Pixels[e.tile*one:(e.tile+1)*one], p.GH, p.GW)
 }
 
 // MaxStepRows is the most rows -- every run's tokens together -- one joint
-// step carries; a StepRuns over more goes one State after another.
+// step carries; a StepRuns over more goes one instance after another.
 const MaxStepRows = nn.MaxDevicePrefillChunk
 
-// StepRuns runs one step for several States, each taking its run of tokens at
-// its own next positions, and returns, run by run, the State's logits after
+// StepRuns runs one step for several instances, each taking its run of tokens at
+// its own next positions, and returns, run by run, the session's logits after
 // the run's last token where the run wants them and nil where it does not. The
-// logits stay valid until that State's next step. Each State's position moves
+// logits stay valid until that instance's next step. Each session's position moves
 // on by its run's length.
 //
-// States are separate sessions -- separate users -- and by themselves they
+// instances are separate sessions -- separate users -- and by themselves they
 // take the device one after another, each reading every block's weights for
 // its own tokens. When they share a model and a device that holds every block
 // and the head, the runs go as rows of one ragged step (nn.SessionStepper):
 // the weights are read once for every row, each row's history -- its attention
-// pages, and a hybrid's recurrent state -- stays its own State's, and a
+// pages, and a hybrid's recurrent state -- stays its own instance's, and a
 // session's chunk sees its own earlier rows causally, as its prefill would.
 // So a server can admit a new session's prompt in chunks inside the steps the
 // other sessions decode in, and none of them waits for the whole prompt.
 //
-// A picture is work of the same step: a run's Encode runs its State's vision
+// A picture is work of the same step: a run's Encode runs its instance's vision
 // segment -- the tower's blocks over the picture's rows, which are different
 // weights from the text rows' and so their own submission -- and a run's Spans
 // prefill a mixed chunk, before the token runs step together. Each answer is
 // the one the run would have had alone.
 //
-// The slice StepRuns returns is its first run's State's and is reused by the
-// next StepRuns that State leads; the logits in it are each State's own, as
+// The slice StepRuns returns is its first run's instance's and is reused by the
+// next StepRuns that instance leads; the logits in it are each instance's own, as
 // above. A step allocates nothing once its sessions are warm.
 //
-// A State appears in at most one run, and every run has at least one token, a
-// span or a picture. Anything that cannot step jointly -- one State, a State
-// on the host, a batched State, more than MaxStepRows rows -- runs one State
+// An instance appears in at most one run, and every run has at least one token, a
+// span or a picture. Anything that cannot step jointly -- one instance, an instance
+// on the host, a batched instance, more than MaxStepRows rows -- runs one instance
 // after another (Prefill for a chunk, Forward for one token), which is the
 // same answer.
 func StepRuns(runs []Run) ([][]float32, error) {
@@ -172,7 +178,7 @@ func StepRuns(runs []Run) ([][]float32, error) {
 }
 
 // StepJoint is StepRuns for runs a caller grouped itself -- the server's
-// decode groups: a lone Steppable State's tokens go through the joint arm too,
+// decode groups: a lone Steppable session's tokens go through the joint arm too,
 // as a step of one session, where StepRuns runs it on the one-at-a-time arm.
 // A row then takes the same step in a group of one as among others.
 func StepJoint(runs []Run) ([][]float32, error) {
@@ -180,13 +186,81 @@ func StepJoint(runs []Run) ([][]float32, error) {
 }
 
 func stepRuns(runs []Run, lone bool) ([][]float32, error) {
-	rows, pictures := 0, false
-	for i, r := range runs {
-		if r.State == nil || (len(r.Tokens) == 0 && r.Spans == nil && r.Encode == nil) {
-			return nil, fmt.Errorf("model: run %d has no State, or no tokens, spans or picture", i)
+	in, err := leasedOn(runs)
+	if err != nil {
+		return nil, err
+	}
+	if in != nil {
+		in.mu.Lock()
+		defer in.mu.Unlock()
+		for i := range runs {
+			if err := in.use(runs[i].Session); err != nil {
+				return nil, err
+			}
+			runs[i].Instance = in
 		}
-		if slices.IndexFunc(runs[:i], func(o Run) bool { return o.State == r.State }) >= 0 {
-			return nil, fmt.Errorf("model: run %d's State is in an earlier run: a State takes one run a step", i)
+		if err := in.use(runs[0].Session); err != nil {
+			return nil, err
+		}
+	}
+	return stepRunsOn(runs, lone)
+}
+
+// leasedOn is the instance the runs' sessions lease, nil for runs of
+// instances' own sessions.
+func leasedOn(runs []Run) (*Instance, error) {
+	var in *Instance
+	for i, r := range runs {
+		if r.Session == nil {
+			if in != nil || i > 0 && runs[0].Session != nil {
+				return nil, fmt.Errorf("model: run %d names no session beside runs that do", i)
+			}
+			continue
+		}
+		if i > 0 && runs[0].Session == nil {
+			return nil, fmt.Errorf("model: run %d names a session beside runs that do not", i)
+		}
+		l := r.Session.lease
+		if l == nil {
+			return nil, fmt.Errorf("model: run %d's session holds no lease (Session.Acquire)", i)
+		}
+		if in != nil && l.Instance != in {
+			return nil, fmt.Errorf("model: run %d's session leases another instance: a step runs on one", i)
+		}
+		in = l.Instance
+	}
+	return in, nil
+}
+
+// sess is the session whose history the run reads and writes.
+func (r *Run) sess() *Session {
+	if r.Session != nil {
+		return r.Session
+	}
+	return r.Instance.Session
+}
+
+// full is the error a run past its session's room is.
+func (r *Run) full() error {
+	if r.Session != nil {
+		return errFull{r.Session.limit, r.Session.limit}
+	}
+	return errFull{r.Instance.maxSeq, r.Instance.reqSeq}
+}
+
+// stepRunsOn is StepRuns with every run's instance its instance and every
+// session where the instance places its blocks.
+func stepRunsOn(runs []Run, lone bool) ([][]float32, error) {
+	rows, pictures := 0, false
+	for i := range runs {
+		r := &runs[i]
+		if r.Instance == nil || (len(r.Tokens) == 0 && r.Spans == nil && r.Encode == nil) {
+			return nil, fmt.Errorf("model: run %d has no instance, or no tokens, spans or picture", i)
+		}
+		for j := range runs[:i] {
+			if runs[j].sess() == r.sess() {
+				return nil, fmt.Errorf("model: run %d's session is in an earlier run: a session takes one run a step", i)
+			}
 		}
 		if r.Spans != nil && len(r.Tokens) > 0 {
 			return nil, fmt.Errorf("model: run %d carries tokens and spans; a chunk is one or the other", i)
@@ -200,8 +274,8 @@ func stepRuns(runs []Run, lone bool) ([][]float32, error) {
 	if ss, ok := stepper(runs, rows); ok {
 		return stepTogether(runs, rows, ss)
 	}
-	if lone && len(runs) == 1 && rows <= MaxStepRows && runs[0].State.Steppable() {
-		return stepTogether(runs, rows, runs[0].State.ldStep)
+	if lone && len(runs) == 1 && rows <= MaxStepRows && runs[0].Instance.Steppable() {
+		return stepTogether(runs, rows, runs[0].Instance.ldStep)
 	}
 	if hostStepper(runs, rows) {
 		return stepHost(runs, rows)
@@ -209,14 +283,19 @@ func stepRuns(runs []Run, lone bool) ([][]float32, error) {
 	if len(runs) == 0 {
 		return nil, nil
 	}
-	out := runs[0].State.stepOut(len(runs))
+	out := runs[0].Instance.stepOut(len(runs))
 	for i, r := range runs {
 		var lg []float32
 		var err error
+		if r.Session != nil {
+			if err := r.Instance.use(r.Session); err != nil {
+				return nil, err
+			}
+		}
 		if len(r.Tokens) == 1 {
-			lg, err = r.State.Forward(r.Tokens[0])
+			lg, err = r.Instance.Forward(r.Tokens[0])
 		} else {
-			lg, err = r.State.Prefill(r.Tokens)
+			lg, err = r.Instance.Prefill(r.Tokens)
 		}
 		if err != nil {
 			return nil, err
@@ -236,14 +315,19 @@ func stepPictures(runs []Run) ([][]float32, error) {
 	var toks []Run
 	var at []int
 	for i, r := range runs {
+		if r.Session != nil {
+			if err := r.Instance.use(r.Session); err != nil {
+				return nil, err
+			}
+		}
 		if r.Encode != nil {
-			if err := r.Encode.step(r.State); err != nil {
+			if err := r.Encode.step(r.Instance); err != nil {
 				return nil, err
 			}
 		}
 		switch {
 		case r.Spans != nil:
-			lg, err := r.State.PrefillMixed(r.Spans...)
+			lg, err := r.Instance.PrefillMixed(r.Spans...)
 			if err != nil {
 				return nil, err
 			}
@@ -251,14 +335,14 @@ func stepPictures(runs []Run) ([][]float32, error) {
 				out[i] = lg
 			}
 		case len(r.Tokens) > 0:
-			toks = append(toks, Run{State: r.State, Tokens: r.Tokens, Logits: r.Logits})
+			toks = append(toks, Run{Instance: r.Instance, Session: r.Session, Tokens: r.Tokens, Logits: r.Logits})
 			at = append(at, i)
 		}
 	}
 	if len(toks) == 0 {
 		return out, nil
 	}
-	lg, err := StepRuns(toks)
+	lg, err := stepRunsOn(toks, false)
 	if err != nil {
 		return nil, err
 	}
@@ -274,30 +358,30 @@ func stepper(runs []Run, rows int) (nn.SessionStepper, bool) {
 	if len(runs) < 2 || rows > MaxStepRows {
 		return nil, false
 	}
-	s0 := runs[0].State
+	s0 := runs[0].Instance
 	for _, r := range runs {
-		if st := r.State; !st.Steppable() || st.m != s0.m || st.ldCand != s0.ldCand {
+		if st := r.Instance; !st.Steppable() || st.m != s0.m || st.ldCand != s0.ldCand {
 			return nil, false
 		}
 	}
 	return s0.ldStep, true
 }
 
-// Steppable reports whether this State can take a run of StepRuns' joint arm:
+// Steppable reports whether this instance can take a run of StepRuns' joint arm:
 // a single sequence whose every block and head run on a device that steps rows
-// of different sessions together. Steppable States of one Model on one device
-// step as one; StepRuns runs any other State alone. A caller batching sessions
-// asks it per State, so one State placed differently does not send the whole
-// step down the one-at-a-time arm. StepRefusal says why a State is not.
-func (s *State) Steppable() bool { return s.StepRefusal() == nil }
+// of different sessions together. Steppable instances of one Model on one device
+// step as one; StepRuns runs any other instance alone. A caller batching sessions
+// asks it per instance, so one instance placed differently does not send the whole
+// step down the one-at-a-time arm. StepRefusal says why an instance is not.
+func (s *Instance) Steppable() bool { return s.StepRefusal() == nil }
 
-// StepRefusal is why this State cannot take a run of StepRuns' joint arm, nil
-// when it can (Steppable). StepRuns runs a refused State alone, which is the
+// StepRefusal is why this instance cannot take a run of StepRuns' joint arm, nil
+// when it can (Steppable). StepRuns runs a refused instance alone, which is the
 // same answer at a pass over the weights per session; this names which
 // condition put it there, so a model that never steps as rows says so rather
 // than reading as one that does. It allocates nothing: a step asks it of every
-// State.
-func (s *State) StepRefusal() error {
+// Instance.
+func (s *Instance) StepRefusal() error {
 	switch {
 	case s.ldStep == nil:
 		return errStepNoDevice
@@ -311,41 +395,41 @@ func (s *State) StepRefusal() error {
 
 // The conditions StepRefusal names.
 var (
-	errStepNoDevice = errors.New("model: the State's device does not step rows of different sessions (no nn.SessionStepper)")
-	errStepBatched  = errors.New("model: a batched State steps its own rows, not other sessions'")
+	errStepNoDevice = errors.New("model: the instance's device does not step rows of different sessions (no nn.SessionStepper)")
+	errStepBatched  = errors.New("model: a batched instance steps its own rows, not other sessions'")
 	errStepEmbedder = errors.New("model: an embedder runs no decode step")
-	errStepNoRows   = errors.New("model: the State's device runs no ragged rows (no nn.RowsDevice)")
+	errStepNoRows   = errors.New("model: the instance's device runs no ragged rows (no nn.RowsDevice)")
 	errStepNoHead   = errors.New("model: the head is not on a device")
-	errStepSplit    = errors.New("model: not every block of the State is on the device")
+	errStepSplit    = errors.New("model: not every block of the instance is on the device")
 )
 
 // hostStepper reports whether the runs can go as one host step across their
-// sessions (stepHost): two or more States of one model, each HostSteppable,
+// sessions (stepHost): two or more instances of one model, each HostSteppable,
 // the rows within the host's widest batch.
 func hostStepper(runs []Run, rows int) bool {
 	if len(runs) < 2 || rows > MaxPrefillChunk {
 		return false
 	}
-	s0 := runs[0].State
+	s0 := runs[0].Instance
 	for _, r := range runs {
-		if !r.State.HostSteppable() || r.State.m != s0.m {
+		if !r.Instance.HostSteppable() || r.Instance.m != s0.m {
 			return false
 		}
 	}
 	return true
 }
 
-// HostSteppable reports whether this State can take a run of StepRuns' host
+// HostSteppable reports whether this instance can take a run of StepRuns' host
 // arm: a single sequence whose every block and head run on the host. Such
-// States of one Model step as rows of one pass over the weights (stepHost),
-// each row reading and writing its own State's history and recurrent state;
-// StepRuns runs any other State alone, which is the same answer. HostRefusal
-// says why a State is not. It allocates nothing.
-func (s *State) HostSteppable() bool { return s.HostRefusal() == nil }
+// instances of one Model step as rows of one pass over the weights (stepHost),
+// each row reading and writing its own session's history and recurrent state;
+// StepRuns runs any other instance alone, which is the same answer. HostRefusal
+// says why an instance is not. It allocates nothing.
+func (s *Instance) HostSteppable() bool { return s.HostRefusal() == nil }
 
-// HostRefusal is why this State cannot take a run of StepRuns' host arm, nil
+// HostRefusal is why this instance cannot take a run of StepRuns' host arm, nil
 // when it can (HostSteppable).
-func (s *State) HostRefusal() error {
+func (s *Instance) HostRefusal() error {
 	c := s.c
 	switch {
 	case s.batched:
@@ -367,17 +451,17 @@ func (s *State) HostRefusal() error {
 
 // The conditions HostRefusal names beside StepRefusal's.
 var (
-	errHostOnDevice = errors.New("model: a device runs some of the State's blocks or its head")
-	errHostPartial  = errors.New("model: the State runs part of the model (a prediction block)")
+	errHostOnDevice = errors.New("model: a device runs some of the instance's blocks or its head")
+	errHostPartial  = errors.New("model: the instance runs part of the model (a prediction block)")
 	errHostCache    = errors.New("model: the architecture's cached rows are read per batch slot (MLA, an indexer, MSA, DeepSeek V4)")
 )
 
-// PromptChunk is how many prompt tokens this State's Prefill takes in one
+// PromptChunk is how many prompt tokens this instance's Prefill takes in one
 // chunk: a pipelined chunk when every block is on a device that crosses
 // several cards (deviceChunk), a device chunk on a device, the host's chunk
 // otherwise. A caller feeding a prompt in pieces feeds pieces this wide to
 // keep the path Prefill would take on the whole prompt.
-func (s *State) PromptChunk() int {
+func (s *Instance) PromptChunk() int {
 	if s.devCount() > 0 {
 		return s.deviceChunk()
 	}
@@ -391,49 +475,50 @@ func (m *Model) HostStepRows() int64 { return atomic.LoadInt64(&m.hostStepRows) 
 // stepHost is StepRuns' host arm: the runs' rows as one ragged pass over the
 // weights (rowsHost, the batch's own step), each row embedded and rotated at
 // its own session's next position, its K and V written into and its attention
-// and recurrent state read from that session's State. Each State's logits and
+// and recurrent state read from that session's Instance. Each session's logits and
 // position then move on as Prefill and Forward move them. The rows whose
 // logits are wanted lead, so the head projects only them.
 func stepHost(runs []Run, rows int) ([][]float32, error) {
-	s0 := runs[0].State
+	s0 := runs[0].Instance
 	c := s0.c
 	defer s0.m.enterPager()()
 	toks, pos, own, win, seq := s0.stepTok[:0], s0.stepPos[:0], s0.rowOwn[:0], s0.rowWin[:0], s0.rowSeq[:0]
 	// The lists keep their capacity; the sessions are let go of, so a step
-	// pins no State past it.
+	// pins no instance past it.
 	defer func() {
 		clear(own)
 		s0.stepTok, s0.stepPos, s0.rowOwn, s0.rowWin, s0.rowSeq = toks[:0], pos[:0], own[:0], win[:0], seq[:0]
 	}()
-	addRow := func(r Run, j int) error {
-		st, tok := r.State, r.Tokens[j]
-		p := st.bpos[0] + j
+	addRow := func(r *Run, j int) error {
+		se, tok := r.sess(), r.Tokens[j]
+		p := se.bpos[0] + j
 		if stepPos != nil {
-			p = stepPos(st.bpos[0], j, len(r.Tokens))
+			p = stepPos(se.bpos[0], j, len(r.Tokens))
 		}
 		if int(tok) < 0 || int(tok) >= c.NVocab {
 			return errToken{tok, c.NVocab}
 		}
-		if p >= st.maxSeq {
-			return errFull{st.maxSeq, st.reqSeq}
+		if p >= se.limit {
+			return r.full()
 		}
 		if stepShare {
-			st = runs[0].State
+			se = runs[0].sess()
 		}
-		toks, pos, own = append(toks, tok), append(pos, p), append(own, st)
+		toks, pos, own = append(toks, tok), append(pos, p), append(own, se)
 		win, seq = append(win, j == len(r.Tokens)-1), append(seq, 0)
 		return nil
 	}
 	nlogit := 0
-	for _, r := range runs {
-		if r.Logits {
+	for i := range runs {
+		if r := &runs[i]; r.Logits {
 			if err := addRow(r, len(r.Tokens)-1); err != nil {
 				return nil, err
 			}
 			nlogit++
 		}
 	}
-	for _, r := range runs {
+	for i := range runs {
+		r := &runs[i]
 		for j := range r.Tokens {
 			if r.Logits && j == len(r.Tokens)-1 {
 				continue
@@ -444,7 +529,7 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 		}
 	}
 	s0.rowOwn, s0.rowWin = own, win
-	// The step's scratch is the model's, lent to whichever State leads.
+	// The step's scratch is the model's, lent to whichever instance leads.
 	s0.borrowStep()
 	defer s0.returnStep()
 	lg, err := s0.rowsHost(toks, seq, pos, nlogit, len(runs))
@@ -455,7 +540,8 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	out := s0.stepOut(len(runs))
 	at := 0
 	for i, r := range runs {
-		st, k := r.State, len(r.Tokens)
+		st, k := r.Instance, len(r.Tokens)
+		st.Session = r.sess()
 		st.kv.note(st.bpos[0], r.Tokens...)
 		if r.Logits {
 			copy(st.logits, lg[at*c.NVocab:(at+1)*c.NVocab])
@@ -468,7 +554,7 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 		}
 		st.reap()
 		// A decoding row steps its seam tuner as stepTogether's do. A tuner
-		// that moves blocks onto a card takes the State out of the host
+		// that moves blocks onto a card takes the instance out of the host
 		// step (HostRefusal), and StepRuns runs it alone from then on.
 		if k == 1 {
 			st.seamStep()
@@ -480,22 +566,22 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	return out, nil
 }
 
-// stepShare, when set, gives every row of a host step the first run's State
+// stepShare, when set, gives every row of a host step the first run's instance
 // as its history. False but in a gate's violation: it is how the gate shows
 // that rows reading one session's history fail it.
 var stepShare bool
 
-// stepPos, when set, is where a run's row j goes, given the State's next
+// stepPos, when set, is where a run's row j goes, given the instance's next
 // position and the run's length. Nil but in a gate's violation: it is how the
 // gate shows that a chunk laid out at the wrong positions fails it.
 var stepPos func(base, j, k int) int
 
 // stepTogether is StepRuns' joint arm: each row embedded and rotated at its
-// own position, one device step, and each State's logits and position moved on
+// own position, one device step, and each session's logits and position moved on
 // as Prefill and Forward move them. The rows whose logits are wanted -- each
 // such run's last -- lead, so the head projects only them (nn.Head.LogitRows).
 func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, error) {
-	s0 := runs[0].State
+	s0 := runs[0].Instance
 	m, c := s0.m, s0.m.Cfg
 	defer m.enterPager()()
 	nrot := c.RopeW()
@@ -506,33 +592,34 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	sess, pos := s0.stepSess[:0], s0.stepPos[:0]
 	s0.stepTok = s0.stepTok[:0]
 	defer func() { s0.stepSess, s0.stepPos = clearDevs(sess), pos[:0] }()
-	addRow := func(r Run, j int) error {
-		st, i := r.State, len(pos)
-		tok, p := r.Tokens[j], st.bpos[0]+j
+	addRow := func(r *Run, j int) error {
+		se, i := r.sess(), len(pos)
+		tok, p := r.Tokens[j], se.bpos[0]+j
 		if stepPos != nil {
-			p = stepPos(st.bpos[0], j, len(r.Tokens))
+			p = stepPos(se.bpos[0], j, len(r.Tokens))
 		}
 		if int(tok) < 0 || int(tok) >= c.NVocab {
 			return errToken{tok, c.NVocab}
 		}
-		if p >= st.maxSeq {
-			return errFull{st.maxSeq, st.reqSeq}
+		if p >= se.limit {
+			return r.full()
 		}
-		s0.ropeRow(i, st.ropeOf(0, p))
-		sess, pos = append(sess, st.ld), append(pos, p)
+		s0.ropeRow(i, se.ropeOf(0, p))
+		sess, pos = append(sess, se.ld), append(pos, p)
 		s0.stepTok = append(s0.stepTok, tok)
 		return nil
 	}
 	nlogit := 0
-	for _, r := range runs {
-		if r.Logits {
+	for i := range runs {
+		if r := &runs[i]; r.Logits {
 			if err := addRow(r, len(r.Tokens)-1); err != nil {
 				return nil, err
 			}
 			nlogit++
 		}
 	}
-	for _, r := range runs {
+	for i := range runs {
+		r := &runs[i]
 		for j := range r.Tokens {
 			if r.Logits && j == len(r.Tokens)-1 {
 				continue
@@ -620,7 +707,8 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	out := s0.stepOut(len(runs))
 	at := 0
 	for i, r := range runs {
-		st, k := r.State, len(r.Tokens)
+		st, k := r.Instance, len(r.Tokens)
+		st.Session = r.sess()
 		st.kv.note(st.bpos[0], r.Tokens...)
 		if r.Logits {
 			copy(st.logits, logits[at*c.NVocab:(at+1)*c.NVocab])
@@ -654,14 +742,14 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 }
 
 // stepOut is n nil logits slots in s's reused result slice (StepRuns).
-func (s *State) stepOut(n int) [][]float32 {
+func (s *Instance) stepOut(n int) [][]float32 {
 	s.stepRes = slices.Grow(s.stepRes[:0], n)[:n]
 	clear(s.stepRes)
 	return s.stepRes
 }
 
 // clearDevs empties a reused list of sessions, so it pins no device the
-// State has let go of.
+// Instance has let go of.
 func clearDevs(ds []nn.LayerDevice) []nn.LayerDevice {
 	clear(ds)
 	return ds[:0]

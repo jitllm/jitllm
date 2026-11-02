@@ -18,7 +18,7 @@ import (
 // buffers, ids, free list) and a persistent table arena, a sequence's run at
 // the same offset in every layer's arena. A sequence is a session and the
 // base of its rows (seqID), so a LayersRows batch's sequences and a single
-// State are the same thing here. A session holds pages only in the layers it
+// Instance are the same thing here. A session holds pages only in the layers it
 // runs here, so leaving a layer frees that layer's pages. Nothing a kernel is
 // built from depends on how long a history is: the rows' descriptors are data
 // written before each submission (the only per-token upload), the tables take

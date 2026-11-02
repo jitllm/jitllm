@@ -32,7 +32,7 @@ type residency struct {
 //
 // The budget covers experts only: attention weights, norms and the embedding
 // are read every token, so their bytes come off the top.
-func (s *State) initResidency(budget uint64) {
+func (s *Instance) initResidency(budget uint64) {
 	c := s.c
 	if !c.MoE() || len(s.m.layers) == 0 {
 		return
@@ -95,7 +95,7 @@ func (r *residency) touch(li int, nExpert int, sel []int32) {
 //
 // Once per token, not per layer: evicting inside a token would drop experts a
 // later layer of the same token is about to use.
-func (s *State) reap() {
+func (s *Instance) reap() {
 	r := s.res
 	if r == nil {
 		return
@@ -113,7 +113,7 @@ func (s *State) reap() {
 
 // Resident reports the expert bytes jitllm is currently keeping, and the budget it
 // keeps them under. Both zero when residency is not managed.
-func (s *State) Resident() (bytes, budget uint64) {
+func (s *Instance) Resident() (bytes, budget uint64) {
 	if s.res == nil {
 		return 0, 0
 	}

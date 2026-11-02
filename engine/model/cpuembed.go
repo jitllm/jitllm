@@ -30,14 +30,14 @@ type cpuEmbedState struct {
 
 // CPUEmbedSteps is how many input rows the composed CPU served, and how many
 // it declined, by reason.
-func (s *State) CPUEmbedSteps() (served int, declined [jit.NumDeclines]int) {
+func (s *Instance) CPUEmbedSteps() (served int, declined [jit.NumDeclines]int) {
 	return s.cpu.embed.served, s.cpu.embed.declined
 }
 
-// cpuPlaceEmbed composes the input rows' graph for the CPU at the State's
+// cpuPlaceEmbed composes the input rows' graph for the CPU at the instance's
 // placement. A graph writing the row over every residual stream as well is
 // declined by name.
-func (s *State) cpuPlaceEmbed() {
+func (s *Instance) cpuPlaceEmbed() {
 	st := &s.cpu.embed
 	g, why := s.m.frontGraphs().embed, jit.DeclineNoEmbed
 	if g != nil && s.c.Streams() > 1 {
@@ -66,7 +66,7 @@ func (st *cpuEmbedState) positions(n int) []int {
 // cpuEmbed writes the input rows of toks, at positions pos, into the rows
 // of x and, where the model has them, their per-layer inputs into the rows
 // of ple, through the composed graph, or says why not.
-func (s *State) cpuEmbed(x, ple []float32, toks []int32, pos []int) jit.Decline {
+func (s *Instance) cpuEmbed(x, ple []float32, toks []int32, pos []int) jit.Decline {
 	if !s.cpuHeadOn() {
 		return jit.DeclineCaller
 	}

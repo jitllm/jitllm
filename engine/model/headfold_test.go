@@ -56,7 +56,7 @@ func foldsTheHead(t *testing.T, name, spec string) {
 	ids = ids[:700]
 
 	run := func(fold bool) (logits []float32, toks []int32, folds int) {
-		st := m.NewState(len(ids) + 16)
+		st := m.NewInstance(len(ids) + 16)
 		defer st.Close()
 		st.SetDevice(g)
 		if gs := g.Stats(); (st.GPULayers() < m.Cfg.NLayer || !st.HeadOnDevice()) && gs.Declined+gs.NoRoom > 0 {

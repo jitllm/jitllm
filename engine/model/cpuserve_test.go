@@ -34,7 +34,7 @@ var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "
 // TestComposedCPUBlocksServe runs each model's blocks on the CPU as the
 // composer forms them (its int8 form: activations quantized in windows of
 // 32, integer dots), teacher-forced on one token sequence, the history in the
-// State's KV pages, and holds them to the CPU's float reference by
+// session's KV pages, and holds them to the CPU's float reference by
 // llama.cpp's spread from it (cpuReference, the user's decision): at the
 // median step no further than bandRatio times the band, at the worst no
 // further than bandWorst times its widest. Every block step must be served
@@ -298,7 +298,7 @@ func cpuBandTo(t *testing.T, want, got [][]float32, band []float64) (med, worst,
 // are zero on every arm and every distance from them 0/0.
 func cpuTokens(t *testing.T, m *Model, n int) []int32 {
 	t.Helper()
-	s := m.NewState(n + 1)
+	s := m.NewInstance(n + 1)
 	defer s.Close()
 	toks := []int32{1}
 	if m.Vocab != nil && m.Vocab.BOS >= 0 {
@@ -316,7 +316,7 @@ func cpuTokens(t *testing.T, m *Model, n int) []int32 {
 
 func cpuLogits(t *testing.T, m *Model, toks []int32, f cpuFault, composed bool) [][]float32 {
 	t.Helper()
-	s := m.NewState(len(toks) + 1)
+	s := m.NewInstance(len(toks) + 1)
 	defer s.Close()
 	s.cpu.fault = f
 	var out [][]float32

@@ -64,7 +64,7 @@ func TestTeacherForcedTrace(t *testing.T) {
 	defer m.Close()
 	ids := m.Vocab.Encode(prompt, true)
 	t.Logf("prompt ids %v", ids)
-	st := m.NewState(len(ids) + len(forced) + 2)
+	st := m.NewInstance(len(ids) + len(forced) + 2)
 	defer st.Close()
 	var logits []float32
 	if os.Getenv("JITLLM_TRACE_DECODE") == "1" {

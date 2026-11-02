@@ -35,9 +35,9 @@ type embedMode struct {
 // collect folds a chunk's final rows into the pooled vector. It runs once per
 // prefill chunk, after the last block and before the chunk's residual is
 // dropped, so a causal model longer than one chunk pools every row too.
-func (e *embedMode) collect(s *State, base, n int) {
+func (e *embedMode) collect(s *Instance, base, n int) {
 	// A mode with no vector pools nothing: a decision head (Clef's) takes
-	// every row through the State's rowTap instead.
+	// every row through the instance's rowTap instead.
 	if e.out == nil {
 		return
 	}
@@ -68,12 +68,12 @@ func (e *embedMode) collect(s *State, base, n int) {
 }
 
 // composed reads the readout from a chunk's n rows from position base on
-// the CPU the composer's way (cpuPool), where the State composed it, and
+// the CPU the composer's way (cpuPool), where the instance composed it, and
 // reports whether the chunk is done with: the readout served (unit, the
 // vector at unit length), or a chunk that holds no row it reads. A mean
 // over several chunks is declined by name (DeclinePrefill) and pooled by
 // main's.
-func (e *embedMode) composed(s *State, base, n int) bool {
+func (e *embedMode) composed(s *Instance, base, n int) bool {
 	if !s.cpuHeadOn() || !s.cpu.pool.form.composed {
 		return false
 	}
@@ -113,7 +113,7 @@ func symmetricWindow(pos, total, window int) (w0, an int) {
 // callTell readies the device for a chunk's call: a bidirectional embedding
 // run's windows (embedTell), or the key runs of the prompt's bidirectional
 // spans (bidirTell).
-func (s *State) callTell(p0, n int) bool {
+func (s *Instance) callTell(p0, n int) bool {
 	if s.emb != nil && s.emb.bidir {
 		return s.embedTell(n)
 	}
@@ -125,7 +125,7 @@ func (s *State) callTell(p0, n int) bool {
 // (nn.RowsReserver), and each row's symmetric window on the sliding layers
 // (nn.RowWindowDevice), every row's keys the call's on the others. false is
 // a device that cannot take them; the caller does not run the call.
-func (s *State) embedTell(n int) bool {
+func (s *Instance) embedTell(n int) bool {
 	if rr, ok := s.ld.(nn.RowsReserver); ok && !rr.ReserveRows(n) {
 		return false
 	}
@@ -151,7 +151,7 @@ func (s *State) embedTell(n int) bool {
 // embedPrefill runs ids from position zero and leaves the pooled, normed (but
 // not yet L2-normalised) vector in out, or, unit, the composer's readout
 // through the dense heads at unit length.
-func (s *State) embedPrefill(ids []int32, out []float32) (_ []float32, unit bool, _ error) {
+func (s *Instance) embedPrefill(ids []int32, out []float32) (_ []float32, unit bool, _ error) {
 	c := s.c
 	if len(ids) > s.maxSeq {
 		return nil, false, fmt.Errorf("model: %d tokens, and this session holds %d", len(ids), s.maxSeq)

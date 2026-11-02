@@ -167,7 +167,7 @@ func cpuPrompt(t *testing.T, m *Model, ids []int32, n, decode int, f cpuFault, c
 // pages faulted back.
 func cpuPromptPaged(t *testing.T, m *Model, ids []int32, n, decode int, f cpuFault, composed, paged bool) [][]float32 {
 	t.Helper()
-	s := m.NewState(n + decode + 1)
+	s := m.NewInstance(n + decode + 1)
 	defer s.Close()
 	s.cpu.fault = f
 	if paged {
@@ -247,10 +247,10 @@ func cpuBatch(t *testing.T, m *Model, prompts [][]int32, steps []int32, f cpuFau
 // counts the steps' blocks: every one served.
 func cpuSessionSteps(t *testing.T, m *Model, prompts [][]int32, steps []int32, composed bool) [][]float32 {
 	t.Helper()
-	states := make([]*State, len(prompts))
+	states := make([]*Instance, len(prompts))
 	rows := make([][][]float32, len(prompts))
 	for i, p := range prompts {
-		states[i] = m.NewState(len(p) + len(steps) + 1)
+		states[i] = m.NewInstance(len(p) + len(steps) + 1)
 		defer states[i].Close()
 		lg, err := states[i].Prefill(p)
 		if err != nil {
@@ -268,7 +268,7 @@ func cpuSessionSteps(t *testing.T, m *Model, prompts [][]int32, steps []int32, c
 			k = min(3, len(steps))
 		}
 		for i, st := range states {
-			runs[i] = Run{State: st, Tokens: steps[j : j+k], Logits: true}
+			runs[i] = Run{Instance: st, Tokens: steps[j : j+k], Logits: true}
 		}
 		lg, err := StepRuns(runs)
 		if err != nil {
@@ -300,7 +300,7 @@ func cpuSessionSteps(t *testing.T, m *Model, prompts [][]int32, steps []int32, c
 // cpuServed holds s's composed CPU census: on a composed arm at least want
 // block steps served, none declined, each block composed once; on main's
 // arm none served.
-func cpuServed(t *testing.T, s *State, what string, want int, composed bool) {
+func cpuServed(t *testing.T, s *Instance, what string, want int, composed bool) {
 	t.Helper()
 	served, declined := s.CPUBlockSteps()
 	if !composed {
@@ -344,7 +344,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 			}
 			defer m.Close()
 			ids := m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands. ", 20), true)
-			blocks := func(s *State, seq, pos []int) {
+			blocks := func(s *Instance, seq, pos []int) {
 				w := s.c.ResidW()
 				for li := range m.Cfg.NLayer {
 					why, err := s.cpuRows(li, &m.layers[li], s.bx[:len(pos)*w], s.bcs, s.bcsSWA, seq, pos)
@@ -354,7 +354,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 				}
 			}
 			const chunk = 33
-			s := m.NewState(4 * chunk)
+			s := m.NewInstance(4 * chunk)
 			defer s.Close()
 			if _, err := s.Prefill(ids[:chunk]); err != nil {
 				t.Fatal(err)

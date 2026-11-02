@@ -77,7 +77,7 @@ func TestVllmD3LegendIsCanonical(t *testing.T) {
 // pictures over a null state, and a chat-message state carrying one -- to
 // llama-server's answers on the same GGUF and mmproj: the qwen3vl tower's
 // rows between their markers, and the whole prompt, pictures and text, one
-// bidirectional run (State.bidirAll). The violation runs it causally, which
+// bidirectional run (Instance.bidirAll). The violation runs it causally, which
 // must move the answers.
 func TestVllmD3PicturesMatchLlamaCpp(t *testing.T) {
 	text, proj := testmodels.Path("vllm-d3/vllm-d3-edge-Q8_0.gguf"), testmodels.Path("vllm-d3/mmproj-vllm-d3-edge-Q8_0.gguf")

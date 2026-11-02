@@ -235,7 +235,7 @@ func (g *devTier) streamWidth(l *kvLayerPool, left int) int {
 }
 
 // rewind tells the pool that sequence s's history now ends at pos: the
-// sequence restarted lower (a State reset and taking a new prompt, a row
+// sequence restarted lower (an instance reset and taking a new prompt, a row
 // retired and reused, a rollback), and its positions from pos on are about to
 // be written again. Pages in host memory past pos are not its history any more, and
 // a page a call writes into must be on the card, so the evicted prefix comes

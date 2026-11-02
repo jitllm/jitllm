@@ -36,7 +36,7 @@ func TestGemma3nRealMatchesTransformers(t *testing.T) {
 	tw := m.Tower()
 	c := tw.Cfg
 	img := goldPicture(t, "photo")
-	encode := func(s *State) ([]float32, []float32) {
+	encode := func(s *Instance) ([]float32, []float32) {
 		px, err := s.PreprocessImage(img)
 		if err != nil {
 			t.Fatal(err)
@@ -140,7 +140,7 @@ func TestGemma3nRealDescribesAnImage(t *testing.T) {
 	describe := func(img image.Image) string {
 		msgs := []ChatMessage{{Role: "user", Content: "Describe this image in one sentence.", Images: 1}}
 		spans := pictureSpans(t, m, msgs, img)
-		st := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + 48)
+		st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + 48)
 		defer st.Close()
 		logits, err := st.PrefillMixed(spans...)
 		if err != nil {

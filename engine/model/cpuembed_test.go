@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestCPUInputRowsAreComposed requires every input row a CPU State reads to
+// TestCPUInputRowsAreComposed requires every input row a CPU instance reads to
 // come from the composed input rows' graph (cpuembed.go): each prompt row's
 // and each decode token's, a position row and per-layer inputs among them,
 // counted served and none declined. The values are the greedy and
@@ -39,7 +39,7 @@ func TestCPUInputRowsAreComposed(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			m := fx.open(t)
 			defer m.Close()
-			st := m.NewState(32)
+			st := m.NewInstance(32)
 			defer st.Close()
 			prompt := []int32{3, 7, 11, 2, 5}
 			if _, err := st.Prefill(prompt); err != nil {

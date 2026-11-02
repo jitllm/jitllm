@@ -526,7 +526,7 @@ var imageMarkersOf = map[string]imageMarkers{
 // ChatSpans renders msgs through the model's own chat template and returns the
 // prompt as spans for PrefillMixed, embeds[i] standing where the i-th image of
 // the conversation goes (in message order). An embeds entry is the tower's
-// output for that image (State.EncodeImage); ChatSpansImages takes a Picture
+// output for that image (Instance.EncodeImage); ChatSpansImages takes a Picture
 // instead, which the prompt's prefill encodes.
 //
 // The template renders the whole prompt, turn text included; only the image
@@ -555,13 +555,13 @@ func (m *Model) ChatSpans(msgs []ChatMessage, embeds [][]float32, addGenerationP
 }
 
 // Image is one picture of a chat: a Picture the prompt's prefill encodes
-// (State.Picture), or rows already encoded (State.EncodeImage) and the grid
+// (Instance.Picture), or rows already encoded (Instance.EncodeImage) and the grid
 // they cover.
 type Image struct {
 	Picture *Picture
 	Embd    []float32
 	Grid    ImageGrid
-	// Key names the picture the rows came from (State.EncodeImage), which is
+	// Key names the picture the rows came from (Instance.EncodeImage), which is
 	// what lets the prefix cache name the pages after it. nil leaves the rows
 	// unnamed: nothing after them is cached.
 	Key *ImageKey
@@ -699,7 +699,7 @@ func (m *Model) chatSpansParts(msgs []ChatMessage, images [][]Span, tools []byte
 	return out, nil
 }
 
-// SpanPositions is how many positions spans occupy, which is what a State
+// SpanPositions is how many positions spans occupy, which is what an instance
 // must be sized for.
 func SpanPositions(spans []Span, nEmbd int) int {
 	t := 0

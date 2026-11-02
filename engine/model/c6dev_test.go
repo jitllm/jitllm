@@ -95,7 +95,7 @@ func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 		t.Fatal("the fixture lost its head bias")
 	}
 	want := make([]int32, len(g.IDs))
-	host := m.NewState(len(g.IDs) + 1)
+	host := m.NewInstance(len(g.IDs) + 1)
 	for p, id := range g.IDs {
 		lg, err := host.Forward(id)
 		if err != nil {
@@ -109,7 +109,7 @@ func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 		noDevice(t, "device", err)
 	}
 	defer gpu.Close()
-	st := m.NewState(len(g.IDs) + 1)
+	st := m.NewInstance(len(g.IDs) + 1)
 	defer st.Close()
 	st.SetDevice(gpu)
 	if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
@@ -172,7 +172,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 	// runErr is the error a run stopped at: a run refused by name, which a
 	// violation's run may be (the gate sees it), returns no logits.
 	var runErr error
-	decode := func(st *State) [][]float32 {
+	decode := func(st *Instance) [][]float32 {
 		var out [][]float32
 		for _, id := range g.IDs {
 			lg, err := st.Forward(id)
@@ -184,7 +184,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 		}
 		return out
 	}
-	prefill := func(st *State) [][]float32 {
+	prefill := func(st *Instance) [][]float32 {
 		lg, err := st.Prefill(g.IDs)
 		if err != nil {
 			runErr = err
@@ -192,8 +192,8 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 		}
 		return [][]float32{append([]float32(nil), lg...)}
 	}
-	onHost := func(run func(*State) [][]float32) [][]float32 {
-		st := m.NewState(len(g.IDs) + 1)
+	onHost := func(run func(*Instance) [][]float32) [][]float32 {
+		st := m.NewInstance(len(g.IDs) + 1)
 		defer st.Close()
 		out := run(st)
 		if runErr != nil {
@@ -237,7 +237,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 			// head placed; steps is its one-row steps, every one of which the
 			// composer runs where it serves blocks the front end states.
 			// noGraph issues every step itself, which counts the declines.
-			onDevice := func(run func(*State) [][]float32, steps int, noGraph bool) ([][]float32, string) {
+			onDevice := func(run func(*Instance) [][]float32, steps int, noGraph bool) ([][]float32, string) {
 				opts := append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)
 				if noGraph {
 					opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
@@ -247,7 +247,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 					t.Fatal(err)
 				}
 				defer gpu.Close()
-				st := m.NewState(len(g.IDs) + 1)
+				st := m.NewInstance(len(g.IDs) + 1)
 				defer st.Close()
 				st.SetDeviceLayers(gpu, -1)
 				if n := st.GPULayers(); n != nl {
@@ -274,7 +274,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 			worst := 0.0
 			arms := []struct {
 				name    string
-				run     func(*State) [][]float32
+				run     func(*Instance) [][]float32
 				want    [][]float32
 				steps   int
 				noGraph bool

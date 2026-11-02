@@ -8,7 +8,7 @@ import (
 )
 
 // A convolutional tower block on the CPU device (frontconv.go): composed
-// once at the vision State's placement at its own shape -- its input grid's
+// once at the vision instance's placement at its own shape -- its input grid's
 // rows, each block a request of its own rows -- and run over the encode's
 // own buffers (mnRun's activation halves), the block's input in one and its
 // output into the other, as main's runner hands them over. Each run is
@@ -16,7 +16,7 @@ import (
 // block the CPU declines.
 
 // cpuComposeConv composes convolutional block li for the CPU into cb.
-func (s *State) cpuComposeConv(li int, cb *cpuBlock) {
+func (s *Instance) cpuComposeConv(li int, cb *cpuBlock) {
 	l := &s.m.layers[li]
 	g := s.m.Composing().BlockGraph(li)
 	switch {
@@ -65,7 +65,7 @@ func (s *State) cpuComposeConv(li int, cb *cpuBlock) {
 // cpuConvRun runs convolutional block li on the CPU the composer's way
 // over the encode's activation, its output into the other half, or says
 // why not.
-func (s *State) cpuConvRun(li int) jit.Decline {
+func (s *Instance) cpuConvRun(li int) jit.Decline {
 	cb := s.cpu.blocks[li]
 	if cb == nil {
 		return jit.DeclineUnplaced
@@ -109,7 +109,7 @@ func (s *State) cpuConvRun(li int) jit.Decline {
 
 // mnPages is a convolutional tower's history: an attention block's keys
 // are its key grid's rows, one key head wide; a convolution keeps none.
-func (s *State) mnPages() {
+func (s *Instance) mnPages() {
 	for li := s.lo; li < s.hi; li++ {
 		b, pg := s.m.layers[li].mn, &s.kv.layers[li]
 		pg.p, pg.pp = 0, 0

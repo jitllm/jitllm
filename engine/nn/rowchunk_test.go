@@ -109,7 +109,7 @@ func TestGEMMRowsDuelSettlesAndReachesTheGEMM(t *testing.T) {
 	}
 }
 
-// TestPrefillDuelsContinueAcrossJITs: every model.State builds its own JIT, so
+// TestPrefillDuelsContinueAcrossJITs: every model.Instance builds its own JIT, so
 // a second JIT over the same shapes must pick up the same running duel where
 // the first left it. Violation (a fresh duel per JIT): the second starts at
 // turn 0.

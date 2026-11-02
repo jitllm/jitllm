@@ -315,7 +315,7 @@ func convertDir(dir string, q8 bool) (string, error) {
 
 // The gates' own options: the package reads no environment, so a knob set with
 // t.Setenv would reach nothing. They apply at Open, the only path that reaches a
-// State's JIT.
+// instance's JIT.
 var (
 	// noTune pins the fitted widths so both sides of a comparison run the same
 	// kernels: the pack-width tuner advances on Forward and not on

@@ -112,11 +112,11 @@ func loadResampler(c *TowerConfig, get func(jlm.Role, int32) (tensor, error),
 	return r, nil
 }
 
-// rsState is the resampler's working memory on a vision State.
+// rsState is the resampler's working memory on a vision Instance.
 type rsState struct {
 	r *resampler
 	// attn is the resampler's attention kernels: 128-wide heads at stride d,
-	// a geometry of its own and a set of its own on the State's one JIT.
+	// a geometry of its own and a set of its own on the instance's one JIT.
 	attn *nn.AttnSet
 	// qp is the projected queries, W_q * LN_q(query) + b_q: a property of the
 	// weights alone, computed on the first encode (qReady).
@@ -173,7 +173,7 @@ func (st *rsState) axes(gh, gw int) {
 
 // resample turns n = gh*gw patch rows of the tower's output into Queries rows
 // of the text model's width, written to out.
-func (s *State) resample(out, patches []float32, gh, gw int) error {
+func (s *Instance) resample(out, patches []float32, gh, gw int) error {
 	st, r := s.vis.rs, s.vis.t.rs
 	n, d := gh*gw, r.d
 	eps := s.vis.t.Cfg.Eps
@@ -258,7 +258,7 @@ func bucketPositions(dst []int32, gh, gw, B int) {
 // half is the COLUMN coordinate, and llama.cpp's concat(pos_w, pos_h) says the
 // same. The four quarters are added in place: elementwise, so a quarter at a
 // time is the bits of the whole row.
-func (s *State) keyPosRows(lo, hi int) {
+func (s *Instance) keyPosRows(lo, hi int) {
 	j, st := &s.rg.rows, s.vis.rs
 	d, gw := j.dim, j.gw
 	q := d / 4
@@ -278,7 +278,7 @@ func (s *State) keyPosRows(lo, hi int) {
 
 // crossHeads is the resampler's cross-attention for heads lo..hi-1 (rowCross):
 // every learned query over the n patch keys in src and values in b.
-func (s *State) crossHeads(lo, hi int) {
+func (s *Instance) crossHeads(lo, hi int) {
 	j, st, r := &s.rg.rows, s.vis.rs, s.vis.t.rs
 	n, d := j.dim, r.d
 	for h := lo; h < hi; h++ {

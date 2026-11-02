@@ -20,7 +20,7 @@ func TestVisionRopeMatchesTheFloat64Rotation(t *testing.T) {
 	// the pairs is 20 and the two halves are not symmetric around a power of two.
 	c := TowerConfig{NHead: 4, HeadDim: 80, NEmbd: 320, ImageSz: 14 * 6, PatchSz: 14}
 	tw := &Tower{Cfg: c, opt: &modelOpts{elemPool: true}}
-	s := &State{vis: &visRun{t: tw}, jit: nn.NewJIT(c.NEmbd, c.NEmbd, nil, nn.WithTune(nn.TuneOff), nn.WithQuietTuner(true))}
+	s := &Instance{vis: &visRun{t: tw}, jit: nn.NewJIT(c.NEmbd, c.NEmbd, nil, nn.WithTune(nn.TuneOff), nn.WithQuietTuner(true))}
 	defer s.jit.Close()
 	side := c.ImageSz / c.PatchSz
 	n := side * side

@@ -28,11 +28,11 @@ func qwen3TowerGate(t *testing.T, tw *Tower, g *qvlGolden, got []float32, clean 
 	}
 	for _, v := range []struct {
 		name  string
-		mut   func(*State)
+		mut   func(*Instance)
 		fault towerFault
 		deep  bool // the violation shows in the taps' rows, not the merged ones
 	}{
-		{"no 2-D rotary", func(s *State) {
+		{"no 2-D rotary", func(s *Instance) {
 			gh, gw := s.patchGrid()
 			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
 			for i := 0; i < len(s.vis.ropeSC); i += 2 {
@@ -62,7 +62,7 @@ func qwen3TowerGate(t *testing.T, tw *Tower, g *qvlGolden, got []float32, clean 
 // as a Picture span -- the prefill encodes it, the taps ride its rows -- and
 // holds it to transformers end to end; then a second prompt that extends the
 // first restores every position past the picture from the prefix cache, runs
-// no tower block and decodes what a cold prefill does; and a third, cold State
+// no tower block and decodes what a cold prefill does; and a third, cold instance
 // takes the picture's rows, taps included, from the image cache.
 func TestQwen3VLPictureCarriesItsTaps(t *testing.T) {
 	m, g := openQVL(t, "synth-qwen3vl")
@@ -74,7 +74,7 @@ func TestQwen3VLPictureCarriesItsTaps(t *testing.T) {
 		restored, block int64
 	}
 	run := func(cached bool, cont []int32) result {
-		st := m.NewState(n)
+		st := m.NewInstance(n)
 		defer st.Close()
 		if cached {
 			st.SetKVStore(store)
@@ -128,8 +128,8 @@ func TestQwen3VLPictureCarriesItsTaps(t *testing.T) {
 			t.Fatalf("restored row %d is %.3e from the cold prefill's", i, d)
 		}
 	}
-	// The image cache: once one State has encoded the picture, a fresh
-	// State's encode is answered, taps included.
+	// The image cache: once one instance has encoded the picture, a fresh
+	// instance's encode is answered, taps included.
 	run(false, nil)
 	h0, _ := m.ImageCacheStats()
 	again := run(false, nil)
@@ -144,7 +144,7 @@ func TestQwen3VLPictureCarriesItsTaps(t *testing.T) {
 		}
 	}
 	t.Logf("turn 2 restored %d positions past the picture's end at %d with no tower block; "+
-		"the image cache answered a fresh State bit for bit", t2.restored, imgEnd)
+		"the image cache answered a fresh instance bit for bit", t2.restored, imgEnd)
 }
 
 // TestQwen3VLRotaryIsInterleaved holds the text model's M-RoPE to
@@ -159,7 +159,7 @@ func TestQwen3VLRotaryIsInterleaved(t *testing.T) {
 				t.Fatal("the container's text model is not an interleaved M-RoPE one")
 			}
 			run := func() (float64, error) {
-				st := m.NewState(len(g.Pre) + g.grid().Rows() + len(g.Post) + len(g.Cont) + 1)
+				st := m.NewInstance(len(g.Pre) + g.grid().Rows() + len(g.Post) + len(g.Cont) + 1)
 				defer st.Close()
 				rows, err := qvlRunErr(st, g, true)
 				if err != nil {

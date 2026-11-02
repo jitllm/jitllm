@@ -117,7 +117,7 @@ func TestPositionTableResizeMatchesTorch(t *testing.T) {
 		}
 	}
 	tw := &Tower{posW: tab, Cfg: TowerConfig{ImageSz: side * 16, PatchSz: 16, NEmbd: ch, Kind: jlm.ProjPhi4}}
-	s := &State{vis: &visRun{t: tw}, jit: nn.NewJIT(64, 64, []quant.Type{quant.F32})}
+	s := &Instance{vis: &visRun{t: tw}, jit: nn.NewJIT(64, 64, []quant.Type{quant.F32})}
 	defer s.jit.Close()
 	reduced := 0
 	for _, gr := range g.Grids {
@@ -265,7 +265,7 @@ func TestPhi4TowerMatchesTransformers(t *testing.T) {
 // no markers, and decodes the continuation, on gpu when it is not nil.
 func p4vRun(t *testing.T, m *Model, g *p4vGolden, gpu *tier.GPU) [][]float32 {
 	t.Helper()
-	st := m.NewState(8)
+	st := m.NewInstance(8)
 	pic, err := st.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	st.Close()
 	if err != nil {
@@ -275,7 +275,7 @@ func p4vRun(t *testing.T, m *Model, g *p4vGolden, gpu *tier.GPU) [][]float32 {
 		t.Fatalf("the picture takes %d positions, the processor's %d patches", pic.Rows, want)
 	}
 	spans := []Span{{Tokens: g.Pre}, {Picture: pic}, {Tokens: g.Post}}
-	s := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
+	s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(g.Cont) + 1)
 	defer s.Close()
 	if gpu != nil {
 		if err := s.SetDevice(gpu); err != nil {

@@ -13,10 +13,10 @@ func glmTowerGate(t *testing.T, tw *Tower, g *qvlGolden, clean float64) {
 	t.Helper()
 	for _, v := range []struct {
 		name  string
-		mut   func(*State)
+		mut   func(*Instance)
 		fault towerFault
 	}{
-		{"no 2-D rotary", func(s *State) {
+		{"no 2-D rotary", func(s *Instance) {
 			gh, gw := s.patchGrid()
 			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
 			for i := 0; i < len(s.vis.ropeSC); i += 2 {

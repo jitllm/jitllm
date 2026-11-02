@@ -45,7 +45,7 @@ func TestStepRunsAdmitsAPromptBesideDecoding(t *testing.T) {
 					got, rows := plan.together(t, m, g)
 					s1 := g.Stats()
 					if n := s1.SessionRows - s0.SessionRows; n != rows {
-						t.Fatalf("%d rows ran across sessions, want %d: StepRuns went one State after another (%s)",
+						t.Fatalf("%d rows ran across sessions, want %d: StepRuns went one instance after another (%s)",
 							n, rows, g.Err())
 					}
 					if chained := s1.RecChainRows - s0.RecChainRows; m.Cfg.Hybrid() && chained == 0 {
@@ -176,7 +176,7 @@ func (p *runsPlan) together(t *testing.T, m *Model, g *tier.GPU) ([][]float32, i
 	late := m.Vocab.Encode(p.late, true)
 	nc := p.chunks(len(late))
 	total := nc + p.steps
-	var sts []*State
+	var sts []*Instance
 	for _, pr := range p.early {
 		ids := m.Vocab.Encode(pr, true)
 		st := p.placed(t, m, g, len(ids)+total+2)
@@ -193,13 +193,13 @@ func (p *runsPlan) together(t *testing.T, m *Model, g *tier.GPU) ([][]float32, i
 	for s := range total {
 		var runs []Run
 		for i, st := range sts {
-			runs = append(runs, Run{State: st, Tokens: p.earlyToks[i][s : s+1], Logits: true})
+			runs = append(runs, Run{Instance: st, Tokens: p.earlyToks[i][s : s+1], Logits: true})
 		}
 		if s < nc {
 			lo, hi := s*p.chunk, min(len(late), (s+1)*p.chunk)
-			runs = append(runs, Run{State: ls, Tokens: late[lo:hi], Logits: hi == len(late)})
+			runs = append(runs, Run{Instance: ls, Tokens: late[lo:hi], Logits: hi == len(late)})
 		} else {
-			runs = append(runs, Run{State: ls, Tokens: p.lateToks[s-nc : s-nc+1], Logits: true})
+			runs = append(runs, Run{Instance: ls, Tokens: p.lateToks[s-nc : s-nc+1], Logits: true})
 		}
 		out, err := StepRuns(runs)
 		if err != nil {
@@ -218,12 +218,12 @@ func (p *runsPlan) together(t *testing.T, m *Model, g *tier.GPU) ([][]float32, i
 	return got, rows
 }
 
-// placed is a State of maxSeq positions with every block and the head on g,
-// or the gate skips naming the card; with g nil, a State on the host.
-func (p *runsPlan) placed(t *testing.T, m *Model, g *tier.GPU, maxSeq int) *State {
+// placed is an instance of maxSeq positions with every block and the head on g,
+// or the gate skips naming the card; with g nil, an instance on the host.
+func (p *runsPlan) placed(t *testing.T, m *Model, g *tier.GPU, maxSeq int) *Instance {
 	t.Helper()
-	st := m.NewState(maxSeq)
-	// No tier is the host arm (hoststep_test.go): the State stays home.
+	st := m.NewInstance(maxSeq)
+	// No tier is the host arm (hoststep_test.go): the instance stays home.
 	if g == nil {
 		return st
 	}
@@ -251,7 +251,7 @@ func TestStepRunsStepsTheSeamTuner(t *testing.T) {
 			defer g.Close()
 			p := &runsPlan{}
 			const steps = 5
-			var sts []*State
+			var sts []*Instance
 			for _, pr := range []string{"The capital of France is", "Water boils at"} {
 				ids := m.Vocab.Encode(pr, true)
 				st := p.placed(t, m, g, len(ids)+steps+2)
@@ -268,7 +268,7 @@ func TestStepRunsStepsTheSeamTuner(t *testing.T) {
 			}
 			s0 := g.Stats()
 			for range steps {
-				runs := []Run{{State: sts[0], Tokens: []int32{1}, Logits: true}, {State: sts[1], Tokens: []int32{1}, Logits: true}}
+				runs := []Run{{Instance: sts[0], Tokens: []int32{1}, Logits: true}, {Instance: sts[1], Tokens: []int32{1}, Logits: true}}
 				if _, err := StepRuns(runs); err != nil {
 					t.Fatal(err)
 				}

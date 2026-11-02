@@ -11,8 +11,8 @@ import (
 //
 // A Span carries a Picture where it would carry tokens: the preprocessed
 // pixels, named before a single block runs (ImageKey). Prefilling the span
-// runs the State's vision segment over them -- the tower's blocks through the
-// one runner, on the State's JIT and device -- unless the model's image cache
+// runs the instance's vision segment over them -- the tower's blocks through the
+// one runner, on the instance's JIT and device -- unless the model's image cache
 // already holds the picture's rows, and then the rows enter the text segment
 // exactly as an embedding span's do. There is no encode stage for a caller to
 // run first, and a prompt restored from the prefix cache past the picture
@@ -43,10 +43,10 @@ type Picture struct {
 // the conversation's pictures in message order, standing where the template
 // puts its image markers: each picture laid out as its tower takes it -- Llama
 // 4's tiles (Llama4Spans), MiniCPM-V's overview and slices (PictureSpans), or
-// one Picture preprocessed on this State's vision segment. The prompt's
+// one Picture preprocessed on this instance's vision segment. The prompt's
 // prefill encodes them, or the image cache answers. tools and choice are
 // rendered as ChatIDsToolChoice renders them (nil for none).
-func (s *State) ChatPictureSpans(msgs []ChatMessage, imgs []image.Image, tools []byte, choice ToolChoice,
+func (s *Instance) ChatPictureSpans(msgs []ChatMessage, imgs []image.Image, tools []byte, choice ToolChoice,
 	addGenerationPrompt bool) ([]Span, error) {
 	tw := s.m.Tower()
 	if tw == nil {
@@ -102,10 +102,10 @@ func (t *Tower) pictureRun(m *Model, i int, img image.Image) ([]Span, error) {
 	return m.PictureSpans(lay, i, true, pieces)
 }
 
-// Picture preprocesses img for this State's vision segment and names it. The
+// Picture preprocesses img for this instance's vision segment and names it. The
 // result goes into a prompt as Span.Picture (or Image.Picture), which encodes
 // it when the span is prefilled.
-func (s *State) Picture(img image.Image) (*Picture, error) {
+func (s *Instance) Picture(img image.Image) (*Picture, error) {
 	vs, err := s.Vision()
 	if err != nil {
 		return nil, err
@@ -154,7 +154,7 @@ func (p *Picture) image(rows []float32, projDim int) Image {
 // PicturePieces is Picture for a tower that cuts a picture into an overview
 // and slices (MiniCPM-V): each piece of lay, preprocessed and named, in the
 // order PictureSpans lays them out. Pillow's resampler needs no generated
-// code, so it needs no State.
+// code, so it needs no Instance.
 func (t *Tower) PicturePieces(img image.Image, lay Layout) ([]*Picture, error) {
 	px, err := t.Pieces(img, lay)
 	if err != nil {
@@ -175,10 +175,10 @@ func (t *Tower) PicturePieces(img image.Image, lay Layout) ([]*Picture, error) {
 	return out, nil
 }
 
-// encodePicture is the picture's rows, on the vision segment's State: the
+// encodePicture is the picture's rows, on the vision segment's instance: the
 // image cache's when it holds them, the tower's otherwise. The rows are the
 // caller's. The caller holds the pager (enterPager).
-func (s *State) encodePicture(p *Picture) ([]float32, error) {
+func (s *Instance) encodePicture(p *Picture) ([]float32, error) {
 	c := s.vis.t.Cfg
 	rows, _, err := s.encodeNamedKey(p.Key, p.GH, p.GW, func() ([]float32, error) {
 		s.vis.px2 = p.Pixels2
@@ -202,7 +202,7 @@ func (s *State) encodePicture(p *Picture) ([]float32, error) {
 // vision segment encodes it, or the image cache answers. A span the prefix
 // cache restored whole is left as it is -- its rows are never read. spans is
 // not changed; the result is a copy when anything was encoded.
-func (s *State) pictureRows(spans []Span, from int) ([]Span, error) {
+func (s *Instance) pictureRows(spans []Span, from int) ([]Span, error) {
 	var out []Span
 	at := 0
 	for i, sp := range spans {

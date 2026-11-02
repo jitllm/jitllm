@@ -68,7 +68,7 @@ func loadMSA(l *layer, bi int32, cfg *Config,
 }
 
 // allocMSA sizes the decode token's selection buffers.
-func (s *State) allocMSA() {
+func (s *Instance) allocMSA() {
 	c := s.m.Cfg
 	if !c.MSA() {
 		return
@@ -81,7 +81,7 @@ func (s *State) allocMSA() {
 }
 
 // growMSARows sizes a chunk's: each row's query, key and masks.
-func (s *State) growMSARows(n int) {
+func (s *Instance) growMSARows(n int) {
 	c := s.m.Cfg
 	if !c.MSA() || len(s.msaMasks) >= n {
 		return

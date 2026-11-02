@@ -177,8 +177,8 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 	// States.
 	const rounds, n, warm = 10, 96, 2
 	seq := max(len(prompts[0]), len(prompts[1])) + n + 2
-	place := func(prompt []int32) (*model.State, int32) {
-		st := m.NewState(seq)
+	place := func(prompt []int32) (*model.Instance, int32) {
+		st := m.NewInstance(seq)
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
 		}
@@ -192,7 +192,7 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 		}
 		return st, model.Greedy(lg)
 	}
-	decode := func(st *model.State, next int32, n int) int32 {
+	decode := func(st *model.Instance, next int32, n int) int32 {
 		for range n {
 			lg, err := st.Forward(next)
 			if err != nil {
@@ -203,7 +203,7 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 		}
 		return next
 	}
-	both := func(sts [2]*model.State, next [2]int32, n int) [2]int32 {
+	both := func(sts [2]*model.Instance, next [2]int32, n int) [2]int32 {
 		var wg sync.WaitGroup
 		for k := range sts {
 			wg.Add(1)
@@ -226,9 +226,9 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 		b, nb := place(prompts[1])
 		// One step untimed: the second session's lane is built at its first
 		// step beside the first.
-		next := both([2]*model.State{a, b}, [2]int32{na, nb}, 1)
+		next := both([2]*model.Instance{a, b}, [2]int32{na, nb}, 1)
 		t0 = time.Now()
-		both([2]*model.State{a, b}, next, n)
+		both([2]*model.Instance{a, b}, next, n)
 		two := time.Since(t0)
 		a.Close()
 		b.Close()

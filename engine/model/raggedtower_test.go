@@ -63,7 +63,7 @@ func TestRaggedTowerProductsMatchTheOracle(t *testing.T) {
 			scale = max(scale, math.Abs(d))
 		}
 	}
-	s := m.NewState(64)
+	s := m.NewInstance(64)
 	defer s.Close()
 	worst := func(got []float32) float64 {
 		e := 0.0

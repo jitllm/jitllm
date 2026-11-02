@@ -22,7 +22,7 @@ type BlockMove struct {
 	RecBytes uint64
 	// Path is how the history travelled, the slowest any block took: "peer"
 	// card to card, "staged" through a host buffer the tier holds, "host"
-	// back to this State's host cache and up again; "" when there was none.
+	// back to this instance's host cache and up again; "" when there was none.
 	Path string
 	// Copied is the bytes the tier copied between the devices (the history
 	// in the devices' own page layout).
@@ -38,13 +38,13 @@ type BlockMove struct {
 	Pause time.Duration
 }
 
-// PendingMove is a move between devices being prepared while the State keeps
+// PendingMove is a move between devices being prepared while the instance keeps
 // generating: the target takes each block's weights and builds its kernels
 // on another goroutine (nn.BlockMover.StageBlock), and Commit, at a token
 // boundary, copies the history and switches the route. Ready says the
 // preparation is done, so a caller that commits only then never waits on it.
 type PendingMove struct {
-	s      *State
+	s      *Instance
 	lo, hi int
 	to     string
 	// blocks are the ones to move, plans their plans, staged which the
@@ -72,18 +72,18 @@ type PendingMove struct {
 // prepares first and commits at a later token.
 //
 // Call it between tokens: like every placement call it must not overlap a
-// Forward of this State. Blocks already on to are left alone, and a block the
+// Forward of this Instance. Blocks already on to are left alone, and a block the
 // target refuses stays where it was and is reported. When no block of this
-// State is left on the device holding the output projection, the projection
+// Instance is left on the device holding the output projection, the projection
 // follows them; a move to the CPU brings it to the CPU with them.
 //
 // A pinned block refuses the call before anything moves. Between two cards a
 // range that does not hold a KV-sharing group whole is refused, since the
 // group's readers attend to its source's history wherever it is; a group the
 // move to or from the CPU splits ends where its source is (fixKVGroups).
-func (s *State) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
+func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 	if lo < s.lo || hi > s.hi || lo >= hi {
-		return BlockMove{}, fmt.Errorf("model: blocks %d..%d are outside this State's %d..%d", lo, hi-1, s.lo, s.hi-1)
+		return BlockMove{}, fmt.Errorf("model: blocks %d..%d are outside this instance's %d..%d", lo, hi-1, s.lo, s.hi-1)
 	}
 	if s.pending != nil {
 		return BlockMove{}, fmt.Errorf("model: a move of blocks %d..%d to %s is pending",
@@ -140,7 +140,7 @@ func (s *State) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 
 // movable refuses a move of placed block li inside [lo, hi): a block sharing
 // its history beyond the range, or one the placement pins where it is.
-func (s *State) movable(li, lo, hi int) error {
+func (s *Instance) movable(li, lo, hi int) error {
 	if glo, ghi := s.kvSpan(li); glo < lo || ghi > hi {
 		return fmt.Errorf("model: block %d shares its history with blocks %d..%d, "+
 			"which move together", li, glo, ghi-1)
@@ -153,11 +153,11 @@ func (s *State) movable(li, lo, hi int) error {
 
 // PrepareMove starts a move of placed blocks [lo, hi) to the card named to
 // (see MoveBlocks) and returns at once: the target prepares the blocks while
-// the State keeps generating on the source, and nothing the State runs
-// changes until Commit. Call it, Commit and Cancel between tokens; a State
+// the instance keeps generating on the source, and nothing the instance runs
+// changes until Commit. Call it, Commit and Cancel between tokens; an instance
 // holds one pending move at a time. A block on the CPU is refused: there is
 // nothing on a card to keep generating from, and MoveBlocks places it.
-func (s *State) PrepareMove(lo, hi int, to string) (*PendingMove, error) {
+func (s *Instance) PrepareMove(lo, hi int, to string) (*PendingMove, error) {
 	if onCPU(to) {
 		return nil, fmt.Errorf("model: a move to the CPU is not prepared ahead; MoveBlocks makes it")
 	}
@@ -167,7 +167,7 @@ func (s *State) PrepareMove(lo, hi int, to string) (*PendingMove, error) {
 // prepareMove is PrepareMove; with skipCPU the blocks of the range on the
 // CPU, the ones the target refused when MoveBlocks offered them, are left out
 // rather than refused.
-func (s *State) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMove, error) {
+func (s *Instance) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMove, error) {
 	nd, ok := s.ld.(nn.NamedDevice)
 	if !ok {
 		return nil, fmt.Errorf("model: no device that places blocks by name is attached, " +
@@ -178,7 +178,7 @@ func (s *State) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMove, 
 			s.pending.lo, s.pending.hi-1, s.pending.to)
 	}
 	if lo < s.lo || hi > s.hi || lo >= hi {
-		return nil, fmt.Errorf("model: blocks %d..%d are outside this State's %d..%d", lo, hi-1, s.lo, s.hi-1)
+		return nil, fmt.Errorf("model: blocks %d..%d are outside this instance's %d..%d", lo, hi-1, s.lo, s.hi-1)
 	}
 	for li := lo; li < hi; li++ {
 		if !s.devAt(li) {
@@ -207,14 +207,14 @@ func (s *State) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMove, 
 	s.pending = p
 	mover, ok := s.ld.(nn.BlockMover)
 	// Staging reads the block's page and hands the tier its weights while the
-	// State runs: the State's own vision and encoder segments, and a mixture's
+	// Instance runs: the instance's own vision and encoder segments, and a mixture's
 	// expert placement, are decided by the offer path, so they are prepared at
 	// the commit instead.
 	if !ok || s.m.opt.hostMoves || s.vis != nil || s.enc != nil || s.c.MoE() || len(p.blocks) == 0 {
 		close(p.done)
 		return p, nil
 	}
-	// The projection is prepared too when the move leaves none of the State's
+	// The projection is prepared too when the move leaves none of the instance's
 	// blocks beside it (Commit then moves it).
 	var head *nn.Head
 	if was, on := nd.HeadDeviceName(); on && s.head != nil && was != nn.DeviceName(to) {
@@ -336,7 +336,7 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 		mover.Unstage(p.lo, p.hi)
 		defer mover.RetireMoved()
 	}
-	// The projection follows once nothing of this State is left beside it: a
+	// The projection follows once nothing of this instance is left beside it: a
 	// head alone on a card costs a crossing a token and holds the card.
 	if headOn && headWas != nn.DeviceName(p.to) && len(mv.Moved) > 0 && !s.anyBlockOn(nd, headWas) {
 		if mv.Head, err = nd.PrepHeadOn(p.to, s.newHead()); err != nil {
@@ -359,7 +359,7 @@ func slowerPath(a, b string) string {
 // the source's pages to the target's and never passes through host memory. A linear block's
 // summary, a few kilobytes, is read back and goes up as it does on every other
 // move. nn.ErrNotDirect changed nothing.
-func (s *State) moveBlockDirect(mover nn.BlockMover, li int, to string, plan *nn.LayerPlan) (string, uint64, bool, error) {
+func (s *Instance) moveBlockDirect(mover nn.BlockMover, li int, to string, plan *nn.LayerPlan) (string, uint64, bool, error) {
 	if !s.migrateRec(li, false) {
 		return "", 0, false, fmt.Errorf("model: block %d's recurrent summary would not come home", li)
 	}
@@ -384,12 +384,12 @@ func (s *State) moveBlockDirect(mover nn.BlockMover, li int, to string, plan *nn
 	return res.Path, res.Bytes, true, nil
 }
 
-// moveBlockViaHost moves block li to the device named to through this State's
-// own cache: the history is read back to the State's cache (MigrateKV copies, so the source keeps
+// moveBlockViaHost moves block li to the device named to through this instance's
+// own cache: the history is read back to the session's cache (MigrateKV copies, so the source keeps
 // its rows until the target has them), the target takes the block, which
 // frees it on the source, and the history goes up to the target. False means
 // the target refused the block, which then stays where it was.
-func (s *State) moveBlockViaHost(nd nn.NamedDevice, li int, to string) (bool, error) {
+func (s *Instance) moveBlockViaHost(nd nn.NamedDevice, li int, to string) (bool, error) {
 	if !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
 		return false, fmt.Errorf("model: block %d's history would not come home from its device", li)
 	}
@@ -413,8 +413,8 @@ func (s *State) moveBlockViaHost(nd nn.NamedDevice, li int, to string) (bool, er
 	return true, nil
 }
 
-// anyBlockOn reports whether a block of this State is on the named device.
-func (s *State) anyBlockOn(nd nn.NamedDevice, name string) bool {
+// anyBlockOn reports whether a block of this instance is on the named device.
+func (s *Instance) anyBlockOn(nd nn.NamedDevice, name string) bool {
 	for li := s.lo; li < s.hi; li++ {
 		if !s.devAt(li) {
 			continue
@@ -428,7 +428,7 @@ func (s *State) anyBlockOn(nd nn.NamedDevice, name string) bool {
 
 // DeviceOf is the name of the device holding block li, and whether a device
 // holds it.
-func (s *State) DeviceOf(li int) (string, bool) {
+func (s *Instance) DeviceOf(li int) (string, bool) {
 	if !s.devAt(li) {
 		return "", false
 	}
@@ -439,7 +439,7 @@ func (s *State) DeviceOf(li int) (string, bool) {
 }
 
 // blockHistoryAt is historyAt for block li alone.
-func (s *State) blockHistoryAt(li, pos int) uint64 {
+func (s *Instance) blockHistoryAt(li, pos int) uint64 {
 	if li < s.kv.lo || li >= len(s.kv.layers) {
 		return 0
 	}
@@ -459,7 +459,7 @@ func (s *State) blockHistoryAt(li, pos int) uint64 {
 }
 
 // recBytesOf is block li's recurrent summary in bytes, every row's.
-func (s *State) recBytesOf(li int) uint64 {
+func (s *Instance) recBytesOf(li int) uint64 {
 	if s.rconv == nil || li >= len(s.rconv) {
 		return 0
 	}
@@ -471,7 +471,7 @@ func (s *State) recBytesOf(li int) uint64 {
 // and the bytes each kept position adds, which a windowed block stops adding
 // once `window` positions are held (zero keeps every position). It is
 // blockHistoryAt's arithmetic in its two parts.
-func (s *State) BlockHistory(li int) (perPos uint64, window int, state uint64) {
+func (s *Instance) BlockHistory(li int) (perPos uint64, window int, state uint64) {
 	state = s.recBytesOf(li)
 	if li < s.kv.lo || li >= len(s.kv.layers) {
 		return 0, 0, state

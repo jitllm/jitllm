@@ -31,7 +31,7 @@ func TestHotnessIsAProbability(t *testing.T) {
 	}
 	const n = 24
 	ids := m.Vocab.Encode("The capital of France is", true)
-	s := m.NewState(len(ids) + n + 1)
+	s := m.NewInstance(len(ids) + n + 1)
 	defer s.Close()
 	var lg []float32
 	for _, id := range ids {

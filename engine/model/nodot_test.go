@@ -69,7 +69,7 @@ func TestNoDotProdIsBitIdentical(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer m.Close()
-		s := m.NewState(len(ids) + 1)
+		s := m.NewInstance(len(ids) + 1)
 		for _, id := range ids {
 			l, err := s.Forward(id)
 			if err != nil {
@@ -78,7 +78,7 @@ func TestNoDotProdIsBitIdentical(t *testing.T) {
 			forced = append(forced, append([]float32(nil), l...))
 		}
 		s.Close()
-		p := m.NewState(len(ids) + 1)
+		p := m.NewInstance(len(ids) + 1)
 		l, err := p.Prefill(ids)
 		if err != nil {
 			t.Fatal(err)
@@ -142,9 +142,9 @@ func BenchmarkNoDotProdDecode(b *testing.B) {
 			}
 			defer m.Close()
 			ids := m.Vocab.Encode("The capital of France is", true)
-			// The kernels are emitted with the State's JIT (Model.newJIT, at
-			// NewState), not at Open, so the arm is checked after the prompt.
-			st := m.NewState(len(ids) + b.N + 2)
+			// The kernels are emitted with the instance's JIT (Model.newJIT, at
+			// NewInstance), not at Open, so the arm is checked after the prompt.
+			st := m.NewInstance(len(ids) + b.N + 2)
 			defer st.Close()
 			var lg []float32
 			for _, id := range ids {

@@ -34,7 +34,7 @@ func nmse32(want, got []float32) (float64, float64) {
 
 // qvlEncode preprocesses and encodes the golden's picture on a fresh state of
 // tw, after mut (nil for none) has had its say over the state.
-func qvlEncode(t *testing.T, tw *Tower, g *qvlGolden, mut func(*State)) ([]float32, ImageGrid) {
+func qvlEncode(t *testing.T, tw *Tower, g *qvlGolden, mut func(*Instance)) ([]float32, ImageGrid) {
 	t.Helper()
 	// A violation's configuration reaches the composer through the graphs
 	// the front end states from it.
@@ -85,8 +85,8 @@ func qwenTowerMatchesTransformers(t *testing.T, name string, opts ...Option) {
 	if tw == nil {
 		t.Fatal("the fixture's container carries no tower")
 	}
-	var cs *State
-	got, grid := qvlEncode(t, tw, g, func(s *State) { cs = s })
+	var cs *Instance
+	got, grid := qvlEncode(t, tw, g, func(s *Instance) { cs = s })
 	if len(opts) > 0 {
 		served, declined := cs.CPUBlockSteps()
 		t.Logf("composed CPU: %d tower block runs served, declines %v (form error %v)", served, nonZero(declined[:]), cs.CPUFormErr())
@@ -128,10 +128,10 @@ func qwenTowerMatchesTransformers(t *testing.T, name string, opts ...Option) {
 	}
 	for _, v := range []struct {
 		name string
-		mut  func(*State)
+		mut  func(*Instance)
 		cfg  func(c *TowerConfig) func()
 	}{
-		{"no 2-D rotary", func(s *State) {
+		{"no 2-D rotary", func(s *Instance) {
 			gh, gw := s.patchGrid()
 			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
 			for i := 0; i < len(s.vis.ropeSC); i += 2 {
@@ -183,7 +183,7 @@ func TestQwenVLMatchesTransformersEndToEnd(t *testing.T) {
 			emb, grid := qvlEncode(t, m.Tower(), g, nil)
 			n := len(g.Pre) + grid.Rows() + len(g.Post) + len(g.Cont) + 1
 			run := func(img Span) [][]float32 {
-				st := m.NewState(n)
+				st := m.NewInstance(n)
 				defer st.Close()
 				lg, err := st.PrefillMixed(Span{Tokens: g.Pre}, img, Span{Tokens: g.Post})
 				if err != nil {

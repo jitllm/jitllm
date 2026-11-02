@@ -14,7 +14,7 @@ import (
 // it, or the store holds by its key (a host mirror of the card's history).
 // The page the session is writing into (the one past its sealed pages) is
 // its own in flight and not counted.
-func kvDuplicates(t *testing.T, st *State) int {
+func kvDuplicates(t *testing.T, st *Instance) int {
 	t.Helper()
 	kc := st.kv
 	if _, none := kc.store.(NoStore); none || kc.ns == "" {
@@ -74,10 +74,10 @@ func TestKVIsHeldOnce(t *testing.T) {
 	for i := range prompt {
 		prompt[i] = int32(1000 + i*7)
 	}
-	chat := func(t *testing.T, g *tier.GPU, share func(*State) error) int {
+	chat := func(t *testing.T, g *tier.GPU, share func(*Instance) error) int {
 		dup := 0
 		for turn := range 2 {
-			st := m.NewState(4096)
+			st := m.NewInstance(4096)
 			if g != nil {
 				if err := st.SetDeviceLayers(g, -1); err != nil {
 					t.Fatal(err)
@@ -137,7 +137,7 @@ func TestKVIsHeldOnce(t *testing.T) {
 		// device arm's pages under the same names, and count as a copy.
 		shared := NewSharedStore()
 		t.Run("chat", func(t *testing.T) {
-			if dup := chat(t, g, func(st *State) error { return st.ShareKV(shared) }); dup != 0 {
+			if dup := chat(t, g, func(st *Instance) error { return st.ShareKV(shared) }); dup != 0 {
 				t.Fatalf("%d page(s) of a chat's history held twice", dup)
 			}
 		})
@@ -168,7 +168,7 @@ func TestKVIsHeldOnce(t *testing.T) {
 		// beside the session's.
 		t.Run("violation", func(t *testing.T) {
 			copying := NewMemStore()
-			dup := chat(t, g, func(st *State) error { st.SetKVStore(copying); return nil })
+			dup := chat(t, g, func(st *Instance) error { st.SetKVStore(copying); return nil })
 			t.Logf("the copying store: %d page(s) held twice", dup)
 			if dup == 0 {
 				t.Fatal("a copying store held nothing twice: the gate cannot see a copy")

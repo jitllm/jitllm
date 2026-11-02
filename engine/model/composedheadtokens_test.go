@@ -68,8 +68,8 @@ func TestComposedHeadTokens(t *testing.T) {
 						m.opt.devSample = DeviceSampleOn
 						stages := m.headStages()
 						ids := headTokens(m)
-						newStateOn := func(g *tier.GPU) *State {
-							st := m.NewState(len(ids) + gen + 4)
+						newStateOn := func(g *tier.GPU) *Instance {
+							st := m.NewInstance(len(ids) + gen + 4)
 							st.SetDeviceFallback(false)
 							if err := st.SetDevice(g); err != nil {
 								t.Fatal(err)
@@ -79,7 +79,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							}
 							return st
 						}
-						newState := func() *State { return newStateOn(g) }
+						newState := func() *Instance { return newStateOn(g) }
 						// Greedy: the token the device selects against Greedy over
 						// the logits of the same position.
 						a, b := newState(), newState()
@@ -131,8 +131,8 @@ func TestComposedHeadTokens(t *testing.T) {
 								t.Fatalf("%s did not open for the violation: %v", dev, err)
 							}
 							defer vg.Close()
-							vState := func() *State {
-								st := m.NewState(len(ids) + gen + 4)
+							vState := func() *Instance {
+								st := m.NewInstance(len(ids) + gen + 4)
 								st.SetDeviceFallback(false)
 								if err := st.SetDevice(vg); err != nil {
 									t.Fatal(err)

@@ -37,7 +37,7 @@ func splitRowsCase(t *testing.T, m *Model, ids []int32, blocks int, noSplit bool
 	n := len(ids)
 	want := make([][]float32, 0, n)
 	func() {
-		s := m.NewState(n + 2)
+		s := m.NewInstance(n + 2)
 		defer s.Close()
 		for _, id := range ids {
 			l, err := s.Forward(id)
@@ -47,7 +47,7 @@ func splitRowsCase(t *testing.T, m *Model, ids []int32, blocks int, noSplit bool
 			want = append(want, append([]float32(nil), l...))
 		}
 	}()
-	s := m.NewState(n + 2)
+	s := m.NewInstance(n + 2)
 	defer s.Close()
 	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(cf *tier.Config) {

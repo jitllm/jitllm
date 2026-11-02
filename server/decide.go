@@ -18,7 +18,7 @@ import (
 //
 // A decision runs in one turn on the model's gates (its devices' and the
 // host's, as a generate does), like an embedding: its prompts are prefilled
-// on the model's Decider, one State the model keeps and reuses, its blocks
+// on the model's Decider, one instance the model keeps and reuses, its blocks
 // placed on the model's device as a session's are (decideMaxBlocks); the
 // requests that arrive while it is busy are answered together after it, as
 // one batch (Decide).
@@ -27,7 +27,7 @@ import (
 type DecideOptions struct {
 	// Model is a loaded model's id, or the file name it was loaded from.
 	Model string
-	// State is what every question is about: a string or any JSON value,
+	// Instance is what every question is about: a string or any JSON value,
 	// object keys in the order the request wrote them.
 	State jinja.Value
 	// Questions are the request's questions in its order.
@@ -187,7 +187,7 @@ func (e *Engine) decideQueued(lm *LoadedModel) {
 	}
 }
 
-// deviceBlocks is how many blocks a State, Decider or Embedder of this model
+// deviceBlocks is how many blocks an instance, Decider or Embedder of this model
 // offers its device: the load's cap, or every block (-1).
 func (lm *LoadedModel) deviceBlocks() int {
 	if lm.maxBlocks != 0 {

@@ -144,7 +144,7 @@ func newMixedCase(t *testing.T, m *Model, ids [][]int32, gens []int, spec string
 	}
 	for i := range ids {
 		g := c.open()
-		st := m.NewState(mixedSeq)
+		st := m.NewInstance(mixedSeq)
 		c.place(st, g)
 		var next int32
 		if g == nil {
@@ -197,7 +197,7 @@ func (c *mixedCase) open() *tier.GPU {
 	return g
 }
 
-func (c *mixedCase) place(st *State, g *tier.GPU) {
+func (c *mixedCase) place(st *Instance, g *tier.GPU) {
 	if g == nil {
 		return
 	}
@@ -213,13 +213,13 @@ func (c *mixedCase) place(st *State, g *tier.GPU) {
 // Scheduler's stats, whether a prompt was ever left part-fed between steps,
 // and the rows that chained a device linear block's state after another row of
 // their own sequence (tier.Stats.RecChainRows).
-func (c *mixedCase) run(chunkPos func(base, j, k int) int) ([][]int32, SchedulerStats, bool, int) {
+func (c *mixedCase) run(chunkPos func(base, j, k int) int) ([][]int32, RowSchedulerStats, bool, int) {
 	t := c.t
 	g := c.open()
 	if g != nil {
 		defer g.Close()
 	}
-	sc := NewScheduler(c.m, mixedRows, mixedSeq, WithPromptBudget(mixedBudget))
+	sc := NewRowScheduler(c.m, mixedRows, mixedSeq, WithPromptBudget(mixedBudget))
 	defer sc.Close()
 	sc.chunkPos = chunkPos
 	c.place(sc.st, g)

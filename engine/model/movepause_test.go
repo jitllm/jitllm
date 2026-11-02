@@ -66,7 +66,7 @@ func TestMovePause(t *testing.T) {
 		}
 		defer m.Close()
 		in := m.Vocab.Encode(sb.String(), true)
-		st := m.NewState(len(in) + gen + 8)
+		st := m.NewInstance(len(in) + gen + 8)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)

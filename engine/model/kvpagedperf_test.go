@@ -61,7 +61,7 @@ func TestPagedKVCost(t *testing.T) {
 	// the layer with the most of them actually holds.
 	sample := func(p int) (float64, int) {
 		defer m.setKVPageForTest(p)()
-		s := m.NewState(maxSeq)
+		s := m.NewInstance(maxSeq)
 		defer s.Close()
 		ids := make([]int32, depth)
 		for i := range ids {
@@ -181,7 +181,7 @@ func TestPrefixCacheSpeedup(t *testing.T) {
 	// Fill the store once, outside every timed arm.
 	restored := 0
 	func() {
-		s := m.NewState(n + 16)
+		s := m.NewInstance(n + 16)
 		defer s.Close()
 		s.SetKVStore(fs)
 		s.SetCacheKey(key)
@@ -190,11 +190,11 @@ func TestPrefixCacheSpeedup(t *testing.T) {
 		}
 	}()
 
-	// Warm the process first: the first State emits and tunes kernels and
+	// Warm the process first: the first instance emits and tunes kernels and
 	// faults weights in, which would land in the earliest rounds as dispersion.
 	for i := 0; i < 2; i++ {
 		func() {
-			s := m.NewState(n + 16)
+			s := m.NewInstance(n + 16)
 			defer s.Close()
 			if _, err := s.Prefill(prompt); err != nil {
 				t.Fatal(err)
@@ -203,7 +203,7 @@ func TestPrefixCacheSpeedup(t *testing.T) {
 	}
 
 	sample := func(cached bool) float64 {
-		s := m.NewState(n + 16)
+		s := m.NewInstance(n + 16)
 		defer s.Close()
 		if cached {
 			s.SetKVStore(fs)

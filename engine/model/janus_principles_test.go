@@ -12,7 +12,7 @@ import (
 // the same bits, relocates host <-> device, and a decode after a picture
 // allocates nothing.
 
-func janusEncodePhoto(t *testing.T, tw *Tower, s *State) []float32 {
+func janusEncodePhoto(t *testing.T, tw *Tower, s *Instance) []float32 {
 	t.Helper()
 	px, err := s.PreprocessImage(decodeImage(t, mcvPhoto))
 	if err != nil {
@@ -110,7 +110,7 @@ func TestJanusDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 			t.Fatal(err)
 		}
 		const warm, n = 96, 48
-		s := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + warm + n + 8)
+		s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + warm + n + 8)
 		defer s.Close()
 		if g != nil {
 			if err := s.SetDevice(g); err != nil {

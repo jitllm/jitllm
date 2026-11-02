@@ -43,7 +43,7 @@ func TestKimiK3ServesComposed(t *testing.T) {
 				t.Fatalf("the head over several streams is %s, want refused by name, and the input rows %s, want stated", s.headWhy, s.embedWhy)
 			}
 			ids := g.IDs
-			host := m.NewState(len(ids) + 1)
+			host := m.NewInstance(len(ids) + 1)
 			var want [][]float32
 			for _, id := range ids {
 				lg, err := host.Forward(id)

@@ -9,7 +9,7 @@ import (
 
 // A recurrent block's projections as GEMMs over a prompt chunk (linrows.go)
 // against the row-by-row arm (WithLinearRowByRow), on one model and two
-// States: the projections, every recurrent state and convolution window at
+// instances: the projections, every recurrent state and convolution window at
 // every prompt partition boundary, the logits, a teacher-forced continuation
 // and a prefix-cache resume.
 //
@@ -87,23 +87,23 @@ func (e *linEnv) String() string {
 	return b.String()
 }
 
-// linPair is a State in each arm.
-func linPair(m *Model, n int) (ref, bat *State) {
-	ref, bat = m.NewState(n), m.NewState(n)
+// linPair is an instance in each arm.
+func linPair(m *Model, n int) (ref, bat *Instance) {
+	ref, bat = m.NewInstance(n), m.NewInstance(n)
 	ref.lin.ref, bat.lin.ref = true, false
 	return ref, bat
 }
 
 // linStates compares every recurrent layer's state and window.
-func linStates(t *testing.T, e *linEnv, what string, ref, bat *State) {
+func linStates(t *testing.T, e *linEnv, what string, ref, bat *Instance) {
 	t.Helper()
 	linSnapCmp(t, e, what, linSnap(ref), bat)
 }
 
-// linSnapshot is a State's recurrent half, copied.
+// linSnapshot is a session's recurrent half, copied.
 type linSnapshot struct{ state, conv [][]float32 }
 
-func linSnap(s *State) linSnapshot {
+func linSnap(s *Instance) linSnapshot {
 	var o linSnapshot
 	for li := range s.rstate {
 		o.state = append(o.state, append([]float32(nil), s.rstate[li]...))
@@ -112,7 +112,7 @@ func linSnap(s *State) linSnapshot {
 	return o
 }
 
-func linSnapCmp(t *testing.T, e *linEnv, what string, ref linSnapshot, bat *State) {
+func linSnapCmp(t *testing.T, e *linEnv, what string, ref linSnapshot, bat *Instance) {
 	t.Helper()
 	n := 0
 	for li := range ref.state {
@@ -163,8 +163,8 @@ func TestLinearRowsResumeFromThePrefixCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := NewMemStore()
-	run := func() (*State, []float32) {
-		s := m.NewState(200)
+	run := func() (*Instance, []float32) {
+		s := m.NewInstance(200)
 		s.lin.ref = false
 		s.SetKVStore(st)
 		if err := s.SetCacheKey("lin/v1"); err != nil {

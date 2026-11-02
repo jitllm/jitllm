@@ -31,8 +31,8 @@ import (
 // large picture once does not make every later one run its rows, and calls
 // whose sizes alternate (an encoder's questions, short and long) do not
 // rebuild the set -- and compile its kernels -- at every call. A picture the budget cannot hold is
-// refused with nothing allocated, and the State takes tower blocks to the CPU until
-// it fits (model.State.reserveTowerRows): the picture encodes on the host,
+// refused with nothing allocated, and the instance takes tower blocks to the CPU until
+// it fits (model.Instance.reserveTowerRows): the picture encodes on the host,
 // never out of memory. The last tower block to leave takes the set with it
 // (dropIdleTower), and so does a first block the budget refused.
 

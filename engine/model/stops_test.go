@@ -36,7 +36,7 @@ func TestChatStopsAtTheTurnsEnd(t *testing.T) {
 	// gen is a generation loop: greedy, ended by stop or n tokens, the stop
 	// token not emitted.
 	gen := func(stop func(int32) bool) []int32 {
-		st := m.NewState(len(ids) + n + 1)
+		st := m.NewInstance(len(ids) + n + 1)
 		defer st.Close()
 		lg, err := st.Prefill(ids)
 		if err != nil {

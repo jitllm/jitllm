@@ -183,7 +183,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 		moves []move
 		// squeeze attaches under a budget that holds every block but only half
 		// the batch's history, so the attach's reservation hands blocks to the
-		// host for this State (reserveRows); at step `first` the budget comes
+		// host for this instance (reserveRows); at step `first` the budget comes
 		// back and a step reclaims them, sending the rows' history up.
 		squeeze bool
 		// seq is each row's capacity. The squeezed arm's is wider, so the
@@ -207,7 +207,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			// Retires put the rows at different positions: row 1 restarts at
 			// step 3, row 2 at step 6, so at the first move they sit at 8, 5
 			// and 2.
-			drive := func(st *State, each func(step int)) [][]float32 {
+			drive := func(st *Instance, each func(step int)) [][]float32 {
 				out := make([][]float32, 0, steps)
 				for step := 0; step < steps; step++ {
 					switch step {
@@ -411,7 +411,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 				t.Fatal(err)
 			}
 			if ls := g.Stats(); ls.KVBytes != 0 || ls.RecBytes != 0 {
-				t.Errorf("after the State closed the device still holds %d B of KV and %d B "+
+				t.Errorf("after the instance closed the device still holds %d B of KV and %d B "+
 					"of recurrent state", ls.KVBytes, ls.RecBytes)
 			}
 			g.Close()

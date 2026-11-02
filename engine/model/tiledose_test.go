@@ -51,7 +51,7 @@ func TestPrefillTileDose(t *testing.T) {
 	ca, cb := envInt("JITLLM_CHUNK_A", 0), envInt("JITLLM_CHUNK_B", 0)
 
 	// capBytes, not chunk: `chunk` is the prompt length in this function.
-	mk := func(tile string, capBytes int) *State {
+	mk := func(tile string, capBytes int) *Instance {
 		n, err := strconv.Atoi(tile)
 		if err != nil || n < 1 {
 			t.Fatalf("tile %q is not a positive integer", tile)
@@ -60,7 +60,7 @@ func TestPrefillTileDose(t *testing.T) {
 		if capBytes > 0 {
 			m.jit = append(m.jit, nn.WithChunkBytes(capBytes))
 		}
-		st := m.NewState(chunk + 8)
+		st := m.NewInstance(chunk + 8)
 		// Warm: the tiled kernels are emitted lazily per (type, k, nrows), and
 		// that cost must not land inside the measurement.
 		st.Reset()
@@ -105,7 +105,7 @@ func TestPrefillTileDose(t *testing.T) {
 		}
 	}
 
-	step := func(st *State) func(int) {
+	step := func(st *Instance) func(int) {
 		return func(n int) {
 			for i := 0; i < n; i++ {
 				st.Reset()
@@ -145,7 +145,7 @@ func TestPrefillTileDose(t *testing.T) {
 // tileWidths reports the tile each of layer 0's four matrices runs at, so the
 // dose can be shown to have moved something. Layer 0 speaks for the block: the
 // census over Llama-3.2-1B's shapes found one width at all four of them.
-func tileWidths(s *State) map[string]int {
+func tileWidths(s *Instance) map[string]int {
 	l := &s.m.layers[0]
 	out := map[string]int{}
 	for _, w := range []struct {

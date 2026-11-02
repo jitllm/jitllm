@@ -26,7 +26,7 @@ func TestResetForgetsTheTokenStream(t *testing.T) {
 	defer m.setKVPageForTest(page)()
 
 	ms := NewMemStore()
-	s := m.NewState(maxSeq)
+	s := m.NewInstance(maxSeq)
 	defer s.Close()
 	s.SetKVStore(ms)
 	mustKey(t, s, "tinyllama/q3_K_M/f32")
@@ -91,7 +91,7 @@ func TestNoteRefusesToAppendAcrossAGap(t *testing.T) {
 	const maxSeq, page, prompt = 128, 8, 40
 	defer m.setKVPageForTest(page)()
 
-	s := m.NewState(maxSeq)
+	s := m.NewInstance(maxSeq)
 	defer s.Close()
 	s.SetKVStore(NewMemStore())
 	mustKey(t, s, "tinyllama/q3_K_M/f32")

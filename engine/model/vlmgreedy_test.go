@@ -101,7 +101,7 @@ func TestVisionGreedyMatchesLlamaMtmd(t *testing.T) {
 				if n := SpanPositions(spans, m.Cfg.NEmbd); o.Tokens > 0 && n != o.Tokens {
 					t.Fatalf("the prompt is %d positions here and %d in llama.cpp", n, o.Tokens)
 				}
-				st := m.NewState(SpanPositions(spans, m.Cfg.NEmbd) + len(ref) + 1)
+				st := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + len(ref) + 1)
 				defer st.Close()
 				logits, err := st.PrefillMixed(spans...)
 				if err != nil {

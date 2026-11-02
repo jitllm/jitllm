@@ -46,7 +46,7 @@ func forwardSampleMatches(t *testing.T, name string) {
 		m.opt.devSample = mode
 		g := swaTier(t)
 		defer g.Close()
-		st := m.NewState(256)
+		st := m.NewInstance(256)
 		defer st.Close()
 		st.SetDevice(g)
 		if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {

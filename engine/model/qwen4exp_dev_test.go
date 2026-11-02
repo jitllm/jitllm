@@ -52,7 +52,7 @@ func TestQwen4ExpDeviceRunsTheChunkWhole(t *testing.T) {
 		ran++
 		t.Run(spec, func(t *testing.T) {
 			defer gpu.Close()
-			st := m.NewState(len(g.IDs) + 2)
+			st := m.NewInstance(len(g.IDs) + 2)
 			defer st.Close()
 			st.SetDeviceLayers(gpu, -1)
 			if st.GPULayers() != nl {
@@ -96,7 +96,7 @@ func TestQwen4ExpQSATurnsByTheMarks(t *testing.T) {
 	m, g := openQ4E(t, "synth-qwen4exp")
 	defer m.Close()
 	const at = 6
-	run := func(st *State, delta int) [][]float32 {
+	run := func(st *Instance, delta int) [][]float32 {
 		var out [][]float32
 		for p, id := range g.IDs {
 			if p == at && delta != 0 {
@@ -123,7 +123,7 @@ func TestQwen4ExpQSATurnsByTheMarks(t *testing.T) {
 		return w
 	}
 	host := func(delta int) [][]float32 {
-		st := m.NewState(len(g.IDs) + 1)
+		st := m.NewInstance(len(g.IDs) + 1)
 		defer st.Close()
 		return run(st, delta)
 	}
@@ -144,7 +144,7 @@ func TestQwen4ExpQSATurnsByTheMarks(t *testing.T) {
 				if moved := nmse(plain, want); !(moved > 1e-4) {
 					t.Fatalf("delta %d: the mark moves the host's logits by %.3e, which no gate could see", delta, moved)
 				}
-				st := m.NewState(len(g.IDs) + 1)
+				st := m.NewInstance(len(g.IDs) + 1)
 				st.SetDeviceLayers(gpu, -1)
 				if st.GPULayers() != m.Cfg.NLayer {
 					t.Fatalf("placed %d of %d blocks: %v", st.GPULayers(), m.Cfg.NLayer, gpu.Err())

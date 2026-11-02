@@ -16,7 +16,7 @@ func preloadIDs(t *testing.T, path string, n int, opts ...Option) ([]int32, *Mod
 		t.Fatal(err)
 	}
 	in := m.Vocab.Encode("Once upon a time", true)
-	st := m.NewState(len(in) + n + 1)
+	st := m.NewInstance(len(in) + n + 1)
 	defer st.Close()
 	logits, err := st.Prefill(in)
 	if err != nil {

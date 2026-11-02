@@ -9,12 +9,12 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestAStateThatLedAHostStepDecodesAlone: the State leading a host step across
+// TestAStateThatLedAHostStepDecodesAlone: the instance leading a host step across
 // sessions lends the model its host scratch for the step and hands it back
 // (borrowStep, returnStep), and a decode token it runs alone afterwards -- the
 // other row having ended, or still sealing its prompt -- finds the scratch it
 // needs: the gated query of a hybrid is one buffer a single token reads. Both
-// States are checked against the same tokens run on States that never stepped
+// instances are checked against the same tokens run on instances that never stepped
 // together.
 func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 	for _, c := range []struct{ name, file string }{
@@ -37,7 +37,7 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 			// The truth: each prompt run alone, then three tokens.
 			var want [2][]float32
 			for i, pr := range prompts {
-				s := m.NewState(64)
+				s := m.NewInstance(64)
 				lg, err := s.Prefill(pr)
 				if err != nil {
 					t.Fatal(err)
@@ -51,7 +51,7 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 				s.Close()
 			}
 
-			a, b := m.NewState(64), m.NewState(64)
+			a, b := m.NewInstance(64), m.NewInstance(64)
 			defer a.Close()
 			defer b.Close()
 			if err := a.HostRefusal(); err != nil {
@@ -68,7 +68,7 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 			ta, tb := []int32{next(lga)}, []int32{next(lgb)}
 			r0 := m.HostStepRows()
 			// a leads one joint step, then b's row is done and a decodes alone.
-			out, err := StepRuns([]Run{{State: a, Tokens: ta, Logits: true}, {State: b, Tokens: tb, Logits: true}})
+			out, err := StepRuns([]Run{{Instance: a, Tokens: ta, Logits: true}, {Instance: b, Tokens: tb, Logits: true}})
 			if err != nil {
 				t.Fatal(err)
 			}

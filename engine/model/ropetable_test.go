@@ -49,7 +49,7 @@ func TestRopeTableAgreesWithF64(t *testing.T) {
 			t.Skip(err)
 		}
 		defer m.Close()
-		s := m.NewState(len(ids) + 4)
+		s := m.NewInstance(len(ids) + 4)
 		defer s.Close()
 		out := make([][]float32, 0, len(ids))
 		for _, id := range ids {

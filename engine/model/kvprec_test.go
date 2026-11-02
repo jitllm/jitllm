@@ -49,7 +49,7 @@ func TestKVPrecisionCost(t *testing.T) {
 			run := func(f16 bool) []float32 {
 				m.SetKVF16(f16)
 				defer m.SetKVF16(false)
-				s := m.NewState(depth + 40)
+				s := m.NewInstance(depth + 40)
 				defer s.Close()
 				// A fixed stream, teacher-forced: both arms see identical
 				// inputs, so the only difference is the cache's precision.

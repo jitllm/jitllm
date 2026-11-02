@@ -8,13 +8,13 @@ import (
 	"github.com/jitllm/jitllm/jit"
 )
 
-// The State half of speculative decoding (spec.go): one call that runs rows of
+// The instance half of speculative decoding (spec.go): one call that runs rows of
 // one sequence and hands back, besides the KV it writes, the logits and the
 // normed hidden state of the rows a speculation step reads, and on a host
 // hybrid the recurrent state after each row; and the rewind that undoes the
 // rows a verification rejected.
 
-// rowsOut is what a speculation step wants back from prefillSrc (State.rows).
+// rowsOut is what a speculation step wants back from prefillSrc (Instance.rows).
 //
 // Rows [from, n) of the call want their logits and hidden state: every row of
 // a verification (from 0), the last row alone of a draft step or of the
@@ -101,7 +101,7 @@ func (r *rowsOut) foldHead(h *nn.Head, base, n int) (func(), bool) {
 // n-gram block) reads ids. It is prefill with every output a speculation step
 // reads: one pass over the weights for all the rows, the KV written for each.
 // The caller holds the pager (enterPager), as every inner path assumes.
-func (s *State) stepRows(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
+func (s *Instance) stepRows(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
 	c := s.c
 	out.token, out.tokens, out.resBase, out.ngBase = -1, nil, 0, 0
 	switch {
@@ -174,7 +174,7 @@ func (e errRowsRefused) Error() string {
 // rowsVerifiable reports a session whose speculation steps can run as ragged
 // rows: every block it runs and the head on one device that runs rows, no
 // block the ragged path refuses (latent attention).
-func (s *State) rowsVerifiable() bool {
+func (s *Instance) rowsVerifiable() bool {
 	_, ok := s.onRowsDevice()
 	return ok && !s.c.MLA() && s.nseq == 1
 }
@@ -188,7 +188,7 @@ func (s *State) rowsVerifiable() bool {
 // (tier.ragStep.chain) -- runs every row through the head in position order
 // into s.rowsLog and s.rowsHid, and the tail is copied out: a few rows of
 // head beside a prompt chunk.
-func (s *State) stepRowsDevice(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
+func (s *Instance) stepRowsDevice(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
 	if s.c.Q4E() {
 		return s.stepRowsStreams(src, ids, out)
 	}
@@ -291,7 +291,7 @@ func (s *State) stepRowsDevice(src []func(dst []float32) error, ids []int32, out
 // logits and hidden state, from the device's head where the chunk folded it
 // (headDone) and from the host's otherwise. The wanted rows are in the last
 // chunk, whose residual rows are in s.bx from lastBase.
-func (s *State) finishRows(headDone bool, lastBase, total int) error {
+func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	m, c, r := s.m, s.c, s.rows
 	if r.noHead {
 		return s.kvCheck()
@@ -340,7 +340,7 @@ func (s *State) finishRows(headDone bool, lastBase, total int) error {
 // snapRow copies every host linear block's recurrent state for the slot after
 // row `row` of a speculation step into its snapshot, when the step asked for
 // one that far. Called once per (block, row), after the block steps the row.
-func (r *rowsOut) snapRow(s *State, li, slot, row int) {
+func (r *rowsOut) snapRow(s *Instance, li, slot, row int) {
 	if r == nil || row >= len(r.snap) || s.rconv == nil || s.rconv[li] == nil {
 		return
 	}
@@ -361,7 +361,7 @@ func (r *rowsOut) snapRow(s *State, li, slot, row int) {
 // that begins at ngBase, at off into block li's recurrent tail: the n-gram
 // block's predecessors (off 0) and convolution history, as each row moves
 // them on (ngramRows, ngramApply).
-func (r *rowsOut) snapTail(s *State, li, row, off int, v []float32) {
+func (r *rowsOut) snapTail(s *Instance, li, row, off int, v []float32) {
 	if r == nil {
 		return
 	}
@@ -376,7 +376,7 @@ func (r *rowsOut) snapTail(s *State, li, row, off int, v []float32) {
 // x (stream-major) into the step's hidden rows, every stream of a row
 // together: on Qwen3.8-Flash-Next a step's hidden state is the residual
 // before the head's mix (q4eCollapse), ResidW a row, not the head's input.
-func (r *rowsOut) tapStreams(s *State, x []float32, n int) {
+func (r *rowsOut) tapStreams(s *Instance, x []float32, n int) {
 	if r == nil || r.noHead {
 		return
 	}
@@ -399,7 +399,7 @@ func (r *rowsOut) tapStreams(s *State, x []float32, n int) {
 // from ids, the blocks on the device as rows in position order, the head on
 // the host over the collapsed streams. Every row runs through the head and
 // the wanted tail is copied out.
-func (s *State) stepRowsStreams(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
+func (s *Instance) stepRowsStreams(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
 	m, c := s.m, s.c
 	n := len(src)
 	p0 := s.bpos[0]
@@ -464,7 +464,7 @@ func (s *State) stepRowsStreams(src []func(dst []float32) error, ids []int32, ou
 // rowsHead projects n collapsed rows of a hyper-connected model's verification
 // into logits: on the device as a head-only ragged call, or on the host when
 // the device refuses it.
-func (s *State) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []float32, nlogit int) error {
+func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []float32, nlogit int) error {
 	c := s.m.Cfg
 	x := s.bx[:n*c.ResidW()]
 	if err := s.collapseStreams(x, n); err != nil {
@@ -497,7 +497,7 @@ func (s *State) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []floa
 
 // newRecSnap allocates one snapshot of every host linear block's state for
 // one row, or an empty one on a model with none.
-func (s *State) newRecSnap() recSnap {
+func (s *Instance) newRecSnap() recSnap {
 	if s.rconv == nil {
 		return recSnap{}
 	}
@@ -516,10 +516,10 @@ func (s *State) newRecSnap() recSnap {
 // sn, and loadRec copies it back. A device block's state is the device's
 // (nn.RecRewinder): the host's copy of it is not the live one, and copying it
 // was a measurable share of a speculation round.
-func (s *State) saveRec(sn *recSnap) { s.copyRec(sn, true) }
-func (s *State) loadRec(sn *recSnap) { s.copyRec(sn, false) }
+func (s *Instance) saveRec(sn *recSnap) { s.copyRec(sn, true) }
+func (s *Instance) loadRec(sn *recSnap) { s.copyRec(sn, false) }
 
-func (s *State) copyRec(sn *recSnap, save bool) {
+func (s *Instance) copyRec(sn *recSnap, save bool) {
 	g := s.dg
 	nc, ns := g.convStateLen(), g.stateStride()
 	for li := range s.rconv {
@@ -557,7 +557,7 @@ func (s *State) copyRec(sn *recSnap, save bool) {
 // page store's seal mark and the noted token ids fall with it. A recurrent
 // state has no position to rewind: the caller restores it (loadRec,
 // nn.RecRewinder) before or after, which is why this is not public.
-func (s *State) rewind(p int) {
+func (s *Instance) rewind(p int) {
 	if p > s.bpos[0] {
 		panic(fmt.Sprintf("model: rewind forward from %d to %d", s.bpos[0], p))
 	}

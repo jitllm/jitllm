@@ -37,7 +37,7 @@ func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
 	for i, pr := range prompts {
 		ids[i] = m.Vocab.Encode(pr, true)
 		g := swaTier(t)
-		st := m.NewState(seq)
+		st := m.NewInstance(seq)
 		st.SetDevice(g)
 		if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
 			t.Fatalf("solo: placed %d of %d blocks: %q", st.GPULayers(), m.Cfg.NLayer, g.Err())
@@ -63,12 +63,12 @@ func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
 		opt  []tier.Option
 	}{{"default", nil}} {
 		got, after := batchGreedy(t, m, ids, gen, seq, arm.opt)
-		// And a shorter State on the same card afterwards: the batch grew the
-		// device's capacity, and a later State's cache must be that wide or
+		// And a shorter instance on the same card afterwards: the batch grew the
+		// device's capacity, and a later session's cache must be that wide or
 		// RoPERowsT writes past it (tier.capped).
 		for j := range after {
 			if after[j] != want[0][j] {
-				t.Fatalf("%s: a single State after the batch, token %d: %d, alone %d\ngot  %v\nwant %v",
+				t.Fatalf("%s: a single instance after the batch, token %d: %d, alone %d\ngot  %v\nwant %v",
 					arm.name, j, after[j], want[0][j], after, want[0])
 			}
 		}
@@ -109,7 +109,7 @@ const batchTie = 1.0
 // hostGap is |logit(a) - logit(b)| on the host after the prompt and prefix.
 func hostGap(t *testing.T, m *Model, prompt, prefix []int32, a, b int32) float64 {
 	t.Helper()
-	st := m.NewState(len(prompt) + len(prefix) + 1)
+	st := m.NewInstance(len(prompt) + len(prefix) + 1)
 	defer st.Close()
 	var lg []float32
 	var err error
@@ -131,7 +131,7 @@ var lastBatchName string
 
 // batchGreedy decodes every prompt together, a token per step, and returns
 // each row's first gen generated tokens, the first prompt decoded afterwards by
-// a single State on the same card, and the count of sm_70 tensor-core matvecs.
+// a single instance on the same card, and the count of sm_70 tensor-core matvecs.
 func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier.Option) (got [][]int32, after []int32) {
 	t.Helper()
 	g, err := tier.OpenWith(append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
@@ -156,7 +156,7 @@ func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier
 		}
 		if done {
 			st.Close()
-			one := m.NewState(len(ids[0]) + gen + 1)
+			one := m.NewInstance(len(ids[0]) + gen + 1)
 			defer one.Close()
 			one.SetDevice(g)
 			var next int32

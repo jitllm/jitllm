@@ -8,7 +8,7 @@ import (
 
 // offCards is the blocks of [lo, hi) the engine was to place and no card
 // holds: what is left on the CPU, less the blocks a placement keeps there.
-func (s *State) offCards(lo, hi int) []int {
+func (s *Instance) offCards(lo, hi int) []int {
 	var off []int
 	for li := lo; li < hi; li++ {
 		if s.devAt(li) {
@@ -22,7 +22,7 @@ func (s *State) offCards(lo, hi int) []int {
 	return off
 }
 
-// pageOnCards is the placement of a State whose caller did not list the CPU
+// pageOnCards is the placement of an instance whose caller did not list the CPU
 // (WithCPU(false)) when the cards do not hold every block resident. Every
 // block it decides is marked streamed (Place.Stream) where it is -- a block
 // already on a card stays there, formed once, and becomes a page the pager
@@ -31,7 +31,7 @@ func (s *State) offCards(lo, hi int) []int {
 // the CPU, a mixture's routed experts streamed to the card rather than run on
 // the host. A block that not even that places -- a plan no card runs, a
 // budget below the slots a swap needs -- is the placement's error, by name.
-func (s *State) pageOnCards(lo, hi int) error {
+func (s *Instance) pageOnCards(lo, hi int) error {
 	if s.cpuListed() || s.ld == nil || s.ldCand == nil {
 		return nil
 	}

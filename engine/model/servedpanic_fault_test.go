@@ -16,7 +16,7 @@ import (
 // TestServedPanicFailsTheStep panics inside a served step's submission on
 // every device (JITLLM_DEVICE_PANIC_AT, the prompt's submission and a
 // decode step's): the step returns the panic as the device's failure, the
-// State finishes the steps, and Close returns, where a submission that
+// Instance finishes the steps, and Close returns, where a submission that
 // panicked left its ticket in flight and Close waited on it forever.
 //
 // Build with -tags jitllmfault; the tier reads JITLLM_DEVICE_PANIC_AT at Open.
@@ -41,7 +41,7 @@ func TestServedPanicFailsTheStep(t *testing.T) {
 					noDevice(t, dev, err)
 				}
 				defer g.Close()
-				s := m.NewState(len(ids) + 8)
+				s := m.NewInstance(len(ids) + 8)
 				if err := s.SetDevice(g); err != nil {
 					t.Fatal(err)
 				}
@@ -84,7 +84,7 @@ func TestServedPanicFailsTheStep(t *testing.T) {
 				select {
 				case <-closed:
 				case <-time.After(time.Minute):
-					t.Fatal("State.Close did not return after a submission panicked")
+					t.Fatal("Instance.Close did not return after a submission panicked")
 				}
 			})
 		}

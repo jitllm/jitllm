@@ -120,7 +120,7 @@ func TestQwen4ExpServesComposedOnCPU(t *testing.T) {
 // no graph.
 func q4ePrompt(t *testing.T, m *Model, ids []int32, n int, composed bool) [][]float32 {
 	t.Helper()
-	s := m.NewState(n + 5)
+	s := m.NewInstance(n + 5)
 	defer s.Close()
 	lg, err := s.Prefill(ids[:n])
 	if err != nil {
@@ -154,7 +154,7 @@ func q4ePrompt(t *testing.T, m *Model, ids []int32, n int, composed bool) [][]fl
 // why alone, and every head step and streams' row is served.
 func partCPULogits(t *testing.T, m *Model, toks []int32, f cpuFault, composed bool, served int, why jit.Decline) [][]float32 {
 	t.Helper()
-	s := m.NewState(len(toks) + 1)
+	s := m.NewInstance(len(toks) + 1)
 	defer s.Close()
 	s.cpu.fault = f
 	var out [][]float32
@@ -350,7 +350,7 @@ func TestQwen4ExpServesComposed(t *testing.T) {
 				t.Fatal("no block is stated: the gate selects nothing")
 			}
 			ids := g.IDs
-			host := m.NewState(len(ids) + 1)
+			host := m.NewInstance(len(ids) + 1)
 			var want [][]float32
 			for _, id := range ids {
 				lg, err := host.Forward(id)

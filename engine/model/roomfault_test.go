@@ -15,14 +15,14 @@ import (
 // survive (RULE 10): a recurrent seat reset from host-written zeros, a
 // Scheduler clamped to the batched scratch the device holds (nn.RowsWidther),
 // and a step whose recurrent seats do not fit run with the blocks home
-// (nn.RowsRoomer, SchedulerStats.RoomToCPU). Every forced arm's tokens are the
+// (nn.RowsRoomer, RowSchedulerStats.RoomToCPU). Every forced arm's tokens are the
 // host's.
 
 // roomBatch is the hybrid fixture's batch on the host: the tokens each forced
 // arm must give.
-func roomBatch(t *testing.T, m *Model, g *tier.GPU, width int) ([][]int32, SchedulerStats, error) {
+func roomBatch(t *testing.T, m *Model, g *tier.GPU, width int) ([][]int32, RowSchedulerStats, error) {
 	t.Helper()
-	sc := NewScheduler(m, 3, 300, WithPromptBudget(width))
+	sc := NewRowScheduler(m, 3, 300, WithPromptBudget(width))
 	defer sc.Close()
 	if g != nil {
 		if err := sc.st.SetDeviceLayers(g, -1); err != nil {
@@ -81,7 +81,7 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 		run := func(fault string) (error, int) {
 			g := swaTier(t)
 			defer g.Close()
-			st := m.NewState(300)
+			st := m.NewInstance(300)
 			defer st.Close()
 			if err := st.SetDeviceLayers(g, -1); err != nil || st.GPULayers() == 0 {
 				t.Fatalf("placement: %v, %d blocks: %s", err, st.GPULayers(), g.Err())

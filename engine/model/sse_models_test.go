@@ -162,7 +162,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	}
 	defer m.Close()
 	var a ssemArm
-	s := m.NewState(len(ids) + gen + 1)
+	s := m.NewInstance(len(ids) + gen + 1)
 	for _, id := range ids {
 		l, err := s.Forward(id)
 		if err != nil {
@@ -185,7 +185,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	a.ksliced, a.workers = s.jit.KSliced(), s.jit.Workers()
 	s.Close()
 
-	p := m.NewState(len(ids) + 1)
+	p := m.NewInstance(len(ids) + 1)
 	l, err := p.Prefill(ids)
 	if err != nil {
 		t.Fatalf("Prefill on tier %v: %v", cpu.HostTier(), err)
@@ -214,7 +214,7 @@ func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float
 	}
 	defer m.Close()
 	before := cpu.MappedByTier()
-	s := m.NewState(len(ids) + 1)
+	s := m.NewInstance(len(ids) + 1)
 	defer s.Close()
 	var worst float64
 	for pos, id := range ids {

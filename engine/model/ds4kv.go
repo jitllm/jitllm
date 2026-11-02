@@ -52,7 +52,7 @@ func (kc *kvCache) entRate(li int) int {
 
 // entLayout is block li's entry layout: one row of EntRowAt floats per entry,
 // always float32 (an entry is a pooled key, and the indexer selects over it).
-func (s *State) entLayout(li int) kvLayout {
+func (s *Instance) entLayout(li int) kvLayout {
 	l := s.kvl
 	l.nKV, l.headDim, l.fmt, l.jit = 1, s.m.Cfg.EntRowAt(li), cpu.KVF32, nil
 	return l

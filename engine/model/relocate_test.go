@@ -34,7 +34,7 @@ func relocationModel(t *testing.T) (*Model, []int32, uint64) {
 		noDevice(t, "device", err)
 	}
 	defer probe.Close()
-	st := m.NewState(swaMaxSeq)
+	st := m.NewInstance(swaMaxSeq)
 	defer st.Close()
 	st.SetDevice(probe)
 	if st.GPULayers() != m.Cfg.NLayer {
@@ -78,7 +78,7 @@ func TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt(t *testing.T) {
 	const page = relocPage
 	host := swaRun(t, m, nil, ids, false)
 
-	// arm is what one run leaves behind: its tier and State are closed before
+	// arm is what one run leaves behind: its tier and instance are closed before
 	// the next opens, because a 4 GiB card holds one copy of this model.
 	type arm struct {
 		out                                [][]float32
@@ -87,7 +87,7 @@ func TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt(t *testing.T) {
 	run := func(relocate, batched bool) arm {
 		g := relocTier(t, used)
 		defer g.Close()
-		st := m.NewState(swaMaxSeq)
+		st := m.NewInstance(swaMaxSeq)
 		defer st.Close()
 		st.SetDevice(g)
 		if st.GPULayers() != m.Cfg.NLayer {
@@ -199,7 +199,7 @@ func TestRelocationTakesFromTheDeviceThatRefused(t *testing.T) {
 	}
 	g := relocTier(t, used)
 	defer g.Close()
-	st := m.NewState(swaMaxSeq)
+	st := m.NewInstance(swaMaxSeq)
 	defer st.Close()
 	st.SetDevice(&refusing{GPU: g, firstCard: first})
 	if st.GPULayers() != m.Cfg.NLayer {
@@ -260,7 +260,7 @@ func TestRelocatedBlocksComeBack(t *testing.T) {
 	t.Run("shorter-prompt", func(t *testing.T) {
 		g := relocTier(t, used)
 		defer g.Close()
-		st := m.NewState(swaMaxSeq)
+		st := m.NewInstance(swaMaxSeq)
 		defer st.Close()
 		st.SetDevice(g)
 		st.SetRelocate(true)
@@ -301,7 +301,7 @@ func TestRelocatedBlocksComeBack(t *testing.T) {
 	t.Run("budget-raised", func(t *testing.T) {
 		g := relocTier(t, used)
 		defer g.Close()
-		st := m.NewState(swaMaxSeq)
+		st := m.NewInstance(swaMaxSeq)
 		defer st.Close()
 		st.SetDevice(g)
 		st.SetRelocate(true)
@@ -343,7 +343,7 @@ func TestFusedRunsFollowARelocation(t *testing.T) {
 	run := func(fused bool) ([][]float32, int64) {
 		g := relocTier(t, used)
 		defer g.Close()
-		st := m.NewState(swaMaxSeq)
+		st := m.NewInstance(swaMaxSeq)
 		defer st.Close()
 		st.SetBlockFusion(fused)
 		st.SetDevice(g)

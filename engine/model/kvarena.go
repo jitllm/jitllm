@@ -11,14 +11,14 @@ import (
 // kvArena is one layer's history pages as one span of memory outside the Go
 // heap: what a composed CPU block's attention addresses as a pool, through a
 // table of page slots, as a card's pool is (jit.History). The model holds one
-// for each layer and page size (Model.kvArenaFor), so every State's pages and
+// for each layer and page size (Model.kvArenaFor), so every session's pages and
 // the shared store's are slots of it, and a prefix shared between sessions is
 // one slot every holder's table names (kvPages.table). It is reserved once
 // and committed by the pages written: a slot let go is handed back to the OS
 // (kernels.ReleaseOffHeap), so a windowed layer still holds its window. A
-// slot is held by the State that grew it and by each store entry that took
+// slot is held by the instance that grew it and by each store entry that took
 // it (SharedStore.publish), and goes back to the free list when the last lets
-// go. The spare list and the pool of closed States stay outside it; a page
+// go. The spare list and the pool of closed instances stay outside it; a page
 // outside it is not one a composed block can address (cpuReadable).
 type kvArena struct {
 	kb, vb []byte
@@ -197,7 +197,7 @@ func (a *kvArena) close() {
 	}
 }
 
-// useArena gives the layer the model's arena for its pages, the State's
+// useArena gives the layer the model's arena for its pages, the instance's
 // table sized for maxSeq positions. A layer with no history keeps none, and
 // a layer whose pages are already held keeps them where they are.
 func (s *kvPages) useArena(li, maxSeq int, arenaFor func(li, pp int, latent bool, minSlots int) (*kvArena, error)) error {
@@ -310,7 +310,7 @@ func (s *kvPages) table(nseq int) []uint32 {
 }
 
 // useArenas gives every attending layer of kc the model's arena for its
-// pages (kvArena), for a State whose CPU blocks run composed.
+// pages (kvArena), for an instance whose CPU blocks run composed.
 func (kc *kvCache) useArenas(maxSeq int, arenaFor func(li, pp int, latent bool, minSlots int) (*kvArena, error)) error {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		if err := kc.layers[li].useArena(li, maxSeq, arenaFor); err != nil {

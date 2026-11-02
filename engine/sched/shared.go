@@ -6,7 +6,7 @@ import (
 )
 
 // Shared returns a view of the process's pool for cpus: one set of workers per
-// core set, however many users run on it. Every model.State builds a JIT with
+// core set, however many users run on it. Every model.Instance builds a JIT with
 // its own pool, and two pools on the same cores are two sets of spinning
 // workers behind two barriers -- the slowest worker of either is both regions'
 // end. Views take turns a region at a time instead, in arrival order (turn),

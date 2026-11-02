@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestConcurrentDecodeOnAnEvictingContainer runs several States decoding at
+// TestConcurrentDecodeOnAnEvictingContainer runs several instances decoding at
 // once on a container whose budget evicts (three frames for eight blocks), so
 // frames change hands between goroutines. Run it under -race; the token
 // comparison also catches a page evicted under a live reader. It fails rather
@@ -26,16 +26,16 @@ func TestConcurrentDecodeOnAnEvictingContainer(t *testing.T) {
 	// Built serially, driven concurrently: building JITs concurrently is not
 	// what this test is about.
 	const workers = 3
-	ss := make([]*State, workers)
+	ss := make([]*Instance, workers)
 	for i := range ss {
-		ss[i] = m.NewState(16)
+		ss[i] = m.NewInstance(16)
 		defer ss[i].Close()
 	}
 	// The single-threaded answer for every worker, taken first, so a page
 	// evicted under a live reader shows as a wrong logit, not only a race.
 	want := make([][]float32, workers)
 	for w := range ss {
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		for k := 0; k < 4; k++ {
 			l, err := s.Forward(int32(1 + w*4 + k))
 			if err != nil {
@@ -94,14 +94,14 @@ func TestConcurrentDecodeOnAFittingMixture(t *testing.T) {
 		t.Fatal("the fixture's banks are not in expert pages: this gate proved nothing")
 	}
 	const workers = 3
-	ss := make([]*State, workers)
+	ss := make([]*Instance, workers)
 	for i := range ss {
-		ss[i] = m.NewState(16)
+		ss[i] = m.NewInstance(16)
 		defer ss[i].Close()
 	}
 	want := make([][]float32, workers)
 	for w := range ss {
-		s := m.NewState(16)
+		s := m.NewInstance(16)
 		for k := 0; k < 4; k++ {
 			l, err := s.Forward(int32(1 + w*4 + k))
 			if err != nil {

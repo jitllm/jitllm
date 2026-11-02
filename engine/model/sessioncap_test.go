@@ -12,7 +12,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// TestABatchLeavesAnotherSessionAlone puts two States on one tier: a single
+// TestABatchLeavesAnotherSessionAlone puts two instances on one tier: a single
 // sequence A and a three-row batch B, whose rows need three times A's
 // positions on every block. A device's KV capacity is each session's own, so
 // B's reservation must not grow A's caches, and when the card cannot hold B's
@@ -55,8 +55,8 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 
 	// attachA places A alone and prefills it; step decodes one greedy token
 	// and returns a copy of the logits it came from.
-	attachA := func(t *testing.T, g *tier.GPU) (*State, func() []float32) {
-		a := m.NewState(seq)
+	attachA := func(t *testing.T, g *tier.GPU) (*Instance, func() []float32) {
+		a := m.NewInstance(seq)
 		t.Cleanup(func() { a.Close() })
 		if err := a.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -79,7 +79,7 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 			return slices.Clone(lg)
 		}
 	}
-	held := func(s *State) uint64 { return s.ld.(nn.Session).HeldBytes() }
+	held := func(s *Instance) uint64 { return s.ld.(nn.Session).HeldBytes() }
 
 	// A alone: the logits every later arm must reproduce exactly.
 	// A subtest, so its tier is closed before the next arm opens another on
@@ -100,8 +100,8 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 
 	// B's tokens, from the host alone; a device run is held to them up to a
 	// tie (batchTie), since the two tiers round differently.
-	bIDs := func(t *testing.T, d *tier.GPU) ([][]int32, *State) {
-		sc := NewScheduler(m, rows, seq)
+	bIDs := func(t *testing.T, d *tier.GPU) ([][]int32, *Instance) {
+		sc := NewRowScheduler(m, rows, seq)
 		t.Cleanup(sc.Close)
 		if d != nil {
 			if err := sc.st.SetDevice(d); err != nil {
@@ -149,8 +149,8 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 		}
 	}
 	// run interleaves: A decodes, B runs to completion on the same tier, A
-	// decodes on. It checks A's history and logits and returns B's State.
-	run := func(t *testing.T, g *tier.GPU) *State {
+	// decodes on. It checks A's history and logits and returns B's Instance.
+	run := func(t *testing.T, g *tier.GPU) *Instance {
 		a, step := attachA(t, g)
 		var got [][]float32
 		for i := 0; i < before; i++ {

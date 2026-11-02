@@ -125,7 +125,7 @@ func runTraced(t *testing.T, path string, ids []int32) ([][]float32, [][]string)
 		t.Fatal(err)
 	}
 	defer m.Close()
-	st := m.NewState(len(ids) + 1)
+	st := m.NewInstance(len(ids) + 1)
 	defer st.Close()
 	var logits [][]float32
 	var sels [][]string

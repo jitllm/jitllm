@@ -130,8 +130,8 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 							agree++
 						}
 					}
-					state := func() *State {
-						st := m.NewState(len(ids) + 1)
+					state := func() *Instance {
+						st := m.NewInstance(len(ids) + 1)
 						if gpu != nil {
 							// As many blocks as the card holds: every one on a card with
 							// room (a V100), a partial seam on a small one, which runs
@@ -179,7 +179,7 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 				arm(t, nil)
 				// The free-running read: the host's greedy text from each prompt.
 				for _, s := range g.Seqs {
-					st := m.NewState(len(s.Prompt) + len(s.Cont) + 1)
+					st := m.NewInstance(len(s.Prompt) + len(s.Cont) + 1)
 					lg, err := st.Prefill(s.Prompt)
 					if err != nil {
 						t.Fatal(err)

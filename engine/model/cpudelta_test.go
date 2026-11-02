@@ -135,7 +135,7 @@ func linearRun(t *testing.T, m *Model, prompt, toks []int32, f cpuFault) [][]flo
 			fs.blocks[li] = nil
 		}
 	}
-	s := m.NewState(len(prompt) + len(toks) + 1)
+	s := m.NewInstance(len(prompt) + len(toks) + 1)
 	defer s.Close()
 	s.cpu.fault = f
 	var out [][]float32
@@ -227,7 +227,7 @@ func TestComposedCPUDeltaFeaturesAreLoadBearing(t *testing.T) {
 		"and the clerk counted barrels of salt on the upper floor. ", 60)
 	ids := m.Vocab.Encode(text, true)[:700]
 	run := func(m *Model) [][]float32 {
-		s := m.NewState(len(ids) + len(toks) + 1)
+		s := m.NewInstance(len(ids) + len(toks) + 1)
 		defer s.Close()
 		lg, err := s.Prefill(ids)
 		if err != nil {

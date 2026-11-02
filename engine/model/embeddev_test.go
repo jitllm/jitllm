@@ -17,7 +17,7 @@ import (
 type hostEmbed struct{ nn.LayerDevice }
 
 // Detach forwards the session's release. Embedding nn.LayerDevice alone hid
-// nn.Session too, so State.Close never detached this arm and its pages stayed
+// nn.Session too, so Instance.Close never detached this arm and its pages stayed
 // held: the second arm's pool doubled, and on a shared card it had
 // to relocate or evict where the first arm had not, which the gate's rounding
 // bound read as a 1.4e-3 difference between the arms.
@@ -91,7 +91,7 @@ func embedsOnTheDevice(t *testing.T, name string, opts ...tier.Option) {
 	// logits holds the prompt's logits and then each decode step's: the
 	// decode after a gathered prompt reads the cache the gathered rows built.
 	run := func(onDevice bool) (logits [][]float32, toks []int32, launches int) {
-		st := m.NewState(len(ids) + 16)
+		st := m.NewInstance(len(ids) + 16)
 		defer st.Close()
 		st.SetDevice(g)
 		if gs := g.Stats(); (st.GPULayers() < m.Cfg.NLayer || !st.HeadOnDevice()) && (gs.Declined+gs.NoRoom > 0 || backend.AllocRefused() > 0) {

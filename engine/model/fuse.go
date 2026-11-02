@@ -18,13 +18,13 @@ import (
 // because the run is not compiled: it is the same per-block code, so the next
 // token's runs follow the next token's placement and residency as they are.
 
-// fuseRun opens a fused run unless one is open or this State runs per op.
-func (s *State) fuseRun() {
+// fuseRun opens a fused run unless one is open or this instance runs per op.
+func (s *Instance) fuseRun() {
 	if s.fused || s.fuseOff {
 		return
 	}
 	// A run starts with nothing to look ahead to: a set named in an earlier
-	// run is the State's to refill now, and no worker may be reading it.
+	// run is the instance's to refill now, and no worker may be reading it.
 	s.jit.SetAhead(nil)
 	s.jit.SetLookahead(!s.lookOff)
 	fuseTriesTotal.Add(1)
@@ -36,17 +36,17 @@ func (s *State) fuseRun() {
 }
 
 // unfuse closes the open fused run, if there is one.
-func (s *State) unfuse() {
+func (s *Instance) unfuse() {
 	if s.fused {
 		s.fused = false
 		s.jit.Unfuse()
 	}
 }
 
-// SetBlockFusion turns fused host runs on or off for this State's decode
+// SetBlockFusion turns fused host runs on or off for this instance's decode
 // tokens (WithBlockFusion is the model-wide default): the A/B arm and the
 // gates' per-op reference.
-func (s *State) SetBlockFusion(on bool) { s.fuseOff = !on }
+func (s *Instance) SetBlockFusion(on bool) { s.fuseOff = !on }
 
 // blockResident reports whether block li's page is held, so a fused run does
 // not stay open across the read of one that is not.
@@ -55,7 +55,7 @@ func (m *Model) blockResident(li int) bool {
 	return c == nil || li >= c.NPages() || c.Resident(li)
 }
 
-// fusedRunsTotal counts fused runs across every State, for the gates that must
+// fusedRunsTotal counts fused runs across every instance, for the gates that must
 // show a fused run happened inside them.
 var fusedRunsTotal atomic.Int64
 
@@ -68,10 +68,10 @@ var fuseTriesTotal atomic.Int64
 // q/k/v, after its o, after its gate/up and after its down.
 const aheadOps = 4
 
-// SetLookahead turns the fused runs' lookahead on or off for this State's
+// SetLookahead turns the fused runs' lookahead on or off for this instance's
 // decode tokens (WithLookahead is the model-wide default).
-func (s *State) SetLookahead(on bool) { s.lookOff = !on }
+func (s *Instance) SetLookahead(on bool) { s.lookOff = !on }
 
 // SetMatVecGroups turns groupOf on or off inside fused runs: off, a fused
 // run's matvecs and their activation quantization are a phase each.
-func (s *State) SetMatVecGroups(on bool) { s.groupOff = !on }
+func (s *Instance) SetMatVecGroups(on bool) { s.groupOff = !on }

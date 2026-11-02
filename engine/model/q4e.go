@@ -305,7 +305,7 @@ func loadQ4EHead(m *Model, cfg *Config, f *jlm.File,
 	return nil
 }
 
-// q4eScratch is a State's Qwen3.8-Flash-Next buffers, grown to the widest
+// q4eScratch is a instance's Qwen3.8-Flash-Next buffers, grown to the widest
 // call so a warm decode token and a warm step allocate nothing.
 type q4eScratch struct {
 	rows int
@@ -325,7 +325,7 @@ type q4eScratch struct {
 	// (qsaMarksToDevice), reused so a warm call allocates nothing.
 	marks []int32
 	// callState, callSlot and callIDs are a device call's rows (setCall).
-	callState *State
+	callState *Instance
 	callSlot  int
 	callIDs   []int32
 	callSeq   []int
@@ -334,15 +334,15 @@ type q4eScratch struct {
 }
 
 // q4eRowIDs records each of n rows' token ids for the n-gram block.
-func (s *State) q4eRowIDs(n int, id func(i int) int32) {
+func (s *Instance) q4eRowIDs(n int, id func(i int) int32) {
 	s.growQ4E(n)
 	for i := 0; i < n; i++ {
 		s.q4.rid[i] = id(i)
 	}
 }
 
-// allocQ4E sizes a State's buffers for one row, and its streams.
-func (s *State) allocQ4E() {
+// allocQ4E sizes a instance's buffers for one row, and its streams.
+func (s *Instance) allocQ4E() {
 	c := s.m.Cfg
 	if !c.Q4E() {
 		return
@@ -360,7 +360,7 @@ func (s *State) allocQ4E() {
 }
 
 // growQ4E sizes the per-row buffers for n rows.
-func (s *State) growQ4E(n int) {
+func (s *Instance) growQ4E(n int) {
 	c, g := s.m.Cfg, s.q4
 	if g == nil || g.rows >= n {
 		return
@@ -384,13 +384,13 @@ func (s *State) growQ4E(n int) {
 
 // q4eExpand copies each row's embedding (stream 0) into the other streams:
 // the residual starts as HCMult copies of it.
-func (s *State) q4eExpand(x []float32, rows int) { s.q4eExpandAt(x, rows, 0) }
+func (s *Instance) q4eExpand(x []float32, rows int) { s.q4eExpandAt(x, rows, 0) }
 
 // q4eExpandAt is q4eExpand for a chunk whose first row is row base of the
 // call. A prediction block's draft does not start from copies: its rows
 // arrive with every stream (s.q4In, row-major, eh_proj's per-stream output),
 // and those are laid into the chunk instead.
-func (s *State) q4eExpandAt(x []float32, rows, base int) {
+func (s *Instance) q4eExpandAt(x []float32, rows, base int) {
 	c := s.m.Cfg
 	if s.q4In == nil && s.cpuExpand(x, rows) == jit.DeclineServes {
 		return
@@ -415,7 +415,7 @@ func (s *State) q4eExpandAt(x []float32, rows, base int) {
 
 // hcNorm writes each of n rows' streams into dst, row-major (row r's stream k
 // at (r*H + k)*d), each RMSNormed against its own row of w.
-func (s *State) hcNorm(dst, x []float32, n int, w []float32) {
+func (s *Instance) hcNorm(dst, x []float32, n int, w []float32) {
 	c := s.m.Cfg
 	h, d := c.HCMult, c.NEmbd
 	for r := 0; r < n; r++ {
@@ -429,7 +429,7 @@ func (s *State) hcNorm(dst, x []float32, n int, w []float32) {
 // hcMix is a hyper-connection's mix for n rows of x: each row's sublayer
 // input into g.mix (n_embd a row), and with a placement its weights into
 // g.w (HCMult a row).
-func (s *State) hcMix(x []float32, n int, hc *q4eHC) error {
+func (s *Instance) hcMix(x []float32, n int, hc *q4eHC) error {
 	c, g := s.m.Cfg, s.q4
 	h, d := c.HCMult, c.NEmbd
 	hd := h * d
@@ -487,7 +487,7 @@ func (s *State) hcMix(x []float32, n int, hc *q4eHC) error {
 // this model (rowsOut.tapStreams): what a prediction block reads, and what a
 // draft chains to its next step. A prediction block's draft mixes through the
 // block's own head mix.
-func (s *State) q4eCollapse(x []float32, n int) error {
+func (s *Instance) q4eCollapse(x []float32, n int) error {
 	// A chunk whose every block ran on a device grew nothing on the host; a
 	// trunk's n-gram rows did, a prediction block's draft has none.
 	s.growQ4E(n)
@@ -515,4 +515,4 @@ func (c *Config) q4eSigmoidGate() bool {
 }
 
 // attnSetF32 is a kernel set scoring rows of width w laid back to back.
-func (s *State) attnSetF32(w int) *nn.AttnSet { return s.jit.AttnSetFor(w, w, w, cpu.KVF32) }
+func (s *Instance) attnSetF32(w int) *nn.AttnSet { return s.jit.AttnSetFor(w, w, w, cpu.KVF32) }

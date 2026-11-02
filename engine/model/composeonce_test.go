@@ -15,7 +15,7 @@ import (
 
 // TestPlacementComposesOnce holds the composer's census on Llama-3.2-1B and
 // the hybrid Qwen3.5-0.8B (composeOnceModels) with every part composed and a reserved prompt width of 512 rows
-// (JITLLM_COMPOSE_ONCE_ROWS another): once a State's blocks are placed,
+// (JITLLM_COMPOSE_ONCE_ROWS another): once a instance's blocks are placed,
 // prompts of 1, 5, 33, 100, 511, 512, 513 and 2000 tokens, each followed by
 // decode steps, a second session's prompt and decode, and a ragged batch of
 // four sequences whose prompts hold more rows than the reserved width compose
@@ -127,7 +127,7 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 		t.Fatalf("%d prompt tokens, %d wanted", len(ids), total)
 	}
 	nl := m.Cfg.NLayer
-	s := m.NewState(total + 128)
+	s := m.NewInstance(total + 128)
 	defer s.Close()
 	if err := s.SetDevice(g); err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 			t.Fatalf("%s: %d prompt block(s) declined and built the tier's kernels, %d part(s) formed at a step", what, d, a)
 		}
 	}
-	prompts := func(s *State, off int, lengths []int) int {
+	prompts := func(s *Instance, off int, lengths []int) int {
 		t.Helper()
 		served0, _ := g.Stats().ServedPart(tier.ComposedPrompt)
 		steps := 0
@@ -216,7 +216,7 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 	}
 	prompts(s, 0, lengths)
 
-	s2 := m.NewState(512)
+	s2 := m.NewInstance(512)
 	closed := false
 	defer func() {
 		if !closed {
@@ -246,7 +246,7 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 	// Four prompts of more rows than the reserved width: the scheduler admits
 	// at most the reserved width a step.
 	seqLen := width + 64
-	sc := NewScheduler(m, 4, seqLen)
+	sc := NewRowScheduler(m, 4, seqLen)
 	defer func() {
 		if !closed {
 			sc.Close()

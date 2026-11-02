@@ -541,7 +541,7 @@ func TestTowerOnDeviceMatchesHost(t *testing.T) {
 		px[i] = float32((i*37)%255)/127.5 - 1
 	}
 	// after0 runs the tower and returns the residual after the FIRST block.
-	after0 := func(s *State) []float32 {
+	after0 := func(s *Instance) []float32 {
 		var got []float32
 		s.vis.afterBlock = func(li int, x []float32) {
 			if li == 0 && got == nil {

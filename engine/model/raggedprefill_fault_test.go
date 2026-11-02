@@ -63,7 +63,7 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 		}
 		return g
 	}
-	place := func(t *testing.T, st *State, g *tier.GPU) {
+	place := func(t *testing.T, st *Instance, g *tier.GPU) {
 		if err := st.SetDeviceLayers(g, -1); err != nil || st.GPULayers() != m.Cfg.NLayer {
 			t.Fatalf("%v: %d of %d blocks placed: %s", err, st.GPULayers(), m.Cfg.NLayer, g.Err())
 		}
@@ -73,7 +73,7 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 	defer g.Close()
 	want := make([][]float32, len(prompts))
 	for i, p := range prompts {
-		st := m.NewState(seq)
+		st := m.NewInstance(seq)
 		place(t, st, g)
 		lg, err := st.Prefill(p)
 		if err != nil {
@@ -89,7 +89,7 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 		t.Skipf("%s's prefill form has no run table yet: this gate proved nothing here", g.Name())
 	}
 	batch := func(t *testing.T, g *tier.GPU, fault string) ([][]float32, tier.Stats) {
-		sc := NewScheduler(m, len(prompts), seq)
+		sc := NewRowScheduler(m, len(prompts), seq)
 		defer sc.Close()
 		place(t, sc.st, g)
 		got := make([][]float32, len(prompts))

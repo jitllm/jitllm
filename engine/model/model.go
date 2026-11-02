@@ -635,7 +635,7 @@ func (c *Config) QKNormAt(li int) bool { return jlm.QKNormOn(c.QKNorm, c.LayerKi
 // qkNorms is the pair block li offers a device: its weights when QKNormAt says
 // the block norms q and k, and none when it does not, so the device's launch
 // follows the same derivation as the host's.
-func (s *State) qkNorms(li int) (q, k []float32) {
+func (s *Instance) qkNorms(li int) (q, k []float32) {
 	if !s.c.QKNormAt(li) {
 		return nil, nil
 	}
@@ -1202,6 +1202,8 @@ type expert struct{ gate, up, down tensor }
 
 // Model is a loaded transformer.
 type Model struct {
+	// insts is the instances the scheduler hands out (Serve).
+	insts instances
 	// bankWts caches bankWeight's Weight per bank entry; holdFree is the
 	// recycled sheet holds (sheetOf).
 	bankWts  sync.Map
@@ -1233,31 +1235,31 @@ type Model struct {
 	// read: Close closes the first and waits on the second.
 	preloadStop, preloadDone chan struct{}
 	preloadErr               error
-	// cpuUse[li] counts the live States that run block li on the CPU, under
-	// bind. A State placing a block gives its host page back only when the
-	// count is zero: placement is per State and the binding per Model, so
-	// another State running the block on the host would otherwise find it
+	// cpuUse[li] counts the live instances that run block li on the CPU, under
+	// bind. An instance placing a block gives its host page back only when the
+	// count is zero: placement is per instance and the binding per Model, so
+	// another instance running the block on the host would otherwise find it
 	// unbound between its pageIn and its matvecs.
 	cpuUse []int32
 	// pages is the page budget as the caller set it, and the devices on the
 	// host's own memory whose holdings come off it (hostheld.go).
 	pages pageAsk
-	// spare is a closed State's prompt buffers, for the next State's first
+	// spare is a closed session's prompt buffers, for the next instance's first
 	// prompt (promptBuf).
 	spareMu sync.Mutex
 	spare   *promptBuf
 	// step is the host step scratch across sessions (stepBuf).
 	step *stepBuf
-	// kvPool is the host KV pages closed States gave back (kvPagePool).
+	// kvPool is the host KV pages closed instances gave back (kvPagePool).
 	kvPool kvPagePool
-	// kvArenas is every State's composed CPU history, a layer and page size
+	// kvArenas is every instance's composed CPU history, a layer and page size
 	// each (kvArenaFor).
 	kvArenas  map[kvArenaKey]*kvArena
 	kvArenaMu sync.Mutex
 	// cpuForms is the composed CPU blocks' forms (cpuserve.go).
 	cpuForms cpuForms
 	// argmaxes is the greedy sampler's graph at each width a caller asked
-	// an argmax of (State.cpuArgmax), one graph a width so its form is
+	// an argmax of (Instance.cpuArgmax), one graph a width so its form is
 	// composed once.
 	argmaxes struct {
 		mu sync.Mutex
@@ -1360,17 +1362,17 @@ type Model struct {
 	output      tensor
 	layers      []layer
 	tracer      func(layer int, name string, v []float32)
-	// jit is what WithJITOptions collected, handed to every State.
+	// jit is what WithJITOptions collected, handed to every Instance.
 	jit []nn.Option
 	// opt is this model's resolved load options, a copy; see modelOpts.
 	opt modelOpts
 	// states counts the sessions built, so AddJITOptions can refuse to be late.
 	// Sessions are built concurrently (a server's requests), so it is atomic.
 	states atomic.Int64
-	// live is the open States, which a prefill asks whether another decodes.
+	// live is the open instances, which a prefill asks whether another decodes.
 	live live
 	// enc is the BERT-family encoder graph, and nil for every decoder. A model
-	// with one has no layers, no output and no State: see encoder.go.
+	// with one has no layers, no output and no instance: see encoder.go.
 	enc *encoder
 	// dense1 and dense2 are an embedding model's projection heads after
 	// pooling (EmbeddingGemma's), empty for every other model.
@@ -1381,13 +1383,13 @@ type Model struct {
 	// audio is the container's audio tower (audio.go), nil without one.
 	audio *audioTower
 	// imgCache is the vision segment's output rows by picture (imagekey.go),
-	// shared by every State of the model.
+	// shared by every instance of the model.
 	imgCache imageCache
 
 	// id names this model to a device (nn.LayerPlan.Model), which holds one
 	// model's blocks at a time.
 	id uint64
-	// forgetters are the devices a State attached that copy weights by
+	// forgetters are the devices an instance attached that copy weights by
 	// address: the pager tells them when a frame's bytes change (forgetCopies).
 	// owners are the devices holding this model's blocks, released at Close.
 	// Both guarded by devMu, since a page-in on any session reads forgetters.
@@ -1395,7 +1397,7 @@ type Model struct {
 	// hyState is the host executor a device's hybrid blocks run their routed
 	// experts on (Model.hostExperts), made on first use, under hyMu.
 	hyMu       sync.Mutex
-	hyState    *State
+	hyState    *Instance
 	forgetters []nn.CopyForgetter
 	owners     []nn.ModelOwner
 }
@@ -1406,8 +1408,8 @@ var modelIDs atomic.Uint64
 
 // watch registers d with this model: told when the pager recycles a frame, if
 // it copies weights by address, and released at Close, if it holds blocks. It
-// reports whether d is told, which is what lets a State offer it a weight in
-// a page (State.mv).
+// reports whether d is told, which is what lets an instance offer it a weight in
+// a page (Instance.mv).
 func (m *Model) watch(d nn.Device) bool {
 	m.devMu.Lock()
 	defer m.devMu.Unlock()
@@ -1504,7 +1506,7 @@ type loadOpts struct {
 	// the sharing.
 	opt modelOpts
 	tok []tok.Option
-	// jit is handed to nn.NewJIT by every State this model creates. It is how a
+	// jit is handed to nn.NewJIT by every instance this model creates. It is how a
 	// caller reaches the generated tier's knobs -- the pack width, the tuner,
 	// the worker pool -- without the package reading an environment variable.
 	jit []nn.Option
@@ -1542,7 +1544,7 @@ func WithTokenizerOption(o tok.Option) Option {
 // converter wrote -- RULE 7m's fourth and outranking authority.
 func WithTokenizer(r io.Reader) Option { return WithTokenizerOption(tok.WithTokenizer(r)) }
 
-// WithJITOptions passes options to the generated-code tier every State of this
+// WithJITOptions passes options to the generated-code tier every instance of this
 // model builds. The JIT always runs (there is no other tier); these configure
 // it. See nn.Option: the packages read no environment, so this (and
 // cmd/jitllm, which fills it from the JITLLM_* names) is the only way in.
@@ -1550,22 +1552,22 @@ func WithJITOptions(o ...nn.Option) Option {
 	return func(l *loadOpts) { l.jit = append(l.jit, o...) }
 }
 
-// AddJITOptions appends options for the States this model has NOT built yet.
+// AddJITOptions appends options for the instances this model has NOT built yet.
 //
 // It exists because one decision cannot be made before Open and must be made
-// before NewState: whether this run will page. A model that fits wants the
+// before NewInstance: whether this run will page. A model that fits wants the
 // worker pool spinning so a region starts the instant the previous one ends;
 // one that streams every block off disk wants it parked, because the critical
 // path is a synchronous read and spinning cores through it is only heat. The
 // caller can weigh that once it knows the weight bytes, after the container is
 // open.
 //
-// It panics rather than silently doing nothing if a State already exists: an
+// It panics rather than silently doing nothing if an instance already exists: an
 // option that reaches some of a model's sessions and not others is the shape
 // RULE 10 is written against.
 func (m *Model) AddJITOptions(o ...nn.Option) {
 	if m.states.Load() > 0 {
-		panic("model: AddJITOptions after a State was built -- the option would reach " +
+		panic("model: AddJITOptions after an instance was built -- the option would reach " +
 			"some sessions and not others")
 	}
 	m.jit = append(m.jit, o...)
@@ -1902,7 +1904,7 @@ func (m *Model) BlockResident(li int) bool {
 //
 // bytes is the host's share before a device on the host's own memory (an
 // integrated GPU, Apple Silicon) takes what it holds: the model subtracts that
-// itself, now and whenever a State's placement moves it (hostheld.go), so a
+// itself, now and whenever a instance's placement moves it (hostheld.go), so a
 // caller never subtracts tier.GPU.HostReserved again.
 func (m *Model) SetPageBudget(bytes uint64) int {
 	if m.container == nil {
@@ -2110,7 +2112,7 @@ func (m *Model) pageInSelected(li int, sel []uint32) error {
 }
 
 // Close gives the model's blocks back to every device holding them, then
-// closes the container and drops every copy keyed on it. Every State of the
+// closes the container and drops every copy keyed on it. Every instance of the
 // model must be closed first.
 func (m *Model) Close() error {
 	if m.container == nil {
@@ -2464,7 +2466,7 @@ func (m *Model) ensureExperts(li int, sel []int32, h *expertHold) error {
 }
 
 // expertHold is the pages one layer's routed experts are held under until the
-// caller's FFN is done with them. A State keeps one and reuses its slices, so
+// caller's FFN is done with them. An instance keeps one and reuses its slices, so
 // holding a token's selection allocates nothing once they have grown.
 type expertHold struct {
 	leases []jlm.Lease
@@ -3029,7 +3031,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if m.posEmbd.k != cfg.NEmbd {
 			return nil, fmt.Errorf("model: the position table is %d wide, want %d", m.posEmbd.k, cfg.NEmbd)
 		}
-		// A learned table ends; the context is clamped to it so NewState
+		// A learned table ends; the context is clamped to it so NewInstance
 		// refuses a later position rather than reading past the table.
 		if m.posEmbd.rows < cfg.NCtx {
 			cfg.NCtx = m.posEmbd.rows
@@ -4040,7 +4042,7 @@ func (m *Model) BytesPerToken() uint64 {
 // widest matrices are usually different tensors.
 func (m *Model) maxMatVec() (rows, k int) {
 	// The shape is the entry's, read whether or not the block is bound: a
-	// block another State placed has given its host page back (releaseLayer)
+	// block another instance placed has given its host page back (releaseLayer)
 	// and may be re-bound under this call, so its data is neither the answer
 	// nor safe to read here.
 	see := func(t *tensor) {
@@ -4183,7 +4185,7 @@ func (m *Model) hasSubNorm() bool {
 // hasPostNorm reports whether some block carries gemma2's post-norms.
 func (m *Model) hasPostNorm() bool {
 	// By index: a copy of each layer would read its bindings, which another
-	// State's placement may be writing.
+	// instance's placement may be writing.
 	for i := range m.layers {
 		if l := &m.layers[i]; l.postAttnNorm != nil || l.postFFNNorm != nil {
 			return true
@@ -4192,7 +4194,7 @@ func (m *Model) hasPostNorm() bool {
 	return false
 }
 
-// newJIT builds the generated-code tier a State runs on: one kernel per
+// newJIT builds the generated-code tier an instance runs on: one kernel per
 // quantization type the container holds, sized for its widest matrix. The
 // vision segment's matrices are in the same container, so one JIT serves the
 // text blocks and the tower's; F32 joins the types where the model has a tower,

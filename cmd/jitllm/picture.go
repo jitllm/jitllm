@@ -24,10 +24,10 @@ type picture struct {
 	lfm2 *[2]int
 }
 
-// openPicture lays out the picture at path before the State exists, which
+// openPicture lays out the picture at path before the instance exists, which
 // the prompt's size needs. A slicing tower's pieces are resampled here --
 // Pillow's resampler needs no generated code -- and every other tower's
-// picture is sized from the header alone and preprocessed by the State
+// picture is sized from the header alone and preprocessed by the instance
 // (preprocess), whose JIT runs the bilinear resize.
 func openPicture(tw *model.Tower, path string) (*picture, error) {
 	f, err := os.Open(path)
@@ -92,7 +92,7 @@ func openPicture(tw *model.Tower, path string) (*picture, error) {
 
 // preprocess fills a picture sized from its header with its pixels and its
 // name, on st's vision segment.
-func (p *picture) preprocess(st *model.State) error {
+func (p *picture) preprocess(st *model.Instance) error {
 	if p.lay != nil || p.tiles != nil || p.lfm2 != nil {
 		return nil
 	}

@@ -24,7 +24,7 @@ const hostStepNMSE = 1e-3
 // TestStepRunsOnTheCPUSharesOnePass is the gate on StepRuns' host arm
 // (stepHost): two sessions decode while a third session's prompt rides beside
 // them in chunks of three tokens, then all three decode together, every
-// State on the host. Teacher-forced against each session alone (Prefill and
+// Instance on the host. Teacher-forced against each session alone (Prefill and
 // Forward): every decoding row's logits, the late session's at the end of its
 // prompt, and its decoding after.
 //
@@ -66,7 +66,7 @@ func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) {
 			r0 := m.HostStepRows()
 			got, rows := plan.together(t, m, nil)
 			if n := m.HostStepRows() - r0; n != int64(rows) {
-				t.Fatalf("%d rows ran in host steps across sessions, want %d: StepRuns went one State after another", n, rows)
+				t.Fatalf("%d rows ran in host steps across sessions, want %d: StepRuns went one instance after another", n, rows)
 			}
 			w, at := worstStep(got, want)
 			t.Logf("%d rows, %d logit rows compared: worst NMSE %.3e (row %d) against each session alone",
@@ -97,7 +97,7 @@ func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) {
 }
 
 // hostStepAllocs is TestDecodeDoesNotAllocate's arm for StepRuns' host step
-// across sessions: three host States step together, warm, at a fixed shape --
+// across sessions: three host instances step together, warm, at a fixed shape --
 // one token each, or with chunk the third taking two prompt rows a step with
 // no logits -- and the window must make no engine heap allocation. It checks
 // the window really ran as host steps (Model.HostStepRows), and skips naming
@@ -107,7 +107,7 @@ func hostStepAllocs(t *testing.T, m *Model, chunk bool) {
 		"The clerk counted barrels of salt on the upper floor, and"}
 	warm, n, k := 128, 64, 1
 	if chunk {
-		// The chunked State moves two positions a step: a windowed layer's
+		// The chunked instance moves two positions a step: a windowed layer's
 		// ring of pages fills only past its window, and before that each
 		// page is a commit, growth paid once and not per step. 128 warm
 		// steps left eight such commits in the window on the windowed
@@ -118,10 +118,10 @@ func hostStepAllocs(t *testing.T, m *Model, chunk bool) {
 	toks := make([][]int32, len(prompts))
 	for i, pr := range prompts {
 		ids := m.Vocab.Encode(pr, true)
-		st := m.NewState(len(ids) + k*(warm+n) + 8)
+		st := m.NewInstance(len(ids) + k*(warm+n) + 8)
 		defer st.Close()
 		if err := st.HostRefusal(); err != nil {
-			t.Skipf("the host step refuses this model (%v): StepRuns runs its States one after another, "+
+			t.Skipf("the host step refuses this model (%v): StepRuns runs its instances one after another, "+
 				"which the host decode arm measured", err)
 		}
 		if _, err := st.Prefill(ids); err != nil {
@@ -132,7 +132,7 @@ func hostStepAllocs(t *testing.T, m *Model, chunk bool) {
 			w, logits = k, false
 		}
 		toks[i] = make([]int32, w)
-		runs = append(runs, Run{State: st, Tokens: toks[i], Logits: logits})
+		runs = append(runs, Run{Instance: st, Tokens: toks[i], Logits: logits})
 	}
 	step := func(at int) {
 		for i, tk := range toks {

@@ -136,7 +136,7 @@ type Config struct {
 	// the cgroup's limit, the bound NUMA nodes' memory and what is available,
 	// less a slice, plus what this engine's models already hold.
 	HostBudget uint64
-	// SessionPool is how many reset States each model keeps for model_id
+	// SessionPool is how many reset instances each model keeps for model_id
 	// requests: zero is LoadOptions.Sessions (at least one), negative none.
 	SessionPool int
 	// MaxQueue is how many requests one model holds, running or waiting,
@@ -378,7 +378,7 @@ type LoadedModel struct {
 	tokensGenerated atomic.Int64
 	tokensPrefilled atomic.Int64
 
-	// ttft is the memory cache, the State pool and the admission bound
+	// ttft is the memory cache, the instance pool and the admission bound
 	// (ttft.go); warmTook is how long the load's warm-up ran.
 	ttft     ttft
 	warmTook time.Duration
@@ -524,7 +524,7 @@ type LoadOptions struct {
 	// gets what the first left over, and on a full card that is the host.
 	Sessions int
 
-	// Warm runs a short prefill and a decode step on a pooled State before
+	// Warm runs a short prefill and a decode step on a pooled instance before
 	// LoadModel returns, so the first request does not pay for the kernels
 	// and recordings those emit (ttft.go).
 	Warm bool
@@ -851,7 +851,7 @@ func (e *Engine) Models() []*LoadedModel {
 	return out
 }
 
-// UnloadModel closes a model. Every State must be closed before its Model, so
+// UnloadModel closes a model. Every instance must be closed before its Model, so
 // force closes the sessions first rather than letting the ordering contract be
 // violated by a caller who did not know about it.
 func (e *Engine) UnloadModel(id string, force bool) (closed int, err error) {
@@ -943,14 +943,14 @@ func (lm *LoadedModel) closeLoop() {
 
 // ---------------------------------------------------------------- sessions
 
-// Session is one sequence on a loaded model: a model.State, its sampler and
+// Session is one sequence on a loaded model: a model.Instance, its sampler and
 // the counters the stats calls report. Work on it is serialised by its own
 // lock; a generate with only a model_id runs on an ephemeral one.
 type Session struct {
 	id      string
 	modelID string
 	lm      *LoadedModel
-	st      *model.State
+	st      *model.Instance
 	maxSeq  int
 
 	// mu serialises this session's own work. A session is one sequence, so two
@@ -961,8 +961,8 @@ type Session struct {
 	// tokens, and an idle session where it was asked.
 	moveMu sync.Mutex
 	move   *moveReq
-	// tier is the model's tier this session's State was attached to, or nil
-	// for a State still on the host alone. Read without mu (a move must not
+	// tier is the model's tier this session's instance was attached to, or nil
+	// for an instance still on the host alone. Read without mu (a move must not
 	// wait for a generate to finish), so it is a box behind an atomic.
 	tier atomic.Pointer[tierBox]
 
@@ -970,7 +970,7 @@ type Session struct {
 	created  time.Time
 	// cached is a session with a prompt store: it prefills through it, alone.
 	cached bool
-	// storeOn says the State is attached to the model's memory cache for the
+	// storeOn says the instance is attached to the model's memory cache for the
 	// generate in hand (attachStore). Guarded by mu.
 	storeOn bool
 	// spec is the session's speculation for generates that carry none, and
@@ -986,7 +986,7 @@ type Session struct {
 	running   atomic.Bool
 	queuePos  atomic.Int32
 
-	// Every reported figure is a snapshot taken under s.mu. model.State's
+	// Every reported figure is a snapshot taken under s.mu. model.Instance's
 	// fields are written by Forward with no lock, so reading them from a stats
 	// handler mid-generate is a data race, and taking s.mu there would block
 	// for the whole generation. The session publishes a snapshot at create,
@@ -999,7 +999,7 @@ type Session struct {
 	// snapBatched is whether a generate here would decode as a row of the
 	// model's step loop (Engine.joins), as of the snapshot.
 	snapBatched atomic.Bool
-	// snapSeam and snapSeamSettled are State.SeamTuned as of the snapshot:
+	// snapSeam and snapSeamSettled are Instance.SeamTuned as of the snapshot:
 	// the tuner is written by Forward, so TuneSeam reports these.
 	snapSeam        atomic.Int32
 	snapSeamSettled atomic.Bool
@@ -1011,7 +1011,7 @@ type Session struct {
 
 	// priority, parked and snapHist are preemption's (preempt.go): the order
 	// a session is parked in, whether it is parked, and its history's bytes
-	// as of the last snapshot (model.State.HistoryBytes).
+	// as of the last snapshot (model.Instance.HistoryBytes).
 	priority atomic.Int32
 	parked   atomic.Bool
 	// pinned is a session the caller placed (RelocateBlocks, SetPlacement):
@@ -1036,20 +1036,20 @@ type SessionOptions struct {
 	// positive MaxDeviceBlocks, a placement the orchestrator leaves alone.
 	callerPlaced bool
 	Relocate     bool
-	// KeepOffHost turns off what a State does by default when its context
+	// KeepOffHost turns off what an instance does by default when its context
 	// outgrows the device: hand a block to the host. A device choice that
 	// leaves the CPU out is kept, and the token takes the device's refusal.
 	KeepOffHost bool
 	Sampling    model.Sampler
 	// KVStore keeps the session's prompt prefixes, so a prompt that starts as
 	// an earlier one did resumes from its cached keys and values; CacheKey
-	// names what may be shared (model.State.SetCacheKey). A session with a
+	// names what may be shared (model.Instance.SetCacheKey). A session with a
 	// store prefills alone rather than as a row of the step loop.
 	KVStore  model.KVStore
 	CacheKey string
 
-	// pooled takes a State from the model's pool when one is idle: a
-	// model_id request's session, which asks for nothing a pooled State
+	// pooled takes an instance from the model's pool when one is idle: a
+	// model_id request's session, which asks for nothing a pooled instance
 	// could lack.
 	pooled bool
 	// Speculation is the default for generates that carry none.
@@ -1090,8 +1090,8 @@ func (o *SessionOptions) check(store model.KVStore) error {
 	return nil
 }
 
-// CreateSession builds a model.State and offers its blocks to the model's
-// tier. The tier's Attach gives this State its own device session, which is
+// CreateSession builds a model.Instance and offers its blocks to the model's
+// tier. The tier's Attach gives this instance its own device session, which is
 // what makes two sessions on one card correct -- see tier.GPU.Attach.
 func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	if err := o.check(e.cfg.PromptStore); err != nil {
@@ -1130,7 +1130,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	}
 	e.mu.Unlock()
 
-	var st *model.State
+	var st *model.Instance
 	if o.pooled {
 		st = e.takeIdle(lm)
 	}
@@ -1139,7 +1139,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		// Placed when it was built, and reset when it was pooled.
 		lm.ttft.statesReused.Add(1)
 	} else {
-		st = lm.m.NewState(maxSeq)
+		st = lm.m.NewInstance(maxSeq)
 		lm.ttft.statesCreated.Add(1)
 	}
 	lm.attachMu.RLock()
@@ -1197,9 +1197,9 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	s.mu.Unlock()
 
 	e.mu.Lock()
-	// The model may have been unloaded while this State was being placed. An
+	// The model may have been unloaded while this instance was being placed. An
 	// unload closes the sessions it finds, so one registered after it would be
-	// a State outliving its Model.
+	// an instance outliving its Model.
 	if e.models[lm.id] != lm {
 		e.mu.Unlock()
 		st.Close()
@@ -1230,11 +1230,11 @@ type placementSnapshot struct {
 	// on is the device each block is on, by block; "" for a host block or a
 	// device the tier did not name.
 	on []string
-	// hist is each block's history cost (model.State.BlockHistory).
+	// hist is each block's history cost (model.Instance.BlockHistory).
 	hist []blockHistory
 }
 
-// blockHistory is one block's model.State.BlockHistory.
+// blockHistory is one block's model.Instance.BlockHistory.
 type blockHistory struct {
 	perPos, state uint64
 	window        int
@@ -1266,7 +1266,7 @@ func (s *Session) refresh() {
 }
 
 // blocksOn is the device each block of st is on, "" for the host.
-func blocksOn(st *model.State, n int) []string {
+func blocksOn(st *model.Instance, n int) []string {
 	on := make([]string, n)
 	for li := range on {
 		on[li], _ = st.DeviceOf(li)
@@ -1275,7 +1275,7 @@ func blocksOn(st *model.State, n int) []string {
 }
 
 // historyOf is what each block of st's history costs.
-func historyOf(st *model.State, n int) []blockHistory {
+func historyOf(st *model.Instance, n int) []blockHistory {
 	h := make([]blockHistory, n)
 	for li := range h {
 		h[li].perPos, h[li].window, h[li].state = st.BlockHistory(li)
@@ -1315,7 +1315,7 @@ func (e *Engine) Sessions() []*Session {
 }
 
 // CloseSession removes the session from the Engine and its model, cancels a
-// generate in flight on it and closes its State once that generate has let
+// generate in flight on it and closes its instance once that generate has let
 // go. An unknown id is ErrNotFound.
 func (e *Engine) CloseSession(id string) error {
 	e.mu.Lock()
@@ -1340,7 +1340,7 @@ func (s *Session) close() {
 	s.cancelGeneration()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// A move waiting for a token boundary will not get one; the State's Close
+	// A move waiting for a token boundary will not get one; the instance's Close
 	// gives back what it prepared.
 	s.moveMu.Lock()
 	r := s.move
@@ -1795,7 +1795,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 
 	// The model's memory cache, for a generate that starts its sequence
-	// (ttft.go). The State is reset here, before the store is attached or
+	// (ttft.go). The instance is reset here, before the store is attached or
 	// taken away: both want position 0. A speculative generate prefills
 	// through its Speculator, which neither restores nor seals, so it runs
 	// without the store rather than leave pages named by a prompt it did not
@@ -2047,12 +2047,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 // n). The prompt is prefilled once: every choice runs on a fresh session of
 // the model sharing one request-scoped prompt store under one namespace, so
 // the first choice's prefill seals the prompt's pages and its final logits
-// into it and every later choice restores them (State.PrefillCached) and
+// into it and every later choice restores them (Instance.PrefillCached) and
 // computes no prompt position -- the prefix cache's own path, which is how
 // the engine forks a sequence. Started.Restored reports it per choice.
 //
 // The choices run one after another, each alone on the model's gates: a
-// State owns a pool, and n of them at once on the same cores is the worst
+// Instance owns a pool, and n of them at once on the same cores is the worst
 // configuration the engine has. Each samples with its own seed and its events
 // carry its index.
 func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Event) error) error {
@@ -2174,7 +2174,7 @@ func acceptsImages(lm *LoadedModel) error {
 	return nil
 }
 
-// pictureSpans lays a chat with pictures out as spans on s's State: the
+// pictureSpans lays a chat with pictures out as spans on s's instance: the
 // template's text, and each picture where the template puts its image markers.
 // A model with no vision tower is refused by name, never run with the picture
 // left out. Such a prompt runs alone rather than as a row of the step loop,
@@ -2363,7 +2363,7 @@ func (e *Engine) ScanModels(dir string) ([]ModelFileInfo, string, error) {
 // ---------------------------------------------------------------- accessors
 //
 // The engine's own fields stay unexported so a caller cannot reach past the
-// gates into a model.State. These are the read-only handles the command and
+// gates into a model.Instance. These are the read-only handles the command and
 // the handlers need.
 
 // ID is the stable id this model was loaded under.
@@ -2404,10 +2404,10 @@ func (lm *LoadedModel) Model() *model.Model { return lm.m }
 // GPU is the model's device tier, nil for a host-only model.
 func (lm *LoadedModel) GPU() *tier.GPU { return lm.gpuTier() }
 
-// Inspect runs f with the session's State under the session's lock, so it
+// Inspect runs f with the session's instance under the session's lock, so it
 // never overlaps a generate: what a front end reads between turns (placement,
 // the prompt cache's counters) or does on the session's own JIT (a picture).
-func (s *Session) Inspect(f func(st *model.State)) {
+func (s *Session) Inspect(f func(st *model.Instance)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f(s.st)
@@ -2458,7 +2458,7 @@ type moveRes struct {
 }
 
 // serveMove advances the session's pending move; the caller holds s.mu, at a
-// token boundary. The first call prepares it (model.State.PrepareMove: the
+// token boundary. The first call prepares it (model.Instance.PrepareMove: the
 // target takes the blocks while the sequence keeps generating), and a later
 // one commits it once the target is ready -- or at once when final, which is
 // a session no generate is holding.
@@ -2558,7 +2558,7 @@ func (e *Engine) attachDevice(lm *LoadedModel, to string) error {
 	if !lm.holds(to) {
 		return fmt.Errorf("%w: %q is not a device of this server (the tier holds %v)", ErrPlacement, to, lm.devIDs())
 	}
-	// The pool's States were placed before the tier changed.
+	// The pool's instances were placed before the tier changed.
 	e.dropIdle(lm)
 	return nil
 }
@@ -2576,9 +2576,9 @@ func tierNames(g *tier.GPU) []string {
 // tierBox holds a tier behind an atomic pointer.
 type tierBox struct{ d nn.Device }
 
-// bindSession attaches the session's State to the model's current tier when it
+// bindSession attaches the session's instance to the model's current tier when it
 // is on another (or on none), keeping as many blocks on a device as it had.
-// model.State.SetDeviceLayers moves the history to the CPU before it changes tier,
+// model.Instance.SetDeviceLayers moves the history to the CPU before it changes tier,
 // so the answer does not change; the blocks go back up after.
 func (e *Engine) bindSession(s *Session) error {
 	dev := s.lm.device()
@@ -2613,7 +2613,7 @@ func (e *Engine) bindSessionLocked(s *Session) error {
 // session's tier: the tier owns the devices and is opened at load.
 //
 // A session generating keeps generating: its generate prepares the move
-// between two tokens (model.State.PrepareMove), keeps decoding on the source
+// between two tokens (model.Instance.PrepareMove), keeps decoding on the source
 // while the target takes the blocks, and commits at the first token boundary
 // the target is ready, so the reply waits for the history's copy alone. An
 // idle session is moved here. A move asked while another is pending is
@@ -2636,7 +2636,7 @@ func (e *Engine) MoveBlocks(ctx context.Context, s *Session, first, last int, to
 	}
 	s.move = r
 	s.moveMu.Unlock()
-	// The pool's States are no sequence's, and would keep the blocks where
+	// The pool's instances are no sequence's, and would keep the blocks where
 	// they are (dropIdle).
 	e.dropIdle(s.lm)
 	tick := time.NewTicker(2 * time.Millisecond)
@@ -2656,7 +2656,7 @@ func (e *Engine) MoveBlocks(ctx context.Context, s *Session, first, last int, to
 			return res.mv, res.err
 		case <-ctx.Done():
 			// Withdrawn only while nothing was prepared; past that the move
-			// finishes and the State is left consistent either way.
+			// finishes and the instance is left consistent either way.
 			s.moveMu.Lock()
 			if s.move == r && r.pm == nil {
 				s.move = nil
@@ -2700,7 +2700,7 @@ func pagerBudget(share uint64) uint64 { return max(share, 1) }
 //
 // It is an Engine method because lm.sessions is written under e.mu, not
 // lm.mu.
-func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.State) {
+func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.Instance) {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 	if lm.m.PageSize() == 0 || lm.budget == 0 {
@@ -2736,7 +2736,7 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.State) {
 	// rows across sessions, held between steps for the next.
 	kv += lm.m.StepScratchBytes()
 
-	// The pooled States' history (above) and the memory cache are committed
+	// The pooled sessions' history (above) and the memory cache are committed
 	// host memory too. The store's bound is a share of the model's budget,
 	// set here so it follows every re-division.
 	if st := lm.ttft.store; st != nil {
