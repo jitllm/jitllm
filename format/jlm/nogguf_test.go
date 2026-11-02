@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -128,7 +128,7 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 			checked++
 			continue
 		}
-		wq, wd, wsc, err := kernels.PackWeights(q, raw, e.Rows(), e.K())
+		wq, wd, wsc, err := layout.PackWeights(q, raw, e.Rows(), e.K())
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -22,13 +22,13 @@ type fmtInfo struct {
 	codes                                  *[16]uint8
 }
 
-func info(q kernels.Quant) fmtInfo {
-	sub, bits, biasK, biasArray := kernels.Layout(q)
-	perSuper, scOff := kernels.ScaleLayout(q)
+func info(q layout.Quant) fmtInfo {
+	sub, bits, biasK, biasArray := layout.Layout(q)
+	perSuper, scOff := layout.ScaleLayout(q)
 	return fmtInfo{
-		blockE: q.Elems(), sub: sub, bits: bits, hi: kernels.HiPlane(q),
+		blockE: q.Elems(), sub: sub, bits: bits, hi: layout.HiPlane(q),
 		perSuper: perSuper, scOff: scOff, biasK: biasK, biasArray: biasArray,
-		signedQ: kernels.SignedPayload(q), codes: kernels.Codes(q),
+		signedQ: layout.SignedPayload(q), codes: layout.Codes(q),
 	}
 }
 
@@ -63,28 +63,28 @@ func code(qi fmtInfo, q uint32) uint32 {
 // Three layouts: a format with a minimum gets the whole word; a narrow f16
 // scale shares a word with the next row; and MXFP4's E8M0 exponent is one byte
 // of four, biased so that the byte shifted left 23 is the f32, exactly.
-func dScale(t kernels.Quant, d []byte, super, nrows, r int) (scale, dmin float32) {
-	di, slot := kernels.DIndex(t, super, nrows, r)
+func dScale(t layout.Quant, d []byte, super, nrows, r int) (scale, dmin float32) {
+	di, slot := layout.DIndex(t, super, nrows, r)
 	dw := binary.LittleEndian.Uint32(d[di*4:])
-	switch kernels.DSlots(t) {
+	switch layout.DSlots(t) {
 	case 4:
 		return math.Float32frombits(uint32(uint8(dw>>(8*uint(slot)))) << 23), 0
 	case 2:
 		return half(uint16(dw >> (16 * uint(slot)))), 0
 	}
-	if kernels.D32(t) {
+	if layout.D32(t) {
 		return math.Float32frombits(dw), 0
 	}
 	return half(uint16(dw)), half(uint16(dw >> 16))
 }
 
 // MatVecPacked is MatVecPackedRows over every row.
-func MatVecPacked(out []float32, t kernels.Quant, qs, d, sc []byte, x []float32, nrows, k int) error {
+func MatVecPacked(out []float32, t layout.Quant, qs, d, sc []byte, x []float32, nrows, k int) error {
 	return MatVecPackedRows(out, t, qs, d, sc, x, nrows, k, 0, nrows)
 }
 
 // MatVecPackedRows computes rows [lo, hi) only, so a caller can split the work.
-func MatVecPackedRows(out []float32, t kernels.Quant, qs, d, sc []byte, x []float32, nrows, k, lo, hi int) error {
+func MatVecPackedRows(out []float32, t layout.Quant, qs, d, sc []byte, x []float32, nrows, k, lo, hi int) error {
 	qi := info(t)
 	if qi.blockE == 0 || k%qi.blockE != 0 {
 		return fmt.Errorf("oracle: MatVecPacked: k=%d is not a multiple of %s's %d", k, t, qi.blockE)
@@ -99,7 +99,7 @@ func MatVecPackedRows(out []float32, t kernels.Quant, qs, d, sc []byte, x []floa
 		return fmt.Errorf("oracle: MatVecPacked: x=%d out=%d for rows [%d,%d) of %d",
 			len(x), len(out), lo, hi, k)
 	}
-	nq, nd, nsc, err := kernels.PackedWords(t, nrows, k)
+	nq, nd, nsc, err := layout.PackedWords(t, nrows, k)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func MatVecPackedRows(out []float32, t kernels.Quant, qs, d, sc []byte, x []floa
 			// the scale. Normalising here is what lets the payload loop below
 			// be one loop rather than six.
 			var bias float32
-			if kernels.ScStream(t) {
+			if layout.ScStream(t) {
 				scv, mv := scStream(sc, si, nrows, r)
 				scale *= float32(int32(scv) + int32(qi.scOff))
 				bias = dmin * float32(mv)
@@ -196,7 +196,7 @@ func MatVecPackedRows(out []float32, t kernels.Quant, qs, d, sc []byte, x []floa
 // no second layout for token_embd. The read is strided (one row's words sit
 // nrows*4 bytes apart). The engine runs cpu.EmitPackedRow; this is its
 // reference.
-func RowPacked(dst []float32, t kernels.Quant, qs, d, sc []byte, r, nrows, k int) error {
+func RowPacked(dst []float32, t layout.Quant, qs, d, sc []byte, r, nrows, k int) error {
 	qi := info(t)
 	if qi.blockE == 0 || k%qi.blockE != 0 {
 		return fmt.Errorf("oracle: RowPacked: k=%d is not a multiple of %s's %d", k, t, qi.blockE)
@@ -207,7 +207,7 @@ func RowPacked(dst []float32, t kernels.Quant, qs, d, sc []byte, r, nrows, k int
 	if len(dst) < k {
 		return fmt.Errorf("oracle: RowPacked: dst=%d, want %d", len(dst), k)
 	}
-	nq, nd, nsc, err := kernels.PackedWords(t, nrows, k)
+	nq, nd, nsc, err := layout.PackedWords(t, nrows, k)
 	if err != nil {
 		return err
 	}
@@ -229,7 +229,7 @@ func RowPacked(dst []float32, t kernels.Quant, qs, d, sc []byte, r, nrows, k int
 		super := si / qi.perSuper
 		scale, dmin := dScale(t, d, super, nrows, r)
 		var bias float32
-		if kernels.ScStream(t) {
+		if layout.ScStream(t) {
 			scv, mv := scStream(sc, si, nrows, r)
 			scale *= float32(int32(scv) + int32(qi.scOff))
 			bias = dmin * float32(mv)
@@ -283,10 +283,10 @@ func RowPacked(dst []float32, t kernels.Quant, qs, d, sc []byte, r, nrows, k int
 // scStream reads sub-block si's scale and minimum out of a row's 96-bit SC
 // stream (kernels.ScStream): three words a super-block, [word][row].
 func scStream(sc []byte, si, nrows, r int) (scale, min uint8) {
-	var ws [kernels.ScStreamWords]uint32
+	var ws [layout.ScStreamWords]uint32
 	sup := si / 8
 	for w := range ws {
-		ws[w] = binary.LittleEndian.Uint32(sc[((sup*kernels.ScStreamWords+w)*nrows+r)*4:])
+		ws[w] = binary.LittleEndian.Uint32(sc[((sup*layout.ScStreamWords+w)*nrows+r)*4:])
 	}
-	return kernels.ScValue(ws, si%8, false), kernels.ScValue(ws, si%8, true)
+	return layout.ScValue(ws, si%8, false), layout.ScValue(ws, si%8, true)
 }

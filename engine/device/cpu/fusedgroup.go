@@ -1,7 +1,7 @@
 package cpu
 
 import (
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -26,7 +26,7 @@ const PackedFusedGroup = 16
 // layout, not the host: amd64's fused and token-tiled kernels and arm64's tiled
 // one all divide by it.
 func PackedFusedGroupOf(t quant.Type) int {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return PackedFusedGroup
 	}
@@ -35,7 +35,7 @@ func PackedFusedGroupOf(t quant.Type) int {
 
 // packedFusedGroupK is PackedFusedGroupOf keyed by the DEVICE-layout quant,
 // which is what the emitters already carry.
-func packedFusedGroupK(q kernels.Quant) int {
+func packedFusedGroupK(q layout.Quant) int {
 	// Derived from the budget, not from a format's name, so a new format with a
 	// secondary plane cannot silently get the default 16 and be refused by the
 	// emitter. This is EmitPackedMatVecFused's own budget line.
@@ -50,9 +50,9 @@ func packedFusedGroupK(q kernels.Quant) int {
 // fusedRegisters is EmitPackedMatVecFused's register budget for one row group.
 // It is the one place that arithmetic is written down for a caller that has to
 // predict it; the emitter re-derives it and refuses if it is wrong.
-func fusedRegisters(q kernels.Quant, group int) int {
-	sub, bits, _, _ := kernels.Layout(q)
-	_, scOff := kernels.ScaleLayout(q)
+func fusedRegisters(q layout.Quant, group int) int {
+	sub, bits, _, _ := layout.Layout(q)
+	_, scOff := layout.ScaleLayout(q)
 	pw := sub * bits / 32
 	nact := pw
 	if bits < 8 {
@@ -62,10 +62,10 @@ func fusedRegisters(q kernels.Quant, group int) int {
 	if scOff != 0 {
 		need++
 	}
-	if kernels.HiPlane(q) != 0 {
+	if layout.HiPlane(q) != 0 {
 		need++ // the pre-shifted secondary mask
 	}
-	if kernels.Codes(q) != nil {
+	if layout.Codes(q) != nil {
 		need++ // the code table
 	}
 	return need

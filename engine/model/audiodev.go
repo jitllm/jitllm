@@ -105,7 +105,7 @@ func (s *Instance) audWeights(li int) nn.LayerWeights {
 
 // setAudioDevice places the audio blocks on d through their segment instance,
 // every one the device takes; nil takes them to the CPU.
-func (e *Embedder) setAudioDevice(d nn.Device) error {
+func (e *Embedder) setAudioDevice(d nn.LayerDevice) error {
 	if e.m.audio == nil {
 		return nil
 	}

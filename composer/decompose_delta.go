@@ -195,9 +195,10 @@ func deltaScan(o graph.Op, c *Context, H, KH, Dk, Dv int, chanDecay bool) ([]Pri
 	return []Prim{{Kind: PrimScan, Shape: []int{H, Dv, Dk}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: c.value(o.Out[0]), Ax: []int{r, h, j}, Ext: []int{R, H, Dv}, Value: y}},
 		Scan:   &Scan{Desc: desc, Init: init, Next: next, Final: tableRecStateOut, Index: final, Extent: N, Loops: c.scanLoops, From: from},
-		Facts:  Facts{Extents: map[int]int{5: N, desc: recDescWords(R)}}}}, nil
+		Facts:  Facts{Extents: map[int]int{5: N, desc: RunDescWords(R)}}}}, nil
 }
 
-// recDescWords is how many words a run descriptor of rows rows holds
-// (kernels.RunDescWords).
-func recDescWords(rows int) int { return 1 + 7*rows }
+// RunDescWords is how many words a run descriptor of rows rows holds: the
+// row count, each run's slots, its first entry and rows, the order list,
+// each row's entry and run (Scan).
+func RunDescWords(rows int) int { return 1 + 7*rows }

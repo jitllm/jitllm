@@ -109,12 +109,12 @@ func hybridBatchedPrefill(t *testing.T, m *Model) {
 				gpu.WithPoisonScratch(true),
 				gpu.WithConfig(func(cf *gpu.Config) {
 					cf.NoBatch = noBatch
-					// sm_70's batched matvecs (off by default) read f16
+					// The matrix unit's forms (off here) read binary16
 					// activations where every other path reads int8, which
 					// alone moves a residual far more than the recurrence
 					// under test. JITLLM_HYBRID_VOLTA=1 runs the shipping
-					// sm_70 path, held to the bulk and logit bounds only.
-					cf.NoVolta = !volta
+					// path, held to the bulk and logit bounds only.
+					cf.NoMMA = !volta
 				}))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)

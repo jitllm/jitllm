@@ -85,7 +85,7 @@ var specPrompts = []string{
 }
 
 // plainGreedy is n tokens of greedy decode after prompt.
-func plainGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.Device) []int32 {
+func plainGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.LayerDevice) []int32 {
 	t.Helper()
 	st := m.NewInstance(len(prompt) + n + 8)
 	defer st.Close()
@@ -110,7 +110,7 @@ func plainGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.Device) [
 }
 
 // specGreedy is n tokens through a Speculator.
-func specGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.Device, fault specFault,
+func specGreedy(t *testing.T, m *Model, prompt []int32, n int, dev nn.LayerDevice, fault specFault,
 	oracle []int32, opts ...SpecOption) ([]int32, SpecStats) {
 	t.Helper()
 	// A break that keeps rejected rows moves the trunk on by every drafted

@@ -127,7 +127,7 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 			}
 			bound := 5e-5
 			// The composer's binary16 matrix forms take main's binary16 bound.
-			if st := g.Stats(); st.VoltaGemm+st.GemmF16 > 0 || mx > 0 {
+			if mx > 0 {
 				bound = 5e-4
 			}
 			if nm > bound {

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
@@ -65,7 +64,7 @@ func TestDeviceCopyMovesExactlyTheRange(t *testing.T) {
 			src := alloc(bytes.Repeat([]byte{0xEE}, n))
 			want[src] = fill(1)
 			stage := alloc(want[src])
-			k, err := kernels.Restride(1, n/4, n/4, n/4)
+			k, err := Restride(1, n/4, n/4, n/4)
 			if err != nil {
 				t.Fatal(err)
 			}

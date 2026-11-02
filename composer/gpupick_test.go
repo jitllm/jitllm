@@ -8,9 +8,9 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testlock"
 )
@@ -41,8 +41,8 @@ func TestComposedGPUPickedRowsAreTheRows(t *testing.T) {
 				x[i] = float32(rng.NormFloat64())
 			}
 			for _, n := range []int{4096, 32000, 65536, 131072} {
-				w := tiledWeights(quant.Q8_0, kernels.Q8_0, n, k, rng)
-				qs, dw, sc, err := kernels.PackWeights(kernels.Q8_0, w, n, k)
+				w := tiledWeights(quant.Q8_0, layout.Q8_0, n, k, rng)
+				qs, dw, sc, err := layout.PackWeights(layout.Q8_0, w, n, k)
 				if err != nil {
 					t.Fatal(err)
 				}

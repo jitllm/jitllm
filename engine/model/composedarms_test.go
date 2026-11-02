@@ -105,7 +105,7 @@ func composedRan(t *testing.T, parts gpu.Parts, allow []string, gs ...*gpu.GPU) 
 		served += n
 		formed += s.FormedAtStep
 		for i := range s.BlockDeclines {
-			if k := s.BlockDeclines[i] + s.HeadDeclines[i]; k > 0 {
+			if k := s.BlockDeclines[i]; k > 0 {
 				declined[gpu.DeclineName(i)] += k
 			}
 		}

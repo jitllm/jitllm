@@ -160,22 +160,11 @@ func stepBand(t *testing.T, m *Model, dev string) {
 	g.Close()
 	host, _ := alone(nil, toks)
 	report("host", host, ref)
-	for _, sp := range []int{1, 4} {
-		g := open(gpu.WithSplit(sp))
-		got, _ := alone(g, toks)
-		g.Close()
-		report(fmt.Sprintf("split=%d", sp), got, ref)
-	}
 	for _, n := range []int{2, 3, 4, 8} {
 		g := open()
 		got := together(g, n, toks)
-		t.Logf("together=%d: %d few-sequence decode matvecs, %d tensor-core matvecs", n, g.Stats().RagGroupMV,
-			g.Stats().VoltaMV)
+		t.Logf("together=%d: %d launches on the matrix unit", n, g.Stats().MatrixPart(gpu.EveryPart))
 		g.Close()
 		report(fmt.Sprintf("together=%d", n), got, ref)
 	}
-	g = open(gpu.WithConfig(func(c *gpu.Config) { c.NoRagFuse = true }))
-	got := together(g, 4, toks)
-	g.Close()
-	report("nofuse=4", got, ref)
 }

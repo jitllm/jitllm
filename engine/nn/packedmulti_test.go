@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -17,7 +17,7 @@ import (
 func packSheet(t testing.TB, gt quant.Type, nrows, k, seed int) *Packed {
 	t.Helper()
 	rng := rand.New(rand.NewSource(int64(seed)))
-	q, _ := kernels.QuantOf(gt)
+	q, _ := layout.QuantOf(gt)
 	nb := uint64(nrows*k) / gt.BlockElems()
 	bb := gt.BlockBytes()
 	src := make([]byte, nb*bb)
@@ -27,7 +27,7 @@ func packSheet(t testing.TB, gt quant.Type, nrows, k, seed int) *Packed {
 	if !quant.PlantScales(gt, src, seed) {
 		panic("no scale planter for " + gt.String() + " -- its blocks would carry random scales")
 	}
-	qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+	qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}

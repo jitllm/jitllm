@@ -70,11 +70,11 @@ func decomposeTakeRows(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a row take of %d operands", len(o.In))
 	}
 	U := ir.U32
-	sh := c.rows(o.Out[0])
+	sh, in := c.rows(o.Out[0]), c.rows(o.In[0])
 	R := sh[0]
 	var x exprs
-	at := x.op(OpMin, U, x.load(1, x.op(OpAdd, U, x.u(RequestRows), x.coord(0))), x.u(uint32(R-1)))
-	x.at(0, sh, at, x.coord(1))
+	at := x.op(OpMin, U, x.load(1, x.op(OpAdd, U, x.u(RequestRows), x.coord(0))), x.u(uint32(in[0]-1)))
+	x.at(0, in, at, x.coord(1))
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), tableRequest}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R}}}}, nil
 }

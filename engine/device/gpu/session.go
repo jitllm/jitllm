@@ -4,7 +4,6 @@ import (
 	"sync/atomic"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/format/quant"
 )
 
 // A session is one sequence; a tier is one model. The per-sequence state (the
@@ -300,14 +299,6 @@ func (s *gpuSession) EmbedRows(ids []int32, pos int, dst []float32) bool {
 func (s *gpuSession) PrepHead(h *nn.Head) bool {
 	defer s.leave(s.enter())
 	return s.g.PrepHead(h)
-}
-
-// MatVec is a single matvec for this session: the crossing verdict it is
-// held to is sampled per session (devTier.mvPays). It does not enter: it
-// takes the device's own lock and must not queue behind another session's
-// token.
-func (s *gpuSession) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
-	return s.g.matVec(s.sid, out, t, w, x, nrows, k)
 }
 
 // SetActWindow forwards the activation window (nn.ActWindower): a JIT that

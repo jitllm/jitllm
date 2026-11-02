@@ -5,8 +5,8 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -21,7 +21,7 @@ type rowKernel struct {
 // tier is in every package-level key).
 type rowKey struct {
 	t cpu.Tier
-	q kernels.Quant
+	q layout.Quant
 }
 
 var (
@@ -33,7 +33,7 @@ var (
 // RowPacked32JIT writes row r of a packed tensor of nrows rows and k columns
 // into dst.
 func RowPacked32JIT(dst []float32, t quant.Type, p *Packed, r, nrows, k int) {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		panic(fmt.Sprintf("jit: %s has no packed layout", t))
 	}
@@ -54,10 +54,10 @@ func RowPacked32JIT(dst []float32, t quant.Type, p *Packed, r, nrows, k int) {
 	// The word, then the slot within it: two rows share a word on a narrow f16
 	// scale and FOUR on MXFP4's E8M0 byte, so the offset is the slot times the
 	// format's row width rather than a fixed 2.
-	di, slot := kernels.DIndex(q, 0, stride, row)
+	di, slot := layout.DIndex(q, 0, stride, row)
 	pd := 4*di + slot*cpu.DRowBytes(t)
-	sub, _, _, _ := kernels.Layout(q)
-	perSuper, _ := kernels.ScaleLayout(q)
+	sub, _, _, _ := layout.Layout(q)
+	perSuper, _ := layout.ScaleLayout(q)
 	// The kernel's gather scratch is on the stack: Code.Call does not let args
 	// escape, and a sync.Pool here allocated again after every GC cycle.
 	var scr [cpu.PackedRowScratch]byte

@@ -13,14 +13,15 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/composer/x86"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // TestComposedCPUMatVecAgainstMain times the composed decode matvec against
@@ -66,10 +67,10 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 	workers := j.Workers()
 
 	rng := rand.New(rand.NewSource(5))
-	q, _ := kernels.QuantOf(typ)
+	q, _ := layout.QuantOf(typ)
 	jt, _ := jlm.TypeOf(typ)
 	w := cpuTestWeights(typ, q, rows, k, rng)
-	qs, d, sc, err := kernels.PackWeights(q, w, rows, k)
+	qs, d, sc, err := layout.PackWeights(q, w, rows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,12 +83,12 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 		per += span[i]
 	}
 	n := max(2, (192<<20)/per)
-	mem, mapped, err := kernels.MapOffHeap(n * per)
+	mem, mapped, err := offheap.MapOffHeap(n * per)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if mapped {
-		defer kernels.UnmapOffHeap(mem)
+		defer offheap.UnmapOffHeap(mem)
 	}
 	huge := os.Getenv("JITLLM_CPU_HUGE") != "0"
 	if huge {

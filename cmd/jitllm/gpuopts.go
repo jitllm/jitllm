@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -31,13 +30,6 @@ func gpuOptions() []gpu.Option {
 	}
 	set := func(k string) bool { return os.Getenv(k) != "" }
 
-	// The tuners' answers persist under the user cache directory, keyed by
-	// device UUID, driver and executable (gpu.WithTuneCache).
-	if d, err := os.UserCacheDir(); err == nil {
-		// A shape not in it runs the table's split while the tuner measures
-		// it in the background (gpu.WithLazyTune).
-		o = append(o, gpu.WithTuneCache(filepath.Join(d, "jitllm")), gpu.WithLazyTune(true))
-	}
 	if v := str("JITLLM_GPU_API"); v != "" {
 		o = append(o, gpu.WithAPI(v))
 	}
@@ -50,10 +42,6 @@ func gpuOptions() []gpu.Option {
 	// A register cap on every CUDA kernel: the register report's what-if.
 	if n := num("JITLLM_CUDA_MAXREGS"); n > 0 {
 		o = append(o, gpu.WithCUDAMaxRegs(n))
-	}
-	// The batched GEMM's spilling tiles, refused by default (gpu.Config.SpillingTiles).
-	if str("JITLLM_GPU_SPILLING_TILES") == "1" {
-		o = append(o, gpu.WithConfig(func(c *gpu.Config) { c.SpillingTiles = true }))
 	}
 	if set("JITLLM_GPU_VERBOSE") {
 		o = append(o, gpu.WithVerbose(true))
@@ -70,26 +58,11 @@ func gpuOptions() []gpu.Option {
 	if n := num("JITLLM_VK_MAXGROUPS"); n >= 1 {
 		o = append(o, gpu.WithVulkanMaxGroups(uint32(n)))
 	}
-	if set("JITLLM_NO_CENTER") || num("JITLLM_CENTER_MINTOK") >= 1 {
-		o = append(o, gpu.WithCentering(set("JITLLM_NO_CENTER"), num("JITLLM_CENTER_MINTOK")))
-	}
-	if n := num("JITLLM_GPU_SPLIT"); n >= 1 {
-		o = append(o, gpu.WithSplit(n))
-	}
-	if n := num("JITLLM_GPU_ACCSPLIT"); n >= 1 {
-		o = append(o, gpu.WithAttnAccSplit(n))
-	}
-	if n := num("JITLLM_ACC_SPLIT"); n >= 1 {
-		o = append(o, gpu.WithMatVecAccSplit(n))
-	}
 	if n := num("JITLLM_GPU_LANES"); n >= 1 {
 		o = append(o, gpu.WithLanes(n))
 	}
 	if set("JITLLM_GPU_POISON_KV") {
 		o = append(o, gpu.WithPoisonKV(true))
-	}
-	if set("JITLLM_GPU_NO_ATTNMMA") {
-		o = append(o, gpu.WithoutAttnMMA(true))
 	}
 	var skip []string
 	if v := str("JITLLM_GPU_SKIP"); v != "" {
@@ -128,13 +101,6 @@ func gpuOptions() []gpu.Option {
 			o = append(o, gpu.WithMMATile(mt, nt))
 		}
 	}
-	// Zero is a value here -- it restores the unpriced behaviour -- so the
-	// presence of the name is what decides, not the number.
-	if set("JITLLM_MV_MIN_KB") {
-		if n := num("JITLLM_MV_MIN_KB"); n >= 0 {
-			o = append(o, gpu.WithMinMatVecBytes(uint64(n)<<10))
-		}
-	}
 	// JITLLM_METAL_SPIN_US is how long a Metal Wait polls a command buffer
 	// before it blocks (0 blocks at once); JITLLM_METAL_FASTMATH=1 compiles
 	// with Metal's fast math; JITLLM_CUDA_INLINE=0 posts CUDA calls to the
@@ -164,50 +130,11 @@ func gpuOptions() []gpu.Option {
 			o = append(o, gpu.WithArena(n))
 		}
 	}
-	// JITLLM_GPU_ROWT, the decode row tile, is a number: 1 is one row per thread, and 2/4/8 give
-	// a thread that many independent accumulator chains.
-	// JITLLM_GPU_FLASH=1 runs decode attention as one generated online-softmax
-	// kernel (gpu.Config.FlashAttention); JITLLM_GPU_FLASH_SPLIT partitions its
-	// keys, merged by a second launch.
-	// JITLLM_GPU_FLASH=2 selects the KV-head form (gpu.Config.FlashKV), which
-	// is the default on CUDA and Metal; =0 keeps decode attention staged (NoFlashKV).
-	if str("JITLLM_GPU_FLASH") == "0" {
-		o = append(o, gpu.WithConfig(func(c *gpu.Config) { c.NoFlashKV = true }))
-	}
-	if f := num("JITLLM_GPU_FLASH"); f > 0 {
-		sp := int(num("JITLLM_GPU_FLASH_SPLIT"))
-		grp, warps := int(num("JITLLM_GPU_FLASH_GROUP")), int(num("JITLLM_GPU_FLASH_WARPS"))
-		o = append(o, gpu.WithConfig(func(c *gpu.Config) {
-			c.FlashAttention, c.FlashKV, c.FlashSplit, c.FlashGroup, c.FlashWarps = f == 1, f == 2, sp, grp, warps
-		}))
-	}
-	if n := num("JITLLM_GPU_ROWT"); n > 1 {
-		o = append(o, gpu.WithConfig(func(c *gpu.Config) { c.DecodeRowt = int(n) }))
-	}
 	// JITLLM_GPU_KV_PAGE is the positions a KV page holds.
-	// JITLLM_GPU_PREFILL_PASS is the keys one paged prefill launch attends
-	// before the history goes in passes.
-	if w := int(num("JITLLM_GPU_PREFILL_PASS")); w > 0 {
-		o = append(o, gpu.WithConfig(func(c *gpu.Config) { c.PrefillPass = w }))
-	}
 	// JITLLM_GPU_PERSIST composes each decode block into persistent kernels
 	// (gpu.WithPersist), JITLLM_GPU_PERSIST_GRID capping their grid;
 	// JITLLM_GPU_PERSIST=deps orders them with dependency counters rather
 	// than grid barriers (gpu.WithPersistDeps).
-	// JITLLM_GPU_GATEUP=1 runs a dense FFN's gate and up as one launch
-	// (gpu.WithGateUpFuse).
-	if set("JITLLM_GPU_GATEUP") {
-		o = append(o, gpu.WithGateUpFuse(str("JITLLM_GPU_GATEUP") != "0"))
-	}
-	// JITLLM_GPU_FFN forces the dense gated FFN's recipe (gpu.WithFFNForm):
-	// two, gate2, gate2in or gu; unset leaves it to the per-card trial.
-	if set("JITLLM_GPU_FFN") {
-		f, err := gpu.ParseFFNForm(str("JITLLM_GPU_FFN"))
-		if err != nil {
-			panic(err)
-		}
-		o = append(o, gpu.WithFFNForm(f))
-	}
 	if str("JITLLM_GPU_PERSIST") == "deps" {
 		o = append(o, gpu.WithPersistDeps(true, int(num("JITLLM_GPU_PERSIST_GRID"))))
 	} else if set("JITLLM_GPU_PERSIST") {
@@ -224,51 +151,16 @@ func gpuOptions() []gpu.Option {
 		set func(*gpu.Config)
 	}{
 		{"JITLLM_GPU_GRAPH", os.Getenv("JITLLM_GPU_GRAPH") == "0", func(c *gpu.Config) { c.NoGraph = true }},
-		{"JITLLM_GPU_UNPACK", os.Getenv("JITLLM_GPU_UNPACK") == "0", func(c *gpu.Config) { c.NoUnpack = true }},
 		{"JITLLM_NO_GPU_BATCH", set("JITLLM_NO_GPU_BATCH"), func(c *gpu.Config) { c.NoBatch = true }},
 		{"JITLLM_GPU_NO_TAIL", set("JITLLM_GPU_NO_TAIL"), func(c *gpu.Config) { c.NoTail = true }},
-		{"JITLLM_GPU_NO_KT", set("JITLLM_GPU_NO_KT"), func(c *gpu.Config) { c.NoKT = true }},
 		{"JITLLM_NO_GPU_MMA", set("JITLLM_NO_GPU_MMA"), func(c *gpu.Config) { c.NoMMA = true }},
-		{"JITLLM_GPU_NO_FUSE", set("JITLLM_GPU_NO_FUSE"), func(c *gpu.Config) { c.NoFuse = true }},
-		{"JITLLM_GPU_NO_ACTFUSE", set("JITLLM_GPU_NO_ACTFUSE"), func(c *gpu.Config) { c.NoActFuse = true }},
-		{"JITLLM_GPU_QKVGEMM", os.Getenv("JITLLM_GPU_QKVGEMM") == "1", func(c *gpu.Config) { c.QKVGemm = true }},
-		{"JITLLM_GPU_NO_ADDNORM", set("JITLLM_GPU_NO_ADDNORM"), func(c *gpu.Config) { c.NoAddNormFold = true }},
-		{"JITLLM_GPU_GATEUP2", os.Getenv("JITLLM_GPU_GATEUP2") == "0", func(c *gpu.Config) { c.GateUp2 = false }},
-		{"JITLLM_GPU_ACTIN_SITES", set("JITLLM_GPU_ACTIN_SITES"),
-			func(c *gpu.Config) { c.ActInSites = num("JITLLM_GPU_ACTIN_SITES") }},
-		{"JITLLM_GPU_ACTIN_PREFETCH", set("JITLLM_GPU_ACTIN_PREFETCH"),
-			func(c *gpu.Config) { c.ActInPrefetch = num("JITLLM_GPU_ACTIN_PREFETCH") }},
-		{"JITLLM_GPU_NO_VOLTA", set("JITLLM_GPU_NO_VOLTA"), func(c *gpu.Config) { c.NoVolta = true }},
-		{"JITLLM_GPU_NO_FLASH_PREFILL", set("JITLLM_GPU_NO_FLASH_PREFILL"), func(c *gpu.Config) { c.NoFlashPrefill = true }},
-		{"JITLLM_GPU_NO_TILE_TAIL", set("JITLLM_GPU_NO_TILE_TAIL"), func(c *gpu.Config) { c.NoTileTail = true }},
 		{"JITLLM_GPU_NO_EXACT_PROMPT", set("JITLLM_GPU_NO_EXACT_PROMPT"), func(c *gpu.Config) { c.NoExactPrompt = true }},
-		{"JITLLM_GPU_NO_VOLTA_MOE", set("JITLLM_GPU_NO_VOLTA_MOE"), func(c *gpu.Config) { c.NoVoltaMoE = true }},
-		{"JITLLM_GPU_GEMM_INT8", set("JITLLM_GPU_GEMM_INT8"), func(c *gpu.Config) { c.PreferGemmInt8 = true }},
-		{"JITLLM_GPU_GEMM_DEEP", set("JITLLM_GPU_GEMM_DEEP"), func(c *gpu.Config) { c.GemmDeep = num("JITLLM_GPU_GEMM_DEEP") }},
-		{"JITLLM_GPU_PREFER_TILES", set("JITLLM_GPU_PREFER_TILES"), func(c *gpu.Config) { c.PreferTiles = true }},
-		{"JITLLM_GPU_NO_RAG_GROUP", set("JITLLM_GPU_NO_RAG_GROUP"), func(c *gpu.Config) { c.NoRagGroup = true }},
-		{"JITLLM_GPU_NO_RAG_FUSE", set("JITLLM_GPU_NO_RAG_FUSE"), func(c *gpu.Config) { c.NoRagFuse = true }},
-		{"JITLLM_GPU_NO_RAG_HEAD_ONE", set("JITLLM_GPU_NO_RAG_HEAD_ONE"), func(c *gpu.Config) { c.NoRagHeadOne = true }},
-		{"JITLLM_NO_GPU_GROUP", set("JITLLM_NO_GPU_GROUP"), func(c *gpu.Config) { c.NoGroupSplit = true }},
-		{"JITLLM_GPU_SCALAR_SOFTMAX", set("JITLLM_GPU_SCALAR_SOFTMAX"), func(c *gpu.Config) { c.ScalarSoftmax = true }},
-		{"JITLLM_GPU_FORCE_GROUP", set("JITLLM_GPU_FORCE_GROUP"), func(c *gpu.Config) { c.ForceGroupSplit = true }},
 		{"JITLLM_GPU_STREAM", set("JITLLM_GPU_STREAM"), func(c *gpu.Config) { c.StreamExperts = true }},
-		{"JITLLM_GPU_STREAM_FIXED", set("JITLLM_GPU_STREAM_FIXED"), func(c *gpu.Config) { c.StreamFixedSel = true }},
-		{"JITLLM_GPU_PROBE", set("JITLLM_GPU_PROBE"), func(c *gpu.Config) { c.StreamProbe = true }},
 		{"JITLLM_GPU_STREAM_CACHE", num("JITLLM_GPU_STREAM_CACHE") > 0,
 			func(c *gpu.Config) { c.StreamCacheSlots = num("JITLLM_GPU_STREAM_CACHE") }},
-		{"JITLLM_GPU_STREAM_PREFETCH", set("JITLLM_GPU_STREAM_PREFETCH"), func(c *gpu.Config) { c.StreamPrefetch = true }},
 		{"JITLLM_GPU_NO_AUTOSTREAM", set("JITLLM_GPU_NO_AUTOSTREAM"), func(c *gpu.Config) { c.NoAutoStream = true }},
-		{"JITLLM_GPU_HYBRID", os.Getenv("JITLLM_GPU_HYBRID") == "1", func(c *gpu.Config) { c.HybridExperts = true }},
-		{"JITLLM_GPU_HYBRID", os.Getenv("JITLLM_GPU_HYBRID") == "0", func(c *gpu.Config) { c.NoHybrid = true }},
 		// =0 gives a hybrid block no expert cache on the card (gpu.WithHybridCache).
 		{"JITLLM_GPU_HYBRID_CACHE", os.Getenv("JITLLM_GPU_HYBRID_CACHE") == "0", func(c *gpu.Config) { c.NoHybridCache = true }},
-		{"JITLLM_GPU_SPLIT_PREDICT", num("JITLLM_GPU_SPLIT_PREDICT") > 0,
-			func(c *gpu.Config) { c.SplitPredict = num("JITLLM_GPU_SPLIT_PREDICT") }},
-		{"JITLLM_GPU_SPLIT_SWAPS", os.Getenv("JITLLM_GPU_SPLIT_SWAPS") != "",
-			func(c *gpu.Config) { c.SplitSwaps = num("JITLLM_GPU_SPLIT_SWAPS") }},
-		{"JITLLM_GPU_SPLIT_ADMIT", num("JITLLM_GPU_SPLIT_ADMIT") > 0,
-			func(c *gpu.Config) { c.SplitAdmit = num("JITLLM_GPU_SPLIT_ADMIT") }},
 		{"JITLLM_GPU_STREAM_NOPIN", set("JITLLM_GPU_STREAM_NOPIN"), func(c *gpu.Config) { c.StreamNoPin = true }},
 		{"JITLLM_GPU_STREAM_GROUPS", num("JITLLM_GPU_STREAM_GROUPS") > 0,
 			func(c *gpu.Config) { c.StreamGroups = num("JITLLM_GPU_STREAM_GROUPS") }},
@@ -276,19 +168,6 @@ func gpuOptions() []gpu.Option {
 	for _, f := range flags {
 		if f.on {
 			o = append(o, gpu.WithConfig(f.set))
-		}
-	}
-	// JITLLM_GPU_SELLOG names a file that gets one line per streamed block per
-	// token: the block index and its routed expert ids in rank order.
-	if path := os.Getenv("JITLLM_GPU_SELLOG"); path != "" {
-		if f, err := os.Create(path); err == nil {
-			o = append(o, gpu.WithConfig(func(c *gpu.Config) {
-				c.StreamSelLog = func(block int, sel []uint32) {
-					fmt.Fprintln(f, block, sel)
-				}
-			}))
-		} else {
-			fmt.Fprintln(os.Stderr, "JITLLM_GPU_SELLOG:", err)
 		}
 	}
 	return o
@@ -310,7 +189,7 @@ func pagerChunk() uint64 {
 // number wins where there is one, because it excludes the parts of the
 // suspension that are not I/O; otherwise jlm.File.ReadWait (the wall decode
 // spent blocked in EnsureRanges) covers host runs.
-func phRead(ph *model.PhaseMeter, dev nn.Device, m *model.Model) {
+func phRead(ph *model.PhaseMeter, dev nn.LayerDevice, m *model.Model) {
 	if ph == nil {
 		return
 	}

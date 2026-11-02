@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -46,11 +46,11 @@ const Q8Block = 32
 func WideActWindow(types []quant.Type) int {
 	any := false
 	for _, t := range types {
-		q, ok := kernels.QuantOf(t)
+		q, ok := layout.QuantOf(t)
 		if !ok {
 			continue
 		}
-		if kernels.NarrowScales(q) {
+		if layout.NarrowScales(q) {
 			return Q8Block // a 32-wide weight block wants a 32-wide scale
 		}
 		any = true
@@ -90,15 +90,15 @@ func BiasC(t quant.Type) float64 {
 	//
 	// The 8 in every case cancels against the row-major kernel's eight-lane
 	// horizontal reduction; see PackedScratch.
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return 0
 	}
-	_, _, biasK, biasArray := kernels.Layout(q)
+	_, _, biasK, biasArray := layout.Layout(q)
 	switch {
 	case biasArray:
 		return 1
-	case kernels.SignedPayload(q):
+	case layout.SignedPayload(q):
 		return 128
 	}
 	return float64(biasK)

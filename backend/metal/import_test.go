@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // newBufferWithBytesNoCopy:, at this package's level. The claim is an identity:
@@ -18,7 +18,7 @@ import (
 
 // TestImportAlignIsTheHostsPage pins the number the whole layout depends on.
 //
-// The page is 16384 on Apple Silicon (4096 on Linux). kernels.HostAlign takes
+// The page is 16384 on Apple Silicon (4096 on Linux). offheap.HostAlign takes
 // the larger of the Vulkan floor and the host page, since arena arrays laid out
 // on 4096 would be refused here with a nil return and no error, silently
 // forcing a copy.
@@ -32,11 +32,11 @@ func TestImportAlignIsTheHostsPage(t *testing.T) {
 	if got := c.ImportAlign(); got != page {
 		t.Fatalf("ImportAlign %d, the host's page is %d", got, page)
 	}
-	if uint64(page) > kernels.HostAlign() {
+	if uint64(page) > offheap.HostAlign() {
 		t.Fatalf("the host's page is %d and the arena lays out on %d, so no arena array on "+
-			"this machine can be imported at all", page, kernels.HostAlign())
+			"this machine can be imported at all", page, offheap.HostAlign())
 	}
-	t.Logf("page %d, arena alignment %d, unified %v", page, kernels.HostAlign(), c.UnifiedMemory())
+	t.Logf("page %d, arena alignment %d, unified %v", page, offheap.HostAlign(), c.UnifiedMemory())
 }
 
 // TestImportIsTheSamePointer is the no-copy claim itself.
@@ -47,42 +47,40 @@ func TestImportIsTheSamePointer(t *testing.T) {
 	}
 	defer c.Close()
 
-	// An arena entry, because that is what the tier imports: mmap'd, page
+	// Off-heap memory, because that is what the device imports: mmap'd, page
 	// aligned and padded to a whole alignment.
-	a := kernels.NewArena(1 << 24)
-	defer a.Close()
-	const rows, k = 32, 256
-	src := make([]byte, rows*(k/kernels.Q8_0.Elems())*kernels.Q8_0.BlockBytes())
-	for i := range src {
-		src[i] = byte(i * 7)
+	n := int(offheap.HostAlign())
+	mem, mapped, err := offheap.MapOffHeap(n)
+	if err != nil || !mapped {
+		t.Fatalf("MapOffHeap(%d): %v (mapped %v)", n, err, mapped)
 	}
-	p, err := a.Pack(0, kernels.Q8_0, src, rows, k)
-	if err != nil || p == nil {
-		t.Fatalf("arena.Pack: %v (nil=%v)", err, p == nil)
+	defer offheap.UnmapOffHeap(mem)
+	qs := unsafe.Slice((*uint32)(unsafe.Pointer(&mem[0])), n/4)
+	for i := range qs {
+		qs[i] = uint32(i * 7)
 	}
-
-	n := int(kernels.PaddedBytes(len(p.QS)))
-	b, err := c.Import(kernels.Ptr(p.QS), n)
+	at := uintptr(unsafe.Pointer(&mem[0]))
+	b, err := c.Import(unsafe.Pointer(&mem[0]), n)
 	if err != nil {
-		t.Fatalf("Import(%d bytes at %#x): %v", n, kernels.Addr(p.QS), err)
+		t.Fatalf("Import(%d bytes at %#x): %v", n, at, err)
 	}
 	defer b.Free()
 	if !b.Imported() {
 		t.Fatal("the buffer does not report itself as imported")
 	}
-	// Bytes() must be the arena's memory: checked both ways, because a
+	// Bytes() must be the mapped memory: checked both ways, because a
 	// one-way check passes on a buffer copied once.
 	host := b.Bytes()
 	if len(host) != n {
 		t.Fatalf("the buffer reports %d bytes, want %d", len(host), n)
 	}
-	if uintptr(unsafe.Pointer(&host[0])) != kernels.Addr(p.QS) {
-		t.Fatalf("the buffer's memory is at %#x and the arena's is at %#x: that is a COPY",
-			uintptr(unsafe.Pointer(&host[0])), kernels.Addr(p.QS))
+	if uintptr(unsafe.Pointer(&host[0])) != at {
+		t.Fatalf("the buffer's memory is at %#x and the mapping's is at %#x: that is a COPY",
+			uintptr(unsafe.Pointer(&host[0])), at)
 	}
-	p.QS[0] ^= 0xffffffff
-	if got := uint32(host[0]) | uint32(host[1])<<8 | uint32(host[2])<<16 | uint32(host[3])<<24; got != p.QS[0] {
-		t.Fatalf("wrote %#x through the arena and the buffer reads %#x", p.QS[0], got)
+	qs[0] ^= 0xffffffff
+	if got := uint32(host[0]) | uint32(host[1])<<8 | uint32(host[2])<<16 | uint32(host[3])<<24; got != qs[0] {
+		t.Fatalf("wrote %#x through the mapping and the buffer reads %#x", qs[0], got)
 	}
 }
 

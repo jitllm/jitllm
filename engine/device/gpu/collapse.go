@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer"
+
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -120,4 +122,26 @@ func (g *devTier) servedRowCopy(w, rows int) (*servedPart, error) {
 	return g.servedFor(servedKey{kind: partCopy, graph: gr, rows: rows}, func() (composedPart, error) {
 		return composedPart{kind: partCopy, graph: gr}, nil
 	})
+}
+
+// servedRowTake is the row of rows rows of w floats hb's request names
+// moved into a row of its own (graph.TakeRow), formed through the composer
+// like any other part.
+func (g *devTier) servedRowTake(hb *blockScratch, w, rows int) (*servedPart, error) {
+	gr := g.takeGraphs[w]
+	if gr == nil {
+		gr = (&graph.TakeRow{Width: w}).Build()
+		if g.takeGraphs == nil {
+			g.takeGraphs = map[int]*graph.Graph{}
+		}
+		g.takeGraphs[w] = gr
+	}
+	sv, err := g.servedFor(servedKey{kind: partCopy, graph: gr, rows: rows}, func() (composedPart, error) {
+		return composedPart{kind: partCopy, graph: gr, tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableRequest): hb.foldReq}}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sv.sl.tables[tableKey(composer.TableRequest)] = hb.foldReq
+	return sv, nil
 }

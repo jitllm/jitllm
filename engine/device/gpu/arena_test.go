@@ -6,8 +6,8 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // The packed arena, at the tier's level: a block uploaded, released and
@@ -306,7 +306,7 @@ func TestArenaPagesInOnRealHardware(t *testing.T) {
 		if l.wq == nil || !l.wq.ok {
 			t.Fatalf("block 0's q projection is not resident")
 		}
-		nq, _, _, err := kernels.PackedWords(l.wq.t, l.wq.nrows, l.wq.k)
+		nq, _, _, err := layout.PackedWords(l.wq.t, l.wq.nrows, l.wq.k)
 		if err != nil {
 			t.Fatal(err)
 		}

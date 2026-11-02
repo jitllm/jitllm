@@ -626,7 +626,7 @@ func TestTowerOnDeviceMatchesHost(t *testing.T) {
 			// activation its own way too. The bound follows the arithmetic the arm
 			// ran, far under the violations' 2.1e-1 either way.
 			bound := 5e-5
-			if st := g.Stats(); st.VoltaGemm+st.GemmF16 > 0 || spec == "metal" {
+			if g.Stats().MatrixPart(gpu.EveryPart) > 0 || spec == "metal" {
 				bound = 5e-4
 			}
 			if nmse > bound {

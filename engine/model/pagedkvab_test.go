@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/dev/bench"
@@ -71,22 +70,8 @@ func TestPagedKVAB(t *testing.T) {
 		a.dec.Close()
 		a.g.Close()
 	}
-	// JITLLM_AB_VS=planoff:N puts back the pieces of kernels.ChooseDecodePlan
-	// that N names in the other arm (Config.DecodePlanOff); 7, the whole old
-	// rule, by default.
-	planOff := 7
-	if vs, ok := strings.CutPrefix(os.Getenv("JITLLM_AB_VS"), "planoff:"); ok {
-		if n, err := strconv.Atoi(vs); err == nil && n > 0 {
-			planOff = n
-		}
-	}
 	open := func(name string, other bool) *arm {
-		opts := []gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
-			gpu.WithConfig(func(c *gpu.Config) {
-				if other {
-					c.DecodePlanOff = planOff
-				}
-			})}
+		opts := []gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)}
 		// JITLLM_AB_BUDGET (MiB) splits a small card evenly: the arm opened
 		// first otherwise takes what it can and the second gets the rest.
 		if mib := num("JITLLM_AB_BUDGET", 0); mib > 0 {

@@ -336,7 +336,6 @@ func serve(args []string) {
 		// The ROCm library directory; the server package reads no environment.
 		ROCm: rocmDir(),
 		// Where the device tuners' answers persist between runs.
-		TuneCache: tuneCacheDir(),
 
 		NoMemCache:    *noStore,
 		MemCacheBytes: storeBytes,

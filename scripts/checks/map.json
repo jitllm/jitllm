@@ -74,7 +74,7 @@
       "note": "every graph feature on the device, every block placed against the host (RULE 11c)"
     },
     "gpu-lowering": {
-      "module": ".", "packages": ["./composer/ir/...", "./composer/ptx/...", "./composer/spirv/...", "./composer/msl/...", "./composer/amdgpu/...", "./composer/lowertest/...", "./composer/kernels/..."], "cap": "8G",
+      "module": ".", "packages": ["./composer/ir/...", "./composer/ptx/...", "./composer/spirv/...", "./composer/msl/...", "./composer/amdgpu/..."], "cap": "8G",
       "note": "the IR and its four lowerings; runs with no GPU"
     },
     "gpu-backend": {
@@ -134,8 +134,6 @@
     {"prefix": "composer/spirv/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
     {"prefix": "composer/msl/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
     {"prefix": "composer/amdgpu/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
-    {"prefix": "composer/lowertest/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
-    {"prefix": "composer/kernels/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "five-principles", "vet"]},
     {"prefix": "backend/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "relocation", "capabilities", "vet"]},
     {"prefix": "backend/cuda/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
     {"prefix": "backend/vulkan/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},

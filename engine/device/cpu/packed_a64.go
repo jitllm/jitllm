@@ -5,9 +5,8 @@ package cpu
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
-
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // SupportedA64Packed reports whether the arm64 packed matvec covers a format.
@@ -66,7 +65,7 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 	if !SupportedA64Packed(t) {
 		return nil, fmt.Errorf("jit: EmitA64PackedMatVec: %s has no arm64 packed kernel", t)
 	}
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return nil, fmt.Errorf("jit: EmitA64PackedMatVec: %s has no device layout", t)
 	}
@@ -191,7 +190,7 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 			wmax = 1<<(bits+hi) - 1
 		} else if codes {
 			wmax = 0
-			for _, c := range kernels.Codes(q) {
+			for _, c := range layout.Codes(q) {
 				if v := int(int8(c)); v > wmax {
 					wmax = v
 				} else if -v > wmax {
@@ -701,7 +700,7 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 	scWords := 1
 	switch {
 	case stream:
-		scWords = kernels.ScStreamWords
+		scWords = layout.ScStreamWords
 	case perSuper > 1:
 		scWords = perSuper / perWordOf(biasArray)
 	}
@@ -810,12 +809,12 @@ func a64CorrConst(a *A64, vK VReg, k int) {
 // the nibble mask, a secondary-plane mask, the correction constant and four
 // epilogue temporaries: at worst 16 + 1 + 8 + 1 + 1 + 1 = 28.
 func MaxTiledTokensA64(t quant.Type) int {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok || !SupportedA64Packed(t) {
 		return 0
 	}
-	sub, _, _, _ := kernels.Layout(q)
-	hi := kernels.HiPlane(q)
+	sub, _, _, _ := layout.Layout(q)
+	hi := layout.HiPlane(q)
 	grp := packedFusedGroupK(q) / 4
 	nact := ((sub / 4) + 3) / 4
 	for tok := 4; tok >= 2; tok-- {
@@ -823,7 +822,7 @@ func MaxTiledTokensA64(t quant.Type) int {
 		if hi != 0 {
 			used++
 		}
-		if kernels.Codes(q) != nil {
+		if layout.Codes(q) != nil {
 			used++ // the code table
 		}
 		if used+4 <= 32 {
@@ -842,7 +841,7 @@ func MaxTiledTokensA64(t quant.Type) int {
 // match the amd64 tiled kernel: Out is [tok][rows], A is [tok][k], AScale is
 // [tok][2*nb] and AHalf is [tok][k/16].
 func EmitA64PackedMatMulTiled(t quant.Type, k, nrows, tok int) ([]byte, error) {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return nil, fmt.Errorf("jit: EmitA64PackedMatMulTiled: %s has no device layout", t)
 	}
@@ -1272,7 +1271,7 @@ func EmitA64PackedMatMulTiled(t quant.Type, k, nrows, tok int) ([]byte, error) {
 	scWords := 1
 	switch {
 	case stream:
-		scWords = kernels.ScStreamWords
+		scWords = layout.ScStreamWords
 	case perSuper > 1:
 		scWords = perSuper / perWordOf(biasArray)
 	}

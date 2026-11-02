@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -90,7 +90,7 @@ func emitterCalls() []emitterCall {
 			func() ([]byte, error) { return EmitRoPE(r.hd, r.nrot, r.neox) })
 	}
 	for _, qt := range quant.PackedTypes {
-		q, _ := kernels.QuantOf(qt)
+		q, _ := layout.QuantOf(qt)
 		add("packed_row/"+qt.String(), func(em *Emitters) ([]byte, error) { return em.PackedRow(q) },
 			func() ([]byte, error) { return EmitPackedRow(q) })
 	}

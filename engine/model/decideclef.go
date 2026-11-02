@@ -836,7 +836,7 @@ func (d *Decider) clefL2(x []float32) {
 // clefRows is out[i] = rows[i] . x for k rows of width w, on the generated
 // f32 matvec.
 func (d *Decider) clefRows(out, rows, x []float32, k, w int) error {
-	if !d.st.jit.MatVecHost(out[:k], quant.F32, f32Bytes(rows[:k*w]), x[:w], k, w) {
+	if !d.st.jit.MatVec(out[:k], quant.F32, f32Bytes(rows[:k*w]), x[:w], k, w) {
 		return fmt.Errorf("model: no generated f32 matvec of %dx%d on this host", k, w)
 	}
 	return nil
@@ -861,7 +861,7 @@ func (d *Decider) clefMM(out []float32, w tensor, x []float32, n int) error {
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		if !j.MatVecHost(out[i*w.rows:(i+1)*w.rows], w.typ, w.data, x[i*w.k:(i+1)*w.k], w.rows, w.k) {
+		if !j.MatVec(out[i*w.rows:(i+1)*w.rows], w.typ, w.data, x[i*w.k:(i+1)*w.k], w.rows, w.k) {
 			return fmt.Errorf("model: no host kernel reads %s (%s, %dx%d)", w.name(), w.typ, w.rows, w.k)
 		}
 	}

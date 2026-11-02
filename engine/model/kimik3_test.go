@@ -156,18 +156,6 @@ func TestKimiK3FeaturesAreLoadBearing(t *testing.T) {
 	}
 }
 
-// k3DevViolations are every violation the device runs itself: all of them but
-// the head's mix, which the host takes.
-var k3DevViolations = func() []c6Violation {
-	var out []c6Violation
-	for _, v := range k3Violations {
-		if v.name != "the head reads the running residual alone" {
-			out = append(out, v)
-		}
-	}
-	return out
-}()
-
 // TestKimiK3OnEveryDevice runs each fixture with every block and the head on
 // each device present against the host -- the residual attention's mixes and
 // checkpoints, KDA's full-rank gate and bounded decay, MLA's output gate and
@@ -180,11 +168,7 @@ func TestKimiK3OnEveryDevice(t *testing.T) {
 			defer m.Close()
 			// A composed build's blocks read the statement, which each of
 			// these takes the piece out of as well.
-			vs := k3DevViolations
-			if composedByDefault {
-				vs = k3ComposedViolations(t)
-			}
-			fixtureOnEveryDeviceWithin(t, m, g, vs, 1e-5)
+			fixtureOnEveryDeviceWithin(t, m, g, k3ComposedViolations(t), 1e-5)
 		})
 	}
 }
@@ -198,17 +182,7 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 	m, g := openK3(t, "synth-kimik3")
 	defer m.Close()
 	c := m.Cfg
-	nl, mixes, latent := c.NLayer, 0, 0
-	for li := 0; li < nl; li++ {
-		for _, ffn := range []bool{false, true} {
-			if c.resBank(li, ffn) > 0 {
-				mixes++
-			}
-		}
-		if li >= c.NDenseLead {
-			latent++
-		}
-	}
+	nl := c.NLayer
 	ran := 0
 	for _, spec := range stepDevices() {
 		gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
@@ -236,34 +210,20 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 				t.Fatal(err)
 			}
 			s2 := gpux.Stats()
-			if composedByDefault {
-				// The composer runs each block whole: the prompt's chunk one
-				// served prompt part a block, a decode token one block step a
-				// block, none declined.
-				p0, pd0 := s0.ServedPart(gpu.ComposedPrompt)
-				p1, pd1 := s1.ServedPart(gpu.ComposedPrompt)
-				b1, bd1 := s1.ServedPart(gpu.ComposedBlock)
-				b2, bd2 := s2.ServedPart(gpu.ComposedBlock)
-				t.Logf("prefill of %d: %d prompt blocks served, %d declined; a decode token: %d block steps served, %d declined",
-					len(g.IDs), p1-p0, pd1-pd0, b2-b1, bd2-bd1)
-				if p1-p0 != nl || pd1 != pd0 {
-					t.Fatalf("the prompt did not run as one composed submission of every block (%s)", declinesOf(s1))
-				}
-				if b2-b1 != nl || bd2 != bd1 {
-					t.Fatalf("a decode token did not run every block composed on the device (%s)", declinesOf(s2))
-				}
-				return
+			// The composer runs each block whole: the prompt's chunk one
+			// served prompt part a block, a decode token one block step a
+			// block, none declined.
+			p0, pd0 := s0.ServedPart(gpu.ComposedPrompt)
+			p1, pd1 := s1.ServedPart(gpu.ComposedPrompt)
+			b1, bd1 := s1.ServedPart(gpu.ComposedBlock)
+			b2, bd2 := s2.ServedPart(gpu.ComposedBlock)
+			t.Logf("prefill of %d: %d prompt blocks served, %d declined; a decode token: %d block steps served, %d declined",
+				len(g.IDs), p1-p0, pd1-pd0, b2-b1, bd2-bd1)
+			if p1-p0 != nl || pd1 != pd0 {
+				t.Fatalf("the prompt did not run as one composed submission of every block (%s)", declinesOf(s1))
 			}
-			t.Logf("prefill of %d: %d mixes, %d latent mixtures, %d grouped, %d MLA batched; a decode "+
-				"token: %d mixes, %d latent mixtures", len(g.IDs), s1.K3Mixes-s0.K3Mixes,
-				s1.K3Latent-s0.K3Latent, s1.GroupedMoE-s0.GroupedMoE, s1.MLABatched-s0.MLABatched,
-				s2.K3Mixes-s1.K3Mixes, s2.K3Latent-s1.K3Latent)
-			if s1.K3Mixes-s0.K3Mixes != mixes || s1.K3Latent-s0.K3Latent != latent ||
-				s1.GroupedMoE-s0.GroupedMoE != latent || s1.MLABatched == s0.MLABatched {
-				t.Fatalf("the prompt did not run as one batched submission of every block")
-			}
-			if s2.K3Mixes-s1.K3Mixes != mixes || s2.K3Latent-s1.K3Latent != latent {
-				t.Fatalf("a decode token did not run every block on the device")
+			if b2-b1 != nl || bd2 != bd1 {
+				t.Fatalf("a decode token did not run every block composed on the device (%s)", declinesOf(s2))
 			}
 		})
 	}

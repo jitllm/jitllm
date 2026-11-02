@@ -12,12 +12,12 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -818,7 +818,7 @@ func TestComposedCPUSubNorm(t *testing.T) {
 			for i := 0; i < c.rows*c.k; i++ {
 				binary.LittleEndian.PutUint32(wb[4*i:], math.Float32bits(float32(rng.NormFloat64())))
 			}
-			qs, d, sc, err := kernels.PackWeights(kernels.Float32, wb, c.rows, c.k)
+			qs, d, sc, err := layout.PackWeights(layout.Float32, wb, c.rows, c.k)
 			if err != nil {
 				t.Fatal(err)
 			}

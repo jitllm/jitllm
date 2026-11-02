@@ -6,9 +6,9 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
@@ -20,17 +20,17 @@ import (
 var packedRefFormats = func() (fs []struct {
 	name string
 	g    quant.Type
-	k    kernels.Quant
+	k    layout.Quant
 }) {
 	for _, g := range quant.PackedTypes {
-		k, ok := kernels.QuantOf(g)
+		k, ok := layout.QuantOf(g)
 		if !ok {
 			panic(g.String() + " is in quant.PackedTypes and has no device layout")
 		}
 		fs = append(fs, struct {
 			name string
 			g    quant.Type
-			k    kernels.Quant
+			k    layout.Quant
 		}{g.String(), g, k})
 	}
 	return fs
@@ -70,7 +70,7 @@ func TestPackedRefMatchesDequant(t *testing.T) {
 				// Inf or NaN, which poisons both arms. Only the scale fields
 				// are constrained; every payload bit stays random.
 				plant(t, f.g, src, nrows)
-				qs, d, sc, err := kernels.PackWeights(f.k, src, nrows, k)
+				qs, d, sc, err := layout.PackWeights(f.k, src, nrows, k)
 				if err != nil {
 					t.Fatalf("pack: %v", err)
 				}
@@ -129,7 +129,7 @@ func TestRowPackedMatchesDequant(t *testing.T) {
 					src[i] = byte(rng.Intn(256))
 				}
 				plant(t, f.g, src, nrows)
-				qs, d, sc, err := kernels.PackWeights(f.k, src, nrows, k)
+				qs, d, sc, err := layout.PackWeights(f.k, src, nrows, k)
 				if err != nil {
 					t.Fatalf("pack: %v", err)
 				}
@@ -194,7 +194,7 @@ func TestPackedPayloadIsNativeWidth(t *testing.T) {
 			continue
 		}
 		const nrows, k = 8, 512
-		nq, _, _, err := kernels.PackedWords(f.k, nrows, k)
+		nq, _, _, err := layout.PackedWords(f.k, nrows, k)
 		if err != nil {
 			t.Fatalf("%s: %v", f.name, err)
 		}
@@ -205,7 +205,7 @@ func TestPackedPayloadIsNativeWidth(t *testing.T) {
 		// And against the source, so the expansion is a number rather than a
 		// claim: the GGUF block plus what the packer adds for scales.
 		src := nrows * k / int(f.g.BlockElems()) * int(f.g.BlockBytes())
-		_, nd, nsc, _ := kernels.PackedWords(f.k, nrows, k)
+		_, nd, nsc, _ := layout.PackedWords(f.k, nrows, k)
 		tot := (nq + nd + nsc) * 4
 		t.Logf("%-5s %d bits/weight, %d bytes against the GGUF's %d (%+.1f%%)",
 			f.name, got, tot, src, 100*(float64(tot)/float64(src)-1))
@@ -239,7 +239,7 @@ func TestMXFP4ScaleTheF32CannotHoldIsRefused(t *testing.T) {
 		{0, 0x10, false},
 	} {
 		src := append(blk(127, 0x21), blk(c.e, c.code)...)
-		_, _, _, err := kernels.PackWeights(kernels.MXFP4, src, nrows, k)
+		_, _, _, err := layout.PackWeights(layout.MXFP4, src, nrows, k)
 		if (err == nil) != c.ok {
 			t.Errorf("e=%d codes %#02x: err=%v, want ok=%v", c.e, c.code, err, c.ok)
 		}

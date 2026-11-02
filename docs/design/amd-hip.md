@@ -3,9 +3,11 @@
 **Status: built and gated offline; not yet run on an AMD card.** The binding
 (`backend/hip`), the lowering (`composer/amdgpu`), the device (`backend.hipDev`)
 and the `hip:N` naming through the tier, the CLI and the server are in. Every
-kernel `lowertest` registers (125) compiles to a code object for gfx90a, gfx942,
-gfx1030, gfx1100 and gfx1201 through comgr with no GPU present, under comgr 3
-(ROCm 6.4.1) and comgr 2 (ROCm 6.3.3) alike. The device gates exist
+kernel the composer forms for the synthetic fixtures' blocks compiles to a
+code object for gfx90a, gfx942, gfx1030, gfx1100 and gfx1201 through comgr
+with no GPU present. (The figures below for flash attention and the
+fragment MMA kernels were measured on main's hand-written inventory, under
+comgr 3 and comgr 2, before it was deleted.) The device gates exist
 and skip by name ("NO AMD DEVICE") until `scripts/hip-gates.sh` runs on a host with an AMD
 card.
 
@@ -230,18 +232,18 @@ any gfx target with no device present.
 Offline, on any Linux box with comgr reachable (`JITLLM_ROCM` names a directory;
 the packages extract without root, see "Running the gates"):
 
-- `lowertest.TestAMDGPULowersForEveryTarget`: every kernel in
-  `lowertest`'s inventory -- the model gates' shapes -- lowers, passes
-  `ir.Validate`'s RULE 13 invariants, compiles to a code object for gfx90a,
+- `model.TestComposedFormsLowerForAMDGPU`: every kernel the composer forms
+  for each synthetic fixture's blocks, at decode and at a chunk's rows, at
+  wave 32 and 64, lowers, compiles to a code object for gfx90a,
   gfx942, gfx1030, gfx1100 and gfx1201, and its metadata says no scratch and
   no spill, the wave size the target runs, LDS equal to the shared arrays
   declared, the declared workgroup, and registers and LDS within the target's
-  limits; the count of code objects must be every kernel, so the gate cannot
+  limits; at least 100 distinct kernels must compile, so the gate cannot
   pass empty. Flash attention on gfx1030 sits at 256 VGPRs (occupancy 4),
   against 162 on gfx1100: no spill, and the first thing to look at on an RDNA2
   card. SGPRs spilled to VGPR lanes (no scratch) are reported,
   not refused: flash attention spills 2-4 on gfx90a.
-- `lowertest.TestAMDGPURefusesWhatItCannotLower`: the fragment MMA kernels.
+- `amdgpu.TestRefusesTheFragmentMMA`: the fragment MMA kernels.
 - Lowering unit tests that read the text: shift semantics, saturating convert,
   the dot4 intrinsic per target, the barrier's fences, zero-trip loops.
 - `hip.TestBogusROCmIsNoDevices`, `hip.TestNoExternalCommands`,
@@ -262,7 +264,7 @@ The offline gate needs only comgr. ROCm's packages extract without root:
 
     curl -O https://repo.radeon.com/rocm/apt/6.4.1/pool/main/c/comgr/comgr_3.0.0.60401-83~24.04_amd64.deb
     dpkg-deb -x comgr_*.deb rocm
-    JITLLM_ROCM=$PWD/rocm/opt/rocm-6.4.1/lib ./scripts/cap 8G -- go test ./composer/lowertest -run AMDGPU
+    JITLLM_ROCM=$PWD/rocm/opt/rocm-6.4.1/lib ./scripts/cap 8G -- go test ./engine/model -run TestComposedFormsLowerForAMDGPU
 
 ## Running the gates on a host with an AMD card
 

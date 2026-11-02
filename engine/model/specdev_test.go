@@ -202,7 +202,7 @@ func specFaultDev(t *testing.T, m *Model, prompt []int32, n int, g *gpu.GPU, fau
 func devFlip(t *testing.T, m *Model, g *gpu.GPU, prompt, prefix []int32, a, b int32) (gap, perturb float64) {
 	t.Helper()
 	all := append(append([]int32(nil), prompt...), prefix...)
-	decode := func(dev nn.Device) []float32 {
+	decode := func(dev nn.LayerDevice) []float32 {
 		st := m.NewInstance(len(all) + 2)
 		defer st.Close()
 		if dev != nil {

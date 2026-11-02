@@ -214,7 +214,7 @@ func (s *Instance) attachTier() error {
 	sess := s.Session
 	if sess.ld != nil && sess.tier == s.ldCand {
 		if !s.borrowsJIT() {
-			s.jit.SetDevice(sess.ld)
+			s.jit.ShareActWindow(sess.ld)
 		}
 		return nil
 	}
@@ -244,7 +244,7 @@ func (s *Instance) attachTier() error {
 	s.setLD(ld)
 	sess.tier, sess.kvRoom = s.ldCand, 0
 	if !s.borrowsJIT() {
-		s.jit.SetDevice(ld)
+		s.jit.ShareActWindow(ld)
 	}
 	return nil
 }
@@ -339,7 +339,7 @@ func (s *Instance) bindOwn() {
 	s.own.away = true
 	s.headTo(s.own)
 	if s.own.ld != nil && !s.borrowsJIT() {
-		s.jit.SetDevice(s.own.ld)
+		s.jit.ShareActWindow(s.own.ld)
 	}
 }
 

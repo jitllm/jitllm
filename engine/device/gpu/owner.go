@@ -142,12 +142,11 @@ func (g *devTier) releaseModel() {
 	// The sampler's buffers were charged as scratch, like the argmax's.
 	sw := g.scratchWin()
 	g.lane0.freeSample()
-	g.closePick()
 	g.lane0.freePick()
 	sw.close()
 	// The capacity, the widest block and the retune mark are the model's
 	// plan, read the first time a device sees one.
 	g.kvCap, g.maxSeqAsked, g.paged = 0, 0, false
-	g.widest, g.retunedAt = 0, 0
+	g.widest = 0
 	g.pinned, g.stream = nil, nil
 }

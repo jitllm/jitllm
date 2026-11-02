@@ -6,9 +6,9 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
@@ -53,7 +53,7 @@ func (f *JIT) MatVecPackedMulti(outs [][]float32, t quant.Type, ps []*Packed, x 
 	per := f.fusedChunk(total, t, k)
 	rowsPer := per * grpOf(t)
 	f.growPackedScratch(f.pool.Max() * rowsPer)
-	q, _ := kernels.QuantOf(t)
+	q, _ := layout.QuantOf(t)
 	j := &f.hot.multi
 	j.fc = f.newFusedCall(fused, t, q, k, min(rowsPer, nrows))
 	j.ps, j.outs, j.groups, j.nrows, j.rowsPer = ps, outs, groups, nrows, rowsPer
@@ -145,7 +145,7 @@ func (f *JIT) matVecPackedGather(outs [][]float32, t quant.Type, ps []*Packed, x
 	per := f.fusedChunk(total, t, k)
 	rowsPer := per * grpOf(t)
 	f.growPackedScratch(f.pool.Max() * rowsPer)
-	q, _ := kernels.QuantOf(t)
+	q, _ := layout.QuantOf(t)
 	j := &f.hot.gather
 	j.fc = f.newFusedCall(fused, t, q, k, min(rowsPer, nrows))
 	j.ps, j.outs, j.groups, j.nrows, j.rowsPer = ps, outs, groups, nrows, rowsPer

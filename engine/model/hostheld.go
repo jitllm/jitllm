@@ -100,7 +100,7 @@ func (m *Model) unholdOnHost(d nn.HostReserver) {
 
 // holdHost makes d the device this instance counts against the host's budgets,
 // releasing the one it had, and re-divides the page budget for the change.
-func (s *Instance) holdHost(d nn.Device) {
+func (s *Instance) holdHost(d nn.LayerDevice) {
 	if s.hostRes != nil {
 		s.m.unholdOnHost(s.hostRes)
 		s.hostRes = nil

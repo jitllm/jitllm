@@ -3,7 +3,7 @@ package jlm
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // TestLayoutMatchesThePacker holds Layout -- the on-disk specification a reader
@@ -33,12 +33,12 @@ func TestLayoutMatchesThePacker(t *testing.T) {
 			continue
 		}
 		packed++
-		sub, bits, biasK, biasArray := kernels.Layout(q)
-		perSuper, scOff := kernels.ScaleLayout(q)
+		sub, bits, biasK, biasArray := layout.Layout(q)
+		perSuper, scOff := layout.ScaleLayout(q)
 		want := TypeLayout{
-			Sub: sub, Planes: [2]int{bits, kernels.HiPlane(q)}, SuperSub: perSuper,
-			ScaleOff: scOff, HasMin: biasArray, Signed: kernels.SignedPayload(q),
-			Codes: kernels.Codes(q), D32: kernels.D32(q), E8M0: kernels.E8M0(q),
+			Sub: sub, Planes: [2]int{bits, layout.HiPlane(q)}, SuperSub: perSuper,
+			ScaleOff: scOff, HasMin: biasArray, Signed: layout.SignedPayload(q),
+			Codes: layout.Codes(q), D32: layout.D32(q), E8M0: layout.E8M0(q),
 		}
 		if !biasArray {
 			want.Bias = biasK

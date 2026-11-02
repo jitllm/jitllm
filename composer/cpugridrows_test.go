@@ -8,9 +8,9 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -255,10 +255,10 @@ func TestComposedCPUGridRows(t *testing.T) {
 	// A packed matrix product over a stride-2 grid's rows, float and int8.
 	const c, e = 256, 96
 	for _, typ := range []quant.Type{quant.Q8_0, quant.Q4_K} {
-		q, _ := kernels.QuantOf(typ)
+		q, _ := layout.QuantOf(typ)
 		jt, _ := jlm.TypeOf(typ)
 		wb := cpuTestWeights(typ, q, e, c, rng)
-		qs, d, sc, err := kernels.PackWeights(q, wb, e, c)
+		qs, d, sc, err := layout.PackWeights(q, wb, e, c)
 		if err != nil {
 			t.Fatalf("%v: %v", typ, err)
 		}

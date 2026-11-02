@@ -60,7 +60,7 @@ func TestComposedPromptMatchesLlamaCppF32(t *testing.T) {
 			}
 			got := map[int][]float32{}
 			for _, i := range at {
-				l, st, _, _ := composedDecode(t, m, "cuda:0", ids[:nctx/2+i+1], nil, gpu.ComposedBlock|gpu.ComposedPrompt, false, false)
+				l, st, _ := composedDecode(t, m, "cuda:0", ids[:nctx/2+i+1], nil, gpu.ComposedBlock|gpu.ComposedPrompt, false, false)
 				if n, d := st.ServedPart(gpu.ComposedPrompt); n == 0 || d != 0 {
 					t.Fatalf("position %d: the composer served %d block steps of the prompt and declined %d", nctx/2+i, n, d)
 				}

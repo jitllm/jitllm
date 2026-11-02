@@ -6,8 +6,8 @@ import (
 	"math"
 	"sync/atomic"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -25,7 +25,7 @@ import (
 func raggedK(t quant.Type, k int) int {
 	// The host's outer step and the format's own block, both powers of two.
 	step := cpu.PackedOuterElems(t)
-	if q, ok := kernels.QuantOf(t); ok {
+	if q, ok := layout.QuantOf(t); ok {
 		step = max(step, q.Elems())
 	}
 	if step == 0 || k%step == 0 {

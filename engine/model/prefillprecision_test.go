@@ -64,7 +64,7 @@ func TestPrefillPrecisionArms(t *testing.T) {
 		return run(s)
 	}
 	dev := func(noBatch bool, opts ...gpu.Option) [][]float32 {
-		opts = append(opts, gpu.WithDeviceTune(gpu.TuneOff), gpu.WithSplit(1), gpu.WithAttnAccSplit(1))
+		opts = append(opts, gpu.WithDeviceTune(gpu.TuneOff))
 		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
@@ -82,16 +82,15 @@ func TestPrefillPrecisionArms(t *testing.T) {
 			t.Fatalf("the device was demoted; this arm is the host")
 		}
 		st := g.Stats()
-		t.Logf("arm noBatch=%v: VoltaGemm %d, GemmF16 %d, attention on the matrix unit %v", noBatch, st.VoltaGemm, st.GemmF16, st.AttnMMA)
+		t.Logf("arm noBatch=%v: %d launches on the matrix unit, %d of them attention", noBatch, st.MatrixPart(gpu.EveryPart), st.AttendPart(gpu.EveryPart))
 		return out
 	}
-	noVolta := gpu.WithConfig(func(c *gpu.Config) { c.NoVolta = true })
+	noMatrix := gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = true })
 	all := map[string][][]float32{
-		"reference":     dev(false, gpu.WithoutAttnMMA(true)),
-		"batched-volta": dev(false),
-		"batched-dp4a":  dev(false, noVolta),
-		"per-token":     dev(true),
-		"host":          host(),
+		"reference":      dev(false, noMatrix),
+		"batched-matrix": dev(false),
+		"per-token":      dev(true),
+		"host":           host(),
 	}
 	diff := func(x, y [][]float32) string {
 		var worst, nmse float64
@@ -111,10 +110,9 @@ func TestPrefillPrecisionArms(t *testing.T) {
 		}
 		return fmt.Sprintf("max|dlogit| %6.3f  worst NMSE %.2e  %d/%d argmax flips", worst, nmse, flips, len(x))
 	}
-	for _, a := range []string{"batched-volta", "batched-dp4a", "per-token", "host"} {
+	for _, a := range []string{"batched-matrix", "per-token", "host"} {
 		t.Logf("%-14s vs reference  %s", a, diff(all[a], all["reference"]))
 	}
-	t.Logf("%-14s vs per-token  %s   <- what verify prints", "batched-volta", diff(all["batched-volta"], all["per-token"]))
-	t.Logf("%-14s vs per-token  %s", "batched-dp4a", diff(all["batched-dp4a"], all["per-token"]))
+	t.Logf("%-14s vs per-token  %s   <- what verify prints", "batched-matrix", diff(all["batched-matrix"], all["per-token"]))
 	t.Logf("%-14s vs host       %s", "per-token", diff(all["per-token"], all["host"]))
 }

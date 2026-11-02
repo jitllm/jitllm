@@ -10,9 +10,9 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
@@ -175,8 +175,8 @@ func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
 		t.Run(d.API(), func(t *testing.T) {
 			dev := gpuDevice(d)
 			rng := rand.New(rand.NewSource(47))
-			w := tiledWeights(quant.F32, kernels.Float32, n, k, rng)
-			qs, dw, sc, err := kernels.PackWeights(kernels.Float32, w, n, k)
+			w := tiledWeights(quant.F32, layout.Float32, n, k, rng)
+			qs, dw, sc, err := layout.PackWeights(layout.Float32, w, n, k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -248,7 +248,7 @@ func withoutFloatTiles(r *composer.Registry) *composer.Registry {
 }
 
 // tiledWeights is rows of k of t, random, with finite scales near one.
-func tiledWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
+func tiledWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []byte {
 	if t == quant.F32 {
 		b := make([]byte, 4*rows*k)
 		for i := range rows * k {
@@ -256,7 +256,7 @@ func tiledWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []
 		}
 		return b
 	}
-	f16At := map[kernels.Quant][]int{kernels.Q8_0: {0}, kernels.Q4_K: {0, 2}, kernels.Q5_K: {0, 2}, kernels.Q3_K: {108}, kernels.Q6_K: {208}}
+	f16At := map[layout.Quant][]int{layout.Q8_0: {0}, layout.Q4_K: {0, 2}, layout.Q5_K: {0, 2}, layout.Q3_K: {108}, layout.Q6_K: {208}}
 	nblk, bb := k/q.Elems(), q.BlockBytes()
 	raw := make([]byte, rows*nblk*bb)
 	rng.Read(raw)
@@ -311,15 +311,15 @@ func TestComposedGPURowTiles(t *testing.T) {
 			for _, sh := range shapes {
 				typ, n, k := sh.typ, sh.n, sh.k
 				jt, ok := jlm.TypeOf(typ)
-				q, qok := kernels.QuantOf(typ)
+				q, qok := layout.QuantOf(typ)
 				if typ == quant.F32 {
-					jt, q, ok, qok = jlm.TypeF32, kernels.Float32, true, true
+					jt, q, ok, qok = jlm.TypeF32, layout.Float32, true, true
 				}
 				if !ok || !qok {
 					t.Fatalf("%v has no container type or kernel format", typ)
 				}
 				w := tiledWeights(typ, q, n, k, rng)
-				qs, dw, sc, err := kernels.PackWeights(q, w, n, k)
+				qs, dw, sc, err := layout.PackWeights(q, w, n, k)
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -10,7 +10,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -24,7 +24,7 @@ func TestLayoutRate(t *testing.T) {
 		t.Skip("set JITLLM_LAYOUT_AB=1")
 	}
 	gt := quant.Q4_K
-	q, _ := kernels.QuantOf(gt)
+	q, _ := layout.QuantOf(gt)
 	for _, sh := range []struct{ rows, k int }{{4096, 4096}, {14336, 4096}, {4096, 14336}, {1024, 4096}, {256, 4096}, {64, 4096}} {
 		nb := uint64(sh.rows*sh.k) / gt.BlockElems()
 		gg := int(nb * gt.BlockBytes())
@@ -36,7 +36,7 @@ func TestLayoutRate(t *testing.T) {
 			src := make([]byte, gg)
 			rng.Read(src)
 			quant.PlantScales(gt, src, 0)
-			qs, d, sc, err := kernels.PackWeights(q, src, sh.rows, sh.k)
+			qs, d, sc, err := layout.PackWeights(q, src, sh.rows, sh.k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -55,7 +55,7 @@ func TestLayoutRate(t *testing.T) {
 			bytes int
 			run   func(c int) bool
 		}{
-			{"gguf rows", gg, func(c int) bool { j.NewInput(); return j.MatVecHost(out, gt, srcs[c], x, sh.rows, sh.k) }},
+			{"gguf rows", gg, func(c int) bool { j.NewInput(); return j.MatVec(out, gt, srcs[c], x, sh.rows, sh.k) }},
 			{"packed   ", pb, func(c int) bool { j.NewInput(); return j.MatVecPacked(out, gt, packs[c], x, sh.rows, sh.k) }},
 		}
 		// The ceiling: the same GGUF bytes read once, in order, on the same

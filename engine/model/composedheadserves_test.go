@@ -51,8 +51,8 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 			}
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					want, _, _, _ := composedDecode(t, m, dev, ids, toks, 0, true, false)
-					got, st, headOn, census := composedDecode(t, m, dev, ids, toks, gpu.ComposedHead, true, false)
+					want := cpuDecode(t, m, ids, toks)
+					got, st, headOn := composedDecode(t, m, dev, ids, toks, gpu.ComposedHead, true, false)
 					if !headOn {
 						t.Skipf("the head does not fit beside the blocks on %s", dev)
 					}
@@ -61,9 +61,6 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 					if served != len(toks)+1 || declined != 0 || st.FormedAtStep != 0 {
 						t.Fatalf("the composed head served %d of %d steps and the prompt's last row, was declined %d (%s) and %d formed at a step",
 							served, len(toks), declined, declinesOf(st), st.FormedAtStep)
-					}
-					if n := census["softcap"]; n != 0 {
-						t.Fatalf("the tier launched its own cap %d times over the capped logits the composed head wrote (%v)", n, census)
 					}
 					// The logits the tier's head capped, capped again and uncapped.
 					worst, twice, none := 0.0, 0.0, 0.0

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 )
@@ -86,11 +85,7 @@ func (g *devTier) pageSizeWhy(ws []nn.Weight) (uint64, string, bool) {
 		}
 		q, ok := quantOf(x.T)
 		if !ok {
-			why := "which has no device kernel"
-			if kq, packed := kernels.QuantOf(x.T); packed {
-				why = "and " + kernels.DeviceWhyNot(kq)
-			}
-			return 0, fmt.Sprintf("%s is %s, %s", weightRole(i), x.T, why), false
+			return 0, fmt.Sprintf("%s is %s, which the device layout does not hold", weightRole(i), x.T), false
 		}
 		// At the buffers' footprint, as a page-in asks for them (pageIn): a
 		// slot priced at the bytes alone counts slots the card does not have.
@@ -502,13 +497,6 @@ func (g *devTier) over() bool {
 // slots than blocks, and evicting on that number would demote a model that
 // fits. On every model that fits this returns immediately. Callers hold g.mu.
 func (g *devTier) trim() {
-	// On a device that streams nothing, the unpack staging goes before any block:
-	// it will never be reused, and prepLayer charges the KV cache and norms
-	// with no room check, so the over-commit would otherwise be paid in blocks
-	// (TestAModelThatFitsAdmitsTheSameBlocksEitherWay).
-	if g.over() && len(g.stream) == 0 {
-		g.freeRaw()
-	}
 	// Expert caches before blocks: a cache is copies of host pages, and its
 	// block keeps running on the plain bank without it.
 	if g.over() {
@@ -520,13 +508,6 @@ func (g *devTier) trim() {
 			break
 		}
 		g.pageOut(v)
-	}
-	// Otherwise the unpack staging goes last: it is charged to the
-	// budget (unpack.go) so a shrink must be able to reclaim it, but losing it
-	// costs every later page-in a host repack, while losing a block costs only
-	// that block's next page-in. ensureRaw re-sizes it on the next page-in.
-	if g.over() {
-		g.freeRaw()
 	}
 	g.Slots = g.slots()
 }
@@ -570,7 +551,6 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	// already held and is absent only after trim took it. Without room the
 	// page-in proceeds without it and packs on the host. Passing the bytes this
 	// block still owes keeps the staging from taking the page-in's room.
-	g.ensureRaw(l.pg.ws, l.pg.bytes)
 	if need := l.pg.bytes + l.pg.round; !g.kvCompact(need, nil) && !g.reclaim(need, li, lo, hi) {
 		g.LastErr = fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used, %d slot(s))",
 			li, l.pg.bytes+l.pg.round, g.used, g.limit, g.slots())
@@ -743,11 +723,6 @@ func (g *devTier) SetBudget(bytes uint64) int {
 			break
 		}
 		g.pageOut(v)
-	}
-	// Below the slot floor nothing will page in again on this budget, so the
-	// staging is pure held memory.
-	if g.slots() < minSlots {
-		g.freeRaw()
 	}
 	g.Slots = g.slots()
 	return g.pagesIn

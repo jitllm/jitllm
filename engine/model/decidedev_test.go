@@ -52,7 +52,7 @@ func decisionBlocks(m *Model) int {
 // sees the placement before anything runs; false returns at once, no answers.
 // violation is the Decider's (a readout feature a test removes); picked is
 // how many prompts' labels the device picked (nn.Head.Pick).
-func decideOn(t *testing.T, m *Model, dev nn.Device, n int, ok func(placed int) bool, violation ...string) ([][]DecisionAnswer, int, string, int) {
+func decideOn(t *testing.T, m *Model, dev nn.LayerDevice, n int, ok func(placed int) bool, violation ...string) ([][]DecisionAnswer, int, string, int) {
 	t.Helper()
 	d, err := m.NewDecider(4096)
 	if err != nil {
@@ -382,12 +382,10 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						need += need/8 + 1<<30
 						// Each run on a device of its own, the last one's room
 						// given back first (as the violation's arm above).
-						composed := func(noPickMV bool) *gpu.GPU {
-							return open(gpu.WithBudget(need), gpu.WithHostBudget(need), gpu.WithConfig(func(c *gpu.Config) {
-								c.NoPickMV = noPickMV
-							}))
+						composed := func() *gpu.GPU {
+							return open(gpu.WithBudget(need), gpu.WithHostBudget(need))
 						}
-						g := composed(false)
+						g := composed()
 						defer g.Close()
 						all := func(n int) bool { return n == nb }
 						got, placed, why, picked := decideOn(t, m, g, -1, all)
@@ -413,7 +411,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 							t.Fatalf("%d of %d picks by the picked rows' projection: the composer's head over the picked rows did not run", st.PickRows, picked)
 						}
 						g.Close()
-						go1 := composed(false)
+						go1 := composed()
 						defer go1.Close()
 						off, n, why, _ := decideOn(t, m, go1, -1, all, "pick-off-by-one")
 						if off == nil {
@@ -421,26 +419,6 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						}
 						if seen := decisionDiff(t, got, off); seen <= tol {
 							t.Errorf("a pick one past each label moved the composed answers %.5f: the gate does not see the pick", seen)
-						}
-						// The whole head and the composer's gather over its
-						// logits (Config.NoPickMV): the same placement, every
-						// pick the gather's, the answers within the band.
-						go1.Close()
-						gg := composed(true)
-						defer gg.Close()
-						gat, n, why, gp := decideOn(t, m, gg, -1, all)
-						if gat == nil {
-							cardTooSmall(t, why, "%s held %d of %d blocks in the composed gather arm", spec, n, nb)
-						}
-						gs := gg.Stats()
-						gn, gd := gs.ServedPart(gpu.ComposedSample)
-						if gp == 0 || gn != gp || gd != 0 || gs.PickRows != 0 {
-							t.Fatalf("the gather arm: %d prompts picked, %d by the composer, %d declined, %d by the picked rows' projection (%s)", gp, gn, gd, gs.PickRows, declinesOf(gs))
-						}
-						w := decisionDiff(t, got, gat)
-						t.Logf("the composer's gather over the whole head on %s: %d picks, %.6f from the picked rows' projection", spec, gn, w)
-						if w > tol {
-							t.Errorf("the gather answers %.5f from the picked rows' projection, past %.3f", w, tol)
 						}
 					})
 				})

@@ -3,7 +3,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // The SSE tier's family 2: RMSNorm, LayerNorm, the rotary rotation, the
@@ -437,12 +437,12 @@ func EmitRoPESSE(hd, nrot int, neox bool) ([]byte, error) {
 // DStr, R10 PSC, R11 super-blocks, RAX scratch, RSI the gather cursor;
 // XMM6/XMM7 the scale and bias, XMM8 0x0F0F0F0F, XMM9 0xFF, XMM10 the code
 // table, XMM11 (1<<hi)-1, XMM12 2^112, XMM13 scOff, XMM14 biasK.
-func EmitPackedRowSSE(q kernels.Quant) ([]byte, error) {
-	sub, bits, _, biasArray := kernels.Layout(q)
-	hi := kernels.HiPlane(q)
-	perSuper, _ := kernels.ScaleLayout(q)
-	signed := kernels.SignedPayload(q)
-	codes := kernels.Codes(q) != nil
+func EmitPackedRowSSE(q layout.Quant) ([]byte, error) {
+	sub, bits, _, biasArray := layout.Layout(q)
+	hi := layout.HiPlane(q)
+	perSuper, _ := layout.ScaleLayout(q)
+	signed := layout.SignedPayload(q)
+	codes := layout.Codes(q) != nil
 	if sub%8 != 0 || (bits != 2 && bits != 4 && bits != 8) || perSuper < 1 || bits == 2 && (sub != 32 || hi != 0 || codes) {
 		return nil, fmt.Errorf("jit: EmitPackedRowSSE: %v has no row kernel shape", q)
 	}
@@ -499,7 +499,7 @@ func EmitPackedRowSSE(q kernels.Quant) ([]byte, error) {
 			a.PXOR(XMM4, XMM4, XMM4)
 			a.PINSRBLoad(XMM4, XMM4, At(R9, 0), 0)
 			a.PSLLD(XMM6, XMM4, 23)
-		} else if kernels.D32(q) {
+		} else if layout.D32(q) {
 			a.MOVSSLoad(XMM6, At(R9, 0)) // TQ2_F32: the word is the scale
 		} else {
 			a.PINSRWLoad(XMM4, XMM4, At(R9, 0), 0)
@@ -510,7 +510,7 @@ func EmitPackedRowSSE(q kernels.Quant) ([]byte, error) {
 			a.PINSRWLoad(XMM5, XMM5, At(R9, 2), 0)
 			halfToFloatSSE(&a, XMM7, XMM5, XMM2, XMM3, XMM12) // dmin
 		}
-		if kernels.ScStream(q) {
+		if layout.ScStream(q) {
 			// Container v27's stream (scstream.go); the next word is RowStr on.
 			next := func(r Reg) { a.MOVSSLoad(r, Idx(R10, R8, 1, 0)) }
 			a.MOVSSLoad(XMM1, At(R10, 0))

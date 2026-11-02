@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
 )
@@ -53,39 +52,6 @@ func (d *devTier) streams() int {
 		return 1
 	}
 	return d.bs.p.Streams()
-}
-
-// kernJob is one of a scratch's kernels and how to build it.
-type kernJob struct {
-	dst  *backend.Kernel
-	make func() (*ir.Kernel, error)
-}
-
-// altJobs are an AltUp scratch's kernels, none where the plan has no AltUp.
-func altJobs(bs *blockScratch, p *nn.LayerPlan, rows, actWin int) []kernJob {
-	if p.AltUp == 0 {
-		return nil
-	}
-	return nil
-}
-
-// allocAltUp allocates an AltUp scratch's buffers through al.
-func allocAltUp(bs *blockScratch, p *nn.LayerPlan, rows int, al func(*backend.Buf, int)) {
-	if p.AltUp == 0 {
-		return
-	}
-	s, d := p.AltUp, p.NEmbd
-	bs.gParts = partsFor(p.NFFN)
-	al(&bs.altM, rows*s*4)
-	al(&bs.altPred, rows*s*d*4)
-	al(&bs.altB, rows*s*d*4)
-	al(&bs.altLaur, rows*d*4)
-	al(&bs.altLT, rows*p.LaurelRank*4)
-	if p.Sparse {
-		al(&bs.gPartB, rows*bs.gParts*4)
-		al(&bs.gVarB, rows*bs.gParts*4)
-		al(&bs.gg, rows*p.NFFN*4)
-	}
 }
 
 // prepAltUp uploads block li's AltUp vectors and router. Its two LAuReL

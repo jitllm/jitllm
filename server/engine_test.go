@@ -13,8 +13,8 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -1030,11 +1030,21 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 	}
 }
 
-// refusingDevice is a device that serves nothing. It stands in for a tier so
+// refusingDevice is a device that takes nothing. It stands in for a tier so
 // SetPlacement reaches Instance.SetDeviceLayers on a model loaded host-only.
 type refusingDevice struct{}
 
-func (refusingDevice) MatVec([]float32, quant.Type, []byte, []float32, int, int) bool { return false }
+func (refusingDevice) PrepLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool { return false }
+func (refusingDevice) Layers(int, int, int, int, []float32, []float32, []float32, *nn.Head) bool {
+	return false
+}
+func (refusingDevice) PrewarmLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool { return false }
+func (refusingDevice) MigrateKV(int, []float32, []float32, int, bool) bool    { return false }
+func (refusingDevice) MigrateRec(int, []float32, []float32, bool) bool        { return false }
+func (refusingDevice) ReserveKV(int) bool                                     { return false }
+func (refusingDevice) ReleaseLayers(int, int)                                 {}
+func (refusingDevice) PrepHead(*nn.Head) bool                                 { return false }
+func (refusingDevice) Reserve(int, int) bool                                  { return false }
 
 // TestARefusedPlacementLeavesTheSessionUsable: when the instance refuses the move
 // -- here a binary16 KV cache that already holds history, which cannot migrate

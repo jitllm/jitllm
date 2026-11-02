@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -55,12 +55,12 @@ func (m *matrixCases) check(family string) {
 
 // packedUnit is the k granularity of a packed format: one super-block.
 func packedUnit(t quant.Type) int {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return 0
 	}
-	sub, _, _, _ := kernels.Layout(q)
-	perSuper, _ := kernels.ScaleLayout(q)
+	sub, _, _, _ := layout.Layout(q)
+	perSuper, _ := layout.ScaleLayout(q)
 	return sub * perSuper
 }
 

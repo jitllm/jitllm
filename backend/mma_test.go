@@ -10,7 +10,6 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestMMAFragmentLayout pins the warp-level matrix instruction's fragment
@@ -54,7 +53,7 @@ func TestMMAFragmentLayout(t *testing.T) {
 					name = "f16/m16n8k" + itoa(sh.K)
 				}
 				t.Run(name, func(t *testing.T) {
-					k, err := kernels.MMAProbe(sh)
+					k, err := MMAProbe(sh)
 					if err != nil {
 						t.Fatal(err)
 					}

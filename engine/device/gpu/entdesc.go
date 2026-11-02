@@ -5,7 +5,6 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // entDesc is a call's rows' entry descriptors at one rate a block folds its
@@ -25,7 +24,7 @@ func (g *devTier) initEntDescs(pg *pagedScratch, rows int, rates ...int) error {
 		if r <= 0 {
 			continue
 		}
-		b, err := g.dev.Alloc(rows * kernels.PRowWords * 4)
+		b, err := g.dev.Alloc(rows * composer.RowWords * 4)
 		if err != nil {
 			return err
 		}

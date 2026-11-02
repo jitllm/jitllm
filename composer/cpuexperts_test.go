@@ -8,10 +8,10 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/composer/x86"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -53,9 +53,9 @@ func TestComposedCPUExpertPages(t *testing.T) {
 			if K%int(typ.BlockElems()) != 0 {
 				continue
 			}
-			q, ok := kernels.QuantOf(typ)
+			q, ok := layout.QuantOf(typ)
 			if typ == quant.F32 {
-				q, ok = kernels.Float32, true
+				q, ok = layout.Float32, true
 			}
 			jt, jok := jlm.TypeOf(typ)
 			if !ok || !jok {
@@ -65,7 +65,7 @@ func TestComposedCPUExpertPages(t *testing.T) {
 			packed := make([][3][]uint32, E)
 			for e := range sheets {
 				sheets[e] = cpuTestWeights(typ, q, rows, K, rng)
-				qs, d, sc, err := kernels.PackWeights(q, sheets[e], rows, K)
+				qs, d, sc, err := layout.PackWeights(q, sheets[e], rows, K)
 				if err != nil {
 					t.Fatalf("%v: %v", typ, err)
 				}
@@ -271,9 +271,9 @@ func TestComposedCPUExpertsAfterTopK(t *testing.T) {
 	rng := rand.New(rand.NewSource(13))
 	ran := 0
 	for _, typ := range []quant.Type{quant.F32, quant.Q8_0, quant.MXFP4} {
-		q, ok := kernels.QuantOf(typ)
+		q, ok := layout.QuantOf(typ)
 		if typ == quant.F32 {
-			q, ok = kernels.Float32, true
+			q, ok = layout.Float32, true
 		}
 		jt, jok := jlm.TypeOf(typ)
 		if !ok || !jok {
@@ -283,7 +283,7 @@ func TestComposedCPUExpertsAfterTopK(t *testing.T) {
 		var bank [3][]uint32
 		for e := range sheets {
 			sheets[e] = cpuTestWeights(typ, q, rows, K, rng)
-			qs, d, sc, err := kernels.PackWeights(q, sheets[e], rows, K)
+			qs, d, sc, err := layout.PackWeights(q, sheets[e], rows, K)
 			if err != nil {
 				t.Fatalf("%v: %v", typ, err)
 			}

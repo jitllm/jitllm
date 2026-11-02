@@ -940,7 +940,7 @@ func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
 		st := x.load(1, x.op(OpAdd, U, slot(x, a, 1), x.op(OpAdd, U, x.op(OpMul, U, x.sel(U, held, p, x.u(0)), x.u(uint32(C))), ch)))
 		return x.sel(F, held, st, x.at(0, []int{R, C}, row, ch))
 	}
-	ext := map[int]int{1: cw.extent, desc: recDescWords(R)}
+	ext := map[int]int{1: cw.extent, desc: RunDescWords(R)}
 
 	var x exprs
 	r, ch := x.coord(0), x.coord(1)
@@ -992,7 +992,7 @@ func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
 		Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{src, cw.in, tableRecRows}, Expr: w.e,
 			Facts: Facts{Extents: maps.Clone(ext)}, Stores: []PrimStore{{Out: next, Index: nix, Value: wv, Extent: R * W}}},
 		Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{next, cw.in, tableRecRows}, Expr: k.e,
-			Facts:  Facts{Extents: map[int]int{0: R * W, 1: cw.extent, desc: recDescWords(R)}},
+			Facts:  Facts{Extents: map[int]int{0: R * W, 1: cw.extent, desc: RunDescWords(R)}},
 			Stores: []PrimStore{{Out: cw.out, Index: kto, Value: kv, Extent: cw.extent}}},
 	), nil
 }

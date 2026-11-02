@@ -11,9 +11,9 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
@@ -238,14 +238,14 @@ func TestComposedGPUTernaryPerToken(t *testing.T) {
 			ran, evens := 0, 0
 			for _, typ := range []quant.Type{quant.TQ2_0, quant.TQ2_F32} {
 				jt, ok := jlm.TypeOf(typ)
-				q, qok := kernels.QuantOf(typ)
+				q, qok := layout.QuantOf(typ)
 				if !ok || !qok {
 					t.Fatalf("%v has no container type or kernel format", typ)
 				}
 				for _, k := range []int{256, 768} {
 					for _, rows := range []int{1, 2, 3, 5, 7, 8, 9, 17, 33, 129} {
 						w := ternaryRows(typ, rows, k, rng)
-						qs, dw, sc, err := kernels.PackWeights(q, w, rows, k)
+						qs, dw, sc, err := layout.PackWeights(q, w, rows, k)
 						if err != nil {
 							t.Fatal(err)
 						}

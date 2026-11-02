@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Fault injection, compiled in only under the `jitllmfault` build tag.
@@ -114,13 +116,46 @@ func SetFormFault(on bool, kind graph.OpKind, asDevice bool) {
 
 var errInjectedForm = errors.New("injected form failure (SetFormFault)")
 
+// moeFault puts a wrong source under a mixture's expert down bank in a form
+// of several rows: it reads the experts' gate output (their up's where they
+// have no gate) in place of their activation. A one-row form is untouched,
+// so a session alone and the same session in a joint step part, as a
+// grouped path wired wrongly would part them.
+var moeFault bool
+
+// SetMoEFault arms moeFault for the tiers that create their composer after
+// it; false disarms.
+func SetMoEFault(on bool) { moeFault = on }
+
 func (g *devTier) rewriteComposer(r *composer.Registry) {
-	if !formFault.on {
-		return
+	if formFault.on {
+		r.Decompositions[formFault.kind] = func(graph.Op, *composer.Context) ([]composer.Prim, error) {
+			return nil, errInjectedForm
+		}
 	}
-	r.Decompositions[formFault.kind] = func(graph.Op, *composer.Context) ([]composer.Prim, error) {
-		return nil, errInjectedForm
+	if moeFault {
+		d := r.Decompositions[graph.OpExpertMatVec]
+		r.Decompositions[graph.OpExpertMatVec] = func(o graph.Op, c *composer.Context) ([]composer.Prim, error) {
+			if c.Step.Rows > 1 && len(o.Weight) > 0 && o.Weight[0].Role == jlm.RoleExpDownBank {
+				o.In = slices.Clone(o.In)
+				o.In[0] = expertsSource(c.Graph, o.In[0])
+			}
+			return d(o, c)
+		}
 	}
+}
+
+// expertsSource is the experts' gate output in gr, their up's where they
+// have no gate, as wide as v: what moeFault reads in place of v.
+func expertsSource(gr *graph.Graph, v graph.ValueID) graph.ValueID {
+	for _, name := range [...]string{"experts.gate", "experts.up"} {
+		for i, x := range gr.Values {
+			if x.Name == name && x.Width == gr.Values[v].Width {
+				return graph.ValueID(i)
+			}
+		}
+	}
+	return v
 }
 
 func formFaultedAsDevice() bool { return formFault.on && formFault.asDevice }
@@ -227,20 +262,3 @@ var roomFault string
 func SetRoomFault(f string) { roomFault = f }
 
 func roomFaulted(f string) bool { return roomFault == f }
-
-// moeFault names a deliberate error in a batched mixture's wiring, so its gate
-// can run the violation and demand it fails (RULE 10):
-//
-//	"floatsrc"  a float bank's down reads the gate's output where the
-//	            activated product belongs: same shape, finite, wrong
-//	"downsrc"   the same for a quantized bank's down, on the dp4a and the
-//	            tensor-core forms alike: its activation is converted from the
-//	            gate's output
-//	"wout"      a grouped mixture that weights the expert's input (Llama 4)
-//	            weights its output instead
-var moeFault string
-
-// SetMoEFault arms one violation for the calls after it; "" disarms.
-func SetMoEFault(f string) { moeFault = f }
-
-func moeFaulted(f string) bool { return moeFault == f }

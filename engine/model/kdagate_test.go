@@ -46,9 +46,9 @@ func TestKimiLinearKDAGateIsLoadBearing(t *testing.T) {
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
 			ran++
-			want, _, _, _ := composedDecode(t, m, dev, ids, toks, 0, true, false)
+			want := cpuDecode(t, m, ids, toks)
 			run := func() float64 {
-				got, st, _, _ := composedDecode(t, m, dev, ids, toks, gpu.ComposedBlock, true, false)
+				got, st, _ := composedDecode(t, m, dev, ids, toks, gpu.ComposedBlock, true, false)
 				served, declined := st.ServedPart(gpu.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))

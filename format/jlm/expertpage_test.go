@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // expertSource is a three-block mixture: blocks 0 and 1 carry expert banks
@@ -121,7 +121,7 @@ func TestExpertPagesHoldEachExpertsSheets(t *testing.T) {
 				checked++
 				continue
 			}
-			wq, wd, wsc, err := kernels.PackWeights(q, sheet, int(e.Dims[1]), int(e.Dims[0]))
+			wq, wd, wsc, err := layout.PackWeights(q, sheet, int(e.Dims[1]), int(e.Dims[0]))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -454,7 +454,7 @@ func rates(v []float64) string {
 }
 
 // deviceErr is the tier's last refusal, or "" for a device that has none.
-func deviceErr(d nn.Device) string {
+func deviceErr(d nn.LayerDevice) string {
 	if g, ok := d.(*gpu.GPU); ok {
 		return g.Err()
 	}
@@ -480,7 +480,7 @@ func ttftText(m *model.Model, p int) string {
 func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps int, t00 time.Time, tOpen, tDev time.Duration) error {
 	text := ttftText(m, p)
 	var tAttach time.Duration
-	var compiled, tuned int64
+	var compiled int64
 	first := func() (time.Duration, int, error) {
 		t0 := time.Now()
 		ids := m.Vocab.Encode(text, true)
@@ -492,13 +492,13 @@ func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps 
 		defer st.Close()
 		// Ready: the blocks are placed, every kernel compiled and the tuners
 		// done. What follows, to the first token, must do none of either.
-		c0, u0 := backend.Compiles(), gpu.TuneTrials()
+		c0 := backend.Compiles()
 		lg, err := st.Prefill(ids)
 		if err != nil {
 			return 0, 0, err
 		}
 		st.Sample(nil, lg)
-		compiled, tuned = backend.Compiles()-c0, gpu.TuneTrials()-u0
+		compiled = backend.Compiles() - c0
 		return time.Since(t0), len(ids), nil
 	}
 	el, _, err := first()
@@ -515,12 +515,12 @@ func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps 
 	// placed and uploaded); ttft (model loaded) is ready to the first token of
 	// the process's first prompt, tokenizing excluded as llama.cpp's prompt
 	// eval excludes it.
-	if err := readyHonest(compiled, tuned); err != nil {
+	if err := readyHonest(compiled); err != nil {
 		return err
 	}
 	tStart := t00.Sub(procStart)
-	fmt.Printf("load %.1f ms (start %.0f + open %.0f + devices %.0f + attach %.0f)   ttft-loaded %.1f ms (ready to the first token; %d compiles, %d tuner trials after ready; %d background tuner trials so far)\n",
-		ms(tStart+tOpen+tDev+tAttach), ms(tStart), ms(tOpen), ms(tDev), ms(tAttach), ms(el-tAttach), compiled, tuned, gpu.BackgroundTuneTrials())
+	fmt.Printf("load %.1f ms (start %.0f + open %.0f + devices %.0f + attach %.0f)   ttft-loaded %.1f ms (ready to the first token; %d compiles after ready)\n",
+		ms(tStart+tOpen+tDev+tAttach), ms(tStart), ms(tOpen), ms(tDev), ms(tAttach), ms(el-tAttach), compiled)
 	var warm []float64
 	ntok := 0
 	for r := 0; r < reps; r++ {
@@ -552,12 +552,11 @@ func warmHonest(st *model.Instance, n int, logits []float32, vocab int) error {
 	return nil
 }
 
-// readyHonest refuses a ready mark that came too early: a kernel compiled or
-// a tuner trial timed between ready and the first token would put load work
-// inside the ttft row.
-func readyHonest(compiled, tuned int64) error {
-	if compiled != 0 || tuned != 0 {
-		return fmt.Errorf("speed: %d kernel compile(s) and %d tuner trial(s) ran after the model was ready", compiled, tuned)
+// readyHonest refuses a ready mark that came too early: a kernel compiled
+// between ready and the first token would put load work inside the ttft row.
+func readyHonest(compiled int64) error {
+	if compiled != 0 {
+		return fmt.Errorf("speed: %d kernel compile(s) ran after the model was ready", compiled)
 	}
 	return nil
 }

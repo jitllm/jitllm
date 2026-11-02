@@ -72,27 +72,6 @@ func TestBatchSeamMovesCarryEveryRowMoEFamilies(t *testing.T) {
 	}
 }
 
-// TestBatchSeamMovesCarryEveryRowOffCard is the same on synth-kimik3 with
-// its mixture blocks' experts off the card: on the host (hybrid), where a
-// step's rows are routed on the device and their experts run on the host, and
-// sent to the card, which a batched step runs a row at a time. Each arm counts
-// its path having run across the moves.
-func TestBatchSeamMovesCarryEveryRowOffCard(t *testing.T) {
-	p, ok := existingModel(testmodels.Path("synth-kimik3.gguf"))
-	if !ok {
-		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path("synth-kimik3.gguf"))
-	}
-	t.Run("host", func(t *testing.T) {
-		batchSeamMovesWith(t, p, 1e-3, false, []Option{WithExperts("host"), WithStreamTrial(false)},
-			func(t *testing.T, st gpu.Stats) {
-				if st.HybridRows == 0 {
-					t.Fatalf("no batched row ran its experts on the host (%d hybrid block-steps)", st.HybridRuns)
-				}
-				t.Logf("%d hybrid rows over %d block-steps", st.HybridRows, st.HybridRuns)
-			})
-	})
-}
-
 // TestBatchSeamMovesCarryEveryRowHunyuan is the same on Hunyuan, whose k is
 // cached unweighted on every tier (jlm.FlagQKNormPostRope folds its weight into
 // q's): a history written by the device must be read by the host and back
@@ -398,8 +377,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 						a1, int64(a1)-int64(a0), c1, int64(c1)-int64(c0), statsMoved(s0, s1))
 				}
 				if ds := int64(s1.ScratchBytes) - int64(s0.ScratchBytes); ds != 0 {
-					t.Logf("the first round trip grew the device's own scratch by %d B (%d lone matvec(s) served)",
-						ds, s1.Served-s0.Served)
+					t.Logf("the first round trip grew the device's own scratch by %d B", ds)
 				}
 				if b := g.Bytes(); b != s1.BudgetUsed {
 					t.Errorf("device bytes after the second round trip %d, after the first %d (%+d)",

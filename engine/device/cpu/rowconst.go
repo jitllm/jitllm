@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // PackedRowScratch is how many bytes of Args.Scratch EmitPackedRow uses: the
@@ -20,12 +20,12 @@ const PackedRowScratch = 96
 //	[64, 64+4*sub)         per element l, the secondary plane's shift:
 //	                       8*(l%4) + hi*((l/4)%(8/hi))
 //	[64+4*sub, 64+8*sub)   the same, negated, for NEON's USHL
-func PackedRowConsts(q kernels.Quant) []byte {
-	sub, _, biasK, _ := kernels.Layout(q)
-	hi := kernels.HiPlane(q)
-	_, scOff := kernels.ScaleLayout(q)
+func PackedRowConsts(q layout.Quant) []byte {
+	sub, _, biasK, _ := layout.Layout(q)
+	hi := layout.HiPlane(q)
+	_, scOff := layout.ScaleLayout(q)
 	b := make([]byte, 64+8*sub)
-	if c := kernels.Codes(q); c != nil {
+	if c := layout.Codes(q); c != nil {
 		copy(b[0:16], c[:])
 	}
 	le := binary.LittleEndian

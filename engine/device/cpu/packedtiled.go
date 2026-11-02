@@ -5,9 +5,8 @@ package cpu
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
-
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // PackedTiledTokens is the widest token tile any format gets. A format's own
@@ -27,9 +26,9 @@ const PackedTiledTokens = 4
 //	Q4_0, Q4_K   4-bit, pay must survive the hi phase   4 + 3*tok   tok 4
 //	Q6_K         4-bit + a secondary plane's mask       5 + 3*tok   tok 3
 //	Q3_K         4-bit + the scale offset vector        5 + 3*tok   tok 3
-func tiledBudget(q kernels.Quant) (need, payR, tok int) {
-	_, bits, _, _ := kernels.Layout(q)
-	_, scOff := kernels.ScaleLayout(q)
+func tiledBudget(q layout.Quant) (need, payR, tok int) {
+	_, bits, _, _ := layout.Layout(q)
+	_, scOff := layout.ScaleLayout(q)
 	grp := packedFusedGroupK(q) / 8
 	payR = 1
 	if bits < 8 {
@@ -42,10 +41,10 @@ func tiledBudget(q kernels.Quant) (need, payR, tok int) {
 	if scOff != 0 {
 		base++
 	}
-	if kernels.HiPlane(q) != 0 {
+	if layout.HiPlane(q) != 0 {
 		base++
 	}
-	if kernels.Codes(q) != nil {
+	if layout.Codes(q) != nil {
 		base++ // the code table, held like the masks for the whole kernel
 	}
 	for tok = PackedTiledTokens; tok >= 1; tok-- {
@@ -59,7 +58,7 @@ func tiledBudget(q kernels.Quant) (need, payR, tok int) {
 // MaxTiledTokens is how many tokens this format's tiled kernel covers, or 0
 // when it has none.
 func MaxTiledTokens(t quant.Type) int {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return 0
 	}
@@ -92,7 +91,7 @@ func MaxTiledTokensNative(t quant.Type) int {
 // Args, beyond EmitPackedMatVecFused's: Out is [tok][rows], A is [tok][k] and
 // AScale is [tok][2*nb], with AHalf [tok][k/16] for the 16-wide formats.
 func EmitPackedMatMulTiled(t quant.Type, k, nrows, tok int, dk DotKind) ([]byte, error) {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return nil, fmt.Errorf("jit: EmitPackedMatMulTiled: %s has no device layout", t)
 	}

@@ -4,7 +4,7 @@ import (
 	"runtime/debug"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // BenchmarkFrame prices a page frame three ways at two page sizes: a fresh Go
@@ -36,10 +36,10 @@ func BenchmarkFrame(b *testing.B) {
 		b.Run("mmap/"+mib(size), func(b *testing.B) {
 			b.SetBytes(int64(size))
 			for i := 0; i < b.N; i++ {
-				p, _, _ := kernels.MapOffHeap(size)
+				p, _, _ := offheap.MapOffHeap(size)
 				touch(p)
 				b.StopTimer()
-				kernels.UnmapOffHeap(p)
+				offheap.UnmapOffHeap(p)
 				b.StartTimer()
 			}
 		})

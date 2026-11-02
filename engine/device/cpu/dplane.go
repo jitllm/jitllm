@@ -1,7 +1,7 @@
 package cpu
 
 import (
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -19,21 +19,21 @@ func NarrowD(t quant.Type) bool { return DSlotsOf(t) > 1 }
 // shifts rather than converting an f16, and treating it as narrow reads two
 // rows' scales as one f16 without failing.
 func E8M0D(t quant.Type) bool {
-	q, ok := kernels.QuantOf(t)
-	return ok && kernels.DSlots(q) == 4
+	q, ok := layout.QuantOf(t)
+	return ok && layout.DSlots(q) == 4
 }
 
 // E8M0Quant is E8M0D for a caller that already holds a kernels.Quant -- the
 // emitters, which are parameterised by it rather than by a quant.Type.
-func E8M0Quant(q kernels.Quant) bool { return kernels.DSlots(q) == 4 }
+func E8M0Quant(q layout.Quant) bool { return layout.DSlots(q) == 4 }
 
 // DSlotsOf is how many rows share one d word: 1, 2 or 4.
 func DSlotsOf(t quant.Type) int {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return 1
 	}
-	return kernels.DSlots(q)
+	return layout.DSlots(q)
 }
 
 // DRowBytes is the d plane's bytes per row, within one super-block: four for

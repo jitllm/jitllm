@@ -5,7 +5,6 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
-	"strconv"
 	"testing"
 	"time"
 
@@ -105,29 +104,8 @@ func TestDeviceDecodeRate(t *testing.T) {
 	// Knobs. tier reads no environment, so a pinned setting has to be passed as
 	// an option.
 	opts := []gpu.Option{gpu.WithDevices(spec)}
-	if v := os.Getenv("JITLLM_DEV_SPLIT"); v != "" {
-		n := 0
-		fmt.Sscanf(v, "%d", &n)
-		opts = append(opts, gpu.WithSplit(n))
-		t.Logf("  split PINNED to %d", n)
-	}
-	if os.Getenv("JITLLM_DEV_NOGROUP") != "" {
-		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.NoGroupSplit = true }))
-		t.Logf("  in-group split reduction REFUSED; the global partial buffer and its Reduce launch stand")
-	}
 	if os.Getenv("JITLLM_DEV_VERBOSE") != "" {
-		// There is no GroupSplit counter, so the tuner's own "in-group" lines
-		// are the evidence that the knob selected a different kernel.
 		opts = append(opts, gpu.WithVerbose(true))
-	}
-	// The row tile. RowtSplitTiles is what says the tile-and-split combination
-	// ran: a shape the tuner sends to Split == 1 tiles without it.
-	if v := os.Getenv("JITLLM_DEV_ROWT"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			t.Fatalf("JITLLM_DEV_ROWT=%q is not a positive integer", v)
-		}
-		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.DecodeRowt = n }))
 	}
 	// The unretained command buffer is a measurement, not a setting: it prices
 	// whether fixed per-token device time is work or retain/release bookkeeping.
@@ -136,36 +114,11 @@ func TestDeviceDecodeRate(t *testing.T) {
 	if os.Getenv("JITLLM_DEV_UNRETAINED") != "" {
 		backend.SetMetalUnretained(true)
 	}
-	if v := os.Getenv("JITLLM_DEV_HEADSPLIT"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			t.Fatalf("JITLLM_DEV_HEADSPLIT=%q is not a positive integer", v)
-		}
-		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.HeadSplit = n }))
-	}
 	if os.Getenv("JITLLM_DEV_PERLAYER") != "" {
 		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.PerLayerSubmit = true }))
 	}
-	if v := os.Getenv("JITLLM_DEV_MVREPEAT"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 {
-			t.Fatalf("JITLLM_DEV_MVREPEAT=%q is not a non-negative integer", v)
-		}
-		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.HeadMatvecRepeat = n }))
-	}
-	if v := os.Getenv("JITLLM_DEV_NORMREPEAT"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 {
-			t.Fatalf("JITLLM_DEV_NORMREPEAT=%q is not a non-negative integer", v)
-		}
-		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.HeadNormRepeat = n }))
-	}
 	if os.Getenv("JITLLM_DEV_RESIDENCY") != "" {
 		backend.SetMetalResidency(true)
-	}
-	if os.Getenv("JITLLM_DEV_FORCEGROUP") != "" {
-		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.ForceGroupSplit = true }))
-		t.Logf("  in-group split reduction FORCED on every eligible shape")
 	}
 	g, err := gpu.OpenWith(opts...)
 	if err != nil || g == nil {
@@ -316,11 +269,6 @@ func TestDeviceDecodeRate(t *testing.T) {
 			"the arm's own wall is %.3f ms/token -> %.3f ms (%.0f%%) NOT on the device",
 			gpuMs, float64(gbuf1-gbuf0)/nTok, tokMs, tokMs-gpuMs,
 			100*(tokMs-gpuMs)/tokMs)
-	}
-	// What the tile actually reached, beside the rate (see JITLLM_DEV_ROWT).
-	if st := g.Stats(); st.RowtTiles+st.RowtPlain+st.RowtSplitTiles > 0 {
-		t.Logf("  decode matvecs: %d tiled (%d of them WITH a split), %d plain",
-			st.RowtTiles, st.RowtSplitTiles, st.RowtPlain)
 	}
 	t.Logf("%s: host %.2f tok/s = %.1f GB/s%s, device %.2f tok/s = %.1f GB/s%s, "+
 		"%d of %d blocks placed = %.2fx; %d B/token over %.0f MiB of weights",

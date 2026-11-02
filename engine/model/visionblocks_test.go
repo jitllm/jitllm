@@ -308,7 +308,7 @@ func TestImageEncodeStepsBesideDecode(t *testing.T) {
 		rows   []float32
 		ran    int
 	}
-	run := func(t *testing.T, g nn.Device, joint bool, blocks int) arm {
+	run := func(t *testing.T, g nn.LayerDevice, joint bool, blocks int) arm {
 		var a arm
 		var sts [2]*Instance
 		for i := range sts {
@@ -372,7 +372,7 @@ func TestImageEncodeStepsBesideDecode(t *testing.T) {
 		}
 		return a
 	}
-	check := func(t *testing.T, g nn.Device) {
+	check := func(t *testing.T, g nn.LayerDevice) {
 		alone := run(t, g, false, 0)
 		for _, blocks := range []int{0, 5} {
 			// Each arm encodes the picture: the image cache would answer the

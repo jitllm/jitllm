@@ -859,7 +859,7 @@ func packedRows(m *Model) []int {
 func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 	for _, name := range []string{"synth-kimik3.gguf", "kimik3/Kimi-K3-0.40B.Q8_0.gguf"} {
 		t.Run(name, func(t *testing.T) {
-			for _, where := range []string{"host", "card"} {
+			for _, where := range []string{"card"} {
 				// An F32 bank has no sheet layout to send (only hybrid needs none).
 				if where == "card" && strings.HasPrefix(name, "synth") {
 					continue
@@ -891,14 +891,8 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 						}
 					}
 					s1 := g.Stats()
-					if where == "host" && s1.HybridRuns == s0.HybridRuns || where == "card" && s1.StreamFills == s0.StreamFills {
-						t.Fatalf("experts %s: %d hybrid block-steps, %d fills -- the path under test never ran",
-							where, s1.HybridRuns-s0.HybridRuns, s1.StreamFills-s0.StreamFills)
-					}
-					// A packed bank's hybrid blocks keep an expert cache on the
-					// card (gpu.Config.NoHybridCache), so the split ran too.
-					if where == "host" && !strings.HasPrefix(name, "synth") && s1.SplitRuns == s0.SplitRuns {
-						t.Fatalf("experts host: no split block-step -- the card's expert cache never ran")
+					if s1.StreamFills == s0.StreamFills {
+						t.Fatalf("experts %s: no fills -- the path under test never ran", where)
 					}
 				})
 			}

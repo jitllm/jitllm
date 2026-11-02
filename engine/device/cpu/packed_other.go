@@ -5,9 +5,8 @@ package cpu
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
-
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // The non-amd64 face of the packed family: which of these names forward to a
@@ -120,12 +119,12 @@ const a64FusedAhead = 2
 // whether a kernel exists, and a wrong answer here would be a wrong answer
 // about the layout rather than about this architecture.
 func PackedOuterElems(t quant.Type) int {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return 0
 	}
-	sub, _, _, _ := kernels.Layout(q)
-	perSuper, _ := kernels.ScaleLayout(q)
+	sub, _, _, _ := layout.Layout(q)
+	perSuper, _ := layout.ScaleLayout(q)
 	return sub * perSuper
 }
 

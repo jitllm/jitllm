@@ -7,7 +7,6 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestTileMatchesReference runs a collective matrix multiply on the device and
@@ -44,7 +43,7 @@ func TestTileMatchesReference(t *testing.T) {
 		msl = msl || d.API() == "msl"
 		defer d.Close()
 		for _, c := range cases {
-			kk, err := kernels.TileProbe(c.m, c.n, c.k, chain, c.elem)
+			kk, err := TileProbe(c.m, c.n, c.k, chain, c.elem)
 			if err != nil {
 				t.Fatalf("TileProbe: %v", err)
 			}

@@ -6,9 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
-
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // PackedRows is the main tile, and PackedTail the one that finishes a row count
@@ -98,7 +97,7 @@ func hiMaskSlot(hi int) int32 {
 // device layout. PackWeights normalises every format to two payload widths and
 // two flat scale arrays, so one emitter serves them all.
 func PackedSupported(t quant.Type) bool {
-	_, ok := kernels.QuantOf(t)
+	_, ok := layout.QuantOf(t)
 	return ok
 }
 
@@ -150,7 +149,7 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 	if rows < 8 || rows%8 != 0 || rows > 64 {
 		return nil, fmt.Errorf("jit: EmitPackedMatVec: %d rows per tile (want 8..64, a multiple of 8)", rows)
 	}
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return nil, fmt.Errorf("jit: EmitPackedMatVec: %s has no device layout", t)
 	}
@@ -162,15 +161,15 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 			return nil, err
 		}
 	}
-	sub, bits, biasK, biasArray := kernels.Layout(q)
-	perSuper, scOff := kernels.ScaleLayout(q)
-	signed := kernels.SignedPayload(q)
+	sub, bits, biasK, biasArray := layout.Layout(q)
+	perSuper, scOff := layout.ScaleLayout(q)
+	signed := layout.SignedPayload(q)
 	codes, err := hasCodes(q)
 	if err != nil {
 		return nil, err
 	}
 	// pw primary words then hw secondary ones; see qinfo.hi and packSub.
-	hiW := kernels.HiPlane(q)
+	hiW := layout.HiPlane(q)
 	pw, hw := sub*bits/32, sub*hiW/32
 	halfSub := sub / 2
 	const vec = 32     // bytes in a YMM, and 8 rows of the layout
@@ -184,13 +183,13 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 	// straight from memory. The cost is only in the addressing (R9 and DStr).
 	narrow := NarrowD(t)
 	e8 := E8M0D(t)
-	d32 := kernels.D32(q)
-	minD := kernels.MinInD(q)
+	d32 := layout.D32(q)
+	minD := layout.MinInD(q)
 	perWord, stride := 4, 8
 	if biasArray {
 		perWord, stride = 2, 16
 	}
-	stream := kernels.ScStream(q)
+	stream := layout.ScStream(q)
 
 	// Only the integer accumulators are held across the k loop, which is what
 	// buys the 64-row tile; the f32 accumulators live in Out and are
@@ -527,12 +526,12 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 // PackedOuterElems is how many elements of a row one outer iteration consumes,
 // so a caller can turn k into the K the kernel wants.
 func PackedOuterElems(t quant.Type) int {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return 0
 	}
-	sub, _, _, _ := kernels.Layout(q)
-	perSuper, _ := kernels.ScaleLayout(q)
+	sub, _, _, _ := layout.Layout(q)
+	perSuper, _ := layout.ScaleLayout(q)
 	// One super-block per outer step for every format since container v2
 	// stores one d word per super-block.
 	return sub * perSuper

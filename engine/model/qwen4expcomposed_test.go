@@ -339,7 +339,7 @@ func TestQwen4ExpServesComposed(t *testing.T) {
 			prompt, toks := ids[:promptLen], ids[promptLen:]
 			run := func(t *testing.T, dev string) float64 {
 				t.Helper()
-				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, gpu.ComposedBlock, true, false)
+				got, st, _ := composedDecode(t, m, dev, prompt, toks, gpu.ComposedBlock, true, false)
 				served, declined := st.ServedPart(gpu.ComposedBlock)
 				if n := len(toks) * covered; served != n || declined != len(toks)*(m.Cfg.NLayer-covered) ||
 					st.BlockDeclines[composer.DeclineNoGraph] != declined {

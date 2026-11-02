@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -14,12 +14,12 @@ import (
 // kernel to run on its first k and agree with the exact-length call.
 func TestMatVecPackedTakesALongerActivation(t *testing.T) {
 	const rows, k = 32, 64
-	q, _ := kernels.QuantOf(quant.Q4_0)
+	q, _ := layout.QuantOf(quant.Q4_0)
 	src := make([]byte, rows*k/32*18)
 	rng := rand.New(rand.NewSource(3))
 	rng.Read(src)
 	quant.PlantScales(quant.Q4_0, src, 0)
-	qs, d, sc, err := kernels.PackWeights(q, src, rows, k)
+	qs, d, sc, err := layout.PackWeights(q, src, rows, k)
 	if err != nil {
 		t.Fatal(err)
 	}

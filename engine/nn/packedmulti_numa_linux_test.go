@@ -8,17 +8,17 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // onNode copies b into fresh anonymous memory bound to node, so the page the
 // kernels read is where a test says it is.
 func onNode(t *testing.T, b []byte, node int) []byte {
 	t.Helper()
-	m, mapped, err := kernels.MapOffHeap(len(b))
+	m, mapped, err := offheap.MapOffHeap(len(b))
 	if err != nil || !mapped {
 		t.Skipf("no anonymous mapping here: %v", err)
 	}

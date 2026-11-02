@@ -6,8 +6,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -138,7 +138,7 @@ func TestSSETierTracksTheHostTier(t *testing.T) {
 				}
 			})
 			ref := make([]float32, sh.rows)
-			q, _ := kernels.QuantOf(gt)
+			q, _ := layout.QuantOf(gt)
 			if err := oracle.MatVecPacked(ref, q, pk.QS, pk.D, pk.SC, x, sh.rows, sh.k); err != nil {
 				t.Fatal(err)
 			}

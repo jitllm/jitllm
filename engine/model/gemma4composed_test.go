@@ -53,8 +53,7 @@ func TestGemma4ServesComposed(t *testing.T) {
 						}
 						return w
 					}
-					tierOut, _, _, _ := composedDecode(t, m, dev, prompt, toks, 0, true, false)
-					got, st, _, _ := composedDecode(t, m, dev, prompt, toks, gpu.ComposedStep, true, false)
+					got, st, _ := composedDecode(t, m, dev, prompt, toks, gpu.ComposedStep, true, false)
 					served, td := st.ServedPart(gpu.ComposedTable)
 					served += st.ReplayedPart(gpu.ComposedTable)
 					nb, db := st.ServedPart(gpu.ComposedBlock)
@@ -67,12 +66,12 @@ func TestGemma4ServesComposed(t *testing.T) {
 					if n := st.FormedPart(gpu.ComposedTable); n != 0 {
 						t.Fatalf("%d table(s) formed at a step, not at the placement (%s)", n, st.LastErr)
 					}
-					hostW, tierW := from(got, host, promptLen-1), from(got, tierOut, 0)
-					t.Logf("%s: the composed step %.3e from the host, %.3e from main's tier", dev, hostW, tierW)
-					if !(hostW < bound) || !(tierW < bound) {
-						t.Fatalf("the composed step is %.3e from the host and %.3e from main's tier, bound %g", hostW, tierW, bound)
+					hostW := from(got, host, promptLen-1)
+					t.Logf("%s: the composed step %.3e from the host", dev, hostW)
+					if !(hostW < bound) {
+						t.Fatalf("the composed step is %.3e from the host, bound %g", hostW, bound)
 					}
-					bad, _, _, _ := composedDecodeWith(t, m, dev, prompt, toks, gpu.ComposedStep, true, false, nil, gpu.WithRopeFault(2, 16))
+					bad, _, _ := composedDecodeWith(t, m, dev, prompt, toks, gpu.ComposedStep, true, false, nil, gpu.WithRopeFault(2, 16))
 					badW := from(bad, host, promptLen-1)
 					t.Logf("%s: every row's table at twice its position and 16 past: %.3e from the host", dev, badW)
 					if !(badW > 100*hostW) || !(badW > 10*bound) {
@@ -205,7 +204,7 @@ func TestGemma4PictureServesComposed(t *testing.T) {
 			run := func(bidir bool) [][]float32 {
 				gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 					gpu.WithConfig(func(c *gpu.Config) {
-						c.Census, c.NoGraph = true, true
+						c.NoGraph = true
 					})}, testTierOpts(t)...)...)
 				if err != nil || gpux == nil {
 					noDevice(t, dev, err)

@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -158,7 +158,7 @@ func (g *devTier) prepDS4(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 	up(&b.fnF, ff)
 	l.auxBytes += uint64(2 * 4 * len(fa))
 	f32r := func(qs backend.Buf, rows, k int) resident {
-		return resident{qs: qs, nrows: rows, k: k, t: kernels.Float32, ok: qs != nil}
+		return resident{qs: qs, nrows: rows, k: k, t: layout.Float32, ok: qs != nil}
 	}
 	b.fnAR, b.fnFR = f32r(b.fnA, mix, s*n), f32r(b.fnF, mix, s*n)
 	b.apeR, b.iapeR = f32r(b.ape, b.rate, coff*hd), f32r(b.iape, b.rate, 2*ihd)
@@ -196,31 +196,6 @@ func ds4Slot(p *nn.LayerPlan, i int) bool {
 		return p.Comp == nn.DS4CompCSA
 	}
 	return false
-}
-
-// ds4Twins compiles block l's grouped output at R rows -- the indexed
-// matvec with a slot a group per row -- outside any session, so the session
-// looks it up (ds4WoA). Callers hold g.mu.
-func (g *devTier) ds4Twins(l *layer, R int) bool {
-	if l.ds4 == nil || R <= 1 {
-		return true
-	}
-	if _, ok := l.woAW[R]; ok {
-		return true
-	}
-	m := l.mvWoA
-	c, err := g.idKernel(kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: 1,
-		Experts: m.experts, Slots: R * m.experts, SlotAct: true, Sub: subFor(m.q, m.k)})
-	if err != nil {
-		g.LastErr = fmt.Sprintf("tier: DeepSeek V4's grouped output at %d rows: %v", R, err)
-		return false
-	}
-	if l.woAW == nil {
-		l.woAW = map[int]mv{}
-	}
-	l.woAW[R] = mv{kern: c, rows: m.rows, slots: R * m.experts, split: 1, q: m.q, k: m.k,
-		experts: m.experts, slotAct: true}
-	return true
 }
 
 // SetTokenIDs takes the rows' token ids for the next call (nn.TokenDevice).

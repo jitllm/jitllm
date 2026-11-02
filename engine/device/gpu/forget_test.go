@@ -3,91 +3,11 @@ package gpu
 import (
 	"strings"
 	"testing"
-	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
 )
-
-// TestForgetFreesTheCopiesInItsRange is the device's half of placement.md 15v:
-// a lone matvec's copy is keyed on its address, and Forget is the host saying
-// the bytes there changed. The copy inside the range goes -- its buffers freed
-// and its charge refunded -- and the next offer uploads afresh; a copy outside
-// it stays. Asked while the device's lock is held, which is where a page-in
-// from inside an upload asks from, it is queued and applied by the next lookup.
-func TestForgetFreesTheCopiesInItsRange(t *testing.T) {
-	d := &fakeDev{}
-	g, err := New([]Slot{{Dev: d, Bytes: 1 << 40}}, WithDeviceTune(TuneOff), WithMinMatVecBytes(0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	const rows, k = 64, 256
-	// One allocation, two weights: the second starts where the first ends, so
-	// a range that overruns by a byte would take it too.
-	mem := make([]byte, 2*rows*k*4)
-	w1, w2 := mem[:rows*k*4], mem[rows*k*4:]
-	x, out := make([]float32, k), make([]float32, rows)
-	serve := func(w []byte) {
-		t.Helper()
-		if !g.MatVec(out, quant.F32, w, x, rows, k) {
-			t.Fatalf("a lone F32 matvec was declined: %s", g.Err())
-		}
-	}
-	// The weights' charge, without the staging the first matvec grew: the
-	// device's own scratch, charged beside them (scratch.go).
-	weights := func() uint64 { return g.Bytes() - g.Stats().ScratchBytes }
-	serve(w1)
-	serve(w2)
-	both := weights()
-	one := both / 2
-	if both == 0 || g.Stats().Forgotten != 0 {
-		t.Fatalf("%d bytes resident, %d forgotten before any Forget", both, g.Stats().Forgotten)
-	}
-
-	freed := d.freedBytes
-	g.Forget(unsafe.Pointer(&w1[0]), uintptr(len(w1)))
-	if got := g.Stats().Forgotten; got != 1 {
-		t.Fatalf("Forget over the first weight dropped %d copies, want 1", got)
-	}
-	if weights() != both-one || d.freedBytes == freed {
-		t.Fatalf("after Forget: %d bytes charged (want %d), %d device bytes freed",
-			weights(), both-one, d.freedBytes-freed)
-	}
-	// The second is still the device's: offering it uploads nothing.
-	alloc := d.allocBytes
-	serve(w2)
-	if d.allocBytes != alloc {
-		t.Fatalf("the weight outside the range was uploaded again (%d bytes)", d.allocBytes-alloc)
-	}
-	// The first comes back as a fresh upload.
-	serve(w1)
-	if d.allocBytes == alloc || weights() != both {
-		t.Fatalf("the forgotten weight was served without an upload (%d bytes, %d charged)",
-			d.allocBytes-alloc, weights())
-	}
-
-	// From inside the device's lock: queued, not applied, and not a deadlock.
-	dt := g.devs[0]
-	dt.mu.Lock()
-	g.Forget(unsafe.Pointer(&w1[0]), uintptr(len(w1)))
-	dt.mu.Unlock()
-	if !dt.forgetPend.Load() || g.Stats().Forgotten != 1 {
-		t.Fatalf("a Forget under the device's lock was applied (%d forgotten) or lost (pending %v)",
-			g.Stats().Forgotten, dt.forgetPend.Load())
-	}
-	serve(w2) // any lookup applies the queue first
-	if g.Stats().Forgotten != 2 || weights() != both-one {
-		t.Fatalf("the queued Forget was not applied by the next lookup: %d forgotten, %d charged",
-			g.Stats().Forgotten, weights())
-	}
-
-	g.Close()
-	if len(d.liveBufs) != 0 || d.doubleFree != 0 || d.allocBytes != d.freedBytes {
-		t.Fatalf("after Close: %d buffer(s) live, %d freed twice, %d of %d bytes freed",
-			len(d.liveBufs), d.doubleFree, d.freedBytes, d.allocBytes)
-	}
-}
 
 // TestATierRefusesASecondModel is the router's half of model.TestATierServesOneModel
 // on the fake: a block of model 2 is refused by name while model 1 holds

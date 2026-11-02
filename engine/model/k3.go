@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -108,10 +107,6 @@ func k3Config(out *Config, c *jlm.Config, nact int) error {
 	if c.SituBeta != 0 || c.SituLinearBeta != 0 {
 		if nact != 0 || out.Act != nn.ActSiLU {
 			return fmt.Errorf("model: %s: the container claims two activations", out.Arch)
-		}
-		if c.SituBeta != kernels.SituBeta || c.SituLinearBeta != kernels.SituLinearBeta {
-			return fmt.Errorf("model: %s: situ bounds %g and %g; the kernels bake %d and %d", out.Arch,
-				c.SituBeta, c.SituLinearBeta, kernels.SituBeta, kernels.SituLinearBeta)
 		}
 		out.Act = nn.ActSitu
 	}

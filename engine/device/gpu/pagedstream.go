@@ -6,8 +6,6 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 )
 
@@ -34,34 +32,10 @@ import (
 // upgrade if long contexts past the card need to be fast rather than
 // possible.
 
-// streamSet is what a pass width compiles once: the staged variant for w
-// pages of keys and the folds for its partials.
-type streamSet struct {
-	w                   int
-	v                   *pagedVariant
-	first, fold, finish backend.Kernel
-	run                 [2]backend.Buf
-	foldT, finT         int
-}
-
-func (ss *streamSet) close() {
-	for _, k := range []backend.Kernel{ss.first, ss.fold, ss.finish} {
-		if k != nil {
-			closeKern(k)
-		}
-	}
-	for _, b := range ss.run {
-		if b != nil {
-			b.Free()
-		}
-	}
-}
-
 // pagedStream is one call's streaming: the sequence, its evicted page count,
 // and a descriptor set per pass for the full and the windowed history.
 type pagedStream struct {
 	g       *devTier
-	set     *streamSet
 	s       seqID
 	evicted int
 	// passes is how many, each over w pages.
@@ -86,16 +60,11 @@ func (st *pagedStream) writes(w func(backend.Buf, []byte)) {
 }
 
 // pagedStreamPrep readies the call's streaming, or leaves pg.st nil when no
-// row reads an evicted page and every row's keys fit the call's plan. The
-// passes reach the furthest live row, so every row's keys are covered
-// whichever sequence it belongs to; only one sequence has pages in host memory
-// (evictVictim). A call whose staged plan was built for a pass
-// (stagedPassKeys) and whose deepest row reads past it goes in passes too,
-// over pages already on the card: nothing is uploaded and nothing waits.
-// prefill says the call runs the prefill kernels, which pass over a long
-// history on their own (pagedprefill.go). Callers hold g.mu, outside any
-// submission; it compiles and allocates.
-func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow, prefill bool) error {
+// row reads an evicted page. The passes reach the furthest live row, so every
+// row's keys are covered whichever sequence it belongs to; only one sequence
+// has pages in host memory (evictVictim). Callers hold g.mu, outside any
+// submission; it allocates.
+func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow) error {
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	pg := bs.pkv
 	pg.st = nil
@@ -114,46 +83,32 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow,
 			s, over = r.s, true
 		}
 	}
-	pass := g.stagedPassKeys(bs)
-	deep := pass > 0 && far >= pass && !prefill && pg.cur != nil && pg.cur.plan.Path == kernels.PathStaged
-	if !over && !deep {
+	if !over {
 		return nil
 	}
-	e, w := 0, pass/kp.p
-	if over {
-		e = kp.evicted[s]
-		// No pass wider than the pass width: the composer's form over passes
-		// is formed for that many keys (passKeys).
-		if w == 0 || e < w {
-			w = e
-		}
-		if err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
-			w = min(w, g.streamWidth(l, e))
-			// Every layer holding s holds the same prefix in host memory (kvevict.go);
-			// one that does not would have the passes read past its copies.
-			if len(l.owned[s]) > 0 && len(l.home[s]) != e {
-				return fmt.Errorf("block %d holds %d page(s) of sequence %v at home and the pool counts %d",
-					li, len(l.home[s]), s, e)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		if w < 1 {
-			return fmt.Errorf("%w: no free page to stream %d evicted page(s) through", ErrKVCapacity, e)
-		}
+	e, w := kp.evicted[s], g.stagedPassKeys(bs)/kp.p
+	// No pass wider than the pass width: the composer's form over passes
+	// is formed for that many keys (passKeys).
+	if w == 0 || e < w {
+		w = e
 	}
-	// A power of two, so the widths a pool passes through compile a handful
-	// of kernel sets rather than one per free-list length.
-	for w&(w-1) != 0 {
-		w &= w - 1
-	}
-	set, err := g.streamSetFor(bs, w)
-	if err != nil {
+	if err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
+		w = min(w, g.streamWidth(l, e))
+		// Every layer holding s holds the same prefix in host memory (kvevict.go);
+		// one that does not would have the passes read past its copies.
+		if len(l.owned[s]) > 0 && len(l.home[s]) != e {
+			return fmt.Errorf("block %d holds %d page(s) of sequence %v at home and the pool counts %d",
+				li, len(l.home[s]), s, e)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
+	if w < 1 {
+		return fmt.Errorf("%w: no free page to stream %d evicted page(s) through", ErrKVCapacity, e)
+	}
 	st := &pg.stream
-	*st = pagedStream{g: g, set: set, s: s, evicted: e, w: w, ids: st.ids[:0]}
+	*st = pagedStream{g: g, s: s, evicted: e, w: w, ids: st.ids[:0]}
 	keys := w * kp.p
 	st.passes = (far + keys) / keys
 	for i, src := range [2][]uint32{pg.desc, pg.descW} {
@@ -173,67 +128,15 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow,
 			lo, hi := uint32(j*keys), uint32((j+1)*keys)
 			d := all[j*len(src) : (j+1)*len(src)]
 			copy(d, src)
-			for o := 0; o < len(d); o += kernels.PRowWords {
-				d[o+kernels.PRowStart] = min(max(d[o+kernels.PRowStart], lo), hi)
-				d[o+kernels.PRowEnd] = min(max(d[o+kernels.PRowEnd], lo), hi)
+			for o := 0; o < len(d); o += composer.RowWords {
+				d[o+composer.RowStart] = min(max(d[o+composer.RowStart], lo), hi)
+				d[o+composer.RowEnd] = min(max(d[o+composer.RowEnd], lo), hi)
 			}
 		}
 		st.desc[i], st.words[i] = pg.streamDesc[i][:st.passes], all
 	}
 	pg.st = st
 	return nil
-}
-
-// streamSetFor is bs's pass set for w pages, compiled once.
-func (g *devTier) streamSetFor(bs *blockScratch, w int) (*streamSet, error) {
-	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
-	pg := bs.pkv
-	if ss := pg.streams[w]; ss != nil {
-		return ss, nil
-	}
-	shape := kernels.PagedStagedPlan(pg.shape, w*g.kvPages().p, g.dev.Slots())
-	v, err := g.pagedBuild(bs, kernels.DecodePlan{Path: kernels.PathStaged, Shape: shape})
-	if err != nil {
-		return nil, err
-	}
-	ss := &streamSet{w: w, v: v}
-	// The folds carry no sink: it is added once, by the finish.
-	ms := mergeShape(v.plan.Shape)
-	one := ms
-	one.Splits = 1
-	ms.Sink = false
-	comp := func(k *ir.Kernel, err error) backend.Kernel {
-		if err == nil {
-			var bk backend.Kernel
-			if bk, err = g.dev.Compile(k); err == nil {
-				return bk
-			}
-		}
-		g.LastErr = err.Error()
-		return nil
-	}
-	ss.first = comp(kernels.FlashAttentionMergeRun(ms, true))
-	ss.fold = comp(kernels.FlashAttentionMergeRun(ms, false))
-	ss.finish = comp(kernels.FlashAttentionMergeWide(one))
-	if ss.first == nil || ss.fold == nil || ss.finish == nil {
-		ss.close()
-		return nil, fmt.Errorf("streamed attention's folds: %s", g.LastErr)
-	}
-	for i := range ss.run {
-		b, err := g.dev.Alloc(kernels.FlashPartialFloats(one) * 4)
-		if err != nil {
-			ss.close()
-			return nil, err
-		}
-		ss.run[i] = b
-	}
-	ss.foldT = ms.Rows * ms.Heads * ((ms.Dim + 31) / 32 * 32)
-	ss.finT = ms.Rows * ms.Heads * ms.Dim
-	if pg.streams == nil {
-		pg.streams = map[int]*streamSet{}
-	}
-	pg.streams[w] = ss
-	return ss, nil
 }
 
 // devStagedPlane is the plane Config.StagedPassKeys' default is sized to:
@@ -259,7 +162,7 @@ func (g *devTier) stagedPassKeys(bs *blockScratch) int {
 	}
 	n := g.StagedPassKeys
 	if n <= 0 {
-		n = devStagedPlane / 4 / max(pg.shape.Rows*pg.shape.Heads, 1)
+		n = devStagedPlane / 4 / max(bs.rows*bs.p.NHead, 1)
 	}
 	return max(n/kp.p, 1) * kp.p
 }

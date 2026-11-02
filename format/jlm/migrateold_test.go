@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // The fixtures in testdata/old are oldSource written by the writer of each
@@ -191,7 +191,7 @@ func TestRestream26KeepsEveryField(t *testing.T) {
 			for v := uint8(0); v < 64; v++ {
 				var ws [3]uint32
 				scPut26(&ws, sub, min, v|0xC0)
-				if got := kernels.ScValue(ws, sub, min); got != v {
+				if got := layout.ScValue(ws, sub, min); got != v {
 					t.Fatalf("sub-block %d min %v: put %d, read %d", sub, min, v, got)
 				}
 			}

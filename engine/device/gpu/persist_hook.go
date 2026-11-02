@@ -29,35 +29,3 @@ func PersistDepLaunchesForTest() int64 { return persistDepTotal.Load() }
 // PersistLaunchesForTest is how many persistent kernels this process has
 // launched, for a gate that must show the path ran.
 func PersistLaunchesForTest() int64 { return persistTotal.Load() }
-
-// SwapGateUpForTest makes every fused gate/up FFN (Config.GateUpFuse) hand
-// down the two rows the wrong way round, and returns the setting it replaced.
-func SwapGateUpForTest(on bool) bool {
-	old := gateUpSwapped
-	gateUpSwapped = on
-	return old
-}
-
-// SwapGateUp2ForTest makes every Gate2 FFN (Config.GateUp2) read the two
-// weights the wrong way round, and returns the setting it replaced.
-func SwapGateUp2ForTest(on bool) bool {
-	old := gateUp2Swapped
-	gateUp2Swapped = on
-	return old
-}
-
-// BreakAddNormForTest makes every folded block-end add (Config.NoAddNormFold
-// false) add the wrong row, and returns the setting it replaced.
-func BreakAddNormForTest(on bool) bool {
-	old := addNormBroken
-	addNormBroken = on
-	return old
-}
-
-// SwapQKVGemmForTest makes every q/k/v grid (qkvGemm) read k's and v's
-// weights the wrong way round, and returns the setting it replaced.
-func SwapQKVGemmForTest(on bool) bool {
-	old := qkvGemmSwapped
-	qkvGemmSwapped = on
-	return old
-}

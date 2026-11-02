@@ -6,8 +6,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // The zero-copy page-in, at the tier's level: on a device whose heap is host
@@ -144,7 +144,7 @@ func prepOne(t *testing.T, d *impDev, budget, arena uint64) (*GPU, *devTier) {
 // charge must be zero. A charged import would make the card decline blocks to
 // protect memory nobody spends.
 func TestUnifiedImportDoesNotCopyAndDoesNotCharge(t *testing.T) {
-	d := &impDev{unified: true, align: int(kernels.HostAlign())}
+	d := &impDev{unified: true, align: int(offheap.HostAlign())}
 	g, one := prepOne(t, d, 1<<40, 1<<30)
 	defer g.Close()
 
@@ -217,12 +217,12 @@ func TestImportIsRefusedWhereItWouldCostMore(t *testing.T) {
 		// tell every call would be refused.
 		mute bool
 	}{
-		{"discrete", &impDev{unified: false, align: int(kernels.HostAlign())}, 1 << 30, true},
-		{"no arena", &impDev{unified: true, align: int(kernels.HostAlign())}, 0, true},
+		{"discrete", &impDev{unified: false, align: int(offheap.HostAlign())}, 1 << 30, true},
+		{"no arena", &impDev{unified: true, align: int(offheap.HostAlign())}, 0, true},
 		{"alignment the arena does not provide",
-			&impDev{unified: true, align: int(kernels.HostAlign()) * 4}, 1 << 30, true},
+			&impDev{unified: true, align: int(offheap.HostAlign()) * 4}, 1 << 30, true},
 		{"the driver refuses",
-			&impDev{unified: true, align: int(kernels.HostAlign()), refuse: true}, 1 << 30, false},
+			&impDev{unified: true, align: int(offheap.HostAlign()), refuse: true}, 1 << 30, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			g, one := prepOne(t, c.dev, 1<<40, c.arena)
@@ -273,7 +273,7 @@ func TestImportedBlocksNeverPageOut(t *testing.T) {
 	// The budget is sized from the block: it must hold two blocks' weights
 	// (or the device declines instead of paging) and fewer than six.
 	budget := func() uint64 {
-		d := &impDev{align: int(kernels.HostAlign())}
+		d := &impDev{align: int(offheap.HostAlign())}
 		g, err := New([]Slot{{Dev: d, Bytes: 1 << 40}}, WithDeviceTune(TuneOff))
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -290,7 +290,7 @@ func TestImportedBlocksNeverPageOut(t *testing.T) {
 	}()
 
 	run := func(t *testing.T, unified bool) (pageOuts, placed, imports int) {
-		d := &impDev{unified: unified, align: int(kernels.HostAlign())}
+		d := &impDev{unified: unified, align: int(offheap.HostAlign())}
 		g, err := New([]Slot{{Dev: d, Bytes: budget}}, WithDeviceTune(TuneOff))
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -348,7 +348,7 @@ func TestImportingDeviceIsNotDeclinedForWeightsItNeverHolds(t *testing.T) {
 	// Room for every block's KV and norms and half of one block's weights:
 	// below two slots by construction.
 	budget := func() uint64 {
-		d := &impDev{align: int(kernels.HostAlign())}
+		d := &impDev{align: int(offheap.HostAlign())}
 		g, err := New([]Slot{{Dev: d, Bytes: 1 << 40}}, WithDeviceTune(TuneOff))
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -364,7 +364,7 @@ func TestImportingDeviceIsNotDeclinedForWeightsItNeverHolds(t *testing.T) {
 	}()
 
 	run := func(unified bool) (placed, slots int, why string) {
-		d := &impDev{unified: unified, align: int(kernels.HostAlign())}
+		d := &impDev{unified: unified, align: int(offheap.HostAlign())}
 		g, err := New([]Slot{{Dev: d, Bytes: budget}}, WithDeviceTune(TuneOff))
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -408,7 +408,7 @@ func TestShrinkingTheBudgetDoesNotDemoteImportedBlocks(t *testing.T) {
 		fill(ws[li], uint32(20260915+li))
 	}
 	run := func(unified bool) (before, after, outs int) {
-		d := &impDev{unified: unified, align: int(kernels.HostAlign())}
+		d := &impDev{unified: unified, align: int(offheap.HostAlign())}
 		g, err := New([]Slot{{Dev: d, Bytes: 1 << 40}}, WithDeviceTune(TuneOff))
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -458,7 +458,7 @@ func TestDropArenaUnwrapsBeforeItUnmaps(t *testing.T) {
 			name = "copied"
 		}
 		t.Run(name, func(t *testing.T) {
-			d := &impDev{unified: unified, align: int(kernels.HostAlign())}
+			d := &impDev{unified: unified, align: int(offheap.HostAlign())}
 			g, err := New([]Slot{{Dev: d, Bytes: 1 << 40}}, WithDeviceTune(TuneOff))
 			if err != nil {
 				t.Fatalf("New: %v", err)
@@ -500,7 +500,7 @@ func TestHostReservedCountsTheArena(t *testing.T) {
 			name = "integrated, on the host pool"
 		}
 		t.Run(name, func(t *testing.T) {
-			d := &impDev{unified: unified, align: int(kernels.HostAlign())}
+			d := &impDev{unified: unified, align: int(offheap.HostAlign())}
 			slot := Slot{Dev: d, Bytes: 1 << 28}
 			if unified {
 				slot.Pool = NewHostPool(1 << 30)

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -31,7 +31,7 @@ import (
 // hands them to a kernel.
 type ssePackFix struct {
 	g            quant.Type
-	q            kernels.Quant
+	q            layout.Quant
 	nrows, k     int
 	qb, db, scb  []byte
 	x            []float32
@@ -47,7 +47,7 @@ type ssePackFix struct {
 // scale 2^-7, so the epilogue's products are exact (see the file comment).
 func newSSEPackFix(t testing.TB, g quant.Type, nrows, k int, seed int64, exact bool) *ssePackFix {
 	t.Helper()
-	q, ok := kernels.QuantOf(g)
+	q, ok := layout.QuantOf(g)
 	if !ok {
 		t.Fatalf("%s has no device layout", g)
 	}
@@ -60,7 +60,7 @@ func newSSEPackFix(t testing.TB, g quant.Type, nrows, k int, seed int64, exact b
 	if !quant.PlantScales(g, src, int(seed)) {
 		t.Fatalf("%s: no scale planter -- add it rather than testing noise", g)
 	}
-	qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+	qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func newSSEPackFix(t testing.TB, g quant.Type, nrows, k int, seed int64, exact b
 			if NarrowD(g) {
 				// Two rows to a word, both halves a scale.
 				d[i] = uint32(pow2[rng.Intn(4)]) | uint32(pow2[rng.Intn(4)])<<16
-			} else if kernels.D32(q) {
+			} else if layout.D32(q) {
 				// The word is the f32 scale (TQ2_F32).
 				d[i] = math.Float32bits(float32(quant.DecodeHalf(pow2[rng.Intn(4)])))
 			} else {
@@ -79,7 +79,7 @@ func newSSEPackFix(t testing.TB, g quant.Type, nrows, k int, seed int64, exact b
 				d[i] = d[i]&0xFFFF0000 | uint32(pow2[rng.Intn(4)])
 			}
 		}
-		if _, scOff := kernels.ScaleLayout(q); scOff == -128 {
+		if _, scOff := layout.ScaleLayout(q); scOff == -128 {
 			// Q6_K's stored byte is an int8 scale + 128; halve it so the
 			// scale is seven bits and a 17-bit dot times it stays in 24.
 			for i := range sc {

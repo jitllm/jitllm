@@ -38,6 +38,8 @@ type rowsState struct {
 	// (collapse.go).
 	coll            backend.Buf
 	collOut, collIn [1]backend.Buf
+	// takeIn and takeOut are the folded head's row take's (servedRowTake).
+	takeIn, takeOut [1]backend.Buf
 }
 
 // RunRows runs p over a picture's live rows on the card holding the

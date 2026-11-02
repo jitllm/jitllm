@@ -4,8 +4,8 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // kvArena is one layer's history pages as one span of memory outside the Go
@@ -41,7 +41,7 @@ func mapKVArena(pp, slots int, latent bool) (*kvArena, error) {
 	n := 4 * pp * slots
 	a := &kvArena{pp: pp, slots: slots}
 	var err error
-	if a.kb, _, err = kernels.MapOffHeap(n); err != nil {
+	if a.kb, _, err = offheap.MapOffHeap(n); err != nil {
 		return nil, err
 	}
 	a.k = unsafe.Slice((*float32)(unsafe.Pointer(&a.kb[0])), pp*slots)
@@ -49,8 +49,8 @@ func mapKVArena(pp, slots int, latent bool) (*kvArena, error) {
 		a.vb, a.v = a.kb, a.k
 		return a, nil
 	}
-	if a.vb, _, err = kernels.MapOffHeap(n); err != nil {
-		kernels.UnmapOffHeap(a.kb)
+	if a.vb, _, err = offheap.MapOffHeap(n); err != nil {
+		offheap.UnmapOffHeap(a.kb)
 		return nil, err
 	}
 	a.v = unsafe.Slice((*float32)(unsafe.Pointer(&a.vb[0])), pp*slots)
@@ -59,9 +59,9 @@ func mapKVArena(pp, slots int, latent bool) (*kvArena, error) {
 
 // unmap returns the arena's memory, a's two spans once each.
 func (a *kvArena) unmap() {
-	kernels.UnmapOffHeap(a.kb)
+	offheap.UnmapOffHeap(a.kb)
 	if &a.vb[0] != &a.kb[0] {
-		kernels.UnmapOffHeap(a.vb)
+		offheap.UnmapOffHeap(a.vb)
 	}
 }
 
@@ -114,9 +114,9 @@ func (a *kvArena) drop(i int) {
 		return
 	}
 	k, v := a.page(i)
-	kernels.ReleaseOffHeap(unsafe.Slice((*byte)(unsafe.Pointer(&k[0])), 4*len(k)))
+	offheap.ReleaseOffHeap(unsafe.Slice((*byte)(unsafe.Pointer(&k[0])), 4*len(k)))
 	if &a.vb[0] != &a.kb[0] {
-		kernels.ReleaseOffHeap(unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), 4*len(v)))
+		offheap.ReleaseOffHeap(unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), 4*len(v)))
 	}
 }
 

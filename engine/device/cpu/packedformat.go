@@ -5,9 +5,8 @@ package cpu
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
-
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // packedFormat is a packed format's layout as the matrix emitters read it,
@@ -15,7 +14,7 @@ import (
 // payload needs, and the d plane's width. It decides no schedule; every
 // emitter keeps its own register plan and instruction order.
 type packedFormat struct {
-	q         kernels.Quant
+	q         layout.Quant
 	sub, bits int // elements per sub-block, primary payload bits
 	biasK     float32
 	biasArray bool // a minimum per sub-block (Q4_K, Q5_K, Q5_1)
@@ -41,7 +40,7 @@ type packedFormat struct {
 
 // packedFormatOf decomposes t. who names the emitter in a refusal.
 func packedFormatOf(t quant.Type, who string) (packedFormat, error) {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return packedFormat{}, fmt.Errorf("jit: %s: %s has no device layout", who, t)
 	}
@@ -49,13 +48,13 @@ func packedFormatOf(t quant.Type, who string) (packedFormat, error) {
 }
 
 // packedFormatK is packedFormatOf for an emitter that has resolved the quant.
-func packedFormatK(q kernels.Quant, t quant.Type) (packedFormat, error) {
+func packedFormatK(q layout.Quant, t quant.Type) (packedFormat, error) {
 	f := packedFormat{q: q}
-	f.sub, f.bits, f.biasK, f.biasArray = kernels.Layout(q)
-	f.perSuper, f.scOff = kernels.ScaleLayout(q)
-	f.signed = kernels.SignedPayload(q)
-	f.minD = kernels.MinInD(q)
-	f.hi = kernels.HiPlane(q)
+	f.sub, f.bits, f.biasK, f.biasArray = layout.Layout(q)
+	f.perSuper, f.scOff = layout.ScaleLayout(q)
+	f.signed = layout.SignedPayload(q)
+	f.minD = layout.MinInD(q)
+	f.hi = layout.HiPlane(q)
 	codes, err := hasCodes(q)
 	if err != nil {
 		return packedFormat{}, err
@@ -67,10 +66,10 @@ func packedFormatK(q kernels.Quant, t quant.Type) (packedFormat, error) {
 	f.fields = 8 / f.bits
 	f.run = f.sub / f.fields
 	f.sub16 = f.sub == Q8Block/2
-	f.stream = kernels.ScStream(q)
+	f.stream = layout.ScStream(q)
 	f.narrow = NarrowD(t)
 	f.e8 = E8M0D(t)
-	f.d32 = kernels.D32(q)
+	f.d32 = layout.D32(q)
 	return f, nil
 }
 

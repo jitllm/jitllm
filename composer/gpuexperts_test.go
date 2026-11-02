@@ -12,9 +12,9 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
@@ -66,7 +66,7 @@ func TestComposedGPUExperts(t *testing.T) {
 				ran := 0
 				for _, typ := range []quant.Type{quant.Q8_0, quant.Q4_K, quant.Q6_K, quant.MXFP4} {
 					jt, ok := jlm.TypeOf(typ)
-					q, qok := kernels.QuantOf(typ)
+					q, qok := layout.QuantOf(typ)
 					if !ok || !qok {
 						t.Fatalf("%v has no container type or kernel format", typ)
 					}
@@ -74,7 +74,7 @@ func TestComposedGPUExperts(t *testing.T) {
 					var planes [3][]uint32
 					for e := range sheets {
 						sheets[e] = expertWeights(typ, q, rows, K, rng)
-						qs, dw, sc, err := kernels.PackWeights(q, sheets[e], rows, K)
+						qs, dw, sc, err := layout.PackWeights(q, sheets[e], rows, K)
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -344,7 +344,7 @@ func runExperts(d backend.Device, codes []composer.Code, kerns []backend.Kernel,
 
 // expertWeights is matrixWeights, an MXFP4 block's scale held near one: a
 // random E8M0 exponent overflows binary16.
-func expertWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
+func expertWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []byte {
 	if t != quant.MXFP4 {
 		return matrixWeights(t, q, rows, k, rng)
 	}

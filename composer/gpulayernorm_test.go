@@ -10,7 +10,6 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/oracle"
@@ -36,8 +35,8 @@ func gpuDevice(d backend.Device) composer.Device {
 		shared = s.SharedPerMultiprocessor()
 	}
 	scale, _ := backend.LowersTile(d, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32, Scale: true})
-	return composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, Shared: shared, ExactDiv: kernels.DivExact(d.API()),
-		ExactArith: kernels.Gate2Exact(d.API()), HalfPairs: kernels.HalfPairs(d.API()), VectorLoads: kernels.VectorLoads(d.API()),
+	return composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, Shared: shared, ExactDiv: composer.ExactDivOn(d.API()),
+		ExactArith: composer.ExactArithOn(d.API()), HalfPairs: composer.HalfPairsOn(d.API()), VectorLoads: composer.VectorLoadsOn(d.API()),
 		Fragment: backend.Fragment(d), ScaleRows: scale, Buffers: backend.Bindings(d)}
 }
 

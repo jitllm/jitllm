@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // Source is a model, described in this format's own terms, ready to be
@@ -67,30 +67,30 @@ func (t *Tensor) Bytes() ([]byte, error) {
 //
 // A type that is not packed is not an error: F32/F16 norms, biases and
 // routers are carried verbatim, since the container must be self-sufficient.
-func packerOf(t Type) (kernels.Quant, bool) {
+func packerOf(t Type) (layout.Quant, bool) {
 	switch t {
 	case TypeQ4:
-		return kernels.Q4_0, true
+		return layout.Q4_0, true
 	case TypeQ8:
-		return kernels.Q8_0, true
+		return layout.Q8_0, true
 	case TypeQ5:
-		return kernels.Q5_0, true
+		return layout.Q5_0, true
 	case TypeQ51:
-		return kernels.Q5_1, true
+		return layout.Q5_1, true
 	case TypeMX4:
-		return kernels.MXFP4, true
+		return layout.MXFP4, true
 	case TypeTQ2:
-		return kernels.TQ2, true
+		return layout.TQ2, true
 	case TypeTQ2F:
-		return kernels.TQ2F, true
+		return layout.TQ2F, true
 	case TypeQ3S:
-		return kernels.Q3_K, true
+		return layout.Q3_K, true
 	case TypeQ4S:
-		return kernels.Q4_K, true
+		return layout.Q4_K, true
 	case TypeQ5S:
-		return kernels.Q5_K, true
+		return layout.Q5_K, true
 	case TypeQ6S:
-		return kernels.Q6_K, true
+		return layout.Q6_K, true
 	}
 	return 0, false
 }
@@ -102,7 +102,7 @@ func Packed(t Type) bool { _, ok := packerOf(t); return ok }
 
 // Packer is packerOf, exported so a gate can pack a tensor the same way the
 // writer did and compare the bytes.
-func Packer(t Type) (kernels.Quant, bool) { return packerOf(t) }
+func Packer(t Type) (layout.Quant, bool) { return packerOf(t) }
 
 // verbatimBytes is how many bytes a non-packed type occupies for n elements.
 func verbatimBytes(t Type, n uint64) (uint64, error) {
@@ -185,7 +185,7 @@ func sheetSpan(e *Entry) (qs, d, sc, sheets uint64, err error) {
 		// span and SpanLen already gives it.
 		return 0, 0, 0, 0, fmt.Errorf("jlm: %v is %v, which is not packed", e.Role, e.Type)
 	}
-	pq, pd, psc, err := kernels.PackedWords(q, int(rows), int(e.Dims[0]))
+	pq, pd, psc, err := layout.PackedWords(q, int(rows), int(e.Dims[0]))
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
@@ -301,7 +301,7 @@ func spans(t Type, dims [4]uint64, ndim uint8) (qs, d, sc uint64, err error) {
 	k := dims[0]
 	sheets, rows := sheetsOf(dims, ndim)
 	if q, ok := packerOf(t); ok {
-		pq, pd, psc, err := kernels.PackedWords(q, int(rows), int(k))
+		pq, pd, psc, err := layout.PackedWords(q, int(rows), int(k))
 		if err != nil {
 			return 0, 0, 0, err
 		}
@@ -386,9 +386,9 @@ func Plan(src *Source, fp Fingerprint) (*Header, uint64, error) {
 	return l.h, l.total, nil
 }
 
-// layout is pass 1's result: every entry placed, the encoded sections, and
+// fileLayout is pass 1's result: every entry placed, the encoded sections, and
 // the file's size.
-type layout struct {
+type fileLayout struct {
 	es                    []Entry
 	h                     *Header
 	cfgb, visb, vocb, fpb []byte
@@ -396,7 +396,7 @@ type layout struct {
 	ver                   uint32 // the version word written
 }
 
-func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
+func layoutOf(src *Source, fp Fingerprint, ver uint32) (*fileLayout, error) {
 	if src == nil || src.Config == nil {
 		return nil, fmt.Errorf("jlm: Write needs a Source with a Config")
 	}
@@ -633,7 +633,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
 		es[i].DOff, es[i].SCOff = es[i].QSOff+qs, es[i].QSOff+qs
 		total = es[i].QSOff + qs
 	}
-	return &layout{es: es, h: h, cfgb: cfgb, visb: visb, vocb: vocb, fpb: fpb,
+	return &fileLayout{es: es, h: h, cfgb: cfgb, visb: visb, vocb: vocb, fpb: fpb,
 		expPageSize: expPageSize, total: total, ver: ver}, nil
 }
 
@@ -655,7 +655,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
 // many tensors are down. A failed or killed write keeps both, and the next
 // Write of the same layout from the same origin by the same build picks up
 // at the journal's count. Anything else starts over.
-func (l *layout) write(dst string, src *Source) (*Header, error) {
+func (l *fileLayout) write(dst string, src *Source) (*Header, error) {
 	es, h, expPageSize, total := l.es, l.h, l.expPageSize, l.total
 	cfgb, visb, vocb, fpb := l.cfgb, l.visb, l.vocb, l.fpb
 	hdr := make([]byte, HeaderBytes)
@@ -796,7 +796,7 @@ func writeTensor(out *os.File, e *Entry, raw []byte, expPageSize uint64, stored 
 	// One sheet at a time, back to back: see sheetsOf. A dense weight is
 	// one sheet and takes the same path, so there is no second shape here.
 	srcSheet := len(raw) / int(sheets)
-	nq, nd, nsc, err := kernels.PackedWords(q, int(rows), e.K())
+	nq, nd, nsc, err := layout.PackedWords(q, int(rows), e.K())
 	if err != nil {
 		return n, fmt.Errorf("jlm: %v: %w", e.Role, err)
 	}
@@ -811,7 +811,7 @@ func writeTensor(out *os.File, e *Entry, raw []byte, expPageSize uint64, stored 
 			dw = raw[(S*nq+sh*nd)*4 : (S*nq+(sh+1)*nd)*4]
 			sc = raw[(S*(nq+nd)+sh*nsc)*4 : (S*(nq+nd)+(sh+1)*nsc)*4]
 		} else {
-			pq, pd, psc, err := kernels.PackWeights(q, raw[sh*srcSheet:(sh+1)*srcSheet], int(rows), e.K())
+			pq, pd, psc, err := layout.PackWeights(q, raw[sh*srcSheet:(sh+1)*srcSheet], int(rows), e.K())
 			if err != nil {
 				return n, fmt.Errorf("jlm: %v sheet %d: %w", e.Role, sh, err)
 			}

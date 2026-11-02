@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/composer/x86"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -102,14 +102,14 @@ func TestComposedTernaryMatVecPerToken(t *testing.T) {
 	right, evens, unformed := map[string]int{}, map[string]int{}, map[string]string{}
 	for _, typ := range []quant.Type{quant.TQ2_0, quant.TQ2_F32} {
 		jt, ok := jlm.TypeOf(typ)
-		q, qok := kernels.QuantOf(typ)
+		q, qok := layout.QuantOf(typ)
 		if !ok || !qok {
 			t.Fatalf("%v has no container type or kernel format", typ)
 		}
 		for _, k := range []int{256, 768} {
 			for _, rows := range []int{1, 2, 3, 5, 7, 8, 9, 17, 33} {
 				w := ternaryWeights(typ, rows, k, rng)
-				qs, d, sc, err := kernels.PackWeights(q, w, rows, k)
+				qs, d, sc, err := layout.PackWeights(q, w, rows, k)
 				if err != nil {
 					t.Fatal(err)
 				}

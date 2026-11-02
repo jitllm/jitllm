@@ -8,10 +8,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/format/quant"
-
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -197,7 +194,7 @@ func (g *GPU) DropArena(lo, hi int) uint64 {
 // ArenaStats is what the packed arena has done. Unlike Stats it is not summed
 // per device: devices share the arena's entries, and a per-device count would
 // count one pack twice.
-func (g *GPU) ArenaStats() kernels.ArenaStats { return g.Config.arena.Stats() }
+func (g *GPU) ArenaStats() ArenaStats { return g.Config.arena.Stats() }
 
 // DropStage frees every pack that has not been uploaded, on every device.
 func (g *GPU) DropStage() {
@@ -217,31 +214,6 @@ func (g *GPU) Reserve(maxRows, maxK int) bool {
 		ok = d.Reserve(maxRows, maxK) && ok
 	}
 	return ok
-}
-
-// MatVec is matVec for the zero session: a caller that never attached.
-func (g *GPU) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
-	return g.matVec(0, out, t, w, x, nrows, k)
-}
-
-// matVec serves one matvec, asking each device in turn.
-//
-// noKernel and tooSmall are the same answer on every device (kernels.MatVec is
-// device-independent, and mvPays judges the model, not a card), so they stop
-// the walk; a full card or a failed compile or allocation asks the next one.
-//
-// The walk is not round-robin: prepare() skips the activation upload when x is
-// unchanged, per device, and the first device that accepts a tensor keeps it.
-func (g *GPU) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
-	for _, d := range g.devs {
-		switch d.matVec(sid, out, t, w, x, nrows, k) {
-		case served:
-			return true
-		case noKernel, tooSmall:
-			return false
-		}
-	}
-	return false
 }
 
 // PrewarmLayer packs a whole block off the main loop, for the device that would

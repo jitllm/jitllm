@@ -17,8 +17,8 @@ import (
 
 	"github.com/jitllm/jitllm/engine/graph"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -1425,20 +1425,16 @@ type Model struct {
 var modelIDs atomic.Uint64
 
 // watch registers d with this model: told when the pager recycles a frame, if
-// it copies weights by address, and released at Close, if it holds blocks. It
-// reports whether d is told, which is what lets an instance offer it a weight in
-// a page (Instance.mv).
-func (m *Model) watch(d nn.Device) bool {
+// it copies weights by address, and released at Close, if it holds blocks.
+func (m *Model) watch(d nn.LayerDevice) {
 	m.devMu.Lock()
 	defer m.devMu.Unlock()
 	if o, ok := d.(nn.ModelOwner); ok && !slices.Contains(m.owners, o) {
 		m.owners = append(m.owners, o)
 	}
-	f, ok := d.(nn.CopyForgetter)
-	if ok && !slices.Contains(m.forgetters, f) {
+	if f, ok := d.(nn.CopyForgetter); ok && !slices.Contains(m.forgetters, f) {
 		m.forgetters = append(m.forgetters, f)
 	}
-	return ok
 }
 
 // forgetCopies is the container's recycle callback (jlm.File.OnRecycle): every
@@ -3278,7 +3274,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			// Experts with no gate bank are ungated: down(act(up(h))), the
 			// activation an ungated kind (Nemotron 3's squared ReLU).
 			if !l.legacyExperts && !c.Has(jlm.RoleExpGateBank, bi, -1) && c.Has(jlm.RoleExpUpBank, bi, -1) {
-				if !slices.Contains(kernels.Ungated[:], cfg.Act) {
+				if !slices.Contains(graph.Ungated[:], cfg.Act) {
 					return nil, fmt.Errorf("model: block %d's experts have no gate, and %v is a gated activation",
 						bi, cfg.Act)
 				}
@@ -3303,7 +3299,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 					{jlm.RoleShExpDown, &l.shDown},
 				} {
 					if spec.role == jlm.RoleShExpGate && !c.Has(jlm.RoleShExpGate, bi, -1) {
-						if !slices.Contains(kernels.Ungated[:], cfg.Act) {
+						if !slices.Contains(graph.Ungated[:], cfg.Act) {
 							return nil, fmt.Errorf("model: block %d's shared expert has no gate, and %v is a gated activation",
 								bi, cfg.Act)
 						}
@@ -3888,14 +3884,14 @@ func bankExpert(b tensor, role jlm.Role, nExpert, nrow, k, e int) (tensor, error
 	// A packed bank is priced by the packer, not by the source block size:
 	// b.data is the payload span only.
 	if b.packed != nil {
-		q, ok := kernels.QuantOf(b.typ)
+		q, ok := layout.QuantOf(b.typ)
 		if !ok {
 			return tensor{}, fmt.Errorf("model: %v: %s has no device layout", role, b.typ)
 		}
 		// An expert is a contiguous sheet: the container packs a bank as
 		// n_expert independent matrices back to back (jlm.sheetsOf), so expert
 		// e owns one range of each of the three spans.
-		nq, nd, nsc, err := kernels.PackedWords(q, nrow, b.k)
+		nq, nd, nsc, err := layout.PackedWords(q, nrow, b.k)
 		if err != nil {
 			return tensor{}, fmt.Errorf("model: %v: %w", role, err)
 		}

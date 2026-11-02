@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
@@ -63,7 +63,7 @@ func TestFamily2RunsOnTheForcedSSETier(t *testing.T) {
 		}
 	}
 	for _, gt := range quant.PackedTypes {
-		q, _ := kernels.QuantOf(gt)
+		q, _ := layout.QuantOf(gt)
 		if _, ok := rowKernels.Load(rowKey{sse, q}); !ok {
 			fresh++
 		}
@@ -78,12 +78,12 @@ func TestFamily2RunsOnTheForcedSSETier(t *testing.T) {
 	const nrows, k = 9, 512
 	type table struct {
 		gt quant.Type
-		q  kernels.Quant
+		q  layout.Quant
 		p  *Packed
 	}
 	var tabs []table
 	for _, gt := range quant.PackedTypes {
-		q, _ := kernels.QuantOf(gt)
+		q, _ := layout.QuantOf(gt)
 		tabs = append(tabs, table{gt, q, packOne(t, gt, nrows, k)})
 	}
 

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -50,11 +50,11 @@ func TestTunerOnThisHardware(t *testing.T) {
 			{quant.Q4_K, 4096, 4096, nil}, {quant.Q4_K, 14336, 4096, nil}, {quant.Q4_K, 14336, 4096, nil},
 			{quant.Q6_K, 4096, 14336, nil},
 		} {
-			q, _ := kernels.QuantOf(m.t)
+			q, _ := layout.QuantOf(m.t)
 			src := make([]byte, uint64(m.rows*m.k)/m.t.BlockElems()*m.t.BlockBytes())
 			rng.Read(src)
 			quant.PlantScales(m.t, src, 0)
-			qs, d, sc, err := kernels.PackWeights(q, src, m.rows, m.k)
+			qs, d, sc, err := layout.PackWeights(q, src, m.rows, m.k)
 			if err != nil {
 				t.Fatal(err)
 			}

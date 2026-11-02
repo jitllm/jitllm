@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // TestViewBindsAtItsOffset binds three streams of one stream-major buffer,
@@ -35,7 +34,7 @@ func TestViewBindsAtItsOffset(t *testing.T) {
 			host[i] = float32(i%31) * 0.25
 		}
 	}
-	k, err := kernels.AddScaled(n)
+	k, err := AddScaled(n)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,9 +7,9 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -39,7 +39,7 @@ func TestGEMMExactDecodeSumsTheWholeK(t *testing.T) {
 			// chunk is 2048 rows or fewer, under fusedSliceRows.
 			nrows, k := 4096, 8192
 			rng := rand.New(rand.NewSource(int64(gt) + 17))
-			q, _ := kernels.QuantOf(gt)
+			q, _ := layout.QuantOf(gt)
 			src := make([]byte, uint64(nrows*k)/gt.BlockElems()*gt.BlockBytes())
 			for i := range src {
 				src[i] = byte(rng.Intn(256))
@@ -47,7 +47,7 @@ func TestGEMMExactDecodeSumsTheWholeK(t *testing.T) {
 			if !quant.PlantScales(gt, src, 0) {
 				t.Fatalf("%s: no scale planter", gt)
 			}
-			qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+			qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 			if err != nil {
 				t.Fatal(err)
 			}

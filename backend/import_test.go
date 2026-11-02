@@ -1,14 +1,17 @@
 package backend_test
 
 import (
-	"github.com/jitllm/jitllm/internal/oracle"
+	"encoding/binary"
 	"math"
 	"math/rand"
 	"strconv"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/layout"
+	"github.com/jitllm/jitllm/internal/offheap"
+
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
@@ -100,14 +103,14 @@ func TestImportedWeightsAreTheHostsOwnBytes(t *testing.T) {
 
 func importCaseRun(t *testing.T, d backend.Device) {
 	const rows, k = 64, 256
-	q := kernels.Q8_0
+	q := layout.Q8_0
 	rng := rand.New(rand.NewSource(20260913))
 	w := randWeights(q, rows, k, rng)
 
 	// The arena is the owner, because it is the owner in the engine too: its
 	// regions are mmap'd, aligned and padded for exactly this call, and a Go
 	// []byte could not be handed to a driver that keeps the pointer.
-	a := kernels.NewArena(1 << 26)
+	a := gpu.NewArena(1 << 26)
 	defer a.Close()
 	p, err := a.Pack(0, q, w, rows, k)
 	if err != nil {
@@ -116,19 +119,15 @@ func importCaseRun(t *testing.T, d backend.Device) {
 	if p == nil {
 		t.Fatal("the arena declined a 64x256 Q8_0 tensor with a 64 MiB budget")
 	}
-	if align := backend.ImportAlign(d); uint64(align) > kernels.HostAlign() {
+	if align := backend.ImportAlign(d); uint64(align) > offheap.HostAlign() {
 		t.Skipf("the device wants %d-byte alignment and the arena lays out on %d",
-			align, kernels.HostAlign())
+			align, offheap.HostAlign())
 	}
 
-	x := randActs(k, rng)
-	av, as, asum, err := oracle.PackActivations(x)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ax := append(append([]float32{}, as...), asum...)
-
-	ker, err := kernels.MatVec(kernels.MatVecShape{T: q, K: k, Rows: rows, Split: 1})
+	// The workload reads every word of the plane and writes it out: a copy,
+	// so a difference is the bytes the device read and nothing else.
+	n := len(p.QS)
+	ker, err := Restride(1, n, n, n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,9 +145,6 @@ func importCaseRun(t *testing.T, d backend.Device) {
 	}()
 	keep := func(b backend.Buf) backend.Buf { bufs = append(bufs, b); return b }
 	upload := func(v []uint32) backend.Buf {
-		if len(v) == 0 {
-			v = []uint32{0}
-		}
 		b, err := d.Alloc(len(v) * 4)
 		if err != nil {
 			t.Fatal(err)
@@ -160,48 +156,46 @@ func importCaseRun(t *testing.T, d backend.Device) {
 	}
 	imp := d.(backend.HostImport)
 	wrap := func(v []uint32) backend.Buf {
-		if len(v) == 0 {
-			return upload(v)
-		}
-		b, err := imp.Import(kernels.Ptr(v), int(kernels.PaddedBytes(len(v))))
+		b, err := imp.Import(gpu.Ptr(v), int(gpu.PaddedBytes(len(v))))
 		if err != nil {
-			t.Fatalf("Import(%d bytes at %#x): %v", kernels.PaddedBytes(len(v)),
-				kernels.Addr(v), err)
+			t.Fatalf("Import(%d bytes at %#x): %v", gpu.PaddedBytes(len(v)),
+				gpu.Addr(v), err)
 		}
 		return keep(b)
 	}
-
-	bA, bAX := upload(av), keep(mustAlloc(t, d, f32bytes(ax)))
-	run := func(qs, dw, sc backend.Buf) []float32 {
-		out := keep(mustAlloc(t, d, make([]byte, rows*4)))
+	run := func(qs backend.Buf) []uint32 {
+		out := keep(mustAlloc(t, d, make([]byte, n*4)))
 		// The kernel's own workgroup: a Metal kernel dispatched at another
 		// width computes the wrong indices (backend's mtlKern.checkWidth).
 		width := ker.Group[0]
-		if err := kern.Launch((rows+width-1)/width, width, qs, dw, sc, bA, bAX, out); err != nil {
+		if err := kern.Launch((n+width-1)/width, width, qs, out); err != nil {
 			t.Fatal(err)
 		}
-		raw := make([]byte, rows*4)
+		raw := make([]byte, n*4)
 		if err := out.Read(raw); err != nil {
 			t.Fatal(err)
 		}
-		return f32s(raw)
+		w := make([]uint32, n)
+		for i := range w {
+			w[i] = binary.LittleEndian.Uint32(raw[4*i:])
+		}
+		return w
 	}
 
-	iQS, iD, iSC := wrap(p.QS), wrap(p.D), wrap(p.SC)
-	cQS, cD, cSC := upload(p.QS), upload(p.D), upload(p.SC)
+	iQS, cQS := wrap(p.QS), upload(p.QS)
 
 	// 1. An import computes the same thing as an upload. Bit equality, because
 	//    it is the same kernel over the same bytes and anything else would be a
 	//    numerical difference nobody asked for.
-	wrapped, copied := run(iQS, iD, iSC), run(cQS, cD, cSC)
+	wrapped, copied := run(iQS), run(cQS)
 	for i := range wrapped {
 		if wrapped[i] != copied[i] {
-			t.Fatalf("row %d: imported %v, uploaded %v -- an import is supposed to be the "+
+			t.Fatalf("word %d: imported %#x, uploaded %#x -- an import is supposed to be the "+
 				"SAME bytes, so the two must agree to the bit", i, wrapped[i], copied[i])
 		}
 	}
 	if allZero(wrapped) {
-		t.Fatal("every output row is zero, so this kernel is not reading the weights at all " +
+		t.Fatal("every output word is zero, so this kernel is not reading the weights at all " +
 			"and neither arm would notice the mutation below")
 	}
 
@@ -210,7 +204,7 @@ func importCaseRun(t *testing.T, d backend.Device) {
 		p.QS[i] ^= 0x0f0f0f0f
 	}
 
-	after, copyAfter := run(iQS, iD, iSC), run(cQS, cD, cSC)
+	after, copyAfter := run(iQS), run(cQS)
 	moved := 0
 	for i := range after {
 		if after[i] != wrapped[i] {
@@ -219,18 +213,18 @@ func importCaseRun(t *testing.T, d backend.Device) {
 	}
 	if moved == 0 {
 		t.Fatalf("the weights changed under the imported buffer and every one of %d output "+
-			"rows is identical: this device COPIED, and the machine is holding the model twice",
+			"words is identical: this device COPIED, and the machine is holding the model twice",
 			len(after))
 	}
 	// 3. ...and the copy arm, which is the violation, must not have moved.
 	for i := range copyAfter {
 		if copyAfter[i] != copied[i] {
-			t.Fatalf("row %d of the UPLOADED arm changed too (%v -> %v): the harness cannot "+
+			t.Fatalf("word %d of the UPLOADED arm changed too (%#x -> %#x): the harness cannot "+
 				"tell an import from a copy, so assertion 2 proves nothing",
 				i, copied[i], copyAfter[i])
 		}
 	}
-	t.Logf("%d of %d rows moved when the host bytes changed under the import; the uploaded "+
+	t.Logf("%d of %d words moved when the host bytes changed under the import; the uploaded "+
 		"arm did not move", moved, len(after))
 }
 
@@ -255,7 +249,7 @@ func f32s(raw []byte) []float32 {
 	return out
 }
 
-func allZero(v []float32) bool {
+func allZero[T float32 | uint32](v []T) bool {
 	for _, x := range v {
 		if x != 0 {
 			return false

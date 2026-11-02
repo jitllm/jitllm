@@ -3,7 +3,6 @@ package model
 import (
 	"math"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 )
@@ -40,7 +39,7 @@ func (m *Model) ngramStreams(b *graph.Builder, xs []graph.ValueID,
 	gate := b.Expr("ng.gate", h, []graph.Term{
 		{Fn: graph.MapMul, Args: [3]graph.Arg{in0, konst(1 / math.Sqrt(float64(d)))}},
 		{Fn: graph.MapAbs, Args: [3]graph.Arg{term(0)}},
-		{Fn: graph.MapMax, Args: [3]graph.Arg{term(1), konst(float64(kernels.SqrtSigmoidFloor))}},
+		{Fn: graph.MapMax, Args: [3]graph.Arg{term(1), konst(float64(graph.SqrtSigmoidFloor))}},
 		{Fn: graph.MapSqrt, Args: [3]graph.Arg{term(2)}},
 		{Fn: graph.MapLess, Args: [3]graph.Arg{konst(0), term(0)}},
 		{Fn: graph.MapLess, Args: [3]graph.Arg{term(0), konst(0)}},

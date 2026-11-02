@@ -7,8 +7,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -34,7 +34,7 @@ func TestMatMulPackedMatchesTheRowLoopExactly(t *testing.T) {
 			}
 			nrows, k, ntok := sh.nrows, sh.k, sh.ntok
 			rng := rand.New(rand.NewSource(int64(nrows*31 + k*7 + ntok)))
-			q, _ := kernels.QuantOf(gt)
+			q, _ := layout.QuantOf(gt)
 			nb := uint64(nrows*k) / gt.BlockElems()
 			bb := gt.BlockBytes()
 			src := make([]byte, nb*bb)
@@ -46,7 +46,7 @@ func TestMatMulPackedMatchesTheRowLoopExactly(t *testing.T) {
 				t.Fatalf("%s: no scale planter, so its blocks would carry "+
 					"random scales -- add it rather than testing noise", gt)
 			}
-			qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+			qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -148,13 +148,13 @@ func TestMatMulPackedMatchesTheRowLoopExactly(t *testing.T) {
 func TestMatMulPackedDeclinesRatherThanApproximating(t *testing.T) {
 	const nrows, k, ntok = 768, 768, 4
 	gt := quant.Q8_0
-	q, _ := kernels.QuantOf(gt)
+	q, _ := layout.QuantOf(gt)
 	nb := uint64(nrows*k) / gt.BlockElems()
 	src := make([]byte, nb*gt.BlockBytes())
 	for b := uint64(0); b < nb; b++ {
 		src[b*gt.BlockBytes()], src[b*gt.BlockBytes()+1] = 0x00, 0x3C
 	}
-	qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+	qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,9 +5,8 @@ package cpu
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
-
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // The pre-VNNI packed path: every packed kernel's integer dot product, written
@@ -155,12 +154,12 @@ func ones16(a *Buf, dst Reg) {
 // (TestQuantActMatchesTheGoLoopExactly). A saturating kernel does not crash,
 // it gives slightly wrong dots, so a wider payload is refused here.
 func PreVNNIPacked(t quant.Type) error {
-	q, ok := kernels.QuantOf(t)
+	q, ok := layout.QuantOf(t)
 	if !ok {
 		return fmt.Errorf("jit: pre-VNNI: %s has no device layout", t)
 	}
-	_, bits, _, _ := kernels.Layout(q)
-	hi := kernels.HiPlane(q)
+	_, bits, _, _ := layout.Layout(q)
+	hi := layout.HiPlane(q)
 	const actMax = 127
 	const i16Max = 32767
 	check := func(plane string, umax int) error {
@@ -171,11 +170,11 @@ func PreVNNIPacked(t quant.Type) error {
 		return nil
 	}
 	switch {
-	case bits == 4 && kernels.Codes(q) != nil:
+	case bits == 4 && layout.Codes(q) != nil:
 		// A table code reaches the dot as its table ENTRY, so the entry bounds
 		// it: 24 for MXFP4.
 		umax := 0
-		for _, c := range kernels.Codes(q) {
+		for _, c := range layout.Codes(q) {
 			umax = max(umax, int(c))
 		}
 		if err := check("code table", umax); err != nil {
@@ -187,7 +186,7 @@ func PreVNNIPacked(t quant.Type) error {
 		if err := check("field", 1<<bits-1); err != nil {
 			return err
 		}
-	case kernels.SignedPayload(q):
+	case layout.SignedPayload(q):
 		// VPSIGNB, not the +128 centring: |w| <= 128 for every input.
 		if err := check("signed", 128); err != nil {
 			return err

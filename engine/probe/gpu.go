@@ -12,7 +12,6 @@ import (
 	"github.com/jitllm/jitllm/backend/metal"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/cost"
 )
 
@@ -45,7 +44,7 @@ import (
 // device's clock where the backend has one.
 func GPU(d backend.Device) (cost.Device, error) {
 	const lanes, width = 32, 256
-	out := cost.Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: kernels.DivExact(d.API())}}
+	out := cost.Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: composer.ExactDivOn(d.API())}}
 	if out.Slots == 0 {
 		out.Slots = defaultSlots
 	}
@@ -331,6 +330,41 @@ func (p *gpuProbe) time(k *ir.Kernel, groups, width, n int, bufs ...backend.Buf)
 	}
 	slices.Sort(times)
 	return times[len(times)/2], nil
+}
+
+// ReadRate is device d's read rate over set bytes, in bytes a second: every
+// thread reading its share of the set once, as GPU measures the device's
+// Bandwidth, after reads of the whole set have woken it. It is the wall a
+// decode row is a fraction of (RULE 1), measured in the process that runs it.
+func ReadRate(d backend.Device, set int64, rounds int) (float64, error) {
+	const width = 256
+	threads := d.Slots()
+	if threads == 0 {
+		threads = defaultSlots
+	}
+	p := &gpuProbe{d: d}
+	defer p.close()
+	in, err := p.alloc(int(set))
+	if err != nil {
+		return 0, err
+	}
+	sums, err := p.alloc(4 * threads)
+	if err != nil {
+		return 0, err
+	}
+	per := max(1, int(set/4)/threads)
+	k, err := gpuReadKernel("probe_wall", threads, per, int(set/4-1), width, false)
+	if err != nil {
+		return 0, err
+	}
+	groups := max(1, threads/width)
+	for range 4 {
+		if _, err := p.time(k, groups, min(width, threads), 1, in, sums); err != nil {
+			return 0, err
+		}
+	}
+	secs, err := p.time(k, groups, min(width, threads), max(rounds, 1), in, sums)
+	return float64(per*threads*4) / secs, err
 }
 
 // KernelTimer is a backend's per-kernel device clock: arming it, and each

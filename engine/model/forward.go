@@ -207,10 +207,6 @@ type Instance struct {
 	// weights in that order, kept so a token allocates neither.
 	hyOrd []int32
 	hyW   []float32
-	// hostOnly keeps every matvec on the host's kernels: set while the
-	// device's own submission waits on hostExperts, when offering a matvec to
-	// that device would wait on the session it is inside of.
-	hostOnly bool
 	// hostCalls counts the device's calls into hostExperts, so a token can
 	// tell whether its submission suspended for the host's experts.
 	hostCalls int
@@ -317,10 +313,6 @@ type Instance struct {
 	// the device's prefix needs the same LayerPlan the first offer used.
 	plan   nn.LayerPlan
 	ldCand nn.LayerDevice
-	// forgets says the device attached for lone matvecs is told when the
-	// pager recycles a frame (Model.watch), so mv may offer it a page's
-	// weights and not only the dense region's.
-	forgets bool
 	// memBudget is what SetMemBudget was asked for -- or what newState read from
 	// sched.MemBudget when nobody did -- kept because the share of it the host
 	// actually gets depends on the device, which may be attached after the budget
@@ -472,7 +464,7 @@ type Instance struct {
 
 	// device is the device SetDeviceLayers was handed, before Attach made ld a
 	// session of it: what a draft instance attaches to (Speculate).
-	device    nn.Device
+	device    nn.LayerDevice
 	gpuLayers int
 	// roomToCPU counts batch steps whose device had no room for them, so the
 	// blocks moved to the CPU device before the step (relocateRows, forwardRows).
@@ -941,7 +933,7 @@ func (s *Instance) Close() error {
 // A Device that can run whole blocks is offered every layer (see offerRange),
 // and what it takes is decided by the device's own memory rather than by a
 // separate placement policy.
-func (s *Instance) SetDevice(d nn.Device) error {
+func (s *Instance) SetDevice(d nn.LayerDevice) error {
 	// The bisection knob for a tower (WithTowerGPULayers): how many of its
 	// blocks are offered.
 	if s.vis != nil && s.m.opt.towerGPULayers >= 0 {
@@ -998,7 +990,7 @@ func ropeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
 // WithPlacement's map is applied here. The error reports a placement that
 // named a device not attached, a strict one that could not be met (nothing is
 // placed then), and a device this instance cannot move onto at all.
-func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
+func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	defer s.settleHist()
 	// MigrateKV moves float32: a binary16 or q8_0 history travels converted
 	// (Instance.migrateKVAs).
@@ -1029,7 +1021,7 @@ func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 	}
 	// A borrowed JIT is the text instance's, attached to its device by it.
 	if !s.borrowsJIT() {
-		s.jit.SetDevice(d)
+		s.jit.ShareActWindow(d)
 	}
 	s.clearOnDev()
 	s.moved = nil
@@ -1045,9 +1037,9 @@ func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 			return err
 		}
 	}
-	// A device the model tells when a frame is refilled may be offered a page's
-	// weights (mv); one it cannot tell sees only the dense region.
-	s.forgets = d != nil && s.m.watch(d)
+	if d != nil {
+		s.m.watch(d)
+	}
 	if d == nil {
 		// Detaching gives the host budget back (an integrated GPU's share).
 		s.setLD(nil)
@@ -1136,7 +1128,7 @@ func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 		// token with different kernels
 		// (TestHybridSecondSessionMatchesTheFirst).
 		if !s.borrowsJIT() {
-			s.jit.SetDevice(ld)
+			s.jit.ShareActWindow(ld)
 		}
 	}
 	// Size the scratch before offering anything: the largest matvec is known
@@ -3352,24 +3344,7 @@ func (s *Instance) mv(out []float32, w tensor, x []float32) error {
 		return fmt.Errorf("jitllm: no host kernel reads %s (%s, rows [%d,%d) of %d, k=%d) on %s",
 			w.name(), w.typ, w.packed.Row, w.packed.Row+w.rows, max(w.packed.Stride, w.rows), w.k, runtime.GOARCH)
 	}
-	// The device keeps its copy of a weight keyed on the pointer (nn.Device).
-	// The dense region never moves; a page's frame is reused for the next
-	// block's tensors at the same offsets and shapes, so a page's weight is
-	// offered only to a device the pager tells when it refills a frame
-	// (nn.CopyForgetter, Model.forgetCopies). Offered to any other, it would
-	// answer for the next block from its copy of the first
-	// (TestPagedWeightsAreNeverServedStale).
-	matvec := s.jit.MatVecHost
-	// A routed expert's sheet is never offered: a device copy of it (a lone
-	// matvec the device keeps keyed on the weight) is an upload for one row's
-	// use and a buffer nothing frees when the block is placed -- a hybrid block
-	// never uploads its bank to take the copies back, and they outlived its
-	// return (TestBatchSeamMovesCarryEveryRowOffCard).
-	if w.e != nil && s.m.container != nil && (s.forgets || s.m.container.InDense(w.e)) && !s.hostOnly &&
-		!jlm.ExpertBank(w.e.Role) {
-		matvec = s.jit.MatVec
-	}
-	if matvec(out, w.typ, w.data, x, w.rows, w.k) {
+	if s.jit.MatVec(out, w.typ, w.data, x, w.rows, w.k) {
 		return nil
 	}
 	return fmt.Errorf("jitllm: no host kernel reads %s (%s, %dx%d, row-major) on %s",

@@ -20,26 +20,18 @@ import (
 type knobs struct {
 	api           string          // pin the backend by API name
 	tune          TuneMode        // probe the devices, or keep the order given
-	split         int             // pin the matvec column split; 0 measures
-	accSplit      int             // pin the attention weighted-sum split
-	mvAccSplit    int             // pin the matvec accumulator split
 	lanes         int             // pin the subgroup width: 0 ask, 1, or 32
 	poisonKV      bool            // fill a fresh KV cache with NaN (RULE 13)
 	poisonScratch bool            // and the block scratch, its twin
 	dropSegments  bool            // every composed split sums all but its last segment
 	ropeFault     [2]int          // the rotary tables read each row at k times its position plus d
-	noAttnMMA     bool            // decline the matrix instruction for scores only
 	skip          map[string]bool // produce wrong answers on purpose; see WithSkip
 	batch         BatchShape      // the batched prefill's tile shape
 	mmaMT         int             // warp-matrix tile, rows
 	mmaNT         int             // warp-matrix tile, columns
-	mvMin         uint64          // bytes per crossing at which serving matvecs pays
-	mvMinSet      bool            // ... and whether a caller set it, since 0 is a value
 	arena         uint64          // packed-arena retention budget
 	scaleFault    ScaleFault      // drop one of Granite's scales on purpose
 	pageFault     PageFault       // read a routed expert's wrong page on purpose
-	cacheDir      string          // where the tuners' answers persist; "" keeps none
-	lazyTune      bool            // tune a missing shape in the background; see WithLazyTune
 }
 
 // TuneMode is whether the tier measures the devices it was given.
@@ -84,22 +76,6 @@ func WithAPI(s string) Option { return func(o *openOpts) { o.kb.api = s } }
 // TuneMode.
 func WithDeviceTune(m TuneMode) Option { return func(o *openOpts) { o.kb.tune = m } }
 
-// WithTuneCache names the directory the device tuners keep their answers in
-// (the backend probe, the split tuner and the sequence retune), so a second
-// process on the same device, driver and executable reads them instead of
-// timing again. An entry is keyed by the device UUID, never its name, by the
-// driver version and by the executable's fingerprint; a device with no UUID or
-// no driver version caches nothing. "" (the default) keeps nothing on disk.
-func WithTuneCache(dir string) Option { return func(o *openOpts) { o.kb.cacheDir = dir } }
-
-// WithLazyTune moves the split tuner off the placement path: a shape with no
-// answer in the WithTuneCache directory runs the table's split at once, and a
-// background goroutine times the candidates between the device's own work
-// and writes the winner to the cache and to the tier, where every matvec
-// built after it takes it (and every later process reads it). It needs a
-// cache directory; without one the tuner measures at placement as before.
-func WithLazyTune(on bool) Option { return func(o *openOpts) { o.kb.lazyTune = on } }
-
 // WithVerbose traces every backend's open attempt, the device probe and the
 // ordering to stderr. It sets package backend's trace switch, which is
 // process-wide: it is the one option here that is not per tier.
@@ -128,12 +104,6 @@ func WithSubgroup(mode string) Option { return func(o *openOpts) { o.vk.Subgroup
 // on a device whose own limit nothing reaches, which is what a gate wants.
 func WithVulkanMaxGroups(n uint32) Option { return func(o *openOpts) { o.vk.MaxGroups = n } }
 
-// WithCentering configures weight centering: off, and the
-// token-columns threshold at which it is emitted. See kernels.Center.
-func WithCentering(noCenter bool, minTok int) Option {
-	return func(o *openOpts) { o.kern.NoCenter, o.kern.MinTok = noCenter, minTok }
-}
-
 // WithCUDAInline chooses how CUDA device calls reach the driver: on the
 // caller's thread (true, the default) or posted to the device's owner
 // goroutine. It applies to the devices this option set opens.
@@ -158,22 +128,6 @@ func WithMetalSpin(d time.Duration) Option { return func(o *openOpts) { o.metal.
 // serial (metal.Opts.Concurrent).
 func WithMetalConcurrent(on bool) Option { return func(o *openOpts) { o.metal.Concurrent = on } }
 
-// WithSplit pins the matvec column split. Summing S partial results is a
-// different order from summing the blocks in sequence and float addition is
-// not associative, so pinning it to 1 attributes a token divergence to the
-// split rather than to a kernel bug.
-func WithSplit(n int) Option { return func(o *openOpts) { o.kb.split = n } }
-
-// WithAttnAccSplit pins how many partial sums the attention weighted sum is
-// computed in. Same argument as WithSplit: pinning both arms to 1 is how a real
-// difference is told from f32 reassociation.
-func WithAttnAccSplit(n int) Option { return func(o *openOpts) { o.kb.accSplit = n } }
-
-// WithMatVecAccSplit pins the matvec accumulator split. It exists because
-// Vulkan and Metal cannot report Slots(), so both fall back to an unvalidated
-// constant; this makes it sweepable.
-func WithMatVecAccSplit(n int) Option { return func(o *openOpts) { o.kb.mvAccSplit = n } }
-
 // WithLanes pins the subgroup width the device assumes: 1 (no shuffle) or 32.
 // Zero asks backend.GuaranteedLanes. 32 on a device that does not guarantee it
 // is what scripts/three-way.sh --violate subgroup-width sets.
@@ -197,11 +151,6 @@ func WithSplitFault(on bool) Option { return func(o *openOpts) { o.kb.dropSegmen
 // position plus d (ropeRowsWords): the violation a served table must fail
 // on. k 0 is none.
 func WithRopeFault(k, d int) Option { return func(o *openOpts) { o.kb.ropeFault = [2]int{k, d} } }
-
-// WithoutAttnMMA declines the warp matrix instruction for the attention SCORES
-// only, leaving it in place for the matvecs. Config.NoMMA declines it
-// everywhere; this is the narrower bisection.
-func WithoutAttnMMA(on bool) Option { return func(o *openOpts) { o.kb.noAttnMMA = on } }
 
 // ScaleFault drops Granite's embedding_scale from the composed input rows'
 // graph on the device, so the gate comparing its placed blocks against the
@@ -264,14 +213,6 @@ func WithMMATile(mt, nt int) Option {
 	return func(o *openOpts) { o.kb.mmaMT, o.kb.mmaNT = mt, nt }
 }
 
-// WithMinMatVecBytes sets the average weight bytes per crossing at which
-// serving matvecs one at a time breaks even, a property of the link and the
-// model rather than the card. Zero is a value, not an absence: it serves every
-// matvec however few bytes it moves. Not calling this takes the default.
-func WithMinMatVecBytes(n uint64) Option {
-	return func(o *openOpts) { o.kb.mvMin, o.kb.mvMinSet = n, true }
-}
-
 // WithArena sets the packed arena's retention budget in bytes: every block's
 // weights in the device layout, host-resident, so a block paged back onto a card
 // is a DMA rather than a repack. Zero retains nothing, which is what a model
@@ -279,8 +220,8 @@ func WithMinMatVecBytes(n uint64) Option {
 func WithArena(n uint64) Option { return func(o *openOpts) { o.kb.arena = n } }
 
 // WithConfig applies f to the Config the tier is built with, which is where the
-// A/B arms live: NoGraph, Paging, NoUnpack, NoBatch, NoTail, NoKT, NoMMA, KVF16,
-// Verify, TableSplit, PerLayerSubmit, ScalarSoftmax and StageLimit. One option
+// A/B arms live: NoGraph, NoBatch, NoTail, NoMMA, KVF16, PerLayerSubmit and
+// StageLimit. One option
 // rather than a wrapper per field keeps each field's documentation in one
 // place.
 func WithConfig(f func(*Config)) Option { return func(o *openOpts) { o.cfg = append(o.cfg, f) } }
@@ -317,16 +258,6 @@ func WithPersistDeps(on bool, grid int) Option {
 	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, on, grid })
 }
 
-// WithFFNForm sets Config.FFNForm: the recipe every dense gated FFN runs,
-// FFNTuned (the default) leaving it to the per-card trial.
-func WithFFNForm(f FFNForm) Option { return WithConfig(func(c *Config) { c.FFNForm = f }) }
-
-// WithGateUpFuse sets Config.GateUpFuse: a dense gated FFN's gate and up in
-// one launch, down forming act(gate)*up in its prologue.
-func WithGateUpFuse(on bool) Option {
-	return WithConfig(func(c *Config) { c.GateUpFuse = on })
-}
-
 // WithAutoStream sets whether a mixture block no device can hold resident is
 // streamed onto one (GPU.AutoStream) rather than left on the host. On by
 // default.
@@ -341,15 +272,3 @@ func WithHybridCache(on bool) Option {
 	return WithConfig(func(c *Config) { c.NoHybridCache = !on })
 }
 
-// WithSplitAdmit caps how many experts a hybrid block's cache takes in a
-// token (Config.SplitAdmit).
-func WithSplitAdmit(n int) Option {
-	return WithConfig(func(c *Config) { c.SplitAdmit = n })
-}
-
-// WithHybridExperts sets where a streamed block's routed experts run by
-// default: on the host (true, hybrid execution) or sent to the card each token
-// (false). A placement's choice for a block (GPU.PlaceExperts) wins.
-func WithHybridExperts(on bool) Option {
-	return WithConfig(func(c *Config) { c.HybridExperts, c.NoHybrid = on, !on })
-}

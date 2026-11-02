@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/kernels"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -34,13 +34,13 @@ func TestFusedPrefetchIsSelectedAndChangesNothing(t *testing.T) {
 			continue
 		}
 		rng := rand.New(rand.NewSource(7))
-		q, _ := kernels.QuantOf(gt)
+		q, _ := layout.QuantOf(gt)
 		src := make([]byte, uint64(nrows*k)/gt.BlockElems()*gt.BlockBytes())
 		rng.Read(src)
 		if !quant.PlantScales(gt, src, 0) {
 			t.Fatalf("%s: no scale planter", gt)
 		}
-		qs, d, sc, err := kernels.PackWeights(q, src, nrows, k)
+		qs, d, sc, err := layout.PackWeights(q, src, nrows, k)
 		if err != nil {
 			t.Fatal(err)
 		}

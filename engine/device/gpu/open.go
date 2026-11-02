@@ -12,7 +12,6 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/metal"
 	"github.com/jitllm/jitllm/backend/vulkan"
-	"github.com/jitllm/jitllm/composer/kernels"
 )
 
 // This file is the opening half of the tier: which devices, what each one may
@@ -44,7 +43,6 @@ type openOpts struct {
 	// The knobs that were environment variables; see knobs.go.
 	kb         knobs
 	vk         vulkan.Config
-	kern       kernels.Center
 	cudaPosted bool
 	cudaRegs   int
 	metal      metal.Opts

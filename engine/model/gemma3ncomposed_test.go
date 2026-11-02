@@ -164,7 +164,7 @@ func TestGemma3nServesComposed(t *testing.T) {
 			run := func(t *testing.T, dev string) float64 {
 				t.Helper()
 				parts := gpu.ComposedBlock | gpu.ComposedPrompt
-				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, parts, true, false)
+				got, st, _ := composedDecode(t, m, dev, prompt, toks, parts, true, false)
 				served, declined := st.ServedPart(gpu.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))

@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer/kernels"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // A File's weight memory -- its page frames and its dense region -- lives off
@@ -43,7 +43,7 @@ func OffHeapBytes() int64 { return offHeapBytes.Load() }
 // mapped as the File was opened to do. A mapped one is recorded for Close.
 func (f *File) buf(n int) []byte {
 	if f.offHeap && n > 0 {
-		if b, mapped, err := kernels.MapOffHeap(n); err == nil && mapped {
+		if b, mapped, err := offheap.MapOffHeap(n); err == nil && mapped {
 			if f.mapped == nil {
 				f.mapped = map[*byte][]byte{}
 			}
@@ -118,7 +118,7 @@ func (f *File) release(b []byte) {
 	if m, ok := f.mapped[unsafe.SliceData(b)]; ok {
 		delete(f.mapped, unsafe.SliceData(b))
 		offHeapBytes.Add(-int64(cap(m)))
-		kernels.UnmapOffHeap(m)
+		offheap.UnmapOffHeap(m)
 	}
 }
 
@@ -183,7 +183,7 @@ func (f *File) FreeBytes() uint64 {
 func (f *File) unmapAll() {
 	for k, m := range f.mapped {
 		offHeapBytes.Add(-int64(cap(m)))
-		kernels.UnmapOffHeap(m)
+		offheap.UnmapOffHeap(m)
 		delete(f.mapped, k)
 	}
 }
