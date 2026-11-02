@@ -29,11 +29,16 @@ pool of placed States stood in for "an instance ready to take a request".
 - **Park moves the session's history, not the instance's blocks.** The old
   Park took every block off the card (`SetGPULayers(0)`), which with a shared
   instance would relocate every other session leasing it.
-- **Binding is lazy and allocation-free.** An instance runs for one session
-  at a time between steps (`Instance.use`); a session whose blocks the
-  instance placed differently since it last ran moves only those blocks'
-  history when it next runs, and `Instance.Settle` does it at once where room
-  must be freed (an orchestrator demotion).
+- **Binding is allocation-free; a move is eager.** An instance runs for one
+  session at a time between steps (`Instance.use`). A move of the instance's
+  blocks (`SetGPULayers`, `SetDeviceLayers`, `MoveBlocks`, a committed
+  `PendingMove`) moves the history of every session that ran on it, and its
+  own session's view, before it returns (`settleHist`): a lazy move left the
+  sessions' views holding the blocks, so a seam emptied of blocks kept their
+  weights and recurrent state on the card. A session whose history would not
+  move stays away and moves at its next run; one short of room on the card
+  moves blocks to the CPU, every session's history of them with them
+  (`reserveMoving`, `roomFor`).
 
 ## Measured on the way
 

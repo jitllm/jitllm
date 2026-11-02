@@ -114,7 +114,7 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 		s.Close()
 	}
 
-	b := m.NewBatch(nseq, steps+1)
+	b := newSessBatch(m, nseq, steps+1)
 	defer b.Close()
 	judge := logitJudge{exact: exact, what: "ForwardBatch and Forward"}
 	for j := 0; j < steps; j++ {
@@ -202,44 +202,6 @@ func (j *logitJudge) finish(t *testing.T) {
 		t.Errorf("NMSE %.3e between %s -- too far to be reassociation", nmse, j.what)
 	}
 }
-
-// TestBatchRefusesSingleAPI keeps the two session kinds from being mixed: a
-// Forward on a batch state would fill only sequence 0's cache and answer from
-// it, which is a wrong answer rather than an error.
-func TestBatchRefusesSingleAPI(t *testing.T) {
-	path := models["stories260K"]
-	if p, ok := existingModel(path); ok {
-		path = p
-	} else {
-		t.Skipf("model not present: %s (nor its container)", path)
-	}
-	m, err := Open(jlmOf(t, path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	b := m.NewBatch(2, 8)
-	defer b.Close()
-	if _, err := b.Forward(1); err == nil {
-		t.Error("Forward on a batch state should refuse")
-	}
-	if _, err := b.Prefill([]int32{1, 2}); err == nil {
-		t.Error("Prefill on a batch state should refuse")
-	}
-	if _, err := b.ForwardBatch([]int32{1}); err == nil {
-		t.Error("ForwardBatch should refuse a short row")
-	}
-}
-
-// TestRaggedBatchMatchesForward is the gate on rows at different positions,
-// which TestBatchMatchesForward cannot see (its rows share a position, so a
-// single shared counter agrees). A retired row starts a new sequence while its
-// neighbours carry on, as a server does; against a shared counter it would
-// attend over the deepest row's length and read real but stale keys.
-//
-// It has TestBatchMatchesForward's two modes: the batched GEMM's integer
-// super-block fold is not bit-identical to the decode matvec on a host that
-// runs it, so only the float-epilogue arm is held to equality.
 func TestRaggedBatchMatchesForward(t *testing.T) {
 	for name, path := range models {
 		if name == "tinyllama" && os.Getenv("JITLLM_SLOW") == "" {
@@ -299,7 +261,7 @@ func raggedVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 		s.Close()
 	}
 
-	b := m.NewBatch(nseq, steps+1)
+	b := newSessBatch(m, nseq, steps+1)
 	defer b.Close()
 	judge := logitJudge{exact: exact, what: "a ragged ForwardBatch and Forward"}
 	ragged := false
@@ -395,7 +357,7 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 			one.Close()
 
 			// Give the other rows real history first.
-			b := m.NewBatch(nseq, maxSeq)
+			b := newSessBatch(m, nseq, maxSeq)
 			defer b.Close()
 			for j := 0; j < 4; j++ {
 				row := make([]int32, nseq)
@@ -436,35 +398,5 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestPrefillSeqRefusesASingleSession keeps the two entry points from being
-// mixed: PrefillSeq on a one-sequence instance would silently mean Prefill, and
-// Prefill on a batch would fill row 0 only.
-func TestPrefillSeqRefusesASingleSession(t *testing.T) {
-	path := models["stories260K"]
-	if p, ok := existingModel(path); ok {
-		path = p
-	} else {
-		t.Skipf("model not present: %s (nor its container)", path)
-	}
-	m, err := Open(jlmOf(t, path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	s := m.NewInstance(32)
-	defer s.Close()
-	if _, err := s.PrefillSeq(0, []int32{1, 2, 3}); err == nil {
-		t.Error("PrefillSeq on a single-sequence session should be refused")
-	}
-	b := m.NewBatch(2, 32)
-	defer b.Close()
-	if _, err := b.Prefill([]int32{1, 2, 3}); err == nil {
-		t.Error("Prefill on a batch session should be refused")
-	}
-	if _, err := b.PrefillSeq(2, []int32{1, 2, 3}); err == nil {
-		t.Error("PrefillSeq past the batch width should be refused")
 	}
 }

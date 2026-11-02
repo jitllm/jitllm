@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"sync/atomic"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -63,10 +64,8 @@ type Session struct {
 	// (SetPrefillInterrupt).
 	interrupt     func() bool
 	rconv, rstate [][]float32
-	// bpos is a position per row, which is what makes a batch ragged. It is
-	// always allocated, one entry even for a single sequence (NewBatch(1) is
-	// legal). pos stays the high-water mark across rows: the maxSeq bound
-	// and Pos() want the furthest row.
+	// bpos is the sequence's position as a row of a step, one entry. pos
+	// stays the high-water mark: the maxSeq bound and Pos() read it.
 	bpos []int
 	// rmarks is, per slot, where an image has moved the rotary position of
 	// the rows after it off their cache position (mrope.go). Empty for every
@@ -129,6 +128,14 @@ func (s *Instance) use(sess *Session) error {
 	}
 	s.Session = sess
 	sess.on = s
+	if sess.kvFormat != s.kvFmt {
+		if err := s.relayout(); err != nil {
+			return err
+		}
+	}
+	if sess != s.own && !slices.Contains(s.hist, sess) {
+		s.hist = append(s.hist, sess)
+	}
 	s.headTo(sess)
 	if err := s.attachTier(); err != nil {
 		return err
@@ -141,6 +148,41 @@ func (s *Instance) use(sess *Session) error {
 	}
 	sess.away = true
 	return s.comeBack()
+}
+
+// histWritten reports whether a session under the instance holds history:
+// the instance keeps the format it was written in (SetDeviceLayers).
+func (s *Instance) histWritten() bool {
+	for _, o := range s.hist {
+		if o.pos > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// relayout lays the bound session's empty history out in the instance's
+// format: one opened before the instance stepped its cache down for a
+// device (SetDeviceLayers). A session with history keeps the format it was
+// written in, and is refused here as the pool refuses it.
+func (s *Instance) relayout() error {
+	sess := s.Session
+	if sess.pos != 0 {
+		return fmt.Errorf("model: the session's history is %v and the instance's %v", sess.kvFormat, s.kvFmt)
+	}
+	l := s.kvl
+	l.maxSeq = sess.limit
+	old := sess.kv
+	sess.kv = newKVCacheRange(s.c, old.id, 1, l, old.store, s.m.opt.kvPage, s.lo, s.hi)
+	sess.kv.usePool(&s.m.kvPool)
+	sess.kv.reserve(sess.limit)
+	sess.kv.ns, sess.kv.budget = old.ns, old.budget
+	if err := sess.kv.useArenas(sess.limit, s.m.kvArenaFor); err != nil {
+		return err
+	}
+	s.m.kvPool.put(old)
+	sess.kvFormat = s.kvFmt
+	return nil
 }
 
 // comeBack brings the bound session's history to where s places each
@@ -270,13 +312,29 @@ func (s *Instance) Settle(sess *Session) error {
 	return err
 }
 
-// forget lets go of sess, which is closing: the instance's calls run for
-// its own session again, its single matvecs through that session's view.
+// forget lets go of sess, which is closing or leaving for another
+// instance: where its history is (held) is taken first, and the instance's
+// calls run for its own session again, its single matvecs through that
+// session's view.
 func (s *Instance) forget(sess *Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if i := slices.Index(s.hist, sess); i >= 0 {
+		s.hist = slices.Delete(s.hist, i, i+1)
+	}
 	if s.Session != sess || s.own == nil {
 		return
+	}
+	s.bindOwn()
+}
+
+// bindOwn binds the instance's own session, the bound one's place taken
+// first: its calls run for no session's history, its single matvecs
+// through its own view.
+func (s *Instance) bindOwn() {
+	if sess := s.Session; !sess.away {
+		sess.held = append(sess.held[:0], s.onDev...)
+		sess.away = true
 	}
 	s.Session = s.own
 	s.own.away = true
@@ -294,6 +352,146 @@ func (s *Instance) headTo(sess *Session) {
 			h.Logits = sess.logits
 		}
 	}
+}
+
+// settleHist brings the history of every session under s (hist), and the
+// instance's own session's view, beside the bound one to where s now places
+// each block, and binds the bound one again: a move of the instance's
+// blocks moves its sessions' histories with it, and no view keeps a block
+// the instance moved off. A session whose history would not move stays away
+// and comes back at its next run (use).
+func (s *Instance) settleHist() error {
+	cur := s.Session
+	if s.settling || s.own == nil {
+		return nil
+	}
+	s.settling = true
+	defer func() { s.settling = false }()
+	var err error
+	for _, o := range s.hist {
+		if o == cur || o.parked || o.ld == nil && o.tier == nil {
+			continue
+		}
+		if e := s.use(o); e != nil && err == nil {
+			err = e
+		}
+	}
+	if o := s.own; o != cur && o.ld != nil {
+		if e := s.use(o); e != nil && err == nil {
+			err = e
+		}
+	}
+	switch {
+	case s.Session == cur:
+	case cur == s.own:
+		s.bindOwn()
+	default:
+		if e := s.use(cur); e != nil && err == nil {
+			err = e
+		}
+	}
+	return err
+}
+
+// roomFor answers a session that could not bring its history to s's
+// placement (err) by moving blocks to the CPU, every session's history of
+// each with them, until every session's fits (relocateUntil), the own
+// session bound for the moves: it holds no history to carry. err where they
+// do not.
+func (s *Instance) roomFor(err error) error {
+	if !s.relocate || !s.cpuListed() || s.own == nil || s.ld == nil {
+		return err
+	}
+	if s.Session != s.own {
+		if e := s.use(s.own); e != nil {
+			return err
+		}
+	}
+	s.relocateUntil(0, func() bool { return s.settleHist() == nil })
+	if e := s.settleHist(); e != nil {
+		return err
+	}
+	return nil
+}
+
+// leave lets go of the instance the session last ran on when its next call
+// runs on another, before that one is locked: two instances' locks are never
+// held at once.
+func (s *Session) leave(next *Instance) {
+	if s.on != nil && s.on != next {
+		s.on.forget(s)
+		s.on = nil
+	}
+}
+
+// Bind calls f with the instance locked and sess bound as a step binds it:
+// its view of the instance's device attached and its history where the
+// instance places each block. A move prepared for sess (PrepareMove) is
+// committed the same way, sess bound.
+func (s *Instance) Bind(sess *Session, f func(*Instance)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.use(sess); err != nil {
+		return err
+	}
+	f(s)
+	return nil
+}
+
+// Place calls f with the instance locked and its own session bound, its view
+// where the instance places each block: a placement (SetDeviceLayers,
+// SetGPULayers, PlaceBlocks, MoveBlocks) moves every session's history with
+// the blocks (settleHist), so it runs as no session in particular, and a
+// session that never ran on the device needs no view of it to move it.
+func (s *Instance) Place(f func(*Instance)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.own != nil && s.Session != s.own {
+		if err := s.use(s.own); err != nil {
+			return err
+		}
+	}
+	f(s)
+	return nil
+}
+
+// vacate brings every other session's history of blocks [lo, hi) to the
+// CPU, the own session's view among them, and lets their views of the blocks
+// go: the tier moves a block between devices with one view holding it, and
+// settleHist brings the others after the blocks once they have landed.
+func (s *Instance) vacate(lo, hi int) error {
+	cur := s.Session
+	defer func() { s.Session = cur }()
+	release := func(o *Session) error {
+		if o == cur || o.ld == nil || o.parked {
+			return nil
+		}
+		s.Session = o
+		for li := lo; li < hi && li < len(o.held); li++ {
+			if !o.held[li] {
+				continue
+			}
+			if !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
+				return fmt.Errorf("model: block %d's history would not leave its device", li)
+			}
+			o.ld.ReleaseLayers(li, li+1)
+			o.held[li] = false
+		}
+		o.away = true
+		return nil
+	}
+	if !cur.away {
+		cur.held = append(cur.held[:0], s.onDev...)
+	}
+	for _, o := range s.hist {
+		if err := release(o); err != nil {
+			return err
+		}
+	}
+	if s.own != nil {
+		return release(s.own)
+	}
+	return nil
 }
 
 // With calls f with the instance locked: a read of its placement while

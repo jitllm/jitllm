@@ -231,11 +231,9 @@ func (s *Instance) ResetRecurrent(row int) {
 	}
 }
 
-// recTail is sequence slot's tail of layer li's recurrent state (recTailLen),
-// after its delta-rule state; empty on a model with none.
-func (s *Instance) recTail(li, slot int) []float32 { return s.recTailOf(s.Session, li, slot) }
-
-// recTailOf is recTail of session o's state.
+// recTailOf is sequence slot's tail of layer li's recurrent state of
+// session o (recTailLen), after its delta-rule state; empty on a model with
+// none.
 func (s *Instance) recTailOf(o *Session, li, slot int) []float32 {
 	if s.dg.tail == 0 || o.rstate == nil || o.rstate[li] == nil {
 		return nil

@@ -1393,9 +1393,6 @@ func (kc *kvCache) dropTail(n int) {
 // absolute position and only a prefix is reusable.
 func (s *Instance) PrefillCached(tokens []int32) ([]float32, error) {
 	defer s.m.enterPager()()
-	if s.batched {
-		return nil, errBatch{}
-	}
 	if len(tokens) == 0 {
 		return nil, errEmptyPrompt{}
 	}
@@ -1423,9 +1420,6 @@ func (s *Instance) PrefillCached(tokens []int32) ([]float32, error) {
 // inside it would leave the tail a chunk that cuts the run.
 func (s *Instance) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 	defer s.m.enterPager()()
-	if s.batched {
-		return nil, errBatch{}
-	}
 	if s.seqPos(0) != 0 {
 		return nil, fmt.Errorf("model: PrefillCachedMixed wants a fresh sequence, this one is at position %d", s.seqPos(0))
 	}
@@ -1539,9 +1533,6 @@ func (s *Instance) prefillCachedKey(key []int32, rows int, run func(n int) ([]fl
 // step loop restores this way and then runs the rest as a row.
 func (s *Instance) RestorePrefix(tokens []int32) (int, error) {
 	defer s.m.enterPager()()
-	if s.batched {
-		return 0, errBatch{}
-	}
 	if len(tokens) == 0 {
 		return 0, errEmptyPrompt{}
 	}

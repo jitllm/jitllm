@@ -143,7 +143,7 @@ func rowsTokens(t *testing.T, m *Model, ids [][]int32, gen int, opts ...tier.Opt
 		noDevice(t, "device", err)
 	}
 	defer g.Close()
-	s := m.NewBatch(len(ids), 256)
+	s := newSessBatch(m, len(ids), 256)
 	defer s.Close()
 	s.SetDevice(g)
 	if s.GPULayers() != m.Cfg.NLayer || !s.HeadOnDevice() {

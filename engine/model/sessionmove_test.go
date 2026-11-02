@@ -12,10 +12,11 @@ import (
 
 // TestSessionMovesBetweenInstances is the design's per-phase lease: a
 // session prefills on one instance and generates on another the scheduler
-// serves for that phase alone, its history moving with it. On the CPU then a
-// card, against one instance prefilling on the CPU and then placed on the
-// card; and from one card's instance to another card's, against one card
-// throughout. Each lease must have been the instance it names.
+// serves for that phase alone, its history moving with it, against one
+// instance prefilling where the first ran and then placed where the second
+// does: on the CPU then a card, and from one card to another (two backends'
+// kernels, so the reference crosses the same two). Each lease must have been
+// the instance it names.
 func TestSessionMovesBetweenInstances(t *testing.T) {
 	path, ok := existingModel(testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"))
 	if !ok {
@@ -67,11 +68,9 @@ func TestSessionMovesBetweenInstances(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if arm.prefill == nil {
-				ref.SetDevice(arm.gen)
-				if ref.GPULayers() != m.Cfg.NLayer {
-					t.Fatalf("the reference placed %d of %d blocks: %q", ref.GPULayers(), m.Cfg.NLayer, arm.gen.Err())
-				}
+			ref.SetDevice(arm.gen)
+			if ref.GPULayers() != m.Cfg.NLayer {
+				t.Fatalf("the reference placed %d of %d blocks: %q", ref.GPULayers(), m.Cfg.NLayer, arm.gen.Err())
 			}
 			want := decode(ref, lg)
 			ref.Close()

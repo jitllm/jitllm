@@ -59,22 +59,23 @@ Left: frequency and presence penalties.
 
 ## 4. Concurrency
 
-**Serving works on the host; the next piece is designed below.**
+**Serving runs sessions on instances, with continuous batching.**
 
 Done:
-- **Ragged positions.** Each batch row has its own position, rotary table, KV
-  offset and attention length, and `Retire(i)` frees a row.
-- **A scheduler.** `model.Scheduler` admits queued sequences into free rows,
-  steps them, and retires them on a stop or a budget.
-- **Per-row prefill.** `PrefillSeq` runs an admitted row's whole prompt in one
-  pass instead of one token per step.
-- **Several sequences on one device tier.** `tier.GPU.Attach` gives each
-  `model.State` its own session and KV history; sessions are serialised per
-  device, not yet parallel.
+- **Model, instance, session.** An instance is the model composed for one
+  placement; a session holds one sequence's history and leases an instance
+  per phase from a `model.Scheduler` (an interface; `model.Pool` is the
+  default). `docs/design/instances-and-sessions.md`.
+- **Continuous batching.** `model.Batcher` admits sequences, steps every
+  leased session's rows together (`StepRuns`), and retires them on a stop or
+  a budget, on the CPU, on a card and across a seam.
+- **Ragged positions.** Each row has its own position, rotary table, KV pages
+  and attention length.
+- **Several sessions on one device tier.** `tier.GPU.Attach` gives each
+  session its own KV history on the card, and their rows step together.
 
-Still refused: a *batched* State with blocks on a device (`errBatchDevice`).
-
-**Next: fold prefill into the decode step.** The idea as put was "prefill the
+**Was next: fold prefill into the decode step** (the Batcher's prompt budget,
+`WithPromptBudget`, folds prompt chunks into the step). The idea as put was "prefill the
 next prompt while the current one finishes inference". It is not about
 concurrency -- prefill and decode would contend for the same cores -- it is
 about the weight pass. A decode step is memory-bound with its arithmetic idle,

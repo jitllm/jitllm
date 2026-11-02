@@ -150,8 +150,8 @@ type Decider struct {
 	batchIn   *Instance
 	batchPool *Pool
 	batchRows int
-	dev    nn.Device
-	devMax int
+	dev       nn.Device
+	devMax    int
 	// jobs is DecideBatch's prompts, kept from batch to batch (batchJob).
 	jobs []*batchJob
 	// batchN is how many of jobs the last batch ran.

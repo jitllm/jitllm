@@ -153,7 +153,7 @@ func auditRun(t *testing.T, m *Model) {
 		t.Fatalf("Prefill: %v", err)
 	}
 	s.Close()
-	bs := m.NewBatch(2, 16)
+	bs := newSessBatch(m, 2, 16)
 	if _, err := bs.ForwardBatch([]int32{1, 2}); err != nil {
 		t.Fatalf("ForwardBatch: %v", err)
 	}

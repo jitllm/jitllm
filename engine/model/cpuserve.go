@@ -17,6 +17,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The CPU is a device like a card: a block placed on it runs what the
@@ -311,6 +312,9 @@ type cpuState struct {
 	// own is each form's own buffers, by form: blocks of one form run one
 	// after another, so they share them.
 	own map[*cpuBlockForm][][]uint32
+	// mapped is the own buffers held off the heap (cpuOwnOffHeap), unmapped
+	// with the instance.
+	mapped [][]byte
 	// args is a call's words for each pool worker.
 	args []cpu.Args
 	// part is the workers the launch running sizes its calls for, and ends
@@ -635,12 +639,16 @@ func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, po
 	// session's logit row leads its other rows in the step, and the range it
 	// reads holds the pages they write.
 	if hl := s.c.KVSource(li); s.kv.layers[hl].p > 0 {
-		lead := s.Session
 		for a := range n {
-			s.Session = s.rowOwn[a]
-			s.cpuWritable(hl, pos[a])
+			oi := s
+			if a < len(s.rowInst) && s.rowInst[a] != nil {
+				oi = s.rowInst[a]
+			}
+			lead := oi.Session
+			oi.Session = s.rowOwn[a]
+			oi.cpuWritable(hl, pos[a])
+			oi.Session = lead
 		}
-		s.Session = lead
 	}
 	why, err := s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, n, false)
 	if why != jit.DeclineServes || err != nil {
@@ -665,26 +673,32 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 		if o.model != s.m {
 			return jit.DeclineSessions, nil
 		}
-		f, why := s.cpuRowsForm(li, l)
+		// A row of another instance runs on that instance's form, composed
+		// for its history; a session leasing s, on s's with its history bound.
+		oi := s
+		if a < len(s.rowInst) && s.rowInst[a] != nil {
+			oi = s.rowInst[a]
+		}
+		f, why := oi.cpuRowsForm(li, l)
 		if why != jit.DeclineServes {
 			return why, nil
 		}
-		lead := s.Session
-		s.Session = o
+		lead := oi.Session
+		oi.Session = o
 		if run {
 			var side []float32
 			if pw != 0 {
 				side = s.bple[a*pw:]
 			}
-			if err := s.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
-				s.Session = lead
+			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
+				oi.Session = lead
 				return jit.DeclineServes, err
 			}
-		} else if why := s.cpuRowsReady(li, f, pos[a:b]); why != jit.DeclineServes {
-			s.Session = lead
+		} else if why := oi.cpuRowsReady(li, f, pos[a:b]); why != jit.DeclineServes {
+			oi.Session = lead
 			return why, nil
 		}
-		s.Session = lead
+		oi.Session = lead
 		a = b
 	}
 	return jit.DeclineServes, nil
@@ -722,25 +736,30 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 	d, nrot := s.c.NEmbd, s.c.RopeW()
 	stride := len(x) / s.c.Streams()
 	b := &s.cpu.bound
-	pg := &s.kv.layers[li]
+	// A step across sessions binds each row's owner for its row: its
+	// history, which a block that attends as well reads, is its own.
+	lead := s.Session
 	for i := range pos {
 		r := i
 		if order != nil {
 			r = order[i]
 		}
+		o, slot := s.rowOwner(r, seq)
+		s.Session = o
+		pg := &s.kv.layers[li]
 		// A block that attends as well writes and reads the row's history.
 		if pg.p > 0 {
 			if why := s.cpuHistory(li, pos[r]); why != jit.DeclineServes {
+				s.Session = lead
 				return why, nil
 			}
 		}
-		o, slot := s.rowOwner(r, seq)
 		if s.cpu.fault == cpuFaultChunk && base > 0 && i == 0 {
 			clear(o.rstate[li][slot*s.dg.stateStride():][:s.dg.stateStride()])
 			clear(o.rconv[li][slot*s.dg.convStateLen():][:s.dg.convStateLen()])
 		}
-		*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1, kv: &s.kv.layers[li],
-			pages: s.kv.layers[li].table(max(s.nseq, 1)), recLi: s.cpuRecLi(li), recOf: o}
+		*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1, kv: pg,
+			pages: pg.table(max(s.nseq, 1)), recLi: s.cpuRecLi(li), recOf: o}
 		if nrot > 0 {
 			b.cs = cs[r*nrot:]
 		}
@@ -748,11 +767,13 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 		s.cpu.recRows = [3]uint32{1, uint32(slot), uint32(slot)}
 		s.cpu.call[0] = 1
 		if err := s.cpuForm(b, cb.f, li); err != nil {
+			s.Session = lead
 			return jit.DeclineServes, err
 		}
 		if pg.p > 0 && pos[r]+1 > pg.written {
 			pg.written = pos[r] + 1
 		}
+		s.Session = lead
 		if base >= 0 {
 			s.rows.snapRow(s, li, slot, base+r)
 			s.recRowPoint(li, slot, p0+r+1)
@@ -923,26 +944,25 @@ func (s *Instance) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline 
 // cpuFaultTable is the page table a step of the layer whose pages pg
 // holds reads, its rows' history ending before end: under cpuFaultPage,
 // once the layer's first page is full, a table whose first page is the
-// neighbouring slot of the layer's own arena -- its positions read another
-// page's (or nothing). Each layer is pointed into its own arena, so a model
+// page holding the history's last position -- its positions read the newest
+// keys, another page's tokens at another rotation. Each layer is pointed into its own arena, so a model
 // whose arenas differ (a sliding layer's beside a global one's) is reached.
 func (s *Instance) cpuFaultTable(pg *kvPages, end int) []uint32 {
 	nseq := max(s.nseq, 1)
 	t := pg.table(nseq)
 	n := len(t)
-	if s.cpu.fault != cpuFaultPage || n <= 2 || pg.p == 0 || end <= pg.p+pg.p/4 || pg.arena == nil {
+	last := (end - 1) / max(pg.p, 1)
+	if s.cpu.fault != cpuFaultPage || n < 2 || pg.p == 0 || end <= pg.p+pg.p/4 || last >= n {
 		return t
 	}
 	if len(s.cpu.fpages) != n {
 		s.cpu.fpages = make([]uint32, n)
 	}
 	copy(s.cpu.fpages, t)
-	slot := int(t[0]) / nseq
-	other := slot + 1
-	if other >= pg.arena.slots {
-		other = slot - 1
-	}
-	s.cpu.fpages[0] = uint32(other * nseq)
+	// Not a neighbouring or free slot: under sessions pooled in one arena
+	// that is often another session's page of the same positions, or a freed
+	// copy of this one's, whose keys move the step too little to see.
+	s.cpu.fpages[0] = t[last]
 	return s.cpu.fpages
 }
 
@@ -1176,6 +1196,12 @@ func (s *Instance) cpuWeights(f *cpuBlockForm, li int, l *layer) jit.Decline {
 	return jit.DeclineServes
 }
 
+// cpuOwnOffHeap is the words past which an own buffer is anonymous memory
+// rather than the heap's: an attention's scores are rows by heads by the
+// context's keys, which the kernel commits as a step's rows reach them, and
+// which on the heap would be the collector's to account and mark (RULE 2f).
+const cpuOwnOffHeap = 1 << 14
+
 // cpuOwn is form f's own buffers for this Instance.
 func (s *Instance) cpuOwn(f *cpuBlockForm) [][]uint32 {
 	if b, ok := s.cpu.own[f]; ok {
@@ -1186,11 +1212,30 @@ func (s *Instance) cpuOwn(f *cpuBlockForm) [][]uint32 {
 	}
 	b := make([][]uint32, len(f.own))
 	for i, n := range f.own {
-		b[i] = make([]uint32, max(n, 1))
+		b[i] = s.ownWords(max(n, 1))
 		copy(b[i], f.consts[i])
 	}
 	s.cpu.own[f] = b
 	return b
+}
+
+// ownWords is n words of an own buffer, zeroed.
+func (s *Instance) ownWords(n int) []uint32 {
+	if n >= cpuOwnOffHeap {
+		if m, mapped, err := kernels.MapOffHeap(4 * n); err == nil && mapped {
+			s.cpu.mapped = append(s.cpu.mapped, m)
+			return unsafe.Slice((*uint32)(unsafe.Pointer(&m[0])), n)
+		}
+	}
+	return make([]uint32, n)
+}
+
+// unmapOwn returns the own buffers held off the heap.
+func (s *Instance) unmapOwn() {
+	for _, m := range s.cpu.mapped {
+		kernels.UnmapOffHeap(m)
+	}
+	s.cpu.mapped, s.cpu.own = nil, nil
 }
 
 // cpuCall runs one kernel of a block: once, or over its calls on the pool.

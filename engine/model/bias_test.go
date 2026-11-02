@@ -150,7 +150,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			b := m.NewBatch(1, steps+1)
+			b := newSessBatch(m, 1, steps+1)
 			defer b.Close()
 			var got []float32
 			for _, id := range ids {

@@ -1,137 +1,10 @@
 package model
 
 import (
-	"fmt"
 	"slices"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit"
 )
-
-// ForwardBatch runs one token for each of the session's nseq sequences and
-// returns their logits, nseq rows of NVocab.
-//
-// Decode is memory-bound: one pass over the weights serves one token. Running
-// N sequences in lockstep spends that pass on N tokens, which is Prefill's
-// trade and the same batched kernels (every matvec a matmul over the batch).
-// Attention is the one op that differs: Prefill's rows are one sequence at
-// successive positions, while a batch's rows are different sequences, each
-// attending into its own cache at its own position.
-func (s *Instance) ForwardBatch(tokens []int32) ([]float32, error) {
-	if !s.batched {
-		return nil, errBatch{}
-	}
-	n := s.nseq
-	if len(tokens) != n {
-		return nil, errBatchWidth{len(tokens), n}
-	}
-	if len(s.batchSeq) < n {
-		s.batchSeq, s.batchPos = make([]int, n), make([]int, n)
-	}
-	seq, pos := s.batchSeq[:n], s.batchPos[:n]
-	for i := range seq {
-		seq[i], pos[i] = i, s.bpos[i]
-	}
-	return s.forwardRows(tokens, seq, pos, n)
-}
-
-// forwardRows is one batch step over rows that need not be one per sequence:
-// row r is tokens[r] for the sequence in slot seq[r] at position pos[r]. A
-// sequence may take several rows, which is a prompt chunk riding in a decode
-// step (Batcher): its positions in the step must be exactly its next ones,
-// bpos[seq].. upward, each once, in any row order. Every row writes its K and
-// V before any row attends, on the host and on the device, so a chunk's row
-// sees the rows of its own sequence at lower positions in the same step, and
-// its own position bounds what it reads.
-//
-// Only the first nlogit rows' logits are wanted, and only they are projected
-// and returned, nlogit rows of NVocab: a prompt chunk needs the logits of its
-// last row at most, and a 128256-wide head over every row of a chunk would
-// cost a chunk's worth of projections and, on a device, their readback.
-//
-// Each sequence's position moves on by the rows it took.
-func (s *Instance) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float32, error) {
-	defer s.m.enterPager()()
-	c := s.c
-	if !s.batched {
-		return nil, errBatch{}
-	}
-	n := len(tokens)
-	if len(seq) != n || len(pos) != n || n == 0 || nlogit < 0 || nlogit > n {
-		return nil, fmt.Errorf("model: a batch step of %d tokens, %d slots, %d positions and %d logit rows",
-			n, len(seq), len(pos), nlogit)
-	}
-	if err := s.retireErr; err != nil {
-		s.retireErr = nil
-		return nil, err
-	}
-	took, err := s.rowsTake(seq, pos)
-	if err != nil {
-		return nil, err
-	}
-	for _, id := range tokens {
-		if int(id) < 0 || int(id) >= c.NVocab {
-			return nil, errToken{id, c.NVocab}
-		}
-	}
-	// A device that cannot hold the batch's history hands blocks to the host
-	// (or a later card) before the step, as Forward does; every row's history
-	// travels with them.
-	// The step's own room -- its scratch and the per-row head it projects
-	// into, a recurrent state a sequence (nn.RowsRoomer) -- counts too, asked
-	// before the step so nothing has run. A device that still has no room
-	// once relocation is done (or is off) would refuse the step: the blocks
-	// come home with their history (SetGPULayers) and the step runs on the
-	// host. A scratch that does not build is the step's error, as the device
-	// refusing it would be: no move gives it room.
-	if err := s.relocateRows(took, n, nlogit); err != nil {
-		return nil, fmt.Errorf("model: the device refused a %d-row step: %w", n, err)
-	}
-	if rr, ok := s.ld.(nn.RowsRoomer); ok && s.devCount() > 0 {
-		room, err := rr.RowsRoom(n, s.nseq, s.stepHead(nlogit))
-		if err != nil {
-			return nil, fmt.Errorf("model: the device refused a %d-row step: %w", n, err)
-		}
-		if !room {
-			if !s.cpuListed() {
-				return nil, fmt.Errorf("model: the device refused a %d-row step: %w", n,
-					errCPUUnlisted("the cards have no room for it"))
-			}
-			s.SetGPULayers(0)
-		}
-	}
-	// A model wholly on one device runs the ragged step there. Otherwise the
-	// device's blocks go as rows with their own slots (nn.RowsDevice): the
-	// ordinary per-sequence call would write every row's history into one
-	// sequence's cache.
-	if _, ok := s.onRowsDevice(); ok && s.devCount() > 0 {
-		return s.forwardRowsDevice(tokens, seq, pos, took, nlogit)
-	}
-	// A split placement runs its host blocks here and hands each run of device
-	// blocks to the device as rows (rowsRun); the projection rides the last run
-	// when the device holding the last block holds it.
-	_, rowsDev := s.ld.(nn.RowsDevice)
-	if s.devCount() > 0 && !rowsDev {
-		return nil, errBatchDevice{}
-	}
-	lg, err := s.rowsHost(tokens, seq, pos, nlogit, s.nseq)
-	if err != nil {
-		return nil, err
-	}
-	s.advanceSeqs(took)
-	// Seal and trim against the slowest row, not s.pos: a page holds every
-	// row's slots, so a page the furthest row has left is one a lagging row may
-	// still be writing. (Positions advance in advanceSeqs, not via advance().)
-	if low := s.lowPos(); low > 0 {
-		s.kv.seal(low)
-		s.kv.trim(low)
-	}
-	// A page the store could not return fails the request; see kvFault.
-	if err := s.kvCheck(); err != nil {
-		return nil, err
-	}
-	return lg, nil
-}
 
 // rowOwner is the session whose history row i of a ragged step reads and
 // writes, and the slot there: the batch's own slot seq[i], or in a step across
@@ -357,30 +230,6 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		s.finishDevLogits(s.blogits[:nlogit*c.NVocab])
 	}
 	return s.blogits[:nlogit*c.NVocab], nil
-}
-
-// BatchLogits is row i of the last ForwardBatch.
-func (s *Instance) BatchLogits(i int) []float32 {
-	nv := s.c.NVocab
-	return s.blogits[i*nv : (i+1)*nv]
-}
-
-type errBatch struct{}
-
-func (errBatch) Error() string {
-	return "model: this session came from NewBatch; use ForwardBatch"
-}
-
-type errBatchWidth struct{ got, want int }
-
-func (e errBatchWidth) Error() string {
-	return "model: ForwardBatch got " + itoa(e.got) + " tokens for " + itoa(e.want) + " sequences"
-}
-
-type errSlot struct{ got, nseq int }
-
-func (e errSlot) Error() string {
-	return fmt.Sprintf("model: sequence slot %d out of range for a batch of %d", e.got, e.nseq)
 }
 
 type errBatchDevice struct{}

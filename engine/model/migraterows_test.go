@@ -207,7 +207,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			// Retires put the rows at different positions: row 1 restarts at
 			// step 3, row 2 at step 6, so at the first move they sit at 8, 5
 			// and 2.
-			drive := func(st *Instance, each func(step int)) [][]float32 {
+			drive := func(st *sessBatch, each func(step int)) [][]float32 {
 				out := make([][]float32, 0, steps)
 				for step := 0; step < steps; step++ {
 					switch step {
@@ -229,7 +229,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 				}
 				return out
 			}
-			host := m.NewBatch(rows, arm.seq)
+			host := newSessBatch(m, rows, arm.seq)
 			// A forced cache format is the configuration under test: one that
 			// was not selected would run the f32 arms again.
 			if m.opt.kvTypeSet && host.KVType() != m.opt.kvType {
@@ -252,7 +252,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			paged := false
 			if arm.squeeze {
 				pg := open()
-				ps := m.NewBatch(rows, arm.seq)
+				ps := newSessBatch(m, rows, arm.seq)
 				if err := ps.SetDeviceLayers(pg, arm.start); err != nil {
 					t.Fatal(err)
 				}
@@ -273,7 +273,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			} else {
 				g = open()
 			}
-			st := m.NewBatch(rows, arm.seq)
+			st := newSessBatch(m, rows, arm.seq)
 			// The arm closes both itself, as part of its leak checks; this is
 			// for a failure before that, which would otherwise hold the card
 			// for every test after it.

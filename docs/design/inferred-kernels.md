@@ -165,7 +165,7 @@ of which must fail against a violation before it is believed:
        RULE 13's poison rule applies to any scratch it allocates.
 
     3. WHICH TIER RAN. A counter per tier, asserted ZERO for tier 2 on every
-       format that has a tier-1 kernel, over Forward, Prefill AND ForwardBatch --
+       format that has a tier-1 kernel, over Forward, Prefill AND StepRuns --
        the same sweep shape as model.TestNothingFallsBackToNN. A tier-2 kernel
        silently serving Q4_K is a 2-5x regression that produces correct tokens
        and would otherwise never be noticed.

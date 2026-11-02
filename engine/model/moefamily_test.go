@@ -570,7 +570,7 @@ func pagesWithTheSameAnswer(t *testing.T, ids []int32, src string) {
 		}
 		out = append(out, slices.Clone(lg))
 		pf.Close()
-		b := m.NewBatch(2, len(ids)+1)
+		b := newSessBatch(m, 2, len(ids)+1)
 		defer b.Close()
 		for p := 0; p+1 < len(ids); p += 2 {
 			rows, err := b.ForwardBatch([]int32{ids[p], ids[p+1]})

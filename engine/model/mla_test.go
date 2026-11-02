@@ -216,7 +216,7 @@ func mlaBatchMatchesDecode(t *testing.T, name string, composed bool) {
 		s.Close()
 	}
 
-	b := m.NewBatch(nseq, steps+1)
+	b := newSessBatch(m, nseq, steps+1)
 	defer b.Close()
 	var sse, sy2 float64
 	for j := 0; j < steps; j++ {
@@ -228,7 +228,7 @@ func mlaBatchMatchesDecode(t *testing.T, name string, composed bool) {
 			t.Fatalf("step %d: %v", j, err)
 		}
 	}
-	cpuServed(t, b, "the batch", steps*m.Cfg.NLayer, composed)
+	cpuServed(t, b.Instance, "the batch", steps*m.Cfg.NLayer, composed)
 	// Check each arm for non-finite values before subtracting, so a
 	// failure names the arm rather than reporting NMSE NaN.
 	for i := 0; i < nseq; i++ {
@@ -308,7 +308,7 @@ func TestAttnScaleReachesEveryPath(t *testing.T) {
 	}
 
 	// ForwardBatch, one row, so its logits are comparable to the same chain.
-	b := m.NewBatch(1, len(ids)+1)
+	b := newSessBatch(m, 1, len(ids)+1)
 	defer b.Close()
 	for _, id := range ids {
 		if _, err := b.ForwardBatch([]int32{id}); err != nil {

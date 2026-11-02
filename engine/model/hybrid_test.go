@@ -407,7 +407,7 @@ func TestHybridBatchMatchesForward(t *testing.T) {
 		}
 		s.Close()
 	}
-	b := m.NewBatch(nseq, steps+1)
+	b := newSessBatch(m, nseq, steps+1)
 	defer b.Close()
 	var out []float32
 	for j := 0; j < steps; j++ {

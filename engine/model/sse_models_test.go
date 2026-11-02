@@ -193,7 +193,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	a.prefill = append([]float32(nil), l...)
 	p.Close()
 
-	b := m.NewBatch(2, 8)
+	b := newSessBatch(m, 2, 8)
 	if _, err := b.ForwardBatch([]int32{ids[0], ids[1]}); err != nil {
 		t.Fatalf("ForwardBatch on tier %v: %v", cpu.HostTier(), err)
 	}

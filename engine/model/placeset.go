@@ -14,6 +14,7 @@ import (
 //
 // Call it between tokens, like every placement call.
 func (s *Instance) PlaceBlocks(lo, hi int) (int, error) {
+	defer s.settleHist()
 	if s.ld == nil {
 		return 0, fmt.Errorf("model: no device attached (SetDevice first)")
 	}

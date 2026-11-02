@@ -80,7 +80,7 @@ func (s *Instance) PrefillStreams() (streamed, kept int) { return s.pfStreamed, 
 // on (auto).
 func (s *Instance) newPrefillStreamer(chunks int, bidir bool) *prefillStreamer {
 	mode := s.m.opt.prefillStream
-	if mode == PrefillStreamOff || s.ld == nil || s.batched || bidir || s.emb != nil || s.rows != nil {
+	if mode == PrefillStreamOff || s.ld == nil || bidir || s.emb != nil || s.rows != nil {
 		return nil
 	}
 	if n := s.devCount(); n == 0 || n == s.hi-s.lo {

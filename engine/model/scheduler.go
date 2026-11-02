@@ -72,6 +72,23 @@ func (pl *Pool) Serve(in *Instance, width int, phases ...Phase) error {
 	if width < 1 {
 		width = MaxStepRows
 	}
+	// Every instance a session leases reads its history in one format: a
+	// later one takes the first's while it holds no history.
+	if first := pl.first(); first != nil {
+		var err error
+		in.With(func(in *Instance) {
+			switch {
+			case in.kvFmt == first.kvFmt:
+			case in.pos == 0:
+				in.setKVFmt(first.kvFmt)
+			default:
+				err = fmt.Errorf("model: the instance's history is %v and the pool's %v", in.kvFmt, first.kvFmt)
+			}
+		})
+		if err != nil {
+			return err
+		}
+	}
 	sv := &served{in: in, width: width}
 	if len(phases) == 0 {
 		for p := range sv.phases {
@@ -236,7 +253,7 @@ func (m *Model) scheduler() Scheduler {
 // holds says s's history fits instance s0: the same blocks, the same KV
 // format, and no more positions than it was composed for.
 func (s0 *Instance) holds(s *Session) bool {
-	return s.model == s0.m && s.limit <= s0.maxSeq && s.kvFormat == s0.kvFmt && s.span == [2]int{s0.lo, s0.hi}
+	return s.model == s0.m && s.limit <= s0.maxSeq && (s.kvFormat == s0.kvFmt || s.pos == 0) && s.span == [2]int{s0.lo, s0.hi}
 }
 
 // NewSession opens a conversation of up to maxSeq positions on the model's
@@ -327,6 +344,7 @@ func (s *Session) Run(ctx context.Context, p Phase, f func(in *Instance) error) 
 		return err
 	}
 	in := s.lease.Instance
+	s.leave(in)
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if err := in.use(s); err != nil {
@@ -343,6 +361,7 @@ func (s *Session) Hold(ctx context.Context, p Phase) (*Instance, error) {
 		return nil, err
 	}
 	in := s.lease.Instance
+	s.leave(in)
 	in.mu.Lock()
 	if err := in.use(s); err != nil {
 		in.mu.Unlock()

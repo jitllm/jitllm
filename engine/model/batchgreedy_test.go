@@ -139,7 +139,7 @@ func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier
 		noDevice(t, "device", err)
 	}
 	defer g.Close()
-	st := m.NewBatch(len(ids), seq)
+	st := newSessBatch(m, len(ids), seq)
 	st.SetDevice(g)
 	if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
 		t.Fatalf("batch: placed %d of %d blocks: %q", st.GPULayers(), m.Cfg.NLayer, g.Err())

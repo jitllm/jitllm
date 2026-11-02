@@ -36,7 +36,7 @@ import (
 //
 // It is the same arithmetic as the per-expert loop (same bytes, same order;
 // only which worker takes which rows moves), so Forward, Prefill and
-// ForwardBatch stay bit-identical on a mixture. The shared activation is
+// StepRuns stay bit-identical on a mixture. The shared activation is
 // quantized once for all k experts.
 //
 // It declines whenever the batch is not uniform: gate and up must share a

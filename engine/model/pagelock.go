@@ -17,7 +17,7 @@ package model
 //
 // It goes on the public boundary only, because the inner paths nest and
 // sync.Mutex is not reentrant: the gated set is exactly Forward, Prefill,
-// PrefillSeq, PrefillCached and ForwardBatch, none of which calls another.
+// PrefillMixed, PrefillCached and StepRuns, none of which calls another.
 func (m *Model) enterPager() func() {
 	if m == nil || m.container == nil || !m.container.CanEvict() {
 		return func() {}

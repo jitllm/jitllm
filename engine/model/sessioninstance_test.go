@@ -144,7 +144,6 @@ func sharedDecodeArms(t *testing.T, m *Model, prompts [][]int32, gen, every int)
 	return out, m.HostStepRows() - before
 }
 
-
 // TestSessionsStepWithinTheBandOnF16KV is TestSessionsShareAnInstance's
 // binary16 history, the default it pins away: two sessions stepped together
 // on one instance, teacher-forced with the tokens each decodes alone, hold

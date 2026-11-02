@@ -76,7 +76,7 @@ func (s *Instance) recPointKey(pos int) (string, int) {
 // under a cache namespace with a store, on a hybrid, outside a speculation
 // step (whose rows may be rolled back).
 func (s *Instance) recPointsOn() bool {
-	if s.rconv == nil || s.kv.ns == "" || s.batched || s.rows != nil {
+	if s.rconv == nil || s.kv.ns == "" || s.rows != nil {
 		return false
 	}
 	_, none := s.kv.store.(NoStore)

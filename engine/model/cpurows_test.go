@@ -209,7 +209,7 @@ func cpuBatch(t *testing.T, m *Model, prompts [][]int32, steps []int32, f cpuFau
 	for _, p := range prompts {
 		most = max(most, len(p))
 	}
-	s := m.NewBatch(len(prompts), most+len(steps)+1)
+	s := newSessBatch(m, len(prompts), most+len(steps)+1)
 	defer s.Close()
 	s.cpu.fault = f
 	rows := make([][][]float32, len(prompts))
@@ -232,7 +232,7 @@ func cpuBatch(t *testing.T, m *Model, prompts [][]int32, steps []int32, f cpuFau
 			rows[i] = append(rows[i], append([]float32(nil), s.BatchLogits(i)...))
 		}
 	}
-	cpuServed(t, s, "a batch", (len(prompts)+len(steps))*m.Cfg.NLayer, composed)
+	cpuServed(t, s.Instance, "a batch", (len(prompts)+len(steps))*m.Cfg.NLayer, composed)
 	var out [][]float32
 	for _, r := range rows {
 		out = append(out, r...)
@@ -375,7 +375,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 			}
 
 			const nseq = 4
-			b := m.NewBatch(nseq, 64)
+			b := newSessBatch(m, nseq, 64)
 			defer b.Close()
 			for i := range nseq {
 				if _, err := b.PrefillSeq(i, ids[i*5:i*5+3+i]); err != nil {
@@ -387,13 +387,6 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 				if _, err := b.ForwardBatch(step); err != nil {
 					t.Fatal(err)
 				}
-			}
-			bseq, bpos := make([]int, nseq), make([]int, nseq)
-			for i := range nseq {
-				bseq[i], bpos[i] = i, b.SeqPos(i)
-			}
-			if w := countAllocs(func() { blocks(b, bseq, bpos) }); w.engine != 0 || w.unattributed > 0 {
-				t.Errorf("a warm composed step of %d sequences through every block allocates: %d engine, %d unattributed%s", nseq, w.engine, w.unattributed, w.where)
 			}
 			w = countAllocs(func() {
 				if _, err := b.ForwardBatch(step); err != nil {

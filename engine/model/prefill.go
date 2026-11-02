@@ -31,9 +31,6 @@ func (s *Instance) chunkWidth() int {
 // attention stays per token because token i attends only up to p0+i.
 func (s *Instance) Prefill(tokens []int32) ([]float32, error) {
 	defer s.m.enterPager()()
-	if s.batched {
-		return nil, errBatch{}
-	}
 	if err := s.retireErr; err != nil {
 		s.retireErr = nil
 		return nil, err
@@ -47,9 +44,6 @@ func (s *Instance) Prefill(tokens []int32) ([]float32, error) {
 // path's per-row sources do).
 func (s *Instance) prefillBidir(tokens []int32) ([]float32, error) {
 	defer s.m.enterPager()()
-	if s.batched {
-		return nil, errBatch{}
-	}
 	if err := s.retireErr; err != nil {
 		s.retireErr = nil
 		return nil, err
@@ -68,43 +62,6 @@ func (s *Instance) prefillBidir(tokens []int32) ([]float32, error) {
 		s.bidir = s.bidir[:0]
 	}()
 	return s.prefillInto(0, tokens)
-}
-
-// PrefillSeq runs a prompt into ROW slot of a batch session, leaving the other
-// rows untouched.
-//
-// It is what admission needs: without it a new sequence's prompt would step the
-// whole batch once per token.
-//
-// The row must be at position 0, i.e. a retired slot; Retire is the only thing
-// that resets a row's positions.
-func (s *Instance) PrefillSeq(slot int, tokens []int32) ([]float32, error) {
-	defer s.m.enterPager()()
-	if !s.batched {
-		return nil, errBatch{}
-	}
-	if slot < 0 || slot >= s.nseq {
-		return nil, errSlot{slot, s.nseq}
-	}
-	// A device that pages each row's history takes this prompt's pages first,
-	// and moves blocks off when they do not fit -- before the path is chosen,
-	// since a block that left makes it a split placement.
-	if sd, ok := s.ld.(nn.SeqKVDevice); ok && s.devCount() > 0 && sd.PerSequenceKV() {
-		end := s.bpos[slot] + len(tokens)
-		s.relocateUntil(end, func() bool { return sd.ReserveKVSeqs([]int{slot * s.maxSeq}, []int{end}) })
-	}
-	// A model wholly on one device that runs ragged rows prefills there, the
-	// prompt laid out as rows of this slot. A split placement prefills on the
-	// host and hands each device run over as rows at this slot's positions.
-	if s.devCount() > 0 {
-		if _, ok := s.onRowsDevice(); ok {
-			return s.prefillSeqDevice(slot, tokens)
-		}
-		if _, ok := s.ld.(nn.RowsDevice); !ok {
-			return nil, errBatchDevice{}
-		}
-	}
-	return s.prefillInto(slot, tokens)
 }
 
 // Span is one run of a mixed prompt: token ids, a picture, or precomputed
@@ -183,11 +140,11 @@ func named(spans []Span) []Span {
 // embedding runs. It is the prefill half of the embedding seam; see
 // ForwardEmbd.
 func (s *Instance) PrefillMixed(spans ...Span) ([]float32, error) {
-	return s.PrefillSeqMixed(0, spans...)
+	return s.prefillMixedAt(0, spans...)
 }
 
-// PrefillSeqMixed is PrefillMixed into one batch slot.
-func (s *Instance) PrefillSeqMixed(slot int, spans ...Span) ([]float32, error) {
+// prefillMixedAt is PrefillMixed into one sequence slot.
+func (s *Instance) prefillMixedAt(slot int, spans ...Span) ([]float32, error) {
 	defer s.m.enterPager()()
 	spans, err := s.pictureRows(named(spans), 0)
 	if err != nil {
@@ -228,7 +185,7 @@ func (s *Instance) PrefillSeqMixed(slot int, spans ...Span) ([]float32, error) {
 	s.markRope(slot, p0+total, next-(p0+total))
 	// Every row's id for the page keys: a named picture's rows are named as
 	// tokens are (spanKey), so the pages from here on can be sealed and found.
-	if slot == 0 && !s.batched && s.kv.ns != "" {
+	if slot == 0 && s.kv.ns != "" {
 		s.kv.note(p0, s.spanKey(p0, spans, rp)...)
 	}
 	defer s.tokensOf(spans)()
@@ -248,9 +205,6 @@ func (s *Instance) bidirRuns(slot int, spans []Span) error {
 		for _, sp := range spans {
 			n += sp.n(c.NEmbd)
 		}
-		if s.batched {
-			return fmt.Errorf("model: PrefillMixed: a bidirectional span in a batch slot is not implemented")
-		}
 		if n > nn.MaxDevicePrefillChunk {
 			return fmt.Errorf("model: PrefillMixed: a bidirectional prompt of %d rows is longer "+
 				"than one %d-row chunk", n, nn.MaxDevicePrefillChunk)
@@ -261,9 +215,6 @@ func (s *Instance) bidirRuns(slot int, spans []Span) error {
 	for _, sp := range spans {
 		n := sp.n(c.NEmbd)
 		if sp.Bidir && n > 0 {
-			if s.batched {
-				return fmt.Errorf("model: PrefillMixed: a bidirectional span in a batch slot is not implemented")
-			}
 			if n > nn.MaxDevicePrefillChunk {
 				return fmt.Errorf("model: PrefillMixed: a bidirectional span of %d rows is longer "+
 					"than one %d-row chunk", n, nn.MaxDevicePrefillChunk)
@@ -440,7 +391,7 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 	// One token is decode; the batched path would allocate megabytes to beat
 	// it by nothing. Single-sequence only, because Forward writes row 0; a
 	// batch slot takes the chunked path at any length.
-	if !s.batched && (total == 1 || total <= s.forwardRowsFor() && src == nil) && s.emb == nil && len(s.deep) == 0 {
+	if (total == 1 || total <= s.forwardRowsFor() && src == nil) && s.emb == nil && len(s.deep) == 0 {
 		var lg []float32
 		var err error
 		s.forwardPrompts++
@@ -757,20 +708,6 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 				s.q4.setCall(s, slot, cids)
 				if err := s.ngramToDevice(li, hi, n, nil, s.q4.callOwner, s.q4.callTok); err != nil {
 					return nil, err
-				}
-				if s.batched {
-					pos, sl := make([]int, n), make([]int, n)
-					for j := range pos {
-						pos[j] = p0 + j
-						sl[j] = slot*s.maxSeq + pos[j]
-					}
-					if err := s.rowsRun(li, hi, pos, sl, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()], s.bswaTable(n, c.NRotSWA),
-						false, nil, 0); err != nil {
-						return nil, err
-					}
-					s.addDeep(hi-1, base, n)
-					li = hi - 1
-					continue
 				}
 				var fh *nn.Head
 				// A tap reads every chunk's residual, which a folded head keeps

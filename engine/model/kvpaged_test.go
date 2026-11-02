@@ -599,7 +599,7 @@ func TestBatchSealsAgainstTheSlowestRow(t *testing.T) {
 
 	const maxSeq, page, nseq = 64, 8, 2
 	defer m.setKVPageForTest(page)()
-	s := m.NewBatch(nseq, maxSeq)
+	s := newSessBatch(m, nseq, maxSeq)
 	defer s.Close()
 	s.SetKVStore(NewMemStore())
 
@@ -1002,7 +1002,7 @@ func TestBatchRefusesACacheNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	b := m.NewBatch(2, 32)
+	b := newSessBatch(m, 2, 32)
 	defer b.Close()
 	if err := b.SetCacheKey("tinyllama/q3_K_M/f32"); err == nil {
 		t.Fatal("a 2-row batch accepted a cache namespace: it would fill a store with " +

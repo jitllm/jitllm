@@ -304,16 +304,4 @@ func TestShareKVRefusesByName(t *testing.T) {
 			}
 		})
 	}
-	t.Run("batch", func(t *testing.T) {
-		m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer m.Close()
-		b := m.NewBatch(2, 64)
-		defer b.Close()
-		if err := b.ShareKV(st); err == nil || !strings.Contains(err.Error(), "batch") {
-			t.Fatalf("ShareKV on a batch: %v", err)
-		}
-	})
 }

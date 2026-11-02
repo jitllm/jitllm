@@ -49,12 +49,12 @@ func Step(states []*Instance, tokens []int32) ([][]float32, error) {
 // the same instance, and StepRuns sets the run's instance to it. A run of an
 // instance's own session names the instance (instance) instead.
 type Run struct {
-	Instance   *Instance
-	Session *Session
-	Tokens  []int32
-	Spans   []Span
-	Logits  bool
-	Encode  *Encode
+	Instance *Instance
+	Session  *Session
+	Tokens   []int32
+	Spans    []Span
+	Logits   bool
+	Encode   *Encode
 }
 
 // Encode is a picture encoded in the steps of StepRuns: its instance's vision
@@ -191,11 +191,16 @@ func stepRuns(runs []Run, lone bool) ([][]float32, error) {
 		return nil, err
 	}
 	if in != nil {
+		for i := range runs {
+			runs[i].Session.leave(in)
+		}
 		in.mu.Lock()
 		defer in.mu.Unlock()
 		for i := range runs {
 			if err := in.use(runs[i].Session); err != nil {
-				return nil, err
+				if err = in.roomFor(err); err != nil {
+					return nil, err
+				}
 			}
 			runs[i].Instance = in
 		}
@@ -238,6 +243,12 @@ func leasedOn(runs []Run) (*Instance, error) {
 // own session's history there. A session asks only when its run passes what
 // it holds, and then a page of positions ahead.
 func reserveRuns(runs []Run) error {
+	// A room report brings back the blocks relocation took off, every
+	// session's history with them, as far as each fits.
+	if in := runs[0].Instance; in.ld != nil && in.moved != nil && in.roomGen() != in.roomSeen {
+		in.relocateUntil(in.pos, func() bool { return in.settleHist() == nil })
+		in.settleHist()
+	}
 	for i := range runs {
 		r := &runs[i]
 		se := r.sess()
@@ -254,13 +265,22 @@ func reserveRuns(runs []Run) error {
 		}
 		room := min((need+63)&^63, se.limit)
 		if !se.ld.ReserveKV(room) {
-			if room = need; !se.ld.ReserveKV(room) {
+			if room = need; !se.ld.ReserveKV(room) && !r.Instance.reserveMoving(se, need) {
 				return fmt.Errorf("model: the device has no room for run %d's %d positions of history", i, need)
 			}
 		}
 		se.kvRoom = room
 	}
 	return nil
+}
+
+// reserveMoving reserves need positions of se's history on s's device,
+// moving blocks to the CPU, every session's history of each with it, until
+// they fit (relocateUntil); false where they do not.
+func (s *Instance) reserveMoving(se *Session, need int) bool {
+	fits := func() bool { return s.settleHist() == nil && se.ld.ReserveKV(need) }
+	s.relocateUntil(need, fits)
+	return fits()
 }
 
 // sess is the session whose history the run reads and writes.
@@ -419,8 +439,6 @@ func (s *Instance) StepRefusal() error {
 	switch {
 	case s.ldStep == nil:
 		return errStepNoDevice
-	case s.batched:
-		return errStepBatched
 	case s.emb != nil:
 		return errStepEmbedder
 	}
@@ -430,7 +448,6 @@ func (s *Instance) StepRefusal() error {
 // The conditions StepRefusal names.
 var (
 	errStepNoDevice = errors.New("model: the instance's device does not step rows of different sessions (no nn.SessionStepper)")
-	errStepBatched  = errors.New("model: a batched instance steps its own rows, not other sessions'")
 	errStepEmbedder = errors.New("model: an embedder runs no decode step")
 	errStepNoRows   = errors.New("model: the instance's device runs no ragged rows (no nn.RowsDevice)")
 	errStepNoHead   = errors.New("model: the head is not on a device")
@@ -466,8 +483,6 @@ func (s *Instance) HostSteppable() bool { return s.HostRefusal() == nil }
 func (s *Instance) HostRefusal() error {
 	c := s.c
 	switch {
-	case s.batched:
-		return errStepBatched
 	case s.emb != nil:
 		return errStepEmbedder
 	case (s.devCount() > 0 || s.head != nil) && s.ldStep == nil:
@@ -517,14 +532,17 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	c := s0.c
 	defer s0.m.enterPager()()
 	toks, pos, own, win, seq := s0.stepTok[:0], s0.stepPos[:0], s0.rowOwn[:0], s0.rowWin[:0], s0.rowSeq[:0]
+	ins := s0.rowInst[:0]
 	// The lists keep their capacity; the sessions are let go of, so a step
 	// pins no instance past it.
 	defer func() {
 		clear(own)
+		clear(ins)
 		s0.stepTok, s0.stepPos, s0.rowOwn, s0.rowWin, s0.rowSeq = toks[:0], pos[:0], own[:0], win[:0], seq[:0]
+		s0.rowInst = ins[:0]
 	}()
 	addRow := func(r *Run, j int) error {
-		se, tok := r.sess(), r.Tokens[j]
+		se, tok, in := r.sess(), r.Tokens[j], r.Instance
 		p := se.bpos[0] + j
 		if stepPos != nil {
 			p = stepPos(se.bpos[0], j, len(r.Tokens))
@@ -536,9 +554,9 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 			return r.full()
 		}
 		if stepShare {
-			se = runs[0].sess()
+			se, in = runs[0].sess(), runs[0].Instance
 		}
-		toks, pos, own = append(toks, tok), append(pos, p), append(own, se)
+		toks, pos, own, ins = append(toks, tok), append(pos, p), append(own, se), append(ins, in)
 		win, seq = append(win, j == len(r.Tokens)-1), append(seq, 0)
 		return nil
 	}
@@ -562,7 +580,7 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 			}
 		}
 	}
-	s0.rowOwn, s0.rowWin = own, win
+	s0.rowOwn, s0.rowWin, s0.rowInst = own, win, ins
 	// The step's scratch is the model's, lent to whichever instance leads.
 	s0.borrowStep()
 	defer s0.returnStep()

@@ -124,7 +124,7 @@ func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 			t.Errorf("pos %d: ForwardGreedy on the device %d, the host's biased argmax %d", p, got, want[p])
 		}
 	}
-	b := m.NewBatch(2, len(g.IDs)+1)
+	b := newSessBatch(m, 2, len(g.IDs)+1)
 	defer b.Close()
 	b.SetDevice(gpu)
 	if _, err := b.ForwardBatchGreedy([]int32{g.IDs[0], g.IDs[1]}); err == nil {

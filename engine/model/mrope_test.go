@@ -247,7 +247,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 
 	// A batch slot behind another sequence: the prompt into slot 1 and the
 	// continuation through ForwardBatch, beside a text sequence in slot 0.
-	b := m.NewBatch(2, n)
+	b := newSessBatch(m, 2, n)
 	if _, err := b.PrefillSeq(0, g.Pre); err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 
 			// A batch slot on the device: the prompt's chunk as rows of the
 			// slot, the continuation as ragged rows beside a text sequence.
-			b := m.NewBatch(2, n)
+			b := newSessBatch(m, 2, n)
 			defer b.Close()
 			b.SetDeviceLayers(gpu, -1)
 			if got := b.GPULayers(); got != m.Cfg.NLayer {

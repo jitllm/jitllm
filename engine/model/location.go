@@ -22,7 +22,7 @@ func (s *Instance) WhereIs(li int) string {
 	if !s.devAt(li) {
 		return nn.CPU
 	}
-	if nd, ok := s.ld.(nn.NamedDevice); ok {
+	if nd, ok := s.named(); ok {
 		if at, ok := nd.DeviceOf(li); ok {
 			return at
 		}

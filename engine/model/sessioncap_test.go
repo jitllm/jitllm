@@ -99,7 +99,10 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 	}
 
 	// B's tokens, from the host alone; a device run is held to them up to a
-	// tie (batchTie), since the two tiers round differently.
+	// tie (batchTie), since the two tiers round differently. bPeak is the
+	// most B's sessions held on the card at once, read after each step: a
+	// session's history goes with it when its sequence retires.
+	var bPeak uint64
 	bIDs := func(t *testing.T, d *tier.GPU) ([][]int32, *Instance) {
 		sc := newTestBatcher(m, rows, seq)
 		t.Cleanup(sc.Close)
@@ -121,6 +124,13 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			var h uint64
+			for _, q := range seqs {
+				if q.sess != nil && q.sess.ld != nil {
+					h += q.sess.ld.(nn.Session).HeldBytes()
+				}
+			}
+			bPeak = max(bPeak, h)
 			done += len(d)
 		}
 		out := make([][]int32, len(seqs))
@@ -157,6 +167,7 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 			got = append(got, step())
 		}
 		hA, placed := held(a), g.Placed()
+		bPeak = 0
 		bOut, b := bIDs(t, g)
 		if h := held(a); h != hA {
 			t.Errorf("B's rows moved A's history on the card: %d -> %d bytes", hA, h)
@@ -186,7 +197,7 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 			t.Fatalf("with room for both, B placed %d of %d blocks", b.devCount(), m.Cfg.NLayer)
 		}
 		composedRan(t, parts, nil, g)
-		bFull = held(b)
+		bFull = bPeak
 		t.Logf("A alone charged %d bytes; B holds %d for %d rows of %d", usedA, bFull, rows, seq)
 	})
 	if bFull == 0 {

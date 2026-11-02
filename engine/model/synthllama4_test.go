@@ -136,7 +136,7 @@ func TestSynthLlama4MatchesTransformers(t *testing.T) {
 	// Two sequences in lockstep through the batched graph, the second a
 	// position behind so the two rows sit on different sides of a chunk
 	// boundary and a temperature step at every step.
-	b := m.NewBatch(2, len(g.IDs)+1)
+	b := newSessBatch(m, 2, len(g.IDs)+1)
 	defer b.Close()
 	if _, err := b.PrefillSeq(0, g.IDs[:2]); err != nil {
 		t.Fatal(err)

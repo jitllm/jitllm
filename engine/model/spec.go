@@ -326,7 +326,7 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 		// in as they arrive, which Instance.rewind does not take back. Not
 		// built, so refused by name, whoever drafts.
 		return nil, fmt.Errorf("model: speculation on %s is not built", c.Arch)
-	case s.batched || s.nseq != 1:
+	case s.nseq != 1:
 		return nil, fmt.Errorf("model: speculation drives a single sequence, not a batch")
 	case s.pos != 0:
 		return nil, fmt.Errorf("model: speculation starts on an empty session")

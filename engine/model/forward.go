@@ -413,14 +413,15 @@ type Instance struct {
 	roomSeen     uint64
 	devReclaimed int
 
-	// nseq is how many independent sequences ForwardBatch steps at once. At 1
-	// every offset below collapses to zero, so Forward and Prefill are the same
-	// code they were. The KV cache is strided by sequence first: sequence j's
-	// position p is k[li][(j*maxSeq+p)*kvDim].
+	// nseq is the sequences an instance's cache is strided by, one: a
+	// session holds one sequence, and sessions step together (StepRuns)
+	// rather than as slots of one cache.
 	nseq int
-	// batched is whether this instance came from NewBatch, which nseq cannot say
-	// at a width of one. It is what decides which API a session accepts.
-	batched bool
+	// hist is the sessions whose history lives under this instance's
+	// placement: each that ran on it and has not left (use, forget). A move
+	// of the instance's blocks moves theirs (settleHist).
+	hist     []*Session
+	settling bool
 	// kvl is where this session's KV cache puts things; see kvLayout. It is the
 	// global layers' layout; kvlAt is any layer's.
 	kvl kvLayout
@@ -477,7 +478,7 @@ type Instance struct {
 	// contract (one activation per expert) and its own way to decline, so one
 	// counter for both would read "batched" while half the FFN looped.
 	moeDownBatched, moeDownLooped atomic.Int64
-	blogits                       []float32 // nseq * NVocab, ForwardBatch's output
+	blogits                       []float32 // a step's rows' logits, NVocab each
 	allRows                       []int     // 0..nseq-1, the rows Reset zeroes on a device
 	// placing is true while SetDeviceLayers offers blocks, when WithPlacement's
 	// map applies; placeErr is what it could not do.
@@ -525,11 +526,11 @@ type Instance struct {
 	// session, whether the row is its session's furthest (the one that
 	// faults its attention window in), and each row's slot, always 0.
 	rowOwn []*Session
-	rowWin []bool
-	rowSeq []int
-	// batchSeq and batchPos are a ForwardBatch step's rows' slots and
-	// positions.
-	batchSeq, batchPos []int
+	// rowInst is each row's run's instance: a row of another instance runs
+	// on that instance's form, composed for its history (cpuOwnerRuns).
+	rowInst []*Instance
+	rowWin  []bool
+	rowSeq  []int
 	// stepb is the model's step scratch holder while this instance leads a
 	// host step (borrowStep).
 	stepb *stepBuf
@@ -635,16 +636,6 @@ type Instance struct {
 
 // NewInstance allocates a session able to hold maxSeq positions.
 func (m *Model) NewInstance(maxSeq int) *Instance { return m.newInstance(1, maxSeq) }
-
-// NewBatch allocates nseq independent sessions that step together, one token
-// each per ForwardBatch. They share one pass over the weights, which is the
-// whole point: decode is memory-bound, so the second sequence is nearly free.
-// Each row carries its own position (bpos).
-func (m *Model) NewBatch(nseq, maxSeq int) *Instance {
-	s := m.newInstance(max(nseq, 1), maxSeq)
-	s.batched = true
-	return s
-}
 
 func (m *Model) newInstance(nseq, maxSeq int) *Instance {
 	return m.newInstanceRange(nseq, maxSeq, 0, m.Cfg.NLayer)
@@ -960,6 +951,7 @@ func (s *Instance) Close() error {
 	}
 	s.m.kvPool.put(s.kv)
 	s.unmapNC()
+	s.unmapOwn()
 	// The blocks this instance ran on the host no longer need their pages for
 	// it. Close may be called twice; cpuHeld makes the second a no-op.
 	if s.cpuHeld {
@@ -1051,6 +1043,7 @@ func ropeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
 // named a device not attached, a strict one that could not be met (nothing is
 // placed then), and a device this instance cannot move onto at all.
 func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
+	defer s.settleHist()
 	// MigrateKV moves float32: a binary16 or q8_0 history travels converted
 	// (Instance.migrateKVAs).
 	// An empty binary16 cache steps down to the f32 the device holds; one
@@ -1075,7 +1068,7 @@ func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 	// history that later moves between devices through the host comes back
 	// as it went (TestLayerRelocatesToAnotherDevice,
 	// TestMLAStepsTheKVDownAtTheRightWidths).
-	if d != nil && s.pos == 0 && s.kvFmt == cpu.KVF16 {
+	if d != nil && s.pos == 0 && s.kvFmt == cpu.KVF16 && !s.histWritten() {
 		s.stepDownKVToF32()
 	}
 	// A borrowed JIT is the text instance's, attached to its device by it.
@@ -1102,7 +1095,7 @@ func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 	if d == nil {
 		// Detaching gives the host budget back (an integrated GPU's share).
 		s.setLD(nil)
-		s.ldCand = nil
+		s.ldCand, s.Session.tier = nil, nil
 		s.applyMemBudget()
 		return nil
 	}
@@ -1198,6 +1191,7 @@ func (s *Instance) SetDeviceLayers(d nn.Device, max int) error {
 	// budget by what it already holds (another session's blocks, the scratch
 	// reserved above); followHost takes off what the offers add.
 	s.setLD(ld)
+	s.Session.tier, s.Session.kvRoom = s.ldCand, 0
 	s.applyMemBudget()
 	// The whole offer sequence is one decision: bracketed, so two instances
 	// attaching at once do not interleave their offers against one budget.
@@ -3271,6 +3265,7 @@ func (s *Instance) SetGPULayers(n int) int {
 	if s.ld == nil {
 		return 0
 	}
+	defer s.settleHist()
 	// What an integrated GPU holds moved with the seam.
 	defer s.followHost()
 	total := s.hi
@@ -3443,12 +3438,21 @@ func (s *Session) PrefillRows() int { return s.promptRows }
 // stepDownKVToF32 narrows the cache from packed halves to f32 and rebuilds it.
 // It is a named method so a gate can reach it without a real card. The caller
 // owns the pos == 0 precondition: the pages are rebuilt, not reinterpreted.
-func (s *Instance) stepDownKVToF32() {
-	s.kvFmt, s.kvl.fmt, s.kvl.jit = cpu.KVF32, cpu.KVF32, nil
+func (s *Instance) stepDownKVToF32() { s.setKVFmt(cpu.KVF32) }
+
+// setKVFmt rebuilds an empty cache in format f, and the CPU's forms for it:
+// what a served instance takes from the pool's first (Pool.Serve), so a
+// session's history reads the same on every instance it leases.
+func (s *Instance) setKVFmt(f cpu.KVFmt) {
+	s.kvFmt, s.kvl.fmt, s.kvl.jit = f, f, nil
 	// attnWidths, not Cfg.HeadDim: on MLA the key and value widths differ
 	// from HeadDim (TestMLAStepsTheKVDownAtTheRightWidths).
 	hdK, hdV := s.c.attnWidths()
-	s.jit.AddAttnKV(hdK, hdV, s.kvl.Stride(), cpu.KVF32)
+	s.jit.AddAttnKV(hdK, hdV, s.kvl.Stride(), f)
+	if f == cpu.KVQ8 {
+		s.kvl.jit = s.jit
+		s.jit.ReserveKVQuant(max(s.c.HeadDim, s.c.HeadDimSWA))
+	}
 	s.provisionAttn()
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.
@@ -3462,6 +3466,7 @@ func (s *Instance) stepDownKVToF32() {
 		s.cpu.formErr = err
 	}
 	s.cpuPlace()
+	s.Session.kvFormat = f
 }
 
 // seqPos and advance are the two places that know a position may be per row.
@@ -3474,8 +3479,7 @@ func (s *Instance) advance(slot, n int) {
 	}
 	// Sealing is a consequence of the position moving, so it lives here. It
 	// runs against the slowest row, not the furthest: a page holds every
-	// row's slots, and a row admitted by PrefillSeq may still be writing a
-	// page the others have left.
+	// row's slots.
 	low := s.lowPos()
 	s.kv.seal(low)
 	// The recurrent half: it can only be captured AT a boundary, so it goes
@@ -3511,27 +3515,6 @@ func (s *Instance) lowPos() int {
 		}
 	}
 	return low
-}
-
-// SeqPos is row i's position. For a single-sequence session it is Pos().
-func (s *Instance) SeqPos(i int) int { return s.bpos[i] }
-
-// GiveBackHistory gives the pages a reset instance still holds on its devices
-// back to their pools: Reset only rewinds the position, and its next prompt
-// releases them as it starts writing. An idle instance -- a server's pooled one
-// -- holding a finished request's history keeps that room from every other
-// session: a scheduler admitting by the devices' free room (tier.GPU.KVRoom)
-// then admitted one row at a time once a round of requests had ended
-// (Qwen3-30B-A3B over two V100s at 64 requests: 105 rows a step in the first
-// round, 5 in the next). An instance that has run since its Reset keeps its
-// history.
-func (s *Instance) GiveBackHistory() {
-	if s.pos != 0 || s.nseq != 1 || s.ld == nil {
-		return
-	}
-	if t, ok := s.ld.(nn.KVTrimmer); ok {
-		t.TrimKV(0)
-	}
 }
 
 // Reset clears the session without reallocating.
@@ -3572,41 +3555,6 @@ func (s *Instance) Reset() {
 	s.kvErr.Store(nil)
 	s.kvRoom = 0
 	s.kvSkipped = 0
-}
-
-// Retire frees row i for a new sequence.
-//
-// It zeroes a position and copies no KV: attention reads only up to a row's
-// own position, so stale keys past it are never addressed. A recurrent block
-// has no position to rewind, so its running summary for the row is zeroed, on
-// the host and on any device holding a linear block; a failure there is kept
-// and returned by the next batch step.
-func (s *Instance) Retire(i int) {
-	if i < 0 || i >= s.nseq {
-		return
-	}
-	if s.recurrent() {
-		s.ResetRecurrent(i)
-		if s.devLinear() {
-			s.retireRow[0] = i
-			if rr, ok := s.ld.(nn.RecRowsDevice); !ok || !rr.ResetRecRows(s.retireRow[:]) {
-				s.retireErr = fmt.Errorf("model: row %d's recurrent state on the device could not be reset", i)
-			}
-		}
-	}
-	s.bpos[i] = 0
-	s.rewindRope(i, -1)
-	s.pos = 0
-	for _, p := range s.bpos {
-		if p > s.pos {
-			s.pos = p
-		}
-	}
-	// The next occupant writes this row's slots from page 0 up, so every page
-	// is mutable again: lower the seal mark with the slowest row (seal treats a
-	// fall as a rollback). Left high, trim would evict pages the new row has
-	// rewritten and a fault would bring back the store's older copy.
-	s.kv.seal(s.lowPos())
 }
 
 // ForwardEmbd is Forward with the token's embedding supplied rather than looked
@@ -3825,9 +3773,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	}
 
 	m, c := s.m, s.c
-	if s.batched {
-		return nil, errBatch{}
-	}
 	if s.pos >= s.maxSeq {
 		return nil, errFull{s.maxSeq, s.reqSeq}
 	}

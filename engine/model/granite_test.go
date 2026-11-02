@@ -119,7 +119,7 @@ func TestGraniteMatchesLlamaCppValues(t *testing.T) {
 			// And the batched path, which adds its own residuals and makes its
 			// own logits; nothing else that opens a Granite reaches ForwardBatch.
 			m.Trace(nil)
-			b := m.NewBatch(1, 8)
+			b := newSessBatch(m, 1, 8)
 			defer b.Close()
 			for _, id := range ids {
 				if _, err := b.ForwardBatch([]int32{id}); err != nil {

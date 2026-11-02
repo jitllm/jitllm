@@ -78,7 +78,7 @@ func TestABBatchThroughput(t *testing.T) {
 	}
 
 	for _, nseq := range widths {
-		b := m.NewBatch(nseq, depth+iters+1)
+		b := newSessBatch(m, nseq, depth+iters+1)
 		row := make([]int32, nseq)
 		for i := range row {
 			row[i] = tok
@@ -90,7 +90,9 @@ func TestABBatchThroughput(t *testing.T) {
 			}
 		}
 		bFn := func(n int) {
-			b.pos = depth
+			for _, se := range b.sess {
+				se.pos, se.bpos[0] = depth, depth
+			}
 			for i := 0; i < n; i++ {
 				if _, err := b.ForwardBatch(row); err != nil {
 					t.Error(err)
@@ -182,7 +184,7 @@ func TestBatchProfile(t *testing.T) {
 		}
 	})
 
-	b := m.NewBatch(nseq, depth+iters+1)
+	b := newSessBatch(m, nseq, depth+iters+1)
 	defer b.Close()
 	row := make([]int32, nseq)
 	for i := range row {
@@ -194,7 +196,9 @@ func TestBatchProfile(t *testing.T) {
 		}
 	}
 	show("batch"+itoa(nseq), nseq, func() {
-		b.pos = depth
+		for _, se := range b.sess {
+			se.pos, se.bpos[0] = depth, depth
+		}
 		for i := 0; i < iters; i++ {
 			if _, err := b.ForwardBatch(row); err != nil {
 				t.Fatal(err)

@@ -82,6 +82,7 @@ type PendingMove struct {
 // group's readers attend to its source's history wherever it is; a group the
 // move to or from the CPU splits ends where its source is (fixKVGroups).
 func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
+	defer s.settleHist()
 	if lo < s.lo || hi > s.hi || lo >= hi {
 		return BlockMove{}, fmt.Errorf("model: blocks %d..%d are outside this instance's %d..%d", lo, hi-1, s.lo, s.hi-1)
 	}
@@ -91,6 +92,9 @@ func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 	}
 	if onCPU(to) {
 		return s.moveToCPU(lo, hi)
+	}
+	if err := s.vacate(lo, hi); err != nil {
+		return BlockMove{}, err
 	}
 	var cpu []int
 	for li := lo; li < hi; li++ {
@@ -192,6 +196,9 @@ func (s *Instance) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMov
 			return nil, err
 		}
 	}
+	if err := s.vacate(lo, hi); err != nil {
+		return nil, err
+	}
 	p := &PendingMove{s: s, lo: lo, hi: hi, to: to, done: make(chan struct{})}
 	for li := lo; li < hi; li++ {
 		if !s.devAt(li) {
@@ -282,6 +289,7 @@ func (p *PendingMove) Cancel() {
 // still running.
 func (p *PendingMove) Commit() (mv BlockMove, err error) {
 	s := p.s
+	defer s.settleHist()
 	if p.closed {
 		return mv, fmt.Errorf("model: the move was already committed or cancelled")
 	}
@@ -432,10 +440,22 @@ func (s *Instance) DeviceOf(li int) (string, bool) {
 	if !s.devAt(li) {
 		return "", false
 	}
-	if nd, ok := s.ld.(nn.NamedDevice); ok {
+	if nd, ok := s.named(); ok {
 		return nd.DeviceOf(li)
 	}
 	return "", true
+}
+
+// named is the device that names where the instance's blocks are: the bound
+// session's view, or the device the instance is placed on where that session
+// has none (one that never ran there); the route is the tier's, the same
+// through every view.
+func (s *Instance) named() (nn.NamedDevice, bool) {
+	if nd, ok := s.ld.(nn.NamedDevice); ok {
+		return nd, true
+	}
+	nd, ok := s.ldCand.(nn.NamedDevice)
+	return nd, ok
 }
 
 // blockHistoryAt is historyAt for block li alone.

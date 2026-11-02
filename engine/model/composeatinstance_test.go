@@ -99,3 +99,91 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 		})
 	}
 }
+
+// TestComposesOnlyWithAnInstanceOnACard is TestComposesOnlyWithAnInstance
+// with the instance on a card: sessions' prompts and tokens, alone and stepped
+// together, form no part on the card at a step (tier.Stats.FormedAtStep) and
+// ask the CPU composer for nothing; the card formed its parts when the
+// instance was placed.
+func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
+	for _, src := range []string{testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), models["qwen3moe"]} {
+		t.Run(filepath.Base(src), func(t *testing.T) {
+			path, ok := existingModel(src)
+			if !ok {
+				t.Fatalf("model not present: %s (nor its container)", src)
+			}
+			m, err := Open(jlmOf(t, path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			g := swaTier(t)
+			defer g.Close()
+			ctx := context.Background()
+			in := m.NewInstance(128)
+			defer in.Close()
+			in.SetDevice(g)
+			if in.GPULayers() != m.Cfg.NLayer {
+				t.Fatalf("placed %d of %d blocks: %q", in.GPULayers(), m.Cfg.NLayer, g.Err())
+			}
+			if err := m.Serve(in, 0); err != nil {
+				t.Fatal(err)
+			}
+			defer m.Unserve(in)
+			c0, f0 := m.CPUComposes(), g.Stats().FormedAtStep
+			prompts := [][]int32{{1, 45, 79, 33, 21, 9}, {1, 65, 108, 250, 205, 63}}
+			sess := make([]*Session, len(prompts))
+			last := make([][]float32, len(prompts))
+			for i, p := range prompts {
+				s, err := m.NewSession(128)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				sess[i] = s
+				if err := s.Run(ctx, PhasePrefill, func(in *Instance) error {
+					lg, err := in.Prefill(p)
+					last[i] = lg
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runs := make([]Run, len(sess))
+			for k := range 12 {
+				for i, s := range sess {
+					if err := s.Acquire(ctx, PhaseGenerate); err != nil {
+						t.Fatal(err)
+					}
+					runs[i] = Run{Session: s, Tokens: []int32{int32(argmax(last[i]))}, Logits: true}
+				}
+				if k%2 == 0 {
+					lg, err := StepRuns(runs)
+					if err != nil {
+						t.Fatal(err)
+					}
+					copy(last, lg)
+					continue
+				}
+				for i, s := range sess {
+					if err := s.Run(ctx, PhaseGenerate, func(in *Instance) error {
+						lg, err := in.Forward(runs[i].Tokens[0])
+						last[i] = lg
+						return err
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if n := g.Stats().FormedAtStep - f0; n != 0 {
+				t.Errorf("the card formed %d parts at a step (%v)", n, g.Stats().FormedAtStepParts)
+			}
+			if n := m.CPUComposes() - c0; n != 0 {
+				t.Errorf("sessions' prompts and tokens asked the CPU composer %d times", n)
+			}
+			if g.Stats().SessionRows == 0 {
+				t.Errorf("no step ran the sessions' rows together on the card")
+			}
+		})
+	}
+}

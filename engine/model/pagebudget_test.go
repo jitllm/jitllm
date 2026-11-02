@@ -175,7 +175,7 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string) {
 		st.Close()
 	}
 
-	b := tight.NewBatch(nseq, steps+1)
+	b := newSessBatch(tight, nseq, steps+1)
 	defer b.Close()
 	for j := 0; j < steps; j++ {
 		row := make([]int32, nseq)
