@@ -2540,6 +2540,24 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 	return partServes
 }
 
+// unserved is why placed block li is one the composer does not serve on
+// this device, "" where it does: prepLayer declines it, so it runs on the
+// CPU device's composed form, never on the tier's own kernels. A step's own
+// conditions (a history mid-prefill, a fault probe, the caller's keep, the
+// pool a step builds) are not a placement's to decide.
+func (g *devTier) unserved(li int) string {
+	bs, l := g.bs, g.layers[li]
+	if bs == nil || l == nil {
+		return ""
+	}
+	switch why := g.blockServes(l, li, &bs.p, bs, false, false); why {
+	case partServes, partPrefill, partSkip, partCaller, partNoPool:
+		return ""
+	default:
+		return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, jit.DeclineName(int(why)))
+	}
+}
+
 // recHeld says linear block l's recurrent state is where the composer's
 // form steps it: in the block's pool of slots of the delta rule's state
 // and any tail its graph states, the step's recurrent descriptor naming

@@ -2465,6 +2465,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			// mixture's is offered again streamed.
 			why := g.prewarmComposedBlock(li, true)
 			if why == "" {
+				why = g.unserved(li)
+			}
+			if why == "" {
 				why = g.promptRoomless(li)
 			}
 			if why != "" && !g.sharedBeyond(li, sid) {
