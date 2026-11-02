@@ -1194,6 +1194,12 @@ func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) er
 		}
 		seq, pos := s.cpuRowsOf(slot, p0, n)
 		var err error
+		if c.NGramAt(li) {
+			s.q4.setCall(s, slot, s.q4.rid[:n])
+			if err := s.ngramForCPU(li, n, nil, s.q4.callOwner, s.q4.callTok); err != nil {
+				return err
+			}
+		}
 		if c.LayerKind(li).Recurrent() {
 			why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos, nil, base, p0)
 		} else {

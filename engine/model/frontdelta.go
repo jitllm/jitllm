@@ -101,11 +101,12 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 	decay := mapc("decay", graph.MapExp, 0, nd, nil, t)
 	beta := mapc("beta", graph.MapSigmoid, 0, vh, nil, braw)
 
+	at := b.G.StateVersion(graph.StateRecState)
 	o := b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, decay, beta}, []graph.Result{{Name: "delta", Width: vh * dv}}, nil,
 		graph.Attrs{NHead: vh, NKVHead: kh, HeadDim: dk, Tiled: g.tiled, Span: stateSpan(c, vh*dv*dk)},
-		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0]
+		[]graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}})[0]
 	o = b.HeadNorm(o, jlm.RoleSSMNorm, dv, c.RMSEps)
-	if g.chanDecay || c.DeltaSigmoidGate {
+	if g.chanDecay || c.q4eSigmoidGate() {
 		return sigmoidMul(b, "gated", z, o), nil
 	}
 	return b.Expr("gated", vh*dv, []graph.Term{

@@ -56,6 +56,9 @@ type q4eBlock struct {
 	// The n-gram block's three grouped norms and its convolution, tap-major
 	// (nil on every other block).
 	ngK, ngQ, ngC, ngConv backend.Buf
+	// ngTaps is ngConv as the composer binds it: a channel's taps
+	// contiguous, as the file stores them (the buffer is ngConv's).
+	ngTaps resident
 	ngram                 bool
 }
 
@@ -112,6 +115,9 @@ func (g *devTier) prepQ4E(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 		}
 		up(v.dst, v.have)
 		l.auxBytes += uint64(4 * v.want)
+	}
+	if b.ngram {
+		b.ngTaps = resident{qs: b.ngConv, nrows: hd, k: q.NGramConv, t: kernels.Float32, ok: true}
 	}
 	l.q4e = b
 	return ""

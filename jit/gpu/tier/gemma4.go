@@ -217,12 +217,16 @@ func (s *gpuSession) inputsOn(d *devTier) {
 
 // pleRows is the staged per-layer inputs, n floats: the caller's rows, then
 // zeros for a grid's padding rows. Callers hold g.mu.
-func (g *devTier) pleRows(n int) []float32 {
+func (g *devTier) pleRows(n int) []float32 { return g.sideRows(g.pleHost, n) }
+
+// sideRows is n floats of the caller's rows host for the blocks' side
+// input, zeros past them, staged in pleStage.
+func (g *devTier) sideRows(host []float32, n int) []float32 {
 	if cap(g.pleStage) < n {
 		g.pleStage = make([]float32, n)
 	}
 	st := g.pleStage[:n]
-	m := copy(st, g.pleHost)
+	m := copy(st, host)
 	clear(st[m:])
 	return st
 }

@@ -82,21 +82,10 @@ func TestQwen4ExpMatchesTransformers(t *testing.T) {
 	}
 }
 
-// q4eViolations take one piece of the graph out at a time. Each must move the
-// logits far past c6NMSE.
+// q4eViolations take one piece of the graph out at a time, the
+// hyper-connection's and QSA's pooling as rewrites of the composed statement
+// (q4eComposedViolations). Each must move the logits far past c6NMSE.
 var q4eViolations = []c6Violation{
-	{"the streams mixed by their plain mean", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultNoGate })
-	}},
-	{"the gate's low rank not divided by the stream count", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultUnscaledGate })
-	}},
-	{"every stream placed at weight one", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultPlainPlace })
-	}},
-	{"the placement without its factor of two", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultHalfPlace })
-	}},
 	{"no n-gram embedding", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultNoNGram })
 	}},
@@ -111,15 +100,6 @@ var q4eViolations = []c6Violation{
 			c.NGramMul = slices.Clone(c.NGramMul)
 			c.NGramMul[1] += 2
 		})
-	}},
-	{"every key read on the QSA blocks", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultDenseQSA })
-	}},
-	{"a QSA block scored by its first key", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultQSAFirstKey })
-	}},
-	{"the incomplete tail dropped from the selection", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultNoTail })
 	}},
 	{"the QSA budget a block short", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.IdxTopK -= c.QSARatio })
@@ -136,7 +116,7 @@ func TestQwen4ExpFeaturesAreLoadBearing(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openQ4E(t, fx.name)
 			defer m.Close()
-			for _, v := range q4eViolations {
+			for _, v := range append(slices.Clone(q4eViolations), q4eComposedViolations(t)...) {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()

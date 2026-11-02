@@ -152,8 +152,12 @@ const (
 	// block's window, the last Taps-1 rows it saw: each channel's Taps taps
 	// (Weight[0], channel-major, the oldest first) against the window's rows
 	// and the row, Out[0] a row of the input's width; the window then drops
-	// its oldest row and takes the row. A primitive with a state of its own:
-	// a recurrent mixer's convolution.
+	// its oldest row and takes the row. Where Dil is above one the taps are
+	// dilated: tap t reads the row (Taps-1-t)*Dil back, the window the last
+	// (Taps-1)*Dil rows. The window is the recurrent convolution's state
+	// (StateRecConv), or where the op reads StateRecState, Offset floats into
+	// each of the state's slots of Span floats: a tail past a rule's state. A
+	// primitive with a state of its own: a recurrent mixer's convolution.
 	OpStateConv
 	// OpPool is the step's live rows of In[0] pooled into one row, Out[0]
 	// it in every row: their mean, the first's or the last's (Pooling, a
@@ -514,6 +518,8 @@ type Attrs struct {
 	// Alpha is OpAdd's scale on its second input: x + Alpha*y; 0 is one.
 	Alpha float64
 	Taps  int
+	// Dil is OpStateConv's dilation; 0 and 1 alike.
+	Dil int
 	// GridW is OpConv's grid width: the rows a grid row holds; Stride its
 	// step over the grid, 0 and 1 alike.
 	GridW, Stride int
@@ -611,6 +617,20 @@ type Graph struct {
 func (g *Graph) value(name string, width int) ValueID {
 	g.Values = append(g.Values, Value{Name: name, Width: width})
 	return ValueID(len(g.Values) - 1)
+}
+
+// StateVersion is the version of the block's state s its ops have written
+// so far: the one the next op reading it reads.
+func (g *Graph) StateVersion(s State) int {
+	v := 0
+	for _, o := range g.Ops {
+		for _, w := range o.Writes {
+			if w.State == s && w.From == 0 {
+				v = max(v, w.Version)
+			}
+		}
+	}
+	return v
 }
 
 // op appends o, an output stating no rows over its first input's grid.

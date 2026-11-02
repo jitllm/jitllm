@@ -4348,6 +4348,10 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		al(&bs.one, 4)
 	}
 	allocAltUp(bs, p, rows, al)
+	// The n-gram block's gathered rows, its side input (SetNGramRows).
+	if q := p.Q4E; p.PLEDim == 0 && q != nil && q.NGramWidth != 0 {
+		al(&bs.pleIn, rows*q.NGramWidth*4)
+	}
 	if p.PLEDim != 0 {
 		al(&bs.pleIn, rows*p.PLEWidth*4)
 		al(&bs.pleG, rows*p.PLEDim*4)
@@ -7222,7 +7226,10 @@ func (g *devTier) layersSession(s backend.Session) {
 	}
 	// Input rows over every stream write the per-layer inputs too
 	// (embedOuts).
-	if bs.pleIn != nil && !(embedSrv && g.bs.embStreams() > 1) {
+	switch q := p.Q4E; {
+	case bs.pleIn != nil && p.PLEDim == 0 && q != nil && q.NGramWidth != 0:
+		w(bs.pleIn, f32b(g.sideRows(g.ngHost, R*q.NGramWidth)))
+	case bs.pleIn != nil && !(embedSrv && g.bs.embStreams() > 1):
 		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
 	}
 	switch {

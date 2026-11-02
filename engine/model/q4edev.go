@@ -26,7 +26,7 @@ func (s *Instance) q4ePlan(li int, plan *nn.LayerPlan) {
 	} else {
 		plan.IdxHeads, plan.IdxHeadDim, plan.IdxTopK = 0, 0, 0
 	}
-	if c.NGramBlock != 0 && c.q4eFault != q4eFaultNoNGram {
+	if c.NGramBlock != 0 {
 		q.NGramWidth, q.NGramConv, q.NGramDil = c.NGramWidth(), c.NGramConv, c.NGram
 		q.NGramHere = c.NGramAt(li)
 	}
@@ -68,7 +68,7 @@ func (s *Instance) ngramToDevice(lo, hi, n int, order []int, owner func(r int) (
 	c := s.m.Cfg
 	s.qsaMarksToDevice(lo, hi, n, owner)
 	li := c.NGramBlock - 1
-	if c.NGramBlock == 0 || li < lo || li >= hi || c.q4eFault == q4eFaultNoNGram {
+	if c.NGramBlock == 0 || li < lo || li >= hi {
 		return nil
 	}
 	nd := s.ldNGram
@@ -93,6 +93,19 @@ func (s *Instance) ngramToDevice(lo, hi, n int, order []int, owner func(r int) (
 	}
 	nd.SetNGramRows(g.emb[:n*c.NGramWidth()])
 	return nil
+}
+
+// ngramForCPU hashes and gathers the n-gram rows of n rows into the n-gram
+// scratch, the side input the CPU's n-gram block li reads (cpuSideRows),
+// moving each sequence's predecessors on; nothing where li is not the
+// n-gram block.
+func (s *Instance) ngramForCPU(li, n int, order []int, owner func(r int) (*Session, int), tok func(r int) int32) error {
+	c := s.m.Cfg
+	if !c.NGramAt(li) {
+		return nil
+	}
+	s.growQ4E(n)
+	return s.ngramRows(li, n, order, owner, tok)
 }
 
 // qsaMarksToDevice hands the device each of n rows' rotary marks -- where a

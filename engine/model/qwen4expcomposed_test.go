@@ -8,88 +8,70 @@ import (
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestQwen4ExpServesComposedOnCPU runs each Qwen3.8-Flash-Next fixture on
-// the CPU device with the composer's blocks over its four streams, each
-// sublayer's low-rank gated mix and its placement into every stream stated
-// as ops, the input rows' copies and the head's mix composed too,
-// teacher-forced on the fixture's ids against main's kernels within 1e-5.
-// The blocks the front end does not state are declined by name and counted:
-// the n-gram block (UncoveredNGram); the attention blocks select their keys
-// by QSA's pooled blocks (graph.Attrs.Pooled), stated. Each piece of the
-// hyper-connection or of QSA's selection taken out
-// of the composed statement alone (q4eComposedViolations), the input rows'
-// streams past the first left empty, and stream 1 read for stream 2 where
-// the head's mix reads them, moves the logits past 100 times the clean worst and
-// past 1e-4.
+// the CPU device with every block composed over its four streams -- each
+// sublayer's low-rank gated mix and its placement into every stream, the
+// n-gram block, QSA's pooled selection -- and the input rows' copies and the
+// head's mix composed too, teacher-forced on the fixture's ids against
+// transformers' logits within c6NMSE, and a prompt with its decode the same.
+// Each piece of the hyper-connection or of QSA's selection taken out of the
+// composed statement alone (q4eComposedViolations), the input rows' streams
+// past the first left empty, and stream 1 read for stream 2 where the head's
+// mix reads them, moves the logits past 100 times the clean worst and past
+// 1e-4.
 func TestQwen4ExpServesComposedOnCPU(t *testing.T) {
-	const bound = 1e-5
 	for _, fx := range q4eFixtures {
 		t.Run(fx.name, func(t *testing.T) {
-			path := jlmOf(t, testmodels.Path(fx.name+".gguf"))
-			ref, err := Open(path, noTune)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ref.Close()
-			if !fx.sel(ref) {
+			m, g := openQ4E(t, fx.name)
+			defer m.Close()
+			if !fx.sel(m) {
 				t.Fatal("the container does not carry the fixture's graph")
 			}
-			gm, g := openQ4E(t, fx.name)
-			gm.Close()
 			toks := g.IDs
-			want := partCPULogits(t, ref, toks, cpuFaultNone, false, 0, 0)
-			m, err := Open(path, noTune)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer m.Close()
-			covered := 0
 			for li := range m.Cfg.NLayer {
-				switch why := m.Uncovered(li); why {
-				case Covered:
-					covered++
-					if g := m.Composing().BlockGraph(li); len(g.Out) != m.Cfg.HCMult {
-						t.Fatalf("block %d writes %d streams, want %d", li, len(g.Out), m.Cfg.HCMult)
-					}
-				case UncoveredSelect, UncoveredNGram:
-					t.Logf("block %d declined: %s", li, why)
-				default:
+				if why := m.Uncovered(li); why != Covered {
 					t.Fatalf("block %d is refused by %q", li, why)
 				}
+				if g := m.Composing().BlockGraph(li); len(g.Out) != m.Cfg.HCMult {
+					t.Fatalf("block %d writes %d streams, want %d", li, len(g.Out), m.Cfg.HCMult)
+				}
 			}
-			if covered == 0 {
-				t.Fatal("no block is stated: the gate selects nothing")
+			golden := func(got [][]float32, at int) float64 {
+				w := 0.0
+				for i, lg := range got {
+					w = max(w, llama4Cmp(g.Pos[at+i].Head, lg))
+				}
+				return w
 			}
-			worst := worstFrom(want, partCPULogits(t, m, toks, cpuFaultNone, true, covered, jit.DeclineNoGraph))
-			t.Logf("%d of %d blocks composed, worst NMSE %.3g over %d steps", covered, m.Cfg.NLayer, worst, len(toks))
-			if !(worst < bound) {
-				t.Fatalf("the composed CPU is %.3g from main, bound %g", worst, bound)
+			run := func(f cpuFault) float64 {
+				return golden(partCPULogits(t, m, toks, f, true, m.Cfg.NLayer, jit.DeclineNoGraph), 0)
 			}
-			// A prompt's rows and its decode: the stated blocks' rows served
-			// on the CPU, the others declined for having no graph.
+			worst := run(cpuFaultNone)
+			t.Logf("every block composed: worst NMSE %.3g against transformers over %d steps", worst, len(toks))
+			if !(worst < c6NMSE) {
+				t.Fatalf("the composed CPU is %.3g from transformers, bound %g", worst, c6NMSE)
+			}
+			// A prompt's rows and its decode.
 			n := len(toks) - 4
-			pw, pg := q4ePrompt(t, ref, toks, n, false), q4ePrompt(t, m, toks, n, true)
-			pworst := 0.0
-			for i := range pw {
-				pworst = max(pworst, logitNMSE(pg[i], pw[i]))
+			if pworst := golden(q4ePrompt(t, m, toks, n, true), n-1); !(pworst < c6NMSE) {
+				t.Fatalf("the composed CPU prompt is %.3g from transformers, bound %g", pworst, c6NMSE)
 			}
-			t.Logf("a prompt of %d and its decode: worst NMSE %.3g", n, pworst)
-			if !(pworst < bound) {
-				t.Fatalf("the composed CPU prompt is %.3g from main, bound %g", pworst, bound)
+			check := func(name string, bad float64) {
+				t.Helper()
+				t.Logf("violation %q: worst NMSE %.3g", name, bad)
+				if !(bad > 100*worst) || !(bad > 1e-4) {
+					t.Errorf("%s: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", name, bad, worst)
+				}
 			}
 			for _, v := range q4eComposedViolations(t) {
 				undo := v.mut(m)
-				bad := worstFrom(want, partCPULogits(t, m, toks, cpuFaultNone, true, covered, jit.DeclineNoGraph))
+				bad := run(cpuFaultNone)
 				undo()
-				t.Logf("violation %q: worst NMSE %.3g", v.name, bad)
-				if !(bad > 100*worst) || !(bad > 1e-4) {
-					t.Errorf("%s: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", v.name, bad, worst)
-				}
+				check(v.name, bad)
 			}
 			undo := m.rewriteExpansion(t, func(g *graph.Graph) *graph.Graph {
 				return rewriteOps(t, g, func(_ int, o *graph.Op) bool {
@@ -100,17 +82,10 @@ func TestQwen4ExpServesComposedOnCPU(t *testing.T) {
 					return true
 				})
 			})
-			bad := worstFrom(want, partCPULogits(t, m, toks, cpuFaultNone, true, covered, jit.DeclineNoGraph))
+			bad := run(cpuFaultNone)
 			undo()
-			t.Logf("violation \"the streams past the first start empty\": worst NMSE %.3g", bad)
-			if !(bad > 100*worst) || !(bad > 1e-4) {
-				t.Errorf("the streams start empty: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", bad, worst)
-			}
-			bad = worstFrom(want, partCPULogits(t, m, toks, cpuFaultStreams, true, covered, jit.DeclineNoGraph))
-			t.Logf("violation \"stream 1 read for stream 2 where the head's mix reads them\": worst NMSE %.3g", bad)
-			if !(bad > 100*worst) || !(bad > 1e-4) {
-				t.Errorf("a stream read twice: the composed CPU cannot see it -- worst NMSE %.3g against a clean %.3g", bad, worst)
-			}
+			check("the streams past the first start empty", bad)
+			check("stream 1 read for stream 2 where the head's mix reads them", run(cpuFaultStreams))
 		})
 	}
 }
@@ -275,6 +250,7 @@ func q4eComposedViolations(t *testing.T) []c6Violation {
 			o.Attr.Pooled, o.Attr.NRot, o.Weight = false, 0, nil
 		}),
 		qsa("QSA keeping one block fewer", func(o *graph.Op) { o.Attr.TopK-- }),
+		qsa("every key read on the QSA blocks", func(o *graph.Op) { o.Attr.TopK = 64 }),
 	}
 }
 
