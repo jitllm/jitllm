@@ -6852,7 +6852,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// chunk instead of folding its last row; prepRowsHead built it.
 	allRows := bs.rows > 1 && head != nil && rag == nil && head.RowLogits
 	fold := bs.rows > 1 && head != nil && rag == nil && !allRows
-	if allRows && (bs.ragHead.kern == nil || bs.ragLogits == nil) {
+	if allRows && (!bs.ragBuilt || bs.ragLogits == nil) {
 		return refuse("a %d-row chunk asked for every row's logits with no per-row head built", bs.rows)
 	}
 	// The per-row head caps where decode's does: a step's rows end in an

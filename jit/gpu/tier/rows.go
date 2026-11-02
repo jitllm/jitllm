@@ -325,13 +325,12 @@ func (g *devTier) prepRaggedBlocks(bs *blockScratch, n int) bool {
 	return true
 }
 
-// prepRowsHead builds bs's per-row head -- the batched projection over the
-// rows a step wants and a per-row argmax -- once, outside any session. A
-// ragged step needs it, and so does a chunk whose head wants every row
+// prepRowsHead readies bs's per-row head -- the composer's head over the
+// rows a step wants, their logits and tokens -- once, outside any session.
+// A ragged step needs it, and so does a chunk whose head wants every row
 // (nn.Head.RowLogits on Layers). Callers hold g.mu.
 func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool {
 	defer g.scratchWin().close()
-	p := &bs.p
 	R := bs.rows
 	fail := func(err error) bool { g.LastErr = "rows: " + err.Error(); return false }
 	// A batch's rows read their history through the scratch's paged set
@@ -343,32 +342,27 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	if need := g.rowsHeadNeed(bs, head.nrows, rowsHead.Softcap); need > 0 && !g.room(need) {
 		return fail(fmt.Errorf("the logits of %d rows need %d bytes, %d of %d used", R, need, g.used, g.limit))
 	}
-	// The composer's head over rows serves any count of them in the
-	// reserved width (servedHead): the tier's per-count projections are not
-	// built for it.
-	served := bs == g.bbs[g.promptW] && g.rowsReserved() &&
-		g.bs.headServes(g.bs.hNorm, false, false) == partServes
-	if !served {
-		g.groupMV(g.headMV(), rowsHead.WantedRows(n), R)
-		g.headOneMV(R)
+	// The composer's head over rows serves any count of them at bs's width
+	// (servedHead), formed here, outside any step; a head it does not serve
+	// is refused at the step, so the tier builds no projection of its own.
+	if g.bs.headServes(g.bs.hNorm, false, false) != partServes {
+		return fail(errors.New("the composer does not serve the head over rows"))
+	}
+	g.prewarming = true
+	_, err := g.servedHead(g.bs, g.bs.hNorm, R)
+	g.prewarming = false
+	if err != nil {
+		return fail(fmt.Errorf("the composed head over %d rows: %w", R, err))
 	}
 	if !bs.ragBuilt {
 		if !g.ragSampleServes() {
 			return fail(errors.New("the composer states no sample for the head"))
-		}
-		var hm mv
-		if !served {
-			var ok bool
-			if hm, ok = g.ragMV(mv{q: head.t, k: p.NEmbd, rows: head.nrows}, R); !ok {
-				return fail(fmt.Errorf("no batched head matvec: %s", g.LastErr))
-			}
 		}
 		// reserveRowsHead may have allocated them at placement, from the
 		// plan's vocabulary; a head of another width replaces them.
 		if bs.ragLogits != nil && bs.ragVocab != head.nrows {
 			freeRagOut(bs)
 		}
-		var err error
 		if bs.ragLogits == nil {
 			if bs.ragLogits, err = g.dev.Alloc(R * head.nrows * 4); err == nil {
 				bs.ragVocab = head.nrows
@@ -378,7 +372,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		if err != nil {
 			return fail(err)
 		}
-		bs.ragHead, bs.ragBuilt = hm, true
+		bs.ragBuilt = true
 	}
 	// The final softcap over every row the head can project: the kernel is
 	// sized for R rows and launched over the wanted ones.
