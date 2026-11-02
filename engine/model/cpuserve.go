@@ -220,6 +220,9 @@ type cpuBlockForm struct {
 	wreads                 []int
 }
 
+// ownUse is a code's use of an own buffer, by their indices.
+type ownUse struct{ code, own int }
+
 func (f *cpuBlockForm) close() {
 	for i := range f.codes {
 		f.codes[i].code.Close()
@@ -1707,7 +1710,6 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows, sel: -1, wsel: -1}
 	selV, wsV := selOf(gr), weightsOf(gr)
 	wOwn := map[graph.ValueID]int{}
-	type ownUse struct{ code, own int }
 	var wrote, read []ownUse
 	// A kernel's constant block is its own: two kernels' blocks may share a
 	// name and hold different words.
@@ -2003,7 +2005,135 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart, whole bool
 		f.chainPhases()
 		f.joinPhases()
 	}
+	f.shareOwn(wrote, read)
 	return f, nil
+}
+
+// shareOwn lays the form's own buffers out on fewer, as the card's forms
+// share theirs (the tier's partForm.share): a buffer whose first code writes
+// it without reading it, live from that code's pool phase to the last
+// phase that binds it, takes one whose last phase ran before its first. The
+// phases run in order -- a joined or chained phase's kernels run together,
+// so its buffers are live across all of it (joinPhases, chainPhases, which
+// ran over the buffers unshared) -- so the earlier holder is done with it.
+// A constant, a buffer first read (it
+// carries what an earlier call left), the selection and the picks' weights
+// (the host reads and writes them between the halves) and what a
+// bidirectional run holds between its passes keep their own. Every own
+// index the form holds is renumbered.
+func (f *cpuBlockForm) shareOwn(wrote, read []ownUse) {
+	n := len(f.own)
+	// Each code's phase: a joined or chained run's kernels share theirs.
+	phase := make([]int, len(f.codes))
+	for ci, p := 0, 0; ci < len(f.codes); p++ {
+		end := ci + 1 + max(f.codes[ci].join, f.codes[ci].chain)
+		for ; ci < end && ci < len(f.codes); ci++ {
+			phase[ci] = p
+		}
+	}
+	first, last := make([]int, n), make([]int, n)
+	for i := range first {
+		first[i] = -1
+	}
+	for ci := range f.codes {
+		for _, ar := range f.codes[ci].args {
+			if ar.src != cpuArgOwn && ar.src != cpuArgWord {
+				continue
+			}
+			if first[ar.i] < 0 {
+				first[ar.i] = ci
+			}
+			last[ar.i] = ci
+		}
+	}
+	fresh := make([]bool, n)
+	for _, w := range wrote {
+		if w.code == first[w.own] {
+			fresh[w.own] = true
+		}
+	}
+	for _, r := range read {
+		if r.code == first[r.own] {
+			fresh[r.own] = false
+		}
+	}
+	pinned := func(i int) bool {
+		_, k := f.consts[i]
+		return k || !fresh[i] || first[i] < 0 || i == f.sel || i == f.wsel || slices.Contains(f.cross, i)
+	}
+	slot := make([]int, n)
+	var phys []int
+	var free []int // each buffer's last code, len(f.codes) where it is never given up
+	var order []int
+	for i := range n {
+		if pinned(i) {
+			slot[i] = len(phys)
+			phys, free = append(phys, f.own[i]), append(free, len(f.codes))
+			continue
+		}
+		order = append(order, i)
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return first[a] - first[b] })
+	for _, i := range order {
+		need, at := f.own[i], -1
+		for p, end := range free {
+			if end >= phase[first[i]] {
+				continue
+			}
+			// The narrowest that holds it, else the widest, grown.
+			switch {
+			case at < 0:
+				at = p
+			case phys[p] >= need && (phys[at] < need || phys[p] < phys[at]):
+				at = p
+			case phys[at] < need && phys[p] > phys[at]:
+				at = p
+			}
+		}
+		if at < 0 {
+			at = len(phys)
+			phys, free = append(phys, 0), append(free, 0)
+		}
+		phys[at] = max(phys[at], need)
+		free[at] = phase[last[i]]
+		slot[i] = at
+	}
+	consts := map[int][]uint32{}
+	for i, c := range f.consts {
+		consts[slot[i]] = c
+	}
+	f.own, f.consts = phys, consts
+	re := func(b *cpuBuf) {
+		if b.src == cpuArgOwn {
+			b.i = slot[b.i]
+		}
+	}
+	for ci := range f.codes {
+		c := &f.codes[ci]
+		for k := range c.args {
+			if c.args[k].src == cpuArgOwn || c.args[k].src == cpuArgWord {
+				c.args[k].i = slot[c.args[k].i]
+			}
+		}
+		for k := range c.rd {
+			re(&c.rd[k])
+		}
+		for k := range c.wr {
+			re(&c.wr[k])
+		}
+		for k := range c.sliced {
+			re(&c.sliced[k].buf)
+		}
+	}
+	for k, i := range f.cross {
+		f.cross[k] = slot[i]
+	}
+	if f.sel >= 0 {
+		f.sel = slot[f.sel]
+	}
+	if f.wsel >= 0 {
+		f.wsel = slot[f.wsel]
+	}
 }
 
 // callsOwnScratch reports whether code c's calls each write a slice of
