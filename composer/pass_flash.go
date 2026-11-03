@@ -263,7 +263,7 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 	windowed := false
 	for _, m := range c.mem {
 		for _, b := range m.k.Bufs {
-			windowed = windowed || b.Operand == tableWindows
+			windowed = windowed || b.Operand == TableWindows.op()
 		}
 	}
 	if dt.k.Nodes[dt.k.Positions.First].Op != OpLoad || windowed && dt.k.Nodes[dt.k.Positions.End].Op != OpLoad {

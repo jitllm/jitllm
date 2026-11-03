@@ -8,11 +8,9 @@ import (
 )
 
 // tableTokens is the step's tokens, a word a row, which the engine writes.
-var tableTokens = tableOp(TableTokens, 0, ir.U32)
 
 // tableRequest is a step's request, the caller's words: a decision's
 // question type, its marker count, then a marker row a step row.
-var tableRequest = tableOp(TableRequest, 0, ir.U32)
 
 // Request words: the question type, the marker count, the first marker.
 const (
@@ -39,7 +37,7 @@ func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	r, i := x.coord(0), x.coord(1)
 	tok := x.load(0, r)
-	in := []Operand{tableTokens}
+	in := []Operand{TableTokens.op()}
 	facts := Facts{Extents: map[int]int{0: R}}
 	if o.Attr.Positional {
 		// The step's positions follow its live row count.
@@ -47,7 +45,7 @@ func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 		if s := o.Attr.Span; s > 0 {
 			tok = x.op(OpRem, ir.U32, tok, x.u(uint32(s)))
 		}
-		in[0] = tablePos
+		in[0] = TablePos.op()
 		facts.Extents[0] = R + 1
 	} else {
 		// A table may stop short of the ids: an id past it reads row 0.
@@ -75,6 +73,6 @@ func decomposeTakeRows(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	at := x.op(OpMin, U, x.load(1, x.op(OpAdd, U, x.u(RequestRows), x.coord(0))), x.u(uint32(in[0]-1)))
 	x.at(0, in, at, x.coord(1))
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), tableRequest}, Out: c.value(o.Out[0]), Expr: x.e,
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R}}}}, nil
 }

@@ -17,28 +17,6 @@ const (
 	rowWords
 )
 
-// The step's tables: the rotary's cos and sin a row, the rows' descriptors,
-// the page table, the history's key and value pools.
-var (
-	tableAngles = tableOp(TableAngles, 0, ir.Void)
-	tableQOff   = tableOp(TableQOff, 0, ir.U32)
-	tableRows   = tableOp(TableRows, 0, ir.U32)
-	// tableWindows is the rows' descriptors with each row's window as its
-	// attended range (graph.Attrs.RowWindows).
-	tableWindows = tableOp(TableWindows, 0, ir.U32)
-	tablePages   = tableOp(TablePages, 0, ir.U32)
-	// tableCall is a call's rows, one word: the rows a form of several
-	// rows runs (CallRows).
-	tableCall   = tableOp(TableCall, 0, ir.U32)
-	tableKeys   = partTable(TableKeys)
-	tableValues = partTable(TableValues)
-	// The entry history's pool, descriptors and page table
-	// (graph.StateEnt): f32 rows, values in keys.
-	tableEntKeys  = partTable(TableEntKeys)
-	tableEntRows  = tableOp(TableEntRows, 0, ir.U32)
-	tableEntPages = tableOp(TableEntPages, 0, ir.U32)
-)
-
 // rotaryTable is the step's table a rotary op turns by: the model's one
 // where it has one, else the rotary its width and base name, its factors
 // telling two apart. A table turns its pairs by the position axes the op
@@ -52,7 +30,7 @@ func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
 			return Operand{}, fmt.Errorf("a rotary over the axes of sections %v (interleaved %v), where the model's table turns by sections %v (interleaved %v)",
 				a.Sections, a.Interleaved, c.Rotaries[0].Sections, c.Rotaries[0].Interleaved)
 		}
-		return tableOp(TableAngles, c.RotaryBase, ir.Void), nil
+		return TableAngles.of(c.RotaryBase), nil
 	}
 	// A split rotary's table holds a pair an element.
 	nrot := a.NRot
@@ -68,7 +46,7 @@ func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
 	if found < 0 {
 		return Operand{}, fmt.Errorf("a rotary of %d at base %v over sections %v the model states no table of", a.NRot, a.Base, a.Sections)
 	}
-	return tableOp(TableAngles, c.RotaryBase+found, ir.Void), nil
+	return TableAngles.of(c.RotaryBase + found), nil
 }
 
 // decomposeRope turns each head's first NRot elements in pairs by the
@@ -143,7 +121,7 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	in, facts := []Operand{c.value(o.In[0]), table}, Facts{}
 	if a.Shift > 0 {
 		stride := (pairs + ropeLanes - 1) &^ (ropeLanes - 1)
-		in = []Operand{c.value(o.In[0]), tableOp(TablePlanes, table.Instance, ir.Void), tableRopeKon, tableRows}
+		in = []Operand{c.value(o.In[0]), TablePlanes.of(table.Instance), TableRopeConst.op(), TableRows.op()}
 		facts = Facts{Words: map[int][]uint32{2: ropeConsts()}, Extents: map[int]int{1: 8*stride + 1, 3: R * rowWords}, Quarter: quarter}
 	}
 	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: in, Expr: x.e, Facts: facts,
@@ -171,14 +149,14 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 2 || c.Step.Page <= 0 {
 		return nil, fmt.Errorf("a history append of %d values over pages of %d", len(o.In), c.Step.Page)
 	}
-	pools := []Operand{tableKeys, tableValues}
+	pools := []Operand{TableKeys.op(), TableValues.op()}
 	layouts := [2]Pool{c.History.Keys, c.History.Values}
-	rows, pages := tableRows, tablePages
+	rows, pages := TableRows.op(), TablePages.op()
 	if len(o.Writes) == 1 && o.Writes[0].State == graph.StateEnt {
 		if o.In[0] != o.In[1] {
 			return nil, fmt.Errorf("an entry whose value is not its key")
 		}
-		pools, layouts, rows, pages = []Operand{tableEntKeys}, [2]Pool{}, tableEntRows, tableEntPages
+		pools, layouts, rows, pages = []Operand{TableEntKeys.op()}, [2]Pool{}, TableEntRows.op(), TableEntPages.op()
 	} else if c.History.ValuesInKeys {
 		if o.In[0] != o.In[1] {
 			return nil, fmt.Errorf("a history append of a value other than its key, into a pool whose values are its keys")
@@ -251,7 +229,7 @@ func decomposePosition(o graph.Op, c *Context) ([]Prim, error) {
 		p = x.op(OpDiv, U, p, x.u(uint32(o.Attr.Span)))
 	}
 	x.un(OpCvtF32, ir.F32, p)
-	return []Prim{{Kind: PrimMap, Shape: []int{R, 1}, In: []Operand{tableRows}, Out: c.value(o.Out[0]), Expr: x.e,
+	return []Prim{{Kind: PrimMap, Shape: []int{R, 1}, In: []Operand{TableRows.op()}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{0: R * rowWords}}}}, nil
 }
 
@@ -279,7 +257,7 @@ func historyWord(o Operand, w int, s Step) (float64, bool) {
 	if o.Kind == OperandTable && o.Table == TablePages {
 		return float64(w), true
 	}
-	if o.Kind != tableRows.Kind || o.Name != tableRows.Name && o.Name != tableWindows.Name {
+	if o.Kind != TableRows.op().Kind || o.Name != TableRows.op().Name && o.Name != TableWindows.op().Name {
 		return 0, false
 	}
 	switch w % rowWords {

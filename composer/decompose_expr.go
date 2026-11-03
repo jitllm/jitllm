@@ -15,7 +15,19 @@ import (
 // z >= 0, odd in z.
 const erfP = float32(0.3275911)
 
-var erfA = [5]float32{0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429}
+func erfA(i int) float32 {
+	switch i {
+	case 0:
+		return 0.254829592
+	case 1:
+		return -0.284496736
+	case 2:
+		return 1.421413741
+	case 3:
+		return -1.453152027
+	}
+	return 1.061405429
+}
 
 func (x *exprs) fma(a, b, c int) int { return x.add(Expr{Op: OpFma, Type: ir.F32, A: a, B: b, C: c}) }
 
@@ -38,9 +50,9 @@ func (x *exprs) erf(a int) int {
 	F := ir.F32
 	z := x.op(OpMax, F, a, x.neg(a))
 	t := x.op(OpDiv, F, x.f(1), x.fma(x.f(erfP), z, x.f(1)))
-	p := x.f(erfA[4])
+	p := x.f(erfA(4))
 	for i := 3; i >= 0; i-- {
-		p = x.fma(p, t, x.f(erfA[i]))
+		p = x.fma(p, t, x.f(erfA(i)))
 	}
 	y := x.op(OpSub, F, x.f(1), x.op(OpMul, F, x.op(OpMul, F, p, t), x.un(OpExp, F, x.neg(x.op(OpMul, F, z, z)))))
 	return x.sel(F, x.op(OpLess, ir.Pred, a, x.f(0)), x.neg(y), y)
