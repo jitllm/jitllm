@@ -55,7 +55,6 @@ func bitnetFixtures() []struct {
 // relocation, the batch faulting its blocks in, zero allocations), one with
 // an f16 scale (TQ2_0) and one with an f32 (TQ2_F32).
 func init() {
-	principleFixtures = append(principleFixtures, "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf")
 }
 
 // bitnetNMSE is the bound against transformers, and bitnetExact the level an

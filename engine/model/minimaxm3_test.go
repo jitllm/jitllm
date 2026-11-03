@@ -198,5 +198,4 @@ func TestMiniMaxM3OnEveryDevice(t *testing.T) {
 // (principleFixtures): the indexer's key is a head of the cached row, so it
 // pages, relocates and is restored with it.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-minimaxm3.gguf")
 }

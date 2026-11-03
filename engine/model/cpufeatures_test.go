@@ -10,7 +10,6 @@ import (
 // dbrx's mixture, its q, k and v clamped, joins the gates of the five
 // principles: relocation, paging and a warm step that allocates nothing.
 func init() {
-	principleMixtures = append(principleMixtures, "synth-dbrx.gguf")
 }
 
 // cpuFeatureFixtures are float fixtures of the attention features the front

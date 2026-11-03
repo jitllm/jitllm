@@ -31,17 +31,23 @@ func TestBatchedMixturePrefillMatchesRowByRow(t *testing.T) {
 // floatMoEModels are mixtures whose expert banks are float: the Qwen3.5 hybrid
 // mixture with a prediction block (scripts/mtpgold.py) in F32, F16 and BF16,
 // every weight of each in that format, on every card.
-var floatMoEModels = []string{"synth-qwen35moe-hybrid-mtp.gguf", "synth-qwen35moe-hybrid-mtp-f16.gguf",
-	"synth-qwen35moe-hybrid-mtp-bf16.gguf", "synth-glm4moe.gguf",
-	"synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-minimaxm2.gguf",
-	"synth-gemma4-moe.gguf", "synth-minimaxm3.gguf", "synth-deepseek4.gguf", "synth-kimik3.gguf"}
+func floatMoEModels() []string {
+	names := []string{"synth-qwen35moe-hybrid-mtp.gguf", "synth-qwen35moe-hybrid-mtp-f16.gguf",
+		"synth-qwen35moe-hybrid-mtp-bf16.gguf", "synth-glm4moe.gguf",
+		"synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-minimaxm2.gguf",
+		"synth-gemma4-moe.gguf", "synth-minimaxm3.gguf", "synth-deepseek4.gguf", "synth-kimik3.gguf"}
+	for _, fx := range moe2Fixtures() {
+		names = append(names, fx.name+".gguf")
+	}
+	return names
+}
 
 // TestBatchedMixturePrefillFloatBanks is the batched-mixture gate on float
 // expert banks, which every card ran one row at a time until the grouped
 // matvec's float form was wired: the selection check is that the float form
 // ran at all. Its violation is in groupedfault_test.go.
 func TestBatchedMixturePrefillFloatBanks(t *testing.T) {
-	for _, name := range floatMoEModels {
+	for _, name := range floatMoEModels() {
 		t.Run(name, func(t *testing.T) { batchedMixtureCase(t, name, true, false) })
 	}
 }

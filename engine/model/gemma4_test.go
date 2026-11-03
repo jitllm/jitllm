@@ -335,7 +335,4 @@ func TestGemma4FeaturesAreLoadBearing(t *testing.T) {
 // come home at its own layer's geometry, and the sliding layers' pages are a
 // window's.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-moe.gguf",
-		"synth-gemma4-e.gguf", "synth-gemma4-wide.gguf")
-	windowFixtures = append(windowFixtures, "synth-gemma4.gguf")
 }

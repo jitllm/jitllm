@@ -18,21 +18,6 @@ import (
 // gates are TestC6MatchesTransformers, TestC6FeaturesAreLoadBearing and
 // TestC6OnEveryDevice under each fixture's name, and the relocation and
 // paging gates through principleFixtures.
-func init() {
-	c6Fixtures = append(c6Fixtures, denseFixtures()...)
-	for k, v := range denseViolations() {
-		c6Violations[k] = v
-	}
-	for k, v := range denseDevViolations() {
-		c6DevViolations[k] = v
-	}
-	// And the gates of the five principles: relocation, paging and a batch
-	// that faults its blocks in, each on every fixture of the group.
-	for _, fx := range denseFixtures() {
-		principleFixtures = append(principleFixtures, fx.name+".gguf")
-	}
-}
-
 func denseFixtures() []struct {
 	name string
 	sel  func(m *Model) bool

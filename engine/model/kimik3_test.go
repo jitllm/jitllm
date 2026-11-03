@@ -247,6 +247,4 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 // compressed-tensors MXFP4 experts in the second) run the generated-code
 // sweep, TestEveryModelRunsGenerated, as safetensors.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-kimik3.gguf")
-	auditHFDirs = append(auditHFDirs, "hf/synth-kimik3", "kimik3/Kimi-K3-0.40B-MXFP4-hf")
 }

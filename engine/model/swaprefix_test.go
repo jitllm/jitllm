@@ -11,7 +11,7 @@ import (
 // prefixWindowFixtures are the models the prefix-cache window gate runs:
 // exaone4's sliding window of 4 beside full layers, and DeepSeek V4's every
 // block sliding, whose entries decide the restore (ds4kv.go).
-var prefixWindowFixtures = []string{"synth-exaone4.gguf"}
+func prefixWindowFixtures() []string { return []string{"synth-exaone4.gguf", "synth-deepseek4.gguf"} }
 
 // TestPrefixCacheRestoresAWindowedLayer runs the prefix cache on a model with
 // windowed layers, on the host and with every block on each device: a prompt
@@ -26,7 +26,7 @@ var prefixWindowFixtures = []string{"synth-exaone4.gguf"}
 // behind the window were never sent home, that restores nothing.
 func TestPrefixCacheRestoresAWindowedLayer(t *testing.T) {
 	specs := append([]string{""}, testdevices.Specs("cuda", "vulkan", "metal")...)
-	for _, fx := range prefixWindowFixtures {
+	for _, fx := range prefixWindowFixtures() {
 		t.Run(fx, func(t *testing.T) {
 			m, err := Open(jlmOf(t, testmodels.Path(fx)), noTune)
 			if err != nil {

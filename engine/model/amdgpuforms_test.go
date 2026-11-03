@@ -141,7 +141,7 @@ type gpuKernel struct {
 func composedGPUKernels(t *testing.T) []gpuKernel {
 	t.Helper()
 	var files []string
-	for _, f := range slices.Concat(servedModels, ssmServed(), stepMixtures()) {
+	for _, f := range slices.Concat(servedModels(), ssmServed(), stepMixtures()) {
 		if strings.HasPrefix(f, "synth-") && !slices.Contains(files, f) {
 			files = append(files, f)
 		}

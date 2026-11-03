@@ -6,20 +6,6 @@ import "github.com/jitllm/jitllm/engine/nn"
 // its fixture, built by NemotronHForCausalLM (scripts/ssmgold.py) with one
 // mixer a source layer merged at conversion, joins every gate there and the
 // five principles' through principleFixtures.
-func init() {
-	ssmFixtures = append(ssmFixtures, nemotronhFixtures()...)
-	for _, fx := range nemotronhFixtures() {
-		ssmFamilyViolations[fx.name] = nemotronhViolations
-	}
-	ssmFamilyViolations["synth-nemotronhmoe"] = func(device bool) []c6Violation {
-		return append(nemotronhViolations(device), nemotronhMoEViolations()...)
-	}
-	// The dense one pages under the frame gate; the mixture under
-	// TestSSMFamiliesPageWithTheSameAnswer, since its expert pages are a
-	// second page size.
-	principleFixtures = append(principleFixtures, "synth-nemotronh.gguf", "synth-nemotronhmoe.gguf")
-}
-
 func nemotronhFixtures() []struct {
 	name string
 	sel  func(m *Model) bool

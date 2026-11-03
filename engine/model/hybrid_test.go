@@ -22,8 +22,6 @@ func init() {
 	// steps. Qwen3.5-0.8B; the mixtures, whose expert pages are a page size of
 	// their own: Qwen3.5's mixture fixture at Q8_0 and Kimi-Linear's (Kimi
 	// Delta Attention beside latent attention) at Q8_0.
-	principleFixtures = append(principleFixtures, "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf")
-	principleMixtures = append(principleMixtures, "synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear"+q8Suffix)
 }
 
 // A hybrid, built out of ordinary Go values: qwen3next's geometry (16 key heads

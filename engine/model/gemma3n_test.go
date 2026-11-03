@@ -192,6 +192,4 @@ func TestBatchSeamMovesCarryEveryRowAltUp(t *testing.T) {
 // (principleFixtures) and the windowed-layer gate: its sliding layers' pages
 // are a window's.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-gemma3n.gguf")
-	windowFixtures = append(windowFixtures, "synth-gemma3n.gguf")
 }

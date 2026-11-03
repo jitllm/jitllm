@@ -16,20 +16,6 @@ import (
 // moefamily_test.go, so the gates are TestMoEFamiliesMatchTransformers,
 // TestMoEFamilyFeaturesAreLoadBearing, TestMoEFamiliesOnEveryDevice and
 // TestMoEFamiliesPageWithTheSameAnswer under each fixture's name.
-func init() {
-	moeFixtures = append(moeFixtures, moe2Fixtures()...)
-	for k, v := range moe2Violations() {
-		moeViolations[k] = v
-	}
-	for k, v := range moe2DevViolations() {
-		moeDevViolations[k] = v
-	}
-	for _, fx := range moe2Fixtures() {
-		floatMoEModels = append(floatMoEModels, fx.name+".gguf")
-		principleMixtures = append(principleMixtures, fx.name+".gguf")
-	}
-}
-
 func moe2Fixtures() []struct {
 	name string
 	sel  func(m *Model) bool
