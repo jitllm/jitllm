@@ -9,7 +9,9 @@ import (
 // a64KernelTypes is the quantized formats with a NEON kernel. Tests iterate it
 // assuming block-sized weights, int8 activations and a KernelConst, so F32 and
 // the other float formats are handled separately in SupportedA64.
-var a64KernelTypes = []quant.Type{quant.Q4_0, quant.Q5_0, quant.Q8_0, quant.Q3_K, quant.Q4_K, quant.Q5_K, quant.Q6_K}
+func a64KernelTypes() [7]quant.Type {
+	return [...]quant.Type{quant.Q4_0, quant.Q5_0, quant.Q8_0, quant.Q3_K, quant.Q4_K, quant.Q5_K, quant.Q6_K}
+}
 
 // SupportedA64 reports whether EmitA64 has a kernel for t.
 func SupportedA64(t quant.Type) bool {
@@ -19,7 +21,7 @@ func SupportedA64(t quant.Type) bool {
 		// the half form and SHLL for bfloat16. No feature to probe.
 		return true
 	}
-	for _, k := range a64KernelTypes {
+	for _, k := range a64KernelTypes() {
 		if k == t {
 			// The FEAT_DotProd check is in SupportedNative, not here: EmitA64
 			// is host-pure so that NEON can be emitted and disassembled from an

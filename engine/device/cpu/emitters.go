@@ -3,7 +3,6 @@
 package cpu
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/jitllm/jitllm/format/layout"
@@ -45,8 +44,8 @@ type Emitters struct {
 	// LogSoftmax is Softmax's log form, the same Args and Scr = ActConsts():
 	// x - max - ln(sum exp(x - max)), in place (EmitLogSoftmax).
 	LogSoftmax func() ([]byte, error)
-	ActMul     func(k ActKind) ([]byte, error) // every kind in Gated
-	Act        func(k ActKind) ([]byte, error) // every kind in Ungated
+	ActMul     func(k ActKind) ([]byte, error) // every kind in graph.Gated
+	Act        func(k ActKind) ([]byte, error) // every kind in graph.Ungated
 	SigmoidMul func() ([]byte, error)
 	// Ln is x = ln(x) in place over positive finite x, Scr = ActConsts()
 	// (EmitLn): a log-mel feature's log.
@@ -239,7 +238,7 @@ type Emitters struct {
 // ErrNoSSEKernel is what an SSE-tier stub returns for an op that has no SSE
 // kernel. It is not a refusal: the integration gate requires that
 // no field returns it.
-var ErrNoSSEKernel = errors.New("jit: this op has no SSE-tier kernel yet")
+const ErrNoSSEKernel jitError = "jit: this op has no SSE-tier kernel yet"
 
 // errNoSSE wraps ErrNoSSEKernel with the op's name, for the stubs.
 func errNoSSE(op string) error { return fmt.Errorf("%w (%s)", ErrNoSSEKernel, op) }
@@ -250,10 +249,11 @@ func errNoSSE(op string) error { return fmt.Errorf("%w (%s)", ErrNoSSEKernel, op
 // table too: on such a host Map refuses every one of its kernels by name
 // (ISAError), which is the refusal that host is owed.
 func EmittersFor(t Tier) *Emitters {
+	e := primaryEmitters()
 	if t == TierSSE {
-		return &sseEmitters
+		e = sseEmitters()
 	}
-	return &primaryEmitters
+	return &e
 }
 
 // EmitOpts are the emission choices that belong to one JIT rather than to the
@@ -296,201 +296,205 @@ func must(op string, b []byte) ([]byte, error) {
 
 // primaryEmitters is the table this architecture has always had: the AVX2
 // tier on amd64, NEON on arm64. Every field is the existing function.
-var primaryEmitters = Emitters{
-	Tier: primaryTier,
+func primaryEmitters() Emitters {
+	return Emitters{
+		Tier: primaryTier,
 
-	Axpy:    func() ([]byte, error) { return must("axpy", EmitAxpy()) },
-	Scale:   func() ([]byte, error) { return must("scale", EmitScale()) },
-	Softcap: func() ([]byte, error) { return must("softcap", EmitSoftcap()) },
-	Clamp:   func() ([]byte, error) { return must("clamp", EmitClamp()) },
-	PrefetchLines: func() ([]byte, error) {
-		return must("prefetch_lines", EmitPrefetchLines())
-	},
-	Resample:   func(prec int) ([]byte, error) { return must("resample", EmitResample(prec)) },
-	ResampleH:  func(prec int) ([]byte, error) { return must("resample_h", EmitResampleH(prec)) },
-	PixLUT:     func() ([]byte, error) { return must("pixlut", EmitPixLUT()) },
-	Copy32:     func() ([]byte, error) { return must("copy32", EmitCopy32()) },
-	PixelRow:   EmitPixelRow,
-	AxisTaps:   func(f AxisFilter) ([]byte, error) { return must("axistaps", EmitAxisTaps(f)) },
-	LerpGrid:   func() ([]byte, error) { return must("lerpgrid", EmitLerpGrid()) },
-	SinCosTab:  func() ([]byte, error) { return must("sincostab", EmitSinCosTab()) },
-	Softmax:    func() ([]byte, error) { return must("softmax", EmitSoftmax()) },
-	LogSoftmax: func() ([]byte, error) { return must("logsoftmax", EmitLogSoftmax()) },
-	ActMul:     func(k ActKind) ([]byte, error) { return must("actmul", EmitActMul(k)) },
-	Act:        func(k ActKind) ([]byte, error) { return must("act", EmitAct(k)) },
-	SigmoidMul: func() ([]byte, error) { return must("sigmoidmul", EmitSigmoidMul()) },
-	Ln:         func() ([]byte, error) { return must("ln", EmitLn()) },
-	XIELU:      func() ([]byte, error) { return must("xielu", EmitXIELU()) },
+		Axpy:    func() ([]byte, error) { return must("axpy", EmitAxpy()) },
+		Scale:   func() ([]byte, error) { return must("scale", EmitScale()) },
+		Softcap: func() ([]byte, error) { return must("softcap", EmitSoftcap()) },
+		Clamp:   func() ([]byte, error) { return must("clamp", EmitClamp()) },
+		PrefetchLines: func() ([]byte, error) {
+			return must("prefetch_lines", EmitPrefetchLines())
+		},
+		Resample:   func(prec int) ([]byte, error) { return must("resample", EmitResample(prec)) },
+		ResampleH:  func(prec int) ([]byte, error) { return must("resample_h", EmitResampleH(prec)) },
+		PixLUT:     func() ([]byte, error) { return must("pixlut", EmitPixLUT()) },
+		Copy32:     func() ([]byte, error) { return must("copy32", EmitCopy32()) },
+		PixelRow:   EmitPixelRow,
+		AxisTaps:   func(f AxisFilter) ([]byte, error) { return must("axistaps", EmitAxisTaps(f)) },
+		LerpGrid:   func() ([]byte, error) { return must("lerpgrid", EmitLerpGrid()) },
+		SinCosTab:  func() ([]byte, error) { return must("sincostab", EmitSinCosTab()) },
+		Softmax:    func() ([]byte, error) { return must("softmax", EmitSoftmax()) },
+		LogSoftmax: func() ([]byte, error) { return must("logsoftmax", EmitLogSoftmax()) },
+		ActMul:     func(k ActKind) ([]byte, error) { return must("actmul", EmitActMul(k)) },
+		Act:        func(k ActKind) ([]byte, error) { return must("act", EmitAct(k)) },
+		SigmoidMul: func() ([]byte, error) { return must("sigmoidmul", EmitSigmoidMul()) },
+		Ln:         func() ([]byte, error) { return must("ln", EmitLn()) },
+		XIELU:      func() ([]byte, error) { return must("xielu", EmitXIELU()) },
 
-	RMSNorm:   func(n int) ([]byte, error) { return must("rmsnorm", EmitRMSNorm(n)) },
-	LayerNorm: func(n int, bias bool) ([]byte, error) { return must("layernorm", EmitLayerNorm(n, bias)) },
-	RowStat: func(n int, mode RowMode) ([]byte, error) {
-		switch mode {
-		case RowGauss:
-			return must("gausstopk", EmitGaussTopK(n))
-		case RowMag:
-			return must("magmatch", EmitMagMatch(n))
-		case RowStd:
-			return must("rowstd", EmitRowStd(n))
-		}
-		return nil, fmt.Errorf("jit: row statistic %d", mode)
-	},
-	RoPE:      EmitRoPE,
-	RoPESplit: EmitRoPESplit,
-	PackedRow: EmitPackedRow,
-	Widen:     func(bf16 bool) ([]byte, error) { return must("widen", EmitWiden(bf16)) },
-	NarrowF16: func() ([]byte, error) { return must("narrow_f16", EmitNarrowF16()) },
-	RopeTable: EmitRopeTable,
-	HCMix:     EmitHCMix,
-	NGramHash: EmitNGramHash,
-	RowIQ4NL:  func() ([]byte, error) { return must("row_iq4nl", EmitRowIQ4NL()) },
-	ColPool:   func() ([]byte, error) { return must("colpool", EmitColPool()) },
+		RMSNorm:   func(n int) ([]byte, error) { return must("rmsnorm", EmitRMSNorm(n)) },
+		LayerNorm: func(n int, bias bool) ([]byte, error) { return must("layernorm", EmitLayerNorm(n, bias)) },
+		RowStat: func(n int, mode RowMode) ([]byte, error) {
+			switch mode {
+			case RowGauss:
+				return must("gausstopk", EmitGaussTopK(n))
+			case RowMag:
+				return must("magmatch", EmitMagMatch(n))
+			case RowStd:
+				return must("rowstd", EmitRowStd(n))
+			}
+			return nil, fmt.Errorf("jit: row statistic %d", mode)
+		},
+		RoPE:      EmitRoPE,
+		RoPESplit: EmitRoPESplit,
+		PackedRow: EmitPackedRow,
+		Widen:     func(bf16 bool) ([]byte, error) { return must("widen", EmitWiden(bf16)) },
+		NarrowF16: func() ([]byte, error) { return must("narrow_f16", EmitNarrowF16()) },
+		RopeTable: EmitRopeTable,
+		HCMix:     EmitHCMix,
+		NGramHash: EmitNGramHash,
+		RowIQ4NL:  func() ([]byte, error) { return must("row_iq4nl", EmitRowIQ4NL()) },
+		ColPool:   func() ([]byte, error) { return must("colpool", EmitColPool()) },
 
-	AttnScores:      EmitAttnScores,
-	AttnAcc:         EmitAttnAcc,
-	AttnAccInto:     EmitAttnAccInto,
-	AttnScores2:     EmitAttnScores2,
-	AttnAcc2:        EmitAttnAcc2,
-	AttnAcc2Into:    EmitAttnAcc2Into,
-	AttnScoresTiled: EmitAttnScoresTiled,
-	KVWiden:         EmitKVWiden,
+		AttnScores:      EmitAttnScores,
+		AttnAcc:         EmitAttnAcc,
+		AttnAccInto:     EmitAttnAccInto,
+		AttnScores2:     EmitAttnScores2,
+		AttnAcc2:        EmitAttnAcc2,
+		AttnAcc2Into:    EmitAttnAcc2Into,
+		AttnScoresTiled: EmitAttnScoresTiled,
+		KVWiden:         EmitKVWiden,
 
-	RowMajorSupported: primaryRowMajorSupported,
-	RowMajor:          EmitNative,
-	FloatMatMul:       EmitFloatMatMul,
-	RowMajorGGUF:      true,
-	PackedSupported:   primaryPackedSupported,
-	// The packed emitters take the host's dot sequence at EMISSION time, as
-	// engine/nn/jit.go always passed it -- a closure rather than a captured value, so
-	// a re-probe (ForceNoVNNIForTest) is seen by the next emission.
-	PackedMatVec: func(t quant.Type, rows int) ([]byte, error) { return EmitPackedMatVec(t, rows, HostDotKind()) },
-	PackedWide:   func(t quant.Type) ([]byte, error) { return EmitPackedMatVecWide(t, HostDotKind()) },
-	PackedFused:  func(t quant.Type) ([]byte, error) { return EmitPackedMatVecFused(t, HostDotKind()) },
-	PackedFusedAhead: func(t quant.Type, ahead int) ([]byte, error) {
-		return EmitPackedMatVecFusedAhead(t, HostDotKind(), ahead)
-	},
-	PackedFusedWin: EmitPackedMatVecFusedWin,
-	PackedTiled: func(t quant.Type, k, nrows, tok int) ([]byte, error) {
-		return EmitPackedMatMulTiled(t, k, nrows, tok, HostDotKind())
-	},
-	MaxTiledTokens: MaxTiledTokens,
-	PackedGEMM: func(t quant.Type, k, nrows, win int) ([]byte, error) {
-		return EmitPackedMatMulStationary(t, k, nrows, win, HostDotKind())
-	},
-	QuantAct:       func(half bool) ([]byte, error) { return must("quantact", EmitQuantAct(half)) },
-	QuantActNarrow: func(half bool) ([]byte, error) { return must("quantactnarrow", EmitQuantActNarrow(half)) },
-	Argmax:         func() ([]byte, error) { return must("argmax", EmitArgmax()) },
-	MoETopK:        EmitMoETopK,
-	MoERoute:       EmitMoERoute,
-	SparseMixer:    EmitSparseMixer,
-	SampleSegMax:   EmitSampleSegMax,
-	SampleDraw:     EmitSampleDraw,
-	SamplePenalty:  EmitSamplePenalty,
+		RowMajorSupported: primaryRowMajorSupported,
+		RowMajor:          EmitNative,
+		FloatMatMul:       EmitFloatMatMul,
+		RowMajorGGUF:      true,
+		PackedSupported:   primaryPackedSupported,
+		// The packed emitters take the host's dot sequence at EMISSION time, as
+		// engine/nn/jit.go always passed it -- a closure rather than a captured value, so
+		// a re-probe (ForceNoVNNIForTest) is seen by the next emission.
+		PackedMatVec: func(t quant.Type, rows int) ([]byte, error) { return EmitPackedMatVec(t, rows, HostDotKind()) },
+		PackedWide:   func(t quant.Type) ([]byte, error) { return EmitPackedMatVecWide(t, HostDotKind()) },
+		PackedFused:  func(t quant.Type) ([]byte, error) { return EmitPackedMatVecFused(t, HostDotKind()) },
+		PackedFusedAhead: func(t quant.Type, ahead int) ([]byte, error) {
+			return EmitPackedMatVecFusedAhead(t, HostDotKind(), ahead)
+		},
+		PackedFusedWin: EmitPackedMatVecFusedWin,
+		PackedTiled: func(t quant.Type, k, nrows, tok int) ([]byte, error) {
+			return EmitPackedMatMulTiled(t, k, nrows, tok, HostDotKind())
+		},
+		MaxTiledTokens: MaxTiledTokens,
+		PackedGEMM: func(t quant.Type, k, nrows, win int) ([]byte, error) {
+			return EmitPackedMatMulStationary(t, k, nrows, win, HostDotKind())
+		},
+		QuantAct:       func(half bool) ([]byte, error) { return must("quantact", EmitQuantAct(half)) },
+		QuantActNarrow: func(half bool) ([]byte, error) { return must("quantactnarrow", EmitQuantActNarrow(half)) },
+		Argmax:         func() ([]byte, error) { return must("argmax", EmitArgmax()) },
+		MoETopK:        EmitMoETopK,
+		MoERoute:       EmitMoERoute,
+		SparseMixer:    EmitSparseMixer,
+		SampleSegMax:   EmitSampleSegMax,
+		SampleDraw:     EmitSampleDraw,
+		SamplePenalty:  EmitSamplePenalty,
 
-	GatedDelta:     EmitGatedDelta,
-	GatedDeltaChan: EmitGatedDeltaChan,
-	Conv1d:         EmitConv1d,
-	DeltaGate:      func() ([]byte, error) { return must("delta_gate", EmitDeltaGate()) },
-	DeltaDecayBound: func() ([]byte, error) {
-		return must("delta_decay_bound", EmitDeltaDecayBound())
-	},
-	GatedSSD: EmitGatedSSD,
-	SSDGate:  func() ([]byte, error) { return must("ssd_gate", EmitSSDGate()) },
-	SelScan:  EmitSelScan,
+		GatedDelta:     EmitGatedDelta,
+		GatedDeltaChan: EmitGatedDeltaChan,
+		Conv1d:         EmitConv1d,
+		DeltaGate:      func() ([]byte, error) { return must("delta_gate", EmitDeltaGate()) },
+		DeltaDecayBound: func() ([]byte, error) {
+			return must("delta_decay_bound", EmitDeltaDecayBound())
+		},
+		GatedSSD: EmitGatedSSD,
+		SSDGate:  func() ([]byte, error) { return must("ssd_gate", EmitSSDGate()) },
+		SelScan:  EmitSelScan,
 
-	DWConv: EmitDWConv,
+		DWConv: EmitDWConv,
+	}
 }
 
 // sseEmitters is the legacy-SSE tier. The matvec family's wide and tiled
 // refusals live in sse_refuse.go.
-var sseEmitters = Emitters{
-	Tier: TierSSE,
+func sseEmitters() Emitters {
+	return Emitters{
+		Tier: TierSSE,
 
-	Axpy:          EmitAxpySSE,
-	Scale:         EmitScaleSSE,
-	Softcap:       EmitSoftcapSSE,
-	Clamp:         EmitClampSSE,
-	PrefetchLines: EmitPrefetchLinesSSE,
-	Resample:      EmitResampleSSE,
-	ResampleH:     EmitResampleHSSE,
-	PixLUT:        EmitPixLUTSSE,
-	Copy32:        EmitCopy32SSE,
-	PixelRow:      EmitPixelRowSSE,
-	AxisTaps:      EmitAxisTapsSSE,
-	LerpGrid:      EmitLerpGridSSE,
-	SinCosTab:     EmitSinCosTabSSE,
-	Softmax:       EmitSoftmaxSSE,
-	LogSoftmax:    EmitLogSoftmaxSSE,
-	ActMul:        EmitActMulSSE,
-	Act:           EmitActSSE,
-	SigmoidMul:    EmitSigmoidMulSSE,
-	Ln:            EmitLnSSE,
-	XIELU:         EmitXIELUSSE,
+		Axpy:          EmitAxpySSE,
+		Scale:         EmitScaleSSE,
+		Softcap:       EmitSoftcapSSE,
+		Clamp:         EmitClampSSE,
+		PrefetchLines: EmitPrefetchLinesSSE,
+		Resample:      EmitResampleSSE,
+		ResampleH:     EmitResampleHSSE,
+		PixLUT:        EmitPixLUTSSE,
+		Copy32:        EmitCopy32SSE,
+		PixelRow:      EmitPixelRowSSE,
+		AxisTaps:      EmitAxisTapsSSE,
+		LerpGrid:      EmitLerpGridSSE,
+		SinCosTab:     EmitSinCosTabSSE,
+		Softmax:       EmitSoftmaxSSE,
+		LogSoftmax:    EmitLogSoftmaxSSE,
+		ActMul:        EmitActMulSSE,
+		Act:           EmitActSSE,
+		SigmoidMul:    EmitSigmoidMulSSE,
+		Ln:            EmitLnSSE,
+		XIELU:         EmitXIELUSSE,
 
-	RMSNorm:   EmitRMSNormSSE,
-	LayerNorm: EmitLayerNormSSE,
-	RowStat: func(n int, mode RowMode) ([]byte, error) {
-		switch mode {
-		case RowGauss:
-			return EmitGaussTopKSSE(n)
-		case RowMag:
-			return EmitMagMatchSSE(n)
-		case RowStd:
-			return EmitRowStdSSE(n)
-		}
-		return nil, fmt.Errorf("jit: row statistic %d", mode)
-	},
-	RoPE:      EmitRoPESSE,
-	RoPESplit: EmitRoPESplitSSE,
-	PackedRow: EmitPackedRowSSE,
-	Widen:     EmitWidenSSE,
-	NarrowF16: EmitNarrowF16SSE,
-	RopeTable: EmitRopeTableSSE,
-	HCMix:     EmitHCMixSSE,
-	NGramHash: EmitNGramHashSSE,
-	RowIQ4NL:  EmitRowIQ4NLSSE,
-	ColPool:   EmitColPoolSSE,
+		RMSNorm:   EmitRMSNormSSE,
+		LayerNorm: EmitLayerNormSSE,
+		RowStat: func(n int, mode RowMode) ([]byte, error) {
+			switch mode {
+			case RowGauss:
+				return EmitGaussTopKSSE(n)
+			case RowMag:
+				return EmitMagMatchSSE(n)
+			case RowStd:
+				return EmitRowStdSSE(n)
+			}
+			return nil, fmt.Errorf("jit: row statistic %d", mode)
+		},
+		RoPE:      EmitRoPESSE,
+		RoPESplit: EmitRoPESplitSSE,
+		PackedRow: EmitPackedRowSSE,
+		Widen:     EmitWidenSSE,
+		NarrowF16: EmitNarrowF16SSE,
+		RopeTable: EmitRopeTableSSE,
+		HCMix:     EmitHCMixSSE,
+		NGramHash: EmitNGramHashSSE,
+		RowIQ4NL:  EmitRowIQ4NLSSE,
+		ColPool:   EmitColPoolSSE,
 
-	AttnScores:      EmitAttnScoresSSE,
-	AttnAcc:         EmitAttnAccSSE,
-	AttnAccInto:     EmitAttnAccIntoSSE,
-	AttnScores2:     EmitAttnScores2SSE,
-	AttnAcc2:        EmitAttnAcc2SSE,
-	AttnAcc2Into:    EmitAttnAcc2IntoSSE,
-	AttnScoresTiled: EmitAttnScoresTiledSSE,
-	KVWiden:         EmitKVWidenSSE,
+		AttnScores:      EmitAttnScoresSSE,
+		AttnAcc:         EmitAttnAccSSE,
+		AttnAccInto:     EmitAttnAccIntoSSE,
+		AttnScores2:     EmitAttnScores2SSE,
+		AttnAcc2:        EmitAttnAcc2SSE,
+		AttnAcc2Into:    EmitAttnAcc2IntoSSE,
+		AttnScoresTiled: EmitAttnScoresTiledSSE,
+		KVWiden:         EmitKVWidenSSE,
 
-	RowMajorSupported: SupportedRowMajorSSE,
-	RowMajor:          EmitRowMajorSSE,
-	FloatMatMul:       EmitFloatMatMulSSE,
-	RowMajorGGUF:      false,
-	PackedSupported:   SupportedPackedSSE,
-	PackedMatVec:      EmitPackedMatVecSSE,
-	PackedWide:        EmitPackedMatVecWideSSE,
-	PackedFused:       EmitPackedMatVecFusedSSE,
-	PackedFusedAhead:  EmitPackedMatVecFusedAheadSSE,
-	PackedFusedWin:    EmitPackedMatVecFusedWinSSE,
-	PackedTiled:       EmitPackedMatMulTiledSSE,
-	MaxTiledTokens:    MaxTiledTokensSSE,
-	PackedGEMM:        EmitPackedGEMMSSE,
-	QuantAct:          EmitQuantActSSE,
-	QuantActNarrow:    EmitQuantActNarrowSSE,
-	Argmax:            EmitArgmaxSSE,
-	MoETopK:           EmitMoETopKSSE,
-	MoERoute:          EmitMoERouteSSE,
-	SparseMixer:       EmitSparseMixerSSE,
-	SampleSegMax:      EmitSampleSegMaxSSE,
-	SampleDraw:        EmitSampleDrawSSE,
-	SamplePenalty:     EmitSamplePenaltySSE,
+		RowMajorSupported: SupportedRowMajorSSE,
+		RowMajor:          EmitRowMajorSSE,
+		FloatMatMul:       EmitFloatMatMulSSE,
+		RowMajorGGUF:      false,
+		PackedSupported:   SupportedPackedSSE,
+		PackedMatVec:      EmitPackedMatVecSSE,
+		PackedWide:        EmitPackedMatVecWideSSE,
+		PackedFused:       EmitPackedMatVecFusedSSE,
+		PackedFusedAhead:  EmitPackedMatVecFusedAheadSSE,
+		PackedFusedWin:    EmitPackedMatVecFusedWinSSE,
+		PackedTiled:       EmitPackedMatMulTiledSSE,
+		MaxTiledTokens:    MaxTiledTokensSSE,
+		PackedGEMM:        EmitPackedGEMMSSE,
+		QuantAct:          EmitQuantActSSE,
+		QuantActNarrow:    EmitQuantActNarrowSSE,
+		Argmax:            EmitArgmaxSSE,
+		MoETopK:           EmitMoETopKSSE,
+		MoERoute:          EmitMoERouteSSE,
+		SparseMixer:       EmitSparseMixerSSE,
+		SampleSegMax:      EmitSampleSegMaxSSE,
+		SampleDraw:        EmitSampleDrawSSE,
+		SamplePenalty:     EmitSamplePenaltySSE,
 
-	GatedDelta:      EmitGatedDeltaSSE,
-	GatedDeltaChan:  EmitGatedDeltaChanSSE,
-	Conv1d:          EmitConv1dSSE,
-	DeltaGate:       EmitDeltaGateSSE,
-	DeltaDecayBound: EmitDeltaDecayBoundSSE,
-	GatedSSD:        EmitGatedSSDSSE,
-	SSDGate:         EmitSSDGateSSE,
-	SelScan:         EmitSelScanSSE,
+		GatedDelta:      EmitGatedDeltaSSE,
+		GatedDeltaChan:  EmitGatedDeltaChanSSE,
+		Conv1d:          EmitConv1dSSE,
+		DeltaGate:       EmitDeltaGateSSE,
+		DeltaDecayBound: EmitDeltaDecayBoundSSE,
+		GatedSSD:        EmitGatedSSDSSE,
+		SSDGate:         EmitSSDGateSSE,
+		SelScan:         EmitSelScanSSE,
 
-	DWConv: EmitDWConvSSE,
+		DWConv: EmitDWConvSSE,
+	}
 }

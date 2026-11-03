@@ -115,12 +115,13 @@ func (g *devTier) towerStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan,
 // picture attending positions [lo, hi): its key and value written at its
 // position. A row-chunked block's first phase (nn.RowChunker) reads only
 // what its rows wrote -- its output is the caller's scratch -- and its
-// second reads every key the first phases wrote.
-func picRow(d []byte, at, lo, hi, phase int) {
+// second reads every key the first phases wrote. causal ends each row's keys
+// at itself, the violation a non-causal block's gate must not survive.
+func picRow(d []byte, at, lo, hi, phase int, causal bool) {
 	if phase == 1 {
 		hi = at + 1
 	}
-	if rowsFaulted("piccausal") {
+	if causal {
 		hi = min(hi, at+1)
 	}
 	binary.LittleEndian.PutUint32(d[4*composer.RowTab:], 0)
@@ -132,14 +133,14 @@ func picRow(d []byte, at, lo, hi, phase int) {
 // picDesc is the descriptors of a call's n rows from position pos: each row
 // attends the picture's rows, the call's where it is not a phase of a
 // row-chunked block (keys rows where it is).
-func (bs *blockScratch) picDesc(pos, n, phase, keys int) []byte {
+func (bs *blockScratch) picDesc(pos, n, phase, keys int, causal bool) []byte {
 	b, w := bs.picStage, 4*composer.RowWords
 	end := pos + n
 	if phase == 2 {
 		end = keys
 	}
 	for r := 0; r < len(b)/w; r++ {
-		picRow(b[r*w:], pos+r, 0, end, phase)
+		picRow(b[r*w:], pos+r, 0, end, phase, causal)
 	}
 	return b
 }
@@ -147,7 +148,7 @@ func (bs *blockScratch) picDesc(pos, n, phase, keys int) []byte {
 // picWinDesc is picDesc with each row attending its window
 // (graph.Attrs.RowWindows): its own run where the windows are a row each,
 // else the run holding it; the picture where no run holds it.
-func (bs *blockScratch) picWinDesc(pos, n, phase, keys int, runs []nn.KeyRun, perRow bool) []byte {
+func (bs *blockScratch) picWinDesc(pos, n, phase, keys int, runs []nn.KeyRun, perRow, causal bool) []byte {
 	b, w := bs.picStageW, 4*composer.RowWords
 	end := pos + n
 	if phase == 2 {
@@ -167,7 +168,7 @@ func (bs *blockScratch) picWinDesc(pos, n, phase, keys int, runs []nn.KeyRun, pe
 				}
 			}
 		}
-		picRow(b[r*w:], at, lo, hi, phase)
+		picRow(b[r*w:], at, lo, hi, phase, causal)
 	}
 	return b
 }

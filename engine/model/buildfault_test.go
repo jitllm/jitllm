@@ -16,9 +16,9 @@ import (
 
 const faultModel = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 
-func faultTier(t *testing.T, parts gpu.Parts) *gpu.GPU {
+func faultTier(t *testing.T, parts gpu.Parts, extra ...gpu.Option) *gpu.GPU {
 	t.Helper()
-	o := append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)
+	o := append(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...), extra...)
 	if testdevices.Selected() {
 		o = append(o, gpu.WithDevices(testdevices.One("")))
 	}
@@ -42,9 +42,9 @@ type faultRun struct {
 // for the violation, as the device failing.
 func buildFaultRun(t *testing.T, m *Model, parts gpu.Parts, asDevice bool) faultRun {
 	t.Helper()
-	gpu.SetFormFault(true, graph.OpMatVec, asDevice)
-	defer gpu.SetFormFault(false, 0, false)
-	g := faultTier(t, parts)
+	var f gpu.Faults
+	f.SetFormFault(true, graph.OpMatVec, asDevice)
+	g := faultTier(t, parts, gpu.WithFaults(&f))
 	defer g.Close()
 	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is", true)
 	st := m.NewInstance(len(ids) + 8)

@@ -27,14 +27,14 @@ func TestSpecSoftcapGateDiscriminates(t *testing.T) {
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {
 					bound := specCapBound(t, m, spec, prompt, want)
+					var f gpu.Faults
 					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
-						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+						gpu.WithDeviceTune(gpu.TuneOff), gpu.WithFaults(&f)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)
 					}
 					defer g.Close()
-					gpu.SetRowsFault("nocap")
-					defer gpu.SetRowsFault("")
+					f.SetRowsFault("nocap")
 					bad := specVerifyCapped(t, m, g, prompt, want, false)
 					t.Logf("nocap on %s: verify rows against decode, worst logit NMSE %.3e, %.0fx the bound %.3e",
 						spec, bad, bad/bound, bound)

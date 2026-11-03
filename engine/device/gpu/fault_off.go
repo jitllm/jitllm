@@ -16,14 +16,16 @@ func faultPanicAt() []int { return nil }
 
 func (g *devTier) injectedPanic() {}
 
-func pagedFaulted(string) bool { return false }
+type tierFaults struct{}
 
-func recFaulted(string) bool { return false }
+func (*Config) pagedFaulted(string) bool { return false }
 
-func rowsFaulted(string) bool { return false }
+func (*Config) recFaulted(string) bool { return false }
 
-func roomFaulted(string) bool { return false }
+func (*Config) rowsFaulted(string) bool { return false }
+
+func (*Config) roomFaulted(string) bool { return false }
 
 func (g *devTier) rewriteComposer(*composer.Registry) {}
 
-func formFaultedAsDevice() bool { return false }
+func (*Config) formFaultedAsDevice() bool { return false }

@@ -1,8 +1,6 @@
 package gpu
 
 import (
-	"sync/atomic"
-
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -25,8 +23,6 @@ import (
 // head -- changes what every step reads, takes the call lock exclusively
 // (enter) and so runs with no step on the device.
 
-var nextSession atomic.Uint64
-
 // Attach returns a device view bound to a fresh session. Every instance that wants
 // its own attention history calls it; two views on one GPU share the model's
 // weights and kernels and nothing else.
@@ -34,7 +30,22 @@ var nextSession atomic.Uint64
 // The zero session -- a caller that uses *GPU directly -- still works and is
 // exactly the single-instance behaviour every existing gate measures.
 func (g *GPU) Attach() nn.LayerDevice {
-	return &gpuSession{g: g, sid: nextSession.Add(1)}
+	s := &gpuSession{g: g, sid: g.sessions.Add(1)}
+	// GPU is the nn.LayerDevice a caller gets, and a session the same device
+	// bound to its own history.
+	var (
+		_ nn.LayerDevice   = g
+		_ nn.NamedDevice   = g
+		_ nn.RecRowsDevice = g
+		_ nn.CopyForgetter = g
+		_ nn.ModelOwner    = g
+		_ nn.NamedDevice   = s
+		_ nn.Session       = s
+		_ nn.RecRowsDevice = s
+		_ nn.CopyForgetter = s
+		_ nn.ModelOwner    = s
+	)
+	return s
 }
 
 type gpuSession struct {

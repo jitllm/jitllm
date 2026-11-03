@@ -15,8 +15,10 @@ import (
 // ssdShapes pairs a state width (baked: Mamba-2's d_state) with a row count
 // (the head's head_dim, a runtime argument), ragged in both and with the rows
 // unequal to the width -- the delta rule's kernel has only ever run square.
-var ssdShapes = [][2]int{{1, 1}, {5, 3}, {8, 8}, {12, 7}, {16, 64}, {33, 5}, {64, 16},
-	{128, 64}, {128, 1}, {130, 9}, {64, 128}}
+func ssdShapes() [][2]int {
+	return [][2]int{{1, 1}, {5, 3}, {8, 8}, {12, 7}, {16, 64}, {33, 5}, {64, 16},
+		{128, 64}, {128, 1}, {130, 9}, {64, 128}}
+}
 
 // ssdStateSSE is the SSE tier's state update to the bit (EmitGatedSSDSSE):
 // x*dt rounded, then each element's decay product and input product rounded
@@ -60,7 +62,7 @@ func ssdWiden(v []float32) []float64 {
 // the unscaled value would be right on the state or the output and wrong on
 // the other; the violations below prove the gate sees both.
 func TestEmitGatedSSDMatchesOracle(t *testing.T) {
-	for _, sh := range ssdShapes {
+	for _, sh := range ssdShapes() {
 		n, rows := sh[0], sh[1]
 		code := onHost(t)(hostTable().GatedSSD(n))
 		rnd := rand.New(rand.NewSource(int64(31*n + rows)))

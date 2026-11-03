@@ -98,7 +98,13 @@ func swaMedian(a, b [][]float32, from int) float64 {
 // reduction order per process and two tiers disagree with each other.
 func swaTier(t *testing.T) *gpu.GPU {
 	t.Helper()
-	o := append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)
+	return swaTierWith(t)
+}
+
+// swaTierWith is swaTier with extra options.
+func swaTierWith(t *testing.T, extra ...gpu.Option) *gpu.GPU {
+	t.Helper()
+	o := append(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...), extra...)
 	if testdevices.Selected() {
 		o = append(o, gpu.WithDevices(testdevices.One("")))
 	}

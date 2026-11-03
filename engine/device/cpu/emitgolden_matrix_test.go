@@ -109,7 +109,9 @@ func matrixShapes(t quant.Type, group int) [][2]int {
 
 // fusedAheads is engine/nn/prefetch.go's prefetchDistances (the duel's
 // candidates, FusedAheadWords first) and the neighbours of its rungs.
-var fusedAheads = []int{FusedAheadWords, 0, 1, 2, 3, 4, 8, 16}
+func fusedAheads() []int {
+	return []int{FusedAheadWords, 0, 1, 2, 3, 4, 8, 16}
+}
 
 // gemmTiles is every register tile the row-major GEMM accepts (mr <= 8,
 // mr*nr <= 12; engine/nn/tune.go's gemmCandidates are among them) and one
@@ -127,7 +129,9 @@ func gemmTiles() [][2]int {
 // gemmNBs is the super-block counts a row-major GEMM is swept at. nb reaches
 // the code as the row stride's immediate: every tile runs at the first two,
 // engine/nn/tune.go's candidate tiles at all of them.
-var gemmNBs = []int{1, 8, 2, 3, 16, 56, 64}
+func gemmNBs() []int {
+	return []int{1, 8, 2, 3, 16, 56, 64}
+}
 
 func gemmCandidateTile(tl [2]int) bool {
 	for _, c := range [][2]int{{4, 2}, {6, 2}, {2, 2}, {3, 4}, {2, 4}, {8, 1}, {4, 1}, {1, 1}} {
@@ -141,7 +145,7 @@ func gemmCandidateTile(tl [2]int) bool {
 // gemmSweep calls f at every (tile, nb, window) the row-major GEMM is pinned at.
 func gemmSweep(f func(mr, nr, nb, win int)) {
 	for _, tl := range gemmTiles() {
-		for i, nb := range gemmNBs {
+		for i, nb := range gemmNBs() {
 			if i >= 2 && !gemmCandidateTile(tl) {
 				continue
 			}
@@ -176,7 +180,7 @@ func TestNEONMatrixEmittersAreByteStable(t *testing.T) {
 						c, err := EmitA64PackedMatVecPF(q, rows, pf)
 						m.add(fmt.Sprintf("matvec/%s/rows=%d/pf=%d", p, rows, pf), c, err)
 					}
-					for _, ah := range fusedAheads {
+					for _, ah := range fusedAheads() {
 						c, err := EmitA64PackedMatVecFused(q, rows, ah)
 						m.add(fmt.Sprintf("fused/%s/rows=%d/ahead=%d", p, rows, ah), c, err)
 					}

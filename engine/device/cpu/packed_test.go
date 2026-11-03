@@ -16,7 +16,7 @@ import (
 // against the GGUF dequantizer in kernels.TestPackedRefMatchesDequant; neither
 // alone would catch a wrong layout shared by the packer and reference.
 // packedFormats derives from quant.PackedTypes so no format is left out.
-var packedFormats = func() (fs []struct {
+func packedFormats() (fs []struct {
 	name string
 	g    quant.Type
 	k    layout.Quant
@@ -33,7 +33,7 @@ var packedFormats = func() (fs []struct {
 		}{g.String(), g, k})
 	}
 	return fs
-}()
+}
 
 func u32b(v []uint32) []byte {
 	if len(v) == 0 {
@@ -47,7 +47,7 @@ func TestPackedKernelMatchesReference(t *testing.T) {
 	// tensor's full width, which a one-tile run cannot tell apart.
 	const nrows, k = 192, 512
 	ran := 0
-	for _, f := range packedFormats {
+	for _, f := range packedFormats() {
 		t.Run(f.name, func(t *testing.T) {
 			if !PackedSupported(f.g) {
 				t.Fatalf("%s has no packed kernel -- the table and the emitter disagree", f.name)
@@ -140,7 +140,7 @@ func TestPackedKernelMatchesReference(t *testing.T) {
 			ran++
 		})
 	}
-	if ran != len(packedFormats) {
-		t.Fatalf("%d of %d formats ran -- this gate proved less than it claims", ran, len(packedFormats))
+	if ran != len(packedFormats()) {
+		t.Fatalf("%d of %d formats ran -- this gate proved less than it claims", ran, len(packedFormats()))
 	}
 }

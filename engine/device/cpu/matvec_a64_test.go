@@ -25,7 +25,7 @@ func TestA64EmitRejects(t *testing.T) {
 	if _, err := EmitA64(Spec{W: quant.Q4_0, Rows: 1, Cols: 4}); err == nil {
 		t.Error("EmitA64 accepted a batched shape; only decode matvec exists")
 	}
-	for _, wt := range a64KernelTypes {
+	for _, wt := range a64KernelTypes() {
 		code, err := EmitA64(Spec{W: wt, Rows: 1, Accs: 1, Cols: 1})
 		if err != nil {
 			t.Fatalf("EmitA64(%s): %v", wt, err)
@@ -52,7 +52,7 @@ func TestA64KernelRegisterDiscipline(t *testing.T) {
 	if mc == "" {
 		t.Skip("no llvm-mc to disassemble aarch64")
 	}
-	for _, wt := range a64KernelTypes {
+	for _, wt := range a64KernelTypes() {
 		code, err := EmitA64(Spec{W: wt, Rows: 1, Accs: 1, Cols: 1})
 		if err != nil {
 			t.Fatal(err)
@@ -151,7 +151,7 @@ func TestA64UnencodableStride(t *testing.T) {
 		f()
 		return
 	}
-	for _, wt := range a64KernelTypes {
+	for _, wt := range a64KernelTypes() {
 		stride := RowBytes(wt, k)
 		off := int32((rows-1)*stride) + 2 // row 7's weight payload
 		var a A64

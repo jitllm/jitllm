@@ -17,17 +17,6 @@ import (
 // nothing. A block is still the unit and the device still declines per block;
 // there are simply more devices to offer a block to before the host keeps it.
 
-// GPU is the nn.LayerDevice a caller gets; devTier is the same interface over
-// one card.
-var (
-	_ nn.LayerDevice   = (*GPU)(nil)
-	_ nn.NamedDevice   = (*GPU)(nil)
-	_ nn.RecRowsDevice = (*GPU)(nil)
-	_ nn.NamedDevice   = (*gpuSession)(nil)
-	_ nn.Session       = (*gpuSession)(nil)
-	_ nn.RecRowsDevice = (*gpuSession)(nil)
-)
-
 // order ranks devices fastest first, by the same probe() choose() uses. The
 // enumeration order is not good enough: a block placed on the slow device while
 // the fast one had room is a loss no later decision undoes, and which backend

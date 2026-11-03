@@ -62,10 +62,10 @@ func TestComposedHeadWritesItsHidden(t *testing.T) {
 // dev, the composer asked for parts, and runs one speculation step of k rows
 // after it: every row wanted, or with fold a prompt chunk wanting its last.
 // It returns the normed rows read back and the tier's stats.
-func composedHidden(t *testing.T, m *Model, dev string, parts gpu.Parts, k int, fold bool) ([]float32, gpu.Stats) {
+func composedHidden(t *testing.T, m *Model, dev string, parts gpu.Parts, k int, fold bool, extra ...gpu.Option) ([]float32, gpu.Stats) {
 	t.Helper()
-	g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
-		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 32 }))
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 32 })}, extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}

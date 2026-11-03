@@ -66,7 +66,7 @@ func dotFamilies(t *testing.T) map[string][]byte {
 		}
 		out[name] = code
 	}
-	for _, w := range a64KernelTypes {
+	for _, w := range a64KernelTypes() {
 		for _, win := range []int16{0, 256} {
 			code, err := EmitA64(Spec{W: w, Rows: 1, Accs: 1, Cols: 1, ActWin: win})
 			add("rowmajor/"+w.String()+"/win"+itoa(int(win)), code, err)
@@ -145,7 +145,7 @@ func TestNoDotProdMatchesDotBitForBit(t *testing.T) {
 		t.Log("no FEAT_DotProd on this chip: the widened arm alone, against the oracle")
 	}
 	ran := 0
-	for _, f := range packedFormats {
+	for _, f := range packedFormats() {
 		// The tiled kernel, the fused one, and the fused one at a window that
 		// takes the integer fold, where the format has it.
 		for arm := 0; arm < 3; arm++ {

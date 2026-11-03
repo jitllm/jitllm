@@ -152,7 +152,9 @@ func moeDiff(want, got moeRoute) string {
 	return ""
 }
 
-var moeTestConsts = MoETopKConsts()
+func moeTestConsts() []float32 {
+	return MoETopKConsts()
+}
 
 // moeCall runs a mapped kernel over p, in the ABI nn uses.
 func moeCall(c *Code, p []float32, k int) moeRoute {
@@ -169,7 +171,7 @@ func moeCall(c *Code, p []float32, k int) moeRoute {
 	}
 	args := Args{
 		Q32:      &p[0],
-		Scr:      (*byte)(unsafe.Pointer(&moeTestConsts[0])),
+		Scr:      (*byte)(unsafe.Pointer(&moeTestConsts()[0])),
 		Scratch:  (*byte)(unsafe.Pointer(&scr[0])),
 		ASum:     &r.sel[0],
 		AHalfSum: &r.ord[0],
@@ -186,7 +188,7 @@ func moeCall(c *Code, p []float32, k int) moeRoute {
 // 4 on Qwen3-MoE-4x0.6B, 32 on gpt-oss, 64 on olmoe, 128 on Qwen3-30B-A3B, 512
 // on Qwen3-Next-80B -- plus 8, and 63/65 either side of a vector boundary,
 // because the vector width divides none of the real ones either.
-var moeShapes = func() [][2]int {
+func moeShapes() [][2]int {
 	var out [][2]int
 	for _, n := range []int{4, 8, 32, 63, 64, 65, 128, 512} {
 		for _, k := range []int{1, 2, 4, 6, 8, 10} {
@@ -199,7 +201,7 @@ var moeShapes = func() [][2]int {
 		}
 	}
 	return out
-}()
+}
 
 // moeInputs is the probability vectors for one expert count.
 //

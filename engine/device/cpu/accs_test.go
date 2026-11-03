@@ -112,19 +112,12 @@ func abAccs(t *testing.T, wt quant.Type) {
 	}
 }
 
-// requireRowMajorExec skips a gate that emits and then runs a row-major kernel
-// on a CPU that cannot execute one. The emitters are host-pure (so cross-arch
-// disassembly gates can exist), so emitter success is not permission to call
-// the code. SupportedNative is the question nn asks, and keying on it rather
-// than GOARCH keeps the gate live wherever the path is.
+// requireRowMajorExec skips a measurement that executes a row-major kernel on
+// a host whose native table has none for qt: the emitter still produces it,
+// only calling it is unsafe.
 func requireRowMajorExec(t testing.TB, qt quant.Type) {
 	t.Helper()
-	if SupportedNative(qt) {
-		return
+	if !SupportedNative(qt) {
+		t.Skipf("ROW-MAJOR %v CANNOT BE EXECUTED ON THIS HOST -- this measurement covered nothing here", qt)
 	}
-	t.Skipf("ROW-MAJOR %v CANNOT BE EXECUTED ON THIS HOST (no AVX-VNNI) -- this "+
-		"gate covered nothing here. The emitter still produces the kernel, which "+
-		"is why the disassembly gates beside this one still run; only calling it "+
-		"is unsafe. The row-major family has no pre-VNNI form by decision "+
-		"(native_amd64.go); prevnni.go carries the packed family's AVX2 sequence.", qt)
 }

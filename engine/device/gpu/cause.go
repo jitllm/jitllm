@@ -44,7 +44,7 @@ func (g *devTier) compile(k *ir.Kernel) (backend.Kernel, error) {
 
 // noteFormCause records a form or a lowering that did not build.
 func (g *devTier) noteFormCause() {
-	if formFaultedAsDevice() {
+	if g.formFaultedAsDevice() {
 		g.noteCause(nn.FailFault)
 	} else {
 		g.noteCause(nn.FailBuild)

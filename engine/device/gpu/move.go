@@ -16,11 +16,6 @@ import (
 // otherwise through a host buffer in chunks, the read of one overlapping the
 // write of the last.
 
-// errNotDirect says a move cannot run in the tier -- a device that keeps the
-// contiguous cache, a batch's flat rows -- and nothing was changed: the caller
-// moves the block through its own cache instead.
-var errNotDirect = nn.ErrNotDirect
-
 // moveChunk is the staged path's buffer: big enough that a transfer runs at
 // the link's rate, small enough that two of them are nothing beside a card.
 const moveChunk = 16 << 20
@@ -189,7 +184,7 @@ func (g *GPU) MoveBlock(li int, to string, p *nn.LayerPlan, w *nn.LayerWeights, 
 // moveBlock moves block li of session sid to the named device, its history
 // copied device to device; pos is the session's position. Moved false with
 // no error is the target refusing the block, which stays where it was;
-// errNotDirect is a move the tier cannot make, with nothing changed.
+// nn.ErrNotDirect is a move the tier cannot make, with nothing changed.
 func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.LayerWeights, pos int) (nn.BlockMoved, error) {
 	g.settle()
 	var out nn.BlockMoved
@@ -245,7 +240,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 		g.mu.Lock()
 		delete(g.staged, li)
 		g.mu.Unlock()
-		return out, errNotDirect
+		return out, nn.ErrNotDirect
 	}
 	path, n, err := copyHistory(sid, li, src, d, pos)
 	if err != nil {
@@ -315,7 +310,7 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 		}
 		for o := range spl.owned {
 			if o.sid == sid && o.base != 0 {
-				return "", 0, errNotDirect // a batch's rows: the instance moves them
+				return "", 0, nn.ErrNotDirect // a batch's rows: the instance moves them
 			}
 		}
 		dpl := dkp.layers[key]
