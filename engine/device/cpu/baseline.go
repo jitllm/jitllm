@@ -6,15 +6,14 @@ import (
 	"sync/atomic"
 )
 
-// Baseline reports whether this host can run the engine: whether every kernel
-// a model needs exists for this host's tier.
+// Baseline reports whether this host can run the engine: whether the
+// composer lowers for this host's tier.
 //
 // It is not Map's gate (Map checks each kernel's declared ISA, isa.go); it
-// answers whether this host's tier is complete. On amd64 an AVX2 host always
-// is; an SSE host is when the SSE table has a kernel for every op
-// (SSEPending); anything below SSE4.1+SSSE3 never is. model.Open refuses
-// through it (nn.HostRefusal), and the error names which extensions or which
-// SSE-tier ops are missing, because the caller prints it.
+// answers whether this host has a tier at all. On amd64 an AVX2 host and an
+// SSE4.1+SSSE3 host do; anything below never does. model.Open refuses
+// through it (nn.HostRefusal), and the error names which extensions are
+// missing, because the caller prints it.
 //
 // It exists because a pre-AVX2 host would SIGILL on the first token: the
 // quantized path declined correctly, but the elementwise path asked a width

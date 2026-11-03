@@ -3,7 +3,6 @@
 package cpu
 
 import (
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -39,58 +38,6 @@ func TestSSEProbesCoverEveryField(t *testing.T) {
 			t.Errorf("Emitters.%s has %d probes in sseProbes, want exactly 1", f, probed[f])
 		}
 	}
-}
-
-// TestBaselineAnswersFromTheSSETable is Baseline on an SSE host, in both
-// directions. It checks Baseline agrees with SSEPending as the tree stands,
-// then stubs GatedDelta and requires the refusal to name exactly it, then
-// restores it and requires the name gone, so a Baseline that ignored the table
-// or cached a verdict across the swap fails.
-func TestBaselineAnswersFromTheSSETable(t *testing.T) {
-	if HostTier() != TierAVX2 && HostTier() != TierSSE {
-		t.Skipf("host tier %v", HostTier())
-	}
-	withTier(t, TierSSE)
-
-	check := func(t *testing.T, stage string) {
-		t.Helper()
-		pending := SSEPending()
-		err := Baseline()
-		if len(pending) == 0 {
-			if err != nil {
-				t.Fatalf("%s: every SSE op has a kernel and Baseline refuses: %v", stage, err)
-			}
-			return
-		}
-		if err == nil {
-			t.Fatalf("%s: %d SSE ops are pending (%s) and Baseline passes -- the engine would "+
-				"start and panic mid-Open", stage, len(pending), strings.Join(pending, ", "))
-		}
-		if !errors.Is(err, ErrNoSSEKernel) || !errors.Is(err, errNoBaseline) {
-			t.Errorf("%s: refusal %v does not wrap both ErrNoSSEKernel and the floor", stage, err)
-		}
-		for _, p := range pending {
-			if !strings.Contains(err.Error(), p) {
-				t.Errorf("%s: refusal does not name pending op %s: %v", stage, p, err)
-			}
-		}
-		if !strings.Contains(err.Error(), "avx2, fma, f16c") {
-			t.Errorf("%s: refusal does not say why this host is on the SSE tier: %v", stage, err)
-		}
-	}
-	check(t, "as the tree stands")
-
-	stub := EmittersFor(TierSSE)
-	stub.GatedDelta = func(int) ([]byte, error) { return nil, errNoSSE("gated_delta") }
-	err := baselineWith(stub)
-	if err == nil || !strings.Contains(err.Error(), "GatedDelta") {
-		t.Fatalf("GatedDelta put back to a stub and Baseline says %v -- it does not ask the table", err)
-	}
-	retier(TierSSE)
-	if err := Baseline(); err != nil && strings.Contains(err.Error(), "GatedDelta") {
-		t.Fatalf("GatedDelta restored and Baseline still names it: %v -- a stale verdict", err)
-	}
-	check(t, "after the swap")
 }
 
 // TestSSEProbesReportAPanickingEmitter: an emitter that panics at an engine
