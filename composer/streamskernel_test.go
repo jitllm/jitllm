@@ -4,9 +4,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestStreamsRefusedPerKernel forms a part of a 2048-row and two 512-row

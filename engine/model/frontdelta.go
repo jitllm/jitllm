@@ -3,8 +3,8 @@ package model
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // deltaMixer is a linear block's mixer over its normed row n, as the

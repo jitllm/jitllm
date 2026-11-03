@@ -3,9 +3,9 @@ package gpu
 import (
 	"math"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // This helper is untagged so the package compiles on darwin: the untagged

@@ -5,7 +5,7 @@ import (
 	"math"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // decomposeSelect is OpSelect over the paged history: each query head's dot

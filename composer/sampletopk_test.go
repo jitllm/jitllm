@@ -9,8 +9,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // SampleCase is one row the sampler's form is held to: its logits, the

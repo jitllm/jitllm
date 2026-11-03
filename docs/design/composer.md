@@ -178,7 +178,7 @@ source (RULE 11e).
 ### The block graph
 
 A **block graph** is a versioned, typed, SSA description of one block's values
-and state effects, built in `engine/graph` (data and a verifier, no
+and state effects, built in `graph` (data and a verifier, no
 arithmetic) from what the container states: `jlm.Config` and the block's
 weight inventory by role.
 
@@ -331,7 +331,7 @@ task:
     constraints: zero warm allocations; no new kernel; no Go arithmetic
     cold_and_warm_boundaries: graph build and verify at Open, outside a token
   scope:
-    allowed_subsystems: engine/graph (new), engine/model (emission, the walker, the forcing option), docs/design
+    allowed_subsystems: graph (new), engine/model (emission, the walker, the forcing option), docs/design
     excluded_work: batch and device lowering (Slice B); any fusion (Slice C); storing the graph in the container
     required_reuse_demonstration: the walker calls only helpers forward.go calls
   control:

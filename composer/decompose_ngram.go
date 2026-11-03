@@ -5,7 +5,7 @@ import (
 	"math/bits"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // decomposeNGramHash is OpNGramHash in words of 32 bits, in maps small

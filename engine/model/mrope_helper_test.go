@@ -1,6 +1,6 @@
 package model
 
-import "github.com/jitllm/jitllm/engine/graph"
+import "github.com/jitllm/jitllm/graph"
 
 // marksLayout is the four rotary positions of slot's n rows from cache
 // position p0 as graph.OpRopePos computes them from the slot's marks: the

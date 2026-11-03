@@ -3,8 +3,8 @@ package model
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // stateConv is the causal convolution of x over the block's window of

@@ -5,8 +5,8 @@ import (
 	"math"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // softplus is log(1 + e^z) as main composes it, no logarithm among the

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // The shadow arm (Config.ComposedShadow) runs the composer's form of a block

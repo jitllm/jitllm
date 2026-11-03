@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer/x86"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestComposedCPUGroupedRouter runs a grouped router on the CPU device as

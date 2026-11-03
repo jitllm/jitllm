@@ -4,8 +4,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // rewriteBlocks states every attention block of m the front end states to the composer

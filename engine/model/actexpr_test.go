@@ -5,9 +5,9 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/convert"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 func argIn(i int) graph.Arg    { return graph.Arg{Kind: graph.ArgIn, Index: i} }

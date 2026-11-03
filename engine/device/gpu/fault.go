@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // Fault injection, compiled in only under the `jitllmfault` build tag.

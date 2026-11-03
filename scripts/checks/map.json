@@ -83,7 +83,7 @@
       "note": "the backends against the oracle on a real device"
     },
     "composer": {
-      "module": ".", "packages": ["./composer", "./composer/x86/...", "./engine/graph/...", "./engine/cost/...", "./engine/probe/..."], "cap": "16G",
+      "module": ".", "packages": ["./composer", "./composer/x86/...", "./graph/...", "./engine/cost/...", "./engine/probe/..."], "cap": "16G",
       "note": "the composer: the graph, its lowering and passes, the one keyed cache, the estimator and the hardware probes"
     },
     "composed": {
@@ -143,7 +143,7 @@
     {"prefix": "engine/device/gpu/", "evidence": "docs/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "composed", "vet"]},
     {"prefix": "composer/x86/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["composer", "vet"]},
     {"prefix": "composer/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
-    {"prefix": "engine/graph/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
+    {"prefix": "graph/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
     {"prefix": "engine/cost/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "vet"]},
     {"prefix": "engine/probe/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "vet"]},
     {"prefix": "format/jlm/", "evidence": "docs/engineering-history/placement.md", "checks": ["format", "five-principles", "model-correctness", "capabilities", "vet"]},

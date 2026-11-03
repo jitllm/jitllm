@@ -27,9 +27,9 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/cost"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	hw "github.com/jitllm/jitllm/engine/probe"
+	"github.com/jitllm/jitllm/graph"
 )
 
 type resident struct {

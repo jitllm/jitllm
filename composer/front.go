@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // PartKind is what a part of the model is.

@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // markArena is the rotary marks of every sequence the device's sessions hold

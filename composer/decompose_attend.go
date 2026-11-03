@@ -6,7 +6,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // sinkVec is an attention's per-head sinks.

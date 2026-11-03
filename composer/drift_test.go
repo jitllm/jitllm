@@ -3,7 +3,7 @@ package composer
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestDriftForms forms the shadow arm's comparison for a card, with the int8

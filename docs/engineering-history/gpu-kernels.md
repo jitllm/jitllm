@@ -7518,9 +7518,9 @@ row where the composer's reads two.
     most 1.10 of the tier's distance at the median and 2.18 of the widest
     backend's at the worst (gemma-3-1b-it).
   - The escape analysis against seam-wip's head. `go build -gcflags=-m` over
-    `engine/device/gpu`, `jit`, `engine/graph` and `engine/model` reads 41235
+    `engine/device/gpu`, `jit`, `graph` and `engine/model` reads 41235
     heap diagnostics there and 41297 here. The 24 entries that differ are in
-    `composer/decompose_map.go` (a form), `engine/graph/verify.go` (the verifier)
+    `composer/decompose_map.go` (a form), `graph/verify.go` (the verifier)
     and `engine/model/front.go` (the graph a model states), all built once;
     none is in `engine/device/gpu`, `composer/pass_regs.go` or a file a token runs.
   - Logs. V100, `~/jitllm-test/gates/engine/model/`: `g5-*.out` the first
@@ -7645,7 +7645,7 @@ row where the composer's reads two.
   original pass fails the same gate at 5e+05 to 8e+05 and 3.8 on the softcap.
   Escape analysis (go build -gcflags=-m, line numbers dropped) against the
   tree before this work, over jit, engine/device/gpu, engine/model, engine/nn and
-  engine/graph, adds no heap escape to forward.go, step.go, layer.go or
+  graph, adds no heap escape to forward.go, step.go, layer.go or
   launch.go: the additions are graph.Head.Build's thirteen (built once, then
   cached), two appends and a local in the cse sweep (formation) and one error
   in servedHead (its failure path); front.go loses four.
@@ -7696,7 +7696,7 @@ row where the composer's reads two.
   part steps each. `TestDecodeDoesNotAllocate` on synth-bitnet-i2s, every
   block on the card in the composed build, reads 0 engine allocations on
   every host, CUDA and Vulkan arm, and `go build -gcflags=-m` over
-  engine/graph, jit and engine/model reads the same 199 heap moves as the
+  graph, jit and engine/model reads the same 199 heap moves as the
   tree before this work.
 - **A kernel that does not build is returned, never moved around.** The device
   call's refusal now carries a cause (`nn.FailCause`: decline, build, fault).
@@ -7802,7 +7802,7 @@ row where the composer's reads two.
   and TestComposedShadowHoldsEveryBlock (Llama-3.2-1B) pass.
   Escape analysis against the tree before this work (go build -gcflags=-m,
   line numbers dropped, jit, engine/device/gpu, engine/model, engine/nn,
-  engine/graph) adds the forms' builds (their maps and a table's planes
+  graph) adds the forms' builds (their maps and a table's planes
   name, once a form), error paths, the placement's planes and table list,
   and appends onto the staging bytes the tier reuses (the rows' positions,
   the promised id), none on a warm step's path.
@@ -8219,7 +8219,7 @@ row where the composer's reads two.
   zero it reads left out of the sequence (`beforeShare` counted every
   constant as made), so the lowering found "node 22 (const) has no register";
   a constant counts as made only where no entry makes it. The family-name
-  counter over composer/, engine/graph and front.go (names of families and of
+  counter over composer/, graph and front.go (names of families and of
   activations, outside comments) went from 4 files to 0. `convert`'s
   `TestStatedActivationsAreTheReferences` holds nine statements (SiLU, GELU
   tanh and erf, squared ReLU, xIELU, the gaussian top-k, both clamped
