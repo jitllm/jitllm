@@ -350,7 +350,7 @@ func (e *Embedder) encode(ids []int32) error {
 			return err
 		}
 		if e.cpuRuns(li) {
-			ok, err := e.cpuRun(li, n, x, cs)
+			ok, err := e.cpuRun(li, n, x, cs, nil)
 			if err != nil {
 				return err
 			}
@@ -829,7 +829,7 @@ func (e *Embedder) cpuRuns(li int) bool {
 // device, cs the rows' rotary table, reporting whether it served the
 // block, or the error its step met; a decline is counted by name, and the
 // block runs on the Embedder's kernels.
-func (e *Embedder) cpuRun(li, n int, x, cs []float32) (bool, error) {
+func (e *Embedder) cpuRun(li, n int, x, cs, csL []float32) (bool, error) {
 	s := e.seg
 	l := &e.m.layers[li]
 	if !s.lendNC(li) {
@@ -845,7 +845,7 @@ func (e *Embedder) cpuRun(li, n int, x, cs []float32) (bool, error) {
 	if len(e.seqs) > 0 {
 		wins = e.seqs
 	}
-	why, err := s.cpuRunRows(li, l, x, n, cs, nrot, wins)
+	why, err := s.cpuRunRows(li, l, x, n, cs, nrot, csL, nrot, wins)
 	s.unlend(li)
 	if err != nil || why != composer.DeclineServes {
 		if err == nil {

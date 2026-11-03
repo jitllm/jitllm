@@ -5,8 +5,27 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
+
+// cardComposed is what g's composer formed afresh and its devices compiled
+// so far: counted where the composer and the driver run, whatever a caller
+// marked the form as.
+func cardComposed(g *gpu.GPU) [2]int {
+	s := g.Stats()
+	return [2]int{s.ComposerRuns, s.PartsFormed}
+}
+
+// composedNothingSince fails t where g's composer formed or its devices
+// compiled anything since was: phase is what ran in between.
+func composedNothingSince(t testing.TB, g *gpu.GPU, was [2]int, phase string) {
+	t.Helper()
+	if now := cardComposed(g); now != was {
+		t.Errorf("%s: the card's composer formed %d requests and compiled %d parts (%v, %s)", phase,
+			now[0]-was[0], now[1]-was[1], g.Stats().FormedAtStepParts, g.Err())
+	}
+}
 
 // TestComposesOnlyWithAnInstance is the design's composition rule on the
 // CPU: once an instance is made and served, sessions opened on it, their
@@ -130,7 +149,12 @@ func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Unserve(in)
-			c0, f0 := m.CPUComposes(), g.Stats().FormedAtStep
+			c0, f0, k0 := m.CPUComposes(), g.Stats().FormedAtStep, cardComposed(g)
+			// The placement composed: a count that never moves would pass
+			// every step below whatever it formed.
+			if k0[0] == 0 || k0[1] == 0 {
+				t.Fatalf("the placement formed %d requests and compiled %d parts: the count sees no composition", k0[0], k0[1])
+			}
 			prompts := [][]int32{{1, 45, 79, 33, 21, 9}, {1, 65, 108, 250, 205, 63}}
 			sess := make([]*Session, len(prompts))
 			last := make([][]float32, len(prompts))
@@ -178,6 +202,7 @@ func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 			if n := g.Stats().FormedAtStep - f0; n != 0 {
 				t.Errorf("the card formed %d parts at a step (%v)", n, g.Stats().FormedAtStepParts)
 			}
+			composedNothingSince(t, g, k0, "sessions' prompts and steps")
 			if n := m.CPUComposes() - c0; n != 0 {
 				t.Errorf("sessions' prompts and tokens asked the CPU composer %d times", n)
 			}

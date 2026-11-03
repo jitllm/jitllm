@@ -16,14 +16,7 @@ func glmTowerGate(t *testing.T, tw *Tower, g *qvlGolden, clean float64) {
 		mut   func(*Instance)
 		fault towerFault
 	}{
-		{"no 2-D rotary", func(s *Instance) {
-			gh, gw := s.patchGrid()
-			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
-			for i := 0; i < len(s.vis.ropeSC); i += 2 {
-				s.vis.ropeSC[i] = 1
-			}
-			s.vis.ropeAt = [2]int{gh, gw}
-		}, towerFaultNone},
+		{"no 2-D rotary", noTowerRotary, towerFaultNone},
 		{"no RMSNorm over the patch embedding", nil, faultNoEmbdNorm},
 		{"the table resampled bilinear", nil, faultBilinearTable},
 		{"the table read unresampled", nil, faultNoPosLerp},

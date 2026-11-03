@@ -19,10 +19,12 @@ type Key uint64
 
 // formCache is a registry's formed requests by Key, each kept with the words
 // it was keyed from: a hit whose words differ is a collision, an error, never
-// another request's kernels. A request that did not form is kept too.
+// another request's kernels. A request that did not form is kept too. n is
+// the requests formed afresh.
 type formCache struct {
 	mu sync.Mutex
 	m  map[Key]formed
+	n  int64
 }
 
 type formed struct {

@@ -26,23 +26,14 @@ var amdTargets = []string{"gfx90a:sramecc+:xnack-", "gfx942:sramecc+:xnack-", "g
 // each AMD generation through comgr, and the code object's own metadata says
 // what the lowering promised -- no scratch and no spill (the lowering never
 // asks for private memory, so any is the code generator out of registers),
-// the wave the target runs, exactly the workgroup memory the kernel declares,
-// and each ISA's register and LDS limits.
+// the wave the target runs, no more workgroup memory than the kernel
+// declares (less is an array declared and unused, logged), and each ISA's
+// register and LDS limits.
 func TestComposedFormsLowerForAMDGPU(t *testing.T) {
 	c, err := hip.LoadComgr(hip.Config{Path: os.Getenv("JITLLM_ROCM")})
 	if err != nil {
 		t.Skipf("NO COMGR: %v -- the AMDGPU code object gate did not run; set JITLLM_ROCM to a "+
 			"directory holding libamd_comgr.so.3 (docs/design/amd-hip.md)", err)
-	}
-	var files []string
-	for _, f := range slices.Concat(servedModels, ssmServed, stepMixtures()) {
-		if strings.HasPrefix(f, "synth-") && !slices.Contains(files, f) {
-			files = append(files, f)
-		}
-	}
-	type kern struct {
-		k    *ir.Kernel
-		from string
 	}
 	targets := make([]amdgpu.Target, len(amdTargets))
 	for i, a := range amdTargets {
@@ -50,45 +41,10 @@ func TestComposedFormsLowerForAMDGPU(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var kernels []kern
-	for _, file := range files {
-		m := frontModel(t, file)
-		f := m.Composing()
-		for li := range m.Cfg.NLayer {
-			g := f.BlockGraph(li)
-			if g == nil {
-				m.Close()
-				t.Fatalf("%s block %d has no graph: %s", file, li, m.Uncovered(li))
-			}
-			formats := map[jlm.Role]jlm.Type{}
-			for _, o := range g.Ops {
-				for _, w := range o.Weight {
-					formats[w.Role] = jlm.TypeF32
-					if e, ok := f.Find(w.Role, int32(li), -1); ok && w.Rows > 0 && w.K > 4 {
-						formats[w.Role] = e.Type
-					}
-				}
-			}
-			gr := *g
-			gr.Block = 0
-			for _, lanes := range []int{ir.SubgroupLanes, 1} {
-				for _, rows := range []int{1, 64} {
-					_, codes, err := composer.Default().Form(composer.Request{Graph: &gr, Formats: formats,
-						Step:   composer.Step{Rows: rows, Page: 64, Keys: 2048, ActWindow: 32},
-						Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: lanes, Shared: 64 << 10}})
-					if err != nil {
-						m.Close()
-						t.Fatalf("%s block %d at %d rows, %d lanes: %v", file, li, rows, lanes, err)
-					}
-					for _, cd := range codes {
-						if cd.GPU != nil {
-							kernels = append(kernels, kern{cd.GPU, file})
-						}
-					}
-				}
-			}
-		}
-		m.Close()
+	kernels := composedGPUKernels(t)
+	files := map[string]bool{}
+	for _, x := range kernels {
+		files[x.from] = true
 	}
 	for _, tg := range targets {
 		t.Run(tg.Base(), func(t *testing.T) {
@@ -126,8 +82,21 @@ func TestComposedFormsLowerForAMDGPU(t *testing.T) {
 				if m.Wave != tg.Wave {
 					t.Errorf("%s %s: generated at wave %d, the target runs %d", x.from, k.Name, m.Wave, tg.Wave)
 				}
-				if want := sharedBytes(k); m.LDS != want {
-					t.Errorf("%s %s: %d bytes of LDS, the kernel declares %d", x.from, k.Name, m.LDS, want)
+				// More than the arrays padded to their widest alignment is
+				// memory the kernel never declared; less than they hold is an
+				// array the code generator found unused: the composer's to
+				// drop, reported.
+				declared := 0
+				for _, o := range k.Ops {
+					if o.Kind == ir.OpShared {
+						declared += 4 * int(o.Imm)
+					}
+				}
+				switch bound := amdgpu.LDSBound(k); {
+				case m.LDS > bound:
+					t.Errorf("%s %s: %d bytes of LDS, the kernel declares %d (%d with every array aligned)", x.from, k.Name, m.LDS, declared, bound)
+				case m.LDS < declared:
+					t.Logf("%s %s: %d bytes of LDS, the kernel declares %d: %d declared and unused", x.from, k.Name, m.LDS, declared, declared-m.LDS)
 				}
 				if g := k.Group[0]; m.MaxGroup != g {
 					t.Errorf("%s %s: max workgroup %d, the kernel declares %d", x.from, k.Name, m.MaxGroup, g)
@@ -158,13 +127,98 @@ func TestComposedFormsLowerForAMDGPU(t *testing.T) {
 	}
 }
 
-// sharedBytes is the workgroup memory a kernel declares.
-func sharedBytes(k *ir.Kernel) int {
-	n := 0
-	for _, o := range k.Ops {
-		if o.Kind == ir.OpShared {
-			n += 4 * int(o.Imm)
+// gpuKernel is one composed GPU kernel and the fixture it was formed from.
+type gpuKernel struct {
+	k    *ir.Kernel
+	from string
+}
+
+// composedGPUKernels is every block of each served synthetic fixture, formed
+// by the composer for a GPU at decode and at a prompt chunk's rows, with the
+// IR's subgroup and with none: what the offline lowering gates read.
+func composedGPUKernels(t *testing.T) []gpuKernel {
+	t.Helper()
+	var files []string
+	for _, f := range slices.Concat(servedModels, ssmServed, stepMixtures()) {
+		if strings.HasPrefix(f, "synth-") && !slices.Contains(files, f) {
+			files = append(files, f)
 		}
 	}
-	return n
+	var kernels []gpuKernel
+	for _, file := range files {
+		m := frontModel(t, file)
+		f := m.Composing()
+		for li := range m.Cfg.NLayer {
+			g := f.BlockGraph(li)
+			if g == nil {
+				m.Close()
+				t.Fatalf("%s block %d has no graph: %s", file, li, m.Uncovered(li))
+			}
+			formats := map[jlm.Role]jlm.Type{}
+			for _, o := range g.Ops {
+				for _, w := range o.Weight {
+					formats[w.Role] = jlm.TypeF32
+					if e, ok := f.Find(w.Role, int32(li), -1); ok && w.Rows > 0 && w.K > 4 {
+						formats[w.Role] = e.Type
+					}
+				}
+			}
+			gr := *g
+			gr.Block = 0
+			for _, lanes := range []int{ir.SubgroupLanes, 1} {
+				for _, rows := range []int{1, 64} {
+					_, codes, err := composer.Default().Form(composer.Request{Graph: &gr, Formats: formats,
+						Step:   composer.Step{Rows: rows, Page: 64, Keys: 2048, ActWindow: 32},
+						Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: lanes, Shared: 64 << 10}})
+					if err != nil {
+						m.Close()
+						t.Fatalf("%s block %d at %d rows, %d lanes: %v", file, li, rows, lanes, err)
+					}
+					for _, cd := range codes {
+						if cd.GPU != nil {
+							kernels = append(kernels, gpuKernel{cd.GPU, file})
+						}
+					}
+				}
+			}
+		}
+		m.Close()
+	}
+	return kernels
+}
+
+// TestComposedFormsDeclareNoDeadShared holds every composed GPU kernel's
+// workgroup arrays to their use: each one some op reads. An array only
+// written, or never named, is memory a lowering that keeps it (PTX, SPIR-V,
+// MSL) spends on nothing, and an occupancy the kernel loses for it.
+func TestComposedFormsDeclareNoDeadShared(t *testing.T) {
+	kernels := composedGPUKernels(t)
+	dead, arrays := 0, 0
+	for _, x := range kernels {
+		k := x.k
+		read := map[ir.Value]bool{}
+		for _, o := range k.Ops {
+			args := append(o.Args[:], o.Vargs...)
+			if o.Kind == ir.OpStore || o.Kind == ir.OpStoreV || o.Kind == ir.OpTileStore {
+				args = args[1:]
+			}
+			for _, a := range args {
+				read[a] = true
+			}
+		}
+		for i, o := range k.Ops {
+			if o.Kind != ir.OpShared {
+				continue
+			}
+			arrays++
+			if !read[ir.Value(i+1)] {
+				dead++
+				t.Errorf("%s %s: workgroup array %%%d (%d words) is never read", x.from, k.Name, i+1, o.Imm)
+			}
+		}
+	}
+	t.Logf("%d kernels, %d workgroup arrays, %d never read", len(kernels), arrays, dead)
+	if arrays == 0 {
+		t.Fatal("no kernel declares a workgroup array: the gate saw nothing")
+	}
 }

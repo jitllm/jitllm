@@ -92,18 +92,23 @@ func TestKVPoolPages(t *testing.T) {
 	}
 	charged()
 
-	// A released page is fenced: the next allocation cannot reuse it.
+	// A page released while a submission is in flight is fenced: no fence
+	// before that submission completes frees it, so no allocation can reuse
+	// it while the step may still read it.
 	l0 := kp.layers[0]
 	aPages := slices.Clone(l0.owned[a])
-	l0.releasePages(a)
 	if err := d.allocPages(0, kp, l0, c, len(aPages)); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range l0.owned[c] {
-		if slices.Contains(aPages, id) {
-			t.Fatalf("page %d reused before a completed submission: a step in flight may still read it", id)
+	flight := d.beginSub()
+	l0.releasePages(a)
+	l0.fence()
+	for _, id := range aPages {
+		if slices.Contains(l0.free, id) {
+			t.Fatalf("page %d free before a completed submission: a step in flight may still read it", id)
 		}
 	}
+	d.endSub(flight)
 	l0.fence()
 	for _, id := range aPages {
 		if !slices.Contains(l0.free, id) {

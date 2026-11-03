@@ -132,6 +132,18 @@ func (g *devTier) geomFor(lo, hi int) geoKey {
 	return 0
 }
 
+// enterGeomOf makes block li's scratch set the one in use and returns the set
+// it left, for useGeom to restore: a check or a form of one block reads its
+// own set's scratch -- a sliding block's table, a tower block's feeds --
+// whichever set its caller is in. Callers hold g.mu.
+func (g *devTier) enterGeomOf(li int) geoKey {
+	prev := g.geoCur
+	if g.geoUsed {
+		g.useGeom(g.geomFor(li, li+1))
+	}
+	return prev
+}
+
 // scratchPlanOf is the plan a block's scratch set is built from. On a split
 // model each set holds one geometry and one rotary: the global set the global
 // table, the sliding set the local one in the global slot (the caller hands it

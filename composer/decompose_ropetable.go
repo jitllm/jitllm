@@ -133,10 +133,13 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		// The position is a cell of the grid the request's first word
 		// wide; the pair's axis, after the planes' scale, picks its row (0)
 		// or its column.
+		// The cell's row and column are the row's, one word each that
+		// every pair reads (OpBroadcast): a device of lanes divides once a
+		// row rather than in its lanes.
 		gw := x.op(OpMax, U, x.load(3, x.u(RequestGrid)), x.u(1))
 		axis := x.un(OpCvtI32, I, x.load(1, x.op(OpAdd, U, p, x.u(uint32(8*stride+1)))))
 		row := x.op(OpLess, ir.Pred, x.un(OpBitcast, U, axis), x.u(1))
-		pos = x.sel(U, row, x.op(OpDiv, U, pos, gw), x.op(OpRem, U, pos, gw))
+		pos = x.sel(U, row, x.un(OpBroadcast, U, x.op(OpDiv, U, pos, gw)), x.un(OpBroadcast, U, x.op(OpRem, U, pos, gw)))
 		in = append(in, tableRequest)
 		ext[1], ext[3] = 8*stride+1+P, RequestRows+R
 	}

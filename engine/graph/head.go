@@ -20,7 +20,8 @@ type Head struct {
 	// logits, 0 or 1 for none.
 	Softcap, Scale float64
 	// Hidden makes the norm's rows the graph's second output, after the
-	// logits: what a step reading the trunk's normed rows back reads.
+	// logits (the input's rows, with no norm): what a step reading the
+	// trunk's normed rows back reads.
 	Hidden bool
 	// NoNorm projects the row as it comes, where the model has no output
 	// norm (a mix of its streams stands in for it).
@@ -80,6 +81,11 @@ func (h *Head) Build() *Graph {
 	}
 	b.Out(l)
 	if h.Hidden {
+		// With no norm the rows are the input's, copied: an output the
+		// graph writes (Copy).
+		if h.NoNorm {
+			n = b.Emit(OpSlice, []ValueID{x}, []Result{{Name: "hidden", Width: h.NEmbd}}, nil, Attrs{Width: h.NEmbd}, nil, nil)[0]
+		}
 		b.Out(n)
 	}
 	return b.G

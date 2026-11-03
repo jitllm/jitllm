@@ -116,9 +116,20 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 					t.Errorf("seq %d: %d tokens, want %d", r, len(s.Out), want[r])
 					continue
 				}
+				// The sequences run free, so the first token they part at ends
+				// the comparison: it must be a tie, the two tokens closer in the
+				// solo run's logits than the model's forms read apart at that
+				// prefix (devFlip, RULE 8).
 				for j := range s.Out {
 					if s.Out[j] != solo[r][j] {
-						t.Errorf("seq %d token %d: scheduled %d, solo %d", r, j, s.Out[j], solo[r][j])
+						gap, pert := devFlip(t, m, nil, prompts[r], solo[r][:j], solo[r][j], s.Out[j])
+						if gap > pert {
+							t.Errorf("seq %d token %d: scheduled %d, solo %d, %.4f apart against a %.4f reach of the band -- not a tie",
+								r, j, s.Out[j], solo[r][j], gap, pert)
+						} else {
+							t.Logf("seq %d token %d: scheduled %d, solo %d, a tie (%.4f apart, the band reaching %.4f)",
+								r, j, s.Out[j], solo[r][j], gap, pert)
+						}
 						break
 					}
 				}

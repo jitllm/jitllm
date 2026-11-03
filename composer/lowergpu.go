@@ -129,9 +129,16 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 	e.stored = make([]bool, len(n.Stores))
 	e.iter, e.phi, e.shared = map[int]ir.Value{}, map[int]ir.Value{}, map[int]ir.Value{}
 	e.homes()
+	named := n.bufsNamed()
 	for i, bf := range n.Bufs {
 		if bf.Kind == BufShared {
-			e.params = append(e.params, b.Shared(fmt.Sprintf("s%d", i), bf.Elem, bf.Size))
+			// A plane no access names any more (Stage moves its accesses to
+			// its own) is declared nowhere: its memory is the occupancy's.
+			var v ir.Value
+			if named[i] {
+				v = b.Shared(fmt.Sprintf("s%d", i), bf.Elem, bf.Size)
+			}
+			e.params = append(e.params, v)
 			continue
 		}
 		e.params = append(e.params, b.Param(fmt.Sprintf("p%d", i), bf.Elem))
@@ -333,6 +340,9 @@ func (e *lowerer) get(i int) ir.Value {
 		v = b.Load(nd.Type, e.params[nd.Buf], e.get(ix), nd.Imm)
 	case OpBitcast:
 		v = b.Bitcast(nd.Type, e.get(nd.A))
+	case OpBroadcast:
+		// A thread is one lane: its word is every lane's.
+		v = e.get(nd.A)
 	case OpSqrt:
 		v = b.Sqrt(e.get(nd.A))
 	case OpExp:
@@ -538,6 +548,23 @@ func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 
 // poisonShared has every thread write NaN to its slots of each workgroup
 // array, then waits for the workgroup.
+// bufsNamed is the buffers a node, a store or a loop's cursor of n names.
+func (n *Kernel) bufsNamed() map[int]bool {
+	named := map[int]bool{}
+	for _, nd := range n.Nodes {
+		named[nd.Buf] = true
+	}
+	for _, s := range n.Stores {
+		named[s.Buf] = true
+	}
+	for _, l := range n.Loops {
+		for _, c := range l.Cursors {
+			named[c.Buf] = true
+		}
+	}
+	return named
+}
+
 func (e *lowerer) poisonShared() {
 	b, n := e.b, e.n
 	fill := func(sh ir.Value, elem ir.Type, size int) {
@@ -548,7 +575,7 @@ func (e *lowerer) poisonShared() {
 	}
 	poisoned := false
 	for i, bf := range n.Bufs {
-		if bf.Kind == BufShared {
+		if bf.Kind == BufShared && e.params[i] != 0 {
 			fill(e.params[i], bf.Elem, bf.Size)
 			poisoned = true
 		}

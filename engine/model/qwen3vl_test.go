@@ -32,14 +32,7 @@ func qwen3TowerGate(t *testing.T, tw *Tower, g *qvlGolden, got []float32, clean 
 		fault towerFault
 		deep  bool // the violation shows in the taps' rows, not the merged ones
 	}{
-		{"no 2-D rotary", func(s *Instance) {
-			gh, gw := s.patchGrid()
-			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
-			for i := 0; i < len(s.vis.ropeSC); i += 2 {
-				s.vis.ropeSC[i] = 1
-			}
-			s.vis.ropeAt = [2]int{gh, gw}
-		}, towerFaultNone, false},
+		{"no 2-D rotary", noTowerRotary, towerFaultNone, false},
 		{"the position table read unresampled", nil, faultNoPosLerp, false},
 		{"the deepstack mergers without their LayerNorm", nil, faultDeepPreNorm, true},
 	} {

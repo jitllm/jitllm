@@ -18,6 +18,21 @@ type markArena struct {
 	size, used int
 }
 
+// freeMarks gives the arena back, refunded. Callers hold g.mu, with no
+// session's marks in it or none to keep.
+func (g *devTier) freeMarks() {
+	a := &g.marks
+	if a.buf != nil {
+		a.buf.Free()
+		g.refund(uint64(4 * a.size))
+	}
+	*a = markArena{}
+}
+
+// marksPlaced says a session's marks are in the arena: past word 0, the
+// empty block every sequence told none reads.
+func (a *markArena) marksPlaced() bool { return a.used > 1 }
+
 // SetSeqMarks places slot's rotary marks on every device (nn.RopeMarksDevice).
 func (s *gpuSession) SetSeqMarks(slot int, block []uint32) error {
 	s.g.mu.Lock()
@@ -79,7 +94,10 @@ func (g *devTier) growMarks(words int) error {
 			return err
 		}
 		a.buf.Free()
+		g.refund(uint64(4 * a.size))
 	}
+	// The device's, charged as itself, never a scratch build's.
+	g.charge(uint64(4 * size))
 	a.buf, a.size, a.used = b, size, max(a.used, 1)
 	// A recording names the old buffer by address.
 	g.dropGraph()

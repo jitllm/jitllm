@@ -60,12 +60,24 @@ func TestStepAcrossSessionsMixtureGateDiscriminates(t *testing.T) {
 				t.Run(dev, func(t *testing.T) {
 					gpu.SetMoEFault(true)
 					defer gpu.SetMoEFault(false)
+					h0, u0, o0 := gpu.MoEFaultSeen()
 					g := stepTier(t, m, dev, false)
 					defer g.Close()
 					r := stepGate(t, m, g, false)
 					mixtureStepChecks(t, m, r)
-					t.Logf("worst logit NMSE %.3e (row %d)", r.worst, r.at)
-					if math.IsNaN(r.worst) || r.worst < mixtureStepNMSE {
+					h, u, o := gpu.MoEFaultSeen()
+					t.Logf("worst logit NMSE %.3e (row %d); the fault rewired %d down bank(s), found no source for %d, left %d one-row",
+						r.worst, r.at, h-h0, u-u0, o-o0)
+					if h == h0 {
+						t.Fatalf("the fault rewired no down bank (%d unsourced, %d in one-row forms): the violation never ran", u-u0, o-o0)
+					}
+					// Against a finite reference, a joint step the fault turned to
+					// NaN has parted from it as far as one can (DeepSeek-V4's
+					// down bank over the raw gate overflows on CUDA).
+					if !r.refFinite {
+						t.Fatalf("the sessions alone read a non-finite logit: the reference is degenerate")
+					}
+					if !math.IsNaN(r.worst) && r.worst < mixtureStepNMSE {
 						t.Fatalf("the gate reads NMSE %.3e with every joint step's down bank reading the experts' gate: it "+
 							"cannot see the grouped path's wiring", r.worst)
 					}

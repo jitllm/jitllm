@@ -3,6 +3,7 @@
 package model
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"slices"
@@ -53,13 +54,10 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 			want := plainGreedy(t, m, prompt, n, nil)
 			oracle := oracleFor(name, want)
 
-			// The host: exact arithmetic, so speculation is decode token for
-			// token and a verified row's logits are decode's.
+			// The host: speculation is decode token for token but where a tie
+			// inside the band of its forms turns (specFlip).
 			got, st := specGreedy(t, m, prompt, n, nil, specFaultNone, oracle, WithSpecDraft(3))
-			if i := firstDiff(got, want); i >= 0 {
-				t.Fatalf("host: token %d is %d, plain greedy says %d (%d drafted, %d accepted)", i, got[i], want[i],
-					st.Drafted, st.Accepted)
-			}
+			specFlip(t, m, prompt, got, want, fmt.Sprintf("host (%d drafted, %d accepted)", st.Drafted, st.Accepted))
 			if st.Drafted == 0 || st.Accepted == 0 {
 				t.Fatalf("host: %d drafted and %d accepted -- the speculation never ran", st.Drafted, st.Accepted)
 			}
@@ -68,10 +66,13 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 			bad := specVerifyCapped(t, m, nil, prompt, want, true)
 			t.Logf("host: %d tokens equal, %d drafted, %d accepted; verify rows against decode: worst logit NMSE "+
 				"%.3e, uncapped %.3e", n, st.Drafted, st.Accepted, w, bad)
-			if !(w < 1e-9) {
-				t.Fatalf("host: the verify rows part from decode under a cap: NMSE %.3e", w)
+			// The CPU's verify rows and its decode row are two forms, held to
+			// the band they read apart (hostStepNMSE, RULE 8); the cap skipped
+			// reads whole logits off.
+			if !(w <= hostStepNMSE) {
+				t.Fatalf("host: the verify rows part from decode under a cap: NMSE %.3e (bound %.0e)", w, hostStepNMSE)
 			}
-			if !(bad > 1e-2) {
+			if !(bad > 10*hostStepNMSE) {
 				t.Errorf("host: verify rows with the cap skipped read %.3e against decode -- the gate cannot see it", bad)
 			}
 

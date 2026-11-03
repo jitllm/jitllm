@@ -247,10 +247,6 @@ type cpuForms struct {
 	reg32 *composer.Registry
 	m     map[composer.Key]*cpuBlockForm
 	err   map[composer.Key]error
-	// planes is each block's rotary planes where a form of it reads them
-	// (cpuArgPlanes), set once under mu before the block's first call.
-	// tabPlanes is each rotary's planes (cpuTablePlanes).
-	tabPlanes [2][]float32
 }
 
 func (c *cpuForms) close() {
@@ -358,10 +354,16 @@ type cpuState struct {
 	head    cpuHeadState
 	streams cpuStreamsState
 	proj    cpuProjState
-	pool    cpuPoolState
-	mtp     cpuMTPState
-	embed   cpuEmbedState
-	tables  cpuTableState
+	// towerTab is the tower's rotary table (towertable.go).
+	towerTab cpuTowerTable
+	// tabPlanes is each rotary's planes as its composed table reads them
+	// (composer.TablePlanes), folded from the model's rotaries when the
+	// instance places its blocks (cpuTablePlanes).
+	tabPlanes [2][]float32
+	pool      cpuPoolState
+	mtp       cpuMTPState
+	embed     cpuEmbedState
+	tables    cpuTableState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -498,6 +500,9 @@ type cpuBound struct {
 	// req is the step's request words (cpuArgRequest), pos its live rows,
 	// then a row's position (cpuArgPos), tok its tokens (cpuArgTokens).
 	req, pos, tok []uint32
+	// planes, where set, is the rotary planes a table's call reads in place
+	// of the model's (the tower's grid planes, towertable.go).
+	planes []float32
 }
 
 // cpuIO is the most inputs and outputs a graph apart from its residual
@@ -616,7 +621,7 @@ func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []
 		return why, nil
 	}
 	side, _ := s.cpuSideRows(li)
-	return composer.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), seq, pos)
+	return composer.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), s.bcsSWA, s.c.NRotSWA, seq, pos)
 }
 
 // cpuTowerRows runs tower block li on the CPU the composer's way over the
@@ -633,15 +638,25 @@ func (s *Instance) cpuTowerRows(li int, l *layer, n int) (composer.Decline, erro
 		}
 		wins = v.winRuns
 	}
-	return s.cpuRunRows(li, l, s.bx[:n*s.c.ResidW()], n, s.bcs, s.c.RopeW(), wins)
+	return s.cpuRunRows(li, l, s.bx[:n*s.c.ResidW()], n, s.bcs, s.c.RopeW(), nil, 0, wins)
+}
+
+// swaRows is the step's second rotary table from row a, nil where the model
+// has no second rotary (cpuRowTables writes it into s.bcsSWA).
+func (s *Instance) swaRows(a int) []float32 {
+	if s.bcsSWA == nil {
+		return nil
+	}
+	return s.bcsSWA[a*s.c.NRotSWA:]
 }
 
 // cpuRunRows runs non-causal block li on the CPU the composer's way over
 // the n rows of x, one run attending both ways or, where wins is not nil,
 // each window a run its rows attend inside; cs is the rows' rotary table,
-// nrot wide. Its history is the segment's arena (ncArena), lent to the
-// block for its run.
-func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, wins []nn.KeyRun) (composer.Decline, error) {
+// nrot wide, and swa the second rotary's, nswa wide, where the block's graph
+// turns by one (nil where it does not). Its history is the segment's arena
+// (ncArena), lent to the block for its run.
+func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, swa []float32, nswa int, wins []nn.KeyRun) (composer.Decline, error) {
 	f, why := s.cpuRowsForm(li, l)
 	if why != composer.DeclineServes {
 		return why, nil
@@ -659,7 +674,7 @@ func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32
 		s.bidir = runs
 	}
 	seq, pos := s.cpuRowsOf(0, 0, n)
-	err := s.cpuRowsRun(li, l, f, x, n*s.c.NEmbd, nil, cs, nrot, seq, pos)
+	err := s.cpuRowsRun(li, l, f, x, n*s.c.NEmbd, nil, cs, nrot, swa, nswa, seq, pos)
 	s.bidir, s.cpu.runWindows = nil, false
 	return composer.DeclineServes, err
 }
@@ -734,7 +749,7 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 			if pw != 0 && rside != nil {
 				side = rside[a*pw:]
 			}
-			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
+			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.NRotSWA, seq[a:b], pos[a:b]); err != nil {
 				oi.Session = lead
 				return composer.DeclineServes, err
 			}
@@ -895,7 +910,7 @@ func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32,
 		if pw != 0 && side != nil {
 			side = side[a*pw:]
 		}
-		if err := s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, seq[a:b], pos[a:b]); err != nil {
+		if err := s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.NRotSWA, seq[a:b], pos[a:b]); err != nil {
 			return composer.DeclineServes, err
 		}
 		if base >= 0 {
@@ -1027,7 +1042,7 @@ func (s *Instance) cpuFaultTable(pg *kvPages, end int) []uint32 {
 // (keysEnd) first run over every row, each reading only the keys before
 // it, so that every call's rows then read all of them. Where those codes
 // write the residual too they run over a copy of it.
-func (s *Instance) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int) error {
+func (s *Instance) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int) error {
 	runs := s.runsAt(li) && s.bidirIn(pos[0], len(pos))
 	if runs && len(pos) > f.rows {
 		keys := f.keysEnd
@@ -1035,15 +1050,15 @@ func (s *Instance) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, st
 			keys = 0
 		}
 		s.cpu.stashing = stashSave
-		err := s.cpuRowsCalls(li, l, f, 0, keys, x, stride, side, cs, nrot, seq, pos, true)
+		err := s.cpuRowsCalls(li, l, f, 0, keys, x, stride, side, cs, nrot, swa, nswa, seq, pos, true)
 		s.cpu.stashing = stashLoad
 		if err == nil {
-			err = s.cpuRowsCalls(li, l, f, keys, len(f.codes), x, stride, side, cs, nrot, seq, pos, true)
+			err = s.cpuRowsCalls(li, l, f, keys, len(f.codes), x, stride, side, cs, nrot, swa, nswa, seq, pos, true)
 		}
 		s.cpu.stashing = stashNone
 		return err
 	}
-	return s.cpuRowsCalls(li, l, f, 0, len(f.codes), x, stride, side, cs, nrot, seq, pos, runs)
+	return s.cpuRowsCalls(li, l, f, 0, len(f.codes), x, stride, side, cs, nrot, swa, nswa, seq, pos, runs)
 }
 
 // cpuStash saves (stashSave) or restores (stashLoad) call c's values form
@@ -1073,7 +1088,7 @@ func (s *Instance) cpuStash(f *cpuBlockForm, own [][]uint32, c int) {
 // rows' per-layer inputs, nil for a model of none. A form over banks
 // (cpuBlockForm.split) holds the experts each call's rows pick, from its
 // selection to the call's end (cpuExperts).
-func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []float32, stride int, side, cs []float32, nrot int, seq, pos []int, runs bool) error {
+func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int, runs bool) error {
 	n := len(pos)
 	pg := &s.kv.layers[s.c.KVSource(li)]
 	d, ns := s.c.NEmbd, s.c.Streams()
@@ -1128,8 +1143,8 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 		if len(s.cpu.tok) > r0 {
 			b.tok = s.cpu.tok[r0:]
 		}
-		if s.bcsSWA != nil {
-			b.csSWA = s.bcsSWA[r0*s.c.NRotSWA:]
+		if swa != nil {
+			b.csSWA = swa[r0*nswa:]
 		}
 		if len(s.cpu.posTab) < 1+f.rows {
 			s.cpu.posTab = make([]uint32, 1+f.rows)
@@ -1419,7 +1434,11 @@ func (s *Instance) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 				p = unsafe.Pointer(&b.csSWA[0])
 			}
 		case cpuArgPlanes:
-			p = unsafe.Pointer(&s.m.cpuTablePlanes(ar.inst)[0])
+			if b.planes != nil {
+				p = unsafe.Pointer(&b.planes[0])
+				break
+			}
+			p = unsafe.Pointer(&s.cpu.tabPlanes[ar.inst][0])
 		case cpuArgRopeRows:
 			p = unsafe.Pointer(&b.ropeRows[0])
 		case cpuArgRopeMarks:
@@ -1533,6 +1552,9 @@ func (r *cpuRegion) groupRegion(w, lo, hi int) {
 // cpuPlace composes a new instance's blocks on the CPU: each block of the
 // instance's range no device holds, once, at its placement (cpuCompose).
 func (s *Instance) cpuPlace() {
+	for i := range s.cpu.tabPlanes {
+		s.cpu.tabPlanes[i] = s.m.cpuTablePlanes(i)
+	}
 	// A segment's blocks are past the text model's in the one block space.
 	n := max(s.c.NLayer, s.hi)
 	s.cpu.blocks = make([]*cpuBlock, n)
@@ -1555,6 +1577,7 @@ func (s *Instance) cpuPlace() {
 	if s.nc() != nil {
 		if s.vis != nil {
 			s.cpuPlaceProjector()
+			s.cpuPlaceTowerTable()
 		}
 		if s.enc != nil {
 			s.cpuPlacePool()

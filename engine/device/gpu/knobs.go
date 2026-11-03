@@ -271,4 +271,3 @@ func WithAutoStream(on bool) Option {
 func WithHybridCache(on bool) Option {
 	return WithConfig(func(c *Config) { c.NoHybridCache = !on })
 }
-

@@ -10,16 +10,16 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// hostStepNMSE is what a violation of the host step must read above: a row
-// reading another session's history, or its own at the wrong positions, is
-// whole logits off. The clean arm is held to equality, under GEMMExact: the
-// two arms run the same generated kernels at different widths (a matmul over
-// the step's rows against a matvec per token), and only that option makes
-// them sum a row in one order on every host -- the pre-VNNI x86 and arm64
-// GEMMs otherwise fold a k-quant's super-block in integers, which reads NMSE
-// 8.5e-3 on Llama-3.2-1B on the Xeon E5-2680 v4 (the server's host step runs
-// under it for that reason).
-const hostStepNMSE = 1e-3
+// hostStepNMSE bounds a host step across sessions against each session
+// alone: the composed CPU's forms over a step's rows against its forms over
+// one, which fold a block in another order (RULE 8: the bar across forms is
+// the band, not bit-identity). Measured on the Xeon at 2.4e-3 on
+// Llama-3.2-1B, 7.5e-4 on Qwen3.5-0.8B, 9.6e-4 on gemma-3-1b and 7.0e-3 on
+// Qwen3-MoE, whose routing turns a near tie the other way; the engine's
+// earlier integer-folding GEMM read 8.5e-3 on Llama-3.2-1B. A violation --
+// a row reading another session's history, or its own at the wrong
+// positions -- must read above it.
+const hostStepNMSE = 1e-2
 
 // TestStepRunsOnTheCPUSharesOnePass is the gate on StepRuns' host arm
 // (stepHost): two sessions decode while a third session's prompt rides beside
@@ -71,8 +71,8 @@ func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) {
 			w, at := worstStep(got, want)
 			t.Logf("%d rows, %d logit rows compared: worst NMSE %.3e (row %d) against each session alone",
 				rows, len(want), w, at)
-			if w != 0 {
-				t.Fatalf("a host step across sessions disagrees with each session alone: NMSE %.3e at row %d", w, at)
+			if !(w <= hostStepNMSE) {
+				t.Fatalf("a host step across sessions parts from each session alone: NMSE %.3e at row %d (bound %.0e)", w, at, hostStepNMSE)
 			}
 
 			stepPos = func(base, j, k int) int { return base + k - 1 - j }

@@ -30,8 +30,8 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 	// One arm at a time: a 4 GiB card holds one copy of the model.
 	// decode is the third arm: the prompt a token at a time, which the
 	// ragged step's matvec is (decode's, over several rows).
-	run := func(on, decode, dev bool, n int, force []int32) out {
-		m, err := Open(p, WithTailRows(on))
+	run := func(on, decode, dev bool, n int, force []int32, opts ...Option) out {
+		m, err := Open(p, append([]Option{WithTailRows(on)}, opts...)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -78,9 +78,12 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 	for _, n := range []int{512 + 3, 2, 4} {
 		dec := run(true, true, true, n, nil)
 		on, off := run(true, false, true, n, dec.toks), run(false, false, true, n, dec.toks)
-		// The CPU device on the same tokens: how far each device arm sits
-		// from it says whether a gap between the arms is one arm's.
-		ref := run(true, true, false, n, dec.toks)
+		// The CPU device's float forms on the same tokens: how far each
+		// device arm sits from them says whether a gap between the arms is
+		// one arm's. The CPU's own int8 forms are an arm beside them, not
+		// the reference: two composed devices' gap adds both their errors.
+		ref := run(true, true, false, n, dec.toks, withCPUFloat())
+		cpu := run(true, true, false, n, dec.toks)
 		far := func(o out) float64 {
 			w := nmseF32(ref.last, o.last)
 			for i := range ref.steps {
@@ -88,7 +91,8 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 			}
 			return w
 		}
-		t.Logf("n=%d: from the CPU device, decode %.2e, the ragged tail %.2e, the chunk %.2e", n, far(dec), far(on), far(off))
+		t.Logf("n=%d: from the CPU device's float forms, decode %.2e, the ragged tail %.2e, the chunk %.2e; the CPU's int8 forms %.2e",
+			n, far(dec), far(on), far(off), far(cpu))
 		if on.tails != 1 || off.tails != 0 || dec.tails != 0 {
 			t.Fatalf("n=%d: %d ragged tail(s) with the rows on, %d off, %d decoding; want 1, 0 and 0",
 				n, on.tails, off.tails, dec.tails)
@@ -103,7 +107,7 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 			o    out
 		}{{"decoding the prompt", dec}, {"the ragged tail", on}, {"the batched chunk", off}} {
 			if w := far(a.o); !(w < tailBand) {
-				t.Fatalf("n=%d: %s reads NMSE %.3e from the CPU device, past %.0e", n, a.name, w, tailBand)
+				t.Fatalf("n=%d: %s reads NMSE %.3e from the CPU device's float forms, past %.0e", n, a.name, w, tailBand)
 			}
 		}
 		worst, chunkWorst := nmseF32(dec.last, on.last), nmseF32(dec.last, off.last)
@@ -115,7 +119,7 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 	}
 }
 
-// tailBand is the NMSE a device arm's logits may sit from the CPU device's on
-// the same tokens: the reduction-order band, which on a V100 read up to
-// 8.3e-3 (decode at n=4).
+// tailBand is the NMSE a device arm's logits may sit from the CPU device's
+// float forms on the same tokens: main's kernels read up to 8.3e-3 against
+// its CPU on a V100 (decode at n=4).
 const tailBand = 1e-2

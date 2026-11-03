@@ -107,10 +107,12 @@ func (recSession) Launch(k backend.Kernel, groups, width int, bufs ...backend.Bu
 // arenaPlan is small enough to page eight times in a test and wide enough that
 // every format field of the pack is exercised.
 func arenaPlan() *nn.LayerPlan {
-	return &nn.LayerPlan{
+	p := &nn.LayerPlan{
 		NEmbd: 256, NHead: 8, NKVHead: 4, HeadDim: 32, NRot: 32, NFFN: 512,
 		MaxSeq: 64, RMSEps: 1e-5, RopeBase: 10000,
 	}
+	textPlan(p)
+	return p
 }
 
 // snapshot is every weight buffer of a resident block, by buffer identity and by

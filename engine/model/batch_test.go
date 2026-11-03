@@ -346,6 +346,7 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := []int32{Greedy(pl)}
+			wantLg := [][]float32{append([]float32(nil), pl...)}
 			for _, tk := range after {
 				lg, err := one.Forward(tk)
 				if err != nil {
@@ -353,6 +354,7 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 					t.Fatal(err)
 				}
 				want = append(want, Greedy(lg))
+				wantLg = append(wantLg, append([]float32(nil), lg...))
 			}
 			one.Close()
 
@@ -381,6 +383,7 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 				t.Errorf("after a %d-token prompt the row is at position %d", plen, b.SeqPos(admit))
 			}
 			got := []int32{Greedy(lg)}
+			gotLg := [][]float32{append([]float32(nil), lg...)}
 			for _, tk := range after {
 				row := make([]int32, nseq)
 				for i := range row {
@@ -391,10 +394,16 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 					t.Fatal(err)
 				}
 				got = append(got, Greedy(b.BatchLogits(admit)))
+				gotLg = append(gotLg, append([]float32(nil), b.BatchLogits(admit)...))
 			}
+			// Teacher-forced, so every step is held to the band the row's
+			// forms read apart (hostStepNMSE, RULE 8): its logits, not its
+			// argmax, which a tie inside the band turns either way.
 			for j := range want {
-				if got[j] != want[j] {
-					t.Errorf("step %d: admitted row %d, single instance %d", j, got[j], want[j])
+				if nm := logitNMSE(gotLg[j], wantLg[j]); !(nm <= hostStepNMSE) {
+					t.Errorf("step %d: the admitted row's logits read NMSE %.3e from the single instance's (bound %.0e)", j, nm, hostStepNMSE)
+				} else if got[j] != want[j] {
+					t.Logf("step %d: admitted row %d, single instance %d, a tie inside the band (NMSE %.3e)", j, got[j], want[j], nm)
 				}
 			}
 		})

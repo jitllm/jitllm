@@ -201,14 +201,7 @@ func TestPixtralTowerMatchesTransformers(t *testing.T) {
 		mut  func(*Instance)
 		set  func() func()
 	}{
-		{"no 2-D rotary", func(s *Instance) {
-			gh, gw := s.patchGrid()
-			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
-			for i := 0; i < len(s.vis.ropeSC); i += 2 {
-				s.vis.ropeSC[i] = 1
-			}
-			s.vis.ropeAt = [2]int{gh, gw}
-		}, nil},
+		{"no 2-D rotary", noTowerRotary, nil},
 		{"NEOX pairs where the GGUF's are interleaved", nil, func() func() {
 			tw.cfg.RopeNeox = true
 			return func() { tw.cfg.RopeNeox = false }

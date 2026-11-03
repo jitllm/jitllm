@@ -49,7 +49,7 @@ func TestVisionRopeMatchesTheFloat64Rotation(t *testing.T) {
 	}
 	// The rotation attnPrep applies to an image row: the text block's kernel over
 	// the row's table.
-	tab := s.visRope(n)
+	tab := visRopeOracle(s, n)
 	for p := 0; p < n; p++ {
 		nn.RoPE32JIT(x[p*c.NEmbd:(p+1)*c.NEmbd], c.HeadDim, tab[p*c.HeadDim:(p+1)*c.HeadDim], true)
 	}

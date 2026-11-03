@@ -19,6 +19,9 @@ var cpuRowsModels = []struct {
 	{"stories15M-q4_0.gguf", []int{5, 33, 100}},
 	{"Qwen3-0.6B-Q8_0.gguf", []int{5, 33, 100, 513}},
 	{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", []int{5, 33, 100}},
+	// DeepSeek's latent attention and mixture: a prompt's rows through the
+	// absorbed query and the one-row history.
+	{"synth-deepseek-yarn-af.gguf", []int{5, 33, 100}},
 }
 
 // TestComposedCPURowsServe holds the composed CPU's form of several rows --

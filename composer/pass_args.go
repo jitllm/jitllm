@@ -304,7 +304,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 	}
 	outs, ins := 0, 0
-	acts, weight, weighted, consts := false, false, false, false
+	acts, weight, weighted, consts, word := false, false, false, false, false
 	held := map[int]Operand{}
 	for _, o := range kept {
 		if o.Kind == OperandWeight || o.Kind == OperandVector {
@@ -312,7 +312,10 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 	}
 	for _, o := range kept {
-		if f.Word > 0 && !written[o] && k.oneWord(byOp[o]) {
+		// One buffer read at one word passes it in the word field; a second
+		// takes a buffer's field.
+		if f.Word > 0 && !word && !written[o] && k.oneWord(byOp[o]) {
+			word = true
 			for _, a := range byOp[o] {
 				k.Bufs[k.Nodes[a.node].Buf].Word = f.Word + 1
 				k.Bufs[k.Nodes[a.node].Buf].Offset = offsets[o]

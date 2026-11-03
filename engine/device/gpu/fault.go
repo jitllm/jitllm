@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
@@ -117,15 +118,28 @@ func SetFormFault(on bool, kind graph.OpKind, asDevice bool) {
 var errInjectedForm = errors.New("injected form failure (SetFormFault)")
 
 // moeFault puts a wrong source under a mixture's expert down bank in a form
-// of several rows: it reads the experts' gate output (their up's where they
-// have no gate) in place of their activation. A one-row form is untouched,
-// so a session alone and the same session in a joint step part, as a
-// grouped path wired wrongly would part them.
+// of several sequences' rows (composer.Step.Seqs 0, a joint step's): it reads
+// the experts' gate output (their up's where they have no gate) in place of
+// their activation. A one-row form and a prompt's of one sequence are
+// untouched, so a session alone -- its prompt and its tokens -- and the same
+// session in a joint step part, as a grouped path wired wrongly would part
+// them.
 var moeFault bool
 
 // SetMoEFault arms moeFault for the tiers that create their composer after
 // it; false disarms.
 func SetMoEFault(on bool) { moeFault = on }
+
+// moeFaultSeen counts the down banks moeFault met: rewired, found no source
+// for, and met in a one-row or one-sequence form it leaves alone. A gate under the fault
+// asserts it rewired one (RULE 10).
+var moeFaultSeen [3]atomic.Int64
+
+// MoEFaultSeen is moeFaultSeen: the down banks rewired, those with no
+// experts' source to read, and those in one-row forms.
+func MoEFaultSeen() (rewired, unsourced, oneRow int64) {
+	return moeFaultSeen[0].Load(), moeFaultSeen[1].Load(), moeFaultSeen[2].Load()
+}
 
 func (g *devTier) rewriteComposer(r *composer.Registry) {
 	if formFault.on {
@@ -136,9 +150,17 @@ func (g *devTier) rewriteComposer(r *composer.Registry) {
 	if moeFault {
 		d := r.Decompositions[graph.OpExpertMatVec]
 		r.Decompositions[graph.OpExpertMatVec] = func(o graph.Op, c *composer.Context) ([]composer.Prim, error) {
-			if c.Step.Rows > 1 && len(o.Weight) > 0 && o.Weight[0].Role == jlm.RoleExpDownBank {
-				o.In = slices.Clone(o.In)
-				o.In[0] = expertsSource(c.Graph, o.In[0])
+			if len(o.Weight) > 0 && o.Weight[0].Role == jlm.RoleExpDownBank {
+				switch src := expertsSource(c.Graph, o.In[0]); {
+				case c.Step.Rows <= 1 || c.Step.Seqs == 1:
+					moeFaultSeen[2].Add(1)
+				case src == o.In[0]:
+					moeFaultSeen[1].Add(1)
+				default:
+					moeFaultSeen[0].Add(1)
+					o.In = slices.Clone(o.In)
+					o.In[0] = src
+				}
 			}
 			return d(o, c)
 		}
@@ -148,10 +170,15 @@ func (g *devTier) rewriteComposer(r *composer.Registry) {
 // expertsSource is the experts' gate output in gr, their up's where they
 // have no gate, as wide as v: what moeFault reads in place of v.
 func expertsSource(gr *graph.Graph, v graph.ValueID) graph.ValueID {
-	for _, name := range [...]string{"experts.gate", "experts.up"} {
-		for i, x := range gr.Values {
-			if x.Name == name && x.Width == gr.Values[v].Width {
-				return graph.ValueID(i)
+	// The op making v -- the experts' activation -- reads the gate first, or
+	// the up projection where there is no gate.
+	for _, o := range gr.Ops {
+		if len(o.Out) == 0 || o.Out[0] != v {
+			continue
+		}
+		for _, in := range o.In {
+			if in != v && gr.Values[in].Width == gr.Values[v].Width {
+				return in
 			}
 		}
 	}

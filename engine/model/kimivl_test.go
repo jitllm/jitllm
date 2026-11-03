@@ -43,14 +43,7 @@ func kimiTowerGate(t *testing.T, tw *Tower, g *qvlGolden, clean float64) {
 		fault towerFault
 		neox  bool
 	}{
-		{"no 2-D rotary", func(s *Instance) {
-			gh, gw := s.patchGrid()
-			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
-			for i := 0; i < len(s.vis.ropeSC); i += 2 {
-				s.vis.ropeSC[i] = 1
-			}
-			s.vis.ropeAt = [2]int{gh, gw}
-		}, towerFaultNone, false},
+		{"no 2-D rotary", noTowerRotary, towerFaultNone, false},
 		{"the rotary NEOX-paired", nil, towerFaultNone, true},
 		{"the row on the even pairs", nil, faultKimiAxes, false},
 		{"the table resampled bilinear", nil, faultBilinearTable, false},

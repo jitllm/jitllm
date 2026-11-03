@@ -267,6 +267,9 @@ type stepResult struct {
 	// instances aligned at the first joint step, at the one after the first
 	// session stepped apart, and at every other.
 	alignsFirst, alignsApart, alignsOther int
+	// refFinite is every logit of the sessions alone finite: a reference
+	// that is not makes every comparison against it degenerate.
+	refFinite bool
 }
 
 // stepPrompts is the sessions stepGate steps together, one prompt each.
@@ -406,6 +409,12 @@ func stepGate(t *testing.T, m *Model, g *gpu.GPU, apart bool) stepResult {
 	r.blocks = b1 - b0 + s1.ReplayedPart(gpu.ComposedBlock) - s0.ReplayedPart(gpu.ComposedBlock)
 	r.blockDeclined = d1 - d0
 	r.worst, r.at = worstStep(got, want)
+	r.refFinite = true
+	for _, w := range want {
+		for _, v := range w {
+			r.refFinite = r.refFinite && !math.IsNaN(float64(v)) && !math.IsInf(float64(v), 0)
+		}
+	}
 	t.Logf("%d sessions x %d steps together: worst logit NMSE %.3e (row %d) against each alone; "+
 		"rows %s", len(prompts), steps, r.worst, r.at, stepRows(got, want))
 	return r

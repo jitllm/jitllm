@@ -130,25 +130,17 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 }
 
 // cpuTablePlanes is rotary table i's planes as its composed form reads them
-// (composer.TablePlanes): the model's rotary's, folded over its axes where it has
-// several, or its sliding blocks'.
+// (composer.TablePlanes): the model's rotary's, folded over its axes where it
+// has several, or its sliding blocks'; nil where the model has no such
+// rotary.
 func (m *Model) cpuTablePlanes(i int) []float32 {
-	c := &m.cpuForms
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.tabPlanes[i] == nil {
-		switch i {
-		case 0:
-			if len(m.rope.Runs) > 0 {
-				c.tabPlanes[i] = ropeAxesPlanes(&m.rope, m.Cfg.NRot, m.Cfg.RopeXD)
-			} else {
-				c.tabPlanes[i] = ropeTabPlanes(&m.rope, m.Cfg.NRot)
-			}
-		case 1:
-			c.tabPlanes[i] = ropeTabPlanes(m.ropeSWA, m.Cfg.NRotSWA)
-		}
+	switch {
+	case i == 0 && len(m.rope.Runs) > 0:
+		return ropeAxesPlanes(&m.rope, m.Cfg.NRot, m.Cfg.RopeXD)
+	case i == 0:
+		return ropeTabPlanes(&m.rope, m.Cfg.NRot)
 	}
-	return c.tabPlanes[i]
+	return ropeTabPlanes(m.ropeSWA, m.Cfg.NRotSWA)
 }
 
 // cpuOneTable makes a decode row's rotary tables in s.cs and s.csSWA, which

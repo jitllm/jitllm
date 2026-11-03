@@ -419,7 +419,9 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 // windowDesc is the descriptors block l's attention reads: the windowed ones
 // where its graph attends a window, the full ones elsewhere.
 func (pg *pagedScratch) windowDesc(l *layer) backend.Buf {
-	if l.win > 0 && !pagedFaulted("window") {
+	// A scratch with no windowed set is one whose context fits inside the
+	// window (model.windowFor): its rows' windows are the full ones.
+	if l.win > 0 && pg.pRowW != nil && !pagedFaulted("window") {
 		return pg.pRowW
 	}
 	return pg.pRow

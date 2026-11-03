@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
 
@@ -971,10 +972,11 @@ type visRun struct {
 	// both nil for a raster tower with no windows (windowOrder).
 	ord  []int
 	segs []int
-	// ropeAt is the grid ropeSC was built for; ropeSC is every row's
-	// {cos, sin} row of the 2-D rotary (visRope).
-	ropeAt [2]int
-	ropeSC []float32
+	// gridCells is the encode's rows' cells of the tower's grid table, the
+	// live count first (towertable.go); tabFresh says the CPU's table of
+	// them is in bcs.
+	gridCells []uint32
+	tabFresh  bool
 	// The attention's scratch, per head and per query tile so the head loop
 	// runs on the pool: scores, one padded row each, and weighted sums.
 	att, acc32 []float32
@@ -1329,10 +1331,9 @@ func (s *Instance) encodeBegin(px []float32, gh, gw int) error {
 	if v.afterBlock != nil {
 		v.afterBlock(-1, x)
 	}
-	// The 2-D rotary rows every block turns q and k by, on either tier.
-	if c.Rope {
-		copy(s.bcs[:n*c.HeadDim], s.visRope(n))
-	}
+	// The 2-D rotary rows every block turns q and k by: the device that runs
+	// a block computes them (towertable.go), the CPU's before its first.
+	v.tabFresh = false
 	v.prog = encodeProg{on: true, n: n, first: first, next: s.lo, gh: gh, gw: gw}
 	return nil
 }
@@ -1524,6 +1525,13 @@ func (s *Instance) encodeBlocks(max int) (bool, error) {
 					return false, fmt.Errorf("model: the device refused the tower's %d window(s)", len(v.winRuns))
 				}
 			}
+			// The rows' cells of the tower's grid table, which the device
+			// turns them by; one that takes none reads the CPU's table.
+			if c.Rope {
+				if err := s.towerGridCells(p.n, cs); err != nil {
+					return false, err
+				}
+			}
 			// The image's rows and no more: the scratch may hold more rows
 			// than the picture (reserveTowerRows rounds them up), and a row
 			// past the image is a key every row would attend to.
@@ -1541,6 +1549,11 @@ func (s *Instance) encodeBlocks(max int) (bool, error) {
 			ran += hi - li
 			p.next = hi
 		} else {
+			if c.Rope {
+				if err := s.towerCPUTable(p.n, cs); err != nil {
+					return false, err
+				}
+			}
 			s.lend(li)
 			err := s.hostRows(li, 0, 0, 0, p.n, p.n, false)
 			s.unlend(li)
@@ -2017,46 +2030,6 @@ func (c TowerConfig) towerRope() nn.Rope {
 		Runs: []nn.RopeRun{{Pairs: quart, Axis: 0}, {Pairs: quart, Axis: 1}}}
 }
 
-// visRope is every row's {cos, sin} row -- HeadDim floats, the row's patch's
-// (grid row, grid column) on towerRope's two axes -- built once per grid by
-// the generated table kernel. The text block's rotation turns q and k by it
-// (attnPrep) on the host, and the device by the same rows (Layers' cs).
-func (s *Instance) visRope(n int) []float32 {
-	v := s.vis
-	c := v.t.Cfg
-	gh, gw := s.patchGrid()
-	if v.ropeAt == [2]int{gh, gw} && len(v.ropeSC) >= n*c.HeadDim {
-		return v.ropeSC[:n*c.HeadDim]
-	}
-	if cap(v.ropeSC) < n*c.HeadDim {
-		v.ropeSC = make([]float32, n*c.HeadDim)
-	}
-	v.ropeSC = v.ropeSC[:n*c.HeadDim]
-	r := c.towerRope()
-	for i := 0; i < n; i++ {
-		if c.Kind == jlm.ProjLlama4 {
-			var pos [2]int
-			llama4Coords(i, gh*gw, gw, pos[:])
-			s.jit.RopeTableAt(r, v.ropeSC[i*c.HeadDim:(i+1)*c.HeadDim], pos[:])
-			continue
-		}
-		if c.Kind == jlm.ProjGemma4V {
-			// (column, row): the column turns the first half.
-			p := s.patchAt(i)
-			pos := []int{p % gw, p / gw}
-			if gemma4RowFirst {
-				pos[0], pos[1] = pos[1], pos[0]
-			}
-			s.jit.RopeTableAt(r, v.ropeSC[i*c.HeadDim:(i+1)*c.HeadDim], pos)
-			continue
-		}
-		p := s.patchAt(i)
-		s.jit.RopeTableAt(r, v.ropeSC[i*c.HeadDim:(i+1)*c.HeadDim], []int{p / gw, p % gw})
-	}
-	v.ropeAt = [2]int{gh, gw}
-	return v.ropeSC
-}
-
 // visPlan is vision block li's plan for a device: the text kit's fields read
 // off the segment's Config -- LayerNorm or RMSNorm, an ungated MLP or a gated
 // one, a per-row rotary (NRot over Layers' cs) or none -- and NonCausal, so a
@@ -2089,6 +2062,11 @@ func (s *Instance) visPlan(li int) *nn.LayerPlan {
 	// table EncodeGrid hands Layers (visRope).
 	if tc.Rope {
 		plan.NRot, plan.RopeNeox = c.HeadDim, c.RopeNeox
+		// The device computes the table itself, from the rows' cells
+		// (nn.GridCellsDevice).
+		if l.mn == nil {
+			plan.Tables, plan.GridPlanes = []*graph.Graph{tc.towerTableGraph()}, tc.towerGridPlanes()
+		}
 	}
 	// Gemma 4's block: sandwich norms, the per-head q/k norm, the weightless
 	// v norm, scores at the segment's own scale, the clipped linears.

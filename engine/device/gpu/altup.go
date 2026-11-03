@@ -9,7 +9,7 @@ import (
 )
 
 // Gemma 3n's AltUp and LAuReL on the device (nn.LayerPlan.AltUp; the graph is
-// engine/model/altup.go, the kernels kernels/altup.go).
+// engine/model/altup.go).
 //
 // bs.x holds every residual stream, stream-major (stream k of row r at
 // (k*R + r)*n_embd), so the block's kernels, which read and write R*n_embd,
