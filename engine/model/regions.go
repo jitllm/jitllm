@@ -83,19 +83,12 @@ func (s *Instance) elemChunk(lo, hi int) {
 type rowOp uint8
 
 const (
-	rowNorm   rowOp = iota // dst row = norm(src row): a LayerNorm or an RMSNorm
-	rowAxpy                // dst row += alpha * b, or the table row idx[r] of b
-	rowHeads               // a vision block's attention, heads lo..hi-1 (visAttendHead)
-	rowPool                // gemma3's average pool of a Scale x Scale block, then its RMSNorm
-	rowKeyPos              // the resampler's keys: dst row = src row + its 2-D position
-	rowCross               // the resampler's cross-attention, heads lo..hi-1 (crossHeads)
-	rowPrep                // a vision block's rotary and K/V write, rows lo..hi-1 (visPrepRows)
-	rowLerp                // a resampled position table's rows (lerpRows)
+	rowNorm rowOp = iota // dst row = norm(src row): a LayerNorm or an RMSNorm
+	rowAxpy              // dst row += alpha * b, or the table row idx[r] of b
 )
 
-// rowRegion is a region over rows -- or, for rowHeads, over heads -- whose
-// arguments the caller fills before the dispatch (rowRun): the prompt's and an
-// encode's per-row ops, without a closure per call.
+// rowRegion is a region over rows whose arguments the caller fills before the
+// dispatch (rowRun): the prompt's per-row ops, without a closure per call.
 type rowRegion struct {
 	op             rowOp
 	dst, src, w, b []float32
@@ -104,11 +97,7 @@ type rowRegion struct {
 	ln             bool
 	eps            float64
 	alpha          float32
-	// rowHeads: the block and its key runs; rowPool and rowKeyPos: the grid.
-	li       int
-	segs     []int
-	side, gw int
-	fn       func(lo, hi int)
+	fn             func(lo, hi int)
 }
 
 // rowRun dispatches the row region described by s.rg.rows over n items in
@@ -119,7 +108,7 @@ func (s *Instance) rowRun(n, chunk int) {
 		j.fn = s.rowItems
 	}
 	s.jit.Parallel(n, chunk, j.fn)
-	j.dst, j.src, j.w, j.b, j.idx, j.segs = nil, nil, nil, nil, nil, nil
+	j.dst, j.src, j.w, j.b, j.idx = nil, nil, nil, nil, nil
 }
 
 // rowItems is one chunk of the row region.
@@ -148,23 +137,42 @@ func (s *Instance) rowItems(lo, hi int) {
 			}
 			nn.Axpy32JIT(j.dst[i*d:(i+1)*d], b, j.alpha)
 		}
-	case rowHeads:
-		for h := lo; h < hi; h++ {
-			for w := 0; w+1 < len(j.segs); w += 2 {
-				s.visAttendHead(j.li, h, j.segs[w], j.segs[w+1], j.alpha)
-			}
-		}
-	case rowPool:
-		s.poolRows(lo, hi)
-	case rowKeyPos:
-		s.keyPosRows(lo, hi)
-	case rowCross:
-		s.crossHeads(lo, hi)
-	case rowPrep:
-		s.visPrepRows(lo, hi)
-	case rowLerp:
-		s.lerpRows(lo, hi)
 	}
+}
+
+// elemChunk is the chunk a pool region of items elements runs in: four
+// chunks per worker, so a chunk's execution dominates the claim, callback and
+// kernel entry.
+func elemChunk(items, workers int) int {
+	if workers < 1 {
+		workers = 1
+	}
+	if c := items / (4 * workers); c > 1 {
+		return c
+	}
+	return 1
+}
+
+// rowChunk is elemChunk for a loop whose unit is a row of width elements:
+// 1024 rows at chunk 1 is 1024 atomic claims around one kernel call each.
+func (s *Instance) rowChunk(rows, width int) int {
+	if !s.worthPooling(rows * width) {
+		return rows // one chunk: the pool runs it on the caller
+	}
+	return elemChunk(rows, s.jit.Workers())
+}
+
+// worthPooling is the crossover: parallelise only when the serial work
+// exceeds the dispatch cost by enough to pay for it, Tserial > D/(1 - 1/S).
+// With a region dispatch of ~3 us and a speedup of ~3 that is ~4.5 us of
+// serial work, expressed in elements at a conservative streaming rate.
+func (s *Instance) worthPooling(elems int) bool {
+	if !s.m.opt.elemPool {
+		return false
+	}
+	const elemsPerUs = 2000 // conservative f32 streaming rate, one core
+	const crossoverUs = 10  // ~3x the region dispatch, with margin
+	return elems >= crossoverUs*elemsPerUs
 }
 
 // embedRegion is a prompt chunk's embedding rows over the pool (Instance.embedRun):

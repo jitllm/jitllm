@@ -39,10 +39,8 @@ func Step(states []*Instance, tokens []int32) ([][]float32, error) {
 // session does; a prompt chunk that does not end its prompt does not, and its
 // rows then cost no projection of the head.
 //
-// A run may carry a picture instead, or as well: Encode is a picture the
-// Instance encodes in its vision segment in this step -- part of the tower or all
-// of it -- and Spans, in place of Tokens, is a chunk of a mixed prompt (tokens
-// and a picture's rows) the instance prefills in this step.
+// Spans, in place of Tokens, is a chunk of a mixed prompt (tokens and
+// embedding rows) the instance prefills in this step.
 //
 // A run names its session (Session), which holds a lease on the instance
 // the step runs on (Session.Acquire); every session of one StepRuns leases
@@ -54,88 +52,6 @@ type Run struct {
 	Tokens   []int32
 	Spans    []Span
 	Logits   bool
-	Encode   *Encode
-}
-
-// Encode is a picture encoded in the steps of StepRuns: its instance's vision
-// segment runs the tower's blocks over the picture's rows in the same step the
-// other sessions decode in, and an encode may be spread over several steps by
-// blocks -- never by rows, which attend to each other.
-type Encode struct {
-	// Picture is the picture to encode (Instance.Picture).
-	Picture *Picture
-	// Blocks is the most tower blocks one step runs; zero runs the rest.
-	Blocks int
-	// Image is the picture's rows, grid and name once Done.
-	Image Image
-	Done  bool
-	// Ran is the tower blocks this encode has run over every step: zero for
-	// a picture the image cache answered.
-	Ran int
-
-	begun       bool
-	tile, tiles int
-	rows        []float32
-}
-
-// step advances the encode by one step's blocks on st's vision segment.
-func (e *Encode) step(st *Instance) error {
-	if e.Done {
-		return nil
-	}
-	vs, err := st.Vision()
-	if err != nil {
-		return err
-	}
-	defer vs.m.enterPager()()
-	v, p := vs.vis, e.Picture
-	c := v.t.Cfg
-	clean := v.fault == towerFaultNone && c.fault == towerFaultNone && !qwenNoUnwindow
-	if !e.begun {
-		if clean {
-			if hit, ok := vs.m.imgCache.get(p.Key); ok {
-				v.cacheHits++
-				e.Image, e.Done = p.image(append([]float32(nil), hit.rows...), c.ProjDim), true
-				return nil
-			}
-		}
-		one := p.GH * c.PatchSz * p.GW * c.PatchSz * 3
-		e.tiles = len(p.Pixels) / one
-		e.begun, e.tile, e.rows = true, 0, e.rows[:0]
-		if err := e.begin(vs, one); err != nil {
-			return err
-		}
-	}
-	before := v.hostBlocks + v.devBlocks
-	done, err := vs.encodeBlocks(e.Blocks)
-	e.Ran += int(v.hostBlocks + v.devBlocks - before)
-	if err != nil {
-		v.prog = encodeProg{}
-		return err
-	}
-	if !done {
-		return nil
-	}
-	rows, err := vs.encodeFinish()
-	if err != nil {
-		return err
-	}
-	e.rows = append(e.rows, rows...)
-	if e.tile++; e.tile < e.tiles {
-		return e.begin(vs, p.GH*c.PatchSz*p.GW*c.PatchSz*3)
-	}
-	if clean {
-		vs.m.imgCache.put(p.Key, e.rows, p.Grid)
-	}
-	e.Image, e.Done = p.image(append([]float32(nil), e.rows...), c.ProjDim), true
-	return nil
-}
-
-// begin starts the encode's current pass: the whole picture for every tower
-// but a tiling one, whose squares are each their own pass.
-func (e *Encode) begin(vs *Instance, one int) error {
-	p := e.Picture
-	return vs.encodeBegin(p.Pixels[e.tile*one:(e.tile+1)*one], p.GH, p.GW)
 }
 
 // MaxStepRows is the most rows -- every run's tokens together -- one joint
@@ -158,11 +74,8 @@ const MaxStepRows = nn.MaxDevicePrefillChunk
 // So a server can admit a new session's prompt in chunks inside the steps the
 // other sessions decode in, and none of them waits for the whole prompt.
 //
-// A picture is work of the same step: a run's Encode runs its instance's vision
-// segment -- the tower's blocks over the picture's rows, which are different
-// weights from the text rows' and so their own submission -- and a run's Spans
-// prefill a mixed chunk, before the token runs step together. Each answer is
-// the one the run would have had alone.
+// A run's Spans prefill a mixed chunk, before the token runs step together.
+// Each answer is the one the run would have had alone.
 //
 // The slice StepRuns returns is its first run's instance's and is reused by the
 // next StepRuns that instance leads; the logits in it are each instance's own, as
@@ -313,8 +226,8 @@ func stepRunsOn(runs []Run, lone bool) ([][]float32, error) {
 	rows, pictures := 0, false
 	for i := range runs {
 		r := &runs[i]
-		if r.Instance == nil || (len(r.Tokens) == 0 && r.Spans == nil && r.Encode == nil) {
-			return nil, fmt.Errorf("model: run %d has no instance, or no tokens, spans or picture", i)
+		if r.Instance == nil || (len(r.Tokens) == 0 && r.Spans == nil) {
+			return nil, fmt.Errorf("model: run %d has no instance, or no tokens or spans", i)
 		}
 		for j := range runs[:i] {
 			if runs[j].sess() == r.sess() {
@@ -325,7 +238,7 @@ func stepRunsOn(runs []Run, lone bool) ([][]float32, error) {
 			return nil, fmt.Errorf("model: run %d carries tokens and spans; a chunk is one or the other", i)
 		}
 		rows += len(r.Tokens)
-		pictures = pictures || r.Spans != nil || r.Encode != nil
+		pictures = pictures || r.Spans != nil
 	}
 	if err := reserveRuns(runs); err != nil {
 		return nil, err
@@ -379,11 +292,6 @@ func stepPictures(runs []Run) ([][]float32, error) {
 	for i, r := range runs {
 		if r.Session != nil {
 			if err := r.Instance.use(r.Session); err != nil {
-				return nil, err
-			}
-		}
-		if r.Encode != nil {
-			if err := r.Encode.step(r.Instance); err != nil {
 				return nil, err
 			}
 		}

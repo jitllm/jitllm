@@ -217,7 +217,7 @@ func (s *Instance) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMov
 	// Instance runs: the instance's own vision and encoder segments, and a mixture's
 	// expert placement, are decided by the offer path, so they are prepared at
 	// the commit instead.
-	if !ok || s.m.opt.hostMoves || s.vis != nil || s.c.MoE() || len(p.blocks) == 0 {
+	if !ok || s.m.opt.hostMoves || s.c.MoE() || len(p.blocks) == 0 {
 		close(p.done)
 		return p, nil
 	}

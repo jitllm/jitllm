@@ -1406,7 +1406,7 @@ func (s *Instance) PrefillCached(tokens []int32) ([]float32, error) {
 // spans -- a chat turn with a picture in its history.
 //
 // A page is named by the rows that produced it, so every row needs an id: a
-// token's own, and for an image row the picture's name (Span.Key, ImageKey),
+// token's own, and for an image row the picture's name (Span.Key, RowsKey),
 // the row's index in it and, on a model whose rotary is multi-axis, its
 // (t, h, w) -- one image's rows under another grid or at another rotary
 // position are different rows (kvCache.nameRow). The pages after the image
@@ -1423,7 +1423,6 @@ func (s *Instance) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 	if s.seqPos(0) != 0 {
 		return nil, fmt.Errorf("model: PrefillCachedMixed wants a fresh sequence, this one is at position %d", s.seqPos(0))
 	}
-	spans = named(spans)
 	rows := 0
 	for _, sp := range spans {
 		rows += sp.n(s.c.NEmbd)
@@ -1446,12 +1445,7 @@ func (s *Instance) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 	key := s.spanKey(0, spans)
 	s.markRope(0, rows, next-rows)
 	return s.prefillCachedKey(key, rows, func(n int) ([]float32, error) {
-		// Only now are the rows needed, and only from n on: a picture the
-		// restore covered whole runs no tower block.
-		enc, err := s.pictureRows(spans, n)
-		if err != nil {
-			return nil, err
-		}
+		enc := spans
 		src, err := s.spanSrc(enc)
 		if err != nil {
 			return nil, err
@@ -2995,7 +2989,7 @@ func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
 // position follows from the grid and the prefix, which the key hashes
 // before it.
 type namedRow struct {
-	key  ImageKey
+	key  RowsKey
 	row  int32
 	grid [5]int32
 }
@@ -3004,7 +2998,7 @@ type namedRow struct {
 // as the row at cache position pos, and returns the id seq holds for it:
 // negative, so no vocabulary id is one. A row named again at the same position
 // reuses its entry; the table never grows past the rows the sequence holds.
-func (kc *kvCache) nameRow(k ImageKey, row int, g ImageGrid, pos int) int32 {
+func (kc *kvCache) nameRow(k RowsKey, row int, g ImageGrid, pos int) int32 {
 	r := namedRow{key: k, row: int32(row), grid: [5]int32{int32(g.T), int32(g.H), int32(g.W), int32(g.Line), int32(g.Ends)}}
 	if pos < len(kc.seq) && kc.seq[pos] < 0 {
 		if i := int(-1 - kc.seq[pos]); i < len(kc.named) && kc.named[i] == r {

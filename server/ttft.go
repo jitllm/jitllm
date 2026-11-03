@@ -99,16 +99,14 @@ func (e *Engine) modelOf(o GenerateOptions) *LoadedModel {
 }
 
 // CheckAdmission reports the ErrOverloaded a generate of o would get now,
-// and the refusal of a picture by a model with no vision tower.
+// and the refusal of a picture, which no tower runs yet.
 func (e *Engine) CheckAdmission(o GenerateOptions) error {
 	lm := e.modelOf(o)
 	if lm == nil {
 		return nil
 	}
 	if o.Prompt.Chat != nil && len(o.Prompt.Chat.Images) > 0 {
-		if err := acceptsImages(lm); err != nil {
-			return err
-		}
+		return fmt.Errorf("%w: model %q does not accept images: no tower runs pictures yet", ErrInvalid, lm.id)
 	}
 	if t := &lm.ttft; t.queueCap > 0 && int(t.inflight.Load()) >= t.queueCap {
 		t.refused.Add(1)

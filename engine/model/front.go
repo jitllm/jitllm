@@ -95,16 +95,6 @@ type frontSet struct {
 	blocks []*graph.Graph
 	why    []Uncovered
 	errs   []error
-	// tower, towerWhy and towerErrs are the vision tower's blocks', vision
-	// block i at i: block base+i of the model's block space.
-	tower     []*graph.Graph
-	towerWhy  []Uncovered
-	towerErrs []error
-	// towerEntry and towerProj are the tower's entry and projector
-	// (towerEntryOf, towerProjOf), each with why the front end states none.
-	towerEntry                  *graph.Graph
-	towerProj                   towerProj
-	towerEntryWhy, towerProjWhy Uncovered
 	// mtp, mtpWhy and mtpErrs are the prediction blocks' bodies
 	// (frontmtp.go), prediction block i at block NLayer+i.
 	mtp     []*graph.Graph
@@ -202,9 +192,6 @@ func (m *Model) Composing() composer.Model { return composing{m.container, m} }
 
 func (c composing) BlockGraph(li int) *graph.Graph {
 	f := c.m.frontGraphs()
-	if i := c.m.towerAt(li); i >= 0 {
-		return f.tower[i]
-	}
 	if i := li - len(f.blocks); i >= 0 && i < len(f.mtp) {
 		return f.mtp[i]
 	}
@@ -212,16 +199,6 @@ func (c composing) BlockGraph(li int) *graph.Graph {
 		return nil
 	}
 	return f.blocks[li]
-}
-
-// towerAt is block li's index among the vision tower's blocks, -1 for a
-// block that is not the tower's.
-func (m *Model) towerAt(li int) int {
-	t := m.tower
-	if t == nil || li < t.base || li >= t.base+t.Cfg.NLayer {
-		return -1
-	}
-	return li - t.base
 }
 
 func (c composing) Blocks() int { return c.m.Cfg.NLayer }
@@ -279,11 +256,8 @@ func (m *Model) uncoveredAt(li int) (Uncovered, error) {
 		return f.embedWhy, f.embedErr
 	case li >= 0 && li < len(f.why):
 		return f.why[li], f.errs[li]
-	case m.towerAt(li) < 0 && li >= len(f.why) && li < len(f.why)+len(f.mtp):
+	case li >= len(f.why) && li < len(f.why)+len(f.mtp):
 		return f.mtpWhy[li-len(f.why)], f.mtpErrs[li-len(f.why)]
-	case m.towerAt(li) >= 0:
-		i := m.towerAt(li)
-		return f.towerWhy[i], f.towerErrs[i]
 	}
 	return UncoveredUnverified, fmt.Errorf("no block %d", li)
 }
@@ -308,15 +282,6 @@ func (m *Model) frontGraphs() *frontSet {
 			s.mtp[i], s.mtpWhy[i], s.mtpErrs[i] = m.blockGraph(n + i)
 			s.mtpEntry[i], s.mtpEntryWhy[i], _ = m.mtpEntryGraph(n + i)
 		}
-	}
-	if t := m.tower; t != nil {
-		nv := t.Cfg.NLayer
-		s.tower, s.towerWhy, s.towerErrs = make([]*graph.Graph, nv), make([]Uncovered, nv), make([]error, nv)
-		for i := range nv {
-			s.tower[i], s.towerWhy[i], s.towerErrs[i] = m.towerGraph(t.base + i)
-		}
-		s.towerEntry, s.towerEntryWhy, _ = m.towerEntryOf()
-		s.towerProj, s.towerProjWhy, _ = m.towerProjOf(false)
 	}
 	s.head, s.headWhy, s.headErr = m.headGraph(false)
 	if s.head != nil {
@@ -418,10 +383,6 @@ func (m *Model) uncovered(li int) Uncovered {
 	switch {
 	case c.NRotAt(li) != c.NRot && !(m.ropeSWA != nil && c.SWA(li)) || !c.MLA() && c.HeadDimV != c.HeadDim || !m.sharesGeometry(li):
 		return UncoveredGeometry
-	// A picture moves the rotary of the positions after it (marks), which a
-	// pooled selection turning blocks at their first positions does not read.
-	case c.IdxHeads != 0 && c.QSARatio != 0 && m.tower != nil:
-		return UncoveredSelect
 	case c.Streams() > 1 && !c.statesStreams():
 		return UncoveredStreams
 	case c.RopeAt(li) && !m.ropeAxesStated(m.ropeAt(li)):
@@ -1617,7 +1578,7 @@ func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 	switch {
 	case c.Streams() > 1 && !c.mixesStreams() && !m.expandsStreams():
 		return nil, UncoveredStreams, nil
-	case types || m.hardEmbd != nil:
+	case types:
 		return nil, UncoveredEmbedRows, nil
 	}
 	b := graph.NewBlock(-1)

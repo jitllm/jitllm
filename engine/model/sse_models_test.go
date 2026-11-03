@@ -474,8 +474,6 @@ func TestSSEModelGates(t *testing.T) {
 		{"BatchMatchesForward", TestBatchMatchesForward},
 		{"RaggedBatchMatchesForward", TestRaggedBatchMatchesForward},
 		{"BiasedBatchMatchesForward", TestBiasedBatchMatchesForward},
-		{"TowerEncodes", TestTowerEncodes},
-		{"TowerMatchesLlamaCpp", TestTowerMatchesLlamaCpp},
 		{"SafetensorsMatchTransformers", TestSafetensorsMatchTransformers},
 		{"GPTOSSMatchesLlamaCppIntermediates", TestGPTOSSMatchesLlamaCppIntermediates},
 		{"SynthGPTOSSMatchesTransformers", TestSynthGPTOSSMatchesTransformers},
@@ -485,7 +483,6 @@ func TestSSEModelGates(t *testing.T) {
 		{"EveryModelRunsGenerated", TestEveryModelRunsGenerated},
 		{"KVF16IsSelectedAndRuns", TestKVF16IsSelectedAndRuns},
 		{"PagedKVIsTokenIdenticalOnEveryModel", TestPagedKVIsTokenIdenticalOnEveryModel},
-		{"LlavaTowerEncodes", TestLlavaTowerEncodes},
 	} {
 		t.Run(g.name, g.fn)
 	}

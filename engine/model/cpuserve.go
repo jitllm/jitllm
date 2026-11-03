@@ -360,9 +360,6 @@ type cpuState struct {
 	fault   cpuFault
 	head    cpuHeadState
 	streams cpuStreamsState
-	proj    cpuProjState
-	// towerTab is the tower's rotary table (towertable.go).
-	towerTab cpuTowerTable
 	// tabPlanes is each rotary's planes as its composed table reads them
 	// (composer.TablePlanes), folded from the model's rotaries when the
 	// instance places its blocks (cpuTablePlanes).
@@ -629,23 +626,6 @@ func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []
 	}
 	side, _ := s.cpuSideRows(li)
 	return composer.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), s.bcsSWA, s.c.NRotSWA, seq, pos)
-}
-
-// cpuTowerRows runs tower block li on the CPU the composer's way over the
-// picture's n rows in s.bx, one run of rows attending both ways (bidir.go),
-// or says why not. Its history is the instance's arena page, lent to the block
-// for its run.
-func (s *Instance) cpuTowerRows(li int, l *layer, n int) (composer.Decline, error) {
-	v := s.vis
-	var wins []nn.KeyRun
-	if s.visWindowed(li) {
-		v.winRuns = v.winRuns[:0]
-		for w := 0; w+1 < len(v.segs); w += 2 {
-			v.winRuns = append(v.winRuns, nn.KeyRun{Lo: v.segs[w], Hi: v.segs[w+1]})
-		}
-		wins = v.winRuns
-	}
-	return s.cpuRunRows(li, l, s.bx[:n*s.c.ResidW()], n, s.bcs, s.c.RopeW(), nil, 0, wins)
 }
 
 // swaRows is the step's second rotary table from row a, nil where the model
@@ -1598,10 +1578,6 @@ func (s *Instance) cpuPlace() {
 		}
 	}
 	if s.nc() != nil {
-		if s.vis != nil {
-			s.cpuPlaceProjector()
-			s.cpuPlaceTowerTable()
-		}
 		return
 	}
 	s.cpuPlaceHead()
@@ -1630,10 +1606,6 @@ func (s *Instance) cpuRelocated(li int, onCPU bool) {
 func (s *Instance) cpuCompose(li int) {
 	cb := &cpuBlock{}
 	s.cpu.blocks[li] = cb
-	if s.m.layers[li].mn != nil {
-		s.cpuComposeConv(li, cb)
-		return
-	}
 	cb.why = s.cpuWhy(li)
 	if cb.why != composer.DeclineServes {
 		return
@@ -1816,12 +1788,6 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpuB
 	f := m.Composing()
 	for _, o := range g.Ops {
 		for _, w := range o.Weight {
-			if m.towerAt(li) >= 0 {
-				if t, ok := towerFormat(&m.layers[li], w.Role); ok {
-					formats[w.Role] = t
-				}
-				continue
-			}
 			if e, ok := f.Find(w.Role, int32(li), -1); ok {
 				formats[w.Role] = e.Type
 				// A table the block lays out as float32 at load is read so.
@@ -1843,11 +1809,9 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpuB
 		Step:    composer.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.jit.ActWindow(), Seqs: max(s.nseq, 1)},
 		History: composer.History{ValuesInKeys: pg.latent},
 		Device:  s.composedCPU()}
-	// A text block turns by the rotary its rope ops state, of the model's
+	// A block turns by the rotary its rope ops state, of the model's
 	// (composing.Rotaries): each its own table, bound by instance.
-	if m.towerAt(li) < 0 {
-		req.Rotaries = composing{m.container, m}.Rotaries()
-	}
+	req.Rotaries = composing{m.container, m}.Rotaries()
 	return m.cpuFormOf(req, &gr, rows, false, false, s.kvl.fmt == cpu.KVF32)
 }
 
@@ -2937,16 +2901,6 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &m.pleProj
 		case r >= jlm.RoleStreamCollapse1 && int(r-jlm.RoleStreamCollapse1) < len(m.altUnembd):
 			return &m.altUnembd[r-jlm.RoleStreamCollapse1]
-		case s.vis != nil && r == jlm.RoleVProj:
-			return &s.vis.t.projW
-		case s.vis != nil && r == jlm.RoleVPatchEmbd:
-			return &s.vis.t.patchW
-		case s.vis != nil && r == jlm.RoleVPosEmbd:
-			return &s.cpu.proj.posW
-		case s.vis != nil && r == jlm.RoleVProj2:
-			return &s.vis.t.projW2
-		case s.vis != nil && r == jlm.RoleVProj3:
-			return &s.vis.t.projW3
 		case r == jlm.RoleEmbdDense1:
 			return &m.dense1
 		case r == jlm.RoleEmbdDense2:
@@ -2959,14 +2913,6 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &m.q4eHead.hc.up
 		}
 		return nil
-	}
-	if l.mn != nil {
-		if s.cpu.fault == cpuFaultFilterT {
-			if t := l.mn.filterT(r); t != nil {
-				return t
-			}
-		}
-		return convRoleWeight(l, r)
 	}
 	switch r {
 	case jlm.RoleNextnEHProj:
@@ -3141,39 +3087,7 @@ func (s *Instance) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 				return hd.scale[:1]
 			}
 		}
-		if s.vis == nil {
-			return nil
-		}
-		switch t := s.vis.t; r {
-		case jlm.RoleVPatchBias:
-			return t.patchB
-		case jlm.RoleVClassEmbd:
-			return t.clsW
-		case jlm.RoleVPreNorm:
-			return t.preLnW
-		case jlm.RoleVPreNormBias:
-			return t.preLnB
-		case jlm.RoleVProjBias:
-			return t.projB
-		case jlm.RoleVProj2Bias:
-			return t.projB2
-		case jlm.RoleVProjNorm:
-			return t.projNorm
-		case jlm.RoleVProjNormBias:
-			return t.projNormB
-		case jlm.RoleVProjInNorm:
-			return t.projInNorm
-		case jlm.RoleVProjInNormBias:
-			return t.projInNormB
-		case jlm.RoleVStdBias:
-			return t.stdBias()
-		case jlm.RoleVStdScale:
-			return t.stdScale()
-		}
 		return nil
-	}
-	if l.mn != nil {
-		return convRoleVector(l, r)
 	}
 	switch r {
 	case jlm.RoleNextnENorm, jlm.RoleNextnHNorm:

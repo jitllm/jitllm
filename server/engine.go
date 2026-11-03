@@ -2244,52 +2244,10 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt, name string) ([]int32, error)
 	return nil, fmt.Errorf("%w: unknown prompt kind %d", ErrInvalid, p.Kind)
 }
 
-// acceptsImages refuses a picture for a model with no vision tower by name.
-func acceptsImages(lm *LoadedModel) error {
-	if lm.m.Tower() == nil {
-		return fmt.Errorf("%w: model %q does not accept images: its container carries no vision tower",
-			ErrInvalid, lm.id)
-	}
-	return nil
-}
-
-// pictureSpans lays a chat with pictures out as spans on s's instance: the
-// template's text, and each picture where the template puts its image markers.
-// A model with no vision tower is refused by name, never run with the picture
-// left out. Such a prompt runs alone rather than as a row of the step loop,
-// as every span prompt does.
+// pictureSpans refuses a chat with pictures by name: no tower runs them yet,
+// and a picture is never run left out of its prompt.
 func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
-	lm, chat := s.lm, o.Prompt.Chat
-	if err := acceptsImages(lm); err != nil {
-		return nil, err
-	}
-	if !lm.m.ChatCapable() {
-		return nil, fmt.Errorf("%w: model %q carries no chat template, which is where a picture's "+
-			"markers go", ErrInvalid, lm.id)
-	}
-	n := 0
-	for _, m := range chat.Messages {
-		n += m.Images
-	}
-	if n != len(chat.Images) {
-		return nil, fmt.Errorf("%w: the messages count %d picture(s) and the request carries %d",
-			ErrInvalid, n, len(chat.Images))
-	}
-	msgs := chat.Messages
-	if chat.HasSystem {
-		msgs = append([]model.ChatMessage{{Role: "system", Content: chat.System}}, msgs...)
-	}
-	// The pictures are encoded on the instance the prompt will run on.
-	in, err := s.ms.Hold(context.Background(), model.PhasePrefill)
-	if err != nil {
-		return nil, err
-	}
-	sp, err := in.ChatPictureSpans(msgs, chat.Images, chat.Tools, chat.ToolChoice, chat.AddGenerationPrompt)
-	s.ms.Unhold(in)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
-	}
-	return sp, nil
+	return nil, fmt.Errorf("%w: model %q does not accept images: no tower runs pictures yet", ErrInvalid, s.lm.id)
 }
 
 // ---------------------------------------------------------------- streaming text

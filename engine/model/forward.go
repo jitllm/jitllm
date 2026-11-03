@@ -143,13 +143,6 @@ type Instance struct {
 	residFold bool
 	Grouped   int64
 
-	// vis is the vision segment's run: set on an instance over the tower's blocks
-	// (Instance.Vision), nil on every text Instance.
-	vis *visRun
-	// visState is the vision instance a text instance encodes its pictures in
-	// (Vision), nil until the first picture.
-	visState *Instance
-
 	x, h, xb []float32 // residual stream and two same-width scratch vectors
 	// hf is a parallel block's FFN input (C6): the block input normed for the
 	// FFN before attention adds into the residual. nil on every sequential
@@ -859,18 +852,6 @@ func (s *Instance) Close() error {
 		close(s.expReq)
 		s.expReq = nil
 	}
-	// The vision instance runs on this instance's JIT, so it goes first.
-	if s.visState != nil {
-		s.visState.Close()
-		s.visState = nil
-	}
-	// A vision instance's blocks run once per picture, so the card they were
-	// placed on gets its room back with the instance: its text sessions' blocks
-	// run every token. Through the session view, so another session's hold on
-	// the same blocks keeps them there.
-	if s.vis != nil && s.ld != nil && s.devCount() > 0 {
-		s.SetGPULayers(s.lo)
-	}
 	// The session's history on the device goes back to the tier, which keeps
 	// the model's weights for whoever else is using them.
 	if d, ok := s.ld.(nn.Session); ok {
@@ -879,11 +860,6 @@ func (s *Instance) Close() error {
 	// The history the device gave back was host memory on an integrated GPU,
 	// and the model's pages get it back once no instance holds the device.
 	s.holdHost(nil)
-	// A vision instance's K/V pair is lent to its first block, so the pool takes
-	// it back with the rest of the cache.
-	if s.vis != nil && s.vis.kp != nil {
-		s.lend(s.lo)
-	}
 	s.m.kvPool.put(s.kv)
 	s.unmapNC()
 	s.unmapOwn()
@@ -897,15 +873,6 @@ func (s *Instance) Close() error {
 			}
 		}
 	}
-	// A vision session's prompt buffers are the tower's shape, which no text
-	// Instance could take; and a JIT it borrowed is the text instance's to close.
-	if s.vis != nil {
-		s.vis.release()
-		if s.vis.borrowed {
-			return nil
-		}
-		return s.jit.Close()
-	}
 	s.keepSpare()
 	return s.jit.Close()
 }
@@ -917,11 +884,6 @@ func (s *Instance) Close() error {
 // and what it takes is decided by the device's own memory rather than by a
 // separate placement policy.
 func (s *Instance) SetDevice(d nn.LayerDevice) error {
-	// The bisection knob for a tower (WithTowerGPULayers): how many of its
-	// blocks are offered.
-	if s.vis != nil && s.m.opt.towerGPULayers >= 0 {
-		return s.SetDeviceLayers(d, s.m.opt.towerGPULayers)
-	}
 	return s.SetDeviceLayers(d, -1)
 }
 
@@ -1014,12 +976,6 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	// will, both budgets are re-divided for it.
 	s.holdHost(d)
 	defer s.followHost()
-	// The vision instance this one encodes pictures in follows it to the device.
-	if s.visState != nil {
-		if err := s.visState.SetDevice(d); err != nil {
-			return err
-		}
-	}
 	if d != nil {
 		s.m.watch(d)
 	}
@@ -1580,9 +1536,6 @@ func (s *Instance) placeHeadOn(name string) bool {
 // not set Ensure -- the caller does, because Ensure calls back into here. It is
 // shared by the offer and by every device page-in, which must agree.
 func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
-	if s.vis != nil {
-		return s.visWeights(li)
-	}
 	l := &s.m.layers[li]
 	qn, kn := s.qkNorms(li)
 	w := nn.LayerWeights{
@@ -1763,8 +1716,6 @@ func (s *Instance) offerRange(lo, hi int) {
 	if adm == nil {
 		adm = ld
 	}
-	// A picture's entry and projector form where the tower's blocks land.
-	defer s.prepPicRows()
 	// Each placed block gives its host pages back and the next block's land
 	// in the same frames; once the range is offered nothing will take the rest,
 	// so they go back to the OS (jlm.File.TrimFree).
@@ -2075,9 +2026,6 @@ func (s *Instance) planExtra(hi int) uint64 {
 func (s *Instance) planFor(li int) *nn.LayerPlan {
 	c := s.c
 	plan := s.plan
-	if s.vis != nil {
-		return s.visPlan(li)
-	}
 	// The sinks and the mixture biases are resident vectors read at build(),
 	// not page bytes, so asking about them here still needs no page-in.
 	l := &s.m.layers[li]
@@ -3290,13 +3238,6 @@ func (s *Instance) addBiasRows(out, b []float32, n int) {
 		return
 	}
 	w := len(b)
-	// A picture's rows -- a thousand of them, six biases a block -- on the
-	// pool, as the tower's own loop ran them; one at a time they were a tenth
-	// of SmolVLM's encode.
-	if s.vis != nil && n > 1 {
-		s.axpyRows(out, b, nil, w, n, s.rowChunk(n, w), 1)
-		return
-	}
 	for r := 0; r < n; r++ {
 		s.axpy(out[r*w:(r+1)*w], b, 1)
 	}

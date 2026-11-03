@@ -100,13 +100,7 @@ type ncArena struct {
 }
 
 // nc is the instance's non-causal segment's arena, nil for an instance of none.
-func (s *Instance) nc() *ncArena {
-	switch {
-	case s.vis != nil:
-		return &s.vis.ncArena
-	}
-	return nil
-}
+func (s *Instance) nc() *ncArena { return nil }
 
 // mapNC maps the arena of a segment instance: one page of the segment's rows
 // at the widest key row of its blocks that keep one (a convolution block

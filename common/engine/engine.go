@@ -23,7 +23,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -86,17 +85,6 @@ type Engine struct {
 	sessMax int
 	// lastPromptTok is the last prompt's length, read by the reuse probe.
 	lastPromptTok int
-	// pictures is each picture file's preprocessed pixels and name, by the
-	// file's identity, so a picture in every turn's history is decoded once.
-	// The rows are the model's image cache's; dropped with the model.
-	pictures map[fileID]*model.Picture
-}
-
-// fileID is a picture file's identity: its path, size and modification time.
-type fileID struct {
-	path  string
-	size  int64
-	mtime int64
 }
 
 // queueDepth is small on purpose: the commands are user actions, and a queue
@@ -410,9 +398,7 @@ func (e *Engine) activate(en *entry) error {
 	// is switched off at load rather than failing every turn.
 	summary := e.headerNow().String()
 	chatOK := m.ChatCapable()
-	vision := m.Tower() != nil
-	// A different model is a different preprocessor: every picture is stale.
-	e.pictures = nil
+	vision := false
 	var blocks []byte
 	var alloc session.Allocation
 	e.inspect(func(st *model.Instance) {
@@ -942,54 +928,10 @@ func hasImages(r session.ChatRequest) bool {
 	return false
 }
 
-// imageSpans lays every picture of the request into the conversation as a
-// picture span, which the prefill encodes in the session's own vision segment
-// (model.Picture): its JIT and pool, its device, the model's image cache. A
-// picture is preprocessed once per file -- pictures maps a file's identity to
-// its pixels and name, never to rows.
-func (e *Engine) imageSpans(r session.ChatRequest) ([]model.Span, error) {
-	if e.m.Tower() == nil {
-		return nil, fmt.Errorf("the loaded model has no vision tower, so it cannot take a picture")
-	}
-	if e.pictures == nil {
-		e.pictures = map[fileID]*model.Picture{}
-	}
-	var imgs []model.Image
-	for _, m := range r.Messages {
-		for _, p := range m.Images {
-			fi, err := os.Stat(p)
-			if err != nil {
-				return nil, err
-			}
-			k := fileID{p, fi.Size(), fi.ModTime().UnixNano()}
-			pc, ok := e.pictures[k]
-			if !ok {
-				if pc, err = e.picture(p); err != nil {
-					return nil, fmt.Errorf("%s: %w", filepath.Base(p), err)
-				}
-				e.pictures[k] = pc
-			}
-			imgs = append(imgs, model.Image{Picture: pc})
-		}
-	}
-	return e.m.ChatSpansImages(chatMessages(r), imgs, true)
-}
-
-// picture decodes and preprocesses one picture on the session's vision
-// segment.
-func (e *Engine) picture(path string) (*model.Picture, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return nil, err
-	}
-	var pc *model.Picture
-	e.inspect(func(st *model.Instance) { pc, err = st.Picture(img) })
-	return pc, err
+// imageSpans refuses a request carrying pictures: no tower runs them yet, and
+// a picture is never run left out of its prompt.
+func (e *Engine) imageSpans(session.ChatRequest) ([]model.Span, error) {
+	return nil, fmt.Errorf("no tower runs pictures yet, so the loaded model cannot take one")
 }
 
 // display is the decoded text made safe to put on screen.
