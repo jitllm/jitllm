@@ -404,9 +404,9 @@ func (s *Instance) HostRefusal() error {
 		return errHostOnDevice
 	case s.lo != 0 || s.hi != c.NLayer:
 		return errHostPartial
-	case c.MLA() || c.Indexer() || c.MSA() || c.DSV4():
+	case c.MLA() || c.Indexer() || c.MSA():
 		// Their cached rows and selections are read through the batch's own
-		// slots (mlaProjectRows, idxRows, msaRows, ds4Block); a row of
+		// slots (mlaProjectRows, idxRows, msaRows); a row of
 		// another session there would read the wrong history.
 		return errHostCache
 	}
@@ -623,7 +623,6 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		defer func() { h.RowLogits, h.Logits, h.LogitRows = false, keep, 0 }()
 	}
 	s0.layerInputs(s0.bple[:rows*c.pleWidth()])
-	s0.tokenIDs(s0.stepTok)
 	if !ss.LayersSessions(s0.lo, s0.hi, sess, pos, x, cs, csSWA, h) {
 		why := "no reason given"
 		if e, ok := s0.ld.(nn.ErrReporter); ok {

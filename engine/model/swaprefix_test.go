@@ -9,9 +9,8 @@ import (
 )
 
 // prefixWindowFixtures are the models the prefix-cache window gate runs:
-// exaone4's sliding window of 4 beside full layers, and DeepSeek V4's every
-// block sliding, whose entries decide the restore (ds4kv.go).
-func prefixWindowFixtures() []string { return []string{"synth-exaone4.gguf", "synth-deepseek4.gguf"} }
+// exaone4's sliding window of 4 beside full layers.
+func prefixWindowFixtures() []string { return []string{"synth-exaone4.gguf"} }
 
 // TestPrefixCacheRestoresAWindowedLayer runs the prefix cache on a model with
 // windowed layers, on the host and with every block on each device: a prompt

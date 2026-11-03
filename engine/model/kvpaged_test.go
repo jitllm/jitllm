@@ -1083,36 +1083,14 @@ func TestSealDoesNotClaimPagesItCouldNotStore(t *testing.T) {
 // mirrorDevice is a LayerDevice that keeps its own KV and hands it back: enough
 // to test that the engine pulls the history down and seals it, without a card.
 type mirrorDevice struct {
-	kv map[int][]float32
-	// ent is a DeepSeek V4 block's entries (nn.EntDevice), which travel
-	// with its rows.
-	ent      map[int][]float32
+	kv       map[int][]float32
 	refuse   bool // MigrateKV(toDevice=false) fails, as the f16 V cache does
 	corrupt  bool // hand back a history that is not what was given
 	migrated int
 }
 
 func newMirrorDevice() *mirrorDevice {
-	return &mirrorDevice{kv: map[int][]float32{}, ent: map[int][]float32{}}
-}
-
-// MigrateEnt keeps a block's entries and hands them back, negated when
-// corrupt.
-func (d *mirrorDevice) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) bool {
-	if toDevice {
-		d.ent[li] = append([]float32(nil), ent...)
-		return true
-	}
-	if d.refuse {
-		return false
-	}
-	copy(ent, d.ent[li])
-	if d.corrupt {
-		for i := range ent {
-			ent[i] *= -1.5 // not a negation alone, which a second crossing undoes
-		}
-	}
-	return true
+	return &mirrorDevice{kv: map[int][]float32{}}
 }
 
 func (d *mirrorDevice) MatVec([]float32, quant.Type, []byte, []float32, int, int) bool {
@@ -1436,11 +1414,6 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType, w *fuseWa
 
 	const maxSeq, page, gen = 128, 8, 12
 	warm := 40
-	if m.Cfg.DSV4() {
-		// Every DeepSeek V4 block slides a window of 8, so its rows hold two
-		// pages; its entries, one per 4 positions, are the history that grows.
-		warm = 72
-	}
 	prompt := make([]int32, warm)
 	for i := range prompt {
 		prompt[i] = int32(300 + i)
@@ -1477,9 +1450,6 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType, w *fuseWa
 		most := 0
 		for i := range s.kv.layers {
 			most = max(most, len(s.kv.layers[i].k))
-		}
-		for i := range s.kv.ent {
-			most = max(most, len(s.kv.ent[i].k))
 		}
 		if most < 3 {
 			t.Fatalf("only %d page(s) after %d tokens: a single-page history cannot show "+

@@ -87,9 +87,6 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 			return nil, err
 		}
 	}
-	if c.DSV4() {
-		s.ds4Expand(s.bx[:n*c.ResidW()], n)
-	}
 	if c.ResAttn() {
 		s.k3Expand(s.bx[:n*c.ResidW()], n)
 	}
@@ -126,7 +123,6 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 				hi++
 			}
 			withHead := headOnDev && hi == s.hi
-			s.tokenIDs(tokens)
 			// Qwen3.8-Flash-Next's n-gram rows, when the run holds its n-gram
 			// block, each sequence's in position order.
 			if c.NGramBlock != 0 {
@@ -155,9 +151,6 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		l := &m.layers[li]
 		var why composer.Decline
 		var err error
-		if c.NHashLayers > 0 && li == s.lo {
-			s.cpuTokens(n, func(i int) int32 { return tokens[i] })
-		}
 		switch {
 		case c.LayerKind(li).Recurrent():
 			if c.NGramAt(li) {
@@ -183,11 +176,6 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	}
 	if c.PredStreams != 0 && nlogit > 0 {
 		if err := s.altCollapse(s.bx[:n*c.ResidW()], n); err != nil {
-			return nil, err
-		}
-	}
-	if c.DSV4() && nlogit > 0 {
-		if err := s.ds4Collapse(s.bx[:n*c.ResidW()], n); err != nil {
 			return nil, err
 		}
 	}

@@ -367,9 +367,8 @@ func stepAllocs(t *testing.T, m *Model, g *gpu.GPU, mode stepMode) {
 				"the step it names; each run's refusal: %v", i, placed[i], got, w, why)
 		}
 	}
-	// An AltUp model's head reads the streams' mean on the host (altup.go),
-	// and DeepSeek V4's their collapse (ds4.go): none of their steps takes
-	// the device's head.
+	// A model of several streams reads their collapse before the head on
+	// the host: none of its steps takes the device's head.
 	wantOne := n
 	if m.Cfg.streamHead() {
 		wantOne = 0

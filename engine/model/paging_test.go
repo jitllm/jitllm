@@ -13,7 +13,7 @@ import (
 // architecture appends its fixture here, so the relocation and paging gates
 // run every graph rather than one.
 func principleFixtures() []string {
-	names := []string{"synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf", "synth-deepseek32.gguf", "synth-deepseek4.gguf",
+	names := []string{"synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf", "synth-deepseek32.gguf",
 		"synth-falconh1.gguf", "synth-gemma3n.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-moe.gguf",
 		"synth-gemma4-e.gguf", "synth-gemma4-wide.gguf", "synth-glm4.gguf", "synth-granitehybrid.gguf",
 		"synth-hunyuan.gguf", "synth-kimik3.gguf", "synth-lfm2.gguf", "synth-mamba2.gguf", "synth-minimaxm3.gguf",

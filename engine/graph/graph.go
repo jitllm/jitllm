@@ -50,10 +50,6 @@ const (
 	// are queries over keys and values other rows appended: a
 	// cross-attention. With In[1], an OpSelect's Out[0], each group of its
 	// query heads attends the positions the selection keeps for it alone.
-	// Reading a second history, an entry history (StateEnt, rows
-	// EntWidth wide), a row attends its window of the first and the entries
-	// its entry descriptor names under one softmax with the sinks, a
-	// selection keeping entries.
 	OpAttend
 	// OpAdd is In[0] + In[1].
 	OpAdd
@@ -246,15 +242,6 @@ const (
 	// row, the cell the row's position less Offset on a grid the request's
 	// first word wide.
 	OpPosAxes
-	// OpColPool is a gated pool of the window of Span history rows ending
-	// at the row's own position: for each of HeadDim columns, the softmax
-	// over the window's rows of their gate (the HeadDim at GateAt of the
-	// history row) weighting their value (the HeadDim at Offset), a row
-	// before the history's first left out. With Overlap each row holds two
-	// halves of 2*HeadDim and the window is the Span before's first halves,
-	// then its own Span's second halves. Out[0] is one row of HeadDim. A
-	// primitive over the history, as OpAttend is: a compressor's entry.
-	OpColPool
 	// OpNGramHash is each row's n-gram table rows from its window In[0]
 	// (u32, n words: the row's token, then its n-1 predecessors nearest
 	// first, each its id plus one, zero for none). A predecessor that is
@@ -385,8 +372,6 @@ func (k OpKind) String() string {
 		return "tail_row"
 	case OpPosAxes:
 		return "pos_axes"
-	case OpColPool:
-		return "col_pool"
 	case OpNGramHash:
 		return "ngram_hash"
 	case OpUnfold:
@@ -539,9 +524,6 @@ type State uint8
 const (
 	// StateKV is the block's paged attention history.
 	StateKV State = iota
-	// StateEnt is the block's entry history: a second paged history, one
-	// row an entry its compressor folds, its values its keys.
-	StateEnt
 	// StateRecConv is a recurrent block's short convolution's tail.
 	StateRecConv
 	// StateRecState is a recurrent block's delta rule's or scan's state.
@@ -675,16 +657,6 @@ type Attrs struct {
 	Pooled bool
 	// Inverse turns OpRope's elements back: by the negated angle.
 	Inverse bool
-	// GateAt is where OpColPool's gate starts in the history row, Overlap
-	// its window of two halves.
-	GateAt  int
-	Overlap bool
-	// EntWidth is an OpAttend's entry history row (its second read).
-	EntWidth int
-	// Shift turns OpRope's elements at the row's history position less
-	// Shift, its angles from the rotary's planes (no table read): an entry
-	// turned at its window's first position.
-	Shift int
 	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
 	// OpTopK, OpRank, OpTile): the function, the order a reduction runs in, the
 	// group a reduction, top-k or rank runs over (0: the row), a constant

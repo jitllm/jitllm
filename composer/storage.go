@@ -58,14 +58,6 @@ const (
 	// axes: the live row count, then RopeAxes words a row, axis a of row r
 	// at 1+r*RopeAxes+a.
 	SourceRopeAxisPositions
-	// SourceEntries, SourceEntRows and SourceEntPages are a part's entry
-	// history (graph.StateEnt): its pool, kept from step to step, f32, an
-	// entry's value its key; the rows' descriptors of it (their write slot
-	// the engine's: a row closing no window writes the slot of the entry it
-	// will close, which that row overwrites); its page table.
-	SourceEntries
-	SourceEntRows
-	SourceEntPages
 	// SourceRopeRows is the step's live row count, then each row's cache
 	// position and the word its sequence's rotary marks start at;
 	// SourceRopeMarks every sequence's marks, a count then Step.Marks marks
@@ -112,12 +104,6 @@ func (s Source) String() string {
 		return "windows"
 	case SourceRopeAxisPositions:
 		return "rotary axis positions"
-	case SourceEntries:
-		return "entries"
-	case SourceEntRows:
-		return "entry rows"
-	case SourceEntPages:
-		return "entry pages"
 	case SourceRopeRows:
 		return "rotary rows"
 	case SourceRopeMarks:
@@ -216,12 +202,6 @@ func tableSource(t Table) (Source, bool) {
 		return SourcePages, true
 	case TableQOff:
 		return SourceQueryOffset, true
-	case TableEntKeys:
-		return SourceEntries, true
-	case TableEntRows:
-		return SourceEntRows, true
-	case TableEntPages:
-		return SourceEntPages, true
 	case TablePos:
 		return SourceRopePositions, true
 	case TableAxisPos:

@@ -114,8 +114,7 @@ func (g *devTier) prewarmKV(positions int) {
 	}
 	pages := (positions + kp.p - 1) / kp.p
 	for _, l := range kp.layers {
-		// DeepSeek V4's entries grow at their own rate with their block.
-		if l.rate > 0 || len(l.free) >= pages {
+		if len(l.free) >= pages {
 			continue
 		}
 		// At least a doubling, so growKVLayer grows to exactly this and asks

@@ -111,9 +111,6 @@ func blockInventory() []struct {
 		// DeepSeek V4's hyper-connection mixer (a row's 24 mixes, a Sinkhorn of
 		// 20 rounds; and the head's collapse weights alone) and the compressor's
 		// softmax pool over positions.
-		{"hcmix/20", func() ([]byte, error) { return EmitHCMix(20, false) }},
-		{"hcmix/head", func() ([]byte, error) { return EmitHCMix(0, true) }},
-		{"colpool", func() ([]byte, error) { return EmitColPool(), nil }},
 	}
 }
 

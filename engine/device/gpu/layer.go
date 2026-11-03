@@ -131,22 +131,15 @@ type layer struct {
 	idxQ  *resident
 	mvMQ  mv
 	nIdxQ backend.Buf
-	// DeepSeek V4 (nn.LayerPlan.DS4, ds4.go): the block's vectors, the
-	// grouped output's first half (a bank of OGroups sheets, slot 31) and its
-	// twins at a batch's rows, and the compressors' projections (32..35).
-	ds4                               *ds4Block
-	woA, compKV, compGate             *resident
-	idxCompKV, idxCompGate            *resident
-	mvWoA, mvCKV, mvCG, mvICKV, mvICG mv
-	// Kimi-K3 (nn.LayerPlan.K3, k3.go): the MLA output gate (slot 36) and the
-	// latent mixture's down and up projections (37, 38), and the block's
+	// Kimi-K3 (nn.LayerPlan.K3, k3.go): the MLA output gate (slot 31) and the
+	// latent mixture's down and up projections (32, 33), and the block's
 	// vectors (the residual attention's scores, the routed sum's norm).
 	mlaGate, routedDown, routedUp *resident
 	mvMG, mvRD, mvRU              mv
 	k3                            *k3Block
 	// Qwen3.8-Flash-Next (nn.LayerPlan.Q4E, q4e.go): the two
-	// hyper-connections' down, up and placement projections (slots 39..44),
-	// the n-gram key and value (45, 46), and the block's vectors.
+	// hyper-connections' down, up and placement projections (slots 34..39),
+	// the n-gram key and value (40, 41), and the block's vectors.
 	hcAD, hcAU, hcAI, hcFD, hcFU, hcFI       *resident
 	ngKey, ngVal                             *resident
 	mvHAD, mvHAU, mvHAI, mvHFD, mvHFU, mvHFI mv
@@ -1512,8 +1505,6 @@ type blockScratch struct {
 	// paged (devTier.pagedPlan), and then the staged, tiled and flash
 	// kernels above that read a contiguous cache are not built.
 	pkv *pagedScratch
-	// ds4 is DeepSeek V4's set (ds4.go), nil on every other model.
-	ds4 *ds4Scratch
 
 	// The ragged-decode set (rows.go): attention whose rows are different
 	// sequences, a per-row softmax, the head's batched twin and a per-row argmax.
@@ -1599,9 +1590,6 @@ type blockScratch struct {
 	// staged per submission, a block's gate, its slice of the inputs, their
 	// product and the projection back. nil elsewhere.
 	pleIn backend.Buf
-	// rowTok is the call's rows' tokens, which a block routing by token reads
-	// (SetTokenIDs), a word a row.
-	rowTok backend.Buf
 	// streams is, by a step's rows, each residual stream of x as a view at
 	// its offset (x is stream-major), the inputs and the outputs a block of
 	// several streams binds (servedStreams).
@@ -2074,8 +2062,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		&l.mvLL, &l.mvLR, &l.mvSI,
 		// MiniMax-M3's indexer query (its key is slot 25's).
 		&l.mvMQ,
-		// DeepSeek V4's grouped output and compressors.
-		&l.mvWoA, &l.mvCKV, &l.mvCG, &l.mvICKV, &l.mvICG,
 		// Kimi-K3's MLA output gate and latent mixture projections.
 		&l.mvMG, &l.mvRD, &l.mvRU,
 		// Qwen3.8-Flash-Next's hyper-connections and n-gram projections.
@@ -2093,7 +2079,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		nil, nil, nil, nil, nil, nil,
 		nil, nil, nil, nil, nil, nil,
 		nil,
-		nil, nil, nil, nil, nil,
 		nil, nil, nil,
 		nil, nil, nil, nil, nil, nil, nil, nil}
 	// The latent block's own slots: 0 (q) is the one-step query and is empty
@@ -2126,23 +2111,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		return false
 	}
 	for i, x := range ws {
-		// A DeepSeek V4 block names its own slots (ds4Slot): the generic
-		// skips below are for every other architecture.
-		if p.DS4 != nil {
-			want := ds4Slot(p, i)
-			if want && len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: a DeepSeek V4 block and %s is empty", li, weightRole(i))
-				return false
-			}
-			if !want {
-				continue
-			}
-		} else if i >= 31 && i <= 35 {
-			continue // DeepSeek V4's slots (31..35), absent everywhere else
-		}
-		// Qwen3.8-Flash-Next's (39..46), on the blocks the plan says carry
+		// Qwen3.8-Flash-Next's (34..41), on the blocks the plan says carry
 		// them and nowhere else.
-		if i >= 39 {
+		if i >= 34 {
 			if !q4eSlot(p, i) {
 				continue
 			}
@@ -2151,11 +2122,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				return false
 			}
 		}
-		// Kimi-K3's MLA output gate (36) and latent projections (37, 38), on
+		// Kimi-K3's MLA output gate (31) and latent projections (32, 33), on
 		// the blocks the plan says carry them.
-		if i >= 36 && i <= 38 {
-			want := i == 36 && p.MLA() && p.Recurrent.Conv == 0 && len(x.Data) != 0 ||
-				i >= 37 && p.K3 != nil && p.K3.Latent != 0
+		if i >= 31 && i <= 33 {
+			want := i == 31 && p.MLA() && p.Recurrent.Conv == 0 && len(x.Data) != 0 ||
+				i >= 32 && p.K3 != nil && p.K3.Latent != 0
 			if !want {
 				continue
 			}
@@ -2169,7 +2140,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// Gemma 3n's LAuReL (27, 28) and Falcon-H1's mixer projection (29),
 		// past every other range.
 		extra := i >= 22
-		if i >= 24 && i <= 28 && p.DS4 == nil {
+		if i >= 24 && i <= 28 {
 			// MiniMax-M3's indexer has a key (25) and its own query (30),
 			// not DeepSeek V3.2's query latent (24) or weights (26).
 			if (i < 27 && (p.IdxHeads == 0 || (p.MSA() || p.QSA()) && i != 25)) || (i >= 27 && p.AltUp == 0) {
@@ -2217,7 +2188,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		// KDA's four low-rank gate matrices, checked before mlaSkip because they
 		// sit past MLA's range and are not MLA's.
-		if i >= 18 && !extra && p.DS4 == nil {
+		if i >= 18 && !extra {
 			switch {
 			case !p.Recurrent.ChanDecay && !p.Recurrent.Mamba1, p.Recurrent.Conv == 0:
 				// Not a KDA model, or an attention block of one: absent by
@@ -2235,7 +2206,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			// A present weight falls through to the upload; a continue here would
 			// leave l.ssmGA nil and crash inside the recorded session.
 		}
-		if p.DS4 == nil && !extra && mlaSkip(i) {
+		if !extra && mlaSkip(i) {
 			continue
 		}
 		if i >= 13 && !extra {
@@ -2317,11 +2288,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// reading its own activation like the mixture's down projection.
 		if l.mla && (i == 16 || i == 17) {
 			e, sl = p.NHead, p.NHead
-		}
-		// DeepSeek V4's grouped output is one sheet per group, every group
-		// selected: the identity, as MLA's heads are.
-		if p.DS4 != nil && i == 31 {
-			e, sl = p.DS4.OGroups, p.DS4.OGroups
 		}
 		// 4..6 only: the shared expert's matrices at 7..9 are dense.
 		if moe && i >= 4 && i <= 6 { // gate, up and down are the banks
@@ -2428,7 +2394,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// slotAct: each slot reads its own activation vector. The mixture's
 		// down projection (6) does, and so do MLA's two banks -- head h absorbs
 		// its own nope half and un-absorbs its own attention result.
-		k, ok := mkkID(x, r, e, sl, i == 6 || i == 16 || i == 17 || i == 31, bias[i] != nil)
+		k, ok := mkkID(x, r, e, sl, i == 6 || i == 16 || i == 17, bias[i] != nil)
 		if !ok {
 			return false
 		}
@@ -2549,7 +2515,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		{"expert down bias", p.MoEBias, w.ExpDownB, p.NExpert * p.NEmbd, &l.expDownB, true},
 		// The block, not just the model, must be a mixture: DeepSeek's leading
 		// dense blocks carry no exp_probs_b.
-		{"expert selection bias", p.ExpertSelBias && p.NExpert > 0 && !p.HashExperts, w.ExpSelB, p.NExpert, &l.expSelB, false},
+		{"expert selection bias", p.ExpertSelBias && p.NExpert > 0, w.ExpSelB, p.NExpert, &l.expSelB, false},
 	} {
 		if !v.on || (v.optional && v.have == nil) {
 			continue
@@ -2625,10 +2591,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		l.auxBytes += uint64(4*p.NEmbd + 4)
 	}
 	if why := g.prepAltUp(l, li, p, w, up); why != "" {
-		g.LastErr = why
-		return false
-	}
-	if why := g.prepDS4(l, li, p, w, up); why != "" {
 		g.LastErr = why
 		return false
 	}
@@ -3224,7 +3186,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	if p.PLEDim != 0 {
 		al(&bs.pleIn, rows*p.PLEWidth*4)
 	}
-	al(&bs.rowTok, rows*4)
 	if err != nil {
 		g.LastErr = err.Error()
 		return nil
@@ -5200,9 +5161,6 @@ func (g *devTier) layersSession(s backend.Session) {
 	}
 	// Input rows over every stream write the per-layer inputs too
 	// (embedOuts).
-	if bs.rowTok != nil && len(g.tokIDs) > 0 {
-		w(bs.rowTok, g.tokWords(R))
-	}
 	if bs.rowPos != nil {
 		w(bs.rowPos, g.rowPosWords(pos, nrow, R, rag))
 	}
@@ -5278,9 +5236,6 @@ func (g *devTier) layersSession(s backend.Session) {
 		w(pk.pRow, u32view(pk.desc))
 		if len(pk.descW) > 0 {
 			w(pk.pRowW, u32view(pk.descW))
-		}
-		for _, e := range pk.ents {
-			w(e.buf, u32view(e.words))
 		}
 		if pk.st != nil {
 			pk.st.writes(w)
@@ -5392,7 +5347,6 @@ type stagingBytes struct {
 	embIDs           []byte // a prompt chunk's ids for the gather on the card (embIDs)
 	ropeRows         []byte // the rows as the rotary tables read them (ropeRowsWords)
 	rowPos           []byte // the rows' positions a block reads (rowPosWords)
-	rowTok           []byte // the rows' tokens a block routing by token reads (tokWords)
 	embPos           []byte // the composer's gather's positions (embedWords)
 	fold             []byte // the folded head's row take's request (foldWords)
 	one              [4]byte
@@ -5441,7 +5395,7 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.shadow,                                           // the shadow arm's state
 		l.nFFN2, l.nPost1, l.nPost2, l.nRouter, l.expScale, // Gemma 4's mixture block
 		l.nPLE, l.pleOff, // Gemma 4's per-layer embedding
-	), append(append(append(l.ds4.bufs(), l.k3.bufs()...), l.q4e.bufs()...), l.conv.bufs()...)...) // DeepSeek V4's, Kimi-K3's, Qwen3.8-Flash-Next's, a convolutional block's
+	), append(append(l.k3.bufs(), l.q4e.bufs()...), l.conv.bufs()...)...) // Kimi-K3's, Qwen3.8-Flash-Next's, a convolutional block's
 }
 
 // dropLayerLocal frees the buffers PrepLayer allocates fresh for one block and
@@ -5941,7 +5895,6 @@ func weightList(w *nn.LayerWeights) []nn.Weight {
 		w.IdxQB, w.IdxK, w.IdxProj,
 		w.LaurelL, w.LaurelR, w.SSM.In,
 		w.IdxQ,
-		w.WoA, w.CompKV, w.CompGate, w.IdxCompKV, w.IdxCompGate,
 		w.MLAGate, w.RoutedDown, w.RoutedUp,
 		w.HCAttn.Down, w.HCAttn.Up, w.HCAttn.Inject, w.HCFFN.Down, w.HCFFN.Up, w.HCFFN.Inject,
 		w.NGram.Key, w.NGram.Value}

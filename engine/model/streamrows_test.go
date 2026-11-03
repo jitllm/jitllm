@@ -30,7 +30,6 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 		open   func(*testing.T, string) (*Model, *c6Golden)
 		blocks bool
 	}{
-		{"synth-deepseek4", openDS4, false},
 		{"synth-gemma3n", openGemma3n, true},
 	}
 	ran := 0

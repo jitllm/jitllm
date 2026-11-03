@@ -35,7 +35,7 @@ func floatMoEModels() []string {
 	names := []string{"synth-qwen35moe-hybrid-mtp.gguf", "synth-qwen35moe-hybrid-mtp-f16.gguf",
 		"synth-qwen35moe-hybrid-mtp-bf16.gguf", "synth-glm4moe.gguf",
 		"synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-minimaxm2.gguf",
-		"synth-gemma4-moe.gguf", "synth-minimaxm3.gguf", "synth-deepseek4.gguf", "synth-kimik3.gguf"}
+		"synth-gemma4-moe.gguf", "synth-minimaxm3.gguf", "synth-kimik3.gguf"}
 	for _, fx := range moe2Fixtures() {
 		names = append(names, fx.name+".gguf")
 	}

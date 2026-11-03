@@ -103,11 +103,8 @@ type kvLayerPool struct {
 	// rel is where windowPages' walk starts for sequence s: every page below
 	// it was released.
 	rel map[seqID]int
-	// rate is set on a DeepSeek V4 block's entries (entKey): its positions
-	// are entries, one per rate positions of the block's, and of is the block.
-	// noEvict keeps the pool's pages on the card (ds4.go).
-	rate, of int
-	noEvict  bool
+	// noEvict keeps the pool's pages on the card.
+	noEvict bool
 }
 
 // keyStart is the first key position pos attends on this layer: pagedStage's
@@ -123,14 +120,8 @@ func (l *kvLayerPool) keyStart(pos int) int {
 }
 
 // positions is how many of the pool's own positions a sequence that has
-// written end positions holds: end, or on an entries pool the entries they
-// closed -- at least one, so the first entry's page is always there to read.
-func (l *kvLayerPool) positions(end int) int {
-	if l.rate > 0 {
-		return max(end/l.rate, 1)
-	}
-	return end
-}
+// written end positions holds.
+func (l *kvLayerPool) positions(end int) int { return end }
 
 // tabRange is a sequence's run in every layer's table arena.
 type tabRange struct{ off, cap int }

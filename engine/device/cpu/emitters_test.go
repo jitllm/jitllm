@@ -104,14 +104,6 @@ func emitterCalls() []emitterCall {
 		add("rope_table/"+shapeName(np), func(em *Emitters) ([]byte, error) { return em.RopeTable(np) },
 			func() ([]byte, error) { return EmitRopeTable(np) })
 	}
-	for _, it := range []int{0, 1, 20} {
-		for _, head := range []bool{false, true} {
-			add("hcmix/"+shapeName(it)+map[bool]string{true: "/head"}[head],
-				func(em *Emitters) ([]byte, error) { return em.HCMix(it, head) },
-				func() ([]byte, error) { return EmitHCMix(it, head) })
-		}
-	}
-	add("colpool", func(em *Emitters) ([]byte, error) { return em.ColPool() }, emitted(EmitColPool()))
 	add("row_iq4nl", func(em *Emitters) ([]byte, error) { return em.RowIQ4NL() }, emitted(EmitRowIQ4NL()))
 	for _, rs := range []bool{false, true} {
 		add("ngramhash/3x8"+map[bool]string{false: "/noreset"}[rs],

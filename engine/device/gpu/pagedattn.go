@@ -41,9 +41,6 @@ type pagedScratch struct {
 	// allocates nothing.
 	rows        []pagedRow
 	desc, descW []uint32
-	// ents is the rows' entry descriptors, a set a rate the blocks fold
-	// their entries at (entdesc.go).
-	ents []entDesc
 	// held says the current call's session holds an attention block here,
 	// so its descriptors are staged (pagedPrep); keys is the call's key
 	// count, rounded to the recording grain.
@@ -97,8 +94,7 @@ func (g *devTier) pagedPlan(p *nn.LayerPlan) bool {
 // position, float32 (the paged kernels read no packed latent), and no V
 // buffer: the value is the row's prefix.
 func (g *devTier) kvGeomOf(p *nn.LayerPlan) kvGeom {
-	// DeepSeek V4's row is one latent head that is also the value, as MLA's.
-	latent := p.MLA() || p.DS4 != nil
+	latent := p.MLA()
 	return kvGeom{kvRow: p.KVRow(), f16: g.KVF16 && !latent, mla: latent}
 }
 
@@ -127,9 +123,6 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 			return err
 		}
 	}
-	if d := p.DS4; d != nil {
-		return g.initEntDescs(pg, bs.rows, d.RateCSA, d.RateHCA)
-	}
 	return nil
 }
 
@@ -152,9 +145,6 @@ func freePaged(pg *pagedScratch) {
 		if b != nil {
 			b.Free()
 		}
-	}
-	for _, e := range pg.ents {
-		e.buf.Free()
 	}
 }
 
@@ -195,12 +185,7 @@ func (g *devTier) heldLayers(sid uint64, f func(li int, l *kvLayerPool) error) e
 		return nil
 	}
 	for li, l := range g.kvp.layers {
-		// A block's entries (DeepSeek V4) are held where the block is.
-		bi := li
-		if l.rate > 0 {
-			bi = l.of
-		}
-		if bl := g.layers[bi]; bl != nil {
+		if bl := g.layers[li]; bl != nil {
 			if kvp := bl.kv[sid]; kvp != nil && kvp.paged {
 				if err := f(li, l); err != nil {
 					return err
@@ -230,10 +215,8 @@ func (g *devTier) pagedAppend(sid uint64, seqs []seqEnd) error {
 		for _, se := range seqs {
 			need := (l.positions(se.end) + kp.p - 1) / kp.p
 			// A named page this call writes into is copied first (kvshare.go).
-			if l.rate == 0 {
-				if err := g.cowPages(sid, kp, l, se.s, se.start, se.end); err != nil {
-					return err
-				}
+			if err := g.cowPages(sid, kp, l, se.s, se.start, se.end); err != nil {
+				return err
 			}
 			if have := len(l.owned[se.s]); need > have {
 				if err := g.allocPages(sid, kp, l, se.s, need-have); err != nil {
@@ -365,7 +348,7 @@ func (g *devTier) pagedPrep(sid uint64, bs *blockScratch, rows []pagedRow) error
 	}
 	// The key count rounded to the recording grain, so a captured graph
 	// serves every token of a grain (graphKey.keys).
-	pg.keys = ds4KeyCap(bs, msaKeys(&bs.p, idxKeys(&bs.p, (pagedKeys(rows)+scoreGrain-1)/scoreGrain*scoreGrain)))
+	pg.keys = msaKeys(&bs.p, idxKeys(&bs.p, (pagedKeys(rows)+scoreGrain-1)/scoreGrain*scoreGrain))
 	return nil
 }
 
@@ -413,7 +396,6 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 			pg.descW = append(pg.descW, o, lo, last, uint32(r.pos))
 		}
 	}
-	pg.stageEnts(kp, rows)
 }
 
 // windowDesc is the descriptors block l's attention reads: the windowed ones
@@ -488,12 +470,10 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	}
 	// The window paged attention applies to this block (pagedStage's descW).
 	kp.layers[li].win, kp.layers[li].chunked = l.win, l.chunked
-	// DeepSeek V4's rows and entries are read through their tables by the
-	// gathers, which a streamed pass does not serve: they never leave.
-	// So does a selection over the whole history (the lightning indexer,
-	// MiniMax-M3's and QSA's block selections): a streamed pass cannot serve
-	// it, so its pages cannot go to host memory either.
-	kp.layers[li].noEvict = p.DS4 != nil || selectsHistory(p)
+	// A selection over the whole history (the lightning indexer, MiniMax-M3's
+	// and QSA's block selections) is not served by a streamed pass, so its
+	// pages cannot go to host memory.
+	kp.layers[li].noEvict = selectsHistory(p)
 	// A history that cannot leave the card is held at the context asked for,
 	// charged here with the block, so the budget declines the block at
 	// placement rather than a call failing for want of a page mid-prompt. It
@@ -502,25 +482,13 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	if selectsHistory(p) {
 		kp.layers[li].ctx = (g.capped(p).MaxSeq + kp.p - 1) / kp.p
 	}
-	if d := p.DS4; d != nil && p.Comp != nn.DS4CompNone {
-		ek := entKey(li)
-		geom := kvGeom{kvRow: d.EntRowAt(p.Comp, p.HeadDim), mla: true}
-		if err := g.addKVLayer(kp, ek, geom, 1+seats); err != nil {
-			return err
-		}
-		e := kp.layers[ek]
-		e.rate, e.of, e.noEvict = d.RateAt(p.Comp), li, true
-	}
 	if l.kv == nil {
 		l.kv = map[uint64]*kvPair{}
 	}
 	fresh := l.kv[sid] == nil
 	l.kv[sid] = &kvPair{paged: true}
-	for _, k := range []int{li, entKey(li)} {
-		if _, ok := kp.layers[k]; !ok {
-			continue
-		}
-		if err := g.pagedSeat(kp, k, l); err != nil {
+	if _, ok := kp.layers[li]; ok {
+		if err := g.pagedSeat(kp, li, l); err != nil {
 			if fresh {
 				delete(l.kv, sid)
 			}
@@ -573,11 +541,6 @@ func (g *devTier) pagedLayerBytes(p *nn.LayerPlan) uint64 {
 	}
 	n := uint64(geom.kWords(g.kvPage())+geom.vWords(g.kvPage()))*4*pages + uint64(words)*4 +
 		kvStageBytes(geom, g.kvPage())
-	if d := p.DS4; d != nil && p.Comp != nn.DS4CompNone {
-		// The block's entries, a pool of their own (ds4.go).
-		e := kvGeom{kvRow: d.EntRowAt(p.Comp, p.HeadDim), mla: true}
-		n += uint64(e.kWords(g.kvPage()))*4*uint64(1+g.sessions()) + uint64(words)*4
-	}
 	return n
 }
 
@@ -585,9 +548,6 @@ func (g *devTier) pagedLayerBytes(p *nn.LayerPlan) uint64 {
 // sequences' runs stay while another layer holds pages of them. Callers hold
 // g.mu.
 func (g *devTier) dropKVLayer(kp *kvPool, li int) {
-	if li >= 0 {
-		g.dropKVLayer(kp, entKey(li)) // a DeepSeek V4 block's entries go with it
-	}
 	l, ok := kp.layers[li]
 	if !ok {
 		return
@@ -608,9 +568,6 @@ func (g *devTier) dropKVLayer(kp *kvPool, li int) {
 func (g *devTier) pagedLeave(li int, sid uint64, bl *layer) {
 	if g.kvp == nil {
 		return
-	}
-	if li >= 0 {
-		g.pagedLeave(entKey(li), sid, bl) // a DeepSeek V4 block's entries go with it
 	}
 	l := g.kvp.layers[li]
 	if l == nil {
@@ -667,11 +624,6 @@ func (kp *kvPool) trimSeq(s seqID, pos int) bool {
 	keep := (pos + kp.p - 1) / kp.p
 	trimmed := false
 	for _, l := range kp.layers {
-		keep := keep
-		if l.rate > 0 {
-			// Entries: the ones the kept positions closed.
-			keep = (pos/l.rate + kp.p - 1) / kp.p
-		}
 		ids := l.owned[s]
 		if keep >= len(ids) {
 			continue
@@ -914,37 +866,6 @@ func (g *devTier) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int
 	}
 	if err := g.pagedMigrate(sid, li, base, k, v, pos, toDevice); err != nil {
 		g.LastErr = fmt.Sprintf("MigrateKVSeq: block %d, sequence at %d: %v", li, base, err)
-		return false
-	}
-	return true
-}
-
-// MigrateEnt is migrateEnt for the zero session: a caller that never attached.
-func (g *devTier) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) bool {
-	return g.migrateEnt(0, li, base, ent, n, toDevice)
-}
-
-// migrateEnt moves DeepSeek V4 block li's entries for session sid's
-// sequence at base between host and device (nn.EntDevice): n entries of the
-// block's entry row, [n][row] float32.
-func (g *devTier) migrateEnt(sid uint64, li, base int, ent []float32, n int, toDevice bool) bool {
-	v := g.as(sid)
-	if v == nil {
-		return false
-	}
-	defer v.done()
-	g = v
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if !g.paged {
-		g.LastErr = "MigrateEnt: this device keeps the contiguous cache"
-		return false
-	}
-	if n <= 0 {
-		return true
-	}
-	if err := g.pagedMigrate(sid, entKey(li), base, ent, ent, n, toDevice); err != nil {
-		g.LastErr = fmt.Sprintf("MigrateEnt: block %d, sequence at %d: %v", li, base, err)
 		return false
 	}
 	return true

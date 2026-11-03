@@ -28,7 +28,7 @@ import (
 // the host's, as for every model with streams.
 
 // q4eBlock is one Qwen3.8-Flash-Next block's vectors; its matrices are the
-// layer's residents (slots 39..46).
+// layer's residents (slots 34..41).
 type q4eBlock struct {
 	// The two hyper-connections' grouped norms, HCMult rows of n_embd.
 	normA, normF backend.Buf
@@ -48,17 +48,17 @@ func (b *q4eBlock) bufs() []backend.Buf {
 	return []backend.Buf{b.normA, b.normF, b.ngK, b.ngQ, b.ngC, b.ngConv}
 }
 
-// q4eSlot says whether a Qwen3.8-Flash-Next block carries slot i (39..46):
+// q4eSlot says whether a Qwen3.8-Flash-Next block carries slot i (34..41):
 // the two hyper-connections' down, up and placement always, the n-gram
 // key and value on the n-gram block.
 func q4eSlot(p *nn.LayerPlan, i int) bool {
 	if p.Q4E == nil {
 		return false
 	}
-	if i >= 45 {
+	if i >= 40 {
 		return p.Q4E.NGramHere
 	}
-	return i >= 39
+	return i >= 34
 }
 
 // prepQ4E uploads block li's Qwen3.8-Flash-Next vectors.

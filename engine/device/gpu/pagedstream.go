@@ -149,11 +149,11 @@ const devStagedPlane = 64 << 20
 // stagedPassKeys is the most keys bs's staged plan is built for, in whole
 // pages, or 0 for no bound: a block whose attention reads the whole history
 // through the table at once (the lightning indexer, MiniMax-M3's block
-// selection, DeepSeek V4's compressed entries) does not go in passes.
+// selection) does not go in passes.
 // Callers hold g.mu.
 func (g *devTier) stagedPassKeys(bs *blockScratch) int {
 	pg := bs.pkv
-	if pg == nil || selectsHistory(&bs.p) || bs.p.DS4 != nil {
+	if pg == nil || selectsHistory(&bs.p) {
 		return 0
 	}
 	kp := g.kvPages()

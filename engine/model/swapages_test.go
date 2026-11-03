@@ -15,11 +15,10 @@ import (
 
 // windowFixtures are the fixtures with windowed layers: exaone4's sliding
 // window of 4, cohere2's sliding layers, llama4's chunked ones, gpt-oss's
-// alternating window and OLMo 3's. DeepSeek V4's every block slides, and its
-// compressed blocks' entries are the history that grows beside the windows.
+// alternating window and OLMo 3's.
 func windowFixtures() []string {
 	return []string{"synth-exaone4.gguf", "synth-cohere2.gguf", "synth-llama4.gguf", "synth-gptoss.gguf",
-		"synth-olmo3.gguf", "synth-gemma3n.gguf", "synth-gemma4.gguf", "synth-deepseek4.gguf"}
+		"synth-olmo3.gguf", "synth-gemma3n.gguf", "synth-gemma4.gguf"}
 }
 
 // TestWindowedLayersHoldTheirWindow holds a windowed layer's history to its
@@ -60,17 +59,9 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 					full = append(full, li)
 				}
 			}
-			// DeepSeek V4 has no full layer: its compressed blocks' entries
-			// (kvCache.ent) are what must keep growing while the windows release.
-			var ents []int
-			for li := 0; li < c.NLayer; li++ {
-				if c.CompRateAt(li) > 0 {
-					ents = append(ents, li)
-				}
-			}
-			if len(win) == 0 || len(full) == 0 && len(ents) == 0 {
-				t.Fatalf("%d windowed and %d full layer(s), %d with entries: this fixture does not have "+
-					"both, so the gate proves nothing on it", len(win), len(full), len(ents))
+			if len(win) == 0 || len(full) == 0 {
+				t.Fatalf("%d windowed and %d full layer(s): this fixture does not have both, so the gate "+
+					"proves nothing on it", len(win), len(full))
 			}
 			maxSeq := min(c.NCtx, 1536)
 			n := maxSeq - 8
@@ -119,14 +110,8 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 			}
 			wl := &hs.kv.layers[win[0]]
 			bound := (wl.win+nn.KVWindowSlack)/wl.p + 3
-			// The history that must still be whole: a full layer's positions,
-			// or a compressed block's entries.
-			fl, held := (*kvPages)(nil), n
-			if len(full) > 0 {
-				fl = &hs.kv.layers[full[0]]
-			} else {
-				fl, held = &hs.kv.ent[ents[0]], n/hs.kv.entRate(ents[0])
-			}
+			// The history that must still be whole: a full layer's positions.
+			fl, held := &hs.kv.layers[full[0]], n
 			fullPages := 0
 			for j := range fl.k {
 				if fl.resident(j) {
@@ -135,7 +120,7 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 			}
 			hs.Close()
 			t.Logf("host: %d positions, window %d (chunked %v), page %d: windowed layers peak at %d page(s) "+
-				"(bound %d) against %d kept by the control; a full layer (or a block's entries) holds %d "+
+				"(bound %d) against %d kept by the control; a full layer holds %d "+
 				"page(s) of %d",
 				n, wl.win, wl.chunked, wl.p, peak, bound, ctlPeak, fullPages, fl.p)
 			if peak > bound {

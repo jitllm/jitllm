@@ -24,7 +24,9 @@ func TestComposedCPULogprobs(t *testing.T) {
 	if err := graph.Verify(g, graph.Facts{}); err != nil {
 		t.Fatal(err)
 	}
-	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+	// Apart, as the engine forms it: the log row is the caller's own
+	// buffer.
+	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(), Apart: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +94,9 @@ func TestComposedCPUMaskRow(t *testing.T) {
 	if err := graph.Verify(g, graph.Facts{}); err != nil {
 		t.Fatal(err)
 	}
-	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+	// Apart, as the engine forms it: the masked row is the caller's own
+	// buffer, never the logits'.
+	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(), Apart: true})
 	if err != nil {
 		t.Fatal(err)
 	}

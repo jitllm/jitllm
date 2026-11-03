@@ -227,7 +227,7 @@ func (g *devTier) sharedLayer(li int) (*kvPool, *kvLayerPool) {
 		return nil, nil
 	}
 	l := kp.layers[li]
-	if l == nil || l.rate > 0 {
+	if l == nil {
 		return nil, nil
 	}
 	return kp, l

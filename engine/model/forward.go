@@ -199,10 +199,6 @@ type Instance struct {
 	// xa is the one-row residual's streams (x is its stream 0), on a model of
 	// several (altup.go).
 	xa []float32
-	// ds is DeepSeek V4's scratch (ds4.go); xa is its streams too. tok is
-	// the token a decode step embeds, -1 for a supplied embedding: DeepSeek
-	// V4's hash blocks route by it.
-	ds *ds4Scratch
 	// k3 is Kimi-K3's residual attention and latent mixture buffers (k3.go),
 	// nil on every other model.
 	k3 *k3Scratch
@@ -623,13 +619,6 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	if c.MSA() && !m.opt.kvTypeSet {
 		want = cpu.KVF32
 	}
-	// DeepSeek V4's cached row is not a key alone: it carries the
-	// compressor's pending projections, which the references hold at f32 and
-	// which a softmax over positions pools, so the row is f32 whatever is
-	// asked (ds4.go).
-	if c.DSV4() {
-		want = cpu.KVF32
-	}
 	// Qwen3.8-Flash-Next's QSA pools its indexer's raw cached keys, which
 	// the references hold at f32 (qsa.go).
 	if c.QSARatio != 0 {
@@ -646,7 +635,6 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		s.kvl.jit = s.jit
 		s.jit.ReserveKVQuant(max(c.HeadDim, c.HeadDimSWA))
 	}
-	s.allocDS4()
 	s.allocK3()
 	s.allocQ4E()
 	// kvl.fmt sizes every page.
@@ -916,8 +904,6 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		RopeSplit:   c.RopeXD,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),
-		// DeepSeek V4's model-wide geometry (ds4dev.go).
-		DS4: ds4PlanOf(c),
 		// Read off the loaded weights, not the architecture name: the
 		// post-norms are optional per-layer roles.
 		PostNorm:  s.m.hasPostNorm(),
@@ -1506,7 +1492,6 @@ func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
 		w.IdxQ, w.IdxK = wt(l.idxQ), wt(l.idxK)
 		w.IdxQNorm, w.IdxKNorm = l.idxQNorm, l.idxKNorm
 	}
-	s.ds4Weights(li, &w)
 	s.q4eWeights(li, &w)
 	w.ResAttn, w.ResFFN = l.resAttn, l.resFFN
 	w.MLAGate, w.RoutedDown, w.RoutedUp, w.RoutedNorm = wt(l.mlaGate), wt(l.routedDown), wt(l.routedUp), l.routedNorm
@@ -1973,7 +1958,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.ExpertGroups, plan.ExpertGroupsUsed = c.NExpertGroup, c.NExpertGroupUsed
 	plan.ExpertSelBias = s.m.expSelBias() != nil
 	plan.ExpertSparseMixer = c.SparseMixer
-	s.ds4Plan(li, &plan)
 	if c.LayerKind(li).Recurrent() {
 		g := c.delta()
 		plan.Recurrent = nn.RecurrentPlan{
@@ -3507,16 +3491,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			return s.altExpand(s.xa, 1)
 		}
 	}
-	if c.DSV4() {
-		inner := fill
-		fill = func() error {
-			if err := inner(); err != nil {
-				return err
-			}
-			s.ds4Expand(s.xa, 1)
-			return nil
-		}
-	}
 	if c.Q4E() {
 		inner := fill
 		fill = func() error {
@@ -3582,7 +3556,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			}
 			s.layerInputs(s.ple)
 			s.tok1[0] = s.tok
-			s.tokenIDs(s.tok1[:])
 			// Qwen3.8-Flash-Next's n-gram rows, when the run holds its n-gram
 			// block (q4edev.go).
 			if err := s.ngramToDevice(li, hi, 1, nil, s.selfSlot0, s.tok1At); err != nil {
@@ -3928,7 +3901,6 @@ func (s *Instance) setLD(ld nn.LayerDevice) {
 	s.ldStep, _ = ld.(nn.SessionStepper)
 	s.ldRows, _ = ld.(nn.RowsDevice)
 	s.ldInputs, _ = ld.(nn.LayerInputDevice)
-	s.ldTokens, _ = ld.(nn.TokenDevice)
 	s.ldPrompt, _ = ld.(nn.PromptDevice)
 	s.ldNGram, _ = ld.(nn.NGramDevice)
 	s.ldMarks, _ = ld.(nn.RopeMarksDevice)

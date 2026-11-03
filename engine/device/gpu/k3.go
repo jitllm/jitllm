@@ -48,7 +48,7 @@ func (b *k3Block) bufs() []backend.Buf {
 }
 
 // prepK3 uploads block li's Kimi-K3 vectors. The MLA output gate and the
-// latent projections go through prepLayer's weight list (slots 36..38).
+// latent projections go through prepLayer's weight list (slots 31..33).
 func (g *devTier) prepK3(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 	up func(*backend.Buf, []float32)) string {
 	k := p.K3

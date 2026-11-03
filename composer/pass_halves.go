@@ -19,7 +19,7 @@ func (Halves) Name() string { return "halves" }
 // is not a recurrent state ("rec.") or an entry history ("ent."), which
 // every device keeps at f32.
 func (o Operand) history() bool {
-	return o.Kind == OperandTable && o.PerPart && !o.Table.recurrent() && !o.Table.entry()
+	return o.Kind == OperandTable && o.PerPart && !o.Table.recurrent()
 }
 
 func (p Halves) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {

@@ -209,21 +209,6 @@ type LayerWeights struct {
 	// IdxKNorm (no bias). Zero without one.
 	IdxQ     Weight
 	IdxQNorm []float32
-	// DeepSeek V4 (LayerPlan.DS4): the two hyper-connections' fn (F32, the
-	// mixes by the flattened streams), per-mix scale and base; the grouped
-	// output's first half (a bank of OGroups sheets of OLoraRank rows, the
-	// second half Wo); the compressor's kv and gate projections, position
-	// bias and norm (a compressed block), and the indexer compressor's (CSA,
-	// whose query is IdxQB and weights IdxProj); and a hash block's token
-	// table, NExpertUsed expert ids a token as floats. Wk is the one key
-	// head (attn_kv), with KVANorm its norm. All zero elsewhere.
-	HCAttnFn, HCFFNFn                          Weight
-	HCAttnScale, HCAttnBase                    []float32
-	HCFFNScale, HCFFNBase                      []float32
-	WoA                                        Weight
-	CompKV, CompGate, IdxCompKV, IdxCompGate   Weight
-	CompAPE, CompNorm, IdxCompAPE, IdxCompNorm []float32
-	HashExperts                                []float32
 	// Kimi-K3 (LayerPlan.K3): the residual attention's two score vectors
 	// (NEmbd, the reference's norm weight times its projection), the MLA
 	// output gate (NHead*HeadDimV rows of NEmbd, on a full block of a model
@@ -533,16 +518,12 @@ func (p *LayerPlan) RopeW() int {
 	return p.NRot
 }
 
-// ResidW is one row's residual width in Layers' x: every AltUp stream, or
-// every DeepSeek V4 hyper-connection stream.
+// ResidW is one row's residual width in Layers' x: every residual stream.
 func (p *LayerPlan) ResidW() int { return p.NEmbd * p.Streams() }
 
-// Streams is how many residual streams Layers' x carries, stream-major: Gemma
-// 3n's AltUp or DeepSeek V4's hyper-connections, one elsewhere.
+// Streams is how many residual streams Layers' x carries, stream-major: AltUp's
+// predictions, a residual bank or hyper-connections, one elsewhere.
 func (p *LayerPlan) Streams() int {
-	if p.DS4 != nil {
-		return max(p.DS4.HCMult, 1)
-	}
 	if p.K3 != nil {
 		return max(p.K3.Streams, 1)
 	}
@@ -556,9 +537,6 @@ func (p *LayerPlan) Streams() int {
 // shared rotary key under MLA, and NKVHead heads of HeadDim otherwise. Every
 // cache allocation, stride and migration must go through it.
 func (p *LayerPlan) KVRow() int {
-	if p.DS4 != nil {
-		return p.DS4.RowAt(p.Comp, p.HeadDim)
-	}
 	if p.MLA() {
 		return p.KVLoraRank + p.NRot + p.IdxHeadDim
 	}
@@ -590,50 +568,6 @@ func (p *LayerPlan) Scale() float64 {
 // host trusts history the device returns only from the window start of
 // (its last position - 1 - KVWindowSlack), which this margin guarantees.
 const KVWindowSlack = 64
-
-// DS4Plan is DeepSeek V4's model-wide geometry (model.Config.DSV4), the same
-// on every block of the model: the hyper-connections, the grouped output
-// projection, the compressors' rates and the lightning indexer's shape.
-// LayerPlan.Comp and HashExperts are what differs per block.
-//
-// A block's cached row (KVRow) is its key, then on a compressed block the
-// compressor's kv and gate projections of that position (one head on HCA, two
-// on CSA), then on CSA the indexer compressor's (two heads of IdxHeadDim); the
-// row is one latent head that is also the value, as MLA's. A compressed block
-// keeps a second history of entries, EntRow wide, one per CompRate positions.
-type DS4Plan struct {
-	HCMult, HCIters      int
-	HCEps                float32
-	OGroups, OLoraRank   int
-	RateCSA, RateHCA     int
-	IdxHeads, IdxHeadDim int
-	IdxTopK              int
-	ExpertSqrtSoftplus   bool
-	// Window is the model's sliding window, which every block's rows are
-	// read through (LayerPlan.SWAWindow may be zero where the context fits
-	// inside it).
-	Window int
-	// Fault breaks one piece of the graph on purpose, set only by a gate;
-	// the host honours the same faults (model's ds4Fault).
-	Fault DS4Fault
-}
-
-// DS4Fault names a piece of DeepSeek V4's graph a gate takes out.
-type DS4Fault uint8
-
-const (
-	DS4FaultNone DS4Fault = iota
-	DS4FaultCombSoftmax
-	DS4FaultCombRows
-	DS4FaultNoDerope
-	DS4FaultWindowOnly
-	DS4FaultNoOverlap
-	DS4FaultAllEntries
-	DS4FaultMainRope
-	DS4FaultScoreRoute
-	DS4FaultNoSinks
-	DS4FaultHeadMean
-)
 
 // K3Plan is Kimi-K3's residual attention and latent mixture at one block
 // (model's k3.go is the graph). The residual is Streams streams, stream-major
@@ -737,47 +671,6 @@ func (p *LayerPlan) ExpWidth() int {
 		return p.K3.Latent
 	}
 	return p.NEmbd
-}
-
-// DS4 compression kinds, LayerPlan.Comp: jlm.CompKind's values.
-const (
-	DS4CompNone = 0
-	DS4CompCSA  = 1
-	DS4CompHCA  = 2
-)
-
-// RateAt is how many positions one entry of a comp block folds.
-func (d *DS4Plan) RateAt(comp int) int {
-	switch comp {
-	case DS4CompCSA:
-		return d.RateCSA
-	case DS4CompHCA:
-		return d.RateHCA
-	}
-	return 0
-}
-
-// RowAt is a comp block's cached row at head width hd.
-func (d *DS4Plan) RowAt(comp, hd int) int {
-	switch comp {
-	case DS4CompHCA:
-		return 3 * hd
-	case DS4CompCSA:
-		return 5*hd + 4*d.IdxHeadDim
-	}
-	return hd
-}
-
-// EntRowAt is one entry of a comp block: the compressed key, and on CSA the
-// indexer's after it. Zero on a block with no compressor.
-func (d *DS4Plan) EntRowAt(comp, hd int) int {
-	switch comp {
-	case DS4CompHCA:
-		return hd
-	case DS4CompCSA:
-		return hd + d.IdxHeadDim
-	}
-	return 0
 }
 
 // LayerPlan is everything about a block that is not in its weights.
@@ -1072,13 +965,6 @@ type LayerPlan struct {
 	// (Llama 4), which with a SiLU expert is a different function from the
 	// output-weighted sum every other mixture runs.
 	ExpertWeightIn bool
-	// DS4 is DeepSeek V4's model-wide geometry, nil on every other model;
-	// Comp is this block's compressor (DS4CompNone, CSA or HCA) and
-	// HashExperts says it routes by the token's row of a frozen table
-	// (LayerWeights.HashExperts, the ids a TokenDevice is handed).
-	DS4         *DS4Plan
-	Comp        int
-	HashExperts bool
 	// K3 is Kimi-K3's residual attention and latent mixture at this block,
 	// nil on every other model.
 	K3 *K3Plan
@@ -1468,22 +1354,6 @@ type RowChunker interface {
 // that call only.
 type LayerInputDevice interface {
 	SetLayerInputs(in []float32)
-}
-
-// EntDevice is an optional SeqKVDevice for DeepSeek V4 (LayerPlan.DS4):
-// MigrateEnt moves block li's entries for the current session's sequence at
-// base, as MigrateKVSeq moves its rows -- n of them, [n][EntRowAt] float32. A
-// block's rows and its entries travel together.
-type EntDevice interface {
-	MigrateEnt(li, base int, ent []float32, n int, toDevice bool) bool
-}
-
-// TokenDevice is an optional LayerDevice that takes the token ids of the rows
-// of the next Layers or LayersRows call: a block that routes by token
-// (LayerPlan.HashExperts) reads its row of the table at the row's id. -1 is a
-// row whose embedding was supplied, which such a block refuses.
-type TokenDevice interface {
-	SetTokenIDs(ids []int32)
 }
 
 // RopeMarksDevice is an optional LayerDevice told a sequence's rotary marks

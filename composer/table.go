@@ -23,10 +23,6 @@ const (
 	// TableKeys and TableValues are a block's history pools.
 	TableKeys
 	TableValues
-	// The entry history's pool, descriptors and pages (graph.StateEnt).
-	TableEntKeys
-	TableEntRows
-	TableEntPages
 	// TableQOff is each row's query offset.
 	TableQOff
 	// TableAngles is a rotary's angles (Instance the model's rotary),
@@ -80,12 +76,6 @@ func (t Table) String() string {
 		return "kv.k"
 	case TableValues:
 		return "kv.v"
-	case TableEntKeys:
-		return "ent.k"
-	case TableEntRows:
-		return "ent.rows"
-	case TableEntPages:
-		return "ent.pages"
 	case TableQOff:
 		return "q.off"
 	case TableAngles:
@@ -133,9 +123,6 @@ func (t Table) String() string {
 // recurrent says t is a recurrent block's own table.
 func (t Table) recurrent() bool { return t >= TableRecState && t <= TableRecRows }
 
-// entry says t is the entry history's.
-func (t Table) entry() bool { return t >= TableEntKeys && t <= TableEntPages }
-
 // TableKey is a table as the call site binds it.
 type TableKey struct {
 	Table    Table
@@ -169,7 +156,7 @@ func (t Table) elem() ir.Type {
 // perPart says t is a part's own state (Operand.PerPart).
 func (t Table) perPart() bool {
 	switch t {
-	case TableKeys, TableValues, TableEntKeys, TableRecState, TableRecStateOut, TableRecConv, TableRecConvOut:
+	case TableKeys, TableValues, TableRecState, TableRecStateOut, TableRecConv, TableRecConvOut:
 		return true
 	}
 	return false

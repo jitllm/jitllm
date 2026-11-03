@@ -30,12 +30,6 @@ func scoreMap(shape []int, in []Operand, out Operand, e []Expr, f Facts) Prim {
 // at the query's or the query's aligned chunk.
 func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.Reads) == 2 {
-		if c.History.Passes {
-			return nil, fmt.Errorf("an attention over two histories read in passes")
-		}
-		return attendTwo(o, c)
-	}
 	if len(o.In) != 1 && len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) > 1 || a.Window < 0 || a.Softcap < 0 ||
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)

@@ -88,22 +88,7 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 		e := x.op(OpMul, U, q, x.u(2))
 		return x.at(1, cs, r, e), x.at(1, cs, r, x.op(OpAdd, U, e, x.u(1)))
 	}
-	var co, si int
-	var quarter *Quarter
-	if a.Shift > 0 {
-		// Turned at the row's history position less Shift: the angles from
-		// the planes (operands 1 and 2), the position from the row's
-		// descriptor (operand 3).
-		if a.Layout == graph.RopeSplit {
-			return nil, fmt.Errorf("a rotary of layout %d turned %d positions back", a.Layout, a.Shift)
-		}
-		stride := (pairs + ropeLanes - 1) &^ (ropeLanes - 1)
-		at := x.load(3, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(rowWrite)))
-		pos := x.op(OpSub, U, x.op(OpMax, U, at, x.u(uint32(a.Shift))), x.u(uint32(a.Shift)))
-		co, si, quarter = ropeTurn(&x, pos, p, 1, 2, stride)
-	} else {
-		co, si = angle(p)
-	}
+	co, si := angle(p)
 	co1, si1 := co, si
 	if a.Layout == graph.RopeSplit {
 		co1, si1 = angle(x.op(OpAdd, U, p, x.u(uint32(pairs))))
@@ -118,13 +103,8 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	if err != nil {
 		return nil, err
 	}
-	in, facts := []Operand{c.value(o.In[0]), table}, Facts{}
-	if a.Shift > 0 {
-		stride := (pairs + ropeLanes - 1) &^ (ropeLanes - 1)
-		in = []Operand{c.value(o.In[0]), TablePlanes.of(table.Instance), TableRopeConst.op(), TableRows.op()}
-		facts = Facts{Words: map[int][]uint32{2: ropeConsts()}, Extents: map[int]int{1: 8*stride + 1, 3: R * rowWords}, Quarter: quarter}
-	}
-	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: in, Expr: x.e, Facts: facts,
+	in := []Operand{c.value(o.In[0]), table}
+	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: sh, Value: y0}, {Out: out, Ax: []int{r, at2}, Ext: sh, Value: y1}}}}
 	// A partial rotary turns NRot of each head from Offset; the rest of
 	// the head, before and after, is the input's.
@@ -152,12 +132,7 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 	pools := []Operand{TableKeys.op(), TableValues.op()}
 	layouts := [2]Pool{c.History.Keys, c.History.Values}
 	rows, pages := TableRows.op(), TablePages.op()
-	if len(o.Writes) == 1 && o.Writes[0].State == graph.StateEnt {
-		if o.In[0] != o.In[1] {
-			return nil, fmt.Errorf("an entry whose value is not its key")
-		}
-		pools, layouts, rows, pages = []Operand{TableEntKeys.op()}, [2]Pool{}, TableEntRows.op(), TableEntPages.op()
-	} else if c.History.ValuesInKeys {
+	if c.History.ValuesInKeys {
 		if o.In[0] != o.In[1] {
 			return nil, fmt.Errorf("a history append of a value other than its key, into a pool whose values are its keys")
 		}

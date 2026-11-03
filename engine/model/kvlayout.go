@@ -116,9 +116,6 @@ func (l kvLayout) atLayer(c *Config, li int) kvLayout {
 	switch {
 	case c.extraKVHead(li):
 		l.nKV++ // kvlMSA
-	case c.DSV4():
-		// One row a position, as wide as the block's (ds4.go).
-		l.nKV, l.headDim = 1, c.KVRowAt(li)
 	case c.GeomSplit() && !c.MLA() && c.SWA(li):
 		l.nKV, l.headDim = c.NKVHeadSWA, c.HeadDimSWA // kvlSWA
 	}
