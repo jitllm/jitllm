@@ -25,6 +25,8 @@ import (
 type cudaDev struct {
 	allocCount
 	d *cuda.Device
+	// drv is the driver binding d was opened through.
+	drv *cuda.Driver
 	// mu guards reqs against Close. do reads it and Close nils it, and without
 	// this that is a data race whose benign-looking outcome is a send on a
 	// closed channel -- a panic from the caller's goroutine, not an error.
@@ -110,7 +112,7 @@ func (c *cudaDev) CopyPeer(dst Buf, dstOff int, from Device, src Buf, srcOff, n 
 	if err := copyRange(db.b.Len(), dstOff, sb.b.Len(), srcOff, n, false); err != nil || n == 0 {
 		return false, err
 	}
-	if !cuda.PeerCopyAvailable() {
+	if !c.drv.PeerCopyAvailable() {
 		return false, fmt.Errorf("backend: cuda: this driver has no cuMemcpyPeer")
 	}
 	err := errCUDAClosed
@@ -126,7 +128,7 @@ func (c *cudaDev) CopyPeer(dst Buf, dstOff int, from Device, src Buf, srcOff, n 
 				return
 			}
 		}
-		if err = cuda.CopyPeer(db.b, c.d, dstOff, sb.b, f.d, srcOff, n); err == nil {
+		if err = c.drv.CopyPeer(db.b, c.d, dstOff, sb.b, f.d, srcOff, n); err == nil {
 			err = c.syncAll()
 		}
 	})
@@ -137,7 +139,7 @@ func (c *cudaDev) CopyPeer(dst Buf, dstOff int, from Device, src Buf, srcOff, n 
 // process.
 func (c *cudaDev) PeerAccess(from Device) bool {
 	f, ok := from.(*cudaDev)
-	if !ok || f == c || !cuda.PeerCopyAvailable() {
+	if !ok || f == c || !c.drv.PeerCopyAvailable() {
 		return false
 	}
 	return c.peerTo(f)
@@ -174,12 +176,17 @@ func openCUDA(o Opts) (Device, error) { return OpenCUDAWith(-1, o) }
 // CUDACount is how many CUDA devices the driver sees, without opening one.
 // Opening costs a context, a locked OS thread and an owner goroutine, so a
 // caller asks this first and opens only the ordinals it chose.
-func CUDACount() (int, error) { return cuda.Count() }
+func CUDACount() (int, error) {
+	drv, err := cuda.Load()
+	if err != nil {
+		return 0, err
+	}
+	return drv.Count()
+}
 
 // OpenCUDA opens one CUDA device by ordinal, with its own context and its own
 // owner goroutine. One owner per device keeps each context current on its own
-// thread without pushing or popping per call; only the driver binding is
-// shared.
+// thread without pushing or popping per call.
 func OpenCUDA(ord int) (Device, error) { return OpenCUDAWith(ord, Opts{}) }
 
 // OpenCUDAWith is OpenCUDA with this device's open choices.
@@ -206,7 +213,11 @@ func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		d, err := cuda.OpenDevice(ord)
+		var d *cuda.Device
+		drv, err := cuda.Load()
+		if err == nil {
+			d, err = drv.OpenDevice(ord)
+		}
 		out <- opened{d, threadID(), err}
 		if err != nil {
 			return
@@ -227,7 +238,7 @@ func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 	if opts.CUDATarget != "" {
 		o.d.Target = opts.CUDATarget
 	}
-	return &cudaDev{d: o.d, reqs: reqs, owner: o.tid, posted: opts.CUDAPosted, maxRegs: opts.CUDAMaxRegs}, nil
+	return &cudaDev{d: o.d, drv: o.d.Driver(), reqs: reqs, owner: o.tid, posted: opts.CUDAPosted, maxRegs: opts.CUDAMaxRegs}, nil
 }
 
 // Session batches a sequence of device calls into ONE ownership hop.
@@ -280,7 +291,7 @@ func (r *sessReq) call() {
 	r.s = cudaSession{c: r.c}
 	r.f(&r.s)
 	if r.c.hasQueues() {
-		cuda.SyncLegacy()
+		r.c.drv.SyncLegacy()
 	}
 }
 
@@ -383,8 +394,8 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 	// Outside a capture the timing instrument is an event pair around the
 	// launch itself, read back by CUDAKernelTimes.
 	var t0 *cuda.Event
-	if s.marks == nil && !s.qcap && s.stream == 0 && cudaKernTiming.Load() && cuda.EventsAvailable() {
-		if e, err := cuda.NewEvent(); err == nil && e.RecordOn(st) == nil {
+	if s.marks == nil && !s.qcap && s.stream == 0 && cudaKernTiming.Load() && s.c.drv.EventsAvailable() {
+		if e, err := s.c.drv.NewEvent(); err == nil && e.RecordOn(st) == nil {
 			t0 = e
 		}
 	}
@@ -397,14 +408,14 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 		name = TrialPrefix + name
 	}
 	if t0 != nil {
-		if e, err := cuda.NewEvent(); err == nil && e.RecordOn(st) == nil {
+		if e, err := s.c.drv.NewEvent(); err == nil && e.RecordOn(st) == nil {
 			directMarks.add(kernPair{t0, e, name})
 		}
 	}
 	if s.marks != nil {
 		// Inside a timed capture: an event NODE after the launch, so a replay
 		// stamps each kernel's end with no host in the loop.
-		if e, err := cuda.NewEvent(); err == nil && e.RecordNode(s.stream) == nil {
+		if e, err := s.c.drv.NewEvent(); err == nil && e.RecordNode(s.stream) == nil {
 			*s.marks = append(*s.marks, kernMark{e, name})
 		}
 	}
@@ -522,7 +533,7 @@ func (s *cudaSession) Sync() error {
 // a caller records with the same code it would otherwise run and the two
 // cannot drift apart (see Record).
 func (s *cudaSession) BeginRecord() error {
-	if !cuda.GraphsAvailable() {
+	if !s.c.drv.GraphsAvailable() {
 		return fmt.Errorf("backend: cuda: this driver has no stream capture")
 	}
 	if s.q != nil {
@@ -561,8 +572,8 @@ func (s *cudaSession) BeginRecord() error {
 // SetCUDAKernelTiming is on, on whichever stream the capture runs.
 func (s *cudaSession) armMarks() {
 	s.recMarks = nil
-	if cudaKernTiming.Load() && cuda.EventsAvailable() {
-		if e, err := cuda.NewEvent(); err == nil && e.RecordNode(s.stream) == nil {
+	if cudaKernTiming.Load() && s.c.drv.EventsAvailable() {
+		if e, err := s.c.drv.NewEvent(); err == nil && e.RecordNode(s.stream) == nil {
 			s.recMarks = []kernMark{{e, ""}}
 			s.marks = &s.recMarks
 		}
@@ -604,7 +615,7 @@ func (s *cudaSession) Replay(r Recording) error {
 	if s.q != nil {
 		st = s.q.st
 	}
-	if !cudaTiming.Load() || !cuda.EventsAvailable() {
+	if !cudaTiming.Load() || !s.c.drv.EventsAvailable() {
 		return cg.g.Launch(st)
 	}
 	return s.c.timeReplay(cg.g, st)
@@ -620,7 +631,7 @@ func (c *cudaDev) timeReplay(g *cuda.Graph, st *cuda.Stream) error {
 	cur := &c.tev[c.ti%3]
 	for i := range cur {
 		if cur[i] == nil {
-			e, err := cuda.NewEvent()
+			e, err := c.drv.NewEvent()
 			if err != nil {
 				return g.Launch(st)
 			}
@@ -925,7 +936,7 @@ func (c *cudaDev) Close() {
 		for q := range c.queues {
 			q.st.Destroy()
 			if q.stage != nil {
-				cuda.FreeHost(q.stage)
+				c.drv.FreeHost(q.stage)
 				q.stage = nil
 			}
 		}
@@ -959,7 +970,7 @@ func (c *cudaDev) Alloc(n int) (Buf, error) {
 func (c *cudaDev) PinHost(n int) ([]byte, error) {
 	var b []byte
 	err := errCUDAClosed
-	c.do(func() { b, err = cuda.HostAlloc(n) })
+	c.do(func() { b, err = c.drv.HostAlloc(n) })
 	return b, err
 }
 
@@ -994,7 +1005,7 @@ var (
 func (c *cudaDev) KernelResources() []KernelResources { return c.res.list() }
 
 // UnpinHost gives PinHost's memory back.
-func (c *cudaDev) UnpinHost(b []byte) { c.do(func() { cuda.FreeHost(b) }) }
+func (c *cudaDev) UnpinHost(b []byte) { c.do(func() { c.drv.FreeHost(b) }) }
 
 // GuaranteedLanes: a CUDA warp is 32 threads on every architecture NVIDIA has
 // shipped, WARP_SIZE is 32 in every CUDA toolkit, and ptx.Lower emits
@@ -1143,7 +1154,7 @@ func (r *cudaWrite) run() {
 	// bytes, not once they have landed: a queue's next launch, on a stream
 	// that does not wait for the legacy one, could read the old ones.
 	if r.err == nil && queues {
-		r.err = cuda.SyncLegacy()
+		r.err = d.drv.SyncLegacy()
 	}
 }
 
@@ -1242,7 +1253,7 @@ func (l *cudaCopyList) run() {
 		if r.N == 0 {
 			continue
 		}
-		if l.err = cuda.CopyDtoD(r.Dst.(*cudaBuf).b, r.DstOff, r.Src.(*cudaBuf).b, r.SrcOff, r.N); l.err != nil {
+		if l.err = c.drv.CopyDtoD(r.Dst.(*cudaBuf).b, r.DstOff, r.Src.(*cudaBuf).b, r.SrcOff, r.N); l.err != nil {
 			return
 		}
 	}
@@ -1276,7 +1287,7 @@ func (r *cudaCopy) run() {
 			return
 		}
 	}
-	if r.err = cuda.CopyDtoD(r.db.b, r.dOff, r.sb.b, r.sOff, r.n); r.err == nil {
+	if r.err = r.c.drv.CopyDtoD(r.db.b, r.dOff, r.sb.b, r.sOff, r.n); r.err == nil {
 		r.err = c.syncAll()
 	}
 }
@@ -1381,14 +1392,14 @@ func (q *cudaQueue) room(n int) ([]byte, error) {
 	}
 	if n > len(q.stage) {
 		if q.stage != nil {
-			cuda.FreeHost(q.stage)
+			q.c.drv.FreeHost(q.stage)
 			q.stage = nil
 		}
 		// Room for stageWrites writes of this size: an arena grown to exactly
 		// n is full after one, and every write after it -- the next sheet, or a
 		// decode token's few words -- drained the stream first. A hybrid
 		// expert cache sending 2.9 MB sheets waited on the card at each.
-		b, err := cuda.HostAlloc(max(n*stageWrites, stageMin))
+		b, err := q.c.drv.HostAlloc(max(n*stageWrites, stageMin))
 		if err != nil {
 			return nil, err
 		}
@@ -1431,7 +1442,7 @@ func (q *cudaQueue) sync() error {
 
 // NewQueue is a non-blocking stream on this device (backend.Queued).
 func (c *cudaDev) NewQueue() (Queue, error) {
-	if !cuda.QueuesAvailable() {
+	if !c.drv.QueuesAvailable() {
 		return nil, fmt.Errorf("backend: cuda: this driver has no non-blocking streams")
 	}
 	var st *cuda.Stream
@@ -1468,7 +1479,7 @@ func (q *cudaQueue) Close() {
 		q.st.Sync()
 		q.st.Destroy()
 		if q.stage != nil {
-			cuda.FreeHost(q.stage)
+			q.c.drv.FreeHost(q.stage)
 			q.stage = nil
 		}
 	})
@@ -1558,7 +1569,7 @@ func (c *cudaDev) syncAll() error {
 		c.capturing.Lock()
 		defer c.capturing.Unlock()
 	}
-	return cuda.Sync()
+	return c.drv.Sync()
 }
 
 func (c *cudaDev) hasQueues() bool {

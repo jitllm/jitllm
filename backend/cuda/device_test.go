@@ -18,7 +18,7 @@ import (
 // two ordinals work; only a second card can.
 
 func TestCountIsReadFromTheDriver(t *testing.T) {
-	n, err := Count()
+	n, err := testCount()
 	if err != nil {
 		t.Skip("no CUDA driver here:", err)
 	}
@@ -61,7 +61,7 @@ func TestCountIsReadFromTheDriver(t *testing.T) {
 
 	var got []string
 	for i := 0; i < n; i++ {
-		d, err := OpenDevice(i)
+		d, err := testOpenDevice(i)
 		if err != nil {
 			t.Fatalf("OpenDevice(%d): %v", i, err)
 		}
@@ -127,14 +127,14 @@ func isDigits(s string) bool {
 // TestOrdinalZeroIsUnchanged: Open() is OpenDevice(0) and reports the same
 // things.
 func TestOrdinalZeroIsUnchanged(t *testing.T) {
-	a, err := Open()
+	a, err := testOpen()
 	if err != nil {
 		t.Skip("no CUDA device:", err)
 	}
 	target, slots, name, ord := a.Target, a.Slots(), a.Name(), a.Ordinal()
 	a.Close()
 
-	b, err := OpenDevice(0)
+	b, err := testOpenDevice(0)
 	if err != nil {
 		t.Fatalf("OpenDevice(0) after a working Open(): %v", err)
 	}
@@ -160,12 +160,12 @@ func TestOrdinalZeroIsUnchanged(t *testing.T) {
 // TestOrdinalOutOfRangeNamesTheCount: asking for a device that is not there is
 // an error that says how many there are, never a crash or a silent device 0.
 func TestOrdinalOutOfRangeNamesTheCount(t *testing.T) {
-	n, err := Count()
+	n, err := testCount()
 	if err != nil {
 		t.Skip("no CUDA driver here:", err)
 	}
 	for _, ord := range []int{n, n + 7, -1} {
-		d, err := OpenDevice(ord)
+		d, err := testOpenDevice(ord)
 		if err == nil {
 			d.Close()
 			t.Fatalf("OpenDevice(%d) opened a device on a box with %d", ord, n)
@@ -184,7 +184,7 @@ func TestOrdinalOutOfRangeNamesTheCount(t *testing.T) {
 // with CUDA_ERROR_INVALID_CONTEXT, and a bound one answers and leaves its own
 // device current.
 func TestMemBindsItsOwnContext(t *testing.T) {
-	d, err := Open()
+	d, err := testOpen()
 	if err != nil {
 		t.Skip("no CUDA device:", err)
 	}
@@ -197,7 +197,7 @@ func TestMemBindsItsOwnContext(t *testing.T) {
 
 	// Open locked this goroutine to its thread, so this is the context's own
 	// thread, the only place it can be taken away.
-	if err := call(cuCtxSetCurrent(0), "cuCtxSetCurrent"); err != nil {
+	if err := d.drv.call(d.drv.cuCtxSetCurrent(0), "cuCtxSetCurrent"); err != nil {
 		t.Fatal(err)
 	}
 	free1, total1, err := d.Mem()
@@ -211,8 +211,8 @@ func TestMemBindsItsOwnContext(t *testing.T) {
 		t.Errorf("free came back 0 (was %d)", free0)
 	}
 	var cur CUdevice
-	if r := cuCtxGetDevice(&cur); r != 0 {
-		t.Fatalf("cuCtxGetDevice: %s", errStr(r))
+	if r := d.drv.cuCtxGetDevice(&cur); r != 0 {
+		t.Fatalf("cuCtxGetDevice: %s", d.drv.errStr(r))
 	}
 	if cur != d.dev {
 		t.Errorf("Mem left device %d current, this Device is %d (#%d)", cur, d.dev, d.ord)
@@ -234,7 +234,7 @@ func TestFailedOpenDoesNotExitLocked(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			if d, err := OpenDevice(-1); err == nil {
+			if d, err := testOpenDevice(-1); err == nil {
 				d.Close()
 				t.Error("OpenDevice(-1) opened a device")
 			}
@@ -266,4 +266,22 @@ func TestFailedOpenDoesNotExitLocked(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func testCount() (int, error) {
+	drv, err := Load()
+	if err != nil {
+		return 0, err
+	}
+	return drv.Count()
+}
+
+func testOpen() (*Device, error) { return testOpenDevice(0) }
+
+func testOpenDevice(ord int) (*Device, error) {
+	drv, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	return drv.OpenDevice(ord)
 }
