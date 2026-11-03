@@ -1408,11 +1408,6 @@ func (s *Instance) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 		if err != nil {
 			return nil, err
 		}
-		undoDeep, err := s.deepRuns(enc, n)
-		if err != nil {
-			return nil, err
-		}
-		defer undoDeep()
 		defer s.tokensOf(enc)()
 		s.spanTok = s.spanTok[min(n, len(s.spanTok)):]
 		return s.prefillSrc(0, src.from(n, s.c.NEmbd))
