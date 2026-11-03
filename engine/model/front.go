@@ -114,9 +114,11 @@ type frontSet struct {
 	mtpWhy  []Uncovered
 	mtpErrs []error
 	// mtpEntry and mtpEntryWhy are each prediction block's entry
-	// (mtpEntryGraph).
+	// (mtpEntryGraph), mtpCollapse its own head mix over the streams where
+	// it stores one (streamCollapseGraphAt).
 	mtpEntry    []*graph.Graph
 	mtpEntryWhy []Uncovered
+	mtpCollapse []*graph.Graph
 	head, embed *graph.Graph
 	// cpuEmbed is embed without the streams past the first, which the CPU
 	// expands through expand (cpustreams.go) or a family's own expansion;
@@ -300,10 +302,13 @@ func (m *Model) frontGraphs() *frontSet {
 	}
 	if np := m.Cfg.NMTP; np > 0 {
 		s.mtp, s.mtpWhy, s.mtpErrs = make([]*graph.Graph, np), make([]Uncovered, np), make([]error, np)
-		s.mtpEntry, s.mtpEntryWhy = make([]*graph.Graph, np), make([]Uncovered, np)
+		s.mtpEntry, s.mtpEntryWhy, s.mtpCollapse = make([]*graph.Graph, np), make([]Uncovered, np), make([]*graph.Graph, np)
 		for i := range np {
 			s.mtp[i], s.mtpWhy[i], s.mtpErrs[i] = m.blockGraph(n + i)
 			s.mtpEntry[i], s.mtpEntryWhy[i], _ = m.mtpEntryGraph(n + i)
+			if m.stores(n+i, jlm.RoleHCHeadDown) {
+				s.mtpCollapse[i], _ = m.streamCollapseGraphAt(n + i)
+			}
 		}
 	}
 	s.head, s.headWhy, s.headErr = m.headGraph(false)

@@ -3001,6 +3001,10 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &h.ngVal
 		case jlm.RoleNGramConv:
 			return &h.ngCvTaps
+		case jlm.RoleHCHeadDown:
+			return &h.head.down
+		case jlm.RoleHCHeadUp:
+			return &h.head.up
 		}
 	}
 	return nil
@@ -3158,6 +3162,8 @@ func (s *Instance) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 			return h.ngNormQ
 		case jlm.RoleNGramNormConv:
 			return h.ngNormC
+		case jlm.RoleHCHeadNorm:
+			return h.head.norm
 		}
 	}
 	return nil

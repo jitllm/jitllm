@@ -367,14 +367,22 @@ func (m *Model) streamExpandGraph() (*graph.Graph, error) {
 // input a stream, one output; nil where the front end states no streams.
 // A bank of checkpoints is mixed with the running residual by the head's
 // score vector, and gated streams through the head's own gate.
-func (m *Model) streamCollapseGraph() (*graph.Graph, error) {
+func (m *Model) streamCollapseGraph() (*graph.Graph, error) { return m.streamCollapseGraphAt(-1) }
+
+// streamCollapseGraphAt is streamCollapseGraph over block li's head roles:
+// a prediction block's own head mix, which its draft's logits read; -1 is
+// the model's head.
+func (m *Model) streamCollapseGraphAt(li int) (*graph.Graph, error) {
 	c := m.Cfg
 	if !c.statesStreams() {
 		return nil, nil
 	}
 	f, _ := m.inventory(jlm.DenseBlock)
+	if li >= 0 {
+		f, _ = m.inventory(int32(li))
+	}
 	s, d := c.Streams(), c.NEmbd
-	b := graph.NewBlock(-1)
+	b := graph.NewBlock(li)
 	xs := make([]graph.ValueID, s)
 	xs[0] = b.In("x", d)
 	for k := 1; k < s; k++ {

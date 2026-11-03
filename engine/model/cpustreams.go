@@ -21,6 +21,9 @@ type cpuStreamsState struct {
 	expand, expandRows, collapse, collapseRows cpuHeadForm
 	served                                     int
 	declined                                   [composer.NumDeclines]int
+	// li is the block whose roles the collapse binds: a prediction block's
+	// own head mix, -1 for the model's head.
+	li int
 	// pad holds a call's rows of each stream where its form's units reach
 	// past them, out the collapse's rows before they go over stream 0.
 	pad, out []float32
@@ -44,8 +47,13 @@ func (s *Instance) cpuPlaceStreams() {
 	fg := s.m.frontGraphs()
 	s.cpuComposeHead(&st.expand, fg.expand, composer.DeclineNoGraph, 1)
 	s.cpuComposeHead(&st.expandRows, fg.expand, composer.DeclineNoGraph, cpuRowsCap)
-	s.cpuComposeHead(&st.collapse, fg.collapse, composer.DeclineNoGraph, 1)
-	s.cpuComposeHead(&st.collapseRows, fg.collapse, composer.DeclineNoGraph, cpuRowsCap)
+	collapse := fg.collapse
+	st.li = -1
+	if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.mtpCollapse) {
+		collapse, st.li = fg.mtpCollapse[i], s.lo
+	}
+	s.cpuComposeHead(&st.collapse, collapse, composer.DeclineNoGraph, 1)
+	s.cpuComposeHead(&st.collapseRows, collapse, composer.DeclineNoGraph, cpuRowsCap)
 	d, ns := s.c.NEmbd, s.c.Streams()
 	u := 1
 	for _, hf := range []*cpuHeadForm{&st.expand, &st.expandRows, &st.collapse, &st.collapseRows} {
@@ -101,7 +109,13 @@ func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, 
 	}
 	f, why := hf.formOf()
 	if why == composer.DeclineServes {
-		why = s.cpuWeights(f, -1, nil)
+		li, l := -1, (*layer)(nil)
+		if hf == &st.collapse || hf == &st.collapseRows {
+			if li = st.li; li >= 0 {
+				l = &s.m.layers[li]
+			}
+		}
+		why = s.cpuWeights(f, li, l)
 	}
 	if why != composer.DeclineServes {
 		st.declined[why] += rows
