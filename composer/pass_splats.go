@@ -15,35 +15,46 @@ func (Splats) Name() string { return "splats" }
 
 func (p Splats) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
-		vw := k.VectorWords()
-		cone := k.addressCone()
-		type use struct{ node, slot int }
-		var uses []use
-		for i := range k.Nodes {
-			if cone[i] || k.Nodes[i].Op == OpLoad || k.Nodes[i].Op == OpBroadcast {
-				continue
-			}
-			nd := k.Nodes[i]
-			for s, a := range k.Operands(&nd) {
-				if cone[*a] && vw[*a] || vw[i] && k.Nodes[*a].Type != ir.F32 && k.Nodes[*a].Type != ir.Pred && k.counter(*a) ||
-					(nd.Type == ir.F32 || vw[i]) && k.gprMask(*a, vw) {
-					uses = append(uses, use{i, s})
-				}
-			}
-		}
-		if len(uses) == 0 {
-			return nil, false, nil
-		}
 		m := k.clone()
 		splat := map[int]int{}
-		for _, u := range uses {
-			a := *m.Operands(&m.Nodes[u.node])[u.slot]
-			b, ok := splat[a]
-			if !ok {
-				b = m.add(Node{Op: OpBroadcast, Type: m.Nodes[a].Type, A: a})
-				splat[a] = b
+		splats := func(take func(i, a int, vw, cone map[int]bool) bool) {
+			vw, cone := m.VectorWords(), m.addressCone()
+			var uses [][2]int
+			for i := range m.Nodes {
+				if m.Nodes[i].Op == OpLoad || m.Nodes[i].Op == OpBroadcast {
+					continue
+				}
+				nd := m.Nodes[i]
+				for s, a := range m.Operands(&nd) {
+					if take(i, *a, vw, cone) {
+						uses = append(uses, [2]int{i, s})
+					}
+				}
 			}
-			*m.Operands(&m.Nodes[u.node])[u.slot] = b
+			for _, u := range uses {
+				a := *m.Operands(&m.Nodes[u[0]])[u[1]]
+				b, ok := splat[a]
+				if !ok {
+					b = m.add(Node{Op: OpBroadcast, Type: m.Nodes[a].Type, A: a})
+					splat[a] = b
+				}
+				*m.Operands(&m.Nodes[u[0]])[u[1]] = b
+			}
+		}
+		// The index's words its vector readers would take first: with them
+		// cut, the vector words are the ones the code computes in lanes.
+		splats(func(i, a int, vw, cone map[int]bool) bool { return !cone[i] && cone[a] && vw[a] })
+		// Then the words those read from general registers: an index's node
+		// among them where a vector mask picks it.
+		splats(func(i, a int, vw, cone map[int]bool) bool {
+			if cone[i] && !vw[i] {
+				return false
+			}
+			t := m.Nodes[a].Type
+			return vw[i] && t != ir.F32 && t != ir.Pred && m.counter(a) || (m.Nodes[i].Type == ir.F32 || vw[i]) && m.gprMask(a, vw)
+		})
+		if len(splat) == 0 {
+			return nil, false, nil
 		}
 		return []*Kernel{m}, true, nil
 	})

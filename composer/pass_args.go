@@ -519,6 +519,16 @@ func (k *Kernel) split(as []access, whole bool, coords map[int]bool) int {
 	for _, l := range ls[1:] {
 		least = min(least, l[""])
 	}
+	// So can a constant taken from an index that subtracts a term the
+	// constant covered (k-1 - min(at, k-1)): such an index keeps what it
+	// adds.
+	for _, l := range ls {
+		for m, v := range l {
+			if _, moved := fixed[m]; m != "" && !moved && v < 0 {
+				least = min(least, 0)
+			}
+		}
+	}
 	if least != 0 {
 		fixed[""] = least
 	}
