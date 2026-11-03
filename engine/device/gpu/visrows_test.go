@@ -36,6 +36,10 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 			t.Fatalf("tower block %d declined on a %d MB card: %s", li, budget>>20, g.Err())
 		}
 	}
+	// The placement ends as a model's does (EndPlacement): every width a
+	// picture's set takes is formed, the row-chunked set where a whole one
+	// does not fit, and a picture's call composes nothing.
+	g.prewarmPromptWidths()
 	placed := g.Stats().ScratchBytes
 	if dt.visCap != visStart || placed == 0 {
 		t.Fatalf("placement built the set for %d rows and charged %d bytes, want %d rows and a charge",
@@ -53,7 +57,7 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 	}
 	run(3000)
 	grown := g.Stats().ScratchBytes
-	if dt.visCap != visRowsFor(3000, p.MaxSeq) || grown <= placed {
+	if dt.visCap != dt.towerWidthFor(3000) || grown <= placed {
 		t.Fatalf("a 3000-row picture: the set is %d rows and %d bytes (placed at %d)", dt.visCap, grown, placed)
 	}
 	// The grid itself: asked of the budget, not of the card. Whole, it does
@@ -65,7 +69,7 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 		t.Fatalf("a %d-row set fit a %d MB card", p.MaxSeq, budget>>20)
 	}
 	dt.NoTowerChunks = false
-	if d.bufs != bufs || live() != held || dt.visCap != visRowsFor(3000, p.MaxSeq) {
+	if d.bufs != bufs || live() != held || dt.visCap != dt.towerWidthFor(3000) {
 		t.Fatalf("the refused picture allocated %d buffers (%d -> %d bytes live) and left the set at %d rows",
 			d.bufs-bufs, held, live(), dt.visCap)
 	}
@@ -89,7 +93,7 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 		run(3000)
 		run(500)
 	}
-	if d.bufs != bufs || dt.visCap != visRowsFor(3000, p.MaxSeq) {
+	if d.bufs != bufs || dt.visCap != dt.towerWidthFor(3000) {
 		t.Fatalf("pictures of 3000 and 500 rows in turn rebuilt the set: %d buffers allocated, %d rows",
 			d.bufs-bufs, dt.visCap)
 	}
@@ -97,16 +101,19 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 	for range visShrinkCalls - 1 {
 		run(500)
 	}
-	if dt.visCap != visRowsFor(3000, p.MaxSeq) {
+	if dt.visCap != dt.towerWidthFor(3000) {
 		t.Fatalf("%d pictures of 500 rows in a row shrank the set to %d rows", visShrinkCalls-1, dt.visCap)
 	}
 	run(500)
 	small := g.Stats().ScratchBytes
-	if dt.visCap != visRowsFor(500, p.MaxSeq) || small >= placed {
+	// The set goes back to its first width, the least a picture takes
+	// (towerWidthFor), smaller than the 3000-row picture's.
+	if dt.visCap != dt.towerWidthFor(500) || small >= grown {
 		t.Fatalf("a 500-row picture after a 3000-row one: the set is %d rows and %d bytes", dt.visCap, small)
 	}
-	t.Logf("a %d-row grid on a %d MB card: set %d bytes at %d rows placed, %d at 3072, %d at 512; "+
-		"the grid refused with nothing allocated", p.MaxSeq, budget>>20, placed, visStart, grown, small)
+	t.Logf("a %d-row grid on a %d MB card: set %d bytes at %d rows placed, %d at %d (3000 rows), %d at %d (500 rows); "+
+		"the grid refused with nothing allocated", p.MaxSeq, budget>>20, placed, visStart, grown, dt.towerWidthFor(3000),
+		small, dt.towerWidthFor(500))
 	g.ReleaseLayers(0, blocks)
 	if dt.scratch != 0 || dt.visCap != 0 || live() > 4096 {
 		t.Fatalf("every tower block released: scratch %d bytes, set at %d rows, %d bytes live",
