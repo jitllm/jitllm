@@ -55,7 +55,7 @@ func (s *Instance) cpuComposeTable(hf *cpuHeadForm, g *graph.Graph, rows int) {
 			ActWindow: s.m.actWindow}, Device: s.composedCPU(), Apart: true}
 		f, err := s.m.cpuFormOf(req, g, rows, true, false, false)
 		if err != nil {
-			hf.why = s.cpuFormDecline(err)
+			hf.why, hf.err = s.cpuFormDecline(err), err
 			return
 		}
 		hf.f = f
@@ -92,7 +92,7 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 		}
 		f, why := hf.formOf()
 		if why != composer.DeclineServes {
-			return fmt.Errorf("model: the rotary table %d on the CPU: %s", i, why)
+			return fmt.Errorf("model: the rotary table %d on the CPU: %s: %w", i, why, hf.err)
 		}
 		for r0 := 0; r0 < rows; {
 			k := min(f.rows, rows-r0)
