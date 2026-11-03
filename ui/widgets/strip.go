@@ -18,6 +18,7 @@ type Strip struct {
 
 // NewStrip builds a strip.
 func NewStrip(gap float32, children ...widget.Widget) *Strip {
+	var _ widget.Lifecycle = (*Strip)(nil)
 	s := &Strip{gap: gap, all: children}
 	for _, ch := range children {
 		if p, ok := ch.(interface{ SetParent(widget.Widget) }); ok {
@@ -104,5 +105,3 @@ func (s *Strip) Unmount() {
 		widget.UnmountTree(ch)
 	}
 }
-
-var _ widget.Lifecycle = (*Strip)(nil)

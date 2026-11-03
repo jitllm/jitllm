@@ -62,7 +62,7 @@ func commandLine(sh *app.Shell) widget.Widget {
 			go func() {
 				var err error
 				if on {
-					models := app.DefaultModelDir()
+					models := sh.Cfg.DefaultModelDir()
 					if dirs := sh.Store.ModelDirs.Get(); len(dirs) > 0 {
 						models = dirs[0]
 					}

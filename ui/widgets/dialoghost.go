@@ -23,7 +23,7 @@ const (
 // DialogReq is a request to raise a modal dialog.
 //
 // Seq is the trigger, not a boolean: a monotonic sequence can raise the same
-// alert twice and needs nobody to clear it. Use [NextDialogSeq] to fill it.
+// alert twice and needs nobody to clear it. Use [DialogSeq.Next] to fill it.
 type DialogReq struct {
 	Seq      uint64
 	Kind     DialogKind
@@ -35,11 +35,12 @@ type DialogReq struct {
 	OnCancel func()
 }
 
-var dialogSeq atomic.Uint64
+// DialogSeq numbers the requests one owner raises.
+type DialogSeq struct{ n atomic.Uint64 }
 
-// NextDialogSeq returns a fresh sequence number for a [DialogReq]. It is safe
-// to call from any goroutine.
-func NextDialogSeq() uint64 { return dialogSeq.Add(1) }
+// Next returns a fresh sequence number for a [DialogReq]. It is safe to call
+// from any goroutine.
+func (d *DialogSeq) Next() uint64 { return d.n.Add(1) }
 
 // DialogHost wraps the whole root and raises a dialog whenever the request
 // signal carries a sequence it has not shown yet.

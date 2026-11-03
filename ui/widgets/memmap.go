@@ -88,6 +88,7 @@ type MemoryMap struct {
 
 // NewMemoryMap builds a map bound to view. size is the caller's type role.
 func NewMemoryMap(view state.ReadonlySignal[MemView], colors MemColors, size float32) *MemoryMap {
+	var _ widget.Lifecycle = (*MemoryMap)(nil)
 	m := &MemoryMap{view: view, colors: colors, size: size}
 	m.SetVisible(true)
 	m.SetEnabled(true)
@@ -390,5 +391,3 @@ func (m *MemoryMap) Mount(ctx widget.Context) {
 // must exist: widget.MountTree calls Mount only on a full Lifecycle, so
 // without it the map never binds and keeps the height it had empty.
 func (m *MemoryMap) Unmount() {}
-
-var _ widget.Lifecycle = (*MemoryMap)(nil)

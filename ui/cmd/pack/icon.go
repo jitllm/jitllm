@@ -19,26 +19,31 @@ func iconPNG(size int) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// icnsTypes are the .icns element types for PNG images, with their pixel
+// icnsTypes() are the .icns element types for PNG images, with their pixel
 // size: the 1x and 2x pairs of the 16, 32, 128, 256 and 512 point icons.
-var icnsTypes = []struct {
+func icnsTypes() []struct {
 	tag  string
 	size int
-}{
-	{"icp4", 16}, {"ic11", 32}, {"icp5", 32}, {"ic12", 64},
-	{"ic07", 128}, {"ic13", 256}, {"ic08", 256}, {"ic14", 512},
-	{"ic09", 512}, {"ic10", 1024},
+} {
+	return []struct {
+		tag  string
+		size int
+	}{
+		{"icp4", 16}, {"ic11", 32}, {"icp5", 32}, {"ic12", 64},
+		{"ic07", 128}, {"ic13", 256}, {"ic08", 256}, {"ic14", 512},
+		{"ic09", 512}, {"ic10", 1024},
+	}
 }
 
 // ico is the Windows icon file the installer shows: ICONDIR, one ICONDIRENTRY
 // per image with its byte offset in the file, then the PNGs. The images are
-// the executable's icon group's (icoSizes); the group names each by resource
+// the executable's icon group's (icoSizes()); the group names each by resource
 // id where the file gives an offset.
 func ico() ([]byte, error) {
 	var head, body bytes.Buffer
-	binary.Write(&head, binary.LittleEndian, [3]uint16{0, 1, uint16(len(icoSizes))})
-	off := 6 + 16*len(icoSizes)
-	for _, s := range icoSizes {
+	binary.Write(&head, binary.LittleEndian, [3]uint16{0, 1, uint16(len(icoSizes()))})
+	off := 6 + 16*len(icoSizes())
+	for _, s := range icoSizes() {
 		p, err := iconPNG(s)
 		if err != nil {
 			return nil, err
@@ -61,7 +66,7 @@ func ico() ([]byte, error) {
 func icns() ([]byte, error) {
 	var body bytes.Buffer
 	cache := map[int][]byte{}
-	for _, t := range icnsTypes {
+	for _, t := range icnsTypes() {
 		p, ok := cache[t.size]
 		if !ok {
 			var err error

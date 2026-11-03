@@ -21,9 +21,11 @@ const (
 // 1200 (UTF-16) in the version's translation table.
 const langEnUS = 0x0409
 
-// icoSizes are the images the Windows icon carries: what Explorer, the task
+// icoSizes() are the images the Windows icon carries: what Explorer, the task
 // bar and Alt-Tab ask for at 100-200% scale.
-var icoSizes = []int{16, 24, 32, 48, 64, 128, 256}
+func icoSizes() []int {
+	return []int{16, 24, 32, 48, 64, 128, 256}
+}
 
 // resource is one leaf of the resource tree.
 type resource struct {
@@ -52,8 +54,8 @@ func syso(arch, version string) ([]byte, error) {
 
 	res := []resource{{rtVersion, 1, vi}}
 	var group bytes.Buffer
-	binary.Write(&group, binary.LittleEndian, [3]uint16{0, 1, uint16(len(icoSizes))}) // GRPICONDIR
-	for i, s := range icoSizes {
+	binary.Write(&group, binary.LittleEndian, [3]uint16{0, 1, uint16(len(icoSizes()))}) // GRPICONDIR
+	for i, s := range icoSizes() {
 		p, err := iconPNG(s)
 		if err != nil {
 			return nil, err

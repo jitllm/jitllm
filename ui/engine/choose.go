@@ -20,12 +20,11 @@ type Engines struct {
 	stopAPI func()
 }
 
-var _ screen.Engine = (*core.Switch)(nil)
-
 // Start chooses the engine for the saved setting (service first, under Auto)
 // and starts it. It asks the network before the window's own API starts.
 // Shell.ConnectTo is set to switch to a service.
 func Start(sh *app.Shell) *Engines {
+	var _ screen.Engine = (*core.Switch)(nil)
 	e := &Engines{sh: sh}
 	sh.ConnectTo = func(addr string) {
 		sh.Store.EngineMode.Set(core.ModeService)

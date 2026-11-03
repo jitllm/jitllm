@@ -466,7 +466,7 @@ func TestEveryRowStateFitsItsColumn(t *testing.T) {
 // realTextWidth measures s with the canvas the offscreen renderer draws with.
 func realTextWidth(t *testing.T, s string, size float32) float32 {
 	t.Helper()
-	app.LoadFonts() // what main and cmd/shots do before the first frame
+	(&app.Fonts{}).Load() // what main and cmd/shots do before the first frame
 	p := &measureProbe{text: s, size: size}
 	p.SetVisible(true)
 	offscreen.NewRenderer(400, 40).Render(p)

@@ -14,15 +14,13 @@ import (
 // Engine is the shared engine, as the window holds it.
 type Engine = core.Engine
 
-// The shared engine and the hardware probe are what the screens drive.
-var (
-	_ screen.Engine  = (*Engine)(nil)
-	_ screen.Machine = hardware.Host{}
-	_ core.Front     = front{}
-)
-
-// New starts the engine worker for sh. Close stops it.
-func New(sh *app.Shell) *Engine { return core.New(front{sh}, StateOf(sh.Store)) }
+// New starts the engine worker for sh. Close stops it. The shared engine and
+// the hardware probe are what the screens drive.
+func New(sh *app.Shell) *Engine {
+	var _ screen.Engine = (*Engine)(nil)
+	var _ screen.Machine = (*hardware.Host)(nil)
+	return core.New(front{sh}, StateOf(sh.Store))
+}
 
 // front is the shell, plus what the engine asks of the screens and the
 // transcript.

@@ -14,10 +14,10 @@ import (
 // (the tap passing records on untouched) the GPU stays unnamed.
 func TestTheAdapterGogpuPicksNamesTheGPU(t *testing.T) {
 	var out bytes.Buffer
-	l := slog.New(adapterTap{slog.NewTextHandler(&out, nil)})
-	crash.SetGPU("")
+	var guard crash.Guard
+	l := slog.New(adapterTap{slog.NewTextHandler(&out, nil), &guard})
 	l.Info("adapter selected", "name", "Microsoft Basic Render Driver", "backend", "DX12", "type", "IntegratedGPU")
-	if got, want := crash.GPU(), "Microsoft Basic Render Driver (DX12, IntegratedGPU)"; got != want {
+	if got, want := guard.GPU(), "Microsoft Basic Render Driver (DX12, IntegratedGPU)"; got != want {
 		t.Errorf("crash reports name the GPU %q, want %q", got, want)
 	}
 	if !strings.Contains(out.String(), "adapter selected") {

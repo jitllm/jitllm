@@ -8,7 +8,6 @@ import (
 
 	"github.com/gogpu/ui/state"
 
-	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/discover"
 	"github.com/jitllm/jitllm/convert/hf"
 	"github.com/jitllm/jitllm/convert/library"
@@ -29,25 +28,24 @@ type downloadScreen struct {
 	busy     state.Signal[bool]   // one download at a time
 	progress state.Signal[float64]
 	note     state.Signal[string]
-	pref     state.Signal[int] // the balance, an index into discover.BalanceSteps
+	pref     state.Signal[int] // the balance, an index into discover.BalanceSteps()
 	picked   bool              // a person chose a model; stop following the top
 	ord      state.ReadonlySignal[[]int]
+
+	// Seams for the tests: the Hub, the whole-file download a stream falls
+	// back to, and the disk.
+	endpoint string
+	noStream bool
+	fetchFn  discover.FetchFunc
+	free     discover.FreeFunc
 
 	cancelMu sync.Mutex
 	stop     gocontext.CancelFunc // the running download's
 }
 
-var (
-	downloadsMu sync.Mutex
-	downloads   = map[*app.Shell]*downloadScreen{}
-)
-
 func downloadsFor(sh *app.Shell) *downloadScreen {
-	downloadsMu.Lock()
-	defer downloadsMu.Unlock()
-	d, ok := downloads[sh]
-	if !ok {
-		d = &downloadScreen{
+	d, created := app.Local(sh, func() *downloadScreen {
+		return &downloadScreen{
 			sh:       sh,
 			sel:      state.NewSignal(-1),
 			rows:     state.NewSignal(len(library.Models)),
@@ -56,15 +54,20 @@ func downloadsFor(sh *app.Shell) *downloadScreen {
 			progress: state.NewSignal(0.0),
 			note:     state.NewSignal(""),
 			pref:     state.NewSignal(discover.DefaultBalance),
+			fetchFn:  discover.HubFetch,
+			free:     discover.FreeBytes,
 		}
+	})
+	if created {
 		d.refresh()
-		downloads[sh] = d
 	}
 	return d
 }
 
 // dir is where downloads land; see [discover.Dir].
-func (d *downloadScreen) dir() string { return discover.Dir(d.sh.Cfg.ModelDirs) }
+func (d *downloadScreen) dir() string {
+	return discover.Dir(d.sh.Cfg.ModelDirs, d.sh.Cfg.DefaultModelDir())
+}
 
 // containerFor is where a library model's container is written.
 func (d *downloadScreen) containerFor(m library.Model) string {
@@ -89,15 +92,6 @@ func (d *downloadScreen) onDisk(i int) bool {
 
 // --- the action ----------------------------------------------------------------
 
-// Seams for the tests: the Hub, the whole-file download a stream falls back
-// to, and the disk.
-var (
-	downloadEndpoint string
-	downloadNoStream bool
-	downloadFetch    discover.FetchFunc = discover.HubFetch
-	downloadFree     discover.FreeFunc  = discover.FreeBytes
-)
-
 // act is the button: Load a model that is on disk, fetch one that is not.
 func (d *downloadScreen) act() {
 	m, i, ok := d.selected()
@@ -119,7 +113,7 @@ func (d *downloadScreen) act() {
 // [discover.Get]'s; this puts them on the screen.
 func (d *downloadScreen) fetch(m library.Model) {
 	dir := d.dir()
-	if note := discover.SpaceNote(m, dir, downloadFree); note != "" {
+	if note := discover.SpaceNote(m, dir, d.free); note != "" {
 		d.note.Set(note)
 		return
 	}
@@ -135,10 +129,10 @@ func (d *downloadScreen) fetch(m library.Model) {
 	d.cancelMu.Unlock()
 	run := modelsFor(d.sh).runner()
 	hub := discover.Hub{
-		Endpoint: downloadEndpoint,
+		Endpoint: d.endpoint,
 		Token:    hf.FindToken(os.Getenv, os.UserHomeDir),
-		Fetch:    downloadFetch,
-		NoStream: downloadNoStream,
+		Fetch:    d.fetchFn,
+		NoStream: d.noStream,
 		// The runner may return before the job has run; Get waits for it.
 		Convert: func(job func()) bool {
 			done := make(chan struct{})
@@ -150,7 +144,7 @@ func (d *downloadScreen) fetch(m library.Model) {
 		},
 	}
 	go func() {
-		defer crash.Recover("download")
+		defer d.sh.Crashes().Recover("download")
 		defer cancel()
 		_, err := discover.Get(ctx, m, dir, hub, func(s discover.Step) {
 			d.sh.Post(func() {
