@@ -9802,18 +9802,26 @@ separate GGUF).
 
 The plan above held, with these settlements.
 
-**The n-gram hash is generated code on every tier** (RULE 8): uint64
-multiply, xor and modulo per head, the reset at an end-of-sequence id, and
-the predecessors moved on (`cpu.EmitNGramHash`, AVX2/SSE/arm64; the only
-setup integer work is the constants). The predecessors are recurrent state
-the host keeps whichever side runs the block: the host hashes and reads the
-table rows, a device gets the gathered rows (`nn.NGramDevice`).
+**The n-gram block states its rows** (RULE 8): each row's token
+(`graph.OpToken`), its window of predecessors held in the block's recurrent
+slot (`graph.OpNGramWindow`), the hash -- the uint64 multiply, xor and
+modulo per head in 32-bit words, the reset at an end-of-sequence id
+(`graph.OpNGramHash`) -- and per head an embedding of that head's range of
+the table (`graph.Binding.From`). The predecessors are the block's state, so
+they move, rewind and snapshot with it. The CPU device binds the table
+through a reservation of all of it (`jlm.RowView`) and reads in the rows a
+call's hash names between its form's two halves, as a form over banks makes
+its experts resident; a card holds no row table and declines the block. It
+was main's before: the host hashed (`cpu.EmitNGramHash`) and decoded the
+rows with main's kernels and kept the predecessors whichever side ran the
+block, a device getting the gathered rows (`nn.NGramDevice`, gone with it).
 
 **IQ4_NL is a native type** (`quant.IQ4_NL`, container v29): the oracle
-decoder first, then a row-gather kernel per tier. The 28.8 GB table is a row
-table placed after every page array and read a row at a time with O_DIRECT
-(`jlm.File.ReadRow`); its page size once entered the per-block page sizing
-and laid a 1.5 TB file out, which `TestRowTableIsReadARowAtATime` now holds.
+decoder first; the gathers read it through the shared decoder
+(`jlm.DecodeVerbatim`). The 28.8 GB table is a row table placed after every
+page array, its rows read with O_DIRECT a span at a time; its page size once
+entered the per-block page sizing and laid a 1.5 TB file out, which
+`TestRowTableIsReadARowAtATime` now holds.
 
 **Every linear block's state slot is [delta rule | tail]**: the n-gram
 block's tail is its predecessors and the dilated convolution's nine

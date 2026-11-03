@@ -21,10 +21,12 @@ import (
 // the delta rule, bs.x2 into bs.x after the mixture.
 //
 // The n-gram block adds its embedding into the streams first, into x.xg,
-// which the attention's mix and placement then read in place of bs.x: the
-// host hashes each row's n-gram and reads the table rows (SetNGramRows), and
-// the projections, the per-stream gate, the norm and the dilated convolution
-// over the history in the block's recurrent tail run here. The head's mix is
+// which the attention's mix and placement then read in place of bs.x: its
+// graph gathers each row's rows of the n-gram table, which no card holds
+// (28.8 GB on the release), so the block runs where the table's rows are
+// read; the projections, the per-stream gate, the norm and the dilated
+// convolution over the history in the block's recurrent tail are its
+// card form's once a card gathers them. The head's mix is
 // the host's, as for every model with streams.
 
 // q4eBlock is one Qwen3.8-Flash-Next block's n-gram convolution; its
@@ -82,15 +84,3 @@ func (g *devTier) prepQ4E(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 	l.q4e = b
 	return ""
 }
-
-// SetNGramRows takes the rows' n-gram table rows for the next call
-// (nn.NGramDevice).
-func (g *devTier) SetNGramRows(rows []float32) {
-	g.mu.Lock()
-	g.ngHost = rows
-	g.mu.Unlock()
-}
-
-// SetNGramRows keeps the rows' n-gram table rows for this session's next
-// call, which hands them to every device it holds (inputsTo).
-func (s *gpuSession) SetNGramRows(rows []float32) { s.ng = rows }

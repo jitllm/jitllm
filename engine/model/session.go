@@ -89,7 +89,6 @@ type Session struct {
 	markErr  error
 	ldEmbed  nn.EmbedDevice
 	ldPrompt nn.PromptDevice
-	ldNGram  nn.NGramDevice
 	tier     nn.LayerDevice
 	held     []bool
 	// kvRoom is the positions ld holds room for (reserveRuns), 0 when not

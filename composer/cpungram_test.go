@@ -118,9 +118,9 @@ func NGramGraph(c NGramCase) (g *graph.Graph, win, rows, next graph.ValueID) {
 }
 
 // TestComposedCPUNGramHash forms OpNGramHash on the CPU at each of
-// NGramCases' shapes, a decode step's one row at a time, held word for word
-// to NGramRef: the rows each head reads and the next predecessors, guard
-// words past both. The reset ignored, and a head reading the row of the
+// NGramCases' shapes, a decode step's one row at a time and a prompt's step
+// of every window at once, held word for word to NGramRef: the rows each
+// head reads and the next predecessors, guard words past both. The reset ignored, and a head reading the row of the
 // head before it, must part from the form.
 func TestComposedCPUNGramHash(t *testing.T) {
 	ran, reset, dropped := 0, 0, 0
@@ -138,7 +138,7 @@ func TestComposedCPUNGramHash(t *testing.T) {
 				t.Fatalf("%d-grams x%d at %d rows: %v", c.N, c.Per, R, err)
 			}
 			vals := map[graph.ValueID][]uint32{win: slices.Concat(wins...), rows: make([]uint32, R*heads), next: make([]uint32, R*(c.N-1))}
-			if err := runCPUValues(codes, g, vals, [3][]uint32{}); err != nil {
+			if err := runCPUGridValues(codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
 				t.Fatalf("%d-grams x%d at %d rows: %v", c.N, c.Per, R, err)
 			}
 			return vals[rows], vals[next]
@@ -158,6 +158,10 @@ func TestComposedCPUNGramHash(t *testing.T) {
 		for i, w := range c.Wins {
 			gr, gn := run([][]uint32{w})
 			check(i, w, gr, gn)
+		}
+		gr, gn := run(c.Wins)
+		for i, w := range c.Wins {
+			check(i, w, gr[i*heads:(i+1)*heads], gn[i*(c.N-1):(i+1)*(c.N-1)])
 		}
 		ran++
 	}

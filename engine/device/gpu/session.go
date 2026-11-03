@@ -63,8 +63,6 @@ type gpuSession struct {
 	rows rowsCall
 	// ple is the rows' per-layer inputs for the next call (SetLayerInputs).
 	ple []float32
-	// ng is the rows' n-gram table rows (SetNGramRows).
-	ng []float32
 	// prompt says the calls are a prompt's (SetPrompt).
 	prompt bool
 }

@@ -48,10 +48,9 @@ type rowsOut struct {
 	// recurrent state after row r of the call: a rejection after row r takes
 	// it back (recSnap). Device blocks keep their own (nn.RecRewinder).
 	snap []recSnap
-	// ngBase is the step's row the chunk the n-gram block is running begins
-	// at, for snapTail; resBase the same for the chunk being collapsed, for
+	// resBase is the step's row the chunk being collapsed begins at, for
 	// tapStreams.
-	ngBase, resBase int
+	resBase int
 }
 
 // recSnap is one copy of every linear block's recurrent state for one row,
@@ -99,7 +98,7 @@ func (r *rowsOut) foldHead(h *nn.Head, base, n int) (func(), bool) {
 // The caller holds the pager (enterPager), as every inner path assumes.
 func (s *Instance) stepRows(src rowSrc, out *rowsOut) error {
 	c := s.c
-	out.token, out.tokens, out.resBase, out.ngBase = -1, nil, 0, 0
+	out.token, out.tokens, out.resBase = -1, nil, 0
 	switch {
 	case src.len() == 0:
 		return errEmptyPrompt{}
@@ -344,28 +343,7 @@ func (r *rowsOut) snapRow(s *Instance, li, slot, row int) {
 	nc, ns := g.convStateLen(), g.stateStride()
 	sn := &r.snap[row]
 	copy(sn.conv[li], s.rconv[li][slot*nc:(slot+1)*nc])
-	if s.c.NGramAt(li) {
-		// The n-gram block ran every row of the chunk before the delta rule
-		// steps the first: its tail is the chunk's last row's by now, and
-		// snapTail took each row's as the block ran it.
-		ns = g.deltaStateLen()
-	}
 	copy(sn.state[li][:ns], s.rstate[li][slot*g.stateStride():slot*g.stateStride()+ns])
-}
-
-// snapTail copies v into the snapshot after row `row` of the step's chunk
-// that begins at ngBase, at off into block li's recurrent tail: the n-gram
-// block's predecessors (off 0) and convolution history, as each row moves
-// them on (ngramRows, ngramApply).
-func (r *rowsOut) snapTail(s *Instance, li, row, off int, v []float32) {
-	if r == nil {
-		return
-	}
-	row += r.ngBase
-	if row >= len(r.snap) || r.snap[row].state == nil || r.snap[row].state[li] == nil {
-		return
-	}
-	copy(r.snap[row].state[li][s.dg.deltaStateLen()+off:], v)
 }
 
 // tapStreams copies the residual of the wanted rows among n rows of a chunk
@@ -514,18 +492,7 @@ func (s *Instance) copyRec(sn *recSnap, save bool) {
 			continue
 		}
 		if s.devAt(li) {
-			// The device rewinds its block's state, the n-gram block's
-			// convolution history with it; the predecessors the n-gram rows
-			// are hashed from stay the host's whichever side runs the block
-			// (ngramToDevice), so they are saved and restored here.
-			if s.c.NGramAt(li) {
-				prev, _ := s.ngramState(li, 0)
-				if save {
-					copy(sn.state[li][g.deltaStateLen():], prev)
-				} else {
-					copy(prev, sn.state[li][g.deltaStateLen():])
-				}
-			}
+			// The device rewinds its block's state (nn.RecRewinder).
 			continue
 		}
 		if save {

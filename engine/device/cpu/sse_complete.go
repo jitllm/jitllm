@@ -110,8 +110,6 @@ func sseProbes() []sseProbe {
 		{"RoPE", func(em *Emitters) error { _, err := em.RoPE(64, 64, true); return err }},
 		{"RoPESplit", func(em *Emitters) error { _, err := em.RoPESplit(64, 64); return err }},
 		{"RopeTable", func(em *Emitters) error { _, err := em.RopeTable(32); return err }},
-		{"NGramHash", func(em *Emitters) error { _, err := em.NGramHash(3, 8, true); return err }},
-		{"RowIQ4NL", func(em *Emitters) error { return probe0(em.RowIQ4NL) }},
 		{"PackedRow", func(em *Emitters) error {
 			q, _ := layout.QuantOf(quant.Q4_K)
 			_, err := em.PackedRow(q)

@@ -97,13 +97,6 @@ type Emitters struct {
 	// Not optional: there is no other way to build the table, so every tier
 	// generates it.
 	RopeTable func(npairs int) ([]byte, error)
-	// NGramHash is Qwen3.8-Flash-Next's n-gram table rows for a position,
-	// integer code one emitter serves on both amd64 tiers (ngram_const.go has
-	// the contract).
-	NGramHash func(n, per int, reset bool) ([]byte, error)
-	// RowIQ4NL widens IQ4_NL blocks to floats: the n-gram table's rows
-	// (iq4nl_x86.go has the contract).
-	RowIQ4NL func() ([]byte, error)
 
 	// ---- family 3: attention (attn.go). All six non-tiled kernels are
 	// mandatory: nn.AddAttn maps every one of them. ----
@@ -334,8 +327,6 @@ func primaryEmitters() Emitters {
 		Widen:     func(bf16 bool) ([]byte, error) { return must("widen", EmitWiden(bf16)) },
 		NarrowF16: func() ([]byte, error) { return must("narrow_f16", EmitNarrowF16()) },
 		RopeTable: EmitRopeTable,
-		NGramHash: EmitNGramHash,
-		RowIQ4NL:  func() ([]byte, error) { return must("row_iq4nl", EmitRowIQ4NL()) },
 
 		AttnScores:      EmitAttnScores,
 		AttnAcc:         EmitAttnAcc,
@@ -438,8 +429,6 @@ func sseEmitters() Emitters {
 		Widen:     EmitWidenSSE,
 		NarrowF16: EmitNarrowF16SSE,
 		RopeTable: EmitRopeTableSSE,
-		NGramHash: EmitNGramHashSSE,
-		RowIQ4NL:  EmitRowIQ4NLSSE,
 
 		AttnScores:      EmitAttnScoresSSE,
 		AttnAcc:         EmitAttnAccSSE,

@@ -45,7 +45,7 @@ func TestPrefixCacheRestoresQwen4Exp(t *testing.T) {
 				defer s.Close()
 				if gpux != nil {
 					s.SetDeviceLayers(gpux, -1)
-					if s.GPULayers() != m.Cfg.NLayer {
+					if s.GPULayers() != cardBlocks(m) {
 						t.Fatalf("placed %d of %d blocks: %v", s.GPULayers(), m.Cfg.NLayer, gpux.Err())
 					}
 				}

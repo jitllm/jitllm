@@ -348,10 +348,12 @@ type Instance struct {
 	roomToCPU int
 	// The lists a step this instance leads reuses (step.go): Step's runs, the
 	// rows' sessions and positions, the wanted rows' logits and the result.
-	stepRuns   []Run
-	stepSess   []nn.LayerDevice
-	stepPos    []int
-	stepTok    []int32
+	stepRuns []Run
+	stepSess []nn.LayerDevice
+	stepPos  []int
+	stepTok  []int32
+	// chunkTok is a prefill chunk's rows' tokens, -1 for a row naming none.
+	chunkTok   []int32
 	stepLogits []float32
 	stepRes    [][]float32
 	// A step across host sessions (stepHost) this instance leads: each row's
@@ -3223,16 +3225,10 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			}
 			s.layerInputs(s.ple)
 			s.tok1[0] = s.tok
-			// Qwen3.8-Flash-Next's n-gram rows, when the run holds its n-gram
-			// block (q4edev.go).
-			if err := s.ngramToDevice(li, hi, 1, nil, s.selfSlot0, s.tok1At); err != nil {
-				return nil, err
-			}
 			if !s.ld.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), fold) {
 				if err := s.refusal(li); err != nil {
 					return nil, err
 				}
-				s.ngramUndoRows()
 				// A fault demotes everything and restarts the token on the
 				// CPU device from the embeddings (Layers may have written part
 				// of the residual), unless SetDeviceFallback(false) asked for
@@ -3297,12 +3293,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}
 		l := &m.layers[li]
 		s.fuseRun()
-		if c.NGramAt(li) {
-			s.tok1[0] = s.tok
-			if err := s.ngramForCPU(li, 1, nil, s.selfSlot0, s.tok1At); err != nil {
-				return nil, err
-			}
-		}
 		why, err := s.cpuStep(li, l, s.cs)
 		if err != nil {
 			return nil, err
@@ -3570,7 +3560,6 @@ func (s *Instance) setLD(ld nn.LayerDevice) {
 	s.ldRows, _ = ld.(nn.RowsDevice)
 	s.ldInputs, _ = ld.(nn.LayerInputDevice)
 	s.ldPrompt, _ = ld.(nn.PromptDevice)
-	s.ldNGram, _ = ld.(nn.NGramDevice)
 	s.ldMarks, _ = ld.(nn.RopeMarksDevice)
 	s.rmarks.sent = s.rmarks.sent[:0]
 	s.sendMarks()

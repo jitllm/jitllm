@@ -105,12 +105,6 @@ func emitterCalls() []emitterCall {
 		add("rope_table/"+shapeName(np), func(em *Emitters) ([]byte, error) { return em.RopeTable(np) },
 			func() ([]byte, error) { return EmitRopeTable(np) })
 	}
-	add("row_iq4nl", func(em *Emitters) ([]byte, error) { return em.RowIQ4NL() }, emitted(EmitRowIQ4NL()))
-	for _, rs := range []bool{false, true} {
-		add("ngramhash/3x8"+map[bool]string{false: "/noreset"}[rs],
-			func(em *Emitters) ([]byte, error) { return em.NGramHash(3, 8, rs) },
-			func() ([]byte, error) { return EmitNGramHash(3, 8, rs) })
-	}
 	// The image path's kernels (imgproc_const.go).
 	for _, prec := range []int{13, 22} {
 		add("resample/"+shapeName(prec), func(em *Emitters) ([]byte, error) { return em.Resample(prec) },

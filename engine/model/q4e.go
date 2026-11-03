@@ -282,26 +282,7 @@ func loadQ4EHead(m *Model, cfg *Config, f *jlm.File,
 // call so a warm decode token and a warm step allocate nothing.
 type q4eScratch struct {
 	rows int
-	ng   *ngramScratch
 	qsa  *qsaScratch
-	// rid is each row's token id for the n-gram block, -1 for a row with
-	// none (q4eRowIDs).
-	rid []int32
-	// callState, callSlot and callIDs are a device call's rows (setCall).
-	callState *Instance
-	callSlot  int
-	callIDs   []int32
-	callSeq   []int
-	callPos   []int
-	callSlots []int
-}
-
-// q4eRowIDs records each of n rows' token ids for the n-gram block.
-func (s *Instance) q4eRowIDs(n int, id func(i int) int32) {
-	s.growQ4E(n)
-	for i := 0; i < n; i++ {
-		s.q4.rid[i] = id(i)
-	}
 }
 
 // allocQ4E sizes a instance's buffers for one row, and its streams.
@@ -311,7 +292,6 @@ func (s *Instance) allocQ4E() {
 		return
 	}
 	s.q4 = &q4eScratch{}
-	s.allocNGram()
 	s.allocQSA()
 	s.growQ4E(1)
 }
@@ -323,8 +303,6 @@ func (s *Instance) growQ4E(n int) {
 		return
 	}
 	g.rows = n
-	g.rid = make([]int32, n)
-	s.growNGram(n)
 	s.growQSARows(n)
 }
 

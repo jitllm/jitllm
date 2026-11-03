@@ -2896,11 +2896,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	al(&bs.roff, rows*4)
 	al(&bs.zero, 4)
-	// The n-gram block's gathered rows, its side input (SetNGramRows), or
-	// the per-layer inputs.
-	if q := p.Q4E; p.PLEDim == 0 && q != nil && q.NGramWidth != 0 {
-		al(&bs.pleIn, rows*q.NGramWidth*4)
-	}
+	// The per-layer inputs.
 	if p.PLEDim != 0 {
 		al(&bs.pleIn, rows*p.PLEWidth*4)
 	}
@@ -4882,10 +4878,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	if bs.rowPos != nil {
 		w(bs.rowPos, g.rowPosWords(pos, nrow, R, rag))
 	}
-	switch q := p.Q4E; {
-	case bs.pleIn != nil && p.PLEDim == 0 && q != nil && q.NGramWidth != 0:
-		w(bs.pleIn, f32b(g.sideRows(g.ngHost, R*q.NGramWidth)))
-	case bs.pleIn != nil && !(embedSrv && g.bs.embStreams() > 1):
+	if bs.pleIn != nil && !(embedSrv && g.bs.embStreams() > 1) {
 		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
 	}
 	switch {

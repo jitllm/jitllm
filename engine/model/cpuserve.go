@@ -137,6 +137,8 @@ type cpuArg struct {
 	moves bool
 	// inst is a rotary table's instance (cpuArgRope, cpuArgPlanes).
 	inst int
+	// from is the first stored row a weight binds (graph.Binding.From).
+	from int
 }
 
 // cpuCode is one kernel of a form, mapped, and its call words; reads and
@@ -231,6 +233,12 @@ type cpuBlockForm struct {
 	// read by the codes wreads.
 	split, sel, selN, wsel int
 	wreads                 []int
+	// toks says a code reads the rows' tokens (cpuArgTokens).
+	toks bool
+	// A form gathering the n-gram table's rows likewise runs to rowSplit,
+	// its first code that reads the table, then reads in the rows the own
+	// buffer rowSel names, rowN a call's row, before the rest (cpuForm).
+	rowSplit, rowSel, rowN int
 }
 
 // ownUse is a code's use of an own buffer, by their indices.
@@ -276,8 +284,10 @@ type cpuState struct {
 	fpages []uint32
 	rows   [4]uint32
 	zero   []uint32
-	// tok1 is a decode's token.
-	tok1 [1]uint32
+	// tok1 is a decode's token, tokTab a call's rows' (all ones for a row
+	// naming none).
+	tok1   [1]uint32
+	tokTab []uint32
 	// oneFresh and tabsFresh say the decode row's and the step's rows'
 	// rotary tables are made (cpuOneTable, cpuRowTables); tabSeq is the
 	// rows' slots as the tables read them.
@@ -316,6 +326,9 @@ type cpuState struct {
 	// pages, by bank (gate, up, down) and plane (jlm.File.BankView), set at
 	// the block's composition.
 	banks [][3][3]unsafe.Pointer
+	// ngView is the n-gram table's rows where this device reads them, made
+	// at the composition of the block that gathers them.
+	ngView *jlm.RowView
 	// xpad is a call's residual rows where its kernels' units reach past
 	// them (cpuBlockForm.unit).
 	xpad []float32
@@ -605,7 +618,7 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (composer.Decline, er
 // row i at position pos[i] of sequence seq[i], its rotary table the i-th of
 // cs, or says why not: through the rows' form, a call of at most its
 // capacity at a time, each row's history in its own sequence's pages.
-func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int) (composer.Decline, error) {
+func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, tok []int32) (composer.Decline, error) {
 	if err := s.cpuRowTables(seq, pos); err != nil {
 		return composer.DeclineServes, err
 	}
@@ -617,7 +630,7 @@ func (s *Instance) cpuRows(li int, l *layer, x, cs, csSWA []float32, seq, pos []
 		return why, nil
 	}
 	side, _ := s.cpuSideRows(li)
-	return composer.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), s.bcsSWA, s.c.NRotSWA, seq, pos)
+	return composer.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), s.bcsSWA, s.c.NRotSWA, seq, pos, tok)
 }
 
 // swaRows is the step's second rotary table from row a, nil where the model
@@ -653,7 +666,7 @@ func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32
 		s.bidir = runs
 	}
 	seq, pos := s.cpuRowsOf(0, 0, n)
-	err := s.cpuRowsRun(li, l, f, x, n*s.c.NEmbd, nil, cs, nrot, swa, nswa, seq, pos)
+	err := s.cpuRowsRun(li, l, f, x, n*s.c.NEmbd, nil, cs, nrot, swa, nswa, seq, pos, nil)
 	s.bidir, s.cpu.runWindows = nil, false
 	return composer.DeclineServes, err
 }
@@ -666,7 +679,7 @@ func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32
 // session's consecutive rows run one after another, the rows after the
 // logit rows first, so a session's last row reads the keys its earlier
 // rows wrote.
-func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, nlogit int) (composer.Decline, error) {
+func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, pos []int, tok []int32, nlogit int) (composer.Decline, error) {
 	if err := s.cpuRowTables(seq, pos); err != nil {
 		return composer.DeclineServes, err
 	}
@@ -687,20 +700,20 @@ func (s *Instance) cpuSessions(li int, l *layer, x, cs, csSWA []float32, seq, po
 			oi.Session = lead
 		}
 	}
-	why, err := s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, n, false)
+	why, err := s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, tok, 0, n, false)
 	if why != composer.DeclineServes || err != nil {
 		return why, err
 	}
-	if why, err = s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, nlogit, n, true); err != nil {
+	if why, err = s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, tok, nlogit, n, true); err != nil {
 		return why, err
 	}
-	return s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, 0, nlogit, true)
+	return s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, tok, 0, nlogit, true)
 }
 
 // cpuOwnerRuns makes ready (run unset) or runs block li over the rows
 // [lo, hi) of a step across sessions, a run of one session's consecutive
 // rows at a time, on that session's form.
-func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, lo, hi int, run bool) (composer.Decline, error) {
+func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq, pos []int, tok []int32, lo, hi int, run bool) (composer.Decline, error) {
 	d := s.c.NEmbd
 	rside, pw := s.cpuSideRows(li)
 	for a := lo; a < hi; {
@@ -728,7 +741,7 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 			if pw != 0 && rside != nil {
 				side = rside[a*pw:]
 			}
-			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.NRotSWA, seq[a:b], pos[a:b]); err != nil {
+			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.NRotSWA, seq[a:b], pos[a:b], rowsOf(tok, a, b)); err != nil {
 				oi.Session = lead
 				return composer.DeclineServes, err
 			}
@@ -752,7 +765,7 @@ func (s *Instance) cpuOwnerRuns(li int, l *layer, x, cs []float32, nrot int, seq
 // base -1 for none) keep each row's summary as main's row loop does: the
 // speculative rows' snapshot, which takes the row at a time, and the
 // restore points, where the rows' form ends a call.
-func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []int, base, p0 int) (composer.Decline, error) {
+func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos []int, tok []int32, order []int, base, p0 int) (composer.Decline, error) {
 	if err := s.cpuRowTables(seq, pos); err != nil {
 		return composer.DeclineServes, err
 	}
@@ -761,7 +774,7 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 		return why, nil
 	}
 	if f := s.cpuRecWhole(li, l, cb, seq, pos, order, base); f != nil {
-		why, err := s.cpuRecRun(li, l, f, x, cs, seq, pos, base, p0)
+		why, err := s.cpuRecRun(li, l, f, x, cs, seq, pos, tok, base, p0)
 		if why == composer.DeclineServes && err == nil {
 			s.cpu.recWhole++
 		}
@@ -801,6 +814,13 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order
 		}
 		*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1, kv: pg,
 			pages: pg.table(max(s.nseq, 1)), recLi: s.cpuRecLi(li), recOf: o}
+		if tok != nil {
+			s.cpu.tok1[0] = uint32(tok[r])
+			b.tok = s.cpu.tok1[:]
+		} else if cb.f.toks {
+			s.Session = lead
+			return composer.DeclineServes, fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
+		}
 		if rside, pw := s.cpuSideRows(li); pw != 0 && rside != nil {
 			b.side = rside[r*pw+cb.sideOff:]
 		}
@@ -865,7 +885,7 @@ func (s *Instance) cpuRecWhole(li int, l *layer, cb *cpuBlock, seq, pos, order [
 // call at most f's rows; a prompt's (base its first row in the prompt, p0
 // its first position) end a call at each restore point inside them and seal
 // it there.
-func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, seq, pos []int, base, p0 int) (composer.Decline, error) {
+func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, seq, pos []int, tok []int32, base, p0 int) (composer.Decline, error) {
 	if why := s.cpuRowsReady(li, f, pos); why != composer.DeclineServes {
 		return why, nil
 	}
@@ -889,7 +909,7 @@ func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32,
 		if pw != 0 && side != nil {
 			side = side[a*pw:]
 		}
-		if err := s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.NRotSWA, seq[a:b], pos[a:b]); err != nil {
+		if err := s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.NRotSWA, seq[a:b], pos[a:b], rowsOf(tok, a, b)); err != nil {
 			return composer.DeclineServes, err
 		}
 		if base >= 0 {
@@ -898,6 +918,14 @@ func (s *Instance) cpuRecRun(li int, l *layer, f *cpuBlockForm, x, cs []float32,
 		a = b
 	}
 	return composer.DeclineServes, nil
+}
+
+// rowsOf is rows [a, b) of a step's rows' tokens, nil for a step of none.
+func rowsOf(tok []int32, a, b int) []int32 {
+	if tok == nil {
+		return nil
+	}
+	return tok[a:b]
 }
 
 // cpuRecDesc is the run descriptor (composer.RunDescWords' layout) of a
@@ -1021,7 +1049,7 @@ func (s *Instance) cpuFaultTable(pg *kvPages, end int) []uint32 {
 // (keysEnd) first run over every row, each reading only the keys before
 // it, so that every call's rows then read all of them. Where those codes
 // write the residual too they run over a copy of it.
-func (s *Instance) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int) error {
+func (s *Instance) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int, tok []int32) error {
 	runs := s.runsAt(li) && s.bidirIn(pos[0], len(pos))
 	if runs && len(pos) > f.rows {
 		keys := f.keysEnd
@@ -1029,15 +1057,15 @@ func (s *Instance) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x []float32, st
 			keys = 0
 		}
 		s.cpu.stashing = stashSave
-		err := s.cpuRowsCalls(li, l, f, 0, keys, x, stride, side, cs, nrot, swa, nswa, seq, pos, true)
+		err := s.cpuRowsCalls(li, l, f, 0, keys, x, stride, side, cs, nrot, swa, nswa, seq, pos, tok, true)
 		s.cpu.stashing = stashLoad
 		if err == nil {
-			err = s.cpuRowsCalls(li, l, f, keys, len(f.codes), x, stride, side, cs, nrot, swa, nswa, seq, pos, true)
+			err = s.cpuRowsCalls(li, l, f, keys, len(f.codes), x, stride, side, cs, nrot, swa, nswa, seq, pos, tok, true)
 		}
 		s.cpu.stashing = stashNone
 		return err
 	}
-	return s.cpuRowsCalls(li, l, f, 0, len(f.codes), x, stride, side, cs, nrot, swa, nswa, seq, pos, runs)
+	return s.cpuRowsCalls(li, l, f, 0, len(f.codes), x, stride, side, cs, nrot, swa, nswa, seq, pos, tok, runs)
 }
 
 // cpuStash saves (stashSave) or restores (stashLoad) call c's values form
@@ -1067,8 +1095,11 @@ func (s *Instance) cpuStash(f *cpuBlockForm, own [][]uint32, c int) {
 // rows' per-layer inputs, nil for a model of none. A form over banks
 // (cpuBlockForm.split) holds the experts each call's rows pick, from its
 // selection to the call's end (cpuExperts).
-func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int, runs bool) error {
+func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int, tok []int32, runs bool) error {
 	n := len(pos)
+	if f.toks && tok == nil {
+		return fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
+	}
 	pg := &s.kv.layers[s.c.KVSource(li)]
 	d, ns := s.c.NEmbd, s.c.Streams()
 	_, pw := s.cpuSideRows(li)
@@ -1133,6 +1164,15 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 			s.cpu.posTab[1+i] = uint32(pos[r0+min(i, k-1)])
 		}
 		b.pos = s.cpu.posTab
+		if tok != nil {
+			if len(s.cpu.tokTab) < f.rows {
+				s.cpu.tokTab = make([]uint32, f.rows)
+			}
+			for i := range f.rows {
+				s.cpu.tokTab[i] = uint32(tok[r0+min(i, k-1)])
+			}
+			b.tok = s.cpu.tokTab
+		}
 		if f.rec {
 			b.recLi, b.recOf, b.rec = s.cpuRecLi(li), s.Session, s.cpuRecDesc(seq[r0:r0+k])
 			if n := len(s.rconv[b.recLi]); len(s.cpu.convOut) < n {
@@ -1144,9 +1184,16 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 			s.cpuStash(f, b.own, r0/f.rows)
 		}
 		for i := lo; i < hi; i++ {
+			if i == f.rowSplit && f.rowSplit > 0 {
+				if err := s.cpu.ngView.Ensure(b.own[f.rowSel][:k*f.rowN]); err != nil {
+					s.cpu.ngView.Drop()
+					return err
+				}
+			}
 			if i == f.split && f.split > 0 {
 				if err := s.cpuExperts(b, f, li, k); err != nil {
 					s.expHold.release()
+					s.dropRows(f)
 					return err
 				}
 			}
@@ -1161,6 +1208,7 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 			s.cpuCall(b, &f.codes[i])
 		}
 		s.expHold.release()
+		s.dropRows(f)
 		if f.rec {
 			// The runs' windows over their slots.
 			L := s.dg.convStateLen()
@@ -1241,6 +1289,13 @@ func (s *Instance) cpuWeights(f *cpuBlockForm, li int, l *layer) composer.Declin
 					}
 					continue
 				}
+				if a.role == jlm.RoleNGramTable {
+					// A row table is read in its view (cpuForm reads the rows in).
+					if s.cpu.ngView == nil {
+						return composer.DeclineNoWeight
+					}
+					continue
+				}
 				w := s.cpuRoleWeight(li, l, a.role)
 				if w == nil || w.packed == nil && len(w.data) == 0 {
 					return composer.DeclineNoWeight
@@ -1292,12 +1347,17 @@ func (s *Instance) ownWords(n int) []uint32 {
 	return make([]uint32, n)
 }
 
-// unmapOwn returns the own buffers held off the heap.
+// unmapOwn returns the own buffers and the n-gram table's view held off
+// the heap.
 func (s *Instance) unmapOwn() {
 	for _, m := range s.cpu.mapped {
 		offheap.UnmapOffHeap(m)
 	}
 	s.cpu.mapped, s.cpu.own = nil, nil
+	if s.cpu.ngView != nil {
+		s.cpu.ngView.Close()
+		s.cpu.ngView = nil
+	}
 }
 
 // cpuCall runs one kernel of a block: once, or over its calls on the pool.
@@ -1404,6 +1464,10 @@ func (s *Instance) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 		case cpuArgWeight:
 			if jlm.ExpertBank(ar.role) {
 				p = s.cpu.banks[b.li][ar.role-jlm.RoleExpGateBank][ar.region]
+				break
+			}
+			if ar.role == jlm.RoleNGramTable {
+				p = unsafe.Add(s.cpu.ngView.Base(), ar.from*s.m.ngram.rowBytes)
 				break
 			}
 			w := s.cpuRoleWeight(b.li, b.l, ar.role)
@@ -1699,9 +1763,6 @@ func sideAtBinding(gr *graph.Graph) int {
 // gathered rows (ngramForCPU), the row's per-layer inputs on a model of
 // them, nil where the block has none.
 func (s *Instance) cpuSide(li int) []float32 {
-	if s.c.NGramAt(li) && s.q4 != nil && s.q4.ng != nil {
-		return s.q4.ng.emb
-	}
 	if s.c.PLEDim == 0 {
 		return nil
 	}
@@ -1710,9 +1771,6 @@ func (s *Instance) cpuSide(li int) []float32 {
 
 // cpuSideRows is cpuSide over a call's rows, and its width a row.
 func (s *Instance) cpuSideRows(li int) ([]float32, int) {
-	if s.c.NGramAt(li) && s.q4 != nil && s.q4.ng != nil {
-		return s.q4.ng.emb, s.c.NGramWidth()
-	}
 	return s.bple, s.c.pleWidth()
 }
 
@@ -1761,11 +1819,20 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpuB
 	gr := *g
 	gr.Block = 0
 	cb.sideOff = sideAtBinding(&gr)
+	if s.cpu.ngView == nil && m.ngram != nil && tableRowsOf(&gr) >= 0 {
+		v, err := m.ngram.f.NewRowView(m.ngram.e)
+		if err != nil {
+			return nil, err
+		}
+		s.cpu.ngView = v
+	}
 	formats := map[jlm.Role]jlm.Type{}
 	f := m.Composing()
 	for _, o := range g.Ops {
 		for _, w := range o.Weight {
-			if e, ok := f.Find(w.Role, int32(li), -1); ok {
+			if e, ok := f.Find(w.Role, jlm.DenseBlock, -1); ok && jlm.RowTable(e) {
+				formats[w.Role] = e.Type
+			} else if e, ok := f.Find(w.Role, int32(li), -1); ok {
 				formats[w.Role] = e.Type
 				// A table the block lays out as float32 at load is read so.
 				if t := s.cpuRoleWeight(li, &m.layers[li], w.Role); w.Rows > 0 && t != nil && t.e == nil && t.typ == quant.F32 {
@@ -1866,8 +1933,8 @@ func buildCPUForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole
 	if apart && len(gr.In)+len(gr.Out) > cpuIO {
 		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), cpuIO)
 	}
-	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows, sel: -1, wsel: -1, rec: stepsState(gr)}
-	selV, wsV := selOf(gr), weightsOf(gr)
+	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows, sel: -1, wsel: -1, rowSel: -1, rec: stepsState(gr)}
+	selV, wsV, rowV := selOf(gr), weightsOf(gr), tableRowsOf(gr)
 	wOwn := map[graph.ValueID]int{}
 	var wrote, read []ownUse
 	// A kernel's constant block is its own: two kernels' blocks may share a
@@ -2021,6 +2088,8 @@ func buildCPUForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole
 				switch o.Value {
 				case selV:
 					f.sel = ar.i
+				case rowV:
+					f.rowSel = ar.i
 				default:
 					if slices.Contains(wsV, o.Value) {
 						wOwn[o.Value] = ar.i
@@ -2029,7 +2098,7 @@ func buildCPUForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole
 			case o.Kind == composer.OperandScratch:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, int(bytes[o]/4)+a.Offset+1, nil)
 			case o.Kind == composer.OperandWeight && o.Region >= 0 && o.Region < 3:
-				ar.src, ar.role, ar.region = cpuArgWeight, o.Role, uint8(o.Region)
+				ar.src, ar.role, ar.region, ar.from = cpuArgWeight, o.Role, uint8(o.Region), o.Instance
 			case o.Kind == composer.OperandVector:
 				ar.src, ar.role = cpuArgVector, o.Role
 			case o.Kind == composer.OperandTable:
@@ -2067,7 +2136,7 @@ func buildCPUForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole
 				case t == composer.TableRequest:
 					ar.src = cpuArgRequest
 				case t == composer.TableTokens:
-					ar.src = cpuArgTokens
+					ar.src, f.toks = cpuArgTokens, true
 				case t == composer.TablePos:
 					// A pooled readout reads its live count (cpuPoolState), any
 					// other graph its rows' positions (cpuBound.pos).
@@ -2161,6 +2230,10 @@ func buildCPUForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole
 		return nil, fmt.Errorf("the block reads its residual after writing its output over it")
 	}
 	if err := f.bankHalves(gr, rows); err != nil {
+		f.close()
+		return nil, err
+	}
+	if err := f.rowHalves(gr); err != nil {
 		f.close()
 		return nil, err
 	}
@@ -2294,6 +2367,9 @@ func (f *cpuBlockForm) shareOwn(wrote, read []ownUse) {
 	if f.sel >= 0 {
 		f.sel = slot[f.sel]
 	}
+	if f.rowSel >= 0 {
+		f.rowSel = slot[f.rowSel]
+	}
 	if f.wsel >= 0 {
 		f.wsel = slot[f.wsel]
 	}
@@ -2358,7 +2434,7 @@ func (f *cpuBlockForm) joinPhases() {
 		}
 		j := g + 1
 		if f.codes[g].joinable() {
-			for j < len(f.codes) && j != f.split && f.codes[j].joinable() && f.codes[j].chain == 0 && apart(f.codes[g:j], &f.codes[j]) {
+			for j < len(f.codes) && j != f.split && j != f.rowSplit && f.codes[j].joinable() && f.codes[j].chain == 0 && apart(f.codes[g:j], &f.codes[j]) {
 				j++
 			}
 		}
@@ -2406,7 +2482,7 @@ func oneAxis(calls []int) int {
 func (f *cpuBlockForm) chainPhases() {
 	for g := 0; g < len(f.codes); {
 		j := g + 1
-		for j < len(f.codes) && j != f.split && f.codes[j].joinable() && chained(f.codes[g:j+1]) {
+		for j < len(f.codes) && j != f.split && j != f.rowSplit && f.codes[j].joinable() && chained(f.codes[g:j+1]) {
 			j++
 		}
 		dep := false
@@ -2564,6 +2640,52 @@ func (f *cpuBlockForm) bankHalves(gr *graph.Graph, rows int) error {
 	return nil
 }
 
+// dropRows hands back the table's rows form f's call read in.
+func (s *Instance) dropRows(f *cpuBlockForm) {
+	if f.rowSplit > 0 {
+		s.cpu.ngView.Drop()
+	}
+}
+
+// tableRowsOf is the rows the n-gram table's gathers read, the hash's, -1
+// for a graph that gathers none.
+func tableRowsOf(gr *graph.Graph) graph.ValueID {
+	if !slices.ContainsFunc(gr.Ops, func(o graph.Op) bool {
+		return o.Kind == graph.OpEmbed && len(o.Weight) == 1 && o.Weight[0].Role == jlm.RoleNGramTable
+	}) {
+		return -1
+	}
+	for _, o := range gr.Ops {
+		if o.Kind == graph.OpNGramHash {
+			return o.Out[0]
+		}
+	}
+	return -1
+}
+
+// rowHalves finds where a form gathering the n-gram table's rows is cut:
+// at its first code that reads the table, the rows written by a code
+// before it.
+func (f *cpuBlockForm) rowHalves(gr *graph.Graph) error {
+	rv := tableRowsOf(gr)
+	if rv < 0 {
+		return nil
+	}
+	f.rowSplit = -1
+	for ci, c := range f.codes {
+		for _, a := range c.args {
+			if a.src == cpuArgWeight && a.role == jlm.RoleNGramTable && f.rowSplit < 0 {
+				f.rowSplit = ci
+			}
+		}
+	}
+	if f.rowSel < 0 || f.rowSplit <= 0 || f.split > 0 && f.split <= f.rowSplit {
+		return fmt.Errorf("a form gathering table rows with no rows of its own (%d), no code before its gathers (%d), or banks before them (%d)", f.rowSel, f.rowSplit, f.split)
+	}
+	f.rowN = gr.Values[rv].Width
+	return nil
+}
+
 // cpuBanksPaged says block li's routed banks are each one view of its
 // experts in the host's expert pages (jlm.File.BankView).
 func (s *Instance) cpuBanksPaged(li int) bool {
@@ -2623,11 +2745,22 @@ func (m *Model) bankTensor(li int, r jlm.Role) *tensor {
 // (ensureExperts), each read from the file where the budget evicted it --
 // and counted as the host's own mixture counts them.
 func (s *Instance) cpuForm(b *cpuBound, f *cpuBlockForm, li int) error {
+	lo := 0
+	if f.rowSplit > 0 {
+		// The table's rows the call's hash names, read in for its gathers and
+		// handed back after the call.
+		s.cpuCalls(b, f.codes[:f.rowSplit])
+		defer s.cpu.ngView.Drop()
+		if err := s.cpu.ngView.Ensure(b.own[f.rowSel][:b.n*f.rowN]); err != nil {
+			return err
+		}
+		lo = f.rowSplit
+	}
 	if f.split <= 0 {
-		s.cpuCalls(b, f.codes)
+		s.cpuCalls(b, f.codes[lo:])
 		return nil
 	}
-	s.cpuCalls(b, f.codes[:f.split])
+	s.cpuCalls(b, f.codes[lo:f.split])
 	err := s.cpuExperts(b, f, li, 1)
 	defer s.expHold.release()
 	if err != nil {

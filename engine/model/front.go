@@ -399,6 +399,13 @@ func (m *Model) inventory(block int32) (graph.Facts, bool) {
 		}
 		inv[e.Role] = s
 	}
+	// A row table is the model's, read by the block whose embedding gathers
+	// it (Config.NGramBlock).
+	if m.Cfg.NGramAt(int(block)) {
+		if e, ok := m.container.Find(jlm.RoleNGramTable, jlm.DenseBlock, -1); ok {
+			inv[e.Role] = graph.Shape{K: e.K(), Rows: e.Rows()}
+		}
+	}
 	if r := m.front.restate; r != nil {
 		r(block, inv)
 	}

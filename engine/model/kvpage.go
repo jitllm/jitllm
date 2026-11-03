@@ -895,30 +895,11 @@ func (s *Instance) migrateRec(li int, toDevice bool) bool {
 	return s.migrateRecLayer(li, toDevice)
 }
 
-// migrateRecLayer is LayerDevice.MigrateRec on block li's host arrays, with
-// the one part of a recurrent state the host keeps for itself:
-// Qwen3.8-Flash-Next's n-gram predecessors, which the host hashes whichever
-// side runs the block, so the device's copy of them is never the live one
-// and a migration to the CPU keeps the host's.
+// migrateRecLayer is LayerDevice.MigrateRec on block li's host arrays: the
+// whole recurrent state, the n-gram block's predecessors among it, moves
+// with the block.
 func (s *Instance) migrateRecLayer(li int, toDevice bool) bool {
-	if toDevice || !s.c.NGramAt(li) {
-		return s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], toDevice)
-	}
-	nseq := len(s.rstate[li]) / s.dg.stateStride()
-	np := s.c.NGram - 1
-	keep := make([]float32, nseq*np)
-	for slot := 0; slot < nseq; slot++ {
-		prev, _ := s.ngramState(li, slot)
-		copy(keep[slot*np:], prev)
-	}
-	if !s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], false) {
-		return false
-	}
-	for slot := 0; slot < nseq; slot++ {
-		prev, _ := s.ngramState(li, slot)
-		copy(prev, keep[slot*np:(slot+1)*np])
-	}
-	return true
+	return s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], toDevice)
 }
 
 // The paged read walk. Every attention read in model/ goes through these four,
