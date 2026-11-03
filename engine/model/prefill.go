@@ -67,19 +67,16 @@ func (s *Instance) prefillBidir(tokens []int32) ([]float32, error) {
 // Span is one run of a mixed prompt: token ids, a picture, or precomputed
 // embeddings -- one of them. Embd is n*NEmbd floats laid out row-major, and is
 // the residual stream rather than a vocabulary row -- EmbdScale is not applied
-// to it, for the reason ForwardEmbd's comment gives. A Picture is rows the
-// instance's vision segment encodes when the span is prefilled (picture.go), and
-// its Grid and Key are the span's.
+// to it, for the reason ForwardEmbd's comment gives.
 //
 // An Embd span may carry Tokens too, one per row: the ids its rows embed,
 // which are not looked up but read where a model reads the token past the
 // embedding -- DeepSeek V4's hash-routed blocks, which refuse a row without one
 // as its references cannot run it, and per-layer embeddings, which take token
-// 0's for such a row (ple.go). A picture's rows have no ids.
+// 0's for such a row (ple.go).
 type Span struct {
-	Tokens  []int32
-	Embd    []float32
-	Picture *Picture
+	Tokens []int32
+	Embd   []float32
 	// Bidir says the span's rows attend to each other in both directions
 	// rather than causally (Gemma 3's image tokens, which its reference masks
 	// so). The rows before and after it stay causal.
@@ -88,56 +85,34 @@ type Span struct {
 	// multi-axis rotary (mrope.go). It is required there and ignored by a
 	// model whose rotary is a plain index.
 	Grid ImageGrid
-	// Key names the picture an embedding span's rows came from (ImageKey), so
-	// the prefix cache can name the pages that hold them and every page after.
+	// Key names what an embedding span's rows came from (RowsKey), so the
+	// prefix cache can name the pages that hold them and every page after.
 	// nil leaves them unnamed, and nothing from them on is cached.
-	Key *ImageKey
-	// Deep is an embedding span's deepstack rows (Qwen3-VL), [taps][rows][NEmbd]:
-	// tap k adds into the span's rows after the text model's block k (deep.go).
-	// nil for every other span; a Picture span's are its tower's.
+	Key *RowsKey
+	// Deep is an embedding span's deepstack rows, [taps][rows][NEmbd]: tap k
+	// adds into the span's rows after the text model's block k (deep.go).
 	Deep []float32
 }
 
-// rows reports whether the span is rows rather than tokens: a picture or an
-// embedding run.
-func (sp Span) rows() bool { return sp.Embd != nil || sp.Picture != nil }
+// RowsKey names the content an embedding span's rows came from: a hash over
+// everything that decides them, known before they are computed, so the prefix
+// cache names their pages as it names tokens.
+type RowsKey [32]byte
+
+func (k RowsKey) zero() bool { return k == RowsKey{} }
+
+// rows reports whether the span is rows rather than tokens.
+func (sp Span) rows() bool { return sp.Embd != nil }
 
 func (sp Span) n(nEmbd int) int {
 	if sp.Embd != nil {
 		return len(sp.Embd) / nEmbd
 	}
-	if sp.Picture != nil {
-		return sp.Picture.Rows
-	}
 	return len(sp.Tokens)
 }
 
-// named is the spans with each picture's grid and name on its span, so the
-// rotary and the page keys read them before the picture is encoded.
-func named(spans []Span) []Span {
-	var out []Span
-	for i, sp := range spans {
-		if sp.Picture == nil || (!sp.Grid.zero() && sp.Key != nil) {
-			continue
-		}
-		if out == nil {
-			out = append([]Span(nil), spans...)
-		}
-		if sp.Grid.zero() {
-			out[i].Grid = sp.Picture.Grid
-		}
-		if sp.Key == nil {
-			out[i].Key = &sp.Picture.Key
-		}
-	}
-	if out == nil {
-		return spans
-	}
-	return out
-}
-
-// PrefillMixed prefills a prompt made of token runs, pictures and precomputed
-// embedding runs. It is the prefill half of the embedding seam; see
+// PrefillMixed prefills a prompt made of token runs and precomputed embedding
+// runs. It is the prefill half of the embedding seam; see
 // ForwardEmbd.
 func (s *Instance) PrefillMixed(spans ...Span) ([]float32, error) {
 	return s.prefillMixedAt(0, spans...)
@@ -146,10 +121,6 @@ func (s *Instance) PrefillMixed(spans ...Span) ([]float32, error) {
 // prefillMixedAt is PrefillMixed into one sequence slot.
 func (s *Instance) prefillMixedAt(slot int, spans ...Span) ([]float32, error) {
 	defer s.m.enterPager()()
-	spans, err := s.pictureRows(named(spans), 0)
-	if err != nil {
-		return nil, err
-	}
 	src, err := s.spanSrc(spans)
 	if err != nil {
 		return nil, err
@@ -256,9 +227,6 @@ func (s *Instance) spanSrc(spans []Span) ([]func(dst []float32) error, error) {
 	c := s.c
 	total := 0
 	for i, sp := range spans {
-		if sp.Picture != nil && sp.Tokens != nil {
-			return nil, fmt.Errorf("model: PrefillMixed: span %d carries both tokens and a picture", i)
-		}
 		if sp.Embd != nil && len(sp.Embd)%c.NEmbd != 0 {
 			return nil, fmt.Errorf("model: PrefillMixed: span %d is %d floats, not a multiple of n_embd %d",
 				i, len(sp.Embd), c.NEmbd)
@@ -282,18 +250,8 @@ func (s *Instance) spanSrc(spans []Span) ([]func(dst []float32) error, error) {
 	// Resolve position -> (span, row) once. A prompt is thousands of rows at
 	// most and this runs once per prefill, not per chunk.
 	src := make([]func(dst []float32) error, 0, total)
-	for i, sp := range spans {
+	for _, sp := range spans {
 		sp := sp
-		// A picture no row of the run reads (the prefix cache restored it
-		// whole, pictureRows): rows that fail if anything does read them.
-		if sp.Picture != nil && sp.Embd == nil {
-			for range sp.n(c.NEmbd) {
-				src = append(src, func([]float32) error {
-					return fmt.Errorf("model: span %d's picture was read before it was encoded", i)
-				})
-			}
-			continue
-		}
 		if sp.Embd != nil {
 			for i := 0; i < sp.n(c.NEmbd); i++ {
 				i := i
@@ -1096,11 +1054,7 @@ func (s *Instance) growBatch(chunk int) {
 	// Padded, so the ragged tail of a width that is not a whole number of
 	// vectors has somewhere legal to go and the generated activation serves
 	// every width (see Instance.actmul).
-	// An ungated vision MLP has no gate: every tower's but Qwen2.5-VL's and
-	// Pixtral's.
-	if s.vis == nil || s.vis.t.Cfg.Gated {
-		s.bgate = scratch(h.bgate, chunk*c.MaxNFFN(), ffnPad(chunk*c.MaxNFFN()))
-	}
+	s.bgate = scratch(h.bgate, chunk*c.MaxNFFN(), ffnPad(chunk*c.MaxNFFN()))
 	s.bup = scratch(h.bup, chunk*c.MaxNFFN(), ffnPad(chunk*c.MaxNFFN()))
 	if c.Parallel || c.SSDAttn() {
 		s.bhf = scratch(h.bhf, chunk*c.NEmbd, 0)
@@ -1112,12 +1066,8 @@ func (s *Instance) growBatch(chunk int) {
 		s.qgate = scratch(h.qgate, chunk*2*qDim, 0)
 		s.ogate = scratch(h.ogate, chunk*qDim, 0)
 	}
-	// A vision segment's rows attend through visAttend, which reads the
-	// queries in place; the staging is the text attention's.
-	if s.vis == nil {
-		s.bqf = scratch(h.bqf, chunk*qDim, 0)
-		s.bxbf = scratch(h.bxbf, chunk*qDim, 0)
-	}
+	s.bqf = scratch(h.bqf, chunk*qDim, 0)
+	s.bxbf = scratch(h.bxbf, chunk*qDim, 0)
 	s.growMLABatch(chunk)
 	s.growMSARows(chunk)
 }
@@ -1152,12 +1102,7 @@ func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) er
 	}
 	l := &m.layers[li]
 	why := composer.DeclineBidir
-	if s.vis != nil {
-		var err error
-		if why, err = s.cpuTowerRows(li, l, n); err != nil {
-			return err
-		}
-	} else if !bidir || !c.LayerKind(li).Recurrent() {
+	if !bidir || !c.LayerKind(li).Recurrent() {
 		// A non-causal decoder's chunk (an embedding run's) is one run
 		// of rows attending both ways; a symmetric window its graph
 		// states clips it per row (graph.Attrs.Bidir).

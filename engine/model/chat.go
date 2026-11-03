@@ -16,10 +16,8 @@ import (
 type ChatMessage struct {
 	Role    string
 	Content string
-	// Images is how many pictures this turn carries, placed before Content --
-	// the order every VLM template here was trained with. Only ChatSpans can
-	// render a message with Images > 0; ChatIDs refuses one, because the
-	// placeholder text it would tokenize is not the image.
+	// Images is how many pictures this turn carries, placed before Content.
+	// No model renders one until a tower runs: the render refuses it.
 	Images int
 	// ToolCalls are the calls an assistant turn made (see tools.go).
 	ToolCalls []ToolCall
@@ -77,11 +75,7 @@ func (m *Model) ChatPromptTools(msgs []ChatMessage, tools []byte, addGenerationP
 // handed to a template that reads it (Kimi-K3's tells the model it MUST
 // call). The zero ToolChoice passes none.
 func (m *Model) ChatPromptToolChoice(msgs []ChatMessage, tools []byte, choice ToolChoice, addGenerationPrompt bool) (string, error) {
-	var mk imageMarkers
-	if tw := m.Tower(); tw != nil {
-		mk = imageMarkersOf[tw.Cfg.Projector]
-	}
-	return m.renderChat(msgs, tools, choice, addGenerationPrompt, mk)
+	return m.renderChat(msgs, tools, choice, addGenerationPrompt)
 }
 
 // chatTemplateFor picks the template a request renders with, as transformers'
@@ -133,9 +127,8 @@ func pickChatTemplate(ts []jlm.ChatTemplate, tools bool) (string, error) {
 		"none named default", strings.Join(names, ", "))
 }
 
-// renderChat is ChatPrompt with the text a string-content template gets in
-// place of each image.
-func (m *Model) renderChat(msgs []ChatMessage, tools []byte, choice ToolChoice, addGenerationPrompt bool, mk imageMarkers) (string, error) {
+// renderChat is ChatPrompt through the template a request picks.
+func (m *Model) renderChat(msgs []ChatMessage, tools []byte, choice ToolChoice, addGenerationPrompt bool) (string, error) {
 	src, err := m.chatTemplateFor(len(tools) > 0)
 	if err != nil {
 		return "", err
@@ -145,7 +138,7 @@ func (m *Model) renderChat(msgs []ChatMessage, tools []byte, choice ToolChoice, 
 		return "", err
 	}
 	bos, eos := m.specialText()
-	return renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt, mk)
+	return renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt)
 }
 
 // compiledTemplate is src compiled, once per model: a compiled template is
@@ -167,19 +160,19 @@ func (m *Model) compiledTemplate(src string) (*jinja.Template, error) {
 // carries none -- Command-R's tool_use and rag templates read the difference),
 // add_generation_prompt, the special tokens, and strftime_now when clock is set.
 func renderChatTemplate(src, bos, eos string, clock func() time.Time, msgs []ChatMessage, tools []byte,
-	addGenerationPrompt bool, mk imageMarkers) (string, error) {
+	addGenerationPrompt bool) (string, error) {
 	tpl, err := jinja.Compile(src)
 	if err != nil {
 		return "", fmt.Errorf("model: chat template (%d bytes): %w", len(src), err)
 	}
-	return renderCompiled(tpl, src, bos, eos, clock, msgs, tools, ToolChoice{}, addGenerationPrompt, mk)
+	return renderCompiled(tpl, src, bos, eos, clock, msgs, tools, ToolChoice{}, addGenerationPrompt)
 }
 
 // renderCompiled is renderChatTemplate over src already compiled, with the
 // request's tool_choice in the context when it gives one.
 func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time.Time, msgs []ChatMessage,
-	tools []byte, choice ToolChoice, addGenerationPrompt bool, mk imageMarkers) (string, error) {
-	ph := mk.placeholder
+	tools []byte, choice ToolChoice, addGenerationPrompt bool) (string, error) {
+	ph := ""
 	ctx := map[string]any{
 		"tools":                 nil,
 		"documents":             nil,
@@ -218,7 +211,7 @@ func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 				return nil, fmt.Errorf("model: message %d carries %d image(s) and this model has "+
 					"no vision tower", i, x.Images)
 			}
-			mm := map[string]any{"role": x.Role, "content": contentValue(x.Content, x.Images, ph, mk.sep(), parts)}
+			mm := map[string]any{"role": x.Role, "content": contentValue(x.Content, x.Images, ph, "", parts)}
 			if err := toolFields(mm, x, stringArgs); err != nil {
 				return nil, fmt.Errorf("model: message %d: %w", i, err)
 			}
@@ -391,312 +384,6 @@ func contentValue(text string, images int, ph, sep string, parts bool) any {
 		out = append(out, map[string]any{"type": "image"})
 	}
 	return append(out, map[string]any{"type": "text", "text": text})
-}
-
-// imageMarkers is how one projector family wraps an image in the token stream.
-type imageMarkers struct {
-	// placeholder is what the model's chat template writes for one image part
-	// -- and what a string-content template is handed in its place.
-	placeholder string
-	// pre and post are vocabulary pieces around the embeddings, looked up by
-	// piece and never encoded.
-	pre, post []string
-	// preText and postText are TEXT around the embeddings, encoded with the
-	// prompt segment beside them -- the reference processor expands its
-	// placeholder into a string and tokenizes the whole, so a newline it adds
-	// may merge with the template's own (gemma3's "\n\n" after "user\n").
-	preText, postText string
-	// bidir says the image's rows attend to each other in both directions in
-	// the text model (Span.Bidir): gemma3's reference masks them so.
-	bidir bool
-	// bidirSWA says the rows are such a run only on a text model whose
-	// sliding layers see an image both ways (Config.BidirSWA): Gemma 4.
-	bidirSWA bool
-	// inline says a string-content template gets the placeholder directly
-	// before the text, with no newline between: gemma3's template trims the
-	// text of a typed part and writes the placeholder flush against it, and
-	// it reads a string as readily as parts.
-	inline bool
-}
-
-// sep is what follows each placeholder in a string-content template.
-func (mk imageMarkers) sep() string {
-	if mk.inline {
-		return ""
-	}
-	return "\n"
-}
-
-// imageMarkersOf is keyed by TowerConfig.Projector.
-//
-// The text model was trained with the embeddings wrapped in specific tokens,
-// and getting them wrong does not fault, it just answers wrongly. Each entry
-// is read off the artefact:
-//
-//   - idefics3 (SmolVLM): the template writes "<image>"; mtmd's
-//     tok_ov_img_start is "\n\n" <fake_token_around_image> <global-img> and its
-//     end is <fake_token_around_image>. The pieces are looked up, as mtmd's
-//     lookup_token does: BPE-encoding "\n\n" after "User:" need not reach the
-//     same split.
-//   - qwen2vl_merger: the template writes
-//     <|vision_start|><|image_pad|><|vision_end|>, and <|image_pad|> is where
-//     the embeddings go -- the span IS the padding, so it is not emitted.
-//   - mlp (llava): no wrapping at all; the embeddings stand where "<image>"
-//     stood, and llava-phi-3's template reads a string.
-//   - gemma3: the template writes "<start_of_image>", and Gemma3Processor
-//     expands it to "\n\n<start_of_image>" + 256 soft tokens +
-//     "<end_of_image>\n\n"; the soft tokens are where the embeddings go, and
-//     they attend to each other bidirectionally (its token_type_ids mask).
-//   - internvl: the template (InternVL's own, and a string template given the
-//     placeholder) writes "<IMG_CONTEXT>"; InternVLProcessor expands it to
-//     "<img>" + 256 per tile + "</img>", every tile in one span.
-//
-// A missing piece is an error, never skipped: a model given no markers still
-// answers plausibly, so nothing else would report it.
-var imageMarkersOf = map[string]imageMarkers{
-	jlm.ProjIdefics3.String(): {placeholder: "<image>",
-		pre:  []string{"\n\n", "<fake_token_around_image>", "<global-img>"},
-		post: []string{"<fake_token_around_image>"}},
-	jlm.ProjQwen2VL.String(): {placeholder: "<|vision_start|><|image_pad|><|vision_end|>",
-		pre: []string{"<|vision_start|>"}, post: []string{"<|vision_end|>"}},
-	jlm.ProjQwen25VL.String(): {placeholder: "<|vision_start|><|image_pad|><|vision_end|>",
-		pre: []string{"<|vision_start|>"}, post: []string{"<|vision_end|>"}},
-	jlm.ProjQwen3VL.String(): {placeholder: "<|vision_start|><|image_pad|><|vision_end|>",
-		pre: []string{"<|vision_start|>"}, post: []string{"<|vision_end|>"}},
-	// GLM-4.xV: the template writes <|begin_of_image|><|image|><|end_of_image|>
-	// and the processor expands <|image|> into the picture's rows.
-	jlm.ProjGLM4V.String(): {placeholder: "<|begin_of_image|><|image|><|end_of_image|>",
-		pre: []string{"<|begin_of_image|>"}, post: []string{"<|end_of_image|>"}},
-	// Kimi-VL: the template writes
-	// <|media_start|>image<|media_content|><|media_pad|><|media_end|> and the
-	// processor expands <|media_pad|> into the picture's rows. Its typed
-	// parts write the image flush against the text (inline).
-	jlm.ProjKimiVL.String(): {placeholder: "<|media_start|>image<|media_content|><|media_pad|><|media_end|>",
-		preText: "<|media_start|>image<|media_content|>", postText: "<|media_end|>", inline: true},
-	// HunyuanVL: the template writes start, image and end place-holders flush
-	// against the text, and the processor expands the image one into the
-	// picture's rows (its begin, grid, newline and end rows) between the
-	// other two.
-	jlm.ProjHunyuanVL.String(): {placeholder: "<｜hy_place▁holder▁no▁100｜><｜hy_place▁holder▁no▁102｜><｜hy_place▁holder▁no▁101｜>",
-		pre: []string{"<｜hy_place▁holder▁no▁100｜>"}, post: []string{"<｜hy_place▁holder▁no▁101｜>"}, inline: true},
-	jlm.ProjMLP.String(): {placeholder: "<image>"},
-	jlm.ProjGemma3.String(): {placeholder: "<start_of_image>",
-		preText: "\n\n<start_of_image>", postText: "<end_of_image>\n\n", bidir: true, inline: true},
-	jlm.ProjInternVL.String(): {placeholder: "<IMG_CONTEXT>", preText: "<img>", postText: "</img>"},
-	// Gemma 3n: gemma3's sequence (Gemma3nProcessor's full_image_sequence),
-	// the template's placeholder its own, and the picture's rows causal.
-	jlm.ProjGemma3nV.String(): {placeholder: "<image_soft_token>",
-		preText: "\n\n<start_of_image>", postText: "<end_of_image>\n\n", inline: true},
-	// MiniCPM-V: its chat() writes "(<image>./</image>)" then a newline ahead
-	// of the question, and the processor replaces that placeholder with the
-	// picture's whole run -- an overview and its slices, each in markers of its
-	// own -- which PictureSpans builds, so there is no single pre and post.
-	jlm.ProjResampler.String(): {placeholder: "(<image>./</image>)"},
-	// Janus-Pro: the GGUF's template writes "<image_placeholder>", and the
-	// processor (processing_janus.py) expands it to <begin_of_image>, the
-	// image tokens and <end_of_image>. mtmd wraps nothing (a divergence,
-	// RULE 7m); the processor is what the weights saw.
-	jlm.ProjJanus.String(): {placeholder: "<image_placeholder>",
-		pre: []string{"<begin_of_image>"}, post: []string{"<end_of_image>"}},
-	// Pixtral / Mistral 3: the template writes "[IMG]", and PixtralProcessor
-	// replaces it with each merged grid row's [IMG] tokens followed by
-	// [IMG_BREAK], the last [IMG_BREAK] made [IMG_END]. The head writes the
-	// rows and the breaks between them (pixtral.go); [IMG_END] is the marker.
-	jlm.ProjPixtral.String(): {placeholder: "[IMG]", post: []string{"[IMG_END]"}},
-	// Llama 4: the template writes "<|image|>", and Llama4Processor expands
-	// it to the tiles and their separators, which Llama4Spans lays out
-	// (ChatSpansParts), so there is no single pre and post.
-	jlm.ProjLlama4.String(): {placeholder: "<|image|>"},
-	// Gemma 4: the template writes "<|image|>", and Gemma4Processor expands it
-	// to <|image>, the soft tokens and <image|>. On the 26B and 31B the soft
-	// tokens see each other on the sliding layers (Config.BidirSWA).
-	// Phi-4-reasoning-vision: its own processor splits the prompt at
-	// "<image>" (processing_phi4_visionr.py's tokenizer_image_token) and puts
-	// the rows there, with no markers; mtmd's PHI4 keeps the boundary text
-	// empty too.
-	jlm.ProjPhi4.String(): {placeholder: "<image>"},
-	// LFM2-VL: the template writes "<image>", and Lfm2VlProcessor expands it
-	// to the picture's tiles and thumbnail in their markers, which LFM2Spans
-	// lays out (ChatSpansParts), so there is no single pre and post.
-	jlm.ProjLFM2.String(): {placeholder: "<image>"},
-	jlm.ProjGemma4V.String(): {placeholder: "<|image|>",
-		pre: []string{"<|image>"}, post: []string{"<image|>"}, bidirSWA: true},
-}
-
-// ChatSpans renders msgs through the model's own chat template and returns the
-// prompt as spans for PrefillMixed, embeds[i] standing where the i-th image of
-// the conversation goes (in message order). An embeds entry is the tower's
-// output for that image (Instance.EncodeImage); ChatSpansImages takes a Picture
-// instead, which the prompt's prefill encodes.
-//
-// The template renders the whole prompt, turn text included; only the image
-// placeholders are replaced.
-//
-// Every image is taken to be the tower's fixed grid (TowerConfig.Grid). A
-// dynamic-resolution tower's grid follows each picture, so it takes
-// ChatSpansImages, and an embedding whose row count is not the fixed grid's
-// is refused here rather than laid out on the wrong grid.
-func (m *Model) ChatSpans(msgs []ChatMessage, embeds [][]float32, addGenerationPrompt bool) ([]Span, error) {
-	imgs := make([]Image, len(embeds))
-	if tw := m.Tower(); tw != nil {
-		g := tw.Cfg.Grid()
-		w := tw.Cfg.RowWidth()
-		for i, e := range embeds {
-			if tw.Cfg.Dynamic() && e != nil && len(e) != g.Rows()*w {
-				return nil, fmt.Errorf("model: image %d is %d rows and this tower's grid follows the "+
-					"picture: ChatSpansImages carries each image's grid", i, len(e)/w)
-			}
-			// A deepstack tower's rows carry their taps' behind them (Encode).
-			embd, deep := splitDeep(e, len(e)/w, tw.Cfg.ProjDim)
-			imgs[i] = Image{Embd: embd, Grid: g, Deep: deep}
-		}
-	}
-	return m.ChatSpansImages(msgs, imgs, addGenerationPrompt)
-}
-
-// Image is one picture of a chat: a Picture the prompt's prefill encodes
-// (Instance.Picture), or rows already encoded (Instance.EncodeImage) and the grid
-// they cover.
-type Image struct {
-	Picture *Picture
-	Embd    []float32
-	Grid    ImageGrid
-	// Key names the picture the rows came from (Instance.EncodeImage), which is
-	// what lets the prefix cache name the pages after it. nil leaves the rows
-	// unnamed: nothing after them is cached.
-	Key *ImageKey
-	// Deep is the picture's deepstack rows beside Embd (Span.Deep).
-	Deep []float32
-}
-
-// ChatSpansImages is ChatSpans with each image's grid, which is where its rows
-// turn on an M-RoPE text model.
-func (m *Model) ChatSpansImages(msgs []ChatMessage, imgs []Image, addGenerationPrompt bool) ([]Span, error) {
-	return m.chatSpansImages(msgs, imgs, nil, ToolChoice{}, addGenerationPrompt)
-}
-
-// chatSpansImages is ChatSpansImages with a tool list and choice rendered as
-// ChatIDsToolChoice renders them.
-func (m *Model) chatSpansImages(msgs []ChatMessage, imgs []Image, tools []byte, choice ToolChoice,
-	addGenerationPrompt bool) ([]Span, error) {
-	n := 0
-	for _, x := range msgs {
-		n += x.Images
-	}
-	if n != len(imgs) {
-		return nil, fmt.Errorf("model: %d image(s) in the messages and %d embedding(s)", n, len(imgs))
-	}
-	if n == 0 {
-		ids, err := m.ChatIDsToolChoice(msgs, tools, choice, addGenerationPrompt)
-		return []Span{{Tokens: ids}}, err
-	}
-	tw := m.Tower()
-	if tw == nil {
-		return nil, fmt.Errorf("model: %d image(s) and this model has no vision tower", n)
-	}
-	mk, ok := imageMarkersOf[tw.Cfg.Projector]
-	if !ok {
-		return nil, fmt.Errorf("model: no image markers for projector %q", tw.Cfg.Projector)
-	}
-	piece := func(names []string) ([]int32, error) {
-		var ids []int32
-		for _, s := range names {
-			id, ok := m.Vocab.ID(s)
-			if !ok {
-				return nil, fmt.Errorf("model: the vocabulary has no %q, so the image markers cannot be built", s)
-			}
-			ids = append(ids, id)
-		}
-		return ids, nil
-	}
-	pre, err := piece(mk.pre)
-	if err != nil {
-		return nil, err
-	}
-	post, err := piece(mk.post)
-	if err != nil {
-		return nil, err
-	}
-	images := make([][]Span, n)
-	for i := range images {
-		var sp []Span
-		if len(pre) > 0 {
-			sp = append(sp, Span{Tokens: pre})
-		}
-		sp = append(sp, Span{Embd: imgs[i].Embd, Picture: imgs[i].Picture, Bidir: mk.bidir || mk.bidirSWA && m.Cfg.BidirSWA,
-			Grid: imgs[i].Grid, Key: imgs[i].Key, Deep: imgs[i].Deep})
-		if len(post) > 0 {
-			sp = append(sp, Span{Tokens: post})
-		}
-		images[i] = sp
-	}
-	return m.chatSpansParts(msgs, images, tools, choice, addGenerationPrompt)
-}
-
-// ChatSpansParts is ChatSpans for pictures whose runs the caller has already
-// laid out, markers included (PictureSpans): images[i] stands where the i-th
-// image of the conversation goes. A projector that cuts a picture into an
-// overview and slices has no single embedding per image to hand ChatSpans.
-func (m *Model) ChatSpansParts(msgs []ChatMessage, images [][]Span, addGenerationPrompt bool) ([]Span, error) {
-	return m.chatSpansParts(msgs, images, nil, ToolChoice{}, addGenerationPrompt)
-}
-
-// chatSpansParts is ChatSpansParts with a tool list and choice rendered as
-// ChatIDsToolChoice renders them.
-func (m *Model) chatSpansParts(msgs []ChatMessage, images [][]Span, tools []byte, choice ToolChoice,
-	addGenerationPrompt bool) ([]Span, error) {
-	n := 0
-	for _, x := range msgs {
-		n += x.Images
-	}
-	if n != len(images) {
-		return nil, fmt.Errorf("model: %d image(s) in the messages and %d picture(s)", n, len(images))
-	}
-	tw := m.Tower()
-	if tw == nil {
-		return nil, fmt.Errorf("model: %d image(s) and this model has no vision tower", n)
-	}
-	mk, ok := imageMarkersOf[tw.Cfg.Projector]
-	if !ok {
-		return nil, fmt.Errorf("model: no image markers for projector %q", tw.Cfg.Projector)
-	}
-	text, err := m.renderChat(msgs, tools, choice, addGenerationPrompt, mk)
-	if err != nil {
-		return nil, err
-	}
-	// The count is checked, because a template that drops an image part, or
-	// user text that happens to contain the placeholder, would otherwise shift
-	// every picture after it onto the wrong turn.
-	segs := strings.Split(text, mk.placeholder)
-	if len(segs)-1 != n {
-		return nil, fmt.Errorf("model: the chat template wrote %d image placeholder(s) %q for %d image(s)",
-			len(segs)-1, mk.placeholder, n)
-	}
-	var out []Span
-	add := func(ids []int32) {
-		if len(ids) > 0 {
-			out = append(out, Span{Tokens: ids})
-		}
-	}
-	for i, seg := range segs {
-		if i > 0 {
-			seg = mk.postText + seg
-		}
-		if i < n {
-			seg += mk.preText
-		}
-		add(m.Vocab.EncodeSpecial(seg, false))
-		if i < n {
-			for _, sp := range images[i] {
-				if sp.rows() {
-					out = append(out, sp)
-				} else {
-					add(sp.Tokens)
-				}
-			}
-		}
-	}
-	return out, nil
 }
 
 // SpanPositions is how many positions spans occupy, which is what an instance

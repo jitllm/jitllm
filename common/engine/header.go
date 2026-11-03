@@ -95,7 +95,6 @@ func (e *Engine) headerNow() header {
 		Context:  e.sessMax,
 		Asked:    e.st.MaxSeq.Get(),
 		Chat:     e.m.ChatCapable(),
-		Vision:   e.m.Tower() != nil,
 	}
 	if e.gpu != nil {
 		h.Device, h.Devices = placedOn(e.gpu)

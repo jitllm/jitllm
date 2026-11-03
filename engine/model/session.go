@@ -210,10 +210,9 @@ func (s *Instance) comeBack() error {
 // attachTier gives the bound session a view of s's device: its own, from
 // s's device, where it has none or one of another device -- its history
 // there coming to the CPU first.
-// borrowsJIT reports whether this instance runs on another's JIT (a vision
-// segment's on its text instance's), which that owner attaches to a device
-// and closes.
-func (s *Instance) borrowsJIT() bool { return s.vis != nil && s.vis.borrowed }
+// borrowsJIT reports whether this instance runs on another's JIT, which that
+// owner attaches to a device and closes: none does.
+func (s *Instance) borrowsJIT() bool { return false }
 
 func (s *Instance) attachTier() error {
 	sess := s.Session

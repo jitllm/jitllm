@@ -1,7 +1,6 @@
 package model
 
 import (
-	"os"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/layout"
@@ -86,34 +85,4 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 				name, packed, verbatim, m.embd.typ, nz, len(dst))
 		})
 	}
-
-	// And the vision tower, which holds its own tensors.
-	t.Run("tower", func(t *testing.T) {
-		if _, err := os.Stat(towerPath); err != nil {
-			t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", towerPath, err)
-		}
-		vlm, tw := openTower(t)
-		defer vlm.Close()
-		if tw.container == nil {
-			t.Fatal("the tower did not open a container -- this gate proved nothing")
-		}
-		packed := 0
-		for _, w := range tw.weights() {
-			if w.e == nil || len(w.data) == 0 {
-				continue
-			}
-			if _, ok := layout.QuantOf(w.typ); !ok {
-				continue
-			}
-			if w.packed == nil || len(w.packed.QS) == 0 {
-				t.Errorf("tower %s (%s) is in GGUF layout inside a container", w.e.Name, w.typ)
-				continue
-			}
-			packed++
-		}
-		if packed == 0 {
-			t.Fatal("no tower weight was packed -- this gate proved nothing")
-		}
-		t.Logf("tower: %d packed weights", packed)
-	})
 }

@@ -40,8 +40,7 @@ type ChatMessage struct {
 	Role    string
 	Content string
 	// Images are the pictures this turn carries, as paths, placed before
-	// Content. The engine encodes them with the model's tower and renders the
-	// turn through model.ChatSpans; ChatIDs cannot carry one.
+	// Content. No tower runs them yet: the engine refuses a turn with one.
 	Images []string
 }
 

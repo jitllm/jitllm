@@ -551,58 +551,13 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			ids = append(ids, ids[i%base])
 		}
 	}
-	// An image costs positions that are not in ids (it arrives as embeddings),
-	// so the state must be sized for them before it exists. The tower lives in
-	// the same container and shares this model's pager.
-	tw := m.Tower()
-	var spans []model.Span
-	// pic is the picture as the prompt's spans carry it (model.Picture): the
-	// prompt's prefill encodes it, so there is no encode stage here.
-	var pic *picture
-	extra := 0
+	// A picture's rows come from a tower, and a container that carries one is
+	// refused at open until its tower runs as the model's own blocks.
 	if imgPath != "" {
-		if tw == nil {
-			return fmt.Errorf("-image needs a container with a vision tower in it; "+
-				"re-run `jitllm convert %s <mmproj.gguf> %s`", path, path)
-		}
-		// An image always goes through the model's own chat template, -chat or
-		// not; -system composes with it.
-		msgs := []model.ChatMessage{{Role: "user", Content: prompt, Images: 1}}
-		if chat != nil && chat.system != "" {
-			msgs = append([]model.ChatMessage{{Role: "system", Content: chat.system}}, msgs...)
-		}
-		if pic, err = openPicture(tw, imgPath); err != nil {
-			return err
-		}
-		if pic.tiles != nil {
-			ps, err := m.Llama4Spans(pic.tiles[0], pic.tiles[1], pic.pieces)
-			if err != nil {
-				return err
-			}
-			if spans, err = m.ChatSpansParts(msgs, [][]model.Span{ps}, true); err != nil {
-				return err
-			}
-		} else if pic.lfm2 != nil {
-			ps, err := m.LFM2Spans(pic.lfm2[0], pic.lfm2[1], pic.pieces)
-			if err != nil {
-				return err
-			}
-			if spans, err = m.ChatSpansParts(msgs, [][]model.Span{ps}, true); err != nil {
-				return err
-			}
-		} else if pic.lay != nil {
-			ps, err := m.PictureSpans(*pic.lay, 0, true, pic.pieces)
-			if err != nil {
-				return err
-			}
-			if spans, err = m.ChatSpansParts(msgs, [][]model.Span{ps}, true); err != nil {
-				return err
-			}
-		} else if spans, err = m.ChatSpansImages(msgs, []model.Image{{Picture: pic.pieces[0]}}, true); err != nil {
-			return err
-		}
-		extra = model.SpanPositions(spans, m.Cfg.NEmbd) - len(ids)
+		return fmt.Errorf("-image: no tower runs pictures yet; a container that carries one is refused at open")
 	}
+	var spans []model.Span
+	extra := 0
 	// Whether the pool spins or parks between regions is decided per token by
 	// the engine, by whether the token paged anything in (model.Instance.forward);
 	// JITLLM_SPIN_US still fixes it.
@@ -818,9 +773,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	restored := 0
 	specFirst := int32(-1)
 	switch {
-	case imgPath != "":
-		logits, err = prefillImage(st, m, tw, pic, spans, kvCacheDir != "")
-		restored = st.KVRestored()
 	case kvCacheDir != "":
 		logits, err = st.PrefillCached(ids)
 		// A hybrid's recurrent summaries are stored beside its KV pages under
@@ -1989,55 +1941,6 @@ func tokenizeCmd(args []string) error {
 	}
 	defer closeTok()
 	return tokenize(fs.Arg(0), strings.Join(fs.Args()[1:], " "), topts)
-}
-
-// prefillImage prefills a prompt that holds a picture. The picture is rows of
-// the prompt (model.Picture): the prefill runs the instance's vision segment over
-// it -- the tower's blocks through the one runner and placement -- or the
-// model's image cache answers, and with cached set the prefix cache restores
-// past it, since its rows are named by the picture itself.
-func prefillImage(st *model.Instance, m *model.Model, tw *model.Tower, pic *picture, spans []model.Span,
-	cached bool) ([]float32, error) {
-	if err := pic.preprocess(st); err != nil {
-		return nil, err
-	}
-	c := tw.Cfg
-	if pic.tiles != nil {
-		fmt.Fprintf(os.Stderr, "vision   %s: a %dx%d canvas of tiles and %d piece(s) -> %d x %d embeddings of %d\n",
-			c.Projector, pic.tiles[1], pic.tiles[0], len(pic.pieces), len(pic.pieces), c.Tokens(), c.ProjDim)
-	} else if pic.lfm2 != nil {
-		rows := 0
-		for _, pc := range pic.pieces {
-			rows += pc.Rows
-		}
-		fmt.Fprintf(os.Stderr, "vision   %s: %dx%d tiles and %d piece(s) -> %d embeddings of %d\n",
-			c.Projector, pic.lfm2[0], pic.lfm2[1], len(pic.pieces), rows, c.ProjDim)
-	} else if pic.lay != nil {
-		fmt.Fprintf(os.Stderr, "vision   %s: %dx%d picture, an overview and %d slice(s) (%dx%d) -> "+
-			"%d x %d embeddings of %d\n", c.Projector, pic.lay.W, pic.lay.H, len(pic.lay.Pieces)-1,
-			pic.lay.Cols, pic.lay.Rows, len(pic.lay.Pieces), c.Tokens(), c.ProjDim)
-	} else {
-		p := pic.pieces[0]
-		fmt.Fprintf(os.Stderr, "vision   %s: a %dx%d patch grid -> %d embeddings of %d\n",
-			c.Projector, p.GW, p.GH, p.Rows, c.ProjDim)
-	}
-	t0 := time.Now()
-	h0, _ := m.ImageCacheStats()
-	var lg []float32
-	var err error
-	if cached {
-		lg, err = st.PrefillCachedMixed(spans...)
-	} else {
-		lg, err = st.PrefillMixed(spans...)
-	}
-	if h1, _ := m.ImageCacheStats(); err == nil && h1 > h0 {
-		fmt.Fprintf(os.Stderr, "vision   the image cache held the picture: no tower block ran\n")
-	}
-	if err == nil {
-		fmt.Fprintf(os.Stderr, "vision   prompt with the picture prefilled in %.0f ms\n",
-			float64(time.Since(t0).Microseconds())/1000)
-	}
-	return lg, err
 }
 
 // setPageBudget derives how many block pages fit in HOST memory and hands the

@@ -48,7 +48,7 @@ func (e *Engine) LlamaModel(name string) (LlamaModelInfo, error) {
 		return LlamaModelInfo{}, err
 	}
 	info := LlamaModelInfo{ID: lm.id, Name: lm.name, Path: lm.path, NCtx: e.defaultMaxSeq(lm),
-		Vision: lm.m.Tower() != nil, Embedding: lm.m.IsEmbedding(), Version: e.cfg.Version}
+		Embedding: lm.m.IsEmbedding(), Version: e.cfg.Version}
 	info.ChatTemplate, _ = lm.m.ChatTemplate("")
 	if v := lm.m.Vocab; v != nil {
 		f := FIMTokens{Pre: vocabID(v, fimNames.pre), Suf: vocabID(v, fimNames.suf), Mid: vocabID(v, fimNames.mid),

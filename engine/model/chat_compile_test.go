@@ -36,7 +36,7 @@ func TestChatTemplateCompilesOncePerModel(t *testing.T) {
 	// One template, rendering for several requests at once (-race sees a
 	// render that writes to it).
 	msgs := []ChatMessage{{Role: "user", Content: "Name a prime."}}
-	want, err := renderCompiled(tpl, src, "", "", nil, msgs, nil, ToolChoice{}, true, imageMarkers{})
+	want, err := renderCompiled(tpl, src, "", "", nil, msgs, nil, ToolChoice{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestChatTemplateCompilesOncePerModel(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 20 {
-				got, err := renderCompiled(tpl, src, "", "", nil, msgs, nil, ToolChoice{}, true, imageMarkers{})
+				got, err := renderCompiled(tpl, src, "", "", nil, msgs, nil, ToolChoice{}, true)
 				if err != nil || got != want {
 					errs <- got
 					return

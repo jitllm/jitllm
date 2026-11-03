@@ -103,7 +103,7 @@ func TestChatPromptMatchesTransformers(t *testing.T) {
 				}
 				tools = conv.Tools[shape]
 			}
-			got, err := renderChatTemplate(src, e.BOS, e.EOS, clock, msgs, tools, c.Gen, imageMarkers{})
+			got, err := renderChatTemplate(src, e.BOS, e.EOS, clock, msgs, tools, c.Gen)
 			name := e.File + "/" + c.Name
 			probe := map[string]any{"tools": nil, "documents": nil, "bos_token": e.BOS, "eos_token": e.EOS}
 			if tools != nil {

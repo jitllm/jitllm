@@ -1047,9 +1047,6 @@ type layer struct {
 	upB, downB []float32
 	// gateB is a gated vision MLP's gate bias (Qwen2.5-VL), nil everywhere else.
 	gateB []float32
-	// mn is a MobileNet-V5 tower block's own description (mobilenet.go),
-	// nil for every other block.
-	mn *mnBlock
 	// clamp is a vision block's clipped-linear bounds (jlm.RoleVClamp): for
 	// q, k, v, o, gate, up and down, the input's and the output's minimum
 	// and maximum. nil everywhere but Gemma 4's tower.
@@ -1335,9 +1332,6 @@ type Model struct {
 	hostStepRows int64
 
 	embd tensor
-	// hardEmbd is Gemma 3n's hard vision tokens' rows (mobilenet.go), nil
-	// on every other model.
-	hardEmbd *hardEmbd
 	// rope is the model's rotary configuration, built once at load.
 	rope nn.Rope
 	// ropeSWA is the LOCAL layers' rotary where an architecture trains two
@@ -1392,12 +1386,6 @@ type Model struct {
 	// dense1 and dense2 are an embedding model's projection heads after
 	// pooling (EmbeddingGemma's), empty for every other model.
 	dense1, dense2 tensor
-	// tower is the vision tower, nil for a container with no vision section.
-	// It shares this model's container, budget and pager.
-	tower *Tower
-	// imgCache is the vision segment's output rows by picture (imagekey.go),
-	// shared by every instance of the model.
-	imgCache imageCache
 
 	// id names this model to a device (nn.LayerPlan.Model), which holds one
 	// model's blocks at a time.
@@ -1714,52 +1702,13 @@ func openContainer(path string, options ...Option) (*Model, error) {
 			bindOne(c, t)
 		}
 	}
-	// A container that carries a tower builds one. Nothing is faulted in: the
-	// tower's norms and biases are in the dense region like the text model's,
-	// and its matrices are bound by Tower.pageIn as Encode reaches them.
-	if c.Vision() != nil && c.VisionBlocks() > 0 {
-		tw, err := buildTower(c)
-		if err != nil {
-			c.Close()
-			return nil, err
-		}
-		if tw.Cfg.ProjDim != m.Cfg.NEmbd {
-			c.Close()
-			return nil, fmt.Errorf("model: the tower projects to %d and this model wants %d; "+
-				"the container was built from two files that do not belong together",
-				tw.Cfg.ProjDim, m.Cfg.NEmbd)
-		}
-		tw.container, tw.jit, tw.opt, tw.model = c, lo.jit, &m.opt, m
-		for _, w := range tw.weights() {
-			bindOne(c, w)
-		}
-		// The vision blocks join the model's block space where the container
-		// already puts them: block NBlocks+i is vision block i's page, so the
-		// pager, the placement and the runner address it as any block.
-		tw.base, tw.cfg = int(c.H.NBlocks), tw.Cfg.segConfig()
-		if len(m.layers) != tw.base {
-			c.Close()
-			return nil, fmt.Errorf("model: %d text and prediction blocks, and the container's vision "+
-				"blocks start at %d", len(m.layers), tw.base)
-		}
-		m.layers = append(m.layers, tw.pending...)
-		tw.pending = nil
-		for i := tw.base; i < len(m.layers); i++ {
-			if err := bindPacked(c, m.Cfg, &m.layers[i]); err != nil {
-				c.Close()
-				return nil, err
-			}
-		}
-		m.tower = tw
-		m.imgCache.budget = defaultImageCache
-		if v := c.Vision(); v != nil && v.Audio != nil {
-			c.Close()
-			return nil, fmt.Errorf("model: the container's audio tower (%v) has no runner: "+
-				"it is to run as the model's blocks, stated by the front end", v.Audio.Projector)
-		}
-		if tw.mn != nil && tw.mn.hard != nil {
-			m.hardEmbd = tw.mn.hardRows(m.Cfg.EmbdScale)
-		}
+	// A tower's blocks run as the model's own, from what the container states
+	// about its pictures; until that path reads them the tower has no runner.
+	if v := c.Vision(); v != nil {
+		c.Close()
+		return nil, fmt.Errorf("model: the container's vision tower (%v) has no runner: its blocks are to "+
+			"run as the model's own, stated by the front end from the container's description of its pictures",
+			v.Projector)
 	}
 	if lo.preload > 0 {
 		m.startPreload(lo.preload)
@@ -1812,11 +1761,6 @@ func (m *Model) ReadBytes() int64 {
 	}
 	return m.container.ReadBytes()
 }
-
-// Tower is the vision tower this container carries, or nil for a text-only
-// model. It is not a second model: it shares this one's container, pager and
-// budget.
-func (m *Model) Tower() *Tower { return m.tower }
 
 // PagerReads is how many read calls the pager has issued. A streamed mixture is
 // priced in requests rather than bytes, since a routed bank asks for many small
@@ -2694,12 +2638,6 @@ func (m *Model) addPos(dst, tmp []float32, pos int) error {
 // tied head the packed kernel at the cost of some cache misses once per token
 // (cpu.EmitPackedRow).
 func (m *Model) embedRow(dst []float32, token int) error {
-	// Gemma 3n's hard vision tokens take the vision embedder's rows, which
-	// Open divided by the embedding scale every caller applies after this.
-	if h := m.hardEmbd; h != nil && token >= h.off && token < h.off+h.n {
-		copy(dst, h.rows[(token-h.off)*len(dst):(token-h.off+1)*len(dst)])
-		return nil
-	}
 	e := &m.embd
 	if token < 0 || token >= e.rows {
 		return fmt.Errorf("model: token %d is outside a vocabulary of %d", token, e.rows)
@@ -4206,9 +4144,6 @@ func (m *Model) newJIT() *nn.JIT {
 		maxK = max(maxK, t.k)
 		maxRows = max(maxRows, t.rows)
 		add(t.typ)
-	}
-	if m.tower != nil {
-		add(quant.F32)
 	}
 	opts := append(m.jit[:len(m.jit):len(m.jit)], nn.WithServingSplit(!m.opt.noServingSplit))
 	if m.Cfg.TokenAct {

@@ -112,11 +112,11 @@ func readSyntaxTemplate(t *testing.T, file string) string {
 func renderedCall(t *testing.T, src string) (reply, prompt string) {
 	user := ChatMessage{Role: "user", Content: "What is the weather in Zürich for the next 3 days?"}
 	call := ChatMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: "a1b2c3d4e", Name: "get_weather", Arguments: syntaxArgs}}}
-	p, err := renderChatTemplate(src, "<s>", "</s>", nil, []ChatMessage{user}, []byte(syntaxTools), true, imageMarkers{})
+	p, err := renderChatTemplate(src, "<s>", "</s>", nil, []ChatMessage{user}, []byte(syntaxTools), true)
 	if err != nil {
 		t.Fatalf("generation prompt: %v", err)
 	}
-	f, err := renderChatTemplate(src, "<s>", "</s>", nil, []ChatMessage{user, call}, []byte(syntaxTools), false, imageMarkers{})
+	f, err := renderChatTemplate(src, "<s>", "</s>", nil, []ChatMessage{user, call}, []byte(syntaxTools), false)
 	if err != nil {
 		t.Fatalf("the call: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestToolChoiceReachesTheTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, err := renderCompiled(tpl, src, "", "", nil, user, []byte(syntaxTools), c, true, imageMarkers{})
+		out, err := renderCompiled(tpl, src, "", "", nil, user, []byte(syntaxTools), c, true)
 		if err != nil {
 			t.Fatalf("%s: %v", file, err)
 		}

@@ -153,10 +153,6 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 			names = append(names, "default")
 		}
 	}
-	visBlocks := 0
-	if t := lm.m.Tower(); t != nil {
-		visBlocks = t.Cfg.NLayer
-	}
 
 	pooling := ""
 	if lm.m.IsEmbedding() {
@@ -178,8 +174,6 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 		ExpertsUsed:       int32(c.NExpertUsed),
 		AttentionBlocks:   int32(attn),
 		LinearBlocks:      int32(lin),
-		HasVisionTower:    lm.m.Tower() != nil,
-		VisionBlockCount:  int32(visBlocks),
 		ChatCapable:       lm.m.ChatCapable(),
 		ChatTemplateNames: names,
 		PageSize:          pbBytes(lm.m.PageSize()),
@@ -189,7 +183,7 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 		Pooling:           pooling,
 		Aliases:           e.aliasesOf(lm.path),
 		DefaultMaxSeq:     int32(e.defaultMaxSeq(lm)),
-		Capabilities: modelCapabilities(lm.m.ChatCapable(), lm.m.Tower() != nil,
+		Capabilities: modelCapabilities(lm.m.ChatCapable(), false,
 			lm.m.IsEmbedding(), false),
 	}
 }
@@ -333,9 +327,6 @@ func pbResidency(lm *LoadedModel) *v1.Residency {
 	frames, in, out := m.PageStats()
 	resident := m.HostResidentBlocks()
 	blocks := m.Cfg.NLayer
-	if t := m.Tower(); t != nil {
-		blocks += t.Cfg.NLayer
-	}
 	budget := m.PageBudget()
 	// fits is a boolean because the step is a cliff: one block short of
 	// resident is one eviction and one page read every token. It is the
