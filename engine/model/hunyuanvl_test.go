@@ -232,7 +232,7 @@ func TestHunyuanVLRealTowerOnDevice(t *testing.T) {
 	if !vlmAvailable(text, proj) {
 		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj -- HYVL_GGUF=1 scripts/hunyuanvlreal.py writes them (RULE 11)", text)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), noTune)
+	m, err := Open(jlmOfPair(t, text, proj), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

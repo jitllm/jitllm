@@ -21,7 +21,7 @@ func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 	if !ok {
 		t.Skip("MODEL MISSING: olmoe-1b-7b-0924-instruct-Q4_K_M (set JITLLM_MODELS) -- this gate proved nothing")
 	}
-	m, err := Open(jlmOf(t, p), noTune)
+	m, err := Open(jlmOf(t, p), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

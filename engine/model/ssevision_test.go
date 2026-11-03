@@ -29,7 +29,7 @@ func TestEveryTowerRunsSSE(t *testing.T) {
 	if cpu.HostTier() != cpu.TierAVX2 {
 		t.Skip("no AVX2 tier on this host to hold the SSE tier to")
 	}
-	photo := decodeImage(t, mcvPhoto)
+	photo := decodeImage(t, mcvPhoto())
 	type arm struct {
 		pixels      [][]float32
 		after0, out []float32

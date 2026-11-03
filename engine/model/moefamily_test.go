@@ -539,7 +539,7 @@ func TestHybridMixturesPageWithTheSameAnswer(t *testing.T) {
 	for _, name := range []string{"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear" + q8Suffix} {
 		t.Run(name, func(t *testing.T) {
 			src := jlmOf(t, testmodels.Path(name))
-			m, err := Open(src, noTune)
+			m, err := Open(src, noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -556,7 +556,7 @@ func TestHybridMixturesPageWithTheSameAnswer(t *testing.T) {
 func pagesWithTheSameAnswer(t *testing.T, ids []int32, src string) {
 	t.Helper()
 	run := func(opts ...Option) ([][]float32, int64) {
-		m, err := Open(src, append([]Option{noTune, WithKVF16(false),
+		m, err := Open(src, append([]Option{noTune(), WithKVF16(false),
 			WithJITOptions(nn.WithGEMMExact(true))}, opts...)...)
 		if err != nil {
 			t.Fatal(err)

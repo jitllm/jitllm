@@ -12,17 +12,17 @@ import (
 // pixel shuffle, then LayerNorm, linear, GELU, linear into the text model's
 // width; images are cut into up to twelve 448 tiles plus a thumbnail.
 
-var internvlText = testmodels.Path("vlm/InternVL3-1B-Instruct-Q8_0.gguf")
-var internvlProj = testmodels.Path("vlm/mmproj-InternVL3-1B-Instruct-Q8_0.gguf")
+func internvlText() string { return testmodels.Path("vlm/InternVL3-1B-Instruct-Q8_0.gguf") }
+func internvlProj() string { return testmodels.Path("vlm/mmproj-InternVL3-1B-Instruct-Q8_0.gguf") }
 
 func openInternVL(t testing.TB, opts ...Option) (*Model, *Tower) {
 	t.Helper()
-	if !vlmAvailable(internvlText, internvlProj) {
+	if !vlmAvailable(internvlText(), internvlProj()) {
 		testmodels.Missing(t, "%s and its mmproj %s (or the merged container) are missing. RULE 11: fetch "+
 			"ggml-org/InternVL3-1B-Instruct-GGUF's Q8_0 text model and mmproj into %s and re-run",
-			internvlText, internvlProj, testmodels.Dir())
+			internvlText(), internvlProj(), testmodels.Dir())
 	}
-	m, err := Open(jlmOfPair(t, internvlText, internvlProj), opts...)
+	m, err := Open(jlmOfPair(t, internvlText(), internvlProj()), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,17 +112,17 @@ func TestInternVLTowerMatchesLlamaCpp(t *testing.T) {
 
 // InternVL 2.5's 1B: the same InternViT-300M and projector over Qwen2.5-0.5B,
 // converted from ggml-org's own GGUF pair.
-var internvl25Text = testmodels.Path("vlm/InternVL2_5-1B-Q8_0.gguf")
-var internvl25Proj = testmodels.Path("vlm/mmproj-InternVL2_5-1B-Q8_0.gguf")
+func internvl25Text() string { return testmodels.Path("vlm/InternVL2_5-1B-Q8_0.gguf") }
+func internvl25Proj() string { return testmodels.Path("vlm/mmproj-InternVL2_5-1B-Q8_0.gguf") }
 
 func openInternVL25(t testing.TB) *Model {
 	t.Helper()
-	if !vlmAvailable(internvl25Text, internvl25Proj) {
+	if !vlmAvailable(internvl25Text(), internvl25Proj()) {
 		testmodels.Missing(t, "%s and its mmproj %s (or the merged container) are missing. RULE 11: fetch "+
 			"ggml-org/InternVL2_5-1B-GGUF's Q8_0 text model and mmproj into %s and re-run",
-			internvl25Text, internvl25Proj, testmodels.Dir())
+			internvl25Text(), internvl25Proj(), testmodels.Dir())
 	}
-	m, err := Open(jlmOfPair(t, internvl25Text, internvl25Proj))
+	m, err := Open(jlmOfPair(t, internvl25Text(), internvl25Proj()))
 	if err != nil {
 		t.Fatal(err)
 	}

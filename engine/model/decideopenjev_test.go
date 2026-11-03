@@ -45,7 +45,7 @@ func TestOpenJevPicturesMatchLlamaCpp(t *testing.T) {
 	}
 	gold := readDecisionGold(t, "tinyopenjev-for-testing-Q8_0.chatpicture.llamacpp.json")
 	decide := func() ([]DecisionAnswer, int, int) {
-		m, err := Open(jlmOfPair(t, text, proj), noTune, WithKVF16(false))
+		m, err := Open(jlmOfPair(t, text, proj), noTune(), WithKVF16(false))
 		if err != nil {
 			t.Fatal(err)
 		}

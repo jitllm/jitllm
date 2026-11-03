@@ -25,7 +25,7 @@ import (
 func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
 	for _, name := range stepArchModels() {
 		t.Run(filepath.Base(name), func(t *testing.T) {
-			m, err := Open(stepArchPath(t, name), noTune, WithKVF16(false))
+			m, err := Open(stepArchPath(t, name), noTune(), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -160,7 +160,7 @@ func openSoftcapStep(t *testing.T) *Model {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune, WithKVF16(false))
+	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

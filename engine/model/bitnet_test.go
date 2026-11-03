@@ -95,7 +95,7 @@ func openBitNet(t *testing.T, model, golden string, typ quant.Type) (*Model, *c6
 	} else {
 		path = hfContainer(t, model)
 	}
-	m, err := Open(path, noTune, WithKVF16(false))
+	m, err := Open(path, noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestBitNetFeaturesAreLoadBearing(t *testing.T) {
 	for _, v := range bitnetScaleViolations() {
 		t.Run(v.name, func(t *testing.T) {
 			dir := bitnetRescaled(t, testmodels.Path(bitnetFixtures()[0].model), v.f)
-			vm, err := Open(hfContainerAt(t, dir), noTune, WithKVF16(false))
+			vm, err := Open(hfContainerAt(t, dir), noTune(), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

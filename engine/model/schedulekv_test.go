@@ -20,7 +20,7 @@ func TestSchedulerUnderAKVBudgetMatchesOneWithout(t *testing.T) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune)
+	m, err := Open(jlmOf(t, p), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -79,7 +79,7 @@ type headFixture struct {
 func headFixtures() []headFixture {
 	return []headFixture{
 		{"synth-qwen2", func(t *testing.T, opts ...Option) *Model {
-			m, err := Open(hfContainer(t, "synth-qwen2"), append([]Option{noTune, WithKVF16(false)}, opts...)...)
+			m, err := Open(hfContainer(t, "synth-qwen2"), append([]Option{noTune(), WithKVF16(false)}, opts...)...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -97,7 +97,7 @@ func openHeadGGUF(file string) func(t *testing.T, opts ...Option) *Model {
 		if !ok {
 			testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory)", testmodels.Path(file))
 		}
-		m, err := Open(jlmOf(t, path), append([]Option{noTune, WithKVF16(false)}, opts...)...)
+		m, err := Open(jlmOf(t, path), append([]Option{noTune(), WithKVF16(false)}, opts...)...)
 		if err != nil {
 			t.Fatal(err)
 		}

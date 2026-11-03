@@ -94,7 +94,7 @@ func toolFixtureMessages() []ChatMessage {
 // just worse ones, so the bar is byte equality.
 // toolGoldDate is the date the tool-prompt goldens are rendered at, and
 // scripts/toolgold.py's FIXED: Llama 3's own default when no clock is given.
-var toolGoldDate = time.Date(2024, time.July, 26, 0, 0, 0, 0, time.UTC)
+func toolGoldDate() time.Time { return time.Date(2024, time.July, 26, 0, 0, 0, 0, time.UTC) }
 
 func TestToolPromptMatchesTransformers(t *testing.T) {
 	dir := filepath.Join("..", "..", "testdata", "golden", "tools")
@@ -109,7 +109,7 @@ func TestToolPromptMatchesTransformers(t *testing.T) {
 		// The date the templates print is pinned on both sides (toolGoldDate,
 		// scripts/toolgold.py): a golden rendered on one day must match on the
 		// next.
-		m, err := Open(jlmOf(t, path), noTune, WithChatClock(func() time.Time { return toolGoldDate }))
+		m, err := Open(jlmOf(t, path), noTune(), WithChatClock(func() time.Time { return toolGoldDate() }))
 		if err != nil {
 			t.Fatal(err)
 		}

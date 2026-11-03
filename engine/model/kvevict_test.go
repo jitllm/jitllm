@@ -69,7 +69,7 @@ func newEvictGateOf(t *testing.T, name string) *evictGate {
 	// No KV prewarm: the pool grows ahead of the history into the room placement
 	// left (112 pages on a 3050 Ti, covering the gate's 449 positions whole),
 	// and a budget squeezed after the prompt then never binds.
-	m, err := Open(jlmOf(t, p), noTune, WithKVPrewarm(false))
+	m, err := Open(jlmOf(t, p), noTune(), WithKVPrewarm(false))
 	if err != nil {
 		t.Fatal(err)
 	}

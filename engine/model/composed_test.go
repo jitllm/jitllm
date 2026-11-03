@@ -26,18 +26,18 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 
 // unsplit forms a reference's sums with no split (Config.ComposedUnsplit):
 // a split an arm forms wrong is not the reference's too.
-var unsplit = gpu.WithConfig(func(c *gpu.Config) { c.ComposedUnsplit = true })
+func unsplit() gpu.Option { return gpu.WithConfig(func(c *gpu.Config) { c.ComposedUnsplit = true }) }
 
 // unsplitRef is the float reference of parts on dev, formed with no split:
 // its blocks all served, and every split's last segment dropped leaves it
 // bit for bit, so a split an arm forms wrong is not the reference's too.
 func unsplitRef(t *testing.T, m *Model, dev string, ids, toks []int32, parts gpu.Parts, noGraph bool) [][]float32 {
 	t.Helper()
-	ref, st, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit)
+	ref, st, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit())
 	if n, d := st.ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the float reference served its blocks %d times and declined them %d (%s)", n, d, declinesOf(st))
 	}
-	cut, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit, gpu.WithSplitFault(true))
+	cut, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit(), gpu.WithSplitFault(true))
 	for i := range cut {
 		if !slices.Equal(cut[i], ref[i]) {
 			t.Fatalf("step %d: with every split's last segment dropped the float reference moves (NMSE %.3g): it forms through the composer's splits", i, logitNMSE(cut[i], ref[i]))
@@ -278,7 +278,7 @@ func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 	ran := 0
 	for _, file := range unblockedModels() {
 		t.Run(file, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune)
+			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -398,7 +398,7 @@ func TestComposedBlocksServeApart(t *testing.T) {
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune)
+			m, err := Open(jlmOf(t, path), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -540,7 +540,7 @@ func TestComposedBlocksServe(t *testing.T) {
 			}
 			// The budget arm streams blocks the card does not hold: the trial
 			// against the CPU would move them mid-decode.
-			m, err := Open(jlmOf(t, path), noTune, WithStreamTrial(false))
+			m, err := Open(jlmOf(t, path), noTune(), WithStreamTrial(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -929,7 +929,7 @@ func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
-	m, err := Open(jlmOf(t, path), noTune)
+	m, err := Open(jlmOf(t, path), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +985,7 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
-	m, err := Open(jlmOf(t, path), noTune)
+	m, err := Open(jlmOf(t, path), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,7 @@ func TestTowerGridTableMatchesVisRope(t *testing.T) {
 	ran := 0
 	for _, f := range composedTowers() {
 		t.Run(f.name, func(t *testing.T) {
-			m, tw := f.open(t, noTune)
+			m, tw := f.open(t, noTune())
 			defer m.Close()
 			c := tw.Cfg
 			if !c.Rope {

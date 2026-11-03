@@ -66,7 +66,7 @@ func kvStoreHas(kc *kvCache, key string, li, n, pp int) bool {
 // exception, in flight. The violation is the copying store (MemStore), which
 // the cache was before: the gate must count its copies.
 func TestKVIsHeldOnce(t *testing.T) {
-	m := openDecision(t, "d1/d1-3B-Q8_0.gguf", jlm.DecisionLFM2D1, noTune)
+	m := openDecision(t, "d1/d1-3B-Q8_0.gguf", jlm.DecisionLFM2D1, noTune())
 	defer m.Close()
 	m.SetKVF16(false)
 	reqs := boardRequests(t, 3)

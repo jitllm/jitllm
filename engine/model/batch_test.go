@@ -17,7 +17,7 @@ import (
 // row reads sequence 0's KV cache. Teacher-forced: both sides consume the same
 // token stream, so a disagreement is localised to its position.
 func TestBatchMatchesForward(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		if name == "tinyllama" && os.Getenv("JITLLM_SLOW") == "" {
 			continue
 		}
@@ -35,15 +35,15 @@ func TestBatchMatchesForward(t *testing.T) {
 			// small-margin argmaxes, so that mode is judged by margin and a
 			// gross-error tripwire.
 			t.Run("exact-gemm", func(t *testing.T) {
-				batchVsForward(t, path, true, noTune, withCPUFloat())
+				batchVsForward(t, path, true, noTune(), withCPUFloat())
 			})
 			t.Run("shipped", func(t *testing.T) {
-				batchVsForward(t, path, false, noTune)
+				batchVsForward(t, path, false, noTune())
 			})
 			// The single sequences and the batch on the composed CPU's
 			// blocks: held to the shipped mode's bar.
 			t.Run("composed-cpu", func(t *testing.T) {
-				batchVsForward(t, path, false, noTune)
+				batchVsForward(t, path, false, noTune())
 			})
 		})
 	}
@@ -51,14 +51,14 @@ func TestBatchMatchesForward(t *testing.T) {
 	// experts its rows pick.
 	for _, file := range cpuMixtureRowsModels() {
 		t.Run("mixture/"+file+"/composed-cpu", func(t *testing.T) {
-			batchVsForward(t, testmodels.Path(file), false, noTune)
+			batchVsForward(t, testmodels.Path(file), false, noTune())
 		})
 	}
 }
 
 func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 	// Both sides must run the same kernels: the pack-width tuner advances on
-	// Forward and not on ForwardBatch (hence noTune).
+	// Forward and not on ForwardBatch (hence noTune()).
 	m, err := Open(jlmOf(t, path), opts...)
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func (j *logitJudge) finish(t *testing.T) {
 	}
 }
 func TestRaggedBatchMatchesForward(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		if name == "tinyllama" && os.Getenv("JITLLM_SLOW") == "" {
 			continue
 		}
@@ -213,17 +213,17 @@ func TestRaggedBatchMatchesForward(t *testing.T) {
 				t.Skipf("model not present: %s (nor its container)", path)
 			}
 			t.Run("exact-gemm", func(t *testing.T) {
-				raggedVsForward(t, path, true, noTune, withCPUFloat())
+				raggedVsForward(t, path, true, noTune(), withCPUFloat())
 			})
 			t.Run("shipped", func(t *testing.T) {
-				raggedVsForward(t, path, false, noTune)
+				raggedVsForward(t, path, false, noTune())
 			})
 		})
 	}
 }
 
 func raggedVsForward(t *testing.T, path string, exact bool, opts ...Option) {
-	m, err := Open(jlmOf(t, path), opts...) // noTune: see batchVsForward
+	m, err := Open(jlmOf(t, path), opts...) // noTune(): see batchVsForward
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func raggedVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 // passes: a prompt admitted into row 1 without a sequence base would overwrite
 // row 0's keys and read them back.
 func TestPrefillSeqMatchesForward(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		if name == "tinyllama" && os.Getenv("JITLLM_SLOW") == "" {
 			continue
 		}
@@ -318,7 +318,7 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 			// kernel, which sums a k-quant super-block in integers, where the
 			// single instance decodes through the tiled kernel's float chain
 			// (TuneOff pins it); qwen2vl's admitted row parted at step 5.
-			m, err := Open(jlmOf(t, path), noTune, WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, path), noTune(), WithJITOptions(nn.WithGEMMExact(true)))
 			if err != nil {
 				t.Fatal(err)
 			}

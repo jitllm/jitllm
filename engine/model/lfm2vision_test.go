@@ -79,18 +79,18 @@ func TestLFM2LayoutMatchesProcessor(t *testing.T) {
 	t.Logf("%d sizes, %d of them tiled, every one the processor's", len(g.Sizes), tiled)
 }
 
-var (
-	d1Text = testmodels.Path("d1/d1-3B-Q8_0.gguf")
-	d1Proj = testmodels.Path("d1/mmproj-d1-3B-F16.gguf")
-	d1Gold = testmodels.Path("d1/gold")
-)
+func d1Text() string { return testmodels.Path("d1/d1-3B-Q8_0.gguf") }
+
+func d1Proj() string { return testmodels.Path("d1/mmproj-d1-3B-F16.gguf") }
+
+func d1Gold() string { return testmodels.Path("d1/gold") }
 
 func openD1VL(t testing.TB, opts ...Option) *Model {
 	t.Helper()
-	if !vlmAvailable(d1Text, d1Proj) {
-		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (RULE 11)", d1Text)
+	if !vlmAvailable(d1Text(), d1Proj()) {
+		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (RULE 11)", d1Text())
 	}
-	m, err := Open(jlmOfPair(t, d1Text, d1Proj), append([]Option{noTune, WithKVF16(false)}, opts...)...)
+	m, err := Open(jlmOfPair(t, d1Text(), d1Proj()), append([]Option{noTune(), WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestLFM2RealMatchesTransformers(t *testing.T) {
 	}
 	for _, pic := range []string{"quad-and-disc", "photo", "photo-896", "perf_speed"} {
 		t.Run(pic, func(t *testing.T) {
-			base := filepath.Join(d1Gold, pic)
+			base := filepath.Join(d1Gold(), pic)
 			raw, err := os.ReadFile(base + ".json")
 			if err != nil {
 				testmodels.Missing(t, "GOLDEN MISSING: %v -- run scripts/lfm2visiongold.py (RULE 11)", err)

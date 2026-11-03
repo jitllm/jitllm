@@ -70,7 +70,7 @@ func openPixtral(t testing.TB, opts ...Option) (*Model, *pixGolden) {
 	if !vlmAvailable(text, proj) {
 		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (set JITLLM_MODELS) -- run scripts/pixtralgold.py (RULE 11)", text)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune, WithKVF16(false)}, opts...)...)
+	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune(), WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

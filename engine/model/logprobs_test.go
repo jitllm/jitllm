@@ -61,10 +61,10 @@ func lpCheck(logits []float32, chosen int32, got float32, top []TopLogprob, n in
 // it. (The kernel's own violations -- the maximum not subtracted, ln(sum)
 // dropped -- fail nn.TestLogSoftmaxMatchesTheOracle.)
 func TestLogprobsMatchTheOracle(t *testing.T) {
-	mp, ok := existingModel(models["stories15M"])
+	mp, ok := existingModel(models()["stories15M"])
 	if !ok {
 		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing",
-			models["stories15M"])
+			models()["stories15M"])
 	}
 	m, err := Open(jlmOf(t, mp))
 	if err != nil {

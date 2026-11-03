@@ -9,16 +9,16 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-var qwen2vlText = testmodels.Path("Qwen2-VL-2B-Instruct-Q4_K_M.gguf")
-var qwen2vlProj = testmodels.Path("mmproj-Qwen2-VL-2B-Instruct-Q8_0.gguf")
+func qwen2vlText() string { return testmodels.Path("Qwen2-VL-2B-Instruct-Q4_K_M.gguf") }
+func qwen2vlProj() string { return testmodels.Path("mmproj-Qwen2-VL-2B-Instruct-Q8_0.gguf") }
 
 func openQwen2VL(t testing.TB) *Model {
 	t.Helper()
-	if !vlmAvailable(qwen2vlText, qwen2vlProj) {
+	if !vlmAvailable(qwen2vlText(), qwen2vlProj()) {
 		t.Skipf("MODEL MISSING: %s, its mmproj and its merged container -- this gate "+
-			"proved nothing", qwen2vlText)
+			"proved nothing", qwen2vlText())
 	}
-	m, err := Open(jlmOfPair(t, qwen2vlText, qwen2vlProj))
+	m, err := Open(jlmOfPair(t, qwen2vlText(), qwen2vlProj()))
 	if err != nil {
 		t.Fatal(err)
 	}

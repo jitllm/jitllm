@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/jitllm/jitllm/convert/gguf"
@@ -15,14 +14,6 @@ import (
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
 )
-
-var convertOnceExt sync.Map
-
-// convertResultExt is what the cache holds; see convertResult.
-type convertResultExt struct {
-	once sync.Once
-	err  error
-}
 
 // jlmOf is the external test package's twin of the internal jlmOf (see
 // jlm_helper_test.go): convert a GGUF to a container beside it, failing
@@ -44,34 +35,33 @@ func jlmOf(t testing.TB, path string) string {
 		c.Close()
 		return dst
 	}
-	v, _ := convertOnceExt.LoadOrStore(dst, &convertResultExt{})
-	r := v.(*convertResultExt)
-	r.once.Do(func() {
-		si, err := os.Stat(path)
-		if err != nil {
-			r.err = err
-			return
-		}
-		// Cached, unless this build cannot read the container or an earlier
-		// build wrote it; see the same check in jlmOfPair.
-		if di, err := os.Stat(dst); err == nil && di.ModTime().After(si.ModTime()) {
+	if di, err := os.Stat(dst); err == nil {
+		if si, err := os.Stat(path); err == nil && di.ModTime().After(si.ModTime()) {
 			if c, err := jlm.Open(dst); err == nil {
 				stale := c.FP.Writer != model.BuildIDForTest()
 				c.Close()
 				if !stale {
-					return
+					return dst
 				}
 			}
 		}
-		if _, err := convert.FromGGUF(path, dst, jlm.Fingerprint{Host: "test", Writer: model.BuildIDForTest()}); err != nil {
-			r.err = err
-		}
-	})
-	if r.err != nil && !errors.Is(r.err, convert.ErrNotImplemented) {
-		t.Fatalf("convert %s: %v", path, r.err)
 	}
-	if r.err != nil {
-		t.Skipf("NOT IMPLEMENTED: %s -- %v (RULE 7 scope)", filepath.Base(path), r.err)
+	tmp, err := os.CreateTemp(filepath.Dir(dst), strings.TrimSuffix(filepath.Base(dst), jlm.Ext)+".tmp-*"+jlm.Ext)
+	if err != nil {
+		t.Fatalf("convert %s: %v", path, err)
+	}
+	tmp.Close()
+	os.Remove(tmp.Name())
+	if _, err := convert.FromGGUF(path, tmp.Name(), jlm.Fingerprint{Host: "test", Writer: model.BuildIDForTest()}); err != nil {
+		os.Remove(tmp.Name())
+		if errors.Is(err, convert.ErrNotImplemented) {
+			t.Skipf("NOT IMPLEMENTED: %s -- %v (RULE 7 scope)", filepath.Base(path), err)
+		}
+		t.Fatalf("convert %s: %v", path, err)
+	}
+	if err := os.Rename(tmp.Name(), dst); err != nil {
+		os.Remove(tmp.Name())
+		t.Fatalf("convert %s: %v", path, err)
 	}
 	return dst
 }

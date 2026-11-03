@@ -33,7 +33,7 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune, withCPUFloat())
+			m, err := Open(jlmOf(t, path), noTune(), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}

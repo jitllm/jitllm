@@ -45,10 +45,10 @@ func mixedModel(t *testing.T, p string) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	// noGEMM: the host arm compares exactly, and rows batched beside others
+	// noGEMM(): the host arm compares exactly, and rows batched beside others
 	// would otherwise take the weight-stationary GEMM where the sequence alone
 	// takes the matvec (see TestBatchMatchesForward).
-	m, err := Open(jlmOf(t, p), noTune, noGEMM)
+	m, err := Open(jlmOf(t, p), noTune(), noGEMM())
 	if err != nil {
 		t.Fatal(err)
 	}

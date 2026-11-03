@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,19 +20,6 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
-
-var convertOnce sync.Map
-
-// convertResult is what the cache holds. Caching only a sync.Once loses the
-// error: a second test asking for a failed destination would open a container
-// that was never written.
-type convertResult struct {
-	once sync.Once
-	err  error
-	// path is the container to serve when it is not the destination: see
-	// the rename in convertPair.
-	path string
-}
 
 // jlmOf converts a GGUF to a container beside it and returns that path; the
 // engine reads only containers, so the suite converts to run what ships. A
@@ -56,10 +42,22 @@ func fixtureSource(path string) string { return strings.TrimSuffix(path, q8Suffi
 // identity (`go test` relinks every run), the content is. An unreadable
 // executable yields "", which forces a reconversion, the safe direction. It is
 // exported only so model_test's jlmOf shares one identity with jlmOfPair.
-var BuildIDForTest = sync.OnceValue(func() string {
+// Hashing a test binary takes long enough to matter once per call, and the
+// package holds no state to remember it in, so the hash is kept in a file named
+// for the binary's path, size and mtime.
+func BuildIDForTest() string {
 	p, err := os.Executable()
 	if err != nil {
 		return ""
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		return ""
+	}
+	key := sha256.Sum256([]byte(fmt.Sprintf("%s %d %d", p, fi.Size(), fi.ModTime().UnixNano())))
+	memo := filepath.Join(os.TempDir(), "jitllm-buildid-"+hex.EncodeToString(key[:8]))
+	if b, err := os.ReadFile(memo); err == nil && len(b) > 0 {
+		return string(b)
 	}
 	f, err := os.Open(p)
 	if err != nil {
@@ -70,8 +68,16 @@ var BuildIDForTest = sync.OnceValue(func() string {
 	if _, err := io.Copy(h, f); err != nil {
 		return ""
 	}
-	return "test " + hex.EncodeToString(h.Sum(nil))[:16]
-})
+	id := "test " + hex.EncodeToString(h.Sum(nil))[:16]
+	if tmp, err := os.CreateTemp(os.TempDir(), "jitllm-buildid-*"); err == nil {
+		_, werr := tmp.WriteString(id)
+		tmp.Close()
+		if werr != nil || os.Rename(tmp.Name(), memo) != nil {
+			os.Remove(tmp.Name())
+		}
+	}
+	return id
+}
 
 // vlmAvailable reports whether a VLM can be opened: its two sources, or the
 // merged container they convert to -- which is all a host that holds only
@@ -174,73 +180,62 @@ func convertPair(path, mmproj string) (string, error) {
 	if !sourcePresent(path, mmproj) {
 		return containerAlone(dst, path)
 	}
-	v, _ := convertOnce.LoadOrStore(dst, &convertResult{})
-	r := v.(*convertResult)
-	r.once.Do(func() {
-		si, err := os.Stat(path)
-		if err != nil {
-			r.err = err
-			return
-		}
-		// Cached: conversion is deterministic, so a container newer than its
-		// source is the one this would produce, provided this build can still
-		// read it.
-		if mi, err := os.Stat(mmproj); mmproj != "" && err == nil && mi.ModTime().After(si.ModTime()) {
-			si = mi // the newer of the two inputs decides staleness
-		}
-		// The binary is an input too: most of a container is decisions the
-		// converter makes, so one written by an earlier build is stale however
-		// new its mtime. jlm.WriterID() cannot tell builds apart here (`go test
-		// -c` stamps no VCS info), so BuildIDForTest hashes the binary and a
-		// container whose Writer disagrees is reconverted.
-		if di, err := os.Stat(dst); err == nil && di.ModTime().After(si.ModTime()) {
-			if c, err := jlm.Open(dst); err == nil {
-				stale := c.FP.Writer != BuildIDForTest()
-				c.Close()
-				if !stale {
-					return
-				}
-			}
-		}
-		// Convert to a private name and rename: once.Do covers only this
-		// process, and two concurrent `go test` runs would otherwise let a
-		// reader open a half-written container. The loser of the race writes a
-		// byte-identical result.
-		// The private name keeps the container's extension: on Windows place
-		// may serve it as it is, and Open reads nothing but a .jlm.
-		tmp := servedName(dst, os.Getpid())
-		sweepServedCopies(dst)
-		if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
-			os.Remove(tmp)
-			r.err = err
-			return
-		}
-		r.path, r.err = place(tmp, dst)
-	})
-	return r.served(dst)
+	si, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	// Cached: conversion is deterministic, so a container newer than its
+	// source is the one this would produce, provided this build can still
+	// read it.
+	if mi, err := os.Stat(mmproj); mmproj != "" && err == nil && mi.ModTime().After(si.ModTime()) {
+		si = mi // the newer of the two inputs decides staleness
+	}
+	if writtenByThisBuild(dst, si.ModTime()) {
+		return dst, nil
+	}
+	tmp, err := servedName(dst)
+	if err != nil {
+		return "", err
+	}
+	sweepServedCopies(dst)
+	if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
+		os.Remove(tmp)
+		return "", err
+	}
+	return place(tmp, dst)
 }
 
-// served is the container a conversion left to read: its destination, or the
-// copy place kept under its own name.
-func (r *convertResult) served(dst string) (string, error) {
-	if r.err != nil {
-		return "", r.err
+// writtenByThisBuild reports whether dst is a container newer than newest and
+// stamped with this binary's identity. The binary is an input too: most of a
+// container is decisions the converter makes, so one written by an earlier
+// build is stale however new its mtime. jlm.WriterID() cannot tell builds apart
+// here (`go test -c` stamps no VCS info), so BuildIDForTest hashes the binary
+// and a container whose Writer disagrees is reconverted.
+func writtenByThisBuild(dst string, newest time.Time) bool {
+	di, err := os.Stat(dst)
+	if err != nil || !di.ModTime().After(newest) {
+		return false
 	}
-	if r.path != "" {
-		return r.path, nil
+	c, err := jlm.Open(dst)
+	if err != nil {
+		return false
 	}
-	return dst, nil
+	defer c.Close()
+	return c.FP.Writer == BuildIDForTest()
 }
 
 // place renames a finished conversion onto dst and returns what to read. On
 // Windows a file another process has open cannot be replaced, and `go test
 // ./...` runs packages in parallel over one model directory, each a different
 // binary and so each reconverting; there the fresh container, complete and
-// written by this build, is served under its own name instead.
+// written by this build, is served under its own name instead. A conversion
+// goes to a private name and is renamed, so a reader never opens a
+// half-written container, and the loser of a race writes a byte-identical
+// result.
 func place(tmp, dst string) (string, error) {
 	err := os.Rename(tmp, dst)
 	if err == nil {
-		return "", nil
+		return dst, nil
 	}
 	if _, statErr := os.Stat(dst); runtime.GOOS == "windows" && statErr == nil {
 		return tmp, nil
@@ -249,10 +244,19 @@ func place(tmp, dst string) (string, error) {
 	return "", err
 }
 
-// servedName is a conversion's private name for process pid: dst with the
-// pid before its extension.
-func servedName(dst string, pid int) string {
-	return fmt.Sprintf("%s.tmp-%d%s", strings.TrimSuffix(dst, jlm.Ext), pid, jlm.Ext)
+// servedName is a conversion's private name: dst with a unique tag before its
+// extension, which stays a container's so the file can be served as it is.
+func servedName(dst string) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(dst), strings.TrimSuffix(filepath.Base(dst), jlm.Ext)+".tmp-*"+jlm.Ext)
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	f.Close()
+	if err := os.Remove(name); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // sweepServedCopies removes the copies place kept in earlier runs. Windows
@@ -278,58 +282,48 @@ func convertDir(dir string, q8 bool) (string, error) {
 		dst = filepath.Clean(dir) + "-q8" + jlm.Ext
 		opts = append(opts, convert.WithQ8())
 	}
-	v, _ := convertOnce.LoadOrStore(dst, &convertResult{})
-	r := v.(*convertResult)
-	r.once.Do(func() {
-		ents, err := os.ReadDir(dir)
-		if err != nil {
-			r.err = err
-			return
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var newest time.Time
+	for _, e := range ents {
+		if fi, err := e.Info(); err == nil && fi.ModTime().After(newest) {
+			newest = fi.ModTime()
 		}
-		var newest time.Time
-		for _, e := range ents {
-			if fi, err := e.Info(); err == nil && fi.ModTime().After(newest) {
-				newest = fi.ModTime()
-			}
-		}
-		if di, err := os.Stat(dst); err == nil && di.ModTime().After(newest) {
-			if c, err := jlm.Open(dst); err == nil {
-				stale := c.FP.Writer != BuildIDForTest()
-				c.Close()
-				if !stale {
-					return
-				}
-			}
-		}
-		tmp := servedName(dst, os.Getpid())
-		sweepServedCopies(dst)
-		if _, err := convert.FromSafetensors(dir, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, opts...); err != nil {
-			os.Remove(tmp)
-			r.err = err
-			return
-		}
-		r.path, r.err = place(tmp, dst)
-	})
-	return r.served(dst)
+	}
+	if writtenByThisBuild(dst, newest) {
+		return dst, nil
+	}
+	tmp, err := servedName(dst)
+	if err != nil {
+		return "", err
+	}
+	sweepServedCopies(dst)
+	if _, err := convert.FromSafetensors(dir, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, opts...); err != nil {
+		os.Remove(tmp)
+		return "", err
+	}
+	return place(tmp, dst)
 }
 
 // The gates' own options: the package reads no environment, so a knob set with
 // t.Setenv would reach nothing. They apply at Open, the only path that reaches a
 // instance's JIT.
-var (
-	// noTune pins the fitted widths so both sides of a comparison run the same
-	// kernels: the pack-width tuner advances on Forward and not on
-	// ForwardBatch, so the two would otherwise reassociate differently.
-	noTune = WithJITOptions(nn.WithTune(nn.TuneOff))
-	// noGEMM is the exact arm bit equality against Forward needs: no
-	// weight-stationary GEMM, and every packed kernel on its float epilogue
-	// (GEMMExact). Without the second, on arm64 the rows a prefill leaves
-	// past its last token tile go through the fused kernel, which sums a
-	// k-quant super-block in integers, while Forward decodes through the
-	// tiled kernel's float chain (TuneOff pins it): qwen2vl and qwen3moe
-	// moved up to a logit at an odd row count there.
-	noGEMM = WithJITOptions(nn.WithoutGEMM(true), nn.WithGEMMExact(true))
-)
+
+// noTune pins the fitted widths so both sides of a comparison run the same
+// kernels: the pack-width tuner advances on Forward and not on
+// ForwardBatch, so the two would otherwise reassociate differently.
+func noTune() Option { return WithJITOptions(nn.WithTune(nn.TuneOff)) }
+
+// noGEMM is the exact arm bit equality against Forward needs: no
+// weight-stationary GEMM, and every packed kernel on its float epilogue
+// (GEMMExact). Without the second, on arm64 the rows a prefill leaves
+// past its last token tile go through the fused kernel, which sums a
+// k-quant super-block in integers, while Forward decodes through the
+// tiled kernel's float chain (TuneOff pins it): qwen2vl and qwen3moe
+// moved up to a logit at an odd row count there.
+func noGEMM() Option { return WithJITOptions(nn.WithoutGEMM(true), nn.WithGEMMExact(true)) }
 
 // benchModel is the model a gate runs against when the caller names none.
 //
@@ -465,12 +459,15 @@ func modelFiles() []string {
 
 // TestAServedCopyOpens: the copy place serves on Windows, when another test
 // binary holds the container and the rename is refused, is a container Open
-// reads. Named <dst>.tmp-<pid> it was refused for its extension, and every
+// reads. Named <dst>.tmp-<tag> it was refused for its extension, and every
 // gate that drew it failed with "is not a .jlm container".
 func TestAServedCopyOpens(t *testing.T) {
 	src := testmodels.Path("stories260K.gguf")
 	dst := filepath.Join(t.TempDir(), "stories260K"+jlm.Ext)
-	tmp := servedName(dst, os.Getpid())
+	tmp, err := servedName(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := convert.FromGGUFs(src, "", tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
 		t.Skipf("MODEL MISSING: %v", err)
 	}

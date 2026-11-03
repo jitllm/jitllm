@@ -13,7 +13,7 @@ import (
 
 // chatGold is tok/jinja's testdata: one chat template per supported family,
 // the conversations they are rendered over, and transformers' renderings.
-var chatGold = filepath.Join("..", "..", "tok", "jinja", "testdata")
+func chatGold() string { return filepath.Join("..", "..", "tok", "jinja", "testdata") }
 
 // TestChatPromptMatchesTransformers is tok/jinja's gate one level up: the
 // same templates and conversations, rendered through renderChatTemplate from
@@ -32,7 +32,7 @@ var chatGold = filepath.Join("..", "..", "tok", "jinja", "testdata")
 // and the documents case has no field in a request, so neither runs here.
 func TestChatPromptMatchesTransformers(t *testing.T) {
 	read := func(name string, v any) {
-		b, err := os.ReadFile(filepath.Join(chatGold, name))
+		b, err := os.ReadFile(filepath.Join(chatGold(), name))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,7 +66,7 @@ func TestChatPromptMatchesTransformers(t *testing.T) {
 
 	compared, raised, folded, refused, stringArgs := 0, 0, 0, 0, 0
 	for _, e := range manifest {
-		srcB, err := os.ReadFile(filepath.Join(chatGold, "templates", e.File))
+		srcB, err := os.ReadFile(filepath.Join(chatGold(), "templates", e.File))
 		if err != nil {
 			t.Fatal(err)
 		}

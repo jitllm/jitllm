@@ -201,11 +201,13 @@ func apertusViolations() []c6Violation {
 // apertusDevViolations are apertusViolations with the rotary pairing flipped
 // in the config, which is what the device reads; the host's table is built
 // at Open, so the host list flips that instead.
-var apertusDevViolations = append(slices.Clone(apertusViolations()[:len(apertusViolations())-2]),
-	c6Violation{"NORM rotary for NEOX", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.RopeNeox = false })
-	}},
-	c6Violation{"no q/k norm", noQKNorm})
+func apertusDevViolations() []c6Violation {
+	return append(slices.Clone(apertusViolations()[:len(apertusViolations())-2]),
+		c6Violation{"NORM rotary for NEOX", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.RopeNeox = false })
+		}},
+		c6Violation{"no q/k norm", noQKNorm})
+}
 
 // xieluMut runs f on a copy of every block's xIELU numbers.
 func xieluMut(f func(p []float32, li int)) func(m *Model) func() {
@@ -256,7 +258,7 @@ func postAsPre(m *Model) func() {
 
 func denseDevViolations() map[string][]c6Violation {
 	return map[string][]c6Violation{
-		"synth-apertus": apertusDevViolations,
+		"synth-apertus": apertusDevViolations(),
 		"synth-olmo2-gqa": {
 			{"a per-head q/k norm", perHeadQK},
 			{"k's norm read from q's weight", kFromQ},

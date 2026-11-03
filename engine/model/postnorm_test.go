@@ -266,7 +266,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			// block's post-FFN norm scaled by bend; it returns the log-softmax
 			// of the scored half.
 			decode := func(g *gpu.GPU, f32 bool, bend float32, opts ...Option) [][]float32 {
-				m, err := Open(path, append([]Option{noTune}, opts...)...)
+				m, err := Open(path, append([]Option{noTune()}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
 				}

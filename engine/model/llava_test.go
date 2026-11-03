@@ -17,21 +17,21 @@ import (
 // own rather than through one end-to-end number.
 
 // llavaText and llavaProj are the pair, in the model directory (JITLLM_MODELS).
-var llavaText = testmodels.Path("llava-phi-3-mini-int4.gguf")
-var llavaProj = testmodels.Path("llava-phi-3-mini-mmproj-f16.gguf")
+func llavaText() string { return testmodels.Path("llava-phi-3-mini-int4.gguf") }
+func llavaProj() string { return testmodels.Path("llava-phi-3-mini-mmproj-f16.gguf") }
 
 // openLlava converts the pair and opens the container. A missing model fails
 // rather than skips, naming the files to fetch.
 func openLlava(t testing.TB, opts ...Option) (*Model, *Tower) {
 	t.Helper()
-	if !vlmAvailable(llavaText, llavaProj) {
+	if !vlmAvailable(llavaText(), llavaProj()) {
 		testmodels.Missing(t, "%s, its mmproj and its merged container are all missing. RULE 11: a "+
 			"missing artefact is a TASK, not a constraint -- fetch llava-phi-3-mini "+
 			"(text + mmproj) into "+testmodels.Dir()+" "+
 			"(set JITLLM_MODELS to the model directory) and re-run. Skipping here would make this "+
-			"gate a green line that proves nothing.", llavaText)
+			"gate a green line that proves nothing.", llavaText())
 	}
-	m, err := Open(jlmOfPair(t, llavaText, llavaProj), opts...)
+	m, err := Open(jlmOfPair(t, llavaText(), llavaProj()), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

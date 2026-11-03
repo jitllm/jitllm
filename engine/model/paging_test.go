@@ -75,7 +75,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 	// arms different reduction orders, which flips tinyllama's 0.082 tie at
 	// token 7 -- a difference in tuning, read as one in paging.
 	ids := func(frames int) ([]int32, int, int64) {
-		m, err := Open(path, append([]Option{noTune}, opts...)...)
+		m, err := Open(path, append([]Option{noTune()}, opts...)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +119,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 		return out, got, faults
 	}
 
-	m0, err := Open(path, append([]Option{noTune}, opts...)...)
+	m0, err := Open(path, append([]Option{noTune()}, opts...)...)
 	if err != nil {
 		if strings.Contains(err.Error(), "q8_0 KV cache is not implemented") {
 			t.Skipf("refused by name: %v", err)

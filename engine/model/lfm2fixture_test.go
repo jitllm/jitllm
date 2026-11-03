@@ -44,7 +44,7 @@ func openLFM2Fixture(t testing.TB, opts ...Option) (*Model, *lfm2FixGold, string
 	if err := json.Unmarshal(raw, g); err != nil {
 		t.Fatal(err)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune, WithKVF16(false)}, opts...)...)
+	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune(), WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -216,7 +216,9 @@ type auditModel struct {
 
 // laterShard is the second and later file of a split GGUF; the first names the
 // whole model.
-var laterShard = regexp.MustCompile(`-0*([2-9]|[1-9][0-9]+)-of-[0-9]+\.gguf$`)
+func laterShard() *regexp.Regexp {
+	return regexp.MustCompile(`-0*([2-9]|[1-9][0-9]+)-of-[0-9]+\.gguf$`)
+}
 
 // auditModels is everything TestEveryModelRunsGenerated sweeps. On a host
 // holding only containers it is the containers, as languageModels' fallback
@@ -247,7 +249,7 @@ func auditModels(t *testing.T) []auditModel {
 	sub, _ := filepath.Glob(filepath.Join(testmodels.Dir(), "*", "*.gguf"))
 	sort.Strings(sub)
 	for _, p := range sub {
-		if laterShard.MatchString(p) || isProjector(p) {
+		if laterShard().MatchString(p) || isProjector(p) {
 			continue
 		}
 		add(filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p)), p, false)

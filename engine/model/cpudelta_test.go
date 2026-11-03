@@ -185,7 +185,7 @@ func TestComposedCPUDeltaFeaturesAreLoadBearing(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"))
 	open := func(opts ...Option) *Model {
 		t.Helper()
-		m, err := Open(path, append([]Option{noTune}, opts...)...)
+		m, err := Open(path, append([]Option{noTune()}, opts...)...)
 		if err != nil {
 			t.Fatal(err)
 		}

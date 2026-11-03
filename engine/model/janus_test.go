@@ -17,18 +17,18 @@ import (
 // processor's <begin_of_image>/<end_of_image> markers. The goldens are
 // scripts/janusgold.py's, transformers' own JanusVisionModel and aligner.
 
-var (
-	janusText = testmodels.Path("minicpmv/Janus-Pro-1B-Q4_K_M.gguf")
-	janusProj = testmodels.Path("minicpmv/mmproj-Janus-Pro-1B-Q8_0.gguf")
-	janusGold = testmodels.Path("minicpmv/hf/Janus-Pro-1B/gold")
-)
+func janusText() string { return testmodels.Path("minicpmv/Janus-Pro-1B-Q4_K_M.gguf") }
+
+func janusProj() string { return testmodels.Path("minicpmv/mmproj-Janus-Pro-1B-Q8_0.gguf") }
+
+func janusGold() string { return testmodels.Path("minicpmv/hf/Janus-Pro-1B/gold") }
 
 func openJanus(t testing.TB, opts ...Option) *Model {
 	t.Helper()
-	if !vlmAvailable(janusText, janusProj) {
-		t.Skipf("MODEL MISSING: %s, its mmproj and its merged container -- this gate proved nothing", janusText)
+	if !vlmAvailable(janusText(), janusProj()) {
+		t.Skipf("MODEL MISSING: %s, its mmproj and its merged container -- this gate proved nothing", janusText())
 	}
-	m, err := Open(jlmOfPair(t, janusText, janusProj), opts...)
+	m, err := Open(jlmOfPair(t, janusText(), janusProj()), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,9 +75,9 @@ func TestJanusMatchesTransformers(t *testing.T) {
 	defer m.Close()
 	tw := m.Tower()
 	c := tw.Cfg
-	for _, pic := range []struct{ name, path string }{{"photo896x448", mcvPhoto}, {"quad-and-disc", testImage}} {
+	for _, pic := range []struct{ name, path string }{{"photo896x448", mcvPhoto()}, {"quad-and-disc", testImage}} {
 		t.Run(pic.name, func(t *testing.T) {
-			if _, err := os.Stat(filepath.Join(janusGold, pic.name+".json")); err != nil {
+			if _, err := os.Stat(filepath.Join(janusGold(), pic.name+".json")); err != nil {
 				t.Skipf("GOLDEN MISSING: %v -- run scripts/janusgold.py; this gate proved nothing", err)
 			}
 			img := decodeImage(t, pic.path)
@@ -87,7 +87,7 @@ func TestJanusMatchesTransformers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			base := filepath.Join(janusGold, pic.name)
+			base := filepath.Join(janusGold(), pic.name)
 			want := readF32n(t, base+".px", c.ImageSz*c.ImageSz*3)
 			off, worst := 0, float32(0)
 			for j := range want {
@@ -249,7 +249,7 @@ func TestJanusDescribesAnImage(t *testing.T) {
 		}
 		return strings.ToLower(m.Vocab.Decode(out))
 	}
-	img := decodeImage(t, mcvPhoto)
+	img := decodeImage(t, mcvPhoto())
 	got := describe(img)
 	t.Logf("jitllm: %q", got)
 	none := describe(image.NewRGBA(img.Bounds()))

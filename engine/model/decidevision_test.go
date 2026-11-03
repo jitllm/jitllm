@@ -34,7 +34,7 @@ type d1VisionCase struct {
 
 func readD1VisionCases(t *testing.T) []d1VisionCase {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(d1Gold, "decisions.json"))
+	b, err := os.ReadFile(filepath.Join(d1Gold(), "decisions.json"))
 	if err != nil {
 		testmodels.Missing(t, "GOLDEN MISSING: %v -- run scripts/lfm2visiongold.py (RULE 11)", err)
 	}
@@ -66,7 +66,7 @@ func d1VisionWorst(t *testing.T, d *Decider, cs []d1VisionCase) float64 {
 		if c.State != nil {
 			state = jinja.NewString(*c.State)
 		}
-		img := decodeImage(t, filepath.Join(d1Gold, c.Image))
+		img := decodeImage(t, filepath.Join(d1Gold(), c.Image))
 		ans, err := d.Decide(state, qs, []image.Image{img})
 		if err != nil {
 			t.Fatal(err)

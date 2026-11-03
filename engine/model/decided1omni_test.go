@@ -171,7 +171,7 @@ func TestD1OmniFeaturesAreLoadBearing(t *testing.T) {
 // placed make no allocation either (relocation: TestDecisionRelocatesBetweenDevices).
 func TestD1OmniKeepsThePrinciples(t *testing.T) {
 	t.Run("allocation", func(t *testing.T) {
-		m := openDecision(t, d1OmniModel, jlm.DecisionD1Omni, noTune)
+		m := openDecision(t, d1OmniModel, jlm.DecisionD1Omni, noTune())
 		defer m.Close()
 		t.Run("host", func(t *testing.T) { decisionAllocs(t, m, nil, 0) })
 		for _, arm := range layaArms(t) {

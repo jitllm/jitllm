@@ -127,7 +127,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 	}
 	// No KV prewarm: the squeezed arm measures what attaching spends and
 	// needs the rows' growth to outrun it, which pages grown ahead would cover.
-	m, err := Open(jlmOf(t, p), append([]Option{noGEMM, noTune, WithKVPrewarm(false)}, mopts...)...)
+	m, err := Open(jlmOf(t, p), append([]Option{noGEMM(), noTune(), WithKVPrewarm(false)}, mopts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

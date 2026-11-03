@@ -72,7 +72,7 @@ func TestJanusTeacherForcedMatchesLlamaCpp(t *testing.T) {
 	m := openJanus(t)
 	defer m.Close()
 	tw := m.Tower()
-	img := decodeImage(t, mcvPhoto)
+	img := decodeImage(t, mcvPhoto())
 	s := tw.testState()
 	px, err := s.PreprocessImage(img)
 	if err != nil {

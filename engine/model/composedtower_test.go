@@ -60,7 +60,7 @@ func towerEncodeAt(t *testing.T, s *Instance, px []float32) (after0, out []float
 // composedTowerOnCPU is the gate over the tower open opens, its picture px
 // (nil for the tower's own synthetic one).
 func composedTowerOnCPU(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tower)) {
-	ref, rtw := open(t, noTune)
+	ref, rtw := open(t, noTune())
 	defer ref.Close()
 	c := rtw.Cfg
 	px := make([]float32, c.ImageSz*c.ImageSz*3)
@@ -71,7 +71,7 @@ func composedTowerOnCPU(t *testing.T, open func(testing.TB, ...Option) (*Model, 
 	want0, want := towerEncodeAt(t, hs, px)
 	hs.Close()
 
-	m, tw := open(t, noTune)
+	m, tw := open(t, noTune())
 	defer m.Close()
 	if n := coveredTower(m); n != c.NLayer {
 		t.Fatalf("the front end states %d of %d tower blocks (block 0: %s, %v)", n, c.NLayer,
@@ -308,7 +308,7 @@ func towerDeclines() map[string][2]bool {
 // arm's whole-tower bound (towerOnDevices), and one block placed, held to the
 // host after it at the one-block bound.
 func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tower), bound float64) {
-	m, tw := open(t, noTune)
+	m, tw := open(t, noTune())
 	defer m.Close()
 	c := tw.Cfg
 	if n := coveredTower(m); n != c.NLayer {
@@ -534,7 +534,7 @@ func unclampTower(tw *Tower) func() {
 func TestComposedProjectorOnCPU(t *testing.T) {
 	for _, f := range composedTowers() {
 		t.Run(f.name, func(t *testing.T) {
-			ref, rtw := f.open(t, noTune)
+			ref, rtw := f.open(t, noTune())
 			defer ref.Close()
 			c := rtw.Cfg
 			if _, why, err := ref.towerProjOf(false); why != Covered {
@@ -559,7 +559,7 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 				return append([]float32(nil), got...)
 			}
 			want := project(rtw)
-			m, tw := f.open(t, noTune)
+			m, tw := f.open(t, noTune())
 			defer m.Close()
 			var vio string
 			switch {

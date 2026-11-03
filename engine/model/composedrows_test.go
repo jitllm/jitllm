@@ -39,8 +39,8 @@ func TestComposedRowsServe(t *testing.T) {
 	}
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			got, _ := batchGreedy(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev)})
-			composedRowsServed(t, m, lastBatchStats)
+			got, _, stats := batchGreedyStats(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev)})
+			composedRowsServed(t, m, stats)
 			if i, j, gap := composedRowsPart(t, m, ids, want, got); i >= 0 {
 				t.Fatalf("row %d token %d: batched %v, the host %v, %.4f apart on the host", i, j, got[i], want[i], gap)
 			}
@@ -65,7 +65,7 @@ func TestComposedRowsTokens(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS)", err)
 			}
-			m, err := Open(jlmOf(t, p), noTune)
+			m, err := Open(jlmOf(t, p), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,7 +190,7 @@ func composedRowsModel(t *testing.T) *Model {
 	if _, err := os.Stat(p); err != nil {
 		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS)", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune)
+	m, err := Open(jlmOf(t, p), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

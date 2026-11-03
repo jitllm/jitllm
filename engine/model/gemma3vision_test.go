@@ -15,20 +15,20 @@ import (
 // patches of 14px at 896), a 4x4 average pool to 256 tokens, an RMSNorm and
 // one matrix into the text model's 2560.
 
-var gemma3Text = testmodels.Path("gemma-3-4b-it-Q4_K_M.gguf")
-var gemma3Proj = testmodels.Path("vlm/mmproj-gemma-3-4b-it-f16.gguf")
+func gemma3Text() string { return testmodels.Path("gemma-3-4b-it-Q4_K_M.gguf") }
+func gemma3Proj() string { return testmodels.Path("vlm/mmproj-gemma-3-4b-it-f16.gguf") }
 
 // openGemma3 converts the pair into one container and opens it. A missing
 // file fails, naming what to fetch: a skipped vision gate is a green line that
 // proves nothing.
 func openGemma3(t testing.TB, opts ...Option) (*Model, *Tower) {
 	t.Helper()
-	if !vlmAvailable(gemma3Text, gemma3Proj) {
+	if !vlmAvailable(gemma3Text(), gemma3Proj()) {
 		testmodels.Missing(t, "%s and its mmproj %s (or the merged container) are missing. RULE 11: fetch "+
 			"ggml-org/gemma-3-4b-it-GGUF's mmproj-model-f16.gguf into %s and re-run",
-			gemma3Text, gemma3Proj, testmodels.Dir())
+			gemma3Text(), gemma3Proj(), testmodels.Dir())
 	}
-	m, err := Open(jlmOfPair(t, gemma3Text, gemma3Proj), opts...)
+	m, err := Open(jlmOfPair(t, gemma3Text(), gemma3Proj()), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

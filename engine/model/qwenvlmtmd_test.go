@@ -54,7 +54,7 @@ func TestQwenVLMatchesLlamaCppTeacherForced(t *testing.T) {
 			if !vlmAvailable(text, proj) {
 				t.Skipf("MODEL MISSING: %s and its mmproj (set JITLLM_MODELS) -- this gate proved nothing", text)
 			}
-			m, err := Open(jlmOfPair(t, text, proj), noTune)
+			m, err := Open(jlmOfPair(t, text, proj), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}

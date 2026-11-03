@@ -25,7 +25,7 @@ func TestStepAcrossSessionsMatchesEachAlone(t *testing.T) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune, WithKVF16(false))
+	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func stepMixtures() []string {
 // is not one: a dense model would pass with nothing grouped in it.
 func openStepMixture(t *testing.T, name string) *Model {
 	t.Helper()
-	m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithKVF16(false))
+	m, err := Open(jlmOf(t, testmodels.Path(name)), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func openStepHybrid(t *testing.T) *Model {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune, WithKVF16(false))
+	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
