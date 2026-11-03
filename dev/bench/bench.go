@@ -116,24 +116,22 @@ func check(c Case, fastest time.Duration, iters int) {
 		// See guard_race.go: the ceiling is instrumented and the kernel is not.
 		return
 	}
-	if implied <= MemWall(threads)*guardFactor {
+	wall := MemWall(threads)
+	if implied <= wall*guardFactor {
 		return
 	}
-	// The cached wall may have been measured while the machine was busy, so
+	// The wall may have been measured while the machine was busy, so
 	// re-measure before accusing and keep the higher reading.
-	if implied <= remeasure(threads)*guardFactor {
+	wall = remeasure(threads, wall)
+	if implied <= wall*guardFactor {
 		return
 	}
 	panic(fmt.Sprintf("bench: %q implies %.1f GB/s, which exceeds the %d-thread ceiling of %.1f GB/s — the benchmark is wrong, not fast",
-		c.Name, implied/1e9, threads, MemWall(threads)*guardFactor/1e9))
+		c.Name, implied/1e9, threads, wall*guardFactor/1e9))
 }
 
-var (
-	wallOnce sync.Map // threads -> float64
-)
-
 // MemWall measures sustained DRAM read bandwidth with the given number of
-// goroutines, in bytes/sec, and caches it for the process.
+// goroutines, in bytes/sec.
 //
 // It is measured rather than hardcoded, and it is a lower bound, not the
 // hardware's peak: scalar Go loads on unpinned goroutines read well below a
@@ -141,9 +139,6 @@ var (
 func MemWall(threads int) float64 {
 	if threads < 1 {
 		threads = 1
-	}
-	if v, ok := wallOnce.Load(threads); ok {
-		return v.(float64)
 	}
 	// The working set must not fit in L3, or this measures cache as DRAM.
 	const perThread = (64 << 20) / 8 // 64 MiB of float64 per thread
@@ -183,12 +178,11 @@ func MemWall(threads int) float64 {
 		}
 		wg.Wait()
 		el := time.Since(start).Seconds()
-		sink = sums[0] // keep the loop alive
+		runtime.KeepAlive(sums)
 		if bw := float64(threads) * perThread * 8 / el; bw > best {
 			best = bw
 		}
 	}
-	wallOnce.Store(threads, best)
 	return best
 }
 
@@ -200,20 +194,10 @@ func MemWall(threads int) float64 {
 // which are off by 10x or by infinity, never by 50%.
 const guardFactor = 2.0
 
-// remeasure re-runs the probe and keeps the best reading ever seen for this
-// thread count, so the cached ceiling only ever moves up.
-func remeasure(threads int) float64 {
-	prev, _ := wallOnce.Load(threads)
-	wallOnce.Delete(threads)
-	got := MemWall(threads)
-	if p, ok := prev.(float64); ok && p > got {
-		wallOnce.Store(threads, p)
-		return p
-	}
-	return got
+// remeasure is the higher of a reading already taken and a fresh one.
+func remeasure(threads int, prev float64) float64 {
+	return max(prev, MemWall(threads))
 }
-
-var sink float64
 
 // Guard refuses to measure on a machine that is busy or hot, and returns why.
 //
@@ -311,10 +295,10 @@ func Report(label string, bytesMoved uint64, elapsed time.Duration, threads int)
 	t := max(threads, 1)
 	gbs := float64(bytesMoved) / elapsed.Seconds()
 	wall := MemWall(t)
-	// A fraction over 100% means the cached wall was mismeasured (MemWall
-	// reads low on a busy box), so re-measure once.
+	// A fraction over 100% means the wall was mismeasured (MemWall reads low
+	// on a busy box), so re-measure once.
 	if gbs > wall {
-		wall = remeasure(t)
+		wall = remeasure(t, wall)
 	}
 	over := ""
 	if gbs > wall {

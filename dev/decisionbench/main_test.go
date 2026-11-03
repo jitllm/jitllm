@@ -53,9 +53,11 @@ func scripted(t *testing.T, pyes map[string]float64) *httptest.Server {
 }
 
 // The table: four centipedes (two caught), four other words (one wrongly picked).
-var pyes = map[string]float64{
-	"Scolopendra": 0.9, "Lithobius": 0.7, "Geophilus": 0.2, "Scutigera": 0.4,
-	"teapot": 0.1, "Lumbricus": 0.6, "granite": 0.0, "Julus": 0.3,
+func pyes() map[string]float64 {
+	return map[string]float64{
+		"Scolopendra": 0.9, "Lithobius": 0.7, "Geophilus": 0.2, "Scutigera": 0.4,
+		"teapot": 0.1, "Lumbricus": 0.6, "granite": 0.0, "Julus": 0.3,
+	}
 }
 
 func items(t *testing.T) []item {
@@ -68,14 +70,14 @@ func items(t *testing.T) []item {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(its) != len(pyes) {
-		t.Fatalf("read %d words, the table has %d", len(its), len(pyes))
+	if len(its) != len(pyes()) {
+		t.Fatalf("read %d words, the table has %d", len(its), len(pyes()))
 	}
 	return its
 }
 
 func TestHarnessCountsANoul(t *testing.T) {
-	srv := scripted(t, pyes)
+	srv := scripted(t, pyes())
 	defer srv.Close()
 	c, err := newConfig(srv.URL, "m", `{"type": "noul", "instructions": "Is this the name of a centipede?"}`, "", 0.5, time.Minute)
 	if err != nil {
@@ -101,7 +103,7 @@ func TestHarnessCountsANoul(t *testing.T) {
 }
 
 func TestHarnessCountsAChoice(t *testing.T) {
-	srv := scripted(t, pyes)
+	srv := scripted(t, pyes())
 	defer srv.Close()
 	c, err := newConfig(srv.URL, "m", `{"type": "choice", "criteria": {"centipede": null, "other": null}}`, "centipede", 0.5, time.Minute)
 	if err != nil {
@@ -128,7 +130,7 @@ func TestHarnessCountsAChoice(t *testing.T) {
 
 // TestHarnessStopsAtTheWindow: a window that has closed answers nothing more.
 func TestHarnessStopsAtTheWindow(t *testing.T) {
-	srv := scripted(t, pyes)
+	srv := scripted(t, pyes())
 	defer srv.Close()
 	c, err := newConfig(srv.URL, "m", `{"type": "noul"}`, "", 0.5, 0)
 	if err != nil {
@@ -160,7 +162,7 @@ func TestHarnessRefusesABadLabel(t *testing.T) {
 
 // A cycling run fills the window from a short file and still counts the file once.
 func TestHarnessCyclesAShortFile(t *testing.T) {
-	srv := scripted(t, pyes)
+	srv := scripted(t, pyes())
 	defer srv.Close()
 	c, err := newConfig(srv.URL, "m", `{"type": "noul"}`, "", 0.5, 300*time.Millisecond)
 	if err != nil {

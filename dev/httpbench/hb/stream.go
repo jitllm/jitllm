@@ -48,14 +48,14 @@ type Sample struct {
 // fewer than two tokens or no measurable decode time.
 func (s *Sample) DecodeRate() float64 {
 	if s.CompletionTokens < 2 || len(s.ITL) == 0 {
-		return nan
+		return nan()
 	}
 	var d time.Duration
 	for _, g := range s.ITL {
 		d += g
 	}
 	if d <= 0 {
-		return nan
+		return nan()
 	}
 	return float64(s.CompletionTokens-1) / d.Seconds()
 }
