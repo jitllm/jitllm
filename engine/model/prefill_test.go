@@ -26,21 +26,20 @@ import (
 // wrong text.
 func TestPrefillMatchesForward(t *testing.T) {
 	path := benchModel(t)
-	// With the batched GEMM out of the way, Prefill is bit-identical to a
-	// Forward loop, so this mode demands equality; an NMSE bar would hide a
-	// prefill path computing the same op by different arithmetic.
+	// On the float forms Prefill differs from a Forward loop by the forms'
+	// folding order alone, so this mode holds them to floatFormsNMSE, a bar
+	// far below what a wrong position or mask reads.
 	t.Run("no-gemm", func(t *testing.T) {
 		nn.ResetForTest()
 		defer nn.ResetForTest()
 		prefillVsForward(t, path, true)
 	})
-	// The GEMM's exact (float-epilogue) form sums what the matvec sums in the
-	// same order, so it is held to equality too. Only the integer-accumulating
-	// form is left to the NMSE tripwire.
+	// The float forms without the GEMM option, held the same way. The
+	// shipping int8 forms are left to the NMSE tripwire.
 	t.Run("exact-gemm", func(t *testing.T) {
 		nn.ResetForTest()
 		defer nn.ResetForTest()
-		prefillVsForwardOpts(t, path, true, WithJITOptions(nn.WithGEMMExact(true)))
+		prefillVsForwardOpts(t, path, true, withCPUFloat())
 	})
 	t.Run("shipped", func(t *testing.T) {
 		nn.ResetForTest()
@@ -184,18 +183,19 @@ func prefillOnDevice(t *testing.T, path, dev string, parts gpu.Parts, windows bo
 		np, mx+at, at)
 }
 
-// prefillVsForward compares Prefill against a Forward loop. exact demands bit
-// equality; otherwise the NMSE tripwire applies.
+// prefillVsForward compares Prefill against a Forward loop. exact runs the
+// float forms and holds them to floatFormsNMSE; otherwise the NMSE tripwire
+// applies.
 func prefillVsForward(t *testing.T, path string, exact bool) {
 	if exact {
-		prefillVsForwardOpts(t, path, true, noGEMM)
+		prefillVsForwardOpts(t, path, true, noGEMM, withCPUFloat())
 		return
 	}
 	prefillVsForwardOpts(t, path, false)
 }
 
 // prefillVsForwardOpts is prefillVsForward with the options that select the
-// batched path under test; exact demands bit equality.
+// batched path under test; exact holds them to floatFormsNMSE.
 func prefillVsForwardOpts(t *testing.T, path string, exact bool, extra ...Option) {
 	// The tuner is pinned so both sessions run the same kernels: it advances
 	// on Forward calls and Prefill makes none.
@@ -275,12 +275,14 @@ func prefillVsForwardModel(t *testing.T, m *Model, exact bool, minTok int, attac
 	}
 	nmse := sse / sy2
 	if exact {
-		// Without the reassociating GEMM there is no difference at all.
-		if nmse != 0 {
-			t.Errorf("last-token logits: NMSE %.3e with the GEMM disabled -- "+
-				"prefill and decode should be bit-identical here", nmse)
+		// The composed CPU's float prompt forms and its float decode forms
+		// fold a block in another order and nothing else (RULE 8: the bar
+		// across forms is a band, not bit-identity).
+		if !(nmse <= floatFormsNMSE) {
+			t.Errorf("last-token logits: NMSE %.3e on the float forms -- "+
+				"prefill and decode differ past their folding order (bound %.0e)", nmse, floatFormsNMSE)
 		}
-		t.Logf("last-token logits bit-identical (NMSE %.3e)", nmse)
+		t.Logf("last-token logits NMSE %.3e (bound %.0e)", nmse, floatFormsNMSE)
 	} else {
 		// The shipped GEMM sums a tile where MatVec sums a row, and that
 		// reassociation compounds over layers (measured up to ~3e-3 across

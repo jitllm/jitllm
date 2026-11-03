@@ -145,10 +145,10 @@ func streamedMatches(t *testing.T, run func(func(*gpu.Config)) ([][]float32, gpu
 	if overlap != (ss.StreamOverlaps > 0) {
 		t.Fatalf("%d reads issued behind a transfer, want overlap %v", ss.StreamOverlaps, overlap)
 	}
-	t.Logf("resident: %d blocks placed, %d streamed, %d fills, %d device bytes",
-		rp, rs.StreamBlocks, rs.StreamFills, rb)
-	t.Logf("streamed: %d blocks placed, %d streamed, %d fills, %d device bytes (%.2fx less)",
-		sp, ss.StreamBlocks, ss.StreamFills, sb, float64(rb)/float64(sb))
+	t.Logf("resident: %d blocks placed, %d streamed, %d fills, %d device bytes (%d composed, %d scratch)",
+		rp, rs.StreamBlocks, rs.StreamFills, rb, rs.ComposedBytes, rs.ScratchBytes)
+	t.Logf("streamed: %d blocks placed, %d streamed, %d fills, %d device bytes (%d composed, %d scratch, %d expert caches; %.2fx less)",
+		sp, ss.StreamBlocks, ss.StreamFills, sb, ss.ComposedBytes, ss.ScratchBytes, ss.StreamCacheBytes, float64(rb)/float64(sb))
 
 	// The device bytes are asserted: a tier that uploaded the full bank and
 	// also assembled a compact one would give equal logits. An expert cache

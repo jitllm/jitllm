@@ -157,7 +157,6 @@ func (s *Instance) allocRecurrent(nseq int) {
 	}
 	g := c.delta()
 	s.dg = g
-	s.lin.ref = s.m.opt.linRowByRow
 	s.rconv = make([][]float32, c.NLayer)
 	s.rstate = make([][]float32, c.NLayer)
 	for i := 0; i < c.NLayer; i++ {

@@ -28,14 +28,14 @@ func TestBatchMatchesForward(t *testing.T) {
 			} else {
 				t.Skipf("model not present: %s (nor its container)", path)
 			}
-			// Two modes, as TestPrefillMatchesForward has. With the GEMM's
-			// float epilogue every batched matmul sums in the matvec's order, so
-			// the batch is held to equality. The shipped form may sum a k-quant
-			// super-block in integers (arm64, pre-VNNI amd64), which flips
+			// Two modes, as TestPrefillMatchesForward has. On the composed
+			// CPU's float forms a step's rows and a row alone are apart by
+			// their folding order, so the batch is held to floatFormsNMSE. The
+			// shipped forms round their int8 activations apart, which flips
 			// small-margin argmaxes, so that mode is judged by margin and a
 			// gross-error tripwire.
 			t.Run("exact-gemm", func(t *testing.T) {
-				batchVsForward(t, path, true, noTune, WithJITOptions(nn.WithGEMMExact(true)))
+				batchVsForward(t, path, true, noTune, withCPUFloat())
 			})
 			t.Run("shipped", func(t *testing.T) {
 				batchVsForward(t, path, false, noTune)
@@ -147,9 +147,9 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 }
 
 // logitJudge holds a batched path's logits to the single-sequence ones in one
-// of the two modes the batch gates share. Exact: any difference is a defect,
-// which is right when every batched matmul sums in the matvec's order (the
-// GEMM's float epilogue). Shipped: the batched GEMM may sum a k-quant
+// of the two modes the batch gates share. Exact: the composed CPU's float
+// forms, a step's against a row's, apart by their folding order alone
+// (floatFormsNMSE). Shipped: the batched GEMM may sum a k-quant
 // super-block in integers (cpu.StationaryIntAcc: arm64, pre-VNNI amd64), a
 // reassociation of NMSE ~1e-12 a matmul that int8 re-quantization of the
 // activations amplifies into the 0.2-0.9 logit band, so a flip is judged at
@@ -163,13 +163,12 @@ type logitJudge struct {
 
 // step judges one row's logits. Teacher-forced, so a flip is judged at its own
 // position: where both argmaxes won by less than the whole perturbation the
-// model is undecided; a confident flip is a defect. The exact mode has no
-// perturbation at all.
+// model is undecided; a confident flip is a defect.
 func (j *logitJudge) step(t *testing.T, got, want []float32, where string) {
 	t.Helper()
 	if g, w := Greedy(got), Greedy(want); g != w {
 		mA, mB, d := margin(want), margin(got), maxAbsDiff(want, got)
-		if j.exact || mA > d || mB > d {
+		if mA > d || mB > d {
 			t.Errorf("%s: batch %d (margin %.4f), single %d (margin %.4f), "+
 				"max|dlogit| %.4f", where, g, mB, w, mA, d)
 		} else {
@@ -194,9 +193,9 @@ func (j *logitJudge) finish(t *testing.T) {
 	switch {
 	case math.IsNaN(nmse):
 		t.Error("NaN logits")
-	case j.exact && nmse != 0:
-		t.Errorf("NMSE %.3e with the float-epilogue GEMM -- %s "+
-			"should be bit-identical here", nmse, j.what)
+	case j.exact && !(nmse <= floatFormsNMSE):
+		t.Errorf("NMSE %.3e on the float forms -- %s differ past their folding order (bound %.0e)",
+			nmse, j.what, floatFormsNMSE)
 	case nmse > 1e-2:
 		// Two orders below the NMSE ~1 a wrong cache offset produces.
 		t.Errorf("NMSE %.3e between %s -- too far to be reassociation", nmse, j.what)
@@ -214,7 +213,7 @@ func TestRaggedBatchMatchesForward(t *testing.T) {
 				t.Skipf("model not present: %s (nor its container)", path)
 			}
 			t.Run("exact-gemm", func(t *testing.T) {
-				raggedVsForward(t, path, true, noTune, WithJITOptions(nn.WithGEMMExact(true)))
+				raggedVsForward(t, path, true, noTune, withCPUFloat())
 			})
 			t.Run("shipped", func(t *testing.T) {
 				raggedVsForward(t, path, false, noTune)

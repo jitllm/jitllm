@@ -2,9 +2,11 @@ package model
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/graph"
 )
 
 // embedDevCos is how close a device's embedding must sit to the host's: the
@@ -177,22 +179,37 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 					}
 					// A bidirectional decoder's mask is load-bearing on the
 					// device: run causal there, and with the sliding layers'
-					// windows as wide as the sequence (the long text is past
-					// the window).
+					// graphs stating no window (the long text is past the
+					// window), which is what the composed attention reads.
 					violation("a causal mask on the device", func() func() {
 						m.Cfg.NonCausal = false
 						return func() { m.Cfg.NonCausal = true }
 					})
 					violation("no symmetric window on the sliding layers", func() func() {
-						was := m.Cfg.SWAWindow
-						m.Cfg.SWAWindow = 1 << 20
-						return func() { m.Cfg.SWAWindow = was }
+						return m.rewriteEveryBlock(t, unwindowed(t))
 					})
 				})
 			}
 			if ran == 0 {
 				noDevice(t, "device", nil)
 			}
+		})
+	}
+}
+
+// unwindowed is a block's graph with its attention's window gone, the graph
+// itself where it states none.
+func unwindowed(t *testing.T) func(*graph.Graph) *graph.Graph {
+	return func(g *graph.Graph) *graph.Graph {
+		if !slices.ContainsFunc(g.Ops, func(o graph.Op) bool { return o.Kind == graph.OpAttend && o.Attr.Window > 0 }) {
+			return g
+		}
+		return rewriteOps(t, g, func(_ int, o *graph.Op) bool {
+			if o.Kind != graph.OpAttend || o.Attr.Window == 0 {
+				return false
+			}
+			o.Attr.Window = 0
+			return true
 		})
 	}
 }

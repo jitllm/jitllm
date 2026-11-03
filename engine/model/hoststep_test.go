@@ -21,6 +21,15 @@ import (
 // positions -- must read above it.
 const hostStepNMSE = 1e-2
 
+// floatFormsNMSE bounds the composed CPU's float forms (withCPUFloat) over a
+// prompt's or a step's rows against their forms over one row: the same
+// arithmetic folded in another order, with no int8 activations to round
+// apart. Measured on box 41 decoding two tokens and prefilling three
+// against decoding five: 1.9e-7 on Qwen2-VL, 1.3e-7 on Qwen3-MoE, 4.5e-9
+// on TinyLlama. A row at a wrong position or reading another's history
+// reads orders of magnitude above it.
+const floatFormsNMSE = 1e-5
+
 // TestStepRunsOnTheCPUSharesOnePass is the gate on StepRuns' host arm
 // (stepHost): two sessions decode while a third session's prompt rides beside
 // them in chunks of three tokens, then all three decode together, every

@@ -7,24 +7,9 @@ import (
 	"testing"
 )
 
-// A recurrent block's projections as GEMMs over a prompt chunk (linrows.go)
-// against the row-by-row arm (WithLinearRowByRow), on one model and two
-// instances: the projections, every recurrent state and convolution window at
-// every prompt partition boundary, the logits, a teacher-forced continuation
-// and a prefix-cache resume.
-//
-// Under nn.WithGEMMExact the GEMM keeps the matvec's float epilogue, so the
-// two arms are the same arithmetic and the bound is equality (linExact): what
-// was measured on every model below, on amd64 and the M4. The shipping GEMM
-// may take a tuned epilogue whose rounding differs from the matvec's in the
-// last bit, and a model whose next block quantizes its activations to int8
-// turns that bit into a quantization step; linShipped is that envelope, set
-// from the worst measured on any model and host with a margin of about two,
-// as |ref - got| <= abs + rel*max|ref| over each vector: LFM2-350M Q4_K_M on
-// the M4 measured proj 0.29, window 0.043, logits 0.079 and continuation
-// 0.105, every other model 0 on both hosts (no model with a recurrent state
-// measured a nonzero state error; its bound is the window's). The measured
-// figures are logged on every run.
+// A hybrid's prompt resumed from the prefix cache, its recurrent summary
+// included, against the same prompt run whole on the composed CPU: the logits
+// and every recurrent state and convolution window, to equality (linExact).
 type linTol struct{ abs, rel float64 }
 
 var linExact = map[string]linTol{}
@@ -77,13 +62,6 @@ func (e *linEnv) String() string {
 		}
 	}
 	return b.String()
-}
-
-// linPair is an instance in each arm.
-func linPair(m *Model, n int) (ref, bat *Instance) {
-	ref, bat = m.NewInstance(n), m.NewInstance(n)
-	ref.lin.ref, bat.lin.ref = true, false
-	return ref, bat
 }
 
 // linStates compares every recurrent layer's state and window.
@@ -140,15 +118,14 @@ func linPrompt(n, vocab int) []int32 {
 }
 
 // TestLinearRowsResumeFromThePrefixCache: a prompt resumed from a stored
-// prefix, its recurrent summary included, in the batched arm against the
-// row-by-row arm run whole.
+// prefix, its recurrent summary included, against the prompt run whole.
 func TestLinearRowsResumeFromThePrefixCache(t *testing.T) {
 	m := hybridModelOpt(t, hyOpt{ctx: 256})
 	defer m.Close()
 	const page = 8
 	defer m.setKVPageForTest(page)()
 	prompt := linPrompt(120, hyVocab)
-	ref, _ := linPair(m, 200)
+	ref := m.NewInstance(200)
 	defer ref.Close()
 	want, err := ref.Prefill(prompt)
 	if err != nil {
@@ -157,7 +134,6 @@ func TestLinearRowsResumeFromThePrefixCache(t *testing.T) {
 	st := NewMemStore()
 	run := func() (*Instance, []float32) {
 		s := m.NewInstance(200)
-		s.lin.ref = false
 		s.SetKVStore(st)
 		if err := s.SetCacheKey("lin/v1"); err != nil {
 			t.Fatal(err)
@@ -175,12 +151,15 @@ func TestLinearRowsResumeFromThePrefixCache(t *testing.T) {
 	if s.KVRestored() == 0 {
 		t.Fatal("nothing was restored: the resume this gate is about never ran")
 	}
+	s0, d0 := s.CPUBlockSteps()
 	got, err := s.Prefill(prompt[80:])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.lin.chunks == 0 {
-		t.Fatal("the batched arm ran no chunk")
+	// The resumed rows ran on the composed CPU, each of their calls every
+	// block, and nothing declined.
+	if s1, d1 := s.CPUBlockSteps(); s1 == s0 || (s1-s0)%m.Cfg.NLayer != 0 || d1 != d0 {
+		t.Fatalf("the resumed rows: the composed CPU served %d block steps over %d blocks and declined %v", s1-s0, m.Cfg.NLayer, d1)
 	}
 	e := newLinEnv(linExact)
 	e.cmp(t, "logits", "resumed against whole", want, got)

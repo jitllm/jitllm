@@ -88,9 +88,6 @@ func reusedScratchGate(t *testing.T, path string) {
 		}
 	}
 	m.kvPool.mu.Unlock()
-	if pooled == 0 {
-		t.Fatal("no history pages were handed back to the model")
-	}
 
 	s := m.NewInstance(ctx)
 	lg, err := s.Prefill(short)
@@ -100,7 +97,16 @@ func reusedScratchGate(t *testing.T, path string) {
 	if unsafe.SliceData(s.bh) != poisoned {
 		t.Fatal("the new session's prompt scratch is not the handed-back set: the reuse was not selected")
 	}
-	if m.kvPool.bytes >= pooled {
+	if pooled == 0 {
+		// The composed CPU holds a layer's history in an arena it unmaps at
+		// Close: no page comes back to be read stale, and a new history is
+		// fresh memory.
+		for li := s.kv.lo; li < len(s.kv.layers); li++ {
+			if l := &s.kv.layers[li]; l.p > 0 && l.arena == nil {
+				t.Fatalf("block %d's history is in pages, and no page was handed back to the model", li)
+			}
+		}
+	} else if m.kvPool.bytes >= pooled {
 		t.Fatalf("the pool still holds %d of %d bytes: the new history did not come from it", m.kvPool.bytes, pooled)
 	}
 	got := [][]float32{append([]float32(nil), lg...)}
