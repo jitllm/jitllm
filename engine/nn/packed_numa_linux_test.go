@@ -60,7 +60,7 @@ func TestFusedMatVecRunsNodeAffine(t *testing.T) {
 	interleaved(t, make([]byte, 1), nodes)
 	round := numaNodeRows * len(nodes)
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedFusedSupported(gt) {
 			t.Logf("%s: no fused kernel on this host", gt)
 			continue

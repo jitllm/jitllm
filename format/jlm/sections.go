@@ -488,7 +488,7 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if n := len(c.CompKinds); n != 0 && uint32(n) != c.NLayer {
 		return nil, fmt.Errorf("jlm: %d compression kinds for %d layers", n, c.NLayer)
 	}
-	if _, ok := decisionNames[c.Decision]; !ok && c.Decision != DecisionNone {
+	if _, ok := decisionName(c.Decision); !ok && c.Decision != DecisionNone {
 		return nil, fmt.Errorf("jlm: decision kind %d is not one this format defines", c.Decision)
 	}
 	for _, d := range c.DecisionTemps {

@@ -26,7 +26,7 @@ func TestAct32JITRunsEveryUngatedKind(t *testing.T) {
 		ActSqrtSoftplus: oracle.SqrtSoftplus,
 	}
 	const n = 203 // whole vectors and a tail
-	for _, k := range graph.Ungated {
+	for _, k := range graph.Ungated() {
 		f, ok := ref[k]
 		if !ok {
 			t.Fatalf("%v: no reference; add one here", k)

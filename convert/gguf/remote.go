@@ -1,17 +1,19 @@
 package gguf
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/jitllm/jitllm/convert/meta"
 )
 
 // ErrNoStream is OpenAt's answer on a platform where a streamed GGUF cannot
 // be told which of its bytes the converter read (see Streamable).
-var ErrNoStream = errors.New("gguf: this platform cannot convert a GGUF while it streams")
+const ErrNoStream streamError = "gguf: this platform cannot convert a GGUF while it streams"
+
+type streamError string
+
+func (e streamError) Error() string { return string(e) }
 
 // OpenAt parses a GGUF read through r, a file of size bytes that is not on
 // this disk -- a Hub file read by range. Data is a reservation of the file's
@@ -61,15 +63,7 @@ const maxHeader = 512 << 20
 // anonymous reservation were read: a page read for the first time is
 // resident afterwards and an unread one is not. It is asked of the kernel,
 // once, rather than assumed.
-func Streamable() bool {
-	probeOnce.Do(func() { probed = probe() })
-	return probed
-}
-
-var (
-	probeOnce sync.Once
-	probed    bool
-)
+func Streamable() bool { return probe() }
 
 func probe() bool {
 	ps := PageSize()
@@ -78,10 +72,7 @@ func probe() bool {
 		return false
 	}
 	defer unreserve(b)
-	probeSink = b[ps+1]
+	first := b[ps+1]
 	in, err := Resident(b)
-	return err == nil && len(in) == 4 && !in[0] && in[1] && !in[2] && !in[3]
+	return err == nil && first == 0 && len(in) == 4 && !in[0] && in[1] && !in[2] && !in[3]
 }
-
-// probeSink keeps the probe's read from being optimised away.
-var probeSink byte

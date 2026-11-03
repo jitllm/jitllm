@@ -16,29 +16,31 @@ import (
 // per-head q/k norm, an ungated MLP, llama 3's rotary factors written from
 // config.json as the rope_freqs tensor convert_hf_to_gguf.py writes, and the
 // four xIELU scalars a block gathered into its RoleXIELU vector.
-var apertusHF = &hfArch{
-	arch:        jlm.ArchApertus,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: map[string]jlm.Role{
-		"attention_layernorm.weight":   jlm.RoleAttnNorm,
-		"feedforward_layernorm.weight": jlm.RoleFFNNorm,
-		"self_attn.q_proj.weight":      jlm.RoleAttnQ,
-		"self_attn.k_proj.weight":      jlm.RoleAttnK,
-		"self_attn.v_proj.weight":      jlm.RoleAttnV,
-		"self_attn.o_proj.weight":      jlm.RoleAttnOut,
-		"self_attn.q_proj.bias":        jlm.RoleAttnQBias,
-		"self_attn.k_proj.bias":        jlm.RoleAttnKBias,
-		"self_attn.v_proj.bias":        jlm.RoleAttnVBias,
-		"self_attn.o_proj.bias":        jlm.RoleAttnOutBias,
-		"self_attn.q_norm.weight":      jlm.RoleAttnQNorm,
-		"self_attn.k_norm.weight":      jlm.RoleAttnKNorm,
-		"mlp.up_proj.weight":           jlm.RoleFFNUp,
-		"mlp.down_proj.weight":         jlm.RoleFFNDown,
-	},
-	ignore: llamaHF.ignore,
-	config: apertusHFConfig,
-	gather: apertusGather,
+func apertusHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchApertus,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: map[string]jlm.Role{
+			"attention_layernorm.weight":   jlm.RoleAttnNorm,
+			"feedforward_layernorm.weight": jlm.RoleFFNNorm,
+			"self_attn.q_proj.weight":      jlm.RoleAttnQ,
+			"self_attn.k_proj.weight":      jlm.RoleAttnK,
+			"self_attn.v_proj.weight":      jlm.RoleAttnV,
+			"self_attn.o_proj.weight":      jlm.RoleAttnOut,
+			"self_attn.q_proj.bias":        jlm.RoleAttnQBias,
+			"self_attn.k_proj.bias":        jlm.RoleAttnKBias,
+			"self_attn.v_proj.bias":        jlm.RoleAttnVBias,
+			"self_attn.o_proj.bias":        jlm.RoleAttnOutBias,
+			"self_attn.q_norm.weight":      jlm.RoleAttnQNorm,
+			"self_attn.k_norm.weight":      jlm.RoleAttnKNorm,
+			"mlp.up_proj.weight":           jlm.RoleFFNUp,
+			"mlp.down_proj.weight":         jlm.RoleFFNDown,
+		},
+		ignore: llamaHF().ignore,
+		config: apertusHFConfig,
+		gather: apertusGather,
+	}
 }
 
 // apertusHFConfig reads ApertusConfig: hidden_act must be xielu, and q/k are
@@ -93,7 +95,7 @@ func apertusGather(c *jlm.Config, names []string, read func(string) ([]float32, 
 	for b := range int(c.NLayer) {
 		var v [4]float64
 		for i, k := range []string{"alpha_p", "alpha_n", "beta", "eps"} {
-			name := llamaHF.blockPrefix + itoa(b) + ".mlp.act_fn." + k
+			name := llamaHF().blockPrefix + itoa(b) + ".mlp.act_fn." + k
 			if !used[name] {
 				return nil, nil, fmt.Errorf("convert: block %d has no %s: Apertus's activation is carried there", b, name)
 			}
@@ -115,7 +117,7 @@ func apertusGather(c *jlm.Config, names []string, read func(string) ([]float32, 
 	}
 	for b := range int(c.NLayer) {
 		for _, k := range []string{"alpha_p", "alpha_n", "beta", "eps"} {
-			used[llamaHF.blockPrefix+itoa(b)+".mlp.act_fn."+k] = true
+			used[llamaHF().blockPrefix+itoa(b)+".mlp.act_fn."+k] = true
 		}
 	}
 	return out, used, nil

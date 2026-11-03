@@ -1,7 +1,5 @@
 package jlm
 
-import "fmt"
-
 // The vision-language families added as one group (Qwen3-VL, GLM-4.xV,
 // Kimi-VL, HunyuanVL): the text architectures they need, their projectors and
 // their towers' own roles. Each range is its own, far from every other group's,
@@ -55,9 +53,20 @@ const (
 	ArchHunyuanVL Arch = 204
 )
 
-var visionArchNames = map[Arch]string{
-	ArchQwen3VL: "qwen3vl", ArchQwen3VLMoE: "qwen3vlmoe", ArchGLM4: "glm4", ArchGLM4VMoE: "glm4vmoe",
-	ArchHunyuanVL: "hunyuan_vl",
+func visionArchName(a Arch) (string, bool) {
+	switch a {
+	case ArchQwen3VL:
+		return "qwen3vl", true
+	case ArchQwen3VLMoE:
+		return "qwen3vlmoe", true
+	case ArchGLM4:
+		return "glm4", true
+	case ArchGLM4VMoE:
+		return "glm4vmoe", true
+	case ArchHunyuanVL:
+		return "hunyuan_vl", true
+	}
+	return "", false
 }
 
 // XDRope reports whether a's M-RoPE assigns its axes per element of the
@@ -111,8 +120,18 @@ const (
 	ProjHunyuanVL Projector = 51
 )
 
-var visionProjNames = map[Projector]string{
-	ProjQwen3VL: "qwen3vl_merger", ProjGLM4V: "glm4v", ProjKimiVL: "kimivl", ProjHunyuanVL: "hunyuanvl",
+func visionProjName(p Projector) (string, bool) {
+	switch p {
+	case ProjQwen3VL:
+		return "qwen3vl_merger", true
+	case ProjGLM4V:
+		return "glm4v", true
+	case ProjKimiVL:
+		return "kimivl", true
+	case ProjHunyuanVL:
+		return "hunyuanvl", true
+	}
+	return "", false
 }
 
 // The group's roles. A deepstack merger is DenseBlock with Index the tower
@@ -155,27 +174,50 @@ const (
 	RoleVImgEnd     Role = 719
 )
 
-var visionRoleNames = map[Role]string{
-	RoleVDsNorm: "v_ds_norm", RoleVDsNormBias: "v_ds_norm.bias",
-	RoleVDsFC1: "v_ds_fc1", RoleVDsFC1Bias: "v_ds_fc1.bias",
-	RoleVDsFC2: "v_ds_fc2", RoleVDsFC2Bias: "v_ds_fc2.bias",
-	RoleVEmbdNorm: "v_embd_norm", RoleVMergeConv: "v_merge_conv", RoleVMergeConvBias: "v_merge_conv.bias",
-	RoleVProjGate: "v_proj_gate", RoleVProjGateBias: "v_proj_gate.bias",
-	RoleVProjUp: "v_proj_up", RoleVProjUpBias: "v_proj_up.bias",
-	RoleVProjDown: "v_proj_down", RoleVProjDownBias: "v_proj_down.bias",
-	RoleVProjInNorm: "v_proj_in_norm", RoleVProjInNormBias: "v_proj_in_norm.bias",
-	RoleVImgNewline: "v_img_newline", RoleVImgBegin: "v_img_begin", RoleVImgEnd: "v_img_end",
-}
-
-func init() {
-	for r, n := range visionRoleNames {
-		// Another group taking the same number would rename its role here and
-		// read one tensor as the other.
-		if was, ok := roleNames[r]; ok {
-			panic(fmt.Sprintf("jlm: role %d is both %q and %q", r, was, n))
-		}
-		roleNames[r] = n
+func visionRoleName(r Role) (string, bool) {
+	switch r {
+	case RoleVDsNorm:
+		return "v_ds_norm", true
+	case RoleVDsNormBias:
+		return "v_ds_norm.bias", true
+	case RoleVDsFC1:
+		return "v_ds_fc1", true
+	case RoleVDsFC1Bias:
+		return "v_ds_fc1.bias", true
+	case RoleVDsFC2:
+		return "v_ds_fc2", true
+	case RoleVDsFC2Bias:
+		return "v_ds_fc2.bias", true
+	case RoleVEmbdNorm:
+		return "v_embd_norm", true
+	case RoleVMergeConv:
+		return "v_merge_conv", true
+	case RoleVMergeConvBias:
+		return "v_merge_conv.bias", true
+	case RoleVProjGate:
+		return "v_proj_gate", true
+	case RoleVProjGateBias:
+		return "v_proj_gate.bias", true
+	case RoleVProjUp:
+		return "v_proj_up", true
+	case RoleVProjUpBias:
+		return "v_proj_up.bias", true
+	case RoleVProjDown:
+		return "v_proj_down", true
+	case RoleVProjDownBias:
+		return "v_proj_down.bias", true
+	case RoleVProjInNorm:
+		return "v_proj_in_norm", true
+	case RoleVProjInNormBias:
+		return "v_proj_in_norm.bias", true
+	case RoleVImgNewline:
+		return "v_img_newline", true
+	case RoleVImgBegin:
+		return "v_img_begin", true
+	case RoleVImgEnd:
+		return "v_img_end", true
 	}
+	return "", false
 }
 
 // visionFamilyRole is Role.Vision for the group's roles: every one is a

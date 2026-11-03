@@ -64,7 +64,7 @@ func TestMatVecPackedMultiMatchesTheLoopExactly(t *testing.T) {
 		maxK, maxRows = max(maxK, sh.k), max(maxRows, sh.rows)
 	}
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		// Both batched entry points are built on the fused kernel; a format
 		// without one is logged and skipped, and requireRan below fails if
 		// none qualified where one exists.
@@ -182,7 +182,7 @@ func TestMatVecPackedGatherMatchesTheLoopExactly(t *testing.T) {
 		maxK, maxRows = max(maxK, sh.k), max(maxRows, sh.rows)
 	}
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedFusedSupported(gt) {
 			t.Logf("%s: no FUSED packed kernel on this architecture", gt)
 			continue
@@ -291,7 +291,7 @@ func requireRan(t *testing.T, ran int) {
 	if ran > 0 {
 		return
 	}
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if cpu.PackedFusedSupported(gt) {
 			t.Fatalf("%s HAS a fused packed kernel and no shape ran: this gate "+
 				"proved nothing", gt)
@@ -310,7 +310,7 @@ func TestMatVecPackedGatherActIsTheActivationThenTheGather(t *testing.T) {
 	const m, rows, k = 4, 256, 512
 	stride := k + ElemLanes
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedFusedSupported(gt) || k%int(gt.BlockElems()) != 0 {
 			continue
 		}

@@ -21,7 +21,7 @@ func TestFusedMatchesTheTiledKernel(t *testing.T) {
 		t.Skip("amd64's fused and tiled kernels are separate emitters with different reduction orders")
 	}
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedFusedSupported(gt) {
 			continue
 		}

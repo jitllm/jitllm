@@ -18,16 +18,15 @@ import (
 // wrong. Every literal below was cross-checked against an independent Python
 // parser before it was written down; if one of these changes, either the file
 // changed or this package has a bug, and both are worth failing over.
-var (
-	tinyllama = testmodels.Path("tinyllama-1.1b-q3_K_M.gguf")
-	gemma     = testmodels.Path("gemma-2b.gguf")
-	minilm    = testmodels.Path("embed/MiniLM-L6-v2.Q8_0.gguf")
+func tinyllama() string { return testmodels.Path("tinyllama-1.1b-q3_K_M.gguf") }
+func gemma() string     { return testmodels.Path("gemma-2b.gguf") }
+func minilm() string    { return testmodels.Path("embed/MiniLM-L6-v2.Q8_0.gguf") }
 
-	// stories260K is committed (testdata/models), so this one always runs.
-	// stories15M is fetched by internal/testmodels/fetch.sh into the model directory.
-	stories260K = "../../testdata/models/stories260K.gguf"
-	stories15M  = testmodels.Path("stories15M-q4_0.gguf")
-)
+// stories260K is committed (testdata/models), so this one always runs.
+const stories260K = "../../testdata/models/stories260K.gguf"
+
+// stories15M is fetched by internal/testmodels/fetch.sh into the model directory.
+func stories15M() string { return testmodels.Path("stories15M-q4_0.gguf") }
 
 func open(t *testing.T, path string) *meta.File {
 	t.Helper()
@@ -50,11 +49,11 @@ func TestHeaders(t *testing.T) {
 		nTensors, nKV             int
 		arch                      string
 	}{
-		{"tinyllama", tinyllama, 550819200, 1709440, 549109760, 201, 23, "llama"},
-		{"gemma", gemma, 1678447520, 6042528, 1672404992, 164, 21, "gemma"},
-		{"minilm", minilm, 25008064, 755520, 24252528, 101, 24, "bert"},
+		{"tinyllama", tinyllama(), 550819200, 1709440, 549109760, 201, 23, "llama"},
+		{"gemma", gemma(), 1678447520, 6042528, 1672404992, 164, 21, "gemma"},
+		{"minilm", minilm(), 25008064, 755520, 24252528, 101, 24, "bert"},
 		{"stories260K", stories260K, 1185376, 14176, 1171200, 48, 19, "llama"},
-		{"stories15M", stories15M, 19077344, 727136, 18350208, 57, 20, "llama"},
+		{"stories15M", stories15M(), 19077344, 727136, 18350208, 57, 20, "llama"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := open(t, tc.path)
@@ -94,7 +93,7 @@ func TestHeaders(t *testing.T) {
 }
 
 func TestTypeHistogram(t *testing.T) {
-	f := open(t, tinyllama)
+	f := open(t, tinyllama())
 	want := []meta.TypeCount{
 		{Type: quant.Q3_K, Count: 89, Bytes: 290836480},
 		{Type: quant.Q4_K, Count: 62, Bytes: 187564032},
@@ -121,10 +120,10 @@ func TestRoleOrder(t *testing.T) {
 		name, path string
 		order      []string
 	}{
-		{"tinyllama", tinyllama, []string{
+		{"tinyllama", tinyllama(), []string{
 			"attn_norm.weight", "ffn_down.weight", "ffn_gate.weight", "ffn_up.weight",
 			"ffn_norm.weight", "attn_k.weight", "attn_output.weight", "attn_q.weight", "attn_v.weight"}},
-		{"gemma", gemma, []string{
+		{"gemma", gemma(), []string{
 			"attn_output.weight", "attn_k.weight", "attn_v.weight", "attn_q.weight",
 			"ffn_gate.weight", "ffn_up.weight", "ffn_down.weight", "attn_norm.weight", "ffn_norm.weight"}},
 		// A third order, from a third converter. Three models, three layouts:
@@ -167,7 +166,7 @@ func TestRoleOrder(t *testing.T) {
 }
 
 func TestLayerRange(t *testing.T) {
-	f := open(t, tinyllama)
+	f := open(t, tinyllama())
 	off, size, ok := f.LayerRange(0)
 	if !ok {
 		t.Fatal("LayerRange(0) not found")
@@ -204,7 +203,7 @@ func TestLayerRange(t *testing.T) {
 // config loader must survive. Each of these is absent, not zero, and defaulting
 // them wrong produces fluent nonsense rather than an error.
 func TestGemmaAbsentKeys(t *testing.T) {
-	f := open(t, gemma)
+	f := open(t, gemma())
 	for _, k := range []string{"gemma.rope.freq_base", "gemma.rope.dimension_count"} {
 		if _, ok := f.KV[k]; ok {
 			t.Errorf("%s is present; the default-handling path is untested", k)
@@ -228,7 +227,7 @@ func TestGemmaAbsentKeys(t *testing.T) {
 // not zero. Reading it as zero divides by zero or silently builds a 0-head
 // attention; both are worse than a missing-key error.
 func TestAbsentKeyDefaults(t *testing.T) {
-	f := open(t, stories15M)
+	f := open(t, stories15M())
 	if _, ok := f.Key("attention.head_count_kv"); ok {
 		t.Skip("model now sets head_count_kv; this default is untested")
 	}
@@ -340,7 +339,7 @@ func TestDequantRejects(t *testing.T) {
 func FuzzParse(f *testing.F) {
 	// Deliberately small seeds: everything is reachable within a few KB, and
 	// a large seed makes the mutation engine copy it per execution and stall.
-	if b, err := os.ReadFile(tinyllama); err == nil {
+	if b, err := os.ReadFile(tinyllama()); err == nil {
 		f.Add(b[:4096])
 		f.Add(b[:1024])
 		f.Add(b[:256])

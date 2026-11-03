@@ -46,7 +46,7 @@ func TestComposedCPUMatVecAgainstMain(t *testing.T) {
 	typ := quant.Q4_K
 	if s := os.Getenv("JITLLM_CPU_TYPE"); s != "" {
 		found := false
-		for _, qt := range quant.PackedTypes {
+		for _, qt := range quant.PackedTypes() {
 			if qt.String() == s {
 				typ, found = qt, true
 			}

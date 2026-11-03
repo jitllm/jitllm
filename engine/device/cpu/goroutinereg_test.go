@@ -68,7 +68,7 @@ func TestGeneratedKernelsLeaveTheGoroutineAlone(t *testing.T) {
 	}
 	check("argmax", EmitArgmax())
 	em := EmittersFor(TierAVX2)
-	for _, q := range quant.PackedTypes {
+	for _, q := range quant.PackedTypes() {
 		if b, err := em.PackedFused(q); err == nil {
 			check("packed_fused_"+q.String(), b)
 		}

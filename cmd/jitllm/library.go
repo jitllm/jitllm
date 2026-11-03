@@ -41,7 +41,7 @@ func libraryCmd(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	for _, m := range library.Models {
+	for _, m := range library.Models() {
 		if *refs {
 			line := fmt.Sprintf("%s %d %s", m.Name, m.Bytes, m.Ref())
 			if t, ok := m.TowerRef(); ok {

@@ -13,32 +13,60 @@ import (
 // the code space (format/jlm/visionfam.go): the names their towers' tensors
 // carry, and the transforms they need, each exact.
 
-func init() {
-	for name, r := range map[string]jlm.Role{
-		// Gemma 4's tower block.
-		"v.attn_post_norm.weight": jlm.RoleVPostAttnNorm,
-		"v.ffn_post_norm.weight":  jlm.RoleVPostFFNNorm,
-		"v.attn_q_norm.weight":    jlm.RoleVAttnQNorm,
-		"v.attn_k_norm.weight":    jlm.RoleVAttnKNorm,
-		"v.std_bias":              jlm.RoleVStdBias,
-		"v.std_scale":             jlm.RoleVStdScale,
-	} {
-		if was, ok := roleOf[name]; ok {
-			panic(fmt.Sprintf("convert: %q is both %v and %v", name, was, r))
-		}
-		roleOf[name] = r
+func visionFamRoleOf(name string) (jlm.Role, bool) {
+	switch name {
+	case "v.attn_post_norm.weight":
+		return jlm.RoleVPostAttnNorm, true
+	case "v.ffn_post_norm.weight":
+		return jlm.RoleVPostFFNNorm, true
+	case "v.attn_q_norm.weight":
+		return jlm.RoleVAttnQNorm, true
+	case "v.attn_k_norm.weight":
+		return jlm.RoleVAttnKNorm, true
+	case "v.std_bias":
+		return jlm.RoleVStdBias, true
+	case "v.std_scale":
+		return jlm.RoleVStdScale, true
 	}
+	return 0, false
 }
 
 // clampSlot is where a clipped linear's bounds go in a block's RoleVClamp
 // vector: its matrix's place, times four.
-var clampSlot = map[string]int{
-	"attn_q": 0, "attn_k": 1, "attn_v": 2, "attn_out": 3,
-	"ffn_gate": 4, "ffn_up": 5, "ffn_down": 6,
+func clampSlot(name string) (int, bool) {
+	switch name {
+	case "attn_q":
+		return 0, true
+	case "attn_k":
+		return 1, true
+	case "attn_v":
+		return 2, true
+	case "attn_out":
+		return 3, true
+	case "ffn_gate":
+		return 4, true
+	case "ffn_up":
+		return 5, true
+	case "ffn_down":
+		return 6, true
+	}
+	return 0, false
 }
 
 // clampWhich is a bound's place among a matrix's four.
-var clampWhich = map[string]int{"input_min": 0, "input_max": 1, "output_min": 2, "output_max": 3}
+func clampWhich(name string) (int, bool) {
+	switch name {
+	case "input_min":
+		return 0, true
+	case "input_max":
+		return 1, true
+	case "output_min":
+		return 2, true
+	case "output_max":
+		return 3, true
+	}
+	return 0, false
+}
 
 // clampOf parses one of Gemma 4's clipped-linear bounds,
 // "v.blk.N.<matrix>.<input|output>_<min|max>": a scalar with no role of its
@@ -53,8 +81,8 @@ func clampOf(name string) (block int32, at int, ok bool) {
 		return 0, 0, false
 	}
 	n, err := strconv.Atoi(f[0])
-	s, okS := clampSlot[f[1]]
-	w, okW := clampWhich[f[2]]
+	s, okS := clampSlot(f[1])
+	w, okW := clampWhich(f[2])
 	if err != nil || n < 0 || !okS || !okW {
 		return 0, 0, false
 	}

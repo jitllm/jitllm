@@ -43,7 +43,7 @@ func TestEvictNarrowsToWholePages(t *testing.T) {
 			t.Fatalf("skew %d: narrowed range [%d,%d) escapes [%d,%d)",
 				skew, pl, pl+uint64(len(p)), lo, hi)
 		}
-		if n := Evict(b); n != len(p) {
+		if n := Evict(f, b); n != len(p) {
 			t.Fatalf("skew %d: Evict handed back %d bytes, want %d -- "+
 				"a zero here is madvise refusing the call, not the page cache declining",
 				skew, n, len(p))
@@ -52,10 +52,10 @@ func TestEvictNarrowsToWholePages(t *testing.T) {
 
 	// A span too short to hold a whole page evicts nothing and says so, rather
 	// than making a call that would be refused.
-	if n := Evict(f.Data[33:35]); n != 0 {
+	if n := Evict(f, f.Data[33:35]); n != 0 {
 		t.Fatalf("Evict of a 2-byte span handed back %d bytes", n)
 	}
-	if n := Evict(nil); n != 0 {
-		t.Fatalf("Evict(nil) handed back %d bytes", n)
+	if n := Evict(f, nil); n != 0 {
+		t.Fatalf("Evict(f, nil) handed back %d bytes", n)
 	}
 }

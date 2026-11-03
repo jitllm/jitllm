@@ -103,7 +103,7 @@ type qinfo struct {
 	// scale*codes[q] - bias. It exists for MXFP4, whose e2m1 code is a float
 	// and not affine in any offset. The entries are biased to be unsigned, so
 	// the dot and bias correction are the ordinary 4-bit ones.
-	codes *[16]uint8
+	codes bool
 	// float is bytes per weight for a float format (4 or 2), 0 otherwise;
 	// bf16 picks bfloat16 over binary16 at 2.
 	float int
@@ -129,53 +129,76 @@ type qinfo struct {
 //
 // Named fields rather than positional: a bool was once added mid-struct and
 // every positional literal silently changed meaning.
-var qtab = [...]qinfo{
-	Q4_0: {bits: 4, sub: 32, biasK: 8, blockB: 18, blockE: 32, perSuper: 1},
-	Q8_0: {bits: 8, sub: 32, biasK: 0, blockB: 34, blockE: 32, perSuper: 1, signedQ: true},
-	Q4_K: {bits: 4, sub: 32, biasArray: true, blockB: 144, blockE: 256, perSuper: 8},
-	Q3_K: {bits: 4, sub: 16, biasK: 4, blockB: 110, blockE: 256, perSuper: 16, scOff: -32},
+func qtab(q Quant) qinfo {
+	switch q {
+	case Q4_0:
+		return qinfo{bits: 4, sub: 32, biasK: 8, blockB: 18, blockE: 32, perSuper: 1}
+	case Q8_0:
+		return qinfo{bits: 8, sub: 32, biasK: 0, blockB: 34, blockE: 32, perSuper: 1, signedQ: true}
+	case Q4_K:
+		return qinfo{bits: 4, sub: 32, biasArray: true, blockB: 144, blockE: 256, perSuper: 8}
+	case Q3_K:
+		return qinfo{bits: 4, sub: 16, biasK: 4, blockB: 110, blockE: 256, perSuper: 16, scOff: -32}
 	// Q5_K is a 4-bit primary plane plus a one-bit secondary plane, the two-plane
 	// form Q6_K uses; readers derive lanes and masks from qi.hi.
-	Q5_K: {bits: 4, hi: 1, sub: 32, biasArray: true, blockB: 176, blockE: 256, perSuper: 8},
-	Q6_K: {bits: 4, hi: 2, sub: 16, biasK: 32, blockB: 210, blockE: 256, perSuper: 16, scOff: -128},
+	case Q5_K:
+		return qinfo{bits: 4, hi: 1, sub: 32, biasArray: true, blockB: 176, blockE: 256, perSuper: 8}
+	case Q6_K:
+		return qinfo{bits: 4, hi: 2, sub: 16, biasK: 32, blockB: 210, blockE: 256, perSuper: 16, scOff: -128}
 	// Q5_0 is Q4_0's scales (perSuper 1: d is the scale) with Q5_K's one-bit
 	// secondary plane.
-	Q5_0: {bits: 4, hi: 1, sub: 32, biasK: 16, blockB: 22, blockE: 32, perSuper: 1},
+	case Q5_0:
+		return qinfo{bits: 4, hi: 1, sub: 32, biasK: 16, blockB: 22, blockE: 32, perSuper: 1}
 	// MXFP4 is Q4_0 with a code table: the payload is the raw e2m1 code and the
 	// kernels translate it; its E8M0 exponent is the one-byte d (see e8m0).
-	MXFP4: {bits: 4, sub: 32, biasK: mxfp4Bias, blockB: 17, blockE: 32, perSuper: 1, codes: &mxfp4Codes, e8m0: true},
+	case MXFP4:
+		return qinfo{bits: 4, sub: 32, biasK: mxfp4Bias, blockB: 17, blockE: 32, perSuper: 1, codes: true, e8m0: true}
 	// Q5_1 is Q5_0 with a minimum. Readers compute scale*q - dmin*m; with no sc
 	// plane m is one, and the packer stores the minimum negated as dmin, so
 	// d*q + m = d*q - (-m)*1. See MinInD.
-	Q5_1: {bits: 4, hi: 1, sub: 32, biasArray: true, blockB: 24, blockE: 32, perSuper: 1},
+	case Q5_1:
+		return qinfo{bits: 4, hi: 1, sub: 32, biasArray: true, blockB: 24, blockE: 32, perSuper: 1}
 	// TQ2 is a 2-bit plane with a bias of one: q in {0, 1, 2} (3 is the
 	// format's own unused code, read as 2), and the source block's one d
 	// written on each of its eight sub-blocks.
-	TQ2: {bits: 2, sub: 32, biasK: 1, blockB: 66, blockE: 256, perSuper: 1, intAct: true},
+	case TQ2:
+		return qinfo{bits: 2, sub: 32, biasK: 1, blockB: 66, blockE: 256, perSuper: 1, intAct: true}
 	// TQ2F is TQ2 with an f32 scale, a row to each d word.
-	TQ2F: {bits: 2, sub: 32, biasK: 1, blockB: 68, blockE: 256, perSuper: 1, intAct: true, d32: true},
+	case TQ2F:
+		return qinfo{bits: 2, sub: 32, biasK: 1, blockB: 68, blockE: 256, perSuper: 1, intAct: true, d32: true}
 	// A "block" of a float format is one 32-element activation block.
-	Float32:  {sub: 32, blockB: 128, blockE: 32, perSuper: 1, float: 4},
-	Float16:  {sub: 32, blockB: 64, blockE: 32, perSuper: 1, float: 2},
-	BFloat16: {sub: 32, blockB: 64, blockE: 32, perSuper: 1, float: 2, bf16: true},
+	case Float32:
+		return qinfo{sub: 32, blockB: 128, blockE: 32, perSuper: 1, float: 4}
+	case Float16:
+		return qinfo{sub: 32, blockB: 64, blockE: 32, perSuper: 1, float: 2}
+	case BFloat16:
+		return qinfo{sub: 32, blockB: 64, blockE: 32, perSuper: 1, float: 2, bf16: true}
+	}
+	return qinfo{}
 }
 
-// mxfp4Codes is quant.MXFP4Values (the doubled e2m1 values, -12..12) plus
+// mxfp4Codes is quant.MXFP4Values() (the doubled e2m1 values, -12..12) plus
 // mxfp4Bias, so every entry is an unsigned byte a VPDPBUSD can take.
-var mxfp4Codes = func() (c [16]uint8) {
-	for i, v := range quant.MXFP4Values {
+func mxfp4Codes() (c [16]uint8) {
+	for i, v := range quant.MXFP4Values() {
 		c[i] = uint8(int(v) + mxfp4Bias)
 	}
 	return c
-}()
+}
 
 const mxfp4Bias = 12
 
 // Codes is the format's code table, nil for a format whose code is its
 // integer. A reader applies it to the primary code first.
-func Codes(q Quant) *[16]uint8 { return q.info().codes }
+func Codes(q Quant) *[16]uint8 {
+	if !q.info().codes {
+		return nil
+	}
+	c := mxfp4Codes()
+	return &c
+}
 
-func (q Quant) info() qinfo { return qtab[q] }
+func (q Quant) info() qinfo { return qtab(q) }
 
 // Layout exposes the device layout for tests: elements per scale, payload bits
 // per weight, the constant bias multiplier, and whether the format stores its

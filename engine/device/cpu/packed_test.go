@@ -15,16 +15,16 @@ import (
 // The kernel is gated against the packed reference here, and the reference
 // against the GGUF dequantizer in kernels.TestPackedRefMatchesDequant; neither
 // alone would catch a wrong layout shared by the packer and reference.
-// packedFormats derives from quant.PackedTypes so no format is left out.
+// packedFormats derives from quant.PackedTypes() so no format is left out.
 func packedFormats() (fs []struct {
 	name string
 	g    quant.Type
 	k    layout.Quant
 }) {
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		k, ok := layout.QuantOf(g)
 		if !ok {
-			panic(g.String() + " is in quant.PackedTypes and has no device layout")
+			panic(g.String() + " is in quant.PackedTypes() and has no device layout")
 		}
 		fs = append(fs, struct {
 			name string

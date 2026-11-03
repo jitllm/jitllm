@@ -28,18 +28,20 @@ import (
 //
 // Each becomes TypeTQ2 or TypeTQ2F (convert/bitnet.go), the weight's
 // magnitude every block's scale at the precision it has.
-var bitnetHF = &hfArch{
-	arch:        jlm.ArchBitNet,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: blockPlus(hfLlamaBlockNoBias, map[string]jlm.Role{
-		"self_attn.attn_sub_norm.weight": jlm.RoleAttnSubNorm,
-		"mlp.ffn_sub_norm.weight":        jlm.RoleFFNSubNorm,
-	}),
-	ignore: llamaHF.ignore,
-	config: bitnetHFConfig,
-	gather: bitnetGather,
-	retype: bitnetRetype,
+func bitnetHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchBitNet,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: blockPlus(hfLlamaBlockNoBias(), map[string]jlm.Role{
+			"self_attn.attn_sub_norm.weight": jlm.RoleAttnSubNorm,
+			"mlp.ffn_sub_norm.weight":        jlm.RoleFFNSubNorm,
+		}),
+		ignore: llamaHF().ignore,
+		config: bitnetHFConfig,
+		gather: bitnetGather,
+		retype: bitnetRetype,
+	}
 }
 
 // bitnetForm is how a checkpoint stores its projections.
@@ -161,7 +163,7 @@ func bitnetGather(c *jlm.Config, names []string, _ func(string) ([]float32, erro
 // as an f32 (TypeTQ2F).
 func bitnetRetype(hc *hfConfig, role jlm.Role, name string, t *safetensors.Tensor,
 	read func(name string) ([]byte, *safetensors.Tensor, error)) (*hfRetyped, error) {
-	if !bitnetProjections[role] {
+	if !bitnetProjections(role) {
 		return nil, nil
 	}
 	form, err := bitnetFormOf(hc)

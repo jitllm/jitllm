@@ -39,9 +39,12 @@ import (
 // arch's (bitnetConfig, jlm.ArchBitNet).
 
 // bitnetProjections are the roles a BitNet block runs as BitLinear.
-var bitnetProjections = map[jlm.Role]bool{
-	jlm.RoleAttnQ: true, jlm.RoleAttnK: true, jlm.RoleAttnV: true, jlm.RoleAttnOut: true,
-	jlm.RoleFFNGate: true, jlm.RoleFFNUp: true, jlm.RoleFFNDown: true,
+func bitnetProjections(r jlm.Role) bool {
+	switch r {
+	case jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut, jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown:
+		return true
+	}
+	return false
 }
 
 // bitnetConfig is the arch's graph on the GGUF side. bitnet.cpp's
@@ -256,7 +259,7 @@ func bitnetTensors(s *jlm.Source, scales map[string]float32) error {
 	used := 0
 	for i := range s.Tensors {
 		e := &s.Tensors[i]
-		if !bitnetProjections[e.Role] {
+		if !bitnetProjections(e.Role) {
 			continue
 		}
 		n := 1

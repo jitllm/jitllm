@@ -318,7 +318,7 @@ func runAllAVX2(t *testing.T, p *ssePackFix) (byTile, byFused []float32) {
 // on every packed format, at the AVX2 gate's bound.
 func TestSSEPackedMatchesTheOracle(t *testing.T) {
 	ran := 0
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		t.Run(g.String(), func(t *testing.T) {
 			tile, tail, fused := ssePackedKernels(t, g)
 			p := newSSEPackFix(t, g, ssePackRows, ssePackK, 7, false)
@@ -334,8 +334,8 @@ func TestSSEPackedMatchesTheOracle(t *testing.T) {
 			ran++
 		})
 	}
-	if ran != len(quant.PackedTypes) {
-		t.Fatalf("%d of %d formats ran", ran, len(quant.PackedTypes))
+	if ran != len(quant.PackedTypes()) {
+		t.Fatalf("%d of %d formats ran", ran, len(quant.PackedTypes()))
 	}
 }
 
@@ -344,7 +344,7 @@ func TestSSEPackedMatchesTheOracle(t *testing.T) {
 func TestSSEPackedMatchesAVX2BitForBit(t *testing.T) {
 	requireAVX2Twin(t)
 	ran := 0
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		t.Run(g.String(), func(t *testing.T) {
 			tile, tail, fused := ssePackedKernels(t, g)
 			for seed := int64(1); seed <= 3; seed++ {
@@ -356,8 +356,8 @@ func TestSSEPackedMatchesAVX2BitForBit(t *testing.T) {
 			ran++
 		})
 	}
-	if ran != len(quant.PackedTypes) {
-		t.Fatalf("%d of %d formats ran", ran, len(quant.PackedTypes))
+	if ran != len(quant.PackedTypes()) {
+		t.Fatalf("%d of %d formats ran", ran, len(quant.PackedTypes()))
 	}
 }
 
@@ -396,7 +396,7 @@ func firstExactMismatch(t *testing.T, p *ssePackFix, tile, tail, fused []byte) s
 func TestSSEPackedTracksAVX2OnRealScales(t *testing.T) {
 	requireAVX2Twin(t)
 	const bound = 1e-6
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		t.Run(g.String(), func(t *testing.T) {
 			tile, tail, fused := ssePackedKernels(t, g)
 			p := newSSEPackFix(t, g, ssePackRows, ssePackK, 11, false)
@@ -435,7 +435,7 @@ func TestSSEPackedTracksAVX2OnRealScales(t *testing.T) {
 // the kernel: the tile kernel zeroes its own output, so a second call into the
 // buffer the first one filled must reproduce it exactly, not double it.
 func TestSSEPackedSecondCallIntoTheSameBuffer(t *testing.T) {
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		tile, err := EmitPackedMatVecSSE(g, PackedRows)
 		if err != nil {
 			t.Fatal(err)
@@ -518,7 +518,7 @@ func TestSSEDotMatchesVPDPBUSD(t *testing.T) {
 // TestSSEPackedRefusesWhatItCannotServe: the tile's row count, the wide and
 // token-tiled kernels (refused by decision), and a type with no layout.
 func TestSSEPackedRefusesWhatItCannotServe(t *testing.T) {
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		if !SupportedPackedSSE(g) {
 			t.Errorf("%s: SupportedPackedSSE is false for a packed type", g)
 		}
@@ -554,7 +554,7 @@ func TestSSEPackedRefusesWhatItCannotServe(t *testing.T) {
 		}
 	}
 	em := EmittersFor(TierSSE)
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		if _, err := em.PackedFused(g); errors.Is(err, ErrNoSSEKernel) || err != nil {
 			t.Errorf("%s: the SSE table's fused field says %v", g, err)
 		}
@@ -569,7 +569,7 @@ func TestSSEPackedRefusesWhatItCannotServe(t *testing.T) {
 // hot loop is one sub-block's body, well inside a 32 KB L1i, and the tile
 // kernel serves only the rows the fused one cannot.
 func TestSSEPackedKernelSizes(t *testing.T) {
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		tile, _ := EmitPackedMatVecSSE(g, PackedRows)
 		tail, _ := EmitPackedMatVecSSE(g, PackedTail)
 		fused, _ := EmitPackedMatVecFusedSSE(g)
@@ -585,7 +585,7 @@ func TestSSEPackedKernelSizes(t *testing.T) {
 // the SSE tier it is whole cache lines of output and prices a call within
 // maxCallNanos at sseCallNanosPerElem, down to the one-line floor.
 func TestRowsPerCallForKeepsTheAVX2Answer(t *testing.T) {
-	for _, g := range append(append([]quant.Type{}, quant.PackedTypes...), quant.F32, quant.F16) {
+	for _, g := range append(append([]quant.Type{}, quant.PackedTypes()...), quant.F32, quant.F16) {
 		for _, k := range []int{256, 512, 2048, 4096, 8192, 16384, 1 << 20} {
 			if k%int(g.BlockElems()) != 0 {
 				continue

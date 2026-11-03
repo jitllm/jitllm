@@ -22,7 +22,7 @@ import (
 // float32 summation order.
 func TestMatMulMatchesMatVec(t *testing.T) {
 	ran := 0
-	for _, wt := range quant.PackedTypes {
+	for _, wt := range quant.PackedTypes() {
 		// Formats with no row-major kernel (Q5_0) get no subtest rather than a
 		// skip; the count below stops the filter from emptying the sweep.
 		if !cpu.Supported(wt) {

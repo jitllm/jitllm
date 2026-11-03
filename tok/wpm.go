@@ -157,9 +157,9 @@ func ucNFDBase(r rune) rune {
 	if u < 0xC0 {
 		return r
 	}
-	i := sort.Search(len(ucNFD), func(i int) bool { return ucNFD[i][0] > u }) - 1
-	if i >= 0 && u <= ucNFD[i][1] {
-		return rune(ucNFD[i][2])
+	i := ucLast(ucNFD, 9, u)
+	if i >= 0 && u <= ucWord(ucNFD, i*9+3) {
+		return rune(ucWord(ucNFD, i*9+6))
 	}
 	return r
 }

@@ -153,7 +153,7 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	// can tell "no stages" from "stages nobody verified".
 	ops, ok := pretok.PreOps(v.PreName)
 	if !ok && v.PreName == "default" {
-		ops, ok = pretok.LlamaCppDefault, true
+		ops, ok = pretok.LlamaCppDefault(), true
 	}
 	if ok {
 		pre, err := containerPreOps(ops)
@@ -167,8 +167,8 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	// add_bos_token key overrides the first; it is often absent (Llama-3.2 ships
 	// none and wants its BOS, qwen3 ships an explicit 0), and a wrong BOS is a
 	// fluent divergence a few tokens in.
-	v.AddBOS = llama3Family[v.PreName]
-	v.IgnoreMerges = llama3Family[v.PreName]
+	v.AddBOS = llama3Family(v.PreName)
+	v.IgnoreMerges = llama3Family(v.PreName)
 	// Llama 4 is not in that family but shares both booleans: its own
 	// tokenizer.json says ignore_merges: true and prepends <|begin_of_text|>,
 	// where llama.cpp's gpt-4o branch sets ignore_merges false (RULE 7m).
@@ -185,7 +185,7 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 // codes.
 //
 // It is the one translation for both input formats: the GGUF path gets its
-// []pretok.Op through pretok.Table by name, the safetensors path from
+// []pretok.Op through pretok.Table() by name, the safetensors path from
 // pretok.ParsePreTokenizer. A stage with no container code is a refusal rather
 // than routed to the nearest-looking one.
 func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
@@ -231,12 +231,14 @@ func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
 // llama3Family is the pre-tokenizer group that takes the llama3 regex, and with
 // it add_bos and ignore_merges (llama.cpp's list, name for name). "default" is
 // not in it: llama.cpp gives an absent or "default" name its own pipeline with
-// neither boolean (pretok.LlamaCppDefault). This source-format heuristic is
+// neither boolean (pretok.LlamaCppDefault()). This source-format heuristic is
 // resolved at conversion; nothing on the load path consults it.
-var llama3Family = map[string]bool{
-	"llama3": true, "llama-v3": true, "llama-bpe": true,
-	"falcon3": true, "falcon-h1": true, "pixtral": true,
-	"midm-2.0": true, "lfm2": true, "jina-v5-nano": true,
+func llama3Family(pre string) bool {
+	switch pre {
+	case "llama3", "llama-v3", "llama-bpe", "falcon3", "falcon-h1", "pixtral", "midm-2.0", "lfm2", "jina-v5-nano":
+		return true
+	}
+	return false
 }
 
 // wordPiece resolves a WordPiece vocabulary's special ids and its one

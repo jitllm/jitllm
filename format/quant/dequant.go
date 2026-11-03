@@ -168,8 +168,8 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 			d := math.Ldexp(1, int(blk[0])-128)
 			out := dst[b*32:]
 			for j := 0; j < 16; j++ {
-				out[j] = T(float64(MXFP4Values[blk[1+j]&0xF]) * d)
-				out[j+16] = T(float64(MXFP4Values[blk[1+j]>>4]) * d)
+				out[j] = T(float64(mxfp4Value(blk[1+j])) * d)
+				out[j+16] = T(float64(mxfp4Value(blk[1+j]>>4)) * d)
 			}
 		}
 
@@ -183,8 +183,8 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 			d := f16(binary.LittleEndian.Uint16(blk))
 			out := dst[b*32:]
 			for j := 0; j < 16; j++ {
-				out[j] = T(float64(IQ4NLValues[blk[2+j]&0xF]) * d)
-				out[j+16] = T(float64(IQ4NLValues[blk[2+j]>>4]) * d)
+				out[j] = T(float64(iq4nlValue(blk[2+j])) * d)
+				out[j+16] = T(float64(iq4nlValue(blk[2+j]>>4)) * d)
 			}
 		}
 
@@ -265,13 +265,28 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 
 // MXFP4Values is the e2m1 code table, doubled so every entry is an integer --
 // ggml's kvalues_mxfp4. The scale that goes with it is 2^(e-128), not 2^(e-127).
-var MXFP4Values = [16]int8{0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
+func MXFP4Values() [16]int8 { return codeTable(mxfp4Values) }
 
 // IQ4NLValues is IQ4_NL's code table, ggml's kvalues_iq4nl.
-var IQ4NLValues = [16]int8{-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113}
+func IQ4NLValues() [16]int8 { return codeTable(iq4nlValues) }
 
-// tq1Pow3 is TQ1_0's digit multipliers.
-var tq1Pow3 = [5]byte{1, 3, 9, 27, 81}
+const (
+	mxfp4Values = "\x00\x01\x02\x03\x04\x06\x08\x0c\x00\xff\xfe\xfd\xfc\xfa\xf8\xf4"
+	iq4nlValues = "\x81\x98\xad\xbf\xcf\xdd\xea\xf6\x01\x0d\x19\x26\x35\x45\x59\x71"
+	// tq1Pow3 is TQ1_0's digit multipliers.
+	tq1Pow3 = "\x01\x03\x09\x1b\x51"
+)
+
+func mxfp4Value(i byte) int8 { return int8(mxfp4Values[i&0xF]) }
+
+func iq4nlValue(i byte) int8 { return int8(iq4nlValues[i&0xF]) }
+
+func codeTable(s string) (t [16]int8) {
+	for i := range t {
+		t[i] = int8(s[i])
+	}
+	return t
+}
 
 // Dequantable reports whether Dequant handles type t.
 func Dequantable(t Type) bool {

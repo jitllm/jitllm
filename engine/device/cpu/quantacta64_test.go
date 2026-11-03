@@ -52,7 +52,7 @@ func quantActKernelsA64(t *testing.T, q quant.Type) (QuantActKernels, func()) {
 // one standard.
 func TestQuantActA64MatchesTheGoLoopExactly(t *testing.T) {
 	wide, narrow := 0, 0
-	for _, q := range quant.PackedTypes {
+	for _, q := range quant.PackedTypes() {
 		kern, done := quantActKernelsA64(t, q)
 		for _, sh := range []struct{ k, window int }{
 			// Whole groups of eight blocks, a group plus a remainder
@@ -141,7 +141,7 @@ func quantActZeroInput(k, window int, seed int64) []float32 {
 // zero and the pair's correction is a negative zero on both sides -- which a
 // bit-equality gate checks and a tolerance would not.
 func TestQuantActA64AllZeroWindowsAgree(t *testing.T) {
-	for _, q := range quant.PackedTypes {
+	for _, q := range quant.PackedTypes() {
 		kern, done := quantActKernelsA64(t, q)
 		for _, sh := range []struct{ k, window int }{
 			{2048, 32}, {2048, 256}, {2304, 256}, {512, 256},

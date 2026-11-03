@@ -11,26 +11,42 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-func init() {
+func kimiK3RoleOf(name string) (jlm.Role, bool) {
+	switch name {
 	// The residual attention's score vectors and the latent mixture's
 	// projections and norm.
-	roleOf["attn_res_score.weight"] = jlm.RoleAttnResScore
-	roleOf["ffn_res_score.weight"] = jlm.RoleFFNResScore
-	roleOf["output_res_score.weight"] = jlm.RoleOutputResScore
-	roleOf["ffn_routed_down.weight"] = jlm.RoleFFNRoutedDown
-	roleOf["ffn_routed_up.weight"] = jlm.RoleFFNRoutedUp
-	roleOf["ffn_routed_norm.weight"] = jlm.RoleFFNRoutedNorm
+	case "attn_res_score.weight":
+		return jlm.RoleAttnResScore, true
+	case "ffn_res_score.weight":
+		return jlm.RoleFFNResScore, true
+	case "output_res_score.weight":
+		return jlm.RoleOutputResScore, true
+	case "ffn_routed_down.weight":
+		return jlm.RoleFFNRoutedDown, true
+	case "ffn_routed_up.weight":
+		return jlm.RoleFFNRoutedUp, true
+	case "ffn_routed_norm.weight":
+		return jlm.RoleFFNRoutedNorm, true
 	// Kimi Delta Attention as llama.cpp's kimi-k3 writes it: three causal
 	// convolutions (joined into one filter bank by kimiK3Tensors), the
 	// forget gate's two halves, beta alone (no alpha stream beside it), and
 	// the full-rank output gate, which is the linear block's z projection.
-	roleOf["ssm_conv1d_q.weight"] = jlm.RoleSSMConv1d
-	roleOf["ssm_conv1d_k.weight"] = jlm.RoleSSMConv1d
-	roleOf["ssm_conv1d_v.weight"] = jlm.RoleSSMConv1d
-	roleOf["ssm_f_a.weight"] = jlm.RoleSSMFA
-	roleOf["ssm_f_b.weight"] = jlm.RoleSSMFB
-	roleOf["ssm_beta.weight"] = jlm.RoleSSMBA
-	roleOf["ssm_g.weight"] = jlm.RoleAttnGate
+	case "ssm_conv1d_q.weight":
+		return jlm.RoleSSMConv1d, true
+	case "ssm_conv1d_k.weight":
+		return jlm.RoleSSMConv1d, true
+	case "ssm_conv1d_v.weight":
+		return jlm.RoleSSMConv1d, true
+	case "ssm_f_a.weight":
+		return jlm.RoleSSMFA, true
+	case "ssm_f_b.weight":
+		return jlm.RoleSSMFB, true
+	case "ssm_beta.weight":
+		return jlm.RoleSSMBA, true
+	case "ssm_g.weight":
+		return jlm.RoleAttnGate, true
+	}
+	return 0, false
 }
 
 // The situ bounds the engine's kernels bake (kernels.ActSitu): Kimi-K3's

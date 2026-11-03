@@ -155,7 +155,7 @@ func sseElemKerns() []sseElemKern {
 		ActQuickGELU:   refQuickGELUMul,
 		ActReLU2:       func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u },
 	}
-	for _, k := range append(graph.Gated[:], ActQuickGELU) {
+	for _, k := range append(kindsGated(), ActQuickGELU) {
 		ks = append(ks, sseElemKern{"actmul/" + k.String(), func() ([]byte, error) { return sse.ActMul(k) },
 			func() []byte { return EmitActMul(k) }, true, consts, nil, gated[k], false})
 	}
@@ -172,7 +172,7 @@ func sseElemKerns() []sseElemKern {
 			return oracle.SqrtSoftplus(x)
 		},
 	}
-	for _, k := range append(graph.Ungated[:], actSigmoid) {
+	for _, k := range append(kindsUngated(), actSigmoid) {
 		ks = append(ks, sseElemKern{"act/" + k.String(), func() ([]byte, error) { return sse.Act(k) },
 			func() []byte { return EmitAct(k) }, false, consts, nil, ungated[k], false})
 	}
@@ -333,7 +333,7 @@ func TestEmitActMulSSEMatchesReference(t *testing.T) {
 		}
 		return oracle.SiLU(g) * u
 	}
-	for _, k := range append(graph.Gated[:], ActQuickGELU) {
+	for _, k := range append(kindsGated(), ActQuickGELU) {
 		c := sseElemMap(t, "actmul/"+k.String(), func() ([]byte, error) { return sse.ActMul(k) })
 		for _, n := range []int{1, 3, 4, 5, 7, 8, 9, 12, 13, 16, 17, 203, 1024, 1027} {
 			full, dst := sseElemBuf(n)
@@ -439,7 +439,7 @@ func TestEmitActSSEMatchesActMulSSE(t *testing.T) {
 	consts := ActConsts()
 	sse := EmittersFor(TierSSE)
 	const n = 1029
-	for _, k := range append(graph.Ungated[:], actSigmoid) {
+	for _, k := range append(kindsUngated(), actSigmoid) {
 		gated := sseElemMap(t, "actmul/"+k.String(), func() ([]byte, error) { return sse.ActMul(k) })
 		plain := sseElemMap(t, "act/"+k.String(), func() ([]byte, error) { return sse.Act(k) })
 		mk := func() []float32 {
@@ -536,8 +536,8 @@ func TestUngatedSSEActivationsAreAllDistinct(t *testing.T) {
 	sse := EmittersFor(TierSSE)
 	consts := ActConsts()
 	const n = 512
-	outs := make([][]float32, len(graph.Ungated))
-	for i, k := range graph.Ungated {
+	outs := make([][]float32, len(graph.Ungated()))
+	for i, k := range graph.Ungated() {
 		c := sseElemMap(t, "act/"+k.String(), func() ([]byte, error) { return sse.Act(k) })
 		_, buf := sseElemBuf(n)
 		for j := range buf {
@@ -554,7 +554,7 @@ func TestUngatedSSEActivationsAreAllDistinct(t *testing.T) {
 				same = same && outs[i][e] == outs[j][e]
 			}
 			if same {
-				t.Errorf("%v and %v emit identical results: two names for one kernel", graph.Ungated[i], graph.Ungated[j])
+				t.Errorf("%v and %v emit identical results: two names for one kernel", graph.Ungated()[i], graph.Ungated()[j])
 			}
 		}
 	}
@@ -562,7 +562,7 @@ func TestUngatedSSEActivationsAreAllDistinct(t *testing.T) {
 
 // TestActSSERefusesWhatItCannotBake: an ungated swiglu-oai would read an `up`
 // the caller never set, and an unknown code must not become GELU by default.
-// The two combinations outside graph.Gated/graph.Ungated that ARE well defined (a gated
+// The two combinations outside graph.Gated()/graph.Ungated() that ARE well defined (a gated
 // quick-GELU, an ungated sigmoid) emit and are covered by the width gate.
 func TestActSSERefusesWhatItCannotBake(t *testing.T) {
 	sse := EmittersFor(TierSSE)
@@ -868,13 +868,13 @@ func TestEveryElementwiseOpIsGeneratedSSE(t *testing.T) {
 		{"clamp", sse.Clamp},
 		{"ln", sse.Ln},
 	}
-	for _, k := range graph.Gated {
+	for _, k := range graph.Gated() {
 		rows = append(rows, struct {
 			name string
 			emit func() ([]byte, error)
 		}{"actmul/" + k.String(), func() ([]byte, error) { return sse.ActMul(k) }})
 	}
-	for _, k := range graph.Ungated {
+	for _, k := range graph.Ungated() {
 		rows = append(rows, struct {
 			name string
 			emit func() ([]byte, error)
@@ -930,4 +930,15 @@ func TestEveryElementwiseOpIsGeneratedSSE(t *testing.T) {
 		})
 	}
 	t.Logf("%d SSE-tier elementwise ops generated, gated and executed on this host", len(rows))
+}
+
+// kindsGated and kindsUngated are graph.Gated and graph.Ungated as slices.
+func kindsGated() []ActKind {
+	k := graph.Gated()
+	return k[:]
+}
+
+func kindsUngated() []ActKind {
+	k := graph.Ungated()
+	return k[:]
 }

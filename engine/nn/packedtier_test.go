@@ -14,7 +14,7 @@ import (
 // architecture, because that is the inference path.
 func TestEveryPackedFormatHasAGeneratedKernel(t *testing.T) {
 	// jlm.packerOf's list, which is what a container can hold.
-	packed := quant.PackedTypes
+	packed := quant.PackedTypes()
 	var missing []quant.Type
 	for _, q := range packed {
 		if !cpu.PackedSupported(q) {
@@ -34,7 +34,7 @@ func TestEveryPackedFormatHasAGeneratedKernel(t *testing.T) {
 // execute a tile ask cpu.MaxTiledTokensNative. On a pre-VNNI host no format is
 // runnable (the tiled emitter has no DotVEX form), which is logged, not failed.
 func TestEveryPackedFormatHasATokenTiledKernel(t *testing.T) {
-	packed := quant.PackedTypes
+	packed := quant.PackedTypes()
 	var missing []quant.Type
 	for _, q := range packed {
 		if cpu.MaxTiledTokens(q) < 2 {

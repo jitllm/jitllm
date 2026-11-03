@@ -11,7 +11,7 @@ import (
 // "close", so a tolerance would hide it.
 func TestDequant32IsBitIdenticalToNarrowedDequant(t *testing.T) {
 	// PackedTypes rather than a hand-written list, so no format is missed.
-	for _, ty := range append([]Type{F32, F16}, PackedTypes...) {
+	for _, ty := range append([]Type{F32, F16}, PackedTypes()...) {
 		be, bb := int(ty.BlockElems()), int(ty.BlockBytes())
 		const blocks = 7
 		src := make([]byte, blocks*bb)

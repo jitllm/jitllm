@@ -98,7 +98,7 @@ func TestElementwiseEntryPointsComputeOnTheSSETier(t *testing.T) {
 		ActIdentity:    func(g, u float64) float64 { return g * u },
 		ActReLU2:       func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u },
 	}
-	for _, k := range graph.Gated {
+	for _, k := range graph.Gated() {
 		ops = append(ops, op{"actmul/" + k.String(), func(d []float32) { ActMul32JIT(d[:n], y, k) },
 			func() ([]byte, error) { return sse.ActMul(k) },
 			func(d []float32) cpu.Args { return elem(d, true, scr) }, gatedRef[k], 1e-9})
@@ -115,7 +115,7 @@ func TestElementwiseEntryPointsComputeOnTheSSETier(t *testing.T) {
 			return oracle.SqrtSoftplus(a)
 		},
 	}
-	for _, k := range graph.Ungated {
+	for _, k := range graph.Ungated() {
 		ops = append(ops, op{"act/" + k.String(), func(d []float32) { Act32JIT(d[:n], k) },
 			func() ([]byte, error) { return sse.Act(k) },
 			func(d []float32) cpu.Args { return elem(d, false, scr) }, ungatedRef[k], 1e-9})

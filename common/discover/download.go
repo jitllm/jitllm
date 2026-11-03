@@ -39,8 +39,8 @@ func ContainerFor(dir string, m library.Model) string {
 // OnDisk is, for each library model, whether a current container for it is
 // in dir.
 func OnDisk(dir string) []bool {
-	have := make([]bool, len(library.Models))
-	for i, m := range library.Models {
+	have := make([]bool, len(library.Models()))
+	for i, m := range library.Models() {
 		have[i] = convertjob.LoadableAt(ContainerFor(dir, m))
 	}
 	return have

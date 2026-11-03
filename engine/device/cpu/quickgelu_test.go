@@ -80,8 +80,8 @@ func TestUngatedActivationsAreAllDistinct(t *testing.T) {
 	for i := range x {
 		x[i] = float32(-6 + 12*float64(i)/float64(n-1))
 	}
-	outs := make([][]float32, len(graph.Ungated))
-	for i, k := range graph.Ungated {
+	outs := make([][]float32, len(graph.Ungated()))
+	for i, k := range graph.Ungated() {
 		c := onHost(t)(hostTable().Act(k))
 		outs[i] = append([]float32(nil), x...)
 		call(c, outs[i], consts)
@@ -97,7 +97,7 @@ func TestUngatedActivationsAreAllDistinct(t *testing.T) {
 			}
 			if same {
 				t.Errorf("%v and %v emit identical results: two names for one kernel",
-					graph.Ungated[i], graph.Ungated[j])
+					graph.Ungated()[i], graph.Ungated()[j])
 			}
 		}
 	}

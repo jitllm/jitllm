@@ -59,20 +59,31 @@ const (
 	DecisionKev DecisionKind = 10
 )
 
-var decisionNames = map[DecisionKind]string{
-	DecisionLev:     "lev",
-	DecisionLFM2D1:  "lfm2-d1",
-	DecisionLaya:    "laya",
-	DecisionClef:    "clef",
-	DecisionD1Omni:  "lfm2-d1-omni",
-	DecisionOpenJev: "openjev",
-	DecisionVllmD3:  "vllm-d3",
-	DecisionKev:     "kev",
+func decisionName(k DecisionKind) (string, bool) {
+	switch k {
+	case DecisionLev:
+		return "lev", true
+	case DecisionLFM2D1:
+		return "lfm2-d1", true
+	case DecisionLaya:
+		return "laya", true
+	case DecisionClef:
+		return "clef", true
+	case DecisionD1Omni:
+		return "lfm2-d1-omni", true
+	case DecisionOpenJev:
+		return "openjev", true
+	case DecisionVllmD3:
+		return "vllm-d3", true
+	case DecisionKev:
+		return "kev", true
+	}
+	return "", false
 }
 
 // String is the name llama.cpp writes as <arch>.decision.type.
 func (k DecisionKind) String() string {
-	if s, ok := decisionNames[k]; ok {
+	if s, ok := decisionName(k); ok {
 		return s
 	}
 	if k == DecisionNone {
@@ -83,8 +94,8 @@ func (k DecisionKind) String() string {
 
 // DecisionKindOf maps llama.cpp's <arch>.decision.type name to a kind.
 func DecisionKindOf(name string) (DecisionKind, bool) {
-	for k, s := range decisionNames {
-		if s == name {
+	for k := DecisionKind(1); k != 0; k++ {
+		if s, ok := decisionName(k); ok && s == name {
 			return k, true
 		}
 	}

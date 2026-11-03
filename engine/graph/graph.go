@@ -301,11 +301,102 @@ const (
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position", "select", "tail_row", "pos_axes", "col_pool", "ngram_hash", "unfold", "uniform", "put", "rope_pos"}
-
 func (k OpKind) String() string {
-	if int(k) < len(opNames) {
-		return opNames[k]
+	switch k {
+	case OpInvalid:
+		return "invalid"
+	case OpNorm:
+		return "norm"
+	case OpHeadNorm:
+		return "head_norm"
+	case OpMatVec:
+		return "matvec"
+	case OpRope:
+		return "rope"
+	case OpKVAppend:
+		return "kv_append"
+	case OpAttend:
+		return "attend"
+	case OpAdd:
+		return "add"
+	case OpExpr:
+		return "expr"
+	case OpExpertMatVec:
+		return "expert_matvec"
+	case OpLayerNorm:
+		return "layer_norm"
+	case OpClamp:
+		return "clamp"
+	case OpSlice:
+		return "slice"
+	case OpScale:
+		return "scale"
+	case OpConv:
+		return "conv"
+	case OpAffine:
+		return "affine"
+	case OpMap:
+		return "map"
+	case OpReduce:
+		return "reduce"
+	case OpTopK:
+		return "top_k"
+	case OpTake:
+		return "take"
+	case OpRank:
+		return "rank"
+	case OpTile:
+		return "tile"
+	case OpConcat:
+		return "concat"
+	case OpRopeTable:
+		return "rope_table"
+	case OpEmbed:
+		return "embed"
+	case OpStateConv:
+		return "state_conv"
+	case OpPool:
+		return "pool"
+	case OpTakeRows:
+		return "take_rows"
+	case OpRowConv:
+		return "row_conv"
+	case OpPatchify:
+		return "patchify"
+	case OpRegroup:
+		return "regroup"
+	case OpLeadRow:
+		return "lead_row"
+	case OpDropRows:
+		return "drop_rows"
+	case OpFold:
+		return "fold"
+	case OpSplice:
+		return "splice"
+	case OpPosResample:
+		return "pos_resample"
+	case OpDeltaRule:
+		return "delta_rule"
+	case OpPosition:
+		return "position"
+	case OpSelect:
+		return "select"
+	case OpTailRow:
+		return "tail_row"
+	case OpPosAxes:
+		return "pos_axes"
+	case OpColPool:
+		return "col_pool"
+	case OpNGramHash:
+		return "ngram_hash"
+	case OpUnfold:
+		return "unfold"
+	case OpUniform:
+		return "uniform"
+	case OpPut:
+		return "put"
+	case OpRopePos:
+		return "rope_pos"
 	}
 	return fmt.Sprintf("op%d", k)
 }
@@ -465,13 +556,20 @@ type StateRef struct {
 	Version int
 }
 
-var stateNames = [...]string{"kv", "ent", "rec.conv", "rec.state"}
-
 // String is the state's label, its version apart.
 func (r StateRef) String() string {
-	s := fmt.Sprintf("state%d", r.State)
-	if int(r.State) < len(stateNames) {
-		s = stateNames[r.State]
+	var s string
+	switch r.State {
+	case 0:
+		s = "kv"
+	case 1:
+		s = "ent"
+	case 2:
+		s = "rec.conv"
+	case 3:
+		s = "rec.state"
+	default:
+		s = fmt.Sprintf("state%d", r.State)
 	}
 	if r.From > 0 {
 		s += fmt.Sprintf(" of block %d", r.From-1)

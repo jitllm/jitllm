@@ -35,7 +35,7 @@ import (
 //
 // It is a list, not a promise of coverage, which is why every row asks the
 // emitter rather than printing this slice.
-var Formats = quant.PackedTypes
+var Formats = quant.PackedTypes()
 
 // FormatNames is [Formats] as strings, in the same order, so a caller that only
 // wants to label a table needs no quant import.

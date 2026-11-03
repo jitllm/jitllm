@@ -145,11 +145,13 @@ type SplitParams struct {
 //
 // A file with no pre name carries no claim about its tokenizer, so what other
 // readers run is the only reference; tok.WithTokenizer outranks this.
-var LlamaCppDefault = []Op{
-	{Kind: OpPunctDefault},
-	{Kind: OpByteLevel, UseRegex: true},
-	{Kind: OpDigits, Individual: false},
-	{Kind: OpDigitTriples},
+func LlamaCppDefault() []Op {
+	return []Op{
+		{Kind: OpPunctDefault},
+		{Kind: OpByteLevel, UseRegex: true},
+		{Kind: OpDigits, Individual: false},
+		{Kind: OpDigitTriples},
+	}
 }
 
 // PreOps returns the ordered stages a pre-tokenizer name denotes, from the
@@ -157,7 +159,7 @@ var LlamaCppDefault = []Op{
 // converter: a container stores the stages, so a name the table lacks is a
 // question at conversion rather than a refusal at load.
 func PreOps(name string) ([]Op, bool) {
-	ops, ok := Table[name]
+	ops, ok := Table()[name]
 	return ops, ok
 }
 

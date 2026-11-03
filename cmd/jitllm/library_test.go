@@ -12,12 +12,12 @@ import (
 // A library name must become the model's pinned references; anything else
 // must pass through untouched.
 func TestLibraryArgsExpandsANameAndNothingElse(t *testing.T) {
-	m := library.Models[0]
+	m := library.Models()[0]
 	got := libraryArgs([]string{m.Name, "out.jlm"})
 	if len(got) < 2 || got[0] != m.Ref().String() || got[len(got)-1] != "out.jlm" {
 		t.Fatalf("libraryArgs(%q) = %q", m.Name, got)
 	}
-	for _, v := range library.Models {
+	for _, v := range library.Models() {
 		if !v.Vision() {
 			continue
 		}

@@ -107,7 +107,7 @@ func quantActInput(k int, seed int64) []float32 {
 func TestQuantActMatchesTheGoLoopExactly(t *testing.T) {
 	em := Native()
 	ran, wide, narrow := 0, 0, 0
-	for _, q := range quant.PackedTypes {
+	for _, q := range quant.PackedTypes() {
 		kern, done := quantActKernels(t, q)
 		if kern.Wide == nil && kern.Narrow == nil {
 			// A tier whose emitters are owed keeps the Go loop; say so, since
@@ -215,7 +215,7 @@ func TestQuantActGateSeesAWrongConstant(t *testing.T) {
 // sweeps every sum either can see: a block is 32 elements and each quantizes to
 // at most 127 in magnitude, and a half-block is 16.
 func TestQuantActConstantsAreExact(t *testing.T) {
-	for _, q := range quant.PackedTypes {
+	for _, q := range quant.PackedTypes() {
 		b := BiasC(q)
 		for _, c := range []struct {
 			name  string

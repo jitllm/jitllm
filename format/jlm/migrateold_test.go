@@ -149,11 +149,14 @@ func TestOldWritersUpgradeToAFreshConversion(t *testing.T) {
 	// is not the fresh one.
 	for _, s := range []uint32{26, 27} {
 		t.Run("stamp-only-"+itoa(uint64(s)), func(t *testing.T) {
-			saved := migrations[s]
-			migrations[s] = func(path string) error { return setVersion(path, s+1) }
-			defer func() { migrations[s] = saved }()
+			stamp := func(v uint32) func(string) error {
+				if v == s {
+					return func(path string) error { return setVersion(path, s+1) }
+				}
+				return migrationFor(v)
+			}
 			p := oldFixture(t, s)
-			if _, err := Upgrade(p); err == nil {
+			if _, err := upgradeWith(stamp, p); err == nil {
 				got, err := os.ReadFile(p)
 				if err != nil {
 					t.Fatal(err)
@@ -168,11 +171,14 @@ func TestOldWritersUpgradeToAFreshConversion(t *testing.T) {
 	// version below it.
 	for _, s := range []uint32{26, 27, 28, 29} {
 		t.Run("missing-"+itoa(uint64(s)), func(t *testing.T) {
-			saved := migrations[s]
-			delete(migrations, s)
-			defer func() { migrations[s] = saved }()
+			without := func(v uint32) func(string) error {
+				if v == s {
+					return nil
+				}
+				return migrationFor(v)
+			}
 			p := oldFixture(t, 26)
-			if _, err := Upgrade(p); err == nil || !strings.Contains(err.Error(), "jitllm convert") {
+			if _, err := upgradeWith(without, p); err == nil || !strings.Contains(err.Error(), "jitllm convert") {
 				t.Fatalf("a chain missing step %d: %v", s, err)
 			}
 			if v, err := ReadVersion(p); err != nil || v != 26 {
@@ -211,7 +217,7 @@ func TestEachStepIsItsVersionsWriter(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := migrations[v](p); err != nil {
+			if err := migrationFor(v)(p); err != nil {
 				t.Fatal(err)
 			}
 			got, err := os.ReadFile(p)

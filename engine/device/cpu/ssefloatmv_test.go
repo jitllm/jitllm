@@ -173,7 +173,7 @@ func TestSSEFloatMatVecZeroRows(t *testing.T) {
 // this tier (a container never decodes through the GGUF layout), no
 // interleaved float kernel, no multi-column one.
 func TestSSERowMajorRefusesWhatItCannotServe(t *testing.T) {
-	for _, g := range append([]quant.Type{}, quant.PackedTypes...) {
+	for _, g := range append([]quant.Type{}, quant.PackedTypes()...) {
 		if SupportedRowMajorSSE(g) {
 			t.Errorf("%s: the SSE tier claims a row-major kernel", g)
 		}

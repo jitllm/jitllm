@@ -61,10 +61,10 @@ func init() {
 // an earlier caller mapped.
 type elemSet struct {
 	softmax *cpu.Code
-	logSm   *cpu.Code                     // the softmax's log form, for a reply's logprobs
-	actMul  [len(graph.Gated)]*cpu.Code   // indexed as graph.Gated
-	act     [len(graph.Ungated)]*cpu.Code // indexed as graph.Ungated
-	sigMul  *cpu.Code                     // sigma(gate) * value, for a gated attention output
+	logSm   *cpu.Code                 // the softmax's log form, for a reply's logprobs
+	actMul  [graph.NGated]*cpu.Code   // indexed as graph.Gated()
+	act     [graph.NUngated]*cpu.Code // indexed as graph.Ungated()
+	sigMul  *cpu.Code                 // sigma(gate) * value, for a gated attention output
 	axpy    *cpu.Code
 	scale   *cpu.Code
 	softcap *cpu.Code
@@ -152,12 +152,12 @@ func (s *elemSet) init(em *cpu.Emitters) {
 	s.pflines = mustEmit("prefetch_lines")(em.PrefetchLines())
 	s.softmax = mustEmit("softmax")(em.Softmax())
 	s.logSm = mustEmit("logsoftmax")(em.LogSoftmax())
-	for i, k := range graph.Gated {
+	for i, k := range graph.Gated() {
 		s.actMul[i] = mustEmit("actmul/" + k.String())(em.ActMul(k))
 	}
-	// The ungated set is enumerated from graph.Ungated rather than restated, so
+	// The ungated set is enumerated from graph.Ungated() rather than restated, so
 	// a fourth kind cannot be added on one side only.
-	for i, k := range graph.Ungated {
+	for i, k := range graph.Ungated() {
 		s.act[i] = mustEmit("act/" + k.String())(em.Act(k))
 	}
 	s.sigMul = mustEmit("sigmoidmul")(em.SigmoidMul())
@@ -397,9 +397,9 @@ const (
 )
 
 // ungatedIndex is k's slot in elemSet.act, or -1 for a kind with no ungated
-// kernel. The slot is k's position in graph.Ungated, not its code.
+// kernel. The slot is k's position in graph.Ungated(), not its code.
 func ungatedIndex(k ActKind) int {
-	for i, g := range graph.Ungated {
+	for i, g := range graph.Ungated() {
 		if g == k {
 			return i
 		}
@@ -409,7 +409,7 @@ func ungatedIndex(k ActKind) int {
 
 // gatedIndex is k's slot in elemSet.actMul, or -1 for a kind with no gated kernel.
 func gatedIndex(k ActKind) int {
-	for i, g := range graph.Gated {
+	for i, g := range graph.Gated() {
 		if g == k {
 			return i
 		}

@@ -58,7 +58,7 @@ func TestParsePreTokenizerAgreesWithTheGeneratedTable(t *testing.T) {
 			t.Errorf("%s: %v", c.name, err)
 			continue
 		}
-		want, ok := pretok.Table[c.name]
+		want, ok := pretok.Table()[c.name]
 		if !ok {
 			t.Errorf("%s: not in the generated table; this case proved nothing", c.name)
 			continue
@@ -143,10 +143,10 @@ func TestParsePreTokenizerRefuses(t *testing.T) {
 // a renderer change cannot silently rewrite every row at the next regeneration.
 func TestGoSourceRendersTheCheckedInTable(t *testing.T) {
 	src := checkedInSource(t, "pretok/table.go")
-	if len(pretok.Table) == 0 {
+	if len(pretok.Table()) == 0 {
 		t.Fatal("the generated table is empty; this test proved nothing")
 	}
-	for name, ops := range pretok.Table {
+	for name, ops := range pretok.Table() {
 		parts := make([]string, len(ops))
 		for i, op := range ops {
 			parts[i] = op.GoSource()

@@ -1,7 +1,5 @@
 package jlm
 
-import "fmt"
-
 // ArchBitNet is Microsoft's BitNet b1.58 (BitNetForCausalLM; llama.cpp's
 // "bitnet", bitnet.cpp's "bitnet-b1.58"): llama's block with ternary
 // projections (TypeTQ2), every projection input quantized to int8 per token
@@ -22,17 +20,12 @@ const (
 	RoleFFNSubNorm  Role = 502
 )
 
-var bitnetRoleNames = map[Role]string{RoleAttnSubNorm: "attn_sub_norm", RoleFFNSubNorm: "ffn_sub_norm"}
-
-func init() {
-	for r, n := range bitnetRoleNames {
-		if was, ok := roleNames[r]; ok {
-			panic(fmt.Sprintf("jlm: role %d is both %q and %q", r, was, n))
-		}
-		roleNames[r] = n
+func bitnetRoleName(r Role) (string, bool) {
+	switch r {
+	case RoleAttnSubNorm:
+		return "attn_sub_norm", true
+	case RoleFFNSubNorm:
+		return "ffn_sub_norm", true
 	}
-	if was, ok := denseArchNames[ArchBitNet]; ok {
-		panic(fmt.Sprintf("jlm: arch %d is both %q and bitnet", ArchBitNet, was))
-	}
-	denseArchNames[ArchBitNet] = "bitnet"
+	return "", false
 }

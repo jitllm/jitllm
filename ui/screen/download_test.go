@@ -21,7 +21,7 @@ import (
 
 // firstText is the first library entry with no vision tower.
 func firstText(t *testing.T) (library.Model, int) {
-	for i, m := range library.Models {
+	for i, m := range library.Models() {
 		if !m.Vision() {
 			return m, i
 		}
@@ -52,12 +52,12 @@ func TestDiscoverListsTheWholeLibrary(t *testing.T) {
 		seen := map[int]bool{}
 		for _, i := range d.order().Get() {
 			if seen[i] {
-				t.Fatalf("balance %d lists %s twice", pref, library.Models[i].Title)
+				t.Fatalf("balance %d lists %s twice", pref, library.Models()[i].Title)
 			}
 			seen[i] = true
 		}
-		if len(seen) != len(library.Models) {
-			t.Fatalf("balance %d lists %d of %d models", pref, len(seen), len(library.Models))
+		if len(seen) != len(library.Models()) {
+			t.Fatalf("balance %d lists %d of %d models", pref, len(seen), len(library.Models()))
 		}
 	}
 }

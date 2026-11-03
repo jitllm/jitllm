@@ -21,50 +21,74 @@ import (
 // matrix of k = K*K*Cin, a depthwise filter as K*K rows of channels. A block's
 // layer scale is folded into the norm or the matrix it follows.
 
-func init() {
-	for name, r := range map[string]jlm.Role{
-		"v.conv_stem.conv.weight":        jlm.RoleVMNStem,
-		"v.conv_stem.conv.bias":          jlm.RoleVMNStemBias,
-		"v.conv_stem.bn.weight":          jlm.RoleVMNStemNorm,
-		"v.conv_exp.weight":              jlm.RoleVMNConvExp,
-		"v.bn1.weight":                   jlm.RoleVMNNorm1,
-		"v.conv_pwl.weight":              jlm.RoleVMNConvPwl,
-		"v.bn2.weight":                   jlm.RoleVMNNorm2,
-		"v.dw_start.conv.weight":         jlm.RoleVMNDwStart,
-		"v.dw_start.bn.weight":           jlm.RoleVMNDwStartNorm,
-		"v.pw_exp.conv.weight":           jlm.RoleVMNPwExp,
-		"v.pw_exp.bn.weight":             jlm.RoleVMNPwExpNorm,
-		"v.dw_mid.conv.weight":           jlm.RoleVMNDwMid,
-		"v.dw_mid.bn.weight":             jlm.RoleVMNDwMidNorm,
-		"v.pw_proj.conv.weight":          jlm.RoleVMNPwProj,
-		"v.pw_proj.bn.weight":            jlm.RoleVMNPwProjNorm,
-		"v.layer_scale.gamma":            jlm.RoleVMNLayerScale,
-		"v.norm.weight":                  jlm.RoleVAttnNorm,
-		"v.attn.query.proj.weight":       jlm.RoleVAttnQ,
-		"v.attn.key.proj.weight":         jlm.RoleVAttnK,
-		"v.attn.value.proj.weight":       jlm.RoleVAttnV,
-		"v.attn.output.proj.weight":      jlm.RoleVAttnOut,
-		"v.attn.key.down_conv.weight":    jlm.RoleVMNKDown,
-		"v.attn.key.norm.weight":         jlm.RoleVMNKDownNorm,
-		"v.attn.value.down_conv.weight":  jlm.RoleVMNVDown,
-		"v.attn.value.norm.weight":       jlm.RoleVMNVDownNorm,
-		"v.msfa.ffn.pw_exp.conv.weight":  jlm.RoleVMNFusionExp,
-		"v.msfa.ffn.pw_exp.bn.weight":    jlm.RoleVMNFusionExpNorm,
-		"v.msfa.ffn.pw_proj.conv.weight": jlm.RoleVMNFusionProj,
-		"v.msfa.ffn.pw_proj.bn.weight":   jlm.RoleVMNFusionProjNorm,
-		"v.msfa.norm.weight":             jlm.RoleVMNFusionNorm,
-		"mm.embedding.weight":            jlm.RoleVMNHardTable,
-		"mm.hard_emb_norm.weight":        jlm.RoleVMNHardNorm,
-	} {
-		if was, ok := roleOf[name]; ok {
-			panic(fmt.Sprintf("convert: %q is both %v and %v", name, was, r))
-		}
-		roleOf[name] = r
+func gemma3nvRoleOf(name string) (jlm.Role, bool) {
+	switch name {
+	case "v.conv_stem.conv.weight":
+		return jlm.RoleVMNStem, true
+	case "v.conv_stem.conv.bias":
+		return jlm.RoleVMNStemBias, true
+	case "v.conv_stem.bn.weight":
+		return jlm.RoleVMNStemNorm, true
+	case "v.conv_exp.weight":
+		return jlm.RoleVMNConvExp, true
+	case "v.bn1.weight":
+		return jlm.RoleVMNNorm1, true
+	case "v.conv_pwl.weight":
+		return jlm.RoleVMNConvPwl, true
+	case "v.bn2.weight":
+		return jlm.RoleVMNNorm2, true
+	case "v.dw_start.conv.weight":
+		return jlm.RoleVMNDwStart, true
+	case "v.dw_start.bn.weight":
+		return jlm.RoleVMNDwStartNorm, true
+	case "v.pw_exp.conv.weight":
+		return jlm.RoleVMNPwExp, true
+	case "v.pw_exp.bn.weight":
+		return jlm.RoleVMNPwExpNorm, true
+	case "v.dw_mid.conv.weight":
+		return jlm.RoleVMNDwMid, true
+	case "v.dw_mid.bn.weight":
+		return jlm.RoleVMNDwMidNorm, true
+	case "v.pw_proj.conv.weight":
+		return jlm.RoleVMNPwProj, true
+	case "v.pw_proj.bn.weight":
+		return jlm.RoleVMNPwProjNorm, true
+	case "v.layer_scale.gamma":
+		return jlm.RoleVMNLayerScale, true
+	case "v.norm.weight":
+		return jlm.RoleVAttnNorm, true
+	case "v.attn.query.proj.weight":
+		return jlm.RoleVAttnQ, true
+	case "v.attn.key.proj.weight":
+		return jlm.RoleVAttnK, true
+	case "v.attn.value.proj.weight":
+		return jlm.RoleVAttnV, true
+	case "v.attn.output.proj.weight":
+		return jlm.RoleVAttnOut, true
+	case "v.attn.key.down_conv.weight":
+		return jlm.RoleVMNKDown, true
+	case "v.attn.key.norm.weight":
+		return jlm.RoleVMNKDownNorm, true
+	case "v.attn.value.down_conv.weight":
+		return jlm.RoleVMNVDown, true
+	case "v.attn.value.norm.weight":
+		return jlm.RoleVMNVDownNorm, true
+	case "v.msfa.ffn.pw_exp.conv.weight":
+		return jlm.RoleVMNFusionExp, true
+	case "v.msfa.ffn.pw_exp.bn.weight":
+		return jlm.RoleVMNFusionExpNorm, true
+	case "v.msfa.ffn.pw_proj.conv.weight":
+		return jlm.RoleVMNFusionProj, true
+	case "v.msfa.ffn.pw_proj.bn.weight":
+		return jlm.RoleVMNFusionProjNorm, true
+	case "v.msfa.norm.weight":
+		return jlm.RoleVMNFusionNorm, true
+	case "mm.embedding.weight":
+		return jlm.RoleVMNHardTable, true
+	case "mm.hard_emb_norm.weight":
+		return jlm.RoleVMNHardNorm, true
 	}
-	for _, r := range []jlm.Role{jlm.RoleVMNStem, jlm.RoleVMNConvExp, jlm.RoleVMNConvPwl, jlm.RoleVMNPwExp,
-		jlm.RoleVMNPwProj, jlm.RoleVMNFusionExp, jlm.RoleVMNFusionProj} {
-		towerMatrix[r] = true
-	}
+	return 0, false
 }
 
 // mobilenetPlace parses "v.blk.S.I.rest", a MobileNet-V5 block tensor.

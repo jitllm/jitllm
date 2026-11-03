@@ -67,7 +67,7 @@ func needPreVNNI(t *testing.T) {
 func TestPreVNNIMatchesVNNIBitForBit(t *testing.T) {
 	needPreVNNI(t)
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedSupported(gt) {
 			t.Logf("%s: no packed emitter on this architecture", gt)
 			continue

@@ -182,7 +182,7 @@ func ShowDownload(sh *app.Shell, fraction float64, note string) {
 func (d *downloadScreen) order() state.ReadonlySignal[[]int] {
 	if d.ord == nil {
 		d.ord = state.NewComputed(func() []int {
-			return discover.Rank(library.Models, d.sh.Store.Machine.Get(), d.pref.Get())
+			return discover.Rank(library.Models(), d.sh.Store.Machine.Get(), d.pref.Get())
 		}, d.pref.AsReadonly(), d.sh.Store.Machine.AsReadonly())
 	}
 	return d.ord
@@ -212,20 +212,20 @@ func (d *downloadScreen) ranked() widget.Widget {
 	text := func(k int, f func(library.Model, int) string) state.ReadonlySignal[string] {
 		return state.NewComputed(func() string {
 			if i := at(k); i >= 0 {
-				return f(library.Models[i], i)
+				return f(library.Models()[i], i)
 			}
 			return ""
 		}, order, d.have.AsReadonly(), d.sh.Store.Machine.AsReadonly())
 	}
 	palette := []widget.Color{p.Colors.Primary, p.Colors.Secondary, p.Colors.Tertiary, p.Warn}
-	rows := make([]widget.Widget, len(library.Models))
-	for k := range library.Models {
+	rows := make([]widget.Widget, len(library.Models()))
+	for k := range library.Models() {
 		look := state.NewComputed(func() widgets.TileLook {
 			i := at(k)
 			if i < 0 {
 				return widgets.TileLook{}
 			}
-			fam := strings.Fields(library.Models[i].Title)[0]
+			fam := strings.Fields(library.Models()[i].Title)[0]
 			h := 0
 			for _, r := range fam {
 				h += int(r)

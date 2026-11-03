@@ -21,42 +21,126 @@ import (
 
 // d1OmniAudioNames is every per-block audio tensor's role, by its name after
 // "a.blk.N.".
-var d1OmniAudioNames = map[string]jlm.Role{
-	"ffn_norm.weight": jlm.RoleAFF1Norm, "ffn_norm.bias": jlm.RoleAFF1NormB,
-	"ffn_up.weight": jlm.RoleAFF1Up, "ffn_up.bias": jlm.RoleAFF1UpB,
-	"ffn_down.weight": jlm.RoleAFF1Down, "ffn_down.bias": jlm.RoleAFF1DownB,
-	"ln1.weight": jlm.RoleAAttnNorm, "ln1.bias": jlm.RoleAAttnNormB,
-	"attn_q.weight": jlm.RoleAQ, "attn_q.bias": jlm.RoleAQB,
-	"attn_k.weight": jlm.RoleAK, "attn_k.bias": jlm.RoleAKB,
-	"attn_v.weight": jlm.RoleAV, "attn_v.bias": jlm.RoleAVB,
-	"attn_out.weight": jlm.RoleAOut, "attn_out.bias": jlm.RoleAOutB,
-	"linear_pos.weight": jlm.RoleAPos, "pos_bias_u": jlm.RoleAPosU, "pos_bias_v": jlm.RoleAPosV,
-	"norm_conv.weight": jlm.RoleAConvNorm, "norm_conv.bias": jlm.RoleAConvNormB,
-	"conv_dw.weight": jlm.RoleADW, "conv_dw.bias": jlm.RoleADWB, // folded below
-	"conv_norm.weight": jlm.RoleABNScale, "conv_norm.bias": jlm.RoleABNShift,
-	"conv_pw2.weight": jlm.RoleAPW2, "conv_pw2.bias": jlm.RoleAPW2B,
-	"ffn_norm_1.weight": jlm.RoleAFF2Norm, "ffn_norm_1.bias": jlm.RoleAFF2NormB,
-	"ffn_up_1.weight": jlm.RoleAFF2Up, "ffn_up_1.bias": jlm.RoleAFF2UpB,
-	"ffn_down_1.weight": jlm.RoleAFF2Down, "ffn_down_1.bias": jlm.RoleAFF2DownB,
-	"ln2.weight": jlm.RoleAOutNorm, "ln2.bias": jlm.RoleAOutNormB,
-	// pointwise_conv1 is cut in two below.
-	"conv_pw1.weight": jlm.RoleAGLUVal, "conv_pw1.bias": jlm.RoleAGLUValB,
+func d1OmniAudioNames(name string) (jlm.Role, bool) {
+	switch name {
+	case "ffn_norm.weight":
+		return jlm.RoleAFF1Norm, true
+	case "ffn_norm.bias":
+		return jlm.RoleAFF1NormB, true
+	case "ffn_up.weight":
+		return jlm.RoleAFF1Up, true
+	case "ffn_up.bias":
+		return jlm.RoleAFF1UpB, true
+	case "ffn_down.weight":
+		return jlm.RoleAFF1Down, true
+	case "ffn_down.bias":
+		return jlm.RoleAFF1DownB, true
+	case "ln1.weight":
+		return jlm.RoleAAttnNorm, true
+	case "ln1.bias":
+		return jlm.RoleAAttnNormB, true
+	case "attn_q.weight":
+		return jlm.RoleAQ, true
+	case "attn_q.bias":
+		return jlm.RoleAQB, true
+	case "attn_k.weight":
+		return jlm.RoleAK, true
+	case "attn_k.bias":
+		return jlm.RoleAKB, true
+	case "attn_v.weight":
+		return jlm.RoleAV, true
+	case "attn_v.bias":
+		return jlm.RoleAVB, true
+	case "attn_out.weight":
+		return jlm.RoleAOut, true
+	case "attn_out.bias":
+		return jlm.RoleAOutB, true
+	case "linear_pos.weight":
+		return jlm.RoleAPos, true
+	case "pos_bias_u":
+		return jlm.RoleAPosU, true
+	case "pos_bias_v":
+		return jlm.RoleAPosV, true
+	case "norm_conv.weight":
+		return jlm.RoleAConvNorm, true
+	case "norm_conv.bias":
+		return jlm.RoleAConvNormB, true
+	case "conv_dw.weight":
+		return jlm.RoleADW, true
+	case "conv_dw.bias":
+		return jlm.RoleADWB, true
+	case "conv_norm.weight":
+		return jlm.RoleABNScale, true
+	case "conv_norm.bias":
+		return jlm.RoleABNShift, true
+	case "conv_pw2.weight":
+		return jlm.RoleAPW2, true
+	case "conv_pw2.bias":
+		return jlm.RoleAPW2B, true
+	case "ffn_norm_1.weight":
+		return jlm.RoleAFF2Norm, true
+	case "ffn_norm_1.bias":
+		return jlm.RoleAFF2NormB, true
+	case "ffn_up_1.weight":
+		return jlm.RoleAFF2Up, true
+	case "ffn_up_1.bias":
+		return jlm.RoleAFF2UpB, true
+	case "ffn_down_1.weight":
+		return jlm.RoleAFF2Down, true
+	case "ffn_down_1.bias":
+		return jlm.RoleAFF2DownB, true
+	case "ln2.weight":
+		return jlm.RoleAOutNorm, true
+	case "ln2.bias":
+		return jlm.RoleAOutNormB, true
+	case "conv_pw1.weight":
+		return jlm.RoleAGLUVal, true
+	case "conv_pw1.bias":
+		return jlm.RoleAGLUValB, true
+	}
+	return 0, false
 }
 
 // d1OmniAudioDense is the dense audio tensors' roles.
-var d1OmniAudioDense = map[string]jlm.Role{
-	"a.pre_encode.out.weight": jlm.RoleASubOut, "a.pre_encode.out.bias": jlm.RoleASubOutB,
-	"mm.a.mlp.0.weight": jlm.RoleAAdNorm, "mm.a.mlp.0.bias": jlm.RoleAAdNormB,
-	"mm.a.mlp.1.weight": jlm.RoleAAd1, "mm.a.mlp.1.bias": jlm.RoleAAd1B,
-	"mm.a.mlp.3.weight": jlm.RoleAAd2, "mm.a.mlp.3.bias": jlm.RoleAAd2B,
-	"mm.a.mlp.4.weight": jlm.RoleAResNorm, "mm.a.mlp.4.bias": jlm.RoleAResNrmB,
-	"mm.a.mlp.5.weight": jlm.RoleAResDown, "mm.a.mlp.5.bias": jlm.RoleAResDnB,
-	"mm.a.mlp.6.weight": jlm.RoleAResUp, "mm.a.mlp.6.bias": jlm.RoleAResUpB,
+func d1OmniAudioDense(name string) (jlm.Role, bool) {
+	switch name {
+	case "a.pre_encode.out.weight":
+		return jlm.RoleASubOut, true
+	case "a.pre_encode.out.bias":
+		return jlm.RoleASubOutB, true
+	case "mm.a.mlp.0.weight":
+		return jlm.RoleAAdNorm, true
+	case "mm.a.mlp.0.bias":
+		return jlm.RoleAAdNormB, true
+	case "mm.a.mlp.1.weight":
+		return jlm.RoleAAd1, true
+	case "mm.a.mlp.1.bias":
+		return jlm.RoleAAd1B, true
+	case "mm.a.mlp.3.weight":
+		return jlm.RoleAAd2, true
+	case "mm.a.mlp.3.bias":
+		return jlm.RoleAAd2B, true
+	case "mm.a.mlp.4.weight":
+		return jlm.RoleAResNorm, true
+	case "mm.a.mlp.4.bias":
+		return jlm.RoleAResNrmB, true
+	case "mm.a.mlp.5.weight":
+		return jlm.RoleAResDown, true
+	case "mm.a.mlp.5.bias":
+		return jlm.RoleAResDnB, true
+	case "mm.a.mlp.6.weight":
+		return jlm.RoleAResUp, true
+	case "mm.a.mlp.6.bias":
+		return jlm.RoleAResUpB, true
+	}
+	return 0, false
 }
 
 // d1OmniSubLayers is the subsampling's convolution layers (audio.py's
 // nn.Sequential indices): a full 3x3, then depthwise 3x3 and pointwise twice.
-var d1OmniSubLayers = []int{0, 2, 3, 5, 6}
+func d1OmniSubLayers() []int {
+	return []int{0, 2, 3, 5, 6}
+}
 
 // audioOf reads f's audio tower, its blocks after nVis vision blocks, or nil
 // for an mmproj with none. An audio projector other than d1-omni's is
@@ -116,7 +200,7 @@ func audioOf(f *meta.File, nVis uint32) (*jlm.Audio, []jlm.Tensor, error) {
 			if dot <= 0 || err != nil || n < 0 || uint64(n) >= uint64(a.NLayer) {
 				return nil, nil, fmt.Errorf("convert: %q: an audio block index outside %d", name, a.NLayer)
 			}
-			role, ok := d1OmniAudioNames[rest[dot+1:]]
+			role, ok := d1OmniAudioNames(rest[dot+1:])
 			if !ok {
 				return nil, nil, fmt.Errorf("convert: tensor %q has no role in this container's vocabulary; "+
 					"a tensor dropped at conversion is a model that loads and is wrong, so this is a refusal", name)
@@ -156,7 +240,7 @@ func audioOf(f *meta.File, nVis uint32) (*jlm.Audio, []jlm.Tensor, error) {
 			}
 			out = append(out, e)
 		case strings.HasPrefix(name, "a.") || strings.HasPrefix(name, "mm.a."):
-			role, ok := d1OmniAudioDense[name]
+			role, ok := d1OmniAudioDense(name)
 			if !ok {
 				return nil, nil, fmt.Errorf("convert: tensor %q has no role in this container's vocabulary; "+
 					"a tensor dropped at conversion is a model that loads and is wrong, so this is a refusal", name)

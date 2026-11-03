@@ -78,7 +78,7 @@ func dotFamilies(t *testing.T) map[string][]byte {
 		}
 		add("gemm/"+w.String(), code, err)
 	}
-	for _, w := range quant.PackedTypes {
+	for _, w := range quant.PackedTypes() {
 		code, err := EmitA64PackedMatVecPF(w, PackedRows, 0)
 		add("packed/"+w.String(), code, err)
 		code, err = EmitA64PackedMatVecFused(w, 16, 0)
@@ -379,7 +379,7 @@ func TestNoDotProdChainsTheDecodeDots(t *testing.T) {
 		{"fused", func(w quant.Type) ([]byte, error) { return EmitA64PackedMatVecFused(w, 16, 0) }},
 		{"fusedwin", func(w quant.Type) ([]byte, error) { return EmitA64PackedMatVecFusedWin(w, 16, 0, 256) }},
 	}
-	for _, w := range quant.PackedTypes {
+	for _, w := range quant.PackedTypes() {
 		q, _ := layout.QuantOf(w)
 		sub, bits, _, _ := layout.Layout(q)
 		hi := layout.HiPlane(q)

@@ -92,7 +92,7 @@ func TestComposedCPURowsMatVec(t *testing.T) {
 	const k, rows = 256, 300
 	rng := rand.New(rand.NewSource(9))
 	right := 0
-	for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
+	for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes()...) {
 		q, ok := layout.QuantOf(typ)
 		if typ == quant.F32 {
 			q, ok = layout.Float32, true

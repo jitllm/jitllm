@@ -16,6 +16,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -40,10 +41,12 @@ const (
 
 // Vocab is a loaded SPM vocabulary.
 type Vocab struct {
-	ids   map[string]int32
-	text  []string
-	score []float32
-	kind  []int32
+	// scratch holds the BPE encoders' working memory between calls.
+	scratch sync.Pool
+	ids     map[string]int32
+	text    []string
+	score   []float32
+	kind    []int32
 
 	BOS, EOS, Unk int32
 	byteTok       [256]int32 // byte value -> <0xNN> token, or -1
@@ -337,13 +340,15 @@ func (h *bigramHeap) pop() bigram {
 // ids it adds to them), matched by name exactly as it does. Where llama.cpp
 // takes one FIM token of each kind, the first its hash map yields, every one
 // present is taken here.
-var eogNames = []string{"<|eot_id|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
-	"<|flush|>", "<|calls|>", "<end_of_turn>", "<|endoftext|>", "</s>", "<|eom_id|>",
-	"<EOT>", "_<EOT>", "[EOT]", "[EOS]", "<|end_of_text|>", "<end_of_utterance>",
-	"<eos>", "<turn|>", "<|tool_response>", "<｜end▁of▁sentence｜>", "[e~[",
-	"<|fim_pad|>", "<fim-pad>", "<fim_pad>", "<PAD>", "[PAD]",
-	"<|fim_repo|>", "<|repo_name|>", "<fim-repo>", "<REPO>", "<reponame>",
-	"<|file_sep|>"}
+func eogNames() []string {
+	return []string{"<|eot_id|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
+		"<|flush|>", "<|calls|>", "<end_of_turn>", "<|endoftext|>", "</s>", "<|eom_id|>",
+		"<EOT>", "_<EOT>", "[EOT]", "[EOS]", "<|end_of_text|>", "<end_of_utterance>",
+		"<eos>", "<turn|>", "<|tool_response>", "<｜end▁of▁sentence｜>", "[e~[",
+		"<|fim_pad|>", "<fim-pad>", "<fim_pad>", "<PAD>", "[PAD]",
+		"<|fim_repo|>", "<|repo_name|>", "<fim-repo>", "<REPO>", "<reponame>",
+		"<|file_sep|>"}
+}
 
 // eogOf is the stop set: EOS, the ids the container states (jlm.Vocab.Stop:
 // a GGUF's eot and eom, a safetensors model's generation_config list), and
@@ -369,7 +374,7 @@ func eogOf(v *Vocab, stated []int32) []int32 {
 	for _, id := range stated {
 		add(id)
 	}
-	for _, n := range eogNames {
+	for _, n := range eogNames() {
 		if id, ok := v.ids[n]; ok {
 			add(id)
 		}

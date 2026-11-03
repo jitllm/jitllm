@@ -83,7 +83,7 @@ func sseProbes() []sseProbe {
 		{"Ln", func(em *Emitters) error { return probe0(em.Ln) }},
 		{"XIELU", func(em *Emitters) error { return probe0(em.XIELU) }},
 		{"ActMul", func(em *Emitters) error {
-			for _, k := range graph.Gated {
+			for _, k := range graph.Gated() {
 				if _, err := em.ActMul(k); err != nil {
 					return err
 				}
@@ -91,7 +91,7 @@ func sseProbes() []sseProbe {
 			return nil
 		}},
 		{"Act", func(em *Emitters) error {
-			for _, k := range graph.Ungated {
+			for _, k := range graph.Ungated() {
 				if _, err := em.Act(k); err != nil {
 					return err
 				}

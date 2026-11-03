@@ -49,7 +49,7 @@ func TestWholeTensorCRC(t *testing.T) {
 	// every subtest skipped while the gate read green.
 	byID := map[string]string{}
 	present := 0
-	for _, p := range []string{tinyllama, gemma} {
+	for _, p := range []string{tinyllama(), gemma()} {
 		if _, err := os.Stat(p); err != nil {
 			continue
 		}
