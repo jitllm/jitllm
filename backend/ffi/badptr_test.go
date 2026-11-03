@@ -18,8 +18,7 @@ import (
 // stale arguments do not: stack copying adjusts pointers in frames, not in heap
 // objects, so the heap copy keeps pointing at the old stack every time.
 func TestHeapPointerGoesStaleOnAStackCopy(t *testing.T) {
-	var sink [1]unsafe.Pointer
-	esc = &sink // make the array escape, exactly as passing ps[:N] did
+	esc := heapArray() // the array escapes, exactly as passing ps[:N] did
 
 	before, after := fillThenGrow(esc)
 	held := uintptr(esc[0])
@@ -43,9 +42,11 @@ func TestHeapPointerGoesStaleOnAStackCopy(t *testing.T) {
 	}
 }
 
-// esc is package-level so the array it points at is heap-allocated, which is
-// what turns the legal version of prepared.call into the illegal one.
-var esc *[1]unsafe.Pointer
+// heapArray returns a heap-allocated array, which is what turns the legal
+// version of prepared.call into the illegal one.
+//
+//go:noinline
+func heapArray() *[1]unsafe.Pointer { return new([1]unsafe.Pointer) }
 
 // fillThenGrow writes a frame-local's address into a heap object exactly as the
 // old wrappers did, forces the stack to be copied, and reports where the local
