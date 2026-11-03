@@ -10,9 +10,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -73,94 +70,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			// it before the shared one opens, so one copy is resident at a time:
 			// olmoe twice is 9 GiB, past scripts/cap 8G's MemoryHigh, where the
 			// kernel throttles the cgroup into reclaim and the gate crawls.
-			// The k-sliced fused matvec (nn's fusedSliced) runs where a pool is
-			// wide enough to make a balanced row chunk short -- olmoe's head on
-			// a 14-worker two-socket host -- and a six-worker host never takes it
-			// at these shapes, so its closure allocated two objects a token
-			// there and nowhere this gate ran. Pinned here, it runs on every
-			// fused matrix of every host.
-			t.Run("host-ksliced", func(t *testing.T) {
-				mk, err := Open(jlmOf(t, p), noTune(), resident, WithJITOptions(nn.WithFusedKSlices(2)))
-				if err != nil {
-					t.Fatal(err)
-				}
-				closeK := func() {
-					if mk != nil {
-						mk.Close()
-						mk = nil
-					}
-				}
-				defer closeK()
-				// An all-float model (the synth fixtures, every tensor F32) has
-				// no fused packed matvec, which is the only kernel k-slicing
-				// splits; the host arm above is its whole decode.
-				if !anyPackedBlock(mk) {
-					t.Skip("every block weight is float: there is no fused packed matvec to split over k")
-				}
-				// A mixture whose only packed weights are its expert banks runs
-				// them in the batched regions, which are not split over k: the
-				// per-expert loop is where the pin reaches them.
-				if !anyDensePacked(mk) {
-					closeK()
-					mk, err = Open(jlmOf(t, p), noTune(), resident, WithJITOptions(nn.WithFusedKSlices(2), nn.WithMixtureBatch(-1)))
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-				if decodeAllocs(t, mk, nil).ksliced == 0 {
-					t.Fatal("no matvec of the window was split over k: this arm measured the plain host decode twice")
-				}
-			})
-			// The node-affine fused matvec (sched.DoNodes), which cmd/jitllm
-			// turns on wherever the pool spans two NUMA nodes: the shipping
-			// host decode of a two-socket box, and a path no one-node host has.
-			t.Run("host-numa", func(t *testing.T) {
-				if len(sched.NUMANodes()) < 2 {
-					t.Skip("one NUMA node: DoNodes is the plain region here, which the host arm measured")
-				}
-				mn, err := Open(jlmOf(t, p), noTune(), resident, WithJITOptions(nn.WithSched(sched.WithNUMA(true))))
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer mn.Close()
-				// DoNodes splits the fused packed matvec, as k-slicing does:
-				// an all-float model has none, and its host arm is its whole
-				// decode.
-				if !anyPackedBlock(mn) {
-					t.Skip("every block weight is float: there is no fused packed matvec to run node-affine")
-				}
-				s := mn.NewInstance(8)
-				nodes, _ := s.jit.NUMA()
-				s.Close()
-				if nodes < 2 {
-					t.Skipf("the pool spans %d node(s) under this process's CPU mask: no DoNodes region can be "+
-						"node-affine", nodes)
-				}
-				// DoNodes takes a dense weight whose rows are a whole number of
-				// node rounds; every other runs the plain region the host arm
-				// measured. A mixture's experts are placed by their pages, so a
-				// mixture is never skipped here.
-				rows, round := packedRows(mn), nn.NUMARound(nodes)
-				if !mn.Cfg.MoE() && !slices.ContainsFunc(rows, func(r int) bool { return r%round == 0 }) {
-					t.Skipf("the packed weights have %v rows and none is a multiple of %d, the node round of "+
-						"%d nodes: no matvec can run node-affine", rows, round, nodes)
-				}
-				if decodeAllocs(t, mn, nil).affine == 0 {
-					t.Fatal("no region of the window ran node-affine: this arm measured the plain host decode twice")
-				}
-			})
-			// The CPU's blocks on what the composer forms for it, on the models
-			// it serves there: every block step of the window served.
-			if slices.Contains(cpuServedModels(), name) || slices.Contains(cpuExpertAllocModels(), name) {
-				t.Run("host-composed", func(t *testing.T) {
-					mc, err := Open(jlmOf(t, p), noTune(), resident, WithStreamTrial(false))
-					if err != nil {
-						t.Fatal(err)
-					}
-					defer mc.Close()
-					decodeAllocs(t, mc, nil)
-				})
-			}
+			// The CPU's blocks are what the composer forms for it (host).
 			// The head on one device and the blocks on another, every part
 			// composed: each token's input row is gathered on the head's device
 			// and read back, and block 0's device uploads it as the residual
@@ -279,14 +189,6 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			}
 		})
 	}
-}
-
-// cpuExpertAllocModels are the mixtures of the gate's list whose decode the
-// composed CPU arm measures, each block's banks read in the host's expert
-// pages (TestComposedCPUExpertPagesServe).
-func cpuExpertAllocModels() []string {
-	return []string{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "synth-glm4moe.gguf", "synth-qwen2moe.gguf",
-		"synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-gemma4-moe.gguf", "synth-phimoe.gguf", "synth-bailingmoe2.gguf"}
 }
 
 // composedAllocModels are the models whose composed step the gate measures:
@@ -810,51 +712,6 @@ func memRecords() map[[32]uintptr]int64 {
 		m[r.Stack0] += r.AllocObjects
 	}
 	return m
-}
-
-// anyPackedBlock reports whether any block weight of m is in a packed
-// (quantized) layout -- what the fused matvec, and so k-slicing, runs on.
-func anyPackedBlock(m *Model) bool {
-	for i := range m.layers {
-		l := &m.layers[i]
-		for _, w := range []*tensor{&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down} {
-			if w.packed != nil {
-				return true
-			}
-		}
-	}
-	return m.output.packed != nil
-}
-
-// anyDensePacked is anyPackedBlock without a mixture's expert banks.
-func anyDensePacked(m *Model) bool {
-	for i := range m.layers {
-		l := &m.layers[i]
-		ws := []*tensor{&l.wq, &l.wk, &l.wv, &l.wo}
-		if len(l.experts) == 0 {
-			ws = append(ws, &l.gate, &l.up, &l.down)
-		}
-		for _, w := range ws {
-			if w.packed != nil {
-				return true
-			}
-		}
-	}
-	return m.output.packed != nil
-}
-
-// packedRows is the distinct row counts of the packed weights in m's container,
-// ascending. It walks the container, not a list of weight fields, so a weight
-// the list forgot cannot make the host-numa arm's skip a false one.
-func packedRows(m *Model) []int {
-	var rows []int
-	for _, e := range m.container.Entries() {
-		if e.NDim >= 2 && jlm.Packed(e.Type) {
-			rows = append(rows, e.Rows())
-		}
-	}
-	slices.Sort(rows)
-	return slices.Compact(rows)
 }
 
 // TestOffCardDecodeDoesNotAllocate is TestDecodeDoesNotAllocate's device arms

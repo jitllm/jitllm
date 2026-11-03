@@ -12,7 +12,6 @@ package hardware
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/dev/bench"
 	"os"
 	"os/exec"
 	"runtime"
@@ -20,42 +19,17 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jitllm/jitllm/dev/bench"
+
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/common/session"
 )
-
-// FormatNames is the quantization types the emitter has kernels for
-// ([quant.PackedTypes()]) as strings, in the same order, so a caller that only
-// wants to label a table needs no quant import. It is a list, not a promise of
-// coverage, which is why every row asks the emitter rather than printing it.
-func FormatNames() []string {
-	out := make([]string, 0, len(quant.PackedTypes()))
-	for _, t := range quant.PackedTypes() {
-		out = append(out, t.String())
-	}
-	return out
-}
-
-// Kernel is what the emitter will do for one quantization type, in both
-// families. Native is the GGUF row-major emitter, which a container never
-// decodes through; on a pre-VNNI host it reads "none" while the packed family
-// runs everything, so both columns are reported.
-type Kernel struct {
-	Format string
-	// Native is the GGUF row-major family: gone from the container path.
-	Native     bool
-	NativeNote string
-	// Packed is the container path. This is the column that matters.
-	Packed     bool
-	PackedNote string
-}
 
 // GPU is one device backend.Open actually opened.
 type GPU struct {
@@ -115,10 +89,10 @@ type Report struct {
 	// Decode reads every active weight once a token, so it bounds the rate.
 	MemWall float64
 
-	Arch    string
-	ISA     string
-	DotKind string
-	Kernels []Kernel
+	// Arch is the host's architecture, ISA the instruction sets it executes,
+	// and Form how the composer forms its CPU device's kernels from them
+	// (model.CPUForm).
+	Arch, ISA, Form string
 
 	GPUs   []GPU
 	Vulkan []VulkanDev
@@ -158,8 +132,7 @@ func Probe() (r Report) {
 	r.MemBudget, r.MemLimit = sched.MemBudget(), sched.MemLimit()
 	r.GCBudgetCap, r.GCUsable = sched.GCBudgetCap(), sched.GCUsable()
 
-	r.Arch, r.ISA, r.DotKind = cpu.NativeArch(), isa(), cpu.HostDotLabel()
-	r.Kernels = kernels()
+	r.Arch, r.ISA, r.Form = runtime.GOARCH, cpu.CPU().ISA().String(), model.CPUForm()
 
 	devs := backend.Open()
 	for _, d := range devs {
@@ -186,34 +159,6 @@ func Probe() (r Report) {
 	return r
 }
 
-// kernels asks the emitter, per format, in both families.
-func kernels() []Kernel {
-	out := make([]Kernel, 0, len(quant.PackedTypes()))
-	for _, t := range quant.PackedTypes() {
-		k := Kernel{Format: t.String()}
-
-		k.Native = cpu.SupportedNative(t)
-		if k.Native {
-			k.NativeNote = fmt.Sprintf("pack%d accs%d", cpu.BestPackNative(t), cpu.BestAccs(t))
-		} else {
-			k.NativeNote = "none"
-		}
-
-		switch {
-		case !cpu.PackedSupported(t):
-			k.PackedNote = "none"
-		case !cpu.SupportedPackedNative(t):
-			// Generated, and declined on this host: a real capability gap, and
-			// a different fact from having no kernel at all.
-			k.PackedNote = "declined"
-		default:
-			k.Packed, k.PackedNote = true, cpu.HostDotLabel()
-		}
-		out = append(out, k)
-	}
-	return out
-}
-
 // describe asks a device what it has, through the optional interfaces the
 // backend exposes -- a driver that cannot say reports its refusal rather than a
 // zero.
@@ -237,34 +182,6 @@ func describe(d backend.Device) GPU {
 	return g
 }
 
-// isa names what the native emitter emits, and whether this CPU can run it.
-//
-// engine/device/cpu probes the feature (CPUID leaf 7.1, AT_HWCAP or sysctl) and declines
-// the quantized row-major kernels when it is absent, so this is a measured
-// capability.
-func isa() string {
-	switch cpu.NativeArch() {
-	case "amd64":
-		// Off the AVX2 tier the VNNI line describes kernels this host cannot
-		// run; the tier report says what a run does here instead.
-		if cpu.HostTier() != cpu.TierAVX2 {
-			return cpu.TierReport()
-		}
-		s := "AVX2 + AVX-VNNI, VEX-encoded VPDPBUSD"
-		if cpu.SupportedNative(quant.Q4_0) {
-			return s + " (probed: present)"
-		}
-		return s + " (probed: ABSENT -- the GGUF row-major kernels decline; the packed column is what a container runs)"
-	case "arm64":
-		s := "NEON + FEAT_DotProd SDOT"
-		if cpu.HasDotProd() {
-			return s + " (probed: present)"
-		}
-		return s + " (probed: ABSENT -- SDOT widened to SMULL/SMLAL/ADDP/SADALP)"
-	}
-	return "unknown"
-}
-
 // Machine is the shell's view of this report.
 //
 // The conversion lives here and nowhere else, so there is one mapping to the
@@ -282,10 +199,6 @@ func (r Report) Machine() session.MachineReport {
 		MemBudget:   r.MemBudget,
 		MemLimit:    r.MemLimit,
 		GCBudgetCap: r.GCBudgetCap,
-	}
-	for _, k := range r.Kernels {
-		// The two columns stay two columns; see Kernel.
-		m.Kernels = append(m.Kernels, session.KernelRow{Format: k.Format, RowMajor: k.Native, Packed: k.Packed})
 	}
 	for _, g := range r.GPUs {
 		m.GPUs = append(m.GPUs, session.GPUInfo{

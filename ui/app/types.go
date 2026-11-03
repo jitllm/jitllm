@@ -19,7 +19,6 @@ type (
 	Role          = session.Role
 	Turn          = session.Turn
 	MachineReport = session.MachineReport
-	KernelRow     = session.KernelRow
 	GPUInfo       = session.GPUInfo
 	PagerStat     = session.PagerStat
 	DeviceUse     = session.DeviceUse

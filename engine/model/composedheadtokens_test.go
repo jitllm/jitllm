@@ -175,35 +175,51 @@ func TestComposedHeadTokens(t *testing.T) {
 						}
 						// draws is gen seeded draws made two ways, from the device's
 						// candidates (ForwardSample) and from the logits it returned
-						// (Sample over Forward's): how many parted, and how many the
-						// device selected. hide clears the head's stages from the
-						// first, so that nothing tells the device a stage is the
-						// host's to apply.
-						drawsOn := func(g *gpu.GPU, hide bool) (parted int, onDev int64) {
-							c, d := newStateOn(g), newStateOn(g)
+						// (Sample over Forward's): how many parted, how many the
+						// device selected, and the second's tokens. hide clears the
+						// head's stages from the first, so that nothing tells the
+						// device a stage is the host's to apply. With ref the second
+						// is ref replayed: a violation that changes every instance's
+						// draw is held to the clean draws.
+						drawsOn := func(g *gpu.GPU, hide bool, ref []int32) (parted int, onDev int64, refs []int32) {
+							c := newStateOn(g)
 							defer c.Close()
-							defer d.Close()
+							var d *Instance
+							if ref == nil {
+								d = newStateOn(g)
+								defer d.Close()
+							}
 							if hide {
 								c.head.Stages = 0
 							}
 							sc, sd := newSampler(), newSampler()
+							next := func(i int, lg []float32) int32 {
+								if ref != nil {
+									return ref[i]
+								}
+								nd, err := d.Sample(sd, lg)
+								if err != nil {
+									t.Fatal(err)
+								}
+								return nd
+							}
 							lc, err := c.Prefill(ids)
 							if err != nil {
 								t.Fatal(err)
 							}
-							ld, err := d.Prefill(ids)
-							if err != nil {
-								t.Fatal(err)
+							var ld []float32
+							if d != nil {
+								if ld, err = d.Prefill(ids); err != nil {
+									t.Fatal(err)
+								}
 							}
 							nc, err := c.Sample(sc, lc)
 							if err != nil {
 								t.Fatal(err)
 							}
-							nd, err := d.Sample(sd, ld)
-							if err != nil {
-								t.Fatal(err)
-							}
-							for range gen {
+							nd := next(0, ld)
+							refs = append(refs, nd)
+							for i := range gen {
 								if nc != nd {
 									parted++
 								}
@@ -212,19 +228,23 @@ func TestComposedHeadTokens(t *testing.T) {
 								if nc, err = c.ForwardSample(nd, sc); err != nil {
 									t.Fatal(err)
 								}
-								lg, err := d.Forward(nd)
-								if err != nil {
-									t.Fatal(err)
+								var lg []float32
+								if d != nil {
+									if lg, err = d.Forward(nd); err != nil {
+										t.Fatal(err)
+									}
 								}
-								if nd, err = d.Sample(sd, lg); err != nil {
-									t.Fatal(err)
-								}
+								nd = next(i+1, lg)
+								refs = append(refs, nd)
 							}
-							return parted, c.SampledOnDevice
+							return parted, c.SampledOnDevice, refs
 						}
-						draws := func(hide bool) (int, int64) { return drawsOn(g, hide) }
+						draws := func(hide bool) (int, int64) {
+							p, n, _ := drawsOn(g, hide, nil)
+							return p, n
+						}
 						before := composedSamples(g.Stats())
-						parted, onDev := draws(false)
+						parted, onDev, clean := drawsOn(g, false, nil)
 						if parted != 0 {
 							t.Fatalf("%d of %d draws from the device's candidates parted from the draws over its logits", parted, gen)
 						}
@@ -260,7 +280,7 @@ func TestComposedHeadTokens(t *testing.T) {
 								if err != nil || vg == nil {
 									t.Fatalf("%s did not open for the violation: %v", dev, err)
 								}
-								vp, vd := drawsOn(vg, false)
+								vp, vd, _ := drawsOn(vg, false, clean)
 								vn := composedSamples(vg.Stats())
 								vg.Close()
 								m.front.mu.Lock()

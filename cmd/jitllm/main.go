@@ -28,11 +28,8 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
-
-	"os/exec"
 
 	"github.com/jitllm/jitllm/dev/bench"
 
@@ -124,8 +121,6 @@ func main() {
 		os.Exit(doctorCmd(os.Args[2:]))
 	case "info":
 		err = info(os.Args[2], len(os.Args) > 3 && os.Args[3] == "-kv")
-	case "asm":
-		err = dumpAsm(os.Args[2])
 	case "bench":
 		err = benchCmd(os.Args[2:])
 	case "run":
@@ -172,7 +167,6 @@ func usage() {
   jitllm upgrade <model.jlm>...   bring containers from an older jitllm to this build's version, in place
   jitllm convert [-o DIR] [-chat-template FILE] [-head mtp.gguf] <model.gguf|model-dir|URL|NAME> [mmproj.gguf|URL] [out.jlm]
   jitllm library [-refs]   the models convert fetches by NAME
-  jitllm asm <Q4_0|Q8_0|Q4_K>[x4]
 
 run flags:
   -devices SPEC          where to run the blocks (default auto). SPEC is a comma-separated
@@ -283,68 +277,6 @@ verify flags:
   -ab split|submit|head  run a paired A/B instead of verifying
   -verify                recompute every served matvec on the host`)
 	os.Exit(2)
-}
-
-// dumpAsm disassembles a generated kernel, so the machine code jitllm emits can be
-// read rather than taken on faith. Needs objdump; the bytes are real either way.
-func dumpAsm(name string) error {
-	rows := int8(1)
-	if strings.HasSuffix(name, "x4") {
-		rows, name = cpu.Interleave, strings.TrimSuffix(name, "x4")
-	}
-	var t quant.Type
-	switch name {
-	case "Q4_0":
-		t = quant.Q4_0
-	case "Q8_0":
-		t = quant.Q8_0
-	case "Q4_K":
-		t = quant.Q4_K
-	default:
-		return fmt.Errorf("no kernel for %q (Q4_0, Q8_0, Q4_K, optionally +x4)", name)
-	}
-	// Print the kernel this host would run: the host tier's packed kernel,
-	// which is what a container decodes through, not the GGUF row-major one.
-	e := cpu.EmittersFor(cpu.HostTier())
-	kind := "packed fused matvec (what a container decodes through)"
-	emit := func() ([]byte, error) {
-		if e.PackedSupported == nil || !e.PackedSupported(t) || e.PackedFused == nil {
-			return nil, fmt.Errorf("the %s tier has no packed kernel for %s", cpu.HostTier(), t)
-		}
-		return e.PackedFused(t)
-	}
-	if rows == cpu.Interleave {
-		kind = "GGUF row-major matvec, interleaved"
-		emit = func() ([]byte, error) {
-			if !e.RowMajorGGUF || e.RowMajorSupported == nil || !e.RowMajorSupported(t) {
-				return nil, fmt.Errorf("the %s tier has no GGUF row-major kernel for %s "+
-					"(a container does not use one)", cpu.HostTier(), t)
-			}
-			return e.RowMajor(cpu.Spec{W: t, Rows: rows, Accs: 1, Cols: 1})
-		}
-	}
-	code, err := emit()
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp("", "jitllmasm")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(code); err != nil {
-		return err
-	}
-	f.Close()
-	fmt.Printf("// %s %s, tier %s, %d bytes of x86-64\n", t, kind, cpu.HostTier(), len(code))
-	out, err := exec.Command("objdump", "-D", "-b", "binary", "-m", "i386:x86-64",
-		"-M", "intel", f.Name()).Output()
-	if err != nil {
-		fmt.Printf("// objdump unavailable; raw bytes:\n%x\n", code)
-		return nil
-	}
-	fmt.Print(string(out))
-	return nil
 }
 
 // benchmark measures one-core decode on the generated kernels as a fraction of

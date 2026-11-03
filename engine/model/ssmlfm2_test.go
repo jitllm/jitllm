@@ -93,8 +93,6 @@ func lfm2Violations(bool) []c6Violation {
 			restore := cfgMut(m, func(c *Config) { c.RopeNeox = false })
 			return func() { m.rope.Neox = was; restore() }
 		}},
-		{"no q/k norm", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.QKNorm = false })
-		}},
+		{"no q/k norm", noQKNorm},
 	}
 }

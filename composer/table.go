@@ -154,11 +154,13 @@ func (t Table) of(inst int) Operand {
 // op is table t's instance 0.
 func (t Table) op() Operand { return t.of(0) }
 
-// elem is the type of table t's elements, Void where it is a pool or a
-// float table the kernel types itself.
+// elem is the type of table t's elements, Void where it is a part's own
+// state or a float table the kernel types itself.
 func (t Table) elem() ir.Type {
-	switch t {
-	case TableAngles, TablePlanes, TableRunIn, TableRunOut, TableKeys, TableValues, TableEntKeys:
+	switch {
+	case t.perPart():
+		return ir.Void
+	case t == TableAngles, t == TablePlanes, t == TableRunIn, t == TableRunOut:
 		return ir.Void
 	}
 	return ir.U32

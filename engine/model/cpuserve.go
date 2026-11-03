@@ -518,6 +518,12 @@ func composedCPUDevice(workers int) composer.Device {
 	return composer.Device{Kind: composer.DeviceCPU, Slots: max(workers, 1), Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
 }
 
+// CPUForm is how the composer forms this host's CPU device
+// (composer.CPUForm).
+func CPUForm() string {
+	return composer.CPUForm(composedCPUDevice(1), runtime.GOARCH == "arm64")
+}
+
 // composedCPU is this instance's CPU as the composer forms for it, its launch
 // cost its probe row's.
 func (s *Instance) composedCPU() composer.Device {
