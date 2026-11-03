@@ -4,8 +4,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
-
-	"github.com/jitllm/jitllm/backend/cuda"
 )
 
 // Device identity: is this enumerated device the same piece of hardware as that
@@ -111,7 +109,7 @@ func APIRank(api string) int {
 // UUID their specifications agree on.
 func (c *cudaDev) Identity() Identity {
 	u, ok := c.d.UUID()
-	return UUIDIdentity(u[:], ok, cuda.UUIDSource())
+	return UUIDIdentity(u[:], ok, c.drv.UUIDSource())
 }
 
 func (v *vkDev) Identity() Identity {
@@ -128,12 +126,6 @@ func (m *mtlDev) Identity() Identity {
 	return Identity{Source: "Metal reports no UUID that MoltenVK's deviceUUID is specified to match"}
 }
 
-var (
-	_ Identified = (*cudaDev)(nil)
-	_ Identified = (*vkDev)(nil)
-	_ Identified = (*mtlDev)(nil)
-)
-
 // Driven is the optional interface a backend implements when it can name the
 // driver behind a Device. A measurement cached against a device is keyed by its
 // identity AND its driver: a driver update recompiles every kernel.
@@ -148,7 +140,7 @@ func DriverOf(d Device) string {
 }
 
 func (c *cudaDev) DriverVersion() string {
-	if v, ok := cuda.DriverVersion(); ok {
+	if v, ok := c.drv.DriverVersion(); ok {
 		return fmt.Sprintf("cuda%d", v)
 	}
 	return ""

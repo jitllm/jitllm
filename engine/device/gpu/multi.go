@@ -36,7 +36,7 @@ var (
 //
 // TuneOff keeps the given order, for tests that want a deterministic placement
 // (and for fakeTier, whose instant answers would order it by noise).
-func order(devs []backend.Device, tune TuneMode) []backend.Device {
+func order(devs []backend.Device, tune TuneMode, verbose bool) []backend.Device {
 	if len(devs) < 2 || tune == TuneOff {
 		return devs
 	}
@@ -53,7 +53,7 @@ func order(devs []backend.Device, tune TuneMode) []backend.Device {
 	for i, j := range idx {
 		out[i] = devs[j]
 	}
-	if backend.Verbose() {
+	if verbose {
 		for i, j := range idx {
 			fmt.Fprintf(os.Stderr, "jitllm: order %d %-6s %-40s %8.1f Gmac/s\n",
 				i, devs[j].API(), devs[j].Name(), rates[j])

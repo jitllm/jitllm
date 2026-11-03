@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"unsafe"
@@ -22,6 +21,8 @@ import (
 // stream, order after them.
 type hipDev struct {
 	allocCount
+	// ctr is what the device counts into (Opts.Counters).
+	ctr  *Counters
 	d    *hip.Device
 	tg   amdgpu.Target
 	comg *hip.Comgr
@@ -36,7 +37,7 @@ type hipDev struct {
 	queues map[*hipQueue]bool
 }
 
-var errHIPClosed = errors.New("backend: hip: the device is closed")
+const errHIPClosed backendError = "backend: hip: the device is closed"
 
 // HIPConfig is where ROCm is looked for; gpu.WithROCm fills it.
 type HIPConfig = hip.Config
@@ -110,7 +111,7 @@ func OpenHIPWith(ord int, o Opts) (Device, error) {
 		return nil, fmt.Errorf("hip:%d: %s runs %d-lane waves and the lowering targets %d",
 			ord, d.Arch, d.Wave, tg.Wave)
 	}
-	return &hipDev{d: d, tg: tg, comg: rt.Comgr()}, nil
+	return &hipDev{ctr: o.counters(), d: d, tg: tg, comg: rt.Comgr()}, nil
 }
 
 // openHIP is what backend.Open uses: the first HIP device, if there is one.
@@ -219,7 +220,7 @@ func (h *hipDev) Alloc(n int) (Buf, error) {
 		return e
 	})
 	if err != nil {
-		allocRefused.Add(1)
+		h.ctr.allocRefused.Add(1)
 		return nil, err
 	}
 	return &hipBuf{p: p, n: n, dev: h, acc: h.take(n, hipFootprint(n))}, nil
@@ -231,7 +232,7 @@ func (h *hipDev) Alloc(n int) (Buf, error) {
 // offline gate (lowertest.TestAMDGPULowersForEveryTarget) holds every shipped
 // kernel to, checked here too because a shape no gate registered reaches it.
 func (h *hipDev) Compile(k *ir.Kernel) (Kernel, error) {
-	compiles.Add(1)
+	h.ctr.compiles.Add(1)
 	src, err := amdgpu.Lower(k, h.tg)
 	if err != nil {
 		return nil, err
@@ -323,7 +324,7 @@ func (b *hipBuf) Read(p []byte) error {
 	if len(p) > b.n {
 		return fmt.Errorf("backend: hip: read of %d bytes from a %d-byte buffer", len(p), b.n)
 	}
-	countRead(len(p))
+	b.dev.ctr.countRead(len(p))
 	return b.dev.outside(func() error { return b.dev.d.Read(b.p, p) })
 }
 
@@ -409,7 +410,7 @@ func (s *hipSession) Read(b Buf, p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	countRead(len(p))
+	s.h.ctr.countRead(len(p))
 	if s.q != nil {
 		return s.h.d.ReadOn(s.q.st, hb.p, p)
 	}
@@ -506,12 +507,3 @@ func (h *hipDev) SessionOn(q Queue, f func(Session)) {
 		return nil
 	})
 }
-
-var (
-	_ Device        = (*hipDev)(nil)
-	_ Queued        = (*hipDev)(nil)
-	_ Identified    = (*hipDev)(nil)
-	_ Unified       = (*hipDev)(nil)
-	_ Lanes         = (*hipDev)(nil)
-	_ OrdinalDevice = (*hipDev)(nil)
-)

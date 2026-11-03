@@ -27,7 +27,7 @@ func TestBogusROCmIsNoDevices(t *testing.T) {
 		// Off Linux and Windows the runtime is refused before any load is tried, and Why
 		// says so; on Linux it names the load that failed.
 		want := "not loadable"
-		if _, ok := layouts[runtime.GOOS]; !ok {
+		if _, ok := layoutFor(runtime.GOOS); !ok {
 			want = "ROCm runs on Linux and Windows"
 		}
 		if why := Why(Config{Path: p}); !strings.Contains(why, want) {
@@ -44,11 +44,11 @@ func TestBogusROCmIsNoDevices(t *testing.T) {
 // ROCm than the one asked for.
 func TestNamedPathIsTheOnlyOneTried(t *testing.T) {
 	dir := filepath.Join(string(filepath.Separator)+"x", "lib")
-	lo, ok := layouts[runtime.GOOS]
+	lo, ok := layoutFor(runtime.GOOS)
 	if !ok {
 		// No ROCm layout here (macOS): the search logic is the same on any
 		// host, so it is checked against Linux's.
-		lo = layouts["linux"]
+		lo, _ = layoutFor("linux")
 	}
 	got := candidates(Config{Path: dir}, lo, false)
 	if len(got) != len(lo.hip) {

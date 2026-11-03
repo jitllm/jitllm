@@ -18,7 +18,7 @@ import (
 func TestCUDAGraphTimingReportsEveryReplay(t *testing.T) {
 	gpuLock(t)
 	const n, replays = 1 << 16, 6
-	for _, d := range backend.Open() {
+	for _, d := range backend.OpenForTest() {
 		defer d.Close()
 		if d.API() != "ptx" { // CUDA
 			continue
@@ -45,9 +45,9 @@ func TestCUDAGraphTimingReportsEveryReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 		run := func(timed bool) (busy, gap []float32) {
-			backend.SetCUDATiming(timed)
-			defer backend.SetCUDATiming(false)
-			backend.CUDAGraphTimes()
+			backend.CountersOf(d).SetCUDATiming(timed)
+			defer backend.CountersOf(d).SetCUDATiming(false)
+			backend.CountersOf(d).CUDAGraphTimes()
 			var rec backend.Recording
 			out := make([]byte, n*4)
 			for it := 0; it < replays; it++ {
@@ -75,7 +75,7 @@ func TestCUDAGraphTimingReportsEveryReplay(t *testing.T) {
 				}
 			}
 			rec.Free()
-			return backend.CUDAGraphTimes()
+			return backend.CountersOf(d).CUDAGraphTimes()
 		}
 		if busy, _ := run(false); len(busy) != 0 {
 			t.Fatalf("timing off reported %d replays", len(busy))

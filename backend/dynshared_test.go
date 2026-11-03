@@ -45,7 +45,7 @@ func TestSharedPastTheStaticLimit(t *testing.T) {
 		t.Fatalf("the kernel's %d bytes of shared memory are not past the static limit: the gate would not ask for dynamic shared memory", n)
 	}
 	ran := 0
-	for _, d := range backend.Open() {
+	for _, d := range backend.OpenForTest() {
 		defer d.Close()
 		if d.API() != "ptx" {
 			continue

@@ -235,11 +235,11 @@ func migrateRecCase(t *testing.T, dt *devTier, shared bool) {
 	}
 	for sid := uint64(1); sid <= sessions; sid++ {
 		conv, state := make([]float32, C), make([]float32, S)
-		_, b0 := backend.HostReads()
+		_, b0 := backend.CountersOf(dt.dev).HostReads()
 		if !dt.migrateRec(sid, 0, conv, state, false) {
 			t.Fatalf("session %d: bringing its state home: %s", sid, dt.LastErr)
 		}
-		_, b1 := backend.HostReads()
+		_, b1 := backend.CountersOf(dt.dev).HostReads()
 		if got, want := b1-b0, uint64(4*(C+S)); got != want {
 			t.Fatalf("session %d at slot %d: %d bytes read to the host, want its own seat's %d",
 				sid, dt.recSeats[sid].base, got, want)

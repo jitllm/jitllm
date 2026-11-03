@@ -19,7 +19,7 @@ import (
 // several iterations with different inputs.
 func TestRecordReplayMatchesDirect(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

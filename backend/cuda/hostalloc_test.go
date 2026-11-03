@@ -9,17 +9,17 @@ import (
 // asked, the host can write all of it, and a transfer out of it lands the same
 // bytes on the card as one out of the Go heap.
 func TestHostAllocIsWritableAndTransfers(t *testing.T) {
-	d, err := Open()
+	d, err := testOpen()
 	if err != nil {
 		t.Skip("no CUDA device:", err)
 	}
 	defer d.Close()
 	const n = 3<<20 + 5
-	pin, err := HostAlloc(n)
+	pin, err := d.Driver().HostAlloc(n)
 	if err != nil {
 		t.Fatalf("HostAlloc(%d): %v", n, err)
 	}
-	defer FreeHost(pin)
+	defer d.Driver().FreeHost(pin)
 	if len(pin) != n {
 		t.Fatalf("HostAlloc(%d) is %d bytes", n, len(pin))
 	}
@@ -43,7 +43,7 @@ func TestHostAllocIsWritableAndTransfers(t *testing.T) {
 			t.Fatalf("byte %d is %d on the card, %d on the host", i, back[i], pin[i])
 		}
 	}
-	if _, err := HostAlloc(0); err == nil {
+	if _, err := d.Driver().HostAlloc(0); err == nil {
 		t.Error("HostAlloc(0) succeeded")
 	}
 }
@@ -57,7 +57,7 @@ func BenchmarkHostToDevicePinned(b *testing.B)   { benchH2D(b, true) }
 func BenchmarkHostToDevicePageable(b *testing.B) { benchH2D(b, false) }
 
 func benchH2D(b *testing.B, pinned bool) {
-	d, err := Open()
+	d, err := testOpen()
 	if err != nil {
 		b.Skip("no CUDA device:", err)
 	}
@@ -70,10 +70,10 @@ func benchH2D(b *testing.B, pinned bool) {
 	defer buf.Free()
 	src := make([]byte, n)
 	if pinned {
-		if src, err = HostAlloc(n); err != nil {
+		if src, err = d.Driver().HostAlloc(n); err != nil {
 			b.Fatal(err)
 		}
-		defer FreeHost(src)
+		defer d.Driver().FreeHost(src)
 	}
 	b.SetBytes(n)
 	b.ResetTimer()

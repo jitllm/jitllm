@@ -103,15 +103,3 @@ func (v *vkDev) FootprintOf(n int) uint64 { return uint64(vulkanFootprint(n)) }
 
 // FootprintOf implements AllocCounter: counted as asked (see mtlDev.Alloc).
 func (m *mtlDev) FootprintOf(n int) uint64 { return uint64(n) }
-
-// compiles counts every Compile on every device of this process.
-var compiles atomic.Int64
-
-// Compiles is how many kernels every device in this process has been asked
-// to compile: what a gate reads across a prompt to show that a placed model's
-// first prompt builds nothing. A compile belongs before the device is ready,
-// not inside a time to first token.
-func Compiles() int64 { return compiles.Load() }
-
-// CompileLog, when set, is told the name of every kernel Metal and CUDA compile.
-var CompileLog func(name string)

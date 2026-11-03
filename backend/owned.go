@@ -2,8 +2,8 @@ package backend
 
 import "sync/atomic"
 
-// Owned is what the process holds of the drivers' objects through this
-// package: devices opened and not yet Closed, and queues made by NewQueue and
+// Owned is what a set of devices holds of the drivers' objects (see
+// Counters.OwnedNow): devices opened and not yet Closed, and queues made by NewQueue and
 // not yet Closed by their owner. A queue counts until its own Close even when
 // its device closed first and the driver reclaimed it there: the count is of
 // what the engine owns, so a session that forgets its queue shows here even on
@@ -15,14 +15,6 @@ import "sync/atomic"
 // objects themselves.
 type Owned struct {
 	Devices, Queues int64
-}
-
-var ownedDevices, ownedQueues atomic.Int64
-
-// OwnedNow is the process's count of live driver objects, every backend
-// together.
-func OwnedNow() Owned {
-	return Owned{Devices: ownedDevices.Load(), Queues: ownedQueues.Load()}
 }
 
 // once is a Close that counts down exactly once.

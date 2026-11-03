@@ -15,15 +15,15 @@ import (
 type vkDev struct {
 	allocCount
 	once
-	c *vulkan.Ctx
+	// ctr is what the device counts into (Opts.Counters).
+	ctr *Counters
+	c   *vulkan.Ctx
 	// free is Session's free list: a session handed to the caller's f
 	// escapes, so a fresh one per call was a heap object per token. Nested
 	// sessions take one each.
 	mu   sync.Mutex
 	free []*vkSession
 }
-
-var _ BufferLimited = (*vkDev)(nil)
 
 // MaxBuffer is the device's maxStorageBufferRange (BufferLimited).
 func (d *vkDev) MaxBuffer() uint64 { return d.c.MaxBuffer() }
@@ -89,8 +89,9 @@ func OpenVulkanWith(sel string, o Opts) (Device, error) {
 			"declining it so the seam tuner cannot place blocks on the host's own cores "+
 			"(a Vulkan device pin of \"0\", or JITLLM_VK_DEVICE=0, takes it anyway)", name)
 	}
-	ownedDevices.Add(1)
-	return &vkDev{c: c}, nil
+	ctr := o.counters()
+	ctr.ownedDevices.Add(1)
+	return &vkDev{ctr: ctr, c: c}, nil
 }
 
 // VulkanDevices enumerates the Vulkan devices on this host without opening one,
@@ -129,7 +130,8 @@ func (v *vkDev) GuaranteedLanes(w int) (bool, string) { return v.c.Subgroups().G
 func (v *vkDev) Slots() int { return v.c.Slots() }
 func (v *vkDev) Close() {
 	v.c.Close()
-	v.release(&ownedDevices)
+	v.ctr.orphaned(v.c.Orphans())
+	v.release(&v.ctr.ownedDevices)
 }
 
 // Mem satisfies the same optional interface cudaDev does: free and total bytes
@@ -149,11 +151,11 @@ func (v *vkDev) Alloc(n int) (Buf, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &vkBuf{b: b, acc: v.take(n, vulkanFootprint(n))}, nil
+	return &vkBuf{b: b, ctr: v.ctr, acc: v.take(n, vulkanFootprint(n))}, nil
 }
 
 func (v *vkDev) Compile(k *ir.Kernel) (Kernel, error) {
-	compiles.Add(1)
+	v.ctr.compiles.Add(1)
 	// A tile kernel is declined by name on a device that did not enable the
 	// features: a driver may run the module anyway and silently compute a
 	// wrong answer, so the refusal is the whole safety property.
@@ -193,10 +195,8 @@ func (v *vkDev) Import(p unsafe.Pointer, n int) (Buf, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &vkBuf{b: b}, nil
+	return &vkBuf{b: b, ctr: v.ctr}, nil
 }
-
-var _ HostImport = (*vkDev)(nil)
 
 // Copy is vkCmdCopyBuffer on the context's one-shot command buffer, never the
 // one a Session records into (see vulkan.Ctx.one), submitted and waited for.
@@ -214,6 +214,7 @@ func (v *vkDev) Copy(dst Buf, dstOff int, src Buf, srcOff, n int) error {
 
 type vkBuf struct {
 	b   *vulkan.Buf
+	ctr *Counters
 	acc *counted
 }
 
@@ -222,7 +223,7 @@ func (b *vkBuf) Write(p []byte) error { return b.b.Write(p) }
 func (b *vkBuf) WriteAt(off int, p []byte) error { return b.b.WriteAt(off, p) }
 
 func (b *vkBuf) Read(p []byte) error {
-	countRead(len(p))
+	b.ctr.countRead(len(p))
 	return b.b.Read(p)
 }
 
@@ -451,16 +452,17 @@ func coopComp(e ir.TileElem) vulkan.ComponentType {
 // vkQueue is a queue of the context, with the session SessionOn hands out on it.
 type vkQueue struct {
 	once
-	mu sync.Mutex
-	l  *vulkan.Queue
-	s  vkSession
+	mu  sync.Mutex
+	ctr *Counters
+	l   *vulkan.Queue
+	s   vkSession
 }
 
 func (q *vkQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.l.Close()
-	q.release(&ownedQueues)
+	q.release(&q.ctr.ownedQueues)
 }
 
 // NewQueue is a queue of its own: a command pool, buffers, descriptor pool,
@@ -470,8 +472,8 @@ func (d *vkDev) NewQueue() (Queue, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownedQueues.Add(1)
-	return &vkQueue{l: l}, nil
+	d.ctr.ownedQueues.Add(1)
+	return &vkQueue{ctr: d.ctr, l: l}, nil
 }
 
 // SessionOn records f's work on q and submits it there, waiting for

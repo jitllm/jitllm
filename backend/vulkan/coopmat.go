@@ -111,12 +111,9 @@ const structTypeCoopMatProps = 1000506001
 //
 // It goes through vkGetInstanceProcAddr, because the loader does not export
 // this symbol (the instance-side counterpart of ffi.Fn4At's device case).
-func CooperativeMatrixShapes(inst Instance, phys PhysDevice) ([]CoopMatShape, error) {
-	if err := load(); err != nil {
-		return nil, err
-	}
+func (l *Loader) CooperativeMatrixShapes(inst Instance, phys PhysDevice) ([]CoopMatShape, error) {
 	name := append([]byte("vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR"), 0)
-	fn := vkGetInstanceProcAddr(inst, unsafe.Pointer(&name[0]))
+	fn := l.vkGetInstanceProcAddr(inst, unsafe.Pointer(&name[0]))
 	if fn == nil {
 		// Not an error: a device without the extension is the ordinary case and
 		// the caller decides what to do about it.
@@ -241,9 +238,9 @@ const (
 // It returns a pointer because the structs link to each other: a pNext chain
 // built over a value's fields and returned by value would point into the
 // callee's dead frame.
-func readTileFeats(p PhysDevice, apiVer uint32) *tileFeats {
+func (l *Loader) readTileFeats(p PhysDevice, apiVer uint32) *tileFeats {
 	t := new(tileFeats)
-	if apiVer < apiVersion11 || vkGetPhysicalDeviceFeatures2 == nil {
+	if apiVer < apiVersion11 || l.vkGetPhysicalDeviceFeatures2 == nil {
 		return t
 	}
 	t.coop.sType, t.s16.sType, t.s8.sType, t.f16i8.sType = stCoopMatFeat, stStorage16, stStorage8, stShaderF16I8
@@ -251,7 +248,7 @@ func readTileFeats(p PhysDevice, apiVer uint32) *tileFeats {
 	t.s16.pNext = uintptr(up(&t.s8))
 	t.s8.pNext = uintptr(up(&t.f16i8))
 	f2 := physFeat2{sType: stPhysDevFeat2, pNext: uintptr(up(&t.coop))}
-	vkGetPhysicalDeviceFeatures2(p, up(&f2))
+	l.vkGetPhysicalDeviceFeatures2(p, up(&f2))
 
 	// Keep only what the tile kernels declare. The driver reports several more
 	// in the same structs (robust access, push-constant storage, input/output

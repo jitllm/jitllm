@@ -17,7 +17,7 @@ import (
 func TestMetalRefusesAThreadgroupThePipelineCannotRun(t *testing.T) {
 	gpuLock(t)
 	ran := 0
-	for _, d := range backend.Open() {
+	for _, d := range backend.OpenForTest() {
 		defer d.Close()
 		if d.API() != "msl" {
 			continue

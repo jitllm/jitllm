@@ -60,25 +60,25 @@ const nvWarp = 32
 // share of them at that occupancy; VK_NV_shader_sm_builtins states none.
 // slots is the threads the device holds resident, each extension's units
 // times its most resident threads a unit, 0 where it does not say.
-func readCores(p PhysDevice, apiVer uint32) (cores int, from string, regs, slots int) {
+func (l *Loader) readCores(p PhysDevice, apiVer uint32) (cores int, from string, regs, slots int) {
 	if apiVer < apiVersionForProps {
 		return 0, "", 0, 0
 	}
-	if ok, err := hasExtension(p, extSMBuiltins); err == nil && ok {
+	if ok, err := l.hasExtension(p, extSMBuiltins); err == nil && ok {
 		sp := onHeap[smBuiltinsProps]()
 		sp.sType = stSMBuiltinsProps
 		p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(sp))}
-		vkGetPhysicalDeviceProperties2(p, up(&p2))
+		l.vkGetPhysicalDeviceProperties2(p, up(&p2))
 		runtime.KeepAlive(sp)
 		if sp.smCount > 0 {
 			return int(sp.smCount), extSMBuiltins, 0, int(sp.smCount * sp.warpsPerS * nvWarp)
 		}
 	}
-	if ok, err := hasExtension(p, extAMDCoreProps); err == nil && ok {
+	if ok, err := l.hasExtension(p, extAMDCoreProps); err == nil && ok {
 		ap := onHeap[amdCoreProps]()
 		ap.sType = stAMDCoreProps
 		p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(ap))}
-		vkGetPhysicalDeviceProperties2(p, up(&p2))
+		l.vkGetPhysicalDeviceProperties2(p, up(&p2))
 		runtime.KeepAlive(ap)
 		if n := ap.shaderEngineCount * ap.shaderArraysPerEngine * ap.computeUnitsPerShaderArr; n > 0 {
 			if ap.wavefrontsPerSimd > 0 {

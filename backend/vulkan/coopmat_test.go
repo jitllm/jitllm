@@ -15,7 +15,7 @@ func TestCooperativeMatrixShapesAreEnumerated(t *testing.T) {
 	}
 	defer c.Close()
 
-	shapes, err := CooperativeMatrixShapes(c.inst, c.phys)
+	shapes, err := c.l.CooperativeMatrixShapes(c.inst, c.phys)
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
@@ -52,11 +52,11 @@ func TestTileFeaturesAreEnabledNotJustProbed(t *testing.T) {
 	}
 	defer c.Close()
 
-	has, err := hasExtension(c.phys, extCooperativeMatrix)
+	has, err := c.l.hasExtension(c.phys, extCooperativeMatrix)
 	if err != nil {
 		t.Fatalf("hasExtension: %v", err)
 	}
-	shapes, err := CooperativeMatrixShapes(c.inst, c.phys)
+	shapes, err := c.l.CooperativeMatrixShapes(c.inst, c.phys)
 	if err != nil {
 		t.Fatalf("CooperativeMatrixShapes: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestTileFeaturesAreEnabledNotJustProbed(t *testing.T) {
 		t.Skipf("%s has no cooperative matrix (extension=%v, %d shapes)", c.Name(), has, len(shapes))
 	}
 
-	tf := readTileFeats(c.phys, apiVersion11)
+	tf := c.l.readTileFeats(c.phys, apiVersion11)
 	for _, f := range []struct {
 		name string
 		on   uint32

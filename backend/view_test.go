@@ -18,7 +18,7 @@ import (
 // minStorageBufferOffsetAlignment is refused by name.
 func TestViewBindsAtItsOffset(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

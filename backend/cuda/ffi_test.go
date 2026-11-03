@@ -9,7 +9,7 @@ import (
 // the device-owner channel hop adds on top: microseconds would be a real share
 // of a token, nanoseconds would put the tier's overhead elsewhere.
 func TestFFIOverhead(t *testing.T) {
-	d, err := Open()
+	d, err := testOpen()
 	if err != nil {
 		t.Skip("no CUDA device:", err)
 	}
@@ -23,11 +23,11 @@ func TestFFIOverhead(t *testing.T) {
 	var v int32
 	const n = 200000
 	for i := 0; i < 1000; i++ {
-		cuDriverGetVersion(&v)
+		d.drv.cuDriverGetVersion(&v)
 	}
 	start := time.Now()
 	for i := 0; i < n; i++ {
-		cuDriverGetVersion(&v)
+		d.drv.cuDriverGetVersion(&v)
 	}
 	per := time.Since(start) / n
 	t.Logf("ffi call (cuDriverGetVersion): %v", per)
@@ -58,7 +58,7 @@ func TestFFIOverhead(t *testing.T) {
 	}
 	start = time.Now()
 	for i := 0; i < n/10; i++ {
-		do(func() { cuDriverGetVersion(&v) })
+		do(func() { d.drv.cuDriverGetVersion(&v) })
 	}
 	t.Logf("same call through the owner hop:  %v", time.Since(start)/(n/10))
 	close(reqs)
