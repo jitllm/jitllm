@@ -38,7 +38,7 @@ func depWait(b *Buf, buf, word, target Reg, sm int) {
 	}
 	b.Op("sub.u32 %v,%v,%v;", d, cur, target)
 	b.Op("setp.lt.s32 %v,%v,0;", wait, d)
-	if depBroken {
+	if b.depBroken {
 		b.Op("bra.uni %s;", done)
 	}
 	if sm >= 70 {
@@ -111,9 +111,3 @@ func depExit(b *Buf, buf Reg, base int64, sm int) {
 	b.Op("st.global.u32 [%v+%d],%v;", buf, 4*base, ep)
 	b.Bind(done)
 }
-
-// depBroken makes every wait return without waiting: the counters still
-// count and the launch still ends, and nothing is ordered. It is the
-// violation the dep block's gate must see (BreakDepWaitForTest, jitllmtest
-// builds only).
-var depBroken bool

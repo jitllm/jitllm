@@ -115,6 +115,14 @@ func WithCUDAInline(on bool) Option { return func(o *openOpts) { o.cudaPosted = 
 // shown to fire.
 func WithCUDAMaxRegs(n int) Option { return func(o *openOpts) { o.cudaRegs = n } }
 
+// WithBrokenGridBarrier and WithBrokenDepWait make the lowering let every
+// grid-barrier waiter, or every dependency-counter wait, through without
+// waiting (backend.Opts): the violations the persistent-decode gates must fail
+// under.
+func WithBrokenGridBarrier() Option { return func(o *openOpts) { o.breakGrid = true } }
+
+func WithBrokenDepWait() Option { return func(o *openOpts) { o.breakDep = true } }
+
 // WithMetalFastMath compiles this tier's Metal libraries with Metal's fast
 // math instead of the IEEE default the other backends have.
 func WithMetalFastMath(on bool) Option { return func(o *openOpts) { o.metal.FastMath = on } }
@@ -236,7 +244,7 @@ func (o *openOpts) apply() {
 
 // devOpts is what every device this option set opens is opened with.
 func (o *openOpts) devOpts() backend.Opts {
-	return backend.Opts{Vulkan: o.vk, CUDAPosted: o.cudaPosted, CUDAMaxRegs: o.cudaRegs, Metal: o.metal, HIP: o.hip}
+	return backend.Opts{Vulkan: o.vk, CUDAPosted: o.cudaPosted, CUDAMaxRegs: o.cudaRegs, BreakGridBarrier: o.breakGrid, BreakDepWait: o.breakDep, Metal: o.metal, HIP: o.hip}
 }
 
 // WithPersist sets whether each decode block's launches are composed into

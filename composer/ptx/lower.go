@@ -13,7 +13,7 @@ import (
 // compiler back end would do. The only lookahead is at a loop head, where the
 // loop-carried values have to be initialised before the label they branch back
 // to -- which is the one thing a linear walk cannot discover after the fact.
-func Lower(k *ir.Kernel, target string) (string, error) {
+func Lower(k *ir.Kernel, target string, opts ...Option) (string, error) {
 	if err := k.Validate(); err != nil {
 		return "", err
 	}
@@ -28,6 +28,9 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 		}
 	}
 	var b Buf
+	for _, o := range opts {
+		o(&b)
+	}
 	reg := make([]Reg, len(k.Ops)+1) // value id -> register, 1-based
 	// The one op with several results. OpMMA writes its D fragment into these
 	// and OpMMAGet aliases them, so nothing else in the walk needs to know.

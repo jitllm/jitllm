@@ -40,8 +40,13 @@ func TestGridBarrierHoldsEveryWorkgroup(t *testing.T) {
 // barrier runs, with that width's co-residency limit.
 func eachGridDevice(t *testing.T, f func(d backend.Device, width, limit int)) {
 	t.Helper()
+	eachGridDeviceWith(t, backend.Open, f)
+}
+
+func eachGridDeviceWith(t *testing.T, open func() []backend.Device, f func(d backend.Device, width, limit int)) {
+	t.Helper()
 	gpuLock(t)
-	devs := backend.Open()
+	devs := open()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

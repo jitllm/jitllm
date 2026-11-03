@@ -478,6 +478,11 @@ type Opts struct {
 	// 0 leaving ptxas its own choice. It exists to force a spill: the
 	// register gate is run against it to show it fires.
 	CUDAMaxRegs int
+	// BreakGridBarrier and BreakDepWait make the lowering let every grid
+	// barrier waiter, or every dependency-counter wait, through without
+	// waiting: the violations the barrier and dep gates must fail under.
+	BreakGridBarrier bool
+	BreakDepWait     bool
 	// CUDATarget, where set, is the PTX target a CUDA device's kernels are
 	// built for in place of its compute capability's: a card runs PTX built
 	// for an older one, so a later card runs an older card's lowering.

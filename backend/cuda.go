@@ -81,6 +81,7 @@ type cudaDev struct {
 	// maxRegs is Opts.CUDAMaxRegs, fixed at open; res is what each compiled
 	// kernel cost (ResourceReporter).
 	maxRegs int
+	lower   []ptx.Option
 	res     resLedger
 	// reqFree is Session's free list; see Session.
 	reqMu   sync.Mutex
@@ -227,7 +228,7 @@ func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 	if opts.CUDATarget != "" {
 		o.d.Target = opts.CUDATarget
 	}
-	return &cudaDev{d: o.d, reqs: reqs, owner: o.tid, posted: opts.CUDAPosted, maxRegs: opts.CUDAMaxRegs}, nil
+	return &cudaDev{d: o.d, reqs: reqs, owner: o.tid, posted: opts.CUDAPosted, maxRegs: opts.CUDAMaxRegs, lower: ptxOptions(opts)}, nil
 }
 
 // Session batches a sequence of device calls into ONE ownership hop.
@@ -1013,12 +1014,23 @@ func (c *cudaDev) GuaranteedLanes(w int) (bool, string) {
 		"those; %d cannot be asked for", ir.SubgroupLanes, w)
 }
 
+func ptxOptions(o Opts) []ptx.Option {
+	var out []ptx.Option
+	if o.BreakGridBarrier {
+		out = append(out, ptx.BrokenGridBarrier())
+	}
+	if o.BreakDepWait {
+		out = append(out, ptx.BrokenDepWait())
+	}
+	return out
+}
+
 func (c *cudaDev) Compile(k *ir.Kernel) (Kernel, error) {
 	compiles.Add(1)
 	if CompileLog != nil {
 		CompileLog(k.Name)
 	}
-	src, err := ptx.Lower(k, c.d.Target)
+	src, err := ptx.Lower(k, c.d.Target, c.lower...)
 	if err != nil {
 		return nil, err
 	}

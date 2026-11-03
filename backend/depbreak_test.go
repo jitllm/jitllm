@@ -7,17 +7,16 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/ptx"
 )
 
 // TestDepCountersSeeABrokenWait is TestDepCountersOrderTheChain's violation
-// (RULE 10): with every wait returning at once (ptx.BreakDepWaitForTest), the
+// (RULE 10): with every wait returning at once (backend.Opts.BreakDepWait), the
 // chain must read words before they are written at the co-residency limit.
 // If it does not, the gate's agreement says nothing about the counters.
 func TestDepCountersSeeABrokenWait(t *testing.T) {
-	defer ptx.BreakDepWaitForTest(ptx.BreakDepWaitForTest(true))
 	ran := 0
-	eachGridDevice(t, func(d backend.Device, width, limit int) {
+	broken := func() []backend.Device { return backend.OpenWith(backend.Opts{BreakDepWait: true}) }
+	eachGridDeviceWith(t, broken, func(d backend.Device, width, limit int) {
 		if d.API() != "ptx" {
 			return
 		}
