@@ -23,15 +23,18 @@ const captureRelaxed = int32(2)
 // legacy stream synchronises with it both ways, so the legacy memcpys of a
 // token's position and logits stay ordered around the graph launch. A
 // non-blocking stream would silently read the previous token's logits.
-type Stream struct{ s CUstream }
+type Stream struct {
+	drv *Driver
+	s   CUstream
+}
 
 // NewStream creates one. It must run on the goroutine that called Open.
 func (d *Device) NewStream() (*Stream, error) {
-	if cuStreamCreate == nil {
+	if d.drv.cuStreamCreate == nil {
 		return nil, fmt.Errorf("cuda: this driver has no stream capture")
 	}
-	st := &Stream{}
-	if err := call(cuStreamCreate(&st.s, 0), "cuStreamCreate"); err != nil {
+	st := &Stream{drv: d.drv}
+	if err := d.drv.call(d.drv.cuStreamCreate(&st.s, 0), "cuStreamCreate"); err != nil {
 		return nil, err
 	}
 	return st, nil
@@ -49,7 +52,7 @@ func (s *Stream) Destroy() {
 	if s == nil || s.s == 0 {
 		return
 	}
-	cuStreamDestroy(s.s)
+	s.drv.cuStreamDestroy(s.s)
 	s.s = 0
 }
 
@@ -57,10 +60,10 @@ func (s *Stream) Destroy() {
 // EndCapture are added to a graph and DO NOT RUN, so a caller that captures
 // must still replay before it can read a result.
 func (s *Stream) BeginCapture() error {
-	if !GraphsAvailable() {
+	if !s.drv.GraphsAvailable() {
 		return fmt.Errorf("cuda: this driver has no stream capture")
 	}
-	return call(cuStreamBeginCapture(s.s, captureRelaxed), "cuStreamBeginCapture")
+	return s.drv.call(s.drv.cuStreamBeginCapture(s.s, captureRelaxed), "cuStreamBeginCapture")
 }
 
 // EndCapture closes the recording and instantiates it.
@@ -69,15 +72,15 @@ func (s *Stream) BeginCapture() error {
 // refuses every later launch on it, and the error returned here is the one that
 // says what happened.
 func (s *Stream) EndCapture() (*Graph, error) {
-	g := &Graph{}
-	if err := call(cuStreamEndCapture(s.s, &g.g), "cuStreamEndCapture"); err != nil {
+	g := &Graph{drv: s.drv}
+	if err := s.drv.call(s.drv.cuStreamEndCapture(s.s, &g.g), "cuStreamEndCapture"); err != nil {
 		return nil, err
 	}
 	if g.g == 0 {
 		return nil, fmt.Errorf("cuda: capture produced no graph")
 	}
-	if err := call(cuGraphInstantiate(&g.e, g.g, 0), "cuGraphInstantiate"); err != nil {
-		cuGraphDestroy(g.g)
+	if err := s.drv.call(s.drv.cuGraphInstantiate(&g.e, g.g, 0), "cuGraphInstantiate"); err != nil {
+		s.drv.cuGraphDestroy(g.g)
 		return nil, err
 	}
 	return g, nil
@@ -87,8 +90,9 @@ func (s *Stream) EndCapture() (*Graph, error) {
 // executable the driver built from it. Both are kept because destroying either
 // alone leaks the other.
 type Graph struct {
-	g CUgraph
-	e CUgraphExec
+	drv *Driver
+	g   CUgraph
+	e   CUgraphExec
 }
 
 // Launch replays the whole sequence with one driver call.
@@ -97,7 +101,7 @@ type Graph struct {
 // any previous replay of the same executable, which is safe for one submission
 // per token ended by a synchronising readback.
 func (g *Graph) Launch(s *Stream) error {
-	return call(cuGraphLaunch(g.e, s.Handle()), "cuGraphLaunch")
+	return g.drv.call(g.drv.cuGraphLaunch(g.e, s.Handle()), "cuGraphLaunch")
 }
 
 // Destroy releases the executable and the recording. Like every other call
@@ -107,11 +111,11 @@ func (g *Graph) Destroy() {
 		return
 	}
 	if g.e != 0 {
-		cuGraphExecDestroy(g.e)
+		g.drv.cuGraphExecDestroy(g.e)
 		g.e = 0
 	}
 	if g.g != 0 {
-		cuGraphDestroy(g.g)
+		g.drv.cuGraphDestroy(g.g)
 		g.g = 0
 	}
 }

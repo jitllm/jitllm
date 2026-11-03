@@ -18,7 +18,7 @@ func TestDriverNamesCoverEveryPlatform(t *testing.T) {
 		{"windows", ".dll"},
 	} {
 		found := ""
-		for _, n := range driverNames {
+		for _, n := range driverNames() {
 			if strings.Contains(n, c.suffix) {
 				found = n
 				break
@@ -28,7 +28,7 @@ func TestDriverNamesCoverEveryPlatform(t *testing.T) {
 			t.Errorf("no %s candidate (%q) in %v -- the driver cannot be opened on "+
 				"that platform and the failure is SILENT: Open returns an error, the "+
 				"tier reports no device, and the app shows a box with a working GPU "+
-				"as having none", c.os, c.suffix, driverNames)
+				"as having none", c.os, c.suffix, driverNames())
 			continue
 		}
 		t.Logf("%-7s -> %s", c.os, found)
@@ -36,13 +36,13 @@ func TestDriverNamesCoverEveryPlatform(t *testing.T) {
 	// The WSL path is its own case: a Linux binary under WSL finds the driver
 	// only at that absolute path.
 	wsl := false
-	for _, n := range driverNames {
+	for _, n := range driverNames() {
 		if strings.HasPrefix(n, "/usr/lib/wsl/") {
 			wsl = true
 		}
 	}
 	if !wsl {
 		t.Errorf("no /usr/lib/wsl/ candidate in %v -- a Linux build under WSL "+
-			"resolves libcuda nowhere else", driverNames)
+			"resolves libcuda nowhere else", driverNames())
 	}
 }
