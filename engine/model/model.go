@@ -1234,6 +1234,19 @@ type expert struct{ gate, up, down tensor }
 
 // Model is a loaded transformer.
 type Model struct {
+	// staleKeyFault is the decision prefix gate's violation
+	// (TestDecisionReusesThePrefix): the key a restore names its pages by, in
+	// place of the prompt's. Nil in every real run.
+	staleKeyFault func(key []int32) []int32
+	// stepShareFault, when set, gives every row of a host step the first run's
+	// instance as its history. False but in a gate's violation: it is how the
+	// gate shows that rows reading one session's history fail it.
+	stepShareFault bool
+	// stepPosFault, when set, is where a run's row j goes, given the
+	// instance's next position and the run's length. Nil but in a gate's
+	// violation: it is how the gate shows that a chunk laid out at the wrong
+	// positions fails it.
+	stepPosFault func(base, j, k int) int
 	// fusedRuns counts the model's fused runs, and fuseTries the runs asked
 	// for, opened or not: a gate whose subtests all skipped (no model on a
 	// model-free runner) asked for none, and has nothing to say about fusion

@@ -247,16 +247,19 @@ func (b *Batcher) Step() ([]*Seq, error) {
 	}
 	clear(feeding)
 	b.feeding = feeding[:0]
-	if b.chunkPos != nil {
-		stepPos = b.chunkPos
-		defer func() { stepPos = nil }()
-	}
 	for i := range b.groups {
 		g := &b.groups[i]
 		if len(g.runs) == 0 {
 			continue
 		}
+		m := g.runs[0].Instance.m
+		if b.chunkPos != nil {
+			m.stepPosFault = b.chunkPos
+		}
 		lg, err := StepRuns(g.runs)
+		if b.chunkPos != nil {
+			m.stepPosFault = nil
+		}
 		if err != nil {
 			b.done = done
 			return done, err
