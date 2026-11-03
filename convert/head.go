@@ -18,6 +18,22 @@ import (
 // the head's block back after the trunk's and the conversion proceeds as for
 // a GGUF that carried it (nextnOf, nextnTensors).
 
+// headAlone says f is a prediction head published alone: it states
+// prediction blocks and holds no tensor of a block before them.
+func headAlone(f *meta.File, src string) error {
+	n, k := f.UintKey("block_count", 0), f.UintKey("nextn_predict_layers", 0)
+	if k == 0 || k > n {
+		return nil
+	}
+	for i := range f.Tensors {
+		if b, ok := blockOf(f.Tensors[i].Name); ok && b < n-k {
+			return nil
+		}
+	}
+	return fmt.Errorf("convert: %s is a prediction head alone, its %d trunk blocks in the model's own GGUF: "+
+		"convert that one with -head %s: %w", src, n-k, src, ErrPart)
+}
+
 // withHead is trunk f with head h's prediction blocks appended: block_count
 // the trunk's plus the head's nextn_predict_layers, every per-block array
 // the head's (which must agree with the trunk's over the trunk's blocks),

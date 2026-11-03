@@ -2,11 +2,13 @@ package convert
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -126,4 +128,24 @@ func TestHeadJoinsAsIfTheTrunkCarriedIt(t *testing.T) {
 	if _, err := withHead(tf, hf, trunk, head); err == nil {
 		t.Errorf("a head stating another head count joined")
 	}
+	// The head alone is part of a model, said as such; the trunk and the
+	// whole model are not.
+	if _, err := FromGGUF(head, filepath.Join(dir, "head.jlm"), fp); !errors.Is(err, ErrPart) {
+		t.Errorf("the head converted alone: %v, want ErrPart", err)
+	}
+	for _, p := range []string{full, trunk} {
+		if err := headAlone(mustOpen(t, p), p); err != nil {
+			t.Errorf("%s reads as a head alone: %v", filepath.Base(p), err)
+		}
+	}
+}
+
+func mustOpen(t *testing.T, p string) *meta.File {
+	t.Helper()
+	f, err := gguf.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
 }
