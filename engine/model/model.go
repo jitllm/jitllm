@@ -17,7 +17,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/graph"
 
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/layout"
@@ -3228,7 +3227,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			// Experts with no gate bank are ungated: down(act(up(h))), the
 			// activation an ungated kind (Nemotron 3's squared ReLU).
 			if !l.legacyExperts && !c.Has(jlm.RoleExpGateBank, bi, -1) && c.Has(jlm.RoleExpUpBank, bi, -1) {
-				if !slices.Contains(graph.Ungated[:], cfg.Act) {
+				if !cfg.Act.Ungated() {
 					return nil, fmt.Errorf("model: block %d's experts have no gate, and %v is a gated activation",
 						bi, cfg.Act)
 				}
@@ -3253,7 +3252,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 					{jlm.RoleShExpDown, &l.shDown},
 				} {
 					if spec.role == jlm.RoleShExpGate && !c.Has(jlm.RoleShExpGate, bi, -1) {
-						if !slices.Contains(graph.Ungated[:], cfg.Act) {
+						if !cfg.Act.Ungated() {
 							return nil, fmt.Errorf("model: block %d's shared expert has no gate, and %v is a gated activation",
 								bi, cfg.Act)
 						}

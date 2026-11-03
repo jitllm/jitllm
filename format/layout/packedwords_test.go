@@ -12,7 +12,7 @@ import (
 // disagreed with PackWeights the tier would silently decline work that fits
 // or accept work that does not.
 func TestPackedWordsMatchesPack(t *testing.T) {
-	for _, f := range packedRefFormats {
+	for _, f := range packedRefFormats() {
 		q := f.k
 		for _, s := range []struct{ rows, k int }{
 			{1, 256}, {7, 512}, {64, 2048}, {300, 1024}, {98304, 256},

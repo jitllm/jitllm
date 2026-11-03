@@ -13,7 +13,7 @@ import (
 
 // The tokenizer, read from the model's own tokenizer.json (RULE 7m). A GGUF
 // carries only a pre-tokenizer label (tokenizer.ggml.pre) that the GGUF path
-// resolves through pretok.Table; a HuggingFace directory ships the artefact
+// resolves through pretok.Table(); a HuggingFace directory ships the artefact
 // the weights were trained against, so this path parses the pipeline out of it
 // with pretok.ParsePreTokenizer and reads as fields what the GGUF side infers
 // from a family:

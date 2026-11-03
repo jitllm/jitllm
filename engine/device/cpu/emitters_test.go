@@ -71,10 +71,10 @@ func emitterCalls() []emitterCall {
 	add("softmax", func(em *Emitters) ([]byte, error) { return em.Softmax() }, emitted(EmitSoftmax()))
 	add("sigmoidmul", func(em *Emitters) ([]byte, error) { return em.SigmoidMul() }, emitted(EmitSigmoidMul()))
 	add("ln", func(em *Emitters) ([]byte, error) { return em.Ln() }, emitted(EmitLn()))
-	for _, k := range graph.Gated {
+	for _, k := range graph.Gated() {
 		add("actmul/"+k.String(), func(em *Emitters) ([]byte, error) { return em.ActMul(k) }, emitted(EmitActMul(k)))
 	}
-	for _, k := range graph.Ungated {
+	for _, k := range graph.Ungated() {
 		add("act/"+k.String(), func(em *Emitters) ([]byte, error) { return em.Act(k) }, emitted(EmitAct(k)))
 	}
 	for _, n := range []int{1, 7, 64, 771, 2048} {
@@ -90,7 +90,7 @@ func emitterCalls() []emitterCall {
 		add("rope/"+shapeName(r.hd), func(em *Emitters) ([]byte, error) { return em.RoPE(r.hd, r.nrot, r.neox) },
 			func() ([]byte, error) { return EmitRoPE(r.hd, r.nrot, r.neox) })
 	}
-	for _, qt := range quant.PackedTypes {
+	for _, qt := range quant.PackedTypes() {
 		q, _ := layout.QuantOf(qt)
 		add("packed_row/"+qt.String(), func(em *Emitters) ([]byte, error) { return em.PackedRow(q) },
 			func() ([]byte, error) { return EmitPackedRow(q) })
@@ -172,7 +172,7 @@ func emitterCalls() []emitterCall {
 		add("row_major/"+ft.String(), func(em *Emitters) ([]byte, error) { return em.RowMajor(s) },
 			func() ([]byte, error) { return EmitNative(s) })
 	}
-	for _, qt := range quant.PackedTypes {
+	for _, qt := range quant.PackedTypes() {
 		for _, rows := range []int{PackedRows, PackedTail} {
 			add("packed/"+qt.String()+"/"+shapeName(rows), func(em *Emitters) ([]byte, error) { return em.PackedMatVec(qt, rows) },
 				func() ([]byte, error) { return EmitPackedMatVec(qt, rows, HostDotKind()) })

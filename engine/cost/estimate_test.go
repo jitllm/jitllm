@@ -10,7 +10,7 @@ import (
 // step s, in order.
 func estimateRun(t *testing.T, d Device, s composer.Step) ([]*composer.Kernel, []Cost) {
 	t.Helper()
-	f := composing(t, *composeModel+".jlm")
+	f := composing(t, composeModel()+".jlm")
 	parts, err := composer.Front(f, false)
 	if err != nil {
 		t.Fatal(err)
@@ -31,18 +31,21 @@ func estimateRun(t *testing.T, d Device, s composer.Step) ([]*composer.Kernel, [
 	return ks, cs
 }
 
-var (
-	testCPU = Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Thread: 15e9, Launch: 50e-9,
+func testCPU() Device {
+	return Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Thread: 15e9, Launch: 50e-9,
 		Caches: [3]Cache{{Bytes: 32 << 10, Rate: Rate{Thread: 100e9}}, {Bytes: 1 << 20, Rate: Rate{Thread: 50e9}}, {Bytes: 12 << 20, Rate: Rate{Thread: 30e9}}},
 		Rates:  [NumClasses]Rate{ClassFloat: {Thread: 8e9}}}
-	testGPU = Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Thread: 2e7, Launch: 4e-6,
+}
+
+func testGPU() Device {
+	return Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Thread: 2e7, Launch: 4e-6,
 		Caches: [3]Cache{{Bytes: 6 << 20, Rate: Rate{Total: 2.5e12}}}, Rates: [NumClasses]Rate{ClassFloat: {Total: 14e12}}}
-)
+}
 
 // TestEstimateDecidesEveryTrip holds the estimate to deciding every loop's
 // trips from the step on both devices.
 func TestEstimateDecidesEveryTrip(t *testing.T) {
-	for _, d := range []Device{testCPU, testGPU} {
+	for _, d := range []Device{testCPU(), testGPU()} {
 		_, cs := estimateRun(t, d, composer.Step{Rows: 1, Page: 64, Keys: 5})
 		for i, c := range cs {
 			if c.Unknown > 0 {
@@ -56,7 +59,7 @@ func TestEstimateDecidesEveryTrip(t *testing.T) {
 // by the same amount for each equal step of the history's length, and
 // growing at all.
 func TestEstimateGrowsWithTheHistory(t *testing.T) {
-	for _, d := range []Device{testCPU, testGPU} {
+	for _, d := range []Device{testCPU(), testGPU()} {
 		var bytes []int64
 		for _, keys := range []int{8, 16, 24} {
 			_, cs := estimateRun(t, d, composer.Step{Rows: 1, Page: 64, Keys: keys})
@@ -78,8 +81,8 @@ func TestEstimateGrowsWithTheHistory(t *testing.T) {
 // it has none.
 func TestEstimateServesReuseFromCache(t *testing.T) {
 	s := composer.Step{Rows: 1, Page: 64, Keys: 5}
-	_, cached := estimateRun(t, testCPU, s)
-	bare := testCPU
+	_, cached := estimateRun(t, testCPU(), s)
+	bare := testCPU()
 	bare.Caches = [3]Cache{}
 	_, none := estimateRun(t, bare, s)
 	var hit, miss, total int64
@@ -99,7 +102,7 @@ func TestEstimateServesReuseFromCache(t *testing.T) {
 // bytes at least the weight's and no more than the weight's, the logits it
 // writes and the row it reads.
 func TestEstimateReadsTheHeadOnce(t *testing.T) {
-	for _, d := range []Device{testCPU, testGPU} {
+	for _, d := range []Device{testCPU(), testGPU()} {
 		ks, cs := estimateRun(t, d, composer.Step{Rows: 1, Page: 64, Keys: 5})
 		var weight, out, got int64
 		for i, k := range ks {

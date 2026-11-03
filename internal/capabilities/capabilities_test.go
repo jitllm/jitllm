@@ -156,7 +156,7 @@ func TestManifestIsDerived(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(m.Architectures) != len(convert.Architectures()) || len(m.SafetensorsClasses) != len(convert.HFClasses()) ||
-		len(m.Projectors) != len(convert.Projectors()) || len(m.Quantization.Packed) != len(quant.PackedTypes) {
+		len(m.Projectors) != len(convert.Projectors()) || len(m.Quantization.Packed) != len(quant.PackedTypes()) {
 		t.Fatal("the manifest's lists are not the converter's")
 	}
 	for _, g := range append(append([]Graph{}, m.Architectures...), m.SafetensorsClasses...) {

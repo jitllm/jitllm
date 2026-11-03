@@ -1,7 +1,6 @@
 package convert
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -170,7 +169,7 @@ func StreamGGUFs(src, mmproj Remote, dst string, fp jlm.Fingerprint, opts ...Opt
 // of its weights than a stream holds in memory (maxStreamHeld) -- a GGUF
 // that ships each expert as its own matrix, stacked at conversion. Nothing
 // is written; the caller downloads instead.
-var ErrStreamHolds = errors.New("more than a streamed conversion holds in memory")
+const ErrStreamHolds constError = "more than a streamed conversion holds in memory"
 
 // streamSmall is the size below which a streamed tensor is read up front.
 const streamSmall = 64 << 10

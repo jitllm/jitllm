@@ -15,7 +15,7 @@ func TestActWindowFollowsTheBlock(t *testing.T) {
 		t.Skip("no k-quant kernel here hoists the scale, so every model gets 32")
 	}
 	narrow := 0
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		q, _ := layout.QuantOf(g)
 		want := 256
 		if layout.NarrowScales(q) {

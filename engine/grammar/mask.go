@@ -117,7 +117,7 @@ func (m *Matcher) feed(st State, b byte) (State, bool) {
 		st.cp, st.need = st.cp<<6|rune(b&0x3F), st.need-1
 		if st.need == 0 {
 			c := st.cp
-			if c < utf8Min[st.n] || c > utf8.MaxRune || c >= 0xD800 && c <= 0xDFFF {
+			if c < utf8Min(st.n) || c > utf8.MaxRune || c >= 0xD800 && c <= 0xDFFF {
 				return st, false // overlong, past the last code point, or a surrogate
 			}
 			st.set, st.cp, st.n = a.step(st.set, c), 0, 0
@@ -142,7 +142,17 @@ func (m *Matcher) feed(st State, b byte) (State, bool) {
 }
 
 // utf8Min is the least code point a sequence of n bytes may encode.
-var utf8Min = [5]rune{0, 0, 0x80, 0x800, 0x10000}
+func utf8Min(n uint8) rune {
+	switch n {
+	case 2:
+		return 0x80
+	case 3:
+		return 0x800
+	case 4:
+		return 0x10000
+	}
+	return 0
+}
 
 // plausible is whether a code point begun in st can still finish as one some
 // stack takes: the range its remaining bytes can reach, cut to what a valid
@@ -150,7 +160,7 @@ var utf8Min = [5]rune{0, 0, 0x80, 0x800, 0x10000}
 func (m *Matcher) plausible(st State) bool {
 	lo := st.cp << (6 * st.need)
 	hi := lo | (1<<(6*st.need) - 1)
-	lo, hi = max(lo, utf8Min[st.n]), min(hi, utf8.MaxRune)
+	lo, hi = max(lo, utf8Min(st.n)), min(hi, utf8.MaxRune)
 	// The surrogates are no code point's encoding.
 	return lo <= min(hi, 0xD7FF) && m.a.meets(st.set, lo, min(hi, 0xD7FF)) ||
 		max(lo, 0xE000) <= hi && m.a.meets(st.set, max(lo, 0xE000), hi)

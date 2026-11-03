@@ -1106,7 +1106,9 @@ func (e *estimator) eval(i, depth int) (float64, bool) {
 // span is a closed interval of values an index takes.
 type span struct{ lo, hi float64 }
 
-var anywhere = span{0, math.Inf(1)}
+func anywhere() span {
+	return span{0, math.Inf(1)}
+}
 
 // hull is the interval the index of an access takes over the launch: its
 // coordinates, threads and loops' iterations over their whole ranges, its
@@ -1116,7 +1118,7 @@ func (e *estimator) hull(ix, ax []int, b int) span {
 	if ax != nil {
 		sh := k.Bufs[b].Shape
 		if len(sh) != len(ax) {
-			return anywhere
+			return anywhere()
 		}
 		var out span
 		stride := 1.0
@@ -1129,7 +1131,7 @@ func (e *estimator) hull(ix, ax []int, b int) span {
 		return out
 	}
 	if len(ix) != 1 {
-		return anywhere
+		return anywhere()
 	}
 	return e.ival(ix[0], 0)
 }
@@ -1139,7 +1141,7 @@ func (e *estimator) hull(ix, ax []int, b int) span {
 func (e *estimator) ival(i, depth int) span {
 	k := e.k
 	if depth > 96 {
-		return anywhere
+		return anywhere()
 	}
 	nd := k.Nodes[i]
 	if v, ok := e.eval(i, 0); ok && e.constant(i) {
@@ -1162,14 +1164,14 @@ func (e *estimator) ival(i, depth int) span {
 		if v, ok := e.eval(i, 0); ok {
 			return span{v, v}
 		}
-		return anywhere
+		return anywhere()
 	case composer.OpLoad:
 		if nd.Ax != nil {
-			return anywhere
+			return anywhere()
 		}
 		w := e.ival(nd.A, depth+1)
 		if math.IsInf(w.hi, 1) || w.hi-w.lo > 1<<16 {
-			return anywhere
+			return anywhere()
 		}
 		out := span{math.Inf(1), math.Inf(-1)}
 		buf := k.Bufs[nd.Buf]
@@ -1177,14 +1179,14 @@ func (e *estimator) ival(i, depth int) span {
 		if buf.Offset > 0 {
 			v, ok := e.eval(buf.Offset-1, 0)
 			if !ok {
-				return anywhere
+				return anywhere()
 			}
 			off += v
 		}
 		for x := w.lo; x <= w.hi; x++ {
 			v, ok := composer.StepWord(buf.Operand, int(x+off), e.s)
 			if !ok {
-				return anywhere
+				return anywhere()
 			}
 			out.lo, out.hi = min(out.lo, v), max(out.hi, v)
 		}
@@ -1204,7 +1206,7 @@ func (e *estimator) ival(i, depth int) span {
 			y = span{math.Exp2(y.lo), math.Exp2(y.hi)}
 		}
 		if y.lo <= 0 {
-			return anywhere
+			return anywhere()
 		}
 		return span{math.Floor(x.lo / y.hi), math.Floor(x.hi / y.lo)}
 	case composer.OpShl:
@@ -1241,7 +1243,7 @@ func (e *estimator) ival(i, depth int) span {
 		delete(e.folding, i)
 		return span{min(x.lo, y.lo), max(x.hi, y.hi)}
 	}
-	return anywhere
+	return anywhere()
 }
 
 // constant reports whether node i reads nothing that varies over a launch.
@@ -1387,7 +1389,7 @@ func (e *estimator) laneStride(i int) float64 {
 // cursor walks the buffer.
 func (e *estimator) reach(i, ix int, ax []int, b int, w float64) span {
 	if e.k.Nodes[i].Ptr > 0 || e.walked(e.homes[i], b) {
-		return anywhere
+		return anywhere()
 	}
 	h := e.hull([]int{ix}, ax, b)
 	eb := float64(composer.ElemBytes(e.k.Bufs[b]))
@@ -1396,7 +1398,7 @@ func (e *estimator) reach(i, ix int, ax []int, b int, w float64) span {
 
 func (e *estimator) storeReach(s composer.Store, w float64) span {
 	if s.Ptr > 0 || e.walked(s.At, s.Buf) {
-		return anywhere
+		return anywhere()
 	}
 	h := e.hull([]int{s.Ix}, s.Ax, s.Buf)
 	eb := float64(composer.ElemBytes(e.k.Bufs[s.Buf]))

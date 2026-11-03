@@ -66,8 +66,8 @@ func (v *Vocab) encodeSPMBPERun(text string, out []int32) []int32 {
 		text = " " + text
 	}
 	work := strings.ReplaceAll(text, " ", spaceMark)
-	sc := bpeScratches.Get().(*bpeScratch)
-	defer sc.release()
+	sc := v.getScratch()
+	defer v.putScratch(sc)
 	// One symbol per character: its token, or -1 for a character the
 	// vocabulary lacks, which no merge names and which falls back to bytes.
 	syms := sc.syms[:0]

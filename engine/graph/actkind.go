@@ -102,14 +102,31 @@ const (
 	SituLinearBeta = 25
 )
 
+// NUngated and NGated are how many kinds Ungated and Gated hold.
+const NUngated, NGated = 8, 8
+
 // Ungated is the set an ungated kernel may bake, in code order. It exists so a
 // gate can enumerate the kinds rather than restate them.
-var Ungated = [...]ActKind{ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf,
-	ActSqrtSigmoid}
+func Ungated() [NUngated]ActKind {
+	return [NUngated]ActKind{ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf,
+		ActSqrtSigmoid}
+}
+
+// Ungated reports whether k is a kind an ungated kernel may bake (Ungated).
+func (k ActKind) Ungated() bool {
+	for _, u := range Ungated() {
+		if u == k {
+			return true
+		}
+	}
+	return false
+}
 
 // Gated is the set a gated kernel (dst = act(dst) combined with up) may bake,
 // for the same reason.
-var Gated = [...]ActKind{ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu, ActGELUErf, ActReLU2}
+func Gated() [NGated]ActKind {
+	return [NGated]ActKind{ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu, ActGELUErf, ActReLU2}
+}
 
 func (k ActKind) String() string {
 	switch k {

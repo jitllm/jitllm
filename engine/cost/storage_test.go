@@ -15,7 +15,7 @@ import (
 // correlation of its terms (a 256-byte row read to 26 MB), so its reach is a
 // bound, not a measure.
 func TestEveryStorageStatesWhatItsKernelsReach(t *testing.T) {
-	f := composing(t, *composeModel+".jlm")
+	f := composing(t, composeModel()+".jlm")
 	s := composer.Step{Rows: 1, Page: 64, Keys: 9}
 	for _, d := range []Device{{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}}} {
 		plan, err := composer.Default().Compose(f, s, func(composer.Part) composer.Device { return d.Device })

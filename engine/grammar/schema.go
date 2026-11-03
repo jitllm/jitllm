@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 )
@@ -32,35 +31,65 @@ func (e ErrUnsupported) Error() string {
 
 // The primitives, as llama.cpp's json-schema-to-grammar writes them, the
 // whitespace bounded so a constrained model cannot pad forever.
-var primitives = map[string]string{
-	"space":         `| " " | "\n" [ \t]{0,20}`,
-	"boolean":       `("true" | "false") space`,
-	"null":          `"null" space`,
-	"integral-part": `[0] | [1-9] [0-9]{0,15}`,
-	"decimal-part":  `[0-9]{1,16}`,
-	"integer":       `("-"? integral-part) space`,
-	"number":        `("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space`,
-	"char":          `[^"\\\x7F\x00-\x1F] | [\\] (["\\/bfnrt] | "u" [0-9a-fA-F]{4})`,
-	"string":        `"\"" char* "\"" space`,
-	"value":         `object | array | string | number | boolean | null`,
-	"object":        `"{" space ( string ":" space value ("," space string ":" space value)* )? "}" space`,
-	"array":         `"[" space ( value ("," space value)* )? "]" space`,
+func primitive(n string) (string, bool) {
+	switch n {
+	case "space":
+		return `| " " | "\n" [ \t]{0,20}`, true
+	case "boolean":
+		return `("true" | "false") space`, true
+	case "null":
+		return `"null" space`, true
+	case "integral-part":
+		return `[0] | [1-9] [0-9]{0,15}`, true
+	case "decimal-part":
+		return `[0-9]{1,16}`, true
+	case "integer":
+		return `("-"? integral-part) space`, true
+	case "number":
+		return `("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space`, true
+	case "char":
+		return `[^"\\\x7F\x00-\x1F] | [\\] (["\\/bfnrt] | "u" [0-9a-fA-F]{4})`, true
+	case "string":
+		return `"\"" char* "\"" space`, true
+	case "value":
+		return `object | array | string | number | boolean | null`, true
+	case "object":
+		return `"{" space ( string ":" space value ("," space string ":" space value)* )? "}" space`, true
+	case "array":
+		return `"[" space ( value ("," space value)* )? "]" space`, true
+	}
+	return "", false
 }
 
 // primDeps is what each primitive refers to.
-var primDeps = map[string][]string{
-	"boolean":       {"space"},
-	"null":          {"space"},
-	"integer":       {"integral-part", "space"},
-	"number":        {"integral-part", "decimal-part", "space"},
-	"string":        {"char", "space"},
-	"value":         {"object", "array", "string", "number", "boolean", "null"},
-	"object":        {"string", "value", "space"},
-	"array":         {"value", "space"},
-	"char":          nil,
-	"space":         nil,
-	"integral-part": nil,
-	"decimal-part":  nil,
+func primDeps(n string) ([]string, bool) {
+	switch n {
+	case "boolean":
+		return []string{"space"}, true
+	case "null":
+		return []string{"space"}, true
+	case "integer":
+		return []string{"integral-part", "space"}, true
+	case "number":
+		return []string{"integral-part", "decimal-part", "space"}, true
+	case "string":
+		return []string{"char", "space"}, true
+	case "value":
+		return []string{"object", "array", "string", "number", "boolean", "null"}, true
+	case "object":
+		return []string{"string", "value", "space"}, true
+	case "array":
+		return []string{"value", "space"}, true
+	case "char":
+		return nil, true
+	case "space":
+		return nil, true
+	case "integral-part":
+		return nil, true
+	case "decimal-part":
+		return nil, true
+	}
+	return []string{}, false
 }
 
 // JSONObject is the grammar of any JSON object: OpenAI's json_object.
@@ -115,19 +144,38 @@ func (c *converter) prim(n string) string {
 	if _, ok := c.rules[n]; ok {
 		return n
 	}
-	c.rules[n] = primitives[n]
+	c.rules[n], _ = primitive(n)
 	c.order = append(c.order, n)
-	for _, d := range primDeps[n] {
+	deps, _ := primDeps(n)
+	for _, d := range deps {
 		c.prim(d)
 	}
 	return n
 }
 
-var notName = regexp.MustCompile(`[^a-zA-Z0-9-]+`)
+// ruleName is name with every run of characters outside [a-zA-Z0-9-] made one
+// dash, and the dashes at its ends trimmed.
+func ruleName(name string) string {
+	var b strings.Builder
+	dash := false
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' {
+			b.WriteByte(c)
+			dash = false
+			continue
+		}
+		if !dash {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
 
 // add names body: name itself where free, else name with a number.
 func (c *converter) add(name, body string) string {
-	name = strings.Trim(notName.ReplaceAllString(name, "-"), "-")
+	name = ruleName(name)
 	if name == "" {
 		name = "r"
 	}
@@ -136,7 +184,7 @@ func (c *converter) add(name, body string) string {
 		if _, ok := c.rules[n]; !ok {
 			break
 		}
-		if _, prim := primitives[n]; !prim && c.rules[n] == body {
+		if _, prim := primitive(n); !prim && c.rules[n] == body {
 			return n
 		}
 		n = fmt.Sprintf("%s-%d", name, i)
@@ -205,17 +253,21 @@ func plain(v any) any {
 }
 
 // annotations are keywords that say nothing about which values are valid.
-var annotations = map[string]bool{
-	"title": true, "description": true, "default": true, "examples": true, "$schema": true, "$id": true,
-	"$comment": true, "deprecated": true, "readOnly": true, "writeOnly": true, "$defs": true,
-	"definitions": true,
+func annotation(k string) bool {
+	switch k {
+	case "title", "description", "default", "examples", "$schema", "$id", "$comment", "deprecated", "readOnly", "writeOnly", "$defs", "definitions":
+		return true
+	}
+	return false
 }
 
 // handled are the validation keywords the converter builds.
-var handled = map[string]bool{
-	"type": true, "properties": true, "required": true, "additionalProperties": true, "items": true,
-	"prefixItems": true, "minItems": true, "maxItems": true, "minLength": true, "maxLength": true,
-	"enum": true, "const": true, "anyOf": true, "oneOf": true, "$ref": true,
+func handled(k string) bool {
+	switch k {
+	case "type", "properties", "required", "additionalProperties", "items", "prefixItems", "minItems", "maxItems", "minLength", "maxLength", "enum", "const", "anyOf", "oneOf", "$ref":
+		return true
+	}
+	return false
 }
 
 // visit is a GBNF expression for schema s; name is what a rule made for it
@@ -235,7 +287,7 @@ func (c *converter) visit(s any, name string) (string, error) {
 
 func (c *converter) visitObject(s map[string]any, name string) (string, error) {
 	for _, k := range keysOf(s) {
-		if !annotations[k] && !handled[k] {
+		if !annotation(k) && !handled(k) {
 			return "", ErrUnsupported{fmt.Sprintf("keyword %q", k)}
 		}
 	}
@@ -323,7 +375,7 @@ func (c *converter) visitObject(s map[string]any, name string) (string, error) {
 
 func onlyAnnotations(s map[string]any, except string) bool {
 	for _, k := range keysOf(s) {
-		if k != except && !annotations[k] {
+		if k != except && !annotation(k) {
 			return false
 		}
 	}

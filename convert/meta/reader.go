@@ -2,14 +2,17 @@ package meta
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 )
 
 // errTruncated is the one error every bounds failure funnels into. A GGUF is
 // untrusted input from the internet: the reader must return errors, never panic
 // and never read out of bounds, for any byte sequence.
-var errTruncated = errors.New("meta: truncated or malformed")
+const errTruncated constError = "meta: truncated or malformed"
+
+type constError string
+
+func (e constError) Error() string { return string(e) }
 
 // reader is a bounds-checked cursor over the mapping. It is sticky: once err is
 // set every subsequent read is a no-op, so callers can read a whole record and

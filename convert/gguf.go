@@ -347,7 +347,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		// A per-expert matrix (Mixtral-era blk.N.ffn_gate.E.weight) is held back
 		// to be stacked into its bank: the device reads a mixture only through
 		// its banks, so unstacked experts kept every such block on the host.
-		if bank, ok := expertBank[role]; ok && index >= 0 {
+		if bank, ok := expertBank(role); ok && index >= 0 {
 			// The index comes from a tensor name, so it is bounded by the config
 			// before it sizes anything (RULE 9).
 			if uint32(index) >= s.Config.NExpert {
@@ -472,16 +472,34 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 }
 
 // expertBank is the bank a per-expert role is stacked into.
-var expertBank = map[jlm.Role]jlm.Role{
-	jlm.RoleExpGate: jlm.RoleExpGateBank,
-	jlm.RoleExpUp:   jlm.RoleExpUpBank,
-	jlm.RoleExpDown: jlm.RoleExpDownBank,
+func expertBank(r jlm.Role) (jlm.Role, bool) {
+	switch r {
+	case jlm.RoleExpGate:
+		return jlm.RoleExpGateBank, true
+	case jlm.RoleExpUp:
+		return jlm.RoleExpUpBank, true
+	case jlm.RoleExpDown:
+		return jlm.RoleExpDownBank, true
+	}
+	return 0, false
 }
 
 // bankStem names a stacked bank the way a modern GGUF names it.
-var bankStem = map[jlm.Role]string{
-	jlm.RoleExpGateBank: "ffn_gate_exps", jlm.RoleExpUpBank: "ffn_up_exps",
-	jlm.RoleExpDownBank: "ffn_down_exps",
+func bankStem(r jlm.Role) (string, bool) {
+	switch r {
+	case jlm.RoleExpGateBank:
+		return "ffn_gate_exps", true
+	case jlm.RoleExpUpBank:
+		return "ffn_up_exps", true
+	case jlm.RoleExpDownBank:
+		return "ffn_down_exps", true
+	}
+	return "", false
+}
+
+func bankStemOf(r jlm.Role) string {
+	s, _ := bankStem(r)
+	return s
 }
 
 // stackGGUFExperts is stackBanks for a GGUF that ships its experts one matrix
@@ -526,7 +544,7 @@ func stackGGUFExperts(experts map[bankKey][]*jlm.Tensor, c *jlm.Config) ([]jlm.T
 			return nil, err
 		}
 		for i := range bs {
-			bs[i].Name = fmt.Sprintf("blk.%d.%s.weight", b, bankStem[bs[i].Role])
+			bs[i].Name = fmt.Sprintf("blk.%d.%s.weight", b, bankStemOf(bs[i].Role))
 		}
 		out = append(out, bs...)
 	}

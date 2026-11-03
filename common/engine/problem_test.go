@@ -20,7 +20,7 @@ func TestEngineErrorsAreExplainedWithTheirFix(t *testing.T) {
 	header := func(name string, v uint32) string {
 		p := filepath.Join(t.TempDir(), name)
 		b := make([]byte, 64)
-		copy(b, jlm.Magic[:])
+		copy(b, jlm.Magic)
 		binary.LittleEndian.PutUint32(b[8:], v)
 		if err := os.WriteFile(p, b, 0o644); err != nil {
 			t.Fatal(err)

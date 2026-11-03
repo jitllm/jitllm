@@ -25,7 +25,7 @@ import (
 // chunk size fixes).
 func TestSSEPackedCallTime(t *testing.T) {
 	const k = 2048
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		fused, err := EmitPackedMatVecFusedSSE(g)
 		if err != nil {
 			t.Fatal(err)

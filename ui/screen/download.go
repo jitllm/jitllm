@@ -50,7 +50,7 @@ func downloadsFor(sh *app.Shell) *downloadScreen {
 		d = &downloadScreen{
 			sh:       sh,
 			sel:      state.NewSignal(-1),
-			rows:     state.NewSignal(len(library.Models)),
+			rows:     state.NewSignal(len(library.Models())),
 			have:     state.NewSignal([]bool(nil)),
 			busy:     state.NewSignal(false),
 			progress: state.NewSignal(0.0),
@@ -76,10 +76,10 @@ func (d *downloadScreen) refresh() { d.have.Set(discover.OnDisk(d.dir())) }
 
 func (d *downloadScreen) selected() (library.Model, int, bool) {
 	i := d.sel.Get()
-	if i < 0 || i >= len(library.Models) {
+	if i < 0 || i >= len(library.Models()) {
 		return library.Model{}, i, false
 	}
-	return library.Models[i], i, true
+	return library.Models()[i], i, true
 }
 
 func (d *downloadScreen) onDisk(i int) bool {
@@ -209,7 +209,7 @@ func (d *downloadScreen) fail(m library.Model, err error) {
 // on the UI goroutine.
 func ShowDiscover(sh *app.Shell, name string) {
 	d := downloadsFor(sh)
-	for i, m := range library.Models {
+	for i, m := range library.Models() {
 		if m.Name == name {
 			d.picked = true
 			d.sel.Set(i)

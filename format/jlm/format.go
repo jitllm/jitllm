@@ -34,7 +34,7 @@ const Ext = ".jlm"
 // The version is a separate field, not part of the magic: "is this ours" and
 // "can we read it" are different questions, and a magic that changed per
 // revision reported a real container as "not a jlm container".
-var Magic = [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0}
+const Magic = "JITLLM\x00\x00"
 
 // Version is the container revision, stored as a u32 at offset 8. Bump it for
 // any layout change, and add the migration from the version before it
@@ -214,7 +214,7 @@ func (e *Entry) K() int { return int(e.Dims[0]) }
 //	12  4   reserved, zero
 //	16  8   page size ... and so on to HeaderBytes
 func (h *Header) encode(b []byte) {
-	copy(b[0:8], Magic[:])
+	copy(b[0:8], Magic)
 	le := binary.LittleEndian
 	le.PutUint32(b[8:], Version)
 	le.PutUint32(b[12:], 0)
@@ -252,7 +252,7 @@ func decodeHeader(b []byte, size uint64, want uint32) (*Header, error) {
 	if len(b) < HeaderBytes {
 		return nil, fmt.Errorf("jlm: %d bytes is shorter than the %d-byte header", len(b), HeaderBytes)
 	}
-	if [8]byte(b[0:8]) != Magic {
+	if string(b[0:8]) != Magic {
 		return nil, fmt.Errorf("jlm: not a jlm container (magic %q)", b[0:8])
 	}
 	if v := binary.LittleEndian.Uint32(b[8:]); v != want {

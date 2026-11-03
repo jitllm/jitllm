@@ -1,9 +1,7 @@
 package jlm
 
-import "errors"
-
 // errVisionActs is a tower whose flags ask for two activations at once.
-var errVisionActs = errors.New("jlm: the vision tower asks for GELU and quick-GELU at once")
+const errVisionActs constError = "jlm: the vision tower asks for GELU and quick-GELU at once"
 
 // ExprBuilder builds an expression term by term; each method is a term's
 // value. The converter states a text block's activation with it

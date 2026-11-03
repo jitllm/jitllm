@@ -33,7 +33,7 @@ func TestEveryMatvecEmitterHasAnSSEAnswer(t *testing.T) {
 	}
 	em := EmittersFor(TierSSE)
 	packedTwin := answer{"twin", func(t *testing.T) {
-		for _, g := range quant.PackedTypes {
+		for _, g := range quant.PackedTypes() {
 			for _, emit := range []func() ([]byte, error){
 				func() ([]byte, error) { return em.PackedMatVec(g, PackedRows) },
 				func() ([]byte, error) { return em.PackedMatVec(g, PackedTail) },
@@ -48,7 +48,7 @@ func TestEveryMatvecEmitterHasAnSSEAnswer(t *testing.T) {
 	}}
 	refused := func(what string, emit func(quant.Type) error) answer {
 		return answer{"refused", func(t *testing.T) {
-			for _, g := range quant.PackedTypes {
+			for _, g := range quant.PackedTypes() {
 				if err := emit(g); err == nil || errors.Is(err, ErrNoSSEKernel) {
 					t.Errorf("%s %s: want a decided refusal, got %v", what, g, err)
 				}
@@ -59,7 +59,7 @@ func TestEveryMatvecEmitterHasAnSSEAnswer(t *testing.T) {
 		if em.RowMajorGGUF {
 			t.Error("the SSE table claims the GGUF row-major machinery (GEMM, interleaved pack width)")
 		}
-		for _, g := range quant.PackedTypes {
+		for _, g := range quant.PackedTypes() {
 			if em.RowMajorSupported(g) {
 				t.Errorf("%s: the SSE table claims a quantized row-major kernel", g)
 			}

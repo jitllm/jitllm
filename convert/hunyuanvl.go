@@ -9,18 +9,32 @@ import (
 // hunyuanvlRole is HunyuanVL's merger as llama.cpp's converter names it
 // (jlm.ProjHunyuanVL): before_rms, the 2x2 convolution (proj.0), the 1x1 one
 // (proj.2), the linear (mlp), after_rms and the three learned rows.
-var hunyuanvlRole = map[string]jlm.Role{
-	"mm.pre_norm.weight":  jlm.RoleVProjInNorm,
-	"mm.0.weight":         jlm.RoleVMergeConv,
-	"mm.0.bias":           jlm.RoleVMergeConvBias,
-	"mm.2.weight":         jlm.RoleVProj,
-	"mm.2.bias":           jlm.RoleVProjBias,
-	"mm.model.fc.weight":  jlm.RoleVProj2,
-	"mm.model.fc.bias":    jlm.RoleVProj2Bias,
-	"mm.post_norm.weight": jlm.RoleVProjNorm,
-	"v.image_newline":     jlm.RoleVImgNewline,
-	"mm.image_begin":      jlm.RoleVImgBegin,
-	"mm.image_end":        jlm.RoleVImgEnd,
+func hunyuanvlRole(name string) (jlm.Role, bool) {
+	switch name {
+	case "mm.pre_norm.weight":
+		return jlm.RoleVProjInNorm, true
+	case "mm.0.weight":
+		return jlm.RoleVMergeConv, true
+	case "mm.0.bias":
+		return jlm.RoleVMergeConvBias, true
+	case "mm.2.weight":
+		return jlm.RoleVProj, true
+	case "mm.2.bias":
+		return jlm.RoleVProjBias, true
+	case "mm.model.fc.weight":
+		return jlm.RoleVProj2, true
+	case "mm.model.fc.bias":
+		return jlm.RoleVProj2Bias, true
+	case "mm.post_norm.weight":
+		return jlm.RoleVProjNorm, true
+	case "v.image_newline":
+		return jlm.RoleVImgNewline, true
+	case "mm.image_begin":
+		return jlm.RoleVImgBegin, true
+	case "mm.image_end":
+		return jlm.RoleVImgEnd, true
+	}
+	return 0, false
 }
 
 // hunyuanvlUnread is the one merger tensor the reference never reads:

@@ -60,7 +60,7 @@ func prevnniAct(k int) []float32 {
 // are equal.
 func TestPackedFamilyIsBuiltOnThisHost(t *testing.T) {
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedSupported(gt) {
 			// continue, never Skipf: one format without an emitter here must
 			// not hide every format that has one.

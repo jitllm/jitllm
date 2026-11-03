@@ -22,7 +22,7 @@ func TestRaggedProductsMatchThePaddedRows(t *testing.T) { raggedProducts(t) }
 
 func raggedProducts(t *testing.T) {
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		for _, kx := range []int{7, 31, 33, 65, 143, 144, 145, 200, 257} {
 			k := raggedK(gt, kx)
 			if k == kx {

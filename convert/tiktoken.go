@@ -25,10 +25,12 @@ import (
 // It is keyed by hash because the file carries no name and the pattern lives
 // in Python source (tokenization_kimi.py's pat_str): one vocabulary identity
 // pairs with one pattern (RULE 7m). An unlisted hash is refused, naming it.
-var tiktokenPre = map[string]string{
-	// Kimi-K2, Moonlight-16B-A3B and Kimi-Linear-48B-A3B share one file,
-	// checked against the Hub's x-linked-etag for all three.
-	"b6c497a7469b33ced9c38afb1ad6e47f03f5e5dc05f15930799210ec050c5103": "kimi-k2",
+func tiktokenPre(key string) (string, bool) {
+	switch key {
+	case "b6c497a7469b33ced9c38afb1ad6e47f03f5e5dc05f15930799210ec050c5103":
+		return "kimi-k2", true
+	}
+	return "", false
 }
 
 // hfTiktokenVocab builds the container's tokenizer from tiktoken.model and
@@ -40,7 +42,7 @@ func hfTiktokenVocab(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(raw)
-	pre, ok := tiktokenPre[hex.EncodeToString(sum[:])]
+	pre, ok := tiktokenPre(hex.EncodeToString(sum[:]))
 	if !ok {
 		return nil, fmt.Errorf("convert: %s (sha256 %x) is a tiktoken vocabulary this "+
 			"converter has not paired with a pre-tokenizer; its pattern lives in the "+

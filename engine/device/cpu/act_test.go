@@ -42,7 +42,7 @@ func TestEmitActMulMatchesReference(t *testing.T) {
 		}
 		return refSiLU(g) * u
 	}
-	for _, k := range graph.Gated {
+	for _, k := range graph.Gated() {
 		code := onHost(t)(hostTable().ActMul(k))
 		n := 1024
 		dst := make([]float32, n)

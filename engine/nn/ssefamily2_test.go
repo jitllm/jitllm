@@ -62,7 +62,7 @@ func TestFamily2RunsOnTheForcedSSETier(t *testing.T) {
 			fresh++
 		}
 	}
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		q, _ := layout.QuantOf(gt)
 		if _, ok := rowKernels.Load(rowKey{sse, q}); !ok {
 			fresh++
@@ -82,7 +82,7 @@ func TestFamily2RunsOnTheForcedSSETier(t *testing.T) {
 		p  *Packed
 	}
 	var tabs []table
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		q, _ := layout.QuantOf(gt)
 		tabs = append(tabs, table{gt, q, packOne(t, gt, nrows, k)})
 	}

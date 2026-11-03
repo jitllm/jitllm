@@ -63,7 +63,7 @@ func TestSafetensorsArchCoverage(t *testing.T) {
 			continue // config.json without weights beside it
 		}
 		r := row{filepath.Base(d), c.Architectures[0], c.ModelType}
-		_, known := hfArchTable[c.Architectures[0]]
+		_, known := hfArchTable()[c.Architectures[0]]
 		// A real checkpoint is skipped by size, because this gate writes a
 		// whole container (a 31 GB model thrashes a 31 GB box). Coverage is not
 		// lost: each class is also covered by a tiny synth fixture gated against
@@ -113,7 +113,7 @@ func TestSafetensorsArchCoverage(t *testing.T) {
 	for _, r := range done {
 		got[r.arch] = true
 	}
-	for name := range hfArchTable {
+	for name := range hfArchTable() {
 		seen := false
 		for _, r := range append(append([]row{}, done...), blocked...) {
 			if r.arch == name {

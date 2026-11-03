@@ -44,8 +44,8 @@ type Emitters struct {
 	// LogSoftmax is Softmax's log form, the same Args and Scr = ActConsts():
 	// x - max - ln(sum exp(x - max)), in place (EmitLogSoftmax).
 	LogSoftmax func() ([]byte, error)
-	ActMul     func(k ActKind) ([]byte, error) // every kind in graph.Gated
-	Act        func(k ActKind) ([]byte, error) // every kind in graph.Ungated
+	ActMul     func(k ActKind) ([]byte, error) // every kind in graph.Gated()
+	Act        func(k ActKind) ([]byte, error) // every kind in graph.Ungated()
 	SigmoidMul func() ([]byte, error)
 	// Ln is x = ln(x) in place over positive finite x, Scr = ActConsts()
 	// (EmitLn): a log-mel feature's log.

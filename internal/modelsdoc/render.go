@@ -159,7 +159,7 @@ func render(d lines) ([]byte, error) {
 	}
 
 	vision := 0
-	for _, m := range library.Models {
+	for _, m := range library.Models() {
 		if m.Vision() {
 			vision++
 		}
@@ -181,10 +181,10 @@ func render(d lines) ([]byte, error) {
 	p("- **%d** graphs in all (`jlm.Arch`)\n", len(graphs))
 	p("- **%d** vision projectors (`clip.projector_type`, `convert.Projectors`)\n", len(projectors))
 	p("- **%d** embedding encoders, and pooling on any decoder\n", len(encoders))
-	p("- **%d** weight types read (`quant.Dequantable`), **%d** of them packed quantizations (`quant.PackedTypes`)\n",
-		len(read), len(quant.PackedTypes))
+	p("- **%d** weight types read (`quant.Dequantable`), **%d** of them packed quantizations (`quant.PackedTypes()`)\n",
+		len(read), len(quant.PackedTypes()))
 	p("- **%d** models in the download catalogue (`jitllm library`), **%d** of them with a vision tower\n\n",
-		len(library.Models), vision)
+		len(library.Models()), vision)
 
 	p("## Text architectures\n\n")
 	p("One row per graph: several source names can convert to one graph. The file can refine a graph\n")
@@ -246,14 +246,14 @@ func render(d lines) ([]byte, error) {
 
 	p("\n## Weight types\n\n")
 	p("Read: %s.\n\n", typeNames(read))
-	p("Packed quantizations: %s. A GGUF's quantization is kept; `-q8` stores a float safetensors model's\n", typeNames(quant.PackedTypes))
+	p("Packed quantizations: %s. A GGUF's quantization is kept; `-q8` stores a float safetensors model's\n", typeNames(quant.PackedTypes()))
 	p("matrices as Q8_0.\n")
 
 	p("\n## Download catalogue\n\n")
 	p("`jitllm convert NAME` fetches and converts these (`convert/library`). It is a curated subset of the\n")
 	p("lists above, each entry downloaded, converted and made to generate before it was added.\n\n")
 	p("| Name | Model | Architecture | Parameters | Weights | Images |\n|---|---|---|---|---|---|\n")
-	for _, m := range library.Models {
+	for _, m := range library.Models() {
 		img := ""
 		if m.Vision() {
 			img = "yes"

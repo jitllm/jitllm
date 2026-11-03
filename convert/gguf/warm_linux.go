@@ -10,14 +10,11 @@ import (
 	"github.com/jitllm/jitllm/engine/sched"
 )
 
-// sink keeps the touch loop from being optimised away.
-var sink atomic.Uint64
-
 // touch faults every page of b in, on the calling goroutine, and stops early
 // when stopped reports true. Reading one byte per page is the whole job: each
 // goroutine is a queue of one I/O. The stop is checked per page, since each
 // fault may take milliseconds.
-func touch(b []byte, stopped func() bool) {
+func touch(b []byte, stopped func() bool, sink *atomic.Uint64) {
 	var acc byte
 	for off := 0; off < len(b); off += 4096 {
 		if stopped() {
@@ -44,6 +41,8 @@ func touchParallel(b []byte, n int) func() {
 		return func() {}
 	}
 	var stop atomic.Bool
+	// sink keeps the touch loops from being optimised away.
+	var sink atomic.Uint64
 	var wg sync.WaitGroup
 	stopped := stop.Load
 	per := (len(b) + n - 1) / n
@@ -55,7 +54,7 @@ func touchParallel(b []byte, n int) func() {
 		wg.Add(1)
 		go func(part []byte) {
 			defer wg.Done()
-			touch(part, stopped)
+			touch(part, stopped, &sink)
 		}(b[lo:hi])
 	}
 	return func() {

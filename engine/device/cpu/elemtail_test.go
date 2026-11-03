@@ -37,10 +37,10 @@ func TestElementwiseEveryWidth(t *testing.T) {
 	clampLH := [2]float32{-2.5, 4} // the inputs reach +-11, so both bounds bite
 	ks = append(ks, kern{"clamp", hostBytes(t)(host.Clamp()), false, unsafe.Pointer(&clampLH[0])})
 	ks = append(ks, kern{"sigmoidmul", hostBytes(t)(host.SigmoidMul()), true, unsafe.Pointer(&consts[0])})
-	for _, k := range graph.Gated {
+	for _, k := range graph.Gated() {
 		ks = append(ks, kern{"actmul/" + k.String(), hostBytes(t)(host.ActMul(k)), true, unsafe.Pointer(&consts[0])})
 	}
-	for _, k := range graph.Ungated {
+	for _, k := range graph.Ungated() {
 		ks = append(ks, kern{"act/" + k.String(), hostBytes(t)(host.Act(k)), false, unsafe.Pointer(&consts[0])})
 	}
 	const guard = 2 * ElemLanes

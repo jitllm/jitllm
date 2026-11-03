@@ -49,7 +49,24 @@ const (
 	ArchOLMo3 Arch = 57
 )
 
-var denseArchNames = map[Arch]string{
-	ArchSmolLM3: "smollm3", ArchArcee: "arcee", ArchSeedOSS: "seed_oss",
-	ArchOLMo2: "olmo2", ArchExaone4: "exaone4", ArchMistral3: "mistral3", ArchOLMo3: "olmo3",
+func denseArchName(a Arch) (string, bool) {
+	switch a {
+	case ArchBitNet:
+		return "bitnet", true
+	case ArchSmolLM3:
+		return "smollm3", true
+	case ArchArcee:
+		return "arcee", true
+	case ArchSeedOSS:
+		return "seed_oss", true
+	case ArchOLMo2:
+		return "olmo2", true
+	case ArchExaone4:
+		return "exaone4", true
+	case ArchMistral3:
+		return "mistral3", true
+	case ArchOLMo3:
+		return "olmo3", true
+	}
+	return "", false
 }
