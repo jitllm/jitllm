@@ -23,7 +23,7 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) < 1 || len(o.In) > 2 || len(o.Out) != 1 || len(o.Reads) != 1 || a.Window != 0 || a.Bidir ||
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || a.Span <= 0 || a.TopK <= 0 || a.Local < 0 ||
 		a.HeadDim <= 0 || a.Offset < 0 || a.Offset+a.HeadDim > a.Width || c.Step.Page <= 0 || c.Step.Keys <= 0 ||
-		a.Pooled && (a.Local != 0 || len(o.Weight) != 1) || !a.Pooled && len(o.Weight) != 0 {
+		a.Pooled && (a.Local != 0 || len(o.Weight) != 1 || a.Firsts) || !a.Pooled && len(o.Weight) != 0 {
 		return nil, fmt.Errorf("a selection of %d heads in %d groups, keys of %d at %d of %d, blocks of %d, window %d",
 			a.NHead, a.NKVHead, a.HeadDim, a.Offset, a.Width, a.Span, a.Window)
 	}
@@ -187,6 +187,11 @@ func selectBest(o graph.Op, c *Context, fn Op, pool Pool, keys Operand, tables f
 	bbd := boundsOf(&bx)
 	t := bx.op(OpAdd, U, bx.op(OpMul, U, bx.coord(2), bx.u(uint32(B))), bx.coord(3))
 	in := bx.sel(U, bx.op(OpLess, ir.Pred, t, bbd.first), bx.u(0), bx.sel(U, bx.op(OpLess, ir.Pred, t, bbd.end), bx.u(1), bx.u(0)))
+	if a.Firsts {
+		// Only the block's first attended position scores it.
+		lead := bx.op(OpMax, U, bx.op(OpMul, U, bx.coord(2), bx.u(uint32(B))), bbd.first)
+		in = bx.sel(U, bx.op(OpLess, ir.Pred, lead, t), bx.u(0), in)
+	}
 	rel := bx.op(OpMin, U, bx.op(OpSub, U, bx.op(OpMax, U, t, bbd.first), bbd.first), bx.u(uint32(C-1)))
 	v := bx.at(0, []int{R, G, C}, bx.coord(0), bx.coord(1), rel)
 	bx.sel(F, bx.op(OpLess, ir.Pred, bx.u(0), in), v, bx.f(minus))

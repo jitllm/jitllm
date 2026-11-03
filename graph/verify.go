@@ -253,6 +253,8 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: pooled blocks with %d local, %d norm weights, a rotary of %d over keys of %d", at, a.Local, len(o.Weight), a.NRot, a.HeadDim)
 			case !a.Pooled && len(o.Weight) != 0:
 				bad("%s: %d weights on a selection that pools no key", at, len(o.Weight))
+			case a.Pooled && a.Firsts:
+				bad("%s: pooled blocks scored by their first positions", at)
 			}
 		case OpAttend:
 			if len(o.In) == 2 {

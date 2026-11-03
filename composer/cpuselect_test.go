@@ -14,17 +14,19 @@ import (
 // selectCase is one selection's shape: the attention's heads over a history
 // row of width W (keys at its start), the selection's index heads of Di at
 // Offset, in G groups, blocks of B, K kept, L forced, a ReLU and weights
-// where Relu, the values the keys' own pool where Latent.
+// where Relu, the values the keys' own pool where Latent, a block scored by
+// its first position where Firsts.
 type selectCase struct {
-	name                string
-	H, KV, Dk, W, Hi, G int
-	Di, Off, B, K, L    int
-	Relu, Latent        bool
+	name                 string
+	H, KV, Dk, W, Hi, G  int
+	Di, Off, B, K, L     int
+	Relu, Latent, Firsts bool
 }
 
 // selectOracle is the selection the case states over n positions' keys: for
 // each group, whether each position is kept (main's procedure: the forced
-// blocks first, then blocks in the order of their best position, until K).
+// blocks first, then blocks in the order of their best position -- of their
+// first where Firsts -- until K).
 func selectOracle(sc selectCase, keys [][]float32, iq, iw []float32, n int, noLocal bool) [][]bool {
 	J := sc.Hi / sc.G
 	nb := (n + sc.B - 1) / sc.B
@@ -70,6 +72,9 @@ func selectOracle(sc selectCase, keys [][]float32, iq, iw []float32, n int, noLo
 			if have >= sc.K {
 				break
 			}
+			if sc.Firsts && t%sc.B != 0 {
+				continue
+			}
 			if b := t / sc.B; !kept[b] {
 				kept[b] = true
 				have++
@@ -101,6 +106,7 @@ func TestComposedCPUSelect(t *testing.T) {
 		{name: "blocks", H: 4, KV: 2, Dk: 8, W: 24, Hi: 2, G: 2, Di: 8, Off: 16, B: 8, K: 4, L: 2},
 		{name: "blocksJ", H: 4, KV: 1, Dk: 16, W: 24, Hi: 4, G: 2, Di: 8, Off: 16, B: 8, K: 4, L: 2, Latent: true},
 		{name: "dense", H: 4, KV: 2, Dk: 8, W: 24, Hi: 2, G: 2, Di: 8, Off: 16, B: 8, K: 9, L: 2},
+		{name: "blocksFirst", H: 4, KV: 2, Dk: 8, W: 24, Hi: 2, G: 2, Di: 8, Off: 16, B: 8, K: 4, L: 2, Firsts: true},
 	} {
 		t.Run(sc.name, func(t *testing.T) { composedCPUSelect(t, sc) })
 	}
@@ -116,7 +122,8 @@ func composedCPUSelect(t *testing.T, sc selectCase) {
 		v = b.In("v", sc.W)
 	}
 	h := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
-	sa := graph.Attrs{NHead: sc.Hi, NKVHead: sc.G, HeadDim: sc.Di, Offset: sc.Off, Width: sc.W, Span: sc.B, TopK: sc.K, Local: sc.L}
+	sa := graph.Attrs{NHead: sc.Hi, NKVHead: sc.G, HeadDim: sc.Di, Offset: sc.Off, Width: sc.W, Span: sc.B, TopK: sc.K, Local: sc.L,
+		Firsts: sc.Firsts}
 	iq := b.In("iq", sc.Hi*sc.Di)
 	var w []graph.ValueID
 	if sc.Relu {
@@ -280,6 +287,14 @@ func composedCPUSelect(t *testing.T, sc selectCase) {
 	if sc.L > 0 {
 		if e := nmse(want(selectOracle(sc, keys, iqv, iwv, n, true))); !(e > 1e-6) {
 			t.Errorf("against the definition without its forced blocks the NMSE is %.3e: the gate cannot see them", e)
+		}
+	}
+	if sc.B > 1 {
+		other := sc
+		other.Firsts = !sc.Firsts
+		if e := nmse(want(selectOracle(other, keys, iqv, iwv, n, false))); !(e > 1e-6) {
+			t.Errorf("against the definition scoring a block by its %s the NMSE is %.3e: the gate cannot tell the two",
+				map[bool]string{true: "first position", false: "best"}[other.Firsts], e)
 		}
 	}
 }
