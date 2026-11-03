@@ -34,7 +34,7 @@ func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partTableHeld
 	case g.tkv == nil || g.tkv.kc == nil || g.tkv.vc == nil:
 		return partNoPool
-	case l.windowed && len(g.winRuns) == 0:
+	case l.windowed && len(g.winRuns) == 0, g.windowCuts(l):
 		return partWindow
 	}
 	if _, _, _, err := g.towerStep(bs, l, li, p, bs.rows); err != nil {
@@ -78,6 +78,17 @@ func (g *devTier) prewarmTower(li int) (roomless string) {
 		return fmt.Sprintf("tower block %d: its composed part does not fit beside the blocks placed (%s)", li, g.LastErr)
 	}
 	return ""
+}
+
+// windowCuts reports a symmetric window block l's graph states that can cut
+// a run of the set. The form centres such a window on each row's write
+// position, which a non-causal set's rows do not carry as the window needs:
+// on the card embeddinggemma's sliding layers read the answer of no window
+// at all (TestEmbeddingsOnEveryDevice). Where half the window covers the
+// set's largest run the window cuts nothing and the block is served.
+// Callers hold g.mu.
+func (g *devTier) windowCuts(l *layer) bool {
+	return l.win != 0 && (g.visMax == 0 || l.win/2 < g.visMax)
 }
 
 // rotates says graph gr turns rows by a rotary table.

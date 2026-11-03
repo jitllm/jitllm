@@ -2625,7 +2625,11 @@ func (g *devTier) unserved(li int) string {
 		return ""
 	case partWindow:
 		// A tower's windows are each call's (SetKeyRuns, SetRowWindows):
-		// none is staged at a placement.
+		// none is staged at a placement. A window its graph states that can
+		// cut a run is the block's own, which the set does not apply.
+		if g.windowCuts(l) {
+			return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, composer.DeclineName(int(why)))
+		}
 		return ""
 	default:
 		return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, composer.DeclineName(int(why)))

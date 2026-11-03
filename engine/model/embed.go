@@ -307,7 +307,7 @@ func (e *Embedder) Embed(ids []int32) ([]float32, error) {
 	default:
 		var err error
 		var unit bool
-		if rows, unit, err = e.st.embedPrefill(ids, e.pooled); err != nil {
+		if rows, unit, err = e.st.embedPrefill(ids, e.pooled, e.skipDense); err != nil {
 			return nil, err
 		}
 		if unit {
@@ -315,8 +315,9 @@ func (e *Embedder) Embed(ids []int32) ([]float32, error) {
 		}
 	}
 	out := e.pooled
-	if e.m.enc != nil && e.seg != nil && e.seg.nc() != nil && e.seg.cpuPool(rows, len(ids), out) {
-		// The composer's readout: pooled and scaled to unit length.
+	// The composer's readout: pooled, through the dense heads and scaled to
+	// unit length. The reading before the heads (skipDense) is not it.
+	if !e.skipDense && e.m.enc != nil && e.seg != nil && e.seg.nc() != nil && e.seg.cpuPool(rows, len(ids), out) {
 		return out, nil
 	}
 	if e.m.enc != nil {
