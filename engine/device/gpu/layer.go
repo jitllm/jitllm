@@ -33,48 +33,44 @@ type layer struct {
 	// graph is the block as ops from the model's front end
 	// (nn.LayerPlan.Graph): what serving it whole forms (served.go), and
 	// win and chunked the window its attention states.
-	graph          *graph.Graph
-	win            int
-	chunked        bool
+	graph   *graph.Graph
+	win     int
+	chunked bool
+	// vecs is every vector the file stores for the block that no field below
+	// holds (nn.LayerWeights.Vectors), uploaded as the file stores it.
+	vecs           []roleBuf
 	wq, wk, wv, wo *resident
 	gate, up, down *resident
 	// qwen3next's shared expert: an always-on feed-forward added to the routed
-	// sum, scaled by a sigmoid of one logit. Its router is a vector, uploaded as
-	// plain floats; mvShRouter is a one-row RouterMatVec.
+	// sum, scaled by a sigmoid of one logit (its gate is in vecs).
 	shGate, shUp, shDown *resident
 	mvsg, mvsu, mvsd     mv
-	shRouter             backend.Buf
 	// Gemma 4's per-layer embedding (nn.LayerPlan.PLEDim): the gate and the
-	// projection back, the post-norm, and pleOff the block's li*PLEDim, the
-	// offset of its slice in a row's inputs (kernels.PLESlice).
+	// projection back, and pleOff the block's li*PLEDim, the offset of its
+	// slice in a row's inputs; its post-norm is in vecs.
 	pleGate, pleProj *resident
 	mvpg, mvpp       mv
-	nPLE, pleOff     backend.Buf
+	pleOff           backend.Buf
 	// Gemma 3n's AltUp (nn.LayerPlan.AltUp, altup.go): the router as plain
-	// floats and its norm, the coefficients transposed, the scale before the
-	// per-layer gate; LAuReL's two matrices and norm; sparse says the FFN
-	// gate takes the gaussian top-k.
-	altRouter, altRouterNorm, altPredT, altCorrT, altCorrScale backend.Buf
+	// floats and LAuReL's two matrices; their vectors are in vecs. sparse
+	// says the FFN gate takes the gaussian top-k.
+	altRouter backend.Buf
 	// altRouterW is altRouter as the composer binds a matrix; it owns
 	// nothing (altRouter is freed with the block).
 	altRouterW       *resident
 	laurelL, laurelR *resident
 	mvLL, mvLR       mv
-	nLaurel          backend.Buf
 	sparse           bool
 	// kvSrc is the block whose history this one attends to: its own index, or
 	// for a KV-sharing block (nn.LayerPlan.KVShared) the source's, whose
 	// cache this block reads and never writes.
 	kvSrc int
-	// A linear block's three matrices and five vectors. Wq above carries the
-	// fused q|k|v for such a block (the layer kind decides the consumer, as in
-	// nn.SSMWeights), so these are the z projection, the beta/alpha head and the
-	// output projection.
-	//
-	// ssmOnes is a unit weight of kDim: the per-key-head L2 norm is an RMSNorm with
-	// a unit weight and eps/n, as engine/model/delta.go builds it.
-	// linear says this block runs the gated delta rule instead of attention. It is
-	// set from the plan, not inferred from a nil weight.
+	// A linear block's three matrices (its vectors are in vecs). Wq above
+	// carries the fused q|k|v for such a block (the layer kind decides the
+	// consumer, as in nn.SSMWeights), so these are the z projection, the
+	// beta/alpha head and the output projection. linear says this block runs
+	// the gated delta rule instead of attention. It is set from the plan, not
+	// inferred from a nil weight.
 	linear                 bool
 	ssmGate, ssmBA, ssmOut *resident
 	// centred is a short convolution with no state over a whole non-causal
@@ -84,19 +80,9 @@ type layer struct {
 	ssmFA, ssmFB, ssmGA, ssmGB *resident
 	mvSG, mvBA, mvSO           mv
 	mvFA, mvFB, mvGA, mvGB     mv
-	ssmConv1d, ssmA, ssmDt     backend.Buf
-	ssmNorm, ssmOnes           backend.Buf
-	// ssmTaps is the convolution's taps as the file stores them, a
-	// channel's contiguous: the composer's state convolution reads them so.
+	// ssmTaps is the convolution's taps a channel's contiguous, which the
+	// composer's convolutions read; the file stores them tap-major.
 	ssmTaps resident
-	// ssmD and ssmCB are a Mamba-2 block's skip and convolution bias
-	// (nn.RecurrentPlan.SSD), and a Mamba-1 block's; nil on the gated delta
-	// rule.
-	ssmD, ssmCB backend.Buf
-	// m1DtN, m1BN and m1CN are a Mamba-1 block's dt, B and C RMSNorm weights
-	// (Jamba's; FalconMamba's ones); nil where it has none. Its four matrices
-	// ride KDA's four (nn.SSMWeights).
-	m1DtN, m1BN, m1CN backend.Buf
 	// withAttn is a block that runs attention beside its Mamba-2 mixer
 	// (nn.RecurrentPlan.WithAttn, Falcon-H1): it keeps a KV history and a
 	// recurrent state both, and its mixer's projection is ssmIn rather than
@@ -116,30 +102,28 @@ type layer struct {
 	wqa, wqb, wkva, wkb, wvb *resident
 	mvQA, mvQB, mvKVA        mv
 	mvKB, mvVB               mv
-	nQA, nKVA                backend.Buf
 	// DeepSeek V3.2's lightning indexer (nn.LayerPlan.IdxHeads, indexer.go):
-	// its query, key and weight projections and the key's LayerNorm.
+	// its query, key and weight projections.
 	idxQB, idxK, idxProj *resident
 	mvIQ, mvIK, mvIW     mv
-	nIdxK, nIdxKB        backend.Buf
 	// MiniMax Sparse Attention (nn.LayerPlan.MSA, msa.go): msa says the block
-	// selects its key blocks; idxQ/mvMQ is its indexer query and nIdxQ that
-	// query's per-head norm, the key being idxK/mvIK with nIdxK.
+	// selects its key blocks; idxQ/mvMQ is its indexer query, the key being
+	// idxK/mvIK.
 	msa bool
 	// qsa is a Qwen3.8-Flash-Next attention block's QSA selection (qsa.go).
-	qsa   bool
-	idxQ  *resident
-	mvMQ  mv
-	nIdxQ backend.Buf
-	// Kimi-K3 (nn.LayerPlan.K3, k3.go): the MLA output gate (slot 31) and the
-	// latent mixture's down and up projections (32, 33), and the block's
-	// vectors (the residual attention's scores, the routed sum's norm).
+	qsa  bool
+	idxQ *resident
+	mvMQ mv
+	// Kimi-K3 (nn.LayerPlan.K3): the MLA output gate (slot 31) and the
+	// latent mixture's down and up projections (32, 33); its vectors are in
+	// vecs. k3 marks such a block.
 	mlaGate, routedDown, routedUp *resident
 	mvMG, mvRD, mvRU              mv
-	k3                            *k3Block
+	k3                            bool
 	// Qwen3.8-Flash-Next (nn.LayerPlan.Q4E, q4e.go): the two
 	// hyper-connections' down, up and placement projections (slots 34..39),
-	// the n-gram key and value (40, 41), and the block's vectors.
+	// the n-gram key and value (40, 41) and its convolution; its vectors are
+	// in vecs.
 	hcAD, hcAU, hcAI, hcFD, hcFU, hcFI       *resident
 	ngKey, ngVal                             *resident
 	mvHAD, mvHAU, mvHAI, mvHFD, mvHFU, mvHFI mv
@@ -150,21 +134,9 @@ type layer struct {
 	conv *convBlock
 
 	nAttn, nFFN backend.Buf // norm weights, f32
-	// nPostAttn and nPostFFN are gemma2/gemma3's two extra RMSNorms, applied to
-	// the attention and FFN outputs before their residual adds. nil elsewhere.
-	nPostAttn, nPostFFN backend.Buf
-	// nSubAttn and nSubFFN are BitNet's inner norms (nn.LayerPlan.SubNorm):
-	// over the attention output before wo and over act(gate)*up before down,
-	// each fused with the int8 quantize its projection reads (bs.subQA,
-	// bs.subQF). nil elsewhere.
-	nSubAttn, nSubFFN backend.Buf
 	// clampB is a vision block's clipped-linear bounds (nn.LayerWeights.Clamp,
 	// Gemma 4), 28 floats the clamp kernels read; nil elsewhere.
 	clampB backend.Buf
-	// Gemma 4's mixture block (nn.LayerPlan.DenseMoE): the experts' pre-norm,
-	// the dense MLP's and the experts' post-norms, the router input's norm and
-	// the per-expert weight factor. nil elsewhere.
-	nFFN2, nPost1, nPost2, nRouter, expScale backend.Buf
 	// LayerNorm biases, nil for every block that RMSNorms.
 	nAttnB, nFFNB backend.Buf
 	// nResid and nResidB are a post-norm block's norm over x + mlp(x)
@@ -231,21 +203,13 @@ type layer struct {
 	routerF16 bool
 	// routerW is l.router as the composer binds a matrix: its buffer, not a
 	// second copy of it.
-	routerW resident
-	// gpt-oss's per-head attention sinks and its router and expert biases, nil
-	// for every other architecture (LayerPlan.AttnSinks, MoEBias).
-	sinks, routerB             backend.Buf
-	expGateB, expUpB, expDownB backend.Buf
-	// expSelB is DeepSeek's e_score_correction_bias: a different tensor from
-	// routerB, added to the scores after gating and only for the selection.
-	expSelB  backend.Buf
+	routerW  resident
 	kvBytes  uint64 // this block's KV cache, so ReleaseLayers can refund it
 	recBytes uint64 // and its recurrent state, refunded on the same walks
 	recHist  uint64 // one session's recurrent pair; see devTier.reserved
 	// auxBytes is everything else charged to the budget for this block (the
 	// norms), so ReleaseLayers refunds it too.
-	auxBytes  uint64
-	biasBytes uint64
+	auxBytes uint64
 	// pg is this block's pageable weights -- the seven matrices and nothing else.
 	// It is built for every block, on every model, because the budget rather than
 	// the fit is what decides whether anything ever moves; see page.go.
@@ -1128,10 +1092,7 @@ type mv struct {
 	// which case the launch is rows*slots*split threads and the kernel takes a
 	// pSel parameter after pOut.
 	slots int
-	// bias is the per-row addend, nil for every projection that has none. The
-	// kernel declares pBias after pOut, so the launch appends it.
-	bias backend.Buf
-	alt  *mv
+	alt   *mv
 	// q/k are the shape this was built from, so the batched twin can be
 	// generated later without re-reading the weight.
 	q layout.Quant
@@ -1203,7 +1164,10 @@ func (l *layer) recOf(sid uint64) *recPair {
 // than admitted into room its own cache does not have. Callers hold g.mu, after
 // initKVCap.
 func (g *devTier) permBytes(p *nn.LayerPlan, w *nn.LayerWeights) uint64 {
-	n := uint64((2*len(w.AttnNorm) + len(w.PostAttnNorm) + len(w.PostFFNNorm)) * 4)
+	var n uint64
+	for _, v := range w.Vectors {
+		n += uint64(4 * len(v.V))
+	}
 	if r := p.Recurrent; r.Conv > 0 {
 		return n + g.sessions()*recHist(p)
 	}
@@ -1877,17 +1841,16 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		return g.resident(li, slot, q, x.Data, x.Rows, x.K, x.Packed)
 	}
-	// mkk is a matrix's record: its rows, format and width, where its bias
-	// goes (served.go binds both by role).
-	mkk := func(x nn.Weight, r *resident, bias bool) (mv, bool) {
+	// mkk is a matrix's record: its rows, format and width.
+	mkk := func(x nn.Weight, r *resident) (mv, bool) {
 		q, ok := quantOf(x.T)
 		if !ok {
 			return mv{}, false
 		}
 		return mv{rows: x.Rows, q: q, k: x.K, pad: p.KPad > 0 && x.K == p.KPad}, true
 	}
-	mkkID := func(x nn.Weight, r *resident, experts, slots int, slotAct, bias bool) (mv, bool) {
-		m, ok := mkk(x, r, bias)
+	mkkID := func(x nn.Weight, r *resident, experts, slots int, slotAct bool) (mv, bool) {
+		m, ok := mkk(x, r)
 		m.experts, m.slots, m.slotAct = experts, slots, slotAct
 		return m, ok
 	}
@@ -1931,7 +1894,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// biases or a dense scale keeps no bank, as cacheSlotsFor refuses them,
 	// and so does a float bank, which has no packed sheets to send.
 	cacheable := !g.NoHybridCache && g.StreamCacheSlots >= 0 && slots > 1 && !p.DenseMoE &&
-		w.ExpGateB == nil && w.ExpUpB == nil && w.ExpDownB == nil &&
+		w.Vector(jlm.RoleExpGateBias) == nil && w.Vector(jlm.RoleExpUpBias) == nil && w.Vector(jlm.RoleExpDownBias) == nil &&
 		w.Up.Packed != nil && w.Down.Packed != nil && (w.Gate.Packed != nil || len(w.Gate.Data) == 0)
 	hybrid := stream && hostExp && !cacheable
 	// cslots is the streamed bank's size in sheets, decided at the first bank
@@ -2060,21 +2023,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		&l.mvMG, &l.mvRD, &l.mvRU,
 		// Qwen3.8-Flash-Next's hyper-connections and n-gram projections.
 		&l.mvHAD, &l.mvHAU, &l.mvHAI, &l.mvHFD, &l.mvHFU, &l.mvHFI, &l.mvNGK, &l.mvNGV}
-	// Same order as rs/ms. Attention carries biases on every architecture that
-	// has them; a vision block also on up and down. For every text model the
-	// FFN entries stay nil, so their kernels are byte-identical to before
-	// (TestDenseKernelsUnchanged).
-	bias := [][]float32{w.Bq, w.Bk, w.Bv, w.Bo, w.BGate, w.BUp, w.BDown,
-		nil, nil, nil, nil, nil, nil,
-		// MLA's five carry no bias on any architecture that has them, and
-		// neither do KDA's four, the per-layer embedding's two, the indexer's
-		// three, LAuReL's two, the mixer's projection or MiniMax-M3's query.
-		nil, nil, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil,
-		nil,
-		nil, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil}
 	// The latent block's own slots: 0 (q) is the one-step query and is empty
 	// where 13/14 are populated; 1 and 2 are always empty (MLA has no k or v
 	// projection); 15..17 are always there. Each is an absent weight, not a
@@ -2384,7 +2332,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// slotAct: each slot reads its own activation vector. The mixture's
 		// down projection (6) does, and so do MLA's two banks -- head h absorbs
 		// its own nope half and un-absorbs its own attention result.
-		k, ok := mkkID(x, r, e, sl, i == 6 || i == 16 || i == 17, bias[i] != nil)
+		k, ok := mkkID(x, r, e, sl, i == 6 || i == 16 || i == 17)
 		if !ok {
 			return false
 		}
@@ -2447,93 +2395,14 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		err = b.Write(f32b(f))
 		*dst = b
 	}
-	if p.NFFNShExp > 0 && w.ShRouter != nil {
-		// The shared gate is a vector producing one logit, uploaded as plain
-		// floats like a norm. A nil gate is an ungated shared expert (DeepSeek's,
-		// weight 1), matching the host's `if l.shRouter != nil`; a present gate of
-		// the wrong width is an error.
-		if len(w.ShRouter) != p.NEmbd {
-			g.LastErr = fmt.Sprintf("block %d: the shared expert's gate is %d wide, want %d",
-				li, len(w.ShRouter), p.NEmbd)
-			return false
-		}
-		up(&l.shRouter, w.ShRouter)
-	}
-	// A post-norm block (OLMo 2, EXAONE 4) has neither pre-norm: the emit
-	// copies the residual where the norm would have written (bs.copyRows).
-	noPre := w.AttnNorm == nil && w.PostAttnNorm != nil && w.PostFFNNorm != nil
-	// Qwen3.8-Flash-Next's sublayers read their hyper-connection's mix, whose
-	// grouped norm stands where the pre-norms would (q4e.go).
-	noPre = noPre || p.Q4E != nil && w.AttnNorm == nil && w.FFNNorm == nil
-	// ModernBERT's first block has no attention norm and keeps its FFN norm:
-	// the attention reads the residual as it is, the same copy.
-	noAttnNorm := w.AttnNorm == nil && w.FFNNorm != nil && p.NoPreNorm && p.NonCausal
-	if noPre && !p.NoPreNorm && p.Q4E == nil {
-		g.LastErr = fmt.Sprintf("block %d has no pre-norm on a plan that does not say so", li)
-		return false
-	}
+	// A block's pre-norms are the ones its file stores (none on a post-norm
+	// block or an encoder's, no FFN norm on a parallel block sharing one);
+	// the composed graph binds what is stored.
 	if w.AttnNorm != nil {
 		up(&l.nAttn, w.AttnNorm)
-	} else if !noPre && !noAttnNorm {
-		g.LastErr = fmt.Sprintf("block %d has no attention norm", li)
-		return false
 	}
-	// A parallel block sharing one norm has no FFN norm (phi-2) and the FFN reads
-	// the attention's normed row; every other block needs one.
-	switch {
-	case w.FFNNorm != nil:
+	if w.FFNNorm != nil {
 		up(&l.nFFN, w.FFNNorm)
-	case noPre, p.NoFFN:
-	case !p.Parallel:
-		g.LastErr = fmt.Sprintf("block %d has no FFN norm and is not a parallel block", li)
-		return false
-	}
-	// Lengths are checked because a wrong one runs: a short sink array is read
-	// past its end, and an expert's bias slice would land on its neighbour's rows.
-	for _, v := range []struct {
-		name     string
-		on       bool
-		have     []float32
-		want     int
-		dst      *backend.Buf
-		optional bool
-	}{
-		{"attention sinks", p.AttnSinks, w.Sinks, p.NHead, &l.sinks, false},
-		{"router bias", p.MoEBias, w.RouterB, p.NExpert, &l.routerB, true},
-		{"expert gate bias", p.MoEBias, w.ExpGateB, p.NExpert * p.NFFNExp, &l.expGateB, true},
-		{"expert up bias", p.MoEBias, w.ExpUpB, p.NExpert * p.NFFNExp, &l.expUpB, true},
-		{"expert down bias", p.MoEBias, w.ExpDownB, p.NExpert * p.NEmbd, &l.expDownB, true},
-		// The block, not just the model, must be a mixture: DeepSeek's leading
-		// dense blocks carry no exp_probs_b.
-		{"expert selection bias", p.ExpertSelBias && p.NExpert > 0, w.ExpSelB, p.NExpert, &l.expSelB, false},
-	} {
-		if !v.on || (v.optional && v.have == nil) {
-			continue
-		}
-		if len(v.have) != v.want {
-			g.LastErr = fmt.Sprintf("block %d: %s is %d wide, want %d", li, v.name, len(v.have), v.want)
-			return false
-		}
-		up(v.dst, v.have)
-	}
-	if w.PostAttnNorm != nil {
-		up(&l.nPostAttn, w.PostAttnNorm)
-	}
-	// BitNet's inner norms: both, at their widths, on every such block.
-	if p.SubNorm {
-		if len(w.AttnSubNorm) != p.NHead*p.HeadDim || len(w.FFNSubNorm) != p.NFFN {
-			g.LastErr = fmt.Sprintf("block %d: inner norms %d and %d wide, want %d and %d", li,
-				len(w.AttnSubNorm), len(w.FFNSubNorm), p.NHead*p.HeadDim, p.NFFN)
-			return false
-		}
-		up(&l.nSubAttn, w.AttnSubNorm)
-		up(&l.nSubFFN, w.FFNSubNorm)
-	} else if w.AttnSubNorm != nil || w.FFNSubNorm != nil {
-		g.LastErr = fmt.Sprintf("block %d carries inner norms the plan does not name", li)
-		return false
-	}
-	if w.PostFFNNorm != nil {
-		up(&l.nPostFFN, w.PostFFNNorm)
 	}
 	if p.Clamps {
 		if len(w.Clamp) != 28 {
@@ -2542,52 +2411,20 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		up(&l.clampB, w.Clamp)
 	}
-	// Gemma 4's mixture block: four norms and the expert factors, charged
-	// with the norms.
-	if p.DenseMoE {
-		for _, v := range []struct {
-			name string
-			have []float32
-			want int
-			dst  *backend.Buf
-		}{
-			{"experts' pre-norm", w.FFNNorm2, p.NEmbd, &l.nFFN2},
-			{"dense MLP's post-norm", w.PostFFNNorm1, p.NEmbd, &l.nPost1},
-			{"experts' post-norm", w.PostFFNNorm2, p.NEmbd, &l.nPost2},
-			{"router input's norm", w.RouterNorm, p.NEmbd, &l.nRouter},
-			{"per-expert scale", w.ExpScale, p.NExpert, &l.expScale},
-		} {
-			if len(v.have) != v.want {
-				g.LastErr = fmt.Sprintf("block %d: %s is %d wide, want %d", li, v.name, len(v.have), v.want)
-				return false
-			}
-			up(v.dst, v.have)
-			l.auxBytes += uint64(4 * v.want)
-		}
-	}
-	// Gemma 4's per-layer embedding norm and the block's slice offset.
+	// Gemma 4's per-layer embedding: the block's slice offset.
 	if p.PLEDim != 0 {
-		if len(w.PLEPost) != p.NEmbd {
-			g.LastErr = fmt.Sprintf("block %d: the per-layer embedding norm is %d wide, want %d",
-				li, len(w.PLEPost), p.NEmbd)
-			return false
-		}
-		up(&l.nPLE, w.PLEPost)
 		if err == nil {
 			if l.pleOff, err = g.dev.Alloc(4); err == nil {
 				err = l.pleOff.Write(g.u32b(uint32(li * p.PLEDim)))
 			}
 		}
-		l.auxBytes += uint64(4*p.NEmbd + 4)
+		l.auxBytes += 4
 	}
 	if why := g.prepAltUp(l, li, p, w, up); why != "" {
 		g.LastErr = why
 		return false
 	}
-	if why := g.prepK3(l, li, p, w, up); why != "" {
-		g.LastErr = why
-		return false
-	}
+	l.k3 = p.K3 != nil
 	if why := g.prepQ4E(l, li, p, w, up); why != "" {
 		g.LastErr = why
 		return false
@@ -2633,82 +2470,18 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if w.FFNNormB != nil {
 		up(&l.nFFNB, w.FFNNormB)
 	}
-	// The attention biases, uploaded as float32 like every other aux vector.
-	// The kernel was already generated with pBias for exactly these slots.
-	for _, bp := range []struct {
-		v []float32
-		m *mv
-	}{{w.Bq, &l.mvq}, {w.Bk, &l.mvk}, {w.Bv, &l.mvv}, {w.Bo, &l.mvo},
-		// A vision block's MLP is biased too; skipping these runs and is wrong
-		// in exactly the way the attention biases are. A gated one's gate as
-		// well (Qwen2.5-VL); nil on every text block.
-		{w.BGate, &l.mvg}, {w.BUp, &l.mvu}, {w.BDown, &l.mvd}} {
-		if bp.v == nil {
-			continue
-		}
-		up(&bp.m.bias, bp.v)
-		if bp.m.alt != nil {
-			bp.m.alt.bias = bp.m.bias
-		}
-		l.biasBytes += uint64(len(bp.v) * 4)
-	}
 	if w.QNorm != nil {
 		up(&l.nQ, w.QNorm)
 		up(&l.nK, w.KNorm)
 	}
-	// MiniMax-M3's indexer norms, each one head wide.
 	l.qsa = p.QSA()
-	if l.msa = p.MSA(); l.msa || l.qsa {
-		if len(w.IdxQNorm) != p.IdxHeadDim || len(w.IdxKNorm) != p.IdxHeadDim {
-			g.LastErr = fmt.Sprintf("block %d: the indexer norms are %d/%d wide, want %d",
-				li, len(w.IdxQNorm), len(w.IdxKNorm), p.IdxHeadDim)
-			return false
-		}
-		up(&l.nIdxQ, w.IdxQNorm)
-		up(&l.nIdxK, w.IdxKNorm)
-		l.auxBytes += uint64(2 * p.IdxHeadDim * 4)
-	}
-	// A linear block of an MLA model has neither latent norm (see mlaSkip).
-	if l.mla && p.Recurrent.Conv == 0 {
-		// Widths are checked because a wrong one runs: KVANorm covers the latent
-		// only, and a whole-row weight would norm the rotary key too.
-		if len(w.KVANorm) != p.KVLoraRank {
-			g.LastErr = fmt.Sprintf("block %d: the kv latent norm is %d wide, want %d",
-				li, len(w.KVANorm), p.KVLoraRank)
-			return false
-		}
-		up(&l.nKVA, w.KVANorm)
-		l.auxBytes += uint64(len(w.KVANorm) * 4)
-		if p.QLoraRank != 0 {
-			if len(w.QANorm) != p.QLoraRank {
-				g.LastErr = fmt.Sprintf("block %d: the query latent norm is %d wide, want %d",
-					li, len(w.QANorm), p.QLoraRank)
-				return false
-			}
-			up(&l.nQA, w.QANorm)
-			l.auxBytes += uint64(len(w.QANorm) * 4)
-		}
-		if p.IdxHeads != 0 {
-			if len(w.IdxKNorm) != p.IdxHeadDim || len(w.IdxKNormB) != p.IdxHeadDim {
-				g.LastErr = fmt.Sprintf("block %d: the indexer key norm is %d/%d wide, want %d",
-					li, len(w.IdxKNorm), len(w.IdxKNormB), p.IdxHeadDim)
-				return false
-			}
-			up(&l.nIdxK, w.IdxKNorm)
-			up(&l.nIdxKB, w.IdxKNormB)
-			l.auxBytes += uint64(2 * p.IdxHeadDim * 4)
-		}
-	}
+	l.msa = p.MSA()
 	if r := p.Recurrent; r.Conv > 0 {
-		// The convolution weight stays plane-major, W[u][c] with the host's stride,
-		// so migrating the state is a memcpy rather than a shuffle.
 		if len(w.SSM.Conv1d) != r.Conv*r.Chans {
 			g.LastErr = fmt.Sprintf("block %d: conv1d is %d floats, want %d x %d",
 				li, len(w.SSM.Conv1d), r.Conv, r.Chans)
 			return false
 		}
-		up(&l.ssmConv1d, w.SSM.Conv1d)
-		l.auxBytes += uint64(len(w.SSM.Conv1d) * 4)
 		// The composed convolution reads its taps channel-major, the causal
 		// one's and the centred one's (graph.OpRowConv) alike.
 		taps := make([]float32, len(w.SSM.Conv1d))
@@ -2721,61 +2494,16 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		l.ssmTaps = resident{qs: l.ssmTaps.qs, nrows: r.Chans, k: r.Conv, t: layout.Float32, ok: true}
 		l.auxBytes += uint64(len(taps) * 4)
 	}
-	// A short convolution (LFM2) has its window and nothing else.
-	if r := p.Recurrent; r.Conv > 0 && !r.ShortConv {
-		up(&l.ssmA, w.SSM.A)
-		up(&l.ssmDt, w.SSM.DtBias)
-		if !r.NoNorm {
-			up(&l.ssmNorm, w.SSM.Norm)
+	for _, v := range w.Vectors {
+		if _, named := l.namedVector(v.Role); named || l.roleWeight(v.Role) != nil {
+			continue
 		}
-		if r.Mamba1 {
-			// Mamba-1's D and convolution bias, one a channel, and its three
-			// norms where the block has them; lengths checked because a short
-			// one is read past its end.
-			if len(w.SSM.D) != r.VHeads || len(w.SSM.ConvBias) != r.Chans || len(w.SSM.A) != r.VHeads*r.KDim ||
-				len(w.SSM.DtBias) != r.VHeads {
-				g.LastErr = fmt.Sprintf("block %d: Mamba-1's D is %d, its conv bias %d, A %d and dt bias %d wide, "+
-					"want %d, %d, %d and %d", li, len(w.SSM.D), len(w.SSM.ConvBias), len(w.SSM.A),
-					len(w.SSM.DtBias), r.VHeads, r.Chans, r.VHeads*r.KDim, r.VHeads)
-				return false
-			}
-			up(&l.ssmD, w.SSM.D)
-			up(&l.ssmCB, w.SSM.ConvBias)
-			l.auxBytes += uint64((len(w.SSM.D) + len(w.SSM.ConvBias)) * 4)
-			if w.SSM.DtNorm != nil {
-				if len(w.SSM.DtNorm) != r.Rank || len(w.SSM.BNorm) != r.KDim || len(w.SSM.CNorm) != r.KDim {
-					g.LastErr = fmt.Sprintf("block %d: Mamba-1's dt/B/C norms are %d, %d and %d wide, want %d, %d and %d",
-						li, len(w.SSM.DtNorm), len(w.SSM.BNorm), len(w.SSM.CNorm), r.Rank, r.KDim, r.KDim)
-					return false
-				}
-				up(&l.m1DtN, w.SSM.DtNorm)
-				up(&l.m1BN, w.SSM.BNorm)
-				up(&l.m1CN, w.SSM.CNorm)
-				l.auxBytes += uint64((r.Rank + 2*r.KDim) * 4)
-			}
+		var b backend.Buf
+		up(&b, v.V)
+		if b != nil {
+			l.vecs = append(l.vecs, roleBuf{role: v.Role, buf: b})
+			l.auxBytes += uint64(4 * len(v.V))
 		}
-		if r.SSD {
-			// Mamba-2's two vectors more; lengths checked because a short one
-			// is read past its end.
-			if len(w.SSM.D) != r.VHeads || len(w.SSM.ConvBias) != r.Chans ||
-				(!r.NoNorm && len(w.SSM.Norm) != r.VHeads*r.VDim) {
-				g.LastErr = fmt.Sprintf("block %d: Mamba-2's D is %d, its conv bias %d and its norm %d wide, "+
-					"want %d, %d and %d", li, len(w.SSM.D), len(w.SSM.ConvBias), len(w.SSM.Norm),
-					r.VHeads, r.Chans, r.VHeads*r.VDim)
-				return false
-			}
-			up(&l.ssmD, w.SSM.D)
-			up(&l.ssmCB, w.SSM.ConvBias)
-			l.auxBytes += uint64((len(w.SSM.D) + len(w.SSM.ConvBias)) * 4)
-		}
-		// A unit weight: the per-key-head L2 norm is an RMSNorm with a weight of
-		// ones (as engine/model/delta.go builds it), so no second reduction kernel.
-		ones := make([]float32, r.KDim)
-		for i := range ones {
-			ones[i] = 1
-		}
-		up(&l.ssmOnes, ones)
-		l.auxBytes += uint64((len(w.SSM.A) + len(w.SSM.DtBias) + len(w.SSM.Norm) + len(ones)) * 4)
 	}
 	// One extra KV position is a trash slot for the batched prefill: a ragged
 	// last chunk runs the full grid width with surplus rows zeroed, and those rows
@@ -2885,7 +2613,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	// += because a linear block already charged its five vectors above, and
 	// auxBytes is what ReleaseLayers refunds.
-	l.auxBytes += uint64((2*len(w.AttnNorm)+len(w.PostAttnNorm)+len(w.PostFFNNorm)+len(w.Clamp))*4) + l.biasBytes
+	l.auxBytes += uint64((2*len(w.AttnNorm) + len(w.Clamp)) * 4)
 	g.charge(l.auxBytes + l.kvBytes)
 	g.KVBytes += l.kvBytes
 	l.ok = true
@@ -5362,30 +5090,22 @@ func u32one(v uint32) []byte {
 // five, gpt-oss's sinks and biases). Both callers are full teardowns, so
 // nothing here is re-read without being uploaded again.
 func (l *layer) auxBufs() []backend.Buf {
-	return append(append([]backend.Buf(nil),
+	vs := make([]backend.Buf, len(l.vecs))
+	for i, v := range l.vecs {
+		vs[i] = v.buf
+	}
+	return append(append(vs,
 		l.nAttn, l.nFFN, l.nAttnB, l.nFFNB, l.nQ, l.nK,
 		l.nResid, l.nResidB, // BERT's post-norm
-		l.nPostAttn, l.nPostFFN, // gemma2/gemma3
-		l.nSubAttn, l.nSubFFN, // BitNet
-		l.clampB,      // Gemma 4's tower: its clipped linears' bounds
-		l.nQA, l.nKVA, // MLA's two latent norms
-		l.nIdxK, l.nIdxKB, l.nIdxQ, // the indexers' norms (DeepSeek V3.2, MiniMax-M3)
-		l.altRouter, l.altRouterNorm, l.altPredT, l.altCorrT, l.altCorrScale, l.nLaurel, // Gemma 3n
-		l.ssmConv1d, l.ssmA, l.ssmDt, l.ssmNorm, l.ssmOnes, l.ssmTaps.qs, // a linear block
-		l.ssmD, l.ssmCB, // Mamba-2's and Mamba-1's
-		l.m1DtN, l.m1BN, l.m1CN, // Mamba-1's
+		l.clampB,     // Gemma 4's tower: its clipped linears' bounds
+		l.altRouter,  // Gemma 3n
+		l.ssmTaps.qs, // a linear block's convolution
 		l.router,
-		l.sinks, l.routerB, l.expGateB, l.expUpB, l.expDownB, // gpt-oss
-		l.expSelB,  // DeepSeek-V3
-		l.shRouter, // qwen2moe's and qwen3next's shared-expert gate
-		l.mvq.bias, l.mvk.bias, l.mvv.bias, l.mvo.bias,
-		l.mvu.bias, l.mvd.bias,
-		l.outScale,                                         // Gemma 4's output scalar
-		l.xielu,                                            // Apertus's activation numbers
-		l.shadow,                                           // the shadow arm's state
-		l.nFFN2, l.nPost1, l.nPost2, l.nRouter, l.expScale, // Gemma 4's mixture block
-		l.nPLE, l.pleOff, // Gemma 4's per-layer embedding
-	), append(append(l.k3.bufs(), l.q4e.bufs()...), l.conv.bufs()...)...) // Kimi-K3's, Qwen3.8-Flash-Next's, a convolutional block's
+		l.outScale, // Gemma 4's output scalar
+		l.xielu,    // Apertus's activation numbers
+		l.shadow,   // the shadow arm's state
+		l.pleOff,   // Gemma 4's per-layer embedding
+	), append(l.q4e.bufs(), l.conv.bufs()...)...) // Qwen3.8-Flash-Next's convolution, a convolutional block's
 }
 
 // dropLayerLocal frees the buffers PrepLayer allocates fresh for one block and

@@ -146,29 +146,16 @@ func f32Row(v []float32) tensor {
 	return tensor{typ: quant.F32, data: f32Bytes(v), rows: 1, k: len(v)}
 }
 
-// loadK3 reads block bi's Kimi-K3 weights beyond the common ones and checks
-// their shapes: the residual attention's two score vectors, the MLA output
-// gate, and the latent mixture's projections and norm.
-func loadK3(l *layer, bi int32, cfg *Config, c *jlm.File, get func(jlm.Role, int32, int32) (tensor, error),
-	vec func(jlm.Role, int32) ([]float32, error)) error {
+// loadK3 reads block bi's Kimi-K3 matrices beyond the common ones and checks
+// their shapes: the MLA output gate and the latent mixture's projections.
+// Its vectors are the block's table's (layer.vecs).
+func loadK3(l *layer, bi int32, cfg *Config, c *jlm.File, getTo func(*tensor, jlm.Role, int32, int32) error) error {
 	var err error
-	if cfg.ResAttn() {
-		if l.resAttn, err = vec(jlm.RoleAttnResScore, bi); err != nil {
-			return err
-		}
-		if l.resFFN, err = vec(jlm.RoleFFNResScore, bi); err != nil {
-			return err
-		}
-		if len(l.resAttn) != cfg.NEmbd || len(l.resFFN) != cfg.NEmbd {
-			return fmt.Errorf("model: block %d's residual scores are %d and %d wide, want %d", bi,
-				len(l.resAttn), len(l.resFFN), cfg.NEmbd)
-		}
-	}
 	// The MLA output gate: RoleAttnGate in a full block of an MLA model,
 	// NHead*HeadDimV rows over n_embd. (A linear block's RoleAttnGate is its
 	// z projection, bound in build.)
 	if cfg.MLA() && !cfg.LayerKind(int(bi)).Recurrent() && c.Has(jlm.RoleAttnGate, bi, -1) {
-		if l.mlaGate, err = get(jlm.RoleAttnGate, bi, -1); err != nil {
+		if err = getTo(&l.mlaGate, jlm.RoleAttnGate, bi, -1); err != nil {
 			return err
 		}
 		if l.mlaGate.k != cfg.NEmbd || l.mlaGate.rows != cfg.NHead*cfg.HeadDimV {
@@ -177,23 +164,16 @@ func loadK3(l *layer, bi int32, cfg *Config, c *jlm.File, get func(jlm.Role, int
 		}
 	}
 	if cfg.ExpertLatent != 0 && cfg.MoEAt(int(bi)) {
-		if l.routedDown, err = get(jlm.RoleFFNRoutedDown, bi, -1); err != nil {
+		if err = getTo(&l.routedDown, jlm.RoleFFNRoutedDown, bi, -1); err != nil {
 			return err
 		}
-		if l.routedUp, err = get(jlm.RoleFFNRoutedUp, bi, -1); err != nil {
+		if err = getTo(&l.routedUp, jlm.RoleFFNRoutedUp, bi, -1); err != nil {
 			return err
-		}
-		if c.Has(jlm.RoleFFNRoutedNorm, bi, -1) {
-			if l.routedNorm, err = vec(jlm.RoleFFNRoutedNorm, bi); err != nil {
-				return err
-			}
 		}
 		L := cfg.ExpertLatent
-		if l.routedDown.k != cfg.NEmbd || l.routedDown.rows != L || l.routedUp.k != L ||
-			l.routedUp.rows != cfg.NEmbd || (l.routedNorm != nil && len(l.routedNorm) != L) {
-			return fmt.Errorf("model: block %d's latent mixture is %dx%d down, %dx%d up and a norm of %d; "+
-				"want %d to %d and back", bi, l.routedDown.k, l.routedDown.rows, l.routedUp.k,
-				l.routedUp.rows, len(l.routedNorm), cfg.NEmbd, L)
+		if l.routedDown.k != cfg.NEmbd || l.routedDown.rows != L || l.routedUp.k != L || l.routedUp.rows != cfg.NEmbd {
+			return fmt.Errorf("model: block %d's latent mixture is %dx%d down and %dx%d up; want %d to %d and back",
+				bi, l.routedDown.k, l.routedDown.rows, l.routedUp.k, l.routedUp.rows, cfg.NEmbd, L)
 		}
 	}
 	return nil
@@ -233,20 +213,6 @@ func (s *Instance) k3Plan(li int, plan *nn.LayerPlan) {
 	if c.ResAttn() {
 		k.BankAttn, k.BankFFN = c.resBank(li, false), c.resBank(li, true)
 		k.Push, _ = c.resCheckpoint(li)
-	}
-	switch c.k3Fault {
-	case k3FaultNoBank:
-		k.Fault = nn.K3FaultNoBank
-	case k3FaultNoRestart:
-		k.Fault = nn.K3FaultNoRestart
-	case k3FaultRawScores:
-		k.Fault = nn.K3FaultRawScores
-	case k3FaultNoLatentNorm:
-		k.Fault = nn.K3FaultNoLatentNorm
-	case k3FaultNoMLAGate:
-		k.Fault = nn.K3FaultNoMLAGate
-	case k3FaultNoKDAGate:
-		k.Fault = nn.K3FaultNoKDAGate
 	}
 	plan.K3 = k
 }

@@ -4,6 +4,8 @@ import (
 	"math"
 	"slices"
 	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 const ds32GoldScript = "scripts/ds32gold.py"
@@ -33,7 +35,7 @@ func ds32Fixtures() []struct {
 			for i := range m.layers {
 				l := &m.layers[i]
 				ok = ok && l.idxQB.rows == 8*16 && l.idxK.rows == 16 && l.idxProj.rows == 8 &&
-					len(l.idxKNorm) == 16 && len(l.idxKNormB) == 16
+					len(l.vector(jlm.RoleIdxKNorm)) == 16 && len(l.vector(jlm.RoleIdxKNormB)) == 16
 			}
 			return ok
 		}},
@@ -52,11 +54,8 @@ func ds32Violations() []c6Violation {
 		}},
 		{"the indexer key unnormed", func(m *Model) func() {
 			return eachLayer(m, func(l *layer) {
-				w, b := make([]float32, len(l.idxKNorm)), make([]float32, len(l.idxKNormB))
-				for i := range w {
-					w[i] = 1
-				}
-				l.idxKNorm, l.idxKNormB = w, b
+				setVec(l, jlm.RoleIdxKNorm, onesLike)
+				setVec(l, jlm.RoleIdxKNormB, func(v []float32) []float32 { return make([]float32, len(v)) })
 			})
 		}},
 		{"the indexer rotary on adjacent pairs", func(m *Model) func() {

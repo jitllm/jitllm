@@ -16,7 +16,7 @@ func (s *Instance) q4ePlan(li int, plan *nn.LayerPlan) {
 	if !c.Q4E() {
 		return
 	}
-	q := &nn.Q4EPlan{HCMult: c.HCMult, HCLowRank: c.HCLowRank, Fault: c.q4eFault}
+	q := &nn.Q4EPlan{HCMult: c.HCMult, HCLowRank: c.HCLowRank}
 	if c.QSAAt(li) {
 		q.QSARatio = c.QSARatio
 		if c.NRot > 0 {
@@ -45,16 +45,14 @@ func (s *Instance) q4eWeights(li int, w *nn.LayerWeights) {
 		return
 	}
 	hc := func(h *q4eHC) nn.HCWeights {
-		return nn.HCWeights{Norm: h.norm, Down: wt(h.down), Up: wt(h.up), Inject: wt(h.inj)}
+		return nn.HCWeights{Down: wt(h.down), Up: wt(h.up), Inject: wt(h.inj)}
 	}
 	w.HCAttn, w.HCFFN = hc(&d.attn), hc(&d.ffn)
 	if s.m.Cfg.QSAAt(li) {
 		w.IdxQ, w.IdxK = wt(l.idxQ), wt(l.idxK)
-		w.IdxQNorm, w.IdxKNorm = l.idxQNorm, l.idxKNorm
 	}
 	if s.m.Cfg.NGramAt(li) {
-		w.NGram = nn.NGramWeights{Key: wt(d.ngKey), Value: wt(d.ngVal), NormKey: d.ngNormK,
-			NormQuery: d.ngNormQ, NormC: d.ngNormC, Conv: d.ngCv}
+		w.NGram = nn.NGramWeights{Key: wt(d.ngKey), Value: wt(d.ngVal), Conv: d.ngCv}
 	}
 }
 

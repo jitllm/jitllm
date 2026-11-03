@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // bitnetDevViolations are BitNet's features taken out of the model while only
@@ -17,10 +18,10 @@ import (
 func bitnetDevViolations() []c6Violation {
 	return []c6Violation{
 		{"the attention inner norm's weight all ones", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.attnSubNorm = onesLike(l.attnSubNorm) })
+			return eachLayer(m, func(l *layer) { setVec(l, jlm.RoleAttnSubNorm, onesLike) })
 		}},
 		{"the FFN inner norm's weight all ones", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.ffnSubNorm = onesLike(l.ffnSubNorm) })
+			return eachLayer(m, func(l *layer) { setVec(l, jlm.RoleFFNSubNorm, onesLike) })
 		}},
 		bitnetViolations()[2], // SiLU for relu2
 		bitnetViolations()[3], // NORM rotary

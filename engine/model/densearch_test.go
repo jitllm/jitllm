@@ -29,7 +29,7 @@ func denseFixtures() []struct {
 		{"synth-apertus", func(m *Model) bool {
 			c, l, l1 := m.Cfg, &m.layers[0], &m.layers[1]
 			return c.Arch == "apertus" && !c.LayerNorm && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
-				len(l.qNorm) == c.HeadDim && c.Act == nn.ActXIELU && l.gate.e == nil && l.upB == nil &&
+				len(l.qNorm) == c.HeadDim && c.Act == nn.ActXIELU && l.gate.e == nil && l.vector(jlm.RoleFFNUpBias) == nil &&
 				len(l.xielu) == 4 && len(l1.xielu) == 4 && l.xielu[0] != l1.xielu[0] && l.xielu[2] != l1.xielu[2] &&
 				l.xielu[3] < -0.01 && len(m.rope.Freqs) == c.NRot/2 && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
@@ -42,25 +42,25 @@ func denseFixtures() []struct {
 		{"synth-arcee", func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
 			return c.Arch == "arcee" && !c.LayerNorm && c.Act == nn.ActReLU2 && l.gate.e == nil &&
-				l.ffnNorm != nil && l.upB == nil && c.NKVHead < c.NHead && !c.TiedEmbd
+				l.ffnNorm != nil && l.vector(jlm.RoleFFNUpBias) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-seedoss", func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
 			return c.Arch == "seed_oss" && c.RopeNeox && c.HeadDim*c.NHead != c.NEmbd &&
-				l.bq != nil && l.bk != nil && l.bv != nil && l.bo == nil && l.ffnNorm != nil &&
-				l.postAttnNorm == nil && c.NKVHead < c.NHead && !c.TiedEmbd
+				l.vector(jlm.RoleAttnQBias) != nil && l.vector(jlm.RoleAttnKBias) != nil && l.vector(jlm.RoleAttnVBias) != nil && l.vector(jlm.RoleAttnOutBias) == nil && l.ffnNorm != nil &&
+				l.vector(jlm.RolePostAttnNorm) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-olmo2", func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
 			return c.Arch == "olmo2" && c.RopeNeox && c.QKNorm && c.QKNormWide &&
 				len(l.qNorm) == c.NHead*c.HeadDim && l.attnNorm == nil && l.ffnNorm == nil &&
-				l.postAttnNorm != nil && l.postFFNNorm != nil && m.hasNoPreNorm() && !c.TiedEmbd
+				l.vector(jlm.RolePostAttnNorm) != nil && l.vector(jlm.RolePostFFNNorm) != nil && m.hasNoPreNorm() && !c.TiedEmbd
 		}},
 		{"synth-exaone4", func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
 			return c.Arch == "exaone4" && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
 				len(l.qNorm) == c.HeadDim && l.attnNorm == nil && l.ffnNorm == nil &&
-				l.postAttnNorm != nil && l.postFFNNorm != nil && c.NoPEGlobal &&
+				l.vector(jlm.RolePostAttnNorm) != nil && l.vector(jlm.RolePostFFNNorm) != nil && c.NoPEGlobal &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.RopeAt(2) && !c.RopeAt(3) &&
 				c.NKVHead < c.NHead
 		}},
@@ -242,8 +242,9 @@ func perHeadQK(m *Model) func() {
 // llama's block with OLMo 2's weights.
 func postAsPre(m *Model) func() {
 	undoL := eachLayer(m, func(l *layer) {
-		l.attnNorm, l.ffnNorm = l.postAttnNorm, l.postFFNNorm
-		l.postAttnNorm, l.postFFNNorm = nil, nil
+		l.attnNorm, l.ffnNorm = l.vector(jlm.RolePostAttnNorm), l.vector(jlm.RolePostFFNNorm)
+		setVec(l, jlm.RolePostAttnNorm, func([]float32) []float32 { return nil })
+		setVec(l, jlm.RolePostFFNNorm, func([]float32) []float32 { return nil })
 	})
 	undoR := m.restate(func(inv map[jlm.Role]graph.Shape) {
 		for _, r := range [][2]jlm.Role{{jlm.RolePostAttnNorm, jlm.RoleAttnNorm}, {jlm.RolePostFFNNorm, jlm.RoleFFNNorm}} {

@@ -54,34 +54,24 @@ func (d *devTier) streams() int {
 	return d.bs.p.Streams()
 }
 
-// prepAltUp uploads block li's AltUp vectors and router. Its two LAuReL
-// matrices go through prepLayer's weight list (slots 27 and 28).
+// prepAltUp uploads block li's AltUp router. Its two LAuReL matrices go
+// through prepLayer's weight list (slots 27 and 28).
 func (g *devTier) prepAltUp(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 	up func(*backend.Buf, []float32)) string {
 	if p.AltUp == 0 {
 		return ""
 	}
 	s, d := p.AltUp, p.NEmbd
-	switch {
-	case w.AltRouter.T != quant.F32 || w.AltRouter.Rows != s || w.AltRouter.K != d || len(w.AltRouter.Data) < 4*s*d:
+	if w.AltRouter.T != quant.F32 || w.AltRouter.Rows != s || w.AltRouter.K != d || len(w.AltRouter.Data) < 4*s*d {
 		return fmt.Sprintf("block %d: the AltUp router is %v %dx%d, want an F32 %dx%d", li, w.AltRouter.T,
 			w.AltRouter.Rows, w.AltRouter.K, s, d)
-	case len(w.AltRouterNorm) != d || len(w.AltPredT) != s*s*s || len(w.AltCorrT) != s*s ||
-		len(w.AltCorrScale) != d || len(w.LaurelPost) != d:
-		return fmt.Sprintf("block %d: AltUp's vectors are %d, %d, %d, %d and LAuReL's norm %d", li,
-			len(w.AltRouterNorm), len(w.AltPredT), len(w.AltCorrT), len(w.AltCorrScale), len(w.LaurelPost))
 	}
-	up(&l.altRouterNorm, w.AltRouterNorm)
-	up(&l.altPredT, w.AltPredT)
-	up(&l.altCorrT, w.AltCorrT)
-	up(&l.altCorrScale, w.AltCorrScale)
-	up(&l.nLaurel, w.LaurelPost)
 	up(&l.altRouter, f32of(w.AltRouter.Data[:4*s*d]))
 	// The composer reads the router as a plain float matrix (roleWeight).
 	if q, ok := quantOf(quant.F32); ok && l.altRouter != nil {
 		l.altRouterW = &resident{qs: l.altRouter, nrows: s, k: d, t: q, ok: true}
 	}
 	l.sparse = p.Sparse
-	l.auxBytes += uint64(4 * (3*d + s*s*s + s*s + s*d))
+	l.auxBytes += uint64(4 * s * d)
 	return ""
 }

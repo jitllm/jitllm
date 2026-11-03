@@ -45,6 +45,10 @@ func (s *Instance) cpuRefused(li int, why composer.Decline) error {
 	if why == composer.DeclineNotFormed && s.cpu.formErr != nil {
 		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the first: %w)", li, composer.DeclineName(int(why)), s.cpu.formErr)
 	}
+	if why == composer.DeclineNoGraph {
+		u, err := s.m.uncoveredAt(li)
+		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the front end: %v, %v)", li, composer.DeclineName(int(why)), u, err)
+	}
 	return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s", li, composer.DeclineName(int(why)))
 }
 
@@ -2877,8 +2881,18 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 		case m.q4eHead != nil && r == jlm.RoleHCHeadUp:
 			return &m.q4eHead.hc.up
 		}
+		for _, v := range s.m.vecMats {
+			if v.role == r {
+				return v.t
+			}
+		}
 		return nil
 	}
+	if t := l.matrix(r); t != nil {
+		return t
+	}
+	// What the loader bound under no role of its own: a prediction block's
+	// matrices and the convolutions' taps, cut from vectors.
 	switch r {
 	case jlm.RoleNextnEHProj:
 		if l.mtp == nil {
@@ -2890,121 +2904,11 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return nil
 		}
 		return &l.mtp.embd
-	case jlm.RoleAttnQ:
-		return &l.wq
-	case jlm.RoleAttnK:
-		return &l.wk
-	case jlm.RoleAttnV:
-		return &l.wv
-	case jlm.RoleAttnOut:
-		return &l.wo
-	case jlm.RoleFFNGate:
-		return &l.gate
-	case jlm.RoleFFNUp:
-		return &l.up
-	case jlm.RoleFFNDown:
-		return &l.down
-	case jlm.RoleRouter:
-		return &l.router
-	case jlm.RoleShExpGate:
-		return &l.shGate
-	case jlm.RoleShExpUp:
-		return &l.shUp
-	case jlm.RoleShExpDown:
-		return &l.shDown
-	case jlm.RoleFFNRoutedDown:
-		return &l.routedDown
-	case jlm.RoleFFNRoutedUp:
-		return &l.routedUp
-	case jlm.RoleAttnQKV:
-		if l.ssmIn.rows != 0 {
-			return &l.ssmIn
-		}
-		return &l.wq
-	case jlm.RoleSCX:
-		return &l.wq
-	case jlm.RoleAttnGate, jlm.RoleSCB:
-		// A full block of a model of latent attention gates its output by
-		// its own; a linear block's is its state's gate.
-		if l.mlaGate.rows != 0 && !s.c.LayerKind(li).Recurrent() {
-			return &l.mlaGate
-		}
-		return &l.ssmGate
-	case jlm.RoleAttnQA:
-		return &l.wqa
-	case jlm.RoleAttnQB:
-		return &l.wqb
-	case jlm.RoleAttnKVA:
-		return &l.wkva
-	case jlm.RoleAttnKB:
-		return &l.wkb
-	case jlm.RoleAttnVB:
-		return &l.wvb
-	case jlm.RoleSSMBA, jlm.RoleSCC:
-		return &l.ssmBA
-	case jlm.RoleSSMXDt:
-		return &l.ssmXDt
-	case jlm.RoleSSMXB:
-		return &l.ssmXB
-	case jlm.RoleSSMXC:
-		return &l.ssmXC
-	case jlm.RoleSSMDtProj:
-		return &l.ssmDtProj
-	case jlm.RoleSSMOut:
-		return &l.ssmOut
-	case jlm.RoleSSMFA:
-		return &l.ssmFA
-	case jlm.RoleSSMFB:
-		return &l.ssmFB
-	case jlm.RoleSSMGA:
-		return &l.ssmGA
-	case jlm.RoleSSMGB:
-		return &l.ssmGB
 	case jlm.RoleSSMConv1d:
 		return &l.ssmConvTaps
-	case jlm.RolePLEGate:
-		return &l.pleGate
-	case jlm.RolePLEProj:
-		return &l.pleProj
-	case jlm.RoleStreamRouter:
-		return &l.altRouter
-	case jlm.RoleLowRankIn:
-		return &l.laurelL
-	case jlm.RoleLowRankOut:
-		return &l.laurelR
-	case jlm.RoleIdxQ:
-		return &l.idxQ
-	case jlm.RoleIdxQB:
-		return &l.idxQB
-	case jlm.RoleIdxK:
-		return &l.idxK
-	case jlm.RoleIdxProj:
-		return &l.idxProj
-	}
-	if h := l.q4e; h != nil {
-		switch r {
-		case jlm.RoleHCAttnDown:
-			return &h.attn.down
-		case jlm.RoleHCAttnUp:
-			return &h.attn.up
-		case jlm.RoleHCAttnInject:
-			return &h.attn.inj
-		case jlm.RoleHCFFNDown:
-			return &h.ffn.down
-		case jlm.RoleHCFFNUp:
-			return &h.ffn.up
-		case jlm.RoleHCFFNInject:
-			return &h.ffn.inj
-		case jlm.RoleNGramKey:
-			return &h.ngKey
-		case jlm.RoleNGramValue:
-			return &h.ngVal
-		case jlm.RoleNGramConv:
-			return &h.ngCvTaps
-		case jlm.RoleHCHeadDown:
-			return &h.head.down
-		case jlm.RoleHCHeadUp:
-			return &h.head.up
+	case jlm.RoleNGramConv:
+		if l.q4e != nil {
+			return &l.q4e.ngCvTaps
 		}
 	}
 	return nil
@@ -3030,143 +2934,48 @@ func (s *Instance) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 				return s.m.q4eHead.hc.norm
 			}
 		}
-		return nil
+		return nn.VectorOf(s.m.vecs, r)
 	}
+	if v, ok := l.namedVector(r); ok {
+		return v
+	}
+	return nn.VectorOf(l.vecs, r)
+}
+
+// namedVector is the vector a field of block l holds under r, and whether a
+// field holds r at all: a role a field holds is read from it, nil or not (a
+// gate's violation takes a vector out through its field), and every other
+// role from the block's table (layer.vecs).
+func (l *layer) namedVector(r jlm.Role) ([]float32, bool) {
 	switch r {
 	case jlm.RoleNextnENorm, jlm.RoleNextnHNorm:
 		if l.mtp == nil {
-			return nil
+			return nil, true
 		}
 		if r == jlm.RoleNextnENorm {
-			return l.mtp.enorm
+			return l.mtp.enorm, true
 		}
-		return l.mtp.hnorm
+		return l.mtp.hnorm, true
 	case jlm.RoleAttnNorm:
-		return l.attnNorm
+		return l.attnNorm, true
 	case jlm.RoleFFNNorm:
-		return l.ffnNorm
+		return l.ffnNorm, true
 	case jlm.RoleAttnNormBias:
-		return l.attnNormB
+		return l.attnNormB, true
 	case jlm.RoleFFNNormBias:
-		return l.ffnNormB
-	case jlm.RolePostAttnNorm:
-		return l.postAttnNorm
-	case jlm.RolePostFFNNorm:
-		return l.postFFNNorm
+		return l.ffnNormB, true
 	case jlm.RoleAttnQNorm:
-		return l.qNorm
+		return l.qNorm, true
 	case jlm.RoleAttnKNorm:
-		return l.kNorm
-	case jlm.RoleAttnQANorm:
-		return l.qaNorm
-	case jlm.RoleAttnKVANorm:
-		return l.kvaNorm
-	case jlm.RoleAttnQBias:
-		return l.bq
-	case jlm.RoleAttnKBias:
-		return l.bk
-	case jlm.RoleAttnVBias:
-		return l.bv
-	case jlm.RoleAttnOutBias:
-		return l.bo
-	case jlm.RoleFFNUpBias:
-		return l.upB
-	case jlm.RoleFFNDownBias:
-		return l.downB
-	case jlm.RoleVFFNGateBias:
-		return l.gateB
+		return l.kNorm, true
 	case jlm.RoleVClamp:
-		return l.clamp
-	case jlm.RoleAttnSinks:
-		return l.sinks
-	case jlm.RoleRouterBias:
-		return l.routerB
-	case jlm.RoleExpGateBias:
-		return l.expGateB
-	case jlm.RoleExpUpBias:
-		return l.expUpB
-	case jlm.RoleExpDownBias:
-		return l.expDownB
-	case jlm.RoleExpProbsB:
-		return l.expProbsB
-	case jlm.RoleShRouter:
-		return l.shRouter
-	case jlm.RoleAttnSubNorm:
-		return l.attnSubNorm
-	case jlm.RoleFFNSubNorm:
-		return l.ffnSubNorm
+		return l.clamp, true
 	case jlm.RoleXIELU:
-		return l.xielu
-	case jlm.RoleIdxQNorm:
-		return l.idxQNorm
-	case jlm.RoleIdxKNorm:
-		return l.idxKNorm
-	case jlm.RoleIdxKNormB:
-		return l.idxKNormB
+		return l.xielu, true
 	case jlm.RoleLayerOutScale:
-		return l.outScaleRow
-	case jlm.RoleSSMA:
-		return l.ssmA
-	case jlm.RoleSSMDtBias:
-		return l.ssmDtBias
-	case jlm.RoleSSMNorm:
-		return l.ssmNorm
-	case jlm.RoleSSMD:
-		return l.ssmD
-	case jlm.RoleSSMConvBias:
-		return l.ssmConvB
-	case jlm.RoleSSMDtNorm:
-		return l.ssmDtNorm
-	case jlm.RoleSSMBNorm:
-		return l.ssmBNorm
-	case jlm.RoleSSMCNorm:
-		return l.ssmCNorm
-	case jlm.RolePLEPostNorm:
-		return l.plePost
-	case jlm.RoleStreamRouterNorm:
-		return l.altRouterNorm
-	case jlm.RoleStreamPredictCoef:
-		return l.altPredT
-	case jlm.RoleStreamCorrectCoef:
-		return l.altCorrT
-	case jlm.RoleStreamCorrectScale:
-		return l.altCorrScale
-	case jlm.RoleLowRankNorm:
-		return l.laurelPost
-	case jlm.RoleFFNNorm2:
-		return l.ffnNorm2
-	case jlm.RolePostFFNNorm1:
-		return l.postFFNNorm1
-	case jlm.RolePostFFNNorm2:
-		return l.postFFNNorm2
-	case jlm.RoleRouterNorm:
-		return l.routerNorm
-	case jlm.RoleExpScale:
-		return l.expScale
-	case jlm.RoleAttnResScore:
-		return l.resAttn
-	case jlm.RoleFFNResScore:
-		return l.resFFN
-	case jlm.RoleFFNRoutedNorm:
-		return l.routedNorm
+		return l.outScaleRow, true
 	}
-	if h := l.q4e; h != nil {
-		switch r {
-		case jlm.RoleHCAttnNorm:
-			return h.attn.norm
-		case jlm.RoleHCFFNNorm:
-			return h.ffn.norm
-		case jlm.RoleNGramNormKey:
-			return h.ngNormK
-		case jlm.RoleNGramNormQuery:
-			return h.ngNormQ
-		case jlm.RoleNGramNormConv:
-			return h.ngNormC
-		case jlm.RoleHCHeadNorm:
-			return h.head.norm
-		}
-	}
-	return nil
+	return nil, false
 }
 
 // arenaSlots is how many pages the layer's arena holds, 0 for none.

@@ -27,15 +27,13 @@ import (
 // over the history in the block's recurrent tail run here. The head's mix is
 // the host's, as for every model with streams.
 
-// q4eBlock is one Qwen3.8-Flash-Next block's vectors; its matrices are the
-// layer's residents (slots 34..41).
+// q4eBlock is one Qwen3.8-Flash-Next block's n-gram convolution; its
+// matrices are the layer's residents (slots 34..41) and its vectors are in
+// the layer's vecs.
 type q4eBlock struct {
-	// The two hyper-connections' grouped norms, HCMult rows of n_embd.
-	normA, normF backend.Buf
-	// The n-gram block's three grouped norms and its convolution, a
-	// channel's taps contiguous as the file stores them (nil on every other
-	// block).
-	ngK, ngQ, ngC, ngConv backend.Buf
+	// ngConv is the n-gram block's convolution, a channel's taps contiguous
+	// as the file stores them (nil on every other block).
+	ngConv backend.Buf
 	// ngTaps is ngConv as the composer binds it, a row a channel (the
 	// buffer is ngConv's).
 	ngTaps resident
@@ -46,7 +44,7 @@ func (b *q4eBlock) bufs() []backend.Buf {
 	if b == nil {
 		return nil
 	}
-	return []backend.Buf{b.normA, b.normF, b.ngK, b.ngQ, b.ngC, b.ngConv}
+	return []backend.Buf{b.ngConv}
 }
 
 // q4eSlot says whether a Qwen3.8-Flash-Next block carries slot i (34..41):
@@ -62,41 +60,23 @@ func q4eSlot(p *nn.LayerPlan, i int) bool {
 	return i >= 34
 }
 
-// prepQ4E uploads block li's Qwen3.8-Flash-Next vectors.
+// prepQ4E uploads block li's n-gram convolution, which the composer binds
+// as a matrix.
 func (g *devTier) prepQ4E(l *layer, li int, p *nn.LayerPlan, w *nn.LayerWeights,
 	up func(*backend.Buf, []float32)) string {
 	q := p.Q4E
 	if q == nil {
 		return ""
 	}
-	hd := q.HCMult * p.NEmbd
 	b := &q4eBlock{ngram: q.NGramHere}
-	vecs := []struct {
-		name string
-		have []float32
-		want int
-		dst  *backend.Buf
-	}{{"attention hyper-connection norm", w.HCAttn.Norm, hd, &b.normA},
-		{"mixture hyper-connection norm", w.HCFFN.Norm, hd, &b.normF}}
 	if b.ngram {
-		vecs = append(vecs, []struct {
-			name string
-			have []float32
-			want int
-			dst  *backend.Buf
-		}{{"n-gram key norm", w.NGram.NormKey, hd, &b.ngK},
-			{"n-gram query norm", w.NGram.NormQuery, hd, &b.ngQ},
-			{"n-gram convolution norm", w.NGram.NormC, hd, &b.ngC},
-			{"n-gram convolution", w.NGram.Conv, hd * q.NGramConv, &b.ngConv}}...)
-	}
-	for _, v := range vecs {
-		if len(v.have) != v.want {
-			return fmt.Sprintf("block %d: the %s is %d wide, want %d", li, v.name, len(v.have), v.want)
+		hd := q.HCMult * p.NEmbd
+		if len(w.NGram.Conv) != hd*q.NGramConv {
+			return fmt.Sprintf("block %d: the n-gram convolution is %d wide, want %d", li, len(w.NGram.Conv),
+				hd*q.NGramConv)
 		}
-		up(v.dst, v.have)
-		l.auxBytes += uint64(4 * v.want)
-	}
-	if b.ngram {
+		up(&b.ngConv, w.NGram.Conv)
+		l.auxBytes += uint64(4 * len(w.NGram.Conv))
 		b.ngTaps = resident{qs: b.ngConv, nrows: hd, k: q.NGramConv, t: layout.Float32, ok: true}
 	}
 	l.q4e = b

@@ -40,29 +40,29 @@ const idxEps = 1e-6
 
 // loadIndexer reads block bi's indexer tensors and checks their shapes.
 func loadIndexer(l *layer, bi int32, cfg *Config,
-	get func(jlm.Role, int32, int32) (tensor, error), vec func(jlm.Role, int32) ([]float32, error)) error {
+	getTo func(*tensor, jlm.Role, int32, int32) error, vec func(jlm.Role, int32) ([]float32, error)) error {
 	var err error
-	if l.idxQB, err = get(jlm.RoleIdxQB, bi, -1); err != nil {
+	if err = getTo(&l.idxQB, jlm.RoleIdxQB, bi, -1); err != nil {
 		return err
 	}
-	if l.idxK, err = get(jlm.RoleIdxK, bi, -1); err != nil {
+	if err = getTo(&l.idxK, jlm.RoleIdxK, bi, -1); err != nil {
 		return err
 	}
-	if l.idxProj, err = get(jlm.RoleIdxProj, bi, -1); err != nil {
+	if err = getTo(&l.idxProj, jlm.RoleIdxProj, bi, -1); err != nil {
 		return err
 	}
-	if l.idxKNorm, err = vec(jlm.RoleIdxKNorm, bi); err != nil {
+	if _, err = vec(jlm.RoleIdxKNorm, bi); err != nil {
 		return err
 	}
-	if l.idxKNormB, err = vec(jlm.RoleIdxKNormB, bi); err != nil {
+	if _, err = vec(jlm.RoleIdxKNormB, bi); err != nil {
 		return err
 	}
 	h, d := cfg.IdxHeads, cfg.IdxHeadDim
 	if l.idxQB.k != cfg.QLoraRank || l.idxQB.rows != h*d || l.idxK.k != cfg.NEmbd || l.idxK.rows != d ||
-		l.idxProj.k != cfg.NEmbd || l.idxProj.rows != h || len(l.idxKNorm) != d || len(l.idxKNormB) != d {
+		l.idxProj.k != cfg.NEmbd || l.idxProj.rows != h || len(l.vector(jlm.RoleIdxKNorm)) != d || len(l.vector(jlm.RoleIdxKNormB)) != d {
 		return fmt.Errorf("model: block %d's indexer is q %dx%d, k %dx%d, weights %dx%d, norm %d/%d; "+
 			"want %d heads of %d over a %d-wide query latent", bi, l.idxQB.k, l.idxQB.rows, l.idxK.k,
-			l.idxK.rows, l.idxProj.k, l.idxProj.rows, len(l.idxKNorm), len(l.idxKNormB), h, d, cfg.QLoraRank)
+			l.idxK.rows, l.idxProj.k, l.idxProj.rows, len(l.vector(jlm.RoleIdxKNorm)), len(l.vector(jlm.RoleIdxKNormB)), h, d, cfg.QLoraRank)
 	}
 	return nil
 }

@@ -28,7 +28,11 @@ func TestOverlongContextIsReportedNotFatal(t *testing.T) {
 		if err != nil || fi.Size() > 512<<20 {
 			continue
 		}
-		m, err := Open(jlmOf(t, p))
+		dst, ok := sweepJLM(t, p)
+		if !ok {
+			continue
+		}
+		m, err := Open(dst)
 		if err != nil {
 			continue
 		}

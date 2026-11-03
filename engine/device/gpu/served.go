@@ -2409,153 +2409,66 @@ func (l *layer) weightsHeld() bool {
 	return true
 }
 
+// roleBuf is one of a block's vectors on the card.
+type roleBuf struct {
+	role jlm.Role
+	buf  backend.Buf
+}
+
 // roleVector is the block's vector its graph binds under role, nil for one
 // the tier does not hold.
 func (l *layer) roleVector(r jlm.Role) backend.Buf {
+	if b, ok := l.namedVector(r); ok {
+		return b
+	}
+	for _, v := range l.vecs {
+		if v.role == r {
+			return v.buf
+		}
+	}
+	return nil
+}
+
+// namedVector is the vector a field of the block holds under r, and whether
+// a field holds r at all: a role a field holds is read from it, nil or not,
+// as the host's is (model's layer.namedVector), and every other role from
+// vecs.
+func (l *layer) namedVector(r jlm.Role) (backend.Buf, bool) {
 	switch r {
 	case jlm.RoleAttnNorm:
-		return l.nAttn
+		return l.nAttn, true
 	case jlm.RoleFFNNorm:
-		return l.nFFN
+		return l.nFFN, true
 	case jlm.RoleAttnNormBias:
-		return l.nAttnB
+		return l.nAttnB, true
 	case jlm.RoleFFNNormBias:
-		return l.nFFNB
-	case jlm.RolePostAttnNorm:
-		return l.nPostAttn
-	case jlm.RolePostFFNNorm:
-		return l.nPostFFN
+		return l.nFFNB, true
 	case jlm.RoleAttnQNorm:
-		return l.nQ
+		return l.nQ, true
 	case jlm.RoleAttnKNorm:
-		return l.nK
-	case jlm.RoleIdxQNorm:
-		return l.nIdxQ
-	case jlm.RoleIdxKNorm:
-		return l.nIdxK
-	case jlm.RoleIdxKNormB:
-		return l.nIdxKB
-	case jlm.RoleAttnQBias:
-		return l.mvq.bias
-	case jlm.RoleAttnKBias:
-		return l.mvk.bias
-	case jlm.RoleAttnVBias:
-		return l.mvv.bias
-	case jlm.RoleAttnOutBias:
-		return l.mvo.bias
-	case jlm.RoleFFNUpBias:
-		return l.mvu.bias
-	case jlm.RoleFFNDownBias:
-		return l.mvd.bias
-	case jlm.RoleVFFNGateBias:
-		// A tower's gated MLP's gate bias, which no text role names.
-		return l.mvg.bias
+		return l.nK, true
 	case jlm.RoleVClamp:
-		return l.clampB
+		return l.clampB, true
 	case jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias:
 		// A post-norm block's norm over x + attention is the one the tier
 		// holds as its MLP's (nn.LayerPlan.PostResidNorm).
 		if l.nResid == nil {
-			return nil
+			return nil, true
 		}
 		if r == jlm.RoleAttnOutNorm {
-			return l.nFFN
+			return l.nFFN, true
 		}
-		return l.nFFNB
+		return l.nFFNB, true
 	case jlm.RoleLayerOutNorm:
-		return l.nResid
+		return l.nResid, true
 	case jlm.RoleLayerOutNormBias:
-		return l.nResidB
-	case jlm.RoleAttnSinks:
-		return l.sinks
-	case jlm.RoleAttnSubNorm:
-		return l.nSubAttn
-	case jlm.RoleFFNSubNorm:
-		return l.nSubFFN
+		return l.nResidB, true
 	case jlm.RoleXIELU:
-		return l.xielu
+		return l.xielu, true
 	case jlm.RoleLayerOutScale:
-		return l.outScale
-	case jlm.RoleAttnQANorm:
-		return l.nQA
-	case jlm.RoleAttnKVANorm:
-		return l.nKVA
-	case jlm.RoleRouterBias:
-		return l.routerB
-	case jlm.RoleExpGateBias:
-		return l.expGateB
-	case jlm.RoleExpUpBias:
-		return l.expUpB
-	case jlm.RoleExpDownBias:
-		return l.expDownB
-	case jlm.RoleExpProbsB:
-		return l.expSelB
-	case jlm.RoleShRouter:
-		return l.shRouter
-	case jlm.RoleSSMA:
-		return l.ssmA
-	case jlm.RoleSSMDtBias:
-		return l.ssmDt
-	case jlm.RoleSSMNorm:
-		return l.ssmNorm
-	case jlm.RoleSSMD:
-		return l.ssmD
-	case jlm.RoleSSMConvBias:
-		return l.ssmCB
-	case jlm.RoleSSMDtNorm:
-		return l.m1DtN
-	case jlm.RoleSSMBNorm:
-		return l.m1BN
-	case jlm.RoleSSMCNorm:
-		return l.m1CN
-	case jlm.RolePLEPostNorm:
-		return l.nPLE
-	case jlm.RoleStreamRouterNorm:
-		return l.altRouterNorm
-	case jlm.RoleStreamPredictCoef:
-		return l.altPredT
-	case jlm.RoleStreamCorrectCoef:
-		return l.altCorrT
-	case jlm.RoleStreamCorrectScale:
-		return l.altCorrScale
-	case jlm.RoleLowRankNorm:
-		return l.nLaurel
-	case jlm.RoleFFNNorm2:
-		return l.nFFN2
-	case jlm.RolePostFFNNorm1:
-		return l.nPost1
-	case jlm.RolePostFFNNorm2:
-		return l.nPost2
-	case jlm.RoleRouterNorm:
-		return l.nRouter
-	case jlm.RoleExpScale:
-		return l.expScale
-	case jlm.RoleAttnResScore, jlm.RoleFFNResScore, jlm.RoleFFNRoutedNorm:
-		if l.k3 == nil {
-			return nil
-		}
-		switch r {
-		case jlm.RoleAttnResScore:
-			return l.k3.resA
-		case jlm.RoleFFNResScore:
-			return l.k3.resF
-		}
-		return l.k3.rnorm
-	case jlm.RoleHCAttnNorm, jlm.RoleHCFFNNorm:
-		if l.q4e == nil {
-			return nil
-		}
-		if r == jlm.RoleHCAttnNorm {
-			return l.q4e.normA
-		}
-		return l.q4e.normF
-	case jlm.RoleNGramNormKey, jlm.RoleNGramNormQuery, jlm.RoleNGramNormConv:
-		if l.q4e == nil || !l.q4e.ngram {
-			return nil
-		}
-		return [...]backend.Buf{l.q4e.ngK, l.q4e.ngQ, l.q4e.ngC}[r-jlm.RoleNGramNormKey]
+		return l.outScale, true
 	}
-	return nil
+	return nil, false
 }
 
 // blockServes is why block li of this step is not one the composer serves

@@ -990,34 +990,49 @@ type tensor struct {
 	packed *nn.Packed
 }
 
+// vector is block l's vector the file stores under r, nil for none.
+func (l *layer) vector(r jlm.Role) []float32 { return nn.VectorOf(l.vecs, r) }
+
+// roleTensor is one of a block's matrices and the role it was loaded under.
+type roleTensor struct {
+	role jlm.Role
+	t    *tensor
+}
+
+// matrix is block l's matrix loaded under r, nil for none.
+func (l *layer) matrix(r jlm.Role) *tensor {
+	for _, m := range l.mats {
+		if m.role == r {
+			return m.t
+		}
+	}
+	return nil
+}
+
 type layer struct {
+	// vecs is every vector the file stores for the block, by role
+	// (jlm.Role.Expanded), read once at load. The named vectors below are
+	// these slices, not copies.
+	vecs []nn.RoleVector
+	// mats is every matrix of the block's the loader bound, by the role it
+	// was loaded under, pointing at the field that holds it: one role can
+	// land in different fields by block kind (RoleAttnQKV in wq or ssmIn).
+	mats []roleTensor
+
 	attnNorm, ffnNorm []float32 // norms are tiny and always F32; kept expanded
 	// attnNormB and ffnNormB are a LayerNorm's biases (C6), nil for RMSNorm
 	// and for a bias-free LayerNorm. ffnNorm itself is nil on a parallel block
 	// that shares one norm between its two branches (phi-2): the FFN reads the
 	// attention's normed row.
 	attnNormB, ffnNormB []float32
-	// upB and downB are an ungated FFN's biases (starcoder, phi-2). An ungated
-	// FFN is one whose gate tensor is absent.
-	upB, downB []float32
-	// gateB is a gated vision MLP's gate bias (Qwen2.5-VL), nil everywhere else.
-	gateB []float32
 	// clamp is a vision block's clipped-linear bounds (jlm.RoleVClamp): for
 	// q, k, v, o, gate, up and down, the input's and the output's minimum
 	// and maximum. nil everywhere but Gemma 4's tower.
 	clamp []float32
 	// qNorm and kNorm are head_dim wide and nil unless the architecture has
 	// them (qwen3). nil is the llama case, not an error path.
-	qNorm, kNorm []float32
-	// postAttnNorm and postFFNNorm are gemma2/gemma3's extra RMSNorms, applied
-	// to the attention and FFN outputs before each is folded into the residual.
-	// nil everywhere else.
-	postAttnNorm, postFFNNorm []float32
-	// attnSubNorm and ffnSubNorm are BitNet's inner RMSNorms: over the
-	// attention output before wo, and over act(gate)*up before down. nil
-	// everywhere else.
-	attnSubNorm, ffnSubNorm []float32
-	wq, wk, wv, wo          tensor
+	qNorm, kNorm   []float32
+	wq, wk, wv, wo tensor
 	// vFromK says the block has no v projection and v is k's (Gemma 4's
 	// global layers): wv is unbound and every path copies k's projection
 	// before k's norm and rotary run.
@@ -1030,22 +1045,13 @@ type layer struct {
 	// xielu is an Apertus block's activation numbers (jlm.RoleXIELU: alpha_p,
 	// alpha_n, beta, eps), read where Config.Act is ActXIELU; nil elsewhere.
 	xielu []float32
-	// Gemma 4's mixture block (Config.DenseMoE): the experts' pre-norm, the
-	// dense MLP's and the experts' post-norms, the router input's norm weight
-	// and each expert's weight factor. The dense MLP is shGate/shUp/shDown.
-	ffnNorm2, postFFNNorm1, postFFNNorm2, routerNorm, expScale []float32
 	// Gemma 4's per-layer embedding (Config.PLEDim): the gate from the
-	// residual, the projection back and its norm.
+	// residual and the projection back; its norm is in vecs.
 	pleGate, pleProj tensor
-	plePost          []float32
-	// Gemma 3n's AltUp and LAuReL (Config.PredStreams, altup.go): the router and
-	// its norm, the prediction and correction coefficients transposed, the
-	// active stream's scale before the per-layer gate, and LAuReL's two
-	// matrices and norm.
-	altRouter                                       tensor
-	altRouterNorm, altPredT, altCorrT, altCorrScale []float32
-	laurelL, laurelR                                tensor
-	laurelPost                                      []float32
+	// Gemma 3n's AltUp and LAuReL (Config.PredStreams, altup.go): the router
+	// and LAuReL's two matrices; their vectors are in vecs.
+	altRouter        tensor
+	laurelL, laurelR tensor
 	// Multi-head Latent Attention, all nil unless Config.KVLoraRank is set.
 	// wq is then the one-step query (DeepSeek-V2-Lite, q_lora_rank null) and
 	// wqa/wqb the two-step one; exactly one of those is populated.
@@ -1053,25 +1059,20 @@ type layer struct {
 	// wkb and wvb are banks, one sheet per head, read through bankExpert as an
 	// expert bank is, so the absorb runs as a single gather.
 	wqa, wqb, wkva, wkb, wvb tensor
-	qaNorm, kvaNorm          []float32
 	// DeepSeek V3.2's lightning indexer (Config.Indexer): its query from the
-	// query latent, its key and its LayerNorm, and the per-head weights.
+	// query latent, its key and the per-head weights; its key's LayerNorm is
+	// in vecs.
 	idxQB, idxK, idxProj tensor
-	idxKNorm, idxKNormB  []float32
-	// MiniMax Sparse Attention's query and its per-head norm (msa.go); the
-	// key is idxK with idxKNorm.
-	idxQ     tensor
-	idxQNorm []float32
+	// MiniMax Sparse Attention's query (msa.go); the key is idxK, the norms
+	// in vecs.
+	idxQ tensor
 	// q4e is Qwen3.8-Flash-Next's hyper-connections and n-gram weights.
 	q4e *q4eLayer
-	// Kimi-K3 (k3.go): the residual attention's two score vectors and their
-	// one-row F32 views (the generated matvec scores every stream with one
-	// call), the MLA output gate (RoleAttnGate in a full block; a linear
-	// block's is ssmGate), and the latent mixture's projections and norm.
-	resAttn, resFFN      []float32
+	// Kimi-K3 (k3.go): the MLA output gate (RoleAttnGate in a full block; a
+	// linear block's is ssmGate) and the latent mixture's projections; their
+	// vectors are in vecs.
 	mlaGate              tensor
 	routedDown, routedUp tensor
-	routedNorm           []float32
 	// kbHead and vbHead are wkb and wvb cut into one view per head, built once
 	// at load as l.experts is.
 	kbHead, vbHead []tensor
@@ -1079,24 +1080,9 @@ type layer struct {
 	// banksFrom the same for the expert bank views: bindPacked re-cuts only
 	// when a bank moved, since a cut is a fresh nn.Packed per view and a
 	// resident block is rebound every token.
-	headsFrom [2]bankSpans
-	banksFrom [3]bankSpans
-	// The attention biases (qwen2 and others); nil where the model has none,
-	// and the add is then skipped by one nil check.
-	bq, bk, bv, bo []float32
-	// sinks is gpt-oss's learned logit per query head, which joins that head's
-	// softmax and carries no value. nil everywhere else.
-	sinks          []float32
+	headsFrom      [2]bankSpans
+	banksFrom      [3]bankSpans
 	gate, up, down tensor
-	// routerB, expGateB, expUpB and expDownB are gpt-oss's mixture biases: one
-	// per expert for the router, and one row per expert, expert-major, for each
-	// bank -- expert e's gate bias is expGateB[e*NFFNExp:(e+1)*NFFNExp]. nil for
-	// every other mixture.
-	routerB, expGateB, expUpB, expDownB []float32
-	// expProbsB is DeepSeek's selection bias -- a DIFFERENT tensor from
-	// routerB, applied after the gating rather than to the logits. See
-	// jlm.RoleExpProbsB.
-	expProbsB []float32
 	// router is nil unless this layer's FFN is a mixture of experts, in which
 	// case gate/up/down hold the three 3-D banks and experts the per-expert
 	// views of them. The router tensor's presence is the graph's branch.
@@ -1111,11 +1097,9 @@ type layer struct {
 	// each is down(act(up(h))), the activation alone, as an ungated FFN is.
 	ungatedExp bool
 
-	// The shared expert runs for every token beside the routed ones. Its gate
-	// shRouter is a vector: sigma(dot(x, shRouter)) scales the whole
-	// contribution. shRouter is nil where the shared expert is ungated.
+	// The shared expert runs for every token beside the routed ones; its
+	// gate, where it has one, is a vector in vecs.
 	shGate, shUp, shDown tensor
-	shRouter             []float32
 
 	// The linear layer's weights. A hybrid's recurrent block projects the
 	// residual into one fused q|k|v vector, which lives in wq; the layer kind
@@ -1135,26 +1119,17 @@ type layer struct {
 	// one matrix for the second and derives the first from ssmBA's interleaved
 	// alpha stream.
 	ssmFA, ssmFB, ssmGA, ssmGB tensor
-	// ssmConv1d is the convolution kernel transposed at load into conv planes
-	// of channels, which is the layout the kernel reads; the file's is the
-	// other way round. ssmA and ssmDtBias are per value head and ssmNorm is one
-	// value head wide, shared by all of them.
-	ssmConv1d, ssmA, ssmDtBias, ssmNorm []float32
+	// ssmConv1d is the convolution kernel tap-major, as the file stores it.
+	// The block's vectors (A, the dt bias, the norm, D, the convolution bias,
+	// Mamba-1's three norms) are in vecs.
+	ssmConv1d []float32
 	// ssmConvTaps is the convolution kernel as the file stores it, the taps
 	// of a channel contiguous: the composer's OpStateConv reads it so.
 	ssmConvTaps tensor
-	// ssmD and ssmConvB are a Mamba-2 block's skip (one per value head) and
-	// convolution bias (one per channel, in q | k | v order); nil on the gated
-	// delta rule. A Mamba-2 block's ssmNorm is all Inner channels, a weight
-	// per group of Inner/Groups.
-	ssmD, ssmConvB []float32
 	// ssmXDt, ssmXB and ssmXC are a Mamba-1 block's x_proj (the dt
 	// bottleneck, B and C, each of the convolved x), and ssmDtProj takes the
-	// bottleneck back up to the channels. ssmDtNorm, ssmBNorm and ssmCNorm
-	// are Jamba's RMSNorms on the three (FalconMamba's are ones); nil where
-	// the block has none.
+	// bottleneck back up to the channels.
 	ssmXDt, ssmXB, ssmXC, ssmDtProj tensor
-	ssmDtNorm, ssmBNorm, ssmCNorm   []float32
 	// noFFN is a block that is its mixer alone: plain Mamba-2's, and a
 	// Nemotron-H mixer layer not followed by an MLP. It ends at the first
 	// residual on every entry point and every tier.
@@ -1185,6 +1160,13 @@ type expert struct{ gate, up, down tensor }
 
 // Model is a loaded transformer.
 type Model struct {
+	// vecs is every vector the file stores for the model rather than a block
+	// (jlm.DenseBlock, jlm.Role.Expanded), read once at load; the named ones
+	// below (outNorm, outNormB, ...) are these slices.
+	vecs []nn.RoleVector
+	// vecMats is each of those that is a table (the token-type rows) as a
+	// float matrix over the same slice, which an embedding binds as one.
+	vecMats []roleTensor
 	// staleKeyFault is the decision prefix gate's violation
 	// (TestDecisionReusesThePrefix): the key a restore names its pages by, in
 	// place of the prompt's. Nil in every real run.
@@ -1636,11 +1618,8 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	}
 	// Pages come in during build(), one block at a time, so a container larger
 	// than the host can still be opened.
-	var m *Model
-	if cf := c.Config(); cf != nil && cf.Arch.Encoder() {
-		err = fmt.Errorf("model: %s is an encoder, and an encoder's blocks have no runner: "+
-			"they are to run as the model's non-causal blocks, stated by the front end", cf.Arch)
-	} else if m, err = build(c, lo.tok...); err == nil {
+	m, err := build(c, lo.tok...)
+	if err == nil {
 		err = loadDenseHeads(c, m)
 	}
 	if err != nil {
@@ -2505,28 +2484,10 @@ func (m *Model) cpuRuns(lo, hi int, d int32) {
 //
 // It is the inverse of bindPacked; pageIn rebinds on the next fault.
 func releaseLayer(c *jlm.File, li int, l *layer, keepExperts bool) {
-	for _, t := range []*tensor{
-		&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down, &l.router,
-		&l.shGate, &l.shUp, &l.shDown,
-		&l.ssmGate, &l.ssmBA, &l.ssmOut, &l.ssmIn,
-		&l.wqa, &l.wqb, &l.wkva, &l.wkb, &l.wvb,
-		&l.mlaGate, &l.routedDown, &l.routedUp,
-		&l.ssmFA, &l.ssmFB, &l.ssmGA, &l.ssmGB, &l.ssmXDt, &l.ssmXB, &l.ssmXC, &l.ssmDtProj,
-		&l.pleGate, &l.pleProj,
-		&l.idxQB, &l.idxK, &l.idxProj, &l.idxQ,
-		&l.altRouter, &l.laurelL, &l.laurelR,
-	} {
-		t.data = nil
-		if t.packed != nil {
-			t.packed.QS, t.packed.D, t.packed.SC = nil, nil, nil
-		}
-	}
-	if l.q4e != nil {
-		for _, t := range l.q4e.tensors() {
-			t.data = nil
-			if t.packed != nil {
-				t.packed.QS, t.packed.D, t.packed.SC = nil, nil, nil
-			}
+	for _, m := range l.mats {
+		m.t.data = nil
+		if m.t.packed != nil {
+			m.t.packed.QS, m.t.packed.D, m.t.packed.SC = nil, nil, nil
 		}
 	}
 	if w := l.mtp; w != nil {
@@ -2581,35 +2542,8 @@ func releaseLayer(c *jlm.File, li int, l *layer, keepExperts bool) {
 // with the whole bank, making every expert expert 0 on an unpacked bank. The
 // views are rebuilt from the freshly bound bank instead.
 func bindPacked(c *jlm.File, cfg *Config, l *layer) error {
-	// Every matrix a block holds. A tensor missing from this list keeps a stale
-	// or empty span after a page-in and no host reader will accept it. This
-	// list, the build() bindings and releaseLayer must agree about a new
-	// matrix.
-	for _, t := range []*tensor{
-		&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down, &l.router,
-		&l.shGate, &l.shUp, &l.shDown,
-		&l.ssmGate, &l.ssmBA, &l.ssmOut, &l.ssmIn,
-		// MLA's five.
-		&l.wqa, &l.wqb, &l.wkva, &l.wkb, &l.wvb,
-		// Kimi-K3's MLA output gate and latent mixture projections.
-		&l.mlaGate, &l.routedDown, &l.routedUp,
-		// Kimi Delta Attention's four.
-		&l.ssmFA, &l.ssmFB, &l.ssmGA, &l.ssmGB, &l.ssmXDt, &l.ssmXB, &l.ssmXC, &l.ssmDtProj,
-		// Gemma 4's per-layer embedding gate and projection.
-		&l.pleGate, &l.pleProj,
-		// DeepSeek V3.2's indexer, and MiniMax-M3's query.
-		&l.idxQB, &l.idxK, &l.idxProj, &l.idxQ,
-		// Gemma 3n's AltUp router and LAuReL.
-		&l.altRouter, &l.laurelL, &l.laurelR,
-	} {
-		bindOne(c, t)
-	}
-	// DeepSeek V4's matrices, and the grouped projection's per-group views,
-	// re-cut when the bank moved as the heads below are.
-	if d := l.q4e; d != nil {
-		for _, t := range d.tensors() {
-			bindOne(c, t)
-		}
+	for _, m := range l.mats {
+		bindOne(c, m.t)
 	}
 	// A prediction block's eh_proj, head and embedding. The head and the
 	// embedding are copies of the trunk's tensors unless the block carries its
@@ -2778,7 +2712,31 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		return tn, nil
 	}
+	// cur is the block the loop below is loading; getTo binds a matrix of it
+	// into dst and records dst under role (layer.mats).
+	var cur *layer
+	getTo := func(dst *tensor, role jlm.Role, block, index int32) error {
+		t, err := get(role, block, index)
+		if err != nil {
+			return err
+		}
+		*dst = t
+		if cur != nil {
+			cur.mats = append(cur.mats, roleTensor{role, dst})
+		}
+		return nil
+	}
 	vec := func(role jlm.Role, block int32) ([]float32, error) {
+		if block >= 0 && int(block) < len(m.layers) {
+			if v := nn.VectorOf(m.layers[block].vecs, role); v != nil {
+				return v, nil
+			}
+		}
+		if block == jlm.DenseBlock {
+			if v := nn.VectorOf(m.vecs, role); v != nil {
+				return v, nil
+			}
+		}
 		e, ok := c.Find(role, block, -1)
 		if !ok {
 			return nil, fmt.Errorf("model: missing %v (block %d)", role, block)
@@ -2806,17 +2764,34 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		return vec(role, block)
 	}
+	var views []tensor
+	for i := range c.Entries() {
+		e := &c.Entries()[i]
+		if e.Index != -1 || !e.Role.Expanded() || e.Role.Vision() || e.Block != jlm.DenseBlock {
+			continue
+		}
+		v, err := vec(e.Role, e.Block)
+		if err != nil {
+			return nil, err
+		}
+		m.vecs = append(m.vecs, nn.RoleVector{Role: e.Role, V: v})
+		if e.NDim == 2 {
+			t := f32Tensor(v, int(e.Dims[1]), int(e.Dims[0]))
+			t.e = e
+			views = append(views, t)
+		}
+	}
+	for i := range views {
+		m.vecMats = append(m.vecMats, roleTensor{views[i].e.Role, &views[i]})
+	}
 
 	if m.embd, err = get(jlm.RoleTokenEmbd, jlm.DenseBlock, -1); err != nil {
 		return nil, err
 	}
-	// Qwen3.8-Flash-Next has no output norm: the head's hyper-connection mix
-	// stands in for it (q4e.go).
-	outNorm := vec
-	if cfg.Q4E() {
-		outNorm = optVec
-	}
-	if m.outNorm, err = outNorm(jlm.RoleOutputNorm, jlm.DenseBlock); err != nil {
+	// A model without an output norm stores none (an encoder; a model whose
+	// streams' mix stands in for it), and the head's graph states one only
+	// where it is stored.
+	if m.outNorm, err = optVec(jlm.RoleOutputNorm, jlm.DenseBlock); err != nil {
 		return nil, err
 	}
 	if p := cfg.PLEDim; p != 0 {
@@ -2955,6 +2930,18 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	}
 
 	m.layers = make([]layer, cfg.NLayer+cfg.NMTP)
+	for i := range c.Entries() {
+		e := &c.Entries()[i]
+		if e.Index != -1 || !e.Role.Expanded() || e.Role.Vision() || e.Block < 0 || int(e.Block) >= len(m.layers) {
+			continue
+		}
+		v, err := vec(e.Role, e.Block)
+		if err != nil {
+			return nil, err
+		}
+		l := &m.layers[e.Block]
+		l.vecs = append(l.vecs, nn.RoleVector{Role: e.Role, V: v})
+	}
 	// bind names one tensor a layer must have. It is a named type rather than
 	// an anonymous struct so a hybrid can substitute the attention four for the
 	// recurrent four without restating the literal.
@@ -2967,6 +2954,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// (jlm.alwaysResident), so build() touches no page and placement can
 		// happen before any block is read.
 		l := &m.layers[i]
+		cur = l
 		bi := int32(i)
 		want := []bind{
 			{jlm.RoleAttnQ, &l.wq}, {jlm.RoleAttnK, &l.wk},
@@ -3090,7 +3078,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				specs = slices.Delete(specs, 1, 2)
 			}
 			for _, spec := range specs {
-				if *spec.dst, err = get(spec.role, bi, -1); err != nil {
+				if err = getTo(spec.dst, spec.role, bi, -1); err != nil {
 					return nil, err
 				}
 			}
@@ -3113,19 +3101,19 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 						}
 						continue
 					}
-					if *spec.dst, err = get(spec.role, bi, -1); err != nil {
+					if err = getTo(spec.dst, spec.role, bi, -1); err != nil {
 						return nil, err
 					}
 				}
 				// Optional: DeepSeek's shared expert has no gate. See
 				// sharedExpert for why an absent one is weight 1 and not
 				// sigma(0).
-				if l.shRouter, err = optVec(jlm.RoleShRouter, bi); err != nil {
+				if _, err = optVec(jlm.RoleShRouter, bi); err != nil {
 					return nil, err
 				}
-				if l.shRouter != nil && len(l.shRouter) != cfg.NEmbd {
+				if l.vector(jlm.RoleShRouter) != nil && len(l.vector(jlm.RoleShRouter)) != cfg.NEmbd {
 					return nil, fmt.Errorf("model: block %d shared-expert gate is %d wide, want %d",
-						bi, len(l.shRouter), cfg.NEmbd)
+						bi, len(l.vector(jlm.RoleShRouter)), cfg.NEmbd)
 				}
 			}
 		}
@@ -3150,27 +3138,19 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				l.vFromK = true
 				continue
 			}
-			if *spec.dst, err = get(spec.role, bi, -1); err != nil {
+			if err = getTo(spec.dst, spec.role, bi, -1); err != nil {
 				return nil, err
 			}
 		}
 		// A post-norm block (OLMo 2, EXAONE 4) has no pre-norms at all: each
 		// branch reads the residual as it is and normalises its output instead.
-		postNorm := c.Has(jlm.RolePostAttnNorm, bi, -1) && c.Has(jlm.RolePostFFNNorm, bi, -1)
-		if (postNorm || cfg.Q4E()) && !c.Has(jlm.RoleAttnNorm, bi, -1) {
-			// Qwen3.8-Flash-Next's hyper-connection mixes are its norms.
-			l.attnNorm = nil
-		} else if l.attnNorm, err = vec(jlm.RoleAttnNorm, bi); err != nil {
+		// A block stores the pre-norms it has: none on a post-norm block (OLMo
+		// 2's, an encoder's norms after each residual add), no FFN norm on a
+		// parallel block sharing one; the front end states the norms stored.
+		if l.attnNorm, err = optVec(jlm.RoleAttnNorm, bi); err != nil {
 			return nil, err
 		}
-		// A parallel block may share one norm between its branches, and then
-		// has no ffn_norm. Every other sequential block needs its own.
-		if cfg.Parallel || (postNorm && l.attnNorm == nil) || l.noFFN || cfg.Q4E() {
-			l.ffnNorm, err = optVec(jlm.RoleFFNNorm, bi)
-		} else {
-			l.ffnNorm, err = vec(jlm.RoleFFNNorm, bi)
-		}
-		if err != nil {
+		if l.ffnNorm, err = optVec(jlm.RoleFFNNorm, bi); err != nil {
 			return nil, err
 		}
 		for _, b := range []struct {
@@ -3178,7 +3158,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			dst  *[]float32
 		}{
 			{jlm.RoleAttnNormBias, &l.attnNormB}, {jlm.RoleFFNNormBias, &l.ffnNormB},
-			{jlm.RoleFFNUpBias, &l.upB}, {jlm.RoleFFNDownBias, &l.downB},
 		} {
 			if *b.dst, err = optVec(b.role, bi); err != nil {
 				return nil, err
@@ -3192,7 +3171,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		// FFN biases belong only to a dense ungated FFN; a mixture's are the
 		// experts' own (RoleExpUpBias). Refused rather than guessed.
-		if (l.upB != nil || l.downB != nil) && (l.gate.e != nil || cfg.MoEAt(i)) {
+		if (l.vector(jlm.RoleFFNUpBias) != nil || l.vector(jlm.RoleFFNDownBias) != nil) && (l.gate.e != nil || cfg.MoEAt(i)) {
 			return nil, fmt.Errorf("model: block %d carries FFN biases on a gated or mixture FFN", bi)
 		}
 		// Apertus's xIELU: four numbers on every block, and only an ungated
@@ -3210,22 +3189,22 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			return nil, fmt.Errorf("model: block %d carries xIELU numbers and %s runs %v", bi, cfg.Arch, cfg.Act)
 		}
 		// gemma2/gemma3's post-norms, when the file carries them.
-		if l.postAttnNorm, err = optVec(jlm.RolePostAttnNorm, bi); err != nil {
+		if _, err = optVec(jlm.RolePostAttnNorm, bi); err != nil {
 			return nil, err
 		}
 		// BitNet's two inner norms: both on every block of a BitNet, and on
 		// no other model, each as wide as what it normalises.
-		if l.attnSubNorm, err = optVec(jlm.RoleAttnSubNorm, bi); err != nil {
+		if _, err = optVec(jlm.RoleAttnSubNorm, bi); err != nil {
 			return nil, err
 		}
-		if l.ffnSubNorm, err = optVec(jlm.RoleFFNSubNorm, bi); err != nil {
+		if _, err = optVec(jlm.RoleFFNSubNorm, bi); err != nil {
 			return nil, err
 		}
-		if (l.attnSubNorm != nil || l.ffnSubNorm != nil) != cfg.TokenAct ||
-			cfg.TokenAct && (len(l.attnSubNorm) != cfg.QDimAt(i) || len(l.ffnSubNorm) != cfg.NFFNAt(i) ||
+		if (l.vector(jlm.RoleAttnSubNorm) != nil || l.vector(jlm.RoleFFNSubNorm) != nil) != cfg.TokenAct ||
+			cfg.TokenAct && (len(l.vector(jlm.RoleAttnSubNorm)) != cfg.QDimAt(i) || len(l.vector(jlm.RoleFFNSubNorm)) != cfg.NFFNAt(i) ||
 				l.gate.e == nil || cfg.MoEAt(i) || cfg.Parallel) {
 			return nil, fmt.Errorf("model: block %d: inner norms %d and %d wide on %s (a gated dense FFN of %d, "+
-				"attention %d wide, per-token activations %v)", bi, len(l.attnSubNorm), len(l.ffnSubNorm),
+				"attention %d wide, per-token activations %v)", bi, len(l.vector(jlm.RoleAttnSubNorm)), len(l.vector(jlm.RoleFFNSubNorm)),
 				cfg.Arch, cfg.NFFNAt(i), cfg.QDimAt(i), cfg.TokenAct)
 		}
 		// Gemma 4's per-block output scalar, when the file carries one.
@@ -3237,29 +3216,29 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			}
 			l.outScale, l.outScaleRow = sc[0], sc
 		}
-		if l.postFFNNorm, err = optVec(jlm.RolePostFFNNorm, bi); err != nil {
+		if _, err = optVec(jlm.RolePostFFNNorm, bi); err != nil {
 			return nil, err
 		}
 		// Gemma 4's per-layer embedding, gated in after the FFN.
 		if p := cfg.PLEDim; p != 0 {
-			if l.pleGate, err = get(jlm.RolePLEGate, bi, -1); err != nil {
+			if err = getTo(&l.pleGate, jlm.RolePLEGate, bi, -1); err != nil {
 				return nil, err
 			}
-			if l.pleProj, err = get(jlm.RolePLEProj, bi, -1); err != nil {
+			if err = getTo(&l.pleProj, jlm.RolePLEProj, bi, -1); err != nil {
 				return nil, err
 			}
-			if l.plePost, err = vec(jlm.RolePLEPostNorm, bi); err != nil {
+			if _, err = vec(jlm.RolePLEPostNorm, bi); err != nil {
 				return nil, err
 			}
 			if l.pleGate.k != cfg.NEmbd || l.pleGate.rows != p || l.pleProj.k != p ||
-				l.pleProj.rows != cfg.NEmbd || len(l.plePost) != cfg.NEmbd {
+				l.pleProj.rows != cfg.NEmbd || len(l.vector(jlm.RolePLEPostNorm)) != cfg.NEmbd {
 				return nil, fmt.Errorf("model: block %d's per-layer embedding gate is %dx%d, its "+
 					"projection %dx%d and its norm %d, want %d and %d", bi, l.pleGate.k, l.pleGate.rows,
-					l.pleProj.k, l.pleProj.rows, len(l.plePost), cfg.NEmbd, p)
+					l.pleProj.k, l.pleProj.rows, len(l.vector(jlm.RolePLEPostNorm)), cfg.NEmbd, p)
 			}
 		}
 		if cfg.PredStreams != 0 {
-			if err := loadAltUpLayer(l, bi, cfg, get, vec); err != nil {
+			if err := loadAltUpLayer(l, bi, cfg, getTo); err != nil {
 				return nil, err
 			}
 		}
@@ -3270,42 +3249,22 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if cfg.DenseMoE && cfg.MoEAt(i) {
 			for _, v := range []struct {
 				role jlm.Role
-				dst  *[]float32
 				want int
 			}{
-				{jlm.RoleFFNNorm2, &l.ffnNorm2, cfg.NEmbd},
-				{jlm.RolePostFFNNorm1, &l.postFFNNorm1, cfg.NEmbd},
-				{jlm.RolePostFFNNorm2, &l.postFFNNorm2, cfg.NEmbd},
-				{jlm.RoleRouterNorm, &l.routerNorm, cfg.NEmbd},
-				{jlm.RoleExpScale, &l.expScale, cfg.NExpert},
+				{jlm.RoleFFNNorm2, cfg.NEmbd},
+				{jlm.RolePostFFNNorm1, cfg.NEmbd},
+				{jlm.RolePostFFNNorm2, cfg.NEmbd},
+				{jlm.RoleRouterNorm, cfg.NEmbd},
+				{jlm.RoleExpScale, cfg.NExpert},
 			} {
-				if *v.dst, err = vec(v.role, bi); err != nil {
-					return nil, err
-				}
-				if len(*v.dst) != v.want {
+				if got := l.vector(v.role); len(got) != v.want {
 					return nil, fmt.Errorf("model: block %d %s has %d values, want %d",
-						bi, v.role, len(*v.dst), v.want)
+						bi, v.role, len(got), v.want)
 				}
 			}
-			if l.postFFNNorm == nil || l.ffnNorm == nil {
+			if l.vector(jlm.RolePostFFNNorm) == nil || l.ffnNorm == nil {
 				return nil, fmt.Errorf("model: block %d is a dense-and-mixture block with no "+
 					"ffn_norm or post_ffw_norm", bi)
-			}
-		}
-		// Attention biases, when the file carries them.
-		for _, b := range []struct {
-			role jlm.Role
-			dst  *[]float32
-		}{
-			{jlm.RoleAttnQBias, &l.bq}, {jlm.RoleAttnKBias, &l.bk},
-			{jlm.RoleAttnVBias, &l.bv}, {jlm.RoleAttnOutBias, &l.bo},
-			{jlm.RoleAttnSinks, &l.sinks},
-			{jlm.RoleRouterBias, &l.routerB}, {jlm.RoleExpProbsB, &l.expProbsB},
-			{jlm.RoleExpGateBias, &l.expGateB},
-			{jlm.RoleExpUpBias, &l.expUpB}, {jlm.RoleExpDownBias, &l.expDownB},
-		} {
-			if *b.dst, err = optVec(b.role, bi); err != nil {
-				return nil, err
 			}
 		}
 		// A bias of the wrong length would still run, landing on a neighbour's
@@ -3315,16 +3274,16 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			v    []float32
 			want int
 		}{
-			{"attn_sinks", l.sinks, cfg.NHead},
-			{"router bias", l.routerB, cfg.NExpert},
-			{"expert selection bias", l.expProbsB, cfg.NExpert},
-			{"expert gate bias", l.expGateB, cfg.NExpert * cfg.NFFNExp},
-			{"expert up bias", l.expUpB, cfg.NExpert * cfg.NFFNExp},
-			{"expert down bias", l.expDownB, cfg.NExpert * cfg.NEmbd},
+			{"attn_sinks", l.vector(jlm.RoleAttnSinks), cfg.NHead},
+			{"router bias", l.vector(jlm.RoleRouterBias), cfg.NExpert},
+			{"expert selection bias", l.vector(jlm.RoleExpProbsB), cfg.NExpert},
+			{"expert gate bias", l.vector(jlm.RoleExpGateBias), cfg.NExpert * cfg.NFFNExp},
+			{"expert up bias", l.vector(jlm.RoleExpUpBias), cfg.NExpert * cfg.NFFNExp},
+			{"expert down bias", l.vector(jlm.RoleExpDownBias), cfg.NExpert * cfg.NEmbd},
 			{"attn_norm bias", l.attnNormB, cfg.NEmbd},
 			{"ffn_norm bias", l.ffnNormB, cfg.NEmbd},
-			{"ffn_up bias", l.upB, cfg.NFFN},
-			{"ffn_down bias", l.downB, cfg.NEmbd},
+			{"ffn_up bias", l.vector(jlm.RoleFFNUpBias), cfg.NFFN},
+			{"ffn_down bias", l.vector(jlm.RoleFFNDownBias), cfg.NEmbd},
 		} {
 			if b.v != nil && len(b.v) != b.want {
 				return nil, fmt.Errorf("model: block %d %s has %d values, want %d",
@@ -3334,12 +3293,13 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// The recurrent vectors are small and dense. ssm_conv1d is a matrix by
 		// shape and a per-channel window by use, so it is expanded here.
 		if linear {
+			var discard []float32
 			for _, v := range []struct {
 				role jlm.Role
 				dst  *[]float32
 			}{
-				{jlm.RoleSSMConv1d, &l.ssmConv1d}, {jlm.RoleSSMA, &l.ssmA},
-				{jlm.RoleSSMDtBias, &l.ssmDtBias}, {jlm.RoleSSMNorm, &l.ssmNorm},
+				{jlm.RoleSSMConv1d, &l.ssmConv1d}, {jlm.RoleSSMA, &discard},
+				{jlm.RoleSSMDtBias, &discard}, {jlm.RoleSSMNorm, &discard},
 			} {
 				// A short convolution has its window and nothing else.
 				if cfg.ShortConv() && v.role != jlm.RoleSSMConv1d {
@@ -3387,32 +3347,24 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				// A is a row of the state per channel; D, dt's bias and the
 				// convolution's bias one per channel; no gated norm.
 				gateWidth, normWidth = g.vHeads*g.kDim, 0
-				if l.ssmD, err = vec(jlm.RoleSSMD, bi); err != nil {
+				if _, err = vec(jlm.RoleSSMD, bi); err != nil {
 					return nil, err
 				}
-				if l.ssmConvB, err = optVec(jlm.RoleSSMConvBias, bi); err != nil {
+				if _, err = optVec(jlm.RoleSSMConvBias, bi); err != nil {
 					return nil, err
-				}
-				if l.ssmConvB == nil {
-					l.ssmConvB = make([]float32, g.chans)
 				}
 				dWidth, cbWidth = g.vHeads, g.chans
 				for _, v := range []struct {
 					role jlm.Role
-					dst  *[]float32
 					want int
-				}{{jlm.RoleSSMDtNorm, &l.ssmDtNorm, g.rank}, {jlm.RoleSSMBNorm, &l.ssmBNorm, g.kDim},
-					{jlm.RoleSSMCNorm, &l.ssmCNorm, g.kDim}} {
-					if *v.dst, err = optVec(v.role, bi); err != nil {
-						return nil, err
-					}
-					if *v.dst != nil && len(*v.dst) != v.want {
-						return nil, fmt.Errorf("model: block %d %v is %d wide, want %d", bi, v.role, len(*v.dst), v.want)
+				}{{jlm.RoleSSMDtNorm, g.rank}, {jlm.RoleSSMBNorm, g.kDim}, {jlm.RoleSSMCNorm, g.kDim}} {
+					if got := l.vector(v.role); got != nil && len(got) != v.want {
+						return nil, fmt.Errorf("model: block %d %v is %d wide, want %d", bi, v.role, len(got), v.want)
 					}
 				}
 				// The three norms come together or not at all, as llama.cpp
 				// applies them.
-				if (l.ssmDtNorm == nil) != (l.ssmBNorm == nil) || (l.ssmDtNorm == nil) != (l.ssmCNorm == nil) {
+				if (l.vector(jlm.RoleSSMDtNorm) == nil) != (l.vector(jlm.RoleSSMBNorm) == nil) || (l.vector(jlm.RoleSSMDtNorm) == nil) != (l.vector(jlm.RoleSSMCNorm) == nil) {
 					return nil, fmt.Errorf("model: block %d carries some of Mamba-1's dt/B/C norms and not all", bi)
 				}
 				for _, m := range []struct {
@@ -3430,17 +3382,14 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			if g.ssd {
 				// Mamba-2's two vectors more, and its gated norm's weight is
 				// every channel of y, a group of Inner/Groups at a time.
-				if l.ssmD, err = vec(jlm.RoleSSMD, bi); err != nil {
+				if _, err = vec(jlm.RoleSSMD, bi); err != nil {
 					return nil, err
 				}
-				if l.ssmConvB, err = optVec(jlm.RoleSSMConvBias, bi); err != nil {
+				if _, err = optVec(jlm.RoleSSMConvBias, bi); err != nil {
 					return nil, err
-				}
-				if l.ssmConvB == nil {
-					l.ssmConvB = make([]float32, g.chans)
 				}
 				normWidth, dWidth, cbWidth = g.vHeads*g.vDim, g.vHeads, g.chans
-				if l.ssmNorm == nil {
+				if l.vector(jlm.RoleSSMNorm) == nil {
 					normWidth = 0
 				}
 			}
@@ -3451,9 +3400,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			}{
 				// KDA carries one decay rate and delta-t bias per (head,
 				// channel); qwen3next one per head.
-				{"ssm_a", len(l.ssmA), gateWidth}, {"ssm_dt.bias", len(l.ssmDtBias), dtWidth},
-				{"ssm_norm", len(l.ssmNorm), normWidth},
-				{"ssm_d", len(l.ssmD), dWidth}, {"ssm_conv1d.bias", len(l.ssmConvB), cbWidth},
+				{"ssm_a", len(l.vector(jlm.RoleSSMA)), gateWidth}, {"ssm_dt.bias", len(l.vector(jlm.RoleSSMDtBias)), dtWidth},
+				{"ssm_norm", len(l.vector(jlm.RoleSSMNorm)), normWidth},
+				{"ssm_d", len(l.vector(jlm.RoleSSMD)), dWidth}, {"ssm_conv1d.bias", len(l.vector(jlm.RoleSSMConvBias)), cbWidth},
 			} {
 				if v.have != v.want {
 					return nil, fmt.Errorf("model: block %d %s is %d wide, want %d", bi, v.name, v.have, v.want)
@@ -3463,11 +3412,11 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if mla {
 			// The kv latent's norm is always there; the q latent's exists only
 			// in the two-step form, which is what QLoraRank says.
-			if l.kvaNorm, err = vec(jlm.RoleAttnKVANorm, bi); err != nil {
+			if _, err = vec(jlm.RoleAttnKVANorm, bi); err != nil {
 				return nil, err
 			}
 			if cfg.QLoraRank != 0 {
-				if l.qaNorm, err = vec(jlm.RoleAttnQANorm, bi); err != nil {
+				if _, err = vec(jlm.RoleAttnQANorm, bi); err != nil {
 					return nil, err
 				}
 			}
@@ -3478,8 +3427,8 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				have int
 				want int
 			}{
-				{"attn_kv_a_norm", len(l.kvaNorm), cfg.KVLoraRank},
-				{"attn_q_a_norm", len(l.qaNorm), cfg.QLoraRank},
+				{"attn_kv_a_norm", len(l.vector(jlm.RoleAttnKVANorm)), cfg.KVLoraRank},
+				{"attn_q_a_norm", len(l.vector(jlm.RoleAttnQANorm)), cfg.QLoraRank},
 			} {
 				if v.want != 0 && v.have != v.want {
 					return nil, fmt.Errorf("model: block %d %s is %d wide, want %d",
@@ -3487,7 +3436,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				}
 			}
 			if cfg.Indexer() {
-				if err := loadIndexer(l, bi, cfg, get, vec); err != nil {
+				if err := loadIndexer(l, bi, cfg, getTo, vec); err != nil {
 					return nil, err
 				}
 			}
@@ -3508,18 +3457,18 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			}
 		}
 		if cfg.MSAAt(i) {
-			if err := loadMSA(l, bi, cfg, get, vec); err != nil {
+			if err := loadMSA(l, bi, cfg, getTo, vec); err != nil {
 				return nil, err
 			}
 		}
-		if err := loadK3(l, bi, cfg, c, get, vec); err != nil {
+		if err := loadK3(l, bi, cfg, c, getTo); err != nil {
 			return nil, err
 		}
-		if err := loadQ4E(l, bi, cfg, get, vec); err != nil {
+		if err := loadQ4E(l, bi, cfg, getTo, vec); err != nil {
 			return nil, err
 		}
 		if cfg.QSAAt(i) {
-			if err := loadQSA(l, bi, cfg, get, vec); err != nil {
+			if err := loadQSA(l, bi, cfg, getTo, vec); err != nil {
 				return nil, err
 			}
 		}
@@ -3595,6 +3544,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			}
 		}
 	}
+	cur = nil
 	if err := buildMTP(c, m, get, vec, optVec); err != nil {
 		return nil, err
 	}
@@ -3872,16 +3822,8 @@ func (m *Model) maxMatVec() (rows, k int) {
 		}
 	}
 	for i := range m.layers {
-		l := &m.layers[i]
-		for _, t := range []*tensor{&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down, &l.router,
-			&l.pleGate, &l.pleProj, &l.idxQB, &l.idxK, &l.idxProj, &l.idxQ, &l.altRouter, &l.laurelL,
-			&l.laurelR, &l.wqa, &l.wqb} {
-			see(t)
-		}
-		if l.q4e != nil {
-			for _, t := range l.q4e.tensors() {
-				see(t)
-			}
+		for _, mt := range m.layers[i].mats {
+			see(mt.t)
 		}
 	}
 	see(&m.output)
@@ -3972,7 +3914,7 @@ func containerShape(e *jlm.Entry) (tensor, bool) {
 // architecture that ships them needs no entry anywhere.
 func (m *Model) hasNoPreNorm() bool {
 	for i := range m.layers {
-		if m.layers[i].attnNorm == nil && m.layers[i].postAttnNorm != nil {
+		if m.layers[i].attnNorm == nil && m.layers[i].vector(jlm.RolePostAttnNorm) != nil {
 			return true
 		}
 	}
@@ -3982,7 +3924,7 @@ func (m *Model) hasNoPreNorm() bool {
 // hasSubNorm reports whether some block carries BitNet's inner norms.
 func (m *Model) hasSubNorm() bool {
 	for i := range m.layers {
-		if l := &m.layers[i]; l.attnSubNorm != nil || l.ffnSubNorm != nil {
+		if l := &m.layers[i]; l.vector(jlm.RoleAttnSubNorm) != nil || l.vector(jlm.RoleFFNSubNorm) != nil {
 			return true
 		}
 	}
@@ -3994,7 +3936,7 @@ func (m *Model) hasPostNorm() bool {
 	// By index: a copy of each layer would read its bindings, which another
 	// instance's placement may be writing.
 	for i := range m.layers {
-		if l := &m.layers[i]; l.postAttnNorm != nil || l.postFFNNorm != nil {
+		if l := &m.layers[i]; l.vector(jlm.RolePostAttnNorm) != nil || l.vector(jlm.RolePostFFNNorm) != nil {
 			return true
 		}
 	}

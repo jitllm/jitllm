@@ -525,7 +525,7 @@ func (g *devTier) persistBuild(ps *persister, lo, hi, w int) (persistSeg, error)
 // streamed mixture's selection read back, a linear block's own
 // submissions) runs per-op.
 func persistable(l *layer, bs *blockScratch) bool {
-	return l != nil && l.stream == nil && !l.linear && l.k3 == nil && l.q4e == nil && l.altRouter == nil
+	return l != nil && l.stream == nil && !l.linear && !l.k3 && l.q4e == nil && l.altRouter == nil
 }
 
 // persistDrain issues what is held and keeps collecting.

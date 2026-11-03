@@ -1,5 +1,7 @@
 package model
 
+import "github.com/jitllm/jitllm/format/jlm"
+
 // GLM-4-0414's text block (jlm.ArchGLM4), the text model of GLM-4.1V and
 // GLM-4.6V-Flash, is gated by the classic-transformer (C6) harness as the
 // dense llama family is (densearch_test.go): transformers' own Glm4ForCausalLM
@@ -16,9 +18,9 @@ func glm4Fixtures() []struct {
 		sel  func(m *Model) bool
 	}{{"synth-glm4", func(m *Model) bool {
 		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "glm4" && !c.RopeNeox && c.NRot < c.HeadDim && l.bq != nil && l.bk != nil &&
-			l.bv != nil && l.bo == nil && l.attnNorm != nil && l.ffnNorm != nil && l.postAttnNorm != nil &&
-			l.postFFNNorm != nil && l.gate.e != nil && c.NKVHead < c.NHead && !c.TiedEmbd
+		return c.Arch == "glm4" && !c.RopeNeox && c.NRot < c.HeadDim && l.vector(jlm.RoleAttnQBias) != nil && l.vector(jlm.RoleAttnKBias) != nil &&
+			l.vector(jlm.RoleAttnVBias) != nil && l.vector(jlm.RoleAttnOutBias) == nil && l.attnNorm != nil && l.ffnNorm != nil && l.vector(jlm.RolePostAttnNorm) != nil &&
+			l.vector(jlm.RolePostFFNNorm) != nil && l.gate.e != nil && c.NKVHead < c.NHead && !c.TiedEmbd
 	}}}
 }
 

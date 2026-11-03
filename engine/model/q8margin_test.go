@@ -90,7 +90,7 @@ func TestQ8RouterMargins(t *testing.T) {
 		// selection scores
 		for p, r := range out {
 			for l, lg := range r.logits {
-				bias := m.layers[l].expProbsB
+				bias := m.layers[l].vector(jlm.RoleExpProbsB)
 				sc := make([]float64, len(lg))
 				idx := make([]int, len(lg))
 				for e, x := range lg {

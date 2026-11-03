@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -124,28 +125,29 @@ func TestSynthGPTOSSOnEveryDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if m.layers[0].sinks == nil || m.layers[0].routerB == nil || m.layers[0].expDownB == nil {
+	if m.layers[0].vector(jlm.RoleAttnSinks) == nil || m.layers[0].vector(jlm.RoleRouterBias) == nil || m.layers[0].vector(jlm.RoleExpDownBias) == nil {
 		t.Fatal("synth-gptoss carries no sinks or mixture biases: this gate would test nothing")
 	}
 	for li := range m.layers {
 		l := &m.layers[li]
-		pin := append([]float32(nil), l.routerB...)
+		pin := append([]float32(nil), l.vector(jlm.RoleRouterBias)...)
 		for j := 0; j < m.Cfg.NExpertUsed; j++ {
 			pin[(li*m.Cfg.NExpertUsed+j)%m.Cfg.NExpert] += 100
 		}
-		l.routerB = pin
+		setVec(l, jlm.RoleRouterBias, func([]float32) []float32 { return pin })
 		// Scale the down and up biases so a wrong bias is visible above the
 		// int8 noise (swiglu-oai clamps the up side at 7). Both tiers run the
 		// scaled values.
-		db := append([]float32(nil), l.expDownB...)
+		db := append([]float32(nil), l.vector(jlm.RoleExpDownBias)...)
 		for i := range db {
 			db[i] *= 50
 		}
-		ub := append([]float32(nil), l.expUpB...)
+		ub := append([]float32(nil), l.vector(jlm.RoleExpUpBias)...)
 		for i := range ub {
 			ub[i] *= 10
 		}
-		l.expDownB, l.expUpB = db, ub
+		setVec(l, jlm.RoleExpDownBias, func([]float32) []float32 { return db })
+		setVec(l, jlm.RoleExpUpBias, func([]float32) []float32 { return ub })
 	}
 	run := func(st *Instance) [][]float32 {
 		var out [][]float32

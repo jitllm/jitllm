@@ -43,9 +43,9 @@ func k3Fixtures() []struct {
 			for i := range m.layers {
 				l := &m.layers[i]
 				lin := c.LayerKind(i).Recurrent()
-				ok = ok && len(l.resAttn) == 64 && len(l.resFFN) == 64 &&
+				ok = ok && len(l.vector(jlm.RoleAttnResScore)) == 64 && len(l.vector(jlm.RoleFFNResScore)) == 64 &&
 					(l.mlaGate.e != nil) == !lin && (lin == (l.ssmGate.e != nil)) && l.ssmGA.e == nil &&
-					(l.routedDown.e != nil) == (i >= 1) && (l.routedNorm != nil) == (i >= 1)
+					(l.routedDown.e != nil) == (i >= 1) && (l.vector(jlm.RoleFFNRoutedNorm) != nil) == (i >= 1)
 			}
 			return ok
 		}},

@@ -24,7 +24,11 @@ func TestChatTemplateIsAppliedAndSpecialsAreNotDoubled(t *testing.T) {
 		if err != nil || fi.Size() > 2<<30 {
 			continue // a metadata+tokenizer test wants breadth, not the big files
 		}
-		m, err := Open(jlmOf(t, p))
+		dst, ok := sweepJLM(t, p)
+		if !ok {
+			continue
+		}
+		m, err := Open(dst)
 		if err != nil {
 			continue
 		}

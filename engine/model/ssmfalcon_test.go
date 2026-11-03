@@ -17,7 +17,7 @@ func falconh1Block(m *Model, norm bool) bool {
 	for i := range m.layers {
 		l := &m.layers[i]
 		ok = ok && c.LayerKind(i) == jlm.LayerSSDAttn && !l.noFFN && l.ssmIn.rows == 128+2*int(c.SSM.Groups)*16 &&
-			l.wq.rows == 64 && l.wk.rows == 32 && len(l.ssmD) == 8 && (l.ssmNorm != nil) == norm
+			l.wq.rows == 64 && l.wk.rows == 32 && len(l.vector(jlm.RoleSSMD)) == 8 && (l.vector(jlm.RoleSSMNorm) != nil) == norm
 	}
 	return ok
 }

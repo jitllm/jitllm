@@ -41,26 +41,26 @@ type qsaScratch struct {
 
 // loadQSA reads block bi's indexer tensors and checks their shapes.
 func loadQSA(l *layer, bi int32, cfg *Config,
-	get func(jlm.Role, int32, int32) (tensor, error), vec func(jlm.Role, int32) ([]float32, error)) error {
+	getTo func(*tensor, jlm.Role, int32, int32) error, vec func(jlm.Role, int32) ([]float32, error)) error {
 	var err error
-	if l.idxQ, err = get(jlm.RoleIdxQ, bi, -1); err != nil {
+	if err = getTo(&l.idxQ, jlm.RoleIdxQ, bi, -1); err != nil {
 		return err
 	}
-	if l.idxK, err = get(jlm.RoleIdxK, bi, -1); err != nil {
+	if err = getTo(&l.idxK, jlm.RoleIdxK, bi, -1); err != nil {
 		return err
 	}
-	if l.idxQNorm, err = vec(jlm.RoleIdxQNorm, bi); err != nil {
+	if _, err = vec(jlm.RoleIdxQNorm, bi); err != nil {
 		return err
 	}
-	if l.idxKNorm, err = vec(jlm.RoleIdxKNorm, bi); err != nil {
+	if _, err = vec(jlm.RoleIdxKNorm, bi); err != nil {
 		return err
 	}
 	h, d := cfg.IdxHeads, cfg.IdxHeadDim
 	if l.idxQ.k != cfg.NEmbd || l.idxQ.rows != h*d || l.idxK.k != cfg.NEmbd || l.idxK.rows != d ||
-		len(l.idxQNorm) != d || len(l.idxKNorm) != d {
+		len(l.vector(jlm.RoleIdxQNorm)) != d || len(l.vector(jlm.RoleIdxKNorm)) != d {
 		return fmt.Errorf("model: block %d's QSA indexer is q %dx%d, k %dx%d, norms %d/%d; "+
 			"want %d heads of %d over a %d-wide input", bi, l.idxQ.k, l.idxQ.rows, l.idxK.k,
-			l.idxK.rows, len(l.idxQNorm), len(l.idxKNorm), h, d, cfg.NEmbd)
+			l.idxK.rows, len(l.vector(jlm.RoleIdxQNorm)), len(l.vector(jlm.RoleIdxKNorm)), h, d, cfg.NEmbd)
 	}
 	return nil
 }

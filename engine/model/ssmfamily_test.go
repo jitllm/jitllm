@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -37,8 +38,8 @@ func ssmBaseFixtures() []struct {
 				c.SSM.StateSize == 16 && c.SSM.Inner == 128 && !c.TiedEmbd
 			for i := range m.layers {
 				l := &m.layers[i]
-				ok = ok && l.noFFN && len(l.ssmD) == 8 && len(l.ssmConvB) == 128+2*16 &&
-					len(l.ssmNorm) == 128 && c.LayerKind(i).Recurrent()
+				ok = ok && l.noFFN && len(l.vector(jlm.RoleSSMD)) == 8 && len(l.vector(jlm.RoleSSMConvBias)) == 128+2*16 &&
+					len(l.vector(jlm.RoleSSMNorm)) == 128 && c.LayerKind(i).Recurrent()
 			}
 			return ok
 		}},
@@ -82,15 +83,13 @@ func TestSSMFamiliesMatchTransformers(t *testing.T) {
 
 // ssdScaled replaces one per-block vector of every Mamba-2 block with f of a
 // copy of it.
-func ssdScaled(m *Model, pick func(l *layer) *[]float32, f func(v []float32)) func() {
+func ssdScaled(m *Model, r jlm.Role, f func(v []float32)) func() {
 	return eachLayer(m, func(l *layer) {
-		p := pick(l)
-		if *p == nil {
-			return
-		}
-		v := slices.Clone(*p)
-		f(v)
-		*p = v
+		setVec(l, r, func(v []float32) []float32 {
+			w := slices.Clone(v)
+			f(w)
+			return w
+		})
 	})
 }
 
@@ -110,7 +109,7 @@ func ssdSwapBC(t *testing.T) func(m *Model) func() {
 			}
 		}
 		return eachLayer(m, func(l *layer) {
-			if l.ssmD == nil {
+			if l.vector(jlm.RoleSSMD) == nil {
 				return
 			}
 			w := &l.wq
@@ -133,10 +132,12 @@ func ssdSwapBC(t *testing.T) func(m *Model) func() {
 				copy(p[n:2*n], o[:n])
 			}
 			l.ssmConv1d = cw
-			cb := slices.Clone(l.ssmConvB)
-			copy(cb[:n], l.ssmConvB[n:2*n])
-			copy(cb[n:2*n], l.ssmConvB[:n])
-			l.ssmConvB = cb
+			setVec(l, jlm.RoleSSMConvBias, func(v []float32) []float32 {
+				cb := slices.Clone(v)
+				copy(cb[:n], v[n:2*n])
+				copy(cb[n:2*n], v[:n])
+				return cb
+			})
 		})
 	}
 }
@@ -146,20 +147,20 @@ func ssdSwapBC(t *testing.T) func(m *Model) func() {
 func ssdViolations(t *testing.T) []c6Violation {
 	return []c6Violation{
 		{"A positive (A_log's sign lost)", func(m *Model) func() {
-			return ssdScaled(m, func(l *layer) *[]float32 { return &l.ssmA }, func(v []float32) {
+			return ssdScaled(m, jlm.RoleSSMA, func(v []float32) {
 				for i := range v {
 					v[i] = -v[i]
 				}
 			})
 		}},
 		{"no D skip", func(m *Model) func() {
-			return ssdScaled(m, func(l *layer) *[]float32 { return &l.ssmD }, func(v []float32) { clear(v) })
+			return ssdScaled(m, jlm.RoleSSMD, func(v []float32) { clear(v) })
 		}},
 		{"no convolution bias", func(m *Model) func() {
-			return ssdScaled(m, func(l *layer) *[]float32 { return &l.ssmConvB }, func(v []float32) { clear(v) })
+			return ssdScaled(m, jlm.RoleSSMConvBias, func(v []float32) { clear(v) })
 		}},
 		{"no dt bias", func(m *Model) func() {
-			return ssdScaled(m, func(l *layer) *[]float32 { return &l.ssmDtBias }, func(v []float32) { clear(v) })
+			return ssdScaled(m, jlm.RoleSSMDtBias, func(v []float32) { clear(v) })
 		}},
 		{"the norm before the gate", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.SSMNormBeforeGate = true })
