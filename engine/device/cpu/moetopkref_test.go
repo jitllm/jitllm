@@ -100,7 +100,7 @@ func moeTopKGo(p []float32, k int, norm bool, f moeFault) moeRoute {
 			sum += p[e]
 		}
 		// The floor the kernel adds, so an all-underflowed selection is not
-		// 0/0. See oracle.MoEDivergences for why it is DeepSeek's addition
+		// 0/0. See oracle.MoEDivergences() for why it is DeepSeek's addition
 		// and not llama.cpp's clamp.
 		sum += MoESumFloor()
 	}

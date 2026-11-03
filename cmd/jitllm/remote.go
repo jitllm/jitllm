@@ -185,7 +185,9 @@ func (r remoteRun) complete(ctx context.Context, chat bool, msgs []chatMessage, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	localserver.Authorize(req, r.key)
-	resp, err := localserver.Client.Do(req)
+	c := localserver.NewClient()
+	defer c.CloseIdleConnections()
+	resp, err := c.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -256,7 +258,9 @@ func embedRemote(addr, key, model string, texts []string, out io.Writer) error {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		localserver.Authorize(req, key)
-		resp, err := localserver.Client.Do(req)
+		c := localserver.NewClient()
+		defer c.CloseIdleConnections()
+		resp, err := c.Do(req)
 		if err != nil {
 			return err
 		}

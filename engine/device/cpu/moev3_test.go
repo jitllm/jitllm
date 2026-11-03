@@ -64,7 +64,7 @@ func TestMoERouteMatchesTheOracle(t *testing.T) {
 // group scored by its best instead of its best two, and the mask arriving
 // after the selection.
 func TestMoERouteViolations(t *testing.T) {
-	for _, f := range oracle.MoEFaults {
+	for _, f := range oracle.MoEFaults() {
 		t.Run(strings.ReplaceAll(f.String(), " ", "_"), func(t *testing.T) {
 			var first string
 			hits := moeV3RunAll(t, moeV3Kernels, f, func(s string) { first = s })

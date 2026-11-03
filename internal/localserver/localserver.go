@@ -25,7 +25,7 @@ import (
 // DefaultAddr is where the service listens unless told otherwise: localhost,
 // which a server binds as 127.0.0.1 and [::1] and nothing else (see
 // server.Listen), so installing it opens nothing to the network. A client
-// dials it through Transport, which resolves "localhost" to loopback
+// dials it through NewTransport, which resolves "localhost" to loopback
 // addresses only.
 const DefaultAddr = "localhost:4242"
 
@@ -132,11 +132,12 @@ type Info struct {
 	Legacy bool
 }
 
-// Transport is the transport a client of the local service uses: the default
-// one, except that the name "localhost" is dialled at its loopback addresses
-// only (127.0.0.1 and ::1, whichever the resolver lists first and answers),
-// whatever else the resolver says it is. Any other host is dialled as usual.
-var Transport http.RoundTripper = func() http.RoundTripper {
+// NewTransport is the transport a client of the local service uses: the
+// default one, except that the name "localhost" is dialled at its loopback
+// addresses only (127.0.0.1 and ::1, whichever the resolver lists first and
+// answers), whatever else the resolver says it is. Any other host is dialled
+// as usual.
+func NewTransport() http.RoundTripper {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -166,14 +167,19 @@ var Transport http.RoundTripper = func() http.RoundTripper {
 		return nil, last
 	}
 	return t
-}()
+}
 
-// Client is an http.Client over Transport, for the one-off requests.
-var Client = &http.Client{Transport: Transport}
+// NewClient is an http.Client over a [NewTransport], for the one-off requests.
+// Close its idle connections when done.
+func NewClient() *http.Client { return &http.Client{Transport: NewTransport()} }
+
+type sentinel string
+
+func (e sentinel) Error() string { return string(e) }
 
 // ErrUnauthorized is a jitllmd that answers and wants an API key this client
 // has none of (or the wrong one) for.
-var ErrUnauthorized = errors.New("the jitllmd needs an API key")
+const ErrUnauthorized sentinel = "the jitllmd needs an API key"
 
 // Option configures how a client reaches a service.
 type Option func(*options)
@@ -212,7 +218,7 @@ func Authorize(r *http.Request, key string) {
 // request; an empty key returns rt unchanged.
 func KeyTransport(key string, rt http.RoundTripper) http.RoundTripper {
 	if rt == nil {
-		rt = Transport
+		rt = NewTransport()
 	}
 	if key == "" {
 		return rt
@@ -233,7 +239,7 @@ func (t keyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // ErrIncompatible is a jitllmd that answers but speaks another API version. A
 // client says so and stops rather than starting a second engine beside it.
-var ErrIncompatible = errors.New("incompatible jitllmd")
+const ErrIncompatible sentinel = "incompatible jitllmd"
 
 // Compatible is nil when a server reporting api may be used by this build,
 // and otherwise says what to do about it. Zero is a server from before the
@@ -273,7 +279,9 @@ func Probe(ctx context.Context, addr string, opts ...Option) (Info, error) {
 		return Info{}, err
 	}
 	Authorize(req, APIKey(opts...))
-	resp, err := Client.Do(req)
+	c := NewClient()
+	defer c.CloseIdleConnections()
+	resp, err := c.Do(req)
 	if err != nil {
 		return Info{}, err
 	}

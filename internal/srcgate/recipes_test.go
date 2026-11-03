@@ -136,10 +136,11 @@ type recipeBlock struct {
 	expects    []string
 }
 
-var (
-	directiveRE = regexp.MustCompile(`^<!-- test: ([a-z]+)(?: (.*?))? -->$`)
-	loopbackRE  = regexp.MustCompile(`127\.0\.0\.1:(4242|80\d\d)\b`)
-)
+func directiveRE() *regexp.Regexp {
+	return regexp.MustCompile(`^<!-- test: ([a-z]+)(?: (.*?))? -->$`)
+}
+
+func loopbackRE() *regexp.Regexp { return regexp.MustCompile(`127\.0\.0\.1:(4242|80\d\d)\b`) }
 
 // parseRecipe reads md's fenced blocks and their directives.
 func parseRecipe(md string) ([]recipeBlock, error) {
@@ -171,7 +172,7 @@ func parseRecipe(md string) ([]recipeBlock, error) {
 			pending = recipeBlock{}
 			continue
 		}
-		m := directiveRE.FindStringSubmatch(strings.TrimSpace(line))
+		m := directiveRE().FindStringSubmatch(strings.TrimSpace(line))
 		if m == nil {
 			continue
 		}
@@ -274,12 +275,12 @@ func runnable(lang string) bool { return lang == "sh" || lang == "python" || lan
 // address throughout the recipe, and refuses any other spelling of a local
 // server, which the rewrite would miss.
 func rewrite(s string, ports map[string]string) (string, error) {
-	rest := loopbackRE.ReplaceAllString(s, "")
+	rest := loopbackRE().ReplaceAllString(s, "")
 	if strings.Contains(rest, "localhost:") || regexp.MustCompile(`[^0-9.]:(4242|80\d\d)\b`).MatchString(rest) {
 		return "", errors.New("a recipe addresses its server as 127.0.0.1:4242 or 127.0.0.1:80NN, which the test rewrites to a free port; this block spells it otherwise")
 	}
 	var err error
-	out := loopbackRE.ReplaceAllStringFunc(s, func(m string) string {
+	out := loopbackRE().ReplaceAllStringFunc(s, func(m string) string {
 		k := m[len("127.0.0.1:"):]
 		if ports[k] == "" {
 			p, e := freePort()

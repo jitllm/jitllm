@@ -16,22 +16,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-var done sync.Map
-
-type result struct {
-	once sync.Once
-	err  error
-}
-
-// Container makes the container at path one this build reads, once per
-// process: a container that does not open and has X.gguf beside it is
+// Container makes the container at path one this build reads: a container that does not open and has X.gguf beside it is
 // reconverted from that. A container that opens, a path that is not a
 // container, an absent one and one with no single GGUF beside it (a merged
 // vision container) are left alone, and the caller's load says what is wrong.
@@ -39,10 +31,7 @@ func Container(path string) error {
 	if !strings.HasSuffix(path, jlm.Ext) {
 		return nil
 	}
-	v, _ := done.LoadOrStore(path, &result{})
-	r := v.(*result)
-	r.once.Do(func() { r.err = reconvert(path) })
-	return r.err
+	return reconvert(path)
 }
 
 // Must is Container failing t.
@@ -72,11 +61,12 @@ func reconvert(path string) error {
 	if _, err := os.Stat(src); err != nil {
 		return nil
 	}
-	// A private name and a rename: another test binary must not open a
-	// half-written container. The private name keeps the extension, as the
-	// converter writes nothing else.
+	// A private name and a rename: another test binary, or another test of
+	// this one, must not open a half-written container or write the same
+	// file. The private name keeps the extension, as the converter writes
+	// nothing else.
 	tmp := filepath.Join(filepath.Dir(path),
-		fmt.Sprintf(".%s.%d%s", strings.TrimSuffix(filepath.Base(path), jlm.Ext), os.Getpid(), jlm.Ext))
+		fmt.Sprintf(".%s.%d.%d%s", strings.TrimSuffix(filepath.Base(path), jlm.Ext), os.Getpid(), time.Now().UnixNano(), jlm.Ext))
 	if _, err := convert.FromGGUFs(src, "", tmp, jlm.Fingerprint{Host: "test"}); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("%s does not open (%v), and reconverting it from %s failed: %w",

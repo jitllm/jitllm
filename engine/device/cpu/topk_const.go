@@ -39,7 +39,7 @@ func moeShapeErr(n, k int) error {
 //	                           `sum + 1e-20` rather than llama.cpp's clamp at
 //	                           the smallest normal f16: the two agree at zero,
 //	                           and this does not distort 0 < sum < 6.1e-5. See
-//	                           oracle.MoEDivergences.
+//	                           oracle.MoEDivergences().
 func MoETopKConsts() []float32 {
 	c := make([]float32, 16)
 	for i := 0; i < 8; i++ {

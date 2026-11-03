@@ -13,5 +13,5 @@ import (
 // (internal/testdevices).
 func TestMain(m *testing.M) {
 	testdevices.Install(backend.Restrict)
-	os.Exit(testdevices.Fail(m.Run()))
+	os.Exit(m.Run())
 }

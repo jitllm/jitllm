@@ -27,18 +27,19 @@ import (
 // the extension that carries it; 0 is base x86-64 (the GP instructions). An
 // unclassified mnemonic is a gate failure, so an instruction nobody thought
 // about cannot pass by default -- add it here with its extension.
-var mnemonicISA = func() map[string]x86.ISA {
-	m := map[string]x86.ISA{}
-	add := func(isa x86.ISA, names string) {
-		for _, n := range strings.Fields(names) {
-			m[n] = isa
+func mnemonicISA() map[string]x86.ISA {
+	return func() map[string]x86.ISA {
+		m := map[string]x86.ISA{}
+		add := func(isa x86.ISA, names string) {
+			for _, n := range strings.Fields(names) {
+				m[n] = isa
+			}
 		}
-	}
-	add(0, `mov movabs movzx movsx movsxd add sub and or xor inc dec neg not test cmp
+		add(0, `mov movabs movzx movsx movsxd add sub and or xor inc dec neg not test cmp
 		lea imul div shl shr sar sal rol ror jmp je jne jz jnz ja jae jb jbe jg jge jl jle
 		js jns ret nop prefetcht0 prefetcht1 prefetcht2 prefetchnta
 		cmove cmovne cmovz cmovnz cmova cmovae cmovb cmovbe cmovg cmovge cmovl cmovle`)
-	add(x86.ISASSE2, `movaps movups movss movd movq movdqu movdqa movhlps movlhps movmskps pmovmskb
+		add(x86.ISASSE2, `movaps movups movss movd movq movdqu movdqa movhlps movlhps movmskps pmovmskb
 		addps subps mulps divps maxps minps andps andnps orps xorps unpcklps unpckhps shufps
 		sqrtps rcpps rsqrtps cmpeqps cmpltps cmpleps cmpunordps cmpneqps cmpnltps cmpnleps cmpordps
 		addss subss mulss divss maxss minss sqrtss cvtss2sd cvtsd2ss ucomiss comiss
@@ -50,18 +51,19 @@ var mnemonicISA = func() map[string]x86.ISA {
 		punpckhbw punpckhwd punpckhdq punpckhqdq pminub pmaxub pminsw pmaxsw pavgb pavgw psadbw
 		pshufd pshuflw pshufhw psrlw psrld psrlq psraw psrad psllw pslld psllq psrldq pslldq
 		pinsrw pextrw lfence sfence mfence`)
-	add(x86.ISASSE3, `haddps hsubps addsubps movsldup movshdup movddup lddqu`)
-	add(x86.ISASSSE3, `pshufb phaddw phaddd phsubw phsubd pmaddubsw psignb psignw psignd pmulhrsw
+		add(x86.ISASSE3, `haddps hsubps addsubps movsldup movshdup movddup lddqu`)
+		add(x86.ISASSSE3, `pshufb phaddw phaddd phsubw phsubd pmaddubsw psignb psignw psignd pmulhrsw
 		pabsb pabsw pabsd palignr`)
-	add(x86.ISASSE41, `pmovsxbw pmovsxbd pmovsxbq pmovsxwd pmovsxwq pmovsxdq
+		add(x86.ISASSE41, `pmovsxbw pmovsxbd pmovsxbq pmovsxwd pmovsxwq pmovsxdq
 		pmovzxbw pmovzxbd pmovzxbq pmovzxwd pmovzxwq pmovzxdq
 		pmulld pmuldq pcmpeqq packusdw pminsb pminsd pminuw pminud pmaxsb pmaxsd pmaxuw pmaxud
 		ptest pblendvb blendvps blendps pblendw insertps extractps pinsrb pinsrd pinsrq
 		pextrb pextrd pextrq roundps roundss roundpd dpps`)
-	add(x86.ISASSE42, `pcmpgtq crc32`)
-	add(x86.ISAPOPCNT, `popcnt`)
-	return m
-}()
+		add(x86.ISASSE42, `pcmpgtq crc32`)
+		add(x86.ISAPOPCNT, `popcnt`)
+		return m
+	}()
+}
 
 // Insn is one disassembled instruction: its bytes and its normalised text.
 type Insn struct {
@@ -123,6 +125,7 @@ func Problems(t testing.TB, name string, code []byte) []string {
 		add("declares %v: an SSE-tier kernel may not need any VEX extension", declared)
 	}
 	ins := Disasm(t, t.TempDir(), name, code)
+	isas := mnemonicISA()
 	if len(ins) == 0 {
 		add("objdump found no instructions")
 	}
@@ -166,7 +169,7 @@ func Problems(t testing.TB, name string, code []byte) []string {
 			add("%s: a stray prefix objdump could not attach to an instruction", where)
 			continue
 		}
-		isa, known := mnemonicISA[mn]
+		isa, known := isas[mn]
 		if mn == "pextrw" && strings.Contains(ops, "PTR") {
 			isa = x86.ISASSE41 // the memory-destination form is SSE4.1's
 		}

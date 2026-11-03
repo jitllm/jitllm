@@ -16,7 +16,7 @@
 // every device open (backend.Restrict). A device outside the selection is not
 // opened; a search for devices (the default pick, a loop over ordinals) is
 // narrowed to the selection, and a test that NAMES a device outside it is
-// recorded as a violation, which Fail turns into a failed binary.
+// a violation: the binary fails.
 //
 // The helpers: Specs, One, Spec and Take give a test the device list it would
 // have hardcoded, replaced by the selection when there is one, so a gate that
@@ -33,10 +33,8 @@ package testdevices
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -61,21 +59,27 @@ func (d device) String() string {
 	return "metal"
 }
 
-var (
-	selection []device
-	selected  bool
-)
-
-func init() {
+// current is the devices JITLLM_TEST_DEVICES names, and whether it is set.
+func current() ([]device, bool) {
 	v := strings.TrimSpace(os.Getenv(Var))
 	if v == "" {
-		return
+		return nil, false
 	}
 	ds, err := parse(v)
 	if err != nil {
 		panic(fmt.Sprintf("%s=%q: %v", Var, v, err))
 	}
-	selection, selected = ds, true
+	return ds, true
+}
+
+func isSelected() bool {
+	_, ok := current()
+	return ok
+}
+
+func selection() []device {
+	ds, _ := current()
+	return ds
 }
 
 // parse reads a selection: backend:ordinal entries, metal alone. A bare
@@ -119,13 +123,13 @@ func parse(v string) ([]device, error) {
 }
 
 // Selected reports whether JITLLM_TEST_DEVICES is set.
-func Selected() bool { return selected }
+func Selected() bool { return isSelected() }
 
 // Selection is the selected devices as specs ("cuda:2", "vulkan:2", "metal"),
 // nil when unset.
 func Selection() []string {
 	var out []string
-	for _, d := range selection {
+	for _, d := range selection() {
 		out = append(out, d.String())
 	}
 	return out
@@ -135,7 +139,7 @@ func Selection() []string {
 // else the selection. Each entry is one device, so a sweep over a bare backend
 // name ("cuda", "vulkan", "metal") becomes a sweep over the selected devices.
 func Specs(def ...string) []string {
-	if !selected {
+	if !isSelected() {
 		return def
 	}
 	return Selection()
@@ -144,16 +148,16 @@ func Specs(def ...string) []string {
 // One is the spec of the single device a gate runs on: def when nothing is
 // selected, else the first selected device.
 func One(def string) string {
-	if !selected {
+	if !isSelected() {
 		return def
 	}
-	return selection[0].String()
+	return selection()[0].String()
 }
 
 // Spec is a device list as one -devices string, for a tier that places blocks
 // over several: def when nothing is selected, else the whole selection.
 func Spec(def string) string {
-	if !selected {
+	if !isSelected() {
 		return def
 	}
 	return strings.Join(Selection(), ",")
@@ -166,11 +170,11 @@ func Spec(def string) string {
 // second card that was not given.
 func Take(t testing.TB, n int, def string) []string {
 	t.Helper()
-	if !selected {
+	if !isSelected() {
 		return strings.Split(def, ",")
 	}
-	if len(selection) < n {
-		t.Skipf("needs %d devices; %s=%s selects %d", n, Var, strings.Join(Selection(), ","), len(selection))
+	if len(selection()) < n {
+		t.Skipf("needs %d devices; %s=%s selects %d", n, Var, strings.Join(Selection(), ","), len(selection()))
 	}
 	return Selection()[:n]
 }
@@ -182,7 +186,7 @@ func Take(t testing.TB, n int, def string) []string {
 // it.
 func Require(t testing.TB, specs ...string) {
 	t.Helper()
-	if !selected {
+	if !isSelected() {
 		return
 	}
 	for _, s := range specs {
@@ -204,7 +208,7 @@ func Require(t testing.TB, specs ...string) {
 }
 
 func allowed(d device) bool {
-	for _, s := range selection {
+	for _, s := range selection() {
 		if s == d {
 			return true
 		}
@@ -213,7 +217,7 @@ func allowed(d device) bool {
 }
 
 func anyOf(api string) (device, bool) {
-	for _, s := range selection {
+	for _, s := range selection() {
 		if s.api == api {
 			return s, true
 		}
@@ -221,53 +225,74 @@ func anyOf(api string) (device, bool) {
 	return device{}, false
 }
 
-var (
-	mu       sync.Mutex
-	violated = map[string]int{}
-	narrowed = map[string]int{}
-	refusing = map[device]int{}
-)
+// refusingVar holds the specs a test declared with Refusing.
+const refusingVar = "JITLLM_TEST_DEVICES_REFUSING"
 
-// admit is the backend.Restriction: the selection's answer to one device open.
-func admit(api string, ord int, enumerated bool) (int, error) {
-	if !selected {
+// restriction is the backend.Restriction: the selection's answer to one device
+// open. onViolation is told the name of a device a test named outside the
+// selection, onNarrowed the name of one a search for devices skipped.
+func restriction(onViolation, onNarrowed func(name string)) func(string, int, bool) (int, error) {
+	refuse := func(api, what string, enumerated bool) (int, error) {
+		name := device{api, 0}.String()
+		if i := strings.IndexByte(name, ':'); i >= 0 {
+			name = name[:i]
+		}
+		if what != "" {
+			name += ":" + what
+		}
+		if enumerated {
+			onNarrowed(name)
+		} else {
+			onViolation(name)
+		}
+		return -1, fmt.Errorf("%s is outside %s=%s", name, Var, strings.Join(Selection(), ","))
+	}
+	return func(api string, ord int, enumerated bool) (int, error) {
+		if !isSelected() {
+			return ord, nil
+		}
+		switch {
+		case ord == -2:
+			// A Vulkan name: the backend asks again with its index once it is open.
+			if _, ok := anyOf(api); !ok {
+				return refuse(api, "by name", enumerated)
+			}
+		case ord < 0:
+			// The default pick: the first selected device of the backend.
+			d, ok := anyOf(api)
+			if !ok {
+				return refuse(api, "default pick", enumerated)
+			}
+			return d.ord, nil
+		case api == "msl":
+			if !allowed(device{api, 0}) {
+				return refuse(api, "", enumerated)
+			}
+		case !allowed(device{api, ord}):
+			if expected(device{api, ord}) {
+				return -1, fmt.Errorf("%s is outside %s=%s", device{api, ord}, Var, strings.Join(Selection(), ","))
+			}
+			return refuse(api, strconv.Itoa(ord), enumerated)
+		}
 		return ord, nil
 	}
-	switch {
-	case ord == -2:
-		// A Vulkan name: the backend asks again with its index once it is open.
-		if _, ok := anyOf(api); !ok {
-			return refuse(api, "by name", enumerated)
-		}
-	case ord < 0:
-		// The default pick: the first selected device of the backend.
-		d, ok := anyOf(api)
-		if !ok {
-			return refuse(api, "default pick", enumerated)
-		}
-		return d.ord, nil
-	case api == "msl":
-		if !allowed(device{api, 0}) {
-			return refuse(api, "", enumerated)
-		}
-	case !allowed(device{api, ord}):
-		if expected(device{api, ord}) {
-			return -1, fmt.Errorf("%s is outside %s=%s", device{api, ord}, Var, strings.Join(Selection(), ","))
-		}
-		return refuse(api, strconv.Itoa(ord), enumerated)
-	}
-	return ord, nil
 }
 
 func expected(d device) bool {
-	mu.Lock()
-	defer mu.Unlock()
-	return refusing[d] > 0
+	for _, entry := range strings.Split(os.Getenv(refusingVar), ",") {
+		if entry == "" {
+			continue
+		}
+		if ds, err := parse(entry); err == nil && len(ds) == 1 && ds[0] == d {
+			return true
+		}
+	}
+	return false
 }
 
 // Refusing declares spec ("cuda:7") a device the test names on purpose to see
 // it refused. While the test runs, an open of it outside the selection is
-// refused as every such open is, and not recorded as a violation; an open of
+// refused as every such open is, and not counted as a violation; an open of
 // any other device outside the selection still is. A spec the selection holds
 // is a test error: that device would open.
 func Refusing(t testing.TB, spec string) {
@@ -276,96 +301,29 @@ func Refusing(t testing.TB, spec string) {
 	if err != nil || len(ds) != 1 {
 		t.Fatalf("testdevices.Refusing(%q): want one device spec (%v)", spec, err)
 	}
-	d := ds[0]
-	if selected && allowed(d) {
+	if isSelected() && allowed(ds[0]) {
 		t.Fatalf("testdevices.Refusing(%q): %s=%s selects it, so it would open", spec, Var, strings.Join(Selection(), ","))
 	}
-	mu.Lock()
-	refusing[d]++
-	mu.Unlock()
-	t.Cleanup(func() {
-		mu.Lock()
-		if refusing[d]--; refusing[d] == 0 {
-			delete(refusing, d)
-		}
-		mu.Unlock()
-	})
-}
-
-// refuse records an open the selection does not allow, and the error that
-// refuses it.
-func refuse(api, what string, enumerated bool) (int, error) {
-	name := device{api, 0}.String()
-	if i := strings.IndexByte(name, ':'); i >= 0 {
-		name = name[:i]
+	prev := os.Getenv(refusingVar)
+	if prev != "" {
+		prev += ","
 	}
-	if what != "" {
-		name += ":" + what
-	}
-	mu.Lock()
-	if enumerated {
-		narrowed[name]++
-	} else {
-		violated[name]++
-	}
-	mu.Unlock()
-	return -1, fmt.Errorf("%s is outside %s=%s", name, Var, strings.Join(Selection(), ","))
+	t.Setenv(refusingVar, prev+ds[0].String())
 }
 
 // Install puts the selection in force in this process through set, the
 // backend's Restrict. It is generic over the restriction's named type so this
 // package imports nothing from the engine (the backend's own tests import it).
-// With nothing selected it installs nothing.
+// With nothing selected it installs nothing. A test that names a device outside
+// the selection ends the binary at once, failed: the open returns the refusal,
+// but a test may swallow that.
 func Install[R ~func(string, int, bool) (int, error)](set func(R)) {
-	if selected {
-		set(R(admit))
+	if isSelected() {
+		set(R(restriction(exitOutside, func(string) {})))
 	}
 }
 
-// Violations are the devices a test named that the selection does not hold,
-// with how many opens asked for each.
-func Violations() []string {
-	mu.Lock()
-	defer mu.Unlock()
-	return list(violated)
-}
-
-// Narrowed are the devices a search for devices skipped because the selection
-// does not hold them. It is information: a sweep over every device was cut to
-// the selection.
-func Narrowed() []string {
-	mu.Lock()
-	defer mu.Unlock()
-	return list(narrowed)
-}
-
-func list(m map[string]int) []string {
-	var out []string
-	for k, n := range m {
-		out = append(out, fmt.Sprintf("%s x%d", k, n))
-	}
-	sort.Strings(out)
-	return out
-}
-
-// Fail is the exit code of a test binary under the selection: code, or 1 when
-// a test named a device outside it. A test binary's TestMain wraps its run in
-// it, as it does the Vulkan-vanished check:
-//
-//	os.Exit(testdevices.Fail(m.Run()))
-func Fail(code int) int {
-	if v := Violations(); len(v) > 0 {
-		fmt.Fprintf(os.Stderr, "FAIL: a test opened a device outside %s=%s: %s\n",
-			Var, strings.Join(Selection(), ","), strings.Join(v, ", "))
-		return 1
-	}
-	return code
-}
-
-// Reset forgets the ledger. For this package's own gate, which provokes a
-// violation on purpose.
-func Reset() {
-	mu.Lock()
-	violated, narrowed = map[string]int{}, map[string]int{}
-	mu.Unlock()
+func exitOutside(name string) {
+	fmt.Fprintf(os.Stderr, "FAIL: a test opened a device outside %s=%s: %s\n", Var, strings.Join(Selection(), ","), name)
+	os.Exit(1)
 }
