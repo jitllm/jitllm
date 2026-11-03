@@ -96,9 +96,9 @@ func TestStepRunsAdmitsALatentPrompt(t *testing.T) {
 						t.Fatalf("a latent step carrying a prompt chunk disagrees with each session alone: NMSE %.3e at row %d",
 							w, at)
 					}
-					stepPos = func(base, j, k int) int { return base + k - 1 - j }
+					m.stepPosFault = func(base, j, k int) int { return base + k - 1 - j }
 					bad, _ := plan.together(t, m, g)
-					stepPos = nil
+					m.stepPosFault = nil
 					if bw, bat := worstStep(bad, want); bw < mlaDeviceNMSE {
 						t.Fatalf("chunks at mirrored positions still matched each session alone (NMSE %.3e at row %d)",
 							bw, bat)

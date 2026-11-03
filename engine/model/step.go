@@ -551,8 +551,8 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	addRow := func(r *Run, j int) error {
 		se, tok, in := r.sess(), r.Tokens[j], r.Instance
 		p := se.bpos[0] + j
-		if stepPos != nil {
-			p = stepPos(se.bpos[0], j, len(r.Tokens))
+		if f := s0.m.stepPosFault; f != nil {
+			p = f(se.bpos[0], j, len(r.Tokens))
 		}
 		if int(tok) < 0 || int(tok) >= c.NVocab {
 			return errToken{tok, c.NVocab}
@@ -560,7 +560,7 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 		if p >= se.limit {
 			return r.full()
 		}
-		if stepShare {
+		if s0.m.stepShareFault {
 			se, in = runs[0].sess(), runs[0].Instance
 		}
 		toks, pos, own, ins = append(toks, tok), append(pos, p), append(own, se), append(ins, in)
@@ -627,16 +627,6 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	return out, nil
 }
 
-// stepShare, when set, gives every row of a host step the first run's instance
-// as its history. False but in a gate's violation: it is how the gate shows
-// that rows reading one session's history fail it.
-var stepShare bool
-
-// stepPos, when set, is where a run's row j goes, given the instance's next
-// position and the run's length. Nil but in a gate's violation: it is how the
-// gate shows that a chunk laid out at the wrong positions fails it.
-var stepPos func(base, j, k int) int
-
 // stepTogether is StepRuns' joint arm: each row embedded and rotated at its
 // own position, one device step, and each session's logits and position moved on
 // as Prefill and Forward move them. The rows whose logits are wanted -- each
@@ -656,8 +646,8 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	addRow := func(r *Run, j int) error {
 		se := r.sess()
 		tok, p := r.Tokens[j], se.bpos[0]+j
-		if stepPos != nil {
-			p = stepPos(se.bpos[0], j, len(r.Tokens))
+		if f := s0.m.stepPosFault; f != nil {
+			p = f(se.bpos[0], j, len(r.Tokens))
 		}
 		if int(tok) < 0 || int(tok) >= c.NVocab {
 			return errToken{tok, c.NVocab}
