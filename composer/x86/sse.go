@@ -1,6 +1,6 @@
 package x86
 
-var ssePrefix = [4]byte{0, 0x66, 0xF3, 0xF2}
+const ssePrefix = "\x00\x66\xf3\xf2"
 
 const (
 	XMM0 Reg = iota
