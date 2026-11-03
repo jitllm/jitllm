@@ -255,7 +255,7 @@ func TestDecisionRelocatesBetweenDevices(t *testing.T) {
 					t.Fatal(err)
 				}
 				placed := d.DeviceBlocks()
-				if placed == 0 || m.IsEncoder() && placed != layaExpressible(m, "") {
+				if placed == 0 || m.IsEncoder() && placed != nb {
 					t.Fatalf("%s took %d of %d blocks: %v", g.Name(), placed, nb, g.Err())
 				}
 				w := decisionDiffRow(t, host, answer())

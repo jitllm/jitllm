@@ -108,13 +108,6 @@ func (s *Instance) cpuPlaceHead() {
 	s.cpuComposeHead(&h.cutProb, fg.cpuCutProb, composer.DeclineNoSample, 1)
 	s.cpuComposeHead(&h.cutK, fg.cpuCutK, composer.DeclineNoSample, 1)
 	s.cpuComposeHead(&h.cutKProb, fg.cpuCutKProb, composer.DeclineNoSample, 1)
-	if s.m.Decision() != jlm.DecisionNone {
-		s.cpuComposeHead(&h.argmax, s.m.argmaxGraph(), composer.DeclineNoSample, 1)
-		h.argmaxIn = make([]float32, decisionOptions+1)
-		for i := range h.argmaxIn {
-			h.argmaxIn[i] = float32(math.Inf(-1))
-		}
-	}
 	d, nv := s.c.NEmbd, s.c.NVocab
 	if f := h.rows.f; f != nil {
 		h.hid = make([]float32, f.rows*d)
@@ -332,6 +325,20 @@ func (s *Instance) cpuPick(x []float32) composer.Decline {
 	s.HostPicked = true
 	h.served++
 	return composer.DeclineServes
+}
+
+// cpuPlaceArgmax composes a decision model's argmax over its scores for the
+// CPU, on any instance of it: an encoder's segment as well as a causal one.
+func (s *Instance) cpuPlaceArgmax() {
+	if s.m.Decision() == jlm.DecisionNone {
+		return
+	}
+	h := &s.cpu.head
+	s.cpuComposeHead(&h.argmax, s.m.argmaxGraph(), composer.DeclineNoSample, 1)
+	h.argmaxIn = make([]float32, decisionOptions+1)
+	for i := range h.argmaxIn {
+		h.argmaxIn[i] = float32(math.Inf(-1))
+	}
 }
 
 // argmaxGraph is the greedy sampler over a decision's scores

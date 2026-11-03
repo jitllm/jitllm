@@ -116,9 +116,6 @@ func decisionAllocs(t *testing.T, m *Model, g *gpu.GPU, n int) {
 		want := n
 		if n < 0 {
 			want = nb
-			if m.IsEncoder() {
-				want = layaExpressible(m, "")
-			}
 		}
 		switch {
 		case placed == 0:
