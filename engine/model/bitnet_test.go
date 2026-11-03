@@ -36,21 +36,25 @@ import (
 //	synth-bitnet-f16.gguf    bitnet.cpp's F16 of the latent form, each
 //	                         magnitude an f16: TQ2_0, held to the class run on
 //	                         those rounded magnitudes (-online-f16)
-var bitnetFixtures = []struct {
+func bitnetFixtures() []struct {
 	model, golden string
 	typ           quant.Type
-}{
-	{"synth-bitnet-hf", "synth-bitnet", quant.TQ2_0},
-	{"synth-bitnet-online-hf", "synth-bitnet-online", quant.TQ2_F32},
-	{"synth-bitnet-i2s.gguf", "synth-bitnet-online-i2s", quant.TQ2_F32},
-	{"synth-bitnet-f16.gguf", "synth-bitnet-online-f16", quant.TQ2_0},
+} {
+	return []struct {
+		model, golden string
+		typ           quant.Type
+	}{
+		{"synth-bitnet-hf", "synth-bitnet", quant.TQ2_0},
+		{"synth-bitnet-online-hf", "synth-bitnet-online", quant.TQ2_F32},
+		{"synth-bitnet-i2s.gguf", "synth-bitnet-online-i2s", quant.TQ2_F32},
+		{"synth-bitnet-f16.gguf", "synth-bitnet-online-f16", quant.TQ2_0},
+	}
 }
 
 // BitNet's two GGUF fixtures run the five principles' gates (paging,
 // relocation, the batch faulting its blocks in, zero allocations), one with
 // an f16 scale (TQ2_0) and one with an f32 (TQ2_F32).
 func init() {
-	principleFixtures = append(principleFixtures, "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf")
 }
 
 // bitnetNMSE is the bound against transformers, and bitnetExact the level an
@@ -91,7 +95,7 @@ func openBitNet(t *testing.T, model, golden string, typ quant.Type) (*Model, *c6
 	} else {
 		path = hfContainer(t, model)
 	}
-	m, err := Open(path, noTune, WithKVF16(false))
+	m, err := Open(path, noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +134,7 @@ func bitnetSelected(m *Model, typ quant.Type) bool {
 // length and the batched path. The tokenizer half compares the container's
 // tokenizer to the release's tokenizer.json.
 func TestBitNetMatchesTransformers(t *testing.T) {
-	for _, fx := range bitnetFixtures {
+	for _, fx := range bitnetFixtures() {
 		t.Run(fx.model, func(t *testing.T) {
 			m, g := openBitNet(t, fx.model, fx.golden, fx.typ)
 			defer m.Close()
@@ -178,45 +182,52 @@ func TestBitNetMatchesTransformers(t *testing.T) {
 // copy of the model. Every one must move the logits far past bitnetNMSE, or
 // the fixture cannot see it and TestBitNetMatchesTransformers certifies
 // nothing about it.
-var bitnetViolations = []c6Violation{
-	{"no attention inner norm", func(m *Model) func() {
-		undoL := eachLayer(m, func(l *layer) { l.attnSubNorm = nil })
-		undoR := dropStored(m, jlm.RoleAttnSubNorm)
-		return func() { undoR(); undoL() }
-	}},
-	{"no FFN inner norm", func(m *Model) func() {
-		undoL := eachLayer(m, func(l *layer) { l.ffnSubNorm = nil })
-		undoR := dropStored(m, jlm.RoleFFNSubNorm)
-		return func() { undoR(); undoL() }
-	}},
-	{"SiLU for relu2", actSwap(nn.ActSiLU)},
-	{"NORM rotary", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	{"activations per 32, not per token", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.TokenAct = false })
-	}},
+func bitnetViolations() []c6Violation {
+	return []c6Violation{
+		{"no attention inner norm", func(m *Model) func() {
+			undoL := eachLayer(m, func(l *layer) { l.attnSubNorm = nil })
+			undoR := dropStored(m, jlm.RoleAttnSubNorm)
+			return func() { undoR(); undoL() }
+		}},
+		{"no FFN inner norm", func(m *Model) func() {
+			undoL := eachLayer(m, func(l *layer) { l.ffnSubNorm = nil })
+			undoR := dropStored(m, jlm.RoleFFNSubNorm)
+			return func() { undoR(); undoL() }
+		}},
+		{"SiLU for relu2", actSwap(nn.ActSiLU)},
+		{"NORM rotary", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		{"activations per 32, not per token", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.TokenAct = false })
+		}},
+	}
 }
 
 // bitnetScaleViolations rewrite the release form's weight_scale tensors
 // before conversion: the converter must carry each scale, and the right way
 // up, or the container reads as one of these.
-var bitnetScaleViolations = []struct {
+func bitnetScaleViolations() []struct {
 	name string
 	f    func(name string, ws float32) float32
-}{
-	{"every weight's scale one", func(string, float32) float32 { return 1 }},
-	{"wo's scale inverted", func(n string, ws float32) float32 {
-		if strings.HasSuffix(n, "o_proj.weight_scale") {
-			return 1 / ws
-		}
-		return ws
-	}},
+} {
+	return []struct {
+		name string
+		f    func(name string, ws float32) float32
+	}{
+		{"every weight's scale one", func(string, float32) float32 { return 1 }},
+		{"wo's scale inverted", func(n string, ws float32) float32 {
+			if strings.HasSuffix(n, "o_proj.weight_scale") {
+				return 1 / ws
+			}
+			return ws
+		}},
+	}
 }
 
 // TestBitNetFeaturesAreLoadBearing runs each violation against the release
 // form's golden and demands it fail by a wide margin: a feature the fixture
 // cannot see is a feature the match does not certify.
 func TestBitNetFeaturesAreLoadBearing(t *testing.T) {
-	m, g := openBitNet(t, bitnetFixtures[0].model, bitnetFixtures[0].golden, bitnetFixtures[0].typ)
+	m, g := openBitNet(t, bitnetFixtures()[0].model, bitnetFixtures()[0].golden, bitnetFixtures()[0].typ)
 	defer m.Close()
 	worstOf := func(t *testing.T, m *Model) float64 {
 		t.Helper()
@@ -243,17 +254,17 @@ func TestBitNetFeaturesAreLoadBearing(t *testing.T) {
 	if w := worstOf(t, m); w > bitnetExact {
 		t.Fatalf("the unviolated model reads %.3e: the violations below would measure nothing", w)
 	}
-	for _, v := range bitnetViolations {
+	for _, v := range bitnetViolations() {
 		t.Run(v.name, func(t *testing.T) {
 			undo := v.mut(m)
 			defer undo()
 			check(t, v.name, worstOf(t, m))
 		})
 	}
-	for _, v := range bitnetScaleViolations {
+	for _, v := range bitnetScaleViolations() {
 		t.Run(v.name, func(t *testing.T) {
-			dir := bitnetRescaled(t, testmodels.Path(bitnetFixtures[0].model), v.f)
-			vm, err := Open(hfContainerAt(t, dir), noTune, WithKVF16(false))
+			dir := bitnetRescaled(t, testmodels.Path(bitnetFixtures()[0].model), v.f)
+			vm, err := Open(hfContainerAt(t, dir), noTune(), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

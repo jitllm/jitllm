@@ -47,7 +47,7 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m, amax := openSpecCapped(t, path)
 			defer m.Close()
-			text := specPrompts[0]
+			text := specPrompts()[0]
 			prompt := m.Vocab.Encode(text, true)
 			greedyCap, logitCap := float32(amax/2), float32(amax/8)
 			m.Cfg.FinalSoftcap = greedyCap
@@ -163,9 +163,9 @@ func specCapModels() []string {
 // its largest logit on the first speculation prompt, and returns that logit.
 func openSpecCapped(t *testing.T, path string) (*Model, float64) {
 	t.Helper()
-	m := openSpecModel(t, path, noTune, WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
+	m := openSpecModel(t, path, noTune(), WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
 	amax := 0.0
-	for _, l := range teacherForce(t, m, m.Vocab.Encode(specPrompts[0], true)) {
+	for _, l := range teacherForce(t, m, m.Vocab.Encode(specPrompts()[0], true)) {
 		for _, v := range l {
 			amax = max(amax, math.Abs(float64(v)))
 		}

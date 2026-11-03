@@ -10,7 +10,9 @@ import (
 
 // shareModels are the prefix-sharing gate's models: the smallest real llama
 // and a real Llama 3 (GQA), each on an f32 and a binary16 cache.
-var shareModels = []string{"stories15M-q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf"}
+func shareModels() []string {
+	return []string{"stories15M-q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf"}
+}
 
 // shareRun is one session of the sharing gate: its prompt's generation and
 // every logit row it produced.
@@ -94,10 +96,10 @@ func shareSession(t *testing.T, m *Model, i int, store KVStore, share bool) shar
 //     N.
 //   - Closing every session and pruning the store returns it to zero bytes.
 func TestSharedPrefixIsHeldOnce(t *testing.T) {
-	for _, name := range shareModels {
+	for _, name := range shareModels() {
 		for _, kt := range []KVType{KVF32, KVF16} {
 			t.Run(name+"/"+kt.String(), func(t *testing.T) {
-				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithKVType(kt))
+				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune(), WithKVType(kt))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -212,7 +214,7 @@ func firstAttn(s *Instance) int {
 // (kvPages.cowFault: the write lands in place) must move session 2's logits,
 // or this gate cannot see the write it is about.
 func TestSharedPageIsNeverWrittenInPlace(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

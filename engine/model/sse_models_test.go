@@ -439,15 +439,9 @@ func TestEveryModelRunsSSE(t *testing.T) {
 }
 
 // ssemKVF16 runs fn with the f16 KV cache pinned. fn opens its own models, so
-// the pin goes through greedyLoadOpts (forward_test.go), a test-only variable,
-// rather than a package-wide default.
-func ssemKVF16(fn func(*testing.T)) func(*testing.T) {
-	return func(t *testing.T) {
-		was := greedyLoadOpts
-		greedyLoadOpts = append(append([]Option(nil), was...), WithKVF16(true))
-		defer func() { greedyLoadOpts = was }()
-		fn(t)
-	}
+// the pin is a load option it is handed, not a package-wide default.
+func ssemKVF16(fn func(*testing.T, ...Option)) func(*testing.T) {
+	return func(t *testing.T) { fn(t, WithKVF16(true)) }
 }
 
 // TestSSEModelGates runs the architecture gates -- the hybrid's four, the
@@ -470,7 +464,7 @@ func TestSSEModelGates(t *testing.T) {
 		// has a first token the KV width alone decides, so this arm runs the
 		// f16 cache. That also puts the SSE f16 attention kernels under a
 		// model-level gate.
-		{"GreedyMatchesLlamaCpp", ssemKVF16(TestGreedyMatchesLlamaCpp)},
+		{"GreedyMatchesLlamaCpp", ssemKVF16(greedyMatchesLlamaCpp)},
 		{"BatchMatchesForward", TestBatchMatchesForward},
 		{"RaggedBatchMatchesForward", TestRaggedBatchMatchesForward},
 		{"BiasedBatchMatchesForward", TestBiasedBatchMatchesForward},

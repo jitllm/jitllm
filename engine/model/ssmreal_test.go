@@ -25,20 +25,22 @@ import (
 // quantize are amplified by 26 recurrences; no engine's greedy answer there is
 // an oracle for another's
 // (docs/engineering-history/model-correctness.md, Mamba-1).
-var ssmRealModels = []string{
-	"granite/granite-4.0-h-350m-Q8_0.gguf",
-	"granite/granite-4.0-h-1b-Q4_K_M.gguf",
-	"granite/granite-4.0-h-tiny-Q4_K_M.gguf",
-	"nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
-	"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
-	"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf",
-	"lfm2/LFM2-350M-Q4_K_M.gguf",
-	"lfm2/LFM2-1.2B-Q4_K_M.gguf",
-	"lfm2/LFM2-8B-A1B-Q4_K_M.gguf",
-	"jamba/jamba-reasoning-3b-F16.gguf",
-	"mamba/mamba-130m-hf.Q8_0.gguf",
-	"falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
-	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf",
+func ssmRealModels() []string {
+	return []string{
+		"granite/granite-4.0-h-350m-Q8_0.gguf",
+		"granite/granite-4.0-h-1b-Q4_K_M.gguf",
+		"granite/granite-4.0-h-tiny-Q4_K_M.gguf",
+		"nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
+		"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
+		"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf",
+		"lfm2/LFM2-350M-Q4_K_M.gguf",
+		"lfm2/LFM2-1.2B-Q4_K_M.gguf",
+		"lfm2/LFM2-8B-A1B-Q4_K_M.gguf",
+		"jamba/jamba-reasoning-3b-F16.gguf",
+		"mamba/mamba-130m-hf.Q8_0.gguf",
+		"falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
+		"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf",
+	}
 }
 
 // TestSSMRealModelsTeacherForced feeds jitllm llama.cpp's own greedy tokens on
@@ -58,7 +60,7 @@ func TestSSMRealModelsTeacherForced(t *testing.T) {
 	if _, err := os.Stat(bin); err != nil {
 		t.Skipf("llama-completion is not in JITLLM_LCPP (%s)", lcpp)
 	}
-	names := ssmRealModels
+	names := ssmRealModels()
 	if v := os.Getenv("JITLLM_SSM_REAL"); v != "" {
 		names = strings.Split(v, ",")
 	}

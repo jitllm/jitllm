@@ -39,7 +39,7 @@ func TestPagedKVBatchMatchesHost(t *testing.T) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune, noGEMM)
+	m, err := Open(jlmOf(t, p), noTune(), noGEMM())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +54,8 @@ func TestPagedKVBatchMatchesHost(t *testing.T) {
 		ids[i] = m.Vocab.Encode(s, true)
 	}
 	const gen, seq = 12, 256
-	got, after := batchGreedy(t, m, ids, gen, seq, append([]gpu.Option{gpu.WithDevices("gpu:0")}, pagedOpts(pagedKVPage)...))
-	if n, d := lastBatchStats.ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
+	got, after, stats := batchGreedyStats(t, m, ids, gen, seq, append([]gpu.Option{gpu.WithDevices("gpu:0")}, pagedOpts(pagedKVPage)...))
+	if n, d := stats.ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the composer served %d of the batch's block steps and declined %d", n, d)
 	}
 	for i := range ids {

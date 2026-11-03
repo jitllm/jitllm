@@ -12,11 +12,24 @@ import (
 // (AGENTS.md) run a synthetic fixture beside tinyllama: a file adding an
 // architecture appends its fixture here, so the relocation and paging gates
 // run every graph rather than one.
-var principleFixtures []string
+func principleFixtures() []string {
+	names := []string{"synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf", "synth-deepseek32.gguf", "synth-deepseek4.gguf",
+		"synth-falconh1.gguf", "synth-gemma3n.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-moe.gguf",
+		"synth-gemma4-e.gguf", "synth-gemma4-wide.gguf", "synth-glm4.gguf", "synth-granitehybrid.gguf",
+		"synth-hunyuan.gguf", "synth-kimik3.gguf", "synth-lfm2.gguf", "synth-mamba2.gguf", "synth-minimaxm3.gguf",
+		"synth-nemotronh.gguf", "synth-nemotronhmoe.gguf", "synth-qwen4exp.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"}
+	for _, fx := range denseFixtures() {
+		names = append(names, fx.name+".gguf")
+	}
+	for _, fx := range mamba1Fixtures() {
+		names = append(names, fx.name+".gguf")
+	}
+	return names
+}
 
 // principleModels is tinyllama and every principle fixture.
 func principleModels() []string {
-	return append([]string{"tinyllama-1.1b-q3_K_M.gguf"}, principleFixtures...)
+	return append([]string{"tinyllama-1.1b-q3_K_M.gguf"}, principleFixtures()...)
 }
 
 // principleMixtures are mixture fixtures that run the relocation, batch-fault
@@ -24,10 +37,16 @@ func principleModels() []string {
 // TestPagingDoesNotChangeTheAnswer counts frames of one page size and a
 // mixture's expert pages are another: their paging gate is
 // TestMoEFamiliesPageWithTheSameAnswer.
-var principleMixtures []string
+func principleMixtures() []string {
+	names := []string{"synth-dbrx.gguf", "synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear" + q8Suffix}
+	for _, fx := range moe2Fixtures() {
+		names = append(names, fx.name+".gguf")
+	}
+	return names
+}
 
 // relocModels is principleModels and every principle mixture.
-func relocModels() []string { return append(principleModels(), principleMixtures...) }
+func relocModels() []string { return append(principleModels(), principleMixtures()...) }
 
 // TestPagingDoesNotChangeTheAnswer compares token ids across page budgets, from
 // fully resident down to one frame. After an eviction a frame holds another
@@ -39,7 +58,7 @@ func TestPagingDoesNotChangeTheAnswer(t *testing.T) {
 	}
 	// And with the CPU's blocks on what the composer forms for it: a block
 	// paged out and back binds its weights where they now are.
-	for _, name := range cpuServedModels {
+	for _, name := range cpuServedModels() {
 		t.Run(name+"/composed-cpu", func(t *testing.T) {
 			pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)))
 		})
@@ -56,7 +75,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 	// arms different reduction orders, which flips tinyllama's 0.082 tie at
 	// token 7 -- a difference in tuning, read as one in paging.
 	ids := func(frames int) ([]int32, int, int64) {
-		m, err := Open(path, append([]Option{noTune}, opts...)...)
+		m, err := Open(path, append([]Option{noTune()}, opts...)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +119,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 		return out, got, faults
 	}
 
-	m0, err := Open(path, append([]Option{noTune}, opts...)...)
+	m0, err := Open(path, append([]Option{noTune()}, opts...)...)
 	if err != nil {
 		if strings.Contains(err.Error(), "q8_0 KV cache is not implemented") {
 			t.Skipf("refused by name: %v", err)

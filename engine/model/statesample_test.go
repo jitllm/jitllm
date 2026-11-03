@@ -23,10 +23,10 @@ import (
 // TestComposedCPUSampleRow/Cut/Walk; this gate says Instance.Sample runs them
 // with the inputs the sampler draws from.
 func TestStateSampleIsComposed(t *testing.T) {
-	if _, err := os.Stat(models["stories15M"]); err != nil {
+	if _, err := os.Stat(models()["stories15M"]); err != nil {
 		t.Fatalf("MODEL MISSING: %v", err)
 	}
-	m, err := Open(jlmOf(t, models["stories15M"]), noTune)
+	m, err := Open(jlmOf(t, models()["stories15M"]), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

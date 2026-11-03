@@ -57,7 +57,7 @@ func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
-			m, err := Open(jlmOf(t, p), noTune, WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -84,18 +84,18 @@ func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) {
 				t.Fatalf("a host step across sessions parts from each session alone: NMSE %.3e at row %d (bound %.0e)", w, at, hostStepNMSE)
 			}
 
-			stepPos = func(base, j, k int) int { return base + k - 1 - j }
+			m.stepPosFault = func(base, j, k int) int { return base + k - 1 - j }
 			bad, _ := plan.together(t, m, nil)
-			stepPos = nil
+			m.stepPosFault = nil
 			if bw, bat := worstStep(bad, want); bw < hostStepNMSE {
 				t.Fatalf("chunks at mirrored positions still matched (NMSE %.3e): this gate cannot see positions", bw)
 			} else {
 				t.Logf("violation: mirrored chunks read NMSE %.3e at row %d", bw, bat)
 			}
 
-			stepShare = true
+			m.stepShareFault = true
 			bad, _ = plan.together(t, m, nil)
-			stepShare = false
+			m.stepShareFault = false
 			if bw, bat := worstStep(bad, want); bw < hostStepNMSE {
 				t.Fatalf("rows sharing one session's history still matched (NMSE %.3e): this gate cannot see a row's state", bw)
 			} else {

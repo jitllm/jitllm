@@ -109,8 +109,8 @@ func TestExactGatesRunPreVNNI(t *testing.T) {
 					opts   []Option
 					sliced bool
 				}{
-					{"host", []Option{noTune}, false},
-					{"host-ksliced", []Option{noTune, WithJITOptions(nn.WithFusedKSlices(2))}, true},
+					{"host", []Option{noTune()}, false},
+					{"host-ksliced", []Option{noTune(), WithJITOptions(nn.WithFusedKSlices(2))}, true},
 				} {
 					t.Run(arm.name, func(t *testing.T) {
 						m, err := Open(p, arm.opts...)

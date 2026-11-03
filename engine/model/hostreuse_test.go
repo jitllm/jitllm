@@ -30,7 +30,7 @@ func TestReusedPromptScratchIsNotRead(t *testing.T) {
 }
 
 func reusedScratchGate(t *testing.T, path string) {
-	m, err := Open(jlmOf(t, path), noTune)
+	m, err := Open(jlmOf(t, path), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

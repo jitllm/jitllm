@@ -56,9 +56,9 @@ func TestPrefillMatchesForward(t *testing.T) {
 		// (cpuServedModels), not the bench model, which may be one it
 		// declines by name, and the mixtures, whose prompts' calls hold the
 		// experts their rows pick.
-		for _, file := range append([]string{"Qwen3-0.6B-Q8_0.gguf"}, cpuMixtureRowsModels...) {
+		for _, file := range append([]string{"Qwen3-0.6B-Q8_0.gguf"}, cpuMixtureRowsModels()...) {
 			t.Run(file, func(t *testing.T) {
-				m, err := Open(jlmOf(t, testmodels.Path(file)), noTune)
+				m, err := Open(jlmOf(t, testmodels.Path(file)), noTune())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -119,7 +119,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 // window where windows: the composer served every prompt block step it was
 // asked for.
 func prefillOnDevice(t *testing.T, path, dev string, parts gpu.Parts, windows bool) {
-	m, err := Open(jlmOf(t, path), noTune)
+	m, err := Open(jlmOf(t, path), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func prefillOnDevice(t *testing.T, path, dev string, parts gpu.Parts, windows bo
 // applies.
 func prefillVsForward(t *testing.T, path string, exact bool) {
 	if exact {
-		prefillVsForwardOpts(t, path, true, noGEMM, withCPUFloat())
+		prefillVsForwardOpts(t, path, true, noGEMM(), withCPUFloat())
 		return
 	}
 	prefillVsForwardOpts(t, path, false)
@@ -199,7 +199,7 @@ func prefillVsForward(t *testing.T, path string, exact bool) {
 func prefillVsForwardOpts(t *testing.T, path string, exact bool, extra ...Option) {
 	// The tuner is pinned so both sessions run the same kernels: it advances
 	// on Forward calls and Prefill makes none.
-	opts := append([]Option{noTune}, extra...)
+	opts := append([]Option{noTune()}, extra...)
 	m, err := Open(jlmOf(t, path), opts...)
 	if err != nil {
 		t.Skip(err)

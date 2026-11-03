@@ -8,15 +8,6 @@ import (
 // FalconH1ForCausalLM with every muP multiplier far from one
 // (scripts/ssmgold.py), with the grouped gated norm every published size but
 // 0.5B carries and without it, as 0.5B ships.
-func init() {
-	ssmFixtures = append(ssmFixtures, falconh1Fixtures...)
-	for _, fx := range falconh1Fixtures {
-		ssmFamilyViolations[fx.name] = falconh1Violations
-	}
-	ssmNoNorm["synth-falconh1-nonorm"] = true
-	principleFixtures = append(principleFixtures, "synth-falconh1.gguf")
-}
-
 // falconh1Block is what every Falcon-H1 block must carry: attention and a
 // Mamba-2 mixer both, the mixer's projection beside the attention's four.
 func falconh1Block(m *Model, norm bool) bool {
@@ -31,14 +22,19 @@ func falconh1Block(m *Model, norm bool) bool {
 	return ok
 }
 
-var falconh1Fixtures = []struct {
+func falconh1Fixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-falconh1", func(m *Model) bool {
-		return falconh1Block(m, true) && m.Cfg.SSM.Groups == 2 && m.Cfg.SSMNormGroups == 2
-	}},
-	{"synth-falconh1-nonorm", func(m *Model) bool { return falconh1Block(m, false) && m.Cfg.SSM.Groups == 1 }},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-falconh1", func(m *Model) bool {
+			return falconh1Block(m, true) && m.Cfg.SSM.Groups == 2 && m.Cfg.SSMNormGroups == 2
+		}},
+		{"synth-falconh1-nonorm", func(m *Model) bool { return falconh1Block(m, false) && m.Cfg.SSM.Groups == 1 }},
+	}
 }
 
 // falconh1Violations are Falcon-H1's own: each half of the parallel block

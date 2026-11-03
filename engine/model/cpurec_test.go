@@ -12,8 +12,10 @@ import (
 // selective scan alone (mamba-130m), the gated short convolution beside
 // attention (LFM2), Mamba-2's mixer beside attention and an MLP
 // (granite-4.0-h) and in one block with attention (Falcon-H1).
-var cpuRecModels = []string{"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "mamba/mamba-130m-hf.Q8_0.gguf",
-	"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf"}
+func cpuRecModels() []string {
+	return []string{"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "mamba/mamba-130m-hf.Q8_0.gguf",
+		"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf"}
+}
 
 // TestComposedCPURecurrentPromptsServe holds a linear model's prompts on
 // the composed CPU -- every linear block's rows of a chunk one call of its
@@ -32,12 +34,12 @@ func TestComposedCPURecurrentPromptsServe(t *testing.T) {
 		"and the clerk counted barrels of salt on the upper floor. ", 40)
 	// The longest crosses a chunk boundary (MaxPrefillChunk).
 	lengths := []int{5, 33, MaxPrefillChunk + 90}
-	for _, file := range cpuRecModels {
+	for _, file := range cpuRecModels() {
 		t.Run(file, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
 			open := func(opts ...Option) *Model {
 				t.Helper()
-				m, err := Open(path, append([]Option{noTune}, opts...)...)
+				m, err := Open(path, append([]Option{noTune()}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
 				}

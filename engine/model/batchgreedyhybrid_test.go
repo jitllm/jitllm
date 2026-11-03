@@ -170,14 +170,14 @@ func TestSharedRecurrentStateMatchesTheDoubledOne(t *testing.T) {
 		ids = append(ids, m.Vocab.Encode(pr, true))
 	}
 	const gen, seq = 12, 64
-	want, _ := batchGreedy(t, m, ids, gen, seq, nil)
-	if lastBatchStats.RecShared != 0 {
-		t.Fatalf("the doubled arm grew %d shared state(s)", lastBatchStats.RecShared)
+	want, _, wantStats := batchGreedyStats(t, m, ids, gen, seq, nil)
+	if wantStats.RecShared != 0 {
+		t.Fatalf("the doubled arm grew %d shared state(s)", wantStats.RecShared)
 	}
-	got, _ := batchGreedy(t, m, ids, gen, seq, []gpu.Option{
+	got, _, gotStats := batchGreedyStats(t, m, ids, gen, seq, []gpu.Option{
 		gpu.WithConfig(func(c *gpu.Config) { c.SharedRec = true }),
 	})
-	shared := lastBatchStats.RecShared
+	shared := gotStats.RecShared
 	if shared == 0 {
 		t.Fatal("no recurrent state was grown in the shared form: the gate compared the doubled form with itself")
 	}

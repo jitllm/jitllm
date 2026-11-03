@@ -15,7 +15,7 @@ import (
 // FinalSoftcap from the host's own logits makes the cap the only possible
 // difference.
 func TestFinalSoftcapReachesTheDeviceHead(t *testing.T) {
-	m, err := Open(hfContainer(t, "synth-deepseek-dense"), noTune, WithKVF16(false))
+	m, err := Open(hfContainer(t, "synth-deepseek-dense"), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

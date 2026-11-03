@@ -61,7 +61,7 @@ func TestParkResumesByteForByte(t *testing.T) {
 				m = hybridModel(t)
 			} else {
 				var err error
-				if m, err = Open(jlmOf(t, models[name]), noTune); err != nil {
+				if m, err = Open(jlmOf(t, models()[name]), noTune()); err != nil {
 					t.Fatal(err)
 				}
 				defer m.Close()

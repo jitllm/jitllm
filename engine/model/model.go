@@ -3,6 +3,8 @@
 package model
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -1235,6 +1237,30 @@ type expert struct{ gate, up, down tensor }
 
 // Model is a loaded transformer.
 type Model struct {
+	// staleKeyFault is the decision prefix gate's violation
+	// (TestDecisionReusesThePrefix): the key a restore names its pages by, in
+	// place of the prompt's. Nil in every real run.
+	staleKeyFault func(key []int32) []int32
+	// stepShareFault, when set, gives every row of a host step the first run's
+	// instance as its history. False but in a gate's violation: it is how the
+	// gate shows that rows reading one session's history fail it.
+	stepShareFault bool
+	// stepPosFault, when set, is where a run's row j goes, given the
+	// instance's next position and the run's length. Nil but in a gate's
+	// violation: it is how the gate shows that a chunk laid out at the wrong
+	// positions fails it.
+	stepPosFault func(base, j, k int) int
+	// fusedRuns counts the model's fused runs, and fuseTries the runs asked
+	// for, opened or not: a gate whose subtests all skipped (no model on a
+	// model-free runner) asked for none, and has nothing to say about fusion
+	// either way.
+	fusedRuns, fuseTries atomic.Int64
+	// opNanos are the per-op nanosecond counters WithProfile arms (OpProfile).
+	opNanos [nOps]atomic.Int64
+	// splitBank is the Data of a bank held in expert pages (bankWeight).
+	splitBank [1]byte
+	// cacheSeq numbers the default cache names of the model's sessions.
+	cacheSeq atomic.Int64
 	// insts is the model's pool: the instances it serves (Serve).
 	insts Pool
 	// bankWts caches bankWeight's Weight per bank entry; holdFree is the
@@ -1399,9 +1425,23 @@ type Model struct {
 	owners     []nn.ModelOwner
 }
 
-// modelIDs hands each opened Model its id. Zero is never handed out, so a
-// plan that forgot to say whose it is reads as nobody's.
-var modelIDs atomic.Uint64
+// newModelID is a random id for an opened Model. Zero is never handed out, so
+// a plan that forgot to say whose it is reads as nobody's. It is random so
+// that a session's default cache name, which carries it, is not guessable
+// across processes sharing a store.
+func newModelID() uint64 {
+	for {
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			// A process that cannot read randomness must not fall back to a
+			// guessable name; the timestamp is only a tiebreak.
+			binary.LittleEndian.PutUint64(b[:], uint64(time.Now().UnixNano()))
+		}
+		if id := binary.LittleEndian.Uint64(b[:]); id != 0 {
+			return id
+		}
+	}
+}
 
 // watch registers d with this model: told when the pager recycles a frame, if
 // it copies weights by address, and released at Close, if it holds blocks.
@@ -1678,7 +1718,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 			return nil, err
 		}
 	}
-	m.id = modelIDs.Add(1)
+	m.id = newModelID()
 	c.OnRecycle(m.forgetCopies)
 	for i := range m.layers {
 		if err := bindPacked(c, m.Cfg, &m.layers[i]); err != nil {

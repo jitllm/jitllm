@@ -28,7 +28,7 @@ import (
 func TestKimiK3ServesComposed(t *testing.T) {
 	const bound, promptLen = 1e-5, 3
 	ran := 0
-	for _, fx := range k3Fixtures {
+	for _, fx := range k3Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openK3(t, fx.name)
 			defer m.Close()
@@ -114,7 +114,7 @@ func TestKimiK3ServesComposed(t *testing.T) {
 // dropped, move the logits past 100 times the clean worst and past 1e-4.
 func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 	const bound = 1e-5
-	for _, fx := range k3Fixtures {
+	for _, fx := range k3Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			gm, g := openK3(t, fx.name)
 			ok := fx.sel(gm)
@@ -127,13 +127,13 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 			// TestKimiK3MatchesReference's. The arm under test runs the same
 			// forms, so what parts it from the reference is a violation.
 			path := jlmOf(t, testmodels.Path(fx.name+".gguf"))
-			ref, err := Open(path, noTune, withCPUFloat())
+			ref, err := Open(path, noTune(), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer ref.Close()
 			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, true, ref.Cfg.NLayer, composer.DeclineServes)
-			m, err := Open(path, noTune, withCPUFloat())
+			m, err := Open(path, noTune(), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}

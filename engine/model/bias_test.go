@@ -17,7 +17,7 @@ import (
 // moved the logits" check would pass with three of four dead.
 // TestGreedyMatchesLlamaCpp covers a real biased model (Qwen2).
 func TestAttentionBiasesReachTheModel(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		if name == "tinyllama" && os.Getenv("JITLLM_SLOW") == "" {
 			continue
 		}
@@ -25,7 +25,7 @@ func TestAttentionBiasesReachTheModel(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune)
+			m, err := Open(jlmOf(t, path), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,7 +99,7 @@ func TestAttentionBiasesReachTheModel(t *testing.T) {
 // same biases as Forward, which the plain batch gate cannot see on unbiased
 // models.
 func TestBiasedBatchMatchesForward(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		if name == "tinyllama" && os.Getenv("JITLLM_SLOW") == "" {
 			continue
 		}
@@ -107,7 +107,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune)
+			m, err := Open(jlmOf(t, path), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -179,7 +179,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			t.Run("prefill", func(t *testing.T) {
 				nn.ResetForTest()
 				defer nn.ResetForTest()
-				pm, err := Open(jlmOf(t, path), noTune, noGEMM)
+				pm, err := Open(jlmOf(t, path), noTune(), noGEMM())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -250,7 +250,7 @@ func logitsOf(t *testing.T, m *Model, ids []int32) []float32 {
 // must advance bpos, which Prefill reads, or the second prompt restarts at the
 // last Prefill's end and overwrites the generated tokens' cache entries.
 func TestPrefillAfterForwardContinues(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		if name == "tinyllama" && os.Getenv("JITLLM_SLOW") == "" {
 			continue
 		}
@@ -262,7 +262,7 @@ func TestPrefillAfterForwardContinues(t *testing.T) {
 			defer nn.ResetForTest()
 			// The float forms: decode and prompt forms apart by their folding
 			// order alone (floatFormsNMSE).
-			m, err := Open(jlmOf(t, path), noTune, noGEMM, withCPUFloat())
+			m, err := Open(jlmOf(t, path), noTune(), noGEMM(), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}

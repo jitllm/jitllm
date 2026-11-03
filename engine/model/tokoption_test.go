@@ -20,7 +20,7 @@ import (
 //
 // tiny-qwen3moe-f32 is the cheapest file carrying a byte-level BPE vocabulary
 // (Qwen's real one); its weights are never run here.
-var tokOptModel = testmodels.Path("tiny-qwen3moe-f32.gguf")
+func tokOptModel() string { return testmodels.Path("tiny-qwen3moe-f32.gguf") }
 
 // The asserted pipeline is one model's own pre_tokenizer object, dumped
 // verbatim by scripts/gentok (see tok/testdata/pre/README).
@@ -35,8 +35,8 @@ const tokOptText = "ABC'S 100 200"
 func tokOptArtefacts(t *testing.T) []byte {
 	t.Helper()
 	// A missing input fails rather than skips.
-	if _, err := os.Stat(tokOptModel); err != nil {
-		testmodels.Missing(t, "%s is the gate's input, not an optional extra: %v", tokOptModel, err)
+	if _, err := os.Stat(tokOptModel()); err != nil {
+		testmodels.Missing(t, "%s is the gate's input, not an optional extra: %v", tokOptModel(), err)
 	}
 	b, err := os.ReadFile(tokOptJSON)
 	if err != nil {
@@ -50,7 +50,7 @@ func tokOptArtefacts(t *testing.T) []byte {
 func TestTokOptionReachesTokNew(t *testing.T) {
 	js := tokOptArtefacts(t)
 
-	base, err := model.Open(jlmOf(t, tokOptModel))
+	base, err := model.Open(jlmOf(t, tokOptModel()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestTokOptionReachesTokNew(t *testing.T) {
 	}
 	def := base.Vocab.Encode(tokOptText, false)
 
-	over, err := model.Open(jlmOf(t, tokOptModel), model.WithTokenizer(bytes.NewReader(js)))
+	over, err := model.Open(jlmOf(t, tokOptModel()), model.WithTokenizer(bytes.NewReader(js)))
 	if err != nil {
 		t.Fatalf("Open with WithTokenizer: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestTokOptionReachesTokNew(t *testing.T) {
 
 	// Different is not enough (a corrupted pipeline also differs): the ids must
 	// equal what tok.New produces directly with the same option.
-	f, err := gguf.Open(tokOptModel)
+	f, err := gguf.Open(tokOptModel())
 	if err != nil {
 		t.Fatalf("gguf.Open: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestTokOptionReachesTokNew(t *testing.T) {
 	}
 	if want := direct.Encode(tokOptText, false); !slices.Equal(got, want) {
 		t.Fatalf("model.Open(%s, WithTokenizer) gave %v; tok.New on the same file and the same "+
-			"reader gives %v -- the option arrives changed", tokOptModel, got, want)
+			"reader gives %v -- the option arrives changed", tokOptModel(), got, want)
 	}
 
 	// And the default path is unchanged: no option gives tok.New(vc)'s ids.

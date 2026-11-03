@@ -20,7 +20,7 @@ import (
 // logits past 100 times the clean worst and past 1e-4.
 func TestDeepseek4ServesComposedOnCPU(t *testing.T) {
 	const bound = 1e-5
-	for _, fx := range ds4Fixtures {
+	for _, fx := range ds4Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			gm, g := openDS4(t, fx.name)
 			ok := fx.sel(gm)
@@ -29,13 +29,13 @@ func TestDeepseek4ServesComposedOnCPU(t *testing.T) {
 				t.Fatal("the container does not carry the fixture's graph")
 			}
 			path := jlmOf(t, testmodels.Path(fx.name+".gguf"))
-			ref, err := Open(path, noTune)
+			ref, err := Open(path, noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer ref.Close()
 			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, false, 0, 0)
-			m, err := Open(path, noTune)
+			m, err := Open(path, noTune())
 			if err != nil {
 				t.Fatal(err)
 			}

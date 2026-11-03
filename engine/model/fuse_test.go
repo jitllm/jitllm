@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/sched"
@@ -19,8 +20,8 @@ func fuseModels() []string {
 	names := []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
 		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "gemma-3-1b-it-Q4_K_M.gguf",
 		"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf"}
-	names = append(names, principleFixtures...)
-	names = append(names, principleMixtures...)
+	names = append(names, principleFixtures()...)
+	names = append(names, principleMixtures()...)
 	if v := os.Getenv("JITLLM_FUSE_MODELS"); v != "" {
 		names = append(names, strings.Split(v, ",")...)
 	}
@@ -96,7 +97,7 @@ func TestFusedBlocksMatchPerOp(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := testmodels.Path(name)
 			for _, paged := range []bool{false, true} {
-				m, err := Open(jlmOf(t, p), noTune)
+				m, err := Open(jlmOf(t, p), noTune())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -160,33 +161,53 @@ func TestFusedBlocksMatchPerOp(t *testing.T) {
 	}
 }
 
-// fusedRunsCheck logs how many fused runs (fuse.go) a test's decode tokens
-// opened, and with must fails a test that ran yet opened none: a relocation
-// gate that never ran a fused run says nothing about fusion. A batched step
-// and a crew shared by several sessions run per op by design, so their gates
-// log the count instead.
-func fusedRunsCheck(t *testing.T, must bool) func() {
-	r0, a0 := fusedRunsTotal.Load(), fuseTriesTotal.Load()
-	return func() {
-		if t.Skipped() || t.Failed() {
-			return
-		}
-		n, asked := fusedRunsTotal.Load()-r0, fuseTriesTotal.Load()-a0
-		t.Logf("fused runs opened: %d of %d asked for", n, asked)
-		if must && asked == 0 {
-			t.Logf("%s decoded no host token that could fuse (every model it names skipped, or every block ran on a device)", t.Name())
-			return
-		}
-		// sched.Pool.Fuse opens no region on a pool of one worker: with no
-		// one else to join there is no round trip to remove, and the per-op
-		// path is what such a host runs (a one-physical-core runner).
-		if must && n == 0 && len(sched.DecodeCores()) < 2 {
-			t.Logf("%s: the decode pool has %d worker(s), and a fused run needs two; the per-op path is this host's",
-				t.Name(), len(sched.DecodeCores()))
-			return
-		}
-		if must && n == 0 {
-			t.Fatalf("%s opened no fused run: it gated the per-op path only", t.Name())
-		}
+// fuseWatch logs how many fused runs (fuse.go) the models a test hands it
+// opened for its decode tokens, and with must fails a test that ran yet opened
+// none: a relocation gate that never ran a fused run says nothing about fusion.
+// A batched step and a crew shared by several sessions run per op by design,
+// so their gates log the count instead. A nil watch watches nothing.
+type fuseWatch struct {
+	t    *testing.T
+	must bool
+	mu   sync.Mutex
+	ms   []*Model
+}
+
+func fusedRunsCheck(t *testing.T, must bool) *fuseWatch { return &fuseWatch{t: t, must: must} }
+
+func (w *fuseWatch) watch(m *Model) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.ms = append(w.ms, m)
+	w.mu.Unlock()
+}
+
+func (w *fuseWatch) done() {
+	t, must := w.t, w.must
+	if t.Skipped() || t.Failed() {
+		return
+	}
+	var n, asked int64
+	for _, m := range w.ms {
+		n += m.fusedRuns.Load()
+		asked += m.fuseTries.Load()
+	}
+	t.Logf("fused runs opened: %d of %d asked for", n, asked)
+	if must && asked == 0 {
+		t.Logf("%s decoded no host token that could fuse (every model it names skipped, or every block ran on a device)", t.Name())
+		return
+	}
+	// sched.Pool.Fuse opens no region on a pool of one worker: with no
+	// one else to join there is no round trip to remove, and the per-op
+	// path is what such a host runs (a one-physical-core runner).
+	if must && n == 0 && len(sched.DecodeCores()) < 2 {
+		t.Logf("%s: the decode pool has %d worker(s), and a fused run needs two; the per-op path is this host's",
+			t.Name(), len(sched.DecodeCores()))
+		return
+	}
+	if must && n == 0 {
+		t.Fatalf("%s opened no fused run: it gated the per-op path only", t.Name())
 	}
 }

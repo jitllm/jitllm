@@ -15,72 +15,74 @@ import (
 // device session runs; the host arm is computed once from the clean model. A
 // tier that ignored a feature would match the host on the clean arm and fail
 // nothing, so each must move the device's logits.
-var c6DevViolations = map[string][]c6Violation{
-	"synth-phi2": {
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"no norm biases", noNormBiases},
-		{"no FFN biases", noFFNBiases},
-		{"serial residual", serialFromShared},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-		{"no output norm bias", func(m *Model) func() {
-			was := m.outNormB
-			m.outNormB = nil
-			return func() { m.outNormB = was }
-		}},
-	},
-	"synth-starcoder": {
-		{"no position table", noPosTable},
-		{"rotary instead of none", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPosEnc = false }) }},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"no norm biases", noNormBiases},
-		{"no FFN biases", noFFNBiases},
-	},
-	"synth-stablelm": {
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	},
-	"synth-stablelm-par": {
-		{"serial residual", serialFromShared},
-	},
-	"synth-starcoder2": {
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-		{"no FFN biases", noFFNBiases},
-	},
-	"synth-falcon": {
-		{"serial residual", serialFromShared},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-	},
-	"synth-falcon40": {
-		{"the two norms swapped", swapNorms},
-		{"one norm for both branches", oneNormForBoth},
-	},
-	"synth-nemotron": {
-		{"GELU for relu2", actSwap(nn.ActGELU)},
-		{"SiLU for relu2", actSwap(nn.ActSiLU)},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	},
-	"synth-dbrx": {
-		{"no clip_qkv", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV = 0 }) }},
-		{"clip_qkv at twice its value", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV *= 2 }) }},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-	},
-	"synth-commandr": {
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
-		{"serial residual", serialFromShared},
-		{"NEOX rotary for NORM", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = true }) }},
-	},
-	"synth-cohere2": {
-		{"rotary on the global layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPEGlobal = false }) }},
-		{"no sliding window", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAWindow = 0 }) }},
-		{"serial residual", serialFromShared},
-	},
+func c6BaseDevViolations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-phi2": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"no norm biases", noNormBiases},
+			{"no FFN biases", noFFNBiases},
+			{"serial residual", serialFromShared},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+			{"no output norm bias", func(m *Model) func() {
+				was := m.outNormB
+				m.outNormB = nil
+				return func() { m.outNormB = was }
+			}},
+		},
+		"synth-starcoder": {
+			{"no position table", noPosTable},
+			{"rotary instead of none", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPosEnc = false }) }},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"no norm biases", noNormBiases},
+			{"no FFN biases", noFFNBiases},
+		},
+		"synth-stablelm": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		},
+		"synth-stablelm-par": {
+			{"serial residual", serialFromShared},
+		},
+		"synth-starcoder2": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+			{"no FFN biases", noFFNBiases},
+		},
+		"synth-falcon": {
+			{"serial residual", serialFromShared},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+		},
+		"synth-falcon40": {
+			{"the two norms swapped", swapNorms},
+			{"one norm for both branches", oneNormForBoth},
+		},
+		"synth-nemotron": {
+			{"GELU for relu2", actSwap(nn.ActGELU)},
+			{"SiLU for relu2", actSwap(nn.ActSiLU)},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		},
+		"synth-dbrx": {
+			{"no clip_qkv", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV = 0 }) }},
+			{"clip_qkv at twice its value", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV *= 2 }) }},
+			{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+		},
+		"synth-commandr": {
+			{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+			{"serial residual", serialFromShared},
+			{"NEOX rotary for NORM", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = true }) }},
+		},
+		"synth-cohere2": {
+			{"rotary on the global layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPEGlobal = false }) }},
+			{"no sliding window", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAWindow = 0 }) }},
+			{"serial residual", serialFromShared},
+		},
+	}
 }
 
 // TestC6GreedyOnDeviceHonoursTheHeadBias holds the two device argmax paths to
@@ -138,11 +140,11 @@ func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 // through the batched kernels, and then each feature removed from the device
 // session alone.
 func TestC6OnEveryDevice(t *testing.T) {
-	for _, fx := range c6Fixtures {
+	for _, fx := range c6Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openC6(t, fx.name)
 			defer m.Close()
-			fixtureOnEveryDeviceCounted(t, m, g, c6DevViolations[fx.name], 1e-5, true)
+			fixtureOnEveryDeviceCounted(t, m, g, c6DevViolations()[fx.name], 1e-5, true)
 		})
 	}
 }

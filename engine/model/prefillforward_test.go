@@ -12,7 +12,7 @@ import (
 // the same logits, bit for bit -- and a longer one, or any prompt without the
 // option, still takes the batched chunk (Instance.forwardPrompts counts which).
 func TestPrefillForwardRowsIsTheForwardLoop(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune, WithPrefillForwardRows(6))
+	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune(), WithPrefillForwardRows(6))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestPrefillForwardRowsIsTheForwardLoop(t *testing.T) {
 		t.Fatal("a prompt under the forward-row limit is not the Forward loop bit for bit")
 	}
 	pre(m.Vocab.Encode("The capital of France is Paris, and the capital of Italy is Rome.", true), 0)
-	m2, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune)
+	m2, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

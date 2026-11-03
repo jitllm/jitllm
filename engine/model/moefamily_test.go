@@ -29,80 +29,85 @@ func openMoE(t *testing.T, name string) (*Model, *c6Golden) {
 // moeFixtures names each fixture and what its container must carry, so a
 // fixture that lost a feature -- or a converter that miscounted one -- fails
 // before it is compared.
-var moeFixtures = []struct {
+func moeBaseFixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-glm4moe", func(m *Model) bool {
-		c := m.Cfg
-		dense, moe := &m.layers[0], &m.layers[1]
-		return c.Arch == "glm4moe" && c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
-			c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
-			c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 &&
-			c.NLayer == 3 && c.NMTP == 1 && !c.TiedEmbd &&
-			dense.router.e == nil && dense.gate.e != nil && dense.ffnNorm != nil &&
-			moe.router.e != nil && moe.expProbsB != nil && moe.shGate.e != nil && moe.shRouter == nil &&
-			moe.ffnNorm != nil && moe.postAttnNorm == nil && moe.qNorm != nil &&
-			moe.bq != nil && moe.bk != nil && moe.bv != nil && moe.bo == nil &&
-			m.layers[3].mtp != nil
-	}},
-	{"synth-qwen2moe", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "qwen2moe" && c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
-			!c.ExpertSigmoid && c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
-			c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 0 && c.NMTP == 0 &&
-			c.NKVHead < c.NHead && l.router.e != nil && l.expProbsB == nil && l.shGate.e != nil &&
-			len(l.shRouter) == c.NEmbd && l.bq != nil && l.bk != nil && l.bv != nil && l.bo == nil &&
-			l.ffnNorm != nil && !c.TiedEmbd
-	}},
-	{"synth-ernie45moe", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[1]
-		return c.Arch == "ernie4_5-moe" && !c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
-			!c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
-			c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 1 && c.MoEStep == 2 &&
-			!c.MoEAt(0) && c.MoEAt(1) && !c.MoEAt(2) && c.MoEAt(3) && c.NMTP == 0 &&
-			m.layers[0].gate.e != nil && m.layers[2].gate.e != nil && m.layers[2].router.e == nil &&
-			l.router.e != nil && len(l.expProbsB) == c.NExpert && l.shGate.e != nil && l.shRouter == nil &&
-			l.bq == nil && l.bo == nil && c.TiedEmbd
-	}},
-	{"synth-ernie45", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "llama" && !c.RopeNeox && c.NRot == c.HeadDim && c.NExpert == 0 &&
-			l.gate.e != nil && l.bq == nil && c.TiedEmbd
-	}},
-	{"synth-hunyuanmoe", func(m *Model) bool {
-		c := m.Cfg
-		ok := c.Arch == "hunyuan" && c.RopeNeox && c.NRot == c.HeadDim && c.HeadDim == 128 &&
-			c.QKNorm && c.QKNormPost && !c.QKNormWide && !c.ExpertSigmoid && !c.NoExpertNorm &&
-			c.ExpertScale == 1 && c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp &&
-			c.NDenseLead == 0 && c.NKVHead < c.NHead && c.TiedEmbd
-		for i := range m.layers {
-			l := &m.layers[i]
-			ok = ok && l.router.e != nil && l.shGate.e != nil && l.shRouter == nil &&
-				l.expProbsB == nil && l.bq == nil && foldedQK(l)
-		}
-		return ok
-	}},
-	{"synth-minimaxm2", func(m *Model) bool {
-		c := m.Cfg
-		ok := c.Arch == "minimax-m2" && c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm && c.QKNormWide &&
-			c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
-			c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 && c.NMTP == 0 &&
-			c.NKVHead < c.NHead && !c.TiedEmbd
-		for i := range m.layers {
-			l := &m.layers[i]
-			ok = ok && l.router.e != nil && len(l.expProbsB) == c.NExpert && l.shGate.e == nil &&
-				len(l.qNorm) == c.NHead*c.HeadDim && len(l.kNorm) == c.NKVHead*c.HeadDim &&
-				l.bq == nil && l.ffnNorm != nil
-		}
-		return ok
-	}},
-	{"synth-hunyuan", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "hunyuan" && c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && c.QKNormPost &&
-			c.NExpert == 0 && c.NKVHead < c.NHead && l.gate.e != nil && l.bq == nil &&
-			c.TiedEmbd && foldedQK(l)
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-glm4moe", func(m *Model) bool {
+			c := m.Cfg
+			dense, moe := &m.layers[0], &m.layers[1]
+			return c.Arch == "glm4moe" && c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
+				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
+				c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 &&
+				c.NLayer == 3 && c.NMTP == 1 && !c.TiedEmbd &&
+				dense.router.e == nil && dense.gate.e != nil && dense.ffnNorm != nil &&
+				moe.router.e != nil && moe.expProbsB != nil && moe.shGate.e != nil && moe.shRouter == nil &&
+				moe.ffnNorm != nil && moe.postAttnNorm == nil && moe.qNorm != nil &&
+				moe.bq != nil && moe.bk != nil && moe.bv != nil && moe.bo == nil &&
+				m.layers[3].mtp != nil
+		}},
+		{"synth-qwen2moe", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "qwen2moe" && c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
+				!c.ExpertSigmoid && c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
+				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 0 && c.NMTP == 0 &&
+				c.NKVHead < c.NHead && l.router.e != nil && l.expProbsB == nil && l.shGate.e != nil &&
+				len(l.shRouter) == c.NEmbd && l.bq != nil && l.bk != nil && l.bv != nil && l.bo == nil &&
+				l.ffnNorm != nil && !c.TiedEmbd
+		}},
+		{"synth-ernie45moe", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[1]
+			return c.Arch == "ernie4_5-moe" && !c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
+				!c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
+				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 1 && c.MoEStep == 2 &&
+				!c.MoEAt(0) && c.MoEAt(1) && !c.MoEAt(2) && c.MoEAt(3) && c.NMTP == 0 &&
+				m.layers[0].gate.e != nil && m.layers[2].gate.e != nil && m.layers[2].router.e == nil &&
+				l.router.e != nil && len(l.expProbsB) == c.NExpert && l.shGate.e != nil && l.shRouter == nil &&
+				l.bq == nil && l.bo == nil && c.TiedEmbd
+		}},
+		{"synth-ernie45", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "llama" && !c.RopeNeox && c.NRot == c.HeadDim && c.NExpert == 0 &&
+				l.gate.e != nil && l.bq == nil && c.TiedEmbd
+		}},
+		{"synth-hunyuanmoe", func(m *Model) bool {
+			c := m.Cfg
+			ok := c.Arch == "hunyuan" && c.RopeNeox && c.NRot == c.HeadDim && c.HeadDim == 128 &&
+				c.QKNorm && c.QKNormPost && !c.QKNormWide && !c.ExpertSigmoid && !c.NoExpertNorm &&
+				c.ExpertScale == 1 && c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp &&
+				c.NDenseLead == 0 && c.NKVHead < c.NHead && c.TiedEmbd
+			for i := range m.layers {
+				l := &m.layers[i]
+				ok = ok && l.router.e != nil && l.shGate.e != nil && l.shRouter == nil &&
+					l.expProbsB == nil && l.bq == nil && foldedQK(l)
+			}
+			return ok
+		}},
+		{"synth-minimaxm2", func(m *Model) bool {
+			c := m.Cfg
+			ok := c.Arch == "minimax-m2" && c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm && c.QKNormWide &&
+				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
+				c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 && c.NMTP == 0 &&
+				c.NKVHead < c.NHead && !c.TiedEmbd
+			for i := range m.layers {
+				l := &m.layers[i]
+				ok = ok && l.router.e != nil && len(l.expProbsB) == c.NExpert && l.shGate.e == nil &&
+					len(l.qNorm) == c.NHead*c.HeadDim && len(l.kNorm) == c.NKVHead*c.HeadDim &&
+					l.bq == nil && l.ffnNorm != nil
+			}
+			return ok
+		}},
+		{"synth-hunyuan", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "hunyuan" && c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && c.QKNormPost &&
+				c.NExpert == 0 && c.NKVHead < c.NHead && l.gate.e != nil && l.bq == nil &&
+				c.TiedEmbd && foldedQK(l)
+		}},
+	}
 }
 
 // foldedQK reports a block whose after-rotary q/k norm was folded at
@@ -142,137 +147,141 @@ func unweightedQKNorm(m *Model) func() {
 
 // moeViolations are the features each family adds, taken out one at a time on
 // the host. Each must move the logits far past c6NMSE.
-var moeViolations = map[string][]c6Violation{
-	"synth-glm4moe": {
-		{"softmax for sigmoid", routerSwap(false)},
-		{"no selection bias", noSelectionBias},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
-		{"no shared expert", noSharedExpert},
-		{"no q/k norm", noQKNorm},
-		{"no q/k/v biases", noQKVBias},
-		{"NORM rotary for NEOX", hostNormRotary},
-		{"the prediction block run as a trunk block", mtpInTrunk},
-	},
-	"synth-qwen2moe": {
-		{"sigmoid for softmax", routerSwap(true)},
-		{"the routed weights renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = false })
-		}},
-		{"no shared-expert gate", noSharedGate},
-		{"no shared expert", noSharedExpert},
-		{"no q/k/v biases", noQKVBias},
-		{"NORM rotary for NEOX", hostNormRotary},
-	},
-	"synth-ernie45moe": {
-		{"sigmoid for softmax", routerSwap(true)},
-		{"no selection bias", noSelectionBias},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no shared expert", noSharedExpert},
-		{"NEOX rotary for NORM", hostNeoxRotary},
-	},
-	"synth-hunyuanmoe": {
-		{"the q/k norm before the rotary", hunyuanNormBeforeRope},
-		{"an unweighted q/k norm", unweightedQKNorm},
-		{"no q/k norm", noQKNorm},
-		{"sigmoid for softmax", routerSwap(true)},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no shared expert", noSharedExpert},
-		{"NORM rotary for NEOX", hostNormRotary},
-	},
-	"synth-hunyuan": {
-		{"the q/k norm before the rotary", hunyuanNormBeforeRope},
-		{"an unweighted q/k norm", unweightedQKNorm},
-		{"no q/k norm", noQKNorm},
-		{"NORM rotary for NEOX", hostNormRotary},
-	},
-	"synth-ernie45": {
-		{"NEOX rotary for NORM", hostNeoxRotary},
-	},
-	"synth-minimaxm2": {
-		{"softmax for sigmoid", routerSwap(false)},
-		{"no selection bias", noSelectionBias},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"a per-head q/k norm", perHeadQK},
-		{"k's norm read from q's weight", kFromQ},
-		{"no q/k norm", noQKNorm},
-		{"NORM rotary for NEOX", hostNormRotary},
-	},
+func moeBaseViolations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-glm4moe": {
+			{"softmax for sigmoid", routerSwap(false)},
+			{"no selection bias", noSelectionBias},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
+			{"no shared expert", noSharedExpert},
+			{"no q/k norm", noQKNorm},
+			{"no q/k/v biases", noQKVBias},
+			{"NORM rotary for NEOX", hostNormRotary},
+			{"the prediction block run as a trunk block", mtpInTrunk},
+		},
+		"synth-qwen2moe": {
+			{"sigmoid for softmax", routerSwap(true)},
+			{"the routed weights renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = false })
+			}},
+			{"no shared-expert gate", noSharedGate},
+			{"no shared expert", noSharedExpert},
+			{"no q/k/v biases", noQKVBias},
+			{"NORM rotary for NEOX", hostNormRotary},
+		},
+		"synth-ernie45moe": {
+			{"sigmoid for softmax", routerSwap(true)},
+			{"no selection bias", noSelectionBias},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no shared expert", noSharedExpert},
+			{"NEOX rotary for NORM", hostNeoxRotary},
+		},
+		"synth-hunyuanmoe": {
+			{"the q/k norm before the rotary", hunyuanNormBeforeRope},
+			{"an unweighted q/k norm", unweightedQKNorm},
+			{"no q/k norm", noQKNorm},
+			{"sigmoid for softmax", routerSwap(true)},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no shared expert", noSharedExpert},
+			{"NORM rotary for NEOX", hostNormRotary},
+		},
+		"synth-hunyuan": {
+			{"the q/k norm before the rotary", hunyuanNormBeforeRope},
+			{"an unweighted q/k norm", unweightedQKNorm},
+			{"no q/k norm", noQKNorm},
+			{"NORM rotary for NEOX", hostNormRotary},
+		},
+		"synth-ernie45": {
+			{"NEOX rotary for NORM", hostNeoxRotary},
+		},
+		"synth-minimaxm2": {
+			{"softmax for sigmoid", routerSwap(false)},
+			{"no selection bias", noSelectionBias},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"a per-head q/k norm", perHeadQK},
+			{"k's norm read from q's weight", kFromQ},
+			{"no q/k norm", noQKNorm},
+			{"NORM rotary for NEOX", hostNormRotary},
+		},
+	}
 }
 
 // moeDevViolations are the same features taken out while only the device
 // session runs.
-var moeDevViolations = map[string][]c6Violation{
-	"synth-glm4moe": {
-		// With the selection bias kept, which is the device's softmax-with-bias
-		// route (ERNIE's).
-		{"softmax for sigmoid", routerSwap(false)},
-		{"no selection bias", noSelectionBias},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
-		{"no shared expert", noSharedExpert},
-		{"no q/k norm", noQKNorm},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	},
-	"synth-qwen2moe": {
-		{"sigmoid for softmax", routerSwap(true)},
-		{"the routed weights renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = false })
-		}},
-		{"no shared-expert gate", noSharedGate},
-		{"no shared expert", noSharedExpert},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	},
-	"synth-ernie45moe": {
-		{"sigmoid for softmax", routerSwap(true)},
-		{"no selection bias", noSelectionBias},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no shared expert", noSharedExpert},
-		{"NEOX rotary for NORM", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = true }) }},
-	},
-	"synth-hunyuanmoe": {
-		{"the q/k norm before the rotary", hunyuanNormBeforeRope},
-		{"an unweighted q/k norm", unweightedQKNorm},
-		{"no q/k norm", noQKNorm},
-		{"sigmoid for softmax", routerSwap(true)},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no shared expert", noSharedExpert},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	},
-	"synth-hunyuan": {
-		{"the q/k norm before the rotary", hunyuanNormBeforeRope},
-		{"an unweighted q/k norm", unweightedQKNorm},
-		{"no q/k norm", noQKNorm},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	},
-	"synth-ernie45": {
-		{"NEOX rotary for NORM", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = true }) }},
-	},
-	"synth-minimaxm2": {
-		{"softmax for sigmoid", routerSwap(false)},
-		{"no selection bias", noSelectionBias},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"a per-head q/k norm", perHeadQK},
-		{"k's norm read from q's weight", kFromQ},
-		{"no q/k norm", noQKNorm},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	},
+func moeBaseDevViolations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-glm4moe": {
+			// With the selection bias kept, which is the device's softmax-with-bias
+			// route (ERNIE's).
+			{"softmax for sigmoid", routerSwap(false)},
+			{"no selection bias", noSelectionBias},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
+			{"no shared expert", noSharedExpert},
+			{"no q/k norm", noQKNorm},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		},
+		"synth-qwen2moe": {
+			{"sigmoid for softmax", routerSwap(true)},
+			{"the routed weights renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = false })
+			}},
+			{"no shared-expert gate", noSharedGate},
+			{"no shared expert", noSharedExpert},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		},
+		"synth-ernie45moe": {
+			{"sigmoid for softmax", routerSwap(true)},
+			{"no selection bias", noSelectionBias},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no shared expert", noSharedExpert},
+			{"NEOX rotary for NORM", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = true }) }},
+		},
+		"synth-hunyuanmoe": {
+			{"the q/k norm before the rotary", hunyuanNormBeforeRope},
+			{"an unweighted q/k norm", unweightedQKNorm},
+			{"no q/k norm", noQKNorm},
+			{"sigmoid for softmax", routerSwap(true)},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no shared expert", noSharedExpert},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		},
+		"synth-hunyuan": {
+			{"the q/k norm before the rotary", hunyuanNormBeforeRope},
+			{"an unweighted q/k norm", unweightedQKNorm},
+			{"no q/k norm", noQKNorm},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		},
+		"synth-ernie45": {
+			{"NEOX rotary for NORM", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = true }) }},
+		},
+		"synth-minimaxm2": {
+			{"softmax for sigmoid", routerSwap(false)},
+			{"no selection bias", noSelectionBias},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"a per-head q/k norm", perHeadQK},
+			{"k's norm read from q's weight", kFromQ},
+			{"no q/k norm", noQKNorm},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		},
+	}
 }
 
 // noQKNorm drops the q/k norm by the one switch both tiers read (QKNormAt).
@@ -428,7 +437,7 @@ func mtpInTrunk(m *Model) func() {
 // own class on decode, prefill at every length and the batched path, and the
 // container's tokenizer to the family's tokenizer.json.
 func TestMoEFamiliesMatchTransformers(t *testing.T) {
-	for _, fx := range moeFixtures {
+	for _, fx := range moeFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openMoE(t, fx.name)
 			defer m.Close()
@@ -463,8 +472,8 @@ func TestMoEFamiliesMatchTransformers(t *testing.T) {
 // feature the fixture cannot see is one TestMoEFamiliesMatchTransformers
 // certifies nothing about.
 func TestMoEFamilyFeaturesAreLoadBearing(t *testing.T) {
-	for _, fx := range moeFixtures {
-		vs := moeViolations[fx.name]
+	for _, fx := range moeFixtures() {
+		vs := moeViolations()[fx.name]
 		t.Run(fx.name, func(t *testing.T) {
 			if len(vs) == 0 {
 				t.Fatal("no violations for this fixture")
@@ -499,11 +508,11 @@ func TestMoEFamilyFeaturesAreLoadBearing(t *testing.T) {
 // on each device present against the host, then each feature taken out of the
 // device session alone (fixtureOnEveryDevice).
 func TestMoEFamiliesOnEveryDevice(t *testing.T) {
-	for _, fx := range moeFixtures {
+	for _, fx := range moeFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openMoE(t, fx.name)
 			defer m.Close()
-			fixtureOnEveryDeviceCounted(t, m, g, moeDevViolations[fx.name], 1e-5, true)
+			fixtureOnEveryDeviceCounted(t, m, g, moeDevViolations()[fx.name], 1e-5, true)
 		})
 	}
 }
@@ -514,7 +523,7 @@ func TestMoEFamiliesOnEveryDevice(t *testing.T) {
 // resident model's logits bit for bit. The selection check is the fault
 // count: a budget that held the model would compare it with itself.
 func TestMoEFamiliesPageWithTheSameAnswer(t *testing.T) {
-	for _, fx := range moeFixtures {
+	for _, fx := range moeFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			_, g := openMoE(t, fx.name)
 			pagesWithTheSameAnswer(t, g.IDs, jlmOf(t, testmodels.Path(fx.name+".gguf")))
@@ -530,7 +539,7 @@ func TestHybridMixturesPageWithTheSameAnswer(t *testing.T) {
 	for _, name := range []string{"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear" + q8Suffix} {
 		t.Run(name, func(t *testing.T) {
 			src := jlmOf(t, testmodels.Path(name))
-			m, err := Open(src, noTune)
+			m, err := Open(src, noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -547,7 +556,7 @@ func TestHybridMixturesPageWithTheSameAnswer(t *testing.T) {
 func pagesWithTheSameAnswer(t *testing.T, ids []int32, src string) {
 	t.Helper()
 	run := func(opts ...Option) ([][]float32, int64) {
-		m, err := Open(src, append([]Option{noTune, WithKVF16(false),
+		m, err := Open(src, append([]Option{noTune(), WithKVF16(false),
 			WithJITOptions(nn.WithGEMMExact(true))}, opts...)...)
 		if err != nil {
 			t.Fatal(err)
@@ -614,5 +623,4 @@ func nmseF32(want, got []float32) float64 {
 // TestPagingDoesNotChangeTheAnswer counts frames of one page size, and a
 // mixture's expert pages are another.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-hunyuan.gguf")
 }

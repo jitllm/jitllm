@@ -23,28 +23,33 @@ func openSSM(t *testing.T, name string) (*Model, *c6Golden) {
 }
 
 // ssmFixtures names each fixture and what its container must carry.
-var ssmFixtures = []struct {
+func ssmBaseFixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-mamba2", func(m *Model) bool {
-		c := m.Cfg
-		ok := c.Arch == "mamba2" && c.SSD() && c.SSM.Groups == 1 && c.SSM.NHeadV == 8 &&
-			c.SSM.StateSize == 16 && c.SSM.Inner == 128 && !c.TiedEmbd
-		for i := range m.layers {
-			l := &m.layers[i]
-			ok = ok && l.noFFN && len(l.ssmD) == 8 && len(l.ssmConvB) == 128+2*16 &&
-				len(l.ssmNorm) == 128 && c.LayerKind(i).Recurrent()
-		}
-		return ok
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-mamba2", func(m *Model) bool {
+			c := m.Cfg
+			ok := c.Arch == "mamba2" && c.SSD() && c.SSM.Groups == 1 && c.SSM.NHeadV == 8 &&
+				c.SSM.StateSize == 16 && c.SSM.Inner == 128 && !c.TiedEmbd
+			for i := range m.layers {
+				l := &m.layers[i]
+				ok = ok && l.noFFN && len(l.ssmD) == 8 && len(l.ssmConvB) == 128+2*16 &&
+					len(l.ssmNorm) == 128 && c.LayerKind(i).Recurrent()
+			}
+			return ok
+		}},
+	}
 }
 
 // TestSSMFamiliesMatchTransformers holds each family to transformers' own
 // class on decode, prefill at every length and the batched path, and the
 // container's tokenizer to the fixture's tokenizer.json.
 func TestSSMFamiliesMatchTransformers(t *testing.T) {
-	for _, fx := range ssmFixtures {
+	for _, fx := range ssmFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openSSM(t, fx.name)
 			defer m.Close()
@@ -163,30 +168,16 @@ func ssdViolations(t *testing.T) []c6Violation {
 	}
 }
 
-// ssmFamilyViolations are each family's own violations beside the Mamba-2
-// ones, keyed by fixture name and registered by the family's own file; device
-// says the list is for a device session (a family may hold back a violation
-// the device declines by name rather than runs).
-var ssmFamilyViolations = map[string]func(device bool) []c6Violation{}
-
-// ssmNoNorm names the fixtures whose mixer has no gated norm, where the norm's
-// order is not a feature (Falcon-H1-0.5B's shape).
-var ssmNoNorm = map[string]bool{}
-
-// ssmNotMamba names the fixtures whose recurrent blocks are not Mamba-2's
-// (LFM2's short convolutions): their family's list is the whole list.
-var ssmNotMamba = map[string]bool{}
-
 // ssmViolations are the Mamba-2 violations and the fixture's family's own.
 func ssmViolations(t *testing.T, name string, device bool) []c6Violation {
 	vs := ssdViolations(t)
-	if ssmNotMamba[name] {
+	if ssmNotMamba(name) {
 		vs = nil
 	}
-	if ssmNoNorm[name] {
+	if name == "synth-falconh1-nonorm" {
 		vs = slices.DeleteFunc(vs, func(v c6Violation) bool { return v.name == "the norm before the gate" })
 	}
-	if f := ssmFamilyViolations[name]; f != nil {
+	if f := ssmFamilyViolations(name); f != nil {
 		vs = append(vs, f(device)...)
 	}
 	return vs
@@ -196,7 +187,7 @@ func ssmViolations(t *testing.T, name string, device bool) []c6Violation {
 // two the weights cannot express: the convolution window and the state not
 // carried from one token to the next.
 func TestSSDFeaturesAreLoadBearing(t *testing.T) {
-	for _, fx := range ssmFixtures {
+	for _, fx := range ssmFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openSSM(t, fx.name)
 			defer m.Close()
@@ -257,7 +248,7 @@ func TestSSDFeaturesAreLoadBearing(t *testing.T) {
 // on each device present against the host, then each Mamba-2 feature taken
 // out of the device session alone (fixtureOnEveryDevice).
 func TestSSMFamiliesOnEveryDevice(t *testing.T) {
-	for _, fx := range ssmFixtures {
+	for _, fx := range ssmFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openSSM(t, fx.name)
 			defer m.Close()
@@ -271,7 +262,6 @@ func TestSSMFamiliesOnEveryDevice(t *testing.T) {
 // it, and so does the allocation gate (decodealloc_test.go). Each family's
 // file registers its own fixtures the same way.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-mamba2.gguf")
 }
 
 // TestSSMFamiliesPageWithTheSameAnswer is the paging principle on every
@@ -279,7 +269,7 @@ func init() {
 // block is evicted and re-read, recurrent and attending alike, and decode,
 // prefill and the batch must give the resident logits bit for bit.
 func TestSSMFamiliesPageWithTheSameAnswer(t *testing.T) {
-	for _, fx := range ssmFixtures {
+	for _, fx := range ssmFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			_, g := openSSM(t, fx.name)
 			pagesWithTheSameAnswer(t, g.IDs, jlmOf(t, testmodels.Path(fx.name+".gguf")))

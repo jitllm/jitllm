@@ -10,7 +10,6 @@ import (
 // dbrx's mixture, its q, k and v clamped, joins the gates of the five
 // principles: relocation, paging and a warm step that allocates nothing.
 func init() {
-	principleMixtures = append(principleMixtures, "synth-dbrx.gguf")
 }
 
 // cpuFeatureFixtures are float fixtures of the attention features the front
@@ -68,7 +67,7 @@ func TestComposedCPUFeaturesAreLoadBearing(t *testing.T) {
 	for name, vs := range cpuFeatureFixtures() {
 		t.Run(name, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(name+".gguf"))
-			ref, err := Open(path, noTune, withCPUFloat())
+			ref, err := Open(path, noTune(), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +75,7 @@ func TestComposedCPUFeaturesAreLoadBearing(t *testing.T) {
 			ref.setKVPageForTest(page)
 			toks := cpuTokens(t, ref, steps)
 			want := cpuLogits(t, ref, toks, cpuFaultNone, true)
-			m, err := Open(path, noTune)
+			m, err := Open(path, noTune())
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -28,9 +28,11 @@ type hotFloor struct {
 	groups    int     // minimum resident workgroups
 }
 
-var hotFloors = []hotFloor{
-	{prefixes: []string{"matvec_", "rmsnorm", "normpart", "normapply", "quantize", "act"}, occupancy: 0.5},
-	{prefixes: []string{"gemm", "flash"}, groups: 2},
+func hotFloors() []hotFloor {
+	return []hotFloor{
+		{prefixes: []string{"matvec_", "rmsnorm", "normpart", "normapply", "quantize", "act"}, occupancy: 0.5},
+		{prefixes: []string{"gemm", "flash"}, groups: 2},
+	}
 }
 
 // hostStagers are the host emitters that address the stack by design: the
@@ -40,13 +42,15 @@ var hotFloors = []hotFloor{
 // (engine/device/cpu/sse_packed.go). Every other host kernel holds its values in
 // registers, and one that starts addressing the stack has outgrown the file.
 // The set is every emitter in engine/device/cpu that writes At(RSP, ...).
-var hostStagers = map[string]bool{
-	"cpu.emitMatVec4":              true,
-	"cpu.emitQ3KMatVec":            true,
-	"cpu.emitQ6KMatVec":            true,
-	"cpu.emitKQuantMatVec":         true,
-	"cpu.EmitPackedMatVecSSE":      true,
-	"cpu.EmitPackedMatVecFusedSSE": true,
+func hostStagers() map[string]bool {
+	return map[string]bool{
+		"cpu.emitMatVec4":              true,
+		"cpu.emitQ3KMatVec":            true,
+		"cpu.emitQ6KMatVec":            true,
+		"cpu.emitKQuantMatVec":         true,
+		"cpu.EmitPackedMatVecSSE":      true,
+		"cpu.EmitPackedMatVecFusedSSE": true,
+	}
 }
 
 // hotKernelFaults is every hot kernel in ks that ran and spills or sits below its
@@ -56,7 +60,7 @@ func hotKernelFaults(ks []backend.KernelResources) (faults []string, checked int
 		if !k.Ran {
 			continue // compiled and passed over: a tile refused for spilling
 		}
-		for _, f := range hotFloors {
+		for _, f := range hotFloors() {
 			hot := false
 			for _, p := range f.prefixes {
 				hot = hot || strings.HasPrefix(k.Name, p)
@@ -127,7 +131,7 @@ func TestHotKernelsKeepTheirRegisters(t *testing.T) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune)
+	m, err := Open(jlmOf(t, p), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +155,7 @@ func TestHotKernelsKeepTheirRegisters(t *testing.T) {
 			if k.VecUsed > k.File {
 				t.Errorf("%s names %d vector registers of a %d-register file", k.Emitter, k.VecUsed, k.File)
 			}
-			if k.StackRefs > 0 && !hostStagers[k.Emitter] {
+			if k.StackRefs > 0 && !hostStagers()[k.Emitter] {
 				t.Errorf("%s addresses the stack %d times: a hand-allocated kernel that outgrew %d %s registers",
 					k.Emitter, k.StackRefs, k.File, k.ISA)
 			}

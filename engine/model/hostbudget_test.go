@@ -37,15 +37,13 @@ func (d *hostHungryDevice) PrewarmLayer(int, *nn.LayerPlan, *nn.LayerWeights) bo
 	return false
 }
 
-var _ nn.LayerDevice = (*hostHungryDevice)(nil)
-
 // TestHostBudgetLosesWhatAnIntegratedDeviceHolds: a device on host memory must
 // be subtracted from the host weight budget, or the host and the device spend
 // the same bytes. Asserted through the public calls (SetMemBudget,
 // SetDeviceLayers, HostBudget) in the order cmd/jitllm and an embedder make
 // them: the budget is set before the device exists.
 func TestHostBudgetLosesWhatAnIntegratedDeviceHolds(t *testing.T) {
-	m, err := Open(jlmOf(t, models["stories260K"]))
+	m, err := Open(jlmOf(t, models()["stories260K"]))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

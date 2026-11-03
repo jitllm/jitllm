@@ -151,11 +151,11 @@ func TestBatchProfile(t *testing.T) {
 
 	show := func(label string, ntok int, run func()) {
 		run() // warm: the tuners converge before the counters are read
-		ResetProfile()
+		m.ResetProfile()
 		start := time.Now()
 		run()
 		took := time.Since(start)
-		names, ns := OpProfile()
+		names, ns := m.OpProfile()
 		var tot int64
 		for _, v := range ns {
 			tot += v

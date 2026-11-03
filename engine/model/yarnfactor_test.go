@@ -10,43 +10,41 @@ import "math"
 // (scripts/c6gold.py), so the gates are TestC6MatchesTransformers,
 // TestC6FeaturesAreLoadBearing and TestC6OnEveryDevice under its name; the same
 // weights as safetensors (<name>-hf) run TestSafetensorsMatchTransformers.
-func init() {
-	c6Fixtures = append(c6Fixtures, yarnFixtures...)
-	for k, v := range yarnViolations {
-		c6Violations[k] = v
-	}
-}
-
 // mscale is YaRN's derived magnitude, 0.1*k*ln(factor) + 1.
 func mscale(factor, k float64) float64 { return 0.1*k*math.Log(factor) + 1 }
 
-var yarnFixtures = []struct {
+func yarnFixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	// attention_factor 1.5 where the formula gives 1.208, on the global layers
-	// only.
-	{"synth-olmo3-af", func(m *Model) bool {
-		c := m.Cfg
-		return c.Arch == "olmo3" && c.YarnFactor == 8 && m.rope.Scale == 1.5 &&
-			m.ropeSWA != nil && m.ropeSWA.Scale == 1 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
-	}},
-	// attention_factor 0.75, outranking the mscale/mscale_all_dim ratio.
-	{"synth-mistral3-af", func(m *Model) bool {
-		c := m.Cfg
-		return c.Arch == "mistral3" && c.YarnFactor == 16 && m.rope.Scale == 0.75 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
-	}},
-	// mscale == mscale_all_dim: cos and sin at exactly one, the score at
-	// mscale(8, 0.707)^2.
-	{"synth-deepseek-yarn", func(m *Model) bool {
-		c := m.Cfg
-		return c.MLA() && c.YarnFactor == 8 && m.rope.Scale == 1 && yarnScoreScaled(c)
-	}},
-	// And a stated 0.8 on cos and sin beside the same score correction.
-	{"synth-deepseek-yarn-af", func(m *Model) bool {
-		c := m.Cfg
-		return c.MLA() && c.YarnFactor == 8 && float32(m.rope.Scale) == 0.8 && yarnScoreScaled(c)
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		// attention_factor 1.5 where the formula gives 1.208, on the global layers
+		// only.
+		{"synth-olmo3-af", func(m *Model) bool {
+			c := m.Cfg
+			return c.Arch == "olmo3" && c.YarnFactor == 8 && m.rope.Scale == 1.5 &&
+				m.ropeSWA != nil && m.ropeSWA.Scale == 1 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
+		}},
+		// attention_factor 0.75, outranking the mscale/mscale_all_dim ratio.
+		{"synth-mistral3-af", func(m *Model) bool {
+			c := m.Cfg
+			return c.Arch == "mistral3" && c.YarnFactor == 16 && m.rope.Scale == 0.75 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
+		}},
+		// mscale == mscale_all_dim: cos and sin at exactly one, the score at
+		// mscale(8, 0.707)^2.
+		{"synth-deepseek-yarn", func(m *Model) bool {
+			c := m.Cfg
+			return c.MLA() && c.YarnFactor == 8 && m.rope.Scale == 1 && yarnScoreScaled(c)
+		}},
+		// And a stated 0.8 on cos and sin beside the same score correction.
+		{"synth-deepseek-yarn-af", func(m *Model) bool {
+			c := m.Cfg
+			return c.MLA() && c.YarnFactor == 8 && float32(m.rope.Scale) == 0.8 && yarnScoreScaled(c)
+		}},
+	}
 }
 
 // yarnScoreScaled reports whether the score carries mscale(8, 0.707)^2 over
@@ -65,20 +63,22 @@ func ropeScale(s float64) func(m *Model) func() {
 	}
 }
 
-var yarnViolations = map[string][]c6Violation{
-	"synth-olmo3-af": {
-		{"the derived magnitude for the stated one", ropeScale(mscale(8, 1))},
-	},
-	"synth-mistral3-af": {
-		{"the mscale ratio for the stated magnitude", ropeScale(mscale(16, 1) / mscale(16, 0.5))},
-	},
-	"synth-deepseek-yarn": {
-		{"the score's correction on cos and sin too", ropeScale(mscale(8, 0.707))},
-		{"no correction on the score", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.AttnScale = 1 / math.Sqrt(float64(c.HeadDim)) })
-		}},
-	},
-	"synth-deepseek-yarn-af": {
-		{"the stated magnitude ignored", ropeScale(1)},
-	},
+func yarnViolations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-olmo3-af": {
+			{"the derived magnitude for the stated one", ropeScale(mscale(8, 1))},
+		},
+		"synth-mistral3-af": {
+			{"the mscale ratio for the stated magnitude", ropeScale(mscale(16, 1) / mscale(16, 0.5))},
+		},
+		"synth-deepseek-yarn": {
+			{"the score's correction on cos and sin too", ropeScale(mscale(8, 0.707))},
+			{"no correction on the score", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.AttnScale = 1 / math.Sqrt(float64(c.HeadDim)) })
+			}},
+		},
+		"synth-deepseek-yarn-af": {
+			{"the stated magnitude ignored", ropeScale(1)},
+		},
+	}
 }

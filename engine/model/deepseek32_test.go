@@ -16,56 +16,63 @@ func openDS32(t *testing.T, name string) (*Model, *c6Golden) {
 // ds32Fixtures names each fixture and what its container must carry: MLA with
 // the V3 router and an indexer whose top-k is below the golden's twelve
 // positions, so the sparse path is what is compared.
-var ds32Fixtures = []struct {
+func ds32Fixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-deepseek32", func(m *Model) bool {
-		c := m.Cfg
-		ok := c.Arch == "deepseek32" && c.MLA() && c.Indexer() && c.QLoraRank == 32 &&
-			c.KVLoraRank == 16 && c.NRot == 8 && c.IdxHeads == 8 && c.IdxHeadDim == 16 &&
-			c.IdxTopK == 4 && c.KVDim() == 16+8+16 && c.ExpertSigmoid && c.NExpertGroup == 2 &&
-			c.NDenseLead == 1 && c.YarnFactor == 8
-		for i := range m.layers {
-			l := &m.layers[i]
-			ok = ok && l.idxQB.rows == 8*16 && l.idxK.rows == 16 && l.idxProj.rows == 8 &&
-				len(l.idxKNorm) == 16 && len(l.idxKNormB) == 16
-		}
-		return ok
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-deepseek32", func(m *Model) bool {
+			c := m.Cfg
+			ok := c.Arch == "deepseek32" && c.MLA() && c.Indexer() && c.QLoraRank == 32 &&
+				c.KVLoraRank == 16 && c.NRot == 8 && c.IdxHeads == 8 && c.IdxHeadDim == 16 &&
+				c.IdxTopK == 4 && c.KVDim() == 16+8+16 && c.ExpertSigmoid && c.NExpertGroup == 2 &&
+				c.NDenseLead == 1 && c.YarnFactor == 8
+			for i := range m.layers {
+				l := &m.layers[i]
+				ok = ok && l.idxQB.rows == 8*16 && l.idxK.rows == 16 && l.idxProj.rows == 8 &&
+					len(l.idxKNorm) == 16 && len(l.idxKNormB) == 16
+			}
+			return ok
+		}},
+	}
 }
 
 // ds32Violations take one piece of the indexer out at a time. Each must move
 // the logits far past c6NMSE at the positions past the top-k.
-var ds32Violations = []c6Violation{
-	{"attention over every position", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.IdxTopK = 1 << 20 })
-	}},
-	{"a top-k one short", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.IdxTopK-- })
-	}},
-	{"the indexer key unnormed", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) {
-			w, b := make([]float32, len(l.idxKNorm)), make([]float32, len(l.idxKNormB))
-			for i := range w {
-				w[i] = 1
-			}
-			l.idxKNorm, l.idxKNormB = w, b
-		})
-	}},
-	{"the indexer rotary on adjacent pairs", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.idxFault = idxFaultPairRope })
-	}},
-	{"no ReLU on the heads' scores", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.idxFault = idxFaultNoReLU })
-	}},
+func ds32Violations() []c6Violation {
+	return []c6Violation{
+		{"attention over every position", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.IdxTopK = 1 << 20 })
+		}},
+		{"a top-k one short", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.IdxTopK-- })
+		}},
+		{"the indexer key unnormed", func(m *Model) func() {
+			return eachLayer(m, func(l *layer) {
+				w, b := make([]float32, len(l.idxKNorm)), make([]float32, len(l.idxKNormB))
+				for i := range w {
+					w[i] = 1
+				}
+				l.idxKNorm, l.idxKNormB = w, b
+			})
+		}},
+		{"the indexer rotary on adjacent pairs", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.idxFault = idxFaultPairRope })
+		}},
+		{"no ReLU on the heads' scores", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.idxFault = idxFaultNoReLU })
+		}},
+	}
 }
 
 // TestDeepseek32MatchesTransformers holds each fixture to transformers' own
 // DeepseekV32ForCausalLM on decode, prefill at every length and the batched
 // path, and the container's tokenizer to DeepSeek-V3.2's tokenizer.json.
 func TestDeepseek32MatchesTransformers(t *testing.T) {
-	for _, fx := range ds32Fixtures {
+	for _, fx := range ds32Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openDS32(t, fx.name)
 			defer m.Close()
@@ -102,11 +109,11 @@ func TestDeepseek32MatchesTransformers(t *testing.T) {
 
 // TestDeepseek32FeaturesAreLoadBearing runs each violation through decode.
 func TestDeepseek32FeaturesAreLoadBearing(t *testing.T) {
-	for _, fx := range ds32Fixtures {
+	for _, fx := range ds32Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openDS32(t, fx.name)
 			defer m.Close()
-			for _, v := range ds32Violations {
+			for _, v := range ds32Violations() {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()
@@ -133,14 +140,16 @@ func TestDeepseek32FeaturesAreLoadBearing(t *testing.T) {
 // ds32DevViolations are the indexer's pieces taken out while only the device
 // session runs: the plan's top-k and the key norm's weights, which the tier
 // reads at placement.
-var ds32DevViolations = []c6Violation{
-	{"attention over every position", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.IdxTopK = 1 << 20 })
-	}},
-	{"a top-k one short", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.IdxTopK-- })
-	}},
-	{"the indexer key unnormed", ds32Violations[2].mut},
+func ds32DevViolations() []c6Violation {
+	return []c6Violation{
+		{"attention over every position", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.IdxTopK = 1 << 20 })
+		}},
+		{"a top-k one short", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.IdxTopK-- })
+		}},
+		{"the indexer key unnormed", ds32Violations()[2].mut},
+	}
 }
 
 // TestDeepseek32OnEveryDevice runs each fixture with every block and the head
@@ -149,11 +158,11 @@ var ds32DevViolations = []c6Violation{
 // decode and on a prefill chunk. Then each piece taken out of the device
 // session alone.
 func TestDeepseek32OnEveryDevice(t *testing.T) {
-	for _, fx := range ds32Fixtures {
+	for _, fx := range ds32Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openDS32(t, fx.name)
 			defer m.Close()
-			fixtureOnEveryDeviceCounted(t, m, g, ds32DevViolations, 1e-5, true)
+			fixtureOnEveryDeviceCounted(t, m, g, ds32DevViolations(), 1e-5, true)
 		})
 	}
 }
@@ -162,5 +171,4 @@ func TestDeepseek32OnEveryDevice(t *testing.T) {
 // (principleFixtures): the indexer's key is part of the latent row, so it
 // pages, relocates and is restored with it.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-deepseek32.gguf")
 }

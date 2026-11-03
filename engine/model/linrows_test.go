@@ -12,7 +12,7 @@ import (
 // and every recurrent state and convolution window, to equality (linExact).
 type linTol struct{ abs, rel float64 }
 
-var linExact = map[string]linTol{}
+func linExact() map[string]linTol { return map[string]linTol{} }
 
 // linEnv is the worst error seen per category, relative to the reference's
 // largest magnitude in the same vector, and the bounds it holds them to.
@@ -161,7 +161,7 @@ func TestLinearRowsResumeFromThePrefixCache(t *testing.T) {
 	if s1, d1 := s.CPUBlockSteps(); s1 == s0 || (s1-s0)%m.Cfg.NLayer != 0 || d1 != d0 {
 		t.Fatalf("the resumed rows: the composed CPU served %d block steps over %d blocks and declined %v", s1-s0, m.Cfg.NLayer, d1)
 	}
-	e := newLinEnv(linExact)
+	e := newLinEnv(linExact())
 	e.cmp(t, "logits", "resumed against whole", want, got)
 	linStates(t, e, "resumed against whole", ref, s)
 	t.Logf("restored %d positions; worst error relative to max|ref|:%v", s.KVRestored(), e)

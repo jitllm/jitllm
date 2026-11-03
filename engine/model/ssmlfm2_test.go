@@ -10,48 +10,38 @@ import (
 // Lfm2ForCausalLM with three gated short convolutions and one attention block
 // (scripts/ssmgold.py). Its recurrence is a convolution window alone, which
 // TestSSDFeaturesAreLoadBearing's window violation covers.
-func init() {
-	ssmFixtures = append(ssmFixtures, lfm2Fixtures...)
-	for _, fx := range lfm2Fixtures {
-		ssmFamilyViolations[fx.name] = lfm2Violations
-		ssmNotMamba[fx.name] = true
-	}
-	ssmFamilyViolations["synth-lfm2moe"] = func(device bool) []c6Violation {
-		return append(lfm2Violations(device),
-			c6Violation{"no selection bias", noSelectionBias},
-			c6Violation{"softmax for the sigmoid router", routerSwap(false)})
-	}
-	// The mixture pages under TestSSMFamiliesPageWithTheSameAnswer.
-	principleFixtures = append(principleFixtures, "synth-lfm2.gguf")
-}
-
-var lfm2Fixtures = []struct {
+func lfm2Fixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-lfm2", func(m *Model) bool {
-		c := m.Cfg
-		ok := c.Arch == "lfm2" && c.ShortConv() && !c.SSD() && c.RopeNeox && c.QKNorm && c.NHead == 4 &&
-			c.NKVHead == 2 && c.TiedEmbd && c.SSM.ConvKernel == 3
-		for i, conv := range []bool{true, false, true, true} {
-			l := &m.layers[i]
-			ok = ok && c.LayerKind(i).Recurrent() == conv && !l.noFFN && l.gate.e != nil
-			if conv {
-				ok = ok && c.LayerKind(i) == jlm.LayerShortConv && l.wq.rows == 64 && l.ssmGate.rows == 64 &&
-					l.ssmBA.rows == 64 && l.ssmOut.rows == 64 && len(l.ssmConv1d) == 3*64 && l.ssmA == nil
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-lfm2", func(m *Model) bool {
+			c := m.Cfg
+			ok := c.Arch == "lfm2" && c.ShortConv() && !c.SSD() && c.RopeNeox && c.QKNorm && c.NHead == 4 &&
+				c.NKVHead == 2 && c.TiedEmbd && c.SSM.ConvKernel == 3
+			for i, conv := range []bool{true, false, true, true} {
+				l := &m.layers[i]
+				ok = ok && c.LayerKind(i).Recurrent() == conv && !l.noFFN && l.gate.e != nil
+				if conv {
+					ok = ok && c.LayerKind(i) == jlm.LayerShortConv && l.wq.rows == 64 && l.ssmGate.rows == 64 &&
+						l.ssmBA.rows == 64 && l.ssmOut.rows == 64 && len(l.ssmConv1d) == 3*64 && l.ssmA == nil
+				}
 			}
-		}
-		return ok
-	}},
-	{"synth-lfm2moe", func(m *Model) bool {
-		c := m.Cfg
-		ok := c.Arch == "lfm2" && c.ShortConv() && c.NExpert == 8 && c.NExpertUsed == 2 && c.ExpertSigmoid &&
-			c.NDenseLead == 1 && m.expSelBias() != nil && c.TiedEmbd
-		for i, conv := range []bool{true, false, true, true} {
-			ok = ok && c.LayerKind(i).Recurrent() == conv && (i == 0) != (m.layers[i].router.e != nil)
-		}
-		return ok
-	}},
+			return ok
+		}},
+		{"synth-lfm2moe", func(m *Model) bool {
+			c := m.Cfg
+			ok := c.Arch == "lfm2" && c.ShortConv() && c.NExpert == 8 && c.NExpertUsed == 2 && c.ExpertSigmoid &&
+				c.NDenseLead == 1 && m.expSelBias() != nil && c.TiedEmbd
+			for i, conv := range []bool{true, false, true, true} {
+				ok = ok && c.LayerKind(i).Recurrent() == conv && (i == 0) != (m.layers[i].router.e != nil)
+			}
+			return ok
+		}},
+	}
 }
 
 // lfm2Violations are LFM2's own: the two gates exchanged, x and the outer
