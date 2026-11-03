@@ -298,6 +298,13 @@ const (
 	// slot: its rows' ids plus one newest first, then the slot's. It reads
 	// state version n and writes n+1. A primitive with a state of its own.
 	OpNGramWindow
+	// OpHalves is In[0]'s floats as binary16, two a word (Out[0], u32, half
+	// In[0]'s width), the lower element in the low half, rounded to nearest
+	// even as a binary16 history's pages store them. A primitive.
+	OpHalves
+	// OpWidenHalves is In[0]'s binary16 halves, two a word (u32), as floats
+	// (Out[0], twice In[0]'s width), the low half first. A primitive.
+	OpWidenHalves
 	numOps
 )
 
@@ -399,6 +406,10 @@ func (k OpKind) String() string {
 		return "token"
 	case OpNGramWindow:
 		return "ngram_window"
+	case OpHalves:
+		return "halves"
+	case OpWidenHalves:
+		return "widen_halves"
 	}
 	return fmt.Sprintf("op%d", k)
 }

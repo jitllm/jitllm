@@ -132,6 +132,9 @@ func (e *a64Lowerer) node(i int) {
 		a.FCVTN4h(lo(r), lo(s))
 		if x.lanes(x.home[i]) > 0 {
 			a.FCVTN2h8(lo(r), hi(s))
+		} else {
+			// FCVTN packs the halves: a word holds its own, zero above.
+			a.UXTL4s(lo(r), lo(r))
 		}
 		a.MOVIzero(hi(r))
 	case OpGtW:

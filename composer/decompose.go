@@ -39,6 +39,8 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpSelect:       decomposeSelect,
 		graph.OpNGramHash:    decomposeNGramHash,
 		graph.OpNGramWindow:  decomposeNGramWindow,
+		graph.OpHalves:       decomposeHalves,
+		graph.OpWidenHalves:  decomposeWidenHalves,
 		graph.OpUniform:      decomposeUniform,
 		graph.OpPut:          decomposePut,
 		graph.OpPool:         decomposePool,
