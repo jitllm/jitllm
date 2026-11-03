@@ -1473,6 +1473,8 @@ type GPU struct {
 	// devs is every device, in the order they were opened (AddDevices
 	// appends).
 	devs []*devTier
+	// counters is what the devices count into; see Counters.
+	counters *backend.Counters
 	// convMu serialises ConvLayers' runs and its activation crossing the
 	// host between cards (convblock.go).
 	convMu   sync.Mutex
@@ -1615,7 +1617,6 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	for _, f := range options {
 		f(&o)
 	}
-	o.apply()
 	cfg := &Config{
 		kb:      o.kb,
 		tiles:   tilesFor(o.kb),
@@ -1645,7 +1646,10 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	if len(slots) == 0 {
 		return nil, fmt.Errorf("tier: no devices")
 	}
-	g := &GPU{Config: cfg, own: map[int]*devTier{}, geo: map[int]geoKey{}}
+	g := &GPU{Config: cfg, own: map[int]*devTier{}, geo: map[int]geoKey{}, counters: o.counters}
+	if g.counters == nil {
+		g.counters = slotCounters(slots)
+	}
 	for i, s := range slots {
 		if s.Dev == nil {
 			closeAll()
@@ -1713,6 +1717,25 @@ func label(d backend.Device, ord int) string {
 
 // Devices is how many devices this tier holds.
 func (g *GPU) Devices() int { return len(g.devs) }
+
+// Counters is what this tier's devices count into: compiles, readbacks to the
+// host, refused allocations, the driver objects held, device-clock timing (see
+// backend.Counters).
+func (g *GPU) Counters() *backend.Counters { return g.counters }
+
+// slotCounters is what devices a caller opened count into: the first device's
+// Counters, or new ones when none of them is a backend device.
+func slotCounters(slots []Slot) *backend.Counters {
+	for _, s := range slots {
+		if s.Dev == nil {
+			continue
+		}
+		if c := backend.CountersOf(s.Dev); c != nil {
+			return c
+		}
+	}
+	return &backend.Counters{}
+}
 
 // Stats sums every device's counters. See Stats.add for the fields that do not
 // sum.

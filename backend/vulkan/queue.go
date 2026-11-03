@@ -59,36 +59,29 @@ type fenceCI struct {
 
 const stFenceCI = 8
 
-var (
-	vkCreateFence   func(Device, up, up, up) Result
-	vkDestroyFence  func(Device, Fence, up) ffi.None
-	vkWaitForFences func(Device, uint32, up, uint32, uint64) Result
-	vkResetFences   func(Device, uint32, up) Result
-)
-
-func loadFences(lib *ffi.Lib) {
-	vkCreateFence = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateFence")
-	vkDestroyFence = ffi.Fn3[ffi.None, Device, Fence, up](lib, "vkDestroyFence")
-	vkWaitForFences = ffi.Fn5[Result, Device, uint32, up, uint32, uint64](lib, "vkWaitForFences")
-	vkResetFences = ffi.Fn3[Result, Device, uint32, up](lib, "vkResetFences")
+func (l *Loader) loadFences(lib *ffi.Lib) {
+	l.vkCreateFence = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateFence")
+	l.vkDestroyFence = ffi.Fn3[ffi.None, Device, Fence, up](lib, "vkDestroyFence")
+	l.vkWaitForFences = ffi.Fn5[Result, Device, uint32, up, uint32, uint64](lib, "vkWaitForFences")
+	l.vkResetFences = ffi.Fn3[Result, Device, uint32, up](lib, "vkResetFences")
 }
 
 // initRec builds r's pool, command buffers and fence on hw.
 func (c *Ctx) initRec(r *rec, hw *hwQueue) error {
 	r.c, r.hw = c, hw
 	cpc := cmdPoolCI{sType: stCmdPoolCI, flags: 0x2 /* RESET_COMMAND_BUFFER */, family: c.family}
-	if err := check(vkCreateCommandPool(c.dev, up(&cpc), nil, up(&r.cmdPool)), "vkCreateCommandPool"); err != nil {
+	if err := check(c.l.vkCreateCommandPool(c.dev, up(&cpc), nil, up(&r.cmdPool)), "vkCreateCommandPool"); err != nil {
 		return err
 	}
 	cba := cmdBufAI{sType: stCmdBufAlloc, pool: uint64(r.cmdPool), level: 0, count: 1}
-	if err := check(vkAllocateCommandBuffers(c.dev, up(&cba), up(&r.cmd)), "vkAllocateCommandBuffers"); err != nil {
+	if err := check(c.l.vkAllocateCommandBuffers(c.dev, up(&cba), up(&r.cmd)), "vkAllocateCommandBuffers"); err != nil {
 		return err
 	}
-	if err := check(vkAllocateCommandBuffers(c.dev, up(&cba), up(&r.one)), "vkAllocateCommandBuffers"); err != nil {
+	if err := check(c.l.vkAllocateCommandBuffers(c.dev, up(&cba), up(&r.one)), "vkAllocateCommandBuffers"); err != nil {
 		return err
 	}
 	fci := fenceCI{sType: stFenceCI}
-	return check(vkCreateFence(c.dev, up(&fci), nil, up(&r.fence)), "vkCreateFence")
+	return check(c.l.vkCreateFence(c.dev, up(&fci), nil, up(&r.fence)), "vkCreateFence")
 }
 
 // freeRec releases what initRec and the rec's use built. The device must be
@@ -103,15 +96,15 @@ func (r *rec) freeRec() {
 		r.stage = nil
 	}
 	if r.bpool != 0 {
-		vkDestroyDescriptorPool(c.dev, r.bpool, nil)
+		r.c.l.vkDestroyDescriptorPool(c.dev, r.bpool, nil)
 		r.bpool = 0
 	}
 	if r.fence != 0 {
-		vkDestroyFence(c.dev, r.fence, nil)
+		r.c.l.vkDestroyFence(c.dev, r.fence, nil)
 		r.fence = 0
 	}
 	if r.cmdPool != 0 {
-		vkDestroyCommandPool(c.dev, r.cmdPool, nil)
+		r.c.l.vkDestroyCommandPool(c.dev, r.cmdPool, nil)
 		r.cmdPool = 0
 	}
 }
@@ -119,17 +112,17 @@ func (r *rec) freeRec() {
 // run submits si to r's queue and waits for r's fence alone.
 func (r *rec) run(si *submitInfo) error {
 	r.hw.mu.Lock()
-	err := check(vkQueueSubmit(r.hw.q, 1, up(si), uint64(r.fence)), "vkQueueSubmit")
+	err := check(r.c.l.vkQueueSubmit(r.hw.q, 1, up(si), uint64(r.fence)), "vkQueueSubmit")
 	r.hw.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	// The fence's own field, not a copy: a local whose address goes to the
 	// driver escapes, and a warm decode allocated one per submission.
-	if err := check(vkWaitForFences(r.c.dev, 1, up(&r.fence), 1, math.MaxUint64), "vkWaitForFences"); err != nil {
+	if err := check(r.c.l.vkWaitForFences(r.c.dev, 1, up(&r.fence), 1, math.MaxUint64), "vkWaitForFences"); err != nil {
 		return err
 	}
-	return check(vkResetFences(r.c.dev, 1, up(&r.fence)), "vkResetFences")
+	return check(r.c.l.vkResetFences(r.c.dev, 1, up(&r.fence)), "vkResetFences")
 }
 
 // waitAll waits until every queue of the context is idle: what a call made
@@ -138,7 +131,7 @@ func (r *rec) run(si *submitInfo) error {
 func (c *Ctx) waitAll() error {
 	for _, h := range c.hw {
 		h.mu.Lock()
-		err := check(vkQueueWaitIdle(h.q), "vkQueueWaitIdle")
+		err := check(c.l.vkQueueWaitIdle(h.q), "vkQueueWaitIdle")
 		h.mu.Unlock()
 		if err != nil {
 			return err

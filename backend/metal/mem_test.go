@@ -90,7 +90,7 @@ func TestDeviceMem(t *testing.T) {
 
 	// The BOOL read raw: UnifiedMemory() is a cached Go bool and would hide a
 	// wrong-width read.
-	raw := sendBool(c.dev, sel("hasUnifiedMemory"))
+	raw := c.rt.sendBool(c.dev, c.rt.sel("hasUnifiedMemory"))
 	t.Logf("hasUnifiedMemory raw byte     %13d", uint8(raw))
 	if raw != 0 && raw != 1 {
 		t.Errorf("hasUnifiedMemory returned %d; BOOL is 0 or 1, so that register did not hold a BOOL", uint8(raw))
@@ -111,8 +111,8 @@ func TestDeviceMem(t *testing.T) {
 			t.Fatalf("Alloc(%d): %v", want, err)
 		}
 		defer keep.Free()
-		wide := sendU64(c.dev, sel("currentAllocatedSize"))
-		narrow := sendBool(c.dev, sel("currentAllocatedSize"))
+		wide := c.rt.sendU64(c.dev, c.rt.sel("currentAllocatedSize"))
+		narrow := c.rt.sendBool(c.dev, c.rt.sel("currentAllocatedSize"))
 		t.Logf("currentAllocatedSize through the NSUInteger binding  0x%016x", wide)
 		t.Logf("currentAllocatedSize through the BOOL binding        0x%016x", uint8(narrow))
 		if wide <= 0xff {

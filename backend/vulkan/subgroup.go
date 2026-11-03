@@ -155,7 +155,7 @@ func (c *Ctx) Subgroups() Subgroups { return c.sg }
 //
 // A device below Vulkan 1.1 cannot be asked (the query is core-1.1), so it gets
 // Subgroups{}, and Guarantees refuses every width.
-func readSubgroups(p PhysDevice, apiVer uint32, control bool) Subgroups {
+func (l *Loader) readSubgroups(p PhysDevice, apiVer uint32, control bool) Subgroups {
 	if apiVer < apiVersion11 {
 		return Subgroups{}
 	}
@@ -165,7 +165,7 @@ func readSubgroups(p PhysDevice, apiVer uint32, control bool) Subgroups {
 		sg.pNext = uintptr(up(sc))
 	}
 	p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(sg))}
-	vkGetPhysicalDeviceProperties2(p, up(&p2))
+	l.vkGetPhysicalDeviceProperties2(p, up(&p2))
 
 	out := Subgroups{Size: sg.size, Stages: sg.stages, Ops: sg.ops, Control: control}
 	if control {

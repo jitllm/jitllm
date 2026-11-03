@@ -25,7 +25,7 @@ import (
 // offset or length, two ranges of one buffer that overlap, a negative) must
 // be refused before the device sees it, with both buffers untouched.
 //
-// Two selection checks: backend.HostReads does not move across the copies, so
+// Two selection checks: Counters.HostReads does not move across the copies, so
 // none of them went through the host; and the source is written by a kernel
 // in a Session that is not waited on (Metal commits asynchronously), so a copy
 // that ran ahead of the work before it reads the poison instead.
@@ -114,14 +114,14 @@ func TestDeviceCopyMovesExactlyTheRange(t *testing.T) {
 				{dst, 200004, dst, 200004 + 4*301, 4 * 301},
 				{src, 4*9000 + 4*77, src, 4 * 9000, 4 * 77},
 			}
-			r0, _ := backend.HostReads()
+			r0, _ := backend.CountersOf(d).HostReads()
 			for _, c := range ok {
 				if err := d.Copy(c.dst, c.dOff, c.src, c.sOff, c.n); err != nil {
 					t.Fatalf("Copy(%d <- %d, %d bytes): %v", c.dOff, c.sOff, c.n, err)
 				}
 				copy(want[c.dst][c.dOff:c.dOff+c.n], want[c.src][c.sOff:c.sOff+c.n])
 			}
-			if r1, _ := backend.HostReads(); r1 != r0 {
+			if r1, _ := backend.CountersOf(d).HostReads(); r1 != r0 {
 				t.Fatalf("%d host reads during %d device copies: a copy went through the host", r1-r0, len(ok))
 			}
 			check("after the copies", src, dst)
@@ -161,7 +161,7 @@ func firstDiff(a, b []byte) int {
 // memory (host-visible, so its transfers are not staged) -- each closed at
 // cleanup.
 func everyDevice(t *testing.T) []backend.Device {
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	opened := map[int]bool{}
 	for _, d := range devs {
 		if o, ok := d.(backend.OrdinalDevice); ok && d.API() == "spirv" {

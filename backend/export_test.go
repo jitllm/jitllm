@@ -7,7 +7,7 @@ import (
 )
 
 // The package reads no environment; its test binary does, to point the suite's
-// Open at a device the default rule would not pick. Each variable is the
+// opens at a device the default rule would not pick. Each variable is the
 // Opts field of the same meaning:
 //
 //	JITLLM_VK_DEVICE     Vulkan device pin (Opts.Vulkan.Device), e.g. "1" for
@@ -18,19 +18,25 @@ import (
 //	                     through a split dispatch on every Vulkan device
 //	JITLLM_ROCM          the ROCm library directory (Opts.HIP.Path); unset
 //	                     searches the default places
-func init() {
-	openDefaults.HIP.Path = os.Getenv("JITLLM_ROCM")
+func testOpts() Opts {
+	var o Opts
+	o.HIP.Path = os.Getenv("JITLLM_ROCM")
 	if v := os.Getenv("JITLLM_VK_DEVICE"); v != "" {
-		openDefaults.Vulkan.Device = v
+		o.Vulkan.Device = v
 	}
 	if v := os.Getenv("JITLLM_VK_MAXGROUPS"); v != "" {
 		n, err := strconv.ParseUint(v, 10, 32)
 		if err != nil || n == 0 {
 			panic(fmt.Sprintf("JITLLM_VK_MAXGROUPS=%q: want a positive count of workgroups", v))
 		}
-		openDefaults.Vulkan.MaxGroups = uint32(n)
+		o.Vulkan.MaxGroups = uint32(n)
 	}
+	return o
 }
+
+// OpenForTest is Open with the suite's choices (testOpts): what every test of
+// this package opens its devices with.
+func OpenForTest() []Device { return OpenWith(testOpts()) }
 
 // VulkanGroups reports a Vulkan device's workgroups per dispatch and how many
 // dispatches it has recorded, and false for any other device. The count is the

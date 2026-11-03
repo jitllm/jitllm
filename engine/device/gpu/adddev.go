@@ -22,7 +22,9 @@ func (g *GPU) AddDevices(spec string, options ...Option) ([]string, error) {
 	for _, f := range options {
 		f(&o)
 	}
-	o.apply()
+	if o.counters == nil {
+		o.counters = g.counters
+	}
 	es, err := ParseDevices(spec)
 	if err != nil {
 		return nil, err

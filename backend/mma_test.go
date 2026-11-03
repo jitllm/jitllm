@@ -23,7 +23,7 @@ import (
 // of the output is obvious.
 func TestMMAFragmentLayout(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

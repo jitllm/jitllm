@@ -9,7 +9,6 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/backend/metal"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/engine/cost"
@@ -377,11 +376,8 @@ type KernelTimer struct {
 // Timer is device d's per-kernel clock, where its backend has one: CUDA's
 // event pairs, Metal's command buffers' own stamps.
 func Timer(d backend.Device) (KernelTimer, bool) {
-	switch d.API() {
-	case "ptx":
-		return KernelTimer{backend.SetCUDAKernelTiming, backend.CUDAKernelTimes}, true
-	case "msl":
-		return KernelTimer{metal.SetKernelTiming, metal.KernelTimes}, true
+	if c, ok := d.(backend.KernelClock); ok {
+		return KernelTimer{c.SetKernelTiming, c.KernelTimes}, true
 	}
 	return KernelTimer{}, false
 }

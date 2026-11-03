@@ -5,10 +5,7 @@
 // tags: `if c, err := metal.Open(); err == nil` reads the same on every host.
 package metal
 
-import (
-	"errors"
-	"unsafe"
-)
+import "unsafe"
 
 type Ctx struct{}
 type Buf struct{}
@@ -21,7 +18,11 @@ type Batch struct{}
 // Queue is a command queue of its own; there is none off darwin.
 type Queue struct{}
 
-var errNoMetal = errors.New("metal: not available on this platform")
+const errNoMetal metalError = "metal: not available on this platform"
+
+type metalError string
+
+func (e metalError) Error() string { return string(e) }
 
 func Open() (*Ctx, error)                           { return nil, errNoMetal }
 func OpenWith(Opts) (*Ctx, error)                   { return nil, errNoMetal }
@@ -39,13 +40,6 @@ func (c *Ctx) Unretained(bool) {}
 // caller that asked for one must not be told it has one.
 func (c *Ctx) Residency() error { return errNoMetal }
 
-// GPUBusy and GPUBusyLast have nothing to report off darwin; they exist so
-// callers (engine/model/devrate_test.go) compile everywhere.
-func GPUBusy() (ns, buffers uint64)                     { return 0, 0 }
-func GPUBusyLast() uint64                               { return 0 }
-func GPUIdle() (ns, gaps uint64)                        { return 0, 0 }
-func HostGap() (ns, n uint64)                           { return 0, 0 }
-func RoundTrip() (ns, n uint64)                         { return 0, 0 }
 func (c *Ctx) Alloc(int) (*Buf, error)                  { return nil, errNoMetal }
 func (c *Ctx) Copy(*Buf, int, *Buf, int, int) error     { return errNoMetal }
 func (c *Ctx) CopyList([]CopyOp) error                  { return errNoMetal }
@@ -61,8 +55,6 @@ func (k *Kernel) Close()                                {}
 func (k *Kernel) Limits() (int, int)                    { return 0, 0 }
 func (k *Kernel) SetWrites(uint64)                      {}
 
-// Barriers has nothing to count off darwin.
-func Barriers() uint64                                   { return 0 }
 func (c *Ctx) NewBatch() *Batch                          { return nil }
 func (c *Ctx) NewQueue() (*Queue, error)                 { return nil, errNoMetal }
 func (q *Queue) NewBatch() *Batch                        { return nil }
@@ -77,25 +69,10 @@ func (b *Batch) Commit() error                           { return errNoMetal }
 // so there is never anything committed to wait for.
 func (c *Ctx) Wait() error { return nil }
 
-func SubmitStats() (commits, waits, blocked uint64) { return 0, 0, 0 }
-
-func SubmitTimes() (encodeNs, waitNs, launches uint64) { return 0, 0, 0 }
-
-func SoloStats() (n, ns uint64) { return 0, 0 }
-
-func AddSessionNs(ns uint64)       {}
-func SessionStats() (n, ns uint64) { return 0, 0 }
-
-func PhaseStats() (newNs, commitNs uint64) { return 0, 0 }
-
 // CounterSampling and CounterSets are darwin-only questions; the stubs let
 // callers compile everywhere.
 func (c *Ctx) CounterSampling() (stage, dispatch bool) { return false, false }
 func (c *Ctx) CounterSets() []string                   { return nil }
 
 // GPUCores is 0 off darwin.
-func GPUCores() int { return 0 }
-
-func SetKernelTiming(bool) {}
-
-func KernelTimes() (map[string]float64, map[string]int) { return nil, nil }
+func (c *Ctx) GPUCores() int { return 0 }

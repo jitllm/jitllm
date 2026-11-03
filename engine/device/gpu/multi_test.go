@@ -3,7 +3,6 @@ package gpu
 import (
 	"fmt"
 	"math"
-	"os"
 	"testing"
 	"time"
 
@@ -287,7 +286,7 @@ func TestFasterDeviceGoesFirst(t *testing.T) {
 	// Not TuneOff: this test is about the probe.
 	slow := &fakeDev{name: "slow", launchCost: 500 * time.Microsecond}
 	fast := &fakeDev{name: "fast"}
-	got := order([]backend.Device{slow, fast}, TuneAuto)
+	got := order([]backend.Device{slow, fast}, TuneAuto, false)
 	names := []string{got[0].Name(), got[1].Name()}
 	if got[0] != backend.Device(fast) {
 		t.Fatalf("order ranked %v, and the first one is where the first blocks go", names)
@@ -494,7 +493,7 @@ func TestRealDevicesBothTakeBlocks(t *testing.T) {
 		}
 		t.Skipf("this box enumerates %d distinct GPU device(s) across every backend; two are needed (%v)", len(devs), err)
 	}
-	devs = order(devs, TuneAuto)
+	devs = order(devs, TuneAuto, false)
 	for _, d := range devs[2:] {
 		d.Close()
 	}
@@ -618,14 +617,6 @@ func fill(w *nn.LayerWeights, seed uint32) {
 		for i := range f {
 			f[i] = 1 + float32(i%5)*0.01
 		}
-	}
-}
-
-// init makes the backend verbose under JITLLM_GPU_VERBOSE.
-func init() {
-	if os.Getenv("JITLLM_GPU_VERBOSE") != "" {
-		fmt.Fprintln(os.Stderr, "tier: JITLLM_VK_DEVICE picks which Vulkan device the real two-device gate uses")
-		backend.SetVerbose(true)
 	}
 }
 

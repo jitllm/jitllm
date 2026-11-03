@@ -30,6 +30,9 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 
 	const workers = 4
+	// Every cycle's tier counts its driver objects into one set, so what one
+	// leaves open shows after it closes.
+	ctr := &backend.Counters{}
 	cycle := func() {
 		m, err := Open(path)
 		if err != nil {
@@ -38,7 +41,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 		defer m.Close()
 
 		// Every device the host reports, not just the fastest.
-		g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff))
+		g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithCounters(ctr))
 		if err != nil || g == nil {
 			noDevice(t, "devices", err)
 		}
@@ -135,7 +138,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	debug.FreeOSMemory()
 	time.Sleep(700 * time.Millisecond)
 	p0, g0 := procNow(t), runtime.NumGoroutine()
-	own0 := backend.OwnedNow()
+	own0 := ctr.OwnedNow()
 	heap0 := liveHeap()
 
 	const rounds = 4
@@ -146,7 +149,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	debug.FreeOSMemory()
 	time.Sleep(1500 * time.Millisecond)
 	p1, g1 := procNow(t), runtime.NumGoroutine()
-	own1 := backend.OwnedNow()
+	own1 := ctr.OwnedNow()
 	heap1 := liveHeap()
 
 	t.Logf("%d cycles x %d concurrent instances on every device: live heap %d -> %d KiB (%+d), "+

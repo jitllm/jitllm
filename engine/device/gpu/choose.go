@@ -41,7 +41,7 @@ func choose(devs []backend.Device, kb knobs) backend.Device {
 		return keep(0)
 	}
 	cand, merges := preferOnePerCard(devs)
-	if backend.Verbose() {
+	if kb.verbose {
 		for _, m := range merges {
 			fmt.Fprintf(os.Stderr, "jitllm: %s\n", m)
 		}
@@ -54,7 +54,7 @@ func choose(devs []backend.Device, kb knobs) backend.Device {
 		sub[i] = devs[j]
 	}
 	best, rates := probe(sub)
-	if backend.Verbose() {
+	if kb.verbose {
 		for i, d := range sub {
 			fmt.Fprintf(os.Stderr, "jitllm: profile %-6s %-40s %8.1f GB/s\n", d.API(), d.Name(), rates[i]/1e9)
 		}

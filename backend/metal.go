@@ -14,7 +14,11 @@ import (
 type mtlDev struct {
 	allocCount
 	once
-	c *metal.Ctx
+	// ctr is what the device counts into (Opts.Counters), and stats what its
+	// context counts (Opts.Metal.Stats, or ctr's Metal).
+	ctr   *Counters
+	stats *metal.Stats
+	c     *metal.Ctx
 	// free is Session's free list: a session handed to the caller's f
 	// escapes, so a fresh one per call was a heap object per token. Nested
 	// sessions take one each.
@@ -48,8 +52,6 @@ func (m *mtlDev) CopyList(cs []CopyRange) error {
 	return err
 }
 
-var _ BufferLimited = (*mtlDev)(nil)
-
 // MaxBuffer is the device's maxBufferLength (BufferLimited).
 func (d *mtlDev) MaxBuffer() uint64 { return d.c.MaxBuffer() }
 
@@ -65,19 +67,17 @@ func openMetal(o Opts) (Device, error) {
 	if _, err := admit("msl", 0, o.Enumerating); err != nil {
 		return nil, err
 	}
-	c, err := metal.OpenWith(o.Metal)
+	ctr := o.counters()
+	mo := o.Metal
+	if mo.Stats == nil {
+		mo.Stats = &ctr.Metal
+	}
+	c, err := metal.OpenWith(mo)
 	if err != nil {
 		return nil, err
 	}
-	c.Unretained(mtlUnretained)
-	if mtlResidency {
-		if err := c.Residency(); err != nil {
-			c.Close()
-			return nil, err
-		}
-	}
-	ownedDevices.Add(1)
-	return &mtlDev{c: c}, nil
+	ctr.ownedDevices.Add(1)
+	return &mtlDev{ctr: ctr, stats: mo.Stats, c: c}, nil
 }
 
 func (m *mtlDev) Name() string { return m.c.Name() }
@@ -88,7 +88,7 @@ func (m *mtlDev) API() string  { return "msl" }
 // project exists to avoid. 0 means "use the caller's default".
 func (m *mtlDev) Slots() int { return 0 }
 
-func (m *mtlDev) Multiprocessors() int { return metal.GPUCores() }
+func (m *mtlDev) Multiprocessors() int { return m.c.GPUCores() }
 
 // Bindings is the entries of a kernel function's buffer argument table, 31
 // on every Apple GPU family (Metal feature set tables).
@@ -100,7 +100,7 @@ func (m *mtlDev) Bindings() int { return 31 }
 func (m *mtlDev) SharedPerMultiprocessor() int { return m.c.MaxThreadgroupMemory() }
 func (m *mtlDev) Close() {
 	m.c.Close()
-	m.release(&ownedDevices)
+	m.release(&m.ctr.ownedDevices)
 }
 
 // Mem satisfies the same optional interface cudaDev and vkDev do:
@@ -115,14 +115,6 @@ func (m *mtlDev) Mem() (free, total uint64, err error) { return m.c.Mem() }
 // metal.Ctx.UnifiedMemory.
 func (m *mtlDev) UnifiedMemory() bool { return m.c.UnifiedMemory() }
 
-// The optional interfaces are asserted at compile time here, because
-// cmd/jitllm reaches them by type assertion and a misspelled method would
-// otherwise fail silently at run time.
-var (
-	_ Device  = (*mtlDev)(nil)
-	_ Unified = (*mtlDev)(nil)
-)
-
 func (m *mtlDev) Alloc(n int) (Buf, error) {
 	b, err := m.c.Alloc(n)
 	if err != nil {
@@ -131,7 +123,7 @@ func (m *mtlDev) Alloc(n int) (Buf, error) {
 	// Metal's page rounding is not measured (its memory is the host's, so a
 	// second context cannot fill it the way alloccount.go's table was taken):
 	// counted as asked.
-	return &mtlBuf{b: b, c: m.c, acc: m.take(n, n)}, nil
+	return &mtlBuf{b: b, c: m.c, ctr: m.ctr, acc: m.take(n, n)}, nil
 }
 
 // GuaranteedLanes: a simdgroup is 32 lanes wide on every Apple GPU, which is the
@@ -150,10 +142,7 @@ func (m *mtlDev) GuaranteedLanes(w int) (bool, string) {
 }
 
 func (m *mtlDev) Compile(k *ir.Kernel) (Kernel, error) {
-	compiles.Add(1)
-	if CompileLog != nil {
-		CompileLog(k.Name)
-	}
+	m.ctr.compiled(k.Name)
 	src, err := msl.Emit(k)
 	if err != nil {
 		return nil, err
@@ -179,21 +168,24 @@ func (m *mtlDev) Compile(k *ir.Kernel) (Kernel, error) {
 	kern.SetWrites(k.WrittenParams())
 	mk := &mtlKern{k: kern, group: k.Group, name: k.Name, src: k, grid: k.GridSync()}
 	if k.GridSync() {
-		mk.resident, mk.residentErr = mtlGridLimit(k)
+		mk.resident, mk.residentErr = mtlGridLimit(k, m.c.GPUCores())
 	}
 	return mk, nil
 }
 
 // GridLimit is one threadgroup per GPU core, as the IORegistry states the
-// count (metal.GPUCores); a device it does not state cannot run a grid
+// count (metal.Ctx.GPUCores); a device it does not state cannot run a grid
 // barrier.
-func (d *mtlDev) GridLimit(k Kernel) (int, error) { return mtlGridLimit(k.(*mtlKern).src) }
+func (d *mtlDev) GridLimit(k Kernel) (int, error) {
+	return mtlGridLimit(k.(*mtlKern).src, d.c.GPUCores())
+}
 
-func mtlGridLimit(k *ir.Kernel) (int, error) {
+// mtlGridLimit is n, the device's core count, for a kernel with a grid
+// barrier.
+func mtlGridLimit(k *ir.Kernel, n int) (int, error) {
 	if !k.GridSync() {
 		return 0, fmt.Errorf("backend: msl: %s has no grid barrier", k.Name)
 	}
-	n := metal.GPUCores()
 	if n == 0 {
 		return 0, fmt.Errorf("backend: msl: the IORegistry states no gpu-core-count, and Metal no co-residency")
 	}
@@ -216,14 +208,13 @@ func (m *mtlDev) Import(p unsafe.Pointer, n int) (Buf, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &mtlBuf{b: b, c: m.c}, nil
+	return &mtlBuf{b: b, c: m.c, ctr: m.ctr}, nil
 }
-
-var _ HostImport = (*mtlDev)(nil)
 
 type mtlBuf struct {
 	b   *metal.Buf
 	c   *metal.Ctx
+	ctr *Counters
 	acc *counted
 }
 
@@ -256,7 +247,7 @@ func (b *mtlBuf) Read(p []byte) error {
 	if err := b.c.Wait(); err != nil {
 		return err
 	}
-	countRead(len(p))
+	b.ctr.countRead(len(p))
 	copy(p, b.b.Bytes())
 	return nil
 }
@@ -334,7 +325,7 @@ func (d *mtlDev) Session(f func(Session)) {
 	}
 	d.mu.Unlock()
 	if s == nil {
-		s = &mtlSession{c: d.c}
+		s = &mtlSession{c: d.c, ctr: d.ctr}
 	}
 	s.err = nil
 	f(s)
@@ -351,11 +342,12 @@ func (d *mtlDev) Session(f func(Session)) {
 	d.mu.Lock()
 	d.free = append(d.free, s)
 	d.mu.Unlock()
-	metal.AddSessionNs(uint64(time.Since(t0)))
+	d.stats.AddSessionNs(uint64(time.Since(t0)))
 }
 
 type mtlSession struct {
-	c *metal.Ctx
+	c   *metal.Ctx
+	ctr *Counters
 	// q is the queue a queued session commits to, nil for the context's own.
 	q     *metal.Queue
 	batch *metal.Batch
@@ -393,7 +385,7 @@ func (s *mtlSession) Read(b Buf, p []byte) error {
 	}
 	if s.q != nil {
 		// Sync waited for this queue's work, which is what wrote it.
-		countRead(len(p))
+		s.ctr.countRead(len(p))
 		copy(p, b.(*mtlBuf).b.Bytes())
 		return nil
 	}
@@ -460,16 +452,17 @@ func (s *mtlSession) finish() {
 // hands out on it.
 type mtlQueue struct {
 	once
-	mu sync.Mutex
-	q  *metal.Queue
-	s  mtlSession
+	mu  sync.Mutex
+	ctr *Counters
+	q   *metal.Queue
+	s   mtlSession
 }
 
 func (q *mtlQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.q.Close()
-	q.release(&ownedQueues)
+	q.release(&q.ctr.ownedQueues)
 }
 
 // NewQueue is a command queue of its own (backend.Queued).
@@ -478,8 +471,8 @@ func (d *mtlDev) NewQueue() (Queue, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownedQueues.Add(1)
-	return &mtlQueue{q: q}, nil
+	d.ctr.ownedQueues.Add(1)
+	return &mtlQueue{ctr: d.ctr, q: q}, nil
 }
 
 // SessionOn commits f's work to q's command queue. Like Session it does not
@@ -488,7 +481,7 @@ func (d *mtlDev) SessionOn(q Queue, f func(Session)) {
 	mq := q.(*mtlQueue)
 	mq.mu.Lock()
 	defer mq.mu.Unlock()
-	mq.s.c, mq.s.q, mq.s.err = d.c, mq.q, nil
+	mq.s.c, mq.s.ctr, mq.s.q, mq.s.err = d.c, d.ctr, mq.q, nil
 	f(&mq.s)
 	mq.s.finish()
 }

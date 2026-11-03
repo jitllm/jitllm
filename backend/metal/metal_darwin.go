@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -38,7 +37,11 @@ type mtlSize struct{ w, h, d uint64 }
 // goffi, which applies the ABI.
 type nsRange struct{ loc, len uint64 }
 
-var (
+// objc is one binding of the Objective-C runtime and Metal.framework: the
+// message shapes, the device constructor and the hot selectors. A Ctx keeps
+// the binding it was opened through, and every message on it, its buffers,
+// kernels, queues and batches goes through that.
+type objc struct {
 	objcGetClass    func(*byte) ID
 	selRegisterName func(*byte) SEL
 
@@ -62,9 +65,7 @@ var (
 	// -respondsToSelector: takes a SEL and answers BOOL.
 	sendResponds func(ID, SEL, SEL) objcBool
 	sendF64      func(ID, SEL) float64 // -GPUStartTime, CFTimeInterval
-)
 
-var (
 	createDevice func() ID
 	// dispatchThreadgroups takes two MTLSize by value (24 bytes, where arm64
 	// passes a pointer to a copy); goffi applies that rule.
@@ -84,11 +85,9 @@ var (
 	// copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size: is a
 	// blit encoder's buffer-to-buffer copy. See Ctx.Copy.
 	sendCopy func(ID, SEL, ID, uint64, ID, uint64, uint64) ffi.None
-)
 
-// Hot selectors are resolved once: sel() allocates and calls sel_registerName
-// on every use, and the encode path sends about nine messages per dispatch.
-var (
+	// Hot selectors are resolved once: sel() allocates and calls sel_registerName
+	// on every use, and the encode path sends about nine messages per dispatch.
 	selSetPSO      SEL
 	selSetBuffers  SEL
 	selSetBuffer   SEL
@@ -112,94 +111,90 @@ var (
 	selResCommit                     SEL
 	selResRequest                    SEL
 	selResponds                      SEL
-)
+}
 
-var loaded bool
-
-func load() error {
-	if loaded {
-		return nil
-	}
+// load binds the runtime and the framework.
+func load() (*objc, error) {
 	lib, err := ffi.Open("/System/Library/Frameworks/Metal.framework/Metal")
 	if err != nil {
-		return fmt.Errorf("metal: %w", err)
+		return nil, fmt.Errorf("metal: %w", err)
 	}
-	createDevice = ffi.Fn0[ID](lib, "MTLCreateSystemDefaultDevice")
+	rt := &objc{}
+	rt.createDevice = ffi.Fn0[ID](lib, "MTLCreateSystemDefaultDevice")
 
 	objcLib, err := ffi.Open("/usr/lib/libobjc.A.dylib", "libobjc.A.dylib")
 	if err != nil {
-		return fmt.Errorf("metal: %w", err)
+		return nil, fmt.Errorf("metal: %w", err)
 	}
-	objcGetClass = ffi.Fn1[ID, *byte](objcLib, "objc_getClass")
-	selRegisterName = ffi.Fn1[SEL, *byte](objcLib, "sel_registerName")
-	send0 = ffi.Fn2[ID, ID, SEL](objcLib, "objc_msgSend")
-	send1id = ffi.Fn3[ID, ID, SEL, ID](objcLib, "objc_msgSend")
-	send1ptr = ffi.Fn3[ID, ID, SEL, unsafe.Pointer](objcLib, "objc_msgSend")
-	sendU64 = ffi.Fn2[uint64, ID, SEL](objcLib, "objc_msgSend")
+	rt.objcGetClass = ffi.Fn1[ID, *byte](objcLib, "objc_getClass")
+	rt.selRegisterName = ffi.Fn1[SEL, *byte](objcLib, "sel_registerName")
+	rt.send0 = ffi.Fn2[ID, ID, SEL](objcLib, "objc_msgSend")
+	rt.send1id = ffi.Fn3[ID, ID, SEL, ID](objcLib, "objc_msgSend")
+	rt.send1ptr = ffi.Fn3[ID, ID, SEL, unsafe.Pointer](objcLib, "objc_msgSend")
+	rt.sendU64 = ffi.Fn2[uint64, ID, SEL](objcLib, "objc_msgSend")
 	// GPUStartTime is a CFTimeInterval (a C double), returned in d0 on arm64
 	// rather than x0, so it needs its own binding.
-	sendF64 = ffi.Fn2[float64, ID, SEL](objcLib, "objc_msgSend")
-	sendBool = ffi.Fn2[objcBool, ID, SEL](objcLib, "objc_msgSend")
-	sendBoolU64 = ffi.Fn3[objcBool, ID, SEL, uint64](objcLib, "objc_msgSend")
-	sendIdxID = ffi.Fn3[ID, ID, SEL, uint64](objcLib, "objc_msgSend")
-	sendResponds = ffi.Fn3[objcBool, ID, SEL, SEL](objcLib, "objc_msgSend")
-	sendDispatch = ffi.Fn4[ffi.None, ID, SEL, mtlSize, mtlSize](objcLib, "objc_msgSend")
-	sendBuffer = ffi.Fn5[ffi.None, ID, SEL, ID, uint64, uint64](objcLib, "objc_msgSend")
-	sendBuffers = ffi.Fn5[ffi.None, ID, SEL, *ID, *uint64, nsRange](objcLib, "objc_msgSend")
-	sendPtr = ffi.Fn2[unsafe.Pointer, ID, SEL](objcLib, "objc_msgSend")
-	sendAlloc = ffi.Fn4[ID, ID, SEL, uint64, uint64](objcLib, "objc_msgSend")
-	sendErr2 = ffi.Fn5[ID, ID, SEL, ID, ID, *ID](objcLib, "objc_msgSend")
-	sendErr1 = ffi.Fn4[ID, ID, SEL, ID, *ID](objcLib, "objc_msgSend")
-	sendNoCopy = ffi.Fn6[ID, ID, SEL, unsafe.Pointer, uint64, uint64, uintptr](objcLib, "objc_msgSend")
-	sendCopy = ffi.Fn7[ffi.None, ID, SEL, ID, uint64, ID, uint64, uint64](objcLib, "objc_msgSend")
-	selSetPSO = sel("setComputePipelineState:")
-	selSetBuffers = sel("setBuffers:offsets:withRange:")
-	selSetBuffer = sel("setBuffer:offset:atIndex:")
-	selDispatchTG = sel("dispatchThreadgroups:threadsPerThreadgroup:")
-	selEndEncoding = sel("endEncoding")
-	selCommit = sel("commit")
-	selGPUStart, selGPUEnd = sel("GPUStartTime"), sel("GPUEndTime")
-	selResCommit, selResRequest = sel("commit"), sel("requestResidency")
-	selResponds = sel("respondsToSelector:")
-	selWaitDone = sel("waitUntilCompleted")
-	selStatus = sel("status")
-	selError = sel("error")
-	selCmdBuf = sel("commandBuffer")
-	selCmdBufUnret = sel("commandBufferWithUnretainedReferences")
-	selBlitEnc = sel("blitCommandEncoder")
-	selCopyBuf = sel("copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:")
-	selComputeEnc = sel("computeCommandEncoder")
-	selComputeEncType = sel("computeCommandEncoderWithDispatchType:")
-	selMemBarrier = sel("memoryBarrierWithScope:")
-	selRetain = sel("retain")
-	selRelease = sel("release")
-	loaded = true
-	return nil
+	rt.sendF64 = ffi.Fn2[float64, ID, SEL](objcLib, "objc_msgSend")
+	rt.sendBool = ffi.Fn2[objcBool, ID, SEL](objcLib, "objc_msgSend")
+	rt.sendBoolU64 = ffi.Fn3[objcBool, ID, SEL, uint64](objcLib, "objc_msgSend")
+	rt.sendIdxID = ffi.Fn3[ID, ID, SEL, uint64](objcLib, "objc_msgSend")
+	rt.sendResponds = ffi.Fn3[objcBool, ID, SEL, SEL](objcLib, "objc_msgSend")
+	rt.sendDispatch = ffi.Fn4[ffi.None, ID, SEL, mtlSize, mtlSize](objcLib, "objc_msgSend")
+	rt.sendBuffer = ffi.Fn5[ffi.None, ID, SEL, ID, uint64, uint64](objcLib, "objc_msgSend")
+	rt.sendBuffers = ffi.Fn5[ffi.None, ID, SEL, *ID, *uint64, nsRange](objcLib, "objc_msgSend")
+	rt.sendPtr = ffi.Fn2[unsafe.Pointer, ID, SEL](objcLib, "objc_msgSend")
+	rt.sendAlloc = ffi.Fn4[ID, ID, SEL, uint64, uint64](objcLib, "objc_msgSend")
+	rt.sendErr2 = ffi.Fn5[ID, ID, SEL, ID, ID, *ID](objcLib, "objc_msgSend")
+	rt.sendErr1 = ffi.Fn4[ID, ID, SEL, ID, *ID](objcLib, "objc_msgSend")
+	rt.sendNoCopy = ffi.Fn6[ID, ID, SEL, unsafe.Pointer, uint64, uint64, uintptr](objcLib, "objc_msgSend")
+	rt.sendCopy = ffi.Fn7[ffi.None, ID, SEL, ID, uint64, ID, uint64, uint64](objcLib, "objc_msgSend")
+	rt.selSetPSO = rt.sel("setComputePipelineState:")
+	rt.selSetBuffers = rt.sel("setBuffers:offsets:withRange:")
+	rt.selSetBuffer = rt.sel("setBuffer:offset:atIndex:")
+	rt.selDispatchTG = rt.sel("dispatchThreadgroups:threadsPerThreadgroup:")
+	rt.selEndEncoding = rt.sel("endEncoding")
+	rt.selCommit = rt.sel("commit")
+	rt.selGPUStart, rt.selGPUEnd = rt.sel("GPUStartTime"), rt.sel("GPUEndTime")
+	rt.selResCommit, rt.selResRequest = rt.sel("commit"), rt.sel("requestResidency")
+	rt.selResponds = rt.sel("respondsToSelector:")
+	rt.selWaitDone = rt.sel("waitUntilCompleted")
+	rt.selStatus = rt.sel("status")
+	rt.selError = rt.sel("error")
+	rt.selCmdBuf = rt.sel("commandBuffer")
+	rt.selCmdBufUnret = rt.sel("commandBufferWithUnretainedReferences")
+	rt.selBlitEnc = rt.sel("blitCommandEncoder")
+	rt.selCopyBuf = rt.sel("copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:")
+	rt.selComputeEnc = rt.sel("computeCommandEncoder")
+	rt.selComputeEncType = rt.sel("computeCommandEncoderWithDispatchType:")
+	rt.selMemBarrier = rt.sel("memoryBarrierWithScope:")
+	rt.selRetain = rt.sel("retain")
+	rt.selRelease = rt.sel("release")
+	return rt, nil
 }
 
-func sel(s string) SEL {
+func (rt *objc) sel(s string) SEL {
 	b := append([]byte(s), 0)
-	return selRegisterName(&b[0])
+	return rt.selRegisterName(&b[0])
 }
 
-func class(s string) ID {
+func (rt *objc) class(s string) ID {
 	b := append([]byte(s), 0)
-	return objcGetClass(&b[0])
+	return rt.objcGetClass(&b[0])
 }
 
 // nsstr wraps a Go string as an NSString. The byte slice is returned so the
 // caller can keep it alive across the call that consumes it.
-func nsstr(s string) (ID, []byte) {
+func (rt *objc) nsstr(s string) (ID, []byte) {
 	b := append([]byte(s), 0)
-	id := send1ptr(class("NSString"), sel("stringWithUTF8String:"), unsafe.Pointer(&b[0]))
+	id := rt.send1ptr(rt.class("NSString"), rt.sel("stringWithUTF8String:"), unsafe.Pointer(&b[0]))
 	return id, b
 }
 
-func gostr(id ID) string {
+func (rt *objc) gostr(id ID) string {
 	if id == 0 {
 		return ""
 	}
-	p := sendPtr(id, sel("UTF8String"))
+	p := rt.sendPtr(id, rt.sel("UTF8String"))
 	if p == nil {
 		return ""
 	}
@@ -213,18 +208,24 @@ func gostr(id ID) string {
 	}
 }
 
-func nserr(e ID, what string) error {
+func (rt *objc) nserr(e ID, what string) error {
 	if e == 0 {
 		return fmt.Errorf("metal: %s failed with no NSError", what)
 	}
 	return fmt.Errorf("metal: %s failed: %s", what,
-		gostr(send0(e, sel("localizedDescription"))))
+		rt.gostr(rt.send0(e, rt.sel("localizedDescription"))))
 }
 
 // Ctx is an open device and its command queue.
 type Ctx struct {
-	dev  ID
-	name string
+	// rt is the binding every message on this context goes through, and stats
+	// the instruments it counts into (Opts.Stats).
+	rt    *objc
+	stats *Stats
+	// cores is the GPU's core count as the IORegistry states it; see GPUCores.
+	cores int
+	dev   ID
+	name  string
 	// unretained selects -commandBufferWithUnretainedReferences; see
 	// Unretained.
 	unretained bool
@@ -254,26 +255,37 @@ func Open() (*Ctx, error) { return OpenWith(Opts{}) }
 
 // OpenWith opens the system default device with this context's choices.
 func OpenWith(o Opts) (*Ctx, error) {
-	if err := load(); err != nil {
+	rt, err := load()
+	if err != nil {
 		return nil, err
 	}
-	d := createDevice()
+	d := rt.createDevice()
 	if d == 0 {
 		return nil, fmt.Errorf("metal: MTLCreateSystemDefaultDevice returned nil")
 	}
-	q := send0(d, sel("newCommandQueue"))
+	q := rt.send0(d, rt.sel("newCommandQueue"))
 	if q == 0 {
 		return nil, fmt.Errorf("metal: newCommandQueue returned nil")
 	}
 	c := &Ctx{
+		rt:         rt,
+		stats:      o.stats(),
+		cores:      readGPUCores(),
 		dev:        d,
-		name:       gostr(send0(d, sel("name"))),
-		unified:    sendBool(d, sel("hasUnifiedMemory")).ok(),
-		opts:       strictMath(o.FastMath),
+		name:       rt.gostr(rt.send0(d, rt.sel("name"))),
+		unified:    rt.sendBool(d, rt.sel("hasUnifiedMemory")).ok(),
+		opts:       rt.strictMath(o.FastMath),
 		spin:       o.spin(),
 		concurrent: o.Concurrent,
+		unretained: o.Unretained,
 	}
 	c.sub = sub{c: c, queue: q}
+	if o.Residency {
+		if err := c.Residency(); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
 	return c, nil
 }
 
@@ -283,15 +295,15 @@ func OpenWith(o Opts) (*Ctx, error) {
 // the same IR would give a different number per kernel, and masked softmaxes
 // depend on -inf handling. backend.TestRMSNormQuantIsNormThenQuantize guards
 // it. An explicit fma() is still one instruction.
-func strictMath(fast bool) ID {
+func (rt *objc) strictMath(fast bool) ID {
 	if fast {
 		return 0 // nil options: Metal's defaults, fast math on
 	}
-	o := send0(send0(class("MTLCompileOptions"), sel("alloc")), sel("init"))
+	o := rt.send0(rt.send0(rt.class("MTLCompileOptions"), rt.sel("alloc")), rt.sel("init"))
 	if o == 0 {
 		return 0
 	}
-	send1id(o, sel("setFastMathEnabled:"), 0)
+	rt.send1id(o, rt.sel("setFastMathEnabled:"), 0)
 	return o
 }
 
@@ -309,11 +321,11 @@ func (c *Ctx) Mem() (free, total uint64, err error) {
 	if c.dev == 0 {
 		return 0, 0, fmt.Errorf("metal: device is closed")
 	}
-	total = sendU64(c.dev, sel("recommendedMaxWorkingSetSize"))
+	total = c.rt.sendU64(c.dev, c.rt.sel("recommendedMaxWorkingSetSize"))
 	if total == 0 {
 		return 0, 0, fmt.Errorf("metal: %s reports recommendedMaxWorkingSetSize 0", c.name)
 	}
-	if used := sendU64(c.dev, sel("currentAllocatedSize")); used < total {
+	if used := c.rt.sendU64(c.dev, c.rt.sel("currentAllocatedSize")); used < total {
 		free = total - used
 	}
 	return free, total, nil
@@ -331,7 +343,7 @@ func (c *Ctx) MaxThreadgroupMemory() int {
 	if c.dev == 0 {
 		return 0
 	}
-	return int(sendU64(c.dev, sel("maxThreadgroupMemoryLength")))
+	return int(c.rt.sendU64(c.dev, c.rt.sel("maxThreadgroupMemoryLength")))
 }
 
 // MaxBuffer is -maxBufferLength: the largest buffer this device will create.
@@ -339,7 +351,7 @@ func (c *Ctx) MaxBuffer() uint64 {
 	if c.dev == 0 {
 		return 0
 	}
-	return sendU64(c.dev, sel("maxBufferLength"))
+	return c.rt.sendU64(c.dev, c.rt.sel("maxBufferLength"))
 }
 
 func (c *Ctx) Close() {
@@ -351,11 +363,11 @@ func (c *Ctx) Close() {
 	c.qs = nil
 	c.qmu.Unlock()
 	if c.queue != 0 {
-		send0(c.queue, sel("release"))
+		c.rt.send0(c.queue, c.rt.sel("release"))
 		c.queue = 0
 	}
 	if c.dev != 0 {
-		send0(c.dev, sel("release"))
+		c.rt.send0(c.dev, c.rt.sel("release"))
 		c.dev = 0
 	}
 }
@@ -406,14 +418,14 @@ func (c *Ctx) Import(p unsafe.Pointer, n int) (*Buf, error) {
 		return nil, fmt.Errorf("metal: newBufferWithBytesNoCopy wants %d-byte alignment; "+
 			"got pointer %p and length %d", a, p, n)
 	}
-	id := sendNoCopy(c.dev, sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
+	id := c.rt.sendNoCopy(c.dev, c.rt.sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
 		p, uint64(n), storageModeShared, 0)
 	if id == 0 {
 		return nil, fmt.Errorf("metal: newBufferWithBytesNoCopy(%p, %d) returned nil", p, n)
 	}
 	// The contents pointer must equal p: that equality is the no-copy claim.
-	if q := sendPtr(id, sel("contents")); q != p {
-		send0(id, sel("release"))
+	if q := c.rt.sendPtr(id, c.rt.sel("contents")); q != p {
+		c.rt.send0(id, c.rt.sel("release"))
 		return nil, fmt.Errorf("metal: newBufferWithBytesNoCopy(%p) has contents %p: that is a COPY", p, q)
 	}
 	// Imported buffers hold the weights, so they must join the residency set.
@@ -423,13 +435,13 @@ func (c *Ctx) Import(p unsafe.Pointer, n int) (*Buf, error) {
 
 func (c *Ctx) Alloc(n int) (*Buf, error) {
 	const storageModeShared = 0
-	id := sendAlloc(c.dev, sel("newBufferWithLength:options:"), uint64(n), storageModeShared)
+	id := c.rt.sendAlloc(c.dev, c.rt.sel("newBufferWithLength:options:"), uint64(n), storageModeShared)
 	if id == 0 {
 		return nil, fmt.Errorf("metal: newBufferWithLength(%d) returned nil", n)
 	}
-	p := sendPtr(id, sel("contents"))
+	p := c.rt.sendPtr(id, c.rt.sel("contents"))
 	if p == nil {
-		send0(id, sel("release"))
+		c.rt.send0(id, c.rt.sel("release"))
 		return nil, fmt.Errorf("metal: buffer has no contents pointer")
 	}
 	c.addResident(id)
@@ -448,7 +460,7 @@ func (b *Buf) Free() {
 		b.c.Wait()
 	}
 	if b.id != 0 {
-		send0(b.id, sel("release"))
+		b.c.rt.send0(b.id, b.c.rt.sel("release"))
 		b.id = 0
 	}
 }
@@ -473,23 +485,23 @@ func (k *Kernel) SetWrites(m uint64) { k.writes = m }
 // Compile builds a pipeline state from MSL source. Metal compiles at runtime,
 // the way the CUDA driver JITs PTX.
 func (c *Ctx) Compile(src, entry string) (*Kernel, error) {
-	nsSrc, keepSrc := nsstr(src)
+	nsSrc, keepSrc := c.rt.nsstr(src)
 	var e ID
-	lib := sendErr2(c.dev, sel("newLibraryWithSource:options:error:"), nsSrc, c.opts, &e)
+	lib := c.rt.sendErr2(c.dev, c.rt.sel("newLibraryWithSource:options:error:"), nsSrc, c.opts, &e)
 	if lib == 0 {
-		return nil, nserr(e, "newLibraryWithSource")
+		return nil, c.rt.nserr(e, "newLibraryWithSource")
 	}
-	nsName, keepName := nsstr(entry)
-	fn := send1id(lib, sel("newFunctionWithName:"), nsName)
+	nsName, keepName := c.rt.nsstr(entry)
+	fn := c.rt.send1id(lib, c.rt.sel("newFunctionWithName:"), nsName)
 	if fn == 0 {
-		send0(lib, sel("release"))
+		c.rt.send0(lib, c.rt.sel("release"))
 		return nil, fmt.Errorf("metal: no function %q in the compiled library", entry)
 	}
-	pso := sendErr1(c.dev, sel("newComputePipelineStateWithFunction:error:"), fn, &e)
+	pso := c.rt.sendErr1(c.dev, c.rt.sel("newComputePipelineStateWithFunction:error:"), fn, &e)
 	if pso == 0 {
-		send0(fn, sel("release"))
-		send0(lib, sel("release"))
-		return nil, nserr(e, "newComputePipelineStateWithFunction")
+		c.rt.send0(fn, c.rt.sel("release"))
+		c.rt.send0(lib, c.rt.sel("release"))
+		return nil, c.rt.nserr(e, "newComputePipelineStateWithFunction")
 	}
 	_, _ = keepSrc, keepName
 	return &Kernel{c: c, lib: lib, fn: fn, pso: pso, name: entry}, nil
@@ -533,34 +545,34 @@ func (c *Ctx) Residency() error {
 	if c.resSet != 0 {
 		return nil
 	}
-	d := class("MTLResidencySetDescriptor")
+	d := c.rt.class("MTLResidencySetDescriptor")
 	if d == 0 {
 		return fmt.Errorf("metal: MTLResidencySetDescriptor is not available (macOS 15+)")
 	}
-	desc := send0(send0(d, sel("alloc")), sel("init"))
+	desc := c.rt.send0(c.rt.send0(d, c.rt.sel("alloc")), c.rt.sel("init"))
 	if desc == 0 {
 		return fmt.Errorf("metal: MTLResidencySetDescriptor alloc/init returned nil")
 	}
-	defer send0(desc, selRelease)
+	defer c.rt.send0(desc, c.rt.selRelease)
 	var nserrID ID
-	set := sendErr1(c.dev, sel("newResidencySetWithDescriptor:error:"), desc, &nserrID)
+	set := c.rt.sendErr1(c.dev, c.rt.sel("newResidencySetWithDescriptor:error:"), desc, &nserrID)
 	if set == 0 {
 		if nserrID != 0 {
-			return nserr(nserrID, "newResidencySetWithDescriptor")
+			return c.rt.nserr(nserrID, "newResidencySetWithDescriptor")
 		}
 		return fmt.Errorf("metal: newResidencySetWithDescriptor returned nil")
 	}
 	// A queue that does not answer addResidencySet: would leave the set
 	// attached to nothing while every buffer is added to it.
-	if sendResponds(c.queue, selResponds, sel("addResidencySet:")) == 0 {
-		send0(set, selRelease)
+	if c.rt.sendResponds(c.queue, c.rt.selResponds, c.rt.sel("addResidencySet:")) == 0 {
+		c.rt.send0(set, c.rt.selRelease)
 		return fmt.Errorf("metal: this command queue does not respond to " +
 			"addResidencySet: -- the set would attach to nothing")
 	}
-	send1id(c.queue, sel("addResidencySet:"), set)
+	c.rt.send1id(c.queue, c.rt.sel("addResidencySet:"), set)
 	c.qmu.RLock()
 	for q := range c.qs {
-		send1id(q.s.queue, sel("addResidencySet:"), set)
+		c.rt.send1id(q.s.queue, c.rt.sel("addResidencySet:"), set)
 	}
 	c.qmu.RUnlock()
 	c.resSet = set
@@ -574,7 +586,7 @@ func (c *Ctx) addResident(id ID) {
 	if c.resSet == 0 || id == 0 {
 		return
 	}
-	send1id(c.resSet, sel("addAllocation:"), id)
+	c.rt.send1id(c.resSet, c.rt.sel("addAllocation:"), id)
 	c.resDirty = true
 }
 
@@ -586,19 +598,19 @@ func (c *Ctx) NewBatch() *Batch { return c.sub.newBatch() }
 func (q *sub) newBatch() *Batch {
 	c := q.c
 	t0 := time.Now()
-	defer func() { statNewNs.Add(uint64(time.Since(t0))) }()
+	defer func() { q.c.stats.statNewNs.Add(uint64(time.Since(t0))) }()
 	if c.resSet != 0 && c.resDirty {
 		// commit publishes the additions; requestResidency asks the OS to
 		// make them resident and keep them so.
-		send0(c.resSet, selResCommit)
-		send0(c.resSet, selResRequest)
+		q.c.rt.send0(c.resSet, q.c.rt.selResCommit)
+		q.c.rt.send0(c.resSet, q.c.rt.selResRequest)
 		c.resDirty = false
 	}
-	sel := selCmdBuf
+	mk := q.c.rt.selCmdBuf
 	if c.unretained {
-		sel = selCmdBufUnret
+		mk = q.c.rt.selCmdBufUnret
 	}
-	cb := send0(q.queue, sel)
+	cb := q.c.rt.send0(q.queue, mk)
 	q.mu.Lock()
 	var b *Batch
 	if n := len(q.freeBatch); n > 0 {
@@ -612,9 +624,9 @@ func (q *sub) newBatch() *Batch {
 	b.nrd, b.nwr, b.conc = 0, 0, c.concurrent
 	if cb != 0 {
 		if b.conc {
-			b.enc = sendIdxID(cb, selComputeEncType, mtlDispatchConcurrent)
+			b.enc = q.c.rt.sendIdxID(cb, q.c.rt.selComputeEncType, mtlDispatchConcurrent)
 		} else {
-			b.enc = send0(cb, selComputeEnc)
+			b.enc = q.c.rt.send0(cb, q.c.rt.selComputeEnc)
 		}
 	}
 	return b
@@ -629,11 +641,11 @@ func (b *Batch) Encode(k *Kernel, groups, width int, bufs ...*Buf) error {
 		return err
 	}
 	t0 := time.Now()
-	statLaunch.Add(1)
+	b.q.c.stats.statLaunch.Add(1)
 	if b.conc {
 		b.order(k, bufs)
 	}
-	send1id(b.enc, selSetPSO, k.pso)
+	b.q.c.rt.send1id(b.enc, b.q.c.rt.selSetPSO, k.pso)
 	// One message for the whole argument list, from fixed arrays so no
 	// dispatch allocates. A kernel with more buffers than len(b.ids) uses the
 	// per-buffer setter rather than binding a prefix.
@@ -641,89 +653,41 @@ func (b *Batch) Encode(k *Kernel, groups, width int, bufs ...*Buf) error {
 		for i, buf := range bufs {
 			b.ids[i], b.offs[i] = buf.id, uint64(buf.off)
 		}
-		sendBuffers(b.enc, selSetBuffers, &b.ids[0], &b.offs[0],
+		b.q.c.rt.sendBuffers(b.enc, b.q.c.rt.selSetBuffers, &b.ids[0], &b.offs[0],
 			nsRange{0, uint64(len(bufs))})
 	} else {
 		for i, buf := range bufs {
-			sendBuffer(b.enc, selSetBuffer, buf.id, uint64(buf.off), uint64(i))
+			b.q.c.rt.sendBuffer(b.enc, b.q.c.rt.selSetBuffer, buf.id, uint64(buf.off), uint64(i))
 		}
 	}
-	sendDispatch(b.enc, selDispatchTG,
+	b.q.c.rt.sendDispatch(b.enc, b.q.c.rt.selDispatchTG,
 		mtlSize{uint64(groups), 1, 1}, mtlSize{uint64(width), 1, 1})
-	statEncodeNs.Add(uint64(time.Since(t0)))
-	if kernTiming.Load() {
+	b.q.c.stats.statEncodeNs.Add(uint64(time.Since(t0)))
+	if b.q.c.stats.kernTiming.Load() {
 		b.timedSplit(k.name)
 	}
 	return nil
-}
-
-// kernTiming puts every dispatch in a command buffer of its own, whose
-// GPUStartTime/GPUEndTime then time that kernel alone; see SetKernelTiming.
-var kernTiming atomic.Bool
-
-// SetKernelTiming arms per-kernel device timing on Metal: each dispatch is
-// committed in its own command buffer, and the device's own start and end
-// stamps of it are read when the work is waited for (KernelTimes). A
-// measurement instrument, default off: a command buffer a dispatch costs its
-// own launch and loses the concurrency between dispatches, so the split it
-// gives is each kernel's time alone, not the token's.
-func SetKernelTiming(on bool) { kernTiming.Store(on) }
-
-// timedCBs names the command buffers committed under SetKernelTiming until a
-// wait reads them.
-var timedCBs struct {
-	sync.Mutex
-	name map[ID]string
-	us   map[string]float64
-	n    map[string]int
 }
 
 // timedSplit commits the batch's command buffer with the one dispatch just
 // encoded, remembers it under the kernel's name, and opens the next.
 func (b *Batch) timedSplit(name string) {
 	cb := b.cb
-	send0(b.enc, selEndEncoding)
-	send0(cb, selCommit)
+	b.q.c.rt.send0(b.enc, b.q.c.rt.selEndEncoding)
+	b.q.c.rt.send0(cb, b.q.c.rt.selCommit)
 	b.q.hold(cb)
-	timedCBs.Lock()
-	if timedCBs.name == nil {
-		timedCBs.name = map[ID]string{}
+	b.q.c.stats.timedCBs.Lock()
+	if b.q.c.stats.timedCBs.name == nil {
+		b.q.c.stats.timedCBs.name = map[uintptr]string{}
 	}
-	timedCBs.name[cb] = name
-	timedCBs.Unlock()
+	b.q.c.stats.timedCBs.name[uintptr(cb)] = name
+	b.q.c.stats.timedCBs.Unlock()
 	nb := b.q.newBatch()
 	b.cb, b.enc, b.nrd, b.nwr = nb.cb, nb.enc, 0, 0
 	nb.cb, nb.enc = 0, 0
 	b.q.mu.Lock()
 	b.q.freeBatch = append(b.q.freeBatch, nb)
 	b.q.mu.Unlock()
-}
-
-// timedDone adds a completed command buffer's device time to its kernel's,
-// when it was a timed one.
-func timedDone(cb ID, t0, t1 float64) {
-	timedCBs.Lock()
-	defer timedCBs.Unlock()
-	name, ok := timedCBs.name[cb]
-	if !ok {
-		return
-	}
-	delete(timedCBs.name, cb)
-	if timedCBs.us == nil {
-		timedCBs.us, timedCBs.n = map[string]float64{}, map[string]int{}
-	}
-	timedCBs.us[name] += (t1 - t0) * 1e6
-	timedCBs.n[name]++
-}
-
-// KernelTimes returns, and clears, the per-kernel device microseconds and
-// launch counts SetKernelTiming recorded, for the work waited for so far.
-func KernelTimes() (us map[string]float64, n map[string]int) {
-	timedCBs.Lock()
-	defer timedCBs.Unlock()
-	us, n = timedCBs.us, timedCBs.n
-	timedCBs.us, timedCBs.n = nil, nil
-	return us, n
 }
 
 // MTLDispatchTypeConcurrent and MTLBarrierScopeBuffers.
@@ -755,8 +719,8 @@ func (b *Batch) order(k *Kernel, bufs []*Buf) {
 		hazard = has(b.wr[:b.nwr], buf.id) || w && has(b.rd[:b.nrd], buf.id)
 	}
 	if hazard {
-		sendIdxID(b.enc, selMemBarrier, mtlBarrierBuffers)
-		statBarrier.Add(1)
+		b.q.c.rt.sendIdxID(b.enc, b.q.c.rt.selMemBarrier, mtlBarrierBuffers)
+		b.q.c.stats.statBarrier.Add(1)
 		b.nrd, b.nwr = 0, 0
 	}
 	for i, buf := range bufs {
@@ -770,14 +734,6 @@ func (b *Batch) order(k *Kernel, bufs []*Buf) {
 	}
 }
 
-// statBarrier counts the buffer barriers concurrent encoders put in.
-var statBarrier atomic.Uint64
-
-// Barriers is how many buffer barriers concurrent encoders have put between
-// dispatches; against SubmitTimes' dispatch count it says how much of a token
-// runs side by side.
-func Barriers() uint64 { return statBarrier.Load() }
-
 // Commit ends encoding and submits. It does not wait: blocking here made every
 // batch a full GPU round trip with the CPU idle. The wait is in Ctx.Wait, which
 // every host read goes through; correctness rests on Metal's in-order queue.
@@ -786,20 +742,20 @@ func (b *Batch) Commit() error {
 		return nil
 	}
 	t0 := time.Now()
-	if w := lastWaitDone.Load(); w != 0 {
+	if w := b.q.c.stats.lastWaitDone.Load(); w != 0 {
 		// The host's share of the device's idle gap since the previous
 		// Wait returned. Gaps over 5 ms are between runs, not tokens.
 		if g := t0.UnixNano() - w; g < 5e6 {
-			statHostGapNs.Add(uint64(g))
-			statHostGapN.Add(1)
+			b.q.c.stats.statHostGapNs.Add(uint64(g))
+			b.q.c.stats.statHostGapN.Add(1)
 		}
-		lastWaitDone.Store(0)
+		b.q.c.stats.lastWaitDone.Store(0)
 	}
-	lastCommit.Store(t0.UnixNano())
-	send0(b.enc, selEndEncoding)
-	send0(b.cb, selCommit)
+	b.q.c.stats.lastCommit.Store(t0.UnixNano())
+	b.q.c.rt.send0(b.enc, b.q.c.rt.selEndEncoding)
+	b.q.c.rt.send0(b.cb, b.q.c.rt.selCommit)
 	b.q.hold(b.cb)
-	statCommitNs.Add(uint64(time.Since(t0)))
+	b.q.c.stats.statCommitNs.Add(uint64(time.Since(t0)))
 	b.cb, b.enc = 0, 0
 	// A committed batch goes back to NewBatch's free list: the caller is done
 	// with it (Commit is a batch's last call), and a Batch per session was a
@@ -812,10 +768,10 @@ func (b *Batch) Commit() error {
 
 // hold takes ownership of a committed command buffer until the next wait.
 func (q *sub) hold(cb ID) {
-	send0(cb, selRetain)
+	q.c.rt.send0(cb, q.c.rt.selRetain)
 	q.mu.Lock()
 	q.pending = append(q.pending, cb)
-	statCommit.Add(1)
+	q.c.stats.statCommit.Add(1)
 	q.mu.Unlock()
 }
 
@@ -845,12 +801,12 @@ func (q *sub) settled() {
 	var last ID
 	if n := len(q.pending); n > 0 {
 		last = q.pending[n-1]
-		send0(last, selRetain)
+		q.c.rt.send0(last, q.c.rt.selRetain)
 	}
 	q.mu.Unlock()
 	if last != 0 {
 		q.c.await(last)
-		send0(last, selRelease)
+		q.c.rt.send0(last, q.c.rt.selRelease)
 	}
 }
 
@@ -863,9 +819,9 @@ func (q *sub) wait() error {
 	// becomes the spare once it is read: two lists that swap, where a fresh
 	// one per Wait was a heap object per decode token.
 	q.pending, q.spare = q.spare[:0], nil
-	statWait.Add(1)
+	q.c.stats.statWait.Add(1)
 	if len(cbs) > 0 {
-		statBlock.Add(1)
+		q.c.stats.statBlock.Add(1)
 	} else {
 		q.spare = cbs[:0]
 	}
@@ -877,44 +833,44 @@ func (q *sub) wait() error {
 	tw := time.Now()
 	c.await(cbs[len(cbs)-1])
 	done := time.Now()
-	statWaitNs.Add(uint64(done.Sub(tw)))
-	lastWaitDone.Store(done.UnixNano())
-	commitAt := lastCommit.Load()
+	q.c.stats.statWaitNs.Add(uint64(done.Sub(tw)))
+	q.c.stats.lastWaitDone.Store(done.UnixNano())
+	commitAt := q.c.stats.lastCommit.Load()
 	var err error
 	for _, cb := range cbs {
-		if e := send0(cb, selError); e != 0 && err == nil {
-			err = nserr(e, "command buffer")
+		if e := q.c.rt.send0(cb, q.c.rt.selError); e != 0 && err == nil {
+			err = q.c.rt.nserr(e, "command buffer")
 		}
 		// GPUStartTime/GPUEndTime bracket execution on the device, so
 		// token wall time minus this is measured rather than fitted. Valid
 		// only after completion.
-		if t0, t1 := sendF64(cb, selGPUStart), sendF64(cb, selGPUEnd); t1 > t0 {
-			if kernTiming.Load() {
-				timedDone(cb, t0, t1)
+		if t0, t1 := q.c.rt.sendF64(cb, q.c.rt.selGPUStart), q.c.rt.sendF64(cb, q.c.rt.selGPUEnd); t1 > t0 {
+			if q.c.stats.kernTiming.Load() {
+				q.c.stats.timedDone(uintptr(cb), t0, t1)
 			}
 			d := uint64((t1 - t0) * 1e9)
-			statGPUNs.Add(d)
-			statGPUN.Add(1)
+			q.c.stats.statGPUNs.Add(d)
+			q.c.stats.statGPUN.Add(1)
 			// Device idle between the previous command buffer's end and
 			// this one's start, on the device clock.
 			if prev := q.prevEnd; prev > 0 && t0 > prev && t0-prev < 1 {
-				statGPUGapNs.Add(uint64((t0 - prev) * 1e9))
-				statGPUGapN.Add(1)
+				q.c.stats.statGPUGapNs.Add(uint64((t0 - prev) * 1e9))
+				q.c.stats.statGPUGapN.Add(1)
 			}
 			q.prevEnd = t1
 			// Commit-to-Wait-return host time less device busy time: the
 			// launch and wake-up latency of a round trip.
 			if commitAt != 0 && len(cbs) == 1 {
 				if lat := done.UnixNano() - commitAt - int64(d); lat > 0 && lat < 5e6 {
-					statLatNs.Add(uint64(lat))
-					statLatN.Add(1)
+					q.c.stats.statLatNs.Add(uint64(lat))
+					q.c.stats.statLatN.Add(1)
 				}
 			}
 			// The last buffer separately: under PerLayerSubmit it holds
 			// only the head sequence, so this times it in situ.
-			statGPULast.Store(d)
+			q.c.stats.statGPULast.Store(d)
 		}
-		send0(cb, selRelease)
+		q.c.rt.send0(cb, q.c.rt.selRelease)
 	}
 	q.mu.Lock()
 	if q.spare == nil {
@@ -934,7 +890,7 @@ func (c *Ctx) await(cb ID) {
 	if budget := c.spin; budget > 0 {
 		t0 := time.Now()
 		for i := 0; ; i++ {
-			if st := send0(cb, selStatus); st >= 4 {
+			if st := c.rt.send0(cb, c.rt.selStatus); st >= 4 {
 				return
 			}
 			// Read the clock once per 64 polls.
@@ -943,7 +899,7 @@ func (c *Ctx) await(cb ID) {
 			}
 		}
 	}
-	send0(cb, selWaitDone)
+	c.rt.send0(cb, c.rt.selWaitDone)
 }
 
 // Launch dispatches groups threadgroups of width threads each and blocks.
@@ -952,27 +908,27 @@ func (k *Kernel) Launch(groups, width int, bufs ...*Buf) error {
 		return err
 	}
 	t0 := time.Now()
-	statSolo.Add(1)
-	defer func() { statSoloNs.Add(uint64(time.Since(t0))) }()
-	cb := send0(k.c.queue, sel("commandBuffer"))
+	k.c.stats.statSolo.Add(1)
+	defer func() { k.c.stats.statSoloNs.Add(uint64(time.Since(t0))) }()
+	cb := k.c.rt.send0(k.c.queue, k.c.rt.sel("commandBuffer"))
 	if cb == 0 {
 		return fmt.Errorf("metal: commandBuffer returned nil")
 	}
-	enc := send0(cb, sel("computeCommandEncoder"))
+	enc := k.c.rt.send0(cb, k.c.rt.sel("computeCommandEncoder"))
 	if enc == 0 {
 		return fmt.Errorf("metal: computeCommandEncoder returned nil")
 	}
-	send1id(enc, sel("setComputePipelineState:"), k.pso)
+	k.c.rt.send1id(enc, k.c.rt.sel("setComputePipelineState:"), k.pso)
 	for i, b := range bufs {
-		sendBuffer(enc, sel("setBuffer:offset:atIndex:"), b.id, uint64(b.off), uint64(i))
+		k.c.rt.sendBuffer(enc, k.c.rt.sel("setBuffer:offset:atIndex:"), b.id, uint64(b.off), uint64(i))
 	}
-	sendDispatch(enc, sel("dispatchThreadgroups:threadsPerThreadgroup:"),
+	k.c.rt.sendDispatch(enc, k.c.rt.sel("dispatchThreadgroups:threadsPerThreadgroup:"),
 		mtlSize{uint64(groups), 1, 1}, mtlSize{uint64(width), 1, 1})
-	send0(enc, sel("endEncoding"))
-	send0(cb, sel("commit"))
-	send0(cb, sel("waitUntilCompleted"))
-	if e := send0(cb, sel("error")); e != 0 {
-		return nserr(e, "command buffer")
+	k.c.rt.send0(enc, k.c.rt.sel("endEncoding"))
+	k.c.rt.send0(cb, k.c.rt.sel("commit"))
+	k.c.rt.send0(cb, k.c.rt.sel("waitUntilCompleted"))
+	if e := k.c.rt.send0(cb, k.c.rt.sel("error")); e != 0 {
+		return k.c.rt.nserr(e, "command buffer")
 	}
 	return nil
 }
@@ -991,21 +947,21 @@ func (c *Ctx) Copy(dst *Buf, dstOff int, src *Buf, srcOff, n int) error {
 	if err := c.Wait(); err != nil {
 		return err
 	}
-	cb := send0(c.queue, selCmdBuf)
+	cb := c.rt.send0(c.queue, c.rt.selCmdBuf)
 	if cb == 0 {
 		return fmt.Errorf("metal: commandBuffer returned nil")
 	}
-	enc := send0(cb, selBlitEnc)
+	enc := c.rt.send0(cb, c.rt.selBlitEnc)
 	if enc == 0 {
 		return fmt.Errorf("metal: blitCommandEncoder returned nil")
 	}
-	sendCopy(enc, selCopyBuf,
+	c.rt.sendCopy(enc, c.rt.selCopyBuf,
 		src.id, uint64(src.off+srcOff), dst.id, uint64(dst.off+dstOff), uint64(n))
-	send0(enc, selEndEncoding)
-	send0(cb, selCommit)
-	send0(cb, selWaitDone)
-	if e := send0(cb, selError); e != 0 {
-		return nserr(e, "blit command buffer")
+	c.rt.send0(enc, c.rt.selEndEncoding)
+	c.rt.send0(cb, c.rt.selCommit)
+	c.rt.send0(cb, c.rt.selWaitDone)
+	if e := c.rt.send0(cb, c.rt.selError); e != 0 {
+		return c.rt.nserr(e, "blit command buffer")
 	}
 	return nil
 }
@@ -1025,11 +981,11 @@ func (c *Ctx) CopyList(ops []CopyOp) error {
 	if err := c.Wait(); err != nil {
 		return err
 	}
-	cb := send0(c.queue, selCmdBuf)
+	cb := c.rt.send0(c.queue, c.rt.selCmdBuf)
 	if cb == 0 {
 		return fmt.Errorf("metal: commandBuffer returned nil")
 	}
-	enc := send0(cb, selBlitEnc)
+	enc := c.rt.send0(cb, c.rt.selBlitEnc)
 	if enc == 0 {
 		return fmt.Errorf("metal: blitCommandEncoder returned nil")
 	}
@@ -1037,14 +993,14 @@ func (c *Ctx) CopyList(ops []CopyOp) error {
 		if o.N == 0 {
 			continue
 		}
-		sendCopy(enc, selCopyBuf,
+		c.rt.sendCopy(enc, c.rt.selCopyBuf,
 			o.Src.id, uint64(o.Src.off+o.SrcOff), o.Dst.id, uint64(o.Dst.off+o.DstOff), uint64(o.N))
 	}
-	send0(enc, selEndEncoding)
-	send0(cb, selCommit)
-	send0(cb, selWaitDone)
-	if e := send0(cb, selError); e != 0 {
-		return nserr(e, "blit command buffer")
+	c.rt.send0(enc, c.rt.selEndEncoding)
+	c.rt.send0(cb, c.rt.selCommit)
+	c.rt.send0(cb, c.rt.selWaitDone)
+	if e := c.rt.send0(cb, c.rt.selError); e != 0 {
+		return c.rt.nserr(e, "blit command buffer")
 	}
 	return nil
 }
@@ -1054,102 +1010,18 @@ func (c *Ctx) CopyList(ops []CopyOp) error {
 // SIMD width. Metal does not refuse a dispatch past either; the kernel
 // silently does not run.
 func (k *Kernel) Limits() (maxThreads, simdWidth int) {
-	return int(sendU64(k.pso, sel("maxTotalThreadsPerThreadgroup"))),
-		int(sendU64(k.pso, sel("threadExecutionWidth")))
+	return int(k.c.rt.sendU64(k.pso, k.c.rt.sel("maxTotalThreadsPerThreadgroup"))),
+		int(k.c.rt.sendU64(k.pso, k.c.rt.sel("threadExecutionWidth")))
 }
 
 func (k *Kernel) Close() {
 	for _, id := range []*ID{&k.pso, &k.fn, &k.lib} {
 		if *id != 0 {
-			send0(*id, sel("release"))
+			k.c.rt.send0(*id, k.c.rt.sel("release"))
 			*id = 0
 		}
 	}
 }
-
-// statCommit, statWait and statBlock count commits, waits and waits that
-// blocked. Package-level because a process has one Metal device.
-var statCommit, statWait, statBlock atomic.Uint64
-
-// statEncodeNs and statWaitNs split the CPU's time between building the
-// command buffer and blocking on the GPU.
-var statEncodeNs, statWaitNs, statLaunch atomic.Uint64
-
-// statSolo counts dispatches that went through Kernel.Launch -- one command
-// buffer, committed AND WAITED, for a single dispatch. Inside a Session they go
-// through Batch.Encode instead and share one buffer.
-var statSolo, statSoloNs atomic.Uint64
-
-// statSessionNs is wall time inside backend Session. It bounds submission from
-// above.
-var statSessionNs, statSessionN atomic.Uint64
-
-// statNewNs is time creating the command buffer and its encoder; statCommitNs
-// is endEncoding plus commit.
-var statNewNs, statCommitNs atomic.Uint64
-
-// statGPUNs is the device's own execution time, summed from every completed
-// command buffer's GPUStartTime/GPUEndTime.
-var statGPUNs, statGPUN, statGPULast atomic.Uint64
-
-// statGPUGapNs sums the device's idle time between consecutive command
-// buffers (GPUStartTime of one less GPUEndTime of the one before), on the
-// device's own clock; each queue keeps its previous end (sub.prevEnd).
-var statGPUGapNs, statGPUGapN atomic.Uint64
-
-// statHostGapNs is host time from a blocking Wait's return to the next
-// Commit: the CPU's share of the device's idle gap.
-var statHostGapNs, statHostGapN atomic.Uint64
-var lastWaitDone atomic.Int64
-
-// statLatNs is commit-to-Wait-return host time less GPU busy time, for a Wait
-// covering one command buffer: the launch and wake-up latency of a round trip.
-var statLatNs, statLatN atomic.Uint64
-var lastCommit atomic.Int64
-
-// RoundTrip reports the launch plus wake-up latency summed over n round trips.
-func RoundTrip() (ns, n uint64) { return statLatNs.Load(), statLatN.Load() }
-
-// HostGap reports the host's nanoseconds from a Wait's return to the next
-// commit, and over how many.
-func HostGap() (ns, n uint64) { return statHostGapNs.Load(), statHostGapN.Load() }
-
-// GPUIdle reports the device's idle nanoseconds between consecutive command
-// buffers, and how many gaps that sums.
-func GPUIdle() (ns, gaps uint64) { return statGPUGapNs.Load(), statGPUGapN.Load() }
-
-// GPUBusy reports nanoseconds the device spent executing, and over how many
-// command buffers. Against a token's wall time it splits the token without a
-// fitted parameter.
-func GPUBusy() (ns, buffers uint64) { return statGPUNs.Load(), statGPUN.Load() }
-
-// GPUBusyLast is the LAST completed command buffer's own execution time. Under
-// one-submission-per-block it is the head sequence's, measured where it runs.
-func GPUBusyLast() uint64 { return statGPULast.Load() }
-
-// SubmitStats reports commits, Wait calls, and Waits that actually blocked.
-func SubmitStats() (commits, waits, blocked uint64) {
-	return statCommit.Load(), statWait.Load(), statBlock.Load()
-}
-
-// SubmitTimes reports nanoseconds spent encoding and nanoseconds spent blocked,
-// plus the number of dispatches encoded.
-func SubmitTimes() (encodeNs, waitNs, launches uint64) {
-	return statEncodeNs.Load(), statWaitNs.Load(), statLaunch.Load()
-}
-
-// SoloStats reports dispatches that took a command buffer of their own, and the
-// nanoseconds they cost. Each is a full GPU round trip.
-func SoloStats() (n, ns uint64) { return statSolo.Load(), statSoloNs.Load() }
-
-// AddSessionNs records one backend Session's wall time.
-func AddSessionNs(ns uint64) { statSessionNs.Add(ns); statSessionN.Add(1) }
-
-// SessionStats reports sessions and their total wall nanoseconds.
-func SessionStats() (n, ns uint64) { return statSessionN.Load(), statSessionNs.Load() }
-
-// PhaseStats splits a Session: creating the command buffer, and committing it.
-func PhaseStats() (newNs, commitNs uint64) { return statNewNs.Load(), statCommitNs.Load() }
 
 // MTLCounterSamplingPoint. Only the two that could time a compute dispatch are
 // named; the draw and tile-dispatch points are graphics.
@@ -1164,40 +1036,40 @@ const (
 // boundary only, per-dispatch timing would need one serial encoder per
 // dispatch and would measure itself.
 func (c *Ctx) CounterSampling() (stage, dispatch bool) {
-	selSupports := sel("supportsCounterSampling:")
-	if !sendResponds(c.dev, selResponds, selSupports).ok() {
+	selSupports := c.rt.sel("supportsCounterSampling:")
+	if !c.rt.sendResponds(c.dev, c.rt.selResponds, selSupports).ok() {
 		return false, false
 	}
-	return sendBoolU64(c.dev, selSupports, sampleAtStageBoundary).ok(),
-		sendBoolU64(c.dev, selSupports, sampleAtDispatchBoundary).ok()
+	return c.rt.sendBoolU64(c.dev, selSupports, sampleAtStageBoundary).ok(),
+		c.rt.sendBoolU64(c.dev, selSupports, sampleAtDispatchBoundary).ok()
 }
 
 // CounterSets lists the device's counter set names, so "there is no timestamp
 // counter set" is distinguishable from "sampling is unsupported".
 func (c *Ctx) CounterSets() []string {
-	sets := send0(c.dev, sel("counterSets"))
+	sets := c.rt.send0(c.dev, c.rt.sel("counterSets"))
 	if sets == 0 {
 		return nil
 	}
-	n := sendU64(sets, sel("count"))
+	n := c.rt.sendU64(sets, c.rt.sel("count"))
 	out := make([]string, 0, n)
 	for i := uint64(0); i < n; i++ {
-		cs := sendIdxID(sets, sel("objectAtIndex:"), i)
+		cs := c.rt.sendIdxID(sets, c.rt.sel("objectAtIndex:"), i)
 		if cs == 0 {
 			continue
 		}
-		out = append(out, nsString(send0(cs, sel("name"))))
+		out = append(out, c.rt.nsString(c.rt.send0(cs, c.rt.sel("name"))))
 	}
 	return out
 }
 
 // nsString copies an NSString's UTF-8 bytes out. Returns "" for nil, which is
 // what -name gives for a counter set the driver does not label.
-func nsString(s ID) string {
+func (rt *objc) nsString(s ID) string {
 	if s == 0 {
 		return ""
 	}
-	p := sendPtr(s, sel("UTF8String"))
+	p := rt.sendPtr(s, rt.sel("UTF8String"))
 	if p == nil {
 		return ""
 	}
@@ -1234,14 +1106,14 @@ type Queue struct{ s sub }
 
 // NewQueue opens a command queue on this device.
 func (c *Ctx) NewQueue() (*Queue, error) {
-	id := send0(c.dev, sel("newCommandQueue"))
+	id := c.rt.send0(c.dev, c.rt.sel("newCommandQueue"))
 	if id == 0 {
 		return nil, fmt.Errorf("metal: newCommandQueue returned nil")
 	}
 	q := &Queue{s: sub{c: c, queue: id}}
 	c.qmu.Lock()
 	if c.resSet != 0 {
-		send1id(id, sel("addResidencySet:"), c.resSet)
+		c.rt.send1id(id, c.rt.sel("addResidencySet:"), c.resSet)
 	}
 	if c.qs == nil {
 		c.qs = map[*Queue]bool{}
@@ -1272,7 +1144,7 @@ func (q *Queue) Close() {
 
 func (q *Queue) release() {
 	if q.s.queue != 0 {
-		send0(q.s.queue, sel("release"))
+		q.s.c.rt.send0(q.s.queue, q.s.c.rt.sel("release"))
 		q.s.queue = 0
 	}
 }

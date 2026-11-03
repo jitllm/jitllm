@@ -23,7 +23,7 @@ import (
 // unchanged.
 func TestWriteAtAssemblesAndRefusesAnOverrun(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

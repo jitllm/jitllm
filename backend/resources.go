@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"errors"
 	"sort"
 	"sync"
 )
@@ -132,4 +131,10 @@ func (l *resLedger) list() []KernelResources {
 // leaves the device unable to launch its declared workgroup width: the launch
 // would fail with too many resources requested, so the compile says so first
 // and a caller with another kernel for the job keeps that one.
-var ErrGroupTooWide = errors.New("backend: the workgroup is wider than the kernel's registers allow")
+const ErrGroupTooWide backendError = "backend: the workgroup is wider than the kernel's registers allow"
+
+// backendError is a sentinel error of this package, a constant so errors.Is
+// and == hold on it.
+type backendError string
+
+func (e backendError) Error() string { return string(e) }

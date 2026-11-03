@@ -18,7 +18,7 @@ import (
 // next as a value, as attention needs over a whole head dimension.
 func TestTileMatchesReference(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

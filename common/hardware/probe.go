@@ -181,9 +181,6 @@ func Probe() Report {
 	r.Arch, r.ISA, r.DotKind = cpu.NativeArch(), isa(), cpu.HostDotLabel()
 	r.Kernels = kernels()
 
-	// backend.Open is reached without a tier here, so verbosity has to be
-	// handed to it directly: the package reads no environment.
-	backend.SetVerbose(false)
 	devs := backend.Open()
 	for _, d := range devs {
 		r.GPUs = append(r.GPUs, describe(d))

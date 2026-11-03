@@ -24,7 +24,9 @@ import (
 // inline with the context bound (see do and inline).
 type cudaDev struct {
 	allocCount
-	d *cuda.Device
+	// ctr is what the device counts into (Opts.Counters).
+	ctr *Counters
+	d   *cuda.Device
 	// drv is the driver binding d was opened through.
 	drv *cuda.Driver
 	// mu guards reqs against Close. do reads it and Close nils it, and without
@@ -91,6 +93,9 @@ type cudaDev struct {
 	// access is enabled between the two: asked once (peerTo).
 	peerMu sync.Mutex
 	peers  map[*cudaDev]bool
+	// writes, copies and copyLists keep the requests Write, Copy and CopyList
+	// post, each with its function built once.
+	writes, copies, copyLists sync.Pool
 }
 
 // CopyPeer is backend.PeerCopier: cuMemcpyPeer from another CUDA device's
@@ -115,7 +120,7 @@ func (c *cudaDev) CopyPeer(dst Buf, dstOff int, from Device, src Buf, srcOff, n 
 	if !c.drv.PeerCopyAvailable() {
 		return false, fmt.Errorf("backend: cuda: this driver has no cuMemcpyPeer")
 	}
-	err := errCUDAClosed
+	var err error = errCUDAClosed
 	f.do(func() { err = f.syncAll() })
 	if err != nil {
 		return false, err
@@ -155,7 +160,7 @@ func (c *cudaDev) peerTo(f *cudaDev) bool {
 	}
 	ok := c.d.CanAccessPeer(f.d) && f.d.CanAccessPeer(c.d)
 	if ok {
-		err := errCUDAClosed
+		var err error = errCUDAClosed
 		c.do(func() { err = c.d.EnablePeerAccess(f.d) })
 		if err == nil {
 			err = errCUDAClosed
@@ -234,11 +239,14 @@ func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 	if o.err != nil {
 		return nil, o.err
 	}
-	ownedDevices.Add(1)
+	ctr := opts.counters()
+	ctr.ownedDevices.Add(1)
 	if opts.CUDATarget != "" {
 		o.d.Target = opts.CUDATarget
 	}
-	return &cudaDev{d: o.d, drv: o.d.Driver(), reqs: reqs, owner: o.tid, posted: opts.CUDAPosted, maxRegs: opts.CUDAMaxRegs}, nil
+	c := &cudaDev{ctr: ctr, d: o.d, drv: o.d.Driver(), reqs: reqs, owner: o.tid, posted: opts.CUDAPosted, maxRegs: opts.CUDAMaxRegs}
+	c.writes.New, c.copies.New, c.copyLists.New = newCudaWrite, newCudaCopy, newCudaCopyList
+	return c, nil
 }
 
 // Session batches a sequence of device calls into ONE ownership hop.
@@ -251,7 +259,7 @@ func (c *cudaDev) Session(f func(Session)) {
 	// Inside a Session on a queue, a nested one is that queue's: on the legacy
 	// stream it would not be ordered against the queue's work.
 	if q := c.curQueue(); q != nil {
-		ownerCalls.Add(1)
+		c.ctr.ownerCalls.Add(1)
 		f(&q.s)
 		return
 	}
@@ -344,7 +352,7 @@ func (s *cudaSession) Read(b Buf, p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	countRead(len(p))
+	s.c.ctr.countRead(len(p))
 	if s.q != nil {
 		return s.q.read(b.(*cudaBuf).b, p)
 	}
@@ -394,7 +402,7 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 	// Outside a capture the timing instrument is an event pair around the
 	// launch itself, read back by CUDAKernelTimes.
 	var t0 *cuda.Event
-	if s.marks == nil && !s.qcap && s.stream == 0 && cudaKernTiming.Load() && s.c.drv.EventsAvailable() {
+	if s.marks == nil && !s.qcap && s.stream == 0 && s.c.ctr.cudaKernTiming.Load() && s.c.drv.EventsAvailable() {
 		if e, err := s.c.drv.NewEvent(); err == nil && e.RecordOn(st) == nil {
 			t0 = e
 		}
@@ -409,7 +417,7 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 	}
 	if t0 != nil {
 		if e, err := s.c.drv.NewEvent(); err == nil && e.RecordOn(st) == nil {
-			directMarks.add(kernPair{t0, e, name})
+			s.c.ctr.directMarks.add(kernPair{t0, e, name})
 		}
 	}
 	if s.marks != nil {
@@ -421,19 +429,6 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 	}
 	return nil
 }
-
-// cudaKernTiming arms an event pair around every launch outside a capture;
-// see SetCUDAKernelTiming.
-var cudaKernTiming atomic.Bool
-
-// SetCUDAKernelTiming arms per-kernel device-clock timing on CUDA: a launch
-// outside a capture runs between two events, read when CUDAKernelTimes is
-// called after the work is done; a capture records an event node after every
-// launch, and each replay's kernels are read back one replay later -- the SAME measurement scripts/kshim.c takes of
-// llama.cpp's graphs, so the two engines' kernels can be set side by side. It
-// applies to graphs recorded after it is armed. A measurement instrument,
-// default off: the event nodes cost device time of their own.
-func SetCUDAKernelTiming(on bool) { cudaKernTiming.Store(on) }
 
 // kernMark is one captured launch's end event: kernel i's device time is its
 // event minus kernel i-1's (the capture's first mark is a bare start event).
@@ -448,10 +443,6 @@ type kernPair struct {
 	name       string
 }
 
-// directMarks holds the launches timed outside a capture until
-// CUDAKernelTimes reads them.
-var directMarks kernPairs
-
 type kernPairs struct {
 	sync.Mutex
 	p []kernPair
@@ -463,8 +454,8 @@ func (k *kernPairs) add(p kernPair) {
 	k.Unlock()
 }
 
-// settle adds every completed pair to kernTimes and keeps the rest.
-func (k *kernPairs) settle() {
+// settle adds every completed pair to t and keeps the rest.
+func (k *kernPairs) settle(t *kernTotals) {
 	k.Lock()
 	defer k.Unlock()
 	keep := k.p[:0]
@@ -474,7 +465,7 @@ func (k *kernPairs) settle() {
 			continue
 		}
 		if ms, err := cuda.Elapsed(p.start, p.end); err == nil {
-			kernTimes.add(p.name, ms*1e3)
+			t.add(p.name, ms*1e3)
 		}
 		p.start.Destroy()
 		p.end.Destroy()
@@ -482,17 +473,15 @@ func (k *kernPairs) settle() {
 	k.p = keep
 }
 
-// settleMarks adds a completed replay's per-kernel times to kernTimes.
-func settleMarks(m []kernMark) {
+// settleMarks adds a completed replay's per-kernel times to the kernel
+// totals.
+func (c *Counters) settleMarks(m []kernMark) {
 	for i := 1; i < len(m); i++ {
 		if ms, err := cuda.Elapsed(m[i-1].ev, m[i].ev); err == nil {
-			kernTimes.add(m[i].name, ms*1e3)
+			c.kernTimes.add(m[i].name, ms*1e3)
 		}
 	}
 }
-
-// kernTimes sums device microseconds and counts per kernel name.
-var kernTimes kernTotals
 
 type kernTotals struct {
 	sync.Mutex
@@ -508,17 +497,6 @@ func (t *kernTotals) add(name string, us float32) {
 	}
 	t.us[name] += float64(us)
 	t.n[name]++
-}
-
-// CUDAKernelTimes returns, and clears, the per-kernel device microseconds and
-// launch counts SetCUDAKernelTiming collected.
-func CUDAKernelTimes() (us map[string]float64, n map[string]int) {
-	directMarks.settle()
-	kernTimes.Lock()
-	defer kernTimes.Unlock()
-	us, n = kernTimes.us, kernTimes.n
-	kernTimes.us, kernTimes.n = nil, nil
-	return us, n
 }
 
 func (s *cudaSession) Sync() error {
@@ -572,7 +550,7 @@ func (s *cudaSession) BeginRecord() error {
 // SetCUDAKernelTiming is on, on whichever stream the capture runs.
 func (s *cudaSession) armMarks() {
 	s.recMarks = nil
-	if cudaKernTiming.Load() && s.c.drv.EventsAvailable() {
+	if s.c.ctr.cudaKernTiming.Load() && s.c.drv.EventsAvailable() {
 		if e, err := s.c.drv.NewEvent(); err == nil && e.RecordNode(s.stream) == nil {
 			s.recMarks = []kernMark{{e, ""}}
 			s.marks = &s.recMarks
@@ -608,14 +586,14 @@ func (s *cudaSession) Replay(r Recording) error {
 		// session on a queue is no different here; settling only on the
 		// legacy stream left both timing instruments silent for every decode
 		// that runs on a queue, which is every decode of a session.
-		settleMarks(s.c.lastMarks)
+		s.c.ctr.settleMarks(s.c.lastMarks)
 		s.c.lastMarks = cg.marks
 	}
 	st := s.c.cap
 	if s.q != nil {
 		st = s.q.st
 	}
-	if !cudaTiming.Load() || !s.c.drv.EventsAvailable() {
+	if !s.c.ctr.cudaTiming.Load() || !s.c.drv.EventsAvailable() {
 		return cg.g.Launch(st)
 	}
 	return s.c.timeReplay(cg.g, st)
@@ -648,7 +626,7 @@ func (c *cudaDev) timeReplay(g *cuda.Graph, st *cuda.Stream) error {
 			}
 		}
 		if err == nil {
-			graphTimes.add(busy, gap)
+			c.ctr.graphTimes.add(busy, gap)
 		}
 	}
 	if err := cur[0].Record(st); err != nil {
@@ -660,9 +638,6 @@ func (c *cudaDev) timeReplay(g *cuda.Graph, st *cuda.Stream) error {
 	c.ti++
 	return cur[1].Record(st)
 }
-
-// graphTimes holds the last replays' device times, in microseconds.
-var graphTimes replayTimes
 
 type replayTimes struct {
 	sync.Mutex
@@ -679,17 +654,6 @@ func (t *replayTimes) add(busyMs, gapMs float32) {
 	t.gap = append(t.gap, gapMs*1e3)
 }
 
-// CUDAGraphTimes returns, and clears, the device-clock time of every timed
-// replay and the idle gap before it (-1 where there was no previous one), in
-// microseconds. See SetCUDATiming.
-func CUDAGraphTimes() (busy, gap []float32) {
-	graphTimes.Lock()
-	defer graphTimes.Unlock()
-	busy, gap = graphTimes.busy, graphTimes.gap
-	graphTimes.busy, graphTimes.gap = nil, nil
-	return busy, gap
-}
-
 // cudaGraph is a Recording. Free hops to the owner goroutine the way cudaBuf's
 // does, because destroying a graph is a driver call like any other while the
 // caller releasing one is the tier, on whatever goroutine decode runs on.
@@ -703,7 +667,7 @@ func (g *cudaGraph) Free() {
 	g.dev.do(func() {
 		g.g.Destroy()
 		if len(g.marks) > 0 && len(g.dev.lastMarks) > 0 && &g.dev.lastMarks[0] == &g.marks[0] {
-			settleMarks(g.dev.lastMarks) // freed while pending: its last replay is done by now
+			g.dev.ctr.settleMarks(g.dev.lastMarks) // freed while pending: its last replay is done by now
 			g.dev.lastMarks = nil
 		}
 		for _, m := range g.marks {
@@ -717,7 +681,7 @@ func (g *cudaGraph) Free() {
 // the dropped call below is a refusal rather than a success with nothing done
 // -- an Alloc that answered a buffer with no memory behind it, or a Read that
 // left the caller's bytes as they were.
-var errCUDAClosed = errors.New("backend: cuda: the device is closed")
+const errCUDAClosed backendError = "backend: cuda: the device is closed"
 
 // do runs f on the device-owning goroutine and waits for it.
 //
@@ -735,7 +699,7 @@ var errCUDAClosed = errors.New("backend: cuda: the device is closed")
 func (c *cudaDev) do(f func()) {
 	tid := threadID()
 	if tid >= 0 && (tid == c.owner || tid == c.in.Load() || c.inQueue(tid)) {
-		ownerCalls.Add(1)
+		c.ctr.ownerCalls.Add(1)
 		f()
 		return
 	}
@@ -748,7 +712,7 @@ func (c *cudaDev) do(f func()) {
 	if reqs == nil {
 		return
 	}
-	postedCalls.Add(1)
+	c.ctr.postedCalls.Add(1)
 	done := make(chan struct{})
 	var pv any
 	// The send is on the SNAPSHOT, not c.reqs: Close cannot nil a local, and it
@@ -805,30 +769,6 @@ func (c *cudaDev) inline(f func()) bool {
 	f()
 	return true
 }
-
-// allocRefused counts allocations a device refused for want of memory.
-var allocRefused atomic.Int64
-
-// AllocRefused is how many device allocations were refused because the card
-// was full -- by this process or, on a shared card, by another one. Placement
-// declines around it; a gate that needs a model on the card reads it to tell
-// "the card is too small here" from a failure.
-func AllocRefused() int64 { return allocRefused.Load() }
-
-// postedCalls counts device calls that took the hop to the owner goroutine.
-var postedCalls atomic.Int64
-
-// PostedCalls is how many CUDA calls were posted to an owner goroutine rather
-// than run inline; a gate holds it still across a Session.
-func PostedCalls() int64 { return postedCalls.Load() }
-
-// ownerCalls counts device calls made from inside a Session, which do runs
-// inline rather than deadlocking on; see OwnerCalls.
-var ownerCalls atomic.Int64
-
-// OwnerCalls is how many device calls were made from inside a Session. The
-// backend completes them, so this is a hygiene count, not an error count.
-func OwnerCalls() int64 { return ownerCalls.Load() }
 
 // Both ends of the ownership hop poll before they park, because waking a
 // parked goroutine costs tens of microseconds with the card idle meanwhile
@@ -946,7 +886,7 @@ func (c *cudaDev) Close() {
 		close(done)
 	}
 	<-done
-	ownedDevices.Add(-1)
+	c.ctr.ownedDevices.Add(-1)
 	c.mu.Lock()
 	close(c.reqs)
 	c.reqs = nil
@@ -955,11 +895,11 @@ func (c *cudaDev) Close() {
 
 func (c *cudaDev) Alloc(n int) (Buf, error) {
 	var b *cuda.Buffer
-	err := errCUDAClosed
+	var err error = errCUDAClosed
 	c.do(func() { b, err = c.d.Alloc(n) })
 	if err != nil {
 		if errors.Is(err, cuda.ErrOutOfMemory) {
-			allocRefused.Add(1)
+			c.ctr.allocRefused.Add(1)
 		}
 		return nil, err
 	}
@@ -969,7 +909,7 @@ func (c *cudaDev) Alloc(n int) (Buf, error) {
 // PinHost is cuda.HostAlloc on the owner goroutine (backend.HostPinner).
 func (c *cudaDev) PinHost(n int) ([]byte, error) {
 	var b []byte
-	err := errCUDAClosed
+	var err error = errCUDAClosed
 	c.do(func() { b, err = c.drv.HostAlloc(n) })
 	return b, err
 }
@@ -981,7 +921,7 @@ func (c *cudaDev) ImportAlign() int { return c.d.ImportAlign() }
 
 func (c *cudaDev) Import(p unsafe.Pointer, n int) (Buf, error) {
 	var b *cuda.Buffer
-	err := errCUDAClosed
+	var err error = errCUDAClosed
 	c.do(func() { b, err = c.d.Import(p, n) })
 	if err != nil {
 		return nil, err
@@ -992,13 +932,6 @@ func (c *cudaDev) Import(p unsafe.Pointer, n int) (Buf, error) {
 // UnifiedMemory is CU_DEVICE_ATTRIBUTE_INTEGRATED: a Jetson's memory is the
 // host's, a discrete card's is not (backend.Unified).
 func (c *cudaDev) UnifiedMemory() bool { return c.d.Integrated() }
-
-var (
-	_ HostImport = (*cudaDev)(nil)
-	_ Unified    = (*cudaDev)(nil)
-
-	_ ResourceReporter = (*cudaDev)(nil)
-)
 
 // KernelResources is every kernel this card compiled, as the driver reports
 // ptxas's allocation of it.
@@ -1025,10 +958,7 @@ func (c *cudaDev) GuaranteedLanes(w int) (bool, string) {
 }
 
 func (c *cudaDev) Compile(k *ir.Kernel) (Kernel, error) {
-	compiles.Add(1)
-	if CompileLog != nil {
-		CompileLog(k.Name)
-	}
+	c.ctr.compiled(k.Name)
 	src, err := ptx.Lower(k, c.d.Target)
 	if err != nil {
 		return nil, err
@@ -1113,12 +1043,12 @@ func (b *cudaBuf) WriteAt(off int, p []byte) error {
 	if q := b.dev.curQueue(); q != nil {
 		return q.write(b.b, off, p)
 	}
-	r := cudaWrites.Get().(*cudaWrite)
+	r := b.dev.writes.Get().(*cudaWrite)
 	*r = cudaWrite{b: b, off: off, p: p, err: errCUDAClosed, fn: r.fn}
 	b.dev.do(r.fn)
 	err := r.err
 	*r = cudaWrite{fn: r.fn}
-	cudaWrites.Put(r)
+	b.dev.writes.Put(r)
 	return err
 }
 
@@ -1133,11 +1063,11 @@ type cudaWrite struct {
 	fn  func()
 }
 
-var cudaWrites = sync.Pool{New: func() any {
+func newCudaWrite() any {
 	r := &cudaWrite{}
 	r.fn = r.run
 	return r
-}}
+}
 
 func (r *cudaWrite) run() {
 	d := r.b.dev
@@ -1162,11 +1092,11 @@ func (b *cudaBuf) Read(p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	countRead(len(p))
+	b.dev.ctr.countRead(len(p))
 	if q := b.dev.curQueue(); q != nil {
 		return q.read(b.b, p)
 	}
-	err := errCUDAClosed
+	var err error = errCUDAClosed
 	b.dev.do(func() {
 		if b.dev.hasQueues() {
 			if err = b.dev.syncAll(); err != nil {
@@ -1195,12 +1125,12 @@ func (c *cudaDev) Copy(dst Buf, dstOff int, src Buf, srcOff, n int) error {
 	if err := copyRange(db.b.Len(), dstOff, sb.b.Len(), srcOff, n, db.b == sb.b); err != nil || n == 0 {
 		return err
 	}
-	r := cudaCopies.Get().(*cudaCopy)
+	r := c.copies.Get().(*cudaCopy)
 	*r = cudaCopy{c: c, db: db, sb: sb, dOff: dstOff, sOff: srcOff, n: n, err: errCUDAClosed, fn: r.fn}
 	c.do(r.fn)
 	err := r.err
 	*r = cudaCopy{fn: r.fn}
-	cudaCopies.Put(r)
+	c.copies.Put(r)
 	return err
 }
 
@@ -1218,12 +1148,12 @@ func (c *cudaDev) CopyList(cs []CopyRange) error {
 			return err
 		}
 	}
-	l := cudaCopyLists.Get().(*cudaCopyList)
+	l := c.copyLists.Get().(*cudaCopyList)
 	l.c, l.cs, l.err = c, cs, errCUDAClosed
 	c.do(l.fn)
 	err := l.err
 	l.c, l.cs, l.err = nil, nil, nil
-	cudaCopyLists.Put(l)
+	c.copyLists.Put(l)
 	return err
 }
 
@@ -1236,11 +1166,11 @@ type cudaCopyList struct {
 	fn  func()
 }
 
-var cudaCopyLists = sync.Pool{New: func() any {
+func newCudaCopyList() any {
 	l := &cudaCopyList{}
 	l.fn = l.run
 	return l
-}}
+}
 
 func (l *cudaCopyList) run() {
 	c := l.c
@@ -1272,11 +1202,11 @@ type cudaCopy struct {
 	fn            func()
 }
 
-var cudaCopies = sync.Pool{New: func() any {
+func newCudaCopy() any {
 	r := &cudaCopy{}
 	r.fn = r.run
 	return r
-}}
+}
 
 func (r *cudaCopy) run() {
 	c := r.c
@@ -1339,7 +1269,7 @@ func (k *cudaKern) Launch(groups, width int, bufs ...Buf) error {
 	for i, b := range bufs {
 		cb[i] = b.(*cudaBuf).b
 	}
-	err := errCUDAClosed
+	var err error = errCUDAClosed
 	k.dev.do(func() {
 		if err = k.m.Launch(groups, width, cb...); err == nil {
 			k.noteRan()
@@ -1446,13 +1376,13 @@ func (c *cudaDev) NewQueue() (Queue, error) {
 		return nil, fmt.Errorf("backend: cuda: this driver has no non-blocking streams")
 	}
 	var st *cuda.Stream
-	err := errCUDAClosed
+	var err error = errCUDAClosed
 	c.do(func() { st, err = c.d.NewQueue() })
 	if err != nil {
 		return nil, err
 	}
 	q := &cudaQueue{c: c, st: st}
-	ownedQueues.Add(1)
+	c.ctr.ownedQueues.Add(1)
 	c.qmu.Lock()
 	if c.queues == nil {
 		c.queues = map[*cudaQueue]bool{}
@@ -1466,7 +1396,7 @@ func (c *cudaDev) NewQueue() (Queue, error) {
 func (q *cudaQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.release(&ownedQueues)
+	q.release(&q.c.ctr.ownedQueues)
 	c := q.c
 	c.qmu.Lock()
 	open := c.queues[q]

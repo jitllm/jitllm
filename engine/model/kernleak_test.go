@@ -3,8 +3,6 @@ package model
 import (
 	"strings"
 	"testing"
-
-	"github.com/jitllm/jitllm/backend/vulkan"
 )
 
 // TestClosingADeviceLeavesNoKernelOpen runs a latent-attention mixture and a
@@ -32,7 +30,6 @@ func TestClosingADeviceLeavesNoKernelOpen(t *testing.T) {
 			ids := m.Vocab.Encode("The capital of France is", true)
 			for _, dev := range devs {
 				t.Run(dev, func(t *testing.T) {
-					before := len(vulkan.Orphans())
 					g := stepTier(t, m, dev, false)
 					st := m.NewInstance(len(ids) + 8)
 					if err := st.SetDevice(g); err != nil {
@@ -56,7 +53,7 @@ func TestClosingADeviceLeavesNoKernelOpen(t *testing.T) {
 					}
 					st.Close()
 					g.Close()
-					if left := vulkan.Orphans()[before:]; len(left) > 0 {
+					if left := g.Counters().Orphans(); len(left) > 0 {
 						t.Fatalf("closing %s found %d kernel(s) still open: %v", dev, len(left), left)
 					}
 				})

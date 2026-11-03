@@ -39,7 +39,7 @@ type groupDevice struct {
 func groupDevices(t *testing.T, forced uint32) []groupDevice {
 	t.Helper()
 	var out []groupDevice
-	for _, d := range backend.Open() {
+	for _, d := range backend.OpenForTest() {
 		if d.API() == "spirv" {
 			d.Close() // reopened by index below
 			continue
