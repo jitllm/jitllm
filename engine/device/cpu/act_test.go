@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/engine/graph"
 )
 
 func refSiLU(x float64) float64 { return x / (1 + math.Exp(-x)) }
@@ -40,7 +42,7 @@ func TestEmitActMulMatchesReference(t *testing.T) {
 		}
 		return refSiLU(g) * u
 	}
-	for _, k := range Gated {
+	for _, k := range graph.Gated {
 		code := onHost(t)(hostTable().ActMul(k))
 		n := 1024
 		dst := make([]float32, n)

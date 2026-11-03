@@ -3,7 +3,6 @@
 package gpu
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -97,67 +96,82 @@ func (g *devTier) injectedPanic() {
 	}
 }
 
-// formFault is a rewrite of the composer's registry: the decomposition of one
-// op kind is replaced by one that fails, so every part holding that op fails
-// to form, as a kernel the composer cannot build would. Nothing in a kernel is
-// touched.
-var formFault struct {
-	on       bool
-	kind     graph.OpKind
-	asDevice bool
+// Faults is the violations armed on the tiers opened with it (WithFaults),
+// shared by their devices. The zero value arms none.
+type Faults struct {
+	// form is a rewrite of the composer's registry: the decomposition of one
+	// op kind is replaced by one that fails, so every part holding that op
+	// fails to form, as a kernel the composer cannot build would. Nothing in
+	// a kernel is touched.
+	form struct {
+		on       bool
+		kind     graph.OpKind
+		asDevice bool
+	}
+	// moe puts a wrong source under a mixture's expert down bank in a form
+	// of several sequences' rows (composer.Step.Seqs 0, a joint step's): it
+	// reads the experts' gate output (their up's where they have no gate) in
+	// place of their activation. A one-row form and a prompt's of one
+	// sequence are untouched, so a session alone -- its prompt and its
+	// tokens -- and the same session in a joint step part, as a grouped path
+	// wired wrongly would part them.
+	moe bool
+	// moeSeen counts the down banks moe met: rewired, found no source for,
+	// and met in a one-row or one-sequence form it leaves alone. A gate under
+	// the fault asserts it rewired one (RULE 10).
+	moeSeen [3]atomic.Int64
+	// paged, rec, rows and room name one violation each (SetPagedFault,
+	// SetRecFault, SetRowsFault, SetRoomFault); "" is none.
+	paged, rec, rows, room string
 }
+
+type tierFaults = Faults
+
+// WithFaults arms f's violations on the tier, read at every call, so a gate
+// can arm and disarm them while the tier is open.
+func WithFaults(f *Faults) Option { return func(o *openOpts) { o.faults = f } }
 
 // SetFormFault makes the composer fail to form every part holding an op of
-// kind, for the tiers that create their composer after it. asDevice is the
-// violation a gate must not survive (RULE 10): the failure is reported as the
-// device failing, which moves work. SetFormFault with on false disarms.
-func SetFormFault(on bool, kind graph.OpKind, asDevice bool) {
-	formFault.on, formFault.kind, formFault.asDevice = on, kind, asDevice
+// kind, for the devices that create their composer after it. asDevice is
+// the violation a gate must not survive (RULE 10): the failure is reported as
+// the device failing, which moves work. SetFormFault with on false disarms.
+func (f *Faults) SetFormFault(on bool, kind graph.OpKind, asDevice bool) {
+	f.form.on, f.form.kind, f.form.asDevice = on, kind, asDevice
 }
 
-var errInjectedForm = errors.New("injected form failure (SetFormFault)")
+const errInjectedForm tierError = "injected form failure (SetFormFault)"
 
-// moeFault puts a wrong source under a mixture's expert down bank in a form
-// of several sequences' rows (composer.Step.Seqs 0, a joint step's): it reads
-// the experts' gate output (their up's where they have no gate) in place of
-// their activation. A one-row form and a prompt's of one sequence are
-// untouched, so a session alone -- its prompt and its tokens -- and the same
-// session in a joint step part, as a grouped path wired wrongly would part
-// them.
-var moeFault bool
+// SetMoEFault arms the mixture fault (Faults.moe) for the devices that
+// create their composer after it; false disarms.
+func (f *Faults) SetMoEFault(on bool) { f.moe = on }
 
-// SetMoEFault arms moeFault for the tiers that create their composer after
-// it; false disarms.
-func SetMoEFault(on bool) { moeFault = on }
-
-// moeFaultSeen counts the down banks moeFault met: rewired, found no source
-// for, and met in a one-row or one-sequence form it leaves alone. A gate under the fault
-// asserts it rewired one (RULE 10).
-var moeFaultSeen [3]atomic.Int64
-
-// MoEFaultSeen is moeFaultSeen: the down banks rewired, those with no
-// experts' source to read, and those in one-row forms.
-func MoEFaultSeen() (rewired, unsourced, oneRow int64) {
-	return moeFaultSeen[0].Load(), moeFaultSeen[1].Load(), moeFaultSeen[2].Load()
+// MoEFaultSeen is what the mixture fault met: the down banks rewired, those
+// with no experts' source to read, and those in one-row forms.
+func (f *Faults) MoEFaultSeen() (rewired, unsourced, oneRow int64) {
+	return f.moeSeen[0].Load(), f.moeSeen[1].Load(), f.moeSeen[2].Load()
 }
 
 func (g *devTier) rewriteComposer(r *composer.Registry) {
-	if formFault.on {
-		r.Decompositions[formFault.kind] = func(graph.Op, *composer.Context) ([]composer.Prim, error) {
+	if g.fault == nil {
+		return
+	}
+	ff, seen := g.fault.form, &g.fault.moeSeen
+	if ff.on {
+		r.Decompositions[ff.kind] = func(graph.Op, *composer.Context) ([]composer.Prim, error) {
 			return nil, errInjectedForm
 		}
 	}
-	if moeFault {
+	if g.fault.moe {
 		d := r.Decompositions[graph.OpExpertMatVec]
 		r.Decompositions[graph.OpExpertMatVec] = func(o graph.Op, c *composer.Context) ([]composer.Prim, error) {
 			if len(o.Weight) > 0 && o.Weight[0].Role == jlm.RoleExpDownBank {
 				switch src := expertsSource(c.Graph, o.In[0]); {
 				case c.Step.Rows <= 1 || c.Step.Seqs == 1:
-					moeFaultSeen[2].Add(1)
+					seen[2].Add(1)
 				case src == o.In[0]:
-					moeFaultSeen[1].Add(1)
+					seen[1].Add(1)
 				default:
-					moeFaultSeen[0].Add(1)
+					seen[0].Add(1)
 					o.In = slices.Clone(o.In)
 					o.In[0] = src
 				}
@@ -168,7 +182,7 @@ func (g *devTier) rewriteComposer(r *composer.Registry) {
 }
 
 // expertsSource is the experts' gate output in gr, their up's where they
-// have no gate, as wide as v: what moeFault reads in place of v.
+// have no gate, as wide as v: what the mixture fault reads in place of v.
 func expertsSource(gr *graph.Graph, v graph.ValueID) graph.ValueID {
 	// The op making v -- the experts' activation -- reads the gate first, or
 	// the up projection where there is no gate.
@@ -185,9 +199,11 @@ func expertsSource(gr *graph.Graph, v graph.ValueID) graph.ValueID {
 	return v
 }
 
-func formFaultedAsDevice() bool { return formFault.on && formFault.asDevice }
+func (c *Config) formFaultedAsDevice() bool {
+	return c.fault != nil && c.fault.form.on && c.fault.form.asDevice
+}
 
-// pagedFault names a deliberate error in the paged history's wiring, so a gate
+// SetPagedFault names a deliberate error in the paged history's wiring, so a gate
 // can run each violation and demand it fails (RULE 10); the kernels' own are
 // kernels.SetPagedFault.
 //
@@ -211,14 +227,13 @@ func formFaultedAsDevice() bool { return formFault.on && formFault.asDevice }
 //	          block the host pager has since put in that frame
 //	"passfold" a staged decode over passes folds none after the first:
 //	          the finish reads a partial nothing wrote
-var pagedFault string
-
+//
 // SetPagedFault arms one violation for the calls after it; "" disarms.
-func SetPagedFault(f string) { pagedFault = f }
+func (f *Faults) SetPagedFault(v string) { f.paged = v }
 
-func pagedFaulted(f string) bool { return pagedFault == f }
+func (c *Config) pagedFaulted(f string) bool { return c.fault != nil && c.fault.paged == f }
 
-// recFault names a deliberate error in a step across sessions' recurrent
+// SetRecFault names a deliberate error in a step across sessions' recurrent
 // wiring (recpool.go), so the hybrid step gate can run each violation and
 // demand it fails (RULE 10):
 //
@@ -231,14 +246,13 @@ func pagedFaulted(f string) bool { return pagedFault == f }
 //	"chain"   every row of a ragged step, and of a chunk the composer
 //	          scans, is its own run: a prompt chunk's rows each read their
 //	          sequence's state from before the step
-var recFault string
-
+//
 // SetRecFault arms one violation for the calls after it; "" disarms.
-func SetRecFault(f string) { recFault = f }
+func (f *Faults) SetRecFault(v string) { f.rec = v }
 
-func recFaulted(f string) bool { return recFault == f }
+func (c *Config) recFaulted(f string) bool { return c.fault != nil && c.fault.rec == f }
 
-// rowsFault names a deliberate error in a ragged step's head, so its gate can
+// SetRowsFault names a deliberate error in a ragged step's head, so its gate can
 // run the violation and demand it fails (RULE 10):
 //
 //	"headone"  the one-row head launches decode's own kernel, which reads the
@@ -259,14 +273,13 @@ func recFaulted(f string) bool { return recFault == f }
 //	          the decode descriptors, where those rows are empty
 //	"piccausal" a composed non-causal block's rows attend causally: each
 //	           row's descriptor ends at itself (picDesc)
-var rowsFault string
-
+//
 // SetRowsFault arms one violation for the calls after it; "" disarms.
-func SetRowsFault(f string) { rowsFault = f }
+func (f *Faults) SetRowsFault(v string) { f.rows = v }
 
-func rowsFaulted(f string) bool { return rowsFault == f }
+func (c *Config) rowsFaulted(f string) bool { return c.fault != nil && c.fault.rows == f }
 
-// roomFault makes a device short of room in one place, so the gate of the
+// SetRoomFault makes a device short of room in one place, so the gate of the
 // path that copes can force it to fire, and names the violation that path
 // must not survive (RULE 10):
 //
@@ -283,9 +296,8 @@ func rowsFaulted(f string) bool { return rowsFault == f }
 //	                  the error and the step is refused by name
 //	"nobuild-room"    the same, and RowsRoom reads it as no room, so the
 //	                  blocks move to the CPU and the step runs on the host
-var roomFault string
-
+//
 // SetRoomFault arms one shortage for the calls after it; "" disarms.
-func SetRoomFault(f string) { roomFault = f }
+func (f *Faults) SetRoomFault(v string) { f.room = v }
 
-func roomFaulted(f string) bool { return roomFault == f }
+func (c *Config) roomFaulted(f string) bool { return c.fault != nil && c.fault.room == f }

@@ -42,6 +42,7 @@ func attnFenced(t *testing.T, n int) []byte {
 // The fenced results must also equal the same call on ordinary memory, bit for
 // bit, so the gate cannot pass by running nothing.
 func TestAttnReadsNothingPastTheRowSSE(t *testing.T) {
+	var gate attnGate
 	const npos = 3
 	type kern struct {
 		name   string
@@ -78,7 +79,7 @@ func TestAttnReadsNothingPastTheRowSSE(t *testing.T) {
 
 			for _, k := range kerns {
 				b, err := k.emit(hd, hd, KVOf(f16))
-				c := sseAttnKernel(t, k.name+"_fence_hd"+itoa(hd)+map[bool]string{true: "_f16"}[f16], b, err)
+				c := gate.kernel(t, k.name+"_fence_hd"+itoa(hd)+map[bool]string{true: "_f16"}[f16], b, err)
 				n := k.outLen(hd)
 				call := func(fenced bool) ([]float32, []float32) {
 					o0, o1 := sentinelRow(n), sentinelRow(n)

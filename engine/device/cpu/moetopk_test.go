@@ -68,7 +68,7 @@ func moeKernels(t *testing.T, n, k int, norm bool) ([]struct {
 
 // TestMoETopKMatchesTheGoLoops is the gate.
 func TestMoETopKMatchesTheGoLoops(t *testing.T) {
-	for _, s := range moeShapes {
+	for _, s := range moeShapes() {
 		n, k := s[0], s[1]
 		for _, norm := range []bool{true, false} {
 			ks, done := moeKernels(t, n, k, norm)
@@ -98,7 +98,7 @@ func TestMoETopKViolations(t *testing.T) {
 		t.Run(strings.ReplaceAll(f.String(), " ", "_"), func(t *testing.T) {
 			var first string
 			hits := 0
-			for _, s := range moeShapes {
+			for _, s := range moeShapes() {
 				n, k := s[0], s[1]
 				if k < 2 {
 					continue // every one of these needs at least two selections

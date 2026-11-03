@@ -21,7 +21,16 @@ import (
 // only by -update-emit-golden, from a tree whose emitters are known good --
 // blessing a golden made from a changed emitter proves nothing (RULE 11b).
 
-var updateEmitGolden = flag.Bool("update-emit-golden", false, "rewrite the emitter goldens from the current emitters")
+func TestMain(m *testing.M) {
+	flag.Bool("update-emit-golden", false, "rewrite the emitter goldens from the current emitters")
+	flag.Parse()
+	os.Exit(m.Run())
+}
+
+// updateEmitGolden is the -update-emit-golden flag TestMain registers.
+func updateEmitGolden() bool {
+	return flag.Lookup("update-emit-golden").Value.(flag.Getter).Get().(bool)
+}
 
 type goldenCase struct {
 	name string
@@ -114,7 +123,7 @@ func checkGolden(t *testing.T, family string, cases []goldenCase) {
 	if len(cases) == 0 {
 		t.Fatal("no cases emitted")
 	}
-	if *updateEmitGolden {
+	if updateEmitGolden() {
 		writeGolden(t, family, cases)
 		return
 	}

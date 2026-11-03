@@ -59,7 +59,7 @@ func (k selScanCase) want(st []float32) (o, state []float64) {
 // violation the gate must see; the last two are run below.
 func TestEmitSelScanMatchesOracle(t *testing.T) {
 	consts := cpu.DeltaGateConsts()
-	for _, sh := range ssdShapes {
+	for _, sh := range ssdShapes() {
 		n, rows := sh[0], sh[1]
 		code := onHost(t)(hostTable().SelScan(n))
 		rnd := rand.New(rand.NewSource(int64(97*n + rows)))

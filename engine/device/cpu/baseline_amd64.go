@@ -1,7 +1,6 @@
 package cpu
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -9,9 +8,8 @@ import (
 // errNoBaseline is the sentinel every below-floor answer wraps, and what the
 // forceNoBaseline test instrument returns as it stands. It names the floor;
 // baseline() adds exactly what this host or this tree lacks.
-var errNoBaseline = errors.New(
-	"jit: this CPU cannot run the engine (the amd64 floor is the SSE tier: " +
-		"sse2, sse3, ssse3 and sse4.1, with every op generated for it)")
+const errNoBaseline jitError = "jit: this CPU cannot run the engine (the amd64 floor is the SSE tier: " +
+	"sse2, sse3, ssse3 and sse4.1, with every op generated for it)"
 
 // baseline is the amd64 engine floor, one answer per tier.
 //
@@ -27,13 +25,16 @@ var errNoBaseline = errors.New(
 // that has none.
 //
 // Below that the host is refused naming the SSE-floor extensions it lacks.
-func baseline() error {
+func baseline() error { return baselineWith(EmittersFor(TierSSE)) }
+
+// baselineWith is baseline with em as the SSE tier's table.
+func baselineWith(sse *Emitters) error {
 	f := CPU()
 	switch tierOf(f) {
 	case TierAVX2:
 		return nil
 	case TierSSE:
-		if p := SSEPending(); len(p) > 0 {
+		if p := ssePendingIn(sse); len(p) > 0 {
 			return fmt.Errorf("%w: this host runs the SSE tier (no usable %s), and that tier "+
 				"has no kernel yet for %s: %w", errNoBaseline, missingNames(f, ISATierAVX2),
 				strings.Join(p, ", "), ErrNoSSEKernel)

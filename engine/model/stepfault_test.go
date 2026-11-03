@@ -29,10 +29,10 @@ func TestStepAcrossSessionsHybridGateDiscriminates(t *testing.T) {
 		}{{"slot", false}, {"parity", false}, {"slot", true}, {"parity", true}} {
 			fault := c.fault
 			t.Run(fmt.Sprintf("%s/%s/shared=%v", dev, fault, c.shared), func(t *testing.T) {
-				g := stepTier(t, m, dev, c.shared)
+				var f gpu.Faults
+				f.SetRecFault(fault)
+				g := stepTier(t, m, dev, c.shared, gpu.WithFaults(&f))
 				defer g.Close()
-				gpu.SetRecFault(fault)
-				defer gpu.SetRecFault("")
 				r := stepGate(t, m, g, true)
 				t.Logf("%s: worst logit NMSE %.3e (row %d), %d linear block(s) across sessions",
 					fault, r.worst, r.at, r.linear)
@@ -47,7 +47,7 @@ func TestStepAcrossSessionsHybridGateDiscriminates(t *testing.T) {
 
 // TestStepAcrossSessionsMixtureGateDiscriminates runs the mixture step gate
 // with every expert down bank of a joint step's form reading the experts'
-// gate output (gpu.SetMoEFault) and demands it lands outside the band: a
+// gate output (gpu.Faults.SetMoEFault) and demands it lands outside the band: a
 // gate green with the grouped path's wiring broken proves nothing about it.
 //
 //	go test -tags jitllmfault ./engine/model -run TestStepAcrossSessionsMixtureGateDiscriminates
@@ -58,14 +58,14 @@ func TestStepAcrossSessionsMixtureGateDiscriminates(t *testing.T) {
 			defer m.Close()
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					gpu.SetMoEFault(true)
-					defer gpu.SetMoEFault(false)
-					h0, u0, o0 := gpu.MoEFaultSeen()
-					g := stepTier(t, m, dev, false)
+					var f gpu.Faults
+					f.SetMoEFault(true)
+					h0, u0, o0 := f.MoEFaultSeen()
+					g := stepTier(t, m, dev, false, gpu.WithFaults(&f))
 					defer g.Close()
 					r := stepGate(t, m, g, false)
 					mixtureStepChecks(t, m, r)
-					h, u, o := gpu.MoEFaultSeen()
+					h, u, o := f.MoEFaultSeen()
 					t.Logf("worst logit NMSE %.3e (row %d); the fault rewired %d down bank(s), found no source for %d, left %d one-row",
 						r.worst, r.at, h-h0, u-u0, o-o0)
 					if h == h0 {
@@ -100,10 +100,10 @@ func TestStepAcrossSessionsLatentGateDiscriminates(t *testing.T) {
 			defer m.Close()
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					g := stepTier(t, m, dev, false)
+					var f gpu.Faults
+					f.SetPagedFault("session")
+					g := stepTier(t, m, dev, false, gpu.WithFaults(&f))
 					defer g.Close()
-					gpu.SetPagedFault("session")
-					defer gpu.SetPagedFault("")
 					r := latentStepGate(t, m, g)
 					t.Logf("session: worst logit NMSE %.3e (row %d)", r.worst, r.at)
 					if r.worst < mlaDeviceNMSE {
@@ -129,9 +129,9 @@ func TestRecurrentPoolGateDiscriminates(t *testing.T) {
 	for _, dev := range stepDevices() {
 		for _, shared := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/shared=%v", dev, shared), func(t *testing.T) {
-				gpu.SetRecFault("resize")
-				defer gpu.SetRecFault("")
-				r := recPoolCase(t, m, dev, shared, ids, 6)
+				var f gpu.Faults
+				f.SetRecFault("resize")
+				r := recPoolCase(t, m, dev, shared, ids, 6, gpu.WithFaults(&f))
 				if r.p < 0 {
 					t.Fatal("the gate passed with every rebuilt pool empty: it cannot see a lost state")
 				}
@@ -153,13 +153,13 @@ func TestStepRunsChainGateDiscriminates(t *testing.T) {
 	defer m.Close()
 	for _, dev := range stepDevices() {
 		t.Run(dev+"/sessions", func(t *testing.T) {
-			g := stepTier(t, m, dev, false)
+			var f gpu.Faults
+			g := stepTier(t, m, dev, false, gpu.WithFaults(&f))
 			defer g.Close()
 			plan := runsPlan{early: []string{"The capital of France is", "Water boils at a temperature of"},
 				late: "The clerk counted barrels of salt on the upper floor, and", chunk: 3, steps: 4}
 			want := plan.alone(t, m, g)
-			gpu.SetRecFault("chain")
-			defer gpu.SetRecFault("")
+			f.SetRecFault("chain")
 			got, _ := plan.together(t, m, g)
 			w, at := worstStep(got, want)
 			t.Logf("chain: worst logit NMSE %.3e (row %d)", w, at)
@@ -172,8 +172,9 @@ func TestStepRunsChainGateDiscriminates(t *testing.T) {
 				m.Vocab.Encode("Once upon a time, in a small village by the sea, there lived", true),
 				m.Vocab.Encode("1, 2, 3,", true)}
 			c := newMixedCase(t, m, ids, []int{8, 8, 8}, dev)
-			gpu.SetRecFault("chain")
-			defer gpu.SetRecFault("")
+			var f gpu.Faults
+			f.SetRecFault("chain")
+			c.extra = []gpu.Option{gpu.WithFaults(&f)}
 			got, _, _, _ := c.run(nil)
 			w, i, j := c.worst(got)
 			t.Logf("chain: row %d parts at token %d, %.4f apart on the host", i, j, w)
@@ -199,13 +200,13 @@ func TestStagedPagedPrefillGateDiscriminates(t *testing.T) {
 	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and", true)
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+			var f gpu.Faults
+			f.SetPagedFault("softwidth")
+			g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithFaults(&f))
 			if err != nil || g == nil {
 				noDevice(t, dev, err)
 			}
 			defer g.Close()
-			gpu.SetPagedFault("softwidth")
-			defer gpu.SetPagedFault("")
 			plan := runsPlan{}
 			chunk := plan.placed(t, m, g, len(ids)+1)
 			defer chunk.Close()
@@ -230,10 +231,10 @@ func TestStepAcrossSessionsSoftcapGateDiscriminates(t *testing.T) {
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
 			bound := denseStepBand * orderControl(t, m, dev)
-			g := stepTier(t, m, dev, false)
+			var f gpu.Faults
+			f.SetRowsFault("nocap")
+			g := stepTier(t, m, dev, false, gpu.WithFaults(&f))
 			defer g.Close()
-			gpu.SetRowsFault("nocap")
-			defer gpu.SetRowsFault("")
 			r := stepGate(t, m, g, false)
 			t.Logf("nocap: worst logit NMSE %.3e (row %d), %.0fx the bound %.3e", r.worst, r.at, r.worst/bound, bound)
 			if r.worst < bound {
@@ -266,12 +267,12 @@ func TestStepAcrossSessionsLlama4GateDiscriminates(t *testing.T) {
 			}
 			defer m.Close()
 			for _, dev := range stepDevices() {
-				run := func(fault string, set func(string)) {
+				run := func(fault string, set func(*gpu.Faults, string)) {
 					t.Run(dev+"/"+fault, func(t *testing.T) {
-						g := stepTier(t, m, dev, false)
+						var f gpu.Faults
+						set(&f, fault)
+						g := stepTier(t, m, dev, false, gpu.WithFaults(&f))
 						defer g.Close()
-						set(fault)
-						defer set("")
 						r := stepGate(t, m, g, false)
 						t.Logf("%s: worst logit NMSE %.3e (row %d)", fault, r.worst, r.at)
 						if r.worst < stepBound(m, c.name, r, 0) {
@@ -280,7 +281,7 @@ func TestStepAcrossSessionsLlama4GateDiscriminates(t *testing.T) {
 					})
 				}
 				for _, f := range c.rows {
-					run(f, gpu.SetRowsFault)
+					run(f, (*gpu.Faults).SetRowsFault)
 				}
 			}
 		})
@@ -301,10 +302,10 @@ func TestStepAcrossSessionsDenseGateDiscriminates(t *testing.T) {
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
 			bound := denseStepBand * orderControl(t, m, dev)
-			g := stepTier(t, m, dev, false)
+			var f gpu.Faults
+			f.SetPagedFault("session")
+			g := stepTier(t, m, dev, false, gpu.WithFaults(&f))
 			defer g.Close()
-			gpu.SetPagedFault("session")
-			defer gpu.SetPagedFault("")
 			r := stepGate(t, m, g, false)
 			t.Logf("session: worst logit NMSE %.3e (row %d), %.0fx the bound %.3e", r.worst, r.at, r.worst/bound, bound)
 			if r.worst < bound {
@@ -332,9 +333,9 @@ func TestComposedPromptChainGateDiscriminates(t *testing.T) {
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
 			want, st, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
-			gpu.SetRecFault("chain")
-			got, fst, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
-			gpu.SetRecFault("")
+			var f gpu.Faults
+			f.SetRecFault("chain")
+			got, fst, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, gpu.WithFaults(&f))
 			for _, s := range []gpu.Stats{st, fst} {
 				if n, d := s.ServedPart(gpu.ComposedPrompt); n < m.Cfg.NLayer || d != 0 {
 					t.Fatalf("the composer served %d block steps of the prompt and declined %d, of %d blocks", n, d, m.Cfg.NLayer)

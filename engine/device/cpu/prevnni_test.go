@@ -14,15 +14,17 @@ import (
 
 // prevnniFormats is the packed family, named here rather than derived so that
 // a format silently dropping out of the list is a visible edit.
-var prevnniFormats = []quant.Type{
-	quant.Q4_0, quant.Q8_0, quant.Q4_K, quant.Q5_K, quant.Q3_K, quant.Q6_K,
+func prevnniFormats() []quant.Type {
+	return []quant.Type{
+		quant.Q4_0, quant.Q8_0, quant.Q4_K, quant.Q5_K, quant.Q3_K, quant.Q6_K,
+	}
 }
 
 // TestEveryPackedFormatHasAPreVNNIKernel is the capability half: a pre-VNNI x86
 // must generate for all six formats. It asks the emitter directly, since a
 // missing kernel is invisible to correctness gates.
 func TestEveryPackedFormatHasAPreVNNIKernel(t *testing.T) {
-	for _, q := range prevnniFormats {
+	for _, q := range prevnniFormats() {
 		if err := PreVNNIPacked(q); err != nil {
 			t.Errorf("%s: refused pre-VNNI: %v", q, err)
 			continue
@@ -73,7 +75,7 @@ func TestPreVNNIBoundIsDerivedNotAsserted(t *testing.T) {
 // ported must refuse rather than emit VPDPBUSD a pre-VNNI host cannot execute
 // (a SIGILL on the first token).
 func TestWideAndTiledAreRefusedPreVNNI(t *testing.T) {
-	for _, q := range prevnniFormats {
+	for _, q := range prevnniFormats() {
 		if _, err := EmitPackedMatVecWide(q, DotVEX); err == nil {
 			t.Errorf("%s: the WIDE kernel emitted under DotVEX", q)
 		}
@@ -108,7 +110,7 @@ func TestNoVPDPBUSDSurvivesDotVEX(t *testing.T) {
 		t.Skip("GNU objdump is not available to disassemble the emitted stream")
 	}
 	ran := 0
-	for _, q := range prevnniFormats {
+	for _, q := range prevnniFormats() {
 		kinds := []struct {
 			name string
 			emit func(DotKind) ([]byte, error)

@@ -11,7 +11,7 @@ import (
 )
 
 // The paths a device short of room takes rather than failing a step, each
-// forced by gpu.SetRoomFault and each held to a violation it must not
+// forced by gpu.Faults.SetRoomFault and each held to a violation it must not
 // survive (RULE 10): a recurrent seat reset from host-written zeros, a
 // Batcher clamped to the batched scratch the device holds (nn.RowsWidther),
 // and a step whose recurrent seats do not fit run with the blocks home
@@ -73,13 +73,13 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 			}
 		}
 	}
-	defer gpu.SetRoomFault("")
 
 	t.Run("reset-zeros-from-host", func(t *testing.T) {
 		// Each arm on a fresh device: a kept zeros buffer from an earlier
 		// reset would serve the next without asking for one.
 		run := func(fault string) (error, int) {
-			g := swaTier(t)
+			var f gpu.Faults
+			g := swaTierWith(t, gpu.WithFaults(&f))
 			defer g.Close()
 			st := m.NewInstance(300)
 			defer st.Close()
@@ -90,9 +90,9 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 			if _, err := st.Prefill(prompt); err != nil {
 				t.Fatal(err)
 			}
-			gpu.SetRoomFault(fault)
+			f.SetRoomFault(fault)
 			st.Reset()
-			gpu.SetRoomFault("")
+			f.SetRoomFault("")
 			_, err := st.Prefill(prompt)
 			return err, g.Stats().RecZeroHost
 		}
@@ -109,11 +109,12 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 	})
 
 	t.Run("width-clamped", func(t *testing.T) {
-		g := swaTier(t)
+		var f gpu.Faults
+		g := swaTierWith(t, gpu.WithFaults(&f))
 		defer g.Close()
-		gpu.SetRoomFault("narrow")
+		f.SetRoomFault("narrow")
 		got, st, err := roomBatch(t, m, g, 0)
-		gpu.SetRoomFault("")
+		f.SetRoomFault("")
 		if err != nil {
 			t.Fatalf("a device holding only 64-row scratch: %v", err)
 		}
@@ -132,20 +133,21 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 				t.Fatalf("sequence %d: %v clamped, %v at a stated 64-row budget", i, got[i], ref[i])
 			}
 		}
-		gpu.SetRoomFault("narrow-lie")
+		f.SetRoomFault("narrow-lie")
 		_, _, err = roomBatch(t, m, g, 0)
-		gpu.SetRoomFault("")
+		f.SetRoomFault("")
 		if err == nil {
 			t.Fatal("the violation (RowsWidth ignoring the scratch) ran: the clamp is untested")
 		}
 	})
 
 	t.Run("seats-home", func(t *testing.T) {
-		g := swaTier(t)
+		var f gpu.Faults
+		g := swaTierWith(t, gpu.WithFaults(&f))
 		defer g.Close()
-		gpu.SetRoomFault("noseat")
+		f.SetRoomFault("noseat")
 		got, st, err := roomBatch(t, m, g, 0)
-		gpu.SetRoomFault("")
+		f.SetRoomFault("")
 		if err != nil {
 			t.Fatalf("a device with no room for the batch's seats: %v", err)
 		}
@@ -153,9 +155,9 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 			t.Fatal("no step came home: the forced path never ran")
 		}
 		same(t, got)
-		gpu.SetRoomFault("noseat-lie")
+		f.SetRoomFault("noseat-lie")
 		_, _, err = roomBatch(t, m, g, 0)
-		gpu.SetRoomFault("")
+		f.SetRoomFault("")
 		if err == nil {
 			t.Fatal("the violation (RowsRoom saying there is room) ran: the fallback is untested")
 		}
@@ -165,11 +167,12 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 	// kernel the device refused room, so none is made, where reading it as no
 	// room sent every block home and the batch ran on the host, green.
 	t.Run("build-refused", func(t *testing.T) {
-		g := swaTier(t)
+		var f gpu.Faults
+		g := swaTierWith(t, gpu.WithFaults(&f))
 		defer g.Close()
-		gpu.SetRoomFault("nobuild")
+		f.SetRoomFault("nobuild")
 		_, st, err := roomBatch(t, m, g, 0)
-		gpu.SetRoomFault("")
+		f.SetRoomFault("")
 		if err == nil || !strings.Contains(err.Error(), "does not build") {
 			t.Fatalf("a step whose twins do not build gave %v, want the step refused by name", err)
 		}
@@ -177,9 +180,9 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 			t.Fatalf("%d step(s) came home for a scratch that does not build", st.RoomToCPU)
 		}
 		t.Logf("refused: %v", err)
-		gpu.SetRoomFault("nobuild-room")
+		f.SetRoomFault("nobuild-room")
 		_, st, err = roomBatch(t, m, g, 0)
-		gpu.SetRoomFault("")
+		f.SetRoomFault("")
 		if err != nil || st.RoomToCPU == 0 {
 			t.Fatalf("the violation (a build failure read as no room) gave %v with %d step(s) home: "+
 				"the refusal is untested", err, st.RoomToCPU)

@@ -77,21 +77,21 @@ func actConsts() []float32 {
 		// 120..168: situ's tanh, kernels.TanhRational's clamp and its odd
 		// numerator (x^13 down to x) and even denominator (x^6 down to 1).
 		// 120
-		-TanhClamp, TanhP[                       // 124
-		0], TanhP[1], TanhP[2], TanhP[3], TanhP[ // 128..140
-		4], TanhP[5], TanhP[6], TanhQ[           // 144..152
-		0], TanhQ[1], TanhQ[2], TanhQ[3],        // 156..168
+		-TanhClamp, TanhP()[                             // 124
+		0], TanhP()[1], TanhP()[2], TanhP()[3], TanhP()[ // 128..140
+		4], TanhP()[5], TanhP()[6], TanhQ()[             // 144..152
+		0], TanhQ()[1], TanhQ()[2], TanhQ()[3],          // 156..168
 		// 172..176: the log-softmax's ln of its sum (emitLnSum): the f32
 		// mantissa mask, as bits, and ln 2.
 		math.Float32frombits(0x007FFFFF), // 172
 		float32(math.Ln2),                // 176
 		// 180..204: ActGELUErf's 1/sqrt 2 and its erf (kernels.GELUErfP,
 		// then GELUErfA from the first coefficient to the fifth).
-		float32(1/math.Sqrt2), GELUErfP, GELUErfA[ // 180
+		float32(1/math.Sqrt2), GELUErfP, GELUErfA()[ // 180
 		// 184
-		0], GELUErfA[1], GELUErfA[ // 188, 192
-		2], GELUErfA[3], GELUErfA[ // 196, 200
-		4],                        // 204
+		0], GELUErfA()[1], GELUErfA()[ // 188, 192
+		2], GELUErfA()[3], GELUErfA()[ // 196, 200
+		4],                            // 204
 		// 208..212: ActSqrtSigmoid's floor on |x| and the sign bit.
 		graph.SqrtSigmoidFloor,           // 208
 		math.Float32frombits(0x80000000), // 212

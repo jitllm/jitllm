@@ -187,10 +187,10 @@ func mixtureStepChecks(t *testing.T, m *Model, r stepResult) {
 
 // stepTier opens dev for a step gate on m, its recurrent pools in the shared
 // form when asked, or skips naming the device.
-func stepTier(t *testing.T, m *Model, dev string, shared bool) *gpu.GPU {
+func stepTier(t *testing.T, m *Model, dev string, shared bool, extra ...gpu.Option) *gpu.GPU {
 	t.Helper()
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
-		gpu.WithConfig(func(c *gpu.Config) { c.SharedRec = shared })}, testTierOpts(t)...)...)
+	g, err := gpu.OpenWith(append(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.SharedRec = shared })}, testTierOpts(t)...), extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}

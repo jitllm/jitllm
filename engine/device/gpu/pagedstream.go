@@ -261,7 +261,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 			}
 			st.ids = append(st.ids[:0], pl.free[:p1-p0]...)
 			for i, id := range st.ids {
-				if pagedFaulted("stream") {
+				if g.pagedFaulted("stream") {
 					break // the violation: the pass reads whatever the ids held
 				}
 				page := home[p0+i]
@@ -288,7 +288,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 			t[tableKey(composer.TableWindows)] = st.desc[1][j]
 		}
 		t[tableKey(composer.TableRunIn)], t[tableKey(composer.TableRunOut)] = pg.run[0], pg.run[1+j%2]
-		if j > 0 && !pagedFaulted("passfold") {
+		if j > 0 && !g.pagedFaulted("passfold") {
 			t[tableKey(composer.TableRunIn)] = pg.run[1+(j+1)%2]
 		}
 		m, err := sv.launchCodes(lc, inst, in, out, f.passLo, f.passHi)

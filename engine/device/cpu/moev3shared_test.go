@@ -19,7 +19,7 @@ import (
 // contract includes a sum's float32 parenthesisation and the bits of a -0.0
 // weight, which many non-identical rewrites would preserve.
 func TestMoETopKIsMoERouteAtItsDefault(t *testing.T) {
-	for _, s := range moeShapes {
+	for _, s := range moeShapes() {
 		for _, norm := range []bool{true, false} {
 			want, err := EmitMoETopK(s[0], s[1], norm)
 			if err != nil {
@@ -91,7 +91,7 @@ func TestMoERouteScratchIsBackwardCompatible(t *testing.T) {
 	// The arm64 kernel has a separate path for a plane offset past an ADD
 	// immediate's twelve bits; the matrix must contain a shape that reaches it.
 	far := false
-	for _, cfg := range moeV3Cfgs {
+	for _, cfg := range moeV3Cfgs() {
 		if pl := moePlanes(cfg.n, cfg.k, cfg.g); cfg.g.Grouped() && 4*pl.gs > 4095 {
 			far = true
 		}
@@ -106,7 +106,7 @@ func TestMoERouteScratchIsBackwardCompatible(t *testing.T) {
 // that does not describe a router, so it is refused by name at emission rather
 // than producing code that reads outside a group.
 func TestMoERouteRefusesShapesItCannotServe(t *testing.T) {
-	for _, r := range moeV3Refusals {
+	for _, r := range moeV3Refusals() {
 		if b, err := EmitMoERoute(r.n, r.k, r.g); err == nil {
 			t.Errorf("%s: EmitMoERoute(%d, %d, %+v) produced %d bytes",
 				r.name, r.n, r.k, r.g, len(b))
@@ -138,7 +138,7 @@ func TestMoERouteDivergencesAreRecorded(t *testing.T) {
 // follows the slice (which, on a selection, can win) without faulting, so the
 // gate changes what follows and requires the answer not to.
 func TestMoERouteReadsNothingPastTheExperts(t *testing.T) {
-	for _, cfg := range moeV3Cfgs {
+	for _, cfg := range moeV3Cfgs() {
 		n, k := cfg.n, cfg.k
 		b, err := EmittersFor(HostTier()).MoERoute(n, k, cfg.g) // this host's tier, SSE on an Atom
 		if err != nil {

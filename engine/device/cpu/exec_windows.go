@@ -15,14 +15,11 @@ import (
 // FlushInstructionCache is required: on x86 it is nearly a no-op, but on arm64
 // the caches are not coherent and stale instruction bytes fault at a plausible
 // address. Windows on ARM is a real target, so it is always called.
-var (
-	kernel32              = syscall.NewLazyDLL("kernel32.dll")
-	procVirtualAlloc      = kernel32.NewProc("VirtualAlloc")
-	procVirtualFree       = kernel32.NewProc("VirtualFree")
-	procVirtualProtect    = kernel32.NewProc("VirtualProtect")
-	procFlushInstrCache   = kernel32.NewProc("FlushInstructionCache")
-	procGetCurrentProcess = kernel32.NewProc("GetCurrentProcess")
-)
+// kernel32 is the named kernel32.dll entry point, resolved when first called.
+// A map and a close are the only callers, so nothing is kept between them.
+func kernel32(name string) *syscall.LazyProc {
+	return syscall.NewLazyDLL("kernel32.dll").NewProc(name)
+}
 
 const (
 	memCommit       = 0x1000
@@ -57,7 +54,7 @@ func mapExec(code []byte) (*Code, error) {
 	if len(code) == 0 {
 		return nil, fmt.Errorf("jit: refusing to map empty code")
 	}
-	addr, _, err := procVirtualAlloc.Call(0, uintptr(len(code)),
+	addr, _, err := kernel32("VirtualAlloc").Call(0, uintptr(len(code)),
 		memCommit|memReserve, pageReadWrite)
 	if addr == 0 {
 		return nil, fmt.Errorf("jit: VirtualAlloc %d bytes: %w", len(code), err)
@@ -65,14 +62,14 @@ func mapExec(code []byte) (*Code, error) {
 	copy(unsafe.Slice((*byte)(unsafe.Add(nil, addr)), len(code)), code)
 
 	var old uint32
-	ok, _, err := procVirtualProtect.Call(addr, uintptr(len(code)),
+	ok, _, err := kernel32("VirtualProtect").Call(addr, uintptr(len(code)),
 		pageExecuteRead, uintptr(unsafe.Pointer(&old)))
 	if ok == 0 {
-		procVirtualFree.Call(addr, 0, memRelease)
+		kernel32("VirtualFree").Call(addr, 0, memRelease)
 		return nil, fmt.Errorf("jit: VirtualProtect: %w", err)
 	}
-	proc, _, _ := procGetCurrentProcess.Call()
-	procFlushInstrCache.Call(proc, addr, uintptr(len(code)))
+	proc, _, _ := kernel32("GetCurrentProcess").Call()
+	kernel32("FlushInstructionCache").Call(proc, addr, uintptr(len(code)))
 
 	c := &Code{addr: addr, entry: (*byte)(unsafe.Add(nil, addr)), Size: len(code)}
 	// A leaked RX mapping is not reclaimed by the GC on its own.
@@ -89,7 +86,7 @@ func (c *Code) Close() error {
 	addr := c.addr
 	c.addr, c.entry = 0, nil
 	runtime.SetFinalizer(c, nil)
-	if ok, _, err := procVirtualFree.Call(addr, 0, memRelease); ok == 0 {
+	if ok, _, err := kernel32("VirtualFree").Call(addr, 0, memRelease); ok == 0 {
 		return fmt.Errorf("jit: VirtualFree: %w", err)
 	}
 	return nil

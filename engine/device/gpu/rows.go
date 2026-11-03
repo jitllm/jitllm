@@ -94,7 +94,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	g.mu.Unlock()
 	defer g.restoreGeom(prev)
 	switch {
-	case rowsFaulted("noswa"):
+	case g.rowsFaulted("noswa"):
 		csSWA = nil
 	}
 	if n < 1 || len(slot) != n || lo < 0 || lo > hi || (lo == hi && head == nil) {
@@ -527,7 +527,7 @@ func (g *GPU) stageEnd(d *devTier) {
 // (rowsReserved). 0 when none does, or no device holds a block.
 func (g *GPU) RowsWidth(want int) int {
 	w := min(want, batchWidth)
-	if roomFaulted("narrow-lie") {
+	if g.roomFaulted("narrow-lie") {
 		return w
 	}
 	for _, d := range g.devs {
@@ -568,7 +568,7 @@ func (g *GPU) RowsWidth(want int) int {
 // error, not a shortage of room.
 func (g *GPU) rowsRoom(sid uint64, rows, seqs int, head *nn.Head) (bool, error) {
 	g.resetCause(sid, true)
-	if roomFaulted("noseat-lie") || roomFaulted("narrow-lie") {
+	if g.roomFaulted("noseat-lie") || g.roomFaulted("narrow-lie") {
 		return true, nil
 	}
 	g.mu.Lock()
@@ -655,7 +655,7 @@ func (g *devTier) stepRoom(lo, n int, head *nn.Head) (bool, error) {
 		}
 	}
 	if !g.prepRagged(bs, head, n) {
-		if roomFaulted("nobuild-room") {
+		if g.roomFaulted("nobuild-room") {
 			return false, nil
 		}
 		return false, errStepBuild{g.LastErr}

@@ -28,7 +28,7 @@ func moeKernelA64(t *testing.T, n, k int, norm bool) (*Code, func()) {
 }
 
 func TestMoETopKA64MatchesTheGoLoops(t *testing.T) {
-	for _, s := range moeShapes {
+	for _, s := range moeShapes() {
 		n, k := s[0], s[1]
 		for _, norm := range []bool{true, false} {
 			c, done := moeKernelA64(t, n, k, norm)
@@ -54,7 +54,7 @@ func TestMoETopKA64Violations(t *testing.T) {
 		t.Run(strings.ReplaceAll(f.String(), " ", "_"), func(t *testing.T) {
 			var first string
 			hits := 0
-			for _, s := range moeShapes {
+			for _, s := range moeShapes() {
 				n, k := s[0], s[1]
 				if k < 2 {
 					continue

@@ -58,7 +58,7 @@ type recPoolResult struct {
 
 // recPoolCase decodes one session alone and once with others arriving and
 // leaving around it, and compares the two.
-func recPoolCase(t *testing.T, m *Model, dev string, shared bool, ids []int32, steps int) recPoolResult {
+func recPoolCase(t *testing.T, m *Model, dev string, shared bool, ids []int32, steps int, extra ...gpu.Option) recPoolResult {
 	t.Helper()
 	// decode prefills a session, then decodes steps tokens teacher-forced by
 	// fed (its own greedy choice when fed is nil). before runs ahead of its
@@ -100,11 +100,11 @@ func recPoolCase(t *testing.T, m *Model, dev string, shared bool, ids []int32, s
 		return out, toks
 	}
 
-	g := stepTier(t, m, dev, shared)
+	g := stepTier(t, m, dev, shared, extra...)
 	alone, fed := decode(g, nil, nil, nil)
 	g.Close()
 
-	g = stepTier(t, m, dev, shared)
+	g = stepTier(t, m, dev, shared, extra...)
 	defer g.Close()
 	var grown, after, carried, reads uint64
 	// noHost runs f and counts what it read to the host.

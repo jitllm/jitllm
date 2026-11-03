@@ -39,7 +39,7 @@ func realDevices(t *testing.T) []backend.Device {
 		if !in.Compute || !testdevices.Has(t, "vulkan", in.Index) {
 			continue
 		}
-		d, err := backend.OpenVulkanWith(strconv.Itoa(in.Index), unpinned)
+		d, err := backend.OpenVulkanWith(strconv.Itoa(in.Index), unpinned())
 		if err != nil {
 			t.Logf("vulkan:%d would not open: %v", in.Index, err)
 			continue
@@ -55,7 +55,7 @@ func realDevices(t *testing.T) []backend.Device {
 }
 
 // unpinned opens a Vulkan device with the required-subgroup-size path off.
-var unpinned = backend.Opts{Vulkan: vulkan.Config{Subgroup: "off"}}
+func unpinned() backend.Opts { return backend.Opts{Vulkan: vulkan.Config{Subgroup: "off"}} }
 
 // qkPlan is a block with the per-head q/k norm, the second kernel in the
 // subgroup-width class.
@@ -142,7 +142,7 @@ func TestSelectionFollowsTheGuaranteeWhenPinningIsOff(t *testing.T) {
 		if !in.Compute || !testdevices.Has(t, "vulkan", in.Index) {
 			continue
 		}
-		d, err := backend.OpenVulkanWith(strconv.Itoa(in.Index), unpinned)
+		d, err := backend.OpenVulkanWith(strconv.Itoa(in.Index), unpinned())
 		if err != nil {
 			t.Logf("vulkan:%d would not open: %v", in.Index, err)
 			continue

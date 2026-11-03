@@ -15,12 +15,16 @@ import (
 // verbatim float matrices. They execute directly (legacy SSE runs on an AVX2
 // host).
 
-var sseFloatTypes = []quant.Type{quant.F32, quant.F16, quant.BF16}
+func sseFloatTypes() []quant.Type {
+	return []quant.Type{quant.F32, quant.F16, quant.BF16}
+}
 
 // sseFloatKs exercise each of the kernel's three loops alone and together:
 // singles only (1, 3, 7), octets only (8, 16), groups only (32, 64), all three
 // (13, 45, 100, 2047) -- TestFloatMatVecEveryK's list.
-var sseFloatKs = []int{1, 3, 7, 8, 16, 32, 64, 13, 45, 100, 2047}
+func sseFloatKs() []int {
+	return []int{1, 3, 7, 8, 16, 32, 64, 13, 45, 100, 2047}
+}
 
 func sseFloatKernel(t *testing.T, typ quant.Type) []byte {
 	t.Helper()
@@ -96,10 +100,10 @@ func callFloat(t *testing.T, code []byte, w []byte, x []float32, rows, k int, es
 // weights exactly as stored, at every k shape, with misaligned rows and
 // activations and a guard on each side of the output.
 func TestSSEFloatMatVecEveryK(t *testing.T) {
-	for _, typ := range sseFloatTypes {
+	for _, typ := range sseFloatTypes() {
 		code := sseFloatKernel(t, typ)
 		es := int(typ.BlockBytes())
-		for _, k := range sseFloatKs {
+		for _, k := range sseFloatKs() {
 			const rows = 5
 			rng := rand.New(rand.NewSource(int64(k)))
 			w, wv := floatRows(rng, typ, rows, k, false)
@@ -127,14 +131,14 @@ func TestSSEFloatMatVecEveryK(t *testing.T) {
 // float.
 func TestSSEFloatMatVecMatchesAVX2BitForBit(t *testing.T) {
 	requireAVX2Twin(t)
-	for _, typ := range sseFloatTypes {
+	for _, typ := range sseFloatTypes() {
 		sse := sseFloatKernel(t, typ)
 		avx, err := EmitNative(Spec{W: typ, Rows: 1, Accs: 1, Cols: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
 		es := int(typ.BlockBytes())
-		for _, k := range append(sseFloatKs, 4096, 777) {
+		for _, k := range append(sseFloatKs(), 4096, 777) {
 			rows := 7
 			rng := rand.New(rand.NewSource(int64(1000 + k)))
 			w, _ := floatRows(rng, typ, rows, k, true)
@@ -177,7 +181,7 @@ func TestSSERowMajorRefusesWhatItCannotServe(t *testing.T) {
 			t.Errorf("%s: the SSE tier emitted a row-major kernel", g)
 		}
 	}
-	for _, typ := range sseFloatTypes {
+	for _, typ := range sseFloatTypes() {
 		if !SupportedRowMajorSSE(typ) {
 			t.Errorf("%s: the SSE tier has no float matvec", typ)
 		}

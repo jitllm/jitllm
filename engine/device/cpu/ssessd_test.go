@@ -18,7 +18,7 @@ import (
 // own state.
 func TestEmitGatedSSDSSEMatchesOracle(t *testing.T) {
 	em := EmittersFor(TierSSE)
-	for _, n := range hybWidths {
+	for _, n := range hybWidths() {
 		rows := 1 + n%9
 		b, err := em.GatedSSD(n)
 		if err != nil {
@@ -72,7 +72,7 @@ func TestEmitSSDGateSSEMatchesOracle(t *testing.T) {
 	c := hybMapSSE(t, "ssd_gate_sse", b)
 	defer c.Close()
 	consts := DeltaGateConsts()
-	for _, n := range hybWidths {
+	for _, n := range hybWidths() {
 		rnd := rand.New(rand.NewSource(int64(n)))
 		alpha, _ := hybGuarded(n)
 		bias, _ := hybGuarded(n)
@@ -108,7 +108,7 @@ func TestEmitSSDGateSSEMatchesOracle(t *testing.T) {
 func TestEmitSelScanSSEMatchesOracle(t *testing.T) {
 	em := EmittersFor(TierSSE)
 	consts := DeltaGateConsts()
-	for _, n := range hybWidths {
+	for _, n := range hybWidths() {
 		rows := 1 + n%9
 		b, err := em.SelScan(n)
 		if err != nil {
