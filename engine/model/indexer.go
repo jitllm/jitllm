@@ -66,30 +66,3 @@ func loadIndexer(l *layer, bi int32, cfg *Config,
 	}
 	return nil
 }
-
-// allocIndexer sizes the decode token's indexer buffers.
-func (s *Instance) allocIndexer() {
-	c := s.m.Cfg
-	if !c.Indexer() {
-		return
-	}
-	s.idxQ = make([]float32, c.IdxHeads*c.IdxHeadDim)
-	s.idxW = make([]float32, c.IdxHeads)
-	s.idxTmp = make([]float32, s.attStride)
-	s.idxScore = make([]float32, s.attStride)
-	s.idxBias = make([]float32, s.attStride)
-	s.idxOrd.Reserve(s.maxSeq)
-}
-
-// growIndexerRows sizes a chunk's: each row's query, weights and mask.
-func (s *Instance) growIndexerRows(n int) {
-	c := s.m.Cfg
-	if !c.Indexer() || len(s.bidxW) >= n*c.IdxHeads {
-		return
-	}
-	s.bidxQ = make([]float32, n*c.IdxHeads*c.IdxHeadDim)
-	s.bidxW = make([]float32, n*c.IdxHeads)
-	s.bidxK = make([]float32, n*c.IdxHeadDim)
-	s.bidxBias = make([]float32, n*s.attStride)
-	s.idxMasks = make([][]float32, n)
-}

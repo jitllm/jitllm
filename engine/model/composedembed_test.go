@@ -4,7 +4,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -13,22 +12,16 @@ import (
 // output norm, the pooling, the dense heads and the unit length
 // (poolGraph) -- served by the composer once a text, every block served
 // (a non-causal decoder's chunk one run both ways, its symmetric windows
-// the graph's), held to main's vectors and to llama.cpp's at the reference
-// gate's bound, and each arm's violation seen: the other pooling, and a
-// non-causal decoder's rows attending causally.
+// the graph's), held to the golden's reference vectors at the reference
+// gate's bound (embedRef), and each violation seen against them: the other
+// pooling, and a non-causal decoder's rows attending causally.
 func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 	ran := 0
 	for _, g := range loadEmbedGoldens(t) {
 		t.Run(g.Model, func(t *testing.T) {
 			m := openEmbedModel(t, g)
 			ran++
-			ref := openEmbedModel(t, g)
-			re, err := ref.NewEmbedder()
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer re.Close()
-			want := embedTexts(t, ref, re, g)
+			want, bound, refName := embedRef(t, g)
 			e, err := m.NewEmbedder()
 			if err != nil {
 				t.Fatal(err)
@@ -51,15 +44,10 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 				t.Fatalf("%d block runs served (%d blocks, %d texts), declines %v", bs, m.Cfg.NLayer, len(g.Texts), nonZero(bd[:]))
 			}
 			c := worstCos(got, want)
-			bound := embedDevCos
-			if g.Model == "qwen3-embedding-0.6b" {
-				bound = embedDevCosQuant
-			}
-			t.Logf("%s: worst cosine to main's %.9f (bound %v)", g.Model, c, bound)
+			t.Logf("%s: worst cosine to %s %.9f (bound %v)", g.Model, refName, c, bound)
 			if !(c >= bound) {
-				t.Errorf("cosine to main's %.9f < %v", c, bound)
+				t.Errorf("cosine to %s %.9f < %v", refName, c, bound)
 			}
-			llamaCos(t, g, got, "composed CPU")
 
 			was := m.Cfg.Pooling
 			m.Cfg.Pooling = jlm.PoolMean
@@ -71,13 +59,11 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 				t.Fatal(err)
 			}
 			vbad := embedTexts(t, m, ve, g)
-			vs, vd := ve.st.CPUPoolSteps()
-			// A mean over a text of several chunks is main's (DeclinePrefill).
-			vs += vd[composer.DeclinePrefill]
+			vs, _ := ve.st.CPUPoolSteps()
 			ve.Close()
 			m.Cfg.Pooling = was
 			cb := worstCos(vbad, want)
-			t.Logf("%s: violation (pooled other than %v): worst cosine to main's %.6f, %d readouts served", g.Model, was, cb, vs)
+			t.Logf("%s: violation (pooled other than %v): worst cosine to %s %.6f, %d readouts served", g.Model, was, refName, cb, vs)
 			if vs != len(g.Texts) || cb >= bound {
 				t.Fatalf("the gate cannot see the wrong pooling: cosine %.9f, %d composed readouts", cb, vs)
 			}
@@ -98,7 +84,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 			m.Cfg.NonCausal = true
 			m.front.restated++
 			cc := worstCos(cbad, want)
-			t.Logf("%s: violation (causal rows): worst cosine to main's %.6f, %d block runs served", g.Model, cc, cs)
+			t.Logf("%s: violation (causal rows): worst cosine to %s %.6f, %d block runs served", g.Model, refName, cc, cs)
 			if cs < m.Cfg.NLayer*len(g.Texts) || len(nonZero(cd[:])) != 0 || cc >= bound {
 				t.Fatalf("the gate cannot see causal rows: cosine %.9f, %d composed block runs", cc, cs)
 			}
@@ -137,31 +123,39 @@ func worstCos(got, want [][]float32) float64 {
 	return w
 }
 
-// llamaCos checks vs's vectors against llama.cpp's where the golden takes
-// them on the same file, at the reference gate's bound.
-func llamaCos(t *testing.T, g embedGolden, vs [][]float32, arm string) {
+// embedRef is the vectors g holds its model to and the bound: llama.cpp's
+// where the golden takes them on the same file -- at the reference gate's
+// 1e-4, or 0.999 where the file is quantized, llama.cpp itself short of the
+// float32 model by more than that -- else sentence-transformers' at the
+// reference gate's bound.
+func embedRef(t *testing.T, g embedGolden) ([][]float32, float64, string) {
 	t.Helper()
-	if g.LGGUF != "" && g.LGGUF != g.GGUF {
-		return
-	}
-	// TestEmbeddingsMatchReference's bound: 0.999 where the file is
-	// quantized, llama.cpp itself short of the float32 model by more than
-	// the gate's bar.
-	bound := embedCosBound
-	if len(g.ST) == len(g.Llamacpp) {
-		var floor []float64
-		for i := range g.ST {
-			floor = append(floor, cos64(g.Llamacpp[i], g.ST[i]))
+	vecs := func(v [][]float64) [][]float32 {
+		var out [][]float32
+		for _, x := range v {
+			r := make([]float32, len(x))
+			for j, y := range x {
+				r[j] = float32(y)
+			}
+			out = append(out, r)
 		}
-		if worst(floor) < embedCosBound {
-			bound = 0.999
-		}
+		return out
 	}
-	for i := range vs {
-		if i < len(g.Llamacpp) {
-			if lc := cosine(vs[i], g.Llamacpp[i]); !(lc >= bound) {
-				t.Errorf("%s text %d: cosine to llama.cpp %.7f < %v", arm, i, lc, bound)
+	if (g.LGGUF == "" || g.LGGUF == g.GGUF) && len(g.Llamacpp) == len(g.Texts) {
+		bound := embedCosBound
+		if len(g.ST) == len(g.Llamacpp) {
+			var floor []float64
+			for i := range g.ST {
+				floor = append(floor, cos64(g.Llamacpp[i], g.ST[i]))
+			}
+			if worst(floor) < embedCosBound {
+				bound = 0.999
 			}
 		}
+		return vecs(g.Llamacpp), bound, "llama.cpp's"
 	}
+	if len(g.ST) != len(g.Texts) {
+		t.Fatalf("%s: the golden holds no reference vectors for its %d texts", g.Model, len(g.Texts))
+	}
+	return vecs(g.ST), embedCosBound, "sentence-transformers'"
 }

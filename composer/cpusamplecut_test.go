@@ -3,90 +3,12 @@ package composer
 import (
 	"math"
 	"math/rand"
-	"sort"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
-
-// SampleCutRef is graph.SampleCut's definition, the host sampler's draw with
-// no top-k and a cut (model.Sampler's cutRow and drawTempered): the repeat
-// penalty once a history entry in float32, the row's softmax at temperature
-// 1 in float64 and its order (the larger first, the lower id of two equal);
-// min-p stops at the first token under min-p times the best's probability,
-// before it joins the mass, and top-p at the first whose mass up to it
-// reaches top-p, after; the best kept. The survivors' softmax at 1/T is
-// walked at u in that order. Where neither cut fires the draw is
-// SampleRowRef's. It returns the token and how far the draw is from flipping:
-// the nearest cut's distance from its threshold and u's point from an edge.
-func SampleCutRef(logits []float32, hist []int, pen, invT float32, topp, minp, u float64) (tok uint32, margin float64) {
-	v := append([]float32(nil), logits...)
-	penalizeOnce(v, hist, pen)
-	n := len(v)
-	m := math.Inf(-1)
-	for i := range v {
-		m = max(m, float64(v[i]))
-	}
-	q1 := make([]float64, n)
-	sum := 0.0
-	for i := range v {
-		q1[i] = math.Exp(float64(v[i]) - m)
-		sum += q1[i]
-	}
-	for i := range q1 {
-		q1[i] /= sum
-	}
-	order := make([]int, n)
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return q1[order[a]] > q1[order[b]] })
-	p0 := q1[order[0]]
-	keep, fired, acc := n, false, 0.0
-	margin = math.Inf(1)
-	for k, i := range order {
-		if minp > 0 {
-			margin = min(margin, math.Abs(q1[i]-minp*p0)/p0)
-		}
-		if q1[i] < minp*p0 {
-			keep, fired = k, true
-			break
-		}
-		acc += q1[i]
-		if !math.IsInf(topp, 1) {
-			margin = min(margin, math.Abs(acc-topp))
-		}
-		if acc >= topp {
-			keep, fired = k+1, true
-			break
-		}
-	}
-	if !fired {
-		t, mg := SampleRowRef(v, nil, 1, invT, u)
-		return t, min(margin, mg)
-	}
-	keep = max(keep, 1)
-	surv := order[:keep]
-	top := float64(v[surv[0]] * invT)
-	et := make([]float64, keep)
-	mass := 0.0
-	for j, i := range surv {
-		et[j] = math.Exp(float64(v[i]*invT) - top)
-		mass += et[j]
-	}
-	target, upto := u*mass, 0.0
-	tok = uint32(surv[keep-1])
-	landed := false
-	for j, i := range surv {
-		upto += et[j]
-		margin = min(margin, math.Abs(upto-target)/mass)
-		if !landed && upto > target {
-			tok, landed = uint32(i), true
-		}
-	}
-	return tok, margin
-}
 
 // TestComposedCPUSampleCut holds graph.SampleCut on the CPU device to its
 // definition, the host sampler's draw with no top-k and a cut: over random
@@ -166,7 +88,7 @@ func TestComposedCPUSampleCut(t *testing.T) {
 		if c%50 == 0 {
 			u = 0
 		}
-		want, margin := SampleCutRef(l, hist, pen, invT, topp, minp, u)
+		want, margin := oracle.SampleCut(l, hist, pen, invT, topp, minp, u)
 		got := draw(l, hist, pen, invT, float32(topp), float32(minp), float32(u))
 		cases++
 		if margin < 1e-4 {
@@ -225,7 +147,7 @@ func TestComposedCPUSampleCutTopK(t *testing.T) {
 			}
 		}
 		v := append([]float32(nil), l...)
-		penalizeOnce(v, hist, pen)
+		oracle.PenalizeOnce(v, hist, pen)
 		k := 2 + rng.Intn(n-2)
 		invT := float32(1 / (0.4 + 1.4*rng.Float64()))
 		topp, minp := math.Inf(1), 0.0
@@ -238,7 +160,7 @@ func TestComposedCPUSampleCutTopK(t *testing.T) {
 			topp, minp = float64(float32(0.5+0.49*rng.Float64())), float64(float32(0.02*rng.Float64()))
 		}
 		u := float64(float32(rng.Float64()))
-		want, margin := SampleWalkRef(v, n, k, float64(invT), topp, minp, u)
+		want, margin := oracle.SampleWalk(v, n, k, float64(invT), topp, minp, u)
 		lw := make([]uint32, n)
 		for i, x := range l {
 			lw[i] = f(x)

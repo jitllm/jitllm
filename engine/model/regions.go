@@ -1,8 +1,6 @@
 package model
 
 import (
-	"sync"
-
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -15,9 +13,8 @@ import (
 // one set of fields serves every call; each is cleared of its slices
 // afterwards so the instance pins no caller's buffer.
 type regions struct {
-	elem  elemRegion
-	rows  rowRegion
-	embed embedRegion
+	elem elemRegion
+	rows rowRegion
 }
 
 // elemOp is which elementwise op an elemRegion runs.
@@ -79,25 +76,15 @@ func (s *Instance) elemChunk(lo, hi int) {
 	}
 }
 
-// rowOp is which per-row op a rowRegion runs.
-type rowOp uint8
-
-const (
-	rowNorm rowOp = iota // dst row = norm(src row): a LayerNorm or an RMSNorm
-	rowAxpy              // dst row += alpha * b, or the table row idx[r] of b
-)
-
 // rowRegion is a region over rows whose arguments the caller fills before the
-// dispatch (rowRun): the prompt's per-row ops, without a closure per call.
+// dispatch (rowRun), without a closure per call: dst row += alpha * b, or the
+// table row idx[r] of b.
 type rowRegion struct {
-	op             rowOp
-	dst, src, w, b []float32
-	idx            []int32
-	dim            int
-	ln             bool
-	eps            float64
-	alpha          float32
-	fn             func(lo, hi int)
+	dst, b []float32
+	idx    []int32
+	dim    int
+	alpha  float32
+	fn     func(lo, hi int)
 }
 
 // rowRun dispatches the row region described by s.rg.rows over n items in
@@ -108,35 +95,20 @@ func (s *Instance) rowRun(n, chunk int) {
 		j.fn = s.rowItems
 	}
 	s.jit.Parallel(n, chunk, j.fn)
-	j.dst, j.src, j.w, j.b, j.idx = nil, nil, nil, nil, nil
+	j.dst, j.b, j.idx = nil, nil, nil
 }
 
 // rowItems is one chunk of the row region.
 func (s *Instance) rowItems(lo, hi int) {
 	j := &s.rg.rows
 	d := j.dim
-	switch j.op {
-	case rowNorm:
-		for i := lo; i < hi; i++ {
-			y, x := j.dst[i*d:(i+1)*d], j.src[i*d:(i+1)*d]
-			switch {
-			case j.w == nil:
-				copy(y, x)
-			case j.ln:
-				nn.LayerNorm32JIT(y, x, j.w, j.b, j.eps)
-			default:
-				nn.RMSNorm32JIT(y, x, j.w, j.eps)
-			}
+	for i := lo; i < hi; i++ {
+		b := j.b
+		if j.idx != nil {
+			r := int(j.idx[i])
+			b = j.b[r*d : (r+1)*d]
 		}
-	case rowAxpy:
-		for i := lo; i < hi; i++ {
-			b := j.b
-			if j.idx != nil {
-				r := int(j.idx[i])
-				b = j.b[r*d : (r+1)*d]
-			}
-			nn.Axpy32JIT(j.dst[i*d:(i+1)*d], b, j.alpha)
-		}
+		nn.Axpy32JIT(j.dst[i*d:(i+1)*d], b, j.alpha)
 	}
 }
 
@@ -173,54 +145,4 @@ func (s *Instance) worthPooling(elems int) bool {
 	const elemsPerUs = 2000 // conservative f32 streaming rate, one core
 	const crossoverUs = 10  // ~3x the region dispatch, with margin
 	return elems >= crossoverUs*elemsPerUs
-}
-
-// embedRegion is a prompt chunk's embedding rows over the pool (Instance.embedRun):
-// row base+i of the prompt into row i of s.bx, from src[base+i] or, where src
-// is nil, ids[base+i]'s vocabulary row. err is the first row's failure.
-type embedRegion struct {
-	src  []func(dst []float32) error
-	ids  []int32
-	base int
-	mu   sync.Mutex
-	err  error
-	fn   func(lo, hi int)
-}
-
-// embedRun fills the chunk's n rows from prompt row base on, and returns the
-// first failure.
-func (s *Instance) embedRun(src []func(dst []float32) error, ids []int32, base, n int) error {
-	j := &s.rg.embed
-	if j.fn == nil {
-		j.fn = s.embedItems
-	}
-	j.src, j.ids, j.base, j.err = src, ids, base, nil
-	s.jit.Parallel(n, max(1, n/(4*s.jit.Workers())), j.fn)
-	err := j.err
-	j.src, j.ids, j.err = nil, nil, nil
-	return err
-}
-
-// embedItems is one chunk of the embedding region: rows lo..hi-1.
-func (s *Instance) embedItems(lo, hi int) {
-	j, w := &s.rg.embed, s.c.NEmbd
-	for i := lo; i < hi; i++ {
-		if err := s.fillRow(j.src, j.ids, j.base+i, s.bx[i*w:(i+1)*w]); err != nil {
-			j.mu.Lock()
-			if j.err == nil {
-				j.err = err
-			}
-			j.mu.Unlock()
-			return
-		}
-	}
-}
-
-// fillRow writes prompt row i into dst: src[i]'s, or ids[i]'s vocabulary row
-// where src is nil.
-func (s *Instance) fillRow(src []func(dst []float32) error, ids []int32, i int, dst []float32) error {
-	if src == nil {
-		return s.embedInto(dst, ids[i])
-	}
-	return src[i](dst)
 }

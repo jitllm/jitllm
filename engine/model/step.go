@@ -589,31 +589,14 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		}
 	}
 	// The rows' input rows, scale, positions and per-layer inputs through the
-	// composed graph (cpuembed.go), or the old engine path where it declines.
+	// composed graph (cpuembed.go).
 	var bple []float32
 	if c.PLEDim != 0 {
 		s0.growBPLE(rows)
 		bple = s0.bple[:rows*c.pleWidth()]
 	}
-	if s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos) != composer.DeclineServes {
-		for i, tok := range s0.stepTok {
-			row := x[i*c.NEmbd : (i+1)*c.NEmbd]
-			if err := m.embedRow(row, int(tok)); err != nil {
-				return nil, err
-			}
-			if c.EmbdScale != 1 {
-				s0.scale(row, float32(c.EmbdScale))
-			}
-			if err := m.addPos(row, s0.prow, pos[i]); err != nil {
-				return nil, err
-			}
-			if c.PLEDim != 0 {
-				w := c.pleWidth()
-				if err := s0.pleInputs(bple[i*w:(i+1)*w], tok, row); err != nil {
-					return nil, err
-				}
-			}
-		}
+	if why := s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos); why != composer.DeclineServes {
+		return nil, s0.embedDeclined(why)
 	}
 	// AltUp's other streams, from each row's embedding (altup.go), or
 	// DeepSeek V4's copies of it.
@@ -654,13 +637,10 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		if err := s0.collapseStreams(x, rows); err != nil {
 			return nil, err
 		}
-		headed = s0.cpuHeadRows(s0.bx, logits, nil, nlogit) == composer.DeclineServes
-		if !headed {
-			s0.altHeadNorm(nlogit)
-			if err := s0.mm(logits, *s0.outW, s0.bh, nlogit); err != nil {
-				return nil, err
-			}
+		if why := s0.cpuHeadRows(s0.bx, logits, nil, nlogit); why != composer.DeclineServes {
+			return nil, s0.headDeclined(why)
 		}
+		headed = true
 	}
 	out := s0.stepOut(len(runs))
 	at := 0
@@ -672,11 +652,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		st.kv.note(st.bpos[0], r.Tokens...)
 		if r.Logits {
 			copy(st.logits, logits[at*c.NVocab:(at+1)*c.NVocab])
-			switch {
-			case headed:
-			case c.streamHead():
-				st.finishLogits(st.logits)
-			default:
+			if !headed {
 				st.finishApplied(st.logits, h.Applied)
 			}
 			out[i] = st.logits

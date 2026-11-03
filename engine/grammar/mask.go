@@ -2,14 +2,11 @@ package grammar
 
 import (
 	"fmt"
-	"math"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
-
-	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // Vocabulary is what the mask reads of a tokenizer: each token's bytes, and
@@ -91,9 +88,6 @@ type Matcher struct {
 	v     *Tokens
 	first int32
 	masks map[State]*allowed
-	// bias is 0 at the allowed tokens and -inf elsewhere while a mask is
-	// applied, -inf everywhere between.
-	bias []float32
 }
 
 // NewMatcher is g over a tokenizer's indexed tokens.
@@ -206,47 +200,33 @@ func (m *Matcher) Allowed(st State) ([]int32, bool) {
 	return al.toks, al.end
 }
 
-// Mask sends every token st does not allow to -inf in logits, a row over the
-// vocabulary: an additive bias of 0 and -inf, applied by the generated
-// elementwise kernel (nn.Add32JIT). A state that allows nothing and may not
-// end -- a vocabulary that cannot spell what the grammar needs next -- allows
-// the end-of-generation tokens, so the output stops rather than leaves the
-// grammar. It reports whether any token is allowed.
-func (m *Matcher) Mask(st State, logits []float32) bool {
+// Allow writes v into bias, a row over the vocabulary, at every token st
+// allows, and reports how many it wrote. A state that allows nothing and may
+// not end -- a vocabulary that cannot spell what the grammar needs next --
+// allows the end-of-generation tokens, so the output stops rather than
+// leaves the grammar. A constrained draw opens its row of -inf with 0 before
+// the draw (its logits plus the row, the caller's) and closes it with -inf
+// after.
+func (m *Matcher) Allow(st State, bias []float32, v float32) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	al := m.allowedAt(st)
-	if len(m.bias) < len(logits) {
-		old := len(m.bias)
-		m.bias = append(m.bias, make([]float32, len(logits)-old)...)
-		ninf := float32(math.Inf(-1))
-		for i := old; i < len(m.bias); i++ {
-			m.bias[i] = ninf // once per Matcher, as it grows
+	n := 0
+	for _, t := range al.toks {
+		if int(t) < len(bias) {
+			bias[t] = v
+			n++
 		}
 	}
-	bias := m.bias[:len(logits)]
-	open := func(v float32) int {
-		n := 0
-		for _, t := range al.toks {
+	if al.end || len(al.toks) == 0 {
+		for _, t := range m.v.eog {
 			if int(t) < len(bias) {
 				bias[t] = v
 				n++
 			}
 		}
-		if al.end || len(al.toks) == 0 {
-			for _, t := range m.v.eog {
-				if int(t) < len(bias) {
-					bias[t] = v
-					n++
-				}
-			}
-		}
-		return n
 	}
-	n := open(0)
-	nn.Add32JIT(logits, bias)
-	open(float32(math.Inf(-1)))
-	return n > 0
+	return n
 }
 
 // Accept is st after token id: false where the grammar does not allow it.

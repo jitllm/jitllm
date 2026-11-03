@@ -3,63 +3,12 @@ package composer
 import (
 	"math"
 	"math/rand"
-	"sort"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
-
-// SampleWalkRef is graph.SampleWalk's definition with no penalty, in
-// float64, which is the host sampler's top-k draw (model.Sampler): the K best
-// logits (the lower id on a tie), the first k of them, top-p and then min-p
-// over their softmax at temperature 1 with the best always kept, then the
-// walk at u over the survivors' softmax at 1/T -- the first whose mass up to
-// and including it passes u times their mass, the last where none does. It
-// returns the token and how far u's point is from the nearest edge, as a
-// share of the mass.
-func SampleWalkRef(logits []float32, K, k int, invT, topp, minp, u float64) (tok uint32, margin float64) {
-	order := make([]int, len(logits))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return logits[order[a]] > logits[order[b]] })
-	K = min(K, len(logits))
-	v0 := float64(logits[order[0]])
-	p := make([]float64, K)
-	sum := 0.0
-	for i := range min(k, K) {
-		p[i] = math.Exp(float64(logits[order[i]]) - v0)
-		sum += p[i]
-	}
-	var kept []int
-	before := 0.0
-	for i := range K {
-		p[i] /= sum
-		if i == 0 || i < k && before < topp && p[i] >= minp*p[0] {
-			kept = append(kept, i)
-		}
-		before += p[i]
-	}
-	et := make([]float64, len(kept))
-	mass := 0.0
-	for j, i := range kept {
-		et[j] = math.Exp((float64(logits[order[i]]) - v0) * invT)
-		mass += et[j]
-	}
-	target, upto := u*mass, 0.0
-	margin = math.Inf(1)
-	tok = uint32(order[kept[len(kept)-1]])
-	landed := false
-	for j, i := range kept {
-		upto += et[j]
-		margin = min(margin, math.Abs(upto-target)/mass)
-		if !landed && upto > target {
-			tok, landed = uint32(order[i]), true
-		}
-	}
-	return tok, margin
-}
 
 // TestComposedCPUSampleWalk holds graph.SampleWalk on the CPU device to its
 // definition, the host sampler's top-k draw: the token of every draw whose
@@ -121,7 +70,7 @@ func TestComposedCPUSampleWalk(t *testing.T) {
 		case 1:
 			u = float64(math.Nextafter32(1, 0))
 		}
-		want, margin := SampleWalkRef(l, K, k, invT, topp, minp, u)
+		want, margin := oracle.SampleWalk(l, K, k, invT, topp, minp, u)
 		got := walk(l, k, float32(invT), float32(topp), float32(minp), float32(u))
 		cases++
 		if margin < 1e-4 && c%50 != 0 {

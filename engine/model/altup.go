@@ -104,35 +104,22 @@ func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32
 		return err
 	}
 	s.growBatch(n)
-	if s.cpuHeadRows(s.bx, logits, nil, nlogit) != composer.DeclineServes {
-		s.altHeadNorm(nlogit)
-		if err := s.mm(logits, *s.outW, s.bh, nlogit); err != nil {
-			return err
-		}
-		for i := 0; i < nlogit; i++ {
-			softcap(logits[i*c.NVocab:(i+1)*c.NVocab], c.FinalSoftcap)
-		}
+	if why := s.cpuHeadRows(s.bx, logits, nil, nlogit); why != composer.DeclineServes {
+		return s.headDeclined(why)
 	}
 	if greedy {
 		if len(s.head.Tokens) < n {
 			s.head.Tokens = make([]int32, n)
 		}
 		for i := 0; i < n; i++ {
-			s.head.Tokens[i] = s.Sample(nil, logits[i*c.NVocab:(i+1)*c.NVocab])
+			tok, err := s.Sample(nil, logits[i*c.NVocab:(i+1)*c.NVocab])
+			if err != nil {
+				return err
+			}
+			s.head.Tokens[i] = tok
 		}
 	}
 	return nil
-}
-
-// altHeadNorm is the output norm of a chunk's first n rows into s.bh, row by
-// row: a step's handful of rows, where batchNormB's pool closure would cost
-// a warm step an allocation.
-func (s *Instance) altHeadNorm(n int) {
-	d := s.m.Cfg.NEmbd
-	for i := 0; i < n; i++ {
-		s.norm(s.bh[i*d:(i+1)*d], s.bx[i*d:(i+1)*d], s.outNorm, s.m.outNormB)
-	}
-	s.jit.NewInput()
 }
 
 // loadAltUp reads the model's AltUp projections.
@@ -207,65 +194,29 @@ func (s *Instance) allocAltUp() {
 	d, n := c.NEmbd, c.Streams()
 	s.xa = make([]float32, n*d)
 	s.x = s.xa[:d]
-	s.altPred = make([]float32, n*d)
-	s.altH = make([]float32, d)
-	s.altM = make([]float32, n)
-	s.altC = make([]float32, n*n)
-	s.altOnes = make([]float32, n)
-	for i := range s.altOnes {
-		s.altOnes[i] = 1
-	}
-	s.altInn = make([]float32, d)
-	s.altLaur = make([]float32, d)
-	s.altLT = make([]float32, s.m.layers[0].laurelL.rows)
-	s.altExp = make([]float32, (n-1)*d)
-	s.altXC = make([]float32, d)
 }
 
 // altExpand fills streams 1.. of each of `rows` rows from stream 0, the
 // scaled embedding.
 func (s *Instance) altExpand(x []float32, rows int) error {
-	if s.cpuExpand(x, rows) == composer.DeclineServes {
-		return nil
+	if why := s.cpuExpand(x, rows); why != composer.DeclineServes {
+		return s.streamsDeclined("expansion", why)
 	}
-	m, c := s.m, s.m.Cfg
-	d := c.NEmbd
-	for r := 0; r < rows; r++ {
-		x0 := c.stream(x, 0, rows, r)
-		s.jit.NewInput()
-		if err := s.mv(s.altExp, m.altProj, x0); err != nil {
-			return err
-		}
-		for k := 1; k < c.Streams(); k++ {
-			nn.MagMatch32JIT(c.stream(x, k, rows, r), s.altExp[(k-1)*d:k*d], x0, magEps)
-		}
-	}
-	s.jit.NewInput()
 	return nil
 }
 
 // altCollapse writes each row's head input into stream 0: the mean of
 // stream 0 and each unembedded stream matched to stream 0's magnitude.
 func (s *Instance) altCollapse(x []float32, rows int) error {
-	if s.cpuCollapse(x, rows) == composer.DeclineServes {
-		return nil
+	if why := s.cpuCollapse(x, rows); why != composer.DeclineServes {
+		return s.streamsDeclined("collapse", why)
 	}
-	m, c := s.m, s.m.Cfg
-	n := c.Streams()
-	for r := 0; r < rows; r++ {
-		x0 := c.stream(x, 0, rows, r)
-		copy(s.altXC, x0)
-		for k := 1; k < n; k++ {
-			s.jit.NewInput()
-			if err := s.mv(s.altH, m.altUnembd[k-1], c.stream(x, k, rows, r)); err != nil {
-				return err
-			}
-			nn.MagMatch32JIT(s.altH, s.altH, x0, magEps)
-			s.addInto(s.altXC, s.altH)
-		}
-		s.scale(s.altXC, float32(1/float64(n)))
-		copy(x0, s.altXC)
-	}
-	s.jit.NewInput()
 	return nil
+}
+
+// streamsDeclined is the error of a streams' expansion or collapse no
+// composed form serves.
+func (s *Instance) streamsDeclined(what string, why composer.Decline) error {
+	return fmt.Errorf("model: the streams' %s has no composed form on this instance (%s): %v %v",
+		what, composer.DeclineName(int(why)), s.cpu.formErr, s.m.frontGraphs().streamsErr)
 }

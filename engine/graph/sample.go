@@ -402,6 +402,44 @@ func (e sampleEmitter) token(ids, score ValueID) ValueID {
 	return e.b.Emit(OpTake, []ValueID{ids, best[0]}, []Result{{Name: "sample.token", Width: 1, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
 }
 
+// MaskRow is a constrained draw's logits: each logit plus its token's bias,
+// 0 where a constraint allows the token and -inf where it does not. Its
+// inputs are the logits and the mask; its output the masked row.
+type MaskRow struct {
+	NVocab int
+}
+
+func (s *MaskRow) Build() *Graph {
+	b := New()
+	l := b.In("logits", s.NVocab)
+	m := b.In("mask", s.NVocab)
+	e := sampleEmitter{b}
+	b.Out(e.mapc(MapAdd, 0, "masked", s.NVocab, l, m))
+	return b.G
+}
+
+// Logprobs is a step's log-probabilities: the logits' log-softmax, each x -
+// max - log(sum(exp(x - max))), and the K most likely tokens, the larger
+// logit first and the lower id on a tie. Its input is the logits; its
+// outputs the log row and the K ids.
+type Logprobs struct {
+	NVocab, K int
+}
+
+func (s *Logprobs) Build() *Graph {
+	b := New()
+	n := s.NVocab
+	l := b.In("logits", n)
+	e := sampleEmitter{b}
+	d := e.mapc(MapSub, 0, "logprobs.d", n, l, e.one(OpReduce, "logprobs.max", 1, Attrs{Fn: MapMax}, l))
+	sum := e.one(OpReduce, "logprobs.sum", 1, Attrs{Fn: MapAdd}, e.mapc(MapExp, 0, "logprobs.exp", n, d))
+	row := e.mapc(MapSub, 0, "logprobs.row", n, d, e.mapc(MapLog, 0, "logprobs.lse", 1, sum))
+	top := b.Emit(OpTopK, []ValueID{l}, []Result{{Name: "logprobs.ids", Width: min(s.K, n), Elem: ElemU32}, {Name: "logprobs.vals", Width: min(s.K, n)}}, nil,
+		Attrs{TopK: min(s.K, n)}, nil, nil)
+	b.Out(row, top[0])
+	return b.G
+}
+
 // Pick is the label pick over the head's logits: the logits at N ids, the
 // graph's second input (an id past the row read as the row's last).
 type Pick struct {

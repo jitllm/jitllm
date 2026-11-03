@@ -816,13 +816,20 @@ func (lp *stepLoop) nextToken(r *row) bool {
 		lp.finish(r, FinishError, "", err)
 		return false
 	}
-	next := in.Sample(&r.sampler, r.logits)
+	next, err := in.Sample(&r.sampler, r.logits)
+	var tlp *TokenLogprob
+	if err == nil {
+		tlp, err = takeLogprob(in, r.logprobs, vocab, r.logits, next)
+	}
 	r.s.ms.Unhold(in)
+	if err != nil {
+		lp.finish(r, FinishError, "", err)
+		return false
+	}
 	if lp.sampleTap != nil {
 		lp.sampleTap(r.sampler.Temp, r.logits, next)
 	}
 	r.sampler.Observe(next)
-	tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
 	if !r.ignoreEOS && vocab.IsEOG(next) {
 		lp.finish(r, FinishEOS, "", nil)
 		return false

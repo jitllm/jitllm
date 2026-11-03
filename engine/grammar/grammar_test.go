@@ -142,33 +142,37 @@ func TestTokenBoundaries(t *testing.T) {
 	}
 }
 
-func TestMaskSendsTheRestToMinusInfinity(t *testing.T) {
+func TestAllowOpensWhatTheGrammarAllows(t *testing.T) {
 	v := newToyVocab()
 	m := NewMatcher(mustParse(t, `root ::= [ab] "c"?`), IndexTokens(v))
-	lg := make([]float32, v.Size()+3) // a padded head
-	for i := range lg {
-		lg[i] = float32(i % 7)
+	ninf := float32(math.Inf(-1))
+	bias := make([]float32, v.Size()+3) // a padded head
+	for i := range bias {
+		bias[i] = ninf
 	}
-	want := slices.Clone(lg)
+	check := func(st State, allowed func(i int) bool, what string) {
+		t.Helper()
+		if n := m.Allow(st, bias, 0); n == 0 {
+			t.Fatalf("%s: nothing allowed", what)
+		}
+		for i, x := range bias {
+			if allowed(i) != (x == 0) || !allowed(i) && x != ninf {
+				t.Fatalf("%s: bias %d is %v", what, i, x)
+			}
+		}
+		m.Allow(st, bias, ninf)
+		for i, x := range bias {
+			if x != ninf {
+				t.Fatalf("%s: bias %d is %v after the close", what, i, x)
+			}
+		}
+	}
 	st := m.Start()
-	m.Mask(st, lg)
-	for i, x := range lg {
-		ok := i == 'a' || i == 'b'
-		if ok && x != want[i] || !ok && !math.IsInf(float64(x), -1) {
-			t.Fatalf("logit %d is %v after the mask (was %v)", i, x, want[i])
-		}
-	}
+	check(st, func(i int) bool { return i == 'a' || i == 'b' }, "at the start")
 	st, _ = m.Accept(st, 'a')
-	copy(lg, want)
-	m.Mask(st, lg)
-	for i, x := range lg {
-		ok := i == 'c' || int32(i) == v.eog()
-		if ok == math.IsInf(float64(x), -1) {
-			t.Fatalf("after a: logit %d is %v", i, x)
-		}
-	}
-	if a := testing.AllocsPerRun(50, func() { copy(lg, want); m.Mask(st, lg) }); a != 0 {
-		t.Fatalf("a mask of a visited state allocates %.0f times", a)
+	check(st, func(i int) bool { return i == 'c' || int32(i) == v.eog() }, "after a")
+	if a := testing.AllocsPerRun(50, func() { m.Allow(st, bias, 0); m.Allow(st, bias, ninf) }); a != 0 {
+		t.Fatalf("an allow of a visited state allocates %.0f times", a)
 	}
 }
 

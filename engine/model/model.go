@@ -17,7 +17,6 @@ import (
 	"time"
 	"unsafe"
 
-
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
@@ -105,7 +104,7 @@ type Config struct {
 	// RopeXD is HunyuanVL's XD-RoPE (jlm.Arch.XDRope): four axes assigned per
 	// element, so a row's table is two pair tables, A for each NEOX pair's
 	// first half and B for its second (RopeW floats), the rotation
-	// nn.RoPESplit32JIT, and k's norm after it as q's is.
+	// graph.RopeSplit, and k's norm after it as q's is.
 	RopeXD bool
 
 	// Mixture of experts. NExpert 0 is a dense FFN. NFFNExp is the per-expert
@@ -2648,45 +2647,6 @@ func releaseLayer(c *jlm.File, li int, l *layer, keepExperts bool) {
 			c.DropPage(c.ExpertPage(e, x))
 		}
 	}
-}
-
-// addPos adds position pos's row of the learned position table to dst, and
-// is a no-op for every model that has none (starcoder is the one that does).
-// tmp is a scratch row of NEmbd; the caller owns it.
-func (m *Model) addPos(dst, tmp []float32, pos int) error {
-	e := &m.posEmbd
-	if e.e == nil {
-		return nil
-	}
-	if pos < 0 || pos >= e.rows {
-		return fmt.Errorf("model: position %d is past the %d-row position table", pos, e.rows)
-	}
-	if e.packed != nil && len(e.packed.QS) != 0 {
-		nn.RowPacked32JIT(tmp, e.typ, e.packed, pos, e.rows, e.k)
-	} else {
-		nn.Row32JIT(tmp, e.typ, e.data, pos, e.k)
-	}
-	nn.Axpy32JIT(dst, tmp[:len(dst)], 1)
-	return nil
-}
-
-// embedRow writes token t's embedding into dst.
-//
-// The embedding is in the device layout like everything else, so the lookup is
-// a strided read (one row's payload words sit rows*4 bytes apart). That buys a
-// tied head the packed kernel at the cost of some cache misses once per token
-// (cpu.EmitPackedRow).
-func (m *Model) embedRow(dst []float32, token int) error {
-	e := &m.embd
-	if token < 0 || token >= e.rows {
-		return fmt.Errorf("model: token %d is outside a vocabulary of %d", token, e.rows)
-	}
-	if e.packed != nil && len(e.packed.QS) != 0 {
-		nn.RowPacked32JIT(dst, e.typ, e.packed, token, e.rows, e.k)
-		return nil
-	}
-	nn.Row32JIT(dst, e.typ, e.data, token, e.k)
-	return nil
 }
 
 // bindPacked binds every weight of one block.

@@ -1,12 +1,5 @@
 package model
 
-import (
-	"fmt"
-	"math"
-
-	"github.com/jitllm/jitllm/engine/nn"
-)
-
 // Gemma 4's per-layer embeddings (E2B/E4B, Config.PLEDim), transcribed from
 // transformers' Gemma4TextModel.project_per_layer_inputs and
 // Gemma4TextDecoderLayer, which llama.cpp's gemma4.cpp matches:
@@ -26,36 +19,6 @@ import (
 // pleWidth is one row's per-layer inputs, NLayer*PLEDim.
 func (c *Config) pleWidth() int { return c.NLayer * c.PLEDim }
 
-// pleInputs writes one row's per-layer inputs into dst from its token and its
-// scaled embedding x.
-func (s *Instance) pleInputs(dst []float32, token int32, x []float32) error {
-	m, c := s.m, s.c
-	p, w := c.PLEDim, c.pleWidth()
-	t := s.pleT[:w]
-	// An id past the table -- Gemma 3n's vision and audio tokens, whose
-	// padding rows the converter cuts -- reads row 0, as transformers'
-	// per_layer_inputs_mask maps it.
-	if int(token) >= m.pleTok.rows {
-		token = 0
-	}
-	if err := m.rowOf(&m.pleTok, t, int(token)); err != nil {
-		return err
-	}
-	s.scale(t, float32(math.Sqrt(float64(p))))
-	s.jit.NewInput()
-	if err := s.mv(dst[:w], m.pleProj, x); err != nil {
-		return err
-	}
-	s.scale(dst[:w], float32(1/math.Sqrt(float64(c.NEmbd))))
-	for li := 0; li < c.NLayer; li++ {
-		v := dst[li*p : (li+1)*p]
-		s.rmsnorm(v, v, m.pleNorm, c.RMSEps)
-	}
-	s.axpy(dst[:w], t, 1)
-	s.scale(dst[:w], float32(1/math.Sqrt2))
-	return nil
-}
-
 // growPLE sizes the per-layer embedding scratch. A model without them gets
 // none.
 func (s *Instance) growPLE() {
@@ -65,9 +28,6 @@ func (s *Instance) growPLE() {
 	}
 	w := c.pleWidth()
 	s.ple = make([]float32, w)
-	s.pleT = make([]float32, w)
-	s.pleG = make([]float32, c.PLEDim, ffnPad(c.PLEDim))
-	s.pleO = make([]float32, c.NEmbd)
 }
 
 // kvGroupOffered reports whether block li may be offered by offerRange(lo,
@@ -148,18 +108,4 @@ func (s *Instance) growBPLE(n int) {
 	if w := n * s.c.pleWidth(); len(s.bple) < w {
 		s.bple = make([]float32, w)
 	}
-}
-
-// rowOf dequantizes row token of a table whose rows are tokens: the embedding
-// or the per-layer embedding table.
-func (m *Model) rowOf(e *tensor, dst []float32, token int) error {
-	if token < 0 || token >= e.rows {
-		return fmt.Errorf("model: token %d is outside a table of %d rows", token, e.rows)
-	}
-	if e.packed != nil && len(e.packed.QS) != 0 {
-		nn.RowPacked32JIT(dst, e.typ, e.packed, token, e.rows, e.k)
-		return nil
-	}
-	nn.Row32JIT(dst, e.typ, e.data, token, e.k)
-	return nil
 }

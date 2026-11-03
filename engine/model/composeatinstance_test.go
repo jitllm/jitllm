@@ -80,7 +80,9 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 				for i, s := range sess {
 					var tok int32
 					if err := s.Run(ctx, PhaseGenerate, func(in *Instance) error {
-						tok = in.Sample(smp, last[i])
+						if tok, err = in.Sample(smp, last[i]); err != nil {
+							return err
+						}
 						smp.Observe(tok)
 						return nil
 					}); err != nil {

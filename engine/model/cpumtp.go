@@ -10,8 +10,10 @@ import (
 // (mtpEntryGraph): a form of one row and one of a chunk's.
 type cpuMTPState struct {
 	one, many cpuHeadForm
-	// pad holds a call's two inputs and its output, each a form's unit of
-	// rows, where the call is shorter than the unit.
+	// tok and pos are a call's tokens table and its positions table (its
+	// live rows); pad holds a call's input and its output, each a form's
+	// unit of rows, where the call is shorter than the unit.
+	tok, pos []uint32
 	pad      []float32
 	served   int
 	declined [composer.NumDeclines]int
@@ -41,13 +43,14 @@ func (s *Instance) cpuPlaceMTP() {
 			u = max(u, hf.f.unit, hf.f.rows)
 		}
 	}
-	st.pad = make([]float32, 3*u*s.c.NEmbd)
+	st.tok, st.pos = make([]uint32, u), make([]uint32, u+1)
+	st.pad = make([]float32, 2*u*s.c.ResidW())
 }
 
-// cpuMTPEntry writes `rows` rows of z, the rows the prediction block reads,
-// from the rows of e (each token's embedding) and x (the trunk's hidden
-// rows) through the composed entry, or says why not.
-func (s *Instance) cpuMTPEntry(z, e, x []float32, rows int) composer.Decline {
+// cpuMTPEntry writes `rows` rows of z, the rows the prediction block
+// reads, from the tokens toks and the rows of x (the trunk's hidden rows,
+// every stream) through the composed entry, or says why not.
+func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) composer.Decline {
 	if !s.cpuHeadOn() {
 		return composer.DeclineCaller
 	}
@@ -64,37 +67,33 @@ func (s *Instance) cpuMTPEntry(z, e, x []float32, rows int) composer.Decline {
 		st.declined[why] += rows
 		return why
 	}
-	d := s.c.NEmbd
+	w := s.c.ResidW()
 	for r0 := 0; r0 < rows; {
 		k := min(f.rows, rows-r0)
 		u := max(f.unit, 1)
 		b := &s.cpu.bound
-		*b = cpuBound{li: s.lo, l: &s.m.layers[s.lo], own: s.cpuOwn(f), n: k}
+		*b = cpuBound{li: s.lo, l: &s.m.layers[s.lo], own: s.cpuOwn(f), n: k, tok: st.tok, pos: st.pos}
 		padded := k < u
 		if !padded {
 			k -= k % u
 			b.n = k
 		}
-		for i, v := range [2][]float32{e, x} {
-			if padded {
-				p := st.pad[i*u*d : (i*u+k)*d]
-				copy(p, v[r0*d:(r0+k)*d])
-				b.io[i] = unsafe.Pointer(&p[0])
-				continue
-			}
-			b.io[i] = unsafe.Pointer(&v[r0*d])
+		st.pos[0] = uint32(k)
+		for i := range k {
+			st.tok[i] = uint32(toks[r0+i])
 		}
 		if padded {
-			b.io[2] = unsafe.Pointer(&st.pad[2*u*d])
+			copy(st.pad[:k*w], x[r0*w:(r0+k)*w])
+			b.io[0], b.io[1] = unsafe.Pointer(&st.pad[0]), unsafe.Pointer(&st.pad[u*w])
 		} else {
-			b.io[2] = unsafe.Pointer(&z[r0*d])
+			b.io[0], b.io[1] = unsafe.Pointer(&x[r0*w]), unsafe.Pointer(&z[r0*w])
 		}
 		s.cpu.call[0] = uint32(k)
 		for i := range f.codes {
 			s.cpuCall(b, &f.codes[i])
 		}
 		if padded {
-			copy(z[r0*d:(r0+k)*d], st.pad[2*u*d:(2*u+k)*d])
+			copy(z[r0*w:(r0+k)*w], st.pad[u*w:(u+k)*w])
 		}
 		r0 += k
 	}

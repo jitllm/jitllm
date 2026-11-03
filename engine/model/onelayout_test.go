@@ -69,8 +69,8 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 				t.Fatal("the embedding is quantised and not packed")
 			}
 			dst := make([]float32, m.Cfg.NEmbd)
-			if err := m.embedRow(dst, 1); err != nil {
-				t.Fatalf("embedRow: %v", err)
+			if err := m.embedRowRef(dst, 1); err != nil {
+				t.Fatalf("embedRowRef: %v", err)
 			}
 			var nz int
 			for _, v := range dst {

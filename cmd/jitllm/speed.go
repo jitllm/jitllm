@@ -350,7 +350,11 @@ func sessionsRun(attach func(int) (*model.Instance, error), prompt []int32, k, n
 			if err != nil {
 				return err
 			}
-			sts[i], toks[i] = st, st.Sample(nil, lg)
+			tok, err := st.Sample(nil, lg)
+			if err != nil {
+				return err
+			}
+			sts[i], toks[i] = st, tok
 		}
 		ctr.CUDAKernelTimes() // clear: only this arm's steps are reported
 		t0 := time.Now()
@@ -361,7 +365,9 @@ func sessionsRun(attach func(int) (*model.Instance, error), prompt []int32, k, n
 					return err
 				}
 				for i, lg := range lgs {
-					toks[i] = sts[i].Sample(nil, lg)
+					if toks[i], err = sts[i].Sample(nil, lg); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -370,7 +376,9 @@ func sessionsRun(attach func(int) (*model.Instance, error), prompt []int32, k, n
 				if err != nil {
 					return err
 				}
-				toks[i] = st.Sample(nil, lg)
+				if toks[i], err = st.Sample(nil, lg); err != nil {
+					return err
+				}
 			}
 		}
 		rate, err := perSecond(fmt.Sprintf("%d sessions x tg%d", k, n), k*n, time.Since(t0))

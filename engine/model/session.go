@@ -82,7 +82,6 @@ type Session struct {
 	ldSpill  nn.Spiller
 	ldStep   nn.SessionStepper
 	ldRows   nn.RowsDevice
-	ldNamed  nn.NamedDevice
 	ldInputs nn.LayerInputDevice
 	ldTokens nn.TokenDevice
 	ldMarks  nn.RopeMarksDevice

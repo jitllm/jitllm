@@ -378,7 +378,11 @@ func benchmark(path string, topts []tok.Option) error {
 	const nTok = 3
 	start := time.Now()
 	for i := 0; i < nTok; i++ {
-		if logits, err = st.Forward(st.Sample(nil, logits)); err != nil {
+		tok, err := st.Sample(nil, logits)
+		if err != nil {
+			return err
+		}
+		if logits, err = st.Forward(tok); err != nil {
 			return err
 		}
 	}
@@ -905,7 +909,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		}
 		next := pending
 		if next < 0 {
-			next = st.Sample(sm, logits)
+			if next, err = st.Sample(sm, logits); err != nil {
+				return err
+			}
 		}
 		// JITLLM_FORCE_IDS decodes the given token ids in place of the
 		// sampled ones (teacher forcing), so two arms of an A/B whose

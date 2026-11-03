@@ -190,7 +190,11 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return st, model.Greedy(lg)
+		next, err := st.Sample(nil, lg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st, next
 	}
 	decode := func(st *model.Instance, next int32, n int) int32 {
 		for range n {
@@ -199,7 +203,10 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 				t.Error(err)
 				return next
 			}
-			next = model.Greedy(lg)
+			if next, err = st.Sample(nil, lg); err != nil {
+				t.Error(err)
+				return next
+			}
 		}
 		return next
 	}

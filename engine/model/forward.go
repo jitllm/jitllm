@@ -141,27 +141,14 @@ type Instance struct {
 	residFold bool
 	Grouped   int64
 
-	x, h, xb []float32 // residual stream and two same-width scratch vectors
-	// hf is a parallel block's FFN input (C6): the block input normed for the
-	// FFN before attention adds into the residual. nil on every sequential
-	// model. bhf is its batched twin.
-	hf, bhf []float32
-	// prow is one row of scratch for a learned position table (starcoder);
-	// nil on every model without one. posIn says the step's input rows added
-	// it already (the composed graph's, embed).
-	prow   []float32
-	posIn  bool
-	q      []float32 // n_head * head_dim
-	kc, vc []float32 // one position's K and V
-	att    []float32 // attention scores for one head
-	atth   []float32 // ... and one row per head, so heads can run in parallel
-	// float32 staging for attention's query and weighted accumulation.
-	qf, xbf []float32
-	attf    []float32 // softmaxed weights, narrowed for the accumulate kernel
-	// attStride is attf's per-head stride, maxSeq rounded up to a vector: the
-	// generated softmax fills [n, pad(n)) with -inf, and at n == maxSeq an
-	// exact stride would pad into the next head's row, which another worker
-	// is reading.
+	x, h []float32 // residual stream and two same-width scratch vectors
+	// bhf is a parallel block's FFN input (C6) over a chunk: the block input
+	// normed for the FFN before attention adds into the residual. nil on
+	// every sequential model.
+	bhf []float32
+	q   []float32 // n_head * head_dim
+	// attStride is a row of scores' stride over the context: maxSeq rounded
+	// up to a vector.
 	attStride int
 	gate, up  []float32
 	maxSeq    int
@@ -189,8 +176,8 @@ type Instance struct {
 	moeOnes []float32
 	// The shared expert's scratch. Its width is NFFNShExp, a different key
 	// from the routed experts'.
-	shGate, shUp, shOut []float32
-	expReq              chan expRead
+	shGate, shUp []float32
+	expReq       chan expRead
 	// hyOrd and hyW are hostExperts' selection in ascending id and its
 	// weights in that order, kept so a token allocates neither.
 	hyOrd []int32
@@ -205,17 +192,13 @@ type Instance struct {
 	streamedOn   []bool
 	// ShOverlaps counts mixture layers whose shared expert ran behind the
 	// routed read: the selection check for WithSharedOverlap.
-	ShOverlaps int
 	// ple is this token's per-layer embedding inputs (Config.PLEDim), pleT
 	// the table row they are built from, pleG and pleO a block's gate and
 	// projection, and bple a batched chunk's inputs, one row each. See ple.go.
-	ple, pleT, pleG, pleO, bple []float32
-	// Gemma 3n's AltUp and LAuReL (altup.go): xa is the one-row residual's
-	// streams (x is its stream 0), altPred the block's predictions, and the
-	// rest the router's, the coefficients' and the branches' scratch; balt*
-	// are a chunk's.
-	xa, altPred, altH, altM, altC, altOnes []float32
-	altInn, altLaur, altLT, altExp, altXC  []float32
+	ple, bple []float32
+	// xa is the one-row residual's streams (x is its stream 0), on a model of
+	// several (altup.go).
+	xa []float32
 	// ds is DeepSeek V4's scratch (ds4.go); xa is its streams too. tok is
 	// the token a decode step embeds, -1 for a supplied embedding: DeepSeek
 	// V4's hash blocks route by it.
@@ -230,11 +213,9 @@ type Instance struct {
 	// allocation, and rowx one row's streams in a prefill's row-by-row
 	// device retry (rowStreams).
 	tok1    [1]int32
-	raxes   []int32
 	tokFill bool
 	// dmoe is Gemma 4's mixture block's scratch (Config.DenseMoE): the
 	// router's input and the mixture's sum, each NEmbd wide. See denseMoE.
-	dmoe [2][]float32
 	// rowsOfChunk says moe() is running one row of a batched chunk, which
 	// counts no hotness: endToken() advances once per Forward. See
 	// denseMoERows.
@@ -276,19 +257,14 @@ type Instance struct {
 	dg deltaGeom
 	// The delta rule's scratch, allocated only for a hybrid. dOut is per
 	// value head so the heads can run in parallel without sharing.
-	dMixed, dZ, dBA              []float32
-	dDecay, dBeta, dAlpha, dBRaw []float32
 	// dLowRank is the rank-kDim temporary KDA's two low-rank gates project
 	// through, and dGateWaste receives the half of DeltaGate32JIT's pair that
 	// the call in question is not for. Both nil on qwen3next.
-	dLowRank, dGateWaste []float32
-	dOut, dOnes          []float32
 	// mvCalls counts mv: each one reads its weight once, the count a gate
 	// holds a batched path to (TestLinearRowsCounts).
 	mvCalls int64
 	// dSB and dSC are a Mamba-1 block's B and C, and dZeroA the zero rates
 	// its dt goes through SSDGate32JIT against (only the softplus is kept).
-	dSB, dSC, dZeroA []float32
 
 	// res keeps the hot experts resident and drops the rest; nil when the model
 	// fits its budget, which is every model but a large MoE on a small one.
@@ -370,10 +346,6 @@ type Instance struct {
 	// kvl is where this session's KV cache puts things; see kvLayout. It is the
 	// global layers' layout; kvlAt is any layer's.
 	kvl kvLayout
-	// attnG and attnL are the attention kernel sets of the global and the
-	// sliding layers, one set (the JIT's default) wherever the two geometries
-	// are one; see provisionAttn and attnAt.
-	attnG, attnL *nn.AttnSet
 	// attnChunk is how many query heads one pool task claims in decode
 	// attention. With GQA adjacent heads share a kv head, so a larger chunk
 	// keeps sharing heads on one worker. A field so both arms of an A/B are
@@ -386,33 +358,6 @@ type Instance struct {
 	// Atomic because the pool writes it from every worker.
 	attnPaired atomic.Int64
 
-	// Multi-head Latent Attention scratch; nil unless Config.MLA(). See mla.go
-	// for what each holds and why the absorbed query is row-wide.
-	mlaQA, mlaAbs, mlaAcc, mlaPE, mlaOut []float32
-	mlaAbsO, mlaOutO                     [][]float32
-	// The prefill chunk's copies of the same, sized by growMLABatch.
-	bmlaQA, bmlaAbs, bmlaAcc, bmlaKV, bmlaOut []float32
-	bmlaAbsO, bmlaOutO                        [][]float32
-	mlaKB, mlaVB                              []*nn.Packed
-	// mlaG and bmlaG are Kimi-K3's MLA output gate (mla.go), one row and a
-	// chunk's; nil where no block has one.
-	mlaG, bmlaG []float32
-	// DeepSeek V3.2's lightning indexer (indexer.go); nil unless
-	// Config.Indexer(). idxAttn scores the cached rows' indexer tails.
-	idxQ, idxW, idxTmp, idxScore, idxBias []float32
-	bidxQ, bidxW, bidxK, bidxBias         []float32
-	idxMasks                              [][]float32
-	idxOrd                                nn.SampleOrder
-	idxAttn                               *nn.AttnSet
-	// MiniMax Sparse Attention (msa.go); nil unless Config.MSA(). attnM is
-	// the attention kernel set of the MSA blocks, whose row carries the
-	// indexer's key as one more head, and reads that head for the scores.
-	msaQ, msaTmp, msaBias  []float32
-	bmsaQ, bmsaK, bmsaBias []float32
-	msaKept                []bool
-	msaMasks               [][]float32
-	msaOrd                 nn.SampleOrder
-	attnM                  *nn.AttnSet
 	// moeBatched and moeLooped count which MoE FFN dispatch shape ran: one
 	// region per stage, or one per expert. Without them "made no difference"
 	// and "never ran" read the same.
@@ -607,28 +552,13 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	}
 	s.x = make([]float32, c.NEmbd)
 	s.h = make([]float32, c.NEmbd)
-	// A parallel block's FFN input, or a Falcon-H1 block's mixer output.
-	if c.Parallel || c.SSDAttn() {
-		s.hf = make([]float32, c.NEmbd)
-	}
-	if m.posEmbd.e != nil {
-		s.prow = make([]float32, c.NEmbd)
-	}
 	// The attention output is exactly n_head*head_dim wide, which is not
 	// n_embd on every model (Qwen3-30B-A3B, gemma-2); the output projection
 	// requires len(x) == k.
-	s.xb = make([]float32, c.MaxQDim())
 	s.q = make([]float32, c.MaxQDim())
-	s.kc = make([]float32, c.MaxKVDim())
-	s.vc = make([]float32, c.MaxKVDim())
-	s.att = make([]float32, maxSeq)
 	s.initHotness()
-	s.atth = make([]float32, c.NHead*maxSeq)
-	s.qf = make([]float32, c.MaxQDim())
-	s.xbf = make([]float32, c.MaxQDim())
 	// A sink takes one slot past the last position, so the row grows by one.
 	s.attStride = attStride(maxSeq + m.sinkSlot())
-	s.attf = make([]float32, c.NHead*s.attStride)
 	s.growPLE()
 	s.allocAltUp()
 	s.gate = make([]float32, c.MaxNFFN(), ffnPad(c.MaxNFFN()))
@@ -643,8 +573,6 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	s.bpos = make([]int, nseq)
 	s.rmarks = ropeMarks{}
 	s.allocRecurrent(nseq)
-	s.allocMLA()
-	s.allocMSA()
 	if c.AttnOutGate {
 		qd := c.NHead * c.HeadDim
 		s.qgate = make([]float32, nseq*2*qd)
@@ -667,29 +595,22 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		if c.NFFNShExp > 0 {
 			s.shGate = make([]float32, c.NFFNShExp, ffnPad(c.NFFNShExp))
 			s.shUp = make([]float32, c.NFFNShExp, ffnPad(c.NFFNShExp))
-			s.shOut = make([]float32, c.NEmbd)
-		}
-		if c.DenseMoE {
-			s.dmoe = [2][]float32{make([]float32, c.NEmbd), make([]float32, c.NEmbd)}
 		}
 	}
 
 	// One kernel per quantization type the model actually contains, emitted
 	// eagerly — the shapes are all known from the header before the first token.
 	s.jit = m.newJIT()
-	// One pair of attention kernels per model: the head dimension and the KV
-	// stride are the same for every layer, and the kernels bake the layout's
-	// stride. The cache width is decided here, after the kernels exist: a
-	// binary16 cache is only legal if the generated kernels read it.
-	// WithKVType (or WithKVF16, SetKVType) forces it; otherwise
-	// nn.KVWidthPaysOff emits both and asks whether f16 costs anything on
-	// this host. A quantized cache is only ever forced (KVType).
-	hdK, hdV := c.attnWidths()
+	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
+	// otherwise binary16, half the history's bytes, wherever the CPU
+	// narrows in hardware -- everywhere but an x86 host the composer forms
+	// from its narrow passes (composer.NarrowsCPU). A quantized cache is
+	// only ever forced (KVType).
 	want := m.opt.kvType.fmt()
 	if !m.opt.kvTypeSet {
-		want = cpu.KVF32
-		if s.jit.KVWidthPaysOff(hdK, s.kvl.Stride()) {
-			want = cpu.KVF16
+		want = cpu.KVF16
+		if composer.NarrowsCPU(composedCPUDevice(1)) {
+			want = cpu.KVF32
 		}
 	}
 	// MiniMax Sparse Attention caches its indexer's key in the row (msa.go),
@@ -714,42 +635,21 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	if c.QSARatio != 0 {
 		want = cpu.KVF32
 	}
-	if c.Hybrid() {
-		// The delta rule's kernel, provisioned per model like the attention
-		// ones beside it: the state width is a header field, so it is baked
-		// rather than read per head.
-		switch {
-		case c.ShortConv():
-			// A short convolution has no state beside its window.
-		case c.Mamba1():
-			s.jit.AddSelScan(int(c.SSM.StateSize))
-		case c.SSD():
-			s.jit.AddSSD(int(c.SSM.StateSize))
-		case c.ChanDecay():
-			s.jit.AddDeltaChan(int(c.SSM.StateSize))
-		default:
-			s.jit.AddDelta(int(c.SSM.StateSize))
-		}
-		g := c.delta()
-		s.jit.AddConv1d(g.conv, g.chans)
-	}
 	// A forced q8 cache on a model that refuses one was refused at Open
 	// (Config.KVTypeRefusal); this is the backstop for one forced afterwards.
 	if want == cpu.KVQ8 && c.KVTypeRefusal(KVQ8_0) != nil {
 		want = cpu.KVF32
 	}
-	s.jit.AddAttnKV(hdK, hdV, s.kvl.Stride(), want)
 	s.kvFmt, s.kvl.fmt = want, want
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
 	if want == cpu.KVQ8 {
 		s.kvl.jit = s.jit
 		s.jit.ReserveKVQuant(max(c.HeadDim, c.HeadDimSWA))
 	}
-	s.provisionAttn()
 	s.allocDS4()
 	s.allocK3()
 	s.allocQ4E()
-	// After AddAttnKV: kvl.fmt sizes every page.
+	// kvl.fmt sizes every page.
 	s.kv = newKVCacheRange(c, s.m.nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
 	s.kv.usePool(&m.kvPool)
 	s.kv.reserve(s.maxSeq)
@@ -2250,27 +2150,15 @@ func (s *Instance) prepDeviceRange(lo, n int) {
 // rows' graph composed for the CPU (cpuembed.go), its scale, its position
 // row and its per-layer inputs with it.
 func (s *Instance) embed(token int32) error {
-	m, c := s.m, s.c
-	// On the host, unlike a prompt's rows: a device gather here measured
+	// On the CPU, unlike a prompt's rows: a device gather here measured
 	// slower (one row is usually cache-hot, and the launch sits on the
 	// token's critical path).
 	e := &s.cpu.embed
 	e.tok1[0], e.pos1[0] = token, s.pos
-	if s.cpuEmbed(s.x, s.ple, e.tok1[:], e.pos1[:]) == composer.DeclineServes {
-		s.posIn = m.posEmbd.e != nil
-		m.trace(-1, "embd", s.x)
-		return nil
+	if why := s.cpuEmbed(s.x, s.ple, e.tok1[:], e.pos1[:]); why != composer.DeclineServes {
+		return s.embedDeclined(why)
 	}
-	if err := m.embedRow(s.x, int(token)); err != nil {
-		return err
-	}
-	if c.EmbdScale != 1 {
-		s.scale(s.x, float32(c.EmbdScale))
-	}
-	m.trace(-1, "embd", s.x)
-	if c.PLEDim != 0 {
-		return s.pleInputs(s.ple, token, s.x)
-	}
+	s.m.trace(-1, "embd", s.x)
 	return nil
 }
 
@@ -2908,15 +2796,6 @@ func (s *Instance) addInto(dst, src []float32) {
 	s.axpy(dst, src, a)
 }
 
-// finishLogits applies whatever the model does to its logits after the head:
-// gemma2's final softcap and Granite's logit_scale, which divides. No model
-// has both. Every path that produces logits ends here, the device's included.
-func (s *Instance) finishLogits(x []float32) {
-	s.headBias(x)
-	softcap(x, s.c.FinalSoftcap)
-	s.scaleLogits(x)
-}
-
 // finishDevLogits is finishLogits for logits the device head produced, which
 // already carry the final softcap (capping twice is a different function). A
 // device that served the head's graph applied the bias and the scale too, and
@@ -2980,9 +2859,6 @@ func (s *Instance) axpy(dst, src []float32, alpha float32) { nn.Axpy32JIT(dst, s
 
 // scale multiplies a vector in place, on generated code.
 func (s *Instance) scale(x []float32, alpha float32) { nn.Scale32JIT(x, alpha) }
-
-// softcap applies x = c*tanh(x/c) in place, generated; a no-op at c == 0.
-func softcap(x []float32, c float32) { nn.Softcap32JIT(x, c) }
 
 // JIT is this state's generated-code tier: its vision segment runs on it
 // (Instance.Vision), so a model has one JIT and one worker pool a session.
@@ -3290,15 +3166,10 @@ func (s *Instance) stepDownKVToF32() { s.setKVFmt(cpu.KVF32) }
 // session's history reads the same on every instance it leases.
 func (s *Instance) setKVFmt(f cpu.KVFmt) {
 	s.kvFmt, s.kvl.fmt, s.kvl.jit = f, f, nil
-	// attnWidths, not Cfg.HeadDim: on MLA the key and value widths differ
-	// from HeadDim (TestMLAStepsTheKVDownAtTheRightWidths).
-	hdK, hdV := s.c.attnWidths()
-	s.jit.AddAttnKV(hdK, hdV, s.kvl.Stride(), f)
 	if f == cpu.KVQ8 {
 		s.kvl.jit = s.jit
 		s.jit.ReserveKVQuant(max(s.c.HeadDim, s.c.HeadDimSWA))
 	}
-	s.provisionAttn()
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.
 	old := s.kv
@@ -3415,11 +3286,12 @@ func (s *Instance) ForwardEmbd(e []float32) ([]float32, error) {
 	}
 	s.tok = -1
 	return s.forward(func() error {
-		copy(s.x, e)
-		s.m.trace(-1, "embd", s.x)
-		if s.c.PLEDim != 0 {
-			return s.pleInputs(s.ple, 0, s.x) // see ple.go
+		st := &s.cpu.embed
+		st.tok1[0], st.pos1[0] = 0, s.pos
+		if why := s.cpuGiven(s.x, s.ple, e, st.tok1[:], st.pos1[:]); why != composer.DeclineServes {
+			return s.embedDeclined(why)
 		}
+		s.m.trace(-1, "embd", s.x)
 		return nil
 	})
 }
@@ -3503,7 +3375,7 @@ func (s *Instance) ForwardGreedy(token int32) (int32, error) {
 	if tok, ok := s.cpuGreedy(logits); ok {
 		return tok, nil
 	}
-	return Greedy(logits), nil
+	return 0, s.sampleDeclined("the greedy token")
 }
 
 // ForwardSample is Forward for a caller that only wants smp's next token.
@@ -3552,11 +3424,11 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		s.SampledOnDevice++
 		tok = h.Token
 	default:
-		if t, ok := s.cpuDraw(logits, smp, u); ok {
-			tok = t
-		} else {
-			tok = smp.sampleAt(logits, u)
+		t, ok := s.cpuDraw(logits, smp, u)
+		if !ok {
+			return 0, s.sampleDeclined("the draw")
 		}
+		tok = t
 	}
 	return tok, nil
 }
@@ -3623,18 +3495,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	m, c := s.m, s.c
 	if s.pos >= s.maxSeq {
 		return nil, errFull{s.maxSeq, s.reqSeq}
-	}
-	// A learned position table (starcoder) rides the fill, so a restarted
-	// token carries its position too.
-	if m.posEmbd.e != nil {
-		inner, pos := fill, s.pos
-		fill = func() error {
-			s.posIn = false
-			if err := inner(); err != nil || s.posIn {
-				return err
-			}
-			return m.addPos(s.x, s.prow, pos)
-		}
 	}
 	// AltUp's streams ride the fill as well (altup.go): every restart begins
 	// from the embedding.
@@ -3877,20 +3737,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	return s.logits, nil
 }
 
-// Greedy returns the argmax token. Ties go to the lower id, which is what
-// llama.cpp's top-k=1 does, and reproducibility of greedy decoding is what makes
-// everything else regression-testable.
-func Greedy(logits []float32) int32 {
-	// Generated on every tier, with no Go scan behind it. A decline means a
-	// host with no code generator, which nn.Available already refuses.
-	i, ok := nn.Argmax32JIT(logits)
-	if !ok {
-		panic(fmt.Sprintf("model: no argmax kernel for %d logits on this host -- "+
-			"greedy sampling is generated code and has no Go path", len(logits)))
-	}
-	return i
-}
-
 // errFull is the end of the context. It names newState's clamp when the caller
 // asked for more positions than the model's context.
 type errFull struct{ max, asked int }
@@ -4081,7 +3927,6 @@ func (s *Instance) setLD(ld nn.LayerDevice) {
 	s.ldSpill, _ = ld.(nn.Spiller)
 	s.ldStep, _ = ld.(nn.SessionStepper)
 	s.ldRows, _ = ld.(nn.RowsDevice)
-	s.ldNamed, _ = ld.(nn.NamedDevice)
 	s.ldInputs, _ = ld.(nn.LayerInputDevice)
 	s.ldTokens, _ = ld.(nn.TokenDevice)
 	s.ldPrompt, _ = ld.(nn.PromptDevice)

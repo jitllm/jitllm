@@ -195,7 +195,14 @@ func TestComposedHeadTokens(t *testing.T) {
 							if err != nil {
 								t.Fatal(err)
 							}
-							nc, nd := sc.Sample(lc), sd.Sample(ld)
+							nc, err := c.Sample(sc, lc)
+							if err != nil {
+								t.Fatal(err)
+							}
+							nd, err := d.Sample(sd, ld)
+							if err != nil {
+								t.Fatal(err)
+							}
 							for range gen {
 								if nc != nd {
 									parted++
@@ -209,7 +216,9 @@ func TestComposedHeadTokens(t *testing.T) {
 								if err != nil {
 									t.Fatal(err)
 								}
-								nd = sd.Sample(lg)
+								if nd, err = d.Sample(sd, lg); err != nil {
+									t.Fatal(err)
+								}
 							}
 							return parted, c.SampledOnDevice
 						}

@@ -262,7 +262,7 @@ func devFlip(t *testing.T, m *Model, g *gpu.GPU, prompt, prefix []int32, a, b in
 			func() {
 				defer m.enterPager()()
 				rs.kv.note(rs.seqPos(0), prefix[i:j]...)
-				if err := rs.stepRows(embedSrc(rs, prefix[i:j]), prefix[i:j], &out); err != nil {
+				if err := rs.stepRows(tokenRows(prefix[i:j]), &out); err != nil {
 					t.Fatal(err)
 				}
 			}()

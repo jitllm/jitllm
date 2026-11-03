@@ -139,27 +139,3 @@ func (s *Instance) kvlSWA() kvLayout {
 	l.nKV, l.headDim = s.c.NKVHeadSWA, s.c.HeadDimSWA
 	return l
 }
-
-// provisionAttn picks the attention kernel sets after the cache width is
-// decided: the JIT's default (the global layers' geometry, AddAttnKV) for
-// every layer, and a second set baked at the sliding layers' head width and
-// stride where the two geometries differ.
-func (s *Instance) provisionAttn() {
-	s.attnG = s.jit.Attn()
-	s.attnL = s.attnG
-	if c := s.c; c.GeomSplit() {
-		s.attnL = s.jit.AttnSetFor(c.HeadDimSWA, c.HeadDimSWA, s.kvlSWA().Stride(), s.kvFmt)
-	}
-	// The indexer's scores read each cached row's IdxHeadDim tail at the row's
-	// stride (indexer.go).
-	if c := s.m.Cfg; c.Indexer() {
-		s.idxAttn = s.jit.AttnSetFor(c.IdxHeadDim, c.IdxHeadDim, s.kvl.Stride(), s.kvFmt)
-	}
-	// An MSA block's row carries the indexer's key as one more head, so its
-	// stride is a head wider; its indexer scores are this set's too, the key
-	// being a head of the same width (msa.go).
-	s.attnM = s.attnG
-	if c := s.m.Cfg; c.MSA() || c.QSARatio != 0 {
-		s.attnM = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, s.kvlMSA().Stride(), s.kvFmt)
-	}
-}

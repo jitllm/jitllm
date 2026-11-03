@@ -280,7 +280,13 @@ func (b *Batcher) Step() ([]*Seq, error) {
 					continue
 				}
 			}
-			s.Out = append(s.Out, s.pick(g.in, lg[j]))
+			tok, err := s.pick(g.in, lg[j])
+			if err != nil {
+				s.Err = err
+				done = append(done, b.retire(s))
+				continue
+			}
+			s.Out = append(s.Out, tok)
 			if s.finished() {
 				done = append(done, b.retire(s))
 				continue
@@ -404,9 +410,9 @@ func (b *Batcher) end(s *Seq) *Seq {
 // byAdmission orders sequences oldest admission first.
 func byAdmission(a, b *Seq) int { return a.adm - b.adm }
 
-func (s *Seq) pick(in *Instance, logits []float32) int32 {
+func (s *Seq) pick(in *Instance, logits []float32) (int32, error) {
 	if s.Sample != nil {
-		return s.Sample(logits)
+		return s.Sample(logits), nil
 	}
 	return in.Sample(nil, logits)
 }

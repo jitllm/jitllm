@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // MaxPrefillChunk sizes the batched scratch. The width used is tuned per
@@ -145,7 +146,7 @@ func (s *Instance) prefillMixedAt(slot int, spans ...Span) ([]float32, error) {
 	// Every row's place on the rotary axes, from the spans: an image's rows
 	// at their grid coordinates and the text after it where the reference
 	// resumes it.
-	p0, total := s.seqPos(slot), len(src)
+	p0, total := s.seqPos(slot), src.len()
 	next, err := s.spanRope(slot, p0, spans)
 	if err != nil {
 		return nil, err
@@ -159,7 +160,7 @@ func (s *Instance) prefillMixedAt(slot int, spans ...Span) ([]float32, error) {
 		s.kv.note(p0, s.spanKey(p0, spans)...)
 	}
 	defer s.tokensOf(spans)()
-	return s.prefillSrc(slot, src, nil)
+	return s.prefillSrc(slot, src)
 }
 
 // bidirRuns records the bidirectional runs of a mixed prompt, at the positions
@@ -222,67 +223,51 @@ func (s *Instance) tokensOf(spans []Span) func() {
 // loop indexes it the same way it indexes tokens. An embedding span's Tokens
 // name its rows' ids and are not looked up; a picture carrying tokens is a
 // caller bug and is refused rather than resolved by precedence.
-func (s *Instance) spanSrc(spans []Span) ([]func(dst []float32) error, error) {
+func (s *Instance) spanSrc(spans []Span) (rowSrc, error) {
 	c := s.c
 	total := 0
 	for i, sp := range spans {
 		if sp.Embd != nil && len(sp.Embd)%c.NEmbd != 0 {
-			return nil, fmt.Errorf("model: PrefillMixed: span %d is %d floats, not a multiple of n_embd %d",
+			return rowSrc{}, fmt.Errorf("model: PrefillMixed: span %d is %d floats, not a multiple of n_embd %d",
 				i, len(sp.Embd), c.NEmbd)
 		}
 		if sp.Embd != nil && sp.Tokens != nil {
 			if len(sp.Tokens) != sp.n(c.NEmbd) {
-				return nil, fmt.Errorf("model: PrefillMixed: span %d names %d token ids for %d rows",
+				return rowSrc{}, fmt.Errorf("model: PrefillMixed: span %d names %d token ids for %d rows",
 					i, len(sp.Tokens), sp.n(c.NEmbd))
 			}
 			for _, id := range sp.Tokens {
 				if int(id) < 0 || int(id) >= c.NVocab {
-					return nil, errToken{id, c.NVocab}
+					return rowSrc{}, errToken{id, c.NVocab}
 				}
 			}
 		}
 		total += sp.n(c.NEmbd)
 	}
 	if total == 0 {
-		return nil, errEmptyPrompt{}
+		return rowSrc{}, errEmptyPrompt{}
 	}
-	// Resolve position -> (span, row) once. A prompt is thousands of rows at
-	// most and this runs once per prefill, not per chunk.
-	src := make([]func(dst []float32) error, 0, total)
+	src := rowSrc{tok: make([]int32, 0, total)}
 	for _, sp := range spans {
-		sp := sp
 		if sp.Embd != nil {
-			for i := 0; i < sp.n(c.NEmbd); i++ {
-				i := i
-				src = append(src, func(dst []float32) error {
-					copy(dst, sp.Embd[i*c.NEmbd:(i+1)*c.NEmbd])
-					return nil
-				})
+			src.given = append(src.given, givenRun{at: len(src.tok), rows: sp.Embd})
+			if sp.Tokens != nil {
+				src.tok = append(src.tok, sp.Tokens...)
+				continue
+			}
+			for range sp.n(c.NEmbd) {
+				src.tok = append(src.tok, -1)
 			}
 			continue
 		}
 		for _, id := range sp.Tokens {
-			id := id
 			if int(id) < 0 || int(id) >= c.NVocab {
-				return nil, errToken{id, c.NVocab}
+				return rowSrc{}, errToken{id, c.NVocab}
 			}
-			src = append(src, func(dst []float32) error { return s.embedInto(dst, id) })
 		}
+		src.tok = append(src.tok, sp.Tokens...)
 	}
 	return src, nil
-}
-
-// embedInto is embed() writing somewhere other than s.x. Prompt rows are
-// filled from the pool's workers (embedRun), so it reads no instance scratch.
-func (s *Instance) embedInto(dst []float32, token int32) error {
-	m, c := s.m, s.c
-	if err := m.embedRow(dst, int(token)); err != nil {
-		return err
-	}
-	if c.EmbdScale != 1 {
-		s.scale(dst, float32(c.EmbdScale))
-	}
-	return nil
 }
 
 func (s *Instance) prefillInto(slot int, tokens []int32) ([]float32, error) {
@@ -295,7 +280,7 @@ func (s *Instance) prefillInto(slot int, tokens []int32) ([]float32, error) {
 	if slot == 0 {
 		s.kv.note(s.seqPos(0), tokens...)
 	}
-	return s.prefillSrc(slot, nil, tokens)
+	return s.prefillSrc(slot, tokenRows(tokens))
 }
 
 // ErrPrefillInterrupted is a prefill stopped between chunks because its
@@ -326,56 +311,40 @@ func (s *Instance) promptCalls(on bool) {
 // the tied embedding gather the rows itself (nn.EmbedDevice). rp, when not
 // nil, is every row's multi-axis rotary position (spanRope); nil rows advance
 // like text (ropeOf).
-func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []int32) ([]float32, error) {
+func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	if err := s.marksHeld(); err != nil {
 		return nil, err
 	}
 	m, c := s.m, s.c
-	// src nil: every row is a vocabulary lookup of ids, with no function a
-	// row (prefillInto), so a warm prompt makes no closure per token.
-	total := len(src)
-	if src == nil {
-		total = len(ids)
-	}
+	total := src.len()
 	if total == 0 {
 		return nil, errEmptyPrompt{}
 	}
 	// Every row's token for what reads it past the embedding (per-layer
-	// embeddings, DeepSeek V4's hash blocks): the prompt, or a mixed prompt's
-	// rows (tokensOf), -1 where a row has none. nil when neither has any.
-	rowIDs := ids
-	if rowIDs == nil {
-		rowIDs = s.spanTok
-	}
+	// embeddings, DeepSeek V4's hash blocks): -1 where a row has none.
+	rowIDs := src.tok
 	s.relocateFresh(total)
 	// One token is decode; the batched path would allocate megabytes to beat
 	// it by nothing. Single-sequence only, because Forward writes row 0; a
 	// batch slot takes the chunked path at any length.
-	if (total == 1 || total <= s.forwardRowsFor() && src == nil) && s.emb == nil && len(s.deep) == 0 {
+	if (total == 1 || total <= s.forwardRowsFor() && len(src.given) == 0) && s.emb == nil && len(s.deep) == 0 {
 		var lg []float32
 		var err error
 		s.forwardPrompts++
 		for i := range total {
-			s.tok = -1
-			if rowIDs != nil {
-				s.tok = rowIDs[i]
-			}
+			s.tok = rowIDs[i]
 			if lg, err = s.forward(func() error {
-				if src == nil {
+				g := src.givenAt(i, c.NEmbd)
+				if g == nil {
 					// A token's row, as a decode step embeds it.
-					return s.embed(ids[i])
+					return s.embed(rowIDs[i])
 				}
-				if err := s.fillRow(src, ids, i, s.x); err != nil {
-					return err
+				st := &s.cpu.embed
+				st.tok1[0], st.pos1[0] = max(rowIDs[i], 0), s.pos
+				if why := s.cpuGiven(s.x, s.ple, g, st.tok1[:], st.pos1[:]); why != composer.DeclineServes {
+					return s.embedDeclined(why)
 				}
 				s.m.trace(-1, "embd", s.x)
-				if c.PLEDim != 0 {
-					tok := int32(0) // a row with no id takes token 0's; see ple.go
-					if rowIDs != nil {
-						tok = max(rowIDs[i], 0)
-					}
-					return s.pleInputs(s.ple, tok, s.x)
-				}
 				return nil
 			}); err != nil {
 				return nil, err
@@ -394,14 +363,16 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 	s.promptCalls(true)
 	defer s.promptCalls(false)
 	// A bidirectional embedding run is one chunk: no row's attention exists
-	// until every row's k and v are in the cache.
+	// until every row's k and v are in the cache. A mean-pooled one is one
+	// chunk too: its readout pools every row in one call.
 	bidir := s.emb != nil && s.emb.bidir
+	whole := s.emb != nil && (s.emb.bidir || s.emb.pool == jlm.PoolMean)
 	chunkCap := s.chunkWidth()
 	// A speculation step that wants more than its last row's outputs runs as
 	// one chunk: the rows it wants are read out of the last chunk's residual,
 	// and a verification is a handful of rows.
 	spanAll := s.rows != nil && s.rows.from < total-1
-	if bidir || spanAll {
+	if whole || spanAll {
 		chunkCap = total
 	}
 	chunkRows := min(chunkCap, total)
@@ -455,7 +426,7 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 		// Asked per chunk, not once: while the tuner is cycling, successive
 		// chunks deliberately use different widths.
 		width := s.jit.PrefillChunk()
-		if bidir || spanAll {
+		if whole || spanAll {
 			width = total
 		}
 		// Snapped to the page boundary when a hybrid is being cached: a
@@ -476,7 +447,7 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 		// rows it carries, not the width: measured, d1-3B every block placed,
 		// 64 rows 13.3 ms and 512 57.4 ms on the V100 (CUDA), 116 ms and
 		// 834 ms on the M4 (Metal).
-		if s.devCount() > 0 && !bidir && !spanAll {
+		if s.devCount() > 0 && !whole && !spanAll {
 			width = s.deviceChunk()
 			// One submission's width when a run is in the prompt: a pipelined
 			// chunk is cut into pieces, and a piece must not cut a run.
@@ -506,64 +477,33 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 		// the residual before it fails, so a restart begins from the
 		// embeddings again.
 		//
-		// Over the pool: in the packed layout one row's words are a
-		// vocabulary's width apart (see Model.embedRow), so each row is many
-		// cache misses, and rows are independent.
-		gathered, composedRows := false, false
 		refill := func() error {
 			// On the card when the block run starts there and the device
 			// gathers the step's input rows (nn.Head.GatherRow), or its tier
 			// gathers the tied embedding: far faster than the host (EmbedRows).
 			// Its input rows are the front end's, a position table's included.
-			gathered, composedRows = false, false
-			if ids != nil && s.head != nil && s.devAt(s.lo) &&
+			// A model of per-layer embeddings gathers on the card only with
+			// every block there: a CPU block reads the per-layer inputs the
+			// CPU's input rows write.
+			if len(src.given) == 0 && s.head != nil && s.devAt(s.lo) && (c.PLEDim == 0 || s.allOnDevice()) &&
 				(s.head.GatherRow || s.c.TiedEmbd && c.PLEDim == 0 && m.posEmbd.e == nil) {
-				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(ids[base:base+n], p0, s.bx[:n*c.NEmbd]) {
-					gathered = true
+				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(rowIDs[base:base+n], p0, s.bx[:n*c.NEmbd]) {
 					return nil
 				}
 			}
-			// A chunk's token rows through the composed input rows, from this
-			// goroutine: the row, its scale, its position row and its
-			// per-layer inputs, which the wrappers below then leave be.
-			if src == nil {
-				var bple []float32
-				if c.PLEDim != 0 {
-					s.growBPLE(n)
-					bple = s.bple[:n*c.pleWidth()]
-				}
-				at := s.cpu.embed.positions(n)
-				for i := range at {
-					at[i] = p0 + i
-				}
-				if s.cpuEmbed(s.bx[:n*c.NEmbd], bple, ids[base:base+n], at) == composer.DeclineServes {
-					composedRows = true
-					return nil
-				}
-			}
-			return s.embedRun(src, ids, base, n)
-		}
-		// Gemma 4's per-layer inputs are built from each row's token and its
-		// embedding, inside refill for the same reason.
-		if c.PLEDim != 0 {
-			fill := refill
-			refill = func() error {
-				if err := fill(); err != nil || composedRows {
-					return err
-				}
-				w := c.pleWidth()
+			// The chunk's rows through the composed input rows, from this
+			// goroutine: a token's row, its scale, its position row and its
+			// per-layer inputs; a given row and its own.
+			var bple []float32
+			if c.PLEDim != 0 {
 				s.growBPLE(n)
-				for i := 0; i < n; i++ {
-					tok := int32(0) // a row with no id takes token 0's; see ple.go
-					if rowIDs != nil {
-						tok = max(rowIDs[base+i], 0)
-					}
-					if err := s.pleInputs(s.bple[i*w:(i+1)*w], tok, s.bx[i*c.NEmbd:(i+1)*c.NEmbd]); err != nil {
-						return err
-					}
-				}
-				return nil
+				bple = s.bple[:n*c.pleWidth()]
 			}
+			at := s.cpu.embed.positions(n)
+			for i := range at {
+				at[i] = p0 + i
+			}
+			return s.fillRows(src, base, n, s.bx[:n*c.NEmbd], bple, at)
 		}
 		// AltUp's other streams, from each row's embedding (altup.go), and
 		// DeepSeek V4's copies of it (ds4.go).
@@ -603,23 +543,6 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 					return err
 				}
 				s.q4eExpandAt(s.bx[:n*c.ResidW()], n, base)
-				return nil
-			}
-		}
-		// A learned position table (starcoder) is added inside refill, so every
-		// restart gets its positions back; serially, since one scratch row
-		// serves the loop.
-		if m.posEmbd.e != nil {
-			fill := refill
-			refill = func() error {
-				if err := fill(); err != nil || gathered || composedRows {
-					return err
-				}
-				for i := 0; i < n; i++ {
-					if err := m.addPos(s.bx[i*c.NEmbd:(i+1)*c.NEmbd], s.prow, p0+i); err != nil {
-						return err
-					}
-				}
 				return nil
 			}
 		}
@@ -780,7 +703,9 @@ func (s *Instance) prefillSrc(slot int, src []func(dst []float32) error, ids []i
 			s.addDeep(li, base, n)
 		}
 		if s.emb != nil {
-			s.emb.collect(s, base, n)
+			if err := s.emb.collect(s, base, n); err != nil {
+				return nil, err
+			}
 		}
 		if s.rowTap != nil {
 			s.rowTap(p0, s.bx[:n*c.ResidW()])
@@ -913,27 +838,11 @@ func (s *Instance) mm(out []float32, w tensor, x []float32, ntok int) error {
 	return nil
 }
 
-// batchNormB is batchNorm with the norm's bias, and it is Instance.norm per row:
-// a LayerNorm on a classic block (C6), an RMSNorm everywhere else.
-func (s *Instance) batchNormB(dst, src, weight, bias []float32, dim, ntok int) {
-	s.normRows(dst, src, weight, bias, dim, ntok, s.c.LayerNorm, s.c.RMSEps, 1)
-	s.jit.NewInput()
-}
-
-// normRows is Instance.norm over ntok rows of width dim on the pool, chunk rows
-// at a time: a LayerNorm with its bias where ln is set, an RMSNorm otherwise,
-// a copy where there is no weight.
-func (s *Instance) normRows(dst, src, weight, bias []float32, dim, ntok int, ln bool, eps float64, chunk int) {
-	j := &s.rg.rows
-	j.op, j.dst, j.src, j.w, j.b, j.dim, j.ln, j.eps = rowNorm, dst, src, weight, bias, dim, ln, eps
-	s.rowRun(ntok, chunk)
-}
-
 // axpyRows adds alpha*b to each of n rows of dst, b one row of width dim or,
 // where idx is set, the table whose row idx[r] goes to row r.
 func (s *Instance) axpyRows(dst, b []float32, idx []int32, dim, n, chunk int, alpha float32) {
 	j := &s.rg.rows
-	j.op, j.dst, j.b, j.idx, j.dim, j.alpha = rowAxpy, dst, b, idx, dim, alpha
+	j.dst, j.b, j.idx, j.dim, j.alpha = dst, b, idx, dim, alpha
 	s.rowRun(n, chunk)
 }
 
@@ -1067,8 +976,6 @@ func (s *Instance) growBatch(chunk int) {
 	}
 	s.bqf = scratch(h.bqf, chunk*qDim, 0)
 	s.bxbf = scratch(h.bxbf, chunk*qDim, 0)
-	s.growMLABatch(chunk)
-	s.growMSARows(chunk)
 }
 
 type errEmptyPrompt struct{}

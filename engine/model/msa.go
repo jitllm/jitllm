@@ -66,28 +66,3 @@ func loadMSA(l *layer, bi int32, cfg *Config,
 	}
 	return nil
 }
-
-// allocMSA sizes the decode token's selection buffers.
-func (s *Instance) allocMSA() {
-	c := s.m.Cfg
-	if !c.MSA() {
-		return
-	}
-	s.msaQ = make([]float32, c.IdxHeads*c.IdxHeadDim)
-	s.msaTmp = make([]float32, s.attStride)
-	s.msaBias = make([]float32, c.IdxHeads*s.attStride)
-	s.msaKept = make([]bool, s.attStride/c.IdxBlock+1)
-	s.msaOrd.Reserve(s.maxSeq)
-}
-
-// growMSARows sizes a chunk's: each row's query, key and masks.
-func (s *Instance) growMSARows(n int) {
-	c := s.m.Cfg
-	if !c.MSA() || len(s.msaMasks) >= n {
-		return
-	}
-	s.bmsaQ = make([]float32, n*c.IdxHeads*c.IdxHeadDim)
-	s.bmsaK = make([]float32, n*c.IdxHeadDim)
-	s.bmsaBias = make([]float32, n*c.IdxHeads*s.attStride)
-	s.msaMasks = make([][]float32, n)
-}

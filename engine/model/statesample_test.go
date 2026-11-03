@@ -1,10 +1,10 @@
 package model
 
 import (
-	"math"
 	"os"
-	"sort"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // TestStateSampleIsComposed requires every token Instance.Sample draws on the
@@ -45,7 +45,7 @@ func TestStateSampleIsComposed(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			st := m.NewInstance(96)
 			defer st.Close()
-			composed, host, peek := c.smp, c.smp, c.smp
+			composed, peek := c.smp, c.smp
 			lg, err := st.Prefill([]int32{1, 450, 3014, 471, 263})
 			if err != nil {
 				t.Fatal(err)
@@ -54,25 +54,24 @@ func TestStateSampleIsComposed(t *testing.T) {
 			const draws = 48
 			near := 0
 			for i := range draws {
-				hist := append([]int32(nil), host.hist...)
+				var hist []int
+				for _, h := range peek.hist {
+					hist = append(hist, int(h))
+				}
 				u := peek.uniform()
-				got, want := st.Sample(&composed, lg), host.Sample(lg)
-				if c.smp.TopK > 0 || c.smp.MinP > 0 || c.smp.TopP > 0 && c.smp.TopP < 1 {
-					if got != want {
-						t.Fatalf("draw %d: the composed draw is %d, the host sampler's %d", i, got, want)
-					}
-				} else if ref, mg := rowMargin(lg, hist, float32(c.smp.RepeatPen), float32(1/c.smp.Temp), u); got != ref {
+				got, err := st.Sample(&composed, lg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ref, mg := sampleRef(lg, hist, c.smp, u); got != ref {
 					if mg >= 1e-6 {
 						t.Fatalf("draw %d: the composed draw is %d, its definition's %d (u %.9f, margin %.3g)", i, got, ref, u, mg)
 					}
 					near++
-				} else {
-					want = ref
 				}
-				composed.Observe(want)
-				host.Observe(want)
-				peek.Observe(want)
-				if lg, err = st.Forward(want); err != nil {
+				composed.Observe(got)
+				peek.Observe(got)
+				if lg, err = st.Forward(got); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -93,50 +92,22 @@ func TestStateSampleIsComposed(t *testing.T) {
 	}
 }
 
-// rowMargin is how far the walk's point at u sits from the nearest edge of
-// the cumulative mass of the penalized row's softmax at 1/T in its order (the
-// larger first, the lower id of two equal), as a share of the mass, in
-// float64: the draw with no top-k and no cut, as the host sampler draws it;
-// and the token the walk lands on.
-func rowMargin(logits []float32, hist []int32, pen, invT float32, u float64) (int32, float64) {
-	v := append([]float32(nil), logits...)
-	if pen > 1 {
-		seen := map[int32]bool{}
-		for _, h := range hist {
-			if seen[h] {
-				continue
-			}
-			seen[h] = true
-			if v[h] > 0 {
-				v[h] /= pen
-			} else {
-				v[h] *= pen
-			}
-		}
+// sampleRef is the draw s makes over logits at u by its definition
+// (internal/oracle): the walk over a top-k's candidates, else the cut, which
+// is the row's where no cut fires; and how far the draw is from flipping.
+func sampleRef(logits []float32, hist []int, s Sampler, u float64) (int32, float64) {
+	pen := float32(1)
+	if s.RepeatPen > 1 && len(hist) > 0 {
+		pen = float32(s.RepeatPen)
 	}
-	m := math.Inf(-1)
-	for _, x := range v {
-		m = max(m, float64(x*invT))
+	invT := float32(1 / s.Temp)
+	topp, minp := s.cuts()
+	if s.TopK > 0 && s.TopK < len(logits) {
+		v := append([]float32(nil), logits...)
+		oracle.PenalizeOnce(v, hist, pen)
+		tok, mg := oracle.SampleWalk(v, s.TopK, s.TopK, float64(invT), float64(topp), float64(minp), u)
+		return int32(tok), mg
 	}
-	q := make([]float64, len(v))
-	mass := 0.0
-	for i, x := range v {
-		q[i] = math.Exp(float64(x*invT) - m)
-		mass += q[i]
-	}
-	order := make([]int, len(v))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return q[order[a]] > q[order[b]] })
-	target, upto, margin := u*mass, 0.0, math.Inf(1)
-	tok := int32(-1)
-	for _, i := range order {
-		upto += q[i]
-		margin = min(margin, math.Abs(upto-target)/mass)
-		if tok < 0 && upto > target {
-			tok = int32(i)
-		}
-	}
-	return tok, margin
+	tok, mg := oracle.SampleCut(logits, hist, pen, invT, float64(topp), float64(minp), u)
+	return int32(tok), mg
 }

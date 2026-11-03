@@ -16,12 +16,6 @@ package cpu
 // constants; Y0..Y6 are free.
 func EmitSoftmax() []byte { return emitSoftmax(false) }
 
-// EmitLogSoftmax is EmitSoftmax's log form, in place over a row of runtime
-// length with the same Args: x[i] - max - ln(sum exp(x - max)). Pass 2 sums
-// without storing, the log of the sum is taken once in vector registers
-// (emitLnSum), and pass 3 subtracts max + ln(sum) from the row.
-func EmitLogSoftmax() []byte { return emitSoftmax(true) }
-
 func emitSoftmax(log bool) []byte {
 	var a Buf
 	a.MOVLoad(RCX, At(RDI, 0))  // Out -> the row, read and written in place

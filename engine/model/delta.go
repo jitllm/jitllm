@@ -145,8 +145,8 @@ func (g deltaGeom) deltaStateLen() int { return g.vHeads * g.vDim * g.kDim }
 // and the tail after it (Config.recTailLen).
 func (g deltaGeom) stateStride() int { return g.deltaStateLen() + g.tail }
 
-// allocRecurrent sizes the recurrent state and the scratch the delta rule
-// needs. Both are nil for every architecture that is not a hybrid.
+// allocRecurrent sizes the recurrent state, nil for every architecture that
+// is not a hybrid.
 //
 // It is per sequence, like the KV cache: a batched session's rows share the
 // weights and nothing else.
@@ -165,41 +165,6 @@ func (s *Instance) allocRecurrent(nseq int) {
 		}
 		s.rconv[i] = make([]float32, nseq*g.convStateLen())
 		s.rstate[i] = make([]float32, nseq*g.stateStride())
-	}
-	s.dMixed = make([]float32, g.chans)
-	if g.mamba1 {
-		s.dLowRank = make([]float32, g.rank)
-		s.dSB, s.dSC = make([]float32, g.kDim), make([]float32, g.kDim)
-		s.dZeroA = make([]float32, g.vHeads)
-	}
-	if c.ShortConv() {
-		// B and C, the short convolution's two gates.
-		s.dZ = make([]float32, 2*g.chans)
-	} else {
-		s.dZ = make([]float32, g.vHeads*g.vDim)
-	}
-	// KDA's decay is per channel, so its gate buffers are vHeads*kDim wide;
-	// qwen3next's are vHeads.
-	nGate := g.vHeads
-	if g.chanDecay {
-		nGate = g.vHeads * g.kDim
-	}
-	s.dBA = make([]float32, 2*g.vHeads)
-	s.dDecay = make([]float32, nGate)
-	s.dBeta = make([]float32, g.vHeads)
-	s.dAlpha = make([]float32, nGate)
-	s.dBRaw = make([]float32, g.vHeads)
-	if g.chanDecay {
-		s.dLowRank = make([]float32, g.rank)
-		// The gate kernel writes both outputs, and KDA wants them at two
-		// different lengths: the decay over vHeads*kDim and beta over vHeads.
-		// dGateWaste receives whichever half the call in question is not for.
-		s.dGateWaste = make([]float32, nGate)
-	}
-	s.dOut = make([]float32, g.vHeads*g.vDim)
-	s.dOnes = make([]float32, g.kDim)
-	for i := range s.dOnes {
-		s.dOnes[i] = 1
 	}
 }
 

@@ -28,11 +28,21 @@ type Profile struct {
 
 // on is the profile p forms by on device d.
 func (p Profile) on(d Device) Profile {
-	if p.Narrow != nil && d.ISA&p.Floor == p.Floor && d.ISA&p.Wide != p.Wide {
+	if p.narrows(d) {
 		p.Passes, p.Narrow = p.Narrow, nil
 	}
 	return p
 }
+
+// narrows reports whether p forms device d's kernels from its narrow passes.
+func (p Profile) narrows(d Device) bool {
+	return p.Narrow != nil && d.ISA&p.Floor == p.Floor && d.ISA&p.Wide != p.Wide
+}
+
+// NarrowsCPU reports whether the composer forms CPU device d's kernels from
+// its narrow passes: an x86 host without AVX2, FMA and F16C, whose binary16
+// conversions are software. An arm64 states neither set and never does.
+func NarrowsCPU(d Device) bool { return cpuProfile().narrows(d) }
 
 // Int8Form is the int8 form a device keeps of a block's contraction inputs
 // produced by a row's op: windows of Window by an exact scale amax/127,

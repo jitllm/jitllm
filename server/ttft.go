@@ -328,9 +328,10 @@ func (e *Engine) warm(lm *LoadedModel) error {
 	var next int32
 	if err := s.ms.Run(ctx, model.PhasePrefill, func(in *model.Instance) error {
 		lg, err := in.Prefill(ids)
-		if err == nil {
-			next = in.Sample(nil, lg)
+		if err != nil {
+			return err
 		}
+		next, err = in.Sample(nil, lg)
 		return err
 	}); err != nil {
 		return fmt.Errorf("server: warming %q: %w", lm.id, err)

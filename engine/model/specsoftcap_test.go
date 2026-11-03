@@ -211,6 +211,11 @@ func specVerifyCapped(t *testing.T, m *Model, dev nn.LayerDevice, prompt, toks [
 		want = append(want, slices.Clone(lg))
 	}
 	dec.Close()
+	if noCap {
+		// The verify rows' head composed with no final softcap: the
+		// instance composes its head at placement.
+		defer cfgMut(m, func(c *Config) { c.FinalSoftcap = 0 })()
+	}
 	rs := open()
 	defer rs.Close()
 	if dev != nil && !rs.rowsVerifiable() {
@@ -218,11 +223,11 @@ func specVerifyCapped(t *testing.T, m *Model, dev nn.LayerDevice, prompt, toks [
 	}
 	worst := 0.0
 	for i := 0; i < len(toks); i += k {
-		out := rowsOut{logits: make([]float32, k*c.NVocab), hidden: make([]float32, k*c.NEmbd), noCap: noCap}
+		out := rowsOut{logits: make([]float32, k*c.NVocab), hidden: make([]float32, k*c.NEmbd)}
 		func() {
 			defer m.enterPager()()
 			rs.kv.note(rs.seqPos(0), toks[i:i+k]...)
-			if err := rs.stepRows(embedSrc(rs, toks[i:i+k]), toks[i:i+k], &out); err != nil {
+			if err := rs.stepRows(tokenRows(toks[i:i+k]), &out); err != nil {
 				t.Fatal(err)
 			}
 		}()

@@ -1612,18 +1612,23 @@ type tokenDecoder interface {
 	Decode(ids []int32) string
 }
 
-// takeLogprob is the event's copy of one step's logprobs: the working set is
-// reused next step, so the event owns its own slice.
-func takeLogprob(l *model.Logprobs, v tokenDecoder, logits []float32, next int32) *TokenLogprob {
+// takeLogprob is the event's copy of one step's logprobs, from in's
+// composed log-softmax: the working set is reused next step, so the event
+// owns its own slice.
+func takeLogprob(in *model.Instance, l *model.Logprobs, v tokenDecoder, logits []float32, next int32) (*TokenLogprob, error) {
 	if l == nil {
-		return nil
+		return nil, nil
 	}
-	out := &TokenLogprob{Text: v.Decode([]int32{next}), Logprob: l.Take(logits, next)}
+	lp, err := in.Logprobs(l, logits, next)
+	if err != nil {
+		return nil, err
+	}
+	out := &TokenLogprob{Text: v.Decode([]int32{next}), Logprob: lp}
 	out.Top = make([]TopToken, len(l.Top))
 	for i, t := range l.Top {
 		out.Top[i] = TopToken{ID: t.ID, Text: v.Decode([]int32{t.ID}), Logprob: t.Logprob}
 	}
-	return out
+	return out, nil
 }
 
 // FinishReason mirrors the proto enum.
@@ -2010,21 +2015,28 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			next = pending
 			sampler.Observe(next)
 		case sp == nil:
-			lg := logits
-			if con != nil && n+1 != o.maskSkip {
-				lg = con.mask(logits)
-			}
 			in, err := s.ms.Hold(ctx, model.PhaseGenerate)
 			if err != nil {
 				return err
 			}
-			next = in.Sample(&sampler, lg)
+			lg := logits
+			if con != nil && n+1 != o.maskSkip {
+				lg, err = con.mask(in, logits)
+			}
+			if err == nil {
+				next, err = in.Sample(&sampler, lg)
+			}
+			if err == nil {
+				// The model's raw distribution, before the grammar's mask, as
+				// before temperature and penalties: vLLM's default
+				// (raw_logprobs).
+				tlp, err = takeLogprob(in, lpw, lm.m.Vocab, logits, next)
+			}
 			s.ms.Unhold(in)
+			if err != nil {
+				return err
+			}
 			sampler.Observe(next)
-			// The model's raw distribution, before the grammar's mask, as
-			// before temperature and penalties: vLLM's default
-			// (raw_logprobs).
-			tlp = takeLogprob(lpw, lm.m.Vocab, logits, next)
 			if con != nil && !con.accept(next) {
 				if n+1 != o.maskSkip {
 					return fmt.Errorf("server: token %d is outside the grammar its mask allowed", next)
