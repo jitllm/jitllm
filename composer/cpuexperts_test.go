@@ -191,7 +191,7 @@ func TestComposedCPUExpertPages(t *testing.T) {
 									return sw
 								case o.Kind == OperandValue && o.Value == y[0]:
 									return out
-								case o.Kind == OperandTable && o.Name == tableExperts.Name:
+								case o.Kind == OperandTable && o.Name == TableExperts.op().Name:
 									return tab
 								}
 								return nil

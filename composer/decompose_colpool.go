@@ -28,7 +28,7 @@ func decomposeColPool(o graph.Op, c *Context) ([]Prim, error) {
 	if err := pool.check(a.Width); err != nil {
 		return nil, err
 	}
-	keys := pool.operand(tableKeys)
+	keys := pool.operand(TableKeys.op())
 	U, F := ir.U32, ir.F32
 	R, D, S := c.Step.Rows, a.HeadDim, halves*a.Span
 	hs := history{a: a, pageSize: c.Step.Page}
@@ -38,7 +38,9 @@ func decomposeColPool(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	gmax, wts, sums, acc := tmp("gmax"), tmp("w"), tmp("sum"), tmp("acc")
 	minus := math.Float32frombits(0xff7fffff)
-	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
+	tables := func(ops ...Operand) []Operand {
+		return append([]Operand{ops[0], TableRows.op(), TablePages.op()}, ops[1:]...)
+	}
 	flat := Facts{Extents: map[int]int{1: R * rowWords, 2: c.pages()}}
 
 	// slot is slot j's (coordinate 2) hold and its column's element at at of

@@ -42,7 +42,7 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	if lead > 0 {
 		x.sel(F, rowBefore(&x, row, lead), x.f(0), v)
 	}
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), tableRequest, tablePos}, Out: c.value(o.Out[0]), Expr: x.e,
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op(), TablePos.op()}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R, 2: R + 1}}}}, nil
 }
 
@@ -89,7 +89,7 @@ func decomposeRegroup(o graph.Op, c *Context) ([]Prim, error) {
 	colm := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpRem, U, g, gsw), u(S)), x.op(OpRem, U, slot, u(S)))
 	p := x.op(OpAdd, U, x.op(OpMul, U, row, gw), colm)
 	x.at(0, ish, x.op(OpMin, U, p, u(R-1)), e)
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), tableRequest}, Out: c.value(o.Out[0]), Expr: x.e,
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R}}}}, nil
 }
 
@@ -123,7 +123,7 @@ func decomposeTailRow(o graph.Op, c *Context) ([]Prim, error) {
 	in, tail := x.at(0, sh, r, i), x.at(1, []int{sh[1]}, i)
 	live := x.load(2, x.u(0))
 	x.sel(ir.F32, x.op(OpLess, ir.Pred, x.op(OpAdd, U, r, x.u(1)), live), in, tail)
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}, tablePos},
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}, TablePos.op()},
 		Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{2: sh[0] + 1}}}}, nil
 }
 
@@ -159,7 +159,7 @@ func decomposePosResample(o graph.Op, c *Context) ([]Prim, error) {
 	R, E, S := sh[0], sh[1], a.Span
 	var x exprs
 	r, e := x.coord(0), x.coord(1)
-	in := []Operand{tablePos, tableRequest}
+	in := []Operand{TablePos.op(), TableRequest.op()}
 	facts := Facts{Extents: map[int]int{0: R + 1, 1: RequestRows + R}}
 	lead := uint32(a.Offset)
 	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), x.u(1))
@@ -280,7 +280,7 @@ func decomposePosAxes(o graph.Op, c *Context) ([]Prim, error) {
 	R, E, A := sh[0], sh[1], uint32(a.Span)
 	var x exprs
 	r, e := x.coord(0), x.coord(1)
-	in := []Operand{tablePos, tableRequest}
+	in := []Operand{TablePos.op(), TableRequest.op()}
 	facts := Facts{Extents: map[int]int{0: R + 1, 1: RequestRows + R}}
 	lead := uint32(a.Offset)
 	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), x.u(1))
@@ -320,6 +320,6 @@ func decomposeSplice(o graph.Op, c *Context) ([]Prim, error) {
 	none := x.op(OpLess, ir.Pred, x.u(SpliceNone-1), at)
 	pic := x.at(1, []int{P, Wp}, x.op(OpMin, U, at, x.u(uint32(P-1))), e)
 	x.sel(F, none, x.at(0, sh, r, e), pic)
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1]), tableRequest}, Out: c.value(o.Out[0]),
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1]), TableRequest.op()}, Out: c.value(o.Out[0]),
 		Expr: x.e, Facts: Facts{Extents: map[int]int{1: P * Wp, 2: RequestRows + R}}}}, nil
 }

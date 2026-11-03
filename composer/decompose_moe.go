@@ -297,7 +297,6 @@ func sheetRow(o graph.Op, x *exprs, wo Operand, l jlm.TypeLayout, in *[]Operand,
 
 // tableExperts is the step's table of a bank held in pages: a word an
 // expert, the sheet of the held bank that holds it.
-var tableExperts = tableOp(TableExperts, 0, ir.U32)
 
 // pageOf is the sheet of o's bank that holds expert sheet, and how many
 // sheets the bank holds: where the call site holds the bank in pages
@@ -311,7 +310,7 @@ func pageOf(o graph.Op, c *Context, x *exprs, in *[]Operand, f *Facts, sheet int
 		return sheet, w.Sheets
 	}
 	at := len(*in)
-	*in = append(*in, tableExperts)
+	*in = append(*in, TableExperts.op())
 	if f.Extents == nil {
 		f.Extents = map[int]int{}
 	}
@@ -464,7 +463,7 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 		return x.sel(U, less(x, s, x.op(OpMul, U, live, x.u(uint32(P)))), e, x.u(uint32(E)))
 	}
 	keyed := func() ([]Operand, Facts) {
-		return []Operand{sel, tableCall}, Facts{Extents: map[int]int{0: Q, 1: 1}}
+		return []Operand{sel, TableCall.op()}, Facts{Extents: map[int]int{0: Q, 1: 1}}
 	}
 	// pairOf is grouped row p's pair: inputs at, at+1, at+2 and at+3 the
 	// blocks' experts, the runs' starts, the counts and the table.
@@ -797,9 +796,9 @@ func stateConvWindow(o graph.Op, w int) (convWindow, error) {
 		if a.Offset < 0 || a.Span < a.Offset+w {
 			return convWindow{}, fmt.Errorf("a state convolution's window of %d at %d of a state slot of %d", w, a.Offset, a.Span)
 		}
-		return convWindow{in: tableRecState, out: tableRecStateOut, stride: a.Span, off: a.Offset, extent: a.Offset + w}, nil
+		return convWindow{in: TableRecState.op(), out: TableRecStateOut.op(), stride: a.Span, off: a.Offset, extent: a.Offset + w}, nil
 	}
-	return convWindow{in: tableRecConv, out: tableRecConvOut, stride: w, extent: w}, nil
+	return convWindow{in: TableRecConv.op(), out: TableRecConvOut.op(), stride: w, extent: w}, nil
 }
 
 // slot is the window's first element in the slot the step's descriptor
@@ -845,7 +844,7 @@ func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
 
 	var x exprs
 	ch := x.coord(1)
-	tapIn := []Operand{in, cw.in, tableRecRows}
+	tapIn := []Operand{in, cw.in, TableRecRows.op()}
 	facts := Facts{Extents: map[int]int{1: cw.extent, 2: 3}}
 	tap := func(t int) int {
 		v, _ := weightElement(&x, wo, C, T, &tapIn, &facts, ch, x.u(uint32(t)))
@@ -874,12 +873,12 @@ func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
 	to := k.op(OpAdd, U, cw.slot(&k, 1, 2), ix)
 	ps := []Prim{{Kind: PrimMap, Shape: []int{1, C}, In: tapIn, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}
 	if H > 1 {
-		ps = append(ps, Prim{Kind: PrimMap, Shape: []int{H - 1, C}, In: []Operand{cw.in, tableRecRows}, Expr: n.e,
+		ps = append(ps, Prim{Kind: PrimMap, Shape: []int{H - 1, C}, In: []Operand{cw.in, TableRecRows.op()}, Expr: n.e,
 			Facts: Facts{Extents: map[int]int{0: cw.extent, 1: 3}}, Stores: []PrimStore{{Out: next, Index: nix, Value: len(n.e) - 1, Extent: W}}})
 	}
 	return append(ps,
 		Prim{Kind: PrimMap, Shape: []int{1, C}, In: []Operand{in}, Expr: m.e, Stores: []PrimStore{{Out: next, Index: mix, Value: mv, Extent: W}}},
-		Prim{Kind: PrimMap, Shape: []int{H, C}, In: []Operand{next, tableRecRows}, Expr: k.e, Facts: Facts{Extents: map[int]int{0: W, 1: 3}},
+		Prim{Kind: PrimMap, Shape: []int{H, C}, In: []Operand{next, TableRecRows.op()}, Expr: k.e, Facts: Facts{Extents: map[int]int{0: W, 1: 3}},
 			Stores: []PrimStore{{Out: cw.out, Index: to, Value: v, Extent: cw.extent}}},
 	), nil
 }
@@ -944,7 +943,7 @@ func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
 
 	var x exprs
 	r, ch := x.coord(0), x.coord(1)
-	tapIn := []Operand{src, cw.in, tableRecRows}
+	tapIn := []Operand{src, cw.in, TableRecRows.op()}
 	facts := Facts{Extents: maps.Clone(ext)}
 	n := x.load(desc, x.u(0))
 	rr := x.op(OpMin, U, r, x.op(OpSub, U, x.op(OpMax, U, n, x.u(1)), x.u(1)))
@@ -975,8 +974,8 @@ func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
 	wv := value(&w, wa, w.op(OpAdd, U, wa.count, wr), wc)
 	to := w.op(OpAdd, U, slot(&w, wa, 2), w.op(OpAdd, U, w.op(OpMul, U, wr, w.u(uint32(C))), wc))
 	ps := []Prim{{Kind: PrimMap, Shape: []int{R, C}, In: tapIn, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}
-	if cw.in != tableRecState {
-		return append(ps, Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{src, cw.in, tableRecRows}, Expr: w.e,
+	if cw.in != TableRecState.op() {
+		return append(ps, Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{src, cw.in, TableRecRows.op()}, Expr: w.e,
 			Facts: Facts{Extents: maps.Clone(ext)}, Stores: []PrimStore{{Out: cw.out, Index: to, Value: wv, Extent: cw.extent}}}), nil
 	}
 	// A window in the state's slots may be read and written in one storage:
@@ -989,9 +988,9 @@ func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
 	kv := k.load(0, k.op(OpAdd, U, k.op(OpMul, U, k.op(OpAdd, U, k.op(OpMul, U, kj, k.u(uint32(H))), kr), k.u(uint32(C))), kc))
 	kto := k.op(OpAdd, U, slot(&k, ka, 2), k.op(OpAdd, U, k.op(OpMul, U, kr, k.u(uint32(C))), kc))
 	return append(ps,
-		Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{src, cw.in, tableRecRows}, Expr: w.e,
+		Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{src, cw.in, TableRecRows.op()}, Expr: w.e,
 			Facts: Facts{Extents: maps.Clone(ext)}, Stores: []PrimStore{{Out: next, Index: nix, Value: wv, Extent: R * W}}},
-		Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{next, cw.in, tableRecRows}, Expr: k.e,
+		Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{next, cw.in, TableRecRows.op()}, Expr: k.e,
 			Facts:  Facts{Extents: map[int]int{0: R * W, 1: cw.extent, desc: RunDescWords(R)}},
 			Stores: []PrimStore{{Out: cw.out, Index: kto, Value: kv, Extent: cw.extent}}},
 	), nil
@@ -1022,7 +1021,7 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	var x exprs
 	ch := x.coord(1)
-	in := []Operand{c.value(o.In[0]), tablePos}
+	in := []Operand{c.value(o.In[0]), TablePos.op()}
 	facts := Facts{Extents: map[int]int{1: R + 1}}
 	live := x.op(OpMax, U, x.load(1, x.u(0)), x.u(1))
 	r := x.op(OpMin, U, x.coord(0), x.op(OpSub, U, live, x.u(1)))
@@ -1030,7 +1029,7 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 	// rows its descriptor states (RowWindows).
 	lo, hi := x.u(0), live
 	if o.Attr.RowWindows {
-		in = append(in, tableWindows)
+		in = append(in, TableWindows.op())
 		facts.Extents[2] = R * rowWords
 		at := func(w int) int { return x.load(2, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(uint32(w)))) }
 		lo, hi = at(rowStart), x.op(OpMin, U, at(rowEnd), live)

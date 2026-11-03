@@ -33,10 +33,42 @@ type a64Lowerer struct {
 }
 
 // a64GPR is the X register each of the profile's general registers is.
-var a64GPR = [16]cpu.XReg{
-	x86.RAX: cpu.X1, x86.RCX: cpu.X2, x86.RDX: cpu.X3, x86.RBX: cpu.X4, x86.RSP: cpu.SP, x86.RBP: cpu.X5,
-	x86.RSI: cpu.X6, x86.RDI: cpu.X0, x86.R8: cpu.X7, x86.R9: cpu.X8, x86.R10: cpu.X9, x86.R11: cpu.X10,
-	x86.R12: cpu.X11, x86.R13: cpu.X12, x86.R14: cpu.X13, x86.R15: cpu.X14,
+func a64GPR(r x86.Reg) cpu.XReg {
+	switch r {
+	case x86.RAX:
+		return cpu.X1
+	case x86.RCX:
+		return cpu.X2
+	case x86.RDX:
+		return cpu.X3
+	case x86.RBX:
+		return cpu.X4
+	case x86.RSP:
+		return cpu.SP
+	case x86.RBP:
+		return cpu.X5
+	case x86.RSI:
+		return cpu.X6
+	case x86.RDI:
+		return cpu.X0
+	case x86.R8:
+		return cpu.X7
+	case x86.R9:
+		return cpu.X8
+	case x86.R10:
+		return cpu.X9
+	case x86.R11:
+		return cpu.X10
+	case x86.R12:
+		return cpu.X11
+	case x86.R13:
+		return cpu.X12
+	case x86.R14:
+		return cpu.X13
+	case x86.R15:
+		return cpu.X14
+	}
+	return cpu.X0
 }
 
 const (
@@ -99,7 +131,7 @@ func (e *a64Lowerer) fail(format string, args ...any) {
 	}
 }
 
-func (e *a64Lowerer) gp(r x86.Reg) cpu.XReg { return a64GPR[r&15] }
+func (e *a64Lowerer) gp(r x86.Reg) cpu.XReg { return a64GPR(r & 15) }
 
 func lo(r x86.Reg) cpu.VReg { return cpu.VReg(2 * r) }
 func hi(r x86.Reg) cpu.VReg { return cpu.VReg(2*r + 1) }
@@ -122,13 +154,13 @@ func (e *a64Lowerer) slot(op cpu.A64Access, rt uint8, s int) {
 func (e *a64Lowerer) reg(i int) x86.Reg {
 	nd := e.k.Nodes[i]
 	if nd.Spill < 0 {
-		r := spillRegs[e.reloads%2]
+		r := spillReg(e.reloads)
 		e.reloads++
 		e.access(cpu.A64LdrX, uint8(e.gp(r)), a64Mem{cpu.X0, int32(nd.Imm)})
 		return r
 	}
 	if s := nd.Spill; s > 0 && i != e.cur {
-		r := spillRegs[e.reloads%2]
+		r := spillReg(e.reloads)
 		e.reloads++
 		e.slot(cpu.A64LdrX, uint8(e.gp(r)), s)
 		return r

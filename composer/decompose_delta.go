@@ -15,13 +15,6 @@ import (
 // a slot of its ".out" (the same storage, or the pool's other half), the
 // slots the step's recurrent descriptor names ("rec.rows": the rows, then
 // the slot read and the slot written).
-var (
-	tableRecState    = partTable(TableRecState)
-	tableRecStateOut = partTable(TableRecStateOut)
-	tableRecConv     = partTable(TableRecConv)
-	tableRecConvOut  = partTable(TableRecConvOut)
-	tableRecRows     = tableOp(TableRecRows, 0, ir.U32)
-)
 
 // slotLen is a delta rule's state floats a sequence: its n, and the tail
 // past them where the op states one (graph.OpDeltaRule's Span).
@@ -131,14 +124,14 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 		ps = append(ps, Prim{Kind: PrimMap, Shape: sh[:3], In: []Operand{v, beta}, Out: delta, Expr: e.e})
 	} else {
 		ps = append(ps,
-			Prim{Kind: PrimReduce, Shape: sh, In: []Operand{tableRecState, k, decay, tableRecRows}, Out: sk, Combine: OpAdd, Expr: s.e, Facts: desc(3)},
+			Prim{Kind: PrimReduce, Shape: sh, In: []Operand{TableRecState.op(), k, decay, TableRecRows.op()}, Out: sk, Combine: OpAdd, Expr: s.e, Facts: desc(3)},
 			Prim{Kind: PrimMap, Shape: sh[:3], In: []Operand{v, sk, beta}, Out: delta, Expr: e.e})
 	}
 	return append(ps,
-		Prim{Kind: PrimMap, Shape: sh, In: []Operand{tableRecState, k, delta, decay, tableRecRows}, Out: next, Expr: u.e, Facts: desc(4)},
+		Prim{Kind: PrimMap, Shape: sh, In: []Operand{TableRecState.op(), k, delta, decay, TableRecRows.op()}, Out: next, Expr: u.e, Facts: desc(4)},
 		Prim{Kind: PrimReduce, Shape: sh, In: []Operand{next, q}, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: y.e},
-		Prim{Kind: PrimMap, Shape: []int{H * Dv, Dk}, In: []Operand{next, tableRecRows}, Expr: w.e, Facts: whole,
-			Stores: []PrimStore{{Out: tableRecStateOut, Index: to, Value: val, Extent: N}}},
+		Prim{Kind: PrimMap, Shape: []int{H * Dv, Dk}, In: []Operand{next, TableRecRows.op()}, Expr: w.e, Facts: whole,
+			Stores: []PrimStore{{Out: TableRecStateOut.op(), Index: to, Value: val, Extent: N}}},
 	), nil
 }
 
@@ -154,11 +147,11 @@ func deltaScan(o graph.Op, c *Context, H, KH, Dk, Dv int, chanDecay bool) ([]Pri
 	R := c.Step.Rows
 	N := H * Dv * Dk
 	q, k, v, decay, beta := c.value(o.In[0]), c.value(o.In[1]), c.value(o.In[2]), c.value(o.In[3]), c.value(o.In[4])
-	in := []Operand{q, k, v, decay, beta, tableRecState, tableRecRows}
+	in := []Operand{q, k, v, decay, beta, TableRecState.op(), TableRecRows.op()}
 	if c.scanLoops {
 		// The state is read where it is written, each run's start in its
 		// slot read of that table.
-		in[5] = tableRecStateOut
+		in[5] = TableRecStateOut.op()
 	}
 	const desc = 6
 	var x exprs
@@ -194,7 +187,7 @@ func deltaScan(o graph.Op, c *Context, H, KH, Dk, Dv int, chanDecay bool) ([]Pri
 	y := x.un(OpGroupSum, F, x.op(OpMul, F, next, x.at(0, []int{R, KH, Dk}, r, kh, i)))
 	return []Prim{{Kind: PrimScan, Shape: []int{H, Dv, Dk}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: c.value(o.Out[0]), Ax: []int{r, h, j}, Ext: []int{R, H, Dv}, Value: y}},
-		Scan:   &Scan{Desc: desc, Init: init, Next: next, Final: tableRecStateOut, Index: final, Extent: N, Loops: c.scanLoops, From: from},
+		Scan:   &Scan{Desc: desc, Init: init, Next: next, Final: TableRecStateOut.op(), Index: final, Extent: N, Loops: c.scanLoops, From: from},
 		Facts:  Facts{Extents: map[int]int{5: N, desc: RunDescWords(R)}}}}, nil
 }
 

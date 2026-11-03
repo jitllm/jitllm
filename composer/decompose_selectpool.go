@@ -83,13 +83,13 @@ func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(.
 		if err != nil {
 			return nil, err
 		}
-		planes := tableOp(TablePlanes, table.Instance, ir.Void)
+		planes := TablePlanes.of(table.Instance)
 		tab := tmp("pooltab")
 		var tx exprs
 		tb, tp := tx.coord(0), tx.coord(1)
 		cvs, svs, quarter := ropeTurn(&tx, tx.op(OpMul, U, tb, tx.u(uint32(B))), tp, 0, 1, stride)
 		at := tx.op(OpMul, U, tx.op(OpAdd, U, tx.op(OpMul, U, tb, tx.u(uint32(P))), tp), tx.u(2))
-		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{NB, P}, In: []Operand{planes, tableRopeKon}, Expr: tx.e,
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{NB, P}, In: []Operand{planes, TableRopeConst.op()}, Expr: tx.e,
 			Stores: []PrimStore{{Out: tab, Index: at, Value: cvs, Extent: 2 * NB * P},
 				{Out: tab, Index: tx.op(OpAdd, U, at, tx.u(1)), Value: svs, Extent: 2 * NB * P}},
 			Facts: Facts{Words: map[int][]uint32{1: ropeConsts()}, Extents: map[int]int{0: 8*stride + 1}, Quarter: quarter, Whole: true}})

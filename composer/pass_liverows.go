@@ -117,13 +117,13 @@ func (k *Kernel) history() (Operand, bool) {
 func (k *Kernel) liveRows(live int) int {
 	b := -1
 	for i, bf := range k.Bufs {
-		if bf.Kind == BufIn && bf.Operand == tableCall {
+		if bf.Kind == BufIn && bf.Operand == TableCall.op() {
 			b = i
 			break
 		}
 	}
 	if b < 0 {
-		b = k.buf(Buf{Kind: BufIn, Elem: ir.U32, Operand: tableCall, Extent: 1})
+		b = k.buf(Buf{Kind: BufIn, Elem: ir.U32, Operand: TableCall.op(), Extent: 1})
 	}
 	U := ir.U32
 	return k.bin(OpMin, U, k.bin(OpMax, U, k.load(b, k.u32(0)), k.u32(1)), k.u32(live))

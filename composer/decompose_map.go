@@ -428,7 +428,7 @@ func decomposePool(o graph.Op, c *Context) ([]Prim, error) {
 	U, F := ir.U32, ir.F32
 	sh := c.rows(o.Out[0])
 	R, W := sh[0], sh[1]
-	in := []Operand{c.value(o.In[0]), tablePos}
+	in := []Operand{c.value(o.In[0]), TablePos.op()}
 	facts := Facts{Extents: map[int]int{1: R + 1}}
 	live := func(x *exprs) int { return x.op(OpMax, U, x.load(1, x.u(0)), x.u(1)) }
 	if p := jlm.Pooling(o.Attr.Pooling); p == jlm.PoolCLS || p == jlm.PoolLast {
@@ -450,6 +450,6 @@ func decomposePool(o graph.Op, c *Context) ([]Prim, error) {
 	m.op(OpDiv, F, m.at(0, []int{R, W}, m.coord(0), m.coord(1)), n)
 	return []Prim{
 		{Kind: PrimReduce, Shape: []int{R, W, R}, In: in, Out: sum, Combine: OpAdd, Expr: s.e, Facts: facts},
-		{Kind: PrimMap, Shape: sh, In: []Operand{sum, tablePos}, Out: c.value(o.Out[0]), Expr: m.e, Facts: facts},
+		{Kind: PrimMap, Shape: sh, In: []Operand{sum, TablePos.op()}, Out: c.value(o.Out[0]), Expr: m.e, Facts: facts},
 	}, nil
 }
