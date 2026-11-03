@@ -19,9 +19,11 @@ var headServedModels = []string{"rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf"}
 // kernels, on each device: the head is served at every step, formed at its
 // placement and declined by no name, the prompt's head not asked, and
 // the tier's own cap is not launched
-// over the capped logits it writes. The logits are held to the tier's own head
-// and cap, tenfold nearer than the same logits capped twice, or not at all,
-// which the head that did either would be.
+// over the capped logits it writes. The logits are held to the CPU's, tenfold
+// nearer than the same logits capped twice, or not at all, which the head
+// that did either would be: both arms on their float forms, whose band is
+// the reduction order's alone, where the shipping forms' int8 activations
+// part a whole model's logits by more than a second cap moves them.
 func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 	const gen = 24
 	ran := 0
@@ -31,7 +33,7 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune)
+			m, err := Open(jlmOf(t, path), noTune, withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -52,7 +54,7 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
 					want := cpuDecode(t, m, ids, toks)
-					got, st, headOn := composedDecode(t, m, dev, ids, toks, gpu.ComposedHead, true, false)
+					got, st, headOn := composedDecode(t, m, dev, ids, toks, gpu.ComposedHead, true, true)
 					if !headOn {
 						t.Skipf("the head does not fit beside the blocks on %s", dev)
 					}
@@ -79,10 +81,10 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 						twice = max(twice, logitNMSE(again, want[i]))
 						none = max(none, logitNMSE(undone, want[i]))
 					}
-					t.Logf("the composed head served %d steps: worst NMSE %.3e from the tier's own head and cap, where capped twice it would read %.3e and uncapped %.3e",
+					t.Logf("the composed head served %d steps: worst NMSE %.3e from the CPU's, where capped twice it would read %.3e and uncapped %.3e",
 						served, worst, twice, none)
 					if !(worst*10 < min(twice, none)) {
-						t.Fatalf("the composed head parts from the tier's by %.3e, where capped twice it would part by %.3e and uncapped by %.3e",
+						t.Fatalf("the composed head parts from the CPU's by %.3e, where capped twice it would part by %.3e and uncapped by %.3e",
 							worst, twice, none)
 					}
 					ran++
