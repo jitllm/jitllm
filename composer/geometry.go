@@ -44,15 +44,18 @@ func (w Workgroups) geometry(h Heads, d Device) workGeom {
 	g.wk, g.ds = g.warps/g.wd, (h.Dim+g.wd-1)/g.wd
 	gqa := max(1, h.Query/max(1, h.Key))
 	words := w.Shared / 4
-	// plane is the words the plane may hold at a group of n heads: on a
-	// device stating its workgroup memory, what is left beside each head's
-	// two combines over the workgroup and Bind's per-trip sums (Bind), and
-	// its partial and two running ones (Running).
+	// plane is the words the plane may hold at a group of n heads: what is
+	// left of the workgroup's memory beside each head's two combines over
+	// the workgroup and Bind's per-trip sums (Bind), and its partial and two
+	// running ones (Running) -- of the device's where it states it, else of
+	// the profile's (Vulkan states none: a stage at 64 rows over one lane
+	// declared 51648 bytes, past every card's static 48 KiB).
 	plane := func(n int) int {
-		if d.Shared <= 0 {
-			return words
+		budget := words
+		if d.Shared > 0 {
+			budget = d.Shared / 4
 		}
-		return min(words, d.Shared/4-n*(2*lanes*g.warps+g.warps*h.Dim+3*w.stride(h.Dim)))
+		return min(words, budget-n*(2*lanes*g.warps+g.warps*h.Dim+3*w.stride(h.Dim)))
 	}
 	g.group = gqa
 	// Each head of the group holds its warps' partial values in a plane of
