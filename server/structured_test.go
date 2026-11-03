@@ -21,25 +21,32 @@ import (
 // allows everything leaves greedy decode as it was; and the mask left off one
 // step is caught.
 
-// structuredModels are a tiny base model with a 128-token context and a real
+// structuredModels() are a tiny base model with a 128-token context and a real
 // instruct model.
-var structuredModels = []struct {
+func structuredModels() []struct {
 	file, id string
 	schemas  []string
 	maxTok   int32
 	prompt   string
-}{
-	{"stories15M-q8_0.jlm", "s15", []string{
-		`{"type":"object","properties":{"color":{"enum":["red","green","blue"]},"ok":{"type":"boolean"}},` +
-			`"required":["color","ok"]}`,
-		`{"type":"array","items":{"type":"integer"},"minItems":1,"maxItems":3}`,
-	}, 96, "Once upon a time"},
-	{"Llama-3.2-1B-Instruct-Q4_K_M.jlm", "llama1b", []string{
-		`{"type":"object","properties":{"name":{"type":"string","maxLength":16},"age":{"type":"integer"},` +
-			`"pets":{"type":"array","items":{"type":"object","properties":{"kind":{"enum":["cat","dog"]},` +
-			`"legs":{"type":"number"}},"required":["kind"]},"maxItems":2}},"required":["name","age"]}`,
-		`{"anyOf":[{"type":"string","maxLength":10},{"type":"null"},{"type":"boolean"}]}`,
-	}, 400, "Describe a person as JSON."},
+} {
+	return []struct {
+		file, id string
+		schemas  []string
+		maxTok   int32
+		prompt   string
+	}{
+		{"stories15M-q8_0.jlm", "s15", []string{
+			`{"type":"object","properties":{"color":{"enum":["red","green","blue"]},"ok":{"type":"boolean"}},` +
+				`"required":["color","ok"]}`,
+			`{"type":"array","items":{"type":"integer"},"minItems":1,"maxItems":3}`,
+		}, 96, "Once upon a time"},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.jlm", "llama1b", []string{
+			`{"type":"object","properties":{"name":{"type":"string","maxLength":16},"age":{"type":"integer"},` +
+				`"pets":{"type":"array","items":{"type":"object","properties":{"kind":{"enum":["cat","dog"]},` +
+				`"legs":{"type":"number"}},"required":["kind"]},"maxItems":2}},"required":["name","age"]}`,
+			`{"anyOf":[{"type":"string","maxLength":10},{"type":"null"},{"type":"boolean"}]}`,
+		}, 400, "Describe a person as JSON."},
+	}
 }
 
 // structuredSeeds is how many sampled outputs each schema is held to.
@@ -77,7 +84,7 @@ func genText(t *testing.T, e *Engine, o GenerateOptions) (string, []int32, Finis
 }
 
 func TestStructuredOutputValidates(t *testing.T) {
-	for _, sm := range structuredModels {
+	for _, sm := range structuredModels() {
 		t.Run(sm.id, func(t *testing.T) {
 			e, lm, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 			// A host model has a step loop (batch.go), so this gate holds a
@@ -136,7 +143,7 @@ func firstKey(m map[string]bool) string {
 // TestAnAllowingGrammarIsPlainGreedy: a grammar that allows any text leaves
 // greedy decode token for token as it was.
 func TestAnAllowingGrammarIsPlainGreedy(t *testing.T) {
-	for _, sm := range structuredModels {
+	for _, sm := range structuredModels() {
 		t.Run(sm.id, func(t *testing.T) {
 			e, _, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 			o := GenerateOptions{ModelID: sm.id, Prompt: Prompt{Kind: PromptText, Text: sm.prompt}, MaxTokens: 48}
@@ -156,7 +163,7 @@ func TestAnAllowingGrammarIsPlainGreedy(t *testing.T) {
 // TestStructuredGateDiscriminates leaves the mask off one step and demands an
 // invalid output among the seeds: the validation gate can see the break.
 func TestStructuredGateDiscriminates(t *testing.T) {
-	sm := structuredModels[1]
+	sm := structuredModels()[1]
 	e, _, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 	schemaText := sm.schemas[0]
 	src, err := grammar.FromJSONSchema([]byte(schemaText))
@@ -187,7 +194,7 @@ func TestStructuredGateDiscriminates(t *testing.T) {
 // /v1/chat/completions -- json_object and json_schema -- and a schema
 // keyword the converter does not build refused with 400 naming it.
 func TestResponseFormatOverHTTP(t *testing.T) {
-	sm := structuredModels[1]
+	sm := structuredModels()[1]
 	_, _, c := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 	// A json_object grammar allows any text inside a string, so a sampled
 	// reply can run to max_tokens before the object closes. The contract is

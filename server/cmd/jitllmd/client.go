@@ -19,10 +19,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/internal/localserver/service"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
@@ -37,13 +39,28 @@ const defaultAddr = localserver.DefaultAddr
 type cli struct {
 	out io.Writer
 	err io.Writer
+
+	// addrOpts lets a gate stand in other default and old-default addresses
+	// (localserver.WithDefaults), so it does not depend on what runs on this
+	// box.
+	addrOpts []localserver.Option
+	// thisService replaces the person's service on this system with one a
+	// gate roots in a temporary home that records its commands.
+	thisService func() (service.Service, error)
+	// waitUp is how long install and start wait for the service to answer;
+	// zero is fifteen seconds.
+	waitUp time.Duration
 }
 
 func stdio() cli { return cli{out: os.Stdout, err: os.Stderr} }
 
 // errHandled means the verb has already printed its own explanation -- a flag
 // parse error, or -h. main exits without saying anything a second time.
-var errHandled = errors.New("jitllmd: bad flags")
+const errHandled verbError = "jitllmd: bad flags"
+
+type verbError string
+
+func (e verbError) Error() string { return string(e) }
 
 // usageErr is a command line that was wrong, as opposed to an operation that
 // failed. It exits 2 ("retrying will not help", as Go's flag package does for
@@ -91,17 +108,13 @@ func dial(addr, key string) (*conn, error) {
 	}, nil
 }
 
-// addrOpts lets a gate stand in other default and old-default addresses
-// (localserver.WithDefaults), so it does not depend on what runs on this box.
-var addrOpts []localserver.Option
-
 // target is dial for a verb: it sends the verb's -api-key (else
 // $JITLLM_API_KEY), and when the address is the default and no jitllmd
 // answers there it uses one on the old default port, saying so on stderr.
 func target(ctx context.Context, c cli, fs *flag.FlagSet, addr string) (*conn, error) {
 	key := keyOf(fs)
 	a := strings.TrimSpace(addr)
-	opts := append([]localserver.Option{localserver.WithAPIKey(key)}, addrOpts...)
+	opts := append([]localserver.Option{localserver.WithAPIKey(key)}, c.addrOpts...)
 	if _, ok := localserver.LegacyFor(a, opts...); ok {
 		if in, _ := localserver.Locate(ctx, a, opts...); in.Legacy {
 			fmt.Fprintf(c.err, "jitllmd: %s\n", localserver.LegacyNotice)

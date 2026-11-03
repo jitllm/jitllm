@@ -30,16 +30,18 @@ func hostBatchModels() []string {
 	return out
 }
 
-// hostPrompts are the requests the host gates send, one per row.
-var hostPrompts = []string{
-	"Once upon a time",
-	"The little dog ran to the park and",
-	"One day, a girl named Lily found a",
-	"Tom and his best friend Sam wanted to",
-	"The sun was hot, so the children went to the",
-	"In a small house by the sea there lived an old",
-	"Ben had a red ball. He threw it",
-	"Mia wanted a cake for her birthday, but",
+// hostPrompts() are the requests the host gates send, one per row.
+func hostPrompts() []string {
+	return []string{
+		"Once upon a time",
+		"The little dog ran to the park and",
+		"One day, a girl named Lily found a",
+		"Tom and his best friend Sam wanted to",
+		"The sun was hot, so the children went to the",
+		"In a small house by the sea there lived an old",
+		"Ben had a red ball. He threw it",
+		"Mia wanted a cake for her birthday, but",
+	}
 }
 
 // hostBatchEngine loads name on the host alone, and demands the step loop.
@@ -133,10 +135,10 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 			e, lm, c := hostBatchEngine(t, name, Config{JointSteps: JointAlways})
 			const gen = 16
 			reqOf := func(i int) *v1.GenerateRequest {
-				return &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts[i]), MaxTokens: gen}
+				return &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts()[i]), MaxTokens: gen}
 			}
-			alone := make([]completion, len(hostPrompts))
-			for i := range hostPrompts {
+			alone := make([]completion, len(hostPrompts()))
+			for i := range hostPrompts() {
 				if alone[i] = complete(c, reqOf(i)); alone[i].err != nil {
 					t.Fatalf("alone %d: %v", i, alone[i].err)
 				}
@@ -151,7 +153,7 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 					got := concurrently(t, e, lm, c, reqs)
 					sent, exact := 0, 0
 					for i := range n {
-						if j := parted(t, lm, hostPrompts[i], got[i].ids, alone[i].ids); j >= 0 {
+						if j := parted(t, lm, hostPrompts()[i], got[i].ids, alone[i].ids); j >= 0 {
 							t.Fatalf("row %d parts from its run alone at token %d\nbatched %v\nalone   %v",
 								i, j, got[i].ids, alone[i].ids)
 						}
@@ -181,7 +183,7 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 				defer func() { lm.loop.feedNext = false }()
 				got := concurrently(t, e, lm, c, []*v1.GenerateRequest{reqOf(0), reqOf(1), reqOf(2)})
 				for i := range got {
-					if parted(t, lm, hostPrompts[i], got[i].ids, alone[i].ids) >= 0 {
+					if parted(t, lm, hostPrompts()[i], got[i].ids, alone[i].ids) >= 0 {
 						t.Logf("row %d parted, as it must", i)
 						return
 					}
@@ -205,7 +207,7 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 						t.Logf("row %d failed past max_tokens %d (%v), as it must", i, gen, got[i].err)
 						return
 					}
-					if parted(t, lm, hostPrompts[i], got[i].ids, alone[i].ids) >= 0 {
+					if parted(t, lm, hostPrompts()[i], got[i].ids, alone[i].ids) >= 0 {
 						t.Logf("row %d ran %d tokens past max_tokens %d, as it must", i, len(got[i].ids), gen)
 						return
 					}
@@ -229,7 +231,7 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 func TestHostBatchSampledRowsEqualAlone(t *testing.T) {
 	for _, name := range hostBatchModels() {
 		t.Run(name, func(t *testing.T) {
-			if i, got, want := sampledBatchParts(t, name); i >= 0 {
+			if i, got, want := sampledBatchParts(t, name, false); i >= 0 {
 				t.Fatalf("sampled row %d differs from its run alone\nbatched %v\nalone   %v", i, got, want)
 			}
 		})
@@ -239,13 +241,13 @@ func TestHostBatchSampledRowsEqualAlone(t *testing.T) {
 // sampledBatchParts runs four seeded sampled generates on name alone and then
 // admitted together, and returns the first row whose draws differ with both
 // sequences, or -1 when every row drew the same tokens.
-func sampledBatchParts(t *testing.T, name string) (int, []int32, []int32) {
+func sampledBatchParts(t *testing.T, name string, inexact bool) (int, []int32, []int32) {
 	t.Helper()
-	e, lm, c := hostBatchEngine(t, name, Config{JointSteps: JointAlways})
+	e, lm, c := hostBatchEngine(t, name, Config{JointSteps: JointAlways, hostInexact: inexact})
 	temp, topP := float32(0.9), float32(0.95)
 	reqOf := func(i int) *v1.GenerateRequest {
 		seed := uint64(7 + i)
-		return &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts[i]), MaxTokens: 16,
+		return &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts()[i]), MaxTokens: 16,
 			Sampling: &v1.SamplingParams{Temperature: &temp, TopP: &topP, Seed: &seed}}
 	}
 	const n = 4
@@ -280,8 +282,8 @@ func TestHostBatchLongPromptTakesItsPipelinedChunk(t *testing.T) {
 	long := strings.Repeat("The little dog ran to the park and played with a red ball. ", 12)
 	nlong := len(lm.m.Vocab.Encode(long, true))
 	reqs := []*v1.GenerateRequest{
-		{ModelId: "dev", Prompt: text(hostPrompts[0]), MaxTokens: 24},
-		{ModelId: "dev", Prompt: text(hostPrompts[1]), MaxTokens: 24},
+		{ModelId: "dev", Prompt: text(hostPrompts()[0]), MaxTokens: 24},
+		{ModelId: "dev", Prompt: text(hostPrompts()[1]), MaxTokens: 24},
 		{ModelId: "dev", Prompt: text(long), MaxTokens: 8},
 	}
 	alone := make([]completion, len(reqs))
@@ -304,7 +306,7 @@ func TestHostBatchLongPromptTakesItsPipelinedChunk(t *testing.T) {
 		t.Fatalf("the long prompt did not take its pipelined chunk: %d pipelined of %d chunks, against %d cut",
 			pipedN, pipedChunks, cutChunks)
 	}
-	prompts := []string{hostPrompts[0], hostPrompts[1], long}
+	prompts := []string{hostPrompts()[0], hostPrompts()[1], long}
 	for i := range reqs {
 		for _, g := range [][]completion{cut, piped} {
 			if j := parted(t, lm, prompts[i], g[i].ids, alone[i].ids); j >= 0 {

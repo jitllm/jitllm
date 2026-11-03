@@ -123,54 +123,58 @@ func samplerSubset(r json.RawMessage) bool {
 // llamaFields is every /completion field (llama.cpp's server README) that is
 // not read: each is accepted at its neutral value and refused at any other.
 // A field in neither this table nor llamaRead is refused as unknown.
-var llamaFields = map[string]llamaField{
-	"dynatemp_range":        {numIs(0), "dynamic temperature is not built"},
-	"dynatemp_exponent":     {anyValue, ""},
-	"typical_p":             {numIs(1), "locally typical sampling is not built"},
-	"presence_penalty":      {numIs(0), "the sampler has no presence penalty; repeat_penalty is built"},
-	"frequency_penalty":     {numIs(0), "the sampler has no frequency penalty; repeat_penalty is built"},
-	"dry_multiplier":        {numIs(0), "DRY sampling is not built"},
-	"dry_base":              {anyValue, ""},
-	"dry_allowed_length":    {anyValue, ""},
-	"dry_penalty_last_n":    {anyValue, ""},
-	"dry_sequence_breakers": {anyValue, ""},
-	"xtc_probability":       {numIs(0), "XTC sampling is not built"},
-	"xtc_threshold":         {anyValue, ""},
-	"mirostat":              {numIs(0), "Mirostat is not built"},
-	"mirostat_tau":          {anyValue, ""},
-	"mirostat_eta":          {anyValue, ""},
-	"top_n_sigma":           {numLE(-1), "top-n-sigma sampling is not built"},
-	"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
-	"adaptive_decay":        {anyValue, ""},
-	"min_keep":              {numIs(0), "min_keep is not built"},
-	"logit_bias":            {emptyJSON, "logit bias is not built"},
-	"samplers":              {samplerSubset, "only the samplers penalties, top_k, top_p, min_p and temperature exist"},
-	"n_indent":              {numIs(0), "n_indent is not built"},
-	"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
-	"n_discard":             {numIs(0), "there is no context shift"},
-	"n_cmpl":                {numIs(1), "send one request per completion"},
-	"n_cache_reuse":         {numIs(0), "KV shifting reuse is not built; the prefix cache is automatic"},
-	"t_max_predict_ms":      {numIs(0), "a prediction time limit is not built; use n_predict"},
-	"t_max_prompt_ms":       {numIs(0), "a prompt time limit is not built"},
-	"timings_per_token":     {boolIs(false), "per-token timings are not built; the final object carries timings"},
-	"return_progress":       {boolIs(false), "prompt progress is not built"},
-	"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
-	"response_fields":       {emptyJSON, "response_fields is not built"},
-	"lora":                  {emptyJSON, "LoRA adapters are not built"},
-	"sse_ping_interval":     {numIs(0), "SSE pings are not built"},
-	"multimodal_data":       {emptyJSON, "send pictures through /v1/chat/completions"},
-	"image_data":            {emptyJSON, "send pictures through /v1/chat/completions"},
+func llamaFields() map[string]llamaField {
+	return map[string]llamaField{
+		"dynatemp_range":        {numIs(0), "dynamic temperature is not built"},
+		"dynatemp_exponent":     {anyValue, ""},
+		"typical_p":             {numIs(1), "locally typical sampling is not built"},
+		"presence_penalty":      {numIs(0), "the sampler has no presence penalty; repeat_penalty is built"},
+		"frequency_penalty":     {numIs(0), "the sampler has no frequency penalty; repeat_penalty is built"},
+		"dry_multiplier":        {numIs(0), "DRY sampling is not built"},
+		"dry_base":              {anyValue, ""},
+		"dry_allowed_length":    {anyValue, ""},
+		"dry_penalty_last_n":    {anyValue, ""},
+		"dry_sequence_breakers": {anyValue, ""},
+		"xtc_probability":       {numIs(0), "XTC sampling is not built"},
+		"xtc_threshold":         {anyValue, ""},
+		"mirostat":              {numIs(0), "Mirostat is not built"},
+		"mirostat_tau":          {anyValue, ""},
+		"mirostat_eta":          {anyValue, ""},
+		"top_n_sigma":           {numLE(-1), "top-n-sigma sampling is not built"},
+		"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
+		"adaptive_decay":        {anyValue, ""},
+		"min_keep":              {numIs(0), "min_keep is not built"},
+		"logit_bias":            {emptyJSON, "logit bias is not built"},
+		"samplers":              {samplerSubset, "only the samplers penalties, top_k, top_p, min_p and temperature exist"},
+		"n_indent":              {numIs(0), "n_indent is not built"},
+		"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
+		"n_discard":             {numIs(0), "there is no context shift"},
+		"n_cmpl":                {numIs(1), "send one request per completion"},
+		"n_cache_reuse":         {numIs(0), "KV shifting reuse is not built; the prefix cache is automatic"},
+		"t_max_predict_ms":      {numIs(0), "a prediction time limit is not built; use n_predict"},
+		"t_max_prompt_ms":       {numIs(0), "a prompt time limit is not built"},
+		"timings_per_token":     {boolIs(false), "per-token timings are not built; the final object carries timings"},
+		"return_progress":       {boolIs(false), "prompt progress is not built"},
+		"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
+		"response_fields":       {emptyJSON, "response_fields is not built"},
+		"lora":                  {emptyJSON, "LoRA adapters are not built"},
+		"sse_ping_interval":     {numIs(0), "SSE pings are not built"},
+		"multimodal_data":       {emptyJSON, "send pictures through /v1/chat/completions"},
+		"image_data":            {emptyJSON, "send pictures through /v1/chat/completions"},
+	}
 }
 
 // llamaRead are the fields the handler reads.
-var llamaRead = map[string]bool{
-	"prompt": true, "temperature": true, "top_k": true, "top_p": true, "min_p": true,
-	"n_predict": true, "max_tokens": true, "stop": true, "seed": true, "stream": true,
-	"cache_prompt": true, "n_probs": true, "grammar": true, "json_schema": true,
-	"id_slot": true, "ignore_eos": true, "return_tokens": true, "repeat_penalty": true,
-	"repeat_last_n": true, "model": true,
-	// /infill's own.
-	"input_prefix": true, "input_suffix": true, "input_extra": true,
+func llamaRead() map[string]bool {
+	return map[string]bool{
+		"prompt": true, "temperature": true, "top_k": true, "top_p": true, "min_p": true,
+		"n_predict": true, "max_tokens": true, "stop": true, "seed": true, "stream": true,
+		"cache_prompt": true, "n_probs": true, "grammar": true, "json_schema": true,
+		"id_slot": true, "ignore_eos": true, "return_tokens": true, "repeat_penalty": true,
+		"repeat_last_n": true, "model": true,
+		// /infill's own.
+		"input_prefix": true, "input_suffix": true, "input_extra": true,
+	}
 }
 
 // llamaCheck refuses a field the handler does not honour, naming it. Fields
@@ -181,14 +185,15 @@ func llamaCheck(body map[string]json.RawMessage, infill bool) error {
 		names = append(names, k)
 	}
 	sortStrings(names)
+	read, fields := llamaRead(), llamaFields()
 	for _, k := range names {
-		if llamaRead[k] {
+		if read[k] {
 			if !infill && strings.HasPrefix(k, "input_") {
 				return fmt.Errorf("%w: %s belongs to /infill", ErrInvalid, k)
 			}
 			continue
 		}
-		f, ok := llamaFields[k]
+		f, ok := fields[k]
 		if !ok {
 			return fmt.Errorf("%w: %s is not a field this server reads", ErrInvalid, k)
 		}

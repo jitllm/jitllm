@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -60,9 +61,14 @@ func verbs() []verb {
 	}
 }
 
-// version is the release version, set at link time
-// (-ldflags "-X main.version=v0.1.0"; see .goreleaser.yaml).
-var version = "dev"
+// buildVersion is the release version the module was built at, "dev" for a
+// build from an untagged tree.
+func buildVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -224,7 +230,7 @@ func serve(args []string) {
 	imagePixels := fs.Int64("image-max-pixels", server.DefaultImageMaxPixels, "the most pixels (width x height) one picture may be")
 	imageCount := fs.Int("image-max-count", server.DefaultImageMaxImages, "the most pictures one request may carry")
 	imageTimeout := fs.Duration("image-fetch-timeout", server.DefaultImageFetchTimeout, "how long one remote picture fetch may take")
-	version := fs.String("version", version, "version string reported by GetServerInfo")
+	version := fs.String("version", buildVersion(), "version string reported by GetServerInfo")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}

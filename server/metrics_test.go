@@ -13,9 +13,11 @@ import (
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
-// sampleLine is one sample of the text exposition format: a name, optional
+// sampleLine() is one sample of the text exposition format: a name, optional
 // labels of name="escaped value" pairs, and a float.
-var sampleLine = regexp.MustCompile(`^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{(?:[a-zA-Z_][a-zA-Z0-9_]*="(?:[^"\\]|\\.)*"(?:,[a-zA-Z_][a-zA-Z0-9_]*="(?:[^"\\]|\\.)*")*)?\})? (\S+)$`)
+func sampleLine() *regexp.Regexp {
+	return regexp.MustCompile(`^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{(?:[a-zA-Z_][a-zA-Z0-9_]*="(?:[^"\\]|\\.)*"(?:,[a-zA-Z_][a-zA-Z0-9_]*="(?:[^"\\]|\\.)*")*)?\})? (\S+)$`)
+}
 
 // scrape parses /metrics, failing on any line the format does not allow, a
 // sample whose family has no TYPE, or a TYPE given twice. It returns each
@@ -56,7 +58,7 @@ func scrape(t *testing.T, url string) map[string]float64 {
 			}
 			typed[f[2]] = f[3]
 		default:
-			m := sampleLine.FindStringSubmatch(l)
+			m := sampleLine().FindStringSubmatch(l)
 			if m == nil {
 				t.Fatalf("not a sample line: %q", l)
 			}

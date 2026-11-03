@@ -107,7 +107,9 @@ const (
 	paritySampling = `"temperature":0.5,"top_p":1,"seed":3`
 )
 
-var parityMessages = []*v1.ChatMessage{{Role: "system", Content: "be brief"}, {Role: "user", Content: "hi"}}
+func parityMessages() []*v1.ChatMessage {
+	return []*v1.ChatMessage{{Role: "system", Content: "be brief"}, {Role: "user", Content: "hi"}}
+}
 
 // pngDataURL is a small picture as an OpenAI client sends it.
 func pngBytes(t *testing.T) []byte {
@@ -155,7 +157,7 @@ func TestNativeRequestsBuildTheOptionsTheOpenAIRoutesDo(t *testing.T) {
 		{"messages and sampling", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,"temperature":0.5,"top_p":0.75,"top_k":40,"min_p":0.25,` +
 				`"repetition_penalty":1.5,"seed":7,"max_tokens":12,"stop":["\n","END"],"ignore_eos":true}`,
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.Sampling = &v1.SamplingParams{Temperature: ptr(float32(0.5)), TopP: ptr(float32(0.75)),
 					TopK: ptr(int32(40)), MinP: ptr(float32(0.25)), RepeatPenalty: ptr(float32(1.5)),
 					Seed: ptr(uint64(7))}
@@ -163,22 +165,22 @@ func TestNativeRequestsBuildTheOptionsTheOpenAIRoutesDo(t *testing.T) {
 			})},
 		{"top_k -1 disables", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,"temperature":0.5,"top_p":1,"top_k":-1,"seed":3}`,
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.Sampling.TopK = ptr(int32(-1))
 			})},
-		{"tools, no choice", "/v1/chat/completions", toolBody(""), chat(parityMessages, withTools(nil))},
+		{"tools, no choice", "/v1/chat/completions", toolBody(""), chat(parityMessages(), withTools(nil))},
 		{"tool_choice auto", "/v1/chat/completions", toolBody(`,"tool_choice":"auto"`),
-			chat(parityMessages, withTools(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_AUTO}))},
+			chat(parityMessages(), withTools(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_AUTO}))},
 		{"tool_choice none withholds the tools", "/v1/chat/completions", toolBody(`,"tool_choice":"none"`),
-			chat(parityMessages, withTools(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_NONE}))},
+			chat(parityMessages(), withTools(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_NONE}))},
 		{"tool_choice required", "/v1/chat/completions", toolBody(`,"tool_choice":"required"`),
-			chat(parityMessages, withTools(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_REQUIRED}))},
+			chat(parityMessages(), withTools(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_REQUIRED}))},
 		{"tool_choice named, one call", "/v1/chat/completions",
 			toolBody(`,"tool_choice":{"type":"function","function":{"name":"get_weather"}},"parallel_tool_calls":false`),
-			chat(parityMessages, withTools(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_FUNCTION,
+			chat(parityMessages(), withTools(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_FUNCTION,
 				Name: "get_weather", SingleCall: true}))},
 		{"parallel_tool_calls false alone", "/v1/chat/completions", toolBody(`,"parallel_tool_calls":false`),
-			chat(parityMessages, withTools(&v1.ToolChoice{SingleCall: true}))},
+			chat(parityMessages(), withTools(&v1.ToolChoice{SingleCall: true}))},
 		{"tool turns", "/v1/chat/completions",
 			`{"model":"m-1",` + paritySampling + `,"messages":[{"role":"user","content":"weather?"},` +
 				`{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":` +
@@ -190,35 +192,35 @@ func TestNativeRequestsBuildTheOptionsTheOpenAIRoutesDo(t *testing.T) {
 				{Role: "tool", ToolCallId: "call_1", Name: "get_weather", Content: "sunny"}}, nil)},
 		{"response_format json_object", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,` + paritySampling + `,"response_format":{"type":"json_object"}}`,
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.ResponseFormat = &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_JSON_OBJECT}
 			})},
 		{"response_format json_schema", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,` + paritySampling + `,"response_format":{"type":"json_schema",` +
 				`"json_schema":{"name":"x","strict":true,"schema":{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]}}}}`,
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.ResponseFormat = &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_JSON_SCHEMA, Name: "x",
 					Strict:     ptr(true),
 					JsonSchema: `{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]}`}
 			})},
 		{"response_format text", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,` + paritySampling + `,"response_format":{"type":"text"}}`,
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.ResponseFormat = &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_TEXT}
 			})},
 		{"n, logprobs, top_logprobs", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,"temperature":0.5,"top_p":1,"seed":5,"n":3,` +
 				`"logprobs":true,"top_logprobs":3}`,
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.Sampling.Seed = ptr(uint64(5))
 				m.N, m.Logprobs, m.TopLogprobs = 3, true, ptr(int32(3))
 			})},
 		{"logprobs without alternatives", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,` + paritySampling + `,"logprobs":true}`,
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.Logprobs = true })},
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.Logprobs = true })},
 		{"jitllm extensions", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,` + paritySampling + `,"jitllm_priority":"high","jitllm_speculate":true}`,
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.Priority, m.Speculation = "high", &v1.SpeculationParams{Enabled: true}
 			})},
 		{"a picture as a data URL, by url", "/v1/chat/completions", imageBody,
@@ -271,14 +273,14 @@ func TestParityOptionsAreSensitive(t *testing.T) {
 	p := newPair(t)
 	want, _, _ := p.viaHTTP(t, "/v1/chat/completions",
 		`{"model":"m-1","messages":`+parityMsgs+`,`+paritySampling+`,"max_tokens":9}`)
-	got, err := p.viaConnect(t, chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.MaxTokens = 10 }))
+	got, err := p.viaConnect(t, chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.MaxTokens = 10 }))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reflect.DeepEqual(got, want) {
 		t.Fatal("max_tokens 9 and 10 compared equal")
 	}
-	got, _ = p.viaConnect(t, chat(parityMessages, func(m *v1.GenerateRequest, cp *v1.ChatPrompt) {
+	got, _ = p.viaConnect(t, chat(parityMessages(), func(m *v1.GenerateRequest, cp *v1.ChatPrompt) {
 		m.MaxTokens = 9
 		cp.Tools = []*v1.Tool{{Name: "f"}}
 	}))
@@ -309,31 +311,31 @@ func TestNativeRefusesWhatTheOpenAIRoutesRefuse(t *testing.T) {
 		contains          string
 	}{
 		{"presence_penalty", "/v1/chat/completions", chatBody(`"presence_penalty":0.5`),
-			chat(parityMessages, samp(func(s *v1.SamplingParams) { s.PresencePenalty = ptr(float32(0.5)) })),
+			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.PresencePenalty = ptr(float32(0.5)) })),
 			"presence_penalty is not supported"},
 		{"frequency_penalty", "/v1/chat/completions", chatBody(`"frequency_penalty":0.5`),
-			chat(parityMessages, samp(func(s *v1.SamplingParams) { s.FrequencyPenalty = ptr(float32(0.5)) })),
+			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.FrequencyPenalty = ptr(float32(0.5)) })),
 			"frequency_penalty is not supported"},
 		{"negative temperature", "/v1/chat/completions", chatBody(`"temperature":-1`),
-			chat(parityMessages, samp(func(s *v1.SamplingParams) { s.Temperature = ptr(float32(-1)) })), "is negative"},
+			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.Temperature = ptr(float32(-1)) })), "is negative"},
 		{"top_p above 1", "/v1/chat/completions", chatBody(`"top_p":2`),
-			chat(parityMessages, samp(func(s *v1.SamplingParams) { s.TopP = ptr(float32(2)) })), "outside [0, 1]"},
+			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.TopP = ptr(float32(2)) })), "outside [0, 1]"},
 		{"top_k below -1", "/v1/chat/completions", chatBody(`"top_k":-2`),
-			chat(parityMessages, samp(func(s *v1.SamplingParams) { s.TopK = ptr(int32(-2)) })), "below -1"},
+			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.TopK = ptr(int32(-2)) })), "below -1"},
 		{"min_p above 1", "/v1/chat/completions", chatBody(`"min_p":2`),
-			chat(parityMessages, samp(func(s *v1.SamplingParams) { s.MinP = ptr(float32(2)) })), "outside [0, 1]"},
+			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.MinP = ptr(float32(2)) })), "outside [0, 1]"},
 		{"repetition penalty negative", "/v1/chat/completions", chatBody(`"repetition_penalty":-1`),
-			chat(parityMessages, samp(func(s *v1.SamplingParams) { s.RepeatPenalty = ptr(float32(-1)) })),
+			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.RepeatPenalty = ptr(float32(-1)) })),
 			"is not positive"},
 		{"n too large", "/v1/chat/completions", chatBody(`"n":129`),
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.N = 129 }), "n must be between"},
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.N = 129 }), "n must be between"},
 		{"n negative", "/v1/chat/completions", chatBody(`"n":-1`),
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.N = -1 }), "n must be between"},
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.N = -1 }), "n must be between"},
 		{"top_logprobs without logprobs", "/v1/chat/completions", chatBody(`"top_logprobs":2`),
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.TopLogprobs = ptr(int32(2)) }),
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) { m.TopLogprobs = ptr(int32(2)) }),
 			"top_logprobs needs logprobs"},
 		{"top_logprobs too large", "/v1/chat/completions", chatBody(`"logprobs":true,"top_logprobs":21`),
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.Logprobs, m.TopLogprobs = true, ptr(int32(21))
 			}), "top_logprobs must be between"},
 		{"logprobs with echo", "/v1/completions", `{"model":"m-1","prompt":"x","echo":true,"logprobs":1}`,
@@ -342,22 +344,22 @@ func TestNativeRefusesWhatTheOpenAIRoutesRefuse(t *testing.T) {
 			"logprobs with echo"},
 		{"tool_choice names an undeclared tool", "/v1/chat/completions",
 			chatBody(`"tools":[` + weather + `],"tool_choice":{"type":"function","function":{"name":"get_time"}}`),
-			chat(parityMessages, toolsAnd(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_FUNCTION,
+			chat(parityMessages(), toolsAnd(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_FUNCTION,
 				Name: "get_time"})),
 			`names "get_time"`},
 		{"a tool with no name", "/v1/chat/completions",
 			chatBody(`"tools":[{"type":"function","function":{"name":""}}]`),
-			chat(parityMessages, func(_ *v1.GenerateRequest, cp *v1.ChatPrompt) { cp.Tools = []*v1.Tool{{}} }),
+			chat(parityMessages(), func(_ *v1.GenerateRequest, cp *v1.ChatPrompt) { cp.Tools = []*v1.Tool{{}} }),
 			"only"},
 		{"an unsupported schema", "/v1/chat/completions",
 			chatBody(`"response_format":{"type":"json_schema","json_schema":{"schema":{"type":"object","not":{"type":"string"}}}}`),
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.ResponseFormat = &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_JSON_SCHEMA,
 					JsonSchema: `{"type":"object","not":{"type":"string"}}`}
 			}), "response_format"},
 		{"a schema format without a schema", "/v1/chat/completions",
 			chatBody(`"response_format":{"type":"json_schema"}`),
-			chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.ResponseFormat = &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_JSON_SCHEMA}
 			}), "needs json_schema.schema"},
 	}
@@ -425,14 +427,14 @@ func TestNativeConstraintsAreOneEach(t *testing.T) {
 			m.ResponseFormat, m.JsonSchema = rf, `{"type":"object"}`
 		},
 	} {
-		_, err := p.viaConnect(t, chat(parityMessages, mod))
+		_, err := p.viaConnect(t, chat(parityMessages(), mod))
 		ce := wantCode(t, name, err, connect.CodeInvalidArgument)
 		if !strings.Contains(ce.Message(), "one constraint each") {
 			t.Fatalf("%s: %q", name, ce.Message())
 		}
 	}
 	// text constrains nothing, so it sits beside a grammar.
-	if _, err := p.viaConnect(t, chat(parityMessages, func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+	if _, err := p.viaConnect(t, chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 		m.ResponseFormat, m.Grammar = &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_TEXT}, `root ::= "a"`
 	})); err != nil {
 		t.Fatalf("text beside a grammar: %v", err)

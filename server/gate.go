@@ -1,7 +1,6 @@
 package server
 
 import (
-	"errors"
 	"sort"
 	"sync"
 )
@@ -45,7 +44,7 @@ const (
 // ErrQueueTimeout is returned when a caller declined to keep waiting for a
 // row of its model's step loop (batch.go). It is NOT a refusal of the
 // session: the session stays open and may try again.
-var ErrQueueTimeout = errors.New("server: timed out waiting for a row of the step loop")
+const ErrQueueTimeout serverError = "server: timed out waiting for a row of the step loop"
 
 func newGate(id string) *gate {
 	return &gate{id: id, holders: map[string]bool{}}

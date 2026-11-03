@@ -240,7 +240,7 @@ func TestFairVictims(t *testing.T) {
 func fairRequests(n, maxTokens int) []*v1.GenerateRequest {
 	var out []*v1.GenerateRequest
 	for i := range n {
-		out = append(out, &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts[i%len(hostPrompts)]),
+		out = append(out, &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts()[i%len(hostPrompts())]),
 			MaxTokens: int32(maxTokens), IgnoreEos: true})
 	}
 	return out
@@ -331,7 +331,7 @@ func timeSliced(t *testing.T, dev string, violate bool) (parks int64, apart int)
 		if want.err != nil {
 			t.Fatal(want.err)
 		}
-		if parted(t, lm, hostPrompts[i%len(hostPrompts)], got[i].ids, want.ids) >= 0 {
+		if parted(t, lm, hostPrompts()[i%len(hostPrompts())], got[i].ids, want.ids) >= 0 {
 			apart++
 		}
 	}

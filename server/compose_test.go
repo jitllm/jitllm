@@ -17,7 +17,7 @@ import (
 // each held to the grammar; and speculation with logprobs or with n is
 // refused by name.
 func TestGrammarComposesWithLogprobsAndChoices(t *testing.T) {
-	sm := structuredModels[1]
+	sm := structuredModels()[1]
 	e, _, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 	prompt := Prompt{Kind: PromptText, Text: sm.prompt}
 

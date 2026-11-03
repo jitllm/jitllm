@@ -148,14 +148,16 @@ func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 				}
 				var tapC, tapW sampleTrace
 				if a.device && o.Sampling != nil {
-					sampleTap = tapC.add
+					clm.loop.sampleTap = tapC.add
 				}
 				want := generate(t, cold, oc)
 				if a.device && o.Sampling != nil {
-					sampleTap = tapW.add
+					wlm.loop.sampleTap = tapW.add
 				}
 				got := generate(t, warm, ow)
-				sampleTap = nil
+				if a.device {
+					clm.loop.sampleTap, wlm.loop.sampleTap = nil, nil
+				}
 				if want.started != 0 {
 					t.Fatalf("request %d: the engine with no store restored %d positions", i, want.started)
 				}
@@ -594,7 +596,7 @@ func TestTheMemCacheLayersOverThePromptStore(t *testing.T) {
 // through its Speculator, which neither restores nor seals, so it is run
 // without the cache -- it restores nothing even after the same prompt ran.
 func TestGrammarAndSpeculationMeetTheMemCache(t *testing.T) {
-	sm := structuredModels[1]
+	sm := structuredModels()[1]
 	e, _ := ttftEngine(t, sm.file, Config{}, LoadOptions{})
 	prompt := Prompt{Kind: PromptText, Text: sm.prompt}
 	g := GenerateOptions{ModelID: "m", Prompt: prompt, MaxTokens: 16, Grammar: `root ::= "zebra quantum lettuce"` + "\n"}

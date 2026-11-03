@@ -35,7 +35,7 @@ func (s *ModelService) ListModels(ctx context.Context, req *connect.Request[v1.L
 		for _, f := range files {
 			mf := pbModelFile(f)
 			if f.IsContainer {
-				d := containerDetails.get(f.Path, probeContainer)
+				d := s.E.details.get(f.Path, probeContainer)
 				mf.ContainerVersion = d.version
 				mf.ContextLength = d.ctx
 				mf.Capabilities = d.caps
@@ -90,8 +90,6 @@ type cachedDetails struct {
 	mtime time.Time
 	d     details
 }
-
-var containerDetails detailsCache
 
 func (c *detailsCache) get(path string, probe func(string) details) details {
 	fi, err := os.Stat(path)

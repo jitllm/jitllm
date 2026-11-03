@@ -19,14 +19,21 @@ import (
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
-// thisService is the person's service on this system. A gate replaces it
-// with one rooted in a temporary home that records its commands.
-var thisService = func() (service.Service, error) {
+// service is the person's service on this system.
+func (c cli) service() (service.Service, error) {
+	if c.thisService != nil {
+		return c.thisService()
+	}
 	return service.ForThisUser(runtime.GOOS, os.Getenv("XDG_CONFIG_HOME"), os.Getenv("LOCALAPPDATA"))
 }
 
-// waitUp is how long install and start wait for the service to answer.
-var waitUp = 15 * time.Second
+// wait is how long install and start wait for the service to answer.
+func (c cli) wait() time.Duration {
+	if c.waitUp > 0 {
+		return c.waitUp
+	}
+	return 15 * time.Second
+}
 
 // cmdService installs and drives jitllmd as the person's background service:
 // a systemd user unit on Linux, a launchd agent on macOS, the login entry
@@ -45,7 +52,7 @@ func cmdService(ctx context.Context, c cli, args []string) error {
 	if err := parse(c, fs, args); err != nil {
 		return err
 	}
-	s, err := thisService()
+	s, err := c.service()
 	if err != nil {
 		return err
 	}
@@ -111,7 +118,7 @@ func cmdService(ctx context.Context, c cli, args []string) error {
 // With legacy it also accepts a service on the old default port, which is
 // where a unit written before the default moved listens.
 func waitFor(ctx context.Context, c cli, addr, key string, legacy bool) error {
-	end := time.Now().Add(waitUp)
+	end := time.Now().Add(c.wait())
 	probe := localserver.Probe
 	if legacy {
 		probe = localserver.Locate
