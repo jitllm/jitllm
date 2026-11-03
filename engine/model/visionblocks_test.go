@@ -298,7 +298,7 @@ func TestTwoTurnImageChatRestoresPastThePicture(t *testing.T) {
 // Untuned: on arm64 a timed shape picks its matvec over its first calls, so a
 // session alone and the same session beside a picture would run two kernels.
 func TestImageEncodeStepsBesideDecode(t *testing.T) {
-	m, tw := openTower(t, noTune)
+	m, tw := openTower(t, noTune())
 	defer m.Close()
 	px := rainbow(tw.Cfg.ImageSz)
 	prompt := m.Vocab.Encode("The capital of France is", true)

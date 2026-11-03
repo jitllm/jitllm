@@ -14,7 +14,7 @@ import (
 
 func janusEncodePhoto(t *testing.T, tw *Tower, s *Instance) []float32 {
 	t.Helper()
-	px, err := s.PreprocessImage(decodeImage(t, mcvPhoto))
+	px, err := s.PreprocessImage(decodeImage(t, mcvPhoto()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestJanusTowerRelocates(t *testing.T) {
 }
 
 func TestJanusDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
-	m := openJanus(t, noTune)
+	m := openJanus(t, noTune())
 	defer m.Close()
 	tw := m.Tower()
 	run := func(t *testing.T, g *gpu.GPU) {

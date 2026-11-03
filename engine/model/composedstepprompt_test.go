@@ -65,7 +65,7 @@ func composedPromptModel(t *testing.T, name string) (*Model, []int32, []float32)
 	if !fileExists(src) {
 		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS to the model directory)", src)
 	}
-	m, err := Open(jlmOf(t, src), noTune, WithKVF16(false))
+	m, err := Open(jlmOf(t, src), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

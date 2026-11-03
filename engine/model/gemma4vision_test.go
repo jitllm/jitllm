@@ -53,7 +53,7 @@ func openGemma4V(t testing.TB, opts ...Option) (*Model, *g4vGolden) {
 	if !vlmAvailable(text, proj) {
 		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (set JITLLM_MODELS) -- run scripts/gemma4visiongold.py (RULE 11)", text)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune, WithKVF16(false)}, opts...)...)
+	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune(), WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

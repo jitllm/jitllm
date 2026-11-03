@@ -79,7 +79,7 @@ func TestSafetensorsMatchTransformers(t *testing.T) {
 			if err := json.Unmarshal(b, &gold); err != nil {
 				t.Fatal(err)
 			}
-			m, err := Open(hfContainer(t, name), noTune, WithKVF16(false))
+			m, err := Open(hfContainer(t, name), noTune(), WithKVF16(false))
 			if err != nil {
 				if why, listed := hfGoldDeclined()[name]; listed && strings.Contains(err.Error(), why) {
 					t.Skipf("DECLINED BY NAME, and the golden is kept because it is what the "+

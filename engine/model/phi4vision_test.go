@@ -55,7 +55,7 @@ func openPhi4VFixture(t testing.TB, opts ...Option) (*Model, *p4vGolden) {
 	if !vlmAvailable(text, proj) {
 		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (set JITLLM_MODELS) -- run scripts/phi4visiongold.py (RULE 11)", text)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune, WithKVF16(false)}, opts...)...)
+	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune(), WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

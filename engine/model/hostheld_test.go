@@ -42,7 +42,7 @@ func (d *unifiedFake) ReleaseLayers(lo, hi int) {
 // moves leave the page budget where attaching put it, and this fails on the
 // first one.
 func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
-	m, err := Open(jlmOf(t, models["stories260K"]))
+	m, err := Open(jlmOf(t, models()["stories260K"]))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

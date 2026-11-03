@@ -20,24 +20,25 @@ import (
 // tower and resampler held to the checkpoint's own code (scripts/minicpmvgold.py
 // writes the goldens beside the model), and the model's answer about a picture.
 
-var (
-	mcvText = testmodels.Path("minicpmv/MiniCPM-V-4-Q4_K_M.gguf")
-	mcvProj = testmodels.Path("minicpmv/mmproj-MiniCPM-V-4-f16.gguf")
-	// mcvGold is scripts/minicpmvgold.py's output for the pictures below.
-	mcvGold = testmodels.Path("minicpmv/hf/MiniCPM-V-4/gold")
-	// mcvPhoto is llama.cpp's tools/mtmd/test-1.jpeg resampled by Pillow to
-	// 896x448 and stored as PNG: two whole 448 slices and an overview, a cut
-	// on which the processor and llama.cpp's port agree pixel for pixel, and a
-	// PNG so neither decoder's JPEG rounding is in the comparison.
-	mcvPhoto = testmodels.Path("minicpmv/photo896x448.png")
-)
+func mcvText() string { return testmodels.Path("minicpmv/MiniCPM-V-4-Q4_K_M.gguf") }
+
+func mcvProj() string { return testmodels.Path("minicpmv/mmproj-MiniCPM-V-4-f16.gguf") }
+
+// mcvGold is scripts/minicpmvgold.py's output for the pictures below.
+func mcvGold() string { return testmodels.Path("minicpmv/hf/MiniCPM-V-4/gold") }
+
+// mcvPhoto is llama.cpp's tools/mtmd/test-1.jpeg resampled by Pillow to
+// 896x448 and stored as PNG: two whole 448 slices and an overview, a cut
+// on which the processor and llama.cpp's port agree pixel for pixel, and a
+// PNG so neither decoder's JPEG rounding is in the comparison.
+func mcvPhoto() string { return testmodels.Path("minicpmv/photo896x448.png") }
 
 func openMiniCPMV(t testing.TB, opts ...Option) *Model {
 	t.Helper()
-	if !vlmAvailable(mcvText, mcvProj) {
-		t.Skipf("MODEL MISSING: %s, its mmproj and its merged container -- this gate proved nothing", mcvText)
+	if !vlmAvailable(mcvText(), mcvProj()) {
+		t.Skipf("MODEL MISSING: %s, its mmproj and its merged container -- this gate proved nothing", mcvText())
 	}
-	m, err := Open(jlmOfPair(t, mcvText, mcvProj), opts...)
+	m, err := Open(jlmOfPair(t, mcvText(), mcvProj()), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +108,7 @@ func readF32n(t testing.TB, path string, n int) []float32 {
 
 func readMcvGolden(t testing.TB, name string) mcvGolden {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(mcvGold, name+".json"))
+	b, err := os.ReadFile(filepath.Join(mcvGold(), name+".json"))
 	if err != nil {
 		t.Skipf("GOLDEN MISSING: %v -- run scripts/minicpmvgold.py; this gate proved nothing", err)
 	}
@@ -145,7 +146,7 @@ func visNMSE(t testing.TB, what string, got, want []float32) float64 {
 // and two slices, and the repository's 384 square, which is an overview alone.
 func mcvPictures() []struct{ name, path string } {
 	return []struct{ name, path string }{
-		{"photo896x448", mcvPhoto},
+		{"photo896x448", mcvPhoto()},
 		{"quad-and-disc", testImage},
 	}
 }
@@ -207,7 +208,7 @@ func TestMiniCPMVMatchesTransformers(t *testing.T) {
 				if b.W != gp.W || b.H != gp.H {
 					t.Fatalf("piece %d is %dx%d, the processor's %dx%d", i, b.W, b.H, gp.W, gp.H)
 				}
-				base := filepath.Join(mcvGold, fmt.Sprintf("%s.p%d", pic.name, i))
+				base := filepath.Join(mcvGold(), fmt.Sprintf("%s.p%d", pic.name, i))
 				want := readF32n(t, base+".px", gp.W*gp.H*3)
 				// One 8-bit step, normalised, is 1/127.5. A downscale's sums sit
 				// within f32 noise of a half on a few samples in ten thousand.
@@ -300,7 +301,7 @@ func TestMiniCPMVPieceOrderAndNormalisation(t *testing.T) {
 	tw := m.Tower()
 	c := tw.Cfg
 	g := readMcvGolden(t, "photo896x448")
-	img := decodeImage(t, mcvPhoto)
+	img := decodeImage(t, mcvPhoto())
 	lay, err := tw.Layout(g.W, g.H)
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +311,7 @@ func TestMiniCPMVPieceOrderAndNormalisation(t *testing.T) {
 	}
 	want := make([][]float32, len(g.Pieces))
 	for i := range want {
-		want[i] = readF32n(t, filepath.Join(mcvGold, fmt.Sprintf("photo896x448.p%d.emb", i)), c.Tokens()*c.ProjDim)
+		want[i] = readF32n(t, filepath.Join(mcvGold(), fmt.Sprintf("photo896x448.p%d.emb", i)), c.Tokens()*c.ProjDim)
 	}
 	run := func(f towerFault) []float64 {
 		s := tw.testState()
@@ -450,7 +451,7 @@ func TestMiniCPMVDescribesAnImage(t *testing.T) {
 	m := openMiniCPMV(t)
 	defer m.Close()
 	tw := m.Tower()
-	img := decodeImage(t, mcvPhoto)
+	img := decodeImage(t, mcvPhoto())
 	describe := func(img image.Image) string {
 		lay, err := tw.Layout(img.Bounds().Dx(), img.Bounds().Dy())
 		if err != nil {

@@ -23,7 +23,7 @@ import (
 func TestDecisionDoesNotAllocate(t *testing.T) {
 	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
-			m := openDecision(t, c.gguf, c.kind, noTune)
+			m := openDecision(t, c.gguf, c.kind, noTune())
 			defer m.Close()
 			if !m.IsEncoder() {
 				m.SetKVF16(false) // the device's history is f32

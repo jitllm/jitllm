@@ -12,7 +12,7 @@ import (
 // one-block arm with its rows attending causally ("piccausal") and demands
 // it part from the host far past the clean reading (RULE 10).
 func TestComposedTowerOnDeviceSeesCausalRows(t *testing.T) {
-	m, tw := openTower(t, noTune)
+	m, tw := openTower(t, noTune())
 	defer m.Close()
 	c := tw.Cfg
 	px := make([]float32, c.ImageSz*c.ImageSz*3)

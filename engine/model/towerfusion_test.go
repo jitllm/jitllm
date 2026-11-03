@@ -24,7 +24,7 @@ func TestTowerFusionCeiling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocates and measures")
 	}
-	if _, err := os.Stat(towerPath); err != nil {
+	if _, err := os.Stat(towerPath()); err != nil {
 		t.Skip("no mmproj present")
 	}
 	// A dispatch measurement needs a quiet box.

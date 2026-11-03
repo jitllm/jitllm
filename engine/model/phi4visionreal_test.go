@@ -18,18 +18,20 @@ import (
 // two real pictures (scripts/phi4visiongold.py DIR IMAGE...). 15B of text:
 // scripts/cap 24G.
 
-var (
-	phi4vText = testmodels.Path("minicpmv/Phi-4-reasoning-vision-15B-Q4_K_M.gguf")
-	phi4vProj = testmodels.Path("minicpmv/mmproj-Phi-4-reasoning-vision-15B-f16.gguf")
-	phi4vGold = testmodels.Path("minicpmv/hf/Phi-4-reasoning-vision-15B/gold")
-)
+func phi4vText() string { return testmodels.Path("minicpmv/Phi-4-reasoning-vision-15B-Q4_K_M.gguf") }
+
+func phi4vProj() string {
+	return testmodels.Path("minicpmv/mmproj-Phi-4-reasoning-vision-15B-f16.gguf")
+}
+
+func phi4vGold() string { return testmodels.Path("minicpmv/hf/Phi-4-reasoning-vision-15B/gold") }
 
 func openPhi4VReal(t testing.TB) *Model {
 	t.Helper()
-	if !vlmAvailable(phi4vText, phi4vProj) {
-		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (RULE 11)", phi4vText)
+	if !vlmAvailable(phi4vText(), phi4vProj()) {
+		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (RULE 11)", phi4vText())
 	}
-	m, err := Open(jlmOfPair(t, phi4vText, phi4vProj), noTune, WithKVF16(false))
+	m, err := Open(jlmOfPair(t, phi4vText(), phi4vProj()), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,9 +66,9 @@ func TestPhi4RealMatchesTransformers(t *testing.T) {
 			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
 		}
 	}
-	for _, pic := range []struct{ name, path string }{{"photo896x448", mcvPhoto}, {"quad-and-disc", testImage}} {
+	for _, pic := range []struct{ name, path string }{{"photo896x448", mcvPhoto()}, {"quad-and-disc", testImage}} {
 		t.Run(pic.name, func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join(phi4vGold, pic.name+".json"))
+			raw, err := os.ReadFile(filepath.Join(phi4vGold(), pic.name+".json"))
 			if err != nil {
 				t.Skipf("GOLDEN MISSING: %v -- run scripts/phi4visiongold.py (RULE 11); this gate proved nothing", err)
 			}
@@ -96,7 +98,7 @@ func TestPhi4RealMatchesTransformers(t *testing.T) {
 			if gh != g.GH || gw != g.GW {
 				t.Fatalf("a %dx%d grid, the processor's %dx%d", gw, gh, g.GW, g.GH)
 			}
-			base := filepath.Join(phi4vGold, pic.name)
+			base := filepath.Join(phi4vGold(), pic.name)
 			pn, pw := nmse32(readF32(t, base+".px"), px)
 			nv, _ := nmse32(readF32(t, base+".vit"), vit)
 			wantEmb := readF32(t, base+".emb")
@@ -181,7 +183,7 @@ func TestPhi4RealDescribesAnImage(t *testing.T) {
 		}
 		return strings.ToLower(m.Vocab.Decode(out))
 	}
-	img := decodeImage(t, mcvPhoto)
+	img := decodeImage(t, mcvPhoto())
 	got := describe(img)
 	t.Logf("jitllm: %q", got)
 	none := describe(image.NewRGBA(img.Bounds()))

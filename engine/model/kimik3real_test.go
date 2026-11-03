@@ -103,7 +103,7 @@ func k3RealModels() []struct {
 // graph, and the MLA latent norms' epsilon is inert on trained weights: at
 // rms_norm_eps (1e-5 against the class's 1e-6) the 0.40B moves 2.1e-7 and
 // its Kazakh continuation 1.7e-12, so synth-kimik3 stays that choice's gate.
-var k3RealViolations = func() []c6Violation {
+func k3RealViolations() []c6Violation {
 	out := []c6Violation{{"a decay bound the checkpoint does not state (-5)", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.KDALowerBound = -5 })
 	}}}
@@ -116,7 +116,7 @@ var k3RealViolations = func() []c6Violation {
 		}
 	}
 	return out
-}()
+}
 
 // TestKimiK3RealMatchesReference holds trained Kimi-K3 checkpoints to their
 // own remote code (scripts/k3gold.py real-<name>): every position of three
@@ -146,7 +146,7 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 					"k3RealModels line names) -- this subtest proved nothing", testmodels.Path(c.file))
 			}
 			ran++
-			m, err := Open(jlmOf(t, path), noTune, WithKVF16(false))
+			m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -299,7 +299,7 @@ func k3RealSelected(t *testing.T, m *Model) {
 // demands it land far past the arm's bound: a feature the trained weights make
 // inert would otherwise pass for one the engine runs.
 func k3RealViolate(t *testing.T, m *Model, g *k3RealGolden, bound float64) {
-	for _, v := range k3RealViolations {
+	for _, v := range k3RealViolations() {
 		t.Run(v.name, func(t *testing.T) {
 			undo := v.mut(m)
 			defer undo()

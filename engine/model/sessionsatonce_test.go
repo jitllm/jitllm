@@ -168,7 +168,7 @@ func overlaps(a, b atOnceRun) int {
 // answers and the host-side overlap; how much the device itself overlaps is
 // TestSessionsOverlapOnCUDA's to measure.
 func TestSessionsStepAtOnce(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func lanesHold(g *gpu.GPU, blocks int, parts gpu.Parts, lanes int) error {
 // PageIns and PageOuts during the run at once are the selection check that the
 // budget bound, and RanBeside that the sessions stepped together.
 func TestSessionsPageAtOnce(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestSessionsPageAtOnce(t *testing.T) {
 // a streamed pass's order flips a near tie (one in two hundred on CUDA, where
 // one session evicting alone already reads 8e-3).
 func TestSessionsEvictAtOnce(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +591,7 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 // as a step: RanBeside says the two did run at once.
 func TestSessionsRelocateAtOnce(t *testing.T) {
 	defer fusedRunsCheck(t, false)()
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,7 +754,7 @@ func TestModelsAndSessionsAtOnce(t *testing.T) {
 	names := []string{"stories15M-q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf"}
 	var ms []*Model
 	for _, n := range names {
-		m, err := Open(jlmOf(t, testmodels.Path(n)), noTune)
+		m, err := Open(jlmOf(t, testmodels.Path(n)), noTune())
 		if err != nil {
 			t.Fatal(err)
 		}

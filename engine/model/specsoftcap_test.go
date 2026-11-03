@@ -163,7 +163,7 @@ func specCapModels() []string {
 // its largest logit on the first speculation prompt, and returns that logit.
 func openSpecCapped(t *testing.T, path string) (*Model, float64) {
 	t.Helper()
-	m := openSpecModel(t, path, noTune, WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
+	m := openSpecModel(t, path, noTune(), WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
 	amax := 0.0
 	for _, l := range teacherForce(t, m, m.Vocab.Encode(specPrompts()[0], true)) {
 		for _, v := range l {

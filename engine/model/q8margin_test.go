@@ -59,7 +59,7 @@ func TestQ8RouterMargins(t *testing.T) {
 		if _, err := convert.FromSafetensors(dir, dst, jlm.Fingerprint{Host: "test"}, opts...); err != nil {
 			t.Fatal(err)
 		}
-		m, err := Open(dst, noTune, WithKVF16(false))
+		m, err := Open(dst, noTune(), WithKVF16(false))
 		if err != nil {
 			t.Fatal(err)
 		}

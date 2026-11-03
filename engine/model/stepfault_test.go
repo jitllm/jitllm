@@ -260,7 +260,7 @@ func TestStepAcrossSessionsLlama4GateDiscriminates(t *testing.T) {
 		{"synth-cohere2.gguf", []string{"nope", "nowin"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			m, err := Open(stepArchPath(t, c.name), noTune, WithKVF16(false))
+			m, err := Open(stepArchPath(t, c.name), noTune(), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

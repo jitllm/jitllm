@@ -20,7 +20,7 @@ func openD1Omni(t *testing.T) *Model {
 	if !vlmAvailable(text, proj) {
 		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (RULE 11)", d1OmniModel)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), noTune)
+	m, err := Open(jlmOfPair(t, text, proj), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

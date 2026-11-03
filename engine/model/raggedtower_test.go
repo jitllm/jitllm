@@ -19,7 +19,7 @@ func TestRaggedTowerProductsMatchTheOracle(t *testing.T) {
 	if !vlmAvailable(text, proj) {
 		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (RULE 11)", text)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), noTune)
+	m, err := Open(jlmOfPair(t, text, proj), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

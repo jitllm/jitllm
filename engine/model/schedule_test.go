@@ -21,7 +21,7 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 	// recurrent block has no position to rewind, so a reused row that kept the
 	// last sequence's summary parts from its solo run at the first token.
 	all := map[string]string{"qwen35": testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf")}
-	for name, path := range models {
+	for name, path := range models() {
 		all[name] = path
 	}
 	for name, path := range all {
@@ -32,7 +32,7 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			// noGEMM too: rows batched three wide against the same sequence
+			// noGEMM() too: rows batched three wide against the same sequence
 			// alone would otherwise take the weight-stationary GEMM on one side
 			// and the matvec on the other, which differ in the last bits. And
 			// GEMMExact: on arm64 a step's rows go through MatMulPacked's
@@ -45,7 +45,7 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 			// rows' form and alone through the one-row form, which round apart
 			// (qwen3moe, qwen35, qwen2vl); TestSessionsStepWithinTheBandOnF16KV
 			// holds the binary16 default to a band.
-			m, err := Open(jlmOf(t, path), noTune, noGEMM, WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, path), noTune(), noGEMM(), WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -141,7 +141,7 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 // TestSchedulerStopsOnStop covers the other retirement path, since MaxTokens
 // alone would let a Stop bug ship: every sequence would still end, on budget.
 func TestSchedulerStopsOnStop(t *testing.T) {
-	path := models["stories15M"]
+	path := models()["stories15M"]
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("model not present: %s", path)
 	}
@@ -182,7 +182,7 @@ func TestSchedulerStopsOnStop(t *testing.T) {
 // TestSchedulerRejectsAnOversizedPrompt checks that a failing admission frees
 // its row rather than wedging it: one bad request must not cost a slot.
 func TestSchedulerRejectsAnOversizedPrompt(t *testing.T) {
-	path := models["stories15M"]
+	path := models()["stories15M"]
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("model not present: %s", path)
 	}

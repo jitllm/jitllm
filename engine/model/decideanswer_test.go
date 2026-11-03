@@ -32,9 +32,9 @@ func answerGate(t *testing.T, violation string) int {
 	}
 	defer j.Close()
 	// An instance for the composed argmax the answer picks with.
-	path, ok := existingModel(models["stories260K"])
+	path, ok := existingModel(models()["stories260K"])
 	if !ok {
-		t.Fatalf("model not present: %s (nor its container)", models["stories260K"])
+		t.Fatalf("model not present: %s (nor its container)", models()["stories260K"])
 	}
 	m, err := Open(jlmOf(t, path))
 	if err != nil {

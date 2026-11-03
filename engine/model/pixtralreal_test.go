@@ -33,7 +33,7 @@ func TestPixtralRealMatchesTransformers(t *testing.T) {
 	if !vlmAvailable(text, proj) {
 		testmodels.Missing(t, "MODEL MISSING: %s and %s (RULE 11)", text, proj)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), noTune, WithKVF16(false))
+	m, err := Open(jlmOfPair(t, text, proj), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

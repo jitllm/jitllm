@@ -75,7 +75,7 @@ func TestVisionDecodeDoesNotAllocate(t *testing.T) {
 	specs := append([]string{"host"}, testdevices.Specs("cuda", "vulkan", "metal")...)
 	for _, fam := range visionFamilies() {
 		t.Run(fam.name, func(t *testing.T) {
-			m, tw := fam.open(t, noTune)
+			m, tw := fam.open(t, noTune())
 			defer m.Close()
 			ts := tw.testState()
 			emb, err := ts.Encode(rainbow(tw.Cfg.ImageSz))

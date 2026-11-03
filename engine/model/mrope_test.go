@@ -97,7 +97,7 @@ func openQVL(t *testing.T, name string, opts ...Option) (*Model, *qvlGolden) {
 		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (set JITLLM_MODELS) -- run scripts/qwenvlgold.py %s (RULE 11)",
 			text, name)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune, WithKVF16(false)}, opts...)...)
+	m, err := Open(jlmOfPair(t, text, proj), append([]Option{noTune(), WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

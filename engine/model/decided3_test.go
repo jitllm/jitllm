@@ -84,7 +84,7 @@ func TestVllmD3PicturesMatchLlamaCpp(t *testing.T) {
 	if !vlmAvailable(text, proj) {
 		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (RULE 11)", text)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), noTune, WithKVF16(false))
+	m, err := Open(jlmOfPair(t, text, proj), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

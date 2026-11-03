@@ -19,7 +19,7 @@ func TestChatStopsAtTheTurnsEnd(t *testing.T) {
 	if !sourcePresent(src) {
 		testmodels.Missing(t, "MODEL MISSING: %s (internal/testmodels/fetch.sh fetches it) -- this gate would prove nothing (RULE 11)", src)
 	}
-	m, err := Open(jlmOf(t, src), noTune)
+	m, err := Open(jlmOf(t, src), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

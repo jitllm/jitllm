@@ -168,7 +168,7 @@ func openLatent(t *testing.T, name string) *Model {
 		}
 		src = jlmOf(t, p)
 	}
-	m, err := Open(src, noTune, WithKVF16(false))
+	m, err := Open(src, noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

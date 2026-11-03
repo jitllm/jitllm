@@ -122,7 +122,7 @@ func TestDecisionReusesThePrefix(t *testing.T) {
 			continue
 		}
 		t.Run(c.name, func(t *testing.T) {
-			m := openDecision(t, c.gguf, c.kind, noTune)
+			m := openDecision(t, c.gguf, c.kind, noTune())
 			defer m.Close()
 			m.SetKVF16(false)
 			reqs := boardsFor(t, m, 4)
@@ -419,7 +419,7 @@ func TestDecisionWithAPrefixDoesNotAllocate(t *testing.T) {
 			continue
 		}
 		t.Run(c.name, func(t *testing.T) {
-			m := openDecision(t, c.gguf, c.kind, noTune)
+			m := openDecision(t, c.gguf, c.kind, noTune())
 			defer m.Close()
 			m.SetKVF16(false)
 			reqs := boardsFor(t, m, 3)

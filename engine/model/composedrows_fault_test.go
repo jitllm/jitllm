@@ -37,9 +37,9 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 		}{{"pos", gpu.SetPagedFault}, {"alias", gpu.SetPagedFault}, {"headrow", gpu.SetRowsFault}} {
 			t.Run(dev+"/"+f.name, func(t *testing.T) {
 				f.arm(f.name)
-				got, _ := batchGreedy(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev)})
+				got, _, stats := batchGreedyStats(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev)})
 				f.arm("")
-				composedRowsServed(t, m, lastBatchStats)
+				composedRowsServed(t, m, stats)
 				i, j, gap := composedRowsPart(t, m, ids, want, got)
 				if i < 0 {
 					t.Fatalf("under %q every row matched the host to a tie: the gate cannot see it", f.name)

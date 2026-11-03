@@ -28,7 +28,7 @@ func TestPrefillPrecisionArms(t *testing.T) {
 	if name == "" {
 		t.Skip("set JITLLM_PREC_MODEL")
 	}
-	m, err := Open(jlmOf(t, testmodels.Resolve(name)), noTune, WithKVF16(false))
+	m, err := Open(jlmOf(t, testmodels.Resolve(name)), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -85,7 +85,7 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 			} else {
 				container = jlmOfSafetensors(t, path)
 			}
-			m, err := Open(container, noTune, WithKVF16(false))
+			m, err := Open(container, noTune(), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

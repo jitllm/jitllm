@@ -96,7 +96,7 @@ func TestFusedBlocksMatchPerOp(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := testmodels.Path(name)
 			for _, paged := range []bool{false, true} {
-				m, err := Open(jlmOf(t, p), noTune)
+				m, err := Open(jlmOf(t, p), noTune())
 				if err != nil {
 					t.Fatal(err)
 				}

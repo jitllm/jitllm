@@ -142,7 +142,7 @@ func ds4Violations() []c6Violation {
 
 // ds4DevViolations are every violation the device runs itself: all of them
 // but the head's collapse, which the host takes.
-var ds4DevViolations = func() []c6Violation {
+func ds4DevViolations() []c6Violation {
 	var out []c6Violation
 	for _, v := range ds4Violations() {
 		if v.name != "the head's collapse a mean" {
@@ -150,7 +150,7 @@ var ds4DevViolations = func() []c6Violation {
 		}
 	}
 	return out
-}()
+}
 
 // TestDeepseek4OnEveryDevice runs each fixture with every block and the head
 // on each device present against the host -- the hyper-connections, the
@@ -163,7 +163,7 @@ func TestDeepseek4OnEveryDevice(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openDS4(t, fx.name)
 			defer m.Close()
-			fixtureOnEveryDeviceWithin(t, m, g, ds4DevViolations, 1e-5)
+			fixtureOnEveryDeviceWithin(t, m, g, ds4DevViolations(), 1e-5)
 		})
 	}
 }

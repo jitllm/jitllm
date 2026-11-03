@@ -133,7 +133,7 @@ func TestForwardEmbdMatchesForward(t *testing.T) {
 			}
 		}
 		diffBits(t, what, want, got)
-	}, noTune)
+	}, noTune())
 }
 
 // routesByID reports whether some block of m picks its experts by the row's
@@ -224,7 +224,7 @@ func TestPrefillMixedMatchesPrefill(t *testing.T) {
 			t.Fatal(err)
 		}
 		diffBits(t, "Forward after PrefillMixed", want, got)
-	}, noTune)
+	}, noTune())
 }
 
 func diffBits(t *testing.T, what string, want, got []float32) {

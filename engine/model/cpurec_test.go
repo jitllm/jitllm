@@ -39,7 +39,7 @@ func TestComposedCPURecurrentPromptsServe(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
 			open := func(opts ...Option) *Model {
 				t.Helper()
-				m, err := Open(path, append([]Option{noTune}, opts...)...)
+				m, err := Open(path, append([]Option{noTune()}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
 				}

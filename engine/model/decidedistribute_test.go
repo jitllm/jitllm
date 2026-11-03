@@ -61,7 +61,7 @@ func TestDecisionMovesBetweenCards(t *testing.T) {
 	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
 			g, a, b := moveTier(t)
-			m := openDecision(t, c.gguf, c.kind, noTune,
+			m := openDecision(t, c.gguf, c.kind, noTune(),
 				WithPlacement(Placement{Rest: &Place{On: a}, Head: &Place{On: a}}))
 			defer m.Close()
 			if !m.IsEncoder() {
@@ -230,7 +230,7 @@ func TestDecisionDistributes(t *testing.T) {
 	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
 			a, b := moveDevices(t)
-			hm := openDecision(t, c.gguf, c.kind, noTune)
+			hm := openDecision(t, c.gguf, c.kind, noTune())
 			if !hm.IsEncoder() {
 				hm.SetKVF16(false)
 			}
@@ -257,7 +257,7 @@ func TestDecisionDistributes(t *testing.T) {
 					}
 					run := func(violation bool) [][]DecisionAnswer {
 						g, _, _ := moveTier(t)
-						m := openDecision(t, c.gguf, c.kind, noTune, WithPlacement(pl))
+						m := openDecision(t, c.gguf, c.kind, noTune(), WithPlacement(pl))
 						defer m.Close()
 						if !m.IsEncoder() {
 							m.SetKVF16(false)
@@ -298,7 +298,7 @@ func TestDecisionDistributes(t *testing.T) {
 func TestDecisionBatchMatchesAlone(t *testing.T) {
 	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
-			m := openDecision(t, c.gguf, c.kind, noTune)
+			m := openDecision(t, c.gguf, c.kind, noTune())
 			defer m.Close()
 			if !m.IsEncoder() {
 				m.SetKVF16(false)

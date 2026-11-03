@@ -19,7 +19,7 @@ func TestMiniCPMVTeacherForcedMatchesLlamaCpp(t *testing.T) {
 	m := openMiniCPMV(t)
 	defer m.Close()
 	tw := m.Tower()
-	img := decodeImage(t, mcvPhoto)
+	img := decodeImage(t, mcvPhoto())
 	lay, err := tw.Layout(img.Bounds().Dx(), img.Bounds().Dy())
 	if err != nil {
 		t.Fatal(err)

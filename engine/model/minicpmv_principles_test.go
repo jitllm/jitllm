@@ -28,7 +28,7 @@ func mcvEncodePhoto(t *testing.T, tw *Tower, s *Instance) []float32 {
 // engine's own picture path: a 45x23-patch grid.
 func mcvOverview(t testing.TB, tw *Tower, s *Instance) ([]float32, int, int) {
 	t.Helper()
-	img := decodeImage(t, mcvPhoto)
+	img := decodeImage(t, mcvPhoto())
 	lay, err := tw.Layout(img.Bounds().Dx(), img.Bounds().Dy())
 	if err != nil {
 		t.Fatal(err)
@@ -127,10 +127,10 @@ func TestMiniCPMVTowerRelocates(t *testing.T) {
 // tower's scratch and the picture's embeddings are the prompt's, not a
 // token's.
 func TestMiniCPMVDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
-	m := openMiniCPMV(t, noTune)
+	m := openMiniCPMV(t, noTune())
 	defer m.Close()
 	tw := m.Tower()
-	img := decodeImage(t, mcvPhoto)
+	img := decodeImage(t, mcvPhoto())
 	run := func(t *testing.T, g *gpu.GPU) {
 		lay, err := tw.Layout(img.Bounds().Dx(), img.Bounds().Dy())
 		if err != nil {

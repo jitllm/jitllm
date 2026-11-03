@@ -89,8 +89,8 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 
 	// And the vision tower, which holds its own tensors.
 	t.Run("tower", func(t *testing.T) {
-		if _, err := os.Stat(towerPath); err != nil {
-			t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", towerPath, err)
+		if _, err := os.Stat(towerPath()); err != nil {
+			t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", towerPath(), err)
 		}
 		vlm, tw := openTower(t)
 		defer vlm.Close()

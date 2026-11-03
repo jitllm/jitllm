@@ -19,17 +19,17 @@ const testImage = "testdata/quad-and-disc.png"
 // vlmTextPath is the TEXT half of the same VLM. A tower is not a model on its
 // own any more -- one container carries both -- so every tower gate converts
 // the pair and asks the model for its tower.
-var vlmTextPath = testmodels.Path("SmolVLM-256M-Instruct-Q8_0.gguf")
+func vlmTextPath() string { return testmodels.Path("SmolVLM-256M-Instruct-Q8_0.gguf") }
 
 // openTower opens the merged container and hands back the model and its tower.
 // The model owns the container; closing IT closes both.
 func openTower(t testing.TB, opts ...Option) (*Model, *Tower) {
 	t.Helper()
-	if !vlmAvailable(vlmTextPath, towerPath) {
+	if !vlmAvailable(vlmTextPath(), towerPath()) {
 		t.Skipf("MODEL MISSING: %s, and no merged container (set JITLLM_MODELS to the "+
-			"model directory) -- this gate proved nothing", towerPath)
+			"model directory) -- this gate proved nothing", towerPath())
 	}
-	m, err := Open(jlmOfPair(t, vlmTextPath, towerPath), opts...)
+	m, err := Open(jlmOfPair(t, vlmTextPath(), towerPath()), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,14 +43,14 @@ func openTower(t testing.TB, opts ...Option) (*Model, *Tower) {
 
 // towerPath is the mmproj in the model directory (JITLLM_MODELS), resolved
 // through testmodels so the tower gates run on every host.
-var towerPath = testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf")
+func towerPath() string { return testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf") }
 
 // TestOpenTower gates the tower loader against a real mmproj. Every figure was
 // read off the file first and is asserted second.
 func TestOpenTower(t *testing.T) {
-	if !vlmAvailable(vlmTextPath, towerPath) {
+	if !vlmAvailable(vlmTextPath(), towerPath()) {
 		t.Skipf("MODEL MISSING: %s, and no merged container (set JITLLM_MODELS to the "+
-			"model directory) -- this gate proved nothing", towerPath)
+			"model directory) -- this gate proved nothing", towerPath())
 	}
 	vlm, tw := openTower(t)
 	defer vlm.Close()
@@ -152,14 +152,14 @@ func TestConvertRefusesAMismatchedPair(t *testing.T) {
 	} else if _, ok := err.(*NotConvertedError); !ok {
 		t.Errorf("Open refused a GGUF with %v, want NotConvertedError", err)
 	}
-	if !vlmAvailable(vlmTextPath, towerPath) {
+	if !vlmAvailable(vlmTextPath(), towerPath()) {
 		t.Skipf("MODEL MISSING: %s, and no merged container (set JITLLM_MODELS to the "+
-			"model directory) -- this gate proved nothing", towerPath)
+			"model directory) -- this gate proved nothing", towerPath())
 	}
 	// tinyllama's NEmbd is 2048 and SmolVLM's tower projects to 576, so this
 	// pair cannot be converted together.
 	dst := t.TempDir() + "/mismatch.jlm"
-	_, err := convert.FromGGUFs(text, towerPath, dst, jlm.Fingerprint{Host: "test"})
+	_, err := convert.FromGGUFs(text, towerPath(), dst, jlm.Fingerprint{Host: "test"})
 	if err == nil {
 		t.Fatal("convert accepted a tower that projects to the wrong width")
 	}
@@ -167,7 +167,7 @@ func TestConvertRefusesAMismatchedPair(t *testing.T) {
 		t.Errorf("convert refused the pair with %v, want a message naming the mismatch", err)
 	}
 	// And the tower must not be offered as the TEXT model of the pair.
-	if _, err := convert.FromGGUFs(towerPath, towerPath, dst, jlm.Fingerprint{Host: "test"}); err == nil {
+	if _, err := convert.FromGGUFs(towerPath(), towerPath(), dst, jlm.Fingerprint{Host: "test"}); err == nil {
 		t.Error("convert accepted an mmproj as the text model")
 	}
 }
@@ -177,13 +177,13 @@ func TestConvertRefusesAMismatchedPair(t *testing.T) {
 // at the real shapes, is deterministic, and produces finite, non-constant
 // output.
 func TestTowerEncodes(t *testing.T) {
-	if !vlmAvailable(vlmTextPath, towerPath) {
+	if !vlmAvailable(vlmTextPath(), towerPath()) {
 		t.Skipf("MODEL MISSING: %s, and no merged container (set JITLLM_MODELS to the "+
-			"model directory) -- this gate proved nothing", towerPath)
+			"model directory) -- this gate proved nothing", towerPath())
 	}
-	// noTune: see the determinism assertion below, which needs the first
+	// noTune(): see the determinism assertion below, which needs the first
 	// encode to be the settled one.
-	vlm, tw := openTower(t, noTune)
+	vlm, tw := openTower(t, noTune())
 	defer vlm.Close()
 	c := tw.Cfg
 	s := tw.testState()
@@ -215,7 +215,7 @@ func TestTowerEncodes(t *testing.T) {
 	// Determinism needs the tuner pinned: while it duels tiles, consecutive
 	// encodes alternate between two values (int8 activations make a tile change
 	// visible). Warming it instead costs ~22 encodes, too slow for the package
-	// timeout, so noTune (at openTower) makes the first encode the settled one.
+	// timeout, so noTune() (at openTower) makes the first encode the settled one.
 	s2 := tw.testState()
 	defer s2.Close()
 	first, err := s2.Encode(px)
@@ -243,9 +243,9 @@ func TestTowerEncodes(t *testing.T) {
 // coloured quadrants and a disc) has structure so a broken patch gather or
 // pixel shuffle shows up as embeddings that do not vary across the token grid.
 func TestPreprocessAndEncode(t *testing.T) {
-	if !vlmAvailable(vlmTextPath, towerPath) {
+	if !vlmAvailable(vlmTextPath(), towerPath()) {
 		t.Skipf("MODEL MISSING: %s, and no merged container (set JITLLM_MODELS to the "+
-			"model directory) -- this gate proved nothing", towerPath)
+			"model directory) -- this gate proved nothing", towerPath())
 	}
 	f, err := os.Open(testImage)
 	if err != nil {
@@ -302,9 +302,9 @@ func TestPreprocessAndEncode(t *testing.T) {
 // nothing, Encode faults what it runs, and the six matrices stay in pages
 // rather than the dense region. It fails against a LoadAll() at open.
 func TestTowerOpensWithoutFaultingAPage(t *testing.T) {
-	if !vlmAvailable(vlmTextPath, towerPath) {
+	if !vlmAvailable(vlmTextPath(), towerPath()) {
 		t.Skipf("MODEL MISSING: %s, and no merged container (set JITLLM_MODELS to the "+
-			"model directory) -- this gate proved nothing", towerPath)
+			"model directory) -- this gate proved nothing", towerPath())
 	}
 	vlm, tw := openTower(t)
 	defer vlm.Close()

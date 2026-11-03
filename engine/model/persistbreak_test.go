@@ -47,7 +47,7 @@ func persistBroken(t *testing.T, deps bool, brk func() func()) {
 			testmodels.Missing(t, "MODEL MISSING: %s", name)
 		}
 	}
-	m, err := Open(jlmOf(t, p), noTune)
+	m, err := Open(jlmOf(t, p), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

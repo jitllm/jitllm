@@ -11,7 +11,7 @@ import (
 // returns them with the model, still open, for the caller's counters.
 func preloadIDs(t *testing.T, path string, n int, opts ...Option) ([]int32, *Model) {
 	t.Helper()
-	m, err := Open(path, append([]Option{noTune}, opts...)...)
+	m, err := Open(path, append([]Option{noTune()}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,12 +44,12 @@ func preloadIDs(t *testing.T, path string, n int, opts ...Option) ([]int32, *Mod
 func TestPreloadReadsEveryPageAndKeepsTheAnswer(t *testing.T) {
 	for _, name := range []string{"stories15M", "qwen3moe"} {
 		t.Run(name, func(t *testing.T) {
-			path := jlmOf(t, models[name])
+			path := jlmOf(t, models()[name])
 			want, m0 := preloadIDs(t, path, 8)
 			coldReads, coldPeak := m0.PagerReads(), m0.ReadConcurrency()
 			m0.Close()
 
-			m, err := Open(path, noTune, WithPreload(4))
+			m, err := Open(path, noTune(), WithPreload(4))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -89,14 +89,14 @@ func TestPreloadReadsEveryPageAndKeepsTheAnswer(t *testing.T) {
 			}
 
 			// A budget below the model: the forward pass decides residency.
-			m3, err := Open(path, noTune, WithPreload(4), WithPageBudget(page/2))
+			m3, err := Open(path, noTune(), WithPreload(4), WithPageBudget(page/2))
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := m3.WaitPreload(); err != nil {
 				t.Fatal(err)
 			}
-			m4, err := Open(path, noTune, WithPageBudget(page/2))
+			m4, err := Open(path, noTune(), WithPageBudget(page/2))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,10 +112,10 @@ func TestPreloadReadsEveryPageAndKeepsTheAnswer(t *testing.T) {
 // TestCloseStopsAPreload: Close in the middle of a preload waits for its reads
 // and leaves no goroutine behind.
 func TestCloseStopsAPreload(t *testing.T) {
-	path := jlmOf(t, models["qwen3moe"])
+	path := jlmOf(t, models()["qwen3moe"])
 	base := runtime.NumGoroutine()
 	for range 4 {
-		m, err := Open(path, noTune, WithPreload(4))
+		m, err := Open(path, noTune(), WithPreload(4))
 		if err != nil {
 			t.Fatal(err)
 		}

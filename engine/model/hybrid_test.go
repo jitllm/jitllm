@@ -291,7 +291,7 @@ func hybridModelOpt(t *testing.T, o hyOpt) *Model {
 	if _, err := jlm.Write(dst, src, jlm.Fingerprint{Host: "test"}); err != nil {
 		t.Fatalf("jlm.Write: %v", err)
 	}
-	opts := []Option{noTune}
+	opts := []Option{noTune()}
 	if o.chunk > 0 {
 		opts = append(opts, WithChunk(o.chunk))
 	}

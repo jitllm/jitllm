@@ -66,7 +66,7 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 			if !vlmAvailable(text, proj) {
 				testmodels.Missing(t, "MODEL MISSING: %s and its mmproj -- QVL_GGUF=1 scripts/qwenvlreal.py writes them (RULE 11)", text)
 			}
-			m, err := Open(jlmOfPair(t, text, proj), noTune, WithKVF16(false))
+			m, err := Open(jlmOfPair(t, text, proj), noTune(), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -235,7 +235,7 @@ func TestQwenVLWindowsSurviveQueryChunks(t *testing.T) {
 	if !vlmAvailable(text, proj) {
 		t.Skipf("MODEL MISSING: %s and its mmproj (set JITLLM_MODELS) -- this gate proved nothing", text)
 	}
-	m, err := Open(jlmOfPair(t, text, proj), noTune)
+	m, err := Open(jlmOfPair(t, text, proj), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

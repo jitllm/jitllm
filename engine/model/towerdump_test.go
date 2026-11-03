@@ -31,7 +31,9 @@ type mtmdNode struct {
 	sum          float64
 }
 
-var mtmdHead = regexp.MustCompile(`common_debug_cb_eval:\s+(.+?) = \(f32\).*= \{(\d+), (\d+), 1, 1\}$`)
+func mtmdHead() *regexp.Regexp {
+	return regexp.MustCompile(`common_debug_cb_eval:\s+(.+?) = \(f32\).*= \{(\d+), (\d+), 1, 1\}$`)
+}
 
 // parseMtmdDump reads every 2-D f32 node of a dump, keyed by its name. A name
 // printed twice keeps its first node.
@@ -50,7 +52,7 @@ func parseMtmdDump(t testing.TB, path string) map[string]*mtmdNode {
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
 		line := sc.Text()
-		if m := mtmdHead.FindStringSubmatch(line); m != nil {
+		if m := mtmdHead().FindStringSubmatch(line); m != nil {
 			w, _ := strconv.Atoi(m[2])
 			r, _ := strconv.Atoi(m[3])
 			cur, name = &mtmdNode{width: w, rows: r}, strings.TrimSpace(m[1])

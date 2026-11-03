@@ -23,7 +23,7 @@ import (
 // region arriving while workers spin costs a sequence load, one arriving after
 // they park costs a wake and a scheduler round trip.
 func TestTowerSpinProbe(t *testing.T) {
-	if _, err := os.Stat(towerPath); err != nil {
+	if _, err := os.Stat(towerPath()); err != nil {
 		t.Skip("no mmproj present")
 	}
 	for _, spin := range []time.Duration{0, 250 * time.Microsecond, 20 * time.Millisecond} {
