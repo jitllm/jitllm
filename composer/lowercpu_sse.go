@@ -356,7 +356,7 @@ func (e *x86Lowerer) nodeSSE(i int) {
 		e.bin(step, commutes, r, r, t)
 	case OpMul, OpAdd, OpShr, OpAnd, OpShl:
 		e.arithSSE(i)
-	case OpSub, OpDiv, OpMin, OpMax:
+	case OpSub, OpDiv, OpRem, OpMin, OpMax:
 		if e.gpr(i) {
 			e.integer(i)
 			return

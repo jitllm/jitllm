@@ -145,3 +145,28 @@ func TestCPUSelectBroadcastsAGeneralMask(t *testing.T) {
 		}
 	}
 }
+
+// TestCPUIndexTakesARemainder executes a row map reading a float at its
+// word's remainder by 3, the index a general register's: each row is held
+// to the float its word picks, at word values on both sides of the divisor.
+func TestCPUIndexTakesARemainder(t *testing.T) {
+	const R = 6
+	U, F := ir.U32, ir.F32
+	var x exprs
+	r := x.coord(0)
+	w := x.at(0, []int{R, 1}, r, x.u(0))
+	v := x.un(OpBitcast, U, x.load(1, x.op(OpRem, U, w, x.u(3))))
+	out := Operand{Kind: OperandValue, Value: 2, Name: "o", Elem: U, Out: true}
+	p := Prim{Kind: PrimMap, Shape: []int{R, 1}, Expr: x.e, Facts: Facts{Extents: map[int]int{1: 3}},
+		In:     []Operand{{Kind: OperandValue, Value: 0, Name: "w", Elem: U}, {Kind: OperandValue, Value: 1, Name: "f", Elem: F}},
+		Stores: []PrimStore{{Out: out, Ax: []int{r, x.u(0)}, Ext: []int{R, 1}, Value: v}}}
+	words := []uint32{0, 1, 2, 3, 7, 11}
+	fs := []float32{0.5, 1.5, 2.5}
+	got := make([]uint32, R)
+	runCPUPrim(t, p, indexValues(), map[string][]uint32{"w": words, "f": f32Words(fs), "o": got})
+	for i, wi := range words {
+		if want := math.Float32bits(fs[wi%3]); got[i] != want {
+			t.Fatalf("row %d (word %d) is %#x, want %#x (rows %#x)", i, wi, got[i], want, got)
+		}
+	}
+}
