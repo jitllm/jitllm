@@ -18,7 +18,9 @@ import (
 	"time"
 )
 
-var nan = math.NaN()
+func nan() float64 {
+	return math.NaN()
+}
 
 // Arm is one endpoint under test.
 type Arm struct {
@@ -69,7 +71,7 @@ type Config struct {
 	// concurrency c warms at c.
 	WarmupLevel int `json:"warmup_level,omitempty"`
 
-	// PromptLens is the mix of generated prompt lengths, in words (about a
+	// PromptLens is the mix of generated prompt lengths, in words() (about a
 	// token each on a llama-family tokenizer; the measured count is in each
 	// sample's prompt_tokens). PromptFile replaces generation.
 	PromptLens []int  `json:"prompt_lens"`
@@ -160,9 +162,10 @@ type job struct {
 	prompt string
 }
 
-// words is the generated prompts' vocabulary: common English words, so a
+// words() is the generated prompts' vocabulary: common English words(), so a
 // llama-family tokenizer spends about a token on each.
-var words = strings.Fields(`the of and to in is was that for it with as his on be at by had
+func words() []string {
+	return strings.Fields(`the of and to in is was that for it with as his on be at by had
 are but from or have an they which one you were all we her she there would their
 will when who him been has more if no out so said what up its about than into them
 can only other time new some could these two may first then do any like my now over
@@ -171,14 +174,16 @@ where much your way well down should because each just those people how too litt
 state good very make world still own see men work long get here between both life
 being under never day same another know while last might us great old year off come
 since against go came right used take three`)
+}
 
 func generate(r *rand.Rand, n int) string {
 	var b strings.Builder
+	vocab := words()
 	for i := range n {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
-		b.WriteString(words[r.IntN(len(words))])
+		b.WriteString(vocab[r.IntN(len(vocab))])
 	}
 	return b.String()
 }

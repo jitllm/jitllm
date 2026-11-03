@@ -37,20 +37,29 @@ type key struct {
 	class, typ, plane, variant string
 }
 
-var (
-	tileSize = flag.Int("tile", 16<<10, "independently decodable tile size in bytes")
-	maxTiles = flag.Int("tiles", 64, "tiles sampled per tensor plane")
-	nPages   = flag.Int("pages", 6, "pages sampled per class")
-	minSpan  = flag.Int("minspan", 64<<10, "skip planes smaller than this")
-	disk     = flag.Float64("disk", 3.0, "disk bandwidth, GB/s")
-	pcie     = flag.Float64("pcie", 12.0, "PCIe bandwidth, GB/s")
-	hbm      = flag.Float64("hbm", 800.0, "device memory bandwidth, GB/s")
-)
+// options are the command's flags.
+type options struct {
+	tileSize, maxTiles, nPages, minSpan int
+	disk, pcie, hbm                     float64
+}
+
+func parseOptions() *options {
+	o := &options{}
+	flag.IntVar(&o.tileSize, "tile", 16<<10, "independently decodable tile size in bytes")
+	flag.IntVar(&o.maxTiles, "tiles", 64, "tiles sampled per tensor plane")
+	flag.IntVar(&o.nPages, "pages", 6, "pages sampled per class")
+	flag.IntVar(&o.minSpan, "minspan", 64<<10, "skip planes smaller than this")
+	flag.Float64Var(&o.disk, "disk", 3.0, "disk bandwidth, GB/s")
+	flag.Float64Var(&o.pcie, "pcie", 12.0, "PCIe bandwidth, GB/s")
+	flag.Float64Var(&o.hbm, "hbm", 800.0, "device memory bandwidth, GB/s")
+	flag.Parse()
+	return o
+}
 
 const metaPerTile = 5 // 4-byte offset + 1-byte codec flag
 
 func main() {
-	flag.Parse()
+	o := parseOptions()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: pagecomp [flags] <model.jlm>")
 		os.Exit(2)
@@ -74,17 +83,17 @@ func main() {
 		}
 	}
 	fmt.Printf("%s: %d block pages, %d expert pages, page %d KiB, tile %d KiB\n",
-		flag.Arg(0), len(blockPages), len(expertPages), f.H.PageSize>>10, *tileSize>>10)
+		flag.Arg(0), len(blockPages), len(expertPages), f.H.PageSize>>10, o.tileSize>>10)
 
 	// head: the dense region.
 	for i := range f.Entries() {
 		e := &f.Entries()[i]
 		if f.InDense(e) {
 			qs, d, sc := f.Span(e)
-			measure(cells, "head", e.Type, qs, d, sc)
+			measure(o, cells, "head", e.Type, qs, d, sc)
 		}
 	}
-	for _, li := range pick(blockPages, *nPages) {
+	for _, li := range pick(blockPages, o.nPages) {
 		if err := f.EnsurePage(li); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			continue
@@ -95,11 +104,11 @@ func main() {
 				continue
 			}
 			qs, d, sc := f.Span(e)
-			measure(cells, "dense", e.Type, qs, d, sc)
+			measure(o, cells, "dense", e.Type, qs, d, sc)
 		}
 		f.DropPage(li)
 	}
-	for _, li := range pick(expertPages, *nPages) {
+	for _, li := range pick(expertPages, o.nPages) {
 		if err := f.EnsurePage(li); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			continue
@@ -114,11 +123,11 @@ func main() {
 				continue
 			}
 			qs, d, sc := f.Sheet(e, x)
-			measure(cells, "expert", e.Type, qs, d, sc)
+			measure(o, cells, "expert", e.Type, qs, d, sc)
 		}
 		f.DropPage(li)
 	}
-	report(cells)
+	report(o, cells)
 }
 
 // pick returns n indices spread evenly over xs.
@@ -133,12 +142,12 @@ func pick(xs []int, n int) []int {
 	return out
 }
 
-func measure(cells map[key]*stat, class string, t jlm.Type, qs, d, sc []byte) {
+func measure(o *options, cells map[key]*stat, class string, t jlm.Type, qs, d, sc []byte) {
 	for _, p := range []struct {
 		name string
 		b    []byte
 	}{{"qs", qs}, {"d", d}, {"sc", sc}} {
-		if len(p.b) < *minSpan {
+		if len(p.b) < o.minSpan {
 			continue
 		}
 		for _, v := range variants(t, p.name) {
@@ -148,22 +157,22 @@ func measure(cells map[key]*stat, class string, t jlm.Type, qs, d, sc []byte) {
 				s = &stat{}
 				cells[k] = s
 			}
-			tiles(p.b, func(tile []byte) { v.run(s, tile) })
+			tiles(o, p.b, func(tile []byte) { v.run(s, tile) })
 		}
 	}
 }
 
 // tiles calls fn on up to maxTiles evenly spaced tiles of b.
-func tiles(b []byte, fn func([]byte)) {
-	n := (len(b) + *tileSize - 1) / *tileSize
+func tiles(o *options, b []byte, fn func([]byte)) {
+	n := (len(b) + o.tileSize - 1) / o.tileSize
 	take := n
-	if take > *maxTiles {
-		take = *maxTiles
+	if take > o.maxTiles {
+		take = o.maxTiles
 	}
 	for i := 0; i < take; i++ {
 		t := i * n / take
-		lo := t * *tileSize
-		hi := lo + *tileSize
+		lo := t * o.tileSize
+		hi := lo + o.tileSize
 		if hi > len(b) {
 			hi = len(b)
 		}
@@ -335,7 +344,7 @@ func entropy(s *stat, b []byte, n int) {
 // summary folds the planes of each (class, type) into one row per codec: a
 // plane with no split variant contributes its unsplit result to the split rows,
 // since the converter would store it unsplit.
-func summary(cells map[key]*stat) {
+func summary(o *options, cells map[key]*stat) {
 	type ck struct{ class, typ string }
 	seen := map[ck]bool{}
 	for k := range cells {
@@ -389,13 +398,13 @@ func summary(cells map[key]*stat) {
 				}
 				return fmt.Sprintf("%.1f", b/(1-r))
 			}
-			fmt.Printf("%-7s %-5s %-13s %9.2f %7.4f %9s %8s %8s %9s\n", c.class, c.typ, v, raw/(1<<20), r, dec, be(*disk), be(*pcie), be(*hbm))
+			fmt.Printf("%-7s %-5s %-13s %9.2f %7.4f %9s %8s %8s %9s\n", c.class, c.typ, v, raw/(1<<20), r, dec, be(o.disk), be(o.pcie), be(o.hbm))
 		}
 	}
 }
 
-func report(cells map[key]*stat) {
-	summary(cells)
+func report(o *options, cells map[key]*stat) {
+	summary(o, cells)
 	keys := make([]key, 0, len(cells))
 	for k := range cells {
 		keys = append(keys, k)
@@ -413,7 +422,7 @@ func report(cells map[key]*stat) {
 		}
 		return a.variant < b.variant
 	})
-	fmt.Printf("\nbreak-even D > B/(1-r), B = disk %.1f, pcie %.1f, hbm %.0f GB/s\n", *disk, *pcie, *hbm)
+	fmt.Printf("\nbreak-even D > B/(1-r), B = disk %.1f, pcie %.1f, hbm %.0f GB/s\n", o.disk, o.pcie, o.hbm)
 	fmt.Printf("%-7s %-5s %-3s %-13s %9s %7s %9s %8s %8s %9s\n",
 		"class", "type", "pl", "codec", "MiB", "r", "dec GB/s", "disk>", "pcie>", "hbm>")
 	for _, k := range keys {
@@ -436,6 +445,6 @@ func report(cells map[key]*stat) {
 		}
 		fmt.Printf("%-7s %-5s %-3s %-13s %9.2f %7.4f %9s %8s %8s %9s\n",
 			k.class, k.typ, k.plane, k.variant, float64(s.raw)/(1<<20), r, dec,
-			be(*disk), be(*pcie), be(*hbm))
+			be(o.disk), be(o.pcie), be(o.hbm))
 	}
 }
