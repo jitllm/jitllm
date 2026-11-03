@@ -2185,19 +2185,17 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 		}
 	}
 	hs := k.Homes()
-	readers := func(i int) []int {
-		var out []int
-		for j, x := range k.Nodes {
-			if _, in := pos[j]; !in {
-				continue
-			}
-			for _, a := range k.Operands(&x) {
-				if *a == i {
-					out = append(out, j)
-				}
-			}
+	// Each node's readers in the sequence, a reader once an operand it reads
+	// the node through, made once: asked of every candidate, a scan of the
+	// kernel each made a rematerialization quadratic in its nodes.
+	readers := make([][]int, len(k.Nodes))
+	for j, x := range k.Nodes {
+		if _, in := pos[j]; !in {
+			continue
 		}
-		return out
+		for _, a := range k.Operands(&x) {
+			readers[*a] = append(readers[*a], j)
+		}
 	}
 	pick := func(outside bool) int {
 		best, at := -1, -1
@@ -2206,7 +2204,7 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 			if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || o != OperandConsts && k.Bufs[nd.Buf].Words == nil || hs[i] >= 0 {
 				continue
 			}
-			rs := readers(i)
+			rs := readers[i]
 			ok := len(rs) > 0
 			first := -1
 			for _, r := range rs {
