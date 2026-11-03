@@ -26,7 +26,7 @@ import (
 // run's "prompt" figure is not a prefill rate: the first prompt of a process
 // compiles and loads the batched kernels, which llama-bench excludes as
 // warm-up.
-func speedCmd(args []string) error {
+func speedCmd(procStart time.Time, args []string) error {
 	backend.SetCUDATiming(os.Getenv("JITLLM_CUDA_TIMING") == "1")
 	backend.SetCUDAKernelTiming(os.Getenv("JITLLM_CUDA_KERNEL_TIMING") == "1")
 	fs := flag.NewFlagSet("speed", flag.ExitOnError)
@@ -276,7 +276,7 @@ func speedCmd(args []string) error {
 		return pp, tg, nil
 	}
 	if *ttft {
-		return ttftRun(m, attach, *p, *reps, t00, tOpen, tDev)
+		return ttftRun(m, attach, *p, *reps, procStart, t00, tOpen, tDev)
 	}
 	if *sessions > 0 {
 		return sessionsRun(attach, prompt, *sessions, *n, *reps)
@@ -477,7 +477,7 @@ func ttftText(m *model.Model, p int) string {
 // the process's -- the container opened, the blocks placed and uploaded, the
 // kernels compiled -- and each after it is a fresh session on the loaded
 // model: tokenize, take pages, prefill, sample.
-func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps int, t00 time.Time, tOpen, tDev time.Duration) error {
+func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps int, procStart, t00 time.Time, tOpen, tDev time.Duration) error {
 	text := ttftText(m, p)
 	var tAttach time.Duration
 	var compiled int64
