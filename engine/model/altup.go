@@ -72,7 +72,7 @@ func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32
 	nlogit int) error {
 	c := s.m.Cfg
 	x := s.bx[:n*c.ResidW()]
-	if err := s.expandStreams(x, n); err != nil {
+	if err := s.expandStreams(x, n, 0); err != nil {
 		return err
 	}
 	// Qwen3.8-Flash-Next's n-gram rows, each sequence's in position order.
@@ -183,40 +183,4 @@ func loadAltUpLayer(l *layer, bi int32, cfg *Config,
 			l.laurelL.k, l.laurelR.rows, l.laurelR.k, s, d)
 	}
 	return nil
-}
-
-// allocAltUp sizes the decode token's AltUp scratch.
-func (s *Instance) allocAltUp() {
-	c := s.m.Cfg
-	if c.PredStreams == 0 {
-		return
-	}
-	d, n := c.NEmbd, c.Streams()
-	s.xa = make([]float32, n*d)
-	s.x = s.xa[:d]
-}
-
-// altExpand fills streams 1.. of each of `rows` rows from stream 0, the
-// scaled embedding.
-func (s *Instance) altExpand(x []float32, rows int) error {
-	if why := s.cpuExpand(x, rows); why != composer.DeclineServes {
-		return s.streamsDeclined("expansion", why)
-	}
-	return nil
-}
-
-// altCollapse writes each row's head input into stream 0: the mean of
-// stream 0 and each unembedded stream matched to stream 0's magnitude.
-func (s *Instance) altCollapse(x []float32, rows int) error {
-	if why := s.cpuCollapse(x, rows); why != composer.DeclineServes {
-		return s.streamsDeclined("collapse", why)
-	}
-	return nil
-}
-
-// streamsDeclined is the error of a streams' expansion or collapse no
-// composed form serves.
-func (s *Instance) streamsDeclined(what string, why composer.Decline) error {
-	return fmt.Errorf("model: the streams' %s has no composed form on this instance (%s): %v %v",
-		what, composer.DeclineName(int(why)), s.cpu.formErr, s.m.frontGraphs().streamsErr)
 }

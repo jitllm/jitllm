@@ -381,6 +381,8 @@ func (m *Model) streamCollapseGraph() (*graph.Graph, error) {
 		xs[k] = b.In(fmt.Sprintf("x.%d", k), d)
 	}
 	switch {
+	case c.mixesStreams() && c.k3Fault == k3FaultNoHeadMix:
+		b.Out(streamCopy(b, xs[0]))
 	case c.mixesStreams():
 		b.Out(m.bankMix(b, f, xs[1:1+c.resBankFinal()], xs[0], jlm.RoleOutputResScore))
 	case c.gatesStreams():

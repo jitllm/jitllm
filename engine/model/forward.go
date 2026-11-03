@@ -199,9 +199,6 @@ type Instance struct {
 	// xa is the one-row residual's streams (x is its stream 0), on a model of
 	// several (altup.go).
 	xa []float32
-	// k3 is Kimi-K3's residual attention and latent mixture buffers (k3.go),
-	// nil on every other model.
-	k3 *k3Scratch
 	// q4 is Qwen3.8-Flash-Next's scratch (q4e.go); xa is its streams too.
 	q4  *q4eScratch
 	tok int32
@@ -462,7 +459,7 @@ type Instance struct {
 	rowsPos []int
 	// q4In is a Qwen3.8-Flash-Next prediction block's draft rows, every
 	// stream, row-major: laid into the residual in place of the embedding's
-	// copies (q4eExpandAt). nil on every other Instance.
+	// copies (q4eDraftStreams). nil on every other Instance.
 	q4In []float32
 
 	// emb is set for the length of one Embedder.Embed on a decoder embedding
@@ -556,7 +553,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	// A sink takes one slot past the last position, so the row grows by one.
 	s.attStride = attStride(maxSeq + m.sinkSlot())
 	s.growPLE()
-	s.allocAltUp()
+	s.allocStreams()
 	s.gate = make([]float32, c.MaxNFFN(), ffnPad(c.MaxNFFN()))
 	s.up = make([]float32, c.MaxNFFN(), ffnPad(c.MaxNFFN()))
 	s.logits = make([]float32, c.NVocab)
@@ -635,7 +632,6 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		s.kvl.jit = s.jit
 		s.jit.ReserveKVQuant(max(c.HeadDim, c.HeadDimSWA))
 	}
-	s.allocK3()
 	s.allocQ4E()
 	// kvl.fmt sizes every page.
 	s.kv = newKVCacheRange(c, s.m.nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
@@ -3482,34 +3478,13 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	}
 	// AltUp's streams ride the fill as well (altup.go): every restart begins
 	// from the embedding.
-	if c.PredStreams != 0 {
+	if c.streamHead() {
 		inner := fill
 		fill = func() error {
 			if err := inner(); err != nil {
 				return err
 			}
-			return s.altExpand(s.xa, 1)
-		}
-	}
-	if c.Q4E() {
-		inner := fill
-		fill = func() error {
-			if err := inner(); err != nil {
-				return err
-			}
-			s.q4eExpand(s.xa, 1)
-			return nil
-		}
-	}
-	// Kimi-K3's bank starts every token empty (k3.go).
-	if c.ResAttn() {
-		inner := fill
-		fill = func() error {
-			if err := inner(); err != nil {
-				return err
-			}
-			s.k3Expand(s.xa, 1)
-			return nil
+			return s.expandStreams(s.xa, 1, 0)
 		}
 	}
 	s.relocateFor(s.pos + 1)
@@ -3646,8 +3621,8 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}
 		return nil, s.cpuRefused(li, why)
 	}
-	// AltUp's head reads the streams' mean, written into stream 0 (altup.go);
-	// DeepSeek V4's their collapse (ds4.go). A device that collapses the
+	// A head over several streams reads their collapse, written into stream
+	// 0. A device that collapses the
 	// streams itself (nn.Head.Collapses) is handed them as they are, and the
 	// host collapses them only where it refuses the call.
 	devCollapse := s.head != nil && !folded && s.head.Collapses && s.rows == nil && s.lo < c.NLayer

@@ -7,13 +7,13 @@ import (
 )
 
 // The input rows' streams and the head's row on the CPU device, for a model
-// of predicted streams (frontstreams.go): where the composed CPU path is on,
-// the host's expansion of stream 0 into the others and its collapse of every
-// stream into the row the head reads run what the composer forms for their
-// graphs, a decode's row at one form and a chunk's rows at cpuRowsCap, each
-// stream bound at its offset in the stream-major residual. Each is composed
-// once at the instance's placement and counted served or declined by name
-// (CPUStreamSteps); main's code runs one it declines.
+// of several residual streams (frontstreams.go): the expansion of stream 0
+// into the others and the collapse of every stream into the row the head
+// reads run what the composer forms for their graphs, a decode's row at one
+// form and a chunk's rows at cpuRowsCap, each stream bound at its offset in
+// the stream-major residual. Each is composed once at the instance's
+// placement and counted served or declined by name (CPUStreamSteps); a
+// declined one refuses the call by name (streamsDeclined).
 
 // cpuStreamsState is a instance's composed expansion and collapse and their
 // census.

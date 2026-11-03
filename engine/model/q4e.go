@@ -339,8 +339,6 @@ func (s *Instance) allocQ4E() {
 	if !c.Q4E() {
 		return
 	}
-	s.xa = make([]float32, c.ResidW())
-	s.x = s.xa[:c.NEmbd]
 	s.q4 = &q4eScratch{}
 	s.q4.twos = make([]float32, c.HCMult*(nn.ElemLanes+1))
 	for i := range s.q4.twos {
@@ -374,33 +372,16 @@ func (s *Instance) growQ4E(n int) {
 	s.growQSARows(n)
 }
 
-// q4eExpand copies each row's embedding (stream 0) into the other streams:
-// the residual starts as HCMult copies of it.
-func (s *Instance) q4eExpand(x []float32, rows int) { s.q4eExpandAt(x, rows, 0) }
-
-// q4eExpandAt is q4eExpand for a chunk whose first row is row base of the
-// call. A prediction block's draft does not start from copies: its rows
-// arrive with every stream (s.q4In, row-major, eh_proj's per-stream output),
-// and those are laid into the chunk instead.
-func (s *Instance) q4eExpandAt(x []float32, rows, base int) {
+// q4eDraftStreams lays a prediction block's draft rows, which arrive with
+// every stream (s.q4In, row-major, eh_proj's per-stream output), into a chunk
+// of rows whose first is row base of the call.
+func (s *Instance) q4eDraftStreams(x []float32, rows, base int) {
 	c := s.m.Cfg
-	if s.q4In == nil && s.cpuExpand(x, rows) == composer.DeclineServes {
-		return
-	}
-	if s.q4In != nil {
-		w, d := c.ResidW(), c.NEmbd
-		for r := 0; r < rows; r++ {
-			in := s.q4In[(base+r)*w : (base+r+1)*w]
-			for k := 0; k < c.HCMult; k++ {
-				copy(c.stream(x, k, rows, r), in[k*d:(k+1)*d])
-			}
-		}
-		return
-	}
+	w, d := c.ResidW(), c.NEmbd
 	for r := 0; r < rows; r++ {
-		x0 := c.stream(x, 0, rows, r)
-		for k := 1; k < c.HCMult; k++ {
-			copy(c.stream(x, k, rows, r), x0)
+		in := s.q4In[(base+r)*w : (base+r+1)*w]
+		for k := 0; k < c.HCMult; k++ {
+			copy(c.stream(x, k, rows, r), in[k*d:(k+1)*d])
 		}
 	}
 }
@@ -485,13 +466,15 @@ func (s *Instance) q4eCollapse(x []float32, n int) error {
 	s.growQ4E(n)
 	c, g := s.m.Cfg, s.q4
 	s.rows.tapStreams(s, x, n)
-	hc := &s.m.q4eHead.hc
-	if s.lo >= c.NLayer {
-		hc = &s.m.layers[s.lo].q4e.head
-	} else if s.cpuCollapse(x, n) == composer.DeclineServes {
+	if s.lo < c.NLayer {
+		if why := s.cpuCollapse(x, n); why != composer.DeclineServes {
+			return s.streamsDeclined("collapse", why)
+		}
 		return nil
 	}
-	if err := s.hcMix(x, n, hc); err != nil {
+	// A prediction block's draft mixes through the block's own head mix,
+	// which no composed form states yet: main's kernels run it.
+	if err := s.hcMix(x, n, &s.m.layers[s.lo].q4e.head); err != nil {
 		return err
 	}
 	for r := 0; r < n; r++ {
