@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"runtime"
 	"slices"
 	"sort"
 	"sync"
@@ -150,41 +149,10 @@ type Instance struct {
 	// attStride is a row of scores' stride over the context: maxSeq rounded
 	// up to a vector.
 	attStride int
-	gate, up  []float32
 	maxSeq    int
 	reqSeq    int       // what the caller asked for; > maxSeq when the model is shorter
 	kvFmt     cpu.KVFmt // the KV cache's element format
 
-	// MoE scratch, allocated only for a mixture-of-experts model. moeGate/moeUp
-	// are the per-expert ffn width, which is not NFFN -- gate and up are NFFN
-	// for every dense model here and NFFNExp for this one.
-	moeGate, moeUp, moeDown []float32
-	// moeGate/moeUp hold every selected expert, not one, so the k gate and k
-	// up projections go out in one pool region (nn.MatVecPackedMulti) and the
-	// SwiGLU over all of them is one more. Expert i occupies
-	// [i*moePad, i*moePad+NFFNExp); the slack between NFFNExp and moePad is
-	// allocated zero, written by nothing but the activation (silu(0)*0 = 0) and
-	// read by nothing, so it stays zero for the life of the Instance.
-	// The per-expert paths take [:NFFNExp], which is what they always had.
-	moePad int
-	// Scratch for the batch: the k*2 sheets and their outputs, reused so a
-	// decode token allocates nothing.
-	moeW []*nn.Packed
-	moeO [][]float32
-	// moeOnes is NExpertUsed ones: the weights a mixture that applies its
-	// routed weight to the expert's input (Llama 4) sums the downs at.
-	moeOnes []float32
-	// The shared expert's scratch. Its width is NFFNShExp, a different key
-	// from the routed experts'.
-	shGate, shUp []float32
-	expReq       chan expRead
-	// hyOrd and hyW are hostExperts' selection in ascending id and its
-	// weights in that order, kept so a token allocates neither.
-	hyOrd []int32
-	hyW   []float32
-	// hostCalls counts the device's calls into hostExperts, so a token can
-	// tell whether its submission suspended for the host's experts.
-	hostCalls int
 	// autoStreamed counts the blocks the last placement streamed because no
 	// card could hold them resident (nn.AutoStreamer), and streamedOn marks
 	// them, with those streamed to make room for the head (streamForHead).
@@ -220,7 +188,6 @@ type Instance struct {
 	// its promptBuf, for growBatch and growMoEBatch to grow into.
 	spareHost hostBatch
 	// traceLayer is the block moe() is running, for traceExperts.
-	traceLayer int
 	// Per-row selection and weight for a batched chunk, so moeBatch can visit
 	// experts in order rather than rows.
 	bsel []int32
@@ -255,7 +222,6 @@ type Instance struct {
 	// the call in question is not for. Both nil on qwen3next.
 	// mvCalls counts mv: each one reads its weight once, the count a gate
 	// holds a batched path to (TestLinearRowsCounts).
-	mvCalls int64
 	// dSB and dSC are a Mamba-1 block's B and C, and dZeroA the zero rates
 	// its dt goes through SSDGate32JIT against (only the softplus is kept).
 
@@ -351,16 +317,8 @@ type Instance struct {
 	// Atomic because the pool writes it from every worker.
 	attnPaired atomic.Int64
 
-	// moeBatched and moeLooped count which MoE FFN dispatch shape ran: one
-	// region per stage, or one per expert. Without them "made no difference"
-	// and "never ran" read the same.
-	moeBatched, moeLooped atomic.Int64
-	// The down projection is a separate question from gate/up: it has its own
-	// contract (one activation per expert) and its own way to decline, so one
-	// counter for both would read "batched" while half the FFN looped.
-	moeDownBatched, moeDownLooped atomic.Int64
-	blogits                       []float32 // a step's rows' logits, NVocab each
-	allRows                       []int     // 0..nseq-1, the rows Reset zeroes on a device
+	blogits []float32 // a step's rows' logits, NVocab each
+	allRows []int     // 0..nseq-1, the rows Reset zeroes on a device
 	// placing is true while SetDeviceLayers offers blocks, when WithPlacement's
 	// map applies; placeErr is what it could not do.
 	placing  bool
@@ -554,8 +512,6 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	s.attStride = attStride(maxSeq + m.sinkSlot())
 	s.growPLE()
 	s.allocStreams()
-	s.gate = make([]float32, c.MaxNFFN(), ffnPad(c.MaxNFFN()))
-	s.up = make([]float32, c.MaxNFFN(), ffnPad(c.MaxNFFN()))
 	s.logits = make([]float32, c.NVocab)
 	// One rotary table per row: a ragged batch has rows at different
 	// positions.
@@ -570,25 +526,6 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		qd := c.NHead * c.HeadDim
 		s.qgate = make([]float32, nseq*2*qd)
 		s.ogate = make([]float32, nseq*qd)
-	}
-	if c.MoE() {
-		s.moePad = ffnPad(c.NFFNExp)
-		s.moeGate = make([]float32, c.NExpertUsed*s.moePad)
-		s.moeUp = make([]float32, c.NExpertUsed*s.moePad)
-		// moeDown holds every selected expert's down projection, so the k of
-		// them come out of one region and the weighted sum is one more.
-		s.moeDown = make([]float32, c.NExpertUsed*c.NEmbd)
-		s.moeW = make([]*nn.Packed, 0, 2*c.NExpertUsed)
-		s.moeO = make([][]float32, 0, 2*c.NExpertUsed)
-		s.moeOnes = make([]float32, c.NExpertUsed)
-		for i := range s.moeOnes {
-			s.moeOnes[i] = 1
-		}
-		// The shared expert has its own width (NFFNShExp), not NFFNExp.
-		if c.NFFNShExp > 0 {
-			s.shGate = make([]float32, c.NFFNShExp, ffnPad(c.NFFNShExp))
-			s.shUp = make([]float32, c.NFFNShExp, ffnPad(c.NFFNShExp))
-		}
 	}
 
 	// One kernel per quantization type the model actually contains, emitted
@@ -729,10 +666,6 @@ func (s *Instance) Close() error {
 	// A move prepared and never committed gives its target's copies back.
 	if s.pending != nil {
 		s.pending.Cancel()
-	}
-	if s.expReq != nil {
-		close(s.expReq)
-		s.expReq = nil
 	}
 	// The session's history on the device goes back to the tier, which keeps
 	// the model's weights for whoever else is using them.
@@ -1515,7 +1448,7 @@ func (s *Instance) ensureLayer(li int) func(*nn.LayerWeights) error {
 		// by the first Ensure (a missed PrefetchExperts disables the streamed
 		// read/upload pipeline).
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
-		w.PrefetchExperts, w.HostExperts, w.HostExpertsRows = dst.PrefetchExperts, dst.HostExperts, dst.HostExpertsRows
+		w.PrefetchExperts = dst.PrefetchExperts
 		w.ExpertUses = dst.ExpertUses
 		w.SpeculateExperts = dst.SpeculateExperts
 		*dst = w
@@ -1540,7 +1473,7 @@ func (s *Instance) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error
 		w := s.layerWeightsAt(li)
 		// Carry every callback over; see ensureLayer.
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
-		w.PrefetchExperts, w.HostExperts = dst.PrefetchExperts, dst.HostExperts
+		w.PrefetchExperts = dst.PrefetchExperts
 		w.ExpertUses = dst.ExpertUses
 		w.SpeculateExperts = dst.SpeculateExperts
 		*dst = w
@@ -1672,8 +1605,7 @@ func (s *Instance) offerRange(lo, hi int) {
 		if bh, ok := ld.(nn.BlockHolder); ok && !named && bh.HoldsBlock(li) && s.heldOnOffer(adm, li) {
 			w := nn.LayerWeights{Ensure: s.ensureLayer(li), EnsureExperts: s.ensureSelected(li),
 				PrefetchExperts: s.prefetchSelected(li), SpeculateExperts: s.speculateSelected(li),
-				HostExperts:     s.hostExpertsFor(li),
-				HostExpertsRows: s.hostExpertsRowsFor(li), ExpertUses: s.hot.layer(li)}
+				ExpertUses: s.hot.layer(li)}
 			plan := *s.planFor(li)
 			took, err := s.prepOffered(adm, li, &plan, &w)
 			if err != nil {
@@ -1854,7 +1786,6 @@ func (s *Instance) blockWeights(li int) (nn.LayerWeights, error) {
 	// page re-read on every swap.
 	w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
 	w.PrefetchExperts, w.SpeculateExperts = s.prefetchSelected(li), s.speculateSelected(li)
-	w.HostExperts, w.HostExpertsRows = s.hostExpertsFor(li), s.hostExpertsRowsFor(li)
 	w.ExpertUses = s.hot.layer(li)
 	if c.MoE() {
 		// The expert banks are fetched by the tier through Ensure once it
@@ -2650,39 +2581,6 @@ func (s *Instance) AttnPaired() int64 { return s.attnPaired.Load() }
 // default, negative none.
 func (s *Instance) SetAttnPair(v int) { s.attnPair = v }
 
-
-// actmulAll applies the activation across a whole FFN width, on the pool.
-//
-// The split is by vector: the ragged remainder rides with the last chunk, and
-// the tail is bit-identical to the vector body (TestElementwiseEveryWidth), so
-// Forward and Prefill compute the same FFN however the work is divided.
-func (s *Instance) actmulAll(gate, up []float32, act nn.ActKind) {
-	v := len(gate) / nn.ElemLanes
-	if v == 0 {
-		s.actmul(gate, up, act)
-		return
-	}
-	j := &s.rg.elem
-	j.op, j.a, j.b, j.act, j.n, j.v = elemActMul, gate, up, act, len(gate), v
-	s.elemRun()
-}
-
-// actmul runs the generated activation.
-func (s *Instance) actmul(gate, up []float32, act nn.ActKind) { nn.ActMul32JIT(gate, up, act) }
-
-// actAll is actmulAll for an ungated FFN (C6): the activation alone, in
-// place, split by vector exactly as actmulAll splits it.
-func (s *Instance) actAll(x []float32, act nn.ActKind) {
-	v := len(x) / nn.ElemLanes
-	if v == 0 {
-		nn.Act32JIT(x, act)
-		return
-	}
-	j := &s.rg.elem
-	j.op, j.a, j.act, j.n, j.v = elemAct, x, act, len(x), v
-	s.elemRun()
-}
-
 // lnBias is a LayerNorm's bias as a device takes it: b itself, or zeros of
 // the model's width where the file carries none (command-r). The host's
 // kernel bakes the absence instead and never asks for this.
@@ -2694,11 +2592,9 @@ func (m *Model) lnBias(b []float32) []float32 {
 	return m.lnZeros
 }
 
-
 // ffnPad rounds an FFN width up to a whole vector. The scratch is allocated at
 // this length so a ragged tail has somewhere legal to go.
 func ffnPad(n int) int { return (n + nn.ElemLanes - 1) &^ (nn.ElemLanes - 1) }
-
 
 // attStride rounds a score row's stride up to a whole vector, so the padding
 // the generated softmax writes stays inside the row it belongs to.
@@ -2740,22 +2636,6 @@ func (m *Model) sinkSlot() int {
 	return 0
 }
 
-// addInto is the residual add, on generated code and across the pool;
-// elementwise, so parallelising it is bit-identical. It carries Granite's
-// residual_scale as the alpha, which is why every block output goes through
-// here; a mixture gets it through the routed scale and the shared expert's
-// weight instead.
-func (s *Instance) addInto(dst, src []float32) {
-	n, a := len(dst), float32(s.c.ResidualScale)
-	if n >= 4096 {
-		j := &s.rg.elem
-		j.op, j.a, j.b, j.alpha, j.n, j.v = elemAxpy, dst, src, a, n, n/nn.ElemLanes
-		s.elemRun()
-		return
-	}
-	s.axpy(dst, src, a)
-}
-
 // devLogits says the logits the device's head handed back carry every stage
 // of the head past the projection (devApplied).
 func (s *Instance) devLogits() error {
@@ -2792,14 +2672,6 @@ func (m *Model) headStages() nn.HeadStage {
 	}
 	return st
 }
-
-
-
-// axpy runs the generated dst += alpha*src.
-func (s *Instance) axpy(dst, src []float32, alpha float32) { nn.Axpy32JIT(dst, src, alpha) }
-
-// scale multiplies a vector in place, on generated code.
-func (s *Instance) scale(x []float32, alpha float32) { nn.Scale32JIT(x, alpha) }
 
 // JIT is this state's generated-code tier: its vision segment runs on it
 // (Instance.Vision), so a model has one JIT and one worker pool a session.
@@ -2930,9 +2802,8 @@ func (s *Instance) PrewarmGPU(n int) <-chan struct{} {
 				// live submission, so the tier skips packing such a block and
 				// the upload path ensures it.
 				w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
-				w.PrefetchExperts, w.HostExperts = s.prefetchSelected(li), s.hostExpertsFor(li)
+				w.PrefetchExperts = s.prefetchSelected(li)
 				w.SpeculateExperts = s.speculateSelected(li)
-				w.HostExpertsRows = s.hostExpertsRowsFor(li)
 				w.ExpertUses = s.hot.layer(li)
 			}
 			s.ldCand.PrewarmLayer(li, &s.plan, &w)
@@ -3035,49 +2906,6 @@ func (s *Instance) MixtureAffine() int64 { return s.jit.MixtureAffine() }
 
 // Shapes is how many shape-specialized kernels were generated for this model.
 func (s *Instance) Shapes() int { return s.jit.Shapes() }
-
-// addBias adds b to out when b is present; the nil test is one branch per
-// projection rather than per element.
-func (s *Instance) addBias(out, b []float32) {
-	if b == nil {
-		return
-	}
-	s.axpy(out, b, 1)
-}
-
-
-// mv runs one matvec on generated code. There is no fallback: a decline is an
-// error naming the tensor.
-func (s *Instance) mv(out []float32, w tensor, x []float32) error {
-	s.mvCalls++
-	t0 := s.tick()
-	defer func() { s.tock(opMatVec, t0) }()
-	// A container weight is read by the host in the device layout, so a block
-	// can sit on either side of the seam without a repack or a second copy.
-	if w.packed != nil {
-		if s.jit.MatVecPacked(out, w.typ, w.packed, x, w.rows, w.k) {
-			return nil
-		}
-		// nn.MatVecPacked declines for a missing emitter, an unbound weight or
-		// a caller's buffer that is too small; say which contract failed.
-		switch {
-		case len(w.packed.QS) == 0:
-			return fmt.Errorf("jitllm: %s is not bound (%s, %d rows of k=%d): its page is "+
-				"out, or bindPacked does not carry it", w.name(), w.typ, w.rows, w.k)
-		case len(out) < w.rows:
-			return fmt.Errorf("jitllm: %s writes %d rows and the caller's buffer holds %d "+
-				"(%s, k=%d): a scratch sized from the config against a weight sized from "+
-				"the file", w.name(), w.rows, len(out), w.typ, w.k)
-		}
-		return fmt.Errorf("jitllm: no host kernel reads %s (%s, rows [%d,%d) of %d, k=%d) on %s",
-			w.name(), w.typ, w.packed.Row, w.packed.Row+w.rows, max(w.packed.Stride, w.rows), w.k, runtime.GOARCH)
-	}
-	if s.jit.MatVec(out, w.typ, w.data, x, w.rows, w.k) {
-		return nil
-	}
-	return fmt.Errorf("jitllm: no host kernel reads %s (%s, %dx%d, row-major) on %s",
-		w.name(), w.typ, w.rows, w.k, runtime.GOARCH)
-}
 
 // Pos is the number of positions already in the cache.
 func (s *Session) Pos() int { return s.pos }
@@ -3403,17 +3231,9 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// the pool spinning through a blocking read").
 	if pc := s.m.container; pc != nil {
 		in0, _ := pc.Faults()
-		calls0 := s.hostCalls
 		defer func() {
 			in1, _ := pc.Faults()
 			s.jit.SetSpinning(in1 == in0)
-			// A token whose device suspended for the host's experts waited on
-			// the card between those calls: the workers spin across it.
-			if in1 == in0 && s.hostCalls != calls0 {
-				if d := s.m.opt.hybridSpinFor(); d > 0 {
-					s.jit.SetSpinFor(d)
-				}
-			}
 		}()
 	}
 
@@ -3837,4 +3657,16 @@ func (s *Instance) layerInputs(in []float32) {
 	if s.ldInputs != nil && s.c.PLEDim != 0 {
 		s.ldInputs.SetLayerInputs(in)
 	}
+}
+
+// expSelBias is a representative selection bias, or nil when this model has
+// none: it answers the shape question a device's plan asks, not a value one.
+// A model must not mix biased and unbiased blocks (loadConfig refuses it).
+func (m *Model) expSelBias() []float32 {
+	for li := range m.layers {
+		if m.Cfg.MoEAt(li) && m.layers[li].expProbsB != nil {
+			return m.layers[li].expProbsB
+		}
+	}
+	return nil
 }

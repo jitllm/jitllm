@@ -254,18 +254,6 @@ type LayerWeights struct {
 	// place, so a wrong guess never delays the experts a token needs. nil
 	// means the host does not speculate.
 	SpeculateExperts func(sel []uint32)
-	// HostExperts runs this block's routed experts on the host, for a device
-	// that keeps the rest of the block (hybrid execution): out = sum over i
-	// of w[i] * expert sel[i] applied to in, sel and w in selection order, in
-	// the expert width the block's mixture reads (the latent on Kimi-K3). It
-	// runs the host's generated kernels over the host's pages; only in and
-	// out cross the bus. nil where the host cannot.
-	HostExperts func(sel []uint32, w, in, out []float32) error
-	// HostExpertsRows is HostExperts over rows of a chunk, expert-major: each
-	// selected expert runs once over the rows that chose it. sel has a row
-	// stride of k+1 (ExpertRank's layout), w of k, in and out of the expert
-	// width.
-	HostExpertsRows func(sel []uint32, w, in, out []float32, rows, k int) error
 	// ExpertUses is the session's selection counts for this block's experts,
 	// one a expert (model.Hotness): the host's routing adds to it, a device
 	// routing the block adds its own selections, and a device's expert cache

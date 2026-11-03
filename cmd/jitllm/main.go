@@ -1643,13 +1643,6 @@ func modelOptions() []model.Option {
 			o = append(o, model.WithPrefillForwardRows(n))
 		}
 	}
-	// JITLLM_HYBRID_SPIN_US sets how long the workers spin between a
-	// device's host expert calls (model.WithHybridSpin); 0 keeps the pool's.
-	if v := os.Getenv("JITLLM_HYBRID_SPIN_US"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			o = append(o, model.WithHybridSpin(time.Duration(n)*time.Microsecond))
-		}
-	}
 	if os.Getenv("JITLLM_NO_HEAD_PLACE") != "" {
 		o = append(o, model.WithHeadPlacement(false))
 	}

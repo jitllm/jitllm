@@ -1069,7 +1069,6 @@ type layer struct {
 	// call), the MLA output gate (RoleAttnGate in a full block; a linear
 	// block's is ssmGate), and the latent mixture's projections and norm.
 	resAttn, resFFN      []float32
-	resAttnT, resFFNT    tensor
 	mlaGate              tensor
 	routedDown, routedUp tensor
 	routedNorm           []float32
@@ -1223,7 +1222,6 @@ type Model struct {
 	xdKNormFirst bool
 	// mnNoResidual is a gate's violation: Gemma 3n's MobileNet blocks with
 	// their residual adds dropped from the graphs the front end states.
-	mnNoResidual bool
 	Cfg          *Config
 	Vocab        *tok.Vocab
 
@@ -1296,10 +1294,6 @@ type Model struct {
 	// the plan (planRuns).
 	expIONs  int64
 	expReads int64
-	// hostExperts is set once a device has run a block's routed experts on
-	// the host from inside its submission (hybrid experts): from then on a
-	// short prompt takes the decode path (forwardRowsFor).
-	hostExperts atomic.Bool
 	expBytes    int64
 	expCalls    int64
 	// hostStepRows is the rows StepRuns has run as host steps across
@@ -1318,7 +1312,6 @@ type Model struct {
 	// resOut is Kimi-K3's head score vector (RoleOutputResScore) and resOutT
 	// its one-row view; nil without residual attention.
 	resOut  []float32
-	resOutT tensor
 	// onesHD is a HeadDim-wide vector of ones: the weight Llama 4's weightless
 	// q/k RMSNorm runs the generated norm against. nil unless QKL2Norm.
 	onesHD  []float32
