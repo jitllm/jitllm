@@ -8,14 +8,11 @@ import (
 // DialogReq is re-exported so a screen can raise a dialog with one import.
 type DialogReq = widgets.DialogReq
 
-// The dialog shapes, re-exported.
+// The dialog shapes(), re-exported.
 const (
 	DialogAlert   = widgets.DialogAlert
 	DialogConfirm = widgets.DialogConfirm
 )
-
-// NextDialogSeq is re-exported; see [widgets.DialogReq].
-var NextDialogSeq = widgets.NextDialogSeq
 
 // The session types, re-exported so a screen reads them from one package.
 type (

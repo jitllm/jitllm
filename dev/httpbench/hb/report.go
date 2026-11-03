@@ -164,7 +164,7 @@ func Reduce(r *Result) Report {
 			for round := 1; round <= c.Rounds; round++ {
 				lv, ok := rounds[k][round]
 				if !ok {
-					row.Rounds = append(row.Rounds, F(nan))
+					row.Rounds = append(row.Rounds, F(nan()))
 					continue
 				}
 				row.Rounds = append(row.Rounds, Summarise(lv.Samples, lv.Wall, c).AggRate)
@@ -182,14 +182,14 @@ func Reduce(r *Result) Report {
 				bl, ok1 := rounds[key{base, level}][round]
 				al, ok2 := rounds[key{a.Name, level}][round]
 				if !ok1 || !ok2 {
-					agg, ttft, itl = append(agg, nan), append(ttft, nan), append(itl, nan)
+					agg, ttft, itl = append(agg, nan()), append(ttft, nan()), append(itl, nan())
 					continue
 				}
 				bs, as := Summarise(bl.Samples, bl.Wall, c), Summarise(al.Samples, al.Wall, c)
 				// A round where either arm failed a request is not a ratio of
 				// the two engines' work.
 				if bs.Errors > 0 || as.Errors > 0 {
-					agg, ttft, itl = append(agg, nan), append(ttft, nan), append(itl, nan)
+					agg, ttft, itl = append(agg, nan()), append(ttft, nan()), append(itl, nan())
 					continue
 				}
 				agg = append(agg, float64(as.AggRate/bs.AggRate))
@@ -280,7 +280,7 @@ func (f F) MarshalJSON() ([]byte, error) {
 
 func (f *F) UnmarshalJSON(b []byte) error {
 	if string(b) == "null" {
-		*f = F(nan)
+		*f = F(nan())
 		return nil
 	}
 	return json.Unmarshal(b, (*float64)(f))

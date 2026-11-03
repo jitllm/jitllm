@@ -74,7 +74,7 @@ func TestLinkUnlinkRoundTrip(t *testing.T) {
 	if err := Unlink(bin, dirs[1]); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range Programs {
+	for _, p := range Programs() {
 		if _, err := os.Lstat(filepath.Join(dirs[1], p)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s still there after Unlink: %v", p, err)
 		}

@@ -131,5 +131,3 @@ func (f *fakeBackend) opts() GenerateOptions {
 	defer f.mu.Unlock()
 	return f.last
 }
-
-var _ Backend = (*fakeBackend)(nil)

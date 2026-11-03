@@ -39,13 +39,18 @@ func call(h http.Handler, method, path, host string, hdr map[string]string) *htt
 }
 
 // routes are one route of each API, with the Connect protocol header it needs.
-var guardRoutes = []struct {
+func guardRoutes() []struct {
 	name, method, path string
 	hdr                map[string]string
-}{
-	{"openai", http.MethodGet, "/v1/models", nil},
-	{"anthropic", http.MethodPost, "/v1/messages", nil},
-	{"connect", http.MethodPost, "/jitllm.v1.TelemetryService/GetServerInfo", map[string]string{"Connect-Protocol-Version": "1"}},
+} {
+	return []struct {
+		name, method, path string
+		hdr                map[string]string
+	}{
+		{"openai", http.MethodGet, "/v1/models", nil},
+		{"anthropic", http.MethodPost, "/v1/messages", nil},
+		{"connect", http.MethodPost, "/jitllm.v1.TelemetryService/GetServerInfo", map[string]string{"Connect-Protocol-Version": "1"}},
+	}
 }
 
 // guardMisses runs every check the guard exists for against h and returns the
@@ -63,7 +68,7 @@ func guardMisses(h http.Handler) []string {
 		}
 		return m
 	}
-	for _, rt := range guardRoutes {
+	for _, rt := range guardRoutes() {
 		if w := call(h, rt.method, rt.path, "127.0.0.1:4242", rt.hdr); w.Code != http.StatusUnauthorized {
 			missed = append(missed, rt.name+": no key was refused")
 		}
@@ -108,7 +113,7 @@ func TestGuardGateDiscriminates(t *testing.T) {
 func TestGuardAcceptsTheKeyOnEveryAPI(t *testing.T) {
 	g := Guard{APIKey: guardKey, Addr: "127.0.0.1:4242"}
 	h := g.Wrap(guardEngine(t).Handler())
-	for _, rt := range guardRoutes {
+	for _, rt := range guardRoutes() {
 		hdr := map[string]string{"Authorization": "Bearer " + guardKey}
 		for k, v := range rt.hdr {
 			hdr[k] = v

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -210,8 +209,6 @@ func (s *scripted) opts() server.GenerateOptions {
 	return s.last
 }
 
-var _ server.Backend = (*scripted)(nil)
-
 // ---------------------------------------------------------------- writers
 
 // syncBuffer is a concurrency-safe sink for a verb's stderr.
@@ -259,8 +256,6 @@ func (w *notifyWriter) String() string {
 	defer w.mu.Unlock()
 	return w.b.String()
 }
-
-var _ io.Writer = (*notifyWriter)(nil)
 
 // ---------------------------------------------------------------- driving
 

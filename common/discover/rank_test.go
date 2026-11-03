@@ -23,29 +23,35 @@ func TestParamsReadsTotalAndActive(t *testing.T) {
 }
 
 // The machine of these cases: a 4 GiB card, 15 GiB of weight budget.
-var discoverMachine = session.MachineReport{Probed: true, MemBudget: 15 << 30, MemWall: 50e9,
-	GPUs: []session.GPUInfo{{Name: "card", Mem: 4 << 30}}}
+func discoverMachine() session.MachineReport {
+	return session.MachineReport{Probed: true, MemBudget: 15 << 30, MemWall: 50e9,
+		GPUs: []session.GPUInfo{{Name: "card", Mem: 4 << 30}}}
+}
 
-var discoverLibrary = []library.Model{
-	{Title: "Tiny", Params: "1B", Bytes: 700 << 20},
-	{Title: "Mid", Params: "8B", Bytes: 4 << 30},
-	{Title: "Big", Params: "14B", Bytes: 8 << 30},
-	{Title: "Huge", Params: "70B", Bytes: 40 << 30},
+func discoverLibrary() []library.Model {
+	return []library.Model{
+		{Title: "Tiny", Params: "1B", Bytes: 700 << 20},
+		{Title: "Mid", Params: "8B", Bytes: 4 << 30},
+		{Title: "Big", Params: "14B", Bytes: 8 << 30},
+		{Title: "Huge", Params: "70B", Bytes: 40 << 30},
+	}
 }
 
 // Fastest leads with the smallest model that fits and Smartest with the
 // largest; a model larger than memory is never ranked above one that fits.
 func TestTheBalanceRanksTheEndsAndKeepsPagedModelsLast(t *testing.T) {
-	first := func(pref int) string { return discoverLibrary[Rank(discoverLibrary, discoverMachine, pref)[0]].Title }
+	first := func(pref int) string {
+		return discoverLibrary()[Rank(discoverLibrary(), discoverMachine(), pref)[0]].Title
+	}
 	if got := first(0); got != "Tiny" {
 		t.Errorf("Fastest leads with %s, want Tiny", got)
 	}
-	if got := first(len(BalanceSteps) - 1); got != "Big" {
+	if got := first(len(BalanceSteps()) - 1); got != "Big" {
 		t.Errorf("Smartest leads with %s, want Big: Huge does not fit", got)
 	}
-	for pref := range BalanceSteps {
-		o := Rank(discoverLibrary, discoverMachine, pref)
-		if last := discoverLibrary[o[len(o)-1]].Title; last != "Huge" {
+	for pref := range BalanceSteps() {
+		o := Rank(discoverLibrary(), discoverMachine(), pref)
+		if last := discoverLibrary()[o[len(o)-1]].Title; last != "Huge" {
 			t.Errorf("balance %d ranks %s last, want the paged Huge", pref, last)
 		}
 	}
@@ -56,17 +62,17 @@ func TestTheBalanceRanksTheEndsAndKeepsPagedModelsLast(t *testing.T) {
 // GPU, and admits a paged model is disk-bound.
 func TestTheSpeedEstimateFollowsTheBandwidth(t *testing.T) {
 	ram := library.Model{Params: "8B", Bytes: 5 << 30}
-	if got := Speed(ram, discoverMachine); got != "about 7 tok/s" {
+	if got := Speed(ram, discoverMachine()); got != "about 7 tok/s" {
 		t.Errorf("an 8B in memory reads %q", got)
 	}
 	moe := library.Model{Params: "30B-A3B", Bytes: 10 << 30}
-	if got := Speed(moe, discoverMachine); got != "about 37 tok/s" {
+	if got := Speed(moe, discoverMachine()); got != "about 37 tok/s" {
 		t.Errorf("a 30B-A3B reads %q: only its active tenth is read a token", got)
 	}
-	if got := Speed(library.Model{Params: "1B", Bytes: 700 << 20}, discoverMachine); !strings.HasPrefix(got, "over ") {
+	if got := Speed(library.Model{Params: "1B", Bytes: 700 << 20}, discoverMachine()); !strings.HasPrefix(got, "over ") {
 		t.Errorf("a model on the GPU reads %q, want a floor", got)
 	}
-	if got := Speed(library.Model{Params: "70B", Bytes: 40 << 30}, discoverMachine); !strings.Contains(got, "disk") {
+	if got := Speed(library.Model{Params: "70B", Bytes: 40 << 30}, discoverMachine()); !strings.Contains(got, "disk") {
 		t.Errorf("a paged model reads %q", got)
 	}
 	if got := Speed(ram, session.MachineReport{Probed: true, MemBudget: 15 << 30}); got != "" {

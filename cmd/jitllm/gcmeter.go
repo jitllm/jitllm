@@ -47,21 +47,24 @@ type gcSample struct {
 }
 
 // gcMeterNames are the runtime/metrics a gcSample reads, in field order.
-var gcMeterNames = []string{
-	"/gc/heap/allocs:bytes",
-	"/gc/heap/allocs:objects",
-	"/gc/cycles/total:gc-cycles",
-	"/cpu/classes/gc/total:cpu-seconds",
-	"/cpu/classes/gc/mark/assist:cpu-seconds",
-	"/sched/pauses/total/gc:seconds",
-	"/gc/heap/goal:bytes",
+func gcMeterNames() []string {
+	return []string{
+		"/gc/heap/allocs:bytes",
+		"/gc/heap/allocs:objects",
+		"/gc/cycles/total:gc-cycles",
+		"/cpu/classes/gc/total:cpu-seconds",
+		"/cpu/classes/gc/mark/assist:cpu-seconds",
+		"/sched/pauses/total/gc:seconds",
+		"/gc/heap/goal:bytes",
+	}
 }
 
 // readGC samples the collector. The pause histogram is reduced to a count and
 // a sum of bucket midpoints, which is as close as the histogram allows.
 func readGC() gcSample {
-	s := make([]metrics.Sample, len(gcMeterNames))
-	for i, n := range gcMeterNames {
+	names := gcMeterNames()
+	s := make([]metrics.Sample, len(names))
+	for i, n := range names {
 		s[i].Name = n
 	}
 	metrics.Read(s)

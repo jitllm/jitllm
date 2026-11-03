@@ -188,7 +188,7 @@ func (gl *groupedLoad) run(t *testing.T, groups int, serial bool) groupedResult 
 		go func() {
 			defer wg.Done()
 			out[i] = complete(gl.c, &v1.GenerateRequest{ModelId: "dev",
-				Prompt: text(fmt.Sprintf("%s %d", prompts[i%len(prompts)], i)), MaxTokens: gen, IgnoreEos: true})
+				Prompt: text(fmt.Sprintf("%s %d", gatePrompts()[i%len(gatePrompts())], i)), MaxTokens: gen, IgnoreEos: true})
 		}()
 	}
 	waitFor(t, "every request to wait for a row", func() bool { return waitingFor(lp) == gl.n })

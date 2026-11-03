@@ -45,7 +45,7 @@ func Session(sh *app.Shell) widget.Widget { return SessionWith(SessionOptions{})
 // SessionWith returns the screen with, optionally, the runtime panel beside
 // it. The engine is the shell's ([Attach]):
 //
-//	sh.Register(app.TabNames[app.TabSession], screen.SessionWith(screen.SessionOptions{
+//	sh.Register(app.TabNames()[app.TabSession], screen.SessionWith(screen.SessionOptions{
 //	    Side: screen.Runtime,
 //	}))
 //

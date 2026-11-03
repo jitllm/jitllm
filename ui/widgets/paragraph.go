@@ -135,7 +135,7 @@ func (p *Paragraph) Bold() *Paragraph { p.bold = true; return p }
 
 // FontFamily selects a registered font, which is what makes a script the
 // embedded default does not cover render at all. The name must have been
-// registered; see app.LoadFonts.
+// registered; see app.Fonts.Load.
 func (p *Paragraph) FontFamily(name string) *Paragraph { p.family = name; return p }
 
 // MaxLines caps the paragraph at n lines and ends the last one with an

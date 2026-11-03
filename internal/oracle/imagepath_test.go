@@ -16,32 +16,36 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// imagePathFiles is the image path in engine/model: preprocessing, the
+// imagePathFiles() is the image path in engine/model: preprocessing, the
 // position tables built per grid and the projector heads. Every op a pixel or
 // a patch passes through there is generated code (AGENTS.md RULE 8), and
 // TestImagePathRunsGeneratedCode reads that off the source more strictly than
 // TestNoGoComputeOnTheInferencePath does for the engine as a whole.
-var imagePathFiles = []string{
-	"image.go", "imageproc.go", "resampler.go", "qwen3vit.go", "glmvit.go", "kimivit.go", "phi4vision.go",
-	"llama4vision.go", "gemma4vision.go", "slices.go", "qwenvit.go", "pixtral.go", "hunyuanvit.go",
+func imagePathFiles() []string {
+	return []string{
+		"image.go", "imageproc.go", "resampler.go", "qwen3vit.go", "glmvit.go", "kimivit.go", "phi4vision.go",
+		"llama4vision.go", "gemma4vision.go", "slices.go", "qwenvit.go", "pixtral.go", "hunyuanvit.go",
+	}
 }
 
-// imagePathAllowed is every image-path function the gate finds, and why it
+// imagePathAllowed() is every image-path function the gate finds, and why it
 // is not per-element compute. An entry that no longer matches fails the gate,
-// as goComputeAllowed's do.
-var imagePathAllowed = map[string]string{
-	"imageproc.go:aaFloats": "the antialiased resize's filter taps in float64: geometry from the sizes, " +
-		"O(output x support) once per picture (and once per grid for Phi-4's position table)",
-	"imageproc.go:aaWeights": "the same taps in fixed point and the precision they share: geometry from the sizes, once per picture",
-	"image.go:bilinearTaps":  "the bilinear path's resampling matrix: two taps per output from the sizes, once per picture",
-	"imageproc.go:normLUT":   "the normalisation's 256 entries per channel from the tower's mean and std; PixLUT reads it per sample",
-	"llama4vision.go:bf16NormLUT": "Llama 4's bfloat16 normalisation's 256 entries per channel, the same table read " +
-		"the same way",
-	"slices.go:slicedGrid": "MiniCPM-V's slice grid: a log of an aspect ratio per candidate grid, from the picture's sizes",
+// as goComputeAllowed()'s do.
+func imagePathAllowed() map[string]string {
+	return map[string]string{
+		"imageproc.go:aaFloats": "the antialiased resize's filter taps in float64: geometry from the sizes, " +
+			"O(output x support) once per picture (and once per grid for Phi-4's position table)",
+		"imageproc.go:aaWeights": "the same taps in fixed point and the precision they share: geometry from the sizes, once per picture",
+		"image.go:bilinearTaps":  "the bilinear path's resampling matrix: two taps per output from the sizes, once per picture",
+		"imageproc.go:normLUT":   "the normalisation's 256 entries per channel from the tower's mean and std; PixLUT reads it per sample",
+		"llama4vision.go:bf16NormLUT": "Llama 4's bfloat16 normalisation's 256 entries per channel, the same table read " +
+			"the same way",
+		"slices.go:slicedGrid": "MiniCPM-V's slice grid: a log of an aspect ratio per candidate grid, from the picture's sizes",
+	}
 }
 
 // TestImagePathRunsGeneratedCode is the image path's source gate. In the files
-// of imagePathFiles it fails on
+// of imagePathFiles() it fails on
 //
 //   - a transcendental math call (Sin, Cos, Pow, Exp, Log ...) anywhere --
 //     the resampler's sin/cos table and the position-table weights were these
@@ -52,7 +56,7 @@ var imagePathAllowed = map[string]string{
 //     arithmetic -- the shape the per-patch cubic weights had, arithmetic
 //     moved into a helper the loop-level test cannot see;
 //
-// outside imagePathAllowed. Rounding and size geometry on scalars (Floor,
+// outside imagePathAllowed(). Rounding and size geometry on scalars (Floor,
 // Sqrt, RoundToEven of a picture's sizes) is not flagged.
 func TestImagePathRunsGeneratedCode(t *testing.T) {
 	testmodels.SourceTree(t)
@@ -80,22 +84,22 @@ func TestImagePathRunsGeneratedCode(t *testing.T) {
 			files = append(files, f)
 		}
 	}
-	found := imagePathFindings(t, fset, files, "engine/model", imagePathFiles)
+	found := imagePathFindings(t, fset, files, "engine/model", imagePathFiles())
 	var keys []string
 	for k := range found {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		if _, ok := imagePathAllowed[k]; !ok {
+		if _, ok := imagePathAllowed()[k]; !ok {
 			t.Errorf("%s runs Go arithmetic on the image path: %s -- generate a kernel (engine/nn/image.go), "+
-				"or, if it is geometry from a picture's sizes, add it to imagePathAllowed with the reason",
+				"or, if it is geometry from a picture's sizes, add it to imagePathAllowed() with the reason",
 				k, strings.Join(found[k], "; "))
 		}
 	}
-	for k, why := range imagePathAllowed {
+	for k, why := range imagePathAllowed() {
 		if _, ok := found[k]; !ok {
-			t.Errorf("imagePathAllowed[%q] (%s) matches no code any more: take it off the list", k, why)
+			t.Errorf("imagePathAllowed()[%q] (%s) matches no code any more: take it off the list", k, why)
 		}
 	}
 	t.Logf("%d image-path function(s) with Go arithmetic, all geometry or a constant table", len(found))

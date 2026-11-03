@@ -60,15 +60,15 @@ func sessionHeader(sh *app.Shell) widget.Widget {
 	ic := iconColors(sh)
 
 	noTurns := state.NewComputed(func() bool { return st.Turns.Get() == 0 }, st.Turns.AsReadonly())
-	copyAll := widgets.NewIconButton(widgets.IconCopy, "Copy the conversation", func() {
+	copyAll := widgets.NewIconButton(widgets.IconCopy(), "Copy the conversation", func() {
 		if t := transcriptText(st); t != "" {
 			sh.Copy(t)
 			sh.SetStatus("conversation copied")
 		}
 	}, ic).DisabledSignal(noTurns)
-	clear := widgets.NewIconButton(widgets.IconTrash, "Delete this chat",
+	clear := widgets.NewIconButton(widgets.IconTrash(), "Delete this chat",
 		func() { sessionClear(sh) }, ic).DisabledSignal(sessionClearDisabled(st))
-	tune := widgets.NewIconButton(widgets.IconSliders, "Sampling settings",
+	tune := widgets.NewIconButton(widgets.IconSliders(), "Sampling settings",
 		func() { st.ShowTuning.Set(!st.ShowTuning.Get()) }, ic)
 
 	// A Paragraph capped at one line: Text.Ellipsis() only affects measuring
@@ -80,7 +80,7 @@ func sessionHeader(sh *app.Shell) widget.Widget {
 		LineHeight(sh.P.Type.BodySmall.LineHeight / sh.P.Type.BodySmall.FontSize).
 		Color(sh.P.Muted()).
 		MaxLines(1).
-		Font(app.Prose)
+		Font(sh.P.Prose())
 
 	return primitives.VBox(
 		primitives.Box(primitives.VBox(
@@ -157,12 +157,12 @@ func sessionComposer(sh *app.Shell, o SessionOptions) widget.Widget {
 		textfield.PainterOpt(sh.P.BareTextField()),
 	)
 
-	image := widgets.NewIconButton(widgets.IconImage, "Attach a picture for a vision model",
+	image := widgets.NewIconButton(widgets.IconImage(), "Attach a picture for a vision model",
 		func() { sessionPickImage(sh) }, ic).
 		DisabledSignal(state.NewComputed(func() bool {
 			return st.Busy.Get() || !st.Vision.Get()
 		}, st.Busy.AsReadonly(), st.Vision.AsReadonly()))
-	fromFile := widgets.NewIconButton(widgets.IconFile, "Send a prompt from a file",
+	fromFile := widgets.NewIconButton(widgets.IconFile(), "Send a prompt from a file",
 		func() { sessionPickPrompt(sh) }, ic).DisabledSignal(busy)
 
 	// Opens or closes every turn's reasoning at once.
@@ -187,11 +187,11 @@ func sessionComposer(sh *app.Shell, o SessionOptions) widget.Widget {
 		)
 	}
 
-	send := widgets.NewIconButton(widgets.IconSend, "Send", func() { sessionSend(sh, o) }, ic).
+	send := widgets.NewIconButton(widgets.IconSend(), "Send", func() { sessionSend(sh, o) }, ic).
 		Filled().DisabledSignal(sessionSendDisabled(st))
 	// Stop cancels the job and leaves the model open, so the next prompt
 	// starts from a warm engine.
-	stop := widgets.NewIconButton(widgets.IconStop, "Stop the reply", func() {
+	stop := widgets.NewIconButton(widgets.IconStop(), "Stop the reply", func() {
 		if eng := depsOf(sh).Engine; eng != nil {
 			eng.Stop()
 		}
@@ -218,7 +218,7 @@ func sessionComposer(sh *app.Shell, o SessionOptions) widget.Widget {
 		FontSize(sh.P.Type.LabelSmall.FontSize).
 		Color(sh.P.Muted()).
 		MaxLines(1).
-		Font(app.Mono)
+		Font(sh.P.Mono())
 
 	return primitives.Box(reading(primitives.VBox(card, primitives.Box(footer).PaddingXY(sh.P.Space.S, 0)).
 		Gap(sh.P.Space.XS).CrossAlign(primitives.CrossAxisStretch))).
@@ -245,10 +245,10 @@ func sessionAttachments(sh *app.Shell) widget.Widget {
 			button.PainterOpt(sh.P.Button),
 		)
 		return primitives.HBox(
-			widgets.NewThumb(path, sessionAttachThumb),
+			sh.Thumbs.New(path, sessionAttachThumb),
 			primitives.Expanded(widgets.NewParagraph(filepath.Base(path)).
 				FontSize(sh.P.Type.BodySmall.FontSize).Color(sh.P.Muted()).MaxLines(1).
-				Font(app.Prose)),
+				Font(sh.P.Prose())),
 			remove,
 		).Gap(8).CrossAlign(primitives.CrossAxisCenter)
 	})
@@ -257,7 +257,7 @@ func sessionAttachments(sh *app.Shell) widget.Widget {
 	blind := widgets.Hide(
 		state.NewComputed(func() bool { return n.Get() > 0 && !st.Vision.Get() }, n, st.Vision.AsReadonly()),
 		widgets.NewParagraph("This model can't see pictures. Remove them to send, or switch back to a vision model.").
-			FontSize(sh.P.Type.BodySmall.FontSize).Color(sh.P.Colors.Error).Font(app.Prose),
+			FontSize(sh.P.Type.BodySmall.FontSize).Color(sh.P.Colors.Error).Font(sh.P.Prose()),
 	)
 	return widgets.Hide(state.NewComputed(func() bool { return n.Get() > 0 }, n),
 		primitives.VBox(col, blind).Gap(4).CrossAlign(primitives.CrossAxisStretch))
@@ -281,21 +281,23 @@ func sessionWithout(paths []string, drop string) []string {
 	return out
 }
 
-// sessionImageExts are the formats model.Preprocess decodes. The picker's
+// sessionImageExts() are the formats model.Preprocess decodes. The picker's
 // filter and the drop classifier both read this, so what can be chosen and
 // what can be dropped cannot disagree.
-var sessionImageExts = []string{"png", "jpg", "jpeg"}
+func sessionImageExts() []string {
+	return []string{"png", "jpg", "jpeg"}
+}
 
 // IsImage reports whether a path names a picture the engine can read.
 func IsImage(path string) bool {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
-	return slices.Contains(sessionImageExts, ext)
+	return slices.Contains(sessionImageExts(), ext)
 }
 
 // sessionPickImage attaches a picture through the native dialog.
 func sessionPickImage(sh *app.Shell) {
 	paths := sh.PickFile("Attach an image",
-		[]gogpu.FileTypeFilter{{Name: "Images", Extensions: sessionImageExts}}, "")
+		[]gogpu.FileTypeFilter{{Name: "Images", Extensions: sessionImageExts()}}, "")
 	AttachImages(sh, paths)
 }
 

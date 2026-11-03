@@ -37,14 +37,12 @@ func TestServiceRunsUnderSystemd(t *testing.T) {
 	l.Close()
 
 	name := fmt.Sprintf("jitllm-test-%d", os.Getpid())
-	real := thisService
-	thisService = func() (service.Service, error) {
-		s, err := real()
+	cl := cli{thisService: func() (service.Service, error) {
+		s, err := cli{}.service()
 		s.Name = name
 		return s, err
-	}
-	defer func() { thisService = real }()
-	s, err := thisService()
+	}}
+	s, err := cl.service()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +59,7 @@ func TestServiceRunsUnderSystemd(t *testing.T) {
 	models := t.TempDir()
 	do := func(args ...string) string {
 		var out bytes.Buffer
-		if err := cmdService(context.Background(), cli{out: &out, err: &out}, args); err != nil {
+		if err := cmdService(context.Background(), cli{out: &out, err: &out, thisService: cl.thisService}, args); err != nil {
 			j, _ := exec.Command("journalctl", "--user", "-u", name, "-n", "30", "--no-pager").CombinedOutput()
 			t.Fatalf("jitllmd service %v: %v\n%s\njournal:\n%s", args, err, out.String(), j)
 		}

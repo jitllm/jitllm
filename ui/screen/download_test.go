@@ -47,7 +47,7 @@ func waitIdle(t *testing.T, sh *app.Shell, d *downloadScreen) {
 // Discover lists every library model exactly once, whatever the balance.
 func TestDiscoverListsTheWholeLibrary(t *testing.T) {
 	d := downloadsFor(dropShell(t))
-	for pref := range discover.BalanceSteps {
+	for pref := range discover.BalanceSteps() {
 		d.pref.Set(pref)
 		seen := map[int]bool{}
 		for _, i := range d.order().Get() {
@@ -69,11 +69,8 @@ func TestADownloadThatWouldFillTheDiskDoesNotStart(t *testing.T) {
 	m, i := firstText(t)
 	d.sel.Set(i)
 	fetched := false
-	defer func(f func(*hf.Client, hf.Ref, string) (string, error), g func(string) (int64, bool)) {
-		downloadFetch, downloadFree = f, g
-	}(downloadFetch, downloadFree)
-	downloadFetch = func(*hf.Client, hf.Ref, string) (string, error) { fetched = true; return "", nil }
-	downloadFree = func(string) (int64, bool) { return m.Bytes, true } // half of what it needs
+	d.fetchFn = func(*hf.Client, hf.Ref, string) (string, error) { fetched = true; return "", nil }
+	d.free = func(string) (int64, bool) { return m.Bytes, true } // half of what it needs
 
 	d.act()
 	if fetched || d.busy.Get() {
@@ -86,11 +83,10 @@ func TestADownloadThatWouldFillTheDiskDoesNotStart(t *testing.T) {
 
 // hubFor serves m's GGUF as b from a Hub on loopback, for the screen's
 // downloads, until the test ends.
-func hubFor(t *testing.T, m library.Model, b []byte) *hubtest.Hub {
+func hubFor(t *testing.T, d *downloadScreen, m library.Model, b []byte) *hubtest.Hub {
 	h := hubtest.New(map[string][]byte{m.Repo + "/" + m.File: b})
-	old := downloadEndpoint
-	downloadEndpoint = h.URL
-	t.Cleanup(func() { downloadEndpoint = old; h.Close() })
+	d.endpoint = h.URL
+	t.Cleanup(h.Close)
 	return h
 }
 
@@ -102,10 +98,9 @@ func TestAGatedModelSaysHowToGetIt(t *testing.T) {
 		d := downloadsFor(sh)
 		m, i := firstText(t)
 		d.sel.Set(i)
-		defer func(g func(string) (int64, bool), n bool) { downloadFree, downloadNoStream = g, n }(downloadFree, downloadNoStream)
-		downloadFree = func(string) (int64, bool) { return 1 << 50, true }
-		downloadNoStream = noStream
-		h := hubFor(t, m, nil)
+		d.free = func(string) (int64, bool) { return 1 << 50, true }
+		d.noStream = noStream
+		h := hubFor(t, d, m, nil)
 		h.Gated = true
 
 		d.act()
@@ -136,18 +131,15 @@ func TestADownloadEndsAsAContainer(t *testing.T) {
 	d := downloadsFor(sh)
 	m, i := firstText(t)
 	d.sel.Set(i)
-	defer func(f discover.FetchFunc, g func(string) (int64, bool)) {
-		downloadFetch, downloadFree = f, g
-	}(downloadFetch, downloadFree)
-	downloadFree = func(string) (int64, bool) { return 1 << 50, true }
+	d.free = func(string) (int64, bool) { return 1 << 50, true }
 	streams := gguf.Streamable()
-	downloadFetch = func(*hf.Client, hf.Ref, string) (string, error) {
+	d.fetchFn = func(*hf.Client, hf.Ref, string) (string, error) {
 		return "", errors.New("the stream fell back to a whole-file download")
 	}
 	if !streams {
-		downloadFetch = nil // this platform downloads, from the same Hub
+		d.fetchFn = nil // this platform downloads, from the same Hub
 	}
-	h := hubFor(t, m, b)
+	h := hubFor(t, d, m, b)
 	var landed []string
 	h.OnGet = func(*http.Request) {
 		if !streams {
@@ -195,9 +187,8 @@ func TestStopEndsADownload(t *testing.T) {
 	d := downloadsFor(sh)
 	m, i := firstText(t)
 	d.sel.Set(i)
-	defer func(g func(string) (int64, bool)) { downloadFree = g }(downloadFree)
-	downloadFree = func(string) (int64, bool) { return 1 << 50, true }
-	h := hubFor(t, m, b)
+	d.free = func(string) (int64, bool) { return 1 << 50, true }
+	h := hubFor(t, d, m, b)
 	h.OnGet = func(*http.Request) {
 		if h.Served.Load() > int64(len(b))/2 {
 			d.cancel()

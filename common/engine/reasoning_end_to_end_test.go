@@ -12,9 +12,11 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
-// reasoningModel is a container whose model reasons, because that is the one
+// reasoningModel() is a container whose model reasons, because that is the one
 // thing this gate exists to prove and no fixture can supply it.
-var reasoningModel = testmodels.Path("Qwen3-1.7B-Q4_K_M.jlm")
+func reasoningModel() string {
+	return testmodels.Path("Qwen3-1.7B-Q4_K_M.jlm")
+}
 
 // A reasoning model's reasoning must reach the store.
 //
@@ -24,8 +26,8 @@ var reasoningModel = testmodels.Path("Qwen3-1.7B-Q4_K_M.jlm")
 // (Turn.Think), since they come from different call sites and are what the
 // transcript renders.
 func TestAReasoningModelsReasoningReachesTheStore(t *testing.T) {
-	fresh.Must(t, reasoningModel)
-	if _, err := os.Stat(reasoningModel); err != nil {
+	fresh.Must(t, reasoningModel())
+	if _, err := os.Stat(reasoningModel()); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	sh := newTestShell()
@@ -34,7 +36,7 @@ func TestAReasoningModelsReasoningReachesTheStore(t *testing.T) {
 	e := New(sh, sh.state())
 	defer e.Close()
 
-	e.Load(reasoningModel)
+	e.Load(reasoningModel())
 	pump(t, sh, 180*time.Second, "the model to load", func() bool { return st.Loaded.Get() })
 
 	// Whether the store saw reasoning while it was arriving, not only after.

@@ -9,17 +9,16 @@ import (
 	"github.com/jitllm/jitllm/tok"
 )
 
-// *Engine is the LlamaBackend of the llama.cpp routes (compat_llamacpp.go).
-var _ LlamaBackend = (*Engine)(nil)
-
 // fimNames are the spellings of each fill-in-the-middle token the vocabularies
 // here carry.
-var fimNames = struct{ pre, suf, mid, repo, sep []string }{
-	pre:  []string{"<|fim_prefix|>", "<fim-prefix>", "<fim_prefix>", "<PRE>", "▁<PRE>", "<｜fim▁begin｜>"},
-	suf:  []string{"<|fim_suffix|>", "<fim-suffix>", "<fim_suffix>", "<SUF>", "▁<SUF>", "<｜fim▁hole｜>"},
-	mid:  []string{"<|fim_middle|>", "<fim-middle>", "<fim_middle>", "<MID>", "▁<MID>", "<｜fim▁end｜>"},
-	repo: []string{"<|fim_repo|>", "<|repo_name|>", "<fim-repo>", "<REPO>", "<reponame>"},
-	sep:  []string{"<|file_sep|>", "<fim-sep>", "<SEP>"},
+func fimNames() struct{ pre, suf, mid, repo, sep []string } {
+	return struct{ pre, suf, mid, repo, sep []string }{
+		pre:  []string{"<|fim_prefix|>", "<fim-prefix>", "<fim_prefix>", "<PRE>", "▁<PRE>", "<｜fim▁begin｜>"},
+		suf:  []string{"<|fim_suffix|>", "<fim-suffix>", "<fim_suffix>", "<SUF>", "▁<SUF>", "<｜fim▁hole｜>"},
+		mid:  []string{"<|fim_middle|>", "<fim-middle>", "<fim_middle>", "<MID>", "▁<MID>", "<｜fim▁end｜>"},
+		repo: []string{"<|fim_repo|>", "<|repo_name|>", "<fim-repo>", "<REPO>", "<reponame>"},
+		sep:  []string{"<|file_sep|>", "<fim-sep>", "<SEP>"},
+	}
 }
 
 func vocabID(v *tok.Vocab, names []string) int32 {
@@ -51,8 +50,9 @@ func (e *Engine) LlamaModel(name string) (LlamaModelInfo, error) {
 		Embedding: lm.m.IsEmbedding(), Version: e.cfg.Version}
 	info.ChatTemplate, _ = lm.m.ChatTemplate("")
 	if v := lm.m.Vocab; v != nil {
-		f := FIMTokens{Pre: vocabID(v, fimNames.pre), Suf: vocabID(v, fimNames.suf), Mid: vocabID(v, fimNames.mid),
-			Repo: vocabID(v, fimNames.repo), Sep: vocabID(v, fimNames.sep)}
+		fim := fimNames()
+		f := FIMTokens{Pre: vocabID(v, fim.pre), Suf: vocabID(v, fim.suf), Mid: vocabID(v, fim.mid),
+			Repo: vocabID(v, fim.repo), Sep: vocabID(v, fim.sep)}
 		if f.Pre >= 0 && f.Suf >= 0 && f.Mid >= 0 {
 			info.FIM = &f
 		}

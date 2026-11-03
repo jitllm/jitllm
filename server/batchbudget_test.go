@@ -87,11 +87,11 @@ func TestHostBatchPromptBesideDecodeIsBounded(t *testing.T) {
 			NoMemCache: true})
 	long := strings.Repeat("The little dog ran to the park and played with a red ball. ", 12)
 	reqs := []*v1.GenerateRequest{
-		{ModelId: "dev", Prompt: text(hostPrompts[0]), MaxTokens: 40},
-		{ModelId: "dev", Prompt: text(hostPrompts[1]), MaxTokens: 40},
+		{ModelId: "dev", Prompt: text(hostPrompts()[0]), MaxTokens: 40},
+		{ModelId: "dev", Prompt: text(hostPrompts()[1]), MaxTokens: 40},
 		{ModelId: "dev", Prompt: text(long), MaxTokens: 8},
 	}
-	prompts := []string{hostPrompts[0], hostPrompts[1], long}
+	prompts := []string{hostPrompts()[0], hostPrompts()[1], long}
 	alone := make([]completion, len(reqs))
 	for i, r := range reqs {
 		if alone[i] = complete(c, r); alone[i].err != nil {

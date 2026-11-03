@@ -15,8 +15,6 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-var sink byte
-
 func main() {
 	drop := flag.Bool("drop", true, "drop the page cache between strategies (needs root, best effort)")
 	npage := flag.Int("pages", 24, "pages to read per strategy")
@@ -131,8 +129,9 @@ func main() {
 		})
 	}
 
-	// 5. the mapping, faulted by touching it. sink is package level so the
-	// compiler cannot delete the touch loop.
+	// 5. the mapping, faulted by touching it. sink is read after the loop so
+	// the compiler cannot delete the touch loop.
+	var sink byte
 	run("mmap fault", func(i int) {
 		p := c.Page(i)
 		var s byte

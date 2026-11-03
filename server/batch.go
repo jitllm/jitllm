@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -120,7 +119,13 @@ type stepLoop struct {
 	// the time slice's answer; onStarted, when set, sees each row as its
 	// prompt is in.
 	parkDropsLogits bool
-	onStarted       func(*row)
+	// sampleTap, when a test sets it, sees the logits a row sampled from and
+	// the token that came out, for every row of the step loop. It exists so a
+	// gate can compare two engines' distributions where their sampled tokens
+	// may part (nothing sets it outside tests; it costs one nil check per
+	// token).
+	sampleTap func(temp float64, logits []float32, next int32)
+	onStarted func(*row)
 	// beforeQueueWait, when set, sees each row after it is submitted and
 	// before its request waits for admission.
 	beforeQueueWait func(*row)
@@ -192,14 +197,20 @@ type batchCounters struct {
 	lastRefusal                                  atomic.Pointer[string]
 }
 
-// errUnloaded ends a request still waiting for a row when its model goes.
+// unloadedError ends a request still waiting for a row when its model goes.
 // errPromptCancelled ends a row whose request left before its prompt was in
 // and whose sequence started with it: no GenerateStarted is sent, the instance
 // is reset, and the request returns its context's error, as a prefill
 // interrupted alone does (Generate).
-var errPromptCancelled = errors.New("server: the request left during its prompt")
+const errPromptCancelled serverError = "server: the request left during its prompt"
 
-var errUnloaded = fmt.Errorf("%w: the model was unloaded before this request got a row", ErrNotFound)
+type unloadedError struct{}
+
+func (unloadedError) Error() string {
+	return "server: not found: the model was unloaded before this request got a row"
+}
+
+func (unloadedError) Unwrap() error { return ErrNotFound }
 
 // batchWidth is the most requests the loop holds rows for: the configured
 // width, bounded by the widest step a device runs across sessions
@@ -382,7 +393,7 @@ func (lp *stepLoop) submit(r *row) error {
 	lp.mu.Lock()
 	if lp.stopped {
 		lp.mu.Unlock()
-		return errUnloaded
+		return unloadedError{}
 	}
 	lp.waiting = append(lp.waiting, r)
 	r.depth = int32(len(lp.waiting) - 1)
@@ -419,7 +430,7 @@ func (lp *stepLoop) renumber() {
 
 // close stops the loop. The model's sessions are closed first (UnloadModel,
 // Engine.Close), so no row is live; a request still waiting for one ends with
-// errUnloaded.
+// unloadedError.
 func (lp *stepLoop) close() {
 	lp.mu.Lock()
 	lp.stopped = true
@@ -433,7 +444,7 @@ func (lp *stepLoop) close() {
 		close(g.start)
 	}
 	for _, r := range waiting {
-		r.result.err = errUnloaded
+		r.result.err = unloadedError{}
 		close(r.done)
 	}
 }
@@ -807,8 +818,8 @@ func (lp *stepLoop) nextToken(r *row) bool {
 	}
 	next := in.Sample(&r.sampler, r.logits)
 	r.s.ms.Unhold(in)
-	if sampleTap != nil {
-		sampleTap(r.sampler.Temp, r.logits, next)
+	if lp.sampleTap != nil {
+		lp.sampleTap(r.sampler.Temp, r.logits, next)
 	}
 	r.sampler.Observe(next)
 	tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
@@ -1478,9 +1489,3 @@ func (c *batchCounters) noteBudget(b int) {
 	c.budgetMax.Store(max(c.budgetMax.Load(), n))
 	c.budgetSum.Add(n)
 }
-
-// sampleTap, when a test sets it, sees the logits a row sampled from and the
-// token that came out, for every row of the step loop. It exists so a gate can
-// compare two engines' distributions where their sampled tokens may part
-// (nothing sets it outside tests; it costs one nil check per token).
-var sampleTap func(temp float64, logits []float32, next int32)

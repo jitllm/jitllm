@@ -42,7 +42,7 @@ func embedCmd(args []string) error {
 	if fs.NArg() < 1 || (fs.NArg() < 2 && !*lines) {
 		return fmt.Errorf("usage: jitllm embed [-ids] [-lines] <model.jlm|NAME> <text...>")
 	}
-	svc, path, err := runTarget(context.Background(), fs.Arg(0), *addr, keyOf(*apiKey), *embedded, engineFlags(fs, embedRemoteFlags), os.Stderr)
+	svc, path, err := runTarget(context.Background(), fs.Arg(0), *addr, keyOf(*apiKey), *embedded, engineFlags(fs, embedRemoteFlags()), os.Stderr)
 	if err != nil {
 		return err
 	}

@@ -164,10 +164,11 @@ type Engine struct {
 	Calls []string
 }
 
-var _ screen.Engine = (*Engine)(nil)
-
 // New builds a mock engine that publishes into sh.
-func New(sh *app.Shell) *Engine { return &Engine{sh: sh, Interval: 40 * time.Millisecond} }
+func New(sh *app.Shell) *Engine {
+	var _ screen.Engine = (*Engine)(nil)
+	return &Engine{sh: sh, Interval: 40 * time.Millisecond}
+}
 
 func (e *Engine) called(format string, a ...any) {
 	e.Calls = append(e.Calls, fmt.Sprintf(format, a...))

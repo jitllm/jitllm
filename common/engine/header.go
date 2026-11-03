@@ -80,10 +80,12 @@ func thousands(n int) string {
 // deviceLabel is a tier's device name without the ordinal and the API:
 // "0:<card name> [cuda]" reads as the card.
 func deviceLabel(name string) string {
-	return strings.TrimSpace(deviceNoise.ReplaceAllString(name, ""))
+	return strings.TrimSpace(deviceNoise().ReplaceAllString(name, ""))
 }
 
-var deviceNoise = regexp.MustCompile(`^\d+:|\s*\[[^\]]*\]$`)
+func deviceNoise() *regexp.Regexp {
+	return regexp.MustCompile(`^\d+:|\s*\[[^\]]*\]$`)
+}
 
 // headerNow reads the header off the running session. Worker goroutine only.
 func (e *Engine) headerNow() header {

@@ -23,7 +23,7 @@ func capabilitiesCmd(args []string, w io.Writer) error {
 	if set.NArg() > 0 {
 		return fmt.Errorf("jitllm capabilities takes no argument, got %q", set.Args())
 	}
-	m, err := capabilities.Build(version)
+	m, err := capabilities.Build(buildVersion())
 	if err != nil {
 		return err
 	}

@@ -29,9 +29,9 @@ func (row) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 func (r row) Render(w io.Writer, l list.Model, i int, li list.Item) {
 	it := li.(item)
 	sel := i == l.Index()
-	marker, ns := "  ", sFg
+	marker, ns := "  ", sFg()
 	if sel {
-		marker, ns = sBrand.Render("▌ "), sBold
+		marker, ns = sBrand().Render("▌ "), sBold()
 	}
 	tag := ""
 	switch {
@@ -44,13 +44,13 @@ func (r row) Render(w io.Writer, l list.Model, i int, li list.Item) {
 	}
 	for _, lm := range r.env.f.st.Models.Get() {
 		if lm.Path == it.Path {
-			dot := lipgloss.NewStyle().Foreground(colourOf(lm.Colour, modelColours))
+			dot := lipgloss.NewStyle().Foreground(colourOf(lm.Colour, modelColours()))
 			tag = dot.Render("● " + strings.ToLower(session.Loaded))
 		}
 	}
 	quant := catalog.QuantFromName(it.Name)
 	right := tag + strings.Repeat(" ", max(1, 22-lipgloss.Width(tag))) +
-		sMuted.Render(fmt.Sprintf("%-7s", quant)) + sDim.Render(fmt.Sprintf("%10s", session.Bytes(uint64(it.Size))))
+		sMuted().Render(fmt.Sprintf("%-7s", quant)) + sDim().Render(fmt.Sprintf("%10s", session.Bytes(uint64(it.Size))))
 	name := strings.TrimSuffix(strings.TrimSuffix(it.Name, ".jlm"), ".gguf")
 	room := l.Width() - 2 - lipgloss.Width(right) - 1
 	name = truncate(name, room)
@@ -80,11 +80,11 @@ func newModelsPage(env *env) *modelsPage {
 	l.SetShowTitle(false)
 	l.SetShowHelp(false)
 	l.DisableQuitKeybindings()
-	l.FilterInput.Prompt = sBrand.Render("  ")
-	l.FilterInput.Cursor.Style = sBrand
-	l.Styles.StatusBar = sDim.PaddingLeft(2).PaddingBottom(1)
+	l.FilterInput.Prompt = sBrand().Render("  ")
+	l.FilterInput.Cursor.Style = sBrand()
+	l.Styles.StatusBar = sDim().PaddingLeft(2).PaddingBottom(1)
 	l.SetShowPagination(false)
-	l.Styles.NoItems = sDim.PaddingLeft(2)
+	l.Styles.NoItems = sDim().PaddingLeft(2)
 	p := &modelsPage{
 		env:     env,
 		keys:    modelsKeys{Load: bind("enter", "load · convert"), Close: bind("ctrl+x", "unload model"), Filter: bind("type", "filter", "/")},
@@ -222,7 +222,7 @@ func (p *modelsPage) View() string {
 		}
 		info = details(e, probed, rw)
 	} else {
-		info = sDim.Render("no models found.\n\nadd a folder in Settings (f5), set JITLLM_MODELS,\nor pass -models dir")
+		info = sDim().Render("no models found.\n\nadd a folder in Settings (f5), set JITLLM_MODELS,\nor pass -models dir")
 	}
 	if jv := p.env.jobs.View(rw); jv != "" {
 		info += "\n\n" + jv
@@ -233,12 +233,12 @@ func (p *modelsPage) View() string {
 // details is what the selected file is.
 func details(e catalog.Entry, probed bool, w int) string {
 	var b strings.Builder
-	b.WriteString(sBold.Render(truncate(e.Name, w)) + "\n")
-	b.WriteString(sDim.Render(truncate(e.Path, w)) + "\n\n")
+	b.WriteString(sBold().Render(truncate(e.Name, w)) + "\n")
+	b.WriteString(sDim().Render(truncate(e.Path, w)) + "\n\n")
 	row := func(k, v string) { b.WriteString(kvLine(k, v, w) + "\n") }
 	switch {
 	case !probed:
-		b.WriteString(sDim.Render("reading header…"))
+		b.WriteString(sDim().Render("reading header…"))
 	case e.ProbeErr != "":
 		b.WriteString(lipgloss.NewStyle().Foreground(cRed).Width(w).Render(e.ProbeErr))
 	default:
@@ -272,11 +272,11 @@ func details(e catalog.Entry, probed bool, w int) string {
 	}
 	switch {
 	case e.Kind != catalog.KindContainer:
-		b.WriteString("\n\n" + sMuted.Render("enter converts it to a .jlm, the format the engine runs"))
+		b.WriteString("\n\n" + sMuted().Render("enter converts it to a .jlm, the format the engine runs"))
 	case e.Stale:
-		b.WriteString("\n\n" + sMuted.Render("enter rebuilds it for this version"))
+		b.WriteString("\n\n" + sMuted().Render("enter rebuilds it for this version"))
 	default:
-		b.WriteString("\n\n" + sDim.Render("enter loads it · ctrl+x unloads it"))
+		b.WriteString("\n\n" + sDim().Render("enter loads it · ctrl+x unloads it"))
 	}
 	return b.String()
 }

@@ -87,7 +87,7 @@ func columnColour(cols []string, id string) lipgloss.Color {
 	if id == hostID {
 		return cBlue
 	}
-	return colourOf(slices.Index(cols, id)-1, deviceColours)
+	return colourOf(slices.Index(cols, id)-1, deviceColours())
 }
 
 // slide is a block's arrival in a new column, played over a few frames after
@@ -130,7 +130,7 @@ func (v mapView) blockRow(b mapBlock, w int, col lipgloss.Color, ghost, landed b
 	label := fmt.Sprintf("%02d", b.Index)
 	barW := max(4, w-lipgloss.Width(label)-lipgloss.Width(size)-2)
 	if ghost {
-		return sDim.Render(label + " " + strings.Repeat("┄", barW) + " ⇢")
+		return sDim().Render(label + " " + strings.Repeat("┄", barW) + " ⇢")
 	}
 	st := lipgloss.NewStyle().Foreground(col)
 	mark := " "
@@ -139,10 +139,10 @@ func (v mapView) blockRow(b mapBlock, w int, col lipgloss.Color, ghost, landed b
 		label = lipgloss.NewStyle().Foreground(cBrand).Bold(true).Render(label)
 		mark = lipgloss.NewStyle().Foreground(cBrand).Bold(true).Render("◂")
 	} else {
-		label = sDim.Render(label)
+		label = sDim().Render(label)
 	}
 	// The mark takes the separator's place so the row never changes width.
-	return label + mark + bar(frac, barW, st) + " " + sMuted.Render(size)
+	return label + mark + bar(frac, barW, st) + " " + sMuted().Render(size)
 }
 
 // bar is a w-cell bar at frac, in half cells so it grows a step at a time as a
@@ -188,10 +188,10 @@ func (v mapView) column(id string, w, h int) string {
 		}
 	}
 	head := lipgloss.NewStyle().Foreground(col).Bold(true).Render(fmt.Sprintf("%d blocks", n)) +
-		sDim.Render(" · "+session.Bytes(hist))
+		sDim().Render(" · "+session.Bytes(hist))
 	body := head + "\n\n" + strings.Join(rows, "\n")
 	if len(rows) == 0 {
-		body = head + "\n\n" + sDim.Render("· no blocks here ·")
+		body = head + "\n\n" + sDim().Render("· no blocks here ·")
 	}
 	return panel(columnLabel(id), body, w, h, col)
 }

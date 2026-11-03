@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-var sink uint64
-
 func main() {
+	var sink atomic.Uint64
 	const nrows = 2048
 	const total = 512 << 20 // 512 MiB, far past L3
 	buf := make([]byte, total)
@@ -51,7 +51,7 @@ func main() {
 						s += uint64(buf[j])
 					}
 				}
-				sink += s
+				sink.Add(s)
 			}(w)
 		}
 		wg.Wait()
@@ -77,7 +77,7 @@ func main() {
 			for j := w * per; j < (w+1)*per; j += 64 {
 				s += uint64(buf[j])
 			}
-			sink += s
+			sink.Add(s)
 		}(w)
 	}
 	wg.Wait()

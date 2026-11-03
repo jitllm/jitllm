@@ -20,7 +20,7 @@ import "math"
 //
 // The bias applied to the returned weights as well as the selection gives the
 // right experts and plausible text from the wrong model; MoEFaultBiasedWeights
-// is that mistake. Where the references disagree, see MoEDivergences.
+// is that mistake. Where the references disagree, see MoEDivergences().
 
 // MoEGate is a router's configuration. Everything here is a property of the
 // container, fixed before the first token.
@@ -115,18 +115,20 @@ func (f MoEFault) String() string {
 	return "?"
 }
 
-// MoEFaults is every defect, so a gate can enumerate them rather than restate
+// MoEFaults() is every defect, so a gate can enumerate them rather than restate
 // them and a ninth cannot be added on one side only.
-var MoEFaults = [...]MoEFault{
-	MoEFaultLastOfTie,
-	MoEFaultAscendingSum,
-	MoEFaultOrdInSelectionOrder,
-	MoEFaultBiasedWeights,
-	MoEFaultGroupTop1,
-	MoEFaultMaskAfterTopK,
-	MoEFaultScaleBeforeNorm,
-	MoEFaultExpScaleByRank,
-	MoEFaultNoExpScale,
+func MoEFaults() []MoEFault {
+	return []MoEFault{
+		MoEFaultLastOfTie,
+		MoEFaultAscendingSum,
+		MoEFaultOrdInSelectionOrder,
+		MoEFaultBiasedWeights,
+		MoEFaultGroupTop1,
+		MoEFaultMaskAfterTopK,
+		MoEFaultScaleBeforeNorm,
+		MoEFaultExpScaleByRank,
+		MoEFaultNoExpScale,
+	}
 }
 
 // moeSumFloor guards the renormalising divide. It is kernels.MoESumFloor and
@@ -138,46 +140,48 @@ const moeSumFloor = 1e-20
 // assert it equals the kernel's. See nn.TestRouterFloorMatchesTheKernel.
 const MoESumFloorForTest = moeSumFloor
 
-// MoEDivergences is where llama.cpp and DeepSeek's own modeling_deepseek.py
+// MoEDivergences() is where llama.cpp and DeepSeek's own modeling_deepseek.py
 // disagree about this router, and which one jitllm matches (AGENTS.md RULE 7m:
 // know which one you are matching, and keep the list a reviewed artefact).
 //
 // Each entry is {what, llama.cpp, modeling_deepseek.py, jitllm}.
-var MoEDivergences = [...][4]string{
-	{
-		"the renormalising divisor's floor",
-		"ggml_clamp(sum, 6.103515625e-5, +Inf) -- the smallest normal f16",
-		"sum + 1e-20",
-		"modeling_deepseek.py: sum + 1e-20, DECIDED. It used to be " +
-			"NEITHER -- an all-underflowed selection divided 0 by 0 and took " +
-			"the token non-finite. The two guards are identical where the sum " +
-			"is zero and differ in a REACHABLE range: for 0 < sum < 6.1e-5 the " +
-			"clamp divides by 6.1e-5 and distorts a legitimate small sum, where " +
-			"the addition divides by ~sum and does not. Below an f32 ulp of any " +
-			"sum above ~1e-13, so it is invisible everywhere the clamp would " +
-			"bite -- the strictly less invasive of the two, and the one the " +
-			"weights were trained against",
-	},
-	{
-		"n_group_used == n_expert_groups",
-		"REFUSED: GGML_ASSERT(n_group_used < n_expert_groups) at load",
-		"allowed -- torch.topk(k=n_group) is an ordinary call",
-		"allowed: every group is kept, which is what the definition says and " +
-			"is one fewer shape to refuse",
-	},
-	{
-		"whether k == 1 renormalises",
-		"yes -- norm_w alone, so a single weight becomes exactly 1.0",
-		"no -- `if self.top_k > 1 and self.norm_topk_prob`",
-		"llama.cpp: Norm alone, at every k",
-	},
-	{
-		"whether a scale of 1 is applied",
-		"no -- `if (w_scale != 0.0f && w_scale != 1.0f)`",
-		"yes, always -- `topk_weight * self.routed_scaling_factor`",
-		"llama.cpp: x*1 is x for every finite float, so the two agree in value " +
-			"and jitllm emits no multiply",
-	},
+func MoEDivergences() [][4]string {
+	return [][4]string{
+		{
+			"the renormalising divisor's floor",
+			"ggml_clamp(sum, 6.103515625e-5, +Inf) -- the smallest normal f16",
+			"sum + 1e-20",
+			"modeling_deepseek.py: sum + 1e-20, DECIDED. It used to be " +
+				"NEITHER -- an all-underflowed selection divided 0 by 0 and took " +
+				"the token non-finite. The two guards are identical where the sum " +
+				"is zero and differ in a REACHABLE range: for 0 < sum < 6.1e-5 the " +
+				"clamp divides by 6.1e-5 and distorts a legitimate small sum, where " +
+				"the addition divides by ~sum and does not. Below an f32 ulp of any " +
+				"sum above ~1e-13, so it is invisible everywhere the clamp would " +
+				"bite -- the strictly less invasive of the two, and the one the " +
+				"weights were trained against",
+		},
+		{
+			"n_group_used == n_expert_groups",
+			"REFUSED: GGML_ASSERT(n_group_used < n_expert_groups) at load",
+			"allowed -- torch.topk(k=n_group) is an ordinary call",
+			"allowed: every group is kept, which is what the definition says and " +
+				"is one fewer shape to refuse",
+		},
+		{
+			"whether k == 1 renormalises",
+			"yes -- norm_w alone, so a single weight becomes exactly 1.0",
+			"no -- `if self.top_k > 1 and self.norm_topk_prob`",
+			"llama.cpp: Norm alone, at every k",
+		},
+		{
+			"whether a scale of 1 is applied",
+			"no -- `if (w_scale != 0.0f && w_scale != 1.0f)`",
+			"yes, always -- `topk_weight * self.routed_scaling_factor`",
+			"llama.cpp: x*1 is x for every finite float, so the two agree in value " +
+				"and jitllm emits no multiply",
+		},
+	}
 }
 
 // MoERouter is the reference. scores is the post-gating score of every expert
@@ -286,7 +290,7 @@ func MoERouter(scores []float32, k int, g MoEGate, f MoEFault) MoERoute {
 		}
 		// The floor is DeepSeek's addition rather than llama.cpp's clamp: they
 		// agree at zero, and the clamp distorts a legitimate small sum. See
-		// MoEDivergences.
+		// MoEDivergences().
 		sum += moeSumFloor
 	}
 	for i := range w {

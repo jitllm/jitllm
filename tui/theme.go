@@ -11,7 +11,7 @@ import (
 
 // The palette is Tokyo Night, the website's and the window's; the brand is
 // its green.
-var (
+const (
 	cBg      = lipgloss.Color("#1a1b26")
 	cPanel   = lipgloss.Color("#1f2335")
 	cRaised  = lipgloss.Color("#292e42")
@@ -28,34 +28,50 @@ var (
 	cRed     = lipgloss.Color("#f7768e")
 )
 
-// modelColours is the transcript's palette, indexed by LoadedModel.Colour so
+// modelColours() is the transcript's palette, indexed by LoadedModel.Colour so
 // each model keeps its colour for the session.
-var modelColours = []lipgloss.Color{cBrand, cBlue, cMagenta, cCyan, cOrange, cYellow}
+func modelColours() []lipgloss.Color {
+	return []lipgloss.Color{cBrand, cBlue, cMagenta, cCyan, cOrange, cYellow}
+}
 
-// deviceColours paints a block by the device that runs it.
-var deviceColours = []lipgloss.Color{cCyan, cMagenta, cYellow, cBlue, cOrange}
+// deviceColours() paints a block by the device that runs it.
+func deviceColours() []lipgloss.Color {
+	return []lipgloss.Color{cCyan, cMagenta, cYellow, cBlue, cOrange}
+}
 
 func colourOf(i int, from []lipgloss.Color) lipgloss.Color {
 	return from[((i%len(from))+len(from))%len(from)]
 }
 
-var (
-	sDim   = lipgloss.NewStyle().Foreground(cDim)
-	sMuted = lipgloss.NewStyle().Foreground(cMuted)
-	sFg    = lipgloss.NewStyle().Foreground(cFg)
-	sBold  = lipgloss.NewStyle().Foreground(cFg).Bold(true)
-	sBrand = lipgloss.NewStyle().Foreground(cBrand).Bold(true)
-	sErr   = lipgloss.NewStyle().Foreground(cRed)
-	sThink = lipgloss.NewStyle().Foreground(cDim).Italic(true)
+func sDim() lipgloss.Style { return lipgloss.NewStyle().Foreground(cDim) }
 
-	sPanel  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cLine).Padding(0, 1)
-	sBubble = lipgloss.NewStyle().Background(cRaised).Foreground(cFg).Padding(0, 1)
-	sCard   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cLine).Padding(0, 1)
-)
+func sMuted() lipgloss.Style { return lipgloss.NewStyle().Foreground(cMuted) }
+
+func sFg() lipgloss.Style { return lipgloss.NewStyle().Foreground(cFg) }
+
+func sBold() lipgloss.Style { return lipgloss.NewStyle().Foreground(cFg).Bold(true) }
+
+func sBrand() lipgloss.Style { return lipgloss.NewStyle().Foreground(cBrand).Bold(true) }
+
+func sErr() lipgloss.Style { return lipgloss.NewStyle().Foreground(cRed) }
+
+func sThink() lipgloss.Style { return lipgloss.NewStyle().Foreground(cDim).Italic(true) }
+
+func sPanel() lipgloss.Style {
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cLine).Padding(0, 1)
+}
+
+func sBubble() lipgloss.Style {
+	return lipgloss.NewStyle().Background(cRaised).Foreground(cFg).Padding(0, 1)
+}
+
+func sCard() lipgloss.Style {
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cLine).Padding(0, 1)
+}
 
 // inner is the content size of a panel w x h cells outside.
 func inner(w, h int) (int, int) {
-	return max(1, w-sPanel.GetHorizontalFrameSize()), max(1, h-sPanel.GetVerticalFrameSize())
+	return max(1, w-sPanel().GetHorizontalFrameSize()), max(1, h-sPanel().GetVerticalFrameSize())
 }
 
 // panel frames body in exactly w x h cells (h 0 fits the body), with title
@@ -64,10 +80,10 @@ func inner(w, h int) (int, int) {
 func panel(title, body string, w, h int, accent lipgloss.Color) string {
 	iw, ih := inner(w, h)
 	body = fitWidth(body, iw)
-	st := sPanel.Width(w - sPanel.GetHorizontalBorderSize())
+	st := sPanel().Width(w - sPanel().GetHorizontalBorderSize())
 	if h > 0 {
 		body = fitHeight(body, ih)
-		st = st.Height(h - sPanel.GetVerticalBorderSize())
+		st = st.Height(h - sPanel().GetVerticalBorderSize())
 	}
 	out := st.Render(body)
 	if title == "" {
@@ -120,7 +136,7 @@ func truncate(s string, w int) string {
 // kvLine is a label at the left and its value at the right of w cells.
 func kvLine(k, v string, w int) string {
 	v = truncate(v, max(4, w-lipgloss.Width(k)-1))
-	return sDim.Render(k) + strings.Repeat(" ", max(1, w-lipgloss.Width(k)-lipgloss.Width(v))) + sFg.Render(v)
+	return sDim().Render(k) + strings.Repeat(" ", max(1, w-lipgloss.Width(k)-lipgloss.Width(v))) + sFg().Render(v)
 }
 
 // meter is a static bar of w cells at frac, the progress bubble's look

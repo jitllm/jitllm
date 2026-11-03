@@ -156,11 +156,13 @@ func (p ImagePolicy) Validate() (ImagePolicy, error) {
 }
 
 // imageFormats maps a decoder's format name to the media type it is sent as.
-var imageFormats = map[string]string{
-	"png":  "image/png",
-	"jpeg": "image/jpeg",
-	"gif":  "image/gif",
-	"webp": "image/webp",
+func imageFormats() map[string]string {
+	return map[string]string{
+		"png":  "image/png",
+		"jpeg": "image/jpeg",
+		"gif":  "image/gif",
+		"webp": "image/webp",
+	}
 }
 
 // imageMediaType is the media type for a declared one, "image/jpg" taken as
@@ -170,7 +172,7 @@ func imageMediaType(mt string) (string, bool) {
 	if mt == "image/jpg" {
 		mt = "image/jpeg"
 	}
-	for _, v := range imageFormats {
+	for _, v := range imageFormats() {
 		if v == mt {
 			return mt, true
 		}
@@ -195,7 +197,7 @@ func (p ImagePolicy) decodeImage(b []byte, mt string) (image.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("is not a PNG, JPEG, WebP or GIF picture: %v", err)
 	}
-	got, ok := imageFormats[format]
+	got, ok := imageFormats()[format]
 	if !ok {
 		return nil, fmt.Errorf("is %s; the pictures accepted are PNG, JPEG, WebP and GIF", format)
 	}

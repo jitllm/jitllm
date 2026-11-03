@@ -51,7 +51,7 @@ func (s *Shell) crashPanel() widget.Widget {
 			return "jitllm crashed. The report below has no prompt or chat in it; copy it into an issue so it can be fixed."
 		})).
 		FontSize(s.P.Type.TitleSmall.FontSize).Bold().
-		Color(c.OnErrorContainer).Font(Prose)
+		Color(c.OnErrorContainer).Font(s.P.Prose())
 	where := widgets.NewParagraph("").
 		ContentSignal(field(func(r crash.Report) string {
 			if r.Path == "" {
@@ -60,11 +60,11 @@ func (s *Shell) crashPanel() widget.Widget {
 			return r.Title + "\nsaved to " + r.Path
 		})).
 		FontSize(s.P.Type.BodySmall.FontSize).
-		Color(c.OnErrorContainer).Font(Prose)
+		Color(c.OnErrorContainer).Font(s.P.Prose())
 	text := widgets.NewParagraph("").
 		ContentSignal(field(func(r crash.Report) string { return r.Text })).
 		FontSize(s.P.Type.BodySmall.FontSize).
-		Color(c.OnSurface).Font(Mono).Selectable()
+		Color(c.OnSurface).Font(s.P.Mono()).Selectable()
 
 	btn := func(label string, v button.Variant, fn func()) widget.Widget {
 		return button.New(

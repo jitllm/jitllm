@@ -12,7 +12,7 @@ import (
 // A table cell must be kept to its own column: Canvas.DrawText uses the rect
 // for alignment only, so a wide name would overlap the next column.
 func TestTableCellIsClippedToItsColumn(t *testing.T) {
-	p := NewPainters(newTheme(false))
+	p := NewPainters(newTheme(false), nil)
 	canvas := &uitest.MockCanvas{}
 	cell := geometry.FromPointSize(geometry.Pt(0, 0), geometry.Sz(180, 28))
 

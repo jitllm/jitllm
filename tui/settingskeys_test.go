@@ -49,7 +49,7 @@ func TestSettingsSaveTheKeysPrivately(t *testing.T) {
 	t.Setenv("AppData", dir)
 	r := newTestRoot(t)
 	dirs := r.env.cfg.ModelDirs
-	r.env.cfg = config.LoadConfig()
+	r.env.cfg = config.LoadConfig(config.Env{})
 	r.env.cfg.ModelDirs = dirs
 	p := newSettingsPage(r.env)
 	if p.d.apiAddr != "" {

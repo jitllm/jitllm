@@ -17,7 +17,7 @@ func mouse(t event.MouseEventType, x, y float32) *event.MouseEvent {
 // position stayed lit after the pointer left -- the sidebar's theme row did.
 func TestAPressableFollowsTheToolkitsProtocol(t *testing.T) {
 	clicks := 0
-	n := NewNavItem(IconChat, "Chat", nil, func() { clicks++ }, NavColors{}, 14)
+	n := NewNavItem(IconChat(), "Chat", nil, func() { clicks++ }, NavColors{}, 14)
 	n.SetBounds(geometry.NewRect(0, 0, 200, 36))
 
 	n.Event(nil, mouse(event.MouseEnter, 999, 999)) // where the window says, not where it is
@@ -45,7 +45,7 @@ func TestAPressableFollowsTheToolkitsProtocol(t *testing.T) {
 	}
 
 	off := state.NewSignal(true)
-	b := NewIconButton(IconSend, "Send", func() { clicks++ }, IconButtonColors{}).DisabledSignal(off.AsReadonly())
+	b := NewIconButton(IconSend(), "Send", func() { clicks++ }, IconButtonColors{}).DisabledSignal(off.AsReadonly())
 	b.SetBounds(geometry.NewRect(0, 0, 32, 32))
 	b.Event(nil, mouse(event.MousePress, 5, 5))
 	b.Event(nil, mouse(event.MouseRelease, 5, 5))

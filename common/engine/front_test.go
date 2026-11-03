@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/session"
 )
 
@@ -190,13 +191,15 @@ type testShell struct {
 	Store *testStore
 	q     chan func()
 	seq   atomic.Uint64
+
+	crashes crash.Guard
 }
+
+func (sh *testShell) Crashes() *crash.Guard { return &sh.crashes }
 
 func newTestShell() *testShell {
 	return &testShell{Store: newTestStore(), q: make(chan func(), 64)}
 }
-
-var _ Front = (*testShell)(nil)
 
 // state is the engine's view of the store.
 func (sh *testShell) state() State {
