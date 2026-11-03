@@ -87,7 +87,8 @@ func TestRendererWritesEveryField(t *testing.T) {
 		}
 	}
 	names(reflect.TypeFor[Profile]())
-	for _, c := range classNames {
+	for i := 0; i < int(NumClasses); i++ {
+		c := className(i)
 		if !strings.Contains(src, c+":") {
 			t.Errorf("the table leaves out the class %s", c)
 		}
@@ -101,7 +102,7 @@ func TestRendererWritesEveryField(t *testing.T) {
 // (Its whole time need not order so: the composed argmax runs on one
 // thread, and a thread's speed is not a card's bandwidth.)
 func TestEveryKnownHardwarePrices(t *testing.T) {
-	f := composing(t, *composeModel+".jlm")
+	f := composing(t, composeModel()+".jlm")
 	s := composer.Step{Rows: 1, Page: 64, Keys: 9}
 	type priced struct {
 		name string

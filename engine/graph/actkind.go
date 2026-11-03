@@ -104,12 +104,16 @@ const (
 
 // Ungated is the set an ungated kernel may bake, in code order. It exists so a
 // gate can enumerate the kinds rather than restate them.
-var Ungated = [...]ActKind{ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf,
-	ActSqrtSigmoid}
+func Ungated() [8]ActKind {
+	return [8]ActKind{ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf,
+		ActSqrtSigmoid}
+}
 
 // Gated is the set a gated kernel (dst = act(dst) combined with up) may bake,
 // for the same reason.
-var Gated = [...]ActKind{ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu, ActGELUErf, ActReLU2}
+func Gated() [8]ActKind {
+	return [8]ActKind{ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu, ActGELUErf, ActReLU2}
+}
 
 func (k ActKind) String() string {
 	switch k {
