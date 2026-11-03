@@ -324,10 +324,12 @@ func (c *compat) openAIFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 // batchEndpoints are the routes a batch line may name.
-var batchEndpoints = map[string]bool{
-	"/v1/chat/completions": true,
-	"/v1/completions":      true,
-	"/v1/embeddings":       true,
+func batchEndpoints() map[string]bool {
+	return map[string]bool{
+		"/v1/chat/completions": true,
+		"/v1/completions":      true,
+		"/v1/embeddings":       true,
+	}
 }
 
 // openAIBatches is /v1/batches, /v1/batches/{id} and /v1/batches/{id}/cancel.
@@ -345,7 +347,7 @@ func (c *compat) openAIBatches(w http.ResponseWriter, r *http.Request) {
 			oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 			return
 		}
-		if !batchEndpoints[req.Endpoint] {
+		if !batchEndpoints()[req.Endpoint] {
 			oaFail(w, http.StatusBadRequest, "endpoint must be /v1/chat/completions, /v1/completions or /v1/embeddings", "invalid_request_error")
 			return
 		}

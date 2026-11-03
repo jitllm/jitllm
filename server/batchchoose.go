@@ -105,7 +105,9 @@ func newJointChoice(mode JointSteps) *jointChoice {
 }
 
 // abba is the arm of each run in a quad: joint, separate, separate, joint.
-var abba = [4]bool{true, false, false, true}
+func abba() [4]bool {
+	return [4]bool{true, false, false, true}
+}
 
 // pick says whether a step of n rows runs joint.
 func (c *jointChoice) pick(n int) bool {
@@ -127,7 +129,7 @@ func (c *jointChoice) pick(n int) bool {
 		return a.joint
 	}
 	c.probeSteps++
-	return abba[a.turn%len(abba)]
+	return abba()[a.turn%len(abba())]
 }
 
 // observe records how long a step of n rows took on the arm pick chose, and
@@ -164,7 +166,7 @@ func (c *jointChoice) observe(n int, joint bool, d time.Duration) {
 		return
 	}
 	a.step = 0
-	if a.turn++; a.turn < jointRounds*len(abba) {
+	if a.turn++; a.turn < jointRounds*len(abba()) {
 		return
 	}
 	a.jMed, a.sMed = median(a.j), median(a.s)

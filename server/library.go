@@ -29,19 +29,13 @@ type (
 	libraryState = localserver.State
 )
 
-var (
-	readState  = localserver.ReadState
-	writeState = localserver.WriteState
-	stem       = localserver.Stem
-)
-
 // library is the folder's containers with their settings and load state.
 func (e *Engine) library() ([]ModelFileInfo, libraryState, error) {
 	files, _, err := e.ScanModels("")
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, libraryState{}, err
 	}
-	st, err := readState(e.ModelDir())
+	st, err := localserver.ReadState(e.ModelDir())
 	if err != nil {
 		return nil, st, err
 	}
@@ -78,7 +72,7 @@ func (e *Engine) aliasesOf(path string) []string {
 	if filepath.Dir(path) != filepath.Clean(e.ModelDir()) {
 		return nil
 	}
-	st, err := readState(e.ModelDir())
+	st, err := localserver.ReadState(e.ModelDir())
 	if err != nil {
 		return nil
 	}
@@ -125,7 +119,7 @@ func (e *Engine) resolveModel(name string) (*LoadedModel, error) {
 	}
 	if f.Disabled {
 		return nil, fmt.Errorf("%w: model %q (%s) is disabled, so it is not loaded on demand; "+
-			"enable it with `jitllmd models -enable %s`, or load it explicitly", ErrInvalid, name, filepath.Base(f.Path), stem(filepath.Base(f.Path)))
+			"enable it with `jitllmd models -enable %s`, or load it explicitly", ErrInvalid, name, filepath.Base(f.Path), localserver.Stem(filepath.Base(f.Path)))
 	}
 	e.demandMu.Lock()
 	defer e.demandMu.Unlock()
@@ -140,7 +134,7 @@ func (e *Engine) resolveModel(name string) (*LoadedModel, error) {
 	}
 	o := e.cfg.OnDemand
 	o.Path = f.Path
-	o.ModelID = stem(filepath.Base(f.Path))
+	o.ModelID = localserver.Stem(filepath.Base(f.Path))
 	if _, err := e.Model(o.ModelID); err == nil {
 		o.ModelID = "" // a model loaded from elsewhere holds the id: take a fresh one
 	}
@@ -217,7 +211,7 @@ func (e *Engine) SetModelOptions(name string, add, remove []string, enabled *boo
 		st.Models[key] = m
 	}
 	for _, a := range add {
-		if !slices.Contains(m.Aliases, a) && a != key && a != stem(key) {
+		if !slices.Contains(m.Aliases, a) && a != key && a != localserver.Stem(key) {
 			m.Aliases = append(m.Aliases, a)
 		}
 	}
@@ -228,7 +222,7 @@ func (e *Engine) SetModelOptions(name string, add, remove []string, enabled *boo
 	}
 	out := *f
 	out.Aliases, out.Disabled = slices.Clone(m.Aliases), m.Disabled
-	if err := writeState(e.ModelDir(), st); err != nil {
+	if err := localserver.WriteState(e.ModelDir(), st); err != nil {
 		return ModelFileInfo{}, err
 	}
 	return out, nil
@@ -249,14 +243,14 @@ func (e *Engine) ListAvailable() []ModelSummary {
 		if f.Disabled || f.ModelID != "" {
 			continue
 		}
-		out = append(out, ModelSummary{ID: stem(filepath.Base(f.Path)), Name: f.Name, Aliases: f.Aliases})
+		out = append(out, ModelSummary{ID: localserver.Stem(filepath.Base(f.Path)), Name: f.Name, Aliases: f.Aliases})
 	}
 	return out
 }
 
 // applyState fills a scan's settings and load state from dir's state file.
 func (e *Engine) applyState(dir string, files []ModelFileInfo) {
-	st, _ := readState(dir)
+	st, _ := localserver.ReadState(dir)
 	loaded := map[string]string{}
 	for _, lm := range e.Models() {
 		loaded[filepath.Clean(lm.path)] = lm.id

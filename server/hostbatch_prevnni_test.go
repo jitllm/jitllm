@@ -22,13 +22,11 @@ func TestHostBatchSampledRowsEqualAlonePreVNNI(t *testing.T) {
 		t.Fatal("ForceNoVNNIForTest did not make HostDotKind report DotVEX: this gate would run the VNNI arithmetic")
 	}
 	const name = "Llama-3.2-1B-Instruct-Q4_K_M.jlm"
-	if i, got, want := sampledBatchParts(t, name); i >= 0 {
+	if i, got, want := sampledBatchParts(t, name, false); i >= 0 {
 		t.Fatalf("sampled row %d differs from its run alone\nbatched %v\nalone   %v", i, got, want)
 	}
 	t.Run("violation-inexact", func(t *testing.T) {
-		hostInexact = true
-		defer func() { hostInexact = false }()
-		i, got, want := sampledBatchParts(t, name)
+		i, got, want := sampledBatchParts(t, name, true)
 		if i < 0 {
 			t.Fatal("a model loaded without the one summation order still drew every row's tokens: this gate cannot see the arithmetic")
 		}

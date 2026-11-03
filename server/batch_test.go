@@ -125,11 +125,13 @@ func requireWholeOnDevice(t *testing.T, e *Engine, lm *LoadedModel) {
 }
 
 // prompts are the requests the gates send, one per row.
-var prompts = []string{
-	"Once upon a time",
-	"The little dog ran to the park and",
-	"One day, a girl named Lily found a",
-	"Tom and his best friend Sam wanted to",
+func gatePrompts() []string {
+	return []string{
+		"Once upon a time",
+		"The little dog ran to the park and",
+		"One day, a girl named Lily found a",
+		"Tom and his best friend Sam wanted to",
+	}
 }
 
 // holdGates holds the model's step loop before it serves, so requests pile
@@ -240,7 +242,7 @@ func concurrentGreedy(t *testing.T, name string, n int) {
 	e, lm, c := batchEngine(t, name, Config{}, n+1, nil)
 	const gen = 24
 	reqOf := func(i int) *v1.GenerateRequest {
-		return &v1.GenerateRequest{ModelId: "dev", Prompt: text(prompts[i]), MaxTokens: gen}
+		return &v1.GenerateRequest{ModelId: "dev", Prompt: text(gatePrompts()[i]), MaxTokens: gen}
 	}
 
 	alone := make([]completion, n)
@@ -286,7 +288,7 @@ func concurrentGreedy(t *testing.T, name string, n int) {
 			t.Fatalf("batched %d did not run as a row", i)
 		}
 		depths = append(depths, got[i].started.GetQueueDepthOnEntry())
-		sameAsAlone(t, lm.m, fmt.Sprintf("row %d", i), prompts[i], got[i].ids, alone[i].ids)
+		sameAsAlone(t, lm.m, fmt.Sprintf("row %d", i), gatePrompts()[i], got[i].ids, alone[i].ids)
 		t.Logf("row %d: %q", i, got[i].text)
 	}
 	slices.Sort(depths)
@@ -326,8 +328,8 @@ func TestBatchARequestJoinsWhileOthersDecode(t *testing.T) {
 		const gen = 32
 		long := strings.Repeat("The sun was warm and the birds sang in the tall green trees. ", 3)
 		reqs := []*v1.GenerateRequest{
-			{ModelId: "dev", Prompt: text(prompts[0]), MaxTokens: gen},
-			{ModelId: "dev", Prompt: text(prompts[1]), MaxTokens: gen},
+			{ModelId: "dev", Prompt: text(gatePrompts()[0]), MaxTokens: gen},
+			{ModelId: "dev", Prompt: text(gatePrompts()[1]), MaxTokens: gen},
 			{ModelId: "dev", Prompt: text(long), MaxTokens: 4},
 		}
 		alone := make([]completion, len(reqs))
@@ -362,7 +364,7 @@ func TestBatchARequestJoinsWhileOthersDecode(t *testing.T) {
 			if g.finished.GetCompletionTokens() == 0 {
 				t.Fatalf("request %d produced nothing", i)
 			}
-			sameAsAlone(t, lm.m, fmt.Sprintf("request %d", i), []string{prompts[0], prompts[1], long}[i],
+			sameAsAlone(t, lm.m, fmt.Sprintf("request %d", i), []string{gatePrompts()[0], gatePrompts()[1], long}[i],
 				g.ids, alone[i].ids)
 		}
 		after := batchStats(t, c)
@@ -398,7 +400,7 @@ func TestBatchCancelOneRowLeavesTheOthers(t *testing.T) {
 
 		alone := make([]completion, 3)
 		for i := range alone {
-			alone[i] = complete(c, &v1.GenerateRequest{ModelId: "dev", Prompt: text(prompts[i]), MaxTokens: gen})
+			alone[i] = complete(c, &v1.GenerateRequest{ModelId: "dev", Prompt: text(gatePrompts()[i]), MaxTokens: gen})
 			if alone[i].err != nil {
 				t.Fatal(alone[i].err)
 			}
@@ -419,7 +421,7 @@ func TestBatchCancelOneRowLeavesTheOthers(t *testing.T) {
 					defer wg.Done()
 					o := &out[i]
 					o.err = e.Generate(ctx, GenerateOptions{SessionID: fmt.Sprint("c", i),
-						Prompt: Prompt{Kind: PromptText, Text: prompts[i]}, MaxTokens: gen},
+						Prompt: Prompt{Kind: PromptText, Text: gatePrompts()[i]}, MaxTokens: gen},
 						func(ev Event) error {
 							switch ev.Kind {
 							case EventToken:
@@ -454,7 +456,7 @@ func TestBatchCancelOneRowLeavesTheOthers(t *testing.T) {
 				if out[i].finished.Reason == FinishCancelled {
 					t.Fatalf("row %d was cancelled with row 1", i)
 				}
-				sameAsAlone(t, lm.m, fmt.Sprint("row ", i), prompts[i], out[i].ids, alone[i].ids)
+				sameAsAlone(t, lm.m, fmt.Sprint("row ", i), gatePrompts()[i], out[i].ids, alone[i].ids)
 			}
 			for i := range 3 {
 				if err := e.CloseSession(fmt.Sprint("c", i)); err != nil {
@@ -510,7 +512,7 @@ func TestBatchForceUnloadEndsEveryRow(t *testing.T) {
 				o := &out[i]
 				seen := false
 				o.err = e.Generate(ctx, GenerateOptions{ModelID: "dev",
-					Prompt: Prompt{Kind: PromptText, Text: prompts[i]}, MaxTokens: 4000},
+					Prompt: Prompt{Kind: PromptText, Text: gatePrompts()[i]}, MaxTokens: 4000},
 					func(ev Event) error {
 						switch ev.Kind {
 						case EventToken:
@@ -591,7 +593,7 @@ func TestBatchSampledRowsAreTheirOwn(t *testing.T) {
 			wg.Add(2)
 			go func() { defer wg.Done(); got = complete(c, subject) }()
 			waitFor(t, "the subject to wait", func() bool { return waitingFor(lm.loop) == 1 })
-			go func() { defer wg.Done(); other = complete(c, sampled(prompts[1], 11, 4*gen)) }()
+			go func() { defer wg.Done(); other = complete(c, sampled(gatePrompts()[1], 11, 4*gen)) }()
 			waitFor(t, "both to wait", func() bool { return waitingFor(lm.loop) == 2 })
 			release()
 			wg.Wait()
@@ -610,9 +612,9 @@ func TestBatchSampledRowsAreTheirOwn(t *testing.T) {
 		// them (the first of three identical sampled pairs parted from the
 		// other two at token 10, which agreed throughout). The
 		// replay runs warm, so the pair it checks does too.
-		pair(sampled(prompts[0], 7, gen))
+		pair(sampled(gatePrompts()[0], 7, gen))
 		before := batchStats(t, c)
-		got, other := pair(sampled(prompts[0], 7, gen))
+		got, other := pair(sampled(gatePrompts()[0], 7, gen))
 		if batchStats(t, c).GetJointSteps() == before.GetJointSteps() {
 			t.Fatal("the pair never shared a step: the replay would compare the one-at-a-time path")
 		}
@@ -621,7 +623,7 @@ func TestBatchSampledRowsAreTheirOwn(t *testing.T) {
 		}
 		t.Logf("the pair: %+v; subject %d tokens, companion %d", batchStats(t, c), len(got.ids), len(other.ids))
 		sp := model.Sampler{Temp: float64(temp), TopP: float64(topP), Seed: 7}
-		replayPair(t, lm, e.cfg.DefaultMaxSeq, sp, lm.m.Vocab.Encode(prompts[0], true), lm.m.Vocab.Encode(prompts[1], true),
+		replayPair(t, lm, e.cfg.DefaultMaxSeq, sp, lm.m.Vocab.Encode(gatePrompts()[0], true), lm.m.Vocab.Encode(gatePrompts()[1], true),
 			got.ids, other.ids)
 
 		// A stop string out of the middle of that text ends the row before it
@@ -631,7 +633,7 @@ func TestBatchSampledRowsAreTheirOwn(t *testing.T) {
 			t.Skipf("the sampled text %q is too short to cut a stop string from", got.text)
 		}
 		stop := got.text[len(got.text)/2 : len(got.text)/2+4]
-		st, _ := pair(sampled(prompts[0], 7, gen, stop))
+		st, _ := pair(sampled(gatePrompts()[0], 7, gen, stop))
 		if st.finished.GetReason() != v1.FinishReason_FINISH_REASON_STOP || st.finished.GetStopMatched() != stop ||
 			strings.Contains(st.text, stop) || !strings.HasPrefix(got.text, st.text) {
 			t.Fatalf("stop %q: finished %v with %q, out of %q", stop, st.finished.GetReason(), st.text, got.text)
@@ -704,7 +706,7 @@ func TestBatchARefusedJointStepRunsTheRowsAlone(t *testing.T) {
 		const gen = 12
 		alone := make([]completion, 2)
 		for i := range alone {
-			if alone[i] = complete(c, &v1.GenerateRequest{ModelId: "dev", Prompt: text(prompts[i]), MaxTokens: gen}); alone[i].err != nil {
+			if alone[i] = complete(c, &v1.GenerateRequest{ModelId: "dev", Prompt: text(gatePrompts()[i]), MaxTokens: gen}); alone[i].err != nil {
 				t.Fatal(alone[i].err)
 			}
 		}
@@ -715,7 +717,7 @@ func TestBatchARefusedJointStepRunsTheRowsAlone(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				got[i] = complete(c, &v1.GenerateRequest{ModelId: "dev", Prompt: text(prompts[i]), MaxTokens: gen})
+				got[i] = complete(c, &v1.GenerateRequest{ModelId: "dev", Prompt: text(gatePrompts()[i]), MaxTokens: gen})
 			}()
 		}
 		waitFor(t, "both to wait", func() bool { return waitingFor(lm.loop) == 2 })
@@ -887,9 +889,9 @@ func TestBatchChoosesByMeasurement(t *testing.T) {
 func chooses(t *testing.T, name string, mode JointSteps) {
 	e, lm, c := batchEngine(t, name, Config{JointSteps: mode}, 3, nil)
 	// Long enough for one probe of two rows and some steps after it.
-	gen := int32(jointRounds*len(abba)*jointRun + 16)
+	gen := int32(jointRounds*len(abba())*jointRun + 16)
 	reqOf := func(i int) *v1.GenerateRequest {
-		return &v1.GenerateRequest{ModelId: "dev", Prompt: text(prompts[i]), MaxTokens: gen}
+		return &v1.GenerateRequest{ModelId: "dev", Prompt: text(gatePrompts()[i]), MaxTokens: gen}
 	}
 	alone := []completion{complete(c, reqOf(0)), complete(c, reqOf(1))}
 	release := holdGates(t, e, lm)
@@ -910,7 +912,7 @@ func chooses(t *testing.T, name string, mode JointSteps) {
 			t.Fatalf("row %d ended after %d tokens, before a probe could finish: pick another prompt",
 				i, len(got[i].ids))
 		}
-		sameAsAlone(t, lm.m, fmt.Sprint("row ", i), prompts[i], got[i].ids, alone[i].ids)
+		sameAsAlone(t, lm.m, fmt.Sprint("row ", i), gatePrompts()[i], got[i].ids, alone[i].ids)
 	}
 	b := batchStats(t, c)
 	t.Logf("%+v", b)

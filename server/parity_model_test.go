@@ -649,9 +649,9 @@ func TestNativeListsWhatTheOpenAIRouteLists(t *testing.T) {
 // TestNativeEmbedMatchesOpenAI: the same vectors and token counts through
 // either door.
 func TestNativeEmbedMatchesOpenAI(t *testing.T) {
-	_, lm, url := embedServer(t, embedGateModels[0], Config{})
+	_, lm, url := embedServer(t, embedGateModels()[0], Config{})
 	cl := jitllmv1connect.NewInferenceServiceClient(http.DefaultClient, url)
-	texts := []string{embedTexts[0], embedTexts[2]}
+	texts := []string{embedTexts()[0], embedTexts()[2]}
 	code, oa := postEmbeddings(t, url, map[string]any{"model": "emb", "input": texts})
 	if code != http.StatusOK {
 		t.Fatalf("OpenAI embeddings: %d", code)

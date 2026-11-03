@@ -23,19 +23,27 @@ import (
 // decisionServerModels are the decision models the batching gate serves:
 // each readout the engine has, under $JITLLM_MODELS as the engine's decision
 // gates find them.
-var decisionServerModels = []struct {
+func decisionServerModels() []struct {
 	name, path string
 	// tol is how far a batched probability may sit from the request's alone:
 	// the engine's batch session against its single prefill
 	// (model.TestDecisionBatchMatchesAlone has the measurements).
 	tol float64
-}{
-	{"d1-3B", "d1/d1-3B-Q8_0.jlm", 0.03},
-	{"lev", "lev/lev-Q8_0.jlm", 0.05},
-	{"laya", "laya/gguf/Laya-BF16.jlm", 0},
-	// Clef answers a request in one pass of its own: batched is alone.
-	{"clef", "clef/Clef-Flash-Q8_0.jlm", 0},
-	{"clef-fixture", "clef/fixture/clef-fixture.jlm", 0},
+} {
+	return []struct {
+		name, path string
+		// tol is how far a batched probability may sit from the request's alone:
+		// the engine's batch session against its single prefill
+		// (model.TestDecisionBatchMatchesAlone has the measurements).
+		tol float64
+	}{
+		{"d1-3B", "d1/d1-3B-Q8_0.jlm", 0.03},
+		{"lev", "lev/lev-Q8_0.jlm", 0.05},
+		{"laya", "laya/gguf/Laya-BF16.jlm", 0},
+		// Clef answers a request in one pass of its own: batched is alone.
+		{"clef", "clef/Clef-Flash-Q8_0.jlm", 0},
+		{"clef-fixture", "clef/fixture/clef-fixture.jlm", 0},
+	}
 }
 
 // TestSystemOneBatchesConcurrentRequests sends concurrent /v1/systemone
@@ -53,7 +61,7 @@ func TestSystemOneBatchesConcurrentRequests(t *testing.T) {
 		}
 		bodies[r] = b
 	}
-	for _, c := range decisionServerModels {
+	for _, c := range decisionServerModels() {
 		t.Run(c.name, func(t *testing.T) {
 			path := testmodels.Path(c.path)
 			fresh.Must(t, path)
