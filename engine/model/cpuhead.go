@@ -184,16 +184,24 @@ func (hf *cpuHeadForm) formOf() (*cpuBlockForm, composer.Decline) {
 
 // formCPUGraph is graph g on the CPU at rows rows through the model's keyed
 // cache: its weights its block's (the model's own, jlm.DenseBlock, for the
-// head's), its inputs and outputs buffers of their own.
+// head's), its inputs and outputs buffers of their own. A role the block
+// reads from another's tensor (a prediction block's embedding, the trunk's
+// table) takes that tensor's format.
 func (m *Model) formCPUGraph(s *Instance, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpuBlockForm, error) {
 	formats := map[jlm.Role]jlm.Type{}
 	f := m.Composing()
+	var l *layer
+	if g.Block >= 0 && g.Block < len(m.layers) {
+		l = &m.layers[g.Block]
+	}
 	for _, o := range g.Ops {
 		for _, w := range o.Weight {
 			if t, ok := over[w.Role]; ok {
 				formats[w.Role] = t
 			} else if e, ok := f.Find(w.Role, int32(g.Block), -1); ok {
 				formats[w.Role] = e.Type
+			} else if t := s.cpuRoleWeight(g.Block, l, w.Role); t != nil && t.e != nil {
+				formats[w.Role] = t.e.Type
 			}
 		}
 	}

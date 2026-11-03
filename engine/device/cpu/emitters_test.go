@@ -42,7 +42,8 @@ func TestEmittersTablesAreComplete(t *testing.T) {
 			t.Errorf("%v table has %d function fields; the reflection walked the wrong thing", tier, n)
 		}
 	}
-	if EmittersFor(TierNone) != EmittersFor(TierAVX2) {
+	// Each call is a table of its own: which one comes back is its tier.
+	if EmittersFor(TierNone).Tier != EmittersFor(TierAVX2).Tier || EmittersFor(TierSSE).Tier == EmittersFor(TierAVX2).Tier {
 		t.Error("TierNone must get the primary table, whose kernels Map refuses by name")
 	}
 }

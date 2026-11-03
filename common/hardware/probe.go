@@ -254,7 +254,8 @@ func ValidatePlacement(placement, spec string) error {
 	if err != nil {
 		return err
 	}
-	opened := map[string]bool{"host": true}
+	// The CPU is a device every spec opens.
+	opened := map[string]bool{nn.CPU: true}
 	for _, e := range es {
 		if !e.Device() || !e.HasSel {
 			continue
