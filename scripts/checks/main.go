@@ -315,17 +315,13 @@ type Result struct {
 // The skip messages the tree prints, by what they say is missing. A model
 // gate reports through testmodels.Missing ("MODEL MISSING") or names its file;
 // a device gate names the device.
-var (
-	modelSkip  = regexp.MustCompile(`(?i)MODEL MISSING|model not present|not present \(|no \*\.gguf|nor its container|JITLLM_LCPP|JITLLM_MODELS|golden .*missing|reference .*missing`)
-	deviceSkip = regexp.MustCompile(`(?i)no (GPU|device|cuda|CUDA|Metal|Vulkan|HIP|AMD)\b|NO AMD DEVICE|CARD TOO SMALL|device took no block|no text block placed on the device|no backend lowers`)
-)
 
 // classify names why a test skipped from what it printed.
 func classify(output string) Status {
 	switch {
-	case modelSkip.MatchString(output):
+	case modelSkip().MatchString(output):
 		return SkippedModel
-	case deviceSkip.MatchString(output):
+	case deviceSkip().MatchString(output):
 		return SkippedDevice
 	}
 	return SkippedOther
@@ -584,4 +580,12 @@ func printPlan(w io.Writer, p Plan) {
 	if len(p.Evidence) > 0 {
 		fmt.Fprintf(w, "read first: %s\n", strings.Join(p.Evidence, ", "))
 	}
+}
+
+func modelSkip() *regexp.Regexp {
+	return regexp.MustCompile(`(?i)MODEL MISSING|model not present|not present \(|no \*\.gguf|nor its container|JITLLM_LCPP|JITLLM_MODELS|golden .*missing|reference .*missing`)
+}
+
+func deviceSkip() *regexp.Regexp {
+	return regexp.MustCompile(`(?i)no (GPU|device|cuda|CUDA|Metal|Vulkan|HIP|AMD)\b|NO AMD DEVICE|CARD TOO SMALL|device took no block|no text block placed on the device|no backend lowers`)
 }

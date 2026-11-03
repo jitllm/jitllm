@@ -60,8 +60,12 @@ func (c *checker) git(args ...string) (string, error) {
 	return string(out), nil
 }
 
-var hunkRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
-var blameRe = regexp.MustCompile(`^([0-9a-f]{40}) \d+ (\d+)`)
+func hunkRe() *regexp.Regexp {
+	return regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+}
+func blameRe() *regexp.Regexp {
+	return regexp.MustCompile(`^([0-9a-f]{40}) \d+ (\d+)`)
+}
 
 // blame maps each line of path at rev to the commit that added it.
 func (c *checker) blame(rev, path string) (map[int]string, error) {
@@ -70,6 +74,7 @@ func (c *checker) blame(rev, path string) (map[int]string, error) {
 		return nil, err
 	}
 	m := map[int]string{}
+	blameRe := blameRe()
 	for _, l := range strings.Split(out, "\n") {
 		if g := blameRe.FindStringSubmatch(l); g != nil {
 			n, _ := strconv.Atoi(g[2])
@@ -130,6 +135,7 @@ func check(dir, base, head, body string, min int) ([]finding, error) {
 	var oldPath string
 	deletedFile := false
 	blames := map[string]map[int]string{}
+	hunkRe := hunkRe()
 	for _, l := range strings.Split(diff, "\n") {
 		switch {
 		case strings.HasPrefix(l, "diff --git "):
@@ -193,11 +199,13 @@ func check(dir, base, head, body string, min int) ([]finding, error) {
 	return out, nil
 }
 
-var removesRe = regexp.MustCompile(`(?m)^Removes:[ \t]*(\S+)`)
+func removesRe() *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^Removes:[ \t]*(\S+)`)
+}
 
 func removes(body string) []string {
 	var out []string
-	for _, g := range removesRe.FindAllStringSubmatch(body, -1) {
+	for _, g := range removesRe().FindAllStringSubmatch(body, -1) {
 		out = append(out, g[1])
 	}
 	return out
