@@ -21,7 +21,7 @@ func newTestRoot(t *testing.T) *root {
 	if err := os.WriteFile(filepath.Join(dir, "x.gguf"), []byte("not a model"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.DefaultConfig()
+	cfg := config.DefaultConfig(config.Env{})
 	cfg.ModelDirs = []string{dir}
 	f := newFront()
 	f.st = newState(f, "cpu", "", 1024, false, false)
@@ -44,7 +44,7 @@ func TestEveryScreenFillsTheTerminalExactly(t *testing.T) {
 	r := newTestRoot(t)
 	for _, size := range [][2]int{{160, 44}, {100, 30}, {80, 24}} {
 		r.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		for s := range screenNames {
+		for s := range screenNames() {
 			r.setScreen(screen(s))
 			for _, palette := range []bool{false, true} {
 				r.palette = nil
@@ -54,11 +54,11 @@ func TestEveryScreenFillsTheTerminalExactly(t *testing.T) {
 				v := r.View()
 				lines := strings.Split(v, "\n")
 				if len(lines) != size[1] {
-					t.Errorf("%s %dx%d palette=%v: %d lines", screenNames[s], size[0], size[1], palette, len(lines))
+					t.Errorf("%s %dx%d palette=%v: %d lines", screenNames()[s], size[0], size[1], palette, len(lines))
 				}
 				for i, l := range lines {
 					if w := len([]rune(stripANSI(l))); w > size[0] {
-						t.Errorf("%s %dx%d palette=%v: line %d is %d wide", screenNames[s], size[0], size[1], palette, i, w)
+						t.Errorf("%s %dx%d palette=%v: line %d is %d wide", screenNames()[s], size[0], size[1], palette, i, w)
 						break
 					}
 				}
@@ -71,10 +71,10 @@ func TestEveryScreenFillsTheTerminalExactly(t *testing.T) {
 // View changes nothing: two renders in a row are the same string.
 func TestViewIsPure(t *testing.T) {
 	r := newTestRoot(t)
-	for s := range screenNames {
+	for s := range screenNames() {
 		r.setScreen(screen(s))
 		if a, b := r.View(), r.View(); a != b {
-			t.Errorf("%s: two Views differ", screenNames[s])
+			t.Errorf("%s: two Views differ", screenNames()[s])
 		}
 	}
 }
@@ -108,7 +108,7 @@ func TestNavigationIsEscBackToTheChat(t *testing.T) {
 	r.chat.prompt.SetValue("")
 	r.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if r.cur != scrChat {
-		t.Fatalf("tab left the chat for %s", screenNames[r.cur])
+		t.Fatalf("tab left the chat for %s", screenNames()[r.cur])
 	}
 	r.Update(tea.KeyMsg{Type: tea.KeyF2})
 	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
@@ -123,7 +123,7 @@ func TestNavigationIsEscBackToTheChat(t *testing.T) {
 		r.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	}
 	if r.cur != scrChat {
-		t.Fatalf("esc on Models went to %s, not the chat", screenNames[r.cur])
+		t.Fatalf("esc on Models went to %s, not the chat", screenNames()[r.cur])
 	}
 }
 

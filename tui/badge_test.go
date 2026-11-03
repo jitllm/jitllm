@@ -28,10 +28,10 @@ func TestTheStatusBarAlwaysSaysWhichEngine(t *testing.T) {
 	r := newTestRoot(t)
 	for _, w := range []int{160, 80, 60} {
 		r.Update(tea.WindowSizeMsg{Width: w, Height: 30})
-		for s := range screenNames {
+		for s := range screenNames() {
 			r.setScreen(screen(s))
 			if f := footerOf(r); !strings.Contains(f, "Embedded · API off") {
-				t.Errorf("%s at %d columns: no badge in %q", screenNames[s], w, f)
+				t.Errorf("%s at %d columns: no badge in %q", screenNames()[s], w, f)
 			}
 		}
 	}

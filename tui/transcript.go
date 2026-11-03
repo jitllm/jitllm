@@ -131,10 +131,10 @@ func (t *transcript) content() string {
 		}
 	}
 	if p := st.Problem.Get(); p.Seq != 0 {
-		b.WriteString(sCard.BorderForeground(cRed).Width(w-2).Render(sErr.Bold(true).Render(p.Title)+"\n"+sFg.Render(p.Detail)) + "\n")
+		b.WriteString(sCard().BorderForeground(cRed).Width(w-2).Render(sErr().Bold(true).Render(p.Title)+"\n"+sFg().Render(p.Detail)) + "\n")
 	}
 	if alert != "" {
-		b.WriteString(sErr.Render(alert) + "\n")
+		b.WriteString(sErr().Render(alert) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -142,29 +142,29 @@ func (t *transcript) content() string {
 func (t *transcript) turn(turn session.Turn, thinkOpen bool, w int) string {
 	switch turn.Role {
 	case session.RoleUser:
-		text := lipgloss.NewStyle().Width(min(w*3/4, lipgloss.Width(turn.Text)+sBubble.GetHorizontalFrameSize())).
-			Inherit(sBubble).Render(turn.Text)
-		return lipgloss.PlaceHorizontal(w, lipgloss.Right, sDim.Render("you")) + "\n" +
+		text := lipgloss.NewStyle().Width(min(w*3/4, lipgloss.Width(turn.Text)+sBubble().GetHorizontalFrameSize())).
+			Inherit(sBubble()).Render(turn.Text)
+		return lipgloss.PlaceHorizontal(w, lipgloss.Right, sDim().Render("you")) + "\n" +
 			lipgloss.PlaceHorizontal(w, lipgloss.Right, text)
 	case session.RoleError:
-		return sCard.BorderForeground(cRed).Foreground(cRed).Width(w - 2).Render(turn.Text)
+		return sCard().BorderForeground(cRed).Foreground(cRed).Width(w - 2).Render(turn.Text)
 	}
 	var body strings.Builder
 	if turn.Think != "" {
 		if thinkOpen {
-			body.WriteString(sThink.Render("▾ thinking") + "\n")
-			body.WriteString(sThink.Width(w-4).Render(turn.Think) + "\n\n")
+			body.WriteString(sThink().Render("▾ thinking") + "\n")
+			body.WriteString(sThink().Width(w-4).Render(turn.Think) + "\n\n")
 		} else {
-			body.WriteString(sThink.Render(fmt.Sprintf("▸ thought for %d words · ctrl+t", len(strings.Fields(turn.Think)))) + "\n")
+			body.WriteString(sThink().Render(fmt.Sprintf("▸ thought for %d words · ctrl+t", len(strings.Fields(turn.Think)))) + "\n")
 		}
 	}
 	if turn.Text != "" {
 		body.WriteString(t.md.render(turn.Text, w-3))
 	} else {
-		body.WriteString(sDim.Render("(no reply)"))
+		body.WriteString(sDim().Render("(no reply)"))
 	}
 	if turn.Tokens > 0 {
-		body.WriteString("\n" + sDim.Render(fmt.Sprintf("%d tokens · %.1f tok/s", turn.Tokens, turn.TokPerSec)))
+		body.WriteString("\n" + sDim().Render(fmt.Sprintf("%d tokens · %.1f tok/s", turn.Tokens, turn.TokPerSec)))
 	}
 	return t.head(turn, false) + "\n" + t.rule(turn).Render(strings.TrimRight(body.String(), "\n"))
 }
@@ -176,10 +176,10 @@ func (t *transcript) live(turn session.Turn, w int) string {
 	think, text := st.StreamThink.Get(), st.Stream.Get()
 	var body strings.Builder
 	if think != "" && (text == "" || st.ShowThinking.Get()) {
-		body.WriteString(sThink.Render("▾ thinking") + "\n")
-		body.WriteString(sThink.Width(w-4).Render(think) + "\n\n")
+		body.WriteString(sThink().Render("▾ thinking") + "\n")
+		body.WriteString(sThink().Width(w-4).Render(think) + "\n\n")
 	} else if think != "" {
-		body.WriteString(sThink.Render(fmt.Sprintf("▸ thought for %d words · ctrl+t", len(strings.Fields(think)))) + "\n")
+		body.WriteString(sThink().Render(fmt.Sprintf("▸ thought for %d words · ctrl+t", len(strings.Fields(think)))) + "\n")
 	}
 	if text != "" {
 		if text != t.liveText {
@@ -187,10 +187,10 @@ func (t *transcript) live(turn session.Turn, w int) string {
 		}
 		body.WriteString(t.liveOut)
 		if t.env.frame%8 < 4 {
-			body.WriteString(lipgloss.NewStyle().Foreground(colourOf(turn.Colour, modelColours)).Render("▍"))
+			body.WriteString(lipgloss.NewStyle().Foreground(colourOf(turn.Colour, modelColours())).Render("▍"))
 		}
 	} else if think == "" {
-		body.WriteString(sDim.Render(strings.Repeat("·", 1+t.env.frame/3%3)))
+		body.WriteString(sDim().Render(strings.Repeat("·", 1+t.env.frame/3%3)))
 	}
 	return t.head(turn, true) + "\n" + t.rule(turn).Render(body.String())
 }
@@ -200,7 +200,7 @@ func (t *transcript) head(turn session.Turn, live bool) string {
 	if name == "" {
 		name = "assistant"
 	}
-	h := lipgloss.NewStyle().Foreground(colourOf(turn.Colour, modelColours)).Bold(true).Render("● " + name)
+	h := lipgloss.NewStyle().Foreground(colourOf(turn.Colour, modelColours())).Bold(true).Render("● " + name)
 	if live {
 		h += " " + t.env.spin.View()
 	}
@@ -209,7 +209,7 @@ func (t *transcript) head(turn session.Turn, live bool) string {
 
 func (t *transcript) rule(turn session.Turn) lipgloss.Style {
 	return lipgloss.NewStyle().Border(lipgloss.ThickBorder(), false, false, false, true).
-		BorderForeground(colourOf(turn.Colour, modelColours)).PaddingLeft(1)
+		BorderForeground(colourOf(turn.Colour, modelColours())).PaddingLeft(1)
 }
 
 func (t *transcript) emptyState(w int) string {
@@ -218,13 +218,13 @@ func (t *transcript) emptyState(w int) string {
 	switch {
 	case len(st.Loads.Get()) > 0:
 		l := st.Loads.Get()[0]
-		hint = t.env.spin.View() + " " + sMuted.Render("loading "+filepath.Base(l.Path)+" · "+l.Stage)
+		hint = t.env.spin.View() + " " + sMuted().Render("loading "+filepath.Base(l.Path)+" · "+l.Stage)
 	case st.Loaded.Get():
-		hint = sMuted.Render("ready. ask anything, or type / for commands.")
+		hint = sMuted().Render("ready. ask anything, or type / for commands.")
 	default:
-		hint = sMuted.Render("f2 to pick a model · ctrl+k for every command")
+		hint = sMuted().Render("f2 to pick a model · ctrl+k for every command")
 	}
-	tag := sDim.Render("every kernel generated at run time for the machine in front of it")
+	tag := sDim().Render("every kernel generated at run time for the machine in front of it")
 	block := lipgloss.JoinVertical(lipgloss.Center, wordmark(1, t.env.frame*2), "", tag, "", hint)
 	return lipgloss.Place(w, max(t.vp.Height, lipgloss.Height(block)), lipgloss.Center, lipgloss.Center, block)
 }

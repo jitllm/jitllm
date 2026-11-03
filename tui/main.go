@@ -31,9 +31,8 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "demo" {
 		os.Exit(runDemo(os.Args[2:]))
 	}
-	config.UseEnv(config.Env{Models: os.Getenv("JITLLM_MODELS"), DataHome: os.Getenv("XDG_DATA_HOME"),
+	cfg := config.LoadConfig(config.Env{Models: os.Getenv("JITLLM_MODELS"), DataHome: os.Getenv("XDG_DATA_HOME"),
 		APIKey: os.Getenv("JITLLM_API_KEY")})
-	cfg := config.LoadConfig()
 	chat := flag.Bool("chat", cfg.Chat, "apply the model's chat template")
 	device := flag.String("device", cfg.DeviceSpec, "device spec, as the window's setting")
 	ctx := flag.Int("ctx", cfg.MaxSeq, "context length")
