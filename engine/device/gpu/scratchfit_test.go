@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -135,6 +136,7 @@ func TestAStepAtMaxRowsFitsAFullCard(t *testing.T) {
 			W:      nn.Weight{T: quant.Q4_0, Data: make([]byte, vocab*(p.NEmbd/32)*18), Rows: vocab, K: p.NEmbd},
 			Logits: make([]float32, vocab),
 		}
+		headGraphs(h, p, jlm.RoleOutput)
 		for !g.PrepHead(h) {
 			if n == 1 {
 				t.Fatalf("the head does not fit beside one block: %s", g.Err())
@@ -182,14 +184,19 @@ func TestTheScratchIsChargedAndReturned(t *testing.T) {
 		}
 	}
 	dt := g.devs[0]
-	// A chunk of another width than the reserved one grows a second scratch.
+	// A chunk narrower than the reserved width runs on the reserved width's
+	// scratch, built at the placement: the step builds none.
 	x := make([]float32, batchWidth*p.NEmbd)
 	cs := make([]float32, batchWidth*p.NRot)
+	widths := len(dt.bbs)
 	if !g.Layers(0, 3, 0, 64, x[:64*p.NEmbd], cs[:64*p.NRot], nil, nil) {
 		t.Fatalf("a 64-row chunk: %s", g.Err())
 	}
-	if dt.scratch == 0 || len(dt.bbs) < 2 {
-		t.Fatalf("scratch %d bytes over %d batched widths: the charge is not running", dt.scratch, len(dt.bbs))
+	if dt.scratch == 0 || widths == 0 {
+		t.Fatalf("scratch %d bytes over %d batched widths: the charge is not running", dt.scratch, widths)
+	}
+	if len(dt.bbs) != widths {
+		t.Fatalf("a 64-row chunk built a scratch of its own (%d widths, %d at the placement)", len(dt.bbs), widths)
 	}
 	live := uint64(d.allocBytes - d.freedBytes)
 	if dt.scratch > live {

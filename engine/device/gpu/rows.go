@@ -256,9 +256,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	if g.bs.headServes(g.bs.hNorm, false, false) != partServes {
 		return fail(errors.New("the composer does not serve the head over rows"))
 	}
-	g.prewarming = true
 	_, err := g.servedHead(g.bs, g.bs.hNorm, R)
-	g.prewarming = false
 	if err != nil {
 		return fail(fmt.Errorf("the composed head over %d rows: %w", R, err))
 	}
@@ -281,6 +279,13 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 			return fail(err)
 		}
 		bs.ragBuilt = true
+	}
+	// The composed sample of the rows' tokens (ragTokens), formed and held
+	// here at the width: the step forms nothing, and the reservation counts
+	// it.
+	_, err = g.servedSampleAt(g.bs.sampleGraph, R)
+	if err != nil {
+		return fail(fmt.Errorf("the composed sample over %d rows: %w", R, err))
 	}
 	return true
 }
@@ -309,6 +314,9 @@ func (g *devTier) prepRowsReserved() {
 	if bb == nil || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsHeld() {
 		return
 	}
+	was := g.prewarming
+	g.prewarming = true
+	defer func() { g.prewarming = was }()
 	if !g.prepRowsHead(bb, &nn.Head{}, bb.rows) {
 		g.LastErr = "the reserved width's per-row head: " + g.LastErr
 	}

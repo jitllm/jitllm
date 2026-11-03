@@ -5,7 +5,9 @@ package gpu
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -13,11 +15,54 @@ import (
 // and none a multiple of another (key head 96 = 64 nope + 32 rotary, value head
 // 128, latent 160), so confusing one for another cannot go unnoticed.
 func mlaPlan() *nn.LayerPlan {
-	return &nn.LayerPlan{
+	p := &nn.LayerPlan{
 		NEmbd: 256, NHead: 4, NKVHead: 4, HeadDim: 96, NRot: 32, NFFN: 512,
 		KVLoraRank: 160, QLoraRank: 192, HeadDimV: 128,
-		MaxSeq: 64, Act: nn.ActSiLU, RMSEps: 1e-5, AttnScale: 0.1,
+		MaxSeq: 64, Act: nn.ActSiLU, RMSEps: 1e-5, AttnScale: 0.1, RopeBase: 10000,
 	}
+	p.Graph = latentBlockGraph(p)
+	withRotary(p)
+	return p
+}
+
+// latentBlockGraph is p's block as the front end states DeepSeek's latent
+// attention: the two-step query, the latent row and its rotary key from
+// kv_a, each head's query absorbed through its sheet of kv_b's key half, the
+// history one row a position, each head's latent result through its sheet of
+// the value half, then the output projection and the FFN.
+func latentBlockGraph(p *nn.LayerPlan) *graph.Graph {
+	b := graph.NewBlock(0)
+	nh, hd, lat, rot, hdv := p.NHead, p.HeadDim, p.KVLoraRank, p.NRot, p.HeadDimV
+	nope, row := hd-rot, lat+rot
+	slice := func(v graph.ValueID, name string, headDim, off, width, out int) graph.ValueID {
+		return b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: name, Width: out}}, nil,
+			graph.Attrs{HeadDim: headDim, Offset: off, Width: width}, nil, nil)[0]
+	}
+	sheets := func(v graph.ValueID, name string, r jlm.Role, k, rows int) graph.ValueID {
+		return b.Emit(graph.OpExpertMatVec, []graph.ValueID{v}, []graph.Result{{Name: name, Width: nh * rows}},
+			[]graph.Binding{{Role: r, K: k, Rows: rows, Sheets: nh}}, graph.Attrs{}, nil, nil)[0]
+	}
+	x := b.In("x", p.NEmbd)
+	n := b.Norm(x, jlm.RoleAttnNorm, p.RMSEps)
+	q := b.MatVec(b.Norm(b.MatVec(n, jlm.RoleAttnQA, p.QLoraRank), jlm.RoleAttnQANorm, p.RMSEps), jlm.RoleAttnQB, nh*hd)
+	kv := b.MatVec(n, jlm.RoleAttnKVA, row)
+	latent := b.Norm(slice(kv, "latent", 0, 0, lat, lat), jlm.RoleAttnKVANorm, p.RMSEps)
+	ra := graph.Attrs{HeadDim: rot, NRot: rot, Base: p.RopeBase, Layout: graph.RopeNorm}
+	qpe := b.Emit(graph.OpRope, []graph.ValueID{slice(q, "q.pe", hd, nope, rot, nh*rot)},
+		[]graph.Result{{Name: "q.pe.rope", Width: nh * rot}}, nil, ra, nil, nil)[0]
+	kpe := b.Emit(graph.OpRope, []graph.ValueID{slice(kv, "k.pe", 0, lat, rot, rot)},
+		[]graph.Result{{Name: "k.pe.rope", Width: rot}}, nil, ra, nil, nil)[0]
+	abs := sheets(slice(q, "q.nope", hd, 0, nope, nh*nope), "q.abs", jlm.RoleAttnKB, nope, lat)
+	qrow := b.Emit(graph.OpConcat, []graph.ValueID{abs, qpe}, []graph.Result{{Name: "q.row", Width: nh * row}}, nil,
+		graph.Attrs{NHead: nh}, nil, nil)[0]
+	krow := b.Emit(graph.OpConcat, []graph.ValueID{latent, kpe}, []graph.Result{{Name: "kv.row", Width: row}}, nil,
+		graph.Attrs{}, nil, nil)[0]
+	hist := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(krow, krow, 0)}
+	att := b.AttendOf(qrow, hist, graph.Attrs{NHead: nh, NKVHead: 1, HeadDim: row, Scale: p.AttnScale})
+	o := sheets(slice(att, "att.latent", row, 0, lat, nh*lat), "att.v", jlm.RoleAttnVB, lat, hdv)
+	x = b.Add(x, b.MatVec(o, jlm.RoleAttnOut, p.NEmbd))
+	b.Out(swiGLU(b, p, x))
+	return b.G
 }
 
 // mlaBlocks builds n distinct latent-attention blocks (resident() keys on the

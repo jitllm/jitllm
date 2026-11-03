@@ -22,8 +22,10 @@ import (
 // bs's rows, serves where it is: the scratch holds the rows' descriptors
 // and, where the block rotates, the rows' rotary table; the device holds its
 // transient pair; the block attends over the whole run or the windows the
-// call staged (SetKeyRuns), not a window its graph states; and the composer
-// forms it at the scratch's rows.
+// call staged (SetKeyRuns, SetRowWindows) -- a symmetric window its graph
+// states is the form's own, computed from each row's place in the run
+// (composer's history.start/end); and the composer forms it at the
+// scratch's rows.
 func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch) partDecline {
 	switch {
 	case bs.pics == nil || bs.calls == nil:
@@ -32,7 +34,7 @@ func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partTableHeld
 	case g.tkv == nil || g.tkv.kc == nil || g.tkv.vc == nil:
 		return partNoPool
-	case l.win != 0 || l.windowed && len(g.winRuns) == 0:
+	case l.windowed && len(g.winRuns) == 0:
 		return partWindow
 	}
 	if _, _, _, err := g.towerStep(bs, l, li, p, bs.rows); err != nil {
@@ -50,22 +52,19 @@ func (g *devTier) prewarmTower(li int) (roomless string) {
 	if g.NoPromptPrewarm {
 		return ""
 	}
-	if g.geoUsed {
-		prev := g.geoCur
-		g.useGeom(g.geomFor(li, li+1))
-		defer g.useGeom(prev)
-	}
+	defer g.useGeom(g.enterGeomOf(li))
 	bs, l := g.bs, g.layers[li]
 	if l.conv != nil {
 		// Formed at its placement (prepConv).
 		return ""
 	}
+	// A windowed block forms here too: the windows a call stages
+	// (SetKeyRuns, SetRowWindows) are descriptors its form reads, not a
+	// shape it is formed for.
 	if bs == nil || bs.pics == nil || bs.calls == nil || bs.cs == nil && rotates(l.graph) ||
-		g.tkv == nil || g.tkv.kc == nil || l.win != 0 || l.windowed {
+		g.tkv == nil || g.tkv.kc == nil {
 		return ""
 	}
-	g.prewarming = true
-	defer func() { g.prewarming = false }()
 	_, inst, _, err := g.towerStep(bs, l, li, &bs.p, bs.rows)
 	if err != nil {
 		g.LastErr = "the composed tower block: " + err.Error()

@@ -173,7 +173,7 @@ func TestUnifiedImportDoesNotCopyAndDoesNotCharge(t *testing.T) {
 	// The weight charge, isolated from the parts that are genuinely resident.
 	one.mu.Lock()
 	l := one.layers[0]
-	weights := one.used - (l.kvBytes + l.auxBytes + one.kvPoolBytes())
+	weights := one.used - (l.kvBytes + l.auxBytes + one.kvPoolBytes() + one.scratch + one.instBytes + one.ownWords())
 	pool := one.pool.Used()
 	pgBytes, pageBytes := l.pg.bytes, one.pageBytes
 	one.mu.Unlock()
@@ -190,10 +190,12 @@ func TestUnifiedImportDoesNotCopyAndDoesNotCharge(t *testing.T) {
 			"pageable bytes, on a block whose weights are wrappers over the arena: a "+
 			"page-in of it moves nothing and reclaims nothing", pgBytes, pageBytes)
 	}
-	if pool != l.kvBytes+l.auxBytes+one.kvPoolBytes() {
-		t.Fatalf("the pool holds %d bytes, want %d (KV %d + aux %d): an import must not "+
+	// What is genuinely resident is the pool's: the history, the norms, the
+	// scratch and the composed parts, and the device's own words.
+	if own := one.scratch + one.instBytes + one.ownWords(); pool != l.kvBytes+l.auxBytes+one.kvPoolBytes()+own {
+		t.Fatalf("the pool holds %d bytes, want %d (KV %d + aux %d + scratch, parts and words %d): an import must not "+
 			"reach the pool either -- that is the account an integrated GPU shares with the host",
-			pool, l.kvBytes+l.auxBytes+one.kvPoolBytes(), l.kvBytes+one.kvPoolBytes(), l.auxBytes)
+			pool, l.kvBytes+l.auxBytes+one.kvPoolBytes()+own, l.kvBytes+one.kvPoolBytes(), l.auxBytes, own)
 	}
 	t.Logf("%d wrapped tensors, %.2f MiB of weights imported, %d bytes charged (KV %.2f MiB)",
 		wrapped, float64(st.ImportBytes)/(1<<20), weights, float64(l.kvBytes)/(1<<20))
@@ -236,7 +238,7 @@ func TestImportIsRefusedWhereItWouldCostMore(t *testing.T) {
 			}
 			one.mu.Lock()
 			l := one.layers[0]
-			weights := one.used - (l.kvBytes + l.auxBytes + one.kvPoolBytes())
+			weights := one.used - (l.kvBytes + l.auxBytes + one.kvPoolBytes() + one.scratch + one.instBytes + one.ownWords())
 			one.mu.Unlock()
 			if weights == 0 {
 				t.Fatal("a COPIED block was charged nothing: the fallback path lost the charge, " +
@@ -284,9 +286,12 @@ func TestImportedBlocksNeverPageOut(t *testing.T) {
 		}
 		g.devs[0].mu.Lock()
 		defer g.devs[0].mu.Unlock()
-		l := g.devs[0].layers[0]
-		// Room for every block's permanent parts plus two blocks of weights.
-		return blocks*(l.kvBytes+l.auxBytes) + 2*g.devs[0].widest
+		d0 := g.devs[0]
+		l := d0.layers[0]
+		// Room for every block's permanent parts plus two blocks of weights,
+		// beside what the device pays once: its scratch, the composed parts
+		// its blocks share, its own words.
+		return blocks*(l.kvBytes+l.auxBytes) + 2*d0.widest + d0.scratch + d0.instBytes + d0.ownWords()
 	}()
 
 	run := func(t *testing.T, unified bool) (pageOuts, placed, imports int) {
@@ -359,8 +364,11 @@ func TestImportingDeviceIsNotDeclinedForWeightsItNeverHolds(t *testing.T) {
 		}
 		g.devs[0].mu.Lock()
 		defer g.devs[0].mu.Unlock()
-		l := g.devs[0].layers[0]
-		return blocks*(l.kvBytes+l.auxBytes) + g.devs[0].kvPoolBytes()*uint64(blocks) + g.devs[0].widest/2
+		d0 := g.devs[0]
+		l := d0.layers[0]
+		// Beside what the device pays once: its scratch, the composed parts
+		// its blocks share, its own words.
+		return blocks*(l.kvBytes+l.auxBytes) + d0.kvPoolBytes()*uint64(blocks) + d0.widest/2 + d0.scratch + d0.instBytes + d0.ownWords()
 	}()
 
 	run := func(unified bool) (placed, slots int, why string) {
@@ -523,4 +531,14 @@ func TestHostReservedCountsTheArena(t *testing.T) {
 				float64(before)/(1<<30), float64(after)/(1<<30), float64(arena)/(1<<30))
 		})
 	}
+}
+
+// ownWords is what g holds of its own beside its blocks and their parts: the
+// marks arena and the all-rows word.
+func (g *devTier) ownWords() uint64 {
+	n := uint64(4 * g.marks.size)
+	if g.everyRows != nil {
+		n += 4
+	}
+	return n
 }

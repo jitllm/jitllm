@@ -104,12 +104,19 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 			tw.opt.towerGPULayers = 1
 			s := tw.testState()
 			s.SetDevice(gpux)
-			uploads := gpux.Stats().RopeTableUploads
+			// The device computes the tower's table from the rows' cells
+			// (the grid table): it takes no row of it from the caller.
+			before := gpux.Stats()
+			tables, _ := before.ServedPart(gpu.ComposedTable)
 			var got0 []float32
 			arm.served(t, gpux, 1, func() { got0, _ = encode(s) })
 			s.Close()
-			if gpux.Stats().RopeTableUploads == uploads {
-				t.Fatal("the device took no rotary table for the tower's block: it did not rotate")
+			after := gpux.Stats()
+			if n := after.RopeTableUploads - before.RopeTableUploads; n != 0 {
+				t.Fatalf("the device took %d rotary table rows from the caller: the tower's grid table did not run on it", n)
+			}
+			if served, _ := after.ServedPart(gpu.ComposedTable); served == tables {
+				t.Fatalf("the device served no rotary table for the tower's block: it did not rotate (%s)", gpux.Err())
 			}
 			clean, _ := nmse32(want0, got0)
 			// The bound is the backends' own rounding against the host's, which
@@ -218,8 +225,8 @@ func TestTextHeadBesideItsTowerOnTheDevice(t *testing.T) {
 				ts := m.Tower().testState()
 				ts.SetDevice(gpux)
 				if st.GPULayers() != m.Cfg.NLayer || ts.GPUBlocks() == 0 {
-					t.Fatalf("%s placed %d of %d text and %d tower blocks: the gate needs both", spec,
-						st.GPULayers(), m.Cfg.NLayer, ts.GPUBlocks())
+					t.Fatalf("%s placed %d of %d text and %d tower blocks: the gate needs both (%s)", spec,
+						st.GPULayers(), m.Cfg.NLayer, ts.GPUBlocks(), gpux.Err())
 				}
 				got, err := st.Prefill(ids)
 				if err != nil {

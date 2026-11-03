@@ -339,7 +339,9 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 				t.Fatalf("%s took %d of %d tower blocks (%s)", spec, n, c.NLayer, g.Err())
 			}
 			s0, _ := g.Stats().ServedPart(gpu.ComposedTower)
+			k0 := cardComposed(g)
 			_, got := towerEncode(t, all, px)
+			composedNothingSince(t, g, k0, "the picture's encode")
 			st := g.Stats()
 			served, declined := st.ServedPart(gpu.ComposedTower)
 			t.Logf("%s: %d tower block runs served by the composer, %d declined %v (%s)", spec,

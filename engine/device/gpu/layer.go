@@ -208,13 +208,11 @@ type layer struct {
 	// first block's the set was built from: an encoder's decision head
 	// (Laya's) is an ungated ReLU MLP wider than the encoder's gated GELU,
 	// and rotates nothing where the encoder rotates every head. nffn is its
-	// width, ungated whether it has no gate, actK its activation where the
-	// set's is another (nil: the set's bs.actMul), noRope that it rotates
-	// nothing. Read on the non-causal path only.
+	// width, ungated whether it has no gate, act its activation, noRope
+	// that it rotates nothing. Read on the non-causal path only.
 	nffn    int
 	ungated bool
 	act     graph.ActKind
-	actK    backend.Kernel
 	noRope  bool
 	// swa says the block attends at the sliding layers' geometry, so it runs
 	// in that geometry's scratch set (gemma4.go). outScale is its output
@@ -1202,14 +1200,6 @@ type recPair struct {
 	marked    bool
 }
 
-// ragLinear is one batch size's linear-block kernels (blockScratch.ragLin).
-type ragLinear struct {
-	conv, shift, delta backend.Kernel
-	// ngConv is Qwen3.8-Flash-Next's n-gram convolution over the step's runs
-	// (q4e.go), nil on every other block.
-	ngConv backend.Kernel
-}
-
 // recOf returns this session's recurrent state for the block, or nil.
 func (l *layer) recOf(sid uint64) *recPair {
 	if l == nil || l.rec == nil {
@@ -1620,18 +1610,18 @@ type blockScratch struct {
 	// its offset (x is stream-major), the inputs and the outputs a block of
 	// several streams binds (servedStreams).
 	streams map[int][2][]backend.Buf
-	// ragLin is a ragged step's linear block per row count (LayersRows): the
-	// convolution and the fused rule over the step's runs, each a sequence's
-	// rows at consecutive positions (kernels' run forms), built for the real
-	// row count so a padded row never reaches a state.
-	ragLin map[int]*ragLinear
-	dRows  backend.Buf
+	dRows   backend.Buf
 	// cRows is the composer's recurrent descriptor in the shared form.
-	cRows           backend.Buf
-	rec             nn.RecurrentPlan
-	hx, hcs, hcsSWA []float32
-	hraw            []byte
-	hout            []float32
+	cRows backend.Buf
+	// gridGraph is a non-causal set's grid table (LayerPlan.GridPlanes), and
+	// gridPos, gridReq and gridPlanes a call's cells, its request and the
+	// table's planes (gridtable.go).
+	gridGraph                    *graph.Graph
+	gridPos, gridReq, gridPlanes backend.Buf
+	rec                          nn.RecurrentPlan
+	hx, hcs, hcsSWA              []float32
+	hraw                         []byte
+	hout                         []float32
 }
 
 // PrepLayer is prepLayerFor for the zero session: a caller that never attached.
@@ -1760,23 +1750,19 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	// A tower block the device could not take leaves nothing behind: the
-	// first one built its set's scratch before the budget said no, and with
-	// no tower block on the device that scratch is a ceiling nobody runs.
-	if p.NonCausal {
-		defer func() {
-			if placed {
-				return
-			}
+	// A block the device could not take leaves nothing behind: the first
+	// one built its scratch before the budget said no, and with no block on
+	// the device that scratch is a ceiling nobody runs -- a tower's set's
+	// too, with no tower block left.
+	defer func() {
+		if placed {
+			return
+		}
+		if p.NonCausal {
 			g.dropIdleTower()
-			// And on a device it was the first block of, the staging its
-			// build sized goes too, as the last block out takes it.
-			if len(g.layers) == 0 && (g.bs == nil || g.bs.head == nil) {
-				g.dropGraph()
-				g.dropAllScratch()
-			}
-		}()
-	}
+		}
+		g.dropIfEmpty()
+	}()
 	// The block's own geometry's scratch set, and the home set again on the
 	// way out (gemma4.go): Gemma 4's sliding layers, and a non-causal
 	// segment's blocks -- a vision tower's, whose residual, heads and FFN are
@@ -1858,6 +1844,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.visMax = max(g.visMax, p.MaxSeq)
 		if g.visCap == 0 {
 			g.visCap = visRowsFor(min(p.MaxSeq, visStart), p.MaxSeq)
+			g.visFirst = g.visCap
 		}
 	}
 	if g.bs == nil && p.NonCausal {
@@ -3225,6 +3212,12 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		bs.picStage = make([]byte, rows*composer.RowWords*4)
 		bs.picStageW = make([]byte, rows*composer.RowWords*4)
 	}
+	if p.NonCausal && len(p.GridPlanes) > 0 && len(p.Tables) == 1 && p.Tables[0] != nil {
+		bs.gridGraph = p.Tables[0]
+		al(&bs.gridPos, (1+rows)*4)
+		al(&bs.gridReq, (composer.RequestRows+rows)*4)
+		al(&bs.gridPlanes, 4*len(p.GridPlanes))
+	}
 	al(&bs.roff, rows*4)
 	al(&bs.zero, 4)
 	// The n-gram block's gathered rows, its side input (SetNGramRows), or
@@ -3239,6 +3232,12 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	if err != nil {
 		g.LastErr = err.Error()
 		return nil
+	}
+	if bs.gridPlanes != nil {
+		if err = bs.gridPlanes.Write(f32b(p.GridPlanes)); err != nil {
+			g.LastErr = err.Error()
+			return nil
+		}
 	}
 	if err = bs.zero.Write([]byte{0, 0, 0, 0}); err != nil {
 		g.LastErr = err.Error()
@@ -4067,8 +4066,8 @@ type graphKey struct {
 	// head, the step's tables, its token and its input rows; pickHeadSrv and
 	// pickSrv that the composer's head projects the picked rows alone, or its
 	// gather picks.
-	headSrv, tableSrv, sampleSrv, embedSrv bool
-	pickHeadSrv, pickSrv                   bool
+	headSrv, tableSrv, gridSrv, sampleSrv, embedSrv bool
+	pickHeadSrv, pickSrv                            bool
 }
 
 // canRecord reports whether this device's sessions can capture a launch
@@ -4436,11 +4435,19 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			tableSrv = true
 		}
 	}
+	gridSrv := p.NonCausal && lo < hi && g.gridServes(bs)
+	if gridSrv {
+		if _, err := g.servedGridTable(bs, R); err != nil {
+			g.PartsDeclined[partRope]++
+			return refuse("the composed grid table: %v", err)
+		}
+	}
 	switch {
 	case tableSrv:
 		// Each row's cache position and its sequence's marks: the tables
 		// turn it by its positions on the axes they compute from them.
 		raxes = g.ropeRowsWords(sid, pos, rrows, R, rag)
+	case gridSrv:
 	case bs.cs != nil:
 		g.RopeTableUploads += R
 	}
@@ -4574,7 +4581,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	key := graphKey{lo: lo, hi: hi, scoreN: nCap, rows: R, head: head != nil, argmax: argmax, sampleK: sampleK, pick: pick,
 		rag: ragN, ragRuns: ragRuns, recParity: par, keys: keys, ragHead: ragHead, hnorm: hNormID,
 		persist: persistOn, persistDeps: persistOn && g.PersistDeps, kvF16: g.KVF16, sid: sid,
-		headSrv: headSrv, tableSrv: tableSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, pickHeadSrv: pickHeadSrv, pickSrv: pickSrv}
+		headSrv: headSrv, tableSrv: tableSrv, gridSrv: gridSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, pickHeadSrv: pickHeadSrv, pickSrv: pickSrv}
 	if lo == hi {
 		// The head alone reads no history, so the capacity is not part of
 		// what it records: keyed by it, prompts on either side of a growth
@@ -4583,8 +4590,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	}
 	if _, live := g.recs[key]; !live {
 		for k, r := range g.recs {
+			// The same call at another position grain: its score count and
+			// its history's key count are the positions'.
 			older := k
-			older.scoreN = key.scoreN
+			older.scoreN, older.keys = key.scoreN, key.keys
 			if older != key {
 				continue // a different placement, still live
 			}
@@ -4624,7 +4633,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		hx: hx, hcs: hcs, hcsSWA: hcsSWA, pn: pn,
 		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow,
 		nCap: nCap, rrows: rrows,
-		tableSrv: tableSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, raxes: raxes,
+		tableSrv: tableSrv, gridSrv: gridSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, raxes: raxes,
 		fold: fold, argmax: argmax, sampleK: sampleK, pick: pick, ragHead: ragHead, parOK: parOK,
 		allRows: allRows, hNorm: hNorm, headWhy: headWhy, pickOnly: pickOnly,
 		pickHeadSrv: pickHeadSrv, pickSrv: pickSrv,
@@ -4729,8 +4738,9 @@ type submitArgs struct {
 	ragHead            int
 	fold, argmax       bool
 	// tableSrv and sampleSrv say the composer serves the step's tables and
-	// its token; raxes is a table over several axes' staged positions.
-	tableSrv, sampleSrv bool
+	// its token; raxes is a table over several axes' staged positions;
+	// gridSrv says the set runs its grid table from the session's cells.
+	tableSrv, sampleSrv, gridSrv bool
 	// embedSrv says the composer gathers the decode row.
 	embedSrv       bool
 	raxes          []byte
@@ -4778,6 +4788,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	R, nrow := a.R, a.nrow
 	fold, argmax, sampleK, pick := a.fold, a.argmax, a.sampleK, a.pick
 	tableSrv, sampleSrv, embedSrv, raxes := a.tableSrv, a.sampleSrv, a.embedSrv, a.raxes
+	gridSrv := a.gridSrv
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
 	pickOnly := a.pickOnly
 	pickHeadSrv := a.pickHeadSrv
@@ -4827,6 +4838,14 @@ func (g *devTier) layersSession(s backend.Session) {
 		// Both launches are pure functions of buffers, so a replay rebuilds it from
 		// whatever bs.rpos holds this token.
 		switch {
+		case gridSrv:
+			sv, serr := g.servedGridTable(bs, R)
+			if serr == nil {
+				serr = sv.run(g, lc, sv.inst, nil, nil)
+			}
+			if err == nil {
+				err = serr
+			}
 		case tableSrv:
 			for i := range bs.tableCount() {
 				cs, planes, at := g.tableBinds(bs, i)
@@ -5200,6 +5219,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	switch {
 	case raxes != nil:
 		w(bs.ropeRows, raxes)
+	case gridSrv:
+		w(bs.gridPos, g.gridCells)
+		w(bs.gridReq, g.gridReq)
 	default:
 		if bs.cs != nil {
 			// nil for a block with no rotary; nothing reads it and there is
@@ -5439,10 +5461,6 @@ func (g *devTier) dropLayerLocal(l *layer) {
 	g.convLeft(l)
 	g.freeKV(l)
 	freeRec(l)
-	if l.actK != nil {
-		l.actK.Close()
-		l.actK = nil
-	}
 	if n := l.recBytes; n > 0 {
 		g.refund(n)
 		g.RecBytes -= n
@@ -5507,6 +5525,16 @@ func (g *devTier) leaveLayers(sid uint64, lo, hi int) []int {
 	return gone
 }
 
+// graphBeside says another block placed here runs l's graph.
+func (g *devTier) graphBeside(l *layer) bool {
+	for _, o := range g.layers {
+		if o != nil && o != l && o.graph == l.graph {
+			return true
+		}
+	}
+	return false
+}
+
 // releaseBlock frees block li and every session's history on it. Callers
 // hold g.mu and drop the graph.
 func (g *devTier) releaseBlock(li int) {
@@ -5515,7 +5543,9 @@ func (g *devTier) releaseBlock(li int) {
 	if l == nil {
 		return
 	}
-	if l.graph != nil {
+	// Its parts go with it, unless another block placed here runs the same
+	// graph: a part is keyed by its graph, not by its block.
+	if l.graph != nil && !g.graphBeside(l) {
 		g.dropServed(l.graph)
 	}
 	// The same free path as a page-out (layer.tensors()); a release also
@@ -5560,22 +5590,33 @@ func (g *devTier) releaseBlock(li int) {
 	g.placeGen.Add(1)
 }
 
+// dropIfEmpty empties a device left with no block and no head: it holds
+// nothing of its own, so the composed parts (the tables', the row copy's),
+// the scratches and the staging go, refunded -- and the marks arena, unless
+// a session's marks are in it. The next placement forms, builds and
+// reserves them again. Callers hold g.mu.
+func (g *devTier) dropIfEmpty() {
+	if len(g.layers) != 0 || g.bs != nil && g.bs.head != nil {
+		return
+	}
+	g.dropGraph()
+	g.partsClose()
+	g.dropAllScratch()
+	if !g.marks.marksPlaced() {
+		g.freeMarks()
+	}
+}
+
 // afterRelease is what every release ends with. Callers hold g.mu.
 func (g *devTier) afterRelease() {
 	// A pool no session holds a place in, and the seats of sessions that hold
 	// none, go back to the budget.
 	g.recTidy()
-	// The last tower block out takes its set's scratch with it.
+	// The last tower block out takes its set's scratch with it, and a block
+	// out takes its parts: the next placement forms the widths again.
 	g.dropIdleTower()
-	if len(g.layers) == 0 {
-		// And a device left with no block and no head holds nothing of its
-		// own: the scratches and the staging go too, refunded (the next
-		// placement builds and reserves them again).
-		if g.bs == nil || g.bs.head == nil {
-			g.dropGraph()
-			g.dropAllScratch()
-		}
-	}
+	g.visWarm = [2]int{}
+	g.dropIfEmpty()
 	// A decline is cached: resident() keeps a failed entry so a tensor is not
 	// re-priced every matvec, and that entry says no forever. Giving budget
 	// back is what clears those tombstones, or a seam grown after a shrink is
@@ -5867,11 +5908,6 @@ func (g *devTier) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevic
 
 // PrewarmLayer packs a whole block off the main loop. See GPU.Prewarm.
 func (g *devTier) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
-	bank := 1
-	if w.Router.Data != nil && p.NExpert > 1 {
-		bank = p.NExpert
-	}
-	_ = bank // the bank is packed as one tall matrix, exactly as PrepLayer does
 	// A lazy weight is not prewarmable: this must be safe beside a running
 	// Layers, and nn.LayerWeights.Ensure reads the file into the pager's frames.
 	// Packing without it would pack whatever the frame holds. The upload calls

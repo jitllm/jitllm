@@ -15,7 +15,7 @@ import (
 //	  first NRot dimensions, into the row's tail at the row's position
 //	the query: idx_q_b on the normed query latent, rotated the same way per head
 //	the weights: idx_proj on the block input
-//	the scores, the selection and the gather (kernels/indexer.go): each row's
+//	the scores, the selection and the gather: each row's
 //	  IdxTopK best positions' latent rows copied into scratch pages
 //
 // and the MLA attention then runs unchanged over the gathered pages, whose

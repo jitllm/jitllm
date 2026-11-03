@@ -4,7 +4,11 @@ package nn
 
 import (
 	"math"
+	"slices"
 	"testing"
+	"unsafe"
+
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // The multi-axis rotary table's gates. The oracle is ropeOracle's float64
@@ -113,4 +117,43 @@ func TestRopeTableAtIsThePlainTableWhenTheAxesAgree(t *testing.T) {
 	if same {
 		t.Fatal("a row at (5, 9, 5) has the table of (5, 5, 5): the h run never read its coordinate")
 	}
+}
+
+// TestTabPlanesFoldEachRunsFrequencies holds the planes a device is handed
+// for a multi-axis rotary (TabPlanes over every run's pairs) to the table the
+// runs turn: through the generated kernel at position p they are TableAt at p
+// on every axis, bit for bit. Restarting runs (a 2-D tower's) are what this
+// catches; the planes of one continuous sequence would give the column's
+// pairs the row's later frequencies.
+func TestTabPlanesFoldEachRunsFrequencies(t *testing.T) {
+	ran := 0
+	for _, c := range ropeAxesConfigs() {
+		n := RopeRuns(c.r.Runs)
+		code := ropeTabCodeFor(n)
+		if code == nil {
+			t.Fatalf("%s: no rotary-table kernel for %d pairs", c.name, n)
+		}
+		planes := c.r.TabPlanes(n)
+		got, want := make([]float32, 2*n), make([]float32, 2*n)
+		for _, p := range []int{0, 1, 7, 400, 30000} {
+			code.Call(&cpu.Args{Out: &got[0], AScale: &planes[0],
+				Scr: (*byte)(unsafe.Pointer(&ropeTabConsts[0])), K: int64(p)})
+			c.r.TableAt(want, []int{p, p, p})
+			for i := range want {
+				if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
+					t.Fatalf("%s at %d entry %d (pair %d): the planes give %v, the runs %v",
+						c.name, p, i, i/2, got[i], want[i])
+				}
+			}
+			ran++
+		}
+	}
+	// The violation: a restarting rotary's planes folded as one sequence.
+	r := ropeAxesConfigs()[1].r
+	n := RopeRuns(r.Runs)
+	plain := buildRopeTab(Rope{NRot: r.NRot, Base: r.Base, Neox: r.Neox}, n).block
+	if slices.Equal(plain, r.TabPlanes(n)) {
+		t.Fatal("qwen2vl-vit's planes are one continuous sequence's: the gate cannot see a restart")
+	}
+	t.Logf("%d positions, every config's planes are its runs' table", ran)
 }

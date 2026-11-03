@@ -285,7 +285,7 @@ func TestTowerChunksUnderABudget(t *testing.T) {
 				continue
 			}
 			chunkedRuns++
-			if math.IsNaN(nm) || nm > towerPagedNMSE {
+			if math.IsNaN(nm) || nm > towerChunkNMSE {
 				t.Fatalf("%s under %d bytes: the row-chunked tower reads NMSE %.3e against the whole set's", spec, b, nm)
 			}
 		}
@@ -298,9 +298,17 @@ func TestTowerChunksUnderABudget(t *testing.T) {
 	}
 }
 
-// towerPagedNMSE bounds a paged or row-chunked tower's projector output
-// against the whole resident one: the reduction-order band of narrower
-// attention passes (2.9e-4 measured on Vulkan, 0 on CUDA), well under what a
-// key read from the wrong rows does (0.53, TestTowerChunksUnderABudget's
-// mutation) and ten times under the device-against-host bound (1e-2).
-const towerPagedNMSE = 1e-3
+// towerPagedNMSE bounds a paged tower's projector output against the whole
+// resident one: the device-against-host bound, because a budget this tight
+// narrows the attention's score planes, a pass more composed as another form
+// (RULE 8) -- 2.7e-3 on a V100's CUDA, where main's one kernel at every
+// width read 0, and 2.9e-4 on its Vulkan.
+const towerPagedNMSE = 1e-2
+
+// towerChunkNMSE bounds a row-chunked tower's projector output against the
+// whole set's: the device-against-host bound, because a chunk's forms are
+// composed at the chunk's rows and the whole set's at the picture's, two
+// forms held to the band rather than to each other (RULE 8) -- 2.7e-3 on a
+// V100's CUDA, where main's one kernel at every width read 0. A chunk's
+// queries over its own chunk's keys alone read 0.53.
+const towerChunkNMSE = 1e-2

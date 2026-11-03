@@ -18,7 +18,7 @@ import (
 //	  attention's: same table, same width)
 //	the query: idx_q on the same input, each head's RMSNorm, the rotary
 //	the scores, the block ranking, the selection, the compaction and the
-//	  gather (kernels/msa.go): each row's kept positions, per kv group, copied
+//	  gather: each row's kept positions, per kv group, copied
 //	  into scratch pages
 //
 // and the attention then runs unchanged over the gathered pages, whose

@@ -31,7 +31,7 @@ func blockWeights(p *nn.LayerPlan) *nn.LayerWeights {
 // missed refund shrinks the budget each cycle until PrepLayer declines a
 // block that would fit, reported as a -vram problem.
 func TestReleaseReturnsTheBudget(t *testing.T) {
-	g, d, p := fakeTier(t)
+	g, _, p := fakeTier(t)
 	// fakeTier already took block 0. Add two more so a partial release has
 	// something to leave behind.
 	for li := 1; li < 3; li++ {
@@ -43,11 +43,11 @@ func TestReleaseReturnsTheBudget(t *testing.T) {
 	if full == 0 {
 		t.Fatal("three blocks cost nothing; the accounting is not running")
 	}
-	liveBufs := d.bufs
 
 	g.ReleaseLayers(0, 3)
 	if g.used != 0 {
-		t.Errorf("after releasing every block, used = %d, want 0 (leaked %d bytes)", g.used, g.used)
+		t.Errorf("after releasing every block, used = %d, want 0 (leaked %d bytes: scratch %d, composed %d of it the arenas' %d, KV %d, recurrent %d, the next pool %d)",
+			g.used, g.used, g.scratch, g.instBytes, g.arenaBytes, g.KVBytes, g.RecBytes, g.recNextBytes)
 	}
 	if g.KVBytes != 0 {
 		t.Errorf("after releasing every block, KVBytes = %d, want 0", g.KVBytes)
@@ -71,7 +71,6 @@ func TestReleaseReturnsTheBudget(t *testing.T) {
 	if g.used != full {
 		t.Errorf("re-taking three blocks costs %d, first time %d", g.used, full)
 	}
-	_ = liveBufs
 }
 
 // TestReleasePartialKeepsTheRest: a service giving back part of the card must

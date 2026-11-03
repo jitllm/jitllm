@@ -183,10 +183,6 @@ type Config struct {
 	// than this goes in passes over its pages, folded (pagedstream.go).
 	StagedPassKeys int
 
-
-
-
-
 	// KVF16 stores the V cache as packed binary16 instead of float32, halving
 	// both the bytes AttnAcc reads per position and the VRAM the cache holds.
 	// It is a field so `jitllm verify -ab` can alternate it in one process
@@ -460,6 +456,11 @@ type Stats struct {
 	// of what a placement composes, which no prompt, step or session after
 	// it moves.
 	PartsFormed, PartKernels, ScratchBuilds int
+	// ComposerRuns is the times the device's composer formed a request
+	// rather than found it (composer.Registry.Formed), counted in the
+	// composer whatever the caller marked the form as: a step, a prompt or
+	// a session that moves it composed.
+	ComposerRuns int
 	// ReservedRows is the rows of the reserved width a device holds the
 	// composer's prompt and ragged forms at, its buffers in the budget
 	// (fitReserved): its capacity, a call of more rows running in chunks of
@@ -573,6 +574,10 @@ type Stats struct {
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
+	// StreamCacheBytes is the bytes the device's expert caches hold now,
+	// beside their blocks' plain banks: copies of host pages, given back
+	// first when history or a block needs the card (dropCaches).
+	StreamCacheBytes uint64
 	// StreamGroupsTuned is the group count the fill tuner holds (0: not
 	// tuning, a stated Config.StreamGroups).
 	StreamGroupsTuned int
@@ -797,6 +802,7 @@ func (s *Stats) add(o Stats) {
 		s.BlockForms[i] += n
 	}
 	s.PartsFormed += o.PartsFormed
+	s.ComposerRuns += o.ComposerRuns
 	s.PartKernels += o.PartKernels
 	s.ScratchBuilds += o.ScratchBuilds
 	if o.ReservedRows > 0 && (s.ReservedRows == 0 || o.ReservedRows < s.ReservedRows) {
@@ -888,6 +894,7 @@ func (s *Stats) add(o Stats) {
 	s.SplitQueued += o.SplitQueued
 	s.TAdmit += o.TAdmit
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
+	s.StreamCacheBytes += o.StreamCacheBytes
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
 	s.StreamPinHalfTuned = max(s.StreamPinHalfTuned, o.StreamPinHalfTuned)
 	s.StreamDirectTuned = max(s.StreamDirectTuned, o.StreamDirectTuned)
@@ -1202,6 +1209,16 @@ type devShared struct {
 	// visSmall counts the calls in a row the set was more than twice what
 	// they needed (ReserveRows), which shrinks it at visShrinkCalls.
 	visSmall int
+	// visFirst is the rows the set was first built for: every width a
+	// picture's set takes doubles from it up to visMax (towerWidthFor), each
+	// formed at the placement (prewarmTowerWidths). visChunk is, for a width
+	// whose whole set did not fit there, the chunk its row-chunked set was
+	// formed at.
+	visFirst int
+	visChunk map[int]int
+	// visWarm is the largest grid and the count of tower blocks the widths
+	// were last formed for: a placement that changes neither forms nothing.
+	visWarm [2]int
 	// scratch is the budget the device's own buffers hold -- the block
 	// scratches and the staging -- and explicit the running sum of what
 	// charge and refund moved, which a scratch window subtracts so a weight or
@@ -1372,7 +1389,6 @@ type devShared struct {
 	// Host-side scratch, reused rather than allocated per matvec.
 	hostRaw []byte
 	hostOut []float32 // a view over hostRaw, for the readback
-
 
 	stage      map[resKey]*staged
 	stageBytes uint64
@@ -1780,6 +1796,19 @@ func (d *devTier) stats() Stats {
 	d.settleRounding() // see Bytes
 	s := d.tot
 	s.RanBeside = int(d.ranBeside.Load())
+	for _, l := range d.layers {
+		if l == nil || l.stream == nil || !l.stream.cached() {
+			continue
+		}
+		for m, r := range [3]*resident{l.gate, l.up, l.down} {
+			if r != nil && l.stream.plain[m] != nil {
+				s.StreamCacheBytes += r.bytes()
+			}
+		}
+	}
+	if d.composer != nil {
+		s.ComposerRuns = int(d.composer.Formed())
+	}
 	if d.kvp != nil {
 		for _, l := range d.kvp.layers {
 			for _, ids := range l.owned {
@@ -1859,36 +1888,11 @@ func freeScratch(bs *blockScratch) {
 	}
 	bs.qoffs = nil
 	freePaged(bs.pkv)
-	for n, rk := range bs.ragLin { // a map, which the walk does not follow either
-		for _, k := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {
-			if k != nil {
-				closeKern(k)
-			}
-		}
-		delete(bs.ragLin, n)
-	}
 	seen := map[backend.Buf]bool{}
-	seenK := map[backend.Kernel]bool{}
 	v := reflect.ValueOf(bs).Elem()
 	bufType := reflect.TypeOf((*backend.Buf)(nil)).Elem()
-	kernType := reflect.TypeOf((*backend.Kernel)(nil)).Elem()
 	for i := 0; i < v.NumField(); i++ {
 		f := v.Field(i)
-		// Only top-level backend.Kernel fields are closed: those are compiled
-		// for this scratch and owned by it. Matvec kernels come from g.kerns,
-		// a device-wide cache shared by every scratch, and reach the scratch
-		// inside `mv` values, which this type filter skips by construction.
-		// Do not turn this into a recursive walk: that would close cached
-		// kernels still in use (a use-after-free).
-		if f.Type() == kernType && !f.IsNil() {
-			k, ok := reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).
-				Elem().Interface().(backend.Kernel)
-			if ok && k != nil && !seenK[k] {
-				seenK[k] = true
-				closeKern(k)
-			}
-			continue
-		}
 		if f.Type() != bufType || f.IsNil() {
 			continue
 		}
@@ -1990,6 +1994,7 @@ func (g *devTier) Close() {
 	// runs on one.
 	g.quiesce()
 	g.partsClose()
+	g.freeMarks()
 	for _, ds := range g.sess {
 		ds.closeQueue()
 	}

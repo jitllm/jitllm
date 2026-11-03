@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/backend"
@@ -157,6 +158,7 @@ func TestHeadOnlySubmissionReachesItsDevice(t *testing.T) {
 		W:      nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
 		Logits: make([]float32, nvocab),
 	}
+	headGraphs(h, p, jlm.RoleOutput)
 	if !g.PrepHead(h) {
 		t.Fatalf("PrepHead: %s", g.Err())
 	}
@@ -207,6 +209,7 @@ func TestAWideChunkReachesAHeadOffTheLastDevice(t *testing.T) {
 		W:      nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
 		Logits: make([]float32, nvocab),
 	}
+	headGraphs(h, p, jlm.RoleOutput)
 	if ok, err := g.PrepHeadOn("fake:0", h); !ok || err != nil {
 		t.Fatalf("PrepHeadOn: %v %s", err, g.Err())
 	}
@@ -503,6 +506,7 @@ func TestRealDevicesBothTakeBlocks(t *testing.T) {
 		NEmbd: 128, NHead: 4, NKVHead: 2, HeadDim: 32, NRot: 32, NFFN: 256,
 		MaxSeq: 64, RMSEps: 1e-5, RopeBase: 10000,
 	}
+	textPlan(p)
 	const nblocks = 4
 	ws := blocks(p, nblocks)
 	// Real weights: a zero block computes zero on any device.
@@ -789,6 +793,7 @@ func TestAFullTailSendsTheHeadToACardWithRoom(t *testing.T) {
 		W:      nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
 		Logits: make([]float32, nvocab),
 	}
+	headGraphs(h, p, jlm.RoleOutput)
 	if !g.PrepHead(h) {
 		t.Fatalf("PrepHead refused with an empty card beside the full tail: %s", g.Err())
 	}
@@ -812,17 +817,7 @@ func TestAFullTailSendsTheHeadToACardWithRoom(t *testing.T) {
 // scratch). A model that does not fit keeps fill-first placement.
 func TestAPlannedModelThatFitsIsSpreadOverTheDevices(t *testing.T) {
 	p := fakePlan()
-	sz, err := New([]Slot{{Dev: &fakeDev{}, Bytes: 1 << 40}})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if !sz.PrepLayer(0, p, blocks(p, 1)[0]) {
-		t.Fatalf("sizing run: %s", sz.Err())
-	}
-	// A device's own scratch is charged once beside its blocks (scratch.go).
-	sc := sz.devs[0].scratch
-	blk := sz.devs[0].used - sc
-	sz.Close()
+	sc, blk := onceAndBlock(t, p)
 	for _, tc := range []struct {
 		n     int
 		plan  bool
@@ -872,16 +867,7 @@ func TestAPlannedModelThatFitsIsSpreadOverTheDevices(t *testing.T) {
 // spill, and relocateUntil spun on one block until the test timed out.
 func TestASpillThatFindsNoRoomStaysASpill(t *testing.T) {
 	p := fakePlan()
-	sz, err := New([]Slot{{Dev: &fakeDev{}, Bytes: 1 << 40}})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if !sz.PrepLayer(0, p, blocks(p, 1)[0]) {
-		t.Fatalf("sizing run: %s", sz.Err())
-	}
-	sc := sz.devs[0].scratch
-	blk := sz.devs[0].used - sc
-	sz.Close()
+	sc, blk := onceAndBlock(t, p)
 	// Room for two blocks each, and a little: both devices full at four.
 	g, err := New([]Slot{{Dev: &fakeDev{}, Bytes: sc + 2*blk + blk/2}, {Dev: &fakeDev{}, Bytes: sc + 2*blk + blk/2}},
 		WithDeviceTune(TuneOff))
@@ -908,4 +894,28 @@ func TestASpillThatFindsNoRoomStaysASpill(t *testing.T) {
 	if got := fmt.Sprint(placement(g, 4)); got != "[0 0 1 1]" {
 		t.Fatalf("placement %s after a spill that found no room, want [0 0 1 1]", got)
 	}
+}
+
+// onceAndBlock sizes p's blocks on an unbounded device: what one more block
+// costs (the second placed over the first) and what the device pays once
+// beside its blocks -- its scratch and the composed parts they share (a part
+// is keyed by its graph, and every block here runs p's).
+func onceAndBlock(t *testing.T, p *nn.LayerPlan) (once, block uint64) {
+	t.Helper()
+	g, err := New([]Slot{{Dev: &fakeDev{}, Bytes: 1 << 40}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer g.Close()
+	var one uint64
+	for li, w := range blocks(p, 2) {
+		if !g.PrepLayer(li, p, w) {
+			t.Fatalf("sizing run: %s", g.Err())
+		}
+		if li == 0 {
+			one = g.devs[0].used
+		}
+	}
+	block = g.devs[0].used - one
+	return one - block, block
 }

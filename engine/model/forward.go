@@ -2310,8 +2310,15 @@ func (s *Instance) devCount() int {
 }
 
 // prepDeviceRange grows the device's prefix to n blocks. A binary16 history
-// travels widened, as SetDeviceLayers' does (migrateKVAs).
+// travels widened, as SetDeviceLayers' does (migrateKVAs). The offers are
+// one placement, ended as an attach's is (nn.Placer): the device forms what
+// a prompt and a step of rows read over the blocks it now holds, so no step
+// after the move composes.
 func (s *Instance) prepDeviceRange(lo, n int) {
+	if pl, ok := s.ld.(nn.Placer); ok {
+		pl.BeginPlacement()
+		defer pl.EndPlacement()
+	}
 	s.offerRange(lo, n)
 	s.placeHead()
 }

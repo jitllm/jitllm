@@ -58,6 +58,81 @@ func visRowsFor(n, most int) int {
 	return min(roundUp(max(n, 1), step), most)
 }
 
+// towerWidthFor is the width a picture of n rows takes a set at: visFirst,
+// doubled until it holds n, never past the tower's largest grid. Every one is
+// formed at the placement (prewarmTowerWidths), so a picture's encode
+// allocates its set and composes nothing.
+func (g *devTier) towerWidthFor(n int) int {
+	w := max(g.visFirst, 1)
+	for w < n && w < g.visMax {
+		w *= 2
+	}
+	return min(w, g.visMax)
+}
+
+// prewarmTowerWidths forms the tower's parts at every width a picture's set
+// takes (towerWidthFor), building the set at each in turn and then as it was:
+// the composer runs at the placement, and an encode only allocates. A width
+// whose whole set does not fit forms the row-chunked set a picture of it
+// takes (chunkTower), its chunk kept in visChunk. Callers hold g.mu.
+func (g *devTier) prewarmTowerWidths() {
+	if g.NoPromptPrewarm || g.visFirst == 0 || !g.holdsTower() {
+		return
+	}
+	towers := 0
+	for _, l := range g.layers {
+		if l != nil && l.geo&geoNonCausal != 0 {
+			towers++
+		}
+	}
+	if g.visWarm == [2]int{g.visMax, towers} {
+		return
+	}
+	g.visWarm = [2]int{g.visMax, towers}
+	home := g.geoCur
+	g.useGeom(geoNonCausal)
+	defer g.useGeom(home)
+	if g.bs == nil {
+		return
+	}
+	plan := g.bs.p
+	plan.MaxSeq = g.visMax
+	first, keys, why := g.visCap, g.visKeys, g.LastErr
+	was := g.prewarming
+	g.prewarming = true
+	defer func() { g.prewarming = was }()
+	back := func() bool {
+		g.dropGraph()
+		g.visKeys = 0
+		return g.towerComposedAt(&plan, first)
+	}
+	for w := g.visFirst; ; w = min(2*w, g.visMax) {
+		if w != first || keys != 0 {
+			g.dropGraph()
+			g.visKeys = 0
+			if !g.towerComposedAt(&plan, w) || !g.headSetAt(w) {
+				if !back() {
+					break
+				}
+				g.chunkTower(w, w)
+			}
+			g.formTables(g.bs)
+		}
+		if w >= g.visMax {
+			break
+		}
+	}
+	if (g.visCap != first || g.visKeys != 0) && !back() {
+		g.LastErr = fmt.Sprintf("%s; and the tower's set at its first %d rows could not be rebuilt after its widths formed: %s",
+			why, first, g.LastErr)
+		return
+	}
+	if keys != 0 {
+		g.chunkTower(keys, keys)
+	}
+	g.LastErr = why
+}
+
 // holdsTower reports whether a tower block (a non-causal block that runs in
 // the non-causal set, not a convolutional one) is on this device. Callers
 // hold g.mu.
@@ -164,7 +239,27 @@ func (g *devTier) towerGrowthAt(old *blockScratch, rows, keys int) int64 {
 	for _, kvp := range g.towerKV() {
 		need += int64(cache+vcache) - int64(kvp.bytes)
 	}
+	// The tower blocks' composed parts the set holds scale with its rows as
+	// its scratch does.
+	if parts := old.partBytes(); parts > 0 {
+		need += parts*int64(rc)/int64(max(old.rows, 1)) - parts
+	}
 	return need
+}
+
+// partBytes is what bs holds of its composed parts: their instances at its
+// rows and the arena they share.
+func (bs *blockScratch) partBytes() int64 {
+	var n int64
+	for _, in := range bs.prompt {
+		n += int64(in.bytes)
+	}
+	if a := bs.arena; a != nil {
+		for _, m := range a.n {
+			n += int64(m)
+		}
+	}
+	return n
 }
 
 // ReserveRows makes this device's tower blocks able to take a call of n rows
@@ -182,7 +277,7 @@ func (g *devTier) ReserveRows(n int) bool {
 		g.LastErr = fmt.Sprintf("a call of %d rows on a tower whose largest grid is %d", n, g.visMax)
 		return false
 	}
-	want := visRowsFor(n, g.visMax)
+	want := g.towerWidthFor(n)
 	if g.visKeys == 0 && n <= g.visCap && !g.towerHeld() {
 		// The whole set's composed parts are not held beside the blocks
 		// placed: the picture takes a chunked set.
@@ -266,7 +361,17 @@ func (g *devTier) chunkTower(n, want int) bool {
 	plan := old.p
 	plan.MaxSeq = g.visMax
 	prevCap, prevKeys, why := g.visCap, g.visKeys, g.LastErr
-	for c := roundUp(want/2, visGrain); c >= visGrain; c = roundUp(c/2, visGrain) {
+	// A call takes the chunk its width was formed at (prewarmTowerWidths);
+	// the placement searches for the widest that fits and keeps it.
+	top, formed := g.visChunk[want]
+	if !g.prewarming && !formed {
+		g.LastErr = fmt.Sprintf("%s; and no row-chunked set of %d keys was formed at the placement", why, want)
+		return false
+	}
+	if !formed {
+		top = roundUp(want/2, visGrain)
+	}
+	for c := top; c >= visGrain; c = roundUp(c/2, visGrain) {
 		need := g.towerGrowthAt(old, c, want) + keep
 		if need > 0 && !g.room(uint64(need)) {
 			g.reclaim(uint64(need), -1, 0, 0)
@@ -281,6 +386,12 @@ func (g *devTier) chunkTower(n, want int) bool {
 		g.visKeys = want
 		if g.towerComposedAt(&plan, c) && (keep == 0 || g.slots() >= minSlots) {
 			g.TowerChunked++
+			if g.prewarming {
+				if g.visChunk == nil {
+					g.visChunk = map[int]int{}
+				}
+				g.visChunk[want] = c
+			}
 			return true
 		}
 		g.visKeys = prevKeys
@@ -288,12 +399,12 @@ func (g *devTier) chunkTower(n, want int) bool {
 			g.LastErr = fmt.Sprintf("%s; and the set's %d rows could not be rebuilt: %s", why, prevCap, g.LastErr)
 			return false
 		}
-		if c == visGrain {
+		if c == visGrain || !g.prewarming {
 			break
 		}
 	}
 	g.LastErr = fmt.Sprintf("%s; and no chunk of %d rows down to %d fits beside the picture's %d keys",
-		why, want/2, visGrain, want)
+		why, top, visGrain, want)
 	return false
 }
 
@@ -332,13 +443,9 @@ func (g *devTier) resizeTower(n, want int) bool {
 			g.reclaim(uint64(need), -1, 0, 0)
 		}
 		if !g.room(uint64(max(need, 0))) {
-			exact := min(roundUp(n, visGrain), g.visMax)
-			if exact >= want || !g.room(uint64(max(g.towerGrowth(old, exact)+keep, 0))) {
-				g.LastErr = fmt.Sprintf("a picture of %d rows: the tower's set at %d rows needs about %d bytes "+
-					"more than it holds, and %d of %d are used", n, want, need, g.used, g.limit)
-				return false
-			}
-			want = exact
+			g.LastErr = fmt.Sprintf("a picture of %d rows: the tower's set at %d rows needs about %d bytes "+
+				"more than it holds, and %d of %d are used", n, want, need, g.used, g.limit)
+			return false
 		}
 	}
 	plan := old.p
@@ -357,10 +464,10 @@ func (g *devTier) resizeTower(n, want int) bool {
 			"below the %d a swap needs", n, want, g.slots(), minSlots)
 	}
 	why := g.LastErr
-	// What fitted before fits again: the old rows, or nothing at all, and the
-	// caller moves blocks to the CPU.
+	// What fitted before fits again, its blocks' composed parts with it: the
+	// old rows, or nothing at all, and the caller moves blocks to the CPU.
 	g.visKeys = prevKeys
-	if !g.towerAt(&plan, prev) {
+	if !g.towerComposedAt(&plan, prev) {
 		g.LastErr = fmt.Sprintf("%s; and the set's %d rows could not be rebuilt: %s", why, prev, g.LastErr)
 		return false
 	}
@@ -481,7 +588,7 @@ func (g *devTier) dropIdleTower() {
 		}
 	}
 	g.useGeom(home)
-	g.visCap, g.visMax = 0, 0
+	g.visCap, g.visMax, g.visFirst, g.visChunk, g.visWarm = 0, 0, 0, nil, [2]int{}
 }
 
 // hasHeadSet reports a decision head's own non-causal set on this device

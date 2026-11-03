@@ -308,14 +308,8 @@ func (l *lowerer) op(i int, o ir.Op, v ir.Value) error {
 		l.emit("%s = getelementptr i8, ptr addrspace(1) %%p%d, i64 0", r, o.Imm)
 	case ir.OpShared:
 		l.space[v] = 3
-		align := 4
-		for _, x := range l.k.Ops {
-			if x.Kind == ir.OpLoadV || x.Kind == ir.OpStoreV {
-				align = 16
-			}
-		}
 		fmt.Fprintf(&l.globals, "@sh%d = internal addrspace(3) global [%d x %s] poison, align %d\n",
-			v, o.Imm, ty(o.Type), align)
+			v, o.Imm, ty(o.Type), ldsAlign(l.k))
 	case ir.OpBarrier:
 		// __syncthreads: the fences are what order LDS and global accesses
 		// across the barrier under the AMDGPU memory model.
@@ -433,7 +427,10 @@ func (l *lowerer) op(i int, o ir.Op, v ir.Value) error {
 		from, to := l.typeOf(a0), o.Type
 		switch {
 		case from == ir.F32 && to == ir.F32:
-			return fmt.Errorf("amdgpu: op %d: bitcast f32 to f32", i)
+			// The identity, through i32 so every bit stays (-0.0 too).
+			w := l.fresh()
+			l.emit("%s = bitcast float %s to i32", w, val(a0))
+			l.emit("%s = bitcast i32 %s to float", r, w)
 		case (from == ir.F32) == (to == ir.F32):
 			// u32 <-> i32 is the same i32.
 			l.emit("%s = or i32 %s, 0", r, val(a0))
@@ -665,4 +662,28 @@ func (l *lowerer) dot4(r string, a, b, acc ir.Value) {
 		l.emit("%s = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %s)", s, m)
 		l.emit("%s = add i32 %s, %s", r, s, val(acc))
 	}
+}
+
+// ldsAlign is the alignment the lowering gives k's workgroup arrays: a
+// vector's where the kernel moves vectors, else a word's.
+func ldsAlign(k *ir.Kernel) int {
+	for _, x := range k.Ops {
+		if x.Kind == ir.OpLoadV || x.Kind == ir.OpStoreV {
+			return 16
+		}
+	}
+	return 4
+}
+
+// LDSBound is the most workgroup memory k's arrays take on the target: each
+// at a vector's boundary, the most the code generator's LDS layout aligns an
+// array to whatever the lowering asks.
+func LDSBound(k *ir.Kernel) int {
+	n := 0
+	for _, o := range k.Ops {
+		if o.Kind == ir.OpShared {
+			n = (n+15)/16*16 + 4*int(o.Imm)
+		}
+	}
+	return n
 }

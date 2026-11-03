@@ -305,12 +305,10 @@ func (e *Embedder) mbEncode(ids []int32) error {
 		if err := m.encBlockPageIn(li); err != nil {
 			return err
 		}
+		// The CPU device is handed both tables, as a card is: the block's
+		// graph turns its local layers by the second (front.go).
 		if e.cpuRuns(li) {
-			cs := e.cs[:n*c.NRot]
-			if c.SWA(li) {
-				cs = e.csL[:n*c.NRot]
-			}
-			ok, err := e.cpuRun(li, n, x, cs)
+			ok, err := e.cpuRun(li, n, x, e.cs[:n*c.NRot], e.csL[:n*c.NRot])
 			if err != nil {
 				return err
 			}
@@ -472,7 +470,7 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 		// On the composer's CPU device every row runs, gathered after the
 		// last block as a device's are.
 		if li := mb.trunk + bi; e.cpuRuns(li) {
-			ok, err := e.cpuRun(li, n, x, nil)
+			ok, err := e.cpuRun(li, n, x, nil, nil)
 			if err != nil {
 				return err
 			}

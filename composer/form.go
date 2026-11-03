@@ -64,7 +64,20 @@ func (r *Registry) Form(req Request) (Key, []Code, error) {
 	}
 	codes, err := r.form(req)
 	c.m[key] = formed{words: words, codes: codes, err: err}
+	c.n++
 	return key, codes, err
+}
+
+// Formed is the requests r and the registries sharing its cache formed
+// afresh rather than found: the composer's runs. A phase that must compose
+// nothing holds it unchanged.
+func (r *Registry) Formed() int64 {
+	if r.cache == nil {
+		return 0
+	}
+	r.cache.mu.Lock()
+	defer r.cache.mu.Unlock()
+	return r.cache.n
 }
 
 func (r *Registry) form(req Request) ([]Code, error) {

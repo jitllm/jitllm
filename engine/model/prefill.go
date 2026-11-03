@@ -1008,7 +1008,10 @@ const pipelineChunks = 4
 
 func (s *Instance) growDeviceBatch(chunk int) {
 	c := s.c
-	if len(s.bx) >= chunk*c.ResidW() {
+	// Every buffer the rows read, the second rotary's table too: a set
+	// whose residual rows suffice may hold a shorter table, or none.
+	if len(s.bx) >= chunk*c.ResidW() && len(s.bcs) >= chunk*c.RopeW() &&
+		(s.m.ropeSWA == nil || len(s.bcsSWA) >= chunk*c.NRotSWA) {
 		return
 	}
 	b := s.m.takeSpare()

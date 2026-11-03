@@ -168,6 +168,28 @@ var specSchedule = []int{0, 0, 0, 2, 0, 3, 1, 0, 0}
 const oracleCorrupt = 5
 
 // firstDiff is the first index where a and b differ, or -1.
+// specFlip holds got, a speculation's tokens on the CPU device, to plain
+// decode's want: where they part, it is at a tie, the two tokens closer in
+// decode's logits than the model's forms read apart at that prefix (devFlip)
+// -- a verification's rows and decode's one row are two forms, held to the
+// band and not to bit-identity (RULE 8). what names the arm.
+func specFlip(t *testing.T, m *Model, prompt, got, want []int32, what string) {
+	t.Helper()
+	i := firstDiff(got, want)
+	if i < 0 {
+		return
+	}
+	if i >= len(got) || i >= len(want) {
+		t.Fatalf("%s: %d tokens, plain greedy %d", what, len(got), len(want))
+	}
+	gap, pert := devFlip(t, m, nil, prompt, want[:i], want[i], got[i])
+	if gap > pert {
+		t.Fatalf("%s: token %d is %d, plain greedy says %d, %.4f apart against a %.4f reach of the band -- not a tie",
+			what, i, got[i], want[i], gap, pert)
+	}
+	t.Logf("%s: a tie at token %d (%.4f apart, the band reaching %.4f); equal before it", what, i, gap, pert)
+}
+
 func firstDiff(a, b []int32) int {
 	for i := range min(len(a), len(b)) {
 		if a[i] != b[i] {
@@ -237,10 +259,8 @@ func TestSpecGreedyMatchesDecode(t *testing.T) {
 				want := plainGreedy(t, m, prompt, n, nil)
 				for _, arm := range arms {
 					got, st := specGreedy(t, m, prompt, n, nil, specFaultNone, oracleFor(name, want), arm.opts...)
-					if i := firstDiff(got, want); i >= 0 {
-						t.Fatalf("%s, prompt %q: token %d is %d, plain greedy says %d (%d drafted, %d accepted, "+
-							"rollback %v)", arm.name, text, i, got[i], want[i], st.Drafted, st.Accepted, st.Rollback)
-					}
+					specFlip(t, m, prompt, got, want, fmt.Sprintf("%s, prompt %q (%d drafted, %d accepted, rollback %v)",
+						arm.name, text, st.Drafted, st.Accepted, st.Rollback))
 					drafted += st.Drafted
 					accepted += st.Accepted
 					t.Logf("%s %-10s %q: %d rounds, %d drafted, %d accepted, %.2f tokens a pass, rollback %v "+

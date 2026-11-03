@@ -131,14 +131,7 @@ func qwenTowerMatchesTransformers(t *testing.T, name string, opts ...Option) {
 		mut  func(*Instance)
 		cfg  func(c *TowerConfig) func()
 	}{
-		{"no 2-D rotary", func(s *Instance) {
-			gh, gw := s.patchGrid()
-			s.vis.ropeSC = make([]float32, gh*gw*tw.Cfg.HeadDim)
-			for i := 0; i < len(s.vis.ropeSC); i += 2 {
-				s.vis.ropeSC[i] = 1
-			}
-			s.vis.ropeAt = [2]int{gh, gw}
-		}, nil},
+		{"no 2-D rotary", noTowerRotary, nil},
 		{"full attention where windowed", nil, func(c *TowerConfig) func() {
 			was := c.WinPattern
 			c.WinPattern = 1

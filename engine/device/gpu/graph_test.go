@@ -2,16 +2,20 @@ package gpu
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -120,7 +124,13 @@ type fakeBuf struct {
 	// site is where this buffer was allocated, so a leak names the line.
 	site string
 }
-type fakeKern struct{ id int }
+
+// fakeKern is a compiled kernel: a launch of its own (a probe's) costs the
+// device's launchCost, as a session's does.
+type fakeKern struct {
+	id int
+	d  *fakeDev
+}
 type fakeRec struct {
 	d  *fakeDev
 	id int
@@ -156,8 +166,13 @@ func (b *fakeBuf) Free() {
 	b.d.freedBytes += b.n
 	delete(b.d.liveBufs, b.id)
 }
-func (k *fakeKern) Close()                                              {}
-func (k *fakeKern) Launch(groups, width int, bufs ...backend.Buf) error { return nil }
+func (k *fakeKern) Close() {}
+func (k *fakeKern) Launch(groups, width int, bufs ...backend.Buf) error {
+	if k.d != nil && k.d.launchCost > 0 {
+		time.Sleep(k.d.launchCost)
+	}
+	return nil
+}
 
 func (d *fakeDev) Name() string {
 	if d.name != "" {
@@ -250,7 +265,7 @@ func (d *fakeDev) Compile(k *ir.Kernel) (backend.Kernel, error) {
 	}
 	d.kerns++
 	d.irs = append(d.irs, k)
-	return &fakeKern{id: d.kerns}, nil
+	return &fakeKern{id: d.kerns, d: d}, nil
 }
 
 func (d *fakeDev) Session(f func(backend.Session)) {
@@ -322,10 +337,74 @@ func (r *fakeRec) Free() {
 
 // fakePlan is the one small block every fake-device test runs.
 func fakePlan() *nn.LayerPlan {
-	return &nn.LayerPlan{
+	p := &nn.LayerPlan{
 		NEmbd: 128, NHead: 4, NKVHead: 2, HeadDim: 32, NRot: 32, NFFN: 256,
 		MaxSeq: 512, RMSEps: 1e-5, RopeBase: 10000,
 	}
+	textPlan(p)
+	return p
+}
+
+// textPlan gives p what a text model's front end states for a plain dense
+// block: its graph, its rotary's table graph with the planes it reads, and
+// the rotary the block turns by.
+func textPlan(p *nn.LayerPlan) {
+	p.Graph = denseBlockGraph(p)
+	withRotary(p)
+}
+
+// withRotary gives p its rotary's table graph, the planes it reads and the
+// rotary the block turns by, as a model's front end states them.
+func withRotary(p *nn.LayerPlan) {
+	r := graph.Rotary{NRot: p.NRot, Base: p.RopeBase}
+	p.Tables = []*graph.Graph{composer.TableGraph(r, 0)}
+	p.RopeTab = nn.Rope{NRot: p.NRot, Base: p.RopeBase}.TabPlanes(p.NRot / 2)
+	p.Rotaries = []graph.Rotary{r}
+}
+
+// swiGLU is x's SwiGLU FFN as the front end states it, over the residual.
+func swiGLU(b *graph.Builder, p *nn.LayerPlan, x graph.ValueID) graph.ValueID {
+	n := b.Norm(x, jlm.RoleFFNNorm, p.RMSEps)
+	gate, up := b.MatVec(n, jlm.RoleFFNGate, p.NFFN), b.MatVec(n, jlm.RoleFFNUp, p.NFFN)
+	fn := func(name string, f graph.MapFn, in ...graph.ValueID) graph.ValueID {
+		return b.Emit(graph.OpMap, in, []graph.Result{{Name: name, Width: p.NFFN}}, nil, graph.Attrs{Fn: f}, nil, nil)[0]
+	}
+	h := fn("act", graph.MapMul, fn("act.silu", graph.MapMul, gate, fn("act.sigmoid", graph.MapSigmoid, gate)), up)
+	return b.Add(x, b.MatVec(h, jlm.RoleFFNDown, p.NEmbd))
+}
+
+// headGraphs gives h the head graphs a model's front end states for a plain
+// head of p's width: the RMSNorm, the projection under role, the same
+// writing the normed rows too, and the greedy token of its logits.
+func headGraphs(h *nn.Head, p *nn.LayerPlan, role jlm.Role) *nn.Head {
+	g := graph.Head{NEmbd: p.NEmbd, NVocab: h.W.Rows, Eps: p.RMSEps, Output: role}
+	h.Graph = g.Build()
+	g.Hidden = true
+	h.HiddenGraph = g.Build()
+	sm := graph.Sample{NVocab: h.W.Rows}
+	h.Sample = sm.Build()
+	return h
+}
+
+// denseBlockGraph is p's block as the front end states a plain dense one: an
+// RMSNorm, q, k and v, the rotary on q and k, the history appended and
+// attended, the output projection over the residual, then a SwiGLU FFN over
+// it. The roles are blockWeights'.
+func denseBlockGraph(p *nn.LayerPlan) *graph.Graph {
+	b := graph.NewBlock(0)
+	qd, kv := p.NHead*p.HeadDim, p.NKVHead*p.HeadDim
+	x := b.In("x", p.NEmbd)
+	n := b.Norm(x, jlm.RoleAttnNorm, p.RMSEps)
+	q, k, v := b.MatVec(n, jlm.RoleAttnQ, qd), b.MatVec(n, jlm.RoleAttnK, kv), b.MatVec(n, jlm.RoleAttnV, kv)
+	ra := graph.Attrs{HeadDim: p.HeadDim, NRot: p.NRot, Base: p.RopeBase, Layout: graph.RopeNorm}
+	q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qd}}, nil, ra, nil, nil)[0]
+	k = b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kv}}, nil, ra, nil, nil)[0]
+	hist := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
+	att := b.AttendOf(q, hist, graph.Attrs{NHead: p.NHead, NKVHead: p.NKVHead, HeadDim: p.HeadDim,
+		Scale: 1 / math.Sqrt(float64(p.HeadDim))})
+	x = b.Add(x, b.MatVec(att, jlm.RoleAttnOut, p.NEmbd))
+	b.Out(swiGLU(b, p, x))
+	return b.G
 }
 
 // fakeTier builds a one-block tier over the fake device. It returns the

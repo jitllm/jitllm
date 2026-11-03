@@ -62,15 +62,22 @@ func choose(devs []backend.Device, kb knobs) backend.Device {
 	return keep(cand[best])
 }
 
-// probe is each device's memory read rate from its measured profile, and
-// the fastest: decode reads every weight once a token, so the rate a card's
-// memory serves is the rate it decodes at. A device with no profile reads 0
-// and keeps its enumeration order behind the measured ones.
+// probeSet is the read an unprofiled device is ranked by: past any card's
+// last cache, short against opening the device.
+const probeSet = 256 << 20
+
+// probe is each device's memory read rate, and the fastest: decode reads
+// every weight once a token, so the rate a card's memory serves is the rate it
+// decodes at. A device's measured profile states it; one with none is
+// measured here (a read of probeSet bytes), and one that cannot be reads 0,
+// behind the rest in enumeration order.
 func probe(devs []backend.Device) (best int, rates []float64) {
 	rates = make([]float64, len(devs))
 	for i, d := range devs {
 		if p, ok := cost.Known(hw.GPUName(d), d.API()); ok {
 			rates[i] = p.Device.Bandwidth
+		} else if r, err := hw.ReadRate(d, probeSet, 3); err == nil {
+			rates[i] = r
 		}
 		if rates[i] > rates[best] {
 			best = i

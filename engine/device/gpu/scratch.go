@@ -607,6 +607,7 @@ func (g *devTier) prewarmPromptWidths() {
 	}
 	g.prewarmHeadKernels()
 	g.prewarmComposed()
+	g.prewarmTowerWidths()
 	if bb := g.bbs[g.promptW]; bb != nil {
 		g.PromptBlocksLeft += countLeft(bb)
 	}

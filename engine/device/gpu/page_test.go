@@ -21,10 +21,12 @@ import (
 // off the budget before slots are counted, and a larger cache leaves a small
 // card under the slot floor, where it correctly declines.
 func pagePlan() *nn.LayerPlan {
-	return &nn.LayerPlan{
+	p := &nn.LayerPlan{
 		NEmbd: 256, NHead: 4, NKVHead: 2, HeadDim: 64, NRot: 64, NFFN: 1024,
 		MaxSeq: 64, RMSEps: 1e-5, RopeBase: 10000,
 	}
+	textPlan(p)
+	return p
 }
 
 // pageBlocks builds n blocks with distinct weights (resident() keys on the
@@ -58,7 +60,9 @@ func cardFor(t *testing.T, p *nn.LayerPlan, fit int) uint64 {
 }
 
 // blockAndScratch measures one block's cost -- weights, KV cache and norms --
-// and the device's scratch.
+// as the second block placed costs over the first, and what the device pays
+// once beside its blocks: its scratch and the composed parts its blocks share
+// (a part is keyed by its graph, and every block here runs p's).
 func blockAndScratch(t *testing.T, p *nn.LayerPlan) (block, scratch uint64) {
 	t.Helper()
 	g, err := New([]Slot{{Dev: &fakeDev{}, Bytes: 1 << 40}})
@@ -66,16 +70,24 @@ func blockAndScratch(t *testing.T, p *nn.LayerPlan) (block, scratch uint64) {
 		t.Fatalf("New: %v", err)
 	}
 	defer g.Close()
-	if !g.PrepLayer(0, p, pageBlocks(p, 1)[0]) {
-		t.Fatalf("sizing run declined: %s", g.Err())
-	}
-	// And the page a first token's history takes: a block that cannot run a
-	// token is not what these budgets are sized for.
-	if !g.ReserveKV(1) {
-		t.Fatalf("sizing run: no room for a first page: %s", g.Err())
-	}
+	ws := pageBlocks(p, 2)
 	d := g.devs[0]
-	return d.used - d.scratch, d.scratch
+	var one uint64
+	for li, w := range ws {
+		if !g.PrepLayer(li, p, w) {
+			t.Fatalf("sizing run declined: %s", g.Err())
+		}
+		// And the page a first token's history takes: a block that cannot
+		// run a token is not what these budgets are sized for.
+		if !g.ReserveKV(1) {
+			t.Fatalf("sizing run: no room for a first page: %s", g.Err())
+		}
+		if li == 0 {
+			one = d.used
+		}
+	}
+	block = d.used - one
+	return block, one - block
 }
 
 // streamBlocks places blocks [0, n) to stream through g's devices (GPU.Stream):

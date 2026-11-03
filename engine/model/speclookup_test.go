@@ -3,6 +3,7 @@
 package model
 
 import (
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -146,10 +147,8 @@ func TestSpecLookupMatchesDecode(t *testing.T) {
 				want := plainGreedy(t, m, prompt, n, nil)
 				for _, arm := range lookupArms(m) {
 					got, st := lookupGreedy(t, m, prompt, n, nil, specFaultNone, nil, arm.opts...)
-					if i := firstDiff(got, want); i >= 0 {
-						t.Fatalf("%s, prompt %q: token %d is %d, plain greedy says %d (%d drafted, %d accepted, "+
-							"rollback %v)", arm.name, text, i, got[i], want[i], st.Drafted, st.Accepted, st.Rollback)
-					}
+					specFlip(t, m, prompt, got, want, fmt.Sprintf("%s, prompt %q (%d drafted, %d accepted, rollback %v)",
+						arm.name, text, st.Drafted, st.Accepted, st.Rollback))
 					drafted += st.Drafted
 					accepted += st.Accepted
 					t.Logf("%-9s %-24q: %3d rounds, %4d drafted, %4d accepted, %.2f tokens a pass, rollback %v",
@@ -200,9 +199,7 @@ func TestSpecLookupGateDiscriminates(t *testing.T) {
 						append([]SpecOption{WithSpecDraft(3)}, f.opts...)...)
 					i := firstDiff(got, want)
 					if f.fault == specFaultNone {
-						if i >= 0 {
-							t.Fatalf("the forced drafts with no break part from plain decode at token %d", i)
-						}
+						specFlip(t, m, prompt, got, want, fmt.Sprintf("the forced drafts with no break, prompt %q", text))
 						if st.Accepted == 0 || st.Accepted == st.Drafted {
 							t.Fatalf("forced drafts: %d drafted, %d accepted -- the control did not both accept "+
 								"and reject", st.Drafted, st.Accepted)

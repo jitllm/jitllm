@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -41,8 +42,8 @@ func TestATierRefusesASecondModel(t *testing.T) {
 	}
 	head := func(model uint64) *nn.Head {
 		p := fakePlan()
-		return &nn.Head{Model: model, Norm: make([]float32, p.NEmbd), W: q4(512, p.NEmbd),
-			Logits: make([]float32, 512)}
+		return headGraphs(&nn.Head{Model: model, Norm: make([]float32, p.NEmbd), W: q4(512, p.NEmbd),
+			Logits: make([]float32, 512)}, p, jlm.RoleOutput)
 	}
 	live0 := len(d.liveBufs)
 

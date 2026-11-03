@@ -13,10 +13,10 @@ import (
 // a plane of the values carried with them, and a combine that runs the
 // planes in order the way the loop ran its terms: a later segment wins only
 // where it is strictly larger, so the first of equal terms keeps its value.
-// The segments are the most, at most Parts and a power of two, that divide
-// the trips; where those leave a loop not yet cut more than Parts trips a
-// segment, Parts segments, the last ones reading the last term again, which
-// never wins.
+// The segments are the most, at most Parts over the kernel's elements and a
+// power of two, that divide the trips; where those leave a loop not yet cut
+// more than Parts trips a segment, that many segments, the last ones reading
+// the last term again, which never wins.
 type SplitExtreme struct {
 	Parts int
 	Kinds []PrimKind
@@ -37,13 +37,17 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	T := n.Loops[c].Trip
-	S := s.Parts
+	// Parts is the work the split makes, over the kernel's elements: one row
+	// is cut Parts ways, rows that already fill it fewer, and as many rows
+	// as Parts not at all.
+	most := max(1, s.Parts/max(n.Elements(), 1))
+	S := most
 	for S > 1 && T%S != 0 {
 		S /= 2
 	}
 	trip := T / max(S, 1)
 	if trip > s.Parts && !n.ran(s.Name()) {
-		S = s.Parts
+		S = most
 		trip = (T + S - 1) / S
 	}
 	if S <= 1 {

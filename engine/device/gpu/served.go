@@ -1048,6 +1048,7 @@ func (g *devTier) partsClose() {
 	if g.everyRows != nil {
 		g.everyRows.Free()
 		g.everyRows = nil
+		g.refund(4)
 	}
 }
 
@@ -1066,6 +1067,7 @@ func (g *devTier) everyRow() (backend.Buf, error) {
 		return nil, err
 	}
 	g.everyRows = b
+	g.charge(4)
 	return b, nil
 }
 
@@ -1587,12 +1589,12 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 }
 
 // headSpec is a head graph the tier serves: a norm (an RMSNorm, or a
-// LayerNorm with its optional bias), the projection to the vocabulary with
-// its optional bias, and a chain of elementwise ops on its logits, whatever
-// they compute.
+// LayerNorm with its optional bias) or none (graph.Head.NoNorm), the
+// projection to the vocabulary with its optional bias, and a chain of
+// elementwise ops on its logits, whatever they compute.
 type headSpec struct {
-	norm, normBias, out, bias       jlm.Role
-	layerNorm, hasNormBias, hasBias bool
+	norm, normBias, out, bias               jlm.Role
+	layerNorm, hasNormBias, hasBias, noNorm bool
 }
 
 // headShape is gr read as a head the tier serves, false for any other graph.
@@ -1600,34 +1602,52 @@ type headSpec struct {
 // (graph.Head.Hidden).
 func headShape(gr *graph.Graph) (headSpec, bool) {
 	var hs headSpec
-	if gr == nil || len(gr.In) != 1 || len(gr.Out) < 1 || len(gr.Out) > 2 || len(gr.Ops) < 2 {
+	if gr == nil || len(gr.In) != 1 || len(gr.Out) < 1 || len(gr.Out) > 2 || len(gr.Ops) < 1 {
 		return hs, false
 	}
-	if len(gr.Out) == 2 && (len(gr.Ops[0].Out) != 1 || gr.Out[1] != gr.Ops[0].Out[0]) {
-		return hs, false
-	}
-	n, mv := gr.Ops[0], gr.Ops[1]
-	switch {
+	ops, rows := gr.Ops, gr.In[0]
+	switch n := ops[0]; {
 	case n.Kind == graph.OpNorm && len(n.Weight) == 1:
 	case n.Kind == graph.OpLayerNorm && (len(n.Weight) == 1 || len(n.Weight) == 2):
 		hs.layerNorm = true
 	default:
+		// No norm: the projection reads the rows as they come, and the
+		// hidden rows are their copy, the graph's last op.
+		hs.noNorm = true
+	}
+	if !hs.noNorm {
+		n := ops[0]
+		if len(n.In) != 1 || n.In[0] != gr.In[0] || len(n.Out) != 1 {
+			return hs, false
+		}
+		hs.norm, rows, ops = n.Weight[0].Role, n.Out[0], ops[1:]
+		if len(n.Weight) == 2 {
+			hs.normBias, hs.hasNormBias = n.Weight[1].Role, true
+		}
+	}
+	hidden := rows
+	if hs.noNorm && len(gr.Out) == 2 {
+		c := ops[len(ops)-1]
+		if c.Kind != graph.OpSlice || len(c.In) != 1 || c.In[0] != gr.In[0] || len(c.Out) != 1 || c.Attr.Offset != 0 ||
+			gr.Values[c.Out[0]].Width != gr.Values[gr.In[0]].Width {
+			return hs, false
+		}
+		hidden, ops = c.Out[0], ops[:len(ops)-1]
+	}
+	if len(gr.Out) == 2 && gr.Out[1] != hidden || len(ops) < 1 {
 		return hs, false
 	}
-	if len(n.In) != 1 || n.In[0] != gr.In[0] || len(n.Out) != 1 ||
-		mv.Kind != graph.OpMatVec || len(mv.In) != 1 || mv.In[0] != n.Out[0] || len(mv.Out) != 1 ||
+	mv := ops[0]
+	if mv.Kind != graph.OpMatVec || len(mv.In) != 1 || mv.In[0] != rows || len(mv.Out) != 1 ||
 		len(mv.Weight) < 1 || len(mv.Weight) > 2 {
 		return hs, false
 	}
-	hs.norm, hs.out = n.Weight[0].Role, mv.Weight[0].Role
-	if len(n.Weight) == 2 {
-		hs.normBias, hs.hasNormBias = n.Weight[1].Role, true
-	}
+	hs.out = mv.Weight[0].Role
 	if len(mv.Weight) == 2 {
 		hs.bias, hs.hasBias = mv.Weight[1].Role, true
 	}
 	last := mv.Out[0]
-	for _, o := range gr.Ops[2:] {
+	for _, o := range ops[1:] {
 		if o.Kind != graph.OpMap || len(o.Weight) != 0 || len(o.In) != 1 || o.In[0] != last || len(o.Out) != 1 {
 			return hs, false
 		}
@@ -1648,7 +1668,7 @@ func (bs *blockScratch) headServes(norm backend.Buf, pickOnly, persist bool) par
 	switch {
 	case !ok || !hok || hh != hs || len(bs.headHidden.Out) != 2:
 		return partHeadShape
-	case norm == nil || hs.layerNorm != lnBlock(&bs.p) || hs.hasNormBias && bs.hNormB == nil:
+	case !hs.noNorm && (norm == nil || hs.layerNorm != lnBlock(&bs.p) || hs.hasNormBias && bs.hNormB == nil):
 		return partHeadNorm
 	case hs.hasBias && bs.hBias == nil:
 		return partHeadBias
@@ -1688,7 +1708,10 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 		return nil, fmt.Errorf("the composed head: format %d has no container type", w.t)
 	}
 	bind := func(sl *composedPart) {
-		sl.weights[hs.out], sl.vectors[hs.norm] = w, norm
+		sl.weights[hs.out] = w
+		if !hs.noNorm {
+			sl.vectors[hs.norm] = norm
+		}
 		if hs.hasNormBias {
 			sl.vectors[hs.normBias] = bs.hNormB
 		}
@@ -1873,7 +1896,18 @@ func (g *devTier) tableBinds(bs *blockScratch, i int) (cs, planes, rows backend.
 // at a placement or where a width's scratch is built: a table met first at
 // a step formed inside it. Callers hold g.mu.
 func (g *devTier) formTables(bs *blockScratch) {
-	if g.NoPromptPrewarm || bs == nil || bs.cs == nil || bs.p.NRot <= 0 || bs.p.NonCausal {
+	if g.NoPromptPrewarm || bs == nil || bs.cs == nil {
+		return
+	}
+	if bs.p.NonCausal {
+		if bs.gridGraph != nil {
+			if _, err := g.servedGridTable(bs, bs.rows); err != nil {
+				g.LastErr = "the composed grid table: " + err.Error()
+			}
+		}
+		return
+	}
+	if bs.p.NRot <= 0 {
 		return
 	}
 	for i := range bs.tableCount() {
@@ -2581,12 +2615,17 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 // conditions (a history mid-prefill, a fault probe, the caller's keep, the
 // pool a step builds) are not a placement's to decide.
 func (g *devTier) unserved(li int) string {
+	defer g.useGeom(g.enterGeomOf(li))
 	bs, l := g.bs, g.layers[li]
 	if bs == nil || l == nil {
 		return ""
 	}
 	switch why := g.blockServes(l, li, &bs.p, bs, false, false); why {
 	case partServes, partPrefill, partSkip, partCaller, partNoPool:
+		return ""
+	case partWindow:
+		// A tower's windows are each call's (SetKeyRuns, SetRowWindows):
+		// none is staged at a placement.
 		return ""
 	default:
 		return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, composer.DeclineName(int(why)))
@@ -2723,8 +2762,12 @@ func (g *devTier) prewarmComposed() {
 // Callers hold g.mu.
 func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	if l := g.layers[li]; l != nil && l.nonCausal {
+		g.prewarming = true
+		defer func() { g.prewarming = false }()
 		return g.prewarmTower(li)
 	}
+	// A sliding block of a split model forms over the sliding set's table.
+	defer g.useGeom(g.enterGeomOf(li))
 	bs, l := g.bs, g.layers[li]
 	if g.NoPromptPrewarm || bs == nil || bs.pkv == nil ||
 		g.kvp == nil || l == nil {
@@ -2812,6 +2855,11 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 // part at the reserved width for want of room, or "" where it has one, the
 // composer does not serve it, or what failed was not room. Callers hold g.mu.
 func (g *devTier) promptRoomless(li int) string {
+	defer g.useGeom(g.enterGeomOf(li))
+	// A placement's: what promptServed forms here is formed at it.
+	was := g.prewarming
+	g.prewarming = true
+	defer func() { g.prewarming = was }()
 	bb, l := g.bbs[g.promptW], g.layers[li]
 	if bb == nil || l == nil || g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
 		return ""
@@ -3200,17 +3248,24 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 // model trains a second rotary, the sliding blocks', with their planes where
 // the block's graph reads them. Callers hold g.mu.
 func (g *devTier) bindRotaries(t map[composer.TableKey]backend.Buf, bs *blockScratch, cs backend.Buf, planes bool) {
-	t[composer.TableKey{Table: composer.TableAngles}] = cs
+	// A sliding geometry's set of a split model holds its own rotary's table
+	// in cs (scratchTable): the second rotary's, which its blocks read.
+	first := 0
+	if bs != nil && bs.p.GeomSplit && bs.p.Sliding {
+		first = 1
+	}
+	t[composer.TableKey{Table: composer.TableAngles, Instance: first}] = cs
 	if bs == nil {
 		return
 	}
 	for i := range bs.tableCount() {
 		tab, pl, _ := g.tableBinds(bs, i)
-		if i > 0 {
-			t[composer.TableKey{Table: composer.TableAngles, Instance: i}] = tab
+		k := first + i
+		if k > first {
+			t[composer.TableKey{Table: composer.TableAngles, Instance: k}] = tab
 		}
 		if planes && pl != nil {
-			t[composer.TableKey{Table: composer.TablePlanes, Instance: i}] = pl
+			t[composer.TableKey{Table: composer.TablePlanes, Instance: k}] = pl
 		}
 	}
 }

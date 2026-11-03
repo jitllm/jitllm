@@ -1,6 +1,7 @@
 package nn
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"sync"
@@ -123,7 +124,8 @@ func (r Rope) Table(cs []float32, pos int) {
 
 // TabPlanes is the folded constant block a generated rotary-table kernel reads
 // -- the four head planes, the four residual planes and mscale, in
-// kernels/ropetab_const.go's layout.
+// engine/device/cpu/ropetab_const.go's layout. A multi-axis rotary's pairs fold at
+// their runs' frequencies.
 //
 // It is exported for the device, which uploads the planes once per model like
 // a weight, so every tier derives the table from the same fold.
@@ -184,6 +186,10 @@ type ropeTabKey struct {
 	nfreq               int
 	freqs               uintptr
 	first, last         uint32
+	// runs is a multi-axis rotary's runs whose frequencies restart (a 2-D
+	// tower's), empty where they are one sequence: such runs fold to the
+	// plain planes (restartingRuns).
+	runs string
 }
 
 func (r Rope) tabKey(npairs int) ropeTabKey {
@@ -201,7 +207,30 @@ func (r Rope) tabKey(npairs int) ropeTabKey {
 		k.first = math.Float32bits(r.Freqs[0])
 		k.last = math.Float32bits(r.Freqs[len(r.Freqs)-1])
 	}
+	if restartingRuns(r.Runs) {
+		b := make([]byte, 0, 24*len(r.Runs))
+		for _, u := range r.Runs {
+			b = binary.LittleEndian.AppendUint64(b, uint64(u.Pairs))
+			b = binary.LittleEndian.AppendUint64(b, uint64(u.Freq))
+			b = binary.LittleEndian.AppendUint64(b, uint64(u.step()))
+		}
+		k.runs = string(b)
+	}
 	return k
+}
+
+// restartingRuns says runs do not continue one frequency sequence: some run
+// starts at an index other than the pairs before it, or strides. Only such
+// runs fold differently from the plain table.
+func restartingRuns(runs []RopeRun) bool {
+	off := 0
+	for _, u := range runs {
+		if u.Freq != off || u.step() != 1 {
+			return true
+		}
+		off += u.Pairs
+	}
+	return false
 }
 
 // The folded constants and the kernels, both keyed and both published as a
@@ -263,6 +292,19 @@ func ropeTabFor(r Rope, npairs int) *ropeTab {
 func buildRopeTab(r Rope, npairs int) *ropeTab {
 	blk := make([]float32, cpu.RopeTabBlock(npairs))
 	freqs := runFreqs(r, npairs)
+	// Restarting runs fold each pair at its own run's frequency, as the
+	// multi-axis table turns it (tableAt).
+	if restartingRuns(r.Runs) {
+		off := 0
+		for _, u := range r.Runs {
+			if off >= npairs {
+				break
+			}
+			n := min(u.Pairs, npairs-off)
+			copy(freqs[off:off+n], runFreqs(r.runRope(u), n))
+			off += n
+		}
+	}
 	for p := 0; p < npairs; p++ {
 		w := math.Mod(freqs[p]*(2/math.Pi), 4)
 		for d := 0; d < cpu.RopeTabDigits; d++ {

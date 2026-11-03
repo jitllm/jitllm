@@ -164,12 +164,12 @@ type JIT struct {
 	ghalf    []int32
 	gout     []float32
 	gscratch []float32
-	gtile  map[rateKey]gemmTile
-	gtune  map[rateKey]*gemmTuner
-	ptune  *duelTuner
-	ctune  *duelTuner
-	rtune  *duelTuner // the batched row chunk's cap, in KiB (newRowChunkDuel)
-	wtune  *duelTuner // the weight-stationary GEMM's rows a call, or off (newGEMMRowsDuel)
+	gtile    map[rateKey]gemmTile
+	gtune    map[rateKey]*gemmTuner
+	ptune    *duelTuner
+	ctune    *duelTuner
+	rtune    *duelTuner // the batched row chunk's cap, in KiB (newRowChunkDuel)
+	wtune    *duelTuner // the weight-stationary GEMM's rows a call, or off (newGEMMRowsDuel)
 	// fpf duels the fused kernel's prefetch distance; fusedAt owns every
 	// fused kernel by distance, and packedFused points into one of them.
 	fpf     *fpfTuner

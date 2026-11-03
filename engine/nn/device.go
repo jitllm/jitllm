@@ -811,6 +811,12 @@ type LayerPlan struct {
 	// cache position.
 	Tables      []*graph.Graph
 	RopeTabAxes []float32
+	// GridPlanes is a non-causal block's grid table's planes (Tables[0] a
+	// graph.RopeTable over grid cells): the rotary's planes and each pair's
+	// axis after them, 0 a cell's row. The table it states turns each row by
+	// its cell (GridCellsDevice); nil for a block whose caller hands the
+	// table.
+	GridPlanes []float32
 	// RopeMarks is the most rotary marks a sequence holds (graph.OpRopePos),
 	// 0 where every row turns at its cache position.
 	RopeMarks int
@@ -1387,6 +1393,15 @@ func (c *ConformerVecs) List() [27][]float32 {
 // not hold the range.
 type ConvDevice interface {
 	ConvLayers(lo, hi int, x, out []float32, tap int, tapOut []float32) bool
+}
+
+// GridCellsDevice is an optional LayerDevice that computes a non-causal
+// call's rotary table itself, from each row's cell of a grid (the plan's
+// grid table, LayerPlan.GridPlanes): cells is the live count then a row's
+// cell, width the grid's, for the Layers calls that follow until replaced.
+// Layers' cs is then not read. False is a device that holds no grid table.
+type GridCellsDevice interface {
+	SetGridCells(cells []uint32, width int) bool
 }
 
 // KeyRunDevice is an optional LayerDevice that takes the key runs of the

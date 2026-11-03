@@ -201,6 +201,10 @@ func specFaultDev(t *testing.T, m *Model, prompt []int32, n int, g *gpu.GPU, fau
 //     margin-only judge would call a flip inside that band a defect.
 func devFlip(t *testing.T, m *Model, g *gpu.GPU, prompt, prefix []int32, a, b int32) (gap, perturb float64) {
 	t.Helper()
+	var on nn.LayerDevice
+	if g != nil {
+		on = g
+	}
 	all := append(append([]int32(nil), prompt...), prefix...)
 	decode := func(dev nn.LayerDevice) []float32 {
 		st := m.NewInstance(len(all) + 2)
@@ -221,13 +225,15 @@ func devFlip(t *testing.T, m *Model, g *gpu.GPU, prompt, prefix []int32, a, b in
 		}
 		return append([]float32(nil), lg...)
 	}
-	ld := decode(g)
+	ld := decode(on)
 	gap = math.Abs(float64(ld[a] - ld[b]))
 	perturb = maxAbsDiff(ld, decode(nil))
 	ch := m.NewInstance(len(all) + 2)
 	defer ch.Close()
-	if err := ch.SetDevice(g); err != nil {
-		t.Fatal(err)
+	if on != nil {
+		if err := ch.SetDevice(on); err != nil {
+			t.Fatal(err)
+		}
 	}
 	lb, err := ch.Prefill(all)
 	if err != nil {
@@ -237,8 +243,10 @@ func devFlip(t *testing.T, m *Model, g *gpu.GPU, prompt, prefix []int32, a, b in
 	c := m.Cfg
 	for step := 2; step <= specMaxRows && step <= len(prefix); step++ {
 		rs := m.NewInstance(len(all) + 2)
-		if err := rs.SetDevice(g); err != nil {
-			t.Fatal(err)
+		if on != nil {
+			if err := rs.SetDevice(on); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if _, err := rs.Prefill(prompt); err != nil {
 			t.Fatal(err)

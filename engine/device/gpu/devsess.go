@@ -94,6 +94,10 @@ type devSess struct {
 	// seqRuns is the packed sequences SetSeqRuns gave this session, staged
 	// with the windows at each of its non-causal calls.
 	seqRuns []nn.KeyRun
+	// gridCells and gridReq are the cells and the grid's width SetGridCells
+	// gave this session, staged into the tower's set at each of its calls
+	// over a tower whose set holds a grid table (gridtable.go).
+	gridCells, gridReq []byte
 	// winPerRow says winRuns is one window a row (SetRowWindows: a symmetric
 	// sliding window, whose rows' windows overlap) rather than runs
 	// partitioning the rows.
