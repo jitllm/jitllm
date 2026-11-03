@@ -49,12 +49,12 @@ func (s *Instance) towerCoords(i, gh, gw int) (a0, a1 int) {
 	switch c.Kind {
 	case jlm.ProjLlama4:
 		var pos [2]int
-		llama4Coords(i, gh*gw, gw, pos[:])
+		llama4Coords(i, gh*gw, gw, pos[:], c.viol)
 		return pos[0], pos[1]
 	case jlm.ProjGemma4V:
 		// (column, row): the column turns the first half.
 		p := s.patchAt(i)
-		if gemma4RowFirst {
+		if c.viol == violRowFirst {
 			return p / gw, p % gw
 		}
 		return p % gw, p / gw

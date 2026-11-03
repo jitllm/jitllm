@@ -41,11 +41,9 @@ type videoProc struct {
 // 2 frames a second, 4 to 768 of them, 4096 to 25165824 pixels over the
 // whole video. The container does not carry a processor's video settings;
 // these are the Clef readout's, as its prompt is.
-var clefVideo = videoProc{fps: 2, minFrames: 4, maxFrames: 768, minPixels: 4096, maxPixels: 25165824, temporal: 2}
-
-// videoFirstFrame is a gate's violation, false in every real run: each pair's
-// second frame read as its first, the still-picture path.
-var videoFirstFrame bool
+func clefVideo() videoProc {
+	return videoProc{fps: 2, minFrames: 4, maxFrames: 768, minPixels: 4096, maxPixels: 25165824, temporal: 2}
+}
 
 // defaultVideoFPS is the rate the reference assumes for frames with none.
 const defaultVideoFPS = 24
@@ -170,7 +168,7 @@ func (t *Tower) videoPictures(vp videoProc, v VideoFrames) ([]*Picture, []float6
 	var pics []*Picture
 	for i := 0; i < len(frames); i += vp.temporal {
 		second := frames[i+1]
-		if videoFirstFrame {
+		if c.viol == violVideoFirstFrame {
 			second = frames[i]
 		}
 		pc, err := c.framePair(frames[i], second, gh, gw)

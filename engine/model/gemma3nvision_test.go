@@ -171,17 +171,17 @@ func TestGemma3nTowerMatchesTransformers(t *testing.T) {
 	// statement (Model.mnNoResidual).
 	for _, v := range []struct {
 		name string
-		f    mnFaultKind
+		f    towerViolation
 	}{
-		{"no residual adds", mnFaultNone},
-		{"the coarser stage upsampled transposed", mnFaultUpsampleT},
-		{"each pooling window's first row", mnFaultPoolFirst},
+		{"no residual adds", violNone},
+		{"the coarser stage upsampled transposed", violMNUpsampleT},
+		{"each pooling window's first row", violMNPoolFirst},
 	} {
-		mnFault = v.f
-		tw.model.mnNoResidual = v.f == mnFaultNone
+		tw.Cfg.viol = v.f
+		tw.model.mnNoResidual = v.f == violNone
 		tw.model.restateTower()
 		bad := g3nvEncode(t, tw, g, nil)
-		mnFault = mnFaultNone
+		tw.Cfg.viol = violNone
 		tw.model.mnNoResidual = false
 		tw.model.restateTower()
 		nb, _ := nmse32(g.Image.EmbdA8, bad)

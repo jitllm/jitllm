@@ -455,7 +455,7 @@ func (s *Instance) projWords(gh, gw int, windowed bool) {
 		for i := range nt {
 			p := v.ord[i*S*S]
 			u := (p/gw/S)*mw + (p%gw)/S
-			if qwenNoUnwindow {
+			if c.viol == violNoUnwindow {
 				u = i
 			}
 			st.req[composer.RequestRows+u] = uint32(i)

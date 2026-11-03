@@ -11,21 +11,6 @@ import (
 
 // The MobileNet-V5 tower's encode on the host (mobilenet.go has the tower).
 
-// mnFault breaks one step of the tower on purpose, for the gates that must
-// be seen to fail (RULE 10); zero in every real run.
-var mnFault mnFaultKind
-
-type mnFaultKind uint8
-
-const (
-	mnFaultNone mnFaultKind = iota
-	// mnFaultUpsampleT reads the coarser stage's row at the transposed
-	// position when the fusion adapter upsamples it.
-	mnFaultUpsampleT
-	// mnFaultPoolFirst takes each pooling window's first row for its mean.
-	mnFaultPoolFirst
-)
-
 // mnColRows is how many output positions one im2col tile holds: a full
 // convolution is a matmul over the tile, so the tile bounds the unfolded
 // input rather than the whole picture's.
@@ -289,7 +274,7 @@ func (s *Instance) mnFinish() ([]float32, error) {
 			p := y*wa + x
 			copy(cat[p*ccat:p*ccat+a.cout], r.tapA[p*a.cout:(p+1)*a.cout])
 			q := (y/fy)*b.wout + x/fx
-			if mnFault == mnFaultUpsampleT {
+			if c.viol == violMNUpsampleT {
 				q = (x/fx)*b.wout + y/fy
 			}
 			copy(cat[p*ccat+a.cout:(p+1)*ccat], fin[q*b.cout:(q+1)*b.cout])
@@ -322,7 +307,7 @@ func (s *Instance) mnFinish() ([]float32, error) {
 			for dy := 0; dy < k; dy++ {
 				for dx := 0; dx < k; dx++ {
 					p := (gy*k+dy)*wa + gx*k + dx
-					if mnFault == mnFaultPoolFirst {
+					if c.viol == violMNPoolFirst {
 						p = (gy*k)*wa + gx*k
 					}
 					nn.Axpy32JIT(dst, f[p*E:(p+1)*E], 1)

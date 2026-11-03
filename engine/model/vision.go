@@ -73,6 +73,9 @@ type TowerConfig struct {
 	// fault is a violation a gate runs to show it discriminates; zero in
 	// every real use.
 	fault towerFault
+	// viol is a violation of the reference a gate runs to show it discriminates;
+	// zero in every real use.
+	viol towerViolation
 	// RMS says the tower's norms -- each block's two and the merger's -- are
 	// RMSNorms with no bias (Qwen2.5-VL, Pixtral), not LayerNorms.
 	RMS bool
@@ -113,6 +116,65 @@ type TowerConfig struct {
 	// ascending (Qwen3-VL); tap k's rows add into the text model after its
 	// block k.
 	Deep []int
+}
+
+// towerViolation names one departure from the reference a vision gate must
+// see: the gate sets it on the tower's config and the code that would be
+// wrong reads it there. Zero in every real run.
+type towerViolation uint8
+
+const (
+	violNone towerViolation = iota
+	// violRowFirst turns the first half of a head by the patch's row where
+	// the column turns it (Gemma 4, Llama 4).
+	violRowFirst
+	// violFromZero starts Llama 4's rotary positions at zero where the
+	// reference starts them at one.
+	violFromZero
+	// violTanhGELU runs LFM2's projector GELU in llama.cpp's tanh form.
+	violTanhGELU
+	// violNoThumb leaves a tiled LFM2 picture's thumbnail out.
+	violNoThumb
+	// violBilinear resamples bilinear whatever the file says.
+	violBilinear
+	// violNoProjNorm skips LFM2's projector LayerNorm where the file has one.
+	violNoProjNorm
+	// violPosTransposed resizes Phi-4's position table to the grid's
+	// transpose, so every patch reads another's position.
+	violPosTransposed
+	// violNoResize reads Phi-4's square table's first rows as a fixed-grid
+	// tower would.
+	violNoResize
+	// violBicubic resamples Phi-4's picture with Pillow's BICUBIC.
+	violBicubic
+	// violPixtralFreq takes Qwen-VL's frequencies (each half from the first)
+	// where Pixtral's take the even and the odd.
+	violPixtralFreq
+	// violPixtralMerge hands the merger the unfold's channel-major order its
+	// columns no longer are in.
+	violPixtralMerge
+	// violPixtralNoBreaks leaves the break rows out of the head's output.
+	violPixtralNoBreaks
+	// violNoUnwindow leaves the merged rows in window order: a merger which
+	// skipped the put-back.
+	violNoUnwindow
+	// violMNUpsampleT reads the coarser stage's row at the transposed
+	// position when the fusion adapter upsamples it.
+	violMNUpsampleT
+	// violMNPoolFirst takes each pooling window's first row for its mean.
+	violMNPoolFirst
+	// violKeyPixelsOnly names a picture by its pixels alone, leaving the
+	// configuration and the grid out of the key.
+	violKeyPixelsOnly
+	// violVideoFirstFrame reads each pair's second frame as its first, the
+	// still-picture path.
+	violVideoFirstFrame
+)
+
+// runsTower reports whether the violation breaks the tower's own encode, so a
+// cached answer to the same picture would be the clean rows.
+func (v towerViolation) runsTower() bool {
+	return v == violNoUnwindow || v == violMNUpsampleT || v == violMNPoolFirst
 }
 
 // towerFault names one wrong step a vision gate must catch.
@@ -1887,7 +1949,7 @@ func (s *Instance) project(patches []float32) ([]float32, error) {
 // one.
 func (t *Tower) projNormOn() bool {
 	c := t.Cfg
-	return c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil && !lfm2NoProjNorm
+	return c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil && c.viol != violNoProjNorm
 }
 
 // projReadsPastLastBlock says the projector reads rows other than the last
@@ -1906,7 +1968,7 @@ func (t *Tower) posPerGrid() bool {
 
 // projAct is the activation between the projector's two matrices.
 func (t *Tower) projAct() nn.ActKind {
-	if t.Cfg.Kind == jlm.ProjLFM2 && !lfm2TanhGELU {
+	if t.Cfg.Kind == jlm.ProjLFM2 && t.Cfg.viol != violTanhGELU {
 		return nn.ActGELUErf
 	}
 	return nn.ActGELU

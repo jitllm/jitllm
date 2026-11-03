@@ -396,7 +396,7 @@ func (d *Decider) cutVideos(vids []VideoFrames) ([][]Span, error) {
 	}
 	out := make([][]Span, len(vids))
 	for i, v := range vids {
-		pics, stamps, err := tw.videoPictures(clefVideo, v)
+		pics, stamps, err := tw.videoPictures(clefVideo(), v)
 		if err != nil {
 			return nil, fmt.Errorf("videos[%d]: %w", i, err)
 		}

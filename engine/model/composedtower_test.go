@@ -391,7 +391,7 @@ func composedTowerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Mod
 			switch {
 			case cp == 0:
 			case c.WinPattern > 0:
-				vio("the merged rows left in the window order", func(*Instance) { qwenNoUnwindow = true }, func() { qwenNoUnwindow = false })
+				vio("the merged rows left in the window order", func(*Instance) { tw.Cfg.viol = violNoUnwindow }, func() { tw.Cfg.viol = violNone })
 			case c.Scale > 1 && tw.projW.k == c.NEmbd:
 				tw.Cfg.fault = towerFaultPoolCorner
 				vio("the pool reads a group's first patch alone", func(*Instance) {}, func() { tw.Cfg.fault = towerFaultNone })
@@ -564,8 +564,8 @@ func TestComposedProjectorOnCPU(t *testing.T) {
 			var vio string
 			switch {
 			case c.WinPattern > 0:
-				vio, qwenNoUnwindow = "the merged rows left in the window order", true
-				defer func() { qwenNoUnwindow = false }()
+				vio, tw.Cfg.viol = "the merged rows left in the window order", violNoUnwindow
+				defer func() { tw.Cfg.viol = violNone }()
 			case c.Scale > 1 && tw.projW.k == c.NEmbd:
 				vio, tw.Cfg.fault = "the pool reads a group's first patch alone", towerFaultPoolCorner
 			case c.Scale > 1:
