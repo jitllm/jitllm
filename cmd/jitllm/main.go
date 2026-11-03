@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"runtime/pprof"
 	"slices"
 	"sort"
@@ -81,16 +82,19 @@ func numaNodes() []int {
 	return nil
 }
 
-// version is the release version, set at link time
-// (-ldflags "-X main.version=v0.1.0"; see .goreleaser.yaml).
-var version = "dev"
-
-// procStart is as near process start as Go code runs: package variables are
-// initialised before main. speed -ttft's load row counts from it, as
-// llama.cpp's log timestamps count from its logger's start.
-var procStart = time.Now()
+// buildVersion is the release version the module was built at, "dev" for a
+// build from an untagged tree.
+func buildVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
+}
 
 func main() {
+	// speed -ttft's load row counts from here, as llama.cpp's log timestamps
+	// count from its logger's start.
+	procStart := time.Now()
 	alignGOMAXPROCS()
 	// Page frames and the dense region live off the Go heap (jlm.SetOffHeap).
 	// JITLLM_OFFHEAP=0 puts them back on it, with the budget's collector
@@ -111,7 +115,7 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "version":
-		fmt.Println(version)
+		fmt.Println(buildVersion())
 	case "hardware":
 		err = hardware()
 	case "capabilities":
@@ -129,7 +133,7 @@ func main() {
 	case "batch":
 		err = batchCmd(os.Args[2:])
 	case "speed":
-		err = speedCmd(os.Args[2:])
+		err = speedCmd(procStart, os.Args[2:])
 	case "verify":
 		err = verifyCmd(os.Args[2:])
 	case "tokenize":
@@ -1568,7 +1572,7 @@ func runCmd(args []string) error {
 	} else if *system != "" {
 		return fmt.Errorf("-system needs -chat: without a template there is no system turn to put it in")
 	}
-	svc, path, err := runTarget(context.Background(), fs.Arg(0), *addr, keyOf(*apiKey), *embedded, engineFlags(fs, remoteFlags), os.Stderr)
+	svc, path, err := runTarget(context.Background(), fs.Arg(0), *addr, keyOf(*apiKey), *embedded, engineFlags(fs, remoteFlags()), os.Stderr)
 	if err != nil {
 		return err
 	}

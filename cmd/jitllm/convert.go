@@ -248,8 +248,10 @@ func aliasCatalogName(args []string, dst string) {
 	}
 }
 
-// splitPart is llama.cpp's gguf-split naming, NAME-00001-of-00003.gguf.
-var splitPart = regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})\.gguf$`)
+// splitPart() is llama.cpp's gguf-split naming, NAME-00001-of-00003.gguf.
+func splitPart() *regexp.Regexp {
+	return regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})\.gguf$`)
+}
 
 // sourceBytes is how many bytes of model the input holds: the file's size for a
 // GGUF or a single shard, and the sum of the weight files for a HuggingFace
@@ -261,7 +263,7 @@ func sourceBytes(src string) (int64, error) {
 	}
 	if !fi.IsDir() {
 		// A split GGUF counts every part, not part 1 alone.
-		if m := splitPart.FindStringSubmatch(src); m != nil && m[2] == "00001" {
+		if m := splitPart().FindStringSubmatch(src); m != nil && m[2] == "00001" {
 			n, _ := strconv.Atoi(m[3])
 			total := fi.Size()
 			for i := 2; i <= n; i++ {
