@@ -4,6 +4,8 @@ package composer
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jitllm/jitllm/composer/x86"
@@ -50,20 +52,24 @@ func TestComposedCPUGatesOnSSE(t *testing.T) {
 		{"JamLooksUpByAWeightWord", TestCPUJamLooksUpByAWeightWord},
 	}
 	for _, g := range gates {
-		sseKernels.Lock()
-		sseKernels.codes = map[string]bool{}
-		sseKernels.Unlock()
 		t.Run(g.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(sseKernelDir, dir)
 			g.run(t)
-			sseKernels.Lock()
-			codes := sseKernels.codes
-			sseKernels.Unlock()
+			files, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
 			n := 0
-			for c := range codes {
-				if need, _ := x86.KernelISA([]byte(c)); need&x86.ISATierAVX2 != 0 {
+			for _, f := range files {
+				c, err := os.ReadFile(filepath.Join(dir, f.Name()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if need, _ := x86.KernelISA(c); need&x86.ISATierAVX2 != 0 {
 					t.Errorf("a kernel declared %v on the SSE tier", need)
 				}
-				ssegate.Require(t, fmt.Sprintf("%s-%d", g.name, n), []byte(c))
+				ssegate.Require(t, fmt.Sprintf("%s-%d", g.name, n), c)
 				n++
 			}
 			t.Logf("%d SSE kernels read back", n)

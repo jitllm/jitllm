@@ -182,11 +182,11 @@ func TestComposedGPUHead(t *testing.T) {
 			for _, matrix := range []bool{false, true} {
 				dev := gpuDevice(d)
 				if matrix {
-					ok, _ := backend.LowersTile(d, matrixTile)
+					ok, _ := backend.LowersTile(d, matrixTile())
 					if !ok {
 						continue
 					}
-					dev.Matrix = [3]int{matrixTile.M, matrixTile.N, matrixTile.K}
+					dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 				}
 				rng := rand.New(rand.NewSource(71))
 				for _, sh := range []struct{ k, v int }{{64, 1000}, {64, 32064}, {96, 777}} {

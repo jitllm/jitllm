@@ -101,10 +101,10 @@ func TestComposedGPUPooledProjection(t *testing.T) {
 		for _, matrix := range []bool{false, true} {
 			dev := gpuDevice(d)
 			if matrix {
-				if ok, _ := backend.LowersTile(d, matrixTile); !ok {
+				if ok, _ := backend.LowersTile(d, matrixTile()); !ok {
 					continue
 				}
-				dev.Matrix = [3]int{matrixTile.M, matrixTile.N, matrixTile.K}
+				dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 			}
 			t.Run(fmt.Sprintf("%s/matrix%v", d.API(), matrix), func(t *testing.T) {
 				_, codes, err := composer.Default().Form(composer.Request{Graph: b.G, Formats: formats,

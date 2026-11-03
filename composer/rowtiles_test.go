@@ -20,7 +20,9 @@ import (
 
 // tiledFormats are the weight formats the row-tile gates form a projection
 // over: a float matrix and the packed types of the served models.
-var tiledFormats = []quant.Type{quant.F32, quant.Q8_0, quant.Q3_K, quant.Q4_K, quant.Q5_K, quant.Q6_K}
+func tiledFormats() []quant.Type {
+	return []quant.Type{quant.F32, quant.Q8_0, quant.Q3_K, quant.Q4_K, quant.Q5_K, quant.Q6_K}
+}
 
 // ffnBlock is a Llama-shaped block's MLP at the model's widths: a norm, gate
 // and up, SiLU, down and the residual add.
@@ -298,7 +300,7 @@ func TestComposedGPURowTiles(t *testing.T) {
 		n, k int
 	}
 	var shapes []shape
-	for _, typ := range tiledFormats {
+	for _, typ := range tiledFormats() {
 		shapes = append(shapes, shape{typ, 2048, 256})
 	}
 	shapes = append(shapes, shape{quant.F32, 128, 2048})

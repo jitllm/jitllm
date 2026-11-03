@@ -112,7 +112,7 @@ func TestCPURowJamReadsTheWeightOnce(t *testing.T) {
 // fourRowsRefused is the packed types whose shipping prompt matvec the
 // registers refuse at four rows a call, by whether the host has VNNI: each
 // halves to two. A list that only shrinks.
-var fourRowsRefused = map[string]bool{}
+func fourRowsRefused() map[string]bool { return map[string]bool{} }
 
 // TestCPUPromptRunsFourRowsACall holds the shipping profile's prompt matvec
 // on the CPU to four rows a call where the registers hold them, Jam's lanes
@@ -137,7 +137,7 @@ func TestCPUPromptRunsFourRowsACall(t *testing.T) {
 			k, jam := rowsForm(t, Default(), typ, isa, 8)
 			_, off := rowsForm(t, rowJamRegistry(4, "rowjam"), typ, isa, 8)
 			want := 4
-			if fourRowsRefused[key] {
+			if fourRowsRefused()[key] {
 				want = 2
 			}
 			switch {

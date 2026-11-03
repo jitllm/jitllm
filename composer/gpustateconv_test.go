@@ -41,10 +41,10 @@ func TestComposedGPUStateWindowConv(t *testing.T) {
 					if err != nil {
 						t.Fatalf("%+v at %d rows: %v", s, R, err)
 					}
-					steps := recSteps
+					steps := recSteps()
 					if R == 1 {
 						steps = steps[:0:0]
-						steps = append(steps, recSteps[0])
+						steps = append(steps, recSteps()[0])
 						steps[0].n, steps[0].runs = 1, recRuns{{0}}
 					}
 					for _, st := range steps {
