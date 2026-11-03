@@ -21,13 +21,14 @@ import (
 
 // BenchmarkComposedFlash times the composer's prompt attention on the matrix
 // unit (the flash pass) at Llama's geometries, a 512-row chunk at the end of a
-// 2048-position prompt in the served models' pool layout, on every CUDA
+// 2048-position prompt in the served models' pool layout, its values binary16
+// and float32 (the card's default history), on every CUDA
 // device: each code's median microseconds over its own rounds, and the flash
 // kernel's registers, spills and workgroup memory. JITLLM_FLASH_SHAPES, a
 // comma list of ROWS:KEYS:SHARED, times those flash forms in place of the
 // profile's. It runs its own rounds:
 //
-//	go test ./jit -run '^$' -bench ComposedFlash -benchtime 1x
+//	go test ./composer -run '^$' -bench ComposedFlash -benchtime 1x
 func BenchmarkComposedFlash(t *testing.B) {
 	testlock.GPU(t)
 	const page, R, p0, keys, rounds, reps = 64, 512, 1536, 4608, 16, 5
@@ -36,7 +37,7 @@ func BenchmarkComposedFlash(t *testing.B) {
 		if d.API() != "ptx" {
 			continue
 		}
-		for _, c := range []attendRowsCase{{32, 8, 64, 0, false, false}, {32, 8, 128, 0, false, false}} {
+		for _, c := range []attendRowsCase{{32, 8, 64, 0, false, false}, {32, 8, 128, 0, false, false}, {32, 8, 64, 0, false, true}, {32, 8, 128, 0, false, true}} {
 			for _, fl := range flashConfigs(t) {
 				reg := composer.Default()
 				if fl.Rows != 0 {
@@ -57,7 +58,7 @@ func BenchmarkComposedFlash(t *testing.B) {
 				dev := gpuDevice(d)
 				dev.Matrix = [3]int{16, 16, 16}
 				_, codes, err := reg.Form(composer.Request{Graph: g, Step: composer.Step{Rows: R, Page: page, Keys: keys, Seqs: 1},
-					Device: dev, History: composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: true}}})
+					Device: dev, History: composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: !c.f32v}}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -80,8 +81,12 @@ func BenchmarkComposedFlash(t *testing.B) {
 					pages[i] = uint32(i)
 				}
 				vals := map[graph.ValueID][]uint32{g.In[0]: rnd(R * w), g.In[1]: rnd(R * w), g.In[2]: rnd(R * c.heads * c.dim), g.Out[0]: make([]uint32, R*c.heads*c.dim)}
+				vwords := keys * w / 2
+				if c.f32v {
+					vwords = keys * w
+				}
 				tables := map[string][]uint32{"rows": rows, "rows.n": {R}, "pages": pages,
-					"kv.k": rnd(keys * w), "kv.v": make([]uint32, keys*w/2)}
+					"kv.k": rnd(keys * w), "kv.v": make([]uint32, vwords)}
 				var bufs []backend.Buf
 				held := map[string]backend.Buf{}
 				get := func(key string, words []uint32) backend.Buf {
@@ -160,8 +165,8 @@ func BenchmarkComposedFlash(t *testing.B) {
 					if r, ok := backend.KernelResourcesOf(op.kerns[ci]); ok {
 						res = fmt.Sprintf("regs %d, spill %d, shared %d, resident %d", r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
 					}
-					t.Logf("%s %v %dq%dkv%dd rows %d at %d: %-24s %v %4d workgroups of %4d: %8.1f us  %s", d.Name(), fl, c.heads, c.kvh, c.dim,
-						R, p0, cd.Name, cd.Passes[len(cd.Passes)-1], cd.LiveGroups(R), cd.GPU.Group[0], med(us), res)
+					t.Logf("%s %v %dq%dkv%dd f32 values %v rows %d at %d: %-24s %v %4d workgroups of %4d: %8.1f us  %s", d.Name(), fl, c.heads, c.kvh, c.dim,
+						c.f32v, R, p0, cd.Name, cd.Passes[len(cd.Passes)-1], cd.LiveGroups(R), cd.GPU.Group[0], med(us), res)
 				}
 				op.close()
 				for _, bf := range bufs {
