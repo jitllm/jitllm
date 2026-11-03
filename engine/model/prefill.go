@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"time"
 
@@ -344,7 +343,7 @@ func (s *Instance) prefillInto(slot int, tokens []int32) ([]float32, error) {
 // ErrPrefillInterrupted is a prefill stopped between chunks because its
 // interrupt (SetPrefillInterrupt) asked. The sequence holds the chunks that
 // ran and nothing after them; the caller resets it before reusing the Instance.
-var ErrPrefillInterrupted = errors.New("model: prefill interrupted")
+const ErrPrefillInterrupted modelError = "model: prefill interrupted"
 
 // SetPrefillInterrupt has every chunked prefill ask f before each chunk and
 // stop with ErrPrefillInterrupted when it answers true: a server stops a long

@@ -22,8 +22,12 @@ import (
 // to that block, the state to what is left.
 
 // The reference's delimiters: reserved tokens of LFM2's vocabulary.
-var d1OmniDelims = [...]string{"<|reserved_7|>", "<|reserved_8|>", "<|reserved_9|>", "<|reserved_10|>",
-	"<|reserved_11|>", "<|mask|>"}
+const d1OmniNDelims = 6
+
+func d1OmniDelims() [d1OmniNDelims]string {
+	return [d1OmniNDelims]string{"<|reserved_7|>", "<|reserved_8|>", "<|reserved_9|>", "<|reserved_10|>",
+		"<|reserved_11|>", "<|mask|>"}
+}
 
 // d1OmniMaxLen is the text's room: the reference's max_length, the
 // container's context, less a media prefix and cut to image_text_length
@@ -47,8 +51,8 @@ const d1OmniAudioText = 15360
 // marker, in the order the model reads them (a noul false first).
 func (d *Decider) d1OmniSequence(state jinja.Value, q *DecisionQuestion, maxLen int) ([]int32, []int, error) {
 	v := d.m.Vocab
-	var dl [len(d1OmniDelims)]int32
-	for i, s := range d1OmniDelims {
+	var dl [d1OmniNDelims]int32
+	for i, s := range d1OmniDelims() {
 		id, ok := v.ID(s)
 		if !ok {
 			return nil, nil, fmt.Errorf("the vocabulary has no %s", s)

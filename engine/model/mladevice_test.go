@@ -215,7 +215,8 @@ func mlaCPUArm(t *testing.T, src string, ids []int32, want [][]float32) {
 // fail differently: demotion reads into host pages whose k and v alias
 // (kvPages.latent), promotion writes at the stride the scores kernel bakes.
 func TestMLASeamMovesWithItsHistory(t *testing.T) {
-	defer fusedRunsCheck(t, true)()
+	w := fusedRunsCheck(t, true)
+	defer w.done()
 	ids := []int32{5, 11, 23, 41, 67, 89, 101, 127}
 	src := hfContainer(t, "synth-deepseek-dense")
 	m, err := Open(src, noTune(), WithKVF16(false))
@@ -223,6 +224,7 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	w.watch(m)
 	want := teacherForce(t, m, ids)
 	// The same container with the CPU's blocks composed: the history moves
 	// between the card's pool and the CPU device's arena.
@@ -231,6 +233,7 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mc.Close()
+	w.watch(mc)
 	ran := 0
 	for _, spec := range stepDevices() {
 		for _, arm := range []struct {

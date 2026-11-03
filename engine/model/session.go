@@ -109,7 +109,7 @@ type Session struct {
 	// points itself (recRowPoint).
 	recPrefill bool
 	// ranAt is when this session last started a decode token, in
-	// nanoseconds past servingEpoch plus one (0: never); see serving.go.
+	// wall-clock nanoseconds (0: never); see serving.go.
 	ranAt atomic.Int64
 }
 

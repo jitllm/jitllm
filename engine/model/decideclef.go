@@ -39,7 +39,15 @@ const clefSystem = "Read the complete state and schema. Decide every field joint
 
 // clefTypes is the reference's QUESTION_TYPES: the row of the type table each
 // question type reads.
-var clefTypes = [...]int32{jlm.QuestionNoul: 0, jlm.QuestionChoice: 1, jlm.QuestionScore: 2}
+func clefType(t jlm.QuestionType) int32 {
+	switch t {
+	case jlm.QuestionChoice:
+		return 1
+	case jlm.QuestionScore:
+		return 2
+	}
+	return 0
+}
 
 // clefBlock is one of the head's blocks: a routing block (kvNorm set, no self
 // attention) or a joint block (self attention, the memory read raw).
@@ -358,7 +366,7 @@ func (d *Decider) clefPrompt(state jinja.Value, qs []DecisionQuestion) (*clefPro
 			return nil, fmt.Errorf("questions.%s: the instructions tokenize to nothing", q.ID)
 		}
 		p.qs = append(p.qs, clefSpan{lo, len(schema)})
-		p.qtype = append(p.qtype, clefTypes[q.Type])
+		p.qtype = append(p.qtype, clefType(q.Type))
 		schema = append(schema, enc("\nALLOWED OPTIONS:\n")...)
 		order := d.clefOrder(q)
 		for i, oi := range order {

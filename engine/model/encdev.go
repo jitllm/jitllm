@@ -74,7 +74,7 @@ func (m *Model) encInstance(j *nn.JIT) *Instance {
 	// segment's arena (ncArena): one page of the rows.
 	keys := n
 	s.kvl = kvLayout{maxSeq: keys, nKV: c.NKVHead, headDim: c.HeadDim}
-	s.kv = newKVCacheRange(c, nextCacheID(), 1, s.kvl, nil, align(keys, kvKeyTile), s.lo, s.hi)
+	s.kv = newKVCacheRange(c, s.m.nextCacheID(), 1, s.kvl, nil, align(keys, kvKeyTile), s.lo, s.hi)
 	s.attnG = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, s.kvl.Stride(), cpu.KVF32)
 	s.attnL = s.attnG
 	s.attStride = attStride(1)

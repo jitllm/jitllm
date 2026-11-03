@@ -590,12 +590,14 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 // (blocks freed and rebuilt, KV pages migrated), so it is held to the same bar
 // as a step: RanBeside says the two did run at once.
 func TestSessionsRelocateAtOnce(t *testing.T) {
-	defer fusedRunsCheck(t, false)()
+	w := fusedRunsCheck(t, false)
+	defer w.done()
 	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	w.watch(m)
 	// half puts the session beside the relocating one on the first half of
 	// the blocks only, so the relocating session's seam move frees the second
 	// half outright and its way back prepares them again -- allocations and

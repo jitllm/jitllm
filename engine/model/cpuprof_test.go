@@ -81,7 +81,7 @@ func TestComposedCPUProfile(t *testing.T) {
 		}
 		run(warm)
 		each = each[:0]
-		ResetProfile()
+		m.ResetProfile()
 		m.cpuForms.mu.Lock()
 		for _, f := range m.cpuForms.m {
 			for i := range f.codes {
@@ -106,7 +106,7 @@ func TestComposedCPUProfile(t *testing.T) {
 			slices.Sort(each)
 			fmt.Fprintf(&b, "  a token's time: min %v p10 %v median %v p90 %v max %v\n", each[0], each[len(each)/10], each[len(each)/2], each[len(each)*9/10], each[len(each)-1])
 		}
-		names, ns := OpProfile()
+		names, ns := m.OpProfile()
 		for i, n := range ns {
 			if n > 0 {
 				fmt.Fprintf(&b, "  main %-12s %8.1f us a token\n", names[i], float64(n)/1e3/ft)

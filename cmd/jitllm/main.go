@@ -386,7 +386,7 @@ func benchmark(path string, topts []tok.Option) error {
 	perTok := m.BytesPerToken()
 	fmt.Println(bench.Report(fmt.Sprintf("decode, %d core(s), %s", threads, tier), perTok*nTok, el, threads))
 	fmt.Printf("             %.3f tok/s   %d B/token\n", nTok/el.Seconds(), perTok)
-	if names, ns := model.OpProfile(); ns[0] > 0 {
+	if names, ns := m.OpProfile(); ns[0] > 0 {
 		var tot int64
 		for _, v := range ns {
 			tot += v
@@ -846,7 +846,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	phRead(ph, dev, m)
 	ph.Mark("prefill")
 	// So the profile below describes DECODE, not the prompt that preceded it.
-	model.ResetProfile()
+	m.ResetProfile()
 
 	ignoreEOS := os.Getenv("JITLLM_IGNORE_EOS") == "1"
 	var forced []int32
@@ -1245,7 +1245,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	fmt.Fprintf(os.Stderr, "ids %v\n", append(append([]int32{}, ids...), out...))
 	// The op split, when asked for; useful at long context, where attention is
 	// the one O(S) op.
-	if names, ns := model.OpProfile(); ns[0] > 0 {
+	if names, ns := m.OpProfile(); ns[0] > 0 {
 		var tot int64
 		for _, v := range ns {
 			tot += v

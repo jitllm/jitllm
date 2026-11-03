@@ -129,7 +129,7 @@ func (d *Decider) cutPictures(imgs []image.Image) ([][]Span, error) {
 // markedPicture is one Picture between its tower's marker pieces.
 func (m *Model) markedPicture(pc *Picture) ([]Span, error) {
 	tw := m.Tower()
-	mk, ok := imageMarkersOf[tw.Cfg.Projector]
+	mk, ok := imageMarkerTable()[tw.Cfg.Projector]
 	if !ok || mk.preText != "" || mk.postText != "" {
 		return nil, fmt.Errorf("model: projector %q has no marker pieces a decision prompt can carry", tw.Cfg.Projector)
 	}
