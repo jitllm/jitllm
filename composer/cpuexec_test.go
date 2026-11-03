@@ -1,13 +1,16 @@
 package composer
 
 import (
+	"crypto/sha256"
 	bin "encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
-	"sync"
 	"testing"
 	"unsafe"
 
@@ -230,23 +233,20 @@ func dealtOverWorkers(codes []Code) bool {
 	return false
 }
 
-// sseKernels is every kernel the gates mapped in the legacy SSE encodings,
-// for the VEX-leak gate to read back.
-var sseKernels struct {
-	sync.Mutex
-	codes map[string]bool
-}
+// sseKernelDir names the directory mapComposed writes each SSE-declared
+// kernel into, for the VEX-leak gate to read back.
+const sseKernelDir = "JITLLM_TEST_SSE_KERNELS"
 
 // mapComposed is cpu.Map, keeping each SSE-declared kernel for the VEX-leak
-// gate.
+// gate where it asks for them.
 func mapComposed(code []byte) (*cpu.Code, error) {
 	if need, ok := x86.KernelISA(code); ok && need&x86.ISAAVX2 == 0 {
-		sseKernels.Lock()
-		if sseKernels.codes == nil {
-			sseKernels.codes = map[string]bool{}
+		if dir := os.Getenv(sseKernelDir); dir != "" {
+			sum := sha256.Sum256(code)
+			if err := os.WriteFile(filepath.Join(dir, hex.EncodeToString(sum[:])), code, 0o600); err != nil {
+				return nil, err
+			}
 		}
-		sseKernels.codes[string(code)] = true
-		sseKernels.Unlock()
 	}
 	return cpu.Map(code)
 }

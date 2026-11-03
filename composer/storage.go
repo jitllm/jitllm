@@ -76,13 +76,52 @@ const (
 	numSources
 )
 
-var sourceNames = [numSources]string{"step", "weight", "input", "rows", "pages", "query offset",
-	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state", "request", "windows",
-	"rotary axis positions", "entries", "entry rows", "entry pages", "rotary rows", "rotary marks"}
-
 func (s Source) String() string {
-	if s < numSources {
-		return sourceNames[s]
+	switch s {
+	case SourceStep:
+		return "step"
+	case SourceWeight:
+		return "weight"
+	case SourceInput:
+		return "input"
+	case SourceRows:
+		return "rows"
+	case SourcePages:
+		return "pages"
+	case SourceQueryOffset:
+		return "query offset"
+	case SourceRopePositions:
+		return "rotary positions"
+	case SourceRopePlanes:
+		return "rotary planes"
+	case SourceKeys:
+		return "keys"
+	case SourceValues:
+		return "values"
+	case SourceWords:
+		return "words"
+	case SourceTransfer:
+		return "transfer"
+	case SourceTokens:
+		return "tokens"
+	case SourceState:
+		return "state"
+	case SourceRequest:
+		return "request"
+	case SourceWindows:
+		return "windows"
+	case SourceRopeAxisPositions:
+		return "rotary axis positions"
+	case SourceEntries:
+		return "entries"
+	case SourceEntRows:
+		return "entry rows"
+	case SourceEntPages:
+		return "entry pages"
+	case SourceRopeRows:
+		return "rotary rows"
+	case SourceRopeMarks:
+		return "rotary marks"
 	}
 	return fmt.Sprintf("source %d", s)
 }

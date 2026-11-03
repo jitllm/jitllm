@@ -42,7 +42,7 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 		// red zone, made once while every vector register is free.
 		e.a.VPCMPEQW(x86.Y0, x86.Y0, x86.Y0)
 		e.a.VPSRLW(x86.Y0, x86.Y0, 15)
-		e.a.VMOVDQUStore(onesSlot, x86.Y0)
+		e.a.VMOVDQUStore(onesSlot(), x86.Y0)
 	}
 	for _, en := range k.Seq {
 		if e.err != nil {
@@ -116,18 +116,23 @@ type x86Lowerer struct {
 
 // shiftCount is the red-zone word a vector shift by a general register's
 // count reads it from: slot 16, which no spill takes.
-var shiftCount = x86.At(x86.RSP, -128)
+func shiftCount() x86.Mem { return x86.At(x86.RSP, -128) }
 
 // onesSlot is the red zone's vector of ones words below shiftCount, where
 // no register holds the byte dots' (Kernel.Ones).
-var onesSlot = x86.At(x86.RSP, -160)
+func onesSlot() x86.Mem { return x86.At(x86.RSP, -160) }
 
 // spillSlot is spill slot s, 1-based, below RSP (spillOffset).
 func spillSlot(s int) x86.Mem { return x86.At(x86.RSP, spillOffset(s)) }
 
 // spillRegs are the registers a spilled value is loaded into at a read
 // (Regs.Reloads in the CPU profile).
-var spillRegs = [2]x86.Reg{x86.R13, x86.RBX}
+func spillReg(n int) x86.Reg {
+	if n%2 == 0 {
+		return x86.R13
+	}
+	return x86.RBX
+}
 
 func (e *x86Lowerer) fail(format string, args ...any) {
 	if e.err == nil {
@@ -137,13 +142,13 @@ func (e *x86Lowerer) fail(format string, args ...any) {
 
 func (e *x86Lowerer) reg(i int) x86.Reg {
 	if nd := e.k.Nodes[i]; nd.Spill < 0 {
-		r := spillRegs[e.reloads%2]
+		r := spillReg(e.reloads)
 		e.reloads++
 		e.a.MOVLoad(r, x86.At(x86.RDI, int32(nd.Imm)))
 		return r
 	}
 	if s := e.k.Nodes[i].Spill; s > 0 && i != e.cur {
-		r := spillRegs[e.reloads%2]
+		r := spillReg(e.reloads)
 		e.reloads++
 		e.a.MOVLoad(r, spillSlot(s))
 		return r
@@ -445,7 +450,7 @@ func (e *x86Lowerer) node(i int) {
 			a.VPMADDUBSW(p, u, t)
 			a.VPADDW(p, e.reg(nd.C), p)
 			if e.k.Ones == 0 {
-				a.VPMADDWDMem(r, p, onesSlot)
+				a.VPMADDWDMem(r, p, onesSlot())
 			} else {
 				a.VPMADDWD(r, p, x86.Reg(e.k.Ones-1))
 			}
@@ -459,7 +464,7 @@ func (e *x86Lowerer) node(i int) {
 		}
 		a.VPMADDUBSW(p, u, t)
 		if e.k.Ones == 0 {
-			a.VPMADDWDMem(p, p, onesSlot)
+			a.VPMADDWDMem(p, p, onesSlot())
 		} else {
 			a.VPMADDWD(p, p, x86.Reg(e.k.Ones-1))
 		}
@@ -558,8 +563,8 @@ func (e *x86Lowerer) node(i int) {
 		a.VADDSUBPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpSar:
 		if k.Nodes[nd.B].Op != OpConst && !e.words[nd.B] {
-			a.MOVStore(shiftCount, e.reg(nd.B))
-			a.VPSRADMem(e.reg(i), e.reg(nd.A), shiftCount)
+			a.MOVStore(shiftCount(), e.reg(nd.B))
+			a.VPSRADMem(e.reg(i), e.reg(nd.A), shiftCount())
 			return
 		}
 		if k.Nodes[nd.B].Op != OpConst {
@@ -618,11 +623,11 @@ func (e *x86Lowerer) node(i int) {
 		if e.words[i] && (nd.Op == OpShl || nd.Op == OpShr) && k.Nodes[nd.B].Op != OpConst && !e.words[nd.B] {
 			// One count for every lane, from a general register: through
 			// the count's word below RSP.
-			a.MOVStore(shiftCount, e.reg(nd.B))
+			a.MOVStore(shiftCount(), e.reg(nd.B))
 			if nd.Op == OpShl {
-				a.VPSLLDMem(e.reg(i), e.reg(nd.A), shiftCount)
+				a.VPSLLDMem(e.reg(i), e.reg(nd.A), shiftCount())
 			} else {
-				a.VPSRLDMem(e.reg(i), e.reg(nd.A), shiftCount)
+				a.VPSRLDMem(e.reg(i), e.reg(nd.A), shiftCount())
 			}
 			return
 		}
@@ -934,11 +939,11 @@ func (e *x86Lowerer) keepIf(nd Node, skip int) {
 // instruction.
 func (e *x86Lowerer) shiftCL(op Op, dst, x, y x86.Reg) {
 	a := e.a
-	a.MOVStore(shiftCount, x86.RCX)
+	a.MOVStore(shiftCount(), x86.RCX)
 	if y == reloadReg {
 		a.MOVQ(x86.RCX, y)
 		if x == x86.RCX {
-			a.MOVLoad(reloadReg, shiftCount)
+			a.MOVLoad(reloadReg, shiftCount())
 		} else {
 			a.MOVQ(reloadReg, x)
 		}
@@ -955,7 +960,7 @@ func (e *x86Lowerer) shiftCL(op Op, dst, x, y x86.Reg) {
 	} else {
 		a.SHLCL(reloadReg)
 	}
-	a.MOVLoad(x86.RCX, shiftCount)
+	a.MOVLoad(x86.RCX, shiftCount())
 	a.MOVQ(dst, reloadReg)
 }
 
@@ -1009,7 +1014,12 @@ func (e *x86Lowerer) divConst(op Op, dst, src x86.Reg, c uint32) {
 
 // divSave is the two words below the red zone that RAX and RDX are kept in
 // across a division by a register, which reads and writes them.
-var divSave = [2]x86.Mem{x86.At(x86.RSP, -136), x86.At(x86.RSP, -144)}
+func divSave(i int) x86.Mem {
+	if i == 0 {
+		return x86.At(x86.RSP, -136)
+	}
+	return x86.At(x86.RSP, -144)
+}
 
 // divReg is dst = x / y, or x % y, for 32-bit unsigned x and y in
 // registers, or by the constant c where it is not 0: DIV of RDX:RAX by the
@@ -1018,14 +1028,14 @@ var divSave = [2]x86.Mem{x86.At(x86.RSP, -136), x86.At(x86.RSP, -144)}
 // dividend, which DIV would fault on.
 func (e *x86Lowerer) divReg(op Op, dst, x, y x86.Reg, c uint32) {
 	a := e.a
-	a.MOVStore(divSave[0], x86.RAX)
-	a.MOVStore(divSave[1], x86.RDX)
+	a.MOVStore(divSave(0), x86.RAX)
+	a.MOVStore(divSave(1), x86.RDX)
 	load := func(to, r x86.Reg) {
 		switch r {
 		case x86.RAX:
-			a.MOVLLoad(to, divSave[0])
+			a.MOVLLoad(to, divSave(0))
 		case x86.RDX:
-			a.MOVLLoad(to, divSave[1])
+			a.MOVLLoad(to, divSave(1))
 		default:
 			a.MOVL(to, r)
 		}
@@ -1059,8 +1069,8 @@ func (e *x86Lowerer) divReg(op Op, dst, x, y x86.Reg, c uint32) {
 	} else {
 		a.MOVQ(reloadReg, x86.RDX)
 	}
-	a.MOVLoad(x86.RAX, divSave[0])
-	a.MOVLoad(x86.RDX, divSave[1])
+	a.MOVLoad(x86.RAX, divSave(0))
+	a.MOVLoad(x86.RDX, divSave(1))
 	a.MOVQ(dst, reloadReg)
 }
 

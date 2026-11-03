@@ -81,7 +81,7 @@ func (l *lowerer) gridBarrier(buf uint32) {
 	inst(f, opBranch, inner)
 
 	inst(f, opLabel, waitB)
-	if gridBroken {
+	if l.gridBroken {
 		inst(f, opBranch, inner)
 		inst(f, opLabel, inner)
 		inst(f, opBranch, merge)
@@ -112,7 +112,3 @@ func (l *lowerer) gridBarrier(buf uint32) {
 	l.cur = merge
 	bar()
 }
-
-// gridBroken makes every waiter leave without waiting (BreakGridBarrierForTest,
-// jitllmtest builds only): the violation the grid barrier's gate must see.
-var gridBroken bool

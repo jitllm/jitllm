@@ -7,22 +7,17 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/composer/msl"
-	"github.com/jitllm/jitllm/composer/ptx"
-	"github.com/jitllm/jitllm/composer/spirv"
 )
 
 // TestGridBarrierProbeSeesAnEarlyCrossing is the grid barrier gate's violation
 // (RULE 10): with every waiter let through without waiting
-// (ptx.BreakGridBarrierForTest; the barrier still counts, so the launch ends),
+// (backend.Opts.BreakGridBarrier; the barrier still counts, so the launch ends),
 // kernels.GridProbe must find wrong words. If it does not, it cannot see an
 // early crossing and TestGridBarrierHoldsEveryWorkgroup certifies nothing.
 func TestGridBarrierProbeSeesAnEarlyCrossing(t *testing.T) {
-	defer ptx.BreakGridBarrierForTest(ptx.BreakGridBarrierForTest(true))
-	defer spirv.BreakGridBarrierForTest(spirv.BreakGridBarrierForTest(true))
-	defer msl.BreakGridBarrierForTest(msl.BreakGridBarrierForTest(true))
 	ran := 0
-	eachGridDevice(t, func(d backend.Device, width, limit int) {
+	broken := func() []backend.Device { return backend.OpenWith(backend.Opts{BreakGridBarrier: true}) }
+	eachGridDeviceWith(t, broken, func(d backend.Device, width, limit int) {
 		for _, groups := range dedupe(2, limit/2, limit) {
 			t.Run(fmt.Sprintf("%s/w%d/g%d", d.API(), width, groups), func(t *testing.T) {
 				r := newGridRig(t, d, groups, width)

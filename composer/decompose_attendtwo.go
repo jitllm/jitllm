@@ -44,17 +44,17 @@ func attendTwo(o graph.Op, c *Context) ([]Prim, error) {
 			return nil, err
 		}
 	}
-	desc := tableRows
+	desc := TableRows.op()
 	if a.Window > 0 {
-		desc = tableWindows
+		desc = TableWindows.op()
 	}
 	ea := a
 	ea.Window, ea.Chunked = 0, false
 	segs := [2]attendSeg{
-		{name: "kv", hs: history{a: a, pageSize: c.Step.Page}, desc: desc, pages: tablePages, keys: c.History.Keys.operand(tableKeys),
+		{name: "kv", hs: history{a: a, pageSize: c.Step.Page}, desc: desc, pages: TablePages.op(), keys: c.History.Keys.operand(TableKeys.op()),
 			values: values, keyPool: c.History.Keys, valuePool: vl, kw: kw},
-		{name: "ent", hs: history{a: ea, pageSize: c.Step.Page}, desc: tableEntRows, pages: tableEntPages, keys: tableEntKeys,
-			values: tableEntKeys, kw: a.EntWidth},
+		{name: "ent", hs: history{a: ea, pageSize: c.Step.Page}, desc: TableEntRows.op(), pages: TableEntPages.op(), keys: TableEntKeys.op(),
+			values: TableEntKeys.op(), kw: a.EntWidth},
 	}
 	if len(o.In) == 2 {
 		sel := c.producer(o.In[1])

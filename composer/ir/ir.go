@@ -214,21 +214,137 @@ const (
 	nKind
 )
 
-// kindName has one name per Kind, in enum order. A name missing from the
-// middle would shift every later name, so TestKindNamesLineUp checks the
-// alignment and not just the length.
-var kindName = [nKind]string{
-	"invalid", "const", "param", "tid", "ctaid", "ntid",
-	"add", "sub", "mul", "div", "rem", "shl", "shr", "and", "xor", "min", "max", "exp", "sqrt",
-	"cvt.f32", "cvt.f16h", "packf16", "cvt.i32", "bitcast", "load", "store", "dot4", "fma", "lt",
-	"select", "loop", "endloop", "phi", "shuffle.xor", "shared", "barrier", "mma", "mma.get",
-	"tile.load", "tile.splat", "tile.mma", "tile.store", "sub.f16x2", "fma.f16x2",
-	"loadv", "loadv.get", "storev", "funnel",
-	"subgroup.reduce", "subgroup.broadcast", "shuffle", "laneid", "subgroup.size", "prefetch",
-	"grid.barrier", "dep.task", "dep.epoch", "dep.wait", "dep.signal", "dep.exit", "or", "tile.scale", "pack.halves",
+func (k Kind) String() string {
+	switch k {
+	case OpInvalid:
+		return "invalid"
+	case OpConst:
+		return "const"
+	case OpParam:
+		return "param"
+	case OpTID:
+		return "tid"
+	case OpCTAID:
+		return "ctaid"
+	case OpNTID:
+		return "ntid"
+	case OpAdd:
+		return "add"
+	case OpSub:
+		return "sub"
+	case OpMul:
+		return "mul"
+	case OpDiv:
+		return "div"
+	case OpRem:
+		return "rem"
+	case OpShl:
+		return "shl"
+	case OpShr:
+		return "shr"
+	case OpAnd:
+		return "and"
+	case OpXor:
+		return "xor"
+	case OpMin:
+		return "min"
+	case OpMax:
+		return "max"
+	case OpExp:
+		return "exp"
+	case OpSqrt:
+		return "sqrt"
+	case OpCvtF32:
+		return "cvt.f32"
+	case OpCvtF16H:
+		return "cvt.f16h"
+	case OpPackF16:
+		return "packf16"
+	case OpCvtI32:
+		return "cvt.i32"
+	case OpBitcast:
+		return "bitcast"
+	case OpLoad:
+		return "load"
+	case OpStore:
+		return "store"
+	case OpDot4:
+		return "dot4"
+	case OpFma:
+		return "fma"
+	case OpLt:
+		return "lt"
+	case OpSelect:
+		return "select"
+	case OpLoop:
+		return "loop"
+	case OpEndLoop:
+		return "endloop"
+	case OpPhi:
+		return "phi"
+	case OpShuffleXor:
+		return "shuffle.xor"
+	case OpShared:
+		return "shared"
+	case OpBarrier:
+		return "barrier"
+	case OpMMA:
+		return "mma"
+	case OpMMAGet:
+		return "mma.get"
+	case OpTileLoad:
+		return "tile.load"
+	case OpTileSplat:
+		return "tile.splat"
+	case OpTileMMA:
+		return "tile.mma"
+	case OpTileStore:
+		return "tile.store"
+	case OpSubF16x2:
+		return "sub.f16x2"
+	case OpFmaF16x2:
+		return "fma.f16x2"
+	case OpLoadV:
+		return "loadv"
+	case OpLoadVGet:
+		return "loadv.get"
+	case OpStoreV:
+		return "storev"
+	case OpFunnel:
+		return "funnel"
+	case OpSubgroupReduce:
+		return "subgroup.reduce"
+	case OpSubgroupBroadcast:
+		return "subgroup.broadcast"
+	case OpShuffle:
+		return "shuffle"
+	case OpLaneID:
+		return "laneid"
+	case OpSubgroupSize:
+		return "subgroup.size"
+	case OpPrefetch:
+		return "prefetch"
+	case OpGridBarrier:
+		return "grid.barrier"
+	case OpDepTask:
+		return "dep.task"
+	case OpDepEpoch:
+		return "dep.epoch"
+	case OpDepWait:
+		return "dep.wait"
+	case OpDepSignal:
+		return "dep.signal"
+	case OpDepExit:
+		return "dep.exit"
+	case OpOr:
+		return "or"
+	case OpTileScale:
+		return "tile.scale"
+	case OpPackHalves:
+		return "pack.halves"
+	}
+	return ""
 }
-
-func (k Kind) String() string { return kindName[k] }
 
 // Op is one instruction.
 type Op struct {
@@ -861,12 +977,6 @@ const (
 	MMAF16
 )
 
-var mmaShapes = []MMAShape{
-	{16, 8, 16, MMAS8}, {16, 8, 32, MMAS8},
-	{16, 8, 8, MMAF16}, {16, 8, 16, MMAF16},
-	MMAVolta(), MMAS8Turing(),
-}
-
 // MMAS8Turing is m8n8k16 int8 -> int32, the integer matrix instruction sm_75
 // has (the m16n8 integer shapes are sm_80's). Lane (g, q) = (lane/4, lane%4)
 // holds A's row g at k 4q..4q+3, B's column g at the same k, and D's row g at
@@ -913,10 +1023,11 @@ func (s MMAShape) Elem() Type {
 
 // Valid reports whether the hardware has this tile.
 func (s MMAShape) Valid() bool {
-	for _, x := range mmaShapes {
-		if x == s {
-			return true
-		}
+	switch s {
+	case MMAShape{16, 8, 16, MMAS8}, MMAShape{16, 8, 32, MMAS8},
+		MMAShape{16, 8, 8, MMAF16}, MMAShape{16, 8, 16, MMAF16},
+		MMAVolta(), MMAS8Turing():
+		return true
 	}
 	return false
 }

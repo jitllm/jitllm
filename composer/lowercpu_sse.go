@@ -14,7 +14,7 @@ import (
 
 // sseSave is where an operand's register is kept while it makes a result
 // whose register is the other operand's.
-var sseSave = x86.At(x86.RSP, -144)
+func sseSave() x86.Mem { return x86.At(x86.RSP, -144) }
 
 // sseSlot is where borrowed vector register j is kept.
 func sseSlot(j int) x86.Mem { return x86.At(x86.RSP, int32(-160-16*j)) }
@@ -57,10 +57,10 @@ func (e *x86Lowerer) bin(op func(dst, x, y x86.Reg), commutes bool, dst, x, y x8
 	case commutes:
 		op(dst, y, x)
 	default:
-		e.a.MOVUPSStore(sseSave, x)
+		e.a.MOVUPSStore(sseSave(), x)
 		op(x, x, y)
 		e.a.MOVAPS(dst, x)
-		e.a.MOVUPSLoad(x, sseSave)
+		e.a.MOVUPSLoad(x, sseSave())
 	}
 }
 
@@ -623,10 +623,10 @@ func (e *x86Lowerer) shiftSSE(i int) {
 // 31 leaves what the vector forms do), RCX kept in the shift-count word.
 func (e *x86Lowerer) laneShifts(op Op, r, x, y x86.Reg) {
 	a := e.a
-	words, counts := sseSave, sseSlot(0)
+	words, counts := sseSave(), sseSlot(0)
 	a.MOVUPSStore(words, x)
 	a.MOVUPSStore(counts, y)
-	a.MOVStore(shiftCount, x86.RCX)
+	a.MOVStore(shiftCount(), x86.RCX)
 	for l := range int32(4) {
 		w := x86.At(x86.RSP, words.Disp+4*l)
 		a.MOVLLoad(reloadReg, w)
@@ -642,7 +642,7 @@ func (e *x86Lowerer) laneShifts(op Op, r, x, y x86.Reg) {
 		}
 		a.MOVLStore(w, reloadReg)
 	}
-	a.MOVLoad(x86.RCX, shiftCount)
+	a.MOVLoad(x86.RCX, shiftCount())
 	a.MOVDQULoad(r, words)
 }
 

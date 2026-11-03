@@ -121,7 +121,7 @@ func (p *packed) Code(t *[16]uint8, q int) int {
 			w = append(w, uint32(t[i])|uint32(t[i+1])<<8|uint32(t[i+2])<<16|uint32(t[i+3])<<24)
 		}
 		p.codes = len(*p.in)
-		*p.in = append(*p.in, tableOp(TableCodes, codesID(w), ir.U32))
+		*p.in = append(*p.in, TableCodes.of(codesID(w)))
 		if p.facts.Words == nil {
 			p.facts.Words = map[int][]uint32{}
 		}

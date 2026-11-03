@@ -108,7 +108,11 @@ func (k *Kernel) at() KernelAt {
 
 // ErrRegisterPressure is a kernel Regs refuses for holding more values live
 // at once than the device's registers.
-var ErrRegisterPressure = errors.New("register pressure")
+const ErrRegisterPressure registerError = "register pressure"
+
+type registerError string
+
+func (e registerError) Error() string { return string(e) }
 
 // PressureError is Regs' refusal of a run's kernels for register pressure:
 // the parts they are of (Kernel.Of), and the first kernel's reason.

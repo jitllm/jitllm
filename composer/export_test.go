@@ -2,11 +2,11 @@ package composer
 
 // What the external tests reach of the package's internals.
 
-var (
-	EntryName              = entryName
-	GPULowering   Lowering = gpuLowering{}
-	RopePosOracle          = ropePosOracle
-)
+func EntryName(s string) string { return entryName(s) }
+
+func GPULowering() Lowering { return gpuLowering{} }
+
+func RopePosOracle(p uint32, marks []ropeMark) [4]uint32 { return ropePosOracle(p, marks) }
 
 type RopeMark = ropeMark
 

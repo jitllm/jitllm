@@ -1,6 +1,6 @@
 package x86
 
-var isaMarker = [5]byte{0x0F, 0x1F, 0x80, 'J', 'I'}
+const isaMarker = "\x0f\x1f\x80JI"
 
 const ISAMarkerLen = len(isaMarker) + 2
 
@@ -17,15 +17,15 @@ func (a *Buf) DeclareISA(mask ISA) {
 			"floor every legacy vector instruction here is checked against", mask)
 	}
 	a.declared, a.isa = true, mask
-	for _, b := range isaMarker {
-		a.u8(b)
+	for i := 0; i < len(isaMarker); i++ {
+		a.u8(isaMarker[i])
 	}
 	a.u8(byte(mask))
 	a.u8(byte(mask >> 8))
 }
 
 func KernelISA(code []byte) (need ISA, declared bool) {
-	if len(code) >= ISAMarkerLen && [5]byte(code[:5]) == isaMarker {
+	if len(code) >= ISAMarkerLen && string(code[:5]) == isaMarker {
 		return ISA(code[5]) | ISA(code[6])<<8, true
 	}
 	return ISATierAVX2, false

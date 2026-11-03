@@ -53,7 +53,7 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 			return nil, err
 		}
 	}
-	g := attendGeom{D: a.HeadDim, KW: kw, Keys: c.History.Keys.operand(tableKeys), Values: values, ValuePool: vl}
+	g := attendGeom{D: a.HeadDim, KW: kw, Keys: c.History.Keys.operand(TableKeys.op()), Values: values, ValuePool: vl}
 	if len(o.In) == 2 {
 		// A block selection: the positions each kv group's mask keeps.
 		sel := c.producer(o.In[1])
@@ -191,11 +191,11 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	}
 	scored := rng(2)
 	scored.Extents[0] = R * H * D
-	desc := tableRows
+	desc := TableRows.op()
 	if a.RowWindows || a.Window > 0 && !a.Bidir {
-		desc = tableWindows
+		desc = TableWindows.op()
 	}
-	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, tablePages}, ops[1:]...) }
+	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, TablePages.op()}, ops[1:]...) }
 	// The score map reads the mask as its fourth operand.
 	withMask := func(d Operand) []Operand {
 		if g.Mask != nil {
@@ -220,16 +220,12 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 
 // The running partial of an attention read in passes: a row's heads, each
 // its weighted values, then their maximum, then their sum.
-var (
-	tableRunIn  = tableOp(TableRunIn, 0, ir.Void)
-	tableRunOut = tableOp(TableRunOut, 0, ir.Void)
-)
 
 // foldsAPass reports whether p folds a pass into the running partial: a
 // pass ends at its kernel (Kernel.Folds), and what reads the partial runs
 // once, after the last pass.
 func foldsAPass(p Prim) bool {
-	return p.Out.Kind == tableRunOut.Kind && p.Out.Name == tableRunOut.Name
+	return p.Out.Kind == TableRunOut.op().Kind && p.Out.Name == TableRunOut.op().Name
 }
 
 // foldPasses folds a pass's weighted values, sums and maxima into the
@@ -261,7 +257,7 @@ func foldPasses(o graph.Op, R, H, D int, values, sums, maxes, out Operand) []Pri
 	var ex exprs
 	er, eh := ex.coord(0), ex.coord(1)
 	l := ex.at(0, runs, er, eh, ex.u(uint32(D+1)))
-	in := []Operand{tableRunOut}
+	in := []Operand{TableRunOut.op()}
 	if len(o.Weight) == 1 {
 		m := ex.at(0, runs, er, eh, ex.u(uint32(D)))
 		l = ex.op(OpAdd, F, l, ex.un(OpExp, F, ex.op(OpSub, F, ex.at(1, []int{H}, eh), m)))
@@ -269,7 +265,7 @@ func foldPasses(o graph.Op, R, H, D int, values, sums, maxes, out Operand) []Pri
 	}
 	ex.op(OpMul, F, ex.at(0, runs, er, eh, ex.coord(2)), ex.op(OpDiv, F, ex.f(1), ex.op(OpMax, F, l, ex.f(1e-30))))
 	return []Prim{
-		{Kind: PrimMap, Shape: runs, In: []Operand{values, sums, maxes, tableRunIn}, Out: tableRunOut, Expr: fx.e},
+		{Kind: PrimMap, Shape: runs, In: []Operand{values, sums, maxes, TableRunIn.op()}, Out: TableRunOut.op(), Expr: fx.e},
 		{Kind: PrimMap, Shape: dims, In: in, Out: out, Expr: ex.e},
 	}
 }

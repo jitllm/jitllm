@@ -85,6 +85,7 @@ type cudaDev struct {
 	// maxRegs is Opts.CUDAMaxRegs, fixed at open; res is what each compiled
 	// kernel cost (ResourceReporter).
 	maxRegs int
+	lower   []ptx.Option
 	res     resLedger
 	// reqFree is Session's free list; see Session.
 	reqMu   sync.Mutex
@@ -244,7 +245,8 @@ func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 	if opts.CUDATarget != "" {
 		o.d.Target = opts.CUDATarget
 	}
-	c := &cudaDev{ctr: ctr, d: o.d, drv: o.d.Driver(), reqs: reqs, owner: o.tid, posted: opts.CUDAPosted, maxRegs: opts.CUDAMaxRegs}
+	c := &cudaDev{ctr: ctr, d: o.d, drv: o.d.Driver(), reqs: reqs, owner: o.tid, posted: opts.CUDAPosted,
+		maxRegs: opts.CUDAMaxRegs, lower: ptxOptions(opts)}
 	c.writes.New, c.copies.New, c.copyLists.New = newCudaWrite, newCudaCopy, newCudaCopyList
 	return c, nil
 }
@@ -957,9 +959,20 @@ func (c *cudaDev) GuaranteedLanes(w int) (bool, string) {
 		"those; %d cannot be asked for", ir.SubgroupLanes, w)
 }
 
+func ptxOptions(o Opts) []ptx.Option {
+	var out []ptx.Option
+	if o.BreakGridBarrier {
+		out = append(out, ptx.BrokenGridBarrier())
+	}
+	if o.BreakDepWait {
+		out = append(out, ptx.BrokenDepWait())
+	}
+	return out
+}
+
 func (c *cudaDev) Compile(k *ir.Kernel) (Kernel, error) {
 	c.ctr.compiled(k.Name)
-	src, err := ptx.Lower(k, c.d.Target)
+	src, err := ptx.Lower(k, c.d.Target, c.lower...)
 	if err != nil {
 		return nil, err
 	}
