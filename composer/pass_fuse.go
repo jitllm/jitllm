@@ -242,10 +242,10 @@ func (k *Kernel) adds() bool {
 }
 
 // conflicts reports whether c may not move before p: p writes what c reads,
-// or reads or writes what c writes.
+// or reads or writes what c writes, each by the buffer it is bound to.
 func conflicts(p, c *Kernel) bool {
 	for _, b := range c.Bufs {
-		if p.writes(b.Operand) {
+		if p.writesStorage(b.Operand) {
 			return true
 		}
 	}
@@ -254,7 +254,7 @@ func conflicts(p, c *Kernel) bool {
 			continue
 		}
 		o := c.Bufs[s.Buf].Operand
-		if p.reads(o) || p.writes(o) {
+		if p.readsStorage(o) || p.writesStorage(o) {
 			return true
 		}
 	}

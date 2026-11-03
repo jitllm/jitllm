@@ -56,6 +56,9 @@ type recRun struct {
 	tables map[string][]uint32
 	wts    map[jlm.Role][]uint32
 	bufs   map[string]backend.Buf
+	// share binds a table to another's buffer, as the shared pool binds
+	// rec.state.out to rec.state.
+	share map[string]string
 }
 
 func (r *recRun) close() {
@@ -100,6 +103,8 @@ func (r *recRun) launch() error {
 			switch {
 			case o.Kind == composer.OperandValue:
 				key, w = fmt.Sprintf("v%d", o.Value), r.vals[o.Value]
+			case o.Kind == composer.OperandTable && r.share[o.Name] != "":
+				key, w = "t"+r.share[o.Name], r.tables[r.share[o.Name]]
 			case o.Kind == composer.OperandTable && r.tables[o.Name] != nil:
 				key, w = "t"+o.Name, r.tables[o.Name]
 			case o.Kind == composer.OperandWeight:
@@ -150,7 +155,12 @@ func (r *recRun) launch() error {
 }
 
 func formRec(d backend.Device, dev composer.Device, g *graph.Graph, rows int, formats map[jlm.Role]jlm.Type) (*recRun, error) {
-	_, codes, err := composer.Default().Form(composer.Request{Graph: g, Formats: formats, Step: composer.Step{Rows: rows, Page: 64, Keys: 1}, Device: dev})
+	return formRecWith(composer.Default(), d, dev, g, rows, formats)
+}
+
+// formRecWith is formRec through registry reg.
+func formRecWith(reg *composer.Registry, d backend.Device, dev composer.Device, g *graph.Graph, rows int, formats map[jlm.Role]jlm.Type) (*recRun, error) {
+	_, codes, err := reg.Form(composer.Request{Graph: g, Formats: formats, Step: composer.Step{Rows: rows, Page: 64, Keys: 1}, Device: dev})
 	if err != nil {
 		return nil, err
 	}

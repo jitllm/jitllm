@@ -73,10 +73,11 @@ func (k *Kernel) renamed(from, to Operand) *Kernel {
 	return m
 }
 
-// writesWhatReads reports whether w writes anything r reads or writes.
+// writesWhatReads reports whether w writes the buffer of anything r reads
+// or writes.
 func writesWhatReads(w, r *Kernel) bool {
 	for _, b := range r.Bufs {
-		if w.writes(b.Operand) {
+		if w.writesStorage(b.Operand) {
 			return true
 		}
 	}
