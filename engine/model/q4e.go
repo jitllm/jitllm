@@ -149,11 +149,11 @@ type q4eLayer struct {
 	head q4eHC
 	// The n-gram block: the key and value projections of the gathered rows,
 	// the three grouped norms and the convolution (HCMult*n_embd channels of
-	// NGramConv taps, tap-major once loaded: tap t's channels at t*hcd).
+	// NGramConv taps, as the file stores them: a channel's taps contiguous).
 	ngKey, ngVal                    tensor
 	ngNormK, ngNormQ, ngNormC, ngCv []float32
-	// ngCvTaps is ngCv as the file stores it, a channel's taps contiguous:
-	// the composer's OpStateConv reads it so.
+	// ngCvTaps is ngCv as a tensor of a row a channel, which the composer's
+	// OpStateConv binds.
 	ngCvTaps tensor
 }
 

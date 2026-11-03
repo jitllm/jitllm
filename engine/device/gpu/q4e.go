@@ -32,11 +32,12 @@ import (
 type q4eBlock struct {
 	// The two hyper-connections' grouped norms, HCMult rows of n_embd.
 	normA, normF backend.Buf
-	// The n-gram block's three grouped norms and its convolution, tap-major
-	// (nil on every other block).
+	// The n-gram block's three grouped norms and its convolution, a
+	// channel's taps contiguous as the file stores them (nil on every other
+	// block).
 	ngK, ngQ, ngC, ngConv backend.Buf
-	// ngTaps is ngConv as the composer binds it: a channel's taps
-	// contiguous, as the file stores them (the buffer is ngConv's).
+	// ngTaps is ngConv as the composer binds it, a row a channel (the
+	// buffer is ngConv's).
 	ngTaps resident
 	ngram  bool
 }
