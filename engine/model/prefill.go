@@ -504,35 +504,14 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			}
 			return s.fillRows(src, base, n, s.bx[:n*c.NEmbd], bple, at)
 		}
-		// AltUp's other streams, from each row's embedding (altup.go), and
-		// DeepSeek V4's copies of it (ds4.go).
-		if c.PredStreams != 0 {
+		// The streams past the first, from each row's embedding.
+		if c.streamHead() {
 			fill := refill
 			refill = func() error {
 				if err := fill(); err != nil {
 					return err
 				}
-				return s.altExpand(s.bx[:n*c.ResidW()], n)
-			}
-		}
-		if c.ResAttn() {
-			fill := refill
-			refill = func() error {
-				if err := fill(); err != nil {
-					return err
-				}
-				s.k3Expand(s.bx[:n*c.ResidW()], n)
-				return nil
-			}
-		}
-		if c.Q4E() {
-			fill := refill
-			refill = func() error {
-				if err := fill(); err != nil {
-					return err
-				}
-				s.q4eExpandAt(s.bx[:n*c.ResidW()], n, base)
-				return nil
+				return s.expandStreams(s.bx[:n*c.ResidW()], n, base)
 			}
 		}
 		if err := refill(); err != nil {
@@ -697,26 +676,14 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		// It is written for a batch row too: nothing decodes from it there, but
 		// the output projection below reads s.x.
 		copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])
-		// AltUp's head reads every stream of the row: collapsed in place, the
-		// chunk's rows' stream 0 is their head input, and the last row's is
-		// s.x's (altup.go).
-		if c.PredStreams != 0 && base+n == total {
-			if err := s.altCollapse(s.bx[:n*c.ResidW()], n); err != nil {
-				return nil, err
-			}
-			copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])
-		}
-		if c.ResAttn() && base+n == total {
-			if err := s.k3Collapse(s.bx[:n*c.ResidW()], n); err != nil {
-				return nil, err
-			}
-			copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])
-		}
-		if c.Q4E() && base+n == total {
+		// A head over several streams reads their collapse: collapsed in
+		// place, the chunk's rows' stream 0 is their head input, and the last
+		// row's is s.x's.
+		if c.streamHead() && base+n == total {
 			if s.rows != nil {
 				s.rows.resBase = base
 			}
-			if err := s.q4eCollapse(s.bx[:n*c.ResidW()], n); err != nil {
+			if err := s.collapseStreams(s.bx[:n*c.ResidW()], n); err != nil {
 				return nil, err
 			}
 			copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])

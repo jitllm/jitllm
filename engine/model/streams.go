@@ -1,6 +1,9 @@
 package model
 
 import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -49,27 +52,52 @@ func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
 	return p
 }
 
-// expandStreams fills every stream of n rows of x from its embedding in
-// stream 0.
-func (s *Instance) expandStreams(x []float32, n int) error {
-	if s.m.Cfg.ResAttn() {
-		s.k3Expand(x, n)
-		return nil
+// allocStreams gives the decode token's residual every stream the model
+// carries (xa), x its stream 0.
+func (s *Instance) allocStreams() {
+	c := s.m.Cfg
+	if c.Streams() < 2 {
+		return
 	}
-	if s.m.Cfg.Q4E() {
-		s.q4eExpand(x, n)
-		return nil
-	}
-	return s.altExpand(x, n)
+	s.xa = make([]float32, c.ResidW())
+	s.x = s.xa[:c.NEmbd]
 }
 
-// collapseStreams writes the head's input into stream 0 of n rows of x.
-func (s *Instance) collapseStreams(x []float32, n int) error {
-	if s.m.Cfg.ResAttn() {
-		return s.k3Collapse(x, n)
+// expandStreams fills the streams past the first of n rows of x, the
+// chunk's first row row base of the call, through the composed expansion of
+// the embedding in stream 0: its copies or its predictions. A bank of
+// checkpoints states none, each block writing its checkpoint before any
+// block reads it; a prediction block's draft rows arrive with every stream
+// (q4In).
+func (s *Instance) expandStreams(x []float32, n, base int) error {
+	if s.q4In != nil {
+		s.q4eDraftStreams(x, n, base)
+		return nil
 	}
-	if s.m.Cfg.Q4E() {
+	if !s.m.expandsStreams() {
+		return nil
+	}
+	if why := s.cpuExpand(x, n); why != composer.DeclineServes {
+		return s.streamsDeclined("expansion", why)
+	}
+	return nil
+}
+
+// collapseStreams writes the head's input into stream 0 of n rows of x
+// through the composed collapse.
+func (s *Instance) collapseStreams(x []float32, n int) error {
+	if s.c.Q4E() {
 		return s.q4eCollapse(x, n)
 	}
-	return s.altCollapse(x, n)
+	if why := s.cpuCollapse(x, n); why != composer.DeclineServes {
+		return s.streamsDeclined("collapse", why)
+	}
+	return nil
+}
+
+// streamsDeclined is the error of a streams' expansion or collapse no
+// composed form serves.
+func (s *Instance) streamsDeclined(what string, why composer.Decline) error {
+	return fmt.Errorf("model: the streams' %s has no composed form on this instance (%s): %v %v",
+		what, composer.DeclineName(int(why)), s.cpu.formErr, s.m.frontGraphs().streamsErr)
 }

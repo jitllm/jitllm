@@ -82,17 +82,13 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		return nil, s.embedDeclined(why)
 	}
 
-	if c.PredStreams != 0 {
-		if err := s.altExpand(s.bx[:n*c.ResidW()], n); err != nil {
-			return nil, err
-		}
-	}
-	if c.ResAttn() {
-		s.k3Expand(s.bx[:n*c.ResidW()], n)
-	}
 	if c.Q4E() {
 		s.growQ4E(n)
-		s.q4eExpand(s.bx[:n*c.ResidW()], n)
+	}
+	if c.streamHead() {
+		if err := s.expandStreams(s.bx[:n*c.ResidW()], n, 0); err != nil {
+			return nil, err
+		}
 	}
 	s.tock(opResid, t0)
 
@@ -174,18 +170,8 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		}
 		return nil, s.cpuRefused(li, why)
 	}
-	if c.PredStreams != 0 && nlogit > 0 {
-		if err := s.altCollapse(s.bx[:n*c.ResidW()], n); err != nil {
-			return nil, err
-		}
-	}
-	if c.ResAttn() && nlogit > 0 {
-		if err := s.k3Collapse(s.bx[:n*c.ResidW()], n); err != nil {
-			return nil, err
-		}
-	}
-	if c.Q4E() && nlogit > 0 {
-		if err := s.q4eCollapse(s.bx[:n*c.ResidW()], n); err != nil {
+	if c.streamHead() && nlogit > 0 {
+		if err := s.collapseStreams(s.bx[:n*c.ResidW()], n); err != nil {
 			return nil, err
 		}
 	}

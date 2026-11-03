@@ -598,10 +598,9 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	if why := s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos); why != composer.DeclineServes {
 		return nil, s0.embedDeclined(why)
 	}
-	// AltUp's other streams, from each row's embedding (altup.go), or
-	// DeepSeek V4's copies of it.
+	// The streams past the first, from each row's embedding.
 	if c.streamHead() {
-		if err := s0.expandStreams(x, rows); err != nil {
+		if err := s0.expandStreams(x, rows, 0); err != nil {
 			return nil, err
 		}
 	}
