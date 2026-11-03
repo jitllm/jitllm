@@ -1,9 +1,6 @@
 package cpu
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 // errNoBaseline is the sentinel every below-floor answer wraps, and what the
 // forceNoBaseline test instrument returns as it stands. It names the floor;
@@ -19,26 +16,14 @@ const errNoBaseline jitError = "jit: this CPU cannot run the engine (the amd64 f
 // with VCVTPH2PS (F16C). tierOf answers TierAVX2 only when all three are
 // usable.
 //
-// SSE tier: the legacy-encoded 128-bit kernels (sse.go), for a host with SSE2,
-// SSE3, SSSE3 and SSE4.1 and no usable AVX2. It passes when the SSE table has
-// a kernel for every op (SSEPending is empty) and is refused naming each op
-// that has none.
+// SSE tier: the legacy-encoded 128-bit code the composer lowers to for a
+// host with SSE2, SSE3, SSSE3 and SSE4.1 and no usable AVX2.
 //
 // Below that the host is refused naming the SSE-floor extensions it lacks.
-func baseline() error { return baselineWith(EmittersFor(TierSSE)) }
-
-// baselineWith is baseline with em as the SSE tier's table.
-func baselineWith(sse *Emitters) error {
+func baseline() error {
 	f := CPU()
 	switch tierOf(f) {
-	case TierAVX2:
-		return nil
-	case TierSSE:
-		if p := ssePendingIn(sse); len(p) > 0 {
-			return fmt.Errorf("%w: this host runs the SSE tier (no usable %s), and that tier "+
-				"has no kernel yet for %s: %w", errNoBaseline, missingNames(f, ISATierAVX2),
-				strings.Join(p, ", "), ErrNoSSEKernel)
-		}
+	case TierAVX2, TierSSE:
 		return nil
 	}
 	return fmt.Errorf("%w: missing %s", errNoBaseline, missingNames(f, ISATierSSE))
