@@ -16,7 +16,7 @@ func TestLoaderNamesCoverEveryPlatform(t *testing.T) {
 		{"macOS", ".dylib"},
 	} {
 		found := ""
-		for _, n := range loaderNames {
+		for _, n := range loaderNames() {
 			if strings.Contains(n, c.suffix) {
 				found = n
 				break
@@ -26,7 +26,7 @@ func TestLoaderNamesCoverEveryPlatform(t *testing.T) {
 			t.Errorf("no %s candidate (%q) in %v -- Vulkan cannot be opened on that "+
 				"platform, and it fails as an ABSENCE rather than an error: the tier "+
 				"reports no device and a working GPU looks like no GPU",
-				c.os, c.suffix, loaderNames)
+				c.os, c.suffix, loaderNames())
 			continue
 		}
 		t.Logf("%-7s -> %s", c.os, found)
@@ -34,7 +34,7 @@ func TestLoaderNamesCoverEveryPlatform(t *testing.T) {
 	// The loader must be preferred over the ICD, which is an order property and
 	// not a membership one -- ffi.Open takes the first name that loads.
 	li, mi := -1, -1
-	for i, n := range loaderNames {
+	for i, n := range loaderNames() {
 		switch {
 		case strings.Contains(n, "libvulkan.1.dylib"):
 			li = i
@@ -44,6 +44,6 @@ func TestLoaderNamesCoverEveryPlatform(t *testing.T) {
 	}
 	if li >= 0 && mi >= 0 && li > mi {
 		t.Errorf("libMoltenVK is tried before the macOS loader in %v -- opening the "+
-			"ICD directly skips layer discovery and any second ICD", loaderNames)
+			"ICD directly skips layer discovery and any second ICD", loaderNames())
 	}
 }

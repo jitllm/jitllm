@@ -61,29 +61,29 @@ func (c *Ctx) Alloc(n int) (*Buf, error) {
 func (c *Ctx) alloc(n int, usage, prefer uint32) (*Buf, error) {
 	b := &Buf{c: c, n: n}
 	bci := bufferCI{sType: stBufferCI, size: uint64(n), usage: usage}
-	if err := check(vkCreateBuffer(c.dev, up(&bci), nil, up(&b.buf)), "vkCreateBuffer"); err != nil {
+	if err := check(c.l.vkCreateBuffer(c.dev, up(&bci), nil, up(&b.buf)), "vkCreateBuffer"); err != nil {
 		return nil, err
 	}
 	var req memReq
-	vkGetBufferMemoryRequirements(c.dev, b.buf, up(&req))
+	c.l.vkGetBufferMemoryRequirements(c.dev, b.buf, up(&req))
 
 	idx, mappable, err := c.memType(req.typeBits, prefer)
 	if err != nil {
-		vkDestroyBuffer(c.dev, b.buf, nil)
+		c.l.vkDestroyBuffer(c.dev, b.buf, nil)
 		return nil, err
 	}
 	ma := memAlloc{sType: stMemAllocInfo, size: req.size, typeIdx: idx}
-	if err := check(vkAllocateMemory(c.dev, up(&ma), nil, up(&b.mem)), "vkAllocateMemory"); err != nil {
-		vkDestroyBuffer(c.dev, b.buf, nil)
+	if err := check(c.l.vkAllocateMemory(c.dev, up(&ma), nil, up(&b.mem)), "vkAllocateMemory"); err != nil {
+		c.l.vkDestroyBuffer(c.dev, b.buf, nil)
 		return nil, err
 	}
-	if err := check(vkBindBufferMemory(c.dev, b.buf, b.mem, 0), "vkBindBufferMemory"); err != nil {
+	if err := check(c.l.vkBindBufferMemory(c.dev, b.buf, b.mem, 0), "vkBindBufferMemory"); err != nil {
 		b.Free()
 		return nil, err
 	}
 	if mappable {
 		var p unsafe.Pointer
-		if err := check(vkMapMemory(c.dev, b.mem, 0, uint64(n), 0, up(&p)), "vkMapMemory"); err != nil {
+		if err := check(c.l.vkMapMemory(c.dev, b.mem, 0, uint64(n), 0, up(&p)), "vkMapMemory"); err != nil {
 			b.Free()
 			return nil, err
 		}
@@ -227,17 +227,17 @@ func (r *rec) staging(n int) (*Buf, error) {
 // would discard everything encoded so far and silently drop everything encoded
 // after. See Ctx.one.
 func (r *rec) copyBuf(src, dst Buffer, srcOff, dstOff uint64, n int) error {
-	if err := check(vkResetCommandBuffer(r.one, 0), "vkResetCommandBuffer"); err != nil {
+	if err := check(r.c.l.vkResetCommandBuffer(r.one, 0), "vkResetCommandBuffer"); err != nil {
 		return err
 	}
 	x := &r.scr
 	x.oneBI = cmdBeginI{sType: stCmdBufBegin, flags: cmdBufOneTime}
-	if err := check(vkBeginCommandBuffer(r.one, up(&x.oneBI)), "vkBeginCommandBuffer"); err != nil {
+	if err := check(r.c.l.vkBeginCommandBuffer(r.one, up(&x.oneBI)), "vkBeginCommandBuffer"); err != nil {
 		return err
 	}
 	x.region = bufCopy{srcOff: srcOff, dstOff: dstOff, size: uint64(n)}
-	vkCmdCopyBuffer(r.one, src, dst, 1, up(&x.region))
-	if err := check(vkEndCommandBuffer(r.one), "vkEndCommandBuffer"); err != nil {
+	r.c.l.vkCmdCopyBuffer(r.one, src, dst, 1, up(&x.region))
+	if err := check(r.c.l.vkEndCommandBuffer(r.one), "vkEndCommandBuffer"); err != nil {
 		return err
 	}
 	return r.submitOne()
@@ -264,11 +264,11 @@ func (b *Buf) Free() {
 		return
 	}
 	if b.mem != 0 {
-		vkFreeMemory(b.c.dev, b.mem, nil)
+		b.c.l.vkFreeMemory(b.c.dev, b.mem, nil)
 		b.mem = 0
 	}
 	if b.buf != 0 {
-		vkDestroyBuffer(b.c.dev, b.buf, nil)
+		b.c.l.vkDestroyBuffer(b.c.dev, b.buf, nil)
 		b.buf = 0
 	}
 	b.host = nil
@@ -331,7 +331,7 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 	}
 	k := &Kernel{c: c, nbuf: nbuf}
 	sm := shaderCI{sType: stShaderModuleCI, size: uint64(len(spv)), pCode: uintptr(up(&spv[0]))}
-	err := check(vkCreateShaderModule(c.dev, up(&sm), nil, up(&k.mod)), "vkCreateShaderModule")
+	err := check(c.l.vkCreateShaderModule(c.dev, up(&sm), nil, up(&k.mod)), "vkCreateShaderModule")
 	// spv is reached only through a uintptr, which keeps nothing alive.
 	runtime.KeepAlive(spv)
 	if err != nil {
@@ -343,7 +343,7 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 		binds[i] = descBinding{binding: uint32(i), kind: descStorageBuffer, count: 1, stages: stageCompute}
 	}
 	dl := descLayoutCI{sType: stDescLayoutCI, nBind: uint32(nbuf), pBind: uintptr(up(&binds[0]))}
-	err = check(vkCreateDescriptorSetLayout(c.dev, up(&dl), nil, up(&k.layout)), "vkCreateDescriptorSetLayout")
+	err = check(c.l.vkCreateDescriptorSetLayout(c.dev, up(&dl), nil, up(&k.layout)), "vkCreateDescriptorSetLayout")
 	// binds is reached only through a uintptr: the collector may take it
 	// while the driver reads it.
 	runtime.KeepAlive(binds)
@@ -359,7 +359,7 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 	k.pr = pushRange{stages: stageCompute, size: groupBaseBytes}
 	pl := pipeLayoutCI{sType: stPipeLayoutCI, nSets: 1, pSets: uintptr(up(&k.layout)),
 		nPush: 1, pPush: uintptr(up(&k.pr))}
-	err = check(vkCreatePipelineLayout(c.dev, up(&pl), nil, up(&k.plyt)), "vkCreatePipelineLayout")
+	err = check(c.l.vkCreatePipelineLayout(c.dev, up(&pl), nil, up(&k.plyt)), "vkCreatePipelineLayout")
 	if err != nil {
 		k.Close()
 		return nil, err
@@ -374,7 +374,7 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 		cp.stage.pNext = uintptr(up(&k.req))
 		cp.stage.flags |= pipeStageRequireFullSubgroups
 	}
-	err = check(vkCreateComputePipelines(c.dev, 0, 1, up(&cp), nil, up(&k.pipe)), "vkCreateComputePipelines")
+	err = check(c.l.vkCreateComputePipelines(c.dev, 0, 1, up(&cp), nil, up(&k.pipe)), "vkCreateComputePipelines")
 	if err != nil {
 		k.Close()
 		return nil, err
@@ -382,12 +382,12 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 
 	k.ps = poolSize{kind: descStorageBuffer, count: uint32(nbuf)}
 	dp := descPoolCI{sType: stDescPoolCI, maxSets: 1, nSizes: 1, pSizes: uintptr(up(&k.ps))}
-	if err := check(vkCreateDescriptorPool(c.dev, up(&dp), nil, up(&k.pool)), "vkCreateDescriptorPool"); err != nil {
+	if err := check(c.l.vkCreateDescriptorPool(c.dev, up(&dp), nil, up(&k.pool)), "vkCreateDescriptorPool"); err != nil {
 		k.Close()
 		return nil, err
 	}
 	da := descSetAI{sType: stDescSetAlloc, pool: uint64(k.pool), n: 1, pSets: uintptr(up(&k.layout))}
-	if err := check(vkAllocateDescriptorSets(c.dev, up(&da), up(&k.set)), "vkAllocateDescriptorSets"); err != nil {
+	if err := check(c.l.vkAllocateDescriptorSets(c.dev, up(&da), up(&k.set)), "vkAllocateDescriptorSets"); err != nil {
 		k.Close()
 		return nil, err
 	}
@@ -412,7 +412,7 @@ func (k *Kernel) Bind(bufs ...*Buf) error {
 		writes[i] = writeDesc{sType: stWriteDescSet, dstSet: uint64(k.set), dstBind: uint32(i),
 			count: 1, kind: descStorageBuffer, pBuffer: uintptr(up(&infos[i]))}
 	}
-	vkUpdateDescriptorSets(k.c.dev, uint32(len(writes)), up(&writes[0]), 0, nil)
+	k.c.l.vkUpdateDescriptorSets(k.c.dev, uint32(len(writes)), up(&writes[0]), 0, nil)
 	// infos is reached only through writeDesc.pBuffer, a uintptr, which keeps
 	// nothing alive; the collector could take it before the driver reads it.
 	runtime.KeepAlive(infos)
@@ -463,8 +463,8 @@ func (c *Ctx) dispatch(cmd CmdBuffer, b *uint32, k *Kernel, groups int) {
 	step := uint64(c.maxGroups)
 	for base := uint64(0); base < uint64(groups); base += step {
 		*b = uint32(base)
-		vkCmdPushConstants(cmd, k.plyt, stageCompute, 0, groupBaseBytes, up(b))
-		vkCmdDispatch(cmd, uint32(min(step, uint64(groups)-base)), 1, 1)
+		c.l.vkCmdPushConstants(cmd, k.plyt, stageCompute, 0, groupBaseBytes, up(b))
+		c.l.vkCmdDispatch(cmd, uint32(min(step, uint64(groups)-base)), 1, 1)
 		c.dispatches.Add(1)
 	}
 }
@@ -483,18 +483,18 @@ func (k *Kernel) Launch(groups int) error {
 	}
 	// On c.one, not c.cmd: this is a one-shot that resets, records, ends and
 	// waits, and a Session may be recording a batch into c.cmd. See Ctx.one.
-	if err := check(vkResetCommandBuffer(c.one, 0), "vkResetCommandBuffer"); err != nil {
+	if err := check(k.c.l.vkResetCommandBuffer(c.one, 0), "vkResetCommandBuffer"); err != nil {
 		return err
 	}
 	bi := cmdBeginI{sType: stCmdBufBegin, flags: cmdBufOneTime}
-	if err := check(vkBeginCommandBuffer(c.one, up(&bi)), "vkBeginCommandBuffer"); err != nil {
+	if err := check(k.c.l.vkBeginCommandBuffer(c.one, up(&bi)), "vkBeginCommandBuffer"); err != nil {
 		return err
 	}
-	vkCmdBindPipeline(c.one, pipeBindCompute, k.pipe)
+	k.c.l.vkCmdBindPipeline(c.one, pipeBindCompute, k.pipe)
 	set := k.set
-	vkCmdBindDescriptorSets(c.one, pipeBindCompute, k.plyt, 0, 1, up(&set), 0, nil)
+	k.c.l.vkCmdBindDescriptorSets(c.one, pipeBindCompute, k.plyt, 0, 1, up(&set), 0, nil)
 	c.dispatch(c.one, &c.scr.oneBase, k, groups)
-	if err := check(vkEndCommandBuffer(c.one), "vkEndCommandBuffer"); err != nil {
+	if err := check(k.c.l.vkEndCommandBuffer(c.one), "vkEndCommandBuffer"); err != nil {
 		return err
 	}
 	return c.submitOne()
@@ -506,23 +506,23 @@ func (k *Kernel) Close() {
 	k.c.kerns.Unlock()
 	d := k.c.dev
 	if k.pool != 0 {
-		vkDestroyDescriptorPool(d, k.pool, nil)
+		k.c.l.vkDestroyDescriptorPool(d, k.pool, nil)
 		k.pool = 0
 	}
 	if k.pipe != 0 {
-		vkDestroyPipeline(d, k.pipe, nil)
+		k.c.l.vkDestroyPipeline(d, k.pipe, nil)
 		k.pipe = 0
 	}
 	if k.plyt != 0 {
-		vkDestroyPipelineLayout(d, k.plyt, nil)
+		k.c.l.vkDestroyPipelineLayout(d, k.plyt, nil)
 		k.plyt = 0
 	}
 	if k.layout != 0 {
-		vkDestroyDescriptorSetLayout(d, k.layout, nil)
+		k.c.l.vkDestroyDescriptorSetLayout(d, k.layout, nil)
 		k.layout = 0
 	}
 	if k.mod != 0 {
-		vkDestroyShaderModule(d, k.mod, nil)
+		k.c.l.vkDestroyShaderModule(d, k.mod, nil)
 		k.mod = 0
 	}
 }
@@ -565,11 +565,11 @@ func (b *Batch) begin() {
 		return
 	}
 	r := b.r
-	if b.err = check(vkResetCommandBuffer(r.cmd, 0), "vkResetCommandBuffer"); b.err != nil {
+	if b.err = check(b.r.c.l.vkResetCommandBuffer(r.cmd, 0), "vkResetCommandBuffer"); b.err != nil {
 		return
 	}
 	r.scr.bi = cmdBeginI{sType: stCmdBufBegin, flags: cmdBufOneTime}
-	b.err = check(vkBeginCommandBuffer(r.cmd, up(&r.scr.bi)), "vkBeginCommandBuffer")
+	b.err = check(b.r.c.l.vkBeginCommandBuffer(r.cmd, up(&r.scr.bi)), "vkBeginCommandBuffer")
 	b.open = b.err == nil
 	b.n = 0
 }
@@ -612,15 +612,15 @@ func (b *Batch) Encode(k *Kernel, groups int, bufs ...*Buf) error {
 		writes[i] = writeDesc{sType: stWriteDescSet, dstSet: uint64(set), dstBind: uint32(i),
 			count: 1, kind: descStorageBuffer, pBuffer: uintptr(up(&infos[i]))}
 	}
-	vkUpdateDescriptorSets(c.dev, uint32(len(writes)), up(&writes[0]), 0, nil)
+	b.r.c.l.vkUpdateDescriptorSets(c.dev, uint32(len(writes)), up(&writes[0]), 0, nil)
 	// See Kernel.Bind: pBuffer is a uintptr, so `infos` has no live reference
 	// once the loop ends and the collector may take it mid-call.
 	runtime.KeepAlive(infos)
 	runtime.KeepAlive(writes)
 
-	vkCmdBindPipeline(r.cmd, pipeBindCompute, k.pipe)
+	b.r.c.l.vkCmdBindPipeline(r.cmd, pipeBindCompute, k.pipe)
 	x.bindSet = set
-	vkCmdBindDescriptorSets(r.cmd, pipeBindCompute, k.plyt, 0, 1, up(&x.bindSet), 0, nil)
+	b.r.c.l.vkCmdBindDescriptorSets(r.cmd, pipeBindCompute, k.plyt, 0, 1, up(&x.bindSet), 0, nil)
 	c.dispatch(r.cmd, &r.scr.base, k, groups)
 	// Both masks cover read and write: write -> read alone leaves write ->
 	// write and read -> write unordered. Most kernels form a chain, but two
@@ -638,7 +638,7 @@ func (b *Batch) Encode(k *Kernel, groups int, bufs ...*Buf) error {
 	x.mb = memBarrier{sType: stMemBarrier,
 		src: accessShaderRead | accessShaderWrite,
 		dst: accessShaderRead | accessShaderWrite}
-	vkCmdPipelineBarrier(r.cmd, stageComputeShader, stageComputeShader, 0, 1, up(&x.mb), 0, nil, 0, nil)
+	b.r.c.l.vkCmdPipelineBarrier(r.cmd, stageComputeShader, stageComputeShader, 0, 1, up(&x.mb), 0, nil, 0, nil)
 	b.n++
 	return nil
 }
@@ -650,7 +650,7 @@ func (b *Batch) Commit() error {
 	}
 	b.open = false
 	r := b.r
-	if err := check(vkEndCommandBuffer(r.cmd), "vkEndCommandBuffer"); err != nil {
+	if err := check(b.r.c.l.vkEndCommandBuffer(r.cmd), "vkEndCommandBuffer"); err != nil {
 		b.err = err
 		return err
 	}
@@ -664,7 +664,7 @@ func (b *Batch) Commit() error {
 	// The sets are free the moment the submission is done, which submit waits
 	// for.
 	if r.bpool != 0 {
-		check(vkResetDescriptorPool(r.c.dev, r.bpool, 0), "vkResetDescriptorPool")
+		check(b.r.c.l.vkResetDescriptorPool(r.c.dev, r.bpool, 0), "vkResetDescriptorPool")
 	}
 	return nil
 }
@@ -676,14 +676,14 @@ func (r *rec) allocSet(layout DescLayout) (DescSet, error) {
 	if r.bpool == 0 {
 		r.scr.ps = poolSize{kind: descStorageBuffer, count: batchSets * batchBufs}
 		dp := descPoolCI{sType: stDescPoolCI, maxSets: batchSets, nSizes: 1, pSizes: uintptr(up(&r.scr.ps))}
-		if err := check(vkCreateDescriptorPool(c.dev, up(&dp), nil, up(&r.bpool)), "vkCreateDescriptorPool"); err != nil {
+		if err := check(r.c.l.vkCreateDescriptorPool(c.dev, up(&dp), nil, up(&r.bpool)), "vkCreateDescriptorPool"); err != nil {
 			return 0, err
 		}
 	}
 	x := &r.scr
 	x.lay = layout
 	x.da = descSetAI{sType: stDescSetAlloc, pool: uint64(r.bpool), n: 1, pSets: uintptr(up(&x.lay))}
-	if err := check(vkAllocateDescriptorSets(c.dev, up(&x.da), up(&x.set)), "vkAllocateDescriptorSets"); err != nil {
+	if err := check(r.c.l.vkAllocateDescriptorSets(c.dev, up(&x.da), up(&x.set)), "vkAllocateDescriptorSets"); err != nil {
 		return 0, err
 	}
 	return x.set, nil
@@ -727,12 +727,12 @@ func (c *Ctx) Import(p unsafe.Pointer, n int) (*Buf, error) {
 	*emb = extMemBufCI{sType: stExtMemBufferCI, handles: handleTypeHostAlloc}
 	bci := bufferCI{sType: stBufferCI, pNext: uintptr(up(emb)), size: uint64(n),
 		usage: usageStorageBuffer | usageTransferSrc | usageTransferDst}
-	if err := check(vkCreateBuffer(c.dev, up(&bci), nil, up(&b.buf)), "vkCreateBuffer"); err != nil {
+	if err := check(c.l.vkCreateBuffer(c.dev, up(&bci), nil, up(&b.buf)), "vkCreateBuffer"); err != nil {
 		return nil, err
 	}
 	runtime.KeepAlive(emb)
 	var req memReq
-	vkGetBufferMemoryRequirements(c.dev, b.buf, up(&req))
+	c.l.vkGetBufferMemoryRequirements(c.dev, b.buf, up(&req))
 
 	// The memory type has to satisfy the BUFFER and the POINTER at once: the
 	// driver decides which types can wrap this particular allocation, and
@@ -740,24 +740,24 @@ func (c *Ctx) Import(p unsafe.Pointer, n int) (*Buf, error) {
 	props := memHostPtrProps{sType: stMemHostPtrProps}
 	if err := check(c.getHostPtrProps(c.dev, handleTypeHostAlloc, p, up(&props)),
 		"vkGetMemoryHostPointerPropertiesEXT"); err != nil {
-		vkDestroyBuffer(c.dev, b.buf, nil)
+		c.l.vkDestroyBuffer(c.dev, b.buf, nil)
 		return nil, err
 	}
 	idx, _, err := c.memType(req.typeBits&props.typeBits, memDeviceLocal)
 	if err != nil {
-		vkDestroyBuffer(c.dev, b.buf, nil)
+		c.l.vkDestroyBuffer(c.dev, b.buf, nil)
 		return nil, fmt.Errorf("%w (buffer types %#x, host-pointer types %#x)",
 			err, req.typeBits, props.typeBits)
 	}
 	imp := onHeap[importHostPtrInfo]()
 	*imp = importHostPtrInfo{sType: stImportMemHostPtr, handleType: handleTypeHostAlloc, p: uintptr(p)}
 	ma := memAlloc{sType: stMemAllocInfo, pNext: uintptr(up(imp)), size: uint64(n), typeIdx: idx}
-	if err := check(vkAllocateMemory(c.dev, up(&ma), nil, up(&b.mem)), "vkAllocateMemory (imported host pointer)"); err != nil {
-		vkDestroyBuffer(c.dev, b.buf, nil)
+	if err := check(c.l.vkAllocateMemory(c.dev, up(&ma), nil, up(&b.mem)), "vkAllocateMemory (imported host pointer)"); err != nil {
+		c.l.vkDestroyBuffer(c.dev, b.buf, nil)
 		return nil, err
 	}
 	runtime.KeepAlive(imp)
-	if err := check(vkBindBufferMemory(c.dev, b.buf, b.mem, 0), "vkBindBufferMemory"); err != nil {
+	if err := check(c.l.vkBindBufferMemory(c.dev, b.buf, b.mem, 0), "vkBindBufferMemory"); err != nil {
 		b.Free()
 		return nil, err
 	}

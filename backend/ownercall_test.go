@@ -26,7 +26,7 @@ func TestADeviceCallFromInsideASessionCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := backend.OwnerCalls()
+	before := backend.CountersOf(d).OwnerCalls()
 	done := make(chan error, 1)
 	go func() {
 		var err error
@@ -52,7 +52,7 @@ func TestADeviceCallFromInsideASessionCompletes(t *testing.T) {
 		t.Fatal("a Free/Alloc/Write issued inside a Session did not return in 30 s: the owner goroutine is " +
 			"waiting on itself (the deadlock that hung gemma-3-27b in the split tuner)")
 	}
-	if n := backend.OwnerCalls() - before; n < 4 {
+	if n := backend.CountersOf(d).OwnerCalls() - before; n < 4 {
 		t.Fatalf("%d owner-thread call(s) counted, want 4: the calls did not take the inline path", n)
 	}
 	// And the device still works from outside, so the inline calls left the
@@ -90,7 +90,7 @@ func TestCUDASessionRunsOnTheCallersThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Free()
-	before := backend.PostedCalls()
+	before := backend.CountersOf(d).PostedCalls()
 	for i := 0; i < 8; i++ {
 		d.Session(func(s backend.Session) {
 			if err := s.Write(b, make([]byte, 64)); err != nil {
@@ -98,7 +98,7 @@ func TestCUDASessionRunsOnTheCallersThread(t *testing.T) {
 			}
 		})
 	}
-	if n := backend.PostedCalls() - before; n != 0 {
+	if n := backend.CountersOf(d).PostedCalls() - before; n != 0 {
 		t.Fatalf("%d of 8 Sessions were posted to the owner goroutine: the inline path was not taken", n)
 	}
 }
@@ -115,7 +115,7 @@ func TestCUDAPostingIsPerDevice(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer b.Free()
-		before := backend.PostedCalls()
+		before := backend.CountersOf(d).PostedCalls()
 		for i := 0; i < 8; i++ {
 			d.Session(func(s backend.Session) {
 				if err := s.Write(b, make([]byte, 64)); err != nil {
@@ -123,7 +123,7 @@ func TestCUDAPostingIsPerDevice(t *testing.T) {
 				}
 			})
 		}
-		return backend.PostedCalls() - before
+		return backend.CountersOf(d).PostedCalls() - before
 	}
 	for _, postedFirst := range []bool{true, false} {
 		open := func(posted bool) backend.Device {

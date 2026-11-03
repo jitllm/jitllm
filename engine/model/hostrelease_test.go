@@ -4,7 +4,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -42,7 +41,7 @@ func TestPlacedBlocksGiveTheirHostPagesBack(t *testing.T) {
 			defer st.Close()
 			st.SetDevice(g)
 			if st.GPULayers() != m.Cfg.NLayer {
-				if gs := g.Stats(); gs.Declined+gs.NoRoom > 0 || backend.AllocRefused() > 0 {
+				if gs := g.Stats(); gs.Declined+gs.NoRoom > 0 || g.Counters().AllocRefused() > 0 {
 					t.Skipf("CARD TOO SMALL: %d of %d blocks placed -- this gate proved nothing on this device", st.GPULayers(), m.Cfg.NLayer)
 				}
 				t.Fatalf("placed %d of %d blocks: %s", st.GPULayers(), m.Cfg.NLayer, g.Err())

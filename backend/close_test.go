@@ -16,7 +16,7 @@ import (
 // The test opens everything, closes all but one, then forces the runtime to
 // build threads.
 func TestCloseThenSpawnThreads(t *testing.T) {
-	devs := Open()
+	devs := OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU on this host")
 	}

@@ -11,7 +11,6 @@ package backend
 import (
 	"fmt"
 	"os"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -19,41 +18,6 @@ import (
 	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/composer/ir"
 )
-
-// verbose traces every backend's open attempt, and the tier's device probe and
-// ordering, to stderr. The package reads no environment; tier sets it.
-var verbose bool
-
-// SetVerbose turns the open/probe trace on. gpu.WithVerbose calls it.
-func SetVerbose(on bool) { verbose = on }
-
-// Verbose reports whether the trace is on.
-func Verbose() bool { return verbose }
-
-// mtlUnretained selects -commandBufferWithUnretainedReferences on Metal, for
-// every device opened afterwards. Default off. It is a package knob because it
-// configures a device before there is an instance, and a measurement
-// instrument; see metal.Ctx's Unretained for what it trades.
-var mtlUnretained bool
-
-// SetMetalUnretained arms the unretained command buffer on Metal devices opened
-// after this call.
-func SetMetalUnretained(on bool) { mtlUnretained = on }
-
-// cudaTiming arms device-clock timing of every replayed graph on CUDA; see
-// CUDAGraphTimes. A measurement instrument, default off: it adds two event
-// records per replay.
-var cudaTiming atomic.Bool
-
-// SetCUDATiming arms or disarms graph timing on CUDA devices.
-func SetCUDATiming(on bool) { cudaTiming.Store(on) }
-
-// mtlResidency arms an MTLResidencySet on Metal devices opened after this call.
-var mtlResidency bool
-
-// SetMetalResidency arms the residency set. Opening fails on a host or queue
-// that cannot carry one, rather than silently measuring without it.
-func SetMetalResidency(on bool) { mtlResidency = on }
 
 type Buf interface {
 	Write([]byte) error
@@ -120,21 +84,6 @@ func copyRange(dl, dstOff, sl, srcOff, n int, same bool) error {
 			n, srcOff, dstOff)
 	}
 	return nil
-}
-
-// hostReads and hostReadBytes count every readback from a device buffer to
-// the host, on every backend; see HostReads.
-var hostReads, hostReadBytes atomic.Uint64
-
-// HostReads is how many reads from a device buffer to the host this process
-// has made, and the bytes they carried. A path that must stay on the device --
-// a recurrent pool's resize carries every session's state across with Copy --
-// is held to it: the count does not move.
-func HostReads() (calls, bytes uint64) { return hostReads.Load(), hostReadBytes.Load() }
-
-func countRead(n int) {
-	hostReads.Add(1)
-	hostReadBytes.Add(uint64(n))
 }
 
 // BufferLimited is a Device that cannot address a buffer past some size in one
@@ -456,14 +405,7 @@ func Record(rec Recorder, f func()) (Recording, error) {
 // Open returns every backend that initialises on this host, in the order
 // CUDA, HIP, Vulkan, Metal. Absent hardware is not an error: a machine with no GPU
 // returns an empty slice, which is the same shape as a machine with three.
-func Open() []Device { return OpenWith(openDefaults) }
-
-// openDefaults is what Open opens with. It is the zero Opts in every build that
-// ships; only this package's own tests set it (export_test.go), so the whole
-// suite -- which opens its devices through Open -- can be pointed at one
-// Vulkan device, or run with a lowered workgroup limit so every kernel family
-// goes through a split launch.
-var openDefaults Opts
+func Open() []Device { return OpenWith(Opts{}) }
 
 // Opts are the choices a device is opened with. They belong to the device, not
 // the process, so two tiers in one process can open theirs differently. Zero is
@@ -486,6 +428,11 @@ type Opts struct {
 	Metal metal.Opts
 	// HIP is where ROCm is looked for. Zero searches the default places.
 	HIP HIPConfig
+	// Counters is what the devices count into; nil gives each its own, except
+	// that the devices one OpenWith opens share one.
+	Counters *Counters
+	// Verbose traces every backend's open attempt to stderr.
+	Verbose bool
 	// Enumerating marks an open that is part of finding devices (a default
 	// pick, a loop over a backend's ordinals) rather than a caller naming one.
 	// It changes nothing about the open; an installed Restriction treats a
@@ -496,11 +443,12 @@ type Opts struct {
 
 // OpenWith is Open with the devices' open choices.
 func OpenWith(o Opts) []Device {
+	o.Counters = o.counters()
 	var out []Device
 	for _, f := range []func(Opts) (Device, error){openCUDA, openHIP, openVulkan, openMetal} {
 		t0 := time.Now()
 		d, err := f(enumerating(o))
-		if verbose {
+		if o.Verbose {
 			name, api := "-", "-"
 			if d != nil {
 				name, api = d.Name(), d.API()

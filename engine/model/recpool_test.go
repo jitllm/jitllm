@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
@@ -21,7 +20,7 @@ import (
 // offset is a wrong state rather than an accident of addressing from zero.
 // Stats.RecBytes is the check that the pools did move: grown by the arrivals,
 // back to two slots when they have gone. Stats.RecCarryBytes is the check that
-// the states crossed, and backend.HostReads that they crossed on the device:
+// the states crossed, and Counters.HostReads that they crossed on the device:
 // every arrival (SetDevice) and departure (Close) reads nothing to the host.
 func TestRecurrentPoolKeepsASessionAcrossOthers(t *testing.T) {
 	m := openStepHybrid(t)
@@ -110,9 +109,9 @@ func recPoolCase(t *testing.T, m *Model, dev string, shared bool, ids []int32, s
 	var grown, after, carried, reads uint64
 	// noHost runs f and counts what it read to the host.
 	noHost := func(f func()) {
-		r0, _ := backend.HostReads()
+		r0, _ := g.Counters().HostReads()
 		f()
-		r1, _ := backend.HostReads()
+		r1, _ := g.Counters().HostReads()
 		reads += r1 - r0
 	}
 	// arrive seats another session and prefills pr; leave closes one.

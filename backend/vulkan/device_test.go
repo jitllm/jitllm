@@ -13,23 +13,25 @@ import (
 // openInstance is the process's VkInstance alone, which is all the selection
 // tests need -- they never create a logical device, so a host with a
 // display-only card or a broken ICD still runs them.
-func openInstance(t *testing.T) Instance {
+func openInstance(t *testing.T) (*Loader, Instance) {
 	t.Helper()
-	if err := load(); err != nil {
+	l, err := Load()
+	if err != nil {
 		t.Skipf("no Vulkan loader: %v", err)
 	}
-	inst, err := instance()
+	inst, err := l.instance()
 	if err != nil {
 		t.Skipf("no Vulkan instance: %v", err)
 	}
-	return inst
+	return l, inst
 }
 
 // TestEnumerateSeesEveryDevice is the precondition for everything below: if the
 // loader only ever hands back one device, "selection" is untestable and a green
 // line here would mean nothing (RULE 10).
 func TestEnumerateSeesEveryDevice(t *testing.T) {
-	cands, err := enumerate(openInstance(t))
+	l, inst := openInstance(t)
+	cands, err := l.enumerate(inst)
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
@@ -46,12 +48,12 @@ func TestEnumerateSeesEveryDevice(t *testing.T) {
 // compute queue, not the first one: on a host that enumerates the iGPU or
 // llvmpipe ahead of a discrete card, taking index 0 fails here.
 func TestPickIsDeliberate(t *testing.T) {
-	inst := openInstance(t)
-	cands, err := enumerate(inst)
+	l, inst := openInstance(t)
+	cands, err := l.enumerate(inst)
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
-	got, err := pickDevice(inst, "", "")
+	got, err := l.pickDevice(inst, "", "")
 	if err != nil {
 		t.Fatalf("pickDevice: %v", err)
 	}
@@ -119,7 +121,8 @@ func TestNoComputeQueueFallsThrough(t *testing.T) {
 // selector and reports its name, type and memory. It fails if two indices
 // produce the same device.
 func TestOverridePinsByIndexAndName(t *testing.T) {
-	cands, err := enumerate(openInstance(t))
+	l, inst := openInstance(t)
+	cands, err := l.enumerate(inst)
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
@@ -328,7 +331,8 @@ func runSMI() ([]byte, error) {
 // server, so a Config held in a package variable between an open's start and
 // its device pick hands one open another's pin; run under -race.
 func TestConfigIsPerDevice(t *testing.T) {
-	cands, err := enumerate(openInstance(t))
+	l, inst := openInstance(t)
+	cands, err := l.enumerate(inst)
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}

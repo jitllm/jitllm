@@ -19,6 +19,7 @@ import (
 // Zero is the shipping default for every one of them.
 type knobs struct {
 	api           string          // pin the backend by API name
+	verbose       bool            // trace the opens, the device probe and the ordering
 	tune          TuneMode        // probe the devices, or keep the order given
 	lanes         int             // pin the subgroup width: 0 ask, 1, or 32
 	poisonKV      bool            // fill a fresh KV cache with NaN (RULE 13)
@@ -77,9 +78,13 @@ func WithAPI(s string) Option { return func(o *openOpts) { o.kb.api = s } }
 func WithDeviceTune(m TuneMode) Option { return func(o *openOpts) { o.kb.tune = m } }
 
 // WithVerbose traces every backend's open attempt, the device probe and the
-// ordering to stderr. It sets package backend's trace switch, which is
-// process-wide: it is the one option here that is not per tier.
-func WithVerbose(on bool) Option { return func(o *openOpts) { o.verbose, o.verboseSet = on, true } }
+// ordering to stderr, for this tier's opens.
+func WithVerbose(on bool) Option { return func(o *openOpts) { o.kb.verbose = on } }
+
+// WithCounters names what this tier's devices count into (backend.Counters),
+// so a caller can read one set across tiers; without it each tier has its own
+// (GPU.Counters).
+func WithCounters(c *backend.Counters) Option { return func(o *openOpts) { o.counters = c } }
 
 // WithROCm names the ROCm library directory (the one holding
 // libamdhip64.so) the AMD backend loads from, in place of the default search;
@@ -127,6 +132,14 @@ func WithMetalSpin(d time.Duration) Option { return func(o *openOpts) { o.metal.
 // with a buffer barrier where one dispatch depends on another, rather than
 // serial (metal.Opts.Concurrent).
 func WithMetalConcurrent(on bool) Option { return func(o *openOpts) { o.metal.Concurrent = on } }
+
+// WithMetalUnretained selects -commandBufferWithUnretainedReferences on this
+// tier's Metal devices (metal.Opts.Unretained), a measurement instrument.
+func WithMetalUnretained(on bool) Option { return func(o *openOpts) { o.metal.Unretained = on } }
+
+// WithMetalResidency attaches an MTLResidencySet to this tier's Metal devices
+// (metal.Opts.Residency); the open fails where one cannot be carried.
+func WithMetalResidency(on bool) Option { return func(o *openOpts) { o.metal.Residency = on } }
 
 // WithLanes pins the subgroup width the device assumes: 1 (no shuffle) or 32.
 // Zero asks backend.GuaranteedLanes. 32 on a device that does not guarantee it
@@ -226,17 +239,10 @@ func WithArena(n uint64) Option { return func(o *openOpts) { o.kb.arena = n } }
 // place.
 func WithConfig(f func(*Config)) Option { return func(o *openOpts) { o.cfg = append(o.cfg, f) } }
 
-// apply publishes the one process-wide switch in the option set: backend's
-// trace logger. Everything else is copied onto the tier by New.
-func (o *openOpts) apply() {
-	if o.verboseSet {
-		backend.SetVerbose(o.verbose)
-	}
-}
-
 // devOpts is what every device this option set opens is opened with.
 func (o *openOpts) devOpts() backend.Opts {
-	return backend.Opts{Vulkan: o.vk, CUDAPosted: o.cudaPosted, CUDAMaxRegs: o.cudaRegs, Metal: o.metal, HIP: o.hip}
+	return backend.Opts{Vulkan: o.vk, CUDAPosted: o.cudaPosted, CUDAMaxRegs: o.cudaRegs, Metal: o.metal, HIP: o.hip,
+		Counters: o.counters, Verbose: o.kb.verbose}
 }
 
 // WithPersist sets whether each decode block's launches are composed into

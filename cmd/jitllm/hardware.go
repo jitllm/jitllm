@@ -164,13 +164,12 @@ func isa() string {
 }
 
 func reportGPU() {
-	// backend.Open is reached without a tier here, so JITLLM_GPU_VERBOSE has to
-	// be handed to it directly: the package reads no environment.
-	backend.SetVerbose(os.Getenv("JITLLM_GPU_VERBOSE") != "")
 	// The same call gpu.Open makes. Opening and closing every backend is
-	// covered by backend.TestCloseThenSpawnThreads.
+	// covered by backend.TestCloseThenSpawnThreads. backend.Open is reached
+	// without a tier here, so JITLLM_GPU_VERBOSE is handed to it directly: the
+	// package reads no environment.
 	hipCfg := backend.HIPConfig{Path: rocmDir()}
-	devs := backend.OpenWith(backend.Opts{HIP: hipCfg})
+	devs := backend.OpenWith(backend.Opts{HIP: hipCfg, Verbose: os.Getenv("JITLLM_GPU_VERBOSE") != ""})
 	defer func() {
 		for _, d := range devs {
 			d.Close()

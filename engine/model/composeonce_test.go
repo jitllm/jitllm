@@ -7,7 +7,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -20,7 +19,7 @@ import (
 // decode steps, a second session's prompt and decode, and a ragged batch of
 // four sequences whose prompts hold more rows than the reserved width compose
 // nothing, compile no kernel and build no scratch -- Stats.PartsFormed,
-// ScratchBuilds, DeclineBuilt, FormedAtStep and backend.Compiles stay where
+// ScratchBuilds, DeclineBuilt, FormedAtStep and Counters.Compiles stay where
 // the placement left them, and the composer serves every chunk's every block.
 // A prompt longer than the reserved width runs in chunks of it, and the
 // scheduler admits no step wider than it (RowsWidth). Each block is composed
@@ -135,16 +134,16 @@ func composesOnce(t *testing.T, m *Model, g *gpu.GPU, width int, to string) {
 	if s.GPULayers() != nl || !s.HeadOnDevice() {
 		t.Fatalf("the devices took %d of %d blocks, the head %v: %s", s.GPULayers(), nl, s.HeadOnDevice(), g.Err())
 	}
-	st0, c0 := g.Stats(), backend.Compiles()
+	st0, c0 := g.Stats(), g.Counters().Compiles()
 	// What compiles after the placement, named.
 	var mu sync.Mutex
 	var compiled []string
-	backend.CompileLog = func(n string) {
+	g.Counters().CompileLog = func(n string) {
 		mu.Lock()
 		compiled = append(compiled, n)
 		mu.Unlock()
 	}
-	defer func() { backend.CompileLog = nil }()
+	defer func() { g.Counters().CompileLog = nil }()
 	t.Logf("at placement: %d forms (%d kernels) composed, %d scratches built, a reserved width of %d rows, block forms %v",
 		st0.PartsFormed, st0.PartKernels, st0.ScratchBuilds, st0.ReservedRows, st0.BlockForms)
 	if st0.PartsFormed == 0 {
@@ -172,7 +171,7 @@ func composesOnce(t *testing.T, m *Model, g *gpu.GPU, width int, to string) {
 		t.Logf("%s: %s", what, g.Err())
 		st := g.Stats()
 		if f, k, sb, c := st.PartsFormed-st0.PartsFormed, st.PartKernels-st0.PartKernels, st.ScratchBuilds-st0.ScratchBuilds,
-			backend.Compiles()-c0; f != 0 || k != 0 || sb != 0 || c != 0 {
+			g.Counters().Compiles()-c0; f != 0 || k != 0 || sb != 0 || c != 0 {
 			mu.Lock()
 			defer mu.Unlock()
 			t.Fatalf("%s composed %d form(s) of %d kernel(s), built %d scratch(es) and compiled %d kernel(s) after the placement %v",
@@ -319,8 +318,8 @@ func composesOnce(t *testing.T, m *Model, g *gpu.GPU, width int, to string) {
 	})
 	st := g.Stats()
 	t.Logf("the relocation of blocks %d..%d to %s: %d forms (%d kernels), %d compiles", lo, hi-1, dest,
-		st.PartsFormed-st0.PartsFormed, st.PartKernels-st0.PartKernels, backend.Compiles()-c0)
-	st0, c0 = st, backend.Compiles()
+		st.PartsFormed-st0.PartsFormed, st.PartKernels-st0.PartKernels, g.Counters().Compiles()-c0)
+	st0, c0 = st, g.Counters().Compiles()
 	prompts(s, 0, []int{5, 100})
 	forms("after the relocation", func(li int) int {
 		if li >= lo && li < hi {
@@ -331,7 +330,7 @@ func composesOnce(t *testing.T, m *Model, g *gpu.GPU, width int, to string) {
 	if testing.Verbose() {
 		st := g.Stats()
 		t.Logf("after every call: %d forms, %d scratches, %d compiles since the relocation", st.PartsFormed-st0.PartsFormed,
-			st.ScratchBuilds-st0.ScratchBuilds, backend.Compiles()-c0)
+			st.ScratchBuilds-st0.ScratchBuilds, g.Counters().Compiles()-c0)
 	}
 }
 

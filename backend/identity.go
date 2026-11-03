@@ -126,12 +126,6 @@ func (m *mtlDev) Identity() Identity {
 	return Identity{Source: "Metal reports no UUID that MoltenVK's deviceUUID is specified to match"}
 }
 
-var (
-	_ Identified = (*cudaDev)(nil)
-	_ Identified = (*vkDev)(nil)
-	_ Identified = (*mtlDev)(nil)
-)
-
 // Driven is the optional interface a backend implements when it can name the
 // driver behind a Device. A measurement cached against a device is keyed by its
 // identity AND its driver: a driver update recompiles every kernel.

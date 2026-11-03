@@ -15,7 +15,7 @@ import (
 func TestKernelTimingTagsTrials(t *testing.T) {
 	gpuLock(t)
 	var d backend.Device
-	for _, x := range backend.Open() {
+	for _, x := range backend.OpenForTest() {
 		defer x.Close()
 		if x.API() == "ptx" && d == nil {
 			d = x
@@ -24,9 +24,9 @@ func TestKernelTimingTagsTrials(t *testing.T) {
 	if d == nil {
 		t.Skip("no CUDA device: the instrument is CUDA's")
 	}
-	backend.SetCUDAKernelTiming(true)
-	defer backend.SetCUDAKernelTiming(false)
-	backend.CUDAKernelTimes()
+	backend.CountersOf(d).SetCUDAKernelTiming(true)
+	defer backend.CountersOf(d).SetCUDAKernelTiming(false)
+	backend.CountersOf(d).CUDAKernelTimes()
 	const n = 256
 	kk, err := Add(n)
 	if err != nil {
@@ -53,7 +53,7 @@ func TestKernelTimingTagsTrials(t *testing.T) {
 			}
 		})
 	}
-	us, _ := backend.CUDAKernelTimes()
+	us, _ := backend.CountersOf(d).CUDAKernelTimes()
 	var tagged, plain int
 	for name := range us {
 		if strings.HasPrefix(name, backend.TrialPrefix) {

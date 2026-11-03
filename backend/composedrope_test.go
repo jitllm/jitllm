@@ -32,7 +32,7 @@ import (
 func TestComposedRopeTableOverAxes(t *testing.T) {
 	t.Run("cpu/1 rows", func(t *testing.T) { composedRopeAxes(t, cpuRope, 1, true) })
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

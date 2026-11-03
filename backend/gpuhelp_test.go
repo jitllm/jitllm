@@ -17,20 +17,29 @@ import (
 // payload -- both kernels decode identical bytes identically -- but it does
 // need the scales to be finite, because random bits hit f16's Inf/NaN exponent
 // about one time in 32 and a NaN compares unequal to itself.
-var f16At = map[layout.Quant][]int{
-	layout.Q4_0: {0},
-	layout.Q8_0: {0},
-	layout.Q5_0: {0},
-	layout.Q5_1: {0, 2}, // d, m
-	layout.Q4_K: {0, 2},
-	layout.Q5_K: {0, 2},
-	layout.Q3_K: {108},
-	layout.Q6_K: {208},
-	layout.TQ2:  {64},
+func f16At(q layout.Quant) ([]int, bool) {
+	switch q {
+	case layout.Q4_0, layout.Q8_0, layout.Q5_0:
+		return []int{0}, true
+	case layout.Q5_1, layout.Q4_K, layout.Q5_K:
+		return []int{0, 2}, true // d, m
+	case layout.Q3_K:
+		return []int{108}, true
+	case layout.Q6_K:
+		return []int{208}, true
+	case layout.TQ2:
+		return []int{64}, true
+	}
+	return nil, false
 }
 
 // f32At is where a format with an f32 scale keeps it (TQ2F).
-var f32At = map[layout.Quant][]int{layout.TQ2F: {64}}
+func f32At(q layout.Quant) ([]int, bool) {
+	if q == layout.TQ2F {
+		return []int{64}, true
+	}
+	return nil, false
+}
 
 func randWeights(q layout.Quant, rows, k int, rng *rand.Rand) []byte {
 	nblk := k / q.Elems()
@@ -51,14 +60,14 @@ func randWeights(q layout.Quant, rows, k int, rng *rand.Rand) []byte {
 			// refuses the tensor (random bytes reach 2^127).
 			raw[i*bb] = byte(120 + rng.Intn(10))
 		}
-		if offs, ok := f32At[q]; ok {
+		if offs, ok := f32At(q); ok {
 			// An f32 scale near one, of no f16's precision.
 			for _, off := range offs {
 				binary.LittleEndian.PutUint32(raw[i*bb+off:], math.Float32bits(0.5+rng.Float32()))
 			}
 			continue
 		}
-		offs, ok := f16At[q]
+		offs, ok := f16At(q)
 		if !ok && q != layout.MXFP4 {
 			// A format with no entry would keep random scales -- Inf or NaN
 			// one time in 32 -- and a NaN compares unequal in both arms.

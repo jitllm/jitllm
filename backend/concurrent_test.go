@@ -80,7 +80,7 @@ func TestConcurrentEncoderKeepsTheChain(t *testing.T) {
 		}
 	}
 	t.Logf("%d of %d words differ from the serial chain's %d after %d steps (%d barriers so far)",
-		bad, n, want, steps, metal.Barriers())
+		bad, n, want, steps, backend.CountersOf(d).Metal.Barriers())
 	if bad != 0 {
 		t.Fatalf("%d words broke the chain", bad)
 	}

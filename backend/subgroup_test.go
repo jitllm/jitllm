@@ -24,7 +24,7 @@ import (
 // change at least one value.
 func TestSubgroupCollectivesMatchTheReference(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}
