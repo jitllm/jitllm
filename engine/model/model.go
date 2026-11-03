@@ -1222,8 +1222,8 @@ type Model struct {
 	xdKNormFirst bool
 	// mnNoResidual is a gate's violation: Gemma 3n's MobileNet blocks with
 	// their residual adds dropped from the graphs the front end states.
-	Cfg          *Config
-	Vocab        *tok.Vocab
+	Cfg   *Config
+	Vocab *tok.Vocab
 
 	// pager serialises decode when the container evicts; see pagelock.go.
 	pager sync.Mutex
@@ -1294,8 +1294,8 @@ type Model struct {
 	// the plan (planRuns).
 	expIONs  int64
 	expReads int64
-	expBytes    int64
-	expCalls    int64
+	expBytes int64
+	expCalls int64
 	// hostStepRows is the rows StepRuns has run as host steps across
 	// sessions (stepHost); HostStepRows reports it.
 	hostStepRows int64
@@ -1311,7 +1311,7 @@ type Model struct {
 	ngram   *ngramTable
 	// resOut is Kimi-K3's head score vector (RoleOutputResScore) and resOutT
 	// its one-row view; nil without residual attention.
-	resOut  []float32
+	resOut []float32
 	// onesHD is a HeadDim-wide vector of ones: the weight Llama 4's weightless
 	// q/k RMSNorm runs the generated norm against. nil unless QKL2Norm.
 	onesHD  []float32

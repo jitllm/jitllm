@@ -46,7 +46,7 @@ type modelOpts struct {
 	// WithPrefillForwardRows.
 	forwardRows    int
 	forwardRowsSet bool
-	hybridSpinSet bool
+	hybridSpinSet  bool
 	// noStreamTrial keeps an auto-streamed placement without measuring it
 	// against the host; see WithStreamTrial.
 	noStreamTrial bool
@@ -170,7 +170,6 @@ func WithResidualFold(on bool) Option { return func(l *loadOpts) { l.opt.residFo
 
 // SetResidualFold is WithResidualFold for one Instance.
 func (s *Instance) SetResidualFold(on bool) { s.residFold = on }
-
 
 // WithPrefillForwardRows runs a prompt of up to n tokens a token at a time,
 // through the decode path, rather than as one batched chunk. One token always
@@ -495,4 +494,3 @@ func ParsePlacement(spec string, strict bool) (Placement, error) {
 	}
 	return p, nil
 }
-

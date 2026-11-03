@@ -18,15 +18,15 @@ import (
 // "contains" check.
 func pinned() map[string]string {
 	return map[string]string{
-	"tinyllama-1.1b-q3_K_M": "<|user|>\nhello</s>\n<|assistant|>\n",
-	"Qwen2-1.5B-Instruct-Q4_K_M": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n" +
-		"<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n",
-	"tiny-qwen3moe-f32":            "<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n",
-	"Phi-3.5-mini-instruct-Q4_K_M": "<|user|>\nhello<|end|>\n<|assistant|>\n",
-	"Mixtral-8x7B-Instruct-Q3_K_M": "<s>[INST] hello [/INST]",
-	"SmolLM2-360M-Instruct-Q8_0": "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, " +
-		"trained by Hugging Face<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n",
-}
+		"tinyllama-1.1b-q3_K_M": "<|user|>\nhello</s>\n<|assistant|>\n",
+		"Qwen2-1.5B-Instruct-Q4_K_M": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n" +
+			"<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n",
+		"tiny-qwen3moe-f32":            "<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n",
+		"Phi-3.5-mini-instruct-Q4_K_M": "<|user|>\nhello<|end|>\n<|assistant|>\n",
+		"Mixtral-8x7B-Instruct-Q3_K_M": "<s>[INST] hello [/INST]",
+		"SmolLM2-360M-Instruct-Q8_0": "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, " +
+			"trained by Hugging Face<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n",
+	}
 }
 
 // TestGGUFChatTemplatesRender compiles and renders every chat template in the model directory.

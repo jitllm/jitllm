@@ -59,25 +59,25 @@ func llamaTokenize(t *testing.T, model, text string) ([]int32, bool) {
 // runs.
 func bpeCases() []string {
 	return []string{
-	"The capital of France is Paris.",
-	"hello world",
-	"  leading and   internal   spaces  ",
-	"Isn't it? I'd say we've all got 'em, y'all.",
-	"1 12 123 1234 12345 007 3.14159",
-	"line one\nline two\n\n\nline three\r\ntrailing",
-	"tabs\tand\t\tmore",
-	"CamelCaseIdentifier snake_case_name kebab-case-name",
-	"func main() { fmt.Println(\"hi\") } // comment",
-	"日本語のテキストです。中文也可以。한국어도.",
-	"emoji 🚀🔥 and combining é vs e\u0301",
-	"<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n",
-	"a  b   c    d     e",
-	"$1,234.56 + €99 = ???",
-	"",
-	" ",
-	"\n",
-	"x",
-}
+		"The capital of France is Paris.",
+		"hello world",
+		"  leading and   internal   spaces  ",
+		"Isn't it? I'd say we've all got 'em, y'all.",
+		"1 12 123 1234 12345 007 3.14159",
+		"line one\nline two\n\n\nline three\r\ntrailing",
+		"tabs\tand\t\tmore",
+		"CamelCaseIdentifier snake_case_name kebab-case-name",
+		"func main() { fmt.Println(\"hi\") } // comment",
+		"日本語のテキストです。中文也可以。한국어도.",
+		"emoji 🚀🔥 and combining é vs e\u0301",
+		"<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n",
+		"a  b   c    d     e",
+		"$1,234.56 + €99 = ???",
+		"",
+		" ",
+		"\n",
+		"x",
+	}
 }
 
 func TestBPEAgainstLlamaCpp(t *testing.T) {
