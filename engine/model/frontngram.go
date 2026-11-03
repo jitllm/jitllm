@@ -7,9 +7,9 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// ngramStreams is the n-gram embedding's block (ngram.go) over the streams
-// xs, stated as ops: the rows' gathered table rows, the block's side input,
-// project to a key per stream and one value; each stream's normed key
+// ngramStreams is the n-gram embedding's block over the streams xs, stated
+// as ops: the rows' gathered table rows (ngramEmbed) project to a key per
+// stream and one value; each stream's normed key
 // against its normed residual, over sqrt(n_embd), gives a gate, the
 // sigmoid of its signed square root (the magnitude floored at
 // kernels.SqrtSigmoidFloor); the gated values, and their normed
@@ -21,7 +21,7 @@ func (m *Model) ngramStreams(b *graph.Builder, xs []graph.ValueID,
 	c := m.Cfg
 	h, d := len(xs), c.NEmbd
 	hd := h * d
-	emb := b.In("ngram", c.NGramWidth())
+	emb := m.ngramEmbed(b)
 	norm := func(name string, v graph.ValueID, role jlm.Role) graph.ValueID {
 		n := b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: name, Width: hd}}, nil,
 			graph.Attrs{Eps: c.RMSEps, HeadDim: d}, nil, nil)[0]
@@ -76,4 +76,36 @@ func (m *Model) ngramStreams(b *graph.Builder, xs []graph.ValueID,
 		out[k] = b.Add(x, y)
 	}
 	return out
+}
+
+// ngramEmbed is each row's n-gram embedding stated as ops: its token and its
+// predecessors, held in the delta rule's state slot after the delta state,
+// hashed into a row of each head's range of the n-gram table (a picture's
+// row hashing as NGramImage); the heads' rows side by side.
+func (m *Model) ngramEmbed(b *graph.Builder) graph.ValueID {
+	c := m.Cfg
+	n, heads := c.NGram, c.ngramHeads()
+	g := c.delta()
+	base := g.vHeads * g.vDim * g.kDim
+	at := b.G.StateVersion(graph.StateRecState)
+	tok := b.Emit(graph.OpToken, nil, []graph.Result{{Name: "ng.tok", Width: 1, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
+	win := b.Emit(graph.OpNGramWindow, []graph.ValueID{tok}, []graph.Result{{Name: "ng.win", Width: n, Elem: graph.ElemU32}}, nil,
+		graph.Attrs{Taps: n, Offset: base, Span: stateSpan(c, base), Words: []uint64{uint64(uint32(c.NGramImage))}},
+		[]graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}})[0]
+	words := append([]uint64{uint64(uint32(c.NGramEOS))}, c.NGramMul...)
+	for h := range heads {
+		words = append(words, c.NGramOff[h], c.NGramVoc[h])
+	}
+	hashed := b.Emit(graph.OpNGramHash, []graph.ValueID{win}, []graph.Result{
+		{Name: "ng.rows", Width: heads, Elem: graph.ElemU32}, {Name: "ng.next", Width: n - 1, Elem: graph.ElemU32}}, nil,
+		graph.Attrs{Span: c.NGramHeadsPer, Words: words, Reset: c.q4eFault != q4eFaultNoEOSReset}, nil, nil)
+	rows := make([]graph.ValueID, heads)
+	for h := range heads {
+		col := b.Emit(graph.OpSlice, []graph.ValueID{hashed[0]}, []graph.Result{{Name: "ng.row", Width: 1, Elem: graph.ElemU32}}, nil,
+			graph.Attrs{Offset: h, Width: 1}, nil, nil)[0]
+		rows[h] = b.Emit(graph.OpEmbed, []graph.ValueID{col}, []graph.Result{{Name: "ng.emb", Width: c.NGramRowDim}},
+			[]graph.Binding{{Role: jlm.RoleNGramTable, K: c.NGramRowDim, Rows: int(c.NGramVoc[h]), From: int(c.NGramOff[h])}},
+			graph.Attrs{}, nil, nil)[0]
+	}
+	return b.Emit(graph.OpConcat, rows, []graph.Result{{Name: "ngram", Width: c.NGramWidth()}}, nil, graph.Attrs{}, nil, nil)[0]
 }

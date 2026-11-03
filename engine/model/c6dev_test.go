@@ -264,7 +264,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 				st := m.NewInstance(len(g.IDs) + 1)
 				defer st.Close()
 				st.SetDeviceLayers(gpux, -1)
-				if n := st.GPULayers(); n != nl {
+				if n := st.GPULayers(); n != cardBlocks(m) {
 					var front []string
 					for li := range nl {
 						if u := m.Uncovered(li); u != Covered {
@@ -283,7 +283,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 					runErr = nil
 					return nil, "refused: " + err.Error()
 				}
-				if n := st.GPULayers(); n != nl {
+				if n := st.GPULayers(); n != cardBlocks(m) {
 					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpux.Err())
 				}
 				if counted || composedOf(m, gpux) != 0 {
@@ -332,7 +332,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 				if !(w < bound) || flips > 0 {
 					t.Fatalf("%s: worst logit NMSE %.3e, %d argmax flips, against the host", arm.name, w, flips)
 				}
-				t.Logf("%s, %d blocks and the head on %s: worst logit NMSE %.3e", arm.name, nl, spec, w)
+				t.Logf("%s, %d of %d blocks and the head on %s: worst logit NMSE %.3e", arm.name, cardBlocks(m), nl, spec, w)
 				worst = math.Max(worst, w)
 			}
 			if composedByDefault && counted {

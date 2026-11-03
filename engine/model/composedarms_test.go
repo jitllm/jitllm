@@ -42,6 +42,8 @@ const composedNoGraph = "no graph from the front end"
 // replays nothing a decline is counted from), at most that where it does not.
 // A sliding layer is served like any other, the tier declining only a graph
 // whose window is not the plan's, so a window decline fails here by its name.
+// A block gathering a row table's rows is no card's (cardBlocks) and is not
+// counted.
 func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ...*gpu.GPU) {
 	t.Helper()
 	if len(gs) == 0 {
@@ -50,6 +52,10 @@ func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ..
 	covered := 0
 	refused := map[string]int{}
 	for li := range placed {
+		if tableRowsOf(m.Composing().BlockGraph(li)) >= 0 {
+			placed--
+			continue
+		}
 		if why := m.Uncovered(li); why != Covered {
 			refused[why.String()]++
 			continue

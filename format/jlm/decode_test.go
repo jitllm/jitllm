@@ -121,26 +121,44 @@ func TestDecodeMatchesThePacker(t *testing.T) {
 func TestDecodeVerbatimMatchesTheDecoders(t *testing.T) {
 	rng := rand.New(rand.NewPCG(3, 4))
 	const rows, k = 3, 7
-	for _, c := range []Type{TypeF32, TypeF16, TypeBF16} {
-		width := 2
-		if c == TypeF32 {
-			width = 4
+	for _, c := range []Type{TypeF32, TypeF16, TypeBF16, TypeIQ4NL} {
+		k := k
+		if c == TypeIQ4NL {
+			// Five blocks a row, 90 bytes: rows and scales off the words.
+			k = 160
 		}
-		raw := make([]byte, (rows*k*width+3)/4*4)
-		for i := 0; i < rows*k; i++ {
+		words, err := VerbatimWords(c, rows, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw := make([]byte, words*4)
+		n := len(raw)
+		for i := 0; i < rows*k && c != TypeIQ4NL; i++ {
 			v := float32(rng.NormFloat64())
 			switch c {
 			case TypeF32:
 				binary.LittleEndian.PutUint32(raw[4*i:], math.Float32bits(v))
+				n = 4 * rows * k
 			case TypeF16:
 				binary.LittleEndian.PutUint16(raw[2*i:], quant.EncodeHalf(v))
+				n = 2 * rows * k
 			default:
 				binary.LittleEndian.PutUint16(raw[2*i:], uint16(math.Float32bits(v)>>16))
+				n = 2 * rows * k
+			}
+		}
+		if c == TypeIQ4NL {
+			n = rows * k / 32 * 18
+			for i := range raw[:n] {
+				raw[i] = byte(rng.Uint32())
+			}
+			for b := 0; b < n; b += 18 {
+				binary.LittleEndian.PutUint16(raw[b:], quant.EncodeHalf(float32(rng.NormFloat64())))
 			}
 		}
 		src, _ := SourceType(c)
 		want := make([]float32, rows*k)
-		if err := quant.Dequant32(src, raw[:rows*k*width], want); err != nil {
+		if err := quant.Dequant32(src, raw[:n], want); err != nil {
 			t.Fatalf("%s: %v", c, err)
 		}
 		p := planes{qs: raw}

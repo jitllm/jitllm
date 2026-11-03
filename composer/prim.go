@@ -68,7 +68,8 @@ type Operand struct {
 	// its scales, its sub-scales.
 	Region int
 	// Table and Instance are which of the step's tables an OperandTable is
-	// (Table.of): what it is matched and bound by. Its Name is a label.
+	// (Table.of): what it is matched and bound by. Its Name is a label. A
+	// weight's Instance is the first stored row it binds (graph.Binding.From).
 	Table    Table
 	Instance int
 }

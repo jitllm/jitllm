@@ -136,13 +136,13 @@ func (p *packed) Code(t *[16]uint8, q int) int {
 // the format the container stores it in: the format's own reading rules
 // (jlm.DecodeElement, jlm.DecodeVerbatim) over the planes it appends to in.
 func weightElement(x *exprs, wo Operand, rows, k int, in *[]Operand, facts *Facts, row, col int) (int, error) {
-	if jlm.Verbatim(wo.Format) {
-		width := 2
-		if wo.Format == jlm.TypeF32 {
-			width = 4
+	if jlm.VerbatimRows(wo.Format) {
+		words, err := jlm.VerbatimWords(wo.Format, rows, k)
+		if err != nil {
+			return 0, err
 		}
 		p := &packed{x: x, in: in, facts: facts, codes: -1, sheet: -1, planes: [3]int{len(*in), -1, -1}}
-		facts.Extents[len(*in)] = (rows*k*width + 3) / 4
+		facts.Extents[len(*in)] = words
 		*in = append(*in, wo)
 		return jlm.DecodeVerbatim[int](p, wo.Format, k, row, col), nil
 	}

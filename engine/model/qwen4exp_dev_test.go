@@ -55,8 +55,8 @@ func TestQwen4ExpDeviceRunsTheChunkWhole(t *testing.T) {
 			st := m.NewInstance(len(g.IDs) + 2)
 			defer st.Close()
 			st.SetDeviceLayers(gpux, -1)
-			if st.GPULayers() != nl {
-				t.Fatalf("placed %d of %d blocks: %v %v", st.GPULayers(), nl, st.DeviceDeclines(), gpux.Err())
+			if st.GPULayers() != cardBlocks(m) {
+				t.Fatalf("placed %d of %d blocks: %v %v", st.GPULayers(), cardBlocks(m), st.DeviceDeclines(), gpux.Err())
 			}
 			s0 := gpux.Stats()
 			lg, err := st.Prefill(g.IDs)
@@ -74,7 +74,8 @@ func TestQwen4ExpDeviceRunsTheChunkWhole(t *testing.T) {
 			bs2, bd2 := s2.ServedPart(gpu.ComposedBlock)
 			t.Logf("prefill of %d: %d composed block steps, %d declined; a decode token: %d, %d (%d QSA blocks)",
 				len(g.IDs), ps1-ps0, pd1-pd0, bs2-bs1, bd2-bd1, qsa)
-			if ps1-ps0 < nl || (ps1-ps0)%nl != 0 || pd1 != pd0 || bs2-bs1 != nl || bd2 != bd1 {
+			cb := cardBlocks(m)
+			if ps1-ps0 < cb || (ps1-ps0)%cb != 0 || pd1 != pd0 || bs2-bs1 != cb || bd2 != bd1 {
 				t.Fatalf("the composer did not serve every block of the prompt and of the decode token on the device")
 			}
 		})
@@ -145,7 +146,7 @@ func TestQwen4ExpQSATurnsByTheMarks(t *testing.T) {
 				}
 				st := m.NewInstance(len(g.IDs) + 1)
 				st.SetDeviceLayers(gpux, -1)
-				if st.GPULayers() != m.Cfg.NLayer {
+				if st.GPULayers() != cardBlocks(m) {
 					t.Fatalf("placed %d of %d blocks: %v", st.GPULayers(), m.Cfg.NLayer, gpux.Err())
 				}
 				got := run(st, delta)
@@ -176,4 +177,17 @@ func TestBatchSeamMovesCarryEveryRowQwen4Exp(t *testing.T) {
 			" (set JITLLM_MODELS to the model directory) -- run "+q4eGoldScript+" (RULE 11)")
 	}
 	batchSeamMoves(t, p, 1e-3, true, w)
+}
+
+// cardBlocks is how many of m's blocks a card takes: every one but a block
+// gathering a row table's rows, which no card holds (the n-gram table does
+// not fit one), so that block runs on the CPU device.
+func cardBlocks(m *Model) int {
+	n := 0
+	for li := range m.Cfg.NLayer {
+		if tableRowsOf(m.Composing().BlockGraph(li)) < 0 {
+			n++
+		}
+	}
+	return n
 }

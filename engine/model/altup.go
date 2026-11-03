@@ -75,13 +75,6 @@ func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32
 	if err := s.expandStreams(x, n, 0); err != nil {
 		return err
 	}
-	// Qwen3.8-Flash-Next's n-gram rows, each sequence's in position order.
-	if c.NGramBlock != 0 {
-		s.q4.setStep(s, pos, slot, tokens)
-		if err := s.ngramToDevice(s.lo, s.hi, n, s.causalOrder(pos), s.q4.stepOwner, s.q4.callTok); err != nil {
-			return err
-		}
-	}
 	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.NRotSWA), nil) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {

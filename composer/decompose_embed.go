@@ -94,6 +94,9 @@ func decomposeEmbedRows(o graph.Op, c *Context, w graph.Binding, wo Operand) ([]
 	var x exprs
 	r, h, i := x.coord(0), x.coord(1), x.coord(2)
 	at := x.at(0, []int{R, H}, r, h)
+	if w.From > 0 {
+		at = x.op(OpSub, ir.U32, at, x.u(uint32(w.From)))
+	}
 	at = x.sel(ir.U32, x.op(OpLess, ir.Pred, at, x.u(uint32(w.Rows))), at, x.u(0))
 	in := []Operand{c.value(o.In[0])}
 	facts := Facts{Extents: map[int]int{}}

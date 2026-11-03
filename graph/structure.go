@@ -39,6 +39,7 @@ func (g *Graph) Structure() uint64 {
 		for _, w := range o.Weight {
 			put(uint64(w.Role))
 			flag(w.Sheets > 0)
+			flag(w.From > 0)
 		}
 		a := &o.Attr
 		put(uint64(a.Layout))

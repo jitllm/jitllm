@@ -119,14 +119,6 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 				hi++
 			}
 			withHead := headOnDev && hi == s.hi
-			// Qwen3.8-Flash-Next's n-gram rows, when the run holds its n-gram
-			// block, each sequence's in position order.
-			if c.NGramBlock != 0 {
-				s.q4.setRows(s, seq, tokens)
-				if err := s.ngramToDevice(li, hi, n, causal, s.q4.rowsOwner, s.q4.callTok); err != nil {
-					return nil, err
-				}
-			}
 			run := s.rowsRun
 			if len(s.rowOwn) > 0 {
 				run = s.rowsSessions
@@ -149,17 +141,11 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		var err error
 		switch {
 		case c.LayerKind(li).Recurrent():
-			if c.NGramAt(li) {
-				s.q4.setRows(s, seq, tokens)
-				if err := s.ngramForCPU(li, n, causal, s.q4.rowsOwner, s.q4.callTok); err != nil {
-					return nil, err
-				}
-			}
-			why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, causal, -1, 0)
+			why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, tokens, causal, -1, 0)
 		case len(s.rowOwn) > 0:
-			why, err = s.cpuSessions(li, l, s.bx[:n*c.ResidW()], cs, csSWA, seq, pos, nlogit)
+			why, err = s.cpuSessions(li, l, s.bx[:n*c.ResidW()], cs, csSWA, seq, pos, tokens, nlogit)
 		default:
-			why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], cs, csSWA, seq, pos)
+			why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], cs, csSWA, seq, pos, tokens)
 		}
 		if err != nil {
 			return nil, err

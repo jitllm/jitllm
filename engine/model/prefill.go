@@ -513,6 +513,15 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		// The chunk's rotary tables are the CPU's to make where a block runs
 		// there (cpuRowTables); a device makes its own.
 		s.cpu.tabsFresh = false
+		// The chunk's rows' tokens, -1 for a supplied embedding's, for a block
+		// that reads them (graph.OpToken).
+		s.chunkTok = grow32i(s.chunkTok, n)
+		for i := range n {
+			s.chunkTok[i] = -1
+			if rowIDs != nil {
+				s.chunkTok[i] = rowIDs[base+i]
+			}
+		}
 		// Device blocks go as runs, not a prefix (see forward.go), each run as
 		// one batch so the weights are read once for n tokens.
 		for li := s.lo; li < s.hi; li++ {
@@ -530,19 +539,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				// rows of this one sequence, a causal prefill (nn.RowsDevice),
 				// which a linear block steps in position order through the
 				// slot's one state.
-				// The chunk's token ids, which DeepSeek V4's hash blocks route
-				// by (-1 or nil for a supplied embedding with none, which they
-				// refuse).
-				var cids []int32
-				if rowIDs != nil {
-					cids = rowIDs[base : base+n]
-				}
-				// Qwen3.8-Flash-Next's n-gram rows, when the run holds its
-				// n-gram block; every failure below puts the predecessors back.
-				s.q4.setCall(s, slot, cids)
-				if err := s.ngramToDevice(li, hi, n, nil, s.q4.callOwner, s.q4.callTok); err != nil {
-					return nil, err
-				}
 				var fh *nn.Head
 				// A tap reads every chunk's residual, which a folded head keeps
 				// on the device.
@@ -586,10 +582,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					if err := refill(); err != nil {
 						return nil, err
 					}
-					s.ngramUndoRows()
-					if err := s.ngramToDevice(li, hi, n, nil, s.q4.callOwner, s.q4.callTok); err != nil {
-						return nil, err
-					}
 				}
 				s.layerInputs(s.bple[:n*c.pleWidth()])
 				if s.callTell(p0, n) && s.ld.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
@@ -601,7 +593,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				if err := s.refusal(li); err != nil {
 					return nil, err
 				}
-				s.ngramUndoRows()
 				// A fault: a hybrid's speculation step is rolled back as one
 				// pass, so its fault is the step's error; any other chunk's
 				// demotes and restarts on the CPU device.
@@ -629,16 +620,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				}
 				li = s.lo - 1
 				continue
-			}
-			// Qwen3.8-Flash-Next's n-gram block hashes the chunk's tokens
-			// (-1 for a supplied embedding).
-			if c.NGramAt(li) {
-				s.q4eRowIDs(n, func(i int) int32 {
-					if rowIDs != nil {
-						return rowIDs[base+i]
-					}
-					return -1
-				})
 			}
 			// A host block needs the host's rows, which a device-only prompt
 			// did not allocate (growDeviceBatch); a demotion lands here.
@@ -925,17 +906,12 @@ func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) er
 			s.bidir = append(s.bidir[:0], nn.KeyRun{Lo: p0, Hi: p0 + n})
 		}
 		seq, pos := s.cpuRowsOf(slot, p0, n)
+		tok := s.chunkTok[:n]
 		var err error
-		if c.NGramAt(li) {
-			s.q4.setCall(s, slot, s.q4.rid[:n])
-			if err := s.ngramForCPU(li, n, nil, s.q4.callOwner, s.q4.callTok); err != nil {
-				return err
-			}
-		}
 		if c.LayerKind(li).Recurrent() {
-			why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos, nil, base, p0)
+			why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos, tok, nil, base, p0)
 		} else {
-			why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], s.bcs, s.bcsSWA, seq, pos)
+			why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], s.bcs, s.bcsSWA, seq, pos, tok)
 		}
 		if bidir {
 			s.bidir = s.bidir[:0]

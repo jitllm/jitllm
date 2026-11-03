@@ -172,6 +172,38 @@ func TestVerifierHoldsAMapsWindow(t *testing.T) {
 	}
 }
 
+// TestVerifierHoldsAnEmbeddingsRange verifies an embedding of a range of
+// its table's rows, from row 0 and from a later row, and refuses a range
+// past the table and a first row on an op that is not an embedding.
+func TestVerifierHoldsAnEmbeddingsRange(t *testing.T) {
+	inv := map[jlm.Role]Shape{jlm.RoleNGramTable: {K: 4, Rows: 9}}
+	embed := func(from, rows int) error {
+		b := NewBlock(0)
+		ix := b.In("ix", 1)
+		b.G.Values[ix].Elem = ElemU32
+		b.Out(b.Emit(OpEmbed, []ValueID{ix}, []Result{{Name: "e", Width: 4}},
+			[]Binding{{Role: jlm.RoleNGramTable, K: 4, Rows: rows, From: from}}, Attrs{}, nil, nil)[0])
+		return Verify(b.G, Facts{Inventory: inv})
+	}
+	for _, c := range []struct{ from, rows int }{{0, 9}, {0, 4}, {3, 4}, {5, 4}} {
+		if err := embed(c.from, c.rows); err != nil {
+			t.Errorf("rows %d to %d of a table of 9 are refused: %v", c.from, c.from+c.rows, err)
+		}
+	}
+	for _, c := range []struct{ from, rows int }{{6, 4}, {0, 10}, {-1, 4}} {
+		if err := embed(c.from, c.rows); err == nil {
+			t.Errorf("rows %d to %d of a table of 9 verify", c.from, c.from+c.rows)
+		}
+	}
+	b := NewBlock(0)
+	x := b.In("x", 4)
+	b.Out(b.Emit(OpMatVec, []ValueID{x}, []Result{{Name: "y", Width: 4}},
+		[]Binding{{Role: jlm.RoleNGramTable, K: 4, Rows: 4, From: 3}}, Attrs{}, nil, nil)[0])
+	if err := Verify(b.G, Facts{Inventory: inv}); err == nil || !strings.Contains(err.Error(), "only an embedding") {
+		t.Errorf("a matrix-vector product from row 3: Verify said %v", err)
+	}
+}
+
 // TestVerifierHoldsASelection verifies an attention over a selection of its
 // own history's keys, then each violation of a selection's structure.
 func TestVerifierHoldsASelection(t *testing.T) {

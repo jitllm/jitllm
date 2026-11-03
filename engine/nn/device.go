@@ -544,8 +544,8 @@ type K3Plan struct {
 // IdxTopK/QSARatio best blocks of QSARatio positions and the tail, the
 // indexer being IdxHeads heads of IdxHeadDim. On the n-gram block
 // (NGramHere; NGramWidth is the model's, on every block, so a scratch built
-// for any block serves it) the gathered table rows of each row
-// (NGramDevice.SetNGramRows) are projected, gated per stream and convolved
+// for any block serves it) each row's table rows, which its graph gathers,
+// are projected, gated per stream and convolved
 // over NGramConv taps NGramDil positions apart, the history the block's
 // recurrent tail (RecurrentPlan.TailLen). The head's mix is the host's.
 type Q4EPlan struct {
@@ -559,13 +559,6 @@ type Q4EPlan struct {
 	// TabPlanes), which a QSA block's pooled keys turn by at their blocks'
 	// first positions: an M-RoPE model's text rows turn by the same table.
 	QSARope []float32
-}
-
-// NGramDevice is a device that runs Qwen3.8-Flash-Next's n-gram block: the
-// host hashes each row's n-gram, reads the table rows and hands them over,
-// rows*Q4EPlan.NGramWidth floats in the call's row order, before the call.
-type NGramDevice interface {
-	SetNGramRows(rows []float32)
 }
 
 // ExpWidth is the routed experts' input and output width: the latent on a

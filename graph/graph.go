@@ -288,6 +288,16 @@ const (
 	// OpToken is each row's token, the step's own: Out[0] one index (u32) a
 	// row. A primitive.
 	OpToken
+	// OpNGramWindow is each row's window for OpNGramHash (Out[0], u32, Taps
+	// words): the row's token In[0] (u32, one word; a row naming none, all
+	// ones, reads as Words[0], the model's image id), then its Taps-1
+	// predecessors nearest first, each its id plus one -- the earlier rows
+	// of its run, then those the run's slot holds at Offset of the
+	// recurrent state (Span floats a sequence, an id's word as a float's
+	// bits). The run's predecessors after its last row are written to the
+	// slot: its rows' ids plus one newest first, then the slot's. It reads
+	// state version n and writes n+1. A primitive with a state of its own.
+	OpNGramWindow
 	numOps
 )
 
@@ -387,6 +397,8 @@ func (k OpKind) String() string {
 		return "rope_pos"
 	case OpToken:
 		return "token"
+	case OpNGramWindow:
+		return "ngram_window"
 	}
 	return fmt.Sprintf("op%d", k)
 }
@@ -521,6 +533,9 @@ type Binding struct {
 	Role    jlm.Role
 	K, Rows int
 	Sheets  int // a bank's experts, each a K x Rows sheet; 0 for one matrix
+	// From, where set, is the first stored row the binding reads: an
+	// embedding of rows From to From+Rows of its table (a row table's head).
+	From int
 }
 
 // State is a block's persistent state an op reads or writes.

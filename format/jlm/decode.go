@@ -1,5 +1,7 @@
 package jlm
 
+import "github.com/jitllm/jitllm/format/quant"
+
 // The reading rules of a packed weight, stated once over an arithmetic the
 // caller supplies: a Go evaluator's values are numbers (DecodeElement), the
 // composer's are the nodes of a kernel, so the device's decode and the
@@ -284,9 +286,21 @@ func (l TypeLayout) Words(rows, k int) (qs, d, sc int) {
 }
 
 // DecodeVerbatim is element c of row r of a verbatim tensor of k columns:
-// row-major values, an f32 a word, an f16 or a bf16 a half of one.
+// row-major values, an f32 a word, an f16 or a bf16 a half of one; IQ4_NL's
+// own 18-byte blocks of 32, a row whole blocks, each an f16 scale and a
+// nibble an element indexing its code table.
 func DecodeVerbatim[V any](a Arith[V], t Type, k int, r, c V) V {
 	u := a.U
+	if t == TypeIQ4NL {
+		byteAt := func(o V) V {
+			return a.Shr(a.Word(PlaneQS, a.Div(o, u(4))), a.Mul(a.Rem(o, u(4)), u(8)))
+		}
+		j := a.Rem(c, u(32))
+		o := a.Add(a.Mul(r, u(uint32(k/32*18))), a.Mul(a.Div(c, u(32)), u(18)))
+		q := a.And(a.Shr(byteAt(a.Add(o, a.Add(u(2), a.Rem(j, u(16))))), a.Mul(a.Div(j, u(16)), u(4))), u(15))
+		codes := iq4nlCodes()
+		return a.FMul(a.Half(byteAt(o)), a.FSub(a.Float(a.Code(&codes, q)), a.FConst(127)))
+	}
 	i := a.Add(a.Mul(r, u(uint32(k))), c)
 	if t == TypeF32 {
 		return a.F32(a.Word(PlaneQS, i))
@@ -298,5 +312,25 @@ func DecodeVerbatim[V any](a Arith[V], t Type, k int, r, c V) V {
 	return a.Half(h)
 }
 
-// Verbatim reports a type DecodeVerbatim reads.
+// Verbatim reports a type DecodeVerbatim reads an element a word or a half
+// of one.
 func Verbatim(t Type) bool { return t == TypeF32 || t == TypeF16 || t == TypeBF16 }
+
+// VerbatimRows reports a type DecodeVerbatim reads, the blocked IQ4_NL with
+// the element types.
+func VerbatimRows(t Type) bool { return Verbatim(t) || t == TypeIQ4NL }
+
+// VerbatimWords is the words rows rows of k columns of verbatim type t take.
+func VerbatimWords(t Type, rows, k int) (int, error) {
+	b, err := verbatimBytes(t, uint64(k))
+	return (rows*int(b) + 3) / 4, err
+}
+
+// iq4nlCodes is IQ4_NL's code table plus 127, so every entry is unsigned.
+func iq4nlCodes() [16]uint8 {
+	var t [16]uint8
+	for i, v := range quant.IQ4NLValues() {
+		t[i] = uint8(int(v) + 127)
+	}
+	return t
+}

@@ -117,6 +117,13 @@ func Verify(g *Graph, f Facts) error {
 			switch {
 			case !ok:
 				bad("%s: binds %v, which the container does not store for the block", at, w.Role)
+			case w.From < 0 || w.From > 0 && (o.Kind != OpEmbed || w.Sheets != 0):
+				bad("%s: binds %v from row %d, which only an embedding of one matrix reads", at, w.Role, w.From)
+			case o.Kind == OpEmbed && w.Sheets == 0:
+				// An embedding reads rows From to From+Rows of its table.
+				if s.K != w.K || s.Sheets != 0 || w.From+w.Rows > s.Rows {
+					bad("%s: binds rows %d to %d of %v, stored %dx%dx%d", at, w.From, w.From+w.Rows, w.Role, s.K, s.Rows, s.Sheets)
+				}
 			case s != (Shape{w.K, w.Rows, w.Sheets}):
 				bad("%s: binds %v as %dx%dx%d, stored %dx%dx%d", at, w.Role, w.K, w.Rows, w.Sheets, s.K, s.Rows, s.Sheets)
 			}
@@ -222,6 +229,18 @@ func Verify(g *Graph, f Facts) error {
 		case OpPosition:
 			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || o.Attr.Offset < 0 || o.Attr.Span < 0 {
 				bad("%s: %d inputs into %d outputs, offset %d and span %d", at, len(o.In), len(o.Out), o.Attr.Offset, o.Attr.Span)
+			}
+		case OpNGramWindow:
+			a := o.Attr
+			switch {
+			case len(o.In) != 1 || len(o.Out) != 1 || width(o.In[0]) != 1 || width(o.Out[0]) != a.Taps || a.Taps < 2:
+				bad("%s: %d inputs into %d outputs, a window of %d", at, len(o.In), len(o.Out), a.Taps)
+			case g.Values[o.In[0]].Elem != ElemU32 || g.Values[o.Out[0]].Elem != ElemU32 || len(a.Words) != 1:
+				bad("%s: a token and window not of indices, or %d constants", at, len(a.Words))
+			case len(o.Reads) != 1 || len(o.Writes) != 1 || o.Reads[0].State != StateRecState || o.Writes[0].State != StateRecState:
+				bad("%s: a window reads and writes the recurrent state", at)
+			case a.Offset < 0 || a.Span < a.Offset+a.Taps-1:
+				bad("%s: %d predecessors at %d of a slot of %d", at, a.Taps-1, a.Offset, a.Span)
 			}
 		case OpToken:
 			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || g.Values[o.Out[0]].Elem != ElemU32 {

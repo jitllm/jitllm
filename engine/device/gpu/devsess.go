@@ -114,9 +114,6 @@ type devSess struct {
 	// pleHost is the rows' per-layer embedding inputs for the next call
 	// (SetLayerInputs) and pleStage their padded staging.
 	pleHost, pleStage []float32
-	// ngHost is the rows' n-gram table rows for the next call (SetNGramRows),
-	// which Qwen3.8-Flash-Next's n-gram block reads (q4e.go).
-	ngHost []float32
 	// markAt and markRoom are, per slot, where the session's rotary marks
 	// sit in the device's arena and how many words they may take
 	// (markArena).
