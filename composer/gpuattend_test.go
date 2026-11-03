@@ -436,16 +436,17 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 }
 
 // flashErr is the expected squared error binary16 operands add to a head
-// of a row -- its factor, the position factors and the exponentials
-// rounded, and a float32 history's second factor -- each rounding an
-// independent error uniform over a binary16 step, carried to first order:
-// an error in score i moves output d by w_i (v_id - o_d), so the row
-// factor's, shared by every position, by sum_e err_e A_de with
-// A_de = scale sum_i w_i (v_id - o_d) k_ie. An exponential is rounded in the
-// frame of a running maximum, at most the row's: a step relative to its
-// weight, or a subnormal step where it can fall below the normal range.
+// of a row -- its factor, the position factors and a float32 history's
+// second factor rounded -- each rounding an independent error uniform over a
+// binary16 step, carried to first order: an error in score i moves output d
+// by w_i (v_id - o_d), so the row factor's, shared by every position, by
+// sum_e err_e A_de with A_de = scale sum_i w_i (v_id - o_d) k_ie. The
+// exponentials are staged as their halves and their remainders' halves,
+// within float32's band, but an exponential is taken in the frame of a
+// running maximum, at most the row's, and one that can fall below binary16's
+// normal range loses its remainder too: a subnormal step.
 func flashErr(qh []float32, k func(int) []float32, v func(i, d int) float64, w, raw, o []float64, scale float64, f32v bool) float64 {
-	const u, normal = 1.0 / 2048, 1.0 / (1 << 14)
+	const normal = 1.0 / (1 << 14)
 	D, top := len(qh), slices.Max(raw)
 	A, ck := make([]float64, D*D), make([]float64, len(w))
 	dv := make([]float64, D)
@@ -474,8 +475,6 @@ func flashErr(qh []float32, k func(int) []float32, v func(i, d int) float64, w, 
 			mse += wi * wi * (vi - o[d]) * (vi - o[d]) * ck[i] * scale * scale
 			if math.Exp(raw[i]-top) < normal {
 				mse += step2(0) * vi * vi
-			} else {
-				mse += wi * wi * u * u / 3 * vi * vi
 			}
 			if f32v {
 				mse += wi * wi * step2(vi)
