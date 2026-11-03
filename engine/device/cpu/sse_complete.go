@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // SSEPending lists the SSE-tier table's ops that have no kernel yet, by field

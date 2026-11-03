@@ -39,7 +39,7 @@ func goComputeAllowed() map[string]string {
 		"engine/model/imageproc.go:aaWeights":      "the same taps in fixed point, and the precision they share: geometry from the image's sizes, once per image",
 		"engine/model/imageproc.go:normLUT":        "the normalisation's 256-entry table per channel, from the tower's mean and std",
 		"engine/model/llama4vision.go:bf16NormLUT": "the bfloat16 normalisation's 256-entry table per channel, from the tower's mean and std",
-		"engine/graph/sample.go:selection":         "the draw's graph: the binade thresholds it states as constants, once when the graph is built",
+		"graph/sample.go:selection":                "the draw's graph: the binade thresholds it states as constants, once when the graph is built",
 		// Geometry of a picture or a grid, from its sizes alone: no pixel and no
 		// activation is read.
 		"engine/model/slices.go:slicedGrid":       "MiniCPM-V's slice grid: which cols x rows best matches the picture's aspect, from its width and height",
@@ -72,7 +72,7 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 	// walking the parent of the repository.
 	t.Chdir(root)
 	found := map[string][]int{}
-	for _, pkg := range []string{"engine/model", "engine/nn", "engine/device/gpu", "backend", "engine/sched", "engine/device/cpu", "composer/kernels", "composer", "engine/graph"} {
+	for _, pkg := range []string{"engine/model", "engine/nn", "engine/device/gpu", "backend", "engine/sched", "engine/device/cpu", "composer/kernels", "composer", "graph"} {
 		fset := token.NewFileSet()
 		ents, err := os.ReadDir(filepath.Join(root, pkg))
 		if err != nil {

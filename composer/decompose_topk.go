@@ -5,7 +5,7 @@ import (
 	"math"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // decomposeTopK is the largest element of a row and where it is, the

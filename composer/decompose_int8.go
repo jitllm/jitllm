@@ -2,7 +2,7 @@ package composer
 
 import (
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // abs is |a| by its sign bit.

@@ -3,8 +3,8 @@ package model
 import (
 	"math"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // ngramStreams is the n-gram embedding's block (ngram.go) over the streams

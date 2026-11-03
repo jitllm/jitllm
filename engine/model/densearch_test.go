@@ -6,8 +6,8 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // The dense llama-family architectures (jlm.ArchSmolLM3 and its siblings) are

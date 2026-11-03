@@ -7,7 +7,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // erfP and erfA are erf's rational approximation, Abramowitz and Stegun

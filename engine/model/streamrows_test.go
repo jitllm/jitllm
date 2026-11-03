@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestStreamRowsServeOnTheCard holds the composer to the input rows and the

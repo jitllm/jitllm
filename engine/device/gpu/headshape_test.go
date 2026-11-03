@@ -3,8 +3,8 @@ package gpu
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestHeadShapeReadsTheHeadsGraph holds the tier's reading of a head graph to

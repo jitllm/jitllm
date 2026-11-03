@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // Philox2x32-10's round multiplier and key increment (Salmon et al.,

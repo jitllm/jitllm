@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestPhasesTakeEdgeReadersOrWriters forms a router's chain on a V100's

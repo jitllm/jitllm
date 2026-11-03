@@ -3,7 +3,7 @@ package composer
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestScratchIsWrittenBeforeItIsRead holds a formed attention's kernels to

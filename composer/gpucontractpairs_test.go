@@ -9,10 +9,10 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestComposedGPUContractPairs runs a gated FFN's gate and up, 5632 rows of

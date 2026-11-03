@@ -7,9 +7,9 @@ import (
 
 	"github.com/jitllm/jitllm/composer/x86"
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // rowJamRegistry is the default registry with the CPU's RowJam at n rows a

@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // llamaBlock is a Llama-3.2-1B-shaped block: the attention half (a norm, q,

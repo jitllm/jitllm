@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // philoxRef is Philox2x32 over counter (c0, c1) keyed by k, rounds of them,

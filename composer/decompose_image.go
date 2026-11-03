@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // RequestGrid is a picture's step's request word: its grid's width in

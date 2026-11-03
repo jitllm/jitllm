@@ -5,7 +5,7 @@ import (
 	"math"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // The rotary table's inputs the engine writes: the positions (the step's

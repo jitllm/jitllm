@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // cloneGraph is a copy of g no rewrite of it reaches the original through.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // tableTokens is the step's tokens, a word a row, which the engine writes.

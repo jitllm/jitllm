@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // Request is what a runtime call site asks the composer to form: a slice of

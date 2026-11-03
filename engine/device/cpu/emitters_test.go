@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestEmittersTablesAreComplete requires every function field of both amd64

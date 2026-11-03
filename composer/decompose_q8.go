@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // The Q8_0 layout the container stores (kernels.PackWeights): a row's

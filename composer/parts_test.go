@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestPartsJoinNoCombineAcrossWidths holds Parts to one width for a part

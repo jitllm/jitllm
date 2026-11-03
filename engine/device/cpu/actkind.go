@@ -1,7 +1,7 @@
 package cpu
 
 import (
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // ActKind is the activation a kernel bakes in. It is the kernels package's

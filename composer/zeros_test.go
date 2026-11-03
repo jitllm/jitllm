@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // zerosReadAcrossLoops is each read, in kernel k's sequence, of a float zero

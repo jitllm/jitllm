@@ -13,11 +13,11 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	hw "github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/offheap"
 )
 

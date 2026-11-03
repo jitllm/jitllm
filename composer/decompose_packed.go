@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // packed is a packed weight's reading rules (jlm.DecodeElement) over a

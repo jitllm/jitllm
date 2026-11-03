@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestComposedCPUTakeRow moves the row the request names out of a step of

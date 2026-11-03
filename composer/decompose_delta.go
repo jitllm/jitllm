@@ -5,7 +5,7 @@ import (
 	"math/bits"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // A part's recurrent state is a pool of slots, a sequence's state a slot:

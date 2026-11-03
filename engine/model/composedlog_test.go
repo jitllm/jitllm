@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // TestComposedCPULog holds the composer's logarithm to math.Log within four

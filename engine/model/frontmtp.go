@@ -3,8 +3,8 @@ package model
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // A model's prediction blocks (Config.NMTP of them, after the trunk's NLayer)

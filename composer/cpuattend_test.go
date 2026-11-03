@@ -10,8 +10,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
 )
 
 func attendGraph(heads, kv, dim int) *graph.Graph {

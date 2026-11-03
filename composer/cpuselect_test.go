@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // selectCase is one selection's shape: the attention's heads over a history
