@@ -199,12 +199,14 @@ func shuffleKernel(t *testing.T) *ir.Kernel {
 // runtime count (loop), or one that loads before any loop.
 func anchorKernel(t *testing.T, loop bool) *ir.Kernel {
 	b := ir.New("anchor", [3]int{32, 1, 1})
-	in, n, out := b.Param("in", ir.F32), b.Param("n", ir.U32), b.Param("out", ir.F32)
+	in, out := b.Param("in", ir.F32), b.Param("out", ir.F32)
 	var first ir.Value
 	if !loop {
 		first = b.Load(ir.F32, in, b.TID(), 0)
 	}
-	b.LoopN(b.Load(ir.U32, n, b.Const(ir.U32, 0), 0))
+	// A count the kernel computes, so the loop's own load is its first
+	// buffer access (a count read from a buffer would be that access).
+	b.LoopN(b.Add(ir.U32, b.TID(), b.Const(ir.U32, 1)))
 	v := b.Load(ir.F32, in, b.TID(), 0)
 	if !loop {
 		v = b.Add(ir.F32, v, first)
