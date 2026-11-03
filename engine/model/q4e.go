@@ -304,13 +304,6 @@ func loadQ4EHead(m *Model, cfg *Config, f *jlm.File,
 // call so a warm decode token and a warm step allocate nothing.
 type q4eScratch struct {
 	rows int
-	// per row: every stream normed (xn), the gate's low rank (lo) and the
-	// gate itself (gate), the mix (mix), the placement weights (w), and a
-	// sublayer's output where it must not land in the residual (out).
-	xn, lo, gate, mix, w, out []float32
-	// twos is the placement's factor of two, a vector so the sigmoid's
-	// generated multiply applies it.
-	twos []float32
 	ng   *ngramScratch
 	qsa  *qsaScratch
 	// rid is each row's token id for the n-gram block, -1 for a row with
@@ -340,10 +333,6 @@ func (s *Instance) allocQ4E() {
 		return
 	}
 	s.q4 = &q4eScratch{}
-	s.q4.twos = make([]float32, c.HCMult*(nn.ElemLanes+1))
-	for i := range s.q4.twos {
-		s.q4.twos[i] = 2
-	}
 	s.allocNGram()
 	s.allocQSA()
 	s.growQ4E(1)
@@ -351,23 +340,12 @@ func (s *Instance) allocQ4E() {
 
 // growQ4E sizes the per-row buffers for n rows.
 func (s *Instance) growQ4E(n int) {
-	c, g := s.m.Cfg, s.q4
+	g := s.q4
 	if g == nil || g.rows >= n {
 		return
 	}
 	g.rows = n
-	h, d := c.HCMult, c.NEmbd
-	g.xn, g.gate = make([]float32, n*h*d), make([]float32, n*h*d)
-	g.lo = make([]float32, n*c.HCLowRank)
-	g.mix, g.out = make([]float32, n*d), make([]float32, n*d)
-	g.w = make([]float32, n*h)
 	g.rid = make([]int32, n)
-	if len(g.twos) < n*h {
-		g.twos = make([]float32, n*h)
-		for i := range g.twos {
-			g.twos[i] = 2
-		}
-	}
 	s.growNGram(n)
 	s.growQSARows(n)
 }
@@ -386,99 +364,20 @@ func (s *Instance) q4eDraftStreams(x []float32, rows, base int) {
 	}
 }
 
-// hcNorm writes each of n rows' streams into dst, row-major (row r's stream k
-// at (r*H + k)*d), each RMSNormed against its own row of w.
-func (s *Instance) hcNorm(dst, x []float32, n int, w []float32) {
-	c := s.m.Cfg
-	h, d := c.HCMult, c.NEmbd
-	for r := 0; r < n; r++ {
-		for k := 0; k < h; k++ {
-			o := (r*h + k) * d
-			s.rmsnorm(dst[o:o+d], c.stream(x, k, n, r), w[k*d:(k+1)*d], c.RMSEps)
-		}
-	}
-}
 
-// hcMix is a hyper-connection's mix for n rows of x: each row's sublayer
-// input into g.mix (n_embd a row), and with a placement its weights into
-// g.w (HCMult a row).
-func (s *Instance) hcMix(x []float32, n int, hc *q4eHC) error {
-	c, g := s.m.Cfg, s.q4
-	h, d := c.HCMult, c.NEmbd
-	hd := h * d
-	xn, gate := g.xn[:n*hd], g.gate[:n*hd]
-	s.hcNorm(xn, x, n, hc.norm)
-	s.jit.NewInput()
-	if c.q4eFault == q4eFaultNoGate {
-		copy(gate, xn)
-	} else {
-		lo := g.lo[:n*c.HCLowRank]
-		if err := s.mm(lo, hc.down, xn, n); err != nil {
-			return err
-		}
-		if c.q4eFault != q4eFaultUnscaledGate {
-			s.scale(lo, 1/float32(h))
-		}
-		nn.Act32JIT(lo, nn.ActSiLU)
-		s.jit.NewInput()
-		if err := s.mm(gate, hc.up, lo, n); err != nil {
-			return err
-		}
-		nn.SigmoidMul32JIT(gate, xn)
-		s.jit.NewInput()
-	}
-	for r := 0; r < n; r++ {
-		m := g.mix[r*d : (r+1)*d]
-		gr := gate[r*hd : (r+1)*hd]
-		copy(m, gr[:d])
-		for k := 1; k < h; k++ {
-			s.axpy(m, gr[k*d:(k+1)*d], 1)
-		}
-		s.scale(m, 1/float32(h))
-	}
-	s.jit.NewInput()
-	if !hc.injected {
-		return nil
-	}
-	w := g.w[:n*h]
-	if err := s.mm(w, hc.inj, xn, n); err != nil {
-		return err
-	}
-	s.scale(w, 1/float32(h))
-	nn.SigmoidMul32JIT(w, g.twos[:n*h])
-	if c.q4eFault == q4eFaultHalfPlace {
-		s.scale(w, 0.5)
-	}
-	s.jit.NewInput()
-	return nil
-}
 
 // q4eCollapse is the head's mix for n rows of x, written into stream 0 of
-// each row, which the projection reads with no norm.
+// each row, which the projection reads with no norm: the composed collapse,
+// a prediction block's draft through the block's own head mix.
 //
 // The rows' residual, every stream, is a speculation step's hidden state on
 // this model (rowsOut.tapStreams): what a prediction block reads, and what a
-// draft chains to its next step. A prediction block's draft mixes through the
-// block's own head mix.
+// draft chains to its next step.
 func (s *Instance) q4eCollapse(x []float32, n int) error {
-	// A chunk whose every block ran on a device grew nothing on the host; a
-	// trunk's n-gram rows did, a prediction block's draft has none.
 	s.growQ4E(n)
-	c, g := s.m.Cfg, s.q4
 	s.rows.tapStreams(s, x, n)
-	if s.lo < c.NLayer {
-		if why := s.cpuCollapse(x, n); why != composer.DeclineServes {
-			return s.streamsDeclined("collapse", why)
-		}
-		return nil
-	}
-	// A prediction block's draft mixes through the block's own head mix,
-	// which no composed form states yet: main's kernels run it.
-	if err := s.hcMix(x, n, &s.m.layers[s.lo].q4e.head); err != nil {
-		return err
-	}
-	for r := 0; r < n; r++ {
-		copy(c.stream(x, 0, n, r), g.mix[r*c.NEmbd:(r+1)*c.NEmbd])
+	if why := s.cpuCollapse(x, n); why != composer.DeclineServes {
+		return s.streamsDeclined("collapse", why)
 	}
 	return nil
 }
