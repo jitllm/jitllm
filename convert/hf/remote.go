@@ -56,7 +56,17 @@ func (c *Client) info(r Ref) (repoInfo, error) {
 	return doc, nil
 }
 
-var commitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
+func isCommitSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < '0' || c > '9' && c < 'a' || c > 'f' {
+			return false
+		}
+	}
+	return true
+}
 
 // Pin resolves r's revision to the commit it names at the time of the call and
 // lists that commit's files.
@@ -69,7 +79,7 @@ func (c *Client) Pin(r Ref) (Ref, []string, error) {
 	if err != nil {
 		return r, nil, err
 	}
-	if !commitSHA.MatchString(doc.SHA) {
+	if !isCommitSHA(doc.SHA) {
 		return r, nil, fmt.Errorf("%s: the Hub gave no commit for revision %q", r, r.Rev)
 	}
 	r.Rev = doc.SHA
@@ -140,8 +150,9 @@ func (m *Remote) ReadAt(p []byte, off int64) (int, error) {
 		mu    sync.Mutex
 		first error
 	)
-	for at := 0; at < len(p); at += rangeChunk {
-		piece := p[at:min(at+rangeChunk, len(p))]
+	chunk := m.c.rangeChunk()
+	for at := 0; at < len(p); at += chunk {
+		piece := p[at:min(at+chunk, len(p))]
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(piece []byte, off int64) {
@@ -163,9 +174,9 @@ func (m *Remote) ReadAt(p []byte, off int64) (int, error) {
 }
 
 // rangeChunk and rangeFanout size the pieces a read is split into; the chunk
-// is a variable so a gate can split a small file. One connection to the Hub's
-// CDN carried about 60 MB/s, so a stream needs many.
-var rangeChunk = 16 << 20
+// is Client.RangeChunk so a gate can split a small file. One connection to the
+// Hub's CDN carried about 60 MB/s, so a stream needs many.
+func (c *Client) rangeChunk() int { return cmp.Or(c.RangeChunk, 16<<20) }
 
 const rangeFanout = 16
 
@@ -173,15 +184,13 @@ const rangeFanout = 16
 // when Client.Conns is 0.
 const DefaultConns = 16
 
-// ranges is the client range reads use when Client.HTTP is nil. It speaks
+// Client.ranges is the client range reads use when Client.HTTP is nil. It speaks
 // HTTP/1.1 only: the Hub's CDN offers HTTP/2, on which net/http multiplexes
 // every request to a host onto ONE TCP connection, so sixteen ranges in
 // flight shared one connection's 60 MB/s -- the first full Kimi-K3 run read
 // 30 MB/s through a single socket. One connection per range is what spreads
 // the stream, and the idle pool keeps them, so a range does not pay a TLS
 // handshake.
-var ranges = &http.Client{Transport: rangeTransport()}
-
 func rangeTransport() *http.Transport {
 	t := sharedTransport().(*http.Transport)
 	t.ForceAttemptHTTP2 = false
@@ -202,7 +211,8 @@ func rangeTransport() *http.Transport {
 // rangeClient is a copy of the client ranges are read with, which follows no
 // redirect (see once).
 func (c *Client) rangeClient() http.Client {
-	cl := *ranges
+	c.httpOnce.Do(c.buildHTTP)
+	cl := *c.ranges
 	if c.HTTP != nil {
 		cl = *c.HTTP
 	}
@@ -242,7 +252,7 @@ func (m *Remote) piece(p []byte, off int64) error {
 		if n > 0 {
 			attempt = 0 // progress resets the budget; only a stuck range gives up
 		}
-		wait := backoff(attempt)
+		wait := m.c.backoff(attempt)
 		var later retryLater
 		if errors.As(err, &later) {
 			wait = max(wait, later.after)
@@ -259,11 +269,9 @@ func (m *Remote) piece(p []byte, off int64) error {
 // of them logged.
 const maxAttempts = 10
 
-// backoffBase is a variable so a gate can inject failures without sleeping.
-var backoffBase = time.Second
-
-func backoff(attempt int) time.Duration {
-	return min(backoffBase<<attempt, time.Minute)
+// backoff is Client.BackoffBase so a gate can inject failures without sleeping.
+func (c *Client) backoff(attempt int) time.Duration {
+	return min(cmp.Or(c.BackoffBase, time.Second)<<attempt, time.Minute)
 }
 
 type permanent struct{ error }
@@ -278,44 +286,43 @@ type retryLater struct {
 func (e retryLater) Unwrap() error { return e.error }
 
 // maxRetryAfter bounds how long a server may ask a range to wait.
-var maxRetryAfter = 5 * time.Minute
+func (c *Client) maxRetryAfter() time.Duration { return cmp.Or(c.MaxRetryAfter, 5*time.Minute) }
 
-var rateLimitReset = regexp.MustCompile(`;\s*t=(\d+)`)
+func rateLimitReset() *regexp.Regexp { return regexp.MustCompile(`;\s*t=(\d+)`) }
 
 // retryAfterOf is how long a 429 or 5xx asks to be left alone, 0 when it does
 // not say. The header is the network's claim, so it is bounded.
-func retryAfterOf(h http.Header) time.Duration {
+func (c *Client) retryAfterOf(h http.Header) time.Duration {
 	var s int64
 	if v, err := strconv.ParseInt(strings.TrimSpace(h.Get("Retry-After")), 10, 64); err == nil {
 		s = v
-	} else if m := rateLimitReset.FindStringSubmatch(h.Get("RateLimit")); m != nil {
+	} else if m := rateLimitReset().FindStringSubmatch(h.Get("RateLimit")); m != nil {
 		s, _ = strconv.ParseInt(m[1], 10, 64)
 	}
 	if s <= 0 {
 		return 0
 	}
-	return min(time.Duration(min(s, 1<<20))*time.Second, maxRetryAfter)
+	return min(time.Duration(min(s, 1<<20))*time.Second, c.maxRetryAfter())
 }
 
 // stallAfter is how long a response may produce nothing before the request is
 // abandoned and retried, and attemptDeadline how long one request may take in
 // all: a body that trickles a byte every few seconds never stalls, and would
-// otherwise hold its range for days. Variables so a gate need not wait.
-var (
-	stallAfter      = time.Minute
-	attemptDeadline = 10 * time.Minute
-)
+// otherwise hold its range for days. Client fields so a gate need not wait.
+func (c *Client) stallAfter() time.Duration { return cmp.Or(c.StallAfter, time.Minute) }
+
+func (c *Client) attemptDeadline() time.Duration { return cmp.Or(c.AttemptDeadline, 10*time.Minute) }
 
 // cdnFresh is how long a learned CDN address is used before the Hub is asked
 // again. The Hub signs it for an hour; a refused one is dropped at once.
-var cdnFresh = 20 * time.Minute
+func (c *Client) cdnFresh() time.Duration { return cmp.Or(c.CDNFresh, 20*time.Minute) }
 
 // target is where the next range goes: the CDN address a redirect led to, if
 // one is known and fresh, else the Hub's own address.
 func (m *Remote) target() (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.direct != "" && time.Since(m.at) < cdnFresh {
+	if m.direct != "" && time.Since(m.at) < m.c.cdnFresh() {
 		return m.direct, true
 	}
 	return m.url, false
@@ -344,10 +351,10 @@ func (m *Remote) once(p []byte, off int64) (int, error) {
 	// mid-stream blocks Read forever. The watchdog cancels the request after
 	// stallAfter with no bytes, and each byte that arrives winds it back; the
 	// deadline ends one that keeps trickling.
-	ctx, cancel := context.WithTimeout(context.Background(), attemptDeadline)
+	ctx, cancel := context.WithTimeout(context.Background(), m.c.attemptDeadline())
 	defer cancel()
 	var stalled atomic.Bool
-	dog := time.AfterFunc(stallAfter, func() { stalled.Store(true); cancel() })
+	dog := time.AfterFunc(m.c.stallAfter(), func() { stalled.Store(true); cancel() })
 	defer dog.Stop()
 	rng := "bytes=" + strconv.FormatInt(off, 10) + "-" + strconv.FormatInt(off+int64(len(p))-1, 10)
 
@@ -371,7 +378,7 @@ func (m *Remote) once(p []byte, off int64) (int, error) {
 			if cached {
 				m.forget(u)
 			}
-			return 0, why(ctx, &stalled, 0, len(p), err)
+			return 0, m.c.why(ctx, &stalled, 0, len(p), err)
 		}
 		if !redirect(resp.StatusCode) || hop == maxHops {
 			break
@@ -393,7 +400,7 @@ func (m *Remote) once(p []byte, off int64) (int, error) {
 		if cached {
 			m.forget(u)
 		}
-		return 0, retryLater{fmt.Errorf("HTTP %d", resp.StatusCode), retryAfterOf(resp.Header)}
+		return 0, retryLater{fmt.Errorf("HTTP %d", resp.StatusCode), m.c.retryAfterOf(resp.Header)}
 	case u != m.url && resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusRequestedRangeNotSatisfiable:
 		// A signed address expires; the Hub hands out a new one.
 		m.forget(u)
@@ -408,22 +415,22 @@ func (m *Remote) once(p []byte, off int64) (int, error) {
 		}
 		return 0, permanent{fmt.Errorf("HTTP %d to a byte range", resp.StatusCode)}
 	}
-	n, err := io.ReadFull(watched{resp.Body, dog}, p)
+	n, err := io.ReadFull(watched{resp.Body, dog, m.c.stallAfter()}, p)
 	m.got.Add(int64(n))
 	if err != nil {
-		err = why(ctx, &stalled, n, len(p), err)
+		err = m.c.why(ctx, &stalled, n, len(p), err)
 	}
 	return n, err
 }
 
 // why names what ended a request early: the watchdog, the deadline, a short
 // body, or the transport's own error.
-func why(ctx context.Context, stalled *atomic.Bool, n, want int, err error) error {
+func (c *Client) why(ctx context.Context, stalled *atomic.Bool, n, want int, err error) error {
 	switch {
 	case stalled.Load():
-		return fmt.Errorf("no bytes for %v after %d of %d", stallAfter, n, want)
+		return fmt.Errorf("no bytes for %v after %d of %d", c.stallAfter(), n, want)
 	case ctx.Err() != nil:
-		return fmt.Errorf("over the %v deadline with %d of %d bytes in", attemptDeadline, n, want)
+		return fmt.Errorf("over the %v deadline with %d of %d bytes in", c.attemptDeadline(), n, want)
 	case err == io.ErrUnexpectedEOF:
 		return fmt.Errorf("the range ended after %d of %d bytes", n, want)
 	}
@@ -447,14 +454,15 @@ func sameHost(a, b string) bool {
 
 // watched winds a stall watchdog back on every read that delivers bytes.
 type watched struct {
-	r   io.Reader
-	dog *time.Timer
+	r     io.Reader
+	dog   *time.Timer
+	stall time.Duration
 }
 
 func (w watched) Read(p []byte) (int, error) {
 	n, err := w.r.Read(p)
 	if n > 0 {
-		w.dog.Reset(stallAfter)
+		w.dog.Reset(w.stall)
 	}
 	return n, err
 }

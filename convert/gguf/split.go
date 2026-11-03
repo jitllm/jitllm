@@ -9,7 +9,9 @@ import (
 )
 
 // splitName matches llama.cpp's gguf-split naming: NAME-00001-of-00003.gguf.
-var splitName = regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})\.gguf$`)
+func splitName() *regexp.Regexp {
+	return regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})\.gguf$`)
+}
 
 // joinSplit opens the remaining parts of a split GGUF and serves every tensor
 // through f, so a caller sees one file. f is part 1, which carries all the
@@ -27,7 +29,7 @@ func joinSplit(f *meta.File, opts ...Option) (*meta.File, error) {
 	if !ok || n <= 1 {
 		return f, nil
 	}
-	m := splitName.FindStringSubmatch(f.Path)
+	m := splitName().FindStringSubmatch(f.Path)
 	if m == nil {
 		return nil, fmt.Errorf("gguf: %s: split.count is %d and the name is not NAME-00001-of-%05d.gguf", f.Path, n, n)
 	}

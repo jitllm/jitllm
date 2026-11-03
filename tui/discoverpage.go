@@ -113,16 +113,16 @@ func (p *discoverPage) onDisk(i int) bool { return i < len(p.disk) && p.disk[i] 
 // refresh ranks the library for the machine and checks what is on disk.
 func (p *discoverPage) refresh() {
 	p.disk = discover.OnDisk(discover.Dir(p.env.dirs))
-	order := make([]int, len(library.Models))
+	order := make([]int, len(library.Models()))
 	for i := range order {
 		order[i] = i
 	}
 	if p.probed {
-		order = discover.Rank(library.Models, p.mr, p.pref)
+		order = discover.Rank(library.Models(), p.mr, p.pref)
 	}
 	items := make([]list.Item, 0, len(order))
 	for _, i := range order {
-		items = append(items, libItem{library.Models[i], i})
+		items = append(items, libItem{library.Models()[i], i})
 	}
 	p.list.SetItems(items)
 }
@@ -206,7 +206,7 @@ func (p *discoverPage) View() string {
 	if !p.probed {
 		bal = p.env.spin.View() + sDim.Render(" measuring this machine to rank them…")
 	}
-	left := panel(fmt.Sprintf("discover · %d verified models", len(library.Models)),
+	left := panel(fmt.Sprintf("discover · %d verified models", len(library.Models())),
 		bal+"\n\n"+p.list.View(), p.listW, p.h, cBrand)
 
 	rw, _ := inner(p.w-p.listW, p.h)

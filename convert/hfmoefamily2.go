@@ -14,21 +14,23 @@ import (
 // dots1HF is dots.llm1: DeepSeek-V3's mixture keys (deepseekMoE) on qwen3's
 // attention, a per-head q/k norm and NEOX rotary over the whole head. The gate
 // is a sigmoid whatever the file says (Dots1TopkRouter; hardcodesSigmoid).
-var dots1HF = &hfArch{
-	arch:        jlm.ArchDots1,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: blockPlus(qwen3Block, map[string]jlm.Role{
-		"mlp.gate.weight":                     jlm.RoleRouter,
-		"mlp.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
-		"mlp.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
-		"mlp.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
-		"mlp.shared_experts.down_proj.weight": jlm.RoleShExpDown,
-	}),
-	expertPrefix: "mlp.experts.",
-	expert:       hfExperts,
-	ignore:       llamaHF.ignore,
-	config:       dots1HFConfig,
+func dots1HF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchDots1,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: blockPlus(qwen3Block(), map[string]jlm.Role{
+			"mlp.gate.weight":                     jlm.RoleRouter,
+			"mlp.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
+			"mlp.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
+			"mlp.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
+			"mlp.shared_experts.down_proj.weight": jlm.RoleShExpDown,
+		}),
+		expertPrefix: "mlp.experts.",
+		expert:       hfExperts(),
+		ignore:       llamaHF().ignore,
+		config:       dots1HFConfig,
+	}
 }
 
 // dots1HFConfig reads dots.llm1's keys. Its config carries layer_types even
@@ -68,12 +70,14 @@ func dots1HFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 
 // moe2SigmoidClasses are the group's classes whose router hardcodes the
 // sigmoid; hardcodesSigmoid consults them.
-var moe2SigmoidClasses = []string{"Dots1ForCausalLM"}
+func moe2SigmoidClasses() []string {
+	return []string{"Dots1ForCausalLM"}
+}
 
 // moe2HardcodesSigmoid reports whether any of archs is one of them.
 func moe2HardcodesSigmoid(archs []string) bool {
 	for _, a := range archs {
-		if slices.Contains(moe2SigmoidClasses, a) {
+		if slices.Contains(moe2SigmoidClasses(), a) {
 			return true
 		}
 	}

@@ -12,24 +12,43 @@ import (
 // 4-D kernel the container stores as the matrix it is.
 
 // glm4vRole is GLM-4.xV's own tower vocabulary.
-var glm4vRole = map[string]jlm.Role{
-	"v.norm_embd.weight":     jlm.RoleVEmbdNorm,
-	"mm.patch_merger.weight": jlm.RoleVMergeConv,
-	"mm.patch_merger.bias":   jlm.RoleVMergeConvBias,
-	"mm.post_norm.weight":    jlm.RoleVProjNorm,
-	"mm.post_norm.bias":      jlm.RoleVProjNormBias,
-	"mm.gate.weight":         jlm.RoleVProjGate,
-	"mm.gate.bias":           jlm.RoleVProjGateBias,
-	"mm.up.weight":           jlm.RoleVProjUp,
-	"mm.up.bias":             jlm.RoleVProjUpBias,
-	"mm.down.weight":         jlm.RoleVProjDown,
-	"mm.down.bias":           jlm.RoleVProjDownBias,
+func glm4vRole(name string) (jlm.Role, bool) {
+	switch name {
+	case "v.norm_embd.weight":
+		return jlm.RoleVEmbdNorm, true
+	case "mm.patch_merger.weight":
+		return jlm.RoleVMergeConv, true
+	case "mm.patch_merger.bias":
+		return jlm.RoleVMergeConvBias, true
+	case "mm.post_norm.weight":
+		return jlm.RoleVProjNorm, true
+	case "mm.post_norm.bias":
+		return jlm.RoleVProjNormBias, true
+	case "mm.gate.weight":
+		return jlm.RoleVProjGate, true
+	case "mm.gate.bias":
+		return jlm.RoleVProjGateBias, true
+	case "mm.up.weight":
+		return jlm.RoleVProjUp, true
+	case "mm.up.bias":
+		return jlm.RoleVProjUpBias, true
+	case "mm.down.weight":
+		return jlm.RoleVProjDown, true
+	case "mm.down.bias":
+		return jlm.RoleVProjDownBias, true
+	}
+	return 0, false
 }
 
 // kimivlRole is Kimi-VL's: the projector's LayerNorm over each patch.
-var kimivlRole = map[string]jlm.Role{
-	"mm.input_norm.weight": jlm.RoleVProjInNorm,
-	"mm.input_norm.bias":   jlm.RoleVProjInNormBias,
+func kimivlRole(name string) (jlm.Role, bool) {
+	switch name {
+	case "mm.input_norm.weight":
+		return jlm.RoleVProjInNorm, true
+	case "mm.input_norm.bias":
+		return jlm.RoleVProjInNormBias, true
+	}
+	return 0, false
 }
 
 // reshapeMergeConv lays the merging convolution out as the matrix the

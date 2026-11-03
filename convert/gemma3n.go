@@ -10,19 +10,32 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-func init() {
-	roleOf["altup_proj.weight"] = jlm.RoleStreamExpand
+func gemma3nRoleOf(name string) (jlm.Role, bool) {
+	switch name {
+	case "altup_proj.weight":
+		return jlm.RoleStreamExpand, true
 	// altup_unembd_proj is one {n, n, AltUp-1} tensor in the file; gemma3nTensors
 	// cuts it into one matrix per stream.
-	roleOf["altup_unembd_proj.weight"] = jlm.RoleStreamCollapse1
-	roleOf["altup_router.weight"] = jlm.RoleStreamRouter
-	roleOf["altup_router_norm.weight"] = jlm.RoleStreamRouterNorm
-	roleOf["altup_predict_coef.weight"] = jlm.RoleStreamPredictCoef
-	roleOf["altup_correct_coef.weight"] = jlm.RoleStreamCorrectCoef
-	roleOf["altup_correct_scale.weight"] = jlm.RoleStreamCorrectScale
-	roleOf["laurel_l.weight"] = jlm.RoleLowRankIn
-	roleOf["laurel_r.weight"] = jlm.RoleLowRankOut
-	roleOf["laurel_post_norm.weight"] = jlm.RoleLowRankNorm
+	case "altup_unembd_proj.weight":
+		return jlm.RoleStreamCollapse1, true
+	case "altup_router.weight":
+		return jlm.RoleStreamRouter, true
+	case "altup_router_norm.weight":
+		return jlm.RoleStreamRouterNorm, true
+	case "altup_predict_coef.weight":
+		return jlm.RoleStreamPredictCoef, true
+	case "altup_correct_coef.weight":
+		return jlm.RoleStreamCorrectCoef, true
+	case "altup_correct_scale.weight":
+		return jlm.RoleStreamCorrectScale, true
+	case "laurel_l.weight":
+		return jlm.RoleLowRankIn, true
+	case "laurel_r.weight":
+		return jlm.RoleLowRankOut, true
+	case "laurel_post_norm.weight":
+		return jlm.RoleLowRankNorm, true
+	}
+	return 0, false
 }
 
 // gemma3nConfig is llama.cpp's gemma3n.cpp and transformers'

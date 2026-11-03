@@ -39,15 +39,21 @@ func clefOf(f *meta.File, c *jlm.Config) error {
 
 // Clef's head tensors are named as their roles are (format/jlm/decisionroles.go),
 // with ".weight" on all but the biases and the scalars.
-func init() {
+func clefRoleOf(name string) (jlm.Role, bool) {
 	for r := jlm.RoleDecHiddenNorm; r <= jlm.RoleDecFFNDownBias; r++ {
 		if !r.Valid() {
 			continue
 		}
-		name := r.String()
-		if !strings.HasSuffix(name, ".bias") && r != jlm.RoleDecScales {
-			name += ".weight"
+		n := r.String()
+		if strings.HasSuffix(n, ".bias") || r == jlm.RoleDecScales {
+			if name == n {
+				return r, true
+			}
+			continue
 		}
-		roleOf[name] = r
+		if len(name) == len(n)+len(".weight") && strings.HasPrefix(name, n) && strings.HasSuffix(name, ".weight") {
+			return r, true
+		}
 	}
+	return 0, false
 }
