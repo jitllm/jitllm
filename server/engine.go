@@ -120,6 +120,11 @@ type Config struct {
 	// Version is reported by GetServerInfo.
 	Version string
 
+	// hostInexact, false but in a gate's violation, loads a host model the
+	// step loop runs without the one summation order (LoadModel): it is how
+	// the gate shows that a sampled row parts from its run alone without it.
+	hostInexact bool
+
 	// NoMemCache turns the per-model memory cache off: every generate then
 	// prefills its whole prompt, as a session given no KVStore does.
 	NoMemCache bool
@@ -188,6 +193,9 @@ func (c *Config) withDefaults() {
 type Engine struct {
 	cfg     Config
 	started time.Time
+
+	// details remembers each container's listing details; see detailsCache.
+	details detailsCache
 
 	mu       sync.RWMutex
 	models   map[string]*LoadedModel
@@ -538,23 +546,27 @@ func (d *DeviceError) Error() string { return d.Err.Error() }
 func (d *DeviceError) Unwrap() error { return d.Err }
 
 // ErrNotFound is returned for an unknown model or session id.
-var ErrNotFound = errors.New("server: not found")
+const ErrNotFound serverError = "server: not found"
+
+type serverError string
+
+func (e serverError) Error() string { return string(e) }
 
 // ErrInUse is returned when an unload would orphan live sessions.
-var ErrInUse = errors.New("server: still in use")
+const ErrInUse serverError = "server: still in use"
 
 // ErrPlacement is returned for a placement the session's tier cannot make: a
 // host-only session, a device the tier was not opened with, or a block another
 // session is using where it is.
-var ErrPlacement = errors.New("server: the placement cannot be made")
+const ErrPlacement serverError = "server: the placement cannot be made"
 
 // ErrExists is returned for a model or session id that is already taken.
-var ErrExists = errors.New("server: already exists")
+const ErrExists serverError = "server: already exists"
 
 // ErrInvalid is returned for a request the caller has to change before it can
 // succeed. It is never a server fault: mapped to Internal, it would tell a
 // client to retry the identical request.
-var ErrInvalid = errors.New("server: invalid request")
+const ErrInvalid serverError = "server: invalid request"
 
 // ResolvePath turns a bare name into a path under ModelDir. An absolute path
 // is taken as given.
@@ -567,11 +579,6 @@ func (e *Engine) ResolvePath(p string) string {
 	}
 	return filepath.Join(e.ModelDir(), p)
 }
-
-// hostInexact, when set, loads a host model the step loop runs without the
-// one summation order (LoadModel). False but in a gate's violation: it is how
-// the gate shows that a sampled row parts from its run alone without it.
-var hostInexact bool
 
 // LoadModel opens a container and, when devices were named, the tier that will
 // hold its blocks. A GGUF is refused by model.Open with a NotConvertedError,
@@ -661,7 +668,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	// matvec rounds per sub-block, arm64's decode picker times forms that sum
 	// differently, and a wide pool splits a long matvec over k. GEMMExact is
 	// the one summation order every packed kernel shares.
-	if dev == nil && e.cfg.MaxBatchRows != 1 && !hostInexact {
+	if dev == nil && e.cfg.MaxBatchRows != 1 && !e.cfg.hostInexact {
 		opts = append(opts, model.WithJITOptions(nn.WithGEMMExact(true)))
 	}
 	m, err := model.Open(path, opts...)

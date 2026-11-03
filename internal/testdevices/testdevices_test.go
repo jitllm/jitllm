@@ -1,6 +1,8 @@
 package testdevices_test
 
 import (
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -9,12 +11,28 @@ import (
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
-// install puts the selection in force at the backend for the test and takes it
-// out again.
-func install(t *testing.T) {
+// ledger counts what the restriction reports.
+type ledger struct{ violated, narrowed map[string]int }
+
+func (l *ledger) list(m map[string]int) []string {
+	var out []string
+	for k, n := range m {
+		out = append(out, fmt.Sprintf("%s x%d", k, n))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// install puts the selection in force at the backend for the test with a
+// ledger of its own, and takes it out again.
+func install(t *testing.T) *ledger {
 	t.Helper()
-	testdevices.Install(backend.Restrict)
+	l := &ledger{violated: map[string]int{}, narrowed: map[string]int{}}
+	backend.Restrict(testdevices.RestrictionForTest(
+		func(name string) { l.violated[name]++ },
+		func(name string) { l.narrowed[name]++ }))
 	t.Cleanup(func() { backend.Restrict(nil) })
+	return l
 }
 
 func TestSelectionIsParsed(t *testing.T) {
@@ -62,12 +80,12 @@ func TestNothingSelectedChangesNothing(t *testing.T) {
 // TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice is the gate's own
 // violation run, at the backend and on any host: the selection names a Vulkan
 // device no box has, so every other open is outside it. A device a test names
-// is refused and recorded, and Fail turns the record into a failed binary; a
+// is refused and recorded, and Install makes a violation end the binary; a
 // search for devices is narrowed without a record; and with the selection
 // withdrawn the ledger is not consulted at all.
 func TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice(t *testing.T) {
 	testdevices.SetForTest(t, "vulkan:99")
-	install(t)
+	l := install(t)
 
 	if d, err := backend.OpenCUDA(0); err == nil || !strings.Contains(err.Error(), "outside JITLLM_TEST_DEVICES") {
 		if d != nil {
@@ -81,27 +99,21 @@ func TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice(t *testing.T) {
 		}
 		t.Fatalf("OpenVulkan(0) under vulkan:99 = %v, want a refusal", err)
 	}
-	if v := testdevices.Violations(); len(v) != 2 {
-		t.Fatalf("Violations = %v, want the two named opens", v)
-	}
-	if code := testdevices.Fail(0); code != 1 {
-		t.Fatalf("Fail(0) = %d with violations recorded: the binary would have passed", code)
+	if v := l.list(l.violated); len(v) != 2 {
+		t.Fatalf("violations = %v, want the two named opens", v)
 	}
 
-	testdevices.Reset()
+	l.violated, l.narrowed = map[string]int{}, map[string]int{}
 	for _, d := range backend.Open() {
 		name := d.Name()
 		d.Close()
 		t.Errorf("backend.Open under vulkan:99 returned %s", name)
 	}
-	if v := testdevices.Violations(); len(v) != 0 {
+	if v := l.list(l.violated); len(v) != 0 {
 		t.Errorf("a search for devices was recorded as a violation: %v", v)
 	}
-	if n := testdevices.Narrowed(); len(n) == 0 {
+	if n := l.list(l.narrowed); len(n) == 0 {
 		t.Error("the search was not narrowed: the restriction was never consulted")
-	}
-	if code := testdevices.Fail(0); code != 0 {
-		t.Errorf("Fail(0) = %d with nothing named outside the selection", code)
 	}
 }
 
@@ -110,7 +122,7 @@ func TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice(t *testing.T) {
 // selection still is, and the declaration ends with its test.
 func TestADeliberateRefusalIsNotAViolation(t *testing.T) {
 	testdevices.SetForTest(t, "vulkan:99")
-	install(t)
+	l := install(t)
 	open := func(ord int) error {
 		d, err := backend.OpenCUDA(ord)
 		if d != nil {
@@ -124,39 +136,35 @@ func TestADeliberateRefusalIsNotAViolation(t *testing.T) {
 		if err := open(7); err == nil || !strings.Contains(err.Error(), "outside JITLLM_TEST_DEVICES") {
 			t.Fatalf("OpenCUDA(7) declared refused = %v, want a refusal", err)
 		}
-		if v := testdevices.Violations(); len(v) != 0 {
+		if v := l.list(l.violated); len(v) != 0 {
 			t.Fatalf("a declared refusal was recorded: %v", v)
 		}
 		if err := open(6); err == nil {
 			t.Fatal("OpenCUDA(6) under vulkan:99 opened")
 		}
-		if v := testdevices.Violations(); len(v) != 1 || v[0] != "cuda:6 x1" {
-			t.Fatalf("Violations = %v, want the undeclared cuda:6 alone", v)
+		if v := l.list(l.violated); len(v) != 1 || v[0] != "cuda:6 x1" {
+			t.Fatalf("violations = %v, want the undeclared cuda:6 alone", v)
 		}
 	})
-	testdevices.Reset()
+	l.violated = map[string]int{}
 	if err := open(7); err == nil {
 		t.Fatal("OpenCUDA(7) under vulkan:99 opened")
 	}
-	if v := testdevices.Violations(); len(v) != 1 || v[0] != "cuda:7 x1" {
-		t.Fatalf("after its test ended the declaration still holds: Violations = %v", v)
+	if v := l.list(l.violated); len(v) != 1 || v[0] != "cuda:7 x1" {
+		t.Fatalf("after its test ended the declaration still holds: violations = %v", v)
 	}
-	if code := testdevices.Fail(0); code != 1 {
-		t.Fatalf("Fail(0) = %d with a violation recorded", code)
-	}
-	testdevices.Reset()
 }
 
 // TestOnlyTheSelectedDevicesOpen runs on a host with the variable set, which
 // is what a shared box does: it asks every ordinal of every backend the host
 // has to open, by name, and the devices that open are exactly the selected
-// ones. The refusals are the violation run, and are cleared so the binary does
-// not fail on them. With nothing selected there is nothing to hold.
+// ones. The refusals are the violation run, and are counted in the test's own
+// ledger so the binary does not fail on them. With nothing selected there is nothing to hold.
 func TestOnlyTheSelectedDevicesOpen(t *testing.T) {
 	if !testdevices.Selected() {
 		t.Skip("JITLLM_TEST_DEVICES is unset: this gate holds a selection and has none")
 	}
-	install(t)
+	l := install(t)
 	opened := map[string]bool{}
 	try := func(spec string, open func() (backend.Device, error)) {
 		d, err := open()
@@ -191,6 +199,5 @@ func TestOnlyTheSelectedDevicesOpen(t *testing.T) {
 		}
 	}
 	t.Logf("opened %d of the selected %v; the rest were refused: %v",
-		len(opened), testdevices.Selection(), testdevices.Violations())
-	testdevices.Reset()
+		len(opened), testdevices.Selection(), l.list(l.violated))
 }

@@ -369,4 +369,8 @@ func (s Service) Manager() string {
 }
 
 // ErrNotInstalled is Start or Stop on a service with no file.
-var ErrNotInstalled = errors.New("the jitllm service is not installed: run `jitllmd service install`")
+const ErrNotInstalled sentinel = "the jitllm service is not installed: run `jitllmd service install`"
+
+type sentinel string
+
+func (e sentinel) Error() string { return string(e) }

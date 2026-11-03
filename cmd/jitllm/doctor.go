@@ -126,7 +126,7 @@ type doctorEnv struct {
 // realDoctorEnv probes this machine the way `jitllm hardware` does.
 func realDoctorEnv() doctorEnv {
 	env := doctorEnv{
-		version:   version,
+		version:   buildVersion(),
 		cpuName:   cpuBrand(),
 		tier:      cpu.TierReport(),
 		jit:       nn.Available(),
@@ -229,7 +229,11 @@ func diagnose(env doctorEnv, container string) (doctorReport, error) {
 
 // errNotInspectable marks a container path the doctor could not read at all,
 // as distinct from one it read and found wanting.
-var errNotInspectable = errors.New("doctor: cannot inspect")
+const errNotInspectable inspectError = "doctor: cannot inspect"
+
+type inspectError string
+
+func (e inspectError) Error() string { return string(e) }
 
 // checkContainer reads a container's version and, when this build reads that
 // version, its architecture. A file that is absent or not a container is a

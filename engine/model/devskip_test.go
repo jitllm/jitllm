@@ -31,7 +31,7 @@ func noDevice(t *testing.T, what string, err error) {
 // does not cover.
 func TestMain(m *testing.M) {
 	testdevices.Install(backend.Restrict)
-	os.Exit(testdevices.Fail(vanishedFails(persistRan(m.Run()))))
+	os.Exit(vanishedFails(persistRan(m.Run())))
 }
 
 // vanishedFails is code, or a failure naming the Vulkan devices that went

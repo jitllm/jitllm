@@ -14,7 +14,7 @@ import (
 // nothing writes the default address into the file.
 func TestKeysAreSavedPrivatelyAndTheDefaultAddressIsNot(t *testing.T) {
 	isolateConfig(t)
-	cfg := LoadConfig()
+	cfg := LoadConfig(Env{})
 	if cfg.APIAddr != "" || cfg.ServiceAddr != "" {
 		t.Fatalf("a first run holds %q and %q", cfg.APIAddr, cfg.ServiceAddr)
 	}

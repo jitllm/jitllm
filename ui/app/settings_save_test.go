@@ -11,7 +11,7 @@ import (
 // close, to the system's config folder, and the chats beside it.
 func TestSettingsAreSavedAsTheyChange(t *testing.T) {
 	isolateConfig(t)
-	cfg := LoadConfig()
+	cfg := LoadConfig(Env{})
 	if cfg.Path() == "" {
 		t.Fatal("no settings path on this system")
 	}
@@ -42,7 +42,7 @@ func TestSettingsAreSavedAsTheyChange(t *testing.T) {
 // otherwise overwrite the person's own settings.
 func TestAConfigWithNoFileIsNeverSaved(t *testing.T) {
 	isolateConfig(t)
-	if err := DefaultConfig().Save(); err != nil {
+	if err := DefaultConfig(Env{}).Save(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(ConfigPath()); !os.IsNotExist(err) {

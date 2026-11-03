@@ -180,27 +180,6 @@ func capture(t *testing.T, f func() error) (stdout, stderr string, err error) {
 	return <-outc, <-errc, err
 }
 
-// The patterns the scripts in scripts/ apply to a run's stderr, transcribed
-// from their sed expressions. A change to a line that breaks one of these
-// breaks a measurement harness silently: its rate comes back empty.
-var (
-	// vs-llamacpp.sh, paging.sh: the decode rate.
-	reDecodeRate = regexp.MustCompile(`decode [0-9]* tok in [^(]*\(([0-9.]*) tok/s\)`)
-	// vs-llamacpp.sh: the prompt rate.
-	rePromptRate = regexp.MustCompile(`prompt [0-9]* tok in [^(]*\(([0-9.]*) tok/s\)`)
-	// paging-rate.sh: the decode count and its duration.
-	reDecodeDur = regexp.MustCompile(`decode ([0-9]*) tok in ([^ ]*) `)
-	// paging.sh: the ids, prompt and completion together.
-	reIDs = regexp.MustCompile(`(?m)^ids (\[.*\])$`)
-
-	reMemory = regexp.MustCompile(`(?m)^memory   budget ([0-9.]+) GiB   weights ([0-9.]+) GiB   kv ([0-9.]+) GiB reserved ` +
-		`\(-n ([0-9]+), commits as the context grows\)   touches ([0-9.]+) GiB of weights a token(   ★ OVER BUDGET by ([0-9.]+) GiB)?$`)
-	rePages = regexp.MustCompile(`(?m)^pages    ([0-9]+) frame\(s\), ([0-9]+) page-in\(s\), ([0-9]+) eviction\(s\), ` +
-		`([0-9]+) fresh frame\(s\), ([0-9.]+) GiB read in ([0-9]+) request\(s\) at ([0-9]+) KiB chunks$`)
-	rePagesShort = regexp.MustCompile(`(?m)^pages    ([0-9]+) of ([0-9]+) host block\(s\) resident at once`)
-	rePromptLine = regexp.MustCompile(`(?m)^prompt ([0-9]+) tok in `)
-)
-
 func atoi(t *testing.T, s string) int {
 	t.Helper()
 	n, err := strconv.Atoi(s)
@@ -234,7 +213,7 @@ func TestRunPrintsTheLinesTheScriptsParse(t *testing.T) {
 	if !strings.HasPrefix(stdout, "Once upon a time") || len(stdout) <= len("Once upon a time\n") {
 		t.Fatalf("stdout is not the prompt then its completion: %q", stdout)
 	}
-	for name, re := range map[string]*regexp.Regexp{"decode rate": reDecodeRate, "prompt rate": rePromptRate} {
+	for name, re := range map[string]*regexp.Regexp{"decode rate": reDecodeRate(), "prompt rate": rePromptRate()} {
 		m := re.FindStringSubmatch(stderr)
 		if m == nil && strings.Contains(stderr, "0s (rate under the clock's resolution)") {
 			// A run inside one tick of a coarse clock (Windows) has no rate to
@@ -248,7 +227,7 @@ func TestRunPrintsTheLinesTheScriptsParse(t *testing.T) {
 			t.Fatalf("the %s %q is not a number", name, m[1])
 		}
 	}
-	d := reDecodeDur.FindStringSubmatch(stderr)
+	d := reDecodeDur().FindStringSubmatch(stderr)
 	if d == nil {
 		t.Fatalf("no decode count and duration:\n%s", stderr)
 	}
@@ -259,9 +238,9 @@ func TestRunPrintsTheLinesTheScriptsParse(t *testing.T) {
 	if decoded < 1 || decoded > 6 {
 		t.Fatalf("decoded %d tokens with -n 6", decoded)
 	}
-	prompt := atoi(t, rePromptLine.FindStringSubmatch(stderr)[1])
+	prompt := atoi(t, rePromptLine().FindStringSubmatch(stderr)[1])
 
-	idm := reIDs.FindStringSubmatch(stderr)
+	idm := reIDs().FindStringSubmatch(stderr)
 	if idm == nil {
 		t.Fatalf("no ids line:\n%s", stderr)
 	}
@@ -269,7 +248,7 @@ func TestRunPrintsTheLinesTheScriptsParse(t *testing.T) {
 		t.Fatalf("the ids line holds %d ids; the prompt was %d and the decode %d", got, prompt, decoded)
 	}
 
-	mem := reMemory.FindStringSubmatch(stderr)
+	mem := reMemory().FindStringSubmatch(stderr)
 	if mem == nil {
 		t.Fatalf("no memory line in the shape it is read in:\n%s", stderr)
 	}
@@ -279,14 +258,14 @@ func TestRunPrintsTheLinesTheScriptsParse(t *testing.T) {
 	if !strings.Contains(stderr, "\ndevice cpu\n") {
 		t.Fatalf("a host run does not say so:\n%s", stderr)
 	}
-	pg := rePages.FindStringSubmatch(stderr)
+	pg := rePages().FindStringSubmatch(stderr)
 	if pg == nil {
 		t.Fatalf("no pages line:\n%s", stderr)
 	}
 	if atoi(t, pg[1]) != 5 || atoi(t, pg[3]) != 0 {
 		t.Fatalf("a model that fits reads %s frame(s) and %s eviction(s), want 5 and 0", pg[1], pg[3])
 	}
-	if rePagesShort.MatchString(stderr) {
+	if rePagesShort().MatchString(stderr) {
 		t.Fatalf("a model that fits printed the short-budget line:\n%s", stderr)
 	}
 }
@@ -297,18 +276,18 @@ func TestRunPrintsTheLinesTheScriptsParse(t *testing.T) {
 // printed the warning and then held every block anyway, evicting nothing.
 func TestATinyBudgetPagesAndSaysSo(t *testing.T) {
 	_, stderr := runSmall(t, 4, 4096)
-	mem := reMemory.FindStringSubmatch(stderr)
+	mem := reMemory().FindStringSubmatch(stderr)
 	if mem == nil || mem[6] == "" {
 		t.Fatalf("a 4 KiB budget against a 1.2 MB model is not marked over budget:\n%s", stderr)
 	}
-	short := rePagesShort.FindStringSubmatch(stderr)
+	short := rePagesShort().FindStringSubmatch(stderr)
 	if short == nil {
 		t.Fatalf("no line saying how few blocks the budget holds:\n%s", stderr)
 	}
 	if got, host := atoi(t, short[1]), atoi(t, short[2]); got >= host || host != 5 {
 		t.Fatalf("the short-budget line says %d of %d resident", got, host)
 	}
-	pg := rePages.FindStringSubmatch(stderr)
+	pg := rePages().FindStringSubmatch(stderr)
 	if pg == nil || atoi(t, pg[3]) == 0 {
 		t.Fatalf("a run that cannot hold its blocks evicted nothing:\n%s", stderr)
 	}
@@ -444,7 +423,7 @@ func TestSubcommandsRefuseAModelTheyCannotUse(t *testing.T) {
 // checked against anything: this is the shape, not a measurement.
 func TestSpeedPrintsOneRatePerRepetition(t *testing.T) {
 	path := modelPath(t, "stories260K.jlm")
-	if err := speedCmd([]string{"a.jlm", "b.jlm"}); err == nil || !strings.Contains(err.Error(), "usage: jitllm speed") {
+	if err := speedCmd(time.Now(), []string{"a.jlm", "b.jlm"}); err == nil || !strings.Contains(err.Error(), "usage: jitllm speed") {
 		t.Fatalf("speed with two models: %v", err)
 	}
 	rate := `[0-9]+\.[0-9]{2}`
@@ -464,7 +443,7 @@ func TestSpeedPrintsOneRatePerRepetition(t *testing.T) {
 			regexp.MustCompile(`(?m)^sessions 2 x tg100: one after another ` + rate + ` tok/s, together ` + rate +
 				` tok/s \([0-9.]+x\)$`)},
 	} {
-		stdout, stderr, err := capture(t, func() error { return speedCmd(tc.args) })
+		stdout, stderr, err := capture(t, func() error { return speedCmd(time.Now(), tc.args) })
 		if err != nil {
 			t.Fatalf("speed %v: %v\n%s", tc.args, err, stderr)
 		}
@@ -507,4 +486,42 @@ func TestVerifyAgreesWithTheHostOnARealDevice(t *testing.T) {
 			t.Errorf("verify printed no %q:\n%s", want, stdout)
 		}
 	}
+}
+
+// vs-llamacpp.sh, paging.sh: the decode rate.
+func reDecodeRate() *regexp.Regexp {
+	return regexp.MustCompile(`decode [0-9]* tok in [^(]*\(([0-9.]*) tok/s\)`)
+}
+
+// vs-llamacpp.sh: the prompt rate.
+func rePromptRate() *regexp.Regexp {
+	return regexp.MustCompile(`prompt [0-9]* tok in [^(]*\(([0-9.]*) tok/s\)`)
+}
+
+// paging-rate.sh: the decode count and its duration.
+func reDecodeDur() *regexp.Regexp {
+	return regexp.MustCompile(`decode ([0-9]*) tok in ([^ ]*) `)
+}
+
+// paging.sh: the ids, prompt and completion together.
+func reIDs() *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^ids (\[.*\])$`)
+}
+
+func reMemory() *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^memory   budget ([0-9.]+) GiB   weights ([0-9.]+) GiB   kv ([0-9.]+) GiB reserved ` +
+		`\(-n ([0-9]+), commits as the context grows\)   touches ([0-9.]+) GiB of weights a token(   ★ OVER BUDGET by ([0-9.]+) GiB)?$`)
+}
+
+func rePages() *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^pages    ([0-9]+) frame\(s\), ([0-9]+) page-in\(s\), ([0-9]+) eviction\(s\), ` +
+		`([0-9]+) fresh frame\(s\), ([0-9.]+) GiB read in ([0-9]+) request\(s\) at ([0-9]+) KiB chunks$`)
+}
+
+func rePagesShort() *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^pages    ([0-9]+) of ([0-9]+) host block\(s\) resident at once`)
+}
+
+func rePromptLine() *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^prompt ([0-9]+) tok in `)
 }

@@ -368,7 +368,7 @@ func EmitMoERoute(n, k int, g MoEGate) ([]byte, error) {
 		}
 		// The divisor's floor, DeepSeek's `sum + 1e-20` rather than llama.cpp's
 		// clamp: an all-underflowed selection would otherwise divide 0 by 0. See
-		// oracle.MoEDivergences and the comment at moeSumFloor.
+		// oracle.MoEDivergences() and the comment at moeSumFloor.
 		a.VMOVSSLoad(Y4, At(RBX, moeSumFloor))
 		a.VADDPS(Y0, Y0, Y4)
 		a.VBROADCASTSSReg(Y0, Y0)

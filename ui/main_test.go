@@ -13,13 +13,13 @@ import (
 // a name added without a screen, is an index panic inside register.
 func TestEveryTabHasAScreen(t *testing.T) {
 	sc := screen.Screens()
-	if len(sc) != len(app.TabNames) {
+	if len(sc) != len(app.TabNames()) {
 		t.Fatalf("%d screen(s) registered against %d tab name(s): %v",
-			len(sc), len(app.TabNames), app.TabNames)
+			len(sc), len(app.TabNames()), app.TabNames())
 	}
 	for i, build := range sc {
 		if build == nil {
-			t.Errorf("tab %d (%q) has no screen", i, app.TabNames[i])
+			t.Errorf("tab %d (%q) has no screen", i, app.TabNames()[i])
 		}
 	}
 }
@@ -38,7 +38,7 @@ func TestEveryTabHasAScreen(t *testing.T) {
 //   - Loaded is true, so Devices' probe refuses (the shipped behaviour): a
 //     unit test must not open and close every backend on the machine.
 func TestEveryRegisteredScreenBuilds(t *testing.T) {
-	cfg := app.DefaultConfig()
+	cfg := app.DefaultConfig(app.Env{})
 	cfg.ModelDirs = []string{t.TempDir()}
 
 	sh := app.NewShell(nil, cfg)
@@ -55,7 +55,7 @@ func TestEveryRegisteredScreenBuilds(t *testing.T) {
 // handler has its own tests in screen, and what is asserted here is that
 // register actually installed one.
 func TestDropFilesReachesTheCatalog(t *testing.T) {
-	cfg := app.DefaultConfig()
+	cfg := app.DefaultConfig(app.Env{})
 	cfg.ModelDirs = []string{t.TempDir()}
 
 	sh := app.NewShell(nil, cfg)

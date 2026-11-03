@@ -57,7 +57,7 @@ func ggufSeen(h *hubtest.Hub, dir string) func() []string {
 func TestDownloadStreamsIntoTheContainer(t *testing.T) {
 	r := newTestRoot(t)
 	m, h, _ := served(t, r, testmodels.Path("stories260K.gguf"))
-	dir := discover.Dir(r.env.dirs)
+	dir := discover.Dir(r.env.dirs, r.env.cfg.DefaultModelDir())
 	seen := ggufSeen(h, dir)
 	r.env.jobs.download(m)
 	dst := discover.ContainerFor(dir, m)
@@ -86,7 +86,7 @@ func TestStopKeyStopsADownload(t *testing.T) {
 	}
 	r := newTestRoot(t)
 	m, h, size := served(t, r, testmodels.Path("Qwen3-0.6B-Q8_0.gguf"))
-	dir := discover.Dir(r.env.dirs)
+	dir := discover.Dir(r.env.dirs, r.env.cfg.DefaultModelDir())
 	dst := discover.ContainerFor(dir, m)
 	r.env.jobs.download(m)
 	for h.Served.Load() < size/2 {

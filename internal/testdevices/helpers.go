@@ -28,7 +28,7 @@ func apiOf(t testing.TB, backend string) string {
 func Has(t testing.TB, backend string, ord int) bool {
 	t.Helper()
 	api := apiOf(t, backend)
-	return !selected || allowed(device{api, ord})
+	return !isSelected() || allowed(device{api, ord})
 }
 
 // Ordinal is the ordinal of the device a gate that names one backend's device
@@ -36,7 +36,7 @@ func Has(t testing.TB, backend string, ord int) bool {
 // backend, and a skip when the selection holds none of it.
 func Ordinal(t testing.TB, backend string, def int) int {
 	t.Helper()
-	if !selected {
+	if !isSelected() {
 		return def
 	}
 	d, ok := anyOf(apiOf(t, backend))
@@ -52,7 +52,7 @@ func Ordinal(t testing.TB, backend string, def int) int {
 // one backend's behaviour and takes any card of it.
 func Like(t testing.TB, spec string) string {
 	t.Helper()
-	if !selected {
+	if !isSelected() {
 		return spec
 	}
 	name, _, _ := strings.Cut(spec, ":")
@@ -69,7 +69,7 @@ func Like(t testing.TB, spec string) string {
 // be exactly the open the selection forbids.
 func SkipSelected(t testing.TB, why string) {
 	t.Helper()
-	if selected {
+	if isSelected() {
 		t.Skipf("%s=%s is set and %s", Var, strings.Join(Selection(), ","), why)
 	}
 }
@@ -78,7 +78,7 @@ func SkipSelected(t testing.TB, why string) {
 // when nothing is selected. A gate that tries devices one after another and
 // takes the first that suits it tries only selected ones.
 func Within(candidates []string) []string {
-	if !selected {
+	if !isSelected() {
 		return candidates
 	}
 	var out []string

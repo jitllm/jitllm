@@ -15,7 +15,6 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/hardware"
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/ui/app"
@@ -93,7 +92,7 @@ func machineStats(sh *app.Shell) widget.Widget {
 		})
 	}
 	return primitives.HBox(
-		primitives.Expanded(stat(sh, widgets.IconMachine, "Processor",
+		primitives.Expanded(stat(sh, widgets.IconMachine(), "Processor",
 			probed(func(r hardware.Report) string { return hardware.ShortCPU(r.CPU) }),
 			probed(func(r hardware.Report) string {
 				if len(r.ECores) > 0 {
@@ -101,10 +100,10 @@ func machineStats(sh *app.Shell) widget.Widget {
 				}
 				return fmt.Sprintf("%d cores", len(r.PCores))
 			}))),
-		primitives.Expanded(stat(sh, widgets.IconMemory, "Memory",
+		primitives.Expanded(stat(sh, widgets.IconMemory(), "Memory",
 			probed(func(r hardware.Report) string { return app.Bytes(r.RAMTotal) }),
 			probed(func(r hardware.Report) string { return app.Bytes(r.MemBudget) + " for weights" }))),
-		primitives.Expanded(stat(sh, widgets.IconGauge, "Bandwidth",
+		primitives.Expanded(stat(sh, widgets.IconGauge(), "Bandwidth",
 			state.NewComputed(func() string {
 				if w := st.MemWall.Get(); w > 0 {
 					return app.GBs(w)
@@ -120,7 +119,7 @@ func machineStats(sh *app.Shell) widget.Widget {
 				}
 				return "sets how fast replies are"
 			}, st.GBs.AsReadonly(), st.MemWall.AsReadonly()))),
-		primitives.Expanded(stat(sh, widgets.IconGPU, "GPU",
+		primitives.Expanded(stat(sh, widgets.IconGPU(), "GPU",
 			probed(func(r hardware.Report) string {
 				if g, _, ok := gpu(r); ok {
 					return hardware.ShortGPU(g.Name)
@@ -146,7 +145,7 @@ func machineStats(sh *app.Shell) widget.Widget {
 func stat(sh *app.Shell, icon widgets.Icon, label string, value, note state.ReadonlySignal[string]) widget.Widget {
 	p := sh.P
 	one := func(sig state.ReadonlySignal[string], size float32, c widget.Color) *widgets.Paragraph {
-		return widgets.NewParagraph("").ContentSignal(sig).FontSize(size).Color(c).MaxLines(1).Font(app.Prose)
+		return widgets.NewParagraph("").ContentSignal(sig).FontSize(size).Color(c).MaxLines(1).Font(sh.P.Prose())
 	}
 	return primitives.Box(primitives.VBox(
 		primitives.HBox(
@@ -203,7 +202,7 @@ func openModels(sh *app.Shell) widget.Widget {
 			}, st.Models.AsReadonly())),
 			primitives.Expanded(primitives.VBox(
 				widgets.NewParagraph("").ContentSignal(reactive(sh, st.Models.AsReadonly(), func() string { return modelLabel(at().Path) })).
-					FontSize(p.Type.BodyMedium.FontSize).Color(p.Text()).MaxLines(1).Font(app.Prose).Bold(),
+					FontSize(p.Type.BodyMedium.FontSize).Color(p.Text()).MaxLines(1).Font(sh.P.Prose()).Bold(),
 				line(sh, reactive(sh, st.Models.AsReadonly(), func() string {
 					m := at()
 					return fmt.Sprintf("%s, %d layers", m.Arch, m.Blocks)
@@ -214,7 +213,7 @@ func openModels(sh *app.Shell) widget.Widget {
 			}, active), p.Muted(), p.Type.BodySmall.FontSize)).PaddingTop(4)),
 			primitives.Box(primitives.Text("").ContentSignal(held).FontSize(p.Type.BodySmall.FontSize).Color(p.Text())).PaddingTop(4),
 			// Unloading is the only way to give a model's memory back.
-			widgets.NewIconButton(widgets.IconTrash, "Unload", func() { unloadModel(sh, at().Path) }, iconColors(sh)),
+			widgets.NewIconButton(widgets.IconTrash(), "Unload", func() { unloadModel(sh, at().Path) }, iconColors(sh)),
 		).Gap(p.Space.S + p.Space.XS)
 	})
 	rows := []widget.Widget{list}
@@ -283,10 +282,10 @@ func firstRune(s string) string {
 
 // --- the probe -------------------------------------------------------------
 
-// probing guards the probe against a second caller. It is package state
-// because a theme swap rebuilds the screen, and two concurrent backend.Open
-// calls is a known process-wide failure.
-var probing atomic.Bool
+// probing guards the probe against a second caller. It is the shell's, not the
+// screen's, because a theme swap rebuilds the screen, and two concurrent
+// backend.Open calls is a known process-wide failure.
+type probing struct{ atomic.Bool }
 
 // StartProbe runs the hardware probe once, on a worker, if it has not run.
 // It is exported so an integrator can start it at startup.
@@ -305,7 +304,8 @@ func Reprobe(sh *app.Shell) {
 	if sh == nil || sh.Store == nil || sh.Store.Loaded.Get() {
 		return
 	}
-	if !probing.CompareAndSwap(false, true) {
+	busy, _ := app.Local(sh, func() *probing { return &probing{} })
+	if !busy.CompareAndSwap(false, true) {
 		return
 	}
 	sh.SetStatus("reading the machine...")
@@ -314,8 +314,8 @@ func Reprobe(sh *app.Shell) {
 	// own device creation.
 	sh.Post(func() {
 		go func() {
-			defer crash.Recover("hardware probe")
-			defer probing.Store(false)
+			defer sh.Crashes().Recover("hardware probe")
+			defer busy.Store(false)
 			r := depsOf(sh).Machine.Probe()
 			// Published on the UI goroutine, not here. A Set is safe from any
 			// goroutine, but one that lands while a frame is laying out loses
@@ -369,7 +369,7 @@ func devicesHeader(sh *app.Shell) widget.Widget {
 			primitives.Expanded(primitives.VBox(
 				p.Role(primitives.Text("Machine").Color(p.Text()), p.Type.HeadlineSmall).Bold(),
 				widgets.NewParagraph("What this computer gives jitllm, and where the loaded models sit in it.").
-					FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(app.Prose),
+					FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(sh.P.Prose()),
 			).Gap(p.Space.XS).CrossAlign(primitives.CrossAxisStretch)),
 			reprobe,
 			copyBtn,
@@ -532,7 +532,7 @@ func devices(sh *app.Shell) widget.Widget {
 		}, sh.Store.Machine.AsReadonly())
 		rows = append(rows, widgets.Hide(show, primitives.VBox(
 			widgets.NewParagraph("").ContentSignal(gpu(func(g hardware.GPU) string { return g.Name })).
-				FontSize(p.Type.BodyMedium.FontSize).Color(p.Text()).MaxLines(1).Font(app.Prose).Bold(),
+				FontSize(p.Type.BodyMedium.FontSize).Color(p.Text()).MaxLines(1).Font(sh.P.Prose()).Bold(),
 			line(sh, gpu(DeviceStat)),
 			// Expanded in a row, because a progress bar laid out loose is its
 			// own preferred 200 px whatever the column is.
@@ -574,7 +574,7 @@ func wrapped(sh *app.Shell, sig state.ReadonlySignal[string]) widget.Widget {
 		FontSize(sh.P.Type.BodySmall.FontSize).
 		LineHeight(sh.P.Type.BodySmall.LineHeight/sh.P.Type.BodySmall.FontSize).
 		Color(sh.P.Muted()).
-		Font(app.Prose)).PaddingTop(sh.P.Space.XS))
+		Font(sh.P.Prose())).PaddingTop(sh.P.Space.XS))
 }
 
 func nextLoad(sh *app.Shell) widget.Widget {
@@ -768,7 +768,7 @@ func line(sh *app.Shell, sig state.ReadonlySignal[string]) *widgets.Paragraph {
 		LineHeight(sh.P.Type.BodySmall.LineHeight / sh.P.Type.BodySmall.FontSize).
 		Color(sh.P.Muted()).
 		MaxLines(1).
-		Font(app.Prose)
+		Font(sh.P.Prose())
 }
 
 func indent(sh *app.Shell, sig state.ReadonlySignal[string]) widget.Widget {
@@ -797,7 +797,7 @@ func note(sh *app.Shell, lines ...string) widget.Widget {
 		FontSize(sh.P.Type.BodySmall.FontSize).
 		LineHeight(sh.P.Type.BodySmall.LineHeight / sh.P.Type.BodySmall.FontSize).
 		Color(sh.P.Muted()).
-		Font(app.Prose)
+		Font(sh.P.Prose())
 
 	return primitives.Box(body).PaddingXY(sh.P.Space.S, sh.P.Space.XS)
 }

@@ -30,10 +30,10 @@ func Tuning(sh *app.Shell) widget.Widget {
 }
 
 func sampling(sh *app.Shell) widget.Widget {
-	// The knobs are [session.SamplingKnobs], the terminal's too, in the
+	// The knobs are [session.SamplingKnobs()], the terminal's too, in the
 	// sampler's order; their comment says why that order.
-	rows := make([]widget.Widget, 0, len(session.SamplingKnobs)+2)
-	for _, k := range session.SamplingKnobs {
+	rows := make([]widget.Widget, 0, len(session.SamplingKnobs())+2)
+	for _, k := range session.SamplingKnobs() {
 		rows = append(rows, knob(sh, k.Name, k.Min, k.Max, k.Step, k.Get, k.Set, k.Caption))
 	}
 	rows = append(rows, seedField(sh),

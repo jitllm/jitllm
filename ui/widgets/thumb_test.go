@@ -8,15 +8,17 @@ import (
 	"github.com/gogpu/ui/uitest"
 )
 
-// quadAndDisc is the engine's own VLM test picture: a yellow disc over four
+// quadAndDisc() is the engine's own VLM test picture: a yellow disc over four
 // coloured quadrants, 384x384.
-var quadAndDisc = filepath.Join("..", "..", "engine", "model", "testdata", "quad-and-disc.png")
+func quadAndDisc() string {
+	return filepath.Join("..", "..", "engine", "model", "testdata", "quad-and-disc.png")
+}
 
 // A thumbnail must reach the canvas as a real DrawImage, scaled into its box and
 // still showing the picture. The pixel is the assertion, not the call: the
 // disc is yellow at the centre, so the thumbnail's centre must be too.
 func TestThumbDrawsTheScaledPicture(t *testing.T) {
-	th := NewThumb(quadAndDisc, 96)
+	th := (&Thumbs{}).New(quadAndDisc(), 96)
 	if th.Err() != "" {
 		t.Fatalf("the test picture did not decode: %s", th.Err())
 	}
@@ -49,7 +51,7 @@ func TestThumbDrawsTheScaledPicture(t *testing.T) {
 
 // A file that does not decode is a labelled placeholder, never an empty space.
 func TestThumbNamesAPictureItCannotRead(t *testing.T) {
-	th := NewThumb(filepath.Join(t.TempDir(), "missing.png"), 64)
+	th := (&Thumbs{}).New(filepath.Join(t.TempDir(), "missing.png"), 64)
 	if th.Err() == "" {
 		t.Fatal("a missing file reported no error")
 	}

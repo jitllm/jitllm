@@ -107,26 +107,26 @@ func (p *enginePage) View() string {
 	if len(bm) == 0 {
 		iw, ih := inner(p.w, p.h)
 		msg := lipgloss.JoinVertical(lipgloss.Center,
-			sBrand.Render("no model on the engine"), "",
-			sDim.Render("f2 picks one; this screen then shows every block, where it runs,"),
-			sDim.Render("and moves the seam between the host and the card with ← →"))
+			sBrand().Render("no model on the engine"), "",
+			sDim().Render("f2 picks one; this screen then shows every block, where it runs,"),
+			sDim().Render("and moves the seam between the host and the card with ← →"))
 		return panel("engine", lipgloss.Place(iw, ih, lipgloss.Center, lipgloss.Center, msg), p.w, p.h, cBrand)
 	}
 
 	gw, _ := inner(p.w, 0)
 	nd := devBlocks(bm)
-	seam := sBold.Render(fmt.Sprint(nd)) + sDim.Render(fmt.Sprintf(" of %d blocks on a device", len(bm)))
+	seam := sBold().Render(fmt.Sprint(nd)) + sDim().Render(fmt.Sprintf(" of %d blocks on a device", len(bm)))
 	switch full := cardFull(st.Alloc.Get()); {
 	case p.asked && p.seam != nd:
 		when := ""
 		if st.Busy.Get() {
 			when = " after this reply"
 		}
-		seam += "  " + p.env.spin.View() + sMuted.Render(fmt.Sprintf(" moving to %d%s", p.seam, when))
+		seam += "  " + p.env.spin.View() + sMuted().Render(fmt.Sprintf(" moving to %d%s", p.seam, when))
 	case full != "" && nd < len(bm):
 		seam += "  " + lipgloss.NewStyle().Foreground(cOrange).Render("● "+full+" is full")
 	}
-	ctrl := sDim.Render("← → one block   home all host   end all device")
+	ctrl := sDim().Render("← → one block   home all host   end all device")
 	line := seam + strings.Repeat(" ", max(2, gw-lipgloss.Width(seam)-lipgloss.Width(ctrl))) + ctrl
 	d := nd * gw / len(bm)
 	split := lipgloss.NewStyle().Foreground(cCyan).Render(strings.Repeat("▀", d)) +
@@ -153,12 +153,12 @@ func (p *enginePage) throughput(w, h int) string {
 	last, peak, mean := p.env.tele.decode.stats()
 	lines := 0
 	if last > 0 {
-		b.WriteString(sBrand.Render(fmt.Sprintf("%.1f", last)) + sDim.Render(" tok/s decode") + "\n")
+		b.WriteString(sBrand().Render(fmt.Sprintf("%.1f", last)) + sDim().Render(" tok/s decode") + "\n")
 		b.WriteString(kvLine("peak", fmt.Sprintf("%.1f", peak), iw) + "\n")
 		b.WriteString(kvLine("mean", fmt.Sprintf("%.1f", mean), iw) + "\n")
 		lines = 3
 	} else {
-		b.WriteString(sDim.Render("send a prompt to see it run") + "\n")
+		b.WriteString(sDim().Render("send a prompt to see it run") + "\n")
 		lines = 1
 	}
 	var tail strings.Builder
@@ -173,7 +173,7 @@ func (p *enginePage) throughput(w, h int) string {
 	}
 	chartH := ih - lines - lipgloss.Height(tail.String()) - 2
 	if ch := p.env.tele.decode.chart(iw, chartH, cBrand); ch != "" {
-		b.WriteString("\n" + ch + "\n" + sDim.Render(fmt.Sprintf("last %ds", len(p.env.tele.decode.v)/2)))
+		b.WriteString("\n" + ch + "\n" + sDim().Render(fmt.Sprintf("last %ds", len(p.env.tele.decode.v)/2)))
 	}
 	return b.String() + tail.String()
 }
@@ -196,7 +196,7 @@ func (p *enginePage) memory(w, h int) string {
 		b.WriteString(kvLine("page", session.Bytes(a.PageBytes), iw) + "\n")
 	}
 	for i, d := range a.Devices {
-		c := colourOf(i, deviceColours)
+		c := colourOf(i, deviceColours())
 		b.WriteString("\n" + lipgloss.NewStyle().Foreground(c).Bold(true).Render(deviceName(d.Name, iw)) + "\n")
 		v := session.Bytes(d.Used)
 		if d.Limit > 0 {
@@ -228,7 +228,7 @@ func (p *enginePage) pager(w, h int) string {
 	case pg.TurnOuts > 0:
 		b.WriteString(lipgloss.NewStyle().Foreground(cOrange).Render(fmt.Sprintf("paging: %d evictions this turn", pg.TurnOuts)) + "\n")
 	case pg.Frames > 0:
-		b.WriteString(sBrand.Render("no evictions this turn") + "\n")
+		b.WriteString(sBrand().Render("no evictions this turn") + "\n")
 	}
 	if s := st.ModelSummary.Get(); s != "" {
 		b.WriteString("\n" + lipgloss.NewStyle().Foreground(cMuted).Width(iw).Render(s) + "\n")

@@ -15,14 +15,15 @@ import (
 // the env var says, in a way recover cannot catch.
 func TestMain(m *testing.M) {
 	if d := os.Getenv("CRASH_CHILD_DIR"); d != "" {
-		if _, err := Arm(d, nil, os.Getenv("CRASH_CHILD_KIND") == "overflow"); err != nil {
+		g := &Guard{}
+		if _, err := g.Arm(d, nil, os.Getenv("CRASH_CHILD_KIND") == "overflow"); err != nil {
 			panic(err)
 		}
 		home, err := os.UserHomeDir()
 		if err != nil {
 			panic(err)
 		}
-		SetGPU("Test Adapter (Vulkan, DiscreteGPU)")
+		g.SetGPU("Test Adapter (Vulkan, DiscreteGPU)")
 		switch os.Getenv("CRASH_CHILD_KIND") {
 		case "panic":
 			go func() {
@@ -79,8 +80,9 @@ func TestFatalCrashIsReportedOnTheNextLaunch(t *testing.T) {
 		t.Run(c.kind, func(t *testing.T) {
 			dir := crashDir(t)
 			runChild(t, dir, c.kind)
-			SetInfo(Info{App: "jitllm-desktop", Version: "test"})
-			rep, err := Arm(dir, []string{"loaded " + filepath.Join(home, "m.jlm")}, false)
+			g := &Guard{}
+			g.SetInfo(Info{App: "jitllm-desktop", Version: "test"})
+			rep, err := g.Arm(dir, []string{"loaded " + filepath.Join(home, "m.jlm")}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -102,7 +104,7 @@ func TestFatalCrashIsReportedOnTheNextLaunch(t *testing.T) {
 			if err != nil || string(saved) != rep.Text {
 				t.Errorf("saved report differs from the shown one (%v)", err)
 			}
-			again, err := Arm(dir, nil, false)
+			again, err := g.Arm(dir, nil, false)
 			if err != nil || again != nil {
 				t.Errorf("the same crash reported twice (%v)", err)
 			}
@@ -119,7 +121,7 @@ func TestDriverNoiseIsNotACrash(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, fatalFile), []byte(noise), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := Arm(dir, nil, false)
+	rep, err := (&Guard{}).Arm(dir, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,14 +134,15 @@ func TestDriverNoiseIsNotACrash(t *testing.T) {
 // stack, and the goroutine ends rather than the process.
 func TestRecoverReportsAndKeepsTheProcess(t *testing.T) {
 	dir := crashDir(t)
-	if _, err := Arm(dir, nil, false); err != nil {
+	g := &Guard{}
+	if _, err := g.Arm(dir, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	got := make(chan Report, 1)
-	OnReport(func(r Report) { got <- r })
-	defer OnReport(nil)
+	g.OnReport(func(r Report) { got <- r })
+	defer g.OnReport(nil)
 	go func() {
-		defer Recover("test worker")
+		defer g.Recover("test worker")
 		var m map[string]int
 		m["x"] = 1
 	}()

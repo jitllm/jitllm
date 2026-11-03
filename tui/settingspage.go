@@ -77,9 +77,9 @@ func (p *settingsPage) rebuild() {
 		system: cfg.System, spec: cfg.DeviceSpec, placement: cfg.Placement, ctx: strconv.Itoa(cfg.MaxSeq),
 		seed: strconv.FormatInt(cfg.Sampling.Seed, 10), folders: strings.Join(cfg.ModelDirs, "\n"),
 	}
-	knobs := make([]huh.Field, len(session.SamplingKnobs))
-	d.knobs = make([]string, len(session.SamplingKnobs))
-	for i, k := range session.SamplingKnobs {
+	knobs := make([]huh.Field, len(session.SamplingKnobs()))
+	d.knobs = make([]string, len(session.SamplingKnobs()))
+	for i, k := range session.SamplingKnobs() {
 		k := k
 		d.knobs[i] = strconv.FormatFloat(float64(k.Get(cfg.Sampling)), 'f', -1, 32)
 		knobs[i] = huh.NewInput().Title(k.Name).Value(&d.knobs[i]).
@@ -190,7 +190,7 @@ func (p *settingsPage) apply() tea.Cmd {
 		cfg.MaxSeq = n
 		st.MaxSeq.Set(n)
 	}
-	for i, k := range session.SamplingKnobs {
+	for i, k := range session.SamplingKnobs() {
 		if v, err := strconv.ParseFloat(strings.TrimSpace(d.knobs[i]), 32); err == nil {
 			k.Set(&cfg.Sampling, float32(v))
 		}
@@ -281,7 +281,7 @@ func (p *settingsPage) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (p *settingsPage) View() string {
-	foot := sDim.Render("saved to " + p.env.cfg.Path() + " · shared with the window")
+	foot := sDim().Render("saved to " + p.env.cfg.Path() + " · shared with the window")
 	iw, _ := inner(p.w, p.h)
 	return panel("settings", p.form.View()+"\n"+truncate(foot, iw), p.w, p.h, cBrand)
 }

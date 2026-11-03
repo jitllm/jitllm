@@ -36,7 +36,7 @@ type lines struct {
 // Render is docs/models.md as the code makes it now. It fails when a name in
 // the converter's lists has no line in describe.go, or a line names nothing.
 func Render() ([]byte, error) {
-	return render(lines{gguf: ggufModels, hf: hfModels, projector: projectorModels})
+	return render(lines{gguf: ggufModels(), hf: hfModels(), projector: projectorModels()})
 }
 
 // covered checks that the keys of have are exactly names.

@@ -21,5 +21,5 @@ func TestMain(m *testing.M) {
 			"%d later -- every Vulkan test after that skipped or ran elsewhere\n", first, now)
 		code = 1
 	}
-	os.Exit(testdevices.Fail(code))
+	os.Exit(code)
 }

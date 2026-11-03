@@ -23,8 +23,8 @@ func TestTheAppsModelIsTheServersModel(t *testing.T) {
 		t.Fatalf("the model did not load: %s", sh.Store.Problem.Get().Title)
 	}
 	ms := e.Server().Models()
-	if len(ms) != 1 || ms[0].Path() != modelPath {
-		t.Fatalf("the server lists %d model(s), want the app's one at %s", len(ms), modelPath)
+	if len(ms) != 1 || ms[0].Path() != modelPath() {
+		t.Fatalf("the server lists %d model(s), want the app's one at %s", len(ms), modelPath())
 	}
 	if n := len(e.Server().Sessions()); n != 1 {
 		t.Fatalf("the server holds %d session(s), want the chat's one", n)

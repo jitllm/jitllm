@@ -23,11 +23,11 @@ func sessionProblem(sh *app.Shell) widget.Widget {
 	title := widgets.NewParagraph("").
 		ContentSignal(field(func(p app.Problem) string { return p.Title })).
 		FontSize(sh.P.Type.TitleSmall.FontSize).Bold().
-		Color(sh.P.Colors.OnErrorContainer).Font(app.Prose)
+		Color(sh.P.Colors.OnErrorContainer).Font(sh.P.Prose())
 	detail := widgets.NewParagraph("").
 		ContentSignal(field(func(p app.Problem) string { return p.Detail })).
 		FontSize(sh.P.Type.BodyMedium.FontSize).
-		Color(sh.P.Colors.OnErrorContainer).MaxLines(6).Font(app.Prose)
+		Color(sh.P.Colors.OnErrorContainer).MaxLines(6).Font(sh.P.Prose())
 
 	act := widgets.Hide(
 		state.NewComputed(func() bool { return st.Problem.Get().Action != "" }, st.Problem.AsReadonly()),

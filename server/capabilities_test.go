@@ -39,7 +39,7 @@ func TestAPIManifestIsGenerated(t *testing.T) {
 // note a field.
 func coverage(notes map[string]map[string]string) []string {
 	var bad []string
-	for _, r := range compatRoutes {
+	for _, r := range compatRoutes() {
 		if r.req == nil {
 			continue
 		}
@@ -58,7 +58,7 @@ func coverage(notes map[string]map[string]string) []string {
 	}
 	for p := range notes {
 		found := false
-		for _, r := range compatRoutes {
+		for _, r := range compatRoutes() {
 			found = found || (r.path == p && r.req != nil)
 		}
 		if !found {
@@ -73,13 +73,13 @@ func coverage(notes map[string]map[string]string) []string {
 // note saying what it does, or a note outlives its field; and is run against
 // both violations.
 func TestAPIManifestCoversEveryField(t *testing.T) {
-	for _, b := range coverage(fieldNotes) {
+	for _, b := range coverage(fieldNotes()) {
 		t.Error(b)
 	}
 	// Violations: a field with its note taken away, and a note for a field
 	// that does not exist.
 	drop := map[string]map[string]string{}
-	for p, m := range fieldNotes {
+	for p, m := range fieldNotes() {
 		drop[p] = map[string]string{}
 		for k, v := range m {
 			drop[p][k] = v
@@ -140,7 +140,7 @@ func TestCapabilitiesEndpoint(t *testing.T) {
 	if m.Build == nil || m.Build.Version != "v1.2.3" {
 		t.Fatalf("build is %+v", m.Build)
 	}
-	if len(m.Architectures) == 0 || len(m.API.Endpoints) != len(compatRoutes)+len(engineRoutes()) || len(m.API.Control) == 0 {
+	if len(m.Architectures) == 0 || len(m.API.Endpoints) != len(compatRoutes())+len(engineRoutes()) || len(m.API.Control) == 0 {
 		t.Fatalf("the served manifest is short: %d architectures, %d endpoints, %d services",
 			len(m.Architectures), len(m.API.Endpoints), len(m.API.Control))
 	}
@@ -219,7 +219,7 @@ func TestRefusalsAreRefused(t *testing.T) {
 	testmodels.SourceTree(t)
 	srv := httptest.NewServer(CompatHandler(&fakeBackend{tokens: []string{"x"}, reason: FinishStop}))
 	defer srv.Close()
-	for _, r := range refusals {
+	for _, r := range refusalList() {
 		if len(r.Endpoints) == 0 || r.ID == "" || r.When == "" || r.Message == "" {
 			t.Errorf("refusal %+v is incomplete", r.Refusal)
 			continue
@@ -235,7 +235,7 @@ func TestRefusalsAreRefused(t *testing.T) {
 		}
 	}
 
-	valid := refusals[0]
+	valid := refusalList()[0]
 	valid.probe = `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
 	if probeRefusal(t, srv, valid.Endpoints[0], valid) == "" {
 		t.Error("a valid request passed as a refusal")

@@ -11,8 +11,6 @@ type fakeEngine struct {
 	stop   func()
 }
 
-var _ Engine = (*fakeEngine)(nil)
-
 func (f *fakeEngine) Load(p string) {
 	if f.load != nil {
 		f.load(p)

@@ -14,7 +14,7 @@ import (
 // separate-faster case fails.
 func TestJointChoiceFollowsTheMeasurement(t *testing.T) {
 	const ms = time.Millisecond
-	probe := jointRounds * len(abba) * jointRun
+	probe := jointRounds * len(abba()) * jointRun
 	// drive runs steps of n rows; cost is a step's time given its arm.
 	drive := func(c *jointChoice, n, steps int, cost func(joint bool) time.Duration) (joint, sep int) {
 		for range steps {

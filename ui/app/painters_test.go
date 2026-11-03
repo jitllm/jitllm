@@ -14,7 +14,7 @@ func tight(w, h float32) geometry.Constraints {
 // A typography role must carry its line height, not only its size (body is 14
 // on a 20px line).
 func TestATypographyRoleCarriesItsLineHeight(t *testing.T) {
-	p := NewPainters(newTheme(false))
+	p := NewPainters(newTheme(false), nil)
 
 	role := p.Type.BodyMedium
 	if role.FontSize == 0 || role.LineHeight == 0 {
@@ -40,7 +40,7 @@ func TestATypographyRoleCarriesItsLineHeight(t *testing.T) {
 
 // The scales must actually be populated from the theme.
 func TestTheScalesAreWired(t *testing.T) {
-	p := NewPainters(newTheme(false))
+	p := NewPainters(newTheme(false), nil)
 	if p.Type.TitleLarge.FontSize == 0 || p.Type.LabelSmall.FontSize == 0 {
 		t.Error("the type scale is empty")
 	}

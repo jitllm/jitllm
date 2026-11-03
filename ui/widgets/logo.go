@@ -20,11 +20,13 @@ const (
 	glyphW = 6
 )
 
-// markRects are x, y, width, height in mark pixels.
-var markRects = [][4]int{
-	{3, 0, 3, 3}, {3, 5, 3, 15}, {0, 18, 5, 3}, {9, 0, 3, 3}, {9, 5, 3, 12},
-	{17, 1, 3, 16}, {15, 5, 8, 3}, {20, 14, 3, 3}, {26, 0, 3, 17}, {32, 0, 3, 17},
-	{38, 5, 14, 3}, {38, 5, 3, 12}, {44, 5, 3, 12}, {50, 6, 3, 11},
+// markRects() are x, y, width, height in mark pixels.
+func markRects() [][4]int {
+	return [][4]int{
+		{3, 0, 3, 3}, {3, 5, 3, 15}, {0, 18, 5, 3}, {9, 0, 3, 3}, {9, 5, 3, 12},
+		{17, 1, 3, 16}, {15, 5, 8, 3}, {20, 14, 3, 3}, {26, 0, 3, 17}, {32, 0, 3, 17},
+		{38, 5, 14, 3}, {38, 5, 3, 12}, {44, 5, 3, 12}, {50, 6, 3, 11},
+	}
 }
 
 // markBand is the band a row of the mark is painted in: 0 the crest, 4 dim.
@@ -45,7 +47,7 @@ func markRuns(glyph bool, f func(x, y, n, band int)) {
 		w = glyphW
 	}
 	var on [markH][markW]bool
-	for _, r := range markRects {
+	for _, r := range markRects() {
 		for y := r[1]; y < r[1]+r[3]; y++ {
 			for x := r[0]; x < r[0]+r[2] && x < w; x++ {
 				on[y][x] = true

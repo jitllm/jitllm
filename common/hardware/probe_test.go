@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/common/hardware"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The spec picker is only worth having if it agrees with the engine, so the
@@ -133,8 +134,8 @@ func TestMachineCarriesTheDeviceHeapAndNotTheFreeFigure(t *testing.T) {
 
 func TestFormatNamesMatchesTheFormatList(t *testing.T) {
 	names := hardware.FormatNames()
-	if len(names) != len(hardware.Formats) {
-		t.Fatalf("FormatNames() = %d, Formats = %d", len(names), len(hardware.Formats))
+	if len(names) != len(quant.PackedTypes()) {
+		t.Fatalf("FormatNames() = %d, Formats = %d", len(names), len(quant.PackedTypes()))
 	}
 	for i, n := range names {
 		if n == "" {

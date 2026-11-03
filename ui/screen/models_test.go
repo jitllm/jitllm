@@ -168,7 +168,7 @@ func TestSortEntriesIsStableAndReversible(t *testing.T) {
 // A screen is rebuilt on a theme swap: build twice, and the convert form the
 // user typed into is still there.
 func TestScreenStateIsPerShellAndSurvivesARebuild(t *testing.T) {
-	cfg := app.DefaultConfig()
+	cfg := app.DefaultConfig(app.Env{})
 	cfg.ModelDirs = []string{t.TempDir()}
 
 	a := app.NewShell(nil, cfg)
@@ -204,7 +204,7 @@ func TestRescanPublishesEveryFileAndMarksAStaleContainer(t *testing.T) {
 	writeZeros(t, filepath.Join(dir, "weights.gguf"), 2048)
 	writeStaleContainer(t, filepath.Join(dir, "old.jlm"), 19)
 
-	cfg := app.DefaultConfig()
+	cfg := app.DefaultConfig(app.Env{})
 	cfg.ModelDirs = []string{dir}
 	sh := app.NewShell(nil, cfg)
 

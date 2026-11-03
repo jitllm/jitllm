@@ -38,7 +38,7 @@ func Discover(sh *app.Shell) widget.Widget {
 
 	title := p.Role(primitives.Text("Discover").Color(p.Text()), p.Type.HeadlineSmall).Bold()
 	sub := widgets.NewParagraph("Models this machine runs, ranked for it. Each one converts once into a .jlm the first time you get it.").
-		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(app.Prose)
+		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(sh.P.Prose())
 
 	body := primitives.VBox(
 		primitives.VBox(title, sub).Gap(p.Space.XS).CrossAlign(primitives.CrossAxisStretch),
@@ -91,7 +91,7 @@ func machineCard(sh *app.Shell) widget.Widget {
 	}
 
 	return primitives.Box(primitives.HBox(
-		widgets.NewIconTile(widgets.IconMachine, 56, p.Colors.SurfaceContainerHigh, p.Colors.Primary),
+		widgets.NewIconTile(widgets.IconMachine(), 56, p.Colors.SurfaceContainerHigh, p.Colors.Primary),
 		primitives.Expanded(primitives.VBox(
 			p.Role(primitives.Text("This machine").Color(p.Muted()), p.Type.LabelMedium),
 			p.Role(primitives.Text("").ContentSignal(rep(func(r hardware.Report) string { return r.CPU })).Color(p.Text()), p.Type.TitleMedium).Bold(),
@@ -142,8 +142,8 @@ func machineCard(sh *app.Shell) widget.Widget {
 
 func (d *downloadScreen) balance() widget.Widget {
 	p := d.sh.P
-	chips := make([]widget.Widget, len(discover.BalanceSteps))
-	for i, s := range discover.BalanceSteps {
+	chips := make([]widget.Widget, len(discover.BalanceSteps()))
+	for i, s := range discover.BalanceSteps() {
 		chips[i] = chip.New(
 			chip.Label(s),
 			chip.Selectable(true),
@@ -163,7 +163,7 @@ func (d *downloadScreen) balance() widget.Widget {
 
 // SetBalance sets Discover's preference, as its chips do: 0 is Fastest.
 func SetBalance(sh *app.Shell, step int) {
-	downloadsFor(sh).pref.Set(min(max(step, 0), len(discover.BalanceSteps)-1))
+	downloadsFor(sh).pref.Set(min(max(step, 0), len(discover.BalanceSteps())-1))
 }
 
 // ShowDownload puts Discover in the state a download in flight leaves it:
@@ -251,10 +251,10 @@ func (d *downloadScreen) ranked() widget.Widget {
 			primitives.Box(primitives.VBox(
 				widgets.NewParagraph("").ContentSignal(text(k, func(m library.Model, _ int) string {
 					return discover.Speed(m, d.sh.Store.Machine.Get())
-				})).FontSize(p.Type.BodySmall.FontSize).Color(p.Text()).Font(app.Mono).MaxLines(1).Align(widget.TextAlignRight),
+				})).FontSize(p.Type.BodySmall.FontSize).Color(p.Text()).Font(p.Mono()).MaxLines(1).Align(widget.TextAlignRight),
 				widgets.NewParagraph("").ContentSignal(text(k, func(m library.Model, _ int) string {
 					return discover.FitWords(m, d.sh.Store.Machine.Get())
-				})).FontSize(p.Type.BodySmall.FontSize).Color(p.Muted()).Font(app.Prose).MaxLines(1).Align(widget.TextAlignRight),
+				})).FontSize(p.Type.BodySmall.FontSize).Color(p.Muted()).Font(p.Prose()).MaxLines(1).Align(widget.TextAlignRight),
 			).Gap(2)).Width(150),
 		).Gap(p.Space.S+p.Space.XS)).PaddingXY(p.Space.S+p.Space.XS, p.Space.S+p.Space.XS)
 		sel := state.NewComputed(func() bool { i := at(k); return i >= 0 && d.sel.Get() == i }, order, d.sel.AsReadonly())
@@ -284,7 +284,7 @@ func (d *downloadScreen) panel() widget.Widget {
 	metric := func(label string, value state.ReadonlySignal[string]) widget.Widget {
 		return primitives.VBox(
 			p.Role(primitives.Text(label).Color(p.Muted()), p.Type.LabelMedium),
-			widgets.NewParagraph("").ContentSignal(value).FontSize(p.Type.BodyMedium.FontSize).Color(p.Text()).Font(app.Prose).Bold().MaxLines(2),
+			widgets.NewParagraph("").ContentSignal(value).FontSize(p.Type.BodyMedium.FontSize).Color(p.Text()).Font(p.Prose()).Bold().MaxLines(2),
 		).Gap(2)
 	}
 
@@ -324,7 +324,7 @@ func (d *downloadScreen) panel() widget.Widget {
 	details := widgets.Hide(some, primitives.VBox(
 		p.Role(primitives.Text("").ContentSignal(pick(func(m library.Model, _ int) string { return m.Title })).Color(p.Text()), p.Type.TitleLarge).Bold(),
 		widgets.NewParagraph("").ContentSignal(pick(func(m library.Model, _ int) string { return m.Note })).
-			FontSize(p.Type.BodySmall.FontSize).Color(p.Muted()).Font(app.Prose),
+			FontSize(p.Type.BodySmall.FontSize).Color(p.Muted()).Font(p.Prose()),
 		primitives.Box().Height(p.Space.XS),
 		primitives.HBox(
 			primitives.Expanded(metric("Speed", pick(func(m library.Model, _ int) string {
@@ -342,13 +342,13 @@ func (d *downloadScreen) panel() widget.Widget {
 		primitives.Box().Height(p.Space.XS),
 		action,
 		bar,
-		widgets.NewParagraph("").ContentSignal(d.note.AsReadonly()).FontSize(p.Type.BodySmall.FontSize).Color(p.Text()).Font(app.Prose),
+		widgets.NewParagraph("").ContentSignal(d.note.AsReadonly()).FontSize(p.Type.BodySmall.FontSize).Color(p.Text()).Font(p.Prose()),
 		widgets.NewParagraph("").ContentSignal(pick(func(m library.Model, _ int) string { return "From " + m.Ref().String() })).
-			FontSize(p.Type.LabelSmall.FontSize).Color(p.Muted()).Font(app.Mono),
+			FontSize(p.Type.LabelSmall.FontSize).Color(p.Muted()).Font(p.Mono()),
 	).Gap(p.Space.S).CrossAlign(primitives.CrossAxisStretch))
 
 	empty := widgets.Hide(none, widgets.NewParagraph("Pick a model to see how it runs here.").
-		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(app.Prose))
+		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(p.Prose()))
 
 	return primitives.Box(primitives.VBox(empty, details).CrossAlign(primitives.CrossAxisStretch)).
 		Padding(p.Space.M+p.Space.XS).

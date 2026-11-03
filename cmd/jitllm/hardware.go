@@ -83,11 +83,6 @@ func reportMem() {
 	fmt.Printf("          scalar unpinned probe, which is a LOWER BOUND on the real bandwidth\n")
 }
 
-// fastPath is the list of packed formats: a list, never a promise of coverage.
-// Asking SupportedNative per type keeps this honest when the emitters differ.
-// It is quant.PackedTypes() itself, not a copy that could drift.
-var fastPath = quant.PackedTypes()
-
 func reportJIT() {
 	// Show what a run would emit: engine/device/cpu reads no environment, so apply the
 	// same pins a run would.
@@ -105,7 +100,7 @@ func reportJIT() {
 	fmt.Printf("          tier      %s\n", cpu.TierReport())
 	fmt.Printf("          isa       %s\n", isa())
 	var ks []string
-	for _, t := range fastPath {
+	for _, t := range quant.PackedTypes() {
 		if !cpu.SupportedNative(t) {
 			ks = append(ks, fmt.Sprintf("%s none", t))
 			continue
@@ -117,7 +112,7 @@ func reportJIT() {
 	// which a container never decodes through; on a pre-VNNI host it reads
 	// "none" while the packed family below runs everything.
 	var ps []string
-	for _, t := range fastPath {
+	for _, t := range quant.PackedTypes() {
 		switch {
 		case !cpu.PackedSupported(t):
 			ps = append(ps, fmt.Sprintf("%s none", t))

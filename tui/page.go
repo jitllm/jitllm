@@ -23,7 +23,9 @@ const (
 	scrSettings
 )
 
-var screenNames = []string{"Chat", "Models", "Discover", "Engine", "Settings"}
+func screenNames() []string {
+	return []string{"Chat", "Models", "Discover", "Engine", "Settings"}
+}
 
 // page is one screen. The root sizes it, focuses it, routes it every message
 // and draws its View; a page asks the root for anything beyond itself with a

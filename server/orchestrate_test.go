@@ -65,7 +65,9 @@ func (f *orchFixture) dev(id string) int {
 	return int(pl.Msg.GetPlacement().GetDeviceBlockCount())
 }
 
-var orchTurns = []string{story, " and then", " until"}
+func orchTurns() []string {
+	return []string{story, " and then", " until"}
+}
 
 // TestTheTalkingModelGetsTheCard: two models on a card that holds one. Each
 // turn, the model generating is promoted onto the card and the idle one is
@@ -83,7 +85,7 @@ func TestTheTalkingModelGetsTheCard(t *testing.T) {
 	f.open("a-host", "ah")
 	f.open("b-host", "bh")
 	var ctlA, ctlB [][]int32
-	for _, p := range orchTurns {
+	for _, p := range orchTurns() {
 		ctlA = append(ctlA, f.turn("ah", p))
 		ctlB = append(ctlB, f.turn("bh", p))
 	}
@@ -105,7 +107,7 @@ func TestTheTalkingModelGetsTheCard(t *testing.T) {
 		}
 		return false
 	}
-	for i, p := range orchTurns {
+	for i, p := range orchTurns() {
 		if got := f.turn("a", p); !same(got, ctlA[i], devA[i]) {
 			t.Fatalf("turn %d: a's reply %v parts from the host's %v and the card's %v", i, got, ctlA[i], devA[i])
 		}
@@ -205,7 +207,7 @@ func (f *orchFixture) declines(id string) []any {
 	return out
 }
 
-// deviceControls is each model's replies to orchTurns from a session that
+// deviceControls is each model's replies to orchTurns() from a session that
 // holds every block on the card from its first token to its last.
 func deviceControls(t *testing.T) (a, b [][]int32) {
 	devs := testdevices.Take(t, 1, "cuda:0")
@@ -220,7 +222,7 @@ func deviceControls(t *testing.T) (a, b [][]int32) {
 			t.Fatal(err)
 		}
 		f.open(m.id, m.id)
-		for _, p := range orchTurns {
+		for _, p := range orchTurns() {
 			*m.out = append(*m.out, f.turn(m.id, p))
 		}
 		if n, all := f.dev(m.id), int(e.mustModel(t, m.id).m.Cfg.NLayer); n != all {

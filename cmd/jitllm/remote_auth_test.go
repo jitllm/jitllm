@@ -72,11 +72,10 @@ func TestRunFindsAServiceOnTheOldPort(t *testing.T) {
 	}
 	primary := l.Addr().String()
 	l.Close()
-	addrOpts = []localserver.Option{localserver.WithDefaults(primary, strings.TrimPrefix(old.URL, "http://"))}
-	defer func() { addrOpts = nil }()
+	addrOpts := []localserver.Option{localserver.WithDefaults(primary, strings.TrimPrefix(old.URL, "http://"))}
 
 	var note bytes.Buffer
-	svc, _, err := runTarget(context.Background(), "qwen3", primary, "", false, nil, &note)
+	svc, _, err := runTarget(context.Background(), "qwen3", primary, "", false, nil, &note, addrOpts...)
 	if err != nil || svc == nil || svc.Addr != strings.TrimPrefix(old.URL, "http://") {
 		t.Fatalf("runTarget: %+v %v", svc, err)
 	}

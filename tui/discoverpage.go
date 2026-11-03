@@ -30,18 +30,18 @@ func (libRow) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 func (c libRow) Render(w io.Writer, l list.Model, i int, li list.Item) {
 	it := li.(libItem)
 	p := c.p
-	marker, ns := "  ", sFg
+	marker, ns := "  ", sFg()
 	if i == l.Index() {
-		marker, ns = sBrand.Render("▌ "), sBold
+		marker, ns = sBrand().Render("▌ "), sBold()
 	}
 	fit := ""
 	if p.onDisk(it.i) {
-		fit = sBrand.Render("✓ on disk")
+		fit = sBrand().Render("✓ on disk")
 	} else if p.probed {
 		fit = fitText(discover.FitWords(it.Model, p.mr))
 	}
 	right := fit + strings.Repeat(" ", max(1, 20-lipgloss.Width(fit))) +
-		sMuted.Render(fmt.Sprintf("%-8s%-7s", it.Params, it.Quant)) + sDim.Render(fmt.Sprintf("%10s", session.Bytes(uint64(it.Bytes))))
+		sMuted().Render(fmt.Sprintf("%-8s%-7s", it.Params, it.Quant)) + sDim().Render(fmt.Sprintf("%10s", session.Bytes(uint64(it.Bytes))))
 	title := it.Title
 	if it.MMProj != "" {
 		title += " ◉"
@@ -96,8 +96,8 @@ func newDiscoverPage(env *env) *discoverPage {
 	p.list.SetShowTitle(false)
 	p.list.SetShowHelp(false)
 	p.list.DisableQuitKeybindings()
-	p.list.FilterInput.Prompt = sBrand.Render("  ")
-	p.list.Styles.StatusBar = sDim.PaddingLeft(2).PaddingBottom(1)
+	p.list.FilterInput.Prompt = sBrand().Render("  ")
+	p.list.Styles.StatusBar = sDim().PaddingLeft(2).PaddingBottom(1)
 	p.refresh()
 	return p
 }
@@ -112,7 +112,7 @@ func (p *discoverPage) onDisk(i int) bool { return i < len(p.disk) && p.disk[i] 
 
 // refresh ranks the library for the machine and checks what is on disk.
 func (p *discoverPage) refresh() {
-	p.disk = discover.OnDisk(discover.Dir(p.env.dirs))
+	p.disk = discover.OnDisk(discover.Dir(p.env.dirs, p.env.cfg.DefaultModelDir()))
 	order := make([]int, len(library.Models()))
 	for i := range order {
 		order[i] = i
@@ -170,7 +170,7 @@ func (p *discoverPage) Update(msg tea.Msg) tea.Cmd {
 					return kept
 				}
 				if p.onDisk(it.i) {
-					return tea.Batch(kept, load(discover.ContainerFor(discover.Dir(p.env.dirs), it.Model)))
+					return tea.Batch(kept, load(discover.ContainerFor(discover.Dir(p.env.dirs, p.env.cfg.DefaultModelDir()), it.Model)))
 				}
 				return tea.Batch(kept, p.env.jobs.download(it.Model))
 			case key.Matches(msg, p.keys.Smaller):
@@ -178,7 +178,7 @@ func (p *discoverPage) Update(msg tea.Msg) tea.Cmd {
 				p.refresh()
 				return nil
 			case key.Matches(msg, p.keys.Larger):
-				p.pref = min(len(discover.BalanceSteps)-1, p.pref+1)
+				p.pref = min(len(discover.BalanceSteps())-1, p.pref+1)
 				p.refresh()
 				return nil
 			}
@@ -195,16 +195,16 @@ func (p *discoverPage) Update(msg tea.Msg) tea.Cmd {
 
 func (p *discoverPage) View() string {
 	var steps []string
-	for i, s := range discover.BalanceSteps {
+	for i, s := range discover.BalanceSteps() {
 		if i == p.pref {
 			steps = append(steps, pill(s, cBg, cBrand))
 		} else {
-			steps = append(steps, sDim.Render(" "+s+" "))
+			steps = append(steps, sDim().Render(" "+s+" "))
 		}
 	}
-	bal := sDim.Render("< ") + strings.Join(steps, "") + sDim.Render(" >")
+	bal := sDim().Render("< ") + strings.Join(steps, "") + sDim().Render(" >")
 	if !p.probed {
-		bal = p.env.spin.View() + sDim.Render(" measuring this machine to rank them…")
+		bal = p.env.spin.View() + sDim().Render(" measuring this machine to rank them…")
 	}
 	left := panel(fmt.Sprintf("discover · %d verified models", len(library.Models())),
 		bal+"\n\n"+p.list.View(), p.listW, p.h, cBrand)
@@ -212,8 +212,8 @@ func (p *discoverPage) View() string {
 	rw, _ := inner(p.w-p.listW, p.h)
 	var b strings.Builder
 	if it, ok := p.list.SelectedItem().(libItem); ok {
-		b.WriteString(sBold.Render(truncate(it.Title, rw)) + "\n")
-		b.WriteString(sDim.Render(truncate(it.Repo, rw)) + "\n\n")
+		b.WriteString(sBold().Render(truncate(it.Title, rw)) + "\n")
+		b.WriteString(sDim().Render(truncate(it.Repo, rw)) + "\n\n")
 		row := func(k, v string) {
 			if v != "" {
 				b.WriteString(kvLine(k, v, rw) + "\n")
@@ -231,16 +231,16 @@ func (p *discoverPage) View() string {
 			b.WriteString("\n" + lipgloss.NewStyle().Foreground(cMuted).Width(rw).Render(it.Note) + "\n")
 		}
 		if it.Verified != "" {
-			b.WriteString("\n" + sDim.Render(truncate("verified "+it.Verified, rw)) + "\n")
+			b.WriteString("\n" + sDim().Render(truncate("verified "+it.Verified, rw)) + "\n")
 		}
 		b.WriteString("\n")
-		switch note := discover.SpaceNote(it.Model, discover.Dir(p.env.dirs), discover.FreeBytes); {
+		switch note := discover.SpaceNote(it.Model, discover.Dir(p.env.dirs, p.env.cfg.DefaultModelDir()), discover.FreeBytes); {
 		case p.onDisk(it.i):
-			b.WriteString(sBrand.Render("enter loads it"))
+			b.WriteString(sBrand().Render("enter loads it"))
 		case note != "":
 			b.WriteString(lipgloss.NewStyle().Foreground(cRed).Width(rw).Render(note))
 		default:
-			b.WriteString(sMuted.Render("enter downloads it and converts it to a .jlm"))
+			b.WriteString(sMuted().Render("enter downloads it and converts it to a .jlm"))
 		}
 	}
 	if jv := p.env.jobs.View(rw); jv != "" {

@@ -71,8 +71,10 @@ func TestNoProductionCodeImportsTestDevices(t *testing.T) {
 	}
 }
 
-// opensADevice is a call that reaches a device.
-var opensADevice = regexp.MustCompile(`\b(backend\.(Open|OpenWith|OpenCUDA|OpenCUDAWith|OpenVulkan|OpenVulkanWith|OpenHIPWith|OpenMetalWith)|tier\.(Open|OpenWith|New)|LoadModel)\(`)
+// opensADevice() is a call that reaches a device.
+func opensADevice() *regexp.Regexp {
+	return regexp.MustCompile(`\b(backend\.(Open|OpenWith|OpenCUDA|OpenCUDAWith|OpenVulkan|OpenVulkanWith|OpenHIPWith|OpenMetalWith)|tier\.(Open|OpenWith|New)|LoadModel)\(`)
+}
 
 // TestEveryPackageThatOpensADeviceInstallsTheSelection: the selection holds
 // only in a test binary that installed it (testdevices.Install), so a package
@@ -100,7 +102,7 @@ func TestEveryPackageThatOpensADeviceInstallsTheSelection(t *testing.T) {
 		if strings.Contains(src, "testdevices.Install(") {
 			installs[dir] = true
 		}
-		if opensADevice.MatchString(src) {
+		if opensADevice().MatchString(src) {
 			opens[dir] = p
 		}
 	})

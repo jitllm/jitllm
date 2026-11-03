@@ -80,7 +80,7 @@ func TestTheWindowPicksTheServiceFirst(t *testing.T) {
 	addr := freeAddr(t)
 	stop := startJitllmd(t, addr)
 
-	sh := app.NewShell(nil, app.DefaultConfig())
+	sh := app.NewShell(nil, app.DefaultConfig(app.Env{}))
 	sh.Store.ServiceAddr.Set(addr)
 	e := Start(sh)
 	defer e.Close()
@@ -108,7 +108,7 @@ func TestTheWindowPicksTheServiceFirst(t *testing.T) {
 // With nothing answering, Auto runs the window's own engine, and the badge
 // says that.
 func TestTheWindowFallsBackToItsOwnEngine(t *testing.T) {
-	sh := app.NewShell(nil, app.DefaultConfig())
+	sh := app.NewShell(nil, app.DefaultConfig(app.Env{}))
 	sh.Store.ServiceAddr.Set(freeAddr(t))
 	e := Start(sh)
 	defer e.Close()
@@ -125,7 +125,7 @@ func TestTheWindowFallsBackToItsOwnEngine(t *testing.T) {
 func TestConnectSwitchesToTheService(t *testing.T) {
 	addr := freeAddr(t)
 	startJitllmd(t, addr)
-	sh := app.NewShell(nil, app.DefaultConfig())
+	sh := app.NewShell(nil, app.DefaultConfig(app.Env{}))
 	sh.Store.EngineMode.Set(core.ModeEmbedded)
 	e := Start(sh)
 	defer e.Close()

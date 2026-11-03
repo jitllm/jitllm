@@ -3,7 +3,6 @@ package screen
 import (
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/gogpu/ui/core/button"
 	"github.com/gogpu/ui/core/progressbar"
@@ -40,18 +39,11 @@ type convertScreen struct {
 	convertDisabled state.ReadonlySignal[bool]
 }
 
-var (
-	convertMu      sync.Mutex
-	convertScreens = map[*app.Shell]*convertScreen{}
-)
-
 // convertFor returns this shell's Convert state, creating it once. It starts
 // the scan if the Models screen has not, since that one walk fills both lists.
 func convertFor(sh *app.Shell) *convertScreen {
-	convertMu.Lock()
-	c, ok := convertScreens[sh]
-	if !ok {
-		c = &convertScreen{
+	c, created := app.Local(sh, func() *convertScreen {
+		c := &convertScreen{
 			sh:         sh,
 			store:      sh.Store,
 			src:        state.NewSignal(""),
@@ -61,10 +53,9 @@ func convertFor(sh *app.Shell) *convertScreen {
 			note:       state.NewSignal(""),
 		}
 		c.convertDisabled = state.NewComputed(func() bool { return c.converting.Get() }, c.converting.AsReadonly())
-		convertScreens[sh] = c
-	}
-	convertMu.Unlock()
-	if !ok {
+		return c
+	})
+	if created {
 		modelsFor(sh)
 	}
 	return c
@@ -200,7 +191,7 @@ func (c *convertScreen) formSide() widget.Widget {
 		widgets.Hide(c.converting.AsReadonly(), primitives.VBox(
 			bar,
 			widgets.NewParagraph("").ContentSignal(c.store.ProgressLabel).
-				FontSize(p.Type.BodySmall.FontSize).Color(p.Text()).Font(app.Prose).MaxLines(2),
+				FontSize(p.Type.BodySmall.FontSize).Color(p.Text()).Font(p.Prose()).MaxLines(2),
 		).Gap(p.Space.XS).CrossAlign(primitives.CrossAxisStretch)),
 		wrapped(c.sh, state.NewSignal("The bar is an estimate. A conversion cannot be cancelled once it starts.").AsReadonly()),
 	)
@@ -228,15 +219,15 @@ func (c *convertScreen) pathRow(label string, sig state.Signal[string], hint str
 	dir := state.NewComputed(func() string { return filepath.Dir(sig.Get()) }, sig.AsReadonly())
 	shown := primitives.VBox(
 		widgets.Hide(set, widgets.NewParagraph("").ContentSignal(name).FontSize(p.Type.BodyMedium.FontSize).
-			Color(p.Text()).MaxLines(1).Font(app.Prose)),
+			Color(p.Text()).MaxLines(1).Font(p.Prose())),
 		widgets.Hide(set, widgets.NewParagraph("").ContentSignal(dir).FontSize(p.Type.LabelSmall.FontSize).
-			Color(p.Muted()).MaxLines(1).Font(app.Mono)),
+			Color(p.Muted()).MaxLines(1).Font(p.Mono())),
 		widgets.Hide(unset, widgets.NewParagraph(hint).FontSize(p.Type.BodyMedium.FontSize).
-			Color(p.Muted()).MaxLines(1).Font(app.Prose)),
+			Color(p.Muted()).MaxLines(1).Font(p.Prose())),
 	).Gap(2).CrossAlign(primitives.CrossAxisStretch)
 	row := []widget.Widget{primitives.Expanded(shown)}
 	if label == "Vision tower" {
-		row = append(row, widgets.Hide(set, widgets.NewIconButton(widgets.IconTrash, "No vision tower",
+		row = append(row, widgets.Hide(set, widgets.NewIconButton(widgets.IconTrash(), "No vision tower",
 			func() { sig.Set("") }, iconColors(c.sh))))
 	}
 	row = append(row, button.New(
@@ -281,7 +272,7 @@ func (c *convertScreen) browse(title string, into state.Signal[string], alsoDest
 	if len(c.sh.Cfg.ModelDirs) > 0 {
 		start = c.sh.Cfg.ModelDirs[0]
 	}
-	paths := c.sh.PickFile(title, modelFilters, start)
+	paths := c.sh.PickFile(title, modelFilters(), start)
 	if len(paths) == 0 {
 		return
 	}
@@ -372,7 +363,7 @@ func hintBox(p app.Painters, sig state.ReadonlySignal[string]) widget.Widget {
 		FontSize(p.Type.BodySmall.FontSize).
 		LineHeight(p.Type.BodySmall.LineHeight / p.Type.BodySmall.FontSize).
 		Color(p.Text()).
-		Font(app.Prose)
+		Font(p.Prose())
 	shown := state.NewComputed(func() bool { return sig.Get() != "" }, sig)
 	return widgets.Hide(shown, primitives.Box(
 		primitives.Box(body).

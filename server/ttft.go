@@ -38,7 +38,7 @@ import (
 // ErrOverloaded is a request refused because its model already holds as many
 // as Config.MaxQueue allows. Nothing was run; retrying later is correct. The
 // error returned wraps it in an *OverloadedError carrying how long to wait.
-var ErrOverloaded = errors.New("server: the model's request queue is full")
+const ErrOverloaded serverError = "server: the model's request queue is full"
 
 // OverloadedError is ErrOverloaded with the wait an HTTP refusal names in
 // Retry-After.

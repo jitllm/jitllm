@@ -6,7 +6,7 @@ import "testing"
 // the round trip, not the field: it drives NewShell (Config -> Store) and
 // Shell.Close (Store -> Config), which a tagged-but-unwired field fails.
 func TestEverySettingSurvivesARestart(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := DefaultConfig(Env{})
 	sh := NewShell(nil, cfg)
 
 	// What a session of adjusting things leaves behind.

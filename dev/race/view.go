@@ -13,7 +13,7 @@ import (
 )
 
 // The palette is Tokyo Night, the website's and tui/'s; the brand is its green.
-var (
+const (
 	cLine   = lipgloss.Color("#3b4261")
 	cDim    = lipgloss.Color("#565f89")
 	cMuted  = lipgloss.Color("#a9b1d6")
@@ -22,16 +22,16 @@ var (
 	cBlue   = lipgloss.Color("#7aa2f7")
 	cYellow = lipgloss.Color("#e0af68")
 	cRed    = lipgloss.Color("#f7768e")
-
-	sDim   = lipgloss.NewStyle().Foreground(cDim)
-	sMuted = lipgloss.NewStyle().Foreground(cMuted)
-	sFg    = lipgloss.NewStyle().Foreground(cFg)
-	sBold  = lipgloss.NewStyle().Foreground(cFg).Bold(true)
-	sErr   = lipgloss.NewStyle().Foreground(cRed)
 )
 
-// sideColour: the left side is the brand's, the right the blue.
-var sideColour = [2]lipgloss.Color{cBrand, cBlue}
+func sDim() lipgloss.Style   { return lipgloss.NewStyle().Foreground(cDim) }
+func sMuted() lipgloss.Style { return lipgloss.NewStyle().Foreground(cMuted) }
+func sFg() lipgloss.Style    { return lipgloss.NewStyle().Foreground(cFg) }
+func sBold() lipgloss.Style  { return lipgloss.NewStyle().Foreground(cFg).Bold(true) }
+func sErr() lipgloss.Style   { return lipgloss.NewStyle().Foreground(cRed) }
+
+// sideColour(): the left side is the brand's, the right the blue.
+func sideColour() [2]lipgloss.Color { return [2]lipgloss.Color{cBrand, cBlue} }
 
 // pane is one side's live state.
 type pane struct {
@@ -134,18 +134,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) View() string {
 	w, h := max(m.w, 40), max(m.h, 12)
 	title := lipgloss.NewStyle().Foreground(cBrand).Bold(true).Render("jitllm race") +
-		sDim.Render("  · same prompt, same model, both started at the same instant")
+		sDim().Render("  · same prompt, same model, both started at the same instant")
 	lines := []string{title}
 	for _, l := range m.header {
-		lines = append(lines, sMuted.Render(ansi.Truncate(l, w, "…")))
+		lines = append(lines, sMuted().Render(ansi.Truncate(l, w, "…")))
 	}
 	head := strings.Join(lines, "\n")
 
-	foot := sDim.Render("waiting for both engines…")
+	foot := sDim().Render("waiting for both engines…")
 	if m.ended {
 		foot = lipgloss.NewStyle().Foreground(cYellow).Bold(true).Render(ansi.Wrap(Summary(m.sides, m.results), w, ""))
 	} else if m.t0.IsZero() {
-		foot = sDim.Render("ready…")
+		foot = sDim().Render("ready…")
 	}
 	ph := h - lipgloss.Height(head) - lipgloss.Height(foot)
 	pw := w / 2
@@ -158,7 +158,7 @@ func (m *model) View() string {
 // as much of the streamed text's tail as fits.
 func (m *model) paneView(i, w, h int) string {
 	p := &m.panes[i]
-	c := sideColour[i]
+	c := sideColour()[i]
 	box := lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(c).Padding(0, 1)
 	if p.done != nil && p.rank == 1 {
 		box = box.BorderStyle(lipgloss.DoubleBorder())
@@ -167,18 +167,18 @@ func (m *model) paneView(i, w, h int) string {
 	ih := max(4, h-box.GetVerticalFrameSize())
 
 	name := lipgloss.NewStyle().Foreground(c).Bold(true).Render(m.sides[i].Name)
-	status := sDim.Render("streaming")
+	status := sDim().Render("streaming")
 	switch {
 	case p.done != nil && p.done.Err != "":
-		status = sErr.Render("error")
+		status = sErr().Render("error")
 	case p.done != nil:
 		status = lipgloss.NewStyle().Foreground(c).Bold(true).Render(fmt.Sprintf("✔ finished (%s)", ordinal(p.rank)))
 	case p.chunks == 0 && !m.t0.IsZero():
-		status = sDim.Render("prefilling…")
+		status = sDim().Render("prefilling…")
 	}
 	gap := max(1, iw-lipgloss.Width(name)-lipgloss.Width(status))
 	top := name + strings.Repeat(" ", gap) + status
-	label := sMuted.Render(ansi.Truncate(m.sides[i].Label, iw, "…"))
+	label := sMuted().Render(ansi.Truncate(m.sides[i].Label, iw, "…"))
 
 	ttft, rate, total, toks, prompt := "—", "—", "—", fmt.Sprint(p.chunks), "—"
 	if p.chunks > 0 {
@@ -196,13 +196,13 @@ func (m *model) paneView(i, w, h int) string {
 		}
 		total = fmt.Sprintf("%.1f s", m.now.Seconds())
 	}
-	stat := func(k, v string) string { return sDim.Render(k+" ") + sBold.Render(v) }
+	stat := func(k, v string) string { return sDim().Render(k+" ") + sBold().Render(v) }
 	stats := []string{
 		stat("TTFT", ttft) + "   " + stat("decode", rate),
 		stat("total", total) + "   " + stat("tokens", toks) + "   " + stat("prompt", prompt),
 	}
 	if p.done != nil && p.done.Err != "" {
-		stats = append(stats, sErr.Render(ansi.Wrap(p.done.Err, iw, "")))
+		stats = append(stats, sErr().Render(ansi.Wrap(p.done.Err, iw, "")))
 	}
 	rule := lipgloss.NewStyle().Foreground(cLine).Render(strings.Repeat("─", iw))
 
@@ -213,7 +213,7 @@ func (m *model) paneView(i, w, h int) string {
 	if len(body) > room {
 		body = body[len(body)-room:]
 	}
-	content := strings.Join(headLines, "\n") + "\n" + sFg.Render(strings.Join(body, "\n"))
+	content := strings.Join(headLines, "\n") + "\n" + sFg().Render(strings.Join(body, "\n"))
 	return box.Width(iw + box.GetHorizontalPadding()).Height(ih).MaxHeight(h).Render(content)
 }
 

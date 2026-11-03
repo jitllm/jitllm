@@ -51,33 +51,39 @@ type list []string
 func (l *list) String() string     { return strings.Join(*l, ",") }
 func (l *list) Set(v string) error { *l = append(*l, v); return nil }
 
-// mixes are the named request mixes. Prompt lengths are words, about a token
+// mixes() are the named request mixes(). Prompt lengths are words, about a token
 // each; the SLOs define goodput. A server's -max-seq must cover the longest
 // prompt plus max_tokens (about 1.4 tokens a word).
-var mixes = map[string]hb.Config{
-	"mixed": {
-		Levels: []int{4}, Requests: 16, PromptLens: []int{32, 128, 512}, MaxTokens: 64,
-		SLOTTFT: 3 * time.Second, SLOTPOT: 100 * time.Millisecond,
-	},
-	"long": {
-		Levels: []int{4}, Requests: 16, PromptLens: []int{1024, 2048}, MaxTokens: 64,
-		SLOTTFT: 12 * time.Second, SLOTPOT: 150 * time.Millisecond,
-	},
-	"decode": {
-		Levels: []int{32}, Requests: 64, PromptLens: []int{64}, MaxTokens: 256,
-		SLOTTFT: time.Second, SLOTPOT: 80 * time.Millisecond,
-	},
+func mixes() map[string]hb.Config {
+	return map[string]hb.Config{
+		"mixed": {
+			Levels: []int{4}, Requests: 16, PromptLens: []int{32, 128, 512}, MaxTokens: 64,
+			SLOTTFT: 3 * time.Second, SLOTPOT: 100 * time.Millisecond,
+		},
+		"long": {
+			Levels: []int{4}, Requests: 16, PromptLens: []int{1024, 2048}, MaxTokens: 64,
+			SLOTTFT: 12 * time.Second, SLOTPOT: 150 * time.Millisecond,
+		},
+		"decode": {
+			Levels: []int{32}, Requests: 64, PromptLens: []int{64}, MaxTokens: 256,
+			SLOTTFT: time.Second, SLOTPOT: 80 * time.Millisecond,
+		},
+	}
 }
 
-// defaultKnobs is the bounded sweep, one factor at a time around the default.
-var defaultOrder = []string{"max-batch", "prompt-chunk", "step-cost", "fairness", "sessions", "mem-cache-max"}
-var defaultKnobs = map[string][]string{
-	"max-batch":     {"8"},
-	"prompt-chunk":  {"128", "512"},
-	"step-cost":     {"2", "4"},
-	"fairness":      {"0", "50"},
-	"sessions":      {"4"},
-	"mem-cache-max": {"256M"},
+// defaultKnobs() is the bounded sweep, one factor at a time around the default.
+func defaultOrder() []string {
+	return []string{"max-batch", "prompt-chunk", "step-cost", "fairness", "sessions", "mem-cache-max"}
+}
+func defaultKnobs() map[string][]string {
+	return map[string][]string{
+		"max-batch":     {"8"},
+		"prompt-chunk":  {"128", "512"},
+		"step-cost":     {"2", "4"},
+		"fairness":      {"0", "50"},
+		"sessions":      {"4"},
+		"mem-cache-max": {"256M"},
+	}
 }
 
 func main() {
@@ -118,7 +124,7 @@ func main() {
 			fail(fmt.Errorf("%s: %v", *mixFile, err))
 		}
 	} else {
-		m, ok := mixes[*mix]
+		m, ok := mixes()[*mix]
 		if !ok {
 			fail(fmt.Errorf("-mix %q: want mixed, long or decode", *mix))
 		}
@@ -136,7 +142,7 @@ func main() {
 		base.Warmup = max(4, 3*base.WarmupLevel)
 	}
 
-	order, kmap := defaultOrder, defaultKnobs
+	order, kmap := defaultOrder(), defaultKnobs()
 	if len(knobs) > 0 {
 		order, kmap = nil, map[string][]string{}
 		for _, k := range knobs {

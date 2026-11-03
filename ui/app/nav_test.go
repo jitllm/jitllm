@@ -6,12 +6,12 @@ import (
 )
 
 func TestTabOrderMatchesTheNames(t *testing.T) {
-	if len(TabNames) != TabSettings+1 {
-		t.Fatalf("TabNames has %d entries; the constants name %d", len(TabNames), TabSettings+1)
+	if len(TabNames()) != TabSettings+1 {
+		t.Fatalf("TabNames() has %d entries; the constants name %d", len(TabNames()), TabSettings+1)
 	}
 	for i, want := range map[int]string{TabSession: "Chat", TabModels: "Models", TabDownload: "Discover", TabConvert: "Convert", TabMachine: "Machine", TabSettings: "Settings"} {
-		if TabNames[i] != want {
-			t.Errorf("TabNames[%d] = %q, want %q", i, TabNames[i], want)
+		if TabNames()[i] != want {
+			t.Errorf("TabNames()[%d] = %q, want %q", i, TabNames()[i], want)
 		}
 	}
 }
@@ -58,11 +58,11 @@ func TestSetCatalogDropsAStaleSelection(t *testing.T) {
 }
 
 func TestDefaultConfigUsesTheDefaultModelDir(t *testing.T) {
-	c := DefaultConfig()
-	if len(c.ModelDirs) != 1 || c.ModelDirs[0] != DefaultModelDir() {
+	c := DefaultConfig(Env{})
+	if len(c.ModelDirs) != 1 || c.ModelDirs[0] != DefaultConfig(Env{}).DefaultModelDir() {
 		t.Fatalf("ModelDirs = %v, want the default model folder", c.ModelDirs)
 	}
-	if c.AddModelDir(DefaultModelDir()) {
+	if c.AddModelDir(DefaultConfig(Env{}).DefaultModelDir()) {
 		t.Error("AddModelDir must not duplicate a directory")
 	}
 	if !c.AddModelDir("/somewhere/else") {
