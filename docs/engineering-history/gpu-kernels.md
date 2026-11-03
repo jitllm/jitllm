@@ -6247,7 +6247,7 @@ workgroups, half the limit and the limit, five launches on one sync buffer, two
 grids taking turns on one buffer, and inside a recorded CUDA graph (a
 cooperative launch captures). Its violation,
 `TestGridBarrierProbeSeesAnEarlyCrossing` (a `jitllmtest` build:
-`BreakGridBarrierForTest` lets every waiter through), finds hundreds to
+`backend.Opts.BreakGridBarrier` lets every waiter through), finds hundreds to
 hundreds of thousands of poisoned words on every arm. Green on the RTX 3050 Ti
 (sm_86; CUDA 240 workgroups of 128 resident, Vulkan 20), the V100 (sm_70;
 CUDA 1280 of 128, Vulkan 80), a T4 (sm_75; CUDA 320 of 128) and the M4
