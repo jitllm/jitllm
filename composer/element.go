@@ -198,6 +198,29 @@ func (k *Kernel) writes(o Operand) bool {
 	return false
 }
 
+// readsStorage and writesStorage are reads and writes of the buffer o is
+// bound to (Operand.storage), which a pass moving work between kernels
+// orders by.
+func (k *Kernel) readsStorage(o Operand) bool {
+	s := o.storage()
+	for _, nd := range k.Nodes {
+		if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.storage() == s {
+			return true
+		}
+	}
+	return false
+}
+
+func (k *Kernel) writesStorage(o Operand) bool {
+	s := o.storage()
+	for _, st := range k.Stores {
+		if !st.Barrier && !st.Run && k.Bufs[st.Buf].Operand.storage() == s {
+			return true
+		}
+	}
+	return false
+}
+
 // readsOwn reports whether k reads o, and only at its element's own place.
 func (k *Kernel) readsOwn(o Operand) bool {
 	any := false

@@ -81,15 +81,15 @@ func joinable(k *Kernel) bool {
 	return true
 }
 
-// writesInto says a stores to something b reads or writes.
+// writesInto says a stores to the buffer of something b reads or writes.
 func writesInto(a, b *Kernel) bool {
 	for _, st := range a.Stores {
 		if st.Barrier {
 			continue
 		}
-		o := a.Bufs[st.Buf].Operand
+		o := a.Bufs[st.Buf].Operand.storage()
 		for _, x := range b.Bufs {
-			if x.Kind != BufShared && x.Operand == o {
+			if x.Kind != BufShared && x.Operand.storage() == o {
 				return true
 			}
 		}

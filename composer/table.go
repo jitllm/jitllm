@@ -123,6 +123,17 @@ func (t Table) String() string {
 // recurrent says t is a recurrent block's own table.
 func (t Table) recurrent() bool { return t >= TableRecState && t <= TableRecRows }
 
+// storage is the operand naming the buffer o is bound to where a call site
+// binds two operands to one: a recurrent block's written state is its read
+// state in the shared pool (one half both), so a pass moving a read of one
+// past a write of the other moves it past a write of its own buffer.
+func (o Operand) storage() Operand {
+	if o.Kind == OperandTable && o.Table == TableRecStateOut {
+		o.Table, o.Name = TableRecState, tableLabel(TableRecState, o.Instance)
+	}
+	return o
+}
+
 // TableKey is a table as the call site binds it.
 type TableKey struct {
 	Table    Table

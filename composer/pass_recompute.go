@@ -121,7 +121,7 @@ func recomputed(ks []*Kernel, i int, mapsOnly bool) ([]int, bool) {
 	}
 	for j := i + 1; j <= readers[len(readers)-1]; j++ {
 		for _, b := range pk.Bufs {
-			if b.Operand != o && ks[j].writes(b.Operand) || b.Kind == BufIn && !writtenBy(ks, b.Operand) && writesBound(ks[j], b.Operand) {
+			if b.Operand != o && ks[j].writesStorage(b.Operand) || b.Kind == BufIn && !writtenBy(ks, b.Operand) && writesBound(ks[j], b.Operand) {
 				return nil, false
 			}
 		}

@@ -129,3 +129,146 @@ func runStateConv(fr *recRun, g *graph.Graph, T, D, C, off, span, R, n int, runs
 	}
 	return worst, nil
 }
+
+// TestComposedGPUStateConvReadByStreams forms the n-gram block's shape on
+// every GPU: a dilated OpStateConv of a map whose window lives in the
+// recurrent state's slot, its SiLU read back apart by a slice per residual
+// stream and added to it, with the state's read and written halves two
+// buffers and one (the
+// shared pool binds rec.state.out to rec.state). Each stream's output and
+// the window the slot is left holding meet the oracle: a pass that moves the
+// convolution's read of the state past the kernel writing the window back
+// reads the new window in place of the old.
+func TestComposedGPUStateConvReadByStreams(t *testing.T) {
+	testlock.GPU(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Skip("no GPU backend on this host")
+	}
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			dev := gpuDevice(d)
+			rng := rand.New(rand.NewSource(43))
+			ran := 0
+			for _, s := range []struct{ T, Dil, H, D, off int }{{4, 3, 2, 8, 5}, {4, 3, 4, 64, 2 + 640}} {
+				C := s.H * s.D
+				span := s.off + (s.T-1)*s.Dil*C + 3
+				for _, R := range []int{1, 8, 64} {
+					b := graph.New()
+					xs := make([]graph.ValueID, s.H)
+					for k := range xs {
+						xs[k] = b.In("x", s.D)
+					}
+					u := b.In("u", C)
+					conv := b.Emit(graph.OpStateConv, []graph.ValueID{b.Add(u, u)}, []graph.Result{{Name: "conv", Width: C}},
+						[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: s.T, Rows: C}}, graph.Attrs{Taps: s.T, Dil: s.Dil, Offset: s.off, Span: span},
+						[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0]
+					act := b.Expr("act", C, []graph.Term{
+						{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
+						{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgTerm, Index: 0}}},
+					}, nil, conv)
+					outs := make([]graph.ValueID, s.H)
+					for k := range outs {
+						ck := b.Emit(graph.OpSlice, []graph.ValueID{act}, []graph.Result{{Name: "ck", Width: s.D}}, nil,
+							graph.Attrs{Offset: k * s.D, Width: s.D}, nil, nil)[0]
+						outs[k] = b.Add(xs[k], ck)
+					}
+					b.Out(outs...)
+					fr, err := formRec(d, dev, b.G, R, map[jlm.Role]jlm.Type{jlm.RoleSSMConv1d: jlm.TypeF32})
+					if err != nil {
+						t.Fatalf("%+v at %d rows: %v", s, R, err)
+					}
+					for _, one := range []bool{false, true} {
+						worst, err := runStreamsConv(fr, b.G, xs, u, s.T, s.Dil, C, s.off, span, R, one, rng)
+						if err != nil {
+							fr.close()
+							t.Fatalf("%+v at %d rows, the state one buffer %v: %v", s, R, one, err)
+						}
+						if !(worst < 1e-5) {
+							fr.close()
+							t.Fatalf("%+v at %d rows (one live), the state one buffer %v: %g from the oracle", s, R, one, worst)
+						}
+						ran++
+					}
+					fr.close()
+				}
+			}
+			t.Logf("%d steps held to the oracle", ran)
+		})
+	}
+}
+
+// runStreamsConv runs one step of one live row of fr, the convolution of u
+// read back per stream of xs, its window at off of slots of span floats, the
+// state's two halves one buffer where one is set, and returns the worst
+// distance from the oracle at the streams and at the window written.
+func runStreamsConv(fr *recRun, g *graph.Graph, xs []graph.ValueID, u graph.ValueID, T, Dil, C, off, span, R int, one bool, rng *rand.Rand) (float64, error) {
+	D, H := C/len(xs), (T-1)*Dil
+	rnd := func(n, live int) []float32 {
+		x := make([]float32, n)
+		for i := range x {
+			x[i] = float32(rng.NormFloat64())
+			if i >= live {
+				x[i] = float32(math.NaN())
+			}
+		}
+		return x
+	}
+	taps, uv := rnd(C*T, C*T), rnd(R*C, C)
+	fr.vals = map[graph.ValueID][]uint32{u: f32w(uv)}
+	xv := make([][]float32, len(xs))
+	for k, x := range xs {
+		xv[k] = rnd(R*D, D)
+		fr.vals[x] = f32w(xv[k])
+	}
+	for id, v := range g.Values {
+		if _, ok := fr.vals[graph.ValueID(id)]; !ok {
+			fr.vals[graph.ValueID(id)] = poisoned(R * v.Width)
+		}
+	}
+	in, out := make([]uint32, 3*span), make([]uint32, 3*span)
+	for i := range in {
+		in[i] = math.Float32bits(float32(rng.NormFloat64()))
+		out[i] = math.Float32bits(float32(math.NaN()))
+	}
+	base := span
+	seq := make([]float64, 0, (H+1)*C)
+	for i := range H * C {
+		seq = append(seq, float64(math.Float32frombits(in[base+off+i])))
+	}
+	for c := range C {
+		seq = append(seq, 2*float64(uv[c]))
+	}
+	fr.tables = map[string][]uint32{"rec.state": in, "rec.state.out": out, "rec.rows": recRuns{{0}}.desc(1, 1, 1)}
+	fr.share = nil
+	if one {
+		fr.share = map[string]string{"rec.state.out": "rec.state"}
+	}
+	fr.wts = map[jlm.Role][]uint32{jlm.RoleSSMConv1d: f32w(taps)}
+	clear(fr.bufs)
+	if err := fr.launch(); err != nil {
+		return 0, err
+	}
+	worst := 0.0
+	for k := range xs {
+		got := wf32(fr.vals[g.Out[k]])
+		for i := range D {
+			c := k*D + i
+			var conv float64
+			for j := range T {
+				conv += float64(taps[c*T+j]) * seq[(H-(T-1-j)*Dil)*C+c]
+			}
+			want := float64(xv[k][i]) + conv/(1+math.Exp(-conv))
+			worst = max(worst, math.Abs(float64(got[i])-want))
+		}
+	}
+	written := out
+	if one {
+		written = in
+	}
+	for i := range H * C {
+		worst = max(worst, math.Abs(float64(math.Float32frombits(written[base+off+i]))-seq[C+i]))
+	}
+	return worst, nil
+}
