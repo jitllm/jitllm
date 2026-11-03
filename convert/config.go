@@ -636,7 +636,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		// (all-minilm's is 1e-12); layer_norm_rms_epsilon read above is absent.
 		c.RMSEps = float32(f.FloatKey("attention.layer_norm_epsilon", 1e-12))
 		// An encoder has no causal mask: every token attends to every token.
-		c.Flags |= jlm.FlagNonCausal
+		c.Flags |= jlm.FlagNonCausal | jlm.FlagLayerNorm
 		if arch == jlm.ArchNomicBERT {
 			// Rotary on q and k in place of the position table, NEOX-paired
 			// (llama.cpp's rope-type table groups nomic-bert with qwen2). The
@@ -647,7 +647,8 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 					"(nomic-bert-moe) is not implemented: %w", name, n, ErrNotImplemented)
 			}
 		} else {
-			c.Flags |= jlm.FlagGELU
+			// A learned position table in the input rows and no rotary.
+			c.Flags |= jlm.FlagGELU | jlm.FlagNoPosEnc
 		}
 	case jlm.ArchModernBERT:
 		if err := modernBERTConfig(f, c); err != nil {
