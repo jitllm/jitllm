@@ -28,7 +28,7 @@ func TestGPUEntryNamesAreIdentifiers(t *testing.T) {
 		t.Fatal("no kernel formed")
 	}
 	for _, k := range ks {
-		l, err := composer.GPULowering.Lower(k, d)
+		l, err := composer.GPULowering().Lower(k, d)
 		if err != nil {
 			t.Fatal(err)
 		}
