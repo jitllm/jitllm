@@ -1,8 +1,6 @@
 package model
 
 import (
-	"fmt"
-	"math"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
@@ -58,12 +56,6 @@ type cpuHeadState struct {
 	hid, xpad, lpad, hpad []float32
 	pickIDs               []uint32
 	pickVals              []float32
-	// argmax is a decision's argmax over decisionOptions+1 scores, formed
-	// at the placement; argmaxIn its scores, the call's then -Inf to the
-	// width, argmaxUsed how many the last call wrote.
-	argmax     cpuHeadForm
-	argmaxIn   []float32
-	argmaxUsed int
 }
 
 // cpuHeadForm is one of the head's graphs composed for the CPU, or why
@@ -325,57 +317,6 @@ func (s *Instance) cpuPick(x []float32) composer.Decline {
 	s.HostPicked = true
 	h.served++
 	return composer.DeclineServes
-}
-
-// cpuPlaceArgmax composes a decision model's argmax over its scores for the
-// CPU, on any instance of it: an encoder's segment as well as a causal one.
-func (s *Instance) cpuPlaceArgmax() {
-	if s.m.Decision() == jlm.DecisionNone {
-		return
-	}
-	h := &s.cpu.head
-	s.cpuComposeHead(&h.argmax, s.m.argmaxGraph(), composer.DeclineNoSample, 1)
-	h.argmaxIn = make([]float32, decisionOptions+1)
-	for i := range h.argmaxIn {
-		h.argmaxIn[i] = float32(math.Inf(-1))
-	}
-}
-
-// argmaxGraph is the greedy sampler over a decision's scores
-// (graph.Sample at decisionOptions+1), one graph for the model.
-func (m *Model) argmaxGraph() *graph.Graph {
-	m.argmaxes.mu.Lock()
-	defer m.argmaxes.mu.Unlock()
-	if m.argmaxes.g == nil {
-		sm := graph.Sample{NVocab: decisionOptions + 1}
-		m.argmaxes.g = sm.Build()
-	}
-	return m.argmaxes.g
-}
-
-// cpuArgmax is the index of the largest of x, the lower of two equal, from
-// the composed greedy sampler on the CPU: a decision's label scores, which
-// are not a vocabulary's row. The form, composed at the placement, reads
-// decisionOptions+1 scores: x's, then -Inf, which no score loses to.
-func (s *Instance) cpuArgmax(x []float32) (int, error) {
-	h := &s.cpu.head
-	f, why := h.argmax.formOf()
-	if why != composer.DeclineServes {
-		return 0, fmt.Errorf("model: the composed argmax of %d: %s", len(x), composer.DeclineName(int(why)))
-	}
-	in := h.argmaxIn
-	copy(in, x)
-	for i := len(x); i < h.argmaxUsed; i++ {
-		in[i] = float32(math.Inf(-1))
-	}
-	h.argmaxUsed = len(x)
-	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
-	b.io[0], b.io[1] = unsafe.Pointer(&in[0]), unsafe.Pointer(&h.token[0])
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
-	return int(h.token[0]), nil
 }
 
 // cpuGreedy is the token of the largest of logits, the lower id of two

@@ -104,8 +104,6 @@ func (s *Instance) nc() *ncArena {
 	switch {
 	case s.vis != nil:
 		return &s.vis.ncArena
-	case s.enc != nil:
-		return &s.enc.ncArena
 	}
 	return nil
 }

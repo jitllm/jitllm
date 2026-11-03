@@ -38,15 +38,12 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 			m := openEmbedModel(t, g)
 			// A decoder embedding model (qwen3-embedding, EmbeddingGemma)
 			// places its instance's blocks; its history is f32 on the device.
-			nb := m.encBlocks()
+			nb := m.Cfg.NLayer
 			bound := embedDevCos
 			if g.Model == "qwen3-embedding-0.6b" {
 				bound = embedDevCosQuant
 			}
-			if !m.IsEncoder() {
-				nb = m.Cfg.NLayer
-				m.SetKVF16(false)
-			}
+			m.SetKVF16(false)
 			embed := func(e *Embedder) [][]float32 {
 				var out [][]float32
 				for _, text := range g.Texts {
@@ -141,24 +138,6 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 						if c >= bound {
 							t.Errorf("%s reads cosine %.9f on %s: the gate does not see it", name, c, spec)
 						}
-					}
-					if m.IsEncoder() {
-						// The output norm's weight gone from what the device is
-						// handed (encWeights reads it at the offer).
-						violation("the output LayerNorm without its weight", func() func() {
-							saved := make([][]float32, len(m.enc.blocks))
-							for i := range m.enc.blocks {
-								b := &m.enc.blocks[i]
-								saved[i] = b.ln2W
-								b.ln2W = onesLike(b.ln2W)
-							}
-							return func() {
-								for i := range m.enc.blocks {
-									m.enc.blocks[i].ln2W = saved[i]
-								}
-							}
-						})
-						return
 					}
 					// A decoder's: the attention norm's weight gone from what
 					// the device is handed at the offer.

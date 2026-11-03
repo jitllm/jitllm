@@ -171,7 +171,7 @@ type ttft struct {
 // initTTFT sets lm's memory cache and queue bound from the config.
 func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 	t := &lm.ttft
-	if !e.cfg.NoMemCache && !lm.m.IsEncoder() {
+	if !e.cfg.NoMemCache {
 		t.store = model.NewBoundedMemStore(1)
 		t.shared = model.NewSharedStore()
 		// The namespace names this load: the store is the model's own, and
@@ -311,7 +311,7 @@ func (s *Session) attachStore(on bool) error {
 // device's first recordings made before a request waits on them. Nothing is
 // counted as served and nothing goes into the memory cache.
 func (e *Engine) warm(lm *LoadedModel) error {
-	if lm.m.IsEncoder() || lm.m.Vocab == nil {
+	if lm.m.Vocab == nil {
 		return nil
 	}
 	s, err := e.CreateSession(SessionOptions{ModelID: lm.id})

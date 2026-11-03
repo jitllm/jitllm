@@ -204,10 +204,6 @@ func (s *scripted) Embed(ctx context.Context, o server.EmbedOptions) (*server.Em
 	return nil, fmt.Errorf("%w: the scripted backend embeds nothing", server.ErrInvalid)
 }
 
-func (s *scripted) Decide(ctx context.Context, o server.DecideOptions) (*server.DecideResult, error) {
-	return nil, fmt.Errorf("%w: the scripted backend decides nothing", server.ErrInvalid)
-}
-
 func (s *scripted) opts() server.GenerateOptions {
 	s.mu.Lock()
 	defer s.mu.Unlock()

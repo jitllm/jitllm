@@ -1597,14 +1597,10 @@ func (s *Instance) cpuPlace() {
 			s.cpuCompose(li)
 		}
 	}
-	s.cpuPlaceArgmax()
 	if s.nc() != nil {
 		if s.vis != nil {
 			s.cpuPlaceProjector()
 			s.cpuPlaceTowerTable()
-		}
-		if s.enc != nil {
-			s.cpuPlacePool()
 		}
 		return
 	}
@@ -2964,9 +2960,6 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 		}
 		return nil
 	}
-	if s.enc != nil {
-		return s.m.encRoleWeight(li, r)
-	}
 	if l.mn != nil {
 		if s.cpu.fault == cpuFaultFilterT {
 			if t := l.mn.filterT(r); t != nil {
@@ -3178,9 +3171,6 @@ func (s *Instance) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 			return t.stdScale()
 		}
 		return nil
-	}
-	if s.enc != nil {
-		return s.m.encRoleVector(li, r)
 	}
 	if l.mn != nil {
 		return convRoleVector(l, r)

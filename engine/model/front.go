@@ -105,11 +105,6 @@ type frontSet struct {
 	towerEntry                  *graph.Graph
 	towerProj                   towerProj
 	towerEntryWhy, towerProjWhy Uncovered
-	// heads, headsWhy and headsErrs are an encoder's decision head blocks'
-	// (headBlockGraph), head block i at block NLayer+i.
-	heads     []*graph.Graph
-	headsWhy  []Uncovered
-	headsErrs []error
 	// mtp, mtpWhy and mtpErrs are the prediction blocks' bodies
 	// (frontmtp.go), prediction block i at block NLayer+i.
 	mtp     []*graph.Graph
@@ -210,9 +205,6 @@ func (c composing) BlockGraph(li int) *graph.Graph {
 	if i := c.m.towerAt(li); i >= 0 {
 		return f.tower[i]
 	}
-	if i := li - len(f.blocks); i >= 0 && i < len(f.heads) {
-		return f.heads[i]
-	}
 	if i := li - len(f.blocks); i >= 0 && i < len(f.mtp) {
 		return f.mtp[i]
 	}
@@ -287,8 +279,6 @@ func (m *Model) uncoveredAt(li int) (Uncovered, error) {
 		return f.embedWhy, f.embedErr
 	case li >= 0 && li < len(f.why):
 		return f.why[li], f.errs[li]
-	case m.towerAt(li) < 0 && li >= len(f.why) && li < len(f.why)+len(f.heads):
-		return f.headsWhy[li-len(f.why)], f.headsErrs[li-len(f.why)]
 	case m.towerAt(li) < 0 && li >= len(f.why) && li < len(f.why)+len(f.mtp):
 		return f.mtpWhy[li-len(f.why)], f.mtpErrs[li-len(f.why)]
 	case m.towerAt(li) >= 0:
@@ -310,12 +300,6 @@ func (m *Model) frontGraphs() *frontSet {
 	s := &frontSet{key: k, blocks: make([]*graph.Graph, n), why: make([]Uncovered, n), errs: make([]error, n)}
 	for li := range n {
 		s.blocks[li], s.why[li], s.errs[li] = m.blockGraph(li)
-	}
-	if nh := m.encHeadBlocks(); nh > 0 {
-		s.heads, s.headsWhy, s.headsErrs = make([]*graph.Graph, nh), make([]Uncovered, nh), make([]error, nh)
-		for i := range nh {
-			s.heads[i], s.headsWhy[i], s.headsErrs[i] = m.headBlockGraph(n + i)
-		}
 	}
 	if np := m.Cfg.NMTP; np > 0 {
 		s.mtp, s.mtpWhy, s.mtpErrs = make([]*graph.Graph, np), make([]Uncovered, np), make([]error, np)

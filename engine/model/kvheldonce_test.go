@@ -1,11 +1,12 @@
 package model
 
 import (
+	"os"
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // kvDuplicates counts the pages of st's history held twice: a page the
@@ -61,15 +62,21 @@ func kvStoreHas(kc *kvCache, key string, li, n, pp int) bool {
 // TestKVIsHeldOnce is the principle that a position's history lives in one
 // place: a session's pages and the prefix cache never hold the same page
 // twice, and a block on a device keeps its history on the card, not beside
-// it on the host -- for a chat's turns and for decisions, on the host and on
-// every device present. The page a session is writing into is the one
+// it on the host -- for a chat's turns, on the host and on every device
+// present. The page a session is writing into is the one
 // exception, in flight. The violation is the copying store (MemStore), which
 // the cache was before: the gate must count its copies.
 func TestKVIsHeldOnce(t *testing.T) {
-	m := openDecision(t, "d1/d1-3B-Q8_0.gguf", jlm.DecisionLFM2D1, noTune)
+	p := testmodels.Path("d1/d1-3B-Q8_0.gguf")
+	if _, err := os.Stat(p); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", p)
+	}
+	m, err := Open(jlmOf(t, p), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer m.Close()
 	m.SetKVF16(false)
-	reqs := boardRequests(t, 3)
 	prompt := make([]int32, 600)
 	for i := range prompt {
 		prompt[i] = int32(1000 + i*7)
@@ -105,33 +112,6 @@ func TestKVIsHeldOnce(t *testing.T) {
 		}
 		return dup
 	}
-	decide := func(t *testing.T, g *gpu.GPU) int {
-		d, err := m.NewDecider(4096)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer d.Close()
-		if g != nil {
-			if err := d.SetDevice(g, -1); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if on, err := d.SetPromptCache(NewSharedStore(), "held-once-decide"); err != nil || !on {
-			t.Fatalf("the Decider did not take the store: %v", err)
-		}
-		dup := 0
-		for _, b := range reqs {
-			state, qs := parseRequest(t, b)
-			if _, err := d.Decide(state, qs, nil); err != nil {
-				t.Fatal(err)
-			}
-			dup += kvDuplicates(t, d.st)
-		}
-		if d.PromptRestored() == 0 {
-			t.Fatal("the decisions restored nothing: they measured cold prompts")
-		}
-		return dup
-	}
 	arms := func(t *testing.T, g *gpu.GPU) {
 		// A store of the arm's own: one the host arm filled would hold the
 		// device arm's pages under the same names, and count as a copy.
@@ -139,11 +119,6 @@ func TestKVIsHeldOnce(t *testing.T) {
 		t.Run("chat", func(t *testing.T) {
 			if dup := chat(t, g, func(st *Instance) error { return st.ShareKV(shared) }); dup != 0 {
 				t.Fatalf("%d page(s) of a chat's history held twice", dup)
-			}
-		})
-		t.Run("decide", func(t *testing.T) {
-			if dup := decide(t, g); dup != 0 {
-				t.Fatalf("%d page(s) of the decisions' history held twice", dup)
 			}
 		})
 		if g != nil {

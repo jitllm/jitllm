@@ -1,6 +1,7 @@
 package model
 
 import (
+	"image/png"
 	"math"
 	"os"
 	"path/filepath"
@@ -31,15 +32,12 @@ func TestRaggedTowerOnDeviceMatchesHost(t *testing.T) {
 	}
 	defer m.Close()
 	tw := m.Tower()
-	body, err := os.ReadFile(filepath.Join("testdata", "decision", "chatpicture.json"))
+	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := ParseDecisionRequest(body)
-	if err != nil || len(req.Images) == 0 {
-		t.Fatalf("the request carries no picture (%v)", err)
-	}
-	img, err := DecodeImageDataURL(req.Images[0])
+	img, err := png.Decode(f)
+	f.Close()
 	if err != nil {
 		t.Fatal(err)
 	}

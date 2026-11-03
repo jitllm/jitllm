@@ -174,8 +174,7 @@ func (lm *LoadedModel) takeEmbedder() (*model.Embedder, error) {
 		lm.giveEmbedder(nil)
 		return nil, err
 	}
-	// Its blocks go where a session's would: an encoder's through its
-	// segment, a decoder's through its Instance.
+	// Its blocks go where a session's would, through its Instance.
 	if lm.device() != nil {
 		if err := x.SetDeviceLayers(lm.device(), lm.deviceBlocks()); err != nil {
 			x.Close()
@@ -228,4 +227,13 @@ func (lm *LoadedModel) closeEmbedders() {
 	if busy > 0 {
 		<-idle
 	}
+}
+
+// deviceBlocks is how many blocks an embedder offers the model's device: the
+// load's cap, or every one (-1).
+func (lm *LoadedModel) deviceBlocks() int {
+	if lm.maxBlocks != 0 {
+		return lm.maxBlocks
+	}
+	return -1
 }

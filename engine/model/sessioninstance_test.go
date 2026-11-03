@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -246,3 +247,6 @@ func forcedSteps(t *testing.T, m *Model, prompts, toks [][]int32) [][][]float32 
 	}
 	return out
 }
+
+// equalIDs reports whether a and b hold the same ids in the same order.
+func equalIDs(a, b []int32) bool { return slices.Equal(a, b) }

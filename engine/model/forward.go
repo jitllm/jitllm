@@ -149,9 +149,6 @@ type Instance struct {
 	// visState is the vision instance a text instance encodes its pictures in
 	// (Vision), nil until the first picture.
 	visState *Instance
-	// enc is an encoder segment's run: set on the instance an Embedder places
-	// its encoder's blocks through (encdev.go), nil everywhere else.
-	enc *encRun
 
 	x, h, xb []float32 // residual stream and two same-width scratch vectors
 	// hf is a parallel block's FFN input (C6): the block input normed for the
@@ -588,13 +585,6 @@ func (m *Model) newInstance(nseq, maxSeq int) *Instance {
 
 // newInstanceRange is newState over blocks [lo, hi) of the model; see Instance.lo.
 func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
-	// An encoder has no decoder layers, no cache and no logits, so an instance
-	// over it would run zero blocks and project nothing: refused by name
-	// rather than handed back empty. NewInstance has no error return, and this
-	// is a caller's contract violation, not a runtime condition.
-	if m.enc != nil {
-		panic(fmt.Sprintf("model: %s is an encoder; embed with NewEmbedder, it has no decoder instance", m.Cfg.Arch))
-	}
 	m.states.Add(1)
 	c := m.Cfg
 	// Clamp to the model's context, and record the request (reqSeq) so a
@@ -878,7 +868,7 @@ func (s *Instance) Close() error {
 	// placed on gets its room back with the instance: its text sessions' blocks
 	// run every token. Through the session view, so another session's hold on
 	// the same blocks keeps them there.
-	if (s.vis != nil || s.enc != nil) && s.ld != nil && s.devCount() > 0 {
+	if s.vis != nil && s.ld != nil && s.devCount() > 0 {
 		s.SetGPULayers(s.lo)
 	}
 	// The session's history on the device goes back to the tier, which keeps
@@ -906,10 +896,6 @@ func (s *Instance) Close() error {
 				s.m.cpuRuns(li, li+1, -1)
 			}
 		}
-	}
-	// An encoder segment's JIT is its Embedder's to close.
-	if s.enc != nil {
-		return nil
 	}
 	// A vision session's prompt buffers are the tower's shape, which no text
 	// Instance could take; and a JIT it borrowed is the text instance's to close.
@@ -1597,9 +1583,6 @@ func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
 	if s.vis != nil {
 		return s.visWeights(li)
 	}
-	if s.enc != nil {
-		return s.encWeights(li)
-	}
 	l := &s.m.layers[li]
 	qn, kn := s.qkNorms(li)
 	w := nn.LayerWeights{
@@ -2094,9 +2077,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan := s.plan
 	if s.vis != nil {
 		return s.visPlan(li)
-	}
-	if s.enc != nil {
-		return s.encPlan(li)
 	}
 	// The sinks and the mixture biases are resident vectors read at build(),
 	// not page bytes, so asking about them here still needs no page-in.

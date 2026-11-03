@@ -55,9 +55,6 @@ var compatRoutes = []compatRoute{
 		handle: (*compat).openAIBatches, note: "the Batch API over an uploaded file"},
 	{path: "/v1/batches/", methods: []string{http.MethodGet, http.MethodPost}, surface: "openai",
 		handle: (*compat).openAIBatches, note: "/v1/batches/{id} and POST /v1/batches/{id}/cancel"},
-	{path: "/v1/systemone", methods: []string{http.MethodPost}, surface: "jitllm", handle: (*compat).systemOne,
-		note: fmt.Sprintf("a decision model's answers: a JSON object with state and questions, at most %d MiB",
-			maxSystemOneBody>>20)},
 	{path: "/completion", methods: []string{http.MethodPost}, surface: "llamacpp", handle: (*compat).llamaCompletion,
 		note: "llama.cpp's /completion: prompt as a string, token ids or both mixed; streams with stream:true; fields the sampler lacks are refused by name"},
 	{path: "/infill", methods: []string{http.MethodPost}, surface: "llamacpp", handle: (*compat).llamaInfill,
@@ -295,8 +292,6 @@ var refusals = []refusal{
 		When: "a picture over the byte or pixel limit, or a request's pictures over the request byte limit", Message: "over the limit of"}},
 	{Refusal: capabilities.Refusal{ID: "image-format", Endpoints: []string{"/v1/chat/completions", "/v1/messages"},
 		When: "a picture that is not PNG, JPEG, WebP or GIF", Message: "the pictures accepted are"}},
-	{Refusal: capabilities.Refusal{ID: "decision-non-decider", Endpoints: []string{"/v1/systemone"},
-		When: "the model is not a decision model", Message: "is not a decision model"}},
 }
 
 // API is the server's half of the manifest, from the tables above and the

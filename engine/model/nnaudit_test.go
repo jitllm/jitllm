@@ -15,7 +15,6 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -76,9 +75,7 @@ func TestEveryModelRunsGenerated(t *testing.T) {
 			defer m.Close()
 			auditRun(t, m)
 			done = true
-			if m.enc == nil && m.Decision() == jlm.DecisionNone {
-				t.Run("composed-cpu", func(t *testing.T) { auditComposedCPU(t, name, path) })
-			}
+			t.Run("composed-cpu", func(t *testing.T) { auditComposedCPU(t, name, path) })
 		})
 		switch {
 		case done:
@@ -99,34 +96,10 @@ func TestEveryModelRunsGenerated(t *testing.T) {
 	t.Logf("%d models ran on generated code", len(ran))
 }
 
-// auditRun is the gate's body for one opened model: an encoder runs its
-// embedder, everything else the three decoder entry points (and its embedder
-// too when the container carries pooling); a decision model answers a request
-// through its readout first (an encoder's, Laya's, has nothing else to run).
+// auditRun is the gate's body for one opened model: the three decoder entry
+// points, and its embedder too when the container carries pooling.
 func auditRun(t *testing.T, m *Model) {
 	t.Helper()
-	if m.Decision() != jlm.DecisionNone {
-		d, err := m.NewDecider(4096)
-		if err != nil {
-			t.Fatalf("NewDecider: %v", err)
-		}
-		state, qs := decisionRequest(t, filepath.Join("testdata", "decision", "support.json"))
-		ans, err := d.Decide(state, qs, nil)
-		d.Close()
-		if err != nil {
-			t.Fatalf("Decide: %v", err)
-		}
-		for i, a := range ans {
-			for _, p := range append([]float64{a.Noul, a.Score, a.Confidence}, a.Probs...) {
-				if math.IsNaN(p) || math.IsInf(p, 0) {
-					t.Fatalf("Decide: question %s answered %v", qs[i].ID, p)
-				}
-			}
-		}
-		if m.enc != nil {
-			return
-		}
-	}
 	ids := []int32{1, 2, 3, 4, 5}
 	if m.IsEmbedding() {
 		e, err := m.NewEmbedder()
@@ -139,9 +112,6 @@ func auditRun(t *testing.T, m *Model) {
 			t.Fatalf("Embed: %v", err)
 		}
 		finite(t, "Embed", v)
-		if m.enc != nil {
-			return
-		}
 	}
 	s := m.NewInstance(16)
 	logits, err := s.Forward(1)
