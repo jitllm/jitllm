@@ -26,10 +26,11 @@ type embedMode struct {
 	total int       // positions in the sequence
 	out   []float32 // NEmbd: the pooled vector, before any dense head
 	// unit says out is the composer's readout (cpuPool): through the dense
-	// heads and at unit length.
-	unit bool
-	row  []float32 // NEmbd scratch for one normed row
-	wins []nn.KeyRun
+	// heads and at unit length. raw asks for the vector before the heads
+	// (Embedder.skipDense), which that readout is not.
+	unit, raw bool
+	row       []float32 // NEmbd scratch for one normed row
+	wins      []nn.KeyRun
 }
 
 // collect folds a chunk's final rows into the pooled vector. It runs once per
@@ -41,7 +42,7 @@ func (e *embedMode) collect(s *Instance, base, n int) {
 	if e.out == nil {
 		return
 	}
-	if e.composed(s, base, n) {
+	if !e.raw && e.composed(s, base, n) {
 		return
 	}
 	c, m := s.c, s.m
@@ -151,7 +152,7 @@ func (s *Instance) embedTell(n int) bool {
 // embedPrefill runs ids from position zero and leaves the pooled, normed (but
 // not yet L2-normalised) vector in out, or, unit, the composer's readout
 // through the dense heads at unit length.
-func (s *Instance) embedPrefill(ids []int32, out []float32) (_ []float32, unit bool, _ error) {
+func (s *Instance) embedPrefill(ids []int32, out []float32, raw bool) (_ []float32, unit bool, _ error) {
 	c := s.c
 	if len(ids) > s.maxSeq {
 		return nil, false, fmt.Errorf("model: %d tokens, and this session holds %d", len(ids), s.maxSeq)
@@ -160,7 +161,7 @@ func (s *Instance) embedPrefill(ids []int32, out []float32) (_ []float32, unit b
 	for i := range out {
 		out[i] = 0
 	}
-	s.emb = &embedMode{bidir: c.NonCausal, pool: c.Pooling, total: len(ids), out: out,
+	s.emb = &embedMode{bidir: c.NonCausal, pool: c.Pooling, total: len(ids), out: out, raw: raw,
 		row: make([]float32, c.NEmbd)}
 	defer func() { s.emb = nil }()
 	if _, err := s.Prefill(ids); err != nil {

@@ -123,14 +123,18 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 			if !ok {
 				t.Fatal("the container does not carry the fixture's graph")
 			}
+			// The reference is the CPU's composed float forms of the model as
+			// stated (main's own arm is gone); its answer against Moonshot's is
+			// TestKimiK3MatchesReference's. The arm under test runs the same
+			// forms, so what parts it from the reference is a violation.
 			path := jlmOf(t, testmodels.Path(fx.name+".gguf"))
-			ref, err := Open(path, noTune)
+			ref, err := Open(path, noTune, withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer ref.Close()
-			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, false, 0, 0)
-			m, err := Open(path, noTune)
+			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, true, ref.Cfg.NLayer, composer.DeclineServes)
+			m, err := Open(path, noTune, withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -142,9 +146,9 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, m.Cfg.NLayer, composer.DeclineServes))
 			}
 			worst := run(cpuFaultNone)
-			t.Logf("the composed CPU head's mix from main: worst NMSE %.3g over %d steps", worst, len(g.IDs))
+			t.Logf("the composed CPU head's mix from the reference: worst NMSE %.3g over %d steps", worst, len(g.IDs))
 			if !(worst < bound) {
-				t.Fatalf("the composed CPU is %.3g from main, bound %g", worst, bound)
+				t.Fatalf("the composed CPU is %.3g from the reference, bound %g", worst, bound)
 			}
 			bad := run(cpuFaultStreams)
 			t.Logf("violation \"a checkpoint read twice where the head's mix reads the bank\": worst NMSE %.3g", bad)
