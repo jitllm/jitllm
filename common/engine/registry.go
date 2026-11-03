@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"fmt"
-
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/server"
@@ -157,7 +155,7 @@ func (e *Engine) SetPriority(on bool) {
 }
 
 // errNoModel is returned when a switch is asked for with nothing to switch to.
-var errNoModel = fmt.Errorf("no model is open")
+const errNoModel engineError = "no model is open"
 
 // activeName is the running model's display name and palette index, for the
 // turn it is about to produce.

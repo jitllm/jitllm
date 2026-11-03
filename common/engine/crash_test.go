@@ -13,8 +13,7 @@ import (
 func TestAPanickingCommandIsReportedAndTheWorkerLives(t *testing.T) {
 	sh := newTestShell()
 	got := make(chan crash.Report, 1)
-	crash.OnReport(func(r crash.Report) { got <- r })
-	defer crash.OnReport(nil)
+	sh.Crashes().OnReport(func(r crash.Report) { got <- r })
 
 	e := New(sh, sh.state())
 	sh.Store.Streaming.Set(true)

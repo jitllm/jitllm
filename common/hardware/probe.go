@@ -31,17 +31,13 @@ import (
 	"github.com/jitllm/jitllm/common/session"
 )
 
-// Formats is the list of quantization types the emitter has kernels for.
-//
-// It is a list, not a promise of coverage, which is why every row asks the
-// emitter rather than printing this slice.
-var Formats = quant.PackedTypes
-
-// FormatNames is [Formats] as strings, in the same order, so a caller that only
-// wants to label a table needs no quant import.
+// FormatNames is the quantization types the emitter has kernels for
+// ([quant.PackedTypes]) as strings, in the same order, so a caller that only
+// wants to label a table needs no quant import. It is a list, not a promise of
+// coverage, which is why every row asks the emitter rather than printing it.
 func FormatNames() []string {
-	out := make([]string, 0, len(Formats))
-	for _, t := range Formats {
+	out := make([]string, 0, len(quant.PackedTypes))
+	for _, t := range quant.PackedTypes {
 		out = append(out, t.String())
 	}
 	return out
@@ -128,28 +124,13 @@ type Report struct {
 	Vulkan []VulkanDev
 }
 
-var (
-	mu     sync.Mutex
-	cached Report
-)
-
-// Cached returns the last [Probe] and whether there has been one.
-func Cached() (Report, bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	return cached, cached.Probed
-}
-
-// Probe reads the machine and caches the result.
+// Probe reads the machine.
 //
 // Call it from a worker, once, and not while a model is loaded: backend.Open
-// opens and closes every backend, which contends with a live gpu.GPU. Calls
-// are serialised here.
-func Probe() Report {
-	mu.Lock()
-	defer mu.Unlock()
-
-	r := Report{
+// opens and closes every backend, which contends with a live gpu.GPU. Callers
+// serialise their own calls; [Host] does.
+func Probe() (r Report) {
+	r = Report{
 		Probed:    true,
 		GOOS:      runtime.GOOS,
 		GOARCH:    runtime.GOARCH,
@@ -165,7 +146,6 @@ func Probe() Report {
 		if v := recover(); v != nil {
 			r.Err = fmt.Sprintf("probe panicked: %v", v)
 		}
-		cached = r
 	}()
 
 	r.PCores, r.ECores, r.SMT = sched.PCores(), sched.ECores(), sched.SMTSiblings()
@@ -211,8 +191,8 @@ func Probe() Report {
 
 // kernels asks the emitter, per format, in both families.
 func kernels() []Kernel {
-	out := make([]Kernel, 0, len(Formats))
-	for _, t := range Formats {
+	out := make([]Kernel, 0, len(quant.PackedTypes))
+	for _, t := range quant.PackedTypes {
 		k := Kernel{Format: t.String()}
 
 		k.Native = cpu.SupportedNative(t)
@@ -468,11 +448,24 @@ func sysctl(key string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// Host is this machine, as screen.Machine reads it.
-type Host struct{}
+// Host is this machine, as screen.Machine reads it: it remembers the last
+// probe and serialises them.
+type Host struct {
+	mu     sync.Mutex
+	cached Report
+}
 
-// Probe is [Probe].
-func (Host) Probe() Report { return Probe() }
+// Probe reads the machine and caches the result.
+func (h *Host) Probe() Report {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cached = Probe()
+	return h.cached
+}
 
-// Cached is [Cached].
-func (Host) Cached() (Report, bool) { return Cached() }
+// Cached returns the last [Host.Probe] and whether there has been one.
+func (h *Host) Cached() (Report, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cached, h.cached.Probed
+}

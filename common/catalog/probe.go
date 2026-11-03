@@ -9,7 +9,7 @@ import (
 )
 
 // Magic is the container's first eight bytes.
-var Magic = [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0}
+func Magic() [8]byte { return [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0} }
 
 // ReadVersion reads a container's format version from its first twelve bytes.
 //
@@ -26,7 +26,7 @@ func ReadVersion(path string) (uint32, error) {
 	if _, err := f.ReadAt(b[:], 0); err != nil {
 		return 0, fmt.Errorf("catalog: %s is too short to be a container: %w", path, err)
 	}
-	if [8]byte(b[0:8]) != Magic {
+	if [8]byte(b[0:8]) != Magic() {
 		return 0, fmt.Errorf("catalog: %s is not a jlm container (magic %q)", path, b[0:8])
 	}
 	return binary.LittleEndian.Uint32(b[8:12]), nil

@@ -16,8 +16,10 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
-// visionModel is the smallest of the three projector families.
-var visionModel = testmodels.Path("SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
+// visionModel() is the smallest of the three projector families.
+func visionModel() string {
+	return testmodels.Path("SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
+}
 
 // A picture attached in the app must reach the model as the picture.
 //
@@ -26,8 +28,8 @@ var visionModel = testmodels.Path("SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
 // model.TestChatSpansDescribeAnImage does not cover. A blank picture runs
 // beside it, because a tower wired to nothing still answers fluently.
 func TestAnAttachedPictureReachesTheModel(t *testing.T) {
-	fresh.Must(t, visionModel)
-	if _, err := os.Stat(visionModel); err != nil {
+	fresh.Must(t, visionModel())
+	if _, err := os.Stat(visionModel()); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	pic := filepath.Join("..", "..", "engine", "model", "testdata", "quad-and-disc.png")
@@ -49,7 +51,7 @@ func TestAnAttachedPictureReachesTheModel(t *testing.T) {
 	st := sh.Store
 	e := New(sh, sh.state())
 	defer e.Close()
-	e.Load(visionModel)
+	e.Load(visionModel())
 	pump(t, sh, 180*time.Second, "the model to load", func() bool { return st.Loaded.Get() })
 	if !st.Vision.Get() {
 		t.Fatal("a VLM loaded and Store.Vision is false: the attach control stays disabled")

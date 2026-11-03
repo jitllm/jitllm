@@ -143,7 +143,8 @@ func TestScanTiesASourceToItsContainer(t *testing.T) {
 	}
 	writeVersion := func(name string, v uint32) {
 		b := make([]byte, 12)
-		copy(b, Magic[:])
+		m := Magic()
+		copy(b, m[:])
 		binary.LittleEndian.PutUint32(b[8:], v)
 		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
 			t.Fatal(err)

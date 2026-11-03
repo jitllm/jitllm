@@ -12,8 +12,10 @@ import (
 	"github.com/jitllm/jitllm/convert/library"
 )
 
-// BalanceSteps are the preference stops, smallest model to largest.
-var BalanceSteps = []string{"Fastest", "Faster", "Balanced", "Smarter", "Smartest"}
+// BalanceSteps() are the preference stops, smallest model to largest.
+func BalanceSteps() []string {
+	return []string{"Fastest", "Faster", "Balanced", "Smarter", "Smartest"}
+}
 
 // Params is a model's quoted size as total and active parameters: "8B" is
 // 8e9 of each, "30B-A3B" is 30e9 of which 3e9 run per token, "360M" is 3.6e8.
@@ -43,7 +45,7 @@ func Params(s string) (total, active float64) {
 }
 
 // Rank orders the library for this machine: models that fit come first,
-// nearest the preference -- 0 the smallest that fits, len(BalanceSteps)-1 the
+// nearest the preference -- 0 the smallest that fits, len(BalanceSteps())-1 the
 // largest -- and models larger than memory follow, smallest first, because
 // they run but read their weights from disk.
 func Rank(models []library.Model, mr session.MachineReport, pref int) []int {
@@ -59,7 +61,7 @@ func Rank(models []library.Model, mr session.MachineReport, pref int) []int {
 	sort.SliceStable(fit, func(a, b int) bool { return size(fit[a]) < size(fit[b]) })
 	sort.SliceStable(big, func(a, b int) bool { return size(big[a]) < size(big[b]) })
 	if len(fit) > 0 {
-		target := float64(pref) / float64(len(BalanceSteps)-1) * float64(len(fit)-1)
+		target := float64(pref) / float64(len(BalanceSteps())-1) * float64(len(fit)-1)
 		pos := make(map[int]float64, len(fit))
 		for k, i := range fit {
 			pos[i] = math.Abs(float64(k) - target)
@@ -69,7 +71,7 @@ func Rank(models []library.Model, mr session.MachineReport, pref int) []int {
 				return pos[fit[a]] < pos[fit[b]]
 			}
 			// A tie goes to the larger model when leaning smart, else the smaller.
-			if pref*2 >= len(BalanceSteps)-1 {
+			if pref*2 >= len(BalanceSteps())-1 {
 				return size(fit[a]) > size(fit[b])
 			}
 			return size(fit[a]) < size(fit[b])

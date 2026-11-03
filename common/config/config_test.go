@@ -9,21 +9,18 @@ import (
 )
 
 func TestKeysFallBackToTheEnvironment(t *testing.T) {
-	defer UseEnv(Env{})
-	UseEnv(Env{APIKey: "from-env"})
-	c := &Config{}
+	c := DefaultConfig(Env{APIKey: "from-env"})
 	if c.ServingKey() != "from-env" || c.ServiceAPIKey() != "from-env" {
 		t.Errorf("env: %q %q", c.ServingKey(), c.ServiceAPIKey())
 	}
-	c = &Config{APIKey: "a", ServiceKey: "s"}
+	c.APIKey, c.ServiceKey = "a", "s"
 	if c.ServingKey() != "a" || c.ServiceAPIKey() != "s" {
 		t.Errorf("file: %q %q", c.ServingKey(), c.ServiceAPIKey())
 	}
 	var none *Config
-	if none.ServingKey() != "from-env" {
+	if none.ServingKey() != "" {
 		t.Errorf("a nil config: %q", none.ServingKey())
 	}
-	UseEnv(Env{})
 	if (&Config{}).ServingKey() != "" {
 		t.Error("a key out of nothing")
 	}
@@ -52,7 +49,7 @@ func TestASavedLegacyAPIAddressFollowsTheDefault(t *testing.T) {
 		if err := os.WriteFile(p, []byte(`{"api_addr":"`+saved+`"}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if got := LoadConfig().APIAddr; got != want {
+		if got := LoadConfig(Env{}).APIAddr; got != want {
 			t.Errorf("saved %q loads as %q, want %q", saved, got, want)
 		}
 	}
@@ -65,7 +62,7 @@ func TestTheDefaultAddressIsNotSaved(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", dir)
 	t.Setenv("AppData", dir)
-	c := LoadConfig()
+	c := LoadConfig(Env{})
 	if c.APIAddr != "" || c.ServiceAddr != "" {
 		t.Fatalf("a first run holds %q and %q, want both empty", c.APIAddr, c.ServiceAddr)
 	}
@@ -104,13 +101,13 @@ func TestTheDefaultAddressIsNotSaved(t *testing.T) {
 	if fi, _ = os.Stat(c.Path()); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("an old file stayed %v", fi.Mode())
 	}
-	c = LoadConfig()
+	c = LoadConfig(Env{})
 	if c.APIKey != "k1" || c.ServiceKey != "k2" {
 		t.Errorf("keys did not round-trip: %q %q", c.APIKey, c.ServiceKey)
 	}
 	c.APIAddr = "0.0.0.0:9000"
 	c.Save()
-	if LoadConfig().APIAddr != "0.0.0.0:9000" {
+	if LoadConfig(Env{}).APIAddr != "0.0.0.0:9000" {
 		t.Error("an address the person typed was lost")
 	}
 }
