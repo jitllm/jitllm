@@ -86,10 +86,9 @@ func c6BaseDevViolations() map[string][]c6Violation {
 }
 
 // TestC6GreedyOnDeviceHonoursTheHeadBias holds the two device argmax paths to
-// phi-2's head bias. The bias is added on the host (finishLogits), so a device
-// argmax picks from logits it never reached: ForwardGreedy must keep the
-// argmax on the host for such a model, and ForwardBatchGreedy -- which has no
-// host logits at all -- must refuse it.
+// phi-2's head bias: the device's composed head applies the bias with its
+// other stages, so ForwardGreedy and each row of ForwardBatchGreedy -- which
+// has no host logits at all -- pick the host's biased argmax.
 func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 	m, g := openC6(t, "synth-phi2")
 	defer m.Close()
@@ -129,8 +128,21 @@ func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 	b := newSessBatch(m, 2, len(g.IDs)+1)
 	defer b.Close()
 	b.SetDevice(gpux)
-	if _, err := b.ForwardBatchGreedy([]int32{g.IDs[0], g.IDs[1]}); err == nil {
-		t.Error("ForwardBatchGreedy ran a model with a head bias; its per-row argmax never sees the bias")
+	rows := []int32{g.IDs[0], g.IDs[1]}
+	got, err := b.ForwardBatchGreedy(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r, id := range rows {
+		h := m.NewInstance(2)
+		lg, err := h.Forward(id)
+		h.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := Greedy(lg); got[r] != w {
+			t.Errorf("row %d: ForwardBatchGreedy on the device %d, the host's biased argmax %d", r, got[r], w)
+		}
 	}
 }
 
