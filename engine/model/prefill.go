@@ -89,9 +89,6 @@ type Span struct {
 	// prefix cache can name the pages that hold them and every page after.
 	// nil leaves them unnamed, and nothing from them on is cached.
 	Key *RowsKey
-	// Deep is an embedding span's deepstack rows, [taps][rows][NEmbd]: tap k
-	// adds into the span's rows after the text model's block k (deep.go).
-	Deep []float32
 }
 
 // RowsKey names the content an embedding span's rows came from: a hash over
@@ -125,11 +122,6 @@ func (s *Instance) prefillMixedAt(slot int, spans ...Span) ([]float32, error) {
 	if err != nil {
 		return nil, err
 	}
-	undoDeep, err := s.deepRuns(spans, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer undoDeep()
 	if err := s.bidirRuns(slot, spans); err != nil {
 		return nil, err
 	}
@@ -326,7 +318,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	// One token is decode; the batched path would allocate megabytes to beat
 	// it by nothing. Single-sequence only, because Forward writes row 0; a
 	// batch slot takes the chunked path at any length.
-	if (total == 1 || total <= s.forwardRowsFor() && len(src.given) == 0) && s.emb == nil && len(s.deep) == 0 {
+	if (total == 1 || total <= s.forwardRowsFor() && len(src.given) == 0) && s.emb == nil {
 		var lg []float32
 		var err error
 		s.forwardPrompts++
@@ -526,9 +518,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		for li := s.lo; li < s.hi; li++ {
 			if s.devAt(li) {
 				hi := li + 1
-				// A deepstack row adds in after each of the first blocks, so
-				// a chunk holding one runs them one submission each.
-				for hi < s.hi && s.devAt(hi) && !s.deepIn(hi-1, base, n) {
+				for hi < s.hi && s.devAt(hi) {
 					hi++
 				}
 				// The last chunk carries the head when the device runs every
@@ -586,7 +576,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					if s.rowsRun(li, hi, pos, pos, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
 						s.bswaTable(n, c.NRotSWA), false, nil, 0) == nil {
 						s.tailRowChunks++
-						s.addDeep(hi-1, base, n)
 						li = hi - 1
 						continue
 					}
@@ -606,7 +595,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				if s.callTell(p0, n) && s.ld.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
 					s.bswaTable(n, c.NRotSWA), fh) {
 					headDone = fh != nil
-					s.addDeep(hi-1, base, n)
 					li = hi - 1
 					continue
 				}
@@ -657,7 +645,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			if err := s.hostRows(li, slot, base, p0, n, chunkRows, bidir); err != nil {
 				return nil, err
 			}
-			s.addDeep(li, base, n)
 		}
 		if s.emb != nil {
 			if err := s.emb.collect(s, base, n); err != nil {
@@ -766,14 +753,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 func (s *Instance) devCollapses() bool {
 	c := s.m.Cfg
 	return c.streamHead() && s.head != nil && s.head.Collapses && s.rows == nil && s.devCount() > 0 && s.lo < c.NLayer
-}
-
-// axpyRows adds alpha*b to each of n rows of dst, b one row of width dim or,
-// where idx is set, the table whose row idx[r] goes to row r.
-func (s *Instance) axpyRows(dst, b []float32, idx []int32, dim, n, chunk int, alpha float32) {
-	j := &s.rg.rows
-	j.dst, j.b, j.idx, j.dim, j.alpha = dst, b, idx, dim, alpha
-	s.rowRun(n, chunk)
 }
 
 // growDeviceBatch sizes what a chunk needs when every block runs on a device:

@@ -121,9 +121,6 @@ type Instance struct {
 	// one device without colliding.
 	lo, hi int
 
-	// rg is the pool regions a decode token runs, with their functions built
-	// once (see regions).
-	rg regions
 	// fuseOff runs this instance's decode one pool region per op
 	// (WithBlockFusion, SetBlockFusion); fused is whether a fused run of host
 	// blocks is open (fuse.go), and FusedRuns counts the runs opened.
@@ -432,11 +429,6 @@ type Instance struct {
 	// bidirCutFault lets a prefill chunk end inside a run: the violation
 	// TestBidirRunIsNeverCut runs. false in every real use.
 	bidirCutFault bool
-
-	// deep is set for the length of one prefill whose spans carry deepstack
-	// rows (deep.go): where they add in. deepIdx is its row index scratch.
-	deep    []deepRun
-	deepIdx []int32
 
 	// rows is set for the length of one speculation step (specrows.go): the
 	// rows whose logits and hidden state the step wants back, and the
