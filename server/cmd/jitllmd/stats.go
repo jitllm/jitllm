@@ -120,14 +120,6 @@ func printStats(w io.Writer, s *v1.GetStatsResponse) {
 			fmt.Fprintf(w, "  pool     %d parallel / %d inline region(s) over %d worker(s)\n",
 				p.GetParallelRegions(), p.GetInlineRegions(), p.GetWorkers())
 		}
-		if mx := ss.GetMixture(); mx != nil && (mx.GetBatchedDispatch() > 0 || mx.GetLoopedDispatch() > 0) {
-			// Both counters, not a ratio: a host that declines the batched
-			// path loops every expert, which is a capability difference and
-			// not a fault.
-			fmt.Fprintf(w, "  mixture  gate/up %d batched / %d looped   down %d batched / %d looped\n",
-				mx.GetBatchedDispatch(), mx.GetLoopedDispatch(),
-				mx.GetBatchedDownDispatch(), mx.GetLoopedDownDispatch())
-		}
 	}
 }
 

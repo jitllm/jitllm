@@ -312,11 +312,10 @@ type streamBank struct {
 	// spec hands the host's read service a guess and nil abandons the
 	// unstarted ones (nn.LayerWeights.SpeculateExperts).
 	spec func(sel []uint32)
-	// host is the block's routed experts on the host (hybrid execution), and
-	// hin, hw and hout its input, weights and output, reused every token.
-	host   func(sel []uint32, w, in, out []float32) error
-	hybrid bool // the experts run on the host (runHost), not sent
-	li     int  // the block, for the session's host side (hostFor)
+	// hybrid says the placement keeps the block's experts off the card: the
+	// composed card declines the block (partExpertsHost).
+	hybrid bool
+	li     int // the block, for the session's host side (hostFor)
 	// The split (hybrid with a cache): heat counts each expert's selections,
 	// halved every heatHalf tokens; hit marks which of this token's
 	// selection the cache holds; dw is the card's weights (a miss's zeroed),
@@ -439,13 +438,9 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 	return err
 }
 
-// hostSide is a session's host side for one hybrid block: a row at a time,
-// and a chunk's rows expert-major.
+// hostSide is a session's own side of a streamed block: its counts of the
+// block's experts (nn.LayerWeights.ExpertUses).
 type hostSide struct {
-	one  func(sel []uint32, w, in, out []float32) error
-	rows func(sel []uint32, w, in, out []float32, rows, k int) error
-	// uses is the session's counts of this block's experts
-	// (nn.LayerWeights.ExpertUses).
 	uses []uint32
 }
 
@@ -1705,12 +1700,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			g.mu.Unlock()
 		}
 	}()
-	// The host side of a hybrid block is the offering session's: a placed
-	// block is shared by every session that attaches, and each runs its experts
-	// on its own instance (runHost looks it up by the call's session). Recorded
-	// before anything can decline, so a block another session placed still
-	// learns this one's.
-	if w != nil && w.HostExperts != nil {
+	// A streamed block's expert counts are the offering session's: a placed
+	// block is shared by every session that attaches, and each counts its own.
+	// Recorded before anything can decline, so a block another session placed
+	// still learns this one's.
+	if w != nil && w.ExpertUses != nil {
 		g.mu.Lock()
 		if g.hostFns == nil {
 			g.hostFns = map[uint64]map[int]hostSide{}
@@ -1718,7 +1712,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if g.hostFns[sid] == nil {
 			g.hostFns[sid] = map[int]hostSide{}
 		}
-		g.hostFns[sid][li] = hostSide{one: w.HostExperts, rows: w.HostExpertsRows, uses: w.ExpertUses}
+		g.hostFns[sid][li] = hostSide{uses: w.ExpertUses}
 		g.mu.Unlock()
 	}
 	// Shapes this tier cannot express are declined first and by name (RULE 8a):
@@ -1928,7 +1922,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// matvec runs.
 	// The composed block reads its experts in pages on the card: only a
 	// placement's own "host" sends them to the host.
-	hostExp := w.HostExperts != nil && auto && mode == expHost
+	hostExp := auto && mode == expHost
 	stream := moe && (g.StreamExperts || auto) && slots < bank
 	// A hybrid block that can hold an expert cache (Config.NoHybridCache)
 	// is placed as a streamed one -- the compact bank and its kernels on the
@@ -2315,7 +2309,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			if l.stream == nil {
 				l.stream = &streamBank{sel: make([]uint32, slots),
 					ensure: w.Ensure, sel2: w.EnsureExperts,
-					pre: w.PrefetchExperts, spec: w.SpeculateExperts, host: w.HostExperts, w: *w, hybrid: true, nExpert: bank, li: li}
+					pre: w.PrefetchExperts, spec: w.SpeculateExperts, w: *w, hybrid: true, nExpert: bank, li: li}
 				g.StreamBlocks++
 			}
 			continue
@@ -2353,15 +2347,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				// contributes zeros.
 				l.stream = &streamBank{sel: make([]uint32, slots),
 					ensure: w.Ensure, sel2: w.EnsureExperts,
-					pre: w.PrefetchExperts, spec: w.SpeculateExperts, host: w.HostExperts, w: *w, li: li}
+					pre: w.PrefetchExperts, spec: w.SpeculateExperts, w: *w, li: li}
 				l.stream.nExpert = bank
-				// An auto-streamed block runs its experts on the host unless
-				// told otherwise: on Kimi-K3 over the V100s that decoded 1.43x
-				// the host's rate where sending the sheets lost to it
-				// (placement.md 16c-2).
-				switch {
-				case l.stream.host == nil || auto && mode == expCard:
-				case auto && mode == expHost:
+				// A block placed with its experts on the host keeps them off
+				// the card, which the composed card declines (expertsServe).
+				if auto && mode == expHost {
 					l.stream.hybrid = true
 				}
 				l.stream.initCache(cslots, bank)

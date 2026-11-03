@@ -749,33 +749,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	return s.logits, nil
 }
 
-// mm is the batched matvec seam, mirroring mv. A false from MatMul is a
-// supported answer -- there is no GEMM for this quantization yet, or the batch
-// is too small to pay -- and the loop below produces identical tokens.
-func (s *Instance) mm(out []float32, w tensor, x []float32, ntok int) error {
-	// The batched path is timed here; the fallback is timed by each s.mv, so a
-	// defer over the whole call would count it twice.
-	t0 := s.tick()
-	// The GGUF GEMM only for a GGUF-layout weight, tested first: nn.MatMul
-	// walks GGUF blocks and would read out of range on a packed payload.
-	if w.packed == nil && s.jit.MatMul(out, w.typ, w.data, x, w.rows, w.k, ntok) {
-		s.tock(opMatVec, t0)
-		return nil
-	}
-	// The packed batch, one pool region for the whole chunk. It declines for a
-	// shape it cannot serve, and the row loop below runs instead.
-	if w.packed != nil && s.jit.MatMulPacked(out, w.typ, w.packed, x, w.rows, w.k, ntok) {
-		s.tock(opMatVec, t0)
-		return nil
-	}
-	for i := 0; i < ntok; i++ {
-		s.jit.NewInput()
-		if err := s.mv(out[i*w.rows:(i+1)*w.rows], w, x[i*w.k:(i+1)*w.k]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 // axpyRows adds alpha*b to each of n rows of dst, b one row of width dim or,
 // where idx is set, the table whose row idx[r] goes to row r.
@@ -982,14 +955,10 @@ func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) er
 }
 
 // forwardRowsFor is the longest prompt run through the decode path: the
-// caller's WithPrefillForwardRows, else hostRowsByRow once a device has run
-// this model's experts on the host, else one.
+// caller's WithPrefillForwardRows, else one.
 func (s *Instance) forwardRowsFor() int {
-	switch {
-	case s.m.opt.forwardRowsSet:
+	if s.m.opt.forwardRowsSet {
 		return s.m.opt.forwardRows
-	case s.m.hostExperts.Load():
-		return hostRowsByRow
 	}
 	return 1
 }

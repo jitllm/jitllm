@@ -364,8 +364,6 @@ func (s *Instance) q4eDraftStreams(x []float32, rows, base int) {
 	}
 }
 
-
-
 // q4eCollapse is the head's mix for n rows of x, written into stream 0 of
 // each row, which the projection reads with no norm: the composed collapse,
 // a prediction block's draft through the block's own head mix.

@@ -75,28 +75,20 @@ func (s *TelemetryService) snapshot(modelID, sessionID string) *v1.GetStatsRespo
 			Generating:      sess.running.Load(),
 			QueuePosition:   sess.queuePos.Load(),
 		}
-		// The pool and mixture counters are written by the decode loop, so
+		// The pool's counters are written by the decode loop, so
 		// they are read only when the session is idle; a busy session
 		// reports zeros rather than race.
 		if !sess.running.Load() && sess.mu.TryLock() {
-			var par, ser, b, l, bd, ld int64
+			var par, ser int64
 			var workers int
 			sess.in().With(func(st *model.Instance) {
 				par, ser = st.JIT().Regions()
-				b, l = st.MoEDispatch()
-				bd, ld = st.MoEDownDispatch()
 				workers = st.Workers()
 			})
 			ss.Pool = &v1.PoolStats{
 				ParallelRegions: par,
 				InlineRegions:   ser,
 				Workers:         int32(workers),
-			}
-			ss.Mixture = &v1.MixtureStats{
-				BatchedDispatch:     b,
-				LoopedDispatch:      l,
-				BatchedDownDispatch: bd,
-				LoopedDownDispatch:  ld,
 			}
 			sess.mu.Unlock()
 		}

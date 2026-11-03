@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -162,7 +163,6 @@ func loadK3(l *layer, bi int32, cfg *Config, c *jlm.File, get func(jlm.Role, int
 			return fmt.Errorf("model: block %d's residual scores are %d and %d wide, want %d", bi,
 				len(l.resAttn), len(l.resFFN), cfg.NEmbd)
 		}
-		l.resAttnT, l.resFFNT = f32Row(l.resAttn), f32Row(l.resFFN)
 	}
 	// The MLA output gate: RoleAttnGate in a full block of an MLA model,
 	// NHead*HeadDimV rows over n_embd. (A linear block's RoleAttnGate is its
@@ -211,7 +211,6 @@ func loadK3Head(m *Model, cfg *Config, vec func(jlm.Role, int32) ([]float32, err
 	if len(m.resOut) != cfg.NEmbd {
 		return fmt.Errorf("model: the head's residual score is %d wide, want %d", len(m.resOut), cfg.NEmbd)
 	}
-	m.resOutT = f32Row(m.resOut)
 	return nil
 }
 
@@ -250,4 +249,13 @@ func (s *Instance) k3Plan(li int, plan *nn.LayerPlan) {
 		k.Fault = nn.K3FaultNoKDAGate
 	}
 	plan.K3 = k
+}
+
+// f32Bytes is a float32 slice addressed as the bytes a kernel reads: the same
+// memory, no copy.
+func f32Bytes(v []float32) []byte {
+	if len(v) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*4)
 }
