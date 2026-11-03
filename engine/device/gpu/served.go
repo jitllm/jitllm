@@ -67,9 +67,37 @@ const (
 	numParts
 )
 
-var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block",
-	partRope: "table", partSample: "sample", partEmbed: "input rows", partEmbedRows: "prompt input rows", partCopy: "copy",
-	partTower: "tower block", partRows: "picture rows", partCollapse: "streams' collapse", partConv: "convolutional block"}
+func (k partKind) String() string {
+	switch k {
+	case partHead:
+		return "head"
+	case partBlock:
+		return "block"
+	case partShadow:
+		return "shadow"
+	case partPrompt:
+		return "prompt block"
+	case partRope:
+		return "table"
+	case partSample:
+		return "sample"
+	case partEmbed:
+		return "input rows"
+	case partEmbedRows:
+		return "prompt input rows"
+	case partCopy:
+		return "copy"
+	case partTower:
+		return "tower block"
+	case partRows:
+		return "picture rows"
+	case partCollapse:
+		return "streams' collapse"
+	case partConv:
+		return "convolutional block"
+	}
+	return ""
+}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
@@ -1114,7 +1142,7 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 		if sk.kind != partPrompt {
 			var err error
 			if in, err = g.instance(sv.f); err != nil {
-				return fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+				return fmt.Errorf("the composed %s: %w", sk.kind, err)
 			}
 		}
 		sv.f.refs++
@@ -1321,11 +1349,11 @@ type servedPart struct {
 
 // errServedCold is a served part asked for inside a capture before it
 // formed: the capture is abandoned and the step issued unrecorded.
-var errServedCold = errors.New("tier: a served part forms outside a capture")
+const errServedCold tierError = "tier: a served part forms outside a capture"
 
 // errFormedEarlier marks a part whose form failed at an earlier step
 // (servedFor), its error stated once.
-var errFormedEarlier = errors.New("did not form earlier")
+const errFormedEarlier tierError = "did not form earlier"
 
 // servedFor is the lane's served part of key sk, built by build on its
 // first step and formed through the composer's one keyed cache, its form the
@@ -1361,7 +1389,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		if g.formErr == nil {
 			g.formErr = map[servedKey]error{}
 		}
-		g.formErr[sk] = fmt.Errorf("the composed %s %w: %w", partNames[sk.kind], errFormedEarlier, err)
+		g.formErr[sk] = fmt.Errorf("the composed %s %w: %w", sk.kind, errFormedEarlier, err)
 		g.LastErr = err.Error()
 		return err
 	}
@@ -1373,7 +1401,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		g.FormedAtStep++
 		g.FormedAtStepParts[sk.kind]++
 		g.LastErr = fmt.Sprintf("the composed %s formed at %d rows outside a placement (keys %d, seqs %d, stream %v, held %d, clone lane %v)",
-			partNames[sk.kind], sk.rows, sk.keys, sk.seqs, sk.stream, sk.held, g.lane.clone)
+			sk.kind, sk.rows, sk.keys, sk.seqs, sk.stream, sk.held, g.lane.clone)
 	}
 	if g.composer == nil {
 		g.composer = composer.Default()
@@ -1430,12 +1458,12 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	key, codes, err := g.askPart(r, &sl, sk.rows)
 	if err != nil {
-		return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
+		return nil, fail(fmt.Errorf("the composed %s: %w", sk.kind, err))
 	}
 	f, ok := g.servedForms[key]
 	if !ok {
 		if f, err = g.compilePart(&sl, codes, sk.rows); err != nil {
-			return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
+			return nil, fail(fmt.Errorf("the composed %s: %w", sk.kind, err))
 		}
 		g.PartsFormed++
 		g.PartKernels += len(codes)
@@ -1451,7 +1479,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 				delete(g.servedForms, key)
 				f.close()
 			}
-			err = fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+			err = fmt.Errorf("the composed %s: %w", sk.kind, err)
 			// Room is not remembered: the part forms at the next ask, once
 			// a move or a page given back has made it.
 			if errors.As(err, new(partRoomError)) {
@@ -1696,7 +1724,7 @@ func (sv *servedPart) runHead(g *devTier, lc *launcher, in, out, h backend.Buf) 
 // a call's hidden readback reads (nn.Head.Hidden).
 func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*servedPart, error) {
 	gr, w := bs.headHidden, bs.head
-	if rowsFaulted("nohidden") {
+	if g.rowsFaulted("nohidden") {
 		gr = bs.headGraph
 	}
 	hs, ok := headShape(gr)
@@ -2704,7 +2732,7 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 		}
 		keys = g.passKeys(bs, keys)
 	}
-	sv, err = g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(l), qOff, bs.calls, bs.dRows, keys, g.kvp.p, R,
+	sv, err = g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, g.windowDesc(bs.pkv, l), qOff, bs.calls, bs.dRows, keys, g.kvp.p, R,
 		rowSeqs(R, one), run, bs)
 	if err != nil {
 		if run != nil {
@@ -2728,7 +2756,7 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 
 // errStreamForm is a block whose form over passes did not form: it declines
 // as one whose history streams (partStream).
-var errStreamForm = errors.New("the composed block over passes")
+const errStreamForm tierError = "the composed block over passes"
 
 // servedCopy is the copy of a block's output from bs.h over x at a step of
 // rows, formed through the composer like any other part, for a form that
@@ -2780,7 +2808,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	if g.blockServes(l, li, &bs.p, bs, false, false) == partServes {
 		rcs := bs.cs
 		serve := func() (*servedPart, error) {
-			return g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, bs.pkv.windowDesc(l), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
+			return g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, g.windowDesc(bs.pkv, l), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
 				g.kvp.p, 1, 0, bs)
 		}
 		sv, err := serve()
@@ -2890,7 +2918,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		if seqs == 0 && !g.raggedAt(bb) {
 			continue
 		}
-		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(l), bb.roff, bb.calls, bb.dRows,
+		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, g.windowDesc(bb.pkv, l), bb.roff, bb.calls, bb.dRows,
 			bb.p.MaxSeq, g.kvp.p, bb.rows, seqs, bb)
 		if err != nil {
 			// A form that failed earlier was named then (servedFor).
@@ -2939,7 +2967,7 @@ func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 		if seqs == 1 && bb.rows == 1 || seqs == 0 && bb.rows > 1 && !g.raggedAt(bb) {
 			continue
 		}
-		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, bb.pkv.windowDesc(l), qOff, bb.calls, bb.dRows,
+		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, g.windowDesc(bb.pkv, l), qOff, bb.calls, bb.dRows,
 			g.passKeys(bb, bb.p.MaxSeq), g.kvp.p, bb.rows, seqs, run, bb)
 		if err != nil {
 			if !errors.Is(err, errFormedEarlier) {

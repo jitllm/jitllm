@@ -14,9 +14,9 @@ import (
 func TestKVEvictionGateDiscriminates(t *testing.T) {
 	eg := newEvictGate(t)
 	free := eg.run(t, false, nil)
-	gpu.SetPagedFault("stream")
-	defer gpu.SetPagedFault("")
-	got := eg.run(t, true, nil)
+	var f gpu.Faults
+	f.SetPagedFault("stream")
+	got := eg.run(t, true, nil, gpu.WithFaults(&f))
 	if got.st.KVStreamPasses == 0 {
 		t.Fatal("no streamed pass ran: the violation was never exercised")
 	}
@@ -33,9 +33,9 @@ func TestKVEvictionGateDiscriminates(t *testing.T) {
 func TestComposedPassFoldDiscriminates(t *testing.T) {
 	eg := newEvictGate(t)
 	free := eg.run(t, false, nil)
-	gpu.SetPagedFault("passfold")
-	defer gpu.SetPagedFault("")
-	got := eg.run(t, true, nil)
+	var f gpu.Faults
+	f.SetPagedFault("passfold")
+	got := eg.run(t, true, nil, gpu.WithFaults(&f))
 	if got.st.ComposedStreamPasses == 0 {
 		t.Fatal("no composed pass ran: the violation was never exercised")
 	}

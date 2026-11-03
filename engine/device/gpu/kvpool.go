@@ -14,7 +14,13 @@ import (
 // width stops a layer's pool growing. Nothing changed; the caller may evict,
 // move blocks, wait for room or give up, and the model is not down. See
 // docs/design/device-kv-paging.md.
-var ErrKVCapacity = errors.New("tier: no room for another page of attention history")
+const ErrKVCapacity tierError = "tier: no room for another page of attention history"
+
+// tierError is a sentinel error of the tier: a constant, matched with
+// errors.Is like any other.
+type tierError string
+
+func (e tierError) Error() string { return string(e) }
 
 // kvGeom is what one attention layer's page holds: kvRow floats of K per
 // position (transposed within the page), and V beside it -- f32, binary16

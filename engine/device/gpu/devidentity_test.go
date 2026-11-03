@@ -218,7 +218,7 @@ func TestTheRealEnumerationCountsEachCardOnce(t *testing.T) {
 // while allDevices enumerates every ordinal and Vulkan index, so both lists
 // are gated.
 func TestAllDevicesOffersEachCardOnce(t *testing.T) {
-	devs, err := allDevices(backend.Opts{})
+	devs, err := realBackends().allDevices(backend.Opts{})
 	if err != nil {
 		t.Skipf("no GPU backend on this host: %v", err)
 	}

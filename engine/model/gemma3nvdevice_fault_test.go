@@ -24,9 +24,9 @@ func TestGemma3nTowerPagesThroughTheDeviceStale(t *testing.T) {
 				t.Skipf("%s: not present", spec)
 			}
 			ran++
-			gpu.SetPagedFault("stale")
-			defer gpu.SetPagedFault("")
-			got, budget := g3nvPaged(t, spec, g, ref)
+			var f gpu.Faults
+			f.SetPagedFault("stale")
+			got, budget := g3nvPaged(t, spec, g, ref, gpu.WithFaults(&f))
 			if got.err != "" {
 				t.Logf("%s, %d bytes, stale page-ins: the encode failed: %s", spec, budget, got.err)
 				return
