@@ -33,8 +33,8 @@ const (
 
 // Ungated and Gated are kernels.Ungated and kernels.Gated.
 var (
-	Ungated = graph.Ungated
-	Gated   = graph.Gated
+	Ungated = graph.Ungated()
+	Gated   = graph.Gated()
 )
 
 // GELUErfP and GELUErfA are ActGELUErf's erf: t = 1/(1 + P*z), and

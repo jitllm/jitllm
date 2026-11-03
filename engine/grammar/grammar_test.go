@@ -174,27 +174,31 @@ func TestMaskSendsTheRestToMinusInfinity(t *testing.T) {
 
 // schemaCases are schemas with outputs of bounded length, a document each
 // must accept and one each must refuse.
-var schemaCases = []struct {
+type schemaCase struct {
 	schema  string
 	yes, no string
-}{
-	{`{"type":"object","properties":{"name":{"type":"string","maxLength":12},"age":{"type":"integer"},` +
-		`"tags":{"type":"array","items":{"enum":["a","b",3,null]},"maxItems":3}},"required":["name","age"]}`,
-		`{"name": "bo", "age": -4, "tags": ["a", 3]}`, `{"age": 4, "name": "bo"}`},
-	{`{"type":"array","items":{"type":"boolean"},"minItems":1,"maxItems":4}`, `[true,false]`, `[]`},
-	{`{"anyOf":[{"type":"number"},{"type":"string","minLength":2,"maxLength":3}]}`, `1.5e3`, `"a"`},
-	{`{"$defs":{"pt":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},` +
-		`"required":["x"],"additionalProperties":false}},"type":"array","items":{"$ref":"#/$defs/pt"},"maxItems":2}`,
-		`[{"x":1,"y":2},{"x":3}]`, `[{"y":2}]`},
-	{`{"type":"object","properties":{"a":{"const":"k"},"b":{"type":"null"},"c":{"type":"boolean"}}}`,
-		`{"b":null}`, `{"c":true,"a":"k"}`},
-	{`{"type":["string","null"],"maxLength":5}`, `null`, `"toolong"`},
-	{`{"prefixItems":[{"type":"integer"},{"type":"string","maxLength":2}],"items":false}`, `[1,"ab"]`, `[1]`},
+}
+
+func schemaCases() []schemaCase {
+	return []schemaCase{
+		{`{"type":"object","properties":{"name":{"type":"string","maxLength":12},"age":{"type":"integer"},` +
+			`"tags":{"type":"array","items":{"enum":["a","b",3,null]},"maxItems":3}},"required":["name","age"]}`,
+			`{"name": "bo", "age": -4, "tags": ["a", 3]}`, `{"age": 4, "name": "bo"}`},
+		{`{"type":"array","items":{"type":"boolean"},"minItems":1,"maxItems":4}`, `[true,false]`, `[]`},
+		{`{"anyOf":[{"type":"number"},{"type":"string","minLength":2,"maxLength":3}]}`, `1.5e3`, `"a"`},
+		{`{"$defs":{"pt":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},` +
+			`"required":["x"],"additionalProperties":false}},"type":"array","items":{"$ref":"#/$defs/pt"},"maxItems":2}`,
+			`[{"x":1,"y":2},{"x":3}]`, `[{"y":2}]`},
+		{`{"type":"object","properties":{"a":{"const":"k"},"b":{"type":"null"},"c":{"type":"boolean"}}}`,
+			`{"b":null}`, `{"c":true,"a":"k"}`},
+		{`{"type":["string","null"],"maxLength":5}`, `null`, `"toolong"`},
+		{`{"prefixItems":[{"type":"integer"},{"type":"string","maxLength":2}],"items":false}`, `[1,"ab"]`, `[1]`},
+	}
 }
 
 func TestSchemaGrammarAcceptsAndRefuses(t *testing.T) {
 	v := newToyVocab()
-	for _, c := range schemaCases {
+	for _, c := range schemaCases() {
 		src, err := FromJSONSchema([]byte(c.schema))
 		if err != nil {
 			t.Fatalf("%s: %v", c.schema, err)
@@ -215,7 +219,7 @@ func TestSchemaGrammarAcceptsAndRefuses(t *testing.T) {
 func TestSchemaRandomWalksValidate(t *testing.T) {
 	v := newToyVocab(`": `, `", "`, `{"`, `"}`, "true", "null", ", ", "é", "\xc3", "\xe4\xb8", "\xad")
 	rng := rand.New(rand.NewPCG(1, 2))
-	for _, c := range schemaCases {
+	for _, c := range schemaCases() {
 		src, err := FromJSONSchema([]byte(c.schema))
 		if err != nil {
 			t.Fatal(err)

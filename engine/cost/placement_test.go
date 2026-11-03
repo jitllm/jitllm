@@ -1,19 +1,16 @@
 package cost
 
 import (
-	"flag"
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
 )
 
-var composeModel = flag.String("compose-model", "synth-ernie45", "the fixture the estimates price")
-
 // TestSuggestPlacesFromTheIR estimates placements from final IR and holds
 // plan mode's suggestion to costing no more than any of them, and to the
 // estimate of the placement it returns.
 func TestSuggestPlacesFromTheIR(t *testing.T) {
-	f := composing(t, *composeModel+".jlm")
+	f := composing(t, composeModel()+".jlm")
 	r := composer.Default()
 	gpu := Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
 	cpu := Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
@@ -62,7 +59,7 @@ func TestSuggestPlacesFromTheIR(t *testing.T) {
 // suggestion and on a placement the engine forces, each part landing where
 // its placement put it.
 func TestEngineTakesOrForcesThePlacement(t *testing.T) {
-	f := composing(t, *composeModel+".jlm")
+	f := composing(t, composeModel()+".jlm")
 	r := composer.Default()
 	gpu := Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
 	cpu := Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
