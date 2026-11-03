@@ -20,10 +20,10 @@ type goldenCase struct {
 
 func models() map[string]string {
 	return map[string]string{
-	"stories260K": "../testdata/models/stories260K.gguf",
-	"stories15M":  testmodels.Path("stories15M-q4_0.gguf"),
-	"tinyllama":   testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"),
-}
+		"stories260K": "../testdata/models/stories260K.gguf",
+		"stories15M":  testmodels.Path("stories15M-q4_0.gguf"),
+		"tinyllama":   testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"),
+	}
 }
 
 // TestGoldens is the tokenizer gate: exact token ids, against llama.cpp's own

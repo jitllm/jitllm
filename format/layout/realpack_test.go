@@ -198,4 +198,3 @@ func checkPack(t *testing.T, q layout.Quant, g quant.Type, name string, w []byte
 		}
 	}
 }
-
