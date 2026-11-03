@@ -272,40 +272,9 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 	cases := map[string][]violation{
 		"all-minilm-l6": {
 			{"cls pooling on a mean model", func(m *Model) func() { return set(&m.Cfg.Pooling, jlm.PoolCLS) }},
-			{"no token-type row", func(m *Model) func() {
-				old := m.enc.typ0
-				m.enc.typ0 = nil
-				return func() { m.enc.typ0 = old }
-			}},
-			{"the attention LayerNorm without its weight", func(m *Model) func() {
-				saved := make([][]float32, len(m.enc.blocks))
-				for i := range m.enc.blocks {
-					b := &m.enc.blocks[i]
-					saved[i] = b.ln1W
-					w := make([]float32, len(b.ln1W))
-					for j := range w {
-						w[j] = 1
-					}
-					b.ln1W = w
-				}
-				return func() {
-					for i := range m.enc.blocks {
-						m.enc.blocks[i].ln1W = saved[i]
-					}
-				}
-			}},
 		},
 		"mxbai-embed-large": {
 			{"mean pooling on a CLS model", func(m *Model) func() { return set(&m.Cfg.Pooling, jlm.PoolMean) }},
-		},
-		"nomic-embed-text": {
-			{"no rotary", func(m *Model) func() {
-				old := m.enc.rope
-				r := *old
-				r.NRot = 0
-				m.enc.rope = &r
-				return func() { m.enc.rope = old }
-			}},
 		},
 		"embeddinggemma-300m": {
 			{"causal attention on a bidirectional model", func(m *Model) func() {

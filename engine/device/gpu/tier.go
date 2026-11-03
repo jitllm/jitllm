@@ -1378,8 +1378,6 @@ type devShared struct {
 	// gatherCopies is a page gather's copy list (gatherInto), reused.
 	gatherCopies []backend.CopyRange
 	pcache       *persistCache // composed persistent kernels; see persist.go
-	ClefHeads    int64
-	KevHeads     int64
 
 	// Host-side scratch, reused rather than allocated per matvec.
 	hostRaw []byte

@@ -1008,6 +1008,12 @@ func configFrom(c *jlm.Config) (*Config, error) {
 }
 
 // tensor is one weight matrix, kept as the raw mapping plus its shape.
+// f32Tensor is vals as an F32 matrix of rows x k, a table the engine built.
+func f32Tensor(vals []float32, rows, k int) tensor {
+	b := unsafe.Slice((*byte)(unsafe.Pointer(&vals[0])), 4*len(vals))
+	return tensor{typ: quant.F32, data: b, rows: rows, k: k}
+}
+
 type tensor struct {
 	// e is the container entry this weight came from: its role, its block and
 	// its shape. Kept for diagnostics and for rows(), never for resolution --
@@ -1290,12 +1296,6 @@ type Model struct {
 	// cpuComposes the times the composer was asked for one (CPUComposes).
 	cpuForms    cpuForms
 	cpuComposes atomic.Int64
-	// argmaxes is a decision's argmax graph (argmaxGraph), one for the
-	// model so its form is composed once.
-	argmaxes struct {
-		mu sync.Mutex
-		g  *graph.Graph
-	}
 
 	// TokErr is why Vocab is nil, when it is. The weights still loaded.
 	TokErr error
@@ -1356,16 +1356,6 @@ type Model struct {
 	// q/k RMSNorm runs the generated norm against. nil unless QKL2Norm.
 	onesHD  []float32
 	outNorm []float32
-	// clef is a Clef decision model's joint schema head, loaded by the first
-	// Decider (decideclef.go) under bind; nil on every other model.
-	clef *clefHead
-	// kev is Kev's pointer head (decidekev.go), read once.
-	kev *kevHead
-	// kevDev is Kev's head as a device reads it (decidekev.go).
-	kevDev *nn.KevHead
-	// clefDev is that head as a device reads it (decideclefdev.go), built
-	// the first time a device runs it.
-	clefDev *nn.ClefHead
 	// outNormB and outB are the output LayerNorm's bias and the head's bias
 	// (phi-2), nil everywhere else.
 	outNormB, outB []float32
@@ -1399,17 +1389,12 @@ type Model struct {
 	states atomic.Int64
 	// live is the open instances, which a prefill asks whether another decodes.
 	live live
-	// enc is the BERT-family encoder graph, and nil for every decoder. A model
-	// with one has no layers, no output and no instance: see encoder.go.
-	enc *encoder
 	// dense1 and dense2 are an embedding model's projection heads after
 	// pooling (EmbeddingGemma's), empty for every other model.
 	dense1, dense2 tensor
 	// tower is the vision tower, nil for a container with no vision section.
 	// It shares this model's container, budget and pager.
 	tower *Tower
-	// audio is the container's audio tower (audio.go), nil without one.
-	audio *audioTower
 	// imgCache is the vision segment's output rows by picture (imagekey.go),
 	// shared by every instance of the model.
 	imgCache imageCache
@@ -1685,11 +1670,10 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// than the host can still be opened.
 	var m *Model
 	if cf := c.Config(); cf != nil && cf.Arch.Encoder() {
-		m, err = buildEncoderModel(c, lo.tok...)
-	} else {
-		if m, err = build(c, lo.tok...); err == nil {
-			err = loadDenseHeads(c, m)
-		}
+		err = fmt.Errorf("model: %s is an encoder, and an encoder's blocks have no runner: "+
+			"they are to run as the model's non-causal blocks, stated by the front end", cf.Arch)
+	} else if m, err = build(c, lo.tok...); err == nil {
+		err = loadDenseHeads(c, m)
 	}
 	if err != nil {
 		c.Close()
@@ -1768,15 +1752,10 @@ func openContainer(path string, options ...Option) (*Model, error) {
 		}
 		m.tower = tw
 		m.imgCache.budget = defaultImageCache
-		if m.audio, err = buildAudio(c, m); err != nil {
+		if v := c.Vision(); v != nil && v.Audio != nil {
 			c.Close()
-			return nil, err
-		}
-		// The audio blocks take their places in the block space after the
-		// vision blocks, as the container pages them; their weights are the
-		// tower's own (audioPageIn).
-		if m.audio != nil {
-			m.layers = append(m.layers, make([]layer, len(m.audio.blocks))...)
+			return nil, fmt.Errorf("model: the container's audio tower (%v) has no runner: "+
+				"it is to run as the model's blocks, stated by the front end", v.Audio.Projector)
 		}
 		if tw.mn != nil && tw.mn.hard != nil {
 			m.hardEmbd = tw.mn.hardRows(m.Cfg.EmbdScale)
@@ -2072,15 +2051,6 @@ func (m *Model) pageIn(li int) error {
 	// everything in the dense region (jlm.alwaysResident).
 	if m.container == nil || li >= len(m.layers) || li >= m.container.NPages() {
 		return nil
-	}
-	// An encoder's blocks are its own structs (encoder.go, modernbert.go);
-	// a tower's after them (d1-omni's) are layers like any model's, and an
-	// audio tower's its own (audio.go).
-	if m.audio != nil && li >= m.audioFirst() {
-		return m.audioPageIn(li - m.audioFirst())
-	}
-	if m.enc != nil && li < m.encBlocks() {
-		return m.encBlockPageIn(li)
 	}
 	// The block's own weights, not its experts: moe() ensures those after the
 	// router has chosen. EnsureRanges tracks which chunks hold real bytes, so an

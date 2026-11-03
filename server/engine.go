@@ -362,17 +362,6 @@ type LoadedModel struct {
 	embMu sync.Mutex
 	emb   embedders
 
-	// decMu guards dec, the decision model's one Decider (decide.go), and
-	// decClosed, set at unload.
-	decMu     sync.Mutex
-	dec       *model.Decider
-	decClosed bool
-	// decQ is the decisions waiting for the Decider, guarded by decQMu;
-	// decBatchMax the most requests one batch has answered.
-	decQMu      sync.Mutex
-	decQ        []*decJob
-	decBatchMax atomic.Int64
-
 	tokensGenerated atomic.Int64
 	tokensPrefilled atomic.Int64
 
@@ -704,7 +693,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		// sessions) where it is.
 		callerPlaced: o.MaxDeviceBlocks >= 0 || len(o.DeviceIDs) == 1 && o.DeviceIDs[0] == "cpu",
 	}
-	if !m.IsEncoder() {
+	{
 		if err := e.makeInstance(lm); err != nil {
 			m.Close()
 			closeDev()
@@ -924,7 +913,6 @@ func (e *Engine) UnloadModel(id string, force bool) (closed int, err error) {
 	// they end -- and before the model it steps.
 	lm.closeLoop()
 	lm.closeEmbedders()
-	lm.closeDecider()
 	if cerr := lm.m.Close(); cerr != nil {
 		err = cerr
 	}
@@ -967,7 +955,6 @@ func (e *Engine) Close() {
 		lm.closeLoop()
 		e.closeIdle(lm)
 		lm.closeEmbedders()
-		lm.closeDecider()
 		lm.m.Close()
 		lm.closeTiers()
 	}
@@ -1145,10 +1132,6 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		if lm.ttft.kv != nil {
 			o.KVStore = lm.ttft.kv
 		}
-	}
-	if lm.m.IsEncoder() {
-		return nil, fmt.Errorf("%w: model %q is an encoder (%s): it has no decoder session to generate "+
-			"from; embed with it instead", ErrInvalid, lm.called(o.modelName), lm.m.Cfg.Arch)
 	}
 	maxSeq := o.MaxSeq
 	if maxSeq <= 0 {

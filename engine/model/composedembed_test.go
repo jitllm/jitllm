@@ -1,6 +1,7 @@
 package model
 
 import (
+	"math"
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
@@ -20,9 +21,6 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 	for _, g := range loadEmbedGoldens(t) {
 		t.Run(g.Model, func(t *testing.T) {
 			m := openEmbedModel(t, g)
-			if m.IsEncoder() {
-				t.Skip("an encoder: TestComposedEncoderOnCPU")
-			}
 			ran++
 			ref := openEmbedModel(t, g)
 			re, err := ref.NewEmbedder()
@@ -30,13 +28,13 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer re.Close()
-			_, want := encodeTexts(t, ref, re, g)
+			want := embedTexts(t, ref, re, g)
 			e, err := m.NewEmbedder()
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer e.Close()
-			_, got := encodeTexts(t, m, e, g)
+			got := embedTexts(t, m, e, g)
 			ps, pd := e.st.CPUPoolSteps()
 			bs, bd := e.st.CPUBlockSteps()
 			t.Logf("%s: %d readouts served by the composed pool (declines %v); %d block runs served, declines %v",
@@ -72,7 +70,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, vbad := encodeTexts(t, m, ve, g)
+			vbad := embedTexts(t, m, ve, g)
 			vs, vd := ve.st.CPUPoolSteps()
 			// A mean over a text of several chunks is main's (DeclinePrefill).
 			vs += vd[composer.DeclinePrefill]
@@ -94,7 +92,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, cbad := encodeTexts(t, m, ce, g)
+			cbad := embedTexts(t, m, ce, g)
 			cs, cd := ce.st.CPUBlockSteps()
 			ce.Close()
 			m.Cfg.NonCausal = true
@@ -108,5 +106,62 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatal("no decoder embedding model among the goldens: the gate proved nothing")
+	}
+}
+
+// embedTexts embeds every text of g.
+func embedTexts(t *testing.T, m *Model, e *Embedder, g embedGolden) [][]float32 {
+	t.Helper()
+	var out [][]float32
+	for _, text := range g.Texts {
+		v, err := e.Embed(m.EmbedIDs(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, append([]float32(nil), v...))
+	}
+	return out
+}
+
+// worstCos is the lowest cosine between got's and want's vectors, text by
+// text.
+func worstCos(got, want [][]float32) float64 {
+	w := 1.0
+	for i := range want {
+		h := make([]float64, len(want[i]))
+		for j, x := range want[i] {
+			h[j] = float64(x)
+		}
+		w = math.Min(w, cosine(got[i], h))
+	}
+	return w
+}
+
+// llamaCos checks vs's vectors against llama.cpp's where the golden takes
+// them on the same file, at the reference gate's bound.
+func llamaCos(t *testing.T, g embedGolden, vs [][]float32, arm string) {
+	t.Helper()
+	if g.LGGUF != "" && g.LGGUF != g.GGUF {
+		return
+	}
+	// TestEmbeddingsMatchReference's bound: 0.999 where the file is
+	// quantized, llama.cpp itself short of the float32 model by more than
+	// the gate's bar.
+	bound := embedCosBound
+	if len(g.ST) == len(g.Llamacpp) {
+		var floor []float64
+		for i := range g.ST {
+			floor = append(floor, cos64(g.Llamacpp[i], g.ST[i]))
+		}
+		if worst(floor) < embedCosBound {
+			bound = 0.999
+		}
+	}
+	for i := range vs {
+		if i < len(g.Llamacpp) {
+			if lc := cosine(vs[i], g.Llamacpp[i]); !(lc >= bound) {
+				t.Errorf("%s text %d: cosine to llama.cpp %.7f < %v", arm, i, lc, bound)
+			}
+		}
 	}
 }

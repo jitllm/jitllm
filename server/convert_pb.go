@@ -187,11 +187,10 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 		SessionCount:      int32(sessions),
 		DefaultDeviceIds:  lm.devIDs(),
 		Pooling:           pooling,
-		Encoder:           lm.m.IsEncoder(),
 		Aliases:           e.aliasesOf(lm.path),
 		DefaultMaxSeq:     int32(e.defaultMaxSeq(lm)),
 		Capabilities: modelCapabilities(lm.m.ChatCapable(), lm.m.Tower() != nil,
-			lm.m.IsEmbedding(), lm.m.IsEncoder()),
+			lm.m.IsEmbedding(), false),
 	}
 }
 

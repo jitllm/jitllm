@@ -24,7 +24,6 @@ type fakeBackend struct {
 	failWith error
 
 	// decide answers /v1/systemone; nil refuses it.
-	decide func(DecideOptions) (*DecideResult, error)
 
 	mu   sync.Mutex
 	last GenerateOptions
@@ -125,13 +124,6 @@ func (f *fakeBackend) CancelSession(id string) (bool, error) {
 
 func (f *fakeBackend) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error) {
 	return nil, fmt.Errorf("%w: the scripted backend embeds nothing", ErrInvalid)
-}
-
-func (f *fakeBackend) Decide(ctx context.Context, o DecideOptions) (*DecideResult, error) {
-	if f.decide == nil {
-		return nil, fmt.Errorf("%w: the scripted backend decides nothing", ErrInvalid)
-	}
-	return f.decide(o)
 }
 
 func (f *fakeBackend) opts() GenerateOptions {

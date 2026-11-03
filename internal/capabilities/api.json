@@ -372,14 +372,6 @@
       "note": "/v1/batches/{id} and POST /v1/batches/{id}/cancel"
     },
     {
-      "path": "/v1/systemone",
-      "methods": [
-        "POST"
-      ],
-      "surface": "jitllm",
-      "note": "a decision model's answers: a JSON object with state and questions, at most 16 MiB"
-    },
-    {
       "path": "/completion",
       "methods": [
         "POST"
@@ -774,14 +766,6 @@
       ],
       "when": "a picture that is not PNG, JPEG, WebP or GIF",
       "message": "the pictures accepted are"
-    },
-    {
-      "id": "decision-non-decider",
-      "endpoints": [
-        "/v1/systemone"
-      ],
-      "when": "the model is not a decision model",
-      "message": "is not a decision model"
     }
   ],
   "control": [
