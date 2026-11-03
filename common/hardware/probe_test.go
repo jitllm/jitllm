@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/common/hardware"
-	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The spec picker is only worth having if it agrees with the engine, so the
@@ -83,35 +82,6 @@ func TestValidateBudgetRefusesSomethingThatIsNotAByteCount(t *testing.T) {
 	}
 }
 
-// The two kernel columns must stay two columns: on a pre-VNNI host the
-// row-major family declines every format while the packed family is fully
-// generated, so copying one into the other misreports the machine.
-func TestMachineKeepsTheRowMajorAndPackedColumnsApart(t *testing.T) {
-	r := hardware.Report{
-		Probed: true,
-		Arch:   "amd64",
-		Kernels: []hardware.Kernel{
-			{Format: "Q4_K", Native: false, NativeNote: "none", Packed: true, PackedNote: "vex"},
-			{Format: "Q6_K", Native: true, NativeNote: "pack4 accs2", Packed: true, PackedNote: "vnni"},
-		},
-		GPUs: []hardware.GPU{{API: "ptx", Name: "a card", Slots: 30720, Free: 1 << 30, Total: 4 << 30, Unified: false}},
-	}
-	m := r.Machine()
-
-	if len(m.Kernels) != 2 {
-		t.Fatalf("Machine().Kernels = %d rows, want 2", len(m.Kernels))
-	}
-	if m.Kernels[0].RowMajor {
-		t.Error("Q4_K row-major should be false: the packed column must not leak into it")
-	}
-	if !m.Kernels[0].Packed {
-		t.Error("Q4_K packed should be true: the row-major column must not leak into it")
-	}
-	if !m.Kernels[1].RowMajor || !m.Kernels[1].Packed {
-		t.Error("Q6_K should be generated in both families")
-	}
-}
-
 // Mem is the device-local heap, and it is the total rather than the free
 // figure: a report that quietly published free under a field named for the heap
 // would read as a much smaller card.
@@ -129,17 +99,5 @@ func TestMachineCarriesTheDeviceHeapAndNotTheFreeFigure(t *testing.T) {
 	}
 	if !m.GPUs[0].Unified {
 		t.Error("GPUs[0].Unified lost: a shared heap must be SUBTRACTED from the host budget, and a caller cannot know to do that if the flag does not survive")
-	}
-}
-
-func TestFormatNamesMatchesTheFormatList(t *testing.T) {
-	names := hardware.FormatNames()
-	if len(names) != len(quant.PackedTypes()) {
-		t.Fatalf("FormatNames() = %d, Formats = %d", len(names), len(quant.PackedTypes()))
-	}
-	for i, n := range names {
-		if n == "" {
-			t.Errorf("FormatNames()[%d] is empty", i)
-		}
 	}
 }

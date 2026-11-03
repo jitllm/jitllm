@@ -9,11 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/format/quant"
-
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/sched"
 )
 
@@ -83,79 +82,11 @@ func reportMem() {
 	fmt.Printf("          scalar unpinned probe, which is a LOWER BOUND on the real bandwidth\n")
 }
 
+// reportJIT is how the composer forms this host's CPU device.
 func reportJIT() {
-	// Show what a run would emit: engine/device/cpu reads no environment, so apply the
-	// same pins a run would.
-	num := func(k string) int {
-		n, _ := strconv.Atoi(os.Getenv(k))
-		return n
-	}
-	cpu.SetWidths(num("JITLLM_PACK"), num("JITLLM_ACCS"))
-	cpuConfigure()
-	// The window is the emitter's answer, not the model's: 256 only where the
-	// native k-quant kernel hoists the activation scale out of its sub-block
-	// loop, which requires an arm64 target.
-	fmt.Printf("jit       %s emitter   activation window %d with Q4_0/Q8_0, %d all-k-quant\n",
-		cpu.NativeArch(), cpu.Q8Block, cpu.WideActWindow([]quant.Type{quant.Q4_K}))
-	fmt.Printf("          tier      %s\n", cpu.TierReport())
-	fmt.Printf("          isa       %s\n", isa())
-	var ks []string
-	for _, t := range quant.PackedTypes() {
-		if !cpu.SupportedNative(t) {
-			ks = append(ks, fmt.Sprintf("%s none", t))
-			continue
-		}
-		ks = append(ks, fmt.Sprintf("%s pack%d accs%d", t, cpu.BestPackNative(t), cpu.BestAccs(t)))
-	}
-	fmt.Printf("          kernels   %s\n", strings.Join(ks, "  "))
-	// Two families, two lines. The line above is the GGUF row-major emitters,
-	// which a container never decodes through; on a pre-VNNI host it reads
-	// "none" while the packed family below runs everything.
-	var ps []string
-	for _, t := range quant.PackedTypes() {
-		switch {
-		case !cpu.PackedSupported(t):
-			ps = append(ps, fmt.Sprintf("%s none", t))
-		case !cpu.SupportedPackedNative(t):
-			ps = append(ps, fmt.Sprintf("%s declined", t))
-		default:
-			ps = append(ps, fmt.Sprintf("%s %s", t, cpu.HostDotLabel()))
-		}
-	}
-	fmt.Printf("          packed    %s   <- the container path\n", strings.Join(ps, "  "))
-	fmt.Printf("          pack width is re-tuned on real decode tokens and cached; JITLLM_PACK pins it.\n")
-	fmt.Printf("          every op a token runs is generated code; there is no interpreted tier\n")
-}
-
-// isa names what the row-major emitter emits, and whether this CPU can run it.
-// engine/device/cpu probes (CPUID leaf 7.1 EAX[4] on amd64, AT_HWCAP or sysctl on arm64)
-// On amd64 SupportedNative declines when the feature is absent; arm64 widens
-// SDOT instead (engine/device/cpu/sdotemu.go) and runs every kernel. This line is about
-// the GGUF row-major family only; the packed line is what a container runs.
-func isa() string {
-	switch cpu.NativeArch() {
-	case "amd64":
-		// Off the AVX2 tier the VNNI line would describe a tier this host
-		// cannot run; say which family is absent instead.
-		if cpu.HostTier() != cpu.TierAVX2 {
-			return "legacy SSE, no VEX: the GGUF row-major quantized kernels do not exist " +
-				"on this tier; the packed line below is what a container runs"
-		}
-		s := "AVX2 + AVX-VNNI, VEX-encoded VPDPBUSD"
-		if cpu.SupportedNative(quant.Q4_0) {
-			return s + " (probed: present)"
-		}
-		return s + " (probed: ABSENT -- the GGUF row-major kernels decline; the packed line below is what a container runs)"
-	case "arm64":
-		s := "NEON + FEAT_DotProd SDOT"
-		if !cpu.HasDotProd() {
-			s += " (probed: ABSENT -- every SDOT is widened to SMULL/SMLAL/ADDP/SADALP: the same bits, slower)"
-		} else {
-			s += " (probed: present)"
-		}
-		return s + "; i8mm unused, decode has one activation vector so SMMLA wastes half its tile"
-	}
-	return "unknown"
+	fmt.Printf("composer  %s\n", model.CPUForm())
+	fmt.Printf("          isa %s (%s)\n", cpu.CPU().ISA(), runtime.GOARCH)
+	fmt.Printf("          every kernel a model runs is formed at load for the device in front of it\n")
 }
 
 func reportGPU() {

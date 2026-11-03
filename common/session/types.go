@@ -60,20 +60,7 @@ type MachineReport struct {
 	// MemWall is measured memory read bandwidth, bytes a second; 0 unprobed.
 	MemWall float64
 
-	// Kernels is one row per quantization type.
-	Kernels []KernelRow
-	GPUs    []GPUInfo
-}
-
-// KernelRow says which kernel families exist for one quantization type on this
-// host. Both columns are shown: on a pre-VNNI host the row-major column reads
-// "none" for every k-quant while the packed family, which containers use, is
-// fully generated.
-type KernelRow struct {
-	Format   string
-	RowMajor bool
-	// Packed is the container path.
-	Packed bool
+	GPUs []GPUInfo
 }
 
 // GPUInfo is one device the backend probe found.

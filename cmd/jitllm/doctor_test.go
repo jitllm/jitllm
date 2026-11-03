@@ -17,7 +17,7 @@ import (
 
 // fakeEnv is a healthy machine: a code generator, no GPU, known memory.
 func fakeEnv() doctorEnv {
-	return doctorEnv{version: "test", cpuName: "fake", tier: "avx2", jit: true, totalRAM: 16 << 30,
+	return doctorEnv{version: "test", cpuName: "fake", form: "x86, wide passes", jit: true, totalRAM: 16 << 30,
 		budget: 8 << 30, hipAbsent: "no ROCm here", archKnown: jlm.Arch.Valid}
 }
 

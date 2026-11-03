@@ -16,7 +16,6 @@
 | `jitllm speed` / `batch` | prompt and decode rates, and batched decode |
 | `jitllm verify` | compare a device run with the host, position by position |
 | `jitllm bench` | one-core decode as a fraction of a memory read rate measured in the same process |
-| `jitllm asm Q4_K` | disassemble a generated CPU kernel |
 
 ## The models folder
 

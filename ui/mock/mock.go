@@ -520,12 +520,8 @@ func Report() hardware.Report {
 		PCores: []int{0, 2, 4, 6, 8, 10}, ECores: []int{12, 13, 14, 15, 16, 17, 18, 19},
 		SMT: []int{1, 3, 5, 7, 9, 11}, Decode: []int{0, 2, 4, 6, 8, 10}, RAMTotal: 31 << 30,
 		MemBudget: 15 << 30, GCBudgetCap: 24 << 30, MemWall: 55.7e9,
-		Arch: "amd64", ISA: "avx2 fma f16c avx-vnni", DotKind: "vpdpbusd",
-		Kernels: []hardware.Kernel{
-			{Format: "Q4_K", Native: true, NativeNote: "generated", Packed: true, PackedNote: "generated"},
-			{Format: "Q6_K", Native: true, NativeNote: "generated", Packed: true, PackedNote: "generated"},
-			{Format: "Q8_0", Native: true, NativeNote: "generated", Packed: true, PackedNote: "generated"},
-		},
+		Arch: "amd64", ISA: "sse2, sse3, ssse3, sse4.1, sse4.2, popcnt, avx2, fma, f16c, avx-vnni, bmi2",
+		Form: "x86, wide passes (AVX2, FMA, F16C), int8 dots by VPDPBUSD",
 		GPUs: []hardware.GPU{
 			{API: "cuda", Name: "NVIDIA GeForce RTX 3050 Ti Laptop GPU", Slots: 20, Free: 3_800_000_000, Total: 4 << 30},
 			{API: "vulkan", Name: "Intel(R) Iris(R) Xe Graphics", Slots: 96, Free: 20 << 30, Total: 20 << 30, Unified: true},

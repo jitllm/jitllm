@@ -188,11 +188,6 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 	if s.c.Q4E() {
 		return s.stepRowsStreams(src, out)
 	}
-	if s.c.PLEDim != 0 {
-		// A row here is an embedding without its token, and Gemma 4's
-		// per-layer inputs are built from the token.
-		return fmt.Errorf("model: a speculation step on the device of a model with per-layer embeddings")
-	}
 	c := s.c
 	n, nrot := src.len(), c.RopeW()
 	p0 := s.bpos[0]
@@ -231,19 +226,31 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		pos[j] = p0 + i
 		slot[j] = pos[j] // sequence 0's slots are its positions (nn.RowsDevice)
 	}
-	// The rows in order's order: the wanted last one first where order
-	// moved it there.
-	d := c.NEmbd
+	// The rows in order's order, the wanted last one first where order
+	// moved it there, their per-layer inputs beside them.
+	d, pw := c.NEmbd, c.pleWidth()
+	var ple []float32
+	if pw > 0 {
+		s.growBPLE(n)
+		ple = s.bple[:n*pw]
+	}
+	pleOf := func(a, b int) []float32 {
+		if ple == nil {
+			return nil
+		}
+		return ple[a*pw : b*pw]
+	}
 	if order[0] == n-1 && n > 1 {
-		if err := s.fillRows(src, n-1, 1, s.bx[:d], nil, pos[:1]); err != nil {
+		if err := s.fillRows(src, n-1, 1, s.bx[:d], pleOf(0, 1), pos[:1]); err != nil {
 			return err
 		}
-		if err := s.fillRows(src, 0, n-1, s.bx[d:n*d], nil, pos[1:]); err != nil {
+		if err := s.fillRows(src, 0, n-1, s.bx[d:n*d], pleOf(1, n), pos[1:]); err != nil {
 			return err
 		}
-	} else if err := s.fillRows(src, 0, n, s.bx[:n*d], nil, pos); err != nil {
+	} else if err := s.fillRows(src, 0, n, s.bx[:n*d], ple, pos); err != nil {
 		return err
 	}
+	s.layerInputs(ple)
 	s.cpu.tabsFresh = false
 	s.relocateFor(p0 + n)
 	rd, _ := s.onRowsDevice()

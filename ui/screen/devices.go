@@ -44,7 +44,7 @@ func Devices(sh *app.Shell) widget.Widget {
 			primitives.Expanded(card(sh, "GPUs", devices(sh))),
 			primitives.Expanded(card(sh, "This computer", primitives.VBox(host(sh), budgets(sh)).Gap(p.Space.S))),
 		).Gap(p.Space.M),
-		card(sh, "Kernels", kernels(sh)),
+		card(sh, "Composer", composerCard(sh)),
 	).Gap(p.Space.M).CrossAlign(primitives.CrossAxisStretch).Padding(p.Space.L)
 
 	return primitives.Box(primitives.VBox(
@@ -447,35 +447,15 @@ func budgets(sh *app.Shell) widget.Widget {
 	)
 }
 
-func kernels(sh *app.Shell) widget.Widget {
-	rows := []widget.Widget{
-		primitives.HBox(
-			col(sh, sh.P.Role(primitives.Text("format").Color(sh.P.Muted()), sh.P.Type.LabelMedium), 90),
-			col(sh, sh.P.Role(primitives.Text("row-major (GGUF)").Color(sh.P.Muted()), sh.P.Type.LabelMedium), 170),
-			sh.P.Role(primitives.Text("packed  <- used to run models").Color(sh.P.Text()), sh.P.Type.LabelMedium),
-		),
-	}
-	for i := range hardware.FormatNames() {
-		rows = append(rows, primitives.HBox(
-			col(sh, line(sh, machine(sh, func(r hardware.Report) string { return hardware.KernelCell(r, i, 0) })), 90),
-			col(sh, line(sh, machine(sh, func(r hardware.Report) string { return hardware.KernelCell(r, i, 1) })), 170),
-			line(sh, machine(sh, func(r hardware.Report) string { return hardware.KernelCell(r, i, 2) })),
-		))
-	}
-
-	rows = append(rows,
-		primitives.Box().Height(6),
+func composerCard(sh *app.Shell) widget.Widget {
+	return primitives.VBox(
+		kv(sh, "cpu form", machine(sh, func(r hardware.Report) string { return r.Form })),
 		kv(sh, "isa", machine(sh, func(r hardware.Report) string { return r.ISA })),
-		kv(sh, "int8 dot", machine(sh, func(r hardware.Report) string { return r.DotKind })),
-		// Two columns because the row-major family reads GGUF blocks, which a
-		// container never decodes through; a host can read none there and still be
-		// fully generated through the packed one.
 		note(sh,
-			"Models run through the packed column. The row-major kernels only read GGUF",
-			"files, which are converted before loading, so `none` there is normal.",
+			"Every kernel a model runs is formed at load for the device in front of it,",
+			"from the model's graph and the instruction sets above.",
 		),
 	)
-	return primitives.VBox(rows...)
 }
 
 // deviceSlots is how many devices this page can draw. An unused slot has

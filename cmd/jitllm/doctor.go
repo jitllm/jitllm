@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -56,8 +56,8 @@ type doctorHost struct {
 	OS   string `json:"os"`
 	Arch string `json:"arch"`
 	CPU  string `json:"cpu"`
-	// Tier is the code generator's tier on this CPU.
-	Tier string `json:"tier"`
+	// Form is how the composer forms this CPU's kernels (model.CPUForm).
+	Form string `json:"cpu_form"`
 	// JIT is whether this build has a code generator for this host at all.
 	JIT bool `json:"jit"`
 }
@@ -112,7 +112,7 @@ type doctorProblem struct {
 type doctorEnv struct {
 	version   string
 	cpuName   string
-	tier      string
+	form      string
 	jit       bool
 	hostErr   error // nn.HostRefusal
 	totalRAM  uint64
@@ -128,7 +128,7 @@ func realDoctorEnv() doctorEnv {
 	env := doctorEnv{
 		version:   buildVersion(),
 		cpuName:   cpuBrand(),
-		tier:      cpu.TierReport(),
+		form:      model.CPUForm(),
 		jit:       nn.Available(),
 		hostErr:   nn.HostRefusal(),
 		budget:    sched.MemBudget(),
@@ -173,7 +173,7 @@ func backendName(api string) string {
 func diagnose(env doctorEnv, container string) (doctorReport, error) {
 	r := doctorReport{
 		Build:    capabilities.Identity(env.version),
-		Host:     doctorHost{OS: runtime.GOOS, Arch: runtime.GOARCH, CPU: env.cpuName, Tier: env.tier, JIT: env.jit},
+		Host:     doctorHost{OS: runtime.GOOS, Arch: runtime.GOARCH, CPU: env.cpuName, Form: env.form, JIT: env.jit},
 		Memory:   doctorMemory{Total: env.totalRAM, Budget: env.budget},
 		Devices:  env.devices,
 		Problems: []doctorProblem{},
@@ -354,7 +354,7 @@ func doctorPrint(w io.Writer, asJSON bool, r doctorReport) int {
 	}
 	fmt.Fprintf(w, "build     %s (%s) %s\n", r.Build.Version, rev, r.Build.Go)
 	fmt.Fprintf(w, "host      %s/%s  %s\n", r.Host.OS, r.Host.Arch, r.Host.CPU)
-	fmt.Fprintf(w, "          tier %s; code generator %v\n", r.Host.Tier, r.Host.JIT)
+	fmt.Fprintf(w, "          composer %s; code generator %v\n", r.Host.Form, r.Host.JIT)
 	fmt.Fprintf(w, "memory    %s total, budget %s\n", gib(r.Memory.Total), gib(r.Memory.Budget))
 	for _, d := range r.Devices {
 		fmt.Fprintf(w, "device    %-6s %s  %s free of %s\n", d.Backend, d.Name, gib(d.FreeBytes), gib(d.TotalBytes))
