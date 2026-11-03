@@ -102,3 +102,15 @@ func decomposeEmbedRows(o graph.Op, c *Context, w graph.Binding, wo Operand) ([]
 	}
 	return []Prim{{Kind: PrimMap, Shape: []int{R, H, W}, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
 }
+
+// decomposeToken is each row's token, read off the step's tokens table.
+func decomposeToken(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 0 || len(o.Out) != 1 || c.width(o.Out[0]) != 1 {
+		return nil, fmt.Errorf("a token of %d inputs into %d outputs", len(o.In), len(o.Out))
+	}
+	R := c.Step.Rows
+	var x exprs
+	x.load(0, x.coord(0))
+	return []Prim{{Kind: PrimMap, Shape: []int{R, 1}, In: []Operand{TableTokens.op()}, Out: c.value(o.Out[0]), Expr: x.e,
+		Facts: Facts{Extents: map[int]int{0: R}}}}, nil
+}

@@ -223,6 +223,10 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || o.Attr.Offset < 0 || o.Attr.Span < 0 {
 				bad("%s: %d inputs into %d outputs, offset %d and span %d", at, len(o.In), len(o.Out), o.Attr.Offset, o.Attr.Span)
 			}
+		case OpToken:
+			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || g.Values[o.Out[0]].Elem != ElemU32 {
+				bad("%s: %d inputs into %d outputs, not one index a row", at, len(o.In), len(o.Out))
+			}
 		case OpNGramHash:
 			n, per := 0, o.Attr.Span
 			if len(o.In) == 1 {

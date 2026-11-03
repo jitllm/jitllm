@@ -285,6 +285,9 @@ const (
 	// and a row before every mark turns at its position. Out[0] is four
 	// indices a row. A primitive.
 	OpRopePos
+	// OpToken is each row's token, the step's own: Out[0] one index (u32) a
+	// row. A primitive.
+	OpToken
 	numOps
 )
 
@@ -382,6 +385,8 @@ func (k OpKind) String() string {
 		return "put"
 	case OpRopePos:
 		return "rope_pos"
+	case OpToken:
+		return "token"
 	}
 	return fmt.Sprintf("op%d", k)
 }
