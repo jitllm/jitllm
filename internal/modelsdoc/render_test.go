@@ -25,7 +25,7 @@ func TestEveryNameNeedsALine(t *testing.T) {
 		{"a line naming nothing", func(l *lines) { l.gguf["llama9"] = "Llama 9" }, "llama9"},
 	}
 	for _, c := range cases {
-		l := lines{gguf: maps.Clone(ggufModels), hf: maps.Clone(hfModels), projector: maps.Clone(projectorModels)}
+		l := lines{gguf: maps.Clone(ggufModels()), hf: maps.Clone(hfModels()), projector: maps.Clone(projectorModels())}
 		c.edit(&l)
 		_, err := render(l)
 		if err == nil || !strings.Contains(err.Error(), c.want) {

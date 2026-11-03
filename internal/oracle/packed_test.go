@@ -17,7 +17,7 @@ import (
 // proves the pack is a pure permutation, where two readers of the same layout
 // agreeing would prove nothing. The formats come from quant.PackedTypes so a
 // new one cannot be missed.
-var packedRefFormats = func() (fs []struct {
+func packedRefFormats() (fs []struct {
 	name string
 	g    quant.Type
 	k    layout.Quant
@@ -34,7 +34,7 @@ var packedRefFormats = func() (fs []struct {
 		}{g.String(), g, k})
 	}
 	return fs
-}()
+}
 
 // plant gives every block finite scales; random bytes are not a valid block.
 func plant(t *testing.T, g quant.Type, src []byte, seed int) {
@@ -55,7 +55,7 @@ func TestPackedRefMatchesDequant(t *testing.T) {
 	// Row counts that are not multiples of eight on purpose: a row-stride bug
 	// is invisible at a count the tile divides. 300 also crosses PackWeights'
 	// 256-row fan-out, exercising both packers.
-	for _, f := range packedRefFormats {
+	for _, f := range packedRefFormats() {
 		for _, nrows := range []int{9, 300} {
 			t.Run(f.name, func(t *testing.T) {
 				const k = 512
@@ -117,7 +117,7 @@ func TestPackedRefMatchesDequant(t *testing.T) {
 // text. Every row is checked, since a bug in the `si*words*nrows + r` stride is
 // invisible on row 0.
 func TestRowPackedMatchesDequant(t *testing.T) {
-	for _, f := range packedRefFormats {
+	for _, f := range packedRefFormats() {
 		for _, nrows := range []int{9, 300} {
 			t.Run(f.name, func(t *testing.T) {
 				const k = 512
@@ -187,7 +187,7 @@ func TestPackedPayloadIsNativeWidth(t *testing.T) {
 		quant.TQ2_0:   2, // the 2-bit plane: four fields a byte (kernels.Fields)
 		quant.TQ2_F32: 2,
 	}
-	for _, f := range packedRefFormats {
+	for _, f := range packedRefFormats() {
 		bits, ok := native[f.g]
 		if !ok {
 			t.Errorf("%s: no native width recorded here", f.name)

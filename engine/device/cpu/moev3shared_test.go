@@ -118,11 +118,11 @@ func TestMoERouteRefusesShapesItCannotServe(t *testing.T) {
 // modeling_deepseek.py disagree about this router are a reviewed list, and an
 // empty list would mean nobody looked.
 func TestMoERouteDivergencesAreRecorded(t *testing.T) {
-	if len(oracle.MoEDivergences) < 3 {
+	if len(oracle.MoEDivergences()) < 3 {
 		t.Fatalf("only %d divergence(s) recorded between the two authorities",
-			len(oracle.MoEDivergences))
+			len(oracle.MoEDivergences()))
 	}
-	for _, d := range oracle.MoEDivergences {
+	for _, d := range oracle.MoEDivergences() {
 		for i, s := range d {
 			if s == "" {
 				t.Errorf("divergence %q has an empty field %d", d[0], i)

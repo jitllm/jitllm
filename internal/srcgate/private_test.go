@@ -43,7 +43,7 @@ func TestNoPrivateValuesInTrackedFiles(t *testing.T) {
 		t.Fatalf("found %d files under %s: the tree was not found, so this gate proved nothing", len(files), root)
 	}
 	self := filepath.ToSlash(filepath.Join("internal", "srcgate", "private_test.go"))
-	privateNames = localPrivateNames(t, root)
+	privateNames := localPrivateNames(t, root)
 
 	var (
 		mu    sync.Mutex
@@ -61,7 +61,7 @@ func TestNoPrivateValuesInTrackedFiles(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for rel := range next {
-				for _, f := range privateValuesIn(root, rel, rel == self) {
+				for _, f := range privateValuesIn(root, rel, rel == self, privateNames) {
 					report(f)
 				}
 			}
@@ -120,16 +120,13 @@ func trackedFiles(t *testing.T, root string) []string {
 	return files
 }
 
-// privateNames are strings that identify a person, a host or a key and have no
-// business in a public tree, whatever the context. The specific ones cannot be
-// spelled here -- this file is public, and the list would publish what it
-// guards -- so they live one per line in local-private-names at the root of a
-// checkout, which .gitignore keeps out of the tree like every local-* file.
-// A checkout without that file runs the generic checks alone.
-var privateNames []string
-
-// localPrivateNames reads root/local-private-names: one name per line, blank
-// lines and #-comments ignored, compared case-insensitively.
+// localPrivateNames reads root/local-private-names: strings that identify a
+// person, a host or a key and have no business in a public tree, whatever the
+// context. The specific ones cannot be spelled here -- this file is public,
+// and the list would publish what it guards -- so they live one per line at
+// the root of a checkout, which .gitignore keeps out of the tree like every
+// local-* file. A checkout without that file runs the generic checks alone.
+// Blank lines and #-comments are ignored, names compared case-insensitively.
 func localPrivateNames(t *testing.T, root string) []string {
 	b, err := os.ReadFile(filepath.Join(root, "local-private-names"))
 	if os.IsNotExist(err) {
@@ -149,21 +146,25 @@ func localPrivateNames(t *testing.T, root string) []string {
 	return names
 }
 
-var (
-	homePath = regexp.MustCompile(`/(home|media|Users)/([A-Za-z0-9_.$<>{}-]+)`)
-	svgPath  = regexp.MustCompile(`\bd=\\?"[^"]*"`)
-)
+func homePath() *regexp.Regexp {
+	return regexp.MustCompile(`/(home|media|Users)/([A-Za-z0-9_.$<>{}-]+)`)
+}
 
-// placeholderUsers are the user names documentation uses for "somebody".
-var placeholderUsers = map[string]bool{
-	"u": true, "user": true, "you": true, "me": true, "USER": true,
-	"$USER": true, "${USER}": true, "<user>": true, "example": true,
+func svgPath() *regexp.Regexp { return regexp.MustCompile(`\bd=\\?"[^"]*"`) }
+
+// placeholderUser is a user name documentation uses for "somebody".
+func placeholderUser(name string) bool {
+	switch name {
+	case "u", "user", "you", "me", "USER", "$USER", "${USER}", "<user>", "example":
+		return true
+	}
+	return false
 }
 
 // privateValuesIn returns one line per finding in the file at rel. The whole
 // file is scanned at once and a line number is worked out only for a finding,
 // because most of the bytes are numeric goldens that contain nothing.
-func privateValuesIn(root, rel string, self bool) []string {
+func privateValuesIn(root, rel string, self bool, privateNames []string) []string {
 	var found []string
 	base := filepath.Base(rel)
 	if base == "CLAUDE.md" || strings.HasPrefix(base, "local-") {
@@ -195,8 +196,8 @@ func privateValuesIn(root, rel string, self bool) []string {
 		}
 	}
 	if bytes.Contains(b, []byte("/home/")) || bytes.Contains(b, []byte("/media/")) || bytes.Contains(b, []byte("/Users/")) {
-		for _, m := range homePath.FindAllSubmatchIndex(b, -1) {
-			if user := string(b[m[4]:m[5]]); !placeholderUsers[user] {
+		for _, m := range homePath().FindAllSubmatchIndex(b, -1) {
+			if user := string(b[m[4]:m[5]]); !placeholderUser(user) {
 				found = append(found, fmt.Sprintf("%s:%d: personal path %q", rel, line(m[0]), b[m[0]:m[1]]))
 			}
 		}
@@ -204,7 +205,7 @@ func privateValuesIn(root, rel string, self bool) []string {
 	text := b
 	if bytes.Contains(b, []byte(`d="`)) || bytes.Contains(b, []byte(`d=\"`)) {
 		// Blank SVG path data in place, so offsets still name the line.
-		text = svgPath.ReplaceAllFunc(bytes.Clone(b), func(m []byte) []byte {
+		text = svgPath().ReplaceAllFunc(bytes.Clone(b), func(m []byte) []byte {
 			return bytes.Repeat([]byte{' '}, len(m))
 		})
 	}

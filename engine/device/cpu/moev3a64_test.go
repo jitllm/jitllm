@@ -37,7 +37,7 @@ func TestMoERouteA64MatchesTheOracle(t *testing.T) {
 // TestMoERouteA64Violations: the same defects, injected into the oracle,
 // must make the comparison go red here too.
 func TestMoERouteA64Violations(t *testing.T) {
-	for _, f := range oracle.MoEFaults {
+	for _, f := range oracle.MoEFaults() {
 		t.Run(strings.ReplaceAll(f.String(), " ", "_"), func(t *testing.T) {
 			var first string
 			hits := moeV3RunAll(t, moeV3KernelA64, f, func(s string) { first = s })
