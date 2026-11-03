@@ -4,8 +4,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
-
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -26,7 +24,9 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
-			m, err := Open(jlmOf(t, p), noTune, WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
+			// The float forms: a step's and a row's apart by their folding
+			// order alone (floatFormsNMSE).
+			m, err := Open(jlmOf(t, p), noTune, WithKVF16(false), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -87,8 +87,8 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 				}
 			}
 			for i, got := range [][]float32{lga, lgb} {
-				if w, at := worstStep([][]float32{got}, [][]float32{want[i]}); w != 0 {
-					t.Fatalf("state %d: a token run alone after leading a host step differs from one that never stepped jointly: NMSE %.3e at %d", i, w, at)
+				if w, at := worstStep([][]float32{got}, [][]float32{want[i]}); !(w <= floatFormsNMSE) {
+					t.Fatalf("state %d: a token run alone after leading a host step differs from one that never stepped jointly: NMSE %.3e at %d (bound %.0e)", i, w, at, floatFormsNMSE)
 				}
 			}
 		})

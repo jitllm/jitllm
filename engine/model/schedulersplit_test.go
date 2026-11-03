@@ -150,6 +150,14 @@ func schedulerOnSplit(t *testing.T, p string) {
 		{"paged", "cuda:0=" + budget, -1, 1, false, nil, true},
 	} {
 		t.Run(arm.name, func(t *testing.T) {
+			// The second card is whichever Vulkan device the selection holds.
+			if strings.Contains(arm.spec, "vulkan:1") {
+				vk := testdevices.Like(t, "vulkan:1")
+				arm.spec = strings.ReplaceAll(arm.spec, "vulkan:1", vk)
+				if arm.place != nil {
+					arm.place = sandwich(vk)
+				}
+			}
 			if arm.devs == 4 && len(four) < 4 {
 				t.Skipf("%s -- this arm proved nothing here", fourWhy)
 			}

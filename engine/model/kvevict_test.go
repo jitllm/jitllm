@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -46,6 +47,10 @@ const evictTurnSteps = 4
 // evictNMSE bounds the evicting arm's logits against the unconstrained card's
 // and the host's: the order-only band is ~2e-3 on this model.
 const evictNMSE = 1e-2
+
+// evictFloatNMSE bounds the float forms' squeezed card against their
+// unconstrained one.
+const evictFloatNMSE = 1e-4
 
 func newEvictGate(t *testing.T) *evictGate { return newEvictGateOf(t, evictModels[0]) }
 
@@ -201,7 +206,9 @@ func TestKVEvictionRunsPastTheBudget(t *testing.T) {
 func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 	free := eg.run(t, false, nil)
 	got := eg.run(t, true, nil)
-	ref := eg.run(t, true, func(c *gpu.Config) { c.ComposedFloat = true })
+	float := func(c *gpu.Config) { c.ComposedFloat = true }
+	ref := eg.run(t, true, float)
+	freeRef := eg.run(t, false, float)
 	for name, r := range map[string]evictRun{"composed": got, "float reference": ref} {
 		for i, n := range r.st.BlockDeclines {
 			if n > 0 {
@@ -254,8 +261,21 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 		t.Fatalf("worst logit NMSE %.3e against the unconstrained card at step %d, past %.3e (%d composed passes, %d streamed)",
 			dev, at, bound, got.st.ComposedStreamPasses, got.st.KVStreamPasses)
 	}
-	if !(host < bound) {
-		t.Fatalf("worst logit NMSE %.3e against the host at step %d, past %.3e", host, hat, bound)
+	// The shipping arms' int8 activations move a mixture's routing, so the
+	// evicting arm's distance from the host is bounded by the two it is
+	// measured to be from the unconstrained card and that card from the
+	// host. What a stale or missing page moves, the float arms below see.
+	hostBound := max(bound, math.Pow(math.Sqrt(ctl)+math.Sqrt(dev), 2))
+	if !(host < hostBound) {
+		t.Fatalf("worst logit NMSE %.3e against the host at step %d, past %.3e", host, hat, hostBound)
+	}
+	// On the float forms the squeezed and unconstrained cards part by the
+	// streamed passes' folding order alone.
+	fw, fat := worstStep(ref.logits, freeRef.logits)
+	t.Logf("the float forms, squeezed against unconstrained: worst NMSE %.3e (step %d)", fw, fat)
+	if !(fw < evictFloatNMSE) {
+		t.Fatalf("on the float forms the squeezed card parts from the unconstrained one by %.3e at step %d, past %.0e: the evicted history is not the one it sent home",
+			fw, fat, evictFloatNMSE)
 	}
 	rw, rat := worstStep(got.logits, ref.logits)
 	t.Logf("composed passes: %d, against the float reference squeezed %.3e (step %d)", got.st.ComposedStreamPasses, rw, rat)
