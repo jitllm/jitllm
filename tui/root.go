@@ -59,7 +59,7 @@ func (k helpKeys) FullHelp() [][]key.Binding { return [][]key.Binding{k} }
 func newRoot(f *front, e engine.Driver, cfg *config.Config, dirs []string) *root {
 	env := &env{
 		f: f, e: e, cfg: cfg, dirs: dirs, keys: newGlobalKeys(), tele: &telemetry{},
-		spin: spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(sBrand)),
+		spin: spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(sBrand())),
 	}
 	env.jobs = newJobs(env)
 	r := &root{env: env, cur: scrModels, splashing: true}
@@ -70,10 +70,10 @@ func newRoot(f *front, e engine.Driver, cfg *config.Config, dirs []string) *root
 	r.settings = newSettingsPage(env)
 	r.pages = []page{r.chat, r.models, r.discover, r.engine, r.settings}
 	r.help = help.New()
-	r.help.Styles.ShortKey = sMuted.Bold(true)
-	r.help.Styles.ShortDesc = sDim
-	r.help.Styles.ShortSeparator = sDim
-	r.help.Styles.Ellipsis = sDim
+	r.help.Styles.ShortKey = sMuted().Bold(true)
+	r.help.Styles.ShortDesc = sDim()
+	r.help.Styles.ShortSeparator = sDim()
+	r.help.Styles.Ellipsis = sDim()
 	return r
 }
 
@@ -264,12 +264,12 @@ func (r *root) View() string {
 func (r *root) header() string {
 	st := r.env.f.st
 	left := pill("◆ jitllm", cBg, cBrand) + " "
-	for i, n := range screenNames {
+	for i, n := range screenNames() {
 		fkey := fmt.Sprintf("F%d", i+1)
 		if screen(i) == r.cur {
-			left += " " + sBrand.Render(n)
+			left += " " + sBrand().Render(n)
 		} else if r.w >= 110 {
-			left += " " + sDim.Render(fkey+" ") + sMuted.Render(n)
+			left += " " + sDim().Render(fkey+" ") + sMuted().Render(n)
 		}
 	}
 	var right string
@@ -278,11 +278,11 @@ func (r *root) header() string {
 		right = r.env.jobs.header()
 	case len(st.Loads.Get()) > 0:
 		l := st.Loads.Get()[0]
-		right = r.env.spin.View() + " " + sMuted.Render("loading "+filepath.Base(l.Path)+" · "+l.Stage)
+		right = r.env.spin.View() + " " + sMuted().Render("loading "+filepath.Base(l.Path)+" · "+l.Stage)
 	case st.Streaming.Get():
-		right = r.env.spin.View() + " " + sBrand.Render("generating")
+		right = r.env.spin.View() + " " + sBrand().Render("generating")
 		if v := st.DecodeTokS.Get(); v > 0 {
-			right += sMuted.Render(fmt.Sprintf(" · %.1f tok/s", v))
+			right += sMuted().Render(fmt.Sprintf(" · %.1f tok/s", v))
 		}
 	case st.Active.Get() != "":
 		colour, _ := activeModel(r.env)
@@ -290,7 +290,7 @@ func (r *root) header() string {
 		if r.env.cfg.Chat {
 			mode = "chat"
 		}
-		right = pill(strings.TrimSuffix(filepath.Base(st.Active.Get()), ".jlm"), cBg, colourOf(colour, modelColours)) + " " + sDim.Render(mode)
+		right = pill(strings.TrimSuffix(filepath.Base(st.Active.Get()), ".jlm"), cBg, colourOf(colour, modelColours())) + " " + sDim().Render(mode)
 	}
 	right = ansi.Truncate(right, max(0, r.w-lipgloss.Width(left)-3), "…")
 	gap := max(1, r.w-lipgloss.Width(left)-lipgloss.Width(right)-2)
@@ -311,11 +311,11 @@ func (r *root) footer() string {
 		left = r.help.View(helpKeys{r.palette.keys.Up, r.palette.keys.Run, r.palette.keys.Close})
 	}
 	if r.toast != "" {
-		left = pill("✓", cBg, cBrand) + " " + sFg.Render(r.toast)
+		left = pill("✓", cBg, cBrand) + " " + sFg().Render(r.toast)
 	}
 	// The engine badge is always shown, whatever else gives way: which engine
 	// this is cannot be a thing that scrolls off.
-	badge := sMuted.Render(r.env.badge())
+	badge := sMuted().Render(r.env.badge())
 	if r.env.where.Lost {
 		badge = pill(r.env.badge(), cBg, cRed)
 	}
@@ -325,7 +325,7 @@ func (r *root) footer() string {
 	room := r.w - 7 - lipgloss.Width(left) - lipgloss.Width(badge)
 	right := badge
 	if room > 16 {
-		right = ansi.Truncate(sDim.Render(r.env.f.st.Status.Get()), room, "…") + sDim.Render(" · ") + badge
+		right = ansi.Truncate(sDim().Render(r.env.f.st.Status.Get()), room, "…") + sDim().Render(" · ") + badge
 	}
 	line := " " + left + strings.Repeat(" ", max(1, r.w-2-lipgloss.Width(left)-lipgloss.Width(right))) + right + " "
 	return ansi.Truncate(line, r.w, "")
@@ -336,7 +336,7 @@ func (r *root) footer() string {
 func (r *root) splashView() string {
 	tag := ""
 	if r.splash.built() {
-		tag = sDim.Render("an inference OS: every kernel generated for the machine in front of it")
+		tag = sDim().Render("an inference OS: every kernel generated for the machine in front of it")
 	}
 	return r.splash.String() + "\n\n" + lipgloss.PlaceHorizontal(r.w, lipgloss.Center, tag)
 }

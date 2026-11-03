@@ -89,7 +89,9 @@ func (s *series) stats() (last, peak, mean float64) {
 	return s.v[len(s.v)-1], peak, mean / float64(len(s.v))
 }
 
-var sparks = []rune("▁▂▃▄▅▆▇█")
+func sparks() []rune {
+	return []rune("▁▂▃▄▅▆▇█")
+}
 
 // chart is the last w samples as bars h rows tall, scaled to the peak.
 func (s *series) chart(w, h int, c lipgloss.Color) string {
@@ -113,7 +115,7 @@ func (s *series) chart(w, h int, c lipgloss.Color) string {
 			case lvl <= 0:
 				rows[r].WriteString(" ")
 			default:
-				rows[r].WriteString(st.Render(string(sparks[lvl-1])))
+				rows[r].WriteString(st.Render(string(sparks()[lvl-1])))
 			}
 		}
 	}
@@ -146,7 +148,7 @@ func (t *telemetry) grid(bm []byte, w int, big bool, frame int) string {
 				if r == 0 {
 					label = fmt.Sprintf("%3d  ", start)
 				}
-				b.WriteString(sDim.Render(label))
+				b.WriteString(sDim().Render(label))
 			}
 			for i := start; i < end; i++ {
 				if i > start {
@@ -171,7 +173,7 @@ func (t *telemetry) cell(raw byte, i, cw int, big bool, frame int) string {
 	}
 	switch {
 	case p.Device() >= 0:
-		col = colourOf(p.Device(), deviceColours)
+		col = colourOf(p.Device(), deviceColours())
 	case p.Resident():
 	default:
 		col = cLine
@@ -213,14 +215,14 @@ func blockLegend(bm []byte) string {
 		}
 	}
 	sq := func(c lipgloss.Color) string { return lipgloss.NewStyle().Foreground(c).Render("■") }
-	parts := []string{sq(cBrand) + sDim.Render(fmt.Sprintf(" host %d", host))}
-	for k := range deviceColours {
+	parts := []string{sq(cBrand) + sDim().Render(fmt.Sprintf(" host %d", host))}
+	for k := range deviceColours() {
 		if n := dev[k]; n > 0 {
-			parts = append(parts, sq(colourOf(k, deviceColours))+sDim.Render(fmt.Sprintf(" gpu%d %d", k, n)))
+			parts = append(parts, sq(colourOf(k, deviceColours()))+sDim().Render(fmt.Sprintf(" gpu%d %d", k, n)))
 		}
 	}
 	if paged > 0 {
-		parts = append(parts, sDim.Render(fmt.Sprintf("□ paged %d", paged)))
+		parts = append(parts, sDim().Render(fmt.Sprintf("□ paged %d", paged)))
 	}
 	return strings.Join(parts, "  ")
 }

@@ -75,11 +75,11 @@ func newPrompt() *prompt {
 	ta.KeyMap.InsertNewline = k.Newline
 	focused := ta.FocusedStyle
 	focused.CursorLine = lipgloss.NewStyle()
-	focused.Placeholder = sDim
-	focused.Text = sFg
+	focused.Placeholder = sDim()
+	focused.Text = sFg()
 	ta.FocusedStyle = focused
 	blurred := focused
-	blurred.Text = sMuted
+	blurred.Text = sMuted()
 	ta.BlurredStyle = blurred
 	return &prompt{ta: ta, keys: k}
 }
@@ -154,10 +154,10 @@ func (p *prompt) menu() string {
 		}
 		row := fmt.Sprintf(" %-20s %s ", name, c.help)
 		if i == 0 {
-			b.WriteString(lipgloss.NewStyle().Foreground(cBg).Background(cBrand).Bold(true).Render(row) + sDim.Render(" tab") + "\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(cBg).Background(cBrand).Bold(true).Render(row) + sDim().Render(" tab") + "\n")
 		} else {
-			b.WriteString(sFg.Render(row) + "\n")
+			b.WriteString(sFg().Render(row) + "\n")
 		}
 	}
-	return sCard.BorderForeground(cBrand).Background(cPanel).Render(strings.TrimRight(b.String(), "\n"))
+	return sCard().BorderForeground(cBrand).Background(cPanel).Render(strings.TrimRight(b.String(), "\n"))
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"sync"
 
+	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/engine"
 	"github.com/jitllm/jitllm/common/session"
 )
@@ -94,7 +95,12 @@ type front struct {
 	turns     []session.Turn
 	thinkOpen map[int]bool
 	alert     string
+
+	crashes crash.Guard
 }
+
+// Crashes is where a panic in an engine command is reported.
+func (f *front) Crashes() *crash.Guard { return &f.crashes }
 
 func newFront() *front {
 	return &front{queue: make(chan any, 256), thinkOpen: map[int]bool{}}

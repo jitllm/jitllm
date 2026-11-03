@@ -20,7 +20,8 @@ import (
 	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
 
-var updateGolden = flag.Bool("update", false, "rewrite the demo's golden text from what it renders now")
+// updateGolden is the -update flag TestMain registers.
+func updateGolden() bool { return flag.Lookup("update").Value.String() == "true" }
 
 // fixturePlacement is eight blocks of a model loaded on two cards: blocks 0-3
 // on cuda:0, 4-5 on vulkan:1, 6-7 on the host. Each block holds 4 KiB a
@@ -57,7 +58,7 @@ func golden(t *testing.T, name, got string) {
 	t.Helper()
 	got = stripANSI(got) + "\n"
 	path := filepath.Join("testdata", name)
-	if *updateGolden {
+	if updateGolden() {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatal(err)
 		}

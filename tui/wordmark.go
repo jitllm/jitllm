@@ -15,17 +15,19 @@ const (
 	wordH = 21
 )
 
-var wordRects = [][4]int{
-	{3, 0, 3, 3}, {3, 5, 3, 15}, {0, 18, 5, 3}, // j
-	{9, 0, 3, 3}, {9, 5, 3, 12}, // i
-	{17, 1, 3, 16}, {15, 5, 8, 3}, {20, 14, 3, 3}, // t
-	{26, 0, 3, 17}, {32, 0, 3, 17}, // l l
-	{38, 5, 14, 3}, {38, 5, 3, 12}, {44, 5, 3, 12}, {50, 6, 3, 11}, // m
+func wordRects() [][4]int {
+	return [][4]int{
+		{3, 0, 3, 3}, {3, 5, 3, 15}, {0, 18, 5, 3}, // j
+		{9, 0, 3, 3}, {9, 5, 3, 12}, // i
+		{17, 1, 3, 16}, {15, 5, 8, 3}, {20, 14, 3, 3}, // t
+		{26, 0, 3, 17}, {32, 0, 3, 17}, // l l
+		{38, 5, 14, 3}, {38, 5, 3, 12}, {44, 5, 3, 12}, {50, 6, 3, 11}, // m
+	}
 }
 
-var wordOn = func() [wordH][wordW]bool {
+func wordOn() [wordH][wordW]bool {
 	var on [wordH][wordW]bool
-	for _, r := range wordRects {
+	for _, r := range wordRects() {
 		for y := r[1]; y < r[1]+r[3]; y++ {
 			for x := r[0]; x < r[0]+r[2]; x++ {
 				on[y][x] = true
@@ -33,33 +35,36 @@ var wordOn = func() [wordH][wordW]bool {
 		}
 	}
 	return on
-}()
+}
 
 // The website's green theme (themes.css): the wordmark cools from crest to
 // dim, top to bottom, in bands of rows.
 type rgb struct{ r, g, b uint8 }
 
-var (
-	fCrest = rgb{0xda, 0xec, 0xc6}
-	fHover = rgb{0xbb, 0xdd, 0x97}
-	fLit   = rgb{0x9e, 0xce, 0x6a}
-	fMid   = rgb{0x67, 0x85, 0x49}
-	fDim   = rgb{0x39, 0x48, 0x2e}
-)
+func fCrest() rgb { return rgb{0xda, 0xec, 0xc6} }
+func fHover() rgb { return rgb{0xbb, 0xdd, 0x97} }
+func fLit() rgb   { return rgb{0x9e, 0xce, 0x6a} }
+func fMid() rgb   { return rgb{0x67, 0x85, 0x49} }
+func fDim() rgb   { return rgb{0x39, 0x48, 0x2e} }
 
-var bands = []struct {
+func bands() []struct {
 	c    rgb
 	rows int
-}{{fCrest, 5}, {fHover, 3}, {fLit, 5}, {fMid, 4}, {fDim, 4}}
+} {
+	return []struct {
+		c    rgb
+		rows int
+	}{{fCrest(), 5}, {fHover(), 3}, {fLit(), 5}, {fMid(), 4}, {fDim(), 4}}
+}
 
 func bandOf(row int) rgb {
-	for _, b := range bands {
+	for _, b := range bands() {
 		if row < b.rows {
 			return b.c
 		}
 		row -= b.rows
 	}
-	return fDim
+	return fDim()
 }
 
 func mix(a, b rgb, t float64) rgb {
@@ -127,14 +132,15 @@ func hash(x, y, z int) float64 {
 func wordmark(scale, phase int) string {
 	c := newCanvas(wordW*scale, wordH*scale)
 	scan := float64(phase%(wordW+60)) - 10
+	on := wordOn()
 	for y := 0; y < wordH; y++ {
 		for x := 0; x < wordW; x++ {
-			if !wordOn[y][x] {
+			if !on[y][x] {
 				continue
 			}
 			col := bandOf(y)
 			if d := math.Abs(float64(x) - scan); d < 1.5 {
-				col = mix(col, fCrest, 1-d/1.5)
+				col = mix(col, fCrest(), 1-d/1.5)
 			}
 			for dy := 0; dy < scale; dy++ {
 				for dx := 0; dx < scale; dx++ {
@@ -175,9 +181,10 @@ func newCompile(cols, rows int) *compile {
 	c := &compile{start: time.Now(), w: w, h: h, scale: scale,
 		ox: (w - wordW*scale) / 2, oy: (h-wordH*scale)/2 - 2}
 	n := 0
+	on := wordOn()
 	for x := 0; x < wordW; x++ {
 		for y := 0; y < wordH; y++ {
-			if !wordOn[y][x] {
+			if !on[y][x] {
 				continue
 			}
 			for dy := 0; dy < scale; dy++ {
@@ -216,7 +223,7 @@ func (c *compile) String() string {
 	for y := 0; y < c.h; y++ {
 		for x := 0; x < c.w; x++ {
 			if v := hash(x, y, tick); v < 0.035*fade+0.004 {
-				cv.set(x, y, mix(fDim, fMid, hash(x, y, tick+1)))
+				cv.set(x, y, mix(fDim(), fMid(), hash(x, y, tick+1)))
 			}
 		}
 	}
@@ -227,15 +234,15 @@ func (c *compile) String() string {
 			// Waiting in the field: a few of the waiting cells are lit at a
 			// time, so the field reads as noise rather than a crowd.
 			if hash(i, tick, 5) < 0.12 {
-				cv.set(int(p.sx), int(p.sy), fMid)
+				cv.set(int(p.sx), int(p.sy), fMid())
 			}
 		case t < p.go_+p.dur:
 			u := ease(float64(t-p.go_) / float64(p.dur))
-			cv.set(int(p.sx+(p.tx-p.sx)*u+0.5), int(p.sy+(p.ty-p.sy)*u+0.5), mix(fLit, fHover, u))
+			cv.set(int(p.sx+(p.tx-p.sx)*u+0.5), int(p.sy+(p.ty-p.sy)*u+0.5), mix(fLit(), fHover(), u))
 		default:
 			col := p.band
 			if since := t - p.go_ - p.dur; since < 200*time.Millisecond {
-				col = mix(fCrest, p.band, float64(since)/float64(200*time.Millisecond))
+				col = mix(fCrest(), p.band, float64(since)/float64(200*time.Millisecond))
 			}
 			cv.set(int(p.tx), int(p.ty), col)
 		}
