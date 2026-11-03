@@ -552,6 +552,13 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if perExpert {
 		return nil, UncoveredExperts, nil
 	}
+	// A prediction block's own head mix is its collapse graph's
+	// (streamCollapseGraphAt), not its body's.
+	if li >= c.NLayer {
+		for _, r := range []jlm.Role{jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp} {
+			delete(f.Inventory, r)
+		}
+	}
 	has := func(r jlm.Role) bool {
 		_, ok := f.Inventory[r]
 		return ok
