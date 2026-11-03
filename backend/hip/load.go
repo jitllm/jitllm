@@ -22,7 +22,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/jitllm/jitllm/backend/ffi"
 )
@@ -50,37 +49,48 @@ type layout struct {
 	root            string
 }
 
-var layouts = map[string]layout{
-	"linux": {
-		hip:   []string{"libamdhip64.so.7", "libamdhip64.so.6", "libamdhip64.so"},
-		comgr: []string{"libamd_comgr.so.3", "libamd_comgr.so.2", "libamd_comgr.so"},
-		dirs:  linuxDirs,
-		root:  "/",
-	},
-	// AMD's HIP SDK: amdhip64_N.dll, which the display driver also puts in
-	// System32 (so the loader's own search finds it), and comgr, which only
-	// the SDK installs, under C:\Program Files\AMD\ROCm\X.Y\bin.
-	"windows": {
-		hip:     []string{"amdhip64_7.dll", "amdhip64_6.dll", "amdhip64.dll"},
-		comgr:   []string{"amd_comgr_3.dll", "amd_comgr_2.dll"},
-		hipGlob: "amdhip64*.dll",
-		cgGlob:  "amd_comgr*.dll",
-		dirs:    windowsDirs,
-		root:    `C:\Program Files`,
-	},
+// layoutFor is goos's layout, false for a system ROCm does not run on.
+func layoutFor(goos string) (layout, bool) {
+	switch goos {
+	case "linux":
+		return layout{
+			hip:   []string{"libamdhip64.so.7", "libamdhip64.so.6", "libamdhip64.so"},
+			comgr: []string{"libamd_comgr.so.3", "libamd_comgr.so.2", "libamd_comgr.so"},
+			dirs:  linuxDirs,
+			root:  "/",
+		}, true
+	case "windows":
+		// AMD's HIP SDK: amdhip64_N.dll, which the display driver also puts in
+		// System32 (so the loader's own search finds it), and comgr, which
+		// only the SDK installs, under C:\Program Files\AMD\ROCm\X.Y\bin.
+		return layout{
+			hip:     []string{"amdhip64_7.dll", "amdhip64_6.dll", "amdhip64.dll"},
+			comgr:   []string{"amd_comgr_3.dll", "amd_comgr_2.dll"},
+			hipGlob: "amdhip64*.dll",
+			cgGlob:  "amd_comgr*.dll",
+			dirs:    windowsDirs,
+			root:    `C:\Program Files`,
+		}, true
+	}
+	return layout{}, false
 }
 
-// HIPNames and ComgrNames are the library names tried on this system, newest
-// ABI first. Package variables so a gate can read them.
-var (
-	HIPNames   = layouts[runtime.GOOS].hip
-	ComgrNames = layouts[runtime.GOOS].comgr
-)
+// HIPNames is the HIP runtime's names tried on this system, newest ABI first.
+func HIPNames() []string {
+	lo, _ := layoutFor(runtime.GOOS)
+	return lo.hip
+}
+
+// ComgrNames is comgr's names tried on this system, newest ABI first.
+func ComgrNames() []string {
+	lo, _ := layoutFor(runtime.GOOS)
+	return lo.comgr
+}
 
 // DefaultDirs is where a ROCm install puts its libraries on this system, in
 // the order tried after the loader's own path.
 func DefaultDirs() []string {
-	lo, ok := layouts[runtime.GOOS]
+	lo, ok := layoutFor(runtime.GOOS)
 	if !ok {
 		return nil
 	}
@@ -188,8 +198,8 @@ func candidates(c Config, lo layout, comgr bool) []string {
 	return out
 }
 
-// lib is one load of ROCm: both libraries' entry points, bound once per
-// configured path. Two configs naming different directories are two loads.
+// lib is one load of ROCm: both libraries' entry points, bound for one
+// configured path.
 type lib struct {
 	hip   *hipAPI
 	comgr *comgrAPI
@@ -198,32 +208,20 @@ type lib struct {
 	hipErr, comgrErr error
 }
 
-var (
-	libsMu sync.Mutex
-	libs   = map[string]*lib{}
-)
-
-// load binds the libraries a config names, once per path. A library that is
-// absent, or present without an entry point this package needs, is an error in
-// the result and never a panic: ffi panics on a missing symbol, which here is
+// load binds the libraries a config names. A library that is absent, or
+// present without an entry point this package needs, is an error in the
+// result and never a panic: ffi panics on a missing symbol, which here is
 // recovered into the reason.
 func load(c Config) *lib {
-	libsMu.Lock()
-	defer libsMu.Unlock()
-	if l, ok := libs[c.Path]; ok {
-		return l
-	}
 	l := &lib{}
-	lo, ok := layouts[runtime.GOOS]
+	lo, ok := layoutFor(runtime.GOOS)
 	if !ok {
 		err := fmt.Errorf("hip: ROCm runs on Linux and Windows; this is %s", runtime.GOOS)
 		l.hipErr, l.comgrErr = err, err
-		libs[c.Path] = l
 		return l
 	}
 	l.comgr, l.comgrErr = bindComgr(candidates(c, lo, true))
 	l.hip, l.hipErr = bindHIP(candidates(c, lo, false))
-	libs[c.Path] = l
 	return l
 }
 

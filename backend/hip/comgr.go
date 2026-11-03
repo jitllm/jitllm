@@ -53,10 +53,8 @@ type comgrCodes struct {
 	llvmIR int32
 }
 
-var (
-	comgrV2 = comgrCodes{act: [5]int32{0x2, 0x6, 0x7, 0x9, 0xA}, llvmIR: 0x5}
-	comgrV3 = comgrCodes{act: [5]int32{0x2, 0x4, 0x5, 0x7, 0x8}, llvmIR: 0x4}
-)
+func comgrV2() comgrCodes { return comgrCodes{act: [5]int32{0x2, 0x6, 0x7, 0x9, 0xA}, llvmIR: 0x5} }
+func comgrV3() comgrCodes { return comgrCodes{act: [5]int32{0x2, 0x4, 0x5, 0x7, 0x8}, llvmIR: 0x4} }
 
 type comgrAPI struct {
 	major, minor int
@@ -142,9 +140,9 @@ func bindComgr(names []string) (*comgrAPI, error) {
 		// that takes it.
 		return nil, fmt.Errorf("hip: libamd_comgr %d.%d does not take LLVM IR; 2.8 (ROCm 6.3) or later is needed", a.major, a.minor)
 	case a.major == 2:
-		a.codes = comgrV2
+		a.codes = comgrV2()
 	case a.major == 3:
-		a.codes = comgrV3
+		a.codes = comgrV3()
 	default:
 		// A later API may renumber again, as 3 did: refused rather than
 		// driven with numbers that may now mean other actions.
