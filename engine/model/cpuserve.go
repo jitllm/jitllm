@@ -1597,6 +1597,7 @@ func (s *Instance) cpuPlace() {
 			s.cpuCompose(li)
 		}
 	}
+	s.cpuPlaceArgmax()
 	if s.nc() != nil {
 		if s.vis != nil {
 			s.cpuPlaceProjector()

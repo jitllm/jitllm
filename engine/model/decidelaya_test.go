@@ -2,13 +2,11 @@ package model
 
 import (
 	"encoding/json"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -80,31 +78,16 @@ func (a layaArm) place(t *testing.T, m *Model, d *Decider, n int) {
 	if err := d.SetDevice(a.gpu, n); err != nil {
 		t.Fatal(err)
 	}
+	// Every block, the head among them where it attends at another geometry
+	// than the encoder (the random fixture: 2 heads of 64 beside 4 of 32),
+	// which runs in a set of its own (nn.LayerPlan.HeadSet).
 	want := n
 	if n < 0 {
-		want = layaExpressible(m, d.emb.violation)
+		want = m.encBlocks()
 	}
 	if got := d.DeviceBlocks(); got != want {
 		t.Fatalf("%s took %d of the %d blocks offered: %v %s", a.name, got, want, d.emb.DeviceDeclines(), a.gpu.Err())
 	}
-	// The head a device leaves home is declined by name, for its geometry.
-	if n < 0 && want < m.encBlocks() && !strings.Contains(fmt.Sprint(d.emb.DeviceDeclines()), "heads of") {
-		t.Fatalf("%s left the head home with no named reason: %v", a.name, d.emb.DeviceDeclines())
-	}
-}
-
-// layaExpressible is how many of a Laya model's blocks a device takes: every
-// one, or the encoder's alone where the head attends at another geometry
-// than the encoder (the random fixture: 2 heads of 64 beside 4 of 32), which
-// the non-causal set, built for the encoder's, declines by name
-// (tier.nonCausalConflict). Every published checkpoint's head has the
-// encoder's geometry (decision-models.md, section 8).
-func layaExpressible(m *Model, violation string) int {
-	mb := m.enc.mb
-	if mb.headHeads != m.Cfg.NHead && violation != "encoder-heads" {
-		return len(mb.blocks)
-	}
-	return m.encBlocks()
 }
 
 // layaDevTol is how far a device's logit may sit from the reference's beyond
