@@ -700,10 +700,6 @@ type Stats struct {
 	// PromptWidthsWarmed counts the prompt grain widths whose kernels were
 	// built at the end of a placement (prewarmPromptWidths).
 	PromptWidthsWarmed int
-	// PromptBlocksLeft counts the blocks of the warmed prompt widths, the
-	// reserved one included, whose own batched kernels the placement left
-	// uncompiled for the composer serves their prompt there (promptHeld).
-	PromptBlocksLeft int
 	// Lanes is the subgroup width this device guarantees for the kernels whose
 	// arithmetic needs one: 32, or 1 meaning "no promise, use the scalar
 	// twins". LanesWhy is the device's own words for a refusal. It is the
@@ -934,7 +930,6 @@ func (s *Stats) add(o Stats) {
 	s.PickRows += o.PickRows
 	s.ExactPrompts += o.ExactPrompts
 	s.PromptWidthsWarmed += o.PromptWidthsWarmed
-	s.PromptBlocksLeft += o.PromptBlocksLeft
 	if o.Lanes > 0 && (s.Lanes == 0 || o.Lanes < s.Lanes) {
 		s.Lanes = o.Lanes
 	}
