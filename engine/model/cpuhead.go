@@ -205,7 +205,7 @@ func (m *Model) formCPUGraph(s *Instance, g *graph.Graph, rows int, over map[jlm
 			}
 		}
 	}
-	req := composer.Request{Graph: g, Formats: formats, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: s.jit.ActWindow()},
+	req := composer.Request{Graph: g, Formats: formats, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: s.m.actWindow},
 		Device: s.composedCPU(), Apart: true}
 	return m.cpuFormOf(req, g, rows, true, false, false)
 }

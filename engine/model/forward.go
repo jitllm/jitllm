@@ -13,7 +13,6 @@ import (
 
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
@@ -570,14 +569,6 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		s.cpu.formErr = err
 	}
 	s.cpuPlace()
-	// Specialize on the shapes this model actually has. A transformer reuses a
-	// handful of (type, K) pairs across all its layers, so this is a few
-	// kernels rather than one per layer.
-	for i := range m.container.Entries() {
-		if t, ok := containerShape(&m.container.Entries()[i]); ok {
-			s.jit.AddShape(t.typ, t.k)
-		}
-	}
 	// Read at construction too, because an embedded caller may never call
 	// SetMemBudget; it overrides this with the caller's number.
 	s.memBudget = sched.MemBudget()
@@ -773,7 +764,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	}
 	// A borrowed JIT is the text instance's, attached to its device by it.
 	if !s.borrowsJIT() {
-		s.jit.ShareActWindow(d)
+		s.m.shareActWindow(d)
 	}
 	s.clearOnDev()
 	s.moved = nil
@@ -832,7 +823,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		// BitNet's inner norms, read off the weights as the post-norms are.
 		SubNorm:     s.m.hasSubNorm(),
 		AttnSoftcap: c.AttnSoftcap,
-		ActWin:      s.jit.ActWindow(),
+		ActWin:      s.m.actWindow,
 		// Zero for a dense model, which is what makes every existing plan
 		// unchanged.
 		NExpert: c.NExpert, NExpertUsed: c.NExpertUsed, NFFNExp: c.NFFNExp,
@@ -872,7 +863,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		// token with different kernels
 		// (TestHybridSecondSessionMatchesTheFirst).
 		if !s.borrowsJIT() {
-			s.jit.ShareActWindow(ld)
+			s.m.shareActWindow(ld)
 		}
 	}
 	// Size the scratch before offering anything: the largest matvec is known
@@ -2856,19 +2847,8 @@ func (s *Instance) SetGPULayers(n int) int {
 	return s.gpuLayers
 }
 
-// Accelerated reports which quantization types this session runs on generated
-// code.
-func (s *Instance) Accelerated() []quant.Type { return s.jit.Types() }
-
 // Workers is how many worker threads the fast tier uses.
 func (s *Instance) Workers() int { return s.jit.Workers() }
-
-// MixtureAffine is how many of this instance's host mixture regions ran on the
-// NUMA nodes holding their experts (nn.JIT.MixtureAffine).
-func (s *Instance) MixtureAffine() int64 { return s.jit.MixtureAffine() }
-
-// Shapes is how many shape-specialized kernels were generated for this model.
-func (s *Instance) Shapes() int { return s.jit.Shapes() }
 
 // Pos is the number of positions already in the cache.
 func (s *Session) Pos() int { return s.pos }
@@ -3168,22 +3148,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			s.ogate = make([]float32, n*qd)
 		}
 	}
-	// Brackets one decode step for the host tuners, which time real tokens.
-	// Not when the device ran the whole token: no CPU matvec ran, and a
-	// settled answer would be cached under the CPU's key for later runs.
-	if s.gpuLayers < s.hi || s.head == nil {
-		s.jit.TokenStart()
-		// A token that read expert pages off disk is not a sample: that I/O
-		// dwarfs what the tuners measure.
-		reads0 := atomic.LoadInt64(&s.m.expReads)
-		defer func() {
-			if atomic.LoadInt64(&s.m.expReads) != reads0 {
-				s.jit.DiscardToken()
-			}
-			s.jit.TokenEnd()
-		}()
-	}
-
 	// The pool spins or parks for the next token by what this one did. A token
 	// that paged weights in waits on reads between its regions, and a spinning
 	// worker would burn a core through each; a token that read nothing runs its
