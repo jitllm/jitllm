@@ -26,8 +26,37 @@ const (
 	nClass
 )
 
-var className = [nClass]string{"p", "rs", "r", "rd", "f", "fd"}
-var classDecl = [nClass]string{".pred", ".b16", ".b32", ".b64", ".f32", ".f64"}
+func className(c Class) string {
+	switch c {
+	case 0:
+		return "p"
+	case 1:
+		return "rs"
+	case 2:
+		return "r"
+	case 3:
+		return "rd"
+	case 4:
+		return "f"
+	}
+	return "fd"
+}
+
+func classDecl(c Class) string {
+	switch c {
+	case 0:
+		return ".pred"
+	case 1:
+		return ".b16"
+	case 2:
+		return ".b32"
+	case 3:
+		return ".b64"
+	case 4:
+		return ".f32"
+	}
+	return ".f64"
+}
 
 // Reg is a virtual register.
 //
@@ -45,7 +74,7 @@ func (r Reg) String() string {
 	if !r.ok {
 		panic("ptx: use of a zero Reg -- registers come from Buf.Reg")
 	}
-	return fmt.Sprintf("%%%s%d", className[r.class], r.n)
+	return fmt.Sprintf("%%%s%d", className(r.class), r.n)
 }
 
 // Buf accumulates PTX text and the register counters it implies.
@@ -59,7 +88,22 @@ type Buf struct {
 	module strings.Builder
 	next   [nClass]int
 	labels int
+	// gridBroken and depBroken are the options' violations: waits that wait
+	// for nothing.
+	gridBroken bool
+	depBroken  bool
 }
+
+// Option changes how Lower emits.
+type Option func(*Buf)
+
+// BrokenGridBarrier makes every grid barrier count its arrival and leave
+// without waiting: the violation the grid barrier's gate must fail under.
+func BrokenGridBarrier() Option { return func(b *Buf) { b.gridBroken = true } }
+
+// BrokenDepWait makes every dependency-counter wait return without waiting:
+// the violation the dep block's gate must fail under.
+func BrokenDepWait() Option { return func(b *Buf) { b.depBroken = true } }
 
 // Module adds a module-scope declaration, emitted before the entry.
 func (b *Buf) Module(format string, args ...any) {
@@ -118,7 +162,7 @@ func (b *Buf) Text(target, entry string, params []Param, group [3]int, resident 
 	s.WriteString("{\n")
 	for c := Class(0); c < nClass; c++ {
 		if b.next[c] > 0 {
-			fmt.Fprintf(&s, " .reg %s %%%s<%d>;\n", classDecl[c], className[c], b.next[c])
+			fmt.Fprintf(&s, " .reg %s %%%s<%d>;\n", classDecl(c), className(c), b.next[c])
 		}
 	}
 	s.WriteString(b.decls.String())

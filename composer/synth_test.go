@@ -25,8 +25,6 @@ type synth struct {
 	head    *graph.Graph
 }
 
-var embedType = jlm.TypeF32
-
 func newSynth(t *testing.T, typ jlm.Type) *synth {
 	t.Helper()
 	s := &synth{cfg: jlm.Config{NLayer: synthBlocks, NEmbd: synthEmbd, NVocab: synthVocab}}
@@ -38,7 +36,7 @@ func newSynth(t *testing.T, typ jlm.Type) *synth {
 		s.entries = append(s.entries, e)
 	}
 	add(jlm.RoleTokenEmbd, jlm.DenseBlock, synthEmbd, synthVocab)
-	s.entries[0].Type = embedType
+	s.entries[0].Type = jlm.TypeF32
 	add(jlm.RoleOutputNorm, jlm.DenseBlock, synthEmbd, 0)
 	add(jlm.RoleOutput, jlm.DenseBlock, synthEmbd, synthVocab)
 	s.embed = &graph.Graph{Block: -1, Values: []graph.Value{{Name: "x", Width: synthEmbd}}, Out: []graph.ValueID{0},

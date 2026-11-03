@@ -68,7 +68,7 @@ type Operand struct {
 	// its scales, its sub-scales.
 	Region int
 	// Table and Instance are which of the step's tables an OperandTable is
-	// (tableOp): what it is matched and bound by. Its Name is a label.
+	// (Table.of): what it is matched and bound by. Its Name is a label.
 	Table    Table
 	Instance int
 }

@@ -31,9 +31,9 @@ type History struct {
 // values is the pool the values are read from, its operand and its layout.
 func (h History) values() (Operand, Pool) {
 	if h.ValuesInKeys {
-		return h.Keys.operand(tableKeys), h.Keys
+		return h.Keys.operand(TableKeys.op()), h.Keys
 	}
-	return h.Values.operand(tableValues), h.Values
+	return h.Values.operand(TableValues.op()), h.Values
 }
 
 func (l Pool) check(width int) error {

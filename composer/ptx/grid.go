@@ -49,7 +49,7 @@ func gridBarrier(b *Buf, sync Reg, sm int) {
 	b.Op("shr.u64 %v,%v,32;", gen, old)
 	b.Op("add.u64 %v,%v,1;", cnt, cnt)
 	b.Op("setp.ne.u64 %v,%v,%v;", notLast, cnt, n)
-	if gridBroken {
+	if b.gridBroken {
 		b.Op("@%v bra %s;", notLast, done)
 	} else {
 		b.Op("@%v bra %s;", notLast, spin)
@@ -79,8 +79,3 @@ func gridBarrier(b *Buf, sync Reg, sm int) {
 	b.Bind(done)
 	b.Op("bar.sync 0;")
 }
-
-// gridBroken makes every waiter leave without waiting: the barrier still
-// counts, so a launch ends, and orders nothing. It is the violation the grid
-// barrier's gate must see (BreakGridBarrierForTest, jitllmtest builds only).
-var gridBroken bool

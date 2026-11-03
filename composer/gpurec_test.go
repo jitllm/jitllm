@@ -187,20 +187,26 @@ func wf32(w []uint32) []float32 {
 	return x
 }
 
-// recSteps are the steps a recurrent gate runs at 8 rows: a prompt chunk's
+// recSteps() are the steps a recurrent gate runs at 8 rows: a prompt chunk's
 // rows as one run, fewer live rows than the form holds, and ragged steps of
 // several sequences, their rows interleaved.
-var recSteps = []struct {
+func recSteps() []struct {
 	name string
 	n    int
 	runs recRuns
-}{
-	{"chunk of 8", 8, recRuns{{0, 1, 2, 3, 4, 5, 6, 7}}},
-	{"chunk of 5", 5, recRuns{{0, 1, 2, 3, 4}}},
-	{"chunk of 1", 1, recRuns{{0}}},
-	{"ragged 1+3+1", 5, recRuns{{2}, {0, 3, 4}, {1}}},
-	{"ragged decode of 6", 6, recRuns{{0}, {1}, {2}, {3}, {4}, {5}}},
-	{"ragged 4+4", 8, recRuns{{0, 2, 4, 6}, {1, 3, 5, 7}}},
+} {
+	return []struct {
+		name string
+		n    int
+		runs recRuns
+	}{
+		{"chunk of 8", 8, recRuns{{0, 1, 2, 3, 4, 5, 6, 7}}},
+		{"chunk of 5", 5, recRuns{{0, 1, 2, 3, 4}}},
+		{"chunk of 1", 1, recRuns{{0}}},
+		{"ragged 1+3+1", 5, recRuns{{2}, {0, 3, 4}, {1}}},
+		{"ragged decode of 6", 6, recRuns{{0}, {1}, {2}, {3}, {4}, {5}}},
+		{"ragged 4+4", 8, recRuns{{0, 2, 4, 6}, {1, 3, 5, 7}}},
+	}
 }
 
 // TestComposedGPURecurrentRuns forms OpDeltaRule and OpStateConv at a step
@@ -255,7 +261,7 @@ func recurrentRuns(t *testing.T, d backend.Device, dev composer.Device) {
 		if err != nil {
 			t.Fatalf("%+v: %v", s, err)
 		}
-		for _, st := range recSteps {
+		for _, st := range recSteps() {
 			for _, chained := range []bool{true, false} {
 				worst, err := runDelta(fr, g, s, st.n, st.runs, chained, rng)
 				if err != nil {
@@ -291,7 +297,7 @@ func recurrentRuns(t *testing.T, d backend.Device, dev composer.Device) {
 		if err != nil {
 			t.Fatalf("%d taps over %d: %v", T, C, err)
 		}
-		for _, st := range recSteps {
+		for _, st := range recSteps() {
 			for _, chained := range []bool{true, false} {
 				worst, err := runConv(fr, b.G, T, C, st.n, st.runs, chained, rng)
 				if err != nil {

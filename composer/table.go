@@ -64,13 +64,68 @@ const (
 	numTables
 )
 
-var tableNames = [numTables]string{"", "rows", "rows.win", "rows.n", "pages", "kv.k", "kv.v", "ent.k", "ent.rows", "ent.pages", "q.off",
-	"rope.cs", "rope.planes", "rope.pos", "rope.pos.axes", "rope.axes", "rope.const", "tokens", "request", "experts", "run.in", "run.out",
-	"rec.state", "rec.state.out", "rec.conv", "rec.conv.out", "rec.rows", "codes", "rope.rows", "rope.marks"}
-
 func (t Table) String() string {
-	if t < numTables {
-		return tableNames[t]
+	switch t {
+	case TableNone:
+		return ""
+	case TableRows:
+		return "rows"
+	case TableWindows:
+		return "rows.win"
+	case TableCall:
+		return "rows.n"
+	case TablePages:
+		return "pages"
+	case TableKeys:
+		return "kv.k"
+	case TableValues:
+		return "kv.v"
+	case TableEntKeys:
+		return "ent.k"
+	case TableEntRows:
+		return "ent.rows"
+	case TableEntPages:
+		return "ent.pages"
+	case TableQOff:
+		return "q.off"
+	case TableAngles:
+		return "rope.cs"
+	case TablePlanes:
+		return "rope.planes"
+	case TablePos:
+		return "rope.pos"
+	case TableAxisPos:
+		return "rope.pos.axes"
+	case TableAxes:
+		return "rope.axes"
+	case TableRopeConst:
+		return "rope.const"
+	case TableTokens:
+		return "tokens"
+	case TableRequest:
+		return "request"
+	case TableExperts:
+		return "experts"
+	case TableRunIn:
+		return "run.in"
+	case TableRunOut:
+		return "run.out"
+	case TableRecState:
+		return "rec.state"
+	case TableRecStateOut:
+		return "rec.state.out"
+	case TableRecConv:
+		return "rec.conv"
+	case TableRecConvOut:
+		return "rec.conv.out"
+	case TableRecRows:
+		return "rec.rows"
+	case TableCodes:
+		return "codes"
+	case TableRopeRows:
+		return "rope.rows"
+	case TableRopeMarks:
+		return "rope.marks"
 	}
 	return fmt.Sprintf("table%d", t)
 }
@@ -90,17 +145,32 @@ type TableKey struct {
 // Key is the table o is, as the call site binds it.
 func (o Operand) Key() TableKey { return TableKey{o.Table, o.Instance} }
 
-// tableOp is table t's instance inst as an operand of elements elem; its name
-// is the table's label, never what it is matched by.
-func tableOp(t Table, inst int, elem ir.Type) Operand {
-	return Operand{Kind: OperandTable, Table: t, Instance: inst, Name: tableLabel(t, inst), Elem: elem}
+// of is table t's instance inst as an operand; its name is the table's label,
+// never what it is matched by.
+func (t Table) of(inst int) Operand {
+	return Operand{Kind: OperandTable, Table: t, Instance: inst, Name: tableLabel(t, inst), Elem: t.elem(), PerPart: t.perPart()}
 }
 
-// partTable is table t, a part's own state (Operand.PerPart).
-func partTable(t Table) Operand {
-	o := tableOp(t, 0, ir.Void)
-	o.PerPart = true
-	return o
+// op is table t's instance 0.
+func (t Table) op() Operand { return t.of(0) }
+
+// elem is the type of table t's elements, Void where it is a pool or a
+// float table the kernel types itself.
+func (t Table) elem() ir.Type {
+	switch t {
+	case TableAngles, TablePlanes, TableRunIn, TableRunOut, TableKeys, TableValues, TableEntKeys:
+		return ir.Void
+	}
+	return ir.U32
+}
+
+// perPart says t is a part's own state (Operand.PerPart).
+func (t Table) perPart() bool {
+	switch t {
+	case TableKeys, TableValues, TableEntKeys, TableRecState, TableRecStateOut, TableRecConv, TableRecConvOut:
+		return true
+	}
+	return false
 }
 
 // tableLabel is table t's instance inst as it is named for a person.

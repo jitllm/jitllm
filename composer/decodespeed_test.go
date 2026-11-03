@@ -49,7 +49,7 @@ func BenchmarkComposedDecode(t *testing.B) {
 			dev.Regs = r.ThreadRegisters()
 		}
 		for _, model := range models {
-			shapes := matrixModels[model]
+			shapes := matrixModels()[model]
 			if model == "Llama-3.1-8B" {
 				shapes = append(shapes, matrixShape{"down q4", quant.Q4_K, 4096, 14336}, matrixShape{"qkv", quant.Q4_K, 4096, 4096}, matrixShape{"gu", quant.Q4_K, 14336, 4096})
 			}
@@ -305,11 +305,13 @@ type matrixShape struct {
 // matrixModels is each model's projection shapes, outputs by k, in the type
 // its Q4_K_M file holds most of them in (Q8_0 where k is not a multiple of
 // 256).
-var matrixModels = map[string][]matrixShape{
-	"Llama-3.2-1B":  {{"q/o", quant.Q4_K, 2048, 2048}, {"k/v", quant.Q4_K, 512, 2048}, {"gate/up", quant.Q4_K, 8192, 2048}, {"down", quant.Q6_K, 2048, 8192}},
-	"Llama-3.1-8B":  {{"q/o", quant.Q4_K, 4096, 4096}, {"k/v", quant.Q4_K, 1024, 4096}, {"gate/up", quant.Q4_K, 14336, 4096}, {"down", quant.Q6_K, 4096, 14336}},
-	"Qwen3-0.6B":    {{"q", quant.Q4_K, 2048, 1024}, {"o", quant.Q4_K, 1024, 2048}, {"k/v", quant.Q4_K, 1024, 1024}, {"gate/up", quant.Q4_K, 3072, 1024}, {"down", quant.Q6_K, 1024, 3072}},
-	"Qwen3-1.7B":    {{"q/o", quant.Q4_K, 2048, 2048}, {"k/v", quant.Q4_K, 1024, 2048}, {"gate/up", quant.Q4_K, 6144, 2048}, {"down", quant.Q6_K, 2048, 6144}},
-	"Qwen3-30B-A3B": {{"q", quant.Q4_K, 4096, 2048}, {"o", quant.Q4_K, 2048, 4096}, {"k/v", quant.Q4_K, 512, 2048}, {"router", quant.Q4_K, 128, 2048}, {"expert gate/up", quant.Q4_K, 768, 2048}, {"expert down", quant.Q6_K, 2048, 768}},
-	"gpt-oss-20b":   {{"q", quant.Q8_0, 4096, 2880}, {"o", quant.Q8_0, 2880, 4096}, {"k/v", quant.Q8_0, 512, 2880}, {"router", quant.Q8_0, 32, 2880}, {"expert", quant.Q8_0, 2880, 2880}},
+func matrixModels() map[string][]matrixShape {
+	return map[string][]matrixShape{
+		"Llama-3.2-1B":  {{"q/o", quant.Q4_K, 2048, 2048}, {"k/v", quant.Q4_K, 512, 2048}, {"gate/up", quant.Q4_K, 8192, 2048}, {"down", quant.Q6_K, 2048, 8192}},
+		"Llama-3.1-8B":  {{"q/o", quant.Q4_K, 4096, 4096}, {"k/v", quant.Q4_K, 1024, 4096}, {"gate/up", quant.Q4_K, 14336, 4096}, {"down", quant.Q6_K, 4096, 14336}},
+		"Qwen3-0.6B":    {{"q", quant.Q4_K, 2048, 1024}, {"o", quant.Q4_K, 1024, 2048}, {"k/v", quant.Q4_K, 1024, 1024}, {"gate/up", quant.Q4_K, 3072, 1024}, {"down", quant.Q6_K, 1024, 3072}},
+		"Qwen3-1.7B":    {{"q/o", quant.Q4_K, 2048, 2048}, {"k/v", quant.Q4_K, 1024, 2048}, {"gate/up", quant.Q4_K, 6144, 2048}, {"down", quant.Q6_K, 2048, 6144}},
+		"Qwen3-30B-A3B": {{"q", quant.Q4_K, 4096, 2048}, {"o", quant.Q4_K, 2048, 4096}, {"k/v", quant.Q4_K, 512, 2048}, {"router", quant.Q4_K, 128, 2048}, {"expert gate/up", quant.Q4_K, 768, 2048}, {"expert down", quant.Q6_K, 2048, 768}},
+		"gpt-oss-20b":   {{"q", quant.Q8_0, 4096, 2880}, {"o", quant.Q8_0, 2880, 4096}, {"k/v", quant.Q8_0, 512, 2880}, {"router", quant.Q8_0, 32, 2880}, {"expert", quant.Q8_0, 2880, 2880}},
+	}
 }

@@ -16,8 +16,9 @@ type vkDev struct {
 	allocCount
 	once
 	// ctr is what the device counts into (Opts.Counters).
-	ctr *Counters
-	c   *vulkan.Ctx
+	ctr   *Counters
+	c     *vulkan.Ctx
+	lower []spirv.Option
 	// free is Session's free list: a session handed to the caller's f
 	// escapes, so a fresh one per call was a heap object per token. Nested
 	// sessions take one each.
@@ -45,6 +46,14 @@ func openVulkan(o Opts) (Device, error) { return OpenVulkanWith("", o) }
 //
 // A selector that names a software rasteriser is honoured: the refusal below is
 // for a device nobody asked for.
+func spirvOptions(o Opts) []spirv.Option {
+	var out []spirv.Option
+	if o.BreakGridBarrier {
+		out = append(out, spirv.BrokenGridBarrier())
+	}
+	return out
+}
+
 func OpenVulkan(sel string) (Device, error) { return OpenVulkanWith(sel, Opts{}) }
 
 // OpenVulkanWith is OpenVulkan with this device's open choices.
@@ -91,7 +100,7 @@ func OpenVulkanWith(sel string, o Opts) (Device, error) {
 	}
 	ctr := o.counters()
 	ctr.ownedDevices.Add(1)
-	return &vkDev{ctr: ctr, c: c}, nil
+	return &vkDev{ctr: ctr, c: c, lower: spirvOptions(o)}, nil
 }
 
 // VulkanDevices enumerates the Vulkan devices on this host without opening one,
@@ -169,7 +178,7 @@ func (v *vkDev) Compile(k *ir.Kernel) (Kernel, error) {
 			return nil, err
 		}
 	}
-	mod, err := spirv.Emit(k)
+	mod, err := spirv.Emit(k, v.lower...)
 	if err != nil {
 		return nil, err
 	}

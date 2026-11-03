@@ -61,7 +61,7 @@ func TestComposedGPUExperts(t *testing.T) {
 			}
 			t.Run(fmt.Sprintf("%s/%dx%dx%d/tiled=%v", name, capacity, E, K, tiled), func(t *testing.T) {
 				dev := gpuDevice(d)
-				dev.Matrix = [3]int{matrixTile.M, matrixTile.N, matrixTile.K}
+				dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 				rng := rand.New(rand.NewSource(71))
 				ran := 0
 				for _, typ := range []quant.Type{quant.Q8_0, quant.Q4_K, quant.Q6_K, quant.MXFP4} {

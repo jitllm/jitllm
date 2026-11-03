@@ -15,13 +15,6 @@ import (
 // and the two polynomials. A table over several position axes reads its
 // positions from tableAxisPos (the live row count, then ropeAxes positions a
 // row) and each pair's axis from a block the plan carries (tableAxes).
-var (
-	tablePos     = tableOp(TablePos, 0, ir.U32)
-	tableAxisPos = tableOp(TableAxisPos, 0, ir.U32)
-	tablePlanes  = tableOp(TablePlanes, 0, ir.Void)
-	tableAxes    = tableOp(TableAxes, 0, ir.U32)
-	tableRopeKon = tableOp(TableRopeConst, 0, ir.U32)
-)
 
 const (
 	ropeDigits    = 4
@@ -70,7 +63,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	P := o.Attr.NRot / 2
 	stride := (P + ropeLanes - 1) &^ (ropeLanes - 1)
 	R := c.Step.Rows
-	out := tableOp(TableAngles, o.Attr.Rotary, ir.Void)
+	out := TableAngles.of(o.Attr.Rotary)
 	var axes []uint32
 	if o.Attr.Cycle != 0 {
 		return nil, fmt.Errorf("a rotary table over a cycle of %d axes %v: its pairs' frequencies are its cycles' first pairs'", o.Attr.Cycle, o.Attr.CycleAxes)
@@ -86,7 +79,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	var x exprs
 	r, p := x.coord(0), x.coord(1)
-	in := []Operand{tablePos, Operand{}, tableRopeKon}
+	in := []Operand{TablePos.op(), Operand{}, TableRopeConst.op()}
 	ext := map[int]int{0: 1 + R, 1: 8*stride + 1}
 	words := map[int][]uint32{2: ropeConsts()}
 	var pos int
@@ -104,10 +97,10 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 			pos = x.load(0, x.op(OpAdd, U, row, x.u(a)))
 		} else {
 			pos = x.load(0, x.op(OpAdd, U, row, x.load(3, p)))
-			in = append(in, tableOp(TableAxes, out.Instance, tableAxes.Elem))
+			in = append(in, TableAxes.of(out.Instance))
 			ext[3], words[3] = P, axes
 		}
-		in = append(in, tableRopeRows)
+		in = append(in, TableRopeRows.op())
 		live = exprs{}
 		live.load(len(in)-1, live.u(0))
 		ext[len(in)-1] = 1 + 2*R
@@ -121,10 +114,10 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		} else {
 			axis := x.load(3, p)
 			pos = x.load(0, x.op(OpAdd, U, x.op(OpAdd, U, row, axis), x.u(1)))
-			in = append(in, tableOp(TableAxes, out.Instance, tableAxes.Elem))
+			in = append(in, TableAxes.of(out.Instance))
 			ext[3], words[3] = P, axes
 		}
-		in[0] = tableAxisPos
+		in[0] = TableAxisPos.op()
 		ext[0] = 1 + R*ropeAxes
 	default:
 		pos = x.load(0, x.op(OpAdd, U, r, x.u(1)))
@@ -140,14 +133,14 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		axis := x.un(OpCvtI32, I, x.load(1, x.op(OpAdd, U, p, x.u(uint32(8*stride+1)))))
 		row := x.op(OpLess, ir.Pred, x.un(OpBitcast, U, axis), x.u(1))
 		pos = x.sel(U, row, x.un(OpBroadcast, U, x.op(OpDiv, U, pos, gw)), x.un(OpBroadcast, U, x.op(OpRem, U, pos, gw)))
-		in = append(in, tableRequest)
+		in = append(in, TableRequest.op())
 		ext[1], ext[3] = 8*stride+1+P, RequestRows+R
 	}
 	cvs, svs, quarter := ropeTurn(&x, pos, p, 1, 2, stride)
 	at := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(P))), p), x.u(2))
 	at1 := x.op(OpAdd, U, at, x.u(1))
 
-	in[1] = tableOp(TablePlanes, out.Instance, ir.Void)
+	in[1] = TablePlanes.of(out.Instance)
 	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},
 		Facts: Facts{Rows: live.e, Words: words, Extents: ext,
@@ -282,7 +275,7 @@ func ropeConsts() []uint32 {
 // rows first, then each row's position, a decode row's the last of its
 // history on every axis.
 func ropeWord(o Operand, w int, s Step) (float64, bool) {
-	if o.Kind != tablePos.Kind || o.Name != tablePos.Name && o.Name != tableAxisPos.Name {
+	if o.Kind != TablePos.op().Kind || o.Name != TablePos.op().Name && o.Name != TableAxisPos.op().Name {
 		return 0, false
 	}
 	if w == 0 {

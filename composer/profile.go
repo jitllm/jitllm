@@ -10,12 +10,12 @@ import (
 func gpuProfile() Profile {
 	contract := []PrimKind{PrimContract}
 	return Profile{Int8: &Int8Form{Window: 32, Word: 4, Sums: 16}, Passes: []Pass{
-		Offsets{Table: tableQOff},
+		Offsets{Table: TableQOff.op()},
 		RunLengths{Grain: 128, Align: 32},
 		Flash{Rows: 128, Keys: 32, Shared: 48 << 10, Half: true},
-		SplitRange{Work: mainWorkgroups},
-		WorkFuse{Work: mainWorkgroups},
-		HeadGroups{Work: mainWorkgroups},
+		SplitRange{Work: mainWorkgroups()},
+		WorkFuse{Work: mainWorkgroups()},
+		HeadGroups{Work: mainWorkgroups()},
 		Forward{},
 		DeadStores{},
 		LoopFuse{},
@@ -224,4 +224,6 @@ func mainTableArgs() ArgFields {
 }
 
 // mainWorkgroups is main's layout of a range's partitions over workgroups.
-var mainWorkgroups = Workgroups{MinWarps: 4, MaxWarps: 8, Shared: 32 << 10, GroupDims: 96, Chunk: 2048, SlotThreads: 1280, PerSplit: 8, Pad: 32, Copies: 32}
+func mainWorkgroups() Workgroups {
+	return Workgroups{MinWarps: 4, MaxWarps: 8, Shared: 32 << 10, GroupDims: 96, Chunk: 2048, SlotThreads: 1280, PerSplit: 8, Pad: 32, Copies: 32}
+}

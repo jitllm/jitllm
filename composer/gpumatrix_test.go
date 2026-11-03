@@ -19,8 +19,10 @@ import (
 	"github.com/jitllm/jitllm/internal/testlock"
 )
 
-// matrixTile is the binary16 tile the gate asks a device to multiply.
-var matrixTile = backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32}
+// matrixTile() is the binary16 tile the gate asks a device to multiply.
+func matrixTile() backend.TileShape {
+	return backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32}
+}
 
 // matrixDevices is every device present whose matrix unit takes binary16
 // tiles staged in workgroup memory, as the composer states it, and a CUDA
@@ -30,7 +32,7 @@ func matrixDevices(t *testing.T) (map[string]backend.Device, func()) {
 	var all []backend.Device
 	for _, d := range backend.Open() {
 		all = append(all, d)
-		if ok, why := backend.LowersTile(d, matrixTile); ok {
+		if ok, why := backend.LowersTile(d, matrixTile()); ok {
 			out[d.API()] = d
 		} else {
 			t.Logf("%s: no binary16 tile: %s", d.API(), why)
@@ -38,7 +40,7 @@ func matrixDevices(t *testing.T) (map[string]backend.Device, func()) {
 	}
 	if d, err := backend.OpenCUDAWith(0, backend.Opts{CUDATarget: "sm_70"}); err == nil {
 		all = append(all, d)
-		if ok, _ := backend.LowersTile(d, matrixTile); ok {
+		if ok, _ := backend.LowersTile(d, matrixTile()); ok {
 			out["ptx-sm_70"] = d
 		}
 	}
@@ -93,7 +95,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 		d := devs[name]
 		t.Run(name, func(t *testing.T) {
 			dev := gpuDevice(d)
-			dev.Matrix = [3]int{matrixTile.M, matrixTile.N, matrixTile.K}
+			dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 			rng := rand.New(rand.NewSource(53))
 			ran := 0
 			for _, typ := range formats {
