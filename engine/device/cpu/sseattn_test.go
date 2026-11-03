@@ -129,15 +129,16 @@ func attnAxpyModelSSE(out []float32, w float32, v []float32) {
 	}
 }
 
-var (
-	attnGateMu   sync.Mutex
-	attnGateSeen = map[[32]byte]bool{}
-)
+// attnGate is the byte strings one test has already run the VEX-leak gate on.
+type attnGate struct {
+	mu   sync.Mutex
+	seen map[[32]byte]bool
+}
 
-// sseAttnKernel emits, runs the VEX-leak gate on (once per distinct byte
-// string), and maps an SSE kernel. It fails rather than skips when Map
-// refuses: an SSE-tier kernel must run on every host at or above the floor.
-func sseAttnKernel(t *testing.T, name string, b []byte, err error) *Code {
+// kernel emits, runs the VEX-leak gate on (once per distinct byte string),
+// and maps an SSE kernel. It fails rather than skips when Map refuses: an
+// SSE-tier kernel must run on every host at or above the floor.
+func (g *attnGate) kernel(t *testing.T, name string, b []byte, err error) *Code {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
@@ -146,10 +147,13 @@ func sseAttnKernel(t *testing.T, name string, b []byte, err error) *Code {
 		t.Fatalf("%s: the kernel is not declared SSE-tier", name)
 	}
 	h := sha256.Sum256(b)
-	attnGateMu.Lock()
-	seen := attnGateSeen[h]
-	attnGateSeen[h] = true
-	attnGateMu.Unlock()
+	g.mu.Lock()
+	if g.seen == nil {
+		g.seen = map[[32]byte]bool{}
+	}
+	seen := g.seen[h]
+	g.seen[h] = true
+	g.mu.Unlock()
 	if !seen {
 		requireSSEKernel(t, name, b)
 	}
@@ -188,19 +192,22 @@ func sseAttnSame(a, b float32) bool { return math.Float32bits(a) == math.Float32
 
 // attnSSEShapes are TestAttnKernels' shapes plus every hd%4 residue at small
 // and at real widths.
-var attnSSEShapes = []struct{ hd, stride, npos int }{
-	{64, 256, 1}, {64, 256, 7}, {64, 256, 821}, // tinyllama
-	{256, 256, 1}, {256, 256, 33}, {256, 256, 500}, // gemma
-	{128, 512, 64}, {80, 80, 9}, {8, 8, 3},
-	{1, 1, 5}, {2, 3, 4}, {3, 5, 9}, {4, 4, 1}, {5, 9, 2}, {6, 6, 3}, {7, 7, 11},
-	{12, 20, 7}, {17, 17, 33}, {33, 40, 100}, {63, 64, 5}, {66, 70, 3},
+func attnSSEShapes() []struct{ hd, stride, npos int } {
+	return []struct{ hd, stride, npos int }{
+		{64, 256, 1}, {64, 256, 7}, {64, 256, 821}, // tinyllama
+		{256, 256, 1}, {256, 256, 33}, {256, 256, 500}, // gemma
+		{128, 512, 64}, {80, 80, 9}, {8, 8, 3},
+		{1, 1, 5}, {2, 3, 4}, {3, 5, 9}, {4, 4, 1}, {5, 9, 2}, {6, 6, 3}, {7, 7, 11},
+		{12, 20, 7}, {17, 17, 33}, {33, 40, 100}, {63, 64, 5}, {66, 70, 3},
+	}
 }
 
 // TestAttnKernelsSSE is TestAttnKernels for the SSE tier, at both KV widths:
 // scores, the accumulate and the accumulating twin, against the model bit for
 // bit and against the oracle and float64 to 1e-12.
 func TestAttnKernelsSSE(t *testing.T) {
-	for _, s := range attnSSEShapes {
+	var gate attnGate
+	for _, s := range attnSSEShapes() {
 		for _, f16 := range []bool{false, true} {
 			d := newAttnSSEData(s.hd, s.stride, s.npos, int64(s.hd*7919+s.npos), false)
 			tag := func(k string) string {
@@ -212,7 +219,7 @@ func TestAttnKernelsSSE(t *testing.T) {
 
 			// scores
 			b, err := EmitAttnScoresSSE(s.hd, s.stride, KVOf(f16))
-			sc := sseAttnKernel(t, tag("scores"), b, err)
+			sc := gate.kernel(t, tag("scores"), b, err)
 			got := sentinelRow(s.npos)
 			a := args(got)
 			sc.Call(&a)
@@ -244,7 +251,7 @@ func TestAttnKernelsSSE(t *testing.T) {
 					emit, name = EmitAttnAccIntoSSE, "acc_into"
 				}
 				b, err := emit(s.hd, s.stride, KVOf(f16))
-				ac := sseAttnKernel(t, tag(name), b, err)
+				ac := gate.kernel(t, tag(name), b, err)
 				out := sentinelRow(s.hd)
 				model, orc := make([]float32, s.hd), make([]float32, s.hd)
 				wantF := make([]float64, s.hd)
@@ -291,6 +298,7 @@ func TestAttnKernelsSSE(t *testing.T) {
 // on a wrapped counter there and nn never asks; the SSE ones guard it, so an
 // empty window is an empty sum -- scores untouched, Acc zero, AccInto its seed.
 func TestAttnEmptyWindowSSE(t *testing.T) {
+	var gate attnGate
 	d := newAttnSSEData(17, 17, 1, 1, false)
 	for _, f16 := range []bool{false, true} {
 		for _, k := range []struct {
@@ -306,7 +314,7 @@ func TestAttnEmptyWindowSSE(t *testing.T) {
 			{"acc2_into", EmitAttnAcc2IntoSSE, func(_ int, seed float32) float32 { return seed }},
 		} {
 			b, err := k.emit(17, 17, KVOf(f16))
-			c := sseAttnKernel(t, "empty_"+k.name, b, err)
+			c := gate.kernel(t, "empty_"+k.name, b, err)
 			o1, o2 := sentinelRow(17), sentinelRow(17)
 			for i := 0; i < 17; i++ {
 				o1[i], o2[i] = float32(i)+0.5, float32(i)-0.5
@@ -339,6 +347,7 @@ func TestAttnEmptyWindowSSE(t *testing.T) {
 // at both KV widths: the paired kernel shares a load and changes no
 // arithmetic.
 func TestAttnPairedIsBitIdenticalSSE(t *testing.T) {
+	var gate attnGate
 	for _, s := range []struct{ hd, stride, npos int }{
 		{64, 256, 1}, {64, 256, 2}, {64, 256, 7},
 		{64, 256, 512}, {64, 256, 1537},
@@ -352,7 +361,7 @@ func TestAttnPairedIsBitIdenticalSSE(t *testing.T) {
 			}
 			emit := func(name string, f func(int, int, KVFmt) ([]byte, error)) *Code {
 				b, err := f(s.hd, s.stride, KVOf(f16))
-				return sseAttnKernel(t, tag(name), b, err)
+				return gate.kernel(t, tag(name), b, err)
 			}
 			base := Args{W: d.cache(f16, 0), Rows: int64(s.npos)}
 
@@ -425,6 +434,7 @@ func sseAttnPairBits(t *testing.T, what string, n int, want, got []float32) {
 // window accumulated in pieces (Acc, then AccInto, as a page walk calls them)
 // gives exactly the bits of one call over the whole window.
 func TestAttnIntoSplitsBitIdenticallySSE(t *testing.T) {
+	var gate attnGate
 	splits := 0
 	for _, hd := range []int{64, 128, 256, 12, 17, 3} {
 		for _, npos := range []int{16, 129, 512} {
@@ -433,7 +443,7 @@ func TestAttnIntoSplitsBitIdenticallySSE(t *testing.T) {
 				tag := "hd" + itoa(hd) + map[bool]string{true: "_f16"}[f16]
 				k := func(name string, f func(int, int, KVFmt) ([]byte, error)) *Code {
 					b, err := f(hd, hd, KVOf(f16))
-					return sseAttnKernel(t, name+"_"+tag, b, err)
+					return gate.kernel(t, name+"_"+tag, b, err)
 				}
 				acc, into := k("acc", EmitAttnAccSSE), k("acc_into", EmitAttnAccIntoSSE)
 				acc2, into2 := k("acc2", EmitAttnAcc2SSE), k("acc2_into", EmitAttnAcc2IntoSSE)
@@ -487,6 +497,7 @@ func TestAttnIntoSplitsBitIdenticallySSE(t *testing.T) {
 // f16 addressing can differ. They must not: the widening is exact, and the
 // arithmetic after it is the f32 kernel's.
 func TestAttnF16MatchesF32OnExactHalvesSSE(t *testing.T) {
+	var gate attnGate
 	type kern struct {
 		name string
 		emit func(hd, stride int, fm KVFmt) ([]byte, error)
@@ -507,7 +518,7 @@ func TestAttnF16MatchesF32OnExactHalvesSSE(t *testing.T) {
 			for _, k := range kerns {
 				run := func(f16 bool) ([]float32, []float32) {
 					b, err := k.emit(hd, stride, KVOf(f16))
-					c := sseAttnKernel(t, k.name+"_exact_hd"+itoa(hd)+map[bool]string{true: "_f16"}[f16], b, err)
+					c := gate.kernel(t, k.name+"_exact_hd"+itoa(hd)+map[bool]string{true: "_f16"}[f16], b, err)
 					n := npos
 					if k.acc {
 						n = hd
@@ -573,6 +584,7 @@ func TestAttnF16KernelSizeSSE(t *testing.T) {
 // against the model, and -- one chain per query being oracle.Dot32's order --
 // against the oracle itself.
 func TestAttnScoresTiledSSE(t *testing.T) {
+	var gate attnGate
 	const (
 		stride      = 768 // kv and q rows both step by the residual width
 		scoreStride = 136 // deliberately not a round number
@@ -596,7 +608,7 @@ func TestAttnScoresTiledSSE(t *testing.T) {
 				}
 				tag := "scores_t" + itoa(qt) + "_hd" + itoa(hd) + map[bool]string{true: "_f16"}[f16]
 				b, err := EmitAttnScoresTiledSSE(hd, stride, stride, scoreStride, qt, KVOf(f16))
-				c := sseAttnKernel(t, tag, b, err)
+				c := gate.kernel(t, tag, b, err)
 				scores := make([]float32, qt*scoreStride+attnGuard)
 				for i := range scores {
 					scores[i] = math.Float32frombits(softmaxSentinel)

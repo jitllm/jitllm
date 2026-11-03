@@ -20,13 +20,17 @@ import (
 // xieluParams are the effective four numbers (alpha_p, alpha_n, beta, eps):
 // Apertus's shape, an eps wide enough that min(x, eps) clamps a visible band of
 // inputs, and one whose alphas are far apart so a swap is loud.
-var xieluParams = [][4]float32{
-	{0.8, 0.95, 0.5, -1e-6},
-	{1.31, 0.42, 0.37, -0.25},
-	{0.05, 2.7, 0.9, -0.0625},
+func xieluParams() [][4]float32 {
+	return [][4]float32{
+		{0.8, 0.95, 0.5, -1e-6},
+		{1.31, 0.42, 0.37, -0.25},
+		{0.05, 2.7, 0.9, -0.0625},
+	}
 }
 
-var xieluWidths = []int{1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 33, 64, 100}
+func xieluWidths() []int {
+	return []int{1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 33, 64, 100}
+}
 
 // xieluInput mixes the regions the kernel distinguishes: the polynomial's
 // [-1/2, 0], exp below it, values near zero where expm1 - x cancels, the eps
@@ -122,8 +126,8 @@ func TestXIELUMatchesTheOracle(t *testing.T) {
 	defer done()
 	ran := 0
 	for _, k := range ks {
-		for _, n := range xieluWidths {
-			for pi, p := range xieluParams {
+		for _, n := range xieluWidths() {
+			for pi, p := range xieluParams() {
 				x := xieluInput(n, int64(n*31+pi))
 				got, guarded := xieluRun(k, x, p)
 				if !guarded {
@@ -177,8 +181,8 @@ func TestXIELUViolations(t *testing.T) {
 	}
 	for _, f := range faults {
 		hits := 0
-		for _, n := range xieluWidths {
-			for pi, p := range xieluParams {
+		for _, n := range xieluWidths() {
+			for pi, p := range xieluParams() {
 				x := xieluInput(n, int64(n*31+pi))
 				got, _ := xieluRun(ks[0], x, p)
 				for i, v := range x {
@@ -257,8 +261,8 @@ func TestXIELUAtTheExpEdges(t *testing.T) {
 	}
 	for _, k := range ks {
 		worst, worstOld := 0.0, 0.0
-		for _, n := range xieluWidths {
-			for pi, p := range xieluParams {
+		for _, n := range xieluWidths() {
+			for pi, p := range xieluParams() {
 				x := tiled(n)
 				got, guarded := xieluRun(k, x, p)
 				if !guarded {
@@ -291,8 +295,8 @@ func TestXIELUAtTheExpEdges(t *testing.T) {
 		{"exp a Taylor term short", xieluShortExp},
 	} {
 		hits := 0
-		for _, n := range xieluWidths {
-			for _, p := range xieluParams {
+		for _, n := range xieluWidths() {
+			for _, p := range xieluParams() {
 				x := tiled(n)
 				got, _ := xieluRun(ks[0], x, p)
 				for i, v := range x {

@@ -115,7 +115,7 @@ func segMaxCall(c *Code, vals []float32, ids []int32, segLen, segs, base int,
 		K:        int64(segLen),
 		Rows:     int64(segs),
 		Cols:     int64(base),
-		Scr:      (*byte)(unsafe.Pointer(&sampleTestConsts[0])),
+		Scr:      (*byte)(unsafe.Pointer(&sampleTestConsts()[0])),
 	}
 	if idsMem {
 		args.ASum = &ids[0]
@@ -127,7 +127,9 @@ func segMaxCall(c *Code, vals []float32, ids []int32, segLen, segs, base int,
 	return outV, outI
 }
 
-var sampleTestConsts = MoETopKConsts()
+func sampleTestConsts() []float32 {
+	return MoETopKConsts()
+}
 
 func drawCall(c *Code, p []float32, minp, topp, u, sumAll float32) drawGoOut {
 	par := [SampleParN]float32{minp, topp, u, sumAll}
@@ -139,7 +141,7 @@ func drawCall(c *Code, p []float32, minp, topp, u, sumAll float32) drawGoOut {
 		AScale: &par[0],
 		ASum:   &out[0],
 		Out:    &sum[0],
-		Scr:    (*byte)(unsafe.Pointer(&sampleTestConsts[0])),
+		Scr:    (*byte)(unsafe.Pointer(&sampleTestConsts()[0])),
 	}
 	c.Call(&args)
 	return drawGoOut{
@@ -159,7 +161,7 @@ func segMaxRaw(c *Code, vals []float32, ids []int32, segLen, segs, base int, pre
 	args := Args{
 		Q32: &vals[0], Out: &outV[0], AHalfSum: &outI[0],
 		K: int64(segLen), Rows: int64(segs), Cols: int64(base),
-		Scr: (*byte)(unsafe.Pointer(&sampleTestConsts[0])),
+		Scr: (*byte)(unsafe.Pointer(&sampleTestConsts()[0])),
 	}
 	if ids != nil {
 		args.ASum = &ids[0]

@@ -1,7 +1,6 @@
 package cpu
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -88,11 +87,17 @@ func MapNamed(code []byte, name string) (*Code, error) {
 // AVX-VNNI. It is a decline: the builders in nn skip the kernel (the packed
 // family has a pre-VNNI sequence to use instead) and a mandatory kernel's
 // mustMap names it.
-var ErrNoVNNI = errors.New("cpu: this kernel contains VPDPBUSD and this host has no AVX-VNNI")
+const ErrNoVNNI jitError = "cpu: this kernel contains VPDPBUSD and this host has no AVX-VNNI"
+
+// jitError is a sentinel error of this package: a constant, matched with
+// errors.Is like any other.
+type jitError string
+
+func (e jitError) Error() string { return string(e) }
 
 // ErrISA is what every ISAError matches under errors.Is: Map refusing a kernel
 // that needs extensions this host does not have.
-var ErrISA = errors.New("cpu: this kernel needs instructions this host does not have")
+const ErrISA jitError = "cpu: this kernel needs instructions this host does not have"
 
 // ISAError is Map's refusal of a kernel whose ISA this host does not cover. It
 // names the missing extensions, so the message reads as a property of the host

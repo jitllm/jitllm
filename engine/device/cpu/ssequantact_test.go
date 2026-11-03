@@ -123,9 +123,11 @@ func sseQuantActTies(k, window int) []float32 {
 // than eight blocks in total, whole groups of eight, and a k whose blocks do not
 // divide into groups (2304/32 = 72 = 9 groups; 576/32 = 18 leaves two blocks
 // over after two groups).
-var sseQuantActShapes = []struct{ k, window int }{
-	{64, 32}, {256, 32}, {576, 32}, {2048, 32},
-	{512, 256}, {2048, 256}, {2304, 256},
+func sseQuantActShapes() []struct{ k, window int } {
+	return []struct{ k, window int }{
+		{64, 32}, {256, 32}, {576, 32}, {2048, 32},
+		{512, 256}, {2048, 256}, {2304, 256},
+	}
 }
 
 // sseQuantActInputs names the three inputs every shape is driven with.
@@ -171,7 +173,7 @@ func TestSSEQuantActMatchesTheGoLoopExactly(t *testing.T) {
 		ran, wide, narrow := 0, 0, 0
 		for _, q := range quant.PackedTypes {
 			kern, done := sseQuantActKernels(t, q)
-			for _, sh := range sseQuantActShapes {
+			for _, sh := range sseQuantActShapes() {
 				// Ask the driver which kernel it takes, so a declined shape
 				// cannot pass by comparing the Go loop with itself.
 				if !kern.Applies(sh.window) {

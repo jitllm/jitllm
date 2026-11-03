@@ -181,7 +181,7 @@ func TestA64ExecuteLoop(t *testing.T) {
 // clobbered it would break the runtime later, elsewhere. Allocating and
 // scheduling right after kernel calls makes the damage local.
 func TestA64GoroutineRegisterIntact(t *testing.T) {
-	for _, wt := range a64KernelTypes {
+	for _, wt := range a64KernelTypes() {
 		code, err := EmitA64(Spec{W: wt, Rows: 1, Accs: 1, Cols: 1})
 		if err != nil {
 			t.Fatal(err)
@@ -232,11 +232,11 @@ func TestA64GoroutineRegisterIntact(t *testing.T) {
 // BiasC 1, so the kernel recovers it as -8*pairs[2b+1] instead of recomputing
 // it per row.
 func TestA64KernelMatchesReference(t *testing.T) {
-	for _, wt := range a64KernelTypes {
+	for _, wt := range a64KernelTypes() {
 		t.Run(wt.String(), func(t *testing.T) { a64KernelVsReference(t, wt, BiasC(wt)) })
 	}
 	t.Run("bias-is-ignored", func(t *testing.T) {
-		for _, wt := range a64KernelTypes {
+		for _, wt := range a64KernelTypes() {
 			if a64NeedsActivationSum(wt) {
 				continue // reads pairs[2b+1] for the min term, by design
 			}

@@ -28,7 +28,7 @@ func TestSSEProbesCoverEveryField(t *testing.T) {
 		t.Fatalf("found %d error-returning fields; the reflection walked the wrong thing", len(fields))
 	}
 	probed := map[string]int{}
-	for _, p := range sseProbes {
+	for _, p := range sseProbes() {
 		probed[p.field]++
 		if !fields[p.field] {
 			t.Errorf("probe %q names no error-returning field of Emitters", p.field)
@@ -80,11 +80,9 @@ func TestBaselineAnswersFromTheSSETable(t *testing.T) {
 	}
 	check(t, "as the tree stands")
 
-	saved := sseEmitters.GatedDelta
-	sseEmitters.GatedDelta = func(int) ([]byte, error) { return nil, errNoSSE("gated_delta") }
-	retier(TierSSE) // drop Baseline's cached verdict
-	err := Baseline()
-	sseEmitters.GatedDelta = saved
+	stub := EmittersFor(TierSSE)
+	stub.GatedDelta = func(int) ([]byte, error) { return nil, errNoSSE("gated_delta") }
+	err := baselineWith(stub)
 	if err == nil || !strings.Contains(err.Error(), "GatedDelta") {
 		t.Fatalf("GatedDelta put back to a stub and Baseline says %v -- it does not ask the table", err)
 	}
@@ -99,11 +97,10 @@ func TestBaselineAnswersFromTheSSETable(t *testing.T) {
 // shape is as absent as a stub, and Baseline must say which one rather than
 // take the process down.
 func TestSSEProbesReportAPanickingEmitter(t *testing.T) {
-	saved := sseEmitters.Conv1d
-	sseEmitters.Conv1d = func(int, int) ([]byte, error) { panic("synthetic emitter bug") }
-	defer func() { sseEmitters.Conv1d = saved }()
+	em := EmittersFor(TierSSE)
+	em.Conv1d = func(int, int) ([]byte, error) { panic("synthetic emitter bug") }
 	var hit string
-	for _, p := range SSEPending() {
+	for _, p := range ssePendingIn(em) {
 		if strings.HasPrefix(p, "Conv1d") {
 			hit = p
 		}

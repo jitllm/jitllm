@@ -111,3 +111,13 @@ func abAccs(t *testing.T, wt quant.Type) {
 		c.Close()
 	}
 }
+
+// requireRowMajorExec skips a measurement that executes a row-major kernel on
+// a host whose native table has none for qt: the emitter still produces it,
+// only calling it is unsafe.
+func requireRowMajorExec(t testing.TB, qt quant.Type) {
+	t.Helper()
+	if !SupportedNative(qt) {
+		t.Skipf("ROW-MAJOR %v CANNOT BE EXECUTED ON THIS HOST -- this measurement covered nothing here", qt)
+	}
+}

@@ -92,15 +92,17 @@ const ISATierSSE = ISASSE2 | ISASSE3 | ISASSSE3 | ISASSE41
 // ISATierAVX2 is what an UNDECLARED kernel needs: the AVX2 tier's floor.
 const ISATierAVX2 = ISAAVX2 | ISAFMA | ISAF16C
 
-var isaNames = [...]string{
-	"sse2", "sse3", "ssse3", "sse4.1", "sse4.2", "popcnt",
-	"avx2", "fma", "f16c", "avx-vnni", "bmi2", "dotprod",
+func isaNames() [12]string {
+	return [...]string{
+		"sse2", "sse3", "ssse3", "sse4.1", "sse4.2", "popcnt",
+		"avx2", "fma", "f16c", "avx-vnni", "bmi2", "dotprod",
+	}
 }
 
 // Names lists the extensions in the set, in a fixed order.
 func (s ISA) Names() []string {
 	var out []string
-	for i, n := range isaNames {
+	for i, n := range isaNames() {
 		if s&(1<<i) != 0 {
 			out = append(out, n)
 		}

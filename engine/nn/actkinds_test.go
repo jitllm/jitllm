@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
@@ -26,7 +26,7 @@ func TestAct32JITRunsEveryUngatedKind(t *testing.T) {
 		ActSqrtSoftplus: oracle.SqrtSoftplus,
 	}
 	const n = 203 // whole vectors and a tail
-	for _, k := range cpu.Ungated {
+	for _, k := range graph.Ungated {
 		f, ok := ref[k]
 		if !ok {
 			t.Fatalf("%v: no reference; add one here", k)

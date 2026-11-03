@@ -16,7 +16,7 @@ package cpu
 // encodings with no second table.
 
 // ssePrefix is the legacy byte for each pp value; pp0 emits nothing.
-var ssePrefix = [4]byte{0, 0x66, 0xF3, 0xF2}
+const ssePrefix = "\x00\x66\xF3\xF2"
 
 // XMM0..XMM15 name the vector registers in legacy-SSE code. They are the same
 // numbers as Y0..Y15 (and as the GP registers), exactly as in the hardware;

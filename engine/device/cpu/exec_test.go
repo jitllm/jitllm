@@ -4,7 +4,6 @@ package cpu
 
 import (
 	"encoding/binary"
-	"math"
 	"testing"
 	"unsafe"
 )
@@ -194,5 +193,3 @@ func TestMapRejects(t *testing.T) {
 	}()
 	c.Call(&Args{})
 }
-
-var _ = math.Float32bits

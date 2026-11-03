@@ -25,7 +25,9 @@ import (
 
 // hybWidths is 1 through several vectors, every residue mod 4 and mod 8,
 // plus the engine's own state width (128) and one past it.
-var hybWidths = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 15, 16, 17, 20, 33, 64, 127, 128, 130}
+func hybWidths() []int {
+	return []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 15, 16, 17, 20, 33, 64, 127, 128, 130}
+}
 
 const hybGuard = 8
 
@@ -33,7 +35,7 @@ const hybGuard = 8
 // arithmetic on a NaN returns its payload unchanged, so a kernel that
 // read-modify-writes a guard slot (decays it, adds 0*k to it) would store the
 // sentinel's own bits back and the guard would compare equal.
-var hybSentinel = float32(-1234.5678)
+const hybSentinel float32 = -1234.5678
 
 // hybGuarded returns n floats that start one float into their allocation (so
 // they are not 16-byte aligned) followed by hybGuard sentinels, and the whole
@@ -113,7 +115,7 @@ func hybCallDelta(c *Code, o, st, k, q, v []float32, decay, gate float32, n int)
 func TestEmitGatedDeltaSSEMatchesOracle(t *testing.T) {
 	em := EmittersFor(TierSSE)
 	var sseO, sseS, avxO, avxS float64
-	for _, n := range hybWidths {
+	for _, n := range hybWidths() {
 		var avx *Code
 		b, err := em.GatedDelta(n)
 		if err != nil {
@@ -187,7 +189,7 @@ func TestEmitGatedDeltaSSEMatchesOracle(t *testing.T) {
 		c.Close()
 	}
 	t.Logf("worst NMSE against the oracle over %d widths x 4 tokens: SSE output %.2e state %.2e; AVX2 output %.2e state %.2e",
-		len(hybWidths), sseO, sseS, avxO, avxS)
+		len(hybWidths()), sseO, sseS, avxO, avxS)
 }
 
 // TestEmitGatedDeltaSSERefusesEmptyWidths: every positive width is served,
@@ -215,7 +217,7 @@ func hybCallConv(c *Code, out, st, w, x []float32) {
 // and computes nothing -- so the state is compared bit for bit.
 func TestEmitConv1dSSEMatchesOracle(t *testing.T) {
 	em := EmittersFor(TierSSE)
-	chansList := append(append([]int(nil), hybWidths...), 512, 8192)
+	chansList := append(append([]int(nil), hybWidths()...), 512, 8192)
 	for _, taps := range []int{2, 3, 4, 5, 6, 8} {
 		for _, chans := range chansList {
 			b, err := em.Conv1d(taps, chans)
