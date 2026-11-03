@@ -1107,64 +1107,66 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *jlm.Config) error {
 
 // hfArchTable maps the class name in config.json's "architectures" onto an
 // entry. See hfArch.
-var hfArchTable = map[string]*hfArch{
-	"LlamaForCausalLM":    llamaHF,
-	"Qwen2ForCausalLM":    qwen2HF,
-	"Qwen3ForCausalLM":    qwen3HF,
-	"Qwen3MoeForCausalLM": qwen3moeHF,
-	"OlmoeForCausalLM":    olmoeHF,
-	"MixtralForCausalLM":  mixtralHF,
-	"GemmaForCausalLM":    gemmaHF,
-	"Phi3ForCausalLM":     phi3HF,
-	// One graph, two class names: V2 and V3 differ in the router, and every
-	// difference is a key config.json states. See deepseek2HF.
-	"DeepseekV2ForCausalLM": deepseek2HF,
-	"DeepseekV3ForCausalLM": deepseek2HF,
-	// Glm4MoeLiteForCausalLM (GLM-4.7-Flash) carries exactly the names this
-	// entry maps, over kv_lora_rank 512 and q_lora_rank 768. Matching names are
-	// not a matching graph, so it is gated by scripts/hfgold.py's
-	// synth-glm4moelite in model.TestSafetensorsMatchTransformers. Its sibling
-	// Glm4MoeForCausalLM (GLM-4.5-Air) has no kv_lora_rank and is not MLA, so
-	// it is deliberately absent.
-	"Glm4MoeLiteForCausalLM": deepseek2HF,
-	"KimiLinearForCausalLM":  kimiLinearHF,
-	// Kimi-K3's text model, its experts compressed-tensors MXFP4 in the
-	// release (convert/hfkimik3.go, convert/hfmxfp4.go).
-	"KimiK3ForConditionalGeneration": kimiK3HF,
-	// The mixture families, each to the container its GGUF converts to. See
-	// convert/hfmoefamily.go.
-	"Glm4MoeForCausalLM":        glm4moeHF,
-	"Qwen2MoeForCausalLM":       qwen2moeHF,
-	"Ernie4_5ForCausalLM":       ernie45HF,
-	"Ernie4_5_MoeForCausalLM":   ernie45moeHF,
-	"HunYuanDenseV1ForCausalLM": hunyuanHF,
-	"HunYuanMoEV1ForCausalLM":   hunyuanHF,
-	// The modern text group (convert/hfmoefamily2.go).
-	"Dots1ForCausalLM": dots1HF,
-	// BitNet b1.58 (convert/hfbitnet.go).
-	"BitNetForCausalLM": bitnetHF,
-	// Phi-3.5-MoE and its smaller siblings name the class as their remote
-	// code did; transformers saves its own spelling (convert/hfphimoe.go).
-	"PhiMoEForCausalLM": phimoeHF,
-	"PhimoeForCausalLM": phimoeHF,
-	// Apertus (convert/hfapertus.go).
-	"ApertusForCausalLM": apertusHF,
-	// The dense llama family (convert/safetensors_dense.go). OLMo 3 is
-	// ArchOLMo2 with a window, as on the GGUF side. Ministral3ForCausalLM is
-	// mistral3's text model; Mistral3ForConditionalGeneration, which nests it
-	// under a vision tower, is not here.
-	"SmolLM3ForCausalLM":    smollm3HF,
-	"ArceeForCausalLM":      arceeHF,
-	"SeedOssForCausalLM":    seedOssHF,
-	"Olmo2ForCausalLM":      olmo2HF,
-	"Olmo3ForCausalLM":      olmo3HF,
-	"Exaone4ForCausalLM":    exaone4HF,
-	"Ministral3ForCausalLM": ministral3HF,
+func hfArchTable() map[string]*hfArch {
+	return map[string]*hfArch{
+		"LlamaForCausalLM":    llamaHF(),
+		"Qwen2ForCausalLM":    qwen2HF(),
+		"Qwen3ForCausalLM":    qwen3HF(),
+		"Qwen3MoeForCausalLM": qwen3moeHF(),
+		"OlmoeForCausalLM":    olmoeHF(),
+		"MixtralForCausalLM":  mixtralHF(),
+		"GemmaForCausalLM":    gemmaHF(),
+		"Phi3ForCausalLM":     phi3HF(),
+		// One graph, two class names: V2 and V3 differ in the router, and every
+		// difference is a key config.json states. See deepseek2HF.
+		"DeepseekV2ForCausalLM": deepseek2HF(),
+		"DeepseekV3ForCausalLM": deepseek2HF(),
+		// Glm4MoeLiteForCausalLM (GLM-4.7-Flash) carries exactly the names this
+		// entry maps, over kv_lora_rank 512 and q_lora_rank 768. Matching names are
+		// not a matching graph, so it is gated by scripts/hfgold.py's
+		// synth-glm4moelite in model.TestSafetensorsMatchTransformers. Its sibling
+		// Glm4MoeForCausalLM (GLM-4.5-Air) has no kv_lora_rank and is not MLA, so
+		// it is deliberately absent.
+		"Glm4MoeLiteForCausalLM": deepseek2HF(),
+		"KimiLinearForCausalLM":  kimiLinearHF(),
+		// Kimi-K3's text model, its experts compressed-tensors MXFP4 in the
+		// release (convert/hfkimik3.go, convert/hfmxfp4.go).
+		"KimiK3ForConditionalGeneration": kimiK3HF(),
+		// The mixture families, each to the container its GGUF converts to. See
+		// convert/hfmoefamily.go.
+		"Glm4MoeForCausalLM":        glm4moeHF(),
+		"Qwen2MoeForCausalLM":       qwen2moeHF(),
+		"Ernie4_5ForCausalLM":       ernie45HF(),
+		"Ernie4_5_MoeForCausalLM":   ernie45moeHF(),
+		"HunYuanDenseV1ForCausalLM": hunyuanHF(),
+		"HunYuanMoEV1ForCausalLM":   hunyuanHF(),
+		// The modern text group (convert/hfmoefamily2.go).
+		"Dots1ForCausalLM": dots1HF(),
+		// BitNet b1.58 (convert/hfbitnet.go).
+		"BitNetForCausalLM": bitnetHF(),
+		// Phi-3.5-MoE and its smaller siblings name the class as their remote
+		// code did; transformers saves its own spelling (convert/hfphimoe.go).
+		"PhiMoEForCausalLM": phimoeHF(),
+		"PhimoeForCausalLM": phimoeHF(),
+		// Apertus (convert/hfapertus.go).
+		"ApertusForCausalLM": apertusHF(),
+		// The dense llama family (convert/safetensors_dense.go). OLMo 3 is
+		// ArchOLMo2 with a window, as on the GGUF side. Ministral3ForCausalLM is
+		// mistral3's text model; Mistral3ForConditionalGeneration, which nests it
+		// under a vision tower, is not here.
+		"SmolLM3ForCausalLM":    smollm3HF(),
+		"ArceeForCausalLM":      arceeHF(),
+		"SeedOssForCausalLM":    seedOssHF(),
+		"Olmo2ForCausalLM":      olmo2HF(),
+		"Olmo3ForCausalLM":      olmo3HF(),
+		"Exaone4ForCausalLM":    exaone4HF(),
+		"Ministral3ForCausalLM": ministral3HF(),
+	}
 }
 
 func hfArchOf(c *hfConfig) (*hfArch, error) {
 	for _, n := range c.Architectures {
-		if a, ok := hfArchTable[n]; ok {
+		if a, ok := hfArchTable()[n]; ok {
 			return a, nil
 		}
 	}
@@ -1182,8 +1184,8 @@ func hfArchOf(c *hfConfig) (*hfArch, error) {
 // HFClasses is every Hugging Face class (config.json's architectures) the
 // safetensors path converts -- hfArchTable, which is the list -- sorted.
 func HFClasses() []string {
-	names := make([]string, 0, len(hfArchTable))
-	for n := range hfArchTable {
+	names := make([]string, 0, len(hfArchTable()))
+	for n := range hfArchTable() {
 		names = append(names, n)
 	}
 	sort.Strings(names)
@@ -1194,7 +1196,7 @@ func HFClasses() []string {
 // class is in the list. As on the GGUF side, the config can refine it (OLMo 3
 // with a window is jlm.ArchOLMo3); this is the class's own entry.
 func HFClassGraph(class string) (jlm.Arch, bool) {
-	a, ok := hfArchTable[class]
+	a, ok := hfArchTable()[class]
 	if !ok {
 		return jlm.ArchNone, false
 	}
@@ -1394,157 +1396,173 @@ func hfCheckShape(e *jlm.Tensor, c *jlm.Config) error {
 // ---------------------------------------------------------------------------
 // llama
 
-var llamaHF = &hfArch{
-	arch:        jlm.ArchLlama,
-	blockPrefix: "model.layers.",
-	model: map[string]jlm.Role{
-		"model.embed_tokens.weight": jlm.RoleTokenEmbd,
-		"model.norm.weight":         jlm.RoleOutputNorm,
-		"lm_head.weight":            jlm.RoleOutput,
-	},
-	block: map[string]jlm.Role{
-		"input_layernorm.weight": jlm.RoleAttnNorm,
-		// post_attention_layernorm is the FFN's input norm (ffn_norm), not a
-		// post-norm; gemma2/gemma3's similarly named tensor is a real post-norm.
-		// This is the trap retarget() handles on the GGUF side.
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
+func llamaHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchLlama,
+		blockPrefix: "model.layers.",
+		model: map[string]jlm.Role{
+			"model.embed_tokens.weight": jlm.RoleTokenEmbd,
+			"model.norm.weight":         jlm.RoleOutputNorm,
+			"lm_head.weight":            jlm.RoleOutput,
+		},
+		block: map[string]jlm.Role{
+			"input_layernorm.weight": jlm.RoleAttnNorm,
+			// post_attention_layernorm is the FFN's input norm (ffn_norm), not a
+			// post-norm; gemma2/gemma3's similarly named tensor is a real post-norm.
+			// This is the trap retarget() handles on the GGUF side.
+			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
 
-		"self_attn.q_proj.weight": jlm.RoleAttnQ,
-		"self_attn.k_proj.weight": jlm.RoleAttnK,
-		"self_attn.v_proj.weight": jlm.RoleAttnV,
-		"self_attn.o_proj.weight": jlm.RoleAttnOut,
-		"self_attn.q_proj.bias":   jlm.RoleAttnQBias,
-		"self_attn.k_proj.bias":   jlm.RoleAttnKBias,
-		"self_attn.v_proj.bias":   jlm.RoleAttnVBias,
-		"self_attn.o_proj.bias":   jlm.RoleAttnOutBias,
+			"self_attn.q_proj.weight": jlm.RoleAttnQ,
+			"self_attn.k_proj.weight": jlm.RoleAttnK,
+			"self_attn.v_proj.weight": jlm.RoleAttnV,
+			"self_attn.o_proj.weight": jlm.RoleAttnOut,
+			"self_attn.q_proj.bias":   jlm.RoleAttnQBias,
+			"self_attn.k_proj.bias":   jlm.RoleAttnKBias,
+			"self_attn.v_proj.bias":   jlm.RoleAttnVBias,
+			"self_attn.o_proj.bias":   jlm.RoleAttnOutBias,
 
-		"mlp.gate_proj.weight": jlm.RoleFFNGate,
-		"mlp.up_proj.weight":   jlm.RoleFFNUp,
-		"mlp.down_proj.weight": jlm.RoleFFNDown,
-	},
-	// inv_freq is derived (a function of rope_theta and the head dim, which the
-	// config carries), so it is named and ignored rather than stored as a
-	// second source of truth.
-	ignore: map[string]bool{
-		"model.rotary_emb.inv_freq":     true,
-		"self_attn.rotary_emb.inv_freq": true,
-	},
-	config: hfConfigWith(jlm.ArchLlama, 0, "silu"),
-	fixup:  llamaHFFixup,
+			"mlp.gate_proj.weight": jlm.RoleFFNGate,
+			"mlp.up_proj.weight":   jlm.RoleFFNUp,
+			"mlp.down_proj.weight": jlm.RoleFFNDown,
+		},
+		// inv_freq is derived (a function of rope_theta and the head dim, which the
+		// config carries), so it is named and ignored rather than stored as a
+		// second source of truth.
+		ignore: map[string]bool{
+			"model.rotary_emb.inv_freq":     true,
+			"self_attn.rotary_emb.inv_freq": true,
+		},
+		config: hfConfigWith(jlm.ArchLlama, 0, "silu"),
+		fixup:  llamaHFFixup,
+	}
 }
 
 // qwen2 is llama plus the attention biases, which the block map already
 // has: the file decides whether a bias exists. It is NEOX and unpermuted,
 // as its GGUF is: convert_hf_to_gguf.py permutes only llama's rows. For
 // qwen3 permuting would also misalign the per-head q/k norm weight.
-var qwen2HF = &hfArch{
-	arch:        jlm.ArchQwen2,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block:       llamaHF.block,
-	ignore:      llamaHF.ignore,
-	config:      hfConfigWith(jlm.ArchQwen2, jlm.FlagRopeNeox, "silu"),
+func qwen2HF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchQwen2,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block:       llamaHF().block,
+		ignore:      llamaHF().ignore,
+		config:      hfConfigWith(jlm.ArchQwen2, jlm.FlagRopeNeox, "silu"),
+	}
 }
 
 // qwen3 is llama plus a per-head q/k norm of width [head_dim] (FlagQKNorm);
 // olmoe ships the same names at [hidden_size] (FlagQKNormWide). hfCheckShape
 // checks the width, so the other shape is refused.
-var qwen3Block = blockPlus(llamaHF.block, map[string]jlm.Role{
-	"self_attn.q_norm.weight": jlm.RoleAttnQNorm,
-	"self_attn.k_norm.weight": jlm.RoleAttnKNorm,
-})
+func qwen3Block() map[string]jlm.Role {
+	return blockPlus(llamaHF().block, map[string]jlm.Role{
+		"self_attn.q_norm.weight": jlm.RoleAttnQNorm,
+		"self_attn.k_norm.weight": jlm.RoleAttnKNorm,
+	})
+}
 
-var qwen3HF = &hfArch{
-	arch:        jlm.ArchQwen3,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block:       qwen3Block,
-	ignore:      llamaHF.ignore,
-	config:      hfConfigWith(jlm.ArchQwen3, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
+func qwen3HF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchQwen3,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block:       qwen3Block(),
+		ignore:      llamaHF().ignore,
+		config:      hfConfigWith(jlm.ArchQwen3, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
+	}
 }
 
 // The HuggingFace mixture spelling qwen3moe and olmoe share: a router at
 // mlp.gate and one SwiGLU per expert under mlp.experts.N.
-var hfExperts = map[string]jlm.Role{
-	"gate_proj.weight": jlm.RoleExpGateBank,
-	"up_proj.weight":   jlm.RoleExpUpBank,
-	"down_proj.weight": jlm.RoleExpDownBank,
+func hfExperts() map[string]jlm.Role {
+	return map[string]jlm.Role{
+		"gate_proj.weight": jlm.RoleExpGateBank,
+		"up_proj.weight":   jlm.RoleExpUpBank,
+		"down_proj.weight": jlm.RoleExpDownBank,
+	}
 }
 
 // qwen3's attention with the dense FFN replaced by a router and experts.
-var qwen3moeHF = &hfArch{
-	arch:         jlm.ArchQwen3MoE,
-	blockPrefix:  llamaHF.blockPrefix,
-	model:        llamaHF.model,
-	block:        blockPlus(qwen3Block, map[string]jlm.Role{"mlp.gate.weight": jlm.RoleRouter}),
-	expertPrefix: "mlp.experts.",
-	expert:       hfExperts,
-	ignore:       llamaHF.ignore,
-	config:       hfConfigWith(jlm.ArchQwen3MoE, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
+func qwen3moeHF() *hfArch {
+	return &hfArch{
+		arch:         jlm.ArchQwen3MoE,
+		blockPrefix:  llamaHF().blockPrefix,
+		model:        llamaHF().model,
+		block:        blockPlus(qwen3Block(), map[string]jlm.Role{"mlp.gate.weight": jlm.RoleRouter}),
+		expertPrefix: "mlp.experts.",
+		expert:       hfExperts(),
+		ignore:       llamaHF().ignore,
+		config:       hfConfigWith(jlm.ArchQwen3MoE, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
+	}
 }
 
 // olmoe is qwen3moe's names over two different graph facts: its q/k norm
 // spans the whole projection (checked by shape), and its mixture weights are
 // not renormalised (norm_topk_prob, read by hfMoEConfig).
-var olmoeHF = &hfArch{
-	arch:         jlm.ArchOLMoE,
-	blockPrefix:  llamaHF.blockPrefix,
-	model:        llamaHF.model,
-	block:        qwen3moeHF.block,
-	expertPrefix: "mlp.experts.",
-	expert:       hfExperts,
-	ignore:       llamaHF.ignore,
-	config: func(c *hfConfig, names []string) (*jlm.Config, error) {
-		// clip_qkv clamps q, k and v to [-x, x]; nothing here does.
-		if c.ClipQKV != nil {
-			return nil, fmt.Errorf("convert: %s: clip_qkv %v is not implemented", c.path, *c.ClipQKV)
-		}
-		cfg, err := hfConfigWith(jlm.ArchOLMoE, jlm.FlagRopeNeox|jlm.FlagQKNorm|jlm.FlagQKNormWide, "silu")(c, names)
-		if err != nil {
-			return nil, err
-		}
-		// The same refusal configOf makes: a whole-projection k norm under GQA
-		// would need a width nothing states.
-		if cfg.NKVHead != cfg.NHead {
-			return nil, fmt.Errorf("convert: %s: a whole-projection q/k norm with GQA "+
-				"(%d q heads, %d kv heads) is not implemented: %w", c.path, cfg.NHead, cfg.NKVHead, ErrNotImplemented)
-		}
-		return cfg, nil
-	},
+func olmoeHF() *hfArch {
+	return &hfArch{
+		arch:         jlm.ArchOLMoE,
+		blockPrefix:  llamaHF().blockPrefix,
+		model:        llamaHF().model,
+		block:        qwen3moeHF().block,
+		expertPrefix: "mlp.experts.",
+		expert:       hfExperts(),
+		ignore:       llamaHF().ignore,
+		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+			// clip_qkv clamps q, k and v to [-x, x]; nothing here does.
+			if c.ClipQKV != nil {
+				return nil, fmt.Errorf("convert: %s: clip_qkv %v is not implemented", c.path, *c.ClipQKV)
+			}
+			cfg, err := hfConfigWith(jlm.ArchOLMoE, jlm.FlagRopeNeox|jlm.FlagQKNorm|jlm.FlagQKNormWide, "silu")(c, names)
+			if err != nil {
+				return nil, err
+			}
+			// The same refusal configOf makes: a whole-projection k norm under GQA
+			// would need a width nothing states.
+			if cfg.NKVHead != cfg.NHead {
+				return nil, fmt.Errorf("convert: %s: a whole-projection q/k norm with GQA "+
+					"(%d q heads, %d kv heads) is not implemented: %w", c.path, cfg.NHead, cfg.NKVHead, ErrNotImplemented)
+			}
+			return cfg, nil
+		},
+	}
 }
 
 // mixtral is llama with the FFN swapped, as its GGUF names it, so it keeps
 // llama's rotary permutation and Arch. Its router always renormalises the
 // top-k; the class has no norm_topk_prob.
-var mixtralHF = &hfArch{
-	arch:        jlm.ArchLlama,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: map[string]jlm.Role{
-		"input_layernorm.weight":          jlm.RoleAttnNorm,
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
-		"self_attn.q_proj.weight":         jlm.RoleAttnQ,
-		"self_attn.k_proj.weight":         jlm.RoleAttnK,
-		"self_attn.v_proj.weight":         jlm.RoleAttnV,
-		"self_attn.o_proj.weight":         jlm.RoleAttnOut,
-		"block_sparse_moe.gate.weight":    jlm.RoleRouter,
-	},
-	expertPrefix: "block_sparse_moe.experts.",
-	expert: map[string]jlm.Role{
-		"w1.weight": jlm.RoleExpGateBank,
-		"w3.weight": jlm.RoleExpUpBank,
-		"w2.weight": jlm.RoleExpDownBank,
-	},
-	ignore: llamaHF.ignore,
-	config: func(c *hfConfig, names []string) (*jlm.Config, error) {
-		cfg, err := hfConfigWith(jlm.ArchLlama, 0, "silu")(c, names)
-		if err != nil {
-			return nil, err
-		}
-		cfg.Flags &^= jlm.FlagNoExpertNorm
-		return cfg, nil
-	},
-	fixup: llamaHFFixup,
+func mixtralHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchLlama,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: map[string]jlm.Role{
+			"input_layernorm.weight":          jlm.RoleAttnNorm,
+			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
+			"self_attn.q_proj.weight":         jlm.RoleAttnQ,
+			"self_attn.k_proj.weight":         jlm.RoleAttnK,
+			"self_attn.v_proj.weight":         jlm.RoleAttnV,
+			"self_attn.o_proj.weight":         jlm.RoleAttnOut,
+			"block_sparse_moe.gate.weight":    jlm.RoleRouter,
+		},
+		expertPrefix: "block_sparse_moe.experts.",
+		expert: map[string]jlm.Role{
+			"w1.weight": jlm.RoleExpGateBank,
+			"w3.weight": jlm.RoleExpUpBank,
+			"w2.weight": jlm.RoleExpDownBank,
+		},
+		ignore: llamaHF().ignore,
+		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+			cfg, err := hfConfigWith(jlm.ArchLlama, 0, "silu")(c, names)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Flags &^= jlm.FlagNoExpertNorm
+			return cfg, nil
+		},
+		fixup: llamaHFFixup,
+	}
 }
 
 // gemma differs from llama in four silent places: NEOX rotary with rows as
@@ -1552,63 +1570,67 @@ var mixtralHF = &hfArch{
 // RMSNorm that multiplies by (1 + weight). The +1 is folded into the weight
 // here, as its GGUF carries it. The class defaults tie_word_embeddings to
 // true, so an absent key means tied.
-var gemmaHF = &hfArch{
-	arch:        jlm.ArchGemma,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block:       llamaHF.block,
-	ignore:      llamaHF.ignore,
-	config: func(c *hfConfig, names []string) (*jlm.Config, error) {
-		if c.TieWordEmbeddings == nil {
-			t := true
-			c.TieWordEmbeddings = &t
-		}
-		cfg, err := hfConfigWith(jlm.ArchGemma, jlm.FlagRopeNeox|jlm.FlagGELU, "gelu_pytorch_tanh")(c, names)
-		if err != nil {
-			return nil, err
-		}
-		cfg.EmbdScale = float32(math.Sqrt(float64(cfg.NEmbd)))
-		return cfg, nil
-	},
-	fixup: gemmaHFFixup,
+func gemmaHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchGemma,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block:       llamaHF().block,
+		ignore:      llamaHF().ignore,
+		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+			if c.TieWordEmbeddings == nil {
+				t := true
+				c.TieWordEmbeddings = &t
+			}
+			cfg, err := hfConfigWith(jlm.ArchGemma, jlm.FlagRopeNeox|jlm.FlagGELU, "gelu_pytorch_tanh")(c, names)
+			if err != nil {
+				return nil, err
+			}
+			cfg.EmbdScale = float32(math.Sqrt(float64(cfg.NEmbd)))
+			return cfg, nil
+		},
+		fixup: gemmaHFFixup,
+	}
 }
 
 // phi3 fuses q/k/v into qkv_proj and gate/up into gate_up_proj; both are the
 // file's packing and are split here, as convert.unfuse does on the GGUF side.
 // Gate comes first: Phi3MLP multiplies the activation of the first half into
 // the second. RoleFFNUp is the fused tensor's role, as the schema says.
-var phi3HF = &hfArch{
-	arch:        jlm.ArchPhi3,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: map[string]jlm.Role{
-		"input_layernorm.weight":          jlm.RoleAttnNorm,
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
-		"self_attn.qkv_proj.weight":       jlm.RoleAttnQKV,
-		"self_attn.o_proj.weight":         jlm.RoleAttnOut,
-		"mlp.gate_up_proj.weight":         jlm.RoleFFNUp,
-		"mlp.down_proj.weight":            jlm.RoleFFNDown,
-	},
-	fused: map[jlm.Role][]jlm.Role{
-		jlm.RoleAttnQKV: {jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV},
-		jlm.RoleFFNUp:   {jlm.RoleFFNGate, jlm.RoleFFNUp},
-	},
-	ignore: llamaHF.ignore,
-	config: func(c *hfConfig, names []string) (*jlm.Config, error) {
-		// phi3 slides every layer (allLocal), as the GGUF path does.
-		win := uint32(0)
-		if c.SlidingWindow != nil && (c.UseSlidingWindow == nil || *c.UseSlidingWindow) {
-			win, c.SlidingWindow = *c.SlidingWindow, nil
-		}
-		cfg, err := hfConfigWith(jlm.ArchPhi3, jlm.FlagRopeNeox, "silu")(c, names)
-		if err != nil {
-			return nil, err
-		}
-		if win > 0 {
-			cfg.SWAWindow, cfg.SWAPeriod = win, allLocal(cfg.NLayer)
-		}
-		return cfg, nil
-	},
+func phi3HF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchPhi3,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: map[string]jlm.Role{
+			"input_layernorm.weight":          jlm.RoleAttnNorm,
+			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
+			"self_attn.qkv_proj.weight":       jlm.RoleAttnQKV,
+			"self_attn.o_proj.weight":         jlm.RoleAttnOut,
+			"mlp.gate_up_proj.weight":         jlm.RoleFFNUp,
+			"mlp.down_proj.weight":            jlm.RoleFFNDown,
+		},
+		fused: map[jlm.Role][]jlm.Role{
+			jlm.RoleAttnQKV: {jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV},
+			jlm.RoleFFNUp:   {jlm.RoleFFNGate, jlm.RoleFFNUp},
+		},
+		ignore: llamaHF().ignore,
+		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+			// phi3 slides every layer (allLocal), as the GGUF path does.
+			win := uint32(0)
+			if c.SlidingWindow != nil && (c.UseSlidingWindow == nil || *c.UseSlidingWindow) {
+				win, c.SlidingWindow = *c.SlidingWindow, nil
+			}
+			cfg, err := hfConfigWith(jlm.ArchPhi3, jlm.FlagRopeNeox, "silu")(c, names)
+			if err != nil {
+				return nil, err
+			}
+			if win > 0 {
+				cfg.SWAWindow, cfg.SWAPeriod = win, allLocal(cfg.NLayer)
+			}
+			return cfg, nil
+		},
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,62 +1643,64 @@ var phi3HF = &hfArch{
 // Dense and mixture blocks spell their feed-forward with disjoint names, so one
 // flat table identifies both; deepseekLayerSets checks each name lands on a
 // block first_k_dense_replace agrees with.
-var deepseek2HF = &hfArch{
-	arch:        jlm.ArchDeepseek2,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: map[string]jlm.Role{
-		"input_layernorm.weight":          jlm.RoleAttnNorm,
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
+func deepseek2HF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchDeepseek2,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: map[string]jlm.Role{
+			"input_layernorm.weight":          jlm.RoleAttnNorm,
+			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
 
-		// MLA. q_a_proj/q_a_layernorm/q_b_proj are the two-step query, absent
-		// when q_lora_rank is null; q_proj is the one-step form. deepseekQueryForm
-		// checks they are exclusive.
-		"self_attn.q_a_proj.weight":           jlm.RoleAttnQA,
-		"self_attn.q_a_layernorm.weight":      jlm.RoleAttnQANorm,
-		"self_attn.q_b_proj.weight":           jlm.RoleAttnQB,
-		"self_attn.q_proj.weight":             jlm.RoleAttnQ,
-		"self_attn.kv_a_proj_with_mqa.weight": jlm.RoleAttnKVA,
-		"self_attn.kv_a_layernorm.weight":     jlm.RoleAttnKVANorm,
-		"self_attn.o_proj.weight":             jlm.RoleAttnOut,
-		// The un-absorbed pair, cut by deepseekSplitKVB. A checkpoint that
-		// ships the halves already separate names them k_b_proj / v_b_proj and
-		// takes neither branch.
-		"self_attn.kv_b_proj.weight": jlm.RoleAttnKB,
-		"self_attn.k_b_proj.weight":  jlm.RoleAttnKB,
-		"self_attn.v_b_proj.weight":  jlm.RoleAttnVB,
+			// MLA. q_a_proj/q_a_layernorm/q_b_proj are the two-step query, absent
+			// when q_lora_rank is null; q_proj is the one-step form. deepseekQueryForm
+			// checks they are exclusive.
+			"self_attn.q_a_proj.weight":           jlm.RoleAttnQA,
+			"self_attn.q_a_layernorm.weight":      jlm.RoleAttnQANorm,
+			"self_attn.q_b_proj.weight":           jlm.RoleAttnQB,
+			"self_attn.q_proj.weight":             jlm.RoleAttnQ,
+			"self_attn.kv_a_proj_with_mqa.weight": jlm.RoleAttnKVA,
+			"self_attn.kv_a_layernorm.weight":     jlm.RoleAttnKVANorm,
+			"self_attn.o_proj.weight":             jlm.RoleAttnOut,
+			// The un-absorbed pair, cut by deepseekSplitKVB. A checkpoint that
+			// ships the halves already separate names them k_b_proj / v_b_proj and
+			// takes neither branch.
+			"self_attn.kv_b_proj.weight": jlm.RoleAttnKB,
+			"self_attn.k_b_proj.weight":  jlm.RoleAttnKB,
+			"self_attn.v_b_proj.weight":  jlm.RoleAttnVB,
 
-		// The dense leading block.
-		"mlp.gate_proj.weight": jlm.RoleFFNGate,
-		"mlp.up_proj.weight":   jlm.RoleFFNUp,
-		"mlp.down_proj.weight": jlm.RoleFFNDown,
+			// The dense leading block.
+			"mlp.gate_proj.weight": jlm.RoleFFNGate,
+			"mlp.up_proj.weight":   jlm.RoleFFNUp,
+			"mlp.down_proj.weight": jlm.RoleFFNDown,
 
-		// The mixture blocks. e_score_correction_bias is added to the router's
-		// scores for selection only, not to the weight, hence a separate role.
-		"mlp.gate.weight":                     jlm.RoleRouter,
-		"mlp.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
-		"mlp.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
-		"mlp.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
-		"mlp.shared_experts.down_proj.weight": jlm.RoleShExpDown,
+			// The mixture blocks. e_score_correction_bias is added to the router's
+			// scores for selection only, not to the weight, hence a separate role.
+			"mlp.gate.weight":                     jlm.RoleRouter,
+			"mlp.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
+			"mlp.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
+			"mlp.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
+			"mlp.shared_experts.down_proj.weight": jlm.RoleShExpDown,
 
-		// A multi-token-prediction block's own tensors (blocks past
-		// num_hidden_layers; jlm.Config.NMTP). Its head and embedding are
-		// copies of the trunk's in every published checkpoint, which
-		// nextnTensors drops.
-		"eh_proj.weight":          jlm.RoleNextnEHProj,
-		"enorm.weight":            jlm.RoleNextnENorm,
-		"hnorm.weight":            jlm.RoleNextnHNorm,
-		"shared_head.norm.weight": jlm.RoleNextnHeadNorm,
-		"shared_head.head.weight": jlm.RoleNextnHead,
-		"embed_tokens.weight":     jlm.RoleNextnEmbd,
-	},
-	expertPrefix: "mlp.experts.",
-	expert:       hfExperts,
-	ignore:       llamaHF.ignore,
-	split: map[string]hfSplit{
-		"self_attn.kv_b_proj.weight": deepseekSplitKVB,
-	},
-	config: deepseekHFConfig,
+			// A multi-token-prediction block's own tensors (blocks past
+			// num_hidden_layers; jlm.Config.NMTP). Its head and embedding are
+			// copies of the trunk's in every published checkpoint, which
+			// nextnTensors drops.
+			"eh_proj.weight":          jlm.RoleNextnEHProj,
+			"enorm.weight":            jlm.RoleNextnENorm,
+			"hnorm.weight":            jlm.RoleNextnHNorm,
+			"shared_head.norm.weight": jlm.RoleNextnHeadNorm,
+			"shared_head.head.weight": jlm.RoleNextnHead,
+			"embed_tokens.weight":     jlm.RoleNextnEmbd,
+		},
+		expertPrefix: "mlp.experts.",
+		expert:       hfExperts(),
+		ignore:       llamaHF().ignore,
+		split: map[string]hfSplit{
+			"self_attn.kv_b_proj.weight": deepseekSplitKVB,
+		},
+		config: deepseekHFConfig,
+	}
 }
 
 func deepseekHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
@@ -2390,89 +2414,91 @@ func hardcodesSigmoid(archs []string) bool {
 // Kimi-Linear: ArchDeepseek2's attention and mixture, with Kimi Delta Attention
 // in the layers layer_types calls "linear_attention". self_attn.q_proj and
 // o_proj mean different things in linear and full layers, hence blockLinear.
-var kimiLinearHF = &hfArch{
-	arch:        jlm.ArchKimiLinear,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: map[string]jlm.Role{
-		"input_layernorm.weight":          jlm.RoleAttnNorm,
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
+func kimiLinearHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchKimiLinear,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: map[string]jlm.Role{
+			"input_layernorm.weight":          jlm.RoleAttnNorm,
+			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
 
-		// MLA. q_lora_rank is null on shipped checkpoints; the two-step names
-		// are carried anyway since deepseekQueryForm decides from the weights.
-		"self_attn.q_proj.weight":             jlm.RoleAttnQ,
-		"self_attn.q_a_proj.weight":           jlm.RoleAttnQA,
-		"self_attn.q_a_layernorm.weight":      jlm.RoleAttnQANorm,
-		"self_attn.q_b_proj.weight":           jlm.RoleAttnQB,
-		"self_attn.kv_a_proj_with_mqa.weight": jlm.RoleAttnKVA,
-		"self_attn.kv_a_layernorm.weight":     jlm.RoleAttnKVANorm,
-		"self_attn.kv_b_proj.weight":          jlm.RoleAttnKB,
-		"self_attn.k_b_proj.weight":           jlm.RoleAttnKB,
-		"self_attn.v_b_proj.weight":           jlm.RoleAttnVB,
-		"self_attn.o_proj.weight":             jlm.RoleAttnOut,
+			// MLA. q_lora_rank is null on shipped checkpoints; the two-step names
+			// are carried anyway since deepseekQueryForm decides from the weights.
+			"self_attn.q_proj.weight":             jlm.RoleAttnQ,
+			"self_attn.q_a_proj.weight":           jlm.RoleAttnQA,
+			"self_attn.q_a_layernorm.weight":      jlm.RoleAttnQANorm,
+			"self_attn.q_b_proj.weight":           jlm.RoleAttnQB,
+			"self_attn.kv_a_proj_with_mqa.weight": jlm.RoleAttnKVA,
+			"self_attn.kv_a_layernorm.weight":     jlm.RoleAttnKVANorm,
+			"self_attn.kv_b_proj.weight":          jlm.RoleAttnKB,
+			"self_attn.k_b_proj.weight":           jlm.RoleAttnKB,
+			"self_attn.v_b_proj.weight":           jlm.RoleAttnVB,
+			"self_attn.o_proj.weight":             jlm.RoleAttnOut,
 
-		// The mixture, under block_sparse_moe. A dense layer is mlp.* in
-		// Moonshot's checkpoint and block_sparse_moe.* when transformers saved it.
-		"mlp.gate_proj.weight":                             jlm.RoleFFNGate,
-		"mlp.up_proj.weight":                               jlm.RoleFFNUp,
-		"mlp.down_proj.weight":                             jlm.RoleFFNDown,
-		"block_sparse_moe.gate_proj.weight":                jlm.RoleFFNGate,
-		"block_sparse_moe.up_proj.weight":                  jlm.RoleFFNUp,
-		"block_sparse_moe.down_proj.weight":                jlm.RoleFFNDown,
-		"block_sparse_moe.gate.weight":                     jlm.RoleRouter,
-		"block_sparse_moe.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
-		"block_sparse_moe.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
-		"block_sparse_moe.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
-		"block_sparse_moe.shared_experts.down_proj.weight": jlm.RoleShExpDown,
-	},
-	blockLinear: map[string]jlm.Role{
-		"input_layernorm.weight":          jlm.RoleAttnNorm,
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
+			// The mixture, under block_sparse_moe. A dense layer is mlp.* in
+			// Moonshot's checkpoint and block_sparse_moe.* when transformers saved it.
+			"mlp.gate_proj.weight":                             jlm.RoleFFNGate,
+			"mlp.up_proj.weight":                               jlm.RoleFFNUp,
+			"mlp.down_proj.weight":                             jlm.RoleFFNDown,
+			"block_sparse_moe.gate_proj.weight":                jlm.RoleFFNGate,
+			"block_sparse_moe.up_proj.weight":                  jlm.RoleFFNUp,
+			"block_sparse_moe.down_proj.weight":                jlm.RoleFFNDown,
+			"block_sparse_moe.gate.weight":                     jlm.RoleRouter,
+			"block_sparse_moe.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
+			"block_sparse_moe.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
+			"block_sparse_moe.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
+			"block_sparse_moe.shared_experts.down_proj.weight": jlm.RoleShExpDown,
+		},
+		blockLinear: map[string]jlm.Role{
+			"input_layernorm.weight":          jlm.RoleAttnNorm,
+			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
 
-		// q, k and v are three matrices here and one mixed projection
-		// (qkBytes|qkBytes|Inner) in the container; fuseOrder joins them in the
-		// geometry's order.
-		"self_attn.q_proj.weight": jlm.RoleAttnQKV,
-		"self_attn.k_proj.weight": jlm.RoleAttnQKV,
-		"self_attn.v_proj.weight": jlm.RoleAttnQKV,
-		// Three causal convolutions, likewise joined into one filter bank.
-		"self_attn.q_conv1d.weight": jlm.RoleSSMConv1d,
-		"self_attn.k_conv1d.weight": jlm.RoleSSMConv1d,
-		"self_attn.v_conv1d.weight": jlm.RoleSSMConv1d,
+			// q, k and v are three matrices here and one mixed projection
+			// (qkBytes|qkBytes|Inner) in the container; fuseOrder joins them in the
+			// geometry's order.
+			"self_attn.q_proj.weight": jlm.RoleAttnQKV,
+			"self_attn.k_proj.weight": jlm.RoleAttnQKV,
+			"self_attn.v_proj.weight": jlm.RoleAttnQKV,
+			// Three causal convolutions, likewise joined into one filter bank.
+			"self_attn.q_conv1d.weight": jlm.RoleSSMConv1d,
+			"self_attn.k_conv1d.weight": jlm.RoleSSMConv1d,
+			"self_attn.v_conv1d.weight": jlm.RoleSSMConv1d,
 
-		// b_proj is all of RoleSSMBA here: KDA's alpha comes from the low-rank
-		// forget gate, so this is beta alone, where qwen3next interleaves both.
-		"self_attn.b_proj.weight": jlm.RoleSSMBA,
+			// b_proj is all of RoleSSMBA here: KDA's alpha comes from the low-rank
+			// forget gate, so this is beta alone, where qwen3next interleaves both.
+			"self_attn.b_proj.weight": jlm.RoleSSMBA,
 
-		"self_attn.f_a_proj.weight": jlm.RoleSSMFA,
-		"self_attn.f_b_proj.weight": jlm.RoleSSMFB,
-		"self_attn.g_a_proj.weight": jlm.RoleSSMGA,
-		"self_attn.g_b_proj.weight": jlm.RoleSSMGB,
+			"self_attn.f_a_proj.weight": jlm.RoleSSMFA,
+			"self_attn.f_b_proj.weight": jlm.RoleSSMFB,
+			"self_attn.g_a_proj.weight": jlm.RoleSSMGA,
+			"self_attn.g_b_proj.weight": jlm.RoleSSMGB,
 
-		"self_attn.A_log":         jlm.RoleSSMA,
-		"self_attn.dt_bias":       jlm.RoleSSMDtBias,
-		"self_attn.o_norm.weight": jlm.RoleSSMNorm,
-		"self_attn.o_proj.weight": jlm.RoleSSMOut,
-	},
-	fuseOrder: map[jlm.Role][]string{
-		jlm.RoleAttnQKV:   {"self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"},
-		jlm.RoleSSMConv1d: {"self_attn.q_conv1d.weight", "self_attn.k_conv1d.weight", "self_attn.v_conv1d.weight"},
-	},
-	expertPrefix: "block_sparse_moe.experts.",
-	expert: map[string]jlm.Role{
-		"w1.weight": jlm.RoleExpGateBank,
-		"w3.weight": jlm.RoleExpUpBank,
-		"w2.weight": jlm.RoleExpDownBank,
-	},
-	ignore: llamaHF.ignore,
-	split: map[string]hfSplit{
-		"self_attn.kv_b_proj.weight": deepseekSplitKVB,
-		"self_attn.q_conv1d.weight":  kimiSqueezeConv1d,
-		"self_attn.k_conv1d.weight":  kimiSqueezeConv1d,
-		"self_attn.v_conv1d.weight":  kimiSqueezeConv1d,
-		"self_attn.A_log":            kimiExpandALog,
-	},
-	config: kimiLinearHFConfig,
+			"self_attn.A_log":         jlm.RoleSSMA,
+			"self_attn.dt_bias":       jlm.RoleSSMDtBias,
+			"self_attn.o_norm.weight": jlm.RoleSSMNorm,
+			"self_attn.o_proj.weight": jlm.RoleSSMOut,
+		},
+		fuseOrder: map[jlm.Role][]string{
+			jlm.RoleAttnQKV:   {"self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"},
+			jlm.RoleSSMConv1d: {"self_attn.q_conv1d.weight", "self_attn.k_conv1d.weight", "self_attn.v_conv1d.weight"},
+		},
+		expertPrefix: "block_sparse_moe.experts.",
+		expert: map[string]jlm.Role{
+			"w1.weight": jlm.RoleExpGateBank,
+			"w3.weight": jlm.RoleExpUpBank,
+			"w2.weight": jlm.RoleExpDownBank,
+		},
+		ignore: llamaHF().ignore,
+		split: map[string]hfSplit{
+			"self_attn.kv_b_proj.weight": deepseekSplitKVB,
+			"self_attn.q_conv1d.weight":  kimiSqueezeConv1d,
+			"self_attn.k_conv1d.weight":  kimiSqueezeConv1d,
+			"self_attn.v_conv1d.weight":  kimiSqueezeConv1d,
+			"self_attn.A_log":            kimiExpandALog,
+		},
+		config: kimiLinearHFConfig,
+	}
 }
 
 // kimiSqueezeConv1d drops a causal convolution's middle axis.

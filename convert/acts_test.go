@@ -135,50 +135,54 @@ func each(f func(g, u float64) float64) func(g, u []float64) []float64 {
 	}
 }
 
-var xieluNumbers = []float64{0.8, 0.6, 0.5, -1e-6}
+func xieluNumbers() []float64 {
+	return []float64{0.8, 0.6, 0.5, -1e-6}
+}
 
-var actCases = []actCase{
-	{"silu", jlm.Config{}, true, nil, each(func(g, u float64) float64 { return g * sig(g) * u })},
-	{"gelu tanh, ungated", jlm.Config{Flags: jlm.FlagGELU}, false, nil, each(func(g, _ float64) float64 { return geluTanhRef(g) })},
-	{"squared relu", jlm.Config{Flags: jlm.FlagReLU2}, true, nil, each(func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u })},
-	{"gelu erf", jlm.Config{Arch: jlm.ArchModernBERT, Flags: jlm.FlagGELU}, true, nil,
-		each(func(g, u float64) float64 { return 0.5 * g * (1 + math.Erf(g/math.Sqrt2)) * u })},
-	{"xielu", jlm.Config{Arch: jlm.ArchApertus}, false, map[jlm.Role][]float64{jlm.RoleXIELU: xieluNumbers},
-		each(func(x, _ float64) float64 {
-			ap, an, b, eps := xieluNumbers[0], xieluNumbers[1], xieluNumbers[2], xieluNumbers[3]
-			if x > 0 {
-				return ap*x*x + b*x
-			}
-			return (math.Expm1(math.Min(x, eps))-x)*an + b*x
+func actCases() []actCase {
+	return []actCase{
+		{"silu", jlm.Config{}, true, nil, each(func(g, u float64) float64 { return g * sig(g) * u })},
+		{"gelu tanh, ungated", jlm.Config{Flags: jlm.FlagGELU}, false, nil, each(func(g, _ float64) float64 { return geluTanhRef(g) })},
+		{"squared relu", jlm.Config{Flags: jlm.FlagReLU2}, true, nil, each(func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u })},
+		{"gelu erf", jlm.Config{Arch: jlm.ArchModernBERT, Flags: jlm.FlagGELU}, true, nil,
+			each(func(g, u float64) float64 { return 0.5 * g * (1 + math.Erf(g/math.Sqrt2)) * u })},
+		{"xielu", jlm.Config{Arch: jlm.ArchApertus}, false, map[jlm.Role][]float64{jlm.RoleXIELU: xieluNumbers()},
+			each(func(x, _ float64) float64 {
+				ap, an, b, eps := xieluNumbers()[0], xieluNumbers()[1], xieluNumbers()[2], xieluNumbers()[3]
+				if x > 0 {
+					return ap*x*x + b*x
+				}
+				return (math.Expm1(math.Min(x, eps))-x)*an + b*x
+			})},
+		{"gaussian top-k", jlm.Config{Flags: jlm.FlagGELU, NSparse: 1, SparseStd: 1.6448536}, true, nil,
+			func(g, u []float64) []float64 {
+				mean, v := 0.0, 0.0
+				for _, x := range g {
+					mean += x
+				}
+				mean /= float64(len(g))
+				for _, x := range g {
+					v += (x - mean) * (x - mean)
+				}
+				cut := mean + 1.6448536*math.Sqrt(v/float64(len(g)))
+				out := make([]float64, len(g))
+				for i := range g {
+					out[i] = geluTanhRef(math.Max(g[i]-cut, 0)) * u[i]
+				}
+				return out
+			}},
+		{"clamped swiglu", jlm.Config{Flags2: jlm.Flag2SwiGLUClamp}, true, nil, each(func(g, u float64) float64 {
+			x := math.Min(g, 10)
+			return x * sig(x) * math.Max(math.Min(u, 10), -10)
 		})},
-	{"gaussian top-k", jlm.Config{Flags: jlm.FlagGELU, NSparse: 1, SparseStd: 1.6448536}, true, nil,
-		func(g, u []float64) []float64 {
-			mean, v := 0.0, 0.0
-			for _, x := range g {
-				mean += x
-			}
-			mean /= float64(len(g))
-			for _, x := range g {
-				v += (x - mean) * (x - mean)
-			}
-			cut := mean + 1.6448536*math.Sqrt(v/float64(len(g)))
-			out := make([]float64, len(g))
-			for i := range g {
-				out[i] = geluTanhRef(math.Max(g[i]-cut, 0)) * u[i]
-			}
-			return out
-		}},
-	{"clamped swiglu", jlm.Config{Flags2: jlm.Flag2SwiGLUClamp}, true, nil, each(func(g, u float64) float64 {
-		x := math.Min(g, 10)
-		return x * sig(x) * math.Max(math.Min(u, 10), -10)
-	})},
-	{"gpt-oss swiglu", jlm.Config{Flags: jlm.FlagSwiGLUOAI}, true, nil, each(func(g, u float64) float64 {
-		x := math.Min(g, 7)
-		return x * sig(1.702*x) * (math.Max(math.Min(u, 7), -7) + 1)
-	})},
-	{"situ", jlm.Config{SituBeta: 4, SituLinearBeta: 25}, true, nil, each(func(g, u float64) float64 {
-		return 4 * math.Tanh(g/4) * sig(g) * 25 * math.Tanh(u/25)
-	})},
+		{"gpt-oss swiglu", jlm.Config{Flags: jlm.FlagSwiGLUOAI}, true, nil, each(func(g, u float64) float64 {
+			x := math.Min(g, 7)
+			return x * sig(1.702*x) * (math.Max(math.Min(u, 7), -7) + 1)
+		})},
+		{"situ", jlm.Config{SituBeta: 4, SituLinearBeta: 25}, true, nil, each(func(g, u float64) float64 {
+			return 4 * math.Tanh(g/4) * sig(g) * 25 * math.Tanh(u/25)
+		})},
+	}
 }
 
 // actRows are operands that reach every branch: both signs, the clamps'
@@ -206,7 +210,7 @@ func agrees(a, b []float64) (float64, bool) {
 // swapped -- is told from it. The gaussian top-k is stated for the sparse
 // layers alone.
 func TestStatedActivationsAreTheReferences(t *testing.T) {
-	for _, c := range actCases {
+	for _, c := range actCases() {
 		t.Run(c.name, func(t *testing.T) {
 			g, u := actRows()
 			if c.cfg.NSparse != 0 {

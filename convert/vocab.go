@@ -167,8 +167,8 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	// add_bos_token key overrides the first; it is often absent (Llama-3.2 ships
 	// none and wants its BOS, qwen3 ships an explicit 0), and a wrong BOS is a
 	// fluent divergence a few tokens in.
-	v.AddBOS = llama3Family[v.PreName]
-	v.IgnoreMerges = llama3Family[v.PreName]
+	v.AddBOS = llama3Family(v.PreName)
+	v.IgnoreMerges = llama3Family(v.PreName)
 	// Llama 4 is not in that family but shares both booleans: its own
 	// tokenizer.json says ignore_merges: true and prepends <|begin_of_text|>,
 	// where llama.cpp's gpt-4o branch sets ignore_merges false (RULE 7m).
@@ -233,10 +233,12 @@ func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
 // not in it: llama.cpp gives an absent or "default" name its own pipeline with
 // neither boolean (pretok.LlamaCppDefault()). This source-format heuristic is
 // resolved at conversion; nothing on the load path consults it.
-var llama3Family = map[string]bool{
-	"llama3": true, "llama-v3": true, "llama-bpe": true,
-	"falcon3": true, "falcon-h1": true, "pixtral": true,
-	"midm-2.0": true, "lfm2": true, "jina-v5-nano": true,
+func llama3Family(pre string) bool {
+	switch pre {
+	case "llama3", "llama-v3", "llama-bpe", "falcon3", "falcon-h1", "pixtral", "midm-2.0", "lfm2", "jina-v5-nano":
+		return true
+	}
+	return false
 }
 
 // wordPiece resolves a WordPiece vocabulary's special ids and its one

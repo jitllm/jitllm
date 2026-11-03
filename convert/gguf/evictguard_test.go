@@ -48,7 +48,7 @@ func TestEvictRefusesMemoryItDidNotMap(t *testing.T) {
 	for i := range anon {
 		anon[i] = 0xCD
 	}
-	if n := Evict(anon); n != 0 {
+	if n := Evict(open(t, stories260K), anon); n != 0 {
 		t.Fatalf("Evict handed back %d bytes of memory gguf never mapped -- on a Go heap "+
 			"slice that is a hole in the heap, not a page cache saving", n)
 	}
@@ -61,15 +61,15 @@ func TestEvictRefusesMemoryItDidNotMap(t *testing.T) {
 	// And a range this package did map is still evicted, or the guard has
 	// simply turned the lever off.
 	f := open(t, stories260K)
-	if n := Evict(f.Data); n == 0 {
+	if n := Evict(f, f.Data); n == 0 {
 		t.Fatalf("Evict refused a live gguf mapping of %d bytes: the guard rejects the "+
 			"ranges it exists to allow", len(f.Data))
 	}
-	if !Mapped(f.Data[7:99]) {
+	if !Mapped(f, f.Data[7:99]) {
 		t.Fatalf("a subslice of a live mapping reads as unmapped")
 	}
 	f.Close()
-	if Mapped(f.Data) {
+	if Mapped(f, f.Data) {
 		t.Fatalf("a CLOSED file's range still reads as mapped: the registry leaks, and the " +
 			"address will eventually be reused by something that must not be evicted")
 	}

@@ -51,14 +51,9 @@ func openOne(path string, opts ...Option) (*meta.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Registered here rather than in mmapFile because parse() is also reached
-	// by the fuzzer over a plain []byte, which is exactly the memory Evict must
-	// refuse. See mapped.go.
-	registerMapping(b)
-	closeMapped := func() error { unregisterMapping(b); return closeFn() }
-	f, err := parse(b, b, path, closeMapped)
+	f, err := parse(b, b, path, closeFn)
 	if err != nil {
-		closeMapped()
+		closeFn()
 		return nil, err
 	}
 	return f, nil

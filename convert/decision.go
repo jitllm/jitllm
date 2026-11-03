@@ -20,13 +20,36 @@ import (
 // by the names llama.cpp's converter gives them: rl_common.temp_bucket's
 // 2 / 3-5 / 6-10 / 11+ (Laya and the models that copy it) and lev's
 // calibration bands small <= 8, mid <= 26, large.
-var decisionBands = map[string][2]uint32{
-	"2": {0, 2}, "3_5": {3, 5}, "6_10": {6, 10}, "11": {11, 0},
-	"small": {0, 8}, "mid": {9, 26}, "large": {27, 0},
+func decisionBands(name string) ([2]uint32, bool) {
+	switch name {
+	case "2":
+		return [2]uint32{0, 2}, true
+	case "3_5":
+		return [2]uint32{3, 5}, true
+	case "6_10":
+		return [2]uint32{6, 10}, true
+	case "11":
+		return [2]uint32{11, 0}, true
+	case "small":
+		return [2]uint32{0, 8}, true
+	case "mid":
+		return [2]uint32{9, 26}, true
+	case "large":
+		return [2]uint32{27, 0}, true
+	}
+	return [2]uint32{}, false
 }
 
-var questionTypes = map[string]jlm.QuestionType{
-	"choice": jlm.QuestionChoice, "score": jlm.QuestionScore, "noul": jlm.QuestionNoul,
+func questionTypes(name string) (jlm.QuestionType, bool) {
+	switch name {
+	case "choice":
+		return jlm.QuestionChoice, true
+	case "score":
+		return jlm.QuestionScore, true
+	case "noul":
+		return jlm.QuestionNoul, true
+	}
+	return 0, false
 }
 
 // decisionOf fills c's decision fields from f. A file with no decision type
@@ -92,13 +115,13 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 			return fmt.Errorf("decision temperature %s is %s, not a positive number", key, val.Short())
 		}
 		typ, band, banded := strings.Cut(rest, ".")
-		qt, ok := questionTypes[typ]
+		qt, ok := questionTypes(typ)
 		if !ok {
 			return fmt.Errorf("decision temperature %s names no question type", key)
 		}
 		d := jlm.DecisionTemp{Type: qt, T: float32(t)}
 		if banded {
-			b, ok := decisionBands[band]
+			b, ok := decisionBands(band)
 			if !ok {
 				return fmt.Errorf("decision temperature %s names band %q, which no reference fits", key, band)
 			}

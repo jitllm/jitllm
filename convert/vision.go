@@ -22,15 +22,14 @@ import (
 // are quantized; see quantizeTower. It is a role list rather than "2-D and
 // F16", which would sweep in v.position_embd (shaped like a weight, used as a
 // lookup, cheap to keep exact).
-var towerMatrix = map[jlm.Role]bool{
-	jlm.RoleVPatchEmbd: true,
-	jlm.RoleVAttnQ:     true, jlm.RoleVAttnK: true, jlm.RoleVAttnV: true, jlm.RoleVAttnOut: true,
-	jlm.RoleVFC1: true, jlm.RoleVFC2: true, jlm.RoleVFFNGate: true,
-	jlm.RoleVProj: true, jlm.RoleVProj2: true, jlm.RoleVProj3: true, jlm.RoleVMerge: true,
-	jlm.RoleVRsKV: true, jlm.RoleVRsQ: true, jlm.RoleVRsK: true, jlm.RoleVRsV: true,
-	jlm.RoleVRsOut: true, jlm.RoleVRsProj: true,
-	jlm.RoleVDsFC1: true, jlm.RoleVDsFC2: true,
-	jlm.RoleVMergeConv: true, jlm.RoleVProjGate: true, jlm.RoleVProjUp: true, jlm.RoleVProjDown: true,
+func towerMatrix(r jlm.Role) bool {
+	switch r {
+	case jlm.RoleVMNStem, jlm.RoleVMNConvExp, jlm.RoleVMNConvPwl, jlm.RoleVMNPwExp,
+		jlm.RoleVMNPwProj, jlm.RoleVMNFusionExp, jlm.RoleVMNFusionProj,
+		jlm.RoleVPatchEmbd, jlm.RoleVAttnQ, jlm.RoleVAttnK, jlm.RoleVAttnV, jlm.RoleVAttnOut, jlm.RoleVFC1, jlm.RoleVFC2, jlm.RoleVFFNGate, jlm.RoleVProj, jlm.RoleVProj2, jlm.RoleVProj3, jlm.RoleVMerge, jlm.RoleVRsKV, jlm.RoleVRsQ, jlm.RoleVRsK, jlm.RoleVRsV, jlm.RoleVRsOut, jlm.RoleVRsProj, jlm.RoleVDsFC1, jlm.RoleVDsFC2, jlm.RoleVMergeConv, jlm.RoleVProjGate, jlm.RoleVProjUp, jlm.RoleVProjDown:
+		return true
+	}
+	return false
 }
 
 // q8Block is the source format's Q8_0 block: an f16 scale and 32 signed bytes.
@@ -115,7 +114,7 @@ func padPatchK(t *jlm.Tensor, nembd int) error {
 func quantizeTower(ts []jlm.Tensor) error {
 	for i := range ts {
 		t := &ts[i]
-		if !towerMatrix[t.Role] && !jlm.AudioMatrix(t.Role) {
+		if !towerMatrix(t.Role) && !jlm.AudioMatrix(t.Role) {
 			continue
 		}
 		if jlm.Packed(t.Type) {

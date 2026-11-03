@@ -117,27 +117,29 @@ func hfQKNormPresent(c *hfConfig, names []string, q, k string) (bool, error) {
 // GQA attention with biased q/k/v, an optional per-head q/k norm (use_qk_norm)
 // and NEOX rotary over partial_rotary_factor of each head, with the prediction
 // block (num_nextn_predict_layers) carried and set aside as DeepSeek's is.
-var glm4moeHF = &hfArch{
-	arch:        jlm.ArchGLM4MoE,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: blockPlus(qwen3Block, map[string]jlm.Role{
-		"mlp.gate.weight":                     jlm.RoleRouter,
-		"mlp.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
-		"mlp.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
-		"mlp.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
-		"mlp.shared_experts.down_proj.weight": jlm.RoleShExpDown,
-		"eh_proj.weight":                      jlm.RoleNextnEHProj,
-		"enorm.weight":                        jlm.RoleNextnENorm,
-		"hnorm.weight":                        jlm.RoleNextnHNorm,
-		"shared_head.norm.weight":             jlm.RoleNextnHeadNorm,
-		"shared_head.head.weight":             jlm.RoleNextnHead,
-		"embed_tokens.weight":                 jlm.RoleNextnEmbd,
-	}),
-	expertPrefix: "mlp.experts.",
-	expert:       hfExperts,
-	ignore:       llamaHF.ignore,
-	config:       glm4moeHFConfig,
+func glm4moeHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchGLM4MoE,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: blockPlus(qwen3Block(), map[string]jlm.Role{
+			"mlp.gate.weight":                     jlm.RoleRouter,
+			"mlp.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
+			"mlp.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
+			"mlp.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
+			"mlp.shared_experts.down_proj.weight": jlm.RoleShExpDown,
+			"eh_proj.weight":                      jlm.RoleNextnEHProj,
+			"enorm.weight":                        jlm.RoleNextnENorm,
+			"hnorm.weight":                        jlm.RoleNextnHNorm,
+			"shared_head.norm.weight":             jlm.RoleNextnHeadNorm,
+			"shared_head.head.weight":             jlm.RoleNextnHead,
+			"embed_tokens.weight":                 jlm.RoleNextnEmbd,
+		}),
+		expertPrefix: "mlp.experts.",
+		expert:       hfExperts(),
+		ignore:       llamaHF().ignore,
+		config:       glm4moeHFConfig,
+	}
 }
 
 // glm4moeHFConfig reads GLM's keys. The gate is a sigmoid whatever the file
@@ -189,21 +191,23 @@ func glm4moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 
 // qwen2moeHF is qwen2's attention with a softmax top-k beside a shared expert
 // scaled by its own sigmoid gate (RoleShRouter, qwen3next's).
-var qwen2moeHF = &hfArch{
-	arch:        jlm.ArchQwen2MoE,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: blockPlus(llamaHF.block, map[string]jlm.Role{
-		"mlp.gate.weight":                    jlm.RoleRouter,
-		"mlp.shared_expert.gate_proj.weight": jlm.RoleShExpGate,
-		"mlp.shared_expert.up_proj.weight":   jlm.RoleShExpUp,
-		"mlp.shared_expert.down_proj.weight": jlm.RoleShExpDown,
-		"mlp.shared_expert_gate.weight":      jlm.RoleShRouter,
-	}),
-	expertPrefix: "mlp.experts.",
-	expert:       hfExperts,
-	ignore:       llamaHF.ignore,
-	config:       qwen2moeHFConfig,
+func qwen2moeHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchQwen2MoE,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: blockPlus(llamaHF().block, map[string]jlm.Role{
+			"mlp.gate.weight":                    jlm.RoleRouter,
+			"mlp.shared_expert.gate_proj.weight": jlm.RoleShExpGate,
+			"mlp.shared_expert.up_proj.weight":   jlm.RoleShExpUp,
+			"mlp.shared_expert.down_proj.weight": jlm.RoleShExpDown,
+			"mlp.shared_expert_gate.weight":      jlm.RoleShRouter,
+		}),
+		expertPrefix: "mlp.experts.",
+		expert:       hfExperts(),
+		ignore:       llamaHF().ignore,
+		config:       qwen2moeHFConfig,
+	}
 }
 
 // qwen2moeHFConfig is hfMoEConfig's mixture plus the shared expert, whose
@@ -236,33 +240,37 @@ func qwen2moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 // converts. Its checkpoint rotates adjacent pairs already (the class's
 // rotate_half interleaves), which is the container's own layout, so unlike
 // llama nothing is permuted.
-var ernie45HF = &hfArch{
-	arch:        jlm.ArchLlama,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block:       llamaHF.block,
-	ignore:      llamaHF.ignore,
-	config:      hfConfigWith(jlm.ArchLlama, 0, "silu"),
+func ernie45HF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchLlama,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block:       llamaHF().block,
+		ignore:      llamaHF().ignore,
+		config:      hfConfigWith(jlm.ArchLlama, 0, "silu"),
+	}
 }
 
 // ernie45moeHF is the mixture: a softmax top-k whose selection adds a
 // per-expert bias to the softmax probability (moe_statics), renormalised,
 // beside shared experts, after a dense lead and interleaved by a step.
-var ernie45moeHF = &hfArch{
-	arch:        jlm.ArchErnie45MoE,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: blockPlus(llamaHF.block, map[string]jlm.Role{
-		"mlp.gate.weight":                         jlm.RoleRouter,
-		"mlp.moe_statics.e_score_correction_bias": jlm.RoleExpProbsB,
-		"mlp.shared_experts.gate_proj.weight":     jlm.RoleShExpGate,
-		"mlp.shared_experts.up_proj.weight":       jlm.RoleShExpUp,
-		"mlp.shared_experts.down_proj.weight":     jlm.RoleShExpDown,
-	}),
-	expertPrefix: "mlp.experts.",
-	expert:       hfExperts,
-	ignore:       llamaHF.ignore,
-	config:       ernie45moeHFConfig,
+func ernie45moeHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchErnie45MoE,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: blockPlus(llamaHF().block, map[string]jlm.Role{
+			"mlp.gate.weight":                         jlm.RoleRouter,
+			"mlp.moe_statics.e_score_correction_bias": jlm.RoleExpProbsB,
+			"mlp.shared_experts.gate_proj.weight":     jlm.RoleShExpGate,
+			"mlp.shared_experts.up_proj.weight":       jlm.RoleShExpUp,
+			"mlp.shared_experts.down_proj.weight":     jlm.RoleShExpDown,
+		}),
+		expertPrefix: "mlp.experts.",
+		expert:       hfExperts(),
+		ignore:       llamaHF().ignore,
+		config:       ernie45moeHFConfig,
+	}
 }
 
 // ernie45moeHFConfig reads ERNIE's own key names. A block is a mixture when
@@ -320,22 +328,24 @@ func ernie45moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 // hunyuanHF is both Hunyuan classes; a mixture is read off num_experts. The
 // q/k norm follows the rotary and is folded at conversion (see convert/hunyuan.go
 // and jlm.FlagQKNormPostRope); the checkpoint is NEOX and unpermuted.
-var hunyuanHF = &hfArch{
-	arch:        jlm.ArchHunyuan,
-	blockPrefix: llamaHF.blockPrefix,
-	model:       llamaHF.model,
-	block: blockPlus(llamaHF.block, map[string]jlm.Role{
-		"self_attn.query_layernorm.weight": jlm.RoleAttnQNorm,
-		"self_attn.key_layernorm.weight":   jlm.RoleAttnKNorm,
-		"mlp.gate.wg.weight":               jlm.RoleRouter,
-		"mlp.shared_mlp.gate_proj.weight":  jlm.RoleShExpGate,
-		"mlp.shared_mlp.up_proj.weight":    jlm.RoleShExpUp,
-		"mlp.shared_mlp.down_proj.weight":  jlm.RoleShExpDown,
-	}),
-	expertPrefix: "mlp.experts.",
-	expert:       hfExperts,
-	ignore:       llamaHF.ignore,
-	config:       hunyuanHFConfig,
+func hunyuanHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchHunyuan,
+		blockPrefix: llamaHF().blockPrefix,
+		model:       llamaHF().model,
+		block: blockPlus(llamaHF().block, map[string]jlm.Role{
+			"self_attn.query_layernorm.weight": jlm.RoleAttnQNorm,
+			"self_attn.key_layernorm.weight":   jlm.RoleAttnKNorm,
+			"mlp.gate.wg.weight":               jlm.RoleRouter,
+			"mlp.shared_mlp.gate_proj.weight":  jlm.RoleShExpGate,
+			"mlp.shared_mlp.up_proj.weight":    jlm.RoleShExpUp,
+			"mlp.shared_mlp.down_proj.weight":  jlm.RoleShExpDown,
+		}),
+		expertPrefix: "mlp.experts.",
+		expert:       hfExperts(),
+		ignore:       llamaHF().ignore,
+		config:       hunyuanHFConfig,
+	}
 }
 
 // hunyuanHFConfig reads Tencent's keys. rope_scaling "dynamic" with an alpha

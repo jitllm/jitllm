@@ -408,7 +408,7 @@ func towerRoleOf(v *jlm.Vision, name string) (jlm.Role, int32, int32, error) {
 // same mmproj (a.*, and its projection mm.a.*) -- a second modality nothing
 // of the vision or text path reads.
 func towerUnread(v *jlm.Vision, name string) bool {
-	if _, ok := unreadTower[name]; ok {
+	if _, ok := unreadTower(name); ok {
 		return true
 	}
 	switch v.Projector {

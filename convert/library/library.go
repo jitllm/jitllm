@@ -84,7 +84,7 @@ func (m Model) rev() string {
 
 // Find returns the model with that name, ignoring case.
 func Find(name string) (Model, bool) {
-	for _, m := range Models {
+	for _, m := range Models() {
 		if strings.EqualFold(m.Name, name) {
 			return m, true
 		}

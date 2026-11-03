@@ -17,162 +17,164 @@ import (
 // reference implementation's source; an unimplemented architecture fails here,
 // at conversion, rather than at load.
 
-var archOf = map[string]jlm.Arch{
-	"llama":     jlm.ArchLlama, // llama2 and llama3 are this arch too
-	"qwen2":     jlm.ArchQwen2,
-	"qwen3":     jlm.ArchQwen3,
-	"qwen3moe":  jlm.ArchQwen3MoE,
-	"olmoe":     jlm.ArchOLMoE,
-	"gemma":     jlm.ArchGemma,
-	"phi3":      jlm.ArchPhi3, // phi4 uses this arch string too
-	"clip":      jlm.ArchCLIP,
-	"qwen3next": jlm.ArchQwen3Next,
-	// Qwen3.5/3.6 are qwen3next's block re-cut, and every cut is in the file:
-	// beta and alpha arrive as two tensors (fused back by fuseBetaAlpha), the
-	// value heads are tiled (jlm.FlagDeltaKeyTiled), qwen35's FFN is dense, and
-	// the interleaved M-RoPE is exactly NEOX for a text prompt. See qwen35Of.
-	"qwen35":    jlm.ArchQwen3Next,
-	"qwen35moe": jlm.ArchQwen3Next,
-	// Clef-Flash: Qwen3.5-9B's text model under another name, with a joint
-	// schema head after it that the decision readout reads (decisionOf,
-	// jlm.DecisionClef).
-	"clef":    jlm.ArchQwen3Next,
-	"qwen2vl": jlm.ArchQwen2VL,
-	"gemma2":  jlm.ArchGemma2,
-	"gemma3":  jlm.ArchGemma3,
-	"gpt-oss": jlm.ArchGPTOSS,
-	// DeepSeek-V2/V3/R1, Kimi-K2 and Moonlight-16B-A3B. Not GLM: see
-	// jlm.ArchDeepseek2 for which GLM is this graph and which is not.
-	"deepseek2": jlm.ArchDeepseek2,
-	// The BERT family of embedding models: all-minilm, mxbai-embed-large,
-	// bge-large and the bert-sized snowflake-arctic-embed tags declare "bert";
-	// nomic-embed-text declares "nomic-bert". See jlm.ArchBERT.
-	"bert":       jlm.ArchBERT,
-	"nomic-bert": jlm.ArchNomicBERT,
-	// ModernBERT, and the decision encoders built on it (Laya). See
-	// jlm.ArchModernBERT.
-	"modern-bert": jlm.ArchModernBERT,
-	// Llama 4 Scout (16 experts) and Maverick (128), text only. See
-	// jlm.ArchLlama4 for the five things that make it not llama.
-	"llama4": jlm.ArchLlama4,
-	// IBM Granite 3.x/4.0, dense and mixture: llama's block with four scaling
-	// constants. See jlm.ArchGranite. (granitehybrid, the Mamba-2 hybrid, is a
-	// different graph and is not here.)
-	"granite":    jlm.ArchGranite,
-	"granitemoe": jlm.ArchGranite,
-	// The classic-transformer blocks (C6): LayerNorm with biases, ungated
-	// FFNs, parallel residuals. See jlm.ArchPhi2.
-	"phi2":      jlm.ArchPhi2,
-	"starcoder": jlm.ArchStarcoder,
-	// Cohere: Command-R, Aya and Aya Expanse declare "command-r"; Command-R7B
-	// and Command-A declare "cohere2". See jlm.ArchCommandR.
-	"command-r":  jlm.ArchCommandR,
-	"cohere2":    jlm.ArchCommandR,
-	"stablelm":   jlm.ArchStableLM,
-	"starcoder2": jlm.ArchStarcoder2,
-	"falcon":     jlm.ArchFalcon,
-	"nemotron":   jlm.ArchNemotron,
-	// Databricks' DBRX: the C6 kit's bias-free LayerNorm on a mixture, with
-	// q, k and v clamped. See jlm.ArchDBRX.
-	"dbrx": jlm.ArchDBRX,
-	// GLM-4.5, GLM-4.6 and GLM-4.5-Air: DeepSeek-V3's router on GQA attention.
-	// See jlm.ArchGLM4MoE.
-	"glm4moe": jlm.ArchGLM4MoE,
-	// Qwen1.5-MoE and Qwen2-57B-A14B. See jlm.ArchQwen2MoE.
-	"qwen2moe": jlm.ArchQwen2MoE,
-	// ERNIE 4.5: the dense models are llama's graph exactly (interleaved
-	// rotary, tied head, biases only as tensors), as llama3 is; the mixtures
-	// are their own. See jlm.ArchErnie45MoE.
-	"ernie4_5":     jlm.ArchLlama,
-	"ernie4_5-moe": jlm.ArchErnie45MoE,
-	// The dense llama-family group: each is llama's block with switches the
-	// graph already runs. See convert/dense.go and jlm.ArchSmolLM3.
-	"smollm3":  jlm.ArchSmolLM3,
-	"arcee":    jlm.ArchArcee,
-	"seed_oss": jlm.ArchSeedOSS,
-	"olmo2":    jlm.ArchOLMo2, // OLMo 3 declares olmo2 too
-	"exaone4":  jlm.ArchExaone4,
-	"mistral3": jlm.ArchMistral3,
-	// Tencent's Hunyuan, mixture and dense: one graph, q/k norm after the
-	// rotary. See jlm.ArchHunyuan.
-	"hunyuan-moe":   jlm.ArchHunyuan,
-	"hunyuan-dense": jlm.ArchHunyuan,
-	// MiniMax-M2/M2.1/M2.5: OLMoE's whole-projection q/k norm on GQA with
-	// partial NEOX rotary, and DeepSeek-V3's sigmoid router without a shared
-	// expert. See jlm.ArchMiniMaxM2.
-	"minimax-m2": jlm.ArchMiniMaxM2,
-	// Gemma 4 (text): gemma3's block with its global layers at another
-	// attention geometry. See jlm.ArchGemma4.
-	"gemma4": jlm.ArchGemma4,
-	// DeepSeek V3.2: deepseek2's graph with DeepSeek Sparse Attention's
-	// lightning indexer. See jlm.ArchDeepseek32.
-	"deepseek32": jlm.ArchDeepseek32,
-	// Gemma 3n (text): gemma3's attention with Gemma 4's E-model pieces,
-	// inside AltUp's parallel residual streams. See jlm.ArchGemma3n.
-	"gemma3n": jlm.ArchGemma3n,
-	// The state-space hybrids: Mamba-2 blocks (jlm.LayerSSD), alone or beside
-	// attention. See convert/ssm.go and jlm.ArchMamba2.
-	"mamba2":        jlm.ArchMamba2,
-	"granitehybrid": jlm.ArchGraniteHybrid,
-	// Nemotron-H and Nemotron Nano 2: one mixer a source layer, merged into
-	// blocks at conversion (convert/nemotronh.go).
-	"nemotron_h": jlm.ArchNemotronH,
-	// Nemotron 3 (Nano): the same blocks with the MLP a mixture of ungated
-	// experts. See nemotronConfig.
-	"nemotron_h_moe": jlm.ArchNemotronH,
-	// Mamba-1: plain Mamba and FalconMamba (one arch, the latter's dt/B/C
-	// norms written as ones), and Jamba beside attention. See convert/mamba1.go.
-	"mamba": jlm.ArchMamba,
-	"jamba": jlm.ArchJamba,
-	// Falcon-H1: attention and Mamba-2 side by side in every block.
-	"falcon-h1": jlm.ArchFalconH1,
-	// LFM2: gated short convolutions beside attention (convert/lfm2.go).
-	"lfm2": jlm.ArchLFM2,
-	// LFM2's mixture (LFM2-8B-A1B, LFM2-24B-A2B): the same blocks with a
-	// sigmoid top-k after a dense lead, read off the keys as for any mixture.
-	"lfm2moe": jlm.ArchLFM2,
-	// MiniMax-M3 (text): MiniMax-M2's attention with DeepSeek-V3's mixture
-	// and MiniMax Sparse Attention. See jlm.ArchMiniMaxM3.
-	"minimax-m3": jlm.ArchMiniMaxM3,
-	// The modern text group: Ling 2.0, dots.llm1, Phi-3.5-MoE and Apertus.
-	// See convert/moefamily2.go, convert/apertus.go and jlm.ArchBailingMoE2.
-	"bailingmoe2": jlm.ArchBailingMoE2,
-	"dots1":       jlm.ArchDots1,
-	"phimoe":      jlm.ArchPhiMoE,
-	"apertus":     jlm.ArchApertus,
-	// BitNet b1.58 2B-4T as bitnet.cpp's converter names it (convert/bitnet.go,
-	// jlm.ArchBitNet). llama.cpp's own "bitnet" is 1bitLLM's reproduction, a
-	// SiLU gate, and its converter cannot write transformers' BitNetForCausalLM
-	// at all (it maps none of its inner-norm names); it is not this graph.
-	"bitnet-b1.58": jlm.ArchBitNet,
-	// DeepSeek V4 (text): hyper-connected residual streams, single-key MQA
-	// over a sliding window and a compressed history. See jlm.ArchDeepseek4.
-	"deepseek4": jlm.ArchDeepseek4,
+func archOf() map[string]jlm.Arch {
+	return map[string]jlm.Arch{
+		"llama":     jlm.ArchLlama, // llama2 and llama3 are this arch too
+		"qwen2":     jlm.ArchQwen2,
+		"qwen3":     jlm.ArchQwen3,
+		"qwen3moe":  jlm.ArchQwen3MoE,
+		"olmoe":     jlm.ArchOLMoE,
+		"gemma":     jlm.ArchGemma,
+		"phi3":      jlm.ArchPhi3, // phi4 uses this arch string too
+		"clip":      jlm.ArchCLIP,
+		"qwen3next": jlm.ArchQwen3Next,
+		// Qwen3.5/3.6 are qwen3next's block re-cut, and every cut is in the file:
+		// beta and alpha arrive as two tensors (fused back by fuseBetaAlpha), the
+		// value heads are tiled (jlm.FlagDeltaKeyTiled), qwen35's FFN is dense, and
+		// the interleaved M-RoPE is exactly NEOX for a text prompt. See qwen35Of.
+		"qwen35":    jlm.ArchQwen3Next,
+		"qwen35moe": jlm.ArchQwen3Next,
+		// Clef-Flash: Qwen3.5-9B's text model under another name, with a joint
+		// schema head after it that the decision readout reads (decisionOf,
+		// jlm.DecisionClef).
+		"clef":    jlm.ArchQwen3Next,
+		"qwen2vl": jlm.ArchQwen2VL,
+		"gemma2":  jlm.ArchGemma2,
+		"gemma3":  jlm.ArchGemma3,
+		"gpt-oss": jlm.ArchGPTOSS,
+		// DeepSeek-V2/V3/R1, Kimi-K2 and Moonlight-16B-A3B. Not GLM: see
+		// jlm.ArchDeepseek2 for which GLM is this graph and which is not.
+		"deepseek2": jlm.ArchDeepseek2,
+		// The BERT family of embedding models: all-minilm, mxbai-embed-large,
+		// bge-large and the bert-sized snowflake-arctic-embed tags declare "bert";
+		// nomic-embed-text declares "nomic-bert". See jlm.ArchBERT.
+		"bert":       jlm.ArchBERT,
+		"nomic-bert": jlm.ArchNomicBERT,
+		// ModernBERT, and the decision encoders built on it (Laya). See
+		// jlm.ArchModernBERT.
+		"modern-bert": jlm.ArchModernBERT,
+		// Llama 4 Scout (16 experts) and Maverick (128), text only. See
+		// jlm.ArchLlama4 for the five things that make it not llama.
+		"llama4": jlm.ArchLlama4,
+		// IBM Granite 3.x/4.0, dense and mixture: llama's block with four scaling
+		// constants. See jlm.ArchGranite. (granitehybrid, the Mamba-2 hybrid, is a
+		// different graph and is not here.)
+		"granite":    jlm.ArchGranite,
+		"granitemoe": jlm.ArchGranite,
+		// The classic-transformer blocks (C6): LayerNorm with biases, ungated
+		// FFNs, parallel residuals. See jlm.ArchPhi2.
+		"phi2":      jlm.ArchPhi2,
+		"starcoder": jlm.ArchStarcoder,
+		// Cohere: Command-R, Aya and Aya Expanse declare "command-r"; Command-R7B
+		// and Command-A declare "cohere2". See jlm.ArchCommandR.
+		"command-r":  jlm.ArchCommandR,
+		"cohere2":    jlm.ArchCommandR,
+		"stablelm":   jlm.ArchStableLM,
+		"starcoder2": jlm.ArchStarcoder2,
+		"falcon":     jlm.ArchFalcon,
+		"nemotron":   jlm.ArchNemotron,
+		// Databricks' DBRX: the C6 kit's bias-free LayerNorm on a mixture, with
+		// q, k and v clamped. See jlm.ArchDBRX.
+		"dbrx": jlm.ArchDBRX,
+		// GLM-4.5, GLM-4.6 and GLM-4.5-Air: DeepSeek-V3's router on GQA attention.
+		// See jlm.ArchGLM4MoE.
+		"glm4moe": jlm.ArchGLM4MoE,
+		// Qwen1.5-MoE and Qwen2-57B-A14B. See jlm.ArchQwen2MoE.
+		"qwen2moe": jlm.ArchQwen2MoE,
+		// ERNIE 4.5: the dense models are llama's graph exactly (interleaved
+		// rotary, tied head, biases only as tensors), as llama3 is; the mixtures
+		// are their own. See jlm.ArchErnie45MoE.
+		"ernie4_5":     jlm.ArchLlama,
+		"ernie4_5-moe": jlm.ArchErnie45MoE,
+		// The dense llama-family group: each is llama's block with switches the
+		// graph already runs. See convert/dense.go and jlm.ArchSmolLM3.
+		"smollm3":  jlm.ArchSmolLM3,
+		"arcee":    jlm.ArchArcee,
+		"seed_oss": jlm.ArchSeedOSS,
+		"olmo2":    jlm.ArchOLMo2, // OLMo 3 declares olmo2 too
+		"exaone4":  jlm.ArchExaone4,
+		"mistral3": jlm.ArchMistral3,
+		// Tencent's Hunyuan, mixture and dense: one graph, q/k norm after the
+		// rotary. See jlm.ArchHunyuan.
+		"hunyuan-moe":   jlm.ArchHunyuan,
+		"hunyuan-dense": jlm.ArchHunyuan,
+		// MiniMax-M2/M2.1/M2.5: OLMoE's whole-projection q/k norm on GQA with
+		// partial NEOX rotary, and DeepSeek-V3's sigmoid router without a shared
+		// expert. See jlm.ArchMiniMaxM2.
+		"minimax-m2": jlm.ArchMiniMaxM2,
+		// Gemma 4 (text): gemma3's block with its global layers at another
+		// attention geometry. See jlm.ArchGemma4.
+		"gemma4": jlm.ArchGemma4,
+		// DeepSeek V3.2: deepseek2's graph with DeepSeek Sparse Attention's
+		// lightning indexer. See jlm.ArchDeepseek32.
+		"deepseek32": jlm.ArchDeepseek32,
+		// Gemma 3n (text): gemma3's attention with Gemma 4's E-model pieces,
+		// inside AltUp's parallel residual streams. See jlm.ArchGemma3n.
+		"gemma3n": jlm.ArchGemma3n,
+		// The state-space hybrids: Mamba-2 blocks (jlm.LayerSSD), alone or beside
+		// attention. See convert/ssm.go and jlm.ArchMamba2.
+		"mamba2":        jlm.ArchMamba2,
+		"granitehybrid": jlm.ArchGraniteHybrid,
+		// Nemotron-H and Nemotron Nano 2: one mixer a source layer, merged into
+		// blocks at conversion (convert/nemotronh.go).
+		"nemotron_h": jlm.ArchNemotronH,
+		// Nemotron 3 (Nano): the same blocks with the MLP a mixture of ungated
+		// experts. See nemotronConfig.
+		"nemotron_h_moe": jlm.ArchNemotronH,
+		// Mamba-1: plain Mamba and FalconMamba (one arch, the latter's dt/B/C
+		// norms written as ones), and Jamba beside attention. See convert/mamba1.go.
+		"mamba": jlm.ArchMamba,
+		"jamba": jlm.ArchJamba,
+		// Falcon-H1: attention and Mamba-2 side by side in every block.
+		"falcon-h1": jlm.ArchFalconH1,
+		// LFM2: gated short convolutions beside attention (convert/lfm2.go).
+		"lfm2": jlm.ArchLFM2,
+		// LFM2's mixture (LFM2-8B-A1B, LFM2-24B-A2B): the same blocks with a
+		// sigmoid top-k after a dense lead, read off the keys as for any mixture.
+		"lfm2moe": jlm.ArchLFM2,
+		// MiniMax-M3 (text): MiniMax-M2's attention with DeepSeek-V3's mixture
+		// and MiniMax Sparse Attention. See jlm.ArchMiniMaxM3.
+		"minimax-m3": jlm.ArchMiniMaxM3,
+		// The modern text group: Ling 2.0, dots.llm1, Phi-3.5-MoE and Apertus.
+		// See convert/moefamily2.go, convert/apertus.go and jlm.ArchBailingMoE2.
+		"bailingmoe2": jlm.ArchBailingMoE2,
+		"dots1":       jlm.ArchDots1,
+		"phimoe":      jlm.ArchPhiMoE,
+		"apertus":     jlm.ArchApertus,
+		// BitNet b1.58 2B-4T as bitnet.cpp's converter names it (convert/bitnet.go,
+		// jlm.ArchBitNet). llama.cpp's own "bitnet" is 1bitLLM's reproduction, a
+		// SiLU gate, and its converter cannot write transformers' BitNetForCausalLM
+		// at all (it maps none of its inner-norm names); it is not this graph.
+		"bitnet-b1.58": jlm.ArchBitNet,
+		// DeepSeek V4 (text): hyper-connected residual streams, single-key MQA
+		// over a sliding window and a compressed history. See jlm.ArchDeepseek4.
+		"deepseek4": jlm.ArchDeepseek4,
 
-	// Qwen3-VL's text models: qwen3 and qwen3moe under an interleaved M-RoPE.
-	// See jlm.ArchQwen3VL.
-	"qwen3vl":    jlm.ArchQwen3VL,
-	"qwen3vlmoe": jlm.ArchQwen3VLMoE,
-	// GLM-4-0414 and the text model of GLM-4.1V / 4.6V-Flash. See jlm.ArchGLM4.
-	// GLM-4.5V's and 4.6V's is glm4moe with M-RoPE sections, which configOf
-	// carries as jlm.ArchGLM4VMoE.
-	"glm4": jlm.ArchGLM4,
-	// HunyuanVL's text model (HunyuanOCR): hunyuan-dense's block under
-	// XD-RoPE. See jlm.ArchHunyuanVL.
-	"hunyuan_vl": jlm.ArchHunyuanVL,
-	// Kimi-K3 (text): Kimi-Linear's KDA + MLA hybrid with residual attention,
-	// a latent mixture and the situ activation. See jlm.ArchKimiK3.
-	"kimi-k3": jlm.ArchKimiK3,
-	// Qwen3.8-Flash-Next (text): qwen3next's hybrid inside low-rank gated
-	// hyper-connections, with QSA block selection and an n-gram embedding.
-	// See jlm.ArchQwen4Exp.
-	"qwen4exp": jlm.ArchQwen4Exp,
+		// Qwen3-VL's text models: qwen3 and qwen3moe under an interleaved M-RoPE.
+		// See jlm.ArchQwen3VL.
+		"qwen3vl":    jlm.ArchQwen3VL,
+		"qwen3vlmoe": jlm.ArchQwen3VLMoE,
+		// GLM-4-0414 and the text model of GLM-4.1V / 4.6V-Flash. See jlm.ArchGLM4.
+		// GLM-4.5V's and 4.6V's is glm4moe with M-RoPE sections, which configOf
+		// carries as jlm.ArchGLM4VMoE.
+		"glm4": jlm.ArchGLM4,
+		// HunyuanVL's text model (HunyuanOCR): hunyuan-dense's block under
+		// XD-RoPE. See jlm.ArchHunyuanVL.
+		"hunyuan_vl": jlm.ArchHunyuanVL,
+		// Kimi-K3 (text): Kimi-Linear's KDA + MLA hybrid with residual attention,
+		// a latent mixture and the situ activation. See jlm.ArchKimiK3.
+		"kimi-k3": jlm.ArchKimiK3,
+		// Qwen3.8-Flash-Next (text): qwen3next's hybrid inside low-rank gated
+		// hyper-connections, with QSA block selection and an n-gram embedding.
+		// See jlm.ArchQwen4Exp.
+		"qwen4exp": jlm.ArchQwen4Exp,
+	}
 }
 
 // Supported reports whether the converter implements a GGUF architecture
 // name -- the list above, which is the list (RULE 7).
 func Supported(arch string) bool {
-	_, ok := archOf[arch]
+	_, ok := archOf()[arch]
 	return ok
 }
 
@@ -182,8 +184,8 @@ func Supported(arch string) bool {
 // library.TestEveryArchitectureIsObtainable reads it to confirm everything the
 // converter implements is reachable from the download catalogue.
 func Architectures() []string {
-	out := make([]string, 0, len(archOf))
-	for name := range archOf {
+	out := make([]string, 0, len(archOf()))
+	for name := range archOf() {
 		out = append(out, name)
 	}
 	sort.Strings(out)
@@ -195,7 +197,7 @@ func Architectures() []string {
 // refine it further (olmo2 with a sliding window is jlm.ArchOLMo3, glm4moe
 // with M-RoPE sections jlm.ArchGLM4VMoE); this is the name's own entry.
 func ArchitectureGraph(name string) (jlm.Arch, bool) {
-	a, ok := archOf[name]
+	a, ok := archOf()[name]
 	return a, ok
 }
 
@@ -228,7 +230,7 @@ func localAxes(c *jlm.Config) error {
 // (d1OmniConfig).
 func configOfFile(f *meta.File) (*jlm.Config, error) {
 	name := f.Arch()
-	arch, ok := archOf[name]
+	arch, ok := archOf()[name]
 	if !ok {
 		return nil, fmt.Errorf("convert: architecture %q is not implemented (%s): %w",
 			name, strings.Join(Architectures(), ", "), ErrNotImplemented)
@@ -1110,34 +1112,36 @@ func mropeSectionsOf(f *meta.File, name string, c *jlm.Config) error {
 // projectorOf is the list of vision projectors (clip.projector_type) the
 // converter implements: an unknown one is refused, as an unknown
 // tokenizer.ggml.pre is. visionOf has a case for each.
-var projectorOf = map[string]jlm.Projector{
-	"idefics3":         jlm.ProjIdefics3,
-	"mlp":              jlm.ProjMLP,
-	"qwen2vl_merger":   jlm.ProjQwen2VL,
-	"gemma3":           jlm.ProjGemma3,
-	"internvl":         jlm.ProjInternVL,
-	"resampler":        jlm.ProjResampler,
-	"janus_pro":        jlm.ProjJanus,
-	"qwen2.5vl_merger": jlm.ProjQwen25VL,
-	"pixtral":          jlm.ProjPixtral,
-	"phi4":             jlm.ProjPhi4,
-	"gemma4v":          jlm.ProjGemma4V,
-	"gemma3nv":         jlm.ProjGemma3nV,
-	"llama4":           jlm.ProjLlama4,
-	"glm4v":            jlm.ProjGLM4V,
-	"hunyuanvl":        jlm.ProjHunyuanVL,
-	"kimivl":           jlm.ProjKimiVL,
-	"qwen3vl_merger":   jlm.ProjQwen3VL,
-	"lfm2":             jlm.ProjLFM2,
-	// d1-omni's vision half: LFM2-VL's tower and projector with no input
-	// norm, resampled bilinear (its vision.py).
-	"d1omni_v": jlm.ProjLFM2,
+func projectorOf() map[string]jlm.Projector {
+	return map[string]jlm.Projector{
+		"idefics3":         jlm.ProjIdefics3,
+		"mlp":              jlm.ProjMLP,
+		"qwen2vl_merger":   jlm.ProjQwen2VL,
+		"gemma3":           jlm.ProjGemma3,
+		"internvl":         jlm.ProjInternVL,
+		"resampler":        jlm.ProjResampler,
+		"janus_pro":        jlm.ProjJanus,
+		"qwen2.5vl_merger": jlm.ProjQwen25VL,
+		"pixtral":          jlm.ProjPixtral,
+		"phi4":             jlm.ProjPhi4,
+		"gemma4v":          jlm.ProjGemma4V,
+		"gemma3nv":         jlm.ProjGemma3nV,
+		"llama4":           jlm.ProjLlama4,
+		"glm4v":            jlm.ProjGLM4V,
+		"hunyuanvl":        jlm.ProjHunyuanVL,
+		"kimivl":           jlm.ProjKimiVL,
+		"qwen3vl_merger":   jlm.ProjQwen3VL,
+		"lfm2":             jlm.ProjLFM2,
+		// d1-omni's vision half: LFM2-VL's tower and projector with no input
+		// norm, resampled bilinear (its vision.py).
+		"d1omni_v": jlm.ProjLFM2,
+	}
 }
 
 // Projectors is every name in that list, sorted.
 func Projectors() []string {
-	out := make([]string, 0, len(projectorOf))
-	for name := range projectorOf {
+	out := make([]string, 0, len(projectorOf()))
+	for name := range projectorOf() {
 		out = append(out, name)
 	}
 	sort.Strings(out)
@@ -1147,7 +1151,7 @@ func Projectors() []string {
 // ProjectorOf is the projector a clip.projector_type name converts to, and
 // whether the name is in the list.
 func ProjectorOf(name string) (jlm.Projector, bool) {
-	p, ok := projectorOf[name]
+	p, ok := projectorOf()[name]
 	return p, ok
 }
 
@@ -1174,7 +1178,7 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 		name, _ = f.KV["clip.vision.projector_type"].String()
 	}
 	last := "mm.model.fc.weight"
-	p, ok := projectorOf[name]
+	p, ok := projectorOf()[name]
 	if !ok {
 		return nil, fmt.Errorf("convert: projector_type %q unsupported (only %s): %w",
 			name, strings.Join(Projectors(), ", "), ErrNotImplemented)

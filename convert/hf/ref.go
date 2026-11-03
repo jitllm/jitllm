@@ -35,11 +35,12 @@ type Ref struct {
 
 // hosts lists the Hub's hosts. A URL on any other host is an error, not a
 // local path. hf.co is what the Hub's share button copies.
-var hosts = map[string]bool{
-	"huggingface.co":     true,
-	"www.huggingface.co": true,
-	"hf.co":              true,
-	"www.hf.co":          true,
+func isHubHost(h string) bool {
+	switch h {
+	case "huggingface.co", "www.huggingface.co", "hf.co", "www.hf.co":
+		return true
+	}
+	return false
 }
 
 // Parse reports whether s names a file on HuggingFace, and what it names.
@@ -89,7 +90,7 @@ func parseURL(s string) (Ref, error) {
 	if err != nil {
 		return Ref{}, fmt.Errorf("%q is not a URL: %w", s, err)
 	}
-	if !hosts[strings.ToLower(u.Hostname())] {
+	if !isHubHost(strings.ToLower(u.Hostname())) {
 		return Ref{}, fmt.Errorf("%q is on %s: this fetches from huggingface.co and hf.co only.\n"+
 			"  For anything else, download it yourself and convert the local file",
 			s, u.Hostname())

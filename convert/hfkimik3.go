@@ -26,83 +26,85 @@ import (
 // kimiK3Gather), the latent mixture's routed_expert_* projections and norm,
 // g_proj (the MLA output gate in a full block, the full-rank KDA gate in a
 // linear one), and the situ activation, a config key.
-var kimiK3HF = &hfArch{
-	arch:        jlm.ArchKimiK3,
-	blockPrefix: k3BlockPrefix,
-	model: map[string]jlm.Role{
-		"language_model.model.embed_tokens.weight": jlm.RoleTokenEmbd,
-		"language_model.model.norm.weight":         jlm.RoleOutputNorm,
-		"language_model.lm_head.weight":            jlm.RoleOutput,
-	},
-	ignorePrefix: []string{"vision_tower.", "mm_projector."},
-	block: map[string]jlm.Role{
-		"input_layernorm.weight":          jlm.RoleAttnNorm,
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
+func kimiK3HF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchKimiK3,
+		blockPrefix: k3BlockPrefix,
+		model: map[string]jlm.Role{
+			"language_model.model.embed_tokens.weight": jlm.RoleTokenEmbd,
+			"language_model.model.norm.weight":         jlm.RoleOutputNorm,
+			"language_model.lm_head.weight":            jlm.RoleOutput,
+		},
+		ignorePrefix: []string{"vision_tower.", "mm_projector."},
+		block: map[string]jlm.Role{
+			"input_layernorm.weight":          jlm.RoleAttnNorm,
+			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
 
-		// MLA with no positional encoding; q_proj is the one-step query a
-		// null q_lora_rank states.
-		"self_attn.q_proj.weight":             jlm.RoleAttnQ,
-		"self_attn.q_a_proj.weight":           jlm.RoleAttnQA,
-		"self_attn.q_a_layernorm.weight":      jlm.RoleAttnQANorm,
-		"self_attn.q_b_proj.weight":           jlm.RoleAttnQB,
-		"self_attn.kv_a_proj_with_mqa.weight": jlm.RoleAttnKVA,
-		"self_attn.kv_a_layernorm.weight":     jlm.RoleAttnKVANorm,
-		"self_attn.kv_b_proj.weight":          jlm.RoleAttnKB,
-		"self_attn.o_proj.weight":             jlm.RoleAttnOut,
-		"self_attn.g_proj.weight":             jlm.RoleAttnGate,
+			// MLA with no positional encoding; q_proj is the one-step query a
+			// null q_lora_rank states.
+			"self_attn.q_proj.weight":             jlm.RoleAttnQ,
+			"self_attn.q_a_proj.weight":           jlm.RoleAttnQA,
+			"self_attn.q_a_layernorm.weight":      jlm.RoleAttnQANorm,
+			"self_attn.q_b_proj.weight":           jlm.RoleAttnQB,
+			"self_attn.kv_a_proj_with_mqa.weight": jlm.RoleAttnKVA,
+			"self_attn.kv_a_layernorm.weight":     jlm.RoleAttnKVANorm,
+			"self_attn.kv_b_proj.weight":          jlm.RoleAttnKB,
+			"self_attn.o_proj.weight":             jlm.RoleAttnOut,
+			"self_attn.g_proj.weight":             jlm.RoleAttnGate,
 
-		// The dense lead, and the latent mixture.
-		"mlp.gate_proj.weight":                             jlm.RoleFFNGate,
-		"mlp.up_proj.weight":                               jlm.RoleFFNUp,
-		"mlp.down_proj.weight":                             jlm.RoleFFNDown,
-		"block_sparse_moe.gate.weight":                     jlm.RoleRouter,
-		"block_sparse_moe.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
-		"block_sparse_moe.routed_expert_down_proj.weight":  jlm.RoleFFNRoutedDown,
-		"block_sparse_moe.routed_expert_norm.weight":       jlm.RoleFFNRoutedNorm,
-		"block_sparse_moe.routed_expert_up_proj.weight":    jlm.RoleFFNRoutedUp,
-		"block_sparse_moe.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
-		"block_sparse_moe.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
-		"block_sparse_moe.shared_experts.down_proj.weight": jlm.RoleShExpDown,
-	},
-	blockLinear: map[string]jlm.Role{
-		"input_layernorm.weight":          jlm.RoleAttnNorm,
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
+			// The dense lead, and the latent mixture.
+			"mlp.gate_proj.weight":                             jlm.RoleFFNGate,
+			"mlp.up_proj.weight":                               jlm.RoleFFNUp,
+			"mlp.down_proj.weight":                             jlm.RoleFFNDown,
+			"block_sparse_moe.gate.weight":                     jlm.RoleRouter,
+			"block_sparse_moe.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
+			"block_sparse_moe.routed_expert_down_proj.weight":  jlm.RoleFFNRoutedDown,
+			"block_sparse_moe.routed_expert_norm.weight":       jlm.RoleFFNRoutedNorm,
+			"block_sparse_moe.routed_expert_up_proj.weight":    jlm.RoleFFNRoutedUp,
+			"block_sparse_moe.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
+			"block_sparse_moe.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
+			"block_sparse_moe.shared_experts.down_proj.weight": jlm.RoleShExpDown,
+		},
+		blockLinear: map[string]jlm.Role{
+			"input_layernorm.weight":          jlm.RoleAttnNorm,
+			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
 
-		// q, k and v joined into one mixed projection and their convolutions
-		// into one filter bank, in the order fuseOrder states: the layout
-		// kimiK3Tensors builds from the GGUF.
-		"self_attn.q_proj.weight":   jlm.RoleAttnQKV,
-		"self_attn.k_proj.weight":   jlm.RoleAttnQKV,
-		"self_attn.v_proj.weight":   jlm.RoleAttnQKV,
-		"self_attn.q_conv1d.weight": jlm.RoleSSMConv1d,
-		"self_attn.k_conv1d.weight": jlm.RoleSSMConv1d,
-		"self_attn.v_conv1d.weight": jlm.RoleSSMConv1d,
+			// q, k and v joined into one mixed projection and their convolutions
+			// into one filter bank, in the order fuseOrder states: the layout
+			// kimiK3Tensors builds from the GGUF.
+			"self_attn.q_proj.weight":   jlm.RoleAttnQKV,
+			"self_attn.k_proj.weight":   jlm.RoleAttnQKV,
+			"self_attn.v_proj.weight":   jlm.RoleAttnQKV,
+			"self_attn.q_conv1d.weight": jlm.RoleSSMConv1d,
+			"self_attn.k_conv1d.weight": jlm.RoleSSMConv1d,
+			"self_attn.v_conv1d.weight": jlm.RoleSSMConv1d,
 
-		// beta alone, the forget gate's two halves, and the full-rank output
-		// gate (K3's g_proj; Kimi-Linear's low-rank g_a/g_b are refused by
-		// kimiK3HFConfig before any tensor is read).
-		"self_attn.b_proj.weight":   jlm.RoleSSMBA,
-		"self_attn.f_a_proj.weight": jlm.RoleSSMFA,
-		"self_attn.f_b_proj.weight": jlm.RoleSSMFB,
-		"self_attn.g_proj.weight":   jlm.RoleAttnGate,
+			// beta alone, the forget gate's two halves, and the full-rank output
+			// gate (K3's g_proj; Kimi-Linear's low-rank g_a/g_b are refused by
+			// kimiK3HFConfig before any tensor is read).
+			"self_attn.b_proj.weight":   jlm.RoleSSMBA,
+			"self_attn.f_a_proj.weight": jlm.RoleSSMFA,
+			"self_attn.f_b_proj.weight": jlm.RoleSSMFB,
+			"self_attn.g_proj.weight":   jlm.RoleAttnGate,
 
-		"self_attn.A_log":         jlm.RoleSSMA,
-		"self_attn.dt_bias":       jlm.RoleSSMDtBias,
-		"self_attn.o_norm.weight": jlm.RoleSSMNorm,
-		"self_attn.o_proj.weight": jlm.RoleSSMOut,
-	},
-	fuseOrder:    kimiLinearHF.fuseOrder,
-	expertPrefix: "block_sparse_moe.experts.",
-	expert:       kimiLinearHF.expert,
-	split: map[string]hfSplit{
-		"self_attn.kv_b_proj.weight": deepseekSplitKVB,
-		"self_attn.q_conv1d.weight":  kimiSqueezeConv1d,
-		"self_attn.k_conv1d.weight":  kimiSqueezeConv1d,
-		"self_attn.v_conv1d.weight":  kimiSqueezeConv1d,
-		"self_attn.A_log":            kimiExpandALog,
-	},
-	config: kimiK3HFConfig,
-	gather: kimiK3Gather,
+			"self_attn.A_log":         jlm.RoleSSMA,
+			"self_attn.dt_bias":       jlm.RoleSSMDtBias,
+			"self_attn.o_norm.weight": jlm.RoleSSMNorm,
+			"self_attn.o_proj.weight": jlm.RoleSSMOut,
+		},
+		fuseOrder:    kimiLinearHF().fuseOrder,
+		expertPrefix: "block_sparse_moe.experts.",
+		expert:       kimiLinearHF().expert,
+		split: map[string]hfSplit{
+			"self_attn.kv_b_proj.weight": deepseekSplitKVB,
+			"self_attn.q_conv1d.weight":  kimiSqueezeConv1d,
+			"self_attn.k_conv1d.weight":  kimiSqueezeConv1d,
+			"self_attn.v_conv1d.weight":  kimiSqueezeConv1d,
+			"self_attn.A_log":            kimiExpandALog,
+		},
+		config: kimiK3HFConfig,
+		gather: kimiK3Gather,
+	}
 }
 
 // k3BlockPrefix is where the text model's blocks live in the checkpoint.
@@ -421,12 +423,17 @@ func k3RopeTheta(tc *k3TextConfig) (float64, error) {
 // k3ResPairs are the residual attention's norm and projection, which the
 // reference only ever multiplies: each pair becomes one F32 vector, their
 // product, as llama.cpp's converter writes it (norm.float() * proj.float()).
-var k3ResPairs = []struct {
+func k3ResPairs() []struct {
 	stem string
 	role jlm.Role
-}{
-	{"self_attention_res", jlm.RoleAttnResScore},
-	{"mlp_res", jlm.RoleFFNResScore},
+} {
+	return []struct {
+		stem string
+		role jlm.Role
+	}{
+		{"self_attention_res", jlm.RoleAttnResScore},
+		{"mlp_res", jlm.RoleFFNResScore},
+	}
 }
 
 // k3OutputRes is the head's pair, outside the blocks.
@@ -470,7 +477,7 @@ func kimiK3Gather(c *jlm.Config, names []string, read func(string) ([]float32, e
 		return nil
 	}
 	for b := range int(c.NLayer) {
-		for _, r := range k3ResPairs {
+		for _, r := range k3ResPairs() {
 			if err := fold(k3BlockPrefix+itoa(b)+"."+r.stem, r.role, int32(b)); err != nil {
 				return nil, nil, err
 			}

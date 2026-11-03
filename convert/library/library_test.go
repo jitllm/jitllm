@@ -10,11 +10,11 @@ import (
 // Every entry must be fetchable as written: a unique name, an architecture
 // the converter implements, and references that parse back to themselves.
 func TestEveryEntryIsWellFormed(t *testing.T) {
-	if len(Models) == 0 {
+	if len(Models()) == 0 {
 		t.Fatal("the library is empty")
 	}
 	seen := map[string]bool{}
-	for _, m := range Models {
+	for _, m := range Models() {
 		if m.Name == "" || seen[m.Name] {
 			t.Errorf("name %q is empty or repeated", m.Name)
 		}

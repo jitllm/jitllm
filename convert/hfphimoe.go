@@ -15,39 +15,41 @@ import (
 // and k are not permuted, as convert_hf_to_gguf.py does not permute them), and
 // phi3's LongRoPE where the config states it. The router is sparsemixer, which
 // the arch code carries (jlm.PhiMoEJitter); phimoeConfig is the GGUF half.
-var phimoeHF = &hfArch{
-	arch:        jlm.ArchPhiMoE,
-	blockPrefix: llamaHF.blockPrefix,
-	model: map[string]jlm.Role{
-		"model.embed_tokens.weight": jlm.RoleTokenEmbd,
-		"model.norm.weight":         jlm.RoleOutputNorm,
-		"model.norm.bias":           jlm.RoleOutputNormBias,
-		"lm_head.weight":            jlm.RoleOutput,
-		"lm_head.bias":              jlm.RoleOutputBias,
-	},
-	block: map[string]jlm.Role{
-		"input_layernorm.weight":          jlm.RoleAttnNorm,
-		"input_layernorm.bias":            jlm.RoleAttnNormBias,
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
-		"post_attention_layernorm.bias":   jlm.RoleFFNNormBias,
-		"self_attn.q_proj.weight":         jlm.RoleAttnQ,
-		"self_attn.k_proj.weight":         jlm.RoleAttnK,
-		"self_attn.v_proj.weight":         jlm.RoleAttnV,
-		"self_attn.o_proj.weight":         jlm.RoleAttnOut,
-		"self_attn.q_proj.bias":           jlm.RoleAttnQBias,
-		"self_attn.k_proj.bias":           jlm.RoleAttnKBias,
-		"self_attn.v_proj.bias":           jlm.RoleAttnVBias,
-		"self_attn.o_proj.bias":           jlm.RoleAttnOutBias,
-		"block_sparse_moe.gate.weight":    jlm.RoleRouter,
-	},
-	expertPrefix: "block_sparse_moe.experts.",
-	expert: map[string]jlm.Role{
-		"w1.weight": jlm.RoleExpGateBank,
-		"w3.weight": jlm.RoleExpUpBank,
-		"w2.weight": jlm.RoleExpDownBank,
-	},
-	ignore: llamaHF.ignore,
-	config: phimoeHFConfig,
+func phimoeHF() *hfArch {
+	return &hfArch{
+		arch:        jlm.ArchPhiMoE,
+		blockPrefix: llamaHF().blockPrefix,
+		model: map[string]jlm.Role{
+			"model.embed_tokens.weight": jlm.RoleTokenEmbd,
+			"model.norm.weight":         jlm.RoleOutputNorm,
+			"model.norm.bias":           jlm.RoleOutputNormBias,
+			"lm_head.weight":            jlm.RoleOutput,
+			"lm_head.bias":              jlm.RoleOutputBias,
+		},
+		block: map[string]jlm.Role{
+			"input_layernorm.weight":          jlm.RoleAttnNorm,
+			"input_layernorm.bias":            jlm.RoleAttnNormBias,
+			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
+			"post_attention_layernorm.bias":   jlm.RoleFFNNormBias,
+			"self_attn.q_proj.weight":         jlm.RoleAttnQ,
+			"self_attn.k_proj.weight":         jlm.RoleAttnK,
+			"self_attn.v_proj.weight":         jlm.RoleAttnV,
+			"self_attn.o_proj.weight":         jlm.RoleAttnOut,
+			"self_attn.q_proj.bias":           jlm.RoleAttnQBias,
+			"self_attn.k_proj.bias":           jlm.RoleAttnKBias,
+			"self_attn.v_proj.bias":           jlm.RoleAttnVBias,
+			"self_attn.o_proj.bias":           jlm.RoleAttnOutBias,
+			"block_sparse_moe.gate.weight":    jlm.RoleRouter,
+		},
+		expertPrefix: "block_sparse_moe.experts.",
+		expert: map[string]jlm.Role{
+			"w1.weight": jlm.RoleExpGateBank,
+			"w3.weight": jlm.RoleExpUpBank,
+			"w2.weight": jlm.RoleExpDownBank,
+		},
+		ignore: llamaHF().ignore,
+		config: phimoeHFConfig,
+	}
 }
 
 // phimoeHFConfig reads PhimoeConfig. sparsemixer keeps two experts and weighs

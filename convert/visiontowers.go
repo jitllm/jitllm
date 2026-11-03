@@ -61,13 +61,13 @@ func familyTowerName(name string) bool {
 	if _, _, ok := deepstackName(name); ok {
 		return true
 	}
-	if _, ok := glm4vRole[name]; ok {
+	if _, ok := glm4vRole(name); ok {
 		return true
 	}
-	if _, ok := kimivlRole[name]; ok {
+	if _, ok := kimivlRole(name); ok {
 		return true
 	}
-	if _, ok := hunyuanvlRole[name]; ok || name == hunyuanvlUnread {
+	if _, ok := hunyuanvlRole(name); ok || name == hunyuanvlUnread {
 		return true
 	}
 	_, part, ok := blockPart(name)
@@ -214,13 +214,13 @@ func checkDeepstack(f *meta.File, s *jlm.Source) error {
 func familyProjectorRole(p jlm.Projector, name string) (jlm.Role, bool) {
 	switch p {
 	case jlm.ProjGLM4V:
-		r, ok := glm4vRole[name]
+		r, ok := glm4vRole(name)
 		return r, ok
 	case jlm.ProjKimiVL:
-		r, ok := kimivlRole[name]
+		r, ok := kimivlRole(name)
 		return r, ok
 	case jlm.ProjHunyuanVL:
-		r, ok := hunyuanvlRole[name]
+		r, ok := hunyuanvlRole(name)
 		return r, ok
 	}
 	return 0, false
