@@ -1783,7 +1783,7 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpuB
 		page = a.page
 	}
 	req := composer.Request{Graph: &gr, Formats: formats, Strides: m.cpuStrides(li, g),
-		Step:    composer.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.jit.ActWindow(), Seqs: max(s.nseq, 1)},
+		Step:    composer.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.m.actWindow, Seqs: max(s.nseq, 1)},
 		History: composer.History{ValuesInKeys: pg.latent},
 		Device:  s.composedCPU()}
 	// A block turns by the rotary its rope ops state, of the model's

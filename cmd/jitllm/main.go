@@ -306,7 +306,6 @@ func benchmark(path string, topts []tok.Option) error {
 		}
 	}
 	threads := st.Workers()
-	tier := fmt.Sprintf("generated %v, %d shape-specialized", st.Accelerated(), st.Shapes())
 	const nTok = 3
 	start := time.Now()
 	for i := 0; i < nTok; i++ {
@@ -321,7 +320,7 @@ func benchmark(path string, topts []tok.Option) error {
 	el := time.Since(start)
 
 	perTok := m.BytesPerToken()
-	fmt.Println(bench.Report(fmt.Sprintf("decode, %d core(s), %s", threads, tier), perTok*nTok, el, threads))
+	fmt.Println(bench.Report(fmt.Sprintf("decode, %d core(s), %s", threads, model.CPUForm()), perTok*nTok, el, threads))
 	fmt.Printf("             %.3f tok/s   %d B/token\n", nTok/el.Seconds(), perTok)
 	if names, ns := m.OpProfile(); ns[0] > 0 {
 		var tot int64
@@ -1040,9 +1039,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// The prompt is the text ids plus whatever an image spliced in (marker
 	// tokens and one embedding per projected patch group).
 	ptok := len(ids) + extra
-	if n := st.MixtureAffine(); n > 0 {
-		fmt.Fprintf(os.Stderr, "numa     %d host mixture region(s) ran on the nodes holding their experts\n", n)
-	}
 	fmt.Fprintf(os.Stderr, "\nprompt %d tok in %v (%s)   decode %d tok in %v (%s)\n",
 		ptok, prefill.Round(time.Millisecond), rateOf(ptok, prefill),
 		len(out), decode.Round(time.Millisecond), rateOf(len(out), decode))

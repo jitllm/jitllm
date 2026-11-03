@@ -17,6 +17,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
@@ -1324,6 +1325,9 @@ type Model struct {
 	tracer      func(layer int, name string, v []float32)
 	// jit is what WithJITOptions collected, handed to every Instance.
 	jit []nn.Option
+	// actWindow is how many activation elements share one int8 scale, the
+	// same on every device (actWindowOf).
+	actWindow int
 	// opt is this model's resolved load options, a copy; see modelOpts.
 	opt modelOpts
 	// states counts the sessions built, so AddJITOptions can refuse to be late.
@@ -1631,6 +1635,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// on the host's memory attached afterwards comes off it (hostheld.go).
 	m.pages.bytes = budget
 	m.jit, m.opt = lo.jit, lo.opt
+	m.actWindow = m.actWindowOf()
 	if lo.opt.kvTypeSet {
 		if err := m.Cfg.KVTypeRefusal(lo.opt.kvType); err != nil {
 			c.Close()
@@ -3941,6 +3946,33 @@ func (m *Model) hasPostNorm() bool {
 		}
 	}
 	return false
+}
+
+// actWindowOf is the model's activation window (composer.ActWindow) over the
+// types of its matrices: for a model quantizing each row per token
+// (Config.TokenAct), one window over its widest row.
+func (m *Model) actWindowOf() int {
+	maxK := 0
+	var types []quant.Type
+	for i := range m.container.Entries() {
+		if t, ok := containerShape(&m.container.Entries()[i]); ok {
+			maxK = max(maxK, t.k)
+			types = append(types, t.typ)
+		}
+	}
+	if m.Cfg.TokenAct {
+		return (maxK + 31) / 32 * 32
+	}
+	return composer.ActWindow(types)
+}
+
+// shareActWindow hands device d the model's activation window where d
+// quantizes activations itself: devices quantizing with two windows do not
+// agree on token ids.
+func (m *Model) shareActWindow(d nn.LayerDevice) {
+	if w, ok := d.(nn.ActWindower); ok {
+		w.SetActWindow(m.actWindow)
+	}
 }
 
 // newJIT builds the generated-code tier an instance runs on: one kernel per
