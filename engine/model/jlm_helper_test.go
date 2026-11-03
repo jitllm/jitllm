@@ -128,6 +128,16 @@ func (e *missingModel) Error() string {
 		e.src, e.dst, e.err)
 }
 
+// sweepJLM is jlmOf for a sweep over files: each converts in a subtest of its
+// own, so a file that is part of a model (a head meant for a trunk) or one
+// refused by scope skips there and the sweep goes on to the next. false for
+// a file that did not convert.
+func sweepJLM(t *testing.T, p string) (string, bool) {
+	var dst string
+	t.Run("convert/"+filepath.Base(p), func(t *testing.T) { dst = jlmOf(t, p) })
+	return dst, dst != ""
+}
+
 // jlmOfPair converts a text model and, when given one, its vision tower into one
 // container. There is no second file on the weight path: see
 // convert.FromGGUFs.
@@ -138,6 +148,8 @@ func jlmOfPair(t testing.TB, path, mmproj string) string {
 	switch {
 	case errors.As(err, &miss):
 		t.Skipf("%v -- this gate proved nothing", err)
+	case errors.Is(err, convert.ErrPart):
+		t.Skipf("PART OF A MODEL: %s -- %v", filepath.Base(path), err)
 	case errors.Is(err, convert.ErrNotImplemented):
 		// A scope refusal reaches the caller as a skip naming it; a sweep
 		// converts in a subtest of its own so the skip stays that model's.

@@ -90,8 +90,8 @@ func mlaBlocks(p *nn.LayerPlan, n int) []*nn.LayerWeights {
 			Wkb: q4(p.NHead*p.KVLoraRank, nope),
 			Wvb: q4(p.NHead*p.HeadDimV, p.KVLoraRank),
 			// The two latent norms, which each free walk must reach.
-			QANorm: f(p.QLoraRank), KVANorm: f(p.KVLoraRank),
-			Gate: q4(p.NFFN, p.NEmbd), Up: q4(p.NFFN, p.NEmbd), Down: q4(p.NEmbd, p.NFFN),
+			Vectors: []nn.RoleVector{{Role: jlm.RoleAttnQANorm, V: f(p.QLoraRank)}, {Role: jlm.RoleAttnKVANorm, V: f(p.KVLoraRank)}},
+			Gate:    q4(p.NFFN, p.NEmbd), Up: q4(p.NFFN, p.NEmbd), Down: q4(p.NEmbd, p.NFFN),
 		}
 	}
 	return out
@@ -136,7 +136,7 @@ func TestLatentAttentionReturnsEveryDeviceBuffer(t *testing.T) {
 					li, w.name)
 			}
 		}
-		if l.nQA == nil || l.nKVA == nil {
+		if l.roleVector(jlm.RoleAttnQANorm) == nil || l.roleVector(jlm.RoleAttnKVANorm) == nil {
 			t.Fatalf("block %d: a latent norm was never uploaded", li)
 		}
 	}
@@ -228,7 +228,7 @@ func TestLatentAttentionReturnsItsMemoryOnTheLocalWalk(t *testing.T) {
 		t.Fatalf("latent block declined: %s", g.Err())
 	}
 	l := dt.layers[0]
-	if l == nil || !l.mla || l.nQA == nil || l.nKVA == nil {
+	if l == nil || !l.mla || l.roleVector(jlm.RoleAttnQANorm) == nil || l.roleVector(jlm.RoleAttnKVANorm) == nil {
 		t.Fatal("the block is not a latent one with both norms uploaded; this gate proves nothing")
 	}
 	// The per-layer buffers this walk owns: the norms. The weights live in

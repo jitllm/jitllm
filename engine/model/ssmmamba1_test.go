@@ -23,8 +23,8 @@ func mamba1Fixtures() []struct {
 				c.dtRank == 32 && c.NLayer == 3 && !c.TiedEmbd
 			for i := range m.layers {
 				l := &m.layers[i]
-				ok = ok && l.noFFN && c.LayerKind(i).Recurrent() && len(l.ssmA) == 128*16 &&
-					len(l.ssmD) == 128 && len(l.ssmConvB) == 128 && l.ssmDtNorm == nil
+				ok = ok && l.noFFN && c.LayerKind(i).Recurrent() && len(l.vector(jlm.RoleSSMA)) == 128*16 &&
+					len(l.vector(jlm.RoleSSMD)) == 128 && len(l.vector(jlm.RoleSSMConvBias)) == 128 && l.vector(jlm.RoleSSMDtNorm) == nil
 			}
 			return ok
 		}},
@@ -40,7 +40,7 @@ func mamba1Fixtures() []struct {
 			ok := c.Arch == "mamba" && c.Mamba1() && c.NLayer == 3
 			for i := range m.layers {
 				l := &m.layers[i]
-				ok = ok && l.noFFN && len(l.ssmDtNorm) == 32 && len(l.ssmBNorm) == 16 && len(l.ssmCNorm) == 16
+				ok = ok && l.noFFN && len(l.vector(jlm.RoleSSMDtNorm)) == 32 && len(l.vector(jlm.RoleSSMBNorm)) == 16 && len(l.vector(jlm.RoleSSMCNorm)) == 16
 			}
 			return ok
 		}},
@@ -54,7 +54,7 @@ func mamba1Fixtures() []struct {
 				l := &m.layers[i]
 				ok = ok && c.LayerKind(i).Recurrent() == want.rec && c.MoEAt(i) == want.moe && !l.noFFN
 				if want.rec {
-					ok = ok && len(l.ssmDtNorm) == 32
+					ok = ok && len(l.vector(jlm.RoleSSMDtNorm)) == 32
 				}
 			}
 			return ok
@@ -67,27 +67,27 @@ func mamba1Fixtures() []struct {
 func mamba1Violations() []c6Violation {
 	return []c6Violation{
 		{"A positive (A_log's sign lost)", func(m *Model) func() {
-			return ssdScaled(m, func(l *layer) *[]float32 { return &l.ssmA }, func(v []float32) {
+			return ssdScaled(m, jlm.RoleSSMA, func(v []float32) {
 				for i := range v {
 					v[i] = -v[i]
 				}
 			})
 		}},
 		{"no D skip", func(m *Model) func() {
-			return ssdScaled(m, func(l *layer) *[]float32 { return &l.ssmD }, func(v []float32) { clear(v) })
+			return ssdScaled(m, jlm.RoleSSMD, func(v []float32) { clear(v) })
 		}},
 		{"no convolution bias", func(m *Model) func() {
-			return ssdScaled(m, func(l *layer) *[]float32 { return &l.ssmConvB }, func(v []float32) { clear(v) })
+			return ssdScaled(m, jlm.RoleSSMConvBias, func(v []float32) { clear(v) })
 		}},
 		{"no dt bias", func(m *Model) func() {
-			return ssdScaled(m, func(l *layer) *[]float32 { return &l.ssmDtBias }, func(v []float32) { clear(v) })
+			return ssdScaled(m, jlm.RoleSSMDtBias, func(v []float32) { clear(v) })
 		}},
 		{"B and C exchanged", func(m *Model) func() {
 			return eachLayer(m, func(l *layer) { l.ssmXB, l.ssmXC = l.ssmXC, l.ssmXB })
 		}},
 		{"one decay rate a channel (Mamba-2's form)", func(m *Model) func() {
 			n := m.Cfg.delta().kDim
-			return ssdScaled(m, func(l *layer) *[]float32 { return &l.ssmA }, func(v []float32) {
+			return ssdScaled(m, jlm.RoleSSMA, func(v []float32) {
 				for j := 0; j < len(v); j += n {
 					for i := 1; i < n; i++ {
 						v[j+i] = v[j]
@@ -103,9 +103,7 @@ func mamba1Violations() []c6Violation {
 func mamba1NormViolations() []c6Violation {
 	return []c6Violation{
 		{"no dt/B/C norms", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.ssmDtNorm, l.ssmBNorm, l.ssmCNorm = nil, nil, nil })
-			undoR := dropStored(m, jlm.RoleSSMDtNorm, jlm.RoleSSMBNorm, jlm.RoleSSMCNorm)
-			return func() { undoR(); undoL() }
+			return dropVecs(m, jlm.RoleSSMDtNorm, jlm.RoleSSMBNorm, jlm.RoleSSMCNorm)
 		}},
 	}
 }

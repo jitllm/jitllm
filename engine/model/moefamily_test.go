@@ -45,9 +45,9 @@ func moeBaseFixtures() []struct {
 				c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 &&
 				c.NLayer == 3 && c.NMTP == 1 && !c.TiedEmbd &&
 				dense.router.e == nil && dense.gate.e != nil && dense.ffnNorm != nil &&
-				moe.router.e != nil && moe.expProbsB != nil && moe.shGate.e != nil && moe.shRouter == nil &&
-				moe.ffnNorm != nil && moe.postAttnNorm == nil && moe.qNorm != nil &&
-				moe.bq != nil && moe.bk != nil && moe.bv != nil && moe.bo == nil &&
+				moe.router.e != nil && moe.vector(jlm.RoleExpProbsB) != nil && moe.shGate.e != nil && moe.vector(jlm.RoleShRouter) == nil &&
+				moe.ffnNorm != nil && moe.vector(jlm.RolePostAttnNorm) == nil && moe.qNorm != nil &&
+				moe.vector(jlm.RoleAttnQBias) != nil && moe.vector(jlm.RoleAttnKBias) != nil && moe.vector(jlm.RoleAttnVBias) != nil && moe.vector(jlm.RoleAttnOutBias) == nil &&
 				m.layers[3].mtp != nil
 		}},
 		{"synth-qwen2moe", func(m *Model) bool {
@@ -55,8 +55,8 @@ func moeBaseFixtures() []struct {
 			return c.Arch == "qwen2moe" && c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
 				!c.ExpertSigmoid && c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 0 && c.NMTP == 0 &&
-				c.NKVHead < c.NHead && l.router.e != nil && l.expProbsB == nil && l.shGate.e != nil &&
-				len(l.shRouter) == c.NEmbd && l.bq != nil && l.bk != nil && l.bv != nil && l.bo == nil &&
+				c.NKVHead < c.NHead && l.router.e != nil && l.vector(jlm.RoleExpProbsB) == nil && l.shGate.e != nil &&
+				len(l.vector(jlm.RoleShRouter)) == c.NEmbd && l.vector(jlm.RoleAttnQBias) != nil && l.vector(jlm.RoleAttnKBias) != nil && l.vector(jlm.RoleAttnVBias) != nil && l.vector(jlm.RoleAttnOutBias) == nil &&
 				l.ffnNorm != nil && !c.TiedEmbd
 		}},
 		{"synth-ernie45moe", func(m *Model) bool {
@@ -66,13 +66,13 @@ func moeBaseFixtures() []struct {
 				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 1 && c.MoEStep == 2 &&
 				!c.MoEAt(0) && c.MoEAt(1) && !c.MoEAt(2) && c.MoEAt(3) && c.NMTP == 0 &&
 				m.layers[0].gate.e != nil && m.layers[2].gate.e != nil && m.layers[2].router.e == nil &&
-				l.router.e != nil && len(l.expProbsB) == c.NExpert && l.shGate.e != nil && l.shRouter == nil &&
-				l.bq == nil && l.bo == nil && c.TiedEmbd
+				l.router.e != nil && len(l.vector(jlm.RoleExpProbsB)) == c.NExpert && l.shGate.e != nil && l.vector(jlm.RoleShRouter) == nil &&
+				l.vector(jlm.RoleAttnQBias) == nil && l.vector(jlm.RoleAttnOutBias) == nil && c.TiedEmbd
 		}},
 		{"synth-ernie45", func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
 			return c.Arch == "llama" && !c.RopeNeox && c.NRot == c.HeadDim && c.NExpert == 0 &&
-				l.gate.e != nil && l.bq == nil && c.TiedEmbd
+				l.gate.e != nil && l.vector(jlm.RoleAttnQBias) == nil && c.TiedEmbd
 		}},
 		{"synth-hunyuanmoe", func(m *Model) bool {
 			c := m.Cfg
@@ -82,8 +82,8 @@ func moeBaseFixtures() []struct {
 				c.NDenseLead == 0 && c.NKVHead < c.NHead && c.TiedEmbd
 			for i := range m.layers {
 				l := &m.layers[i]
-				ok = ok && l.router.e != nil && l.shGate.e != nil && l.shRouter == nil &&
-					l.expProbsB == nil && l.bq == nil && foldedQK(l)
+				ok = ok && l.router.e != nil && l.shGate.e != nil && l.vector(jlm.RoleShRouter) == nil &&
+					l.vector(jlm.RoleExpProbsB) == nil && l.vector(jlm.RoleAttnQBias) == nil && foldedQK(l)
 			}
 			return ok
 		}},
@@ -95,16 +95,16 @@ func moeBaseFixtures() []struct {
 				c.NKVHead < c.NHead && !c.TiedEmbd
 			for i := range m.layers {
 				l := &m.layers[i]
-				ok = ok && l.router.e != nil && len(l.expProbsB) == c.NExpert && l.shGate.e == nil &&
+				ok = ok && l.router.e != nil && len(l.vector(jlm.RoleExpProbsB)) == c.NExpert && l.shGate.e == nil &&
 					len(l.qNorm) == c.NHead*c.HeadDim && len(l.kNorm) == c.NKVHead*c.HeadDim &&
-					l.bq == nil && l.ffnNorm != nil
+					l.vector(jlm.RoleAttnQBias) == nil && l.ffnNorm != nil
 			}
 			return ok
 		}},
 		{"synth-hunyuan", func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
 			return c.Arch == "hunyuan" && c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && c.QKNormPost &&
-				c.NExpert == 0 && c.NKVHead < c.NHead && l.gate.e != nil && l.bq == nil &&
+				c.NExpert == 0 && c.NKVHead < c.NHead && l.gate.e != nil && l.vector(jlm.RoleAttnQBias) == nil &&
 				c.TiedEmbd && foldedQK(l)
 		}},
 	}
@@ -311,25 +311,22 @@ func hostRotary(m *Model, neox bool) func() {
 
 // noSelectionBias drops the router's selection-only bias from every block.
 func noSelectionBias(m *Model) func() {
-	undoL := eachLayer(m, func(l *layer) { l.expProbsB = nil })
-	undoR := dropStored(m, jlm.RoleExpProbsB)
-	return func() { undoR(); undoL() }
+	return dropVecs(m, jlm.RoleExpProbsB)
 }
 
 // noSharedExpert drops the shared expert, and its gate where it has one; the
 // width goes too, since a device plan with a width and no weights is refused.
 func noSharedExpert(m *Model) func() {
 	undo := cfgMut(m, func(c *Config) { c.NFFNShExp = 0 })
-	undoL := eachLayer(m, func(l *layer) { l.shGate, l.shUp, l.shDown, l.shRouter = tensor{}, tensor{}, tensor{}, nil })
-	undoR := dropStored(m, jlm.RoleShExpGate, jlm.RoleShExpUp, jlm.RoleShExpDown, jlm.RoleShRouter)
-	return func() { undoR(); undoL(); undo() }
+	undoL := eachLayer(m, func(l *layer) { l.shGate, l.shUp, l.shDown = tensor{}, tensor{}, tensor{} })
+	undoR := dropStored(m, jlm.RoleShExpGate, jlm.RoleShExpUp, jlm.RoleShExpDown)
+	undoV := dropVecs(m, jlm.RoleShRouter)
+	return func() { undoV(); undoR(); undoL(); undo() }
 }
 
 // noSharedGate runs the shared expert at weight one: its sigmoid gate dropped.
 func noSharedGate(m *Model) func() {
-	undoL := eachLayer(m, func(l *layer) { l.shRouter = nil })
-	undoR := dropStored(m, jlm.RoleShRouter)
-	return func() { undoR(); undoL() }
+	return dropVecs(m, jlm.RoleShRouter)
 }
 
 // routerSwap scores every expert by its logit's sigmoid, or by the softmax

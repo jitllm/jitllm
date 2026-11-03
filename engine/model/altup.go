@@ -144,36 +144,18 @@ func loadAltUp(m *Model, cfg *Config, get func(jlm.Role, int32, int32) (tensor, 
 	return nil
 }
 
-// loadAltUpLayer reads block bi's AltUp and LAuReL tensors.
-func loadAltUpLayer(l *layer, bi int32, cfg *Config,
-	get func(jlm.Role, int32, int32) (tensor, error), vec func(jlm.Role, int32) ([]float32, error)) error {
+// loadAltUpLayer reads block bi's AltUp and LAuReL matrices; their vectors
+// are the block's table's (layer.vecs).
+func loadAltUpLayer(l *layer, bi int32, cfg *Config, getTo func(*tensor, jlm.Role, int32, int32) error) error {
 	var err error
 	d, s := cfg.NEmbd, cfg.Streams()
-	for _, v := range []struct {
-		dst  *[]float32
-		role jlm.Role
-		n    int
-	}{
-		{&l.altRouterNorm, jlm.RoleStreamRouterNorm, d},
-		{&l.altPredT, jlm.RoleStreamPredictCoef, s * s * s},
-		{&l.altCorrT, jlm.RoleStreamCorrectCoef, s * s},
-		{&l.altCorrScale, jlm.RoleStreamCorrectScale, d},
-		{&l.laurelPost, jlm.RoleLowRankNorm, d},
-	} {
-		if *v.dst, err = vec(v.role, bi); err != nil {
-			return err
-		}
-		if len(*v.dst) != v.n {
-			return fmt.Errorf("model: block %d's %v holds %d values, want %d", bi, v.role, len(*v.dst), v.n)
-		}
-	}
-	if l.altRouter, err = get(jlm.RoleStreamRouter, bi, -1); err != nil {
+	if err = getTo(&l.altRouter, jlm.RoleStreamRouter, bi, -1); err != nil {
 		return err
 	}
-	if l.laurelL, err = get(jlm.RoleLowRankIn, bi, -1); err != nil {
+	if err = getTo(&l.laurelL, jlm.RoleLowRankIn, bi, -1); err != nil {
 		return err
 	}
-	if l.laurelR, err = get(jlm.RoleLowRankOut, bi, -1); err != nil {
+	if err = getTo(&l.laurelR, jlm.RoleLowRankOut, bi, -1); err != nil {
 		return err
 	}
 	if l.altRouter.k != d || l.altRouter.rows != s || l.laurelL.k != d || l.laurelR.k != l.laurelL.rows ||

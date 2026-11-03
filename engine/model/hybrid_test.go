@@ -1298,9 +1298,9 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 // TestMoEDeviceReadsOnlyTheBanksItTakes is the other half of
 // TestMoEDeviceUploadReadsTheWholeBank: the bank is read only for a block the
 // device actually admits, not for every block offered (a mixture's bank is most
-// of its page). Self-calibrating: under a budget admitting one block of two the
-// read must be strictly smaller than under one admitting both; if it followed
-// the offer the two would be equal.
+// of its page). Self-calibrating: of eight blocks offered, under a budget
+// admitting fewer the read must be strictly smaller than under one admitting
+// more; if it followed the offer the two would be equal.
 func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 	opt := hyOpt{moe: true, layers: 8, manyExp: true}
 	// The prompt's scratch is not reserved on either side: its width is halved
@@ -1349,18 +1349,22 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 		return m.container.ChunksIn() - before, s.GPULayers()
 	}
 
+	// Under a budget the card pages a block's banks, so a budgeted block
+	// costs less than a resident one and each budget admits more blocks than
+	// it was measured at; what the gate needs is that the smaller admits
+	// fewer, and both fewer than the eight offered.
 	two, nTwo := chunks(used)
 	one, nOne := chunks(bOne)
 	t.Logf("budget %d B: %d block(s), %d chunk(s) read", used, nTwo, two)
 	t.Logf("budget %d B: %d block(s), %d chunk(s) read", bOne, nOne, one)
-	if nTwo != 2 || nOne != 1 {
-		t.Skipf("wanted 2 and 1 blocks placed, got %d and %d: the budgets do not "+
-			"separate the two cases on this device", nTwo, nOne)
+	if nOne < 1 || nOne >= nTwo || nTwo >= 8 {
+		t.Fatalf("budgets of %d and %d B placed %d and %d of 8 blocks: they do not "+
+			"separate an admission from the offer", bOne, used, nOne, nTwo)
 	}
 	if one >= two {
-		t.Fatalf("placing one block of two read %d chunk(s) against %d for both: "+
+		t.Fatalf("placing %d blocks of 8 read %d chunk(s) against %d for %d: "+
 			"the read follows the OFFER rather than the admission, so every block "+
-			"the budget refuses still costs a whole expert bank", one, two)
+			"the budget refuses still costs a whole expert bank", nOne, one, two, nTwo)
 	}
 }
 

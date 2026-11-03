@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -28,10 +29,13 @@ func visionBlocks(p *nn.LayerPlan, n int) []*nn.LayerWeights {
 			FFNNorm: f(p.NEmbd), FFNNormB: f(p.NEmbd),
 			Wq: q4(qd, p.NEmbd), Wk: q4(qd, p.NEmbd), Wv: q4(qd, p.NEmbd),
 			Wo: q4(p.NEmbd, qd),
-			Bq: f(qd), Bk: f(qd), Bv: f(qd), Bo: f(p.NEmbd),
 			// No Gate: a ViT's MLP is ungated.
 			Up: q4(p.NFFN, p.NEmbd), Down: q4(p.NEmbd, p.NFFN),
-			BUp: f(p.NFFN), BDown: f(p.NEmbd),
+			Vectors: []nn.RoleVector{
+				{Role: jlm.RoleAttnQBias, V: f(qd)}, {Role: jlm.RoleAttnKBias, V: f(qd)},
+				{Role: jlm.RoleAttnVBias, V: f(qd)}, {Role: jlm.RoleAttnOutBias, V: f(p.NEmbd)},
+				{Role: jlm.RoleFFNUpBias, V: f(p.NFFN)}, {Role: jlm.RoleFFNDownBias, V: f(p.NEmbd)},
+			},
 		}
 	}
 	return out

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -31,7 +32,7 @@ func gemma3nFixtures() []struct {
 				c.SparseStd > 1.64 && c.SparseStd < 1.65 && c.VNorm && c.SWAPeriod == 5 && len(m.altUnembd) == 3
 			for i := range m.layers {
 				l := &m.layers[i]
-				ok = ok && l.laurelL.rows == 32 && l.altRouter.rows == 4 && len(l.altPredT) == 64
+				ok = ok && l.laurelL.rows == 32 && l.altRouter.rows == 4 && len(l.vector(jlm.RoleStreamPredictCoef)) == 64
 			}
 			return ok
 		}},
@@ -61,15 +62,19 @@ func gemma3nActs(name string, to func(c *Config, acts []uint8) func(li int) uint
 func gemma3nViolations() []c6Violation {
 	return []c6Violation{
 		{"no AltUp prediction", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.altPredT = make([]float32, len(l.altPredT)) })
+			return eachLayer(m, func(l *layer) {
+				setVec(l, jlm.RoleStreamPredictCoef, func(v []float32) []float32 { return make([]float32, len(v)) })
+			})
 		}},
 		{"no AltUp correction", func(m *Model) func() {
 			return eachLayer(m, func(l *layer) {
-				l.altCorrT = make([]float32, len(l.altCorrT))
+				setVec(l, jlm.RoleStreamCorrectCoef, func(v []float32) []float32 { return make([]float32, len(v)) })
 			})
 		}},
 		{"no LAuReL", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.laurelPost = make([]float32, len(l.laurelPost)) })
+			return eachLayer(m, func(l *layer) {
+				setVec(l, jlm.RoleLowRankNorm, func(v []float32) []float32 { return make([]float32, len(v)) })
+			})
 		}},
 		gemma3nActs("no gaussian top-k", func(c *Config, a []uint8) func(int) uint8 {
 			return func(int) uint8 { return a[c.NSparse] }
@@ -79,11 +84,7 @@ func gemma3nViolations() []c6Violation {
 		}),
 		{"no correction scale", func(m *Model) func() {
 			return eachLayer(m, func(l *layer) {
-				ones := make([]float32, len(l.altCorrScale))
-				for i := range ones {
-					ones[i] = 1
-				}
-				l.altCorrScale = ones
+				setVec(l, jlm.RoleStreamCorrectScale, onesLike)
 			})
 		}},
 	}

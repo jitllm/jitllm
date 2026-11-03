@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // hfDenseSelected is what each dense llama-family safetensors fixture's
@@ -27,26 +28,26 @@ func hfDenseSelected() map[string]func(m *Model) bool {
 		"synth-hf-seedoss": func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
 			return c.Arch == "seed_oss" && c.RopeNeox && c.HeadDim*c.NHead != c.NEmbd &&
-				l.bq != nil && l.bk != nil && l.bv != nil && l.bo == nil && l.ffnNorm != nil && l.postAttnNorm == nil
+				l.vector(jlm.RoleAttnQBias) != nil && l.vector(jlm.RoleAttnKBias) != nil && l.vector(jlm.RoleAttnVBias) != nil && l.vector(jlm.RoleAttnOutBias) == nil && l.ffnNorm != nil && l.vector(jlm.RolePostAttnNorm) == nil
 		},
 		"synth-hf-olmo2": func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
 			return c.Arch == "olmo2" && c.RopeNeox && c.QKNorm && c.QKNormWide &&
 				len(l.qNorm) == c.NHead*c.HeadDim && l.attnNorm == nil && l.ffnNorm == nil &&
-				l.postAttnNorm != nil && l.postFFNNorm != nil && c.SWAWindow == 0
+				l.vector(jlm.RolePostAttnNorm) != nil && l.vector(jlm.RolePostFFNNorm) != nil && c.SWAWindow == 0
 		},
 		// OLMo 3: OLMo 2's block with a window on three layers in four, every
 		// layer rotating, the sliding ones on a plain rotary of their own.
 		"synth-hf-olmo3": func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
-			return c.Arch == "olmo3" && c.QKNormWide && l.attnNorm == nil && l.postFFNNorm != nil &&
+			return c.Arch == "olmo3" && c.QKNormWide && l.attnNorm == nil && l.vector(jlm.RolePostFFNNorm) != nil &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && c.SWA(2) && !c.SWA(3) &&
 				!c.NoPEGlobal && c.RopeAt(3) && c.SWARopePlain && m.ropeSWA != nil
 		},
 		"synth-hf-exaone4": func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
 			return c.Arch == "exaone4" && c.RopeNeox && c.QKNorm && !c.QKNormWide && len(l.qNorm) == c.HeadDim &&
-				l.attnNorm == nil && l.postAttnNorm != nil && c.NoPEGlobal && c.SWAWindow == 4 &&
+				l.attnNorm == nil && l.vector(jlm.RolePostAttnNorm) != nil && c.NoPEGlobal && c.SWAWindow == 4 &&
 				c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.RopeAt(2) && !c.RopeAt(3) && c.NKVHead < c.NHead
 		},
 		"synth-hf-ministral3": func(m *Model) bool {

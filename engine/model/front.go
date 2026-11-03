@@ -41,7 +41,6 @@ const (
 	UncoveredCompressed
 	UncoveredAct
 	UncoveredPooling
-	UncoveredEmbedRows
 	UncoveredClamp
 	UncoveredUnbound
 	UncoveredUnverified
@@ -77,8 +76,6 @@ func (u Uncovered) String() string {
 		return "an activation the container does not state, or not over the block's operands"
 	case UncoveredPooling:
 		return "a pooled head (an embedding model's)"
-	case UncoveredEmbedRows:
-		return "input rows beyond the token's row, a scale and a position table"
 	case UncoveredClamp:
 		return "linears clamped to stored bounds"
 	case UncoveredUnbound:
@@ -299,6 +296,9 @@ func (m *Model) frontGraphs() *frontSet {
 	s := &frontSet{key: k, blocks: make([]*graph.Graph, n), why: make([]Uncovered, n), errs: make([]error, n)}
 	for li := range n {
 		s.blocks[li], s.why[li], s.errs[li] = m.blockGraph(li)
+		if s.errs[li] == nil {
+			s.errs[li] = m.shortVector(li, s.blocks[li])
+		}
 	}
 	if np := m.Cfg.NMTP; np > 0 {
 		s.mtp, s.mtpWhy, s.mtpErrs = make([]*graph.Graph, np), make([]Uncovered, np), make([]error, np)
@@ -543,6 +543,31 @@ func (m *Model) ropeAxesStated(r nn.Rope) bool {
 // it stores a gate, its activation the expression the container states for
 // the block, over the gate and the up or the up alone, reading the residual after the attention or, in a parallel block, the
 // block's input -- or why it has none.
+// shortVector is block li's graph g binding a vector the file does not store
+// for it, or past the end of one it does: a short one is read past its end,
+// on every device.
+func (m *Model) shortVector(li int, g *graph.Graph) error {
+	if g == nil || li >= len(m.layers) {
+		return nil
+	}
+	for _, o := range g.Ops {
+		for _, b := range o.Weight {
+			if !b.Role.Expanded() {
+				continue
+			}
+			v := nn.VectorOf(m.layers[li].vecs, b.Role)
+			if v == nil {
+				return fmt.Errorf("model: block %d reads its %v, which the file does not store", li, b.Role)
+			}
+			if len(v) < b.K*max(b.Rows, 1) {
+				return fmt.Errorf("model: block %d reads %d floats of its %v, which holds %d", li,
+					b.K*max(b.Rows, 1), b.Role, len(v))
+			}
+		}
+	}
+	return nil
+}
+
 func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if why := m.uncovered(li); why != Covered {
 		return nil, why, nil
@@ -907,8 +932,22 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	var att graph.ValueID
 	if selects {
 		a.Width = rowW
-		sel := b.Select(iq, hist, graph.Attrs{NHead: c.IdxHeads, NKVHead: c.IdxHeads, HeadDim: c.IdxHeadDim, Offset: kvDim, Width: rowW,
-			Span: c.IdxBlock, TopK: c.IdxTopK, Local: c.IdxLocal})
+		sa := graph.Attrs{NHead: c.IdxHeads, NKVHead: c.IdxHeads, HeadDim: c.IdxHeadDim, Offset: kvDim, Width: rowW,
+			Span: c.IdxBlock, TopK: c.IdxTopK, Local: c.IdxLocal}
+		switch c.msaFault {
+		case msaFaultOneShort:
+			sa.TopK--
+		case msaFaultNoLocal:
+			sa.Local = 0
+		case msaFaultFirstPosition:
+			sa.Firsts = true
+		case msaFaultSharedGroups:
+			// Group 0's head selects once for every group.
+			iq = b.Emit(graph.OpSlice, []graph.ValueID{iq}, []graph.Result{{Name: "idx.q.0", Width: c.IdxHeadDim}}, nil,
+				graph.Attrs{HeadDim: c.IdxHeads * c.IdxHeadDim, Width: c.IdxHeadDim}, nil, nil)[0]
+			sa.NHead, sa.NKVHead = 1, 1
+		}
+		sel := b.Select(iq, hist, sa)
 		att = b.AttendSelected(q, hist, sel, a, stored(jlm.RoleAttnSinks)...)
 	} else if pooled {
 		a.Width = rowW
@@ -1345,12 +1384,16 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueI
 	var iq, iw graph.ValueID
 	if has(jlm.RoleIdxK) {
 		ih, id := c.IdxHeads, c.IdxHeadDim
+		layout := graph.RopeNeox
+		if c.idxFault == idxFaultPairRope {
+			layout = graph.RopeNorm
+		}
 		turn := func(v graph.ValueID, name string) graph.ValueID {
 			if !c.RopeAt(li) {
 				return v
 			}
 			r := m.ropeAt(li)
-			a := graph.Attrs{HeadDim: id, NRot: r.NRot, Base: r.Base, Layout: graph.RopeNeox, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
+			a := graph.Attrs{HeadDim: id, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
 			return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: name, Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0]
 		}
 		ik := turn(b.LayerNorm(matvec(n, jlm.RoleIdxK, id), jlm.RoleIdxKNorm, idxEps, jlm.RoleIdxKNormB), "idx.k.rope")
@@ -1371,8 +1414,12 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueI
 	var att graph.ValueID
 	if width != row {
 		a.Width = width
+		relu := graph.MapMax
+		if c.idxFault == idxFaultNoReLU {
+			relu = 0
+		}
 		sel := b.Select(iq, hist, graph.Attrs{NHead: c.IdxHeads, NKVHead: 1, HeadDim: c.IdxHeadDim, Offset: row, Width: width,
-			Span: 1, TopK: c.IdxTopK, Fn: graph.MapMax}, iw)
+			Span: 1, TopK: c.IdxTopK, Fn: relu}, iw)
 		att = b.AttendSelected(qrow, hist, sel, a, stored(jlm.RoleAttnSinks)...)
 	} else {
 		att = b.AttendOf(qrow, hist, a, stored(jlm.RoleAttnSinks)...)
@@ -1565,11 +1612,8 @@ func (m *Model) embedGraph(streams bool) (*graph.Graph, Uncovered, error) {
 	// vector of them is a head's (clef's fields), which the rows never read.
 	tt, types := f.Inventory[jlm.RoleTokenTypes]
 	types = types && tt.K == c.NEmbd && tt.Rows > 0
-	switch {
-	case streams && c.Streams() > 1 && !c.mixesStreams() && !m.expandsStreams():
+	if streams && c.Streams() > 1 && !c.mixesStreams() && !m.expandsStreams() {
 		return nil, UncoveredStreams, nil
-	case types:
-		return nil, UncoveredEmbedRows, nil
 	}
 	b := graph.NewBlock(-1)
 	x := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "embd", Width: c.NEmbd}},
@@ -1582,6 +1626,24 @@ func (m *Model) embedGraph(streams bool) (*graph.Graph, Uncovered, error) {
 		pos := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: c.NEmbd}},
 			[]graph.Binding{{Role: jlm.RolePosEmbd, K: p.K, Rows: p.Rows}}, graph.Attrs{Positional: true}, nil, nil)[0]
 		x = b.Add(x, pos)
+	}
+	// A text is one segment: every row adds the token-type table's row 0, a
+	// positional row at a span of one.
+	if types {
+		t0 := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "types", Width: c.NEmbd}},
+			[]graph.Binding{{Role: jlm.RoleTokenTypes, K: tt.K, Rows: tt.Rows}}, graph.Attrs{Positional: true, Span: 1}, nil, nil)[0]
+		x = b.Add(x, t0)
+	}
+	if _, ok := f.Inventory[jlm.RoleTokenEmbdNorm]; ok {
+		if c.LayerNorm {
+			var bias []jlm.Role
+			if _, ok := f.Inventory[jlm.RoleTokenEmbdNormBias]; ok {
+				bias = append(bias, jlm.RoleTokenEmbdNormBias)
+			}
+			x = b.LayerNorm(x, jlm.RoleTokenEmbdNorm, c.RMSEps, bias...)
+		} else {
+			x = b.Norm(x, jlm.RoleTokenEmbdNorm, c.RMSEps)
+		}
 	}
 	b.Out(x)
 	if streams && m.expandsStreams() {

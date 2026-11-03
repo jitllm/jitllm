@@ -290,9 +290,10 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 				return func() { m.Cfg.SWAWindow = old }
 			}},
 			{"no dense heads", func(m *Model) func() {
-				d1 := m.dense1
-				m.dense1 = tensor{}
-				return func() { m.dense1 = d1 }
+				d1, d2 := m.dense1, m.dense2
+				m.dense1, m.dense2 = tensor{}, tensor{}
+				undo := dropStoredDense(m, jlm.RoleEmbdDense1, jlm.RoleEmbdDense2)
+				return func() { undo(); m.dense1, m.dense2 = d1, d2 }
 			}},
 		},
 		"qwen3-embedding-0.6b": {

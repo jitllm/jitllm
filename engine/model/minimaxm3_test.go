@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 const m3GoldScript = "scripts/minimaxm3gold.py"
@@ -37,8 +38,8 @@ func m3Fixtures() []struct {
 			for i := range m.layers {
 				l := &m.layers[i]
 				if c.MSAAt(i) {
-					ok = ok && l.idxQ.rows == 2*16 && l.idxK.rows == 16 && len(l.idxQNorm) == 16 &&
-						len(l.idxKNorm) == 16
+					ok = ok && l.idxQ.rows == 2*16 && l.idxK.rows == 16 && len(l.vector(jlm.RoleIdxQNorm)) == 16 &&
+						len(l.vector(jlm.RoleIdxKNorm)) == 16
 				} else {
 					ok = ok && l.idxQ.e == nil && l.idxK.e == nil
 				}
@@ -69,24 +70,12 @@ func m3Violations() []c6Violation {
 		}},
 		{"the indexer key unnormed", func(m *Model) func() {
 			return eachLayer(m, func(l *layer) {
-				if l.idxKNorm != nil {
-					w := make([]float32, len(l.idxKNorm))
-					for i := range w {
-						w[i] = 1
-					}
-					l.idxKNorm = w
-				}
+				setVec(l, jlm.RoleIdxKNorm, onesLike)
 			})
 		}},
 		{"the indexer query unnormed", func(m *Model) func() {
 			return eachLayer(m, func(l *layer) {
-				if l.idxQNorm != nil {
-					w := make([]float32, len(l.idxQNorm))
-					for i := range w {
-						w[i] = 1
-					}
-					l.idxQNorm = w
-				}
+				setVec(l, jlm.RoleIdxQNorm, onesLike)
 			})
 		}},
 		{"plain SwiGLU", actSwap(nn.ActSiLU)},

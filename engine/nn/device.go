@@ -89,6 +89,11 @@ type Packed struct {
 // one must decline the block rather than skip it: skipping runs and produces
 // fluent, wrong text.
 type LayerWeights struct {
+	// Vectors is every vector the file stores for the block, by role
+	// (jlm.Role.Expanded): what a composed block binds as a vector, as the
+	// file holds it.
+	Vectors []RoleVector
+
 	AttnNorm, FFNNorm []float32 // tiny, always F32 in the file, kept expanded
 	// QNorm and KNorm are head_dim wide and nil unless the architecture
 	// RMSNorms each head of q and k before RoPE (qwen3).
@@ -101,49 +106,17 @@ type LayerWeights struct {
 	// norms and depthwise filters. Its matrices are Up and Down (an edge or
 	// inverted residual's two) or Wq, Wk, Wv and Wo (an attention block's).
 	Conv *ConvWeights
-	// Bq, Bk, Bv, Bo are the attention biases (qwen2 and others), nil when the
-	// model has none.
-	Bq, Bk, Bv, Bo []float32
-	// PostAttnNorm and PostFFNNorm are gemma2/gemma3's extra RMSNorms on the
-	// attention and FFN outputs, each applied before its residual add. They are
-	// the same op as AttnNorm with a different weight. LayerPlan.PostNorm says
-	// the model has them so a tier can decline before uploading anything.
-	PostAttnNorm, PostFFNNorm []float32
-	// AttnSubNorm and FFNSubNorm are BitNet's inner RMSNorms (LayerPlan.SubNorm):
-	// over the attention output (QDim wide) before wo, and over act(gate)*up
-	// (NFFN wide) before down. nil elsewhere.
-	AttnSubNorm, FFNSubNorm []float32
 	// ResidNorm and ResidNormB are a post-norm block's last LayerNorm, over x
 	// + mlp(x) (LayerPlan.PostResidNorm): BERT's output norm. nil elsewhere.
 	ResidNorm, ResidNormB []float32
-	// Gemma 4's mixture block (LayerPlan.DenseMoE): the experts' pre-norm, the
-	// dense MLP's and the experts' post-norms and the router input's norm,
-	// NEmbd wide, and one weight factor per expert. nil elsewhere.
-	FFNNorm2, PostFFNNorm1, PostFFNNorm2, RouterNorm, ExpScale []float32
-	// Sinks is gpt-oss's learned logit per head (LayerPlan.AttnSinks), NHead
-	// wide. RouterB is its router's bias, NExpert wide; ExpGateB, ExpUpB and
-	// ExpDownB are the experts' biases, NExpert blocks of NFFNExp (gate, up)
-	// or NEmbd (down), expert-major. All nil elsewhere (LayerPlan.MoEBias).
-	Sinks, RouterB             []float32
-	ExpGateB, ExpUpB, ExpDownB []float32
-	// ExpSelB is DeepSeek's e_score_correction_bias, NExpert wide, non-nil only
-	// when LayerPlan.ExpertSelBias is set. Unlike RouterB, which biases the
-	// router logits before gating, this is added after gating and only for the
-	// selection; a model can carry both.
-	ExpSelB []float32
 
 	// AttnNormB and FFNNormB are the LayerNorm biases (LayerPlan.LayerNorm):
 	// an RMSNorm has no bias and a LayerNorm does.
 	AttnNormB, FFNNormB []float32
-	// BUp and BDown are the MLP biases: an ungated FFN's (C6, a ViT) or a
-	// gated one's that carries them (Qwen2.5-VL's tower).
-	BUp, BDown []float32
 	// XIELU is an Apertus block's activation numbers (alpha_p, alpha_n, beta,
 	// eps; jlm.RoleXIELU), where LayerPlan.Act is ActXIELU. They are the
 	// block's own, so they ride with its weights and move when it moves.
-	XIELU []float32
-	// BGate is a gated MLP's gate bias, nil where it has none.
-	BGate          []float32
+	XIELU          []float32
 	Wq, Wk, Wv, Wo Weight
 	// Gate, Up and Down are one expert's matrices in a dense block and the whole
 	// bank of LayerPlan.NExpert of them when Router.Data is non-nil. Rows stays
@@ -154,25 +127,17 @@ type LayerWeights struct {
 	// file. Non-nil Data is the MoE branch: the tensor's presence decides it,
 	// not the config.
 	Router Weight
-	// ShGate, ShUp, ShDown and ShRouter are the shared expert: an always-on FFN
-	// whose gate is one weight per model dimension rather than a matrix, so the
-	// gate is a single sigmoid of a dot product. nil unless LayerPlan.NFFNShExp
-	// is non-zero.
+	// ShGate, ShUp and ShDown are the shared expert: an always-on FFN whose
+	// gate, in Vectors, is one weight per model dimension rather than a
+	// matrix. Zero unless LayerPlan.NFFNShExp is non-zero.
 	ShGate, ShUp, ShDown Weight
-	ShRouter             []float32
 	// PLEGate and PLEProj are Gemma 4's per-layer embedding gate (n_embd ->
-	// PLEDim) and projection back, PLEPost its norm; zero unless
-	// LayerPlan.PLEDim is set.
+	// PLEDim) and projection back; zero unless LayerPlan.PLEDim is set.
 	PLEGate, PLEProj Weight
-	PLEPost          []float32
 	// Gemma 3n's AltUp and LAuReL (LayerPlan.AltUp): the router (AltUp rows of
-	// n_embd, F32) and its norm, the prediction and correction coefficients
-	// transposed, the active stream's scale before the per-layer gate, and
-	// LAuReL's two matrices and norm.
-	AltRouter                                       Weight
-	AltRouterNorm, AltPredT, AltCorrT, AltCorrScale []float32
-	LaurelL, LaurelR                                Weight
-	LaurelPost                                      []float32
+	// n_embd, F32) and LAuReL's two matrices; their vectors are in Vectors.
+	AltRouter        Weight
+	LaurelL, LaurelR Weight
 	// SSM is a linear-attention block's weights, and every field is zero for an
 	// attention block. Wq carries the fused q|k|v projection for such a block;
 	// the layer kind decides the consumer.
@@ -195,31 +160,20 @@ type LayerWeights struct {
 	//
 	// Exactly one of Wq and (Wqa, Wqb) is populated, decided by QLoraRank.
 	Wqa, Wqb, Wkva, Wkb, Wvb Weight
-	// QANorm and KVANorm are the two latent RMSNorms: QANorm is QLoraRank wide
-	// and nil where there is no query latent, KVANorm is KVLoraRank wide and
-	// covers only the latent, not the cache row's rotary tail.
-	QANorm, KVANorm []float32
 	// DeepSeek V3.2's lightning indexer (LayerPlan.IdxHeads): its query from
-	// the query latent, its key and the heads' weights from the block input,
-	// and the key's LayerNorm. All zero without one.
+	// the query latent, its key and the heads' weights from the block input.
+	// All zero without one.
 	IdxQB, IdxK, IdxProj Weight
-	IdxKNorm, IdxKNormB  []float32
 	// MiniMax Sparse Attention (LayerPlan.MSA): the indexer's query from the
-	// block's normed input and its per-head RMSNorm; the key is IdxK with
-	// IdxKNorm (no bias). Zero without one.
-	IdxQ     Weight
-	IdxQNorm []float32
-	// Kimi-K3 (LayerPlan.K3): the residual attention's two score vectors
-	// (NEmbd, the reference's norm weight times its projection), the MLA
-	// output gate (NHead*HeadDimV rows of NEmbd, on a full block of a model
-	// that has one), and the latent mixture's down and up projections and
-	// the routed sum's norm (ExpertLatent wide; nil where the reference has
-	// none). All zero elsewhere. A linear block's full-rank output gate is
-	// SSM.Gate, with SSM.GA and SSM.GB empty.
-	ResAttn, ResFFN      []float32
+	// block's normed input; the key is IdxK. Zero without one.
+	IdxQ Weight
+	// Kimi-K3 (LayerPlan.K3): the MLA output gate (NHead*HeadDimV rows of
+	// NEmbd, on a full block of a model that has one) and the latent
+	// mixture's down and up projections; its vectors are in Vectors. All
+	// zero elsewhere. A linear block's full-rank output gate is SSM.Gate,
+	// with SSM.GA and SSM.GB empty.
 	MLAGate              Weight
 	RoutedDown, RoutedUp Weight
-	RoutedNorm           []float32
 	// Qwen3.8-Flash-Next (LayerPlan.Q4E): the two hyper-connections, and on
 	// the n-gram block its weights.
 	HCAttn, HCFFN HCWeights
@@ -261,24 +215,42 @@ type LayerWeights struct {
 	ExpertUses []uint32
 }
 
-// HCWeights are one Qwen3.8-Flash-Next hyper-connection's: the grouped
-// norm (HCMult rows of NEmbd), the gate's down (HCMult*NEmbd -> HCLowRank)
-// and up (back) projections, and the placement's projection (F32,
-// HCMult*NEmbd -> HCMult).
+// RoleVector is one of a block's vectors and the role the file stores it
+// under.
+type RoleVector struct {
+	Role jlm.Role
+	V    []float32
+}
+
+// Vector is the block's vector under r (Vectors), nil for none.
+func (w *LayerWeights) Vector(r jlm.Role) []float32 { return VectorOf(w.Vectors, r) }
+
+// VectorOf is the vector vs holds under r, nil for none.
+func VectorOf(vs []RoleVector, r jlm.Role) []float32 {
+	for _, v := range vs {
+		if v.Role == r {
+			return v.V
+		}
+	}
+	return nil
+}
+
+// HCWeights are one Qwen3.8-Flash-Next hyper-connection's matrices: the
+// gate's down (HCMult*NEmbd -> HCLowRank) and up (back) projections, and the
+// placement's projection (F32, HCMult*NEmbd -> HCMult). Its norm is in
+// LayerWeights.Vectors.
 type HCWeights struct {
-	Norm     []float32
 	Down, Up Weight
 	Inject   Weight
 }
 
 // NGramWeights are Qwen3.8-Flash-Next's n-gram block's: the key (NGramWidth
-// -> HCMult*NEmbd) and value (-> NEmbd) projections, three grouped norms
-// (HCMult rows of NEmbd) and the convolution (NGramConv taps of
-// HCMult*NEmbd channels, tap-major).
+// -> HCMult*NEmbd) and value (-> NEmbd) projections and the convolution
+// (HCMult*NEmbd channels of NGramConv taps, a channel's contiguous), which a
+// device binds as a matrix. Its norms are in LayerWeights.Vectors.
 type NGramWeights struct {
-	Key, Value                Weight
-	NormKey, NormQuery, NormC []float32
-	Conv                      []float32
+	Key, Value Weight
+	Conv       []float32
 }
 
 // SSMWeights are the gated delta rule's tensors.
@@ -288,9 +260,7 @@ type NGramWeights struct {
 // a backend that runs this needs two state buffers and a swap.
 type SSMWeights struct {
 	Gate, BA, Out Weight    // the z projection, the beta/alpha head, the output
-	Conv1d        []float32 // {Conv, Chans}, PLANE-MAJOR: see cpu.EmitConv1d
-	A, DtBias     []float32 // per value head, or per CHANNEL when ChanDecay
-	Norm          []float32 // one value head wide, shared by all of them
+	Conv1d        []float32 // {Conv, Chans}, tap-major as the file stores it
 	// FA/FB and GA/GB are Kimi Delta Attention's two low-rank gates: the
 	// forget gate whose softplus becomes the per-channel decay, and the output
 	// gate that replaces Gate. All four are zero on qwen3next, which has one
@@ -298,14 +268,10 @@ type SSMWeights struct {
 	//
 	// Mamba-1 (RecurrentPlan.Mamba1) carries its four matrices in the same
 	// four: FA is x_proj's dt rows and FB dt_proj (the same bottleneck shape
-	// as KDA's forget gate), GA x_proj's B rows and GB its C rows. Its dt, B
-	// and C RMSNorm weights are DtNorm, BNorm and CNorm, nil where the block
-	// has none.
-	FA, FB, GA, GB       Weight
-	DtNorm, BNorm, CNorm []float32
-	// D and ConvBias are Mamba-2's skip (one per value head) and convolution
-	// bias (one per channel); nil on the gated delta rule.
-	D, ConvBias []float32
+	// as KDA's forget gate), GA x_proj's B rows and GB its C rows. The
+	// block's vectors (A, the dt bias, the norms, D, the convolution bias)
+	// are in LayerWeights.Vectors.
+	FA, FB, GA, GB Weight
 	// In is the mixer's x|B|C projection on a block that runs attention too
 	// (RecurrentPlan.WithAttn), where Wq is the attention's query; empty
 	// everywhere else, where Wq carries it.
@@ -567,9 +533,6 @@ type K3Plan struct {
 	BankAttn, BankFFN int
 	Push              int
 	Latent            int
-	// Fault breaks one piece of the graph on purpose, set only by a gate;
-	// the host honours the same faults (model's k3Fault).
-	Fault K3Fault
 }
 
 // Q4EPlan is Qwen3.8-Flash-Next at one block (model's q4e.go is the graph).
@@ -596,34 +559,7 @@ type Q4EPlan struct {
 	// TabPlanes), which a QSA block's pooled keys turn by at their blocks'
 	// first positions: an M-RoPE model's text rows turn by the same table.
 	QSARope []float32
-	// Fault breaks one piece of the graph on purpose, set only by a gate;
-	// the host honours the same faults (model's q4eFault).
-	Fault Q4EFault
 }
-
-// Q4EFault names a piece of Qwen3.8-Flash-Next's graph a gate takes out, in
-// the host's numbering (model's q4eFault).
-type Q4EFault uint8
-
-// The host's violations a device runs too: the mix by the plain mean, the
-// gate's low rank unscaled, every stream placed at one, the placement
-// halved, no n-gram embedding, no n-gram convolution, every key read on a
-// QSA block, a QSA block scored by its first key, the tail dropped, the
-// delta rule's gate silu.
-const (
-	Q4EFaultNone Q4EFault = iota
-	Q4EFaultNoGate
-	Q4EFaultPlainPlace
-	Q4EFaultNoNGram
-	Q4EFaultNoNGramConv
-	Q4EFaultNoEOSReset
-	Q4EFaultDenseQSA
-	Q4EFaultQSAFirstKey
-	Q4EFaultNoTail
-	Q4EFaultSiLUGate
-	Q4EFaultUnscaledGate
-	Q4EFaultHalfPlace
-)
 
 // NGramDevice is a device that runs Qwen3.8-Flash-Next's n-gram block: the
 // host hashes each row's n-gram, reads the table rows and hands them over,
@@ -631,19 +567,6 @@ const (
 type NGramDevice interface {
 	SetNGramRows(rows []float32)
 }
-
-// K3Fault names a piece of Kimi-K3's graph a gate takes out.
-type K3Fault uint8
-
-const (
-	K3FaultNone K3Fault = iota
-	K3FaultNoBank
-	K3FaultNoRestart
-	K3FaultRawScores
-	K3FaultNoLatentNorm
-	K3FaultNoMLAGate
-	K3FaultNoKDAGate
-)
 
 // ExpWidth is the routed experts' input and output width: the latent on a
 // Kimi-K3 mixture, NEmbd everywhere else.

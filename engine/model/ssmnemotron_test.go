@@ -1,6 +1,9 @@
 package model
 
-import "github.com/jitllm/jitllm/engine/nn"
+import (
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // Nemotron-H (jlm.ArchNemotronH) on the Mamba-2 harness (ssmfamily_test.go):
 // its fixture, built by NemotronHForCausalLM (scripts/ssmgold.py) with one
@@ -43,8 +46,8 @@ func nemotronhFixtures() []struct {
 				l := &m.layers[i]
 				ok = ok && c.LayerKind(i).Recurrent() == want.rec && c.MoEAt(i) == want.moe && l.noFFN == !want.moe
 				if want.moe {
-					ok = ok && l.ungatedExp && l.gate.e == nil && l.up.e != nil && l.expProbsB != nil &&
-						l.shGate.e == nil && l.shUp.e != nil && l.shRouter == nil
+					ok = ok && l.ungatedExp && l.gate.e == nil && l.up.e != nil && l.vector(jlm.RoleExpProbsB) != nil &&
+						l.shGate.e == nil && l.shUp.e != nil && l.vector(jlm.RoleShRouter) == nil
 				}
 			}
 			return ok

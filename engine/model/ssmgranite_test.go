@@ -1,6 +1,10 @@
 package model
 
-import "math"
+import (
+	"math"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // Granite 4.0-H (jlm.ArchGraniteHybrid) on the Mamba-2 harness
 // (ssmfamily_test.go): its dense and mixture fixtures, built by
@@ -20,14 +24,14 @@ func granitehybridFixtures() []struct {
 				c.ResidualScale == float64(float32(0.35)) && c.EmbdScale == float64(float32(6)) &&
 				c.AttnScale == float64(float32(0.09)) && c.NExpert == 0 && c.NKVHead == 2 && c.NHead == 4 &&
 				c.LayerKind(0).Recurrent() && !c.LayerKind(1).Recurrent() && c.LayerKind(2).Recurrent() &&
-				!m.layers[0].noFFN && !m.layers[1].noFFN && m.layers[1].gate.e != nil && len(m.layers[0].ssmD) == 8 &&
+				!m.layers[0].noFFN && !m.layers[1].noFFN && m.layers[1].gate.e != nil && len(m.layers[0].vector(jlm.RoleSSMD)) == 8 &&
 				!c.TiedEmbd
 		}},
 		{"synth-granitehybridmoe", func(m *Model) bool {
 			c := m.Cfg
 			return c.Arch == "granitehybrid" && c.SSD() && c.NoPosEnc && c.NExpert == 8 && c.NExpertUsed == 2 &&
 				c.NFFNShExp > 0 && !c.LayerKind(2).Recurrent() && c.LayerKind(3).Recurrent() &&
-				m.layers[0].router.e != nil && m.layers[0].shGate.e != nil && m.layers[0].shRouter == nil &&
+				m.layers[0].router.e != nil && m.layers[0].shGate.e != nil && m.layers[0].vector(jlm.RoleShRouter) == nil &&
 				c.TiedEmbd
 		}},
 	}

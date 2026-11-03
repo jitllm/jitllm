@@ -34,7 +34,7 @@ func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
 			case jlm.RoleOutput, jlm.RoleTokenEmbd, jlm.RolePosEmbd:
 				continue
 			}
-			if b.Rows == 0 {
+			if o.Kind != graph.OpEmbed && (b.Rows == 0 || b.Role.Expanded()) {
 				v := s.cpuRoleVector(-1, nil, b.Role)
 				if len(v) == 0 {
 					return nil

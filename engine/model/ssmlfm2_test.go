@@ -27,7 +27,7 @@ func lfm2Fixtures() []struct {
 				ok = ok && c.LayerKind(i).Recurrent() == conv && !l.noFFN && l.gate.e != nil
 				if conv {
 					ok = ok && c.LayerKind(i) == jlm.LayerShortConv && l.wq.rows == 64 && l.ssmGate.rows == 64 &&
-						l.ssmBA.rows == 64 && l.ssmOut.rows == 64 && len(l.ssmConv1d) == 3*64 && l.ssmA == nil
+						l.ssmBA.rows == 64 && l.ssmOut.rows == 64 && len(l.ssmConv1d) == 3*64 && l.vector(jlm.RoleSSMA) == nil
 				}
 			}
 			return ok

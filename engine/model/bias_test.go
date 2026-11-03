@@ -40,12 +40,11 @@ func TestAttentionBiasesReachTheModel(t *testing.T) {
 			for _, b := range []struct {
 				name string
 				role jlm.Role
-				at   func(l *layer) *[]float32
 			}{
-				{"attn_q.bias", jlm.RoleAttnQBias, func(l *layer) *[]float32 { return &l.bq }},
-				{"attn_k.bias", jlm.RoleAttnKBias, func(l *layer) *[]float32 { return &l.bk }},
-				{"attn_v.bias", jlm.RoleAttnVBias, func(l *layer) *[]float32 { return &l.bv }},
-				{"attn_output.bias", jlm.RoleAttnOutBias, func(l *layer) *[]float32 { return &l.bo }},
+				{"attn_q.bias", jlm.RoleAttnQBias},
+				{"attn_k.bias", jlm.RoleAttnKBias},
+				{"attn_v.bias", jlm.RoleAttnVBias},
+				{"attn_output.bias", jlm.RoleAttnOutBias},
 			} {
 				t.Run(b.name, func(t *testing.T) {
 					// Width by role: q is nHead*headDim, k and v are the KV
@@ -63,17 +62,11 @@ func TestAttentionBiasesReachTheModel(t *testing.T) {
 					}
 					// The bias in the layers and as the composer reads the
 					// container, each layer's own put back after.
-					was := make([][]float32, len(m.layers))
-					for li := range m.layers {
-						p := b.at(&m.layers[li])
-						was[li], *p = *p, v
-					}
+					undoL := eachLayer(m, func(l *layer) { addVec(l, b.role, v) })
 					undoR := m.restate(func(inv map[jlm.Role]graph.Shape) { inv[b.role] = graph.Shape{K: w} })
 					defer func() {
 						undoR()
-						for li := range m.layers {
-							*b.at(&m.layers[li]) = was[li]
-						}
+						undoL()
 					}()
 
 					got := logitsOf(t, m, ids)
@@ -124,10 +117,10 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			// is a disagreement rather than a coincidence.
 			for li := range m.layers {
 				l := &m.layers[li]
-				l.bq = fill(c.NHead*c.HeadDim, 0.05)
-				l.bk = fill(c.KVDim(), -0.03)
-				l.bv = fill(c.KVDim(), 0.07)
-				l.bo = fill(c.NEmbd, -0.02)
+				addVec(l, jlm.RoleAttnQBias, fill(c.NHead*c.HeadDim, 0.05))
+				addVec(l, jlm.RoleAttnKBias, fill(c.KVDim(), -0.03))
+				addVec(l, jlm.RoleAttnVBias, fill(c.KVDim(), 0.07))
+				addVec(l, jlm.RoleAttnOutBias, fill(c.NEmbd, -0.02))
 			}
 			// The biases as the composer reads the container too.
 			defer m.restate(func(inv map[jlm.Role]graph.Shape) {
@@ -186,10 +179,10 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 				defer pm.Close()
 				for li := range pm.layers {
 					l := &pm.layers[li]
-					l.bq = fill(c.NHead*c.HeadDim, 0.05)
-					l.bk = fill(c.KVDim(), -0.03)
-					l.bv = fill(c.KVDim(), 0.07)
-					l.bo = fill(c.NEmbd, -0.02)
+					addVec(l, jlm.RoleAttnQBias, fill(c.NHead*c.HeadDim, 0.05))
+					addVec(l, jlm.RoleAttnKBias, fill(c.KVDim(), -0.03))
+					addVec(l, jlm.RoleAttnVBias, fill(c.KVDim(), 0.07))
+					addVec(l, jlm.RoleAttnOutBias, fill(c.NEmbd, -0.02))
 				}
 				defer pm.restate(func(inv map[jlm.Role]graph.Shape) {
 					inv[jlm.RoleAttnQBias] = graph.Shape{K: c.NHead * c.HeadDim}

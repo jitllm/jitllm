@@ -40,7 +40,7 @@ func gemma4Fixtures() []struct {
 			for i := range m.layers {
 				l := &m.layers[i]
 				ok = ok && l.vFromK == !c.SWA(i) && l.outScale != 0 && l.outScale != 1 &&
-					len(l.qNorm) == c.HeadDimAt(i) && l.postAttnNorm != nil && l.postFFNNorm != nil
+					len(l.qNorm) == c.HeadDimAt(i) && l.vector(jlm.RolePostAttnNorm) != nil && l.vector(jlm.RolePostFFNNorm) != nil
 			}
 			return ok
 		}},
@@ -69,7 +69,7 @@ func gemma4Fixtures() []struct {
 				m.pleTok.k == 6*32 && m.pleProj.rows == 6*32 && len(m.pleNorm) == 32
 			for i := range m.layers {
 				l := &m.layers[i]
-				ok = ok && l.pleGate.rows == 32 && l.pleProj.k == 32 && len(l.plePost) == c.NEmbd &&
+				ok = ok && l.pleGate.rows == 32 && l.pleProj.k == 32 && len(l.vector(jlm.RolePLEPostNorm)) == c.NEmbd &&
 					(l.wk.rows == 0) == c.KVShared(i) && (l.kNorm == nil) == c.KVShared(i) && !l.vFromK
 			}
 			return ok
@@ -92,8 +92,8 @@ func gemma4Fixtures() []struct {
 			for i := range m.layers {
 				l := &m.layers[i]
 				ok = ok && c.MoEAt(i) && l.router.rows == c.NExpert && l.shGate.rows == c.NFFN &&
-					l.shRouter == nil && len(l.expScale) == c.NExpert && len(l.routerNorm) == c.NEmbd &&
-					l.ffnNorm2 != nil && l.postFFNNorm1 != nil && l.postFFNNorm2 != nil
+					l.vector(jlm.RoleShRouter) == nil && len(l.vector(jlm.RoleExpScale)) == c.NExpert && len(l.vector(jlm.RoleRouterNorm)) == c.NEmbd &&
+					l.vector(jlm.RoleFFNNorm2) != nil && l.vector(jlm.RolePostFFNNorm1) != nil && l.vector(jlm.RolePostFFNNorm2) != nil
 			}
 			return ok
 		}},
@@ -153,11 +153,7 @@ func gemma4EViolations() []c6Violation {
 			})
 		}},
 		{"the per-layer embedding's post-norm unweighted", func(m *Model) func() {
-			ones := make([]float32, m.Cfg.NEmbd)
-			for i := range ones {
-				ones[i] = 1
-			}
-			return eachLayer(m, func(l *layer) { l.plePost = ones })
+			return eachLayer(m, func(l *layer) { setVec(l, jlm.RolePLEPostNorm, onesLike) })
 		}},
 	}
 }
@@ -168,20 +164,20 @@ func gemma4MoEViolations() []c6Violation {
 		// Ones rather than nil, so the device runs it rather than declining a
 		// missing vector.
 		{"no per-expert scale", func(m *Model) func() {
-			ones := make([]float32, m.Cfg.NExpert)
-			for i := range ones {
-				ones[i] = 1
-			}
-			return eachLayer(m, func(l *layer) { l.expScale = ones })
+			return eachLayer(m, func(l *layer) { setVec(l, jlm.RoleExpScale, onesLike) })
 		}},
 		{"the router on the experts' input", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.routerNorm = l.ffnNorm2 })
+			return eachLayer(m, func(l *layer) {
+				setVec(l, jlm.RoleRouterNorm, func([]float32) []float32 { return l.vector(jlm.RoleFFNNorm2) })
+			})
 		}},
 		{"the experts on the dense MLP's input", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.ffnNorm2 = l.ffnNorm })
+			return eachLayer(m, func(l *layer) { setVec(l, jlm.RoleFFNNorm2, func([]float32) []float32 { return l.ffnNorm }) })
 		}},
 		{"the dense MLP's post-norm on the experts", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.postFFNNorm2 = l.postFFNNorm1 })
+			return eachLayer(m, func(l *layer) {
+				setVec(l, jlm.RolePostFFNNorm2, func([]float32) []float32 { return l.vector(jlm.RolePostFFNNorm1) })
+			})
 		}},
 		{"no layer scalar", noLayerScalar},
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -256,7 +257,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			// The method is RULE 11c's and holds for any block; the violation
 			// bends the last block's post-FFN norm, so that is what a model
 			// needs (Gemma 4 carries pre- and post-norms both).
-			if c.layers[nl-1].postFFNNorm == nil {
+			if c.layers[nl-1].vector(jlm.RolePostFFNNorm) == nil {
 				c.Close()
 				t.Fatalf("%s's last block has no post-FFN norm for the violation to bend", arch)
 			}
@@ -286,7 +287,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 					}
 				}
 				if bend != 1 {
-					w := m.layers[nl-1].postFFNNorm
+					w := m.layers[nl-1].vector(jlm.RolePostFFNNorm)
 					if w == nil {
 						t.Fatal("the last block has no post-FFN norm to bend")
 					}

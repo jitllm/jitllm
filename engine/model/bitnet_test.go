@@ -117,7 +117,7 @@ func bitnetSelected(m *Model, typ quant.Type) bool {
 	}
 	for i := range m.layers {
 		l := &m.layers[i]
-		if l.attnSubNorm == nil || l.ffnSubNorm == nil {
+		if l.vector(jlm.RoleAttnSubNorm) == nil || l.vector(jlm.RoleFFNSubNorm) == nil {
 			return false
 		}
 		for _, w := range []tensor{l.wq, l.wk, l.wv, l.wo, l.gate, l.up, l.down} {
@@ -185,14 +185,10 @@ func TestBitNetMatchesTransformers(t *testing.T) {
 func bitnetViolations() []c6Violation {
 	return []c6Violation{
 		{"no attention inner norm", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.attnSubNorm = nil })
-			undoR := dropStored(m, jlm.RoleAttnSubNorm)
-			return func() { undoR(); undoL() }
+			return dropVecs(m, jlm.RoleAttnSubNorm)
 		}},
 		{"no FFN inner norm", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.ffnSubNorm = nil })
-			undoR := dropStored(m, jlm.RoleFFNSubNorm)
-			return func() { undoR(); undoL() }
+			return dropVecs(m, jlm.RoleFFNSubNorm)
 		}},
 		{"SiLU for relu2", actSwap(nn.ActSiLU)},
 		{"NORM rotary", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},

@@ -1309,9 +1309,7 @@ func (s *Instance) newHead() *nn.Head {
 	if s.m.posEmbd.e != nil {
 		h.PosEmbd = wt(s.m.posEmbd)
 	}
-	if c.Streams() > 1 {
-		h.Streams, h.Collapse = s.streamsPart(f.embed), s.streamsPart(f.collapse)
-	}
+	h.Streams, h.Collapse = s.streamsPart(f.embed), s.streamsPart(f.collapse)
 	// The final softcap rides the head: a tier that takes it applies the cap on
 	// the device (nn.Head.Softcap), which is what lets a gemma2 token end in
 	// the device argmax instead of a 256,000-float readback.
@@ -1352,22 +1350,17 @@ func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
 	l := &s.m.layers[li]
 	qn, kn := s.qkNorms(li)
 	w := nn.LayerWeights{
+		Vectors:  l.vecs,
 		AttnNorm: l.attnNorm, FFNNorm: l.ffnNorm,
-		PostAttnNorm: l.postAttnNorm, PostFFNNorm: l.postFFNNorm,
-		AttnSubNorm: l.attnSubNorm, FFNSubNorm: l.ffnSubNorm,
 		QNorm: qn, KNorm: kn,
-		Bq: l.bq, Bk: l.bk, Bv: l.bv, Bo: l.bo,
 		Wq: wt(l.wq), Wk: wt(l.wk), Wv: wt(l.wv), Wo: wt(l.wo),
 		// For a MoE file these three are the banks -- l.gate is the 3-D
 		// ffn_gate_exps and l.experts[e] are views into it, so
 		// nothing is copied and the device indexes the same mapping.
 		Gate: s.m.bankWeight(l.gate), Up: s.m.bankWeight(l.up), Down: s.m.bankWeight(l.down),
 	}
-	w.Sinks = l.sinks
-	// The classic block's vectors (C6). A LayerNorm always hands the device
-	// a bias -- zeros where the file has none (command-r) -- because the apply
-	// kernel takes one; an ungated FFN's biases ride up and down.
-	w.BUp, w.BDown = l.upB, l.downB
+	// A LayerNorm always hands the device a bias -- zeros where the file has
+	// none (command-r) -- because the apply kernel takes one.
 	w.XIELU = l.xielu
 	if s.c.LayerNorm {
 		w.AttnNormB = s.m.lnBias(l.attnNormB)
@@ -1377,53 +1370,37 @@ func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
 	}
 	if s.c.MoE() {
 		w.Router = wt(l.router)
-		w.RouterB, w.ExpGateB, w.ExpUpB, w.ExpDownB = l.routerB, l.expGateB, l.expUpB, l.expDownB
-		w.ExpSelB = l.expProbsB
-		w.FFNNorm2, w.PostFFNNorm1, w.PostFFNNorm2 = l.ffnNorm2, l.postFFNNorm1, l.postFFNNorm2
-		w.RouterNorm, w.ExpScale = l.routerNorm, l.expScale
-		// Keyed on the shared expert, not its gate: DeepSeek's always-on
-		// expert has no gate (shRouter) at all.
 		if l.shGate.rows != 0 || l.shUp.rows != 0 {
 			w.ShGate, w.ShUp, w.ShDown = wt(l.shGate), wt(l.shUp), wt(l.shDown)
-			w.ShRouter = l.shRouter
 		}
 	}
 	if s.c.PLEDim != 0 {
-		w.PLEGate, w.PLEProj, w.PLEPost = wt(l.pleGate), wt(l.pleProj), l.plePost
-		w.AltRouter, w.AltRouterNorm, w.AltPredT, w.AltCorrT, w.AltCorrScale =
-			wt(l.altRouter), l.altRouterNorm, l.altPredT, l.altCorrT, l.altCorrScale
-		w.LaurelL, w.LaurelR, w.LaurelPost = wt(l.laurelL), wt(l.laurelR), l.laurelPost
+		w.PLEGate, w.PLEProj = wt(l.pleGate), wt(l.pleProj)
+		w.AltRouter, w.LaurelL, w.LaurelR = wt(l.altRouter), wt(l.laurelL), wt(l.laurelR)
 	}
 	if s.c.LayerKind(li).Recurrent() {
 		w.SSM = nn.SSMWeights{
-			Gate: wt(l.ssmGate), BA: wt(l.ssmBA), Out: wt(l.ssmOut),
-			Conv1d: l.ssmConv1d, A: l.ssmA, DtBias: l.ssmDtBias, Norm: l.ssmNorm,
-			FA: wt(l.ssmFA), FB: wt(l.ssmFB), GA: wt(l.ssmGA), GB: wt(l.ssmGB),
-			D: l.ssmD, ConvBias: l.ssmConvB, In: wt(l.ssmIn),
+			Gate: wt(l.ssmGate), BA: wt(l.ssmBA), Out: wt(l.ssmOut), Conv1d: l.ssmConv1d,
+			FA: wt(l.ssmFA), FB: wt(l.ssmFB), GA: wt(l.ssmGA), GB: wt(l.ssmGB), In: wt(l.ssmIn),
 		}
 		if s.m.Cfg.Mamba1() {
 			w.SSM.FA, w.SSM.FB, w.SSM.GA, w.SSM.GB = wt(l.ssmXDt), wt(l.ssmDtProj), wt(l.ssmXB), wt(l.ssmXC)
-			w.SSM.DtNorm, w.SSM.BNorm, w.SSM.CNorm = l.ssmDtNorm, l.ssmBNorm, l.ssmCNorm
 		}
 	}
-	// MLA's five matrices and two norms. Wk and Wv stay zero-valued (MLA has
-	// no k or v projection; the tier skips a 0x0 weight). The per-head views
-	// are not carried: wkb and wvb are the banks, indexed by head on the
-	// device as an expert bank is by expert.
+	// MLA's five matrices. Wk and Wv stay zero-valued (MLA has no k or v
+	// projection; the tier skips a 0x0 weight). The per-head views are not
+	// carried: wkb and wvb are the banks, indexed by head on the device as an
+	// expert bank is by expert.
 	if s.c.MLA() {
 		w.Wqa, w.Wqb = wt(l.wqa), wt(l.wqb)
 		w.Wkva, w.Wkb, w.Wvb = wt(l.wkva), wt(l.wkb), wt(l.wvb)
-		w.QANorm, w.KVANorm = l.qaNorm, l.kvaNorm
 		w.IdxQB, w.IdxK, w.IdxProj = wt(l.idxQB), wt(l.idxK), wt(l.idxProj)
-		w.IdxKNorm, w.IdxKNormB = l.idxKNorm, l.idxKNormB
 	}
 	if s.m.Cfg.MSAAt(li) {
 		w.IdxQ, w.IdxK = wt(l.idxQ), wt(l.idxK)
-		w.IdxQNorm, w.IdxKNorm = l.idxQNorm, l.idxKNorm
 	}
 	s.q4eWeights(li, &w)
-	w.ResAttn, w.ResFFN = l.resAttn, l.resFFN
-	w.MLAGate, w.RoutedDown, w.RoutedUp, w.RoutedNorm = wt(l.mlaGate), wt(l.routedDown), wt(l.routedUp), l.routedNorm
+	w.MLAGate, w.RoutedDown, w.RoutedUp = wt(l.mlaGate), wt(l.routedDown), wt(l.routedUp)
 	return w
 }
 
@@ -1796,7 +1773,6 @@ func (s *Instance) blockWeights(li int) (nn.LayerWeights, error) {
 		// The expert, not its gate; see the twin above.
 		if l.shGate.rows != 0 || l.shUp.rows != 0 {
 			w.ShGate, w.ShUp, w.ShDown = wt(l.shGate), wt(l.shUp), wt(l.shDown)
-			w.ShRouter = l.shRouter
 		}
 	}
 	if k := c.LayerKind(li); k.Recurrent() && !k.Attends() {
@@ -1839,8 +1815,8 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	// The sinks and the mixture biases are resident vectors read at build(),
 	// not page bytes, so asking about them here still needs no page-in.
 	l := &s.m.layers[li]
-	plan.AttnSinks = l.sinks != nil
-	plan.MoEBias = l.routerB != nil || l.expGateB != nil || l.expUpB != nil || l.expDownB != nil
+	plan.AttnSinks = l.vector(jlm.RoleAttnSinks) != nil
+	plan.MoEBias = l.vector(jlm.RoleRouterBias) != nil || l.vector(jlm.RoleExpGateBias) != nil || l.vector(jlm.RoleExpUpBias) != nil || l.vector(jlm.RoleExpDownBias) != nil
 	// An ungated FFN has no gate tensor, which build() recorded without a
 	// page-in: the entry is bound at load whether or not the block is resident.
 	plan.UngatedFFN = l.gate.e == nil && (l.router.e == nil || l.ungatedExp)
@@ -1895,7 +1871,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		}
 		if g.ssd {
 			plan.Recurrent.SSD, plan.Recurrent.NormGroups = true, c.SSMNormGroups
-			plan.Recurrent.NormBeforeGate, plan.Recurrent.NoNorm = c.SSMNormBeforeGate, l.ssmNorm == nil
+			plan.Recurrent.NormBeforeGate, plan.Recurrent.NoNorm = c.SSMNormBeforeGate, l.vector(jlm.RoleSSMNorm) == nil
 		}
 		// A linear block has no attention, so no out-gate.
 		plan.AttnOutGate = false
@@ -2629,7 +2605,7 @@ const scoreReachMin = 256
 // need room for the one extra logit.
 func (m *Model) sinkSlot() int {
 	for i := range m.layers {
-		if m.layers[i].sinks != nil {
+		if m.layers[i].vector(jlm.RoleAttnSinks) != nil {
 			return 1
 		}
 	}
@@ -2783,20 +2759,15 @@ func (s *Instance) PrewarmGPU(n int) <-chan struct{} {
 			l := &s.m.layers[li]
 			qn, kn := s.qkNorms(li)
 			w := nn.LayerWeights{
+				Vectors:  l.vecs,
 				AttnNorm: l.attnNorm, FFNNorm: l.ffnNorm,
-				PostAttnNorm: l.postAttnNorm, PostFFNNorm: l.postFFNNorm,
-				AttnSubNorm: l.attnSubNorm, FFNSubNorm: l.ffnSubNorm,
 				QNorm: qn, KNorm: kn,
-				Bq: l.bq, Bk: l.bk, Bv: l.bv, Bo: l.bo,
 				Wq: wt(l.wq), Wk: wt(l.wk), Wv: wt(l.wv), Wo: wt(l.wo),
 				Gate: wt(l.gate), Up: wt(l.up), Down: wt(l.down),
 				XIELU: l.xielu,
 			}
-			w.Sinks = l.sinks
 			if c.MoE() {
 				w.Router = wt(l.router)
-				w.RouterB, w.ExpGateB, w.ExpUpB, w.ExpDownB = l.routerB, l.expGateB, l.expUpB, l.expDownB
-				w.ExpSelB = l.expProbsB
 				// The same lazy marker offerRange sets: the routed bank is
 				// unread, and this goroutine must not do the file I/O beside a
 				// live submission, so the tier skips packing such a block and
@@ -3664,8 +3635,8 @@ func (s *Instance) layerInputs(in []float32) {
 // A model must not mix biased and unbiased blocks (loadConfig refuses it).
 func (m *Model) expSelBias() []float32 {
 	for li := range m.layers {
-		if m.Cfg.MoEAt(li) && m.layers[li].expProbsB != nil {
-			return m.layers[li].expProbsB
+		if m.Cfg.MoEAt(li) && m.layers[li].vector(jlm.RoleExpProbsB) != nil {
+			return m.layers[li].vector(jlm.RoleExpProbsB)
 		}
 	}
 	return nil

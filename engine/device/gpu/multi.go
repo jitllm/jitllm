@@ -10,6 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // This file is the router: which device gets a block, in what order they are
@@ -781,7 +782,7 @@ func (g *devTier) sizeAutoCaches() {
 		// A block whose experts carry biases keeps its plain bank: see
 		// cacheSlotsFor.
 		if l == nil || l.stream == nil || l.stream.cached() || l.stream.hybrid && g.NoHybridCache || l.down == nil ||
-			l.expGateB != nil || l.expUpB != nil || l.expDownB != nil {
+			l.roleVector(jlm.RoleExpGateBias) != nil || l.roleVector(jlm.RoleExpUpBias) != nil || l.roleVector(jlm.RoleExpDownBias) != nil {
 			continue
 		}
 		var s uint64
