@@ -72,32 +72,14 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 
 	t0 := s.tick()
 	// The rows' input rows, scale, positions and per-layer inputs through the
-	// composed graph (cpuembed.go), or the old engine path where it declines.
+	// composed graph (cpuembed.go).
 	var bple []float32
 	if c.PLEDim != 0 {
 		s.growBPLE(n)
 		bple = s.bple[:n*c.pleWidth()]
 	}
-	composed := s.cpuEmbed(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]) == composer.DeclineServes
-	for i := 0; i < n && !composed; i++ {
-		row := s.bx[i*c.NEmbd : (i+1)*c.NEmbd]
-		if err := m.embedRow(row, int(tokens[i])); err != nil {
-			return nil, err
-		}
-		if c.EmbdScale != 1 {
-			s.scale(row, float32(c.EmbdScale))
-		}
-		// Each row at its own position (starcoder's learned table).
-		if err := m.addPos(row, s.prow, pos[i]); err != nil {
-			return nil, err
-		}
-		if c.PLEDim != 0 {
-			w := c.pleWidth()
-			s.growBPLE(n)
-			if err := s.pleInputs(s.bple[i*w:(i+1)*w], tokens[i], row); err != nil {
-				return nil, err
-			}
-		}
+	if why := s.cpuEmbed(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]); why != composer.DeclineServes {
+		return nil, s.embedDeclined(why)
 	}
 
 	if c.PredStreams != 0 {

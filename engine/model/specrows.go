@@ -52,10 +52,6 @@ type rowsOut struct {
 	// at, for snapTail; resBase the same for the chunk being collapsed, for
 	// tapStreams.
 	ngBase, resBase int
-	// noCap is a gate's break (TestSpecOverAFinalSoftcap): the host's head
-	// over the step's rows skips the final softcap. false in every step a
-	// session makes.
-	noCap bool
 }
 
 // recSnap is one copy of every linear block's recurrent state for one row,
@@ -101,18 +97,18 @@ func (r *rowsOut) foldHead(h *nn.Head, base, n int) (func(), bool) {
 // n-gram block) reads ids. It is prefill with every output a speculation step
 // reads: one pass over the weights for all the rows, the KV written for each.
 // The caller holds the pager (enterPager), as every inner path assumes.
-func (s *Instance) stepRows(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
+func (s *Instance) stepRows(src rowSrc, out *rowsOut) error {
 	c := s.c
 	out.token, out.tokens, out.resBase, out.ngBase = -1, nil, 0, 0
 	switch {
-	case len(src) == 0:
+	case src.len() == 0:
 		return errEmptyPrompt{}
-	case out.noHead && len(src) < 2:
-		return fmt.Errorf("model: a replay of %d row(s) is decode, which runs the head", len(src))
-	case out.from < 0 || out.from >= len(src):
-		return fmt.Errorf("model: a speculation step of %d rows wanting rows from %d", len(src), out.from)
-	case !out.noHead && (len(out.logits) < (len(src)-out.from)*c.NVocab || len(out.hidden) < (len(src)-out.from)*c.NEmbd):
-		return fmt.Errorf("model: a speculation step's destinations hold fewer than its %d rows", len(src)-out.from)
+	case out.noHead && src.len() < 2:
+		return fmt.Errorf("model: a replay of %d row(s) is decode, which runs the head", src.len())
+	case out.from < 0 || out.from >= src.len():
+		return fmt.Errorf("model: a speculation step of %d rows wanting rows from %d", src.len(), out.from)
+	case !out.noHead && (len(out.logits) < (src.len()-out.from)*c.NVocab || len(out.hidden) < (src.len()-out.from)*c.NEmbd):
+		return fmt.Errorf("model: a speculation step's destinations hold fewer than its %d rows", src.len()-out.from)
 	}
 	// A final softcap needs nothing here: every head a step's rows reach caps
 	// them -- the device's per-row head and its folded one as decode's does
@@ -125,8 +121,8 @@ func (s *Instance) stepRows(src []func(dst []float32) error, ids []int32, out *r
 	// a verification carrying replayed rows ahead of the ones it wants cost
 	// tens of milliseconds as a chunk of five to seven rows, against a few
 	// as rows. Whatever rows it wants (stepRowsDevice).
-	if len(src) >= 2 && !out.prompt && s.rowsVerifiable() && (!c.Q4E() || ids != nil) {
-		err := s.stepRowsDevice(src, ids, out)
+	if src.len() >= 2 && !out.prompt && s.rowsVerifiable() && true {
+		err := s.stepRowsDevice(src, out)
 		// A refusal (a kernel the ragged path lacks, as a float expert bank)
 		// left positions and every recurrent state where they were, so a
 		// model with no linear block takes the prompt chunk, and its per-row
@@ -140,18 +136,18 @@ func (s *Instance) stepRows(src []func(dst []float32) error, ids []int32, out *r
 	s.rows = out
 	defer func() { s.rows = nil }()
 	h := s.head
-	if out.argmax && len(src) == 1 && h != nil { // as ForwardGreedy
+	if out.argmax && src.len() == 1 && h != nil { // as ForwardGreedy
 		h.ArgmaxOnly, h.Token = true, -1
 		defer func() { h.ArgmaxOnly = false }()
 	}
-	lg, err := s.prefillSrc(0, src, ids)
+	lg, err := s.prefillSrc(0, src)
 	if err != nil {
 		return err
 	}
 	// One row ran as decode (forward), whose logits come back as ever and
 	// whose hidden state the head's readback or the host norm filled.
 	switch {
-	case len(src) != 1:
+	case src.len() != 1:
 	case h != nil && h.ArgmaxOnly && h.Token >= 0:
 		out.token = h.Token
 	default:
@@ -188,17 +184,17 @@ func (s *Instance) rowsVerifiable() bool {
 // (tier.ragStep.chain) -- runs every row through the head in position order
 // into s.rowsLog and s.rowsHid, and the tail is copied out: a few rows of
 // head beside a prompt chunk.
-func (s *Instance) stepRowsDevice(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
+func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 	if s.c.Q4E() {
-		return s.stepRowsStreams(src, ids, out)
+		return s.stepRowsStreams(src, out)
 	}
 	if s.c.PLEDim != 0 {
 		// A row here is an embedding without its token, and Gemma 4's
 		// per-layer inputs are built from the token.
 		return fmt.Errorf("model: a speculation step on the device of a model with per-layer embeddings")
 	}
-	m, c := s.m, s.c
-	n, nrot := len(src), c.RopeW()
+	c := s.c
+	n, nrot := src.len(), c.RopeW()
 	p0 := s.bpos[0]
 	if p0+n > s.maxSeq {
 		return errFull{s.maxSeq, s.reqSeq}
@@ -232,17 +228,23 @@ func (s *Instance) stepRowsDevice(src []func(dst []float32) error, ids []int32, 
 	s.growDeviceBatch(n)
 	pos, slot := make([]int, n), make([]int, n)
 	for j, i := range order {
-		row := s.bx[j*c.NEmbd : (j+1)*c.NEmbd]
-		if err := src[i](row); err != nil {
-			return err
-		}
 		pos[j] = p0 + i
 		slot[j] = pos[j] // sequence 0's slots are its positions (nn.RowsDevice)
-		if err := m.addPos(row, s.prow, pos[j]); err != nil {
+	}
+	// The rows in order's order: the wanted last one first where order
+	// moved it there.
+	d := c.NEmbd
+	if order[0] == n-1 && n > 1 {
+		if err := s.fillRows(src, n-1, 1, s.bx[:d], nil, pos[:1]); err != nil {
 			return err
 		}
-		s.cpu.tabsFresh = false
+		if err := s.fillRows(src, 0, n-1, s.bx[d:n*d], nil, pos[1:]); err != nil {
+			return err
+		}
+	} else if err := s.fillRows(src, 0, n, s.bx[:n*d], nil, pos); err != nil {
+		return err
 	}
+	s.cpu.tabsFresh = false
 	s.relocateFor(p0 + n)
 	rd, _ := s.onRowsDevice()
 	// A step with no head (a replay's commit, a piece of the prediction
@@ -291,7 +293,7 @@ func (s *Instance) stepRowsDevice(src []func(dst []float32) error, ids []int32, 
 // (headDone) and from the host's otherwise. The wanted rows are in the last
 // chunk, whose residual rows are in s.bx from lastBase.
 func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
-	m, c, r := s.m, s.c, s.rows
+	c, r := s.c, s.rows
 	if r.noHead {
 		return s.kvCheck()
 	}
@@ -307,32 +309,16 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	if off < 0 {
 		return fmt.Errorf("model: a speculation step wants row %d, before its last chunk at %d", r.from, lastBase)
 	}
-	// A host head over the wanted rows: the same norm and matmul the batched
-	// decode step runs (batch.go), so under the exact GEMM a row's logits are
-	// the decode path's bit for bit.
+	// The CPU's composed head over the wanted rows, the norm's rows its
+	// hidden state.
 	s.growBatch(cnt)
-	if !r.noCap {
-		var hidden []float32
-		if !c.Q4E() { // its hidden state is the residual, taken in q4eCollapse
-			hidden = r.hidden[:cnt*c.NEmbd]
-		}
-		if s.cpuHeadRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt) == composer.DeclineServes {
-			return s.kvCheck()
-		}
-	}
-	s.batchNormB(s.bh, s.bx[off*c.NEmbd:], s.outNorm, m.outNormB, c.NEmbd, cnt)
-	if err := s.mm(r.logits, *s.outW, s.bh, cnt); err != nil {
-		return err
-	}
+	var hidden []float32
 	if !c.Q4E() { // its hidden state is the residual, taken in q4eCollapse
-		copy(r.hidden, s.bh[:cnt*c.NEmbd])
+		hidden = r.hidden[:cnt*c.NEmbd]
 	}
-	if r.noCap {
-		s.headBias(r.logits[:cnt*c.NVocab])
-		s.scaleLogits(r.logits[:cnt*c.NVocab])
-		return s.kvCheck()
+	if why := s.cpuHeadRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt); why != composer.DeclineServes {
+		return s.headDeclined(why)
 	}
-	s.finishLogits(r.logits[:cnt*c.NVocab])
 	return s.kvCheck()
 }
 
@@ -398,9 +384,9 @@ func (r *rowsOut) tapStreams(s *Instance, x []float32, n int) {
 // from ids, the blocks on the device as rows in position order, the head on
 // the host over the collapsed streams. Every row runs through the head and
 // the wanted tail is copied out.
-func (s *Instance) stepRowsStreams(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
-	m, c := s.m, s.c
-	n := len(src)
+func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
+	c := s.c
+	n := src.len()
 	p0 := s.bpos[0]
 	if p0+n > s.maxSeq {
 		return errFull{s.maxSeq, s.reqSeq}
@@ -412,17 +398,13 @@ func (s *Instance) stepRowsStreams(src []func(dst []float32) error, ids []int32,
 	}
 	pos, slot := s.rowsPos[:n], s.rowsPos[n:2*n]
 	for i := range n {
-		row := s.bx[i*c.NEmbd : (i+1)*c.NEmbd]
-		if err := src[i](row); err != nil {
-			return err
-		}
 		pos[i] = p0 + i
 		slot[i] = pos[i] // sequence 0's slots are its positions (nn.RowsDevice)
-		if err := m.addPos(row, s.prow, pos[i]); err != nil {
-			return err
-		}
-		s.cpu.tabsFresh = false
 	}
+	if err := s.fillRows(src, 0, n, s.bx[:n*c.NEmbd], nil, pos); err != nil {
+		return err
+	}
+	s.cpu.tabsFresh = false
 	s.relocateFor(p0 + n)
 	rd, _ := s.onRowsDevice()
 	nlogit := n
@@ -443,7 +425,7 @@ func (s *Instance) stepRowsStreams(src []func(dst []float32) error, ids []int32,
 	if devHead {
 		hostLogits = 0
 	}
-	err := s.altRowsStep(rd, pos, slot, ids, n, logits, hostLogits)
+	err := s.altRowsStep(rd, pos, slot, src.tok, n, logits, hostLogits)
 	if err == nil && devHead {
 		err = s.rowsHead(rd, pos, slot, n, logits, nlogit)
 	}
@@ -481,15 +463,8 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 		}
 	}
 	s.growBatch(n)
-	if s.cpuHeadRows(s.bx, logits, nil, nlogit) == composer.DeclineServes {
-		return nil
-	}
-	s.altHeadNorm(nlogit)
-	if err := s.mm(logits, *s.outW, s.bh, nlogit); err != nil {
-		return err
-	}
-	for i := 0; i < nlogit; i++ {
-		softcap(logits[i*c.NVocab:(i+1)*c.NVocab], c.FinalSoftcap)
+	if why := s.cpuHeadRows(s.bx, logits, nil, nlogit); why != composer.DeclineServes {
+		return s.headDeclined(why)
 	}
 	return nil
 }

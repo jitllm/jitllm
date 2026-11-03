@@ -68,9 +68,6 @@ func emitA64Exp(a *A64, d, t0, t1 VReg) {
 // sum.
 func EmitA64Softmax() []byte { return emitA64Softmax(false) }
 
-// EmitA64LogSoftmax is the NEON twin of EmitLogSoftmax.
-func EmitA64LogSoftmax() []byte { return emitA64Softmax(true) }
-
 func emitA64Softmax(log bool) []byte {
 	var a A64
 	a.LDRx(X1, X0, 0)   // Out -> the row, in place
@@ -445,7 +442,6 @@ func a64ElemLoops(a *A64, k, r XReg, cursors []XReg, vec, one func()) {
 // NEON twin. Keeping one name means the caller has no build tag and no branch.
 func EmitRMSNorm(n int) []byte    { return EmitA64RMSNorm(n) }
 func EmitSoftmax() []byte         { return EmitA64Softmax() }
-func EmitLogSoftmax() []byte      { return EmitA64LogSoftmax() }
 func EmitActMul(k ActKind) []byte { return EmitA64ActMul(k) }
 func EmitAct(k ActKind) []byte    { return EmitA64Act(k) }
 func EmitSigmoidMul() []byte      { return EmitA64SigmoidMul() }

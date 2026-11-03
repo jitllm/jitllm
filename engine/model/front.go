@@ -118,6 +118,13 @@ type frontSet struct {
 	mtpEntry    []*graph.Graph
 	mtpEntryWhy []Uncovered
 	head, embed *graph.Graph
+	// cpuEmbed is embed without the streams past the first, which the CPU
+	// expands through expand (cpustreams.go) or a family's own expansion;
+	// given is an embedding span's rows' input (givenGraph); outNorm the
+	// output norm alone (outNormGraph). cpuInErr is why any of them did not
+	// verify.
+	cpuEmbed, given, outNorm *graph.Graph
+	cpuInErr                 error
 	// headHidden is head writing the norm's rows too (nn.Head.HiddenGraph).
 	headHidden *graph.Graph
 	// cpuHead and cpuHidden are head and headHidden over the row a model of
@@ -139,6 +146,9 @@ type frontSet struct {
 	cpuSample, cpuWalk, cpuRow, cpuCut *graph.Graph
 	cpuWalkProb, cpuCutProb            *graph.Graph
 	cpuCutK, cpuCutKProb               *graph.Graph
+	// cpuLogprobs is the logits' log-softmax and their MaxTopLogprobs most
+	// likely tokens, cpuMask a constrained draw's masked logits.
+	cpuLogprobs, cpuMask *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
 	// sliding layers', as composer.Front states them (nil for one that turns
 	// nothing).
@@ -311,7 +321,12 @@ func (m *Model) frontGraphs() *frontSet {
 	s.expand, eerr = m.streamExpandGraph()
 	s.collapse, cerr = m.streamCollapseGraph()
 	s.streamsErr = errors.Join(eerr, cerr)
-	s.embed, s.embedWhy, s.embedErr = m.embedGraph()
+	s.embed, s.embedWhy, s.embedErr = m.embedGraph(true)
+	var ce, ge, ne error
+	s.cpuEmbed, _, ce = m.embedGraph(false)
+	s.given, ge = m.givenGraph()
+	s.outNorm, ne = m.outNormGraph()
+	s.cpuInErr = errors.Join(ce, ge, ne)
 	s.pool, s.poolWhy, s.poolErr = m.poolGraph()
 	for i, r := range (composing{m.container, m}).Rotaries() {
 		var t *graph.Graph
@@ -346,6 +361,10 @@ func (m *Model) frontGraphs() *frontSet {
 		s.cpuCutK = ck.Build()
 		ckp := graph.SampleCut{NVocab: m.Cfg.NVocab, TopK: true, Prob: true}
 		s.cpuCutKProb = ckp.Build()
+		lp := graph.Logprobs{NVocab: m.Cfg.NVocab, K: MaxTopLogprobs}
+		s.cpuLogprobs = lp.Build()
+		mk := graph.MaskRow{NVocab: m.Cfg.NVocab}
+		s.cpuMask = mk.Build()
 	}
 	f.set = s
 	return s
@@ -1513,16 +1532,27 @@ func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
 	}
 	p := b.Emit(graph.OpPool, []graph.ValueID{x}, []graph.Result{{Name: "pooled", Width: d}}, nil,
 		graph.Attrs{Pooling: uint8(c.Pooling)}, nil, nil)[0]
-	w := d
+	// unit is v at unit length: an RMSNorm of no weight is v/sqrt(mean(v^2)),
+	// and 1/sqrt(w) turns the mean into the sum. The eps is
+	// sentence-transformers' 1e-12 floor on the norm, squared and taken per
+	// element.
+	unit := func(v graph.ValueID, w int, name string) graph.ValueID {
+		n := b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: name + ".rms", Width: w}}, nil,
+			graph.Attrs{Eps: 1e-24 / float64(w), HeadDim: w}, nil, nil)[0]
+		return mapRow(b, name, graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(w))}, nil, w, n)
+	}
+	raw, w := p, d
 	for _, r := range [...]jlm.Role{jlm.RoleEmbdDense1, jlm.RoleEmbdDense2} {
 		if has(r) {
 			w = inv[r].Rows
 			p = b.MatVec(p, r, w)
 		}
 	}
-	n := b.Emit(graph.OpHeadNorm, []graph.ValueID{p}, []graph.Result{{Name: "rms", Width: w}}, nil,
-		graph.Attrs{Eps: 1e-24 / float64(w), HeadDim: w}, nil, nil)[0]
-	b.Out(mapRow(b, "unit", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(w))}, nil, w, n))
+	if p == raw {
+		b.Out(unit(p, w, "unit"))
+	} else {
+		b.Out(unit(p, w, "unit"), unit(raw, d, "unit.raw"))
+	}
 	return verified(b, graph.Facts{Inventory: inv})
 }
 
@@ -1575,13 +1605,13 @@ func (m *Model) perLayerInputs(b *graph.Builder, f graph.Facts, x graph.ValueID)
 
 // embedGraph is the step's input rows: each row's token's row of the
 // embedding, times the stored scale, plus its position's row where the
-// container stores a position table; for a model of several streams the
-// front end expands, every stream past the first from it (streamExpand);
-// then, for a model of per-layer embeddings, each row's per-layer inputs,
-// the blocks' last input. A bank of checkpoints writes the running
-// residual's rows alone: a block writes each checkpoint before any block
-// reads it.
-func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
+// container stores a position table; with streams, for a model of several
+// streams the front end expands, every stream past the first from it
+// (streamExpand); then, for a model of per-layer embeddings, each row's
+// per-layer inputs, the blocks' last input. A bank of checkpoints writes
+// the running residual's rows alone: a block writes each checkpoint before
+// any block reads it.
+func (m *Model) embedGraph(streams bool) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	f, _ := m.inventory(jlm.DenseBlock)
 	// Token types the input rows add are a table of n_embd-wide rows; a
@@ -1589,7 +1619,7 @@ func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 	tt, types := f.Inventory[jlm.RoleTokenTypes]
 	types = types && tt.K == c.NEmbd && tt.Rows > 0
 	switch {
-	case c.Streams() > 1 && !c.mixesStreams() && !m.expandsStreams():
+	case streams && c.Streams() > 1 && !c.mixesStreams() && !m.expandsStreams():
 		return nil, UncoveredStreams, nil
 	case types:
 		return nil, UncoveredEmbedRows, nil
@@ -1607,7 +1637,7 @@ func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 		x = b.Add(x, pos)
 	}
 	b.Out(x)
-	if m.expandsStreams() {
+	if streams && m.expandsStreams() {
 		b.Out(m.streamExpand(b, x)...)
 	}
 	if c.PLEDim != 0 {
@@ -1617,4 +1647,68 @@ func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 		return nil, UncoveredUnverified, fmt.Errorf("the input rows' graph does not verify: %w", err)
 	}
 	return b.G, Covered, nil
+}
+
+// outNormGraph is the output norm alone over a row: the trunk's hidden
+// state a prediction block reads of a speculation's prompt rows. nil for a
+// model that stores no output norm, whose hidden state is the row itself.
+func (m *Model) outNormGraph() (*graph.Graph, error) {
+	c := m.Cfg
+	all, _ := m.inventory(jlm.DenseBlock)
+	inv := map[jlm.Role]graph.Shape{}
+	has := func(r jlm.Role) bool {
+		s, ok := all.Inventory[r]
+		if ok {
+			inv[r] = s
+		}
+		return ok
+	}
+	if !has(jlm.RoleOutputNorm) {
+		return nil, nil
+	}
+	b := graph.NewBlock(int(jlm.DenseBlock))
+	x := b.In("x", c.NEmbd)
+	if c.LayerNorm {
+		var bias []jlm.Role
+		if has(jlm.RoleOutputNormBias) {
+			bias = append(bias, jlm.RoleOutputNormBias)
+		}
+		x = b.LayerNorm(x, jlm.RoleOutputNorm, c.RMSEps, bias...)
+	} else {
+		x = b.Norm(x, jlm.RoleOutputNorm, c.RMSEps)
+	}
+	b.Out(x)
+	g, _, err := verified(b, graph.Facts{Inventory: inv})
+	return g, err
+}
+
+// givenGraph is an embedding span's rows' input, the rows the caller gives
+// in place of a token's: each row plus its position's row where the
+// container stores a position table, then, for a model of per-layer
+// embeddings, each row's per-layer inputs from the row and the token it
+// names (token 0's where it names none). Its outputs are the row where a
+// position table moves it, then the per-layer inputs; nil for a model that
+// adds nothing to a given row.
+func (m *Model) givenGraph() (*graph.Graph, error) {
+	c := m.Cfg
+	f, _ := m.inventory(jlm.DenseBlock)
+	p, pos := f.Inventory[jlm.RolePosEmbd]
+	if !pos && c.PLEDim == 0 {
+		return nil, nil
+	}
+	b := graph.NewBlock(-1)
+	x := b.In("x", c.NEmbd)
+	if pos {
+		pe := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: c.NEmbd}},
+			[]graph.Binding{{Role: jlm.RolePosEmbd, K: p.K, Rows: p.Rows}}, graph.Attrs{Positional: true}, nil, nil)[0]
+		x = b.Add(x, pe)
+		b.Out(x)
+	}
+	if c.PLEDim != 0 {
+		b.Out(m.perLayerInputs(b, f, x))
+	}
+	if err := graph.Verify(b.G, f); err != nil {
+		return nil, fmt.Errorf("the given rows' graph does not verify: %w", err)
+	}
+	return b.G, nil
 }

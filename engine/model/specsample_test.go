@@ -51,7 +51,10 @@ func specKeepsTheDistribution(t *testing.T, m *Model, temp, topP float64) {
 		}
 		var out []int32
 		for len(out) < 3 {
-			y := st.Sample(sm, lg)
+			y, err := st.Sample(sm, lg)
+			if err != nil {
+				t.Fatal(err)
+			}
 			sm.Observe(y)
 			out = append(out, y)
 			if lg, err = st.Forward(y); err != nil {

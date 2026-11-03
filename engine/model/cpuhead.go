@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
@@ -31,13 +32,22 @@ type cpuHeadState struct {
 	// from, probVals and probIDs the walk's; cutK and cutKProb a top-k
 	// draw past the walk's bound and its distribution.
 	walkProb, cutProb, cutK, cutKProb cpuHeadForm
-	cutKArgs                          [5]float32
-	probVals                          []float32
-	probIDs                           []uint32
-	served, sampled                   int
-	declined                          [composer.NumDeclines]int
-	sampleDeclined                    [composer.NumDeclines]int
-	token                             [1]uint32
+	// outNorm is the output norm's alone (outNormGraph), onPad its rows
+	// where a call is shorter than its unit, in then out.
+	outNorm cpuHeadForm
+	onPad   []float32
+	// logprobs is the log-softmax and the most likely tokens' form, lpRow
+	// and lpIDs what it writes; mask a constrained draw's masked logits'.
+	logprobs, mask  cpuHeadForm
+	lpRow           []float32
+	lpIDs           []uint32
+	cutKArgs        [5]float32
+	probVals        []float32
+	probIDs         []uint32
+	served, sampled int
+	declined        [composer.NumDeclines]int
+	sampleDeclined  [composer.NumDeclines]int
+	token           [1]uint32
 	// noWin is a window that holds no token, for a sampler with no
 	// penalty; pen is the penalty a draw reads.
 	noWin []float32
@@ -100,6 +110,14 @@ func (s *Instance) cpuPlaceHead() {
 	s.cpuComposeHead(&h.cutProb, fg.cpuCutProb, composer.DeclineNoSample, 1)
 	s.cpuComposeHead(&h.cutK, fg.cpuCutK, composer.DeclineNoSample, 1)
 	s.cpuComposeHead(&h.cutKProb, fg.cpuCutKProb, composer.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.logprobs, fg.cpuLogprobs, composer.DeclineNoSample, 1)
+	s.cpuComposeHead(&h.mask, fg.cpuMask, composer.DeclineNoSample, 1)
+	if fg.outNorm != nil {
+		s.cpuComposeHead(&h.outNorm, fg.outNorm, composer.DeclineNoGraph, cpuRowsCap)
+		if f := h.outNorm.f; f != nil {
+			h.onPad = make([]float32, 2*max(f.unit, 1)*s.c.NEmbd)
+		}
+	}
 	d, nv := s.c.NEmbd, s.c.NVocab
 	if f := h.rows.f; f != nil {
 		h.hid = make([]float32, f.rows*d)
@@ -115,6 +133,9 @@ func (s *Instance) cpuPlaceHead() {
 	}
 	if h.walkProb.f != nil {
 		h.probVals, h.probIDs = make([]float32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK)
+	}
+	if h.logprobs.f != nil {
+		h.lpRow, h.lpIDs = make([]float32, nv), make([]uint32, min(MaxTopLogprobs, nv))
 	}
 	if h.row.f != nil || h.cut.f != nil || h.cutProb.f != nil || h.cutK.f != nil || h.cutKProb.f != nil {
 		h.ids = make([]uint32, nv)
@@ -265,6 +286,53 @@ func (s *Instance) cpuHeadRows(x, logits, hidden []float32, n int) composer.Decl
 	return composer.DeclineServes
 }
 
+// cpuOutNorm writes the output norm of n rows of x into dst through the
+// composed norm (outNormGraph) -- a model with no output norm copies them
+// -- or says why not.
+func (s *Instance) cpuOutNorm(dst, x []float32, n int) composer.Decline {
+	d := s.c.NEmbd
+	if s.m.frontGraphs().outNorm == nil {
+		copy(dst[:n*d], x[:n*d])
+		return composer.DeclineServes
+	}
+	if !s.cpuHeadOn() {
+		return composer.DeclineCaller
+	}
+	h := &s.cpu.head
+	f, why := h.outNorm.formOf()
+	if why == composer.DeclineServes {
+		why = s.cpuWeights(f, -1, nil)
+	}
+	if why != composer.DeclineServes {
+		h.declined[why] += n
+		return why
+	}
+	for r0 := 0; r0 < n; {
+		k := min(f.rows, n-r0)
+		u := max(f.unit, 1)
+		in, out := unsafe.Pointer(&x[r0*d]), unsafe.Pointer(&dst[r0*d])
+		padded := k < u
+		if padded {
+			copy(h.onPad[:k*d], x[r0*d:(r0+k)*d])
+			in, out = unsafe.Pointer(&h.onPad[0]), unsafe.Pointer(&h.onPad[u*d])
+		} else {
+			k -= k % u
+		}
+		b := &s.cpu.bound
+		*b = cpuBound{own: s.cpuOwn(f), n: k}
+		b.io[0], b.io[1] = in, out
+		s.cpu.call[0] = uint32(k)
+		for i := range f.codes {
+			s.cpuCall(b, &f.codes[i])
+		}
+		if padded {
+			copy(dst[r0*d:(r0+k)*d], h.onPad[u*d:(u+k)*d])
+		}
+		r0 += k
+	}
+	return composer.DeclineServes
+}
+
 // cpuHeadCall runs the rows' form f over k rows of x into logits and the
 // norm's rows hidden.
 func (s *Instance) cpuHeadCall(f *cpuBlockForm, x, logits, hidden unsafe.Pointer, k int) {
@@ -341,28 +409,36 @@ func (s *Instance) cpuGreedy(logits []float32) (int32, bool) {
 	return int32(h.token[0]), true
 }
 
-// Sample is smp's token over logits, a row this instance produced, from the
-// composed samplers on the CPU: the greedy token (graph.Sample) and a top-k
-// draw's (graph.SampleWalk), at the uniform the host sampler would draw, so
-// a seed draws what it does through Sampler.Sample. A draw they do not serve
-// -- no top-k, one past their bounds, a row of another width -- is the host
-// sampler's.
-func (s *Instance) Sample(smp *Sampler, logits []float32) int32 {
-	whole := len(logits) == s.c.NVocab
-	if smp == nil || smp.Temp <= 0 {
-		if t, ok := s.cpuGreedy(logits); whole && ok {
-			return t
-		}
-		return Greedy(logits)
+// Sample is smp's token over logits, a row of this instance's vocabulary,
+// from the composed samplers on the CPU: the greedy token (graph.Sample), a
+// top-k draw's (graph.SampleWalk) and the row's or its cut's
+// (graph.SampleRow, SampleCut), at the uniform smp's stream draws.
+func (s *Instance) Sample(smp *Sampler, logits []float32) (int32, error) {
+	if len(logits) != s.c.NVocab {
+		return 0, fmt.Errorf("model: a draw over %d logits, and the vocabulary is %d", len(logits), s.c.NVocab)
 	}
-	if len(logits) == 0 {
-		return 0
+	if smp == nil || smp.Temp <= 0 {
+		if t, ok := s.cpuGreedy(logits); ok {
+			return t, nil
+		}
+		return 0, s.sampleDeclined("the greedy token")
 	}
 	u := float32(smp.uniform())
-	if t, ok := s.cpuDraw(logits, smp, u); whole && ok {
-		return t
+	if t, ok := s.cpuDraw(logits, smp, u); ok {
+		return t, nil
 	}
-	return smp.sampleAt(logits, u)
+	return 0, s.sampleDeclined("the draw")
+}
+
+// headDeclined is the error of head rows no composed form serves.
+func (s *Instance) headDeclined(why composer.Decline) error {
+	return fmt.Errorf("model: the head has no composed form on this instance (%s): %v", composer.DeclineName(int(why)), s.cpu.formErr)
+}
+
+// sampleDeclined is the error of a draw no composed form serves: a form the
+// composer refused at the placement, which CPUFormErr names.
+func (s *Instance) sampleDeclined(what string) error {
+	return fmt.Errorf("model: %s has no composed form on this instance: %v", what, s.cpu.formErr)
 }
 
 // cpuDraw is smp's sampled token over logits from the CPU's composed draws
@@ -378,24 +454,24 @@ func (s *Instance) cpuDraw(logits []float32, smp *Sampler, u float32) (int32, bo
 }
 
 // dist fills d with the distribution smp draws from over logits (a row this
-// instance's model produces), from the CPU's composed forms (cpuDist), the host
-// sampler's where they decline.
-func (s *Instance) dist(smp *Sampler, logits []float32, d *specDist) {
+// instance's model produces), from the CPU's composed forms (cpuDist).
+func (s *Instance) dist(smp *Sampler, logits []float32, d *specDist) error {
 	if !s.cpuDist(logits, smp, d) {
-		smp.dist(logits, d)
+		return s.sampleDeclined("the distribution")
 	}
+	return nil
 }
 
 // topProb is the largest probability of logits' softmax: the draft's
 // confidence in its argmax, from the composed greedy sampler and the
 // distribution of a draw at temperature 1 with no cut.
-func (s *Instance) topProb(logits []float32, d *specDist) float32 {
+func (s *Instance) topProb(logits []float32, d *specDist) (float32, error) {
 	one := Sampler{Temp: 1}
 	t, ok := s.cpuGreedy(logits)
 	if !ok || !s.cpuDist(logits, &one, d) {
-		return topProb(logits, d)
+		return 0, s.sampleDeclined("the draft's confidence")
 	}
-	return d.prob(t)
+	return d.prob(t), nil
 }
 
 // cpuDist fills d with the distribution smp draws from over logits, from

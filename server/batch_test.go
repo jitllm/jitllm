@@ -675,7 +675,11 @@ func replayPair(t *testing.T, lm *LoadedModel, maxSeq int, sp model.Sampler, sub
 	}
 	lg := out[0]
 	for j, want := range subj {
-		if got := sp.Sample(lg); got != want {
+		got, err := a.Sample(&sp, lg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
 			t.Fatalf("token %d: the server sent %d, and the same pair stepped together draws %d\nserver %v",
 				j, want, got, subj)
 		}

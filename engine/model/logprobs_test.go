@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"sort"
 	"testing"
 
@@ -83,8 +84,14 @@ func TestLogprobsMatchTheOracle(t *testing.T) {
 	lp := &Logprobs{N: n}
 	checked, rejected := 0, 0
 	for i := 0; i < gen; i++ {
-		next := sm.Sample(logits)
-		got := lp.Take(logits, next)
+		next, err := st.Sample(sm, logits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.Logprobs(lp, logits, next)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := lpCheck(logits, next, got, lp.Top, n); err != nil {
 			t.Fatalf("step %d (position %d): %v", i, st.Pos(), err)
 		}
@@ -96,7 +103,11 @@ func TestLogprobsMatchTheOracle(t *testing.T) {
 			hot[j] /= 0.8
 		}
 		vl := &Logprobs{N: n}
-		if lpCheck(logits, next, vl.Take(hot, next), vl.Top, n) != nil {
+		vg, err := st.Logprobs(vl, hot, next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lpCheck(logits, next, vg, vl.Top, n) != nil {
 			rejected++
 		}
 		if logits, err = st.Forward(next); err != nil {
@@ -109,13 +120,37 @@ func TestLogprobsMatchTheOracle(t *testing.T) {
 	}
 }
 
-// TestLogprobsAllocateNothingWarm: a warm Take, top-20 at a vocabulary width,
-// makes no heap allocation.
+// TestLogprobsAllocateNothingWarm: a warm Logprobs, top-20 over stories15M's
+// vocabulary, makes no heap allocation.
 func TestLogprobsAllocateNothingWarm(t *testing.T) {
-	logits := allocProbeLogits(32000)
-	lp := &Logprobs{N: MaxTopLogprobs}
-	lp.Take(logits, 5)
-	if a := testing.AllocsPerRun(20, func() { lp.Take(logits, 5) }); a != 0 {
-		t.Fatalf("%v allocations per warm Take, want none", a)
+	mp, ok := existingModel(models()["stories15M"])
+	if !ok {
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing",
+			models()["stories15M"])
 	}
+	m, err := Open(jlmOf(t, mp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	st := m.NewInstance(8)
+	defer st.Close()
+	logits := allocProbeLogits(m.Cfg.NVocab)
+	lp := &Logprobs{N: MaxTopLogprobs}
+	if _, err := st.Logprobs(lp, logits, 5); err != nil {
+		t.Fatal(err)
+	}
+	if a := testing.AllocsPerRun(20, func() { st.Logprobs(lp, logits, 5) }); a != 0 {
+		t.Fatalf("%v allocations per warm Logprobs, want none", a)
+	}
+}
+
+// allocProbeLogits is nv logits drawn from a fixed stream.
+func allocProbeLogits(nv int) []float32 {
+	l := make([]float32, nv)
+	rng := rand.New(rand.NewSource(7))
+	for i := range l {
+		l[i] = float32(rng.NormFloat64())
+	}
+	return l
 }

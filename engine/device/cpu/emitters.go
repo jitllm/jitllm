@@ -41,12 +41,9 @@ type Emitters struct {
 	// caches: a fused region's lookahead (prefetchlines.go).
 	PrefetchLines func() ([]byte, error)
 	Softmax       func() ([]byte, error)
-	// LogSoftmax is Softmax's log form, the same Args and Scr = ActConsts():
-	// x - max - ln(sum exp(x - max)), in place (EmitLogSoftmax).
-	LogSoftmax func() ([]byte, error)
-	ActMul     func(k ActKind) ([]byte, error) // every kind in graph.Gated()
-	Act        func(k ActKind) ([]byte, error) // every kind in graph.Ungated()
-	SigmoidMul func() ([]byte, error)
+	ActMul        func(k ActKind) ([]byte, error) // every kind in graph.Gated()
+	Act           func(k ActKind) ([]byte, error) // every kind in graph.Ungated()
+	SigmoidMul    func() ([]byte, error)
 	// Ln is x = ln(x) in place over positive finite x, Scr = ActConsts()
 	// (EmitLn): a log-mel feature's log.
 	Ln func() ([]byte, error)
@@ -316,7 +313,6 @@ func primaryEmitters() Emitters {
 		LerpGrid:   func() ([]byte, error) { return must("lerpgrid", EmitLerpGrid()) },
 		SinCosTab:  func() ([]byte, error) { return must("sincostab", EmitSinCosTab()) },
 		Softmax:    func() ([]byte, error) { return must("softmax", EmitSoftmax()) },
-		LogSoftmax: func() ([]byte, error) { return must("logsoftmax", EmitLogSoftmax()) },
 		ActMul:     func(k ActKind) ([]byte, error) { return must("actmul", EmitActMul(k)) },
 		Act:        func(k ActKind) ([]byte, error) { return must("act", EmitAct(k)) },
 		SigmoidMul: func() ([]byte, error) { return must("sigmoidmul", EmitSigmoidMul()) },
@@ -423,7 +419,6 @@ func sseEmitters() Emitters {
 		LerpGrid:      EmitLerpGridSSE,
 		SinCosTab:     EmitSinCosTabSSE,
 		Softmax:       EmitSoftmaxSSE,
-		LogSoftmax:    EmitLogSoftmaxSSE,
 		ActMul:        EmitActMulSSE,
 		Act:           EmitActSSE,
 		SigmoidMul:    EmitSigmoidMulSSE,

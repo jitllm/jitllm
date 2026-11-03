@@ -253,8 +253,14 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 				defer st.Close()
 				st.SetDeviceLayers(gpux, -1)
 				if n := st.GPULayers(); n != nl {
-					return nil, fmt.Sprintf("took %d of %d blocks: %v %v", n, nl,
-						st.DeviceDeclines(), gpux.Err())
+					var front []string
+					for li := range nl {
+						if u := m.Uncovered(li); u != Covered {
+							front = append(front, fmt.Sprintf("block %d: %v (%v)", li, u, m.UncoveredErr(li)))
+						}
+					}
+					return nil, fmt.Sprintf("took %d of %d blocks: %v %v; the front end: %v", n, nl,
+						st.DeviceDeclines(), gpux.Err(), front)
 				}
 				if !st.HeadOnDevice() {
 					return nil, "the head stayed on the host: " + gpux.Err()

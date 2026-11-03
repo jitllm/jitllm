@@ -8,69 +8,8 @@ import (
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
-
-// sampleProbRef is the probability the host sampler's draw gives token x, in
-// float64: of the candidates (the k best penalized logits, or the whole row
-// where k is 0) in their order, min-p and top-p over their softmax at
-// temperature 1 (the best kept), then x's share of the survivors' softmax at
-// 1/T; with no top-k and no cut firing, x's share of the row's softmax at 1/T.
-// It returns the probability and how far the cuts are from flipping.
-func sampleProbRef(logits []float32, hist []int, pen, invT float32, k int, topp, minp float64, x int) (p, margin float64) {
-	v := append([]float32(nil), logits...)
-	penalizeOnce(v, hist, pen)
-	n := len(v)
-	order := make([]int, n)
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return v[order[a]] > v[order[b]] })
-	cand := order
-	if k > 0 {
-		cand = order[:k]
-	}
-	v0 := float64(v[cand[0]])
-	q1 := make([]float64, len(cand))
-	sum := 0.0
-	for j, i := range cand {
-		q1[j] = math.Exp(float64(v[i]) - v0)
-		sum += q1[j]
-	}
-	keep, fired, acc := len(cand), false, 0.0
-	margin = math.Inf(1)
-	for j := range cand {
-		q1[j] /= sum
-		if minp > 0 {
-			margin = min(margin, math.Abs(q1[j]-minp*q1[0])/q1[0])
-		}
-		if q1[j] < minp*q1[0] {
-			keep, fired = j, true
-			break
-		}
-		acc += q1[j]
-		if !math.IsInf(topp, 1) {
-			margin = min(margin, math.Abs(acc-topp))
-		}
-		if acc >= topp {
-			keep, fired = j+1, true
-			break
-		}
-	}
-	surv := cand[:max(keep, 1)]
-	if k == 0 && !fired {
-		surv = order
-	}
-	top := float64(v[surv[0]] * invT)
-	mass, px := 0.0, 0.0
-	for _, i := range surv {
-		e := math.Exp(float64(v[i]*invT) - top)
-		mass += e
-		if i == x {
-			px = e
-		}
-	}
-	return px / mass, margin
-}
 
 // TestComposedCPUSampleProb holds graph.SampleWalk and graph.SampleCut with
 // Prob on the CPU device to the distribution their draw draws from, read at
@@ -181,7 +120,7 @@ func TestComposedCPUSampleProb(t *testing.T) {
 					sort.SliceStable(byLogit, func(i, j int) bool { return l[byLogit[i]] > l[byLogit[j]] })
 					x = byLogit[rng.Intn(K)]
 				}
-				want, margin := sampleProbRef(l, hist, pen, invT, k, topp, minp, x)
+				want, margin := oracle.SampleProb(l, hist, pen, invT, k, topp, minp, x)
 				if margin < 1e-4 {
 					continue
 				}

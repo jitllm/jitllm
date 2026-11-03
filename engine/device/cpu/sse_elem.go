@@ -154,11 +154,6 @@ func EmitSoftcapSSE() ([]byte, error) {
 // sum's halves, then XMM6 = 1/sum; XMM0..XMM2 are the body's.
 func EmitSoftmaxSSE() ([]byte, error) { return emitSoftmaxSSE(false) }
 
-// EmitLogSoftmaxSSE is EmitLogSoftmax for the SSE tier: pass 2 sums without
-// storing, ln(sum) is emitLnSum's sequence without FMA, and pass 3 subtracts
-// max + ln(sum).
-func EmitLogSoftmaxSSE() ([]byte, error) { return emitSoftmaxSSE(true) }
-
 func emitSoftmaxSSE(log bool) ([]byte, error) {
 	var a Buf
 	a.DeclareISA(ISATierSSE)

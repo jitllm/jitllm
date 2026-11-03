@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -24,13 +23,9 @@ const embedMaxSeq = 8192
 // Embedder is the working memory for embedding one sequence at a time. It is
 // not safe for concurrent use; make one per goroutine.
 type Embedder struct {
-	m   *Model
-	jit *nn.JIT
-	st  *Instance
-
-	pooled, norm, ones []float32
-	// dense is the projection heads' middle row (denseHeads).
-	dense []float32
+	m      *Model
+	st     *Instance
+	pooled []float32
 	// skipDense reads the vector out before any projection head, matching
 	// llama.cpp on a GGUF converted without the dense modules. Tests only.
 	skipDense bool
@@ -52,14 +47,7 @@ func (m *Model) NewEmbedder() (*Embedder, error) {
 	}
 	c := m.Cfg
 	st := m.NewInstance(min(c.NCtx, embedMaxSeq))
-	e := &Embedder{m: m, st: st, jit: st.jit}
-	e.ones = make([]float32, c.NEmbd)
-	for i := range e.ones {
-		e.ones[i] = 1
-	}
-	e.pooled = make([]float32, c.NEmbd)
-	e.norm = make([]float32, c.NEmbd)
-	return e, nil
+	return &Embedder{m: m, st: st, pooled: make([]float32, st.cpuPoolWidth())}, nil
 }
 
 // Close releases the embedder's session.
@@ -103,32 +91,13 @@ func (e *Embedder) Embed(ids []int32) ([]float32, error) {
 	if n := e.MaxTokens(); n > 0 && len(ids) > n {
 		return nil, fmt.Errorf("model: %d tokens, and this model embeds at most %d", len(ids), n)
 	}
-	_, unit, err := e.st.embedPrefill(ids, e.pooled, e.skipDense)
-	if err != nil {
+	if err := e.st.embedPrefill(ids, e.pooled, e.skipDense); err != nil {
 		return nil, err
 	}
-	out := e.pooled
-	if unit {
-		return out, nil
+	if e.skipDense {
+		return e.pooled[:e.m.Cfg.NEmbd], nil
 	}
-	if !e.skipDense {
-		if err := e.m.denseHeads(e, out); err != nil {
-			return nil, err
-		}
-	}
-	e.normalize(out)
-	return out, nil
-}
-
-// normalize scales v to unit L2 norm, on generated code: an RMSNorm with a
-// weight of ones is v/sqrt(mean(v^2)), and 1/sqrt(len) turns the mean into the
-// sum. The eps is sentence-transformers' 1e-12 floor on the norm, squared and
-// taken per element so the two agree on everything but a zero vector.
-func (e *Embedder) normalize(v []float32) {
-	n := len(v)
-	nn.RMSNorm32JIT(e.norm[:n], v, e.ones[:n], 1e-24/float64(n))
-	copy(v, e.norm[:n])
-	nn.Scale32JIT(v, float32(1/math.Sqrt(float64(n))))
+	return e.pooled, nil
 }
 
 // loadDenseHeads binds an embedding model's projection heads, when the

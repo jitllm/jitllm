@@ -457,7 +457,7 @@ func trainedToks(t *testing.T, m *Model, ids []int32, n int) ([]int32, int) {
 	for i := range toks {
 		id := (int(ids[i%len(ids)])*7 + i) % m.Vocab.Size()
 		for tries := 0; ; tries++ {
-			if err := m.embedRow(row, id); err != nil {
+			if err := m.embedRowRef(row, id); err != nil {
 				t.Fatal(err)
 			}
 			if slices.ContainsFunc(row, nonzero) {

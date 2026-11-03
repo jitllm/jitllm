@@ -177,9 +177,8 @@ type Speculator struct {
 	t, d *Instance
 	opt  specOpts
 	mode SpecRollback
-	// mtp is the prediction block's own weights; mli its block index. Both
-	// unset, and d nil, where prompt lookup drafts.
-	mtp *mtpWeights
+	// mli is the prediction block's index: unset, and d nil, where prompt
+	// lookup drafts.
 	mli int
 	// hist is every decided token, the prompt's first, where prompt lookup
 	// drafts: what its n-grams are matched against (speclookup.go).
@@ -201,10 +200,9 @@ type Speculator struct {
 	tout, dout rowsOut
 	snaps      []recSnap
 	pre        recSnap
-	eh, ze     []float32
-	// epos is a draft step's rows' positions for its input rows (zero: the
-	// trunk's table carries none).
-	epos   []int
+	ze         []float32
+	// noTok is a draft step's rows' tokens: none, its rows given (draftRows).
+	noTok  []int32
 	rowTok []int32
 	dist   specDist
 	qdists []specDist
@@ -336,7 +334,7 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 	sp := &Speculator{t: s, opt: o}
 	sp.stats.Drafter = o.drafter
 	if mtp {
-		sp.mli, sp.mtp = c.NLayer, m.layers[c.NLayer].mtp
+		sp.mli = c.NLayer
 		// The draft's positions run one past the trunk's: a round drafts only
 		// where the trunk can verify, and the round's last token -- decided,
 		// not yet fed -- has its draft row at the position the trunk will feed
@@ -416,7 +414,10 @@ func (sp *Speculator) Start(prompt []int32, sm *Sampler) (int32, error) {
 	if err != nil {
 		return 0, err
 	}
-	y := sp.t.Sample(sm, logits)
+	y, err := sp.t.Sample(sm, logits)
+	if err != nil {
+		return 0, err
+	}
 	sm.Observe(y)
 	sp.stats.Emitted++
 	hw := c.specHidW()
@@ -453,7 +454,7 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 	hid := make([]float32, n*c.specHidW())
 	logits := make([]float32, c.NVocab)
 	if n == 1 {
-		if err := t.stepRows(embedSrc(t, prompt), prompt, &rowsOut{logits: logits, hidden: hid}); err != nil {
+		if err := t.stepRows(tokenRows(prompt), &rowsOut{logits: logits, hidden: hid}); err != nil {
 			return nil, nil, err
 		}
 		return logits, hid, nil
@@ -475,7 +476,7 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 		}
 	}
 	t.noHeadFold = true
-	lg, err := t.prefillSrc(0, embedSrc(t, prompt), prompt)
+	lg, err := t.prefillSrc(0, tokenRows(prompt))
 	t.rowTap, t.noHeadFold = nil, false
 	if err != nil {
 		return nil, nil, err
@@ -488,7 +489,9 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 		copy(hid, resid)
 		return logits, hid, nil
 	}
-	t.batchNormB(hid, resid, t.outNorm, t.m.outNormB, c.NEmbd, n)
+	if why := t.cpuOutNorm(hid, resid, n); why != composer.DeclineServes {
+		return nil, nil, t.headDeclined(why)
+	}
 	return logits, hid, nil
 }
 
@@ -503,112 +506,38 @@ func (c *Config) specHidW() int {
 	return c.NEmbd
 }
 
-// embedSrc is a prompt's rows as the trunk's prefill reads them.
-func embedSrc(s *Instance, ids []int32) []func(dst []float32) error {
-	src := make([]func(dst []float32) error, len(ids))
-	for i, id := range ids {
-		id := id
-		src[i] = func(dst []float32) error { return s.embedInto(dst, id) }
-	}
-	return src
-}
-
 // draftRows runs rows of the draft at its next positions -- toks[i] with the
 // hidden state hs[i], row-major -- into out: the rows from out.from on, which
 // is the last alone for every step but a gate's.
 func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error {
-	d, c, w := sp.d, sp.d.m.Cfg, sp.mtp
+	d, c := sp.d, sp.d.m.Cfg
 	n := len(toks)
 	// The block's page: its eh_proj is read on the host even where the block
 	// itself runs on a device, and the page stays (offerRange keeps it).
 	if err := d.m.pageIn(sp.mli); err != nil {
 		return err
 	}
-	// [enorm(embed(x)) ; hnorm(h)] per row, then eh_proj over every row at
-	// once: one read of the matrix for the whole step.
-	// Qwen3.8-Flash-Next's block takes the trunk's residual, every stream:
-	// eh_proj runs once per (row, stream) over [enorm(e) ; hnorm(h_s)], and
-	// its rows are the draft's residual streams (llama.cpp's graph_mtp).
-	st := 1
-	if c.Q4E() {
-		st = c.HCMult
-	}
+	// [enorm(embed(x)) ; hnorm(h)] per row through eh_proj, the composed
+	// entry (mtpEntryGraph). Qwen3.8-Flash-Next's block takes the trunk's
+	// residual, every stream: eh_proj runs once per (row, stream), and its
+	// rows are the draft's residual streams (llama.cpp's graph_mtp).
+	st := c.Streams()
 	d0 := c.NEmbd
-	sp.eh = grow32(sp.eh, n*st*2*d0)
 	sp.ze = grow32(sp.ze, n*st*d0)
-	if st == 1 {
-		// The composed entry (mtpEntryGraph): the embeddings in eh, its rows
-		// in ze.
-		e := sp.eh[:n*d0]
-		// The trunk's table through the composed input rows where the block
-		// reads it unscaled and nothing else rides the rows; else row by row.
-		rows := !w.ownEmbd && (c.EmbdScale == 0 || c.EmbdScale == 1) && d.m.posEmbd.e == nil && c.PLEDim == 0
-		if rows {
-			if len(sp.epos) < n {
-				sp.epos = make([]int, n)
-			}
-			rows = d.cpuEmbed(e, nil, toks, sp.epos[:n]) == composer.DeclineServes
+	if why := d.cpuMTPEntry(sp.ze[:n*st*d0], hs[:n*st*d0], toks, n); why != composer.DeclineServes {
+		if why == composer.DeclineNotFormed && d.cpu.formErr != nil {
+			return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s (the first: %w)", sp.mli, composer.DeclineName(int(why)), d.cpu.formErr)
 		}
-		for i := 0; i < n && !rows; i++ {
-			if err := d.embedMTP(e[i*d0:(i+1)*d0], toks[i]); err != nil {
-				return err
-			}
-		}
-		if why := d.cpuMTPEntry(sp.ze[:n*d0], e, hs[:n*d0], n); why != composer.DeclineServes {
-			if why == composer.DeclineNotFormed && d.cpu.formErr != nil {
-				return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s (the first: %w)", sp.mli, composer.DeclineName(int(why)), d.cpu.formErr)
-			}
-			return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s", sp.mli, composer.DeclineName(int(why)))
-		}
-	} else {
-		e := sp.ze // the embeddings, before eh_proj overwrites them
-		for i, x := range toks {
-			if err := d.embedMTP(e[i*d0:(i+1)*d0], x); err != nil {
-				return err
-			}
-		}
-		for i := n - 1; i >= 0; i-- {
-			for k := 0; k < st; k++ {
-				row := sp.eh[(i*st+k)*2*d0 : (i*st+k+1)*2*d0]
-				if k == 0 {
-					d.rmsnorm(row[:d0], e[i*d0:(i+1)*d0], w.enorm, c.RMSEps)
-				} else {
-					copy(row[:d0], sp.eh[i*st*2*d0:i*st*2*d0+d0])
-				}
-				d.rmsnorm(row[d0:], hs[(i*st+k)*d0:(i*st+k+1)*d0], w.hnorm[k*d0:(k+1)*d0], c.RMSEps)
-			}
-		}
-		d.jit.NewInput()
-		if err := d.mm(sp.ze[:n*st*d0], w.ehProj, sp.eh[:n*st*2*d0], n*st); err != nil {
-			return err
-		}
+		return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s", sp.mli, composer.DeclineName(int(why)))
 	}
 	if st > 1 {
 		d.q4In = sp.ze[:n*st*d0]
 		defer func() { d.q4In = nil }()
 	}
-	src := make([]func(dst []float32) error, n)
-	for i := range src {
-		z := sp.ze[i*c.NEmbd : (i+1)*c.NEmbd]
-		src[i] = func(dst []float32) error { copy(dst, z); return nil }
+	for len(sp.noTok) < n {
+		sp.noTok = append(sp.noTok, -1)
 	}
-	return d.stepRows(src, nil, out)
-}
-
-// embedMTP is token x's row of the table the prediction block reads: its own
-// where it carries one, the trunk's otherwise. llama.cpp's graph_mtp applies
-// no embedding scale here, and neither does this.
-func (s *Instance) embedMTP(dst []float32, x int32) error {
-	e := &s.m.layers[s.lo].mtp.embd
-	if int(x) < 0 || int(x) >= e.rows {
-		return errToken{x, s.c.NVocab}
-	}
-	if e.packed != nil && len(e.packed.QS) != 0 {
-		nn.RowPacked32JIT(dst, e.typ, e.packed, int(x), e.rows, e.k)
-		return nil
-	}
-	nn.Row32JIT(dst, e.typ, e.data, int(x), e.k)
-	return nil
+	return d.stepRows(rowSrc{tok: sp.noTok[:n], given: []givenRun{{rows: sp.ze[:n*c.NEmbd]}}}, out)
 }
 
 // Next runs one round and returns the tokens it decided, in order: the
@@ -673,9 +602,16 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		var x int32
 		var px float64
 		if greedy {
-			x = sp.t.Sample(nil, sp.dlog)
+			var err error
+			if x, err = sp.t.Sample(nil, sp.dlog); err != nil {
+				return nil, err
+			}
 			if sp.opt.minP > 0 {
-				px = float64(sp.t.topProb(sp.dlog, &sp.dist))
+				top, err := sp.t.topProb(sp.dlog, &sp.dist)
+				if err != nil {
+					return nil, err
+				}
+				px = float64(top)
 			}
 			x = sp.oracleAt(int(sp.stats.Emitted)+i, x)
 		} else {
@@ -686,8 +622,13 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 				}
 			}
 			q := &sp.qdists[i]
-			sp.t.dist(sm, dl, q)
-			x = sp.t.Sample(sm, dl)
+			if err := sp.t.dist(sm, dl, q); err != nil {
+				return nil, err
+			}
+			var err error
+			if x, err = sp.t.Sample(sm, dl); err != nil {
+				return nil, err
+			}
 			px = float64(q.prob(x))
 		}
 		if sp.opt.minP > 0 && px < sp.opt.minP {
@@ -741,7 +682,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		}
 	}
 	t.kv.note(P, rows...)
-	if err := t.stepRows(embedSrc(t, rows), rows, &sp.tout); err != nil {
+	if err := t.stepRows(tokenRows(rows), &sp.tout); err != nil {
 		return nil, err
 	}
 	sp.stats.Verify += time.Since(t1)
@@ -754,25 +695,37 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	var y int32
 	if greedy {
 		// The device's per-row argmax where the step read back no logits.
-		tok := func(j int) int32 {
+		tok := func(j int) (int32, error) {
 			if sp.tout.tokens != nil {
-				return sp.tout.tokens[j]
+				return sp.tout.tokens[j], nil
 			}
 			return sp.t.Sample(nil, lg(j))
 		}
-		for a < kd && tok(a) == drafts[a] && (sp.opt.stop == nil || !sp.opt.stop(drafts[a])) {
+		for a < kd {
+			t, err := tok(a)
+			if err != nil {
+				return nil, err
+			}
+			if t != drafts[a] || sp.opt.stop != nil && sp.opt.stop(drafts[a]) {
+				break
+			}
 			a++
 		}
 		if sp.fault == faultAcceptUnchecked && a < kd {
 			a++
 		}
 		if y = sp.tout.token; y < 0 {
-			y = tok(a)
+			var err error
+			if y, err = tok(a); err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		sm.mark(&sp.smark)
 		for a < kd {
-			sp.t.dist(sm, lg(a), &sp.dist)
+			if err := sp.t.dist(sm, lg(a), &sp.dist); err != nil {
+				return nil, err
+			}
 			px, qx := sp.dist.prob(drafts[a]), sp.qdists[a].prob(drafts[a])
 			if sp.fault == faultAcceptUnchecked || qx > 0 && sm.uniform() < float64(px)/float64(qx) {
 				sm.Observe(drafts[a])
@@ -781,10 +734,14 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 			}
 			break
 		}
+		var err error
 		if a < kd {
-			y = sp.residual(sm, lg(a), a, drafts[a])
+			y, err = sp.residual(sm, lg(a), a, drafts[a])
 		} else {
-			y = sp.t.Sample(sm, lg(a))
+			y, err = sp.t.Sample(sm, lg(a))
+		}
+		if err != nil {
+			return nil, err
 		}
 		sm.restore(&sp.smark)
 	}
@@ -827,7 +784,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 			// head: one more pass, and the next round starts clean.
 			if r > 0 {
 				commit := rowsOut{noHead: true}
-				if err := t.stepRows(embedSrc(t, nextReplay), nextReplay, &commit); err != nil {
+				if err := t.stepRows(tokenRows(nextReplay), &commit); err != nil {
 					return nil, err
 				}
 				nextReplay = nextReplay[:0]
@@ -901,7 +858,9 @@ func (sp *Speculator) decode(sm *Sampler, greedy bool) ([]int32, error) {
 		if err != nil {
 			return nil, err
 		}
-		y = sp.t.Sample(sm, lg)
+		if y, err = sp.t.Sample(sm, lg); err != nil {
+			return nil, err
+		}
 	}
 	sm.Observe(y)
 	sp.next = y
@@ -958,7 +917,7 @@ func (sp *Speculator) catchUp(debt bool) error {
 // expected number of draws is at most 1/(q(x) - p(x)). After enough draws that
 // a residual of that mass is missed with probability below double precision's
 // epsilon (2^-53), the last draw is taken as it stands.
-func (sp *Speculator) residual(sm *Sampler, lg []float32, i int, x int32) int32 {
+func (sp *Speculator) residual(sm *Sampler, lg []float32, i int, x int32) (int32, error) {
 	q := &sp.qdists[i]
 	mass := float64(q.prob(x)) - float64(sp.dist.prob(x))
 	limit := 1
@@ -967,13 +926,16 @@ func (sp *Speculator) residual(sm *Sampler, lg []float32, i int, x int32) int32 
 	}
 	var z int32
 	for n := 0; n < limit; n++ {
-		z = sp.t.Sample(sm, lg)
+		var err error
+		if z, err = sp.t.Sample(sm, lg); err != nil {
+			return 0, err
+		}
 		pz, qz := float64(sp.dist.prob(z)), float64(q.prob(z))
 		if pz > 0 && sm.uniform() < 1-qz/pz {
-			return z
+			return z, nil
 		}
 	}
-	return z
+	return z, nil
 }
 
 // oracleAt is a gate's proposal for generated token g (see Speculator.oracle),
@@ -1166,15 +1128,6 @@ const specSettle = 2
 // is the median of: enough that a slow round or two does not move it, few
 // enough to follow a history that grows (attention lengthens with it).
 const specWindow = 8
-
-// topProb is the largest probability of a softmax over logits, the draft's
-// confidence in its argmax.
-func topProb(logits []float32, d *specDist) float32 {
-	d.pall = grow32(d.pall, len(logits))
-	copy(d.pall, logits)
-	nn.Softmax32JIT(d.pall, len(logits))
-	return d.pall[Greedy(d.pall)]
-}
 
 // SpecRows is the most rows one verification pass carries when the count of
 // drafts is the adaptive search's (a lookup draft and the deepest model

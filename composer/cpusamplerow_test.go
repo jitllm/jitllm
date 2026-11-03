@@ -3,71 +3,12 @@ package composer
 import (
 	"math"
 	"math/rand"
-	"sort"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
-
-// SampleRowRef is graph.SampleRow's definition, the host sampler's draw with
-// no top-k and no cut: the repeat penalty once on each token the window
-// holds, in float32 (penalizeOnce), the row's softmax at 1/T in float64, its order
-// (the larger first, the lower id of two equal), and the walk at u -- the
-// first token whose mass up to and including it passes u times the row's
-// mass, the last where none does. It returns the token and how far u's point
-// is from the nearest edge, as a share of the mass.
-func SampleRowRef(logits []float32, hist []int, pen float32, invT float32, u float64) (tok uint32, margin float64) {
-	v := append([]float32(nil), logits...)
-	penalizeOnce(v, hist, pen)
-	n := len(v)
-	m := math.Inf(-1)
-	s := make([]float64, n)
-	for i := range v {
-		s[i] = float64(v[i] * invT)
-		m = max(m, s[i])
-	}
-	q := make([]float64, n)
-	mass := 0.0
-	for i := range q {
-		q[i] = math.Exp(s[i] - m)
-		mass += q[i]
-	}
-	order := make([]int, n)
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return q[order[a]] > q[order[b]] })
-	target, upto := u*mass, 0.0
-	margin = math.Inf(1)
-	tok = uint32(order[n-1])
-	landed := false
-	for _, i := range order {
-		upto += q[i]
-		margin = min(margin, math.Abs(upto-target)/mass)
-		if !landed && upto > target {
-			tok, landed = uint32(i), true
-		}
-	}
-	return tok, margin
-}
-
-// penalizeOnce is v with the repeat penalty once on each token hist holds,
-// however often: a positive value divided by pen, any other multiplied.
-func penalizeOnce(v []float32, hist []int, pen float32) {
-	seen := map[int]bool{}
-	for _, h := range hist {
-		if seen[h] {
-			continue
-		}
-		seen[h] = true
-		if v[h] > 0 {
-			v[h] /= pen
-		} else {
-			v[h] *= pen
-		}
-	}
-}
 
 // windowWords is hist as the forms read the repeat window (sample.window):
 // each of n tokens' count in it, a float's bits.
@@ -137,6 +78,15 @@ func TestComposedCPUSampleRow(t *testing.T) {
 				l[i] = l[(i*7)%n]
 			}
 		}
+		masked := c%5 == 1
+		if masked {
+			// A grammar's mask: some tokens at -inf, which no draw may land on.
+			for i := range l {
+				if rng.Intn(20) == 0 {
+					l[i] = float32(math.Inf(-1))
+				}
+			}
+		}
 		var hist []int
 		pen := float32(1)
 		if c%2 == 0 {
@@ -150,8 +100,11 @@ func TestComposedCPUSampleRow(t *testing.T) {
 		if c%50 == 0 {
 			u = 0
 		}
-		want, margin := SampleRowRef(l, hist, pen, invT, u)
+		want, margin := oracle.SampleRow(l, hist, pen, invT, u)
 		got := draw(l, hist, pen, invT, float32(u))
+		if masked && math.IsInf(float64(l[got]), -1) {
+			t.Fatalf("case %d: drew token %d, whose logit is -inf", c, got)
+		}
 		cases++
 		if margin < 1e-4 && c%50 != 0 {
 			continue

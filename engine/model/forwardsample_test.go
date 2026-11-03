@@ -58,7 +58,10 @@ func forwardSampleMatches(t *testing.T, name string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		next := sm.Sample(logits)
+		next, err := st.Sample(sm, logits)
+		if err != nil {
+			t.Fatal(err)
+		}
 		reads0 := g.Stats().SampleReads
 		for i := 0; i < n; i++ {
 			out = append(out, next)
@@ -71,7 +74,9 @@ func forwardSampleMatches(t *testing.T, name string) {
 				if logits, err = st.Forward(next); err != nil {
 					t.Fatal(err)
 				}
-				next = sm.Sample(logits)
+				if next, err = st.Sample(sm, logits); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		onDev, reads = st.SampledOnDevice, g.Stats().SampleReads-reads0

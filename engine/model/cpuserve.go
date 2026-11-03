@@ -2920,6 +2920,11 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return nil
 		}
 		return &l.mtp.ehProj
+	case jlm.RoleNextnEmbd:
+		if l.mtp == nil {
+			return nil
+		}
+		return &l.mtp.embd
 	case jlm.RoleAttnQ:
 		return &l.wq
 	case jlm.RoleAttnK:

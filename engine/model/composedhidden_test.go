@@ -92,7 +92,7 @@ func composedHidden(t *testing.T, m *Model, dev string, parts gpu.Parts, k int, 
 	func() {
 		defer m.enterPager()()
 		s.kv.note(s.seqPos(0), rows...)
-		if err := s.stepRows(embedSrc(s, rows), rows, &out); err != nil {
+		if err := s.stepRows(tokenRows(rows), &out); err != nil {
 			t.Fatal(err)
 		}
 	}()

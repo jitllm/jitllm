@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,20 +64,27 @@ func (lm *LoadedModel) matcher(src string) (*grammar.Matcher, error) {
 type constraint struct {
 	m  *grammar.Matcher
 	st grammar.State
-	// lg is the masked copy of the step's logits.
-	lg []float32
+	// lg is the masked copy of the step's logits, bias the row it adds: 0
+	// at the tokens the grammar allows while a mask is taken, -inf elsewhere
+	// and between.
+	lg, bias []float32
 }
 
 // mask is logits with every token the grammar does not allow at -inf, in
-// the constraint's own copy.
-func (c *constraint) mask(logits []float32) []float32 {
-	if cap(c.lg) < len(logits) {
-		c.lg = make([]float32, len(logits))
+// the constraint's own copy, through in's composed mask.
+func (c *constraint) mask(in *model.Instance, logits []float32) ([]float32, error) {
+	n := len(logits)
+	if cap(c.lg) < n {
+		c.lg, c.bias = make([]float32, n), make([]float32, n)
+		for i := range c.bias {
+			c.bias[i] = float32(math.Inf(-1))
+		}
 	}
-	c.lg = c.lg[:len(logits)]
-	copy(c.lg, logits)
-	c.m.Mask(c.st, c.lg)
-	return c.lg
+	c.lg, c.bias = c.lg[:n], c.bias[:n]
+	c.m.Allow(c.st, c.bias, 0)
+	err := in.MaskRow(c.lg, logits, c.bias)
+	c.m.Allow(c.st, c.bias, float32(math.Inf(-1)))
+	return c.lg, err
 }
 
 // accept advances past tok; false where the grammar does not allow it.
