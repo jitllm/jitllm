@@ -10,13 +10,6 @@ import "math"
 // (scripts/c6gold.py), so the gates are TestC6MatchesTransformers,
 // TestC6FeaturesAreLoadBearing and TestC6OnEveryDevice under its name; the same
 // weights as safetensors (<name>-hf) run TestSafetensorsMatchTransformers.
-func init() {
-	c6Fixtures = append(c6Fixtures, yarnFixtures()...)
-	for k, v := range yarnViolations() {
-		c6Violations[k] = v
-	}
-}
-
 // mscale is YaRN's derived magnitude, 0.1*k*ln(factor) + 1.
 func mscale(factor, k float64) float64 { return 0.1*k*math.Log(factor) + 1 }
 

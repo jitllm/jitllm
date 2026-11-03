@@ -6,17 +6,6 @@ import "math"
 // (ssmfamily_test.go): its dense and mixture fixtures, built by
 // GraniteMoeHybridForCausalLM (scripts/ssmgold.py), join every gate there and
 // the dense one the five principles' through principleFixtures.
-func init() {
-	ssmFixtures = append(ssmFixtures, granitehybridFixtures()...)
-	for _, fx := range granitehybridFixtures() {
-		ssmFamilyViolations[fx.name] = func(bool) []c6Violation { return granitehybridViolations() }
-	}
-	// The mixture pages under TestSSMFamiliesPageWithTheSameAnswer:
-	// TestPagingDoesNotChangeTheAnswer counts frames of one page size, and its
-	// expert pages are another.
-	principleFixtures = append(principleFixtures, "synth-granitehybrid.gguf")
-}
-
 func granitehybridFixtures() []struct {
 	name string
 	sel  func(m *Model) bool

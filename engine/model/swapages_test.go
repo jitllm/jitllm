@@ -17,8 +17,10 @@ import (
 // window of 4, cohere2's sliding layers, llama4's chunked ones, gpt-oss's
 // alternating window and OLMo 3's. DeepSeek V4's every block slides, and its
 // compressed blocks' entries are the history that grows beside the windows.
-var windowFixtures = []string{"synth-exaone4.gguf", "synth-cohere2.gguf", "synth-llama4.gguf", "synth-gptoss.gguf",
-	"synth-olmo3.gguf"}
+func windowFixtures() []string {
+	return []string{"synth-exaone4.gguf", "synth-cohere2.gguf", "synth-llama4.gguf", "synth-gptoss.gguf",
+		"synth-olmo3.gguf", "synth-gemma3n.gguf", "synth-gemma4.gguf", "synth-deepseek4.gguf"}
+}
 
 // TestWindowedLayersHoldTheirWindow holds a windowed layer's history to its
 // window over a long decode, on the host and on every device: the paging
@@ -39,7 +41,7 @@ var windowFixtures = []string{"synth-exaone4.gguf", "synth-cohere2.gguf", "synth
 // below the window start of the last position less nn.KVWindowSlack.
 func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 	specs := testdevices.Specs("cuda", "vulkan", "metal")
-	for _, name := range windowFixtures {
+	for _, name := range windowFixtures() {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(jlmOf(t, testmodels.Path(name)), noTune)
 			if err != nil {

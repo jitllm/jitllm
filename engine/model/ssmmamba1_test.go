@@ -1,8 +1,6 @@
 package model
 
 import (
-	"slices"
-
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -11,22 +9,6 @@ import (
 // (scripts/ssmgold.py), join every gate there and the five principles'
 // through principleFixtures. Mamba-2's own violations do not apply (its
 // norm, its grouped B/C in the convolved channels); the scan's are below.
-func init() {
-	ssmFixtures = append(ssmFixtures, mamba1Fixtures()...)
-	for _, fx := range mamba1Fixtures() {
-		ssmNotMamba[fx.name] = true
-		principleFixtures = append(principleFixtures, fx.name+".gguf")
-	}
-	ssmFamilyViolations["synth-mamba1"] = func(bool) []c6Violation { return mamba1Violations() }
-	ssmFamilyViolations["synth-mamba1-ragged"] = func(bool) []c6Violation { return mamba1Violations() }
-	ssmFamilyViolations["synth-falconmamba"] = func(bool) []c6Violation {
-		return append(slices.Clone(mamba1Violations()), mamba1NormViolations()...)
-	}
-	ssmFamilyViolations["synth-jamba"] = func(bool) []c6Violation {
-		return append(append(slices.Clone(mamba1Violations()), mamba1NormViolations()...), jambaViolations()...)
-	}
-}
-
 func mamba1Fixtures() []struct {
 	name string
 	sel  func(m *Model) bool

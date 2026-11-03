@@ -10,21 +10,6 @@ import (
 // Lfm2ForCausalLM with three gated short convolutions and one attention block
 // (scripts/ssmgold.py). Its recurrence is a convolution window alone, which
 // TestSSDFeaturesAreLoadBearing's window violation covers.
-func init() {
-	ssmFixtures = append(ssmFixtures, lfm2Fixtures()...)
-	for _, fx := range lfm2Fixtures() {
-		ssmFamilyViolations[fx.name] = lfm2Violations
-		ssmNotMamba[fx.name] = true
-	}
-	ssmFamilyViolations["synth-lfm2moe"] = func(device bool) []c6Violation {
-		return append(lfm2Violations(device),
-			c6Violation{"no selection bias", noSelectionBias},
-			c6Violation{"softmax for the sigmoid router", routerSwap(false)})
-	}
-	// The mixture pages under TestSSMFamiliesPageWithTheSameAnswer.
-	principleFixtures = append(principleFixtures, "synth-lfm2.gguf")
-}
-
 func lfm2Fixtures() []struct {
 	name string
 	sel  func(m *Model) bool

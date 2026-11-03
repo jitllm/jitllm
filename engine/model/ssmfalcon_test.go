@@ -8,15 +8,6 @@ import (
 // FalconH1ForCausalLM with every muP multiplier far from one
 // (scripts/ssmgold.py), with the grouped gated norm every published size but
 // 0.5B carries and without it, as 0.5B ships.
-func init() {
-	ssmFixtures = append(ssmFixtures, falconh1Fixtures()...)
-	for _, fx := range falconh1Fixtures() {
-		ssmFamilyViolations[fx.name] = falconh1Violations
-	}
-	ssmNoNorm["synth-falconh1-nonorm"] = true
-	principleFixtures = append(principleFixtures, "synth-falconh1.gguf")
-}
-
 // falconh1Block is what every Falcon-H1 block must carry: attention and a
 // Mamba-2 mixer both, the mixer's projection beside the attention's four.
 func falconh1Block(m *Model, norm bool) bool {

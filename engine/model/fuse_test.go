@@ -19,8 +19,8 @@ func fuseModels() []string {
 	names := []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
 		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "gemma-3-1b-it-Q4_K_M.gguf",
 		"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf"}
-	names = append(names, principleFixtures...)
-	names = append(names, principleMixtures...)
+	names = append(names, principleFixtures()...)
+	names = append(names, principleMixtures()...)
 	if v := os.Getenv("JITLLM_FUSE_MODELS"); v != "" {
 		names = append(names, strings.Split(v, ",")...)
 	}

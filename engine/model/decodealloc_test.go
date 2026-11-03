@@ -41,7 +41,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 		"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf"}
 	// Every principle fixture (paging_test.go): one graph per architecture
 	// that has no real model in the list above.
-	for _, n := range slices.Concat(principleFixtures, principleMixtures) {
+	for _, n := range slices.Concat(principleFixtures(), principleMixtures()) {
 		if !slices.Contains(names, n) {
 			names = append(names, n)
 		}

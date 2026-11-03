@@ -455,7 +455,7 @@ func kvLegalCut(c *Config, n int) bool {
 // They are F32, so the device's own arithmetic is far under the bound.
 func TestBatchSeamMovesCarryEveryRowSSM(t *testing.T) {
 	defer fusedRunsCheck(t, false)()
-	for _, fx := range ssmFixtures {
+	for _, fx := range ssmFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			p, ok := existingModel(testmodels.Path(fx.name + ".gguf"))
 			if !ok {

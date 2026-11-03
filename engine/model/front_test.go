@@ -29,7 +29,7 @@ func namedReason(u Uncovered) bool { return u > Covered && u < UncoveredUnbound 
 // block by a reason it names, never by a graph that fails to verify.
 func TestFrontStatesTheModelAsOps(t *testing.T) {
 	step := composer.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
-	for _, file := range append(append(slices.Clone(servedModels), formedModels()...), mixtureModels()...) {
+	for _, file := range append(append(slices.Clone(servedModels()), formedModels()...), mixtureModels()...) {
 		t.Run(file, func(t *testing.T) {
 			m := frontModel(t, file)
 			f := m.Composing()

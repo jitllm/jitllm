@@ -185,23 +185,25 @@ func cpuDecode(t *testing.T, m *Model, ids, toks []int32) [][]float32 {
 // its unrotated layers and input-weighted top-1 experts, and HunyuanVL's
 // XD-RoPE, whose pair halves turn by two coordinates (on a text row, one
 // position: TestHunyuanVLTextMatchesTransformers decodes after a picture).
-var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
-	"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-	"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
-	"newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf", "newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/AFM-4.5B-Q4_K_M.gguf",
-	"granite/granite-3.3-2b-instruct-Q4_K_M.gguf", "granite/granite-4.0-micro-Q4_K_M.gguf",
-	"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
-	"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf",
-	"falcon/falcon-7b-instruct.Q4_K_M.gguf",
-	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
-	"bitnet-b1.58-2B-4T-i2_s.gguf", "synth-deepseek-dense", "synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf",
-	"synth-apertus.gguf",
-	"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
-	"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf",
-	"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
-	"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-kimilinear@q8",
-	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "synth-llama4-q8.gguf", "synth-pixtral.gguf", "synth-hunyuanvl.gguf",
-	"hunyuanvl/HunyuanOCR-Q8_0.gguf", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "gpt-oss-20b-MXFP4.gguf"}
+func servedBaseModels() []string {
+	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
+		"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+		"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
+		"newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf", "newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/AFM-4.5B-Q4_K_M.gguf",
+		"granite/granite-3.3-2b-instruct-Q4_K_M.gguf", "granite/granite-4.0-micro-Q4_K_M.gguf",
+		"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+		"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf",
+		"falcon/falcon-7b-instruct.Q4_K_M.gguf",
+		"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+		"bitnet-b1.58-2B-4T-i2_s.gguf", "synth-deepseek-dense", "synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf",
+		"synth-apertus.gguf",
+		"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
+		"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf",
+		"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
+		"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-kimilinear@q8",
+		"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "synth-llama4-q8.gguf", "synth-pixtral.gguf", "synth-hunyuanvl.gguf",
+		"hunyuanvl/HunyuanOCR-Q8_0.gguf", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "gpt-oss-20b-MXFP4.gguf"}
+}
 
 // budgetElsewhere is the fixtures whose experts are too small for any budget
 // to tell streamed from resident, each with the served model whose budget arm
@@ -366,10 +368,6 @@ func ssmServed() []string {
 		"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "synth-nemotronhmoe-q8.gguf"}
 }
 
-func init() {
-	servedModels = append(servedModels, ssmServed()...)
-}
-
 // apartModels are the state-space checkpoints whose blocks with no MLP end
 // in a kernel that adds the projection to x and writes the output: a kernel
 // reading x where it writes is not written over it -- its surplus threads
@@ -529,12 +527,12 @@ func TestComposedBlocksServe(t *testing.T) {
 	arms = append(arms, arm{"whole step, experts streamed under a budget", gpu.ComposedStep, 0, streamBudget},
 		arm{"whole step, experts cached in pages", gpu.ComposedStep, 0, streamCache})
 	for f, by := range budgetElsewhere() {
-		if !slices.Contains(servedModels, by) {
+		if !slices.Contains(servedModels(), by) {
 			t.Fatalf("%s's budget arm runs on %s, which the gate does not serve", f, by)
 		}
 	}
 	ran := 0
-	for _, file := range servedModels {
+	for _, file := range servedModels() {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(path)); err != nil {

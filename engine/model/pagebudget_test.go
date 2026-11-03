@@ -120,7 +120,7 @@ func TestForwardBatchFaultsItsBlocksIn(t *testing.T) {
 	}
 	// The principle fixtures (paging_test.go), one per architecture beyond
 	// the map's.
-	for _, name := range append(principleFixtures, principleMixtures...) {
+	for _, name := range append(principleFixtures(), principleMixtures()...) {
 		t.Run(name, func(t *testing.T) { forwardBatchFaultsItsBlocksIn(t, testmodels.Path(name)) })
 	}
 }

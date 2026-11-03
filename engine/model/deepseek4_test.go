@@ -173,9 +173,6 @@ func TestDeepseek4OnEveryDevice(t *testing.T) {
 // carries the compressor's pending inputs, so it pages, relocates and is
 // restored with the key, and the entries are a second paged history beside it.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-deepseek4.gguf")
-	windowFixtures = append(windowFixtures, "synth-deepseek4.gguf")
-	prefixWindowFixtures = append(prefixWindowFixtures, "synth-deepseek4.gguf")
 }
 
 // TestDeepseek4FeaturesAreLoadBearing runs each violation through decode.

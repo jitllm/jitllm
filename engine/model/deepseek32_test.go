@@ -171,5 +171,4 @@ func TestDeepseek32OnEveryDevice(t *testing.T) {
 // (principleFixtures): the indexer's key is part of the latent row, so it
 // pages, relocates and is restored with it.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-deepseek32.gguf")
 }

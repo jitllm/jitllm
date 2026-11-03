@@ -48,7 +48,7 @@ func TestC6ServesComposed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m, g := openC6(t, name)
 			defer m.Close()
-			ran += servesComposed(t, m, g.IDs, bound, append(slices.Clone(c6DevViolations[name]), statedViolations(m)...), true)
+			ran += servesComposed(t, m, g.IDs, bound, append(slices.Clone(c6DevViolations()[name]), statedViolations(m)...), true)
 		})
 	}
 	if ran == 0 {

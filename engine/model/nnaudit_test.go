@@ -267,7 +267,7 @@ func auditModels(t *testing.T) []auditModel {
 			add(rel, p, false)
 		}
 	}
-	for _, rel := range auditHFDirs {
+	for _, rel := range auditHFDirs() {
 		if dir := testmodels.Path(rel); fileExists(filepath.Join(dir, "config.json")) {
 			add(rel+" (safetensors)", dir, true)
 		}
@@ -278,7 +278,7 @@ func auditModels(t *testing.T) []auditModel {
 // auditHFDirs are safetensors inputs held to their reference outside
 // testdata/golden/hf, relative to the model directory: a class whose
 // fixtures carry their own goldens appends them (kimik3_test.go).
-var auditHFDirs []string
+func auditHFDirs() []string { return []string{"hf/synth-kimik3", "kimik3/Kimi-K3-0.40B-MXFP4-hf"} }
 
 // auditDecision is the decision models' GGUFs two directories down; d1's and
 // lev's one directory down are found by the glob.
