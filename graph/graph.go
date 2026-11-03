@@ -141,9 +141,9 @@ const (
 	// OpEmbed is a step's input rows: each row's token's row of Weight[0],
 	// the token a word of the step's own a row; where Positional, each
 	// row's position's row (a learned position table), the position modulo
-	// Span where Span is set; where Request, the row the step's request
-	// names, every row's (a decision's question type's). Into an index row
-	// (ElemU32), each element is an index: a token's experts.
+	// Span where Span is set; over an index row In[0] (u32), each of the
+	// row's indices' rows side by side (an n-gram's table rows). Into an
+	// index row (ElemU32), each element is an index: a token's experts.
 	OpEmbed
 	// OpStateConv is a causal depthwise convolution of In[0] over the
 	// block's window, the last Taps-1 rows it saw: each channel's Taps taps
