@@ -670,16 +670,19 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		s.recChunkPoint(slot, p0+n)
 		s.advance(slot, n)
 		// The last chunk's last row is the only one the caller can use, so it
-		// becomes the decode path's residual stream and the session continues
-		// from there.
+		// becomes the decode path's one-row residual, every stream of it, and
+		// the session continues from there.
 		//
 		// It is written for a batch row too: nothing decodes from it there, but
-		// the output projection below reads s.x.
-		copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])
+		// the output projection below reads it.
+		for k := range c.Streams() {
+			copy(c.stream(s.resid(), k, 1, 0), c.stream(s.bx, k, n, n-1))
+		}
 		// A head over several streams reads their collapse: collapsed in
 		// place, the chunk's rows' stream 0 is their head input, and the last
-		// row's is s.x's.
-		if c.streamHead() && base+n == total {
+		// row's is s.x's. A device head that collapses them itself is handed
+		// the last row's as they are (devCollapses).
+		if c.streamHead() && base+n == total && !s.devCollapses() {
 			if s.rows != nil {
 				s.rows.resBase = base
 			}
@@ -715,6 +718,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		}
 		return s.logits, nil
 	}
+	devCollapse := s.devCollapses()
 	if s.head != nil && s.devCount() > 0 {
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.seqPos(slot)-1, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), s.head) {
 			if err := s.devLogits(); err != nil {
@@ -733,6 +737,11 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}
+	if devCollapse {
+		if err := s.collapseStreams(s.resid(), 1); err != nil {
+			return nil, err
+		}
+	}
 	why := composer.DeclineServes
 	if len(s.HostPick) > 0 {
 		why = s.cpuPick(s.x)
@@ -749,6 +758,15 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	return s.logits, nil
 }
 
+// devCollapses says a prompt's head over several streams goes to a device
+// that collapses them itself (nn.Head.Collapses), handed the last row's
+// every stream as forward.go's tail hands a token's: the host collapsing
+// them first would have the device collapse stream 0's collapse beside
+// streams the last row never wrote.
+func (s *Instance) devCollapses() bool {
+	c := s.m.Cfg
+	return c.streamHead() && s.head != nil && s.head.Collapses && s.rows == nil && s.devCount() > 0 && s.lo < c.NLayer
+}
 
 // axpyRows adds alpha*b to each of n rows of dst, b one row of width dim or,
 // where idx is set, the table whose row idx[r] goes to row r.
