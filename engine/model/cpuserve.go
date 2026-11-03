@@ -337,7 +337,7 @@ type cpuState struct {
 	// mapped is the own buffers held off the heap (cpuOwnOffHeap), unmapped
 	// with the instance.
 	mapped [][]byte
-	// args is a call's words for each pool worker.
+	// args is a call's words for each pool worker (cpuArgBlocks).
 	args []cpu.Args
 	// part is the workers the launch running sizes its calls for, and ends
 	// its phase's kernels' calls' running totals (cpuGroup).
@@ -1370,7 +1370,7 @@ func (s *Instance) cpuLaunch(b *cpuBound, c *cpuCode) {
 	// sized for at placement (the P and E cores'): a word block for each of
 	// its workers.
 	if w := s.jit.Workers(); len(s.cpu.args) < w {
-		s.cpu.args = append(s.cpu.args, make([]cpu.Args, w-len(s.cpu.args))...)
+		s.cpu.args = cpuArgBlocks(w)
 	}
 	r := &s.cpu.run
 	r.s, r.b, r.c, r.live = s, b, c, live
@@ -1385,6 +1385,20 @@ func (c *cpuCode) callAt(i, live int) int {
 		return i
 	}
 	return i%live*c.inner + i/live
+}
+
+// cpuArgWords is one call's word block: cpu.Args' layout, which the kernel
+// reads, held as words. A word is an address and its offset, which past a
+// slice's last element is no pointer the collector accepts (a field of
+// cpu.Args is), or a count; the addresses are of the instance's own buffers,
+// which it holds.
+type cpuArgWords [(unsafe.Sizeof(cpu.Args{}) + 7) / 8]uint64
+
+// cpuArgBlocks is n word blocks seen as the cpu.Args a kernel call takes: the
+// collector scans an object by the type it was allocated as.
+func cpuArgBlocks(n int) []cpu.Args {
+	w := make([]cpuArgWords, n)
+	return unsafe.Slice((*cpu.Args)(unsafe.Pointer(&w[0])), n)
 }
 
 // cpuWords writes call at's words of kernel c into a.
@@ -1563,7 +1577,7 @@ func (s *Instance) cpuPlace() {
 	if s.jit != nil {
 		w = s.jit.Workers()
 	}
-	s.cpu.args = make([]cpu.Args, max(w, 1))
+	s.cpu.args = cpuArgBlocks(max(w, 1))
 	s.cpu.ends = make([]int, 0, 16)
 	s.cpu.run.fn = s.cpu.run.region
 	s.cpu.run.gfn = s.cpu.run.groupRegion
@@ -2791,7 +2805,7 @@ func (s *Instance) cpuGroup(b *cpuBound, g []cpuCode) {
 		return
 	}
 	if w := s.jit.Workers(); len(s.cpu.args) < w {
-		s.cpu.args = append(s.cpu.args, make([]cpu.Args, w-len(s.cpu.args))...)
+		s.cpu.args = cpuArgBlocks(w)
 	}
 	r := &s.cpu.run
 	r.s, r.b, r.g = s, b, g
@@ -2807,7 +2821,7 @@ func (s *Instance) cpuChain(b *cpuBound, g []cpuCode, units int) {
 		return
 	}
 	if w := s.jit.Workers(); len(s.cpu.args) < w {
-		s.cpu.args = append(s.cpu.args, make([]cpu.Args, w-len(s.cpu.args))...)
+		s.cpu.args = cpuArgBlocks(w)
 	}
 	r := &s.cpu.run
 	r.s, r.b, r.g, r.units = s, b, g, units
