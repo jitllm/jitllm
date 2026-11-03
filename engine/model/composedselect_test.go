@@ -81,9 +81,9 @@ func TestComposedCPUSelectsKeys(t *testing.T) {
 		t.Fatalf("the composed CPU is %.3g from the float forms, bound %g", worst, bound)
 	}
 	for _, v := range []c6Violation{
-		{"attention over every block", m3Violations[0].mut},
-		{"a top-k one short", m3DevViolations[1].mut},
-		{"two blocks forced in", m3DevViolations[2].mut},
+		{"attention over every block", m3Violations()[0].mut},
+		{"a top-k one short", m3DevViolations()[1].mut},
+		{"two blocks forced in", m3DevViolations()[2].mut},
 		{"blocks of eight", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.IdxBlock = 8 }) }},
 	} {
 		undo := v.mut(m)

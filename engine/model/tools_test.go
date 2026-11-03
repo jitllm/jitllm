@@ -63,11 +63,13 @@ func TestToolCallHold(t *testing.T) {
 
 // toolModels are the containers whose templates the render gate holds to
 // HuggingFace's own renderer. Each is one family's tool format.
-var toolModels = []string{
-	"qwen2.5-1.5b-instruct-q4_k_m",    // Hermes <tool_call>, tools in the system turn
-	"Qwen3-0.6B-Q8_0",                 // Hermes, `arguments is string` branch
-	"Llama-3.2-1B-Instruct-Q4_K_M",    // JSON in the first user turn, ipython role
-	"Mistral-7B-Instruct-v0.3-Q4_K_M", // this GGUF's template has NO tools: refused
+func toolModels() []string {
+	return []string{
+		"qwen2.5-1.5b-instruct-q4_k_m",    // Hermes <tool_call>, tools in the system turn
+		"Qwen3-0.6B-Q8_0",                 // Hermes, `arguments is string` branch
+		"Llama-3.2-1B-Instruct-Q4_K_M",    // JSON in the first user turn, ipython role
+		"Mistral-7B-Instruct-v0.3-Q4_K_M", // this GGUF's template has NO tools: refused
+	}
 }
 
 // toolFixture is the conversation every template renders: a tool list whose
@@ -98,7 +100,7 @@ func TestToolPromptMatchesTransformers(t *testing.T) {
 	dir := filepath.Join("..", "..", "testdata", "golden", "tools")
 	dump := os.Getenv("JITLLM_TOOLGOLD") == "dump"
 	ran := 0
-	for _, name := range toolModels {
+	for _, name := range toolModels() {
 		path, ok := existingModel(testmodels.Path(name + ".gguf"))
 		if !ok {
 			t.Logf("%s: not on this box", name)

@@ -20,7 +20,7 @@ import (
 // logits past 100 times the clean worst and past 1e-4.
 func TestDeepseek4ServesComposedOnCPU(t *testing.T) {
 	const bound = 1e-5
-	for _, fx := range ds4Fixtures {
+	for _, fx := range ds4Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			gm, g := openDS4(t, fx.name)
 			ok := fx.sel(gm)

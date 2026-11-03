@@ -58,8 +58,10 @@ func sidesWithTheSessionRun(out, want []int32, i int) bool {
 // 0.87 with the M4's cache at f16. Its residual stream reaches 2.6e4, and the
 // two hosts' 7e-4 apart after layer 0's MLP are 16% apart at the output norm
 // (docs/engineering-history/model-correctness.md, "Apertus").
-var recordedNearTies = map[string]map[string]int{
-	"swiss-ai_Apertus-8B-Instruct-2509-Q4_K_M.gguf": {"The capital of France is": 11},
+func recordedNearTies() map[string]map[string]int {
+	return map[string]map[string]int{
+		"swiss-ai_Apertus-8B-Instruct-2509-Q4_K_M.gguf": {"The capital of France is": 11},
+	}
 }
 
 // TestGreedyMatchesLlamaCpp decodes the same prompt on jitllm and on llama.cpp
@@ -336,7 +338,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 								second = v
 							}
 						}
-						pos, recorded := recordedNearTies[name][prompt]
+						pos, recorded := recordedNearTies()[name][prompt]
 						switch {
 						case bi == want[i]:
 							agreed++
@@ -387,7 +389,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 					// A disagreement is only a bug if the margin is wide: the
 					// engines quantize and sum differently, so near-ties may go
 					// either way.
-					if pos, ok := recordedNearTies[name][prompt]; ok && pos == i && i > 0 {
+					if pos, ok := recordedNearTies()[name][prompt]; ok && pos == i && i > 0 {
 						t.Logf("%q: diverged at token %d, a recorded near-tie (%q at %.3f vs llama.cpp's %q...)",
 							prompt, i, m.Vocab.Text(out[i]), margins[i], rest)
 						break
@@ -429,7 +431,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 					// all 20 on another, with every position teacher-forced in
 					// agreement on both. The length is reported beside it as a
 					// lead, never as a floor.
-					if rec, ok := llamaCppCoverage[name]; ok && covered != rec {
+					if rec, ok := llamaCppCoverage()[name]; ok && covered != rec {
 						t.Logf("agreed for %d tokens; the laptop's record is %d (a different tie, not a gate)",
 							covered, rec)
 					}
@@ -453,70 +455,72 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 // table moved four rows, two each way), so another host parts elsewhere with
 // every position teacher-forced in agreement. The teacher-forced sweep and the
 // tie rule are what guard every position.
-var llamaCppCoverage = map[string]int{
-	"Llama-3.2-1B-Instruct-Q4_K_M.gguf": 20,
-	"Qwen2-1.5B-Instruct-Q4_K_M.gguf":   1, // one-ulp table, 0.085 tie at token 1
-	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf":  20,
-	"Qwen3-1.7B-Q4_K_M.gguf":            5, // one-ulp table, 0.035 tie at token 5
-	"Qwen3-MOE-4x0.6B-Q4_K_M.gguf":      20,
-	"SmolLM2-360M-Instruct-Q8_0.gguf":   20,
-	"SmolVLM-256M-Instruct-Q8_0.gguf":   20,
-	"gemma-2-2b-it-Q4_K_M.gguf":         18, // arm64 untuned (TuneOff), 0.089 tie at token 18
-	"gemma-2b.gguf":                     17,
-	"gemma-3-1b-it-Q4_K_M.gguf":         7,
-	// Held against the container streamed from safetensors, through
-	// JITLLM_GREEDY_PAIR: jitllm takes Kimi-Linear only from safetensors.
-	"moonshotai_Kimi-Linear-48B-A3B-Instruct-Q8_0-00001-of-00002.gguf": 20,
-	// A GPU server, host tier, against llama.cpp's CPU path: 20 of 20
-	// teacher-forced as well.
-	"Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00001-of-00002.gguf": 20,
-	"synth-gptoss.gguf": 7,
-	// The C6 fixtures.
-	"synth-cohere2.gguf":               20,
-	"synth-dbrx.gguf":                  20,
-	"synth-commandr.gguf":              20,
-	"synth-falcon.gguf":                20,
-	"synth-falcon40.gguf":              20,
-	"synth-nemotron.gguf":              20,
-	"synth-phi2.gguf":                  20,
-	"synth-phi2-q8.gguf":               20,
-	"synth-stablelm.gguf":              20,
-	"synth-stablelm-par.gguf":          20,
-	"synth-starcoder.gguf":             20,
-	"synth-starcoder2.gguf":            20,
-	"google_gemma-3-1b-it-Q4_K_M.gguf": 20,
-	// Held through JITLLM_GREEDY_PAIR (it is over the 2 GiB default): the
-	// first K-quant falcon, whose attn_qkv is Q5_1. llama.cpp ends at EOS
-	// after 11 tokens, all 11 teacher-forced positions agreeing.
-	"falcon-7b-instruct.Q4_K_M.gguf": 10,
-	"tiny-qwen3moe-f32.gguf":         19,
-	"tinyllama-1.1b-q3_K_M.gguf":     7,
-	// The flagships, on a GPU server's host tier against llama.cpp's
-	// CPU path (JITLLM_GREEDY_MODEL): every teacher-forced position agrees.
-	// The 26B compared 12 teacher-forced positions, all agreeing.
-	"gemma-4-31B-it-Q4_K_M.gguf":            20,
-	"google_gemma-4-26B-A4B-it-Q4_K_M.gguf": 15,
-	"google_gemma-4-E2B-it-Q4_K_M.gguf":     5,
-	"google_gemma-4-E4B-it-Q4_K_M.gguf":     14,
-	"MiniMax-M2-Q3_K_M-00001-of-00003.gguf": 20,
-	// The dense llama-family fixtures, and the real models of the group.
-	"synth-smollm3.gguf":                       20,
-	"synth-arcee.gguf":                         20,
-	"synth-seedoss.gguf":                       20,
-	"synth-olmo2.gguf":                         20,
-	"synth-olmo2-gqa.gguf":                     20,
-	"synth-olmo3.gguf":                         20,
-	"synth-mistral3.gguf":                      20,
-	"OLMo-2-0425-1B-Instruct-Q4_K_M.gguf":      20,
-	"SmolLM3-3B-Q4_K_M.gguf":                   20,
-	"Ministral-3-3B-Instruct-2512-Q4_K_M.gguf": 20,
-	"AFM-4.5B-Q4_K_M.gguf":                     20,
-	// llama.cpp ends at EOS after 8 tokens, all 8 teacher-forced positions
-	// agreeing.
-	"EXAONE-4.0-1.2B-Q4_K_M.gguf": 7,
-	// Against llama.cpp's MiniMax Sparse Attention, i.e. with flash attention
-	// on; its dense fallback agrees at 8 of 20 teacher-forced positions.
-	"synth-minimaxm3.gguf": 20,
+func llamaCppCoverage() map[string]int {
+	return map[string]int{
+		"Llama-3.2-1B-Instruct-Q4_K_M.gguf": 20,
+		"Qwen2-1.5B-Instruct-Q4_K_M.gguf":   1, // one-ulp table, 0.085 tie at token 1
+		"Qwen2-VL-2B-Instruct-Q4_K_M.gguf":  20,
+		"Qwen3-1.7B-Q4_K_M.gguf":            5, // one-ulp table, 0.035 tie at token 5
+		"Qwen3-MOE-4x0.6B-Q4_K_M.gguf":      20,
+		"SmolLM2-360M-Instruct-Q8_0.gguf":   20,
+		"SmolVLM-256M-Instruct-Q8_0.gguf":   20,
+		"gemma-2-2b-it-Q4_K_M.gguf":         18, // arm64 untuned (TuneOff), 0.089 tie at token 18
+		"gemma-2b.gguf":                     17,
+		"gemma-3-1b-it-Q4_K_M.gguf":         7,
+		// Held against the container streamed from safetensors, through
+		// JITLLM_GREEDY_PAIR: jitllm takes Kimi-Linear only from safetensors.
+		"moonshotai_Kimi-Linear-48B-A3B-Instruct-Q8_0-00001-of-00002.gguf": 20,
+		// A GPU server, host tier, against llama.cpp's CPU path: 20 of 20
+		// teacher-forced as well.
+		"Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00001-of-00002.gguf": 20,
+		"synth-gptoss.gguf": 7,
+		// The C6 fixtures.
+		"synth-cohere2.gguf":               20,
+		"synth-dbrx.gguf":                  20,
+		"synth-commandr.gguf":              20,
+		"synth-falcon.gguf":                20,
+		"synth-falcon40.gguf":              20,
+		"synth-nemotron.gguf":              20,
+		"synth-phi2.gguf":                  20,
+		"synth-phi2-q8.gguf":               20,
+		"synth-stablelm.gguf":              20,
+		"synth-stablelm-par.gguf":          20,
+		"synth-starcoder.gguf":             20,
+		"synth-starcoder2.gguf":            20,
+		"google_gemma-3-1b-it-Q4_K_M.gguf": 20,
+		// Held through JITLLM_GREEDY_PAIR (it is over the 2 GiB default): the
+		// first K-quant falcon, whose attn_qkv is Q5_1. llama.cpp ends at EOS
+		// after 11 tokens, all 11 teacher-forced positions agreeing.
+		"falcon-7b-instruct.Q4_K_M.gguf": 10,
+		"tiny-qwen3moe-f32.gguf":         19,
+		"tinyllama-1.1b-q3_K_M.gguf":     7,
+		// The flagships, on a GPU server's host tier against llama.cpp's
+		// CPU path (JITLLM_GREEDY_MODEL): every teacher-forced position agrees.
+		// The 26B compared 12 teacher-forced positions, all agreeing.
+		"gemma-4-31B-it-Q4_K_M.gguf":            20,
+		"google_gemma-4-26B-A4B-it-Q4_K_M.gguf": 15,
+		"google_gemma-4-E2B-it-Q4_K_M.gguf":     5,
+		"google_gemma-4-E4B-it-Q4_K_M.gguf":     14,
+		"MiniMax-M2-Q3_K_M-00001-of-00003.gguf": 20,
+		// The dense llama-family fixtures, and the real models of the group.
+		"synth-smollm3.gguf":                       20,
+		"synth-arcee.gguf":                         20,
+		"synth-seedoss.gguf":                       20,
+		"synth-olmo2.gguf":                         20,
+		"synth-olmo2-gqa.gguf":                     20,
+		"synth-olmo3.gguf":                         20,
+		"synth-mistral3.gguf":                      20,
+		"OLMo-2-0425-1B-Instruct-Q4_K_M.gguf":      20,
+		"SmolLM3-3B-Q4_K_M.gguf":                   20,
+		"Ministral-3-3B-Instruct-2512-Q4_K_M.gguf": 20,
+		"AFM-4.5B-Q4_K_M.gguf":                     20,
+		// llama.cpp ends at EOS after 8 tokens, all 8 teacher-forced positions
+		// agreeing.
+		"EXAONE-4.0-1.2B-Q4_K_M.gguf": 7,
+		// Against llama.cpp's MiniMax Sparse Attention, i.e. with flash attention
+		// on; its dense fallback agrees at 8 of 20 teacher-forced positions.
+		"synth-minimaxm3.gguf": 20,
+	}
 }
 
 // sessionTokens reads the ids llama-completion's --prompt-cache-all saved: a

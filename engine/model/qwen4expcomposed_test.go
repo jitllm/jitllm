@@ -24,7 +24,7 @@ import (
 // mix reads them, moves the logits past 100 times the clean worst and past
 // 1e-4.
 func TestQwen4ExpServesComposedOnCPU(t *testing.T) {
-	for _, fx := range q4eFixtures {
+	for _, fx := range q4eFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openQ4E(t, fx.name)
 			defer m.Close()
@@ -314,7 +314,7 @@ func (m *Model) rewriteCollapse(t *testing.T, rewrite func(*graph.Graph) *graph.
 func TestQwen4ExpServesComposed(t *testing.T) {
 	const bound, promptLen = 1e-5, 3
 	ran := 0
-	for _, fx := range q4eFixtures {
+	for _, fx := range q4eFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openQ4E(t, fx.name)
 			defer m.Close()

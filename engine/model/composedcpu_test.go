@@ -620,9 +620,11 @@ func xieluTol(x float64, p [4]float32) float64 {
 // (alpha_p, alpha_n, beta, eps) and three of like size, an eps wide enough that
 // min(x, eps) clamps a visible band of inputs and alphas far apart so a swap is
 // loud.
-var xieluNumbers = [][4]float32{
-	{0.8, 0.95, 0.5, -1e-6}, {1.31, 0.42, 0.37, -0.25}, {0.05, 2.7, 0.9, -0.0625},
-	{0.9, 0.6, 0.5, -1e-6}, {1.3, 0.8, 0.4, -0.02}, {0.2, 1.1, 0.7, -0.5},
+func xieluNumbers() [][4]float32 {
+	return [][4]float32{
+		{0.8, 0.95, 0.5, -1e-6}, {1.31, 0.42, 0.37, -0.25}, {0.05, 2.7, 0.9, -0.0625},
+		{0.9, 0.6, 0.5, -1e-6}, {1.3, 0.8, 0.4, -0.02}, {0.2, 1.1, 0.7, -0.5},
+	}
 }
 
 // xieluInputs mixes the regions the kernel distinguishes, as engine/device/cpu's gate
@@ -731,7 +733,7 @@ func TestComposedCPUXIELU(t *testing.T) {
 	type fig struct{ comp, main dist }
 	figs := make([][]fig, len(kinds))
 	for k := range figs {
-		figs[k] = make([]fig, len(xieluNumbers))
+		figs[k] = make([]fig, len(xieluNumbers()))
 	}
 	// A violation is asked to be seen where it moves the result. An eps one
 	// part in a million under zero clamps nothing, so ignoring it changes
@@ -763,7 +765,7 @@ func TestComposedCPUXIELU(t *testing.T) {
 		}
 		naive := cpuForm(t, naiveExpm1(g), []jlm.Role{jlm.RoleXIELU})
 		rotated := cpuForm(t, rotateWindows(g, 4), []jlm.Role{jlm.RoleXIELU})
-		for pi, p := range xieluNumbers {
+		for pi, p := range xieluNumbers() {
 			got := run(codes, p)
 			main := slices.Clone(fam.xs)
 			nn.XIELU32JIT(main, p[:])
@@ -791,14 +793,14 @@ func TestComposedCPUXIELU(t *testing.T) {
 					continue
 				}
 				if seen[name] == nil {
-					seen[name] = make([]float64, len(xieluNumbers))
+					seen[name] = make([]float64, len(xieluNumbers()))
 				}
 				seen[name][pi] = max(seen[name][pi], distOf(fam.xs, run(v.codes, v.p), p).bound)
 			}
 		}
 	}
 	for k, kind := range kinds {
-		for pi, p := range xieluNumbers {
+		for pi, p := range xieluNumbers() {
 			f := figs[k][pi]
 			t.Logf("%s, numbers %v: composed %.3f of the bound, %.3f of the engine's, %.3g of the result; main's kernel %.3f, %.3f, %.3g",
 				kind, p, f.comp.bound, f.comp.engine, f.comp.result, f.main.bound, f.main.engine, f.main.result)
@@ -806,7 +808,7 @@ func TestComposedCPUXIELU(t *testing.T) {
 	}
 	for _, name := range slices.Sorted(maps.Keys(seen)) {
 		weakest, strongest := math.Inf(1), 0.0
-		for pi, p := range xieluNumbers {
+		for pi, p := range xieluNumbers() {
 			if seenWhere(name, p) {
 				weakest, strongest = min(weakest, seen[name][pi]), max(strongest, seen[name][pi])
 			}

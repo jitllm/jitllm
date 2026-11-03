@@ -58,7 +58,7 @@ func decisionSegment(d *Decider) *Instance {
 // logits and the answers are the unmoved run's. The violation is a move whose
 // recurrent summaries were lost on the way.
 func TestDecisionMovesBetweenCards(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
 			g, a, b := moveTier(t)
 			m := openDecision(t, c.gguf, c.kind, noTune,
@@ -97,9 +97,9 @@ func TestDecisionMovesBetweenCards(t *testing.T) {
 				}
 				return mv
 			}
-			tol := decisionDevTol[c.name]
+			tol := decisionDevTol()[c.name]
 			if !sameKernels(a, b) && !m.IsEncoder() {
-				tol = decisionRelocTol[c.name]
+				tol = decisionRelocTol()[c.name]
 			}
 			if sameKernels(a, b) {
 				tol = 0
@@ -165,7 +165,7 @@ func TestDecisionMovesBetweenCards(t *testing.T) {
 					bad, _ := run(true, true)
 					seen := labelWorst(ctl, bad)
 					t.Logf("the recurrent summaries lost on the way: worst %.4f", seen)
-					if seen <= max(tol, decisionRelocTol[c.name]) {
+					if seen <= max(tol, decisionRelocTol()[c.name]) {
 						t.Errorf("a move that lost the recurrent state moved a label logit %.6f: the gate does not see it", seen)
 					}
 				})
@@ -192,12 +192,12 @@ func TestDecisionMovesBetweenCards(t *testing.T) {
 				// device band, where a decoder's history is bit for bit.
 				backTol := 0.0
 				if m.IsEncoder() {
-					backTol = decisionDevTol["laya"]
+					backTol = decisionDevTol()["laya"]
 				}
 				// Answers are held to the device band, logits (above) to the
 				// relocation one: vllm-d3's are 0.10 and 0.026.
 				if !sameKernels(a, b) && !m.IsEncoder() {
-					tol = max(tol, decisionDevTol[c.name])
+					tol = max(tol, decisionDevTol()[c.name])
 				}
 				if !(wb <= tol) || !(wa <= backTol) {
 					t.Errorf("moved between questions, the answers moved %.6f on %s and %.6f back", wb, b, wa)
@@ -227,7 +227,7 @@ func labelWorst(want, got []float32) float64 {
 // the device band. The violation is a feature removed from what the devices
 // are handed (decisionDevViolations), which must move them past it.
 func TestDecisionDistributes(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
 			a, b := moveDevices(t)
 			hm := openDecision(t, c.gguf, c.kind, noTune)
@@ -237,7 +237,7 @@ func TestDecisionDistributes(t *testing.T) {
 			host, _, _, _ := decideOn(t, hm, nil, 0, nil)
 			nb := decisionBlocks(hm)
 			hm.Close()
-			tol := decisionDevTol[c.name]
+			tol := decisionDevTol()[c.name]
 			for _, arm := range []struct {
 				name  string
 				place func(li int) string
@@ -263,7 +263,7 @@ func TestDecisionDistributes(t *testing.T) {
 							m.SetKVF16(false)
 						}
 						if violation {
-							defer decisionDevViolations[c.name].cut(m)()
+							defer decisionDevViolations()[c.name].cut(m)()
 						}
 						got, placed, why, _ := decideOn(t, m, g, -1, func(int) bool { return true })
 						if placed != nb-want["host"] {
@@ -277,7 +277,7 @@ func TestDecisionDistributes(t *testing.T) {
 					if w > tol {
 						t.Errorf("split %v, the answers moved %.5f from the host's", want, w)
 					}
-					v := decisionDevViolations[c.name]
+					v := decisionDevViolations()[c.name]
 					seen := decisionDiff(t, host, run(true))
 					t.Logf("%s, split %v: the answers move %.5f", v.name, want, seen)
 					if seen <= tol {
@@ -296,7 +296,7 @@ func TestDecisionDistributes(t *testing.T) {
 // step, counted), an encoder's one pass each. The failing request fails
 // alone. The violation is each prompt chunk laid out at its positions reversed.
 func TestDecisionBatchMatchesAlone(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
 			m := openDecision(t, c.gguf, c.kind, noTune)
 			defer m.Close()
@@ -305,7 +305,7 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 			}
 			var reqs []DecisionRequest
 			for range 2 {
-				for _, r := range decisionRequests {
+				for _, r := range decisionRequests() {
 					state, qs := decisionRequest(t, filepath.Join("testdata", "decision", r+".json"))
 					reqs = append(reqs, DecisionRequest{State: state, Questions: qs})
 				}

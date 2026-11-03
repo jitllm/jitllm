@@ -17,20 +17,25 @@ func openGemma3n(t *testing.T, name string) (*Model, *c6Golden) {
 
 // gemma3nFixtures names each fixture and what its container must carry: four
 // AltUp streams, LAuReL, per-layer inputs, KV sharing and a sparse lead.
-var gemma3nFixtures = []struct {
+func gemma3nFixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-gemma3n", func(m *Model) bool {
-		c := m.Cfg
-		ok := c.Arch == "gemma3n" && c.PredStreams == 4 && c.PLEDim == 32 && c.NKVShared == 2 && c.NSparse == 3 &&
-			c.SparseStd > 1.64 && c.SparseStd < 1.65 && c.VNorm && c.SWAPeriod == 5 && len(m.altUnembd) == 3
-		for i := range m.layers {
-			l := &m.layers[i]
-			ok = ok && l.laurelL.rows == 32 && l.altRouter.rows == 4 && len(l.altPredT) == 64
-		}
-		return ok
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-gemma3n", func(m *Model) bool {
+			c := m.Cfg
+			ok := c.Arch == "gemma3n" && c.PredStreams == 4 && c.PLEDim == 32 && c.NKVShared == 2 && c.NSparse == 3 &&
+				c.SparseStd > 1.64 && c.SparseStd < 1.65 && c.VNorm && c.SWAPeriod == 5 && len(m.altUnembd) == 3
+			for i := range m.layers {
+				l := &m.layers[i]
+				ok = ok && l.laurelL.rows == 32 && l.altRouter.rows == 4 && len(l.altPredT) == 64
+			}
+			return ok
+		}},
+	}
 }
 
 // gemma3nActs is a violation restating every block's activation as the
@@ -53,40 +58,42 @@ func gemma3nActs(name string, to func(c *Config, acts []uint8) func(li int) uint
 }
 
 // gemma3nViolations take one piece of Gemma 3n out at a time.
-var gemma3nViolations = []c6Violation{
-	{"no AltUp prediction", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) { l.altPredT = make([]float32, len(l.altPredT)) })
-	}},
-	{"no AltUp correction", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) {
-			l.altCorrT = make([]float32, len(l.altCorrT))
-		})
-	}},
-	{"no LAuReL", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) { l.laurelPost = make([]float32, len(l.laurelPost)) })
-	}},
-	gemma3nActs("no gaussian top-k", func(c *Config, a []uint8) func(int) uint8 {
-		return func(int) uint8 { return a[c.NSparse] }
-	}),
-	gemma3nActs("the gaussian on every block", func(c *Config, a []uint8) func(int) uint8 {
-		return func(int) uint8 { return a[0] }
-	}),
-	{"no correction scale", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) {
-			ones := make([]float32, len(l.altCorrScale))
-			for i := range ones {
-				ones[i] = 1
-			}
-			l.altCorrScale = ones
-		})
-	}},
+func gemma3nViolations() []c6Violation {
+	return []c6Violation{
+		{"no AltUp prediction", func(m *Model) func() {
+			return eachLayer(m, func(l *layer) { l.altPredT = make([]float32, len(l.altPredT)) })
+		}},
+		{"no AltUp correction", func(m *Model) func() {
+			return eachLayer(m, func(l *layer) {
+				l.altCorrT = make([]float32, len(l.altCorrT))
+			})
+		}},
+		{"no LAuReL", func(m *Model) func() {
+			return eachLayer(m, func(l *layer) { l.laurelPost = make([]float32, len(l.laurelPost)) })
+		}},
+		gemma3nActs("no gaussian top-k", func(c *Config, a []uint8) func(int) uint8 {
+			return func(int) uint8 { return a[c.NSparse] }
+		}),
+		gemma3nActs("the gaussian on every block", func(c *Config, a []uint8) func(int) uint8 {
+			return func(int) uint8 { return a[0] }
+		}),
+		{"no correction scale", func(m *Model) func() {
+			return eachLayer(m, func(l *layer) {
+				ones := make([]float32, len(l.altCorrScale))
+				for i := range ones {
+					ones[i] = 1
+				}
+				l.altCorrScale = ones
+			})
+		}},
+	}
 }
 
 // TestGemma3nMatchesTransformers holds each fixture to transformers' own
 // Gemma3nForCausalLM on decode, prefill at every length and the batched path,
 // and the container's tokenizer to Gemma 3n's tokenizer.json.
 func TestGemma3nMatchesTransformers(t *testing.T) {
-	for _, fx := range gemma3nFixtures {
+	for _, fx := range gemma3nFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openGemma3n(t, fx.name)
 			defer m.Close()
@@ -119,11 +126,11 @@ func TestGemma3nMatchesTransformers(t *testing.T) {
 
 // TestGemma3nFeaturesAreLoadBearing runs each violation through decode.
 func TestGemma3nFeaturesAreLoadBearing(t *testing.T) {
-	for _, fx := range gemma3nFixtures {
+	for _, fx := range gemma3nFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openGemma3n(t, fx.name)
 			defer m.Close()
-			for _, v := range gemma3nViolations {
+			for _, v := range gemma3nViolations() {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()
@@ -148,19 +155,21 @@ func TestGemma3nFeaturesAreLoadBearing(t *testing.T) {
 }
 
 // gemma3nDevViolations take a piece out while only the device session runs.
-var gemma3nDevViolations = []c6Violation{gemma3nViolations[0], gemma3nViolations[2], gemma3nViolations[5],
-	gemma3nViolations[4]}
+func gemma3nDevViolations() []c6Violation {
+	return []c6Violation{gemma3nViolations()[0], gemma3nViolations()[2], gemma3nViolations()[5],
+		gemma3nViolations()[4]}
+}
 
 // TestGemma3nOnEveryDevice runs each fixture with every block and the head on
 // each device present against the host: the streams stream-major in the
 // device's residual, the prediction, LAuReL, the gaussian top-k and the
 // correction in the session (tier/altup.go), on decode and a prefill chunk.
 func TestGemma3nOnEveryDevice(t *testing.T) {
-	for _, fx := range gemma3nFixtures {
+	for _, fx := range gemma3nFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openGemma3n(t, fx.name)
 			defer m.Close()
-			fixtureOnEveryDeviceWithin(t, m, g, gemma3nDevViolations, 1e-5)
+			fixtureOnEveryDeviceWithin(t, m, g, gemma3nDevViolations(), 1e-5)
 		})
 	}
 }

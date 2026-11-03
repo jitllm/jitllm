@@ -19,7 +19,7 @@ import (
 // ggml_rope_multi, which assigns axes per pair; RULE 7m), and k normed before
 // the rotary.
 func TestHunyuanVLTextMatchesTransformers(t *testing.T) {
-	for _, name := range hyFixtures {
+	for _, name := range hyFixtures() {
 		t.Run(name, func(t *testing.T) {
 			mRopeMatchesTransformers(t, name)
 			m, g := openQVL(t, name)
@@ -55,7 +55,7 @@ func TestHunyuanVLTextMatchesTransformers(t *testing.T) {
 // hyFixtures are the HunyuanVL fixtures scripts/hunyuanvlgold.py writes:
 // transformers' own HunYuanVLForConditionalGeneration, converted by
 // llama.cpp's converter.
-var hyFixtures = []string{"synth-hunyuanvl"}
+func hyFixtures() []string { return []string{"synth-hunyuanvl"} }
 
 // hyTowerGate is TestQwenTowerMatchesTransformers' half for HunyuanVL's tower:
 // each of its own pieces taken out must move the output far past the bound --
@@ -89,7 +89,7 @@ func hyTowerGate(t *testing.T, tw *Tower, g *qvlGolden, clean float64) {
 // rows -- the newline column included -- at (position, column, row, picture
 // 0), and the continuation unshifted.
 func TestHunyuanVLLaysTheImageOutAsTransformersDoes(t *testing.T) {
-	for _, name := range hyFixtures {
+	for _, name := range hyFixtures() {
 		t.Run(name, func(t *testing.T) {
 			m, g := openQVL(t, name)
 			defer m.Close()
@@ -121,7 +121,7 @@ func TestHunyuanVLLaysTheImageOutAsTransformersDoes(t *testing.T) {
 // TestHunyuanVLKeepsTheFivePrinciples runs HunyuanVL's picture prompt through
 // the principles' conditions against transformers (mRopeKeepsTheFivePrinciples).
 func TestHunyuanVLKeepsTheFivePrinciples(t *testing.T) {
-	for _, name := range hyFixtures {
+	for _, name := range hyFixtures() {
 		t.Run(name, func(t *testing.T) { mRopeKeepsTheFivePrinciples(t, name) })
 	}
 }
@@ -130,7 +130,7 @@ func TestHunyuanVLKeepsTheFivePrinciples(t *testing.T) {
 // prefix cache onto transformers' continuation, and keys the same rows under
 // another grid apart (mRopePrefixCacheKeysOnPositions).
 func TestHunyuanVLPrefixCacheKeysOnPositions(t *testing.T) {
-	for _, name := range hyFixtures {
+	for _, name := range hyFixtures() {
 		t.Run(name, func(t *testing.T) { mRopePrefixCacheKeysOnPositions(t, name) })
 	}
 }
@@ -140,7 +140,7 @@ func TestHunyuanVLPrefixCacheKeysOnPositions(t *testing.T) {
 // picture's rows -- its start and end place-holders included -- to the prompt
 // transformers' processor built.
 func TestHunyuanVLChatSpansAreTheProcessors(t *testing.T) {
-	for _, name := range hyFixtures {
+	for _, name := range hyFixtures() {
 		t.Run(name, func(t *testing.T) {
 			m, g := openQVL(t, name)
 			defer m.Close()
@@ -173,7 +173,7 @@ func TestHunyuanVLChatSpansAreTheProcessors(t *testing.T) {
 // TestHunyuanVLTowerOnDeviceMatchesHost runs every tower block on each device
 // against the host and against transformers.
 func TestHunyuanVLTowerOnDeviceMatchesHost(t *testing.T) {
-	for _, name := range hyFixtures {
+	for _, name := range hyFixtures() {
 		t.Run(name, func(t *testing.T) {
 			m, g := openQVL(t, name)
 			defer m.Close()
@@ -295,7 +295,7 @@ func TestHunyuanVLRealTowerOnDevice(t *testing.T) {
 // GridRows) and the preprocessed picture must agree on. Counting the merged
 // units alone (H*W) undercounts, and the picture was refused.
 func TestHunyuanVLPictureCountsItsNewlineAndEndRows(t *testing.T) {
-	for _, name := range hyFixtures {
+	for _, name := range hyFixtures() {
 		t.Run(name, func(t *testing.T) {
 			m, g := openQVL(t, name)
 			defer m.Close()

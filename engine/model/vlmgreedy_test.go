@@ -40,7 +40,7 @@ type cliOracle struct {
 // (mtmd_decode_use_non_causal); the causal violation runs beside the clean arm
 // and must disagree with llama.cpp by more.
 func TestVisionGreedyMatchesLlamaMtmd(t *testing.T) {
-	for _, fam := range visionFamilies {
+	for _, fam := range visionFamilies() {
 		t.Run(fam.name, func(t *testing.T) {
 			raw, err := os.ReadFile(testmodels.Path(filepath.Join("vlm", "oracle", fam.name+"-cli.json")))
 			if err != nil {
@@ -155,7 +155,7 @@ func TestVisionGreedyMatchesLlamaMtmd(t *testing.T) {
 // included, to what transformers' processor tokenizes for the same messages:
 // every image row stands for one image-token id there.
 func TestChatSpansMatchTheProcessor(t *testing.T) {
-	for _, fam := range visionFamilies {
+	for _, fam := range visionFamilies() {
 		t.Run(fam.name, func(t *testing.T) {
 			meta := readMeta(t, fam.name, "photo")
 			m, tw := fam.open(t)

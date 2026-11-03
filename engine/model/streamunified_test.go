@@ -12,7 +12,7 @@ import (
 
 // unifiedCandidates are the devices that may share the host's memory, in the
 // order they are tried: Metal, then an integrated GPU through Vulkan.
-var unifiedCandidates = []string{"metal", "vulkan:1", "vulkan:0"}
+func unifiedCandidates() []string { return []string{"metal", "vulkan:1", "vulkan:0"} }
 
 // TestStreamedContainerOnAUnifiedDevice is the command line's streamed
 // placement on a device whose heap is the host's: every block streamed
@@ -36,7 +36,7 @@ func TestStreamedContainerOnAUnifiedDevice(t *testing.T) {
 
 	var g *gpu.GPU
 	var name string
-	for _, c := range testdevices.Within(unifiedCandidates) {
+	for _, c := range testdevices.Within(unifiedCandidates()) {
 		d, err := gpu.OpenWith(gpu.WithDevices(c+"="+strconv.FormatUint(third, 10)),
 			gpu.WithDeviceTune(gpu.TuneOff), gpu.WithArena(1<<30))
 		if err != nil || d == nil {
@@ -49,7 +49,7 @@ func TestStreamedContainerOnAUnifiedDevice(t *testing.T) {
 		d.Close()
 	}
 	if g == nil {
-		t.Skipf("NO UNIFIED DEVICE among %v -- this gate proved nothing here; run it on the M4", unifiedCandidates)
+		t.Skipf("NO UNIFIED DEVICE among %v -- this gate proved nothing here; run it on the M4", unifiedCandidates())
 	}
 	defer g.Close()
 	t.Logf("device %s, a %d-byte budget against %d of weights", name, third, 3*third)

@@ -11,17 +11,22 @@ import (
 
 // cpuRowsModels are the models whose prompts and batched steps the
 // composer serves on the CPU, and the prompt lengths each is held at.
-var cpuRowsModels = []struct {
+func cpuRowsModels() []struct {
 	file    string
 	lengths []int
-}{
-	{"stories15M-q8_0.gguf", []int{5, 33, 100}},
-	{"stories15M-q4_0.gguf", []int{5, 33, 100}},
-	{"Qwen3-0.6B-Q8_0.gguf", []int{5, 33, 100, 513}},
-	{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", []int{5, 33, 100}},
-	// DeepSeek's latent attention and mixture: a prompt's rows through the
-	// absorbed query and the one-row history.
-	{"synth-deepseek-yarn-af.gguf", []int{5, 33, 100}},
+} {
+	return []struct {
+		file    string
+		lengths []int
+	}{
+		{"stories15M-q8_0.gguf", []int{5, 33, 100}},
+		{"stories15M-q4_0.gguf", []int{5, 33, 100}},
+		{"Qwen3-0.6B-Q8_0.gguf", []int{5, 33, 100, 513}},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", []int{5, 33, 100}},
+		// DeepSeek's latent attention and mixture: a prompt's rows through the
+		// absorbed query and the one-row history.
+		{"synth-deepseek-yarn-af.gguf", []int{5, 33, 100}},
+	}
 }
 
 // TestComposedCPURowsServe holds the composed CPU's form of several rows --
@@ -41,7 +46,7 @@ func TestComposedCPURowsServe(t *testing.T) {
 	const page, decode = 32, 6
 	text := strings.Repeat("The river rose every spring until the bridges were islands, "+
 		"and the clerk counted barrels of salt on the upper floor. ", 60)
-	for _, tc := range cpuRowsModels {
+	for _, tc := range cpuRowsModels() {
 		t.Run(tc.file, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(tc.file))
 			open := func(opts ...Option) *Model {
@@ -336,7 +341,7 @@ func cpuServed(t *testing.T, s *Instance, what string, want int, composed bool) 
 // hold the experts their rows pick.
 func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 	files := []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf"}
-	for _, tc := range cpuRowsModels {
+	for _, tc := range cpuRowsModels() {
 		files = append(files, tc.file)
 	}
 	for _, file := range files {

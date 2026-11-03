@@ -151,7 +151,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			})
 			// The CPU's blocks on what the composer forms for it, on the models
 			// it serves there: every block step of the window served.
-			if slices.Contains(cpuServedModels, name) || slices.Contains(cpuExpertAllocModels, name) {
+			if slices.Contains(cpuServedModels(), name) || slices.Contains(cpuExpertAllocModels(), name) {
 				t.Run("host-composed", func(t *testing.T) {
 					mc, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false))
 					if err != nil {
@@ -252,7 +252,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				// allocates nothing either. Without the captured graph too,
 				// where every token runs the served code (a replayed
 				// recording runs none of it).
-				if slices.Contains(composedAllocModels, name) {
+				if slices.Contains(composedAllocModels(), name) {
 					for _, noGraph := range []bool{false, true} {
 						parts := []gpu.Parts{gpu.ComposedEmbed, gpu.ComposedTable, gpu.ComposedBlock, gpu.ComposedHead, gpu.ComposedSample}
 						t.Run(fmt.Sprintf("%s/composed step/no graph %v", spec, noGraph), func(t *testing.T) {
@@ -284,8 +284,10 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 // cpuExpertAllocModels are the mixtures of the gate's list whose decode the
 // composed CPU arm measures, each block's banks read in the host's expert
 // pages (TestComposedCPUExpertPagesServe).
-var cpuExpertAllocModels = []string{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "synth-glm4moe.gguf", "synth-qwen2moe.gguf",
-	"synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-gemma4-moe.gguf", "synth-phimoe.gguf", "synth-bailingmoe2.gguf"}
+func cpuExpertAllocModels() []string {
+	return []string{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "synth-glm4moe.gguf", "synth-qwen2moe.gguf",
+		"synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-gemma4-moe.gguf", "synth-phimoe.gguf", "synth-bailingmoe2.gguf"}
+}
 
 // composedAllocModels are the models whose composed step the gate measures:
 // a dense model, a latent attention model whose every block the front end
@@ -293,8 +295,10 @@ var cpuExpertAllocModels = []string{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "sy
 // selection bias beside a shared expert; and the attention features read at
 // a row's position (mistral3's temperature, Llama 4's on its unrotated
 // layers beside its input-weighted experts) and dbrx's clamped q, k and v.
-var composedAllocModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "synth-deepseek-dense", "synth-glm4moe.gguf",
-	"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-mistral3.gguf", "synth-llama4-q8.gguf", "synth-dbrx.gguf"}
+func composedAllocModels() []string {
+	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "synth-deepseek-dense", "synth-glm4moe.gguf",
+		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-mistral3.gguf", "synth-llama4-q8.gguf", "synth-dbrx.gguf"}
+}
 
 // TestLongDecodeDoesNotAllocate is TestDecodeDoesNotAllocate's host arm past
 // four KV pages of context, which that gate's window -- under one page, by

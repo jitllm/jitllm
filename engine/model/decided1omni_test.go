@@ -55,7 +55,7 @@ func TestD1OmniMatchesReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	for _, req := range decisionRequests {
+	for _, req := range decisionRequests() {
 		t.Run(req, func(t *testing.T) {
 			g := readD1OmniGold(t, req)
 			state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))

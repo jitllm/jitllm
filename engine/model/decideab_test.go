@@ -256,7 +256,7 @@ func (a *abArm) sample(t *testing.T, text string) time.Duration {
 	var total time.Duration
 	if a.batch {
 		var reqs []DecisionRequest
-		for _, req := range decisionRequests {
+		for _, req := range decisionRequests() {
 			state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
 			reqs = append(reqs, DecisionRequest{State: state, Questions: qs})
 			a.n += len(qs)
@@ -274,7 +274,7 @@ func (a *abArm) sample(t *testing.T, text string) time.Duration {
 		}
 		return time.Since(t0)
 	}
-	for _, req := range decisionRequests {
+	for _, req := range decisionRequests() {
 		state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
 		t0 := time.Now()
 		if _, err := a.d.Decide(state, qs, nil); err != nil {

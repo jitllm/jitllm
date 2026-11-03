@@ -39,7 +39,7 @@ func TestPagingDoesNotChangeTheAnswer(t *testing.T) {
 	}
 	// And with the CPU's blocks on what the composer forms for it: a block
 	// paged out and back binds its weights where they now are.
-	for _, name := range cpuServedModels {
+	for _, name := range cpuServedModels() {
 		t.Run(name+"/composed-cpu", func(t *testing.T) {
 			pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)))
 		})

@@ -36,7 +36,9 @@ import (
 // vllm-d3's 0.10: the ambiguous request's issue question is a near-tie
 // (0.50 against 0.50 on the host), where the device's reduction order reads
 // 0.085 off on the V100 and the laptop alike.
-var decisionDevTol = map[string]float64{"d1-3B": 0.03, "lev": 0.08, "laya": 0.01, "clef": 0.05, "clef-fixture": 0.002, "d1-omni": 0.01, "openjev": 0.005, "vllm-d3": 0.10, "kev": 0.15}
+func decisionDevTol() map[string]float64 {
+	return map[string]float64{"d1-3B": 0.03, "lev": 0.08, "laya": 0.01, "clef": 0.05, "clef-fixture": 0.002, "d1-omni": 0.01, "openjev": 0.005, "vllm-d3": 0.10, "kev": 0.15}
+}
 
 // decisionBlocks is how many blocks a Decider's readout runs: the decoder's,
 // or the encoder segment's (a decision head's blocks with it).
@@ -94,7 +96,7 @@ func decideOn(t *testing.T, m *Model, dev nn.LayerDevice, n int, ok func(placed 
 		s0 = gpux.Stats().Submits
 	}
 	var out [][]DecisionAnswer
-	for _, req := range decisionRequests {
+	for _, req := range decisionRequests() {
 		state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
 		ans, err := d.Decide(state, qs, nil)
 		if err != nil {
@@ -107,9 +109,9 @@ func decideOn(t *testing.T, m *Model, dev nn.LayerDevice, n int, ok func(placed 
 	}
 	// The device ran them: at least one submission a prompt, counted by the
 	// device itself.
-	if gpux != nil && placed > 0 && gpux.Stats().Submits-s0 < len(decisionRequests) {
+	if gpux != nil && placed > 0 && gpux.Stats().Submits-s0 < len(decisionRequests()) {
 		t.Fatalf("%d submission(s) for %d requests: the placed blocks did not run on the device",
-			gpux.Stats().Submits-s0, len(decisionRequests))
+			gpux.Stats().Submits-s0, len(decisionRequests()))
 	}
 	// Clef has no labels to pick: what the device took is its head, one
 	// request at a time.
@@ -150,11 +152,11 @@ func decisionDiff(t *testing.T, want, got [][]DecisionAnswer) float64 {
 				if d := math.Abs(v.w - v.g); d > worst {
 					worst = d
 					where = fmt.Sprintf("request %s, question %d, %s: host %.4f, device %.4f",
-						decisionRequests[r], i, v.what, v.w, v.g)
+						decisionRequests()[r], i, v.what, v.w, v.g)
 				}
 			}
 			if a.Choice != b.Choice {
-				t.Logf("request %s, question %d: the device chose %q, the host %q", decisionRequests[r], i, b.Choice, a.Choice)
+				t.Logf("request %s, question %d: the device chose %q, the host %q", decisionRequests()[r], i, b.Choice, a.Choice)
 			}
 		}
 	}
@@ -169,44 +171,46 @@ type decisionDevViolation struct {
 	cut  func(m *Model) func()
 }
 
-var decisionDevViolations = map[string]decisionDevViolation{
-	// The norm's epsilon is read into the plan (LayerPlan.RMSEps).
-	"d1-3B": {"a norm epsilon of 1", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
-	}},
-	"kev": {"a norm epsilon of 1", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
-	}},
-	"vllm-d3": {"a norm epsilon of 1", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
-	}},
-	"lev": {"a norm epsilon of 1", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
-	}},
-	"openjev": {"a norm epsilon of 1", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
-	}},
-	"d1-omni": {"a norm epsilon of 1", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
-	}},
-	// The device reads which blocks are local from the plan (mb.local): every
-	// block global there attends over every row at the global base.
-	// The device reads its own copy of the head (clefDevHead): with the joint
-	// score gated off there, only the prior answers on the device.
-	"clef":         {"the device head's joint score gated off", clefDevGateOff},
-	"clef-fixture": {"the device head's joint score gated off", clefDevGateOff},
-	"laya": {"every block global on the device", func(m *Model) func() {
-		mb := m.enc.mb
-		was := make([]bool, len(mb.blocks))
-		for i := range mb.blocks {
-			was[i], mb.blocks[i].global = mb.blocks[i].global, true
-		}
-		return func() {
+func decisionDevViolations() map[string]decisionDevViolation {
+	return map[string]decisionDevViolation{
+		// The norm's epsilon is read into the plan (LayerPlan.RMSEps).
+		"d1-3B": {"a norm epsilon of 1", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
+		}},
+		"kev": {"a norm epsilon of 1", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
+		}},
+		"vllm-d3": {"a norm epsilon of 1", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
+		}},
+		"lev": {"a norm epsilon of 1", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
+		}},
+		"openjev": {"a norm epsilon of 1", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
+		}},
+		"d1-omni": {"a norm epsilon of 1", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
+		}},
+		// The device reads which blocks are local from the plan (mb.local): every
+		// block global there attends over every row at the global base.
+		// The device reads its own copy of the head (clefDevHead): with the joint
+		// score gated off there, only the prior answers on the device.
+		"clef":         {"the device head's joint score gated off", clefDevGateOff},
+		"clef-fixture": {"the device head's joint score gated off", clefDevGateOff},
+		"laya": {"every block global on the device", func(m *Model) func() {
+			mb := m.enc.mb
+			was := make([]bool, len(mb.blocks))
 			for i := range mb.blocks {
-				mb.blocks[i].global = was[i]
+				was[i], mb.blocks[i].global = mb.blocks[i].global, true
 			}
-		}
-	}},
+			return func() {
+				for i := range mb.blocks {
+					mb.blocks[i].global = was[i]
+				}
+			}
+		}},
+	}
 }
 
 // TestDecisionOnEveryDevice runs each decision model with every block on each
@@ -214,14 +218,14 @@ var decisionDevViolations = map[string]decisionDevViolation{
 // needs a card the model fits; where it does not, the arm says how many blocks
 // the card held and skips, and the seam arm still runs.
 func TestDecisionOnEveryDevice(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
 			m := openDecision(t, c.gguf, c.kind)
 			defer m.Close()
 			if !m.IsEncoder() {
 				m.SetKVF16(false) // the device's history is f32
 			}
-			tol := decisionDevTol[c.name]
+			tol := decisionDevTol()[c.name]
 			host, _, _, _ := decideOn(t, m, nil, 0, nil)
 			nb := decisionBlocks(m)
 			ran := 0
@@ -297,8 +301,8 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 							// it: the gate skips, loudly, as for a block), and
 							// the same rows through the host's head answer within
 							// the band.
-							if picked != len(decisionRequests) {
-								cardTooSmall(t, g.Err(), "Clef's head ran on %s for %d of %d requests (budget %d)", spec, picked, len(decisionRequests), need)
+							if picked != len(decisionRequests()) {
+								cardTooSmall(t, g.Err(), "Clef's head ran on %s for %d of %d requests (budget %d)", spec, picked, len(decisionRequests()), need)
 							}
 							home, _, _, hp := decideOn(t, m, g, -1, all, "host-head")
 							if hp != 0 {
@@ -349,7 +353,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 								t.Errorf("a pick one past each label moved the answers %.5f: the gate does not see the pick", seen)
 							}
 						}
-						v, ok := decisionDevViolations[c.name]
+						v, ok := decisionDevViolations()[c.name]
 						if !ok {
 							t.Fatalf("%s has no device violation", c.name)
 						}
@@ -481,7 +485,7 @@ func TestClefHeadLayerNormOnEveryDevice(t *testing.T) {
 		h.outLN, h.outNormB, m.clefDev = false, nil, nil
 		m.bind.Unlock()
 	}()
-	tol := decisionDevTol["clef-fixture"]
+	tol := decisionDevTol()["clef-fixture"]
 	nb := decisionBlocks(m)
 	all := func(n int) bool { return n == nb }
 	ran := 0
@@ -504,8 +508,8 @@ func TestClefHeadLayerNormOnEveryDevice(t *testing.T) {
 			if placed != nb {
 				t.Fatalf("%s held %d of %d blocks (%s)", spec, placed, nb, why)
 			}
-			if runs != len(decisionRequests) {
-				t.Fatalf("the LayerNorm head ran on %s for %d of %d requests", spec, runs, len(decisionRequests))
+			if runs != len(decisionRequests()) {
+				t.Fatalf("the LayerNorm head ran on %s for %d of %d requests", spec, runs, len(decisionRequests()))
 			}
 			home, _, _, hp := decideOn(t, m, g, -1, all, "host-head")
 			if hp != 0 {

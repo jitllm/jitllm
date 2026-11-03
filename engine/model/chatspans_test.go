@@ -94,12 +94,12 @@ func TestChatSpansDescribeAnImage(t *testing.T) {
 		// sentence:" on arm64 leaves the picture's last words past 32).
 		n int
 	}{
-		{"smolvlm", func(t testing.TB) *Model { m, _ := openTower(t); return m }, chatSpansWant["smolvlm"], 0},
-		{"llava", func(t testing.TB) *Model { m, _ := openLlava(t); return m }, chatSpansWant["llava"], 0},
-		{"qwen2vl", openQwen2VL, chatSpansWant["qwen2vl"], 0},
-		{"gemma3", func(t testing.TB) *Model { m, _ := openGemma3(t); return m }, chatSpansWant["gemma3"], 64},
-		{"internvl", func(t testing.TB) *Model { m, _ := openInternVL(t); return m }, chatSpansWant["internvl"], 0},
-		{"internvl2.5", openInternVL25, chatSpansWant["internvl"], 0},
+		{"smolvlm", func(t testing.TB) *Model { m, _ := openTower(t); return m }, chatSpansWant()["smolvlm"], 0},
+		{"llava", func(t testing.TB) *Model { m, _ := openLlava(t); return m }, chatSpansWant()["llava"], 0},
+		{"qwen2vl", openQwen2VL, chatSpansWant()["qwen2vl"], 0},
+		{"gemma3", func(t testing.TB) *Model { m, _ := openGemma3(t); return m }, chatSpansWant()["gemma3"], 64},
+		{"internvl", func(t testing.TB) *Model { m, _ := openInternVL(t); return m }, chatSpansWant()["internvl"], 0},
+		{"internvl2.5", openInternVL25, chatSpansWant()["internvl"], 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			m := c.open(t)
@@ -176,14 +176,16 @@ func TestChatSpansDescribeAnImage(t *testing.T) {
 // the blank-image violation beside it. llava's words are "circle" and "four"
 // because with its special tokens matched (its prompt equals llama-tokenize's)
 // it describes the sections rather than naming the colours.
-var chatSpansWant = map[string][]string{
-	"smolvlm": {"yellow"},
-	"llava":   {"circle", "four"},
-	"qwen2vl": {"yellow", "circle"},
-	// gemma3: "a stylized flag with four colored quadrants - red, green, blue,
-	// and white - surrounding a central yellow circle"; internvl: "a colorful,
-	// abstract design with a central yellow circle surrounded by red, green,
-	// blue, and white squares".
-	"gemma3":   {"yellow", "circle"},
-	"internvl": {"yellow", "circle"},
+func chatSpansWant() map[string][]string {
+	return map[string][]string{
+		"smolvlm": {"yellow"},
+		"llava":   {"circle", "four"},
+		"qwen2vl": {"yellow", "circle"},
+		// gemma3: "a stylized flag with four colored quadrants - red, green, blue,
+		// and white - surrounding a central yellow circle"; internvl: "a colorful,
+		// abstract design with a central yellow circle surrounded by red, green,
+		// blue, and white squares".
+		"gemma3":   {"yellow", "circle"},
+		"internvl": {"yellow", "circle"},
+	}
 }

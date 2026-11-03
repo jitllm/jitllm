@@ -56,7 +56,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 		// (cpuServedModels), not the bench model, which may be one it
 		// declines by name, and the mixtures, whose prompts' calls hold the
 		// experts their rows pick.
-		for _, file := range append([]string{"Qwen3-0.6B-Q8_0.gguf"}, cpuMixtureRowsModels...) {
+		for _, file := range append([]string{"Qwen3-0.6B-Q8_0.gguf"}, cpuMixtureRowsModels()...) {
 			t.Run(file, func(t *testing.T) {
 				m, err := Open(jlmOf(t, testmodels.Path(file)), noTune)
 				if err != nil {

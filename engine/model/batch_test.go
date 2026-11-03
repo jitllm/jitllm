@@ -49,7 +49,7 @@ func TestBatchMatchesForward(t *testing.T) {
 	}
 	// The mixtures' batches on the composed CPU, each call holding the
 	// experts its rows pick.
-	for _, file := range cpuMixtureRowsModels {
+	for _, file := range cpuMixtureRowsModels() {
 		t.Run("mixture/"+file+"/composed-cpu", func(t *testing.T) {
 			batchVsForward(t, testmodels.Path(file), false, noTune)
 		})

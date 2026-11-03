@@ -14,18 +14,20 @@ import (
 // inner norm taken away is a block the tier refuses by name (the plan says
 // the block has one), so the norms' weights are made ones instead: the
 // device must read the block's own.
-var bitnetDevViolations = []c6Violation{
-	{"the attention inner norm's weight all ones", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) { l.attnSubNorm = onesLike(l.attnSubNorm) })
-	}},
-	{"the FFN inner norm's weight all ones", func(m *Model) func() {
-		return eachLayer(m, func(l *layer) { l.ffnSubNorm = onesLike(l.ffnSubNorm) })
-	}},
-	bitnetViolations[2], // SiLU for relu2
-	bitnetViolations[3], // NORM rotary
-	// The per-token scale is the session's activation window, which the
-	// device takes from the host's JIT (nn.LayerPlan.ActWin).
-	bitnetViolations[4],
+func bitnetDevViolations() []c6Violation {
+	return []c6Violation{
+		{"the attention inner norm's weight all ones", func(m *Model) func() {
+			return eachLayer(m, func(l *layer) { l.attnSubNorm = onesLike(l.attnSubNorm) })
+		}},
+		{"the FFN inner norm's weight all ones", func(m *Model) func() {
+			return eachLayer(m, func(l *layer) { l.ffnSubNorm = onesLike(l.ffnSubNorm) })
+		}},
+		bitnetViolations()[2], // SiLU for relu2
+		bitnetViolations()[3], // NORM rotary
+		// The per-token scale is the session's activation window, which the
+		// device takes from the host's JIT (nn.LayerPlan.ActWin).
+		bitnetViolations()[4],
+	}
 }
 
 // TestBitNetOnEveryDevice runs each BitNet fixture with every block and the
@@ -47,7 +49,7 @@ var bitnetDevViolations = []c6Violation{
 // with the tiles at bitnetDevPrefill, and without them at bitnetNMSE, which
 // is the arm that proves the tier's wiring of BitNet exact.
 func TestBitNetOnEveryDevice(t *testing.T) {
-	for _, fx := range bitnetFixtures {
+	for _, fx := range bitnetFixtures() {
 		t.Run(fx.model, func(t *testing.T) {
 			m, g := openBitNet(t, fx.model, fx.golden, fx.typ)
 			defer m.Close()
@@ -203,7 +205,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 				t.Logf("%s on %s: worst logit NMSE %.3e, %d of %d positions in the reduction band",
 					arm.name, spec, w, band, len(arm.want))
 			}
-			for _, v := range bitnetDevViolations {
+			for _, v := range bitnetDevViolations() {
 				undo := v.mut(m)
 				got, why := onDevice(decode, nl, false, false) // every block; the head may stay home
 				undo()

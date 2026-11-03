@@ -24,7 +24,9 @@ type visionFamily struct {
 	open func(testing.TB, ...Option) (*Model, *Tower)
 }
 
-var visionFamilies = []visionFamily{{"gemma3", openGemma3}, {"internvl", openInternVL}}
+func visionFamilies() []visionFamily {
+	return []visionFamily{{"gemma3", openGemma3}, {"internvl", openInternVL}}
+}
 
 // visionGoldDir is where visiongold.py writes a family's goldens.
 func visionGoldDir(fam string) string { return testmodels.Path(filepath.Join("vlm", "goldens", fam)) }
@@ -119,7 +121,7 @@ func pixelDiff(got, want []float32) (n int, worst float64) {
 // in place of the model's, the plain bilinear resize the other projectors use,
 // and the tiles handed over in reverse.
 func TestPreprocessMatchesTransformers(t *testing.T) {
-	for _, fam := range visionFamilies {
+	for _, fam := range visionFamilies() {
 		t.Run(fam.name, func(t *testing.T) {
 			m, tw := fam.open(t)
 			defer m.Close()
@@ -196,7 +198,7 @@ func TestPreprocessMatchesTransformers(t *testing.T) {
 // under the violations: the pool skipped, the shuffle transposed, and the class
 // token where llama.cpp puts it.
 func TestVisionMatchesTransformers(t *testing.T) {
-	for _, fam := range visionFamilies {
+	for _, fam := range visionFamilies() {
 		t.Run(fam.name, func(t *testing.T) {
 			m, tw := fam.open(t)
 			defer m.Close()

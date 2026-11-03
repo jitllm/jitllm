@@ -19,7 +19,7 @@ import (
 // the unbudgeted answer bit for bit, which needs eviction, re-read and re-bind
 // all to be right.
 func TestVisionTowerPagesUnderABudget(t *testing.T) {
-	for _, fam := range visionFamilies {
+	for _, fam := range visionFamilies() {
 		t.Run(fam.name, func(t *testing.T) {
 			var px []float32
 			encode := func(budget uint64) ([]float32, int64) {
@@ -73,7 +73,7 @@ func TestVisionTowerPagesUnderABudget(t *testing.T) {
 // that a token pays for.
 func TestVisionDecodeDoesNotAllocate(t *testing.T) {
 	specs := append([]string{"host"}, testdevices.Specs("cuda", "vulkan", "metal")...)
-	for _, fam := range visionFamilies {
+	for _, fam := range visionFamilies() {
 		t.Run(fam.name, func(t *testing.T) {
 			m, tw := fam.open(t, noTune)
 			defer m.Close()

@@ -194,7 +194,7 @@ func auditComposedCPU(t *testing.T, name, path string) {
 		t.Fatalf("the census counts %d block steps on the CPU, where the decode ran %d", total, want)
 	}
 	t.Logf("composed CPU: %d of %d block steps served; declined: %s (%v)", served, total, strings.Join(named, ", "), s.CPUFormErr())
-	if slices.Contains(cpuServedModels, name) && served != total {
+	if slices.Contains(cpuServedModels(), name) && served != total {
 		t.Fatalf("a model the composer serves on the CPU declined %d block steps", total-served)
 	}
 }
@@ -262,7 +262,7 @@ func auditModels(t *testing.T) []auditModel {
 	}
 	// The decision models' files, which sit deeper than one directory down
 	// (laya/gguf/, laya/fixture/) where the glob above does not reach.
-	for _, rel := range auditDecision {
+	for _, rel := range auditDecision() {
 		if p := testmodels.Path(rel); fileExists(p) {
 			add(rel, p, false)
 		}
@@ -282,7 +282,9 @@ var auditHFDirs []string
 
 // auditDecision is the decision models' GGUFs two directories down; d1's and
 // lev's one directory down are found by the glob.
-var auditDecision = []string{"laya/fixture/laya-fixture.gguf", "laya/gguf/Laya-BF16.gguf"}
+func auditDecision() []string {
+	return []string{"laya/fixture/laya-fixture.gguf", "laya/gguf/Laya-BF16.gguf"}
+}
 
 // isProjector reads general.architecture, as languageModels does: a vision
 // projector is the wrong input, not missing work.

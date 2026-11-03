@@ -24,11 +24,11 @@ const kimiRealBound = 5e-3
 // family's shape, so they run its tower, processor, end-to-end and principle
 // gates -- not its M-RoPE ones: Kimi-VL's text model is DeepSeek-V3's and
 // turns an image's rows at their sequence positions.
-var kimiFixtures = []string{"synth-kimivl"}
+func kimiFixtures() []string { return []string{"synth-kimivl"} }
 
 // towerFixtures is every fixture the Qwen-VL family's tower and end-to-end
 // gates run.
-func towerFixtures() []string { return slices.Concat(qvlFixtures, kimiFixtures, hyFixtures) }
+func towerFixtures() []string { return slices.Concat(qvlFixtures(), kimiFixtures(), hyFixtures()) }
 
 // kimiTowerGate is TestQwenTowerMatchesTransformers' half for MoonViT: each of
 // its own pieces taken out must move the output far past the bound -- the 2-D
@@ -70,7 +70,7 @@ func kimiTowerGate(t *testing.T, tw *Tower, g *qvlGolden, clean float64) {
 // image's rows in reverse: a single-axis rotary still turns each row by its
 // place, so the order must show.
 func TestKimiVLTextMatchesTransformers(t *testing.T) {
-	for _, name := range kimiFixtures {
+	for _, name := range kimiFixtures() {
 		t.Run(name, func(t *testing.T) {
 			m, g := openQVL(t, name)
 			defer m.Close()
@@ -159,7 +159,7 @@ func TestKimiVLChatSpansAreTheProcessors(t *testing.T) {
 // TestKimiVLKeepsTheFivePrinciples runs Kimi-VL's picture prompt through the
 // principles' conditions against Moonshot's own model (mRopeKeepsTheFivePrinciples).
 func TestKimiVLKeepsTheFivePrinciples(t *testing.T) {
-	for _, name := range kimiFixtures {
+	for _, name := range kimiFixtures() {
 		t.Run(name, func(t *testing.T) { mRopeKeepsTheFivePrinciples(t, name) })
 	}
 }
@@ -167,7 +167,7 @@ func TestKimiVLKeepsTheFivePrinciples(t *testing.T) {
 // TestKimiVLTowerOnDeviceMatchesHost runs MoonViT's blocks on every device
 // against the host (rotaryTowerOnDevice), its pairing among the violations.
 func TestKimiVLTowerOnDeviceMatchesHost(t *testing.T) {
-	for _, name := range kimiFixtures {
+	for _, name := range kimiFixtures() {
 		t.Run(name, func(t *testing.T) { rotaryTowerOnDevice(t, name) })
 	}
 }

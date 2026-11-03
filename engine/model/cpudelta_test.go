@@ -38,57 +38,59 @@ func rewireIn(g *graph.Graph, i, j int, v graph.ValueID) {
 // deltaRewrites are the delta rule's features, each dropped: the decay (the
 // state not decayed: beta read in its place), the output gate, the key's
 // unit norm and the causal convolution.
-var deltaRewrites = []deltaRewrite{
-	{"decay", func(g *graph.Graph) bool {
-		for i, o := range g.Ops {
-			if o.Kind == graph.OpDeltaRule && g.Values[o.In[3]].Width == g.Values[o.In[4]].Width {
-				rewireIn(g, i, 3, o.In[4])
-				return true
-			}
-		}
-		return false
-	}},
-	{"gate", func(g *graph.Graph) bool {
-		for i, o := range g.Ops {
-			if o.Kind == graph.OpMatVec && o.Weight[0].Role == jlm.RoleSSMOut {
-				if p := producer(g, o.In[0]); p >= 0 && g.Ops[p].Kind == graph.OpExpr {
-					rewireIn(g, i, 0, g.Ops[p].In[1])
+func deltaRewrites() []deltaRewrite {
+	return []deltaRewrite{
+		{"decay", func(g *graph.Graph) bool {
+			for i, o := range g.Ops {
+				if o.Kind == graph.OpDeltaRule && g.Values[o.In[3]].Width == g.Values[o.In[4]].Width {
+					rewireIn(g, i, 3, o.In[4])
 					return true
 				}
 			}
-		}
-		return false
-	}},
-	{"key norm", func(g *graph.Graph) bool {
-		for _, o := range g.Ops {
-			if o.Kind != graph.OpDeltaRule {
-				continue
+			return false
+		}},
+		{"gate", func(g *graph.Graph) bool {
+			for i, o := range g.Ops {
+				if o.Kind == graph.OpMatVec && o.Weight[0].Role == jlm.RoleSSMOut {
+					if p := producer(g, o.In[0]); p >= 0 && g.Ops[p].Kind == graph.OpExpr {
+						rewireIn(g, i, 0, g.Ops[p].In[1])
+						return true
+					}
+				}
 			}
-			sc := producer(g, o.In[1])
-			if sc < 0 {
-				return false
-			}
-			if n := producer(g, g.Ops[sc].In[0]); n >= 0 && g.Ops[n].Kind == graph.OpHeadNorm {
-				rewireIn(g, sc, 0, g.Ops[n].In[0])
-				return true
-			}
-		}
-		return false
-	}},
-	{"convolution", func(g *graph.Graph) bool {
-		for _, o := range g.Ops {
-			if o.Kind != graph.OpStateConv {
-				continue
-			}
-			for i, r := range g.Ops {
-				if j := slices.Index(r.In, o.Out[0]); j >= 0 {
-					rewireIn(g, i, j, o.In[0])
+			return false
+		}},
+		{"key norm", func(g *graph.Graph) bool {
+			for _, o := range g.Ops {
+				if o.Kind != graph.OpDeltaRule {
+					continue
+				}
+				sc := producer(g, o.In[1])
+				if sc < 0 {
+					return false
+				}
+				if n := producer(g, g.Ops[sc].In[0]); n >= 0 && g.Ops[n].Kind == graph.OpHeadNorm {
+					rewireIn(g, sc, 0, g.Ops[n].In[0])
 					return true
 				}
 			}
-		}
-		return false
-	}},
+			return false
+		}},
+		{"convolution", func(g *graph.Graph) bool {
+			for _, o := range g.Ops {
+				if o.Kind != graph.OpStateConv {
+					continue
+				}
+				for i, r := range g.Ops {
+					if j := slices.Index(r.In, o.Out[0]); j >= 0 {
+						rewireIn(g, i, j, o.In[0])
+						return true
+					}
+				}
+			}
+			return false
+		}},
+	}
 }
 
 // rewriteMixers states each linear block of m as rw rewrites it until the
@@ -209,7 +211,7 @@ func TestComposedCPUDeltaFeaturesAreLoadBearing(t *testing.T) {
 			t.Errorf("%s stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", what, bm, bw)
 		}
 	}
-	for _, rw := range deltaRewrites {
+	for _, rw := range deltaRewrites() {
 		n, undo := rewriteMixers(m, rw)
 		if n == 0 {
 			undo()

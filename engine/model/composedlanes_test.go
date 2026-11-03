@@ -14,7 +14,9 @@ import (
 // laneModels is what the lane gate decodes: heads 48, 64 and 128 wide, one,
 // three and two query heads to a key head -- what a split attention's
 // workgroups are laid out by.
-var laneModels = []string{"stories15M-q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf"}
+func laneModels() []string {
+	return []string{"stories15M-q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf"}
+}
 
 // TestComposedBlocksAtEachLaneCount decodes with every block and the head
 // the composer's, formed for a subgroup of 1, 8 and 32 lanes and for the
@@ -28,7 +30,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 	const bandRatio, bandWorst = 1.5, 4.0
 	parts := gpu.ComposedBlock | gpu.ComposedHead
 	ran := 0
-	for _, file := range laneModels {
+	for _, file := range laneModels() {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(path); err != nil {
