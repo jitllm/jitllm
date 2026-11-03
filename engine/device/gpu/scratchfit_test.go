@@ -112,9 +112,10 @@ func TestAPromptFindsItsScratchOnAFullCard(t *testing.T) {
 
 // TestAStepAtMaxRowsFitsAFullCard is the server's step loop on a card the
 // blocks filled: a ragged step of the full width, every row wanting the head,
-// needs the step's scratch and its per-row logits (rows x vocabulary). With
-// StepRows set the device reserves both at placement; without it the logits
-// are asked for at the first step, from a card with nothing left.
+// needs the step's scratch and its per-row logits (rows x vocabulary). The
+// device reserves both at placement, with the reserved width; with nothing
+// reserved (NoScratchReserve) they are asked for at the first step, from a
+// card with nothing left.
 func TestAStepAtMaxRowsFitsAFullCard(t *testing.T) {
 	const vocab = 4096
 	p := fakePlan()
@@ -124,9 +125,9 @@ func TestAStepAtMaxRowsFitsAFullCard(t *testing.T) {
 	head := uint64(vocab*(p.NEmbd/32)*18 + 2*vocab*4 + p.NEmbd*4)
 	capBytes := int(scratch + 3*block + head + block/2)
 	run := func(reserve bool) (Stats, int, bool) {
-		cfg := func(c *Config) {}
-		if reserve {
-			cfg = step
+		cfg := func(c *Config) {
+			step(c)
+			c.NoScratchReserve = !reserve
 		}
 		g, _, n := fullCard(t, p, capBytes, cfg)
 		// The head goes where the last block is, and on a full card it needs
@@ -163,7 +164,7 @@ func TestAStepAtMaxRowsFitsAFullCard(t *testing.T) {
 	vst, vn, vok := run(false)
 	t.Logf("unreserved: %d blocks, ok %v: %s", vn, vok, vst.LastErr)
 	if vok {
-		t.Fatalf("without the step's reservation a %d-row step still ran on %d blocks: the gate does not discriminate",
+		t.Fatalf("with nothing reserved at placement a %d-row step still ran on %d blocks: the gate does not discriminate",
 			batchWidth, vn)
 	}
 }
