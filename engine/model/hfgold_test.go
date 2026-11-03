@@ -19,7 +19,7 @@ import (
 // not a `continue`: a listed model that opens fails its subtest, and matching on
 // the refusal's text keeps any other failure fatal. The golden stays, since it
 // is what the graph will be gated against when it lands.
-var hfGoldDeclined = map[string]string{}
+func hfGoldDeclined() map[string]string { return map[string]string{} }
 
 // declinedRefusal reports whether err is Open declining an ARCHITECTURE this
 // engine converts and does not yet run, as opposed to any other failure.
@@ -31,7 +31,7 @@ func declinedRefusal(err error) bool {
 	if err == nil {
 		return false
 	}
-	for _, why := range hfGoldDeclined {
+	for _, why := range hfGoldDeclined() {
 		if strings.Contains(err.Error(), why) {
 			return true
 		}
@@ -81,7 +81,7 @@ func TestSafetensorsMatchTransformers(t *testing.T) {
 			}
 			m, err := Open(hfContainer(t, name), noTune, WithKVF16(false))
 			if err != nil {
-				if why, listed := hfGoldDeclined[name]; listed && strings.Contains(err.Error(), why) {
+				if why, listed := hfGoldDeclined()[name]; listed && strings.Contains(err.Error(), why) {
 					t.Skipf("DECLINED BY NAME, and the golden is kept because it is what the "+
 						"graph will be gated against when it lands (RULE 11: a missing "+
 						"artefact is a task): %v", err)
@@ -89,7 +89,7 @@ func TestSafetensorsMatchTransformers(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			if _, listed := hfGoldDeclined[name]; listed {
+			if _, listed := hfGoldDeclined()[name]; listed {
 				t.Fatalf("%s is in hfGoldDeclined and it OPENED -- delete its entry so this "+
 					"gate actually runs, which is the whole point of the list being explicit", name)
 			}

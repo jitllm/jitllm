@@ -27,11 +27,13 @@ func heapNow() uint64 {
 // tokCostModels spans every tokenizer family: llama3, qwen2 and
 // gpt2-style byte-level BPE, and SentencePiece in its llama, gemma and phi3
 // forms.
-var tokCostModels = []string{
-	"Llama-3.2-1B-Instruct-Q4_K_M.jlm", "Qwen3-1.7B-Q4_K_M.jlm", "Qwen2-1.5B-Instruct-Q4_K_M.jlm",
-	"olmoe-1b-7b-0924-instruct-Q4_K_M.jlm", "SmolLM2-360M-Instruct-Q8_0.jlm",
-	"tinyllama-1.1b-q3_K_M.jlm", "gemma-3-1b-it-Q4_K_M.jlm", "gemma-2b.jlm",
-	"Phi-3.5-mini-instruct-Q4_K_M.jlm", "stories15M-q8_0.jlm",
+func tokCostModels() []string {
+	return []string{
+		"Llama-3.2-1B-Instruct-Q4_K_M.jlm", "Qwen3-1.7B-Q4_K_M.jlm", "Qwen2-1.5B-Instruct-Q4_K_M.jlm",
+		"olmoe-1b-7b-0924-instruct-Q4_K_M.jlm", "SmolLM2-360M-Instruct-Q8_0.jlm",
+		"tinyllama-1.1b-q3_K_M.jlm", "gemma-3-1b-it-Q4_K_M.jlm", "gemma-2b.jlm",
+		"Phi-3.5-mini-instruct-Q4_K_M.jlm", "stories15M-q8_0.jlm",
+	}
 }
 
 // tokCostTexts is prose, code, and a mix built to reach the special-token
@@ -65,7 +67,7 @@ func TestTokenizerCost(t *testing.T) {
 	}
 	texts := tokCostTexts(t)
 	dump := os.Getenv("JITLLM_TOKDUMP")
-	for _, name := range tokCostModels {
+	for _, name := range tokCostModels() {
 		if f := os.Getenv("JITLLM_TOKMODEL"); f != "" && !strings.Contains(name, f) {
 			continue
 		}

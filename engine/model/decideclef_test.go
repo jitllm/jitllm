@@ -106,16 +106,21 @@ func clefWorst(t *testing.T, g clefGold, got []float32) float64 {
 // clefRefCases are the models held to Clef's own code: the random fixture
 // (f32 on both sides) and the release, its reference run in f32 from the
 // BF16 safetensors (clefgold.py real) against the Q8_0 GGUF here.
-var clefRefCases = []struct {
+func clefRefCases() []struct {
 	name, gguf, gold string
 	tol              float64
-}{
-	{"fixture", clefFixture, "clef-fixture", clefFixtureTol},
-	{"clef", "clef/Clef-Flash-Q8_0.gguf", "clef", clefRealTol},
+} {
+	return []struct {
+		name, gguf, gold string
+		tol              float64
+	}{
+		{"fixture", clefFixture, "clef-fixture", clefFixtureTol},
+		{"clef", "clef/Clef-Flash-Q8_0.gguf", "clef", clefRealTol},
+	}
 }
 
 func TestClefMatchesReference(t *testing.T) {
-	for _, c := range clefRefCases {
+	for _, c := range clefRefCases() {
 		t.Run(c.name, func(t *testing.T) {
 			m := openDecision(t, c.gguf, jlm.DecisionClef)
 			defer m.Close()
@@ -125,7 +130,7 @@ func TestClefMatchesReference(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer d.Close()
-			for _, req := range decisionRequests {
+			for _, req := range decisionRequests() {
 				t.Run(req, func(t *testing.T) {
 					g := readClefGoldOf(t, c.gold, req)
 					p, got := clefLogits(t, d, req)
@@ -177,7 +182,7 @@ func TestClefFeaturesAreLoadBearing(t *testing.T) {
 			defer d.Close()
 			d.violation = v
 			worst := 0.0
-			for _, req := range decisionRequests {
+			for _, req := range decisionRequests() {
 				g := readClefGold(t, req)
 				_, got := clefLogits(t, d, req)
 				if len(got) == countClefLogits(g) {

@@ -117,7 +117,7 @@ func parseRequest(t testing.TB, b []byte) (jinja.Value, []DecisionQuestion) {
 // The violation restores the first board's pages for a later board, and the
 // gate must see it (RULE 10).
 func TestDecisionReusesThePrefix(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		if !prefixReadout(c.kind) {
 			continue
 		}
@@ -414,7 +414,7 @@ func answersDiffer(a, b []DecisionAnswer, tol float64) string {
 // that restore their shared prefix, prefill the rest and seal the restore
 // points they pass makes zero engine heap allocations.
 func TestDecisionWithAPrefixDoesNotAllocate(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		if !prefixReadout(c.kind) {
 			continue
 		}

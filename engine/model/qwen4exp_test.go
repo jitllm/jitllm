@@ -22,32 +22,37 @@ func openQ4E(t *testing.T, name string) (*Model, *c6Golden) {
 // QSA on both attention blocks (budget 8 at a ratio of 4, so from position 12
 // a query reads a subset of its keys); the n-gram block on block 2 (3-grams,
 // two heads each, rows of 16); the delta rule's gate a sigmoid.
-var q4eFixtures = []struct {
+func q4eFixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-qwen4exp", func(m *Model) bool {
-		c := m.Cfg
-		return c.Arch == "qwen4exp" && c.HCMult == 4 && c.HCLowRank == 32 && c.QSARatio == 4 &&
-			c.IdxTopK == 8 && c.IdxHeads == 8 && c.IdxHeadDim == 32 && c.NGramBlock == 3 &&
-			c.NGram == 3 && c.NGramHeadsPer == 2 && c.NGramRowDim == 16 && c.NGramConv == 4 &&
-			c.DeltaSigmoidGate && c.NRot == 16 && c.RopeNeox && c.AttnOutGate &&
-			c.LayerKind(0).Recurrent() && !c.LayerKind(1).Recurrent() &&
-			c.LayerKind(2).Recurrent() && !c.LayerKind(3).Recurrent() && m.ngram != nil
-	}},
-	// The hyper-connections' rank 40: not a whole number of the activation
-	// quantizer's blocks, so every tier quantizes it with a ragged tail.
-	{"synth-qwen4exp-ragged", func(m *Model) bool {
-		c := m.Cfg
-		return c.Arch == "qwen4exp" && c.HCMult == 4 && c.HCLowRank == 40 && m.ngram != nil
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-qwen4exp", func(m *Model) bool {
+			c := m.Cfg
+			return c.Arch == "qwen4exp" && c.HCMult == 4 && c.HCLowRank == 32 && c.QSARatio == 4 &&
+				c.IdxTopK == 8 && c.IdxHeads == 8 && c.IdxHeadDim == 32 && c.NGramBlock == 3 &&
+				c.NGram == 3 && c.NGramHeadsPer == 2 && c.NGramRowDim == 16 && c.NGramConv == 4 &&
+				c.DeltaSigmoidGate && c.NRot == 16 && c.RopeNeox && c.AttnOutGate &&
+				c.LayerKind(0).Recurrent() && !c.LayerKind(1).Recurrent() &&
+				c.LayerKind(2).Recurrent() && !c.LayerKind(3).Recurrent() && m.ngram != nil
+		}},
+		// The hyper-connections' rank 40: not a whole number of the activation
+		// quantizer's blocks, so every tier quantizes it with a ragged tail.
+		{"synth-qwen4exp-ragged", func(m *Model) bool {
+			c := m.Cfg
+			return c.Arch == "qwen4exp" && c.HCMult == 4 && c.HCLowRank == 40 && m.ngram != nil
+		}},
+	}
 }
 
 // TestQwen4ExpMatchesTransformers holds each fixture to transformers' own
 // Qwen4ExpForCausalLM on decode, prefill at every length and the batched
 // path, and the container's tokenizer to Qwen3.8-Flash-Next's tokenizer.json.
 func TestQwen4ExpMatchesTransformers(t *testing.T) {
-	for _, fx := range q4eFixtures {
+	for _, fx := range q4eFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openQ4E(t, fx.name)
 			defer m.Close()
@@ -85,38 +90,40 @@ func TestQwen4ExpMatchesTransformers(t *testing.T) {
 // q4eViolations take one piece of the graph out at a time, the
 // hyper-connection's and QSA's pooling as rewrites of the composed statement
 // (q4eComposedViolations). Each must move the logits far past c6NMSE.
-var q4eViolations = []c6Violation{
-	{"no n-gram embedding", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultNoNGram })
-	}},
-	{"the n-gram embedding without its convolution", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultNoNGramConv })
-	}},
-	{"the n-gram window not reset at the end of a sequence", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultNoEOSReset })
-	}},
-	{"another 2-gram multiplier", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) {
-			c.NGramMul = slices.Clone(c.NGramMul)
-			c.NGramMul[1] += 2
-		})
-	}},
-	{"the QSA budget a block short", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.IdxTopK -= c.QSARatio })
-	}},
-	{"the delta rule's output gated by silu", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultSiLUGate })
-	}},
+func q4eViolations() []c6Violation {
+	return []c6Violation{
+		{"no n-gram embedding", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultNoNGram })
+		}},
+		{"the n-gram embedding without its convolution", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultNoNGramConv })
+		}},
+		{"the n-gram window not reset at the end of a sequence", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultNoEOSReset })
+		}},
+		{"another 2-gram multiplier", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) {
+				c.NGramMul = slices.Clone(c.NGramMul)
+				c.NGramMul[1] += 2
+			})
+		}},
+		{"the QSA budget a block short", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.IdxTopK -= c.QSARatio })
+		}},
+		{"the delta rule's output gated by silu", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.q4eFault = q4eFaultSiLUGate })
+		}},
+	}
 }
 
 // TestQwen4ExpFeaturesAreLoadBearing runs each violation through decode: the
 // fixture must see every one.
 func TestQwen4ExpFeaturesAreLoadBearing(t *testing.T) {
-	for _, fx := range q4eFixtures {
+	for _, fx := range q4eFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openQ4E(t, fx.name)
 			defer m.Close()
-			for _, v := range append(slices.Clone(q4eViolations), q4eComposedViolations(t)...) {
+			for _, v := range append(slices.Clone(q4eViolations()), q4eComposedViolations(t)...) {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()

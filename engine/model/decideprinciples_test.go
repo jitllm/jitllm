@@ -42,7 +42,7 @@ func decisionDevices(t *testing.T) []*gpu.GPU {
 // rule). The violation is the history left behind: the blocks placed with no
 // migration, so the device attends over nothing it wrote.
 func TestDecisionRelocatesMidPrompt(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		if c.kind == jlm.DecisionLaya || c.kind == jlm.DecisionD1Omni {
 			continue // an encoder has no history: TestDecisionRelocatesBetweenDevices
 		}
@@ -168,7 +168,7 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 				}
 				g.Close()
 				t.Logf("budget %d MiB: %d blocks onto the device at token %d and home at %d (worst %.4f)", mb, placed, a, b, w)
-				if tol := decisionRelocTol[c.name]; !(w <= tol) {
+				if tol := decisionRelocTol()[c.name]; !(w <= tol) {
 					t.Errorf("relocated mid-prompt under a %d MiB budget, a label logit moved %.4f from the host's (bound %.2f)",
 						mb, w, tol)
 				}
@@ -182,7 +182,7 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 					w := worst(got)
 					t.Logf("%d of %d blocks onto %s at token %d of %d and home at %d: label logits %v, the host's %v (worst %.4f)",
 						placed, m.Cfg.NLayer, g.Name(), a, len(ids), b, got, host, w)
-					tol := decisionRelocTol[c.name]
+					tol := decisionRelocTol()[c.name]
 					if !(w <= tol) {
 						t.Errorf("relocated mid-prompt, a label logit moved %.4f from the host's (bound %.2f)", w, tol)
 					}
@@ -209,7 +209,9 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 // sees the whole prompt, so the linear blocks' state carries less of it.
 // Kev (V100, CUDA and Vulkan): a pointer score moves 0.0015 between cards
 // and 0.20 with the recurrent summaries lost.
-var decisionRelocTol = map[string]float64{"d1-3B": 0.06, "openjev": 0.005, "lev": 1.0, "vllm-d3": 0.026, "kev": 0.05, "clef": 1.0, "clef-fixture": 0.01}
+func decisionRelocTol() map[string]float64 {
+	return map[string]float64{"d1-3B": 0.06, "openjev": 0.005, "lev": 1.0, "vllm-d3": 0.026, "kev": 0.05, "clef": 1.0, "clef-fixture": 0.01}
+}
 
 // TestDecisionRelocatesBetweenDevices moves one Decider's blocks from the host
 // onto each device in turn and home, answering the same request at every
@@ -245,9 +247,9 @@ func TestDecisionRelocatesBetweenDevices(t *testing.T) {
 				return [][]DecisionAnswer{ans}
 			}
 			host := answer()
-			tol := decisionDevTol[c.name]
+			tol := decisionDevTol()[c.name]
 			if c.kind == jlm.DecisionLaya {
-				tol = decisionDevTol["laya"]
+				tol = decisionDevTol()["laya"]
 			}
 			nb := decisionBlocks(m)
 			for _, g := range gpus {
@@ -288,7 +290,7 @@ func decisionNames() []struct {
 		name, gguf string
 		kind       jlm.DecisionKind
 	}
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		if c.kind != jlm.DecisionLaya && c.kind != jlm.DecisionD1Omni {
 			out = append(out, struct {
 				name, gguf string

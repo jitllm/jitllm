@@ -18,7 +18,7 @@ import (
 // refused (its prompts formed again at their own widths) and sm_86 refused
 // at launch.
 func TestPromptFormsFitTheWorkgroupsMemory(t *testing.T) {
-	for _, file := range ssmServed {
+	for _, file := range ssmServed() {
 		t.Run(file, func(t *testing.T) {
 			m := frontModel(t, file)
 			f := m.Composing()

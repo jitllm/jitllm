@@ -28,7 +28,7 @@ func TestBlocksMoveToTheCPUAndBack(t *testing.T) {
 	// The CPU's blocks on what the composer forms for it: each block composed
 	// for the CPU at its placement and again at each move back, and every
 	// block step the CPU runs between the moves served.
-	for _, name := range cpuServedModels {
+	for _, name := range cpuServedModels() {
 		t.Run(name+"/composed-cpu", func(t *testing.T) { blocksMoveToTheCPUAndBack(t, jlmOf(t, testmodels.Path(name)), true) })
 	}
 }

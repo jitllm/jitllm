@@ -14,7 +14,9 @@ import (
 // weight, and every block's output scaled by its stored scalar; and the
 // E-models' blocks, each reading its slice of the row's per-layer inputs,
 // the last two reading an earlier block's history.
-var gemma4Composed = []string{"synth-gemma4", "synth-gemma4-kv", "synth-gemma4-wide", "synth-gemma4-e", "synth-gemma4-e-ragged", "synth-gemma4-moe"}
+func gemma4Composed() []string {
+	return []string{"synth-gemma4", "synth-gemma4-kv", "synth-gemma4-wide", "synth-gemma4-e", "synth-gemma4-e-ragged", "synth-gemma4-moe"}
+}
 
 // TestGemma4ServesComposed holds the composer to each of gemma4Composed's
 // blocks and head on every device present, as TestC6ServesComposed holds
@@ -29,7 +31,7 @@ var gemma4Composed = []string{"synth-gemma4", "synth-gemma4-kv", "synth-gemma4-w
 func TestGemma4ServesComposed(t *testing.T) {
 	const bound = 1e-5
 	ran := 0
-	for _, name := range gemma4Composed {
+	for _, name := range gemma4Composed() {
 		t.Run(name, func(t *testing.T) {
 			m, g := openGemma4(t, name)
 			defer m.Close()
@@ -108,7 +110,7 @@ func TestGemma4ServesComposed(t *testing.T) {
 // 6), so it is no violation the card arms can run.
 func gemma4ComposedViolations(name string) []c6Violation {
 	var vs []c6Violation
-	for _, v := range gemma4Violations[name] {
+	for _, v := range gemma4Violations()[name] {
 		switch v.name {
 		case "no final softcap":
 			v = c6Violation{"a final softcap of 1", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.FinalSoftcap = 1 }) }}
@@ -131,7 +133,7 @@ func gemma4ComposedViolations(name string) []c6Violation {
 // gemma4Selects is gemma4Fixtures' selection for name.
 func gemma4Selects(t *testing.T, m *Model, name string) bool {
 	t.Helper()
-	for _, fx := range gemma4Fixtures {
+	for _, fx := range gemma4Fixtures() {
 		if fx.name == name {
 			return fx.sel(m)
 		}

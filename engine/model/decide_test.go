@@ -53,7 +53,7 @@ func decisionRequest(t testing.TB, path string) (jinja.Value, []DecisionQuestion
 }
 
 // decisionCases are the models and the llama.cpp answers they are held to.
-var decisionCases = []struct {
+func decisionCases() []struct {
 	name, gguf, gold string // gold is the golden's prefix: <gold>.<request>.llamacpp.json
 	kind             jlm.DecisionKind
 	// ownConfidence: the model's reference computes its confidence its own
@@ -64,43 +64,56 @@ var decisionCases = []struct {
 	// bytes, on either kv cache and either host architecture; the note
 	// before decisionSeen has the measurements.
 	tol float64
-}{
-	{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0", jlm.DecisionLFM2D1, false, 0.03},
-	{"lev", "lev/lev-Q8_0.gguf", "lev-Q8_0", jlm.DecisionLev, false, 0.10},
-	{"laya", "laya/gguf/Laya-BF16.gguf", "Laya-BF16", jlm.DecisionLaya, true, 0.01},
-	{"clef", "clef/Clef-Flash-Q8_0.gguf", "Clef-Flash-Q8_0", jlm.DecisionClef, true, 0.03},
-	// clefgold.py's random fixture: f32, so llama.cpp, Clef's own code and
-	// jitllm agree to the reference's rounding of its answers (6.5e-5); it
-	// is the Clef every gate can run on a card the release does not fit.
-	{"clef-fixture", "clef/fixture/clef-fixture.gguf", "clef-fixture", jlm.DecisionClef, true, 0.001},
-	// d1-omni's F16 GGUF: jitllm sits 5.5e-6 from the model's own code on
-	// these weights (TestD1OmniMatchesReference) and llama.cpp 0.0023 from
-	// both (its F16 products). Its confidence is its own code's (the chosen
-	// option's probability).
-	{"d1-omni", d1OmniModel, "d1-omni-600M-F16", jlm.DecisionD1Omni, true, 0.005},
-	// llama.cpp's own openjev test model (ggml-org/tinyopenjev-for-testing-gguf):
-	// a random qwen35 whose answers sit far from saturation.
-	{"openjev", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", jlm.DecisionOpenJev, false, 0.01},
-	// vllm-sr's d3-edge (ggml-org's GGUF): lev's codes over a qwen35 whose
-	// attention blocks see the whole prompt; its confidence is its own
-	// reference's (one minus the normalised entropy), which llama.cpp's
-	// server also gives for it. The tolerance is lev's kind: the ambiguous
-	// request's issue question is a near-tie (late 0.50 against damaged 0.50
-	// here, 0.42 against 0.57 at llama.cpp's f16 cache), where the f32 arm
-	// reads 0.078 off and the f16 arm 0.015.
-	{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0", jlm.DecisionVllmD3, false, 0.08},
-	// jaredpalmer's Kev 4B (ggml-org's BF16): the pointer head over the
-	// normed hidden state, the question's last row against each option's
-	// <|box_end|> row. BF16 (worst 0.0026 on either cache): at Q4_K_M both
-	// engines' projections sit 5.6% from the BF16 ones and 2% from each
-	// other, a band as wide as some of the readout's own violations.
-	{"kev", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", jlm.DecisionKev, false, 0.01},
+} {
+	return []struct {
+		name, gguf, gold string // gold is the golden's prefix: <gold>.<request>.llamacpp.json
+		kind             jlm.DecisionKind
+		// ownConfidence: the model's reference computes its confidence its own
+		// way (Laya: one minus normalised entropy) and jitllm follows it, where
+		// llama.cpp gives TypeSafe's formula (RULE 7m); the field is not compared.
+		ownConfidence bool
+		// tol is how far a probability may sit from llama.cpp's on the same
+		// bytes, on either kv cache and either host architecture; the note
+		// before decisionSeen has the measurements.
+		tol float64
+	}{
+		{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0", jlm.DecisionLFM2D1, false, 0.03},
+		{"lev", "lev/lev-Q8_0.gguf", "lev-Q8_0", jlm.DecisionLev, false, 0.10},
+		{"laya", "laya/gguf/Laya-BF16.gguf", "Laya-BF16", jlm.DecisionLaya, true, 0.01},
+		{"clef", "clef/Clef-Flash-Q8_0.gguf", "Clef-Flash-Q8_0", jlm.DecisionClef, true, 0.03},
+		// clefgold.py's random fixture: f32, so llama.cpp, Clef's own code and
+		// jitllm agree to the reference's rounding of its answers (6.5e-5); it
+		// is the Clef every gate can run on a card the release does not fit.
+		{"clef-fixture", "clef/fixture/clef-fixture.gguf", "clef-fixture", jlm.DecisionClef, true, 0.001},
+		// d1-omni's F16 GGUF: jitllm sits 5.5e-6 from the model's own code on
+		// these weights (TestD1OmniMatchesReference) and llama.cpp 0.0023 from
+		// both (its F16 products). Its confidence is its own code's (the chosen
+		// option's probability).
+		{"d1-omni", d1OmniModel, "d1-omni-600M-F16", jlm.DecisionD1Omni, true, 0.005},
+		// llama.cpp's own openjev test model (ggml-org/tinyopenjev-for-testing-gguf):
+		// a random qwen35 whose answers sit far from saturation.
+		{"openjev", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", jlm.DecisionOpenJev, false, 0.01},
+		// vllm-sr's d3-edge (ggml-org's GGUF): lev's codes over a qwen35 whose
+		// attention blocks see the whole prompt; its confidence is its own
+		// reference's (one minus the normalised entropy), which llama.cpp's
+		// server also gives for it. The tolerance is lev's kind: the ambiguous
+		// request's issue question is a near-tie (late 0.50 against damaged 0.50
+		// here, 0.42 against 0.57 at llama.cpp's f16 cache), where the f32 arm
+		// reads 0.078 off and the f16 arm 0.015.
+		{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0", jlm.DecisionVllmD3, false, 0.08},
+		// jaredpalmer's Kev 4B (ggml-org's BF16): the pointer head over the
+		// normed hidden state, the question's last row against each option's
+		// <|box_end|> row. BF16 (worst 0.0026 on either cache): at Q4_K_M both
+		// engines' projections sit 5.6% from the BF16 ones and 2% from each
+		// other, a band as wide as some of the readout's own violations.
+		{"kev", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", jlm.DecisionKev, false, 0.01},
+	}
 }
 
 // decisionRequests are the request bodies in testdata/decision: an object
 // state with every question type, and a string state whose answers are not
 // saturated, where a feature's removal shows.
-var decisionRequests = []string{"support", "ambiguous"}
+func decisionRequests() []string { return []string{"support", "ambiguous"} }
 
 // Why each decision case's tolerance is what it is. llama-server's kv
 // cache is f16 (its answers did not move with -ctk f32). Measured worst, on
@@ -159,7 +172,7 @@ type decisionArm struct {
 }
 
 func TestDecisionMatchesLlamaCpp(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
 			m := openDecision(t, c.gguf, c.kind)
 			defer m.Close()
@@ -168,7 +181,7 @@ func TestDecisionMatchesLlamaCpp(t *testing.T) {
 			if m.IsEncoder() {
 				arms = []decisionArm{{"encoder", false, c.tol}}
 			}
-			for _, req := range decisionRequests {
+			for _, req := range decisionRequests() {
 				gold := readDecisionGold(t, c.gold+"."+req+".llamacpp.json")
 				for _, arm := range arms {
 					t.Run(req+"/"+arm.name, func(t *testing.T) {
@@ -370,7 +383,7 @@ func checkDecisions(t *testing.T, qs []DecisionQuestion, ans []DecisionAnswer, g
 // head's within the matvec's reduction order, and a pick one row past each
 // label moves them -- the answers are what the pick read.
 func TestDecisionPicksOnTheCPU(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		if c.kind == jlm.DecisionLaya || c.kind == jlm.DecisionClef || c.kind == jlm.DecisionD1Omni || c.kind == jlm.DecisionKev {
 			continue // an encoder's scorer and Clef's span head read no label logits
 		}
@@ -385,7 +398,7 @@ func TestDecisionPicksOnTheCPU(t *testing.T) {
 				defer d.Close()
 				d.violation = violation
 				var out [][]DecisionAnswer
-				for _, req := range decisionRequests {
+				for _, req := range decisionRequests() {
 					state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
 					ans, err := d.Decide(state, qs, nil)
 					if err != nil {

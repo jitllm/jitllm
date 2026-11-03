@@ -19,21 +19,27 @@ import (
 //
 // It prints three leading and three trailing values per axis plus the sum of
 // the whole tensor, which is why the table is shaped the way it is.
-var towerCbRef = struct {
+func towerCbRef() struct {
 	rows [6]int
 	vals [6][6]float64
 	sum  float64
-}{
-	rows: [6]int{0, 1, 2, 61, 62, 63},
-	vals: [6][6]float64{
-		{2.9709, -0.2394, 7.9154, -0.0333, 3.9492, -6.2315},
-		{2.3362, 1.1205, 4.9934, 1.0887, 3.3559, -5.4497},
-		{2.0612, 0.4978, 5.8252, -0.2149, 3.9973, -5.3926},
-		{8.0296, 3.1371, 5.3551, 4.4943, 8.4025, -3.6975},
-		{10.8150, 1.2275, 8.8473, 2.4137, 12.9995, -7.4657},
-		{15.4850, 4.6529, 1.5212, 3.8733, 7.9017, 0.0195},
-	},
-	sum: 1605.572876,
+} {
+	return struct {
+		rows [6]int
+		vals [6][6]float64
+		sum  float64
+	}{
+		rows: [6]int{0, 1, 2, 61, 62, 63},
+		vals: [6][6]float64{
+			{2.9709, -0.2394, 7.9154, -0.0333, 3.9492, -6.2315},
+			{2.3362, 1.1205, 4.9934, 1.0887, 3.3559, -5.4497},
+			{2.0612, 0.4978, 5.8252, -0.2149, 3.9973, -5.3926},
+			{8.0296, 3.1371, 5.3551, 4.4943, 8.4025, -3.6975},
+			{10.8150, 1.2275, 8.8473, 2.4137, 12.9995, -7.4657},
+			{15.4850, 4.6529, 1.5212, 3.8733, 7.9017, 0.0195},
+		},
+		sum: 1605.572876,
+	}
 }
 
 // towerCb is the same checkerboard llama-mtmd-debug's "cb" builds: 1.0 and 0.0
@@ -76,13 +82,13 @@ func TestTowerMatchesLlamaCpp(t *testing.T) {
 	// where clip runs f32/f16, which compounds to ~1.5% over twelve blocks,
 	// while a permutation moves values by O(1).
 	var sse, sy2 float64
-	for i, row := range towerCbRef.rows {
+	for i, row := range towerCbRef().rows {
 		for j := 0; j < 6; j++ {
 			col := j
 			if j >= 3 {
 				col = c.ProjDim - 6 + j
 			}
-			got, want := float64(out[row*c.ProjDim+col]), towerCbRef.vals[i][j]
+			got, want := float64(out[row*c.ProjDim+col]), towerCbRef().vals[i][j]
 			sse += (got - want) * (got - want)
 			sy2 += want * want
 		}
@@ -92,10 +98,10 @@ func TestTowerMatchesLlamaCpp(t *testing.T) {
 	}
 	if rel := math.Sqrt(sse / sy2); rel > 0.05 {
 		t.Errorf("projector output differs from llama.cpp: relative RMS %.4f over 36 sampled values", rel)
-		for i, row := range towerCbRef.rows {
+		for i, row := range towerCbRef().rows {
 			t.Logf("row %2d: got %8.4f %8.4f %8.4f ... want %8.4f %8.4f %8.4f",
 				row, out[row*c.ProjDim], out[row*c.ProjDim+1], out[row*c.ProjDim+2],
-				towerCbRef.vals[i][0], towerCbRef.vals[i][1], towerCbRef.vals[i][2])
+				towerCbRef().vals[i][0], towerCbRef().vals[i][1], towerCbRef().vals[i][2])
 		}
 	}
 
@@ -106,7 +112,7 @@ func TestTowerMatchesLlamaCpp(t *testing.T) {
 	for _, v := range out {
 		sum += float64(v)
 	}
-	if d := math.Abs(sum-towerCbRef.sum) / math.Abs(towerCbRef.sum); d > 0.05 {
-		t.Errorf("embedding sum %.4f, llama.cpp %.4f (%.1f%% off)", sum, towerCbRef.sum, d*100)
+	if d := math.Abs(sum-towerCbRef().sum) / math.Abs(towerCbRef().sum); d > 0.05 {
+		t.Errorf("embedding sum %.4f, llama.cpp %.4f (%.1f%% off)", sum, towerCbRef().sum, d*100)
 	}
 }

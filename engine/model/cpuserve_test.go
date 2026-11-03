@@ -24,12 +24,14 @@ import (
 // the step's own row (median 0.655, worst 1.25e-3): over 80 steps its
 // attention reads nearly the same value from any of its rows (attending to
 // its own key alone in every block moves the logits 6.5e-4).
-var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
-	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
-	"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
-	"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
-	"synth-deepseek-dense" + q8Suffix, "synth-deepseek" + q8Suffix, "synth-deepseek-lite" + q8Suffix,
-	"synth-kimilinear" + q8Suffix, "kimik3/Kimi-K3-0.40B.Q8_0.gguf"}
+func cpuServedModels() []string {
+	return []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
+		"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
+		"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
+		"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
+		"synth-deepseek-dense" + q8Suffix, "synth-deepseek" + q8Suffix, "synth-deepseek-lite" + q8Suffix,
+		"synth-kimilinear" + q8Suffix, "kimik3/Kimi-K3-0.40B.Q8_0.gguf"}
+}
 
 // TestComposedCPUBlocksServe runs each model's blocks on the CPU as the
 // composer forms them (its int8 form: activations quantized in windows of
@@ -45,7 +47,7 @@ var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "
 // row than the residual -- must leave the band.
 func TestComposedCPUBlocksServe(t *testing.T) {
 	const steps, page = 80, 32
-	for _, file := range cpuServedModels {
+	for _, file := range cpuServedModels() {
 		t.Run(file, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
 			m, err := Open(path, noTune)
@@ -97,15 +99,17 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 // cpuLatentRewrite turns the key's rotary part of a latent block's cached
 // row into the latent's first NRot: the row's rotary tail not the one the
 // projection wrote.
-var cpuLatentRewrite = latentRewrite{"the cached row's rotary tail read from the latent's start", func(g *graph.Graph) bool {
-	for i, o := range g.Ops {
-		if o.Kind == graph.OpSlice && o.Attr.HeadDim == 0 && o.Attr.Offset > 0 && strings.HasPrefix(g.Values[o.Out[0]].Name, "k.pe.") {
-			g.Ops[i].Attr.Offset = 0
-			return true
+func cpuLatentRewrite() latentRewrite {
+	return latentRewrite{"the cached row's rotary tail read from the latent's start", func(g *graph.Graph) bool {
+		for i, o := range g.Ops {
+			if o.Kind == graph.OpSlice && o.Attr.HeadDim == 0 && o.Attr.Offset > 0 && strings.HasPrefix(g.Values[o.Out[0]].Name, "k.pe.") {
+				g.Ops[i].Attr.Offset = 0
+				return true
+			}
 		}
-	}
-	return false
-}}
+		return false
+	}}
+}
 
 // cpuLatentRewrites is the latent violations the CPU arm runs on m, none for
 // a model of no latent block: latentRewrites and cpuLatentRewrite, each
@@ -127,8 +131,8 @@ func cpuLatentRewrites(t *testing.T, m *Model, float bool) []latentRewrite {
 		}
 		return false
 	}
-	short := latentRewrites[1].what
-	all := append(slices.Clone(latentRewrites), cpuLatentRewrite)
+	short := latentRewrites()[1].what
+	all := append(slices.Clone(latentRewrites()), cpuLatentRewrite())
 	// The rotation a pair short turns the latent query's and key's rotary
 	// parts alone: an indexer beside them turns its own.
 	all[1] = latentRewrite{short, func(g *graph.Graph) bool {
@@ -155,7 +159,7 @@ func cpuLatentRewrites(t *testing.T, m *Model, float bool) []latentRewrite {
 		case rw.what == short && !float:
 		case reaches(rw):
 			rws = append(rws, rw)
-		case rw.what == short && m.Cfg.NoPosEnc, rw.what == latentRewrites[2].what:
+		case rw.what == short && m.Cfg.NoPosEnc, rw.what == latentRewrites()[2].what:
 		default:
 			t.Fatalf("%s reaches no block of a latent model: the gate cannot see it", rw.what)
 		}

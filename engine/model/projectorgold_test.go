@@ -29,7 +29,7 @@ func projectorRows(n, width int) []float32 {
 // Its composed arm runs the projector the composer forms for the CPU
 // (towerProjOf), counted served once a run.
 func TestProjectorMatchesTransformers(t *testing.T) {
-	for _, fam := range visionFamilies {
+	for _, fam := range visionFamilies() {
 		for _, composed := range []bool{false, true} {
 			name := fam.name
 			if composed {

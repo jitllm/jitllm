@@ -32,7 +32,7 @@ func TestComposedD1OmniOnCPU(t *testing.T) {
 	encodes := 0
 	worst := func() float64 {
 		w := 0.0
-		for _, req := range decisionRequests {
+		for _, req := range decisionRequests() {
 			g := readD1OmniGold(t, req)
 			state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
 			byID := map[string]*DecisionQuestion{}

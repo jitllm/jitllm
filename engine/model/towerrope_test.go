@@ -23,7 +23,7 @@ import (
 // activations and reduce differently and a tower amplifies that per block. The
 // whole tower on the device is held to TestQwenTowerMatchesTransformers' bound.
 func TestRotaryTowerOnDeviceMatchesHost(t *testing.T) {
-	for _, name := range qvlFixtures {
+	for _, name := range qvlFixtures() {
 		t.Run(name, func(t *testing.T) { rotaryTowerOnDevice(t, name) })
 	}
 }

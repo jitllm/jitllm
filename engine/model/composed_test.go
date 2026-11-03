@@ -206,7 +206,9 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 // budgetElsewhere is the fixtures whose experts are too small for any budget
 // to tell streamed from resident, each with the served model whose budget arm
 // stands for its family's.
-var budgetElsewhere = map[string]string{"synth-gptoss.gguf": "gpt-oss-20b-MXFP4.gguf"}
+func budgetElsewhere() map[string]string {
+	return map[string]string{"synth-gptoss.gguf": "gpt-oss-20b-MXFP4.gguf"}
+}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K, unblockedModels),
@@ -239,38 +241,40 @@ var budgetElsewhere = map[string]string{"synth-gptoss.gguf": "gpt-oss-20b-MXFP4.
 // sits 5.7e-04 to 2.6e-03 from the float reference, alike on both
 // backends: a rounding a tenth of the tier's own, amplified through the
 // sixteen blocks to a trajectory CUDA's tier happens to keep closer.
-var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
-	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
-	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
-	"synth-olmo3.gguf", "synth-phi3", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf",
-	"synth-phi2.gguf", "synth-starcoder.gguf", "synth-stablelm.gguf", "synth-stablelm-par.gguf",
-	"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
-	"synth-commandr.gguf", "synth-cohere2.gguf",
-	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
-	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
-	"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-dbrx.gguf", "synth-llama4.gguf", "synth-mistral3.gguf",
-	"synth-mistral3-af.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-wide.gguf",
-	"synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "synth-gemma4-moe.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
-	"synth-deepseek32.gguf", "synth-minimaxm3.gguf"}
+func formedModels() []string {
+	return []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
+		"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
+		"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
+		"synth-olmo3.gguf", "synth-phi3", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf",
+		"synth-phi2.gguf", "synth-starcoder.gguf", "synth-stablelm.gguf", "synth-stablelm-par.gguf",
+		"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
+		"synth-commandr.gguf", "synth-cohere2.gguf",
+		"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
+		"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
+		"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-dbrx.gguf", "synth-llama4.gguf", "synth-mistral3.gguf",
+		"synth-mistral3-af.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-wide.gguf",
+		"synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "synth-gemma4-moe.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
+		"synth-deepseek32.gguf", "synth-minimaxm3.gguf"}
+}
 
 // mixtureModels are the mixtures the front end states whole and the serving
 // gate does not run: tiny-qwen3moe, whose eight-wide rows the tier cannot
 // place (unblockedModels), and synth-phimoe, a float fixture whose
 // sparsemixer weights each pick by a stated softmax over the logits near it
 // (TestMoEFamiliesOnEveryDevice serves it composed against the host).
-var mixtureModels = []string{"tiny-qwen3moe-f32.gguf", "synth-phimoe.gguf"}
+func mixtureModels() []string { return []string{"tiny-qwen3moe-f32.gguf", "synth-phimoe.gguf"} }
 
 // unblockedModels are the models whose rows the tier's int8 activation
 // blocks (32 wide) do not divide: stories260K's 172-wide MLP and
 // tiny-qwen3moe's 8-wide residual. The device refuses their blocks at
 // placement, by that name.
-var unblockedModels = []string{"stories260K.gguf", "tiny-qwen3moe-f32.gguf"}
+func unblockedModels() []string { return []string{"stories260K.gguf", "tiny-qwen3moe-f32.gguf"} }
 
 // TestTierNamesTheRowsItCannotBlock places each of unblockedModels on every
 // device, its blocks composed: the device takes none and names the row.
 func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 	ran := 0
-	for _, file := range unblockedModels {
+	for _, file := range unblockedModels() {
 		t.Run(file, func(t *testing.T) {
 			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune)
 			if err != nil {
@@ -354,14 +358,16 @@ func bandFloor(layers int) float64 { return 6 * 4 * float64(layers) / 3 / (1 << 
 // 32, the first 32, the first 16 and all 64 blocks composed, the 132nd step
 // reads 0.0236, 0.0184, 0.0015, 0.0006 and 0.0007 from the float reference
 // (the tier 0.00066), tracking no block and no depth.
-var ssmServed = []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
-	"granite/granite-4.0-h-1b-Q4_K_M.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
-	"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf", "mamba/mamba-130m-hf.Q8_0.gguf",
-	"jamba/jamba-reasoning-3b-Q4_K_M.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
-	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "synth-nemotronhmoe-q8.gguf"}
+func ssmServed() []string {
+	return []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
+		"granite/granite-4.0-h-1b-Q4_K_M.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
+		"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf", "mamba/mamba-130m-hf.Q8_0.gguf",
+		"jamba/jamba-reasoning-3b-Q4_K_M.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
+		"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "synth-nemotronhmoe-q8.gguf"}
+}
 
 func init() {
-	servedModels = append(servedModels, ssmServed...)
+	servedModels = append(servedModels, ssmServed()...)
 }
 
 // apartModels are the state-space checkpoints whose blocks with no MLP end
@@ -375,9 +381,11 @@ func init() {
 // falcon-mamba-7B by 80, mamba-codestral went non-finite at its 103rd step,
 // and Nemotron-Nano-9B-v2 changed under poisoned buffers. synth-nemotronhmoe-q8,
 // Nemotron-H's mixture fixture, has such a block a quarter of its steps.
-var apartModels = []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
-	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
-	"synth-nemotronhmoe-q8.gguf"}
+func apartModels() []string {
+	return []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
+		"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
+		"synth-nemotronhmoe-q8.gguf"}
+}
 
 // TestComposedBlocksServeApart decodes each apartModels checkpoint with
 // every block and the head asked of the composer on every device: every
@@ -386,7 +394,7 @@ var apartModels = []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-
 // the logits finite and unchanged under poisoned buffers.
 func TestComposedBlocksServeApart(t *testing.T) {
 	ran := 0
-	for _, file := range apartModels {
+	for _, file := range apartModels() {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
@@ -520,7 +528,7 @@ func TestComposedBlocksServe(t *testing.T) {
 	}
 	arms = append(arms, arm{"whole step, experts streamed under a budget", gpu.ComposedStep, 0, streamBudget},
 		arm{"whole step, experts cached in pages", gpu.ComposedStep, 0, streamCache})
-	for f, by := range budgetElsewhere {
+	for f, by := range budgetElsewhere() {
 		if !slices.Contains(servedModels, by) {
 			t.Fatalf("%s's budget arm runs on %s, which the gate does not serve", f, by)
 		}
@@ -550,7 +558,7 @@ func TestComposedBlocksServe(t *testing.T) {
 			}
 			type prompt struct{ ids, toks []int32 }
 			var panel []prompt
-			for pi, text := range servePanel {
+			for pi, text := range servePanel() {
 				ids := m.Vocab.Encode(text, true)
 				// A context the prompt and the panel's steps overrun keeps the
 				// prompt's head, still across several blocks.
@@ -672,8 +680,8 @@ func TestComposedBlocksServe(t *testing.T) {
 							if a.tile > 0 && noGraph || a.stream != 0 && (noGraph || m.Cfg.NExpert == 0) {
 								continue
 							}
-							if a.stream == streamBudget && budgetElsewhere[file] != "" {
-								t.Logf("%s: its budget arm runs on %s", a.name, budgetElsewhere[file])
+							if a.stream == streamBudget && budgetElsewhere()[file] != "" {
+								t.Logf("%s: its budget arm runs on %s", a.name, budgetElsewhere()[file])
 								continue
 							}
 							name := a.name

@@ -16,7 +16,7 @@ import (
 // /v1/systemone p50 at 84 ms against Decide's 42. The violation runs it as a
 // row of the batch session, which the step count sees.
 func TestDecisionBatchOfOnePromptRunsAlone(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
 			m := openDecision(t, c.gguf, c.kind, noTune)
 			defer m.Close()
@@ -24,7 +24,7 @@ func TestDecisionBatchOfOnePromptRunsAlone(t *testing.T) {
 				t.Skipf("%s runs a request one pass of its own, never a batch session", c.name)
 			}
 			m.SetKVF16(false)
-			state, qs := decisionRequest(t, filepath.Join("testdata", "decision", decisionRequests[0]+".json"))
+			state, qs := decisionRequest(t, filepath.Join("testdata", "decision", decisionRequests()[0]+".json"))
 			// A noul: one prompt on every readout (lev asks a choice twice).
 			var one []DecisionQuestion
 			for i := range qs {
@@ -34,7 +34,7 @@ func TestDecisionBatchOfOnePromptRunsAlone(t *testing.T) {
 				}
 			}
 			if one == nil {
-				t.Fatalf("%s carries no noul question", decisionRequests[0])
+				t.Fatalf("%s carries no noul question", decisionRequests()[0])
 			}
 			reqs := []DecisionRequest{{State: state, Questions: one}}
 			arms := []*gpu.GPU{nil}

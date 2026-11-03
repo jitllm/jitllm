@@ -18,7 +18,7 @@ import (
 // blocks counted (every block of every encode, none declined), and the
 // rows made causal seen. The type rows and the scorer stay main's.
 func TestComposedLayaOnCPU(t *testing.T) {
-	for _, c := range layaCases {
+	for _, c := range layaCases() {
 		t.Run(c.name, func(t *testing.T) {
 			m := openDecision(t, c.gguf, jlm.DecisionLaya)
 			defer m.Close()
@@ -38,7 +38,7 @@ func TestComposedLayaOnCPU(t *testing.T) {
 			defer d.Close()
 			worst := func(d *Decider) float64 {
 				w := 0.0
-				for _, req := range decisionRequests {
+				for _, req := range decisionRequests() {
 					var g layaGold
 					b, err := os.ReadFile(filepath.Join("testdata", "decision", c.gold+"."+req+".reference.json"))
 					if err != nil {

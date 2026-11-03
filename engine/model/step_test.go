@@ -273,8 +273,10 @@ type stepResult struct {
 }
 
 // stepPrompts is the sessions stepGate steps together, one prompt each.
-var stepPrompts = []string{"The capital of France is", "Water boils at a temperature of",
-	"The clerk counted barrels of salt on the upper floor, and"}
+func stepPrompts() []string {
+	return []string{"The capital of France is", "Water boils at a temperature of",
+		"The clerk counted barrels of salt on the upper floor, and"}
+}
 
 // stepGate decodes three prompts on g once an instance at a time and once
 // together through Step, teacher-forced, and returns the worst logit NMSE of
@@ -283,7 +285,7 @@ var stepPrompts = []string{"The capital of France is", "Water boils at a tempera
 // Step did not run every row across sessions.
 func stepGate(t *testing.T, m *Model, g *gpu.GPU, apart bool) stepResult {
 	t.Helper()
-	prompts := stepPrompts
+	prompts := stepPrompts()
 	const steps, mid = 8, 4
 	// arm opens an instance per prompt and prefills it. It returns the instances
 	// and each one's next token. The alone arm's are closed as soon as its
@@ -472,9 +474,9 @@ func orderControl(t *testing.T, m *Model, dev string) float64 {
 		}
 		defer g.Close()
 		var out [][]float32
-		sts := make([]*Instance, len(stepPrompts))
-		next := make([]int32, len(stepPrompts))
-		for i, pr := range stepPrompts {
+		sts := make([]*Instance, len(stepPrompts()))
+		next := make([]int32, len(stepPrompts()))
+		for i, pr := range stepPrompts() {
 			ids := m.Vocab.Encode(pr, true)
 			sts[i] = m.NewInstance(len(ids) + steps + 2)
 			defer sts[i].Close()

@@ -24,35 +24,40 @@ func openDS4(t *testing.T, name string) (*Model, *c6Golden) {
 // golden's 32 positions the window slides, both kinds compress, and from
 // position 15 each CSA query reads a subset of its entries; the first two
 // blocks route by token id.
-var ds4Fixtures = []struct {
+func ds4Fixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-deepseek4", func(m *Model) bool {
-		c := m.Cfg
-		ok := c.Arch == "deepseek4" && c.DSV4() && c.HCMult == 4 && c.HCIters == 20 && c.NKVHead == 1 &&
-			c.HeadDim == 32 && c.NRot == 16 && !c.RopeNeox && c.QLoraRank == 32 && c.OGroups == 2 &&
-			c.OLoraRank == 32 && c.SWAWindow == 8 && c.CompRateCSA == 4 && c.CompRateHCA == 8 &&
-			c.IdxHeads == 8 && c.IdxHeadDim == 32 && c.IdxTopK == 3 && c.NHashLayers == 2 &&
-			c.ExpertSqrtSoftplus && c.Act == nn.ActSwiGLUClamp && c.NFFNShExp == 32 && !c.Indexer() &&
-			slices.Equal(c.CompKinds, []jlm.CompKind{jlm.CompCSA, jlm.CompHCA, jlm.CompNone, jlm.CompCSA}) &&
-			c.YarnFactor == 16 && c.RopeBase == 160000 && c.RopeBaseSWA == 10000 && m.ropeSWA != nil &&
-			m.ropeSWA.Freqs == nil && m.rope.Freqs != nil && m.ds4Head != nil
-		for i := range m.layers {
-			l := &m.layers[i]
-			ok = ok && l.ds4 != nil && len(l.ds4.woAG) == 2 && (l.ds4.hash != nil) == (i < 2) &&
-				(l.ds4.compKV.e != nil) == (c.CompAt(i) != jlm.CompNone) &&
-				(l.idxQB.e != nil) == (c.CompAt(i) == jlm.CompCSA) && len(l.sinks) == 4
-		}
-		return ok
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-deepseek4", func(m *Model) bool {
+			c := m.Cfg
+			ok := c.Arch == "deepseek4" && c.DSV4() && c.HCMult == 4 && c.HCIters == 20 && c.NKVHead == 1 &&
+				c.HeadDim == 32 && c.NRot == 16 && !c.RopeNeox && c.QLoraRank == 32 && c.OGroups == 2 &&
+				c.OLoraRank == 32 && c.SWAWindow == 8 && c.CompRateCSA == 4 && c.CompRateHCA == 8 &&
+				c.IdxHeads == 8 && c.IdxHeadDim == 32 && c.IdxTopK == 3 && c.NHashLayers == 2 &&
+				c.ExpertSqrtSoftplus && c.Act == nn.ActSwiGLUClamp && c.NFFNShExp == 32 && !c.Indexer() &&
+				slices.Equal(c.CompKinds, []jlm.CompKind{jlm.CompCSA, jlm.CompHCA, jlm.CompNone, jlm.CompCSA}) &&
+				c.YarnFactor == 16 && c.RopeBase == 160000 && c.RopeBaseSWA == 10000 && m.ropeSWA != nil &&
+				m.ropeSWA.Freqs == nil && m.rope.Freqs != nil && m.ds4Head != nil
+			for i := range m.layers {
+				l := &m.layers[i]
+				ok = ok && l.ds4 != nil && len(l.ds4.woAG) == 2 && (l.ds4.hash != nil) == (i < 2) &&
+					(l.ds4.compKV.e != nil) == (c.CompAt(i) != jlm.CompNone) &&
+					(l.idxQB.e != nil) == (c.CompAt(i) == jlm.CompCSA) && len(l.sinks) == 4
+			}
+			return ok
+		}},
+	}
 }
 
 // TestDeepseek4MatchesTransformers holds each fixture to transformers' own
 // DeepseekV4ForCausalLM on decode, prefill at every length and the batched
 // path, and the container's tokenizer to DeepSeek-V4's tokenizer.json.
 func TestDeepseek4MatchesTransformers(t *testing.T) {
-	for _, fx := range ds4Fixtures {
+	for _, fx := range ds4Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openDS4(t, fx.name)
 			defer m.Close()
@@ -89,55 +94,57 @@ func TestDeepseek4MatchesTransformers(t *testing.T) {
 
 // ds4Violations take one piece of the graph out at a time. Each must move the
 // logits far past c6NMSE.
-var ds4Violations = []c6Violation{
-	{"the stream mixer softmaxed and not Sinkhorn-normalised", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultCombSoftmax })
-	}},
-	{"the stream mixer untransposed", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultCombRows })
-	}},
-	{"three Sinkhorn rounds", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.HCIters = 3 })
-	}},
-	{"the head's collapse a mean", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultHeadMean })
-	}},
-	{"the attention output left rotated", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultNoDerope })
-	}},
-	{"the window alone", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultWindowOnly })
-	}},
-	{"a CSA entry without the window before", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultNoOverlap })
-	}},
-	{"every CSA entry attended", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultAllEntries })
-	}},
-	{"the indexer's top-k one short", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.IdxTopK-- })
-	}},
-	{"the compressed blocks at the sliding rotary", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultMainRope })
-	}},
-	{"the hash blocks routed by score", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultScoreRoute })
-	}},
-	{"no sinks", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultNoSinks })
-	}},
-	{"a window of 7", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.SWAWindow-- })
-	}},
-	{"a sigmoid gate", sigmoidScore},
-	{"plain SwiGLU", actSwap(nn.ActSiLU)},
+func ds4Violations() []c6Violation {
+	return []c6Violation{
+		{"the stream mixer softmaxed and not Sinkhorn-normalised", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultCombSoftmax })
+		}},
+		{"the stream mixer untransposed", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultCombRows })
+		}},
+		{"three Sinkhorn rounds", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.HCIters = 3 })
+		}},
+		{"the head's collapse a mean", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultHeadMean })
+		}},
+		{"the attention output left rotated", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultNoDerope })
+		}},
+		{"the window alone", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultWindowOnly })
+		}},
+		{"a CSA entry without the window before", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultNoOverlap })
+		}},
+		{"every CSA entry attended", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultAllEntries })
+		}},
+		{"the indexer's top-k one short", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.IdxTopK-- })
+		}},
+		{"the compressed blocks at the sliding rotary", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultMainRope })
+		}},
+		{"the hash blocks routed by score", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultScoreRoute })
+		}},
+		{"no sinks", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ds4Fault = ds4FaultNoSinks })
+		}},
+		{"a window of 7", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.SWAWindow-- })
+		}},
+		{"a sigmoid gate", sigmoidScore},
+		{"plain SwiGLU", actSwap(nn.ActSiLU)},
+	}
 }
 
 // ds4DevViolations are every violation the device runs itself: all of them
 // but the head's collapse, which the host takes.
 var ds4DevViolations = func() []c6Violation {
 	var out []c6Violation
-	for _, v := range ds4Violations {
+	for _, v := range ds4Violations() {
 		if v.name != "the head's collapse a mean" {
 			out = append(out, v)
 		}
@@ -152,7 +159,7 @@ var ds4DevViolations = func() []c6Violation {
 // ds4.go) -- on decode and on a prefill chunk. Then each piece taken out of
 // the device session alone.
 func TestDeepseek4OnEveryDevice(t *testing.T) {
-	for _, fx := range ds4Fixtures {
+	for _, fx := range ds4Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openDS4(t, fx.name)
 			defer m.Close()
@@ -173,11 +180,11 @@ func init() {
 
 // TestDeepseek4FeaturesAreLoadBearing runs each violation through decode.
 func TestDeepseek4FeaturesAreLoadBearing(t *testing.T) {
-	for _, fx := range ds4Fixtures {
+	for _, fx := range ds4Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openDS4(t, fx.name)
 			defer m.Close()
-			for _, v := range ds4Violations {
+			for _, v := range ds4Violations() {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()

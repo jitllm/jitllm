@@ -17,64 +17,69 @@ import (
 // TestMoEFamilyFeaturesAreLoadBearing, TestMoEFamiliesOnEveryDevice and
 // TestMoEFamiliesPageWithTheSameAnswer under each fixture's name.
 func init() {
-	moeFixtures = append(moeFixtures, moe2Fixtures...)
-	for k, v := range moe2Violations {
+	moeFixtures = append(moeFixtures, moe2Fixtures()...)
+	for k, v := range moe2Violations() {
 		moeViolations[k] = v
 	}
-	for k, v := range moe2DevViolations {
+	for k, v := range moe2DevViolations() {
 		moeDevViolations[k] = v
 	}
-	for _, fx := range moe2Fixtures {
+	for _, fx := range moe2Fixtures() {
 		floatMoEModels = append(floatMoEModels, fx.name+".gguf")
 		principleMixtures = append(principleMixtures, fx.name+".gguf")
 	}
 }
 
-var moe2Fixtures = []struct {
+func moe2Fixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-bailingmoe2", func(m *Model) bool {
-		c := m.Cfg
-		dense, moe := &m.layers[0], &m.layers[1]
-		return c.Arch == "bailingmoe2" && c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
-			!c.QKNormWide && c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 &&
-			c.NExpert == 16 && c.NExpertUsed == 4 && c.NExpertGroup == 4 && c.NExpertGroupUsed == 2 &&
-			c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 &&
-			c.NKVHead < c.NHead && !c.TiedEmbd &&
-			dense.router.e == nil && dense.gate.e != nil &&
-			moe.router.e != nil && len(moe.expProbsB) == c.NExpert && moe.shGate.e != nil &&
-			moe.shRouter == nil && moe.qNorm != nil && moe.kNorm != nil &&
-			moe.bq == nil && moe.bk == nil && moe.bv == nil && moe.bo == nil &&
-			moe.wq.e != nil && moe.wk.e != nil && moe.wv.e != nil
-	}},
-	{"synth-dots1", func(m *Model) bool {
-		c := m.Cfg
-		dense, moe := &m.layers[0], &m.layers[1]
-		return c.Arch == "dots1" && c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && !c.QKNormWide &&
-			c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
-			c.NExpertUsed == 2 && c.NExpertGroup <= 1 && c.NFFNShExp == 2*c.NFFNExp &&
-			c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 && c.NKVHead == c.NHead && !c.TiedEmbd &&
-			c.SWAWindow == 0 && dense.router.e == nil && dense.gate.e != nil &&
-			moe.router.e != nil && len(moe.expProbsB) == c.NExpert && moe.shGate.e != nil &&
-			moe.shRouter == nil && moe.qNorm != nil && moe.kNorm != nil &&
-			moe.bq == nil && moe.bk == nil && moe.bv == nil && moe.bo == nil
-	}},
-	{"synth-phimoe", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		ok := c.Arch == "phimoe" && c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
-			c.SparseMixer == 0.01 && c.NoExpertNorm && !c.ExpertSigmoid && c.NExpertGroup <= 1 &&
-			c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 &&
-			c.NKVHead < c.NHead && !c.TiedEmbd && c.SWAWindow == 0 &&
-			math.Abs(c.AttnFactor-math.Sqrt(1+math.Log(8)/math.Log(512))) < 1e-6 &&
-			len(m.rope.Freqs) == c.NRot/2 && m.outB != nil && m.outNormB != nil
-		for i := range m.layers {
-			l = &m.layers[i]
-			ok = ok && l.router.e != nil && l.expProbsB == nil && l.shGate.e == nil &&
-				l.attnNormB != nil && l.ffnNormB != nil && l.bq != nil && l.bk != nil && l.bv != nil && l.bo != nil
-		}
-		return ok
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-bailingmoe2", func(m *Model) bool {
+			c := m.Cfg
+			dense, moe := &m.layers[0], &m.layers[1]
+			return c.Arch == "bailingmoe2" && c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
+				!c.QKNormWide && c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 &&
+				c.NExpert == 16 && c.NExpertUsed == 4 && c.NExpertGroup == 4 && c.NExpertGroupUsed == 2 &&
+				c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 &&
+				c.NKVHead < c.NHead && !c.TiedEmbd &&
+				dense.router.e == nil && dense.gate.e != nil &&
+				moe.router.e != nil && len(moe.expProbsB) == c.NExpert && moe.shGate.e != nil &&
+				moe.shRouter == nil && moe.qNorm != nil && moe.kNorm != nil &&
+				moe.bq == nil && moe.bk == nil && moe.bv == nil && moe.bo == nil &&
+				moe.wq.e != nil && moe.wk.e != nil && moe.wv.e != nil
+		}},
+		{"synth-dots1", func(m *Model) bool {
+			c := m.Cfg
+			dense, moe := &m.layers[0], &m.layers[1]
+			return c.Arch == "dots1" && c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && !c.QKNormWide &&
+				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
+				c.NExpertUsed == 2 && c.NExpertGroup <= 1 && c.NFFNShExp == 2*c.NFFNExp &&
+				c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 && c.NKVHead == c.NHead && !c.TiedEmbd &&
+				c.SWAWindow == 0 && dense.router.e == nil && dense.gate.e != nil &&
+				moe.router.e != nil && len(moe.expProbsB) == c.NExpert && moe.shGate.e != nil &&
+				moe.shRouter == nil && moe.qNorm != nil && moe.kNorm != nil &&
+				moe.bq == nil && moe.bk == nil && moe.bv == nil && moe.bo == nil
+		}},
+		{"synth-phimoe", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			ok := c.Arch == "phimoe" && c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
+				c.SparseMixer == 0.01 && c.NoExpertNorm && !c.ExpertSigmoid && c.NExpertGroup <= 1 &&
+				c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 &&
+				c.NKVHead < c.NHead && !c.TiedEmbd && c.SWAWindow == 0 &&
+				math.Abs(c.AttnFactor-math.Sqrt(1+math.Log(8)/math.Log(512))) < 1e-6 &&
+				len(m.rope.Freqs) == c.NRot/2 && m.outB != nil && m.outNormB != nil
+			for i := range m.layers {
+				l = &m.layers[i]
+				ok = ok && l.router.e != nil && l.expProbsB == nil && l.shGate.e == nil &&
+					l.attnNormB != nil && l.ffnNormB != nil && l.bq != nil && l.bk != nil && l.bv != nil && l.bo != nil
+			}
+			return ok
+		}},
+	}
 }
 
 // ungrouped runs a grouped router as a plain top-k over every expert.
@@ -92,113 +97,117 @@ func hostFullRotary(m *Model) func() {
 	return func() { undo(); m.rope.NRot = was }
 }
 
-var moe2Violations = map[string][]c6Violation{
-	"synth-bailingmoe2": {
-		{"softmax for sigmoid", routerSwap(false)},
-		{"no selection bias", noSelectionBias},
-		{"no group limit", ungrouped},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
-		{"no shared expert", noSharedExpert},
-		{"no q/k norm", noQKNorm},
-		{"NORM rotary for NEOX", hostNormRotary},
-		{"rotary over the whole head", hostFullRotary},
-	},
-	"synth-dots1": {
-		{"softmax for sigmoid", routerSwap(false)},
-		{"no selection bias", noSelectionBias},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
-		{"no shared expert", noSharedExpert},
-		{"no q/k norm", noQKNorm},
-		{"NORM rotary for NEOX", hostNormRotary},
-	},
-	"synth-phimoe": {
-		{"llama.cpp's router (a renormalised softmax top-2)", llamaCppPhiMoERouter},
-		{"no sparsemixer mask (a softmax over every expert)", unmaskedSoftmax},
-		// The threshold moved, so the fixture's logits are known to sit near
-		// it: a router whose every other expert fell outside would weight each
-		// choice exactly one, and neither of these could move it.
-		{"a threshold of zero (each weight one)", mixerEps(1e-12)},
-		{"a threshold ten times wider", mixerEps(0.1)},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"no norm biases", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
-			undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
-			return func() { undoR(); undoL() }
-		}},
-		{"no q/k/v/o biases", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv, l.bo = nil, nil, nil, nil })
-			undoR := dropStored(m, jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias, jlm.RoleAttnOutBias)
-			return func() { undoR(); undoL() }
-		}},
-		{"no head bias", func(m *Model) func() {
-			was := m.outB
-			m.outB = nil
-			undoR := dropStoredDense(m, jlm.RoleOutputBias)
-			return func() { undoR(); m.outB = was }
-		}},
-		{"no LongRoPE short factors", func(m *Model) func() {
-			was := m.rope.Freqs
-			m.rope.Freqs = nil
-			return func() { m.rope.Freqs = was }
-		}},
-		{"no LongRoPE magnitude", func(m *Model) func() {
-			was := m.rope.Scale
-			m.rope.Scale = 1
-			return func() { m.rope.Scale = was }
-		}},
-		{"NORM rotary for NEOX", hostNormRotary},
-	},
+func moe2Violations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-bailingmoe2": {
+			{"softmax for sigmoid", routerSwap(false)},
+			{"no selection bias", noSelectionBias},
+			{"no group limit", ungrouped},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
+			{"no shared expert", noSharedExpert},
+			{"no q/k norm", noQKNorm},
+			{"NORM rotary for NEOX", hostNormRotary},
+			{"rotary over the whole head", hostFullRotary},
+		},
+		"synth-dots1": {
+			{"softmax for sigmoid", routerSwap(false)},
+			{"no selection bias", noSelectionBias},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
+			{"no shared expert", noSharedExpert},
+			{"no q/k norm", noQKNorm},
+			{"NORM rotary for NEOX", hostNormRotary},
+		},
+		"synth-phimoe": {
+			{"llama.cpp's router (a renormalised softmax top-2)", llamaCppPhiMoERouter},
+			{"no sparsemixer mask (a softmax over every expert)", unmaskedSoftmax},
+			// The threshold moved, so the fixture's logits are known to sit near
+			// it: a router whose every other expert fell outside would weight each
+			// choice exactly one, and neither of these could move it.
+			{"a threshold of zero (each weight one)", mixerEps(1e-12)},
+			{"a threshold ten times wider", mixerEps(0.1)},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"no norm biases", func(m *Model) func() {
+				undoL := eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
+				undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
+				return func() { undoR(); undoL() }
+			}},
+			{"no q/k/v/o biases", func(m *Model) func() {
+				undoL := eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv, l.bo = nil, nil, nil, nil })
+				undoR := dropStored(m, jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias, jlm.RoleAttnOutBias)
+				return func() { undoR(); undoL() }
+			}},
+			{"no head bias", func(m *Model) func() {
+				was := m.outB
+				m.outB = nil
+				undoR := dropStoredDense(m, jlm.RoleOutputBias)
+				return func() { undoR(); m.outB = was }
+			}},
+			{"no LongRoPE short factors", func(m *Model) func() {
+				was := m.rope.Freqs
+				m.rope.Freqs = nil
+				return func() { m.rope.Freqs = was }
+			}},
+			{"no LongRoPE magnitude", func(m *Model) func() {
+				was := m.rope.Scale
+				m.rope.Scale = 1
+				return func() { m.rope.Scale = was }
+			}},
+			{"NORM rotary for NEOX", hostNormRotary},
+		},
+	}
 }
 
-var moe2DevViolations = map[string][]c6Violation{
-	"synth-bailingmoe2": {
-		// Ungrouped too: the device's softmax route forms no group scores, and
-		// declines a grouped one by name rather than running it.
-		{"softmax for sigmoid", func(m *Model) func() {
-			undoS := routerSwap(false)(m)
-			undoG := ungrouped(m)
-			return func() { undoG(); undoS() }
-		}},
-		{"no selection bias", noSelectionBias},
-		{"no group limit", ungrouped},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
-		{"no shared expert", noSharedExpert},
-		{"no q/k norm", noQKNorm},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-		{"rotary over the whole head", hostFullRotary},
-	},
-	"synth-dots1": {
-		{"softmax for sigmoid", routerSwap(false)},
-		{"no selection bias", noSelectionBias},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
-		{"no shared expert", noSharedExpert},
-		{"no q/k norm", noQKNorm},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	},
-	"synth-phimoe": {
-		{"llama.cpp's router (a renormalised softmax top-2)", llamaCppPhiMoERouter},
-		{"no sparsemixer mask (a softmax over every expert)", unmaskedSoftmax},
-		{"a threshold of zero (each weight one)", mixerEps(1e-12)},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"no q/k/v/o biases", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv, l.bo = nil, nil, nil, nil })
-			undoR := dropStored(m, jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias, jlm.RoleAttnOutBias)
-			return func() { undoR(); undoL() }
-		}},
-		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-	},
+func moe2DevViolations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-bailingmoe2": {
+			// Ungrouped too: the device's softmax route forms no group scores, and
+			// declines a grouped one by name rather than running it.
+			{"softmax for sigmoid", func(m *Model) func() {
+				undoS := routerSwap(false)(m)
+				undoG := ungrouped(m)
+				return func() { undoG(); undoS() }
+			}},
+			{"no selection bias", noSelectionBias},
+			{"no group limit", ungrouped},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
+			{"no shared expert", noSharedExpert},
+			{"no q/k norm", noQKNorm},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+			{"rotary over the whole head", hostFullRotary},
+		},
+		"synth-dots1": {
+			{"softmax for sigmoid", routerSwap(false)},
+			{"no selection bias", noSelectionBias},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
+			{"no shared expert", noSharedExpert},
+			{"no q/k norm", noQKNorm},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		},
+		"synth-phimoe": {
+			{"llama.cpp's router (a renormalised softmax top-2)", llamaCppPhiMoERouter},
+			{"no sparsemixer mask (a softmax over every expert)", unmaskedSoftmax},
+			{"a threshold of zero (each weight one)", mixerEps(1e-12)},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"no q/k/v/o biases", func(m *Model) func() {
+				undoL := eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv, l.bo = nil, nil, nil, nil })
+				undoR := dropStored(m, jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias, jlm.RoleAttnOutBias)
+				return func() { undoR(); undoL() }
+			}},
+			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
+		},
+	}
 }
 
 // llamaCppPhiMoERouter routes Phi-3.5-MoE as llama.cpp does: a softmax top-2,

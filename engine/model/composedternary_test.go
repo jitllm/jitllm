@@ -207,17 +207,24 @@ func TestComposedTernaryMatVecPerToken(t *testing.T) {
 // quantMaps are the maps the int8 statement adds -- |x|, x rounded half away
 // from zero, 1/x, x/127 -- each with Go's own result and a violation of it
 // the values must tell apart.
-var quantMaps = []struct {
+func quantMaps() []struct {
 	fn    graph.MapFn
 	k     float64
 	want  func(float32) float32
 	wrong func(float32) float32
-}{
-	{graph.MapAbs, 0, func(v float32) float32 { return float32(math.Abs(float64(v))) }, func(v float32) float32 { return v }},
-	{graph.MapRound, 0, func(v float32) float32 { return float32(math.Round(float64(v))) },
-		func(v float32) float32 { return float32(math.RoundToEven(float64(v))) }},
-	{graph.MapRecip, 0, func(v float32) float32 { return 1 / v }, func(v float32) float32 { return 1 / (v * 1.0000001) }},
-	{graph.MapDiv, 127, func(v float32) float32 { return v / 127 }, func(v float32) float32 { return v * (1.0 / 127) }},
+} {
+	return []struct {
+		fn    graph.MapFn
+		k     float64
+		want  func(float32) float32
+		wrong func(float32) float32
+	}{
+		{graph.MapAbs, 0, func(v float32) float32 { return float32(math.Abs(float64(v))) }, func(v float32) float32 { return v }},
+		{graph.MapRound, 0, func(v float32) float32 { return float32(math.Round(float64(v))) },
+			func(v float32) float32 { return float32(math.RoundToEven(float64(v))) }},
+		{graph.MapRecip, 0, func(v float32) float32 { return 1 / v }, func(v float32) float32 { return 1 / (v * 1.0000001) }},
+		{graph.MapDiv, 127, func(v float32) float32 { return v / 127 }, func(v float32) float32 { return v * (1.0 / 127) }},
+	}
 }
 
 // TestComposedQuantMapsMatchTheReference runs quantMaps on the CPU as the
@@ -228,7 +235,7 @@ var quantMaps = []struct {
 func TestComposedQuantMapsMatchTheReference(t *testing.T) {
 	xs := sweep(23, 1e30)
 	xs = append(xs, 0.5, 1.5, 2.5, -0.5, -2.5, 0.49999997, -0.49999997, 126.5, 127.49999, 8388607.5, 8388608, 16777217, 1e-40)
-	for _, cs := range quantMaps {
+	for _, cs := range quantMaps() {
 		name := cs.fn.String()
 		b := graph.New()
 		x := b.In("x", len(xs))

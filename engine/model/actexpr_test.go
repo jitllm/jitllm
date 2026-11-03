@@ -21,21 +21,22 @@ func term(f graph.MapFn, a ...graph.Arg) graph.Term {
 
 // outGateTerms is sigmoid(gate) * attention, the output gate as the front
 // end states it.
-var outGateTerms = []graph.Term{term(graph.MapSigmoid, argIn(0)), term(graph.MapMul, argTerm(0), argIn(1))}
+func outGateTerms() []graph.Term {
+	return []graph.Term{term(graph.MapSigmoid, argIn(0)), term(graph.MapMul, argTerm(0), argIn(1))}
+}
 
 // isOutGate reports whether o is the attention's output gate.
 func isOutGate(o graph.Op) bool {
-	return o.Kind == graph.OpExpr && slices.Equal(o.Attr.Expr, outGateTerms)
+	return o.Kind == graph.OpExpr && slices.Equal(o.Attr.Expr, outGateTerms())
 }
 
 // sigmoidGate is sigmoid(g) * v as an op of b.
 func sigmoidGate(b *graph.Builder, g, v graph.ValueID, width int) graph.ValueID {
-	return b.Expr("gated", width, outGateTerms, nil, g, v)
+	return b.Expr("gated", width, outGateTerms(), nil, g, v)
 }
 
 // reluSquaredTerms and siluTerms are two activations a fault swaps one for
 // the other.
-var ()
 
 // statedViolations are m's stated activations taken apart where the composer
 // reads them, the host computing the clean model: a constant moved, a

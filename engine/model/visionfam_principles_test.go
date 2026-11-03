@@ -62,96 +62,98 @@ func pictureEncode(t *testing.T, m *Model, img image.Image) []float32 {
 	return append([]float32(nil), out...)
 }
 
-var visionFams = []visionFam{
-	{
-		name: "gemma3n",
-		open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
-			m, g := openGemma3nV(t, opts...)
-			return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
+func visionFams() []visionFam {
+	return []visionFam{
+		{
+			name: "gemma3n",
+			open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
+				m, g := openGemma3nV(t, opts...)
+				return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
+			},
+			spans:  pictureSpans,
+			encode: pictureEncode,
 		},
-		spans:  pictureSpans,
-		encode: pictureEncode,
-	},
-	{
-		name: "phi4",
-		open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
-			m, g := openPhi4VFixture(t, opts...)
-			return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
+		{
+			name: "phi4",
+			open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
+				m, g := openPhi4VFixture(t, opts...)
+				return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
+			},
+			spans:  pictureSpans,
+			encode: pictureEncode,
 		},
-		spans:  pictureSpans,
-		encode: pictureEncode,
-	},
-	{
-		name: "gemma4",
-		open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
-			m, g := openGemma4V(t, opts...)
-			return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
+		{
+			name: "gemma4",
+			open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
+				m, g := openGemma4V(t, opts...)
+				return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
+			},
+			spans:  pictureSpans,
+			encode: pictureEncode,
 		},
-		spans:  pictureSpans,
-		encode: pictureEncode,
-	},
-	{
-		name: "pixtral",
-		open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
-			m, g := openPixtral(t, opts...)
-			return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
+		{
+			name: "pixtral",
+			open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
+				m, g := openPixtral(t, opts...)
+				return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
+			},
+			spans: func(t *testing.T, m *Model, msgs []ChatMessage, img image.Image) []Span {
+				st := m.NewInstance(8)
+				p, err := st.Picture(img)
+				st.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				spans, err := m.ChatSpansImages(msgs, []Image{{Picture: p}}, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return spans
+			},
+			encode: func(t *testing.T, m *Model, img image.Image) []float32 {
+				s := m.Tower().testState()
+				defer s.Close()
+				px, err := s.PreprocessImage(img)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out, err := s.Encode(px)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return append([]float32(nil), out...)
+			},
 		},
-		spans: func(t *testing.T, m *Model, msgs []ChatMessage, img image.Image) []Span {
-			st := m.NewInstance(8)
-			p, err := st.Picture(img)
-			st.Close()
-			if err != nil {
-				t.Fatal(err)
-			}
-			spans, err := m.ChatSpansImages(msgs, []Image{{Picture: p}}, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return spans
+		{
+			name: "llama4",
+			open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
+				m, g := openLlama4V(t, opts...)
+				return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
+			},
+			spans: func(t *testing.T, m *Model, msgs []ChatMessage, img image.Image) []Span {
+				rows, cols, ps, err := m.Tower().Llama4Pieces(img)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pic, err := m.Llama4Spans(rows, cols, ps)
+				if err != nil {
+					t.Fatal(err)
+				}
+				spans, err := m.ChatSpansParts(msgs, [][]Span{pic}, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return spans
+			},
+			encode: func(t *testing.T, m *Model, img image.Image) []float32 {
+				_, _, ps, err := m.Tower().Llama4Pieces(img)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return l4vEncode(t, m.Tower(), ps)
+			},
 		},
-		encode: func(t *testing.T, m *Model, img image.Image) []float32 {
-			s := m.Tower().testState()
-			defer s.Close()
-			px, err := s.PreprocessImage(img)
-			if err != nil {
-				t.Fatal(err)
-			}
-			out, err := s.Encode(px)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return append([]float32(nil), out...)
-		},
-	},
-	{
-		name: "llama4",
-		open: func(t testing.TB, opts ...Option) (*Model, image.Image) {
-			m, g := openLlama4V(t, opts...)
-			return m, goldenImage(g.Image.W, g.Image.H, g.Image.RGB)
-		},
-		spans: func(t *testing.T, m *Model, msgs []ChatMessage, img image.Image) []Span {
-			rows, cols, ps, err := m.Tower().Llama4Pieces(img)
-			if err != nil {
-				t.Fatal(err)
-			}
-			pic, err := m.Llama4Spans(rows, cols, ps)
-			if err != nil {
-				t.Fatal(err)
-			}
-			spans, err := m.ChatSpansParts(msgs, [][]Span{pic}, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return spans
-		},
-		encode: func(t *testing.T, m *Model, img image.Image) []float32 {
-			_, _, ps, err := m.Tower().Llama4Pieces(img)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return l4vEncode(t, m.Tower(), ps)
-		},
-	},
+	}
 }
 
 // otherPicture is img with one pixel changed: another picture.
@@ -168,7 +170,7 @@ func otherPicture(img image.Image) image.Image {
 }
 
 func TestVisionFamTowerPagesUnderABudget(t *testing.T) {
-	for _, f := range visionFams {
+	for _, f := range visionFams() {
 		t.Run(f.name, func(t *testing.T) {
 			m, img := f.open(t)
 			full := f.encode(t, m, img)
@@ -191,7 +193,7 @@ func TestVisionFamTowerPagesUnderABudget(t *testing.T) {
 }
 
 func TestVisionFamDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
-	for _, f := range visionFams {
+	for _, f := range visionFams() {
 		t.Run(f.name, func(t *testing.T) {
 			m, img := f.open(t)
 			defer m.Close()
@@ -267,7 +269,7 @@ func TestVisionFamDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 // -- runs no tower block and asks the image cache nothing, and decodes what a
 // cold run does; another picture restores nothing past its start.
 func TestVisionFamTwoTurnChatRestoresPastThePicture(t *testing.T) {
-	for _, f := range visionFams {
+	for _, f := range visionFams() {
 		t.Run(f.name, func(t *testing.T) {
 			m, img := f.open(t)
 			defer m.Close()

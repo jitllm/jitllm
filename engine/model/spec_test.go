@@ -77,11 +77,13 @@ func openSpecModel(t *testing.T, name string, opts ...Option) *Model {
 	return m
 }
 
-var specPrompts = []string{
-	"The capital of France is",
-	"def fibonacci(n):\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n",
-	"Here is a list of the planets in order from the sun: Mercury, Venus,",
-	"Once upon a time, in a small village by the sea, there lived",
+func specPrompts() []string {
+	return []string{
+		"The capital of France is",
+		"def fibonacci(n):\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n",
+		"Here is a list of the planets in order from the sun: Mercury, Venus,",
+		"Once upon a time, in a small village by the sea, there lived",
+	}
 }
 
 // plainGreedy is n tokens of greedy decode after prompt.
@@ -160,7 +162,7 @@ func withSpecSchedule(k []int) SpecOption { return func(o *specOpts) { o.sched =
 // specSchedule is a gate's round-by-round draft counts: runs of no draft long
 // enough to owe the prediction block several rows, each followed by a round
 // that drafts and so must catch it up first.
-var specSchedule = []int{0, 0, 0, 2, 0, 3, 1, 0, 0}
+func specSchedule() []int { return []int{0, 0, 0, 2, 0, 3, 1, 0, 0} }
 
 // oracleCorrupt is every how-many-th forced draft is wrong: often enough
 // that most rounds of three drafts reject somewhere, rarely enough that most
@@ -244,7 +246,7 @@ func TestSpecGreedyMatchesDecode(t *testing.T) {
 			}{
 				{"k3", []SpecOption{WithSpecDraft(3)}},
 				{"adaptive", nil},
-				{"schedule", []SpecOption{withSpecSchedule(specSchedule)}},
+				{"schedule", []SpecOption{withSpecSchedule(specSchedule())}},
 			}
 			if m.Cfg.Hybrid() {
 				arms = append(arms,
@@ -254,7 +256,7 @@ func TestSpecGreedyMatchesDecode(t *testing.T) {
 					}{"k3-replay", []SpecOption{WithSpecDraft(3), WithSpecRollback(SpecRollbackReplay)}})
 			}
 			var drafted, accepted int64
-			for _, text := range specPrompts {
+			for _, text := range specPrompts() {
 				prompt := m.Vocab.Encode(text, true)
 				want := plainGreedy(t, m, prompt, n, nil)
 				for _, arm := range arms {
@@ -309,7 +311,7 @@ func TestSpecGateDiscriminates(t *testing.T) {
 			}
 			for _, f := range faults {
 				caught := false
-				for _, text := range specPrompts {
+				for _, text := range specPrompts() {
 					prompt := m.Vocab.Encode(text, true)
 					n := faultTokens(m, prompt, n)
 					want := plainGreedy(t, m, prompt, n, nil)

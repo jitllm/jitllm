@@ -33,16 +33,21 @@ type layaGold struct {
 	Markers map[string][]int           `json:"markers"`
 }
 
-var layaCases = []struct {
+func layaCases() []struct {
 	name, gguf, gold string
 	tol              float64 // on a raw logit
-}{
-	// f32 weights: what is left is f32 reduction order (worst 1e-6 on the
-	// host, LAYADEV on a device).
-	{"fixture", "laya/fixture/laya-fixture.gguf", "laya-fixture", 2e-5},
-	// BF16 weights read as the reference reads them (exactly); 28 blocks of
-	// f32 order (worst 0.027).
-	{"laya", "laya/gguf/Laya-BF16.gguf", "laya", 0.035},
+} {
+	return []struct {
+		name, gguf, gold string
+		tol              float64 // on a raw logit
+	}{
+		// f32 weights: what is left is f32 reduction order (worst 1e-6 on the
+		// host, LAYADEV on a device).
+		{"fixture", "laya/fixture/laya-fixture.gguf", "laya-fixture", 2e-5},
+		// BF16 weights read as the reference reads them (exactly); 28 blocks of
+		// f32 order (worst 0.027).
+		{"laya", "laya/gguf/Laya-BF16.gguf", "laya", 0.035},
+	}
 }
 
 // layaArm is where a Laya gate runs its Decider: the host, or every block
@@ -112,10 +117,10 @@ func layaExpressible(m *Model, violation string) int {
 // over 28 blocks (the checkpoint) or 2 (the fixture), and on a V100 the
 // binary16 operands of sm_70's prompt kernels: the fixture there reads 2.6e-4,
 // and 1e-6 with gpu.Config.NoMMA and NoVolta, which take them away.
-var layaDevTol = map[string]float64{"fixture": 4e-4, "laya": 0.035}
+func layaDevTol() map[string]float64 { return map[string]float64{"fixture": 4e-4, "laya": 0.035} }
 
 func TestLayaMatchesReference(t *testing.T) {
-	for _, c := range layaCases {
+	for _, c := range layaCases() {
 		t.Run(c.name, func(t *testing.T) {
 			m := openDecision(t, c.gguf, jlm.DecisionLaya)
 			defer m.Close()
@@ -123,7 +128,7 @@ func TestLayaMatchesReference(t *testing.T) {
 				t.Run(arm.name, func(t *testing.T) {
 					tol := c.tol
 					if arm.gpu != nil {
-						tol += layaDevTol[c.name]
+						tol += layaDevTol()[c.name]
 					}
 					layaMatchesReference(t, m, c.gold, tol, arm)
 				})
@@ -140,7 +145,7 @@ func layaMatchesReference(t *testing.T, m *Model, gold string, tol float64, arm 
 	}
 	defer d.Close()
 	arm.place(t, m, d, -1)
-	for _, req := range decisionRequests {
+	for _, req := range decisionRequests() {
 		t.Run(req, func(t *testing.T) {
 			var g layaGold
 			b, err := os.ReadFile(filepath.Join("testdata", "decision", gold+"."+req+".reference.json"))
@@ -316,7 +321,7 @@ func TestLayaFeaturesAreLoadBearing(t *testing.T) {
 		if arm.gpu != nil {
 			want = run(t, arm, "")
 		}
-		seen := 10 * layaCases[0].tol
+		seen := 10 * layaCases()[0].tol
 		for _, v := range []string{"no-window", "one-base", "up-gated", "type-row-0", "encoder-heads", "tanh-gelu"} {
 			t.Run(arm.name+"/"+v, func(t *testing.T) {
 				worst := 0.0

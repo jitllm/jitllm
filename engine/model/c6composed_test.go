@@ -11,9 +11,11 @@ import (
 // classicFixtures are the classic-transformer fixtures (LayerNorm, a
 // parallel attention and FFN, biases, ungated MLPs), dbrx's mixture with its
 // clamped q, k and v among them, and mistral3's attention temperature.
-var classicFixtures = []string{"synth-phi2", "synth-starcoder", "synth-stablelm", "synth-stablelm-par",
-	"synth-starcoder2", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-commandr", "synth-cohere2",
-	"synth-dbrx", "synth-mistral3", "synth-mistral3-af"}
+func classicFixtures() []string {
+	return []string{"synth-phi2", "synth-starcoder", "synth-stablelm", "synth-stablelm-par",
+		"synth-starcoder2", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-commandr", "synth-cohere2",
+		"synth-dbrx", "synth-mistral3", "synth-mistral3-af"}
+}
 
 // coveredBlocks is how many of m's blocks the front end states as ops.
 func coveredBlocks(m *Model) int {
@@ -42,7 +44,7 @@ func TestC6ServesComposed(t *testing.T) {
 	// 1e-12. The violations below land at 1e-4 and up.
 	const bound = 1e-5
 	ran := 0
-	for _, name := range classicFixtures {
+	for _, name := range classicFixtures() {
 		t.Run(name, func(t *testing.T) {
 			m, g := openC6(t, name)
 			defer m.Close()

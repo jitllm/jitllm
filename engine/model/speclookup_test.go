@@ -23,12 +23,14 @@ import (
 // lookupModels are the models prompt lookup is gated on: two real dense ones,
 // the hybrid fixture (its prediction block ignored: lookup is forced) and a
 // state-space fixture.
-var lookupModels = []string{
-	"stories15M-q8_0.gguf",
-	"Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-	"synth-qwen35-hybrid-mtp.gguf",
-	"synth-mamba2.gguf",
-	"synth-qwen4exp.gguf",
+func lookupModels() []string {
+	return []string{
+		"stories15M-q8_0.gguf",
+		"Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+		"synth-qwen35-hybrid-mtp.gguf",
+		"synth-mamba2.gguf",
+		"synth-qwen4exp.gguf",
+	}
 }
 
 // copyPrompt asks for a paragraph again: what prompt lookup exists for.
@@ -37,7 +39,7 @@ const copyPrompt = "Repeat this paragraph exactly.\n\nThe old lighthouse keeper 
 	"colour of the sky, the direction of the wind and the names of the ships that passed.\n\n" +
 	"The old lighthouse keeper climbed the spiral stairs every evening"
 
-var lookupPrompts = append([]string{copyPrompt}, specPrompts...)
+var lookupPrompts = append([]string{copyPrompt}, specPrompts()...)
 
 func openLookupModel(t *testing.T, name string, opts ...Option) *Model {
 	t.Helper()
@@ -136,7 +138,7 @@ func lookupArms(m *Model) []struct {
 // prompt against plain ones.
 func TestSpecLookupMatchesDecode(t *testing.T) {
 	n := specTokens()
-	for _, name := range lookupModels {
+	for _, name := range lookupModels() {
 		t.Run(strings.TrimSuffix(name, ".gguf"), func(t *testing.T) {
 			m := openLookupModel(t, name, noTune, WithJITOptions(nn.WithGEMMExact(true)))
 			defer m.Close()
@@ -173,7 +175,7 @@ func TestSpecLookupMatchesDecode(t *testing.T) {
 // every round both accepts and rejects; each break must part from plain decode.
 func TestSpecLookupGateDiscriminates(t *testing.T) {
 	n := specTokens()
-	for _, name := range lookupModels {
+	for _, name := range lookupModels() {
 		t.Run(strings.TrimSuffix(name, ".gguf"), func(t *testing.T) {
 			m := openLookupModel(t, name, noTune, WithJITOptions(nn.WithGEMMExact(true)))
 			defer m.Close()
@@ -226,7 +228,7 @@ func TestSpecLookupGateDiscriminates(t *testing.T) {
 func TestSpecLookupOnDevice(t *testing.T) {
 	n := specTokens()
 	specs := testdevices.Specs("cuda:0", "vulkan:0", "metal")
-	for _, name := range lookupModels {
+	for _, name := range lookupModels() {
 		t.Run(strings.TrimSuffix(name, ".gguf"), func(t *testing.T) {
 			m := openLookupModel(t, name, noTune, WithKVF16(false))
 			defer m.Close()

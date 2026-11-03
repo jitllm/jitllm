@@ -51,43 +51,50 @@ type k3RealGolden struct {
 // sharply trained model -- and the Kazakh checkpoint, float16 already. An
 // exact arm runs the violations too. Q8_0 and MXFP4 are quantizations, held to
 // the float32 reference within their band.
-var k3RealModels = []struct {
+func k3RealModels() []struct {
 	golden, file string
 	nmse         float64
 	flips        int
 	exact        bool
-}{
-	// llama.cpp's convert_hf_to_gguf.py --outtype f32 on
-	// inference-optimization/Kimi-K3-0.40B, the reference's weights exactly.
-	{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B-F32.gguf", 1e-8, 0, true},
-	// The published F16 conversion of it (murillo2000/Kimi-K3-0.40B-GGUF).
-	{"Kimi-K3-0.40B-float16", "kimik3/Kimi-K3-0.40B-F16.gguf", 1e-8, 0, true},
-	// The published quantizations: mradermacher's Q8_0, and murillo2000's
-	// MXFP4 of inference-optimization/Kimi-K3-0.40B-MXFP4 (the routed experts
-	// MXFP4, the rest F16).
-	{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B.Q8_0.gguf", 2e-2, 0, false},
-	// The checkpoint itself, converted from safetensors: the same container
-	// as the F32 GGUF's (convert.TestK3SafetensorsMatchesItsGGUF).
-	{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B-hf", 1e-8, 0, true},
-	// inference-optimization/Kimi-K3-0.40B-MXFP4 converted from safetensors,
-	// its compressed-tensors MXFP4 experts (routed and shared) moved into the
-	// container byte for byte, against the reference on those same weights
-	// (compressed-tensors' own decompression). Its only distance is the
-	// engine's MXFP4 kernels, which round the activation they multiply:
-	// 3.2e-5 on the host, CUDA and Vulkan, every greedy token the
-	// reference's. The same container held to the unquantized reference
-	// (real-Kimi-K3-0.40B) reads 4.3e-2, the experts' quantization, over
-	// 400 times this bound.
-	{"Kimi-K3-0.40B-MXFP4", "kimik3/Kimi-K3-0.40B-MXFP4-hf", 1e-4, 0, false},
-	// A mixed quantization: attn_q at Q4_K beside attn_k and attn_v at Q8_0,
-	// which convert.k3JoinRows re-stores as one Q8_0 projection. Its one flip
-	// is "The capital of France" -> "ith" where the reference says " my", a
-	// 0.955 margin, and llama.cpp reading the same file answers "ith" too.
-	{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B.Q4_K_M.gguf", 2e-1, 1, false},
-	{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B-MXFP4.gguf", 1e-1, 1, false},
-	// convert_hf_to_gguf.py --outtype f16 on
-	// Eraly-ml/Kimi-K3-0.40B-Kazakh-CPT-59M, whose weights are float16.
-	{"Kimi-K3-0.40B-Kazakh-CPT-59M", "kimik3/Kimi-K3-0.40B-Kazakh-CPT-59M-F16.gguf", 1e-8, 0, true},
+} {
+	return []struct {
+		golden, file string
+		nmse         float64
+		flips        int
+		exact        bool
+	}{
+		// llama.cpp's convert_hf_to_gguf.py --outtype f32 on
+		// inference-optimization/Kimi-K3-0.40B, the reference's weights exactly.
+		{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B-F32.gguf", 1e-8, 0, true},
+		// The published F16 conversion of it (murillo2000/Kimi-K3-0.40B-GGUF).
+		{"Kimi-K3-0.40B-float16", "kimik3/Kimi-K3-0.40B-F16.gguf", 1e-8, 0, true},
+		// The published quantizations: mradermacher's Q8_0, and murillo2000's
+		// MXFP4 of inference-optimization/Kimi-K3-0.40B-MXFP4 (the routed experts
+		// MXFP4, the rest F16).
+		{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B.Q8_0.gguf", 2e-2, 0, false},
+		// The checkpoint itself, converted from safetensors: the same container
+		// as the F32 GGUF's (convert.TestK3SafetensorsMatchesItsGGUF).
+		{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B-hf", 1e-8, 0, true},
+		// inference-optimization/Kimi-K3-0.40B-MXFP4 converted from safetensors,
+		// its compressed-tensors MXFP4 experts (routed and shared) moved into the
+		// container byte for byte, against the reference on those same weights
+		// (compressed-tensors' own decompression). Its only distance is the
+		// engine's MXFP4 kernels, which round the activation they multiply:
+		// 3.2e-5 on the host, CUDA and Vulkan, every greedy token the
+		// reference's. The same container held to the unquantized reference
+		// (real-Kimi-K3-0.40B) reads 4.3e-2, the experts' quantization, over
+		// 400 times this bound.
+		{"Kimi-K3-0.40B-MXFP4", "kimik3/Kimi-K3-0.40B-MXFP4-hf", 1e-4, 0, false},
+		// A mixed quantization: attn_q at Q4_K beside attn_k and attn_v at Q8_0,
+		// which convert.k3JoinRows re-stores as one Q8_0 projection. Its one flip
+		// is "The capital of France" -> "ith" where the reference says " my", a
+		// 0.955 margin, and llama.cpp reading the same file answers "ith" too.
+		{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B.Q4_K_M.gguf", 2e-1, 1, false},
+		{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B-MXFP4.gguf", 1e-1, 1, false},
+		// convert_hf_to_gguf.py --outtype f16 on
+		// Eraly-ml/Kimi-K3-0.40B-Kazakh-CPT-59M, whose weights are float16.
+		{"Kimi-K3-0.40B-Kazakh-CPT-59M", "kimik3/Kimi-K3-0.40B-Kazakh-CPT-59M-F16.gguf", 1e-8, 0, true},
+	}
 }
 
 // k3RealViolations are the fixture's violations, less two, and the one only a
@@ -100,7 +107,7 @@ var k3RealViolations = func() []c6Violation {
 	out := []c6Violation{{"a decay bound the checkpoint does not state (-5)", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.KDALowerBound = -5 })
 	}}}
-	for _, v := range k3Violations {
+	for _, v := range k3Violations() {
 		switch v.name {
 		case "the KDA decay unbounded (Kimi-Linear's softplus)",
 			"the MLA latent norms at rms_norm_eps (llama.cpp's)":
@@ -123,7 +130,7 @@ var k3RealViolations = func() []c6Violation {
 // full-rank gate, and it checkpoints every four of eight blocks.
 func TestKimiK3RealMatchesReference(t *testing.T) {
 	ran := 0
-	for _, c := range k3RealModels {
+	for _, c := range k3RealModels() {
 		t.Run(filepath.Base(c.file), func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "kimik3", "real-"+c.golden+".json"))
 			if err != nil {

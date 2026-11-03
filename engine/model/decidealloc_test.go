@@ -21,7 +21,7 @@ import (
 // over the same prompts, so the Decider's scratch, its session's pages and the
 // device's buffers are at their size.
 func TestDecisionDoesNotAllocate(t *testing.T) {
-	for _, c := range decisionCases {
+	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
 			m := openDecision(t, c.gguf, c.kind, noTune)
 			defer m.Close()
@@ -64,7 +64,7 @@ type decisionPrompt struct {
 func decisionPrompts(t *testing.T, d *Decider) []decisionPrompt {
 	t.Helper()
 	var out []decisionPrompt
-	for _, req := range decisionRequests {
+	for _, req := range decisionRequests() {
 		state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
 		if d.kind == jlm.DecisionClef {
 			p, err := d.clefPrompt(state, qs)
@@ -179,7 +179,7 @@ func decisionAllocs(t *testing.T, m *Model, g *gpu.GPU, n int) {
 	// (runJobs) -- a decoder's as rows of the batch session.
 	var reqs []DecisionRequest
 	for range 2 {
-		for _, req := range decisionRequests {
+		for _, req := range decisionRequests() {
 			state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
 			reqs = append(reqs, DecisionRequest{State: state, Questions: qs})
 		}

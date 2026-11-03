@@ -76,16 +76,18 @@ type headFixture struct {
 	open func(t *testing.T, opts ...Option) *Model
 }
 
-var headFixtures = []headFixture{
-	{"synth-qwen2", func(t *testing.T, opts ...Option) *Model {
-		m, err := Open(hfContainer(t, "synth-qwen2"), append([]Option{noTune, WithKVF16(false)}, opts...)...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return m
-	}},
-	{"synth-phi2", openHeadGGUF("synth-phi2.gguf")},
-	{"synth-falcon", openHeadGGUF("synth-falcon.gguf")},
+func headFixtures() []headFixture {
+	return []headFixture{
+		{"synth-qwen2", func(t *testing.T, opts ...Option) *Model {
+			m, err := Open(hfContainer(t, "synth-qwen2"), append([]Option{noTune, WithKVF16(false)}, opts...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return m
+		}},
+		{"synth-phi2", openHeadGGUF("synth-phi2.gguf")},
+		{"synth-falcon", openHeadGGUF("synth-falcon.gguf")},
+	}
 }
 
 // openHeadGGUF opens the fixture file as a head fixture.
@@ -199,7 +201,7 @@ func (a *headArm) run(t *testing.T) {
 func TestComposedHeadOps(t *testing.T) {
 	const bound = 1e-9
 	ran := 0
-	for _, fx := range headFixtures {
+	for _, fx := range headFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			ref := fx.open(t)
 			defer ref.Close()
@@ -370,7 +372,7 @@ func TestComposedHeadOps(t *testing.T) {
 // name.
 func TestComposedHeadForms(t *testing.T) {
 	step := composer.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
-	for _, fx := range headFixtures {
+	for _, fx := range headFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m := fx.open(t)
 			defer m.Close()

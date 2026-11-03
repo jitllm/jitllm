@@ -13,7 +13,9 @@ import (
 
 // composedRowsPrompts are prompts of different lengths, so a ragged step's
 // rows sit at different positions every step.
-var composedRowsPrompts = []string{"Once upon a time, in a small village by the sea, there lived", "1, 2, 3,", "Water boils at"}
+func composedRowsPrompts() []string {
+	return []string{"Once upon a time, in a small village by the sea, there lived", "1, 2, 3,", "Water boils at"}
+}
 
 // TestComposedRowsServe decodes composedRowsPrompts together on each device
 // with the composer asked for the blocks and the head: every step is a
@@ -26,8 +28,8 @@ var composedRowsPrompts = []string{"Once upon a time, in a small village by the 
 func TestComposedRowsServe(t *testing.T) {
 	m := composedRowsModel(t)
 	defer m.Close()
-	ids := make([][]int32, len(composedRowsPrompts))
-	for i, p := range composedRowsPrompts {
+	ids := make([][]int32, len(composedRowsPrompts()))
+	for i, p := range composedRowsPrompts() {
 		ids[i] = m.Vocab.Encode(p, true)
 	}
 	const gen = 12
@@ -82,8 +84,8 @@ func TestComposedRowsTokens(t *testing.T) {
 
 func composedRowsTokens(t *testing.T, m *Model) {
 	t.Helper()
-	ids := make([][]int32, len(composedRowsPrompts))
-	for i, p := range composedRowsPrompts {
+	ids := make([][]int32, len(composedRowsPrompts()))
+	for i, p := range composedRowsPrompts() {
 		ids[i] = m.Vocab.Encode(p, true)
 	}
 	const gen = 12

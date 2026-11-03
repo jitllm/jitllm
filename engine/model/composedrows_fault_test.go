@@ -21,8 +21,8 @@ import (
 func TestComposedRowsDiscriminate(t *testing.T) {
 	m := composedRowsModel(t)
 	defer m.Close()
-	ids := make([][]int32, len(composedRowsPrompts))
-	for i, p := range composedRowsPrompts {
+	ids := make([][]int32, len(composedRowsPrompts()))
+	for i, p := range composedRowsPrompts() {
 		ids[i] = m.Vocab.Encode(p, true)
 	}
 	const gen = 12

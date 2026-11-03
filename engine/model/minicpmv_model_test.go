@@ -143,9 +143,11 @@ func visNMSE(t testing.TB, what string, got, want []float32) float64 {
 
 // mcvPictures are the goldens the gates read: the photo, cut into an overview
 // and two slices, and the repository's 384 square, which is an overview alone.
-var mcvPictures = []struct{ name, path string }{
-	{"photo896x448", mcvPhoto},
-	{"quad-and-disc", testImage},
+func mcvPictures() []struct{ name, path string } {
+	return []struct{ name, path string }{
+		{"photo896x448", mcvPhoto},
+		{"quad-and-disc", testImage},
+	}
 }
 
 func decodeImage(t testing.TB, path string) image.Image {
@@ -183,7 +185,7 @@ func TestMiniCPMVMatchesTransformers(t *testing.T) {
 	tw := m.Tower()
 	c := tw.Cfg
 	const vitBound, embBound, rsBound = 3e-2, 3e-2, 5e-4
-	for _, pic := range mcvPictures {
+	for _, pic := range mcvPictures() {
 		t.Run(pic.name, func(t *testing.T) {
 			g := readMcvGolden(t, pic.name)
 			img := decodeImage(t, pic.path)
