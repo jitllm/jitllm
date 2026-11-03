@@ -212,8 +212,8 @@ func NewStore() *Store {
 
 		DeviceSpec:    state.NewSignal("auto"),
 		Placement:     state.NewSignal(""),
-		Sampling:      state.NewSignal(DefaultConfig().Sampling),
-		MaxSeq:        state.NewSignal(DefaultConfig().MaxSeq),
+		Sampling:      state.NewSignal(DefaultConfig(Env{}).Sampling),
+		MaxSeq:        state.NewSignal(DefaultConfig(Env{}).MaxSeq),
 		DeviceReport:  state.NewSignal(""),
 		DeclineReport: state.NewSignal(""),
 		BlockMap:      state.NewSignal([]byte(nil)),

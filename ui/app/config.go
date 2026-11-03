@@ -12,20 +12,14 @@ type (
 	Config = config.Config
 )
 
-// UseEnv sets what the app takes from the environment; see [config.UseEnv].
-func UseEnv(e Env) { config.UseEnv(e) }
-
-// DefaultModelDir is re-exported; see [config.DefaultModelDir].
-func DefaultModelDir() string { return config.DefaultModelDir() }
-
 // DefaultConfig is re-exported; see [config.DefaultConfig].
-func DefaultConfig() *Config { return config.DefaultConfig() }
+func DefaultConfig(e Env) *Config { return config.DefaultConfig(e) }
 
 // ConfigPath is re-exported; see [config.ConfigPath].
 func ConfigPath() string { return config.ConfigPath() }
 
 // LoadConfig is re-exported; see [config.LoadConfig].
-func LoadConfig() *Config { return config.LoadConfig() }
+func LoadConfig(e Env) *Config { return config.LoadConfig(e) }
 
 // KVCacheDir is re-exported; see [session.KVCacheDir].
 func KVCacheDir() string { return session.KVCacheDir() }

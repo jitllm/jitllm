@@ -28,7 +28,7 @@ func TestSysoIsAnObjectTheLinkerReads(t *testing.T) {
 		if s == nil {
 			t.Fatalf("%s: no .rsrc section", arch)
 		}
-		if want := len(icoSizes) + 2; len(s.Relocs) != want {
+		if want := len(icoSizes()) + 2; len(s.Relocs) != want {
 			t.Errorf("%s: %d relocations, want %d", arch, len(s.Relocs), want)
 		}
 		types, err := resourceTypes(f)
@@ -79,14 +79,14 @@ func TestIcnsElementsAreTheirSize(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tag, err)
 		}
-		if want := icnsTypes[n].size; img.Width != want || img.Height != want || tag != icnsTypes[n].tag {
-			t.Errorf("%s is %dx%d, want %s at %d", tag, img.Width, img.Height, icnsTypes[n].tag, want)
+		if want := icnsTypes()[n].size; img.Width != want || img.Height != want || tag != icnsTypes()[n].tag {
+			t.Errorf("%s is %dx%d, want %s at %d", tag, img.Width, img.Height, icnsTypes()[n].tag, want)
 		}
 		at += l
 		n++
 	}
-	if at != len(b) || n != len(icnsTypes) {
-		t.Errorf("walked %d of %d bytes, %d of %d elements", at, len(b), n, len(icnsTypes))
+	if at != len(b) || n != len(icnsTypes()) {
+		t.Errorf("walked %d of %d bytes, %d of %d elements", at, len(b), n, len(icnsTypes()))
 	}
 }
 
@@ -98,11 +98,11 @@ func TestIcoOffsetsLandOnTheirImages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r, typ, n := binary.LittleEndian.Uint16(b), binary.LittleEndian.Uint16(b[2:]), int(binary.LittleEndian.Uint16(b[4:])); r != 0 || typ != 1 || n != len(icoSizes) {
+	if r, typ, n := binary.LittleEndian.Uint16(b), binary.LittleEndian.Uint16(b[2:]), int(binary.LittleEndian.Uint16(b[4:])); r != 0 || typ != 1 || n != len(icoSizes()) {
 		t.Fatalf("ICONDIR %d %d %d", r, typ, n)
 	}
-	end := 6 + 16*len(icoSizes)
-	for i, s := range icoSizes {
+	end := 6 + 16*len(icoSizes())
+	for i, s := range icoSizes() {
 		e := b[6+16*i:]
 		l, off := int(binary.LittleEndian.Uint32(e[8:])), int(binary.LittleEndian.Uint32(e[12:]))
 		if off != end {

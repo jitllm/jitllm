@@ -14,7 +14,7 @@ import (
 // a macOS app opened from Finder or `open` has its standard error on
 // /dev/null. Started from a terminal, the output stays there. noConsole is
 // !stderrIsRead(), asked once: on Windows asking attaches the console.
-func logToFileWithoutAConsole(noConsole bool) {
+func logToFileWithoutAConsole(held *stdio, noConsole bool) {
 	if !noConsole {
 		return
 	}
@@ -31,7 +31,7 @@ func logToFileWithoutAConsole(noConsole bool) {
 	if err != nil {
 		return
 	}
-	replaceStdio(f)
+	held.replace(f)
 	log.SetOutput(f)
 }
 
@@ -41,12 +41,12 @@ func logToFileWithoutAConsole(noConsole bool) {
 const logName = "jitllm-ui.log"
 
 // stderrIsRead reports whether standard error goes anywhere a person sees.
-func stderrIsRead() bool {
+func stderrIsRead(held *stdio) bool {
 	fi, err := os.Stderr.Stat()
 	if err != nil {
 		// A GUI program run from a terminal has no console of its own; it
 		// writes to the terminal's when it can attach to it.
-		return attachParentConsole()
+		return attachParentConsole(held)
 	}
 	null, err := os.Stat(os.DevNull)
 	if err != nil {
@@ -59,11 +59,12 @@ func stderrIsRead() bool {
 // replaced. An *os.File closes its descriptor when collected, and descriptor
 // 2 is where the runtime writes a fatal error: dropped, the collector closes
 // it, the next file opened takes its number, and a crash's traceback is
-// written into that file -- or nowhere.
-var stdio []*os.File
+// written into that file -- or nowhere. The caller keeps it alive for the
+// life of the process.
+type stdio struct{ files []*os.File }
 
-// replaceStdio points os.Stdout and os.Stderr at f, keeping the old ones.
-func replaceStdio(f *os.File) {
-	stdio = append(stdio, os.Stdout, os.Stderr)
+// replace points os.Stdout and os.Stderr at f, keeping the old ones.
+func (s *stdio) replace(f *os.File) {
+	s.files = append(s.files, os.Stdout, os.Stderr)
 	os.Stdout, os.Stderr = f, f
 }

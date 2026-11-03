@@ -27,8 +27,6 @@ func main() {
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		fail(err)
 	}
-	app.LoadFonts()
-
 	problems := 0
 	for _, sc := range mock.Scenarios() {
 		for _, size := range []struct {
@@ -36,14 +34,14 @@ func main() {
 			w, h   int
 		}{{"", 1440, 900}, {"-narrow", 1000, 700}} {
 			for _, dark := range []bool{false, true} {
-				cfg := app.DefaultConfig()
+				cfg := app.DefaultConfig(app.Env{})
 				cfg.Light = !dark
 				cfg.ModelDirs = []string{os.TempDir()}
 				theme := ""
 				if dark {
 					theme = "-dark"
 				}
-				failed := stage.Play(sc, cfg, size.w, size.h, func(step string, f stage.Frame) {
+				failed := stage.Play(sc, cfg, size.w, size.h, true, func(step string, f stage.Frame) {
 					name := fmt.Sprintf("%s-%s%s%s.png", sc.Name, step, size.suffix, theme)
 					write(filepath.Join(*out, name), f)
 					for _, p := range f.Problems() {

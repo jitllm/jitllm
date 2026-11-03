@@ -133,7 +133,7 @@ func dropShell(t *testing.T) *app.Shell {
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", dir)
 	t.Setenv("AppData", dir)
-	cfg := app.DefaultConfig()
+	cfg := app.DefaultConfig(app.Env{})
 	cfg.ModelDirs = []string{t.TempDir()}
 	return app.NewShell(nil, cfg)
 }

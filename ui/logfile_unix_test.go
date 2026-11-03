@@ -41,7 +41,8 @@ func TestTheLogFileLeavesTheStandardDescriptorsOpen(t *testing.T) {
 	})
 
 	before := os.Stderr
-	logToFileWithoutAConsole(true)
+	var held stdio
+	logToFileWithoutAConsole(&held, true)
 	if os.Stderr == before {
 		t.Fatal("the log did not go to a file")
 	}
@@ -56,4 +57,5 @@ func TestTheLogFileLeavesTheStandardDescriptorsOpen(t *testing.T) {
 			t.Errorf("descriptor %d was closed: %v", fd, err)
 		}
 	}
+	runtime.KeepAlive(&held)
 }

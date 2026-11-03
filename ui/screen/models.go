@@ -13,7 +13,6 @@ import (
 	"github.com/gogpu/ui/widget"
 
 	"github.com/jitllm/jitllm/common/catalog"
-	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/discover"
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/ui/app"
@@ -68,22 +67,11 @@ type modelsScreen struct {
 	scanRunning bool
 }
 
-var (
-	modelsMu      sync.Mutex
-	modelsScreens = map[*app.Shell]*modelsScreen{}
-)
-
 // modelsFor returns this shell's screen state, creating it -- and kicking off
 // the first scan -- exactly once.
 func modelsFor(sh *app.Shell) *modelsScreen {
-	modelsMu.Lock()
-	m, ok := modelsScreens[sh]
-	if !ok {
-		m = newModelsScreen(sh)
-		modelsScreens[sh] = m
-	}
-	modelsMu.Unlock()
-	if !ok {
+	m, created := app.Local(sh, func() *modelsScreen { return newModelsScreen(sh) })
+	if created {
 		m.rescan()
 		// Folders added or removed anywhere -- this tab, a drop, Settings --
 		// change what is on disk to show. Set on the UI goroutine, so this runs
@@ -221,7 +209,7 @@ func (m *modelsScreen) rescan() {
 	dirs := append([]string(nil), m.sh.Cfg.ModelDirs...)
 
 	go func() {
-		defer crash.Recover("model scan")
+		defer m.sh.Crashes().Recover("model scan")
 		defer func() {
 			m.mu.Lock()
 			m.scanRunning = false
@@ -369,10 +357,12 @@ func (m *modelsScreen) reconvert() {
 
 // --- the list ---------------------------------------------------------------
 
-// modelFilters is what the convert form's Browse offers.
-var modelFilters = []gogpu.FileTypeFilter{
-	{Name: "Model weights", Extensions: []string{"gguf", "safetensors"}},
-	{Name: "jitllm container", Extensions: []string{"jlm"}},
+// modelFilters() is what the convert form's Browse offers.
+func modelFilters() []gogpu.FileTypeFilter {
+	return []gogpu.FileTypeFilter{
+		{Name: "Model weights", Extensions: []string{"gguf", "safetensors"}},
+		{Name: "jitllm container", Extensions: []string{"jlm"}},
+	}
 }
 
 // list is one row per container: what it is, and what it is doing here. The
@@ -481,7 +471,7 @@ func (m *modelsScreen) detailSide() widget.Widget {
 		return primitives.HBox(
 			primitives.Box(p.Role(primitives.Text(label).Color(p.Muted()), p.Type.BodySmall)).Width(104),
 			primitives.Expanded(widgets.NewParagraph("").ContentSignal(sig).FontSize(p.Type.BodySmall.FontSize).
-				Color(p.Text()).Font(app.Prose)),
+				Color(p.Text()).Font(p.Prose())),
 		).Gap(p.Space.S)
 	}
 
@@ -527,7 +517,7 @@ func (m *modelsScreen) detailSide() widget.Widget {
 		}, st.Catalog.AsReadonly(), st.CatalogSel.AsReadonly(), st.Machine.AsReadonly())),
 	).Gap(p.Space.S).CrossAlign(primitives.CrossAxisStretch))
 	empty := widgets.Hide(none, widgets.NewParagraph("Pick a model to see what it is and load it.").
-		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(app.Prose))
+		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(p.Prose()))
 
 	load := button.New(
 		button.TextReadonlySignal(m.loadLabel),
@@ -558,7 +548,7 @@ func (m *modelsScreen) detailSide() widget.Widget {
 		kv("Dense region", m.dDense),
 		kv("Written by", m.dWriter),
 		widgets.NewParagraph("").ContentSignal(m.dPath).FontSize(p.Type.LabelSmall.FontSize).
-			Color(p.Muted()).Font(app.Mono),
+			Color(p.Muted()).Font(p.Mono()),
 	).Gap(2).CrossAlign(primitives.CrossAxisStretch))
 
 	return panel(m.sh,

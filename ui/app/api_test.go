@@ -11,7 +11,7 @@ import (
 
 // The window's badge follows the API it actually serves, not the setting.
 func TestTheBadgeFollowsTheAPI(t *testing.T) {
-	sh := NewShell(nil, DefaultConfig())
+	sh := NewShell(nil, DefaultConfig(Env{}))
 	e := server.New(server.Config{ModelDir: t.TempDir()})
 	defer e.Close()
 	badge := sh.Badge()
@@ -46,7 +46,7 @@ func TestTheAPIToggleIsRefusedOnAHeldAddress(t *testing.T) {
 	}
 	defer held.Close()
 
-	sh := NewShell(nil, DefaultConfig())
+	sh := NewShell(nil, DefaultConfig(Env{}))
 	var connected string
 	sh.ConnectTo = func(addr string) { connected = addr }
 	e := server.New(server.Config{ModelDir: t.TempDir()})

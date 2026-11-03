@@ -110,7 +110,7 @@ func TestRebuildsOnlyWhenTheCountMoves(t *testing.T) {
 // Layout places children in the column's own frame, so Draw must translate.
 func TestColumnDrawsInItsOwnFrame(t *testing.T) {
 	n := state.NewSignal(1)
-	col := NewColumn(n.AsReadonly(), 0, func(int) widget.Widget { return NewThumb(quadAndDisc, 16) })
+	col := NewColumn(n.AsReadonly(), 0, func(int) widget.Widget { return (&Thumbs{}).New(quadAndDisc(), 16) })
 	col.Layout(nil, geometry.Constraints{MaxWidth: 100, MaxHeight: 100})
 	col.SetBounds(geometry.FromPointSize(geometry.Pt(12, 10), col.Bounds().Size()))
 

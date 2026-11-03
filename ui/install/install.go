@@ -18,8 +18,10 @@ import (
 	"strings"
 )
 
-// Programs are the command-line programs the bundle carries, by file name.
-var Programs = []string{"jitllm", "jitllmd"}
+// Programs() are the command-line programs the bundle carries, by file name.
+func Programs() []string {
+	return []string{"jitllm", "jitllmd"}
+}
 
 // Bundled is the directory holding the bundle's command-line programs when
 // this process is a macOS app's executable (Contents/MacOS/<exe>) and the
@@ -46,7 +48,7 @@ func bundledFrom(exe string) (string, bool) {
 		return "", false
 	}
 	bin := filepath.Join(filepath.Dir(macos), "Resources", "bin")
-	for _, p := range Programs {
+	for _, p := range Programs() {
 		if fi, err := os.Stat(filepath.Join(bin, p)); err != nil || fi.IsDir() {
 			return "", false
 		}
@@ -69,7 +71,7 @@ func LinkDirs(home string) []string {
 func Linked(bin string, dirs []string) string {
 	for _, d := range dirs {
 		all := true
-		for _, p := range Programs {
+		for _, p := range Programs() {
 			if !linksTo(filepath.Join(d, p), filepath.Join(bin, p)) {
 				all = false
 				break
@@ -96,14 +98,18 @@ func linksTo(link, target string) bool {
 // ErrNotALink is returned when a program's name in the target directory is
 // taken by something that is not a link: a file this code did not make,
 // which it does not replace.
-var ErrNotALink = errors.New("exists and is not a link")
+const ErrNotALink installError = "exists and is not a link"
+
+type installError string
+
+func (e installError) Error() string { return string(e) }
 
 // Link makes each program in dir a symbolic link into bin, creating dir. A
 // link already there is replaced, since it is a link this app (or an earlier
 // copy of it) made; anything else is refused with ErrNotALink, before any
 // link is written.
 func Link(bin, dir string) error {
-	for _, p := range Programs {
+	for _, p := range Programs() {
 		fi, err := os.Lstat(filepath.Join(dir, p))
 		if err == nil && fi.Mode()&os.ModeSymlink == 0 {
 			return fmt.Errorf("%s: %w", filepath.Join(dir, p), ErrNotALink)
@@ -112,7 +118,7 @@ func Link(bin, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for _, p := range Programs {
+	for _, p := range Programs() {
 		dst := filepath.Join(dir, p)
 		if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -128,14 +134,14 @@ func Link(bin, dir string) error {
 // directory the person cannot write (/usr/local/bin is root's on a fresh
 // Mac). It refuses a name that is not a link as Link does, before prompting.
 func LinkAsAdmin(bin, dir string) error {
-	for _, p := range Programs {
+	for _, p := range Programs() {
 		fi, err := os.Lstat(filepath.Join(dir, p))
 		if err == nil && fi.Mode()&os.ModeSymlink == 0 {
 			return fmt.Errorf("%s: %w", filepath.Join(dir, p), ErrNotALink)
 		}
 	}
 	script := "mkdir -p " + shQuote(dir)
-	for _, p := range Programs {
+	for _, p := range Programs() {
 		script += " && ln -sfn " + shQuote(filepath.Join(bin, p)) + " " + shQuote(filepath.Join(dir, p))
 	}
 	out, err := exec.Command("osascript", "-e",
@@ -149,7 +155,7 @@ func LinkAsAdmin(bin, dir string) error {
 // Unlink removes each program's link in dir that points into bin, and
 // nothing else.
 func Unlink(bin, dir string) error {
-	for _, p := range Programs {
+	for _, p := range Programs() {
 		dst := filepath.Join(dir, p)
 		if linksTo(dst, filepath.Join(bin, p)) {
 			if err := os.Remove(dst); err != nil {

@@ -32,6 +32,7 @@ type LiveText struct {
 // primitives.Text("").ContentSignal(sig); the signal is passed twice because
 // the wrapper invalidates layout on it and the child reads it.
 func NewLiveText(sig state.ReadonlySignal[string], child *primitives.TextWidget) *LiveText {
+	var _ widget.Lifecycle = (*LiveText)(nil)
 	w := &LiveText{sig: sig, child: child}
 	w.SetVisible(true)
 	w.SetEnabled(true)
@@ -85,8 +86,6 @@ func (w *LiveText) Mount(ctx widget.Context) {
 
 // Unmount must exist: widget.MountTree calls Mount only on a full Lifecycle.
 func (w *LiveText) Unmount() {}
-
-var _ widget.Lifecycle = (*LiveText)(nil)
 
 // AccessibilityRole reports the wrapper as plain text.
 func (w *LiveText) AccessibilityRole() a11y.Role { return a11y.RoleStaticText }

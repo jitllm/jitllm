@@ -22,6 +22,7 @@ type Clickable struct {
 
 // NewClickable wraps child. selected may be nil.
 func NewClickable(child widget.Widget, selected state.ReadonlySignal[bool], onClick func(), hoverBg, selBg, selLine widget.Color) *Clickable {
+	var _ widget.Lifecycle = (*Clickable)(nil)
 	c := &Clickable{child: child, selected: selected, onClick: onClick, hoverBg: hoverBg, selBg: selBg, selLine: selLine}
 	if s, ok := child.(interface{ SetParent(widget.Widget) }); ok {
 		s.SetParent(c)
@@ -73,8 +74,6 @@ func (c *Clickable) Mount(ctx widget.Context) {
 }
 
 func (c *Clickable) Unmount() { widget.UnmountTree(c.child) }
-
-var _ widget.Lifecycle = (*Clickable)(nil)
 
 // Tile is a rounded square holding an icon or a letter: a model's maker as
 // its initial, the machine as a chip.

@@ -1,7 +1,7 @@
 package screen
 
 import (
-	"sync"
+	"sync/atomic"
 
 	"github.com/jitllm/jitllm/common/catalog"
 	"github.com/jitllm/jitllm/common/hardware"
@@ -65,18 +65,25 @@ type Deps struct {
 	Files   Files
 }
 
-var attached sync.Map // *app.Shell -> Deps
+type depsBox struct{ v atomic.Pointer[Deps] }
+
+func boxOf(sh *app.Shell) *depsBox {
+	b, _ := app.Local(sh, func() *depsBox { return &depsBox{} })
+	return b
+}
 
 // Attach binds a shell's screens to their dependencies. Call it before the
 // first build; a screen reads its Deps when an action runs, so a later Attach
 // reaches the controls already on screen too.
-func Attach(sh *app.Shell, d Deps) { attached.Store(sh, d) }
+func Attach(sh *app.Shell, d Deps) { boxOf(sh).v.Store(&d) }
 
 func depsOf(sh *app.Shell) Deps {
-	d, _ := attached.Load(sh)
-	deps, _ := d.(Deps)
+	var deps Deps
+	if d := boxOf(sh).v.Load(); d != nil {
+		deps = *d
+	}
 	if deps.Machine == nil {
-		deps.Machine = hardware.Host{}
+		deps.Machine = &hardware.Host{}
 	}
 	if deps.Files == nil {
 		deps.Files = catalog.Disk{}
@@ -86,7 +93,7 @@ func depsOf(sh *app.Shell) Deps {
 
 // Screens is the window's tabs in registration order, indexed by the tab
 // constants so the mapping is written down rather than inferred.
-// TestEveryTabHasAScreen relates it to app.TabNames, which can drift from it.
+// TestEveryTabHasAScreen relates it to app.TabNames(), which can drift from it.
 func Screens() []app.ScreenFunc {
 	return []app.ScreenFunc{
 		// Sampling belongs beside the conversation it changes.
@@ -103,7 +110,7 @@ func Screens() []app.ScreenFunc {
 // Shell.Build. main, the shots and the stage tests all build it this way.
 func Install(sh *app.Shell, d Deps) {
 	for i, build := range Screens() {
-		sh.Register(app.TabNames[i], build)
+		sh.Register(app.TabNames()[i], build)
 	}
 	Attach(sh, d)
 }

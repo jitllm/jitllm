@@ -13,10 +13,10 @@ import (
 // a stroke on the root <svg> is not inherited -- so parsing is not the test.
 func TestEveryIconPaints(t *testing.T) {
 	for name, ic := range map[string]Icon{
-		"chat": IconChat, "discover": IconDiscover, "models": IconModels, "convert": IconConvert,
-		"machine": IconMachine, "sun": IconSun, "moon": IconMoon, "copy": IconCopy, "retry": IconRetry,
-		"image": IconImage, "file": IconFile, "send": IconSend, "stop": IconStop, "download": IconDownload,
-		"think": IconThink, "sliders": IconSliders, "trash": IconTrash, "plus": IconPlus, "memory": IconMemory, "gauge": IconGauge, "gpu": IconGPU, "settings": IconSettings, "folder": IconFolder,
+		"chat": IconChat(), "discover": IconDiscover(), "models": IconModels(), "convert": IconConvert(),
+		"machine": IconMachine(), "sun": IconSun(), "moon": IconMoon(), "copy": IconCopy(), "retry": IconRetry(),
+		"image": IconImage(), "file": IconFile(), "send": IconSend(), "stop": IconStop(), "download": IconDownload(),
+		"think": IconThink(), "sliders": IconSliders(), "trash": IconTrash(), "plus": IconPlus(), "memory": IconMemory(), "gauge": IconGauge(), "gpu": IconGPU(), "settings": IconSettings(), "folder": IconFolder(),
 	} {
 		dc := gg.NewContext(24, 24)
 		cv := render.NewCanvas(dc, 24, 24)

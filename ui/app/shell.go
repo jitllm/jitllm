@@ -16,6 +16,7 @@
 package app
 
 import (
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,8 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/theme/material3"
 	"github.com/gogpu/ui/widget"
+
+	"github.com/jitllm/jitllm/common/crash"
 
 	"github.com/jitllm/jitllm/ui/widgets"
 )
@@ -53,13 +56,23 @@ type Shell struct {
 	// M3 is the live theme; P is the painter set built from it.
 	M3 *material3.Theme
 	P  Painters
+	// Fonts is the font chain Load registers; Painters draws by it.
+	Fonts *Fonts
 	// Store is every piece of state the screens share.
 	Store *Store
 	// Cfg is the persisted settings.
 	Cfg *Config
 
-	q       chan func()
-	screens []screenReg
+	q chan func()
+	// Thumbs caches the scaled pictures the transcript and the composer show.
+	Thumbs widgets.Thumbs
+	// locals is what the screens keep per shell; see [Local].
+	localMu sync.Mutex
+	locals  map[reflect.Type]any
+	crashes *crash.Guard
+	// dialogSeq numbers the dialogs this shell raises.
+	dialogSeq widgets.DialogSeq
+	screens   []screenReg
 
 	mu        sync.Mutex
 	saveTimer *time.Timer
@@ -82,17 +95,20 @@ type Shell struct {
 // It creates the ui app too, because a theme swap has to reach both.
 func NewShell(gpuApp *gogpu.App, cfg *Config) *Shell {
 	if cfg == nil {
-		cfg = DefaultConfig()
+		cfg = DefaultConfig(Env{})
 	}
 	m3 := newTheme(!cfg.Light)
+	fonts := &Fonts{}
 
 	s := &Shell{
-		GPU:   gpuApp,
-		M3:    m3,
-		P:     NewPainters(m3),
-		Store: NewStore(),
-		Cfg:   cfg,
-		q:     make(chan func(), uiQueueDepth),
+		GPU:     gpuApp,
+		M3:      m3,
+		Fonts:   fonts,
+		crashes: &crash.Guard{},
+		P:       NewPainters(m3, fonts),
+		Store:   NewStore(),
+		Cfg:     cfg,
+		q:       make(chan func(), uiQueueDepth),
 	}
 
 	// Seed the store from the persisted settings so a screen reads one source.
@@ -164,18 +180,23 @@ func (s *Shell) Build() widget.Widget {
 	return widgets.NewDialogHost(root, s.Store.Dialog, s.P.Dialog)
 }
 
-// navOrder is the sidebar's order, which is the order of the work -- talk to a
+// navOrder() is the sidebar's order, which is the order of the work -- talk to a
 // model, find one, manage them, convert, look at the machine -- not the
 // registration order the tab constants fix.
-var navOrder = []struct {
+func navOrder() []struct {
 	tab  int
 	icon widgets.Icon
-}{
-	{TabSession, widgets.IconChat},
-	{TabDownload, widgets.IconDiscover},
-	{TabModels, widgets.IconModels},
-	{TabConvert, widgets.IconConvert},
-	{TabMachine, widgets.IconMachine},
+} {
+	return []struct {
+		tab  int
+		icon widgets.Icon
+	}{
+		{TabSession, widgets.IconChat()},
+		{TabDownload, widgets.IconDiscover()},
+		{TabModels, widgets.IconModels()},
+		{TabConvert, widgets.IconConvert()},
+		{TabMachine, widgets.IconMachine()},
+	}
 }
 
 func (s *Shell) sidebar() widget.Widget {
@@ -186,7 +207,7 @@ func (s *Shell) sidebar() widget.Widget {
 	}
 	size := s.P.Type.BodyMedium.FontSize
 	items := []widget.Widget{}
-	for _, n := range navOrder {
+	for _, n := range navOrder() {
 		if n.tab >= len(s.screens) {
 			continue
 		}
@@ -196,16 +217,16 @@ func (s *Shell) sidebar() widget.Widget {
 	}
 
 	// SetDark rebuilds the window, so the row is decided here, per build.
-	themeIcon, themeLabel, toDark := widgets.IconSun, "Light theme", false
+	themeIcon, themeLabel, toDark := widgets.IconSun(), "Light theme", false
 	if !s.M3.IsDark() {
-		themeIcon, themeLabel, toDark = widgets.IconMoon, "Dark theme", true
+		themeIcon, themeLabel, toDark = widgets.IconMoon(), "Dark theme", true
 	}
 	theme := widgets.NewNavItem(themeIcon, themeLabel, nil, func() { s.SetDark(toDark) }, colors, size)
 	// Settings sits with the theme at the foot: it is visited, not worked in.
 	var settings widget.Widget = primitives.Box()
 	if TabSettings < len(s.screens) {
 		on := state.NewComputed(func() bool { return s.Store.Tab.Get() == TabSettings }, s.Store.Tab.AsReadonly())
-		settings = widgets.NewNavItem(widgets.IconSettings, s.screens[TabSettings].label, on, s.GoSettings, colors, size)
+		settings = widgets.NewNavItem(widgets.IconSettings(), s.screens[TabSettings].label, on, s.GoSettings, colors, size)
 	}
 
 	mark := widgets.NewLogo(markBands(s.M3 == nil || s.M3.IsDark()), 2)
@@ -218,7 +239,7 @@ func (s *Shell) sidebar() widget.Widget {
 		primitives.Box().Height(6),
 		primitives.VBox(items...).Gap(2),
 		primitives.Box().Height(16),
-		widgets.NewNavItem(widgets.IconPlus, "New chat", nil, func() { s.chatAction(s.Store.NewChat) }, colors, size),
+		widgets.NewNavItem(widgets.IconPlus(), "New chat", nil, func() { s.chatAction(s.Store.NewChat) }, colors, size),
 		widgets.NewNavHeading("Recent", s.P.Type.LabelSmall.FontSize, c.OnSurfaceVariant),
 		primitives.Expanded(scrollview.New(s.chatList(colors, size), scrollview.PainterOpt(s.P.Scrollbar))),
 		settings,
@@ -291,7 +312,7 @@ func (s *Shell) Confirm(title, message, okLabel string, onOK func()) {
 // every other action (the README's concurrency rule 4). Post's RequestRedraw
 // runs a frame, and widgets.DialogHost raises it from that frame's tick.
 func (s *Shell) raise(r DialogReq) {
-	r.Seq = widgets.NextDialogSeq()
+	r.Seq = s.dialogSeq.Next()
 	s.Post(func() { s.Store.Dialog.Set(r) })
 }
 
@@ -299,7 +320,7 @@ func (s *Shell) raise(r DialogReq) {
 // status line. Safe from any goroutine; published on the UI goroutine like a
 // dialog.
 func (s *Shell) Report(p Problem) {
-	p.Seq = widgets.NextDialogSeq()
+	p.Seq = s.dialogSeq.Next()
 	s.Post(func() {
 		s.Store.Problem.Set(p)
 		s.Store.Status.Set(p.Title)
@@ -500,4 +521,34 @@ func (s *Shell) Copy(text string) {
 	if err := s.GPU.ClipboardWrite(text); err != nil {
 		s.SetStatus("clipboard: " + err.Error())
 	}
+}
+
+// Crashes is where this shell's panics are reported.
+func (s *Shell) Crashes() *crash.Guard { return s.crashes }
+
+// SetCrashes replaces the guard, for the program that armed its own.
+func (s *Shell) SetCrashes(g *crash.Guard) { s.crashes = g }
+
+// Local is the value of type T this shell keeps for its screens: build makes it
+// the first time, and created says so. A screen's state belongs to the shell
+// it was built for, so two shells never share one.
+func Local[T any](s *Shell, build func() T) (v T, created bool) {
+	key := reflect.TypeFor[T]()
+	s.localMu.Lock()
+	if have, ok := s.locals[key]; ok {
+		s.localMu.Unlock()
+		return have.(T), false
+	}
+	s.localMu.Unlock()
+	made := build()
+	s.localMu.Lock()
+	defer s.localMu.Unlock()
+	if have, ok := s.locals[key]; ok {
+		return have.(T), false
+	}
+	if s.locals == nil {
+		s.locals = map[reflect.Type]any{}
+	}
+	s.locals[key] = made
+	return made, true
 }

@@ -27,7 +27,7 @@ func Settings(sh *app.Shell) widget.Widget {
 	p := sh.P
 	title := p.Role(primitives.Text("Settings").Color(p.Text()), p.Type.HeadlineSmall).Bold()
 	sub := widgets.NewParagraph("Saved as you change them, in this computer's settings folder.").
-		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(app.Prose)
+		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(sh.P.Prose())
 
 	cards := []widget.Widget{
 		primitives.VBox(title, sub).Gap(p.Space.XS).CrossAlign(primitives.CrossAxisStretch),
@@ -94,17 +94,17 @@ func modelFolders(sh *app.Shell) widget.Widget {
 		if i == 0 {
 			role = "Downloads are saved here"
 		}
-		remove := widgets.NewIconButton(widgets.IconTrash, "Stop looking in this folder", func() {
+		remove := widgets.NewIconButton(widgets.IconTrash(), "Stop looking in this folder", func() {
 			ds := append([]string(nil), st.ModelDirs.Get()...)
 			if i < len(ds) {
 				sh.SetModelDirs(append(ds[:i], ds[i+1:]...))
 			}
 		}, iconColors(sh))
-		open := widgets.NewIconButton(widgets.IconFolder, "Open this folder", func() { OpenFolder(sh, dir.Get()) }, iconColors(sh))
+		open := widgets.NewIconButton(widgets.IconFolder(), "Open this folder", func() { OpenFolder(sh, dir.Get()) }, iconColors(sh))
 		return primitives.HBox(
 			primitives.Expanded(primitives.VBox(
 				widgets.NewParagraph("").ContentSignal(dir).FontSize(p.Type.BodyMedium.FontSize).
-					Color(p.Text()).MaxLines(1).Font(app.Mono),
+					Color(p.Text()).MaxLines(1).Font(sh.P.Mono()),
 				line(sh, state.NewSignal(role).AsReadonly()),
 			).Gap(2)),
 			open, remove,
@@ -156,7 +156,7 @@ func chatSettings(sh *app.Shell) widget.Widget {
 		button.SizeOpt(button.Small),
 		button.VariantOpt(button.Outlined),
 		button.OnClick(func() {
-			st.Sampling.Set(app.DefaultConfig().Sampling)
+			st.Sampling.Set(app.DefaultConfig(app.Env{}).Sampling)
 			sh.SetStatus("sampling reset to its defaults")
 		}),
 		button.PainterOpt(p.Button),
@@ -178,11 +178,13 @@ func chatSettings(sh *app.Shell) widget.Widget {
 	).Gap(p.Space.S).CrossAlign(primitives.CrossAxisStretch)
 }
 
-// engineModes are the engine setting's choices, in the order shown.
-var engineModes = []struct{ mode, label string }{
-	{core.ModeAuto, "Auto"},
-	{core.ModeEmbedded, "Embedded"},
-	{core.ModeService, "Service"},
+// engineModes() are the engine setting's choices, in the order shown.
+func engineModes() []struct{ mode, label string } {
+	return []struct{ mode, label string }{
+		{core.ModeAuto, "Auto"},
+		{core.ModeEmbedded, "Embedded"},
+		{core.ModeService, "Service"},
+	}
 }
 
 // engineSettings is which engine the window runs: a jitllmd it connects to,
@@ -197,8 +199,8 @@ func engineSettings(sh *app.Shell) widget.Widget {
 		}
 		return core.ModeAuto
 	}
-	chips := make([]widget.Widget, 0, len(engineModes))
-	for _, m := range engineModes {
+	chips := make([]widget.Widget, 0, len(engineModes()))
+	for _, m := range engineModes() {
 		m := m
 		chips = append(chips, chip.New(
 			chip.Label(m.label),
@@ -279,15 +281,15 @@ func files(sh *app.Shell) widget.Widget {
 		if path == "" {
 			path = "not saved: this window was opened without a settings file"
 		}
-		open := widgets.NewIconButton(widgets.IconFolder, "Open the folder", func() { OpenFolder(sh, config.FolderOf(path)) }, iconColors(sh))
-		copyPath := widgets.NewIconButton(widgets.IconCopy, "Copy the path", func() {
+		open := widgets.NewIconButton(widgets.IconFolder(), "Open the folder", func() { OpenFolder(sh, config.FolderOf(path)) }, iconColors(sh))
+		copyPath := widgets.NewIconButton(widgets.IconCopy(), "Copy the path", func() {
 			sh.Copy(path)
 			sh.SetStatus("copied " + path)
 		}, iconColors(sh))
 		return primitives.HBox(
 			primitives.Expanded(primitives.VBox(
 				p.Role(primitives.Text(name).Color(p.Text()), p.Type.BodyMedium),
-				widgets.NewParagraph(path).FontSize(p.Type.BodySmall.FontSize).Color(p.Muted()).MaxLines(1).Font(app.Mono),
+				widgets.NewParagraph(path).FontSize(p.Type.BodySmall.FontSize).Color(p.Muted()).MaxLines(1).Font(sh.P.Mono()),
 				line(sh, state.NewSignal(what).AsReadonly()),
 			).Gap(2)),
 			open, copyPath,
@@ -360,7 +362,7 @@ func files(sh *app.Shell) widget.Widget {
 // ResetSettings puts every setting back to its default. Model folders, the
 // chats and the window size are the person's data, not settings, and stay.
 func ResetSettings(sh *app.Shell) {
-	d := app.DefaultConfig()
+	d := app.DefaultConfig(app.Env{})
 	st := sh.Store
 	st.Chat.Set(d.Chat)
 	st.System.Set(d.System)

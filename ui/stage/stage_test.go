@@ -18,11 +18,11 @@ func TestEveryScenarioRendersClean(t *testing.T) {
 		for _, size := range [][2]int{{1440, 900}, {1000, 700}} {
 			for _, dark := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%dx%d/dark=%v", sc.Name, size[0], size[1], dark), func(t *testing.T) {
-					cfg := app.DefaultConfig()
+					cfg := app.DefaultConfig(app.Env{})
 					cfg.Light = !dark
 					cfg.ModelDirs = []string{t.TempDir()}
 					frames := 0
-					failed := stage.Play(sc, cfg, size[0], size[1], func(step string, f stage.Frame) {
+					failed := stage.Play(sc, cfg, size[0], size[1], false, func(step string, f stage.Frame) {
 						frames++
 						if len(f.Texts) == 0 {
 							t.Errorf("%s: the frame painted no text at all", step)

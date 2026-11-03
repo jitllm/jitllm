@@ -11,6 +11,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 
 	_ "github.com/gogpu/gg/gpu" // enable GPU SDF acceleration; required
 
@@ -39,43 +41,51 @@ func register(sh *app.Shell, d screen.Deps) {
 	sh.OnFilesDropped(func(paths []string) { screen.DropFiles(sh, paths) })
 }
 
-// version is the release's, set by the linker (-X main.version).
-var version = "dev"
+// buildVersion is the release version the module was built at, "dev" for a
+// build from an untagged tree.
+func buildVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
+}
 
 func main() {
 	mockMode := flag.Bool("mock", false, "run against package mock: no model, no GPU, fixtures only")
 	showVersion := flag.Bool("version", false, "print the version and exit, opening no window")
 	flag.Parse()
+	var held stdio
+	defer runtime.KeepAlive(&held)
 	if *showVersion {
 		// Before the log moves to a file: a portable copy is checked by
 		// running it with -version, which must answer on standard output.
 		// A GUI program started from a console has no standard output of its
 		// own; one whose output is redirected keeps the redirection.
 		if _, err := os.Stdout.Stat(); err != nil {
-			attachParentConsole()
+			attachParentConsole(&held)
 		}
-		fmt.Println("jitllm-desktop", version)
+		fmt.Println("jitllm-desktop", buildVersion())
 		return
 	}
 	// The previous run's log is read before this run's truncates it: its last
 	// lines go in the report of a crash that ended it.
-	noConsole := !stderrIsRead()
+	noConsole := !stderrIsRead(&held)
+	guard := &crash.Guard{}
 	var prev *crash.Report
 	if p := config.ConfigPath(); p != "" {
 		dir := filepath.Dir(p)
 		tail := crash.LogTail(filepath.Join(dir, logName), 20)
-		logToFileWithoutAConsole(noConsole)
-		crash.SetInfo(crash.Info{App: "jitllm-desktop", Version: version})
+		logToFileWithoutAConsole(&held, noConsole)
+		guard.SetInfo(crash.Info{App: "jitllm-desktop", Version: buildVersion()})
 		var err error
-		if prev, err = crash.Arm(dir, tail, noConsole); err != nil {
+		if prev, err = guard.Arm(dir, tail, noConsole); err != nil {
 			log.Printf("crash reports: %v", err)
 		}
 	}
 	// After Arm: the GPU it names is written beside crash.log.
-	tapAdapter()
-	app.UseEnv(app.Env{Models: os.Getenv("JITLLM_MODELS"), DataHome: os.Getenv("XDG_DATA_HOME"),
+	tapAdapter(guard)
+	cfg := app.LoadConfig(app.Env{Models: os.Getenv("JITLLM_MODELS"), DataHome: os.Getenv("XDG_DATA_HOME"),
 		APIKey: os.Getenv("JITLLM_API_KEY")})
-	cfg := app.LoadConfig()
 
 	gpuApp := gogpu.NewApp(gogpu.DefaultConfig().
 		WithTitle("jitllm").
@@ -83,12 +93,12 @@ func main() {
 		WithIcon(app.Icon()).
 		WithMinSize(960, 640))
 
+	sh := app.NewShell(gpuApp, cfg)
+	sh.SetCrashes(guard)
+	guard.OnReport(sh.ShowCrash)
 	// Before the first frame: a font registered after a widget has measured
 	// itself is a font the layout has already decided without.
-	app.LoadFonts()
-
-	sh := app.NewShell(gpuApp, cfg)
-	crash.OnReport(sh.ShowCrash)
+	sh.Fonts.Load()
 	if prev != nil {
 		sh.ShowCrash(*prev)
 	}
