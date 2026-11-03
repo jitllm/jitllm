@@ -258,6 +258,18 @@ func Verify(g *Graph, f Facts) error {
 				width(floats) != 2*width(words) || width(words) < 1 {
 				bad("%s: %d inputs into %d outputs, not floats and their halves two a word", at, len(o.In), len(o.Out))
 			}
+		case OpQ8Rows, OpWidenQ8Rows:
+			var words, floats ValueID
+			if len(o.In) == 1 && len(o.Out) == 1 {
+				words, floats = o.Out[0], o.In[0]
+				if o.Kind == OpWidenQ8Rows {
+					words, floats = o.In[0], o.Out[0]
+				}
+			}
+			if len(o.In) != 1 || len(o.Out) != 1 || g.Values[words].Elem != ElemU32 || g.Values[floats].Elem == ElemU32 ||
+				width(floats) < 1 || width(words) != Q8RowWords(width(floats)) {
+				bad("%s: %d inputs into %d outputs, not rows of floats and their q8 rows", at, len(o.In), len(o.Out))
+			}
 		case OpNGramHash:
 			n, per := 0, o.Attr.Span
 			if len(o.In) == 1 {

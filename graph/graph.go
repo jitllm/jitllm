@@ -305,6 +305,17 @@ const (
 	// OpWidenHalves is In[0]'s binary16 halves, two a word (u32), as floats
 	// (Out[0], twice In[0]'s width), the low half first. A primitive.
 	OpWidenHalves
+	// OpQ8Rows is each row of In[0]'s floats as a q8 history's row holds it
+	// (Out[0], u32): the row's nb = ceil(W/32) blocks' codes, four to a word
+	// with the lower element low and the last block zero past W, then a pair
+	// of floats a block, its scale amax/127 and the sum of its codes times
+	// -16. A code is the element times the scale's reciprocal (zero where the
+	// scale is), rounded half away from zero. A primitive.
+	OpQ8Rows
+	// OpWidenQ8Rows is OpQ8Rows' rows (In[0], u32) as floats (Out[0], the
+	// rows' W elements): each element its code times its block's scale. A
+	// primitive.
+	OpWidenQ8Rows
 	numOps
 )
 
@@ -410,9 +421,17 @@ func (k OpKind) String() string {
 		return "halves"
 	case OpWidenHalves:
 		return "widen_halves"
+	case OpQ8Rows:
+		return "q8_rows"
+	case OpWidenQ8Rows:
+		return "widen_q8_rows"
 	}
 	return fmt.Sprintf("op%d", k)
 }
+
+// Q8RowWords is the words OpQ8Rows writes for a row of w floats: the codes
+// of ceil(w/32) blocks four to a word, then a pair a block.
+func Q8RowWords(w int) int { return (w + 31) / 32 * 10 }
 
 // RopeLayout is how a rotary pairs a head's elements.
 type RopeLayout uint8
