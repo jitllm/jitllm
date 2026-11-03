@@ -12,17 +12,16 @@ import (
 	"unicode"
 )
 
-// cachedBuiltins is a read-only scope populated once with all built-in
-// globals and filters. It is shared across every render — no code path
-// writes to the builtins scope (only chained reads through parent
-// links and lookupFilter), so a single shared instance is safe and
-// avoids rebuilding them per render.
-var cachedBuiltins = func() *scope {
+// newBuiltins is a read-only scope populated with all built-in globals and
+// filters. A Template builds it once at Compile and shares it across its
+// renders: no code path writes to the builtins scope (only chained reads
+// through parent links and lookupFilter).
+func newBuiltins() *scope {
 	s := newScope(nil)
 	registerGlobals(s)
 	registerFilters(s)
 	return s
-}()
+}
 
 // =============================================================================
 // Global functions

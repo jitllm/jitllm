@@ -7,8 +7,9 @@ import (
 
 // Template is a compiled Jinja template ready for rendering.
 type Template struct {
-	nodes []node
-	src   string
+	nodes    []node
+	src      string
+	builtins *scope
 }
 
 // Compile parses a Jinja template source string and returns a compiled
@@ -24,7 +25,7 @@ func Compile(source string) (*Template, error) {
 		return nil, fmt.Errorf("jinja parse: %w", err)
 	}
 
-	return &Template{nodes: nodes, src: source}, nil
+	return &Template{nodes: nodes, src: source, builtins: newBuiltins()}, nil
 }
 
 // Render executes the template with the provided data and returns the
@@ -37,23 +38,22 @@ func (t *Template) Render(data map[string]any) (string, error) {
 		vals[k] = FromGoValue(v)
 	}
 
-	return render(t.nodes, vals)
+	return render(t.nodes, t.builtins, vals)
 }
 
 // =============================================================================
 
 // render executes the AST with the given data and returns the result.
-func render(nodes []node, data map[string]Value) (string, error) {
+func render(nodes []node, builtins *scope, data map[string]Value) (string, error) {
 	e := evaluator{
 		output: strings.Builder{},
 	}
 
-	// Use the cached builtins scope directly. The scope is initialized
-	// once at package init and is only read after that (lookupFilter,
-	// chained get() through parent links, passed to nested evaluators).
-	// No code path writes to e.builtins, so sharing the cached scope
-	// across renders is safe and avoids cloning the entries per render.
-	e.builtins = cachedBuiltins
+	// The template's builtins scope is only read after Compile (lookupFilter,
+	// chained get() through parent links, passed to nested evaluators), so
+	// sharing it across renders is safe and avoids cloning the entries per
+	// render.
+	e.builtins = builtins
 
 	// Create user data scope on top of builtins.
 	e.scope = newScope(e.builtins)

@@ -35,7 +35,7 @@ func TestPipelineIsComposedNotHandPicked(t *testing.T) {
 		if kind != "gpt2" || verr != nil {
 			continue
 		}
-		if _, generated := pretok.Table[pre]; !generated {
+		if _, generated := pretok.Table()[pre]; !generated {
 			t.Logf("%-42s pre=%-12q NO generated pipeline (legacy path)", filepath.Base(p), pre)
 			continue
 		}
@@ -68,7 +68,7 @@ func TestGeneratedShapes(t *testing.T) {
 		{"gpt-2", []pretok.OpKind{pretok.OpByteLevel},
 			"ByteLevel(use_regex) alone -- the pattern lives INSIDE the stage"},
 	} {
-		ops, ok := pretok.Table[c.name]
+		ops, ok := pretok.Table()[c.name]
 		if !ok {
 			t.Errorf("%s: no generated pipeline (%s)", c.name, c.why)
 			continue
@@ -85,7 +85,7 @@ func TestGeneratedShapes(t *testing.T) {
 	}
 	// The digit rule, from the models' own artefacts.
 	for name, want := range map[string]int{"llama-bpe": 3, "smaug-bpe": 3, "qwen2": 1, "qwen35": 1} {
-		ops := pretok.Table[name]
+		ops := pretok.Table()[name]
 		for _, op := range ops {
 			if op.Kind == pretok.OpSplit && op.Split.DigitGroup != want {
 				t.Errorf("%s: digit group %d, want %d", name, op.Split.DigitGroup, want)
@@ -94,10 +94,10 @@ func TestGeneratedShapes(t *testing.T) {
 	}
 	// qwen35 is [\p{L}\p{M}]+ where qwen2 is \p{L}+ -- a difference the legacy
 	// family map could not express at all, since both were "qwen2Family".
-	if !pretok.Table["qwen35"][0].Split.LetterMarks {
+	if !pretok.Table()["qwen35"][0].Split.LetterMarks {
 		t.Error("qwen35: LetterMarks should be set; its pattern is [\\p{L}\\p{M}]+")
 	}
-	if pretok.Table["qwen2"][0].Split.LetterMarks {
+	if pretok.Table()["qwen2"][0].Split.LetterMarks {
 		t.Error("qwen2: LetterMarks should NOT be set; its pattern is \\p{L}+")
 	}
 }

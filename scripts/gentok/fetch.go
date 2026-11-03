@@ -18,7 +18,9 @@ import (
 	"time"
 )
 
-var repoLine = regexp.MustCompile(`\{"name":\s*"([^"]+)",\s*"tokt":\s*TOKENIZER_TYPE\.(\w+),\s*"repo":\s*"https://huggingface\.co/([^"]+)"`)
+func repoLine() *regexp.Regexp {
+	return regexp.MustCompile(`\{"name":\s*"([^"]+)",\s*"tokt":\s*TOKENIZER_TYPE\.(\w+),\s*"repo":\s*"https://huggingface\.co/([^"]+)"`)
+}
 
 // Latest, not pinned: the directory's value is currency, since new models mint
 // new names. The generated file records the resolved SHA and is checked in, so
@@ -91,7 +93,7 @@ func resolveHead() (string, error) {
 // way. Only BPE has a regex pre-tokenizer.
 func hfRepos(updateScript string) map[string][]string {
 	out := map[string][]string{}
-	for _, m := range repoLine.FindAllStringSubmatch(updateScript, -1) {
+	for _, m := range repoLine().FindAllStringSubmatch(updateScript, -1) {
 		r := strings.TrimSuffix(m[3], "/")
 		if m[2] == "BPE" && !slices.Contains(out[m[1]], r) {
 			out[m[1]] = append(out[m[1]], r)
@@ -103,7 +105,11 @@ func hfRepos(updateScript string) map[string][]string {
 // ErrGated is a repo HuggingFace will not serve without credentials, and
 // ErrMissing one it does not have at all. Both answer 401 anonymously; the body
 // tells them apart.
-var (
-	ErrGated   = fmt.Errorf("gated repo: needs HF_TOKEN")
-	ErrMissing = fmt.Errorf("repo not found on HuggingFace")
+const (
+	ErrGated   fetchError = "gated repo: needs HF_TOKEN"
+	ErrMissing fetchError = "repo not found on HuggingFace"
 )
+
+type fetchError string
+
+func (e fetchError) Error() string { return string(e) }

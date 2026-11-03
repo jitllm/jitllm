@@ -3,7 +3,6 @@ package tok
 import (
 	"fmt"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -42,21 +41,9 @@ type bpeState struct {
 	ignoreMerges bool
 }
 
-// gpt2 byte<->rune tables; pretok.ByteToRune is the definition.
-var (
-	byteToRune = pretok.ByteToRune
-	runeToByte = map[rune]byte{}
-)
-
-func init() {
-	for c := 0; c < 256; c++ {
-		runeToByte[byteToRune[c]] = byte(c)
-	}
-}
-
 func byteDecode(s string, out *strings.Builder) {
 	for _, r := range s {
-		if b, ok := runeToByte[r]; ok {
+		if b, ok := pretok.RuneToByte(r); ok {
 			out.WriteByte(b)
 			continue
 		}
@@ -110,7 +97,7 @@ func newBPE(vc *jlm.Vocab, v *Vocab, override []pretok.Op) error {
 	}
 	for c := 0; c < 256; c++ {
 		b.byteID[c] = -1
-		if id, ok := v.ids[string(byteToRune[c])]; ok {
+		if id, ok := v.ids[string(pretok.ByteToRune(byte(c)))]; ok {
 			b.byteID[c] = id
 		}
 	}
@@ -128,8 +115,8 @@ func (v *Vocab) encodeBPE(text string, addSpecial bool) []int32 {
 	// their ids are written once rather than copied through every doubling on
 	// the way up; denser text (CJK, symbols, 2-2.7) grows once.
 	out := make([]int32, 0, len(text)/3+2)
-	sc := bpeScratches.Get().(*bpeScratch)
-	defer sc.release()
+	sc := v.getScratch()
+	defer v.putScratch(sc)
 	word := func(w string) { out = v.mergeWord(w, out, sc) }
 	if addSpecial && v.AddBOS && v.BOS >= 0 {
 		out = append(out, v.BOS)
@@ -238,19 +225,25 @@ type bpeScratch struct {
 	pre  []runes // one per pre-tokenizer stage; see runes
 }
 
-// bpeScratches keeps scratch between Encodes. One that has grown past
-// maxPooledRunes is dropped, so a single giant input does not pin its buffers.
-var bpeScratches = sync.Pool{New: func() any { return new(bpeScratch) }}
-
 const maxPooledRunes = 1 << 20
 
-func (sc *bpeScratch) release() {
+// getScratch is scratch kept between Encodes.
+func (v *Vocab) getScratch() *bpeScratch {
+	if sc, ok := v.scratch.Get().(*bpeScratch); ok {
+		return sc
+	}
+	return new(bpeScratch)
+}
+
+// putScratch keeps sc for the next Encode. One that has grown past
+// maxPooledRunes is dropped, so a single giant input does not pin its buffers.
+func (v *Vocab) putScratch(sc *bpeScratch) {
 	for _, st := range sc.pre {
 		if cap(st.rs) > maxPooledRunes {
 			return
 		}
 	}
-	bpeScratches.Put(sc)
+	v.scratch.Put(sc)
 }
 
 // stages is n pre-tokenizer stage buffers, kept across calls.
@@ -272,7 +265,7 @@ func (v *Vocab) mergeWord(word string, out []int32, sc *bpeScratch) []int32 {
 	if v.bpe.ignoreMerges {
 		sc.buf = sc.buf[:0]
 		for i := 0; i < len(word); i++ {
-			sc.buf = utf8.AppendRune(sc.buf, byteToRune[word[i]])
+			sc.buf = utf8.AppendRune(sc.buf, pretok.ByteToRune(word[i]))
 		}
 		if id, ok := v.ids[string(sc.buf)]; ok {
 			return append(out, id)
@@ -407,10 +400,12 @@ func (v *Vocab) decodeBPE(ids []int32) string {
 // "default" is here only to keep an older container's answer what it was; it
 // is wrong for it (llama.cpp gives "default" its own pipeline, which the
 // converter now stores as pretok.LlamaCppDefault). Reconvert to fix.
-var llama3Family = map[string]bool{
-	"default": true, "llama3": true, "llama-v3": true, "llama-bpe": true,
-	"falcon3": true, "falcon-h1": true, "pixtral": true,
-	"midm-2.0": true, "lfm2": true, "jina-v5-nano": true,
+func llama3Family(pre string) bool {
+	switch pre {
+	case "default", "llama3", "llama-v3", "llama-bpe", "falcon3", "falcon-h1", "pixtral", "midm-2.0", "lfm2", "jina-v5-nano":
+		return true
+	}
+	return false
 }
 
 // digitGroupFor is the \p{N} quantifier the model's own tokenizer.json asks
@@ -426,27 +421,32 @@ func digitGroupFor(pre string) int {
 
 // qwen2Family and dbrxFamily share llama3's SHAPE but not its digit rule; see
 // digitGroupFor. They also do not take its ignore_merges or add_bos default.
-var qwen2Family = map[string]bool{
-	"qwen2": true, "qwen35": true, "hunyuan": true, "solar-open": true,
-	"minicpm5":         true, // llama3-shaped but single-digit; see digitGroupFor
-	"deepseek-r1-qwen": true, "kormo": true, "f2llmv2": true,
-	"dbrx": true, "smaug-bpe": true, "stablelm2": true,
+func qwen2Family(pre string) bool {
+	switch pre {
+	case "qwen2", "qwen35", "hunyuan", "solar-open", "minicpm5", "deepseek-r1-qwen", "kormo", "f2llmv2", "dbrx", "smaug-bpe", "stablelm2":
+		return true
+	}
+	return false
 }
 
 // gpt2Family gets the original GPT-2 pattern: no case-insensitive
 // contractions, no digit grouping in threes, no newline runs. It is a
 // different split from llama3's, not a simplification of it.
-var gpt2Family = map[string]bool{
-	"gpt-2": true, "mpt": true, "olmo": true, "jais": true, "trillion": true,
-	"granite-docling": true, "phi-2": true, "gigachat": true, "mellum": true,
-	"modern-bert": true, "a.x-4.0": true,
-	"jina-es": true, "jina-de": true, "jina-v2-es": true, "jina-v2-de": true,
+func gpt2Family(pre string) bool {
+	switch pre {
+	case "gpt-2", "mpt", "olmo", "jais", "trillion", "granite-docling", "phi-2", "gigachat", "mellum", "modern-bert", "a.x-4.0", "jina-es", "jina-de", "jina-v2-es", "jina-v2-de":
+		return true
+	}
+	return false
 }
 
 // starcoderFamily is gpt2's pattern with digits split one at a time first.
-var starcoderFamily = map[string]bool{
-	"starcoder": true, "refact": true, "command-r": true, "smollm": true,
-	"codeshell": true, "exaone": true, "minerva-7b": true, "mellum2": true,
+func starcoderFamily(pre string) bool {
+	switch pre {
+	case "starcoder", "refact", "command-r", "smollm", "codeshell", "exaone", "minerva-7b", "mellum2":
+		return true
+	}
+	return false
 }
 
 // preSplit applies the architecture's pre-tokenizer pattern and gathers the
@@ -467,13 +467,13 @@ func (v *Vocab) preSplitEach(text string, sc *bpeScratch, emit func(string)) {
 		return
 	}
 	switch {
-	case llama3Family[v.bpe.pre]:
+	case llama3Family(v.bpe.pre):
 		splitLlama3Each(text, llama3Params(3), &sc.stages(1)[0], emit)
-	case qwen2Family[v.bpe.pre]:
+	case qwen2Family(v.bpe.pre):
 		splitLlama3Each(text, llama3Params(digitGroupFor(v.bpe.pre)), &sc.stages(1)[0], emit)
-	case gpt2Family[v.bpe.pre]:
+	case gpt2Family(v.bpe.pre):
 		splitGPT2Each(text, &sc.stages(1)[0], emit)
-	case starcoderFamily[v.bpe.pre]:
+	case starcoderFamily(v.bpe.pre):
 		st := sc.stages(2)
 		splitDigitsEach(text, &st[0], func(run string) { splitGPT2Each(run, &st[1], emit) })
 	}

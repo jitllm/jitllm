@@ -23,7 +23,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // TestGeneratedTableMatchesArtefact requires, for every pre_tokenizer object in
-// testdata/pre, that pretok.ParsePreTokenizer produce exactly pretok.Table[name]
+// testdata/pre, that pretok.ParsePreTokenizer produce exactly pretok.Table()[name]
 // field by field, and that Op.GoSource render that parse back into the literal
 // checked into tok/pretok/table.go, verbatim. The second half makes the table a
 // reproducible cache: a hand-edited row fails even if it builds. The diff is
@@ -52,7 +52,7 @@ func TestGeneratedTableMatchesArtefact(t *testing.T) {
 			t.Errorf("%s: the model's own pre_tokenizer does not parse: %v", name, err)
 			continue
 		}
-		row, ok := pretok.Table[name]
+		row, ok := pretok.Table()[name]
 		if !ok {
 			t.Errorf("%s: the artefact is on disk but the generated table has no row for it; "+
 				"either the table lost a name or the file is misnamed", name)
@@ -131,7 +131,7 @@ func qwenBPEModel(t *testing.T) (*src, string) {
 		// By the pipeline it composes, not only by its label: a container
 		// converted from safetensors is labelled "tokenizer.json" and carries
 		// the stages that file describes.
-		if s.pre() == "qwen2" || composes(t, s, pretok.Table["qwen2"]) {
+		if s.pre() == "qwen2" || composes(t, s, pretok.Table()["qwen2"]) {
 			return s, s.name
 		}
 		s.Close()
@@ -187,7 +187,7 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 	if base.pipe == nil {
 		t.Fatalf("%s composed no pipeline; this gate cannot see an override", name)
 	}
-	if !reflect.DeepEqual(base.pipe.ops, pretok.Table["qwen2"]) {
+	if !reflect.DeepEqual(base.pipe.ops, pretok.Table()["qwen2"]) {
 		t.Fatalf("%s did not select the generated qwen2 row: %+v", name, base.pipe.ops)
 	}
 	if g := base.pipe.ops[0].Split.DigitGroup; g != 1 {
@@ -196,7 +196,7 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 
 	// --- arm A: the split changes, exactly and predictably.
 	over := loadWith(t, f, "llama-bpe")
-	if !reflect.DeepEqual(over.pipe.ops, pretok.Table["llama-bpe"]) {
+	if !reflect.DeepEqual(over.pipe.ops, pretok.Table()["llama-bpe"]) {
 		t.Fatalf("the llama-bpe artefact did not reach the vocabulary: %+v", over.pipe.ops)
 	}
 	if reflect.DeepEqual(base.pipe.ops, over.pipe.ops) {
@@ -259,7 +259,7 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 	// `\s*[\r\n]+` and becomes two under GPT-2's, and GPT-2's contraction
 	// alternation is case-exact where qwen2's folds.
 	smol := loadWith(t, f, "smollm")
-	if !reflect.DeepEqual(smol.pipe.ops, pretok.Table["smollm"]) {
+	if !reflect.DeepEqual(smol.pipe.ops, pretok.Table()["smollm"]) {
 		t.Fatalf("the smollm artefact did not reach the vocabulary: %+v", smol.pipe.ops)
 	}
 	ids := func(pieces ...string) []int32 {
@@ -324,7 +324,7 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 			t.Errorf("a plain New(vocabOf(t, f)) no longer tokenizes %q as it did: %v -> %v", text, a, b)
 		}
 	}
-	if !reflect.DeepEqual(again.pipe.ops, pretok.Table["qwen2"]) {
+	if !reflect.DeepEqual(again.pipe.ops, pretok.Table()["qwen2"]) {
 		t.Errorf("a plain New(vocabOf(t, f)) after two overrides composed %+v", again.pipe.ops)
 	}
 }
@@ -341,10 +341,10 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 // name from a file.
 func TestWithTokenizerRescuesUnknownPre(t *testing.T) {
 	const unknown = "a-converter-name-no-table-carries"
-	if _, ok := pretok.Table[unknown]; ok {
+	if _, ok := pretok.Table()[unknown]; ok {
 		t.Fatalf("%q is in the generated table; this gate would rescue nothing", unknown)
 	}
-	if llama3Family[unknown] || qwen2Family[unknown] || gpt2Family[unknown] || starcoderFamily[unknown] {
+	if llama3Family(unknown) || qwen2Family(unknown) || gpt2Family(unknown) || starcoderFamily(unknown) {
 		t.Fatalf("%q is in a legacy family map; the refusal this gate rescues would never fire", unknown)
 	}
 	f := openSrc(t, testmodels.Path("SmolLM2-360M-Instruct-Q8_0"))
@@ -366,17 +366,17 @@ func TestWithTokenizerRescuesUnknownPre(t *testing.T) {
 	}
 
 	v := loadWith(t, f, "llama-bpe")
-	if !reflect.DeepEqual(v.pipe.ops, pretok.Table["llama-bpe"]) {
+	if !reflect.DeepEqual(v.pipe.ops, pretok.Table()["llama-bpe"]) {
 		t.Fatalf("rescued, but running %+v", v.pipe.ops)
 	}
 	// The asserted pipeline must be the one that runs, not lose to a family
 	// splitter: compare with the same stages built independently, and against
 	// the model's own pipeline (smollm), which the output must not match.
-	ref, err := buildPipeline(pretok.Table["llama-bpe"])
+	ref, err := buildPipeline(pretok.Table()["llama-bpe"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	native, err := buildPipeline(pretok.Table["smollm"])
+	native, err := buildPipeline(pretok.Table()["smollm"])
 	if err != nil {
 		t.Fatal(err)
 	}

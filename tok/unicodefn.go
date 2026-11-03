@@ -1,22 +1,56 @@
 package tok
 
-import "sort"
-
 // The classification the pre-tokenizers split on, from jitllm's own pinned
 // tables rather than the Go toolchain's: the unicode package's tables change
 // with the compiler, and Go's Unicode 17.0.0 disagrees with the pinned tables
 // on thousands of letters, so a `go` upgrade could change token ids.
 
+// The generated tables are const strings of fixed-size records sorted by
+// their first word, three bytes little-endian each; ucRanges ends each record
+// with a flags byte.
+
+// ucWord is the three-byte word at byte offset o of table t.
+func ucWord(t string, o int) uint32 {
+	return uint32(t[o]) | uint32(t[o+1])<<8 | uint32(t[o+2])<<16
+}
+
+// ucLast is the index of the last record of t, stride bytes each, whose first
+// word is <= key, or -1.
+func ucLast(t string, stride int, key uint32) int {
+	lo, hi := 0, len(t)/stride
+	for lo < hi {
+		m := int(uint(lo+hi) >> 1)
+		if ucWord(t, m*stride) > key {
+			hi = m
+		} else {
+			lo = m + 1
+		}
+	}
+	return lo - 1
+}
+
+// ucMap is the second word of the record of t, six bytes each, whose first is r.
+func ucMap(t string, r rune) (rune, bool) {
+	if r < 0 {
+		return 0, false
+	}
+	u := uint32(r)
+	i := ucLast(t, 6, u)
+	if i < 0 || ucWord(t, i*6) != u {
+		return 0, false
+	}
+	return rune(ucWord(t, i*6+3)), true
+}
+
 func ucFlags(r rune) uint16 {
 	if r < 0 {
 		return ucFlagUndefined
 	}
-	u := uint32(r)
-	i := sort.Search(len(ucRanges), func(i int) bool { return ucRanges[i].start > u }) - 1
+	i := ucLast(ucRanges, 4, uint32(r))
 	if i < 0 {
 		return ucFlagUndefined
 	}
-	return ucRanges[i].flags
+	return uint16(ucRanges[i*4+3])
 }
 
 // ucIsLetter is \p{L}. Note llama.cpp folds every letter subcategory (Lu, Ll,
@@ -35,15 +69,15 @@ func ucIsSpace(r rune) bool {
 		return false
 	}
 	u := uint32(r)
-	i := sort.Search(len(ucWhitespace), func(i int) bool { return ucWhitespace[i] >= u })
-	return i < len(ucWhitespace) && ucWhitespace[i] == u
+	i := ucLast(ucWhitespace, 3, u)
+	return i >= 0 && ucWord(ucWhitespace, i*3) == u
 }
 
 // ucToLower is the simple lowercase mapping: one codepoint to one codepoint,
 // no locale and no multi-character expansions. That is what the contraction
 // rules need and what llama.cpp implements.
 func ucToLower(r rune) rune {
-	if c, ok := ucLower[r]; ok {
+	if c, ok := ucMap(ucLower, r); ok {
 		return c
 	}
 	return r
@@ -95,10 +129,10 @@ func ucUpperClass(r rune) bool {
 	if !ucIsLetter(r) {
 		return false
 	}
-	if _, down := ucLower[r]; down {
+	if _, down := ucMap(ucLower, r); down {
 		return true // Lu or Lt
 	}
-	_, up := ucUpper[r]
+	_, up := ucMap(ucUpper, r)
 	return !up // Lm/Lo have neither mapping; Ll has only the upward one
 }
 
@@ -109,7 +143,7 @@ func ucLowerClass(r rune) bool {
 	if !ucIsLetter(r) {
 		return false
 	}
-	_, down := ucLower[r]
+	_, down := ucMap(ucLower, r)
 	return !down // everything but Lu and Lt
 }
 
@@ -122,11 +156,11 @@ func ucIsHan(r rune) bool {
 		return false // below every Han range; the whole of ASCII
 	}
 	u := uint32(r)
-	for _, rg := range ucHan {
-		if u < rg[0] {
+	for o := 0; o < len(ucHan); o += 6 {
+		if u < ucWord(ucHan, o) {
 			return false
 		}
-		if u <= rg[1] {
+		if u <= ucWord(ucHan, o+3) {
 			return true
 		}
 	}

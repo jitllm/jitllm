@@ -18,10 +18,12 @@ type goldenCase struct {
 	NoBOS []int32 `json:"nobos"`
 }
 
-var models = map[string]string{
+func models() map[string]string {
+	return map[string]string{
 	"stories260K": "../testdata/models/stories260K.gguf",
 	"stories15M":  testmodels.Path("stories15M-q4_0.gguf"),
 	"tinyllama":   testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"),
+}
 }
 
 // TestGoldens is the tokenizer gate: exact token ids, against llama.cpp's own
@@ -29,7 +31,7 @@ var models = map[string]string{
 // shifts every embedding lookup after it and the model still produces fluent
 // text, so a tolerance would defeat the entire test.
 func TestGoldens(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		t.Run(name, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join("..", "testdata", "golden", "tokens", name+".json"))
 			if err != nil {
@@ -73,7 +75,7 @@ func TestGoldens(t *testing.T) {
 // its package's testdata, not the repository's).
 func stories260K(t *testing.T) *src {
 	t.Helper()
-	f := openSrc(t, strings.TrimSuffix(models["stories260K"], ".gguf"), testmodels.Path("stories260K"))
+	f := openSrc(t, strings.TrimSuffix(models()["stories260K"], ".gguf"), testmodels.Path("stories260K"))
 	if f == nil {
 		t.Fatal("stories260K is neither the testdata GGUF nor a container under " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory)")
 	}

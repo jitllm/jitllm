@@ -152,54 +152,55 @@ const (
 	ucFlagControl
 )
 
-// ucRanges is (start, flags); a codepoint takes the flags of the last range
-// whose start is <= it. %d entries.
-var ucRanges = [...]struct {
-	start uint32
-	flags uint16
-}{
-`, "15.1.0", "15.1.0", len(ranges))
+// ucRanges is %d records of four bytes: a range's start as three
+// little-endian bytes, then its flags. A codepoint takes the flags of the
+// last range whose start is <= it.
+const ucRanges = "" +`, "15.1.0", "15.1.0", len(ranges))
+	b.WriteString("\n")
 	for _, r := range ranges {
-		fmt.Fprintf(&b, "\t{0x%06X, 0x%04X},\n", r.start, r.flags)
+		packedRange(&b, r.start, r.flags)
 	}
-	fmt.Fprintf(&b, "}\n\n// ucWhitespace is llama.cpp's White_Space set, %d codepoints.\nvar ucWhitespace = [...]uint32{\n", len(white))
+	endPacked(&b)
+	fmt.Fprintf(&b, "\n// ucWhitespace is llama.cpp's White_Space set: %d codepoints, three bytes each.\nconst ucWhitespace = \"\" +\n", len(white))
 	for _, w := range white {
-		fmt.Fprintf(&b, "\t0x%06X,\n", w)
+		packed(&b, fmt.Sprintf("U+%06X", w), w)
 	}
-	fmt.Fprintf(&b, "}\n\n// ucLower is the simple lowercase mapping, %d entries.\nvar ucLower = map[rune]rune{\n", len(keys))
+	endPacked(&b)
+	fmt.Fprintf(&b, "\n// ucLower is the simple lowercase mapping: %d records, each the codepoint\n// and its mapping in three bytes apiece.\nconst ucLower = \"\" +\n", len(keys))
 	for _, k := range keys {
-		fmt.Fprintf(&b, "\t0x%06X: 0x%06X,\n", k, lower[k])
+		packed(&b, fmt.Sprintf("U+%06X", k), k, lower[k])
 	}
-	b.WriteString("}\n")
+	endPacked(&b)
 	// The uppercase map is not for uppercasing: the flag table has one letter
 	// bit, and o200k splits letter runs by case, so the two mappings separate
 	// the classes (see ucUpperClass/ucLowerClass in unicodefn.go).
-	fmt.Fprintf(&b, "\n// ucUpper is the simple uppercase mapping, %d entries. It exists to\n// separate Ll from Lm/Lo, not to uppercase anything -- see genunicode.\nvar ucUpper = map[rune]rune{\n", len(ukeys))
+	fmt.Fprintf(&b, "\n// ucUpper is the simple uppercase mapping, %d records laid out as ucLower. It\n// exists to separate Ll from Lm/Lo, not to uppercase anything -- see genunicode.\nconst ucUpper = \"\" +\n", len(ukeys))
 	for _, k := range ukeys {
-		fmt.Fprintf(&b, "\t0x%06X: 0x%06X,\n", k, upper[k])
+		packed(&b, fmt.Sprintf("U+%06X", k), k, upper[k])
 	}
-	b.WriteString("}\n")
+	endPacked(&b)
 	var nHan int
 	for _, r := range han {
 		nHan += int(r[1]-r[0]) + 1
 	}
 	fmt.Fprintf(&b, "\n// ucHan is the Han SCRIPT, %d merged ranges over %d codepoints, from\n"+
-		"// UCD %s Scripts.txt. It is a script rather than a category, which is why\n"+
-		"// it is not in the flag table: kimi-k2 is the only pre-tokenizer that asks.\nvar ucHan = [...][2]uint32{\n", len(han), nHan, "15.1.0")
+		"// UCD %s Scripts.txt, as (first, last) in three bytes apiece. It is a script\n"+
+		"// rather than a category, which is why it is not in the flag table: kimi-k2\n"+
+		"// is the only pre-tokenizer that asks.\nconst ucHan = \"\" +\n", len(han), nHan, "15.1.0")
 	for _, r := range han {
-		fmt.Fprintf(&b, "\t{0x%06X, 0x%06X},\n", r[0], r[1])
+		packed(&b, fmt.Sprintf("U+%06X..U+%06X", r[0], r[1]), r[0], r[1])
 	}
-	b.WriteString("}\n")
+	endPacked(&b)
 	// The NFD table is a base-character map, not a decomposition: each range
 	// maps a precomposed codepoint to the first codepoint of its canonical
 	// decomposition, which is all BERT's strip_accents needs.
 	sort.Slice(nfd, func(i, j int) bool { return nfd[i][0] < nfd[j][0] })
 	fmt.Fprintf(&b, "\n// ucNFD maps a precomposed codepoint to the base of its canonical\n"+
-		"// decomposition: (first, last, base), %d ranges. See genunicode.\nvar ucNFD = [...][3]uint32{\n", len(nfd))
+		"// decomposition: %d records of (first, last, base), three bytes apiece. See\n// genunicode.\nconst ucNFD = \"\" +\n", len(nfd))
 	for _, r := range nfd {
-		fmt.Fprintf(&b, "\t{0x%06X, 0x%06X, 0x%06X},\n", r[0], r[1], r[2])
+		packed(&b, fmt.Sprintf("U+%06X..U+%06X", r[0], r[1]), r[0], r[1], r[2])
 	}
-	b.WriteString("}\n")
+	endPacked(&b)
 	must(os.WriteFile(os.Args[3], []byte(b.String()), 0o644))
 	fmt.Printf("wrote %s: %d ranges, %d whitespace, %d lowercase, %d uppercase, %d Han ranges (%d codepoints), %d NFD ranges\n",
 		os.Args[3], len(ranges), len(white), len(keys), len(ukeys), len(han), nHan, len(nfd))
@@ -258,3 +259,22 @@ func hanRanges(path string) [][2]uint32 {
 	}
 	return merged
 }
+
+// packed writes one record of a packed table, one per line, each value as
+// three little-endian bytes; the label is the record in the source's terms.
+func packed(b *strings.Builder, label string, vals ...uint32) {
+	b.WriteString("\t\"")
+	for _, v := range vals {
+		fmt.Fprintf(b, "\\x%02x\\x%02x\\x%02x", v&0xff, v>>8&0xff, v>>16&0xff)
+	}
+	fmt.Fprintf(b, "\" + // %s\n", label)
+}
+
+// packedRange writes one record of ucRanges: the start in three bytes and the
+// flags in a fourth.
+func packedRange(b *strings.Builder, start uint32, flags uint16) {
+	fmt.Fprintf(b, "\t\"\\x%02x\\x%02x\\x%02x\\x%02x\" + // U+%06X\n", start&0xff, start>>8&0xff, start>>16&0xff, flags, start)
+}
+
+// endPacked closes a table's last record.
+func endPacked(b *strings.Builder) { b.WriteString("\t\"\"\n") }

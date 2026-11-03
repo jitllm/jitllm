@@ -56,7 +56,7 @@ func TestTestdataPreTokenizersMatchTheGeneratedTable(t *testing.T) {
 			t.Errorf("%s: the dumped object does not parse: %v", name, err)
 			continue
 		}
-		row, ok := pretok.Table[name]
+		row, ok := pretok.Table()[name]
 		if !ok {
 			t.Errorf("%s: not in the generated table; this file proved nothing", name)
 			continue

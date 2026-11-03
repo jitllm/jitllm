@@ -25,13 +25,13 @@ import (
 // raw JSON object they were parsed from (for -dump), and the repo that served
 // it -- a mirror or stand-in when the defining repo could not.
 func fetchPipeline(repo string) ([]pretok.Op, []byte, string, error) {
-	if m, ok := mirrors[repo]; ok {
+	if m, ok := mirrors()[repo]; ok {
 		if ops, raw, err := fetchPipelineFrom(m); err == nil {
 			return ops, raw, m, nil
 		}
 	}
 	ops, raw, err := fetchPipelineFrom(repo)
-	if si, ok := standIns[repo]; ok && err != nil {
+	if si, ok := standIns()[repo]; ok && err != nil {
 		ops, raw, err = fetchPipelineFrom(si)
 		return ops, raw, si, err
 	}
@@ -46,8 +46,10 @@ func fetchPipeline(repo string) ([]pretok.Op, []byte, string, error) {
 // THUDM/glm-4-9b-chat (zai-org) ships a tiktoken tokenizer.model and
 // Python; zai-org/glm-4-9b-chat-hf is the same organisation's
 // HuggingFace-format conversion of it and does ship a tokenizer.json.
-var standIns = map[string]string{
-	"THUDM/glm-4-9b-chat": "zai-org/glm-4-9b-chat-hf",
+func standIns() map[string]string {
+	return map[string]string{
+		"THUDM/glm-4-9b-chat": "zai-org/glm-4-9b-chat-hf",
+	}
 }
 
 func fetchPipelineFrom(repo string) ([]pretok.Op, []byte, error) {
@@ -125,10 +127,12 @@ func fetchPipelineFrom(repo string) ([]pretok.Op, []byte, error) {
 // (not) list the same blob as CohereForAI/c4ai-command-r-v01.
 // Xenova/c4ai-command-r-v01-tokenizer, the obvious "mirror", is not it: its
 // blob differs and is 27 bytes shorter.
-var mirrors = map[string]string{
-	"meta-llama/Meta-Llama-3-8B":                "NousResearch/Meta-Llama-3-8B",
-	"meta-llama/Llama-4-Scout-17B-16E-Instruct": "unsloth/Llama-4-Scout-17B-16E-Instruct",
-	"CohereForAI/c4ai-command-r-v01":            "mlx-community/aya-23-8B-8bit",
+func mirrors() map[string]string {
+	return map[string]string{
+		"meta-llama/Meta-Llama-3-8B":                "NousResearch/Meta-Llama-3-8B",
+		"meta-llama/Llama-4-Scout-17B-16E-Instruct": "unsloth/Llama-4-Scout-17B-16E-Instruct",
+		"CohereForAI/c4ai-command-r-v01":            "mlx-community/aya-23-8B-8bit",
+	}
 }
 
 // doWithBackoff retries a rate-limited or transiently failed fetch.

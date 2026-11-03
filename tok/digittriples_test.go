@@ -64,7 +64,7 @@ func TestTheDigitTripleSplitIsReadOnlyIsolated(t *testing.T) {
 	}
 }
 
-// TestLlamaCppDefaultPipeline holds pretok.LlamaCppDefault to llama.cpp's own
+// TestLlamaCppDefaultPipeline holds pretok.LlamaCppDefault() to llama.cpp's own
 // default regexes (llama-vocab.cpp, the `default:` arm), applied in order by
 // Python's `regex` module the way unicode_regex_split applies them: each
 // pattern over each piece, the gaps kept.
@@ -73,7 +73,7 @@ func TestTheDigitTripleSplitIsReadOnlyIsolated(t *testing.T) {
 // takes it before any contraction rule sees it. The backtick row is where this
 // class parts from HuggingFace's Punctuation.
 func TestLlamaCppDefaultPipeline(t *testing.T) {
-	p, err := buildPipeline(pretok.LlamaCppDefault)
+	p, err := buildPipeline(pretok.LlamaCppDefault())
 	if err != nil {
 		t.Fatal(err)
 	}
