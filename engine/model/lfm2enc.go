@@ -28,13 +28,63 @@ import (
 // lfBlock is one trunk block: a short convolution or an attention, then the
 // MLP.
 type lfBlock struct {
-	attn           bool
-	norm, ffnNorm  []float32
-	b, c, x, out   tensor    // the convolution's B, C and x projections and out_proj
-	taps           []float32 // the convolution's three taps per channel, [tap][channel]
+	attn          bool
+	norm, ffnNorm []float32
+	b, c, x, out  tensor    // the convolution's B, C and x projections and out_proj
+	taps          []float32 // the convolution's three taps per channel, [tap][channel]
+	// convTaps is the taps as the file stores them, a channel's contiguous:
+	// the composer's OpRowConv reads them so.
+	convTaps       tensor
 	wq, wk, wv, wo tensor
 	qNorm, kNorm   []float32
 	gate, up, down tensor
+}
+
+// roleWeight is the block's matrix of role r as the composer binds it, nil
+// for a role the block does not hold.
+func (b *lfBlock) roleWeight(r jlm.Role) *tensor {
+	switch r {
+	case jlm.RoleAttnQ:
+		return &b.wq
+	case jlm.RoleAttnK:
+		return &b.wk
+	case jlm.RoleAttnV:
+		return &b.wv
+	case jlm.RoleAttnOut:
+		return &b.wo
+	case jlm.RoleSCB:
+		return &b.b
+	case jlm.RoleSCC:
+		return &b.c
+	case jlm.RoleSCX:
+		return &b.x
+	case jlm.RoleSSMOut:
+		return &b.out
+	case jlm.RoleSSMConv1d:
+		return &b.convTaps
+	case jlm.RoleFFNGate:
+		return &b.gate
+	case jlm.RoleFFNUp:
+		return &b.up
+	case jlm.RoleFFNDown:
+		return &b.down
+	}
+	return nil
+}
+
+// roleVector is the block's vector of role r, nil for one it does not hold.
+func (b *lfBlock) roleVector(r jlm.Role) []float32 {
+	switch r {
+	case jlm.RoleAttnNorm:
+		return b.norm
+	case jlm.RoleFFNNorm:
+		return b.ffnNorm
+	case jlm.RoleAttnQNorm:
+		return b.qNorm
+	case jlm.RoleAttnKNorm:
+		return b.kNorm
+	}
+	return nil
 }
 
 func (b *lfBlock) weights() []*tensor {
@@ -110,6 +160,9 @@ func buildLFM2Enc(c *jlm.File, m *Model, enc *encoder) error {
 		return fmt.Errorf("model: %d heads of %d (rotary %d) for a %d-wide residual", cfg.NHead, hd, cfg.NRot, d)
 	}
 	lf := &lfm2Enc{rope: nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: true, Scale: 1}}
+	// The front end turns the attention by the model's rotary: the trunk's,
+	// NEOX over the whole head.
+	m.rope, cfg.RopeNeox, cfg.RowWindowed = lf.rope, true, true
 	var err error
 	if lf.outNorm, err = vec(jlm.RoleOutputNorm, jlm.DenseBlock, d); err != nil {
 		return err
@@ -147,6 +200,7 @@ func buildLFM2Enc(c *jlm.File, m *Model, enc *encoder) error {
 			if err != nil {
 				return err
 			}
+			b.convTaps = f32Tensor(taps, d, 3)
 			// [channel][tap] in the file (conv.weight, {3, d}); [tap][channel]
 			// here, each tap a row the generated multiply reads whole.
 			b.taps = make([]float32, 3*d)
@@ -215,6 +269,10 @@ func (e *Embedder) lfm2Encode(ids []int32, pre []float32) error {
 	if err := e.devPrepare(n, -1, p); err != nil {
 		return err
 	}
+	// Each row's window: a prefix row's the prefix, a text row's its
+	// sequence (rowWindows), which its attention and its convolution's taps
+	// keep to.
+	wins := e.rowWindows(n, -1, p)
 	for li := 0; li < len(lf.blocks); li++ {
 		// A run of placed blocks is one device call over the sequence.
 		if e.onDevice(li) {
@@ -230,6 +288,25 @@ func (e *Embedder) lfm2Encode(ids []int32, pre []float32) error {
 		}
 		if err := m.encBlockPageIn(li); err != nil {
 			return err
+		}
+		// The composed CPU runs a call in chunks of cpuRowsCap rows, and the
+		// centred convolution reads the rows either side of its own across a
+		// chunk's edge, which no chunk holds: until its input is a history
+		// the second pass reads (as a bidirectional attention's keys are),
+		// the trunk runs here (TestComposedD1OmniOnCPU).
+		if len(wins) <= cpuRowsCap && e.cpuRuns(li) {
+			e.seg.cpu.rowWins = wins
+			ok, err := e.cpuRun(li, n, x, e.cs[:n*c.NRot], nil)
+			e.seg.cpu.rowWins = nil
+			if err != nil {
+				return err
+			}
+			if ok {
+				if e.afterBlock != nil {
+					e.afterBlock(li, x)
+				}
+				continue
+			}
 		}
 		e.cpuDecline(li)
 		b := &lf.blocks[li]

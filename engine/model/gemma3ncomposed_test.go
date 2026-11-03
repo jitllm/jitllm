@@ -2,7 +2,6 @@ package model
 
 import (
 	"math"
-	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -15,7 +14,7 @@ import (
 // fixture's own ids against the CPU's float forms over the same history
 // (withCPUFloat): every block step and head served, within 1e-5 of their
 // logits on decode and on a prompt with its
-// decode, and each piece of the block taken out (gemma3nComposedViolations:
+// decode, and each piece of the block taken out (gemma3nViolations:
 // the prediction, the correction, the side branch, the gaussian top-k on no
 // block and on every block, the correction's scale) moving the composed
 // arm past 100 times its worst and past 1e-4. The input rows' expansion of
@@ -66,7 +65,7 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 			if !(worst < bound) || !(pworst < bound) {
 				t.Fatalf("the composed CPU is %.3g and %.3g from the float forms, bound %g", worst, pworst, bound)
 			}
-			for _, v := range gemma3nComposedViolations() {
+			for _, v := range gemma3nViolations {
 				undo := v.mut(m)
 				bad := worstFrom(want, cpuLogits(t, m, toks, cpuFaultNone, true))
 				undo()
@@ -86,49 +85,12 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 	}
 }
 
-// gemma3nComposedViolations is gemma3nViolations as the composed arm reads
-// them: the gaussian top-k is the activation the container states for the
-// first NSparse blocks, which main's arm runs from NSparse, so its two
-// violations restate the blocks' activations instead.
-func gemma3nComposedViolations() []c6Violation {
-	acts := func(name string, to func(c *Config, acts []uint8) func(li int) uint8) c6Violation {
-		return c6Violation{name, func(m *Model) func() {
-			jc := m.container.Config()
-			was := slices.Clone(jc.ActLayers)
-			pick := to(m.Cfg, was)
-			for li := range jc.ActLayers {
-				jc.ActLayers[li] = pick(li)
-			}
-			undo := cfgMut(m, func(*Config) {})
-			return func() {
-				copy(jc.ActLayers, was)
-				undo()
-			}
-		}}
-	}
-	var vs []c6Violation
-	for _, v := range gemma3nViolations {
-		switch v.name {
-		case "no gaussian top-k":
-			v = acts(v.name, func(c *Config, a []uint8) func(int) uint8 {
-				return func(int) uint8 { return a[c.NSparse] }
-			})
-		case "the gaussian on every block":
-			v = acts(v.name, func(c *Config, a []uint8) func(int) uint8 {
-				return func(int) uint8 { return a[0] }
-			})
-		}
-		vs = append(vs, v)
-	}
-	return vs
-}
-
 // TestGemma3nServesComposed holds the composer to each Gemma 3n fixture's
 // blocks on every device present: the residual's streams bound as views at
 // their offsets in the stream-major residual on the card, every block step
 // served, decode and a prompt's rows (gpu.ComposedPrompt), within the
 // device band of the host's logits, and each piece of the block taken out
-// (gemma3nComposedViolations) moving them past 100 times the clean worst and
+// (gemma3nViolations) moving them past 100 times the clean worst and
 // past 1e-4. The input rows over every stream and the per-layer inputs, and
 // the streams' collapse before the head, are stated (a head over every
 // stream is refused by name, UncoveredStreams) and served on the card with
@@ -194,7 +156,7 @@ func TestGemma3nServesComposed(t *testing.T) {
 					if !(worst < bound) {
 						t.Fatalf("worst logit NMSE %.3g against the host, bound %g", worst, bound)
 					}
-					for _, v := range gemma3nComposedViolations() {
+					for _, v := range gemma3nViolations {
 						undo := v.mut(m)
 						bad := run(t, dev)
 						undo()

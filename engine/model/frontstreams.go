@@ -190,8 +190,11 @@ func (m *Model) bankMix(b *graph.Builder, f graph.Facts, bank []graph.ValueID, x
 	}
 	scores := make([]graph.ValueID, len(rows))
 	for j, v := range rows {
-		nv := b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: "bank.normed", Width: d}}, nil,
-			graph.Attrs{Eps: c.RMSEps, HeadDim: d}, nil, nil)[0]
+		nv := v
+		if c.k3Fault != k3FaultRawScores {
+			nv = b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: "bank.normed", Width: d}}, nil,
+				graph.Attrs{Eps: c.RMSEps, HeadDim: d}, nil, nil)[0]
+		}
 		scores[j] = reduce("bank.score", mapRow(b, "bank.scored", graph.Attrs{Fn: graph.MapMul}, w, d, nv), graph.MapAdd)
 	}
 	ns := len(rows)
@@ -204,6 +207,9 @@ func (m *Model) bankMix(b *graph.Builder, f graph.Facts, bank []graph.ValueID, x
 	acc := mapRow(b, "bank.mix", graph.Attrs{Fn: graph.MapMul}, nil, d, slice1(b, "bank.pj", p, 0), rows[0])
 	for j := 1; j < ns; j++ {
 		acc = mapRow(b, "bank.mix", graph.Attrs{Fn: graph.MapFma}, nil, d, slice1(b, "bank.pj", p, j), rows[j], acc)
+	}
+	if c.k3Fault == k3FaultNoBank {
+		return keepBound(b, x, acc)
 	}
 	return acc
 }
@@ -435,18 +441,94 @@ func (m *Model) streamCollapseGraph() (*graph.Graph, error) {
 }
 
 // plainActAt is block li's stated activation without the sparsity the
-// container states on its first NSparse blocks' FFN gates: the activation
-// of the first block past them, nil where every block is sparse. A gate
-// that is not an FFN's (the per-layer input's) reads it.
+// container states on its FFN's gate (unsparsified): the activation a gate
+// that is not an FFN's (the per-layer input's) reads.
 func (m *Model) plainActAt(li int) *jlm.Expr {
-	c := m.Cfg
-	if li < c.NSparse {
-		if c.NSparse >= c.NLayer {
-			return nil
-		}
-		li = c.NSparse
+	e := m.container.Config().ActAt(li)
+	if e == nil {
+		return nil
 	}
-	return m.container.Config().ActAt(li)
+	return unsparsified(e)
+}
+
+// unsparsified is e with each term keeping max(g - t, 0) of its gate g
+// (operand 0), t a value reduced over the gate -- Gemma 3n's gaussian top-k,
+// t the mean and SparseStd deviations -- read as the gate itself, and the
+// terms nothing reads then dropped: e itself where it has no such term.
+func unsparsified(e *jlm.Expr) *jlm.Expr {
+	gate := jlm.Operand(0)
+	ts := slices.Clone(e.Terms)
+	// overGate reports whether a reads a reduction over the gate, gated
+	// whether it reads the gate at all.
+	var overGate, gated func(a jlm.Arg) bool
+	gated = func(a jlm.Arg) bool {
+		if a == gate {
+			return true
+		}
+		if a.Kind != jlm.ArgTerm {
+			return false
+		}
+		return slices.ContainsFunc(ts[a.Index].Args[:], gated)
+	}
+	overGate = func(a jlm.Arg) bool {
+		if a.Kind != jlm.ArgTerm {
+			return false
+		}
+		t := ts[a.Index]
+		if t.Reduce && gated(t.Args[0]) {
+			return true
+		}
+		return slices.ContainsFunc(t.Args[:], overGate)
+	}
+	cut := false
+	for k, t := range ts {
+		if t.Fn != jlm.FnMax || t.Reduce || t.Args[1] != jlm.Num(0) || t.Args[0].Kind != jlm.ArgTerm {
+			continue
+		}
+		s := ts[t.Args[0].Index]
+		if s.Fn != jlm.FnSub || s.Reduce || s.Args[0] != gate || !overGate(s.Args[1]) {
+			continue
+		}
+		at := jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(k)}
+		for j := k + 1; j < len(ts); j++ {
+			for i, a := range ts[j].Args {
+				if a == at {
+					ts[j].Args[i] = gate
+				}
+			}
+		}
+		cut = true
+	}
+	if !cut {
+		return e
+	}
+	live := make([]bool, len(ts))
+	live[len(ts)-1] = true
+	for k := len(ts) - 1; k >= 0; k-- {
+		if !live[k] {
+			continue
+		}
+		for _, a := range ts[k].Args {
+			if a.Kind == jlm.ArgTerm {
+				live[a.Index] = true
+			}
+		}
+	}
+	at := make([]uint32, len(ts))
+	out := &jlm.Expr{}
+	for k, t := range ts {
+		if !live[k] {
+			continue
+		}
+		for i, a := range t.Args {
+			if a.Kind == jlm.ArgTerm {
+				t.Args[i].Index = at[a.Index]
+			}
+		}
+		at[k] = uint32(len(out.Terms))
+		out.Terms = append(out.Terms, t)
+	}
+	return out
 }
 
 // keepBound is x with v read and weighed by zero: a gate's violation that

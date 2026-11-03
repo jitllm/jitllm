@@ -106,6 +106,9 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 		graph.Attrs{NHead: vh, NKVHead: kh, HeadDim: dk, Tiled: g.tiled, Span: stateSpan(c, vh*dv*dk)},
 		[]graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}})[0]
 	o = b.HeadNorm(o, jlm.RoleSSMNorm, dv, c.RMSEps)
+	if c.k3Fault == k3FaultNoKDAGate {
+		return keepBound(b, o, z), nil
+	}
 	if g.chanDecay || c.q4eSigmoidGate() {
 		return sigmoidMul(b, "gated", z, o), nil
 	}

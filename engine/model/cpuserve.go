@@ -199,6 +199,9 @@ type cpuBuf struct {
 // once for the model, and the words of each of its own buffers.
 type cpuBlockForm struct {
 	codes []cpuCode
+	// rec says the graph steps a recurrent state: a recurrent kind's block
+	// whose convolution is centred over the call keeps none.
+	rec bool
 	// rows is the rows the form holds: 1 for decode's, else its capacity;
 	// keys the positions of a sequence's history it attends at most.
 	rows, keys int
@@ -331,6 +334,10 @@ type cpuState struct {
 	// attend inside, none of the positions before it: a tower's windowed
 	// block's (cpuTowerRows).
 	runWindows bool
+	// rowWins is each row's own window where a call's rows' windows overlap
+	// (an LFM2 encoder's media prefix), nil else: its rows' descriptors
+	// carry them as they are.
+	rowWins []nn.KeyRun
 	// own is each form's own buffers, by form: blocks of one form run one
 	// after another, so they share them.
 	own map[*cpuBlockForm][][]uint32
@@ -1108,6 +1115,9 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 					st = max(st, s.bidirStart(p))
 				}
 			}
+			if w := s.cpu.rowWins; w != nil {
+				st, e = max(st, w[p].Lo), w[p].Hi
+			}
 			end = max(end, p+1)
 			t := s.cpu.rowsTab[i*4 : i*4+4]
 			t[0], t[1], t[2], t[3] = uint32(seq[r0+i]*slots), uint32(st), uint32(e), uint32(p)
@@ -1160,8 +1170,7 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 			}
 			s.cpuEntBind(b, li, s.cpu.entTab, seq[r0:r0+k], pos[r0:r0+k])
 		}
-		rec := s.c.LayerKind(li).Recurrent()
-		if rec {
+		if f.rec {
 			b.recLi, b.recOf, b.rec = s.cpuRecLi(li), s.Session, s.cpuRecDesc(seq[r0:r0+k])
 			if n := len(s.rconv[b.recLi]); len(s.cpu.convOut) < n {
 				s.cpu.convOut = make([]float32, n)
@@ -1189,7 +1198,7 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 			s.cpuCall(b, &f.codes[i])
 		}
 		s.expHold.release()
-		if rec {
+		if f.rec {
 			// The runs' windows over their slots.
 			L := s.dg.convStateLen()
 			for i, q := range seq[r0 : r0+k] {
@@ -1899,6 +1908,18 @@ func (m *Model) cpuFormOf(req composer.Request, gr *graph.Graph, rows int, apart
 // relocation or tuning moves, and a prefill or a generated token must not.
 func (m *Model) CPUComposes() int64 { return m.cpuComposes.Load() }
 
+// stepsState reports whether gr reads or writes a recurrent state.
+func stepsState(gr *graph.Graph) bool {
+	for _, o := range gr.Ops {
+		for _, r := range slices.Concat(o.Reads, o.Writes) {
+			if r.State == graph.StateRecState || r.State == graph.StateRecConv {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // buildCPUForm maps codes and plans each call word's source: the graph's
 // input and output the residual, or with apart each an io place of its own.
 // A whole form is run at its rows and no fewer (a convolutional block's,
@@ -1907,7 +1928,7 @@ func buildCPUForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole
 	if apart && len(gr.In)+len(gr.Out) > cpuIO {
 		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), cpuIO)
 	}
-	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows, sel: -1, wsel: -1}
+	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows, sel: -1, wsel: -1, rec: stepsState(gr)}
 	selV, wsV := selOf(gr), weightsOf(gr)
 	wOwn := map[graph.ValueID]int{}
 	var wrote, read []ownUse

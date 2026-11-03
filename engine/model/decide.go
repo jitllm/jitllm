@@ -178,6 +178,11 @@ type Decider struct {
 }
 
 // NewDecider builds a Decider whose prompts may run to maxSeq tokens.
+// decisionOptions is the most options or labels a decision weighs: every
+// kind's, its scores' argmax formed at its instance's placement over them
+// (cpuArgmax).
+const decisionOptions = 255
+
 func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 	kind := m.Decision()
 	if kind == jlm.DecisionNone {
@@ -194,7 +199,7 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("model: the systemone template: %w", err)
 	}
-	d := &Decider{m: m, cfg: m.container.Config(), kind: kind, tpl: tpl, maxOptions: 255}
+	d := &Decider{m: m, cfg: m.container.Config(), kind: kind, tpl: tpl, maxOptions: decisionOptions}
 	switch kind {
 	case jlm.DecisionLev, jlm.DecisionVllmD3:
 		// Codes A..Z then AA..ZZ; only those that are one token are used, up

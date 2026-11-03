@@ -211,6 +211,21 @@ func (e *Embedder) devPrepare(n, window, prefix int) error {
 	if !ok {
 		return fmt.Errorf("model: the device holds a windowed encoder block and takes no row windows")
 	}
+	wins := e.rowWindows(n, window, prefix)
+	if !rw.SetRowWindows(wins) {
+		why := ""
+		if er, ok := s.ld.(nn.ErrReporter); ok {
+			why = er.Err()
+		}
+		return fmt.Errorf("model: the device refused the encoder's %d row windows: %s", n, why)
+	}
+	return nil
+}
+
+// rowWindows is each of n rows' window (devPrepare's): its packed sequence's
+// rows, and where window is negative a media prefix's rows the prefix alone,
+// where it is positive the keys within window either side.
+func (e *Embedder) rowWindows(n, window, prefix int) []nn.KeyRun {
 	wins := e.wins[:0]
 	for i := 0; i < n; i++ {
 		lo, hi := 0, n
@@ -228,14 +243,7 @@ func (e *Embedder) devPrepare(n, window, prefix int) error {
 		}
 	}
 	e.wins = wins
-	if !rw.SetRowWindows(wins) {
-		why := ""
-		if er, ok := s.ld.(nn.ErrReporter); ok {
-			why = er.Err()
-		}
-		return fmt.Errorf("model: the device refused the encoder's %d row windows: %s", n, why)
-	}
-	return nil
+	return wins
 }
 
 // zeros is a zero row of n, the bias a LayerNorm without one is handed on a
@@ -296,7 +304,9 @@ func (s *Instance) encPlan(li int) *nn.LayerPlan {
 			p.HeadDim = c.NEmbd / p.NHead
 			p.NFFN, p.UngatedFFN, p.Act = mb.headFFN, true, nn.ActReLU
 			p.NoPosEnc = true
-			p.HeadSet = enc.lf != nil
+			// A head attending or norming otherwise than the trunk runs in a
+			// set of its own (nn.LayerPlan.HeadSet).
+			p.HeadSet = enc.lf != nil || p.NHead != c.NHead || p.HeadDim != c.HeadDim
 			return p
 		}
 		p.Act = nn.ActGELUErf

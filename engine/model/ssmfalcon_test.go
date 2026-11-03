@@ -1,8 +1,6 @@
 package model
 
 import (
-	"slices"
-
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -53,16 +51,16 @@ func falconh1Violations(bool) []c6Violation {
 			restore := cfgMut(m, func(c *Config) { c.RopeNeox = false })
 			return func() { m.rope.Neox = was; restore() }
 		}},
-		{"the attention half dropped", falconKinds(jlm.LayerSSD)},
-		{"the mixer half dropped", falconKinds(jlm.LayerFullAttn)},
+		{"the attention half dropped", falconHalf(halfFaultNoAttn)},
+		{"the mixer half dropped", falconHalf(halfFaultNoMixer)},
 	}
 }
 
 // falconKinds runs every block as kind alone: one half of the sum dropped.
-func falconKinds(kind jlm.LayerKind) func(m *Model) func() {
+// falconHalf drops one half of every block (halfFault): computed, bound and
+// weighed by zero, as the container stores both.
+func falconHalf(f halfFault) func(m *Model) func() {
 	return func(m *Model) func() {
-		return cfgMut(m, func(c *Config) {
-			c.LayerKinds = slices.Repeat([]jlm.LayerKind{kind}, len(c.LayerKinds))
-		})
+		return cfgMut(m, func(c *Config) { c.halfFault = f })
 	}
 }

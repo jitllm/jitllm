@@ -700,6 +700,9 @@ func (m *Model) encRoleWeight(li int, r jlm.Role) *tensor {
 			}
 			return nil
 		}
+		if lf := enc.lf; lf != nil && li >= 0 && li < len(lf.blocks) {
+			return lf.blocks[li].roleWeight(r)
+		}
 		if enc.lf != nil || li < 0 || li >= mb.trunk {
 			return nil
 		}
@@ -777,6 +780,9 @@ func (m *Model) encRoleVector(li int, r jlm.Role) []float32 {
 				return h.ln2B
 			}
 			return nil
+		}
+		if lf := enc.lf; lf != nil && li >= 0 && li < len(lf.blocks) {
+			return lf.blocks[li].roleVector(r)
 		}
 		if enc.lf != nil || li < 0 || li >= mb.trunk {
 			return nil

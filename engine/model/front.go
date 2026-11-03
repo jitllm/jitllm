@@ -37,7 +37,6 @@ const (
 	UncoveredStreams
 	UncoveredRopeAxes
 	UncoveredNonCausal
-	UncoveredCentredConv
 	UncoveredTemp
 	UncoveredCompressed
 	UncoveredAct
@@ -56,19 +55,18 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredExperts:     "routed experts weighted at their input over biased banks, in a latent of their own, or stored one matrix each",
 	UncoveredGeometry: "a value head of another width than the key's, a layer of its own rotary width turned by the model's rotary, " +
 		"or a block reading another's history of another shape than its attention's",
-	UncoveredSelect:      "an attention indexer or sparse key selection",
-	UncoveredStreams:     "several residual streams",
-	UncoveredRopeAxes:    "a rotary over position axes its sections do not state (a pair's halves turned apart)",
-	UncoveredNonCausal:   "non-causal attention",
-	UncoveredCentredConv: "a centred short convolution, which the call's runs cut",
-	UncoveredTemp:        "an attention temperature whose position offset is not a whole number",
-	UncoveredCompressed:  "compressed or grouped attention",
-	UncoveredAct:         "an activation the container does not state, or not over the block's operands",
-	UncoveredPooling:     "a pooled head (an embedding model's)",
-	UncoveredEmbedRows:   "input rows beyond the token's row, a scale and a position table",
-	UncoveredClamp:       "linears clamped to stored bounds",
-	UncoveredUnbound:     "stored tensors its graph does not bind",
-	UncoveredUnverified:  "a graph that does not verify",
+	UncoveredSelect:     "an attention indexer or sparse key selection",
+	UncoveredStreams:    "several residual streams",
+	UncoveredRopeAxes:   "a rotary over position axes its sections do not state (a pair's halves turned apart)",
+	UncoveredNonCausal:  "non-causal attention",
+	UncoveredTemp:       "an attention temperature whose position offset is not a whole number",
+	UncoveredCompressed: "compressed or grouped attention",
+	UncoveredAct:        "an activation the container does not state, or not over the block's operands",
+	UncoveredPooling:    "a pooled head (an embedding model's)",
+	UncoveredEmbedRows:  "input rows beyond the token's row, a scale and a position table",
+	UncoveredClamp:      "linears clamped to stored bounds",
+	UncoveredUnbound:    "stored tensors its graph does not bind",
+	UncoveredUnverified: "a graph that does not verify",
 }
 
 func (u Uncovered) String() string {
@@ -461,8 +459,6 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 	switch {
 	case c.Streams() > 1 && !c.statesStreams():
 		return UncoveredStreams
-	case c.CentredConv && c.mixerAt(li) == mixShortConv:
-		return UncoveredCentredConv
 	case m.container.Config().ActAt(li) == nil:
 		return UncoveredAct
 	case !c.MoEAt(li):
@@ -516,7 +512,16 @@ func (m *Model) ropeAxes(r nn.Rope) (sections [4]int, interleaved bool) {
 		}
 		return sections, false
 	}
-	return m.Cfg.RopeSections, m.Cfg.RopeInterleaved
+	// The runs say how the sections lie over the pairs: one after another
+	// (Qwen2-VL's) or interleaved (Qwen3-VL's).
+	sec, il := m.Cfg.RopeSections, m.Cfg.RopeInterleaved
+	switch {
+	case slices.Equal(r.Runs, nn.IMRopeRuns(sec[:], r.NRot/2)):
+		il = true
+	case slices.Equal(r.Runs, nn.MRopeRuns(sec[:])):
+		il = false
+	}
+	return sec, il
 }
 
 // ropeAxesStated reports whether the sections ropeAxes states are rotary
@@ -683,7 +688,11 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		if !c.LayerKind(li).Attends() {
 			return m.blockRest(b, f, li, x, n, mix, jlm.RoleSSMOut, preNorm, norm, resid, matvec, stored, has, st)
 		}
-		side = append(side, matvec(mix, jlm.RoleSSMOut, d))
+		mo := matvec(mix, jlm.RoleSSMOut, d)
+		if c.halfFault == halfFaultNoMixer {
+			mo = mapRow(b, "mix.dropped", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, d, mo)
+		}
+		side = append(side, mo)
 	}
 	// With an output gate the q projection is double width: each head's query,
 	// then that head's gate.
@@ -916,7 +925,8 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if scale == 0 {
 		scale = 1 / math.Sqrt(float64(hd))
 	}
-	a := graph.Attrs{NHead: c.NHead, NKVHead: nkv, HeadDim: hd, Scale: scale, Softcap: float64(c.AttnSoftcap), Bidir: c.NonCausal}
+	a := graph.Attrs{NHead: c.NHead, NKVHead: nkv, HeadDim: hd, Scale: scale, Softcap: float64(c.AttnSoftcap), Bidir: c.NonCausal,
+		RowWindows: c.NonCausal && c.RowWindowed}
 	if c.SWA(li) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
@@ -954,6 +964,9 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)
+	}
+	if c.halfFault == halfFaultNoAttn && len(side) > 0 {
+		att = mapRow(b, "att.dropped", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, b.G.Values[att].Width, att)
 	}
 	return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has, st, side...)
 }
@@ -1004,7 +1017,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	default:
 		x2 = postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	}
-	if _, ok := c.resCheckpoint(li); ok && st != nil && st.mixed {
+	if _, ok := c.resCheckpoint(li); ok && st != nil && st.mixed && c.k3Fault != k3FaultNoRestart {
 		x2 = norm(proj, jlm.RolePostAttnNorm)
 	}
 	if st != nil && st.side != 0 {
@@ -1326,7 +1339,12 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 	}
 	out = normed(out, jlm.RolePostFFNNorm2)
 	if has(jlm.RoleFFNRoutedUp) {
-		out = b.MatVec(normed(out, jlm.RoleFFNRoutedNorm), jlm.RoleFFNRoutedUp, d)
+		if m.Cfg.k3Fault == k3FaultNoLatentNorm {
+			out = keepBound(b, out, normed(out, jlm.RoleFFNRoutedNorm))
+		} else {
+			out = normed(out, jlm.RoleFFNRoutedNorm)
+		}
+		out = b.MatVec(out, jlm.RoleFFNRoutedUp, d)
 	}
 	sh, ok := f.Inventory[jlm.RoleShExpUp]
 	if !ok {
@@ -1437,7 +1455,11 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueI
 	}
 	o := sheets(slice(att, "att.latent", row, 0, lat, nh*lat), "att.v", jlm.RoleAttnVB, lat, hdv)
 	if has(jlm.RoleAttnGate) {
-		o = sigmoidMul(b, "att.gated", matvec(n, jlm.RoleAttnGate, nh*hdv), o)
+		gate := matvec(n, jlm.RoleAttnGate, nh*hdv)
+		if m.Cfg.k3Fault == k3FaultNoMLAGate {
+			return keepBound(b, o, gate), nil
+		}
+		o = sigmoidMul(b, "att.gated", gate, o)
 	}
 	return o, nil
 }

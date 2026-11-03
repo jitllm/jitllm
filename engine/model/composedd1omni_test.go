@@ -5,28 +5,23 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // TestComposedD1OmniOnCPU is TestD1OmniMatchesReference's composed CPU
-// arm: d1-omni's decision head blocks (Laya's) served by the composer on
-// the CPU device, its LFM2 encoder's trunk declined by name (a centred
-// convolution and a media prefix's windows the front end does not state:
-// UncoveredNonCausal, the CPU's DeclineNoGraph) and run main's, every block
-// of every encode counted one way or the other, the logits held to the
-// reference at the main gate's bound, and the head's rows made causal seen.
+// arm: every block of d1-omni served by the composer on the CPU device --
+// its LFM2 encoder's trunk (the centred convolution and the attention, each
+// row inside its window: a media prefix's rows the prefix alone) and its
+// decision head's (Laya's) -- every block of every encode counted, the
+// logits held to the reference at the main gate's bound, and the head's
+// rows made causal seen.
 func TestComposedD1OmniOnCPU(t *testing.T) {
 	m := openDecision(t, d1OmniModel, jlm.DecisionD1Omni)
 	defer m.Close()
 	trunk, nb := m.enc.mb.trunk, m.encBlocks()
 	for li := range nb {
-		u := m.Uncovered(li)
-		switch {
-		case li >= trunk && u != Covered:
-			t.Fatalf("decision head block %d: %s, %v", li, u, m.UncoveredErr(li))
-		case li < trunk && u != UncoveredNonCausal:
-			t.Fatalf("trunk block %d: %s, want %s", li, u, UncoveredNonCausal)
+		if u := m.Uncovered(li); u != Covered {
+			t.Fatalf("block %d (the trunk's %d): %s, %v", li, trunk, u, m.UncoveredErr(li))
 		}
 	}
 	d, err := m.NewDecider(0)
@@ -68,11 +63,10 @@ func TestComposedD1OmniOnCPU(t *testing.T) {
 	clean := worst()
 	seg := d.emb.seg
 	served, declined := seg.CPUBlockSteps()
-	t.Logf("d1-omni: %d head block runs served on the composed CPU, declines %v (form error %v, arena %v, %d rows); worst logit difference %.2e (bound 3e-4)",
+	t.Logf("d1-omni: %d block runs served on the composed CPU, declines %v (form error %v, arena %v, %d rows); worst logit difference %.2e (bound 3e-4)",
 		served, nonZero(declined[:]), seg.CPUFormErr(), seg.nc().arena != nil, seg.maxSeq, clean)
-	if served != (nb-trunk)*encodes || declined[composer.DeclineNoGraph] != trunk*encodes || len(nonZero(declined[:])) != 1 {
-		t.Fatalf("%d encodes: %d head block runs served (want %d), declines %v (want %d trunk blocks' %s)", encodes, served,
-			(nb-trunk)*encodes, nonZero(declined[:]), trunk*encodes, composer.DeclineName(int(composer.DeclineNoGraph)))
+	if served != nb*encodes || len(nonZero(declined[:])) != 0 {
+		t.Fatalf("%d encodes: %d block runs served (want %d), declines %v", encodes, served, nb*encodes, nonZero(declined[:]))
 	}
 	if clean > 3e-4 {
 		t.Errorf("worst logit difference %.2e from the reference (bound 3e-4)", clean)

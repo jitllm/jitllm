@@ -1026,6 +1026,15 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 	facts := Facts{Extents: map[int]int{1: R + 1}}
 	live := x.op(OpMax, U, x.load(1, x.u(0)), x.u(1))
 	r := x.op(OpMin, U, x.coord(0), x.op(OpSub, U, live, x.u(1)))
+	// A row's taps stay inside the live rows, or inside its window, the
+	// rows its descriptor states (RowWindows).
+	lo, hi := x.u(0), live
+	if o.Attr.RowWindows {
+		in = append(in, tableWindows)
+		facts.Extents[2] = R * rowWords
+		at := func(w int) int { return x.load(2, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(uint32(w)))) }
+		lo, hi = at(rowStart), x.op(OpMin, U, at(rowEnd), live)
+	}
 	tap := func(t int) int {
 		v, _ := weightElement(&x, wo, C, T, &in, &facts, ch, x.u(uint32(t)))
 		return v
@@ -1036,9 +1045,10 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 		if t == h {
 			continue
 		}
-		// Row r+t-h, held in the step's rows; zero past the live ones.
+		// Row r+t-h, held in the step's rows; zero outside the row's bounds.
 		at := x.op(OpSub, U, x.op(OpAdd, U, r, x.u(uint32(t))), x.u(uint32(h)))
-		ok := x.op(OpLess, ir.Pred, at, live)
+		// lo <= at < hi as one unsigned comparison: below lo, at - lo wraps.
+		ok := x.op(OpLess, ir.Pred, x.op(OpSub, U, at, lo), x.op(OpSub, U, hi, lo))
 		v := x.at(0, sh, x.op(OpMin, U, at, x.u(uint32(R-1))), ch)
 		acc = x.op(OpAdd, F, acc, x.sel(F, ok, x.op(OpMul, F, v, tap(t)), x.f(0)))
 	}

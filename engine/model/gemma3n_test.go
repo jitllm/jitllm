@@ -33,6 +33,25 @@ var gemma3nFixtures = []struct {
 	}},
 }
 
+// gemma3nActs is a violation restating every block's activation as the
+// container states it (ActLayers), which is what the front end builds the
+// blocks from: to picks block li's from the blocks' own.
+func gemma3nActs(name string, to func(c *Config, acts []uint8) func(li int) uint8) c6Violation {
+	return c6Violation{name, func(m *Model) func() {
+		jc := m.container.Config()
+		was := slices.Clone(jc.ActLayers)
+		pick := to(m.Cfg, was)
+		for li := range jc.ActLayers {
+			jc.ActLayers[li] = pick(li)
+		}
+		undo := cfgMut(m, func(*Config) {})
+		return func() {
+			copy(jc.ActLayers, was)
+			undo()
+		}
+	}}
+}
+
 // gemma3nViolations take one piece of Gemma 3n out at a time.
 var gemma3nViolations = []c6Violation{
 	{"no AltUp prediction", func(m *Model) func() {
@@ -46,12 +65,12 @@ var gemma3nViolations = []c6Violation{
 	{"no LAuReL", func(m *Model) func() {
 		return eachLayer(m, func(l *layer) { l.laurelPost = make([]float32, len(l.laurelPost)) })
 	}},
-	{"no gaussian top-k", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.NSparse = 0 })
-	}},
-	{"the gaussian on every block", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.NSparse = c.NLayer })
-	}},
+	gemma3nActs("no gaussian top-k", func(c *Config, a []uint8) func(int) uint8 {
+		return func(int) uint8 { return a[c.NSparse] }
+	}),
+	gemma3nActs("the gaussian on every block", func(c *Config, a []uint8) func(int) uint8 {
+		return func(int) uint8 { return a[0] }
+	}),
 	{"no correction scale", func(m *Model) func() {
 		return eachLayer(m, func(l *layer) {
 			ones := make([]float32, len(l.altCorrScale))

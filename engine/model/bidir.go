@@ -142,8 +142,12 @@ func (s *Instance) mapNC() {
 // whether the instance has one.
 func (s *Instance) lendNC(li int) bool {
 	a, pg := s.nc(), &s.kv.layers[li]
-	if a == nil || a.arena == nil || pg.p == 0 {
+	switch {
+	case a == nil || a.arena == nil:
 		return false
+	case pg.p == 0:
+		// A block keeping no history (a convolution's) has none to lend.
+		return true
 	}
 	pg.extend(0)
 	pg.arena = a.arena
