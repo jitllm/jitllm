@@ -1489,10 +1489,6 @@ type blockScratch struct {
 	// rewrites their matvecs, the walk would find what it found then (0: never
 	// walked).
 	walked uint64
-	// left marks, by block, the blocks whose prompt the composer serves at
-	// this scratch's rows and whose own batched kernels the walk left
-	// uncompiled: a decline's work (declineTwins).
-	left []bool
 	// prompt is the lane's instance of each form the composer serves a
 	// prompt chunk's blocks with at this scratch's rows, shared by the blocks
 	// of the form (served.go): freed and refunded with the scratch.

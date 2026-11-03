@@ -2625,11 +2625,7 @@ func (g *devTier) unserved(li int) string {
 		return ""
 	case partWindow:
 		// A tower's windows are each call's (SetKeyRuns, SetRowWindows):
-		// none is staged at a placement. A window its graph states that can
-		// cut a run is the block's own, which the set does not apply.
-		if g.windowCuts(l) {
-			return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, composer.DeclineName(int(why)))
-		}
+		// none is staged at a placement.
 		return ""
 	default:
 		return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, composer.DeclineName(int(why)))
@@ -2773,10 +2769,12 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	// A sliding block of a split model forms over the sliding set's table.
 	defer g.useGeom(g.enterGeomOf(li))
 	bs, l := g.bs, g.layers[li]
-	if g.NoPromptPrewarm || bs == nil || bs.pkv == nil ||
-		g.kvp == nil || l == nil {
+	if g.NoPromptPrewarm || bs == nil || bs.pkv == nil || l == nil {
 		return ""
 	}
+	// A model with no attention block has no pool from its placement
+	// (pagedLayer); its first step would make one and form there.
+	g.kvPages()
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
 	if g.blockServes(l, li, &bs.p, bs, false, false) == partServes {

@@ -34,7 +34,7 @@ func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partTableHeld
 	case g.tkv == nil || g.tkv.kc == nil || g.tkv.vc == nil:
 		return partNoPool
-	case l.windowed && len(g.winRuns) == 0, g.windowCuts(l):
+	case l.windowed && len(g.winRuns) == 0:
 		return partWindow
 	}
 	if _, _, _, err := g.towerStep(bs, l, li, p, bs.rows); err != nil {
@@ -80,17 +80,6 @@ func (g *devTier) prewarmTower(li int) (roomless string) {
 	return ""
 }
 
-// windowCuts reports a symmetric window block l's graph states that can cut
-// a run of the set. The form centres such a window on each row's write
-// position, which a non-causal set's rows do not carry as the window needs:
-// on the card embeddinggemma's sliding layers read the answer of no window
-// at all (TestEmbeddingsOnEveryDevice). Where half the window covers the
-// set's largest run the window cuts nothing and the block is served.
-// Callers hold g.mu.
-func (g *devTier) windowCuts(l *layer) bool {
-	return l.win != 0 && (g.visMax == 0 || l.win/2 < g.visMax)
-}
-
 // rotates says graph gr turns rows by a rotary table.
 func rotates(gr *graph.Graph) bool {
 	for _, o := range gr.Ops {
@@ -110,7 +99,7 @@ func (g *devTier) towerStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan,
 	page := cpl.MaxSeq + 1
 	pl := &l.picPool
 	pl.geom, pl.k, pl.v, pl.tab = g.kvGeomOf(p), g.tkv.kc, g.tkv.vc, bs.zero
-	sv, err = g.servedBlock(l, li, bs.cs, pl, bs.pics, bs.picsW, bs.roff, bs.calls, nil, cpl.MaxSeq, page, R, 0, nil)
+	sv, err = g.servedBlock(l, li, bs.cs, pl, bs.pics, bs.picsW, bs.roff, bs.calls, nil, cpl.MaxSeq, page, R, 0, bs)
 	if err != nil {
 		return nil, nil, nil, err
 	}

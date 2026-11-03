@@ -608,9 +608,6 @@ func (g *devTier) prewarmPromptWidths() {
 	g.prewarmHeadKernels()
 	g.prewarmComposed()
 	g.prewarmTowerWidths()
-	if bb := g.bbs[g.promptW]; bb != nil {
-		g.PromptBlocksLeft += countLeft(bb)
-	}
 	grain := g.promptGrain()
 	if g.NoExactPrompt || g.promptW <= grain || g.promptsReserved() {
 		return
@@ -625,21 +622,9 @@ func (g *devTier) prewarmPromptWidths() {
 		}
 		if g.prepBatch(w) {
 			g.PromptWidthsWarmed++
-			g.PromptBlocksLeft += countLeft(g.bbs[w])
 		}
 		g.dropBatch(w)
 	}
-}
-
-// countLeft is how many blocks bs's walk left to the composer (promptHeld).
-func countLeft(bs *blockScratch) int {
-	n := 0
-	for _, l := range bs.left {
-		if l {
-			n++
-		}
-	}
-	return n
 }
 
 // prewarmHeadKernels forms the decode scratch's prompt-only part, which a
@@ -722,8 +707,7 @@ func (g *devTier) noRoomFor(width int) bool {
 // promptsReserved reports whether the device's prompts run in its reserved
 // width with their rows the call's, where the composer serves them
 // (promptComposed, asked at each call): a placement then warms no other
-// width, and a block whose prompt declines compiles its own kernels at the
-// call (declineTwins), counted by reason.
+// width.
 func (g *devTier) promptsReserved() bool {
 	return g.promptW >= 2 && !g.ComposedWidths
 }
