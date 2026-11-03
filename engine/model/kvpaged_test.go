@@ -1401,14 +1401,15 @@ func TestFileStoreStaysInsideItsLimit(t *testing.T) {
 // anywhere: the fake carries the history rather than computing with it, since
 // what is under test is the gather/migrate/scatter seam in model/.
 func TestKVPagesRelocateWithTheLayer(t *testing.T) {
-	defer fusedRunsCheck(t, true)()
+	w := fusedRunsCheck(t, true)
+	defer w.done()
 	for _, name := range relocModels() {
-		t.Run(name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), KVF32) })
+		t.Run(name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), KVF32, w) })
 	}
 }
 
 // kvPagesRelocateWithTheLayer is TestKVPagesRelocateWithTheLayer on one model.
-func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType) {
+func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType, w *fuseWatch) {
 	// Untuned: the logit sum below is held bit for bit, and a kernel pick
 	// timed mid-run (the arm64 per-shape choice) moves the reduction order
 	// between the two arms.
@@ -1417,6 +1418,7 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType) {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	w.watch(m)
 	if err := m.Cfg.KVTypeRefusal(kt); err != nil {
 		t.Skipf("refused by name: %v", err)
 	}

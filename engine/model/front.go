@@ -48,30 +48,43 @@ const (
 	numUncovered
 )
 
-var uncoveredNames = [numUncovered]string{
-	Covered:              "covered",
-	UncoveredKind:        "a layer whose kind is not an attention block or a recurrent mixer the front end states",
-	UncoveredRouterScore: "a router whose score the container does not state",
-	UncoveredExperts:     "routed experts weighted at their input over biased banks, in a latent of their own, or stored one matrix each",
-	UncoveredGeometry: "a value head of another width than the key's, a layer of its own rotary width turned by the model's rotary, " +
-		"or a block reading another's history of another shape than its attention's",
-	UncoveredSelect:     "an attention indexer or sparse key selection",
-	UncoveredStreams:    "several residual streams",
-	UncoveredRopeAxes:   "a rotary over position axes its sections do not state (a pair's halves turned apart)",
-	UncoveredNonCausal:  "non-causal attention",
-	UncoveredTemp:       "an attention temperature whose position offset is not a whole number",
-	UncoveredCompressed: "compressed or grouped attention",
-	UncoveredAct:        "an activation the container does not state, or not over the block's operands",
-	UncoveredPooling:    "a pooled head (an embedding model's)",
-	UncoveredEmbedRows:  "input rows beyond the token's row, a scale and a position table",
-	UncoveredClamp:      "linears clamped to stored bounds",
-	UncoveredUnbound:    "stored tensors its graph does not bind",
-	UncoveredUnverified: "a graph that does not verify",
-}
-
 func (u Uncovered) String() string {
-	if u < numUncovered {
-		return uncoveredNames[u]
+	switch u {
+	case Covered:
+		return "covered"
+	case UncoveredKind:
+		return "a layer whose kind is not an attention block or a recurrent mixer the front end states"
+	case UncoveredRouterScore:
+		return "a router whose score the container does not state"
+	case UncoveredExperts:
+		return "routed experts weighted at their input over biased banks, in a latent of their own, or stored one matrix each"
+	case UncoveredGeometry:
+		return "a value head of another width than the key's, a layer of its own rotary width turned by the model's rotary, " +
+			"or a block reading another's history of another shape than its attention's"
+	case UncoveredSelect:
+		return "an attention indexer or sparse key selection"
+	case UncoveredStreams:
+		return "several residual streams"
+	case UncoveredRopeAxes:
+		return "a rotary over position axes its sections do not state (a pair's halves turned apart)"
+	case UncoveredNonCausal:
+		return "non-causal attention"
+	case UncoveredTemp:
+		return "an attention temperature whose position offset is not a whole number"
+	case UncoveredCompressed:
+		return "compressed or grouped attention"
+	case UncoveredAct:
+		return "an activation the container does not state, or not over the block's operands"
+	case UncoveredPooling:
+		return "a pooled head (an embedding model's)"
+	case UncoveredEmbedRows:
+		return "input rows beyond the token's row, a scale and a position table"
+	case UncoveredClamp:
+		return "linears clamped to stored bounds"
+	case UncoveredUnbound:
+		return "stored tensors its graph does not bind"
+	case UncoveredUnverified:
+		return "a graph that does not verify"
 	}
 	return fmt.Sprintf("uncovered(%d)", uint8(u))
 }

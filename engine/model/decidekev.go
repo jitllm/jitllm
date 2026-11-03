@@ -3,7 +3,6 @@ package model
 import (
 	"fmt"
 	"math"
-	"regexp"
 	"strings"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -282,13 +281,31 @@ func (d *Decider) kevHead(ids []int32, v int) ([]float32, error) {
 
 // kevSpecial is the form a special token takes in request text: Kev's
 // server writes <|name|> as <¦name¦>, so text cannot fake a marker.
-var kevSpecial = regexp.MustCompile(`<\|([A-Za-z0-9_]+)\|>`)
+func kevEscapeSpecial(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if strings.HasPrefix(s[i:], "<|") {
+			j := i + 2
+			for j < len(s) && (s[j] == '_' || s[j] >= '0' && s[j] <= '9' || s[j] >= 'A' && s[j] <= 'Z' || s[j] >= 'a' && s[j] <= 'z') {
+				j++
+			}
+			if j > i+2 && strings.HasPrefix(s[j:], "|>") {
+				b.WriteString("<¦" + s[i+2:j] + "¦>")
+				i = j + 2
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
 
 // kevText is v as Kev's text (kev/api.py render, as llama.cpp's server
 // writes it): an object's keys as labels, a list as dashed lines, nested
 // values indented, booleans as Python writes them, special tokens escaped.
 func kevText(v jinja.Value) jinja.Value {
-	return jinja.NewString(kevSpecial.ReplaceAllString(kevRender(v, 0), "<¦$1¦>"))
+	return jinja.NewString(kevEscapeSpecial(kevRender(v, 0)))
 }
 
 func kevRender(v jinja.Value, indent int) string {

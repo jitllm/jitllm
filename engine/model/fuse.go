@@ -1,8 +1,6 @@
 package model
 
-import (
-	"sync/atomic"
-)
+import ()
 
 // A decode token runs each run of consecutive resident host blocks as ONE pool
 // region (sched.Pool.Fuse): the workers join once and every op of every block
@@ -27,11 +25,11 @@ func (s *Instance) fuseRun() {
 	// run is the instance's to refill now, and no worker may be reading it.
 	s.jit.SetAhead(nil)
 	s.jit.SetLookahead(!s.lookOff)
-	fuseTriesTotal.Add(1)
+	s.m.fuseTries.Add(1)
 	if s.jit.Fuse() {
 		s.fused = true
 		s.FusedRuns++
-		fusedRunsTotal.Add(1)
+		s.m.fusedRuns.Add(1)
 	}
 }
 
@@ -54,15 +52,6 @@ func (m *Model) blockResident(li int) bool {
 	c := m.container
 	return c == nil || li >= c.NPages() || c.Resident(li)
 }
-
-// fusedRunsTotal counts fused runs across every instance, for the gates that must
-// show a fused run happened inside them.
-var fusedRunsTotal atomic.Int64
-
-// fuseTriesTotal counts the fused runs asked for, opened or not: a gate whose
-// subtests all skipped (no model on a model-free runner) asked for none, and
-// has nothing to say about fusion either way.
-var fuseTriesTotal atomic.Int64
 
 // SetLookahead turns the fused runs' lookahead on or off for this instance's
 // decode tokens (WithLookahead is the model-wide default).

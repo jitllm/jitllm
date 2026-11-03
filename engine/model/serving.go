@@ -25,8 +25,6 @@ import (
 // a session that has stopped is not held against the next prefill for long.
 const servingGrace = 250 * time.Millisecond
 
-var servingEpoch = time.Now()
-
 // live is the model's open instances, for a prefill to ask whether another is
 // decoding.
 type live struct {
@@ -53,12 +51,12 @@ func (l *live) remove(s *Instance) {
 
 // touch records that s is decoding now. One clock read and a store, so a warm
 // token still allocates nothing.
-func (s *Instance) touch() { s.ranAt.Store(int64(time.Since(servingEpoch)) + 1) }
+func (s *Instance) touch() { s.ranAt.Store(time.Now().UnixNano()) }
 
 // decoding reports whether s ran a token within servingGrace.
 func (s *Instance) decoding() bool {
 	t := s.ranAt.Load()
-	return t != 0 && time.Since(servingEpoch)-time.Duration(t-1) < servingGrace
+	return t != 0 && time.Duration(time.Now().UnixNano()-t) < servingGrace
 }
 
 // othersDecoding reports whether an instance of this model other than s is

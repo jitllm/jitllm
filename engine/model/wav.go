@@ -3,7 +3,6 @@ package model
 import (
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -69,4 +68,4 @@ func DecodeWAV(b []byte) ([]float32, error) {
 }
 
 // ErrUnsupportedAudio is a clip in a format the engine does not read.
-var ErrUnsupportedAudio = errors.New("unsupported audio")
+const ErrUnsupportedAudio modelError = "unsupported audio"

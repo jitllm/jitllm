@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"sync/atomic"
@@ -454,12 +453,12 @@ func (s *Instance) StepRefusal() error {
 }
 
 // The conditions StepRefusal names.
-var (
-	errStepNoDevice = errors.New("model: the instance's device does not step rows of different sessions (no nn.SessionStepper)")
-	errStepEmbedder = errors.New("model: an embedder runs no decode step")
-	errStepNoRows   = errors.New("model: the instance's device runs no ragged rows (no nn.RowsDevice)")
-	errStepNoHead   = errors.New("model: the head is not on a device")
-	errStepSplit    = errors.New("model: not every block of the instance is on the device")
+const (
+	errStepNoDevice modelError = "model: the instance's device does not step rows of different sessions (no nn.SessionStepper)"
+	errStepEmbedder modelError = "model: an embedder runs no decode step"
+	errStepNoRows   modelError = "model: the instance's device runs no ragged rows (no nn.RowsDevice)"
+	errStepNoHead   modelError = "model: the head is not on a device"
+	errStepSplit    modelError = "model: not every block of the instance is on the device"
 )
 
 // hostStepper reports whether the runs can go as one host step across their
@@ -507,10 +506,10 @@ func (s *Instance) HostRefusal() error {
 }
 
 // The conditions HostRefusal names beside StepRefusal's.
-var (
-	errHostOnDevice = errors.New("model: a device that steps no rows of different sessions runs some of the instance's blocks or its head")
-	errHostPartial  = errors.New("model: the instance runs part of the model (a prediction block)")
-	errHostCache    = errors.New("model: the architecture's cached rows are read per batch slot (MLA, an indexer, MSA, DeepSeek V4)")
+const (
+	errHostOnDevice modelError = "model: a device that steps no rows of different sessions runs some of the instance's blocks or its head"
+	errHostPartial  modelError = "model: the instance runs part of the model (a prediction block)"
+	errHostCache    modelError = "model: the architecture's cached rows are read per batch slot (MLA, an indexer, MSA, DeepSeek V4)"
 )
 
 // PromptChunk is how many prompt tokens this instance's Prefill takes in one

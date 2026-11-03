@@ -168,11 +168,12 @@ func TestQwen4ExpQSATurnsByTheMarks(t *testing.T) {
 // (the delta rule's and the n-gram block's history after it), its QSA blocks'
 // cached rows with the raw indexer key, and the streams across the seam.
 func TestBatchSeamMovesCarryEveryRowQwen4Exp(t *testing.T) {
-	defer fusedRunsCheck(t, false)()
+	w := fusedRunsCheck(t, false)
+	defer w.done()
 	p, ok := existingModel(testmodels.Path("synth-qwen4exp.gguf"))
 	if !ok {
 		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path("synth-qwen4exp.gguf")+
 			" (set JITLLM_MODELS to the model directory) -- run "+q4eGoldScript+" (RULE 11)")
 	}
-	batchSeamMoves(t, p, 1e-3, true)
+	batchSeamMoves(t, p, 1e-3, true, w)
 }

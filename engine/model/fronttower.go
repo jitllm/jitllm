@@ -55,12 +55,14 @@ func towerVectors(l *layer) [16]towerVec {
 // towerHeld is the vision roles a tower block's loaded fields are read
 // from (buildTower): a tensor of another role in the block is one its graph
 // would not bind.
-var towerHeld = [...]jlm.Role{
-	jlm.RoleVAttnQ, jlm.RoleVAttnK, jlm.RoleVAttnV, jlm.RoleVAttnOut, jlm.RoleVFC1, jlm.RoleVFC2,
-	jlm.RoleVFC1Bias, jlm.RoleVFC2Bias, jlm.RoleVAttnNorm, jlm.RoleVAttnNormBias, jlm.RoleVFFNNorm,
-	jlm.RoleVFFNNormBias, jlm.RoleVAttnQBias, jlm.RoleVAttnKBias, jlm.RoleVAttnVBias, jlm.RoleVAttnOutBias,
-	jlm.RoleVPostAttnNorm, jlm.RoleVPostFFNNorm, jlm.RoleVAttnQNorm, jlm.RoleVAttnKNorm, jlm.RoleVClamp,
-	jlm.RoleVFFNGate, jlm.RoleVFFNGateBias,
+func towerHeld() []jlm.Role {
+	return []jlm.Role{
+		jlm.RoleVAttnQ, jlm.RoleVAttnK, jlm.RoleVAttnV, jlm.RoleVAttnOut, jlm.RoleVFC1, jlm.RoleVFC2,
+		jlm.RoleVFC1Bias, jlm.RoleVFC2Bias, jlm.RoleVAttnNorm, jlm.RoleVAttnNormBias, jlm.RoleVFFNNorm,
+		jlm.RoleVFFNNormBias, jlm.RoleVAttnQBias, jlm.RoleVAttnKBias, jlm.RoleVAttnVBias, jlm.RoleVAttnOutBias,
+		jlm.RoleVPostAttnNorm, jlm.RoleVPostFFNNorm, jlm.RoleVAttnQNorm, jlm.RoleVAttnKNorm, jlm.RoleVClamp,
+		jlm.RoleVFFNGate, jlm.RoleVFFNGateBias,
+	}
 }
 
 // towerInventory is block l's tensors by the role each plays, at the shape
@@ -108,15 +110,12 @@ func (m *Model) towerUncovered(li int) (Uncovered, error) {
 		}
 	}
 	vi := int32(li - t.base)
+	heldRoles := towerHeld()
 	for _, e := range m.container.Entries() {
 		if !e.Role.Vision() || e.Block != vi {
 			continue
 		}
-		held := false
-		for _, r := range towerHeld {
-			held = held || r == e.Role
-		}
-		if !held {
+		if !slices.Contains(heldRoles, e.Role) {
 			return UncoveredUnbound, fmt.Errorf("the container holds %s for tower block %d, which no graph binds", e.Role, vi)
 		}
 	}
@@ -299,11 +298,13 @@ func towerFormat(l *layer, r jlm.Role) (jlm.Type, bool) {
 // towerProjRead is the model-wide vision tensors the tower's entry and its
 // projector graphs read: a container holding another is a projector they
 // do not state.
-var towerProjRead = [...]jlm.Role{
-	jlm.RoleVPatchEmbd, jlm.RoleVPatchBias, jlm.RoleVClassEmbd, jlm.RoleVPosEmbd, jlm.RoleVPreNorm,
-	jlm.RoleVPreNormBias, jlm.RoleVPostNorm, jlm.RoleVPostNormBias, jlm.RoleVProj, jlm.RoleVProjBias,
-	jlm.RoleVProj2, jlm.RoleVProj2Bias, jlm.RoleVProj3, jlm.RoleVProjNorm, jlm.RoleVProjNormBias, jlm.RoleVProjInNorm,
-	jlm.RoleVProjInNormBias, jlm.RoleVStdBias, jlm.RoleVStdScale,
+func towerProjRead() []jlm.Role {
+	return []jlm.Role{
+		jlm.RoleVPatchEmbd, jlm.RoleVPatchBias, jlm.RoleVClassEmbd, jlm.RoleVPosEmbd, jlm.RoleVPreNorm,
+		jlm.RoleVPreNormBias, jlm.RoleVPostNorm, jlm.RoleVPostNormBias, jlm.RoleVProj, jlm.RoleVProjBias,
+		jlm.RoleVProj2, jlm.RoleVProj2Bias, jlm.RoleVProj3, jlm.RoleVProjNorm, jlm.RoleVProjNormBias, jlm.RoleVProjInNorm,
+		jlm.RoleVProjInNormBias, jlm.RoleVStdBias, jlm.RoleVStdScale,
+	}
 }
 
 // towerProj is the tower's projector as graphs of generic ops over the
@@ -327,8 +328,9 @@ func (m *Model) towerProjOf(corner bool) (towerProj, Uncovered, error) {
 	t := m.tower
 	c := t.Cfg
 	var p towerProj
+	projRoles := towerProjRead()
 	for _, e := range m.container.Entries() {
-		if e.Role.Vision() && e.Block == jlm.DenseBlock && !slices.Contains(towerProjRead[:], e.Role) {
+		if e.Role.Vision() && e.Block == jlm.DenseBlock && !slices.Contains(projRoles, e.Role) {
 			return p, UncoveredUnbound, fmt.Errorf("the container holds %s, which the projector's graphs do not read", e.Role)
 		}
 	}

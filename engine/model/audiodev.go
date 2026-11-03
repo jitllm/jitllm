@@ -54,7 +54,7 @@ func (m *Model) audInstance(j *nn.JIT) *Instance {
 	// The (empty) cache over this segment's blocks, as encState makes the
 	// encoder's: a history no block keeps.
 	m.kvPool.put(s.kv)
-	s.kv = newKVCacheRange(m.Cfg, nextCacheID(), 1, s.kvl, nil, align(1, kvKeyTile), s.lo, s.hi)
+	s.kv = newKVCacheRange(m.Cfg, m.nextCacheID(), 1, s.kvl, nil, align(1, kvKeyTile), s.lo, s.hi)
 	s.maxSeq, s.reqSeq = m.audio.audioMaxRows(), m.audio.audioMaxRows()
 	s.enc.audio = true
 	return s

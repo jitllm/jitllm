@@ -79,7 +79,7 @@ func (m *Model) ChatPromptTools(msgs []ChatMessage, tools []byte, addGenerationP
 func (m *Model) ChatPromptToolChoice(msgs []ChatMessage, tools []byte, choice ToolChoice, addGenerationPrompt bool) (string, error) {
 	var mk imageMarkers
 	if tw := m.Tower(); tw != nil {
-		mk = imageMarkersOf[tw.Cfg.Projector]
+		mk = imageMarkerTable()[tw.Cfg.Projector]
 	}
 	return m.renderChat(msgs, tools, choice, addGenerationPrompt, mk)
 }
@@ -453,74 +453,76 @@ func (mk imageMarkers) sep() string {
 //
 // A missing piece is an error, never skipped: a model given no markers still
 // answers plausibly, so nothing else would report it.
-var imageMarkersOf = map[string]imageMarkers{
-	jlm.ProjIdefics3.String(): {placeholder: "<image>",
-		pre:  []string{"\n\n", "<fake_token_around_image>", "<global-img>"},
-		post: []string{"<fake_token_around_image>"}},
-	jlm.ProjQwen2VL.String(): {placeholder: "<|vision_start|><|image_pad|><|vision_end|>",
-		pre: []string{"<|vision_start|>"}, post: []string{"<|vision_end|>"}},
-	jlm.ProjQwen25VL.String(): {placeholder: "<|vision_start|><|image_pad|><|vision_end|>",
-		pre: []string{"<|vision_start|>"}, post: []string{"<|vision_end|>"}},
-	jlm.ProjQwen3VL.String(): {placeholder: "<|vision_start|><|image_pad|><|vision_end|>",
-		pre: []string{"<|vision_start|>"}, post: []string{"<|vision_end|>"}},
-	// GLM-4.xV: the template writes <|begin_of_image|><|image|><|end_of_image|>
-	// and the processor expands <|image|> into the picture's rows.
-	jlm.ProjGLM4V.String(): {placeholder: "<|begin_of_image|><|image|><|end_of_image|>",
-		pre: []string{"<|begin_of_image|>"}, post: []string{"<|end_of_image|>"}},
-	// Kimi-VL: the template writes
-	// <|media_start|>image<|media_content|><|media_pad|><|media_end|> and the
-	// processor expands <|media_pad|> into the picture's rows. Its typed
-	// parts write the image flush against the text (inline).
-	jlm.ProjKimiVL.String(): {placeholder: "<|media_start|>image<|media_content|><|media_pad|><|media_end|>",
-		preText: "<|media_start|>image<|media_content|>", postText: "<|media_end|>", inline: true},
-	// HunyuanVL: the template writes start, image and end place-holders flush
-	// against the text, and the processor expands the image one into the
-	// picture's rows (its begin, grid, newline and end rows) between the
-	// other two.
-	jlm.ProjHunyuanVL.String(): {placeholder: "<｜hy_place▁holder▁no▁100｜><｜hy_place▁holder▁no▁102｜><｜hy_place▁holder▁no▁101｜>",
-		pre: []string{"<｜hy_place▁holder▁no▁100｜>"}, post: []string{"<｜hy_place▁holder▁no▁101｜>"}, inline: true},
-	jlm.ProjMLP.String(): {placeholder: "<image>"},
-	jlm.ProjGemma3.String(): {placeholder: "<start_of_image>",
-		preText: "\n\n<start_of_image>", postText: "<end_of_image>\n\n", bidir: true, inline: true},
-	jlm.ProjInternVL.String(): {placeholder: "<IMG_CONTEXT>", preText: "<img>", postText: "</img>"},
-	// Gemma 3n: gemma3's sequence (Gemma3nProcessor's full_image_sequence),
-	// the template's placeholder its own, and the picture's rows causal.
-	jlm.ProjGemma3nV.String(): {placeholder: "<image_soft_token>",
-		preText: "\n\n<start_of_image>", postText: "<end_of_image>\n\n", inline: true},
-	// MiniCPM-V: its chat() writes "(<image>./</image>)" then a newline ahead
-	// of the question, and the processor replaces that placeholder with the
-	// picture's whole run -- an overview and its slices, each in markers of its
-	// own -- which PictureSpans builds, so there is no single pre and post.
-	jlm.ProjResampler.String(): {placeholder: "(<image>./</image>)"},
-	// Janus-Pro: the GGUF's template writes "<image_placeholder>", and the
-	// processor (processing_janus.py) expands it to <begin_of_image>, the
-	// image tokens and <end_of_image>. mtmd wraps nothing (a divergence,
-	// RULE 7m); the processor is what the weights saw.
-	jlm.ProjJanus.String(): {placeholder: "<image_placeholder>",
-		pre: []string{"<begin_of_image>"}, post: []string{"<end_of_image>"}},
-	// Pixtral / Mistral 3: the template writes "[IMG]", and PixtralProcessor
-	// replaces it with each merged grid row's [IMG] tokens followed by
-	// [IMG_BREAK], the last [IMG_BREAK] made [IMG_END]. The head writes the
-	// rows and the breaks between them (pixtral.go); [IMG_END] is the marker.
-	jlm.ProjPixtral.String(): {placeholder: "[IMG]", post: []string{"[IMG_END]"}},
-	// Llama 4: the template writes "<|image|>", and Llama4Processor expands
-	// it to the tiles and their separators, which Llama4Spans lays out
-	// (ChatSpansParts), so there is no single pre and post.
-	jlm.ProjLlama4.String(): {placeholder: "<|image|>"},
-	// Gemma 4: the template writes "<|image|>", and Gemma4Processor expands it
-	// to <|image>, the soft tokens and <image|>. On the 26B and 31B the soft
-	// tokens see each other on the sliding layers (Config.BidirSWA).
-	// Phi-4-reasoning-vision: its own processor splits the prompt at
-	// "<image>" (processing_phi4_visionr.py's tokenizer_image_token) and puts
-	// the rows there, with no markers; mtmd's PHI4 keeps the boundary text
-	// empty too.
-	jlm.ProjPhi4.String(): {placeholder: "<image>"},
-	// LFM2-VL: the template writes "<image>", and Lfm2VlProcessor expands it
-	// to the picture's tiles and thumbnail in their markers, which LFM2Spans
-	// lays out (ChatSpansParts), so there is no single pre and post.
-	jlm.ProjLFM2.String(): {placeholder: "<image>"},
-	jlm.ProjGemma4V.String(): {placeholder: "<|image|>",
-		pre: []string{"<|image>"}, post: []string{"<image|>"}, bidirSWA: true},
+func imageMarkerTable() map[string]imageMarkers {
+	return map[string]imageMarkers{
+		jlm.ProjIdefics3.String(): {placeholder: "<image>",
+			pre:  []string{"\n\n", "<fake_token_around_image>", "<global-img>"},
+			post: []string{"<fake_token_around_image>"}},
+		jlm.ProjQwen2VL.String(): {placeholder: "<|vision_start|><|image_pad|><|vision_end|>",
+			pre: []string{"<|vision_start|>"}, post: []string{"<|vision_end|>"}},
+		jlm.ProjQwen25VL.String(): {placeholder: "<|vision_start|><|image_pad|><|vision_end|>",
+			pre: []string{"<|vision_start|>"}, post: []string{"<|vision_end|>"}},
+		jlm.ProjQwen3VL.String(): {placeholder: "<|vision_start|><|image_pad|><|vision_end|>",
+			pre: []string{"<|vision_start|>"}, post: []string{"<|vision_end|>"}},
+		// GLM-4.xV: the template writes <|begin_of_image|><|image|><|end_of_image|>
+		// and the processor expands <|image|> into the picture's rows.
+		jlm.ProjGLM4V.String(): {placeholder: "<|begin_of_image|><|image|><|end_of_image|>",
+			pre: []string{"<|begin_of_image|>"}, post: []string{"<|end_of_image|>"}},
+		// Kimi-VL: the template writes
+		// <|media_start|>image<|media_content|><|media_pad|><|media_end|> and the
+		// processor expands <|media_pad|> into the picture's rows. Its typed
+		// parts write the image flush against the text (inline).
+		jlm.ProjKimiVL.String(): {placeholder: "<|media_start|>image<|media_content|><|media_pad|><|media_end|>",
+			preText: "<|media_start|>image<|media_content|>", postText: "<|media_end|>", inline: true},
+		// HunyuanVL: the template writes start, image and end place-holders flush
+		// against the text, and the processor expands the image one into the
+		// picture's rows (its begin, grid, newline and end rows) between the
+		// other two.
+		jlm.ProjHunyuanVL.String(): {placeholder: "<｜hy_place▁holder▁no▁100｜><｜hy_place▁holder▁no▁102｜><｜hy_place▁holder▁no▁101｜>",
+			pre: []string{"<｜hy_place▁holder▁no▁100｜>"}, post: []string{"<｜hy_place▁holder▁no▁101｜>"}, inline: true},
+		jlm.ProjMLP.String(): {placeholder: "<image>"},
+		jlm.ProjGemma3.String(): {placeholder: "<start_of_image>",
+			preText: "\n\n<start_of_image>", postText: "<end_of_image>\n\n", bidir: true, inline: true},
+		jlm.ProjInternVL.String(): {placeholder: "<IMG_CONTEXT>", preText: "<img>", postText: "</img>"},
+		// Gemma 3n: gemma3's sequence (Gemma3nProcessor's full_image_sequence),
+		// the template's placeholder its own, and the picture's rows causal.
+		jlm.ProjGemma3nV.String(): {placeholder: "<image_soft_token>",
+			preText: "\n\n<start_of_image>", postText: "<end_of_image>\n\n", inline: true},
+		// MiniCPM-V: its chat() writes "(<image>./</image>)" then a newline ahead
+		// of the question, and the processor replaces that placeholder with the
+		// picture's whole run -- an overview and its slices, each in markers of its
+		// own -- which PictureSpans builds, so there is no single pre and post.
+		jlm.ProjResampler.String(): {placeholder: "(<image>./</image>)"},
+		// Janus-Pro: the GGUF's template writes "<image_placeholder>", and the
+		// processor (processing_janus.py) expands it to <begin_of_image>, the
+		// image tokens and <end_of_image>. mtmd wraps nothing (a divergence,
+		// RULE 7m); the processor is what the weights saw.
+		jlm.ProjJanus.String(): {placeholder: "<image_placeholder>",
+			pre: []string{"<begin_of_image>"}, post: []string{"<end_of_image>"}},
+		// Pixtral / Mistral 3: the template writes "[IMG]", and PixtralProcessor
+		// replaces it with each merged grid row's [IMG] tokens followed by
+		// [IMG_BREAK], the last [IMG_BREAK] made [IMG_END]. The head writes the
+		// rows and the breaks between them (pixtral.go); [IMG_END] is the marker.
+		jlm.ProjPixtral.String(): {placeholder: "[IMG]", post: []string{"[IMG_END]"}},
+		// Llama 4: the template writes "<|image|>", and Llama4Processor expands
+		// it to the tiles and their separators, which Llama4Spans lays out
+		// (ChatSpansParts), so there is no single pre and post.
+		jlm.ProjLlama4.String(): {placeholder: "<|image|>"},
+		// Gemma 4: the template writes "<|image|>", and Gemma4Processor expands it
+		// to <|image>, the soft tokens and <image|>. On the 26B and 31B the soft
+		// tokens see each other on the sliding layers (Config.BidirSWA).
+		// Phi-4-reasoning-vision: its own processor splits the prompt at
+		// "<image>" (processing_phi4_visionr.py's tokenizer_image_token) and puts
+		// the rows there, with no markers; mtmd's PHI4 keeps the boundary text
+		// empty too.
+		jlm.ProjPhi4.String(): {placeholder: "<image>"},
+		// LFM2-VL: the template writes "<image>", and Lfm2VlProcessor expands it
+		// to the picture's tiles and thumbnail in their markers, which LFM2Spans
+		// lays out (ChatSpansParts), so there is no single pre and post.
+		jlm.ProjLFM2.String(): {placeholder: "<image>"},
+		jlm.ProjGemma4V.String(): {placeholder: "<|image|>",
+			pre: []string{"<|image>"}, post: []string{"<image|>"}, bidirSWA: true},
+	}
 }
 
 // ChatSpans renders msgs through the model's own chat template and returns the
@@ -594,7 +596,7 @@ func (m *Model) chatSpansImages(msgs []ChatMessage, imgs []Image, tools []byte, 
 	if tw == nil {
 		return nil, fmt.Errorf("model: %d image(s) and this model has no vision tower", n)
 	}
-	mk, ok := imageMarkersOf[tw.Cfg.Projector]
+	mk, ok := imageMarkerTable()[tw.Cfg.Projector]
 	if !ok {
 		return nil, fmt.Errorf("model: no image markers for projector %q", tw.Cfg.Projector)
 	}
@@ -656,7 +658,7 @@ func (m *Model) chatSpansParts(msgs []ChatMessage, images [][]Span, tools []byte
 	if tw == nil {
 		return nil, fmt.Errorf("model: %d image(s) and this model has no vision tower", n)
 	}
-	mk, ok := imageMarkersOf[tw.Cfg.Projector]
+	mk, ok := imageMarkerTable()[tw.Cfg.Projector]
 	if !ok {
 		return nil, fmt.Errorf("model: no image markers for projector %q", tw.Cfg.Projector)
 	}

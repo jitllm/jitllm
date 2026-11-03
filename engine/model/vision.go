@@ -1100,7 +1100,7 @@ func (t *Tower) newState(j *nn.JIT, owned bool) *Instance {
 	// The image's rows are one page: K and V are contiguous for every query
 	// tile, and the page is the pair every block borrows in turn (lend).
 	s.kvl = kvLayout{maxSeq: n, nKV: c.NKVHead, headDim: c.HeadDim}
-	s.kv = newKVCacheRange(c, nextCacheID(), 1, s.kvl, nil, align(n, kvKeyTile), s.lo, s.hi)
+	s.kv = newKVCacheRange(c, s.m.nextCacheID(), 1, s.kvl, nil, align(n, kvKeyTile), s.lo, s.hi)
 	if t.mn != nil {
 		s.mnPages()
 	}

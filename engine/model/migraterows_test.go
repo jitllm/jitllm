@@ -29,8 +29,9 @@ import (
 // relocation hands a block home because the batch's history does not fit, and
 // reclaims it with every row's history once the room comes back.
 func TestBatchSeamMovesCarryEveryRow(t *testing.T) {
-	defer fusedRunsCheck(t, false)()
-	batchSeamMoves(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), 1e-1, true)
+	w := fusedRunsCheck(t, false)
+	defer w.done()
+	batchSeamMoves(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), 1e-1, true, w)
 }
 
 // TestBatchSeamMovesCarryEveryRowHybrid is the same on a hybrid, where a linear
@@ -42,14 +43,15 @@ func TestBatchSeamMovesCarryEveryRow(t *testing.T) {
 // batch (growSeat), so a budget short of the KV refuses that growth instead of
 // relocating. The moves themselves are the other arms'.
 func TestBatchSeamMovesCarryEveryRowHybrid(t *testing.T) {
-	defer fusedRunsCheck(t, false)()
-	batchSeamMoves(t, testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"), 3e-2, false)
+	w := fusedRunsCheck(t, false)
+	defer w.done()
+	batchSeamMoves(t, testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"), 3e-2, false, w)
 }
 
 // TestBatchSeamMovesCarryEveryRowMoE is the same on a mixture, whose blocks
 // carry a router, expert banks and their grouped scratch on the device.
 func TestBatchSeamMovesCarryEveryRowMoE(t *testing.T) {
-	batchSeamMoves(t, testmodels.Path("Qwen3-MOE-4x0.6B-Q4_K_M.gguf"), 1e-1, false)
+	batchSeamMoves(t, testmodels.Path("Qwen3-MOE-4x0.6B-Q4_K_M.gguf"), 1e-1, false, nil)
 }
 
 // TestBatchSeamMovesCarryEveryRowMoEFamilies is the same on the mixture
@@ -67,7 +69,7 @@ func TestBatchSeamMovesCarryEveryRowMoEFamilies(t *testing.T) {
 				testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path(name+".gguf")+
 					" (set JITLLM_MODELS to the model directory) -- run "+moeGoldScript+" "+name+" (RULE 11)")
 			}
-			batchSeamMoves(t, p, 1e-3, true)
+			batchSeamMoves(t, p, 1e-3, true, nil)
 		})
 	}
 }
@@ -94,7 +96,7 @@ func TestBatchSeamMovesCarryEveryRowHunyuan(t *testing.T) {
 				testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path(c.name)+
 					" (set JITLLM_MODELS to the model directory) -- RULE 11")
 			}
-			batchSeamMoves(t, p, c.bound, true)
+			batchSeamMoves(t, p, c.bound, true, nil)
 		})
 	}
 }
@@ -113,15 +115,15 @@ func TestBatchSeamMovesCarryEveryRowHunyuan(t *testing.T) {
 //
 // The V100's device arithmetic alone reads 1.3e-02 on Llama and 8.3e-03 on the
 // hybrid before any move, which is what the bounds sit above.
-func batchSeamMoves(t *testing.T, p string, bound float64, relocate bool) {
-	batchSeamMovesWith(t, p, bound, relocate, nil, nil)
+func batchSeamMoves(t *testing.T, p string, bound float64, relocate bool, w *fuseWatch) {
+	batchSeamMovesWith(t, p, bound, relocate, nil, nil, w)
 }
 
 // batchSeamMovesWith is batchSeamMoves with model options added and a check
 // handed each arm's device stats once its steps have run -- the count that
 // says the configuration under test was the one that ran (RULE 10).
 func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mopts []Option,
-	check func(t *testing.T, st gpu.Stats)) {
+	check func(t *testing.T, st gpu.Stats), w *fuseWatch) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
@@ -132,6 +134,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 		t.Fatal(err)
 	}
 	defer m.Close()
+	w.watch(m)
 	c := m.Cfg
 	const rows, steps = 3, 21
 	texts := []string{
@@ -454,14 +457,15 @@ func kvLegalCut(c *Config, n int) bool {
 // them, each row's convolution window and state carried across by MigrateRec.
 // They are F32, so the device's own arithmetic is far under the bound.
 func TestBatchSeamMovesCarryEveryRowSSM(t *testing.T) {
-	defer fusedRunsCheck(t, false)()
+	w := fusedRunsCheck(t, false)
+	defer w.done()
 	for _, fx := range ssmFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			p, ok := existingModel(testmodels.Path(fx.name + ".gguf"))
 			if !ok {
 				testmodels.Missing(t, "%s", "MODEL MISSING: "+fx.name+" -- run "+ssmGoldScript)
 			}
-			batchSeamMoves(t, p, 1e-4, false)
+			batchSeamMoves(t, p, 1e-4, false, w)
 		})
 	}
 }

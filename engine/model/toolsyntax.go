@@ -92,17 +92,59 @@ const (
 	numToolSyntaxes
 )
 
-var toolSyntaxNames = [numToolSyntaxes]string{
-	"hermes", "json", "qwen-xml", "seed-xml", "glm", "minimax", "dsml", "deepseek-v3", "deepseek-v3.1",
-	"kimi", "kimi-xtml", "harmony", "mistral", "mistral-args", "granite", "nemotron", "command-r7b",
-	"command-r", "apertus", "phi4-mini", "pythonic", "lfm2", "hunyuan", "gemma4",
-}
-
 // String is the syntax's name.
 func (s ToolSyntax) String() string {
-	if s < numToolSyntaxes {
-		return toolSyntaxNames[s]
+	switch s {
+	case ToolSyntaxHermes:
+		return "hermes"
+	case ToolSyntaxJSON:
+		return "json"
+	case ToolSyntaxQwenXML:
+		return "qwen-xml"
+	case ToolSyntaxSeedXML:
+		return "seed-xml"
+	case ToolSyntaxGLM:
+		return "glm"
+	case ToolSyntaxMiniMax:
+		return "minimax"
+	case ToolSyntaxDSML:
+		return "dsml"
+	case ToolSyntaxDeepSeekV3:
+		return "deepseek-v3"
+	case ToolSyntaxDeepSeekV31:
+		return "deepseek-v3.1"
+	case ToolSyntaxKimi:
+		return "kimi"
+	case ToolSyntaxKimiXTML:
+		return "kimi-xtml"
+	case ToolSyntaxHarmony:
+		return "harmony"
+	case ToolSyntaxMistral:
+		return "mistral"
+	case ToolSyntaxMistralArgs:
+		return "mistral-args"
+	case ToolSyntaxGranite:
+		return "granite"
+	case ToolSyntaxNemotron:
+		return "nemotron"
+	case ToolSyntaxCommandR7B:
+		return "command-r7b"
+	case ToolSyntaxCommandR:
+		return "command-r"
+	case ToolSyntaxApertus:
+		return "apertus"
+	case ToolSyntaxPhi4Mini:
+		return "phi4-mini"
+	case ToolSyntaxPythonic:
+		return "pythonic"
+	case ToolSyntaxLFM2:
+		return "lfm2"
+	case ToolSyntaxHunyuan:
+		return "hunyuan"
+	case ToolSyntaxGemma4:
+		return "gemma4"
 	}
+
 	return "tool-syntax(" + strconv.Itoa(int(s)) + ")"
 }
 
