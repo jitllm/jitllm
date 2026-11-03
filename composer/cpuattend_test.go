@@ -84,7 +84,7 @@ func runCPUCallsAt(codes []Code, g *graph.Graph, bufs map[string][]uint32, of fu
 					words = a.Words
 				case o.Kind == OperandValue && bufs[g.Values[o.Value].Name] != nil:
 					words = bufs[g.Values[o.Value].Name]
-				case (o.Kind == OperandTable || o.Kind == OperandVector) && bufs[o.Name] != nil:
+				case (o.Kind == OperandTable || o.Kind == OperandVector || o.Kind == OperandWeight) && bufs[o.Name] != nil:
 					words = bufs[o.Name]
 				case o.Kind == OperandValue || o.Kind == OperandScratch:
 					if own[o] == nil {
