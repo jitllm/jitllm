@@ -89,7 +89,7 @@ func (e *Encode) step(st *Instance) error {
 	defer vs.m.enterPager()()
 	v, p := vs.vis, e.Picture
 	c := v.t.Cfg
-	clean := v.fault == towerFaultNone && c.fault == towerFaultNone && !qwenNoUnwindow
+	clean := v.fault == towerFaultNone && c.fault == towerFaultNone && !c.viol.runsTower()
 	if !e.begun {
 		if clean {
 			if hit, ok := vs.m.imgCache.get(p.Key); ok {

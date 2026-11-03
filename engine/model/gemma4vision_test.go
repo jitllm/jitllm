@@ -190,8 +190,8 @@ func TestGemma4TowerMatchesTransformers(t *testing.T) {
 			return func() { tw.cfg.VNorm = true }
 		}, true},
 		{"the row turning the first half", func() func() {
-			gemma4RowFirst = true
-			return func() { gemma4RowFirst = false }
+			tw.Cfg.viol = violRowFirst
+			return func() { tw.Cfg.viol = violNone }
 		}, false},
 		{"scores at 1/sqrt(head_dim)", func() func() {
 			tw.cfg.AttnScale = 1 / math.Sqrt(float64(tw.Cfg.HeadDim))

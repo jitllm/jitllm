@@ -94,7 +94,7 @@ func (s *Instance) preprocessPIL(img image.Image) ([]float32, error) {
 	out := make([]float32, nw*nh*3)
 	// Phi-4-reasoning-vision's processor resamples BILINEAR.
 	f := aaBicubic
-	if c.Kind == jlm.ProjPhi4 && !phi4Bicubic {
+	if c.Kind == jlm.ProjPhi4 && c.viol != violBicubic {
 		f = aaBilinear
 	}
 	src.resizePIL(nw, nh, f).normalizeInto(out, c.Mean, c.Std)

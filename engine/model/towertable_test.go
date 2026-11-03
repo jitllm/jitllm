@@ -101,12 +101,12 @@ func visRopeOracle(s *Instance, n int) []float32 {
 		switch c.Kind {
 		case jlm.ProjLlama4:
 			var pos [2]int
-			llama4Coords(i, gh*gw, gw, pos[:])
+			llama4Coords(i, gh*gw, gw, pos[:], c.viol)
 			s.jit.RopeTableAt(r, row, pos[:])
 		case jlm.ProjGemma4V:
 			p := s.patchAt(i)
 			pos := []int{p % gw, p / gw}
-			if gemma4RowFirst {
+			if c.viol == violRowFirst {
 				pos[0], pos[1] = pos[1], pos[0]
 			}
 			s.jit.RopeTableAt(r, row, pos)

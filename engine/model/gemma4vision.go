@@ -182,10 +182,6 @@ const (
 	clampSlots
 )
 
-// gemma4RowFirst turns the first half of a head by the patch's row: a
-// gate's violation.
-var gemma4RowFirst bool
-
 // projectGemma4V is the head over a picture's patch rows: the Scale x Scale
 // average pool over the grid, sqrt(NEmbd) and the standardisation, an
 // unweighted RMSNorm, and the projection. Every arithmetic step is a

@@ -109,8 +109,8 @@ func TestLFM2FixtureMatchesTransformers(t *testing.T) {
 		name string
 		set  func() func()
 	}{
-		{"no projector LayerNorm", func() func() { lfm2NoProjNorm = true; return func() { lfm2NoProjNorm = false } }},
-		{"llama.cpp's tanh GELU", func() func() { lfm2TanhGELU = true; return func() { lfm2TanhGELU = false } }},
+		{"no projector LayerNorm", func() func() { tw.Cfg.viol = violNoProjNorm; return func() { tw.Cfg.viol = violNone } }},
+		{"llama.cpp's tanh GELU", func() func() { tw.Cfg.viol = violTanhGELU; return func() { tw.Cfg.viol = violNone } }},
 		{"the unshuffle transposed", func() func() {
 			was := tw.Cfg.fault
 			tw.Cfg.fault = towerFaultShuffleSwap
@@ -125,11 +125,11 @@ func TestLFM2FixtureMatchesTransformers(t *testing.T) {
 			t.Errorf("%s reads %.3e against a clean %.3e: the gate cannot see it", v.name, bad, pn)
 		}
 	}
-	phi4PosTransposed = true
+	tw.Cfg.viol = violPosTransposed
 	s = tw.testState()
 	_, _, bad, _ := lfm2Encode(t, tw, s, path)
 	s.Close()
-	phi4PosTransposed = false
+	tw.Cfg.viol = violNone
 	nb, _ := nmse32(wantEmb8, bad)
 	t.Logf("violation, the table resized to the grid's transpose: NMSE %.3e", nb)
 	if !(nb > 10*ne) {

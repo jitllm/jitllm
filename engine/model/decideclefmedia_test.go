@@ -159,9 +159,9 @@ func TestClefMediaMatchesReference(t *testing.T) {
 				t.Logf("violation, the media left out: %.2e", w)
 			}
 			if len(vids) > 0 {
-				videoFirstFrame = true
+				m.Tower().Cfg.viol = violVideoFirstFrame
 				_, still := run(t, nil, imgs, vids)
-				videoFirstFrame = false
+				m.Tower().Cfg.viol = violNone
 				w := clefWorstLoose(a8, still)
 				t.Logf("violation, each pair's second frame read as its first: %.2e", w)
 				if !(w > 10*max(clean, clefFixtureTol)) {

@@ -159,12 +159,13 @@ func TestImageKeyCoversTheLayout(t *testing.T) {
 		Mean: [3]float64{0.5, 0.5, 0.5}, Std: [3]float64{0.5, 0.5, 0.5}}
 	px := rainbow(56)
 	for _, fault := range []bool{false, true} {
-		keyFault = fault
+		if fault {
+			c.viol = violKeyPixelsOnly
+		}
 		a, b := c.imageKey(px, 2, 8), c.imageKey(px, 8, 2)
 		other := c
 		other.Mean[0] = 0.48
 		d := other.imageKey(px, 2, 8)
-		keyFault = false
 		if !fault && (a == b || a == d) {
 			t.Fatal("one pixel buffer under another grid or another normalisation keys the same")
 		}
