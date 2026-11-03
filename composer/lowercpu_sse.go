@@ -397,13 +397,14 @@ func (e *x86Lowerer) nodeSSE(i int) {
 			e.broadcastSSE(e.reg(i), e.addr(x.Buf, x.A, x.Ptr))
 			return
 		}
-		if e.gpr(nd.A) {
+		if e.gpr(nd.A) || e.gprMask(nd.A) {
 			a.MOVDToX(e.reg(i), e.reg(nd.A))
 			a.PSHUFD(e.reg(i), e.reg(i), 0)
 			return
 		}
 		a.PSHUFD(e.reg(i), e.reg(nd.A), 0)
-	case OpUnpack:
+	case OpUnpack, OpZip:
+		// One 128-bit register is one lane: its zip is its unpack.
 		switch {
 		case e.shuffles:
 			imm := byte(0x44 + 0xAA*nd.Imm)

@@ -114,3 +114,34 @@ func TestCPUIndexKeepsTheConstantItSubtractsFrom(t *testing.T) {
 		}
 	}
 }
+
+// TestCPUSelectBroadcastsAGeneralMask executes a reduce over a ragged row
+// read through a mask, max |sel(i < W, x[min(i, W-1)], 0)| over blocks of
+// 32: the mask a general register's compare, broadcast to the vector the
+// select reads. Each block is held to its own elements' maximum, so a
+// broadcast of a vector register in the mask's place fails it.
+func TestCPUSelectBroadcastsAGeneralMask(t *testing.T) {
+	const R, W, NB = 2, 40, 2
+	U, F := ir.U32, ir.F32
+	sh := []int{R, W}
+	xs := make([]float32, R*W)
+	for i := range xs {
+		xs[i] = float32(i + 1)
+	}
+	g := &graph.Graph{Values: []graph.Value{{Name: "x", Width: W}, {Name: "o", Width: NB}}}
+	in := Operand{Kind: OperandValue, Value: 0, Name: "x", Elem: F}
+	out := Operand{Kind: OperandValue, Value: 1, Name: "o", Elem: F, Out: true}
+	var a exprs
+	i := a.op(OpAdd, U, a.op(OpMul, U, a.coord(1), a.u(32)), a.coord(2))
+	a.abs(a.sel(F, a.op(OpLess, ir.Pred, i, a.u(W)), a.at(0, sh, a.coord(0), a.op(OpMin, U, i, a.u(W-1))), a.f(0)))
+	p := Prim{Kind: PrimReduce, Shape: []int{R, NB, 32}, In: []Operand{in}, Out: out, Combine: OpMax, Expr: a.e}
+	got := make([]float32, R*NB)
+	runCPUPrim(t, p, g, map[string][]uint32{"x": f32Words(xs), "o": f32Words(got)})
+	for r := 0; r < R; r++ {
+		for b := 0; b < NB; b++ {
+			if want := xs[r*W+min(b*32+32, W)-1]; got[r*NB+b] != want {
+				t.Fatalf("row %d block %d is %v, want %v (all %v)", r, b, got[r*NB+b], want, got)
+			}
+		}
+	}
+}
