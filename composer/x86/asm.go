@@ -405,7 +405,8 @@ func (a *Buf) VPSRLVD(dst, src, count Reg) { a.vop(0x45, p66, m0F38, 0, dst, src
 func (a *Buf) VPSLLVD(dst, src, count Reg) { a.vop(0x47, p66, m0F38, 0, dst, src, count) }
 func (a *Buf) VPSRAVD(dst, src, count Reg) { a.vop(0x46, p66, m0F38, 0, dst, src, count) }
 
-func (a *Buf) VPMOVZXWD(dst Reg, m Mem) { a.vopMem(0x33, p66, m0F38, 0, dst, Y0, m) }
+func (a *Buf) VPMOVZXWD(dst Reg, m Mem)  { a.vopMem(0x33, p66, m0F38, 0, dst, Y0, m) }
+func (a *Buf) VPMOVZXWDReg(dst, src Reg) { a.vop(0x33, p66, m0F38, 0, dst, Y0, src) }
 
 func (a *Buf) VPINSRWLoad(dst, src1 Reg, m Mem, imm byte) {
 	idx := noIndex

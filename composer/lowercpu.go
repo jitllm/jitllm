@@ -512,7 +512,12 @@ func (e *x86Lowerer) node(i int) {
 			a.VPBROADCASTDReg(e.reg(i), e.reg(i))
 		}
 	case OpHalf:
-		a.VCVTPS2PH(e.reg(i), e.reg(nd.A), e.lanes(e.home[i]) > 0, 0)
+		lanes := e.lanes(e.home[i]) > 0
+		a.VCVTPS2PH(e.reg(i), e.reg(nd.A), lanes, 0)
+		if !lanes {
+			// F16C packs the halves: a word holds its own, zero above.
+			a.VPMOVZXWDReg(e.reg(i), e.reg(i))
+		}
 	case OpGtW:
 		a.VPCMPGTWx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpLess:
