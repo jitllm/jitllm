@@ -74,6 +74,8 @@ type cpuHeadForm struct {
 	composed bool
 	f        *cpuBlockForm
 	why      composer.Decline
+	// err is the composer's, where it formed none.
+	err error
 }
 
 // CPUHeadSteps is how many head rows the CPU's composed head served, and
@@ -166,7 +168,7 @@ func (s *Instance) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, o
 	default:
 		f, err := s.m.formCPUGraph(s, g, rows, over)
 		if err != nil {
-			hf.why = s.cpuFormDecline(err)
+			hf.why, hf.err = s.cpuFormDecline(err), err
 			return
 		}
 		hf.f = f
