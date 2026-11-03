@@ -63,11 +63,11 @@ func guardBytes(t *testing.T, src []byte) []byte {
 // TestSSEFloatMatVecReadsNothingPastItsRow runs the float matvec with its
 // weights and its activation each ending at a guard page, at every k shape.
 func TestSSEFloatMatVecReadsNothingPastItsRow(t *testing.T) {
-	for _, typ := range sseFloatTypes {
+	for _, typ := range sseFloatTypes() {
 		code := sseFloatKernel(t, typ)
 		c := mustMap(t, code)
 		es := int(typ.BlockBytes())
-		for _, k := range sseFloatKs {
+		for _, k := range sseFloatKs() {
 			const rows = 3
 			rng := rand.New(rand.NewSource(int64(k)))
 			w, _ := floatRows(rng, typ, rows, k, false)

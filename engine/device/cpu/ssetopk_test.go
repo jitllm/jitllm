@@ -20,7 +20,7 @@ func TestMoETopKOnTheForcedSSETier(t *testing.T) {
 	}
 	before := MappedByTier()
 
-	for _, s := range moeShapes {
+	for _, s := range moeShapes() {
 		n, k := s[0], s[1]
 		for _, norm := range []bool{true, false} {
 			b, err := EmittersFor(HostTier()).MoETopK(n, k, norm)

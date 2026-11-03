@@ -38,43 +38,45 @@ type moeV3Cfg struct {
 // The rest cover ragged tails: 30 experts in 5 groups of 6 is ragged in the
 // group span, 63 in 7 groups of 9 in the span and the total, and 12 groups in
 // the group vector itself.
-var moeV3Cfgs = []moeV3Cfg{
-	{"deepseek-v3", 256, 8, MoEGate{Norm: true, Bias: true, NGroup: 8, NGroupUsed: 4, Scale: true}, 2.5},
-	{"deepseek-v3/nonorm", 256, 8, MoEGate{Bias: true, NGroup: 8, NGroupUsed: 4, Scale: true}, 2.5},
-	{"kimi-k2/degenerate", 128, 8, MoEGate{Norm: true, Bias: true, NGroup: 1, NGroupUsed: 1, Scale: true}, 2.827},
-	{"glm4-moe/ungrouped", 128, 8, MoEGate{Norm: true, Bias: true, Scale: true}, 1.5},
+func moeV3Cfgs() []moeV3Cfg {
+	return []moeV3Cfg{
+		{"deepseek-v3", 256, 8, MoEGate{Norm: true, Bias: true, NGroup: 8, NGroupUsed: 4, Scale: true}, 2.5},
+		{"deepseek-v3/nonorm", 256, 8, MoEGate{Bias: true, NGroup: 8, NGroupUsed: 4, Scale: true}, 2.5},
+		{"kimi-k2/degenerate", 128, 8, MoEGate{Norm: true, Bias: true, NGroup: 1, NGroupUsed: 1, Scale: true}, 2.827},
+		{"glm4-moe/ungrouped", 128, 8, MoEGate{Norm: true, Bias: true, Scale: true}, 1.5},
 
-	{"bias-only", 64, 4, MoEGate{Norm: true, Bias: true}, 1},
-	{"scale-only", 64, 4, MoEGate{Norm: true, Scale: true}, 2.5},
-	{"group-only", 64, 4, MoEGate{Norm: true, NGroup: 4, NGroupUsed: 2}, 1},
-	{"allgroups", 64, 6, MoEGate{Norm: true, Bias: true, NGroup: 4, NGroupUsed: 4, Scale: true}, 0.5},
-	{"onegroupused", 64, 4, MoEGate{Norm: true, Bias: true, NGroup: 8, NGroupUsed: 1, Scale: true}, 2},
-	{"pairgroups", 32, 4, MoEGate{Norm: true, Bias: true, NGroup: 16, NGroupUsed: 3, Scale: true}, 1.25},
+		{"bias-only", 64, 4, MoEGate{Norm: true, Bias: true}, 1},
+		{"scale-only", 64, 4, MoEGate{Norm: true, Scale: true}, 2.5},
+		{"group-only", 64, 4, MoEGate{Norm: true, NGroup: 4, NGroupUsed: 2}, 1},
+		{"allgroups", 64, 6, MoEGate{Norm: true, Bias: true, NGroup: 4, NGroupUsed: 4, Scale: true}, 0.5},
+		{"onegroupused", 64, 4, MoEGate{Norm: true, Bias: true, NGroup: 8, NGroupUsed: 1, Scale: true}, 2},
+		{"pairgroups", 32, 4, MoEGate{Norm: true, Bias: true, NGroup: 16, NGroupUsed: 3, Scale: true}, 1.25},
 
-	{"ragged/span", 30, 4, MoEGate{Norm: true, Bias: true, NGroup: 5, NGroupUsed: 2, Scale: true}, 2.5},
-	{"ragged/both", 63, 5, MoEGate{Norm: true, Bias: true, NGroup: 7, NGroupUsed: 3, Scale: true}, 2.5},
-	{"ragged/groups", 60, 4, MoEGate{Norm: true, Bias: true, NGroup: 12, NGroupUsed: 5, Scale: true}, 2.5},
-	{"ragged/total", 65, 3, MoEGate{Norm: true, Bias: true, Scale: true}, 2.5},
-	// Ragged and plain: the only shape where the selection walks the caller's
-	// own buffer with a tail (a bias or group selects over a scratch plane),
-	// so these are what let TestMoERouteReadsNothingPastTheExperts fire.
-	{"ragged/plain", 63, 5, MoEGate{Norm: true, Scale: true}, 2.5},
+		{"ragged/span", 30, 4, MoEGate{Norm: true, Bias: true, NGroup: 5, NGroupUsed: 2, Scale: true}, 2.5},
+		{"ragged/both", 63, 5, MoEGate{Norm: true, Bias: true, NGroup: 7, NGroupUsed: 3, Scale: true}, 2.5},
+		{"ragged/groups", 60, 4, MoEGate{Norm: true, Bias: true, NGroup: 12, NGroupUsed: 5, Scale: true}, 2.5},
+		{"ragged/total", 65, 3, MoEGate{Norm: true, Bias: true, Scale: true}, 2.5},
+		// Ragged and plain: the only shape where the selection walks the caller's
+		// own buffer with a tail (a bias or group selects over a scratch plane),
+		// so these are what let TestMoERouteReadsNothingPastTheExperts fire.
+		{"ragged/plain", 63, 5, MoEGate{Norm: true, Scale: true}, 2.5},
 
-	// Wide enough that the group planes sit past arm64's 12-bit add
-	// immediate, so the NEON kernel's register-offset branch is exercised
-	// (no shipped expert count reaches it yet).
-	{"wide", 1024, 8, MoEGate{Norm: true, Bias: true, NGroup: 8, NGroupUsed: 4, Scale: true}, 2.5},
-	{"ragged/plain-nonorm", 45, 3, MoEGate{}, 1},
-	{"ragged/k1", 33, 1, MoEGate{Norm: true, Bias: true, NGroup: 3, NGroupUsed: 2, Scale: true}, 2.5},
-	{"groupsize1", 8, 2, MoEGate{Norm: true, Bias: true, NGroup: 8, NGroupUsed: 3, Scale: true}, 2.5},
+		// Wide enough that the group planes sit past arm64's 12-bit add
+		// immediate, so the NEON kernel's register-offset branch is exercised
+		// (no shipped expert count reaches it yet).
+		{"wide", 1024, 8, MoEGate{Norm: true, Bias: true, NGroup: 8, NGroupUsed: 4, Scale: true}, 2.5},
+		{"ragged/plain-nonorm", 45, 3, MoEGate{}, 1},
+		{"ragged/k1", 33, 1, MoEGate{Norm: true, Bias: true, NGroup: 3, NGroupUsed: 2, Scale: true}, 2.5},
+		{"groupsize1", 8, 2, MoEGate{Norm: true, Bias: true, NGroup: 8, NGroupUsed: 3, Scale: true}, 2.5},
 
-	// Gemma 4's router: softmax, renormalised, then each weight times its
-	// expert's own scale, gathered by id. Ragged so the gather's tail runs, and
-	// combined with everything else so the multiply's place is pinned.
-	{"gemma4", 128, 8, MoEGate{Norm: true, ExpScale: true}, 1},
-	{"expscale/ragged", 63, 5, MoEGate{Norm: true, ExpScale: true}, 1},
-	{"expscale/all", 65, 3, MoEGate{Norm: true, Bias: true, NGroup: 5, NGroupUsed: 2, Scale: true, ExpScale: true}, 2.5},
-	{"expscale/k1", 33, 1, MoEGate{ExpScale: true}, 1},
+		// Gemma 4's router: softmax, renormalised, then each weight times its
+		// expert's own scale, gathered by id. Ragged so the gather's tail runs, and
+		// combined with everything else so the multiply's place is pinned.
+		{"gemma4", 128, 8, MoEGate{Norm: true, ExpScale: true}, 1},
+		{"expscale/ragged", 63, 5, MoEGate{Norm: true, ExpScale: true}, 1},
+		{"expscale/all", 65, 3, MoEGate{Norm: true, Bias: true, NGroup: 5, NGroupUsed: 2, Scale: true, ExpScale: true}, 2.5},
+		{"expscale/k1", 33, 1, MoEGate{ExpScale: true}, 1},
+	}
 }
 
 // moeExpScale is the per-expert scale every ExpScale fixture runs with:
@@ -258,7 +260,7 @@ func moeV3RunAll(t *testing.T, mk func(*testing.T, moeV3Cfg) ([]moeV3Kernel, fun
 	fault oracle.MoEFault, report func(string)) int {
 	t.Helper()
 	hits := 0
-	for _, cfg := range moeV3Cfgs {
+	for _, cfg := range moeV3Cfgs() {
 		ks, done := mk(t, cfg)
 		for _, in := range moeV3Inputs(cfg) {
 			want := moeFromOracle(oracle.MoERouter(in.sc, cfg.k, cfg.oracleGate(in.bias), fault))
@@ -287,14 +289,20 @@ func moeV3RunAll(t *testing.T, mk func(*testing.T, moeV3Cfg) ([]moeV3Kernel, fun
 
 // moeV3Refusals is every shape the emitters must refuse by name. Each is a
 // config error, which nn reports naming the router.
-var moeV3Refusals = []struct {
+func moeV3Refusals() []struct {
 	name string
 	n, k int
 	g    MoEGate
-}{
-	{"more groups used than exist", 64, 4, MoEGate{NGroup: 4, NGroupUsed: 5}},
-	{"no groups used", 64, 4, MoEGate{NGroup: 4}},
-	{"a negative group count used", 64, 4, MoEGate{NGroup: 4, NGroupUsed: -1}},
-	{"experts that do not divide into groups", 65, 4, MoEGate{NGroup: 8, NGroupUsed: 2}},
-	{"k above n, grouped", 4, 8, MoEGate{NGroup: 2, NGroupUsed: 1}},
+} {
+	return []struct {
+		name string
+		n, k int
+		g    MoEGate
+	}{
+		{"more groups used than exist", 64, 4, MoEGate{NGroup: 4, NGroupUsed: 5}},
+		{"no groups used", 64, 4, MoEGate{NGroup: 4}},
+		{"a negative group count used", 64, 4, MoEGate{NGroup: 4, NGroupUsed: -1}},
+		{"experts that do not divide into groups", 65, 4, MoEGate{NGroup: 8, NGroupUsed: 2}},
+		{"k above n, grouped", 4, 8, MoEGate{NGroup: 2, NGroupUsed: 1}},
+	}
 }

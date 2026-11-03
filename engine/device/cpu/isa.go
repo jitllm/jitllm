@@ -24,7 +24,7 @@ import "fmt"
 // gate (ssegate_test.go) independently checks the encoder's bookkeeping.
 
 // isaMarker is the fixed prefix of the declaration; the mask follows it.
-var isaMarker = [5]byte{0x0F, 0x1F, 0x80, 'J', 'I'}
+const isaMarker = "\x0F\x1F\x80JI"
 
 // ISAMarkerLen is how many bytes the declaration occupies at the head of a
 // kernel.
@@ -49,8 +49,8 @@ func (a *Buf) DeclareISA(mask ISA) {
 			"floor every legacy vector instruction here is checked against", mask))
 	}
 	a.declared, a.isa = true, mask
-	for _, b := range isaMarker {
-		a.u8(b)
+	for i := 0; i < len(isaMarker); i++ {
+		a.u8(isaMarker[i])
 	}
 	a.u8(byte(mask))
 	a.u8(byte(mask >> 8))
@@ -61,7 +61,7 @@ func (a *Buf) DeclareISA(mask ISA) {
 // needs ISATierAVX2 -- plus AVX-VNNI if it contains VPDPBUSD, which runnable()
 // checks separately because that half predates the declaration.
 func KernelISA(code []byte) (need ISA, declared bool) {
-	if len(code) >= ISAMarkerLen && [5]byte(code[:5]) == isaMarker {
+	if len(code) >= ISAMarkerLen && string(code[:len(isaMarker)]) == isaMarker {
 		return ISA(code[5]) | ISA(code[6])<<8, true
 	}
 	return ISATierAVX2, false

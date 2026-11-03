@@ -15,7 +15,7 @@ func TestEmitDWConvSSEMatchesReference(t *testing.T) {
 	em := EmittersFor(TierSSE)
 	for _, k := range []int{1, 3, 5} {
 		for _, st := range []int{1, 2} {
-			for _, ch := range hybWidths {
+			for _, ch := range hybWidths() {
 				s := DWShape{K: k, Stride: st, WP: 4*st + k, Chans: ch, WOut: 5}
 				b, err := em.DWConv(s)
 				if err != nil {

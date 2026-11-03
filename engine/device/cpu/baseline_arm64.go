@@ -1,8 +1,6 @@
 package cpu
 
-import "errors"
-
-var errNoBaseline = errors.New("jit: this CPU is below the arm64 baseline (ARMv8-A NEON)")
+const errNoBaseline jitError = "jit: this CPU is below the arm64 baseline (ARMv8-A NEON)"
 
 // baseline is nil on arm64: ARMv8-A mandates NEON, so the floor is the
 // architecture itself. FEAT_DotProd is deliberately not asked here: it is a

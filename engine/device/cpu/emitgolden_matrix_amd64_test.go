@@ -19,7 +19,7 @@ func TestAVX2MatrixEmittersAreByteStable(t *testing.T) {
 	for _, dk := range []DotKind{DotVNNI, DotVEX} {
 		for _, q := range quant.PackedTypes {
 			p := fmt.Sprintf("dk=%d/%s", dk, q)
-			for _, ah := range fusedAheads {
+			for _, ah := range fusedAheads() {
 				c, err := EmitPackedMatVecFusedAhead(q, dk, ah)
 				m.add(fmt.Sprintf("fused/%s/ahead=%d", p, ah), c, err)
 			}
@@ -87,7 +87,7 @@ func TestSSEMatrixEmittersAreByteStable(t *testing.T) {
 			c, err := EmitPackedMatVecSSE(q, rows)
 			m.add(fmt.Sprintf("matvec/%s/rows=%d", q, rows), c, err)
 		}
-		for _, ah := range fusedAheads {
+		for _, ah := range fusedAheads() {
 			c, err := EmitPackedMatVecFusedAheadSSE(q, ah)
 			m.add(fmt.Sprintf("fusedahead/%s/ahead=%d", q, ah), c, err)
 		}

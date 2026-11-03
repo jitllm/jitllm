@@ -19,7 +19,9 @@ import (
 
 // smShapes is the expert counts: 16 (Phi-3.5-MoE), the smallest legal one,
 // either side of every vector width, and a few dozen.
-var smShapes = []int{2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64}
+func smShapes() []int {
+	return []int{2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64}
+}
 
 // smEps is Phi-3.5-MoE's router_jitter_noise.
 const smEps = 0.01
@@ -163,7 +165,7 @@ func smDiff(want, got oracle.MoERoute) string {
 
 func TestSparseMixerMatchesTheOracle(t *testing.T) {
 	kept := 0
-	for _, n := range smShapes {
+	for _, n := range smShapes() {
 		ks, done := smKernels(t, n)
 		for _, in := range smInputs(n) {
 			want := oracle.SparseMixer(in.s, smEps, oracle.SparseMixerFaultNone)
@@ -180,7 +182,7 @@ func TestSparseMixerMatchesTheOracle(t *testing.T) {
 	}
 	// Random logits mask every other expert, where every weight is 1 and the
 	// mask is invisible; the built cases must reach the softmax.
-	if kept < len(smShapes) {
+	if kept < len(smShapes()) {
 		t.Fatalf("only %d inputs kept more than the maximum -- the masks were barely exercised", kept)
 	}
 }
@@ -194,7 +196,7 @@ func TestSparseMixerViolations(t *testing.T) {
 		oracle.SparseMixerFaultAbsFactor} {
 		t.Run(fmt.Sprint(f), func(t *testing.T) {
 			hits := 0
-			for _, n := range smShapes {
+			for _, n := range smShapes() {
 				ks, done := smKernels(t, n)
 				for _, in := range smInputs(n) {
 					bad := oracle.SparseMixer(in.s, smEps, f)

@@ -34,7 +34,7 @@ func hybCallDeltaChan(c *Code, o, st, k, q, v, decay []float32, gate float32, n 
 // that runs the vector body would read past the last channel.
 func TestEmitGatedDeltaChanSSEMatchesOracle(t *testing.T) {
 	em := EmittersFor(TierSSE)
-	for _, n := range hybWidths {
+	for _, n := range hybWidths() {
 		b, err := em.GatedDeltaChan(n)
 		if err != nil {
 			t.Fatalf("n=%d: %v", n, err)

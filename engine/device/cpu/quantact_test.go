@@ -243,7 +243,7 @@ func TestQuantActConstantsAreExact(t *testing.T) {
 // built on amd64 too, since the tests that index that slice run only on
 // darwin/arm64.
 func TestEveryA64KernelTypeHasAConstantBlock(t *testing.T) {
-	for _, q := range a64KernelTypes {
+	for _, q := range a64KernelTypes() {
 		if len(KernelConst(q)) == 0 {
 			t.Errorf("%v is in a64KernelTypes and KernelConst gives it no bytes -- "+
 				"every harness that walks that list takes &konst[0] and panics", q)

@@ -1,11 +1,9 @@
 package cpu
 
-import "errors"
-
 // errQuantActOwed is what a tier without the activation-quantize kernel
 // returns. It is deliberately not ErrNoSSEKernel, which marks the tier
 // incomplete and makes model.Open refuse the host (cpu.SSEPending).
-var errQuantActOwed = errors.New("jit: this tier has no activation-quantize kernel yet")
+const errQuantActOwed jitError = "jit: this tier has no activation-quantize kernel yet"
 
 // EmitQuantActSSE and EmitQuantActNarrowSSE are the SSE tier's entries for the
 // two window shapes. sse_quantact.go has the bodies; both are bit-identical to

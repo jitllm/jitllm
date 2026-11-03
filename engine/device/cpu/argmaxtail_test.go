@@ -38,7 +38,9 @@ type argmaxKernel struct {
 	c    *Code
 }
 
-var argmaxTestConsts = ArgmaxConsts()
+func argmaxTestConsts() []float32 {
+	return ArgmaxConsts()
+}
 
 // call runs the kernel over the whole of x, in the ABI nn uses: Args.K is the
 // element count.
@@ -49,7 +51,7 @@ func (k argmaxKernel) call(x []float32) (int32, float32) {
 		K:    int64(len(x)),
 		Out:  &val,
 		ASum: &idx,
-		Scr:  (*byte)(unsafe.Pointer(&argmaxTestConsts[0])),
+		Scr:  (*byte)(unsafe.Pointer(&argmaxTestConsts()[0])),
 	}
 	if len(x) > 0 {
 		args.Q32 = &x[0]
@@ -121,7 +123,9 @@ func argmaxLens() []int {
 	return ns
 }
 
-var argmaxShapes = []string{"ascending", "descending", "flat", "negative", "random", "mixed"}
+func argmaxShapes() []string {
+	return []string{"ascending", "descending", "flat", "negative", "random", "mixed"}
+}
 
 func argmaxData(shape string, n int, seed int64) []float32 {
 	r := rand.New(rand.NewSource(seed))
@@ -158,7 +162,7 @@ func TestArgmaxServesEveryLengthOnBothTiers(t *testing.T) {
 	ks := argmaxKernels(t)
 	ran := 0
 	for _, n := range argmaxLens() {
-		for _, shape := range argmaxShapes {
+		for _, shape := range argmaxShapes() {
 			x := argmaxData(shape, n, int64(n*31+len(shape)))
 			wi, wv := argmaxScanGo(x)
 			for _, k := range ks {
@@ -383,7 +387,7 @@ func TestArgmaxGateSeesItsViolations(t *testing.T) {
 				Q32:  &x[0],
 				Out:  &val,
 				ASum: &idx,
-				Scr:  (*byte)(unsafe.Pointer(&argmaxTestConsts[0])),
+				Scr:  (*byte)(unsafe.Pointer(&argmaxTestConsts()[0])),
 			}
 			k.c.Call(&args)
 			if idx == wi {
@@ -424,7 +428,7 @@ func TestArgmaxGateSeesItsViolations(t *testing.T) {
 		var val float32
 		c.Call(&Args{
 			K: int64(len(x) / ArgmaxLanes), Q32: &x[0], Out: &val, ASum: &idx,
-			Scr: (*byte)(unsafe.Pointer(&argmaxTestConsts[0])),
+			Scr: (*byte)(unsafe.Pointer(&argmaxTestConsts()[0])),
 		})
 		if idx != wi {
 			bad++

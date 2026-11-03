@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 )
@@ -70,10 +71,10 @@ func emitterCalls() []emitterCall {
 	add("softmax", func(em *Emitters) ([]byte, error) { return em.Softmax() }, emitted(EmitSoftmax()))
 	add("sigmoidmul", func(em *Emitters) ([]byte, error) { return em.SigmoidMul() }, emitted(EmitSigmoidMul()))
 	add("ln", func(em *Emitters) ([]byte, error) { return em.Ln() }, emitted(EmitLn()))
-	for _, k := range Gated {
+	for _, k := range graph.Gated {
 		add("actmul/"+k.String(), func(em *Emitters) ([]byte, error) { return em.ActMul(k) }, emitted(EmitActMul(k)))
 	}
-	for _, k := range Ungated {
+	for _, k := range graph.Ungated {
 		add("act/"+k.String(), func(em *Emitters) ([]byte, error) { return em.Act(k) }, emitted(EmitAct(k)))
 	}
 	for _, n := range []int{1, 7, 64, 771, 2048} {

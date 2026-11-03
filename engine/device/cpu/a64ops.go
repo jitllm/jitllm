@@ -1,5 +1,7 @@
 package cpu
 
+import "fmt"
+
 // The instructions the composer's arm64 lowering (composer/lowera64.go) emits
 // beside the ones main's emitters already encode: three-register vector
 // operations, the scalar and general-register forms of its integer nodes,
@@ -24,34 +26,48 @@ const (
 	A64StrH
 )
 
-// a64Access is each access's unsigned-offset and unscaled encodings and its
-// size in bytes.
-var a64Access = [...]struct{ scaled, unscaled, size uint32 }{
-	A64LdrX: {0xF9400000, 0xF8400000, 8},
-	A64StrX: {0xF9000000, 0xF8000000, 8},
-	A64LdrW: {0xB9400000, 0xB8400000, 4},
-	A64StrW: {0xB9000000, 0xB8000000, 4},
-	A64LdrQ: {0x3DC00000, 0x3CC00000, 16},
-	A64StrQ: {0x3D800000, 0x3C800000, 16},
-	A64LdrD: {0xFD400000, 0xFC400000, 8},
-	A64StrD: {0xFD000000, 0xFC000000, 8},
-	A64LdrS: {0xBD400000, 0xBC400000, 4},
-	A64StrS: {0xBD000000, 0xBC000000, 4},
-	A64LdrH: {0x7D400000, 0x7C400000, 2},
-	A64StrH: {0x7D000000, 0x7C000000, 2},
+// enc is op's unsigned-offset and unscaled encodings and its size in bytes.
+func (op A64Access) enc() (scaled, unscaled, size uint32) {
+	switch op {
+	case A64LdrX:
+		return 0xF9400000, 0xF8400000, 8
+	case A64StrX:
+		return 0xF9000000, 0xF8000000, 8
+	case A64LdrW:
+		return 0xB9400000, 0xB8400000, 4
+	case A64StrW:
+		return 0xB9000000, 0xB8000000, 4
+	case A64LdrQ:
+		return 0x3DC00000, 0x3CC00000, 16
+	case A64StrQ:
+		return 0x3D800000, 0x3C800000, 16
+	case A64LdrD:
+		return 0xFD400000, 0xFC400000, 8
+	case A64StrD:
+		return 0xFD000000, 0xFC000000, 8
+	case A64LdrS:
+		return 0xBD400000, 0xBC400000, 4
+	case A64StrS:
+		return 0xBD000000, 0xBC000000, 4
+	case A64LdrH:
+		return 0x7D400000, 0x7C400000, 2
+	case A64StrH:
+		return 0x7D000000, 0x7C000000, 2
+	}
+	panic(fmt.Sprintf("jit: A64Access %d is not an access", op))
 }
 
 // Access is op of register rt at rn+off: the unsigned scaled offset where
 // off is a non-negative multiple of the size in reach, else the unscaled
 // one. It reports false, emitting nothing, where neither reaches off.
 func (a *A64) Access(op A64Access, rt uint8, rn XReg, off int32) bool {
-	e := a64Access[op]
-	s := int32(e.size)
+	scaled, unscaled, size := op.enc()
+	s := int32(size)
 	switch {
 	case off >= 0 && off%s == 0 && off/s <= 4095:
-		a.w(e.scaled | uint32(off/s)<<10 | uint32(rn)<<5 | uint32(rt))
+		a.w(scaled | uint32(off/s)<<10 | uint32(rn)<<5 | uint32(rt))
 	case off >= -256 && off <= 255:
-		a.w(e.unscaled | uint32(off&0x1FF)<<12 | uint32(rn)<<5 | uint32(rt))
+		a.w(unscaled | uint32(off&0x1FF)<<12 | uint32(rn)<<5 | uint32(rt))
 	default:
 		return false
 	}
