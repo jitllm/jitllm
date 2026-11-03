@@ -35,7 +35,7 @@ func TestCPUComposesOnce(t *testing.T) {
 		{"synth-gemma4.gguf", []int{1, 5, 33, 100}},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(tc.file)), noTune)
+			m, err := Open(jlmOf(t, testmodels.Path(tc.file)), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}

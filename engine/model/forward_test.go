@@ -17,17 +17,19 @@ type runCase struct {
 	Out    string `json:"out"`
 }
 
-var models = map[string]string{
-	"stories260K": "../../testdata/models/stories260K.gguf",
-	"stories15M":  testmodels.Path("stories15M-q4_0.gguf"),
-	"tinyllama":   testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"),
-	// A real mixture of experts, so the tests that iterate this map cover the
-	// MoE graph on the generated kernels rather than only on the F32 fixture.
-	"qwen3moe": testmodels.Path("Qwen3-MOE-4x0.6B-Q4_K_M.gguf"),
-	// qwen2vl is qwen2's block with M-RoPE; with no image rows the (t, h, w)
-	// position triple collapses to the token index, so its text path must be
-	// exactly qwen2's.
-	"qwen2vl": testmodels.Path("Qwen2-VL-2B-Instruct-Q4_K_M.gguf"),
+func models() map[string]string {
+	return map[string]string{
+		"stories260K": "../../testdata/models/stories260K.gguf",
+		"stories15M":  testmodels.Path("stories15M-q4_0.gguf"),
+		"tinyllama":   testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"),
+		// A real mixture of experts, so the tests that iterate this map cover the
+		// MoE graph on the generated kernels rather than only on the F32 fixture.
+		"qwen3moe": testmodels.Path("Qwen3-MOE-4x0.6B-Q4_K_M.gguf"),
+		// qwen2vl is qwen2's block with M-RoPE; with no image rows the (t, h, w)
+		// position triple collapses to the token index, so its text path must be
+		// exactly qwen2's.
+		"qwen2vl": testmodels.Path("Qwen2-VL-2B-Instruct-Q4_K_M.gguf"),
+	}
 }
 
 // tieMargin is how close the top two logits must be for a disagreement with
@@ -39,13 +41,13 @@ var models = map[string]string{
 // disagree, the margin must be tiny. A disagreement with a wide margin fails.
 const tieMargin = 0.5
 
-// greedyLoadOpts is extra load options for the gate below, for a caller that
-// cannot reach its Open (ssemKVF16 pins the reference's binary16 KV cache on the
-// SSE tier). A test variable, so no other model in the process inherits it.
-var greedyLoadOpts []Option
+func TestGreedyMatchesLlamaCpp(t *testing.T) { greedyMatchesLlamaCpp(t) }
 
-func TestGreedyMatchesLlamaCpp(t *testing.T) {
-	for name, path := range models {
+// greedyMatchesLlamaCpp is the gate with extra load options for a caller that
+// cannot reach its Open (ssemKVF16 pins the reference's binary16 KV cache on the
+// SSE tier), so no other model in the process inherits them.
+func greedyMatchesLlamaCpp(t *testing.T, loadOpts ...Option) {
+	for name, path := range models() {
 		t.Run(name, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "run", name+".json"))
 			if err != nil {
@@ -59,7 +61,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 			if !ok {
 				t.Skipf("model not present: %s (nor its container) (set JITLLM_MODELS to the model directory)", path)
 			}
-			m, err := Open(jlmOf(t, mp), greedyLoadOpts...)
+			m, err := Open(jlmOf(t, mp), loadOpts...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,7 +125,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 // logits as continuing an existing session, and a Reset must be a true reset.
 // A stale KV entry produces fluent, subtly wrong text and nothing else notices.
 func TestKVCacheConsistency(t *testing.T) {
-	m, err := Open(jlmOf(t, models["stories260K"]))
+	m, err := Open(jlmOf(t, models()["stories260K"]))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +176,7 @@ func TestKVCacheConsistency(t *testing.T) {
 }
 
 func TestStateRejects(t *testing.T) {
-	m, err := Open(jlmOf(t, models["stories260K"]))
+	m, err := Open(jlmOf(t, models()["stories260K"]))
 	if err != nil {
 		t.Fatal(err)
 	}

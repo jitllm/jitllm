@@ -25,7 +25,7 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	path := jlmOf(t, p)
-	m, err := Open(path, noTune, noGEMM)
+	m, err := Open(path, noTune(), noGEMM())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -121,18 +121,17 @@ func hostGap(t *testing.T, m *Model, prompt, prefix []int32, a, b int32) float64
 	return math.Abs(float64(lg[a] - lg[b]))
 }
 
-// lastBatchStats is the tier's Stats as batchGreedy's last run left them, for a
-// gate that has to assert which path ran.
-var lastBatchStats gpu.Stats
-
-// lastBatchName is the device batchGreedy's last run stepped on, as
-// gpu.GPU.Name prints it: which backend took the batch.
-var lastBatchName string
-
 // batchGreedy decodes every prompt together, a token per step, and returns
 // each row's first gen generated tokens, the first prompt decoded afterwards by
 // a single instance on the same card, and the count of sm_70 tensor-core matvecs.
 func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []gpu.Option) (got [][]int32, after []int32) {
+	got, after, _ = batchGreedyStats(t, m, ids, gen, seq, opt)
+	return got, after
+}
+
+// batchGreedyStats is batchGreedy and the tier's Stats as the run left them,
+// for a gate that has to assert which path ran.
+func batchGreedyStats(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []gpu.Option) (got [][]int32, after []int32, stats gpu.Stats) {
 	t.Helper()
 	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opt...)...)
 	if err != nil || g == nil {
@@ -171,8 +170,7 @@ func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []gpu.
 					t.Fatal(err)
 				}
 			}
-			lastBatchStats, lastBatchName = g.Stats(), g.Name()
-			return got, after
+			return got, after, g.Stats()
 		}
 		out, err := st.ForwardBatchGreedy(feed)
 		if err != nil {

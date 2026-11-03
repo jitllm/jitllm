@@ -2,7 +2,6 @@ package model
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -13,8 +12,6 @@ import (
 	"math"
 	"slices"
 	"strconv"
-	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
@@ -42,7 +39,7 @@ import (
 //
 // A miss means "compute it"; any other error means the store is broken, and
 // treating the two alike would silently drop a sequence's history.
-var ErrNoPage = errors.New("model: no such kv page")
+const ErrNoPage modelError = "model: no such kv page"
 
 // KVStore is where a KV page lives when no tier is holding it.
 //
@@ -700,22 +697,12 @@ func (s *kvPages) scatter(l kvLayout, slot, n int, k, v []float32) bool {
 // nextCacheID hands out a fresh identity for every session's history. It is
 // unique and deliberately not reusable: a session that wants its pages found
 // again names itself with SetCacheKey. It is not a batch row, which admit
-// reuses as soon as its sequence retires.
-var nextCacheID = func() func() string {
-	// A per-process nonce: a bare counter restarts in every process, and a
-	// second process would address the first one's pages in a shared store.
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// A process that cannot read randomness must not fall back to a
-		// guessable name; the timestamp is only a tiebreak beside the counter.
-		binary.LittleEndian.PutUint64(b[:], uint64(time.Now().UnixNano()))
-	}
-	nonce := hex.EncodeToString(b[:])
-	var n atomic.Int64
-	return func() string {
-		return "session-" + nonce + "-" + strconv.FormatInt(n.Add(1), 10)
-	}
-}()
+// reuses as soon as its sequence retires. The model's random id is in the name:
+// a bare counter restarts in every process, and a second process would address
+// the first one's pages in a shared store.
+func (m *Model) nextCacheID() string {
+	return "session-" + strconv.FormatUint(m.id, 16) + "-" + strconv.FormatInt(m.cacheSeq.Add(1), 10)
+}
 
 // migrateKV moves block li's history between the host's pages and the tier.
 //
@@ -1573,8 +1560,8 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 		s.kv.recAt, s.kv.endsAt = s.recFns()
 	}
 	s.kv.mark = s.recMark
-	if staleKeyFault != nil {
-		tokens = staleKeyFault(key)
+	if s.m.staleKeyFault != nil {
+		tokens = s.m.staleKeyFault(key)
 	}
 	// The tokens come first: restore() names the pages by H(tokens[0:boundary]).
 	s.kv.seq = append(s.kv.seq[:0], tokens...)
@@ -1661,11 +1648,6 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 	s.kvSkipped = n
 	return n, full, nil
 }
-
-// staleKeyFault is the decision prefix gate's violation
-// (TestDecisionReusesThePrefix): the key a restore names its pages by, in
-// place of the prompt's. Nil in every real run.
-var staleKeyFault func(key []int32) []int32
 
 // syncKVFromDevice brings a placed block's history down into the host pages so
 // that seal has something to store.

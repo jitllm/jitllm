@@ -25,7 +25,7 @@ func TestPhaseSites(t *testing.T) {
 	if v := os.Getenv("JITLLM_MODEL"); v != "" {
 		name = v
 	}
-	m, err := Open(jlmOf(t, testmodels.Path(name)), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path(name)), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

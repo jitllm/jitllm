@@ -13,7 +13,7 @@ import (
 // budget actually binds before comparing tokens, since a budget that did
 // nothing would give two identical fully-resident models.
 func TestOpenHonoursAPageBudget(t *testing.T) {
-	path, ok := models["stories260K"]
+	path, ok := models()["stories260K"]
 	if !ok {
 		t.Skip("no small model in the table")
 	}
@@ -112,7 +112,7 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 // gate's old 1e-3 bound. TestBatchMatchesForward's "shipped" arm
 // is where that form is judged.
 func TestForwardBatchFaultsItsBlocksIn(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		if name == "stories260K" {
 			continue // its blocks are smaller than a frame; nothing evicts
 		}
@@ -120,7 +120,7 @@ func TestForwardBatchFaultsItsBlocksIn(t *testing.T) {
 	}
 	// The principle fixtures (paging_test.go), one per architecture beyond
 	// the map's.
-	for _, name := range append(principleFixtures, principleMixtures...) {
+	for _, name := range append(principleFixtures(), principleMixtures()...) {
 		t.Run(name, func(t *testing.T) { forwardBatchFaultsItsBlocksIn(t, testmodels.Path(name)) })
 	}
 }
@@ -133,7 +133,7 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string) {
 		t.Skipf("model not present: %s", path)
 	}
 	src := jlmOf(t, p)
-	tight, err := Open(src, noTune, WithKVF16(false), WithPageBudget(1),
+	tight, err := Open(src, noTune(), WithKVF16(false), WithPageBudget(1),
 		WithJITOptions(nn.WithGEMMExact(true)))
 	if err != nil {
 		t.Fatalf("Open under a one-page budget: %v", err)

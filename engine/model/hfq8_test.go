@@ -120,7 +120,7 @@ func TestSafetensorsQ8MatchTransformers(t *testing.T) {
 // ("" for a block with no mixture).
 func runTraced(t *testing.T, path string, ids []int32) ([][]float32, [][]string) {
 	t.Helper()
-	m, err := Open(path, noTune, WithKVF16(false))
+	m, err := Open(path, noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

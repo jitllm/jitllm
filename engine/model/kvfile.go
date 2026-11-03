@@ -300,14 +300,12 @@ func (f *FileStore) Total() (int, error) {
 // from an I/O failure on purpose: a mismatch is a stale or foreign cache
 // directory and must cost a prefill, while a broken disk must stop the request.
 // See kvCache.miss.
-var errPageMismatch = errors.New("model: kv page does not match this geometry")
+const errPageMismatch modelError = "model: kv page does not match this geometry"
 
-// errShortPage is what a store returning the wrong number of bytes gets. It
-// wraps errPageMismatch so the fault path treats it as a miss rather than as a
+// shortPage is what a store returning the wrong number of bytes gets. It wraps
+// errPageMismatch so the fault path treats it as a miss rather than as a
 // failure -- see kvCache.fault.
-var errShortPage = fmt.Errorf("%w: came back short", errPageMismatch)
-
 func shortPage(li, n, got, want int) error {
-	return fmt.Errorf("%w: layer %d page %d is %d bytes, the geometry says %d",
-		errShortPage, li, n, got, want)
+	return fmt.Errorf("%w: came back short: layer %d page %d is %d bytes, the geometry says %d",
+		errPageMismatch, li, n, got, want)
 }

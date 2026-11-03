@@ -164,7 +164,7 @@ func auditComposedCPU(t *testing.T, name, path string) {
 		t.Fatalf("the census counts %d block steps on the CPU, where the decode ran %d", total, want)
 	}
 	t.Logf("composed CPU: %d of %d block steps served; declined: %s (%v)", served, total, strings.Join(named, ", "), s.CPUFormErr())
-	if slices.Contains(cpuServedModels, name) && served != total {
+	if slices.Contains(cpuServedModels(), name) && served != total {
 		t.Fatalf("a model the composer serves on the CPU declined %d block steps", total-served)
 	}
 }
@@ -186,7 +186,9 @@ type auditModel struct {
 
 // laterShard is the second and later file of a split GGUF; the first names the
 // whole model.
-var laterShard = regexp.MustCompile(`-0*([2-9]|[1-9][0-9]+)-of-[0-9]+\.gguf$`)
+func laterShard() *regexp.Regexp {
+	return regexp.MustCompile(`-0*([2-9]|[1-9][0-9]+)-of-[0-9]+\.gguf$`)
+}
 
 // auditModels is everything TestEveryModelRunsGenerated sweeps. On a host
 // holding only containers it is the containers, as languageModels' fallback
@@ -217,7 +219,7 @@ func auditModels(t *testing.T) []auditModel {
 	sub, _ := filepath.Glob(filepath.Join(testmodels.Dir(), "*", "*.gguf"))
 	sort.Strings(sub)
 	for _, p := range sub {
-		if laterShard.MatchString(p) || isProjector(p) {
+		if laterShard().MatchString(p) || isProjector(p) {
 			continue
 		}
 		add(filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p)), p, false)
@@ -232,12 +234,12 @@ func auditModels(t *testing.T) []auditModel {
 	}
 	// The decision models' files, which sit deeper than one directory down
 	// (laya/gguf/, laya/fixture/) where the glob above does not reach.
-	for _, rel := range auditDecision {
+	for _, rel := range auditDecision() {
 		if p := testmodels.Path(rel); fileExists(p) {
 			add(rel, p, false)
 		}
 	}
-	for _, rel := range auditHFDirs {
+	for _, rel := range auditHFDirs() {
 		if dir := testmodels.Path(rel); fileExists(filepath.Join(dir, "config.json")) {
 			add(rel+" (safetensors)", dir, true)
 		}
@@ -248,11 +250,13 @@ func auditModels(t *testing.T) []auditModel {
 // auditHFDirs are safetensors inputs held to their reference outside
 // testdata/golden/hf, relative to the model directory: a class whose
 // fixtures carry their own goldens appends them (kimik3_test.go).
-var auditHFDirs []string
+func auditHFDirs() []string { return []string{"hf/synth-kimik3", "kimik3/Kimi-K3-0.40B-MXFP4-hf"} }
 
 // auditDecision is the decision models' GGUFs two directories down; d1's and
 // lev's one directory down are found by the glob.
-var auditDecision = []string{"laya/fixture/laya-fixture.gguf", "laya/gguf/Laya-BF16.gguf"}
+func auditDecision() []string {
+	return []string{"laya/fixture/laya-fixture.gguf", "laya/gguf/Laya-BF16.gguf"}
+}
 
 // isProjector reads general.architecture, as languageModels does: a vision
 // projector is the wrong input, not missing work.

@@ -26,28 +26,35 @@ import (
 // agreement over every position (agree, a fraction), no confident flip (a
 // reference margin over tieMargin), and the NMSE bound only as a backstop at
 // several times what a flip reads.
-var bitnetRealModels = []struct {
+func bitnetRealModels() []struct {
 	file, golden string
 	typ          quant.Type
 	nmse, agree  float64
 	flips        int
-}{
-	// The release itself (microsoft/bitnet-b1.58-2B-4T), from safetensors:
-	// uint8 codes and bf16 weight_scales, TQ2_0, its scales exact.
-	{"bitnet-b1.58-2B-4T", "bitnet-b1.58-2B-4T", quant.TQ2_0, 2e-1, 0.98, 0},
-	// The bf16 master weights (microsoft/bitnet-b1.58-2B-4T-bf16), ternarized
-	// as BitNetForCausalLM does under its torch_dtype, in bf16: other codes
-	// than the release's (98-99% of each projection agrees), so its own
-	// golden. Its distributions are flatter at more positions than the
-	// release's (six to nine reference ties within tieMargin, against two),
-	// and every position that parts is one of them, so it agrees at 95%.
-	{"bitnet-b1.58-2B-4T-bf16", "bitnet-b1.58-2B-4T-bf16", quant.TQ2_0, 2e-1, 0.95, 0},
-	// Microsoft's I2_S GGUF (microsoft/bitnet-b1.58-2B-4T-gguf, bitnet.cpp's
-	// converter), its per-tensor f32 scales carried as TQ2_F32 and its
-	// embedding F16. Its weights are neither golden's -- its scales are f32
-	// means, the release's bf16 -- so it is held to the release's within the
-	// two models' own distance.
-	{"bitnet-b1.58-2B-4T-i2_s.gguf", "bitnet-b1.58-2B-4T", quant.TQ2_F32, 2e-1, 0.98, 2},
+} {
+	return []struct {
+		file, golden string
+		typ          quant.Type
+		nmse, agree  float64
+		flips        int
+	}{
+		// The release itself (microsoft/bitnet-b1.58-2B-4T), from safetensors:
+		// uint8 codes and bf16 weight_scales, TQ2_0, its scales exact.
+		{"bitnet-b1.58-2B-4T", "bitnet-b1.58-2B-4T", quant.TQ2_0, 2e-1, 0.98, 0},
+		// The bf16 master weights (microsoft/bitnet-b1.58-2B-4T-bf16), ternarized
+		// as BitNetForCausalLM does under its torch_dtype, in bf16: other codes
+		// than the release's (98-99% of each projection agrees), so its own
+		// golden. Its distributions are flatter at more positions than the
+		// release's (six to nine reference ties within tieMargin, against two),
+		// and every position that parts is one of them, so it agrees at 95%.
+		{"bitnet-b1.58-2B-4T-bf16", "bitnet-b1.58-2B-4T-bf16", quant.TQ2_0, 2e-1, 0.95, 0},
+		// Microsoft's I2_S GGUF (microsoft/bitnet-b1.58-2B-4T-gguf, bitnet.cpp's
+		// converter), its per-tensor f32 scales carried as TQ2_F32 and its
+		// embedding F16. Its weights are neither golden's -- its scales are f32
+		// means, the release's bf16 -- so it is held to the release's within the
+		// two models' own distance.
+		{"bitnet-b1.58-2B-4T-i2_s.gguf", "bitnet-b1.58-2B-4T", quant.TQ2_F32, 2e-1, 0.98, 2},
+	}
 }
 
 // TestBitNetRealMatchesReference holds BitNet b1.58 2B-4T to transformers'
@@ -57,7 +64,7 @@ var bitnetRealModels = []struct {
 // host and with every block and the head on each device.
 func TestBitNetRealMatchesReference(t *testing.T) {
 	ran := 0
-	for _, c := range bitnetRealModels {
+	for _, c := range bitnetRealModels() {
 		t.Run(c.file, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "bitnet", "real-"+c.golden+".json"))
 			if err != nil {
@@ -78,7 +85,7 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 			} else {
 				container = jlmOfSafetensors(t, path)
 			}
-			m, err := Open(container, noTune, WithKVF16(false))
+			m, err := Open(container, noTune(), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

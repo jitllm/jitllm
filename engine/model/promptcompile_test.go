@@ -53,7 +53,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 					t.Skipf("no GPU device: %v", err)
 				}
 				defer g.Close()
-				m, err := Open(jlmOf(t, p), noTune)
+				m, err := Open(jlmOf(t, p), noTune())
 				if err != nil {
 					t.Fatal(err)
 				}

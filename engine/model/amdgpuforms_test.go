@@ -17,7 +17,9 @@ import (
 // (MI250, wave64, sdot4), CDNA3 (MI300X), RDNA2 (V620 and RX 6000, wave32,
 // sdot4), RDNA3 (RX 7900, wave32, sudot4) and RDNA4 (RX 9070), with the target
 // features those cards report.
-var amdTargets = []string{"gfx90a:sramecc+:xnack-", "gfx942:sramecc+:xnack-", "gfx1030", "gfx1100", "gfx1201"}
+func amdTargets() []string {
+	return []string{"gfx90a:sramecc+:xnack-", "gfx942:sramecc+:xnack-", "gfx1030", "gfx1100", "gfx1201"}
+}
 
 // TestComposedFormsLowerForAMDGPU is the AMD lowering's offline gate: every
 // block of each served synthetic fixture, formed by the composer at decode
@@ -35,8 +37,8 @@ func TestComposedFormsLowerForAMDGPU(t *testing.T) {
 		t.Skipf("NO COMGR: %v -- the AMDGPU code object gate did not run; set JITLLM_ROCM to a "+
 			"directory holding libamd_comgr.so.3 (docs/design/amd-hip.md)", err)
 	}
-	targets := make([]amdgpu.Target, len(amdTargets))
-	for i, a := range amdTargets {
+	targets := make([]amdgpu.Target, len(amdTargets()))
+	for i, a := range amdTargets() {
 		if targets[i], err = amdgpu.TargetFor(a); err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +141,7 @@ type gpuKernel struct {
 func composedGPUKernels(t *testing.T) []gpuKernel {
 	t.Helper()
 	var files []string
-	for _, f := range slices.Concat(servedModels, ssmServed, stepMixtures()) {
+	for _, f := range slices.Concat(servedModels(), ssmServed(), stepMixtures()) {
 		if strings.HasPrefix(f, "synth-") && !slices.Contains(files, f) {
 			files = append(files, f)
 		}

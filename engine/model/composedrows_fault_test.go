@@ -21,8 +21,8 @@ import (
 func TestComposedRowsDiscriminate(t *testing.T) {
 	m := composedRowsModel(t)
 	defer m.Close()
-	ids := make([][]int32, len(composedRowsPrompts))
-	for i, p := range composedRowsPrompts {
+	ids := make([][]int32, len(composedRowsPrompts()))
+	for i, p := range composedRowsPrompts() {
 		ids[i] = m.Vocab.Encode(p, true)
 	}
 	const gen = 12
@@ -38,8 +38,8 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 			t.Run(dev+"/"+f.name, func(t *testing.T) {
 				var faults gpu.Faults
 				f.arm(&faults, f.name)
-				got, _ := batchGreedy(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev), gpu.WithFaults(&faults)})
-				composedRowsServed(t, m, lastBatchStats)
+				got, _, stats := batchGreedyStats(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev), gpu.WithFaults(&faults)})
+				composedRowsServed(t, m, stats)
 				i, j, gap := composedRowsPart(t, m, ids, want, got)
 				if i < 0 {
 					t.Fatalf("under %q every row matched the host to a tie: the gate cannot see it", f.name)

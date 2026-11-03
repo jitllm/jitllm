@@ -17,8 +17,8 @@ import (
 // session after another fails it; reading one session's history for both
 // rows (stepShare) must fail it too.
 func TestSessionsShareAnInstance(t *testing.T) {
-	for _, src := range []string{models["stories260K"], testmodels.Path("SmolLM2-360M-Instruct-Q8_0.gguf"),
-		models["qwen3moe"]} {
+	for _, src := range []string{models()["stories260K"], testmodels.Path("SmolLM2-360M-Instruct-Q8_0.gguf"),
+		models()["qwen3moe"]} {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			path, ok := existingModel(src)
 			if !ok {
@@ -26,7 +26,7 @@ func TestSessionsShareAnInstance(t *testing.T) {
 			}
 			// The reduction order pinned as hostStepNMSE says: the step runs the
 			// rows' forms and alone runs the one-row forms.
-			m, err := Open(jlmOf(t, path), noTune, WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -58,9 +58,9 @@ func TestSessionsShareAnInstance(t *testing.T) {
 			if joint == 0 {
 				t.Errorf("no step ran the sessions' rows together")
 			}
-			stepShare = true
+			m.stepShareFault = true
 			bad, _ := sharedDecode(t, m, prompts, gen)
-			stepShare = false
+			m.stepShareFault = false
 			if equalIDs(bad[1], alone[1]) {
 				t.Errorf("rows reading the first session's history decoded session 1's tokens: the gate cannot see a shared history")
 			}
@@ -153,13 +153,13 @@ func sharedDecodeArms(t *testing.T, m *Model, prompts [][]int32, gen, every int)
 // one-row form, which round apart; a row reading the other session's
 // history (stepShare) is whole logits off and must fail it.
 func TestSessionsStepWithinTheBandOnF16KV(t *testing.T) {
-	for _, src := range []string{testmodels.Path("SmolLM2-360M-Instruct-Q8_0.gguf"), models["qwen3moe"]} {
+	for _, src := range []string{testmodels.Path("SmolLM2-360M-Instruct-Q8_0.gguf"), models()["qwen3moe"]} {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			path, ok := existingModel(src)
 			if !ok {
 				t.Fatalf("model not present: %s (nor its container)", src)
 			}
-			m, err := Open(jlmOf(t, path), noTune, WithKVF16(true), WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, path), noTune(), WithKVF16(true), WithJITOptions(nn.WithGEMMExact(true)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -192,9 +192,9 @@ func TestSessionsStepWithinTheBandOnF16KV(t *testing.T) {
 					t.Logf("session %d: worst NMSE %.3e (token %d)", i, w, at)
 				}
 			}
-			stepShare = true
+			m.stepShareFault = true
 			bad := forcedSteps(t, m, prompts, toks)
-			stepShare = false
+			m.stepShareFault = false
 			if w, _ := worstStep(bad[1], want[1]); w < hostStepNMSE {
 				t.Errorf("rows reading the first session's history read NMSE %.3e: the band cannot see a shared history", w)
 			}

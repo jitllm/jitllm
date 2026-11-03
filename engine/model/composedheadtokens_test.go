@@ -37,7 +37,7 @@ func negatedSample(s *graph.Graph) *graph.Graph {
 func TestComposedHeadTokens(t *testing.T) {
 	const gen = 24
 	ran := 0
-	for _, fx := range headFixtures {
+	for _, fx := range headFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			for _, dev := range stepDevices() {
 				for _, parts := range []gpu.Parts{gpu.ComposedHead | gpu.ComposedSample} {

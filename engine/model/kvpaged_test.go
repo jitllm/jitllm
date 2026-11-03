@@ -1165,8 +1165,6 @@ func (d *mirrorDevice) PrewarmLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool {
 	return false
 }
 
-var _ nn.LayerDevice = (*mirrorDevice)(nil)
-
 // TestDeviceHistoryIsPulledDownAndSealed covers syncKVFromDevice. attnPrep runs
 // only over the host block range, so a placed block writes no host page and seal
 // would store nothing while every counter reports success.
@@ -1403,22 +1401,24 @@ func TestFileStoreStaysInsideItsLimit(t *testing.T) {
 // anywhere: the fake carries the history rather than computing with it, since
 // what is under test is the gather/migrate/scatter seam in model/.
 func TestKVPagesRelocateWithTheLayer(t *testing.T) {
-	defer fusedRunsCheck(t, true)()
+	w := fusedRunsCheck(t, true)
+	defer w.done()
 	for _, name := range relocModels() {
-		t.Run(name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), KVF32) })
+		t.Run(name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), KVF32, w) })
 	}
 }
 
 // kvPagesRelocateWithTheLayer is TestKVPagesRelocateWithTheLayer on one model.
-func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType) {
+func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType, w *fuseWatch) {
 	// Untuned: the logit sum below is held bit for bit, and a kernel pick
 	// timed mid-run (the arm64 per-shape choice) moves the reduction order
 	// between the two arms.
-	m, err := Open(path, noTune)
+	m, err := Open(path, noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	w.watch(m)
 	if err := m.Cfg.KVTypeRefusal(kt); err != nil {
 		t.Skipf("refused by name: %v", err)
 	}
@@ -1679,12 +1679,12 @@ func TestPagedKVIsTokenIdenticalOnEveryModel(t *testing.T) {
 			continue // the big ones need JITLLM_KVSWEEP_MODEL, one at a time
 		}
 		t.Run(name, func(t *testing.T) {
-			// noTune: both arms must run the same kernels. On arm64 the packed
+			// noTune(): both arms must run the same kernels. On arm64 the packed
 			// matvec times its candidates in place over a shape's first calls
 			// (mvpick.go), so the first arm decoded through kernels that sum
 			// in other orders than the second's -- a token
 			// flipped with the history untouched.
-			m, err := Open(p, noTune)
+			m, err := Open(p, noTune())
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}

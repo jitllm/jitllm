@@ -19,7 +19,7 @@ import (
 // states its attention beside it. Every block is covered, and two of each
 // kind form on a card and on the CPU.
 func TestFrontStatesTheStateSpaceMixers(t *testing.T) {
-	for _, fx := range ssmFixtures {
+	for _, fx := range ssmFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m := frontModel(t, fx.name+".gguf")
 			dg := m.Cfg.delta()

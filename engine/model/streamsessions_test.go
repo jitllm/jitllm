@@ -25,7 +25,7 @@ import (
 // streamed from a stale copy, is tenths. KVEvictions and KVStreamPasses are
 // the selection check, and Reset must have met evicted history (rewinds).
 func TestManySessionsStreamTheirHistory(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

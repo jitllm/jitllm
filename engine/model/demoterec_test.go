@@ -15,9 +15,11 @@ import (
 // does, through migrateKV/migrateRec, without a fault injector. The seam moves
 // mid-run; the tail is compared against a pure-host run.
 func TestShrinkingTheSeamMovesTheSummaryToTheCPU(t *testing.T) {
-	defer fusedRunsCheck(t, true)()
+	w := fusedRunsCheck(t, true)
+	defer w.done()
 	m := hybridModelOpt(t, hyOpt{moe: true, layers: 8})
 	defer m.Close()
+	w.watch(m)
 	if m.Cfg.NLayer < 4 {
 		t.Fatalf("the fixture has %d layers; this gate wants a real hybrid", m.Cfg.NLayer)
 	}

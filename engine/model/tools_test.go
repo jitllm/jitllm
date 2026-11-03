@@ -63,11 +63,13 @@ func TestToolCallHold(t *testing.T) {
 
 // toolModels are the containers whose templates the render gate holds to
 // HuggingFace's own renderer. Each is one family's tool format.
-var toolModels = []string{
-	"qwen2.5-1.5b-instruct-q4_k_m",    // Hermes <tool_call>, tools in the system turn
-	"Qwen3-0.6B-Q8_0",                 // Hermes, `arguments is string` branch
-	"Llama-3.2-1B-Instruct-Q4_K_M",    // JSON in the first user turn, ipython role
-	"Mistral-7B-Instruct-v0.3-Q4_K_M", // this GGUF's template has NO tools: refused
+func toolModels() []string {
+	return []string{
+		"qwen2.5-1.5b-instruct-q4_k_m",    // Hermes <tool_call>, tools in the system turn
+		"Qwen3-0.6B-Q8_0",                 // Hermes, `arguments is string` branch
+		"Llama-3.2-1B-Instruct-Q4_K_M",    // JSON in the first user turn, ipython role
+		"Mistral-7B-Instruct-v0.3-Q4_K_M", // this GGUF's template has NO tools: refused
+	}
 }
 
 // toolFixture is the conversation every template renders: a tool list whose
@@ -92,13 +94,13 @@ func toolFixtureMessages() []ChatMessage {
 // just worse ones, so the bar is byte equality.
 // toolGoldDate is the date the tool-prompt goldens are rendered at, and
 // scripts/toolgold.py's FIXED: Llama 3's own default when no clock is given.
-var toolGoldDate = time.Date(2024, time.July, 26, 0, 0, 0, 0, time.UTC)
+func toolGoldDate() time.Time { return time.Date(2024, time.July, 26, 0, 0, 0, 0, time.UTC) }
 
 func TestToolPromptMatchesTransformers(t *testing.T) {
 	dir := filepath.Join("..", "..", "testdata", "golden", "tools")
 	dump := os.Getenv("JITLLM_TOOLGOLD") == "dump"
 	ran := 0
-	for _, name := range toolModels {
+	for _, name := range toolModels() {
 		path, ok := existingModel(testmodels.Path(name + ".gguf"))
 		if !ok {
 			t.Logf("%s: not on this box", name)
@@ -107,7 +109,7 @@ func TestToolPromptMatchesTransformers(t *testing.T) {
 		// The date the templates print is pinned on both sides (toolGoldDate,
 		// scripts/toolgold.py): a golden rendered on one day must match on the
 		// next.
-		m, err := Open(jlmOf(t, path), noTune, WithChatClock(func() time.Time { return toolGoldDate }))
+		m, err := Open(jlmOf(t, path), noTune(), WithChatClock(func() time.Time { return toolGoldDate() }))
 		if err != nil {
 			t.Fatal(err)
 		}

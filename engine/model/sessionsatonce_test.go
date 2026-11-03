@@ -168,7 +168,7 @@ func overlaps(a, b atOnceRun) int {
 // answers and the host-side overlap; how much the device itself overlaps is
 // TestSessionsOverlapOnCUDA's to measure.
 func TestSessionsStepAtOnce(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,14 +189,14 @@ func TestSessionsStepAtOnce(t *testing.T) {
 // block runs alone by design (tier exclusiveRange), so the device is not
 // asked to run two side by side; the steps still overlap on the wall clock.
 func TestSessionsStepAtOnceHybrid(t *testing.T) {
-	for _, o := range hybridAtOnce {
+	for _, o := range hybridAtOnce() {
 		m := hybridModelOpt(t, o.opt)
 		defer m.Close()
 		nl := m.Cfg.NLayer
 		for _, blocks := range []int{nl, nl / 2} {
 			for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "vulkan:1", "metal") {
 				t.Run(fmt.Sprintf("%s/%d-of-%d/%s", o.name, blocks, nl, spec), func(t *testing.T) {
-					stepAtOnce(t, m, hybridPrompts, spec, blocks, false, 0)
+					stepAtOnce(t, m, hybridPrompts(), spec, blocks, false, 0)
 				})
 			}
 		}
@@ -206,14 +206,21 @@ func TestSessionsStepAtOnceHybrid(t *testing.T) {
 // hybridAtOnce are the hybrids the session gates run: the gated delta rule
 // beside attention, and the same with qwen3next's routed mixture and shared
 // expert.
-var hybridAtOnce = []struct {
+func hybridAtOnce() []struct {
 	name string
 	opt  hyOpt
-}{{"delta", hyOpt{}}, {"delta+moe", hyOpt{moe: true}}}
+} {
+	return []struct {
+		name string
+		opt  hyOpt
+	}{{"delta", hyOpt{}}, {"delta+moe", hyOpt{moe: true}}}
+}
 
 // hybridPrompts are the sessions' prompts on the synthetic hybrid, whose
 // vocabulary is hyVocab ids with no text behind them.
-var hybridPrompts = [2][]int32{{1, 2, 3, 4, 5, 6, 7, 8}, {9, 3, 14, 1, 5, 9, 2, 6}}
+func hybridPrompts() [2][]int32 {
+	return [2][]int32{{1, 2, 3, 4, 5, 6, 7, 8}, {9, 3, 14, 1, 5, 9, 2, 6}}
+}
 
 // atOncePlace places a instance's first blocks on g -- every block and the head
 // through atOnceState -- and prefills prompt, returning the first greedy
@@ -329,7 +336,7 @@ func lanesHold(g *gpu.GPU, blocks int, parts gpu.Parts, lanes int) error {
 // PageIns and PageOuts during the run at once are the selection check that the
 // budget bound, and RanBeside that the sessions stepped together.
 func TestSessionsPageAtOnce(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +441,7 @@ func TestSessionsPageAtOnce(t *testing.T) {
 // a streamed pass's order flips a near tie (one in two hundred on CUDA, where
 // one session evicting alone already reads 8e-3).
 func TestSessionsEvictAtOnce(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,12 +590,14 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 // (blocks freed and rebuilt, KV pages migrated), so it is held to the same bar
 // as a step: RanBeside says the two did run at once.
 func TestSessionsRelocateAtOnce(t *testing.T) {
-	defer fusedRunsCheck(t, false)()
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	w := fusedRunsCheck(t, false)
+	defer w.done()
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	w.watch(m)
 	// half puts the session beside the relocating one on the first half of
 	// the blocks only, so the relocating session's seam move frees the second
 	// half outright and its way back prepares them again -- allocations and
@@ -610,13 +619,13 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 // submission holding a linear block runs alone by design, so RanBeside is
 // logged and not held.
 func TestSessionsRelocateAtOnceHybrid(t *testing.T) {
-	for _, o := range hybridAtOnce {
+	for _, o := range hybridAtOnce() {
 		m := hybridModelOpt(t, o.opt)
 		defer m.Close()
 		for _, half := range []bool{false, true} {
 			for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
 				t.Run(fmt.Sprintf("%s/%s/half=%v", o.name, spec, half), func(t *testing.T) {
-					relocateAtOnce(t, m, hybridPrompts, spec, half, false, 0)
+					relocateAtOnce(t, m, hybridPrompts(), spec, half, false, 0)
 				})
 			}
 		}
@@ -747,7 +756,7 @@ func TestModelsAndSessionsAtOnce(t *testing.T) {
 	names := []string{"stories15M-q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf"}
 	var ms []*Model
 	for _, n := range names {
-		m, err := Open(jlmOf(t, testmodels.Path(n)), noTune)
+		m, err := Open(jlmOf(t, testmodels.Path(n)), noTune())
 		if err != nil {
 			t.Fatal(err)
 		}

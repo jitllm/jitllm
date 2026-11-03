@@ -23,7 +23,7 @@ func relocationModel(t *testing.T) (*Model, []int32, uint64) {
 	// No KV prewarm: these gates squeeze the budget to what attaching
 	// spends and need the history's growth to outrun it, which pages grown
 	// ahead into the attach's room would cover.
-	m, err := Open(p, noTune, WithKVPrewarm(false))
+	m, err := Open(p, noTune(), WithKVPrewarm(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,8 +243,10 @@ func TestRelocationTakesFromTheDeviceThatRefused(t *testing.T) {
 // a budget raised mid-sequence (the block returns at the next token and must
 // bring the history it built on the host).
 func TestRelocatedBlocksComeBack(t *testing.T) {
-	defer fusedRunsCheck(t, true)()
+	w := fusedRunsCheck(t, true)
+	defer w.done()
 	m, ids, used := relocationModel(t)
+	w.watch(m)
 	host := swaRun(t, m, nil, ids, false)
 	gb := swaTier(t)
 	band := swaMedian(swaRun(t, m, gb, ids, false), host, relocPage)

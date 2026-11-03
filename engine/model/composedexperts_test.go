@@ -18,16 +18,18 @@ import (
 // fixtures with their matrices in Q8_0 (a float bank has no packed sheets to
 // send, and the tier refuses to stream it by that name) and the checkpoints
 // one card of 16 GiB runs.
-var pagedExpertModels = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
-	"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "synth-ernie45moe-hf" + q8Suffix,
-	"synth-hunyuanmoe-hf" + q8Suffix, "synth-dots1-hf" + q8Suffix, "synth-deepseek" + q8Suffix,
-	"synth-deepseek-lite" + q8Suffix, "synth-gptoss.gguf", "synth-llama4-q8.gguf"}
+func pagedExpertModels() []string {
+	return []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
+		"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "synth-ernie45moe-hf" + q8Suffix,
+		"synth-hunyuanmoe-hf" + q8Suffix, "synth-dots1-hf" + q8Suffix, "synth-deepseek" + q8Suffix,
+		"synth-deepseek-lite" + q8Suffix, "synth-gptoss.gguf", "synth-llama4-q8.gguf"}
+}
 
 // plainBankModels are the mixtures whose streamed banks the tier keeps plain
 // whatever cache is stated (cacheSlotsFor): gpt-oss's experts carry biases,
 // which the tier's own kernels index by the selection a cache rewrites as
 // slots. Their pages are the compact bank's, re-read every token.
-var plainBankModels = []string{"synth-gptoss.gguf"}
+func plainBankModels() []string { return []string{"synth-gptoss.gguf"} }
 
 // TestComposedExpertPagesServe serves each mixture's blocks composed with
 // its routed banks in pages on the card (gpu.Config.StreamExperts): every
@@ -41,7 +43,7 @@ var plainBankModels = []string{"synth-gptoss.gguf"}
 // fills, the cache's misses and the host's page-ins counted. With a page
 // read from the wrong expert, or an eviction not re-read, it must not.
 func TestComposedExpertPagesServe(t *testing.T) {
-	models := pagedExpertModels
+	models := pagedExpertModels()
 	// JITLLM_PAGED_EXPERTS adds checkpoints past one card of 16 GiB,
 	// comma-separated (docs/testing.md).
 	if names := os.Getenv("JITLLM_PAGED_EXPERTS"); names != "" {
@@ -55,7 +57,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
 			src := jlmOf(t, path)
-			m, err := Open(src, noTune)
+			m, err := Open(src, noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -85,7 +87,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 				t.Run(dev, func(t *testing.T) {
 					decode := func(t *testing.T, budget bool, opts ...gpu.Option) ([][]float32, gpu.Stats, int64) {
 						t.Helper()
-						mo := []Option{noTune, WithStreamTrial(false)}
+						mo := []Option{noTune(), WithStreamTrial(false)}
 						if budget {
 							mo = append(mo, WithPageBudget(1))
 						}
@@ -119,7 +121,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 						slots  int
 						budget bool
 					}{{"compact", -1, false}, {"compact under one page", -1, true}, {"cache", slots, false}, {"cache under one page", slots, true}} {
-						if arm.slots > 0 && slices.Contains(plainBankModels, file) {
+						if arm.slots > 0 && slices.Contains(plainBankModels(), file) {
 							continue
 						}
 						t.Run(arm.name, func(t *testing.T) {
@@ -212,11 +214,13 @@ func TestComposedExpertPagesMove(t *testing.T) {
 // sigmoid router and MiniMax-M2's among them, a checkpoint, and DeepSeek's
 // mixtures beside latent attention: V3's grouped sigmoid router and V2's
 // softmax one.
-var cpuExpertModels = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix,
-	"synth-ernie45moe-hf" + q8Suffix, "synth-hunyuanmoe-hf" + q8Suffix, "synth-dots1-hf" + q8Suffix,
-	"synth-llama4-q8.gguf", "synth-dbrx.gguf", "synth-gptoss.gguf", "synth-phimoe.gguf",
-	"synth-bailingmoe2.gguf", "synth-minimaxm2.gguf",
-	"synth-deepseek" + q8Suffix, "synth-deepseek-lite" + q8Suffix}
+func cpuExpertModels() []string {
+	return []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix,
+		"synth-ernie45moe-hf" + q8Suffix, "synth-hunyuanmoe-hf" + q8Suffix, "synth-dots1-hf" + q8Suffix,
+		"synth-llama4-q8.gguf", "synth-dbrx.gguf", "synth-gptoss.gguf", "synth-phimoe.gguf",
+		"synth-bailingmoe2.gguf", "synth-minimaxm2.gguf",
+		"synth-deepseek" + q8Suffix, "synth-deepseek-lite" + q8Suffix}
+}
 
 // TestComposedCPUExpertPagesServe runs each mixture's blocks on the CPU
 // device composed, its banks read in the host's expert pages at a page's
@@ -229,7 +233,7 @@ var cpuExpertModels = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-glm4moe-hf
 // logits leave the resident run's.
 func TestComposedCPUExpertPagesServe(t *testing.T) {
 	const steps, page = 40, 32
-	names := cpuExpertModels
+	names := cpuExpertModels()
 	if extra := os.Getenv("JITLLM_PAGED_EXPERTS"); extra != "" {
 		names = append(names, strings.Split(extra, ",")...)
 	}
@@ -241,7 +245,7 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 			fm.Close()
 			want, band := cpuReference(t, path, fixtureSource(testmodels.Path(file)), page, toks)
 			run := func(f cpuFault, opts ...Option) ([][]float32, int64) {
-				m, err := Open(path, append([]Option{noTune}, opts...)...)
+				m, err := Open(path, append([]Option{noTune()}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -284,14 +288,18 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 // cpuExpertPromptModels are the mixtures whose prompts and batched steps
 // TestComposedCPUExpertPromptsServe holds on the CPU device: cpuExpertModels
 // and Gemma 4's mixture beside its dense MLP. JITLLM_PAGED_EXPERTS adds more.
-var cpuExpertPromptModels = append(slices.Clone(cpuExpertModels), "synth-gemma4-moe.gguf")
+func cpuExpertPromptModels() []string {
+	return append(slices.Clone(cpuExpertModels()), "synth-gemma4-moe.gguf")
+}
 
 // cpuMixtureRowsModels are the mixtures whose prompts TestPrefillMatchesForward
 // and whose batched steps TestBatchMatchesForward hold on the composed CPU:
 // qwen3moe's float fixture and a checkpoint, Gemma 4's mixture beside its
 // dense MLP, phimoe's sparsemixer and gpt-oss's MXFP4 banks.
-var cpuMixtureRowsModels = []string{"tiny-qwen3moe-f32.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-gemma4-moe.gguf",
-	"synth-phimoe.gguf", "synth-gptoss.gguf"}
+func cpuMixtureRowsModels() []string {
+	return []string{"tiny-qwen3moe-f32.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-gemma4-moe.gguf",
+		"synth-phimoe.gguf", "synth-gptoss.gguf"}
+}
 
 // TestComposedCPUExpertPromptsServe runs each mixture's prompts and batched
 // steps on the CPU device composed: a prompt of more rows than a call of
@@ -306,7 +314,7 @@ var cpuMixtureRowsModels = []string{"tiny-qwen3moe-f32.gguf", "Qwen3-MOE-4x0.6B-
 // pick's weight dropped -- moves the prompt's logits.
 func TestComposedCPUExpertPromptsServe(t *testing.T) {
 	const page, pn, decode = 32, 72, 4
-	names := cpuExpertPromptModels
+	names := cpuExpertPromptModels()
 	if extra := os.Getenv("JITLLM_PAGED_EXPERTS"); extra != "" {
 		names = append(names, strings.Split(extra, ",")...)
 	}
@@ -315,7 +323,7 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
 			open := func(opts ...Option) *Model {
 				t.Helper()
-				m, err := Open(path, append([]Option{noTune}, opts...)...)
+				m, err := Open(path, append([]Option{noTune()}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -417,7 +425,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 					noDevice(t, dev, err)
 				}
 				defer g.Close()
-				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts("card"), WithStreamTrial(false))
+				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune(), WithExperts("card"), WithStreamTrial(false))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -519,7 +527,7 @@ func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
 					noDevice(t, dev, err)
 				}
 				defer g.Close()
-				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts("card"), WithStreamTrial(false),
+				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune(), WithExperts("card"), WithStreamTrial(false),
 					WithPrefillForwardRows(16))
 				if err != nil {
 					t.Fatal(err)

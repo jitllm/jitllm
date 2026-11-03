@@ -29,7 +29,7 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 	specs := testdevices.Specs("cuda:0", "vulkan:0", "metal") // metal takes no selector
 	for name, path := range specModels(t) {
 		t.Run(name, func(t *testing.T) {
-			m := openSpecModel(t, path, noTune, WithKVF16(false))
+			m := openSpecModel(t, path, noTune(), WithKVF16(false))
 			defer m.Close()
 			ran := 0
 			for _, spec := range specs {
@@ -45,9 +45,9 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 						name string
 						opts []SpecOption
 					}{{"k3", []SpecOption{WithSpecDraft(3)}}, {"adaptive", nil},
-						{"schedule", []SpecOption{withSpecSchedule(specSchedule)}}}
+						{"schedule", []SpecOption{withSpecSchedule(specSchedule())}}}
 					var drafted, accepted int64
-					for _, text := range specPrompts {
+					for _, text := range specPrompts() {
 						prompt := m.Vocab.Encode(text, true)
 						want := plainGreedy(t, m, prompt, n, g)
 						for _, arm := range arms {
@@ -90,7 +90,7 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 					}
 					for _, f := range faults {
 						caught := false
-						for _, text := range specPrompts {
+						for _, text := range specPrompts() {
 							prompt := m.Vocab.Encode(text, true)
 							n := faultTokens(m, prompt, n)
 							want := plainGreedy(t, m, prompt, n, g)

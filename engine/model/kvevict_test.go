@@ -52,12 +52,14 @@ const evictNMSE = 1e-2
 // unconstrained one.
 const evictFloatNMSE = 1e-4
 
-func newEvictGate(t *testing.T) *evictGate { return newEvictGateOf(t, evictModels[0]) }
+func newEvictGate(t *testing.T) *evictGate { return newEvictGateOf(t, evictModels()[0]) }
 
 // evictModels are the checkpoints the eviction gate runs: a dense model and
 // a mixture, whose blocks fold their history in passes through forms of
 // their own.
-var evictModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"}
+func evictModels() []string {
+	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"}
+}
 
 func newEvictGateOf(t *testing.T, name string) *evictGate {
 	p := testmodels.Path(name)
@@ -67,7 +69,7 @@ func newEvictGateOf(t *testing.T, name string) *evictGate {
 	// No KV prewarm: the pool grows ahead of the history into the room placement
 	// left (112 pages on a 3050 Ti, covering the gate's 449 positions whole),
 	// and a budget squeezed after the prompt then never binds.
-	m, err := Open(jlmOf(t, p), noTune, WithKVPrewarm(false))
+	m, err := Open(jlmOf(t, p), noTune(), WithKVPrewarm(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +200,7 @@ func worstStep(got, want [][]float32) (float64, int) {
 // squeezed and the composer's float reference squeezed are held to the same
 // bound against it.
 func TestKVEvictionRunsPastTheBudget(t *testing.T) {
-	for _, name := range evictModels {
+	for _, name := range evictModels() {
 		t.Run(name, func(t *testing.T) { evictionRunsPastTheBudget(t, newEvictGateOf(t, name)) })
 	}
 }

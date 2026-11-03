@@ -28,7 +28,7 @@ func sessionSeamMoves(t *testing.T, p string, bound float64) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noGEMM, noTune, WithKVPrewarm(false))
+	m, err := Open(jlmOf(t, p), noGEMM(), noTune(), WithKVPrewarm(false))
 	if err != nil {
 		t.Fatal(err)
 	}

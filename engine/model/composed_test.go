@@ -26,18 +26,18 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 
 // unsplit forms a reference's sums with no split (Config.ComposedUnsplit):
 // a split an arm forms wrong is not the reference's too.
-var unsplit = gpu.WithConfig(func(c *gpu.Config) { c.ComposedUnsplit = true })
+func unsplit() gpu.Option { return gpu.WithConfig(func(c *gpu.Config) { c.ComposedUnsplit = true }) }
 
 // unsplitRef is the float reference of parts on dev, formed with no split:
 // its blocks all served, and every split's last segment dropped leaves it
 // bit for bit, so a split an arm forms wrong is not the reference's too.
 func unsplitRef(t *testing.T, m *Model, dev string, ids, toks []int32, parts gpu.Parts, noGraph bool) [][]float32 {
 	t.Helper()
-	ref, st, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit)
+	ref, st, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit())
 	if n, d := st.ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the float reference served its blocks %d times and declined them %d (%s)", n, d, declinesOf(st))
 	}
-	cut, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit, gpu.WithSplitFault(true))
+	cut, _, _ := composedDecode(t, m, dev, ids, toks, parts, noGraph, true, unsplit(), gpu.WithSplitFault(true))
 	for i := range cut {
 		if !slices.Equal(cut[i], ref[i]) {
 			t.Fatalf("step %d: with every split's last segment dropped the float reference moves (NMSE %.3g): it forms through the composer's splits", i, logitNMSE(cut[i], ref[i]))
@@ -185,28 +185,32 @@ func cpuDecode(t *testing.T, m *Model, ids, toks []int32) [][]float32 {
 // its unrotated layers and input-weighted top-1 experts, and HunyuanVL's
 // XD-RoPE, whose pair halves turn by two coordinates (on a text row, one
 // position: TestHunyuanVLTextMatchesTransformers decodes after a picture).
-var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
-	"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-	"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
-	"newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf", "newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/AFM-4.5B-Q4_K_M.gguf",
-	"granite/granite-3.3-2b-instruct-Q4_K_M.gguf", "granite/granite-4.0-micro-Q4_K_M.gguf",
-	"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
-	"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf",
-	"falcon/falcon-7b-instruct.Q4_K_M.gguf",
-	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
-	"bitnet-b1.58-2B-4T-i2_s.gguf", "synth-deepseek-dense", "synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf",
-	"synth-apertus.gguf",
-	"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
-	"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf",
-	"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
-	"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-kimilinear@q8",
-	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "synth-llama4-q8.gguf", "synth-pixtral.gguf", "synth-hunyuanvl.gguf",
-	"hunyuanvl/HunyuanOCR-Q8_0.gguf", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "gpt-oss-20b-MXFP4.gguf"}
+func servedBaseModels() []string {
+	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
+		"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+		"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
+		"newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf", "newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/AFM-4.5B-Q4_K_M.gguf",
+		"granite/granite-3.3-2b-instruct-Q4_K_M.gguf", "granite/granite-4.0-micro-Q4_K_M.gguf",
+		"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+		"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf",
+		"falcon/falcon-7b-instruct.Q4_K_M.gguf",
+		"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+		"bitnet-b1.58-2B-4T-i2_s.gguf", "synth-deepseek-dense", "synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf",
+		"synth-apertus.gguf",
+		"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
+		"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf",
+		"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
+		"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-kimilinear@q8",
+		"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "synth-llama4-q8.gguf", "synth-pixtral.gguf", "synth-hunyuanvl.gguf",
+		"hunyuanvl/HunyuanOCR-Q8_0.gguf", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "gpt-oss-20b-MXFP4.gguf"}
+}
 
 // budgetElsewhere is the fixtures whose experts are too small for any budget
 // to tell streamed from resident, each with the served model whose budget arm
 // stands for its family's.
-var budgetElsewhere = map[string]string{"synth-gptoss.gguf": "gpt-oss-20b-MXFP4.gguf"}
+func budgetElsewhere() map[string]string {
+	return map[string]string{"synth-gptoss.gguf": "gpt-oss-20b-MXFP4.gguf"}
+}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K, unblockedModels),
@@ -239,40 +243,42 @@ var budgetElsewhere = map[string]string{"synth-gptoss.gguf": "gpt-oss-20b-MXFP4.
 // sits 5.7e-04 to 2.6e-03 from the float reference, alike on both
 // backends: a rounding a tenth of the tier's own, amplified through the
 // sixteen blocks to a trajectory CUDA's tier happens to keep closer.
-var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
-	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
-	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
-	"synth-olmo3.gguf", "synth-phi3", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf",
-	"synth-phi2.gguf", "synth-starcoder.gguf", "synth-stablelm.gguf", "synth-stablelm-par.gguf",
-	"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
-	"synth-commandr.gguf", "synth-cohere2.gguf",
-	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
-	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
-	"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-dbrx.gguf", "synth-llama4.gguf", "synth-mistral3.gguf",
-	"synth-mistral3-af.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-wide.gguf",
-	"synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "synth-gemma4-moe.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
-	"synth-deepseek32.gguf", "synth-minimaxm3.gguf"}
+func formedModels() []string {
+	return []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
+		"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
+		"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
+		"synth-olmo3.gguf", "synth-phi3", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf",
+		"synth-phi2.gguf", "synth-starcoder.gguf", "synth-stablelm.gguf", "synth-stablelm-par.gguf",
+		"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
+		"synth-commandr.gguf", "synth-cohere2.gguf",
+		"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
+		"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
+		"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-dbrx.gguf", "synth-llama4.gguf", "synth-mistral3.gguf",
+		"synth-mistral3-af.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-wide.gguf",
+		"synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "synth-gemma4-moe.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
+		"synth-deepseek32.gguf", "synth-minimaxm3.gguf"}
+}
 
 // mixtureModels are the mixtures the front end states whole and the serving
 // gate does not run: tiny-qwen3moe, whose eight-wide rows the tier cannot
 // place (unblockedModels), and synth-phimoe, a float fixture whose
 // sparsemixer weights each pick by a stated softmax over the logits near it
 // (TestMoEFamiliesOnEveryDevice serves it composed against the host).
-var mixtureModels = []string{"tiny-qwen3moe-f32.gguf", "synth-phimoe.gguf"}
+func mixtureModels() []string { return []string{"tiny-qwen3moe-f32.gguf", "synth-phimoe.gguf"} }
 
 // unblockedModels are the models whose rows the tier's int8 activation
 // blocks (32 wide) do not divide: stories260K's 172-wide MLP and
 // tiny-qwen3moe's 8-wide residual. The device refuses their blocks at
 // placement, by that name.
-var unblockedModels = []string{"stories260K.gguf", "tiny-qwen3moe-f32.gguf"}
+func unblockedModels() []string { return []string{"stories260K.gguf", "tiny-qwen3moe-f32.gguf"} }
 
 // TestTierNamesTheRowsItCannotBlock places each of unblockedModels on every
 // device, its blocks composed: the device takes none and names the row.
 func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 	ran := 0
-	for _, file := range unblockedModels {
+	for _, file := range unblockedModels() {
 		t.Run(file, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune)
+			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -354,14 +360,12 @@ func bandFloor(layers int) float64 { return 6 * 4 * float64(layers) / 3 / (1 << 
 // 32, the first 32, the first 16 and all 64 blocks composed, the 132nd step
 // reads 0.0236, 0.0184, 0.0015, 0.0006 and 0.0007 from the float reference
 // (the tier 0.00066), tracking no block and no depth.
-var ssmServed = []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
-	"granite/granite-4.0-h-1b-Q4_K_M.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
-	"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf", "mamba/mamba-130m-hf.Q8_0.gguf",
-	"jamba/jamba-reasoning-3b-Q4_K_M.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
-	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "synth-nemotronhmoe-q8.gguf"}
-
-func init() {
-	servedModels = append(servedModels, ssmServed...)
+func ssmServed() []string {
+	return []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
+		"granite/granite-4.0-h-1b-Q4_K_M.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
+		"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf", "mamba/mamba-130m-hf.Q8_0.gguf",
+		"jamba/jamba-reasoning-3b-Q4_K_M.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
+		"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "synth-nemotronhmoe-q8.gguf"}
 }
 
 // apartModels are the state-space checkpoints whose blocks with no MLP end
@@ -375,9 +379,11 @@ func init() {
 // falcon-mamba-7B by 80, mamba-codestral went non-finite at its 103rd step,
 // and Nemotron-Nano-9B-v2 changed under poisoned buffers. synth-nemotronhmoe-q8,
 // Nemotron-H's mixture fixture, has such a block a quarter of its steps.
-var apartModels = []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
-	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
-	"synth-nemotronhmoe-q8.gguf"}
+func apartModels() []string {
+	return []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
+		"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
+		"synth-nemotronhmoe-q8.gguf"}
+}
 
 // TestComposedBlocksServeApart decodes each apartModels checkpoint with
 // every block and the head asked of the composer on every device: every
@@ -386,13 +392,13 @@ var apartModels = []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-
 // the logits finite and unchanged under poisoned buffers.
 func TestComposedBlocksServeApart(t *testing.T) {
 	ran := 0
-	for _, file := range apartModels {
+	for _, file := range apartModels() {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune)
+			m, err := Open(jlmOf(t, path), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -520,13 +526,13 @@ func TestComposedBlocksServe(t *testing.T) {
 	}
 	arms = append(arms, arm{"whole step, experts streamed under a budget", gpu.ComposedStep, 0, streamBudget},
 		arm{"whole step, experts cached in pages", gpu.ComposedStep, 0, streamCache})
-	for f, by := range budgetElsewhere {
-		if !slices.Contains(servedModels, by) {
+	for f, by := range budgetElsewhere() {
+		if !slices.Contains(servedModels(), by) {
 			t.Fatalf("%s's budget arm runs on %s, which the gate does not serve", f, by)
 		}
 	}
 	ran := 0
-	for _, file := range servedModels {
+	for _, file := range servedModels() {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
@@ -534,7 +540,7 @@ func TestComposedBlocksServe(t *testing.T) {
 			}
 			// The budget arm streams blocks the card does not hold: the trial
 			// against the CPU would move them mid-decode.
-			m, err := Open(jlmOf(t, path), noTune, WithStreamTrial(false))
+			m, err := Open(jlmOf(t, path), noTune(), WithStreamTrial(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -550,7 +556,7 @@ func TestComposedBlocksServe(t *testing.T) {
 			}
 			type prompt struct{ ids, toks []int32 }
 			var panel []prompt
-			for pi, text := range servePanel {
+			for pi, text := range servePanel() {
 				ids := m.Vocab.Encode(text, true)
 				// A context the prompt and the panel's steps overrun keeps the
 				// prompt's head, still across several blocks.
@@ -672,8 +678,8 @@ func TestComposedBlocksServe(t *testing.T) {
 							if a.tile > 0 && noGraph || a.stream != 0 && (noGraph || m.Cfg.NExpert == 0) {
 								continue
 							}
-							if a.stream == streamBudget && budgetElsewhere[file] != "" {
-								t.Logf("%s: its budget arm runs on %s", a.name, budgetElsewhere[file])
+							if a.stream == streamBudget && budgetElsewhere()[file] != "" {
+								t.Logf("%s: its budget arm runs on %s", a.name, budgetElsewhere()[file])
 								continue
 							}
 							name := a.name
@@ -923,7 +929,7 @@ func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
-	m, err := Open(jlmOf(t, path), noTune)
+	m, err := Open(jlmOf(t, path), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -979,7 +985,7 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
-	m, err := Open(jlmOf(t, path), noTune)
+	m, err := Open(jlmOf(t, path), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,36 +22,41 @@ func openK3(t *testing.T, name string) (*Model, *c6Golden) {
 // (three in the bank by the head), a dense lead, then latent mixtures (64 ->
 // 32) beside one shared expert, situ everywhere, the MLA output gate, the
 // full-rank KDA gate and the decay bound, and the latent norms' own epsilon.
-var k3Fixtures = []struct {
+func k3Fixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-kimik3", func(m *Model) bool {
-		c := m.Cfg
-		ok := c.Arch == "kimi-k3" && c.ResAttn() && c.AttnResBlock == 2 && c.Streams() == 4 &&
-			c.ExpertLatent == 32 && c.Act == nn.ActSitu && c.KDALowerBound == -5 &&
-			c.LatentNormEps == float64(float32(1e-6)) && c.RMSEps == float64(float32(1e-3)) &&
-			c.ChanDecay() && c.MLA() && c.NoPosEnc && c.QLoraRank == 32 && c.KVLoraRank == 32 &&
-			c.NDenseLead == 1 && c.NFFNShExp == 32 && c.ExpertSigmoid && c.ExpertScale == 2 &&
-			len(m.resOut) == 64 &&
-			slices.Equal(c.LayerKinds, []jlm.LayerKind{jlm.LayerLinearAttn, jlm.LayerLinearAttn,
-				jlm.LayerFullAttn, jlm.LayerLinearAttn, jlm.LayerLinearAttn, jlm.LayerFullAttn})
-		for i := range m.layers {
-			l := &m.layers[i]
-			lin := c.LayerKind(i).Recurrent()
-			ok = ok && len(l.resAttn) == 64 && len(l.resFFN) == 64 &&
-				(l.mlaGate.e != nil) == !lin && (lin == (l.ssmGate.e != nil)) && l.ssmGA.e == nil &&
-				(l.routedDown.e != nil) == (i >= 1) && (l.routedNorm != nil) == (i >= 1)
-		}
-		return ok
-	}},
-	// The latent and KDA's head 40 wide: not a whole number of the activation
-	// quantizer's blocks, so every tier quantizes the latent and the low-rank
-	// gates' rank (the head width) with a ragged tail.
-	{"synth-kimik3-ragged", func(m *Model) bool {
-		c := m.Cfg
-		return c.Arch == "kimi-k3" && c.ExpertLatent == 40 && c.ChanDecay()
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-kimik3", func(m *Model) bool {
+			c := m.Cfg
+			ok := c.Arch == "kimi-k3" && c.ResAttn() && c.AttnResBlock == 2 && c.Streams() == 4 &&
+				c.ExpertLatent == 32 && c.Act == nn.ActSitu && c.KDALowerBound == -5 &&
+				c.LatentNormEps == float64(float32(1e-6)) && c.RMSEps == float64(float32(1e-3)) &&
+				c.ChanDecay() && c.MLA() && c.NoPosEnc && c.QLoraRank == 32 && c.KVLoraRank == 32 &&
+				c.NDenseLead == 1 && c.NFFNShExp == 32 && c.ExpertSigmoid && c.ExpertScale == 2 &&
+				len(m.resOut) == 64 &&
+				slices.Equal(c.LayerKinds, []jlm.LayerKind{jlm.LayerLinearAttn, jlm.LayerLinearAttn,
+					jlm.LayerFullAttn, jlm.LayerLinearAttn, jlm.LayerLinearAttn, jlm.LayerFullAttn})
+			for i := range m.layers {
+				l := &m.layers[i]
+				lin := c.LayerKind(i).Recurrent()
+				ok = ok && len(l.resAttn) == 64 && len(l.resFFN) == 64 &&
+					(l.mlaGate.e != nil) == !lin && (lin == (l.ssmGate.e != nil)) && l.ssmGA.e == nil &&
+					(l.routedDown.e != nil) == (i >= 1) && (l.routedNorm != nil) == (i >= 1)
+			}
+			return ok
+		}},
+		// The latent and KDA's head 40 wide: not a whole number of the activation
+		// quantizer's blocks, so every tier quantizes the latent and the low-rank
+		// gates' rank (the head width) with a ragged tail.
+		{"synth-kimik3-ragged", func(m *Model) bool {
+			c := m.Cfg
+			return c.Arch == "kimi-k3" && c.ExpertLatent == 40 && c.ChanDecay()
+		}},
+	}
 }
 
 // TestKimiK3MatchesReference holds each fixture to Moonshot's own remote code
@@ -59,7 +64,7 @@ var k3Fixtures = []struct {
 // torch references; scripts/k3gold.py) on decode, prefill at every length and
 // the batched path, and the container's tokenizer to Kimi-K3's tiktoken.
 func TestKimiK3MatchesReference(t *testing.T) {
-	for _, fx := range k3Fixtures {
+	for _, fx := range k3Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openK3(t, fx.name)
 			defer m.Close()
@@ -92,47 +97,49 @@ func TestKimiK3MatchesReference(t *testing.T) {
 
 // k3Violations take one piece of the graph out at a time. Each must move the
 // logits far past c6NMSE.
-var k3Violations = []c6Violation{
-	{"no residual attention: every sublayer reads the running residual", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoBank })
-	}},
-	{"a checkpoint block adds its attention instead of restarting", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoRestart })
-	}},
-	{"the bank scored on raw values", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultRawScores })
-	}},
-	{"the head reads the running residual alone", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoHeadMix })
-	}},
-	{"a checkpoint every three blocks", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.AttnResBlock = 3 })
-	}},
-	{"the latent sum unnormed", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoLatentNorm })
-	}},
-	{"the MLA output ungated", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoMLAGate })
-	}},
-	{"the KDA output ungated", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoKDAGate })
-	}},
-	{"the KDA decay unbounded (Kimi-Linear's softplus)", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.KDALowerBound = 0 })
-	}},
-	{"the MLA latent norms at rms_norm_eps (llama.cpp's)", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.LatentNormEps = c.RMSEps })
-	}},
-	{"plain SwiGLU", actSwap(nn.ActSiLU)},
+func k3Violations() []c6Violation {
+	return []c6Violation{
+		{"no residual attention: every sublayer reads the running residual", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoBank })
+		}},
+		{"a checkpoint block adds its attention instead of restarting", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoRestart })
+		}},
+		{"the bank scored on raw values", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultRawScores })
+		}},
+		{"the head reads the running residual alone", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoHeadMix })
+		}},
+		{"a checkpoint every three blocks", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.AttnResBlock = 3 })
+		}},
+		{"the latent sum unnormed", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoLatentNorm })
+		}},
+		{"the MLA output ungated", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoMLAGate })
+		}},
+		{"the KDA output ungated", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.k3Fault = k3FaultNoKDAGate })
+		}},
+		{"the KDA decay unbounded (Kimi-Linear's softplus)", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.KDALowerBound = 0 })
+		}},
+		{"the MLA latent norms at rms_norm_eps (llama.cpp's)", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.LatentNormEps = c.RMSEps })
+		}},
+		{"plain SwiGLU", actSwap(nn.ActSiLU)},
+	}
 }
 
 // TestKimiK3FeaturesAreLoadBearing runs each violation through decode.
 func TestKimiK3FeaturesAreLoadBearing(t *testing.T) {
-	for _, fx := range k3Fixtures {
+	for _, fx := range k3Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openK3(t, fx.name)
 			defer m.Close()
-			for _, v := range k3Violations {
+			for _, v := range k3Violations() {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()
@@ -162,7 +169,7 @@ func TestKimiK3FeaturesAreLoadBearing(t *testing.T) {
 // latent norms, the latent mixture and situ (tier's k3.go) -- on decode and on
 // a prefill chunk. Then each piece taken out of the device session alone.
 func TestKimiK3OnEveryDevice(t *testing.T) {
-	for _, fx := range k3Fixtures {
+	for _, fx := range k3Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openK3(t, fx.name)
 			defer m.Close()
@@ -240,6 +247,4 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 // compressed-tensors MXFP4 experts in the second) run the generated-code
 // sweep, TestEveryModelRunsGenerated, as safetensors.
 func init() {
-	principleFixtures = append(principleFixtures, "synth-kimik3.gguf")
-	auditHFDirs = append(auditHFDirs, "hf/synth-kimik3", "kimik3/Kimi-K3-0.40B-MXFP4-hf")
 }

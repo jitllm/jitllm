@@ -12,7 +12,7 @@ import (
 // headServedModels are checkpoints whose heads the composer serves where their
 // blocks are not yet served whole (formedModels): rnj-1, whose final softcap
 // of 30 was a head graph the tier declined by name at every step.
-var headServedModels = []string{"rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf"}
+func headServedModels() []string { return []string{"rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf"} }
 
 // TestComposedHeadServesWhereTheBlocksDoNot decodes each of headServedModels
 // with the composer asked for the head alone, every block on the tier's own
@@ -27,13 +27,13 @@ var headServedModels = []string{"rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf"}
 func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 	const gen = 24
 	ran := 0
-	for _, file := range headServedModels {
+	for _, file := range headServedModels() {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(path); err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune, withCPUFloat())
+			m, err := Open(jlmOf(t, path), noTune(), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}

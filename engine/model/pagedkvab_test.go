@@ -50,7 +50,7 @@ func TestPagedKVAB(t *testing.T) {
 	wall := 0.0
 	fmt.Sscanf(os.Getenv("JITLLM_WALL"), "%g", &wall)
 
-	m, err := Open(jlmOf(t, p), noTune)
+	m, err := Open(jlmOf(t, p), noTune())
 	if err != nil {
 		t.Skipf("cannot load: %v", err)
 	}

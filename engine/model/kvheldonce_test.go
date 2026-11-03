@@ -71,7 +71,7 @@ func TestKVIsHeldOnce(t *testing.T) {
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", p)
 	}
-	m, err := Open(jlmOf(t, p), noTune)
+	m, err := Open(jlmOf(t, p), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}

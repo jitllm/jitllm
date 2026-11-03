@@ -60,7 +60,7 @@ func openGolden(t *testing.T, dir, script, name string) (*Model, *c6Golden) {
 		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path(name+".gguf")+
 			" (set JITLLM_MODELS to the model directory) -- run "+script+" "+name+" (RULE 11)")
 	}
-	m, err := Open(jlmOf(t, path), noTune, WithKVF16(false))
+	m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,78 +114,83 @@ func c6Worst(t *testing.T, m *Model, g *c6Golden, check func(what string, p int,
 
 // c6Fixtures names each fixture and what its container must carry, so a
 // fixture that lost a feature fails before it is compared.
-var c6Fixtures = []struct {
+func c6BaseFixtures() []struct {
 	name string
 	sel  func(m *Model) bool
-}{
-	{"synth-phi2", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "phi2" && c.LayerNorm && c.Parallel && c.RopeNeox &&
-			c.NRot < c.HeadDim && l.ffnNorm == nil && l.gate.e == nil &&
-			l.attnNormB != nil && l.upB != nil && l.downB != nil && l.bq != nil &&
-			l.bo != nil && m.outB != nil && m.outNormB != nil
-	}},
-	{"synth-starcoder", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "starcoder" && c.LayerNorm && !c.Parallel && c.NoPosEnc &&
-			c.NKVHead == 1 && c.NHead > 1 && m.posEmbd.e != nil && l.ffnNorm != nil &&
-			l.gate.e == nil && l.attnNormB != nil && l.ffnNormB != nil && l.upB != nil &&
-			l.downB != nil && l.bq != nil && l.bk != nil && l.bv != nil && l.bo != nil &&
-			m.outNormB != nil && c.TiedEmbd
-	}},
-	{"synth-stablelm", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "stablelm" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
-			c.NRot*4 == c.HeadDim && l.ffnNorm != nil && l.gate.e != nil && l.bq != nil &&
-			l.bo == nil && l.attnNormB != nil && m.outNormB != nil && !c.TiedEmbd
-	}},
-	{"synth-stablelm-par", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "stablelm" && c.LayerNorm && c.Parallel && l.ffnNorm == nil && l.gate.e != nil
-	}},
-	{"synth-starcoder2", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "starcoder2" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
-			c.NRot == c.HeadDim && c.NKVHead < c.NHead && l.gate.e == nil && l.ffnNorm != nil &&
-			l.attnNormB != nil && l.ffnNormB != nil && l.upB != nil && l.downB != nil &&
-			l.bq != nil && l.bo != nil && m.outNormB != nil
-	}},
-	{"synth-falcon", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "falcon" && c.LayerNorm && c.Parallel && c.RopeNeox && c.NKVHead == 1 &&
-			l.ffnNorm == nil && l.gate.e == nil && l.upB == nil && l.bq == nil && l.attnNormB != nil
-	}},
-	{"synth-falcon40", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "falcon" && c.Parallel && c.NKVHead == 2 && l.ffnNorm != nil &&
-			l.ffnNormB != nil && l.attnNormB != nil && l.gate.e == nil
-	}},
-	{"synth-nemotron", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "nemotron" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
-			2*c.NRot == c.HeadDim && c.Act == nn.ActReLU2 && l.gate.e == nil &&
-			l.ffnNorm != nil && l.attnNormB != nil && l.upB != nil && l.downB != nil &&
-			m.outNormB != nil && !c.TiedEmbd
-	}},
-	{"synth-commandr", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "command-r" && c.LayerNorm && c.Parallel && !c.RopeNeox &&
-			c.LogitScale == 16 && c.TiedEmbd && l.ffnNorm == nil && l.gate.e != nil &&
-			l.attnNormB == nil && m.outNormB == nil && c.NKVHead < c.NHead && c.SWAWindow == 0
-	}},
-	{"synth-dbrx", func(m *Model) bool {
-		c, l := m.Cfg, &m.layers[0]
-		return c.Arch == "dbrx" && c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
-			c.ClampKQV == 1.5 && c.NExpert == 4 && c.NExpertUsed == 2 && !c.NoExpertNorm &&
-			c.NKVHead < c.NHead && l.router.e != nil && l.ffnNorm != nil && l.attnNormB == nil &&
-			l.ffnNormB == nil && l.bq == nil && m.outNormB == nil && !c.TiedEmbd
-	}},
-	{"synth-cohere2", func(m *Model) bool {
-		c := m.Cfg
-		return c.Arch == "command-r" && c.LayerNorm && c.Parallel && c.NoPEGlobal &&
-			c.SWAWindow == 4 && c.SWAPeriod == 4 && c.LogitScale == 4 &&
-			c.SWA(0) && !c.SWA(3) && c.RopeAt(0) && !c.RopeAt(3)
-	}},
+} {
+	return []struct {
+		name string
+		sel  func(m *Model) bool
+	}{
+		{"synth-phi2", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "phi2" && c.LayerNorm && c.Parallel && c.RopeNeox &&
+				c.NRot < c.HeadDim && l.ffnNorm == nil && l.gate.e == nil &&
+				l.attnNormB != nil && l.upB != nil && l.downB != nil && l.bq != nil &&
+				l.bo != nil && m.outB != nil && m.outNormB != nil
+		}},
+		{"synth-starcoder", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "starcoder" && c.LayerNorm && !c.Parallel && c.NoPosEnc &&
+				c.NKVHead == 1 && c.NHead > 1 && m.posEmbd.e != nil && l.ffnNorm != nil &&
+				l.gate.e == nil && l.attnNormB != nil && l.ffnNormB != nil && l.upB != nil &&
+				l.downB != nil && l.bq != nil && l.bk != nil && l.bv != nil && l.bo != nil &&
+				m.outNormB != nil && c.TiedEmbd
+		}},
+		{"synth-stablelm", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "stablelm" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
+				c.NRot*4 == c.HeadDim && l.ffnNorm != nil && l.gate.e != nil && l.bq != nil &&
+				l.bo == nil && l.attnNormB != nil && m.outNormB != nil && !c.TiedEmbd
+		}},
+		{"synth-stablelm-par", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "stablelm" && c.LayerNorm && c.Parallel && l.ffnNorm == nil && l.gate.e != nil
+		}},
+		{"synth-starcoder2", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "starcoder2" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
+				c.NRot == c.HeadDim && c.NKVHead < c.NHead && l.gate.e == nil && l.ffnNorm != nil &&
+				l.attnNormB != nil && l.ffnNormB != nil && l.upB != nil && l.downB != nil &&
+				l.bq != nil && l.bo != nil && m.outNormB != nil
+		}},
+		{"synth-falcon", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "falcon" && c.LayerNorm && c.Parallel && c.RopeNeox && c.NKVHead == 1 &&
+				l.ffnNorm == nil && l.gate.e == nil && l.upB == nil && l.bq == nil && l.attnNormB != nil
+		}},
+		{"synth-falcon40", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "falcon" && c.Parallel && c.NKVHead == 2 && l.ffnNorm != nil &&
+				l.ffnNormB != nil && l.attnNormB != nil && l.gate.e == nil
+		}},
+		{"synth-nemotron", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "nemotron" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
+				2*c.NRot == c.HeadDim && c.Act == nn.ActReLU2 && l.gate.e == nil &&
+				l.ffnNorm != nil && l.attnNormB != nil && l.upB != nil && l.downB != nil &&
+				m.outNormB != nil && !c.TiedEmbd
+		}},
+		{"synth-commandr", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "command-r" && c.LayerNorm && c.Parallel && !c.RopeNeox &&
+				c.LogitScale == 16 && c.TiedEmbd && l.ffnNorm == nil && l.gate.e != nil &&
+				l.attnNormB == nil && m.outNormB == nil && c.NKVHead < c.NHead && c.SWAWindow == 0
+		}},
+		{"synth-dbrx", func(m *Model) bool {
+			c, l := m.Cfg, &m.layers[0]
+			return c.Arch == "dbrx" && c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
+				c.ClampKQV == 1.5 && c.NExpert == 4 && c.NExpertUsed == 2 && !c.NoExpertNorm &&
+				c.NKVHead < c.NHead && l.router.e != nil && l.ffnNorm != nil && l.attnNormB == nil &&
+				l.ffnNormB == nil && l.bq == nil && m.outNormB == nil && !c.TiedEmbd
+		}},
+		{"synth-cohere2", func(m *Model) bool {
+			c := m.Cfg
+			return c.Arch == "command-r" && c.LayerNorm && c.Parallel && c.NoPEGlobal &&
+				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.LogitScale == 4 &&
+				c.SWA(0) && !c.SWA(3) && c.RopeAt(0) && !c.RopeAt(3)
+		}},
+	}
 }
 
 // swapNorms feeds each branch of a two-norm parallel block the other's norm:
@@ -277,7 +282,7 @@ func noPosTable(m *Model) func() {
 // at every length and the batched path. The tokenizer half compares the
 // container's tokenizer to the family's tokenizer.json.
 func TestC6MatchesTransformers(t *testing.T) {
-	for _, fx := range c6Fixtures {
+	for _, fx := range c6Fixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openC6(t, fx.name)
 			defer m.Close()
@@ -413,115 +418,117 @@ func cfgMut(m *Model, f func(c *Config)) func() {
 // c6Violations are the violation runs for the kit, kept as a gate: each feature
 // switched off must move the logits far past c6NMSE, or the fixture cannot see
 // it and TestC6MatchesTransformers certifies nothing about it.
-var c6Violations = map[string][]c6Violation{
-	"synth-phi2": {
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"no attn_norm bias", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.attnNormB = nil })
-			undoR := dropStored(m, jlm.RoleAttnNormBias)
-			return func() { undoR(); undoL() }
-		}},
-		{"no FFN biases", noFFNBiases},
-		{"no q/k/v biases", noQKVBias},
-		{"no head bias", func(m *Model) func() {
-			was := m.outB
-			m.outB = nil
-			undoR := dropStoredDense(m, jlm.RoleOutputBias)
-			return func() { undoR(); m.outB = was }
-		}},
-		{"no output norm bias", func(m *Model) func() {
-			was := m.outNormB
-			m.outNormB = nil
-			undoR := dropStoredDense(m, jlm.RoleOutputNormBias)
-			return func() { undoR(); m.outNormB = was }
-		}},
-		{"serial residual", func(m *Model) func() {
-			undo := cfgMut(m, func(c *Config) { c.Parallel = false })
-			undoL := eachLayer(m, func(l *layer) { l.ffnNorm, l.ffnNormB = l.attnNorm, l.attnNormB })
-			return func() { undoL(); undo() }
-		}},
-		{"NORM rotary for NEOX", hostNormRotary},
-	},
-	"synth-starcoder": {
-		{"no position table", noPosTable},
-		{"rotary instead of none", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPosEnc = false }) }},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"no norm biases", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
-			undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
-			return func() { undoR(); undoL() }
-		}},
-		{"no FFN biases", noFFNBiases},
-		{"no k/v biases", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.bk, l.bv = nil, nil })
-			undoR := dropStored(m, jlm.RoleAttnKBias, jlm.RoleAttnVBias)
-			return func() { undoR(); undoL() }
-		}},
-	},
-	"synth-stablelm": {
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
-		{"NORM rotary for NEOX", hostNormRotary},
-		{"no q/k/v biases", noQKVBias},
-	},
-	"synth-stablelm-par": {
-		{"serial residual", serialFromShared},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-	},
-	"synth-starcoder2": {
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
-		{"NORM rotary for NEOX", hostNormRotary},
-		{"no FFN biases", noFFNBiases},
-		{"no o bias", func(m *Model) func() {
-			undoL := eachLayer(m, func(l *layer) { l.bo = nil })
-			undoR := dropStored(m, jlm.RoleAttnOutBias)
-			return func() { undoR(); undoL() }
-		}},
-	},
-	"synth-falcon": {
-		{"serial residual", serialFromShared},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"NORM rotary for NEOX", hostNormRotary},
-	},
-	"synth-falcon40": {
-		{"the two norms swapped", swapNorms},
-		{"one norm for both branches", oneNormForBoth},
-	},
-	"synth-nemotron": {
-		{"GELU for relu2", actSwap(nn.ActGELU)},
-		{"LayerNorm1p's 1 added again", onePlusAgain},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"NORM rotary for NEOX", hostNormRotary},
-		{"no FFN biases", noFFNBiases},
-	},
-	"synth-commandr": {
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"serial residual", serialFromShared},
-		{"NEOX rotary for NORM", hostNeoxRotary},
-		{"no logit scale", logitScale},
-	},
-	"synth-dbrx": {
-		{"no clip_qkv", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV = 0 }) }},
-		{"clip_qkv at twice its value", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV *= 2 }) }},
-		{"RMSNorm for LayerNorm", rmsForLayerNorm},
-		{"NORM rotary for NEOX", hostNormRotary},
-		{"the routed weights not renormalised", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
-		}},
-		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
-	},
-	"synth-cohere2": {
-		{"rotary on the global layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPEGlobal = false }) }},
-		{"no sliding window", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAWindow = 0 }) }},
-		{"serial residual", serialFromShared},
-		{"no logit scale", logitScale},
-	},
+func c6BaseViolations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-phi2": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"no attn_norm bias", func(m *Model) func() {
+				undoL := eachLayer(m, func(l *layer) { l.attnNormB = nil })
+				undoR := dropStored(m, jlm.RoleAttnNormBias)
+				return func() { undoR(); undoL() }
+			}},
+			{"no FFN biases", noFFNBiases},
+			{"no q/k/v biases", noQKVBias},
+			{"no head bias", func(m *Model) func() {
+				was := m.outB
+				m.outB = nil
+				undoR := dropStoredDense(m, jlm.RoleOutputBias)
+				return func() { undoR(); m.outB = was }
+			}},
+			{"no output norm bias", func(m *Model) func() {
+				was := m.outNormB
+				m.outNormB = nil
+				undoR := dropStoredDense(m, jlm.RoleOutputNormBias)
+				return func() { undoR(); m.outNormB = was }
+			}},
+			{"serial residual", func(m *Model) func() {
+				undo := cfgMut(m, func(c *Config) { c.Parallel = false })
+				undoL := eachLayer(m, func(l *layer) { l.ffnNorm, l.ffnNormB = l.attnNorm, l.attnNormB })
+				return func() { undoL(); undo() }
+			}},
+			{"NORM rotary for NEOX", hostNormRotary},
+		},
+		"synth-starcoder": {
+			{"no position table", noPosTable},
+			{"rotary instead of none", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPosEnc = false }) }},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"no norm biases", func(m *Model) func() {
+				undoL := eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
+				undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
+				return func() { undoR(); undoL() }
+			}},
+			{"no FFN biases", noFFNBiases},
+			{"no k/v biases", func(m *Model) func() {
+				undoL := eachLayer(m, func(l *layer) { l.bk, l.bv = nil, nil })
+				undoR := dropStored(m, jlm.RoleAttnKBias, jlm.RoleAttnVBias)
+				return func() { undoR(); undoL() }
+			}},
+		},
+		"synth-stablelm": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
+			{"NORM rotary for NEOX", hostNormRotary},
+			{"no q/k/v biases", noQKVBias},
+		},
+		"synth-stablelm-par": {
+			{"serial residual", serialFromShared},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+		},
+		"synth-starcoder2": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
+			{"NORM rotary for NEOX", hostNormRotary},
+			{"no FFN biases", noFFNBiases},
+			{"no o bias", func(m *Model) func() {
+				undoL := eachLayer(m, func(l *layer) { l.bo = nil })
+				undoR := dropStored(m, jlm.RoleAttnOutBias)
+				return func() { undoR(); undoL() }
+			}},
+		},
+		"synth-falcon": {
+			{"serial residual", serialFromShared},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"NORM rotary for NEOX", hostNormRotary},
+		},
+		"synth-falcon40": {
+			{"the two norms swapped", swapNorms},
+			{"one norm for both branches", oneNormForBoth},
+		},
+		"synth-nemotron": {
+			{"GELU for relu2", actSwap(nn.ActGELU)},
+			{"LayerNorm1p's 1 added again", onePlusAgain},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"NORM rotary for NEOX", hostNormRotary},
+			{"no FFN biases", noFFNBiases},
+		},
+		"synth-commandr": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"serial residual", serialFromShared},
+			{"NEOX rotary for NORM", hostNeoxRotary},
+			{"no logit scale", logitScale},
+		},
+		"synth-dbrx": {
+			{"no clip_qkv", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV = 0 }) }},
+			{"clip_qkv at twice its value", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ClampKQV *= 2 }) }},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"NORM rotary for NEOX", hostNormRotary},
+			{"the routed weights not renormalised", func(m *Model) func() {
+				return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+			}},
+			{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
+		},
+		"synth-cohere2": {
+			{"rotary on the global layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPEGlobal = false }) }},
+			{"no sliding window", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAWindow = 0 }) }},
+			{"serial residual", serialFromShared},
+			{"no logit scale", logitScale},
+		},
+	}
 }
 
 func TestC6FeaturesAreLoadBearing(t *testing.T) {
-	for _, fx := range c6Fixtures {
-		vs := c6Violations[fx.name]
+	for _, fx := range c6Fixtures() {
+		vs := c6Violations()[fx.name]
 		t.Run(fx.name, func(t *testing.T) {
 			if len(vs) == 0 {
 				t.Fatal("no violations for this fixture")

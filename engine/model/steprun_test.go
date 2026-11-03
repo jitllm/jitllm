@@ -67,9 +67,9 @@ func TestStepRunsAdmitsAPromptBesideDecoding(t *testing.T) {
 					}
 
 					// The violation: the late prompt's chunks back to front.
-					stepPos = func(base, j, k int) int { return base + k - 1 - j }
+					m.stepPosFault = func(base, j, k int) int { return base + k - 1 - j }
 					bad, _ := plan.together(t, m, g)
-					stepPos = nil
+					m.stepPosFault = nil
 					bw, bat := worstStep(bad, want)
 					if bw < mlaDeviceNMSE {
 						t.Fatalf("chunks at mirrored positions still matched each session alone (NMSE %.3e): "+
@@ -89,7 +89,7 @@ func openStepDense(t *testing.T) *Model {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune, WithKVF16(false))
+	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

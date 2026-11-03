@@ -12,7 +12,7 @@ import (
 // order of magnitude (a token reads NExpertUsed of NExpert); on a dense model
 // they are equal, which is the control.
 func TestBlockReadBytesIsNotBlockSize(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		t.Run(name, func(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
@@ -65,7 +65,7 @@ func TestBlockReadBytesIsNotBlockSize(t *testing.T) {
 // depends on the ratio of two sizes. The trade is sound when the reads given up
 // never exceed the read gained less one crossing.
 func TestHeadTradeNeverGivesUpMoreThanItGains(t *testing.T) {
-	for name, path := range models {
+	for name, path := range models() {
 		t.Run(name, func(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
@@ -118,7 +118,7 @@ func TestHeadTradeNeverGivesUpMoreThanItGains(t *testing.T) {
 // all: on a mixture of experts the same projection is worth strictly more
 // blocks than it would be if a token read every expert.
 func TestMoEDiscountBuysMoreBlocks(t *testing.T) {
-	path := models["qwen3moe"]
+	path := models()["qwen3moe"]
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("model not present: %s", path)
 	}

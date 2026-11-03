@@ -24,7 +24,7 @@ import (
 // reads them moves the arm as far.
 func TestGemma3nServesComposedOnCPU(t *testing.T) {
 	const page, bound = 32, 1e-5
-	for _, fx := range gemma3nFixtures {
+	for _, fx := range gemma3nFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			gm, g := openGemma3n(t, fx.name)
 			ok := fx.sel(gm)
@@ -34,14 +34,14 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 			}
 			toks := g.IDs
 			path := jlmOf(t, testmodels.Path(fx.name+".gguf"))
-			ref, err := Open(path, noTune, withCPUFloat())
+			ref, err := Open(path, noTune(), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer ref.Close()
 			ref.setKVPageForTest(page)
 			want := cpuLogits(t, ref, toks, cpuFaultNone, true)
-			m, err := Open(path, noTune)
+			m, err := Open(path, noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -65,7 +65,7 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 			if !(worst < bound) || !(pworst < bound) {
 				t.Fatalf("the composed CPU is %.3g and %.3g from the float forms, bound %g", worst, pworst, bound)
 			}
-			for _, v := range gemma3nViolations {
+			for _, v := range gemma3nViolations() {
 				undo := v.mut(m)
 				bad := worstFrom(want, cpuLogits(t, m, toks, cpuFaultNone, true))
 				undo()
@@ -98,7 +98,7 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 func TestGemma3nServesComposed(t *testing.T) {
 	const bound, promptLen = 1e-5, 3
 	ran := 0
-	for _, fx := range gemma3nFixtures {
+	for _, fx := range gemma3nFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openGemma3n(t, fx.name)
 			defer m.Close()
@@ -156,7 +156,7 @@ func TestGemma3nServesComposed(t *testing.T) {
 					if !(worst < bound) {
 						t.Fatalf("worst logit NMSE %.3g against the host, bound %g", worst, bound)
 					}
-					for _, v := range gemma3nViolations {
+					for _, v := range gemma3nViolations() {
 						undo := v.mut(m)
 						bad := run(t, dev)
 						undo()

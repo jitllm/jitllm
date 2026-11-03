@@ -22,56 +22,58 @@ type latentRewrite struct {
 // short, swap the absorb's bank with the un-absorb's (where the two share a
 // shape), and read each head's value as the last KVLoraRank of the key's
 // width rather than its latent prefix.
-var latentRewrites = []latentRewrite{
-	{"the latent row's norm dropped", func(g *graph.Graph) bool {
-		for i, o := range g.Ops {
-			if o.Kind == graph.OpNorm && o.Weight[0].Role == jlm.RoleAttnKVANorm {
-				g.Ops[i] = graph.Op{Kind: graph.OpSlice, In: o.In, Out: o.Out, Attr: graph.Attrs{Width: g.Values[o.Out[0]].Width}}
-				return true
+func latentRewrites() []latentRewrite {
+	return []latentRewrite{
+		{"the latent row's norm dropped", func(g *graph.Graph) bool {
+			for i, o := range g.Ops {
+				if o.Kind == graph.OpNorm && o.Weight[0].Role == jlm.RoleAttnKVANorm {
+					g.Ops[i] = graph.Op{Kind: graph.OpSlice, In: o.In, Out: o.Out, Attr: graph.Attrs{Width: g.Values[o.Out[0]].Width}}
+					return true
+				}
 			}
-		}
-		return false
-	}},
-	{"the rotated parts a pair short", func(g *graph.Graph) bool {
-		n := 0
-		for i, o := range g.Ops {
-			if o.Kind == graph.OpRope {
-				g.Ops[i].Attr.NRot -= 2
-				n++
-			}
-		}
-		return n == 2
-	}},
-	{"the absorb's and the un-absorb's banks swapped", func(g *graph.Graph) bool {
-		var kb, vb *graph.Binding
-		for i, o := range g.Ops {
-			if o.Kind != graph.OpExpertMatVec {
-				continue
-			}
-			switch w := &g.Ops[i].Weight[0]; w.Role {
-			case jlm.RoleAttnKB:
-				kb = w
-			case jlm.RoleAttnVB:
-				vb = w
-			}
-		}
-		if kb == nil || vb == nil || kb.K != vb.K || kb.Rows != vb.Rows {
 			return false
-		}
-		kb.Role, vb.Role = vb.Role, kb.Role
-		return true
-	}},
-	{"the value read at the key's width, its last KVLoraRank", func(g *graph.Graph) bool {
-		for i, o := range g.Ops {
-			if o.Kind == graph.OpSlice && len(o.In) == 1 && slices.ContainsFunc(g.Ops, func(a graph.Op) bool {
-				return a.Kind == graph.OpAttend && a.Out[0] == o.In[0]
-			}) {
-				g.Ops[i].Attr.Offset = o.Attr.HeadDim - o.Attr.Width
-				return true
+		}},
+		{"the rotated parts a pair short", func(g *graph.Graph) bool {
+			n := 0
+			for i, o := range g.Ops {
+				if o.Kind == graph.OpRope {
+					g.Ops[i].Attr.NRot -= 2
+					n++
+				}
 			}
-		}
-		return false
-	}},
+			return n == 2
+		}},
+		{"the absorb's and the un-absorb's banks swapped", func(g *graph.Graph) bool {
+			var kb, vb *graph.Binding
+			for i, o := range g.Ops {
+				if o.Kind != graph.OpExpertMatVec {
+					continue
+				}
+				switch w := &g.Ops[i].Weight[0]; w.Role {
+				case jlm.RoleAttnKB:
+					kb = w
+				case jlm.RoleAttnVB:
+					vb = w
+				}
+			}
+			if kb == nil || vb == nil || kb.K != vb.K || kb.Rows != vb.Rows {
+				return false
+			}
+			kb.Role, vb.Role = vb.Role, kb.Role
+			return true
+		}},
+		{"the value read at the key's width, its last KVLoraRank", func(g *graph.Graph) bool {
+			for i, o := range g.Ops {
+				if o.Kind == graph.OpSlice && len(o.In) == 1 && slices.ContainsFunc(g.Ops, func(a graph.Op) bool {
+					return a.Kind == graph.OpAttend && a.Out[0] == o.In[0]
+				}) {
+					g.Ops[i].Attr.Offset = o.Attr.HeadDim - o.Attr.Width
+					return true
+				}
+			}
+			return false
+		}},
+	}
 }
 
 // latentGateModels are the models the latent attention gate decodes: the
@@ -81,11 +83,16 @@ var latentRewrites = []latentRewrite{
 // YaRN fixtures, and a real checkpoint whose first block is a dense latent
 // block and the rest mixtures, which the front end refuses by name and the
 // tier runs.
-var latentGateModels = []struct {
+func latentGateModels() []struct {
 	file          string
 	violate, nope bool
-}{{"synth-deepseek-dense", true, false}, {"synth-deepseek-dense", false, true}, {"synth-deepseek-yarn-af.gguf", false, false},
-	{"DeepSeek-V2-Lite.Q4_K_M.gguf", false, false}}
+} {
+	return []struct {
+		file          string
+		violate, nope bool
+	}{{"synth-deepseek-dense", true, false}, {"synth-deepseek-dense", false, true}, {"synth-deepseek-yarn-af.gguf", false, false},
+		{"DeepSeek-V2-Lite.Q4_K_M.gguf", false, false}}
+}
 
 // TestComposedLatentViolations holds the composed latent attention blocks to
 // the float reference as TestComposedBlocksServe holds every arm, every block
@@ -96,7 +103,7 @@ var latentGateModels = []struct {
 // a pair short and a value read at the wrong place in the key's width.
 func TestComposedLatentViolations(t *testing.T) {
 	ran := 0
-	for _, lm := range latentGateModels {
+	for _, lm := range latentGateModels() {
 		name := lm.file
 		if lm.nope {
 			name += "/nope"
@@ -184,7 +191,7 @@ func TestComposedLatentViolations(t *testing.T) {
 						ran++
 						return
 					}
-					for _, rw := range latentRewrites {
+					for _, rw := range latentRewrites() {
 						var undo []func()
 						for li := range m.Cfg.NLayer {
 							u := rewriteBlock(t, m, li, rw.rewrite)

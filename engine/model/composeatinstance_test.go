@@ -34,8 +34,8 @@ func composedNothingSince(t testing.TB, g *gpu.GPU, was [2]int, phase string) {
 // instance in the middle must move the count: that is the gate seeing a
 // composition at all.
 func TestComposesOnlyWithAnInstance(t *testing.T) {
-	for _, src := range []string{models["stories260K"], testmodels.Path("SmolLM2-360M-Instruct-Q8_0.gguf"),
-		models["qwen3moe"], testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf")} {
+	for _, src := range []string{models()["stories260K"], testmodels.Path("SmolLM2-360M-Instruct-Q8_0.gguf"),
+		models()["qwen3moe"], testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf")} {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			path, ok := existingModel(src)
 			if !ok {
@@ -125,7 +125,7 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 // ask the CPU composer for nothing; the card formed its parts when the
 // instance was placed.
 func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
-	for _, src := range []string{testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), models["qwen3moe"]} {
+	for _, src := range []string{testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), models()["qwen3moe"]} {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			path, ok := existingModel(src)
 			if !ok {

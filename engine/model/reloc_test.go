@@ -270,16 +270,17 @@ func TestPageBudgetResizesWhileServing(t *testing.T) {
 func TestLayerRelocatesToAnotherDevice(t *testing.T) {
 	// Every block is on a card here, so no host run exists to fuse; the
 	// fused relocation is TestFusedRunsFollowARelocation.
-	defer fusedRunsCheck(t, false)()
+	w := fusedRunsCheck(t, false)
+	defer w.done()
 	for _, name := range relocModels() {
 		path := jlmOf(t, testmodels.Path(name))
-		t.Run(name, func(t *testing.T) { layerRelocatesToAnotherDevice(t, path, composedParts) })
+		t.Run(name, func(t *testing.T) { layerRelocatesToAnotherDevice(t, path, composedParts, w) })
 	}
 }
 
 // layerRelocatesToAnotherDevice is TestLayerRelocatesToAnotherDevice on one
 // model, with the composer serving parts.
-func layerRelocatesToAnotherDevice(t *testing.T, path string, parts gpu.Parts) {
+func layerRelocatesToAnotherDevice(t *testing.T, path string, parts gpu.Parts, w *fuseWatch) {
 
 	// Both tiers' split tuner off: each tier tunes its own splits, so two
 	// tuned tiers can sum a matvec in different orders, and the two arms then
@@ -302,6 +303,7 @@ func layerRelocatesToAnotherDevice(t *testing.T, path string, parts gpu.Parts) {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	w.watch(m)
 
 	const ntok = 8
 	in := m.Vocab.Encode("The capital of France is", true)

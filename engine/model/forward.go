@@ -21,11 +21,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
-// Per-op timing, armed by WithProfile. The counters are process-wide (OpProfile
-// and ResetProfile have no receiver); the arm is per model, so a model opened
-// without WithProfile never records because another one was opened with it.
-var opNanos [nOps]atomic.Int64
-
+// Per-op timing, armed by WithProfile: each model keeps its own counters.
 type opID int
 
 const (
@@ -41,7 +37,9 @@ const (
 	nOps
 )
 
-var opNames = [nOps]string{"matvec", "rmsnorm", "rope", "attention", "activation", "residual", "router"}
+func opNames() []string {
+	return []string{"matvec", "rmsnorm", "rope", "attention", "activation", "residual", "router"}
+}
 
 func (s *Instance) tick() int64 {
 	if !s.prof {
@@ -52,27 +50,27 @@ func (s *Instance) tick() int64 {
 
 func (s *Instance) tock(op opID, t0 int64) {
 	if s.prof {
-		opNanos[op].Add(time.Now().UnixNano() - t0)
+		s.m.opNanos[op].Add(time.Now().UnixNano() - t0)
 	}
 }
 
-// OpProfile returns per-op nanoseconds and their names, largest first is the
+// OpProfile returns the model's per-op nanoseconds and their names, largest first is the
 // caller's problem.
-func OpProfile() ([]string, []int64) {
+func (m *Model) OpProfile() ([]string, []int64) {
 	out := make([]int64, nOps)
 	for i := range out {
-		out[i] = opNanos[i].Load()
+		out[i] = m.opNanos[i].Load()
 	}
-	return opNames[:], out
+	return opNames(), out
 }
 
-// ResetProfile zeroes the per-op counters.
+// ResetProfile zeroes the model's per-op counters.
 //
 // The counters accumulate across both phases, and a long prompt's prefill
 // swamps decode; reset between the two and each phase answers for itself.
-func ResetProfile() {
-	for i := range opNanos {
-		opNanos[i].Store(0)
+func (m *Model) ResetProfile() {
+	for i := range m.opNanos {
+		m.opNanos[i].Store(0)
 	}
 }
 
@@ -752,7 +750,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	s.allocK3()
 	s.allocQ4E()
 	// After AddAttnKV: kvl.fmt sizes every page.
-	s.kv = newKVCacheRange(c, nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
+	s.kv = newKVCacheRange(c, s.m.nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
 	s.kv.usePool(&m.kvPool)
 	s.kv.reserve(s.maxSeq)
 	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor); err != nil {
@@ -2571,11 +2569,9 @@ func (s *Instance) relocationVictim() int {
 	return li
 }
 
-// splitBankData is the Data of a bank that lives in expert pages. It is not
+// Model.splitBank is the Data of a bank that lives in expert pages. It is not
 // the weight's bytes -- there is no one span of them -- and it exists because
 // every consumer of an nn.Weight reads an empty Data as "no weight here".
-var splitBankData = []byte{0}
-
 // bankWeight is wt for a mixture's bank. A bank in expert pages has no span to
 // hand over, so the device gets Sheet instead: expert x's planes, held in their
 // page until the device has copied them. A float bank -- which the device reads
@@ -2597,7 +2593,7 @@ func (m *Model) bankWeight(t tensor) nn.Weight {
 	}
 	sheets := int(t.e.Dims[2])
 	nrow := t.rows / max(sheets, 1)
-	w := nn.Weight{T: t.typ, Data: splitBankData, Rows: t.rows, K: t.k,
+	w := nn.Weight{T: t.typ, Data: m.splitBank[:], Rows: t.rows, K: t.k,
 		Packed: &nn.Packed{Sheet: func(x int) (nn.Packed, func(), error) { return m.sheetOf(t.e, x, nrow) }, Sheets: sheets}}
 	got, _ := m.bankWts.LoadOrStore(t.e, w)
 	return got.(nn.Weight)

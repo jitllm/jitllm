@@ -49,7 +49,7 @@ func TestComposedPromptMatchesLlamaCppF32(t *testing.T) {
 			for i := 0; i < len(ref)-1; i += stride {
 				at = append(at, i)
 			}
-			m, err := Open(jlmOf(t, gguf), noTune)
+			m, err := Open(jlmOf(t, gguf), noTune())
 			if err != nil {
 				t.Fatal(err)
 			}

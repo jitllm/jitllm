@@ -22,7 +22,7 @@ func TestSpecSoftcapGateDiscriminates(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m, _ := openSpecCapped(t, path)
 			defer m.Close()
-			prompt := m.Vocab.Encode(specPrompts[0], true)
+			prompt := m.Vocab.Encode(specPrompts()[0], true)
 			want := plainGreedy(t, m, prompt, 32, nil)
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {

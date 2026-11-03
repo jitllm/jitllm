@@ -41,7 +41,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 		"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf"}
 	// Every principle fixture (paging_test.go): one graph per architecture
 	// that has no real model in the list above.
-	for _, n := range slices.Concat(principleFixtures, principleMixtures) {
+	for _, n := range slices.Concat(principleFixtures(), principleMixtures()) {
 		if !slices.Contains(names, n) {
 			names = append(names, n)
 		}
@@ -80,7 +80,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			// there and nowhere this gate ran. Pinned here, it runs on every
 			// fused matrix of every host.
 			t.Run("host-ksliced", func(t *testing.T) {
-				mk, err := Open(jlmOf(t, p), noTune, resident, WithJITOptions(nn.WithFusedKSlices(2)))
+				mk, err := Open(jlmOf(t, p), noTune(), resident, WithJITOptions(nn.WithFusedKSlices(2)))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -102,7 +102,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				// per-expert loop is where the pin reaches them.
 				if !anyDensePacked(mk) {
 					closeK()
-					mk, err = Open(jlmOf(t, p), noTune, resident, WithJITOptions(nn.WithFusedKSlices(2), nn.WithMixtureBatch(-1)))
+					mk, err = Open(jlmOf(t, p), noTune(), resident, WithJITOptions(nn.WithFusedKSlices(2), nn.WithMixtureBatch(-1)))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -118,7 +118,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				if len(sched.NUMANodes()) < 2 {
 					t.Skip("one NUMA node: DoNodes is the plain region here, which the host arm measured")
 				}
-				mn, err := Open(jlmOf(t, p), noTune, resident, WithJITOptions(nn.WithSched(sched.WithNUMA(true))))
+				mn, err := Open(jlmOf(t, p), noTune(), resident, WithJITOptions(nn.WithSched(sched.WithNUMA(true))))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -151,9 +151,9 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			})
 			// The CPU's blocks on what the composer forms for it, on the models
 			// it serves there: every block step of the window served.
-			if slices.Contains(cpuServedModels, name) || slices.Contains(cpuExpertAllocModels, name) {
+			if slices.Contains(cpuServedModels(), name) || slices.Contains(cpuExpertAllocModels(), name) {
 				t.Run("host-composed", func(t *testing.T) {
-					mc, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false))
+					mc, err := Open(jlmOf(t, p), noTune(), resident, WithStreamTrial(false))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -174,7 +174,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 						noDevice(t, d[0]+","+d[1], err)
 					}
 					defer g.Close()
-					m2, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false),
+					m2, err := Open(jlmOf(t, p), noTune(), resident, WithStreamTrial(false),
 						WithPlacement(Placement{Rest: &Place{On: d[1]}, Head: &Place{On: d[0]}}))
 					if err != nil {
 						t.Fatal(err)
@@ -197,11 +197,11 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			switch name {
 			case "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
 				"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf":
-				t.Run("two-device-groups", func(t *testing.T) { groupedStepAllocs(t, p, noTune, resident) })
+				t.Run("two-device-groups", func(t *testing.T) { groupedStepAllocs(t, p, noTune(), resident) })
 			}
 			// The stream trial pinned off with the tuners: it migrates blocks
 			// between its runs, and a migration's page-ins are not a decode.
-			m, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false))
+			m, err := Open(jlmOf(t, p), noTune(), resident, WithStreamTrial(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -252,7 +252,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				// allocates nothing either. Without the captured graph too,
 				// where every token runs the served code (a replayed
 				// recording runs none of it).
-				if slices.Contains(composedAllocModels, name) {
+				if slices.Contains(composedAllocModels(), name) {
 					for _, noGraph := range []bool{false, true} {
 						parts := []gpu.Parts{gpu.ComposedEmbed, gpu.ComposedTable, gpu.ComposedBlock, gpu.ComposedHead, gpu.ComposedSample}
 						t.Run(fmt.Sprintf("%s/composed step/no graph %v", spec, noGraph), func(t *testing.T) {
@@ -284,8 +284,10 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 // cpuExpertAllocModels are the mixtures of the gate's list whose decode the
 // composed CPU arm measures, each block's banks read in the host's expert
 // pages (TestComposedCPUExpertPagesServe).
-var cpuExpertAllocModels = []string{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "synth-glm4moe.gguf", "synth-qwen2moe.gguf",
-	"synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-gemma4-moe.gguf", "synth-phimoe.gguf", "synth-bailingmoe2.gguf"}
+func cpuExpertAllocModels() []string {
+	return []string{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "synth-glm4moe.gguf", "synth-qwen2moe.gguf",
+		"synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-gemma4-moe.gguf", "synth-phimoe.gguf", "synth-bailingmoe2.gguf"}
+}
 
 // composedAllocModels are the models whose composed step the gate measures:
 // a dense model, a latent attention model whose every block the front end
@@ -293,8 +295,10 @@ var cpuExpertAllocModels = []string{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "sy
 // selection bias beside a shared expert; and the attention features read at
 // a row's position (mistral3's temperature, Llama 4's on its unrotated
 // layers beside its input-weighted experts) and dbrx's clamped q, k and v.
-var composedAllocModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "synth-deepseek-dense", "synth-glm4moe.gguf",
-	"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-mistral3.gguf", "synth-llama4-q8.gguf", "synth-dbrx.gguf"}
+func composedAllocModels() []string {
+	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "synth-deepseek-dense", "synth-glm4moe.gguf",
+		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-mistral3.gguf", "synth-llama4-q8.gguf", "synth-dbrx.gguf"}
+}
 
 // TestLongDecodeDoesNotAllocate is TestDecodeDoesNotAllocate's host arm past
 // four KV pages of context, which that gate's window -- under one page, by
@@ -303,7 +307,7 @@ var composedAllocModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "synth-d
 // 1024 positions: a picture's prompt alone (Phi-4-reasoning-vision's 2003)
 // was enough, and every gate decoded short.
 func TestLongDecodeDoesNotAllocate(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune)
+	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -866,7 +870,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 					continue
 				}
 				t.Run(where, func(t *testing.T) {
-					m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts(where), WithStreamTrial(false))
+					m, err := Open(jlmOf(t, testmodels.Path(name)), noTune(), WithExperts(where), WithStreamTrial(false))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -911,7 +915,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 // is bytes on a particular device, so on another card an arm may land
 // elsewhere: CARD TOO SMALL, or a placement with room to spare.
 func TestStepAllocsUnderABudget(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("synth-gemma4-moe.gguf")), noTune, WithStreamTrial(false))
+	m, err := Open(jlmOf(t, testmodels.Path("synth-gemma4-moe.gguf")), noTune(), WithStreamTrial(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -939,13 +943,13 @@ func TestPagedDecodeDoesNotAllocate(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf"} {
 		t.Run(name, func(t *testing.T) {
 			src := jlmOf(t, testmodels.Path(name))
-			probe, err := Open(src, noTune)
+			probe, err := Open(src, noTune())
 			if err != nil {
 				t.Fatal(err)
 			}
 			page, nb := probe.PageSize(), uint64(probe.Cfg.NLayer)
 			probe.Close()
-			m, err := Open(src, noTune, WithPageBudget(page*max(nb/3, 2)), WithStreamTrial(false))
+			m, err := Open(src, noTune(), WithPageBudget(page*max(nb/3, 2)), WithStreamTrial(false))
 			if err != nil {
 				t.Fatal(err)
 			}

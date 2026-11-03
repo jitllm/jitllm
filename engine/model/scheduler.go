@@ -290,7 +290,7 @@ func (s *Instance) newHistory(maxSeq int) (*Session, error) {
 	sess := &Session{model: s.m, limit: maxSeq, kvFormat: s.kvFmt, span: [2]int{s.lo, s.hi}}
 	l := s.kvl
 	l.maxSeq = maxSeq
-	sess.kv = newKVCacheRange(s.c, nextCacheID(), 1, l, nil, s.m.opt.kvPage, s.lo, s.hi)
+	sess.kv = newKVCacheRange(s.c, s.m.nextCacheID(), 1, l, nil, s.m.opt.kvPage, s.lo, s.hi)
 	sess.kv.usePool(&s.m.kvPool)
 	sess.kv.reserve(maxSeq)
 	if err := sess.kv.useArenas(maxSeq, s.m.kvArenaFor); err != nil {
