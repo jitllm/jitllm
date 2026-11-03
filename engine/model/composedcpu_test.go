@@ -88,47 +88,84 @@ func cpuExec(t *testing.T, codes []composer.Code, vecs map[jlm.Role][]float32, p
 		if err != nil {
 			t.Fatalf("mapping %s: %v", c.Name, err)
 		}
-		var args cpu.Args
-		base := unsafe.Pointer(&args)
-		for _, a := range c.Args {
-			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(args) {
-				t.Fatalf("%s: a call word at %d past the argument block", c.Name, a.Field)
-			}
-			slot := (*uint64)(unsafe.Add(base, a.Field))
-			if a.Length || a.Value {
-				*slot = uint64(a.Extent)
-				continue
-			}
-			var w []uint32
-			o := a.Operand
-			switch {
-			case a.Words != nil:
-				w = append([]uint32(nil), a.Words...)
-			case o.Kind == composer.OperandValue && bufs[o.Value] != nil:
-				w = words(bufs[o.Value])
-			case o.Kind == composer.OperandVector && vecs[o.Role] != nil:
-				w = words(vecs[o.Role])
-			case o.Kind == composer.OperandWeight && o.Region >= 0 && o.Region < 3 && planes[o.Role][o.Region] != nil:
-				w = planes[o.Role][o.Region]
-			case o.Kind == composer.OperandVector || o.Kind == composer.OperandWeight:
-				t.Fatalf("%s binds %+v, which the gate does not hold", c.Name, o)
-			default:
-				if own[o] == nil {
-					own[o] = make([]uint32, reach[o])
-					for i := range own[o] {
-						own[o][i] = 0x7fc00000
-					}
-				}
-				w = own[o]
-			}
-			keep = append(keep, w)
-			if a.Word {
-				*slot = uint64(w[a.Offset])
-				continue
-			}
-			*slot = uint64(uintptr(unsafe.Pointer(&w[0]))) + uint64(4*a.Offset)
+		// Each of the code's calls, as one worker runs them (cpuLaunch): a
+		// shared kernel's rows in one call, any other at each coordinate of
+		// its calls' space, the last axis fastest.
+		n, rows := 1, 0
+		for _, k := range c.Calls {
+			n *= k
 		}
-		code.Call(&args)
+		if c.Share > 0 {
+			rows, n = c.ShareRows(1)
+		}
+		coord := func(at, ax int) int {
+			if rows > 0 {
+				return at * rows / max(c.ShareUnit, 1)
+			}
+			for a := len(c.Calls) - 1; a > ax; a-- {
+				at /= c.Calls[a]
+			}
+			return at % c.Calls[ax]
+		}
+		for at := range max(n, 1) {
+			var args cpu.Args
+			base := unsafe.Pointer(&args)
+			for _, a := range c.Args {
+				if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(args) {
+					t.Fatalf("%s: a call word at %d past the argument block", c.Name, a.Field)
+				}
+				slot := (*uint64)(unsafe.Add(base, a.Field))
+				switch {
+				case a.Share:
+					*slot = uint64(min(rows, c.Share-at*rows))
+					continue
+				case a.Coord > 0:
+					*slot = uint64(coord(at, a.Coord-1))
+					continue
+				case a.Length || a.Value:
+					*slot = uint64(a.Extent)
+					continue
+				}
+				var w []uint32
+				o := a.Operand
+				switch {
+				case a.Words != nil:
+					w = append([]uint32(nil), a.Words...)
+				case o.Kind == composer.OperandValue && bufs[o.Value] != nil:
+					w = words(bufs[o.Value])
+				case o.Kind == composer.OperandVector && vecs[o.Role] != nil:
+					w = words(vecs[o.Role])
+				case o.Kind == composer.OperandWeight && o.Region >= 0 && o.Region < 3 && planes[o.Role][o.Region] != nil:
+					w = planes[o.Role][o.Region]
+				case o.Kind == composer.OperandVector || o.Kind == composer.OperandWeight:
+					t.Fatalf("%s binds %+v, which the gate does not hold", c.Name, o)
+				default:
+					if own[o] == nil {
+						own[o] = make([]uint32, reach[o])
+						for i := range own[o] {
+							own[o][i] = 0x7fc00000
+						}
+					}
+					w = own[o]
+				}
+				keep = append(keep, w)
+				if a.Word {
+					*slot = uint64(w[a.Offset])
+					continue
+				}
+				off, elem := a.Offset, 4
+				if a.Elem > 0 {
+					elem = a.Elem
+				}
+				// An address moves a unit of each axis it has a step along
+				// (cpuWords).
+				for ax, per := range a.Per {
+					off += coord(at, ax) * per
+				}
+				*slot = uint64(uintptr(unsafe.Pointer(&w[0]))) + uint64(off*elem)
+			}
+			code.Call(&args)
+		}
 		code.Close()
 	}
 	runtime.KeepAlive(keep)
