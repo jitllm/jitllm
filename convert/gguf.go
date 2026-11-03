@@ -40,6 +40,9 @@ func FromGGUFs(src, mmproj, dst string, fp jlm.Fingerprint, opts ...Option) (*jl
 		return nil, err
 	}
 	defer f.Close()
+	if err := headAlone(f, src); err != nil && o.head == "" {
+		return nil, err
+	}
 	if o.head != "" {
 		h, err := gguf.Open(o.head)
 		if err != nil {
