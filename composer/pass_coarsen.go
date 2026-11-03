@@ -816,6 +816,16 @@ func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
 	key := k.key(fmt.Sprintf("%p %d", n, s.Val), coords)
 	g := k.E / n.Elements()
 	if n.Kind == PrimReduce && g > k.c.Unit {
+		// An exchanged sum is the output a unit's group of threads holds, so
+		// it is read only there: a reader taking another output -- one
+		// head's gate read across every element of a row -- would read its
+		// own group's sum in place of that one.
+		if !k.ownOutput(n, coords, g) {
+			if k.err == nil {
+				k.err = fmt.Errorf("a reduction exchanged over its threads read at another output than theirs")
+			}
+			return 0
+		}
 		key = fmt.Sprintf("%p %d", n, s.Val)
 	}
 	if v, ok := k.memo[key]; ok {
@@ -832,6 +842,32 @@ func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
 	}
 	k.memo[key] = v
 	return v
+}
+
+// ownOutput says coords are, at every unit, the output of reduction n that
+// the unit's group exchanges: the unit over the group's g/Unit slots,
+// decoded in n's space.
+func (k *coarse) ownOutput(n *Kernel, coords []int, g int) bool {
+	own := k.m.decode(k.m.bin(OpDiv, ir.U32, k.u, k.m.u32(g/k.c.Unit)), n.Space)
+	if len(own) != len(coords) {
+		return false
+	}
+	for i := range own {
+		a, ok := k.value(own[i])
+		if !ok {
+			return false
+		}
+		b, ok := k.value(coords[i])
+		if !ok {
+			return false
+		}
+		for t := range k.T {
+			if k.at(a, t) != k.at(b, t) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // term is reduction n's term j at coordinates coords.
