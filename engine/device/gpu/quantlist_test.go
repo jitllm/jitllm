@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// TestEveryPackedFormatReachesTheDevice sweeps quant.PackedTypes -- the
+// TestEveryPackedFormatReachesTheDevice sweeps quant.PackedTypes() -- the
 // CANONICAL list -- rather than naming formats here.
 //
 // A hand-written copy of that list went stale once (a new format answered
@@ -15,10 +15,10 @@ import (
 // layout.QuantOf, and this gate covers a format added to quant and to no
 // layout at all. Against a violation it names the format.
 func TestEveryPackedFormatReachesTheDevice(t *testing.T) {
-	if len(quant.PackedTypes) == 0 {
-		t.Fatal("quant.PackedTypes is empty; this gate would pass by sweeping nothing")
+	if len(quant.PackedTypes()) == 0 {
+		t.Fatal("quant.PackedTypes() is empty; this gate would pass by sweeping nothing")
 	}
-	for _, q := range quant.PackedTypes {
+	for _, q := range quant.PackedTypes() {
 		got, ok := quantOf(q)
 		if !ok {
 			t.Errorf("%s is a packed format and the device holds no layout for it; "+
@@ -31,5 +31,5 @@ func TestEveryPackedFormatReachesTheDevice(t *testing.T) {
 				q, got, want)
 		}
 	}
-	t.Logf("%d packed formats, every one reaching the device", len(quant.PackedTypes))
+	t.Logf("%d packed formats, every one reaching the device", len(quant.PackedTypes()))
 }

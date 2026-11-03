@@ -111,7 +111,7 @@ func TestDoctorReportsFakeDevices(t *testing.T) {
 func writeOldContainer(t *testing.T, v uint32) string {
 	t.Helper()
 	b := make([]byte, jlm.HeaderBytes)
-	copy(b, jlm.Magic[:])
+	copy(b, jlm.Magic)
 	binary.LittleEndian.PutUint32(b[8:], v)
 	p := filepath.Join(t.TempDir(), "old.jlm")
 	if err := os.WriteFile(p, b, 0o644); err != nil {

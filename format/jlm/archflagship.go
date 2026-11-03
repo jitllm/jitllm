@@ -1,7 +1,5 @@
 package jlm
 
-import "fmt"
-
 // The flagship architectures added as one group (MiniMax, Gemma 4, DeepSeek
 // V3.2, ...). The mixture families count up from ArchDBRX and the dense
 // llama family down from the top of the 6-bit range, so these are taken from
@@ -111,16 +109,31 @@ const (
 	ArchQwen4Exp Arch = 51
 )
 
-var flagshipArchNames = map[Arch]string{
-	ArchMiniMaxM2: "minimax-m2", ArchGemma4: "gemma4", ArchDeepseek32: "deepseek32",
-	ArchGemma3n: "gemma3n", ArchMiniMaxM3: "minimax-m3", ArchDeepseek4: "deepseek4",
-	ArchKimiK3: "kimi-k3", ArchQwen4Exp: "qwen4exp",
+func flagshipArchName(a Arch) (string, bool) {
+	switch a {
+	case ArchMiniMaxM2:
+		return "minimax-m2", true
+	case ArchGemma4:
+		return "gemma4", true
+	case ArchDeepseek32:
+		return "deepseek32", true
+	case ArchGemma3n:
+		return "gemma3n", true
+	case ArchMiniMaxM3:
+		return "minimax-m3", true
+	case ArchDeepseek4:
+		return "deepseek4", true
+	case ArchKimiK3:
+		return "kimi-k3", true
+	case ArchQwen4Exp:
+		return "qwen4exp", true
+	}
+	return "", false
 }
 
 // The flagship group's roles, numbered from 300: 200 and 201 are Qwen2.5-VL's
 // tower gate (RoleVFFNGate), and a concurrent addition counting up from the
-// last core role does not reach this far. Valid and
-// String read roleNames, which init extends.
+// last core role does not reach this far.
 const (
 	// RoleLayerOutScale is Gemma 4's per-block output scalar (layer_scalar):
 	// one float the block's whole output row is multiplied by after its last
@@ -294,97 +307,158 @@ const (
 	RoleNGramConv      Role = 373
 )
 
-var flagshipRoleNames = map[Role]string{
-	RoleLayerOutScale: "layer_output_scale",
-	RoleFFNNorm2:      "pre_ffw_norm_2",
-	RolePostFFNNorm1:  "post_ffw_norm_1",
-	RolePostFFNNorm2:  "post_ffw_norm_2",
-	RoleRouterNorm:    "router_norm",
-	RoleExpScale:      "ffn_down_exps_scale",
-	RolePLETokEmbd:    "per_layer_token_embd",
-	RolePLEModelProj:  "per_layer_model_proj",
-	RolePLEProjNorm:   "per_layer_proj_norm",
-	RolePLEGate:       "inp_gate",
-	RolePLEProj:       "proj",
-	RolePLEPostNorm:   "post_norm",
-	RoleIdxQB:         "indexer.attn_q_b",
-	RoleIdxK:          "indexer.attn_k",
-	RoleIdxKNorm:      "indexer.k_norm",
-	RoleIdxKNormB:     "indexer.k_norm_bias",
-	RoleIdxProj:       "indexer.proj",
-
-	RoleStreamExpand:       "stream_expand",
-	RoleStreamCollapse1:    "stream_collapse.1",
-	RoleStreamCollapse2:    "stream_collapse.2",
-	RoleStreamCollapse3:    "stream_collapse.3",
-	RoleStreamRouter:       "stream_router",
-	RoleStreamRouterNorm:   "stream_router_norm",
-	RoleStreamPredictCoef:  "stream_predict_coef",
-	RoleStreamCorrectCoef:  "stream_correct_coef",
-	RoleStreamCorrectScale: "stream_correct_scale",
-	RoleLowRankIn:          "lowrank_in",
-	RoleLowRankOut:         "lowrank_out",
-	RoleLowRankNorm:        "lowrank_post_norm",
-
-	RoleIdxQ:     "indexer.q_proj",
-	RoleIdxQNorm: "indexer.q_norm",
-
-	RoleHCAttnFn:    "hc_attn_fn",
-	RoleHCAttnBase:  "hc_attn_base",
-	RoleHCAttnScale: "hc_attn_scale",
-	RoleHCFFNFn:     "hc_ffn_fn",
-	RoleHCFFNBase:   "hc_ffn_base",
-	RoleHCFFNScale:  "hc_ffn_scale",
-	RoleHCHeadFn:    "output_hc_fn",
-	RoleHCHeadBase:  "output_hc_base",
-	RoleHCHeadScale: "output_hc_scale",
-	RoleAttnOutA:    "attn_output_a",
-	RoleCompKV:      "attn_compressor_kv",
-	RoleCompGate:    "attn_compressor_gate",
-	RoleCompAPE:     "attn_compressor_ape",
-	RoleCompNorm:    "attn_compressor_norm",
-	RoleIdxCompKV:   "indexer_compressor_kv",
-	RoleIdxCompGate: "indexer_compressor_gate",
-	RoleIdxCompAPE:  "indexer_compressor_ape",
-	RoleIdxCompNorm: "indexer_compressor_norm",
-	RoleHashExperts: "ffn_gate_tid2eid",
-
-	RoleAttnResScore:   "attn_res_score",
-	RoleFFNResScore:    "ffn_res_score",
-	RoleOutputResScore: "output_res_score",
-	RoleFFNRoutedDown:  "ffn_routed_down",
-	RoleFFNRoutedUp:    "ffn_routed_up",
-	RoleFFNRoutedNorm:  "ffn_routed_norm",
-
-	RoleHCAttnNorm:     "hc_attn_norm",
-	RoleHCAttnDown:     "hc_attn_down",
-	RoleHCAttnUp:       "hc_attn_up",
-	RoleHCAttnInject:   "hc_attn_inject",
-	RoleHCFFNNorm:      "hc_ffn_norm",
-	RoleHCFFNDown:      "hc_ffn_down",
-	RoleHCFFNUp:        "hc_ffn_up",
-	RoleHCFFNInject:    "hc_ffn_inject",
-	RoleHCHeadNorm:     "output_hc_norm",
-	RoleHCHeadDown:     "output_hc_down",
-	RoleHCHeadUp:       "output_hc_up",
-	RoleNGramTable:     "ngram_token_embd",
-	RoleNGramKey:       "ple_key",
-	RoleNGramValue:     "ple_value",
-	RoleNGramNormKey:   "ple_norm_key",
-	RoleNGramNormQuery: "ple_norm_query",
-	RoleNGramNormConv:  "ple_norm_conv",
-	RoleNGramConv:      "ple_conv1d",
-}
-
-func init() {
-	for r, n := range flagshipRoleNames {
-		// Another group taking the same number would rename its role here
-		// and read one tensor as the other.
-		if was, ok := roleNames[r]; ok {
-			panic(fmt.Sprintf("jlm: role %d is both %q and %q", r, was, n))
-		}
-		roleNames[r] = n
+func flagshipRoleName(r Role) (string, bool) {
+	switch r {
+	case RoleLayerOutScale:
+		return "layer_output_scale", true
+	case RoleFFNNorm2:
+		return "pre_ffw_norm_2", true
+	case RolePostFFNNorm1:
+		return "post_ffw_norm_1", true
+	case RolePostFFNNorm2:
+		return "post_ffw_norm_2", true
+	case RoleRouterNorm:
+		return "router_norm", true
+	case RoleExpScale:
+		return "ffn_down_exps_scale", true
+	case RolePLETokEmbd:
+		return "per_layer_token_embd", true
+	case RolePLEModelProj:
+		return "per_layer_model_proj", true
+	case RolePLEProjNorm:
+		return "per_layer_proj_norm", true
+	case RolePLEGate:
+		return "inp_gate", true
+	case RolePLEProj:
+		return "proj", true
+	case RolePLEPostNorm:
+		return "post_norm", true
+	case RoleIdxQB:
+		return "indexer.attn_q_b", true
+	case RoleIdxK:
+		return "indexer.attn_k", true
+	case RoleIdxKNorm:
+		return "indexer.k_norm", true
+	case RoleIdxKNormB:
+		return "indexer.k_norm_bias", true
+	case RoleIdxProj:
+		return "indexer.proj", true
+	case RoleStreamExpand:
+		return "stream_expand", true
+	case RoleStreamCollapse1:
+		return "stream_collapse.1", true
+	case RoleStreamCollapse2:
+		return "stream_collapse.2", true
+	case RoleStreamCollapse3:
+		return "stream_collapse.3", true
+	case RoleStreamRouter:
+		return "stream_router", true
+	case RoleStreamRouterNorm:
+		return "stream_router_norm", true
+	case RoleStreamPredictCoef:
+		return "stream_predict_coef", true
+	case RoleStreamCorrectCoef:
+		return "stream_correct_coef", true
+	case RoleStreamCorrectScale:
+		return "stream_correct_scale", true
+	case RoleLowRankIn:
+		return "lowrank_in", true
+	case RoleLowRankOut:
+		return "lowrank_out", true
+	case RoleLowRankNorm:
+		return "lowrank_post_norm", true
+	case RoleIdxQ:
+		return "indexer.q_proj", true
+	case RoleIdxQNorm:
+		return "indexer.q_norm", true
+	case RoleHCAttnFn:
+		return "hc_attn_fn", true
+	case RoleHCAttnBase:
+		return "hc_attn_base", true
+	case RoleHCAttnScale:
+		return "hc_attn_scale", true
+	case RoleHCFFNFn:
+		return "hc_ffn_fn", true
+	case RoleHCFFNBase:
+		return "hc_ffn_base", true
+	case RoleHCFFNScale:
+		return "hc_ffn_scale", true
+	case RoleHCHeadFn:
+		return "output_hc_fn", true
+	case RoleHCHeadBase:
+		return "output_hc_base", true
+	case RoleHCHeadScale:
+		return "output_hc_scale", true
+	case RoleAttnOutA:
+		return "attn_output_a", true
+	case RoleCompKV:
+		return "attn_compressor_kv", true
+	case RoleCompGate:
+		return "attn_compressor_gate", true
+	case RoleCompAPE:
+		return "attn_compressor_ape", true
+	case RoleCompNorm:
+		return "attn_compressor_norm", true
+	case RoleIdxCompKV:
+		return "indexer_compressor_kv", true
+	case RoleIdxCompGate:
+		return "indexer_compressor_gate", true
+	case RoleIdxCompAPE:
+		return "indexer_compressor_ape", true
+	case RoleIdxCompNorm:
+		return "indexer_compressor_norm", true
+	case RoleHashExperts:
+		return "ffn_gate_tid2eid", true
+	case RoleAttnResScore:
+		return "attn_res_score", true
+	case RoleFFNResScore:
+		return "ffn_res_score", true
+	case RoleOutputResScore:
+		return "output_res_score", true
+	case RoleFFNRoutedDown:
+		return "ffn_routed_down", true
+	case RoleFFNRoutedUp:
+		return "ffn_routed_up", true
+	case RoleFFNRoutedNorm:
+		return "ffn_routed_norm", true
+	case RoleHCAttnNorm:
+		return "hc_attn_norm", true
+	case RoleHCAttnDown:
+		return "hc_attn_down", true
+	case RoleHCAttnUp:
+		return "hc_attn_up", true
+	case RoleHCAttnInject:
+		return "hc_attn_inject", true
+	case RoleHCFFNNorm:
+		return "hc_ffn_norm", true
+	case RoleHCFFNDown:
+		return "hc_ffn_down", true
+	case RoleHCFFNUp:
+		return "hc_ffn_up", true
+	case RoleHCFFNInject:
+		return "hc_ffn_inject", true
+	case RoleHCHeadNorm:
+		return "output_hc_norm", true
+	case RoleHCHeadDown:
+		return "output_hc_down", true
+	case RoleHCHeadUp:
+		return "output_hc_up", true
+	case RoleNGramTable:
+		return "ngram_token_embd", true
+	case RoleNGramKey:
+		return "ple_key", true
+	case RoleNGramValue:
+		return "ple_value", true
+	case RoleNGramNormKey:
+		return "ple_norm_key", true
+	case RoleNGramNormQuery:
+		return "ple_norm_query", true
+	case RoleNGramNormConv:
+		return "ple_norm_conv", true
+	case RoleNGramConv:
+		return "ple_conv1d", true
 	}
+	return "", false
 }
 
 // flagshipExpanded is Role.Expanded for the roles above: the per-block vectors

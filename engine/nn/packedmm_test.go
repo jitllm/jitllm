@@ -21,7 +21,7 @@ func TestMatMulPackedMatchesTheRowLoopExactly(t *testing.T) {
 	// Q8_0 is every matrix of a SmolVLM tower; the k-quants cover the half-sums
 	// path, which is a second activation buffer and the likeliest thing to get
 	// wrong per token.
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		for _, sh := range []struct{ nrows, k, ntok int }{
 			{768, 768, 8},  // the tower's q/k/v/o shape
 			{3072, 768, 5}, // fc1, and an odd token count

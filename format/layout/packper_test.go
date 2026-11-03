@@ -9,8 +9,8 @@ import (
 // workers OR-ing into one word lose an update about one run in fifteen, so the
 // arithmetic is gated rather than the lottery.
 func TestPackWorkersNeverShareADWord(t *testing.T) {
-	for q := Quant(0); q < Quant(len(qtab)); q++ {
-		if IsFloat(q) || qtab[q].blockE == 0 {
+	for q := Quant(0); q < Quant(numQuants); q++ {
+		if IsFloat(q) || qtab(q).blockE == 0 {
 			continue
 		}
 		g := DSlots(q)

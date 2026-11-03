@@ -169,7 +169,7 @@ func sseQuantActDiff(gq, wq []int8, gp, wp, gh, wh []float32) (ints, pairs, halv
 func TestSSEQuantActMatchesTheGoLoopExactly(t *testing.T) {
 	underSSEQuant(t, func() {
 		ran, wide, narrow := 0, 0, 0
-		for _, q := range quant.PackedTypes {
+		for _, q := range quant.PackedTypes() {
 			kern, done := sseQuantActKernels(t, q)
 			for _, sh := range sseQuantActShapes {
 				// Ask the driver which kernel it takes, so a declined shape

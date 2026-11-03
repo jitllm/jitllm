@@ -17,7 +17,7 @@ import (
 func TestAVX2MatrixEmittersAreByteStable(t *testing.T) {
 	m := &matrixCases{t: t}
 	for _, dk := range []DotKind{DotVNNI, DotVEX} {
-		for _, q := range quant.PackedTypes {
+		for _, q := range quant.PackedTypes() {
 			p := fmt.Sprintf("dk=%d/%s", dk, q)
 			for _, ah := range fusedAheads {
 				c, err := EmitPackedMatVecFusedAhead(q, dk, ah)
@@ -37,7 +37,7 @@ func TestAVX2MatrixEmittersAreByteStable(t *testing.T) {
 			}
 		}
 	}
-	for _, q := range quant.PackedTypes {
+	for _, q := range quant.PackedTypes() {
 		gemmSweep(func(mr, nr, nb, win int) {
 			c, err := EmitGEMMWindow(q, mr, nr, nb, win)
 			m.add(fmt.Sprintf("gemm/%s/tile=%dx%d/nb=%d/win=%d", q, mr, nr, nb, win), c, err)
@@ -52,7 +52,7 @@ func TestAVX2MatrixEmittersAreByteStable(t *testing.T) {
 // sequence. A measurement, not a gate (RULE 4).
 func BenchmarkMatrixEmission(b *testing.B) {
 	for b.Loop() {
-		for _, q := range quant.PackedTypes {
+		for _, q := range quant.PackedTypes() {
 			EmitPackedMatVecFusedAhead(q, DotVNNI, 2)
 			EmitPackedMatMulTiled(q, 4096, 4096, 2, DotVNNI)
 			EmitPackedMatMulStationary(q, 4096, 4096, 256, DotVEX)
@@ -65,7 +65,7 @@ func BenchmarkMatrixEmission(b *testing.B) {
 func BenchmarkNEONMatrixEmission(b *testing.B) {
 	neonDot(true, func() {
 		for b.Loop() {
-			for _, q := range quant.PackedTypes {
+			for _, q := range quant.PackedTypes() {
 				EmitA64PackedMatVecFused(q, PackedFusedGroupOf(q), 2)
 				EmitA64PackedMatMulTiled(q, 4096, 4096, 2)
 				EmitA64PackedMatMulStationary(q, 4096, 4096, 256)
@@ -80,7 +80,7 @@ func BenchmarkNEONMatrixEmission(b *testing.B) {
 // stationary forms (sse_refuse.go), so a port lands as a recorded change.
 func TestSSEMatrixEmittersAreByteStable(t *testing.T) {
 	m := &matrixCases{t: t}
-	for _, q := range quant.PackedTypes {
+	for _, q := range quant.PackedTypes() {
 		c, err := EmitPackedMatVecFusedSSE(q)
 		m.add(fmt.Sprintf("fused/%s", q), c, err)
 		for rows := 0; rows <= 68; rows += 4 {

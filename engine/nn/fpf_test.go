@@ -22,7 +22,7 @@ func TestFusedPrefetchIsSelectedAndChangesNothing(t *testing.T) {
 			"(cpu.EmitPackedMatVecFused) and MatVecPacked times each shape instead (mvpick.go)")
 	}
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedFusedSupported(gt) || k%int(gt.BlockElems()) != 0 {
 			continue
 		}

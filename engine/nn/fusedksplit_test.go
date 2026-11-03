@@ -18,7 +18,7 @@ import (
 // whose planes are interleaved with the other experts'.
 func TestFusedKSplitIsBitIdentical(t *testing.T) {
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedFusedSupported(gt) {
 			continue
 		}
@@ -90,7 +90,7 @@ func TestFusedKSplitIsBitIdentical(t *testing.T) {
 // of one Stride-row bank, as a real mixture's are.
 func TestFusedKSplitReachesTheMixturePaths(t *testing.T) {
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedFusedSupported(gt) {
 			continue
 		}
@@ -160,7 +160,7 @@ func TestFusedKSplitReachesTheMixturePaths(t *testing.T) {
 // slice at the wrong super-block reads NMSE ~1).
 func TestFusedKSlicesMatchWholeK(t *testing.T) {
 	ran, worst := 0, 0.0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		if !cpu.PackedFusedSupported(gt) {
 			continue
 		}

@@ -19,7 +19,7 @@ const ScStreamWords = 3
 // shifts; two straddle a word boundary (sub-block 2's minimum, sub-block 5's
 // scale) and read one more word, always the next one, so a cursor walking the
 // plane forward never steps back.
-func ScStream(q Quant) bool { qi := qtab[q]; return qi.biasArray && qi.perSuper == 8 }
+func ScStream(q Quant) bool { qi := qtab(q); return qi.biasArray && qi.perSuper == 8 }
 
 // ScField places field (sub, min) of the stream: word w of the super-block's
 // ScStreamWords, starting at bit b, with hi of its six bits in the low bits of

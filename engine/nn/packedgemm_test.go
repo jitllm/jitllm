@@ -42,13 +42,13 @@ func runGEMMGate(t *testing.T, mk func(maxK, maxRows int, ts []quant.Type, opts 
 	// rather than being averaged into the others' ~1e-12.
 	worstNMSE := map[quant.Type]float64{}
 	defer func() {
-		for _, gt := range quant.PackedTypes {
+		for _, gt := range quant.PackedTypes() {
 			if w, ok := worstNMSE[gt]; ok {
 				t.Logf("%s: integer-accumulated, worst NMSE against the row loop %.3e", gt, w)
 			}
 		}
 	}()
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		for _, sh := range gemmShapes {
 			if sh.k%int(gt.BlockElems()) != 0 {
 				continue

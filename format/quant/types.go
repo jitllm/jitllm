@@ -54,46 +54,158 @@ const (
 	MXFP4 Type = 39
 )
 
-// blockInfo is elements-per-block and bytes-per-block. A type absent from this
+// blockInfoOf is elements-per-block and bytes-per-block. A type absent from this
 // table is either removed from ggml (4, 5, 31-33, 36-38) or newer than this
 // table; either way we cannot compute a tensor's size, so Open rejects it. That
 // is a parse-time refusal, not a "we have no fast kernel" refusal — see nn.Ref.
-var blockInfo = map[Type][2]uint64{
-	F32: {1, 4}, F16: {1, 2}, BF16: {1, 2},
-	Q4_0: {32, 18}, Q4_1: {32, 20}, Q5_0: {32, 22}, Q5_1: {32, 24},
-	Q8_0: {32, 34}, Q8_1: {32, 36},
-	Q2_K: {256, 84}, Q3_K: {256, 110}, Q4_K: {256, 144},
-	Q5_K: {256, 176}, Q6_K: {256, 210}, Q8_K: {256, 292},
-	16:      {256, 66},  // IQ2_XXS
-	17:      {256, 74},  // IQ2_XS
-	18:      {256, 98},  // IQ3_XXS
-	19:      {256, 50},  // IQ1_S
-	20:      {32, 18},   // IQ4_NL
-	21:      {256, 110}, // IQ3_S
-	22:      {256, 82},  // IQ2_S
-	23:      {256, 136}, // IQ4_XS
-	24:      {1, 1},     // I8
-	25:      {1, 2},     // I16
-	26:      {1, 4},     // I32
-	27:      {1, 8},     // I64
-	28:      {1, 8},     // F64
-	29:      {256, 56},  // IQ1_M
-	TQ1_0:   {256, 54},
-	TQ2_0:   {256, 66},
-	TQ2_F32: {256, 68},
-	MXFP4:   {32, 17},
+func blockInfoOf(t Type) ([2]uint64, bool) {
+	switch t {
+	case F32:
+		return [2]uint64{1, 4}, true
+	case F16:
+		return [2]uint64{1, 2}, true
+	case BF16:
+		return [2]uint64{1, 2}, true
+	case Q4_0:
+		return [2]uint64{32, 18}, true
+	case Q4_1:
+		return [2]uint64{32, 20}, true
+	case Q5_0:
+		return [2]uint64{32, 22}, true
+	case Q5_1:
+		return [2]uint64{32, 24}, true
+	case Q8_0:
+		return [2]uint64{32, 34}, true
+	case Q8_1:
+		return [2]uint64{32, 36}, true
+	case Q2_K:
+		return [2]uint64{256, 84}, true
+	case Q3_K:
+		return [2]uint64{256, 110}, true
+	case Q4_K:
+		return [2]uint64{256, 144}, true
+	case Q5_K:
+		return [2]uint64{256, 176}, true
+	case Q6_K:
+		return [2]uint64{256, 210}, true
+	case Q8_K:
+		return [2]uint64{256, 292}, true
+	case 16:
+		return [2]uint64{256, 66}, true
+	case 17:
+		return [2]uint64{256, 74}, true
+	case 18:
+		return [2]uint64{256, 98}, true
+	case 19:
+		return [2]uint64{256, 50}, true
+	case 20:
+		return [2]uint64{32, 18}, true
+	case 21:
+		return [2]uint64{256, 110}, true
+	case 22:
+		return [2]uint64{256, 82}, true
+	case 23:
+		return [2]uint64{256, 136}, true
+	case 24:
+		return [2]uint64{1, 1}, true
+	case 25:
+		return [2]uint64{1, 2}, true
+	case 26:
+		return [2]uint64{1, 4}, true
+	case 27:
+		return [2]uint64{1, 8}, true
+	case 28:
+		return [2]uint64{1, 8}, true
+	case 29:
+		return [2]uint64{256, 56}, true
+	case TQ1_0:
+		return [2]uint64{256, 54}, true
+	case TQ2_0:
+		return [2]uint64{256, 66}, true
+	case TQ2_F32:
+		return [2]uint64{256, 68}, true
+	case MXFP4:
+		return [2]uint64{32, 17}, true
+	}
+	return [2]uint64{}, false
 }
 
-var typeNames = map[Type]string{
-	F32: "F32", F16: "F16", Q4_0: "Q4_0", Q4_1: "Q4_1", Q5_0: "Q5_0", Q5_1: "Q5_1",
-	Q8_0: "Q8_0", Q8_1: "Q8_1", Q2_K: "Q2_K", Q3_K: "Q3_K", Q4_K: "Q4_K", Q5_K: "Q5_K",
-	Q6_K: "Q6_K", Q8_K: "Q8_K", 16: "IQ2_XXS", 17: "IQ2_XS", 18: "IQ3_XXS", 19: "IQ1_S",
-	20: "IQ4_NL", 21: "IQ3_S", 22: "IQ2_S", 23: "IQ4_XS", 24: "I8", 25: "I16", 26: "I32",
-	27: "I64", 28: "F64", 29: "IQ1_M", BF16: "BF16", TQ1_0: "TQ1_0", TQ2_0: "TQ2_0", I2_S: "I2_S", TQ2_F32: "TQ2_F32", MXFP4: "MXFP4",
+func typeName(t Type) (string, bool) {
+	switch t {
+	case F32:
+		return "F32", true
+	case F16:
+		return "F16", true
+	case Q4_0:
+		return "Q4_0", true
+	case Q4_1:
+		return "Q4_1", true
+	case Q5_0:
+		return "Q5_0", true
+	case Q5_1:
+		return "Q5_1", true
+	case Q8_0:
+		return "Q8_0", true
+	case Q8_1:
+		return "Q8_1", true
+	case Q2_K:
+		return "Q2_K", true
+	case Q3_K:
+		return "Q3_K", true
+	case Q4_K:
+		return "Q4_K", true
+	case Q5_K:
+		return "Q5_K", true
+	case Q6_K:
+		return "Q6_K", true
+	case Q8_K:
+		return "Q8_K", true
+	case 16:
+		return "IQ2_XXS", true
+	case 17:
+		return "IQ2_XS", true
+	case 18:
+		return "IQ3_XXS", true
+	case 19:
+		return "IQ1_S", true
+	case 20:
+		return "IQ4_NL", true
+	case 21:
+		return "IQ3_S", true
+	case 22:
+		return "IQ2_S", true
+	case 23:
+		return "IQ4_XS", true
+	case 24:
+		return "I8", true
+	case 25:
+		return "I16", true
+	case 26:
+		return "I32", true
+	case 27:
+		return "I64", true
+	case 28:
+		return "F64", true
+	case 29:
+		return "IQ1_M", true
+	case BF16:
+		return "BF16", true
+	case TQ1_0:
+		return "TQ1_0", true
+	case TQ2_0:
+		return "TQ2_0", true
+	case I2_S:
+		return "I2_S", true
+	case TQ2_F32:
+		return "TQ2_F32", true
+	case MXFP4:
+		return "MXFP4", true
+	}
+	return "", false
 }
 
 func (t Type) String() string {
-	if s, ok := typeNames[t]; ok {
+	if s, ok := typeName(t); ok {
 		return s
 	}
 	return "type(" + itoa(uint64(t)) + ")"
@@ -112,14 +224,14 @@ func (t Type) Engine() bool { return t >= EngineTypes }
 func I2SBytes(n uint64) uint64 { return n/4 + 32 }
 
 // BlockElems is how many logical elements one block encodes.
-func (t Type) BlockElems() uint64 { return blockInfo[t][0] }
+func (t Type) BlockElems() uint64 { b, _ := blockInfoOf(t); return b[0] }
 
 // BlockBytes is the on-disk size of one block.
-func (t Type) BlockBytes() uint64 { return blockInfo[t][1] }
+func (t Type) BlockBytes() uint64 { b, _ := blockInfoOf(t); return b[1] }
 
 // Known reports whether we can compute this type's size. Dispatch on the type,
 // never on the block size: 18 bytes per 32 elements is Q4_0 and is also IQ4_NL.
-func (t Type) Known() bool { _, ok := blockInfo[t]; return ok }
+func (t Type) Known() bool { _, ok := blockInfoOf(t); return ok }
 
 func itoa(v uint64) string {
 	if v == 0 {
@@ -140,7 +252,9 @@ func itoa(v uint64) string {
 //
 // A gate that sweeps this cannot miss a newly added format, where hand-written
 // lists in each test once did.
-var PackedTypes = []Type{Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4, TQ2_0, TQ2_F32}
+func PackedTypes() []Type {
+	return []Type{Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4, TQ2_0, TQ2_F32}
+}
 
 // PlantScales overwrites every block's scale fields in src -- a buffer of whole
 // blocks of t, typically random bytes -- with finite values, drawn in turn from

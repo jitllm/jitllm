@@ -25,7 +25,7 @@ func TestPackedGEMMRate(t *testing.T) {
 	}
 	gt := quant.Q4_K
 	if s := os.Getenv("JITLLM_GEMM_RATE_TYPE"); s != "" {
-		for _, q := range quant.PackedTypes {
+		for _, q := range quant.PackedTypes() {
 			if q.String() == s {
 				gt = q
 			}

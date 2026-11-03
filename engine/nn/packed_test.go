@@ -53,7 +53,7 @@ func TestPackedMatVecTailAgrees(t *testing.T) {
 	}
 	for _, sh := range shapes {
 		nrows := sh.rows
-		for _, gt := range quant.PackedTypes {
+		for _, gt := range quant.PackedTypes() {
 			if !cpu.PackedSupported(gt) {
 				// continue, not Skipf: Skipf would end the whole test and hide
 				// every format that does have a kernel.

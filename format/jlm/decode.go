@@ -212,7 +212,7 @@ func DecodeWord[V any](a Arith[V], l TypeLayout, rows int, r, c V) (codes V, ok 
 	f, rem := a.Div(e, u(uint32(h))), a.Rem(e, u(uint32(h)))
 	v := a.Word(PlaneQS, a.Add(base, a.Mul(a.Div(rem, u(4)), R)))
 	q := a.And(a.Shr(v, a.Mul(f, u(uint32(bits)))), bytes(uint32(1)<<bits-1))
-	if l.Codes == &mx4Codes {
+	if l.Codes != nil && *l.Codes == mx4Codes() {
 		return e2m1Word(a, q), true
 	}
 	if l.Codes != nil {

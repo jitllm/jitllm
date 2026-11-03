@@ -43,7 +43,7 @@ const (
 	defaultSpecPages = 32
 )
 
-var errSpecFull = errors.New("jlm: speculative occupancy is full")
+const errSpecFull constError = "jlm: speculative occupancy is full"
 
 // specSvc is the queue and its workers. mu is taken before f.mu, never
 // after.

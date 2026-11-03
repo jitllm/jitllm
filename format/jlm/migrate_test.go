@@ -14,15 +14,15 @@ import (
 // the migration from the version before it: a container its source no
 // longer exists for would otherwise have no way forward.
 func TestEveryVersionHasItsMigration(t *testing.T) {
-	if migrations[Version-1] == nil {
+	if migrationFor(Version-1) == nil {
 		t.Fatalf("Version is %d and there is no migration from %d (migrate.go): every bump adds one",
 			Version, Version-1)
 	}
 	if !Upgradable(26) {
 		t.Fatalf("version 26 no longer upgrades to %d: a migration in the chain is missing", Version)
 	}
-	for v := range migrations {
-		if v >= Version {
+	for v := uint32(0); v < 1000; v++ {
+		if migrationFor(v) != nil && v >= Version {
 			t.Errorf("a migration from version %d, which is not older than %d", v, Version)
 		}
 	}
@@ -147,11 +147,14 @@ func TestUpgradeIsAFreshConversion(t *testing.T) {
 				return
 			}
 			// The violation: the step that only stamps the version.
-			saved := migrations[29]
-			migrations[29] = func(path string) error { return setVersion(path, 30) }
-			defer func() { migrations[29] = saved }()
+			stamp := func(v uint32) func(string) error {
+				if v == 29 {
+					return func(path string) error { return setVersion(path, 30) }
+				}
+				return migrationFor(v)
+			}
 			q := old()
-			if _, err := Upgrade(q); err != nil {
+			if _, err := upgradeWith(stamp, q); err != nil {
 				t.Fatal(err)
 			}
 			bad, err := os.ReadFile(q)

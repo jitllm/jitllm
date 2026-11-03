@@ -54,8 +54,24 @@ const (
 	ArchLFM2Enc Arch = 107
 )
 
-var ssmArchNames = map[Arch]string{
-	ArchMamba2: "mamba2", ArchGraniteHybrid: "granitehybrid", ArchNemotronH: "nemotron_h",
-	ArchFalconH1: "falcon-h1", ArchLFM2: "lfm2", ArchMamba: "mamba", ArchJamba: "jamba",
-	ArchLFM2Enc: "lfm2enc",
+func ssmArchName(a Arch) (string, bool) {
+	switch a {
+	case ArchMamba2:
+		return "mamba2", true
+	case ArchGraniteHybrid:
+		return "granitehybrid", true
+	case ArchNemotronH:
+		return "nemotron_h", true
+	case ArchFalconH1:
+		return "falcon-h1", true
+	case ArchLFM2:
+		return "lfm2", true
+	case ArchMamba:
+		return "mamba", true
+	case ArchJamba:
+		return "jamba", true
+	case ArchLFM2Enc:
+		return "lfm2enc", true
+	}
+	return "", false
 }

@@ -349,7 +349,7 @@ func f2CheckRoPE(t *testing.T, em *Emitters, hd, nrot int, neox bool, heads int)
 func TestPackedRowSSEIsTheAVX2KernelBitForBit(t *testing.T) {
 	em := EmittersFor(TierSSE)
 	ran, compared := 0, 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		q, ok := layout.QuantOf(gt)
 		if !ok {
 			t.Fatalf("%s has no device layout", gt)
@@ -461,7 +461,7 @@ func TestPackedRowSSEIsTheAVX2KernelBitForBit(t *testing.T) {
 		}
 	}
 	t.Logf("%d rows over %d formats equal to the layout's own reading; %d also bit-identical to the AVX2 kernel",
-		ran, len(quant.PackedTypes), compared)
+		ran, len(quant.PackedTypes()), compared)
 }
 
 // TestWidenSSEIsTheAVX2KernelBitForBit converts every binary16 and bfloat16
@@ -602,7 +602,7 @@ func TestSSEFamily2TableServesItsEmitters(t *testing.T) {
 		w, we := EmitRoPESSE(80, 32, neox)
 		check(fmt.Sprintf("rope/%v", neox), g, ge, w, we)
 	}
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		q, _ := layout.QuantOf(gt)
 		g, ge := em.PackedRow(q)
 		w, we := EmitPackedRowSSE(q)

@@ -21,27 +21,32 @@ import (
 // (Tensor.Stored), so the result is byte for byte the container a fresh
 // conversion at the new version writes (TestUpgradeIsAFreshConversion).
 
-// migrations[v] rewrites the version v container at path as version v+1.
-// Every Version bump adds the entry for the version before it
-// (TestEveryVersionHasItsMigration).
-// Filled in init: a migration opens the container, and Open's refusal asks
-// which versions upgrade.
-var migrations = map[uint32]func(path string) error{}
-
-func init() {
-	migrations[26] = migrate26
-	migrations[27] = migrate27
-	migrations[28] = migrate28
-	migrations[29] = migrate29
+// migrationFor is the step that rewrites the version v container at path as
+// version v+1, or nil when there is none. Every Version bump adds the entry
+// for the version before it (TestEveryVersionHasItsMigration).
+func migrationFor(v uint32) func(path string) error {
+	switch v {
+	case 26:
+		return migrate26
+	case 27:
+		return migrate27
+	case 28:
+		return migrate28
+	case 29:
+		return migrate29
+	}
+	return nil
 }
 
 // Upgradable reports whether a chain of migrations reaches Version from v.
-func Upgradable(v uint32) bool {
+func Upgradable(v uint32) bool { return upgradableWith(migrationFor, v) }
+
+func upgradableWith(steps func(uint32) func(string) error, v uint32) bool {
 	if v >= Version {
 		return false
 	}
 	for ; v < Version; v++ {
-		if migrations[v] == nil {
+		if steps(v) == nil {
 			return false
 		}
 	}
@@ -59,7 +64,7 @@ func ReadVersion(path string) (uint32, error) {
 	if _, err := f.ReadAt(b[:], 0); err != nil {
 		return 0, fmt.Errorf("jlm: reading %s: %w", path, err)
 	}
-	if [8]byte(b[0:8]) != Magic {
+	if string(b[0:8]) != Magic {
 		return 0, fmt.Errorf("jlm: %s is not a jlm container", path)
 	}
 	return binary.LittleEndian.Uint32(b[8:]), nil
@@ -68,7 +73,9 @@ func ReadVersion(path string) (uint32, error) {
 // Upgrade brings the container at path to Version through the migrations,
 // and reports the version it started at. A current container is left as it
 // is; one no chain reaches is refused, naming the convert command.
-func Upgrade(path string) (from uint32, err error) {
+func Upgrade(path string) (from uint32, err error) { return upgradeWith(migrationFor, path) }
+
+func upgradeWith(steps func(uint32) func(string) error, path string) (from uint32, err error) {
 	from, err = ReadVersion(path)
 	if err != nil {
 		return 0, err
@@ -76,12 +83,12 @@ func Upgrade(path string) (from uint32, err error) {
 	if from == Version {
 		return from, nil
 	}
-	if !Upgradable(from) {
+	if !upgradableWith(steps, from) {
 		return from, fmt.Errorf("jlm: %s is version %d and no migration reaches %d from it; "+
 			"re-run `jitllm convert` on its source", path, from, Version)
 	}
 	for v := from; v < Version; v++ {
-		if err := migrations[v](path); err != nil {
+		if err := steps(v)(path); err != nil {
 			return from, fmt.Errorf("jlm: upgrading %s from version %d to %d: %w", path, v, v+1, err)
 		}
 		if got, err := ReadVersion(path); err != nil || got != v+1 {

@@ -14,7 +14,7 @@ import (
 var (
 	iq4nlK     [cpu.NumTiers]*cpu.Code
 	iq4nlOnce  tierOnce
-	iq4nlConst = cpu.IQ4NLConsts(quant.IQ4NLValues)
+	iq4nlConst = cpu.IQ4NLConsts(quant.IQ4NLValues())
 )
 
 // RowIQ4NL32JIT widens raw, whole IQ4_NL blocks, into dst (32 floats a

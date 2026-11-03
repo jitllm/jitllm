@@ -14,4 +14,10 @@ const (
 	ArchModernBERT Arch = 150
 )
 
-var encoderArchNames = map[Arch]string{ArchModernBERT: "modern-bert"}
+func encoderArchName(a Arch) (string, bool) {
+	switch a {
+	case ArchModernBERT:
+		return "modern-bert", true
+	}
+	return "", false
+}

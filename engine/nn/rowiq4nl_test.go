@@ -47,7 +47,7 @@ func TestRowIQ4NLMatchesTheDecoder(t *testing.T) {
 			}
 			got := make([]float32, 32*nb+1)
 			got[32*nb] = 12345
-			run(got, raw, cpu.IQ4NLConsts(quant.IQ4NLValues))
+			run(got, raw, cpu.IQ4NLConsts(quant.IQ4NLValues()))
 			for i := range want {
 				if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
 					t.Fatalf("%v, %d blocks: element %d is %g, the decoder %g", tier, nb, i, got[i], want[i])
@@ -56,7 +56,7 @@ func TestRowIQ4NLMatchesTheDecoder(t *testing.T) {
 			if got[32*nb] != 12345 {
 				t.Fatalf("%v: the decode wrote past %d blocks", tier, nb)
 			}
-			bad := quant.IQ4NLValues
+			bad := quant.IQ4NLValues()
 			bad[raw[2]&0xF]++
 			run(got, raw, cpu.IQ4NLConsts(bad))
 			same := true

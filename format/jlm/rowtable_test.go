@@ -60,12 +60,12 @@ func TestRowTableIsReadARowAtATime(t *testing.T) {
 	}
 	dstRow, scr := make([]byte, rb), jlm.RowScratch()
 	for _, r := range []uint64{0, 1, 45, 46, 2999, 1234, 455} {
-		before := jlm.RowReads()
+		before := c.RowReads()
 		if err := c.ReadRow(te, r, dstRow, scr); err != nil {
 			t.Fatal(err)
 		}
-		if jlm.RowReads() != before+1 {
-			t.Fatalf("row %d took %d reads", r, jlm.RowReads()-before)
+		if c.RowReads() != before+1 {
+			t.Fatalf("row %d took %d reads", r, c.RowReads()-before)
 		}
 		if !bytes.Equal(dstRow, table[r*rb:(r+1)*rb]) {
 			t.Fatalf("row %d is not its source bytes", r)

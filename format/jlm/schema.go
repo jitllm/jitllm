@@ -66,7 +66,7 @@ const (
 	TypeQ51 Type = 12
 
 	// TypeIQ4NL is GGUF's IQ4_NL, carried verbatim in its own 18-byte blocks
-	// (an f16 scale and 32 nibbles indexing quant.IQ4NLValues). It is not
+	// (an f16 scale and 32 nibbles indexing quant.IQ4NLValues()). It is not
 	// packed: the only tensor that may be this type is a row table
 	// (RoleNGramTable), read a row at a time and gathered, never multiplied.
 	TypeIQ4NL Type = 13
@@ -172,7 +172,8 @@ func Layout(t Type) (TypeLayout, bool) {
 	case TypeQ6S:
 		return TypeLayout{Sub: 16, Planes: [2]int{4, 2}, SuperSub: 16, ScaleOff: -128, Bias: 32}, true
 	case TypeMX4:
-		return TypeLayout{Sub: 32, Planes: [2]int{4, 0}, SuperSub: 1, Bias: 12, Codes: &mx4Codes, E8M0: true}, true
+		codes := mx4Codes()
+		return TypeLayout{Sub: 32, Planes: [2]int{4, 0}, SuperSub: 1, Bias: 12, Codes: &codes, E8M0: true}, true
 	case TypeQ51:
 		// HasMin at SuperSub 1: there is no per-sub-block minimum to read, so
 		// the minimum is the d word's high half, stored negated.
@@ -187,7 +188,9 @@ func Layout(t Type) (TypeLayout, bool) {
 
 // mx4Codes is the doubled e2m1 values plus 12: {0, 1, 2, 3, 4, 6, 8, 12} for
 // codes 0-7 and their negatives for 8-15, biased so every entry is unsigned.
-var mx4Codes = [16]uint8{12, 13, 14, 15, 16, 18, 20, 24, 12, 11, 10, 9, 8, 6, 4, 0}
+func mx4Codes() [16]uint8 {
+	return [16]uint8{12, 13, 14, 15, 16, 18, 20, 24, 12, 11, 10, 9, 8, 6, 4, 0}
+}
 
 // Role says what a tensor is. A container identifies every tensor by (Role,
 // Block, Index) and the name it carries is a label nothing reads. A code
@@ -476,86 +479,348 @@ const (
 	RoleSSMCNorm  Role = 436
 )
 
-// roleNames is for diagnostics only. Nothing resolves a tensor through it.
-var roleNames = map[Role]string{
-	RoleTokenEmbd: "token_embd", RoleOutput: "output", RoleOutputNorm: "output_norm",
-	RoleAttnNorm: "attn_norm", RoleAttnQ: "attn_q", RoleAttnK: "attn_k", RoleAttnV: "attn_v",
-	RoleAttnOut: "attn_out", RoleAttnQKV: "attn_qkv", RoleAttnQBias: "attn_q.bias",
-	RoleAttnKBias: "attn_k.bias", RoleAttnVBias: "attn_v.bias", RoleAttnOutBias: "attn_out.bias",
-	RoleAttnQNorm: "attn_q_norm", RoleAttnKNorm: "attn_k_norm", RolePostAttnNorm: "post_attn_norm",
-	RoleFFNNorm: "ffn_norm", RoleFFNGate: "ffn_gate", RoleFFNUp: "ffn_up", RoleFFNDown: "ffn_down",
-	RolePostFFNNorm: "post_ffn_norm", RoleRouter: "router",
-	RoleExpGateBank: "exp_gate_bank", RoleExpUpBank: "exp_up_bank", RoleExpDownBank: "exp_down_bank",
-	RoleExpGate: "exp_gate", RoleExpUp: "exp_up", RoleExpDown: "exp_down",
-	RoleAttnGate: "attn_gate", RoleShRouter: "sh_router", RoleAttnSinks: "attn_sinks",
-	RoleRouterBias: "router.bias", RoleExpGateBias: "exp_gate_bank.bias",
-	RoleExpUpBias: "exp_up_bank.bias", RoleExpDownBias: "exp_down_bank.bias",
-	RoleShExpGate: "sh_exp_gate", RoleShExpUp: "sh_exp_up", RoleShExpDown: "sh_exp_down",
-	RoleSSMBA: "ssm_ba", RoleSSMConv1d: "ssm_conv1d",
-	RoleSSMA: "ssm_a", RoleSSMDtBias: "ssm_dt_bias", RoleSSMNorm: "ssm_norm",
-	RoleSSMOut: "ssm_out",
-	RoleSSMFA:  "ssm_f_a", RoleSSMFB: "ssm_f_b",
-	RoleSSMGA: "ssm_g_a", RoleSSMGB: "ssm_g_b",
-	RoleAttnQA: "attn_q_a", RoleAttnQANorm: "attn_q_a_norm", RoleAttnQB: "attn_q_b",
-	RoleAttnKVA: "attn_kv_a", RoleAttnKVANorm: "attn_kv_a_norm",
-	RoleAttnKB: "attn_k_b", RoleAttnVB: "attn_v_b",
-	// Named although no container carries it: every diagnostic between
-	// identify() and the split prints it.
-	RoleAttnKVB:         "attn_kv_b",
-	RoleExpProbsB:       "exp_probs_b",
-	RoleRopeFactorsLong: "rope_factors_long", RoleRopeFactorsShort: "rope_factors_short",
-	RoleRopeFreqs:  "rope_freqs",
-	RoleVPatchEmbd: "v_patch_embd", RoleVPatchBias: "v_patch_bias", RoleVPosEmbd: "v_pos_embd",
-	RoleVPostNorm: "v_post_norm", RoleVPostNormBias: "v_post_norm.bias",
-	RoleVProj: "v_proj", RoleVProjBias: "v_proj.bias",
-	RoleVAttnNorm: "v_attn_norm", RoleVAttnNormBias: "v_attn_norm.bias",
-	RoleVAttnQ: "v_attn_q", RoleVAttnK: "v_attn_k", RoleVAttnV: "v_attn_v", RoleVAttnOut: "v_attn_out",
-	RoleVAttnQBias: "v_attn_q.bias", RoleVAttnKBias: "v_attn_k.bias",
-	RoleVAttnVBias: "v_attn_v.bias", RoleVAttnOutBias: "v_attn_out.bias",
-	RoleVFFNNorm: "v_ffn_norm", RoleVFFNNormBias: "v_ffn_norm.bias",
-	RoleVFC1: "v_fc1", RoleVFC1Bias: "v_fc1.bias", RoleVFC2: "v_fc2", RoleVFC2Bias: "v_fc2.bias",
-	RoleVClassEmbd: "v_class_embd", RoleVPreNorm: "v_pre_norm",
-	RoleVPreNormBias: "v_pre_norm.bias",
-	RoleVProj2:       "v_proj2", RoleVProj2Bias: "v_proj2.bias",
-	RoleVProjNorm: "v_proj_norm", RoleVProjNormBias: "v_proj_norm.bias",
-	RoleVFFNGate: "v_ffn_gate", RoleVFFNGateBias: "v_ffn_gate.bias",
-	RoleTokenTypes: "token_types", RolePosEmbd: "position_embd",
-	RoleTokenEmbdNorm: "token_embd_norm", RoleTokenEmbdNormBias: "token_embd_norm.bias",
-	RoleEmbdDense1: "embd_dense1", RoleEmbdDense2: "embd_dense2",
-	RoleScorerNorm: "scorer_norm", RoleScorerNormBias: "scorer_norm.bias",
-	RoleScorer: "scorer", RoleScorerBias: "scorer.bias",
-	RoleScorerOut: "scorer_out", RoleScorerOutBias: "scorer_out.bias",
-	RoleAttnOutNorm: "attn_out_norm", RoleAttnOutNormBias: "attn_out_norm.bias",
-	RoleLayerOutNorm: "layer_out_norm", RoleLayerOutNormBias: "layer_out_norm.bias",
-	RoleFFNUpBias: "ffn_up.bias", RoleFFNDownBias: "ffn_down.bias",
-	RoleAttnNormBias: "attn_norm.bias", RoleFFNNormBias: "ffn_norm.bias",
-	RoleOutputNormBias: "output_norm.bias", RoleOutputBias: "output.bias",
-	RoleAttnQKVBias: "attn_qkv.bias",
-	RoleAttnNorm2:   "attn_norm_2", RoleAttnNorm2Bias: "attn_norm_2.bias",
-	RoleNextnEHProj: "nextn.eh_proj", RoleNextnENorm: "nextn.enorm", RoleNextnHNorm: "nextn.hnorm",
-	RoleNextnHeadNorm: "nextn.shared_head_norm", RoleNextnHead: "nextn.shared_head_head",
-	RoleNextnEmbd: "nextn.embed_tokens",
-	RoleVRsQuery:  "v_rs_query", RoleVRsKV: "v_rs_kv",
-	RoleVRsLnQ: "v_rs_ln_q", RoleVRsLnQBias: "v_rs_ln_q.bias",
-	RoleVRsLnKV: "v_rs_ln_kv", RoleVRsLnKVBias: "v_rs_ln_kv.bias",
-	RoleVRsQ: "v_rs_q", RoleVRsQBias: "v_rs_q.bias", RoleVRsK: "v_rs_k", RoleVRsKBias: "v_rs_k.bias",
-	RoleVRsV: "v_rs_v", RoleVRsVBias: "v_rs_v.bias", RoleVRsOut: "v_rs_out", RoleVRsOutBias: "v_rs_out.bias",
-	RoleVRsLnPost: "v_rs_ln_post", RoleVRsLnPostBias: "v_rs_ln_post.bias", RoleVRsProj: "v_rs_proj",
-	RoleSSMD: "ssm_d", RoleSSMConvBias: "ssm_conv1d.bias",
-	RoleSCB: "shortconv.in_proj.b", RoleSCC: "shortconv.in_proj.c", RoleSCX: "shortconv.in_proj.x",
-	RoleSSMXDt: "ssm_x.dt", RoleSSMXB: "ssm_x.b", RoleSSMXC: "ssm_x.c", RoleSSMDtProj: "ssm_dt",
-	RoleSSMDtNorm: "ssm_dt_norm", RoleSSMBNorm: "ssm_b_norm", RoleSSMCNorm: "ssm_c_norm",
+// coreRoleName is for diagnostics only. Nothing resolves a tensor through it.
+func coreRoleName(r Role) (string, bool) {
+	switch r {
+	case RoleTokenEmbd:
+		return "token_embd", true
+	case RoleOutput:
+		return "output", true
+	case RoleOutputNorm:
+		return "output_norm", true
+	case RoleAttnNorm:
+		return "attn_norm", true
+	case RoleAttnQ:
+		return "attn_q", true
+	case RoleAttnK:
+		return "attn_k", true
+	case RoleAttnV:
+		return "attn_v", true
+	case RoleAttnOut:
+		return "attn_out", true
+	case RoleAttnQKV:
+		return "attn_qkv", true
+	case RoleAttnQBias:
+		return "attn_q.bias", true
+	case RoleAttnKBias:
+		return "attn_k.bias", true
+	case RoleAttnVBias:
+		return "attn_v.bias", true
+	case RoleAttnOutBias:
+		return "attn_out.bias", true
+	case RoleAttnQNorm:
+		return "attn_q_norm", true
+	case RoleAttnKNorm:
+		return "attn_k_norm", true
+	case RolePostAttnNorm:
+		return "post_attn_norm", true
+	case RoleFFNNorm:
+		return "ffn_norm", true
+	case RoleFFNGate:
+		return "ffn_gate", true
+	case RoleFFNUp:
+		return "ffn_up", true
+	case RoleFFNDown:
+		return "ffn_down", true
+	case RolePostFFNNorm:
+		return "post_ffn_norm", true
+	case RoleRouter:
+		return "router", true
+	case RoleExpGateBank:
+		return "exp_gate_bank", true
+	case RoleExpUpBank:
+		return "exp_up_bank", true
+	case RoleExpDownBank:
+		return "exp_down_bank", true
+	case RoleExpGate:
+		return "exp_gate", true
+	case RoleExpUp:
+		return "exp_up", true
+	case RoleExpDown:
+		return "exp_down", true
+	case RoleAttnGate:
+		return "attn_gate", true
+	case RoleShRouter:
+		return "sh_router", true
+	case RoleAttnSinks:
+		return "attn_sinks", true
+	case RoleRouterBias:
+		return "router.bias", true
+	case RoleExpGateBias:
+		return "exp_gate_bank.bias", true
+	case RoleExpUpBias:
+		return "exp_up_bank.bias", true
+	case RoleExpDownBias:
+		return "exp_down_bank.bias", true
+	case RoleShExpGate:
+		return "sh_exp_gate", true
+	case RoleShExpUp:
+		return "sh_exp_up", true
+	case RoleShExpDown:
+		return "sh_exp_down", true
+	case RoleSSMBA:
+		return "ssm_ba", true
+	case RoleSSMConv1d:
+		return "ssm_conv1d", true
+	case RoleSSMA:
+		return "ssm_a", true
+	case RoleSSMDtBias:
+		return "ssm_dt_bias", true
+	case RoleSSMNorm:
+		return "ssm_norm", true
+	case RoleSSMOut:
+		return "ssm_out", true
+	case RoleSSMFA:
+		return "ssm_f_a", true
+	case RoleSSMFB:
+		return "ssm_f_b", true
+	case RoleSSMGA:
+		return "ssm_g_a", true
+	case RoleSSMGB:
+		return "ssm_g_b", true
+	case RoleAttnQA:
+		return "attn_q_a", true
+	case RoleAttnQANorm:
+		return "attn_q_a_norm", true
+	case RoleAttnQB:
+		return "attn_q_b", true
+	case RoleAttnKVA:
+		return "attn_kv_a", true
+	case RoleAttnKVANorm:
+		return "attn_kv_a_norm", true
+	case RoleAttnKB:
+		return "attn_k_b", true
+	case RoleAttnVB:
+		return "attn_v_b", true
+	case RoleAttnKVB:
+		return "attn_kv_b", true
+	case RoleExpProbsB:
+		return "exp_probs_b", true
+	case RoleRopeFactorsLong:
+		return "rope_factors_long", true
+	case RoleRopeFactorsShort:
+		return "rope_factors_short", true
+	case RoleRopeFreqs:
+		return "rope_freqs", true
+	case RoleVPatchEmbd:
+		return "v_patch_embd", true
+	case RoleVPatchBias:
+		return "v_patch_bias", true
+	case RoleVPosEmbd:
+		return "v_pos_embd", true
+	case RoleVPostNorm:
+		return "v_post_norm", true
+	case RoleVPostNormBias:
+		return "v_post_norm.bias", true
+	case RoleVProj:
+		return "v_proj", true
+	case RoleVProjBias:
+		return "v_proj.bias", true
+	case RoleVAttnNorm:
+		return "v_attn_norm", true
+	case RoleVAttnNormBias:
+		return "v_attn_norm.bias", true
+	case RoleVAttnQ:
+		return "v_attn_q", true
+	case RoleVAttnK:
+		return "v_attn_k", true
+	case RoleVAttnV:
+		return "v_attn_v", true
+	case RoleVAttnOut:
+		return "v_attn_out", true
+	case RoleVAttnQBias:
+		return "v_attn_q.bias", true
+	case RoleVAttnKBias:
+		return "v_attn_k.bias", true
+	case RoleVAttnVBias:
+		return "v_attn_v.bias", true
+	case RoleVAttnOutBias:
+		return "v_attn_out.bias", true
+	case RoleVFFNNorm:
+		return "v_ffn_norm", true
+	case RoleVFFNNormBias:
+		return "v_ffn_norm.bias", true
+	case RoleVFC1:
+		return "v_fc1", true
+	case RoleVFC1Bias:
+		return "v_fc1.bias", true
+	case RoleVFC2:
+		return "v_fc2", true
+	case RoleVFC2Bias:
+		return "v_fc2.bias", true
+	case RoleVClassEmbd:
+		return "v_class_embd", true
+	case RoleVPreNorm:
+		return "v_pre_norm", true
+	case RoleVPreNormBias:
+		return "v_pre_norm.bias", true
+	case RoleVProj2:
+		return "v_proj2", true
+	case RoleVProj2Bias:
+		return "v_proj2.bias", true
+	case RoleVProjNorm:
+		return "v_proj_norm", true
+	case RoleVProjNormBias:
+		return "v_proj_norm.bias", true
+	case RoleVFFNGate:
+		return "v_ffn_gate", true
+	case RoleVFFNGateBias:
+		return "v_ffn_gate.bias", true
+	case RoleTokenTypes:
+		return "token_types", true
+	case RolePosEmbd:
+		return "position_embd", true
+	case RoleTokenEmbdNorm:
+		return "token_embd_norm", true
+	case RoleTokenEmbdNormBias:
+		return "token_embd_norm.bias", true
+	case RoleEmbdDense1:
+		return "embd_dense1", true
+	case RoleEmbdDense2:
+		return "embd_dense2", true
+	case RoleScorerNorm:
+		return "scorer_norm", true
+	case RoleScorerNormBias:
+		return "scorer_norm.bias", true
+	case RoleScorer:
+		return "scorer", true
+	case RoleScorerBias:
+		return "scorer.bias", true
+	case RoleScorerOut:
+		return "scorer_out", true
+	case RoleScorerOutBias:
+		return "scorer_out.bias", true
+	case RoleAttnOutNorm:
+		return "attn_out_norm", true
+	case RoleAttnOutNormBias:
+		return "attn_out_norm.bias", true
+	case RoleLayerOutNorm:
+		return "layer_out_norm", true
+	case RoleLayerOutNormBias:
+		return "layer_out_norm.bias", true
+	case RoleFFNUpBias:
+		return "ffn_up.bias", true
+	case RoleFFNDownBias:
+		return "ffn_down.bias", true
+	case RoleAttnNormBias:
+		return "attn_norm.bias", true
+	case RoleFFNNormBias:
+		return "ffn_norm.bias", true
+	case RoleOutputNormBias:
+		return "output_norm.bias", true
+	case RoleOutputBias:
+		return "output.bias", true
+	case RoleAttnQKVBias:
+		return "attn_qkv.bias", true
+	case RoleAttnNorm2:
+		return "attn_norm_2", true
+	case RoleAttnNorm2Bias:
+		return "attn_norm_2.bias", true
+	case RoleNextnEHProj:
+		return "nextn.eh_proj", true
+	case RoleNextnENorm:
+		return "nextn.enorm", true
+	case RoleNextnHNorm:
+		return "nextn.hnorm", true
+	case RoleNextnHeadNorm:
+		return "nextn.shared_head_norm", true
+	case RoleNextnHead:
+		return "nextn.shared_head_head", true
+	case RoleNextnEmbd:
+		return "nextn.embed_tokens", true
+	case RoleVRsQuery:
+		return "v_rs_query", true
+	case RoleVRsKV:
+		return "v_rs_kv", true
+	case RoleVRsLnQ:
+		return "v_rs_ln_q", true
+	case RoleVRsLnQBias:
+		return "v_rs_ln_q.bias", true
+	case RoleVRsLnKV:
+		return "v_rs_ln_kv", true
+	case RoleVRsLnKVBias:
+		return "v_rs_ln_kv.bias", true
+	case RoleVRsQ:
+		return "v_rs_q", true
+	case RoleVRsQBias:
+		return "v_rs_q.bias", true
+	case RoleVRsK:
+		return "v_rs_k", true
+	case RoleVRsKBias:
+		return "v_rs_k.bias", true
+	case RoleVRsV:
+		return "v_rs_v", true
+	case RoleVRsVBias:
+		return "v_rs_v.bias", true
+	case RoleVRsOut:
+		return "v_rs_out", true
+	case RoleVRsOutBias:
+		return "v_rs_out.bias", true
+	case RoleVRsLnPost:
+		return "v_rs_ln_post", true
+	case RoleVRsLnPostBias:
+		return "v_rs_ln_post.bias", true
+	case RoleVRsProj:
+		return "v_rs_proj", true
+	case RoleSSMD:
+		return "ssm_d", true
+	case RoleSSMConvBias:
+		return "ssm_conv1d.bias", true
+	case RoleSCB:
+		return "shortconv.in_proj.b", true
+	case RoleSCC:
+		return "shortconv.in_proj.c", true
+	case RoleSCX:
+		return "shortconv.in_proj.x", true
+	case RoleSSMXDt:
+		return "ssm_x.dt", true
+	case RoleSSMXB:
+		return "ssm_x.b", true
+	case RoleSSMXC:
+		return "ssm_x.c", true
+	case RoleSSMDtProj:
+		return "ssm_dt", true
+	case RoleSSMDtNorm:
+		return "ssm_dt_norm", true
+	case RoleSSMBNorm:
+		return "ssm_b_norm", true
+	case RoleSSMCNorm:
+		return "ssm_c_norm", true
+	}
+	return "", false
 }
 
 func (r Role) String() string {
-	if s, ok := roleNames[r]; ok {
+	if s, ok := roleName(r); ok {
 		return s
 	}
 	return "role(" + itoa(uint64(r)) + ")"
 }
 
 // Valid reports whether r is a role this format defines.
-func (r Role) Valid() bool { _, ok := roleNames[r]; return ok }
+func (r Role) Valid() bool { _, ok := roleName(r); return ok }
+
+func roleName(r Role) (string, bool) {
+	if s, ok := coreRoleName(r); ok {
+		return s, true
+	}
+	for _, group := range roleGroups() {
+		if s, ok := group(r); ok {
+			return s, true
+		}
+	}
+	return "", false
+}
+
+// roleGroups are the groups of roles beside the core ones. A code named by
+// two groups would read one tensor as the other; TestRoleCodesAreUnique
+// walks every code.
+func roleGroups() []func(Role) (string, bool) {
+	return []func(Role) (string, bool){
+		bitnetRoleName, visionRoleName, moe2RoleName, flagshipRoleName,
+		decisionRoleName, audioRoleName, visionFamRoleName,
+	}
+}
 
 func itoa(v uint64) string {
 	if v == 0 {

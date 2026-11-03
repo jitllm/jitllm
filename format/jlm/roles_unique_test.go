@@ -21,13 +21,26 @@ var schemaSrc string
 // lookups succeed. A duplicate map key catches it only for named roles.
 func TestRoleCodesAreUnique(t *testing.T) {
 	seen := map[Role]string{}
-	for r, n := range roleNames {
-		if prev, dup := seen[r]; dup {
-			t.Errorf("role code %d is both %q and %q", r, prev, n)
+	for c := 0; c <= 0xffff; c++ {
+		r := Role(c)
+		var names []string
+		if n, ok := coreRoleName(r); ok {
+			names = append(names, n)
 		}
-		seen[r] = n
+		for _, group := range roleGroups() {
+			if n, ok := group(r); ok {
+				names = append(names, n)
+			}
+		}
+		if len(names) > 1 {
+			t.Errorf("role code %d is named by two groups: %q", r, names)
+		}
+		if len(names) == 0 {
+			continue
+		}
+		seen[r] = names[0]
 		if r == RoleNone {
-			t.Errorf("%q uses the zero code, which means \"no role\"", n)
+			t.Errorf("%q uses the zero code, which means \"no role\"", names[0])
 		}
 	}
 	if len(seen) < 40 {
@@ -43,9 +56,14 @@ func TestRoleCodesAreUnique(t *testing.T) {
 // identifier: the linear block reads RoleAttnQKV and RoleAttnGate (see
 // convert/roles.go), these two never got a name, and reusing either code
 // later would make an old container resolve to the wrong graph node.
-var reservedRoles = map[Role]string{
-	RoleSSMInProj:  "the linear block reads RoleAttnQKV",
-	RoleSSMOutGate: "the linear block reads RoleAttnGate",
+func reservedRole(r Role) (string, bool) {
+	switch r {
+	case RoleSSMInProj:
+		return "the linear block reads RoleAttnQKV", true
+	case RoleSSMOutGate:
+		return "the linear block reads RoleAttnGate", true
+	}
+	return "", false
 }
 
 // TestEveryDeclaredRoleIsNamedOrReserved reads the schema's own constants and
@@ -71,15 +89,15 @@ func TestEveryDeclaredRoleIsNamedOrReserved(t *testing.T) {
 		if r == RoleNone {
 			continue
 		}
-		_, named := roleNames[r]
-		why, reserved := reservedRoles[r]
+		_, named := roleName(r)
+		why, reserved := reservedRole(r)
 		switch {
 		case named && reserved:
 			t.Errorf("%s (%d) is both named %q and reserved (%s) -- pick one",
-				m[1], code, roleNames[r], why)
+				m[1], code, r, why)
 		case named:
 			if !r.Valid() {
-				t.Errorf("%s (%d) is named %q and Valid() says otherwise", m[1], code, roleNames[r])
+				t.Errorf("%s (%d) is named %q and Valid() says otherwise", m[1], code, r)
 			}
 		case reserved:
 			unnamed++
@@ -88,7 +106,7 @@ func TestEveryDeclaredRoleIsNamedOrReserved(t *testing.T) {
 					m[1], code, why)
 			}
 		default:
-			t.Errorf("%s (%d) is declared, unnamed and not in reservedRoles -- Valid() refuses it, "+
+			t.Errorf("%s (%d) is declared, unnamed and not in reservedRole -- Valid() refuses it, "+
 				"so jlm.write and jlm.codec would reject any container carrying one. Name it or "+
 				"reserve it by name.", m[1], code)
 		}
