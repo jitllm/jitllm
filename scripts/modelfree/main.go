@@ -233,7 +233,9 @@ func goTest(name, dir, out string, args []string) (result, bool) {
 	return res, !res.exitFail && !res.buildFailed && sc.Err() == nil
 }
 
-var space = regexp.MustCompile(`\s+`)
+func space() *regexp.Regexp {
+	return regexp.MustCompile(`\s+`)
+}
 
 // reason is the last line a test printed that is not the harness's own.
 func reason(lines []string) string {
@@ -242,7 +244,7 @@ func reason(lines []string) string {
 		if l == "" || strings.HasPrefix(l, "=== ") || strings.HasPrefix(l, "--- ") {
 			continue
 		}
-		l = space.ReplaceAllString(l, " ")
+		l = space().ReplaceAllString(l, " ")
 		if len(l) > 220 {
 			l = l[:220]
 		}
