@@ -655,6 +655,9 @@ type Attrs struct {
 	// blocks rank, TopK of them kept, and the row's incomplete block is kept
 	// beside them; Local is 0.
 	Pooled bool
+	// Firsts scores OpSelect's blocks by their first attended position's
+	// score in place of their best; not with Pooled.
+	Firsts bool
 	// Inverse turns OpRope's elements back: by the negated angle.
 	Inverse bool
 	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
