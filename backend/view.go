@@ -22,13 +22,13 @@ func View(b Buf, off, n int) (Buf, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &vkBuf{b: w}, nil
+		return &vkBuf{b: w, ctr: v.ctr}, nil
 	case *mtlBuf:
 		w, err := v.b.View(off, n)
 		if err != nil {
 			return nil, err
 		}
-		return &mtlBuf{b: w, c: v.c}, nil
+		return &mtlBuf{b: w, c: v.c, ctr: v.ctr}, nil
 	}
 	return nil, fmt.Errorf("backend: a %T bound at an offset: views are not implemented on its backend", b)
 }

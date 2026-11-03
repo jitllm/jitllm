@@ -6,14 +6,6 @@ import (
 	"github.com/jitllm/jitllm/backend/ffi"
 )
 
-// What ptxas allocated for a loaded kernel, read back from the driver: the
-// per-kernel facts the register report and its gate are made of.
-var (
-	cuFuncGetAttribute                          func(*int32, int32, CUfunc) CUresult
-	cuFuncSetAttribute                          func(CUfunc, int32, int32) CUresult
-	cuOccupancyMaxActiveBlocksPerMultiprocessor func(*int32, CUfunc, int32, uint64) CUresult
-)
-
 // CUfunction_attribute values (cuda.h).
 const (
 	funcMaxThreads = 0 // CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK
@@ -23,15 +15,15 @@ const (
 	funcMaxDynamic = 8 // CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES
 )
 
-func loadFuncAttrs(lib *ffi.Lib) {
+func (drv *Driver) loadFuncAttrs(lib *ffi.Lib) {
 	if lib.Has("cuFuncGetAttribute") {
-		cuFuncGetAttribute = ffi.Fn3[CUresult, *int32, int32, CUfunc](lib, "cuFuncGetAttribute")
+		drv.cuFuncGetAttribute = ffi.Fn3[CUresult, *int32, int32, CUfunc](lib, "cuFuncGetAttribute")
 	}
 	if lib.Has("cuFuncSetAttribute") {
-		cuFuncSetAttribute = ffi.Fn3[CUresult, CUfunc, int32, int32](lib, "cuFuncSetAttribute")
+		drv.cuFuncSetAttribute = ffi.Fn3[CUresult, CUfunc, int32, int32](lib, "cuFuncSetAttribute")
 	}
 	if lib.Has("cuOccupancyMaxActiveBlocksPerMultiprocessor") {
-		cuOccupancyMaxActiveBlocksPerMultiprocessor = ffi.Fn4[CUresult, *int32, CUfunc, int32, uint64](
+		drv.cuOccupancyMaxActiveBlocksPerMultiprocessor = ffi.Fn4[CUresult, *int32, CUfunc, int32, uint64](
 			lib, "cuOccupancyMaxActiveBlocksPerMultiprocessor")
 	}
 }
@@ -54,21 +46,21 @@ type Attrs struct {
 // a driver that does not export cuFuncGetAttribute. It is a driver call and
 // runs on the device's owner thread, as every other one does.
 func (m *Module) Attrs(block int) (a Attrs, ok bool) {
-	if cuFuncGetAttribute == nil {
+	if m.drv.cuFuncGetAttribute == nil {
 		return a, false
 	}
 	get := func(attr int32) int {
 		var v int32
-		if cuFuncGetAttribute(&v, attr, m.f) != 0 {
+		if m.drv.cuFuncGetAttribute(&v, attr, m.f) != 0 {
 			return -1
 		}
 		return int(v)
 	}
 	a.Regs, a.Local = get(funcNumRegs), get(funcLocal)
 	a.Shared, a.MaxThreads = get(funcShared), get(funcMaxThreads)
-	if cuOccupancyMaxActiveBlocksPerMultiprocessor != nil && block > 0 {
+	if m.drv.cuOccupancyMaxActiveBlocksPerMultiprocessor != nil && block > 0 {
 		var n int32
-		if cuOccupancyMaxActiveBlocksPerMultiprocessor(&n, m.f, int32(block), uint64(m.dynShared)) == 0 {
+		if m.drv.cuOccupancyMaxActiveBlocksPerMultiprocessor(&n, m.f, int32(block), uint64(m.dynShared)) == 0 {
 			a.Blocks = int(n)
 		}
 	}
@@ -78,11 +70,11 @@ func (m *Module) Attrs(block int) (a Attrs, ok bool) {
 // MaxThreadsPerSM is CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR, 0
 // when the driver would not say: the denominator of an occupancy.
 func (d *Device) MaxThreadsPerSM() int {
-	if cuDeviceGetAttribute == nil {
+	if d.drv.cuDeviceGetAttribute == nil {
 		return 0
 	}
 	var v int32
-	if cuDeviceGetAttribute(&v, attrMaxTPM, d.dev) != 0 {
+	if d.drv.cuDeviceGetAttribute(&v, attrMaxTPM, d.dev) != 0 {
 		return 0
 	}
 	return int(v)
@@ -95,10 +87,10 @@ func (d *Device) MaxThreadsPerSM() int {
 // (CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN), and the error
 // says so.
 func (m *Module) SetDynamicShared(n int) error {
-	if cuFuncSetAttribute == nil {
+	if m.drv.cuFuncSetAttribute == nil {
 		return fmt.Errorf("cuda: this driver does not export cuFuncSetAttribute, so a kernel cannot ask for %d bytes of shared memory", n)
 	}
-	if err := call(cuFuncSetAttribute(m.f, funcMaxDynamic, int32(n)), "cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)"); err != nil {
+	if err := m.drv.call(m.drv.cuFuncSetAttribute(m.f, funcMaxDynamic, int32(n)), "cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)"); err != nil {
 		return fmt.Errorf("%w: %d bytes of shared memory a workgroup", err, n)
 	}
 	m.dynShared = n

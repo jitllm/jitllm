@@ -2,7 +2,6 @@ package cuda
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -16,6 +15,7 @@ import (
 
 // Device is an initialised CUDA context on one GPU.
 type Device struct {
+	drv *Driver
 	dev CUdevice
 	ctx CUctx
 	// ord is the CUDA ordinal this context was opened on, and name is what
@@ -81,19 +81,16 @@ const (
 // Count is how many CUDA devices this driver can see. It needs cuInit only,
 // creates no context and does not lock the caller's OS thread, so it is safe
 // for enumeration from any goroutine.
-func Count() (int, error) {
-	if err := loadCUDA(); err != nil {
+func (drv *Driver) Count() (int, error) {
+	if err := drv.call(drv.cuInit(0), "cuInit"); err != nil {
 		return 0, err
 	}
-	if err := call(cuInit(0), "cuInit"); err != nil {
-		return 0, err
-	}
-	return count()
+	return drv.count()
 }
 
-func count() (int, error) {
+func (drv *Driver) count() (int, error) {
 	var n int32
-	if err := call(cuDeviceGetCount(&n), "cuDeviceGetCount"); err != nil {
+	if err := drv.call(drv.cuDeviceGetCount(&n), "cuDeviceGetCount"); err != nil {
 		return 0, err
 	}
 	return int(n), nil
@@ -101,7 +98,7 @@ func count() (int, error) {
 
 // Open initialises the driver and creates a context on device 0; it is
 // OpenDevice(0).
-func Open() (*Device, error) { return OpenDevice(0) }
+func (drv *Driver) Open() (*Device, error) { return drv.OpenDevice(0) }
 
 // OpenDevice initialises the driver and creates a context on CUDA device ord.
 // An ordinal past cuDeviceGetCount is an error naming the count, never a
@@ -112,9 +109,9 @@ func Open() (*Device, error) { return OpenDevice(0) }
 // migrated goroutine fails with CUDA_ERROR_INVALID_CONTEXT. One owner
 // goroutine per device, each holding its own context current, so nothing here
 // pushes and pops contexts per call.
-func OpenDevice(ord int) (*Device, error) {
+func (drv *Driver) OpenDevice(ord int) (*Device, error) {
 	runtime.LockOSThread()
-	d, err := openDevice(ord)
+	d, err := drv.openDevice(ord)
 	if err != nil {
 		// The error path must unlock: a goroutine that exits locked has its
 		// OS thread destroyed with a raw exit that skips glibc teardown, which
@@ -125,14 +122,11 @@ func OpenDevice(ord int) (*Device, error) {
 	return d, nil
 }
 
-func openDevice(ord int) (*Device, error) {
-	if err := loadCUDA(); err != nil {
+func (drv *Driver) openDevice(ord int) (*Device, error) {
+	if err := drv.call(drv.cuInit(0), "cuInit"); err != nil {
 		return nil, err
 	}
-	if err := call(cuInit(0), "cuInit"); err != nil {
-		return nil, err
-	}
-	n, err := count()
+	n, err := drv.count()
 	if err != nil {
 		return nil, err
 	}
@@ -143,56 +137,56 @@ func openDevice(ord int) (*Device, error) {
 		return nil, fmt.Errorf("cuda: device %d was asked for, and this driver reports %d device(s), ordinals 0..%d",
 			ord, n, n-1)
 	}
-	d := &Device{ord: ord}
-	if err := call(cuDeviceGet(&d.dev, int32(ord)), "cuDeviceGet"); err != nil {
+	d := &Device{drv: drv, ord: ord}
+	if err := drv.call(drv.cuDeviceGet(&d.dev, int32(ord)), "cuDeviceGet"); err != nil {
 		return nil, err
 	}
-	if err := call(cuCtxCreate(&d.ctx, 0, d.dev), "cuCtxCreate"); err != nil {
+	if err := drv.call(drv.cuCtxCreate(&d.ctx, 0, d.dev), "cuCtxCreate"); err != nil {
 		return nil, err
 	}
-	d.name = deviceName(d.dev, ord)
-	d.uuid, d.uuidOK = deviceUUID(d.dev)
+	d.name = drv.deviceName(d.dev, ord)
+	d.uuid, d.uuidOK = drv.deviceUUID(d.dev)
 	d.Target = "sm_86"
-	if cuDeviceGetAttribute != nil {
+	if drv.cuDeviceGetAttribute != nil {
 		var maj, min int32
-		if cuDeviceGetAttribute(&maj, attrCCMajor, d.dev) == 0 &&
-			cuDeviceGetAttribute(&min, attrCCMinor, d.dev) == 0 && maj > 0 {
+		if drv.cuDeviceGetAttribute(&maj, attrCCMajor, d.dev) == 0 &&
+			drv.cuDeviceGetAttribute(&min, attrCCMinor, d.dev) == 0 && maj > 0 {
 			d.Target = fmt.Sprintf("sm_%d%d", maj, min)
 		}
 	}
 	// Threads the card can hold resident, asked rather than guessed: the
 	// attention split (tier.accSplitFor) needs a target thread count, and it
 	// varies by an order of magnitude across cards.
-	if cuDeviceGetAttribute != nil {
+	if drv.cuDeviceGetAttribute != nil {
 		var sm, tpm int32
-		if cuDeviceGetAttribute(&sm, attrSMCount, d.dev) == 0 &&
-			cuDeviceGetAttribute(&tpm, attrMaxTPM, d.dev) == 0 && sm > 0 && tpm > 0 {
+		if drv.cuDeviceGetAttribute(&sm, attrSMCount, d.dev) == 0 &&
+			drv.cuDeviceGetAttribute(&tpm, attrMaxTPM, d.dev) == 0 && sm > 0 && tpm > 0 {
 			d.slots = int(sm) * int(tpm)
 			var regs int32
-			if cuDeviceGetAttribute(&regs, attrRegsSM, d.dev) == 0 && regs > 0 {
+			if drv.cuDeviceGetAttribute(&regs, attrRegsSM, d.dev) == 0 && regs > 0 {
 				d.threadRegs = int(regs) / int(tpm)
 			}
 			var shm int32
-			if cuDeviceGetAttribute(&shm, attrShmSM, d.dev) == 0 && shm > 0 {
+			if drv.cuDeviceGetAttribute(&shm, attrShmSM, d.dev) == 0 && shm > 0 {
 				d.sharedSM = int(shm)
 			}
 		}
 		d.sms = int(sm)
 		var coop int32
-		d.coop = cuLaunchCooperativeKernel != nil && cuOccupancy != nil &&
-			cuDeviceGetAttribute(&coop, attrCoopLaunch, d.dev) == 0 && coop != 0
+		d.coop = drv.cuLaunchCooperativeKernel != nil && drv.cuOccupancy != nil &&
+			drv.cuDeviceGetAttribute(&coop, attrCoopLaunch, d.dev) == 0 && coop != 0
 		var grid int32
-		if cuDeviceGetAttribute(&grid, attrMaxGrid, d.dev) == 0 && grid > 0 {
+		if drv.cuDeviceGetAttribute(&grid, attrMaxGrid, d.dev) == 0 && grid > 0 {
 			d.maxGrid = int(grid)
 		}
 		var l2 int32
-		if cuDeviceGetAttribute(&l2, attrL2, d.dev) == 0 && l2 > 0 {
+		if drv.cuDeviceGetAttribute(&l2, attrL2, d.dev) == 0 && l2 > 0 {
 			d.l2 = int(l2)
 		}
 		var mapHost, reg, integ int32
-		d.mapHost = cuDeviceGetAttribute(&mapHost, attrCanMapHost, d.dev) == 0 && mapHost != 0 &&
-			cuDeviceGetAttribute(&reg, attrHostRegister, d.dev) == 0 && reg != 0
-		d.integrated = cuDeviceGetAttribute(&integ, attrIntegrated, d.dev) == 0 && integ != 0
+		d.mapHost = drv.cuDeviceGetAttribute(&mapHost, attrCanMapHost, d.dev) == 0 && mapHost != 0 &&
+			drv.cuDeviceGetAttribute(&reg, attrHostRegister, d.dev) == 0 && reg != 0
+		d.integrated = drv.cuDeviceGetAttribute(&integ, attrIntegrated, d.dev) == 0 && integ != 0
 	}
 	return d, nil
 }
@@ -225,6 +219,9 @@ func (d *Device) L2Bytes() int { return d.l2 }
 // Ordinal is the CUDA device this context was opened on.
 func (d *Device) Ordinal() int { return d.ord }
 
+// Driver is the binding the device was opened through.
+func (d *Device) Driver() *Driver { return d.drv }
+
 // Name is the hardware, from cuDeviceGetName (a marketing name such as
 // "NVIDIA GeForce RTX ..."), not "sm_86".
 func (d *Device) Name() string { return d.name }
@@ -240,24 +237,21 @@ func (d *Device) UUID() ([UUIDSize]byte, bool) { return d.uuid, d.uuidOK }
 
 // DeviceUUID reads a device's identity without creating a context on it; it
 // needs cuInit and nothing else.
-func DeviceUUID(ord int) ([UUIDSize]byte, bool) {
+func (drv *Driver) DeviceUUID(ord int) ([UUIDSize]byte, bool) {
 	var zero [UUIDSize]byte
-	if err := loadCUDA(); err != nil {
-		return zero, false
-	}
-	if err := call(cuInit(0), "cuInit"); err != nil {
+	if err := drv.call(drv.cuInit(0), "cuInit"); err != nil {
 		return zero, false
 	}
 	var dev CUdevice
-	if call(cuDeviceGet(&dev, int32(ord)), "cuDeviceGet") != nil {
+	if drv.call(drv.cuDeviceGet(&dev, int32(ord)), "cuDeviceGet") != nil {
 		return zero, false
 	}
-	return deviceUUID(dev)
+	return drv.deviceUUID(dev)
 }
 
-func deviceUUID(dev CUdevice) ([UUIDSize]byte, bool) {
+func (drv *Driver) deviceUUID(dev CUdevice) ([UUIDSize]byte, bool) {
 	var out [UUIDSize]byte
-	for _, c := range uuidCalls() {
+	for _, c := range drv.uuidCalls() {
 		var buf [UUIDSize]byte
 		if c.fn(&buf[0], dev) == 0 {
 			return buf, true
@@ -271,13 +265,13 @@ type uuidCall struct {
 	fn   func(*byte, CUdevice) CUresult
 }
 
-func uuidCalls() []uuidCall {
+func (drv *Driver) uuidCalls() []uuidCall {
 	var out []uuidCall
-	if cuDeviceGetUuidV2 != nil {
-		out = append(out, uuidCall{"cuDeviceGetUuid_v2", cuDeviceGetUuidV2})
+	if drv.cuDeviceGetUuidV2 != nil {
+		out = append(out, uuidCall{"cuDeviceGetUuid_v2", drv.cuDeviceGetUuidV2})
 	}
-	if cuDeviceGetUuid != nil {
-		out = append(out, uuidCall{"cuDeviceGetUuid", cuDeviceGetUuid})
+	if drv.cuDeviceGetUuid != nil {
+		out = append(out, uuidCall{"cuDeviceGetUuid", drv.cuDeviceGetUuid})
 	}
 	return out
 }
@@ -287,11 +281,8 @@ func uuidCalls() []uuidCall {
 //
 // cuDeviceGetUuid_v2 identifies a MIG instance and the v1 call the whole GPU,
 // so the report names which one answered.
-func UUIDSource() string {
-	if err := loadCUDA(); err != nil {
-		return "no CUDA driver: " + err.Error()
-	}
-	if c := uuidCalls(); len(c) > 0 {
+func (drv *Driver) UUIDSource() string {
+	if c := drv.uuidCalls(); len(c) > 0 {
 		return c[0].name
 	}
 	return "this CUDA driver exports neither cuDeviceGetUuid nor cuDeviceGetUuid_v2"
@@ -307,10 +298,10 @@ const nameLen = 256
 
 // deviceName asks the driver what the card is called, and falls back to
 // something distinguishable rather than the empty string.
-func deviceName(dev CUdevice, ord int) string {
-	if cuDeviceGetName != nil {
+func (drv *Driver) deviceName(dev CUdevice, ord int) string {
+	if drv.cuDeviceGetName != nil {
 		buf := make([]byte, nameLen)
-		if cuDeviceGetName(&buf[0], int32(len(buf)), dev) == 0 {
+		if drv.cuDeviceGetName(&buf[0], int32(len(buf)), dev) == 0 {
 			if i := bytes.IndexByte(buf, 0); i > 0 {
 				return string(buf[:i])
 			}
@@ -328,8 +319,8 @@ func (d *Device) Close() error {
 		return nil
 	}
 	var err error
-	if cuCtxDestroy != nil {
-		err = call(cuCtxDestroy(d.ctx), "cuCtxDestroy")
+	if d.drv.cuCtxDestroy != nil {
+		err = d.drv.call(d.drv.cuCtxDestroy(d.ctx), "cuCtxDestroy")
 	}
 	d.ctx = 0
 	// Open called LockOSThread; this is its matching unlock. The lock nests
@@ -348,7 +339,7 @@ func (d *Device) Mem() (free, total uint64, err error) {
 	if err = d.bind(); err != nil {
 		return 0, 0, err
 	}
-	err = call(cuMemGetInfo(&free, &total), "cuMemGetInfo")
+	err = d.drv.call(d.drv.cuMemGetInfo(&free, &total), "cuMemGetInfo")
 	return
 }
 
@@ -368,13 +359,14 @@ func (d *Device) Bind() error {
 	if d.ctx == 0 {
 		return fmt.Errorf("cuda: device #%d is closed", d.ord)
 	}
-	return call(cuCtxSetCurrent(d.ctx), "cuCtxSetCurrent")
+	return d.drv.call(d.drv.cuCtxSetCurrent(d.ctx), "cuCtxSetCurrent")
 }
 
 // Buffer is device memory, or host memory the device addresses (Import).
 type Buffer struct {
-	p CUdevptr
-	n uint64
+	drv *Driver
+	p   CUdevptr
+	n   uint64
 	// host is the registered host address of an imported buffer, nil for
 	// one cuMemAlloc made. Free unregisters it and never frees the pages.
 	host unsafe.Pointer
@@ -389,7 +381,7 @@ func (d *Device) Integrated() bool { return d.integrated }
 // because registration page-locks whole pages and a partial one would pin
 // bytes the caller does not own. 0 when the device cannot map host memory.
 func (d *Device) ImportAlign() int {
-	if !d.mapHost || cuMemHostRegister == nil {
+	if !d.mapHost || d.drv.cuMemHostRegister == nil {
 		return 0
 	}
 	return os.Getpagesize()
@@ -408,20 +400,20 @@ func (d *Device) Import(p unsafe.Pointer, n int) (*Buffer, error) {
 	if n <= 0 || uintptr(p)%uintptr(a) != 0 || n%a != 0 {
 		return nil, fmt.Errorf("cuda: importing %d bytes at %p: both must be %d-aligned", n, p, a)
 	}
-	if err := call(cuMemHostRegister(p, uint64(n), 1|2), "cuMemHostRegister"); err != nil {
+	if err := d.drv.call(d.drv.cuMemHostRegister(p, uint64(n), 1|2), "cuMemHostRegister"); err != nil {
 		return nil, err
 	}
-	b := &Buffer{n: uint64(n), host: p}
-	if err := call(cuMemHostGetDevicePointer(&b.p, p, 0), "cuMemHostGetDevicePointer"); err != nil {
-		cuMemHostUnregister(p)
+	b := &Buffer{drv: d.drv, n: uint64(n), host: p}
+	if err := d.drv.call(d.drv.cuMemHostGetDevicePointer(&b.p, p, 0), "cuMemHostGetDevicePointer"); err != nil {
+		d.drv.cuMemHostUnregister(p)
 		return nil, err
 	}
 	return b, nil
 }
 
 func (d *Device) Alloc(n int) (*Buffer, error) {
-	b := &Buffer{n: uint64(n)}
-	if err := call(cuMemAlloc(&b.p, b.n), "cuMemAlloc"); err != nil {
+	b := &Buffer{drv: d.drv, n: uint64(n)}
+	if err := d.drv.call(d.drv.cuMemAlloc(&b.p, b.n), "cuMemAlloc"); err != nil {
 		return nil, err
 	}
 	return b, nil
@@ -434,7 +426,7 @@ func (b *Buffer) View(off, n int) (*Buffer, error) {
 	if off < 0 || n <= 0 || uint64(off)+uint64(n) > b.n {
 		return nil, fmt.Errorf("cuda: a view of %d bytes from %d of a buffer of %d", n, off, b.n)
 	}
-	return &Buffer{p: b.p + CUdevptr(off), n: uint64(n), view: true}, nil
+	return &Buffer{drv: b.drv, p: b.p + CUdevptr(off), n: uint64(n), view: true}, nil
 }
 
 func (b *Buffer) Free() {
@@ -442,10 +434,10 @@ func (b *Buffer) Free() {
 		return
 	}
 	if b.host != nil {
-		cuMemHostUnregister(b.host)
+		b.drv.cuMemHostUnregister(b.host)
 		return
 	}
-	cuMemFree(b.p)
+	b.drv.cuMemFree(b.p)
 }
 
 // Arg is the address of the device pointer. cuLaunchKernel takes an array of
@@ -464,11 +456,11 @@ func (b *Buffer) WriteAt(off int, p unsafe.Pointer, n int) error {
 	if off < 0 || uint64(off)+uint64(n) > b.n {
 		return fmt.Errorf("cuda: writing %d bytes at offset %d of a %d-byte buffer", n, off, b.n)
 	}
-	return call(cuMemcpyHtoD(b.p+CUdevptr(off), p, uint64(n)), "cuMemcpyHtoD")
+	return b.drv.call(b.drv.cuMemcpyHtoD(b.p+CUdevptr(off), p, uint64(n)), "cuMemcpyHtoD")
 }
 
 func (b *Buffer) Read(p unsafe.Pointer, n int) error {
-	return call(cuMemcpyDtoH(p, b.p, uint64(n)), "cuMemcpyDtoH")
+	return b.drv.call(b.drv.cuMemcpyDtoH(p, b.p, uint64(n)), "cuMemcpyDtoH")
 }
 
 // HostAlloc is n bytes of page-locked host memory, portable to every context.
@@ -476,23 +468,23 @@ func (b *Buffer) Read(p unsafe.Pointer, n int) error {
 // driver; a pageable one is copied through the driver's own pinned bounce
 // buffer first. The memory is the driver's, outside the Go heap, and lives
 // until FreeHost.
-func HostAlloc(n int) ([]byte, error) {
+func (drv *Driver) HostAlloc(n int) ([]byte, error) {
 	if n <= 0 {
 		return nil, fmt.Errorf("cuda: page-locking %d bytes", n)
 	}
 	var p unsafe.Pointer
 	// CU_MEMHOSTALLOC_PORTABLE: pinned for every context, not only the
 	// current one, so any card's transfer reads it at full rate.
-	if err := call(cuMemHostAlloc(&p, uint64(n), 1), "cuMemHostAlloc"); err != nil {
+	if err := drv.call(drv.cuMemHostAlloc(&p, uint64(n), 1), "cuMemHostAlloc"); err != nil {
 		return nil, err
 	}
 	return unsafe.Slice((*byte)(p), n), nil
 }
 
 // FreeHost gives back memory HostAlloc returned.
-func FreeHost(b []byte) {
+func (drv *Driver) FreeHost(b []byte) {
 	if len(b) > 0 {
-		cuMemFreeHost(unsafe.Pointer(&b[0]))
+		drv.cuMemFreeHost(unsafe.Pointer(&b[0]))
 	}
 }
 
@@ -503,14 +495,15 @@ func (b *Buffer) Len() int { return int(b.n) }
 // on the legacy stream. It does not wait: a device-to-device copy is
 // asynchronous to the host, so a caller that needs the bytes landed follows it
 // with Sync. Ranges are the caller's to have checked.
-func CopyDtoD(dst *Buffer, dstOff int, src *Buffer, srcOff, n int) error {
-	return call(cuMemcpyDtoD(dst.p+CUdevptr(dstOff), src.p+CUdevptr(srcOff), uint64(n)), "cuMemcpyDtoD")
+func (drv *Driver) CopyDtoD(dst *Buffer, dstOff int, src *Buffer, srcOff, n int) error {
+	return drv.call(drv.cuMemcpyDtoD(dst.p+CUdevptr(dstOff), src.p+CUdevptr(srcOff), uint64(n)), "cuMemcpyDtoD")
 }
 
 // Module is loaded PTX.
 type Module struct {
-	m CUmodule
-	f CUfunc
+	drv *Driver
+	m   CUmodule
+	f   CUfunc
 	// args is the argument array cuLaunchKernel is handed, reused to avoid
 	// allocating per launch. Per-module mutable state is safe because every
 	// driver call runs on the one goroutine backend.cudaDev owns.
@@ -542,21 +535,21 @@ const maxArgs = 64
 // performance property.
 func (d *Device) Load(ptx, entry string) (*Module, error) {
 	src := append([]byte(ptx), 0)
-	m := &Module{maxGrid: d.maxGrid, sms: d.sms, devCoop: d.coop}
-	if err := call(cuModuleLoadData(&m.m, unsafe.Pointer(&src[0])), "cuModuleLoadData"); err != nil {
+	m := &Module{drv: d.drv, maxGrid: d.maxGrid, sms: d.sms, devCoop: d.coop}
+	if err := d.drv.call(d.drv.cuModuleLoadData(&m.m, unsafe.Pointer(&src[0])), "cuModuleLoadData"); err != nil {
 		return nil, err
 	}
 	// goffi does not marshal Go strings, so the entry name is NUL-terminated
 	// here.
 	name := append([]byte(entry), 0)
-	if err := call(cuModuleGetFunction(&m.f, m.m, &name[0]), "cuModuleGetFunction"); err != nil {
-		cuModuleUnload(m.m)
+	if err := d.drv.call(d.drv.cuModuleGetFunction(&m.f, m.m, &name[0]), "cuModuleGetFunction"); err != nil {
+		d.drv.cuModuleUnload(m.m)
 		return nil, err
 	}
 	return m, nil
 }
 
-func (m *Module) Unload() { cuModuleUnload(m.m) }
+func (m *Module) Unload() { m.drv.cuModuleUnload(m.m) }
 
 // Args hands back the module's own argument scratch, n entries wide, for a
 // caller that fills it with Buffer.Arg and passes it to LaunchArgs. It returns
@@ -608,24 +601,24 @@ func (m *Module) LaunchArgs(st CUstream, grid, block int, args []unsafe.Pointer)
 	if m.Coop {
 		// The driver refuses a cooperative grid it cannot hold resident
 		// (CUDA_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE) rather than launching it.
-		return call(cuLaunchCooperativeKernel(m.f, uint32(grid), 1, 1, uint32(block), 1, 1,
+		return m.drv.call(m.drv.cuLaunchCooperativeKernel(m.f, uint32(grid), 1, 1, uint32(block), 1, 1,
 			uint32(m.dynShared), st, unsafe.Pointer(&args[0])), "cuLaunchCooperativeKernel")
 	}
-	return call(cuLaunchKernel(m.f, uint32(grid), 1, 1, uint32(block), 1, 1,
+	return m.drv.call(m.drv.cuLaunchKernel(m.f, uint32(grid), 1, 1, uint32(block), 1, 1,
 		uint32(m.dynShared), st, unsafe.Pointer(&args[0]), nil), "cuLaunchKernel")
 }
 
 // Sync blocks until the device is idle.
-func Sync() error { return call(cuCtxSynchronize(), "cuCtxSynchronize") }
+func (drv *Driver) Sync() error { return drv.call(drv.cuCtxSynchronize(), "cuCtxSynchronize") }
 
-func call(r CUresult, what string) error {
+func (drv *Driver) call(r CUresult, what string) error {
 	if r == 0 {
 		return nil
 	}
 	if r == cudaErrorOutOfMemory {
-		return fmt.Errorf("cuda: %s: %s: %w", what, errStr(r), ErrOutOfMemory)
+		return fmt.Errorf("cuda: %s: %s: %w", what, drv.errStr(r), ErrOutOfMemory)
 	}
-	return fmt.Errorf("cuda: %s: %s", what, errStr(r))
+	return fmt.Errorf("cuda: %s: %s", what, drv.errStr(r))
 }
 
 // cudaErrorOutOfMemory is CUDA_ERROR_OUT_OF_MEMORY.
@@ -633,16 +626,17 @@ const cudaErrorOutOfMemory CUresult = 2
 
 // ErrOutOfMemory is what a driver call wraps when the device refused memory:
 // the card is full, which a caller treats differently from a failure.
-var ErrOutOfMemory = errors.New("device out of memory")
+const ErrOutOfMemory cudaError = "device out of memory"
+
+type cudaError string
+
+func (e cudaError) Error() string { return string(e) }
 
 // DriverVersion is cuDriverGetVersion's answer (1000*major + 10*minor), false
 // when there is no driver to ask.
-func DriverVersion() (int, bool) {
-	if err := loadCUDA(); err != nil {
-		return 0, false
-	}
+func (drv *Driver) DriverVersion() (int, bool) {
 	var v int32
-	if call(cuDriverGetVersion(&v), "cuDriverGetVersion") != nil {
+	if drv.call(drv.cuDriverGetVersion(&v), "cuDriverGetVersion") != nil {
 		return 0, false
 	}
 	return int(v), true

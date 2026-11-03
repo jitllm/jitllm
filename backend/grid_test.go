@@ -41,7 +41,7 @@ func TestGridBarrierHoldsEveryWorkgroup(t *testing.T) {
 func eachGridDevice(t *testing.T, f func(d backend.Device, width, limit int)) {
 	t.Helper()
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

@@ -37,7 +37,7 @@ func TestWindowsSDKIsFoundNewestFirst(t *testing.T) {
 		"AMD/ROCm/6.10/bin/hiprtc0610.dll",
 		"AMD/Other/bin/amdhip64_6.dll",
 	)
-	lo := layouts["windows"]
+	lo, _ := layoutFor("windows")
 	lo.root = root
 	hipC := candidates(Config{}, lo, false)
 	want := append(slices.Clone(lo.hip),
@@ -78,7 +78,7 @@ func TestLinuxLayoutUnderARoot(t *testing.T) {
 		"opt/rocm-6.4.1/lib/libamd_comgr.so.3",
 		"opt/rocm-7.0.0/lib/libamdhip64.so.7",
 	)
-	lo := layouts["linux"]
+	lo, _ := layoutFor("linux")
 	lo.root = root
 	got := candidates(Config{}, lo, false)
 	want := append(slices.Clone(lo.hip),

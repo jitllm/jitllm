@@ -3,7 +3,6 @@
 package metal
 
 import (
-	"sync"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend/ffi"
@@ -14,16 +13,8 @@ import (
 // Information reports), or 0 when it cannot be read. Metal states neither the
 // count nor any forward-progress guarantee between threadgroups; the grid
 // barrier's co-residency limit (backend.GridLimit) is one threadgroup per core,
-// a reasoned bound rather than a driver guarantee.
-func GPUCores() int {
-	coresOnce.Do(func() { cores = readGPUCores() })
-	return cores
-}
-
-var (
-	coresOnce sync.Once
-	cores     int
-)
+// a reasoned bound rather than a driver guarantee. It is read once, at open.
+func (c *Ctx) GPUCores() int { return c.cores }
 
 func readGPUCores() int {
 	iokit, err := ffi.Open("/System/Library/Frameworks/IOKit.framework/IOKit")

@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/backend/metal"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
@@ -19,7 +17,7 @@ import (
 // starts from: the same prompts as rows of one batch session's steps
 // (Batcher, a ragged step) and each prompt alone (Prefill), every block on
 // the device, with each kernel's device time taken by the backend's own
-// instrument (backend.SetCUDAKernelTiming, metal.SetKernelTiming). It
+// instrument (Counters.SetCUDAKernelTiming, metal.Stats.SetKernelTiming). It
 // measures and asserts nothing (RULE 4), and runs only when JITLLM_SPLIT_MODEL
 // names a model.
 //
@@ -110,17 +108,17 @@ func TestRaggedStepKernelSplit(t *testing.T) {
 		np, ntok, wa, wb, wb.Seconds()/wa.Seconds())
 
 	timed := func(f func()) (map[string]float64, map[string]int) {
-		backend.SetCUDAKernelTiming(true)
-		metal.SetKernelTiming(true)
-		backend.CUDAKernelTimes()
-		metal.KernelTimes()
+		g.Counters().SetCUDAKernelTiming(true)
+		g.Counters().Metal.SetKernelTiming(true)
+		g.Counters().CUDAKernelTimes()
+		g.Counters().Metal.KernelTimes()
 		f()
-		us, n := backend.CUDAKernelTimes()
-		if mu, mn := metal.KernelTimes(); len(mu) > 0 {
+		us, n := g.Counters().CUDAKernelTimes()
+		if mu, mn := g.Counters().Metal.KernelTimes(); len(mu) > 0 {
 			us, n = mu, mn
 		}
-		backend.SetCUDAKernelTiming(false)
-		metal.SetKernelTiming(false)
+		g.Counters().SetCUDAKernelTiming(false)
+		g.Counters().Metal.SetKernelTiming(false)
 		return us, n
 	}
 	ua, na := timed(alone)

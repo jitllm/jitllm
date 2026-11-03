@@ -22,9 +22,12 @@ import (
 
 type up = unsafe.Pointer
 
-// The Vulkan entry points, bound through gpujit/ffi (goffi). The loader
-// exports every core symbol, so no vkGetInstanceProcAddr trampolining.
-var (
+// Loader is one binding of the Vulkan loader through backend/ffi: a Ctx keeps
+// the Loader it was opened through, and every call on it, its buffers,
+// kernels, queues and batches goes through that.
+type Loader struct {
+	// The Vulkan entry points, bound through backend/ffi (goffi). The loader
+	// exports every core symbol, so no vkGetInstanceProcAddr trampolining.
 	vkCreateInstance                         func(up, up, up) Result
 	vkEnumeratePhysicalDevices               func(Instance, *uint32, up) Result
 	vkGetPhysicalDeviceProperties            func(PhysDevice, up) ffi.None
@@ -80,13 +83,12 @@ var (
 	// vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR is the first. See
 	// coopmat.go.
 	vkGetInstanceProcAddr func(Instance, unsafe.Pointer) unsafe.Pointer
-)
 
-// loaded is load's outcome: the loader is opened and bound once a process,
-// and concurrent first opens wait for the one doing it.
-var loaded struct {
-	sync.Once
-	err error
+	// The fences a rec waits on (queue.go).
+	vkCreateFence   func(Device, up, up, up) Result
+	vkDestroyFence  func(Device, Fence, up) ffi.None
+	vkWaitForFences func(Device, uint32, up, uint32, uint64) Result
+	vkResetFences   func(Device, uint32, up) Result
 }
 
 // loaderNames is every name the Vulkan loader ships under, in the order they
@@ -95,77 +97,75 @@ var loaded struct {
 // On macOS libvulkan.1.dylib is the loader; libMoltenVK.dylib is the ICD
 // itself, which works but skips layer discovery and any second ICD, so it is
 // only the fallback for a host without the loader.
-var loaderNames = []string{
-	"libvulkan.so.1", "libvulkan.so", // linux
-	"vulkan-1.dll",                           // windows
-	"libvulkan.1.dylib", "libMoltenVK.dylib", // macOS: loader first, ICD as fallback
-}
-
-func load() error {
-	loaded.Do(func() { loaded.err = bind() })
-	return loaded.err
-}
-
-// bind opens the loader and binds every entry point; load runs it once.
-func bind() error {
-	lib, err := ffi.Open(loaderNames...)
-	if err != nil {
-		return fmt.Errorf("vulkan: %w", err)
+func loaderNames() []string {
+	return []string{
+		"libvulkan.so.1", "libvulkan.so", // linux
+		"vulkan-1.dll",                           // windows
+		"libvulkan.1.dylib", "libMoltenVK.dylib", // macOS: loader first, ICD as fallback
 	}
-	vkCreateInstance = ffi.Fn3[Result, up, up, up](lib, "vkCreateInstance")
-	vkGetInstanceProcAddr = ffi.Fn2[unsafe.Pointer, Instance, unsafe.Pointer](lib, "vkGetInstanceProcAddr")
-	vkEnumeratePhysicalDevices = ffi.Fn3[Result, Instance, *uint32, up](lib, "vkEnumeratePhysicalDevices")
-	vkGetPhysicalDeviceProperties = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceProperties")
-	vkGetPhysicalDeviceQueueFamilyProperties = ffi.Fn3[ffi.None, PhysDevice, *uint32, up](lib, "vkGetPhysicalDeviceQueueFamilyProperties")
-	vkGetPhysicalDeviceMemoryProperties = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceMemoryProperties")
+}
+
+// Load opens the loader and binds every entry point.
+func Load() (*Loader, error) {
+	lib, err := ffi.Open(loaderNames()...)
+	if err != nil {
+		return nil, fmt.Errorf("vulkan: %w", err)
+	}
+	l := &Loader{}
+	l.vkCreateInstance = ffi.Fn3[Result, up, up, up](lib, "vkCreateInstance")
+	l.vkGetInstanceProcAddr = ffi.Fn2[unsafe.Pointer, Instance, unsafe.Pointer](lib, "vkGetInstanceProcAddr")
+	l.vkEnumeratePhysicalDevices = ffi.Fn3[Result, Instance, *uint32, up](lib, "vkEnumeratePhysicalDevices")
+	l.vkGetPhysicalDeviceProperties = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceProperties")
+	l.vkGetPhysicalDeviceQueueFamilyProperties = ffi.Fn3[ffi.None, PhysDevice, *uint32, up](lib, "vkGetPhysicalDeviceQueueFamilyProperties")
+	l.vkGetPhysicalDeviceMemoryProperties = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceMemoryProperties")
 	// Core since Vulkan 1.1, so the loader exports it under the un-suffixed
 	// name and no KHR fallback is needed at the 1.3 instance this asks for.
-	vkGetPhysicalDeviceMemoryProperties2 = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceMemoryProperties2")
+	l.vkGetPhysicalDeviceMemoryProperties2 = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceMemoryProperties2")
 	// Core since Vulkan 1.1 as well, and the DEVICE has to be 1.1 for the call
 	// to be legal -- see readSubgroups, which checks before it asks.
-	vkGetPhysicalDeviceProperties2 = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceProperties2")
-	vkGetPhysicalDeviceFeatures2 = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceFeatures2")
-	vkEnumerateDeviceExtensionProperties = ffi.Fn4[Result, PhysDevice, up, *uint32, up](lib, "vkEnumerateDeviceExtensionProperties")
-	vkCreateDevice = ffi.Fn4[Result, PhysDevice, up, up, up](lib, "vkCreateDevice")
-	vkDestroyDevice = ffi.Fn2[ffi.None, Device, up](lib, "vkDestroyDevice")
-	vkGetDeviceQueue = ffi.Fn4[ffi.None, Device, uint32, uint32, up](lib, "vkGetDeviceQueue")
-	vkCreateBuffer = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateBuffer")
-	vkDestroyBuffer = ffi.Fn3[ffi.None, Device, Buffer, up](lib, "vkDestroyBuffer")
-	vkGetBufferMemoryRequirements = ffi.Fn3[ffi.None, Device, Buffer, up](lib, "vkGetBufferMemoryRequirements")
-	vkAllocateMemory = ffi.Fn4[Result, Device, up, up, up](lib, "vkAllocateMemory")
-	vkFreeMemory = ffi.Fn3[ffi.None, Device, Memory, up](lib, "vkFreeMemory")
-	vkBindBufferMemory = ffi.Fn4[Result, Device, Buffer, Memory, uint64](lib, "vkBindBufferMemory")
-	vkMapMemory = ffi.Fn6[Result, Device, Memory, uint64, uint64, uint32, up](lib, "vkMapMemory")
-	vkCreateShaderModule = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateShaderModule")
-	vkDestroyShaderModule = ffi.Fn3[ffi.None, Device, ShaderMod, up](lib, "vkDestroyShaderModule")
-	vkCreateDescriptorSetLayout = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateDescriptorSetLayout")
-	vkDestroyDescriptorSetLayout = ffi.Fn3[ffi.None, Device, DescLayout, up](lib, "vkDestroyDescriptorSetLayout")
-	vkCreatePipelineLayout = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreatePipelineLayout")
-	vkDestroyPipelineLayout = ffi.Fn3[ffi.None, Device, PipeLayout, up](lib, "vkDestroyPipelineLayout")
-	vkCreateComputePipelines = ffi.Fn6[Result, Device, uint64, uint32, up, up, up](lib, "vkCreateComputePipelines")
-	vkDestroyPipeline = ffi.Fn3[ffi.None, Device, Pipeline, up](lib, "vkDestroyPipeline")
-	vkCreateDescriptorPool = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateDescriptorPool")
-	vkDestroyDescriptorPool = ffi.Fn3[ffi.None, Device, DescPool, up](lib, "vkDestroyDescriptorPool")
-	vkAllocateDescriptorSets = ffi.Fn3[Result, Device, up, up](lib, "vkAllocateDescriptorSets")
-	vkUpdateDescriptorSets = ffi.Fn5[ffi.None, Device, uint32, up, uint32, up](lib, "vkUpdateDescriptorSets")
-	vkCreateCommandPool = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateCommandPool")
-	vkDestroyCommandPool = ffi.Fn3[ffi.None, Device, CmdPool, up](lib, "vkDestroyCommandPool")
-	vkAllocateCommandBuffers = ffi.Fn3[Result, Device, up, up](lib, "vkAllocateCommandBuffers")
-	vkBeginCommandBuffer = ffi.Fn2[Result, CmdBuffer, up](lib, "vkBeginCommandBuffer")
-	vkEndCommandBuffer = ffi.Fn1[Result, CmdBuffer](lib, "vkEndCommandBuffer")
-	vkResetCommandBuffer = ffi.Fn2[Result, CmdBuffer, uint32](lib, "vkResetCommandBuffer")
-	vkCmdBindPipeline = ffi.Fn3[ffi.None, CmdBuffer, uint32, Pipeline](lib, "vkCmdBindPipeline")
-	vkCmdBindDescriptorSets = ffi.Fn8[ffi.None, CmdBuffer, uint32, PipeLayout, uint32, uint32, up, uint32, up](lib, "vkCmdBindDescriptorSets")
-	vkCmdDispatch = ffi.Fn4[ffi.None, CmdBuffer, uint32, uint32, uint32](lib, "vkCmdDispatch")
-	vkCmdPushConstants = ffi.Fn6[ffi.None, CmdBuffer, PipeLayout, uint32, uint32, uint32, up](lib, "vkCmdPushConstants")
-	vkCmdPipelineBarrier = ffi.Fn10[ffi.None, CmdBuffer, uint32, uint32, uint32, uint32, up, uint32, up, uint32, up](lib, "vkCmdPipelineBarrier")
-	vkResetDescriptorPool = ffi.Fn3[Result, Device, DescPool, uint32](lib, "vkResetDescriptorPool")
-	vkQueueSubmit = ffi.Fn4[Result, VkQueue, uint32, up, uint64](lib, "vkQueueSubmit")
-	vkQueueWaitIdle = ffi.Fn1[Result, VkQueue](lib, "vkQueueWaitIdle")
-	loadFences(lib)
-	vkCmdCopyBuffer = ffi.Fn5[ffi.None, CmdBuffer, Buffer, Buffer, uint32, up](lib, "vkCmdCopyBuffer")
-	vkGetDeviceProcAddr = ffi.Fn2[unsafe.Pointer, Device, unsafe.Pointer](lib, "vkGetDeviceProcAddr")
-	return nil
+	l.vkGetPhysicalDeviceProperties2 = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceProperties2")
+	l.vkGetPhysicalDeviceFeatures2 = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceFeatures2")
+	l.vkEnumerateDeviceExtensionProperties = ffi.Fn4[Result, PhysDevice, up, *uint32, up](lib, "vkEnumerateDeviceExtensionProperties")
+	l.vkCreateDevice = ffi.Fn4[Result, PhysDevice, up, up, up](lib, "vkCreateDevice")
+	l.vkDestroyDevice = ffi.Fn2[ffi.None, Device, up](lib, "vkDestroyDevice")
+	l.vkGetDeviceQueue = ffi.Fn4[ffi.None, Device, uint32, uint32, up](lib, "vkGetDeviceQueue")
+	l.vkCreateBuffer = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateBuffer")
+	l.vkDestroyBuffer = ffi.Fn3[ffi.None, Device, Buffer, up](lib, "vkDestroyBuffer")
+	l.vkGetBufferMemoryRequirements = ffi.Fn3[ffi.None, Device, Buffer, up](lib, "vkGetBufferMemoryRequirements")
+	l.vkAllocateMemory = ffi.Fn4[Result, Device, up, up, up](lib, "vkAllocateMemory")
+	l.vkFreeMemory = ffi.Fn3[ffi.None, Device, Memory, up](lib, "vkFreeMemory")
+	l.vkBindBufferMemory = ffi.Fn4[Result, Device, Buffer, Memory, uint64](lib, "vkBindBufferMemory")
+	l.vkMapMemory = ffi.Fn6[Result, Device, Memory, uint64, uint64, uint32, up](lib, "vkMapMemory")
+	l.vkCreateShaderModule = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateShaderModule")
+	l.vkDestroyShaderModule = ffi.Fn3[ffi.None, Device, ShaderMod, up](lib, "vkDestroyShaderModule")
+	l.vkCreateDescriptorSetLayout = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateDescriptorSetLayout")
+	l.vkDestroyDescriptorSetLayout = ffi.Fn3[ffi.None, Device, DescLayout, up](lib, "vkDestroyDescriptorSetLayout")
+	l.vkCreatePipelineLayout = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreatePipelineLayout")
+	l.vkDestroyPipelineLayout = ffi.Fn3[ffi.None, Device, PipeLayout, up](lib, "vkDestroyPipelineLayout")
+	l.vkCreateComputePipelines = ffi.Fn6[Result, Device, uint64, uint32, up, up, up](lib, "vkCreateComputePipelines")
+	l.vkDestroyPipeline = ffi.Fn3[ffi.None, Device, Pipeline, up](lib, "vkDestroyPipeline")
+	l.vkCreateDescriptorPool = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateDescriptorPool")
+	l.vkDestroyDescriptorPool = ffi.Fn3[ffi.None, Device, DescPool, up](lib, "vkDestroyDescriptorPool")
+	l.vkAllocateDescriptorSets = ffi.Fn3[Result, Device, up, up](lib, "vkAllocateDescriptorSets")
+	l.vkUpdateDescriptorSets = ffi.Fn5[ffi.None, Device, uint32, up, uint32, up](lib, "vkUpdateDescriptorSets")
+	l.vkCreateCommandPool = ffi.Fn4[Result, Device, up, up, up](lib, "vkCreateCommandPool")
+	l.vkDestroyCommandPool = ffi.Fn3[ffi.None, Device, CmdPool, up](lib, "vkDestroyCommandPool")
+	l.vkAllocateCommandBuffers = ffi.Fn3[Result, Device, up, up](lib, "vkAllocateCommandBuffers")
+	l.vkBeginCommandBuffer = ffi.Fn2[Result, CmdBuffer, up](lib, "vkBeginCommandBuffer")
+	l.vkEndCommandBuffer = ffi.Fn1[Result, CmdBuffer](lib, "vkEndCommandBuffer")
+	l.vkResetCommandBuffer = ffi.Fn2[Result, CmdBuffer, uint32](lib, "vkResetCommandBuffer")
+	l.vkCmdBindPipeline = ffi.Fn3[ffi.None, CmdBuffer, uint32, Pipeline](lib, "vkCmdBindPipeline")
+	l.vkCmdBindDescriptorSets = ffi.Fn8[ffi.None, CmdBuffer, uint32, PipeLayout, uint32, uint32, up, uint32, up](lib, "vkCmdBindDescriptorSets")
+	l.vkCmdDispatch = ffi.Fn4[ffi.None, CmdBuffer, uint32, uint32, uint32](lib, "vkCmdDispatch")
+	l.vkCmdPushConstants = ffi.Fn6[ffi.None, CmdBuffer, PipeLayout, uint32, uint32, uint32, up](lib, "vkCmdPushConstants")
+	l.vkCmdPipelineBarrier = ffi.Fn10[ffi.None, CmdBuffer, uint32, uint32, uint32, uint32, up, uint32, up, uint32, up](lib, "vkCmdPipelineBarrier")
+	l.vkResetDescriptorPool = ffi.Fn3[Result, Device, DescPool, uint32](lib, "vkResetDescriptorPool")
+	l.vkQueueSubmit = ffi.Fn4[Result, VkQueue, uint32, up, uint64](lib, "vkQueueSubmit")
+	l.vkQueueWaitIdle = ffi.Fn1[Result, VkQueue](lib, "vkQueueWaitIdle")
+	l.loadFences(lib)
+	l.vkCmdCopyBuffer = ffi.Fn5[ffi.None, CmdBuffer, Buffer, Buffer, uint32, up](lib, "vkCmdCopyBuffer")
+	l.vkGetDeviceProcAddr = ffi.Fn2[unsafe.Pointer, Device, unsafe.Pointer](lib, "vkGetDeviceProcAddr")
+	return l, nil
 }
 
 func check(r Result, what string) error {
@@ -177,6 +177,8 @@ func check(r Result, what string) error {
 
 // Ctx is an open device: instance, logical device, queue and command pool.
 type Ctx struct {
+	// l is the binding every call on this context goes through.
+	l *Loader
 	// cores and coresFrom are the compute-unit count and the extension that
 	// stated it, threadRegs a lane's registers at the most resident waves
 	// (cores.go).
@@ -252,22 +254,13 @@ type Ctx struct {
 		sync.Mutex
 		live map[*Kernel]struct{}
 	}
+	// orphans is every kernel Close found still open, by entry point.
+	orphans []string
 }
 
-// orphans is every kernel a Ctx.Close found still open, by entry point, over
-// the process's life.
-var orphans struct {
-	sync.Mutex
-	names []string
-}
-
-// Orphans is the entry point of every kernel a Close found its owner had not
-// closed, in the order found, over this process's life.
-func Orphans() []string {
-	orphans.Lock()
-	defer orphans.Unlock()
-	return append([]string(nil), orphans.names...)
-}
+// Orphans is the entry point of every kernel Close found its owner had not
+// closed, in the order found.
+func (c *Ctx) Orphans() []string { return append([]string(nil), c.orphans...) }
 
 // onHeap is a new zero T on the heap. A struct the driver reaches through a
 // uintptr field (a pNext chain, a create info's array) must not live on a
@@ -302,16 +295,17 @@ func OpenDevice(sel string) (*Ctx, error) { return OpenDeviceWith(sel, Config{})
 
 // OpenDeviceWith is OpenDevice with this device's Config.
 func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
-	if err := load(); err != nil {
-		return nil, err
-	}
-	inst, err := instance()
+	l, err := Load()
 	if err != nil {
 		return nil, err
 	}
-	c := &Ctx{inst: inst}
+	inst, err := l.instance()
+	if err != nil {
+		return nil, err
+	}
+	c := &Ctx{l: l, inst: inst}
 
-	pick, err := pickDevice(c.inst, sel, cfg.Device)
+	pick, err := l.pickDevice(c.inst, sel, cfg.Device)
 	if err != nil {
 		c.Close()
 		return nil, err
@@ -332,12 +326,12 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		// the one call site that knew.
 		c.name += softwareSuffix
 	}
-	vkGetPhysicalDeviceMemoryProperties(c.phys, up(&c.mem))
+	l.vkGetPhysicalDeviceMemoryProperties(c.phys, up(&c.mem))
 
 	// VK_EXT_memory_budget is what Mem reads. It is enabled on the logical
 	// device as well as queried on the physical one, so heapUsage accounts for
 	// this process's own allocations rather than only the driver's view.
-	c.budget, err = hasExtension(c.phys, extMemoryBudget)
+	c.budget, err = l.hasExtension(c.phys, extMemoryBudget)
 	if err != nil {
 		c.Close()
 		return nil, err
@@ -345,7 +339,7 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 
 	// VK_EXT_external_memory_host is read for its alignment here, which
 	// decides whether an import is possible at all.
-	hasHostMem, err := hasExtension(c.phys, extExternalMemoryHost)
+	hasHostMem, err := l.hasExtension(c.phys, extExternalMemoryHost)
 	if err != nil {
 		c.Close()
 		return nil, err
@@ -355,7 +349,7 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		hp := onHeap[extMemHostProps]()
 		hp.sType = stExtMemHostProps
 		p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(hp))}
-		vkGetPhysicalDeviceProperties2(c.phys, up(&p2))
+		l.vkGetPhysicalDeviceProperties2(c.phys, up(&p2))
 		hostAlign = hp.minAlign
 		runtime.KeepAlive(hp)
 	}
@@ -364,26 +358,26 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 	// the logical one. Supported means the range can be read; enabled, with
 	// subgroupSizeControl and computeFullSubgroups on, lets a pipeline pin its
 	// width.
-	hasSizeCtl, err := hasExtension(c.phys, extSubgroupSizeControl)
+	hasSizeCtl, err := l.hasExtension(c.phys, extSubgroupSizeControl)
 	if err != nil {
 		c.Close()
 		return nil, err
 	}
-	c.sg = readSubgroups(c.phys, pick.apiVer, hasSizeCtl)
-	c.cores, c.coresFrom, c.threadRegs, c.slots = readCores(c.phys, pick.apiVer)
+	c.sg = l.readSubgroups(c.phys, pick.apiVer, hasSizeCtl)
+	c.cores, c.coresFrom, c.threadRegs, c.slots = l.readCores(c.phys, pick.apiVer)
 	c.sg.Off, c.sg.Forced = subgroupEnv(cfg)
 
 	// The tile features are likewise read before the device is made and
 	// enabled on it. See readTileFeats.
-	tf := readTileFeats(c.phys, pick.apiVer)
-	hasCoopMat, err := hasExtension(c.phys, extCooperativeMatrix)
+	tf := l.readTileFeats(c.phys, pick.apiVer)
+	hasCoopMat, err := l.hasExtension(c.phys, extCooperativeMatrix)
 	if err != nil {
 		c.Close()
 		return nil, err
 	}
 	c.tiles = tf.CoopOK && hasCoopMat
 	if c.tiles {
-		if sh, err := CooperativeMatrixShapes(c.inst, c.phys); err == nil {
+		if sh, err := l.CooperativeMatrixShapes(c.inst, c.phys); err == nil {
 			c.shapes = sh
 		}
 	}
@@ -433,7 +427,7 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		dci.nExts = uint32(len(exts))
 		dci.pExts = uintptr(up(&exts[0]))
 	}
-	if err := check(vkCreateDevice(c.phys, up(&dci), nil, up(&c.dev)), "vkCreateDevice"); err != nil {
+	if err := check(l.vkCreateDevice(c.phys, up(&dci), nil, up(&c.dev)), "vkCreateDevice"); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -443,14 +437,14 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 	runtime.KeepAlive(tf)
 	for i := range nq {
 		h := &hwQueue{}
-		vkGetDeviceQueue(c.dev, c.family, uint32(i), up(&h.q))
+		l.vkGetDeviceQueue(c.dev, c.family, uint32(i), up(&h.q))
 		c.hw = append(c.hw, h)
 	}
 	// The extension's entry point is not exported by the loader, so it is
 	// fetched from the device's dispatch table; binding it by name would panic
 	// at startup. A null answer leaves hostAlign at 0 ("cannot import").
 	if hostAlign > 0 {
-		if fn := vkGetDeviceProcAddr(c.dev, cstrPin(c, "vkGetMemoryHostPointerPropertiesEXT")); fn != nil {
+		if fn := l.vkGetDeviceProcAddr(c.dev, cstrPin(c, "vkGetMemoryHostPointerPropertiesEXT")); fn != nil {
 			c.hostAlign = hostAlign
 			c.getHostPtrProps = ffi.Fn4At[Result, Device, uint32, unsafe.Pointer, up](fn,
 				"vkGetMemoryHostPointerPropertiesEXT")
@@ -465,11 +459,19 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 }
 
 // proc is the process's one VkInstance, created by the first open or List and
-// never destroyed; see instance.
+// never destroyed (see instance), and what its enumerations have found: seen
+// is the first enumeration's device count, and shrunk the count of the first
+// one that came back with fewer (see Vanished). It is the package's one
+// variable because the instance is the process's by the drivers' constraint,
+// not by a choice here.
 var proc struct {
 	sync.Once
 	inst Instance
 	err  error
+	seen struct {
+		sync.Mutex
+		first, shrunk int
+	}
 }
 
 // instance is the process's VkInstance, which every Ctx and every List shares.
@@ -490,14 +492,14 @@ var proc struct {
 // It is also why the loader's environment -- VK_ICD_FILENAMES, VK_DRIVER_FILES,
 // VK_INSTANCE_LAYERS -- is read once, at the first open: a caller that wants a
 // different set of drivers wants a different process.
-func instance() (Instance, error) {
+func (l *Loader) instance() (Instance, error) {
 	proc.Do(func() {
 		namePtr, nameBuf := cstr("jitllm")
 		ai := onHeap[appInfo]()
 		*ai = appInfo{sType: stAppInfo, pName: namePtr, pEngine: namePtr,
 			apiVer: 1<<22 | 3<<12} // 1.3: shaderIntegerDotProduct is core
 		ici := instanceCI{sType: stInstanceCI, pApp: uintptr(up(ai))}
-		proc.err = check(vkCreateInstance(up(&ici), nil, up(&proc.inst)), "vkCreateInstance")
+		proc.err = check(l.vkCreateInstance(up(&ici), nil, up(&proc.inst)), "vkCreateInstance")
 		runtime.KeepAlive(ai)
 		runtime.KeepAlive(nameBuf)
 	})
@@ -559,14 +561,15 @@ func List() ([]Info, error) { return ListWith(Config{}) }
 
 // ListWith is List as a device opened with cfg would report its subgroups.
 func ListWith(cfg Config) ([]Info, error) {
-	if err := load(); err != nil {
-		return nil, err
-	}
-	inst, err := instance()
+	l, err := Load()
 	if err != nil {
 		return nil, err
 	}
-	cands, err := enumerate(inst)
+	inst, err := l.instance()
+	if err != nil {
+		return nil, err
+	}
+	cands, err := l.enumerate(inst)
 	if err != nil {
 		return nil, err
 	}
@@ -584,9 +587,9 @@ func ListWith(cfg Config) ([]Info, error) {
 			MaxGroups: d.maxGroups,
 		}
 		if in.Compute {
-			ctl, err := hasExtension(d.phys, extSubgroupSizeControl)
+			ctl, err := l.hasExtension(d.phys, extSubgroupSizeControl)
 			if err == nil {
-				in.Subgroups = readSubgroups(d.phys, d.apiVer, ctl)
+				in.Subgroups = l.readSubgroups(d.phys, d.apiVer, ctl)
 				in.Subgroups.Off, in.Subgroups.Forced = subgroupEnv(cfg)
 			}
 		}
@@ -654,9 +657,7 @@ func (c *Ctx) Close() {
 		}
 		c.kerns.Unlock()
 		for _, k := range left {
-			orphans.Lock()
-			orphans.names = append(orphans.names, kernName(k))
-			orphans.Unlock()
+			c.orphans = append(c.orphans, kernName(k))
 			k.Close()
 		}
 		// The batch pool and fence are children of the device like the command
@@ -664,7 +665,7 @@ func (c *Ctx) Close() {
 		// (VUID-vkDestroyDevice-device-05137, which the validation layer
 		// reported on every Close).
 		c.rec.freeRec()
-		vkDestroyDevice(c.dev, nil)
+		c.l.vkDestroyDevice(c.dev, nil)
 		c.dev = 0
 	}
 	// The instance is the process's (see instance) and outlives every Ctx.

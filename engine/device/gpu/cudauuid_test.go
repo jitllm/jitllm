@@ -12,7 +12,11 @@ import (
 // It lets a gate ask "does CUDA hold this card" without paying for a driver
 // context, a locked thread and an owner goroutine.
 func cudaUUIDForTest(ord int) (string, bool) {
-	u, ok := cuda.DeviceUUID(ord)
+	drv, err := cuda.Load()
+	if err != nil {
+		return "", false
+	}
+	u, ok := drv.DeviceUUID(ord)
 	if !ok {
 		return "", false
 	}

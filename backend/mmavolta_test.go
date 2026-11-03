@@ -15,7 +15,7 @@ import (
 // operands and f32 sums are exact and the compare is equality.
 func TestMMAVoltaProbeMatchesTheHost(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

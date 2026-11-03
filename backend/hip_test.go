@@ -15,10 +15,10 @@ import (
 // device half of the AMD backend did not run, and the line says so.
 func hipOrSkip(t *testing.T) Device {
 	t.Helper()
-	if HIPCount(openDefaults.HIP) == 0 {
-		t.Skipf("NO AMD DEVICE: %s -- the HIP device gate did not run", HIPMissing(openDefaults.HIP))
+	if HIPCount(testOpts().HIP) == 0 {
+		t.Skipf("NO AMD DEVICE: %s -- the HIP device gate did not run", HIPMissing(testOpts().HIP))
 	}
-	d, err := OpenHIPWith(testdevices.Ordinal(t, "hip", 0), openDefaults)
+	d, err := OpenHIPWith(testdevices.Ordinal(t, "hip", 0), testOpts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,11 +168,11 @@ func TestExplicitHIPWithoutROCmIsAnError(t *testing.T) {
 // count. It needs a ROCm that loads; on one with no card the count is 0.
 func TestHIPOrdinalPastTheCountIsAnError(t *testing.T) {
 	testdevices.SkipSelected(t, "it opens an ordinal past the box's last card, which no selection holds")
-	if !hip.Loaded(openDefaults.HIP) {
-		t.Skipf("NO ROCM: %s -- the ordinal refusal did not run", HIPMissing(openDefaults.HIP))
+	if !hip.Loaded(testOpts().HIP) {
+		t.Skipf("NO ROCM: %s -- the ordinal refusal did not run", HIPMissing(testOpts().HIP))
 	}
-	n := HIPCount(openDefaults.HIP)
-	_, err := OpenHIPWith(n+1, openDefaults)
+	n := HIPCount(testOpts().HIP)
+	_, err := OpenHIPWith(n+1, testOpts())
 	if want := "HIP devices"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("err = %v", err)
 	}

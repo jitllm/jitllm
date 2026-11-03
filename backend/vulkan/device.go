@@ -9,12 +9,10 @@ package vulkan
 // Vulkan queue. Hence the explicit ranking below.
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 // candidate is one enumerated physical device with everything the pick needs.
@@ -99,31 +97,29 @@ const softwareSuffix = " [SOFTWARE RASTERISER -- NOT A GPU]"
 // enumerates the rest -- so without this an open of a device that was there a
 // moment ago reads as "this host has none", and a caller that skips on a
 // missing device skips everything from then on.
-var ErrDevicesVanished = errors.New("vulkan: a device an earlier enumeration in this process found is gone")
+const ErrDevicesVanished vkError = "vulkan: a device an earlier enumeration in this process found is gone"
 
-// seen is the first enumeration's device count in this process, and shrunk the
-// count of the first enumeration that came back with fewer; see Vanished.
-var seen struct {
-	sync.Mutex
-	first, shrunk int
-}
+type vkError string
+
+func (e vkError) Error() string { return string(e) }
 
 // Vanished reports the device count this process first enumerated and the
 // count of the first later enumeration that found fewer, or (0, 0) when none
 // has. A test binary checks it after its tests, so a device that vanished
 // fails the run even where a test skipped on it.
 func Vanished() (first, now int) {
-	seen.Lock()
-	defer seen.Unlock()
-	if seen.shrunk == 0 {
+	proc.seen.Lock()
+	defer proc.seen.Unlock()
+	if proc.seen.shrunk == 0 {
 		return 0, 0
 	}
-	return seen.first, seen.shrunk
+	return proc.seen.first, proc.seen.shrunk
 }
 
 // noteCount records n against the process's first enumeration and refuses a
 // count below it.
 func noteCount(n int) error {
+	seen := &proc.seen
 	seen.Lock()
 	defer seen.Unlock()
 	if seen.first == 0 {
@@ -140,16 +136,16 @@ func noteCount(n int) error {
 }
 
 // enumerate reads every physical device's name, type and compute queue family.
-func enumerate(inst Instance) ([]candidate, error) {
+func (l *Loader) enumerate(inst Instance) ([]candidate, error) {
 	var n uint32
-	if err := check(vkEnumeratePhysicalDevices(inst, &n, nil), "vkEnumeratePhysicalDevices"); err != nil {
+	if err := check(l.vkEnumeratePhysicalDevices(inst, &n, nil), "vkEnumeratePhysicalDevices"); err != nil {
 		return nil, err
 	}
 	if n == 0 {
 		return nil, fmt.Errorf("vulkan: no physical devices")
 	}
 	devs := make([]PhysDevice, n)
-	if err := check(vkEnumeratePhysicalDevices(inst, &n, up(&devs[0])), "vkEnumeratePhysicalDevices"); err != nil {
+	if err := check(l.vkEnumeratePhysicalDevices(inst, &n, up(&devs[0])), "vkEnumeratePhysicalDevices"); err != nil {
 		return nil, err
 	}
 	if err := noteCount(int(n)); err != nil {
@@ -158,19 +154,19 @@ func enumerate(inst Instance) ([]candidate, error) {
 	cands := make([]candidate, 0, n)
 	for i, p := range devs {
 		var props physProps
-		vkGetPhysicalDeviceProperties(p, up(&props))
+		l.vkGetPhysicalDeviceProperties(p, up(&props))
 		c := candidate{phys: p, idx: i, name: gostr(props.name[:]), devType: props.devType,
 			family: noFamily, apiVer: props.apiVer, driverVer: props.driverVer}
-		c.uuid, c.uuidOK = readDeviceUUID(p, props.apiVer)
+		c.uuid, c.uuidOK = l.readDeviceUUID(p, props.apiVer)
 		c.maxStorage = props.maxStorageBufferRange()
 		c.maxGroups = props.maxComputeWorkGroupCount()
 		c.storageAlign = props.minStorageBufferOffsetAlignment()
 
 		var nq uint32
-		vkGetPhysicalDeviceQueueFamilyProperties(p, &nq, nil)
+		l.vkGetPhysicalDeviceQueueFamilyProperties(p, &nq, nil)
 		if nq > 0 {
 			fams := make([]queueFamily, nq)
-			vkGetPhysicalDeviceQueueFamilyProperties(p, &nq, up(&fams[0]))
+			l.vkGetPhysicalDeviceQueueFamilyProperties(p, &nq, up(&fams[0]))
 			// A compute-only family first: on NVIDIA the graphics family's
 			// queues run one after another, and the compute-only one is where
 			// two sessions' submissions run at once. Any compute family else.
@@ -226,8 +222,8 @@ func describeAll(cands []candidate) string {
 //
 // sel is the caller's selector; "" falls back to pin (Config.Device) and then
 // to the ordering.
-func pickDevice(inst Instance, sel, pin string) (candidate, error) {
-	cands, err := enumerate(inst)
+func (l *Loader) pickDevice(inst Instance, sel, pin string) (candidate, error) {
+	cands, err := l.enumerate(inst)
 	if err != nil {
 		return candidate{}, err
 	}
@@ -304,7 +300,7 @@ func pinned(cands []candidate, want string) (candidate, error) {
 // A device below Vulkan 1.1 is a refusal, not a zero UUID: the query is invalid
 // usage there, and an all-zero UUID would compare equal to every other device
 // that could not be asked, merging distinct cards.
-func readDeviceUUID(p PhysDevice, apiVer uint32) ([uuidSize]byte, bool) {
+func (l *Loader) readDeviceUUID(p PhysDevice, apiVer uint32) ([uuidSize]byte, bool) {
 	var zero [uuidSize]byte
 	if apiVer < apiVersion11 {
 		return zero, false
@@ -312,7 +308,7 @@ func readDeviceUUID(p PhysDevice, apiVer uint32) ([uuidSize]byte, bool) {
 	id := onHeap[idProps]()
 	id.sType = stPhysDevIDProps
 	p2 := physProps2{sType: stPhysDevProps2, pNext: uintptr(up(id))}
-	vkGetPhysicalDeviceProperties2(p, up(&p2))
+	l.vkGetPhysicalDeviceProperties2(p, up(&p2))
 	out := id.deviceUUID
 	// id is reachable only through a uintptr pNext, which is not a reference.
 	runtime.KeepAlive(id)
@@ -320,16 +316,16 @@ func readDeviceUUID(p PhysDevice, apiVer uint32) ([uuidSize]byte, bool) {
 }
 
 // hasExtension reports whether the physical device supports a device extension.
-func hasExtension(p PhysDevice, name string) (bool, error) {
+func (l *Loader) hasExtension(p PhysDevice, name string) (bool, error) {
 	var n uint32
-	if err := check(vkEnumerateDeviceExtensionProperties(p, nil, &n, nil), "vkEnumerateDeviceExtensionProperties"); err != nil {
+	if err := check(l.vkEnumerateDeviceExtensionProperties(p, nil, &n, nil), "vkEnumerateDeviceExtensionProperties"); err != nil {
 		return false, err
 	}
 	if n == 0 {
 		return false, nil
 	}
 	exts := make([]extProps, n)
-	if err := check(vkEnumerateDeviceExtensionProperties(p, nil, &n, up(&exts[0])), "vkEnumerateDeviceExtensionProperties"); err != nil {
+	if err := check(l.vkEnumerateDeviceExtensionProperties(p, nil, &n, up(&exts[0])), "vkEnumerateDeviceExtensionProperties"); err != nil {
 		return false, err
 	}
 	for i := range exts {
@@ -423,7 +419,7 @@ func (c *Ctx) Mem() (free, total uint64, err error) {
 	var p2 memProps2
 	p2.sType = stPhysDevMemProps2
 	p2.pNext = uintptr(up(b))
-	vkGetPhysicalDeviceMemoryProperties2(c.phys, up(&p2))
+	c.l.vkGetPhysicalDeviceMemoryProperties2(c.phys, up(&p2))
 
 	// The budget query returns the core properties too; take the heap size from
 	// the same call so size and budget cannot come from two different reads.

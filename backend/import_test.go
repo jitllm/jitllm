@@ -37,7 +37,7 @@ func importDevices(t *testing.T) []backend.Device {
 	t.Helper()
 	var out []backend.Device
 	seen := map[string]bool{}
-	for _, d := range backend.Open() {
+	for _, d := range backend.OpenForTest() {
 		if d.API() == "spirv" {
 			d.Close() // re-opened by index below, with its siblings
 			continue

@@ -15,7 +15,7 @@ import (
 // row-major prefix, and ragged sizes around a 128-thread group.
 func TestRestrideMovesExactlyTheBlock(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

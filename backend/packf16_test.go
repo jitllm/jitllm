@@ -20,7 +20,7 @@ import (
 // input: binary16 has 11 bits of mantissa and the point of the op is to lose
 // the rest. What must match is which bits are lost.
 func TestPackF16RoundTrip(t *testing.T) {
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

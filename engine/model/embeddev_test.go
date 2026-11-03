@@ -1,7 +1,6 @@
 package model
 
 import (
-	"github.com/jitllm/jitllm/backend"
 	"math"
 	"os"
 	"strings"
@@ -94,7 +93,7 @@ func embedsOnTheDevice(t *testing.T, name string, opts ...gpu.Option) {
 		st := m.NewInstance(len(ids) + 16)
 		defer st.Close()
 		st.SetDevice(g)
-		if gs := g.Stats(); (st.GPULayers() < m.Cfg.NLayer || !st.HeadOnDevice()) && (gs.Declined+gs.NoRoom > 0 || backend.AllocRefused() > 0) {
+		if gs := g.Stats(); (st.GPULayers() < m.Cfg.NLayer || !st.HeadOnDevice()) && (gs.Declined+gs.NoRoom > 0 || g.Counters().AllocRefused() > 0) {
 			// The gather reads the resident head, so a card too small for the
 			// blocks and the head has nothing to gather from.
 			t.Skipf("CARD TOO SMALL: %d of %d blocks and head %v placed (budget or device memory: %s) "+

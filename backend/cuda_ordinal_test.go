@@ -59,7 +59,7 @@ func TestCUDAOrdinalZeroIsWhatOpenReturns(t *testing.T) {
 
 	// backend.Open must still return exactly this device for the ptx arm.
 	var seen string
-	for _, dd := range backend.Open() {
+	for _, dd := range backend.OpenForTest() {
 		if dd.API() == "ptx" {
 			seen = dd.Name()
 		}

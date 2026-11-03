@@ -48,8 +48,8 @@ type openOpts struct {
 	metal      metal.Opts
 	hip        backend.HIPConfig
 	cfg        []func(*Config)
-	verbose    bool
-	verboseSet bool
+	// counters is what the devices count into (WithCounters).
+	counters *backend.Counters
 	// pools is the registry the tier's discrete cards take their pools from
 	// (WithPoolRegistry); nil, each tier its own.
 	pools *PoolRegistry
@@ -94,7 +94,12 @@ func OpenWith(options ...Option) (*GPU, error) {
 	for _, f := range options {
 		f(&o)
 	}
-	o.apply()
+	if o.counters == nil && len(o.slots) == 0 {
+		// New parses the options again: it is handed these counters too. A
+		// tier over WithSlots devices takes theirs (slotCounters).
+		o.counters = &backend.Counters{}
+		options = append(options[:len(options):len(options)], WithCounters(o.counters))
+	}
 	if len(o.slots) > 0 {
 		if o.spec != "" {
 			// OpenWith owns WithSlots devices from the moment it is called
@@ -426,14 +431,14 @@ func openEntries(es []Entry, o openOpts) ([]backend.Device, []uint64, []string, 
 			if err != nil {
 				return fail(err)
 			}
-			took(e, order(devs, o.kb.tune)...)
+			took(e, order(devs, o.kb.tune, o.kb.verbose)...)
 		case "ptx":
 			if !e.HasSel {
 				devs, err := everyCUDA(do)
 				if err != nil {
 					return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 				}
-				took(e, order(devs, o.kb.tune)...)
+				took(e, order(devs, o.kb.tune, o.kb.verbose)...)
 				continue
 			}
 			ord, _ := strconv.Atoi(e.Sel)
@@ -448,7 +453,7 @@ func openEntries(es []Entry, o openOpts) ([]backend.Device, []uint64, []string, 
 				if err != nil {
 					return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 				}
-				took(e, order(devs, o.kb.tune)...)
+				took(e, order(devs, o.kb.tune, o.kb.verbose)...)
 				continue
 			}
 			d, err := openVulkan(e.Sel, do)
@@ -462,7 +467,7 @@ func openEntries(es []Entry, o openOpts) ([]backend.Device, []uint64, []string, 
 				if err != nil {
 					return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 				}
-				took(e, order(devs, o.kb.tune)...)
+				took(e, order(devs, o.kb.tune, o.kb.verbose)...)
 				continue
 			}
 			ord, _ := strconv.Atoi(e.Sel)
@@ -533,7 +538,7 @@ func allDevices(do backend.Opts) ([]backend.Device, error) {
 	if d, err := openMetal(enumerating(do)); err == nil {
 		out = append(out, d)
 	}
-	out = dropSecondAPI(out)
+	out = dropSecondAPI(out, do.Verbose)
 	if len(out) == 0 {
 		return nil, fmt.Errorf("tier: no GPU backend on this host")
 	}
@@ -691,7 +696,7 @@ func preferOnePerCard(devs []backend.Device) ([]int, []Merge) {
 // dropSecondAPI keeps one device per card and closes the rest. Pooling keeps
 // the accounting right (planSlots); this also saves the slower second context
 // and its driver overhead.
-func dropSecondAPI(devs []backend.Device) []backend.Device {
+func dropSecondAPI(devs []backend.Device, verbose bool) []backend.Device {
 	keep, merges := preferOnePerCard(devs)
 	kept := make([]bool, len(devs))
 	out := make([]backend.Device, 0, len(keep))
@@ -704,7 +709,7 @@ func dropSecondAPI(devs []backend.Device) []backend.Device {
 			d.Close()
 		}
 	}
-	if backend.Verbose() {
+	if verbose {
 		for _, m := range merges {
 			fmt.Fprintf(os.Stderr, "jitllm: %s\n", m)
 		}

@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/backend/metal"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -112,13 +110,13 @@ func TestDeviceDecodeRate(t *testing.T) {
 	// Safe only while buffers outlive the submission, which holds on a fully
 	// resident model and not across a page-in.
 	if os.Getenv("JITLLM_DEV_UNRETAINED") != "" {
-		backend.SetMetalUnretained(true)
+		opts = append(opts, gpu.WithMetalUnretained(true))
 	}
 	if os.Getenv("JITLLM_DEV_PERLAYER") != "" {
 		opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.PerLayerSubmit = true }))
 	}
 	if os.Getenv("JITLLM_DEV_RESIDENCY") != "" {
-		backend.SetMetalResidency(true)
+		opts = append(opts, gpu.WithMetalResidency(true))
 	}
 	g, err := gpu.OpenWith(opts...)
 	if err != nil || g == nil {
@@ -146,24 +144,24 @@ func TestDeviceDecodeRate(t *testing.T) {
 	}
 	probe.Close()
 	dev, blocks := rate(g, -1)
-	c0, w0, b0 := metal.SubmitStats()
-	gns0, gbuf0 := metal.GPUBusy()
-	gap0, gapN0 := metal.GPUIdle()
-	hg0, hgN0 := metal.HostGap()
-	rt0, rtN0 := metal.RoundTrip()
-	_, _, dl0 := metal.SubmitTimes()
-	bar0 := metal.Barriers()
+	c0, w0, b0 := g.Counters().Metal.SubmitStats()
+	gns0, gbuf0 := g.Counters().Metal.GPUBusy()
+	gap0, gapN0 := g.Counters().Metal.GPUIdle()
+	hg0, hgN0 := g.Counters().Metal.HostGap()
+	rt0, rtN0 := g.Counters().Metal.RoundTrip()
+	_, _, dl0 := g.Counters().Metal.SubmitTimes()
+	bar0 := g.Counters().Metal.Barriers()
 	devMs0 := time.Now()
 	rate(g, -1)
 	devWall := time.Since(devMs0)
-	gns1, gbuf1 := metal.GPUBusy()
-	gap1, gapN1 := metal.GPUIdle()
-	hg1, hgN1 := metal.HostGap()
+	gns1, gbuf1 := g.Counters().Metal.GPUBusy()
+	gap1, gapN1 := g.Counters().Metal.GPUIdle()
+	hg1, hgN1 := g.Counters().Metal.HostGap()
 	if hgN1 > hgN0 {
 		t.Logf("  host from a Wait's return to the next commit: %.3f ms a token over %d",
 			float64(hg1-hg0)/1e6/float64(hgN1-hgN0), hgN1-hgN0)
 	}
-	if rt1, rtN1 := metal.RoundTrip(); rtN1 > rtN0 {
+	if rt1, rtN1 := g.Counters().Metal.RoundTrip(); rtN1 > rtN0 {
 		t.Logf("  commit-to-start plus wake-up latency: %.3f ms a round trip over %d",
 			float64(rt1-rt0)/1e6/float64(rtN1-rtN0), rtN1-rtN0)
 	}
@@ -171,28 +169,28 @@ func TestDeviceDecodeRate(t *testing.T) {
 		t.Logf("  GPU idle between command buffers: %.3f ms/token over %d gaps (the device's own clock)",
 			float64(gap1-gap0)/1e6/36, gapN1-gapN0)
 	}
-	_, _, dl1 := metal.SubmitTimes()
-	if bar := metal.Barriers() - bar0; bar > 0 {
+	_, _, dl1 := g.Counters().Metal.SubmitTimes()
+	if bar := g.Counters().Metal.Barriers() - bar0; bar > 0 {
 		t.Logf("  concurrent encoder: %.0f buffer barriers a token between %.0f dispatches",
 			float64(bar)/36, float64(dl1-dl0)/36)
 	}
-	c1, w1, b1 := metal.SubmitStats()
+	c1, w1, b1 := g.Counters().Metal.SubmitStats()
 	if c1 > c0 {
 		t.Logf("  submission over 36 tokens: %d commits, %d Wait calls, %d BLOCKED (%.1f commits/token)",
 			c1-c0, w1-w0, b1-b0, float64(c1-c0)/36)
 	}
-	e1, wn1, l1 := metal.SubmitTimes()
-	sn, sns := metal.SoloStats()
+	e1, wn1, l1 := g.Counters().Metal.SubmitTimes()
+	sn, sns := g.Counters().Metal.SoloStats()
 	if sn > 0 {
 		t.Logf("  SOLO dispatches (a command buffer each, committed AND waited): "+
 			"%.1f/token costing %.3f ms/token", float64(sn)/float64(c1), float64(sns)/1e6/float64(c1))
 	}
-	if snN, snNs := metal.SessionStats(); snN > 0 {
+	if snN, snNs := g.Counters().Metal.SessionStats(); snN > 0 {
 		t.Logf("  inside backend Session: %.1f sessions/token, %.3f ms/token TOTAL "+
 			"(this bounds submission from above)",
 			float64(snN)/float64(c1), float64(snNs)/1e6/float64(c1))
 	}
-	if nn0, cn0 := metal.PhaseStats(); nn0+cn0 > 0 {
+	if nn0, cn0 := g.Counters().Metal.PhaseStats(); nn0+cn0 > 0 {
 		t.Logf("  Session phases: %.3f ms/token making the command buffer, "+
 			"%.3f ms/token endEncoding+commit",
 			float64(nn0)/1e6/float64(c1), float64(cn0)/1e6/float64(c1))
@@ -219,11 +217,11 @@ func TestDeviceDecodeRate(t *testing.T) {
 			// arm, so GPU busy against layers is a regression: its slope is one
 			// block's streaming time (known from the container) plus per-layer
 			// non-streaming time, read off rather than fitted.
-			gn0, gb0 := metal.GPUBusy()
-			_, _, dl0 := metal.SubmitTimes()
+			gn0, gb0 := g.Counters().Metal.GPUBusy()
+			_, _, dl0 := g.Counters().Metal.SubmitTimes()
 			r, _ := rate(g, n)
-			gn1, gb1 := metal.GPUBusy()
-			_, _, dl1 := metal.SubmitTimes()
+			gn1, gb1 := g.Counters().Metal.GPUBusy()
+			_, _, dl1 := g.Counters().Metal.SubmitTimes()
 			const nTok = 36
 			gpux, disp := 0.0, 0.0
 			if gb1 > gb0 {
@@ -255,7 +253,7 @@ func TestDeviceDecodeRate(t *testing.T) {
 	}
 	// Under one submission per block the last command buffer is the head's
 	// alone, so its GPU clock prices the head sequence in situ, once and cold.
-	if lastNs := metal.GPUBusyLast(); lastNs > 0 {
+	if lastNs := g.Counters().Metal.GPUBusyLast(); lastNs > 0 {
 		t.Logf("  last command buffer: %.3f ms of GPU time (under one submission "+
 			"per block this is the HEAD SEQUENCE, measured in situ)",
 			float64(lastNs)/1e6)

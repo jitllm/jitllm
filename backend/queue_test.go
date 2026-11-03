@@ -20,7 +20,7 @@ import (
 // a rate, not an answer: bench.TestQueuesOverlapOnTheDevice holds it (RULE 4).
 func TestQueuesRunSessionsAtOnce(t *testing.T) {
 	gpuLock(t)
-	devs := backend.Open()
+	devs := backend.OpenForTest()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}
@@ -187,7 +187,7 @@ func queuesAtOnce(t *testing.T, d backend.Device, qd backend.Queued) {
 func TestQueuedSessionSeesTheDevicesOwnWork(t *testing.T) {
 	gpuLock(t)
 	ran := 0
-	for _, d := range backend.Open() {
+	for _, d := range backend.OpenForTest() {
 		defer d.Close()
 		qd, ok := d.(backend.Queued)
 		if !ok {

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -78,9 +77,9 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				if s.GPULayers() != m.Cfg.NLayer {
 					t.Fatalf("the device took %d of %d blocks: %s", s.GPULayers(), m.Cfg.NLayer, g.Err())
 				}
-				c0 := backend.Compiles()
-				backend.CompileLog = func(n string) { t.Logf("compiled after placement: %s", n) }
-				defer func() { backend.CompileLog = nil }()
+				c0 := g.Counters().Compiles()
+				g.Counters().CompileLog = func(n string) { t.Logf("compiled after placement: %s", n) }
+				defer func() { g.Counters().CompileLog = nil }()
 				off := 0
 				var l []float32
 				for _, n := range chunks {
@@ -97,7 +96,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 					}
 				}
 				st := g.Stats()
-				got := backend.Compiles() - c0
+				got := g.Counters().Compiles() - c0
 				t.Logf("%d compile(s) after placement; %d exact prompt chunk(s), %d width(s) warmed",
 					got, st.ExactPrompts, st.PromptWidthsWarmed)
 				// A prompt the composer serves runs in the reserved width, its
