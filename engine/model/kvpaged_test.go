@@ -1382,7 +1382,12 @@ func TestKVPagesRelocateWithTheLayer(t *testing.T) {
 	w := fusedRunsCheck(t, true)
 	defer w.done()
 	for _, name := range relocModels() {
-		t.Run(name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), KVF32, w) })
+		for _, c := range []struct {
+			name string
+			kt   KVType
+		}{{"f32", KVF32}, {"f16", KVF16}} {
+			t.Run(name+"/"+c.name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), c.kt, w) })
+		}
 	}
 }
 
@@ -1427,9 +1432,10 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType, w *fuseWa
 	run := func(move, corrupt bool) ([]int32, int) {
 		sum = 0
 		defer m.setKVPageForTest(page)()
-		// f32 or q8: an f16 host cache cannot migrate (MigrateKV takes
-		// []float32), so SetDeviceLayers refuses at a live position and the
-		// gate would place nothing.
+		// A binary16 history travels converted, widened on its way out and
+		// narrowed home through the CPU device's composed conversions
+		// (migrateKVAs): exact both ways, so the logits are held bit for bit
+		// at every width.
 		if err := m.SetKVType(kt); err != nil {
 			t.Fatal(err)
 		}
@@ -1472,6 +1478,9 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType, w *fuseWa
 			moved = dev.migrated
 			if moved == 0 {
 				t.Fatal("MigrateKV was never called, so the history did not travel")
+			}
+			if kt == KVF16 && s.cpu.kvh.ran == 0 {
+				t.Fatal("the binary16 history travelled without the CPU device's composed conversions")
 			}
 		}
 		out := make([]int32, 0, gen)

@@ -329,6 +329,8 @@ type cpuState struct {
 	// ngView is the n-gram table's rows where this device reads them, made
 	// at the composition of the block that gathers them.
 	ngView *jlm.RowView
+	// kvh is a binary16 history's conversions (cpukvhalves.go).
+	kvh cpuKVHalves
 	// xpad is a call's residual rows where its kernels' units reach past
 	// them (cpuBlockForm.unit).
 	xpad []float32
@@ -1627,6 +1629,7 @@ func (s *Instance) cpuPlace() {
 	s.cpuPlaceMTP()
 	s.cpuPlaceEmbed()
 	s.cpuPlaceTables()
+	s.cpuPlaceKV()
 }
 
 // cpuRelocated follows block li onto the CPU, composed for it there, or off

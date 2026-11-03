@@ -585,23 +585,6 @@ func (s *kvPages) vSpan(l kvLayout, sp kvSpan, slot, kvHead int) []float32 {
 	return s.v[sp.page][s.layout(l).At(slot, sp.first, kvHead):]
 }
 
-// write stores one position's whole kvDim-wide vector into the page that holds
-// it, growing the page list if this position starts a new one.
-func (s *kvPages) write(l kvLayout, slot, pos int, k, v []float32) {
-	if s.p == 0 {
-		return // a linear-attention layer keeps no history
-	}
-	pg, off := s.page(pos)
-	s.grow(pg)
-	s.cow(pg) // a shared page is never written in place
-	pl := s.layout(l)
-	pl.Write(s.k[pg], slot, off, k)
-	pl.Write(s.v[pg], slot, off, v)
-	if pos+1 > s.written {
-		s.written = pos + 1
-	}
-}
-
 // gather copies positions [0, n) of one slot into a flat contiguous buffer, and
 // scatter puts them back.
 //
@@ -773,8 +756,9 @@ func (s *Instance) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDe
 			s.jit.WidenKVRows(fk, k, kvl.headDim, rows)
 			s.jit.WidenKVRows(fv, v, kvl.headDim, rows)
 		case cpu.KVF16:
-			nn.WidenF16(fk[:rows*kvl.headDim], halves(k))
-			nn.WidenF16(fv[:rows*kvl.headDim], halves(v))
+			if !s.cpuHalves(false, fk[:rows*kvl.headDim], halves(k)) || !s.cpuHalves(false, fv[:rows*kvl.headDim], halves(v)) {
+				return false
+			}
 		}
 	}
 	if !move() {
@@ -786,9 +770,10 @@ func (s *Instance) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDe
 			s.jit.QuantizeKVRows(k, fk, kvl.headDim, rows)
 			s.jit.QuantizeKVRows(v, fv, kvl.headDim, rows)
 		case cpu.KVF16:
-			// Rounded as the host's own store rounds what it writes.
-			nn.NarrowF16(halves(k), fk[:rows*kvl.headDim])
-			nn.NarrowF16(halves(v), fv[:rows*kvl.headDim])
+			// Rounded as the CPU's own history stores round what they write.
+			if !s.cpuHalves(true, fk[:rows*kvl.headDim], halves(k)) || !s.cpuHalves(true, fv[:rows*kvl.headDim], halves(v)) {
+				return false
+			}
 		}
 	}
 	return true

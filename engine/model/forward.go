@@ -547,8 +547,9 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		want = cpu.KVF32
 	}
 	// Qwen3.8-Flash-Next's QSA pools its indexer's raw cached keys, which
-	// the references hold at f32 (qsa.go).
-	if c.QSARatio != 0 {
+	// the references hold at f32 (qsa.go): the default is f32, as MSA's is,
+	// and a forced width is kept.
+	if c.QSARatio != 0 && !m.opt.kvTypeSet {
 		want = cpu.KVF32
 	}
 	// A forced q8 cache on a model that refuses one was refused at Open
@@ -559,7 +560,6 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	s.kvFmt, s.kvl.fmt = want, want
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
 	if want == cpu.KVQ8 {
-		s.kvl.jit = s.jit
 		s.jit.ReserveKVQuant(max(c.HeadDim, c.HeadDimSWA))
 	}
 	s.allocQ4E()
@@ -2869,9 +2869,8 @@ func (s *Instance) stepDownKVToF32() { s.setKVFmt(cpu.KVF32) }
 // what a served instance takes from the pool's first (Pool.Serve), so a
 // session's history reads the same on every instance it leases.
 func (s *Instance) setKVFmt(f cpu.KVFmt) {
-	s.kvFmt, s.kvl.fmt, s.kvl.jit = f, f, nil
+	s.kvFmt, s.kvl.fmt = f, f
 	if f == cpu.KVQ8 {
-		s.kvl.jit = s.jit
 		s.jit.ReserveKVQuant(max(s.c.HeadDim, s.c.HeadDimSWA))
 	}
 	// Carry every caller-visible setting into the fresh cache (namespace and
@@ -3459,7 +3458,6 @@ func (s *Instance) ropeTable(li int, global, local []float32, tok int) []float32
 }
 
 // narrow copies one run of f32 into the f32 cache.
-func narrow(dst []float32, src []float32) { copy(dst, src) }
 
 // errDevice is a device failure the instance cannot continue past on the host.
 // why is the device's own reason (nn.ErrReporter), so a refusal the backend
