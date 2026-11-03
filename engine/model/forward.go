@@ -1383,9 +1383,9 @@ func (s *Instance) newHead() *nn.Head {
 	// the device (nn.Head.Softcap), which is what lets a gemma2 token end in
 	// the device argmax instead of a 256,000-float readback.
 	// A LayerNorm head (C6) carries its bias, zeros where the file has none.
-	// The head's own bias (phi-2's output.bias) and the logit scale are added
-	// by finishDevLogits on the host after the device, unless the device
-	// served the head's graph and says so (nn.Head.Applied).
+	// The head's own bias (phi-2's output.bias) and the logit scale are
+	// stages of the head's graph, which the device applies with the rest
+	// (nn.Head.Applied).
 	if c.LayerNorm {
 		h.NormB = s.m.lnBias(s.m.outNormB)
 	}
@@ -2650,8 +2650,6 @@ func (s *Instance) AttnPaired() int64 { return s.attnPaired.Load() }
 // default, negative none.
 func (s *Instance) SetAttnPair(v int) { s.attnPair = v }
 
-// rmsnorm runs the generated norm.
-func (s *Instance) rmsnorm(y, x, w []float32, eps float64) { nn.RMSNorm32JIT(y, x, w, eps) }
 
 // actmulAll applies the activation across a whole FFN width, on the pool.
 //
@@ -2696,29 +2694,11 @@ func (m *Model) lnBias(b []float32) []float32 {
 	return m.lnZeros
 }
 
-// norm is the text graph's norm: an RMSNorm, or on a classic block (C6) a
-// LayerNorm with its bias (b may be nil -- command-r's has none).
-func (s *Instance) norm(y, x, w, b []float32) {
-	c := s.c
-	// A block with no pre-norm (OLMo 2, EXAONE 4) feeds its input as it is;
-	// the loader admits that only where the block's post-norms stand in.
-	if w == nil {
-		copy(y, x)
-		return
-	}
-	if c.LayerNorm {
-		nn.LayerNorm32JIT(y, x, w, b, c.RMSEps)
-		return
-	}
-	s.rmsnorm(y, x, w, c.RMSEps)
-}
 
 // ffnPad rounds an FFN width up to a whole vector. The scratch is allocated at
 // this length so a ragged tail has somewhere legal to go.
 func ffnPad(n int) int { return (n + nn.ElemLanes - 1) &^ (nn.ElemLanes - 1) }
 
-// softmax runs the generated softmax over the first n entries of row.
-func (s *Instance) softmax(row []float32, n int) { nn.Softmax32JIT(row, n) }
 
 // attStride rounds a score row's stride up to a whole vector, so the padding
 // the generated softmax writes stays inside the row it belongs to.
@@ -2776,32 +2756,29 @@ func (s *Instance) addInto(dst, src []float32) {
 	s.axpy(dst, src, a)
 }
 
-// finishDevLogits is finishLogits for logits the device head produced, which
-// already carry the final softcap (capping twice is a different function). A
-// device that served the head's graph applied the bias and the scale too, and
-// says so (nn.Head.Applied); applying either again is a different function.
-// No model has both a head bias and a final softcap, so the order is safe.
-func (s *Instance) finishDevLogits(x []float32) {
-	var applied nn.HeadStage
+// devLogits says the logits the device's head handed back carry every stage
+// of the head past the projection (devApplied).
+func (s *Instance) devLogits() error {
+	var a nn.HeadStage
 	if s.head != nil {
-		applied = s.head.Applied
+		a = s.head.Applied
 	}
-	s.finishApplied(x, applied)
+	return s.devApplied(a)
 }
 
-// finishApplied is finishDevLogits for a device that applied the stages a of
-// the head: the one a step across sessions ran for all of them.
-func (s *Instance) finishApplied(x []float32, a nn.HeadStage) {
-	if a&nn.HeadBias == 0 {
-		s.headBias(x)
+// devApplied says a device that applied the stages a of the head applied
+// all of them: the composed head's form is the whole head, its bias, cap
+// and scale in the model's order, and a device serves it whole or refuses
+// the call (nn.Head.Applied).
+func (s *Instance) devApplied(a nn.HeadStage) error {
+	if left := s.m.headStages() &^ a; left != 0 {
+		return fmt.Errorf("model: the device's head left the stages %03b of the head to the caller", left)
 	}
-	if a&nn.HeadScale == 0 {
-		s.scaleLogits(x)
-	}
+	return nil
 }
 
-// headStages is what the model's head does past the projection, in the order
-// finishLogits applies it.
+// headStages is what the model's head does past the projection, in the
+// model's order.
 func (m *Model) headStages() nn.HeadStage {
 	var st nn.HeadStage
 	if m.outB != nil {
@@ -2816,23 +2793,7 @@ func (m *Model) headStages() nn.HeadStage {
 	return st
 }
 
-// headBias adds the output projection's bias (phi-2) to one or more whole rows
-// of NVocab.
-//
-// It goes first, before any cap or scale, and is added here so every arm that
-// makes logits (host, device head, batch) gets it exactly once.
-func (s *Instance) headBias(x []float32) {
-	if s.m.outB != nil {
-		s.addBiasRows(x, s.m.outB, len(x)/s.c.NVocab)
-	}
-}
 
-// scaleLogits is Granite's logit_scale, which divides.
-func (s *Instance) scaleLogits(x []float32) {
-	if c := s.c; c.LogitScale != 1 {
-		s.scale(x, float32(1/c.LogitScale))
-	}
-}
 
 // axpy runs the generated dst += alpha*src.
 func (s *Instance) axpy(dst, src []float32, alpha float32) { nn.Axpy32JIT(dst, src, alpha) }
@@ -3084,16 +3045,6 @@ func (s *Instance) addBias(out, b []float32) {
 	s.axpy(out, b, 1)
 }
 
-// addBiasRows is addBias over a batch of n rows of width len(b).
-func (s *Instance) addBiasRows(out, b []float32, n int) {
-	if b == nil {
-		return
-	}
-	w := len(b)
-	for r := 0; r < n; r++ {
-		s.axpy(out[r*w:(r+1)*w], b, 1)
-	}
-}
 
 // mv runs one matvec on generated code. There is no fallback: a decline is an
 // error naming the tensor.
@@ -3338,8 +3289,6 @@ func (s *Instance) embedOnDevice() bool {
 // exactly the logits Forward would return.
 func (s *Instance) ForwardGreedy(token int32) (int32, error) {
 	h := s.head
-	// A device that leaves the head's bias to the host (finishLogits) declines
-	// the request, and the logits come home (nn.Head.Applied).
 	onDev := h != nil
 	if onDev {
 		h.ArgmaxOnly, h.Token = true, -1
@@ -3368,10 +3317,6 @@ func (s *Instance) ForwardGreedy(token int32) (int32, error) {
 // the logits Forward returns: the device selects exactly the host's
 // candidates, and the softmax, cuts and draw are the host sampler's own.
 //
-// A head bias or a logit scale the device left to the host (finishLogits) in
-// its last call (nn.Head.Left) would come after the device's penalty rather
-// than before it, so such a head is sampled from the logits that come home;
-// the device declines the request itself in any call that would leave either.
 // A greedy smp is ForwardGreedy.
 func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	if smp == nil || smp.Temp <= 0 {
@@ -3574,8 +3519,9 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 				// The device ran the output norm and the projection too, so the
 				// token is finished and the residual never came home.
 				//
-				// The device applied the final softcap (nn.Head.Softcap).
-				s.finishDevLogits(s.logits)
+				if err := s.devLogits(); err != nil {
+					return nil, err
+				}
 				s.advance(0, 1)
 				// The token is complete, so it steps what every token steps:
 				// a head on the device is no reason for the seam tuner or the
@@ -3666,10 +3612,10 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}
 	}
 	s.unfuse()
-	// The tier's head applied the final softcap, so it takes only the scale;
-	// the CPU's composed head applied every stage.
 	if done {
-		s.finishDevLogits(s.logits)
+		if err := s.devLogits(); err != nil {
+			return nil, err
+		}
 	}
 	// Through advance, not s.pos++: Prefill reads bpos, so a Prefill after a
 	// Forward must see this token.

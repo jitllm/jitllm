@@ -415,19 +415,13 @@ type Head struct {
 	Softcap float32
 	// Stages is what the model's head does past the projection, and Bias the
 	// output bias HeadBias adds, NVocab wide (nil without it). A device that
-	// serves Graph applies every stage the model has, in the model's order;
-	// one that runs the head itself applies HeadCap alone and leaves the
-	// others to the caller.
+	// serves Graph applies every stage the model has, in the model's order,
+	// and one that does not serve it refuses the call.
 	Stages HeadStage
 	Bias   []float32
 	// Applied is which Stages the device applied to the logits in the call
-	// that last ran this head, set by every such call: HeadCap where it
-	// capped them, and with it HeadBias and HeadScale where it served Graph.
-	// The caller applies the rest (Instance.finishDevLogits). A device asked for
-	// the token (ArgmaxOnly) of a head whose bias it leaves to the caller, or
-	// for the candidates (SampleK) or the picked labels (Pick) of one whose
-	// bias or scale it leaves, declines the request and returns the logits, as
-	// for any request it cannot serve.
+	// that last ran this head, set by every such call: every one, where it
+	// served Graph. The caller holds it to that (Instance.devApplied).
 	Applied HeadStage
 	// Embeds says W is also the model's token embedding (a tied model), so a
 	// tier holding the head can look prompt tokens up itself -- see
@@ -470,9 +464,8 @@ type Head struct {
 	Tokens []int32
 	// RowLogits asks LayersRows to read every row's logits back as well, into
 	// Logits, row-major and NVocab wide per row, for a caller that samples.
-	// They are the per-row head's output: capped where the head caps
-	// (Softcap), a head bias and a logit scale the caller's to apply
-	// (finishLogits), as for one sequence.
+	// They are the per-row head's output, every stage of the head applied,
+	// as for one sequence.
 	//
 	// On a Layers call of several rows (a prompt chunk) it asks for every
 	// row's projection rather than the last row's alone: a speculative

@@ -189,7 +189,9 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	// The wanted rows' logits, which is one contiguous run of nlogit*NVocab:
 	// capped already where the device ran the head.
 	if headOnDev {
-		s.finishDevLogits(s.blogits[:nlogit*c.NVocab])
+		if err := s.devLogits(); err != nil {
+			return nil, err
+		}
 	}
 	return s.blogits[:nlogit*c.NVocab], nil
 }

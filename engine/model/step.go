@@ -651,7 +651,9 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		if r.Logits {
 			copy(st.logits, logits[at*c.NVocab:(at+1)*c.NVocab])
 			if !headed {
-				st.finishApplied(st.logits, h.Applied)
+				if err := st.devApplied(h.Applied); err != nil {
+					return nil, err
+				}
 			}
 			out[i] = st.logits
 			at++

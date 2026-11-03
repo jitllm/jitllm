@@ -284,7 +284,9 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		copy(s.rowsTok, h.Tokens[from:want])
 		out.tokens = s.rowsTok[:want-from]
 	case h != nil:
-		s.finishDevLogits(logits[:want*c.NVocab])
+		if err := s.devLogits(); err != nil {
+			return err
+		}
 		if tail {
 			copy(out.logits[:(n-from)*c.NVocab], logits[from*c.NVocab:n*c.NVocab])
 		}
@@ -309,7 +311,9 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 		if cnt == 1 {
 			copy(r.logits, s.logits[:c.NVocab])
 		}
-		s.finishDevLogits(r.logits[:cnt*c.NVocab])
+		if err := s.devLogits(); err != nil {
+			return err
+		}
 		return s.kvCheck()
 	}
 	off := r.from - lastBase
@@ -443,7 +447,9 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 	s.advance(0, n)
 	if !out.noHead {
 		from := out.from
-		s.finishDevLogits(logits[from*c.NVocab:])
+		if err := s.devLogits(); err != nil {
+			return err
+		}
 		copy(out.logits[:(n-from)*c.NVocab], logits[from*c.NVocab:])
 	}
 	return s.kvCheck()
