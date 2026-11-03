@@ -4,6 +4,7 @@ package cpu
 
 import (
 	"math/rand/v2"
+	"runtime"
 	"slices"
 	"testing"
 	"unsafe"
@@ -52,7 +53,7 @@ func ngramRef(win []uint32, eos uint64, mul, off, voc []uint64, per int, reset b
 func TestNGramHashMatchesReference(t *testing.T) {
 	rng := rand.New(rand.NewPCG(7, 13))
 	const eos = 248044
-	for _, em := range hcTiers() {
+	for _, em := range hostTiers() {
 		tier := em.Tier
 		for _, sh := range []struct{ n, per int }{{3, 8}, {2, 1}, {4, 3}, {3, 2}} {
 			for _, reset := range []bool{true, false} {
@@ -117,4 +118,14 @@ func TestNGramHashMatchesReference(t *testing.T) {
 			}
 		}
 	}
+}
+
+// hostTiers is every emitter table this host runs: its own, and on an AVX2
+// host the SSE tier's too.
+func hostTiers() []*Emitters {
+	ts := []*Emitters{hostTable()}
+	if runtime.GOARCH == "amd64" && HostTier() != TierSSE {
+		ts = append(ts, EmittersFor(TierSSE))
+	}
+	return ts
 }

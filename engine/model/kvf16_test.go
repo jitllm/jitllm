@@ -59,18 +59,6 @@ func TestKVF16IsSelectedAndRuns(t *testing.T) {
 		if s32.KVIsF16() {
 			t.Errorf("%s: the f32 state reports an f16 cache", name)
 		}
-		// DeepSeek V4's row carries the compressor's pending projections and
-		// stays f32 whatever is asked (forward.go): forced f16 must not take.
-		if m.Cfg.DSV4() {
-			if s16.KVIsF16() {
-				t.Errorf("%s: a DeepSeek V4 row went to binary16", name)
-			}
-			t.Logf("%-30s f32 by design, forced f16 declined", name)
-			s32.Close()
-			s16.Close()
-			m.Close()
-			continue
-		}
 		if !s16.KVIsF16() {
 			t.Errorf("%s: asked for f16 and got f32 -- head dim %d has no attention kernel?",
 				name, m.Cfg.HeadDim)

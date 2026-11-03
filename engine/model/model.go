@@ -170,16 +170,6 @@ type Config struct {
 	// rotate at their base unscaled (llama.cpp's olmo2 builder passes
 	// attn_factor 1 there, transformers builds them a default rotary).
 	SWARopePlain bool
-	// RopeTail turns each head's last NRot elements rather than its first,
-	// a head being [unturned | turned] (DeepSeek V4).
-	RopeTail bool
-	// AttnDerope turns the attention's output back at the query's position
-	// before the output projection: a value that is its key carries the
-	// key's rotation (DeepSeek V4).
-	AttnDerope bool
-	// QHeadNormBare RMS-norms each query head with no weight after the
-	// query's projection (DeepSeek V4's q_b_norm).
-	QHeadNormBare bool
 
 	// Rotary scaling; see jlm.Config. YarnFactor 0 is no YaRN and RopeLinear 0
 	// no linear interpolation. Both scale the global rotary only.
@@ -282,21 +272,8 @@ type Config struct {
 	// msaFault breaks one piece of MiniMax-M3's block selection, for a gate's
 	// violation only.
 	msaFault msaFault
-	// DeepSeek V4 (ds4.go): HCMult residual streams mixed by hyper-
-	// connections (HCIters Sinkhorn rounds at HCEps), the attention output
-	// projected through OGroups groups of OLoraRank, each block's compression
-	// (CompKinds, at CompRateCSA or CompRateHCA), the first NHashLayers
-	// blocks routed by token id, and the router's sqrt-softplus gate.
-	HCMult, HCIters          int
-	HCEps                    float64
-	OGroups, OLoraRank       int
-	CompRateCSA, CompRateHCA int
-	NHashLayers              int
-	CompKinds                []jlm.CompKind
-	ExpertSqrtSoftplus       bool
-	// ds4Fault breaks one piece of DeepSeek V4's graph, for a gate's
-	// violation only.
-	ds4Fault ds4Fault
+	// HCMult is the residual streams a hyper-connected model carries.
+	HCMult int
 	// Qwen3.8-Flash-Next (q4e.go): the hyper-connections' gate rank, QSA's
 	// block size, the n-gram embedding (its one-based block, n, heads per n,
 	// row width, convolution taps, the end-of-sequence and picture ids and
@@ -370,15 +347,8 @@ func (c *Config) periodLocal(il int) bool {
 }
 
 // ropeLocal says block il turns by the sliding blocks' rotary where the
-// model holds one: a sliding block, but for one that compresses its history
-// (compRope).
-func (c *Config) ropeLocal(il int) bool { return c.SWA(il) && !c.compRope(il) }
-
-// compRope says block il compresses its history and turns by the model's
-// own rotary, its entries'.
-func (c *Config) compRope(il int) bool {
-	return c.CompAt(il) != jlm.CompNone && c.ds4Fault != ds4FaultMainRope
-}
+// model holds one: a sliding block.
+func (c *Config) ropeLocal(il int) bool { return c.SWA(il) }
 
 // AttnWindow is the key range layer il attends to from position pos: w0 is
 // the first key and an how many there are, so the keys are w0..w0+an-1 and
@@ -459,7 +429,7 @@ func (c *Config) MLA() bool { return c.KVLoraRank != 0 }
 
 // Indexer reports that attention reads only the positions DeepSeek V3.2's
 // lightning indexer selects.
-func (c *Config) Indexer() bool { return c.IdxHeads != 0 && c.IdxBlock == 0 && !c.DSV4() && !c.Q4E() }
+func (c *Config) Indexer() bool { return c.IdxHeads != 0 && c.IdxBlock == 0 && !c.Q4E() }
 
 // MSA reports MiniMax Sparse Attention: attention on the blocks past the
 // dense lead reads only the position blocks each kv group's indexer head
@@ -482,11 +452,6 @@ func (c *Config) extraKVHead(li int) bool { return c.MSAAt(li) || c.QSAAt(li) }
 func (c *Config) KVRowAt(li int) int {
 	if c.extraKVHead(li) {
 		return (c.NKVHead + 1) * c.HeadDim
-	}
-	if len(c.CompKinds) != 0 {
-		// The key, and on a compressing block the compressor's inputs
-		// (compRowAt).
-		return c.compRowAt(li).width
 	}
 	return c.KVDimAt(li)
 }
@@ -595,13 +560,6 @@ func (c *Config) MaxKVDim() int {
 		// The row an MSA or QSA block writes: its k with the indexer's key
 		// after it.
 		return (c.NKVHead + 1) * c.HeadDim
-	}
-	if c.DSV4() {
-		w := 0
-		for li := 0; li < c.NLayer; li++ {
-			w = max(w, c.KVRowAt(li))
-		}
-		return w
 	}
 	return max(c.KVDim(), c.NKVHeadSWA*c.HeadDimSWA)
 }
@@ -738,6 +696,10 @@ func configFrom(c *jlm.Config) (*Config, error) {
 	if !c.Arch.Valid() || c.Arch == jlm.ArchCLIP {
 		return nil, fmt.Errorf("model: %v is not a language model", c.Arch)
 	}
+	if c.Arch == jlm.ArchDeepseek4 {
+		return nil, fmt.Errorf("model: %v is refused: its compressed attention and Sinkhorn hyper-connections "+
+			"have no composed form stated from the container", c.Arch)
+	}
 	out := &Config{
 		Arch:         c.Arch.String(),
 		chanDecay:    c.Arch == jlm.ArchKimiLinear || c.Arch == jlm.ArchKimiK3,
@@ -812,16 +774,8 @@ func configFrom(c *jlm.Config) (*Config, error) {
 		LayerNorm:      c.Flags.Has(jlm.FlagLayerNorm),
 		Parallel:       c.Flags.Has(jlm.FlagParallel),
 
-		HCMult:      int(c.HCMult),
-		HCLowRank:   int(c.HCLowRank),
-		HCIters:     int(c.HCIters),
-		HCEps:       float64(c.HCEps),
-		OGroups:     int(c.OGroups),
-		OLoraRank:   int(c.OLoraRank),
-		CompRateCSA: int(c.CompRateCSA),
-		CompRateHCA: int(c.CompRateHCA),
-		NHashLayers: int(c.NHashLayers),
-		CompKinds:   c.CompKinds,
+		HCMult:    int(c.HCMult),
+		HCLowRank: int(c.HCLowRank),
 	}
 	// Zero means the global layers' geometry; the engine wants the widths.
 	out.HeadDimSWA, out.NKVHeadSWA, out.NRotSWA = out.HeadDim, out.NKVHead, out.NRot
@@ -975,8 +929,9 @@ func configFrom(c *jlm.Config) (*Config, error) {
 		}
 		out.Act = nn.ActSwiGLUClamp
 	}
-	if err := ds4Config(out, c); err != nil {
-		return nil, err
+	if out.HCMult != 0 && out.HCLowRank == 0 || len(c.CompKinds) != 0 || c.NHashLayers != 0 {
+		return nil, fmt.Errorf("model: %s carries hyper-connections mixed by Sinkhorn rounds, compressed "+
+			"attention or experts routed by token id, which have no composed form stated from the container", out.Arch)
 	}
 	if err := q4eConfig(out, c); err != nil {
 		return nil, err
@@ -1107,10 +1062,6 @@ type layer struct {
 	// key is idxK with idxKNorm.
 	idxQ     tensor
 	idxQNorm []float32
-	// DeepSeek V4 (ds4.go): ds4 holds the block's hyper-connections,
-	// compressors and grouped output projection; the query latent is
-	// wqa/qaNorm/wqb, the key wk with kvaNorm, the output's second half wo.
-	ds4 *ds4Layer
 	// q4e is Qwen3.8-Flash-Next's hyper-connections and n-gram weights.
 	q4e *q4eLayer
 	// Kimi-K3 (k3.go): the residual attention's two score vectors and their
@@ -1361,8 +1312,6 @@ type Model struct {
 	// ropeSWA is the LOCAL layers' rotary where an architecture trains two
 	// bases, and nil where it trains one -- which is every model but gemma3.
 	ropeSWA *nn.Rope
-	// ds4Head is DeepSeek V4's stream collapse before the head (ds4.go).
-	ds4Head *ds4Head
 	// q4eHead is Qwen3.8-Flash-Next's head mix and ngram its n-gram table.
 	q4eHead *q4eHead
 	ngram   *ngramTable
@@ -2587,22 +2536,6 @@ func releaseLayer(c *jlm.File, li int, l *layer, keepExperts bool) {
 			}
 		}
 	}
-	if l.ds4 != nil {
-		for _, t := range append(l.ds4.tensors(), &l.wqa, &l.wqb) {
-			t.data = nil
-			if t.packed != nil {
-				t.packed.QS, t.packed.D, t.packed.SC = nil, nil, nil
-			}
-		}
-		for i := range l.ds4.woAG {
-			t := &l.ds4.woAG[i]
-			t.data = nil
-			if t.packed != nil {
-				t.packed.QS, t.packed.D, t.packed.SC = nil, nil, nil
-			}
-		}
-		l.ds4.woAFrom = bankSpans{}
-	}
 	if w := l.mtp; w != nil {
 		for _, t := range []*tensor{&w.ehProj, &w.head, &w.embd} {
 			if t.e == nil || t.e.Block == jlm.DenseBlock {
@@ -2683,24 +2616,6 @@ func bindPacked(c *jlm.File, cfg *Config, l *layer) error {
 	if d := l.q4e; d != nil {
 		for _, t := range d.tensors() {
 			bindOne(c, t)
-		}
-	}
-	if d := l.ds4; d != nil {
-		for _, t := range d.tensors() {
-			bindOne(c, t)
-		}
-		if from := spansOf(d.woA); from != d.woAFrom {
-			gw := cfg.NHead / cfg.OGroups * cfg.HeadDim
-			for g := range d.woAG {
-				t, err := bankExpert(d.woA, jlm.RoleAttnOutA, cfg.OGroups, cfg.OLoraRank, gw, g)
-				if err != nil {
-					return err
-				}
-				if !sameView(d.woAG[g], t) {
-					d.woAG[g] = t
-				}
-			}
-			d.woAFrom = from
 		}
 	}
 	// A prediction block's eh_proj, head and embedding. The head and the
@@ -2937,11 +2852,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			return nil, err
 		}
 	}
-	if cfg.DSV4() {
-		if err := loadDS4Head(m, cfg, get, vec); err != nil {
-			return nil, err
-		}
-	}
 	if err := loadK3Head(m, cfg, vec); err != nil {
 		return nil, err
 	}
@@ -3096,14 +3006,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				head = append(head, bind{jlm.RoleAttnQA, &l.wqa})
 			}
 			want = append(head, want[4:]...)
-		}
-		// DeepSeek V4: the query latent's two halves, the key, and the
-		// grouped projection's second half; the rest is loadDS4's.
-		if cfg.DSV4() {
-			want = append([]bind{
-				{jlm.RoleAttnQA, &l.wqa}, {jlm.RoleAttnQB, &l.wqb},
-				{jlm.RoleAttnK, &l.wk}, {jlm.RoleAttnOut, &l.wo},
-			}, want[4:]...)
 		}
 		if linear {
 			head := []bind{
@@ -3617,11 +3519,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				return nil, err
 			}
 		}
-		if cfg.DSV4() {
-			if err := loadDS4(l, bi, cfg, get, vec); err != nil {
-				return nil, err
-			}
-		}
 		if err := loadK3(l, bi, cfg, c, get, vec); err != nil {
 			return nil, err
 		}
@@ -3991,14 +3888,6 @@ func (m *Model) maxMatVec() (rows, k int) {
 		if l.q4e != nil {
 			for _, t := range l.q4e.tensors() {
 				see(t)
-			}
-		}
-		if l.ds4 != nil {
-			for _, t := range l.ds4.tensors() {
-				see(t)
-			}
-			for i := range l.ds4.woAG {
-				see(&l.ds4.woAG[i])
 			}
 		}
 	}

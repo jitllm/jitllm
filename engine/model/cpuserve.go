@@ -73,9 +73,6 @@ const (
 	cpuArgKeys
 	cpuArgRopeRows
 	cpuArgRopeMarks
-	cpuArgEntKeys
-	cpuArgEntPages
-	cpuArgEntRows
 	cpuArgValues
 	cpuArgPages
 	cpuArgRows
@@ -275,12 +272,7 @@ type cpuState struct {
 	fpages []uint32
 	rows   [4]uint32
 	zero   []uint32
-	// entRow and entTab are a block's entry descriptors (cpuEntBind), a
-	// decode's and a call's rows'.
-	entRow [4]uint32
-	entTab []uint32
-	// tok is the step's rows' tokens (cpuTokens), tok1 a decode's.
-	tok  []uint32
+	// tok1 is a decode's token.
 	tok1 [1]uint32
 	// oneFresh and tabsFresh say the decode row's and the step's rows'
 	// rotary tables are made (cpuOneTable, cpuRowTables); tabSeq is the
@@ -485,11 +477,6 @@ type cpuBound struct {
 	// marks (cpuTables).
 	csSWA               []float32
 	ropeRows, ropeMarks []uint32
-	// ent is the block's entries, entPages their table and entRows the
-	// rows' entry descriptors (cpuEntBind).
-	ent      *kvPages
-	entPages []uint32
-	entRows  []uint32
 	// recLi is the block whose recurrent states a linear block's step binds
 	// and recOf the session that holds them.
 	recLi int
@@ -580,9 +567,6 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (composer.Decline, er
 			return why, nil
 		}
 	}
-	if why := s.cpuEntReady(li, pos); why != composer.DeclineServes {
-		return why, nil
-	}
 	b := &s.cpu.bound
 	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: pg.table(max(s.nseq, 1)),
 		recLi: s.cpuRecLi(li), recOf: s.Session, side: s.cpuSide(li)}
@@ -592,8 +576,6 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (composer.Decline, er
 	s.cpu.tok1[0] = uint32(s.tok)
 	s.cpu.pos1 = [2]uint32{1, uint32(pos)}
 	b.tok, b.pos, b.csSWA = s.cpu.tok1[:], s.cpu.pos1[:], s.csSWA
-	s.cpu.onePos[0] = pos
-	s.cpuEntBind(b, li, s.cpu.entRow[:], nil, s.cpu.onePos[:])
 	if why := s.cpuWeights(cb.f, li, l); why != composer.DeclineServes {
 		return why, nil
 	}
@@ -1000,7 +982,7 @@ func (s *Instance) cpuRowsReady(li int, f *cpuBlockForm, pos []int) composer.Dec
 	if why := s.cpuReadable(hl, start, end-1); why != composer.DeclineServes {
 		return why
 	}
-	return s.cpuEntReady(li, pos...)
+	return composer.DeclineServes
 }
 
 // cpuFaultTable is the page table a step of the layer whose pages pg
@@ -1136,9 +1118,6 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 		}
 		*b = cpuBound{li: li, l: l, own: s.cpuOwn(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
 			kv: pg, pages: s.cpuFaultTable(pg, end), side: bside}
-		if len(s.cpu.tok) > r0 {
-			b.tok = s.cpu.tok[r0:]
-		}
 		if swa != nil {
 			b.csSWA = swa[r0*nswa:]
 		}
@@ -1150,12 +1129,6 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, lo, hi int, x
 			s.cpu.posTab[1+i] = uint32(pos[r0+min(i, k-1)])
 		}
 		b.pos = s.cpu.posTab
-		if s.kv.entRate(li) > 0 {
-			if len(s.cpu.entTab) < len(s.cpu.rowsTab) {
-				s.cpu.entTab = make([]uint32, len(s.cpu.rowsTab))
-			}
-			s.cpuEntBind(b, li, s.cpu.entTab, seq[r0:r0+k], pos[r0:r0+k])
-		}
 		if f.rec {
 			b.recLi, b.recOf, b.rec = s.cpuRecLi(li), s.Session, s.cpuRecDesc(seq[r0:r0+k])
 			if n := len(s.rconv[b.recLi]); len(s.cpu.convOut) < n {
@@ -1454,12 +1427,6 @@ func (s *Instance) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			p = unsafe.Pointer(&b.ropeMarks[0])
 		case cpuArgKeys:
 			p = unsafe.Pointer(&b.kv.arena.k[0])
-		case cpuArgEntKeys:
-			p = unsafe.Pointer(&b.ent.arena.k[0])
-		case cpuArgEntPages:
-			p = unsafe.Pointer(&b.entPages[0])
-		case cpuArgEntRows:
-			p = unsafe.Pointer(&b.entRows[0])
 		case cpuArgValues:
 			p = unsafe.Pointer(&b.kv.arena.v[0])
 		case cpuArgPages:
@@ -1825,7 +1792,7 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpuB
 // pooled selection turning its blocks, or a rotary at positions of its own.
 func readsPlanes(g *graph.Graph) bool {
 	return slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
-		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0 || o.Kind == graph.OpRope && o.Attr.Shift > 0
+		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0
 	})
 }
 
@@ -2073,12 +2040,6 @@ func buildCPUForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole
 					ar.src = cpuArgRopeMarks
 				case t == composer.TableKeys:
 					ar.src = cpuArgKeys
-				case t == composer.TableEntKeys:
-					ar.src = cpuArgEntKeys
-				case t == composer.TableEntPages:
-					ar.src = cpuArgEntPages
-				case t == composer.TableEntRows:
-					ar.src = cpuArgEntRows
 				case t == composer.TableValues:
 					ar.src = cpuArgValues
 				case t == composer.TablePages:
@@ -2911,8 +2872,6 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &m.dense1
 		case r == jlm.RoleEmbdDense2:
 			return &m.dense2
-		case m.ds4Head != nil && r == jlm.RoleHCHeadFn:
-			return &m.ds4Head.fn
 		case m.q4eHead != nil && r == jlm.RoleHCHeadDown:
 			return &m.q4eHead.hc.down
 		case m.q4eHead != nil && r == jlm.RoleHCHeadUp:
@@ -3044,30 +3003,6 @@ func (s *Instance) cpuRoleWeight(li int, l *layer, r jlm.Role) *tensor {
 			return &h.ngCvTaps
 		}
 	}
-	if d := l.ds4; d != nil {
-		switch r {
-		case jlm.RoleHCAttnFn:
-			return &d.attnFn
-		case jlm.RoleHCFFNFn:
-			return &d.ffnFn
-		case jlm.RoleAttnOutA:
-			return &d.woA
-		case jlm.RoleCompKV:
-			return &d.compKV
-		case jlm.RoleCompGate:
-			return &d.compGate
-		case jlm.RoleIdxCompKV:
-			return &d.idxCompKV
-		case jlm.RoleIdxCompGate:
-			return &d.idxCompGate
-		case jlm.RoleCompAPE:
-			return &d.compAPET
-		case jlm.RoleIdxCompAPE:
-			return &d.idxCompAPET
-		case jlm.RoleHashExperts:
-			return &d.hashT
-		}
-	}
 	return nil
 }
 
@@ -3089,13 +3024,6 @@ func (s *Instance) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 		case jlm.RoleHCHeadNorm:
 			if s.m.q4eHead != nil {
 				return s.m.q4eHead.hc.norm
-			}
-		case jlm.RoleHCHeadBase, jlm.RoleHCHeadScale:
-			if hd := s.m.ds4Head; hd != nil {
-				if r == jlm.RoleHCHeadBase {
-					return hd.base[:s.c.HCMult]
-				}
-				return hd.scale[:1]
 			}
 		}
 		return nil
@@ -3230,22 +3158,6 @@ func (s *Instance) cpuRoleVector(li int, l *layer, r jlm.Role) []float32 {
 			return h.ngNormQ
 		case jlm.RoleNGramNormConv:
 			return h.ngNormC
-		}
-	}
-	if d := l.ds4; d != nil {
-		switch r {
-		case jlm.RoleHCAttnBase:
-			return d.attnBase
-		case jlm.RoleHCFFNBase:
-			return d.ffnBase
-		case jlm.RoleHCAttnScale:
-			return d.attnScale3
-		case jlm.RoleHCFFNScale:
-			return d.ffnScale3
-		case jlm.RoleCompNorm:
-			return d.compNorm
-		case jlm.RoleIdxCompNorm:
-			return d.idxCompNorm
 		}
 	}
 	return nil

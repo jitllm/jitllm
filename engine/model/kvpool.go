@@ -100,7 +100,4 @@ func (kc *kvCache) usePool(p *kvPagePool) {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		kc.layers[li].pool = p
 	}
-	for li := range kc.ent {
-		kc.ent[li].pool = p
-	}
 }

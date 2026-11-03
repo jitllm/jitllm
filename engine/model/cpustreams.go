@@ -38,7 +38,7 @@ func (s *Instance) CPUStreamSteps() (served int, declined [composer.NumDeclines]
 // the CPU at the instance's placement.
 func (s *Instance) cpuPlaceStreams() {
 	st := &s.cpu.streams
-	if !s.c.statesStreams() && !s.c.mixesStreamsSinkhorn() {
+	if !s.c.statesStreams() {
 		return
 	}
 	fg := s.m.frontGraphs()

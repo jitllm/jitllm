@@ -83,7 +83,6 @@ type Session struct {
 	ldStep   nn.SessionStepper
 	ldRows   nn.RowsDevice
 	ldInputs nn.LayerInputDevice
-	ldTokens nn.TokenDevice
 	ldMarks  nn.RopeMarksDevice
 	// markErr is the device's failure to hold a sequence's rotary marks
 	// (sendMarks), which the next call returns (marksHeld).

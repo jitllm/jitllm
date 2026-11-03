@@ -2,7 +2,6 @@ package model
 
 import (
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -283,27 +282,5 @@ func TestSharedPageIsNeverWrittenInPlace(t *testing.T) {
 	if bad := arm(true, true); same(want, bad) {
 		t.Fatal("a write in place into the shared page left the other session's logits unchanged: " +
 			"this gate cannot see the write it guards against")
-	}
-}
-
-// TestShareKVRefusesByName: the sessions that cannot share say why.
-func TestShareKVRefusesByName(t *testing.T) {
-	st := NewSharedStore()
-	for _, c := range []struct{ name, why string }{
-		{"synth-deepseek4.gguf", "compressed entries"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(c.name)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer m.Close()
-			s := m.NewInstance(64)
-			defer s.Close()
-			mustKey(t, s, "share-gate")
-			if err := s.ShareKV(st); err == nil || !strings.Contains(err.Error(), c.why) {
-				t.Fatalf("ShareKV: %v, want a refusal naming %q", err, c.why)
-			}
-		})
 	}
 }

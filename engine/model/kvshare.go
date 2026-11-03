@@ -356,8 +356,6 @@ func (s *Instance) ShareKV(st *SharedStore) error {
 		return fmt.Errorf("model: ShareKV wants a store")
 	case s.nseq > 1:
 		return fmt.Errorf("model: a %d-row batch cannot share kv pages: one page holds every row's slots", s.nseq)
-	case len(s.kv.ent) > 0:
-		return fmt.Errorf("model: %s keeps compressed entries beside its pages: kv page sharing is refused on it", s.c.Arch)
 	case s.kv.ns == "":
 		return fmt.Errorf("model: ShareKV wants a namespace (SetCacheKey): a page is named by its tokens only inside one")
 	case s.ld != nil && s.devCount() > 0 && !s.kvShareDevice():

@@ -114,9 +114,6 @@ type devSess struct {
 	// pleHost is the rows' per-layer embedding inputs for the next call
 	// (SetLayerInputs) and pleStage their padded staging.
 	pleHost, pleStage []float32
-	// tokIDs is the rows' token ids for the next call (SetTokenIDs), which a
-	// DeepSeek V4 block routing by token reads (ds4.go).
-	tokIDs []int32
 	// ngHost is the rows' n-gram table rows for the next call (SetNGramRows),
 	// which Qwen3.8-Flash-Next's n-gram block reads (q4e.go).
 	ngHost []float32

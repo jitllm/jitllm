@@ -267,8 +267,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 }
 
 // copyHistory copies session sid's history on block li from src's pages into
-// pages dst allocates for it: the block's own pool and, on a DeepSeek V4
-// block, its entries' (entKey). It reports the slowest path any part took and
+// pages dst allocates for it. It reports the slowest path any part took and
 // the bytes copied. Pages copy raw when both pools page alike; otherwise the
 // history is read into the device-independent row layout and written again
 // (pagedMigrate), still without the session's cache.
@@ -303,7 +302,7 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 	}
 	skp, dkp := sv.kvPages(), dv.kvPages()
 	s := seqID{sid, 0}
-	for _, key := range []int{li, entKey(li)} {
+	for _, key := range []int{li} {
 		spl := skp.layers[key]
 		if spl == nil || len(spl.owned[s]) == 0 {
 			continue

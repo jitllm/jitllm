@@ -3,9 +3,7 @@ package model
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -115,17 +113,6 @@ func TestForwardEmbdMatchesForward(t *testing.T) {
 		row := func(i int) []float32 { return e[i*m.Cfg.NEmbd : (i+1)*m.Cfg.NEmbd] }
 		step := func(i int) ([]float32, error) { return b.ForwardEmbd(row(i)) }
 		what := "ForwardEmbd"
-		// A block that routes by token id cannot run a row with none, as its
-		// references cannot (refusesIDless); a one-row span naming its id is
-		// the same decode.
-		if routesByID(m) {
-			refusesIDless(t, m, func(s *Instance) error {
-				_, err := s.ForwardEmbd(row(0))
-				return err
-			})
-			step = func(i int) ([]float32, error) { return b.PrefillMixed(Span{Embd: row(i), Tokens: ids[i : i+1]}) }
-			what = "one-row embedding spans naming their ids"
-		}
 		var got []float32
 		for i := range ids {
 			if got, err = step(i); err != nil {
@@ -134,25 +121,6 @@ func TestForwardEmbdMatchesForward(t *testing.T) {
 		}
 		diffBits(t, what, want, got)
 	}, noTune())
-}
-
-// routesByID reports whether some block of m picks its experts by the row's
-// token id (DeepSeek V4's hash-routed blocks).
-func routesByID(m *Model) bool { return m.Cfg.NHashLayers > 0 }
-
-// refusesIDless holds a model that routes by token id to its references: a
-// supplied embedding with no id is refused by name, not routed somewhere.
-// transformers' DeepseekV4HashRouter indexes tid2eid by input_ids, which
-// inputs_embeds alone do not give it, and llama.cpp's deepseek4 builder
-// gathers the table at the batch's tokens. The run is an instance of its own, so a
-// refusal half way through a block leaves nothing behind for the gate.
-func refusesIDless(t *testing.T, m *Model, run func(*Instance) error) {
-	t.Helper()
-	s := m.NewInstance(64)
-	defer s.Close()
-	if err := run(s); err == nil || !strings.Contains(err.Error(), "routes by token id") {
-		t.Fatalf("an embedding row with no token id on a model that routes by it: %v, want a refusal naming it", err)
-	}
 }
 
 // TestPrefillMixedMatchesPrefill runs with tuning off: on arm64 a timed shape
@@ -175,29 +143,6 @@ func TestPrefillMixedMatchesPrefill(t *testing.T) {
 
 		e := embdRows(t, m, ids[cut1:cut2])
 		mid := Span{Embd: e}
-		// A model that routes by token id refuses the embedding rows without
-		// their ids, and runs them naming them; a wrong name routes them
-		// elsewhere, which the logits must show.
-		if routesByID(m) {
-			refusesIDless(t, m, func(s *Instance) error {
-				_, err := s.PrefillMixed(Span{Tokens: ids[:cut1]}, mid, Span{Tokens: ids[cut2:]})
-				return err
-			})
-			wrong := make([]int32, cut2-cut1)
-			for i := range wrong {
-				wrong[i] = ids[cut1+i] + 1
-			}
-			w := m.NewInstance(64)
-			bad, err := w.PrefillMixed(Span{Tokens: ids[:cut1]}, Span{Embd: e, Tokens: wrong}, Span{Tokens: ids[cut2:]})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if slices.Equal(bad, want) {
-				t.Error("the embedding rows named by the wrong ids gave the right logits: the ids reach no router")
-			}
-			w.Close()
-			mid.Tokens = ids[cut1:cut2]
-		}
 		b := m.NewInstance(64)
 		defer b.Close()
 		got, err := b.PrefillMixed(

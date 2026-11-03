@@ -522,10 +522,10 @@ func (g *devTier) persistBuild(ps *persister, lo, hi, w int) (persistSeg, error)
 
 // persistable reports whether block l's launches are held: a block whose
 // emission makes calls of its own on the session between launches (a
-// streamed mixture's selection read back, a linear block's or DeepSeek V4's
-// own submissions) runs per-op.
+// streamed mixture's selection read back, a linear block's own
+// submissions) runs per-op.
 func persistable(l *layer, bs *blockScratch) bool {
-	return l != nil && l.stream == nil && !l.linear && l.ds4 == nil && l.k3 == nil && l.q4e == nil && l.altRouter == nil
+	return l != nil && l.stream == nil && !l.linear && l.k3 == nil && l.q4e == nil && l.altRouter == nil
 }
 
 // persistDrain issues what is held and keeps collecting.

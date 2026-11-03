@@ -196,24 +196,6 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.In) != 2 || len(o.Out) != 1 || width(o.In[0]) != width(o.In[1]) || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: widths %d and %d into %d", at, width(o.In[0]), width(o.In[1]), width(o.Out[0]))
 			}
-		case OpColPool:
-			a := o.Attr
-			n := 1
-			if a.Overlap {
-				n = 2
-			}
-			switch {
-			case len(o.In) != 0 || len(o.Out) != 1 || len(o.Reads) != 1 || len(o.Writes) != 0:
-				bad("%s: %d inputs, %d outputs, %d histories read and %d written", at, len(o.In), len(o.Out), len(o.Reads), len(o.Writes))
-			case a.HeadDim < 1 || a.Span < 1 || width(o.Out[0]) != a.HeadDim:
-				bad("%s: a pool of %d columns over windows of %d into %d", at, a.HeadDim, a.Span, width(o.Out[0]))
-			case a.Offset < 0 || a.GateAt < 0 || a.Offset+n*a.HeadDim > a.Width || a.GateAt+n*a.HeadDim > a.Width:
-				bad("%s: values at %d and gates at %d of %d columns (%d a row) in a row of %d", at, a.Offset, a.GateAt, a.HeadDim, n, a.Width)
-			}
-		case OpKVAppend:
-			if len(o.Writes) == 1 && o.Writes[0].State == StateEnt && (len(o.In) != 2 || o.In[0] != o.In[1]) {
-				bad("%s: an entry whose value is not its key", at)
-			}
 		case OpUnfold:
 			if t := o.Attr.Taps; len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || o.Attr.GridW < 1 || t < 1 || t%2 == 0 ||
 				width(o.Out[0]) < t*t*width(o.In[0]) {

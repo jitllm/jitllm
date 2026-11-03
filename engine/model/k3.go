@@ -132,7 +132,7 @@ func k3Config(out *Config, c *jlm.Config, nact int) error {
 		out.ExpertWeightIn):
 		return fmt.Errorf("model: %s: a latent mixture at %d on %d experts at n_embd %d", out.Arch,
 			out.ExpertLatent, out.NExpert, out.NEmbd)
-	case out.AttnResBlock < 0 || out.ResAttn() && (out.PredStreams != 0 || out.DSV4() || out.Parallel ||
+	case out.AttnResBlock < 0 || out.ResAttn() && (out.PredStreams != 0 || out.HCMult != 0 || out.Parallel ||
 		out.NMTP != 0):
 		return fmt.Errorf("model: %s: residual attention every %d blocks beside another residual "+
 			"structure", out.Arch, out.AttnResBlock)

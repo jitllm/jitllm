@@ -201,7 +201,7 @@ func (s *gpuSession) inputsTo(ds []*devTier) []*devTier {
 
 // inputsOn hands the session's inputs to d alone.
 func (s *gpuSession) inputsOn(d *devTier) {
-	d.setInputs(s.sid, s.ple, s.ids, s.ng, s.prompt)
+	d.setInputs(s.sid, s.ple, s.ng, s.prompt)
 }
 
 // pleRows is the staged per-layer inputs, n floats: the caller's rows, then

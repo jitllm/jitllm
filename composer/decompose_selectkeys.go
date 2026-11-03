@@ -39,11 +39,6 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	pool := c.History.Keys
 	keys, desc, pages := pool.operand(TableKeys.op()), TableRows.op(), TablePages.op()
-	if o.Reads[0].State == graph.StateEnt {
-		// Over the entry history: its f32 pool, descriptors and pages.
-		pool = Pool{}
-		keys, desc, pages = TableEntKeys.op(), TableEntRows.op(), TableEntPages.op()
-	}
 	if err := pool.check(a.Width); err != nil {
 		return nil, err
 	}

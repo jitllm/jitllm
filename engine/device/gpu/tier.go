@@ -1985,12 +1985,12 @@ func (g *devTier) setRecSteps(sid uint64, n int) {
 	g.mu.Unlock()
 }
 
-// setInputs hands session sid's per-layer inputs and token ids to this device
-// for its next call (gpuSession.inputsTo).
-func (g *devTier) setInputs(sid uint64, ple []float32, ids []int32, ng []float32, prompt bool) {
+// setInputs hands session sid's per-layer inputs to this device for its
+// next call (gpuSession.inputsTo).
+func (g *devTier) setInputs(sid uint64, ple []float32, ng []float32, prompt bool) {
 	g.mu.Lock()
 	ds := g.sessOf(sid)
-	ds.pleHost, ds.tokIDs, ds.ngHost, ds.prompt = ple, ids, ng, prompt
+	ds.pleHost, ds.ngHost, ds.prompt = ple, ng, prompt
 	g.mu.Unlock()
 }
 

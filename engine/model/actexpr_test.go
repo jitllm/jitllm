@@ -117,7 +117,10 @@ func actSwap(k nn.ActKind) func(*Model) func() {
 		}
 		gated := make([]bool, c.NLayer)
 		for li := range gated {
-			gated[li] = m.stores(li, jlm.RoleFFNGate) || !m.stores(li, jlm.RoleFFNUp)
+			// As the converter reads it: the dense FFN's roles or the
+			// experts' banks.
+			gate := m.stores(li, jlm.RoleFFNGate) || m.stores(li, jlm.RoleExpGateBank)
+			gated[li] = gate || !m.stores(li, jlm.RoleFFNUp) && !m.stores(li, jlm.RoleExpUpBank)
 		}
 		if err := convert.StateGated(&s, gated); err != nil {
 			panic(err)
@@ -160,24 +163,5 @@ func statedExprMut(f func([]jlm.Term)) func(*Model) func() {
 			c.Acts = was
 			undo()
 		}
-	}
-}
-
-// sigmoidScore restates m's router score as a sigmoid of the logits, the
-// container's statement and its config with it, and has the front end state
-// the blocks again.
-func sigmoidScore(m *Model) func() {
-	undoC := cfgMut(m, func(c *Config) { c.ExpertSqrtSoftplus, c.ExpertSigmoid = false, true })
-	c := m.container.Config()
-	was := c.RouterScore
-	s := *c
-	s.Flags2 &^= jlm.Flag2ExpertSqrtSoftplus
-	s.Flags |= jlm.FlagExpertSigmoid
-	c.RouterScore = convert.RouterScore(&s)
-	undo := m.restate(func(map[jlm.Role]graph.Shape) {})
-	return func() {
-		c.RouterScore = was
-		undo()
-		undoC()
 	}
 }

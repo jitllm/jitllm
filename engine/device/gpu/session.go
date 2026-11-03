@@ -61,10 +61,8 @@ type gpuSession struct {
 	slotBuf []int
 	// rows is the session's rows calls' own state (rowsCall).
 	rows rowsCall
-	// ple is the rows' per-layer inputs for the next call (SetLayerInputs),
-	// ids their token ids (SetTokenIDs).
+	// ple is the rows' per-layer inputs for the next call (SetLayerInputs).
 	ple []float32
-	ids []int32
 	// ng is the rows' n-gram table rows (SetNGramRows).
 	ng []float32
 	// prompt says the calls are a prompt's (SetPrompt).
@@ -206,11 +204,6 @@ func (s *gpuSession) ReserveKVSeqs(bases, ends []int) bool {
 func (s *gpuSession) MigrateKVSeq(li, base int, k, v []float32, pos int, toDevice bool) bool {
 	defer s.leave(s.enter())
 	return s.g.migrateKVSeq(s.sid, li, base, k, v, pos, toDevice)
-}
-
-func (s *gpuSession) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) bool {
-	defer s.leave(s.enter())
-	return s.g.migrateEnt(s.sid, li, base, ent, n, toDevice)
 }
 
 // RecSteps forwards the device's count; see devTier.recSteps. It takes no

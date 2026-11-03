@@ -1704,22 +1704,6 @@ func (g *GPU) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int, to
 	return d.migrateKVSeq(sid, li, base, k, v, pos, toDevice)
 }
 
-// MigrateEnt is migrateEnt for the zero session: a caller that never attached.
-func (g *GPU) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) bool {
-	return g.migrateEnt(0, li, base, ent, n, toDevice)
-}
-
-// migrateEnt forwards to the device holding block li; see devTier.MigrateEnt.
-func (g *GPU) migrateEnt(sid uint64, li, base int, ent []float32, n int, toDevice bool) bool {
-	g.mu.Lock()
-	d := g.own[li]
-	g.mu.Unlock()
-	if d == nil {
-		return false
-	}
-	return d.migrateEnt(sid, li, base, ent, n, toDevice)
-}
-
 // owners appends to buf every distinct device that holds a block, in block
 // order. A decode step reserves through it every token once blocks span two
 // devices, so the caller passes a stack array and nothing reaches the heap

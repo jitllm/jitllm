@@ -71,7 +71,6 @@ func (l *layer) tensors() []**resident {
 		&l.idxQB, &l.idxK, &l.idxProj,
 		&l.laurelL, &l.laurelR, &l.ssmIn,
 		&l.idxQ,
-		&l.woA, &l.compKV, &l.compGate, &l.idxCompKV, &l.idxCompGate,
 		&l.mlaGate, &l.routedDown, &l.routedUp,
 		&l.hcAD, &l.hcAU, &l.hcAI, &l.hcFD, &l.hcFU, &l.hcFI, &l.ngKey, &l.ngVal}
 }
@@ -111,8 +110,6 @@ func weightRole(i int) string {
 		"indexer.attn_q_b", "indexer.attn_k", "indexer.proj",
 		"laurel_l", "laurel_r", "ssm_in",
 		"indexer.q_proj",
-		"attn_output_a", "attn_compressor_kv", "attn_compressor_gate",
-		"indexer_compressor_kv", "indexer_compressor_gate",
 		"attn_gate", "ffn_routed_down", "ffn_routed_up",
 		"hc_attn_down", "hc_attn_up", "hc_attn_inject", "hc_ffn_down", "hc_ffn_up", "hc_ffn_inject",
 		"ngram_key", "ngram_value"}

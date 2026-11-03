@@ -112,33 +112,6 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 	})
 }
 
-// TestFrontStatesSeveralStreams holds a model of several residual streams
-// mixed by a Sinkhorn-normalised hyper-connection to its statement: every
-// block has a graph over every stream, the input rows write every stream,
-// and the head, which reads the streams' collapse (the CPU's and the
-// card's), is refused for them by name.
-func TestFrontStatesSeveralStreams(t *testing.T) {
-	m := frontModel(t, "synth-deepseek4.gguf")
-	if m.Cfg.Streams() < 2 || !m.Cfg.mixesStreamsSinkhorn() {
-		t.Fatalf("%d residual streams: the fixture does not select the shape", m.Cfg.Streams())
-	}
-	for li := range m.Cfg.NLayer {
-		g := m.Composing().BlockGraph(li)
-		if why := m.Uncovered(li); why != Covered || g == nil {
-			t.Fatalf("block %d of %d streams is %q", li, m.Cfg.Streams(), why)
-		}
-		if len(g.In) < m.Cfg.Streams() || len(g.Out) != m.Cfg.Streams() {
-			t.Fatalf("block %d reads %d rows and writes %d, want every one of %d streams", li, len(g.In), len(g.Out), m.Cfg.Streams())
-		}
-	}
-	if why := m.Uncovered(-1); why != UncoveredStreams {
-		t.Fatalf("the head is refused by %q, want %q", why, UncoveredStreams)
-	}
-	if why, em := m.Uncovered(-2), m.frontGraphs().embed; why != Covered || em == nil || len(em.Out) != m.Cfg.Streams() {
-		t.Fatalf("the input rows are %q, want stated over every stream", why)
-	}
-}
-
 // rotaryTables is how many of parts are a rotary's table.
 func rotaryTables(parts []composer.Part) int {
 	n := 0

@@ -2305,30 +2305,6 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.idxK
 	case jlm.RoleIdxProj:
 		return l.idxProj
-	case jlm.RoleAttnOutA:
-		return l.woA
-	case jlm.RoleCompKV:
-		return l.compKV
-	case jlm.RoleCompGate:
-		return l.compGate
-	case jlm.RoleIdxCompKV:
-		return l.idxCompKV
-	case jlm.RoleIdxCompGate:
-		return l.idxCompGate
-	}
-	if b := l.ds4; b != nil {
-		switch r {
-		case jlm.RoleHCAttnFn:
-			return &b.fnAR
-		case jlm.RoleHCFFNFn:
-			return &b.fnFR
-		case jlm.RoleCompAPE:
-			return &b.apeR
-		case jlm.RoleIdxCompAPE:
-			return &b.iapeR
-		case jlm.RoleHashExperts:
-			return &b.tableR
-		}
 	}
 	return nil
 }
@@ -2504,24 +2480,6 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.nQA
 	case jlm.RoleAttnKVANorm:
 		return l.nKVA
-	case jlm.RoleHCAttnBase, jlm.RoleHCAttnScale, jlm.RoleHCFFNBase, jlm.RoleHCFFNScale, jlm.RoleCompNorm, jlm.RoleIdxCompNorm:
-		b := l.ds4
-		if b == nil {
-			return nil
-		}
-		switch r {
-		case jlm.RoleHCAttnBase:
-			return b.bA
-		case jlm.RoleHCAttnScale:
-			return b.scA
-		case jlm.RoleHCFFNBase:
-			return b.bF
-		case jlm.RoleHCFFNScale:
-			return b.scF
-		case jlm.RoleCompNorm:
-			return b.norm
-		}
-		return b.inorm
 	case jlm.RoleRouterBias:
 		return l.routerB
 	case jlm.RoleExpGateBias:
@@ -3209,7 +3167,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			sl.history.Passes = true
 			sl.tables[tableKey(composer.TableRunIn)], sl.tables[tableKey(composer.TableRunOut)] = run[0], run[1]
 		}
-		g.bindEnts(sl.tables, l, li, bs)
+		g.bindRowTables(sl.tables, bs)
 		if bs != nil {
 			sl.rotaries = bs.p.Rotaries
 		}
@@ -3268,7 +3226,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	if l.linear {
 		t[tableKey(composer.TableRecRows)] = rec
 	}
-	g.bindEnts(t, l, li, bs)
+	g.bindRowTables(t, bs)
 	g.bindRotaries(t, bs, cs, readsPlanes(l.graph))
 	return sv, nil
 }
@@ -3301,9 +3259,9 @@ func (g *devTier) bindRotaries(t map[composer.TableKey]backend.Buf, bs *blockScr
 }
 
 // readsPlanes reports whether a form of g reads the rotary's planes: a
-// pooled selection turning its blocks, or a rotary at positions of its own.
+// pooled selection turning its blocks.
 func readsPlanes(g *graph.Graph) bool {
 	return slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
-		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0 || o.Kind == graph.OpRope && o.Attr.Shift > 0
+		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0
 	})
 }

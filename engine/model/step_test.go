@@ -153,7 +153,7 @@ func stepMixtures() []string {
 	return []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
 		"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf",
 		"synth-minimaxm2.gguf", "synth-gemma4-moe.gguf", "synth-minimaxm3.gguf",
-		"synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-phimoe.gguf", "synth-deepseek4.gguf",
+		"synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-phimoe.gguf",
 		"synth-kimik3.gguf"}
 }
 

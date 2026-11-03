@@ -426,12 +426,7 @@ func (s *kvPages) span(pos, end int) kvSpan {
 type kvCache struct {
 	id     string
 	layers []kvPages
-	// ent is DeepSeek V4's compressed history, one per block (ds4kv.go):
-	// addressed by entry, not position, and empty on every block without a
-	// compressor and on every other model. entRates is each block's rate.
-	ent      []kvPages
-	entRates []int
-	store    KVStore
+	store  KVStore
 	// budget caps the resident bytes. Zero never evicts.
 	budget uint64
 	// ns is the namespace for content-addressed pages: set it and a page is named
@@ -533,8 +528,7 @@ func newKVCacheRange(c *Config, id string, nseq int, l kvLayout, store KVStore, 
 	for li := kc.lo; li < len(kc.layers); li++ {
 		p := kvPagePositions(c, li, pin)
 		kc.layers[li].p = p
-		// DeepSeek V4's value is its key: one row, as MLA's.
-		kc.layers[li].latent = c.MLA() || c.DSV4()
+		kc.layers[li].latent = c.MLA()
 		if p > 0 {
 			kc.layers[li].pp = l.atLayer(c, li).slots(nseq * p * c.KVRowAt(li))
 			// The window Config.AttnWindow applies, whatever sized the page.
@@ -543,7 +537,6 @@ func newKVCacheRange(c *Config, id string, nseq int, l kvLayout, store KVStore, 
 			}
 		}
 	}
-	kc.initEnt(c, nseq, l, pin)
 	return kc
 }
 
@@ -560,16 +553,10 @@ func (kc *kvCache) release(low int) {
 	}
 }
 
-// reserve sizes every layer's page index for maxSeq positions, and every
-// compressed history's for the entries those positions fold.
+// reserve sizes every layer's page index for maxSeq positions.
 func (kc *kvCache) reserve(maxSeq int) {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		kc.layers[li].reserve(maxSeq)
-	}
-	for li := range kc.ent {
-		if r := kc.entRate(li); r > 0 {
-			kc.ent[li].reserve(maxSeq/r + 1)
-		}
 	}
 }
 
@@ -739,10 +726,6 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 	}) {
 		return false
 	}
-	// A DeepSeek V4 block's entries travel with its rows (ds4dev.go).
-	if !s.migrateEnt(li, []int{pos}, func(int) int { return 0 }, toDevice) {
-		return false
-	}
 	if toDevice {
 		return true
 	}
@@ -895,8 +878,7 @@ func (s *Instance) migrateKVSeqs(sd nn.SeqKVDevice, li int, toDevice bool) bool 
 			return false
 		}
 	}
-	// A DeepSeek V4 block's entries travel with its rows (ds4dev.go).
-	return s.migrateEnt(li, s.bpos, func(r int) int { return r * s.maxSeq }, toDevice)
+	return true
 }
 
 // migrateRec moves one placed linear block's running summary between the host
@@ -1110,12 +1092,6 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 			best = cov
 		}
 	}
-	// DeepSeek V4's coverage is its entries' (ds4kv.go): returned as a tail,
-	// so restoreKV clamps it in positions.
-	if kc.entRestores() {
-		t, err := kc.entRestore()
-		return t, t, err
-	}
 	if best < 0 {
 		return 0, 0, nil
 	}
@@ -1292,11 +1268,6 @@ func (kc *kvCache) covers(li int) bool {
 	}
 	if s.win == 0 || kc.walkWindow {
 		return true
-	}
-	// DeepSeek V4: every block's rows slide, and its entries decide
-	// (entRestore).
-	if kc.entRestores() {
-		return false
 	}
 	for i := kc.lo; i < len(kc.layers); i++ {
 		if x := &kc.layers[i]; x.p > 0 && x.win == 0 {
@@ -1796,7 +1767,6 @@ func (s *Instance) restoreKV(max int) (int, error) {
 		pg.lastSealed = n / pg.p
 		pg.written = n
 	}
-	s.kv.entTruncate(n)
 	return n, nil
 }
 
@@ -1899,7 +1869,6 @@ func (kc *kvCache) seal(pos int) {
 		// again, and trim must not treat it as evictable.
 		s.lastSealed = n
 	}
-	kc.entSeal(pos)
 }
 
 // trim evicts sealed pages, oldest first, until the resident set is inside the
@@ -2328,7 +2297,7 @@ func (kc *kvCache) sealTail(pos int) int {
 			stored += 2
 		}
 	}
-	return stored + kc.entSealTail(pos)
+	return stored
 }
 
 // miss turns "these bytes are not a page of this shape" into a miss, and drops
@@ -2627,7 +2596,6 @@ func (kc *kvCache) reset() {
 		}
 		s.k, s.v, s.out, s.lastSealed, s.written = s.k[:0], s.v[:0], s.out[:0], 0, 0
 	}
-	kc.entTruncate(0)
 	kc.seq, kc.named = kc.seq[:0], kc.named[:0]
 	if kc.bh == nil {
 		kc.bh = map[int][]string{}

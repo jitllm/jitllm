@@ -38,11 +38,6 @@ type streams struct {
 	gated bool
 	cur   []graph.ValueID
 	w     graph.ValueID
-	// sinkhorn is streams each sublayer reads through a Sinkhorn-normalised
-	// mixer (mixesStreamsSinkhorn), post and comb the sublayer's placement
-	// and stream mix (sinkhornMix); cur as gated's.
-	sinkhorn   bool
-	post, comb graph.ValueID
 }
 
 // predictsStreams says the model's several residual streams are predicted
@@ -88,41 +83,9 @@ func (c *Config) gatesStreams() bool {
 	return c.HCLowRank > 0 && c.Streams() == c.HCMult && c.PredStreams == 0 && !c.ResAttn()
 }
 
-// A model whose sublayers read and write their streams through a mixer
-// Sinkhorn-normalised per row (HCMult streams, no low-rank gate): its input
-// rows are S copies of the embedding, and its head reads the streams
-// weighted by sigmoid(scale * (F norm(xs)) + base) + eps, norm an RMS norm
-// with no weight over the streams side by side; its blocks each sublayer's
-// (sinkhornMix).
-
-// mixesStreamsSinkhorn says the model's streams are mixed per row by a
-// Sinkhorn-normalised mixer, and nothing else carries a stream.
-func (c *Config) mixesStreamsSinkhorn() bool {
-	return c.HCMult > 1 && c.HCLowRank == 0 && c.Streams() == c.HCMult && c.PredStreams == 0 && !c.ResAttn()
-}
-
-// sinkhornCollapse is the head's row from the streams xs.
-func (m *Model) sinkhornCollapse(b *graph.Builder, xs []graph.ValueID) graph.ValueID {
-	c := m.Cfg
-	s, d := len(xs), c.NEmbd
-	cat := b.Emit(graph.OpConcat, xs, []graph.Result{{Name: "hc.streams", Width: s * d}}, nil, graph.Attrs{}, nil, nil)[0]
-	n := b.Emit(graph.OpHeadNorm, []graph.ValueID{cat}, []graph.Result{{Name: "hc.normed", Width: s * d}}, nil,
-		graph.Attrs{Eps: c.RMSEps, HeadDim: s * d}, nil, nil)[0]
-	pre := mapRow(b, "hc.pre.scaled", graph.Attrs{Fn: graph.MapMul, Width: 1}, []graph.Binding{{Role: jlm.RoleHCHeadScale, K: 1}}, s,
-		b.MatVec(n, jlm.RoleHCHeadFn, s))
-	pre = mapRow(b, "hc.pre.based", graph.Attrs{Fn: graph.MapAdd}, []graph.Binding{{Role: jlm.RoleHCHeadBase, K: s}}, s, pre)
-	pre = mapRow(b, "hc.pre.sig", graph.Attrs{Fn: graph.MapSigmoid}, nil, s, pre)
-	pre = mapRow(b, "hc.pre", graph.Attrs{Fn: graph.MapAdd, Const: c.HCEps}, nil, s, pre)
-	acc := mapRow(b, "hc.collapsed", graph.Attrs{Fn: graph.MapMul}, nil, d, slice1(b, "hc.prek", pre, 0), xs[0])
-	for k := 1; k < s; k++ {
-		acc = mapRow(b, "hc.collapsed", graph.Attrs{Fn: graph.MapFma}, nil, d, slice1(b, "hc.prek", pre, k), xs[k], acc)
-	}
-	return acc
-}
-
 // statesStreams says the front end states the model's residual streams.
 func (c *Config) statesStreams() bool {
-	return c.predictsStreams() || c.mixesStreams() || c.gatesStreams() || c.mixesStreamsSinkhorn()
+	return c.predictsStreams() || c.mixesStreams() || c.gatesStreams()
 }
 
 // gatedMix is the sublayer input the low-rank gate reads from the streams
@@ -358,7 +321,7 @@ func (m *Model) magMatched(b *graph.Builder, p, r graph.ValueID) graph.ValueID {
 // it: predicted from it, or copies of it.
 func (m *Model) expandsStreams() bool {
 	c := m.Cfg
-	return c.predictsStreams() || c.gatesStreams() || c.mixesStreamsSinkhorn()
+	return c.predictsStreams() || c.gatesStreams()
 }
 
 // streamExpand is the input rows' streams 1 and up from stream 0, x:
@@ -367,7 +330,7 @@ func (m *Model) streamExpand(b *graph.Builder, x graph.ValueID) []graph.ValueID 
 	c := m.Cfg
 	s, d := c.Streams(), c.NEmbd
 	var out []graph.ValueID
-	if c.gatesStreams() || c.mixesStreamsSinkhorn() {
+	if c.gatesStreams() {
 		for range s - 1 {
 			out = append(out, streamCopy(b, x))
 		}
@@ -403,11 +366,10 @@ func (m *Model) streamExpandGraph() (*graph.Graph, error) {
 // streamCollapseGraph is the row the head reads from every stream: an
 // input a stream, one output; nil where the front end states no streams.
 // A bank of checkpoints is mixed with the running residual by the head's
-// score vector, gated streams through the head's own gate, and streams a
-// Sinkhorn mixer reads by the head's collapse weights.
+// score vector, and gated streams through the head's own gate.
 func (m *Model) streamCollapseGraph() (*graph.Graph, error) {
 	c := m.Cfg
-	if !c.statesStreams() && !c.mixesStreamsSinkhorn() {
+	if !c.statesStreams() {
 		return nil, nil
 	}
 	f, _ := m.inventory(jlm.DenseBlock)
@@ -424,8 +386,6 @@ func (m *Model) streamCollapseGraph() (*graph.Graph, error) {
 	case c.gatesStreams():
 		mix, _ := m.gatedMix(b, f, xs, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp, 0)
 		b.Out(mix)
-	case c.mixesStreamsSinkhorn():
-		b.Out(m.sinkhornCollapse(b, xs))
 	default:
 		acc := xs[0]
 		for k := 1; k < s; k++ {

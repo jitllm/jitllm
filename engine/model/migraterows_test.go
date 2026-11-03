@@ -62,7 +62,7 @@ func TestBatchSeamMovesCarryEveryRowMoE(t *testing.T) {
 func TestBatchSeamMovesCarryEveryRowMoEFamilies(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe", "synth-qwen2moe", "synth-ernie45moe", "synth-minimaxm2", "synth-gemma4-moe",
 		"synth-deepseek32", "synth-minimaxm3",
-		"synth-bailingmoe2", "synth-dots1", "synth-phimoe", "synth-deepseek4", "synth-kimik3"} {
+		"synth-bailingmoe2", "synth-dots1", "synth-phimoe", "synth-kimik3"} {
 		t.Run(name, func(t *testing.T) {
 			p, ok := existingModel(testmodels.Path(name + ".gguf"))
 			if !ok {

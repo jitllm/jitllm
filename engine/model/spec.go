@@ -318,12 +318,6 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 	switch {
 	case mtp && c.NMTP == 0:
 		return nil, fmt.Errorf("model: %s carries no multi-token-prediction block to draft with", c.Arch)
-	case c.DSV4():
-		// Its prediction blocks are hyper-connected as its trunk is, and the
-		// draft path runs an ordinary block; and its pooled history folds rows
-		// in as they arrive, which Instance.rewind does not take back. Not
-		// built, so refused by name, whoever drafts.
-		return nil, fmt.Errorf("model: speculation on %s is not built", c.Arch)
 	case s.nseq != 1:
 		return nil, fmt.Errorf("model: speculation drives a single sequence, not a batch")
 	case s.pos != 0:

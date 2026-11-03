@@ -200,10 +200,9 @@ func (s *Instance) bidirRuns(slot int, spans []Span) error {
 // tokensOf sets spanTok to every row's token of a mixed prompt -- a token
 // span's ids, an embedding span's Tokens when it names them, -1 for a row
 // with none -- for a model that reads the token past the embedding (per-layer
-// embeddings, ple.go; DeepSeek V4's hash blocks, ds4.go), and returns its
-// reset. A no-op elsewhere.
+// embeddings, ple.go), and returns its reset. A no-op elsewhere.
 func (s *Instance) tokensOf(spans []Span) func() {
-	if s.c.PLEDim == 0 && s.c.NHashLayers == 0 {
+	if s.c.PLEDim == 0 {
 		return func() {}
 	}
 	s.spanTok = s.spanTok[:0]
@@ -516,16 +515,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				return s.altExpand(s.bx[:n*c.ResidW()], n)
 			}
 		}
-		if c.DSV4() {
-			fill := refill
-			refill = func() error {
-				if err := fill(); err != nil {
-					return err
-				}
-				s.ds4Expand(s.bx[:n*c.ResidW()], n)
-				return nil
-			}
-		}
 		if c.ResAttn() {
 			fill := refill
 			refill = func() error {
@@ -579,7 +568,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				if rowIDs != nil {
 					cids = rowIDs[base : base+n]
 				}
-				s.tokenIDs(cids)
 				// Qwen3.8-Flash-Next's n-gram rows, when the run holds its
 				// n-gram block; every failure below puts the predecessors back.
 				s.q4.setCall(s, slot, cids)
@@ -675,16 +663,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				li = s.lo - 1
 				continue
 			}
-			// A block routing by token reads the chunk's (-1 for a supplied
-			// embedding).
-			if c.NHashLayers > 0 {
-				s.cpuTokens(n, func(i int) int32 {
-					if rowIDs != nil {
-						return rowIDs[base+i]
-					}
-					return -1
-				})
-			}
 			// Qwen3.8-Flash-Next's n-gram block hashes the chunk's tokens
 			// (-1 for a supplied embedding).
 			if c.NGramAt(li) {
@@ -724,12 +702,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		// s.x's (altup.go).
 		if c.PredStreams != 0 && base+n == total {
 			if err := s.altCollapse(s.bx[:n*c.ResidW()], n); err != nil {
-				return nil, err
-			}
-			copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])
-		}
-		if c.DSV4() && base+n == total {
-			if err := s.ds4Collapse(s.bx[:n*c.ResidW()], n); err != nil {
 				return nil, err
 			}
 			copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])

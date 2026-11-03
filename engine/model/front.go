@@ -608,7 +608,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// own and runs on stream 0's prediction (frontstreams.go).
 	var st *streams
 	if c.statesStreams() {
-		st = &streams{in: []graph.ValueID{x}, mixed: c.mixesStreams(), gated: c.gatesStreams(), sinkhorn: c.mixesStreamsSinkhorn()}
+		st = &streams{in: []graph.ValueID{x}, mixed: c.mixesStreams(), gated: c.gatesStreams()}
 		for k := 1; k < c.Streams(); k++ {
 			st.in = append(st.in, b.In(fmt.Sprintf("x.%d", k), d))
 		}
@@ -633,8 +633,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		attnIn = m.bankMix(b, f, st.in[1:1+c.resBank(li, false)], x, jlm.RoleAttnResScore)
 	case st != nil && st.gated:
 		attnIn, st.w = m.gatedMix(b, f, st.in, jlm.RoleHCAttnNorm, jlm.RoleHCAttnDown, jlm.RoleHCAttnUp, jlm.RoleHCAttnInject)
-	case st != nil && st.sinkhorn:
-		attnIn, st.post, st.comb = m.sinkhornMix(b, st.in, jlm.RoleHCAttnFn, jlm.RoleHCAttnBase, jlm.RoleHCAttnScale)
 	case st != nil:
 		st.pred = m.predicted(b, f, st.in)
 		x, attnIn = st.pred[0], st.pred[0]
@@ -745,9 +743,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// turned apart do not keep a head's RMS.
 	postQ := c.QKNormAt(li) && c.QKNormPost
 	postK := postQ && c.RopeXD && c.RopeAt(li) && !shared && !m.xdKNormFirst
-	if c.QHeadNormBare {
-		q = ones(q, "q.bare")
-	}
 	// A key norm stored beside no key latent is the key's own.
 	if !shared && has(jlm.RoleAttnKVANorm) && !has(jlm.RoleAttnKVA) {
 		k = b.Norm(k, jlm.RoleAttnKVANorm, c.RMSEps)
@@ -758,7 +753,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 			k = f(k)
 		}
 	}
-	var ropeA graph.Attrs
 	switch {
 	case postK:
 	case postQ:
@@ -781,10 +775,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		a := graph.Attrs{HeadDim: hd, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
 		a.Sections, a.Interleaved = m.ropeAxes(r)
-		if c.RopeTail {
-			a.Offset = hd - r.NRot
-		}
-		ropeA = a
 		q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qdim}}, nil, a, nil, nil)[0]
 		onK(func(k graph.ValueID) graph.ValueID {
 			return b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
@@ -889,11 +879,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 					Sections: qsa.Sections, Interleaved: qsa.Interleaved}, nil, nil)[0]
 		}
 	}
-	compresses := c.CompAt(li) != jlm.CompNone && !shared
-	if compresses {
-		k = m.compressedRow(b, li, n, k, matvec)
-		v, rowW = k, b.G.Values[k].Width
-	}
 	hist := graph.SharedHistory(c.KVSource(li))
 	if !shared {
 		hist = graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
@@ -908,19 +893,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
 	var att graph.ValueID
-	if compresses {
-		a.Width = rowW
-		sinks := stored(jlm.RoleAttnSinks)
-		if c.ds4Fault == ds4FaultNoSinks {
-			sinks = nil
-		}
-		att = m.compressedAttend(b, li, n, qIn, q, hist, a, ropeA, matvec, sinks)
-		if c.ds4Fault == ds4FaultNoSinks {
-			kept := b.Emit(graph.OpSlice, nil, []graph.Result{{Name: "sinks", Width: c.NHead}},
-				[]graph.Binding{{Role: jlm.RoleAttnSinks, K: c.NHead}}, graph.Attrs{Width: c.NHead}, nil, nil)[0]
-			att = keepBound(b, att, kept)
-		}
-	} else if selects {
+	if selects {
 		a.Width = rowW
 		sel := b.Select(iq, hist, graph.Attrs{NHead: c.IdxHeads, NKVHead: c.IdxHeads, HeadDim: c.IdxHeadDim, Offset: kvDim, Width: rowW,
 			Span: c.IdxBlock, TopK: c.IdxTopK, Local: c.IdxLocal})
@@ -931,13 +904,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		att = b.AttendSelected(q, hist, sel, a, stored(jlm.RoleAttnSinks)...)
 	} else {
 		att = b.AttendOf(q, hist, a, stored(jlm.RoleAttnSinks)...)
-	}
-	// A value that is its key carries the key's rotation: turned back at
-	// the query's position.
-	if c.AttnDerope && c.RopeAt(li) && c.ds4Fault != ds4FaultNoDerope {
-		ra := ropeA
-		ra.Inverse = true
-		att = b.Emit(graph.OpRope, []graph.ValueID{att}, []graph.Result{{Name: "att.derope", Width: qdim}}, nil, ra, nil, nil)[0]
 	}
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)
@@ -970,15 +936,6 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		return b.Norm(v, r, c.RMSEps)
 	}
 	att = norm(att, jlm.RoleAttnSubNorm)
-	if oa, ok := f.Inventory[jlm.RoleAttnOutA]; ok && c.OGroups > 0 {
-		g := c.OGroups
-		rank := oa.Rows
-		if oa.Sheets == 0 {
-			rank = oa.Rows / g
-		}
-		att = b.Emit(graph.OpExpertMatVec, []graph.ValueID{att}, []graph.Result{{Name: "att.groups", Width: g * rank}},
-			[]graph.Binding{{Role: jlm.RoleAttnOutA, K: oa.K, Rows: rank, Sheets: g}}, graph.Attrs{}, nil, nil)[0]
-	}
 	proj := matvec(att, out, d, stored(jlm.RoleAttnOutBias)...)
 	for _, s := range side {
 		proj = b.Add(proj, s)
@@ -989,8 +946,6 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	switch {
 	case st != nil && st.gated:
 		st.cur = m.placed(b, st.in, st.w, norm(proj, jlm.RolePostAttnNorm))
-	case st != nil && st.sinkhorn:
-		st.cur = m.sinkhornPlace(b, st.in, st.post, st.comb, norm(proj, jlm.RolePostAttnNorm))
 	default:
 		x2 = postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	}
@@ -1001,7 +956,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		x2 = mapRow(b, "joined", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt2}, nil, d, b.Add(x2, st.side))
 	}
 	if !c.MoEAt(li) && !has(jlm.RoleFFNUp) && !has(jlm.RoleFFNDown) {
-		if st != nil && (st.gated || st.sinkhorn) {
+		if st != nil && st.gated {
 			b.Out(st.cur...)
 			return verified(b, f)
 		}
@@ -1028,8 +983,6 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		ffnIn = m.bankMix(b, f, st.bankAfter(c, li), x2, jlm.RoleFFNResScore)
 	case st != nil && st.gated:
 		ffnIn, st.w = m.gatedMix(b, f, st.cur, jlm.RoleHCFFNNorm, jlm.RoleHCFFNDown, jlm.RoleHCFFNUp, jlm.RoleHCFFNInject)
-	case st != nil && st.sinkhorn:
-		ffnIn, st.post, st.comb = m.sinkhornMix(b, st.cur, jlm.RoleHCFFNFn, jlm.RoleHCFFNBase, jlm.RoleHCFFNScale)
 	}
 	n2 := preNorm(ffnIn, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
 	if _, own := f.Inventory[jlm.RoleFFNNorm]; c.Parallel && !own {
@@ -1057,10 +1010,6 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	}
 	if st != nil && st.gated {
 		b.Out(m.placed(b, st.cur, st.w, norm(ffn, jlm.RolePostFFNNorm))...)
-		return verified(b, f)
-	}
-	if st != nil && st.sinkhorn {
-		b.Out(m.sinkhornPlace(b, st.cur, st.post, st.comb, norm(ffn, jlm.RolePostFFNNorm))...)
 		return verified(b, f)
 	}
 	if st != nil && st.mixed {
@@ -1215,21 +1164,7 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 			[]graph.Result{{Name: "router.group.rank", Width: g, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
 		choose = mapc("router.kept", graph.MapWhere, math.Inf(-1), E, nil, mapc("router.group.kept", graph.MapLess, float64(kept), g, nil, rank), choose)
 	}
-	var sel graph.ValueID
-	_, hashed := f.Inventory[jlm.RoleHashExperts]
-	switch {
-	case hashed && c.ds4Fault == ds4FaultScoreRoute:
-		table := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "router.hash", Width: K}},
-			[]graph.Binding{{Role: jlm.RoleHashExperts, K: K, Rows: c.NVocab}}, graph.Attrs{}, nil, nil)[0]
-		sel, _ = topk("router", keepBound(b, choose, table), K, 0, K)
-	case hashed:
-		// A block routing by token id reads its experts from the token's
-		// row of its table; its scores weigh them.
-		sel = b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "router.hash", Width: K, Elem: graph.ElemU32}},
-			[]graph.Binding{{Role: jlm.RoleHashExperts, K: K, Rows: c.NVocab}}, graph.Attrs{}, nil, nil)[0]
-	default:
-		sel, _ = topk("router", choose, K, 0, K)
-	}
+	sel, _ := topk("router", choose, K, 0, K)
 	take := func(name string, v graph.ValueID) graph.ValueID {
 		return b.Emit(graph.OpTake, []graph.ValueID{v, sel}, []graph.Result{{Name: name, Width: K}}, nil, graph.Attrs{}, nil, nil)[0]
 	}
