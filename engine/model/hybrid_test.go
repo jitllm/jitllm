@@ -459,8 +459,10 @@ func hyCloseState(t *testing.T, a, b *Instance) {
 		if worst > 1e-4 {
 			t.Errorf("layer %d recurrent state differs by %.3e", li, worst)
 		}
+		// The window holds the last rows' projections, which a prompt's
+		// form and decode's fold in another order (RULE 8).
 		for i := range a.rconv[li] {
-			if a.rconv[li][i] != b.rconv[li][i] {
+			if d := math.Abs(float64(a.rconv[li][i] - b.rconv[li][i])); !(d <= 1e-4) {
 				t.Errorf("layer %d convolution state differs at %d: %v vs %v",
 					li, i, a.rconv[li][i], b.rconv[li][i])
 				break

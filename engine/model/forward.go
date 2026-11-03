@@ -298,9 +298,6 @@ type Instance struct {
 	// mvCalls counts mv: each one reads its weight once, the count a gate
 	// holds a batched path to (TestLinearRowsCounts).
 	mvCalls int64
-	// lin is a prompt chunk's linear-block projections, run as GEMMs before
-	// the row loop (linrows.go).
-	lin linRows
 	// dSB and dSC are a Mamba-1 block's B and C, and dZeroA the zero rates
 	// its dt goes through SSDGate32JIT against (only the softplus is kept).
 	dSB, dSC, dZeroA []float32

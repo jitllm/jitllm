@@ -1,7 +1,9 @@
 package model
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -99,11 +101,15 @@ func composedRan(t *testing.T, parts gpu.Parts, allow []string, gs ...*gpu.GPU) 
 	}
 	var served, formed int
 	declined := map[string]int{}
+	var where []string
 	for _, g := range gs {
 		s := g.Stats()
 		n, _ := s.ServedPart(parts)
 		served += n
 		formed += s.FormedAtStep
+		if s.FormedAtStep > 0 {
+			where = append(where, fmt.Sprintf("%v (%s)", s.FormedAtStepParts, g.Err()))
+		}
 		for i := range s.BlockDeclines {
 			if k := s.BlockDeclines[i]; k > 0 {
 				declined[gpu.DeclineName(i)] += k
@@ -115,7 +121,7 @@ func composedRan(t *testing.T, parts gpu.Parts, allow []string, gs ...*gpu.GPU) 
 		t.Fatal("the composer served no part step: the composed arm ran the tier's own kernels")
 	}
 	if formed != 0 {
-		t.Fatalf("%d composed part(s) formed at a step", formed)
+		t.Fatalf("%d composed part(s) formed at a step, by part: %s", formed, strings.Join(where, "; "))
 	}
 	for why, k := range declined {
 		if !slices.Contains(allow, why) {

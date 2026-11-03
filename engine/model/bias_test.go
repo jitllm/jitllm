@@ -260,8 +260,9 @@ func TestPrefillAfterForwardContinues(t *testing.T) {
 			}
 			nn.ResetForTest()
 			defer nn.ResetForTest()
-			// noGEMM so the comparison is bit equality.
-			m, err := Open(jlmOf(t, path), noTune, noGEMM)
+			// The float forms: decode and prompt forms apart by their folding
+			// order alone (floatFormsNMSE).
+			m, err := Open(jlmOf(t, path), noTune, noGEMM, withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -296,17 +297,18 @@ func TestPrefillAfterForwardContinues(t *testing.T) {
 				t.Errorf("position is %d after 2 Forward + 3 Prefill, want %d",
 					mix.Pos(), len(ids))
 			}
-			var d float64
+			var sse, sy float64
 			for i := range want {
-				if x := math.Abs(float64(want[i] - got[i])); x > d {
-					d = x
-				}
+				d := float64(want[i] - got[i])
+				sse += d * d
+				sy += float64(want[i]) * float64(want[i])
 			}
-			if d != 0 {
-				t.Errorf("Prefill after Forward: max|dlogit| %.4e -- the second "+
-					"call started at the wrong position", d)
+			if nmse := sse / sy; !(nmse <= floatFormsNMSE) {
+				t.Errorf("Prefill after Forward: logit NMSE %.3e (bound %.0e) -- the second "+
+					"call started at the wrong position", nmse, floatFormsNMSE)
+			} else {
+				t.Logf("Prefill after Forward: logit NMSE %.3e, pos %d", nmse, mix.Pos())
 			}
-			t.Logf("Prefill after Forward: bit-identical, pos %d", mix.Pos())
 		})
 	}
 }

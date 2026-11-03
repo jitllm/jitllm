@@ -607,9 +607,10 @@ func decodeAllocs(t *testing.T, m *Model, g *gpu.GPU) decodeWindow {
 	if g != nil && s.GPULayers() < placed {
 		t.Fatalf("%d of the %d blocks placed on the device are still there after the window (%s): this arm measured the host", s.GPULayers(), placed, declinesOf(g.Stats()))
 	}
-	{
-		if served, _ := s.CPUBlockSteps(); served != (warm+n)*m.Cfg.NLayer {
-			t.Fatalf("the composed CPU served %d of %d block steps (%v): this arm measured main's decode", served, (warm+n)*m.Cfg.NLayer, s.CPUFormErr())
+	// Every block the CPU holds ran on the composer, the card's on the card.
+	if want := (warm + n) * (m.Cfg.NLayer - placed); want > 0 {
+		if served, _ := s.CPUBlockSteps(); served != want {
+			t.Fatalf("the composed CPU served %d of %d block steps (%v): this arm measured main's decode", served, want, s.CPUFormErr())
 		}
 	}
 	dw := decodeWindow{ksliced: s.jit.KSliced() - k0, affine: a1 - a0}
