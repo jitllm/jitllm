@@ -85,8 +85,8 @@ func reportMem() {
 
 // fastPath is the list of packed formats: a list, never a promise of coverage.
 // Asking SupportedNative per type keeps this honest when the emitters differ.
-// It is quant.PackedTypes itself, not a copy that could drift.
-var fastPath = quant.PackedTypes
+// It is quant.PackedTypes() itself, not a copy that could drift.
+var fastPath = quant.PackedTypes()
 
 func reportJIT() {
 	// Show what a run would emit: engine/device/cpu reads no environment, so apply the

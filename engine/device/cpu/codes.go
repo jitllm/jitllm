@@ -26,7 +26,7 @@ func hasCodes(q layout.Quant) (bool, error) {
 	switch {
 	case c == nil:
 		return false, nil
-	case c != layout.Codes(layout.MXFP4):
+	case *c != *layout.Codes(layout.MXFP4):
 		return false, fmt.Errorf("jit: %s has a code table the packed scratch does not hold", q)
 	}
 	return true, nil

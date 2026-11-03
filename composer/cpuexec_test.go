@@ -41,7 +41,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 		if rows == 1024 {
 			k = 2048
 		}
-		for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
+		for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes()...) {
 			q, ok := layout.QuantOf(typ)
 			if typ == quant.F32 {
 				q, ok = layout.Float32, true
@@ -511,7 +511,7 @@ func TestComposedCPUHonoursTheDevicesISA(t *testing.T) {
 	isa := uint64(cpu.CPU().ISA()) &^ uint64(x86.ISABMI2)
 	r := Default().WithoutInt8(DeviceCPU)
 	right := 0
-	for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
+	for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes()...) {
 		q, ok := layout.QuantOf(typ)
 		if typ == quant.F32 {
 			q, ok = layout.Float32, true

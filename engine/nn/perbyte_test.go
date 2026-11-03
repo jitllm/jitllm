@@ -51,7 +51,7 @@ func TestPerByteCost(t *testing.T) {
 		gbs   float64
 	}
 	var out []row
-	for _, qt := range quant.PackedTypes {
+	for _, qt := range quant.PackedTypes() {
 		if v := os.Getenv("JITLLM_PERBYTE_TYPES"); v != "" && !strings.Contains(","+v+",", ","+qt.String()+",") {
 			continue
 		}
@@ -208,7 +208,7 @@ func TestShapeCost(t *testing.T) {
 				t.Fatalf("JITLLM_SHAPES entry %q: want type:rows:k", f)
 			}
 			name = parts[0]
-			for _, qt := range quant.PackedTypes {
+			for _, qt := range quant.PackedTypes() {
 				if qt.String() == name {
 					s.t = qt
 				}

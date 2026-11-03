@@ -74,7 +74,7 @@ func TestSSETierRunsTheMatvecGates(t *testing.T) {
 // takes the batch, finishing every token with the fused kernel.
 func TestSSETierHasNoTokenTileAndStillBatches(t *testing.T) {
 	underSSE(t, func() {
-		for _, gt := range quant.PackedTypes {
+		for _, gt := range quant.PackedTypes() {
 			if !cpu.PackedFusedSupported(gt) {
 				t.Errorf("%s: no fused kernel on the SSE tier, so the batched mixture dispatch declines", gt)
 			}
@@ -112,7 +112,7 @@ func TestSSETierTracksTheHostTier(t *testing.T) {
 	}
 	const bound = 1e-6
 	shapes := []struct{ rows, k int }{{256, 512}, {200, 512}, {203, 512}, {96, 1024}}
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		for _, sh := range shapes {
 			if sh.k%int(gt.BlockElems()) != 0 {
 				continue

@@ -91,6 +91,8 @@ type File struct {
 	// readHook stands in for the file read, for a gate that holds or counts
 	// reads; nil reads the file.
 	readHook func(dst []byte, off int64) error
+
+	rowReads atomic.Int64
 	chunkIn  int64
 	// spanBuf is planRuns' scratch for the chunk spans it sorts. Guarded by
 	// f.mu, which planRuns holds for its whole body, so one array serves every

@@ -289,7 +289,7 @@ func containerVersion(path string) (uint32, error) {
 	if _, err := io.ReadFull(f, b[:]); err != nil {
 		return 0, fmt.Errorf("%s is too short to be a container", path)
 	}
-	if [8]byte(b[:8]) != jlm.Magic {
+	if string(b[:8]) != jlm.Magic {
 		return 0, fmt.Errorf("%s is not a jlm container (magic %q)", path, b[:8])
 	}
 	return binary.LittleEndian.Uint32(b[8:]), nil

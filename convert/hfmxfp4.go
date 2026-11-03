@@ -28,7 +28,7 @@ import (
 // scale byte and then 16 bytes holding element j in the low nibble and
 // element j+16 in the high one, where compressed-tensors packs neighbours.
 // ggml's table is the e2m1 values doubled and its scale 2^(s-128), so the
-// product is the same number (quant.MXFP4Values). llama.cpp's converter does
+// product is the same number (quant.MXFP4Values()). llama.cpp's converter does
 // this same repack for the GGUF repositories (repack_mxfp4_blocks).
 
 // ctQuant is a checkpoint's compressed-tensors quantization_config, the

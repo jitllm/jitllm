@@ -2,7 +2,6 @@ package layout_test
 
 import (
 	"math"
-	"os"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/layout"
@@ -24,7 +23,7 @@ func TestPackAgainstRealWeights(t *testing.T) {
 		t.Skip("MODEL MISSING: no *.gguf in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
 	want := map[quant.Type]layout.Quant{}
-	for _, f := range packedRefFormats {
+	for _, f := range packedRefFormats() {
 		want[f.g] = f.k
 	}
 	seen := map[quant.Type]int{}
@@ -200,4 +199,3 @@ func checkPack(t *testing.T, q layout.Quant, g quant.Type, name string, w []byte
 	}
 }
 
-var _ = os.Stat

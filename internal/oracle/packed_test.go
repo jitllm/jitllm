@@ -15,17 +15,17 @@ import (
 // The host reader is gated against the GGUF dequantizer, not the device
 // kernel: agreeing with quant.Dequant32 (the source layout) on every format
 // proves the pack is a pure permutation, where two readers of the same layout
-// agreeing would prove nothing. The formats come from quant.PackedTypes so a
+// agreeing would prove nothing. The formats come from quant.PackedTypes() so a
 // new one cannot be missed.
 var packedRefFormats = func() (fs []struct {
 	name string
 	g    quant.Type
 	k    layout.Quant
 }) {
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		k, ok := layout.QuantOf(g)
 		if !ok {
-			panic(g.String() + " is in quant.PackedTypes and has no device layout")
+			panic(g.String() + " is in quant.PackedTypes() and has no device layout")
 		}
 		fs = append(fs, struct {
 			name string
@@ -176,7 +176,7 @@ func TestRowPackedMatchesDequant(t *testing.T) {
 // widened payload, and at the memory wall the byte count is the run time.
 func TestPackedPayloadIsNativeWidth(t *testing.T) {
 	// The native width of each format, which is a fact about the format and
-	// so is written here; the sweep is quant.PackedTypes, and a format missing
+	// so is written here; the sweep is quant.PackedTypes(), and a format missing
 	// from this map fails rather than going unchecked.
 	native := map[quant.Type]int{
 		quant.Q4_0: 4, quant.Q5_0: 5, quant.Q5_1: 5, quant.Q8_0: 8, quant.Q4_K: 4,

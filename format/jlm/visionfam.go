@@ -1,7 +1,5 @@
 package jlm
 
-import "fmt"
-
 // The vision families whose codes are taken from the TOP of the code space
 // down: Pixtral / Mistral 3, Llama 4, Gemma 4, Gemma 3n and
 // Phi-4-reasoning-vision. Another set of families takes the next free codes
@@ -158,74 +156,116 @@ const (
 	RoleVMNHardNorm  Role = 65496
 )
 
-var visionFamRoleNames = map[Role]string{
-	RoleVMerge:    "mm.patch_merger",
-	RoleVImgBreak: "v.token_embd.img_break",
-	RoleVProj3:    "mm.model.fc",
-
-	RoleVPostAttnNorm: "v.attn_post_norm",
-	RoleVPostFFNNorm:  "v.ffn_post_norm",
-	RoleVAttnQNorm:    "v.attn_q_norm",
-	RoleVAttnKNorm:    "v.attn_k_norm",
-	RoleVClamp:        "v.clamp",
-	RoleVStdBias:      "v.std_bias",
-	RoleVStdScale:     "v.std_scale",
-
-	RoleVMNStem:           "v.conv_stem.conv",
-	RoleVMNStemBias:       "v.conv_stem.conv.bias",
-	RoleVMNStemNorm:       "v.conv_stem.bn",
-	RoleVMNConvExp:        "v.conv_exp",
-	RoleVMNNorm1:          "v.bn1",
-	RoleVMNConvPwl:        "v.conv_pwl",
-	RoleVMNNorm2:          "v.bn2",
-	RoleVMNDwStart:        "v.dw_start.conv",
-	RoleVMNDwStartNorm:    "v.dw_start.bn",
-	RoleVMNPwExp:          "v.pw_exp.conv",
-	RoleVMNPwExpNorm:      "v.pw_exp.bn",
-	RoleVMNDwMid:          "v.dw_mid.conv",
-	RoleVMNDwMidNorm:      "v.dw_mid.bn",
-	RoleVMNPwProj:         "v.pw_proj.conv",
-	RoleVMNPwProjNorm:     "v.pw_proj.bn",
-	RoleVMNKDown:          "v.attn.key.down_conv",
-	RoleVMNKDownNorm:      "v.attn.key.norm",
-	RoleVMNVDown:          "v.attn.value.down_conv",
-	RoleVMNVDownNorm:      "v.attn.value.norm",
-	RoleVMNGeom:           "v.mn_geom",
-	RoleVMNFusionExp:      "v.msfa.ffn.pw_exp.conv",
-	RoleVMNFusionExpNorm:  "v.msfa.ffn.pw_exp.bn",
-	RoleVMNFusionProj:     "v.msfa.ffn.pw_proj.conv",
-	RoleVMNFusionProjNorm: "v.msfa.ffn.pw_proj.bn",
-	RoleVMNFusionNorm:     "v.msfa.norm",
-	RoleVMNLayerScale:     "v.layer_scale",
-	RoleVMNHardEmbd:       "mm.hard_embd",
-	RoleVMNHardOffset:     "mm.hard_offset",
-	RoleVMNHardTable:      "mm.embedding",
-	RoleVMNHardNorm:       "mm.hard_emb_norm",
-}
-
-var visionFamProjNames = map[Projector]string{
-	ProjPixtral: "pixtral",
-	ProjLlama4:  "llama4",
-	ProjGemma4V: "gemma4v",
-	ProjPhi4:    "phi4",
-
-	ProjGemma3nV: "gemma3nv",
-	ProjLFM2:     "lfm2",
-}
-
-func init() {
-	for r, n := range visionFamRoleNames {
-		if was, ok := roleNames[r]; ok {
-			panic(fmt.Sprintf("jlm: role %d is both %q and %q", r, was, n))
-		}
-		roleNames[r] = n
+func visionFamRoleName(r Role) (string, bool) {
+	switch r {
+	case RoleVMerge:
+		return "mm.patch_merger", true
+	case RoleVImgBreak:
+		return "v.token_embd.img_break", true
+	case RoleVProj3:
+		return "mm.model.fc", true
+	case RoleVPostAttnNorm:
+		return "v.attn_post_norm", true
+	case RoleVPostFFNNorm:
+		return "v.ffn_post_norm", true
+	case RoleVAttnQNorm:
+		return "v.attn_q_norm", true
+	case RoleVAttnKNorm:
+		return "v.attn_k_norm", true
+	case RoleVClamp:
+		return "v.clamp", true
+	case RoleVStdBias:
+		return "v.std_bias", true
+	case RoleVStdScale:
+		return "v.std_scale", true
+	case RoleVMNStem:
+		return "v.conv_stem.conv", true
+	case RoleVMNStemBias:
+		return "v.conv_stem.conv.bias", true
+	case RoleVMNStemNorm:
+		return "v.conv_stem.bn", true
+	case RoleVMNConvExp:
+		return "v.conv_exp", true
+	case RoleVMNNorm1:
+		return "v.bn1", true
+	case RoleVMNConvPwl:
+		return "v.conv_pwl", true
+	case RoleVMNNorm2:
+		return "v.bn2", true
+	case RoleVMNDwStart:
+		return "v.dw_start.conv", true
+	case RoleVMNDwStartNorm:
+		return "v.dw_start.bn", true
+	case RoleVMNPwExp:
+		return "v.pw_exp.conv", true
+	case RoleVMNPwExpNorm:
+		return "v.pw_exp.bn", true
+	case RoleVMNDwMid:
+		return "v.dw_mid.conv", true
+	case RoleVMNDwMidNorm:
+		return "v.dw_mid.bn", true
+	case RoleVMNPwProj:
+		return "v.pw_proj.conv", true
+	case RoleVMNPwProjNorm:
+		return "v.pw_proj.bn", true
+	case RoleVMNKDown:
+		return "v.attn.key.down_conv", true
+	case RoleVMNKDownNorm:
+		return "v.attn.key.norm", true
+	case RoleVMNVDown:
+		return "v.attn.value.down_conv", true
+	case RoleVMNVDownNorm:
+		return "v.attn.value.norm", true
+	case RoleVMNGeom:
+		return "v.mn_geom", true
+	case RoleVMNFusionExp:
+		return "v.msfa.ffn.pw_exp.conv", true
+	case RoleVMNFusionExpNorm:
+		return "v.msfa.ffn.pw_exp.bn", true
+	case RoleVMNFusionProj:
+		return "v.msfa.ffn.pw_proj.conv", true
+	case RoleVMNFusionProjNorm:
+		return "v.msfa.ffn.pw_proj.bn", true
+	case RoleVMNFusionNorm:
+		return "v.msfa.norm", true
+	case RoleVMNLayerScale:
+		return "v.layer_scale", true
+	case RoleVMNHardEmbd:
+		return "mm.hard_embd", true
+	case RoleVMNHardOffset:
+		return "mm.hard_offset", true
+	case RoleVMNHardTable:
+		return "mm.embedding", true
+	case RoleVMNHardNorm:
+		return "mm.hard_emb_norm", true
 	}
+	return "", false
+}
+
+func visionFamProjName(p Projector) (string, bool) {
+	switch p {
+	case ProjD1OmniA:
+		return "d1omni_a", true
+	case ProjPixtral:
+		return "pixtral", true
+	case ProjLlama4:
+		return "llama4", true
+	case ProjGemma4V:
+		return "gemma4v", true
+	case ProjPhi4:
+		return "phi4", true
+	case ProjGemma3nV:
+		return "gemma3nv", true
+	case ProjLFM2:
+		return "lfm2", true
+	}
+	return "", false
 }
 
 // visionFamRole reports whether r is one of the roles above, every one a
 // tower tensor (Role.Vision).
 func visionFamRole(r Role) bool {
-	_, ok := visionFamRoleNames[r]
+	_, ok := visionFamRoleName(r)
 	return ok
 }
 

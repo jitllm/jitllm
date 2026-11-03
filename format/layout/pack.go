@@ -50,7 +50,7 @@ func PackWeights(t Quant, src []byte, nrows, k int) (qs, d, sc []uint32, err err
 // d and sc are cleared here: packRows ORs its scale words (rows and sub-blocks
 // share words), so leftover contents would OR into the new scales.
 func PackWeightsInto(t Quant, src []byte, nrows, k int, qs, d, sc []uint32) error {
-	qi := qtab[t]
+	qi := qtab(t)
 	// A float format is sized in elements, not blocks: its "block" is the
 	// activation granule and raw rows have none. The quantized formats keep the
 	// block checks, which catch a truncated tensor.
@@ -454,7 +454,7 @@ func F16(u uint16) float32 { return float32(quant.DecodeHalf(u)) }
 // no per-sub-block one (Q4_0, Q5_0, Q5_1, Q8_0 and MXFP4). How many rows share
 // a d word is DSlots' question. Its caller (cpu.WideActWindow) asks the block
 // width.
-func NarrowScales(q Quant) bool { return qtab[q].perSuper == 1 }
+func NarrowScales(q Quant) bool { return qtab(q).perSuper == 1 }
 
 // DSlots is how many rows share one 32-bit d word: one for a format with a
 // minimum beside its scale (it needs the whole word), two for a narrow f16
@@ -462,14 +462,14 @@ func NarrowScales(q Quant) bool { return qtab[q].perSuper == 1 }
 // block 17 bytes, the GGUF's own size).
 func DSlots(q Quant) int {
 	switch {
-	case qtab[q].e8m0:
+	case qtab(q).e8m0:
 		return 4
-	case qtab[q].biasArray, qtab[q].d32:
+	case qtab(q).biasArray, qtab(q).d32:
 		// A minimum beside the scale needs the whole word, whatever perSuper
 		// is (Q5_1's d and m, a k-quant's d and dmin), and so does an f32
 		// scale (TQ2F).
 		return 1
-	case qtab[q].perSuper == 1:
+	case qtab(q).perSuper == 1:
 		return 2
 	}
 	return 1
@@ -498,7 +498,7 @@ func DIndex(q Quant, super, nrows, r int) (idx, slot int) {
 // without building them, so a budget decision costs nothing.
 // TestPackedWordsMatchesPack holds it to PackWeights format by format.
 func PackedWords(t Quant, nrows, k int) (qs, d, sc int, err error) {
-	qi := qtab[t]
+	qi := qtab(t)
 	// A float format is answered before the block check because it has no
 	// block: qtab's blockE 32 is the activation granule, and MLA's absorbed
 	// per-head sheets can have k = 16 (see MatVecShape.Sub).

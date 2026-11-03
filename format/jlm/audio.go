@@ -1,7 +1,5 @@
 package jlm
 
-import "fmt"
-
 // An audio tower: d1-omni's (its audio.py; llama.cpp's "d1omni_a"), the
 // container's first. It rides the tower's page array after the vision
 // blocks -- audio block j is tower block Vision.NLayer+j -- and its
@@ -113,65 +111,145 @@ const (
 	RoleAResUpB  Role = 1071
 )
 
-var audioRoleNames = map[Role]string{
-	RoleAConv: "a.conv1d", RoleAConvBias: "a.conv1d.bias",
-	RoleASubOut: "a.pre_encode.out", RoleASubOutB: "a.pre_encode.out.bias",
-	RoleAFF1Norm: "a.ffn_norm", RoleAFF1NormB: "a.ffn_norm.bias",
-	RoleAFF1Up: "a.ffn_up", RoleAFF1UpB: "a.ffn_up.bias",
-	RoleAFF1Down: "a.ffn_down", RoleAFF1DownB: "a.ffn_down.bias",
-	RoleAAttnNorm: "a.ln1", RoleAAttnNormB: "a.ln1.bias",
-	RoleAQ: "a.attn_q", RoleAQB: "a.attn_q.bias", RoleAK: "a.attn_k", RoleAKB: "a.attn_k.bias",
-	RoleAV: "a.attn_v", RoleAVB: "a.attn_v.bias", RoleAOut: "a.attn_out", RoleAOutB: "a.attn_out.bias",
-	RoleAPos: "a.linear_pos", RoleAPosU: "a.pos_bias_u", RoleAPosV: "a.pos_bias_v",
-	RoleAConvNorm: "a.norm_conv", RoleAConvNormB: "a.norm_conv.bias",
-	RoleAGLUVal: "a.conv_pw1.value", RoleAGLUValB: "a.conv_pw1.value.bias",
-	RoleAGLUGate: "a.conv_pw1.gate", RoleAGLUGateB: "a.conv_pw1.gate.bias",
-	RoleADW: "a.conv_dw", RoleADWB: "a.conv_dw.bias",
-	RoleABNScale: "a.conv_norm", RoleABNShift: "a.conv_norm.bias+conv_dw.bias",
-	RoleAPW2: "a.conv_pw2", RoleAPW2B: "a.conv_pw2.bias",
-	RoleAFF2Norm: "a.ffn_norm_1", RoleAFF2NormB: "a.ffn_norm_1.bias",
-	RoleAFF2Up: "a.ffn_up_1", RoleAFF2UpB: "a.ffn_up_1.bias",
-	RoleAFF2Down: "a.ffn_down_1", RoleAFF2DownB: "a.ffn_down_1.bias",
-	RoleAOutNorm: "a.ln2", RoleAOutNormB: "a.ln2.bias",
-	RoleAAdNorm: "mm.a.mlp.0", RoleAAdNormB: "mm.a.mlp.0.bias",
-	RoleAAd1: "mm.a.mlp.1", RoleAAd1B: "mm.a.mlp.1.bias",
-	RoleAAd2: "mm.a.mlp.3", RoleAAd2B: "mm.a.mlp.3.bias",
-	RoleAResNorm: "mm.a.mlp.4", RoleAResNrmB: "mm.a.mlp.4.bias",
-	RoleAResDown: "mm.a.mlp.5", RoleAResDnB: "mm.a.mlp.5.bias",
-	RoleAResUp: "mm.a.mlp.6", RoleAResUpB: "mm.a.mlp.6.bias",
+func audioRoleName(r Role) (string, bool) {
+	switch r {
+	case RoleAConv:
+		return "a.conv1d", true
+	case RoleAConvBias:
+		return "a.conv1d.bias", true
+	case RoleASubOut:
+		return "a.pre_encode.out", true
+	case RoleASubOutB:
+		return "a.pre_encode.out.bias", true
+	case RoleAFF1Norm:
+		return "a.ffn_norm", true
+	case RoleAFF1NormB:
+		return "a.ffn_norm.bias", true
+	case RoleAFF1Up:
+		return "a.ffn_up", true
+	case RoleAFF1UpB:
+		return "a.ffn_up.bias", true
+	case RoleAFF1Down:
+		return "a.ffn_down", true
+	case RoleAFF1DownB:
+		return "a.ffn_down.bias", true
+	case RoleAAttnNorm:
+		return "a.ln1", true
+	case RoleAAttnNormB:
+		return "a.ln1.bias", true
+	case RoleAQ:
+		return "a.attn_q", true
+	case RoleAQB:
+		return "a.attn_q.bias", true
+	case RoleAK:
+		return "a.attn_k", true
+	case RoleAKB:
+		return "a.attn_k.bias", true
+	case RoleAV:
+		return "a.attn_v", true
+	case RoleAVB:
+		return "a.attn_v.bias", true
+	case RoleAOut:
+		return "a.attn_out", true
+	case RoleAOutB:
+		return "a.attn_out.bias", true
+	case RoleAPos:
+		return "a.linear_pos", true
+	case RoleAPosU:
+		return "a.pos_bias_u", true
+	case RoleAPosV:
+		return "a.pos_bias_v", true
+	case RoleAConvNorm:
+		return "a.norm_conv", true
+	case RoleAConvNormB:
+		return "a.norm_conv.bias", true
+	case RoleAGLUVal:
+		return "a.conv_pw1.value", true
+	case RoleAGLUValB:
+		return "a.conv_pw1.value.bias", true
+	case RoleAGLUGate:
+		return "a.conv_pw1.gate", true
+	case RoleAGLUGateB:
+		return "a.conv_pw1.gate.bias", true
+	case RoleADW:
+		return "a.conv_dw", true
+	case RoleADWB:
+		return "a.conv_dw.bias", true
+	case RoleABNScale:
+		return "a.conv_norm", true
+	case RoleABNShift:
+		return "a.conv_norm.bias+conv_dw.bias", true
+	case RoleAPW2:
+		return "a.conv_pw2", true
+	case RoleAPW2B:
+		return "a.conv_pw2.bias", true
+	case RoleAFF2Norm:
+		return "a.ffn_norm_1", true
+	case RoleAFF2NormB:
+		return "a.ffn_norm_1.bias", true
+	case RoleAFF2Up:
+		return "a.ffn_up_1", true
+	case RoleAFF2UpB:
+		return "a.ffn_up_1.bias", true
+	case RoleAFF2Down:
+		return "a.ffn_down_1", true
+	case RoleAFF2DownB:
+		return "a.ffn_down_1.bias", true
+	case RoleAOutNorm:
+		return "a.ln2", true
+	case RoleAOutNormB:
+		return "a.ln2.bias", true
+	case RoleAAdNorm:
+		return "mm.a.mlp.0", true
+	case RoleAAdNormB:
+		return "mm.a.mlp.0.bias", true
+	case RoleAAd1:
+		return "mm.a.mlp.1", true
+	case RoleAAd1B:
+		return "mm.a.mlp.1.bias", true
+	case RoleAAd2:
+		return "mm.a.mlp.3", true
+	case RoleAAd2B:
+		return "mm.a.mlp.3.bias", true
+	case RoleAResNorm:
+		return "mm.a.mlp.4", true
+	case RoleAResNrmB:
+		return "mm.a.mlp.4.bias", true
+	case RoleAResDown:
+		return "mm.a.mlp.5", true
+	case RoleAResDnB:
+		return "mm.a.mlp.5.bias", true
+	case RoleAResUp:
+		return "mm.a.mlp.6", true
+	case RoleAResUpB:
+		return "mm.a.mlp.6.bias", true
+	}
+	return "", false
 }
 
 // audioMatrix is the audio roles a tower multiplies by; every other is a
 // vector read once at load (Role.Expanded) or a convolution's taps.
-var audioMatrix = map[Role]bool{
-	RoleASubOut: true, RoleAFF1Up: true, RoleAFF1Down: true, RoleAQ: true, RoleAK: true, RoleAV: true,
-	RoleAOut: true, RoleAPos: true, RoleAGLUVal: true, RoleAGLUGate: true, RoleAPW2: true,
-	RoleAFF2Up: true, RoleAFF2Down: true, RoleAAd1: true, RoleAAd2: true, RoleAResDown: true, RoleAResUp: true,
+func audioMatrix(r Role) bool {
+	switch r {
+	case RoleASubOut, RoleAFF1Up, RoleAFF1Down, RoleAQ, RoleAK, RoleAV, RoleAOut, RoleAPos, RoleAGLUVal, RoleAGLUGate, RoleAPW2, RoleAFF2Up, RoleAFF2Down, RoleAAd1, RoleAAd2, RoleAResDown, RoleAResUp:
+		return true
+	}
+	return false
 }
 
 // AudioMatrix reports whether r is an audio tower matrix (the converter's
 // quantized set, a reader's bound one).
-func AudioMatrix(r Role) bool { return audioMatrix[r] }
-
-func init() {
-	for r, n := range audioRoleNames {
-		if was, ok := roleNames[r]; ok {
-			panic(fmt.Sprintf("jlm: role %d is both %q and %q", r, was, n))
-		}
-		roleNames[r] = n
-	}
-	visionFamProjNames[ProjD1OmniA] = "d1omni_a"
-}
+func AudioMatrix(r Role) bool { return audioMatrix(r) }
 
 // audioRole reports whether r is one of the audio tower's roles.
 func audioRole(r Role) bool {
-	_, ok := audioRoleNames[r]
+	_, ok := audioRoleName(r)
 	return ok
 }
 
 // audioExpanded is Role.Expanded for the audio roles: every vector, and the
 // convolutions' taps, which a reader copies out at load.
-func audioExpanded(r Role) bool { return audioRole(r) && !audioMatrix[r] }
+func audioExpanded(r Role) bool { return audioRole(r) && !audioMatrix(r) }
 
 // encodeAudio is the Vision record's audio tail.
 func encodeAudio(w *wbuf, a *Audio) {

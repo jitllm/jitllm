@@ -11,7 +11,7 @@ import (
 // The host quantised matrix family under the emitter golden gate
 // (emitgolden_test.go): the packed matvec, the token tile, the
 // weight-stationary GEMM and the row-major GEMM, on every tier and dot
-// sequence, at every format quant.PackedTypes lists.
+// sequence, at every format quant.PackedTypes() lists.
 
 // matrixCases collects one family's cases. A refusal is a case too: its
 // recorded bytes are the error text, so an emitter that starts emitting where
@@ -169,7 +169,7 @@ func TestNEONMatrixEmittersAreByteStable(t *testing.T) {
 	m := &matrixCases{t: t}
 	for _, dot := range []bool{true, false} {
 		neonDot(dot, func() {
-			for _, q := range quant.PackedTypes {
+			for _, q := range quant.PackedTypes() {
 				p := fmt.Sprintf("dot=%v/%s", dot, q)
 				for rows := 0; rows <= 68; rows += 4 {
 					for _, pf := range []int{-1, 0, 64, 256} {

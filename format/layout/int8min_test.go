@@ -14,7 +14,7 @@ func TestPackNeverEmitsInt8Min(t *testing.T) {
 	// to a small unsigned range before the dot sees them. Q8_0 is the exception
 	// and is declared so (signedQ); it takes the unbounded path.
 	const nrows, k = 2, 256
-	for q := Quant(0); int(q) < len(qtab); q++ {
+	for q := Quant(0); int(q) < numQuants; q++ {
 		qi := q.info()
 		if qi.blockB == 0 {
 			continue
@@ -58,3 +58,5 @@ func TestPackNeverEmitsInt8Min(t *testing.T) {
 		}
 	}
 }
+
+const numQuants = int(TQ2F) + 1

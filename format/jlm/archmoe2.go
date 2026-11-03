@@ -1,7 +1,5 @@
 package jlm
 
-import "fmt"
-
 // The modern text families added as one group: Ling 2.0, dots.llm1,
 // Phi-3.5-MoE and Apertus. Their codes are 39..42 of the 6-bit range, between
 // the families counting up from ArchDBRX and the dense group counting down
@@ -50,17 +48,12 @@ const (
 // not collide.
 const RoleXIELU Role = 500
 
-var moe2RoleNames = map[Role]string{RoleXIELU: "ffn_xielu"}
-
-func init() {
-	for r, n := range moe2RoleNames {
-		// Another group taking the same number would rename its role here
-		// and read one tensor as the other.
-		if was, ok := roleNames[r]; ok {
-			panic(fmt.Sprintf("jlm: role %d is both %q and %q", r, was, n))
-		}
-		roleNames[r] = n
+func moe2RoleName(r Role) (string, bool) {
+	switch r {
+	case RoleXIELU:
+		return "ffn_xielu", true
 	}
+	return "", false
 }
 
 // PhiMoEJitter is sparsemixer's jitter_eps: router_jitter_noise, which every
@@ -69,9 +62,16 @@ func init() {
 // config that states another value.
 const PhiMoEJitter = 0.01
 
-var moe2ArchNames = map[Arch]string{
-	ArchBailingMoE2: "bailingmoe2",
-	ArchDots1:       "dots1",
-	ArchPhiMoE:      "phimoe",
-	ArchApertus:     "apertus",
+func moe2ArchName(a Arch) (string, bool) {
+	switch a {
+	case ArchBailingMoE2:
+		return "bailingmoe2", true
+	case ArchDots1:
+		return "dots1", true
+	case ArchPhiMoE:
+		return "phimoe", true
+	case ArchApertus:
+		return "apertus", true
+	}
+	return "", false
 }

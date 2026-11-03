@@ -22,7 +22,7 @@ import (
 // (quant.PlantScales), since a constant plane hides reading the wrong one.
 func TestPackedRowMatchesTheLayout(t *testing.T) {
 	ran := 0
-	for _, gt := range quant.PackedTypes {
+	for _, gt := range quant.PackedTypes() {
 		q, ok := layout.QuantOf(gt)
 		if !ok {
 			t.Fatalf("%s has no device layout", gt)
@@ -88,7 +88,7 @@ func TestPackedRowMatchesTheLayout(t *testing.T) {
 		}
 		c.Close()
 	}
-	t.Logf("%d rows over %d formats, each equal to the layout's own reading", ran, len(quant.PackedTypes))
+	t.Logf("%d rows over %d formats, each equal to the layout's own reading", ran, len(quant.PackedTypes()))
 }
 
 // TestWidenEveryLength converts F16 and BF16 at lengths that exercise the

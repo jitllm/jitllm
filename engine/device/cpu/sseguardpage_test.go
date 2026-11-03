@@ -85,7 +85,7 @@ func TestSSEFloatMatVecReadsNothingPastItsRow(t *testing.T) {
 // over the last rows of a tensor whose payload, scale planes, activations,
 // scratch and constant block each end at a guard page.
 func TestSSEPackedReadsNothingPastItsSpans(t *testing.T) {
-	for _, g := range quant.PackedTypes {
+	for _, g := range quant.PackedTypes() {
 		tile, tail, fused := ssePackedKernels(t, g)
 		p := newSSEPackFix(t, g, ssePackRows, ssePackK, 5, false)
 		p.qb, p.db = guardBytes(t, p.qb), guardBytes(t, p.db)

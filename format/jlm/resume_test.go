@@ -19,7 +19,6 @@ import (
 // the part was truncated or the skipped tensors were never on the disk.
 // Another origin, or a part of the wrong size, starts over.
 func TestAnInterruptedWriteResumes(t *testing.T) {
-	defer jlm.SetJournalEvery(1)()
 	fp := jlm.Fingerprint{Host: "test"}
 	dir := t.TempDir()
 	ref := filepath.Join(dir, "ref"+jlm.Ext)
@@ -37,6 +36,7 @@ func TestAnInterruptedWriteResumes(t *testing.T) {
 	var fail atomic.Bool
 	lazy := func(origin string) (*jlm.Source, []atomic.Int64) {
 		src := bigSource(t)
+		src.JournalEvery = 1
 		src.Origin = origin
 		loads := make([]atomic.Int64, len(src.Tensors))
 		for i := range src.Tensors {

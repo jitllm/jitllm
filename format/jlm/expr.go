@@ -45,11 +45,53 @@ func (f Fn) Arity() int {
 	return 0
 }
 
-var fnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma", "expm1", "abs", "round", "recip", "tanh", "erf", "equal", "log"}
-
 func (f Fn) String() string {
-	if int(f) < len(fnNames) {
-		return fnNames[f]
+	if f == 0 {
+		return "?"
+	}
+	switch f {
+	case FnAdd:
+		return "add"
+	case FnSub:
+		return "sub"
+	case FnMul:
+		return "mul"
+	case FnDiv:
+		return "div"
+	case FnMax:
+		return "max"
+	case FnMin:
+		return "min"
+	case FnExp:
+		return "exp"
+	case FnSigmoid:
+		return "sigmoid"
+	case FnSoftplus:
+		return "softplus"
+	case FnSqrt:
+		return "sqrt"
+	case FnWhere:
+		return "where"
+	case FnLess:
+		return "less"
+	case FnFma:
+		return "fma"
+	case FnExpm1:
+		return "expm1"
+	case FnAbs:
+		return "abs"
+	case FnRound:
+		return "round"
+	case FnRecip:
+		return "recip"
+	case FnTanh:
+		return "tanh"
+	case FnErf:
+		return "erf"
+	case FnEqual:
+		return "equal"
+	case FnLog:
+		return "log"
 	}
 	return fmt.Sprintf("fn%d", f)
 }

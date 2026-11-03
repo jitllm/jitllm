@@ -225,16 +225,72 @@ const (
 	archMax = ArchHunyuan
 )
 
-var archNames = [...]string{
-	ArchLlama: "llama", ArchQwen2: "qwen2", ArchQwen3: "qwen3", ArchQwen3MoE: "qwen3moe",
-	ArchOLMoE: "olmoe", ArchGemma: "gemma", ArchPhi3: "phi3", ArchCLIP: "clip",
-	ArchQwen3Next: "qwen3next", ArchQwen2VL: "qwen2vl", ArchGemma2: "gemma2",
-	ArchGemma3: "gemma3", ArchGPTOSS: "gptoss", ArchDeepseek2: "deepseek2",
-	ArchKimiLinear: "kimilinear", ArchBERT: "bert", ArchNomicBERT: "nomic-bert", ArchLlama4: "llama4",
-	ArchGranite: "granite", ArchPhi2: "phi2", ArchStarcoder: "starcoder",
-	ArchCommandR: "command-r", ArchStableLM: "stablelm", ArchStarcoder2: "starcoder2", ArchFalcon: "falcon",
-	ArchNemotron: "nemotron", ArchDBRX: "dbrx", ArchGLM4MoE: "glm4moe",
-	ArchQwen2MoE: "qwen2moe", ArchErnie45MoE: "ernie4_5-moe", ArchHunyuan: "hunyuan",
+func coreArchName(a Arch) (string, bool) {
+	switch a {
+	case ArchLlama:
+		return "llama", true
+	case ArchQwen2:
+		return "qwen2", true
+	case ArchQwen3:
+		return "qwen3", true
+	case ArchQwen3MoE:
+		return "qwen3moe", true
+	case ArchOLMoE:
+		return "olmoe", true
+	case ArchGemma:
+		return "gemma", true
+	case ArchPhi3:
+		return "phi3", true
+	case ArchCLIP:
+		return "clip", true
+	case ArchQwen3Next:
+		return "qwen3next", true
+	case ArchQwen2VL:
+		return "qwen2vl", true
+	case ArchGemma2:
+		return "gemma2", true
+	case ArchGemma3:
+		return "gemma3", true
+	case ArchGPTOSS:
+		return "gptoss", true
+	case ArchDeepseek2:
+		return "deepseek2", true
+	case ArchKimiLinear:
+		return "kimilinear", true
+	case ArchBERT:
+		return "bert", true
+	case ArchNomicBERT:
+		return "nomic-bert", true
+	case ArchLlama4:
+		return "llama4", true
+	case ArchGranite:
+		return "granite", true
+	case ArchPhi2:
+		return "phi2", true
+	case ArchStarcoder:
+		return "starcoder", true
+	case ArchCommandR:
+		return "command-r", true
+	case ArchStableLM:
+		return "stablelm", true
+	case ArchStarcoder2:
+		return "starcoder2", true
+	case ArchFalcon:
+		return "falcon", true
+	case ArchNemotron:
+		return "nemotron", true
+	case ArchDBRX:
+		return "dbrx", true
+	case ArchGLM4MoE:
+		return "glm4moe", true
+	case ArchQwen2MoE:
+		return "qwen2moe", true
+	case ArchErnie45MoE:
+		return "ernie4_5-moe", true
+	case ArchHunyuan:
+		return "hunyuan", true
+	}
+	return "", false
 }
 
 // LayerKind says what one repeating unit is. The container stores one per
@@ -335,25 +391,19 @@ func (a Arch) String() string {
 }
 
 func (a Arch) name() string {
-	if int(a) < len(archNames) && archNames[a] != "" {
-		return archNames[a]
-	}
-	if n := denseArchNames[a]; n != "" {
+	if n, ok := coreArchName(a); ok {
 		return n
 	}
-	if n := ssmArchNames[a]; n != "" {
-		return n
+	for _, group := range archGroups() {
+		if n, ok := group(a); ok {
+			return n
+		}
 	}
-	if n := moe2ArchNames[a]; n != "" {
-		return n
-	}
-	if n := flagshipArchNames[a]; n != "" {
-		return n
-	}
-	if n := encoderArchNames[a]; n != "" {
-		return n
-	}
-	return visionArchNames[a]
+	return ""
+}
+
+func archGroups() []func(Arch) (string, bool) {
+	return []func(Arch) (string, bool){denseArchName, ssmArchName, moe2ArchName, flagshipArchName, encoderArchName, visionArchName}
 }
 
 // Valid reports whether a is an architecture this format defines: a code
@@ -1128,10 +1178,10 @@ func (p Projector) String() string {
 	case ProjJanus:
 		return "janus_pro"
 	}
-	if n, ok := visionFamProjNames[p]; ok {
+	if n, ok := visionFamProjName(p); ok {
 		return n
 	}
-	if n := visionProjNames[p]; n != "" {
+	if n, ok := visionProjName(p); ok {
 		return n
 	}
 	return "projector(" + itoa(uint64(p)) + ")"

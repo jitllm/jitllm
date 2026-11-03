@@ -89,7 +89,7 @@ func emitterCalls() []emitterCall {
 		add("rope/"+shapeName(r.hd), func(em *Emitters) ([]byte, error) { return em.RoPE(r.hd, r.nrot, r.neox) },
 			func() ([]byte, error) { return EmitRoPE(r.hd, r.nrot, r.neox) })
 	}
-	for _, qt := range quant.PackedTypes {
+	for _, qt := range quant.PackedTypes() {
 		q, _ := layout.QuantOf(qt)
 		add("packed_row/"+qt.String(), func(em *Emitters) ([]byte, error) { return em.PackedRow(q) },
 			func() ([]byte, error) { return EmitPackedRow(q) })
@@ -171,7 +171,7 @@ func emitterCalls() []emitterCall {
 		add("row_major/"+ft.String(), func(em *Emitters) ([]byte, error) { return em.RowMajor(s) },
 			func() ([]byte, error) { return EmitNative(s) })
 	}
-	for _, qt := range quant.PackedTypes {
+	for _, qt := range quant.PackedTypes() {
 		for _, rows := range []int{PackedRows, PackedTail} {
 			add("packed/"+qt.String()+"/"+shapeName(rows), func(em *Emitters) ([]byte, error) { return em.PackedMatVec(qt, rows) },
 				func() ([]byte, error) { return EmitPackedMatVec(qt, rows, HostDotKind()) })

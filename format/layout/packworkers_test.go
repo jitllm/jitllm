@@ -15,7 +15,7 @@ import (
 func TestPackIsIndependentOfWorkerCount(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
 	for _, q := range []Quant{Q4_0, Q8_0, Q4_K, Q6_K} {
-		qi := qtab[q]
+		qi := qtab(q)
 		if qi.blockE == 0 {
 			continue
 		}

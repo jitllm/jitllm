@@ -18,7 +18,7 @@ import (
 // tolerance).
 func TestKernelMatchesReference(t *testing.T) {
 	ran := 0
-	for _, wt := range quant.PackedTypes {
+	for _, wt := range quant.PackedTypes() {
 		// This gate is about Emit, the row-major matvec, which not every
 		// packed type has (Q5_0), so it asks Supported rather than keeping a
 		// second list.
