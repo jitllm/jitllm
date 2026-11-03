@@ -236,13 +236,16 @@ func TestSharedPageIsNeverWrittenInPlace(t *testing.T) {
 		key := b.s.kv.pageKey(li, 0)
 		before := st.Refs(key, li*2, 0)
 		if write {
+			// As a composed block writes its row: the page made its own
+			// (cpuWritable), then the row stored in place.
 			pg.cowFault = inPlace
-			l := b.s.kvlAt(li)
-			junk := make([]float32, l.kvDim())
-			for i := range junk {
-				junk[i] = 9
+			b.s.cpuWritable(li, 3)
+			l := pg.layout(b.s.kvlAt(li))
+			n, off := pg.page(3)
+			at := l.slots(off * l.kvDim())
+			for i := range l.slots(l.kvDim()) {
+				pg.k[n][at+i], pg.v[n][at+i] = 9, 9
 			}
-			pg.write(l, 0, 3, junk, junk)
 			pg.cowFault = false
 			if !inPlace {
 				if pg.isShared(0) {
