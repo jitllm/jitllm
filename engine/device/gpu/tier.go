@@ -105,7 +105,6 @@ type resKey struct {
 // A devTier is a complete tier over one card and satisfies nn.LayerDevice on
 // its own, which is what makes GPU a router rather than a second
 // implementation.
-var _ nn.LayerDevice = (*devTier)(nil)
 
 // Config is the tier's shared settings. Every field is written by the caller
 // (or once at Open) and read by every device under that device's lock.
@@ -315,6 +314,9 @@ type Config struct {
 	failAt []int
 	// panicAt is failAt for a panic inside a submission.
 	panicAt []int
+	// fault is the violations a jitllmfault build arms on this tier
+	// (WithFaults); nil, none, and in every other build.
+	fault *tierFaults
 	// FillFirst places blocks on the first device until it is full, then the
 	// next, instead of spreading a model that fits across the devices in
 	// proportion to their budgets (GPU.PlanBlocks). The spread leaves each card
@@ -1470,6 +1472,8 @@ type GPU struct {
 	ownMu sync.Mutex
 	model uint64
 	held  bool
+	// sessions is the last session id Attach gave out; 0 is the zero session.
+	sessions atomic.Uint64
 	// devs is every device, in the order they were opened (AddDevices
 	// appends).
 	devs []*devTier
@@ -1621,6 +1625,7 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 		tiles:   tilesFor(o.kb),
 		failAt:  faultAt(),
 		panicAt: faultPanicAt(),
+		fault:   o.faults,
 		stage:   NewPool("host stage", 0),
 		// Always built, budgeted at zero: the structure exists from load, and
 		// the budget decides whether anything is retained. At zero (the

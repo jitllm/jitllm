@@ -33,12 +33,12 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 	for _, dev := range stepDevices() {
 		for _, f := range []struct {
 			name string
-			arm  func(string)
-		}{{"pos", gpu.SetPagedFault}, {"alias", gpu.SetPagedFault}, {"headrow", gpu.SetRowsFault}} {
+			arm  func(*gpu.Faults, string)
+		}{{"pos", (*gpu.Faults).SetPagedFault}, {"alias", (*gpu.Faults).SetPagedFault}, {"headrow", (*gpu.Faults).SetRowsFault}} {
 			t.Run(dev+"/"+f.name, func(t *testing.T) {
-				f.arm(f.name)
-				got, _ := batchGreedy(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev)})
-				f.arm("")
+				var faults gpu.Faults
+				f.arm(&faults, f.name)
+				got, _ := batchGreedy(t, m, ids, gen, 256, []gpu.Option{gpu.WithDevices(dev), gpu.WithFaults(&faults)})
 				composedRowsServed(t, m, lastBatchStats)
 				i, j, gap := composedRowsPart(t, m, ids, want, got)
 				if i < 0 {
@@ -52,9 +52,9 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 		})
 		t.Run(dev+"/nohidden", func(t *testing.T) {
 			want, _ := composedHidden(t, m, dev, 0, composedHiddenRows, false)
-			gpu.SetRowsFault("nohidden")
-			got, st := composedHidden(t, m, dev, composedParts, composedHiddenRows, false)
-			gpu.SetRowsFault("")
+			var faults gpu.Faults
+			faults.SetRowsFault("nohidden")
+			got, st := composedHidden(t, m, dev, composedParts, composedHiddenRows, false, gpu.WithFaults(&faults))
 			if st.HiddenHeads == 0 {
 				t.Fatalf("no served head's normed rows were read back: the arm did not select the served head")
 			}
@@ -88,8 +88,9 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 func composedFoldParts(t *testing.T, m *Model, dev string) {
 	// Chunks of at most 32 rows: the device reserves and warms the widths up
 	// to 32, each a form of the composer's.
+	var faults gpu.Faults
 	g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
-		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 32 }))
+		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 32 }), gpu.WithFaults(&faults))
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}
@@ -116,9 +117,9 @@ func composedFoldParts(t *testing.T, m *Model, dev string) {
 		return append([]float32(nil), lg...), g.Stats().HeadFolds - before
 	}
 	want, _ := run(false)
-	gpu.SetRowsFault("foldrow")
+	faults.SetRowsFault("foldrow")
 	got, folds := run(true)
-	gpu.SetRowsFault("")
+	faults.SetRowsFault("")
 	if folds == 0 {
 		t.Fatalf("no head folded: the arm did not select the fold")
 	}

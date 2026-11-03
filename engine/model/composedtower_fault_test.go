@@ -26,7 +26,8 @@ func TestComposedTowerOnDeviceSeesCausalRows(t *testing.T) {
 	tw.opt.towerGPULayers = 1
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := gpu.OpenWith(gpu.WithDevices(spec))
+		var f gpu.Faults
+		g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithFaults(&f))
 		if err != nil || g == nil {
 			continue
 		}
@@ -34,8 +35,8 @@ func TestComposedTowerOnDeviceSeesCausalRows(t *testing.T) {
 		t.Run(spec, func(t *testing.T) {
 			defer g.Close()
 			read := func(fault string) float64 {
-				gpu.SetRowsFault(fault)
-				defer gpu.SetRowsFault("")
+				f.SetRowsFault(fault)
+				defer f.SetRowsFault("")
 				s := tw.testState()
 				defer s.Close()
 				s.SetDevice(g)

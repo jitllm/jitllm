@@ -2,8 +2,6 @@ package gpu
 
 import (
 	"fmt"
-
-	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A tier is one model. Its blocks are keyed by index (GPU.own, devTier.layers)
@@ -13,11 +11,6 @@ import (
 // by the first model's projection. Nothing in a block's index says which model
 // it is, so the offer says (nn.LayerPlan.Model, nn.Head.Model) and the tier
 // refuses another model's offers while anything of the first is placed.
-
-var (
-	_ nn.ModelOwner = (*GPU)(nil)
-	_ nn.ModelOwner = (*gpuSession)(nil)
-)
 
 // admit takes the tier for model, or refuses -- naming why, in every device's
 // LastErr -- when another model has anything placed on it. what names the

@@ -261,11 +261,11 @@ func TestComposedEncoderOnDevice(t *testing.T) {
 // encDeviceArm embeds g's texts with n of m's encoder blocks on device spec
 // (-1 every one), a tier asked for non-causal blocks (encParts), and demands
 // every placed block run served by the composer, none declined.
-func encDeviceArm(t *testing.T, m *Model, g embedGolden, spec string, n int) (after0, out [][]float32) {
+func encDeviceArm(t *testing.T, m *Model, g embedGolden, spec string, n int, extra ...gpu.Option) (after0, out [][]float32) {
 	t.Helper()
 	nb := m.encBlocks()
-	gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
-		gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+	gpux, err := gpu.OpenWith(append(append([]gpu.Option{gpu.WithDevices(spec),
+		gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...), extra...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

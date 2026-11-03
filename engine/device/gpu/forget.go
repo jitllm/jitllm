@@ -2,8 +2,6 @@ package gpu
 
 import (
 	"unsafe"
-
-	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A block's weight is uploaded once and keyed on its address (resKey.p), and
@@ -11,11 +9,6 @@ import (
 // one address to block after block: a frame refilled, or memory given back and
 // mapped again. Forget is the host saying so, and every copy keyed inside the
 // range goes; see docs/engineering-history/placement.md 15v.
-
-var (
-	_ nn.CopyForgetter = (*GPU)(nil)
-	_ nn.CopyForgetter = (*gpuSession)(nil)
-)
 
 // Forget drops every copy the tier keyed on an address in [p, p+n), on every
 // device and in the arena. It never waits for a device that is busy: a device

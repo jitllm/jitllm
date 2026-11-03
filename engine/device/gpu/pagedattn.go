@@ -274,7 +274,7 @@ func (g *devTier) windowPages(sid uint64, kp *kvPool, li int, l *kvLayerPool, se
 			}
 		}
 	}
-	fault := pagedFaulted("winrelease")
+	fault := g.pagedFaulted("winrelease")
 	for j := l.keyStart(se.start) / P; j < se.start/P && !fault; j++ {
 		if l.owned[s][j] == 0 && (j >= ev || l.home[s][j] == nil) {
 			return fmt.Errorf("block %d: sequence %v reads position %d's window from page %d, released "+
@@ -418,10 +418,10 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 
 // windowDesc is the descriptors block l's attention reads: the windowed ones
 // where its graph attends a window, the full ones elsewhere.
-func (pg *pagedScratch) windowDesc(l *layer) backend.Buf {
+func (g *devTier) windowDesc(pg *pagedScratch, l *layer) backend.Buf {
 	// A scratch with no windowed set is one whose context fits inside the
 	// window (model.windowFor): its rows' windows are the full ones.
-	if l.win > 0 && pg.pRowW != nil && !pagedFaulted("window") {
+	if l.win > 0 && pg.pRowW != nil && !g.pagedFaulted("window") {
 		return pg.pRowW
 	}
 	return pg.pRow
@@ -436,15 +436,15 @@ func (g *devTier) pagedRows(sid uint64, dst []pagedRow, R, nrow, pos int, rag *r
 		switch {
 		case rag != nil && r < len(rag.pos):
 			base := rag.slot[r] - rag.pos[r]
-			if pagedFaulted("alias") {
+			if g.pagedFaulted("alias") {
 				base = rag.slot[0] - rag.pos[0]
 			}
 			s := sid
-			if rag.sid != nil && !pagedFaulted("session") {
+			if rag.sid != nil && !g.pagedFaulted("session") {
 				s = rag.sid[r]
 			}
 			at := rag.pos[r]
-			if r == 1 && pagedFaulted("pos") {
+			if r == 1 && g.pagedFaulted("pos") {
 				at /= 2
 			}
 			rows[r] = pagedRow{s: seqID{s, base}, pos: at}

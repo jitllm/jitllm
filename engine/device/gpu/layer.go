@@ -4979,7 +4979,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// The wanted rows (they lead) at their own count.
 			out := bs.ragLogits
 			rows := ragHead
-			if rowsFaulted("headrow") {
+			if g.rowsFaulted("headrow") {
 				rows = 1
 			}
 			// The head of the step's scratch's capacity, its rows the wanted
@@ -5006,7 +5006,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			out := hb.logits
 			in := hb.x
-			if rowsFaulted("foldrow") {
+			if g.rowsFaulted("foldrow") {
 				in = bs.x
 			}
 			if pickHeadSrv {
@@ -5234,12 +5234,12 @@ func (g *devTier) layersSession(s backend.Session) {
 		w(bs.calls, g.subBytes.calls[:])
 	}
 	if bs.pics != nil {
-		w(bs.pics, bs.picDesc(pos, nrow, g.ncPhase, g.ncKeys))
-		w(bs.picsW, bs.picWinDesc(pos, nrow, g.ncPhase, g.ncKeys, g.winRuns, g.winPerRow))
+		w(bs.pics, bs.picDesc(pos, nrow, g.ncPhase, g.ncKeys, g.rowsFaulted("piccausal")))
+		w(bs.picsW, bs.picWinDesc(pos, nrow, g.ncPhase, g.ncKeys, g.winRuns, g.winPerRow, g.rowsFaulted("piccausal")))
 	}
 	if bs.headCalls != nil && R > 1 && ragHead > 0 {
 		hr := ragHead
-		if rowsFaulted("headrow") {
+		if g.rowsFaulted("headrow") {
 			hr = 1
 		}
 		binary.LittleEndian.PutUint32(g.subBytes.headCalls[:], uint32(hr))

@@ -118,14 +118,14 @@ func (eg *evictGate) second(t *testing.T, st *Instance) [][]float32 {
 // open is an arm's device and instance, the model wholly placed and the prompt
 // in; squeeze then holds the budget at a few pages of slack. cfg, where set,
 // changes the arm's device configuration.
-func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config)) (*gpu.GPU, *Instance, int) {
-	g, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
+func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), extra ...gpu.Option) (*gpu.GPU, *Instance, int) {
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) {
 			c.KVPage = 64 // the smallest page: several over a short history
 			if cfg != nil {
 				cfg(c)
 			}
-		}))
+		})}, extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -157,8 +157,8 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config)) (*g
 	return g, st, resident
 }
 
-func (eg *evictGate) run(t *testing.T, squeeze bool, cfg func(*gpu.Config)) evictRun {
-	g, st, resident := eg.open(t, squeeze, cfg)
+func (eg *evictGate) run(t *testing.T, squeeze bool, cfg func(*gpu.Config), extra ...gpu.Option) evictRun {
+	g, st, resident := eg.open(t, squeeze, cfg, extra...)
 	r := evictRun{resident: resident}
 	for _, id := range eg.ids {
 		lg, err := st.Forward(id)

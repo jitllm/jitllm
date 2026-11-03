@@ -130,6 +130,8 @@ type mixedCase struct {
 	// tie is how far apart on the host the first difference may be: none on
 	// the host, whose batched rows compute exactly what one sequence does.
 	tie float64
+	// extra is options every tier the case opens after it is set takes.
+	extra []gpu.Option
 }
 
 const mixedSeq, mixedRows, mixedBudget = 256, 3, 4
@@ -188,8 +190,8 @@ func (c *mixedCase) open() *gpu.GPU {
 	if c.spec == "" {
 		return nil
 	}
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(c.spec), gpu.WithDeviceTune(gpu.TuneOff)},
-		testTierOpts(c.t)...)...)
+	g, err := gpu.OpenWith(append(append([]gpu.Option{gpu.WithDevices(c.spec), gpu.WithDeviceTune(gpu.TuneOff)},
+		testTierOpts(c.t)...), c.extra...)...)
 	if err != nil || g == nil {
 		noDevice(c.t, c.spec, err)
 	}

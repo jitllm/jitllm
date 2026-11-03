@@ -31,9 +31,9 @@ func TestComposedEncoderOnDeviceSeesCausalRows(t *testing.T) {
 				probe.Close()
 				ran++
 				got0, _ := encDeviceArm(t, m, g, spec, 1)
-				gpu.SetRowsFault("piccausal")
-				bad0, _ := encDeviceArm(t, m, g, spec, 1)
-				gpu.SetRowsFault("")
+				var f gpu.Faults
+				f.SetRowsFault("piccausal")
+				bad0, _ := encDeviceArm(t, m, g, spec, 1, gpu.WithFaults(&f))
 				n0, nbad := worstNMSE(got0, want0), worstNMSE(bad0, want0)
 				t.Logf("%s: clean NMSE %.3e after block 0, causal rows %.3e", spec, n0, nbad)
 				if !(nbad > 100*n0) || !(nbad > 5e-4) {

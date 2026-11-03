@@ -14,20 +14,13 @@ import (
 // again (one physical device under two APIs), an integrated GPU, and a
 // software rasteriser. It returns every device the spec opened, so a gate can
 // check that nothing was opened twice or left open.
-func fakeHost(t *testing.T) *[]*fakeDev {
+func fakeHost(t *testing.T) (*[]*fakeDev, *hostBackends) {
 	t.Helper()
 	var opened []*fakeDev
 	cards := []string{card0, card1, "00112233445566778899aabbccddeeff"}
-	saved := []any{cudaCount, openCUDA, vulkanDevices, openVulkan, openMetal}
-	t.Cleanup(func() {
-		cudaCount = saved[0].(func() (int, error))
-		openCUDA = saved[1].(func(int, backend.Opts) (backend.Device, error))
-		vulkanDevices = saved[2].(func() ([]vulkan.Info, error))
-		openVulkan = saved[3].(func(string, backend.Opts) (backend.Device, error))
-		openMetal = saved[4].(func(backend.Opts) (backend.Device, error))
-	})
-	cudaCount = func() (int, error) { return len(cards), nil }
-	openCUDA = func(ord int, _ backend.Opts) (backend.Device, error) {
+	b := realBackends()
+	b.cudaCount = func() (int, error) { return len(cards), nil }
+	b.openCUDA = func(ord int, _ backend.Opts) (backend.Device, error) {
 		if ord < 0 || ord >= len(cards) {
 			return nil, fmt.Errorf("fake: no CUDA device %d", ord)
 		}
@@ -43,8 +36,8 @@ func fakeHost(t *testing.T) *[]*fakeDev {
 		{Index: 3, Name: "llvmpipe", Compute: true, Software: true},
 	}
 	vkUUID := []string{cards[0], cards[1], "aaaabbbbccccddddeeeeffff00001111", ""}
-	vulkanDevices = func() ([]vulkan.Info, error) { return infos, nil }
-	openVulkan = func(sel string, _ backend.Opts) (backend.Device, error) {
+	b.vulkanDevices = func() ([]vulkan.Info, error) { return infos, nil }
+	b.openVulkan = func(sel string, _ backend.Opts) (backend.Device, error) {
 		i := 0 // "" picks the first, as the backend picks its best
 		if sel != "" {
 			n, err := strconv.Atoi(sel)
@@ -57,9 +50,12 @@ func fakeHost(t *testing.T) *[]*fakeDev {
 		opened = append(opened, d)
 		return ordFake{d, i}, nil
 	}
-	openMetal = func(backend.Opts) (backend.Device, error) { return nil, fmt.Errorf("fake: no Metal") }
-	return &opened
+	b.openMetal = func(backend.Opts) (backend.Device, error) { return nil, fmt.Errorf("fake: no Metal") }
+	return &opened, &b
 }
+
+// withBackends opens the spec's devices through b instead of the backends.
+func withBackends(b *hostBackends) Option { return func(o *openOpts) { o.back = b } }
 
 // TestABareBackendNameIsEveryDeviceOfIt: `cuda` is every CUDA card, `vulkan`
 // every Vulkan GPU, and a bare `gpu` every GPU after one card under two APIs
@@ -83,12 +79,12 @@ func TestABareBackendNameIsEveryDeviceOfIt(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.spec, func(t *testing.T) {
-			opened := fakeHost(t)
+			opened, b := fakeHost(t)
 			es, err := ParseDevices(tc.spec)
 			if err != nil {
 				t.Fatal(err)
 			}
-			o := openOpts{spec: tc.spec, kb: knobs{tune: TuneOff}}
+			o := openOpts{spec: tc.spec, kb: knobs{tune: TuneOff}, back: b}
 			devs, asks, names, err := openEntries(es, o)
 			if err != nil {
 				t.Fatal(err)
@@ -152,8 +148,8 @@ func labels(devs []backend.Device) []string {
 func TestHardwareIsOneKeyPerPhysicalDevice(t *testing.T) {
 	keys := func(spec string) []Hardware {
 		t.Helper()
-		fakeHost(t)
-		g, err := OpenWith(WithDevices(spec), WithHostBudget(boxHost), WithDeviceTune(TuneOff))
+		_, b := fakeHost(t)
+		g, err := OpenWith(WithDevices(spec), WithHostBudget(boxHost), WithDeviceTune(TuneOff), withBackends(b))
 		if err != nil {
 			t.Fatalf("-devices %s: %v", spec, err)
 		}

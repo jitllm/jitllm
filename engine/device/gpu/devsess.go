@@ -253,6 +253,7 @@ func newDevice(sh *devShared) *devTier {
 	l0 := &lane{bbs: map[int]*blockScratch{}}
 	ds := &devSess{}
 	dv := &devTier{devShared: sh, devSess: ds, lane: l0, Stats: &sh.tot}
+	var _ nn.LayerDevice = dv
 	sh.lane0, sh.dv = l0, dv
 	sh.sess = map[uint64]*devSess{0: ds}
 	sh.idle.L = &sh.mu
