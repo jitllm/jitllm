@@ -3,7 +3,6 @@ package model
 import (
 	"math"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
@@ -180,42 +179,16 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 // head's mix is the host's, and a checkpoint every three blocks is a bank of
 // other streams than the device was placed with, so neither is here.
 func k3ComposedViolations(t *testing.T) []c6Violation {
-	both := func(f k3Fault, undoS func(*Model) func()) func(*Model) func() {
-		return func(m *Model) func() {
-			undoC := cfgMut(m, func(c *Config) { c.k3Fault = f })
-			undoR := undoS(m)
-			return func() { undoR(); undoC() }
-		}
+	fault := func(f k3Fault) func(*Model) func() {
+		return func(m *Model) func() { return cfgMut(m, func(c *Config) { c.k3Fault = f }) }
 	}
 	return []c6Violation{
-		{"no residual attention: every sublayer reads the running residual", both(k3FaultNoBank, func(m *Model) func() {
-			return dropStored(m, jlm.RoleAttnResScore, jlm.RoleFFNResScore)
-		})},
-		{"the bank scored on raw values", both(k3FaultRawScores, func(m *Model) func() {
-			return m.rewriteEveryBlock(t, func(g *graph.Graph) *graph.Graph {
-				return rewriteOps(t, g, func(_ int, o *graph.Op) bool {
-					if o.Kind != graph.OpHeadNorm || !strings.HasPrefix(g.Values[o.Out[0]].Name, "bank.normed") {
-						return false
-					}
-					*o = graph.Op{Kind: graph.OpMap, In: o.In, Out: o.Out, Attr: graph.Attrs{Fn: graph.MapMul, Const: 1}}
-					return true
-				})
-			})
-		})},
-		{"a checkpoint block adds its attention instead of restarting", both(k3FaultNoRestart, func(m *Model) func() {
-			return m.rewriteEveryBlock(t, func(g *graph.Graph) *graph.Graph { return addedNotRestarted(m, g) })
-		})},
-		{"the latent sum unnormed", both(k3FaultNoLatentNorm, func(m *Model) func() {
-			return dropStored(m, jlm.RoleFFNRoutedNorm)
-		})},
-		{"the MLA output ungated", both(k3FaultNoMLAGate, func(m *Model) func() {
-			return m.restateAt(func(li int, inv map[jlm.Role]graph.Shape) {
-				if !m.Cfg.LayerKind(li).Recurrent() {
-					delete(inv, jlm.RoleAttnGate)
-				}
-			})
-		})},
-		{"the KDA output ungated", both(k3FaultNoKDAGate, func(m *Model) func() { return m.rewriteEveryBlock(t, kdaUngated(t, m)) })},
+		{"no residual attention: every sublayer reads the running residual", fault(k3FaultNoBank)},
+		{"the bank scored on raw values", fault(k3FaultRawScores)},
+		{"a checkpoint block adds its attention instead of restarting", fault(k3FaultNoRestart)},
+		{"the latent sum unnormed", fault(k3FaultNoLatentNorm)},
+		{"the MLA output ungated", fault(k3FaultNoMLAGate)},
+		{"the KDA output ungated", fault(k3FaultNoKDAGate)},
 		{"the KDA decay unbounded (Kimi-Linear's softplus)", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.KDALowerBound = 0 })
 		}},
@@ -223,26 +196,6 @@ func k3ComposedViolations(t *testing.T) []c6Violation {
 			return cfgMut(m, func(c *Config) { c.LatentNormEps = c.RMSEps })
 		}},
 		{"plain SwiGLU", actSwap(nn.ActSiLU)},
-	}
-}
-
-// restateAt is restate with the block each inventory is of.
-func (m *Model) restateAt(f func(li int, inv map[jlm.Role]graph.Shape)) func() {
-	fr := &m.front
-	fr.mu.Lock()
-	was := fr.restate
-	fr.restate = func(block int32, inv map[jlm.Role]graph.Shape) {
-		if block != jlm.DenseBlock {
-			f(int(block), inv)
-		}
-	}
-	fr.restated++
-	fr.mu.Unlock()
-	return func() {
-		fr.mu.Lock()
-		fr.restate = was
-		fr.restated++
-		fr.mu.Unlock()
 	}
 }
 
@@ -278,56 +231,6 @@ func (m *Model) rewriteEveryBlock(t *testing.T, rewrite func(*graph.Graph) *grap
 		m.front.set = was
 		m.front.mu.Unlock()
 	}
-}
-
-// addedNotRestarted is a checkpoint block's graph with its attention's
-// output added to the running residual (the graph's first input) where it
-// restarts the residual: every read of the output after the projection
-// reads their sum. g itself on a block that banks nothing.
-func addedNotRestarted(m *Model, g *graph.Graph) *graph.Graph {
-	if _, ok := m.Cfg.resCheckpoint(g.Block); !ok {
-		return g
-	}
-	// The projection is the last op of the attention's output role before
-	// the FFN's mix.
-	at := -1
-	for i, o := range g.Ops {
-		if (o.Kind == graph.OpMatVec || o.Kind == graph.OpAdd) && len(o.Weight) > 0 &&
-			(o.Weight[0].Role == jlm.RoleAttnOut || o.Weight[0].Role == jlm.RoleSSMOut) {
-			at = i
-		}
-	}
-	if at < 0 {
-		return g
-	}
-	out := *g
-	out.Values = slices.Clone(g.Values)
-	proj := g.Ops[at].Out[0]
-	sum := graph.ValueID(len(out.Values))
-	out.Values = append(out.Values, graph.Value{Name: "restart.added", Width: g.Values[proj].Width})
-	ops := make([]graph.Op, 0, len(g.Ops)+1)
-	for i, o := range g.Ops {
-		if i > at {
-			o.In = slices.Clone(o.In)
-			for j, v := range o.In {
-				if v == proj {
-					o.In[j] = sum
-				}
-			}
-		}
-		ops = append(ops, o)
-		if i == at {
-			ops = append(ops, graph.Op{Kind: graph.OpAdd, In: []graph.ValueID{g.In[0], proj}, Out: []graph.ValueID{sum}})
-		}
-	}
-	out.Ops = ops
-	out.Out = slices.Clone(g.Out)
-	for j, v := range out.Out {
-		if v == proj {
-			out.Out[j] = sum
-		}
-	}
-	return &out
 }
 
 // embedDoubled is the input rows' graph with each row's embedding doubled.

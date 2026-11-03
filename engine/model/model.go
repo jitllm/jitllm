@@ -49,6 +49,10 @@ type Config struct {
 	// CentredConv is a short convolution reading the rows after its own as
 	// well as before (jlm.Flag2CentredConv).
 	CentredConv bool
+	// RowWindowed says a non-causal block's rows attend inside windows of
+	// their own, which its convolution's taps keep to as well: a media
+	// prefix's rows the prefix alone (an LFM2 encoder's, rowWindows).
+	RowWindowed bool
 	// chanDecay is ChanDecay()'s backing field: Kimi Delta Attention rather
 	// than qwen3next's gated delta rule. Unexported because it is derived from
 	// the container's Arch and is not a knob.
@@ -317,6 +321,9 @@ type Config struct {
 	// k3Fault breaks one piece of Kimi-K3's graph, for a gate's violation
 	// only.
 	k3Fault k3Fault
+	// halfFault drops one half of a block that attends beside its mixer
+	// (Falcon-H1's), for a gate's violation only.
+	halfFault halfFault
 	// PredStreams is how many residual streams each block predicts and
 	// corrects (altup.go), zero for one stream; NSparse blocks lead with a
 	// gaussian top-k on their FFN gate at SparseStd deviations.
@@ -1283,12 +1290,11 @@ type Model struct {
 	// cpuComposes the times the composer was asked for one (CPUComposes).
 	cpuForms    cpuForms
 	cpuComposes atomic.Int64
-	// argmaxes is the greedy sampler's graph at each width a caller asked
-	// an argmax of (Instance.cpuArgmax), one graph a width so its form is
-	// composed once.
+	// argmaxes is a decision's argmax graph (argmaxGraph), one for the
+	// model so its form is composed once.
 	argmaxes struct {
 		mu sync.Mutex
-		g  map[int]*graph.Graph
+		g  *graph.Graph
 	}
 
 	// TokErr is why Vocab is nil, when it is. The weights still loaded.

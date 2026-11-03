@@ -2757,17 +2757,17 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		up(&l.ssmConv1d, w.SSM.Conv1d)
 		l.auxBytes += uint64(len(w.SSM.Conv1d) * 4)
-		if !r.Centred {
-			taps := make([]float32, len(w.SSM.Conv1d))
-			for u := range r.Conv {
-				for c := range r.Chans {
-					taps[c*r.Conv+u] = w.SSM.Conv1d[u*r.Chans+c]
-				}
+		// The composed convolution reads its taps channel-major, the causal
+		// one's and the centred one's (graph.OpRowConv) alike.
+		taps := make([]float32, len(w.SSM.Conv1d))
+		for u := range r.Conv {
+			for c := range r.Chans {
+				taps[c*r.Conv+u] = w.SSM.Conv1d[u*r.Chans+c]
 			}
-			up(&l.ssmTaps.qs, taps)
-			l.ssmTaps = resident{qs: l.ssmTaps.qs, nrows: r.Chans, k: r.Conv, t: layout.Float32, ok: true}
-			l.auxBytes += uint64(len(taps) * 4)
 		}
+		up(&l.ssmTaps.qs, taps)
+		l.ssmTaps = resident{qs: l.ssmTaps.qs, nrows: r.Chans, k: r.Conv, t: layout.Float32, ok: true}
+		l.auxBytes += uint64(len(taps) * 4)
 	}
 	// A short convolution (LFM2) has its window and nothing else.
 	if r := p.Recurrent; r.Conv > 0 && !r.ShortConv {

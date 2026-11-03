@@ -26,7 +26,10 @@ import (
 // definition: every row, where the call's live elements, counted in 32
 // bits, once wrapped past a flattened space of 4096 rows of 1152 and left
 // the rows from 455 on unwritten. Two violations must fail: each row's span cut to the rows up
-// to its own (a causal row) and the span's first position moved by one.
+// to its own (a causal row) and the span's first position moved by one. A
+// symmetric window the graph states (EmbeddingGemma's sliding layers: 512,
+// half either side) is held the same way, and its form without the window
+// must fail too.
 func TestComposedGPUAttendBidirRows(t *testing.T) {
 	testlock.GPU(t)
 	devs := backend.Open()
@@ -41,13 +44,13 @@ func TestComposedGPUAttendBidirRows(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		tile, _ := backend.LowersTile(d, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32})
-		for _, c := range [][2]int{{1024, 72}, {2100, 72}, {4096, 72}, {2100, 64}} {
+		for _, c := range [][3]int{{1024, 72, 0}, {2100, 72, 0}, {4096, 72, 0}, {2100, 64, 0}, {700, 256, 512}, {2100, 72, 512}} {
 			for _, seqs := range []int{0, 1} {
 				if seqs == 1 && !tile {
 					continue
 				}
 				ran++
-				t.Run(fmt.Sprintf("%s/rows%d/dim%d/seqs%d", d.API(), c[0], c[1], seqs), func(t *testing.T) { gpuAttendBidir(t, d, c[0], c[1], seqs) })
+				t.Run(fmt.Sprintf("%s/rows%d/dim%d/win%d/seqs%d", d.API(), c[0], c[1], c[2], seqs), func(t *testing.T) { gpuAttendBidir(t, d, c[0], c[1], c[2], seqs) })
 			}
 		}
 	}
@@ -57,26 +60,30 @@ func TestComposedGPUAttendBidirRows(t *testing.T) {
 }
 
 // gpuAttendBidir is a run of R rows at head width dim on d, the device's
-// matrix unit stated where seqs is 1. Past 2048 rows -- a workgroup's chunk
-// of positions at most (Workgroups.Chunk) -- the form must split the range.
-func gpuAttendBidir(t *testing.T, d backend.Device, R, dim, seqs int) {
+// matrix unit stated where seqs is 1, each row within win/2 of it either
+// side where win is a window. Past 2048 rows -- a workgroup's chunk of
+// positions at most (Workgroups.Chunk) -- the form must split the range.
+func gpuAttendBidir(t *testing.T, d backend.Device, R, dim, win, seqs int) {
 	const heads = 16
 	keys := (R + 127) / 128 * 128
 	page := R + 1
-	b := graph.New()
-	n := b.KVAppend(b.In("k", heads*dim), b.In("v", heads*dim), 0)
 	scale := float32(1 / math.Sqrt(float64(dim)))
-	b.Out(b.Attend(b.In("q", heads*dim), n, graph.Attrs{NHead: heads, NKVHead: heads, HeadDim: dim, Scale: float64(scale), Bidir: true}))
-	g := b.G
 	dev := gpuDevice(d)
 	if seqs == 1 {
 		dev.Matrix = [3]int{16, 16, 16}
 	}
-	_, codes, err := composer.Default().Form(composer.Request{Graph: g, Step: composer.Step{Rows: R, Page: page, Keys: keys, Seqs: seqs},
-		Device: dev, History: composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: true}}})
-	if err != nil {
-		t.Fatal(err)
+	form := func(win int) (*graph.Graph, []composer.Code) {
+		b := graph.New()
+		n := b.KVAppend(b.In("k", heads*dim), b.In("v", heads*dim), 0)
+		b.Out(b.Attend(b.In("q", heads*dim), n, graph.Attrs{NHead: heads, NKVHead: heads, HeadDim: dim, Scale: float64(scale), Bidir: true, Window: win}))
+		_, codes, err := composer.Default().Form(composer.Request{Graph: b.G, Step: composer.Step{Rows: R, Page: page, Keys: keys, Seqs: seqs},
+			Device: dev, History: composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: true}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b.G, codes
 	}
+	g, codes := form(win)
 	var passes []string
 	for _, cd := range codes {
 		for _, p := range cd.Passes {
@@ -106,21 +113,25 @@ func gpuAttendBidir(t *testing.T, d backend.Device, R, dim, seqs int) {
 		sample = append(sample, r)
 	}
 	ref := func(r int) []float64 {
+		lo, hi := 0, R
+		if win > 0 {
+			lo, hi = max(0, r-win/2), min(R, r+win/2+1)
+		}
 		want := make([]float64, w)
 		for h := range heads {
-			sc := make([]float64, R)
-			for p := range R {
+			sc := make([]float64, hi-lo)
+			for p := lo; p < hi; p++ {
 				var s float64
 				for e := range dim {
 					s += float64(q[r*w+h*dim+e]) * float64(k[p*w+h*dim+e])
 				}
-				sc[p] = s * float64(scale)
+				sc[p-lo] = s * float64(scale)
 			}
 			oracle.Softmax(sc)
 			for e := range dim {
 				var o float64
-				for p := range R {
-					o += sc[p] * round(v[p*w+h*dim+e])
+				for p := lo; p < hi; p++ {
+					o += sc[p-lo] * round(v[p*w+h*dim+e])
 				}
 				want[h*dim+e] = o
 			}
@@ -131,7 +142,7 @@ func gpuAttendBidir(t *testing.T, d backend.Device, R, dim, seqs int) {
 	for i := range pgs {
 		pgs[i] = uint32(i)
 	}
-	run := func(causal bool, shift uint32) []float32 {
+	run := func(codes []composer.Code, causal bool, shift uint32) []float32 {
 		rows := make([]uint32, R*4)
 		for r := range R {
 			end := uint32(R)
@@ -162,7 +173,7 @@ func gpuAttendBidir(t *testing.T, d backend.Device, R, dim, seqs int) {
 	for _, r := range sample {
 		wants[r] = ref(r)
 	}
-	got := run(false, 0)
+	got := run(codes, false, 0)
 	worst, bad := 0.0, 0
 	for _, r := range sample {
 		e := nmse(got, wants[r], r)
@@ -177,10 +188,22 @@ func gpuAttendBidir(t *testing.T, d backend.Device, R, dim, seqs int) {
 		}
 	}
 	t.Logf("%d sampled rows of %d: worst NMSE %.3e, %d over the band", len(sample), R, worst, bad)
-	if e := nmse(run(true, 0), wants[0], 0); !(e > 1e-6) {
+	if e := nmse(run(codes, true, 0), wants[0], 0); !(e > 1e-6) {
 		t.Errorf("with each row's span cut to its own the NMSE is %.3e: the gate cannot see a causal row", e)
 	}
-	if e := nmse(run(false, 1), wants[R-1], R-1); !(e > 1e-6) {
+	// The last row's span starts at the first position, a windowed one's
+	// past it: row 1's window reaches the first position.
+	vr := R - 1
+	if win > 0 {
+		vr = 1
+	}
+	if e := nmse(run(codes, false, 1), wants[vr], vr); !(e > 1e-6) {
 		t.Errorf("with the span's first position moved the NMSE is %.3e: the gate cannot see a wrong span", e)
+	}
+	if win > 0 {
+		_, open := form(0)
+		if e := nmse(run(open, false, 0), wants[R/2], R/2); !(e > 1e-6) {
+			t.Errorf("formed without its window the NMSE is %.3e: the gate cannot see the window", e)
+		}
 	}
 }

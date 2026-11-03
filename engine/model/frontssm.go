@@ -143,7 +143,9 @@ func (m *Model) scanMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has 
 }
 
 // shortConvMixer is a gated short convolution over its normed row n: x's
-// projection times B's, through the causal convolution, times C's.
+// projection times B's, through the causal convolution, times C's -- or a
+// centred one across the call's rows (CentredConv), each row's taps inside
+// its window (RowWindowed).
 func (m *Model) shortConvMixer(b *graph.Builder, n graph.ValueID,
 	matvec func(graph.ValueID, jlm.Role, int, ...jlm.Role) graph.ValueID) (graph.ValueID, error) {
 	g := m.Cfg.delta()
@@ -155,8 +157,14 @@ func (m *Model) shortConvMixer(b *graph.Builder, n graph.ValueID,
 		return mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, nil, w, x, y)
 	}
 	bx := mul("bx", matvec(n, jlm.RoleSCB, w), matvec(n, jlm.RoleSCX, w))
-	conv := b.Emit(graph.OpStateConv, []graph.ValueID{bx}, []graph.Result{{Name: "conv", Width: w}},
-		[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: g.conv, Rows: w}}, graph.Attrs{Taps: g.conv},
+	taps := []graph.Binding{{Role: jlm.RoleSSMConv1d, K: g.conv, Rows: w}}
+	if c := m.Cfg; c.CentredConv {
+		conv := b.Emit(graph.OpRowConv, []graph.ValueID{bx}, []graph.Result{{Name: "conv", Width: w}}, taps,
+			graph.Attrs{Taps: g.conv, RowWindows: c.RowWindowed}, nil, nil)[0]
+		return mul("cy", matvec(n, jlm.RoleSCC, w), conv), nil
+	}
+	conv := b.Emit(graph.OpStateConv, []graph.ValueID{bx}, []graph.Result{{Name: "conv", Width: w}}, taps,
+		graph.Attrs{Taps: g.conv},
 		[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0]
 	return mul("cy", matvec(n, jlm.RoleSCC, w), conv), nil
 }

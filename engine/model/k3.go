@@ -28,6 +28,19 @@ import (
 // k3Fault breaks one piece of Kimi-K3's graph, for a gate's violation only.
 type k3Fault int
 
+// halfFault drops one half of a block that attends beside its mixer: the
+// half computed and its output weighed by zero, so every tensor it reads
+// stays bound as the container stores it.
+type halfFault int
+
+const (
+	halfFaultNone halfFault = iota
+	// halfFaultNoAttn leaves the block its mixer alone.
+	halfFaultNoAttn
+	// halfFaultNoMixer leaves the block its attention alone.
+	halfFaultNoMixer
+)
+
 const (
 	k3FaultNone k3Fault = iota
 	// k3FaultNoBank mixes nothing: every sublayer reads the running residual,
