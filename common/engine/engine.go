@@ -33,7 +33,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
@@ -135,7 +134,7 @@ func (e *Engine) run() {
 func (e *Engine) do(fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			crash.Handle("engine worker", r, debug.Stack())
+			e.sh.Crashes().Handle("engine worker", r, debug.Stack())
 			e.afterPanic()
 		}
 	}()
@@ -147,7 +146,7 @@ func (e *Engine) do(fn func()) {
 func (e *Engine) afterPanic() {
 	defer func() {
 		if r := recover(); r != nil {
-			crash.Handle("engine worker, closing the session after a panic", r, debug.Stack())
+			e.sh.Crashes().Handle("engine worker, closing the session after a panic", r, debug.Stack())
 			e.sess, e.active = nil, nil
 			e.gpu, e.m, e.path, e.sessMax = nil, nil, "", 0
 		}
@@ -1148,7 +1147,11 @@ func (e *Engine) lastFailures() (n int64) {
 }
 
 // errStopped ends a generate the person stopped.
-var errStopped = errors.New("stopped")
+const errStopped engineError = "stopped"
+
+type engineError string
+
+func (e engineError) Error() string { return string(e) }
 
 // lastPrompt is how many tokens the last prompt was, for the reuse probe.
 func (e *Engine) lastPrompt() int { return e.lastPromptTok }

@@ -18,18 +18,17 @@ import (
 // model again chats. Against the violation (afterPanic not closing the
 // session) the model is still shown loaded on the broken session.
 func TestAPanicMidReplyLeavesTheAppConsistent(t *testing.T) {
-	fresh.Must(t, modelPath)
-	if _, err := os.Stat(modelPath); err != nil {
+	fresh.Must(t, modelPath())
+	if _, err := os.Stat(modelPath()); err != nil {
 		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
 	}
-	crash.OnReport(func(crash.Report) {})
-	defer crash.OnReport(nil)
 	sh := newTestShell()
+	sh.Crashes().OnReport(func(crash.Report) {})
 	st := sh.Store
 	e := New(sh, sh.state())
 	defer e.Close()
 
-	e.Load(modelPath)
+	e.Load(modelPath())
 	pump(t, sh, 90*time.Second, "the model to load", func() bool { return st.Loaded.Get() })
 
 	// Send's own bookkeeping around a command that falls over.
@@ -53,7 +52,7 @@ func TestAPanicMidReplyLeavesTheAppConsistent(t *testing.T) {
 		t.Errorf("%d model(s) listed, want the one still open", len(st.Models.Get()))
 	}
 
-	e.Use(modelPath)
+	e.Use(modelPath())
 	pump(t, sh, 60*time.Second, "the model to be chosen again", func() bool { return st.Loaded.Get() && !st.Busy.Get() })
 	r := st.AppendTurn(session.Turn{Role: session.RoleAssistant})
 	e.Send(session.ChatRequest{Prompt: "Once upon a time", Reply: r, MaxTokens: 8})

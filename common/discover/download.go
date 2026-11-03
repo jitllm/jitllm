@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jitllm/jitllm/common/config"
 	"github.com/jitllm/jitllm/common/convertjob"
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/convert/gguf"
@@ -23,12 +22,12 @@ import (
 // DefaultBalance is the preference a first look starts at: Balanced.
 const DefaultBalance = 2
 
-// Dir is where downloads land: the first configured model folder.
-func Dir(modelDirs []string) string {
+// Dir is where downloads land: the first configured model folder, else def.
+func Dir(modelDirs []string, def string) string {
 	if len(modelDirs) > 0 {
 		return modelDirs[0]
 	}
-	return config.DefaultModelDir()
+	return def
 }
 
 // ContainerFor is where a library model's container is written in dir.

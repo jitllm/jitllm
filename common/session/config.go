@@ -51,58 +51,60 @@ type Knob struct {
 	Caption func(Sampling) string
 }
 
-// SamplingKnobs are the sampler's settings, in the order the sampler applies
+// SamplingKnobs() are the sampler's settings, in the order the sampler applies
 // them. The filters run in llama.cpp's order -- top-k, top-p, min-p --
 // because the other order gives a different distribution, and matching it is
 // what makes a prompt behave comparably in both engines. The seed is not a
 // knob: it is a value, not a range.
-var SamplingKnobs = []Knob{
-	// The temperature caption names greedy: at zero model.Sampler returns the
-	// argmax before reading any other field, so the other knobs are inert.
-	{Name: "Temperature", Min: 0, Max: 2, Step: 0.05,
-		Get: func(s Sampling) float32 { return s.Temp },
-		Set: func(s *Sampling, v float32) { s.Temp = v },
-		Caption: func(s Sampling) string {
-			if s.Temp <= 0 {
-				return "0, always the likeliest token"
-			}
-			return fmt.Sprintf("%.2f", s.Temp)
-		}},
-	{Name: "Top-k", Min: 0, Max: 200, Step: 1,
-		Get:     func(s Sampling) float32 { return float32(s.TopK) },
-		Set:     func(s *Sampling, v float32) { s.TopK = int(v) },
-		Caption: func(s Sampling) string { return OffInt(s.TopK, 0, "most likely tokens") }},
-	{Name: "Top-p", Min: 0, Max: 1, Step: 0.01,
-		Get: func(s Sampling) float32 { return s.TopP },
-		Set: func(s *Sampling, v float32) { s.TopP = v },
-		Caption: func(s Sampling) string {
-			if s.TopP <= 0 || s.TopP >= 1 {
-				return "off"
-			}
-			return fmt.Sprintf("%.2f", s.TopP)
-		}},
-	{Name: "Min-p", Min: 0, Max: 0.5, Step: 0.01,
-		Get: func(s Sampling) float32 { return s.MinP },
-		Set: func(s *Sampling, v float32) { s.MinP = v },
-		Caption: func(s Sampling) string {
-			if s.MinP <= 0 {
-				return "off"
-			}
-			return fmt.Sprintf("%.2f of the likeliest", s.MinP)
-		}},
-	{Name: "Repeat penalty", Min: 1, Max: 2, Step: 0.01,
-		Get: func(s Sampling) float32 { return s.RepeatPen },
-		Set: func(s *Sampling, v float32) { s.RepeatPen = v },
-		Caption: func(s Sampling) string {
-			if s.RepeatPen <= 1 {
-				return "off"
-			}
-			return fmt.Sprintf("%.2f", s.RepeatPen)
-		}},
-	{Name: "Repeat window", Min: 0, Max: 512, Step: 8,
-		Get:     func(s Sampling) float32 { return float32(s.RepeatLastN) },
-		Set:     func(s *Sampling, v float32) { s.RepeatLastN = int(v) },
-		Caption: func(s Sampling) string { return fmt.Sprintf("last %d tokens", s.RepeatLastN) }},
+func SamplingKnobs() []Knob {
+	return []Knob{
+		// The temperature caption names greedy: at zero model.Sampler returns the
+		// argmax before reading any other field, so the other knobs are inert.
+		{Name: "Temperature", Min: 0, Max: 2, Step: 0.05,
+			Get: func(s Sampling) float32 { return s.Temp },
+			Set: func(s *Sampling, v float32) { s.Temp = v },
+			Caption: func(s Sampling) string {
+				if s.Temp <= 0 {
+					return "0, always the likeliest token"
+				}
+				return fmt.Sprintf("%.2f", s.Temp)
+			}},
+		{Name: "Top-k", Min: 0, Max: 200, Step: 1,
+			Get:     func(s Sampling) float32 { return float32(s.TopK) },
+			Set:     func(s *Sampling, v float32) { s.TopK = int(v) },
+			Caption: func(s Sampling) string { return OffInt(s.TopK, 0, "most likely tokens") }},
+		{Name: "Top-p", Min: 0, Max: 1, Step: 0.01,
+			Get: func(s Sampling) float32 { return s.TopP },
+			Set: func(s *Sampling, v float32) { s.TopP = v },
+			Caption: func(s Sampling) string {
+				if s.TopP <= 0 || s.TopP >= 1 {
+					return "off"
+				}
+				return fmt.Sprintf("%.2f", s.TopP)
+			}},
+		{Name: "Min-p", Min: 0, Max: 0.5, Step: 0.01,
+			Get: func(s Sampling) float32 { return s.MinP },
+			Set: func(s *Sampling, v float32) { s.MinP = v },
+			Caption: func(s Sampling) string {
+				if s.MinP <= 0 {
+					return "off"
+				}
+				return fmt.Sprintf("%.2f of the likeliest", s.MinP)
+			}},
+		{Name: "Repeat penalty", Min: 1, Max: 2, Step: 0.01,
+			Get: func(s Sampling) float32 { return s.RepeatPen },
+			Set: func(s *Sampling, v float32) { s.RepeatPen = v },
+			Caption: func(s Sampling) string {
+				if s.RepeatPen <= 1 {
+					return "off"
+				}
+				return fmt.Sprintf("%.2f", s.RepeatPen)
+			}},
+		{Name: "Repeat window", Min: 0, Max: 512, Step: 8,
+			Get:     func(s Sampling) float32 { return float32(s.RepeatLastN) },
+			Set:     func(s *Sampling, v float32) { s.RepeatLastN = int(v) },
+			Caption: func(s Sampling) string { return fmt.Sprintf("last %d tokens", s.RepeatLastN) }},
+	}
 }
 
 // OffInt is an integer setting in words: "off" at its off value.

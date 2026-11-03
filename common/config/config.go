@@ -15,8 +15,8 @@ import (
 )
 
 // Env is what the app takes from the process environment. A library reads no
-// environment, so each command (ui/main.go, tui/main.go) reads these and hands them over
-// with UseEnv before LoadConfig.
+// environment, so each command (ui/main.go, tui/main.go) reads these and hands them
+// to LoadConfig.
 type Env struct {
 	// Models is $JITLLM_MODELS, the model folder the engine's tests read.
 	Models string
@@ -27,14 +27,9 @@ type Env struct {
 	APIKey string
 }
 
-var env Env
-
-// UseEnv sets what the app takes from the environment.
-func UseEnv(e Env) { env = e }
-
 // DefaultModelDir is where a first run looks for models and puts downloads;
 // see [catalog.DefaultDir].
-func DefaultModelDir() string { return catalog.DefaultDir(env.Models, env.DataHome) }
+func (e Env) DefaultModelDir() string { return catalog.DefaultDir(e.Models, e.DataHome) }
 
 // Config is what survives a restart. Window size is persisted and position is
 // not: neither library reports or restores a window position.
@@ -90,30 +85,38 @@ type Config struct {
 	CLIOffered bool `json:"cli_offered"`
 
 	path string
+	env  Env
 }
 
 // ServingKey is the key the app's own API requires, "" for none.
 func (c *Config) ServingKey() string {
-	if c != nil && c.APIKey != "" {
+	if c == nil {
+		return ""
+	}
+	if c.APIKey != "" {
 		return c.APIKey
 	}
-	return env.APIKey
+	return c.env.APIKey
 }
 
 // ServiceAPIKey is the key the app sends a jitllmd, "" for none.
 func (c *Config) ServiceAPIKey() string {
-	if c != nil && c.ServiceKey != "" {
+	if c == nil {
+		return ""
+	}
+	if c.ServiceKey != "" {
 		return c.ServiceKey
 	}
-	return env.APIKey
+	return c.env.APIKey
 }
 
 // DefaultConfig is the configuration a first run gets.
-func DefaultConfig() *Config {
+func DefaultConfig(e Env) *Config {
 	return &Config{
+		env:        e,
 		WindowW:    1440,
 		WindowH:    900,
-		ModelDirs:  []string{DefaultModelDir()},
+		ModelDirs:  []string{e.DefaultModelDir()},
 		DeviceSpec: "auto",
 		MaxSeq:     4096,
 		Sampling:   session.DefaultSampling(),
@@ -146,8 +149,8 @@ func (c *Config) Path() string { return c.path }
 // LoadConfig reads the settings file, falling back to [DefaultConfig] for a
 // missing or unreadable one. A corrupt file is not an error worth refusing to
 // start over.
-func LoadConfig() *Config {
-	c := DefaultConfig()
+func LoadConfig(e Env) *Config {
+	c := DefaultConfig(e)
 	c.path = ConfigPath()
 	if c.path == "" {
 		return c
@@ -156,7 +159,7 @@ func LoadConfig() *Config {
 	if err != nil {
 		return c
 	}
-	saved := DefaultConfig()
+	saved := DefaultConfig(e)
 	if err := json.Unmarshal(b, saved); err != nil {
 		return c
 	}
@@ -207,4 +210,13 @@ func (c *Config) AddModelDir(dir string) bool {
 	}
 	c.ModelDirs = append(c.ModelDirs, dir)
 	return true
+}
+
+// DefaultModelDir is the folder the environment this config was loaded under
+// names for models; see [Env.DefaultModelDir].
+func (c *Config) DefaultModelDir() string {
+	if c == nil {
+		return Env{}.DefaultModelDir()
+	}
+	return c.env.DefaultModelDir()
 }
