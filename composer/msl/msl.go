@@ -78,12 +78,20 @@ func tname(t ir.Type) string {
 	return "void"
 }
 
+// Option changes how Emit lowers.
+type Option func(*lowerer)
+
+// BrokenGridBarrier makes every waiter of a grid barrier leave without
+// waiting: the violation the grid barrier's gate must fail under.
+func BrokenGridBarrier() Option { return func(l *lowerer) { l.gridBroken = true } }
+
 type lowerer struct {
-	b    strings.Builder
-	k    *ir.Kernel
-	name []string // ir.Value -> MSL expression or variable
-	fc   []bool   // ir.Value -> carried as float; see floatCarried
-	ind  int
+	gridBroken bool
+	b          strings.Builder
+	k          *ir.Kernel
+	name       []string // ir.Value -> MSL expression or variable
+	fc         []bool   // ir.Value -> carried as float; see floatCarried
+	ind        int
 }
 
 // tn is tname with the float-carrying override applied.
@@ -149,7 +157,7 @@ func floatCarried(k *ir.Kernel) []bool {
 }
 
 // Emit returns MSL source for the kernel.
-func Emit(k *ir.Kernel) (string, error) {
+func Emit(k *ir.Kernel, opts ...Option) (string, error) {
 	if err := k.Validate(); err != nil {
 		return "", err
 	}
@@ -161,11 +169,14 @@ func Emit(k *ir.Kernel) (string, error) {
 		}
 	}
 	l := &lowerer{k: k, name: make([]string, len(k.Ops)+1), fc: floatCarried(k), ind: 1}
+	for _, o := range opts {
+		o(l)
+	}
 	l.b.WriteString(preamble)
 	grid := k.GridSync()
 	if grid {
 		wait := "while (atomic_load_explicit(s + 1, memory_order_relaxed) == g) {\n            }"
-		if gridBroken {
+		if l.gridBroken {
 			wait = "(void)g;"
 		}
 		l.b.WriteString(strings.Replace(gridPreamble, "JITLLM_GRID_WAIT", wait, 1))
@@ -614,7 +625,3 @@ inline void jitllm_grid_barrier(device atomic_uint* s, uint tid, uint n) {
     threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
 }
 `
-
-// gridBroken makes every waiter leave without waiting (BreakGridBarrierForTest,
-// jitllmtest builds only): the violation the grid barrier's gate must see.
-var gridBroken bool

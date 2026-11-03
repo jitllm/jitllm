@@ -21,13 +21,21 @@ const (
 	glslSMin           = 39
 )
 
+// Option changes how Emit lowers.
+type Option func(*lowerer)
+
+// BrokenGridBarrier makes every waiter of a grid barrier leave without
+// waiting: the violation the grid barrier's gate must fail under.
+func BrokenGridBarrier() Option { return func(l *lowerer) { l.gridBroken = true } }
+
 type lowerer struct {
-	m     mod
-	k     *ir.Kernel
-	val   []uint32 // ir.Value -> spirv id
-	tid   uint32   // loaded LocalInvocationId.x
-	ctaid uint32
-	glsl  uint32
+	gridBroken bool
+	m          mod
+	k          *ir.Kernel
+	val        []uint32 // ir.Value -> spirv id
+	tid        uint32   // loaded LocalInvocationId.x
+	ctaid      uint32
+	glsl       uint32
 
 	tvoid, tbool, tu32, ti32, tf32, tv3u32, tv2f32 uint32
 	consts                                         map[[2]uint32]uint32 // (type, bits) -> id
@@ -121,7 +129,7 @@ func anchorFor(k *ir.Kernel) (loop, buf int) {
 }
 
 // Emit lowers a kernel to a SPIR-V binary module.
-func Emit(k *ir.Kernel) ([]byte, error) {
+func Emit(k *ir.Kernel, opts ...Option) ([]byte, error) {
 	if err := k.Validate(); err != nil {
 		return nil, err
 	}
@@ -134,6 +142,9 @@ func Emit(k *ir.Kernel) ([]byte, error) {
 	}
 	l := &lowerer{k: k, val: make([]uint32, len(k.Ops)+1),
 		consts: map[[2]uint32]uint32{}, ptrTo: map[uint32]uint32{}}
+	for _, o := range opts {
+		o(l)
+	}
 	for i, o := range k.Ops {
 		// Two tile forms not lowered here yet, refused by name: a loop-carried
 		// cooperative matrix and a cooperative access to workgroup memory.

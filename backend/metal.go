@@ -14,7 +14,8 @@ import (
 type mtlDev struct {
 	allocCount
 	once
-	c *metal.Ctx
+	c     *metal.Ctx
+	lower []msl.Option
 	// free is Session's free list: a session handed to the caller's f
 	// escapes, so a fresh one per call was a heap object per token. Nested
 	// sessions take one each.
@@ -77,7 +78,7 @@ func openMetal(o Opts) (Device, error) {
 		}
 	}
 	ownedDevices.Add(1)
-	return &mtlDev{c: c}, nil
+	return &mtlDev{c: c, lower: mslOptions(o)}, nil
 }
 
 func (m *mtlDev) Name() string { return m.c.Name() }
@@ -149,12 +150,20 @@ func (m *mtlDev) GuaranteedLanes(w int) (bool, string) {
 		"over exactly those; %d cannot be asked for", ir.SubgroupLanes, w)
 }
 
+func mslOptions(o Opts) []msl.Option {
+	var out []msl.Option
+	if o.BreakGridBarrier {
+		out = append(out, msl.BrokenGridBarrier())
+	}
+	return out
+}
+
 func (m *mtlDev) Compile(k *ir.Kernel) (Kernel, error) {
 	compiles.Add(1)
 	if CompileLog != nil {
 		CompileLog(k.Name)
 	}
-	src, err := msl.Emit(k)
+	src, err := msl.Emit(k, m.lower...)
 	if err != nil {
 		return nil, err
 	}

@@ -8,38 +8,31 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/composer/ptx"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestPersistentDecodeSeesABrokenBarrier is TestPersistentDecodeMatchesPerOp's
 // violation (RULE 10): with every grid barrier letting its waiters through
-// (ptx.BreakGridBarrierForTest), a persistent decode reads rows before they
+// (gpu.WithBrokenGridBarrier), a persistent decode reads rows before they
 // are written, and its logits must leave the per-op arm's. If they do not,
 // the bit-identity the gate asserts says nothing about the barrier.
 func TestPersistentDecodeSeesABrokenBarrier(t *testing.T) {
-	persistBroken(t, false, func() func() {
-		old := ptx.BreakGridBarrierForTest(true)
-		return func() { ptx.BreakGridBarrierForTest(old) }
-	})
+	persistBroken(t, false, gpu.WithBrokenGridBarrier())
 }
 
 // TestDepDecodeSeesABrokenWait is the same violation for the dependency
 // counters (Config.PersistDeps): with every wait returning at once
-// (ptx.BreakDepWaitForTest) the decode must leave the per-op logits, or the
+// (gpu.WithBrokenDepWait) the decode must leave the per-op logits, or the
 // dep arm's bit-identity in TestPersistentDecodeMatchesPerOp says nothing
 // about the waits.
 func TestDepDecodeSeesABrokenWait(t *testing.T) {
-	persistBroken(t, true, func() func() {
-		old := ptx.BreakDepWaitForTest(true)
-		return func() { ptx.BreakDepWaitForTest(old) }
-	})
+	persistBroken(t, true, gpu.WithBrokenDepWait())
 }
 
 // persistBroken decodes per-op and then persistent with break applied, and
 // requires the logits to differ.
-func persistBroken(t *testing.T, deps bool, brk func() func()) {
+func persistBroken(t *testing.T, deps bool, brk gpu.Option) {
 	name := "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
@@ -54,13 +47,17 @@ func persistBroken(t *testing.T, deps bool, brk func() func()) {
 	defer m.Close()
 	ids := m.Vocab.Encode("The river rose every spring until the bridges were islands, and", true)
 	const steps = 8
-	run := func(persist bool) ([][]float32, gpu.Stats) {
+	run := func(persist bool, brk gpu.Option) ([][]float32, gpu.Stats) {
 		mode := gpu.WithPersist(persist, 0)
 		if deps {
 			mode = gpu.WithPersistDeps(persist, 0)
 		}
-		g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff), mode,
-			gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
+		opts := []gpu.Option{gpu.WithDeviceTune(gpu.TuneOff), mode,
+			gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true })}
+		if brk != nil {
+			opts = append(opts, brk)
+		}
+		g, err := gpu.OpenWith(opts...)
 		if err != nil || g == nil {
 			t.Skipf("no GPU: %v", err)
 		}
@@ -85,9 +82,8 @@ func persistBroken(t *testing.T, deps bool, brk func() func()) {
 		s.SetGPULayers(0)
 		return out, g.Stats()
 	}
-	ref, _ := run(false)
-	defer brk()()
-	got, st := run(true)
+	ref, _ := run(false, nil)
+	got, st := run(true, brk)
 	if deps && st.PersistDepLaunches == 0 {
 		t.Fatalf("no dependency-counter kernel ran (%s): the violation reached nothing", st.PersistWhy)
 	}
