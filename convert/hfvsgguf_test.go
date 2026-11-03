@@ -231,7 +231,7 @@ func TestSafetensorsTensorsMatchTheirGGUF(t *testing.T) {
 // than asserted.
 //
 // The safetensors arm parses the model's own tokenizer.json; the GGUF arm
-// resolves its label through pretok.Table. Disagreement is a finding, so this
+// resolves its label through pretok.Table(). Disagreement is a finding, so this
 // reports every field rather than asserting one.
 func TestSafetensorsTokenizerMatchesItsGGUF(t *testing.T) {
 	dir, gp := hfModelDir(t)

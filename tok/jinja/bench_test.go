@@ -39,7 +39,8 @@ func BenchmarkRender_Simple(b *testing.B) {
 // Chat template benchmarks – Qwen3 with tool calling (real-world)
 // =============================================================================
 
-var chatBenchData = map[string]any{
+func chatBenchData() map[string]any {
+	return map[string]any{
 	"messages": []any{
 		map[string]any{
 			"role":    "user",
@@ -68,6 +69,7 @@ var chatBenchData = map[string]any{
 	"add_generation_prompt": true,
 	"enable_thinking":       true,
 }
+}
 
 func BenchmarkCompile_Qwen3(b *testing.B) {
 	source := readTemplate(b, "qwen3.jinja")
@@ -86,7 +88,7 @@ func BenchmarkRender_Qwen3(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		if _, err := tmpl.Render(chatBenchData); err != nil {
+		if _, err := tmpl.Render(chatBenchData()); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -113,7 +115,7 @@ func BenchmarkRender_Qwen35(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		if _, err := tmpl.Render(chatBenchData); err != nil {
+		if _, err := tmpl.Render(chatBenchData()); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -123,7 +125,8 @@ func BenchmarkRender_Qwen35(b *testing.B) {
 // Complex template benchmarks – Gemma4 multi-turn tool calling (heaviest)
 // =============================================================================
 
-var gemmaMultiTurnData = map[string]any{
+func gemmaMultiTurnData() map[string]any {
+	return map[string]any{
 	"messages": []any{
 		map[string]any{
 			"role":    "user",
@@ -180,6 +183,7 @@ var gemmaMultiTurnData = map[string]any{
 	"add_generation_prompt": true,
 	"enable_thinking":       true,
 }
+}
 
 func BenchmarkCompile_Gemma4(b *testing.B) {
 	source := readTemplate(b, "gemma4.jinja")
@@ -198,7 +202,7 @@ func BenchmarkRender_Gemma4(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		if _, err := tmpl.Render(gemmaMultiTurnData); err != nil {
+		if _, err := tmpl.Render(gemmaMultiTurnData()); err != nil {
 			b.Fatal(err)
 		}
 	}

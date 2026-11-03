@@ -141,7 +141,7 @@ func flattenPreTokenizer(node any) []Op {
 		}
 		// The whole-pattern stages, recognised by their exact text: each is
 		// not the alternation skeleton parseSplit reads parameters off.
-		if op, ok := isolatedSplits[pat]; ok {
+		if op, ok := isolatedSplit(pat); ok {
 			if n["behavior"] == "Isolated" && n["invert"] != true {
 				return []Op{op}
 			}
@@ -187,13 +187,20 @@ const SparkWords = "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+" +
 	"| ?[\\p{P}\\p{S}]+" +
 	"|[\r\n]|\\s+(?!\\S)|\\s+"
 
-// isolatedSplits are the Split patterns that are a stage of their own rather
-// than the alternation skeleton, keyed by their exact text.
-var isolatedSplits = map[string]Op{
-	`\p{N}{1,3}`: {Kind: OpDigitGroups, Split: SplitParams{DigitGroup: 3}},
-	"[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+": {Kind: OpKanaHanRuns},
-	HunyuanWords: {Kind: OpHunyuanSplit},
-	SparkWords:   {Kind: OpSparkSplit},
+// isolatedSplit is the stage of a Split pattern that is a stage of its own
+// rather than the alternation skeleton, by its exact text.
+func isolatedSplit(pat string) (Op, bool) {
+	switch pat {
+	case `\p{N}{1,3}`:
+		return Op{Kind: OpDigitGroups, Split: SplitParams{DigitGroup: 3}}, true
+	case "[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+":
+		return Op{Kind: OpKanaHanRuns}, true
+	case HunyuanWords:
+		return Op{Kind: OpHunyuanSplit}, true
+	case SparkWords:
+		return Op{Kind: OpSparkSplit}, true
+	}
+	return Op{}, false
 }
 
 // parseSplit reads the parameters out of a Split pattern.

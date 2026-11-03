@@ -57,7 +57,8 @@ func llamaTokenize(t *testing.T, model, text string) ([]int32, bool) {
 // subtly wrong: contractions, digit grouping in threes, runs of spaces (where
 // the last one belongs to the next word), newlines, CJK, emoji and punctuation
 // runs.
-var bpeCases = []string{
+func bpeCases() []string {
+	return []string{
 	"The capital of France is Paris.",
 	"hello world",
 	"  leading and   internal   spaces  ",
@@ -76,6 +77,7 @@ var bpeCases = []string{
 	" ",
 	"\n",
 	"x",
+}
 }
 
 func TestBPEAgainstLlamaCpp(t *testing.T) {
@@ -105,7 +107,7 @@ func TestBPEAgainstLlamaCpp(t *testing.T) {
 			continue
 		}
 		name := filepath.Base(path)
-		for _, text := range bpeCases {
+		for _, text := range bpeCases() {
 			want, ok := llamaTokenize(t, path, text)
 			if !ok {
 				continue // llama-tokenize declined this one (it rejects "")
@@ -127,7 +129,7 @@ func TestBPEAgainstLlamaCpp(t *testing.T) {
 		// render control tokens, which is what a caller printing model output
 		// wants and what llama.cpp's detokenizer does by default. So the round
 		// trip holds for every case that contains none.
-		for _, text := range bpeCases {
+		for _, text := range bpeCases() {
 			if strings.Contains(text, "<|") {
 				continue
 			}

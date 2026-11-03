@@ -153,7 +153,7 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	// can tell "no stages" from "stages nobody verified".
 	ops, ok := pretok.PreOps(v.PreName)
 	if !ok && v.PreName == "default" {
-		ops, ok = pretok.LlamaCppDefault, true
+		ops, ok = pretok.LlamaCppDefault(), true
 	}
 	if ok {
 		pre, err := containerPreOps(ops)
@@ -185,7 +185,7 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 // codes.
 //
 // It is the one translation for both input formats: the GGUF path gets its
-// []pretok.Op through pretok.Table by name, the safetensors path from
+// []pretok.Op through pretok.Table() by name, the safetensors path from
 // pretok.ParsePreTokenizer. A stage with no container code is a refusal rather
 // than routed to the nearest-looking one.
 func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
@@ -231,7 +231,7 @@ func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
 // llama3Family is the pre-tokenizer group that takes the llama3 regex, and with
 // it add_bos and ignore_merges (llama.cpp's list, name for name). "default" is
 // not in it: llama.cpp gives an absent or "default" name its own pipeline with
-// neither boolean (pretok.LlamaCppDefault). This source-format heuristic is
+// neither boolean (pretok.LlamaCppDefault()). This source-format heuristic is
 // resolved at conversion; nothing on the load path consults it.
 var llama3Family = map[string]bool{
 	"llama3": true, "llama-v3": true, "llama-bpe": true,

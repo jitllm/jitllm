@@ -60,7 +60,7 @@ func main() {
 	var rows []row
 	var unresolved, disagree []string
 	for _, n := range names {
-		if h, ok := handWritten[n]; ok {
+		if h, ok := handWritten()[n]; ok {
 			// Not a fetch failure: the model publishes no tokenizer.json at
 			// all, which no retry or repo name fixes, so it is not listed as
 			// unresolved.
@@ -114,10 +114,11 @@ package pretok
 
 // Table maps a pre-tokenizer name to the ordered stages it denotes.
 // %d names resolved.
-var Table = map[string][]Op{
+func Table() map[string][]Op {
+	return map[string][]Op{
 `, rev, len(rows))
 	for _, r := range rows {
-		fmt.Fprintf(&b, "\t// %s\n\t%q: {", r.repo, r.name)
+		fmt.Fprintf(&b, "\t\t// %s\n\t\t%q: {", r.repo, r.name)
 		for i, op := range r.ops {
 			if i > 0 {
 				b.WriteString(", ")
@@ -126,7 +127,7 @@ var Table = map[string][]Op{
 		}
 		b.WriteString("},\n")
 	}
-	b.WriteString("}\n")
+	b.WriteString("\t}\n}\n")
 	if len(unresolved) > 0 {
 		b.WriteString("\n// Unresolved at generation time -- these names have NO entry above. One the\n" +
 			"// legacy family splitters cover (tok/bpe.go) still tokenizes, unverified\n" +
@@ -175,36 +176,40 @@ func dumpRaw(dir, name string, raw []byte) error {
 // It is not an escape hatch for a fetch that failed: everything else is parsed
 // from the model's own tokenizer.json. An entry belongs here only when there is
 // no tokenizer.json at all, and it names the artefact that replaces it.
-var handWritten = map[string]struct {
+type handWrittenRow struct {
 	repo string
 	why  string
 	ops  []pretok.Op
-}{
-	// Moonshot publishes a `tiktoken.model` and a Python file, never a
-	// tokenizer.json. The authority is the `pat_str` in tokenization_kimi.py,
-	// byte-identical to Moonlight-16B-A3B's tokenization_moonshot.py:
-	//
-	//	[\p{Han}]+
-	//	|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?
-	//	|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?
-	//	|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
-	//
-	// which is o200k -- gpt-4o's row below, flag for flag -- plus HanRuns, and
-	// minus PunctSlash: the punctuation run ends [\r\n]* here where o200k's is
-	// [\r\n/]*. tok/testdata/kimi_k2_split.json is the golden, generated from
-	// that pattern.
-	"kimi-k2": {
-		repo: "moonshotai/Kimi-K2-Instruct (tokenization_kimi.py)",
-		why:  "no tokenizer.json is published; the pat_str is the artefact",
-		ops: []pretok.Op{
-			{Kind: pretok.OpSplit, Split: pretok.SplitParams{
-				Contractions: true, CaseFold: true, DigitGroup: 3,
-				CaseRuns: true, SuffixContract: true, PunctSlash: false,
-				HanRuns: true,
-			}},
-			{Kind: pretok.OpByteLevel},
+}
+
+func handWritten() map[string]handWrittenRow {
+	return map[string]handWrittenRow{
+		// Moonshot publishes a `tiktoken.model` and a Python file, never a
+		// tokenizer.json. The authority is the `pat_str` in tokenization_kimi.py,
+		// byte-identical to Moonlight-16B-A3B's tokenization_moonshot.py:
+		//
+		//	[\p{Han}]+
+		//	|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?
+		//	|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?
+		//	|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
+		//
+		// which is o200k -- gpt-4o's row below, flag for flag -- plus HanRuns, and
+		// minus PunctSlash: the punctuation run ends [\r\n]* here where o200k's is
+		// [\r\n/]*. tok/testdata/kimi_k2_split.json is the golden, generated from
+		// that pattern.
+		"kimi-k2": {
+			repo: "moonshotai/Kimi-K2-Instruct (tokenization_kimi.py)",
+			why:  "no tokenizer.json is published; the pat_str is the artefact",
+			ops: []pretok.Op{
+				{Kind: pretok.OpSplit, Split: pretok.SplitParams{
+					Contractions: true, CaseFold: true, DigitGroup: 3,
+					CaseRuns: true, SuffixContract: true, PunctSlash: false,
+					HanRuns: true,
+				}},
+				{Kind: pretok.OpByteLevel},
+			},
 		},
-	},
+	}
 }
 
 // opsSource is a pipeline as the Go source it generates, which is how two
