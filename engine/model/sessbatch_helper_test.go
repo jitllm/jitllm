@@ -103,6 +103,17 @@ func (b *sessBatch) PrefillSeq(i int, tokens []int32) ([]float32, error) {
 	return lg, err
 }
 
+// PrefillSeqMixed is PrefillSeq for a mixed prompt.
+func (b *sessBatch) PrefillSeqMixed(i int, spans ...Span) ([]float32, error) {
+	var lg []float32
+	err := b.row(i).Run(context.Background(), PhasePrefill, func(in *Instance) error {
+		var err error
+		lg, err = in.PrefillMixed(spans...)
+		return err
+	})
+	return lg, err
+}
+
 // Retire starts row i's sequence over.
 func (b *sessBatch) Retire(i int) {
 	b.row(i).Run(context.Background(), PhasePrefill, func(in *Instance) error {
