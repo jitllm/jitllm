@@ -1381,6 +1381,10 @@ type vectorMemo struct {
 	// vecN is the count of nodes vec was found at, plus one (0: none).
 	vecN int
 	vec  bool
+	// usesN is the count of nodes uses was found at, plus one (0: none),
+	// usesS the count of stores (operandUses).
+	usesN, usesS int
+	uses         []bool
 }
 
 // vectorized reports whether any loop of k runs in vector lanes, or any
@@ -2032,6 +2036,7 @@ func (k *Kernel) copiesAside() {
 					}
 				}
 			}
+			k.forgetUses()
 			at := pos[t]
 			k.Seq = append(k.Seq[:at+1], append([]Entry{{Kind: EntryNode, I: c}}, k.Seq[at+1:]...)...)
 			done = false
@@ -2072,6 +2077,7 @@ func (k *Kernel) foldsAside() {
 				}
 			}
 		}
+		k.forgetUses()
 		k.Seq = slices.Insert(k.Seq, pos, Entry{Kind: EntryNode, I: c})
 	}
 }
@@ -2506,6 +2512,7 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 				*a = c
 			}
 		}
+		k.forgetUses()
 		if x := k.Nodes[r]; (x.Op == OpAnd || x.Op == OpAdd) && x.B == c && words[r] && k.wholeVector(c) {
 			k.Nodes[c].Mem = true
 			continue
@@ -2706,6 +2713,7 @@ func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 				}
 			}
 		}
+		k.forgetUses()
 		k.Seq = append(k.Seq[:first], append([]Entry{{Kind: EntryNode, I: c}}, k.Seq[first:]...)...)
 	}
 }
@@ -2767,22 +2775,47 @@ func (k *Kernel) dotZero(i int) bool {
 // zeroOperand reports whether float zero node i is an operand the code
 // computes with or a store writes, not only a sum's start.
 func (k *Kernel) zeroOperand(i int) bool {
-	for j, nd := range k.Nodes {
+	u := k.operandUses()
+	return i < len(u) && u[i]
+}
+
+// operandUses is, by node, whether another node reads it (a fold aside) or a
+// store writes it: kept while a register binding runs for as long as the
+// kernel holds as many nodes and stores, and dropped (forgetUses) where the
+// binding re-points an operand in place.
+func (k *Kernel) operandUses() []bool {
+	m := k.vwords
+	if m != nil && m.usesN == len(k.Nodes)+1 && m.usesS == len(k.Stores) {
+		return m.uses
+	}
+	uses := make([]bool, len(k.Nodes))
+	for j := range k.Nodes {
+		nd := k.Nodes[j]
 		if nd.Op == OpFold {
 			continue
 		}
 		for _, a := range k.Operands(&nd) {
-			if *a == i && j != i {
-				return true
+			if *a != j && *a >= 0 && *a < len(uses) {
+				uses[*a] = true
 			}
 		}
 	}
 	for _, s := range k.Stores {
-		if !s.Barrier && !s.Run && s.Val == i {
-			return true
+		if !s.Barrier && !s.Run && s.Val >= 0 && s.Val < len(uses) {
+			uses[s.Val] = true
 		}
 	}
-	return false
+	if m != nil {
+		m.usesN, m.usesS, m.uses = len(k.Nodes)+1, len(k.Stores), uses
+	}
+	return uses
+}
+
+// forgetUses drops the binding's operandUses after an operand is re-pointed.
+func (k *Kernel) forgetUses() {
+	if k.vwords != nil {
+		k.vwords.usesN = 0
+	}
 }
 
 // passes reports whether the kernel walks an address in several passes:
