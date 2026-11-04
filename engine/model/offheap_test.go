@@ -31,7 +31,7 @@ func offHeapGate(t *testing.T, path string) {
 		was := jlm.SetOffHeap(off)
 		defer jlm.SetOffHeap(was)
 		base := jlm.OffHeapBytes()
-		m, err := Open(path, noTune(), WithPageBudget(1))
+		m, err := Open(path, WithPageBudget(1))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +84,7 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 		t.Skip("MODEL MISSING: Qwen3-MOE-4x0.6B-Q4_K_M (set JITLLM_MODELS) -- this gate proved nothing")
 	}
 	before := jlm.OffHeapBytes()
-	m, err := Open(jlmOf(t, p), noTune())
+	m, err := Open(jlmOf(t, p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		return out
 	}
 	open := func(p string) *Model {
-		m, err := Open(p, noTune())
+		m, err := Open(p)
 		if err != nil {
 			t.Fatal(err)
 		}

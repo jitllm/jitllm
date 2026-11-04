@@ -96,13 +96,13 @@ func (p *prefillPlace) at() {
 		return
 	}
 	p.end()
-	if e && p.s.jit.BeginPrefillE() {
+	if e && p.s.cpu.workers.BeginPrefillE() {
 		p.onE, p.started = true, true
 		p.s.ServedOnE++
 		p.low = sched.LowerToE()
 		return
 	}
-	p.s.jit.BeginPrefill()
+	p.s.cpu.workers.BeginPrefill()
 	p.onE, p.started = false, true
 }
 
@@ -113,9 +113,9 @@ func (p *prefillPlace) end() {
 	}
 	if p.onE {
 		p.low.Raise()
-		p.s.jit.EndPrefillE()
+		p.s.cpu.workers.EndPrefillE()
 	} else {
-		p.s.jit.EndPrefill()
+		p.s.cpu.workers.EndPrefill()
 	}
 	p.started, p.onE = false, false
 }

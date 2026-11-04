@@ -27,7 +27,7 @@ func TestPlacedBlocksGiveTheirHostPagesBack(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
-			m, err := Open(p, noTune())
+			m, err := Open(p)
 			if err != nil {
 				t.Fatal(err)
 			}

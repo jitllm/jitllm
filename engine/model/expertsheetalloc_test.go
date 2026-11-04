@@ -17,7 +17,7 @@ func TestExpertSheetHandoverAllocatesNothing(t *testing.T) {
 	if !ok {
 		t.Skipf("MODEL MISSING: kimik3/Kimi-K3-0.40B.Q8_0.gguf -- this gate proved nothing")
 	}
-	m, err := Open(jlmOf(t, path), noTune())
+	m, err := Open(jlmOf(t, path))
 	if err != nil {
 		t.Fatal(err)
 	}

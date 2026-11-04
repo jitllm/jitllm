@@ -39,7 +39,7 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 			}
 		}
 		t.Run(name, func(t *testing.T) {
-			m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
+			m, err := Open(jlmOf(t, p), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

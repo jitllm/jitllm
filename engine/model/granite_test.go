@@ -62,11 +62,7 @@ func TestGraniteMatchesLlamaCppValues(t *testing.T) {
 			if !ok {
 				testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path(tc.file)+" (set JITLLM_MODELS) -- RULE 11, fetch it")
 			}
-			// noTune(): on arm64 the packed matvec times its kernels in place for
-			// a shape's first calls, so Forward and ForwardBatch would otherwise
-			// run different kernels (an integer and a float super-block fold)
-			// for the same token.
-			m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false))
+			m, err := Open(jlmOf(t, path), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

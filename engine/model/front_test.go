@@ -145,7 +145,7 @@ func frontModel(t *testing.T, file string) *Model {
 	if _, err := os.Stat(fixtureSource(path)); err != nil {
 		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
-	m, err := Open(jlmOf(t, path), noTune())
+	m, err := Open(jlmOf(t, path))
 	if err != nil {
 		t.Fatal(err)
 	}

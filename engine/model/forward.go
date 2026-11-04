@@ -130,7 +130,6 @@ type Instance struct {
 	// decoding session (serving.go): what a gate reads to know the split ran.
 	ServedOnE int64
 	groupOff  bool
-	lookOff   bool
 	// residFold lets the o and down groups add their rows into the
 	// residual (WithResidualFold).
 	residFold bool
@@ -336,9 +335,6 @@ type Instance struct {
 	bqf, bxbf       []float32
 	battf           []float32 // per-token score rows, at rowsStride
 
-	// jit is the generated-code tier.
-	jit *nn.JIT
-
 	// device is the device SetDeviceLayers was handed, before Attach made ld a
 	// session of it: what a draft instance attaches to (Speculate).
 	device    nn.LayerDevice
@@ -465,7 +461,6 @@ func (m *Model) newInstance(nseq, maxSeq int) *Instance {
 
 // newInstanceRange is newState over blocks [lo, hi) of the model; see Instance.lo.
 func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
-	m.states.Add(1)
 	c := m.Cfg
 	// Clamp to the model's context, and record the request (reqSeq) so a
 	// later "kv cache is full" can name the number the caller passed.
@@ -475,7 +470,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	}
 	s := &Instance{Session: &Session{model: m}, m: m, c: m.Cfg, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
 		devFallback: true, relocate: true, prof: m.opt.profile, outNorm: m.outNorm, outW: &m.output,
-		fuseOff: m.opt.noFuse, groupOff: m.opt.noGroups, lookOff: m.opt.noLook,
+		fuseOff: m.opt.noFuse, groupOff: m.opt.noGroups,
 		residFold: m.opt.residFold}
 	s.own = s.Session
 	s.holdCPURuns()
@@ -521,9 +516,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		s.ogate = make([]float32, nseq*qd)
 	}
 
-	// One kernel per quantization type the model actually contains, emitted
-	// eagerly — the shapes are all known from the header before the first token.
-	s.jit = m.newJIT()
+	s.cpu.workers = cpu.NewPool(m.poolOptions()...)
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
 	// otherwise binary16, half the history's bytes, wherever the CPU
 	// narrows in hardware -- everywhere but an x86 host the composer forms
@@ -671,7 +664,8 @@ func (s *Instance) Close() error {
 		}
 	}
 	s.keepSpare()
-	return s.jit.Close()
+	s.cpu.workers.Close()
+	return nil
 }
 
 // SetDevice attaches an optional accelerator to this instance's matvecs. Nil, the
@@ -2633,7 +2627,8 @@ func (m *Model) headStages() nn.HeadStage {
 
 // JIT is this state's generated-code tier: its vision segment runs on it
 // (Instance.Vision), so a model has one JIT and one worker pool a session.
-func (s *Instance) JIT() *nn.JIT { return s.jit }
+// Pool is the CPU device's workers this instance runs on.
+func (s *Instance) Pool() *cpu.Pool { return s.cpu.workers }
 
 // GPULayers is how many blocks a device took, which is the set and not the
 // prefix: on a hybrid the two differ and the count is what a caller means.
@@ -2847,7 +2842,7 @@ func (s *Instance) SetGPULayers(n int) int {
 }
 
 // Workers is how many worker threads the fast tier uses.
-func (s *Instance) Workers() int { return s.jit.Workers() }
+func (s *Instance) Workers() int { return s.cpu.workers.Workers() }
 
 // Pos is the number of positions already in the cache.
 func (s *Session) Pos() int { return s.pos }
@@ -3155,7 +3150,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		in0, _ := pc.Faults()
 		defer func() {
 			in1, _ := pc.Faults()
-			s.jit.SetSpinning(in1 == in0)
+			s.cpu.workers.SetSpinning(in1 == in0)
 		}()
 	}
 

@@ -19,7 +19,7 @@ func TestSpecDistIsTheDrawsDistribution(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
 		t.Fatalf("MODEL MISSING: %v", err)
 	}
-	m, err := Open(jlmOf(t, models()["stories15M"]), noTune())
+	m, err := Open(jlmOf(t, models()["stories15M"]))
 	if err != nil {
 		t.Fatal(err)
 	}

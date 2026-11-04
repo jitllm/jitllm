@@ -26,7 +26,7 @@ func TestDemotedDevicePrefillFinishesOnTheCPU(t *testing.T) {
 	// Both arms on the same arithmetic: the tuner off (a pack width is a
 	// summation order) and an f32 KV cache (a device steps an f16 one down to
 	// f32 before it places a block, so the demoted instance holds f32).
-	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, p), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

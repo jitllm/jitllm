@@ -1,6 +1,7 @@
 package model
 
 import (
+	"cmp"
 	"fmt"
 	"time"
 
@@ -9,8 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// MaxPrefillChunk sizes the batched scratch. The width used is tuned per
-// machine (nn.JIT.PrefillChunk), so buffers fit the widest candidate.
+// MaxPrefillChunk is the most rows a step on the CPU device carries.
 const MaxPrefillChunk = nn.MaxHostPrefillChunk
 
 // chunkWidth is how many rows one prompt chunk runs: the host's chunk, or the
@@ -19,7 +19,14 @@ func (s *Instance) chunkWidth() int {
 	if s.devCount() > 0 {
 		return s.deviceChunk()
 	}
-	return MaxPrefillChunk
+	return s.hostChunk()
+}
+
+// hostChunk is the rows a prompt chunk on the CPU device carries: the rows
+// its forms are composed at (cpuRowsCap), a wider chunk being cut into calls
+// of that many, so no fewer weight reads. WithPrefillChunk pins it.
+func (s *Instance) hostChunk() int {
+	return min(cmp.Or(s.m.opt.prefillChunk, cpuRowsCap), MaxPrefillChunk)
 }
 
 // Prefill runs a whole prompt through the model in batches and returns the
@@ -414,9 +421,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		if place != nil {
 			place.at()
 		}
-		// Asked per chunk, not once: while the tuner is cycling, successive
-		// chunks deliberately use different widths.
-		width := s.jit.PrefillChunk()
+		width := s.hostChunk()
 		if whole || spanAll {
 			width = total
 		}
@@ -659,9 +664,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			}
 			copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])
 		}
-		// The batch width is tuned on the whole chunk's time, not the matmul
-		// rate inside it. See nn.JIT.ObserveChunk.
-		s.jit.ObserveChunk(width, n, time.Since(chunkStart))
 		ps.after(n, time.Since(chunkStart).Seconds(), s.seqPos(slot))
 		s.promptRows += n
 		base += n

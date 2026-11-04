@@ -65,7 +65,7 @@ func TestComposedRowsTokens(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS)", err)
 			}
-			m, err := Open(jlmOf(t, p), noTune())
+			m, err := Open(jlmOf(t, p))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,7 +190,7 @@ func composedRowsModel(t *testing.T) *Model {
 	if _, err := os.Stat(p); err != nil {
 		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS)", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune())
+	m, err := Open(jlmOf(t, p))
 	if err != nil {
 		t.Fatal(err)
 	}

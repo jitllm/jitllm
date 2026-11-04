@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -133,8 +132,7 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string) {
 		t.Skipf("model not present: %s", path)
 	}
 	src := jlmOf(t, p)
-	tight, err := Open(src, noTune(), WithKVF16(false), WithPageBudget(1),
-		WithJITOptions(nn.WithGEMMExact(true)))
+	tight, err := Open(src, WithKVF16(false), WithPageBudget(1))
 	if err != nil {
 		t.Fatalf("Open under a one-page budget: %v", err)
 	}

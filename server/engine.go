@@ -120,11 +120,6 @@ type Config struct {
 	// Version is reported by GetServerInfo.
 	Version string
 
-	// hostInexact, false but in a gate's violation, loads a host model the
-	// step loop runs without the one summation order (LoadModel): it is how
-	// the gate shows that a sampled row parts from its run alone without it.
-	hostInexact bool
-
 	// NoMemCache turns the per-model memory cache off: every generate then
 	// prefills its whole prompt, as a session given no KVStore does.
 	NoMemCache bool
@@ -662,15 +657,8 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	// (model.StepRuns' host arm, a matmul over the rows) or one session after
 	// another (a matvec each), as the joint choice decides per step. Its
 	// contract is that a row comes out as it does alone, to the bit, so a
-	// seeded sampler draws the same tokens either way. That holds only when
-	// the matmul sums a row in the matvec's order: the pre-VNNI x86 and arm64
-	// prefill GEMMs fold a k-quant's super-block in integers where the decode
-	// matvec rounds per sub-block, arm64's decode picker times forms that sum
-	// differently, and a wide pool splits a long matvec over k. GEMMExact is
-	// the one summation order every packed kernel shares.
-	if dev == nil && e.cfg.MaxBatchRows != 1 && !e.cfg.hostInexact {
-		opts = append(opts, model.WithJITOptions(nn.WithGEMMExact(true)))
-	}
+	// seeded sampler draws the same tokens either way
+	// (TestHostBatchSampledRowsEqualAlone).
 	m, err := model.Open(path, opts...)
 	if err != nil {
 		closeDev()

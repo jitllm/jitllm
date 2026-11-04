@@ -46,7 +46,7 @@ func TestToolStreamReadsControlTokens(t *testing.T) {
 				}
 				path = jlmOf(t, src)
 			}
-			m, err := Open(path, noTune())
+			m, err := Open(path)
 			if err != nil {
 				t.Fatal(err)
 			}

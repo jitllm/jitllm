@@ -25,7 +25,7 @@ func TestAttentionBiasesReachTheModel(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune())
+			m, err := Open(jlmOf(t, path))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -100,7 +100,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune())
+			m, err := Open(jlmOf(t, path))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -172,7 +172,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			t.Run("prefill", func(t *testing.T) {
 				nn.ResetForTest()
 				defer nn.ResetForTest()
-				pm, err := Open(jlmOf(t, path), noTune(), noGEMM())
+				pm, err := Open(jlmOf(t, path))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -255,7 +255,7 @@ func TestPrefillAfterForwardContinues(t *testing.T) {
 			defer nn.ResetForTest()
 			// The float forms: decode and prompt forms apart by their folding
 			// order alone (floatFormsNMSE).
-			m, err := Open(jlmOf(t, path), noTune(), noGEMM(), withCPUFloat())
+			m, err := Open(jlmOf(t, path), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}

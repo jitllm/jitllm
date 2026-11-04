@@ -71,7 +71,7 @@ func buildFaultRun(t *testing.T, m *Model, parts gpu.Parts, asDevice bool) fault
 // then demote, which proves the gate can tell the two apart (RULE 10).
 func TestBuildFailureMovesNothing(t *testing.T) {
 	p := testmodels.Path(faultModel)
-	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, p), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestBuildFailureMovesNothing(t *testing.T) {
 // the demotion be counted as a fault.
 func TestDeviceFaultAtDecodeEvacuatesAndIsCounted(t *testing.T) {
 	p := testmodels.Path(faultModel)
-	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, p), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

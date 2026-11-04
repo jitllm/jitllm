@@ -90,11 +90,11 @@ func TestComposedCPUProfile(t *testing.T) {
 			}
 		}
 		m.cpuForms.mu.Unlock()
-		st.jit.ResetRegions()
-		ph0 := st.jit.Phases()
+		st.Pool().ResetRegions()
+		ph0 := st.Pool().Phases()
 		d := run(toks)
-		par, ser := st.jit.Regions()
-		phases := st.jit.Phases() - ph0
+		par, ser := st.Pool().Regions()
+		phases := st.Pool().Phases() - ph0
 		per := float64(d.Microseconds()) / ft
 		bpt := float64(m.BytesPerToken())
 		gb := bpt / (per * 1e-6) / 1e9

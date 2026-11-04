@@ -22,6 +22,7 @@ import (
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok"
@@ -1323,16 +1324,13 @@ type Model struct {
 	output      tensor
 	layers      []layer
 	tracer      func(layer int, name string, v []float32)
-	// jit is what WithJITOptions collected, handed to every Instance.
-	jit []nn.Option
+	// pool is what WithPool collected, handed to every instance's CPU device.
+	pool []cpu.PoolOption
 	// actWindow is how many activation elements share one int8 scale, the
 	// same on every device (actWindowOf).
 	actWindow int
 	// opt is this model's resolved load options, a copy; see modelOpts.
 	opt modelOpts
-	// states counts the sessions built, so AddJITOptions can refuse to be late.
-	// Sessions are built concurrently (a server's requests), so it is atomic.
-	states atomic.Int64
 	// live is the open instances, which a prefill asks whether another decodes.
 	live live
 	// dense1 and dense2 are an embedding model's projection heads after
@@ -1465,10 +1463,9 @@ type loadOpts struct {
 	// the sharing.
 	opt modelOpts
 	tok []tok.Option
-	// jit is handed to nn.NewJIT by every instance this model creates. It is how a
-	// caller reaches the generated tier's knobs -- the pack width, the tuner,
-	// the worker pool -- without the package reading an environment variable.
-	jit []nn.Option
+	// pool configures every instance's CPU device's workers: how a caller
+	// reaches them without the package reading an environment variable.
+	pool []cpu.PoolOption
 	// pageBudget is the host weight budget in BYTES, or zero for "ask the
 	// process". See WithPageBudget.
 	pageBudget uint64
@@ -1503,33 +1500,12 @@ func WithTokenizerOption(o tok.Option) Option {
 // converter wrote -- RULE 7m's fourth and outranking authority.
 func WithTokenizer(r io.Reader) Option { return WithTokenizerOption(tok.WithTokenizer(r)) }
 
-// WithJITOptions passes options to the generated-code tier every instance of this
-// model builds. The JIT always runs (there is no other tier); these configure
-// it. See nn.Option: the packages read no environment, so this (and
-// cmd/jitllm, which fills it from the JITLLM_* names) is the only way in.
-func WithJITOptions(o ...nn.Option) Option {
-	return func(l *loadOpts) { l.jit = append(l.jit, o...) }
-}
-
-// AddJITOptions appends options for the instances this model has NOT built yet.
-//
-// It exists because one decision cannot be made before Open and must be made
-// before NewInstance: whether this run will page. A model that fits wants the
-// worker pool spinning so a region starts the instant the previous one ends;
-// one that streams every block off disk wants it parked, because the critical
-// path is a synchronous read and spinning cores through it is only heat. The
-// caller can weigh that once it knows the weight bytes, after the container is
-// open.
-//
-// It panics rather than silently doing nothing if an instance already exists: an
-// option that reaches some of a model's sessions and not others is the shape
-// RULE 10 is written against.
-func (m *Model) AddJITOptions(o ...nn.Option) {
-	if m.states.Load() > 0 {
-		panic("model: AddJITOptions after an instance was built -- the option would reach " +
-			"some sessions and not others")
-	}
-	m.jit = append(m.jit, o...)
+// WithPool configures the CPU device's workers every instance of this model
+// runs on: their cores, the prefill's, the serving split and how many drain a
+// region (cpu.PoolOption). cmd/jitllm fills it from the JITLLM_* names; the
+// packages read no environment.
+func WithPool(o ...cpu.PoolOption) Option {
+	return func(l *loadOpts) { l.pool = append(l.pool, o...) }
 }
 
 // WithPageBudget caps the bytes of block pages the container may hold resident.
@@ -1634,7 +1610,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// The open-time budget is the caller's ask like any later one: a device
 	// on the host's memory attached afterwards comes off it (hostheld.go).
 	m.pages.bytes = budget
-	m.jit, m.opt = lo.jit, lo.opt
+	m.pool, m.opt = lo.pool, lo.opt
 	m.actWindow = m.actWindowOf()
 	if lo.opt.kvTypeSet {
 		if err := m.Cfg.KVTypeRefusal(lo.opt.kvType); err != nil {
@@ -3975,35 +3951,8 @@ func (m *Model) shareActWindow(d nn.LayerDevice) {
 	}
 }
 
-// newJIT builds the generated-code tier an instance runs on: one kernel per
-// quantization type the container holds, sized for its widest matrix. The
-// vision segment's matrices are in the same container, so one JIT serves the
-// text blocks and the tower's; F32 joins the types where the model has a tower,
-// for the bilinear preprocessors' resize (image.go).
-func (m *Model) newJIT() *nn.JIT {
-	maxK, maxRows := 0, m.Cfg.NVocab
-	seen := map[quant.Type]bool{}
-	var types []quant.Type
-	add := func(t quant.Type) {
-		if !seen[t] {
-			seen[t] = true
-			types = append(types, t)
-		}
-	}
-	for i := range m.container.Entries() {
-		e := &m.container.Entries()[i]
-		t, ok := containerShape(e)
-		if !ok {
-			continue
-		}
-		maxK = max(maxK, t.k)
-		maxRows = max(maxRows, t.rows)
-		add(t.typ)
-	}
-	opts := append(m.jit[:len(m.jit):len(m.jit)], nn.WithServingSplit(!m.opt.noServingSplit))
-	if m.Cfg.TokenAct {
-		// One window over the widest row: each row's blocks share its scale.
-		opts = append(append([]nn.Option(nil), opts...), nn.WithActWindow((maxK+31)/32*32))
-	}
-	return nn.NewJIT(maxK, maxRows, types, opts...)
+// poolOptions is what an instance's CPU device's workers are made with: the
+// caller's, and the serving split unless the model turned it off.
+func (m *Model) poolOptions() []cpu.PoolOption {
+	return append(m.pool[:len(m.pool):len(m.pool)], cpu.WithServingSplit(!m.opt.noServingSplit))
 }

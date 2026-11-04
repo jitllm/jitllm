@@ -235,7 +235,7 @@ func TestSpecGreedyMatchesDecode(t *testing.T) {
 	n := specTokens()
 	for name, path := range specModels(t) {
 		t.Run(name, func(t *testing.T) {
-			m := openSpecModel(t, path, noTune(), WithJITOptions(nn.WithGEMMExact(true)))
+			m := openSpecModel(t, path)
 			defer m.Close()
 			if m.Vocab == nil {
 				t.Fatalf("no tokenizer: %v", m.TokErr)
@@ -286,7 +286,7 @@ func TestSpecGateDiscriminates(t *testing.T) {
 	n := specTokens()
 	for name, path := range specModels(t) {
 		t.Run(name, func(t *testing.T) {
-			m := openSpecModel(t, path, noTune(), WithJITOptions(nn.WithGEMMExact(true)))
+			m := openSpecModel(t, path)
 			defer m.Close()
 			faults := []struct {
 				name  string

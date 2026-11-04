@@ -21,12 +21,8 @@ func (s *Instance) fuseRun() {
 	if s.fused || s.fuseOff {
 		return
 	}
-	// A run starts with nothing to look ahead to: a set named in an earlier
-	// run is the instance's to refill now, and no worker may be reading it.
-	s.jit.SetAhead(nil)
-	s.jit.SetLookahead(!s.lookOff)
 	s.m.fuseTries.Add(1)
-	if s.jit.Fuse() {
+	if s.cpu.workers.Fuse() {
 		s.fused = true
 		s.FusedRuns++
 		s.m.fusedRuns.Add(1)
@@ -37,7 +33,7 @@ func (s *Instance) fuseRun() {
 func (s *Instance) unfuse() {
 	if s.fused {
 		s.fused = false
-		s.jit.Unfuse()
+		s.cpu.workers.Unfuse()
 	}
 }
 
@@ -52,10 +48,6 @@ func (m *Model) blockResident(li int) bool {
 	c := m.container
 	return c == nil || li >= c.NPages() || c.Resident(li)
 }
-
-// SetLookahead turns the fused runs' lookahead on or off for this instance's
-// decode tokens (WithLookahead is the model-wide default).
-func (s *Instance) SetLookahead(on bool) { s.lookOff = !on }
 
 // SetMatVecGroups turns groupOf on or off inside fused runs: off, a fused
 // run's matvecs and their activation quantization are a phase each.

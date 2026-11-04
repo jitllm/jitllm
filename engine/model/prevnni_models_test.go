@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -81,8 +80,7 @@ func TestEveryModelRunsPreVNNI(t *testing.T) {
 // host and passed here -- tinyllama's batch-vs-decode at NMSE 5.87e-14 and
 // olmoe's decode at two allocations a token -- and both turned out to be the
 // pool's WIDTH (14 workers against 6) rather than the kernel family; this arm
-// is what showed the family exact, and the width cases are gated where they
-// live (nn.TestGEMMExactDecodeSumsTheWholeK, the host-ksliced arm).
+// is what showed the family exact.
 func TestExactGatesRunPreVNNI(t *testing.T) {
 	if cpu.HostDotKind() == cpu.DotVEX {
 		t.Skip("this host is already pre-VNNI; the plain gates run this family")
@@ -103,26 +101,12 @@ func TestExactGatesRunPreVNNI(t *testing.T) {
 		for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf",
 			"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"} {
 			t.Run(name, func(t *testing.T) {
-				p := jlmOf(t, testmodels.Path(name))
-				for _, arm := range []struct {
-					name   string
-					opts   []Option
-					sliced bool
-				}{
-					{"host", []Option{noTune()}, false},
-					{"host-ksliced", []Option{noTune(), WithJITOptions(nn.WithFusedKSlices(2))}, true},
-				} {
-					t.Run(arm.name, func(t *testing.T) {
-						m, err := Open(p, arm.opts...)
-						if err != nil {
-							t.Fatal(err)
-						}
-						defer m.Close()
-						if dw := decodeAllocs(t, m, nil); arm.sliced && dw.ksliced == 0 {
-							t.Fatal("no matvec of the window was split over k: this arm measured the plain host decode twice")
-						}
-					})
+				m, err := Open(jlmOf(t, testmodels.Path(name)))
+				if err != nil {
+					t.Fatal(err)
 				}
+				defer m.Close()
+				decodeAllocs(t, m, nil)
 			})
 		}
 	})

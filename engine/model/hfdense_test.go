@@ -65,7 +65,7 @@ func hfDenseSelected() map[string]func(m *Model) bool {
 func TestSafetensorsDenseFamilySelected(t *testing.T) {
 	for name, sel := range hfDenseSelected() {
 		t.Run(name, func(t *testing.T) {
-			m, err := Open(hfContainer(t, name), noTune(), WithKVF16(false))
+			m, err := Open(hfContainer(t, name), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

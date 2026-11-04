@@ -146,7 +146,7 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 					"k3RealModels line names) -- this subtest proved nothing", testmodels.Path(c.file))
 			}
 			ran++
-			m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false))
+			m, err := Open(jlmOf(t, path), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

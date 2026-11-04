@@ -1396,7 +1396,7 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType, w *fuseWa
 	// Untuned: the logit sum below is held bit for bit, and a kernel pick
 	// timed mid-run (the arm64 per-shape choice) moves the reduction order
 	// between the two arms.
-	m, err := Open(path, noTune())
+	m, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1658,12 +1658,7 @@ func TestPagedKVIsTokenIdenticalOnEveryModel(t *testing.T) {
 			continue // the big ones need JITLLM_KVSWEEP_MODEL, one at a time
 		}
 		t.Run(name, func(t *testing.T) {
-			// noTune(): both arms must run the same kernels. On arm64 the packed
-			// matvec times its candidates in place over a shape's first calls
-			// (mvpick.go), so the first arm decoded through kernels that sum
-			// in other orders than the second's -- a token
-			// flipped with the history untouched.
-			m, err := Open(p, noTune())
+			m, err := Open(p)
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}

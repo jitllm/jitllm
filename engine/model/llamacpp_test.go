@@ -14,7 +14,6 @@ import (
 
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -181,7 +180,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 			// Tuning off, so the ratchet below measures the engine and not a
 			// per-process kernel choice: on arm64 a timed choice once
 			// flipped a near-tie.
-			opts := []model.Option{model.WithJITOptions(nn.WithGEMMExact(true), nn.WithTune(nn.TuneOff))}
+			var opts []model.Option
 			// Hunyuan-A13B runs on an f32 KV cache. At "The capital of
 			// France is"'s tenth position its 64-expert router holds the 8th
 			// and 9th experts 1e-4 apart in most blocks, and which side the

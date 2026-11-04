@@ -21,7 +21,7 @@ func TestCPUInputRowsAreComposed(t *testing.T) {
 			if _, err := os.Stat(models()[name]); err != nil {
 				t.Fatalf("MODEL MISSING: %v", err)
 			}
-			m, err := Open(jlmOf(t, models()[name]), noTune())
+			m, err := Open(jlmOf(t, models()[name]))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -32,7 +32,6 @@ type qsaScratch struct {
 	cs               []float32 // one block's rotary table
 	kept             []bool
 	ord              nn.SampleOrder
-	dot              *nn.AttnSet
 	// per row of a chunk: queries, keys and masks.
 	bq, bk, bbias []float32
 	masks         [][]float32
@@ -82,7 +81,6 @@ func (s *Instance) allocQSA() {
 	g.cs = make([]float32, c.NRot)
 	g.kept = make([]bool, nb)
 	g.ord.Reserve(nb)
-	g.dot = s.attnSetF32(c.IdxHeadDim)
 }
 
 // growQSARows sizes a chunk's: each row's query, key and mask.

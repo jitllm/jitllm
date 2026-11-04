@@ -278,7 +278,7 @@ func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 	ran := 0
 	for _, file := range unblockedModels() {
 		t.Run(file, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune())
+			m, err := Open(jlmOf(t, testmodels.Path(file)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -398,7 +398,7 @@ func TestComposedBlocksServeApart(t *testing.T) {
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune())
+			m, err := Open(jlmOf(t, path))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -540,7 +540,7 @@ func TestComposedBlocksServe(t *testing.T) {
 			}
 			// The budget arm streams blocks the card does not hold: the trial
 			// against the CPU would move them mid-decode.
-			m, err := Open(jlmOf(t, path), noTune(), WithStreamTrial(false))
+			m, err := Open(jlmOf(t, path), WithStreamTrial(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -929,7 +929,7 @@ func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
-	m, err := Open(jlmOf(t, path), noTune())
+	m, err := Open(jlmOf(t, path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +985,7 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
-	m, err := Open(jlmOf(t, path), noTune())
+	m, err := Open(jlmOf(t, path))
 	if err != nil {
 		t.Fatal(err)
 	}

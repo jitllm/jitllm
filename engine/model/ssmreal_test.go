@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -75,7 +74,7 @@ func TestSSMRealModelsTeacherForced(t *testing.T) {
 			continue
 		}
 		t.Run(filepath.Base(name), func(t *testing.T) {
-			m, err := model.Open(jlmOf(t, path), model.WithJITOptions(nn.WithGEMMExact(true), nn.WithTune(nn.TuneOff)))
+			m, err := model.Open(jlmOf(t, path))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -48,7 +48,7 @@ func openSynthLlama4(t *testing.T) (*Model, *synthLlama4) {
 		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path("synth-llama4.gguf")+
 			" (set JITLLM_MODELS to the model directory) -- run scripts/llama4gold.py (RULE 11)")
 	}
-	m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, path), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

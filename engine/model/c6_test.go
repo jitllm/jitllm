@@ -60,7 +60,7 @@ func openGolden(t *testing.T, dir, script, name string) (*Model, *c6Golden) {
 		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path(name+".gguf")+
 			" (set JITLLM_MODELS to the model directory) -- run "+script+" "+name+" (RULE 11)")
 	}
-	m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, path), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

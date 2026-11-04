@@ -4,7 +4,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -32,20 +31,11 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			// noGEMM() too: rows batched three wide against the same sequence
-			// alone would otherwise take the weight-stationary GEMM on one side
-			// and the matvec on the other, which differ in the last bits. And
-			// GEMMExact: on arm64 a step's rows go through MatMulPacked's
-			// per-token fused kernel, which sums a k-quant super-block in
-			// integers, where the sequence alone decodes through the tiled
-			// kernel's float chain (TuneOff pins it) -- qwen3moe and qwen2vl
-			// flipped five small-margin argmaxes on an arm64 host. The batch gate's
-			// exact mode takes the same option (TestBatchMatchesForward). And an
-			// f32 cache: a session's rows read a binary16 history through the
+			// An f32 cache: a session's rows read a binary16 history through the
 			// rows' form and alone through the one-row form, which round apart
 			// (qwen3moe, qwen35, qwen2vl); TestSessionsStepWithinTheBandOnF16KV
 			// holds the binary16 default to a band.
-			m, err := Open(jlmOf(t, path), noTune(), noGEMM(), WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, path), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

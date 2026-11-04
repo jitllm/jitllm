@@ -98,7 +98,7 @@ func TestSharedPrefixIsHeldOnce(t *testing.T) {
 	for _, name := range shareModels() {
 		for _, kt := range []KVType{KVF32, KVF16} {
 			t.Run(name+"/"+kt.String(), func(t *testing.T) {
-				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune(), WithKVType(kt))
+				m, err := Open(jlmOf(t, testmodels.Path(name)), WithKVType(kt))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -213,7 +213,7 @@ func firstAttn(s *Instance) int {
 // (kvPages.cowFault: the write lands in place) must move session 2's logits,
 // or this gate cannot see the write it is about.
 func TestSharedPageIsNeverWrittenInPlace(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune())
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")))
 	if err != nil {
 		t.Fatal(err)
 	}

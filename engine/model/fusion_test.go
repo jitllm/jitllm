@@ -76,7 +76,7 @@ func fusionCeiling(t *testing.T, path string) {
 	}
 
 	const tokens = 64
-	s.jit.ResetRegions()
+	s.Pool().ResetRegions()
 	start := time.Now()
 	for i := 0; i < tokens; i++ {
 		if _, err := s.Forward(int32(1 + i%16)); err != nil {
@@ -84,7 +84,7 @@ func fusionCeiling(t *testing.T, path string) {
 		}
 	}
 	elapsed := time.Since(start)
-	par, ser := s.jit.Regions()
+	par, ser := s.Pool().Regions()
 	perTok := elapsed / tokens
 	parPerTok := float64(par) / tokens
 	t.Logf("%d layers, %.1f parallel regions/token, %.1f inline regions/token, %v/token (%.1f tok/s)",

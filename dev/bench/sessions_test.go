@@ -13,7 +13,6 @@ import (
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -159,7 +158,7 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this floor proved nothing", err)
 	}
-	m, err := model.Open(path, model.WithJITOptions(nn.WithTune(nn.TuneOff)))
+	m, err := model.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

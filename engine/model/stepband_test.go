@@ -38,7 +38,7 @@ func TestStepNMSEBand(t *testing.T) {
 	}
 	for _, name := range strings.Split(v, ",") {
 		t.Run(filepath.Base(name), func(t *testing.T) {
-			m, err := Open(stepArchPath(t, name), noTune(), WithKVF16(false))
+			m, err := Open(stepArchPath(t, name), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

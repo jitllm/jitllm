@@ -5,8 +5,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
-
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -57,7 +55,7 @@ func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
-			m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, p), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

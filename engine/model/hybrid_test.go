@@ -2,12 +2,13 @@ package model
 
 import (
 	"encoding/binary"
-	"github.com/jitllm/jitllm/engine/device/gpu"
 	"math"
 	"math/rand"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/jitllm/jitllm/engine/device/gpu"
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -291,7 +292,7 @@ func hybridModelOpt(t *testing.T, o hyOpt) *Model {
 	if _, err := jlm.Write(dst, src, jlm.Fingerprint{Host: "test"}); err != nil {
 		t.Fatalf("jlm.Write: %v", err)
 	}
-	opts := []Option{noTune()}
+	var opts []Option
 	if o.chunk > 0 {
 		opts = append(opts, WithChunk(o.chunk))
 	}

@@ -38,13 +38,13 @@ func TestPrefillRegionProbe(t *testing.T) {
 	}
 	s2 := m.NewInstance(1024)
 	defer s2.Close()
-	s2.jit.ResetRegions()
+	s2.Pool().ResetRegions()
 	start := time.Now()
 	if _, err := s2.Prefill(ids); err != nil {
 		t.Fatal(err)
 	}
 	el := time.Since(start)
-	par, ser := s2.jit.Regions()
+	par, ser := s2.Pool().Regions()
 	t.Logf("%d layers, %d prompt tokens: %d parallel regions (%d/layer, %.1f per layer per token), "+
 		"%d inline, %v (%.1f tok/s)",
 		m.Cfg.NLayer, len(ids), par, par/int64(m.Cfg.NLayer),

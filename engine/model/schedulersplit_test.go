@@ -37,10 +37,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	// The host's blocks run three rows wide here and one wide in the
-	// reference; without noGEMM() the first can take the weight-stationary GEMM,
-	// which is not bit-identical to the matvec the second runs.
-	m, err := Open(jlmOf(t, p), noGEMM())
+	m, err := Open(jlmOf(t, p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +161,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 			testdevices.Require(t, arm.spec)
 			m := m
 			if arm.place != nil {
-				km, err := Open(jlmOf(t, p), noGEMM(), WithPlacement(Placement{Blocks: arm.place, Strict: true}))
+				km, err := Open(jlmOf(t, p), WithPlacement(Placement{Blocks: arm.place, Strict: true}))
 				if err != nil {
 					t.Fatal(err)
 				}

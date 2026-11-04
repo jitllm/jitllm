@@ -38,7 +38,7 @@ func TestHybridPrefillBatchesOnTheDevice(t *testing.T) {
 	// Kimi Delta Attention's per-channel decay through a batch, beside latent
 	// full blocks whose float absorb banks the batched latent attention reads.
 	t.Run("synth-kimilinear", func(t *testing.T) {
-		m, err := Open(hfContainer(t, "synth-kimilinear"), noTune())
+		m, err := Open(hfContainer(t, "synth-kimilinear"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +58,7 @@ func TestHybridPrefillBatchesOnTheDevice(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %v", err)
 			}
-			m, err := Open(p, noTune())
+			m, err := Open(p)
 			if err != nil {
 				t.Fatal(err)
 			}

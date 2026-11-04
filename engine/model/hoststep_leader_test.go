@@ -26,7 +26,7 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 			}
 			// The float forms: a step's and a row's apart by their folding
 			// order alone (floatFormsNMSE).
-			m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false), withCPUFloat())
+			m, err := Open(jlmOf(t, p), WithKVF16(false), withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}

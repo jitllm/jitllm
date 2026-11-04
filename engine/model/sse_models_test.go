@@ -15,7 +15,6 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // The SSE tier at the model level: every gate here forces the tier before a
@@ -131,8 +130,6 @@ type ssemArm struct {
 	greedy  []int32
 	margins []float32
 	steps   [][]float32 // the logits greedy[i] was chosen from
-	// ksliced is how many decode matvecs summed k in slices, over workers.
-	ksliced int64
 	workers int
 }
 
@@ -182,7 +179,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 		step = append([]float32(nil), l...)
 		next, margin = ssemArgmax(step)
 	}
-	a.ksliced, a.workers = s.jit.KSliced(), s.jit.Workers()
+	a.workers = s.Workers()
 	s.Close()
 
 	p := m.NewInstance(len(ids) + 1)
@@ -285,17 +282,7 @@ func TestEveryModelRunsSSE(t *testing.T) {
 	// The KV width is pinned per Open: it is a per-tier default (f16 on AVX2,
 	// f32 on SSE), so unpinned the arms would run different caches. Both run
 	// the f32 cache an SSE host ships with.
-	//
-	// And the k-split, for the host's sake rather than the arms': nn's
-	// fusedSlices sums a large matrix over k in two slices on a pool of even
-	// width and whole on an odd one, for both tiers alike (432 split matvecs
-	// in each arm on four workers, none in either on three) -- so the parity
-	// of the pool decided what the tiers were compared at, and gemma-2b's
-	// part by 2.890 summed whole (pools of 3, 5, 7 and 9)
-	// against 0.96-1.88 in slices and a KV control of 1.69-1.99 that does not
-	// move with the pool. Pinned, every host compares the same summation.
 	f32 := WithKVF16(false)
-	split := WithJITOptions(nn.WithFusedKSlices(2))
 	const gen = 12
 	ran := 0
 	for _, src := range models {
@@ -304,12 +291,12 @@ func TestEveryModelRunsSSE(t *testing.T) {
 			var ref *ssemArm
 			band := ssemBand
 			if cpu.HostTier() == cpu.TierAVX2 {
-				r := ssemRun(t, path, ids, gen, f32, split)
+				r := ssemRun(t, path, ids, gen, f32)
 				ref = &r
 				// The control is compared over exactly what the SSE arm is:
 				// every prompt position, then the greedy steps while the two
 				// chains share a history, the step where they part included.
-				c := ssemRun(t, path, ids, gen, WithKVF16(true), split)
+				c := ssemRun(t, path, ids, gen, WithKVF16(true))
 				var ctl float64
 				for pos := range ids {
 					ctl = math.Max(ctl, ssemMaxAbs(c.forced[pos], r.forced[pos]))
@@ -336,7 +323,7 @@ func TestEveryModelRunsSSE(t *testing.T) {
 			ssemForce(t)
 			ssemRequireComplete(t)
 			before := cpu.MappedByTier()
-			got := ssemRun(t, path, ids, gen, f32, split)
+			got := ssemRun(t, path, ids, gen, f32)
 			after := cpu.MappedByTier()
 			if d := after[cpu.TierAVX2] - before[cpu.TierAVX2]; d != 0 {
 				t.Fatalf("%d AVX2 kernels were mapped during the SSE arm -- it did not run the SSE tier", d)
@@ -344,7 +331,7 @@ func TestEveryModelRunsSSE(t *testing.T) {
 			if after[cpu.TierSSE] == before[cpu.TierSSE] {
 				t.Fatal("the SSE arm mapped no SSE-tier kernel -- it ran nothing it claims to")
 			}
-			ssemComposedServes(t, path, ids, got.forced, band, f32, split)
+			ssemComposedServes(t, path, ids, got.forced, band, f32)
 
 			for pos, l := range got.forced {
 				for _, v := range l {
@@ -428,8 +415,8 @@ func TestEveryModelRunsSSE(t *testing.T) {
 					"did not carry", strings.Join(at, ", "), band)
 			}
 			t.Logf("teacher-forced max|dlogit| %.4f over %d positions and the shared greedy prefix; "+
-				"greedy agreed for %d of %d steps; k-sliced matvecs AVX2 %d, SSE %d, on %d workers",
-				worst, len(ids), agreed, gen, ref.ksliced, got.ksliced, got.workers)
+				"greedy agreed for %d of %d steps, on %d workers",
+				worst, len(ids), agreed, gen, got.workers)
 			ran++
 		})
 	}

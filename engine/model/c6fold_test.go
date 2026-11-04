@@ -19,7 +19,7 @@ import (
 func TestPrefillFoldsALayerNormHead(t *testing.T) {
 	_, golden := openC6(t, "synth-phi2")
 	path := testmodels.Path("synth-phi2-q8.gguf")
-	m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, path), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -127,13 +127,13 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 			// TestKimiK3MatchesReference's. The arm under test runs the same
 			// forms, so what parts it from the reference is a violation.
 			path := jlmOf(t, testmodels.Path(fx.name+".gguf"))
-			ref, err := Open(path, noTune(), withCPUFloat())
+			ref, err := Open(path, withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer ref.Close()
 			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, true, ref.Cfg.NLayer, composer.DeclineServes)
-			m, err := Open(path, noTune(), withCPUFloat())
+			m, err := Open(path, withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}

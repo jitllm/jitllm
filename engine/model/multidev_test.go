@@ -20,7 +20,7 @@ import (
 // It fails against GPU.runs returning its per-device runs in reverse order.
 func TestTwoDevicesAgreeWithTheHost(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
-	m, err := Open(path, noTune(), WithKVF16(false))
+	m, err := Open(path, WithKVF16(false))
 	if err != nil {
 		t.Skip(err)
 	}
@@ -105,7 +105,7 @@ func sameInts(a, b []int) bool {
 // direction.
 func TestTheSeamMovesAcrossTwoDevices(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
-	m, err := Open(path, noTune(), WithKVF16(false))
+	m, err := Open(path, WithKVF16(false))
 	if err != nil {
 		t.Skip(err)
 	}
@@ -198,7 +198,7 @@ func TestTheSeamMovesAcrossTwoDevices(t *testing.T) {
 // TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice.
 func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
-	m, err := Open(path, noTune(), WithKVF16(false))
+	m, err := Open(path, WithKVF16(false))
 	if err != nil {
 		t.Skip(err)
 	}
@@ -261,7 +261,7 @@ func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 // is here to run the arm if a placement policy ever makes it live.
 func TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
-	m, err := Open(path, noTune(), WithKVF16(false))
+	m, err := Open(path, WithKVF16(false))
 	if err != nil {
 		t.Skip(err)
 	}
@@ -331,7 +331,7 @@ func TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice(t *testing.T) {
 // wrote. The selection check is Stats.PipelinePieces on both devices.
 func TestAWidePromptPipelinesAcrossTwoDevices(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
-	m, err := Open(path, noTune(), WithKVF16(false))
+	m, err := Open(path, WithKVF16(false))
 	if err != nil {
 		t.Skip(err)
 	}

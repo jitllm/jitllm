@@ -244,7 +244,7 @@ func openGranite(t *testing.T, name string) *Model {
 	if !fileExists(p) && !fileExists(strings.TrimSuffix(p, ".gguf")+".jlm") {
 		testmodels.Missing(t, "MODEL MISSING: %s nor its container (set JITLLM_MODELS) -- RULE 11, fetch it", p)
 	}
-	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, p), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func graniteRun(t *testing.T, m *Model, dev string, seq int, prompt, forced []in
 func TestGraniteScalesOnEveryDevice(t *testing.T) {
 	for _, name := range []string{"synth-qwen2", "synth-mixtral"} {
 		t.Run(name, func(t *testing.T) {
-			m, err := Open(hfContainer(t, name), noTune(), WithKVF16(false))
+			m, err := Open(hfContainer(t, name), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}

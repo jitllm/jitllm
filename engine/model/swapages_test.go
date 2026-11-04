@@ -42,7 +42,7 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 	specs := testdevices.Specs("cuda", "vulkan", "metal")
 	for _, name := range windowFixtures() {
 		t.Run(name, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(name)), noTune())
+			m, err := Open(jlmOf(t, testmodels.Path(name)))
 			if err != nil {
 				t.Fatal(err)
 			}
