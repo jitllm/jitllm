@@ -1479,7 +1479,7 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType, w *fuseWa
 			if moved == 0 {
 				t.Fatal("MigrateKV was never called, so the history did not travel")
 			}
-			if kt == KVF16 && s.cpu.kvh.ran == 0 {
+			if kt == KVF16 && s.cpu.kvconv.ran == 0 {
 				t.Fatal("the binary16 history travelled without the CPU device's composed conversions")
 			}
 		}

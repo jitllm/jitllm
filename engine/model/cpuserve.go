@@ -329,8 +329,8 @@ type cpuState struct {
 	// ngView is the n-gram table's rows where this device reads them, made
 	// at the composition of the block that gathers them.
 	ngView *jlm.RowView
-	// kvh is a binary16 history's conversions (cpukvhalves.go).
-	kvh cpuKVHalves
+	// kvconv is a binary16 or q8 history's conversions (cpukvconv.go).
+	kvconv cpuKVConvs
 	// xpad is a call's residual rows where its kernels' units reach past
 	// them (cpuBlockForm.unit).
 	xpad []float32

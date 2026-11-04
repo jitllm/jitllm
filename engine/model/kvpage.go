@@ -736,44 +736,32 @@ func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
 	return k, v, fk, fv
 }
 
-// migrateKVAs runs move between the q8 rows and the float32 a device holds: a
-// q8 history leaves widened to d*q (nn.WidenKVRows) and comes back quantized
-// again (nn.QuantizeKVRows). Widening then quantizing gives the same int8
-// back and each scale to within an ulp (the block's amax widens to 127*d), so
-// a history that travels and returns keeps its rows; what the device wrote
-// while it held the block is quantized as the host would have quantized it.
-// The device holds float32 pages: a q8 cache resident on a device is not
-// implemented (kvtype.go).
+// migrateKVAs runs move between a history's own rows and the float32 a device
+// holds: a binary16 or q8 history leaves widened and comes back narrowed
+// through the CPU device's composed conversions (cpuKV). A binary16 history
+// returns its halves bit for bit. A q8 history leaves as d*q; quantized
+// again, each element's code comes back and each scale within an ulp (the
+// block's amax widens to 127*d), so a history that travels and returns keeps
+// its rows, and what the device wrote while it held the block is quantized
+// as the CPU's history would hold it. The device holds float32 pages: a q8
+// cache resident on a device is not implemented (kvtype.go).
 func (s *Instance) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDevice bool, move func() bool) bool {
 	rows := n * kvl.nKV
-	// A binary16 history's rows are halves two to a slot.
-	halves := func(x []float32) []uint16 {
-		return unsafe.Slice((*uint16)(unsafe.Pointer(&x[0])), rows*kvl.headDim)
+	own := func(x []float32) []byte {
+		return unsafe.Slice((*byte)(unsafe.Pointer(&x[0])), rows*cpu.KVRowBytes(kvl.fmt, kvl.headDim))
 	}
-	if toDevice && rows > 0 {
-		switch kvl.fmt {
-		case cpu.KVQ8:
-			s.jit.WidenKVRows(fk, k, kvl.headDim, rows)
-			s.jit.WidenKVRows(fv, v, kvl.headDim, rows)
-		case cpu.KVF16:
-			if !s.cpuHalves(false, fk[:rows*kvl.headDim], halves(k)) || !s.cpuHalves(false, fv[:rows*kvl.headDim], halves(v)) {
-				return false
-			}
+	conv := kvl.fmt != cpu.KVF32 && rows > 0
+	if toDevice && conv {
+		if !s.cpuKV(false, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.cpuKV(false, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
+			return false
 		}
 	}
 	if !move() {
 		return false
 	}
-	if !toDevice && rows > 0 {
-		switch kvl.fmt {
-		case cpu.KVQ8:
-			s.jit.QuantizeKVRows(k, fk, kvl.headDim, rows)
-			s.jit.QuantizeKVRows(v, fv, kvl.headDim, rows)
-		case cpu.KVF16:
-			// Rounded as the CPU's own history stores round what they write.
-			if !s.cpuHalves(true, fk[:rows*kvl.headDim], halves(k)) || !s.cpuHalves(true, fv[:rows*kvl.headDim], halves(v)) {
-				return false
-			}
+	if !toDevice && conv {
+		if !s.cpuKV(true, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.cpuKV(true, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
+			return false
 		}
 	}
 	return true

@@ -559,9 +559,6 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	}
 	s.kvFmt, s.kvl.fmt = want, want
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
-	if want == cpu.KVQ8 {
-		s.jit.ReserveKVQuant(max(c.HeadDim, c.HeadDimSWA))
-	}
 	s.allocQ4E()
 	// kvl.fmt sizes every page.
 	s.kv = newKVCacheRange(c, s.m.nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
@@ -2870,9 +2867,6 @@ func (s *Instance) stepDownKVToF32() { s.setKVFmt(cpu.KVF32) }
 // session's history reads the same on every instance it leases.
 func (s *Instance) setKVFmt(f cpu.KVFmt) {
 	s.kvFmt, s.kvl.fmt = f, f
-	if f == cpu.KVQ8 {
-		s.jit.ReserveKVQuant(max(s.c.HeadDim, s.c.HeadDimSWA))
-	}
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.
 	old := s.kv
