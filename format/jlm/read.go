@@ -110,7 +110,7 @@ type File struct {
 	dense []byte
 	pages [][]byte // one per block, nil when that page is not resident
 	// offHeap and mapped are where frames and the dense region live (see
-	// SetOffHeap): mapped is every live anonymous mapping, by its first byte,
+	// OnHeap): mapped is every live anonymous mapping, by its first byte,
 	// each unmapped when the File lets go of it (release) and the rest at
 	// Close.
 	offHeap bool
@@ -197,9 +197,10 @@ type OpenOption func(*openOpts)
 
 type openOpts struct{ offHeap bool }
 
-// OnHeap keeps the File's weight memory on the Go heap: the control arm for
-// a measurement (see offheap.go). The budget it is sized against keeps its
-// collector reserve (sched.GCPlan.OnHeap).
+// OnHeap keeps the File's frames and dense region on the Go heap: the
+// control arm for a measurement (see offheap.go). Expert pages stay in their
+// reservation, where a bank is one view (exparena.go). The budget it is sized
+// against keeps its collector reserve (sched.GCPlan.OnHeap).
 func OnHeap() OpenOption { return func(o *openOpts) { o.offHeap = false } }
 
 // openAt is Open for a container of version want: the current one, or an

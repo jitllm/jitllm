@@ -1,6 +1,7 @@
 package jlm
 
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/internal/offheap"
@@ -20,32 +21,39 @@ import (
 // do.
 
 // expFrame is expert page li's frame of size bytes in the reservation, made
-// at the first expert page-in, or nil where there is none. Callers hold f.mu.
-func (f *File) expFrame(li int, size uint64) []byte {
+// at the first expert page-in, or nil where there is none. The reservation is
+// made with the frames on the heap too (OnHeap): it is address space, and a
+// bank is one view of its experts only there. Callers hold f.mu.
+func (f *File) expFrame(li int, size uint64) ([]byte, error) {
 	if f.exp == nil && !f.expNone {
 		n := uint64(f.H.NExpPages) * f.H.ExpPageSize
-		if n == 0 || !f.offHeap || f.H.ExpPageSize%Align != 0 {
+		if n == 0 || f.H.ExpPageSize%Align != 0 {
 			f.expNone = true
-			return nil
+			return nil, nil
 		}
 		b, mapped, err := offheap.ReserveOffHeap(int(n))
 		if err != nil || !mapped {
 			f.expNone = true
-			return nil
+			return nil, nil
 		}
 		f.exp = b
 	}
 	if f.exp == nil {
-		return nil
+		return nil, nil
 	}
 	at := uint64(li-int(f.H.NBlocks)-int(f.H.NVisBlocks)) * f.H.ExpPageSize
 	if size > f.H.ExpPageSize || at+size > uint64(len(f.exp)) {
-		return nil
+		return nil, nil
 	}
 	b := f.exp[at : at+size : at+size]
+	// A bank's view reads this frame and no other, so a frame it cannot commit
+	// fails the page-in.
+	if err := offheap.CommitOffHeap(b); err != nil {
+		return nil, fmt.Errorf("jlm: expert page %d: %w", li, err)
+	}
 	placeMemory(b, f.noHuge, f.nodeMask)
 	f.expHeld += size
-	return b
+	return b, nil
 }
 
 // inExp reports whether b is a frame of the expert reservation.
@@ -87,7 +95,9 @@ func (f *File) BankView(e *Entry) (planes [3]unsafe.Pointer, stride uint64, ok b
 		return planes, 0, false
 	}
 	if f.exp == nil && !f.expNone {
-		f.expFrame(f.ExpertPage(e, 0), 0)
+		if _, err := f.expFrame(f.ExpertPage(e, 0), 0); err != nil {
+			return planes, 0, false
+		}
 	}
 	if f.exp == nil {
 		return planes, 0, false

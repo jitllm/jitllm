@@ -374,7 +374,11 @@ func (f *File) claimFor(b int, spec bool) error {
 	f.makeRoom(b, size)
 	f.pages[b] = nil
 	if f.expertPage(b) {
-		f.pages[b] = f.expFrame(b, size)
+		fr, err := f.expFrame(b, size)
+		if err != nil {
+			return err
+		}
+		f.pages[b] = fr
 		if f.pages[b] != nil && f.budget > 0 {
 			// An expert page takes no free frame: those beside it give way
 			// as they would to a fresh one (take).

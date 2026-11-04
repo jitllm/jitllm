@@ -85,6 +85,9 @@ func (v *RowView) readSpan(p uint64) error {
 	off := v.lo + p*Align
 	n := min(uint64(Align), v.end-off)
 	dst := v.mem[p*Align : p*Align+n]
+	if err := offheap.CommitOffHeap(dst); err != nil {
+		return fmt.Errorf("jlm: row span at %d: %w", off, err)
+	}
 	v.f.rowReads.Add(1)
 	h := v.f.f
 	if v.f.direct != nil && directOK(int64(off), int(n)) && aligned(dst) {
