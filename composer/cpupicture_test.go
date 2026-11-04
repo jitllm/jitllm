@@ -301,3 +301,119 @@ func TestComposedCPUPictureFormats(t *testing.T) {
 		t.Logf("%s (%dx%d, sub %#x): %.1e from the oracle, the violation %.2g", c.name, c.w, c.h, c.sub, worst, diff)
 	}
 }
+
+// TestComposedCPUPictureLive forms the picture op at a size and runs it at
+// the sizes its request states (graph.Attrs.PicLive), two-tap and Pillow's
+// bicubic: each the oracle's resample to the request's size, dense in the
+// output and zero past it. The same pictures through the op formed without
+// PicLive -- resampled to the form's size -- are the violation.
+func TestComposedCPUPictureLive(t *testing.T) {
+	const W, maxW, maxH, side = 48, 32, 24, 64
+	r := Default().WithoutInt8(DeviceCPU)
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
+	mean, std := [3]float64{0.48145466, 0.4578275, 0.40821073}, [3]float64{0.26862954, 0.26130258, 0.27577711}
+	const sw, sh = 37, 29
+	rgb := oracle.PILPattern(sw, sh)
+	rgba := make([]byte, sw*sh*4)
+	for i := range sw * sh {
+		copy(rgba[4*i:], rgb[3*i:3*i+3])
+		rgba[4*i+3] = 255
+	}
+	words := unsafe.Slice((*uint32)(unsafe.Pointer(&rgba[0])), len(rgba)/4)
+	rows := (maxW*maxH*3 + W - 1) / W
+	for _, pil := range []bool{false, true} {
+		K := 0
+		form := func(live bool) []Code {
+			a := graph.Attrs{Pixels: graph.PixRGBA8, PicW: maxW, PicH: maxH, PicLive: live, Mean: mean, Std: std,
+				Chain: graph.ChainHalfPixel, Filter: graph.FilterLinear}
+			if pil {
+				K = max(PILTapCount(graph.FilterCubic, side, maxW), PILTapCount(graph.FilterCubic, side, 1))
+				a.Chain, a.Filter, a.PicSide, a.Taps = graph.ChainPIL, graph.FilterCubic, side, K
+			}
+			b := graph.NewBlock(-1)
+			b.In("unused", 1)
+			b.Out(b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "pixels", Width: W}}, nil, a, nil, nil)[0])
+			if err := graph.Verify(b.G, graph.Facts{}); err != nil {
+				t.Fatal(err)
+			}
+			_, codes, err := r.Form(Request{Graph: b.G, Step: Step{Rows: rows, Page: 64, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
+			if err != nil {
+				t.Fatalf("pil %v, live %v: %v", pil, live, err)
+			}
+			return codes
+		}
+		live, fixed := form(true), form(false)
+		run := func(codes []Code, ow, oh int) []float32 {
+			req := make([]uint32, RequestPicTaps+(maxW+maxH)*(K+1))
+			req[RequestPicW], req[RequestPicH], req[RequestPicStride] = sw, sh, sw*4
+			req[RequestPicOW], req[RequestPicOH] = uint32(ow), uint32(oh)
+			if pil {
+				PILTaps(graph.FilterCubic, sw, ow, 0, ow, K, req[RequestPicTaps:])
+				PILTaps(graph.FilterCubic, sh, oh, 0, oh, K, req[RequestPicTaps+maxW*(K+1):])
+			}
+			got, err := runCPUBound(hostArm(), codes, []float32{0}, rows*W, [3][]uint32{}, nil, func(o Operand) []uint32 {
+				switch o.Name {
+				case "request":
+					return req
+				case "picture":
+					return words
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("pil %v at %dx%d: %v", pil, ow, oh, err)
+			}
+			return got
+		}
+		seen := 0
+		for _, sz := range [][2]int{{maxW, maxH}, {20, 14}, {7, 23}, {32, 5}, {1, 1}} {
+			ow, oh := sz[0], sz[1]
+			var want []float32
+			if pil {
+				b := oracle.PILResize(rgb, sw, sh, ow, oh, true)
+				want = make([]float32, len(b))
+				for i, v := range b {
+					want[i] = float32((float64(v)/255 - mean[i%3]) / std[i%3])
+				}
+			} else {
+				want = oracle.Picture(rgba, false, sw, sh, sw*4, ow, oh, mean, std)
+			}
+			got := run(live, ow, oh)
+			worst := 0.0
+			for i, g := range got {
+				wv := float32(0)
+				if i < len(want) {
+					wv = want[i]
+				}
+				if math.IsNaN(float64(g)) {
+					t.Fatalf("pil %v at %dx%d: element %d is NaN", pil, ow, oh, i)
+				}
+				worst = max(worst, math.Abs(float64(g-wv)))
+			}
+			if worst > 2e-5 {
+				t.Fatalf("pil %v at %dx%d of a %dx%d form: %g from the oracle", pil, ow, oh, maxW, maxH, worst)
+			}
+			// The violation over the whole output: past the live picture the
+			// form's own size writes pixels where the live op writes zeros.
+			bad := run(fixed, ow, oh)
+			diff := 0.0
+			for i, g := range bad {
+				wv := float32(0)
+				if i < len(want) {
+					wv = want[i]
+				}
+				diff = max(diff, math.Abs(float64(g-wv)))
+			}
+			if ow != maxW || oh != maxH {
+				if diff < 1e-3 {
+					t.Fatalf("pil %v at %dx%d: the form's own size reads the same pixels", pil, ow, oh)
+				}
+				seen++
+			}
+			t.Logf("pil %v: %dx%d of a %dx%d form, %.1e from the oracle; the form's size %.1e", pil, ow, oh, maxW, maxH, worst, diff)
+		}
+		if seen == 0 {
+			t.Fatalf("pil %v: no size the violation could part from", pil)
+		}
+	}
+}
