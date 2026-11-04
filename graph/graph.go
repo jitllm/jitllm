@@ -847,4 +847,13 @@ const (
 	PixRGBA8 uint8 = 1 + iota
 	// PixGray8 is one byte a pixel, every channel's.
 	PixGray8
+	// PixYCbCr8 is a luma plane and two chroma planes, a byte a sample, the
+	// chroma subsampled as the step's request says; a pixel's red, green and
+	// blue are Go's image/color.YCbCrToRGB of its three samples.
+	PixYCbCr8
+	// PixPaletted8 is one byte a pixel, an index into a palette of four
+	// bytes an entry (red, green, blue, an alpha the picture drops).
+	PixPaletted8
+	// PixFormats is one past the last sample format.
+	PixFormats
 )

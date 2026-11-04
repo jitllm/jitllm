@@ -219,7 +219,7 @@ func Verify(g *Graph, f Facts) error {
 			switch {
 			case len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 0:
 				bad("%s: a picture reads the step's and writes one value", at)
-			case a.Pixels != PixRGBA8 && a.Pixels != PixGray8:
+			case a.Pixels < PixRGBA8 || a.Pixels >= PixFormats:
 				bad("%s: a picture of sample format %d", at, a.Pixels)
 			case a.PicW < 1 || a.PicH < 1:
 				bad("%s: a picture resampled to %dx%d", at, a.PicW, a.PicH)
