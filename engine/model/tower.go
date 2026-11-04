@@ -1,9 +1,12 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"math"
+	"sync"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
@@ -11,6 +14,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // The vision tower as its container states it (jlm.Tower), lowered into the
@@ -29,6 +33,23 @@ type towerGraphs struct {
 	// the patch grid's width; out the rows the head writes, one a token of
 	// the picture's span.
 	rows, side, out int
+	// holders is what each chat template writes for a picture, by the
+	// template's source (picturePlaceholder).
+	holders sync.Map
+}
+
+// placeholder is what the template src writes for an image part, read off it
+// once.
+func (tg *towerGraphs) placeholder(tpl *jinja.Template, src, bos, eos string) (string, error) {
+	if ph, ok := tg.holders.Load(src); ok {
+		return ph.(string), nil
+	}
+	ph, err := picturePlaceholder(tpl, src, bos, eos)
+	if err != nil {
+		return "", err
+	}
+	tg.holders.Store(src, ph)
+	return ph, nil
 }
 
 // bindTower makes the tower's blocks layers of the model from towerBase on,
@@ -180,7 +201,7 @@ func towerEntry(t *jlm.Tower, px uint8, rows int, f graph.Facts) (*graph.Graph, 
 	if a.PicW*a.PicH != rows*P*P {
 		return nil, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, rows, P)
 	}
-	out, err := lowerProgram(b, p, []graph.ValueID{pix}, f)
+	out, err := lowerProgram(b, p, []graph.ValueID{pix}, rows, f)
 	if err != nil {
 		return nil, err
 	}
@@ -192,19 +213,14 @@ func towerEntry(t *jlm.Tower, px uint8, rows int, f graph.Facts) (*graph.Graph, 
 func towerHead(t *jlm.Tower, v *jlm.Vision, rows int, f graph.Facts) (*graph.Graph, int, error) {
 	b := graph.NewBlock(-1)
 	x := b.In("rows", int(v.NEmbd))
-	out, err := lowerProgram(b, &t.Head, []graph.ValueID{x}, f)
+	out, err := lowerProgram(b, &t.Head, []graph.ValueID{x}, rows, f)
 	if err != nil {
 		return nil, 0, err
 	}
 	b.Out(out)
-	n := rows
-	for _, op := range t.Head.Ops {
-		switch op.Code {
-		case jlm.TOpRegroup:
-			n /= int(op.Span * op.Span)
-		case jlm.TOpDropRows:
-			n -= int(op.Offset)
-		}
+	n := b.G.Values[out].Rows
+	if n == 0 {
+		n = rows
 	}
 	return b.G, n, graph.Verify(b.G, f)
 }
@@ -213,7 +229,7 @@ func towerHead(t *jlm.Tower, v *jlm.Vision, rows int, f graph.Facts) (*graph.Gra
 // the same meaning, and is p's result. A value's width is its op's: a
 // matrix's rows, a regroup's input times its group, and a patch gather's the
 // width the matrix reading it takes.
-func lowerProgram(b *graph.Builder, p *jlm.Program, in []graph.ValueID, f graph.Facts) (graph.ValueID, error) {
+func lowerProgram(b *graph.Builder, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts) (graph.ValueID, error) {
 	if len(in) != int(p.NIn) {
 		return 0, fmt.Errorf("a program of %d inputs over %d", p.NIn, len(in))
 	}
@@ -235,6 +251,14 @@ func lowerProgram(b *graph.Builder, p *jlm.Program, in []graph.ValueID, f graph.
 		}
 	}
 	width := func(v graph.ValueID) int { return b.G.Values[v].Width }
+	// rowsOf is a value's rows: its own, where an op that changes the count
+	// made it, else the program's.
+	rowsOf := func(v graph.ValueID) int {
+		if r := b.G.Values[v].Rows; r > 0 {
+			return r
+		}
+		return rows
+	}
 	for i := range p.Ops {
 		op := &p.Ops[i]
 		ins := make([]graph.ValueID, len(op.In))
@@ -273,14 +297,14 @@ func lowerProgram(b *graph.Builder, p *jlm.Program, in []graph.ValueID, f graph.
 			out = b.Norm(ins[0], op.Bind[0], float64(op.Eps))
 		case jlm.TOpRegroup:
 			S := int(op.Span)
-			out = b.Emit(graph.OpRegroup, ins, []graph.Result{{Name: "grouped", Width: S * S * width(ins[0])}}, nil,
-				graph.Attrs{Span: S}, nil, nil)[0]
+			out = b.Emit(graph.OpRegroup, ins, []graph.Result{{Name: "grouped", Width: S * S * width(ins[0]),
+				Rows: rowsOf(ins[0]) / (S * S)}}, nil, graph.Attrs{Span: S}, nil, nil)[0]
 		case jlm.TOpLeadRow:
 			out = b.Emit(graph.OpLeadRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpDropRows:
-			out = b.Emit(graph.OpDropRows, ins, []graph.Result{{Name: "rows", Width: width(ins[0])}}, nil,
-				graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
+			out = b.Emit(graph.OpDropRows, ins, []graph.Result{{Name: "rows", Width: width(ins[0]),
+				Rows: rowsOf(ins[0]) - int(op.Offset)}}, nil, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpStated:
 			v, err := b.Stated(name, op.Expr, ins, int(op.Width), f)
 			if err != nil {
@@ -384,6 +408,10 @@ type towerRun struct {
 	req       []uint32
 	// pad holds a picture's samples where its bytes are not whole words.
 	pad []uint32
+	// pics is a prompt's pictures' rows, one buffer a picture, and spans the
+	// prompt's spans with them in place (encodePictures).
+	pics  [][]float32
+	spans []Span
 }
 
 // newTowerRun is the model's tower run, nil for a model with no tower.
@@ -401,7 +429,7 @@ func (m *Model) newTowerRun() (*towerRun, error) {
 		return nil, ts.cpu.formErr
 	}
 	tr := &towerRun{s: ts, entry: map[uint8]*cpudev.Form{}, rows: make([]float32, n*c.NEmbd),
-		out: make([]float32, n*int(v.ProjDim)), seq: make([]int, n), pos: make([]int, n),
+		out: make([]float32, tg.out*int(v.ProjDim)), seq: make([]int, n), pos: make([]int, n),
 		posTab: make([]uint32, 1+n), req: make([]uint32, composer.RequestPicStride+1)}
 	tr.posTab[0] = uint32(n)
 	for i := range n {
@@ -479,11 +507,28 @@ func pictureWords(img image.Image, pad *[]uint32) (words []uint32, px uint8, w, 
 // attending both ways, and its head, every step on the CPU device's composed
 // forms. The rows are the instance's until its next encode.
 func (s *Instance) EncodePicture(img image.Image) ([]float32, error) {
-	tr := s.tower
-	if tr == nil {
-		return nil, fmt.Errorf("model: the model has no vision tower")
+	if err := s.towerReady(); err != nil {
+		return nil, err
 	}
 	defer s.m.enterPager()()
+	return s.encodePicture(img, s.tower.out)
+}
+
+// towerReady is why the instance cannot encode a picture, nil when it can.
+func (s *Instance) towerReady() error {
+	switch {
+	case s.tower != nil:
+		return nil
+	case s.towerErr != nil:
+		return fmt.Errorf("model: the tower did not compose: %w", s.towerErr)
+	}
+	return fmt.Errorf("model: the model has no vision tower")
+}
+
+// encodePicture is EncodePicture into dst, the head's rows, under the pager
+// the caller holds.
+func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, error) {
+	tr := s.tower
 	words, px, w, h, stride, err := pictureWords(img, &tr.pad)
 	if err != nil {
 		return nil, err
@@ -519,8 +564,105 @@ func (s *Instance) EncodePicture(img image.Image) ([]float32, error) {
 	if why := ts.cpuWeights(f, -1, &m.towerDense); why != composer.DeclineServes {
 		return nil, fmt.Errorf("model: the tower's head: %v", why)
 	}
+	if len(dst) != tg.out*int(m.container.Vision().ProjDim) {
+		return nil, fmt.Errorf("model: %d values for a picture's %d rows of %d", len(dst), tg.out,
+			m.container.Vision().ProjDim)
+	}
 	*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab}
-	b.io[0], b.io[1] = unsafe.Pointer(&tr.rows[0]), unsafe.Pointer(&tr.out[0])
+	b.io[0], b.io[1] = unsafe.Pointer(&tr.rows[0]), unsafe.Pointer(&dst[0])
 	ts.cpuRunForm(b, f)
-	return tr.out[:tg.out*int(m.container.Vision().ProjDim)], nil
+	return dst, nil
+}
+
+// encodePictures is spans with every picture span's rows in place: encoded
+// into a buffer of the instance's (one a picture of the prompt), or, for a
+// picture whose rows all lie before row from -- restored by the prefix
+// cache -- a buffer nothing reads, with no tower block run. The caller's
+// spans are left as they were.
+func (s *Instance) encodePictures(spans []Span, from int) ([]Span, error) {
+	n := 0
+	for _, sp := range spans {
+		if sp.Picture != nil && sp.Embd == nil {
+			n++
+		}
+	}
+	if n == 0 {
+		return spans, nil
+	}
+	if err := s.towerReady(); err != nil {
+		return nil, err
+	}
+	tr := s.tower
+	w := s.m.tower.out * int(s.m.container.Vision().ProjDim)
+	tr.spans = append(tr.spans[:0], spans...)
+	k, row := 0, 0
+	for i := range tr.spans {
+		sp := &tr.spans[i]
+		r := sp.n(s.c.NEmbd)
+		if sp.Picture != nil && sp.Embd == nil {
+			if sp.PicRows != s.m.tower.out {
+				return nil, fmt.Errorf("model: span %d is a picture of %d rows and the tower writes %d",
+					i, sp.PicRows, s.m.tower.out)
+			}
+			if k == len(tr.pics) {
+				tr.pics = append(tr.pics, make([]float32, w))
+			}
+			sp.Embd = tr.pics[k]
+			k++
+			if row+r > from {
+				if _, err := s.encodePicture(sp.Picture, sp.Embd); err != nil {
+					return nil, fmt.Errorf("model: span %d: %w", i, err)
+				}
+			}
+		}
+		row += r
+	}
+	return tr.spans, nil
+}
+
+// SeesPictures reports whether the model carries a tower, so a prompt may hold
+// a picture.
+func (m *Model) SeesPictures() bool { return m.tower != nil }
+
+// PictureSpan is the span a picture stands in a prompt as, for ChatSpans or
+// PrefillMixed: the picture, which the prefill encodes through the tower,
+// the rows it takes, and the key naming them (pictureKey).
+func (m *Model) PictureSpan(img image.Image) (Span, error) {
+	if m.tower == nil {
+		return Span{}, fmt.Errorf("model: the model has no vision tower")
+	}
+	k, err := pictureKey(img)
+	if err != nil {
+		return Span{}, err
+	}
+	return Span{Picture: img, PicRows: m.tower.out, Key: k}, nil
+}
+
+// pictureKey names a picture by everything the tower reads of it: its sample
+// format, its size and its samples row by row (a row's padding past its
+// samples is not read, so it is not named).
+func pictureKey(img image.Image) (*RowsKey, error) {
+	var pad []uint32
+	words, px, w, h, stride, err := pictureWords(img, &pad)
+	if err != nil {
+		return nil, err
+	}
+	bpp := 4
+	if px == graph.PixGray8 {
+		bpp = 1
+	}
+	pix := unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), 4*len(words))
+	hs := sha256.New()
+	var hdr [13]byte
+	hdr[0] = px
+	binary.LittleEndian.PutUint32(hdr[1:], uint32(w))
+	binary.LittleEndian.PutUint32(hdr[5:], uint32(h))
+	binary.LittleEndian.PutUint32(hdr[9:], uint32(bpp))
+	hs.Write(hdr[:])
+	for y := range h {
+		hs.Write(pix[y*stride : y*stride+w*bpp])
+	}
+	var k RowsKey
+	hs.Sum(k[:0])
+	return &k, nil
 }

@@ -138,7 +138,7 @@ func (m *Model) renderChat(msgs []ChatMessage, tools []byte, choice ToolChoice, 
 		return "", err
 	}
 	bos, eos := m.specialText()
-	return renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt)
+	return renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt, false)
 }
 
 // compiledTemplate is src compiled, once per model: a compiled template is
@@ -165,14 +165,16 @@ func renderChatTemplate(src, bos, eos string, clock func() time.Time, msgs []Cha
 	if err != nil {
 		return "", fmt.Errorf("model: chat template (%d bytes): %w", len(src), err)
 	}
-	return renderCompiled(tpl, src, bos, eos, clock, msgs, tools, ToolChoice{}, addGenerationPrompt)
+	return renderCompiled(tpl, src, bos, eos, clock, msgs, tools, ToolChoice{}, addGenerationPrompt, false)
 }
 
 // renderCompiled is renderChatTemplate over src already compiled, with the
-// request's tool_choice in the context when it gives one.
+// request's tool_choice in the context when it gives one. pics says a
+// message's images are written as the template writes an image part, which
+// only ChatSpans asks for: everywhere else a picture is refused, since its
+// placeholder's text is not the picture.
 func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time.Time, msgs []ChatMessage,
-	tools []byte, choice ToolChoice, addGenerationPrompt bool) (string, error) {
-	ph := ""
+	tools []byte, choice ToolChoice, addGenerationPrompt, pics bool) (string, error) {
 	ctx := map[string]any{
 		"tools":                 nil,
 		"documents":             nil,
@@ -207,11 +209,15 @@ func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 	messages := func(stringArgs bool) ([]any, error) {
 		ms := make([]any, len(msgs))
 		for i, x := range msgs {
-			if x.Images > 0 && ph == "" {
-				return nil, fmt.Errorf("model: message %d carries %d image(s) and this model has "+
-					"no vision tower", i, x.Images)
+			if x.Images > 0 && !pics {
+				return nil, fmt.Errorf("model: message %d carries %d image(s); ChatSpans is the "+
+					"path for a picture", i, x.Images)
 			}
-			mm := map[string]any{"role": x.Role, "content": contentValue(x.Content, x.Images, ph, "", parts)}
+			if x.Images > 0 && !parts {
+				return nil, fmt.Errorf("model: message %d carries %d image(s) and this chat "+
+					"template reads a message as a string, so it writes no image part", i, x.Images)
+			}
+			mm := map[string]any{"role": x.Role, "content": contentValue(x.Content, x.Images, parts)}
 			if err := toolFields(mm, x, stringArgs); err != nil {
 				return nil, fmt.Errorf("model: message %d: %w", i, err)
 			}
@@ -293,8 +299,8 @@ func systemRendered(tpl *jinja.Template, ctx map[string]any, parts bool) bool {
 	const probe = "jitllm-system-probe"
 	pc := maps.Clone(ctx)
 	pc["messages"] = []any{
-		map[string]any{"role": "system", "content": contentValue(probe, 0, "", "", parts)},
-		map[string]any{"role": "user", "content": contentValue("User message", 0, "", "", parts)},
+		map[string]any{"role": "system", "content": contentValue(probe, 0, parts)},
+		map[string]any{"role": "user", "content": contentValue("User message", 0, parts)},
 	}
 	pc["add_generation_prompt"] = true
 	out, err := tpl.Render(pc)
@@ -372,18 +378,138 @@ func wantsContentParts(tpl *jinja.Template) bool {
 	return err != nil || !strings.Contains(out, probe)
 }
 
-// contentValue presents a message in the shape the template reads: images
-// first, as typed parts, or -- for a template that reads a string -- as the
-// placeholder text followed by sep, which is llava's "<image>\n{prompt}".
-func contentValue(text string, images int, ph, sep string, parts bool) any {
+// contentValue presents a message in the shape the template reads: its text,
+// or its images first as typed parts and then its text.
+func contentValue(text string, images int, parts bool) any {
 	if !parts {
-		return strings.Repeat(ph+sep, images) + text
+		return text
 	}
 	out := make([]any, 0, images+1)
 	for range images {
 		out = append(out, map[string]any{"type": "image"})
 	}
 	return append(out, map[string]any{"type": "text", "text": text})
+}
+
+// ChatSpans is a conversation's prompt as spans, for a model with a tower: the
+// chat template's text, and in place of each image of the messages, in order,
+// pics[i] -- a picture the prefill encodes (Model.PictureSpan), or rows
+// already encoded (Instance.EncodePicture), named by their Key where the
+// caller knows it -- between the markers the container states the
+// rows are wrapped in (jlm.TowerSpan). The template renders the whole prompt;
+// only what it writes for an image part is replaced, and that text is read
+// off the template (picturePlaceholder), never named per family.
+func (m *Model) ChatSpans(msgs []ChatMessage, pics []Span, addGenerationPrompt bool) ([]Span, error) {
+	return m.ChatSpansToolChoice(msgs, pics, nil, ToolChoice{}, addGenerationPrompt)
+}
+
+// ChatSpansToolChoice is ChatSpans with a tool list and choice rendered as
+// ChatIDsToolChoice renders them.
+func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byte, choice ToolChoice,
+	addGenerationPrompt bool) ([]Span, error) {
+	n := 0
+	for _, x := range msgs {
+		n += x.Images
+	}
+	if n != len(pics) {
+		return nil, fmt.Errorf("model: %d image(s) in the messages and %d picture(s)", n, len(pics))
+	}
+	if n == 0 {
+		ids, err := m.ChatIDsToolChoice(msgs, tools, choice, addGenerationPrompt)
+		return []Span{{Tokens: ids}}, err
+	}
+	if m.tower == nil {
+		return nil, fmt.Errorf("model: %d image(s) and this model has no vision tower", n)
+	}
+	if m.Vocab == nil {
+		return nil, fmt.Errorf("model: no tokenizer: %v", m.TokErr)
+	}
+	for i, p := range pics {
+		switch {
+		case p.Embd == nil && p.Picture != nil:
+			if p.PicRows != m.tower.out {
+				return nil, fmt.Errorf("model: picture %d takes %d rows and the tower writes %d",
+					i, p.PicRows, m.tower.out)
+			}
+		case len(p.Embd) == 0 || len(p.Embd)%m.Cfg.NEmbd != 0:
+			return nil, fmt.Errorf("model: picture %d is %d values, not rows of the model's %d",
+				i, len(p.Embd), m.Cfg.NEmbd)
+		}
+	}
+	src, err := m.chatTemplateFor(len(tools) > 0)
+	if err != nil {
+		return nil, err
+	}
+	tpl, err := m.compiledTemplate(src)
+	if err != nil {
+		return nil, err
+	}
+	bos, eos := m.specialText()
+	ph, err := m.tower.placeholder(tpl, src, bos, eos)
+	if err != nil {
+		return nil, err
+	}
+	text, err := renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt, true)
+	if err != nil {
+		return nil, err
+	}
+	// The count is checked: a template that drops an image part, or text that
+	// happens to hold the placeholder, would put every later picture on the
+	// wrong turn.
+	segs := strings.Split(text, ph)
+	if len(segs)-1 != n {
+		return nil, fmt.Errorf("model: the chat template wrote %d image placeholder(s) %q for %d image(s)",
+			len(segs)-1, ph, n)
+	}
+	mk := m.container.Vision().Tower.Span
+	var out []Span
+	add := func(ids []int32) {
+		if len(ids) > 0 {
+			out = append(out, Span{Tokens: ids})
+		}
+	}
+	for i, seg := range segs {
+		add(m.Vocab.EncodeSpecial(seg, false))
+		if i < n {
+			add(mk.Before)
+			out = append(out, pics[i])
+			add(mk.After)
+		}
+	}
+	return out, nil
+}
+
+// picturePlaceholder is what the template writes for one image part: a user
+// turn rendered with a picture before its text and without one differ by
+// that text, which is what is left of the first between the two's common
+// prefix and suffix.
+func picturePlaceholder(tpl *jinja.Template, src, bos, eos string) (string, error) {
+	const probe = "\u2042probe\u2042"
+	turn := func(images int) (string, error) {
+		return renderCompiled(tpl, src, bos, eos, nil, []ChatMessage{{Role: "user", Content: probe, Images: images}},
+			nil, ToolChoice{}, false, true)
+	}
+	with, err := turn(1)
+	if err != nil {
+		return "", err
+	}
+	without, err := turn(0)
+	if err != nil {
+		return "", err
+	}
+	p := 0
+	for p < len(with) && p < len(without) && with[p] == without[p] {
+		p++
+	}
+	s := 0
+	for s < len(with)-p && s < len(without)-p && with[len(with)-1-s] == without[len(without)-1-s] {
+		s++
+	}
+	ph := with[p : len(with)-s]
+	if ph == "" || strings.Contains(ph, probe) || strings.Count(with, ph) != 1 {
+		return "", fmt.Errorf("model: the chat template writes no text of its own for an image part (%q)", ph)
+	}
+	return ph, nil
 }
 
 // SpanPositions is how many positions spans occupy, which is what an instance

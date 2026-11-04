@@ -15,12 +15,26 @@ func statedTower(s *jlm.Source) (*jlm.Tower, error) {
 	if s.Vision == nil {
 		return nil, nil
 	}
-	switch s.Vision.Projector {
-	case jlm.ProjIdefics3:
-		return idefics3Tower(s)
+	f := towerStater(s.Vision.Projector)
+	if f == nil {
+		return nil, nil
 	}
-	return nil, nil
+	return f(s)
 }
+
+// towerStater is what states projector p's tower, nil for a projector whose
+// tower is not stated yet.
+func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
+	switch p {
+	case jlm.ProjIdefics3:
+		return idefics3Tower
+	}
+	return nil
+}
+
+// StatesTower reports whether the converter states projector p's tower, so a
+// container of p written without one is a stale conversion.
+func StatesTower(p jlm.Projector) bool { return towerStater(p) != nil }
 
 // idefics3Tower is SmolVLM's tower as llama.cpp's mtmd runs it, which this
 // container matches: the picture squashed to the tower's square by two-tap

@@ -918,9 +918,13 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   `convert.TestSmolVLMStatesItsTower`, `TestStatedTowerComposesOnTheCPU`,
   `TestStatedTowerBlocksArePagedBlocks`, `TestStatedTowerEncodesAPicture`
   (a warm encode allocates nothing), `TestStatedTowerSeesThePicture` (a blank
-  picture is the violation), `composer.TestComposedCPUPicture`. The tower on
-  a card, the image cache and the two-turn restore have no gate until their
-  paths run again.
+  picture is the violation), `TestChatSpansFollowTheTemplate`,
+  `composer.TestComposedCPUPicture`, `composer.TestComposedCPURegroup`;
+  through the front ends `server.TestImageRequestsMatchTheEngine`,
+  `cmd/jitllm.TestImageRunsThroughTheTower` (a run restored past the picture
+  answers alike) and `common/engine.TestAnAttachedPictureReachesTheModel` (a
+  follow-up turn sees the picture in its history). The tower on a card has no
+  gate until its blocks are placed there.
 
 **The bar for a new projector family**, on top of RULE 7's:
 
