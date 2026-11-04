@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"sync"
 	"unsafe"
 
@@ -38,10 +39,12 @@ type towerGraphs struct {
 	// width and patch a patch's side in pixels; out the rows the head writes
 	// for rows rows, one a token of the picture's span.
 	rows, lead, side, patch, out int
-	// merge is the side of the windows the patch rows are ordered in, 0 for
-	// raster order; gridDiv the language model's grid over the patches'
-	// (jlm.TowerSpan.GridDiv).
-	merge, gridDiv int
+	// gridDiv is the language model's grid over the patches'
+	// (jlm.TowerSpan.GridDiv); merge the side of the merge windows the patch
+	// rows are ordered in and window that of the windows of them, in merge
+	// windows (towerTiles); full says block i attends the whole picture.
+	gridDiv, merge, window int
+	full                   []bool
 	// fit is how a picture becomes the tower's squares.
 	fit pictureFit
 	// table and planes are the blocks' rotary table and its planes, nil for
@@ -219,7 +222,8 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 		return nil, fmt.Errorf("model: the tower's entry: %w", err)
 	}
 	P := int(ops[0].Span)
-	tg := &towerGraphs{lead: int(ops[0].Offset), merge: int(ops[0].Width), gridDiv: int(t.Span.GridDiv),
+	merge, window := towerTiles(t)
+	tg := &towerGraphs{lead: int(ops[0].Offset), gridDiv: int(t.Span.GridDiv), merge: merge, window: window,
 		side: int(v.ImageSize / v.PatchSize), patch: P, fit: fit}
 	sides := []int{0}
 	if fit.factor > 0 {
@@ -242,10 +246,11 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 		tg.rows = max(tg.rows, cl.rows)
 	}
 	if r := t.Block.Rope; len(r.Runs) > 0 {
-		tg.table, tg.planes = towerRotary(&t.Block)
+		tg.table, tg.planes = towerRotary(t)
 	}
 	for i := range int(v.NLayer) {
-		g, err := towerBlock(m.towerBase+i, t, v, m.towerFacts(int32(i)))
+		tg.full = append(tg.full, window == 0 || slices.Contains(t.Block.Full, int32(i)))
+		g, err := towerBlock(m.towerBase+i, i, t, v, m.towerFacts(int32(i)))
 		if err != nil {
 			return nil, fmt.Errorf("model: the tower's block %d: %w", i, err)
 		}
@@ -407,7 +412,7 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit pictureFit, f 
 	if a.PicLive && grid*P*P > a.PicW*a.PicH || !a.PicLive && a.PicW*a.PicH != grid*P*P {
 		return nil, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
 	}
-	out, err := lowerProgram(b, p, []graph.ValueID{pix}, grid+lead, f)
+	out, err := lowerProgram(b, t, p, []graph.ValueID{pix}, grid+lead, f)
 	if err != nil {
 		return nil, err
 	}
@@ -415,34 +420,46 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit pictureFit, f 
 	return b.G, graph.Verify(b.G, f)
 }
 
-// towerRotary is a block's rotary as the tower's tables turn it: the table
-// graph over the axes each row's grid mark places it on -- the tower's row
-// and column, the marks' axes 1 and 2 -- and its planes.
-func towerRotary(bl *jlm.TowerBlock) (*graph.Graph, []float32) {
-	r := towerRope(bl)
-	return composer.TableGraph(towerRotaryOf(bl), 0), ropeAxesPlanes(&r, towerRotaryOf(bl).NRot, false)
-}
-
-// towerRope is the block's rotary as the planes read it: its runs on the
-// marks' axes, its frequencies over Dim.
-func towerRope(bl *jlm.TowerBlock) nn.Rope {
-	rp := bl.Rope
-	r := nn.Rope{NRot: int(rp.Dim), Base: float64(rp.Base), Neox: rp.Neox}
-	for _, run := range rp.Runs {
-		r.Runs = append(r.Runs, nn.RopeRun{Pairs: int(run.Pairs), Axis: int(run.Axis) + 1, Freq: int(run.Freq)})
+// towerTiles is the nested order the tower's patch rows are in: merge x
+// merge merge windows (TOpPatchify's Width, 1 for none) in windows of window
+// x window of them (TowerBlock.Window over the merge, 0 for none).
+func towerTiles(t *jlm.Tower) (merge, window int) {
+	merge = 1
+	if ops := t.Entry.Ops; len(ops) > 0 && ops[0].Code == jlm.TOpPatchify && ops[0].Width > 1 {
+		merge = int(ops[0].Width)
 	}
-	return r
+	return merge, int(t.Block.Window) / merge
 }
 
-// towerRotaryOf is the block's rotary as its graphs state it: every turned
-// pair's element, each axis's run of pairs.
-func towerRotaryOf(bl *jlm.TowerBlock) graph.Rotary {
-	rp := bl.Rope
-	g := graph.Rotary{Base: float64(rp.Base)}
+// towerRotary is the blocks' rotary as the tower's table turns it: the
+// table graph over each row's cell of the picture's grid (graph.RopeTable
+// .Grid), and its planes -- every pair's frequency, then its axis, 0 a
+// cell's row and 1 its column.
+func towerRotary(t *jlm.Tower) (*graph.Graph, []float32) {
+	rp := t.Block.Rope
+	r := nn.Rope{NRot: int(rp.Dim), Base: float64(rp.Base), Neox: rp.Neox}
+	var axes []float32
 	for _, run := range rp.Runs {
-		g.Sections[run.Axis+1] += int(run.Pairs)
+		r.Runs = append(r.Runs, nn.RopeRun{Pairs: int(run.Pairs), Axis: int(run.Axis), Freq: int(run.Freq)})
+		for range run.Pairs {
+			axes = append(axes, float32(run.Axis))
+		}
+	}
+	return composer.TableGraph(towerRotaryOf(t), 0), append(r.TabPlanes(len(axes)), axes...)
+}
+
+// towerRotaryOf is the blocks' rotary as their graphs state it: every turned
+// pair's element, each row's position the cell of the grid in the order the
+// patch gather lays the rows out (TOpPatchify's Width and Offset).
+func towerRotaryOf(t *jlm.Tower) graph.Rotary {
+	g := graph.Rotary{Base: float64(t.Block.Rope.Base), Grid: true}
+	for _, run := range t.Block.Rope.Runs {
 		g.NRot += 2 * int(run.Pairs)
 	}
+	if ops := t.Entry.Ops; len(ops) > 0 && ops[0].Code == jlm.TOpPatchify {
+		g.Lead = int(ops[0].Offset)
+	}
+	g.Merge, g.Window = towerTiles(t)
 	return g
 }
 
@@ -579,7 +596,7 @@ func shortSide(w, h, s int) (int, int) {
 func towerHead(t *jlm.Tower, v *jlm.Vision, rows int, f graph.Facts) (*graph.Graph, int, error) {
 	b := graph.NewBlock(-1)
 	x := b.In("rows", int(v.NEmbd))
-	out, err := lowerProgram(b, &t.Head, []graph.ValueID{x}, rows, f)
+	out, err := lowerProgram(b, t, &t.Head, []graph.ValueID{x}, rows, f)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -595,7 +612,8 @@ func towerHead(t *jlm.Tower, v *jlm.Vision, rows int, f graph.Facts) (*graph.Gra
 // the same meaning, and is p's result. A value's width is its op's: a
 // matrix's rows, a regroup's input times its group, and a patch gather's the
 // width the matrix reading it takes.
-func lowerProgram(b *graph.Builder, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts) (graph.ValueID, error) {
+func lowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts) (graph.ValueID, error) {
+	merge, window := towerTiles(t)
 	if len(in) != int(p.NIn) {
 		return 0, fmt.Errorf("a program of %d inputs over %d", p.NIn, len(in))
 	}
@@ -641,7 +659,7 @@ func lowerProgram(b *graph.Builder, p *jlm.Program, in []graph.ValueID, rows int
 				w = k
 			}
 			out = b.Emit(graph.OpPatchify, ins, []graph.Result{{Name: "patches", Width: w}}, nil,
-				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
+				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset), Width: int(op.Width), Window: window}, nil, nil)[0]
 		case jlm.TOpLinear:
 			s, err := shape(op.Bind[0])
 			if err != nil {
@@ -690,6 +708,9 @@ func lowerProgram(b *graph.Builder, p *jlm.Program, in []graph.ValueID, rows int
 			S := int(op.Span)
 			out = b.Emit(graph.OpFold, ins, []graph.Result{{Name: "folded", Width: S * width(ins[0]),
 				Rows: rowsOf(ins[0]) / S}}, nil, graph.Attrs{Span: S}, nil, nil)[0]
+		case jlm.TOpUntile:
+			out = b.Emit(graph.OpUntile, ins, []graph.Result{{Name: "raster", Width: width(ins[0]), Rows: rowsOf(ins[0])}}, nil,
+				graph.Attrs{Width: merge, Window: window}, nil, nil)[0]
 		case jlm.TOpLeadRow:
 			out = b.Emit(graph.OpLeadRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
@@ -714,7 +735,8 @@ func lowerProgram(b *graph.Builder, p *jlm.Program, in []graph.ValueID, rows int
 // li-NLayer): the stated block over the tensors its inventory holds -- each
 // norm before a sublayer where held, biases where held, a gate where held,
 // post-norms where held -- attending both ways over the picture's rows.
-func towerBlock(li int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.Graph, error) {
+func towerBlock(li, i int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.Graph, error) {
+	rot := towerRotaryOf(t)
 	bl := &t.Block
 	has := func(r jlm.Role) bool {
 		_, ok := f.Inventory[r]
@@ -750,12 +772,11 @@ func towerBlock(li int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.Grap
 	k := b.MatVec(n, jlm.RoleVAttnK, kvDim, stored(jlm.RoleVAttnKBias)...)
 	vv := b.MatVec(n, jlm.RoleVAttnV, kvDim, stored(jlm.RoleVAttnVBias)...)
 	if len(bl.Rope.Runs) > 0 {
-		r := towerRotaryOf(bl)
 		layout := graph.RopeNorm
 		if bl.Rope.Neox {
 			layout = graph.RopeNeox
 		}
-		a := graph.Attrs{HeadDim: hd, NRot: r.NRot, Base: r.Base, Layout: layout, Sections: r.Sections}
+		a := graph.Attrs{HeadDim: hd, NRot: rot.NRot, Base: rot.Base, Layout: layout}
 		q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qdim}}, nil, a, nil, nil)[0]
 		k = b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
 	}
@@ -764,7 +785,11 @@ func towerBlock(li int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.Grap
 	if scale == 0 {
 		scale = 1 / math.Sqrt(float64(hd))
 	}
-	att := b.AttendOf(q, hist, graph.Attrs{NHead: int(bl.NHead), NKVHead: int(bl.NKVHead), HeadDim: hd, Scale: scale, Bidir: true})
+	// A windowed block reads each row's keys from its window (the step's
+	// row windows); a whole-picture block every row's.
+	windowed := bl.Window > 0 && !slices.Contains(bl.Full, int32(i))
+	att := b.AttendOf(q, hist, graph.Attrs{NHead: int(bl.NHead), NKVHead: int(bl.NKVHead), HeadDim: hd, Scale: scale, Bidir: true,
+		RowWindows: windowed})
 	x2 := b.Add(x, b.MatVec(att, jlm.RoleVAttnOut, d, stored(jlm.RoleVAttnOutBias)...))
 	n2 := norm(x2, jlm.RoleVFFNNorm, jlm.RoleVFFNNormBias)
 	ffn := f.Inventory[jlm.RoleVFC1].Rows
@@ -787,7 +812,7 @@ func towerBlock(li int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.Grap
 // asked by the index it runs at.
 func towerConfig(base, rows int, v *jlm.Vision, t *jlm.Tower) *Config {
 	b := &t.Block
-	r := towerRotaryOf(b)
+	r := towerRotaryOf(t)
 	return &Config{Arch: "tower", NLayer: base + int(v.NLayer), NEmbd: int(v.NEmbd), NHead: int(b.NHead),
 		NKVHead: int(b.NKVHead), HeadDim: int(b.HeadDim), NFFN: int(v.NFFN), NCtx: rows,
 		RMSEps: float64(b.Eps), EmbdScale: 1, AttnFactor: 1, NonCausal: true, NoPosEnc: r.NRot == 0,
@@ -805,11 +830,11 @@ type towerRun struct {
 	head  *cpudev.Form
 	// rows is a square's patch rows at the tower's width, as the entry
 	// writes them, and blk as the last block leaves them; seq and pos the
-	// rows' sequence and positions -- a patch's in raster order, whatever
-	// order the rows are in -- posTab the step's live rows and positions as
-	// the entry reads them, mode the blocks' run on a card (embedMode.rows).
-	// Each is as long as the square being encoded, over buffers grown to the
-	// largest one yet (size).
+	// rows' sequence and positions -- row i at position i, the patch gather
+	// and the rotary reading its cell in the grid's nested order -- posTab
+	// the step's live rows and positions as the entry reads them, mode the
+	// blocks' run on a card (embedMode.rows). Each is as long as the square
+	// being encoded, over buffers grown to the largest one yet (size).
 	rows, blk  []float32
 	seq, pos   []int
 	posTab     []uint32
@@ -818,6 +843,9 @@ type towerRun struct {
 	bufE, bufB []float32
 	bufS, bufP []int
 	bufT       []uint32
+	// wins is a square's windows as runs of its rows, rowWins each row's
+	// own (a card's row windows).
+	wins, rowWins []nn.KeyRun
 	// out is the rows EncodePicture hands back, at the language model's
 	// width; encodes counts the pictures encoded.
 	out     []float32
@@ -903,38 +931,43 @@ func (tr *towerRun) squareRequest(pl pictureLayout, sq square, a graph.Attrs, sq
 	}
 }
 
-// size is the run's buffers over n rows of width e: grown where the square
-// is the largest yet, the rows in raster order (lead rows first, a class
-// row's) until a square's order sets them.
+// size is the run's buffers over n rows of width e, row i at position i:
+// grown, their positions written, where the square is the largest yet.
 func (tr *towerRun) size(n, e int) {
 	if len(tr.bufS) < n {
 		tr.bufE, tr.bufB = make([]float32, n*e), make([]float32, n*e)
 		tr.bufS, tr.bufP, tr.bufT = make([]int, n), make([]int, n), make([]uint32, 1+n)
+		for i := range n {
+			tr.bufP[i], tr.bufT[1+i] = i, uint32(i)
+		}
 	}
 	tr.rows, tr.blk = tr.bufE[:n*e], tr.bufB[:n*e]
 	tr.seq, tr.pos, tr.posTab = tr.bufS[:n], tr.bufP[:n], tr.bufT[:1+n]
 	tr.posTab[0] = uint32(n)
 }
 
-// order sets the square's rows' positions: lead rows first, then the
-// patches in the raster order of the grid's merge x merge windows where
-// merge is set (each window's patches in raster order), else in raster
-// order; a row's position is its patch's raster index after the lead rows,
-// which the patch gather and the rotary's grid read.
-func (tr *towerRun) order(lead, gw, gh, merge int) {
-	for i := range lead {
-		tr.pos[i], tr.posTab[1+i] = i, uint32(i)
+// windows is a gw x gh patch grid's windows as runs of its rows in their
+// nested order (towerTiles): the lead rows one run, then window by window;
+// nil for a tower whose blocks attend the whole picture.
+func (tr *towerRun) windows(tg *towerGraphs, gw, gh int) []nn.KeyRun {
+	if tg.window < 1 {
+		return nil
 	}
-	for i := range gw * gh {
-		p := i
-		if merge > 1 {
-			w, j := i/(merge*merge), i%(merge*merge)
-			y := (w/(gw/merge))*merge + j/merge
-			x := (w%(gw/merge))*merge + j%merge
-			p = y*gw + x
+	m, w := tg.merge, tg.window
+	gw2, gh2 := gw/m, gh/m
+	tr.wins = tr.wins[:0]
+	at := tg.lead
+	if at > 0 {
+		tr.wins = append(tr.wins, nn.KeyRun{Lo: 0, Hi: at})
+	}
+	for top := 0; top < gh2; top += w {
+		for left := 0; left < gw2; left += w {
+			n := min(w, gh2-top) * min(w, gw2-left) * m * m
+			tr.wins = append(tr.wins, nn.KeyRun{Lo: at, Hi: at + n})
+			at += n
 		}
-		tr.pos[lead+i], tr.posTab[1+lead+i] = lead+p, uint32(lead+p)
 	}
+	return tr.wins
 }
 
 // close lets the tower's instance go.
@@ -1164,11 +1197,10 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 		tr.squareRequest(pl, sq, tg.classes[sq.class].pic, squares)
 		n := tg.lead + sq.gw*sq.gh
 		tr.size(n, E)
-		tr.order(tg.lead, sq.gw, sq.gh, tg.merge)
 		*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: n, req: tr.req, pos: tr.posTab, pic: words}
 		b.io[0] = unsafe.Pointer(&tr.rows[0])
 		ts.cpuRunForm(b, f)
-		if err := ts.towerBlocks(tr, sq.gw, sq.gh); err != nil {
+		if err := ts.towerBlocks(tr, tr.windows(tg, sq.gw, sq.gh)); err != nil {
 			return nil, fmt.Errorf("model: the tower's blocks: %w", err)
 		}
 		*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(head), n: n, req: tr.req, pos: tr.posTab}
@@ -1184,31 +1216,39 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 // block's rows in blk: on the CPU device, the runner's CPU rows over the
 // run, block by block; with blocks on a card, the tower instance's prefill
 // (embedMode.rows), each block on the device that holds it. Blocks that turn
-// q and k read each row's place on the grid from the picture's one mark
-// (graph.MarkGrid), the patch rows after the lead rows its cells.
-func (ts *Instance) towerBlocks(tr *towerRun, gw, gh int) error {
+// q and k read each row's cell of the grid from its position and the
+// picture's request (the tower's grid table); a windowed block attends
+// within its row's run of wins, every other block the whole picture.
+func (ts *Instance) towerBlocks(tr *towerRun, wins []nn.KeyRun) error {
 	n := len(tr.pos)
 	ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: n})
-	defer func() { ts.bidir = ts.bidir[:0] }()
-	grid := func() {
-		if ts.m.tower.table == nil {
-			return
-		}
-		ts.rmarks.rewind(0, -1)
-		ts.rmarks.add(0, [graph.MarkWords]uint32{graph.MarkAt: uint32(ts.m.tower.lead), graph.MarkKind: graph.MarkGrid,
-			graph.MarkT: 1, graph.MarkH: uint32(gh), graph.MarkW: uint32(gw)})
-		ts.sendMarks()
-	}
+	defer func() { ts.bidir, ts.cpu.runWindows = ts.bidir[:0], false }()
+	ts.cpu.tables.req, ts.cpu.tables.pos = tr.req, tr.posTab
 	if ts.devCount() > 0 {
 		ts.Reset()
-		grid()
+		if wins != nil {
+			// A card's windowed blocks read each row's window (graph.Attrs
+			// .RowWindows).
+			rw, ok := ts.ld.(nn.RowWindowDevice)
+			if !ok {
+				return fmt.Errorf("the tower's windowed blocks are on a device that holds no row windows")
+			}
+			tr.rowWins = tr.rowWins[:0]
+			for _, w := range wins {
+				for range w.Hi - w.Lo {
+					tr.rowWins = append(tr.rowWins, w)
+				}
+			}
+			if !rw.SetRowWindows(tr.rowWins) {
+				return fmt.Errorf("the device would not hold the tower's %d row windows", len(tr.rowWins))
+			}
+		}
 		tr.mode = embedMode{bidir: true, rows: true, total: n, out: tr.blk}
 		ts.emb = &tr.mode
 		defer func() { ts.emb = nil }()
 		_, err := ts.prefillSpans(0, Span{Embd: tr.rows})
 		return err
 	}
-	grid()
 	if w := ts.c.RopeW(); len(ts.bcs) < n*w {
 		ts.bcs = make([]float32, n*w)
 	}
@@ -1218,6 +1258,14 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw, gh int) error {
 		if err := ts.m.pageIn(li); err != nil {
 			return err
 		}
+		// Each run of a windowed block is a window its rows attend inside.
+		windowed := wins != nil && !ts.m.tower.full[li-ts.lo]
+		if windowed {
+			ts.bidir = append(ts.bidir[:0], wins...)
+		} else {
+			ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: n})
+		}
+		ts.cpu.runWindows = windowed
 		why, err := ts.cpuRows(li, &ts.m.layers[li], tr.blk, nil, nil, tr.seq, tr.pos, nil)
 		if err != nil {
 			return err

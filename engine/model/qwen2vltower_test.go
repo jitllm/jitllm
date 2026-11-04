@@ -66,7 +66,6 @@ func towerPixels(t *testing.T, s *Instance, img image.Image) ([]float32, square)
 	}
 	n := sq.gw * sq.gh
 	tr.size(tg.lead+n, int(m.container.Vision().NEmbd))
-	tr.order(tg.lead, sq.gw, sq.gh, tg.merge)
 	out := make([]float32, cl.rows*3*P*P)
 	bd := &ts.cpu.bound
 	*bd = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.lead + n, req: tr.req, pos: tr.posTab, pic: words}
@@ -87,10 +86,20 @@ func towerPixels(t *testing.T, s *Instance, img image.Image) ([]float32, square)
 // violation: a picture resized to the rounded size without the area's
 // bound, and the patches in raster order.
 func TestQwen2VLTowerMatchesTransformers(t *testing.T) {
-	m, g := openQVLTower(t, "synth-qwen2vl")
+	for _, name := range qvlTowers {
+		t.Run(name, func(t *testing.T) { qwen2VLTowerMatchesTransformers(t, name) })
+	}
+}
+
+// qvlTowers are the Qwen2-VL family fixtures whose towers the converter
+// states: Qwen2-VL's, and Qwen2.5-VL's with its windows.
+var qvlTowers = []string{"synth-qwen2vl", "synth-qwen25vl"}
+
+func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
+	m, g := openQVLTower(t, name)
 	defer m.Close()
 	tg := m.tower
-	if tg == nil || tg.fit.factor != 28 || tg.merge != 2 || tg.gridDiv != 2 || tg.table == nil || len(tg.classes) < 2 {
+	if tg == nil || tg.fit.factor != 28 || tg.gridDiv != 2 || tg.table == nil || len(tg.classes) < 2 {
 		t.Fatalf("the tower is %+v: want a size of its own in multiples of 28, 2x2 merge windows, a rotary", tg)
 	}
 	s := m.NewInstance(64)
@@ -143,9 +152,20 @@ func TestQwen2VLTowerMatchesTransformers(t *testing.T) {
 		t.Fatalf("the tower's rows are NMSE %.3e from transformers' (bound 2e-3)", nmse)
 	}
 	clean := append([]float32(nil), rows...)
-	tg.merge = 0
-	bad, err := s.EncodePicture(img)
-	tg.merge = 2
+	// The violation: a tower whose patches and rotary lie in raster order.
+	rec := m.container.Vision().Tower
+	was := rec.Entry.Ops[0].Width
+	rec.Entry.Ops[0].Width = 0
+	raster, err := m.buildTowerGraphs()
+	rec.Entry.Ops[0].Width = was
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.tower = raster
+	rs := m.NewInstance(64)
+	bad, err := rs.EncodePicture(img)
+	rs.Close()
+	m.tower = tg
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,25 +181,28 @@ func TestQwen2VLTowerMatchesTransformers(t *testing.T) {
 // continuation, and holds every row's logits to transformers'
 // Qwen2VLForConditionalGeneration: the tower's rows, the M-RoPE grid they
 // stand on and the text model's turn of them. The reference's tower is f32
-// and the engine's runs Q8_0 matrices on int8 activations, which moves the
-// rows by what TestQwen2VLTowerMatchesTransformers logs; the text model is
+// and the engine's runs Q8_0 matrices on int8 activations; the text model is
 // f32 on both sides (the M-RoPE gates hold it at 1e-12), so the bound is
-// that movement's, with no argmax flipped. The violation is the picture's
-// rows laid out as text.
+// twice what that arithmetic alone moves the logits -- transformers' own
+// tower at it (embd_a8) under the text model -- with no argmax flipped. The
+// violation is the picture's rows laid out as text.
 func TestQwen2VLMatchesTransformers(t *testing.T) {
-	m, g := openQVLTower(t, "synth-qwen2vl")
+	for _, name := range qvlTowers {
+		t.Run(name, func(t *testing.T) { qwen2VLMatchesTransformers(t, name) })
+	}
+}
+
+func qwen2VLMatchesTransformers(t *testing.T, name string) {
+	m, g := openQVLTower(t, name)
 	defer m.Close()
 	img := rgbPicture(g.Image.RGB, g.Image.W, g.Image.H)
-	run := func(grid bool) [][]float32 {
+	picture, err := m.PictureSpan(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(sp Span) [][]float32 {
 		t.Helper()
-		sp, err := m.PictureSpan(img)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !grid {
-			sp.Grid = ImageGrid{}
-		}
-		s := m.NewInstance(len(g.Pre) + sp.PicRows + len(g.Post) + len(g.Cont) + 1)
+		s := m.NewInstance(len(g.Pre) + sp.n(m.Cfg.NEmbd) + len(g.Post) + len(g.Cont) + 1)
 		defer s.Close()
 		lg, err := s.PrefillMixed(Span{Tokens: g.Pre}, sp, Span{Tokens: g.Post})
 		if err != nil {
@@ -208,23 +231,37 @@ func TestQwen2VLMatchesTransformers(t *testing.T) {
 		}
 		return w, flips
 	}
-	clean, flips := worst(run(true))
-	t.Logf("%d rows: worst NMSE %.3e against transformers, %d argmax flips", len(g.Logits), clean, flips)
-	if !(clean < 5e-3) || flips > 0 {
-		t.Fatalf("worst NMSE %.3e against transformers (bound 5e-3), %d argmax flips", clean, flips)
+	// What the tower's arithmetic alone moves the logits by: transformers'
+	// own tower at the engine's arithmetic (embd_a8) under the text model.
+	arith, _ := worst(run(Span{Embd: g.Image.EmbdA8, Grid: picture.Grid}))
+	clean, flips := worst(run(picture))
+	t.Logf("%d rows: worst NMSE %.3e against transformers, %d argmax flips (its tower's arithmetic alone moves them %.3e)",
+		len(g.Logits), clean, flips, arith)
+	if !(arith > 0) || !(clean < 2*arith) || flips > 0 {
+		t.Fatalf("worst NMSE %.3e against transformers (bound twice the arithmetic's %.3e), %d argmax flips", clean, arith, flips)
 	}
-	bad, _ := worst(run(false))
+	text := picture
+	text.Grid = ImageGrid{}
+	bad, _ := worst(run(text))
 	if !(bad > 100*math.Max(clean, 1e-12)) {
 		t.Fatalf("VIOLATION: the picture laid out as text reads %.3e against a clean %.3e", bad, clean)
 	}
 	t.Logf("violation (the picture as text): %.3e", bad)
 }
 
-// TestQwen2VLSeesThePicture is the real checkpoint: Qwen2-VL-2B-Instruct
-// names the colours of the quadrant picture and none in the blank one.
+// TestQwen2VLSeesThePicture is the real checkpoints: Qwen2-VL-2B-Instruct
+// and Qwen2.5-VL-3B-Instruct, its windowed tower, name the colours of the
+// quadrant picture and fewer in a blank one.
 func TestQwen2VLSeesThePicture(t *testing.T) {
-	text := testmodels.Path("Qwen2-VL-2B-Instruct-Q4_K_M.gguf")
-	mm := testmodels.Path("mmproj-Qwen2-VL-2B-Instruct-f16.gguf")
+	for _, c := range []struct{ name, text, mm string }{
+		{"qwen2vl-2b", "Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "mmproj-Qwen2-VL-2B-Instruct-f16.gguf"},
+		{"qwen25vl-3b", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"},
+	} {
+		t.Run(c.name, func(t *testing.T) { qwen2VLSeesThePicture(t, testmodels.Path(c.text), testmodels.Path(c.mm)) })
+	}
+}
+
+func qwen2VLSeesThePicture(t *testing.T, text, mm string) {
 	if !sourcePresent(text, mm) {
 		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
 	}

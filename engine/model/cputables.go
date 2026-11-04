@@ -20,6 +20,9 @@ type cpuTableState struct {
 	rows      []uint32
 	// zero is the marks a model of no marks binds, one empty block.
 	zero [1]uint32
+	// req and pos are a grid table's request and rows (a tower's picture):
+	// the grid's width, and the live rows and their positions.
+	req, pos []uint32
 }
 
 // cpuPlaceTables composes the rotary tables' graphs for the CPU at the
@@ -37,7 +40,12 @@ func (s *Instance) cpuPlaceTables() {
 			continue
 		}
 		s.cpuComposeTable(&st.one[i], g, 1)
-		s.cpuComposeTable(&st.many[i], g, cpuRowsCap)
+		// A tower's grid table turns a picture's rows in one call.
+		many := cpuRowsCap
+		if s.towered() {
+			many = s.maxSeq
+		}
+		s.cpuComposeTable(&st.many[i], g, many)
 		for _, hf := range []*cpuHeadForm{&st.one[i], &st.many[i]} {
 			if hf.f != nil {
 				u = max(u, hf.f.Unit, hf.f.Rows)
@@ -92,8 +100,8 @@ func (s *Instance) rotaries() []graph.Rotary {
 	if !s.towered() {
 		return composing{s.m.container, s.m}.Rotaries()
 	}
-	if b := &s.m.container.Vision().Tower.Block; len(b.Rope.Runs) > 0 {
-		return []graph.Rotary{towerRotaryOf(b)}
+	if t := s.m.container.Vision().Tower; len(t.Block.Rope.Runs) > 0 {
+		return []graph.Rotary{towerRotaryOf(t)}
 	}
 	return nil
 }
@@ -110,16 +118,14 @@ func (s *Instance) tablePlanes(i int) []float32 {
 	return nil
 }
 
-// marksCap is the most rotary marks a sequence of the instance holds: a
-// tower's picture's one grid, or the model's (ropeMarksCap).
+// marksCap is the most rotary marks a sequence of the instance holds: none
+// on a tower's, whose table reads its rows' cells (towerRotary), the model's
+// on any other (ropeMarksCap).
 func (s *Instance) marksCap() int {
-	if !s.towered() {
-		return s.m.ropeMarksCap(s.maxSeq)
+	if s.towered() {
+		return 0
 	}
-	if s.m.tower.table != nil {
-		return 1
-	}
-	return 0
+	return s.m.ropeMarksCap(s.maxSeq)
 }
 
 // ropeMarksCap is the most rotary marks a sequence of maxSeq positions holds:
@@ -156,6 +162,18 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 		f, why := hf.formOf()
 		if why != composer.DeclineServes {
 			return fmt.Errorf("model: the rotary table %d on the CPU: %s: %w", i, why, hf.err)
+		}
+		if st.pos != nil {
+			// A grid table reads the picture's rows and request whole.
+			if f.Rows < rows {
+				return fmt.Errorf("model: the grid table on the CPU turns %d rows, a picture's %d", f.Rows, rows)
+			}
+			b := &s.cpu.bound
+			*b = cpuBound{li: cpuTablesBlock, own: s.cpu.dev.Own(f), n: rows, req: st.req, pos: st.pos, ropeMarks: st.zero[:]}
+			b.cs, b.csSWA = outs[0], outs[1]
+			s.cpu.call[0] = uint32(rows)
+			s.cpuRunForm(b, f)
+			continue
 		}
 		for r0 := 0; r0 < rows; {
 			k := min(f.Rows, rows-r0)

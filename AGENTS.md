@@ -919,17 +919,20 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   device, never withheld by the model (RULE 8a). A vision block is one
   submission: bidirectional attention needs every row's k and v first.
 - Gates: `jlm.TestTowerRefusesWhatItCannotRead`, each stater's
-  `convert.Test*StatesItsTower` (SmolVLM, Gemma 3, llava, InternVL, Qwen2-VL),
-  `TestStatedTowerComposesOnTheCPU`, `TestStatedTowerBlocksArePagedBlocks`,
+  `convert.Test*StatesItsTower` (SmolVLM, Gemma 3, llava, InternVL, Qwen2-VL,
+  Qwen2.5-VL), `TestStatedTowerComposesOnTheCPU`, `TestStatedTowerBlocksArePagedBlocks`,
   `TestStatedTowerEncodesAPicture`, `TestWarmImageEncodeDoesNotAllocate`,
   `TestStatedTowerSeesThePicture` and each family's `Test*TowerSeesThePicture`
   (a blank picture is the violation), `TestStatedTowerRunsOnTheCard` (every
   block and a partial seam, against the CPU), `TestQwen2VLTowerMatchesTransformers`
-  (the processor's samples, every one, and the tower's rows),
+  (Qwen2-VL's and Qwen2.5-VL's: the processor's samples, every one, and the
+  tower's rows),
   `TestQwen2VLMatchesTransformers`, the M-RoPE gates (`TestMRope*`, the text
   side on transformers' own tower rows), `TestChatSpansFollowTheTemplate`,
   `TestPictureFormatsEncodeAsTheirPixels`, `composer.TestComposedCPUPicture*`,
-  `composer.TestComposedCPURegroup`; through the front ends
+  `composer.TestComposedCPURegroup`, `composer.TestComposedCPUPatchifyTiles`
+  and `composer.TestComposedCPUUntile` (the windows' order, against
+  get_window_index); through the front ends
   `server.TestImageRequestsMatchTheEngine`, `cmd/jitllm.TestImageRunsThroughTheTower`
   (a run restored past the picture answers alike) and
   `common/engine.TestAnAttachedPictureReachesTheModel` (a follow-up turn sees

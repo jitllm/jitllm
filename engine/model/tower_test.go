@@ -290,23 +290,24 @@ func seesThePicture(t *testing.T, m *Model, img image.Image) {
 	got, none := describePicture(t, m, img, 32), describePicture(t, m, grey, 32)
 	t.Logf("picture %q", got)
 	t.Logf("blank   %q", none)
-	if !namesAColour(got) {
-		t.Errorf("the description names none of the picture's colours: %q", got)
-	}
-	if namesAColour(none) {
-		t.Errorf("a blank picture has the picture's colours too (%q): the picture is not what answered", none)
+	// A model may make a colour up for a blank picture (Qwen2-VL-2B's "a
+	// person wearing a red shirt"); the picture's description names more of
+	// its colours than the blank's does, one at least (SmolVLM-256M names
+	// the disc alone).
+	if n := colours(got); n < 1 || n <= colours(none) {
+		t.Errorf("the description names %d of the picture's colours, the blank's %d: %q", n, colours(none), got)
 	}
 }
 
-// namesAColour reports whether a description names one of the test
-// picture's colours.
-func namesAColour(s string) bool {
+// colours is how many of the test picture's colours a description names.
+func colours(s string) int {
+	n := 0
 	for _, c := range []string{"red", "green", "blue", "yellow"} {
 		if strings.Contains(s, c) {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // describePicture is m's greedy description of pic in one sentence, n tokens
@@ -766,7 +767,7 @@ func TestInternVLTowerSeesThePicture(t *testing.T) {
 	}
 	got := describePicture(t, m, wide, 32)
 	t.Logf("wide    %q", got)
-	if !namesAColour(got) {
-		t.Errorf("the wide picture's description names none of its colours: %q", got)
+	if colours(got) < 1 {
+		t.Errorf("the wide picture's description names %d of its colours: %q", colours(got), got)
 	}
 }
