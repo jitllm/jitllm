@@ -260,7 +260,7 @@ func TestToolChoiceReachesTheTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, err := renderCompiled(tpl, src, "", "", nil, user, []byte(syntaxTools), c, true)
+		out, err := renderCompiled(tpl, src, "", "", nil, user, []byte(syntaxTools), c, true, false)
 		if err != nil {
 			t.Fatalf("%s: %v", file, err)
 		}

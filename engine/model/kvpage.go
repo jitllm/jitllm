@@ -1306,7 +1306,10 @@ func (s *Instance) PrefillCachedMixed(spans ...Span) ([]float32, error) {
 	key := s.spanKey(0, spans)
 	s.markRope(0, rows, next-rows)
 	return s.prefillCachedKey(key, rows, func(n int) ([]float32, error) {
-		enc := spans
+		enc, err := s.encodePictures(spans, n)
+		if err != nil {
+			return nil, err
+		}
 		src, err := s.spanSrc(enc)
 		if err != nil {
 			return nil, err

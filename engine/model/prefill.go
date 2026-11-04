@@ -3,6 +3,7 @@ package model
 import (
 	"cmp"
 	"fmt"
+	"image"
 	"time"
 
 	"github.com/jitllm/jitllm/composer"
@@ -70,6 +71,12 @@ type Span struct {
 	// prefix cache can name the pages that hold them and every page after.
 	// nil leaves them unnamed, and nothing from them on is cached.
 	Key *RowsKey
+	// Picture is a picture whose rows the prefill encodes through the model's
+	// tower, PicRows of them, when Embd is nil (Model.PictureSpan): a picture
+	// is a span of the prompt, not a stage before it, and one the prefix
+	// cache restores past runs no tower block.
+	Picture image.Image
+	PicRows int
 }
 
 // RowsKey names the content an embedding span's rows came from: a hash over
@@ -80,11 +87,14 @@ type RowsKey [32]byte
 func (k RowsKey) zero() bool { return k == RowsKey{} }
 
 // rows reports whether the span is rows rather than tokens.
-func (sp Span) rows() bool { return sp.Embd != nil }
+func (sp Span) rows() bool { return sp.Embd != nil || sp.Picture != nil }
 
 func (sp Span) n(nEmbd int) int {
 	if sp.Embd != nil {
 		return len(sp.Embd) / nEmbd
+	}
+	if sp.Picture != nil {
+		return sp.PicRows
 	}
 	return len(sp.Tokens)
 }
@@ -99,6 +109,10 @@ func (s *Instance) PrefillMixed(spans ...Span) ([]float32, error) {
 // prefillMixedAt is PrefillMixed into one sequence slot.
 func (s *Instance) prefillMixedAt(slot int, spans ...Span) ([]float32, error) {
 	defer s.m.enterPager()()
+	spans, err := s.encodePictures(spans, 0)
+	if err != nil {
+		return nil, err
+	}
 	src, err := s.spanSrc(spans)
 	if err != nil {
 		return nil, err

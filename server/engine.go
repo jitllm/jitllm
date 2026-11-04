@@ -2280,10 +2280,36 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt, name string) ([]int32, error)
 	return nil, fmt.Errorf("%w: unknown prompt kind %d", ErrInvalid, p.Kind)
 }
 
-// pictureSpans refuses a chat with pictures by name: no tower runs them yet,
-// and a picture is never run left out of its prompt.
+// pictureSpans lays a chat with pictures out as spans: the template's text,
+// and each picture where its message's image part stands, which the prefill
+// encodes through the model's tower (model.Model.PictureSpan).
 func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
-	return nil, fmt.Errorf("%w: model %q does not accept images: no tower runs pictures yet", ErrInvalid, s.lm.id)
+	ch, m := o.Prompt.Chat, s.lm.m
+	if !m.SeesPictures() {
+		return nil, fmt.Errorf("%w: model %q does not accept images: it carries no vision tower", ErrInvalid,
+			s.lm.called(o.ModelName))
+	}
+	if !m.ChatCapable() {
+		return nil, fmt.Errorf("%w: model %q carries no chat template, so its pictures have no place in "+
+			"the prompt", ErrInvalid, s.lm.called(o.ModelName))
+	}
+	pics := make([]model.Span, len(ch.Images))
+	for i, img := range ch.Images {
+		sp, err := m.PictureSpan(img)
+		if err != nil {
+			return nil, fmt.Errorf("%w: picture %d: %v", ErrInvalid, i, err)
+		}
+		pics[i] = sp
+	}
+	msgs := ch.Messages
+	if ch.HasSystem {
+		msgs = append([]model.ChatMessage{{Role: "system", Content: ch.System}}, msgs...)
+	}
+	sp, err := m.ChatSpansToolChoice(msgs, pics, ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return sp, nil
 }
 
 // ---------------------------------------------------------------- streaming text

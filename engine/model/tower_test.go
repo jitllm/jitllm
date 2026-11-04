@@ -263,12 +263,11 @@ func TestStatedTowerEncodesAPicture(t *testing.T) {
 // are described with the disc's colour, and a blank grey picture is not
 // called yellow -- a tower wired to nothing still answers fluently, so the
 // blank is the violation. The prompt is SmolVLM's own template's, its
-// picture's markers the container's (jlm.TowerSpan).
+// picture's markers the container's (jlm.TowerSpan), laid out by ChatSpans.
 func TestStatedTowerSeesThePicture(t *testing.T) {
 	m, img := openSmolVLM(t)
 	defer m.Close()
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	span := m.container.Vision().Tower.Span
 	ask := func(pic image.Image) string {
 		t.Helper()
 		s := m.NewInstance(256)
@@ -277,10 +276,12 @@ func TestStatedTowerSeesThePicture(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		pre := m.Vocab.EncodeSpecial("<|im_start|>User:", false)
-		post := m.Vocab.EncodeSpecial("Describe this image in one sentence.<end_of_utterance>\nAssistant:", false)
-		lg, err := s.PrefillMixed(Span{Tokens: pre}, Span{Tokens: span.Before}, Span{Embd: rows},
-			Span{Tokens: span.After}, Span{Tokens: post})
+		spans, err := m.ChatSpans([]ChatMessage{{Role: "user", Content: "Describe this image in one sentence.",
+			Images: 1}}, []Span{{Embd: rows}}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lg, err := s.PrefillMixed(spans...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -310,5 +311,74 @@ func TestStatedTowerSeesThePicture(t *testing.T) {
 	}
 	if strings.Contains(none, "yellow") {
 		t.Errorf("a blank picture is yellow too (%q): the picture is not what answered", none)
+	}
+}
+
+// flatSpans lays spans out as one id sequence with -1 where a picture goes,
+// so a whole prompt is one comparison.
+func flatSpans(spans []Span) []int32 {
+	var out []int32
+	for _, sp := range spans {
+		if sp.Embd != nil {
+			out = append(out, -1)
+			continue
+		}
+		out = append(out, sp.Tokens...)
+	}
+	return out
+}
+
+// TestChatSpansFollowTheTemplate pins the picture's marker sequence, which no
+// numerical gate sees: with every marker wrong the picture still arrives,
+// unannounced. The markers are mtmd's (tools/mtmd/mtmd.cpp at b10825), which
+// the converter states in the container:
+//
+//	tok_ov_img_start = {"\n\n", "<fake_token_around_image>", "<global-img>"}
+//	tok_ov_img_end   = {"<fake_token_around_image>"}
+//
+// and the turn is SmolVLM's own template's, which departs from mtmd by one
+// token on purpose: it writes "User:" before an image-led turn, where mtmd
+// emits "User: ". The placeholder ("<image>") is read off the template.
+func TestChatSpansFollowTheTemplate(t *testing.T) {
+	m, _ := openSmolVLM(t)
+	defer m.Close()
+	rows := make([]float32, m.tower.out*m.Cfg.NEmbd)
+	one := []ChatMessage{{Role: "user", Content: "Describe the image.", Images: 1}}
+	spans, err := m.ChatSpans(one, []Span{{Embd: rows}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	//                <|im_start|> User  :   \n\n  <fake…> <global-img> IMG <fake…>
+	want := []int32{1, 11126, 42, 1116, 49189, 49152, -1, 49189,
+		// Describe  the  image  .  <end_of_utterance>  \n  Ass  istant  :
+		37964, 260, 2443, 30, 49279, 198, 9519, 9531, 42}
+	if got := flatSpans(spans); !slices.Equal(got, want) {
+		t.Fatalf("spans\n  got  %v\n  want %v", got, want)
+	}
+	for _, sp := range spans {
+		if sp.Embd != nil && &sp.Embd[0] != &rows[0] {
+			t.Error("the picture's span copied its rows instead of referring to them")
+		}
+	}
+	if got, want := SpanPositions(spans, m.Cfg.NEmbd), len(want)-1+m.tower.out; got != want {
+		t.Errorf("SpanPositions %d, want %d", got, want)
+	}
+	// The refusals, each of which would otherwise put a picture on the wrong
+	// turn or none at all.
+	if _, err := m.ChatSpans(one, nil, true); err == nil {
+		t.Error("one image and no picture was accepted")
+	}
+	lit := []ChatMessage{{Role: "user", Content: "what is <image>?", Images: 1}}
+	if _, err := m.ChatSpans(lit, []Span{{Embd: rows}}, true); err == nil {
+		t.Error("user text holding the placeholder shifted the picture count and was accepted")
+	}
+	if _, err := m.ChatSpans(one, []Span{{Embd: rows[:len(rows)-1]}}, true); err == nil {
+		t.Error("a picture of a ragged row was accepted")
+	}
+	if _, err := m.ChatIDs(one, true); err == nil {
+		t.Error("ChatIDs tokenized an image placeholder as text")
+	}
+	if _, err := m.ChatPrompt(one, true); err == nil {
+		t.Error("ChatPrompt rendered an image part as text")
 	}
 }

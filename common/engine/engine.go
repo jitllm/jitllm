@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -397,7 +398,7 @@ func (e *Engine) activate(en *entry) error {
 	// is switched off at load rather than failing every turn.
 	summary := e.headerNow().String()
 	chatOK := m.ChatCapable()
-	vision := false
+	vision := m.SeesPictures()
 	var blocks []byte
 	var alloc session.Allocation
 	e.inspect(func(st *model.Instance) {
@@ -927,10 +928,43 @@ func hasImages(r session.ChatRequest) bool {
 	return false
 }
 
-// imageSpans refuses a request carrying pictures: no tower runs them yet, and
-// a picture is never run left out of its prompt.
-func (e *Engine) imageSpans(session.ChatRequest) ([]model.Span, error) {
-	return nil, fmt.Errorf("no tower runs pictures yet, so the loaded model cannot take one")
+// imageSpans is a request carrying pictures as spans: each picture file
+// decoded and laid out where its turn's image part stands, which the prefill
+// encodes through the model's tower. Completion mode goes through the
+// template too, since a picture's place is the template's.
+func (e *Engine) imageSpans(r session.ChatRequest) ([]model.Span, error) {
+	if !e.m.SeesPictures() {
+		return nil, fmt.Errorf("the loaded model carries no vision tower, so it cannot take a picture")
+	}
+	var pics []model.Span
+	for _, m := range r.Messages {
+		for _, p := range m.Images {
+			img, err := decodePicture(p)
+			if err != nil {
+				return nil, err
+			}
+			sp, err := e.m.PictureSpan(img)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", p, err)
+			}
+			pics = append(pics, sp)
+		}
+	}
+	return e.m.ChatSpans(chatMessages(r), pics, true)
+}
+
+// decodePicture is the picture in the file at path.
+func decodePicture(path string) (image.Image, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return img, nil
 }
 
 // display is the decoded text made safe to put on screen.

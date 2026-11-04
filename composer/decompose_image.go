@@ -152,7 +152,7 @@ func decomposeRegroup(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	U := ir.U32
 	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
-	R, E := sh[0], ish[1]
+	R, E := ish[0], ish[1]
 	var x exprs
 	g, j := x.coord(0), x.coord(1)
 	u := func(v int) int { return x.u(uint32(v)) }
@@ -164,7 +164,7 @@ func decomposeRegroup(o graph.Op, c *Context) ([]Prim, error) {
 	p := x.op(OpAdd, U, x.op(OpMul, U, row, gw), colm)
 	x.at(0, ish, x.op(OpMin, U, p, u(R-1)), e)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
-		Facts: Facts{Extents: map[int]int{1: RequestRows + R}}}}, nil
+		Facts: Facts{Extents: map[int]int{1: RequestRows + sh[0]}}}}, nil
 }
 
 // decomposeLeadRow is the input with its first Offset rows each the
@@ -207,10 +207,10 @@ func decomposeDropRows(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a row drop of %d operands", len(o.In))
 	}
 	U := ir.U32
-	sh := c.rows(o.Out[0])
+	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
 	var x exprs
-	at := x.op(OpMin, U, x.op(OpAdd, U, x.coord(0), x.u(uint32(o.Attr.Offset))), x.u(uint32(sh[0]-1)))
-	x.at(0, sh, at, x.coord(1))
+	at := x.op(OpMin, U, x.op(OpAdd, U, x.coord(0), x.u(uint32(o.Attr.Offset))), x.u(uint32(ish[0]-1)))
+	x.at(0, ish, at, x.coord(1))
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
 

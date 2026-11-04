@@ -91,8 +91,10 @@ type Instance struct {
 	// them (cpuserve.go).
 	cpu cpuState
 	// tower is the instance's run of its model's vision tower (tower.go),
-	// nil for a model with none.
-	tower *towerRun
+	// nil for a model with none and, with towerErr why, for one whose tower
+	// did not compose.
+	tower    *towerRun
+	towerErr error
 	// bidirAll makes a mixed prompt's every row one bidirectional run
 	// (bidirRuns): a non-causal decoder's prompt with pictures in it.
 	bidirAll bool
@@ -563,9 +565,10 @@ func (m *Model) newInstanceOver(c *Config, nseq, maxSeq, lo, hi int) *Instance {
 	}
 	s.cpuPlace()
 	// A text instance of a model with a tower runs its pictures through a
-	// tower run of its own, composed with it (tower.go).
+	// tower run of its own, composed with it (tower.go); one that does not
+	// compose keeps its error for the picture that asks.
 	if c == m.Cfg && m.tower != nil && s.cpu.formErr == nil {
-		if s.tower, s.cpu.formErr = m.newTowerRun(); s.cpu.formErr != nil {
+		if s.tower, s.towerErr = m.newTowerRun(); s.towerErr != nil {
 			s.tower = nil
 		}
 	}

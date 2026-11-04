@@ -15,6 +15,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"image"
+	_ "image/gif" // a GIF's first frame, which image.Decode returns
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"os"
 	"path/filepath"
@@ -481,13 +485,16 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			ids = append(ids, ids[i%base])
 		}
 	}
-	// A picture's rows come from a tower, and a container that carries one is
-	// refused at open until its tower runs as the model's own blocks.
-	if imgPath != "" {
-		return fmt.Errorf("-image: no tower runs pictures yet; a container that carries one is refused at open")
-	}
+	// A picture is a span of the prompt where the chat template puts its image
+	// part, which the prefill encodes through the model's tower.
 	var spans []model.Span
 	extra := 0
+	if imgPath != "" {
+		if spans, err = imageSpans(m, imgPath, prompt, chat); err != nil {
+			return err
+		}
+		extra = model.SpanPositions(spans, m.Cfg.NEmbd) - len(ids)
+	}
 	// Whether the pool spins or parks between regions is decided per token by
 	// the engine, by whether the token paged anything in (model.Instance.forward);
 	// JITLLM_SPIN_US still fixes it.
@@ -703,6 +710,11 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	restored := 0
 	specFirst := int32(-1)
 	switch {
+	case spans != nil && kvCacheDir != "":
+		logits, err = st.PrefillCachedMixed(spans...)
+		restored = st.KVRestored()
+	case spans != nil:
+		logits, err = st.PrefillMixed(spans...)
 	case kvCacheDir != "":
 		logits, err = st.PrefillCached(ids)
 		// A hybrid's recurrent summaries are stored beside its KV pages under
@@ -1884,4 +1896,36 @@ func rateOf(n int, d time.Duration) string {
 		return "rate under the clock's resolution"
 	}
 	return fmt.Sprintf("%.2f tok/s", float64(n)/d.Seconds())
+}
+
+// imageSpans is -image's prompt: the picture at path where the chat template
+// writes its image part in a user turn of prompt (after chat's system prompt
+// when it gives one), which the prefill encodes through the tower. A
+// completion prompt has no place for a picture, so -image takes the template.
+func imageSpans(m *model.Model, path, prompt string, chat *chatSpec) ([]model.Span, error) {
+	if !m.SeesPictures() {
+		return nil, fmt.Errorf("-image: the model carries no vision tower")
+	}
+	if !m.HasChatTemplate() {
+		return nil, fmt.Errorf("-image: the model carries no chat template, so its picture has no place in the prompt")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("-image: %w", err)
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil, fmt.Errorf("-image: %s: %w", path, err)
+	}
+	pic, err := m.PictureSpan(img)
+	if err != nil {
+		return nil, fmt.Errorf("-image: %s: %w", path, err)
+	}
+	var msgs []model.ChatMessage
+	if chat != nil && chat.system != "" {
+		msgs = append(msgs, model.ChatMessage{Role: "system", Content: chat.system})
+	}
+	msgs = append(msgs, model.ChatMessage{Role: "user", Content: prompt, Images: 1})
+	return m.ChatSpans(msgs, []model.Span{pic}, true)
 }
