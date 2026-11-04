@@ -16,36 +16,22 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// imagePathFiles() is the image path in engine/model: preprocessing, the
-// position tables built per grid and the projector heads. Every op a pixel or
-// a patch passes through there is generated code (AGENTS.md RULE 8), and
-// TestImagePathRunsGeneratedCode reads that off the source more strictly than
-// TestNoGoComputeOnTheInferencePath does for the engine as a whole.
-func imagePathFiles() []string {
-	return []string{
-		"image.go", "imageproc.go", "resampler.go", "qwen3vit.go", "glmvit.go", "kimivit.go", "phi4vision.go",
-		"llama4vision.go", "gemma4vision.go", "slices.go", "qwenvit.go", "pixtral.go", "hunyuanvit.go",
-	}
-}
-
 // imagePathAllowed() is every image-path function the gate finds, and why it
 // is not per-element compute. An entry that no longer matches fails the gate,
 // as goComputeAllowed()'s do.
 func imagePathAllowed() map[string]string {
 	return map[string]string{
-		"imageproc.go:aaFloats": "the antialiased resize's filter taps in float64: geometry from the sizes, " +
-			"O(output x support) once per picture (and once per grid for Phi-4's position table)",
-		"imageproc.go:aaWeights": "the same taps in fixed point and the precision they share: geometry from the sizes, once per picture",
-		"image.go:bilinearTaps":  "the bilinear path's resampling matrix: two taps per output from the sizes, once per picture",
-		"imageproc.go:normLUT":   "the normalisation's 256 entries per channel from the tower's mean and std; PixLUT reads it per sample",
-		"llama4vision.go:bf16NormLUT": "Llama 4's bfloat16 normalisation's 256 entries per channel, the same table read " +
-			"the same way",
-		"slices.go:slicedGrid": "MiniCPM-V's slice grid: a log of an aspect ratio per candidate grid, from the picture's sizes",
+		"model.go:AttnTemp":     "Llama 4's attention temperature at a position, the config's statement its gates read; the composed blocks state it as ops",
+		"model.go:configFrom":   "YaRN's attention scale from the config, once at open",
+		"hotness.go:ExpertUses": "expert-use accounting for the report",
+		"wav.go:DecodeWAV":      "a WAV container's 16-bit PCM read into floats: a format decoder, as image/png's is for a picture",
 	}
 }
 
-// TestImagePathRunsGeneratedCode is the image path's source gate. In the files
-// of imagePathFiles() it fails on
+// TestImagePathRunsGeneratedCode is the image path's source gate. A picture
+// enters the model as the graph's ops (OpPatchify and the tower's blocks),
+// so the gate reads every file of engine/model, where any Go of the image
+// path lands, and fails on
 //
 //   - a transcendental math call (Sin, Cos, Pow, Exp, Log ...) anywhere --
 //     the resampler's sin/cos table and the position-table weights were these
@@ -84,7 +70,7 @@ func TestImagePathRunsGeneratedCode(t *testing.T) {
 			files = append(files, f)
 		}
 	}
-	found := imagePathFindings(t, fset, files, "engine/model", imagePathFiles())
+	found := imagePathFindings(t, fset, files, "engine/model", nil)
 	var keys []string
 	for k := range found {
 		keys = append(keys, k)
@@ -164,7 +150,8 @@ func resizeTo(w, h int) (int, int) {
 }
 
 // imagePathFindings type-checks files as package pkg and returns, keyed
-// "file:func" for the functions in only, each finding's line and reason.
+// "file:func" for the functions of the files only names (every file where
+// only is empty), each finding's line and reason.
 func imagePathFindings(t *testing.T, fset *token.FileSet, files []*ast.File, pkg string, only []string) map[string][]string {
 	t.Helper()
 	info := &types.Info{
@@ -253,7 +240,7 @@ func imagePathFindings(t *testing.T, fset *token.FileSet, files []*ast.File, pkg
 	found := map[string][]string{}
 	for _, f := range files {
 		name := filepath.Base(fset.Position(f.Pos()).Filename)
-		if !want[name] {
+		if len(only) > 0 && !want[name] {
 			continue
 		}
 		for _, d := range f.Decls {

@@ -12,7 +12,7 @@ by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the
 - **61** graphs in all (`jlm.Arch`)
 - **19** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **3** embedding encoders, and pooling on any decoder
-- **15** weight types read (`quant.Dequantable`), **11** of them packed quantizations (`quant.PackedTypes`)
+- **15** weight types read (`quant.Dequantable`), **11** of them packed quantizations (`quant.PackedTypes()`)
 - **87** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
 
 ## Text architectures

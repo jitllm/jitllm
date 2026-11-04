@@ -35,10 +35,12 @@ func main() {
     in := m.NewInstance(8192)
     defer in.Close()
 
+    // Sample with no sampler is the greedy token, drawn by the CPU
+    // device's composed head.
     logits, err := in.Prefill(ids)
     for err == nil && in.Pos() < 8192 {
-        id := model.Greedy(logits)
-        if m.Vocab.IsEOG(id) {
+        var id int32
+        if id, err = in.Sample(nil, logits); err != nil || m.Vocab.IsEOG(id) {
             break
         }
         fmt.Print(m.Vocab.Decode([]int32{id}))
@@ -88,21 +90,26 @@ func main() {
     defer s.Close()
     ids := m.Vocab.Encode("The sky is blue because", true)
     ctx := context.Background()
-    var logits []float32
+    // Each phase draws its next token on the instance it leased.
+    var id int32
     if err := s.Run(ctx, model.PhasePrefill, func(in *model.Instance) error {
-        logits, err = in.Prefill(ids)
+        logits, err := in.Prefill(ids)
+        if err != nil {
+            return err
+        }
+        id, err = in.Sample(nil, logits)
         return err
     }); err != nil {
         log.Fatal(err)
     }
-    for n := 0; n < 64; n++ {
-        id := model.Greedy(logits)
-        if m.Vocab.IsEOG(id) {
-            break
-        }
+    for n := 0; n < 64 && !m.Vocab.IsEOG(id); n++ {
         fmt.Print(m.Vocab.Decode([]int32{id}))
         if err := s.Run(ctx, model.PhaseGenerate, func(in *model.Instance) error {
-            logits, err = in.Forward(id)
+            logits, err := in.Forward(id)
+            if err != nil {
+                return err
+            }
+            id, err = in.Sample(nil, logits)
             return err
         }); err != nil {
             log.Fatal(err)
@@ -122,11 +129,11 @@ func main() {
 | `Session.SetKVStore`, `Instance.PrefillCached` | KV spill and prefix reuse |
 | `Instance.ShareKV`, `model.NewSharedStore` | one copy of a prompt prefix's pages across sessions |
 | `Instance.Park`, `Instance.Resume` | preemption: a session's history home and out to a store, then back |
-| `model.WithKVType` | the KV cache's format: f32, f16 or q8_0 |
+| `model.WithKVType` | the KV cache's format: f32 or f16 |
 | `Model.NewEmbedder` | embeddings |
-| `model.Batcher`, `model.StepRuns` | continuous batching: many sessions' rows in one step of an instance, on a device or the host |
+| `model.Batcher`, `model.StepRuns` | continuous batching: many sessions' rows in one step of an instance, on a card or the CPU device |
 
-See the [model API](../engine/model/) and the [device tier](../jit/gpu/tier/).
+See the [model API](../engine/model/) and the [card tier](../engine/device/gpu/).
 
 The desktop app (model downloads, conversion, text and image chat, memory and
 device views) is a separate module in [ui/](../ui/). Install it from a release

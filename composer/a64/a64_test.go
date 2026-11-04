@@ -1,4 +1,4 @@
-package cpu
+package a64
 
 import (
 	"encoding/binary"
@@ -238,12 +238,12 @@ func TestA64Encodings(t *testing.T) {
 	for _, tc := range a64Encodings() {
 		var a A64
 		tc.emit(&a)
-		if got := hex.EncodeToString(a.Bytes()); got != tc.want {
+		if got := hex.EncodeToString(bytesOf(t, &a)); got != tc.want {
 			t.Errorf("%s\n got  %s\n want %s", tc.name, got, tc.want)
 		}
-		if len(a.Bytes()) != 4 {
+		if len(bytesOf(t, &a)) != 4 {
 			t.Errorf("%s emitted %d bytes; A64 instructions are always 4",
-				tc.name, len(a.Bytes()))
+				tc.name, len(bytesOf(t, &a)))
 		}
 	}
 	t.Logf("%d A64 encodings byte-exact against clang's aarch64 assembler", len(a64Encodings()))
@@ -328,7 +328,7 @@ func TestA64FloatEncodings(t *testing.T) {
 	for _, tc := range a64FloatEncodings() {
 		var a A64
 		tc.emit(&a)
-		b := a.Bytes()
+		b := bytesOf(t, &a)
 		if len(b) != 4 {
 			t.Fatalf("%s: %d bytes", tc.name, len(b))
 		}
@@ -350,7 +350,7 @@ func TestA64Disassembles(t *testing.T) {
 	for _, tc := range a64Encodings() {
 		tc.emit(&a)
 	}
-	stream := a.Bytes()
+	stream := bytesOf(t, &a)
 
 	var in strings.Builder
 	for _, b := range stream {
@@ -382,7 +382,7 @@ func TestA64Labels(t *testing.T) {
 	a.SUBimm(X9, X9, 1) // d1000529
 	a.CBNZ(X9, top)     // b5ffffc9, imm19 = -2 instructions
 	a.RET()             // d65f03c0
-	if got := hex.EncodeToString(a.Bytes()); got != "2094824e290500d1c9ffffb5c0035fd6" {
+	if got := hex.EncodeToString(bytesOf(t, &a)); got != "2094824e290500d1c9ffffb5c0035fd6" {
 		t.Errorf("loop encoded as %s", got)
 	}
 
@@ -395,7 +395,7 @@ func TestA64Labels(t *testing.T) {
 	f.SDOT(V0, V1, V2)
 	f.Bind(done)
 	f.RET()
-	b := f.Bytes()
+	b := bytesOf(t, &f)
 	if len(b) != 16 {
 		t.Fatalf("got %d bytes, want 16", len(b))
 	}
@@ -406,19 +406,14 @@ func TestA64Labels(t *testing.T) {
 
 	var d A64
 	d.CBNZ(X0, d.Label()) // never bound
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Error("Bytes() returned code with an unbound label")
-			}
-		}()
-		d.Bytes()
-	}()
+	if _, err := d.Bytes(); err == nil {
+		t.Error("Bytes() returned code with an unbound label")
+	}
 }
 
 // TestA64RejectsBadOffsets: a scaled offset that is not a multiple of its
 // access size would silently truncate to a different valid address ((8/16)<<10
-// is 0), so the emitter must panic instead.
+// is 0), so the emitter must refuse it instead.
 func TestA64RejectsBadOffsets(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -438,15 +433,11 @@ func TestA64RejectsBadOffsets(t *testing.T) {
 		{"ushr shift 9", func(a *A64) { a.USHR16b(V0, V1, 9) }},
 		{"fmla element 4", func(a *A64) { a.FMLAelem(V0, V1, V2, 4) }},
 	} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("%s: emitted silently instead of panicking", tc.name)
-				}
-			}()
-			var a A64
-			tc.emit(&a)
-		}()
+		var a A64
+		tc.emit(&a)
+		if _, err := a.Bytes(); err == nil {
+			t.Errorf("%s: emitted silently instead of refusing", tc.name)
+		}
 	}
 }
 
@@ -476,7 +467,7 @@ func TestMOVimmShifted(t *testing.T) {
 	} {
 		var a A64
 		a.MOVimm(X0, c.imm)
-		got := binary.LittleEndian.Uint32(a.Bytes())
+		got := binary.LittleEndian.Uint32(bytesOf(t, &a))
 		if got != c.want {
 			t.Errorf("MOVimm(x0, %#x) = %#08x, want %#08x", c.imm, got, c.want)
 		}
@@ -486,8 +477,18 @@ func TestMOVimmShifted(t *testing.T) {
 	func() {
 		var a A64
 		a.MOVimm(X0, 0x12345)
-		if n := len(a.Bytes()); n != 8 {
+		if n := len(bytesOf(t, &a)); n != 8 {
 			t.Errorf("MOVimm(x0, 0x12345) emitted %d bytes, want 8 (movz + movk)", n)
 		}
 	}()
+}
+
+// bytesOf is a's code, the test failed on any error emitting it met.
+func bytesOf(t testing.TB, a *A64) []byte {
+	t.Helper()
+	b, err := a.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

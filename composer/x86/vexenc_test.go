@@ -1,6 +1,6 @@
 //go:build amd64
 
-package cpu
+package x86
 
 import (
 	"testing"
@@ -65,7 +65,7 @@ func TestVEXEncodingMatchesObjdump(t *testing.T) {
 	for _, c := range cases {
 		var a Buf
 		c.emit(&a)
-		b := a.Bytes()
+		b := bytesOf(t, &a)
 		if got := disasmIntel(t, dir, "enc", b); got != c.want {
 			t.Errorf("%s: emitted % x\n  objdump: %q\n  want:    %q", c.name, b, got, c.want)
 		}
@@ -77,7 +77,7 @@ func TestVEXEncodingMatchesObjdump(t *testing.T) {
 	a.JZ(l)
 	a.TESTQ(RAX, RAX)
 	a.Bind(l)
-	if got := disasmIntel(t, dir, "jz", a.Bytes()); got == "" {
+	if got := disasmIntel(t, dir, "jz", bytesOf(t, &a)); got == "" {
 		t.Error("jz: nothing disassembled")
 	}
 }

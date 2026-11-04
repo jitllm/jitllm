@@ -1,4 +1,4 @@
-package cpu
+package a64
 
 import "testing"
 
@@ -76,7 +76,7 @@ func TestA64OpsMatchLLVM(t *testing.T) {
 	} {
 		var a A64
 		c.emit(&a)
-		b := a.Bytes()
+		b := bytesOf(t, &a)
 		if len(b) != 4 {
 			t.Errorf("%s: %d bytes", c.what, len(b))
 			continue
@@ -94,7 +94,7 @@ func TestA64MOVconstMakesTheValue(t *testing.T) {
 		0x1234_0000_5678_0000, 0xFFFF_0000_FFFF_0001, 0x8000_0000_0000_0000} {
 		var a A64
 		a.MOVconst(X1, v)
-		b := a.Bytes()
+		b := bytesOf(t, &a)
 		var x uint64
 		for i := 0; i < len(b); i += 4 {
 			w := uint32(b[i]) | uint32(b[i+1])<<8 | uint32(b[i+2])<<16 | uint32(b[i+3])<<24

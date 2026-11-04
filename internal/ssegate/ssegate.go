@@ -1,6 +1,5 @@
-// Package ssegate is the SSE tier's VEX-leak gate, shared by every x86
-// assembler's tests: main's SSE kernels (engine/device/cpu) and the composer's
-// (composer/x86 through jit's CPU lowering).
+// Package ssegate is the SSE tier's VEX-leak gate for the composer's x86
+// kernels (composer/x86 through its CPU lowering).
 //
 // It reads a kernel's bytes back through objdump, which shares no code with
 // either encoder, and fails on anything a pre-AVX host would fault on: a VEX or
@@ -14,13 +13,12 @@ package ssegate
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/composer/x86"
+	"github.com/jitllm/jitllm/internal/objdump"
 )
 
 // mnemonicISA classifies every mnemonic an SSE-tier kernel may contain by
@@ -65,50 +63,6 @@ func mnemonicISA() map[string]x86.ISA {
 	}()
 }
 
-// Insn is one disassembled instruction: its bytes and its normalised text.
-type Insn struct {
-	Bytes []byte
-	Text  string
-}
-
-// Disasm disassembles code with objdump, one row per instruction and the
-// whole encoding on that row (--insn-width=16, so a long instruction's bytes
-// are not wrapped onto a continuation line). It keeps "(bad)" rows, because a
-// gate must see them.
-func Disasm(t testing.TB, dir, name string, code []byte) []Insn {
-	t.Helper()
-	p := filepath.Join(dir, name+".bin")
-	if err := os.WriteFile(p, code, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	out, err := exec.Command("objdump", "-D", "-b", "binary", "-m", "i386:x86-64",
-		"-M", "intel", "--insn-width=16", p).Output()
-	if err != nil {
-		t.Fatalf("objdump: %v", err)
-	}
-	var got []Insn
-	for _, ln := range strings.Split(string(out), "\n") {
-		f := strings.SplitN(ln, "\t", 3)
-		if len(f) < 3 || !strings.HasSuffix(strings.TrimSpace(f[0]), ":") {
-			continue
-		}
-		var bs []byte
-		for _, h := range strings.Fields(f[1]) {
-			var v byte
-			if _, err := fmt.Sscanf(h, "%02x", &v); err != nil {
-				t.Fatalf("objdump byte %q in %q: %v", h, ln, err)
-			}
-			bs = append(bs, v)
-		}
-		txt := strings.Join(strings.Fields(f[2]), " ")
-		if i := strings.Index(txt, " #"); i >= 0 {
-			txt = strings.TrimSpace(txt[:i])
-		}
-		got = append(got, Insn{Bytes: bs, Text: txt})
-	}
-	return got
-}
-
 // Problems returns every way code fails to be a legal SSE-tier kernel. It
 // returns rather than failing, so the gate's own self-test can run it against
 // violations.
@@ -124,7 +78,7 @@ func Problems(t testing.TB, name string, code []byte) []string {
 	if declared&(x86.ISAAVX2|x86.ISAFMA|x86.ISAF16C|x86.ISAVNNI) != 0 {
 		add("declares %v: an SSE-tier kernel may not need any VEX extension", declared)
 	}
-	ins := Disasm(t, t.TempDir(), name, code)
+	ins := objdump.Disasm(t, t.TempDir(), name, code)
 	isas := mnemonicISA()
 	if len(ins) == 0 {
 		add("objdump found no instructions")

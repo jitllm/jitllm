@@ -165,9 +165,10 @@ func (k *Kernel) bindCounts(f ArgFields) error {
 			if ln < 0 && k.computedFrom(n, OpParam) {
 				continue
 			}
-			// Where the kernel addresses whole indices it counts what it
-			// loads itself: a count made from a table's words is its own.
-			if ln < 0 && f.Coords != nil && k.computedFrom(n, OpLoad) {
+			// A count made from a table's words is the kernel's own: no
+			// caller knows what the kernel loads (a row's marks' count, at
+			// a step of one row, which no loop moves).
+			if ln < 0 && k.computedFrom(n, OpLoad) {
 				continue
 			}
 			if ln < 0 {
@@ -313,8 +314,9 @@ func (k *Kernel) bindBufs(f ArgFields) {
 	}
 	for _, o := range kept {
 		// One buffer read at one word passes it in the word field; a second
-		// takes a buffer's field.
-		if f.Word > 0 && !word && !written[o] && k.oneWord(byOp[o]) {
+		// takes a buffer's field, as does one whose word field holds a count
+		// (the table's, whose vector count shares it).
+		if f.Word > 0 && !word && !written[o] && k.oneWord(byOp[o]) && !k.countAt(f.Word) {
 			word = true
 			for _, a := range byOp[o] {
 				k.Bufs[k.Nodes[a.node].Buf].Word = f.Word + 1
@@ -351,10 +353,10 @@ func (k *Kernel) bindBufs(f ArgFields) {
 				fl = f2
 			}
 		}
-		if p, ok := held[fl]; ok && p != o {
+		if p, ok := held[fl]; ok && p != o || k.countAt(fl) {
 			// The convention gives the field to another buffer already (a
-			// second output where a pair's second head's goes): this one
-			// takes a field the kernel passes nothing in.
+			// second output where a pair's second head's goes), or to a
+			// count: this one takes a field the kernel passes nothing in.
 			if fl = k.freeField(f, held); fl < 0 {
 				fl = f.Out[0]
 			}
@@ -386,6 +388,11 @@ func (k *Kernel) bindBufs(f ArgFields) {
 // freeField is a field of the convention f that neither a buffer held
 // already nor any word k passes takes: its inputs' first, then its other
 // buffers', -1 where every one is taken.
+// countAt says a count the call passes holds field fl.
+func (k *Kernel) countAt(fl int) bool {
+	return slices.ContainsFunc(k.Args, func(a Arg) bool { return a.Field == fl && a.Buf < 0 })
+}
+
 func (k *Kernel) freeField(f ArgFields, held map[int]Operand) int {
 	cands := slices.Concat(f.In, f.Out)
 	for _, s := range f.Second {
@@ -474,7 +481,7 @@ func (k *Kernel) split(as []access, whole bool, coords map[int]bool) int {
 	}
 	fixed := lin{}
 	for m, v := range ls[0] {
-		if m != "" && (!whole && g.still(lin{m: 1}) || whole && sized && g.coordMono(m, coords)) {
+		if m != "" && !g.readsLoad(m) && (!whole && g.still(lin{m: 1}) || whole && sized && g.coordMono(m, coords)) {
 			fixed[m] = v
 		}
 	}
@@ -723,6 +730,39 @@ func (k *Kernel) queries(o Operand) bool {
 
 // splitFrom is the length node i splits into trips: i with its shifts,
 // masks and constant multiples taken off.
+// readsLoad says monomial m reads a value the kernel loads (a row's marks'
+// start, say): no loop moving it is no caller knowing it, so it stays in
+// the kernel's index rather than the address the caller adds.
+func (g *alg) readsLoad(m string) bool {
+	for _, id := range monoIDs(m) {
+		a := g.atoms[id]
+		for a.field {
+			a = g.atoms[a.of]
+		}
+		if g.k.loadedFrom(a.node) {
+			return true
+		}
+	}
+	return false
+}
+
+// loadedFrom says node i is, or is computed from, a load.
+func (k *Kernel) loadedFrom(i int) bool {
+	nd := k.Nodes[i]
+	if nd.Op == OpLoad {
+		return true
+	}
+	if nd.Op == OpFold {
+		return false
+	}
+	for _, a := range k.Operands(&nd) {
+		if k.loadedFrom(*a) {
+			return true
+		}
+	}
+	return false
+}
+
 func (k *Kernel) splitFrom(i int) int {
 	for {
 		nd := k.Nodes[i]

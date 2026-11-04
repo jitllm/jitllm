@@ -1,4 +1,4 @@
-package cpu
+package x86
 
 import (
 	"encoding/hex"
@@ -165,7 +165,7 @@ func TestNormEncodings(t *testing.T) {
 	for _, tc := range normEncodings() {
 		var a Buf
 		tc.emit(&a)
-		if got := hex.EncodeToString(a.Bytes()); got != tc.want {
+		if got := hex.EncodeToString(bytesOf(t, &a)); got != tc.want {
 			t.Errorf("%s\n got  %s\n want %s", tc.name, got, tc.want)
 		}
 	}
@@ -175,7 +175,7 @@ func TestEncodings(t *testing.T) {
 	for _, tc := range encodings() {
 		var a Buf
 		tc.emit(&a)
-		if got := hex.EncodeToString(a.Bytes()); got != tc.want {
+		if got := hex.EncodeToString(bytesOf(t, &a)); got != tc.want {
 			t.Errorf("%s\n got  %s\n want %s", tc.name, got, tc.want)
 		}
 	}
@@ -189,7 +189,7 @@ func TestNoEVEX(t *testing.T) {
 	a.VPDPBUSD(Y1, Y2, Y3)
 	a.VPDPBUSD(Y15, Y14, Y13)
 	a.VPDPBUSDMem(Y9, Y2, Idx(R12, RSI, 4, 0x100))
-	b := a.Bytes()
+	b := bytesOf(t, &a)
 	if b[0] == 0x62 {
 		t.Fatalf("emitted EVEX (0x62); this CPU has AVX-VNNI without AVX-512 and will SIGILL")
 	}
@@ -240,7 +240,7 @@ func TestObjdumpRoundTrip(t *testing.T) {
 	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "code.bin")
-	if err := os.WriteFile(bin, a.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(bin, bytesOf(t, &a), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out, err := exec.Command(objdump, "-D", "-b", "binary", "-m", "i386:x86-64",
@@ -275,7 +275,7 @@ func TestLabels(t *testing.T) {
 	a.DEC(RCX)             // 2 bytes
 	a.JNZ(top)             // short form: 2 bytes, disp -9
 	a.RET()
-	b := a.Bytes()
+	b := bytesOf(t, &a)
 	if got := hex.EncodeToString(b); got != "c4e26d50cbffc975f7c3" {
 		t.Errorf("loop encoded as %s", got)
 	}
@@ -286,14 +286,9 @@ func TestLabels(t *testing.T) {
 
 	var d Buf
 	d.JNZ(d.Label()) // never bound
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Error("Bytes() returned code with an unbound label")
-			}
-		}()
-		d.Bytes()
-	}()
+	if _, err := d.Bytes(); err == nil {
+		t.Error("Bytes() returned code with an unbound label")
+	}
 }
 
 // TestForwardJump exercises the fixup path a loop prologue needs.
@@ -304,7 +299,7 @@ func TestForwardJump(t *testing.T) {
 	a.VZEROUPPER()
 	a.Bind(done)
 	a.RET()
-	b := a.Bytes()
+	b := bytesOf(t, &a)
 	// near jcc is 6 bytes; it must skip the 3-byte vzeroupper.
 	if len(b) != 6+3+1 {
 		t.Fatalf("got %d bytes, want 10", len(b))
@@ -312,4 +307,14 @@ func TestForwardJump(t *testing.T) {
 	if d := int32(uint32(b[2]) | uint32(b[3])<<8 | uint32(b[4])<<16 | uint32(b[5])<<24); d != 3 {
 		t.Errorf("forward jump displacement is %d, want 3", d)
 	}
+}
+
+// bytesOf is a's code, the test failed on any error emitting it met.
+func bytesOf(t testing.TB, a *Buf) []byte {
+	t.Helper()
+	b, err := a.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

@@ -96,6 +96,16 @@ func (d Device) warp() int {
 type Lowered struct {
 	GPU *ir.Kernel
 	CPU []byte
+	// Regs is a CPU kernel's register facts.
+	Regs RegUse
+}
+
+// RegUse is what a CPU kernel asks of its host: Vec of the File vector
+// registers its ISA has (highest index named + 1, -1 where the lowering does
+// not count them), and Stack memory operands off the stack pointer, its
+// spills. Zero Stack is the bar for a hot kernel.
+type RegUse struct {
+	Vec, File, Stack int
 }
 
 // Lowering turns a kernel's final IR into its backend's code.

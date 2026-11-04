@@ -15,7 +15,6 @@ import (
 
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/dev/bench"
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 )
@@ -91,7 +90,7 @@ func verifyCmd(args []string) error {
 			// kernels that ran, which is what was asked for here.
 			fmt.Printf("  (prefill diff: %v)\n", err)
 		}
-		return registerReport(os.Stdout, cpu.KernelRegisters(), g.KernelResources(), *asJSON)
+		return registerReport(os.Stdout, m.CPUKernels(), g.KernelResources(), *asJSON)
 	}
 	if *ab != "" {
 		abRun(m, g, *ab, *n, *rounds, *depth)

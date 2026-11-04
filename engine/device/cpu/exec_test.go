@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"testing"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/composer/x86"
 )
 
 // TestArgsLayout pins the struct offsets the generated code addresses by.
@@ -42,15 +44,15 @@ func TestArgsLayout(t *testing.T) {
 // It reads a field out of Args and writes it through another, so it exercises
 // argument passing, a load, a store and the return path.
 func TestExecuteScalar(t *testing.T) {
-	var a Buf
+	var a x86.Buf
 	// Scalar moves only: declared at the SSE2 floor, every x86-64 host runs it.
-	a.DeclareISA(ISASSE2)
-	a.MOVLoad(RAX, At(RDI, 32)) // args.Rows
-	a.MOVLoad(RCX, At(RDI, 56)) // args.Scr
-	a.MOVStore(At(RCX, 0), RAX)
+	a.DeclareISA(x86.ISASSE2)
+	a.MOVLoad(x86.RAX, x86.At(x86.RDI, 32)) // args.Rows
+	a.MOVLoad(x86.RCX, x86.At(x86.RDI, 56)) // args.Scr
+	a.MOVStore(x86.At(x86.RCX, 0), x86.RAX)
 	a.RET()
 
-	code := mustMap(t, a.Bytes())
+	code := mustMap(t, asmBytes(t, &a))
 	defer code.Close()
 
 	scr := make([]byte, 8)
@@ -72,18 +74,18 @@ func TestExecuteVPDPBUSD(t *testing.T) {
 	// This one executes VPDPBUSD itself; the AVX2 sequence that replaces it
 	// on a non-VNNI host is gated by TestExecuteVEXDotMatchesVPDPBUSD.
 	requireVNNIHost(t)
-	var a Buf
-	a.MOVLoad(RSI, At(RDI, 16)) // args.A  — unsigned side
-	a.MOVLoad(RDX, At(RDI, 8))  // args.W  — signed side
-	a.MOVLoad(RCX, At(RDI, 56)) // args.Scr
-	a.VPXOR(Y0, Y0, Y0)
-	a.VMOVDQULoad(Y1, At(RSI, 0))
-	a.VPDPBUSDMem(Y0, Y1, At(RDX, 0))
-	a.VMOVDQUStore(At(RCX, 0), Y0)
+	var a x86.Buf
+	a.MOVLoad(x86.RSI, x86.At(x86.RDI, 16)) // args.A  — unsigned side
+	a.MOVLoad(x86.RDX, x86.At(x86.RDI, 8))  // args.W  — signed side
+	a.MOVLoad(x86.RCX, x86.At(x86.RDI, 56)) // args.Scr
+	a.VPXOR(x86.Y0, x86.Y0, x86.Y0)
+	a.VMOVDQULoad(x86.Y1, x86.At(x86.RSI, 0))
+	a.VPDPBUSDMem(x86.Y0, x86.Y1, x86.At(x86.RDX, 0))
+	a.VMOVDQUStore(x86.At(x86.RCX, 0), x86.Y0)
 	a.VZEROUPPER()
 	a.RET()
 
-	code, err := Map(a.Bytes())
+	code, err := Map(asmBytes(t, &a))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,25 +118,25 @@ func TestExecuteVPDPBUSD(t *testing.T) {
 func TestExecuteLoop(t *testing.T) {
 	// Executes VPDPBUSD (see TestExecuteVPDPBUSD).
 	requireVNNIHost(t)
-	var a Buf
-	a.MOVLoad(RSI, At(RDI, 16)) // A
-	a.MOVLoad(RDX, At(RDI, 8))  // W
-	a.MOVLoad(RCX, At(RDI, 56)) // Scr
-	a.MOVLoad(RAX, At(RDI, 40)) // K = number of 32-byte blocks
-	a.VPXOR(Y0, Y0, Y0)
+	var a x86.Buf
+	a.MOVLoad(x86.RSI, x86.At(x86.RDI, 16)) // A
+	a.MOVLoad(x86.RDX, x86.At(x86.RDI, 8))  // W
+	a.MOVLoad(x86.RCX, x86.At(x86.RDI, 56)) // Scr
+	a.MOVLoad(x86.RAX, x86.At(x86.RDI, 40)) // K = number of 32-byte blocks
+	a.VPXOR(x86.Y0, x86.Y0, x86.Y0)
 	top := a.Label()
 	a.Bind(top)
-	a.VMOVDQULoad(Y1, At(RSI, 0))
-	a.VPDPBUSDMem(Y0, Y1, At(RDX, 0))
-	a.ADDimm(RSI, 32)
-	a.ADDimm(RDX, 32)
-	a.DEC(RAX)
+	a.VMOVDQULoad(x86.Y1, x86.At(x86.RSI, 0))
+	a.VPDPBUSDMem(x86.Y0, x86.Y1, x86.At(x86.RDX, 0))
+	a.ADDimm(x86.RSI, 32)
+	a.ADDimm(x86.RDX, 32)
+	a.DEC(x86.RAX)
 	a.JNZ(top)
-	a.VMOVDQUStore(At(RCX, 0), Y0)
+	a.VMOVDQUStore(x86.At(x86.RCX, 0), x86.Y0)
 	a.VZEROUPPER()
 	a.RET()
 
-	code, err := Map(a.Bytes())
+	code, err := Map(asmBytes(t, &a))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,10 +175,10 @@ func TestMapRejects(t *testing.T) {
 	if _, err := Map(nil); err == nil {
 		t.Error("Map accepted empty code")
 	}
-	var ret Buf
-	ret.DeclareISA(ISASSE2) // a bare ret runs on every x86-64 host
+	var ret x86.Buf
+	ret.DeclareISA(x86.ISASSE2) // a bare ret runs on every x86-64 host
 	ret.RET()
-	c, err := Map(ret.Bytes())
+	c, err := Map(asmBytes(t, &ret))
 	if err != nil {
 		t.Fatalf("Map: %v", err)
 	}

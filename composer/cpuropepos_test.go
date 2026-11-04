@@ -1,6 +1,7 @@
 package composer
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
@@ -54,7 +55,7 @@ func TestComposedCPURopePos(t *testing.T) {
 	if !HostCPULowers() {
 		t.Skip("no CPU lowering on this host")
 	}
-	const R, M = 8, 4
+	const M = 4
 	seqs := [][]ropeMark{
 		nil,
 		{{5, 9, graph.MarkText}, {10, 12, graph.MarkGrid, 2, 2, 3}, {22, 15, graph.MarkText}},
@@ -71,15 +72,48 @@ func TestComposedCPURopePos(t *testing.T) {
 			copy(marks[o+1+i*graph.MarkWords:], m[:])
 		}
 	}
+	// Every row at once, then each alone in a step of one row, the step a
+	// decode's table runs.
+	cpuRopePosAt(t, seqs, rows, marks, off, M, true)
+	for i := range rows {
+		t.Run(fmt.Sprintf("row %d alone", i), func(t *testing.T) {
+			cpuRopePosAt(t, seqs, rows[i:i+1], marks, off, M, false)
+		})
+	}
+	// A row far into its sequence under one XD-RoPE picture's mark of a
+	// 2048 by 2048 grid, the step's one sequence of one mark: its four axes
+	// apart, each in its own digit of a position.
+	t.Run("a far row of a wide picture", func(t *testing.T) {
+		const w, h, p = 1 << 11, 1 << 11, 1<<27 + 5
+		jj := uint32(37*w + 1000)
+		one := [][]ropeMark{{{p - jj, 0, graph.MarkGridXD, 1, h, w, 0, 70003}}}
+		buf := append([]uint32{1}, one[0][0][:]...)
+		cpuRopePosAt(t, one, [][2]uint32{{p, 0}}, buf, []uint32{0}, 1, false)
+		// And at a rotary table's step on one slot, as an instance asks.
+		cpuRopePosIn(t, one, [][2]uint32{{p, 0}}, buf, []uint32{0}, Step{Rows: 1, Page: 64, Keys: 1, Seqs: 1, Marks: 1}, 1, false)
+	})
+}
+
+// cpuRopePosAt forms OpRopePos on the CPU at a step of len(rows) rows and
+// holds each row's positions to the oracle; violations runs the marks read
+// short, which must part.
+func cpuRopePosAt(t *testing.T, seqs [][]ropeMark, rows [][2]uint32, marks, off []uint32, M int, violations bool) {
+	cpuRopePosIn(t, seqs, rows, marks, off, Step{Rows: len(rows), Page: 16, Keys: 64, Seqs: len(seqs), Marks: M}, 4, violations)
+}
+
+// cpuRopePosIn is cpuRopePosAt at step st on a CPU of slots slots.
+func cpuRopePosIn(t *testing.T, seqs [][]ropeMark, rows [][2]uint32, marks, off []uint32, st Step, slots int, violations bool) {
+	t.Helper()
+	R := len(rows)
 	b := graph.New()
 	y := b.Emit(graph.OpRopePos, nil, []graph.Result{{Name: "rope.pos", Width: 4, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
 	b.Out(y)
-	_, codes, err := Default().Form(Request{Graph: b.G, Step: Step{Rows: R, Page: 16, Keys: 64, Seqs: len(seqs), Marks: M},
-		Device: Device{Kind: DeviceCPU, Slots: 4, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+	_, codes, err := Default().Form(Request{Graph: b.G, Step: st,
+		Device: Device{Kind: DeviceCPU, Slots: slots, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	desc := []uint32{R}
+	desc := []uint32{uint32(R)}
 	for _, r := range rows {
 		desc = append(desc, r[0], off[r[1]])
 	}
@@ -96,6 +130,9 @@ func TestComposedCPURopePos(t *testing.T) {
 			return m
 		}, func(s int) []ropeMark { return seqs[s] }, true},
 	} {
+		if c.parts && !violations {
+			continue
+		}
 		got := make([]uint32, R*4)
 		for i := range got {
 			got[i] = 0xdeadbeef

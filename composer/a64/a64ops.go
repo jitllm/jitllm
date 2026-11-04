@@ -1,6 +1,4 @@
-package cpu
-
-import "fmt"
+package a64
 
 // The instructions the composer's arm64 lowering (composer/lowera64.go) emits
 // beside the ones main's emitters already encode: three-register vector
@@ -26,42 +24,47 @@ const (
 	A64StrH
 )
 
-// enc is op's unsigned-offset and unscaled encodings and its size in bytes.
-func (op A64Access) enc() (scaled, unscaled, size uint32) {
+// enc is op's unsigned-offset and unscaled encodings and its size in bytes,
+// and false for a value that names no access.
+func (op A64Access) enc() (scaled, unscaled, size uint32, ok bool) {
 	switch op {
 	case A64LdrX:
-		return 0xF9400000, 0xF8400000, 8
+		return 0xF9400000, 0xF8400000, 8, true
 	case A64StrX:
-		return 0xF9000000, 0xF8000000, 8
+		return 0xF9000000, 0xF8000000, 8, true
 	case A64LdrW:
-		return 0xB9400000, 0xB8400000, 4
+		return 0xB9400000, 0xB8400000, 4, true
 	case A64StrW:
-		return 0xB9000000, 0xB8000000, 4
+		return 0xB9000000, 0xB8000000, 4, true
 	case A64LdrQ:
-		return 0x3DC00000, 0x3CC00000, 16
+		return 0x3DC00000, 0x3CC00000, 16, true
 	case A64StrQ:
-		return 0x3D800000, 0x3C800000, 16
+		return 0x3D800000, 0x3C800000, 16, true
 	case A64LdrD:
-		return 0xFD400000, 0xFC400000, 8
+		return 0xFD400000, 0xFC400000, 8, true
 	case A64StrD:
-		return 0xFD000000, 0xFC000000, 8
+		return 0xFD000000, 0xFC000000, 8, true
 	case A64LdrS:
-		return 0xBD400000, 0xBC400000, 4
+		return 0xBD400000, 0xBC400000, 4, true
 	case A64StrS:
-		return 0xBD000000, 0xBC000000, 4
+		return 0xBD000000, 0xBC000000, 4, true
 	case A64LdrH:
-		return 0x7D400000, 0x7C400000, 2
+		return 0x7D400000, 0x7C400000, 2, true
 	case A64StrH:
-		return 0x7D000000, 0x7C000000, 2
+		return 0x7D000000, 0x7C000000, 2, true
 	}
-	panic(fmt.Sprintf("jit: A64Access %d is not an access", op))
+	return 0, 0, 0, false
 }
 
 // Access is op of register rt at rn+off: the unsigned scaled offset where
 // off is a non-negative multiple of the size in reach, else the unscaled
 // one. It reports false, emitting nothing, where neither reaches off.
 func (a *A64) Access(op A64Access, rt uint8, rn XReg, off int32) bool {
-	scaled, unscaled, size := op.enc()
+	scaled, unscaled, size, ok := op.enc()
+	if !ok {
+		a.fail("a64: A64Access %d is not an access", op)
+		return true
+	}
 	s := int32(size)
 	switch {
 	case off >= 0 && off%s == 0 && off/s <= 4095:

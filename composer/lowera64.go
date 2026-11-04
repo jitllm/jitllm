@@ -5,6 +5,7 @@ import (
 	"math/bits"
 	"runtime"
 
+	"github.com/jitllm/jitllm/composer/a64"
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/composer/x86"
 	"github.com/jitllm/jitllm/engine/device/cpu"
@@ -22,7 +23,7 @@ import (
 type a64Lowerer struct {
 	x        *x86Lowerer
 	k        *Kernel
-	a        *cpu.A64
+	a        *a64.A64
 	top, end map[int]int
 	preset   map[int]bool
 	err      error
@@ -33,49 +34,49 @@ type a64Lowerer struct {
 }
 
 // a64GPR is the X register each of the profile's general registers is.
-func a64GPR(r x86.Reg) cpu.XReg {
+func a64GPR(r x86.Reg) a64.XReg {
 	switch r {
 	case x86.RAX:
-		return cpu.X1
+		return a64.X1
 	case x86.RCX:
-		return cpu.X2
+		return a64.X2
 	case x86.RDX:
-		return cpu.X3
+		return a64.X3
 	case x86.RBX:
-		return cpu.X4
+		return a64.X4
 	case x86.RSP:
-		return cpu.SP
+		return a64.SP
 	case x86.RBP:
-		return cpu.X5
+		return a64.X5
 	case x86.RSI:
-		return cpu.X6
+		return a64.X6
 	case x86.RDI:
-		return cpu.X0
+		return a64.X0
 	case x86.R8:
-		return cpu.X7
+		return a64.X7
 	case x86.R9:
-		return cpu.X8
+		return a64.X8
 	case x86.R10:
-		return cpu.X9
+		return a64.X9
 	case x86.R11:
-		return cpu.X10
+		return a64.X10
 	case x86.R12:
-		return cpu.X11
+		return a64.X11
 	case x86.R13:
-		return cpu.X12
+		return a64.X12
 	case x86.R14:
-		return cpu.X13
+		return a64.X13
 	case x86.R15:
-		return cpu.X14
+		return a64.X14
 	}
-	return cpu.X0
+	return a64.X0
 }
 
 const (
-	a64T    = cpu.X15
-	a64Imm  = cpu.X16
-	a64Addr = cpu.X17
-	a64Q    = cpu.X19
+	a64T    = a64.X15
+	a64Imm  = a64.X16
+	a64Addr = a64.X17
+	a64Q    = a64.X19
 	// a64Save is the bytes below SP a saved vector temporary takes, past
 	// the spill slots and the shift-count word.
 	a64Save = -160
@@ -93,7 +94,7 @@ func lowerA64(k *Kernel, d Device) (lw Lowered, err error) {
 	if k.Seq == nil {
 		return Lowered{}, fmt.Errorf("the arm64 lowering of %s: the kernel is not ordered", k.Name)
 	}
-	e := &a64Lowerer{k: k, a: &cpu.A64{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{},
+	e := &a64Lowerer{k: k, a: &a64.A64{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{},
 		x:   &x86Lowerer{k: k, home: k.Homes(), words: k.VectorWords()},
 		dot: d.ISA&uint64(cpu.ISADotProd) != 0}
 	for _, en := range k.Seq {
@@ -106,7 +107,7 @@ func lowerA64(k *Kernel, d Device) (lw Lowered, err error) {
 			e.cur = en.I
 			e.node(en.I)
 			if s := k.Nodes[en.I].Spill; s > 0 && k.Nodes[en.I].Reg > 0 {
-				e.slot(cpu.A64StrX, uint8(e.gp(x86.Reg(k.Nodes[en.I].Reg-1))), s)
+				e.slot(a64.A64StrX, uint8(e.gp(x86.Reg(k.Nodes[en.I].Reg-1))), s)
 			}
 		case EntryStore:
 			e.store(en.I)
@@ -122,7 +123,11 @@ func lowerA64(k *Kernel, d Device) (lw Lowered, err error) {
 		return Lowered{}, fmt.Errorf("the arm64 lowering of %s: %w", k.Name, e.err)
 	}
 	e.a.RET()
-	return Lowered{CPU: e.a.Bytes()}, nil
+	code, err := e.a.Bytes()
+	if err != nil {
+		return Lowered{}, fmt.Errorf("the arm64 lowering of %s: %w", k.Name, err)
+	}
+	return Lowered{CPU: code, Regs: RegUse{Vec: -1, File: 32, Stack: a64.StackRefs(code)}}, nil
 }
 
 func (e *a64Lowerer) fail(format string, args ...any) {
@@ -131,20 +136,20 @@ func (e *a64Lowerer) fail(format string, args ...any) {
 	}
 }
 
-func (e *a64Lowerer) gp(r x86.Reg) cpu.XReg { return a64GPR(r & 15) }
+func (e *a64Lowerer) gp(r x86.Reg) a64.XReg { return a64GPR(r & 15) }
 
-func lo(r x86.Reg) cpu.VReg { return cpu.VReg(2 * r) }
-func hi(r x86.Reg) cpu.VReg { return cpu.VReg(2*r + 1) }
+func lo(r x86.Reg) a64.VReg { return a64.VReg(2 * r) }
+func hi(r x86.Reg) a64.VReg { return a64.VReg(2*r + 1) }
 
 // slot is op of register rt at spill slot s, 1-based, below SP
 // (spillOffset): one past the unscaled offset's reach is addressed from
 // a64Imm.
-func (e *a64Lowerer) slot(op cpu.A64Access, rt uint8, s int) {
+func (e *a64Lowerer) slot(op a64.A64Access, rt uint8, s int) {
 	off := spillOffset(s)
-	if e.a.Access(op, rt, cpu.SP, off) {
+	if e.a.Access(op, rt, a64.SP, off) {
 		return
 	}
-	e.addConstTo(a64Imm, cpu.SP, int64(off))
+	e.addConstTo(a64Imm, a64.SP, int64(off))
 	if !e.a.Access(op, rt, a64Imm, 0) {
 		e.fail("spill slot %d is out of reach", s)
 	}
@@ -156,13 +161,13 @@ func (e *a64Lowerer) reg(i int) x86.Reg {
 	if nd.Spill < 0 {
 		r := spillReg(e.reloads)
 		e.reloads++
-		e.access(cpu.A64LdrX, uint8(e.gp(r)), a64Mem{cpu.X0, int32(nd.Imm)})
+		e.access(a64.A64LdrX, uint8(e.gp(r)), a64Mem{a64.X0, int32(nd.Imm)})
 		return r
 	}
 	if s := nd.Spill; s > 0 && i != e.cur {
 		r := spillReg(e.reloads)
 		e.reloads++
-		e.slot(cpu.A64LdrX, uint8(e.gp(r)), s)
+		e.slot(a64.A64LdrX, uint8(e.gp(r)), s)
 		return r
 	}
 	if nd.Reg == 0 {
@@ -171,11 +176,11 @@ func (e *a64Lowerer) reg(i int) x86.Reg {
 	return x86.Reg(max(nd.Reg-1, 0))
 }
 
-func (e *a64Lowerer) xr(i int) cpu.XReg { return e.gp(e.reg(i)) }
+func (e *a64Lowerer) xr(i int) a64.XReg { return e.gp(e.reg(i)) }
 
 // a64Mem is an address: a base register and a byte offset.
 type a64Mem struct {
-	base cpu.XReg
+	base a64.XReg
 	off  int32
 }
 
@@ -183,7 +188,7 @@ func (m a64Mem) plus(n int32) a64Mem { return a64Mem{m.base, m.off + n} }
 
 // access is op of register rt at m, the address made in a64Imm where no
 // addressing mode reaches it.
-func (e *a64Lowerer) access(op cpu.A64Access, rt uint8, m a64Mem) {
+func (e *a64Lowerer) access(op a64.A64Access, rt uint8, m a64Mem) {
 	if e.a.Access(op, rt, m.base, m.off) {
 		return
 	}
@@ -193,8 +198,8 @@ func (e *a64Lowerer) access(op cpu.A64Access, rt uint8, m a64Mem) {
 }
 
 // bare is m's address in a register, for the forms that take no offset.
-func (e *a64Lowerer) bare(m a64Mem) cpu.XReg {
-	if m.off == 0 && m.base != cpu.SP {
+func (e *a64Lowerer) bare(m a64Mem) a64.XReg {
+	if m.off == 0 && m.base != a64.SP {
 		return m.base
 	}
 	e.addConstTo(a64Imm, m.base, int64(m.off))
@@ -214,7 +219,7 @@ func (e *a64Lowerer) ahead(i int) {
 }
 
 // addConstTo is dst = src + c.
-func (e *a64Lowerer) addConstTo(dst, src cpu.XReg, c int64) {
+func (e *a64Lowerer) addConstTo(dst, src a64.XReg, c int64) {
 	switch {
 	case c >= 0 && c <= 4095:
 		e.a.ADDimm(dst, src, int32(c))
@@ -249,7 +254,7 @@ func (e *a64Lowerer) addr(b, ix, ptr int) a64Mem {
 		return a64Mem{a64Addr, 0}
 	}
 	if w := k.Bufs[b].Word; w > 0 {
-		return a64Mem{cpu.X0, int32(w-1) + int32(nd.Imm)*int32(ElemBytes(k.Bufs[b]))}
+		return a64Mem{a64.X0, int32(w-1) + int32(nd.Imm)*int32(ElemBytes(k.Bufs[b]))}
 	}
 	return a64Mem{e.ptrReg(b, ptr), int32(nd.Imm) * int32(ElemBytes(k.Bufs[b]))}
 }
@@ -263,12 +268,12 @@ func (e *a64Lowerer) laneAddr(b, ix, ptr int) a64Mem {
 		a.ADDreg(a64Addr, a64Addr, e.offBase(ptr))
 		a.ADDlsl(a64Addr, a64Addr, e.gp(x86.Reg(k.Ptrs[ptr-1].Off-1)), uint8(bits.TrailingZeros(uint(k.Ptrs[ptr-1].Scale))))
 	case ptr > 0 && k.Ptrs[ptr-1].Reg == 0 && k.Ptrs[ptr-1].Spill > 0:
-		e.slot(cpu.A64LdrX, uint8(a64Imm), k.Ptrs[ptr-1].Spill)
+		e.slot(a64.A64LdrX, uint8(a64Imm), k.Ptrs[ptr-1].Spill)
 		a.ADDreg(a64Addr, a64Addr, a64Imm)
 	case ptr > 0 && k.Ptrs[ptr-1].Reg > 0:
 		a.ADDreg(a64Addr, a64Addr, e.gp(x86.Reg(k.Ptrs[ptr-1].Reg-1)))
 	case ptr == 0 && k.Bufs[b].Reg == 0 && k.Bufs[b].Reload && k.Bufs[b].Base > 0:
-		e.access(cpu.A64LdrX, uint8(a64Imm), a64Mem{cpu.X0, int32(k.Nodes[k.Bufs[b].Base-1].Imm)})
+		e.access(a64.A64LdrX, uint8(a64Imm), a64Mem{a64.X0, int32(k.Nodes[k.Bufs[b].Base-1].Imm)})
 		a.ADDreg(a64Addr, a64Addr, a64Imm)
 	case ptr == 0 && k.Bufs[b].Reg > 0:
 		a.ADDreg(a64Addr, a64Addr, e.gp(x86.Reg(k.Bufs[b].Reg-1)))
@@ -278,7 +283,7 @@ func (e *a64Lowerer) laneAddr(b, ix, ptr int) a64Mem {
 	return a64Mem{a64Addr, 0}
 }
 
-func (e *a64Lowerer) offBase(ptr int) cpu.XReg {
+func (e *a64Lowerer) offBase(ptr int) a64.XReg {
 	p := e.k.Ptrs[ptr-1]
 	if p.From > 0 {
 		return e.gp(x86.Reg(e.k.Ptrs[p.From-1].Reg - 1))
@@ -286,7 +291,7 @@ func (e *a64Lowerer) offBase(ptr int) cpu.XReg {
 	return e.gp(x86.Reg(e.k.Bufs[p.Buf].Reg - 1))
 }
 
-func (e *a64Lowerer) ptrReg(b, ptr int) cpu.XReg {
+func (e *a64Lowerer) ptrReg(b, ptr int) a64.XReg {
 	r := e.k.Bufs[b].Reg
 	if p := e.k.Ptrs; ptr > 0 && p[ptr-1].Off > 0 {
 		e.a.ADDlsl(e.gp(reloadReg), e.offBase(ptr), e.gp(x86.Reg(p[ptr-1].Off-1)), uint8(bits.TrailingZeros(uint(p[ptr-1].Scale))))
@@ -295,12 +300,12 @@ func (e *a64Lowerer) ptrReg(b, ptr int) cpu.XReg {
 	if ptr > 0 {
 		r = e.k.Ptrs[ptr-1].Reg
 		if s := e.k.Ptrs[ptr-1].Spill; r == 0 && s > 0 {
-			e.slot(cpu.A64LdrX, uint8(e.gp(reloadReg)), s)
+			e.slot(a64.A64LdrX, uint8(e.gp(reloadReg)), s)
 			return e.gp(reloadReg)
 		}
 	}
 	if r == 0 && ptr == 0 && e.k.Bufs[b].Reload && e.k.Bufs[b].Base > 0 {
-		e.access(cpu.A64LdrX, uint8(e.gp(reloadReg)), a64Mem{cpu.X0, int32(e.k.Nodes[e.k.Bufs[b].Base-1].Imm)})
+		e.access(a64.A64LdrX, uint8(e.gp(reloadReg)), a64Mem{a64.X0, int32(e.k.Nodes[e.k.Bufs[b].Base-1].Imm)})
 		return e.gp(reloadReg)
 	}
 	if r == 0 {
@@ -311,8 +316,8 @@ func (e *a64Lowerer) ptrReg(b, ptr int) cpu.XReg {
 
 // temp is a vector register none of avoid is, for one operation's
 // temporary: saved below SP until release.
-func (e *a64Lowerer) temp(avoid ...cpu.VReg) cpu.VReg {
-	for v := cpu.VReg(31); ; v-- {
+func (e *a64Lowerer) temp(avoid ...a64.VReg) a64.VReg {
+	for v := a64.VReg(31); ; v-- {
 		free := true
 		for _, x := range avoid {
 			if x == v {
@@ -320,32 +325,32 @@ func (e *a64Lowerer) temp(avoid ...cpu.VReg) cpu.VReg {
 			}
 		}
 		if free {
-			e.vaccess(cpu.A64StrQ, v, a64Mem{cpu.SP, a64Save - 16*int32(e.saved)})
+			e.vaccess(a64.A64StrQ, v, a64Mem{a64.SP, a64Save - 16*int32(e.saved)})
 			e.saved++
 			return v
 		}
 	}
 }
 
-func (e *a64Lowerer) release(v cpu.VReg) {
+func (e *a64Lowerer) release(v a64.VReg) {
 	e.saved--
-	e.vaccess(cpu.A64LdrQ, v, a64Mem{cpu.SP, a64Save - 16*int32(e.saved)})
+	e.vaccess(a64.A64LdrQ, v, a64Mem{a64.SP, a64Save - 16*int32(e.saved)})
 }
 
-func (e *a64Lowerer) vaccess(op cpu.A64Access, v cpu.VReg, m a64Mem) {
+func (e *a64Lowerer) vaccess(op a64.A64Access, v a64.VReg, m a64Mem) {
 	e.access(op, uint8(v), m)
 }
 
 // pair is both halves of a vector register.
-func pair(r x86.Reg) [2]cpu.VReg { return [2]cpu.VReg{lo(r), hi(r)} }
+func pair(r x86.Reg) [2]a64.VReg { return [2]a64.VReg{lo(r), hi(r)} }
 
 // each is f on each half of d, n and m.
-func each(d, n, m x86.Reg, f func(d, n, m cpu.VReg)) {
+func each(d, n, m x86.Reg, f func(d, n, m a64.VReg)) {
 	f(lo(d), lo(n), lo(m))
 	f(hi(d), hi(n), hi(m))
 }
 
-func each2(d, n x86.Reg, f func(d, n cpu.VReg)) {
+func each2(d, n x86.Reg, f func(d, n a64.VReg)) {
 	f(lo(d), lo(n))
 	f(hi(d), hi(n))
 }
@@ -363,8 +368,8 @@ func (e *a64Lowerer) zero(d x86.Reg) {
 
 // load8 is the eight words at m into r.
 func (e *a64Lowerer) load8(r x86.Reg, m a64Mem) {
-	e.vaccess(cpu.A64LdrQ, lo(r), m)
-	e.vaccess(cpu.A64LdrQ, hi(r), m.plus(16))
+	e.vaccess(a64.A64LdrQ, lo(r), m)
+	e.vaccess(a64.A64LdrQ, hi(r), m.plus(16))
 }
 
 // splat is the word at m in every lane of r.
@@ -376,7 +381,7 @@ func (e *a64Lowerer) splat(r x86.Reg, m a64Mem) {
 // withMem runs f on each half h of the operation, node b's half in v: its
 // register's, or, for a folded load, a temporary none of avoid is that the
 // half is loaded into.
-func (e *a64Lowerer) withMem(b int, avoid []cpu.VReg, f func(h int, v cpu.VReg)) {
+func (e *a64Lowerer) withMem(b int, avoid []a64.VReg, f func(h int, v a64.VReg)) {
 	nd := e.k.Nodes[b]
 	if !nd.Mem {
 		r := e.reg(b)
@@ -387,15 +392,15 @@ func (e *a64Lowerer) withMem(b int, avoid []cpu.VReg, f func(h int, v cpu.VReg))
 	m := e.addr(nd.Buf, nd.A, nd.Ptr)
 	t := e.temp(avoid...)
 	for h := range 2 {
-		e.vaccess(cpu.A64LdrQ, t, m.plus(16*int32(h)))
+		e.vaccess(a64.A64LdrQ, t, m.plus(16*int32(h)))
 		f(h, t)
 	}
 	e.release(t)
 }
 
 // a64Halves is both halves of each register of rs, for a temporary to avoid.
-func a64Halves(rs ...x86.Reg) []cpu.VReg {
-	var out []cpu.VReg
+func a64Halves(rs ...x86.Reg) []a64.VReg {
+	var out []a64.VReg
 	for _, r := range rs {
 		out = append(out, lo(r), hi(r))
 	}

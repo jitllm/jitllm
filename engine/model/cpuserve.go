@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -161,8 +162,11 @@ type cpuCode struct {
 	// its calls run a tile for every live row before the next tile.
 	tiles bool
 	// name is the composer's name for the kernel; nanos and runs its time
-	// and launches under WithProfile.
+	// and launches under WithProfile; regs and size its register facts and
+	// its code's bytes.
 	name        string
+	regs        composer.RegUse
+	size        int
 	desc        string
 	nanos, runs int64
 	// pcalls, pcallNs, pstartNs and pmaxNs are its calls under WithProfile:
@@ -259,6 +263,46 @@ type cpuForms struct {
 	reg32 *composer.Registry
 	m     map[composer.Key]*cpuBlockForm
 	err   map[composer.Key]error
+}
+
+// CPUKernel is one composed CPU kernel's register facts, the worst over the
+// forms holding it, and how many do.
+type CPUKernel struct {
+	Name  string `json:"name"`
+	Vec   int    `json:"vec_used"`
+	File  int    `json:"file"`
+	Stack int    `json:"stack_refs"`
+	Bytes int    `json:"bytes"`
+	Forms int    `json:"forms"`
+}
+
+// CPUKernels is the register facts of every kernel the model's composed CPU
+// forms hold, by name.
+func (m *Model) CPUKernels() []CPUKernel {
+	c := &m.cpuForms
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	by := map[string]*CPUKernel{}
+	for _, f := range c.m {
+		for i := range f.codes {
+			cc := &f.codes[i]
+			k := by[cc.name]
+			if k == nil {
+				k = &CPUKernel{Name: cc.name, Vec: cc.regs.Vec, File: cc.regs.File}
+				by[cc.name] = k
+			}
+			k.Vec = max(k.Vec, cc.regs.Vec)
+			k.Stack = max(k.Stack, cc.regs.Stack)
+			k.Bytes = max(k.Bytes, cc.size)
+			k.Forms++
+		}
+	}
+	out := make([]CPUKernel, 0, len(by))
+	for _, k := range by {
+		out = append(out, *k)
+	}
+	slices.SortFunc(out, func(a, b CPUKernel) int { return strings.Compare(a.Name, b.Name) })
+	return out
 }
 
 func (c *cpuForms) close() {
@@ -1962,7 +2006,7 @@ func buildCPUForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole
 			f.close()
 			return nil, fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		cc := cpuCode{calls: c.Calls, n: 1, name: c.Name, share: composer.Code{Share: c.Share, ShareUnit: c.ShareUnit}}
+		cc := cpuCode{calls: c.Calls, n: 1, name: c.Name, regs: c.Regs, size: len(c.CPU), share: composer.Code{Share: c.Share, ShareUnit: c.ShareUnit}}
 		if c.Share > 0 && len(c.Calls) != 1 {
 			f.close()
 			return nil, fmt.Errorf("%s: a share of rows over calls %v", c.Name, c.Calls)

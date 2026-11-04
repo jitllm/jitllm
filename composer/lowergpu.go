@@ -20,7 +20,7 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 		return Lowered{}, fmt.Errorf("no workgroup: the profile binds none")
 	}
 	if s := sharedBytes(n); d.Shared > 0 && s > d.Shared {
-		return Lowered{}, fmt.Errorf("%s holds %d bytes of workgroup memory, past the device's %d", n.Name, s, d.Shared)
+		return Lowered{}, fmt.Errorf("%s holds %d bytes of workgroup memory, past the device's %d (%s; passes %v)", n.Name, s, d.Shared, sharedParts(n), n.Passes)
 	}
 	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison, lanes: d.Lanes, fragment: d.Fragment}
 	if d.VectorLoads {
@@ -62,6 +62,23 @@ func resident(n *Kernel, d Device) int {
 
 // sharedBytes is the workgroup memory a workgroup of n holds: its arrays,
 // and a slot a thread for each combine over the workgroup.
+// sharedParts names what sharedBytes counts: each array's bytes, then the
+// group reductions' rows.
+func sharedParts(n *Kernel) string {
+	var parts []string
+	for _, bf := range n.Bufs {
+		if bf.Kind == BufShared {
+			parts = append(parts, strings.TrimSpace(fmt.Sprintf("%s %d", bf.Operand.Name, 4*bf.Size)))
+		}
+	}
+	for _, nd := range n.Nodes {
+		if nd.Op == OpGroupSum || nd.Op == OpGroupMax || nd.Op == OpExchange {
+			parts = append(parts, fmt.Sprintf("a group %s's %d", nd.Op, 4*n.Group))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 func sharedBytes(n *Kernel) int {
 	b := 0
 	for _, bf := range n.Bufs {

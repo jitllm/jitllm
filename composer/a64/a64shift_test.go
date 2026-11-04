@@ -1,4 +1,4 @@
-package cpu
+package a64
 
 import "testing"
 
@@ -37,7 +37,7 @@ func TestA64ShiftEncodingsMatchClang(t *testing.T) {
 	} {
 		var a A64
 		c.got(&a)
-		b := a.Bytes()
+		b := bytesOf(t, &a)
 		if len(b) != 4 {
 			t.Fatalf("%s: %d bytes", c.what, len(b))
 		}
@@ -55,7 +55,7 @@ func TestA64MOVimmReachesEveryConstant(t *testing.T) {
 	for _, v := range []int64{0, 1, 0xFFFF, 0x10000, 0x18000, 0x8000_0000, 0x1234_5678, 0x1_0001, 0xDEAD_BEEF_CAFE} {
 		var a A64
 		a.MOVimm(X19, v) // must not panic
-		if n := len(a.Bytes()); n == 0 || n%4 != 0 || n > 16 {
+		if n := len(bytesOf(t, &a)); n == 0 || n%4 != 0 || n > 16 {
 			t.Errorf("MOVimm %#x emitted %d bytes", v, n)
 		}
 	}

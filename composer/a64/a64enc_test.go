@@ -1,4 +1,4 @@
-package cpu
+package a64
 
 import "testing"
 
@@ -41,7 +41,7 @@ func TestA64NewEncodingsMatchLLVM(t *testing.T) {
 	} {
 		var a A64
 		c.emit(&a)
-		b := a.Bytes()
+		b := bytesOf(t, &a)
 		got := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 		if got != c.want {
 			t.Errorf("%s: emitted %08x, llvm says %08x", c.what, got, c.want)

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -32,24 +31,6 @@ func hotFloors() []hotFloor {
 	return []hotFloor{
 		{prefixes: []string{"matvec_", "rmsnorm", "normpart", "normapply", "quantize", "act"}, occupancy: 0.5},
 		{prefixes: []string{"gemm", "flash"}, groups: 2},
-	}
-}
-
-// hostStagers are the host emitters that address the stack by design: the
-// k-quant matvecs keep loop-invariant bases and a block's unpacked scales in
-// the System V red zone (engine/device/cpu/matvec.go, "The loop-invariant bases live in
-// the RED ZONE"), and the SSE packed tile stages its scale planes there
-// (engine/device/cpu/sse_packed.go). Every other host kernel holds its values in
-// registers, and one that starts addressing the stack has outgrown the file.
-// The set is every emitter in engine/device/cpu that writes At(RSP, ...).
-func hostStagers() map[string]bool {
-	return map[string]bool{
-		"cpu.emitMatVec4":              true,
-		"cpu.emitQ3KMatVec":            true,
-		"cpu.emitQ6KMatVec":            true,
-		"cpu.emitKQuantMatVec":         true,
-		"cpu.EmitPackedMatVecSSE":      true,
-		"cpu.EmitPackedMatVecFusedSSE": true,
 	}
 }
 
@@ -137,7 +118,7 @@ func TestHotKernelsKeepTheirRegisters(t *testing.T) {
 	}
 	defer m.Close()
 
-	t.Run("host", func(t *testing.T) {
+	t.Run("cpu", func(t *testing.T) {
 		st := m.NewInstance(64)
 		defer st.Close()
 		lg, err := st.Prefill(m.Vocab.Encode(strings.Repeat("The capital of France is Paris. ", 5), true))
@@ -147,20 +128,23 @@ func TestHotKernelsKeepTheirRegisters(t *testing.T) {
 		if _, err = st.Forward(Greedy(lg)); err != nil {
 			t.Fatal(err)
 		}
-		ks := cpu.KernelRegisters()
+		ks := m.CPUKernels()
 		if len(ks) == 0 {
-			t.Fatal("no host kernel was recorded: the gate checked nothing")
+			t.Fatal("the model holds no composed CPU kernel: the gate checked nothing")
 		}
+		var spill []string
 		for _, k := range ks {
-			if k.VecUsed > k.File {
-				t.Errorf("%s names %d vector registers of a %d-register file", k.Emitter, k.VecUsed, k.File)
+			if k.Bytes == 0 || k.Forms == 0 {
+				t.Errorf("%s is recorded with %d bytes over %d forms", k.Name, k.Bytes, k.Forms)
 			}
-			if k.StackRefs > 0 && !hostStagers()[k.Emitter] {
-				t.Errorf("%s addresses the stack %d times: a hand-allocated kernel that outgrew %d %s registers",
-					k.Emitter, k.StackRefs, k.File, k.ISA)
+			if k.Vec > k.File {
+				t.Errorf("%s names %d vector registers of a %d-register file", k.Name, k.Vec, k.File)
+			}
+			if k.Stack > 0 {
+				spill = append(spill, fmt.Sprintf("%s (%d)", k.Name, k.Stack))
 			}
 		}
-		t.Logf("%d host emitters checked", len(ks))
+		t.Logf("%d composed CPU kernels; addressing the stack: %s", len(ks), strings.Join(spill, ", "))
 	})
 	t.Run("violation", func(t *testing.T) {
 		faults, checked := hotKernelFaults(runForRegisters(t, m, gpu.WithCUDAMaxRegs(32)))
