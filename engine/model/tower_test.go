@@ -543,7 +543,9 @@ func (d *ycbcrDst) Set(x, y int, c color.Color) {
 // which offers its tower run every tower block: all 12 are placed there, the
 // picture's rows sit within the reduction-order band of the CPU device's
 // (an NMSE of 1e-3 over the 64 rows the head writes), and the description
-// still names the yellow disc where a blank grey picture's does not.
+// still names the yellow disc where a blank grey picture's does not. A half
+// seam -- the tower's first 6 blocks on the card, the rest on the CPU device
+// through the prefill -- sits in the band too.
 func TestStatedTowerRunsOnTheCard(t *testing.T) {
 	m, img := openSmolVLM(t)
 	defer m.Close()
@@ -571,6 +573,28 @@ func TestStatedTowerRunsOnTheCard(t *testing.T) {
 			if n := ts.GPULayers(); n != len(m.tower.blocks) {
 				t.Fatalf("%d of the tower's %d blocks placed on %s: %s", n, len(m.tower.blocks), dev, g.Err())
 			}
+			half := m.NewInstance(256)
+			defer half.Close()
+			half.SetDeviceFallback(false)
+			if err := half.tower.s.SetDeviceLayers(g, len(m.tower.blocks)/2); err != nil {
+				t.Fatal(err)
+			}
+			if n := half.tower.s.GPULayers(); n != len(m.tower.blocks)/2 {
+				t.Fatalf("%d of the tower's %d blocks placed on %s for a half seam", n, len(m.tower.blocks), dev)
+			}
+			hgot, err := half.EncodePicture(img)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var hn, hd float64
+			for i := range want {
+				d := float64(hgot[i] - want[i])
+				hn, hd = hn+d*d, hd+float64(want[i])*float64(want[i])
+			}
+			if e := hn / hd; math.IsNaN(e) || e > 1e-3 {
+				t.Fatalf("the picture's rows over a half seam on %s sit at NMSE %.3e from the CPU device's", dev, e)
+			}
+			t.Logf("%s: a half seam (%d tower blocks on the card) at NMSE %.3e", dev, len(m.tower.blocks)/2, hn/hd)
 			got, err := s.EncodePicture(img)
 			if err != nil {
 				t.Fatal(err)

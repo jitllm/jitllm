@@ -28,8 +28,14 @@ func (s *Instance) cpuPlaceTables() {
 	st := &s.cpu.tables
 	tabs := s.m.frontGraphs().tables
 	st.one, st.many = make([]cpuHeadForm, len(tabs)), make([]cpuHeadForm, len(tabs))
+	widths := [2]int{s.c.RopeW(), s.c.NRotSWA}
 	u := 1
 	for i, g := range tabs {
+		// The tables are the model's rotaries; an instance whose config has
+		// none (a tower's) composes none.
+		if i < len(widths) && widths[i] == 0 {
+			continue
+		}
 		s.cpuComposeTable(&st.one[i], g, 1)
 		s.cpuComposeTable(&st.many[i], g, cpuRowsCap)
 		for _, hf := range []*cpuHeadForm{&st.one[i], &st.many[i]} {
@@ -83,8 +89,11 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 	widths := [2]int{s.c.RopeW(), s.c.NRotSWA}
 	rows := len(pos)
 	for i := range st.one {
-		if i >= len(outs) || outs[i] == nil {
+		if i >= len(outs) || len(outs[i]) == 0 || widths[i] == 0 {
 			continue
+		}
+		if len(outs[i]) < rows*widths[i] {
+			return fmt.Errorf("model: the rotary table %d on the CPU: %d values for %d rows of %d", i, len(outs[i]), rows, widths[i])
 		}
 		hf := &st.one[i]
 		if rows > 1 {
