@@ -199,6 +199,20 @@ func Verify(g *Graph, f Facts) error {
 					}
 				}
 			}
+		case OpPicture:
+			a := o.Attr
+			switch {
+			case len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 0:
+				bad("%s: a picture reads the step's and writes one value", at)
+			case a.Pixels != PixRGBA8 && a.Pixels != PixGray8:
+				bad("%s: a picture of sample format %d", at, a.Pixels)
+			case a.PicW < 1 || a.PicH < 1:
+				bad("%s: a picture resampled to %dx%d", at, a.PicW, a.PicH)
+			case a.Chain != ChainHalfPixel || a.Filter != FilterLinear:
+				bad("%s: a picture resampled by chain %d and filter %d", at, a.Chain, a.Filter)
+			case a.Std[0] == 0 || a.Std[1] == 0 || a.Std[2] == 0:
+				bad("%s: a picture normalised by a std of 0", at)
+			}
 		case OpAdd:
 			if len(o.In) != 2 || len(o.Out) != 1 || width(o.In[0]) != width(o.In[1]) || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: widths %d and %d into %d", at, width(o.In[0]), width(o.In[1]), width(o.Out[0]))

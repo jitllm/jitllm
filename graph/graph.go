@@ -316,6 +316,15 @@ const (
 	// rows' W elements): each element its code times its block's scale. A
 	// primitive.
 	OpWidenQ8Rows
+	// OpPicture is the step's picture as a tower reads its pixels: the
+	// decoded samples (the step's picture table, in Pixels' format, rows of
+	// the request's stride in bytes, its width and height in pixels the
+	// request's words) resampled to PicW x PicH by Chain and Filter's taps on
+	// each axis, each sample read as [0, 1] and channel c normalised as
+	// (v - Mean[c]) / Std[c]. Out[0] is the pixels [y][x][channel] over the
+	// step's rows, as OpPatchify reads them, zero past PicW*PicH*3. A
+	// primitive.
+	OpPicture
 	numOps
 )
 
@@ -379,6 +388,8 @@ func (k OpKind) String() string {
 		return "take_rows"
 	case OpRowConv:
 		return "row_conv"
+	case OpPicture:
+		return "picture"
 	case OpPatchify:
 		return "patchify"
 	case OpRegroup:
@@ -727,6 +738,11 @@ type Attrs struct {
 	// without it a division takes the device's, within the gates' band like
 	// every other kernel form.
 	Exact bool
+	// Pixels, PicW, PicH, Mean and Std are OpPicture's: the picture's sample
+	// format, the size it is resampled to, and each channel's mean and std.
+	Pixels     uint8
+	PicW, PicH int
+	Mean, Std  [3]float64
 }
 
 // Op is one operation.
@@ -822,4 +838,13 @@ const (
 	FilterBilinear uint8 = 1 + iota
 	FilterLinear
 	FilterCubic
+)
+
+// A picture's sample formats (OpPicture), as an image decoder leaves them.
+const (
+	// PixRGBA8 is four bytes a pixel, red, green, blue and an alpha the
+	// picture drops.
+	PixRGBA8 uint8 = 1 + iota
+	// PixGray8 is one byte a pixel, every channel's.
+	PixGray8
 )
