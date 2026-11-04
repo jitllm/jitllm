@@ -1149,13 +1149,6 @@ func Projectors() []string {
 	return out
 }
 
-// ProjectorOf is the projector a clip.projector_type name converts to, and
-// whether the name is in the list.
-func ProjectorOf(name string) (jlm.Projector, bool) {
-	p, ok := projectorOf()[name]
-	return p, ok
-}
-
 // visionOf reads a vision tower's description. A tower is its own container.
 func visionOf(f *meta.File) (*jlm.Vision, error) {
 	if f.Arch() != "clip" {

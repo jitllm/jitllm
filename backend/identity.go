@@ -131,14 +131,6 @@ func (m *mtlDev) Identity() Identity {
 // identity AND its driver: a driver update recompiles every kernel.
 type Driven interface{ DriverVersion() string }
 
-// DriverOf names a device's driver, or "" when the backend cannot say.
-func DriverOf(d Device) string {
-	if v, ok := d.(Driven); ok {
-		return v.DriverVersion()
-	}
-	return ""
-}
-
 func (c *cudaDev) DriverVersion() string {
 	if v, ok := c.drv.DriverVersion(); ok {
 		return fmt.Sprintf("cuda%d", v)

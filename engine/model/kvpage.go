@@ -141,8 +141,8 @@ type kvPages struct {
 	k, v [][]float32
 	// latent makes the value the same memory as the key, which is what MLA
 	// is: a cached row is the latent followed by the shared rotary key, and
-	// the value is the latent prefix. It is an alias, not a copy. vSpan
-	// returns kSpan's base, and the accumulate kernel is emitted for
+	// the value is the latent prefix. It is an alias, not a copy: a value's
+	// span is its key's base, and the accumulate kernel is emitted for
 	// KVLoraRank while scores use the whole row (nn.AddAttnKV).
 	latent bool
 	// lastSealed is how many pages have been offered to the store. A page is
@@ -574,16 +574,6 @@ func (kc *kvCache) Bytes() uint64 {
 // replaced by the page's own position count. At P == maxSeq there is one page
 // and its bytes are the flat cache, element for element.
 func (s *kvPages) layout(l kvLayout) kvLayout { l.maxSeq = s.p; return l }
-
-// kSpan and vSpan are the run of one page that a kvSpan names, for one
-// (slot, kv head), ready to hand to a kernel as a base pointer.
-func (s *kvPages) kSpan(l kvLayout, sp kvSpan, slot, kvHead int) []float32 {
-	return s.k[sp.page][s.layout(l).At(slot, sp.first, kvHead):]
-}
-
-func (s *kvPages) vSpan(l kvLayout, sp kvSpan, slot, kvHead int) []float32 {
-	return s.v[sp.page][s.layout(l).At(slot, sp.first, kvHead):]
-}
 
 // gather copies positions [0, n) of one slot into a flat contiguous buffer, and
 // scatter puts them back.

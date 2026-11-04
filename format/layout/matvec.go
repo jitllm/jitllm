@@ -29,7 +29,8 @@ const (
 	Float16
 	BFloat16
 	// Q5_1 is Q5_0's planes with an f16 minimum: weight = d*q + m. Its d word
-	// carries both halves the way a k-quant's does; see MinInD.
+	// carries both halves the way a k-quant's does, the minimum the high half
+	// alone, with no per-sub-block integer to multiply it by.
 	Q5_1
 	// TQ2 is a ternary weight, llama.cpp's TQ2_0: codes q+1 in {0, 1, 2} for
 	// weights {-1, 0, 1} in a 2-bit plane (four fields a byte, Fields), one f16
@@ -155,7 +156,7 @@ func qtab(q Quant) qinfo {
 		return qinfo{bits: 4, sub: 32, biasK: mxfp4Bias, blockB: 17, blockE: 32, perSuper: 1, codes: true, e8m0: true}
 	// Q5_1 is Q5_0 with a minimum. Readers compute scale*q - dmin*m; with no sc
 	// plane m is one, and the packer stores the minimum negated as dmin, so
-	// d*q + m = d*q - (-m)*1. See MinInD.
+	// d*q + m = d*q - (-m)*1: the k-quant formula at m = 1.
 	case Q5_1:
 		return qinfo{bits: 4, hi: 1, sub: 32, biasArray: true, blockB: 24, blockE: 32, perSuper: 1}
 	// TQ2 is a 2-bit plane with a bias of one: q in {0, 1, 2} (3 is the
@@ -215,11 +216,6 @@ func D32(q Quant) bool { return q.info().d32 }
 // E8M0 reports whether q's d word holds E8M0 exponents, one byte a block
 // (MXFP4).
 func E8M0(q Quant) bool { return q.info().e8m0 }
-
-// MinInD reports a format whose minimum is the d word's high half alone, with
-// no per-sub-block integer to multiply it by: Q5_1. Its bias is dmin itself,
-// the k-quant formula at m = 1.
-func MinInD(q Quant) bool { i := q.info(); return i.biasArray && i.perSuper == 1 }
 
 // HiPlane is the secondary payload plane's width, or 0 when the quants fit the
 // primary one. A weight is primary | hi<<bits; see qinfo.hi and packSub.

@@ -47,19 +47,6 @@ func QuantizeQ8(dst []int8, pairs []float32, x []float32, biasC float64) error {
 	return nil
 }
 
-// QuantizeHalfSums fills per-16-element sums, which the 16-wide k-quants need
-// for their bias correction. Stored pre-divided by 4, because each half occupies
-// four of VPDPBUSD's eight lanes and the row ends in a horizontal sum.
-func QuantizeHalfSums(half []float32, q []int8, biasC float64) {
-	for h := 0; h*16+16 <= len(q); h++ {
-		s := 0
-		for _, v := range q[h*16 : h*16+16] {
-			s += int(v)
-		}
-		half[h] = float32(-float64(s) * biasC / 4)
-	}
-}
-
 // QuantizeQ8Range quantizes blocks [lo, hi). Split out so the pool can spread it
 // across cores: quantization is a quarter of decode time.
 func QuantizeQ8Range(dst []int8, pairs []float32, x []float32, biasC float64, lo, hi int) {

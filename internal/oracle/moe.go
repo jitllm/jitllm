@@ -1,7 +1,5 @@
 package oracle
 
-import "math"
-
 // The mixture-of-experts router's selection, in plain Go: the reference
 // cpu.EmitMoERoute and nn.MoERouteJIT are gated against on every tier.
 //
@@ -20,7 +18,7 @@ import "math"
 //
 // The bias applied to the returned weights as well as the selection gives the
 // right experts and plausible text from the wrong model; MoEFaultBiasedWeights
-// is that mistake. Where the references disagree, see MoEDivergences().
+// is that mistake.
 
 // MoEGate is a router's configuration. Everything here is a property of the
 // container, fixed before the first token.
@@ -115,22 +113,6 @@ func (f MoEFault) String() string {
 	return "?"
 }
 
-// MoEFaults() is every defect, so a gate can enumerate them rather than restate
-// them and a ninth cannot be added on one side only.
-func MoEFaults() []MoEFault {
-	return []MoEFault{
-		MoEFaultLastOfTie,
-		MoEFaultAscendingSum,
-		MoEFaultOrdInSelectionOrder,
-		MoEFaultBiasedWeights,
-		MoEFaultGroupTop1,
-		MoEFaultMaskAfterTopK,
-		MoEFaultScaleBeforeNorm,
-		MoEFaultExpScaleByRank,
-		MoEFaultNoExpScale,
-	}
-}
-
 // moeSumFloor guards the renormalising divide. It is kernels.MoESumFloor and
 // the two are asserted equal by TestRouterFloorMatchesTheKernel: an oracle that
 // guards differently from the kernel it gates is not an oracle.
@@ -139,196 +121,6 @@ const moeSumFloor = 1e-20
 // MoESumFloorForTest exposes that constant so a gate in another package can
 // assert it equals the kernel's. See nn.TestRouterFloorMatchesTheKernel.
 const MoESumFloorForTest = moeSumFloor
-
-// MoEDivergences() is where llama.cpp and DeepSeek's own modeling_deepseek.py
-// disagree about this router, and which one jitllm matches (AGENTS.md RULE 7m:
-// know which one you are matching, and keep the list a reviewed artefact).
-//
-// Each entry is {what, llama.cpp, modeling_deepseek.py, jitllm}.
-func MoEDivergences() [][4]string {
-	return [][4]string{
-		{
-			"the renormalising divisor's floor",
-			"ggml_clamp(sum, 6.103515625e-5, +Inf) -- the smallest normal f16",
-			"sum + 1e-20",
-			"modeling_deepseek.py: sum + 1e-20, DECIDED. It used to be " +
-				"NEITHER -- an all-underflowed selection divided 0 by 0 and took " +
-				"the token non-finite. The two guards are identical where the sum " +
-				"is zero and differ in a REACHABLE range: for 0 < sum < 6.1e-5 the " +
-				"clamp divides by 6.1e-5 and distorts a legitimate small sum, where " +
-				"the addition divides by ~sum and does not. Below an f32 ulp of any " +
-				"sum above ~1e-13, so it is invisible everywhere the clamp would " +
-				"bite -- the strictly less invasive of the two, and the one the " +
-				"weights were trained against",
-		},
-		{
-			"n_group_used == n_expert_groups",
-			"REFUSED: GGML_ASSERT(n_group_used < n_expert_groups) at load",
-			"allowed -- torch.topk(k=n_group) is an ordinary call",
-			"allowed: every group is kept, which is what the definition says and " +
-				"is one fewer shape to refuse",
-		},
-		{
-			"whether k == 1 renormalises",
-			"yes -- norm_w alone, so a single weight becomes exactly 1.0",
-			"no -- `if self.top_k > 1 and self.norm_topk_prob`",
-			"llama.cpp: Norm alone, at every k",
-		},
-		{
-			"whether a scale of 1 is applied",
-			"no -- `if (w_scale != 0.0f && w_scale != 1.0f)`",
-			"yes, always -- `topk_weight * self.routed_scaling_factor`",
-			"llama.cpp: x*1 is x for every finite float, so the two agree in value " +
-				"and jitllm emits no multiply",
-		},
-	}
-}
-
-// MoERouter is the reference. scores is the post-gating score of every expert
-// -- sigmoid(logits) for V3/R1/K2/GLM-4-MoE, softmax(logits) for everything
-// before it -- because which gating function ran is the caller's choice of
-// kernel and not this function's business (nn.MoERouteJIT runs the generated
-// one, and the engine has always computed the softmax as its own kernel).
-//
-// Selection is the lexicographic walk over (score, -index), the kernel's
-// contract: equal scores go to the lowest index, as ggml_argsort's descending
-// order does (it matters when a fresh router emits identical logits). A NaN is
-// never eligible.
-//
-// The method is deliberately not the kernel's: the kernel finds the kept groups
-// from a threshold pair left by the last group pass, this builds the kept set
-// directly, so the comparison is between two derivations.
-func MoERouter(scores []float32, k int, g MoEGate, f MoEFault) MoERoute {
-	n := len(scores)
-	scale := g.Scale
-	if scale == 0 {
-		scale = 1
-	}
-
-	// The selection plane: the scores plus the correction bias. The weights
-	// never come from here.
-	bi := make([]float32, n)
-	copy(bi, scores)
-	if g.Bias != nil {
-		for e := range bi {
-			bi[e] = scores[e] + g.Bias[e]
-		}
-	}
-
-	if g.Grouped() && f != MoEFaultMaskAfterTopK {
-		sz := n / g.NGroup
-		take := 2
-		if sz < take {
-			take = sz
-		}
-		if f == MoEFaultGroupTop1 {
-			take = 1
-		}
-		gs := make([]float32, g.NGroup)
-		for grp := range gs {
-			span := bi[grp*sz : (grp+1)*sz]
-			var s float32 // ggml_sum_rows accumulates from zero
-			for _, e := range moeLexTopK(span, take, MoEFaultNone) {
-				s += span[e]
-			}
-			gs[grp] = s
-		}
-		keep := make([]bool, g.NGroup)
-		for _, grp := range moeLexTopK(gs, g.NGroupUsed, MoEFaultNone) {
-			keep[grp] = true
-		}
-		negInf := float32(math.Inf(-1))
-		for grp, ok := range keep {
-			if ok {
-				continue
-			}
-			for e := grp * sz; e < (grp+1)*sz; e++ {
-				bi[e] = negInf
-			}
-		}
-	}
-
-	selI := moeLexTopK(bi, k, f)
-	ordI := append([]int(nil), selI...)
-	for i := 1; i < len(ordI); i++ {
-		for j := i; j > 0 && ordI[j] < ordI[j-1]; j-- {
-			ordI[j], ordI[j-1] = ordI[j-1], ordI[j]
-		}
-	}
-
-	// The weight of a selected expert is its unbiased score.
-	w := make([]float32, len(selI))
-	for i, e := range selI {
-		w[i] = scores[e]
-		if f == MoEFaultBiasedWeights {
-			w[i] = bi[e]
-		}
-		if f == MoEFaultScaleBeforeNorm {
-			w[i] *= scale
-		}
-	}
-
-	sum := float32(1)
-	if g.Norm {
-		sum = 0
-		// In selection order, one addition at a time: that is the float32 sum
-		// model.Forward, model.Prefill and model.ForwardBatch are gated
-		// bit-identical against each other on a mixture.
-		src := w
-		if f == MoEFaultAscendingSum {
-			src = make([]float32, len(ordI))
-			for i, e := range ordI {
-				for j, s := range selI {
-					if s == e {
-						src[i] = w[j]
-					}
-				}
-			}
-		}
-		for _, v := range src {
-			sum += v
-		}
-		// The floor is DeepSeek's addition rather than llama.cpp's clamp: they
-		// agree at zero, and the clamp distorts a legitimate small sum. See
-		// MoEDivergences().
-		sum += moeSumFloor
-	}
-	for i := range w {
-		w[i] /= sum
-		if scale != 1 && f != MoEFaultScaleBeforeNorm {
-			w[i] *= scale
-		}
-		switch {
-		case g.ExpScale == nil || f == MoEFaultNoExpScale:
-		case f == MoEFaultExpScaleByRank:
-			w[i] *= g.ExpScale[i]
-		default:
-			w[i] *= g.ExpScale[selI[i]]
-		}
-	}
-
-	if f == MoEFaultOrdInSelectionOrder {
-		copy(ordI, selI)
-	}
-
-	r := MoERoute{
-		Sel: make([]int32, len(selI)), Ord: make([]int32, len(ordI)),
-		Wt: make([]float32, len(selI)), OWt: make([]float32, len(ordI)),
-		Sum: sum,
-	}
-	for i, e := range selI {
-		r.Sel[i], r.Wt[i] = int32(e), w[i]
-	}
-	for i, e := range ordI {
-		r.Ord[i] = int32(e)
-		for j, s := range selI {
-			if s == e {
-				r.OWt[i] = w[j]
-			}
-		}
-	}
-	return r
-}
 
 // moeLexTopK is the k largest of v, descending, with the lowest index winning a
 // tie and a NaN never eligible. It is the definition every phase of this router
@@ -360,15 +152,4 @@ func moeLexTopK(v []float32, k int, f MoEFault) []int {
 		prevVal, prevIdx = bestVal, best
 	}
 	return out
-}
-
-// MoESigmoid is sigma(x) = 1/(1+exp(-x)) in f64, narrowed once. It is the
-// reference for the gating step, which is a separate generated kernel run
-// before the router kernel (as the softmax always was).
-//
-// It is the one place in this router compared with a tolerance: the kernel's
-// exp is a minimax polynomial, this is libm. Everything after the gating is
-// bit-exact on every tier.
-func MoESigmoid(x float32) float32 {
-	return float32(1 / (1 + math.Exp(-float64(x))))
 }

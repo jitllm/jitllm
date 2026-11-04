@@ -146,7 +146,7 @@ func MatVecPackedRows(out []float32, t layout.Quant, qs, d, sc []byte, x []float
 					bias = dmin * float32((sw>>(sh+8))&0xFF)
 				}
 			} else if qi.biasArray {
-				bias = dmin // Q5_1: no sc plane, so m is one (kernels.MinInD)
+				bias = dmin // Q5_1: no sc plane, so m is one
 			}
 			if !qi.biasArray {
 				bias = scale * qi.biasK
@@ -241,7 +241,7 @@ func RowPacked(dst []float32, t layout.Quant, qs, d, sc []byte, r, nrows, k int)
 				bias = dmin * float32((sw>>(sh+8))&0xFF)
 			}
 		} else if qi.biasArray {
-			bias = dmin // Q5_1: no sc plane, so m is one (kernels.MinInD)
+			bias = dmin // Q5_1: no sc plane, so m is one
 		}
 		if !qi.biasArray {
 			bias = scale * qi.biasK

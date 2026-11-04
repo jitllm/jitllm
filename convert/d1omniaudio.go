@@ -136,12 +136,6 @@ func d1OmniAudioDense(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-// d1OmniSubLayers is the subsampling's convolution layers (audio.py's
-// nn.Sequential indices): a full 3x3, then depthwise 3x3 and pointwise twice.
-func d1OmniSubLayers() []int {
-	return []int{0, 2, 3, 5, 6}
-}
-
 // audioOf reads f's audio tower, its blocks after nVis vision blocks, or nil
 // for an mmproj with none. An audio projector other than d1-omni's is
 // refused by name.

@@ -238,7 +238,6 @@ func (a *Buf) VPSIGNB(dst, src1, src2 Reg) { a.vop(0x08, p66, m0F38, 0, dst, src
 
 func (a *Buf) VPCMPEQW(dst, src1, src2 Reg) { a.vop(0x75, p66, m0F, 0, dst, src1, src2) }
 
-func (a *Buf) VPCMPEQD(dst, src1, src2 Reg) { a.vop(0x76, p66, m0F, 0, dst, src1, src2) }
 func (a *Buf) VPCMPGTD(dst, src1, src2 Reg) { a.vop(0x66, p66, m0F, 0, dst, src1, src2) }
 
 func (a *Buf) VPMADDWD(dst, src1, src2 Reg) { a.vop(0xF5, p66, m0F, 0, dst, src1, src2) }
@@ -253,10 +252,9 @@ func (a *Buf) VPADDDMem(dst, src1 Reg, m Mem) { a.vopMem(0xFE, p66, m0F, 0, dst,
 func (a *Buf) VPADDW(dst, src1, src2 Reg)     { a.vop(0xFD, p66, m0F, 0, dst, src1, src2) }
 func (a *Buf) VPSUBB(dst, src1, src2 Reg)     { a.vop(0xF8, p66, m0F, 0, dst, src1, src2) }
 
-func (a *Buf) VPSUBBMem(dst, src1 Reg, m Mem) { a.vopMem(0xF8, p66, m0F, 0, dst, src1, m) }
-func (a *Buf) VPAND(dst, src1, src2 Reg)      { a.vop(0xDB, p66, m0F, 0, dst, src1, src2) }
-func (a *Buf) VPOR(dst, src1, src2 Reg)       { a.vop(0xEB, p66, m0F, 0, dst, src1, src2) }
-func (a *Buf) VPANDN(dst, src1, src2 Reg)     { a.vop(0xDF, p66, m0F, 0, dst, src1, src2) }
+func (a *Buf) VPAND(dst, src1, src2 Reg)  { a.vop(0xDB, p66, m0F, 0, dst, src1, src2) }
+func (a *Buf) VPOR(dst, src1, src2 Reg)   { a.vop(0xEB, p66, m0F, 0, dst, src1, src2) }
+func (a *Buf) VPANDN(dst, src1, src2 Reg) { a.vop(0xDF, p66, m0F, 0, dst, src1, src2) }
 
 func (a *Buf) VPMINSD(dst, src1, src2 Reg) { a.vop(0x39, p66, m0F38, 0, dst, src1, src2) }
 
@@ -314,9 +312,6 @@ func (a *Buf) VMINPS(dst, src1, src2 Reg) { a.vop(0x5D, pNone, m0F, 0, dst, src1
 func (a *Buf) VCVTPS2DQ(dst, src Reg) { a.vop(0x5B, p66, m0F, 0, dst, Y0, src) }
 
 func (a *Buf) VCVTTPS2DQ(dst, src Reg) { a.vop(0x5B, pF3, m0F, 0, dst, Y0, src) }
-
-func (a *Buf) VPACKSSDW(dst, src1, src2 Reg) { a.vop(0x6B, p66, m0F, 0, dst, src1, src2) }
-func (a *Buf) VPACKSSWB(dst, src1, src2 Reg) { a.vop(0x63, p66, m0F, 0, dst, src1, src2) }
 
 func (a *Buf) VPMULLD(dst, src1, src2 Reg) { a.vop(0x40, p66, m0F38, 0, dst, src1, src2) }
 
@@ -459,8 +454,6 @@ func (a *Buf) VADDPSMem(dst, src1 Reg, m Mem) { a.vopMem(0x58, pNone, m0F, 0, ds
 func (a *Buf) VMULPSMem(dst, src1 Reg, m Mem) { a.vopMem(0x59, pNone, m0F, 0, dst, src1, m) }
 
 func (a *Buf) VSUBPS(dst, src1, src2 Reg) { a.vop(0x5C, pNone, m0F, 0, dst, src1, src2) }
-
-func (a *Buf) VPSUBDMem(dst, src1 Reg, m Mem) { a.vopMem(0xFA, p66, m0F, 0, dst, src1, m) }
 
 func (a *Buf) VPSUBD(dst, src1, src2 Reg) { a.vop(0xFA, p66, m0F, 0, dst, src1, src2) }
 
@@ -699,8 +692,6 @@ func (a *Buf) DECmem(m Mem) {
 func (a *Buf) PREFETCHT0(m Mem) { a.prefetch(1, m) }
 
 func (a *Buf) PREFETCHNTA(m Mem) { a.prefetch(0, m) }
-
-func (a *Buf) PREFETCHT2(m Mem) { a.prefetch(3, m) }
 
 func (a *Buf) prefetch(hint uint8, m Mem) {
 	idx := noIndex

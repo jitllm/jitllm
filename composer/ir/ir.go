@@ -424,14 +424,6 @@ func (b *Builder) fail(format string, args ...any) {
 	}
 }
 
-func (b *Builder) IntConst(v Value) (int64, bool) {
-	if v == 0 || int(v) > len(b.k.Ops) {
-		return 0, false
-	}
-	o := b.k.Ops[v-1]
-	return o.Imm, o.Kind == OpConst && (o.Type == U32 || o.Type == I32)
-}
-
 func New(name string, group [3]int) *Builder {
 	return &Builder{k: Kernel{Name: name, Group: group}}
 }
@@ -493,10 +485,6 @@ func (b *Builder) And(t Type, x, y Value) Value { return b.bin(OpAnd, t, x, y) }
 func (b *Builder) Xor(t Type, x, y Value) Value { return b.bin(OpXor, t, x, y) }
 func (b *Builder) Or(t Type, x, y Value) Value  { return b.bin(OpOr, t, x, y) }
 
-// Funnel is (hi:lo) >> n, n in [0,31]: see OpFunnel.
-func (b *Builder) Funnel(lo, hi, n Value) Value {
-	return b.emit(Op{Kind: OpFunnel, Type: U32, Args: [3]Value{lo, hi, n}})
-}
 func (b *Builder) Sub(t Type, x, y Value) Value { return b.bin(OpSub, t, x, y) }
 func (b *Builder) Mul(t Type, x, y Value) Value { return b.bin(OpMul, t, x, y) }
 func (b *Builder) Div(t Type, x, y Value) Value { return b.bin(OpDiv, t, x, y) }

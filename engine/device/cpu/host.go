@@ -6,8 +6,7 @@ import (
 )
 
 // Host is the CPU a caller maps generated code onto: its features, probed
-// when the Host is made or stated lower (AtTier, WithoutVNNI,
-// WithoutDotProd), the tier they make, whether the engine runs on it at all
+// when the Host is made or stated at a lower tier (AtTier), the tier they make, whether the engine runs on it at all
 // (Baseline), how many codes it mapped per tier, and the perf map it writes
 // when asked (WithPerfMap). Each model's CPU device maps through its own.
 type Host struct {
@@ -22,10 +21,9 @@ type Host struct {
 type HostOption func(*hostOpts)
 
 type hostOpts struct {
-	tier          Tier
-	lower         bool
-	noVNNI, noDot bool
-	perfMap       bool
+	tier    Tier
+	lower   bool
+	perfMap bool
 }
 
 // AtTier makes the Host one of tier t: what a host of that tier would not
@@ -33,13 +31,6 @@ type hostOpts struct {
 // machine. A Host only loses capabilities -- it cannot execute an
 // instruction its CPU lacks -- so the top tier takes nothing.
 func AtTier(t Tier) HostOption { return func(o *hostOpts) { o.tier, o.lower = t, true } }
-
-// WithoutVNNI makes the Host one without AVX-VNNI or AVX512-VNNI.
-func WithoutVNNI() HostOption { return func(o *hostOpts) { o.noVNNI = true } }
-
-// WithoutDotProd makes the Host one without FEAT_DotProd, so the forms that
-// widen SDOT are selected on a chip that has it.
-func WithoutDotProd() HostOption { return func(o *hostOpts) { o.noDot = true } }
 
 // WithPerfMap has the Host write /tmp/perf-<pid>.map, the JIT symbol format
 // Linux perf reads: one "<hex addr> <hex size> <name>" line per named code it
@@ -55,12 +46,6 @@ func NewHost(opts ...HostOption) *Host {
 		opt(&o)
 	}
 	f := CPU()
-	if o.noVNNI {
-		f.AVXVNNI, f.AVX512VNNI = false, false
-	}
-	if o.noDot {
-		f.DotProd = false
-	}
 	if o.lower {
 		lowerTo(&f, o.tier)
 	}

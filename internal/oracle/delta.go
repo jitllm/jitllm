@@ -55,23 +55,6 @@ func Conv1d(out, state, w, x []float64, taps, chans int) {
 	}
 }
 
-// DeltaGate computes a linear block's two gates over len(decay) heads:
-//
-//	decay[i] = exp(A[i] * softplus(alpha[i] + dt[i]))
-//	beta[i]  = sigmoid(b[i])
-//
-// softplus is written max(z,0) + log1p(exp(-|z|)), which is exact in float64
-// for every finite z -- the textbook log1p(exp(z)) overflows above ~709 and
-// needs the branch this form removes.
-func DeltaGate(decay, beta, alpha, dt, b, a []float64) {
-	for i := range decay {
-		z := alpha[i] + dt[i]
-		sp := math.Max(z, 0) + math.Log1p(math.Exp(-math.Abs(z)))
-		decay[i] = math.Exp(a[i] * sp)
-		beta[i] = 1 / (1 + math.Exp(-b[i]))
-	}
-}
-
 // GatedDeltaChan is GatedDelta with a per-channel decay: the state decays at a
 // rate that varies along the row instead of one rate for the whole head. It is
 // Kimi-Linear's delta rule (KDA); qwen3next's is the scalar form above.
@@ -119,20 +102,6 @@ func GatedSSD(o, state, k, q, v []float64, decay, dt, d float64) {
 			acc += row[i] * q[i]
 		}
 		o[j] = acc + d*v[j]
-	}
-}
-
-// SSDGate computes Mamba-2's two per-head scalars over len(decay) heads:
-//
-//	dt[i]    = softplus(alpha[i] + bias[i])
-//	decay[i] = exp(A[i] * dt[i])
-//
-// softplus in DeltaGate's form, exact for every finite argument.
-func SSDGate(decay, dt, alpha, bias, a []float64) {
-	for i := range decay {
-		z := alpha[i] + bias[i]
-		dt[i] = math.Max(z, 0) + math.Log1p(math.Exp(-math.Abs(z)))
-		decay[i] = math.Exp(a[i] * dt[i])
 	}
 }
 

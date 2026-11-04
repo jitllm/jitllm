@@ -72,24 +72,9 @@ func (s *Instance) kvlAt(li int) kvLayout { return s.kvl.atLayer(s.c, li) }
 func (l kvLayout) atLayer(c *Config, li int) kvLayout {
 	switch {
 	case c.extraKVHead(li):
-		l.nKV++ // kvlMSA
+		l.nKV++
 	case c.GeomSplit() && !c.MLA() && c.SWA(li):
-		l.nKV, l.headDim = c.NKVHeadSWA, c.HeadDimSWA // kvlSWA
+		l.nKV, l.headDim = c.NKVHeadSWA, c.HeadDimSWA
 	}
-	return l
-}
-
-// kvlMSA is an MSA block's layout: the indexer's key is one more kv head
-// after the attention's, so the row is (NKVHead+1)*HeadDim (msa.go).
-func (s *Instance) kvlMSA() kvLayout {
-	l := s.kvl
-	l.nKV++
-	return l
-}
-
-// kvlSWA is the sliding layers' layout.
-func (s *Instance) kvlSWA() kvLayout {
-	l := s.kvl
-	l.nKV, l.headDim = s.c.NKVHeadSWA, s.c.HeadDimSWA
 	return l
 }

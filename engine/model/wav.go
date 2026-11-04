@@ -1,28 +1,9 @@
 package model
 
 import (
-	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	"strings"
 )
-
-// DecodeAudioDataURL decodes a data:audio/...;base64 voice clip: a WAV of
-// 16 kHz mono 16-bit PCM, the samples scaled to [-1, 1] (audio.waveform's
-// int16 / 32768). Any other rate, channel count or encoding is refused by
-// name: the engine does not resample.
-func DecodeAudioDataURL(u string) ([]float32, error) {
-	rest, ok := strings.CutPrefix(u, "data:")
-	head, data, found := strings.Cut(rest, ",")
-	if !ok || !found || !strings.HasPrefix(head, "audio/") || !strings.HasSuffix(head, ";base64") {
-		return nil, fmt.Errorf("audio must be a data:audio/...;base64 URL")
-	}
-	b, err := base64.StdEncoding.DecodeString(data)
-	if err != nil {
-		return nil, fmt.Errorf("audio: %w", err)
-	}
-	return DecodeWAV(b)
-}
 
 // DecodeWAV reads a RIFF WAV of 16 kHz mono 16-bit PCM into samples in
 // [-1, 1].

@@ -75,18 +75,6 @@ func layoutFor(goos string) (layout, bool) {
 	return layout{}, false
 }
 
-// HIPNames is the HIP runtime's names tried on this system, newest ABI first.
-func HIPNames() []string {
-	lo, _ := layoutFor(runtime.GOOS)
-	return lo.hip
-}
-
-// ComgrNames is comgr's names tried on this system, newest ABI first.
-func ComgrNames() []string {
-	lo, _ := layoutFor(runtime.GOOS)
-	return lo.comgr
-}
-
 // DefaultDirs is where a ROCm install puts its libraries on this system, in
 // the order tried after the loader's own path.
 func DefaultDirs() []string {

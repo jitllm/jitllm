@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -43,19 +42,4 @@ func vanishedFails(code int) int {
 		return 1
 	}
 	return code
-}
-
-// cardTooSmall is what an every-block arm does when the device held fewer
-// blocks than it was offered: a loud skip naming the card when the device
-// said it ran out of room ("needs N, M of L used", "does not fit the
-// budget"), and a failure for
-// any other reason, since the only decline a device may give is "does not
-// fit" (RULE 8). why is the device's account of the placement.
-func cardTooSmall(t *testing.T, why string, format string, args ...any) {
-	t.Helper()
-	msg := fmt.Sprintf(format, args...)
-	if strings.Contains(why, "does not fit") || strings.Contains(why, "needs ") && strings.Contains(why, " used") {
-		t.Skipf("CARD TOO SMALL: %s (%s) -- this gate proved nothing here", msg, why)
-	}
-	t.Fatalf("%s, and not for room (%s): a device declines a block only when it does not fit", msg, why)
 }

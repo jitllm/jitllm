@@ -78,17 +78,6 @@ func BuildIDForTest() string {
 	return id
 }
 
-// vlmAvailable reports whether a VLM can be opened: its two sources, or the
-// merged container they convert to -- which is all a host that holds only
-// containers has (see containerAlone).
-func vlmAvailable(text, mmproj string) bool {
-	if sourcePresent(text, mmproj) {
-		return true
-	}
-	_, err := os.Stat(strings.TrimSuffix(text, filepath.Ext(text)) + "-vlm" + jlm.Ext)
-	return err == nil
-}
-
 // sourcePresent reports whether every input a conversion needs is on disk.
 func sourcePresent(paths ...string) bool {
 	for _, p := range paths {

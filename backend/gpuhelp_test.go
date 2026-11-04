@@ -81,14 +81,6 @@ func randWeights(q layout.Quant, rows, k int, rng *rand.Rand) []byte {
 	return raw
 }
 
-func randActs(k int, rng *rand.Rand) []float32 {
-	x := make([]float32, k)
-	for i := range x {
-		x[i] = float32(rng.NormFloat64())
-	}
-	return x
-}
-
 // gpu is a scratch device context: allocate, launch, read back, free.
 type scratchDev struct {
 	d    backend.Device

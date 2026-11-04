@@ -33,13 +33,3 @@ func (c *Config) attnWidths() (hdK, hdV int) {
 	}
 	return c.HeadDim, c.HeadDim
 }
-
-// mlaGated reports whether any full block carries Kimi-K3's MLA output gate.
-func (m *Model) mlaGated() bool {
-	for i := range m.layers {
-		if m.layers[i].mlaGate.rows != 0 {
-			return true
-		}
-	}
-	return false
-}

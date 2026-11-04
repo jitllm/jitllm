@@ -6,7 +6,6 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -139,12 +138,6 @@ func k3Config(out *Config, c *jlm.Config, nact int) error {
 			"structure", out.Arch, out.AttnResBlock)
 	}
 	return nil
-}
-
-// f32Row is a vector as a one-row F32 matrix, which the generated matvec
-// reads: a score vector dotted with every normed stream in one call.
-func f32Row(v []float32) tensor {
-	return tensor{typ: quant.F32, data: f32Bytes(v), rows: 1, k: len(v)}
 }
 
 // loadK3 reads block bi's Kimi-K3 matrices beyond the common ones and checks

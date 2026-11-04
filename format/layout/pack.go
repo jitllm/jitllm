@@ -272,7 +272,7 @@ func extract(t Quant, blk []byte, s int, q []int32) (dBits, dminBits uint16, sc,
 	case Q5_1:
 		// Q5_0's planes after two halves, d then m. The minimum goes out negated
 		// (sign bit flipped, exact for every half) because every reader subtracts
-		// dmin*m and Q5_1's m is one: see MinInD.
+		// dmin*m and Q5_1's m is one.
 		qh := binary.LittleEndian.Uint32(blk[4:])
 		for l := 0; l < 16; l++ {
 			q[l] = int32(blk[8+l] & 0xF)
@@ -538,58 +538,4 @@ func PackedWords(t Quant, nrows, k int) (qs, d, sc int, err error) {
 		sc = nrows * ((nsub + per - 1) / per)
 	}
 	return qs, d, sc, nil
-}
-
-// RowWindow copies rows [lo, lo+n) of a packed tensor whose buffer holds nrows
-// rows into dst tensors laid out for exactly `to` rows (n <= to), the rows past
-// n zeroed. dst spans must be PackedWords(t, to, k) words each. It lets a host
-// kernel serve a row count its tile does not divide.
-//
-// Every plane is [unit][row] words with the row fastest, so a window is one
-// strided copy per unit, except the d plane, where DSlots rows share a word:
-// lo must be a multiple of DSlots, which a tile boundary always is.
-func RowWindow(t Quant, qs, d, sc []byte, nrows, k, lo, n, to int, dqs, dd, dsc []byte) error {
-	nq, nd, nsc, err := PackedWords(t, nrows, k)
-	if err != nil {
-		return err
-	}
-	tq, td, tsc, _ := PackedWords(t, to, k)
-	if n > to || lo < 0 || lo+n > nrows || len(dqs) < tq*4 || len(dd) < td*4 || len(dsc) < tsc*4 {
-		return fmt.Errorf("kernels: RowWindow: rows [%d,%d) of %d into %d", lo, lo+n, nrows, to)
-	}
-	clear(dqs[:tq*4])
-	clear(dd[:td*4])
-	clear(dsc[:tsc*4])
-	plane := func(dst, src []byte, units, srcRows, dstRows, first, count int) {
-		for u := 0; u < units; u++ {
-			copy(dst[(u*dstRows)*4:(u*dstRows+count)*4], src[(u*srcRows+first)*4:(u*srcRows+first+count)*4])
-		}
-	}
-	plane(dqs, qs, nq/nrows, nrows, to, lo, n)
-	if nsc > 0 {
-		plane(dsc, sc, nsc/nrows, nrows, to, lo, n)
-	}
-	if sl := DSlots(t); sl > 1 {
-		// The first row must start a word; tile boundaries always do.
-		if lo%sl != 0 {
-			return fmt.Errorf("kernels: RowWindow: a %d-row-per-word d plane needs a first "+
-				"row that is a multiple of %d, not %d", sl, sl, lo)
-		}
-		sp, dp := (nrows+sl-1)/sl, (to+sl-1)/sl
-		plane(dd, d, nd/sp, sp, dp, lo/sl, (n+sl-1)/sl)
-		// A ragged last word carries rows past the window (the next tile's
-		// scales), which must be zeroed.
-		if rem := n % sl; rem != 0 && lo+n < nrows {
-			w0 := (n / sl) * 4
-			for u := 0; u < nd/sp; u++ {
-				w := u*dp*4 + w0
-				for b := rem * (4 / sl); b < 4; b++ {
-					dd[w+b] = 0
-				}
-			}
-		}
-		return nil
-	}
-	plane(dd, d, nd/nrows, nrows, to, lo, n)
-	return nil
 }
