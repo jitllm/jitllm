@@ -153,7 +153,7 @@ func TestComposedCPUGridRows(t *testing.T) {
 	rng := rand.New(rand.NewSource(41))
 	dev := cpuDevice(hostArm())
 	right := 0
-	kinds := []graph.OpKind{graph.OpMatVec, graph.OpNorm, graph.OpExpr, graph.OpAdd}
+	kinds := []graph.OpKind{graph.OpMatVec, graph.OpNorm, graph.OpLayerNorm, graph.OpExpr, graph.OpAdd}
 	seen := map[graph.OpKind]int{}
 	for _, g := range GridRowsCases() {
 		gr, err := GridRowsGraph(g)
@@ -406,8 +406,8 @@ func TestComposedCPUUnfold(t *testing.T) {
 
 // GridRowsLone is op kind alone over a stride-2 depthwise convolution's
 // grid, its output the graph's, and that output by the oracle: a matrix
-// product of the grid by the norm's vector as a one-row matrix, the norm,
-// GELU, and the grid added to itself.
+// product of the grid by the norm's vector as a one-row matrix, the RMS
+// norm, the LayerNorm, GELU, and the grid added to itself.
 func GridRowsLone(g GridRowsCase, kind graph.OpKind, x, filt, n1 []float32) (*graph.Graph, []float32) {
 	m := g.Out()
 	b := graph.New()
@@ -431,6 +431,12 @@ func GridRowsLone(g GridRowsCase, kind graph.OpKind, x, filt, n1 []float32) (*gr
 		want = make([]float32, m*g.C)
 		for r := range m {
 			oracle.RMSNorm32(want[r*g.C:(r+1)*g.C], ref[r*g.C:(r+1)*g.C], filt[:g.C], 1e-6)
+		}
+	case graph.OpLayerNorm:
+		b.Out(b.LayerNorm(dw, jlm.RoleVMNDwMid, 1e-6))
+		want = make([]float32, m*g.C)
+		for r := range m {
+			oracle.LayerNorm32(want[r*g.C:(r+1)*g.C], ref[r*g.C:(r+1)*g.C], filt[:g.C], nil, 1e-6)
 		}
 	case graph.OpExpr:
 		var e jlm.ExprBuilder

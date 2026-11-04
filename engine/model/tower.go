@@ -34,12 +34,10 @@ type towerGraphs struct {
 	// the patch grid's width; out the rows the head writes, one a token of
 	// the picture's span.
 	rows, side, out int
+	// fit is how a picture becomes the tower's squares.
+	fit pictureFit
 	// pic is the entry's picture op's attributes: its size, and for a
 	// resize by Pillow's filters its taps.
-	// short is the shorter side a picture is resized to before its centre
-	// is cropped to the picture op's size, 0 where the whole picture is
-	// resized to it.
-	short int
 	pic graph.Attrs
 	// holders is what each chat template writes for a picture, by the
 	// template's source (picturePlaceholder).
@@ -90,7 +88,7 @@ func (m *Model) bindTower(c *jlm.File) error {
 		case e.Block != jlm.DenseBlock:
 			return fmt.Errorf("model: the tower holds %v in block %d of %d", e.Role, e.Block, len(ls))
 		}
-		if e.Role.Expanded() || e.NDim < 2 {
+		if e.Role.Expanded() || e.NDim < 2 || squeezed(e) {
 			x, err := entryVector(c, e)
 			if err != nil {
 				return err
@@ -110,6 +108,17 @@ func (m *Model) bindTower(c *jlm.File) error {
 		l.mats = append(l.mats, roleTensor{e.Role, dst})
 	}
 	return bindPacked(c, m.Cfg, &m.towerDense)
+}
+
+// squeezed reports whether e is a vector stored with trailing dimensions
+// of 1 (InternViT's class embedding, [1024, 1, 1]).
+func squeezed(e *jlm.Entry) bool {
+	for d := 1; d < int(e.NDim); d++ {
+		if e.Dims[d] != 1 {
+			return false
+		}
+	}
+	return true
 }
 
 // towerSlot is the field of a tower block's layer matrix r is held in: the
@@ -146,7 +155,7 @@ func (m *Model) towerFacts(b int32) graph.Facts {
 			continue
 		}
 		s := graph.Shape{K: e.K()}
-		if e.NDim >= 2 {
+		if e.NDim >= 2 && !squeezed(e) {
 			s.Rows = e.Rows()
 		}
 		inv[e.Role] = s
@@ -191,11 +200,11 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 	}
 	tg := &towerGraphs{entry: map[uint8]*graph.Graph{}, rows: side*side + lead, side: side}
 	for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
-		g, short, err := towerEntry(t, px, side*side, lead, dense)
+		g, fit, err := towerEntry(t, px, side*side, lead, dense)
 		if err != nil {
 			return nil, fmt.Errorf("model: the tower's entry: %w", err)
 		}
-		tg.pic, tg.short = g.Ops[0].Attr, short
+		tg.pic, tg.fit = g.Ops[0].Attr, fit
 		tg.entry[px] = g
 	}
 	for i := range int(v.NLayer) {
@@ -213,32 +222,41 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 	return tg, nil
 }
 
+// pictureFit is how a picture becomes the tower's squares: resized as a
+// whole to the picture op's size; its shorter side resized to short and its
+// centre cropped to it; or cut into between minTiles and maxTiles tiles of
+// it, a thumbnail of the whole after them where thumb says (jlm.PreTile).
+type pictureFit struct {
+	short              int
+	minTiles, maxTiles int
+	thumb              bool
+}
+
 // towerEntry is the entry for pictures of sample format px: the record's
 // preprocessing as one op (graph.OpPicture), then its entry program over
-// the grid's patch rows after lead rows (a class row's), and the shorter
-// side the picture is resized to before its centre is cropped (0 for a
-// resize of the whole picture to the op's size).
-func towerEntry(t *jlm.Tower, px uint8, grid, lead int, f graph.Facts) (*graph.Graph, int, error) {
+// the grid's patch rows after lead rows (a class row's), and how a picture
+// becomes the op's squares.
+func towerEntry(t *jlm.Tower, px uint8, grid, lead int, f graph.Facts) (*graph.Graph, pictureFit, error) {
 	a := graph.Attrs{Pixels: px, Std: [3]float64{1, 1, 1}}
-	short, cropped := 0, false
+	var fit pictureFit
+	cropped := false
 	for _, s := range t.Pre {
 		switch s.Kind {
 		case jlm.PreResize:
 			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[1])
 			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
-				return nil, 0, err
+				return nil, fit, err
 			}
 		case jlm.PreResizeShort:
-			short = int(s.Ints[0])
-			a.PicW, a.PicH = short, short
+			fit.short = int(s.Ints[0])
+			a.PicW, a.PicH = fit.short, fit.short
 			if err := resizeChain(&a, jlm.Filter(s.Ints[1])); err != nil {
-				return nil, 0, err
-			}
-			if a.Chain != graph.ChainPIL {
-				return nil, 0, fmt.Errorf("a resize of the shorter side by filter %d, which crops no window", s.Ints[1])
+				return nil, fit, err
 			}
 		case jlm.PreCenterCrop:
 			a.PicW, a.PicH, cropped = int(s.Ints[0]), int(s.Ints[1]), true
+		case jlm.PreTile:
+			fit.minTiles, fit.maxTiles, fit.thumb = int(s.Ints[0]), int(s.Ints[1]), s.Ints[2] == 1
 		case jlm.PreNormalize:
 			for c := range 3 {
 				a.Mean[c], a.Std[c] = float64(s.Floats[c]), float64(s.Floats[3+c])
@@ -247,11 +265,17 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead int, f graph.Facts) (*graph.G
 	}
 	switch {
 	case a.PicW == 0:
-		return nil, 0, fmt.Errorf("the picture is never resized to the tower's size")
-	case short > 0 && !cropped:
-		return nil, 0, fmt.Errorf("a picture resized by its shorter side and never cropped has no one size")
-	case short > 0 && (a.PicW > short || a.PicH > short):
-		return nil, 0, fmt.Errorf("a %dx%d crop of a picture whose shorter side is %d", a.PicW, a.PicH, short)
+		return nil, fit, fmt.Errorf("the picture is never resized to the tower's size")
+	case fit.short > 0 && !cropped:
+		return nil, fit, fmt.Errorf("a picture resized by its shorter side and never cropped has no one size")
+	case fit.short > 0 && (a.PicW > fit.short || a.PicH > fit.short):
+		return nil, fit, fmt.Errorf("a %dx%d crop of a picture whose shorter side is %d", a.PicW, a.PicH, fit.short)
+	case fit.short > 0 && fit.maxTiles > 0:
+		return nil, fit, fmt.Errorf("a picture both cropped and tiled")
+	case (fit.short > 0 || fit.maxTiles > 0) && a.Chain != graph.ChainPIL:
+		// A crop and a tile are windows of a resize, which only Pillow's
+		// taps (composer.PILTaps) take.
+		return nil, fit, fmt.Errorf("a window of a picture resized by filter %d", a.Filter)
 	}
 	if a.Chain == graph.ChainPIL {
 		// A crop's taps are a window of the resize's, whose scale is at most
@@ -260,20 +284,86 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead int, f graph.Facts) (*graph.G
 	}
 	p := &t.Entry
 	if len(p.Ops) == 0 || p.Ops[0].Code != jlm.TOpPatchify || p.NIn != 1 {
-		return nil, 0, fmt.Errorf("an entry that does not begin with the picture's patches")
+		return nil, fit, fmt.Errorf("an entry that does not begin with the picture's patches")
 	}
 	b := graph.NewBlock(-1)
 	P := int(p.Ops[0].Span)
 	pix := b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "pixels", Width: 3 * P * P}}, nil, a, nil, nil)[0]
 	if a.PicW*a.PicH != grid*P*P {
-		return nil, 0, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
+		return nil, fit, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
 	}
 	out, err := lowerProgram(b, p, []graph.ValueID{pix}, grid+lead, f)
 	if err != nil {
-		return nil, 0, err
+		return nil, fit, err
 	}
 	b.Out(out)
-	return b.G, short, graph.Verify(b.G, f)
+	return b.G, fit, graph.Verify(b.G, f)
+}
+
+// tiles is a w x h picture's tile grid in squares of side s and how many
+// squares it becomes, the thumbnail among them: one square for a tower
+// that does not tile.
+func (f pictureFit) tiles(w, h, s int) (cols, rows, n int) {
+	if f.maxTiles == 0 {
+		return 1, 1, 1
+	}
+	cols, rows = tileGrid(w, h, s, f.minTiles, f.maxTiles)
+	n = cols * rows
+	if f.thumb && n > 1 {
+		n++
+	}
+	return cols, rows, n
+}
+
+// window is square t of a w x h picture as the picture op's taps take it:
+// the size the picture is resized to and the square's corner in it.
+func (f pictureFit) window(w, h, pw, ph, t int) (ow, oh, x0, y0 int) {
+	switch {
+	case f.short > 0:
+		// transformers' center_crop: the offsets floored.
+		ow, oh = shortSide(w, h, f.short)
+		return ow, oh, (ow - pw) / 2, (oh - ph) / 2
+	case f.maxTiles > 0:
+		cols, rows, _ := f.tiles(w, h, pw)
+		if t < cols*rows {
+			return cols * pw, rows * ph, (t % cols) * pw, (t / cols) * ph
+		}
+	}
+	return pw, ph, 0, 0
+}
+
+// tileGrid is the (columns, rows) grid of between minT and maxT tiles of
+// side s whose aspect is closest to a w x h picture's: a tie goes to the
+// later (larger) grid while the picture's area is more than half the grid's,
+// the grids in the reference's own order -- every (columns, rows) pair,
+// columns outer, stably sorted by tile count (InternVL's
+// find_closest_aspect_ratio, transformers' get_optimal_tiled_canvas).
+func tileGrid(w, h, s, minT, maxT int) (cols, rows int) {
+	aspect, area := float64(w)/float64(h), float64(w*h)
+	bc, br, best := 1, 1, -1.0
+	// By tile count, then in generation order: the stable sort, walked.
+	for n := minT; n <= maxT; n++ {
+		for c := 1; c <= maxT; c++ {
+			if n%c != 0 {
+				continue
+			}
+			r := n / c
+			d := math.Abs(aspect - float64(c)/float64(r))
+			switch {
+			case best < 0 || d < best:
+				bc, br, best = c, r, d
+			case d == best && area > 0.5*float64(s*s*c*r):
+				bc, br = c, r
+			}
+		}
+	}
+	return bc, br
+}
+
+// picRows is the rows a w x h picture becomes: its squares' every row.
+func (tg *towerGraphs) picRows(w, h int) int {
+	_, _, n := tg.fit.tiles(w, h, tg.pic.PicW)
+	return n * tg.out
 }
 
 // resizeChain sets a's resample to filter f's.
@@ -754,7 +844,12 @@ func (s *Instance) EncodePicture(img image.Image) ([]float32, error) {
 		return nil, err
 	}
 	defer s.m.enterPager()()
-	return s.encodePicture(img, s.tower.out)
+	b := img.Bounds()
+	n := s.m.tower.picRows(b.Dx(), b.Dy()) * int(s.m.container.Vision().ProjDim)
+	if cap(s.tower.out) < n {
+		s.tower.out = make([]float32, n)
+	}
+	return s.encodePicture(img, s.tower.out[:n])
 }
 
 // towerReady is why the instance cannot encode a picture, nil when it can.
@@ -784,39 +879,42 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 	}
 	tr.req[composer.RequestGrid] = uint32(tg.side)
 	pl.request(tr.req)
-	if a := tg.pic; a.Chain == graph.ChainPIL && (pl.w != tr.tapsW || pl.h != tr.tapsH) {
-		if pl.w > a.PicSide || pl.h > a.PicSide {
-			return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.w, pl.h, a.PicSide)
-		}
-		// A crop is the centre window of the resize (transformers'
-		// center_crop: the offsets floored).
-		ow, oh := a.PicW, a.PicH
-		if tg.short > 0 {
-			ow, oh = shortSide(pl.w, pl.h, tg.short)
-		}
-		x0, y0 := (ow-a.PicW)/2, (oh-a.PicH)/2
-		composer.PILTaps(a.Filter, pl.w, ow, x0, a.PicW, a.Taps, tr.req[composer.RequestPicTaps:])
-		composer.PILTaps(a.Filter, pl.h, oh, y0, a.PicH, a.Taps, tr.req[composer.RequestPicTaps+a.PicW*(a.Taps+1):])
-		tr.tapsW, tr.tapsH = pl.w, pl.h
+	a := tg.pic
+	if a.Chain == graph.ChainPIL && (pl.w > a.PicSide || pl.h > a.PicSide) {
+		return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.w, pl.h, a.PicSide)
 	}
-	b := &ts.cpu.bound
-	*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab, pic: words}
-	b.io[0] = unsafe.Pointer(&tr.rows[0])
-	ts.cpuRunForm(b, f)
-	if err := ts.towerBlocks(tr); err != nil {
-		return nil, fmt.Errorf("model: the tower's blocks: %w", err)
-	}
-	f = tr.head
-	if why := ts.cpuWeights(f, -1, &m.towerDense); why != composer.DeclineServes {
+	head := tr.head
+	if why := ts.cpuWeights(head, -1, &m.towerDense); why != composer.DeclineServes {
 		return nil, fmt.Errorf("model: the tower's head: %v", why)
 	}
-	if len(dst) != tg.out*int(m.container.Vision().ProjDim) {
-		return nil, fmt.Errorf("model: %d values for a picture's %d rows of %d", len(dst), tg.out,
-			m.container.Vision().ProjDim)
+	D := int(m.container.Vision().ProjDim)
+	_, _, squares := tg.fit.tiles(pl.w, pl.h, a.PicW)
+	if len(dst) != squares*tg.out*D {
+		return nil, fmt.Errorf("model: %d values for a picture's %d rows of %d", len(dst), squares*tg.out, D)
 	}
-	*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab}
-	b.io[0], b.io[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&dst[0])
-	ts.cpuRunForm(b, f)
+	b := &ts.cpu.bound
+	for sq := range squares {
+		// The taps are the square's window of the resize; one picture size's
+		// whole-picture taps are kept from one picture to the next.
+		if a.Chain == graph.ChainPIL && (squares > 1 || pl.w != tr.tapsW || pl.h != tr.tapsH) {
+			ow, oh, x0, y0 := tg.fit.window(pl.w, pl.h, a.PicW, a.PicH, sq)
+			composer.PILTaps(a.Filter, pl.w, ow, x0, a.PicW, a.Taps, tr.req[composer.RequestPicTaps:])
+			composer.PILTaps(a.Filter, pl.h, oh, y0, a.PicH, a.Taps, tr.req[composer.RequestPicTaps+a.PicW*(a.Taps+1):])
+			tr.tapsW, tr.tapsH = pl.w, pl.h
+			if squares > 1 {
+				tr.tapsW = 0
+			}
+		}
+		*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab, pic: words}
+		b.io[0] = unsafe.Pointer(&tr.rows[0])
+		ts.cpuRunForm(b, f)
+		if err := ts.towerBlocks(tr); err != nil {
+			return nil, fmt.Errorf("model: the tower's blocks: %w", err)
+		}
+		*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(head), n: tg.rows, req: tr.req, pos: tr.posTab}
+		b.io[0], b.io[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&dst[sq*tg.out*D])
+		ts.cpuRunForm(b, head)
+	}
 	return dst, nil
 }
 
@@ -872,21 +970,25 @@ func (s *Instance) encodePictures(spans []Span, from int) ([]Span, error) {
 		return nil, err
 	}
 	tr := s.tower
-	w := s.m.tower.out * int(s.m.container.Vision().ProjDim)
+	D := int(s.m.container.Vision().ProjDim)
 	tr.spans = append(tr.spans[:0], spans...)
 	k, row := 0, 0
 	for i := range tr.spans {
 		sp := &tr.spans[i]
 		r := sp.n(s.c.NEmbd)
 		if sp.Picture != nil && sp.Embd == nil {
-			if sp.PicRows != s.m.tower.out {
+			b := sp.Picture.Bounds()
+			if want := s.m.tower.picRows(b.Dx(), b.Dy()); sp.PicRows != want {
 				return nil, fmt.Errorf("model: span %d is a picture of %d rows and the tower writes %d",
-					i, sp.PicRows, s.m.tower.out)
+					i, sp.PicRows, want)
 			}
 			if k == len(tr.pics) {
-				tr.pics = append(tr.pics, make([]float32, w))
+				tr.pics = append(tr.pics, nil)
 			}
-			sp.Embd = tr.pics[k]
+			if cap(tr.pics[k]) < sp.PicRows*D {
+				tr.pics[k] = make([]float32, sp.PicRows*D)
+			}
+			sp.Embd = tr.pics[k][:sp.PicRows*D]
 			k++
 			if row+r > from {
 				if _, err := s.encodePicture(sp.Picture, sp.Embd); err != nil {
@@ -914,7 +1016,8 @@ func (m *Model) PictureSpan(img image.Image) (Span, error) {
 	if err != nil {
 		return Span{}, err
 	}
-	return Span{Picture: img, PicRows: m.tower.out, Key: k}, nil
+	b := img.Bounds()
+	return Span{Picture: img, PicRows: m.tower.picRows(b.Dx(), b.Dy()), Key: k}, nil
 }
 
 // pictureKey names a picture by everything the tower reads of it: its

@@ -212,7 +212,7 @@ func TestComposedGPUGridRows(t *testing.T) {
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate proved nothing")
 	}
-	kinds := []graph.OpKind{graph.OpMatVec, graph.OpNorm, graph.OpExpr, graph.OpAdd}
+	kinds := []graph.OpKind{graph.OpMatVec, graph.OpNorm, graph.OpLayerNorm, graph.OpExpr, graph.OpAdd}
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {

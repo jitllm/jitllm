@@ -649,9 +649,9 @@ func TestLlavaTowerSeesThePicture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if !m.SeesPictures() || m.tower.out != 576 || m.tower.rows != 577 || len(m.tower.blocks) != 23 || m.tower.short != 336 {
+	if !m.SeesPictures() || m.tower.out != 576 || m.tower.rows != 577 || len(m.tower.blocks) != 23 || m.tower.fit.short != 336 {
 		t.Fatalf("the tower writes %d rows from %d over %d blocks, the shorter side to %d; want 576 from 577 over 23, 336",
-			m.tower.out, m.tower.rows, len(m.tower.blocks), m.tower.short)
+			m.tower.out, m.tower.rows, len(m.tower.blocks), m.tower.fit.short)
 	}
 	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
 	if err != nil {
@@ -663,4 +663,86 @@ func TestLlavaTowerSeesThePicture(t *testing.T) {
 		t.Fatal(err)
 	}
 	seesThePicture(t, m, img)
+}
+
+// TestTileGridFollowsTheReference holds tileGrid to InternVL's
+// find_closest_aspect_ratio (transformers' get_optimal_tiled_canvas), each
+// grid worked by hand from the reference's rule over 448-pixel tiles, 1 to
+// 12 of them: the closest aspect, a tie to the larger grid only while the
+// picture covers more than half of it.
+func TestTileGridFollowsTheReference(t *testing.T) {
+	for _, c := range []struct{ w, h, cols, rows int }{
+		{384, 384, 1, 1},  // (2,2) ties at 0 and is more than twice the picture
+		{800, 600, 4, 3},  // 4:3 exactly, after (2,2) took the tie with (1,1)
+		{1000, 500, 2, 1}, // (4,2) ties at 0 and is more than twice the picture
+		{2000, 1000, 4, 2},
+		{448, 896, 1, 2},
+		{640, 480, 4, 3},
+		{100, 1000, 1, 10}, // 1:10 exactly, before (1,11) and (1,12)
+	} {
+		if cols, rows := tileGrid(c.w, c.h, 448, 1, 12); cols != c.cols || rows != c.rows {
+			t.Errorf("%dx%d: a grid of %dx%d, want %dx%d", c.w, c.h, cols, rows, c.cols, c.rows)
+		}
+	}
+	f := pictureFit{minTiles: 1, maxTiles: 12, thumb: true}
+	for _, c := range []struct{ w, h, n int }{{384, 384, 1}, {1000, 500, 3}, {800, 600, 13}} {
+		if _, _, n := f.tiles(c.w, c.h, 448); n != c.n {
+			t.Errorf("%dx%d: %d squares, want %d (a thumbnail after a grid of more than one)", c.w, c.h, n, c.n)
+		}
+	}
+	if ow, oh, x0, y0 := f.window(1000, 500, 448, 448, 1); ow != 896 || oh != 448 || x0 != 448 || y0 != 0 {
+		t.Errorf("the second tile of 1000x500 is (%d, %d) of %dx%d, want (448, 0) of 896x448", x0, y0, ow, oh)
+	}
+	if ow, oh, x0, y0 := f.window(1000, 500, 448, 448, 2); ow != 448 || oh != 448 || x0 != 0 || y0 != 0 {
+		t.Errorf("1000x500's thumbnail is (%d, %d) of %dx%d, want the whole picture at 448x448", x0, y0, ow, oh)
+	}
+}
+
+// TestInternVLTowerSeesThePicture runs InternVL3-1B's stated tower --
+// Pillow's bicubic to 448-pixel tiles, InternViT's 24 blocks over a class
+// row and 1024 patches, the shuffled projector -- on the CPU device: a
+// square picture is one tile of 256 rows, and the same picture beside an
+// as wide grey field is two tiles and a thumbnail, 768 rows; each is
+// described naming its colours, and a blank picture is not.
+func TestInternVLTowerSeesThePicture(t *testing.T) {
+	text := testmodels.Path("vlm/InternVL3-1B-Instruct-Q8_0.gguf")
+	mm := testmodels.Path("vlm/mmproj-InternVL3-1B-Instruct-Q8_0.gguf")
+	if !sourcePresent(text, mm) {
+		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+	}
+	m, err := Open(jlmOfPair(t, text, mm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if !m.SeesPictures() || m.tower.out != 256 || m.tower.rows != 1025 || len(m.tower.blocks) != 24 || m.tower.fit.maxTiles != 12 {
+		t.Fatalf("the tower writes %d rows from %d over %d blocks, %d tiles at most; want 256 from 1025 over 24, 12",
+			m.tower.out, m.tower.rows, len(m.tower.blocks), m.tower.fit.maxTiles)
+	}
+	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seesThePicture(t, m, img)
+	b := img.Bounds()
+	wide := image.NewRGBA(image.Rect(0, 0, 2*b.Dx(), b.Dy()))
+	draw.Draw(wide, wide.Bounds(), image.NewUniform(color.Gray{128}), image.Point{}, draw.Src)
+	draw.Draw(wide, b, img, b.Min, draw.Src)
+	sp, err := m.PictureSpan(wide)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sp.PicRows != 3*256 {
+		t.Fatalf("a %dx%d picture takes %d rows, want two tiles and a thumbnail's 768", wide.Bounds().Dx(), b.Dy(), sp.PicRows)
+	}
+	got := describePicture(t, m, wide, 32)
+	t.Logf("wide    %q", got)
+	if !namesAColour(got) {
+		t.Errorf("the wide picture's description names none of its colours: %q", got)
+	}
 }
