@@ -336,14 +336,14 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 // row `row` of a speculation step into its snapshot, when the step asked for
 // one that far. Called once per (block, row), after the block steps the row.
 func (r *rowsOut) snapRow(s *Instance, li, slot, row int) {
-	if r == nil || row >= len(r.snap) || s.rconv == nil || s.rconv[li] == nil {
+	if r == nil || row >= len(r.snap) || s.view.Conv(li) == nil {
 		return
 	}
 	g := s.dg
 	nc, ns := g.convStateLen(), g.stateStride()
 	sn := &r.snap[row]
-	copy(sn.conv[li], s.rconv[li][slot*nc:(slot+1)*nc])
-	copy(sn.state[li][:ns], s.rstate[li][slot*g.stateStride():slot*g.stateStride()+ns])
+	copy(sn.conv[li], s.view.Conv(li)[slot*nc:(slot+1)*nc])
+	copy(sn.state[li][:ns], s.view.State(li)[slot*g.stateStride():slot*g.stateStride()+ns])
 }
 
 // tapStreams copies the residual of the wanted rows among n rows of a chunk
@@ -463,13 +463,13 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 // newRecSnap allocates one snapshot of every host linear block's state for
 // one row, or an empty one on a model with none.
 func (s *Instance) newRecSnap() recSnap {
-	if s.rconv == nil {
+	if !s.view.Recurrent() {
 		return recSnap{}
 	}
 	g := s.dg
-	sn := recSnap{conv: make([][]float32, len(s.rconv)), state: make([][]float32, len(s.rstate))}
-	for li := range s.rconv {
-		if s.rconv[li] != nil {
+	sn := recSnap{conv: make([][]float32, s.view.Blocks()), state: make([][]float32, s.view.Blocks())}
+	for li := range s.view.Blocks() {
+		if s.view.Conv(li) != nil {
 			sn.conv[li] = make([]float32, g.convStateLen())
 			sn.state[li] = make([]float32, g.stateStride())
 		}
@@ -487,8 +487,8 @@ func (s *Instance) loadRec(sn *recSnap) { s.copyRec(sn, false) }
 func (s *Instance) copyRec(sn *recSnap, save bool) {
 	g := s.dg
 	nc, ns := g.convStateLen(), g.stateStride()
-	for li := range s.rconv {
-		if s.rconv[li] == nil || !s.c.LayerKind(li).Recurrent() {
+	for li := range s.view.Blocks() {
+		if s.view.Conv(li) == nil || !s.c.LayerKind(li).Recurrent() {
 			continue
 		}
 		if s.devAt(li) {
@@ -496,11 +496,11 @@ func (s *Instance) copyRec(sn *recSnap, save bool) {
 			continue
 		}
 		if save {
-			copy(sn.conv[li], s.rconv[li][:nc])
-			copy(sn.state[li], s.rstate[li][:ns])
+			copy(sn.conv[li], s.view.Conv(li)[:nc])
+			copy(sn.state[li], s.view.State(li)[:ns])
 		} else {
-			copy(s.rconv[li][:nc], sn.conv[li])
-			copy(s.rstate[li][:ns], sn.state[li])
+			copy(s.view.Conv(li)[:nc], sn.conv[li])
+			copy(s.view.State(li)[:ns], sn.state[li])
 		}
 	}
 }

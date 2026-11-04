@@ -65,3 +65,29 @@ func TestTableFollowsItsPages(t *testing.T) {
 		t.Fatal("Holds does not tell the arena's slots from other memory")
 	}
 }
+
+// TestViewHoldsRecurrentStates makes a block's state, reads it back through a
+// view grown to hold it, and reads a nil view and a block without one as
+// holding nothing.
+func TestViewHoldsRecurrentStates(t *testing.T) {
+	var nilView *View
+	if nilView.Recurrent() || nilView.Conv(0) != nil || nilView.State(0) != nil || nilView.Blocks() != 0 {
+		t.Fatal("a nil view holds something")
+	}
+	v := NewView(2)
+	if v.Recurrent() {
+		t.Fatal("a fresh view holds a recurrent state")
+	}
+	v.MakeRec(4, 3, 5)
+	if !v.Recurrent() || v.Blocks() != 5 {
+		t.Fatalf("after a state for block 4: recurrent %v, %d blocks", v.Recurrent(), v.Blocks())
+	}
+	if len(v.Conv(4)) != 3 || len(v.State(4)) != 5 || v.Conv(1) != nil || v.State(9) != nil {
+		t.Fatalf("block 4 holds %d and %d, block 1 %v", len(v.Conv(4)), len(v.State(4)), v.Conv(1))
+	}
+	v.State(4)[2] = 7
+	v.MakeRec(4, 3, 5)
+	if v.State(4)[2] != 0 {
+		t.Fatal("a state made again kept what the old one held")
+	}
+}

@@ -299,13 +299,10 @@ func (s *Instance) newHistory(maxSeq int) (*Session, error) {
 	sess.bpos = make([]int, 1)
 	sess.logits = make([]float32, s.c.NVocab)
 	sess.rmarks = ropeMarks{}
-	if s.rconv != nil {
-		sess.rconv = make([][]float32, len(s.rconv))
-		sess.rstate = make([][]float32, len(s.rstate))
-		for li := range s.rconv {
-			if s.rconv[li] != nil {
-				sess.rconv[li] = make([]float32, s.dg.convStateLen())
-				sess.rstate[li] = make([]float32, s.dg.stateStride())
+	if s.view.Recurrent() {
+		for li := range s.view.Blocks() {
+			if s.view.Conv(li) != nil {
+				sess.cpuView().MakeRec(li, s.dg.convStateLen(), s.dg.stateStride())
 			}
 		}
 	}

@@ -3469,7 +3469,7 @@ func (s *Instance) devWhy() string {
 
 // recurrent reports that this session carries a linear block's running state,
 // which is what makes re-running a block from the embeddings unsound.
-func (s *Instance) recurrent() bool { return s.rconv != nil || s.rstate != nil }
+func (s *Instance) recurrent() bool { return s.view.Recurrent() }
 
 // RecurrenceAdvanced reports whether the device call that just failed had
 // already advanced one of this instance's linear blocks, so running its tokens
@@ -3496,11 +3496,11 @@ func (s *Instance) recStepped() int {
 // (the set, not the prefix), so a failed submission may have advanced a
 // summary the host cannot rewind.
 func (s *Instance) devLinear() bool {
-	if s.rconv == nil {
+	if !s.view.Recurrent() {
 		return false
 	}
-	for li := 0; li < len(s.onDev) && li < len(s.rconv); li++ {
-		if s.onDev[li] && s.rconv[li] != nil {
+	for li := 0; li < len(s.onDev) && li < s.view.Blocks(); li++ {
+		if s.onDev[li] && s.view.Conv(li) != nil {
 			return true
 		}
 	}

@@ -75,9 +75,9 @@ type linSnapshot struct{ state, conv [][]float32 }
 
 func linSnap(s *Instance) linSnapshot {
 	var o linSnapshot
-	for li := range s.rstate {
-		o.state = append(o.state, append([]float32(nil), s.rstate[li]...))
-		o.conv = append(o.conv, append([]float32(nil), s.rconv[li]...))
+	for li := range s.view.Blocks() {
+		o.state = append(o.state, append([]float32(nil), s.view.State(li)...))
+		o.conv = append(o.conv, append([]float32(nil), s.view.Conv(li)...))
 	}
 	return o
 }
@@ -86,12 +86,12 @@ func linSnapCmp(t *testing.T, e *linEnv, what string, ref linSnapshot, bat *Inst
 	t.Helper()
 	n := 0
 	for li := range ref.state {
-		if bat.rstate[li] == nil {
+		if bat.view.State(li) == nil {
 			continue
 		}
 		n++
-		e.cmp(t, "state", fmt.Sprintf("%s: layer %d state", what, li), ref.state[li], bat.rstate[li])
-		e.cmp(t, "conv", fmt.Sprintf("%s: layer %d window", what, li), ref.conv[li], bat.rconv[li])
+		e.cmp(t, "state", fmt.Sprintf("%s: layer %d state", what, li), ref.state[li], bat.view.State(li))
+		e.cmp(t, "conv", fmt.Sprintf("%s: layer %d window", what, li), ref.conv[li], bat.view.Conv(li))
 	}
 	if n == 0 {
 		t.Fatalf("%s: no recurrent layer: this gate is about nothing", what)

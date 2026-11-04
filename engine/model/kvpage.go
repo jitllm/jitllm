@@ -862,7 +862,7 @@ func (s *Instance) migrateKVSeqs(sd nn.SeqKVDevice, li int, toDevice bool) bool 
 // row r at r*convStateLen and r*deltaStateLen, which is the device's own
 // per-row layout (nn.LayerDevice.MigrateRec).
 func (s *Instance) migrateRec(li int, toDevice bool) bool {
-	if s.ld == nil || s.rconv == nil || li >= len(s.rconv) || s.rconv[li] == nil {
+	if s.ld == nil || s.view.Conv(li) == nil {
 		return true // an attention block, or a session with no recurrence
 	}
 	return s.migrateRecLayer(li, toDevice)
@@ -872,7 +872,7 @@ func (s *Instance) migrateRec(li int, toDevice bool) bool {
 // whole recurrent state, the n-gram block's predecessors among it, moves
 // with the block.
 func (s *Instance) migrateRecLayer(li int, toDevice bool) bool {
-	return s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], toDevice)
+	return s.ld.MigrateRec(li, s.view.Conv(li), s.view.State(li), toDevice)
 }
 
 // The paged read walk. Every attention read in model/ goes through these four,
@@ -1560,7 +1560,7 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 	s.kv.chunked = n / kvChunk * kvChunk
 	if n > 0 {
 		s.advance(0, n)
-	} else if s.rconv != nil {
+	} else if s.view.Recurrent() {
 		// A probe may have faulted a summary in for a prefix it then gave
 		// up; the prompt runs from zero, from an empty one.
 		s.ResetRecurrent(0)
@@ -1584,7 +1584,7 @@ func (s *Instance) syncKVFromDevice() error {
 		return nil
 	}
 	// The recurrent summary is read back too: sealRecurrentTail writes through
-	// s.rconv/s.rstate, which are stale for a placed linear block.
+	// the view's recurrent states, which are stale for a placed linear block.
 	// A sharing session's placed blocks are named on the card (kvCache.seal)
 	// and keep their restore points there (recshare.go): neither their
 	// history nor their state is read back.
@@ -1612,11 +1612,11 @@ func (s *Instance) syncKVFromDevice() error {
 // rconv/rstate, where every host consumer reads it: the recurrent twin of
 // syncKVFromDevice.
 func (s *Instance) syncRecFromDevice() error {
-	if s.rconv == nil || s.devCount() == 0 || s.ld == nil {
+	if !s.view.Recurrent() || s.devCount() == 0 || s.ld == nil {
 		return nil
 	}
 	for _, li := range s.placedFrom(s.lo) {
-		if s.rconv[li] == nil {
+		if s.view.Conv(li) == nil {
 			continue // not a linear block
 		}
 		if !s.migrateRecLayer(li, false) {
@@ -1632,11 +1632,11 @@ func (s *Instance) syncRecFromDevice() error {
 // pushRecToDevice sends every placed linear block's restored summary back to
 // the device that runs it. It is syncRecFromDevice with the arrow reversed.
 func (s *Instance) pushRecToDevice() bool {
-	if s.rconv == nil || s.devCount() == 0 || s.ld == nil {
+	if !s.view.Recurrent() || s.devCount() == 0 || s.ld == nil {
 		return true
 	}
 	for _, li := range s.placedFrom(s.lo) {
-		if s.rconv[li] == nil {
+		if s.view.Conv(li) == nil {
 			continue
 		}
 		if !s.migrateRecLayer(li, true) {
@@ -1660,7 +1660,7 @@ func (s *Instance) restoreKV(max int) (int, error) {
 	// covers exactly the positions it was taken after, and resuming earlier
 	// would apply a token twice.
 	if n > max {
-		if tail > 0 && s.rconv != nil && s.recurrentBoundary() > 0 {
+		if tail > 0 && s.view.Recurrent() && s.recurrentBoundary() > 0 {
 			s.kv.dropTail(n)
 			n, tail = n-tail, 0
 		}
@@ -1681,7 +1681,7 @@ func (s *Instance) restoreKV(max int) (int, error) {
 	}
 	// Both halves of a hybrid's history, or neither: without the summary for
 	// this boundary, the prefix is given up and the prompt prefilled in full.
-	if p := s.recurrentBoundary(); s.rconv != nil && p > 0 {
+	if p := s.recurrentBoundary(); s.view.Recurrent() && p > 0 {
 		// Named as it was kept (recPointKey).
 		key, idx := s.recPointKey(n)
 		if idx < 0 || key == "" || !s.faultRecurrentAt(idx, key, true) {
@@ -2698,7 +2698,7 @@ func (s *Instance) recurrentBoundary() int {
 // only when the position is n*p, which is why prefill snaps its chunk width to
 // the boundary when a hybrid is being cached.
 func (s *Instance) sealRecurrent(pos int) {
-	if s.rconv == nil || s.kv.ns == "" || pos == 0 {
+	if !s.view.Recurrent() || s.kv.ns == "" || pos == 0 {
 		return
 	}
 	if _, ok := s.kv.store.(NoStore); ok {
@@ -2713,9 +2713,9 @@ func (s *Instance) sealRecurrent(pos int) {
 	if s.recPrefill && s.recPointsOn() {
 		return
 	}
-	for li := range s.rconv {
+	for li := range s.view.Blocks() {
 		// A placed block's summary is the device's; the host's copy is stale.
-		if s.rconv[li] == nil || s.devAt(li) {
+		if s.view.Conv(li) == nil || s.devAt(li) {
 			continue
 		}
 		if !s.sealRecLayer(li, pos) {
@@ -2729,7 +2729,7 @@ func (s *Instance) sealRecurrent(pos int) {
 // than at a page boundary, under the same fill-named key sealTail uses: a
 // restored partial page needs a matching summary or no tail at all.
 func (s *Instance) sealRecurrentTail(pos int) {
-	if s.rconv == nil || s.kv.ns == "" || pos == 0 {
+	if !s.view.Recurrent() || s.kv.ns == "" || pos == 0 {
 		return
 	}
 	if _, ok := s.kv.store.(NoStore); ok {
@@ -2745,8 +2745,8 @@ func (s *Instance) sealRecurrentTail(pos int) {
 	}
 	// The prompt's end, beside the points the prefill kept on the way
 	// (recpoint.go), under the fill-named key its partial page has.
-	for li := range s.rconv {
-		if s.rconv[li] != nil && s.recDev(li) == nil && !s.sealRecLayer(li, pos) {
+	for li := range s.view.Blocks() {
+		if s.view.Conv(li) != nil && s.recDev(li) == nil && !s.sealRecLayer(li, pos) {
 			return
 		}
 	}
@@ -2823,7 +2823,7 @@ func (s *Instance) attnLayer() int {
 // its fill rather than by a boundary (see sealRecurrentTail). All of them or
 // none: a hybrid with half its summaries restored is worse than one with none.
 func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
-	if s.rconv == nil {
+	if !s.view.Recurrent() {
 		return true
 	}
 	if key == "" || n < 0 {
@@ -2832,8 +2832,8 @@ func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
 	// A block whose restore points live on its device (nn.RecShareDevice)
 	// is asked there; its state is loaded there, by apply, after every
 	// block has answered.
-	for li := range s.rconv {
-		if s.rconv[li] == nil {
+	for li := range s.view.Blocks() {
+		if s.view.Conv(li) == nil {
 			continue
 		}
 		if d := s.recDev(li); d != nil && !d.HasRec(li, key) {
@@ -2844,13 +2844,13 @@ func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
 	// every layer has answered, so a failure half way leaves the session's
 	// own summaries untouched.
 	if s.recStage == nil {
-		s.recStage = make([][]float32, len(s.rconv))
+		s.recStage = make([][]float32, s.view.Blocks())
 	}
-	for li := range s.rconv {
-		if s.rconv[li] == nil || s.recDev(li) != nil {
+	for li := range s.view.Blocks() {
+		if s.view.Conv(li) == nil || s.recDev(li) != nil {
 			continue
 		}
-		w := len(s.rconv[li]) + len(s.rstate[li])
+		w := len(s.view.Conv(li)) + len(s.view.State(li))
 		if cap(s.recStage[li]) < w {
 			s.recStage[li] = make([]float32, w)
 		}
@@ -2866,8 +2866,8 @@ func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
 	if !apply {
 		return true
 	}
-	for li := range s.rconv {
-		if s.rconv[li] == nil {
+	for li := range s.view.Blocks() {
+		if s.view.Conv(li) == nil {
 			continue
 		}
 		if d := s.recDev(li); d != nil {
@@ -2877,8 +2877,8 @@ func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
 			continue
 		}
 		buf := s.recStage[li]
-		copy(s.rconv[li], buf[:len(s.rconv[li])])
-		copy(s.rstate[li], buf[len(s.rconv[li]):len(s.rconv[li])+len(s.rstate[li])])
+		copy(s.view.Conv(li), buf[:len(s.view.Conv(li))])
+		copy(s.view.State(li), buf[len(s.view.Conv(li)):len(s.view.Conv(li))+len(s.view.State(li))])
 	}
 	return true
 }

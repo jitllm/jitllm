@@ -29,13 +29,13 @@ func (s *Instance) recEvery() int {
 	}
 	s.recEv = -1
 	p := s.recurrentBoundary()
-	if s.rconv == nil || p == 0 {
+	if !s.view.Recurrent() || p == 0 {
 		return 0
 	}
 	var point, perPos uint64
-	for li := range s.rconv {
-		if s.rconv[li] != nil {
-			point += uint64(len(s.rconv[li])+len(s.rstate[li])) * 4
+	for li := range s.view.Blocks() {
+		if s.view.Conv(li) != nil {
+			point += uint64(len(s.view.Conv(li))+len(s.view.State(li))) * 4
 		}
 	}
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
@@ -76,7 +76,7 @@ func (s *Instance) recPointKey(pos int) (string, int) {
 // under a cache namespace with a store, on a hybrid, outside a speculation
 // step (whose rows may be rolled back).
 func (s *Instance) recPointsOn() bool {
-	if s.rconv == nil || s.kv.ns == "" || s.rows != nil {
+	if !s.view.Recurrent() || s.kv.ns == "" || s.rows != nil {
 		return false
 	}
 	_, none := s.kv.store.(NoStore)
@@ -96,13 +96,13 @@ func (s *Instance) sealRecLayer(li, pos int) bool {
 	if d := s.recDev(li); d != nil {
 		return d.SnapRec(li, key)
 	}
-	nc, ns := len(s.rconv[li]), len(s.rstate[li])
+	nc, ns := len(s.view.Conv(li)), len(s.view.State(li))
 	if cap(s.recBuf) < nc+ns {
 		s.recBuf = make([]float32, nc+ns)
 	}
 	b := s.recBuf[:nc+ns]
-	copy(b, s.rconv[li])
-	copy(b[nc:], s.rstate[li])
+	copy(b, s.view.Conv(li))
+	copy(b[nc:], s.view.State(li))
 	s.recRd.Reset(kvBytesOf(b))
 	if err := s.kv.store.Set(key, s.recurrentLayer(li), idx, &s.recRd); err != nil {
 		s.kv.failed++
@@ -133,7 +133,7 @@ func (s *Instance) recPoint(pos int) bool {
 // from the last one, when that is inside it. The key is kept for the next.
 func (s *Instance) markParting(key []int32) {
 	s.recMark = 0
-	if s.rconv == nil {
+	if !s.view.Recurrent() {
 		return
 	}
 	c := 0
@@ -157,7 +157,7 @@ func (s *Instance) recChunkPoint(slot, pos int) {
 		return
 	}
 	for li := s.lo; li < len(s.onDev); li++ {
-		if !s.onDev[li] || s.rconv[li] == nil || s.recDev(li) != nil {
+		if !s.onDev[li] || s.view.Conv(li) == nil || s.recDev(li) != nil {
 			continue
 		}
 		// Read back where the device keeps no points.
@@ -179,8 +179,8 @@ func (s *Instance) sealRecOnDevice(pos int) bool {
 	}
 	s.recBatch = s.recBatch[:0]
 	var d nn.RecShareDevice
-	for li := range s.rconv {
-		if s.rconv[li] == nil {
+	for li := range s.view.Blocks() {
+		if s.view.Conv(li) == nil {
 			continue
 		}
 		if x := s.recDev(li); x != nil {
