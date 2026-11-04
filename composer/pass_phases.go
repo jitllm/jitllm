@@ -143,16 +143,7 @@ func (Phases) phase(k, m *Kernel) {
 			bufOf[i] = k.bufLike(b)
 		}
 	}
-	lb := len(k.Loops)
-	for _, l := range m.Loops {
-		if l.Parent >= 0 {
-			l.Parent += lb
-		}
-		if l.Of > 0 {
-			l.Of += lb
-		}
-		k.Loops = append(k.Loops, l)
-	}
+	loopOf := k.moveLoops(m, bufOf, -1)
 	nodeOf := make([]int, len(m.Nodes))
 	for i := range nodeOf {
 		nodeOf[i] = -1
@@ -167,12 +158,7 @@ func (Phases) phase(k, m *Kernel) {
 			nodeOf[i] = coord[nd.A]
 			return nodeOf[i]
 		}
-		if nd.Op == OpIter || nd.Op == OpFold || nd.Op == OpLoad && nd.At > 0 {
-			nd.At += lb
-		}
-		if nd.Op == OpLoad {
-			nd.Buf = bufOf[nd.Buf]
-		}
+		moveNode(&nd, bufOf, loopOf)
 		nodeOf[i] = k.add(Node{})
 		for _, a := range k.Operands(&nd) {
 			*a = walk(*a)
@@ -190,25 +176,11 @@ func (Phases) phase(k, m *Kernel) {
 		return v
 	}
 	for i, l := range m.Loops {
-		at := &k.Loops[lb+i]
+		at := &k.Loops[loopOf[i]]
 		at.Count, at.Span, at.End, at.Elem = ref(l.Count), ref(l.Span), ref(l.End), ref(l.Elem)
 	}
 	for _, s := range m.Stores {
-		ns := s
-		if s.At >= 0 {
-			ns.At += lb
-		}
-		if !s.Barrier && !s.Run {
-			// Ix too where Ax indexes: every pass reads it as the store's.
-			ns.Buf, ns.Val, ns.Ix = bufOf[s.Buf], walk(s.Val), walk(s.Ix)
-			if s.Ax != nil {
-				ns.Ax = make([]int, len(s.Ax))
-				for a, x := range s.Ax {
-					ns.Ax[a] = walk(x)
-				}
-			}
-		}
-		k.Stores = append(k.Stores, ns)
+		k.Stores = append(k.Stores, k.moveStore(s, bufOf, loopOf, -1, walk))
 	}
 }
 

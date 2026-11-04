@@ -3026,6 +3026,9 @@ func (s *Instance) embedOnDevice() bool {
 	if s.c.PLEDim != 0 && s.c.Streams() > 1 && !s.allOnDevice() {
 		return false
 	}
+	// The card reads the per-layer inputs it writes back into the token's
+	// own, handed before it runs.
+	s.layerInputs(s.ple)
 	s.tok1[0] = s.tok
 	return s.ldEmbed.EmbedRows(s.tok1[:], s.pos, s.resid())
 }

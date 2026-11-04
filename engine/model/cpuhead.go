@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -73,7 +74,7 @@ type cpuHeadState struct {
 // not.
 type cpuHeadForm struct {
 	composed bool
-	f        *cpuBlockForm
+	f        *cpudev.Form
 	why      composer.Decline
 	// err is the composer's, where it formed none.
 	err error
@@ -118,13 +119,13 @@ func (s *Instance) cpuPlaceHead() {
 	if fg.outNorm != nil {
 		s.cpuComposeHead(&h.outNorm, fg.outNorm, composer.DeclineNoGraph, cpuRowsCap)
 		if f := h.outNorm.f; f != nil {
-			h.onPad = make([]float32, 2*max(f.unit, 1)*s.c.NEmbd)
+			h.onPad = make([]float32, 2*max(f.Unit, 1)*s.c.NEmbd)
 		}
 	}
 	d, nv := s.c.NEmbd, s.c.NVocab
 	if f := h.rows.f; f != nil {
-		h.hid = make([]float32, f.rows*d)
-		if u := f.unit; u > 1 {
+		h.hid = make([]float32, f.Rows*d)
+		if u := f.Unit; u > 1 {
 			h.xpad, h.lpad, h.hpad = make([]float32, u*d), make([]float32, u*nv), make([]float32, u*d)
 		}
 	}
@@ -178,7 +179,7 @@ func (s *Instance) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, o
 
 // formOf is hf's form, or why it does not serve: not composed at the
 // instance's placement, or declined there.
-func (hf *cpuHeadForm) formOf() (*cpuBlockForm, composer.Decline) {
+func (hf *cpuHeadForm) formOf() (*cpudev.Form, composer.Decline) {
 	if !hf.composed {
 		return nil, composer.DeclineUnplaced
 	}
@@ -190,7 +191,7 @@ func (hf *cpuHeadForm) formOf() (*cpuBlockForm, composer.Decline) {
 // head's), its inputs and outputs buffers of their own. A role the block
 // reads from another's tensor (a prediction block's embedding, the trunk's
 // table) takes that tensor's format.
-func (m *Model) formCPUGraph(s *Instance, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpuBlockForm, error) {
+func (m *Model) formCPUGraph(s *Instance, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpudev.Form, error) {
 	formats := map[jlm.Role]jlm.Type{}
 	f := m.Composing()
 	var l *layer
@@ -214,7 +215,7 @@ func (m *Model) formCPUGraph(s *Instance, g *graph.Graph, rows int, over map[jlm
 }
 
 // cpuHeadOn says the composed CPU path is on for this Instance.
-func (s *Instance) cpuHeadOn() bool { return s.cpu.args != nil }
+func (s *Instance) cpuHeadOn() bool { return s.cpu.dev != nil }
 
 // cpuHead runs the head on the CPU the composer's way: the norm of the row
 // x, its projection and what follows it into logits, and the norm's rows
@@ -237,7 +238,7 @@ func (s *Instance) cpuHead(x, logits, hidden []float32) composer.Decline {
 		return why
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
 	b.io[0], b.io[1] = unsafe.Pointer(&x[0]), unsafe.Pointer(&logits[0])
 	if s.cpu.fault == cpuFaultHead {
 		b.io[0] = unsafe.Pointer(&s.h[0])
@@ -245,9 +246,7 @@ func (s *Instance) cpuHead(x, logits, hidden []float32) composer.Decline {
 	if hidden != nil {
 		b.io[2] = unsafe.Pointer(&hidden[0])
 	}
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 	h.served++
 	return composer.DeclineServes
 }
@@ -272,8 +271,8 @@ func (s *Instance) cpuHeadRows(x, logits, hidden []float32, n int) composer.Decl
 	}
 	d, nv := s.c.NEmbd, s.c.NVocab
 	for r0 := 0; r0 < n; {
-		k := min(f.rows, n-r0)
-		u := max(f.unit, 1)
+		k := min(f.Rows, n-r0)
+		u := max(f.Unit, 1)
 		if k >= u {
 			k -= k % u
 			var hd unsafe.Pointer
@@ -319,8 +318,8 @@ func (s *Instance) cpuOutNorm(dst, x []float32, n int) composer.Decline {
 		return why
 	}
 	for r0 := 0; r0 < n; {
-		k := min(f.rows, n-r0)
-		u := max(f.unit, 1)
+		k := min(f.Rows, n-r0)
+		u := max(f.Unit, 1)
 		in, out := unsafe.Pointer(&x[r0*d]), unsafe.Pointer(&dst[r0*d])
 		padded := k < u
 		if padded {
@@ -330,12 +329,10 @@ func (s *Instance) cpuOutNorm(dst, x []float32, n int) composer.Decline {
 			k -= k % u
 		}
 		b := &s.cpu.bound
-		*b = cpuBound{own: s.cpuOwn(f), n: k}
+		*b = cpuBound{own: s.cpu.dev.Own(f), n: k}
 		b.io[0], b.io[1] = in, out
 		s.cpu.call[0] = uint32(k)
-		for i := range f.codes {
-			s.cpuCall(b, &f.codes[i])
-		}
+		s.cpuRunForm(b, f)
 		if padded {
 			copy(dst[r0*d:(r0+k)*d], h.onPad[u*d:(u+k)*d])
 		}
@@ -346,17 +343,15 @@ func (s *Instance) cpuOutNorm(dst, x []float32, n int) composer.Decline {
 
 // cpuHeadCall runs the rows' form f over k rows of x into logits and the
 // norm's rows hidden.
-func (s *Instance) cpuHeadCall(f *cpuBlockForm, x, logits, hidden unsafe.Pointer, k int) {
+func (s *Instance) cpuHeadCall(f *cpudev.Form, x, logits, hidden unsafe.Pointer, k int) {
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: k}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: k}
 	b.io[0], b.io[1], b.io[2] = x, logits, hidden
 	if s.cpu.fault == cpuFaultHead {
 		b.io[0] = unsafe.Pointer(&s.cpu.head.hid[0])
 	}
 	s.cpu.call[0] = uint32(k)
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 }
 
 // cpuPick is the label pick on the CPU: the head projecting the instance's
@@ -384,14 +379,12 @@ func (s *Instance) cpuPick(x []float32) composer.Decline {
 		h.pickIDs[i] = uint32(id)
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
 	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&x[0]), unsafe.Pointer(&h.pickIDs[0]), unsafe.Pointer(&h.pickVals[0])
 	if s.cpu.fault == cpuFaultHead {
 		b.io[0] = unsafe.Pointer(&s.h[0])
 	}
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 	copy(s.HostPickVals, h.pickVals[:len(s.HostPick)])
 	s.HostPicked = true
 	h.served++
@@ -411,11 +404,9 @@ func (s *Instance) cpuGreedy(logits []float32) (int32, bool) {
 		return 0, false
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
 	b.io[0], b.io[1] = unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.token[0])
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 	h.sampled++
 	return int32(h.token[0]), true
 }
@@ -513,7 +504,7 @@ func (s *Instance) cpuDist(logits []float32, smp *Sampler, d *specDist) bool {
 	win := s.cpuStageSample(smp)
 	topp, minp := smp.cuts()
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
 	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0])
 	if bounded {
 		h.walkArgs = [5]float32{float32(smp.TopK), float32(1 / smp.Temp), topp, minp, 0}
@@ -528,9 +519,7 @@ func (s *Instance) cpuDist(logits []float32, smp *Sampler, d *specDist) bool {
 		}
 		b.io[3], b.io[4], b.io[5] = unsafe.Pointer(&h.ids[0]), words, unsafe.Pointer(&d.pall[0])
 	}
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 	h.sampled++
 	d.dense = !bounded
 	if bounded {
@@ -569,12 +558,10 @@ func (s *Instance) cpuWideToken(logits []float32, smp *Sampler, u float32) (int3
 	}
 	win := s.cpuStageSample(smp)
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
 	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0])
 	b.io[3], b.io[4], b.io[5] = unsafe.Pointer(&h.ids[0]), words, unsafe.Pointer(&h.token[0])
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 	h.sampled++
 	return int32(h.token[0]), true
 }
@@ -599,12 +586,10 @@ func (s *Instance) cpuWalkToken(logits []float32, smp *Sampler, u float32) (int3
 	topp, minp := smp.cuts()
 	h.walkArgs = [5]float32{float32(smp.TopK), float32(1 / smp.Temp), topp, minp, u}
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
 	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0])
 	b.io[3], b.io[4] = unsafe.Pointer(&h.walkArgs[0]), unsafe.Pointer(&h.token[0])
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 	h.sampled++
 	return int32(h.token[0]), true
 }
@@ -623,9 +608,4 @@ func (s *Instance) cpuStageSample(smp *Sampler) unsafe.Pointer {
 
 // cpuFormCount is how many forms the model's CPU cache holds, refused ones
 // among them: a step that forms nothing leaves it as it was.
-func (m *Model) cpuFormCount() int {
-	c := &m.cpuForms
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.m) + len(c.err)
-}
+func (m *Model) cpuFormCount() int { return m.cpuForms.Count() }

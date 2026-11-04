@@ -63,6 +63,9 @@ func TestEveryModelRunsGenerated(t *testing.T) {
 					why = err
 					t.Skipf("NOT IMPLEMENTED (RULE 7 scope): %v", err)
 				}
+				if errors.Is(err, convert.ErrPart) {
+					t.Skipf("PART OF A MODEL: %v", err)
+				}
 				if err != nil {
 					t.Fatalf("convert: %v", err)
 				}

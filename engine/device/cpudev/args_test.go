@@ -1,4 +1,4 @@
-package model
+package cpudev
 
 import (
 	"runtime"
@@ -20,7 +20,7 @@ func TestCPUArgWordsAreNotScanned(t *testing.T) {
 	big = nil
 	runtime.GC()
 	runtime.GC()
-	args := cpuArgBlocks(16)
+	args := argBlocks(16)
 	for i := range args {
 		base := unsafe.Pointer(&args[i])
 		for off := uintptr(0); off < unsafe.Sizeof(cpu.Args{}); off += 8 {

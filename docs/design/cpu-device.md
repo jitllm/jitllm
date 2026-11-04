@@ -105,7 +105,11 @@ matrices reach the device by role, as the vectors do
    counters its own, its `Stats` the card's shape. The runtime moves out
    of `engine/model` (`cpuserve.go`, `cpuembed.go`, `cpuhead.go`,
    `cpukvconv.go`, `cpumtp.go`, `cpupool.go`, `cpustreams.go`,
-   `cputables.go`) into it; nothing is kept beside it. Gates: the composed
+   `cputables.go`) into it; nothing is kept beside it. In place: the
+   forms, their keyed cache and own buffers, the launches and the
+   address-only call record. The runners that turn a step's rows and a
+   session's pages into a call record are the instance's until the
+   history is the device's (2), whose rows' descriptors they read. Gates: the composed
    CPU suite (blocks, rows, features, embeddings, experts, census) and
    `TestDecodeDoesNotAllocate`.
 2. Its history: the pages its blocks read are the CPU device's own, as

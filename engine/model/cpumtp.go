@@ -40,7 +40,7 @@ func (s *Instance) cpuPlaceMTP() {
 	u := 1
 	for _, hf := range []*cpuHeadForm{&st.one, &st.many} {
 		if hf.f != nil {
-			u = max(u, hf.f.unit, hf.f.rows)
+			u = max(u, hf.f.Unit, hf.f.Rows)
 		}
 	}
 	st.tok, st.pos = make([]uint32, u), make([]uint32, u+1)
@@ -69,10 +69,10 @@ func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) composer.
 	}
 	w := s.c.ResidW()
 	for r0 := 0; r0 < rows; {
-		k := min(f.rows, rows-r0)
-		u := max(f.unit, 1)
+		k := min(f.Rows, rows-r0)
+		u := max(f.Unit, 1)
 		b := &s.cpu.bound
-		*b = cpuBound{li: s.lo, l: &s.m.layers[s.lo], own: s.cpuOwn(f), n: k, tok: st.tok, pos: st.pos}
+		*b = cpuBound{li: s.lo, l: &s.m.layers[s.lo], own: s.cpu.dev.Own(f), n: k, tok: st.tok, pos: st.pos}
 		padded := k < u
 		if !padded {
 			k -= k % u
@@ -89,9 +89,7 @@ func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) composer.
 			b.io[0], b.io[1] = unsafe.Pointer(&x[r0*w]), unsafe.Pointer(&z[r0*w])
 		}
 		s.cpu.call[0] = uint32(k)
-		for i := range f.codes {
-			s.cpuCall(b, &f.codes[i])
-		}
+		s.cpuRunForm(b, f)
 		if padded {
 			copy(z[r0*w:(r0+k)*w], st.pad[u*w:(u+k)*w])
 		}

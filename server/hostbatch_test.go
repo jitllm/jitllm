@@ -219,26 +219,30 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 }
 
 // TestHostBatchSampledRowsEqualAlone: seeded sampled generates on a host
-// model, admitted together, draw exactly the tokens each draws alone. The
-// host's step across sessions must be the alone path's arithmetic, row for
-// row, for a seeded sampler fed its logits to draw the same tokens. Against
-// rows sharing a random stream, or fed each other's tokens, the draws part.
+// model, admitted together, draw exactly the tokens they draw admitted in
+// the reverse order: a row's draws are its own seed's and its own tokens'
+// wherever the joint step puts it. Against rows sharing a random stream, or
+// fed each other's tokens, the draws part with the order. A row alone is
+// not the reference: it runs the one-row forms and a joint step the rows'
+// forms, which fold apart (RULE 8; model.TestBatchMatchesForward bounds them).
 func TestHostBatchSampledRowsEqualAlone(t *testing.T) {
 	for _, name := range hostBatchModels() {
 		t.Run(name, func(t *testing.T) {
 			if i, got, want := sampledBatchParts(t, name); i >= 0 {
-				t.Fatalf("sampled row %d differs from its run alone\nbatched %v\nalone   %v", i, got, want)
+				t.Fatalf("sampled row %d draws apart with the rows' order\nadmitted first %v\nadmitted last  %v", i, got, want)
 			}
 		})
 	}
 }
 
-// sampledBatchParts runs four seeded sampled generates on name alone and then
-// admitted together, and returns the first row whose draws differ with both
-// sequences, or -1 when every row drew the same tokens.
+// sampledBatchParts runs four seeded sampled generates on name admitted
+// together, then admitted together in the reverse order, and returns the
+// first row whose draws differ between the two, with both sequences, or -1
+// when every row drew the same tokens. The memory cache is off: each run's
+// prompts are its own.
 func sampledBatchParts(t *testing.T, name string) (int, []int32, []int32) {
 	t.Helper()
-	e, lm, c := hostBatchEngine(t, name, Config{JointSteps: JointAlways})
+	e, lm, c := hostBatchEngine(t, name, Config{JointSteps: JointAlways, NoMemCache: true})
 	temp, topP := float32(0.9), float32(0.95)
 	reqOf := func(i int) *v1.GenerateRequest {
 		seed := uint64(7 + i)
@@ -246,18 +250,17 @@ func sampledBatchParts(t *testing.T, name string) (int, []int32, []int32) {
 			Sampling: &v1.SamplingParams{Temperature: &temp, TopP: &topP, Seed: &seed}}
 	}
 	const n = 4
-	alone := make([]completion, n)
 	reqs := make([]*v1.GenerateRequest, n)
 	for i := range n {
 		reqs[i] = reqOf(i)
-		if alone[i] = complete(c, reqs[i]); alone[i].err != nil {
-			t.Fatal(alone[i].err)
-		}
 	}
 	got := concurrently(t, e, lm, c, reqs)
+	rev := slices.Clone(reqs)
+	slices.Reverse(rev)
+	back := concurrently(t, e, lm, c, rev)
 	for i := range n {
-		if !slices.Equal(got[i].ids, alone[i].ids) {
-			return i, got[i].ids, alone[i].ids
+		if !slices.Equal(got[i].ids, back[n-1-i].ids) {
+			return i, got[i].ids, back[n-1-i].ids
 		}
 	}
 	return -1, nil, nil

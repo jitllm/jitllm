@@ -2,10 +2,11 @@ package model
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/engine/nn"
 	"os"
 	"sort"
 	"time"
+
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // The seam tuner: how many blocks belong on the device, decided by measurement.

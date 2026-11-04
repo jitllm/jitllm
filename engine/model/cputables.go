@@ -35,7 +35,7 @@ func (s *Instance) cpuPlaceTables() {
 		s.cpuComposeTable(&st.many[i], g, cpuRowsCap)
 		for _, hf := range []*cpuHeadForm{&st.one[i], &st.many[i]} {
 			if hf.f != nil {
-				u = max(u, hf.f.unit, hf.f.rows)
+				u = max(u, hf.f.Unit, hf.f.Rows)
 			}
 		}
 	}
@@ -96,9 +96,9 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 			return fmt.Errorf("model: the rotary table %d on the CPU: %s: %w", i, why, hf.err)
 		}
 		for r0 := 0; r0 < rows; {
-			k := min(f.rows, rows-r0)
+			k := min(f.Rows, rows-r0)
 			st.rows[0] = uint32(k)
-			for j := range f.rows {
+			for j := range f.Rows {
 				r := r0 + min(j, k-1)
 				q := 0
 				if seq != nil {
@@ -110,7 +110,7 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 				}
 			}
 			b := &s.cpu.bound
-			*b = cpuBound{li: cpuTablesBlock, own: s.cpuOwn(f), n: k, ropeRows: st.rows, ropeMarks: st.zero[:]}
+			*b = cpuBound{li: cpuTablesBlock, own: s.cpu.dev.Own(f), n: k, ropeRows: st.rows, ropeMarks: st.zero[:]}
 			if marks != nil && len(marks.buf) > 0 {
 				b.ropeMarks = marks.buf
 			}
@@ -121,9 +121,7 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 				b.csSWA = outs[1][r0*widths[1]:]
 			}
 			s.cpu.call[0] = uint32(k)
-			for c := range f.codes {
-				s.cpuCall(b, &f.codes[c])
-			}
+			s.cpuRunForm(b, f)
 			r0 += k
 		}
 	}

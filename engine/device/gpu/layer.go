@@ -1488,12 +1488,14 @@ type blockScratch struct {
 	// embedding) and a learned position table, resident for the model, and
 	// embWhy why PrepHead could not hold them. embTok and embPos are the
 	// rows' tokens and positions the composer's gather reads, embCast the
-	// rows a promise no call takes are gathered into (materializeLocked).
+	// rows a promise no call takes are gathered into (materializeLocked),
+	// embPLE their per-layer inputs, each as wide as the widest call.
 	embedGraph     *graph.Graph
 	embW, posW     *resident
 	embWhy         partDecline
 	embTok, embPos backend.Buf
 	embCast        backend.Buf
+	embPLE         backend.Buf
 	// embOuts is the buffers a step's input rows write (embedOuts).
 	embOuts [partIO]backend.Buf
 	// embSW and embSV are the tensors the input rows bind past the token
@@ -4873,12 +4875,11 @@ func (g *devTier) layersSession(s backend.Session) {
 	} else {
 		w(bs.x, f32b(hx))
 	}
-	// Input rows over every stream write the per-layer inputs too
-	// (embedOuts).
+	// Served input rows write the per-layer inputs too (embedOuts).
 	if bs.rowPos != nil {
 		w(bs.rowPos, g.rowPosWords(pos, nrow, R, rag))
 	}
-	if bs.pleIn != nil && !(embedSrv && g.bs.embStreams() > 1) {
+	if bs.pleIn != nil && !embedSrv {
 		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
 	}
 	switch {

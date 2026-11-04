@@ -2,10 +2,11 @@ package model
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/engine/device/cpu"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"

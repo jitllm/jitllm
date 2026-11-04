@@ -58,7 +58,7 @@ func (s *Instance) cpuPlaceStreams() {
 	u := 1
 	for _, hf := range []*cpuHeadForm{&st.expand, &st.expandRows, &st.collapse, &st.collapseRows} {
 		if hf.f != nil {
-			u = max(u, hf.f.unit, hf.f.rows)
+			u = max(u, hf.f.Unit, hf.f.Rows)
 		}
 	}
 	st.pad, st.out = make([]float32, ns*u*d), make([]float32, u*d)
@@ -124,10 +124,10 @@ func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, 
 	d := s.c.NEmbd
 	at := func(k, r int) unsafe.Pointer { return unsafe.Pointer(&x[(k*rows+r)*d]) }
 	for r0 := 0; r0 < rows; {
-		k := min(f.rows, rows-r0)
-		u := max(f.unit, 1)
+		k := min(f.Rows, rows-r0)
+		u := max(f.Unit, 1)
 		b := &s.cpu.bound
-		*b = cpuBound{own: s.cpuOwn(f), n: k}
+		*b = cpuBound{own: s.cpu.dev.Own(f), n: k}
 		padded := k < u
 		if !padded {
 			k -= k % u
@@ -153,9 +153,7 @@ func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, 
 			}
 		}
 		s.cpu.call[0] = uint32(k)
-		for i := range f.codes {
-			s.cpuCall(b, &f.codes[i])
-		}
+		s.cpuRunForm(b, f)
 		for j, sk := range st.outs {
 			switch {
 			case apart:

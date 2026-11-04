@@ -43,6 +43,8 @@ func TestFormsHoldTheDevicesWorkgroupMemory(t *testing.T) {
 		{32, 4, 128, 0, false, false},
 		{16, 8, 128, 0, false, true},
 		{16, 8, 256, 0, false, true},
+		{8, 1, 512, 0, false, false},
+		{8, 2, 512, 0, false, true},
 	}
 	unbounded, refused := 0, 0
 	for _, shared := range []int{0, 32 << 10, 16 << 10} {
