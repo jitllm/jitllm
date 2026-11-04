@@ -61,6 +61,7 @@ func (e *a64Lowerer) node(i int) {
 		r := e.reg(i)
 		if k.Bufs[nd.Buf].Half {
 			if x.lanes(home) == 0 {
+				a.MOVIzero(lo(r))
 				a.LD1h0(lo(r), e.bare(m))
 				a.FCVTL(lo(r), lo(r))
 				a.MOVIzero(hi(r))

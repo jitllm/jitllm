@@ -191,7 +191,8 @@ func TestComposedCPUAttend(t *testing.T) {
 }
 func gateComposedCPUAttend(t *testing.T, cpuOn cpuArm) {
 
-	for _, sh := range []struct{ heads, kvh, dim int }{{6, 6, 48}, {32, 8, 64}, {16, 8, 128}, {8, 2, 64}, {15, 5, 64}, {12, 2, 128}} {
+	for _, sh := range []struct{ heads, kvh, dim int }{{6, 6, 48}, {32, 8, 64}, {16, 8, 128}, {8, 2, 64}, {15, 5, 64}, {12, 2, 128},
+		{4, 2, 2}, {4, 4, 4}, {3, 1, 6}} {
 		t.Run(fmt.Sprintf("%dq%dkv%dd", sh.heads, sh.kvh, sh.dim), func(t *testing.T) {
 			composedCPUAttend(t, cpuOn, sh.heads, sh.kvh, sh.dim)
 		})
@@ -325,7 +326,7 @@ func gateComposedCPUAttendRows(t *testing.T, cpuOn cpuArm) {
 	p := unfused.Profiles[DeviceCPU]
 	p.Off = map[string]bool{"fuse": true}
 	unfused.Profiles[DeviceCPU] = p
-	for _, sh := range []struct{ heads, kvh, dim int }{{6, 6, 48}, {16, 8, 128}, {12, 2, 128}} {
+	for _, sh := range []struct{ heads, kvh, dim int }{{6, 6, 48}, {16, 8, 128}, {12, 2, 128}, {4, 2, 2}, {4, 4, 4}} {
 		for _, mag := range []float32{1, 8, -16} {
 			for _, arm := range []struct {
 				name string
@@ -460,6 +461,11 @@ func composedCPUAttendRows(t *testing.T, cpuOn cpuArm, reg *Registry, heads, kvh
 		worst = max(worst, e)
 	}
 	t.Logf("%d rows of a %d-row form: worst NMSE %.3e against the definition", R, capRows, worst)
+	if mag < 0 && dim < 8 {
+		// Every score far below zero over a head this narrow leaves the
+		// first key no weight to move; this shape's x1 and x8 arms move it.
+		return
+	}
 	bad := run(1)
 	var num, den float64
 	for i := range R * qw {
