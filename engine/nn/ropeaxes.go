@@ -1,11 +1,7 @@
 package nn
 
 import (
-	"fmt"
 	"math"
-	"unsafe"
-
-	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // A multi-axis rotary: a position with more than one coordinate, each turning
@@ -135,61 +131,6 @@ func XDRopeRuns(sections []int, pairs int) (a, b []RopeRun) {
 		return runs
 	}
 	return runsOf(0), runsOf(pairs)
-}
-
-// TableAt fills a multi-axis position's table: run u's pairs at pos[u.Axis].
-// Every run is the generated table kernel over its own folded planes, so the
-// arithmetic is Table's, pair for pair.
-func (r Rope) TableAt(cs []float32, pos []int) {
-	r.tableAt(cs, pos, false)
-}
-
-// RopeTableAt is TableAt through this JIT, as RopeTable is Table.
-func (f *JIT) RopeTableAt(r Rope, cs []float32, pos []int) {
-	r.tableAt(cs, pos, f != nil && f.cfg.RopeGo)
-}
-
-func (r Rope) tableAt(cs []float32, pos []int, goArm bool) {
-	if len(r.Runs) == 0 {
-		panic("jit: a multi-axis rotary table for a rotary with no runs")
-	}
-	if 2*RopeRuns(r.Runs) > len(cs) {
-		panic(fmt.Sprintf("jit: a %d-pair multi-axis table into %d floats", RopeRuns(r.Runs), len(cs)))
-	}
-	off := 0
-	for _, u := range r.Runs {
-		if u.Axis < 0 || u.Axis >= len(pos) {
-			panic(fmt.Sprintf("jit: a rotary run on axis %d of a %d-coordinate position", u.Axis, len(pos)))
-		}
-		p := pos[u.Axis]
-		dst := cs[2*off : 2*(off+u.Pairs)]
-		off += u.Pairs
-		if u.Pairs <= 0 {
-			continue
-		}
-		if goArm {
-			ropeGoRun(r, dst, p, u)
-			continue
-		}
-		if p < 0 || p >= cpu.RopeTabMaxPos {
-			panic(fmt.Sprintf("jit: rotary table at position %d, outside the %d the "+
-				"kernel's digit decomposition covers", p, cpu.RopeTabMaxPos))
-		}
-		code := ropeTabCodeFor(u.Pairs)
-		if code == nil {
-			panic(fmt.Sprintf("jit: no rotary-table kernel for %d pair(s) on tier %v -- "+
-				"every tier generates one, so this is a wiring bug and not a fallback",
-				u.Pairs, cpu.HostTier()))
-		}
-		tab := ropeTabFor(r.runRope(u), u.Pairs)
-		ropeTabCalls.Add(1)
-		code.Call(&cpu.Args{
-			Out:    &dst[0],
-			AScale: &tab.block[0],
-			Scr:    (*byte)(unsafe.Pointer(&ropeTabConsts[0])),
-			K:      int64(p),
-		})
-	}
 }
 
 // runRope is the single-axis rotary whose folded planes are run u's: the same

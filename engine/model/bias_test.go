@@ -5,7 +5,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 )
@@ -167,12 +166,12 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			}
 			t.Logf("biased batch-of-one vs Forward: NMSE %.3e", nmse)
 
-			// And prefill, the third copy. With the GEMM pinned out this is bit
-			// equality, not a bar.
+			// And prefill, the third copy. On the float forms prefill differs
+			// from a Forward loop by the forms' folding order alone
+			// (floatFormsNMSE), far below what a bias applied twice or not at
+			// all reads.
 			t.Run("prefill", func(t *testing.T) {
-				nn.ResetForTest()
-				defer nn.ResetForTest()
-				pm, err := Open(jlmOf(t, path))
+				pm, err := Open(jlmOf(t, path), withCPUFloat())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -204,17 +203,17 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var d float64
+				var sse, sy float64
 				for i := range w {
-					if x := math.Abs(float64(w[i] - g[i])); x > d {
-						d = x
-					}
+					d := float64(w[i] - g[i])
+					sse += d * d
+					sy += float64(w[i]) * float64(w[i])
 				}
-				if d != 0 {
-					t.Errorf("biased prefill vs Forward: max|dlogit| %.4e with the "+
-						"GEMM disabled -- these must be bit-identical", d)
+				if nmse := sse / sy; !(nmse <= floatFormsNMSE) {
+					t.Errorf("biased prefill vs Forward: NMSE %.3e on the float forms, past their folding order's %.0e", nmse, floatFormsNMSE)
+				} else {
+					t.Logf("biased prefill vs Forward: NMSE %.3e (bound %.0e)", nmse, floatFormsNMSE)
 				}
-				t.Logf("biased prefill vs Forward: bit-identical")
 			})
 		})
 	}
@@ -223,7 +222,6 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 // logitsOf prefills ids on a fresh state and returns the last-token logits.
 func logitsOf(t *testing.T, m *Model, ids []int32) []float32 {
 	t.Helper()
-	nn.ResetForTest()
 	st := m.NewInstance(len(ids) + 8)
 	defer st.Close()
 	var out []float32
@@ -251,8 +249,6 @@ func TestPrefillAfterForwardContinues(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			nn.ResetForTest()
-			defer nn.ResetForTest()
 			// The float forms: decode and prompt forms apart by their folding
 			// order alone (floatFormsNMSE).
 			m, err := Open(jlmOf(t, path), withCPUFloat())

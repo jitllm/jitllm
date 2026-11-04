@@ -5,7 +5,6 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/convert"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 )
@@ -96,7 +95,7 @@ func statedViolations(m *Model) []c6Violation {
 // actSwap runs every block under activation k: in the model's config, which
 // main's kernels read, and stated by the converter, as a container of that
 // activation states it, for the front end and the composer.
-func actSwap(k nn.ActKind) func(*Model) func() {
+func actSwap(k graph.ActKind) func(*Model) func() {
 	return func(m *Model) func() {
 		undoC := cfgMut(m, func(c *Config) { c.Act = k })
 		c := m.container.Config()
@@ -107,11 +106,11 @@ func actSwap(k nn.ActKind) func(*Model) func() {
 		s.Flags2 &^= jlm.Flag2SwiGLUClamp
 		s.SituBeta, s.SituLinearBeta, s.SparseStd = 0, 0, 0
 		switch k {
-		case nn.ActGELU:
+		case graph.ActGELU:
 			s.Flags |= jlm.FlagGELU
-		case nn.ActReLU2:
+		case graph.ActReLU2:
 			s.Flags |= jlm.FlagReLU2
-		case nn.ActSiLU:
+		case graph.ActSiLU:
 		default:
 			panic(fmt.Sprintf("actSwap: no statement for %v", k))
 		}

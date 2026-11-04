@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -280,7 +280,7 @@ func k3RealSelected(t *testing.T, m *Model) {
 	c := m.Cfg
 	lin, full := jlm.LayerLinearAttn, jlm.LayerFullAttn
 	ok := c.Arch == "kimi-k3" && c.ResAttn() && c.AttnResBlock == 4 && c.ExpertLatent == 512 &&
-		c.Act == nn.ActSitu && c.KDALowerBound == 0 && c.ChanDecay() && c.MLA() && c.NoPosEnc &&
+		c.Act == graph.ActSitu && c.KDALowerBound == 0 && c.ChanDecay() && c.MLA() && c.NoPosEnc &&
 		c.QLoraRank == 256 && c.KVLoraRank == 128 && c.NDenseLead == 1 && c.NExpert == 8 &&
 		c.NExpertUsed == 2 && c.ExpertSigmoid && c.NEmbd == 1024 &&
 		slices.Equal(c.LayerKinds, []jlm.LayerKind{lin, lin, lin, full, lin, lin, lin, full})

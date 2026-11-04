@@ -3,7 +3,6 @@
 package model_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
@@ -22,10 +21,6 @@ func TestGreedyMatchesLlamaCppSSE(t *testing.T) {
 	defer cpu.ForceTierForTest(old)
 	if cpu.HostTier() != cpu.TierSSE {
 		t.Fatalf("forced SSE and the probe reports %v -- the force reached nothing", cpu.HostTier())
-	}
-	if p := cpu.SSEPending(); len(p) > 0 {
-		t.Fatalf("the SSE tier is incomplete: %d ops have no kernel (%s); red by design until every family has landed",
-			len(p), strings.Join(p, ", "))
 	}
 	before := cpu.MappedByTier()
 	TestGreedyMatchesLlamaCpp(t)

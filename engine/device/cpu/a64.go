@@ -123,21 +123,6 @@ type A64 struct {
 	b      []byte
 	fixup  []a64fixup
 	labels []int
-
-	// dotT is the two scratch vectors SDOT and SDOTelem are widened through on
-	// a chip without FEAT_DotProd (sdotemu.go), and dotEmu whether they are:
-	// both set by DotScratch, which every kernel emitting SDOT calls. An A64
-	// that never called it encodes SDOT as written, which keeps the encoding
-	// tests host-pure; a kernel that forgot is caught by
-	// TestNoDotProdKernelsEmitNoSDOT and, on a chip without the feature, by
-	// SIGILL.
-	dotT   [2]VReg
-	dotEmu bool
-	// dotPend is the accumulator a DotChain is open on and dotLinks how many
-	// links it has taken; the chain's int16 sums live in dotT until its last
-	// link folds them into dotPend.
-	dotPend  VReg
-	dotLinks int
 }
 
 // a64fixup is a branch whose target was not yet bound. bits is the width of the
@@ -435,10 +420,6 @@ func (a *A64) MOVI16b(vd VReg, imm8 byte) {
 // not apply here, and porting it would double-bias every weight. USDOT has
 // VPDPBUSD's semantics but needs ARMv8.6. Use SDOT, and do not mix the two.
 func (a *A64) SDOT(vd, vn, vm VReg) {
-	if a.dotEmu {
-		a.sdotWide(vd, vn, vm, false, 0)
-		return
-	}
 	a.w(0x4E809400 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
 }
 
@@ -452,10 +433,6 @@ func (a *A64) SDOT(vd, vn, vm VReg) {
 func (a *A64) SDOTelem(vd, vn, vm VReg, idx uint8) {
 	if idx > 3 {
 		panic(fmt.Sprintf("jit: SDOTelem index %d, want 0..3", idx))
-	}
-	if a.dotEmu {
-		a.sdotWide(vd, vn, vm, true, idx)
-		return
 	}
 	a.w(0x4F80E000 | uint32(idx&1)<<21 | uint32(idx>>1)<<11 |
 		uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))

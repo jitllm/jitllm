@@ -1,12 +1,7 @@
 package nn
 
 import (
-	"encoding/binary"
-	"fmt"
 	"math"
-	"sync"
-	"sync/atomic"
-	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
 )
@@ -67,156 +62,19 @@ func YarnFreqs(nrot int, base, factor float64, origCtx int, betaFast, betaSlow f
 	return out
 }
 
-// RopeTable is Table through this JIT, which lets a test build (Config.RopeGo)
-// select the float64 Go table per model. Every caller in model/ takes it.
-func (f *JIT) RopeTable(r Rope, cs []float32, pos int) {
-	if f != nil && f.cfg.RopeGo {
-		npairs := r.NRot / 2
-		if len(cs)/2 < npairs {
-			npairs = len(cs) / 2
-		}
-		if npairs > 0 {
-			ropeGoTable(r, cs, pos, npairs)
-		}
-		return
-	}
-	r.Table(cs, pos)
-}
-
-// Table fills the cosines and sines one position needs, interleaved, for a
-// caller that applies the rotation elsewhere. It is a generated kernel on
-// every tier; a tier without one panics naming the shape.
-//
-// The frequencies are folded mod four quarter-turns in float64 once at load
-// (buildRopeTab); the kernel does the position-dependent part. It lands within
-// one float32 ulp at 1.0 of the float64 table at every position tested, and
-// the device kernel (kernels.RopeTable) transcribes it from the same planes
-// (TabPlanes). See engine/device/cpu/ropetab.go for the precision analysis and
-// engine/nn/ropetab_test.go for the gate.
-func (r Rope) Table(cs []float32, pos int) {
-	npairs := r.NRot / 2
-	if len(cs)/2 < npairs {
-		npairs = len(cs) / 2
-	}
-	if npairs <= 0 {
-		return
-	}
-	if pos < 0 || pos >= cpu.RopeTabMaxPos {
-		panic(fmt.Sprintf("jit: rotary table at position %d, outside the %d the "+
-			"kernel's digit decomposition covers", pos, cpu.RopeTabMaxPos))
-	}
-	code := ropeTabCodeFor(npairs)
-	if code == nil {
-		panic(fmt.Sprintf("jit: no rotary-table kernel for %d pair(s) on tier %v -- "+
-			"every tier generates one, so this is a wiring bug and not a fallback",
-			npairs, cpu.HostTier()))
-	}
-	tab := ropeTabFor(r, npairs)
-	ropeTabCalls.Add(1)
-	args := cpu.Args{
-		Out:    &cs[0],
-		AScale: &tab.block[0],
-		Scr:    (*byte)(unsafe.Pointer(&ropeTabConsts[0])),
-		K:      int64(pos),
-	}
-	code.Call(&args)
-}
-
 // TabPlanes is the folded constant block a generated rotary-table kernel reads
 // -- the four head planes, the four residual planes and mscale, in
 // engine/device/cpu/ropetab_const.go's layout. A multi-axis rotary's pairs fold at
 // their runs' frequencies.
 //
 // It is exported for the device, which uploads the planes once per model like
-// a weight, so every tier derives the table from the same fold.
-//
-// The returned slice is a copy: the cache behind it is shared by every
-// sequence on this configuration.
+// a weight, so every tier derives the table from the same fold. Each call
+// folds afresh: it runs where a block is placed, never in a step.
 func (r Rope) TabPlanes(npairs int) []float32 {
 	if npairs <= 0 {
 		return nil
 	}
-	return append([]float32(nil), ropeTabFor(r, npairs).block...)
-}
-
-// ropeTabCalls counts tables the kernel has built. A gate cannot prove the
-// kernel ran by asserting it differs from a reference, since it often matches
-// to the last bit; a counter answers that.
-var ropeTabCalls atomic.Int64
-
-// RopeTableCalls is how many tables the generated kernel has built.
-func RopeTableCalls() int64 { return ropeTabCalls.Load() }
-
-// SetRopeGo flips this JIT's rotary dose (Config.RopeGo). The Go table only
-// exists under the jitllmtest build tag (ropego.go), so a release binary has no
-// path to it. It is a setter rather than an option because the dose harness
-// (engine/model/ropedose_test.go) toggles it mid-run so both arms share one JIT.
-// Not safe to call while another goroutine is using this JIT.
-func (f *JIT) SetRopeGo(on bool) {
-	if f != nil {
-		f.cfg.RopeGo = on
-	}
-}
-
-var ropeTabConsts = cpu.RopeTabConsts()
-
-// ropeTab is one model's folded rotary constants, in the layout
-// ropetab_const.go defines.
-//
-// freqs is kept ALIVE rather than merely keyed on, which is what makes the
-// pointer in ropeTabKey sound: while the entry lives the backing array cannot
-// be collected, so its address cannot be reused by a different slice.
-type ropeTab struct {
-	block []float32
-	freqs []float32
-}
-
-// ropeTabKey identifies one rotary configuration at one pair count.
-//
-// The frequency slice is keyed by identity, not content, so a token does not
-// hash NRot/2 floats. A model builds Freqs once and never writes it; the
-// address, length and end words pin it, and the entry holds a reference so the
-// address cannot be recycled.
-type ropeTabKey struct {
-	nrot, npairs int
-	// runFirst and runStride are a multi-axis run's frequency sequence
-	// (runRope).
-	runFirst, runStride int
-	base, scale         uint64
-	nfreq               int
-	freqs               uintptr
-	first, last         uint32
-	// runs is a multi-axis rotary's runs whose frequencies restart (a 2-D
-	// tower's), empty where they are one sequence: such runs fold to the
-	// plain planes (restartingRuns).
-	runs string
-}
-
-func (r Rope) tabKey(npairs int) ropeTabKey {
-	k := ropeTabKey{
-		nrot:      r.NRot,
-		npairs:    npairs,
-		runFirst:  r.first,
-		runStride: max(r.stride, 1),
-		base:      math.Float64bits(r.Base),
-		scale:     math.Float64bits(r.Scale),
-		nfreq:     len(r.Freqs),
-	}
-	if len(r.Freqs) > 0 {
-		k.freqs = uintptr(unsafe.Pointer(unsafe.SliceData(r.Freqs)))
-		k.first = math.Float32bits(r.Freqs[0])
-		k.last = math.Float32bits(r.Freqs[len(r.Freqs)-1])
-	}
-	if restartingRuns(r.Runs) {
-		b := make([]byte, 0, 24*len(r.Runs))
-		for _, u := range r.Runs {
-			b = binary.LittleEndian.AppendUint64(b, uint64(u.Pairs))
-			b = binary.LittleEndian.AppendUint64(b, uint64(u.Freq))
-			b = binary.LittleEndian.AppendUint64(b, uint64(u.step()))
-		}
-		k.runs = string(b)
-	}
-	return k
+	return foldRopeTab(r, npairs)
 }
 
 // restartingRuns says runs do not continue one frequency sequence: some run
@@ -233,54 +91,7 @@ func restartingRuns(runs []RopeRun) bool {
 	return false
 }
 
-// The folded constants and the kernels, both keyed and both published as a
-// whole snapshot, which is engine/nn/moetopk.go's pattern: a model asks for exactly
-// one key for its whole life, so neither map grows past the number of loaded
-// configurations and the read path takes no lock.
-var ropeTabs struct {
-	mu   sync.Mutex
-	snap atomic.Pointer[map[ropeTabKey]*ropeTab]
-}
-
-type ropeCodeKey struct {
-	t      cpu.Tier
-	npairs int
-}
-
-var ropeCodes struct {
-	mu   sync.Mutex
-	snap atomic.Pointer[map[ropeCodeKey]*cpu.Code]
-}
-
-func init() {
-	t := map[ropeTabKey]*ropeTab{}
-	ropeTabs.snap.Store(&t)
-	c := map[ropeCodeKey]*cpu.Code{}
-	ropeCodes.snap.Store(&c)
-}
-
-func ropeTabFor(r Rope, npairs int) *ropeTab {
-	key := r.tabKey(npairs)
-	if t, ok := (*ropeTabs.snap.Load())[key]; ok {
-		return t
-	}
-	ropeTabs.mu.Lock()
-	defer ropeTabs.mu.Unlock()
-	old := *ropeTabs.snap.Load()
-	if t, ok := old[key]; ok {
-		return t
-	}
-	t := buildRopeTab(r, npairs)
-	next := make(map[ropeTabKey]*ropeTab, len(old)+1)
-	for k, v := range old {
-		next[k] = v
-	}
-	next[key] = t
-	ropeTabs.snap.Store(&next)
-	return t
-}
-
-// buildRopeTab folds one configuration's frequencies into the kernel's planes.
+// foldRopeTab folds one configuration's frequencies into the kernel's planes.
 //
 // Each digit's weight is folded progressively and exactly: the next weight is
 // this one's times 128, and multiplying by a power of two and taking mod 4 of
@@ -289,7 +100,7 @@ func ropeTabFor(r Rope, npairs int) *ropeTab {
 //
 // The frequency uses the float64 table's own recurrence (f *= step, runFreqs),
 // so a comparison between the two is about the kernel, not the frequencies.
-func buildRopeTab(r Rope, npairs int) *ropeTab {
+func foldRopeTab(r Rope, npairs int) []float32 {
 	blk := make([]float32, cpu.RopeTabBlock(npairs))
 	freqs := runFreqs(r, npairs)
 	// Restarting runs fold each pair at its own run's frequency, as the
@@ -324,37 +135,5 @@ func buildRopeTab(r Rope, npairs int) *ropeTab {
 		mscale = 1
 	}
 	blk[cpu.RopeTabScaleOff(npairs)] = float32(mscale)
-	return &ropeTab{block: blk, freqs: r.Freqs}
-}
-
-// ropeTabCodeFor emits and maps one kernel under the lock and publishes a new
-// snapshot. A failure is cached as a nil entry rather than retried: an emitter
-// that refuses this shape refuses it every token.
-//
-// It is keyed by tier as well as by shape, so a forced-SSE run is not handed
-// an AVX2 kernel an earlier caller mapped.
-func ropeTabCodeFor(npairs int) *cpu.Code {
-	key := ropeCodeKey{cpu.HostTier(), npairs}
-	if c, ok := (*ropeCodes.snap.Load())[key]; ok {
-		return c
-	}
-	ropeCodes.mu.Lock()
-	defer ropeCodes.mu.Unlock()
-	old := *ropeCodes.snap.Load()
-	if c, ok := old[key]; ok {
-		return c
-	}
-	var c *cpu.Code
-	if b, err := cpu.EmittersFor(key.t).RopeTable(npairs); err == nil {
-		if mapped, err := cpu.MapNamed(b, "rope_table"); err == nil {
-			c = mapped
-		}
-	}
-	next := make(map[ropeCodeKey]*cpu.Code, len(old)+1)
-	for k, v := range old {
-		next[k] = v
-	}
-	next[key] = c
-	ropeCodes.snap.Store(&next)
-	return c
+	return blk
 }

@@ -1,8 +1,8 @@
 package model
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // Nemotron-H (jlm.ArchNemotronH) on the Mamba-2 harness (ssmfamily_test.go):
@@ -22,7 +22,7 @@ func nemotronhFixtures() []struct {
 			// its MLP, a mixer alone, a mixer with its MLP -- five blocks.
 			c := m.Cfg
 			ok := c.Arch == "nemotron_h" && c.SSD() && c.NLayer == 5 && c.SSM.Groups == 2 &&
-				c.SSMNormGroups == 2 && c.NoPosEnc && c.Act == nn.ActReLU2 && c.NKVHead == 2 && !c.TiedEmbd
+				c.SSMNormGroups == 2 && c.NoPosEnc && c.Act == graph.ActReLU2 && c.NKVHead == 2 && !c.TiedEmbd
 			for i, want := range []struct {
 				rec, noFFN bool
 			}{{true, false}, {true, true}, {false, false}, {true, true}, {true, false}} {
@@ -39,7 +39,7 @@ func nemotronhFixtures() []struct {
 			c := m.Cfg
 			ok := c.Arch == "nemotron_h" && c.SSD() && c.NLayer == 4 && c.NExpert == 8 && c.NExpertUsed == 2 &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpertGroup == 0 &&
-				c.NFFNExp == 64 && c.NFFNShExp == 96 && c.Act == nn.ActReLU2 && c.NoPosEnc
+				c.NFFNExp == 64 && c.NFFNShExp == 96 && c.Act == graph.ActReLU2 && c.NoPosEnc
 			for i, want := range []struct {
 				rec, moe bool
 			}{{true, true}, {false, true}, {true, false}, {true, true}} {
@@ -87,7 +87,7 @@ func nemotronhViolations(device bool) []c6Violation {
 				}
 			})
 		}},
-		{"SiLU for the squared ReLU", actSwap(nn.ActSiLU)},
+		{"SiLU for the squared ReLU", actSwap(graph.ActSiLU)},
 	}
 	if !device {
 		vs = append(vs, c6Violation{"value heads paired with key groups tiled", func(m *Model) func() {

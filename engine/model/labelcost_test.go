@@ -5,6 +5,7 @@ package model
 import (
 	"os"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -154,4 +155,10 @@ func TestRegionLabelRate(t *testing.T) {
 			p, med, raw/med, len(r), b0, b1, gate)
 		t.Logf("        off %.2f tok/s   on %.2f tok/s", roff, ron)
 	}
+}
+
+// medIQR is v's median and interquartile range.
+func medIQR(v []float64) (med, iqr float64) {
+	s := slices.Sorted(slices.Values(v))
+	return s[len(s)/2], s[3*len(s)/4] - s[len(s)/4]
 }

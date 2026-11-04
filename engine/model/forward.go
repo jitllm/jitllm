@@ -136,11 +136,7 @@ type Instance struct {
 	Grouped   int64
 
 	x, h []float32 // residual stream and two same-width scratch vectors
-	// bhf is a parallel block's FFN input (C6) over a chunk: the block input
-	// normed for the FFN before attention adds into the residual. nil on
-	// every sequential model.
-	bhf []float32
-	q   []float32 // n_head * head_dim
+	q    []float32 // n_head * head_dim
 	// attStride is a row of scores' stride over the context: maxSeq rounded
 	// up to a vector.
 	attStride int
@@ -329,11 +325,9 @@ type Instance struct {
 
 	// Batched prefill scratch, allocated on first use and sized by
 	// PrefillChunk rather than by the sequence length.
-	bx, bh, bq, bxb []float32
-	bk, bv          []float32
-	bgate, bup      []float32
-	bqf, bxbf       []float32
-	battf           []float32 // per-token score rows, at rowsStride
+	bx, bh    []float32
+	bqf, bxbf []float32
+	battf     []float32 // per-token score rows, at rowsStride
 
 	// device is the device SetDeviceLayers was handed, before Attach made ld a
 	// session of it: what a draft instance attaches to (Speculate).
@@ -2543,10 +2537,6 @@ func (m *Model) lnBias(b []float32) []float32 {
 	m.lnZerosOnce.Do(func() { m.lnZeros = make([]float32, m.Cfg.NEmbd) })
 	return m.lnZeros
 }
-
-// ffnPad rounds an FFN width up to a whole vector. The scratch is allocated at
-// this length so a ragged tail has somewhere legal to go.
-func ffnPad(n int) int { return (n + nn.ElemLanes - 1) &^ (nn.ElemLanes - 1) }
 
 // attStride rounds a score row's stride up to a whole vector, so the padding
 // the generated softmax writes stays inside the row it belongs to.

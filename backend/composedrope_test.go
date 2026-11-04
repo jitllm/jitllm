@@ -19,18 +19,14 @@ import (
 // TestComposedRopeTableOverAxes runs the composer's rotary table over one
 // position axis, contiguous sections and interleaved ones, at ragged pair
 // counts, on every backend present at one row and at five. Each row is held
-// to main's host table at the row's positions (nn.Rope.Table, and
-// nn.Rope.TableAt over the runs main builds from the same sections) and to
-// the float64 table of each pair at its axis's position. Each pair of a
-// table over several axes must also be, to the bit, the composer's one-axis
-// table's pair at the position of the pair's axis as main's runs assign it.
-// A guard after the output must survive, and with two axes' positions
-// swapped the table must not match. On this host's CPU, at one row (the
-// CPU's table convention, one row a call), each table must be main's host
-// table to the bit, and no argument may be one whose offset a caller would
-// have to compute.
+// to the float64 table of each pair at its axis's position, and each pair of
+// a table over several axes must be, to the bit, the composer's one-axis
+// table's pair at the position of the pair's axis as the runs assign it. A
+// guard after the output must survive, and with two axes' positions swapped
+// the table must not match. On this host's CPU no argument may be one whose
+// offset a caller would have to compute.
 func TestComposedRopeTableOverAxes(t *testing.T) {
-	t.Run("cpu/1 rows", func(t *testing.T) { composedRopeAxes(t, cpuRope, 1, true) })
+	t.Run("cpu/1 rows", func(t *testing.T) { composedRopeAxes(t, cpuRope, 1) })
 	gpuLock(t)
 	devs := backend.OpenForTest()
 	if len(devs) == 0 {
@@ -39,7 +35,7 @@ func TestComposedRopeTableOverAxes(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		for _, rows := range []int{1, 5} {
-			t.Run(fmt.Sprintf("%s/%d rows", d.API(), rows), func(t *testing.T) { composedRopeAxes(t, gpuRope(d), rows, false) })
+			t.Run(fmt.Sprintf("%s/%d rows", d.API(), rows), func(t *testing.T) { composedRopeAxes(t, gpuRope(d), rows) })
 		}
 	}
 }
@@ -49,12 +45,9 @@ func TestComposedRopeTableOverAxes(t *testing.T) {
 // shows, and a word written past the table changes it.
 const composedRopeGuard = 0x7fc0dead
 
-// composedRopeAxes holds run's tables at rows rows; exact holds each to main's
-// host table to the bit, which is itself the one-axis table run by run
-// (nn.Rope.TableAt), in place of the cross-check against the composer's own
-// one-axis table.
-func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
-	// The device table's bound against the host's and the float64 table's
+// composedRopeAxes holds run's tables at rows rows.
+func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
+	// The table's bound against the float64 table's
 	// (TestRopeTableOnDeviceMatchesHost's).
 	const bound = 3e-7
 	cases := []struct {
@@ -103,54 +96,44 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 					t.Fatalf("main's runs cover %d of %d pairs", p, tc.pairs)
 				}
 			}
-			host := make([]float32, rows*2*tc.pairs)
 			pos := []uint32{uint32(rows)}
 			for r := range rows {
-				cs := host[r*2*tc.pairs : (r+1)*2*tc.pairs]
 				if !multi {
-					rope.Table(cs, at[r][0])
 					pos = append(pos, uint32(at[r][0]))
 					continue
 				}
-				rope.TableAt(cs, at[r][:])
 				for _, p := range at[r] {
 					pos = append(pos, uint32(p))
 				}
 			}
 			got := run(t, rope, tc.sections, tc.interleaved, rows, pos)
-			worstHost, worstOracle := 0.0, 0.0
+			worst := 0.0
 			for r := range rows {
 				for p := range tc.pairs {
 					ref := ropeTabOracle(rope, at[r][axis[p]], tc.pairs)
 					for j := range 2 {
 						i := r*2*tc.pairs + 2*p + j
-						dh := math.Abs(float64(got[i]) - float64(host[i]))
-						do := math.Abs(float64(got[i]) - ref[2*p+j])
-						if math.IsNaN(dh) || math.IsNaN(do) {
-							t.Fatalf("row %d pair %d is %v where the host's is %v", r, p, got[i], host[i])
+						d := math.Abs(float64(got[i]) - ref[2*p+j])
+						if math.IsNaN(d) {
+							t.Fatalf("row %d pair %d is %v where the float64 table's is %v", r, p, got[i], ref[2*p+j])
 						}
-						worstHost, worstOracle = max(worstHost, dh), max(worstOracle, do)
+						worst = max(worst, d)
 					}
 				}
 			}
-			if worstHost > bound || worstOracle > bound || exact && worstHost != 0 {
-				t.Fatalf("the composer's table is %.3e from the host's and %.3e from the float64 table, past %.0e (exact %v)", worstHost, worstOracle, bound, exact)
+			if worst > bound {
+				t.Fatalf("the composer's table is %.3e from the float64 table, past %.0e", worst, bound)
 			}
 			if !multi {
-				t.Logf("one axis: %.3e from the host's table, %.3e from the float64 table", worstHost, worstOracle)
+				t.Logf("one axis: %.3e from the float64 table", worst)
 				ran++
 				return
 			}
 			// Each row's position on each axis, the one-axis table of a row
 			// there: pair p of row r is pair p of that table at p's axis.
-			// Where exact, the host's table to the bit is that check.
 			plain := rope
 			plain.Runs = nil
-			cross := rows
-			if exact {
-				cross = 0
-			}
-			for r := range cross {
+			for r := range rows {
 				var flat [composer.RopeAxes][]float32
 				for a, p := range at[r] {
 					flat[a] = run(t, plain, [4]int{}, false, 1, []uint32{1, uint32(p)})
@@ -174,7 +157,7 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 				}
 			}
 			if len(used) < 2 {
-				t.Logf("one axis turns every pair: %.3e from the host's table, %.3e from the float64 table", worstHost, worstOracle)
+				t.Logf("one axis turns every pair: %.3e from the float64 table", worst)
 				ran++
 				return
 			}
@@ -185,13 +168,13 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 			}
 			swapped := run(t, rope, tc.sections, tc.interleaved, rows, bad)
 			apart := 0.0
-			for i := range host {
-				apart = max(apart, math.Abs(float64(swapped[i])-float64(host[i])))
+			for i := range got {
+				apart = max(apart, math.Abs(float64(swapped[i])-float64(got[i])))
 			}
 			if !(apart > 1e3*bound) {
-				t.Fatalf("with axes %d and %d swapped the table is %.3e from the host's: the gate cannot see a wrong axis", x, y, apart)
+				t.Fatalf("with axes %d and %d swapped the table is %.3e from the unswapped one: the gate cannot see a wrong axis", x, y, apart)
 			}
-			t.Logf("%.3e from the host's table, %.3e from the float64 table; axes %d and %d swapped, %.3e", worstHost, worstOracle, x, y, apart)
+			t.Logf("%.3e from the float64 table; axes %d and %d swapped, %.3e", worst, x, y, apart)
 			ran++
 		})
 	}

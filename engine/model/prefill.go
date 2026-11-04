@@ -847,18 +847,6 @@ func (s *Instance) growBatch(chunk int) {
 	h := s.spareHost
 	s.spareHost.bh = nil
 	s.bh = scratch(h.bh, chunk*max(c.NEmbd, qDim), 0)
-	s.bq = scratch(h.bq, chunk*qDim, 0)
-	s.bxb = scratch(h.bxb, chunk*qDim, 0)
-	s.bk = scratch(h.bk, chunk*c.MaxKVDim(), 0)
-	s.bv = scratch(h.bv, chunk*c.MaxKVDim(), 0)
-	// Padded, so the ragged tail of a width that is not a whole number of
-	// vectors has somewhere legal to go and the generated activation serves
-	// every width (see Instance.actmul).
-	s.bgate = scratch(h.bgate, chunk*c.MaxNFFN(), ffnPad(chunk*c.MaxNFFN()))
-	s.bup = scratch(h.bup, chunk*c.MaxNFFN(), ffnPad(chunk*c.MaxNFFN()))
-	if c.Parallel || c.SSDAttn() {
-		s.bhf = scratch(h.bhf, chunk*c.NEmbd, 0)
-	}
 	// One attention scores row per token, for the same kernels decode uses:
 	// sized where it is used, by the keys the chunk reaches (rowsStride).
 	s.battf = h.battf

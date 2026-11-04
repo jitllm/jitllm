@@ -14,7 +14,6 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
@@ -571,13 +570,7 @@ func TestComposedCPUHeadSlices(t *testing.T) {
 		if !(e <= bound) {
 			t.Fatalf("%d heads of %d: the gated output is %.3g from sigmoid(gate)*attention, at %d, bound %.3g", c.heads, c.d, e, at, bound)
 		}
-		main := slices.Clone(gate)
-		nn.SigmoidMul32JIT(main, att)
-		me, _ := worstRel(main, wantOut)
-		if !(me <= bound) {
-			t.Fatalf("%d heads of %d: main's kernel is %.3g from sigmoid(gate)*attention, over the bound %.3g the composed form is held to", c.heads, c.d, me, bound)
-		}
-		t.Logf("%d heads of %d: the split is exact, the gated output %.3g and main's kernel %.3g from the definition, bound %.3g", c.heads, c.d, e, me, bound)
+		t.Logf("%d heads of %d: the split is exact, the gated output %.3g from the definition, bound %.3g", c.heads, c.d, e, bound)
 		badQ, _, _, _ := run(c.d, c.d)
 		if e, _ := worstRel(badQ, wantQ); !(e > 1e-2) {
 			t.Errorf("%d heads of %d: a query read from the gate's half is only %.3g from the query", c.heads, c.d, e)
@@ -730,7 +723,7 @@ func TestComposedCPUXIELU(t *testing.T) {
 		return dist{max(a.bound, b.bound), max(a.engine, b.engine), max(a.result, b.result)}
 	}
 	// figs is the worst of each family kind for each set of numbers.
-	type fig struct{ comp, main dist }
+	type fig struct{ comp dist }
 	figs := make([][]fig, len(kinds))
 	for k := range figs {
 		figs[k] = make([]fig, len(xieluNumbers()))
@@ -767,16 +760,11 @@ func TestComposedCPUXIELU(t *testing.T) {
 		rotated := cpuForm(t, rotateWindows(g, 4), []jlm.Role{jlm.RoleXIELU})
 		for pi, p := range xieluNumbers() {
 			got := run(codes, p)
-			main := slices.Clone(fam.xs)
-			nn.XIELU32JIT(main, p[:])
-			dc, dm := distOf(fam.xs, got, p), distOf(fam.xs, main, p)
+			dc := distOf(fam.xs, got, p)
 			f := &figs[kind][pi]
-			f.comp, f.main = worse(f.comp, dc), worse(f.main, dm)
+			f.comp = worse(f.comp, dc)
 			if !(dc.bound <= 1) {
 				t.Errorf("%s, numbers %v: the composed form is %.3g of the bound from the oracle", fam.name, p, dc.bound)
-			}
-			if !(dm.bound <= 1) {
-				t.Errorf("%s, numbers %v: main's kernel is %.3g of the bound from the oracle: the bound is not one the engine's kernel meets", fam.name, p, dm.bound)
 			}
 			for name, v := range map[string]struct {
 				codes []composer.Code
@@ -802,8 +790,8 @@ func TestComposedCPUXIELU(t *testing.T) {
 	for k, kind := range kinds {
 		for pi, p := range xieluNumbers() {
 			f := figs[k][pi]
-			t.Logf("%s, numbers %v: composed %.3f of the bound, %.3f of the engine's, %.3g of the result; main's kernel %.3f, %.3f, %.3g",
-				kind, p, f.comp.bound, f.comp.engine, f.comp.result, f.main.bound, f.main.engine, f.main.result)
+			t.Logf("%s, numbers %v: composed %.3f of the bound, %.3f of the engine's, %.3g of the result",
+				kind, p, f.comp.bound, f.comp.engine, f.comp.result)
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(seen)) {

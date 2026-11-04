@@ -277,7 +277,6 @@ func loadQ4EHead(m *Model, cfg *Config, f *jlm.File,
 // call so a warm decode token and a warm step allocate nothing.
 type q4eScratch struct {
 	rows int
-	qsa  *qsaScratch
 }
 
 // allocQ4E sizes a instance's buffers for one row, and its streams.
@@ -287,7 +286,6 @@ func (s *Instance) allocQ4E() {
 		return
 	}
 	s.q4 = &q4eScratch{}
-	s.allocQSA()
 	s.growQ4E(1)
 }
 
@@ -298,7 +296,6 @@ func (s *Instance) growQ4E(n int) {
 		return
 	}
 	g.rows = n
-	s.growQSARows(n)
 }
 
 // q4eDraftStreams lays a prediction block's draft rows, which arrive with

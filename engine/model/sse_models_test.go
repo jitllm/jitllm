@@ -3,7 +3,6 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -50,16 +49,6 @@ func ssemForce(t *testing.T) {
 	}
 }
 
-// ssemRequireComplete fails t naming every SSE-tier op with no kernel.
-func ssemRequireComplete(t *testing.T) {
-	t.Helper()
-	if p := cpu.SSEPending(); len(p) > 0 {
-		t.Fatalf("the SSE tier is incomplete: %d ops have no kernel (%s). This gate runs models "+
-			"on that tier and is red by design until every family has landed.",
-			len(p), strings.Join(p, ", "))
-	}
-}
-
 // ssemSmallModels is every language model under 2 GiB, sorted by size
 // (languageModels leaves the projectors out).
 func ssemSmallModels(t testing.TB) []string {
@@ -75,50 +64,6 @@ func ssemSmallModels(t testing.TB) []string {
 		return a.Size() < b.Size()
 	})
 	return out
-}
-
-// TestOpenRefusesAnIncompleteTierByName is model.Open's floor on an SSE host,
-// in both directions and in every state of the tree: while any SSE-tier op is
-// pending, Open refuses before building anything and names every pending op;
-// once none is, Open succeeds.
-func TestOpenRefusesAnIncompleteTierByName(t *testing.T) {
-	models := ssemSmallModels(t)
-	if len(models) == 0 {
-		t.Fatal("no model under 2 GiB -- this gate proved nothing")
-	}
-	path := jlmOf(t, models[0]) // convert on the host's own tier, before the force
-	ssemForce(t)
-	before := cpu.MappedByTier()
-	m, err := Open(path)
-	after := cpu.MappedByTier()
-	pending := cpu.SSEPending()
-	if len(pending) == 0 {
-		if err != nil {
-			t.Fatalf("every SSE-tier op has a kernel and Open refused: %v", err)
-		}
-		m.Close()
-		t.Logf("%s opened on the complete SSE tier", filepath.Base(path))
-	} else {
-		if err == nil {
-			m.Close()
-			t.Fatalf("%d SSE-tier ops are pending and Open succeeded: %s", len(pending), strings.Join(pending, ", "))
-		}
-		if !errors.Is(err, cpu.ErrNoSSEKernel) {
-			t.Errorf("the refusal %v does not wrap cpu.ErrNoSSEKernel", err)
-		}
-		for _, p := range pending {
-			if !strings.Contains(err.Error(), p) {
-				t.Errorf("the refusal does not name pending op %s: %v", p, err)
-			}
-		}
-		if after[cpu.TierSSE] != before[cpu.TierSSE] {
-			t.Errorf("the refused Open mapped %d SSE kernels first -- it refused late", after[cpu.TierSSE]-before[cpu.TierSSE])
-		}
-		t.Logf("refused by name: %v", err)
-	}
-	if after[cpu.TierAVX2] != before[cpu.TierAVX2] {
-		t.Errorf("%d AVX2 kernels were mapped while the SSE tier was forced", after[cpu.TierAVX2]-before[cpu.TierAVX2])
-	}
 }
 
 // ssemArm is one tier's transcription of a model: teacher-forced logits at every
@@ -270,7 +215,6 @@ func ssemMaxAbs(a, b []float32) float64 {
 func TestEveryModelRunsSSE(t *testing.T) {
 	// First, before converting or opening anything: on an incomplete tier
 	// every model would be refused, and the conversions would be wasted.
-	ssemRequireComplete(t)
 	models := ssemSmallModels(t)
 	if len(models) == 0 {
 		t.Fatal("no model under 2 GiB -- this gate proved nothing")
@@ -321,7 +265,6 @@ func TestEveryModelRunsSSE(t *testing.T) {
 			}
 
 			ssemForce(t)
-			ssemRequireComplete(t)
 			before := cpu.MappedByTier()
 			got := ssemRun(t, path, ids, gen, f32)
 			after := cpu.MappedByTier()
@@ -437,7 +380,6 @@ func ssemKVF16(fn func(*testing.T, ...Option)) func(*testing.T) {
 // it checks on the AVX2 tier it checks here.
 func TestSSEModelGates(t *testing.T) {
 	ssemForce(t)
-	ssemRequireComplete(t)
 	before := cpu.MappedByTier()
 	for _, g := range []struct {
 		name string

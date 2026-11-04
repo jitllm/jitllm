@@ -11,7 +11,6 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -30,28 +29,20 @@ func TestPrefillMatchesForward(t *testing.T) {
 	// folding order alone, so this mode holds them to floatFormsNMSE, a bar
 	// far below what a wrong position or mask reads.
 	t.Run("no-gemm", func(t *testing.T) {
-		nn.ResetForTest()
-		defer nn.ResetForTest()
 		prefillVsForward(t, path, true)
 	})
 	// The float forms without the GEMM option, held the same way. The
 	// shipping int8 forms are left to the NMSE tripwire.
 	t.Run("exact-gemm", func(t *testing.T) {
-		nn.ResetForTest()
-		defer nn.ResetForTest()
 		prefillVsForwardOpts(t, path, true, withCPUFloat())
 	})
 	t.Run("shipped", func(t *testing.T) {
-		nn.ResetForTest()
-		defer nn.ResetForTest()
 		prefillVsForward(t, path, false)
 	})
 	// The prompt and the forward loop both on the composed CPU's blocks --
 	// the prompt's rows through its form of several rows -- held to the
 	// shipped mode's bar.
 	t.Run("composed-cpu", func(t *testing.T) {
-		nn.ResetForTest()
-		defer nn.ResetForTest()
 		// Models the composer serves every block of on the CPU
 		// (cpuServedModels), not the bench model, which may be one it
 		// declines by name, and the mixtures, whose prompts' calls hold the
