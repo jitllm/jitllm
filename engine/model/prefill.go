@@ -809,10 +809,10 @@ type promptBuf struct {
 
 // takeSpare is the model's spare prompt buffers, or nil, emptying the slot.
 func (m *Model) takeSpare() *promptBuf {
-	m.spareMu.Lock()
-	defer m.spareMu.Unlock()
-	b := m.spare
-	m.spare = nil
+	m.eng.spareMu.Lock()
+	defer m.eng.spareMu.Unlock()
+	b := m.eng.spare
+	m.eng.spare = nil
 	return b
 }
 
@@ -823,10 +823,10 @@ func (s *Instance) keepSpare() {
 		return
 	}
 	m := s.m
-	m.spareMu.Lock()
-	defer m.spareMu.Unlock()
-	if m.spare == nil || len(m.spare.bx) < len(s.bx) {
-		m.spare = &promptBuf{s.bx, s.bcs, s.bcsSWA, s.takeHostBatch()}
+	m.eng.spareMu.Lock()
+	defer m.eng.spareMu.Unlock()
+	if m.eng.spare == nil || len(m.eng.spare.bx) < len(s.bx) {
+		m.eng.spare = &promptBuf{s.bx, s.bcs, s.bcsSWA, s.takeHostBatch()}
 	}
 	s.bx, s.bcs, s.bcsSWA = nil, nil, nil
 }

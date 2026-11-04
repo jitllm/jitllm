@@ -156,10 +156,10 @@ type kvArenaKey struct {
 // on the first ask: reserved for what the host's memory budget can hold of
 // that layer and no fewer than minSlots pages.
 func (m *Model) kvArenaFor(li, pp int, latent bool, minSlots int) (*kvArena, error) {
-	m.kvArenaMu.Lock()
-	defer m.kvArenaMu.Unlock()
+	m.eng.kvArenaMu.Lock()
+	defer m.eng.kvArenaMu.Unlock()
 	k := kvArenaKey{li, pp, latent}
-	if a := m.kvArenas[k]; a != nil {
+	if a := m.eng.kvArenas[k]; a != nil {
 		return a, nil
 	}
 	slots := max(minSlots, int(min(sched.MemBudget()/uint64(4*pp), kvArenaElems/uint64(pp))))
@@ -167,21 +167,21 @@ func (m *Model) kvArenaFor(li, pp int, latent bool, minSlots int) (*kvArena, err
 	if err != nil {
 		return nil, err
 	}
-	if m.kvArenas == nil {
-		m.kvArenas = map[kvArenaKey]*kvArena{}
+	if m.eng.kvArenas == nil {
+		m.eng.kvArenas = map[kvArenaKey]*kvArena{}
 	}
-	m.kvArenas[k] = a
+	m.eng.kvArenas[k] = a
 	return a, nil
 }
 
 // unmapKVArenas lets the model's arenas go, for Close: each is returned now,
 // or when the last slot a store still holds is let go.
 func (m *Model) unmapKVArenas() {
-	m.kvArenaMu.Lock()
-	defer m.kvArenaMu.Unlock()
-	for k, a := range m.kvArenas {
+	m.eng.kvArenaMu.Lock()
+	defer m.eng.kvArenaMu.Unlock()
+	for k, a := range m.eng.kvArenas {
 		a.close()
-		delete(m.kvArenas, k)
+		delete(m.eng.kvArenas, k)
 	}
 }
 

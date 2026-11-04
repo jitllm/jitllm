@@ -23,7 +23,6 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -1171,32 +1170,8 @@ type Model struct {
 	// vecMats is each of those that is a table (the token-type rows) as a
 	// float matrix over the same slice, which an embedding binds as one.
 	vecMats []roleTensor
-	// staleKeyFault is the decision prefix gate's violation
-	// (TestDecisionReusesThePrefix): the key a restore names its pages by, in
-	// place of the prompt's. Nil in every real run.
-	staleKeyFault func(key []int32) []int32
-	// stepShareFault, when set, gives every row of a host step the first run's
-	// instance as its history. False but in a gate's violation: it is how the
-	// gate shows that rows reading one session's history fail it.
-	stepShareFault bool
-	// stepPosFault, when set, is where a run's row j goes, given the
-	// instance's next position and the run's length. Nil but in a gate's
-	// violation: it is how the gate shows that a chunk laid out at the wrong
-	// positions fails it.
-	stepPosFault func(base, j, k int) int
-	// fusedRuns counts the model's fused runs, and fuseTries the runs asked
-	// for, opened or not: a gate whose subtests all skipped (no model on a
-	// model-free runner) asked for none, and has nothing to say about fusion
-	// either way.
-	fusedRuns, fuseTries atomic.Int64
-	// opNanos are the per-op nanosecond counters WithProfile arms (OpProfile).
-	opNanos [nOps]atomic.Int64
 	// splitBank is the Data of a bank held in expert pages (bankWeight).
 	splitBank [1]byte
-	// cacheSeq numbers the default cache names of the model's sessions.
-	cacheSeq atomic.Int64
-	// insts is the model's pool: the instances it serves (Serve).
-	insts Pool
 	// bankWts caches bankWeight's Weight per bank entry; holdFree is the
 	// recycled sheet holds (sheetOf).
 	bankWts  sync.Map
@@ -1227,31 +1202,9 @@ type Model struct {
 	// read: Close closes the first and waits on the second.
 	preloadStop, preloadDone chan struct{}
 	preloadErr               error
-	// cpuUse[li] counts the live instances that run block li on the CPU, under
-	// bind. An instance placing a block gives its host page back only when the
-	// count is zero: placement is per instance and the binding per Model, so
-	// another instance running the block on the host would otherwise find it
-	// unbound between its pageIn and its matvecs.
-	cpuUse []int32
 	// pages is the page budget as the caller set it, and the devices on the
 	// host's own memory whose holdings come off it (hostheld.go).
 	pages pageAsk
-	// spare is a closed session's prompt buffers, for the next instance's first
-	// prompt (promptBuf).
-	spareMu sync.Mutex
-	spare   *promptBuf
-	// step is the host step scratch across sessions (stepBuf).
-	step *stepBuf
-	// kvPool is the host KV pages closed instances gave back (kvPagePool).
-	kvPool kvPagePool
-	// kvArenas is every instance's composed CPU history, a layer and page size
-	// each (kvArenaFor).
-	kvArenas  map[kvArenaKey]*kvArena
-	kvArenaMu sync.Mutex
-	// cpuForms is the composed CPU blocks' forms (cpuserve.go), and
-	// cpuComposes the times the composer was asked for one (CPUComposes).
-	cpuForms    cpudev.Forms
-	cpuComposes atomic.Int64
 
 	// TokErr is why Vocab is nil, when it is. The weights still loaded.
 	TokErr error
@@ -1282,9 +1235,6 @@ type Model struct {
 	expReads int64
 	expBytes int64
 	expCalls int64
-	// hostStepRows is the rows StepRuns has run as host steps across
-	// sessions (stepHost); HostStepRows reports it.
-	hostStepRows int64
 
 	embd tensor
 	// rope is the model's rotary configuration, built once at load.
@@ -1326,15 +1276,11 @@ type Model struct {
 	output      tensor
 	layers      []layer
 	tracer      func(layer int, name string, v []float32)
-	// pool is what WithPool collected, handed to every instance's CPU device.
-	pool []cpu.PoolOption
 	// actWindow is how many activation elements share one int8 scale, the
 	// same on every device (actWindowOf).
 	actWindow int
 	// opt is this model's resolved load options, a copy; see modelOpts.
 	opt modelOpts
-	// live is the open instances, which a prefill asks whether another decodes.
-	live live
 	// dense1 and dense2 are an embedding model's projection heads after
 	// pooling (EmbeddingGemma's), empty for every other model.
 	dense1, dense2 tensor
@@ -1342,13 +1288,9 @@ type Model struct {
 	// id names this model to a device (nn.LayerPlan.Model), which holds one
 	// model's blocks at a time.
 	id uint64
-	// forgetters are the devices an instance attached that copy weights by
-	// address: the pager tells them when a frame's bytes change (forgetCopies).
-	// owners are the devices holding this model's blocks, released at Close.
-	// Both guarded by devMu, since a page-in on any session reads forgetters.
-	devMu      sync.Mutex
-	forgetters []nn.CopyForgetter
-	owners     []nn.ModelOwner
+
+	// eng is what the engine holds for the model's instances (engineState).
+	eng engineState
 }
 
 // newModelID is a random id for an opened Model. Zero is never handed out, so
@@ -1372,13 +1314,13 @@ func newModelID() uint64 {
 // watch registers d with this model: told when the pager recycles a frame, if
 // it copies weights by address, and released at Close, if it holds blocks.
 func (m *Model) watch(d nn.LayerDevice) {
-	m.devMu.Lock()
-	defer m.devMu.Unlock()
-	if o, ok := d.(nn.ModelOwner); ok && !slices.Contains(m.owners, o) {
-		m.owners = append(m.owners, o)
+	m.eng.devMu.Lock()
+	defer m.eng.devMu.Unlock()
+	if o, ok := d.(nn.ModelOwner); ok && !slices.Contains(m.eng.owners, o) {
+		m.eng.owners = append(m.eng.owners, o)
 	}
-	if f, ok := d.(nn.CopyForgetter); ok && !slices.Contains(m.forgetters, f) {
-		m.forgetters = append(m.forgetters, f)
+	if f, ok := d.(nn.CopyForgetter); ok && !slices.Contains(m.eng.forgetters, f) {
+		m.eng.forgetters = append(m.eng.forgetters, f)
 	}
 }
 
@@ -1386,9 +1328,9 @@ func (m *Model) watch(d nn.LayerDevice) {
 // device that may hold a copy keyed inside [p, p+n) drops it, before the frame
 // is read into. See placement.md 15v.
 func (m *Model) forgetCopies(p unsafe.Pointer, n uintptr) {
-	m.devMu.Lock()
-	fs := m.forgetters
-	m.devMu.Unlock()
+	m.eng.devMu.Lock()
+	fs := m.eng.forgetters
+	m.eng.devMu.Unlock()
 	for _, f := range fs {
 		f.Forget(p, n)
 	}
@@ -1612,7 +1554,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// The open-time budget is the caller's ask like any later one: a device
 	// on the host's memory attached afterwards comes off it (hostheld.go).
 	m.pages.bytes = budget
-	m.pool, m.opt = lo.pool, lo.opt
+	m.eng.pool, m.opt = lo.pool, lo.opt
 	m.actWindow = m.actWindowOf()
 	if lo.opt.kvTypeSet {
 		if err := m.Cfg.KVTypeRefusal(lo.opt.kvType); err != nil {
@@ -2002,18 +1944,18 @@ func (m *Model) Close() error {
 	// The devices give this model's blocks back first, so a device another
 	// model is offered next is free; then the container's memory goes, and
 	// every copy keyed on it with it (forgetCopies).
-	m.devMu.Lock()
-	owners := m.owners
-	m.devMu.Unlock()
+	m.eng.devMu.Lock()
+	owners := m.eng.owners
+	m.eng.devMu.Unlock()
 	for _, o := range owners {
 		o.ReleaseModel(m.id)
 	}
-	m.cpuForms.Close()
+	m.eng.cpuForms.Close()
 	m.unmapKVArenas()
 	err := m.container.Close()
-	m.devMu.Lock()
-	m.forgetters, m.owners = nil, nil
-	m.devMu.Unlock()
+	m.eng.devMu.Lock()
+	m.eng.forgetters, m.eng.owners = nil, nil
+	m.eng.devMu.Unlock()
 	return err
 }
 
@@ -2453,11 +2395,11 @@ func (m *Model) PagerReadWait() time.Duration {
 func (m *Model) cpuRuns(lo, hi int, d int32) {
 	m.bind.Lock()
 	defer m.bind.Unlock()
-	if m.cpuUse == nil {
-		m.cpuUse = make([]int32, len(m.layers))
+	if m.eng.cpuUse == nil {
+		m.eng.cpuUse = make([]int32, len(m.layers))
 	}
 	for li := max(lo, 0); li < min(hi, len(m.layers)); li++ {
-		m.cpuUse[li] += d
+		m.eng.cpuUse[li] += d
 	}
 }
 
@@ -3956,5 +3898,5 @@ func (m *Model) shareActWindow(d nn.LayerDevice) {
 // poolOptions is what an instance's CPU device's workers are made with: the
 // caller's, and the serving split unless the model turned it off.
 func (m *Model) poolOptions() []cpu.PoolOption {
-	return append(m.pool[:len(m.pool):len(m.pool)], cpu.WithServingSplit(!m.opt.noServingSplit))
+	return append(m.eng.pool[:len(m.eng.pool):len(m.eng.pool)], cpu.WithServingSplit(!m.opt.noServingSplit))
 }

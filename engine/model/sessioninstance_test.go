@@ -57,9 +57,9 @@ func TestSessionsShareAnInstance(t *testing.T) {
 			if joint == 0 {
 				t.Errorf("no step ran the sessions' rows together")
 			}
-			m.stepShareFault = true
+			m.eng.stepShareFault = true
 			bad, _ := sharedDecode(t, m, prompts, gen)
-			m.stepShareFault = false
+			m.eng.stepShareFault = false
 			if equalIDs(bad[1], alone[1]) {
 				t.Errorf("rows reading the first session's history decoded session 1's tokens: the gate cannot see a shared history")
 			}
@@ -191,9 +191,9 @@ func TestSessionsStepWithinTheBandOnF16KV(t *testing.T) {
 					t.Logf("session %d: worst NMSE %.3e (token %d)", i, w, at)
 				}
 			}
-			m.stepShareFault = true
+			m.eng.stepShareFault = true
 			bad := forcedSteps(t, m, prompts, toks)
-			m.stepShareFault = false
+			m.eng.stepShareFault = false
 			if w, _ := worstStep(bad[1], want[1]); w < hostStepNMSE {
 				t.Errorf("rows reading the first session's history read NMSE %.3e: the band cannot see a shared history", w)
 			}

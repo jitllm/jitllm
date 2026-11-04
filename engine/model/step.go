@@ -434,7 +434,7 @@ func (s *Instance) PromptChunk() int {
 
 // HostStepRows is the rows StepRuns has run as host steps across sessions,
 // which says whether sessions really shared passes over the weights.
-func (m *Model) HostStepRows() int64 { return atomic.LoadInt64(&m.hostStepRows) }
+func (m *Model) HostStepRows() int64 { return atomic.LoadInt64(&m.eng.hostStepRows) }
 
 // stepHost is StepRuns' host arm: the runs' rows as one ragged pass over the
 // weights (rowsHost, the batch's own step), each row embedded and rotated at
@@ -459,7 +459,7 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	addRow := func(r *Run, j int) error {
 		se, tok, in := r.sess(), r.Tokens[j], r.Instance
 		p := se.bpos[0] + j
-		if f := s0.m.stepPosFault; f != nil {
+		if f := s0.m.eng.stepPosFault; f != nil {
 			p = f(se.bpos[0], j, len(r.Tokens))
 		}
 		if int(tok) < 0 || int(tok) >= c.NVocab {
@@ -468,7 +468,7 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 		if p >= se.limit {
 			return r.full()
 		}
-		if s0.m.stepShareFault {
+		if s0.m.eng.stepShareFault {
 			se, in = runs[0].sess(), runs[0].Instance
 		}
 		toks, pos, own, ins = append(toks, tok), append(pos, p), append(own, se), append(ins, in)
@@ -503,7 +503,7 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	if err != nil {
 		return nil, err
 	}
-	atomic.AddInt64(&s0.m.hostStepRows, int64(rows))
+	atomic.AddInt64(&s0.m.eng.hostStepRows, int64(rows))
 	out := s0.stepOut(len(runs))
 	at := 0
 	lead := s0.Session
@@ -554,7 +554,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	addRow := func(r *Run, j int) error {
 		se := r.sess()
 		tok, p := r.Tokens[j], se.bpos[0]+j
-		if f := s0.m.stepPosFault; f != nil {
+		if f := s0.m.eng.stepPosFault; f != nil {
 			p = f(se.bpos[0], j, len(r.Tokens))
 		}
 		if int(tok) < 0 || int(tok) >= c.NVocab {

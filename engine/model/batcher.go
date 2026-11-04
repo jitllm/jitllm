@@ -253,11 +253,11 @@ func (b *Batcher) Step() ([]*Seq, error) {
 			continue
 		}
 		if b.chunkPos != nil {
-			b.m.stepPosFault = b.chunkPos
+			b.m.eng.stepPosFault = b.chunkPos
 		}
 		lg, err := StepRuns(g.runs)
 		if b.chunkPos != nil {
-			b.m.stepPosFault = nil
+			b.m.eng.stepPosFault = nil
 		}
 		if err != nil {
 			b.done = done
