@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 1
+const TowerVersion = 2
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -103,7 +103,10 @@ const (
 	TOpDropRows OpCode = 9
 	// TOpStated is the expression Expr over the In values, Width wide.
 	TOpStated OpCode = 10
-	topCodes  OpCode = 11
+	// TOpPool is an average pool: each Span x Span block of the grid's rows
+	// their mean, the blocks in raster order.
+	TOpPool  OpCode = 11
+	topCodes OpCode = 12
 )
 
 // TowerOp is one operation of a program: its inputs are values (a program's
@@ -150,9 +153,15 @@ type TowerBlock struct {
 }
 
 // TowerSpan is a picture's place in a prompt: the token ids before its rows,
-// the ids after them. The rows are the head's, one a token.
+// the ids after them, and text before and after those -- text the prompt's
+// tokenizer encodes with the prompt beside it, as a reference processor
+// expands its placeholder into a string before tokenizing the whole. The
+// rows are the head's, one a token; Bidir says they attend to each other
+// both ways in the language model.
 type TowerSpan struct {
-	Before, After []int32
+	Before, After         []int32
+	BeforeText, AfterText string
+	Bidir                 bool
 }
 
 // Valid says the record is one this build can read: a known version, known
@@ -234,7 +243,7 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) reads %d values, want %d", name, i, op.Code, len(op.In), in)
 		case len(op.Bind) < bind[0] || len(op.Bind) > bind[1]:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) binds %d weights, want %d to %d", name, i, op.Code, len(op.Bind), bind[0], bind[1])
-		case (op.Code == TOpPatchify || op.Code == TOpRegroup) && op.Span <= 0:
+		case (op.Code == TOpPatchify || op.Code == TOpRegroup || op.Code == TOpPool) && op.Span <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d has an epsilon of %v", name, i, op.Eps)
@@ -262,7 +271,7 @@ func (p *Program) valid(name string) error {
 // weights it binds.
 func (op *TowerOp) arity() (in int, bind [2]int) {
 	switch op.Code {
-	case TOpPatchify, TOpDropRows, TOpRegroup:
+	case TOpPatchify, TOpDropRows, TOpRegroup, TOpPool:
 		return 1, [2]int{0, 0}
 	case TOpLinear, TOpLayerNorm:
 		return 1, [2]int{1, 2}
@@ -325,6 +334,9 @@ func encodeTower(w *wbuf, t *Tower) {
 			w.i32(id)
 		}
 	}
+	w.str(t.Span.BeforeText)
+	w.str(t.Span.AfterText)
+	w.bool(t.Span.Bidir)
 }
 
 func encodeProgram(w *wbuf, p *Program) {
@@ -379,6 +391,8 @@ func decodeTower(r *rbuf) *Tower {
 			*ids = append(*ids, r.i32())
 		}
 	}
+	t.Span.BeforeText, t.Span.AfterText = r.str(), r.str()
+	t.Span.Bidir = r.bool()
 	return t
 }
 

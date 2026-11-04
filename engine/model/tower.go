@@ -34,6 +34,9 @@ type towerGraphs struct {
 	// the patch grid's width; out the rows the head writes, one a token of
 	// the picture's span.
 	rows, side, out int
+	// pic is the entry's picture op's attributes: its size, and for a
+	// resize by Pillow's filters its taps.
+	pic graph.Attrs
 	// holders is what each chat template writes for a picture, by the
 	// template's source (picturePlaceholder).
 	holders sync.Map
@@ -184,6 +187,7 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 		if err != nil {
 			return nil, fmt.Errorf("model: the tower's entry: %w", err)
 		}
+		tg.pic = g.Ops[0].Attr
 		tg.entry[px] = g
 	}
 	for i := range int(v.NLayer) {
@@ -208,10 +212,19 @@ func towerEntry(t *jlm.Tower, px uint8, rows int, f graph.Facts) (*graph.Graph, 
 	for _, s := range t.Pre {
 		switch s.Kind {
 		case jlm.PreResize:
-			if jlm.Filter(s.Ints[2]) != jlm.FilterTwoTap {
-				return nil, fmt.Errorf("a resize by filter %d, which no picture op runs yet", s.Ints[2])
+			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[1])
+			switch jlm.Filter(s.Ints[2]) {
+			case jlm.FilterTwoTap:
+				a.Chain, a.Filter = graph.ChainHalfPixel, graph.FilterLinear
+			case jlm.FilterPILBilinear, jlm.FilterPILBicubic:
+				a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterBilinear, composer.PictureSide
+				if jlm.Filter(s.Ints[2]) == jlm.FilterPILBicubic {
+					a.Filter = graph.FilterCubic
+				}
+				a.Taps = max(composer.PILTapCount(a.Filter, a.PicSide, a.PicW), composer.PILTapCount(a.Filter, a.PicSide, a.PicH))
+			default:
+				return nil, fmt.Errorf("a resize by filter %d, which no picture op runs", s.Ints[2])
 			}
-			a.PicW, a.PicH, a.Chain, a.Filter = int(s.Ints[0]), int(s.Ints[1]), graph.ChainHalfPixel, graph.FilterLinear
 		case jlm.PreNormalize:
 			for c := range 3 {
 				a.Mean[c], a.Std[c] = float64(s.Floats[c]), float64(s.Floats[3+c])
@@ -329,6 +342,27 @@ func lowerProgram(b *graph.Builder, p *jlm.Program, in []graph.ValueID, rows int
 			S := int(op.Span)
 			out = b.Emit(graph.OpRegroup, ins, []graph.Result{{Name: "grouped", Width: S * S * width(ins[0]),
 				Rows: rowsOf(ins[0]) / (S * S)}}, nil, graph.Attrs{Span: S}, nil, nil)[0]
+		case jlm.TOpPool:
+			// The mean of each block's S*S rows: the block regrouped into one
+			// row, its slots summed and scaled by 1/S^2.
+			S, E := int(op.Span), width(ins[0])
+			g := b.Emit(graph.OpRegroup, ins, []graph.Result{{Name: "pool.grouped", Width: S * S * E,
+				Rows: rowsOf(ins[0]) / (S * S)}}, nil, graph.Attrs{Span: S}, nil, nil)[0]
+			slot := func(k int) graph.ValueID {
+				return b.Emit(graph.OpSlice, []graph.ValueID{g}, []graph.Result{{Name: "pool.slot", Width: E}}, nil,
+					graph.Attrs{Offset: k * E, Width: E}, nil, nil)[0]
+			}
+			acc := slot(0)
+			for k := 1; k < S*S; k++ {
+				acc = b.Add(acc, slot(k))
+			}
+			var e jlm.ExprBuilder
+			e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(1/float32(S*S)))
+			mean := jlm.Expr{Terms: e.T}
+			var err error
+			if out, err = b.Stated("pooled", &mean, []graph.ValueID{acc}, E, f); err != nil {
+				return 0, fmt.Errorf("the pool's mean: %w", err)
+			}
 		case jlm.TOpLeadRow:
 			out = b.Emit(graph.OpLeadRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
@@ -440,9 +474,11 @@ type towerRun struct {
 	mode           embedMode
 	req            []uint32
 	// pad holds a picture's planes where they are not read in place, ent a
-	// palette's entries.
-	pad []uint32
-	ent [4 * 256]byte
+	// palette's entries; tapsW and tapsH the source size the request's taps
+	// are for.
+	pad          []uint32
+	ent          [4 * 256]byte
+	tapsW, tapsH int
 	// pics is a prompt's pictures' rows, one buffer a picture, and spans the
 	// prompt's spans with them in place (encodePictures).
 	pics  [][]float32
@@ -466,7 +502,7 @@ func (m *Model) newTowerRun() (*towerRun, error) {
 	tr := &towerRun{s: ts, entry: map[uint8]*cpudev.Form{}, rows: make([]float32, n*c.NEmbd),
 		blk: make([]float32, n*c.NEmbd), out: make([]float32, tg.out*int(v.ProjDim)),
 		seq: make([]int, n), pos: make([]int, n),
-		posTab: make([]uint32, 1+n), req: make([]uint32, composer.RequestPicSub+1)}
+		posTab: make([]uint32, 1+n), req: make([]uint32, composer.RequestPicTaps+(tg.pic.PicW+tg.pic.PicH)*(tg.pic.Taps+1))}
 	tr.posTab[0] = uint32(n)
 	for i := range n {
 		tr.pos[i], tr.posTab[1+i] = i, uint32(i)
@@ -699,6 +735,14 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 	}
 	tr.req[composer.RequestGrid] = uint32(tg.side)
 	pl.request(tr.req)
+	if a := tg.pic; a.Chain == graph.ChainPIL && (pl.w != tr.tapsW || pl.h != tr.tapsH) {
+		if pl.w > a.PicSide || pl.h > a.PicSide {
+			return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.w, pl.h, a.PicSide)
+		}
+		composer.PILTaps(a.Filter, pl.w, a.PicW, a.Taps, tr.req[composer.RequestPicTaps:])
+		composer.PILTaps(a.Filter, pl.h, a.PicH, a.Taps, tr.req[composer.RequestPicTaps+a.PicW*(a.Taps+1):])
+		tr.tapsW, tr.tapsH = pl.w, pl.h
+	}
 	b := &ts.cpu.bound
 	*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab, pic: words}
 	b.io[0] = unsafe.Pointer(&tr.rows[0])

@@ -28,6 +28,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 	switch p {
 	case jlm.ProjIdefics3:
 		return idefics3Tower
+	case jlm.ProjGemma3:
+		return gemma3Tower
 	}
 	return nil
 }
@@ -189,4 +191,66 @@ func markerIDs(s *jlm.Source, pieces ...string) ([]int32, error) {
 		out[i] = id
 	}
 	return out, nil
+}
+
+// gemma3Tower is Gemma 3's tower as transformers' Gemma3ForConditionalGeneration
+// runs it: Gemma3ImageProcessor resizes the picture to the tower's square by
+// Pillow's BILINEAR filter and normalises it; SigLIP's patches, their
+// embedding and position table, its blocks; then the projector -- the
+// post-norm, the patch grid average-pooled Scale x Scale, the soft-embedding
+// RMS norm (its weight, as llama.cpp's converter stores it, already 1 + w)
+// and the input projection. Gemma3Processor writes each picture as
+// "\n\n<start_of_image>", its rows, "<end_of_image>\n\n", tokenized with the
+// text beside it, and the rows attend to each other both ways.
+func gemma3Tower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPosEmbd, jlm.RoleVPostNorm, jlm.RoleVProjNorm, jlm.RoleVProj} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: gemma3: the tower has no %v", r)
+		}
+	}
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || v.Scale == 0 || v.PatchSize == 0 || v.ImageSize%v.PatchSize != 0 {
+		return nil, fmt.Errorf("convert: gemma3: %d heads over %d, a pool of %d, patches of %d in %d",
+			v.NHead, v.NEmbd, v.Scale, v.PatchSize, v.ImageSize)
+	}
+	if side := v.ImageSize / v.PatchSize; side%v.Scale != 0 {
+		return nil, fmt.Errorf("convert: gemma3: a grid of %d patches does not pool by %d", side, v.Scale)
+	}
+	act, err := v.Activation(false)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreResize, Ints: []int32{int32(v.ImageSize), int32(v.ImageSize), int32(jlm.FilterPILBilinear), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		Entry: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize)},
+			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+			{Code: jlm.TOpPosTable, Bind: []jlm.Role{jlm.RoleVPosEmbd}},
+			{Code: jlm.TOpAdd, In: []uint16{2, 3}},
+		}},
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
+		Head: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpLayerNorm, In: []uint16{0}, Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps},
+			{Code: jlm.TOpPool, In: []uint16{1}, Span: int32(v.Scale)},
+			{Code: jlm.TOpRMSNorm, In: []uint16{2}, Bind: []jlm.Role{jlm.RoleVProjNorm}, Eps: v.Eps},
+			{Code: jlm.TOpLinear, In: []uint16{3}, Bind: []jlm.Role{jlm.RoleVProj}},
+		}},
+		Span: jlm.TowerSpan{BeforeText: "\n\n<start_of_image>", AfterText: "<end_of_image>\n\n", Bidir: true},
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: gemma3: %w", err)
+	}
+	return t, nil
 }

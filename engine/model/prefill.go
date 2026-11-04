@@ -445,16 +445,17 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			}
 		}
 		n := min(width, total-base)
+		// A bidirectional run is never cut (bidir.go): a chunk that starts
+		// in one ends where it does, past the chunk's width if it must.
+		if len(s.bidir) > 0 && !s.bidirCutFault {
+			n = min(s.bidirChunk(s.seqPos(slot), n), total-base)
+		}
 		// A block an earlier chunk moved (relocateFor) can widen the
-		// device's chunk past what the prompt was sized for: a second card
-		// makes it a pipeline (deviceChunk).
+		// device's chunk past what the prompt was sized for -- a second card
+		// makes it a pipeline (deviceChunk) -- and so can a run.
 		if n > chunkRows {
 			chunkRows = n
 			sizeFor(n)
-		}
-		// A bidirectional run is never cut (bidir.go).
-		if len(s.bidir) > 0 && !s.bidirCutFault {
-			n = min(s.bidirChunk(s.seqPos(slot), n), total-base)
 		}
 		chunkBidir := bidir || s.bidirIn(s.seqPos(slot), n)
 		lastBase = base

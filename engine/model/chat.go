@@ -205,6 +205,7 @@ func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 		}
 	}
 	parts := wantsContentParts(tpl)
+	typed := parts || readsContentParts(tpl)
 	msgs = foldSystem(tpl, ctx, parts, msgs)
 	messages := func(stringArgs bool) ([]any, error) {
 		ms := make([]any, len(msgs))
@@ -213,11 +214,11 @@ func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 				return nil, fmt.Errorf("model: message %d carries %d image(s); ChatSpans is the "+
 					"path for a picture", i, x.Images)
 			}
-			if x.Images > 0 && !parts {
+			if x.Images > 0 && !typed {
 				return nil, fmt.Errorf("model: message %d carries %d image(s) and this chat "+
 					"template reads a message as a string, so it writes no image part", i, x.Images)
 			}
-			mm := map[string]any{"role": x.Role, "content": contentValue(x.Content, x.Images, parts)}
+			mm := map[string]any{"role": x.Role, "content": contentValue(x.Content, x.Images, parts || x.Images > 0)}
 			if err := toolFields(mm, x, stringArgs); err != nil {
 				return nil, fmt.Errorf("model: message %d: %w", i, err)
 			}
@@ -378,6 +379,23 @@ func wantsContentParts(tpl *jinja.Template) bool {
 	return err != nil || !strings.Contains(out, probe)
 }
 
+// readsContentParts says the template reads `content` as typed parts too: a
+// text part's text reaches its output and the part itself does not -- a
+// template printing the list whole writes a key nothing reads. A template
+// that reads both shapes (Gemma 3's) is handed a message carrying an image
+// as parts.
+func readsContentParts(tpl *jinja.Template) bool {
+	const probe, unread = "\x00jitllm-probe\x00", "\x00jitllm-unread\x00"
+	out, err := tpl.Render(map[string]any{
+		"messages": []any{map[string]any{"role": "user",
+			"content": []any{map[string]any{"type": "text", "text": probe, "unread": unread}}}},
+		"add_generation_prompt": false,
+		"bos_token":             "",
+		"eos_token":             "",
+	})
+	return err == nil && strings.Contains(out, probe) && !strings.Contains(out, unread)
+}
+
 // contentValue presents a message in the shape the template reads: its text,
 // or its images first as typed parts and then its text.
 func contentValue(text string, images int, parts bool) any {
@@ -468,11 +486,21 @@ func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byt
 			out = append(out, Span{Tokens: ids})
 		}
 	}
+	// Text around a picture is encoded with the prompt beside it, as the
+	// processor expands its placeholder into a string before tokenizing it.
 	for i, seg := range segs {
+		if i > 0 {
+			seg = mk.AfterText + seg
+		}
+		if i < n {
+			seg += mk.BeforeText
+		}
 		add(m.Vocab.EncodeSpecial(seg, false))
 		if i < n {
 			add(mk.Before)
-			out = append(out, pics[i])
+			p := pics[i]
+			p.Bidir = p.Bidir || mk.Bidir
+			out = append(out, p)
 			add(mk.After)
 		}
 	}
