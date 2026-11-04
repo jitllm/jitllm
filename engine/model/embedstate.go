@@ -28,6 +28,9 @@ type embedMode struct {
 	out  []float32
 	raw  bool
 	wins []nn.KeyRun
+	// rowWins is each row's window where the run states them (a windowed
+	// tower's, TowerBlock.Window), nil where the sliding window says them.
+	rowWins []nn.KeyRun
 	// rows keeps every row of the last block's, unnormed, in out (a tower's
 	// run: its head reads them), in place of a pooled readout.
 	rows bool
@@ -98,6 +101,9 @@ func (s *Instance) embedTell(n int) bool {
 	rw, ok := s.ld.(nn.RowWindowDevice)
 	if !ok {
 		return false
+	}
+	if s.emb.rowWins != nil {
+		return rw.SetRowWindows(s.emb.rowWins)
 	}
 	c := s.c
 	if cap(s.emb.wins) < n {

@@ -1200,7 +1200,7 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 		*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: n, req: tr.req, pos: tr.posTab, pic: words}
 		b.io[0] = unsafe.Pointer(&tr.rows[0])
 		ts.cpuRunForm(b, f)
-		if err := ts.towerBlocks(tr, tr.windows(tg, sq.gw, sq.gh)); err != nil {
+		if err := ts.towerBlocks(tr, sq.gw, tr.windows(tg, sq.gw, sq.gh)); err != nil {
 			return nil, fmt.Errorf("model: the tower's blocks: %w", err)
 		}
 		*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(head), n: n, req: tr.req, pos: tr.posTab}
@@ -1211,39 +1211,47 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 	return dst, nil
 }
 
+// wholePicture says tower block li attends the whole picture though its
+// rows carry windows (TowerBlock.Full).
+func (s *Instance) wholePicture(li int) bool {
+	return s.towered() && s.m.tower.full[li-s.lo]
+}
+
 // towerBlocks runs the tower's blocks over the patch rows of a gw x gh grid,
 // one run in which every row's keys are every row's, leaving the last
 // block's rows in blk: on the CPU device, the runner's CPU rows over the
 // run, block by block; with blocks on a card, the tower instance's prefill
 // (embedMode.rows), each block on the device that holds it. Blocks that turn
 // q and k read each row's cell of the grid from its position and the
-// picture's request (the tower's grid table); a windowed block attends
-// within its row's run of wins, every other block the whole picture.
-func (ts *Instance) towerBlocks(tr *towerRun, wins []nn.KeyRun) error {
+// picture's request (the tower's grid table, on a card the card's own from
+// the rows' cells and the grid's width gw); a windowed block attends within
+// its row's run of wins, every other block the whole picture.
+func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 	n := len(tr.pos)
 	ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: n})
-	defer func() { ts.bidir, ts.cpu.runWindows = ts.bidir[:0], false }()
+	defer func() { ts.bidir, ts.cpu.runWindows, ts.cpu.rowWins = ts.bidir[:0], false, nil }()
 	ts.cpu.tables.req, ts.cpu.tables.pos = tr.req, tr.posTab
 	if ts.devCount() > 0 {
 		ts.Reset()
+		if ts.m.tower.table != nil {
+			gc, ok := ts.ld.(nn.GridCellsDevice)
+			if !ok || !gc.SetGridCells(tr.posTab, gw) {
+				return fmt.Errorf("the tower's blocks turn by the picture's grid on a device that holds no grid table")
+			}
+		}
+		tr.mode = embedMode{bidir: true, rows: true, total: n, out: tr.blk, wins: tr.mode.wins}
 		if wins != nil {
 			// A card's windowed blocks read each row's window (graph.Attrs
-			// .RowWindows).
-			rw, ok := ts.ld.(nn.RowWindowDevice)
-			if !ok {
-				return fmt.Errorf("the tower's windowed blocks are on a device that holds no row windows")
-			}
+			// .RowWindows), handed with the call (embedTell); the blocks the
+			// CPU device keeps read them per row as well.
 			tr.rowWins = tr.rowWins[:0]
 			for _, w := range wins {
 				for range w.Hi - w.Lo {
 					tr.rowWins = append(tr.rowWins, w)
 				}
 			}
-			if !rw.SetRowWindows(tr.rowWins) {
-				return fmt.Errorf("the device would not hold the tower's %d row windows", len(tr.rowWins))
-			}
+			tr.mode.rowWins, ts.cpu.rowWins = tr.rowWins, tr.rowWins
 		}
-		tr.mode = embedMode{bidir: true, rows: true, total: n, out: tr.blk}
 		ts.emb = &tr.mode
 		defer func() { ts.emb = nil }()
 		_, err := ts.prefillSpans(0, Span{Embd: tr.rows})

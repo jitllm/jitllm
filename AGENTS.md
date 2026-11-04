@@ -926,7 +926,8 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   (a blank picture is the violation), `TestStatedTowerRunsOnTheCard` (every
   block and a partial seam, against the CPU), `TestQwen2VLTowerMatchesTransformers`
   (Qwen2-VL's and Qwen2.5-VL's: the processor's samples, every one, and the
-  tower's rows),
+  tower's rows), `TestQwen2VLTowerRunsOnTheCard` (their grid rotary from the
+  card's own table and Qwen2.5-VL's windows, every block and a half seam),
   `TestQwen2VLMatchesTransformers`, the M-RoPE gates (`TestMRope*`, the text
   side on transformers' own tower rows), `TestChatSpansFollowTheTemplate`,
   `TestPictureFormatsEncodeAsTheirPixels`, `composer.TestComposedCPUPicture*`,
