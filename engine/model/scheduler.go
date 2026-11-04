@@ -293,7 +293,7 @@ func (s *Instance) newHistory(maxSeq int) (*Session, error) {
 	sess.kv = newKVCacheRange(s.c, s.m.nextCacheID(), 1, l, nil, s.m.opt.kvPage, s.lo, s.hi)
 	sess.kv.usePool(&s.m.eng.kvPool)
 	sess.kv.reserve(maxSeq)
-	if err := sess.kv.useArenas(maxSeq, s.m.kvArenaFor); err != nil {
+	if err := sess.kv.useArenas(maxSeq, s.m.kvArenaFor, sess.cpuView()); err != nil {
 		return nil, err
 	}
 	sess.bpos = make([]int, 1)

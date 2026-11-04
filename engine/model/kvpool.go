@@ -75,7 +75,7 @@ func (p *kvPagePool) put(kc *kvCache) {
 			if !s.latent {
 				p.keep(s.v[i], s.pp)
 			}
-			s.k[i], s.v[i] = nil, nil
+			s.setPage(i, nil, nil)
 		}
 		// A windowed layer's released pages are pages all the same.
 		for i, b := range s.spare {

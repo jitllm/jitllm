@@ -129,9 +129,13 @@ matrices reach the device by role, as the vectors do
 
    a. The arenas: `kvArena` and its pool move to `cpudev` as the model
       level's history memory, keyed by block and page size as now.
-   b. The page tables: a session's `kvPages` for its CPU blocks are its
-      view's, the instance asking the view for a block's table where it
-      binds `SrcPages` today.
+   b. The page tables: a session's view (`cpudev.View`, `Session.view`)
+      holds a table a block (`cpudev.Table`): the arena its pages take
+      slots of, the slot each page is in and the table `SrcPages` binds,
+      which the instance asks the view for (`Instance.cpuPages`). The
+      session's history (`kvPages`) still decides what each page holds and
+      tells the table as a page changes (`setPage`), so the table is kept,
+      not laid out again for every call.
    c. The recurrent states: a linear block's state and convolution rows
       are the view's, bound as `SrcRecState` and `SrcRecConv` from it.
    d. The moves: `MigrateKV` and `MigrateRec` on the view, the
