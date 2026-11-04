@@ -36,6 +36,10 @@ type towerGraphs struct {
 	rows, side, out int
 	// pic is the entry's picture op's attributes: its size, and for a
 	// resize by Pillow's filters its taps.
+	// short is the shorter side a picture is resized to before its centre
+	// is cropped to the picture op's size, 0 where the whole picture is
+	// resized to it.
+	short int
 	pic graph.Attrs
 	// holders is what each chat template writes for a picture, by the
 	// template's source (picturePlaceholder).
@@ -44,11 +48,11 @@ type towerGraphs struct {
 
 // placeholder is what the template src writes for an image part, read off it
 // once.
-func (tg *towerGraphs) placeholder(tpl *jinja.Template, src, bos, eos string) (string, error) {
+func (tg *towerGraphs) placeholder(tpl *jinja.Template, src, bos, eos, mark string) (string, error) {
 	if ph, ok := tg.holders.Load(src); ok {
 		return ph.(string), nil
 	}
-	ph, err := picturePlaceholder(tpl, src, bos, eos)
+	ph, err := picturePlaceholder(tpl, src, bos, eos, mark)
 	if err != nil {
 		return "", err
 	}
@@ -181,13 +185,17 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 	}
 	dense := m.towerFacts(jlm.DenseBlock)
 	side := int(v.ImageSize / v.PatchSize)
-	tg := &towerGraphs{entry: map[uint8]*graph.Graph{}, rows: side * side, side: side}
+	lead := 0
+	if ops := t.Entry.Ops; len(ops) > 0 && ops[0].Code == jlm.TOpPatchify {
+		lead = int(ops[0].Offset)
+	}
+	tg := &towerGraphs{entry: map[uint8]*graph.Graph{}, rows: side*side + lead, side: side}
 	for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
-		g, err := towerEntry(t, px, tg.rows, dense)
+		g, short, err := towerEntry(t, px, side*side, lead, dense)
 		if err != nil {
 			return nil, fmt.Errorf("model: the tower's entry: %w", err)
 		}
-		tg.pic = g.Ops[0].Attr
+		tg.pic, tg.short = g.Ops[0].Attr, short
 		tg.entry[px] = g
 	}
 	for i := range int(v.NLayer) {
@@ -206,50 +214,91 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 }
 
 // towerEntry is the entry for pictures of sample format px: the record's
-// preprocessing as one op (graph.OpPicture), then its entry program.
-func towerEntry(t *jlm.Tower, px uint8, rows int, f graph.Facts) (*graph.Graph, error) {
+// preprocessing as one op (graph.OpPicture), then its entry program over
+// the grid's patch rows after lead rows (a class row's), and the shorter
+// side the picture is resized to before its centre is cropped (0 for a
+// resize of the whole picture to the op's size).
+func towerEntry(t *jlm.Tower, px uint8, grid, lead int, f graph.Facts) (*graph.Graph, int, error) {
 	a := graph.Attrs{Pixels: px, Std: [3]float64{1, 1, 1}}
+	short, cropped := 0, false
 	for _, s := range t.Pre {
 		switch s.Kind {
 		case jlm.PreResize:
 			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[1])
-			switch jlm.Filter(s.Ints[2]) {
-			case jlm.FilterTwoTap:
-				a.Chain, a.Filter = graph.ChainHalfPixel, graph.FilterLinear
-			case jlm.FilterPILBilinear, jlm.FilterPILBicubic:
-				a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterBilinear, composer.PictureSide
-				if jlm.Filter(s.Ints[2]) == jlm.FilterPILBicubic {
-					a.Filter = graph.FilterCubic
-				}
-				a.Taps = max(composer.PILTapCount(a.Filter, a.PicSide, a.PicW), composer.PILTapCount(a.Filter, a.PicSide, a.PicH))
-			default:
-				return nil, fmt.Errorf("a resize by filter %d, which no picture op runs", s.Ints[2])
+			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
+				return nil, 0, err
 			}
+		case jlm.PreResizeShort:
+			short = int(s.Ints[0])
+			a.PicW, a.PicH = short, short
+			if err := resizeChain(&a, jlm.Filter(s.Ints[1])); err != nil {
+				return nil, 0, err
+			}
+			if a.Chain != graph.ChainPIL {
+				return nil, 0, fmt.Errorf("a resize of the shorter side by filter %d, which crops no window", s.Ints[1])
+			}
+		case jlm.PreCenterCrop:
+			a.PicW, a.PicH, cropped = int(s.Ints[0]), int(s.Ints[1]), true
 		case jlm.PreNormalize:
 			for c := range 3 {
 				a.Mean[c], a.Std[c] = float64(s.Floats[c]), float64(s.Floats[3+c])
 			}
 		}
 	}
-	if a.PicW == 0 {
-		return nil, fmt.Errorf("the picture is never resized to the tower's size")
+	switch {
+	case a.PicW == 0:
+		return nil, 0, fmt.Errorf("the picture is never resized to the tower's size")
+	case short > 0 && !cropped:
+		return nil, 0, fmt.Errorf("a picture resized by its shorter side and never cropped has no one size")
+	case short > 0 && (a.PicW > short || a.PicH > short):
+		return nil, 0, fmt.Errorf("a %dx%d crop of a picture whose shorter side is %d", a.PicW, a.PicH, short)
+	}
+	if a.Chain == graph.ChainPIL {
+		// A crop's taps are a window of the resize's, whose scale is at most
+		// the crop's own.
+		a.Taps = max(composer.PILTapCount(a.Filter, a.PicSide, a.PicW), composer.PILTapCount(a.Filter, a.PicSide, a.PicH))
 	}
 	p := &t.Entry
 	if len(p.Ops) == 0 || p.Ops[0].Code != jlm.TOpPatchify || p.NIn != 1 {
-		return nil, fmt.Errorf("an entry that does not begin with the picture's patches")
+		return nil, 0, fmt.Errorf("an entry that does not begin with the picture's patches")
 	}
 	b := graph.NewBlock(-1)
 	P := int(p.Ops[0].Span)
 	pix := b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "pixels", Width: 3 * P * P}}, nil, a, nil, nil)[0]
-	if a.PicW*a.PicH != rows*P*P {
-		return nil, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, rows, P)
+	if a.PicW*a.PicH != grid*P*P {
+		return nil, 0, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
 	}
-	out, err := lowerProgram(b, p, []graph.ValueID{pix}, rows, f)
+	out, err := lowerProgram(b, p, []graph.ValueID{pix}, grid+lead, f)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	b.Out(out)
-	return b.G, graph.Verify(b.G, f)
+	return b.G, short, graph.Verify(b.G, f)
+}
+
+// resizeChain sets a's resample to filter f's.
+func resizeChain(a *graph.Attrs, f jlm.Filter) error {
+	switch f {
+	case jlm.FilterTwoTap:
+		a.Chain, a.Filter = graph.ChainHalfPixel, graph.FilterLinear
+	case jlm.FilterPILBilinear:
+		a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterBilinear, composer.PictureSide
+	case jlm.FilterPILBicubic:
+		a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterCubic, composer.PictureSide
+	default:
+		return fmt.Errorf("a resize by filter %d, which no picture op runs", f)
+	}
+	return nil
+}
+
+// shortSide is a w x h picture's size with its shorter side resized to s
+// and its longer to int(s * long / short), as transformers'
+// get_resize_output_image_size sizes a shortest_edge resize.
+func shortSide(w, h, s int) (int, int) {
+	if w <= h {
+		return s, int(float64(s) * float64(h) / float64(w))
+	}
+	return int(float64(s) * float64(w) / float64(h)), s
 }
 
 // towerHead is the head over the last block's rows, and the rows it writes.
@@ -739,8 +788,15 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 		if pl.w > a.PicSide || pl.h > a.PicSide {
 			return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.w, pl.h, a.PicSide)
 		}
-		composer.PILTaps(a.Filter, pl.w, a.PicW, a.Taps, tr.req[composer.RequestPicTaps:])
-		composer.PILTaps(a.Filter, pl.h, a.PicH, a.Taps, tr.req[composer.RequestPicTaps+a.PicW*(a.Taps+1):])
+		// A crop is the centre window of the resize (transformers'
+		// center_crop: the offsets floored).
+		ow, oh := a.PicW, a.PicH
+		if tg.short > 0 {
+			ow, oh = shortSide(pl.w, pl.h, tg.short)
+		}
+		x0, y0 := (ow-a.PicW)/2, (oh-a.PicH)/2
+		composer.PILTaps(a.Filter, pl.w, ow, x0, a.PicW, a.Taps, tr.req[composer.RequestPicTaps:])
+		composer.PILTaps(a.Filter, pl.h, oh, y0, a.PicH, a.Taps, tr.req[composer.RequestPicTaps+a.PicW*(a.Taps+1):])
 		tr.tapsW, tr.tapsH = pl.w, pl.h
 	}
 	b := &ts.cpu.bound

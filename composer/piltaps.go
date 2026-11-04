@@ -52,19 +52,22 @@ func PILTapCount(filter uint8, in, out int) int {
 	return int(math.Ceil(pilSupport(filter)*scale))*2 + 1
 }
 
-// PILTaps writes the taps resizing a side of in samples to out by filter
-// into dst, out entries of k+1 words: the first sample an output reads, then
-// its k weights in Pillow's fixed point (int32, zero past its window) --
-// Resample.c's precompute_coeffs and normalize_coeffs_8bpc, in float64 as
-// Pillow computes them, so the passes the picture op runs on them are
-// Pillow's to the bit.
-func PILTaps(filter uint8, in, out, k int, dst []uint32) {
+// PILTaps writes the taps of outputs from to from+n-1 of a side of in
+// samples resized to out by filter into dst, n entries of k+1 words: the
+// first sample an output reads, then its k weights in Pillow's fixed point
+// (int32, zero past its window) -- Resample.c's precompute_coeffs and
+// normalize_coeffs_8bpc, in float64 as Pillow computes them, so the passes
+// the picture op runs on them are Pillow's to the bit. A window short of the
+// whole side is a crop of the resize: each output's taps are its own, and
+// so is the 8-bit sample the first pass leaves for it.
+func PILTaps(filter uint8, in, out, from, n, k int, dst []uint32) {
 	scale := float64(in) / float64(out)
 	fscale := max(scale, 1)
 	support := pilSupport(filter) * fscale
 	ss := 1 / fscale
 	w := make([]float64, k)
-	for o := range out {
+	for i := range n {
+		o := from + i
 		center := (float64(o) + 0.5) * scale
 		xmin := max(int(center-support+0.5), 0)
 		xmax := min(int(center+support+0.5), in) - xmin
@@ -74,7 +77,7 @@ func PILTaps(filter uint8, in, out, k int, dst []uint32) {
 			w[x] = pilFilter(filter, (float64(x+xmin)-center+0.5)*ss)
 			ww += w[x]
 		}
-		e := dst[o*(k+1) : (o+1)*(k+1)]
+		e := dst[i*(k+1) : (i+1)*(k+1)]
 		e[0] = uint32(xmin)
 		for x := range k {
 			v := 0.0

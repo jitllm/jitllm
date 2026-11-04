@@ -33,7 +33,7 @@ func sampleTower(t *testing.T) *Tower {
 			{Code: TOpPool, In: []uint16{1}, Span: 2},
 		}},
 		Span: TowerSpan{Before: []int32{198, 49189, 49152}, After: []int32{49189},
-			BeforeText: "\n\n<start_of_image>", AfterText: "<end_of_image>\n\n", Bidir: true},
+			BeforeText: "\n\n<start_of_image>", AfterText: "<end_of_image>\n\n", Bidir: true, Mark: "<image>\n"},
 	}
 }
 
@@ -75,6 +75,13 @@ func TestTowerRefusesWhatItCannotRead(t *testing.T) {
 		{"an unknown step", "kind", func(t *Tower) { t.Pre[0].Kind = 99 }},
 		{"a filter in the wrong arithmetic", "resizes", func(t *Tower) { t.Pre[0].Ints[3] = int32(PrecPIL) }},
 		{"a std of zero", "std of 0", func(t *Tower) { t.Pre[1].Floats[4] = 0 }},
+		{"a shorter side of nothing", "shorter side", func(t *Tower) {
+			t.Pre[0] = PreStep{Kind: PreResizeShort, Ints: []int32{0, int32(FilterPILBicubic), int32(PrecPIL)}}
+		}},
+		{"a shorter side in the wrong arithmetic", "shorter side", func(t *Tower) {
+			t.Pre[0] = PreStep{Kind: PreResizeShort, Ints: []int32{336, int32(FilterPILBicubic), int32(PrecFloat)}}
+		}},
+		{"a crop of no height", "crops", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreCenterCrop, Ints: []int32{336, 0}}) }},
 		{"an unknown op", "does not know", func(t *Tower) { t.Head.Ops[1].Code = topCodes }},
 		{"a value read before it is made", "before it is made", func(t *Tower) { t.Entry.Ops[3].In[1] = 4 }},
 		{"a linear with no matrix", "binds 0 weights", func(t *Tower) { t.Head.Ops[2].Bind = nil }},

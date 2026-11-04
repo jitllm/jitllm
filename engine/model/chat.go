@@ -138,7 +138,7 @@ func (m *Model) renderChat(msgs []ChatMessage, tools []byte, choice ToolChoice, 
 		return "", err
 	}
 	bos, eos := m.specialText()
-	return renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt, false)
+	return renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt, false, "")
 }
 
 // compiledTemplate is src compiled, once per model: a compiled template is
@@ -165,16 +165,18 @@ func renderChatTemplate(src, bos, eos string, clock func() time.Time, msgs []Cha
 	if err != nil {
 		return "", fmt.Errorf("model: chat template (%d bytes): %w", len(src), err)
 	}
-	return renderCompiled(tpl, src, bos, eos, clock, msgs, tools, ToolChoice{}, addGenerationPrompt, false)
+	return renderCompiled(tpl, src, bos, eos, clock, msgs, tools, ToolChoice{}, addGenerationPrompt, false, "")
 }
 
 // renderCompiled is renderChatTemplate over src already compiled, with the
 // request's tool_choice in the context when it gives one. pics says a
 // message's images are written as the template writes an image part, which
 // only ChatSpans asks for: everywhere else a picture is refused, since its
-// placeholder's text is not the picture.
+// placeholder's text is not the picture. A template that reads no typed
+// parts is handed mark before the message's text for each image, where the
+// tower states one (jlm.TowerSpan.Mark).
 func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time.Time, msgs []ChatMessage,
-	tools []byte, choice ToolChoice, addGenerationPrompt, pics bool) (string, error) {
+	tools []byte, choice ToolChoice, addGenerationPrompt, pics bool, mark string) (string, error) {
 	ctx := map[string]any{
 		"tools":                 nil,
 		"documents":             nil,
@@ -214,11 +216,15 @@ func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 				return nil, fmt.Errorf("model: message %d carries %d image(s); ChatSpans is the "+
 					"path for a picture", i, x.Images)
 			}
-			if x.Images > 0 && !typed {
+			if x.Images > 0 && !typed && mark == "" {
 				return nil, fmt.Errorf("model: message %d carries %d image(s) and this chat "+
 					"template reads a message as a string, so it writes no image part", i, x.Images)
 			}
-			mm := map[string]any{"role": x.Role, "content": contentValue(x.Content, x.Images, parts || x.Images > 0)}
+			content := contentValue(x.Content, x.Images, parts || typed && x.Images > 0)
+			if x.Images > 0 && !typed {
+				content = strings.Repeat(mark, x.Images) + x.Content
+			}
+			mm := map[string]any{"role": x.Role, "content": content}
 			if err := toolFields(mm, x, stringArgs); err != nil {
 				return nil, fmt.Errorf("model: message %d: %w", i, err)
 			}
@@ -463,11 +469,12 @@ func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byt
 		return nil, err
 	}
 	bos, eos := m.specialText()
-	ph, err := m.tower.placeholder(tpl, src, bos, eos)
+	mark := m.container.Vision().Tower.Span.Mark
+	ph, err := m.tower.placeholder(tpl, src, bos, eos, mark)
 	if err != nil {
 		return nil, err
 	}
-	text, err := renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt, true)
+	text, err := renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt, true, mark)
 	if err != nil {
 		return nil, err
 	}
@@ -511,11 +518,11 @@ func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byt
 // turn rendered with a picture before its text and without one differ by
 // that text, which is what is left of the first between the two's common
 // prefix and suffix.
-func picturePlaceholder(tpl *jinja.Template, src, bos, eos string) (string, error) {
+func picturePlaceholder(tpl *jinja.Template, src, bos, eos, mark string) (string, error) {
 	const probe = "\u2042probe\u2042"
 	turn := func(images int) (string, error) {
 		return renderCompiled(tpl, src, bos, eos, nil, []ChatMessage{{Role: "user", Content: probe, Images: images}},
-			nil, ToolChoice{}, false, true)
+			nil, ToolChoice{}, false, true, mark)
 	}
 	with, err := turn(1)
 	if err != nil {

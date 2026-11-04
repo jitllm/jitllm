@@ -30,6 +30,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return idefics3Tower
 	case jlm.ProjGemma3:
 		return gemma3Tower
+	case jlm.ProjMLP:
+		return llavaTower
 	}
 	return nil
 }
@@ -251,6 +253,96 @@ func gemma3Tower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: gemma3: %w", err)
+	}
+	return t, nil
+}
+
+// llavaTower is llava's tower as transformers' LlavaForConditionalGeneration
+// runs it over CLIPImageProcessor's pixels: the shorter side resized to the
+// tower's square by Pillow's BICUBIC filter and the centre cropped to it,
+// then normalised; CLIP's patches after a class row, the position table over
+// both, the pre-norm; the blocks the file holds (llama.cpp's converter stops
+// it at the feature layer, the second from last, so a post-norm is applied
+// only where the file has one); then the class row dropped and the two-layer
+// projector with transformers' GELU between. The processor's template
+// writes "<image>\n" before a message's text, and "<image>" becomes the
+// picture's rows: a template that reads a message as a string carries the
+// mark, and the newline is the text after the rows.
+func llavaTower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVClassEmbd, jlm.RoleVPosEmbd, jlm.RoleVProj, jlm.RoleVProj2} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: llava: the tower has no %v", r)
+		}
+	}
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || v.PatchSize == 0 || v.ImageSize%v.PatchSize != 0 {
+		return nil, fmt.Errorf("convert: llava: %d heads over %d, patches of %d in %d", v.NHead, v.NEmbd, v.PatchSize, v.ImageSize)
+	}
+	var hidden int32
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProj {
+			hidden = int32(t.Dims[1])
+		}
+	}
+	act, err := v.Activation(false)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	// The pixels are value 0.
+	entry := jlm.Program{NIn: 1, Out: 5, Ops: []jlm.TowerOp{
+		{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize), Offset: 1},
+		{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+		{Code: jlm.TOpLeadRow, In: []uint16{2}, Bind: []jlm.Role{jlm.RoleVClassEmbd}, Offset: 1},
+		{Code: jlm.TOpPosTable, Bind: []jlm.Role{jlm.RoleVPosEmbd}},
+		{Code: jlm.TOpAdd, In: []uint16{3, 4}},
+	}}
+	if has[jlm.RoleVPreNorm] {
+		entry.Ops = append(entry.Ops, jlm.TowerOp{Code: jlm.TOpLayerNorm, In: []uint16{5},
+			Bind: bias(jlm.RoleVPreNorm, jlm.RoleVPreNormBias), Eps: v.Eps})
+		entry.Out = 6
+	}
+	// The last block's rows are value 0.
+	var head jlm.Program
+	head.NIn = 1
+	at := uint16(0)
+	op := func(o jlm.TowerOp) {
+		o.In = []uint16{at}
+		head.Ops = append(head.Ops, o)
+		at = uint16(len(head.Ops))
+	}
+	if has[jlm.RoleVPostNorm] {
+		op(jlm.TowerOp{Code: jlm.TOpLayerNorm, Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps})
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	op(jlm.TowerOp{Code: jlm.TOpDropRows, Offset: 1})
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)})
+	op(jlm.TowerOp{Code: jlm.TOpStated, Expr: &jlm.Expr{Terms: gelu.T}, Width: hidden})
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)})
+	head.Out = at
+	side := int32(v.ImageSize)
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreResizeShort, Ints: []int32{side, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreCenterCrop, Ints: []int32{side, side}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		Entry: entry,
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
+		Head: head,
+		Span: jlm.TowerSpan{Mark: "<image>\n", AfterText: "\n"},
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: llava: %w", err)
 	}
 	return t, nil
 }
