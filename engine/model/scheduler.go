@@ -64,10 +64,22 @@ type served struct {
 // NewPool is a Pool serving no instance yet.
 func NewPool() *Pool { return &Pool{} }
 
+// take is every instance pl serves, which it serves no longer.
+func (pl *Pool) take() []*Instance {
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	out := make([]*Instance, 0, len(pl.list))
+	for _, sv := range pl.list {
+		out = append(out, sv.in)
+	}
+	pl.list = nil
+	return out
+}
+
 // Serve hands instance in to the pool for phases (every phase when none is
 // named), batching up to width sessions at once (MaxStepRows when width <
 // 1). The instance was composed when it was made; serving it composes
-// nothing.
+// nothing. The model's pool's instances close with the model (Model.Close).
 func (pl *Pool) Serve(in *Instance, width int, phases ...Phase) error {
 	if width < 1 {
 		width = MaxStepRows
