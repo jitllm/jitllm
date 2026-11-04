@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
@@ -53,11 +52,12 @@ func rowsNMSE(got, want []float32) float64 {
 // against the oracle's RMS norm; the LayerNorm must be right at every width,
 // a whole number of vectors, a ragged one, a tail of one element or one
 // element alone.
-func TestComposedCPULayerNorm(t *testing.T) {
+func TestComposedCPULayerNorm(t *testing.T) { gateComposedCPULayerNorm(t, hostArm()) }
+func gateComposedCPULayerNorm(t *testing.T, cpuOn cpuArm) {
 	const eps, guard = 1e-5, 64
 	rng := rand.New(rand.NewSource(13))
 	r := Default().WithoutInt8(DeviceCPU)
-	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}
 	form := func(g *graph.Graph, rows int) (codes []Code, err error) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -92,7 +92,7 @@ func TestComposedCPULayerNorm(t *testing.T) {
 					for i := rows * w; i < len(in); i++ {
 						in[i] = nan
 					}
-					out, err := runCPUVectors(codes, in, rows*w+guard, [3][]uint32{},
+					out, err := runCPUVectors(cpuOn, codes, in, rows*w+guard, [3][]uint32{},
 						map[jlm.Role][]float32{jlm.RoleAttnNorm: scale, jlm.RoleAttnNormBias: shift})
 					if err != nil {
 						return nil, err

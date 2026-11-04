@@ -13,7 +13,7 @@ type Code struct {
 	page  []byte
 	entry *byte
 	Size  int
-	Name  string // symbol reported to perf (Host.MapNamed)
+	Name  string // symbol reported to perf (Target.MapNamed)
 }
 
 // Map makes code executable using the W^X sequence: map read+write, copy, then

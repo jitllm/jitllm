@@ -19,13 +19,13 @@ func TestComposedCPUReadsEachRowsToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, codes, err := Default().Form(Request{Graph: g, Step: Step{Rows: R, Page: 1, Keys: 1},
-		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	toks := []uint32{7, 0, 151643, 3, 1 << 20}
 	out := make([]uint32, R)
-	if err := runCPUCalls(codes, g, map[string][]uint32{"tokens": toks, g.Values[tok].Name: out}); err != nil {
+	if err := runCPUCalls(hostArm(), codes, g, map[string][]uint32{"tokens": toks, g.Values[tok].Name: out}); err != nil {
 		t.Fatal(err)
 	}
 	for r := range R {

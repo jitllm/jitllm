@@ -34,7 +34,8 @@ func q8RowsCase(R, W int) []float32 {
 // word for word as oracle.QuantizeQ8 writes the zero-padded row (llama.cpp's
 // quantize_row_q8_0: amax/127, halves away from zero) with the pair's sum
 // term at Q8_0's bias, and each element widened as d*q.
-func TestComposedCPUQ8Rows(t *testing.T) {
+func TestComposedCPUQ8Rows(t *testing.T) { gateComposedCPUQ8Rows(t, hostArm()) }
+func gateComposedCPUQ8Rows(t *testing.T, cpuOn cpuArm) {
 	const R = 5
 	away := 0
 	for _, W := range []int{32, 40, 80, 128, 200} {
@@ -57,7 +58,7 @@ func TestComposedCPUQ8Rows(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, codes, err := Default().Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 1, Keys: 1},
-				Device: cpuDevice(), Apart: true})
+				Device: cpuDevice(cpuOn), Apart: true})
 			if err != nil {
 				t.Fatalf("%v at width %d: %v", kind, W, err)
 			}
@@ -66,7 +67,7 @@ func TestComposedCPUQ8Rows(t *testing.T) {
 		run := func(kind graph.OpKind, in []uint32, n int) []uint32 {
 			codes, g, iv, ov := form(kind)
 			vals := map[graph.ValueID][]uint32{iv: in, ov: make([]uint32, n)}
-			if err := runCPUGridValues(codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
+			if err := runCPUGridValues(cpuOn, codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
 				t.Fatalf("%v at width %d: %v", kind, W, err)
 			}
 			return vals[ov]

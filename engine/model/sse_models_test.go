@@ -16,10 +16,9 @@ import (
 	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
-// The SSE tier at the model level: every gate here forces the tier before a
-// model opens (nn.NewJIT builds its kernels at construction), asserts the probe
-// took it, and uses its Host's MappedByTier to assert no AVX2 kernel was mapped while
-// it was on. Until every SSE family has landed they fail naming the missing
+// The SSE tier at the model level: every gate here opens its models on the CPU
+// device at the SSE tier (cpu:sse, sseDevice), and uses that device's
+// Target.MappedByTier to assert no AVX2 kernel was mapped. Until every SSE family has landed they fail naming the missing
 // ops rather than skip.
 
 // ssemBand is the floor of the teacher-forced max|dlogit| between the SSE and
@@ -39,13 +38,20 @@ const ssemMargin = 1.25
 // observed tier difference 1.4x headroom.
 const ssemCap = 6.0
 
-// ssemForce forces the SSE tier for the rest of t and checks it took.
-func ssemForce(t *testing.T) {
+// sseDevice is the device list of a CPU at the SSE tier.
+func sseDevice() Option { return WithDevices("cpu:sse") }
+
+// ssemTook fails t unless a model opened with sseDevice has its CPU device at
+// the SSE tier: an arm that ran AVX2 code would prove nothing.
+func ssemTook(t *testing.T, path string) {
 	t.Helper()
-	old := cpu.ForceTierForTest(cpu.TierSSE)
-	t.Cleanup(func() { cpu.ForceTierForTest(old) })
-	if cpu.HostTier() != cpu.TierSSE {
-		t.Fatalf("forced SSE and the probe reports %v -- the force reached nothing", cpu.HostTier())
+	m, err := Open(path, sseDevice())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if got := m.eng.cpuForms.Target.Tier(); got != cpu.TierSSE {
+		t.Fatalf("a model opened on cpu:sse has its CPU device at %v", got)
 	}
 }
 
@@ -76,7 +82,7 @@ type ssemArm struct {
 	margins []float32
 	steps   [][]float32 // the logits greedy[i] was chosen from
 	workers int
-	mapped  map[cpu.Tier]int64 // the arm's Host's codes by tier
+	mapped  map[cpu.Tier]int64 // the arm's CPU device's codes by tier
 }
 
 func ssemArgmax(l []float32) (int32, float32) {
@@ -101,7 +107,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	t.Helper()
 	m, err := Open(path, opts...)
 	if err != nil {
-		t.Fatalf("open on tier %v: %v", cpu.HostTier(), err)
+		t.Fatalf("open: %v", err)
 	}
 	defer m.Close()
 	var a ssemArm
@@ -109,7 +115,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	for _, id := range ids {
 		l, err := s.Forward(id)
 		if err != nil {
-			t.Fatalf("Forward on tier %v: %v", cpu.HostTier(), err)
+			t.Fatalf("Forward on tier %v: %v", m.eng.cpuForms.Target.Tier(), err)
 		}
 		a.forced = append(a.forced, append([]float32(nil), l...))
 	}
@@ -120,7 +126,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 		a.steps = append(a.steps, step)
 		l, err := s.Forward(next)
 		if err != nil {
-			t.Fatalf("greedy Forward on tier %v: %v", cpu.HostTier(), err)
+			t.Fatalf("greedy Forward on tier %v: %v", m.eng.cpuForms.Target.Tier(), err)
 		}
 		step = append([]float32(nil), l...)
 		next, margin = ssemArgmax(step)
@@ -131,17 +137,17 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	p := m.NewInstance(len(ids) + 1)
 	l, err := p.Prefill(ids)
 	if err != nil {
-		t.Fatalf("Prefill on tier %v: %v", cpu.HostTier(), err)
+		t.Fatalf("Prefill on tier %v: %v", m.eng.cpuForms.Target.Tier(), err)
 	}
 	a.prefill = append([]float32(nil), l...)
 	p.Close()
 
 	b := newSessBatch(m, 2, 8)
 	if _, err := b.ForwardBatch([]int32{ids[0], ids[1]}); err != nil {
-		t.Fatalf("ForwardBatch on tier %v: %v", cpu.HostTier(), err)
+		t.Fatalf("ForwardBatch on tier %v: %v", m.eng.cpuForms.Target.Tier(), err)
 	}
 	b.Close()
-	a.mapped = m.eng.cpuForms.Host.MappedByTier()
+	a.mapped = m.eng.cpuForms.Target.MappedByTier()
 	return a
 }
 
@@ -171,7 +177,7 @@ func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float
 		}
 		worst = math.Max(worst, d)
 	}
-	mapped := m.eng.cpuForms.Host.MappedByTier()
+	mapped := m.eng.cpuForms.Target.MappedByTier()
 	if d := mapped[cpu.TierAVX2]; d != 0 {
 		t.Fatalf("the composed CPU mapped %d AVX2 kernels on the SSE tier", d)
 	}
@@ -235,7 +241,7 @@ func TestEveryModelRunsSSE(t *testing.T) {
 			path := jlmOf(t, src)
 			var ref *ssemArm
 			band := ssemBand
-			if cpu.HostTier() == cpu.TierAVX2 {
+			if cpu.New().Tier() == cpu.TierAVX2 {
 				r := ssemRun(t, path, ids, gen, f32)
 				ref = &r
 				// The control is compared over exactly what the SSE arm is:
@@ -265,15 +271,14 @@ func TestEveryModelRunsSSE(t *testing.T) {
 					ctl, pd, band, ssemMargin*math.Max(ctl, pd), ssemCap)
 			}
 
-			ssemForce(t)
-			got := ssemRun(t, path, ids, gen, f32)
+			got := ssemRun(t, path, ids, gen, f32, sseDevice())
 			if d := got.mapped[cpu.TierAVX2]; d != 0 {
 				t.Fatalf("%d AVX2 kernels were mapped during the SSE arm -- it did not run the SSE tier", d)
 			}
 			if got.mapped[cpu.TierSSE] == 0 {
 				t.Fatal("the SSE arm mapped no SSE-tier kernel -- it ran nothing it claims to")
 			}
-			ssemComposedServes(t, path, ids, got.forced, band, f32)
+			ssemComposedServes(t, path, ids, got.forced, band, f32, sseDevice())
 
 			for pos, l := range got.forced {
 				for _, v := range l {
@@ -369,44 +374,44 @@ func TestEveryModelRunsSSE(t *testing.T) {
 
 // ssemKVF16 runs fn with the f16 KV cache pinned. fn opens its own models, so
 // the pin is a load option it is handed, not a package-wide default.
-func ssemKVF16(fn func(*testing.T, ...Option)) func(*testing.T) {
-	return func(t *testing.T) { fn(t, WithKVF16(true)) }
+func ssemKVF16(fn func(*testing.T, ...Option)) func(*testing.T, ...Option) {
+	return func(t *testing.T, opts ...Option) { fn(t, append([]Option{WithKVF16(true)}, opts...)...) }
 }
 
 // TestSSEModelGates runs the architecture gates -- the hybrid's four, the
 // batch transcriptions, the llama.cpp and transformers goldens, the tower --
-// with the SSE tier forced for all of them. Each is the unchanged gate: what
-// it checks on the AVX2 tier it checks here.
+// with every model they open on the CPU device at the SSE tier. Each is the
+// unchanged gate: what it checks on the AVX2 tier it checks here.
 func TestSSEModelGates(t *testing.T) {
-	// Every model the gates open maps onto a Host at the SSE tier, whose
+	// Every model the gates open maps onto a Target at the SSE tier, whose
 	// gate refuses an AVX2 kernel by name: none can be mapped silently.
-	ssemForce(t)
+	ssemTook(t, jlmOf(t, benchModel(t)))
 	for _, g := range []struct {
 		name string
-		fn   func(*testing.T)
+		fn   func(*testing.T, ...Option)
 	}{
-		{"HybridRuns", TestHybridRuns},
-		{"HybridPrefillMatchesForward", TestHybridPrefillMatchesForward},
-		{"HybridBatchMatchesForward", TestHybridBatchMatchesForward},
-		{"HybridStateIsConstantInContext", TestHybridStateIsConstantInContext},
+		{"HybridRuns", hybridRuns},
+		{"HybridPrefillMatchesForward", hybridPrefillMatchesForward},
+		{"HybridBatchMatchesForward", hybridBatchMatchesForward},
+		{"HybridStateIsConstantInContext", hybridStateIsConstantInContext},
 		// llama.cpp's goldens use its default f16 KV cache, and one (qwen2vl)
 		// has a first token the KV width alone decides, so this arm runs the
 		// f16 cache. That also puts the SSE f16 attention kernels under a
 		// model-level gate.
 		{"GreedyMatchesLlamaCpp", ssemKVF16(greedyMatchesLlamaCpp)},
-		{"BatchMatchesForward", TestBatchMatchesForward},
-		{"RaggedBatchMatchesForward", TestRaggedBatchMatchesForward},
-		{"BiasedBatchMatchesForward", TestBiasedBatchMatchesForward},
-		{"SafetensorsMatchTransformers", TestSafetensorsMatchTransformers},
-		{"GPTOSSMatchesLlamaCppIntermediates", TestGPTOSSMatchesLlamaCppIntermediates},
-		{"SynthGPTOSSMatchesTransformers", TestSynthGPTOSSMatchesTransformers},
-		{"PrefillMatchesForward", TestPrefillMatchesForward},
-		{"PrefillSeqMatchesForward", TestPrefillSeqMatchesForward},
-		{"PrefillMixedMatchesPrefill", TestPrefillMixedMatchesPrefill},
-		{"EveryModelRunsGenerated", TestEveryModelRunsGenerated},
-		{"KVF16IsSelectedAndRuns", TestKVF16IsSelectedAndRuns},
-		{"PagedKVIsTokenIdenticalOnEveryModel", TestPagedKVIsTokenIdenticalOnEveryModel},
+		{"BatchMatchesForward", batchMatchesForward},
+		{"RaggedBatchMatchesForward", raggedBatchMatchesForward},
+		{"BiasedBatchMatchesForward", biasedBatchMatchesForward},
+		{"SafetensorsMatchTransformers", safetensorsMatchTransformers},
+		{"GPTOSSMatchesLlamaCppIntermediates", gptossMatchesLlamaCppIntermediates},
+		{"SynthGPTOSSMatchesTransformers", synthGPTOSSMatchesTransformers},
+		{"PrefillMatchesForward", prefillMatchesForward},
+		{"PrefillSeqMatchesForward", prefillSeqMatchesForward},
+		{"PrefillMixedMatchesPrefill", prefillMixedMatchesPrefill},
+		{"EveryModelRunsGenerated", everyModelRunsGenerated},
+		{"KVF16IsSelectedAndRuns", kvF16IsSelectedAndRuns},
+		{"PagedKVIsTokenIdenticalOnEveryModel", pagedKVIsTokenIdenticalOnEveryModel},
 	} {
-		t.Run(g.name, g.fn)
+		t.Run(g.name, func(t *testing.T) { g.fn(t, sseDevice()) })
 	}
 }

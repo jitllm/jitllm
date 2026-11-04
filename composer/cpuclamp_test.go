@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
@@ -49,11 +48,12 @@ func clampGraph(w, k, off int, bound float64) *graph.Graph {
 // rows, each held to the oracle's clamp exactly with a guard of poisoned
 // words after the result. The violation reads the pair one word over: the
 // gate must see it.
-func TestComposedCPUClamp(t *testing.T) {
+func TestComposedCPUClamp(t *testing.T) { gateComposedCPUClamp(t, hostArm()) }
+func gateComposedCPUClamp(t *testing.T, cpuOn cpuArm) {
 	const guard, pairs = 64, 14
 	rng := rand.New(rand.NewSource(29))
 	r := Default().WithoutInt8(DeviceCPU)
-	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}
 	tab := clampTable(rng, pairs)
 	nan := float32(math.NaN())
 	right, seen := 0, 0
@@ -87,7 +87,7 @@ func TestComposedCPUClamp(t *testing.T) {
 					for i := len(x); i < len(in); i++ {
 						in[i] = nan
 					}
-					out, err := runCPUVectors(codes, in, len(x)+guard, [3][]uint32{}, map[jlm.Role][]float32{jlm.RoleVClamp: tab})
+					out, err := runCPUVectors(cpuOn, codes, in, len(x)+guard, [3][]uint32{}, map[jlm.Role][]float32{jlm.RoleVClamp: tab})
 					if err != nil {
 						return nil, err
 					}

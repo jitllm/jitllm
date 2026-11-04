@@ -1572,7 +1572,10 @@ func TestKVBudgetWithoutAStoreIsRefused(t *testing.T) {
 // grouped-query geometries, a vision-carrying container and a hybrid reach
 // cases tinyllama cannot. The control is the same binary at P >= maxSeq (one
 // page, the flat cache) against P = 8, so any difference is the page walk.
-func TestPagedKVIsTokenIdenticalOnEveryModel(t *testing.T) {
+func TestPagedKVIsTokenIdenticalOnEveryModel(t *testing.T) { pagedKVIsTokenIdenticalOnEveryModel(t) }
+
+// pagedKVIsTokenIdenticalOnEveryModel is TestPagedKVIsTokenIdenticalOnEveryModel with opts on every model it opens.
+func pagedKVIsTokenIdenticalOnEveryModel(t *testing.T, opts ...Option) {
 	if testing.Short() {
 		t.Skip("opens every model on the box")
 	}
@@ -1602,7 +1605,7 @@ func TestPagedKVIsTokenIdenticalOnEveryModel(t *testing.T) {
 		if strings.Contains(name, "mmproj") {
 			continue
 		}
-		m, err := Open(p)
+		m, err := Open(p, opts...)
 		if err != nil && strings.Contains(err.Error(), "this build reads") {
 			// A stale container whose GGUF remains is converted again, as
 			// every other gate's jlmOf does: excluding it ran the sweep on
@@ -1614,7 +1617,7 @@ func TestPagedKVIsTokenIdenticalOnEveryModel(t *testing.T) {
 				t.Run("convert/"+name, func(t *testing.T) { fresh = jlmOf(t, src) })
 				if fresh != "" {
 					p = fresh
-					m, err = Open(p)
+					m, err = Open(p, opts...)
 				}
 			}
 		}
@@ -1658,7 +1661,7 @@ func TestPagedKVIsTokenIdenticalOnEveryModel(t *testing.T) {
 			continue // the big ones need JITLLM_KVSWEEP_MODEL, one at a time
 		}
 		t.Run(name, func(t *testing.T) {
-			m, err := Open(p)
+			m, err := Open(p, opts...)
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}

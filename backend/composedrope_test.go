@@ -377,7 +377,7 @@ func cpuRope(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, at [
 	t.Helper()
 	rows := len(at)
 	rowTab, marksTab, marks := ropeRowTables(t, at)
-	codes, g := composedRopeCodes(t, composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true},
+	codes, g := composedRopeCodes(t, composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true},
 		rope, sections, interleaved, rows, marks)
 	n := rows * rope.NRot
 	out := guardedTable(n)
@@ -392,7 +392,7 @@ func cpuRope(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, at [
 		if c.CPU == nil {
 			t.Fatalf("%s has no CPU code", c.Name)
 		}
-		code, err := cpu.NewHost().Map(c.CPU)
+		code, err := cpu.New().Map(c.CPU)
 		if err != nil {
 			t.Fatalf("mapping %s: %v", c.Name, err)
 		}

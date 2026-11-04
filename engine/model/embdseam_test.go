@@ -126,7 +126,10 @@ func TestForwardEmbdMatchesForward(t *testing.T) {
 // TestPrefillMixedMatchesPrefill runs with tuning off: on arm64 a timed shape
 // picks its matvec over its first calls, so two states decoding the same row
 // may run different kernels and part by rounding.
-func TestPrefillMixedMatchesPrefill(t *testing.T) {
+func TestPrefillMixedMatchesPrefill(t *testing.T) { prefillMixedMatchesPrefill(t) }
+
+// prefillMixedMatchesPrefill is TestPrefillMixedMatchesPrefill with opts on every model it opens.
+func prefillMixedMatchesPrefill(t *testing.T, opts ...Option) {
 	eachModel(t, func(t *testing.T, m *Model) {
 		ids := promptIDs(m, 24)
 		// The same prompt as three spans: tokens, embeddings, tokens. The split
@@ -169,7 +172,7 @@ func TestPrefillMixedMatchesPrefill(t *testing.T) {
 			t.Fatal(err)
 		}
 		diffBits(t, "Forward after PrefillMixed", want, got)
-	})
+	}, opts...)
 }
 
 func diffBits(t *testing.T, what string, want, got []float32) {

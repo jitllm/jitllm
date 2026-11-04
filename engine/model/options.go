@@ -77,7 +77,7 @@ type modelOpts struct {
 	headPlace bool
 	// place is WithPlacement's map, nil when the engine decides everything.
 	place *Placement
-	// noCPU leaves the CPU out of the devices the engine may choose (WithCPU).
+	// noCPU leaves the CPU out of the devices the engine may choose (WithDevices).
 	noCPU bool
 	// elemPool runs the vision tower's elementwise passes on the pool.
 	elemPool bool
@@ -327,18 +327,24 @@ func WithPlacement(p Placement) Option {
 	return func(l *loadOpts) { l.opt.place = &p }
 }
 
-// WithCPU says whether the CPU is one of the devices the caller listed for
-// this model's blocks. Listed (the default, and what a device spec of "auto"
-// or one naming cpu means), the engine may choose it as any other device: a
-// block no card takes, a block relocation or a fault moves off a card. Not
-// listed, a block runs on the cards attached (Instance.SetDevice) and on nothing
-// else: one that no card holds resident pages through a card's slots, every
-// block streamed (Place.Stream), and a block that cannot run there even paged
-// fails the placement by name. A fault or a history the cards cannot grow is
-// then the step's error, never a move to the CPU. A caller's own move to the
-// CPU (MoveBlocks, SetGPULayers, a Placement naming "cpu") is its choice and
-// is honoured either way.
-func WithCPU(listed bool) Option { return func(l *loadOpts) { l.opt.noCPU = !listed } }
+// WithDevices is the devices the engine may place this model's blocks on, by
+// spec as -devices names them ("auto", "cpu", "cuda:0", "vulkan:1", ...;
+// gpu.ParseDevices), the default being "auto". The CPU is one of them when an
+// entry names it or says auto: the engine may then choose it as any other
+// device -- a block no card takes, a block a relocation or a fault moves off a
+// card -- and the cpu entry's variants are its device's (cpu:sse, cpu:novnni,
+// cpu:nodotprod, cpu:perfmap; cpu.SpecOptions). Not listed, a block runs on the
+// cards attached (Instance.SetDevice) and on nothing else: one that no card
+// holds resident pages through a card's slots, every block streamed
+// (Place.Stream), and a block that cannot run there even paged fails the
+// placement by name. A fault or a history the cards cannot grow is then the
+// step's error, never a move to the CPU. A caller's own move to the CPU
+// (MoveBlocks, SetGPULayers, a Placement naming "cpu") is its choice and is
+// honoured either way. The cards a spec names are attached by the caller. The
+// last WithDevices a caller gives is the list.
+func WithDevices(specs ...string) Option {
+	return func(l *loadOpts) { l.devices = append([]string(nil), specs...) }
+}
 
 // WithKVF16 forces the cache width, overriding what nn.KVWidthPaysOff decides:
 // WithKVType(KVF16) or WithKVType(KVF32).

@@ -43,7 +43,10 @@ const floatFormsNMSE = 1e-5
 //
 // A dense model, a hybrid (recurrent state per row), a mixture and a sliding
 // window model.
-func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) {
+func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) { stepRunsOnTheCPUSharesOnePass(t) }
+
+// stepRunsOnTheCPUSharesOnePass is TestStepRunsOnTheCPUSharesOnePass with opts on every model it opens.
+func stepRunsOnTheCPUSharesOnePass(t *testing.T, opts ...Option) {
 	for _, c := range []struct{ name, file string }{
 		{"dense", "Llama-3.2-1B-Instruct-Q4_K_M.gguf"},
 		{"hybrid", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"},
@@ -55,7 +58,7 @@ func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
-			m, err := Open(jlmOf(t, p), WithKVF16(false))
+			m, err := Open(jlmOf(t, p), append([]Option{WithKVF16(false)}, opts...)...)
 			if err != nil {
 				t.Fatal(err)
 			}

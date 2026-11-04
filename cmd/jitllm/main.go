@@ -364,11 +364,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 	// A -devices list without cpu (or auto) keeps every block on its devices,
 	// paging where they do not hold the model.
-	listed, err := gpu.AdmitsHost(devSpec)
-	if err != nil {
-		return err
-	}
-	opts = append(opts, model.WithCPU(listed))
+	opts = append(opts, model.WithDevices(perfMapSpec(devSpec)))
 	m, err := model.Open(path, append(opts, open...)...)
 	// The meter starts at Open, not after placement: on a streamed model
 	// admission is the largest read, and starting later leaves it uncounted.
@@ -1501,6 +1497,35 @@ func preloadWait(m *model.Model) error {
 	return err
 }
 
+// perfMapSpec is device spec spec with the CPU device writing its perf map
+// when JITLLM_PERFMAP is set: perfmap among the cpu entry's variants, a cpu
+// entry beside auto, and a spec of cards alone left as it is -- the CPU runs
+// nothing there.
+func perfMapSpec(spec string) string {
+	if os.Getenv("JITLLM_PERFMAP") == "" {
+		return spec
+	}
+	es := strings.Split(spec, ",")
+	auto := strings.TrimSpace(spec) == ""
+	for i, e := range es {
+		t := strings.ToLower(strings.TrimSpace(e))
+		switch {
+		case t == "cpu":
+			es[i] = "cpu:perfmap"
+			return strings.Join(es, ",")
+		case strings.HasPrefix(t, "cpu:"):
+			es[i] = strings.TrimSpace(e) + "+perfmap"
+			return strings.Join(es, ",")
+		case t == "auto":
+			auto = true
+		}
+	}
+	if auto {
+		return strings.TrimSpace(spec + ",cpu:perfmap")
+	}
+	return spec
+}
+
 func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	o := make([]model.Option, 0, len(t)+3)
 	for _, x := range t {
@@ -1518,10 +1543,11 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	if n, err := strconv.Atoi(os.Getenv("JITLLM_CHUNK")); err == nil && n >= 1 {
 		o = append(o, model.WithPrefillChunk(n))
 	}
-	// JITLLM_PERFMAP=1 has the model's CPU write /tmp/perf-<pid>.map, so perf
-	// resolves generated code by name (cpu.WithPerfMap).
+	// JITLLM_PERFMAP=1 has the CPU device write /tmp/perf-<pid>.map, so perf
+	// resolves generated code by name (cpu:perfmap); a command with a device
+	// spec of its own states it there (perfMapSpec).
 	if os.Getenv("JITLLM_PERFMAP") != "" {
-		o = append(o, model.WithCPUHost(cpu.WithPerfMap()))
+		o = append(o, model.WithDevices(perfMapSpec("auto")))
 	}
 	// JITLLM_HUGEPAGES=0 leaves the frames on the kernel's default page size.
 	if os.Getenv("JITLLM_HUGEPAGES") == "0" {

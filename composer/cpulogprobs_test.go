@@ -26,7 +26,7 @@ func TestComposedCPULogprobs(t *testing.T) {
 	}
 	// Apart, as the engine forms it: the log row is the caller's own
 	// buffer.
-	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(), Apart: true})
+	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(hostArm()), Apart: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestComposedCPULogprobs(t *testing.T) {
 			lw[i] = math.Float32bits(v)
 		}
 		vals := map[graph.ValueID][]uint32{g.In[0]: lw, rowV: make([]uint32, n), idsV: make([]uint32, K)}
-		if err := runCPUValues(codes, g, vals, [3][]uint32{}); err != nil {
+		if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 			t.Fatal(err)
 		}
 		row := make([]float32, n)
@@ -96,7 +96,7 @@ func TestComposedCPUMaskRow(t *testing.T) {
 	}
 	// Apart, as the engine forms it: the masked row is the caller's own
 	// buffer, never the logits'.
-	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(), Apart: true})
+	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(hostArm()), Apart: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestComposedCPUMaskRow(t *testing.T) {
 			}
 		}
 		vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: mw, g.Out[0]: make([]uint32, n)}
-		if err := runCPUValues(codes, g, vals, [3][]uint32{}); err != nil {
+		if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 			t.Fatal(err)
 		}
 		for i, got := range vals[g.Out[0]] {

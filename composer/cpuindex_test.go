@@ -5,20 +5,19 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/graph"
 )
 
 // runCPUPrim forms map p alone on the CPU device and runs its calls over
 // bufs, g naming its values.
-func runCPUPrim(t *testing.T, p Prim, g *graph.Graph, bufs map[string][]uint32) {
+func runCPUPrim(t *testing.T, cpuOn cpuArm, p Prim, g *graph.Graph, bufs map[string][]uint32) {
 	t.Helper()
 	k, err := generate(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	k.Apart = true
-	dev := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}
 	reg := Default()
 	ks, err := reg.Profiles[DeviceCPU].on(dev).run([]*Kernel{k}, dev)
 	if err != nil {
@@ -32,7 +31,7 @@ func runCPUPrim(t *testing.T, p Prim, g *graph.Graph, bufs map[string][]uint32) 
 	for _, c := range pcs {
 		codes = append(codes, c.Code)
 	}
-	if err := runCPUCalls(codes, g, bufs); err != nil {
+	if err := runCPUCalls(cpuOn, codes, g, bufs); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -67,7 +66,7 @@ func TestCPUVectorAddressReadsItsCoordinate(t *testing.T) {
 		fs[i] = 0.25 + float32(i)
 	}
 	got := make([]uint32, R)
-	runCPUPrim(t, p, indexValues(), map[string][]uint32{"w": words, "f": f32Words(fs), "o": got})
+	runCPUPrim(t, hostArm(), p, indexValues(), map[string][]uint32{"w": words, "f": f32Words(fs), "o": got})
 	picked := 0
 	for i, wi := range words {
 		want := wi
@@ -103,7 +102,7 @@ func TestCPUIndexKeepsTheConstantItSubtractsFrom(t *testing.T) {
 	words := []uint32{0, 1, 5, 0, 2, 0}
 	fs := []float32{0.5, 1.5}
 	got := make([]uint32, R)
-	runCPUPrim(t, p, indexValues(), map[string][]uint32{"w": words, "f": f32Words(fs), "o": got})
+	runCPUPrim(t, hostArm(), p, indexValues(), map[string][]uint32{"w": words, "f": f32Words(fs), "o": got})
 	for i, wi := range words {
 		want := math.Float32bits(fs[0])
 		if wi == 0 {
@@ -121,6 +120,9 @@ func TestCPUIndexKeepsTheConstantItSubtractsFrom(t *testing.T) {
 // select reads. Each block is held to its own elements' maximum, so a
 // broadcast of a vector register in the mask's place fails it.
 func TestCPUSelectBroadcastsAGeneralMask(t *testing.T) {
+	gateCPUSelectBroadcastsAGeneralMask(t, hostArm())
+}
+func gateCPUSelectBroadcastsAGeneralMask(t *testing.T, cpuOn cpuArm) {
 	const R, W, NB = 2, 40, 2
 	U, F := ir.U32, ir.F32
 	sh := []int{R, W}
@@ -136,7 +138,7 @@ func TestCPUSelectBroadcastsAGeneralMask(t *testing.T) {
 	a.abs(a.sel(F, a.op(OpLess, ir.Pred, i, a.u(W)), a.at(0, sh, a.coord(0), a.op(OpMin, U, i, a.u(W-1))), a.f(0)))
 	p := Prim{Kind: PrimReduce, Shape: []int{R, NB, 32}, In: []Operand{in}, Out: out, Combine: OpMax, Expr: a.e}
 	got := make([]float32, R*NB)
-	runCPUPrim(t, p, g, map[string][]uint32{"x": f32Words(xs), "o": f32Words(got)})
+	runCPUPrim(t, cpuOn, p, g, map[string][]uint32{"x": f32Words(xs), "o": f32Words(got)})
 	for r := 0; r < R; r++ {
 		for b := 0; b < NB; b++ {
 			if want := xs[r*W+min(b*32+32, W)-1]; got[r*NB+b] != want {
@@ -149,7 +151,8 @@ func TestCPUSelectBroadcastsAGeneralMask(t *testing.T) {
 // TestCPUIndexTakesARemainder executes a row map reading a float at its
 // word's remainder by 3, the index a general register's: each row is held
 // to the float its word picks, at word values on both sides of the divisor.
-func TestCPUIndexTakesARemainder(t *testing.T) {
+func TestCPUIndexTakesARemainder(t *testing.T) { gateCPUIndexTakesARemainder(t, hostArm()) }
+func gateCPUIndexTakesARemainder(t *testing.T, cpuOn cpuArm) {
 	const R = 6
 	U, F := ir.U32, ir.F32
 	var x exprs
@@ -163,7 +166,7 @@ func TestCPUIndexTakesARemainder(t *testing.T) {
 	words := []uint32{0, 1, 2, 3, 7, 11}
 	fs := []float32{0.5, 1.5, 2.5}
 	got := make([]uint32, R)
-	runCPUPrim(t, p, indexValues(), map[string][]uint32{"w": words, "f": f32Words(fs), "o": got})
+	runCPUPrim(t, cpuOn, p, indexValues(), map[string][]uint32{"w": words, "f": f32Words(fs), "o": got})
 	for i, wi := range words {
 		if want := math.Float32bits(fs[wi%3]); got[i] != want {
 			t.Fatalf("row %d (word %d) is %#x, want %#x (rows %#x)", i, wi, got[i], want, got)

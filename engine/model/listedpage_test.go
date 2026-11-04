@@ -58,7 +58,11 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 		if err != nil || g == nil {
 			noDevice(t, ds, err)
 		}
-		m, err := Open(path, WithKVF16(false), WithCPU(cpu))
+		devs := []string{spec}
+		if cpu {
+			devs = append(devs, "cpu")
+		}
+		m, err := Open(path, WithKVF16(false), WithDevices(devs...))
 		if err != nil {
 			g.Close()
 			t.Fatal(err)

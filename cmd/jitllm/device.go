@@ -78,9 +78,9 @@ func openDevices(spec string, vram, hostBudget uint64, streamGroups, stepRows in
 
 // relocatable refuses -relocate on a device spec that leaves the CPU out.
 // Relocating moves blocks to the CPU, and a spec that names only cards asked
-// for them and nothing else (model.WithCPU).
+// for them and nothing else (model.WithDevices).
 func relocatable(spec string) error {
-	ok, err := gpu.AdmitsHost(spec)
+	ok, err := gpu.ListsCPU(spec)
 	if err != nil || ok {
 		return err
 	}

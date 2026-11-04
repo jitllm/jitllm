@@ -19,7 +19,7 @@ func TestCPUPromptScratchMovesWithItsCalls(t *testing.T) {
 		Graph:   graph.MatVec(jlm.RoleOutput, 2048, 2048),
 		Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
 		Step:    Step{Rows: 128, Page: 64, Keys: 1, ActWindow: 32},
-		Device:  Device{Kind: DeviceCPU, Slots: 14, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true},
+		Device:  Device{Kind: DeviceCPU, Slots: 14, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true},
 	}
 	_, codes, err := Default().Form(req)
 	if err != nil {

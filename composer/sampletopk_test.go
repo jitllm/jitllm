@@ -144,14 +144,14 @@ func SampleMismatch(gv []float32, gi []uint32, wv []float32, wi []uint32) int {
 // runCPUValues runs codes on the CPU over the graph's values: vals holds
 // the inputs and receives every value a kernel writes, each followed by
 // guard words checked after; every other storage is NaN until written.
-func runCPUValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32) error {
-	return runCPUTables(codes, g, vals, planes, nil)
+func runCPUValues(cpuOn cpuArm, codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32) error {
+	return runCPUTables(cpuOn, codes, g, vals, planes, nil)
 }
 
 // runCPUTables is runCPUValues with the step's tables by name, each read
 // and written in place.
-func runCPUTables(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32, tables map[string][]uint32) error {
-	return runCPUGridValues(codes, g, vals, planes, tables, nil, nil)
+func runCPUTables(cpuOn cpuArm, codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32, tables map[string][]uint32) error {
+	return runCPUGridValues(cpuOn, codes, g, vals, planes, tables, nil, nil)
 }
 
 // runCPUGridValues is runCPUTables over values of several rows, value v
@@ -161,7 +161,7 @@ func runCPUTables(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32,
 // states of it. A value's or scratch's guard past it holds the widest
 // value's most rows, so a form run at more rows than a value holds writes
 // its guard and not the process's memory.
-func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32, tables map[string][]uint32,
+func runCPUGridValues(cpuOn cpuArm, codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32, tables map[string][]uint32,
 	rowsOf func(graph.ValueID) int, byRole map[jlm.Role][]uint32) error {
 	guard := 16
 	if rowsOf != nil {
@@ -205,7 +205,7 @@ func runCPUGridValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uin
 		if c.CPU == nil {
 			return fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		code, err := mapComposed(c.CPU)
+		code, err := cpuOn.mapComposed(c.CPU)
 		if err != nil {
 			return fmt.Errorf("mapping %s: %w", c.Name, err)
 		}

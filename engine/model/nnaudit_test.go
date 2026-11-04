@@ -35,7 +35,10 @@ import (
 // A model the converter accepts and the engine then cannot open is a FAILURE,
 // not a silent pass. The sweep itself never reports SKIP: it fails when no model
 // ran.
-func TestEveryModelRunsGenerated(t *testing.T) {
+func TestEveryModelRunsGenerated(t *testing.T) { everyModelRunsGenerated(t) }
+
+// everyModelRunsGenerated is TestEveryModelRunsGenerated with opts on every model it opens.
+func everyModelRunsGenerated(t *testing.T, opts ...Option) {
 	// JITLLM_AUDIT_MODEL=<substring> audits one file whatever its size (run it
 	// under `scripts/cap 24G` for anything over ~16 GB); JITLLM_SLOW=1 admits
 	// every model over 2 GiB.
@@ -71,14 +74,14 @@ func TestEveryModelRunsGenerated(t *testing.T) {
 				}
 				path = p
 			}
-			m, err := Open(path)
+			m, err := Open(path, opts...)
 			if err != nil {
 				t.Fatalf("the converter accepted it and Open refused it: %v", err)
 			}
 			defer m.Close()
 			auditRun(t, m)
 			done = true
-			t.Run("composed-cpu", func(t *testing.T) { auditComposedCPU(t, name, path) })
+			t.Run("composed-cpu", func(t *testing.T) { auditComposedCPU(t, name, path, opts...) })
 		})
 		switch {
 		case done:
@@ -137,8 +140,8 @@ func auditRun(t *testing.T, m *Model) {
 // with the CPU's blocks on what the composer forms for it, and a decode whose
 // every block step is counted, served or declined by name -- all of them
 // served on the models the composer serves on the CPU (cpuServedModels).
-func auditComposedCPU(t *testing.T, name, path string) {
-	m, err := Open(path)
+func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
+	m, err := Open(path, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

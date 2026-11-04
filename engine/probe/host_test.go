@@ -13,10 +13,10 @@ import (
 // to read (an Apple core streams its L2 nearly as fast as its L1, and one
 // thread's L1 rate reads below it), all threads at least most of one's rate,
 // and an empty call under a microsecond.
-func TestHostMeasures(t *testing.T) { hostMeasures(t, cpu.NewHost()) }
+func TestHostMeasures(t *testing.T) { hostMeasures(t, cpu.New()) }
 
 // hostMeasures holds the probe of h to the orders TestHostMeasures states.
-func hostMeasures(t *testing.T, h *cpu.Host) {
+func hostMeasures(t *testing.T, h *cpu.Target) {
 	d, err := HostOn(h)
 	if err != nil {
 		t.Skip(err)

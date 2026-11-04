@@ -34,7 +34,7 @@ type Code struct {
 	addr  uintptr
 	entry *byte
 	Size  int
-	// Name is the code's name (Host.MapNamed). Windows samplers do not read a
+	// Name is the code's name (Target.MapNamed). Windows samplers do not read a
 	// perf-style JIT map, so it is recorded and otherwise unused.
 	Name string
 }

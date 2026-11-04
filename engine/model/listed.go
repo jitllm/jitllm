@@ -2,7 +2,10 @@ package model
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -23,7 +26,7 @@ func (s *Instance) offCards(lo, hi int) []int {
 }
 
 // pageOnCards is the placement of an instance whose caller did not list the CPU
-// (WithCPU(false)) when the cards do not hold every block resident. Every
+// (WithDevices without cpu) when the cards do not hold every block resident. Every
 // block it decides is marked streamed (Place.Stream) where it is -- a block
 // already on a card stays there, formed once, and becomes a page the pager
 // may take (the device pager's victim()) -- and the blocks no card took are
@@ -68,4 +71,33 @@ func (s *Instance) pageOnCards(lo, hi int) error {
 		why = d[0].Why
 	}
 	return errCPUUnlisted(fmt.Sprintf("blocks %v run on no listed card even paged (%s)", off, why))
+}
+
+// cpuOfDevices is what the device specs a model was opened with state about
+// the CPU device: whether it is listed (an entry naming cpu, or auto -- the
+// default with no specs) and the options its entries' variants give its
+// Target (cpu.SpecOptions).
+func cpuOfDevices(specs []string) (opts []cpu.Option, listed bool, err error) {
+	spec := "auto"
+	if len(specs) > 0 {
+		spec = strings.Join(specs, ",")
+	}
+	es, err := gpu.ParseDevices(spec)
+	if err != nil {
+		return nil, false, fmt.Errorf("model: %w", err)
+	}
+	for _, e := range es {
+		switch e.API {
+		case "auto":
+			listed = true
+		case "cpu":
+			listed = true
+			o, err := cpu.SpecOptions(e.Sel)
+			if err != nil {
+				return nil, false, fmt.Errorf("model: %w", err)
+			}
+			opts = append(opts, o...)
+		}
+	}
+	return opts, listed, nil
 }

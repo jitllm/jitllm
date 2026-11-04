@@ -21,7 +21,7 @@ import (
 // (0F 18 /1), PRFM on arm64, counted in the code. Its reach is x86's: an arm64
 // host is asked none.
 func TestAheadPrefetchesTheWeightStream(t *testing.T) {
-	host := uint64(cpu.CPU().ISA())
+	host := uint64(cpu.Probe().ISA())
 	for _, typ := range []quant.Type{quant.Q4_K, quant.Q8_0, quant.Q6_K} {
 		jt, _ := jlm.TypeOf(typ)
 		for _, isa := range []uint64{host, host &^ uint64(x86.ISAVNNI)} {

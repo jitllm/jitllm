@@ -2021,7 +2021,7 @@ func (s *Instance) embed(token int32) error {
 // SetDeviceFallback decides what happens when the device faults mid-sequence
 // (a driver error, a device lost): move every block and its history to the
 // CPU device and finish there (true, the default), or return an error
-// (false). A model whose caller did not list the CPU (WithCPU(false)) takes
+// (false). A model whose caller did not list the CPU (WithDevices without cpu) takes
 // the error either way, and a decline or a kernel that did not build is an
 // error always (refusal).
 //

@@ -23,7 +23,7 @@ func TestGCNotBlocked(t *testing.T) {
 		t.Skip(err)
 	}
 	// Executes VPDPBUSD (see cpu.TestExecuteVPDPBUSD).
-	if !cpu.CPU().AVXVNNI {
+	if !cpu.Probe().AVXVNNI {
 		t.Skip("this host has no AVX-VNNI, so VPDPBUSD cannot be executed here")
 	}
 	var a x86.Buf
@@ -46,7 +46,7 @@ func TestGCNotBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := cpu.NewHost().Map(b)
+	code, err := cpu.New().Map(b)
 	if err != nil {
 		t.Fatal(err)
 	}

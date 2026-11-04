@@ -23,7 +23,10 @@ import (
 // activation quantization; the bounds are sized for that, allowing an argmax
 // flip or two on a random 201k-entry head. It is also the arm64 gate for
 // gpt-oss, since the real model does not fit a small arm64 host.
-func TestSynthGPTOSSMatchesTransformers(t *testing.T) {
+func TestSynthGPTOSSMatchesTransformers(t *testing.T) { synthGPTOSSMatchesTransformers(t) }
+
+// synthGPTOSSMatchesTransformers is TestSynthGPTOSSMatchesTransformers with opts on every model it opens.
+func synthGPTOSSMatchesTransformers(t *testing.T, opts ...Option) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "gptoss", "synth-gptoss.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +45,7 @@ func TestSynthGPTOSSMatchesTransformers(t *testing.T) {
 	if !ok {
 		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path("synth-gptoss.gguf")+" (set JITLLM_MODELS to the model directory) -- run scripts/gptossgold.py (RULE 11)")
 	}
-	m, err := Open(jlmOf(t, path))
+	m, err := Open(jlmOf(t, path), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

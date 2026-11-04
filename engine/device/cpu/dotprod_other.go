@@ -2,4 +2,4 @@
 
 package cpu
 
-func hostDotProd() bool { return false }
+func dotProd() bool { return false }

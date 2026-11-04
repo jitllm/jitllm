@@ -33,7 +33,7 @@ func TestCountsBeyondTheWordsAreRefused(t *testing.T) {
 		reg.Profiles[composer.DeviceCPU] = p
 		_, codes, err := reg.Form(composer.Request{Graph: llamaBlock(), Formats: formats,
 			Step:   composer.Step{Rows: 1, Page: 64, Keys: 64, ActWindow: 32},
-			Device: composer.Device{Kind: composer.DeviceCPU, Slots: 8, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+			Device: composer.Device{Kind: composer.DeviceCPU, Slots: 8, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}})
 		return codes, err
 	}
 	codes, err := form(2)

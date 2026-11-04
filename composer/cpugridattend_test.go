@@ -196,7 +196,7 @@ func TestComposedCPUGridAttend(t *testing.T) {
 		}
 		step := Step{Rows: n, Page: m, Keys: m, ActWindow: 32}
 		run := func(r *Registry) ([]float32, map[string][]uint32, error) {
-			_, codes, err := r.Form(Request{Graph: gr, Formats: GridAttendFormats(), Step: step, Device: cpuDevice()})
+			_, codes, err := r.Form(Request{Graph: gr, Formats: GridAttendFormats(), Step: step, Device: cpuDevice(hostArm())})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -206,7 +206,7 @@ func TestComposedCPUGridAttend(t *testing.T) {
 			for r, v := range roles {
 				byRole[r] = f32Words(v)
 			}
-			err = runCPUGridValues(codes, gr, vals, [3][]uint32{}, tabs, gridValueRows(gr, n), byRole)
+			err = runCPUGridValues(hostArm(), codes, gr, vals, [3][]uint32{}, tabs, gridValueRows(gr, n), byRole)
 			if err != nil {
 				return nil, tabs, err
 			}

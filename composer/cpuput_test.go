@@ -66,7 +66,7 @@ func TestComposedCPUPut(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, R := range []int{1, 3} {
-				_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice()})
+				_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice(hostArm())})
 				if err != nil {
 					t.Fatalf("%d indices into %d at %d rows: %v", k, w, R, err)
 				}
@@ -85,7 +85,7 @@ func TestComposedCPUPut(t *testing.T) {
 					return u
 				}
 				m := map[graph.ValueID][]uint32{row: words(rows), idx: slices.Clone(ix), vals: words(vs), out: got}
-				if err := runCPUGridValues(codes, g, m, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
+				if err := runCPUGridValues(hostArm(), codes, g, m, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
 					t.Fatalf("%d indices into %d at %d rows: %v", k, w, R, err)
 				}
 				for r := range R {

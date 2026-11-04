@@ -11,7 +11,7 @@ import (
 
 // formOnCPU forms graph g on the CPU and runs it over vals, the profile
 // with the passes off turned off.
-func formOnCPU(t *testing.T, g *graph.Graph, vals map[graph.ValueID][]uint32, off ...string) {
+func formOnCPU(t *testing.T, cpuOn cpuArm, g *graph.Graph, vals map[graph.ValueID][]uint32, off ...string) {
 	t.Helper()
 	reg := Default()
 	p := reg.Profiles[DeviceCPU]
@@ -20,17 +20,17 @@ func formOnCPU(t *testing.T, g *graph.Graph, vals map[graph.ValueID][]uint32, of
 		p.Off[o] = true
 	}
 	reg.Profiles[DeviceCPU] = p
-	_, codes, err := reg.Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(), Apart: true})
+	_, codes, err := reg.Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(cpuOn), Apart: true})
 	if err != nil {
 		t.Fatalf("forming: %v", err)
 	}
-	if err := runCPUValues(codes, g, vals, [3][]uint32{}); err != nil {
+	if err := runCPUValues(cpuOn, codes, g, vals, [3][]uint32{}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // rankOnCPU is OpRank of x over one group, formed and run on the CPU.
-func rankOnCPU(t *testing.T, x []float32, off ...string) []uint32 {
+func rankOnCPU(t *testing.T, cpuOn cpuArm, x []float32, off ...string) []uint32 {
 	b := graph.New()
 	in := b.In("x", len(x))
 	r := b.Emit(graph.OpRank, []graph.ValueID{in}, []graph.Result{{Name: "rank", Width: len(x), Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
@@ -40,7 +40,7 @@ func rankOnCPU(t *testing.T, x []float32, off ...string) []uint32 {
 		xs[i] = math.Float32bits(v)
 	}
 	vals := map[graph.ValueID][]uint32{in: xs}
-	formOnCPU(t, b.G, vals, off...)
+	formOnCPU(t, cpuOn, b.G, vals, off...)
 	return vals[r]
 }
 
@@ -48,7 +48,8 @@ func rankOnCPU(t *testing.T, x []float32, off ...string) []uint32 {
 // the lower index of two equal first) on the CPU at ragged widths, values
 // on a grid of five so that ties are many, held to the definition. The
 // ranks with ties to the higher index must part from what it gives.
-func TestComposedCPURank(t *testing.T) {
+func TestComposedCPURank(t *testing.T) { gateComposedCPURank(t, hostArm()) }
+func gateComposedCPURank(t *testing.T, cpuOn cpuArm) {
 	rng := rand.New(rand.NewSource(3))
 	ran, parted := 0, 0
 	for _, n := range []int{1, 2, 5, 7, 8, 9, 15, 16, 17, 33, 100} {
@@ -67,7 +68,7 @@ func TestComposedCPURank(t *testing.T) {
 				}
 			}
 		}
-		got := rankOnCPU(t, x)
+		got := rankOnCPU(t, cpuOn, x)
 		for i := range n {
 			if got[i] != want[i] {
 				t.Fatalf("width %d: rank %v, want %v", n, got[:n], want)
@@ -93,7 +94,8 @@ func TestComposedCPURank(t *testing.T) {
 // three largest, the lower index of two equal first) on the CPU at ragged
 // widths and holds it to the definition; the form with FoldsAside off,
 // whose place counter runs a trip ahead, must part.
-func TestComposedCPUTopK(t *testing.T) {
+func TestComposedCPUTopK(t *testing.T) { gateComposedCPUTopK(t, hostArm()) }
+func gateComposedCPUTopK(t *testing.T, cpuOn cpuArm) {
 	rng := rand.New(rand.NewSource(4))
 	const K = 3
 	run := func(x []float32, off ...string) ([]uint32, []float32) {
@@ -107,7 +109,7 @@ func TestComposedCPUTopK(t *testing.T) {
 			xs[i] = math.Float32bits(v)
 		}
 		vals := map[graph.ValueID][]uint32{in: xs}
-		formOnCPU(t, b.G, vals, off...)
+		formOnCPU(t, cpuOn, b.G, vals, off...)
 		return vals[outs[0]], wordsF32(vals[outs[1]])
 	}
 	parted := 0
@@ -138,7 +140,8 @@ func TestComposedCPUTopK(t *testing.T) {
 // the sampler's candidates bit for bit in value and id, guard words past
 // every output, ties among the kept on some. The violation: the window moved
 // to the next id (SampleWindow) parts on every case with a window.
-func TestComposedCPUSampleTopK(t *testing.T) {
+func TestComposedCPUSampleTopK(t *testing.T) { gateComposedCPUSampleTopK(t, hostArm()) }
+func gateComposedCPUSampleTopK(t *testing.T, cpuOn cpuArm) {
 	ran, ties, want, selected := 0, 0, 0, 0
 	for _, c := range SampleCases() {
 		if c.V > selectMin {
@@ -153,7 +156,7 @@ func TestComposedCPUSampleTopK(t *testing.T) {
 				lw[i] = math.Float32bits(v)
 			}
 			vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: SampleWindow(c, shift), g.In[2]: {math.Float32bits(c.Pen)}}
-			formOnCPU(t, g, vals)
+			formOnCPU(t, cpuOn, g, vals)
 			return wordsF32(vals[g.Out[0]]), vals[g.Out[1]]
 		}
 		gv, gi := run(false)
@@ -190,7 +193,8 @@ func TestComposedCPUSampleTopK(t *testing.T) {
 // each row's best placed at its start, middle and end, and tied with an
 // earlier one, and holds the token to the definition. The violation: the
 // logits negated, whose largest is another id, must part.
-func TestComposedCPUSampleGreedy(t *testing.T) {
+func TestComposedCPUSampleGreedy(t *testing.T) { gateComposedCPUSampleGreedy(t, hostArm()) }
+func gateComposedCPUSampleGreedy(t *testing.T, cpuOn cpuArm) {
 	rng := rand.New(rand.NewSource(5))
 	ran, parted := 0, 0
 	for _, n := range []int{1, 2, 7, 8, 9, 15, 16, 17, 33, 100, 1531} {
@@ -213,7 +217,7 @@ func TestComposedCPUSampleGreedy(t *testing.T) {
 					lw[i] = math.Float32bits(v)
 				}
 				vals := map[graph.ValueID][]uint32{g.In[0]: lw}
-				formOnCPU(t, g, vals)
+				formOnCPU(t, cpuOn, g, vals)
 				return int(vals[g.Out[0]][0])
 			}
 			if got := run(l); got != want {

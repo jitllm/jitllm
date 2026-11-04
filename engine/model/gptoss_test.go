@@ -25,12 +25,15 @@ import (
 // YaRN's magnitude, 1.3466 -- which is what makes the K row a YaRN check even
 // at one token. And at one position the sink is the whole difference between
 // a softmax of 1 and 1/(1+exp(sink-score)).
-func TestGPTOSSMatchesLlamaCppIntermediates(t *testing.T) {
+func TestGPTOSSMatchesLlamaCppIntermediates(t *testing.T) { gptossMatchesLlamaCppIntermediates(t) }
+
+// gptossMatchesLlamaCppIntermediates is TestGPTOSSMatchesLlamaCppIntermediates with opts on every model it opens.
+func gptossMatchesLlamaCppIntermediates(t *testing.T, opts ...Option) {
 	path, ok := existingModel(testmodels.Path("gpt-oss-20b-Q4_K_M.gguf"))
 	if !ok {
 		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path("gpt-oss-20b-Q4_K_M.gguf")+" (set JITLLM_MODELS to the model directory) -- RULE 11, fetch it; this gate proves nothing without it")
 	}
-	m, err := Open(jlmOf(t, path))
+	m, err := Open(jlmOf(t, path), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,7 +53,7 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, codes, err := Default().Form(Request{Graph: b.G, Step: Step{Rows: R, Page: 1, Keys: 1},
-			Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+			Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -78,7 +78,7 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 		got := make([]uint32, R*n)
 		bufs := map[string][]uint32{g.Values[tok].Name: append([]uint32(nil), toks...), g.Values[win].Name: got,
 			"rec.state": f32Words(in), "rec.state.out": f32Words(out), "rec.rows": desc}
-		if err := runCPUCalls(codes, g, bufs); err != nil {
+		if err := runCPUCalls(hostArm(), codes, g, bufs); err != nil {
 			t.Fatal(err)
 		}
 		return got

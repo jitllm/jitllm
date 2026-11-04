@@ -30,11 +30,11 @@ type cache struct {
 // Host measures the host CPU: its caches' sizes from the operating system,
 // then each level's read bandwidth on one P-core and on every P-core, each
 // class's instruction rate, and an empty call's cost.
-func Host() (cost.Device, error) { return HostOn(cpu.NewHost()) }
+func Host() (cost.Device, error) { return HostOn(cpu.New()) }
 
 // HostOn is Host for the CPU h states: the SSE tier's kernels where h is at
 // that tier.
-func HostOn(h *cpu.Host) (cost.Device, error) {
+func HostOn(h *cpu.Target) (cost.Device, error) {
 	if err := hostCheck(h); err != nil {
 		return cost.Device{}, err
 	}

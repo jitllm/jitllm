@@ -8,8 +8,8 @@ import (
 	"sync"
 )
 
-// perfMap is a Host's lines of /tmp/perf-<pid>.map (WithPerfMap), the file
-// opened to append, as every Host of the process writes it.
+// perfMap is a Target's lines of /tmp/perf-<pid>.map (WithPerfMap), the file
+// opened to append, as every Target of the process writes it.
 type perfMap struct {
 	mu sync.Mutex
 	f  *os.File

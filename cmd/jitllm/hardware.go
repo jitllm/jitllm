@@ -85,7 +85,7 @@ func reportMem() {
 // reportJIT is how the composer forms this host's CPU device.
 func reportJIT() {
 	fmt.Printf("composer  %s\n", model.CPUForm())
-	fmt.Printf("          isa %s (%s)\n", cpu.CPU().ISA(), runtime.GOARCH)
+	fmt.Printf("          isa %s (%s)\n", cpu.Probe().ISA(), runtime.GOARCH)
 	fmt.Printf("          every kernel a model runs is formed at load for the device in front of it\n")
 }
 

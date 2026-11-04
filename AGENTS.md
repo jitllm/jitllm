@@ -649,9 +649,10 @@ The SSE tier binds the same way on amd64:
 
 - **The SSE and AVX2 tiers are two transcriptions, not one**: a comparison
   between them pins the KV width and holds the SSE arm to a same-process control
-  (`TestEveryModelRunsSSE`). A forced tier is set with
-  `cpu.ForceTierForTest(cpu.TierSSE)` (build tag `jitllmtest`) BEFORE
-  `NewJIT`/`Open`.
+  (`TestEveryModelRunsSSE`). A lower tier is a CPU device opened as one:
+  `WithDevices("cpu:sse")` for a model (`cpu:novnni` and `cpu:nodotprod`
+  likewise), a `cpuArm` at `cpu.AtTier(cpu.TierSSE)` for a composer gate.
+  Nothing forces a tier process-wide.
 
 Evidence: `docs/engineering-history/cpu-kernels.md` ("RULE 11d's cases", "THE
 SSE TIER").

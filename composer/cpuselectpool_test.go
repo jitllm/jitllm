@@ -6,7 +6,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -128,11 +127,11 @@ func TestComposedCPUSelectPooled(t *testing.T) {
 		{name: "whole", H: 4, KV: 2, Dk: 8, W: 24, Hi: 4, Di: 8, Off: 16, B: 4, K: 4, NRot: 8, Neox: true, pos: 75},
 		{name: "dense", H: 4, KV: 2, Dk: 8, W: 24, Hi: 4, Di: 8, Off: 16, B: 4, K: 18, NRot: 8, Neox: true, pos: 70},
 	} {
-		t.Run(pc.name, func(t *testing.T) { composedCPUSelectPooled(t, pc) })
+		t.Run(pc.name, func(t *testing.T) { composedCPUSelectPooled(t, hostArm(), pc) })
 	}
 }
 
-func composedCPUSelectPooled(t *testing.T, pc pooledCase) {
+func composedCPUSelectPooled(t *testing.T, cpuOn cpuArm, pc pooledCase) {
 	const page = 32
 	n := pc.pos + 1
 	b := graph.New()
@@ -154,7 +153,7 @@ func composedCPUSelectPooled(t *testing.T, pc pooledCase) {
 	}
 	_, codes, err := Default().Form(Request{Graph: g, History: History{Keys: Pool{ByDim: true}},
 		Step:   Step{Rows: 1, Page: page, Keys: 4 * page, ActWindow: 32},
-		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +235,7 @@ func composedCPUSelectPooled(t *testing.T, pc pooledCase) {
 	bufs[g.Values[sel].Name] = count
 	got := make([]float32, pc.H*pc.Dk)
 	bufs[g.Values[g.Out[0]].Name] = f32Words(got)
-	if err := runCPUCalls(codes, g, bufs); err != nil {
+	if err := runCPUCalls(cpuOn, codes, g, bufs); err != nil {
 		t.Fatal(err)
 	}
 	nmse := func(want []float64) float64 {

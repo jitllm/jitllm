@@ -16,7 +16,7 @@ import (
 // on the CPU at a k-quant super-block's window, 256, to no more code than
 // at 32: the window's scale is read where the sub-block's index scales to.
 func TestCPUWideWindowAddsNoWork(t *testing.T) {
-	host := uint64(cpu.CPU().ISA())
+	host := uint64(cpu.Probe().ISA())
 	bytes := func(typ quant.Type, isa uint64, rows, win int) int {
 		jt, _ := jlm.TypeOf(typ)
 		_, codes, err := Default().Form(Request{

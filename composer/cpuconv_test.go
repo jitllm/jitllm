@@ -45,7 +45,7 @@ func TestComposedCPUGridConv(t *testing.T) {
 	const guard = 64
 	convReg := Default()
 	rng := rand.New(rand.NewSource(37))
-	dev := cpuDevice()
+	dev := cpuDevice(hostArm())
 	nan := float32(math.NaN())
 	right := 0
 	for _, cs := range gridConvCases() {
@@ -77,7 +77,7 @@ func TestComposedCPUGridConv(t *testing.T) {
 			for i := len(x); i < len(in); i++ {
 				in[i] = nan
 			}
-			out, err := runCPUVectors(codes, in, len(want)+guard, [3][]uint32{f32Words(filt)}, nil)
+			out, err := runCPUVectors(hostArm(), codes, in, len(want)+guard, [3][]uint32{f32Words(filt)}, nil)
 			if err != nil {
 				return nil, err
 			}

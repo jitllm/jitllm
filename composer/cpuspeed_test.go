@@ -45,7 +45,7 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 		}
 	}
 	reg := speedRegistry(ahead, jam)
-	isa := uint64(cpu.CPU().ISA())
+	isa := uint64(cpu.Probe().ISA())
 	if os.Getenv("JITLLM_CPU_NOVNNI") != "" {
 		isa &^= uint64(x86.ISAVNNI)
 	}
@@ -80,7 +80,7 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			code, err := cpu.NewHost().Map(c.CPU)
+			code, err := cpu.New().Map(c.CPU)
 			if err != nil {
 				t.Fatal(err)
 			}

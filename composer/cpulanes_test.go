@@ -39,7 +39,7 @@ func TestComposedCPULanesAsData(t *testing.T) {
 			x.sel(F, x.op(OpLess, ir.Pred, j, i), w, x.f(0))
 			p := Prim{Kind: PrimReduce, Shape: []int{R, S, B}, In: []Operand{in, th}, Out: out, Combine: OpAdd, Type: F,
 				Expr: x.e, Facts: Facts{Extents: map[int]int{0: R * S}}}
-			dev := cpuDevice()
+			dev := cpuDevice(hostArm())
 			reg := Default()
 			kn, err := generate(p)
 			if err != nil {
@@ -87,7 +87,7 @@ func TestComposedCPULanesAsData(t *testing.T) {
 			for i := range got {
 				got[i] = poison
 			}
-			if _, err := runCPUBound(codes, xs, 1, [3][]uint32{}, nil, func(o Operand) []uint32 {
+			if _, err := runCPUBound(hostArm(), codes, xs, 1, [3][]uint32{}, nil, func(o Operand) []uint32 {
 				switch {
 				case o.Name == th.Name:
 					return thr

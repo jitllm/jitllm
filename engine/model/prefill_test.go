@@ -23,21 +23,24 @@ import (
 // token i may only see positions up to p0+i, and an off-by-one there does not
 // crash; it silently lets a token attend to its own future and produces fluent,
 // wrong text.
-func TestPrefillMatchesForward(t *testing.T) {
+func TestPrefillMatchesForward(t *testing.T) { prefillMatchesForward(t) }
+
+// prefillMatchesForward is TestPrefillMatchesForward with opts on every model it opens.
+func prefillMatchesForward(t *testing.T, opts ...Option) {
 	path := benchModel(t)
 	// On the float forms Prefill differs from a Forward loop by the forms'
 	// folding order alone, so this mode holds them to floatFormsNMSE, a bar
 	// far below what a wrong position or mask reads.
 	t.Run("no-gemm", func(t *testing.T) {
-		prefillVsForward(t, path, true)
+		prefillVsForward(t, path, true, opts...)
 	})
 	// The float forms without the GEMM option, held the same way. The
 	// shipping int8 forms are left to the NMSE tripwire.
 	t.Run("exact-gemm", func(t *testing.T) {
-		prefillVsForwardOpts(t, path, true, withCPUFloat())
+		prefillVsForwardOpts(t, path, true, append([]Option{withCPUFloat()}, opts...)...)
 	})
 	t.Run("shipped", func(t *testing.T) {
-		prefillVsForward(t, path, false)
+		prefillVsForward(t, path, false, opts...)
 	})
 	// The prompt and the forward loop both on the composed CPU's blocks --
 	// the prompt's rows through its form of several rows -- held to the
@@ -49,7 +52,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 		// experts their rows pick.
 		for _, file := range append([]string{"Qwen3-0.6B-Q8_0.gguf"}, cpuMixtureRowsModels()...) {
 			t.Run(file, func(t *testing.T) {
-				m, err := Open(jlmOf(t, testmodels.Path(file)))
+				m, err := Open(jlmOf(t, testmodels.Path(file)), opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -177,12 +180,12 @@ func prefillOnDevice(t *testing.T, path, dev string, parts gpu.Parts, windows bo
 // prefillVsForward compares Prefill against a Forward loop. exact runs the
 // float forms and holds them to floatFormsNMSE; otherwise the NMSE tripwire
 // applies.
-func prefillVsForward(t *testing.T, path string, exact bool) {
+func prefillVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 	if exact {
-		prefillVsForwardOpts(t, path, true, withCPUFloat())
+		prefillVsForwardOpts(t, path, true, append([]Option{withCPUFloat()}, opts...)...)
 		return
 	}
-	prefillVsForwardOpts(t, path, false)
+	prefillVsForwardOpts(t, path, false, opts...)
 }
 
 // prefillVsForwardOpts is prefillVsForward with the options that select the

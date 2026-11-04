@@ -23,11 +23,15 @@ import (
 // bias row an expert, must give the whole bank's answer to the bit, the
 // whole bank's held to the oracle; with two held experts' words of the table
 // swapped, it must not.
-func TestComposedCPUExpertPages(t *testing.T) {
-	const E, held, P = 8, 5, 3
-	rng := rand.New(rand.NewSource(11))
+func TestComposedCPUExpertPages(t *testing.T) { gateComposedCPUExpertPages(t, hostArm()) }
+func gateComposedCPUExpertPages(
+
 	// The held sheets in slot order, and the table: each held expert's slot,
 	// the others an empty word the selection never reads.
+	t *testing.T, cpuOn cpuArm) {
+	const E, held, P = 8, 5, 3
+	rng := rand.New(rand.NewSource(11))
+
 	slotExpert := []int{6, 1, 4, 0, 3}
 	table := make([]uint32, E)
 	for e := range table {
@@ -44,7 +48,7 @@ func TestComposedCPUExpertPages(t *testing.T) {
 		vnni           bool
 	}{{256, 32, 6, true}, {64, 128, 14, true}, {64, 128, 14, false}, {64, 64, 14, false}} {
 		K, rows := sh.K, sh.rows
-		dev := cpuDevice()
+		dev := cpuDevice(cpuOn)
 		dev.Slots = sh.slots
 		if !sh.vnni {
 			dev.ISA &^= uint64(x86.ISAVNNI)
@@ -185,7 +189,7 @@ func TestComposedCPUExpertPages(t *testing.T) {
 							}
 							sw := append([]uint32(nil), sels...)
 							vecs := map[jlm.Role][]float32{jlm.RoleExpGateBias: bias}
-							_, err = runCPUBound(codes, xs, 1, planes, vecs, func(o Operand) []uint32 {
+							_, err = runCPUBound(cpuOn, codes, xs, 1, planes, vecs, func(o Operand) []uint32 {
 								switch {
 								case o.Kind == OperandValue && o.Value == sel:
 									return sw
@@ -311,7 +315,7 @@ func TestComposedCPUExpertsAfterTopK(t *testing.T) {
 					y := b.Emit(graph.OpExpertMatVec, []graph.ValueID{in, tk[0]}, []graph.Result{{Name: "y", Width: P * rows}},
 						[]graph.Binding{{Role: jlm.RoleExpGateBank, K: K, Rows: rows, Sheets: E}}, graph.Attrs{}, nil, nil)[0]
 					b.Out(y)
-					dev := cpuDevice()
+					dev := cpuDevice(hostArm())
 					dev.Slots = slots
 					if !vnni {
 						dev.ISA &^= uint64(x86.ISAVNNI)
@@ -331,7 +335,7 @@ func TestComposedCPUExpertsAfterTopK(t *testing.T) {
 						sw[i] = math.Float32bits(float32(v) + 0.5)
 					}
 					vals := map[graph.ValueID][]uint32{x: unsafe.Slice((*uint32)(unsafe.Pointer(&xs[0])), K), scores: sw}
-					if err := runCPUValues(codes, b.G, vals, bank); err != nil {
+					if err := runCPUValues(hostArm(), codes, b.G, vals, bank); err != nil {
 						t.Fatalf("%s: %v", name, err)
 					}
 					ref := xs

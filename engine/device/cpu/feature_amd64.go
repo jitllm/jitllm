@@ -6,9 +6,8 @@ import "github.com/jitllm/jitllm/composer/x86"
 //
 // The probe is itself JIT-compiled, which reads CPUID without a dependency
 // (golang.org/x/sys/cpu would end go.mod's single require; internal/cpu cannot
-// be imported). It is the one probe: SupportedNative, HostDotKind and
-// SupportedPackedNative all ask CPU(), so forcing a feature off reaches all of
-// them.
+// be imported). It is the one probe: Probe and every Target are built from
+// it.
 
 // cpuidProbe emits: save RBX, CPUID(leaf, subleaf), store the four result
 // registers through Args.Out, restore RBX.

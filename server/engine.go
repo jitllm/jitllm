@@ -636,12 +636,13 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 
 	// A list of cards alone keeps every block on them, paging where they do
 	// not hold the model; auto and a list naming cpu let the engine choose it.
-	cpuListed, err := gpu.AdmitsHost(strings.Join(DefaultDevices(o.DeviceIDs), ","))
+	devs := DefaultDevices(o.DeviceIDs)
+	cpuListed, err := gpu.ListsCPU(strings.Join(devs, ","))
 	if err != nil {
 		closeDev()
 		return nil, &DeviceError{err}
 	}
-	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth), model.WithCPU(cpuListed)}
+	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth), model.WithDevices(devs...)}
 	kv := cmp.Or(o.KVF16, e.cfg.KVF16)
 	if kv != nil {
 		opts = append(opts, model.WithKVF16(*kv))

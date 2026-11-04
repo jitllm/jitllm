@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 )
@@ -113,7 +112,8 @@ func crossNMSE(got []float32, want []float64) float64 {
 // (one query over one key through 64 queries over 300 keys), held to the
 // definition. A span cut by its last key or starting one key late must
 // fail it.
-func TestComposedCPUCrossAttend(t *testing.T) {
+func TestComposedCPUCrossAttend(t *testing.T) { gateComposedCPUCrossAttend(t, hostArm()) }
+func gateComposedCPUCrossAttend(t *testing.T, cpuOn cpuArm) {
 	const page = 32
 	ran := 0
 	for _, c := range crossCases() {
@@ -122,7 +122,7 @@ func TestComposedCPUCrossAttend(t *testing.T) {
 			g := crossGraph(c.heads, c.kvh, c.dim)
 			_, codes, err := Default().Form(Request{Graph: g,
 				Step:   Step{Rows: c.Q, Page: page, Keys: pages * page, ActWindow: 32},
-				Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+				Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -141,7 +141,7 @@ func TestComposedCPUCrossAttend(t *testing.T) {
 				bufs := map[string][]uint32{"q": f32Words(q), "rows": rows, "rows.win": rows, "pages": pg,
 					"q.off": make([]uint32, c.Q*4), "rows.n": {uint32(c.Q)}, "kv.k": kp, "kv.v": vp}
 				bufs[g.Values[g.Out[0]].Name] = f32Words(out)
-				if err := runCPURows(codes, g, bufs, c.Q); err != nil {
+				if err := runCPURows(cpuOn, codes, g, bufs, c.Q); err != nil {
 					t.Fatal(err)
 				}
 				for _, b := range codes[len(codes)-1].Binds {

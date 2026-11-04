@@ -18,14 +18,14 @@ import (
 // another element than it writes: half of every row read a partner already
 // turned. The pooled selection's turn is this map.
 func TestCPUMapLoadsAtASelectedIndex(t *testing.T) {
-	if !LowersCPU(uint64(cpu.CPU().ISA())) {
+	if !LowersCPU(uint64(cpu.Probe().ISA())) {
 		t.Skip("no CPU lowering on this host")
 	}
 	for _, form := range []string{"partner", "tab0", "table", "turn", "made", "between"} {
 		for _, sh := range [][3]int{{1, 1, 16}, {2, 3, 16}, {3, 2, 32}, {2, 2, 8}, {2, 5, 12}, {1, 18, 8}, {1, 19, 8}, {2, 18, 8}} {
 			R, NB, D := sh[0], sh[1], sh[2]
 			t.Run(fmt.Sprintf("%s/%dx%dx%d", form, R, NB, D), func(t *testing.T) {
-				selIndexCase(t, form, R, NB, D)
+				selIndexCase(t, hostArm(), form, R, NB, D)
 			})
 		}
 	}
@@ -34,7 +34,7 @@ func TestCPUMapLoadsAtASelectedIndex(t *testing.T) {
 // selIndexCase is one of TestCPUMapLoadsAtASelectedIndex's maps: the
 // partner alone, the element times its pair's table entry (the table read
 // at a selected index), or the whole NEOX turn.
-func selIndexCase(t *testing.T, form string, R, NB, D int) {
+func selIndexCase(t *testing.T, cpuOn cpuArm, form string, R, NB, D int) {
 	P := D / 2
 	U, F := ir.U32, ir.F32
 	var x exprs
@@ -89,7 +89,7 @@ func selIndexCase(t *testing.T, form string, R, NB, D int) {
 		k.Apart = true
 		ks = append(ks, k)
 	}
-	dev := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}
 	r0 := Default()
 	ks, err := r0.Profiles[DeviceCPU].on(dev).run(ks, dev)
 	if err != nil {
@@ -112,7 +112,7 @@ func selIndexCase(t *testing.T, form string, R, NB, D int) {
 	for i := range tab {
 		tab[i] = float32(i%7) + 0.5
 	}
-	got, err := runCPUBound(codes, in, n, [3][]uint32{}, nil, func(o Operand) []uint32 {
+	got, err := runCPUBound(cpuOn, codes, in, n, [3][]uint32{}, nil, func(o Operand) []uint32 {
 		if o.Name != "tab" {
 			return nil
 		}

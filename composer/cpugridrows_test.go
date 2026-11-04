@@ -98,7 +98,7 @@ func RandRow(rng *rand.Rand, n int, scale float64) []float32 {
 // gridRowsRun runs codes formed from g over x, the graph's values each at
 // its own rows, the weights by role; nil and the error where a guard word
 // past any value was written.
-func gridRowsRun(codes []Code, g *graph.Graph, stepRows int, x []float32, roles map[jlm.Role][]float32, planes [3][]uint32) ([]float32, error) {
+func gridRowsRun(cpuOn cpuArm, codes []Code, g *graph.Graph, stepRows int, x []float32, roles map[jlm.Role][]float32, planes [3][]uint32) ([]float32, error) {
 	vals := map[graph.ValueID][]uint32{g.In[0]: f32Words(x)}
 	byRole := map[jlm.Role][]uint32{}
 	for r, v := range roles {
@@ -110,7 +110,7 @@ func gridRowsRun(codes []Code, g *graph.Graph, stepRows int, x []float32, roles 
 		}
 		return stepRows
 	}
-	if err := runCPUGridValues(codes, g, vals, planes, nil, rows, byRole); err != nil {
+	if err := runCPUGridValues(cpuOn, codes, g, vals, planes, nil, rows, byRole); err != nil {
 		return nil, err
 	}
 	return wordsF32(vals[g.Out[0]]), nil
@@ -151,7 +151,7 @@ func Misrowed(r *Registry, kind graph.OpKind, rows int) *Registry {
 // parted from the oracle.
 func TestComposedCPUGridRows(t *testing.T) {
 	rng := rand.New(rand.NewSource(41))
-	dev := cpuDevice()
+	dev := cpuDevice(hostArm())
 	right := 0
 	kinds := []graph.OpKind{graph.OpMatVec, graph.OpNorm, graph.OpExpr, graph.OpAdd}
 	seen := map[graph.OpKind]int{}
@@ -178,7 +178,7 @@ func TestComposedCPUGridRows(t *testing.T) {
 			t.Errorf("%v: %v", g, err)
 			continue
 		}
-		got, err := gridRowsRun(codes, gr, step.Rows, x, roles, [3][]uint32{})
+		got, err := gridRowsRun(hostArm(), codes, gr, step.Rows, x, roles, [3][]uint32{})
 		if err != nil {
 			t.Errorf("%v: %v", g, err)
 			continue
@@ -198,7 +198,7 @@ func TestComposedCPUGridRows(t *testing.T) {
 				seen[k]++
 				continue
 			}
-			bad, err := gridRowsRun(codes, gr, step.Rows, x, roles, [3][]uint32{})
+			bad, err := gridRowsRun(hostArm(), codes, gr, step.Rows, x, roles, [3][]uint32{})
 			if err != nil {
 				t.Logf("%v: %s at the input's rows: %v", g, k, err)
 				seen[k]++
@@ -216,7 +216,7 @@ func TestComposedCPUGridRows(t *testing.T) {
 				t.Errorf("%v: %s alone: %v", g, k, err)
 				continue
 			}
-			lgot, err := gridRowsRun(lcodes, lone, step.Rows, x, roles, [3][]uint32{})
+			lgot, err := gridRowsRun(hostArm(), lcodes, lone, step.Rows, x, roles, [3][]uint32{})
 			if err != nil {
 				t.Errorf("%v: %s alone: %v", g, k, err)
 				continue
@@ -229,7 +229,7 @@ func TestComposedCPUGridRows(t *testing.T) {
 				seen[k]++
 				continue
 			}
-			lbad, err := gridRowsRun(lcodes, lone, step.Rows, x, roles, [3][]uint32{})
+			lbad, err := gridRowsRun(hostArm(), lcodes, lone, step.Rows, x, roles, [3][]uint32{})
 			if err != nil {
 				t.Logf("%v: %s alone at the input's rows: %v", g, k, err)
 				seen[k]++
@@ -283,7 +283,7 @@ func TestComposedCPUGridRows(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%v/%s: %v", typ, arm.name, err)
 			}
-			got, err := gridRowsRun(codes, b.G, step.Rows, x, map[jlm.Role][]float32{jlm.RoleVMNDwMid: filt}, planes)
+			got, err := gridRowsRun(hostArm(), codes, b.G, step.Rows, x, map[jlm.Role][]float32{jlm.RoleVMNDwMid: filt}, planes)
 			if err != nil {
 				t.Fatalf("%v/%s: %v", typ, arm.name, err)
 			}
@@ -305,7 +305,7 @@ func TestComposedCPUGridRows(t *testing.T) {
 			_, codes, err = Misrowed(arm.r, graph.OpMatVec, step.Rows).Form(Request{Graph: b.G, Formats: formats, Step: step, Device: dev})
 			if err == nil {
 				var bad []float32
-				if bad, err = gridRowsRun(codes, b.G, step.Rows, x, map[jlm.Role][]float32{jlm.RoleVMNDwMid: filt}, planes); err == nil {
+				if bad, err = gridRowsRun(hostArm(), codes, b.G, step.Rows, x, map[jlm.Role][]float32{jlm.RoleVMNDwMid: filt}, planes); err == nil {
 					if nm := rowsNMSE(bad, want); !(nm > 1e-6) {
 						t.Fatalf("%v/%s: the product at the input's %d rows reads NMSE %.3e: the gate cannot see it", typ, arm.name, step.Rows, nm)
 					}
@@ -324,7 +324,7 @@ func TestComposedCPUGridRows(t *testing.T) {
 // transposed and the grid read a column narrower must fail it.
 func TestComposedCPUUnfold(t *testing.T) {
 	rng := rand.New(rand.NewSource(43))
-	dev := cpuDevice()
+	dev := cpuDevice(hostArm())
 	right := 0
 	cases := GridRowsCases()
 	for _, g := range cases {
@@ -355,7 +355,7 @@ func TestComposedCPUUnfold(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			return gridRowsRun(codes, gr, step.Rows, x, map[jlm.Role][]float32{jlm.RoleVMNConvExp: wt}, [3][]uint32{})
+			return gridRowsRun(hostArm(), codes, gr, step.Rows, x, map[jlm.Role][]float32{jlm.RoleVMNConvExp: wt}, [3][]uint32{})
 		}
 		clean := make([]float32, len(wt))
 		copy(clean, wt)

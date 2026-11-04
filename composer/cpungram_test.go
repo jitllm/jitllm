@@ -133,12 +133,12 @@ func TestComposedCPUNGramHash(t *testing.T) {
 		run := func(wins [][]uint32) ([]uint32, []uint32) {
 			R := len(wins)
 			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 64, Keys: 1},
-				Device: cpuDevice(), Apart: true})
+				Device: cpuDevice(hostArm()), Apart: true})
 			if err != nil {
 				t.Fatalf("%d-grams x%d at %d rows: %v", c.N, c.Per, R, err)
 			}
 			vals := map[graph.ValueID][]uint32{win: slices.Concat(wins...), rows: make([]uint32, R*heads), next: make([]uint32, R*(c.N-1))}
-			if err := runCPUGridValues(codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
+			if err := runCPUGridValues(hostArm(), codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
 				t.Fatalf("%d-grams x%d at %d rows: %v", c.N, c.Per, R, err)
 			}
 			return vals[rows], vals[next]

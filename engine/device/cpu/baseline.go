@@ -40,7 +40,7 @@ func (e *ISAError) Error() string {
 func (e *ISAError) Is(target error) bool { return target == ErrISA }
 
 // isaCheck refuses code whose ISA f does not cover. It is the amd64 half of
-// Host.gate, factored out so the refusal text is built in one place.
+// Target.gate, factored out so the refusal text is built in one place.
 func isaCheck(f Features, code []byte) error {
 	need, declared := KernelISA(code)
 	if miss := need &^ f.ISA(); miss != 0 {

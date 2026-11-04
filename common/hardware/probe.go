@@ -132,7 +132,7 @@ func Probe() (r Report) {
 	r.MemBudget, r.MemLimit = sched.MemBudget(), sched.MemLimit()
 	r.GCBudgetCap, r.GCUsable = sched.GCBudgetCap(), sched.GCUsable()
 
-	r.Arch, r.ISA, r.Form = runtime.GOARCH, cpu.CPU().ISA().String(), model.CPUForm()
+	r.Arch, r.ISA, r.Form = runtime.GOARCH, cpu.Probe().ISA().String(), model.CPUForm()
 
 	devs := backend.Open()
 	for _, d := range devs {

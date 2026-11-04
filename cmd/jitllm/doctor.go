@@ -129,8 +129,8 @@ func realDoctorEnv() doctorEnv {
 		version:   buildVersion(),
 		cpuName:   cpuBrand(),
 		form:      model.CPUForm(),
-		jit:       composer.LowersCPU(uint64(cpu.CPU().ISA())),
-		hostErr:   cpu.Baseline(),
+		jit:       composer.LowersCPU(uint64(cpu.Probe().ISA())),
+		hostErr:   cpu.New().Baseline(),
 		budget:    gcPlan().Budget(),
 		archKnown: jlm.Arch.Valid,
 	}
