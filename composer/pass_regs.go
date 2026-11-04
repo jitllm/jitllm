@@ -190,44 +190,152 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 		w.residents(p.Resident, moved)
 	}
 	late := w.lateParams()
-	sunk := map[int]bool{}
-	var why error
-	for range len(k.Nodes) {
-		m := w.clone()
+	// try binds st's kernel as it stands: the bound kernel, or why the
+	// floats do not fit; an error past them is the words not fitting.
+	try := func(st *bindState) (*Kernel, error, error) {
+		m := st.w.clone()
 		m.vwords = &vectorMemo{n: -1}
 		b := binder86{k: m, p: p, used: map[int]bool{}, late: late, isa: x86.ISA(d.ISA)}
 		b.lives()
 		if b.gprs() != nil {
 			// The words do not fit: again with the reload registers kept
 			// out of every pool, spilling where none is free.
-			m = w.clone()
+			m = st.w.clone()
 			m.vwords = &vectorMemo{n: -1}
 			b = binder86{k: m, p: p, used: map[int]bool{}, late: late, spill: true, isa: x86.ISA(d.ISA)}
 			b.lives()
 			if err := b.gprs(); err != nil {
-				return nil, false, fmt.Errorf("%s: the words do not fit the general registers: %w: %w", k.Name, ErrRegisterPressure, err)
+				return nil, nil, fmt.Errorf("%s: the words do not fit the general registers: %w: %w", k.Name, ErrRegisterPressure, err)
 			}
 		}
-		if why = b.vectors(); why == nil {
-			m.vwords = nil
-			return []*Kernel{m}, true, nil
-		}
-		if m.Ones > 0 {
+		why := b.vectors()
+		if why != nil && m.Ones > 0 {
 			// Again with the byte dots making their ones each time.
 			b.noOnes = true
-			if why = b.vectors(); why == nil {
-				m.vwords = nil
-				return []*Kernel{m}, true, nil
-			}
+			why = b.vectors()
 		}
-		if !w.rematerialize(moved) && !w.sink(sunk) {
+		if why != nil {
+			return nil, why, nil
+		}
+		m.vwords = nil
+		return m, nil, nil
+	}
+	// A failed binding rematerializes a load or sinks a value, one a step,
+	// which binding reads nothing of: the steps are the kernel's alone, and
+	// the binding is the first step count that binds, at most one a node.
+	// Binding is not monotone in the steps -- a sink after the count that
+	// binds can make the next counts fail again -- so the counts are walked
+	// one by one up to walkSteps. Past them, a kernel of hundreds of steps
+	// gallops: the steps between tries double from the last count that
+	// failed, then halve back from the first that bound, a binding in a score
+	// of tries where the walk took hundreds; it takes a count that binds,
+	// the first one where binding is monotone from there. Where galloping
+	// finds none, the walk goes on from walkSteps, so a kernel the walk binds
+	// is never refused.
+	end := len(k.Nodes) - 1
+	cur := &bindState{w: w, moved: moved, sunk: map[int]bool{}}
+	var why error
+	for {
+		m, w2, err := try(cur)
+		switch {
+		case err != nil:
+			return nil, false, err
+		case m != nil:
+			return []*Kernel{m}, true, nil
+		}
+		why = w2
+		if cur.steps == end || cur.advance(1) == 0 {
+			return nil, false, bindFailed(k.Name, why)
+		}
+		if cur.steps == walkSteps {
 			break
 		}
 	}
+	start := cur.clone()
+	m, w2, err := try(cur)
+	switch {
+	case err != nil:
+		return nil, false, err
+	case m != nil:
+		return []*Kernel{m}, true, nil
+	}
+	failed, why := cur.clone(), w2
+	for gap := 1; cur.steps < end; gap *= 2 {
+		if cur.advance(min(gap, end-cur.steps)) == 0 {
+			break
+		}
+		bound, w2, err := try(cur)
+		if err != nil {
+			return nil, false, err
+		}
+		if bound == nil {
+			failed, why = cur.clone(), w2
+			continue
+		}
+		m = bound
+		for cur.steps-failed.steps > 1 {
+			mid := failed.clone()
+			mid.advance((cur.steps - failed.steps) / 2)
+			bound, w2, err := try(mid)
+			switch {
+			case err != nil:
+				return nil, false, err
+			case bound == nil:
+				failed, why = mid, w2
+			default:
+				cur, m = mid, bound
+			}
+		}
+		return []*Kernel{m}, true, nil
+	}
+	for cur = start; cur.steps < end && cur.advance(1) == 1; {
+		m, w2, err := try(cur)
+		switch {
+		case err != nil:
+			return nil, false, err
+		case m != nil:
+			return []*Kernel{m}, true, nil
+		}
+		why = w2
+	}
+	return nil, false, bindFailed(k.Name, why)
+}
+
+// walkSteps is how many of Regs' step counts are tried one by one before a
+// binding gallops.
+const walkSteps = 64
+
+// bindFailed is a kernel's floats not fitting the vector registers, why the
+// last binding tried failed.
+func bindFailed(name string, why error) error {
 	if why == nil {
 		why = errors.New("no binding within a rematerialization per node")
 	}
-	return nil, false, fmt.Errorf("%s: the floats do not fit the vector registers: %w: %w", k.Name, ErrRegisterPressure, why)
+	return fmt.Errorf("%s: the floats do not fit the vector registers: %w: %w", name, ErrRegisterPressure, why)
+}
+
+// bindState is a kernel some steps of Regs' rematerializations and sinks on,
+// with what those took.
+type bindState struct {
+	w           *Kernel
+	moved, sunk map[int]bool
+	steps       int
+}
+
+// advance takes up to n steps more, the rematerializations first: the steps
+// taken, fewer where none is left.
+func (st *bindState) advance(n int) int {
+	for i := range n {
+		if !st.w.rematerialize(st.moved) && !st.w.sink(st.sunk) {
+			return i
+		}
+		st.steps++
+	}
+	return n
+}
+
+func (st *bindState) clone() *bindState {
+	return &bindState{w: st.w.clone(), moved: maps.Clone(st.moved), sunk: maps.Clone(st.sunk), steps: st.steps}
 }
 
 type binder86 struct {
