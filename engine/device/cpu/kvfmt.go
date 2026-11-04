@@ -48,14 +48,6 @@ func (f KVFmt) String() string {
 	return fmt.Sprintf("KVFmt(%d)", uint8(f))
 }
 
-// KVOf is the format a legacy width flag names.
-func KVOf(f16 bool) KVFmt {
-	if f16 {
-		return KVF16
-	}
-	return KVF32
-}
-
 // KVRowBytes is the bytes one head row of hd elements occupies in format f.
 // Every format's row is a multiple of four bytes for the hd the caches use
 // (f16 needs hd even), so a row starts on a float32 slot.
@@ -76,19 +68,6 @@ func KVRowBytes(f KVFmt, hd int) int {
 type kvAddr struct {
 	f  KVFmt
 	hd int
-}
-
-func newKVAddr(f KVFmt, hd, kvStride int) (kvAddr, error) {
-	if hd <= 0 {
-		return kvAddr{}, fmt.Errorf("jit: attention kernel: hd=%d must be positive", hd)
-	}
-	if f > KVQ8 {
-		return kvAddr{}, fmt.Errorf("jit: unknown KV format %d", f)
-	}
-	if f == KVQ8 && (kvStride <= 0 || kvStride%hd != 0) {
-		return kvAddr{}, fmt.Errorf("jit: a q8_0 KV cache is addressed in whole rows: kvStride=%d is not a multiple of hd=%d", kvStride, hd)
-	}
-	return kvAddr{f, hd}, nil
 }
 
 // off is element e's byte offset from the row's start.

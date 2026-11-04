@@ -195,17 +195,6 @@ func (s *Instance) ResetRecurrent(row int) {
 	}
 }
 
-// recTailOf is sequence slot's tail of layer li's recurrent state of
-// session o (recTailLen), after its delta-rule state; empty on a model with
-// none.
-func (s *Instance) recTailOf(o *Session, li, slot int) []float32 {
-	if s.dg.tail == 0 || o.rstate == nil || o.rstate[li] == nil {
-		return nil
-	}
-	n := s.dg.stateStride()
-	return o.rstate[li][slot*n+s.dg.deltaStateLen() : (slot+1)*n]
-}
-
 // recTailLen is what each linear block's recurrent state carries per
 // sequence after the delta rule's: room for Qwen3.8-Flash-Next's n-gram
 // predecessors and convolution history (ngram.go), which its n-gram block

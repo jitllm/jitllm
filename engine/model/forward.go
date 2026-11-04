@@ -386,7 +386,7 @@ type Instance struct {
 	cs []float32
 	// csSWA is the local layers' rotary table, allocated only for an
 	// architecture with two bases. nil everywhere else, which is what keeps
-	// ropeTable a pointer compare for every other model.
+	// choosing the table a pointer compare for every other model.
 	csSWA  []float32
 	bcsSWA []float32
 	// bcs is cs for a whole prefill chunk: one nRot-wide rotary table per row,
@@ -3426,17 +3426,6 @@ func swaPeriodFor(c *Config) int {
 		return 0
 	}
 	return int(c.SWAPeriod)
-}
-
-// ropeTable picks the rotary table layer li was trained with: the local one on
-// a sliding layer of an architecture with two bases (gemma3), the global one
-// otherwise. It is a per-layer choice.
-func (s *Instance) ropeTable(li int, global, local []float32, tok int) []float32 {
-	c := s.c
-	if local != nil && c.ropeLocal(li) {
-		return local[tok*c.NRotSWA : (tok+1)*c.NRotSWA]
-	}
-	return global[tok*c.RopeW() : (tok+1)*c.RopeW()]
 }
 
 // narrow copies one run of f32 into the f32 cache.

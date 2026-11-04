@@ -45,32 +45,6 @@ func (s *Instance) Prefill(tokens []int32) ([]float32, error) {
 	return s.prefillInto(0, tokens)
 }
 
-// prefillBidir is Prefill over a prompt whose rows all attend to each other
-// (a non-causal decoder's, vllm-d3's): PrefillMixed's one bidirectional run,
-// through the token path, so a warm prompt allocates nothing (the mixed
-// path's per-row sources do).
-func (s *Instance) prefillBidir(tokens []int32) ([]float32, error) {
-	defer s.m.enterPager()()
-	if err := s.retireErr; err != nil {
-		s.retireErr = nil
-		return nil, err
-	}
-	n := len(tokens)
-	if n > nn.MaxDevicePrefillChunk {
-		return nil, fmt.Errorf("model: a bidirectional prompt of %d rows is longer than one %d-row chunk",
-			n, nn.MaxDevicePrefillChunk)
-	}
-	p := s.seqPos(0)
-	s.bidir = append(s.bidir[:0], nn.KeyRun{Lo: p, Hi: p + n})
-	defer func() {
-		if kd, ok := s.ld.(nn.KeyRunDevice); ok {
-			kd.SetKeyRuns(nil, nil)
-		}
-		s.bidir = s.bidir[:0]
-	}()
-	return s.prefillInto(0, tokens)
-}
-
 // Span is one run of a mixed prompt: token ids, a picture, or precomputed
 // embeddings -- one of them. Embd is n*NEmbd floats laid out row-major, and is
 // the residual stream rather than a vocabulary row -- EmbdScale is not applied

@@ -126,12 +126,6 @@ func (a *Buf) PINSRWLoad(dst, src1 Reg, m Mem, imm byte) {
 	a.sseOpMemImm(iPINSRW().op, iPINSRW().pp, iPINSRW().mm, 0, dst, m, imm)
 }
 
-func (a *Buf) PINSRBLoad(dst, src1 Reg, m Mem, imm byte) {
-	a.useISA(iPINSRB().isa, iPINSRB().name)
-	a.MOVAPS(dst, src1)
-	a.sseOpMemImm(iPINSRB().op, iPINSRB().pp, iPINSRB().mm, 0, dst, m, imm)
-}
-
 func (a *Buf) PEXTRW(gp, src Reg, imm byte) { a.unImm(iPEXTRW(), gp, src, imm) }
 
 func (a *Buf) PINSRB(dst, src1, gp Reg, imm byte) {

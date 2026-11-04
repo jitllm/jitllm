@@ -14,7 +14,7 @@ import (
 // IdxLocal blocks ending at its own, and keeps the IdxTopK best; the group's
 // heads attend there alone, through a -inf mask added after the scale and
 // before the softmax. The key is one more kv head of the attention row
-// (Config.KVRowAt, kvlMSA), so it pages, relocates and is prefix-cached with
+// (Config.KVRowAt), so it pages, relocates and is prefix-cached with
 // k: the attention reads heads 0..NKVHead-1, the indexer head NKVHead, and
 // the value row's extra head is zero. The ranking is the sampler's ordering
 // over positions, keeping each block as it is first seen: the first position

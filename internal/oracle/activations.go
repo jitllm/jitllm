@@ -10,35 +10,19 @@ import (
 // over 127) and a sum per sixteen. The reference the tests hold the composed
 // quantize to; no production code may quantize in Go (RULE 8).
 
-// PackActivations quantizes activations to int8 and returns the packed bytes,
-// a scale per 32 elements, and a sum per sixteen.
-//
-// The sums are the zero-point correction: nibbles stay unsigned and the true
-// weight is q-bias, so sum((q-bias)*a) = dot(q,a) - bias*sum(a), which avoids a
-// byte-wise signed subtract the IR cannot express. They are per 16 because
-// Q3_K and Q6_K scale per 16; a 32-element format adds two.
-func PackActivations(x []float32) (a []uint32, as, sum16 []float32, err error) {
-	nb := len(x) / 32
-	a = make([]uint32, len(x)/4)
-	as = make([]float32, nb)
-	sum16 = make([]float32, 2*nb)
-	err = PackActivationsInto(a, as, sum16, x, 32)
-	return a, as, sum16, err
-}
-
-// PackActivationsInto is PackActivations writing into caller buffers, with the
-// given amax window; see cpu.QuantizeQ8Window for why the window is a
+// PackActivationsInto quantizes activations to int8 into caller buffers, with
+// the given amax window; see cpu.QuantizeQ8Window for why the window is a
 // per-model decision. window <= 32 is the usual per-block scale.
 //
 // It must quantize bit-for-bit as the host tier does, or the tiers' dot
 // products differ slightly and a deep model's greedy tokens diverge.
 func PackActivationsInto(a []uint32, as, sum []float32, x []float32, window int) error {
 	if len(x)%32 != 0 {
-		return fmt.Errorf("oracle: PackActivations: %d is not a multiple of 32", len(x))
+		return fmt.Errorf("oracle: PackActivationsInto: %d is not a multiple of 32", len(x))
 	}
 	nb := len(x) / 32
 	if len(a) < len(x)/4 || len(as) < nb || len(sum) < 2*nb {
-		return fmt.Errorf("oracle: PackActivations: destination too small")
+		return fmt.Errorf("oracle: PackActivationsInto: destination too small")
 	}
 	per := window / 32
 	if per < 1 {

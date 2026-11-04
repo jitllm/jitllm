@@ -1,8 +1,6 @@
 package model
 
 import (
-	"math/bits"
-
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -85,67 +83,22 @@ func (s *Instance) bidirTell(p0, n int) bool {
 
 // ncArena is a non-causal segment's history on the CPU device
 // (cpuserve.go), a tower's or an encoder's: its keys live one block
-// deep, so every block borrows the one page in turn (lendNC), the pool its
-// form addresses (kvArena).
+// deep, so every block borrows the one page in turn, the pool its form
+// addresses (kvArena).
 type ncArena struct {
 	arena *kvArena
 	// page is the arena's page, the segment's rows rounded up to a power of
 	// two: the composer's page arithmetic is shifts on the CPU (AVX2 has no
 	// packed integer division).
 	page int
-	// run is the one run of a composed CPU block's rows (cpuRunRows);
-	// causalFault, a gate's violation, leaves the rows causal.
+	// run is the one run of a composed CPU block's rows; causalFault, a
+	// gate's violation, leaves the rows causal.
 	run         [1]nn.KeyRun
 	causalFault bool
 }
 
 // nc is the instance's non-causal segment's arena, nil for an instance of none.
 func (s *Instance) nc() *ncArena { return nil }
-
-// mapNC maps the arena of a segment instance: one page of the segment's rows
-// at the widest key row of its blocks that keep one (a convolution block
-// keeps none).
-func (s *Instance) mapNC() {
-	a := s.nc()
-	p, row := 0, 0
-	for li := s.lo; li < len(s.kv.layers); li++ {
-		if pg := &s.kv.layers[li]; pg.p > 0 {
-			p, row = max(p, pg.p), max(row, pg.pp/pg.p)
-		}
-	}
-	if p == 0 {
-		return
-	}
-	a.page = 1 << bits.Len(uint(p-1))
-	// A block's keys live one run deep in the arena: its window is the
-	// run, or the symmetric one its graph states, never a causal window
-	// read off the layer's kind (a decision head's blocks are past the
-	// model's layers).
-	for li := range s.kv.layers {
-		s.kv.layers[li].win = 0
-	}
-	var err error
-	if a.arena, err = mapKVArena(a.page*row, 1, false); err != nil {
-		s.cpu.formErr = err
-	}
-}
-
-// lendNC hands the segment's arena to block li for its run, reporting
-// whether the instance has one.
-func (s *Instance) lendNC(li int) bool {
-	a, pg := s.nc(), &s.kv.layers[li]
-	switch {
-	case a == nil || a.arena == nil:
-		return false
-	case pg.p == 0:
-		// A block keeping no history (a convolution's) has none to lend.
-		return true
-	}
-	pg.extend(0)
-	pg.arena = a.arena
-	pg.k[0], pg.v[0] = a.arena.k[:pg.pp], a.arena.v[:pg.pp]
-	return true
-}
 
 // unmapNC releases the segment's arena.
 func (s *Instance) unmapNC() {

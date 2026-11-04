@@ -437,21 +437,6 @@ func (a *A64) SDOT(vd, vn, vm VReg) {
 	a.w(0x4E809400 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
 }
 
-// SDOTelem is sdot vd.4s, vn.16b, vm.4b[idx]: the by-element dot product. The
-// four weight bytes are selected by an immediate index and broadcast by the
-// instruction itself, so sixteen weight bytes loaded once serve four k-groups
-// with no broadcast and no bias correction.
-//
-// The index is split the same way FMLAelem's is -- L at bit 21, H at bit 11 --
-// and getting it wrong silently selects a different k-group.
-func (a *A64) SDOTelem(vd, vn, vm VReg, idx uint8) {
-	if idx > 3 {
-		a.fail("a64: SDOTelem index %d, want 0..3", idx)
-	}
-	a.w(0x4F80E000 | uint32(idx&1)<<21 | uint32(idx>>1)<<11 |
-		uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
-}
-
 // FMUL4s is fmul vd.4s, vn.4s, vm.4s: four float32 lanes, used to fold the
 // per-token activation scales in one go.
 func (a *A64) FMUL4s(vd, vn, vm VReg) {
@@ -483,16 +468,6 @@ func (a *A64) USHR16b(vd, vn VReg, shift uint8) {
 		a.fail("a64: USHR16b shift %d, want 1..8", shift)
 	}
 	a.w(0x6F000400 | uint32(16-shift)<<16 | uint32(vn)<<5 | uint32(vd))
-}
-
-// SHL16b is shl vd.16b, vn.16b, #shift, the mirror of USHR16b. For 8-bit
-// elements a left shift encodes immh:immb as 8+shift while a right shift
-// encodes 16-shift; getting that backwards shifts by the wrong amount.
-func (a *A64) SHL16b(vd, vn VReg, shift uint8) {
-	if shift > 7 {
-		a.fail("a64: SHL16b shift %d, want 0..7", shift)
-	}
-	a.w(0x4F005400 | uint32(8+shift)<<16 | uint32(vn)<<5 | uint32(vd))
 }
 
 // MOVvec is the register-to-register vector move, which A64 spells as
@@ -553,24 +528,7 @@ func (a *A64) INSs(vd VReg, to uint8, vn VReg, from uint8) {
 	a.w(0x6E000400 | imm5<<16 | uint32(from)<<13 | uint32(vn)<<5 | uint32(vd))
 }
 
-// The widening chain. A quantized scale arrives as one byte and has to become a
-// float32 lane, which on arm64 is two widenings and a convert -- byte to
-// halfword, halfword to word, word to float. SXTL sign-extends and UXTL zero-
-// extends; the "2" forms take the HIGH half of the source register, so a
-// 16-byte vector becomes four 4-lane float vectors as SXTL/SXTL2 then SXTL/SXTL2
-// again on each.
-func (a *A64) SXTL8h(vd, vn VReg)   { a.w(0x0F08A400 | uint32(vn)<<5 | uint32(vd)) }
-func (a *A64) SXTL2_8h(vd, vn VReg) { a.w(0x4F08A400 | uint32(vn)<<5 | uint32(vd)) }
-func (a *A64) SXTL4s(vd, vn VReg)   { a.w(0x0F10A400 | uint32(vn)<<5 | uint32(vd)) }
-func (a *A64) SXTL2_4s(vd, vn VReg) { a.w(0x4F10A400 | uint32(vn)<<5 | uint32(vd)) }
-func (a *A64) UXTL8h(vd, vn VReg)   { a.w(0x2F08A400 | uint32(vn)<<5 | uint32(vd)) }
-func (a *A64) UXTL2_8h(vd, vn VReg) { a.w(0x6F08A400 | uint32(vn)<<5 | uint32(vd)) }
-func (a *A64) UXTL4s(vd, vn VReg)   { a.w(0x2F10A400 | uint32(vn)<<5 | uint32(vd)) }
-func (a *A64) UXTL2_4s(vd, vn VReg) { a.w(0x6F10A400 | uint32(vn)<<5 | uint32(vd)) }
-
-// UCVTF4s is ucvtf vd.4s, vn.4s: UNSIGNED int32 lanes to float32, for the
-// k-quant scales that are unsigned 6-bit values rather than signed bytes.
-func (a *A64) UCVTF4s(vd, vn VReg) { a.w(0x6E21D800 | uint32(vn)<<5 | uint32(vd)) }
+func (a *A64) UXTL4s(vd, vn VReg) { a.w(0x2F10A400 | uint32(vn)<<5 | uint32(vd)) }
 
 // SCVTF4s is scvtf vd.4s, vn.4s: signed int32 lanes to float32. The last step of
 // an integer dot product, before the scale is applied.
@@ -585,27 +543,7 @@ func (a *A64) FCVTsh(vd, vn VReg) {
 	a.w(0x1EE24000 | uint32(vn)<<5 | uint32(vd))
 }
 
-// The packer's instructions. Encodings verified against clang, two registers
-// apart each so a base-vs-field mistake cannot hide: FABS4s reads 0x4EA0F820 for
-// v0<-v1 and 0x4EA0FAB4 for v20<-v21.
-//
-// FCVTZS4s truncates toward zero, which is what round-half-away needs once the
-// sign-carrying 0.5 is added.
-//
-// SQXTN4h and SQXTN8b narrow int32 -> int16 -> int8 with signed saturation,
-// performing the packer's [-128,127] clamp for free.
-func (a *A64) FABS4s(vd, vn VReg)   { a.w(0x4EA0F800 | uint32(vn)<<5 | uint32(vd)) }
 func (a *A64) FCVTZS4s(vd, vn VReg) { a.w(0x4EA1B800 | uint32(vn)<<5 | uint32(vd)) }
-func (a *A64) SQXTN4h(vd, vn VReg)  { a.w(0x0E614800 | uint32(vn)<<5 | uint32(vd)) }
-func (a *A64) SQXTN8b(vd, vn VReg)  { a.w(0x0E214800 | uint32(vn)<<5 | uint32(vd)) }
-
-// ADDV reduces four int32 lanes to one, in a single instruction where amd64
-// needs an extract and two horizontal adds.
-func (a *A64) ADDV(vd, vn VReg) { a.w(0x4EB1B800 | uint32(vn)<<5 | uint32(vd)) }
-
-// FCMEQzero sets all-ones lanes where the operand IS zero; the packer wants the
-// complement, which BIC16b gives without a second compare.
-func (a *A64) FCMEQzero(vd, vn VReg) { a.w(0x4EA0D800 | uint32(vn)<<5 | uint32(vd)) }
 
 // FCMGT4s and FCMEQ4s are the register-to-register float compares, all-ones in
 // every lane where the predicate holds.
@@ -629,19 +567,6 @@ func (a *A64) FCMEQ4s(vd, vn, vm VReg) {
 	a.w(0x4E20E400 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
 }
 
-// FCMGE4s is ordered greater-or-equal, false for a NaN on either side. FCMEQ
-// (U=0, sz=0) 0x4E20E400, FCMGE (U=1, sz=0) 0x6E20E400 and FCMGT (U=1, sz=1)
-// 0x6EA0E400 differ in exactly those two bits.
-//
-// The sampler's top-p test is acc >= TopP, and !(acc < TopP) is not the same
-// predicate: it is true for a NaN.
-//
-//	fcmge v9.4s,  v7.4s,  v0.4s   -> [0xe9,0xe4,0x20,0x6e]  0x6E20E4E9
-//	fcmge v31.4s, v30.4s, v29.4s  -> [0xdf,0xe7,0x3d,0x6e]  0x6E3DE7DF
-func (a *A64) FCMGE4s(vd, vn, vm VReg) {
-	a.w(0x6E20E400 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
-}
-
 // SMIN4s and SMINV are the signed integer minimum, lanewise and across a
 // vector. The float twins are wrong here: the argmax folds an index, and the
 // 0x7FFFFFFF sentinel read as a float is a NaN.
@@ -656,8 +581,8 @@ func (a *A64) SMIN4s(vd, vn, vm VReg) {
 
 func (a *A64) SMINV(vd, vn VReg) { a.w(0x4EB1A800 | uint32(vn)<<5 | uint32(vd)) }
 
-// CMGT4s and CMEQ4s are the integer compares (signed greater-than, equality)
-// over 32-bit lanes; they differ from the float twins only in the opcode field.
+// CMGT4s is the integer compare (signed greater-than) over 32-bit lanes; it
+// differs from its float twin only in the opcode field.
 //
 // The router's top-k compares expert ids and must not do it in float: an id
 // read as float32 is a denormal, and with FPCR.FZ set (process state this
@@ -671,10 +596,6 @@ func (a *A64) CMGT4s(vd, vn, vm VReg) {
 	a.w(0x4EA03400 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
 }
 
-func (a *A64) CMEQ4s(vd, vn, vm VReg) {
-	a.w(0x6EA08C00 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
-}
-
 func (a *A64) MUL4s(vd, vn, vm VReg) {
 	a.w(0x4EA09C00 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
 }
@@ -686,19 +607,12 @@ func (a *A64) MLA4s(vd, vn, vm VReg) {
 	a.w(0x4EA09400 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
 }
 
-// LDRd loads 64 bits into a d register: four f16, which FCVTL then widens to a
-// full 4S vector. Encoding verified against clang (0xFD400444 for
-// `ldr d4, [x2, #8]`); the offset is scaled by 8 and caps at 32760.
-func (a *A64) LDRd(vt VReg, rn XReg, off int32) {
-	a.w(0xFD400000 | uint32(off/8)<<10 | uint32(rn)<<5 | uint32(vt))
-}
-
 // SHLL and SHLL2 widen four 16-bit lanes (the low or the high half) to four
 // 32-bit lanes shifted left by sixteen: a bfloat16 becomes its float32.
 func (a *A64) SHLL(vd, vn VReg)  { a.w(0x2E613800 | uint32(vn)<<5 | uint32(vd)) }
 func (a *A64) SHLL2(vd, vn VReg) { a.w(0x6E613800 | uint32(vn)<<5 | uint32(vd)) }
 
-// FCVTL is fcvtl vd.4s, vn.4h: the low four f16 lanes widened to f32. FCVTL2
+// FCVTL is fcvtl vd.4s, vn.4h: the low four f16 lanes widened to f32. fcvtl2
 // takes the high four of the same register, so one LDRq of eight halves gives
 // two 4S vectors. A wrong Rn field silently widens a different register.
 func (a *A64) FCVTL(vd, vn VReg) { a.w(0x0E217800 | uint32(vn)<<5 | uint32(vd)) }
@@ -727,8 +641,6 @@ const prfmPLDL2KEEP = 2
 func (a *A64) PRFMop(op uint32, rn XReg, off int32) {
 	a.w(0xF9800000 | a.scaled(off, 8, "prfm") | uint32(rn)<<5 | op)
 }
-
-func (a *A64) FCVTL2(vd, vn VReg) { a.w(0x4E217800 | uint32(vn)<<5 | uint32(vd)) }
 
 // FMULs is fmul sd, sn, sm: scalar float32, used to combine d_w with d_x.
 func (a *A64) FMULs(vd, vn, vm VReg) {
@@ -761,12 +673,6 @@ func (a *A64) MLAelem(vd, vn, vm VReg, idx uint8) { a.fmaElem(0x6F800000, vd, vn
 func (a *A64) ADD4s(vd, vn, vm VReg) {
 	a.w(0x4EA08400 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
 }
-
-// FMULelem is fmul vd.4s, vn.4s, vm.s[idx], and FMLSelem is the subtracting
-// twin of FMLAelem. All three share FMLAelem's split index encoding and differ
-// only in bits 15:12: 0001 for FMLA, 0101 for FMLS, 1001 for FMUL.
-func (a *A64) FMULelem(vd, vn, vm VReg, idx uint8) { a.fmaElem(0x4F809000, vd, vn, vm, idx) }
-func (a *A64) FMLSelem(vd, vn, vm VReg, idx uint8) { a.fmaElem(0x4F805000, vd, vn, vm, idx) }
 
 func (a *A64) fmaElem(base uint32, vd, vn, vm VReg, idx uint8) {
 	if idx > 3 {

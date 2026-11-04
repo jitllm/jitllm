@@ -444,35 +444,6 @@ func (s *Instance) swaRows(a int) []float32 {
 	return s.bcsSWA[a*s.c.NRotSWA:]
 }
 
-// cpuRunRows runs non-causal block li on the CPU the composer's way over
-// the n rows of x, one run attending both ways or, where wins is not nil,
-// each window a run its rows attend inside; cs is the rows' rotary table,
-// nrot wide, and swa the second rotary's, nswa wide, where the block's graph
-// turns by one (nil where it does not). Its history is the segment's arena
-// (ncArena), lent to the block for its run.
-func (s *Instance) cpuRunRows(li int, l *layer, x []float32, n int, cs []float32, nrot int, swa []float32, nswa int, wins []nn.KeyRun) (composer.Decline, error) {
-	f, why := s.cpuRowsForm(li, l)
-	if why != composer.DeclineServes {
-		return why, nil
-	}
-	if n > f.Keys {
-		return composer.DeclineSessions, nil
-	}
-	a := s.nc()
-	a.run[0] = nn.KeyRun{Lo: 0, Hi: n}
-	runs := a.run[:]
-	if wins != nil {
-		runs, s.cpu.runWindows = wins, true
-	}
-	if !a.causalFault {
-		s.bidir = runs
-	}
-	seq, pos := s.cpuRowsOf(0, 0, n)
-	err := s.cpuRowsRun(li, l, f, x, n*s.c.NEmbd, nil, cs, nrot, swa, nswa, seq, pos, nil)
-	s.bidir, s.cpu.runWindows = nil, false
-	return composer.DeclineServes, err
-}
-
 // cpuSessions is cpuRows for a step across sessions (stepHost): row i's
 // history is s.rowOwn[i]'s, its one sequence, and the first nlogit rows are
 // each a session's last. Each session runs its own rows on its own block's
@@ -1381,7 +1352,7 @@ func (s *Instance) cpuSideOff(li int) int {
 
 // cpuTowerWhy is cpuWhy for a block of a non-causal segment (a tower's or an
 // encoder's): its history is the block's run's own, written and read inside
-// the one call over the segment's rows (lendNC), so no other path reads its
+// the one call over the segment's rows, so no other path reads its
 // format, and its page is the instance's arena.
 func (s *Instance) cpuTowerWhy(g *graph.Graph) composer.Decline {
 	switch {
@@ -1444,14 +1415,6 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpud
 	// (composing.Rotaries): each its own table, bound by instance.
 	req.Rotaries = composing{m.container, m}.Rotaries()
 	return m.cpuFormOf(req, &gr, rows, false, false, s.kvl.fmt == cpu.KVF32)
-}
-
-// readsPlanes reports whether a form of g reads the rotary's planes: a
-// pooled selection turning its blocks, or a rotary at positions of its own.
-func readsPlanes(g *graph.Graph) bool {
-	return slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
-		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0
-	})
 }
 
 // cpuFormOf is req's form on the CPU, mapped once for the model by its Key;

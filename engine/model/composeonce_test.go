@@ -335,11 +335,3 @@ func composesOnce(t *testing.T, m *Model, g *gpu.GPU, width int, to string) {
 			st.ScratchBuilds-st0.ScratchBuilds, g.Counters().Compiles()-c0)
 	}
 }
-
-func sumCounts(a []int) int {
-	n := 0
-	for _, v := range a {
-		n += v
-	}
-	return n
-}

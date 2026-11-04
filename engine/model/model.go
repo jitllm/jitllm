@@ -1418,8 +1418,8 @@ type loadOpts struct {
 
 // WithCPUHost states the CPU the model's CPU device maps its forms onto:
 // a perf map (cpu.WithPerfMap), or a lower tier than the CPU's own
-// (cpu.AtTier, cpu.WithoutVNNI, cpu.WithoutDotProd), which the composer forms
-// for and the device refuses to map past.
+// (cpu.AtTier), which the composer forms for and the device refuses to map
+// past.
 func WithCPUHost(o ...cpu.HostOption) Option {
 	return func(l *loadOpts) { l.cpuHost = append(l.cpuHost, o...) }
 }
