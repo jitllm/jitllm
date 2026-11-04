@@ -605,40 +605,40 @@ func (n *Kernel) Homes() []int {
 		step[i] = -1
 	}
 	// known is reachesFold(i, f) for the fold f being walked, each node's
-	// answer kept (0 unknown, 1 no, 2 yes): the nodes below the folds are
-	// acyclic.
-	var known []uint8
+	// answer kept under the walk's mark gen (gen<<2 | 1 no, gen<<2 | 2 yes;
+	// another walk's mark unknown): the nodes below the folds are acyclic.
+	var known []uint32
+	var gen uint32
 	for f := range n.Nodes {
 		nd := &n.Nodes[f]
 		if nd.Op != OpFold {
 			continue
 		}
 		if known == nil {
-			known = make([]uint8, nn)
-		} else {
-			clear(known)
+			known = make([]uint32, nn)
 		}
+		gen++
 		var reaches func(i int) bool
 		reaches = func(i int) bool {
 			if i == f {
 				return true
 			}
-			if r := known[i]; r != 0 {
-				return r == 2
+			if r := known[i]; r>>2 == gen {
+				return r&3 == 2
 			}
-			known[i] = 1
+			known[i] = gen<<2 | 1
 			if x := n.Nodes[i]; x.Op == OpFold {
 				// Another sum of the loop, read in this one's step, is read
 				// as it runs: what reads it is made in the trip too.
 				if x.At == nd.At {
-					known[i] = 2
+					known[i] = gen<<2 | 2
 				}
-				return known[i] == 2
+				return known[i]&3 == 2
 			}
 			var buf [3]int
 			for _, a := range n.args(i, &buf) {
 				if reaches(a) {
-					known[i] = 2
+					known[i] = gen<<2 | 2
 					return true
 				}
 			}
