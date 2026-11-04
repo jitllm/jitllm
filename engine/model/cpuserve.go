@@ -814,6 +814,9 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos []int,
 		}
 		*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1, kv: pg,
 			pages: pg.table(max(s.nseq, 1)), recLi: s.cpuRecLi(li), recOf: o}
+		// One live row, at its own position, as a decode step's.
+		s.cpu.pos1 = [2]uint32{1, uint32(pos[r])}
+		b.pos = s.cpu.pos1[:]
 		if tok != nil {
 			s.cpu.tok1[0] = uint32(tok[r])
 			b.tok = s.cpu.tok1[:]
