@@ -90,6 +90,9 @@ type Instance struct {
 	// cpu is the blocks this instance runs on the CPU as the composer forms
 	// them (cpuserve.go).
 	cpu cpuState
+	// tower is the instance's run of its model's vision tower (tower.go),
+	// nil for a model with none.
+	tower *towerRun
 	// bidirAll makes a mixed prompt's every row one bidirectional run
 	// (bidirRuns): a non-causal decoder's prompt with pictures in it.
 	bidirAll bool
@@ -455,14 +458,19 @@ func (m *Model) newInstance(nseq, maxSeq int) *Instance {
 
 // newInstanceRange is newState over blocks [lo, hi) of the model; see Instance.lo.
 func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
-	c := m.Cfg
+	return m.newInstanceOver(m.Cfg, nseq, maxSeq, lo, hi)
+}
+
+// newInstanceOver is newInstanceRange over blocks of a segment whose
+// geometry is c's (the text's, or the tower's: towerConfig).
+func (m *Model) newInstanceOver(c *Config, nseq, maxSeq, lo, hi int) *Instance {
 	// Clamp to the model's context, and record the request (reqSeq) so a
 	// later "kv cache is full" can name the number the caller passed.
 	req := maxSeq
 	if maxSeq > c.NCtx {
 		maxSeq = c.NCtx
 	}
-	s := &Instance{Session: &Session{model: m}, m: m, c: m.Cfg, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
+	s := &Instance{Session: &Session{model: m}, m: m, c: c, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
 		devFallback: true, relocate: true, prof: m.opt.profile, outNorm: m.outNorm, outW: &m.output,
 		fuseOff: m.opt.noFuse, groupOff: m.opt.noGroups,
 		residFold: m.opt.residFold}
@@ -554,6 +562,13 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		s.cpu.formErr = err
 	}
 	s.cpuPlace()
+	// A text instance of a model with a tower runs its pictures through a
+	// tower run of its own, composed with it (tower.go).
+	if c == m.Cfg && m.tower != nil && s.cpu.formErr == nil {
+		if s.tower, s.cpu.formErr = m.newTowerRun(); s.cpu.formErr != nil {
+			s.tower = nil
+		}
+	}
 	// Read at construction too, because an embedded caller may never call
 	// SetMemBudget; it overrides this with the caller's number.
 	s.memBudget = s.m.opt.gc.Budget()
@@ -630,6 +645,8 @@ func (s *Instance) Close() error {
 	if s.own != nil {
 		s.Session = s.own
 	}
+	s.tower.close()
+	s.tower = nil
 	s.m.eng.live.remove(s)
 	// A move prepared and never committed gives its target's copies back.
 	if s.pending != nil {

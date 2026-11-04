@@ -2,7 +2,11 @@ package model
 
 import (
 	"fmt"
+	"image"
+	"image/png"
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -163,4 +167,148 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 		}
 	}
 	t.Logf("%d tower blocks from %d, paged and rebound under one page; %d logits as the text model's", v.NLayer, m.towerBase, len(want))
+}
+
+// openSmolVLM is SmolVLM-256M's container and the picture the gates show it.
+func openSmolVLM(t *testing.T) (*Model, image.Image) {
+	t.Helper()
+	path := testmodels.Path("SmolVLM-256M-Instruct-Q8_0.gguf")
+	mm := testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf")
+	if !sourcePresent(path, mm) {
+		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", path, mm)
+	}
+	m, err := Open(jlmOfPair(t, path, mm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
+	if err != nil {
+		m.Close()
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		m.Close()
+		t.Fatal(err)
+	}
+	return m, img
+}
+
+// TestStatedTowerEncodesAPicture runs a picture through SmolVLM's stated
+// tower on the CPU device: 64 rows of the language model's width, finite and
+// not one row repeated, the same rows bit for bit when the picture is encoded
+// again, other rows for another picture, and a warm encode allocates nothing.
+func TestStatedTowerEncodesAPicture(t *testing.T) {
+	m, img := openSmolVLM(t)
+	defer m.Close()
+	s := m.NewInstance(256)
+	defer s.Close()
+	rows, err := s.EncodePicture(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := m.container.Vision()
+	if len(rows) != m.tower.out*int(v.ProjDim) || m.tower.out != 64 {
+		t.Fatalf("%d floats in %d rows, want 64 rows of %d", len(rows), m.tower.out, v.ProjDim)
+	}
+	d := int(v.ProjDim)
+	same := true
+	for i, x := range rows {
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			t.Fatalf("value %d (row %d) is %v", i, i/d, x)
+		}
+		same = same && x == rows[i%d]
+	}
+	if same {
+		t.Fatal("every row is the first: the picture's rows do not differ")
+	}
+	first := slices.Clone(rows)
+	again, err := s.EncodePicture(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range first {
+		if math.Float32bits(again[i]) != math.Float32bits(first[i]) {
+			t.Fatalf("value %d differs between two encodes of one picture: %v, %v", i, first[i], again[i])
+		}
+	}
+	grey := image.NewGray(image.Rect(0, 0, 384, 384))
+	for i := range grey.Pix {
+		grey.Pix[i] = 128
+	}
+	other, err := s.EncodePicture(grey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := 0.0
+	for i := range first {
+		diff = max(diff, math.Abs(float64(other[i]-first[i])))
+	}
+	if diff < 1e-2 {
+		t.Fatalf("a grey picture encodes to within %g of the coloured one", diff)
+	}
+	if n := testing.AllocsPerRun(3, func() {
+		if _, err := s.EncodePicture(img); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Fatalf("a warm encode allocates %v times", n)
+	}
+	t.Logf("64 rows of %d, deterministic, %g from a grey picture's, no allocation warm", d, diff)
+}
+
+// TestStatedTowerSeesThePicture asks SmolVLM to describe a picture through
+// its stated tower and the CPU device: the coloured quadrants and yellow disc
+// are described with the disc's colour, and a blank grey picture is not
+// called yellow -- a tower wired to nothing still answers fluently, so the
+// blank is the violation. The prompt is SmolVLM's own template's, its
+// picture's markers the container's (jlm.TowerSpan).
+func TestStatedTowerSeesThePicture(t *testing.T) {
+	m, img := openSmolVLM(t)
+	defer m.Close()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	span := m.container.Vision().Tower.Span
+	ask := func(pic image.Image) string {
+		t.Helper()
+		s := m.NewInstance(256)
+		defer s.Close()
+		rows, err := s.EncodePicture(pic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pre := m.Vocab.EncodeSpecial("<|im_start|>User:", false)
+		post := m.Vocab.EncodeSpecial("Describe this image in one sentence.<end_of_utterance>\nAssistant:", false)
+		lg, err := s.PrefillMixed(Span{Tokens: pre}, Span{Tokens: span.Before}, Span{Embd: rows},
+			Span{Tokens: span.After}, Span{Tokens: post})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []int32
+		for range 32 {
+			tok := int32(argmax(lg))
+			if m.Vocab.IsEOG(tok) {
+				break
+			}
+			out = append(out, tok)
+			if lg, err = s.Forward(tok); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return strings.ToLower(m.Vocab.Decode(out))
+	}
+	got := ask(img)
+	grey := image.NewGray(image.Rect(0, 0, 384, 384))
+	for i := range grey.Pix {
+		grey.Pix[i] = 128
+	}
+	none := ask(grey)
+	t.Logf("picture %q", got)
+	t.Logf("blank   %q", none)
+	if !strings.Contains(got, "yellow") {
+		t.Errorf("the description does not name the yellow disc: %q", got)
+	}
+	if strings.Contains(none, "yellow") {
+		t.Errorf("a blank picture is yellow too (%q): the picture is not what answered", none)
+	}
 }

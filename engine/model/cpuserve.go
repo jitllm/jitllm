@@ -321,6 +321,8 @@ type cpuBound struct {
 	// planes, where set, is the rotary planes a table's call reads in place
 	// of the model's (the tower's grid planes, towertable.go).
 	planes []float32
+	// pic is the step's picture, its decoded samples' words (cpudev.SrcPicture).
+	pic []uint32
 }
 
 // composedCPUDevice is the CPU of extensions isa as the composer forms for
@@ -1133,6 +1135,7 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 	}
 	a[cpudev.SrcPoolPos], a[cpudev.SrcZero] = addr(s.cpu.pool.pos), addr(s.cpu.zero)
 	a[cpudev.SrcRequest], a[cpudev.SrcTokens], a[cpudev.SrcPos] = addr(b.req), addr(b.tok), addr(b.pos)
+	a[cpudev.SrcPicture] = addr(b.pic)
 	c.Weights = c.Weights[:0]
 	for _, w := range f.Weights {
 		c.Weights = append(c.Weights, s.cpuWeightAt(b.li, b.l, w))
@@ -1375,7 +1378,13 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpud
 	}
 	formats := map[jlm.Role]jlm.Type{}
 	f := m.Composing()
+	if li >= m.towerBase {
+		formats = m.towerFormats(g)
+	}
 	for _, o := range g.Ops {
+		if li >= m.towerBase {
+			break
+		}
 		for _, w := range o.Weight {
 			if e, ok := f.Find(w.Role, jlm.DenseBlock, -1); ok && jlm.RowTable(e) {
 				formats[w.Role] = e.Type
