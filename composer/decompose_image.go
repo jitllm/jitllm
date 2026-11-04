@@ -25,6 +25,10 @@ const (
 	RequestPicP2
 	RequestPicP3
 	RequestPicSub
+	// RequestPicTaps is where a picture resized by Pillow's filters
+	// (graph.ChainPIL) has its taps: the output's columns' (PILTaps), then
+	// its rows', each entry Taps+1 words.
+	RequestPicTaps
 )
 
 // PictureWords is the most words a step's picture holds: a picture 4096
@@ -38,10 +42,15 @@ const PictureWords = 4096 * 4096
 // channel's mean and std; zero past the picture.
 func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.In) != 0 || len(o.Out) != 1 || a.PicW < 1 || a.PicH < 1 || a.Chain != graph.ChainHalfPixel ||
-		a.Filter != graph.FilterLinear || a.Pixels < graph.PixRGBA8 || a.Pixels >= graph.PixFormats {
+	pil := a.Chain == graph.ChainPIL && (a.Filter == graph.FilterBilinear || a.Filter == graph.FilterCubic) && a.Taps > 0
+	if len(o.In) != 0 || len(o.Out) != 1 || a.PicW < 1 || a.PicH < 1 ||
+		!pil && (a.Chain != graph.ChainHalfPixel || a.Filter != graph.FilterLinear) ||
+		a.Pixels < graph.PixRGBA8 || a.Pixels >= graph.PixFormats {
 		return nil, fmt.Errorf("a picture of format %d resampled to %dx%d by chain %d and filter %d",
 			a.Pixels, a.PicW, a.PicH, a.Chain, a.Filter)
+	}
+	if pil {
+		return decomposePicturePIL(o, c)
 	}
 	U, F, I := ir.U32, ir.F32, ir.I32
 	sh := c.rows(o.Out[0])
@@ -69,23 +78,9 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	y0, y1, ty := axis(oy, sh2, a.PicH)
 	x0, x1, tx := axis(ox, sw, a.PicW)
-	// byteAt is the picture's byte at offset off.
-	byteAt := func(off int) int {
-		w := x.load(0, x.op(OpShr, U, off, u(2)))
-		return x.op(OpAnd, U, x.op(OpShr, U, w, x.op(OpShl, U, x.op(OpAnd, U, off, u(3)), u(3))), u(255))
-	}
 	// sample is the picture's channel for (y, x), as a float.
 	sample := func(y, xx int) int {
-		at := x.op(OpAdd, U, x.op(OpMul, U, y, stride), xx)
-		switch a.Pixels {
-		case graph.PixRGBA8:
-			at = x.op(OpAdd, U, x.op(OpAdd, U, x.op(OpMul, U, y, stride), x.op(OpMul, U, xx, u(4))), ch)
-		case graph.PixPaletted8:
-			at = x.op(OpAdd, U, x.op(OpAdd, U, x.load(1, u(RequestPicP2)), x.op(OpMul, U, byteAt(at), u(4))), ch)
-		case graph.PixYCbCr8:
-			return x.un(OpCvtF32, F, ycbcr(&x, byteAt, at, y, xx, ch))
-		}
-		return x.un(OpCvtF32, F, byteAt(at))
+		return x.un(OpCvtF32, F, pictureSample(&x, a.Pixels, stride, y, xx, ch))
 	}
 	lerp := func(p, q, t int) int {
 		return x.op(OpAdd, F, x.op(OpMul, F, p, x.op(OpSub, F, x.f(1), t)), x.op(OpMul, F, q, t))
@@ -101,11 +96,118 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 		Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicSub + 1}}}}, nil
 }
 
+// pictureSample is channel ch of the picture's pixel (y, xx), the byte its
+// format holds or makes (U32): the picture in operand 0, the request in 1,
+// stride its rows' bytes.
+func pictureSample(x *exprs, px uint8, stride, y, xx, ch int) int {
+	U := ir.U32
+	u := func(v int) int { return x.u(uint32(v)) }
+	byteAt := func(off int) int {
+		w := x.load(0, x.op(OpShr, U, off, u(2)))
+		return x.op(OpAnd, U, x.op(OpShr, U, w, x.op(OpShl, U, x.op(OpAnd, U, off, u(3)), u(3))), u(255))
+	}
+	at := x.op(OpAdd, U, x.op(OpMul, U, y, stride), xx)
+	switch px {
+	case graph.PixRGBA8:
+		at = x.op(OpAdd, U, x.op(OpAdd, U, x.op(OpMul, U, y, stride), x.op(OpMul, U, xx, u(4))), ch)
+	case graph.PixPaletted8:
+		at = x.op(OpAdd, U, x.op(OpAdd, U, x.load(1, u(RequestPicP2)), x.op(OpMul, U, byteAt(at), u(4))), ch)
+	case graph.PixYCbCr8:
+		return ycbcr(x, byteAt, at, y, xx, ch)
+	}
+	return byteAt(at)
+}
+
+// decomposePicturePIL is a picture resized by Pillow's antialiased filter
+// (graph.ChainPIL), its taps in the request (PILTaps): for each source row
+// (PicSide of them) and output column's channel the sum over the tap axis
+// (Taps long, its weights zero past the column's window) of each weight times
+// its sample, in integers; then for each output pixel's channel the same over
+// its rows, each term the horizontal sum made a byte -- from half Pillow's
+// unit, clamped at zero, shifted down by its fixed point and clamped to 255;
+// then that sum made a byte, read as [0, 1] and normalised by its channel's
+// mean and std; zero past the picture. A source row or column past the
+// picture's reads its last, at a weight of zero.
+func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	U, F, I := ir.U32, ir.F32, ir.I32
+	sh := c.rows(o.Out[0])
+	W, K := sh[1], a.Taps
+	if W%3 != 0 || W >= 1<<15 {
+		return nil, fmt.Errorf("a picture's rows of %d samples, not whole pixels", W)
+	}
+	tapsV := RequestPicTaps + a.PicW*(K+1)
+	reqWords := tapsV + a.PicH*(K+1)
+	name := c.Graph.Values[o.Out[0]].Name
+	hsh := []int{a.PicSide, a.PicW, 3}
+	hsum := Operand{Kind: OperandScratch, Name: name + ".rows", Elem: I}
+	vsum := Operand{Kind: OperandScratch, Name: name + ".cols", Elem: I}
+	// finish is a sum of weights times bytes as Pillow's byte (U32).
+	finish := func(x *exprs, acc int) int {
+		v := x.un(OpBitcast, U, x.op(OpMax, I, x.op(OpAdd, I, acc, x.i(1<<(pilPrecision-1))), x.i(0)))
+		return x.op(OpMin, U, x.op(OpShr, U, v, x.u(pilPrecision)), x.u(255))
+	}
+	// weight is tap t's weight at entry base of the request's taps.
+	weight := func(x *exprs, base, t int) int {
+		return x.un(OpBitcast, I, x.load(1, x.op(OpAdd, U, x.op(OpAdd, U, base, x.u(1)), t)))
+	}
+	facts := Facts{Extents: map[int]int{0: PictureWords, 1: reqWords}}
+
+	// The horizontal pass, a reduction a channel: the channel a constant.
+	var prims []Prim
+	for ch := range 3 {
+		var h exprs
+		r, xo, t := h.coord(0), h.coord(1), h.coord(2)
+		hu := func(v int) int { return h.u(uint32(v)) }
+		sw := h.op(OpMax, U, h.load(1, hu(RequestPicW)), hu(1))
+		srcH := h.op(OpMax, U, h.load(1, hu(RequestPicH)), hu(1))
+		y := h.op(OpMin, U, r, h.op(OpSub, U, srcH, hu(1)))
+		base := h.op(OpAdd, U, hu(RequestPicTaps), h.op(OpMul, U, xo, hu(K+1)))
+		xi := h.op(OpMin, U, h.op(OpAdd, U, h.load(1, base), t), h.op(OpSub, U, sw, hu(1)))
+		stride := h.load(1, hu(RequestPicStride))
+		h.op(OpMul, I, weight(&h, base, t), h.un(OpBitcast, I, pictureSample(&h, a.Pixels, stride, y, xi, hu(ch))))
+		var hi exprs
+		hi.op(OpAdd, U, hi.op(OpMul, U, hi.op(OpAdd, U, hi.op(OpMul, U, hi.coord(0), hi.u(uint32(a.PicW))), hi.coord(1)), hi.u(3)),
+			hi.u(uint32(ch)))
+		hf := Facts{Extents: facts.Extents, OutExtent: a.PicSide * a.PicW * 3}
+		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{a.PicSide, a.PicW, K}, In: []Operand{TablePicture.op(), TableRequest.op()},
+			Out: hsum, Combine: OpAdd, Type: I, Expr: h.e, Index: hi.e, Facts: hf})
+	}
+
+	var v exprs
+	oy, ox, vch, vt := v.coord(0), v.coord(1), v.coord(2), v.coord(3)
+	vu := func(n int) int { return v.u(uint32(n)) }
+	vsrcH := v.op(OpMax, U, v.load(1, vu(RequestPicH)), vu(1))
+	vbase := v.op(OpAdd, U, vu(tapsV), v.op(OpMul, U, oy, vu(K+1)))
+	yi := v.op(OpMin, U, v.op(OpAdd, U, v.load(1, vbase), vt), v.op(OpSub, U, vsrcH, vu(1)))
+	v.op(OpMul, I, weight(&v, vbase, vt), v.un(OpBitcast, I, finish(&v, v.at(2, hsh, yi, ox, vch))))
+
+	var m exprs
+	mu := func(n int) int { return m.u(uint32(n)) }
+	n := a.PicW * a.PicH * 3
+	flat := m.op(OpAdd, U, m.op(OpMul, U, m.coord(0), mu(W)), m.coord(1))
+	col := m.coord(1)
+	mch := m.op(OpSub, U, col, m.op(OpMul, U, m.op(OpShr, U, m.op(OpMul, U, col, mu(0xAAAB)), mu(17)), mu(3)))
+	byChannel := func(c [3]float64) int {
+		return m.sel(F, m.op(OpLess, ir.Pred, mch, mu(1)), m.f(float32(c[0])),
+			m.sel(F, m.op(OpLess, ir.Pred, mch, mu(2)), m.f(float32(c[1])), m.f(float32(c[2]))))
+	}
+	b := m.un(OpCvtF32, F, finish(&m, m.load(0, m.op(OpMin, U, flat, mu(n-1)))))
+	val := m.op(OpDiv, F, m.op(OpSub, F, m.op(OpDiv, F, b, m.f(255)), byChannel(a.Mean)), byChannel(a.Std))
+	m.sel(F, m.op(OpLess, ir.Pred, flat, mu(n)), val, m.f(0))
+	return append(prims,
+		Prim{Kind: PrimReduce, Shape: []int{a.PicH, a.PicW, 3, K}, In: []Operand{TablePicture.op(), TableRequest.op(), hsum},
+			Out: vsum, Combine: OpAdd, Type: I, Expr: v.e, Facts: facts},
+		Prim{Kind: PrimMap, Shape: sh, In: []Operand{vsum}, Out: c.value(o.Out[0]), Expr: m.e,
+			Facts: Facts{Extents: map[int]int{0: n}}}), nil
+}
+
 // ycbcr is channel ch of the YCbCr pixel (y, xx), its luma at byte at: its
 // chroma sample the pixel's coordinates, each plus its axis's phase, shifted
 // down by its axis's subsampling (RequestPicSub), in the second and third
-// planes; the three converted as image/color.YCbCrToRGB does, in integers --
-// luma times 0x10101 plus the chroma terms, clamped to 24 bits, the top byte.
+// planes; converted as image/color.YCbCrToRGB does, in integers -- luma
+// times 0x10101 plus the channel's chroma terms, clamped to 24 bits, the top
+// byte.
 func ycbcr(x *exprs, byteAt func(int) int, at, y, xx, ch int) int {
 	U, I := ir.U32, ir.I32
 	u := func(v int) int { return x.u(uint32(v)) }
@@ -120,14 +222,14 @@ func ycbcr(x *exprs, byteAt func(int) int, at, y, xx, ch int) int {
 		return x.op(OpSub, I, x.un(OpBitcast, I, b), x.i(128))
 	}
 	cb, cr := chroma(RequestPicP2), chroma(RequestPicP3)
-	k := func(v int32) int { return x.i(v) }
-	r := x.op(OpAdd, I, yy, x.op(OpMul, I, k(91881), cr))
-	g := x.op(OpSub, I, x.op(OpSub, I, yy, x.op(OpMul, I, k(22554), cb)), x.op(OpMul, I, k(46802), cr))
-	b := x.op(OpAdd, I, yy, x.op(OpMul, I, k(116130), cb))
-	top := func(v int) int {
-		return x.op(OpShr, U, x.un(OpBitcast, U, x.op(OpMin, I, x.op(OpMax, I, v, x.i(0)), x.i(0xffffff))), u(16))
+	// The channel's two chroma weights: red 0 and 91881, green -22554 and
+	// -46802, blue 116130 and 0 -- each channel YCbCrToRGB's one sum.
+	byChannel := func(r, g, b int32) int {
+		return x.sel(I, x.op(OpLess, ir.Pred, ch, u(1)), x.i(r), x.sel(I, x.op(OpLess, ir.Pred, ch, u(2)), x.i(g), x.i(b)))
 	}
-	return x.sel(U, x.op(OpLess, ir.Pred, ch, u(1)), top(r), x.sel(U, x.op(OpLess, ir.Pred, ch, u(2)), top(g), top(b)))
+	v := x.op(OpAdd, I, yy, x.op(OpAdd, I, x.op(OpMul, I, byChannel(0, -22554, 116130), cb),
+		x.op(OpMul, I, byChannel(91881, -46802, 0), cr)))
+	return x.op(OpShr, U, x.un(OpBitcast, U, x.op(OpMin, I, x.op(OpMax, I, v, x.i(0)), x.i(0xffffff))), u(16))
 }
 
 // decomposePatchify is each row's patch of the picture, gathered: a row

@@ -223,8 +223,9 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: a picture of sample format %d", at, a.Pixels)
 			case a.PicW < 1 || a.PicH < 1:
 				bad("%s: a picture resampled to %dx%d", at, a.PicW, a.PicH)
-			case a.Chain != ChainHalfPixel || a.Filter != FilterLinear:
-				bad("%s: a picture resampled by chain %d and filter %d", at, a.Chain, a.Filter)
+			case !(a.Chain == ChainHalfPixel && a.Filter == FilterLinear) &&
+				!(a.Chain == ChainPIL && (a.Filter == FilterBilinear || a.Filter == FilterCubic) && a.Taps > 0 && a.PicSide > 0):
+				bad("%s: a picture resampled by chain %d and filter %d (%d taps)", at, a.Chain, a.Filter, a.Taps)
 			case a.Std[0] == 0 || a.Std[1] == 0 || a.Std[2] == 0:
 				bad("%s: a picture normalised by a std of 0", at)
 			}

@@ -739,9 +739,12 @@ type Attrs struct {
 	// every other kernel form.
 	Exact bool
 	// Pixels, PicW, PicH, Mean and Std are OpPicture's: the picture's sample
-	// format, the size it is resampled to, and each channel's mean and std.
+	// format, the size it is resampled to, and each channel's mean and std;
+	// PicSide is the most a side of a picture resampled by Pillow's filters
+	// (ChainPIL) may be, whose reduction Taps reaches.
 	Pixels     uint8
 	PicW, PicH int
+	PicSide    int
 	Mean, Std  [3]float64
 }
 
@@ -832,6 +835,11 @@ func (g *Graph) String() string {
 const (
 	ChainAligned uint8 = 1 + iota
 	ChainHalfPixel
+	// ChainPIL is Pillow's antialiased resample (a picture's, OpPicture):
+	// each output's window and weights from the reduction's scale, in
+	// Pillow's fixed point, a horizontal pass to 8 bits and then a vertical
+	// one; Taps is the most weights an output reads.
+	ChainPIL
 )
 
 const (
