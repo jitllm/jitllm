@@ -1352,6 +1352,10 @@ type devShared struct {
 	// composerPasses is composer for forms over a history read in passes
 	// (composer.Registry.ForPasses).
 	composerPasses *composer.Registry
+	// halvesTo is where a history page's conversion launches (kvhalves.go),
+	// and halvesGraphs its graphs by width and direction.
+	halvesTo     launchTo
+	halvesGraphs map[halvesKey]*graph.Graph
 	// embTo is the composer's gather made real on its own
 	// (materializeComposed).
 	embTo launchTo

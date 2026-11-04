@@ -11,9 +11,9 @@ import (
 // TestF16HistoryTravelsRounded moves a block's history onto a device whose V
 // pages are packed binary16 (Config.KVF16) and home again: K comes back
 // exactly, and V as quant.EncodeHalf then DecodeHalf round it, bit for bit --
-// the narrowing and widening on the way are the host's generated kernels
-// (nn.NarrowF16, nn.WidenF16), held here to the Go reference they replaced.
-// The positions are not a whole number of vectors, so both kernels run a tail.
+// the narrowing and widening on the way are the card's own, composed
+// (graph.OpHalves, graph.OpWidenHalves, kvhalves.go), and must have run.
+// The positions are not a whole number of pages, so a page runs part full.
 func TestF16HistoryTravelsRounded(t *testing.T) {
 	devs := realDevices(t)
 	if len(devs) == 0 {
@@ -69,5 +69,8 @@ func f16HistoryTravelsRounded(t *testing.T, dv backend.Device) {
 	}
 	if rounded == 0 {
 		t.Fatalf("no value was rounded: the gate cannot tell a packed V from a float32 one")
+	}
+	if n, _ := g.Stats().ServedPart(PartHalves); n == 0 {
+		t.Fatal("the history travelled without the card's own binary16 conversions")
 	}
 }

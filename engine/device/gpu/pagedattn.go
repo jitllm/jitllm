@@ -3,7 +3,6 @@ package gpu
 import (
 	"fmt"
 	"slices"
-	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
@@ -701,6 +700,15 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		return fmt.Errorf("the sequence holds %d page(s) and %d positions need %d", len(ids), pos, npages)
 	}
 	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
+	// A binary16 V pool's pages are narrowed and widened on the card.
+	var hv *pageHalves
+	if pl.geom.f16 && vw > 0 {
+		var err error
+		if hv, err = g.newPageHalves(kvRow, P); err != nil {
+			return err
+		}
+		defer hv.close()
+	}
 	if toDevice {
 		kPage := make([]float32, kw)
 		vPage := make([]float32, P*kvRow)
@@ -719,18 +727,18 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 				}
 				copy(vPage[(t%P)*kvRow:], v[t*kvRow:(t+1)*kvRow])
 			}
-			var vb []byte
-			if vw > 0 { // MLA has none: the value is the key row's prefix
-				vb = f32b(vPage)
-				if pl.geom.f16 {
-					vb = packF16(vPage)
-				}
-			}
 			if ids[j] == 0 {
 				if pl.home == nil {
 					pl.home = map[seqID][][]float32{}
 				}
-				page := append(append(make([]float32, 0, kw+vw), kPage...), f32of(vb)...)
+				vWords := vPage[:vw] // MLA has none: the value is the key row's prefix
+				if hv != nil {
+					var err error
+					if vWords, err = hv.narrowPage(vPage, nil, 0); err != nil {
+						return err
+					}
+				}
+				page := append(append(make([]float32, 0, kw+vw), kPage...), vWords...)
 				pl.home[s] = append(pl.home[s][:j], page)
 				continue
 			}
@@ -740,7 +748,13 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 			if vw == 0 {
 				continue
 			}
-			if err := pl.v.WriteAt(int(ids[j])*vw*4, vb); err != nil {
+			if hv != nil {
+				if _, err := hv.narrowPage(vPage, pl.v, int(ids[j])*vw*4); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := pl.v.WriteAt(int(ids[j])*vw*4, f32b(vPage)); err != nil {
 				return err
 			}
 		}
@@ -751,7 +765,25 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		return err
 	}
 	var vAll []float32
-	if vw > 0 {
+	switch {
+	case hv != nil:
+		// Widened on the card a page at a time, those in host memory too.
+		vAll = make([]float32, npages*P*kvRow)
+		for j := 0; j < npages; j++ {
+			out := vAll[j*P*kvRow : (j+1)*P*kvRow]
+			if j < e {
+				if page := pl.home[s][j]; page != nil {
+					if err := hv.widenPage(nil, 0, page[kw:], out); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			if err := hv.widenPage(pl.v, int(ids[j])*vw*4, nil, out); err != nil {
+				return err
+			}
+		}
+	case vw > 0:
 		if vAll, err = g.readPages(pl, pl.v, ids[e:npages], vw); err != nil {
 			return err
 		}
@@ -760,15 +792,18 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		// The pages in host memory ahead of the ones read from the card. A windowed
 		// layer's page released behind its window has no copy: zeros, which
 		// nothing reads (the host trusts this history only from its window).
-		hk, hv := make([]float32, 0, npages*kw), make([]float32, 0, npages*vw)
+		hk, hvs := make([]float32, 0, npages*kw), make([]float32, 0, npages*vw)
 		for _, page := range pl.home[s][:e] {
 			if page == nil {
-				hk, hv = append(hk, make([]float32, kw)...), append(hv, make([]float32, vw)...)
+				hk, hvs = append(hk, make([]float32, kw)...), append(hvs, make([]float32, vw)...)
 				continue
 			}
-			hk, hv = append(hk, page[:kw]...), append(hv, page[kw:]...)
+			hk, hvs = append(hk, page[:kw]...), append(hvs, page[kw:]...)
 		}
-		kAll, vAll = append(hk, kAll...), append(hv, vAll...)
+		kAll = append(hk, kAll...)
+		if hv == nil {
+			vAll = append(hvs, vAll...)
+		}
 	}
 	for t := 0; t < pos; t++ {
 		j, o := t/P, t%P
@@ -784,11 +819,8 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		for e := 0; e < kvRow; e++ {
 			k[t*kvRow+e] = kAll[j*kw+e*P+o]
 		}
-		if pl.geom.f16 {
-			unpackF16(v[t*kvRow:(t+1)*kvRow], vAll[j*vw+o*kvRow/2:j*vw+(o+1)*kvRow/2])
-		} else {
-			copy(v[t*kvRow:(t+1)*kvRow], vAll[j*vw+o*kvRow:j*vw+(o+1)*kvRow])
-		}
+		// Widened, a binary16 page's floats are a float page's.
+		copy(v[t*kvRow:(t+1)*kvRow], vAll[j*P*kvRow+o*kvRow:j*P*kvRow+(o+1)*kvRow])
 	}
 	return nil
 }
@@ -899,24 +931,6 @@ func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 		return false
 	}
 	return true
-}
-
-// packF16 is f32 values as packed binary16, two to a word: the pool's f16 V,
-// rounded by the host's generated narrowing (nn.NarrowF16).
-func packF16(v []float32) []byte {
-	b := make([]byte, 2*len(v))
-	if len(v) > 0 {
-		nn.NarrowF16(unsafe.Slice((*uint16)(unsafe.Pointer(&b[0])), len(v)), v)
-	}
-	return b
-}
-
-// unpackF16 widens packed binary16 words into dst through the host's
-// generated widening (nn.WidenF16).
-func unpackF16(dst, words []float32) {
-	if len(dst) > 0 {
-		nn.WidenF16(dst, unsafe.Slice((*uint16)(unsafe.Pointer(&words[0])), len(dst)))
-	}
 }
 
 // pagedHold gives session sid's sequence the pages pos positions of
