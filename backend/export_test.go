@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // The package reads no environment; its test binary does, to point the suite's
@@ -18,8 +20,10 @@ import (
 //	                     through a split dispatch on every Vulkan device
 //	JITLLM_ROCM          the ROCm library directory (Opts.HIP.Path); unset
 //	                     searches the default places
+//
+// and the opens stay on the devices JITLLM_TEST_DEVICES selects (Opts.Admit).
 func testOpts() Opts {
-	var o Opts
+	o := Opts{Admit: testdevices.Admit()}
 	o.HIP.Path = os.Getenv("JITLLM_ROCM")
 	if v := os.Getenv("JITLLM_VK_DEVICE"); v != "" {
 		o.Vulkan.Device = v

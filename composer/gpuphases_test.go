@@ -7,7 +7,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -20,7 +19,7 @@ import (
 // one, and each output is the host's within 1e-5 of the largest.
 func TestComposedGPUPhasesExpertsSum(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
@@ -92,7 +91,7 @@ func TestComposedGPUPhasesExpertsSum(t *testing.T) {
 // within 1e-6.
 func TestComposedGPURouterRows(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
@@ -170,7 +169,7 @@ func TestComposedGPURouterRows(t *testing.T) {
 // them. The selection one place off must part.
 func TestComposedGPUPhases(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}

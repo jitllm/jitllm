@@ -66,7 +66,7 @@ func embedServer(t *testing.T, name string, cfg Config) (*Engine, *LoadedModel, 
 			"embed/%s.gguf) -- this gate proved nothing", path, strings.TrimSuffix(name, ".jlm"))
 	}
 	cfg.ModelDir, cfg.Probe = filepath.Dir(path), noProbe
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "emb"})
 	if err != nil {

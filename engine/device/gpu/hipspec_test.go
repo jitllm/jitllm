@@ -26,7 +26,7 @@ func amdHost(t *testing.T, nHIP int) (*[]*fakeDev, *hostBackends) {
 		return nil, fmt.Errorf("fake: no CUDA device %d", ord)
 	}
 	b.openMetal = func(backend.Opts) (backend.Device, error) { return nil, fmt.Errorf("fake: no Metal") }
-	b.vulkanDevices = func() ([]vulkan.Info, error) {
+	b.vulkanDevices = func(backend.Opts) ([]vulkan.Info, error) {
 		return []vulkan.Info{{Index: 0, Name: "AMD Radeon RX 7900 XTX (RADV NAVI31)", Compute: true}}, nil
 	}
 	b.openVulkan = func(sel string, _ backend.Opts) (backend.Device, error) {

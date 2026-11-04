@@ -208,7 +208,7 @@ func gridRowsOf(g *graph.Graph, step int) func(graph.ValueID) int {
 // input's rows seen -- in the chain or alone.
 func TestComposedGPUGridRows(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate proved nothing")
 	}
@@ -299,7 +299,7 @@ func TestComposedGPUGridRows(t *testing.T) {
 // convolution, the filter transposed seen.
 func TestComposedGPUUnfold(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate proved nothing")
 	}
@@ -378,7 +378,7 @@ func TestComposedGPUUnfold(t *testing.T) {
 // grid's rows seen writing past it.
 func TestComposedGPUGridAttend(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate proved nothing")
 	}

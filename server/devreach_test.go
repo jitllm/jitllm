@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // reachable says whether a -devices name can be opened on this host, and why
@@ -21,13 +22,13 @@ func reachable(dev string) (bool, string) {
 		}
 		return true, ""
 	case "vulkan":
-		infos, err := backend.VulkanDevices()
+		infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 		if err != nil || len(infos) == 0 {
 			return false, fmt.Sprintf("no Vulkan device (%v)", err)
 		}
 		return true, ""
 	}
-	devs := backend.Open()
+	devs := backend.OpenWith(backend.Opts{Admit: testdevices.Admit()})
 	for _, d := range devs {
 		d.Close()
 	}

@@ -80,7 +80,7 @@ func (e *Engine) Devices(refresh bool) ([]DeviceInfo, error) {
 	}
 	probe := e.cfg.Probe
 	if probe == nil {
-		probe = func() ([]DeviceInfo, error) { return probeDevices(e.cfg.ROCm) }
+		probe = func() ([]DeviceInfo, error) { return probeDevices(e.cfg.ROCm, e.cfg.Admit) }
 	}
 	e.devices, e.devErr = probe()
 	// Dedupe whatever the probe returned, injected probes included.
@@ -99,7 +99,7 @@ func (e *Engine) snapshotDevices() []DeviceInfo {
 	return out
 }
 
-func probeDevices(rocm string) ([]DeviceInfo, error) {
+func probeDevices(rocm string, admit backend.Restriction) ([]DeviceInfo, error) {
 	out := []DeviceInfo{{
 		ID:                     HostGateID,
 		Backend:                "cpu",
@@ -114,7 +114,7 @@ func probeDevices(rocm string) ([]DeviceInfo, error) {
 	// Every Vulkan physical device is listed, not only the one backend.Open
 	// picks (discrete-first), so a caller can see and name vulkan:1. The query
 	// opens nothing.
-	if infos, err := backend.VulkanDevices(); err == nil {
+	if infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: admit}); err == nil {
 		for _, in := range infos {
 			d := DeviceInfo{
 				ID:        "vulkan:" + strconv.Itoa(in.Index),
@@ -141,9 +141,10 @@ func probeDevices(rocm string) ([]DeviceInfo, error) {
 	// Every HIP device is listed as hip:N, as every Vulkan device is above. No
 	// ROCm is no entry, not an error: the card is then vulkan:N alone.
 	hipCfg := backend.HIPConfig{Path: rocm}
+	base := backend.Opts{HIP: hipCfg, Admit: admit}
 	for i := 0; i < backend.HIPCount(hipCfg); i++ {
 		d := DeviceInfo{ID: "hip:" + strconv.Itoa(i), Backend: "hip", Index: i, Kind: KindDiscrete}
-		hd, err := backend.OpenHIPWith(i, backend.Opts{HIP: hipCfg, Enumerating: true})
+		hd, err := backend.OpenHIPWith(i, backend.Opts{HIP: hipCfg, Admit: admit, Enumerating: true})
 		if err != nil {
 			d.Why = err.Error()
 			out = append(out, d)
@@ -161,7 +162,7 @@ func probeDevices(rocm string) ([]DeviceInfo, error) {
 		out = append(out, d)
 	}
 
-	devs := backend.OpenWith(backend.Opts{HIP: hipCfg})
+	devs := backend.OpenWith(base)
 	defer func() {
 		for _, d := range devs {
 			d.Close()

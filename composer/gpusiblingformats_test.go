@@ -25,7 +25,7 @@ import (
 // the order of its sum. The violation: v's bias scaled must part.
 func TestComposedGPUSiblingsOfTwoFormats(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
@@ -118,7 +118,7 @@ func TestComposedGPUSiblingsOfTwoFormats(t *testing.T) {
 // k's norm weight scaled must part.
 func TestComposedGPUHeadNormsInOneLaunch(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}

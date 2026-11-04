@@ -52,7 +52,7 @@ func hostBatchEngine(t *testing.T, name string, cfg Config) (*Engine, *LoadedMod
 	if cfg.DefaultMaxSeq == 0 {
 		cfg.DefaultMaxSeq = 512
 	}
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev"})
 	if err != nil {

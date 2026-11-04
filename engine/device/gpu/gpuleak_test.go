@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // A CUDA context is per OS thread, so backend/cuda keeps one owner goroutine per
@@ -47,7 +49,7 @@ func quiesce(d time.Duration) {
 // give it back. If the count tracks the cycle count rather than the live device
 // count, every model load in a long-running process costs a thread permanently.
 func TestDeviceOpenCloseDoesNotLeakThreads(t *testing.T) {
-	g, err := OpenWith(WithDevices("auto"), WithDeviceTune(TuneOff))
+	g, err := OpenWith(WithAdmit(testdevices.Admit()), WithDevices("auto"), WithDeviceTune(TuneOff))
 	if err != nil || g == nil {
 		t.Skipf("no device: %v", err)
 	}
@@ -58,7 +60,7 @@ func TestDeviceOpenCloseDoesNotLeakThreads(t *testing.T) {
 	g0, th0 := runtime.NumGoroutine(), procThreads(t)
 	const rounds = 8
 	for i := 0; i < rounds; i++ {
-		h, err := OpenWith(WithDevices("auto"), WithDeviceTune(TuneOff))
+		h, err := OpenWith(WithAdmit(testdevices.Admit()), WithDevices("auto"), WithDeviceTune(TuneOff))
 		if err != nil || h == nil {
 			t.Fatalf("round %d: %v", i, err)
 		}
@@ -86,7 +88,7 @@ func TestDeviceOpenCloseDoesNotLeakThreads(t *testing.T) {
 // Nothing in engine/device/gpu calls sched_setaffinity; this keeps it so, catching
 // a driver thread, an FFI trampoline or a future pinning optimisation.
 func TestDeviceOpenLeavesNoThreadMaskedToOneCPU(t *testing.T) {
-	g, err := OpenWith(WithDevices("auto"), WithDeviceTune(TuneOff))
+	g, err := OpenWith(WithAdmit(testdevices.Admit()), WithDevices("auto"), WithDeviceTune(TuneOff))
 	if err != nil || g == nil {
 		t.Skipf("no device: %v", err)
 	}

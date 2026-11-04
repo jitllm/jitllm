@@ -26,7 +26,7 @@ func TestTheRowIsReadBackWhenTheReplyReadsIt(t *testing.T) {
 
 func rowComesHome(t *testing.T, mode model.DeviceSampleMode) {
 	path := modelPath(t, instructModel)
-	e := New(Config{ModelDir: filepath.Dir(path), Version: "test", MaxBatchRows: 1})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Version: "test", MaxBatchRows: 1}))
 	defer e.Close()
 	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "inst", DeviceIDs: []string{"gpu:0"},
 		Sessions: 1, DeviceSample: mode}); err != nil {

@@ -228,7 +228,7 @@ func gpuNMSE(got, want []float32) float64 {
 // too: the gate sees both.
 func TestComposedGPULayerNorm(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

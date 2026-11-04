@@ -5,19 +5,23 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
-// TestMain puts JITLLM_TEST_DEVICES in force: no test here opens a device
-// outside it, and one that names such a device fails the binary
-// (internal/testdevices).
+// TestMain holds a Vulkan driver for the binary's life where JITLLM_TEST_DEVICES
+// admits one (internal/testdevices); every device open here carries the
+// selection itself.
 func TestMain(m *testing.M) {
-	testdevices.Install(backend.Restrict)
 	// A Vulkan driver held for the binary's life keeps the ICDs loaded while
 	// the tests open and close their own (vulkan.Driver).
-	keep, _ := vulkan.NewDriver()
+	keep, _ := backend.NewVulkanDriver(backend.Opts{Admit: testdevices.Admit()})
 	code := m.Run()
 	keep.Close()
 	os.Exit(code)
+}
+
+// admitConfig is c under the test binary's device selection.
+func admitConfig(c Config) Config {
+	c.Admit = testdevices.Admit()
+	return c
 }

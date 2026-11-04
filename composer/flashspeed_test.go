@@ -32,7 +32,7 @@ import (
 func BenchmarkComposedFlash(t *testing.B) {
 	testlock.GPU(t)
 	const page, R, p0, keys, rounds, reps = 64, 512, 1536, 4608, 16, 5
-	for _, d := range backend.Open() {
+	for _, d := range openDevices() {
 		defer d.Close()
 		if d.API() != "ptx" {
 			continue

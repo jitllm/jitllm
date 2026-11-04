@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-
 )
 
 // backgroundShare is the fraction of the host budget that all backgrounded

@@ -31,8 +31,7 @@ func noDevice(t *testing.T, what string, err error) {
 // which catches an arm that skipped on a vanished device through a path
 // noDevice does not cover.
 func TestMain(m *testing.M) {
-	testdevices.Install(backend.Restrict)
-	keep, _ := vulkan.NewDriver()
+	keep, _ := backend.NewVulkanDriver(backend.Opts{Admit: testdevices.Admit()})
 	code := vanishedFails(keep, m.Run())
 	keep.Close()
 	os.Exit(code)

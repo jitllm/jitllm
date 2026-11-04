@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
@@ -21,7 +20,7 @@ import (
 // its last key or starting one key late must fail it.
 func TestComposedGPUCrossAttend(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	defer func() {
 		for _, d := range devs {
 			d.Close()

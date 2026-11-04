@@ -178,7 +178,7 @@ func TestAnExplicitAPIStillWinsOverThePreference(t *testing.T) {
 // through the same rule; only the real enumeration shows whether Vulkan's
 // deviceUUID and CUDA's cuDeviceGetUuid agree on this driver.
 func TestTheRealEnumerationCountsEachCardOnce(t *testing.T) {
-	devs := backend.Open()
+	devs := backend.OpenWith(backend.Opts{Admit: testdevices.Admit()})
 	defer func() {
 		for _, d := range devs {
 			d.Close()
@@ -266,7 +266,7 @@ func TestAllDevicesOffersEachCardOnce(t *testing.T) {
 // backend.OpenVulkan, not through choose(), so it is gated separately in case
 // a dedupe is ever added one layer up.
 func TestAnExplicitVulkanSpecStillOpensVulkan(t *testing.T) {
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil || len(infos) == 0 {
 		t.Skipf("no Vulkan device here, so the CUDA-holds-the-same-card case cannot be run: %v", err)
 	}

@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -163,6 +164,11 @@ type Config struct {
 	// Tests and deployments that know their topology supply it here.
 	Probe func() ([]DeviceInfo, error)
 
+	// Admit, where set, is asked before every device the engine opens or
+	// lists (backend.Opts.Admit): a test binary's restriction to the cards
+	// it was given. A deployment leaves it nil.
+	Admit backend.Restriction
+
 	// OnDemand is how a model a request names but nobody loaded is loaded
 	// (library.go): its devices, budget and seam. Path and ModelID are
 	// filled per model.
@@ -263,7 +269,7 @@ func New(cfg Config) *Engine {
 	cfg.withDefaults()
 	// One fetch bound for the whole server, shared by every surface.
 	cfg.Images = cfg.Images.ready()
-	vk, _ := vulkan.NewDriver()
+	vk, _ := backend.NewVulkanDriver(backend.Opts{Admit: cfg.Admit})
 	return &Engine{
 		pools:    gpu.NewPoolRegistry(),
 		crews:    sched.NewCrews(),
@@ -777,6 +783,7 @@ func (e *Engine) makeInstance(lm *LoadedModel) error {
 func (e *Engine) tierOptions(sessions int, tierConfig func(*gpu.Config), hostBudget uint64) []gpu.Option {
 	return []gpu.Option{
 		gpu.WithROCm(e.cfg.ROCm),
+		gpu.WithAdmit(e.cfg.Admit),
 		gpu.WithHostBudget(hostBudget),
 		// Every model's tier spends one card's memory once, so the room one
 		// model gives back is the next one's (orchestrate.go).

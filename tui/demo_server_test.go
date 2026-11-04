@@ -68,7 +68,7 @@ func TestDemoRelocatesAStreamingReplyOnARealService(t *testing.T) {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	devs := testdevices.Take(t, 2, "cuda:0,vulkan:1")
-	e := server.New(server.Config{Version: "test", NoMemCache: true})
+	e := server.New(server.Config{Admit: testdevices.Admit(), Version: "test", NoMemCache: true})
 	t.Cleanup(e.Close)
 	if _, err := e.LoadModel(server.LoadOptions{Path: path, ModelID: "dev", DeviceIDs: devs}); err != nil {
 		t.Skipf("NO DEVICE: loading onto %v failed (%v) -- this gate proved nothing", devs, err)

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
@@ -81,6 +82,7 @@ func engineServer(t *testing.T, cfg server.Config) (string, *server.Engine) {
 	if cfg.Probe == nil {
 		cfg.Probe = func() ([]server.DeviceInfo, error) { return nil, nil }
 	}
+	cfg.Admit = testdevices.Admit()
 	e := server.New(cfg)
 	t.Cleanup(e.Close)
 	s := httptest.NewServer(e.Handler())
@@ -93,7 +95,7 @@ func engineServer(t *testing.T, cfg server.Config) (string, *server.Engine) {
 // own model probe has somebody to talk to.
 func scriptServer(t *testing.T, b server.Backend) (string, *pathCount) {
 	t.Helper()
-	e := server.New(server.Config{
+	e := server.New(server.Config{Admit: testdevices.Admit(),
 		ModelDir: t.TempDir(),
 		Probe:    func() ([]server.DeviceInfo, error) { return nil, nil },
 	})

@@ -46,7 +46,7 @@ func TestShadowDriftOnTheDevice(t *testing.T) {
 }
 
 func shadowDriftOn(t *testing.T, spec string) {
-	g, err := OpenWith(WithDevices(spec), WithDeviceTune(TuneOff),
+	g, err := OpenWith(WithAdmit(testdevices.Admit()), WithDevices(spec), WithDeviceTune(TuneOff),
 		WithConfig(func(c *Config) { c.ComposedShadow = true }))
 	if err != nil || g == nil {
 		t.Skipf("no %s here: %v", spec, err)

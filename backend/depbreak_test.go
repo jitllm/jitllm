@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // TestDepCountersSeeABrokenWait is TestDepCountersOrderTheChain's violation
@@ -15,7 +16,9 @@ import (
 // If it does not, the gate's agreement says nothing about the counters.
 func TestDepCountersSeeABrokenWait(t *testing.T) {
 	ran := 0
-	broken := func() []backend.Device { return backend.OpenWith(backend.Opts{BreakDepWait: true}) }
+	broken := func() []backend.Device {
+		return backend.OpenWith(backend.Opts{Admit: testdevices.Admit(), BreakDepWait: true})
+	}
 	eachGridDeviceWith(t, broken, func(d backend.Device, width, limit int) {
 		if d.API() != "ptx" {
 			return

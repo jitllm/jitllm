@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jitllm/jitllm/common/api"
 	"github.com/jitllm/jitllm/common/engine"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -51,7 +52,7 @@ func TestTheStatusBarAlwaysSaysWhichEngine(t *testing.T) {
 // Turning the API on where a jitllmd answers is refused, the setting goes
 // back off, and the line says how to connect instead.
 func TestTheAPIIsRefusedWhereAServiceAnswers(t *testing.T) {
-	svc := server.New(server.Config{ModelDir: t.TempDir(), Version: "4.5.6"})
+	svc := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir(), Version: "4.5.6"})
 	defer svc.Close()
 	held, err := api.Start("127.0.0.1:0", svc)
 	if err != nil {

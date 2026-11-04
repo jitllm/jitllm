@@ -12,7 +12,7 @@ const guardKey = "s3cret-key"
 
 func guardEngine(t *testing.T) *Engine {
 	t.Helper()
-	e := New(Config{ModelDir: t.TempDir(), Probe: func() ([]DeviceInfo, error) { return nil, nil }})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: func() ([]DeviceInfo, error) { return nil, nil }}))
 	t.Cleanup(e.Close)
 	return e
 }

@@ -39,7 +39,7 @@ func BenchmarkComposedDecode(t *testing.B) {
 	if v := os.Getenv("JITLLM_DECODE_SPLITS"); v != "" {
 		splits = strings.Split(v, ",")
 	}
-	for _, d := range backend.Open() {
+	for _, d := range openDevices() {
 		defer d.Close()
 		if d.API() != "ptx" {
 			continue

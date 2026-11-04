@@ -22,7 +22,7 @@ func TestCUDAOrdinalZeroIsWhatOpenReturns(t *testing.T) {
 	}
 
 	ord := testdevices.Ordinal(t, "cuda", 0)
-	d, err := backend.OpenCUDA(ord)
+	d, err := backend.OpenCUDAWith(ord, backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Fatalf("OpenCUDA(%d) on a box with %d device(s): %v", ord, n, err)
 	}
@@ -80,7 +80,7 @@ func TestCUDAOrdinalOutOfRange(t *testing.T) {
 	if err != nil {
 		t.Skip("no CUDA driver here:", err)
 	}
-	d, err := backend.OpenCUDA(n)
+	d, err := backend.OpenCUDAWith(n, backend.Opts{Admit: testdevices.Admit()})
 	if err == nil {
 		d.Close()
 		t.Fatalf("OpenCUDA(%d) opened a device on a box with %d", n, n)

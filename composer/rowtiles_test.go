@@ -8,7 +8,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
@@ -167,7 +166,7 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 // FloatTiles is removed: it takes a float32 projection over rows first.
 func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
@@ -287,7 +286,7 @@ func tiledWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []b
 // FloatTiles is removed: it takes a float32 projection over rows first.
 func TestComposedGPURowTiles(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}

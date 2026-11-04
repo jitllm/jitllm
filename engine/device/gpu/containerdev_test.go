@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -69,7 +70,7 @@ func TestContainerAgreesHostAndDevice(t *testing.T) {
 		defer st.Close()
 		placed := 0
 		if dev {
-			g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"))
+			g, err := gpu.OpenWith(gpu.WithAdmit(testdevices.Admit()), gpu.WithDevices("gpu:0"))
 			if err != nil {
 				t.Skipf("no accelerator: %v -- this gate proved nothing", err)
 			}

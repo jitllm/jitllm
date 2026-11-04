@@ -96,7 +96,7 @@ func loadedEngine(t *testing.T, name, id string, o LoadOptions) (*Engine, *Loade
 	// The model directory is the whole test model disk: with on-demand loads
 	// on, a request naming any of its files would load it. These gates are
 	// about the one model they load; library_test.go gates the folder.
-	e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", NoOnDemand: true})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", NoOnDemand: true}))
 	t.Cleanup(e.Close)
 	o.Path, o.ModelID = path, id
 	lm, err := e.LoadModel(o)
@@ -689,7 +689,7 @@ func TestForceUnloadStopsAStepLoopRowWhileItsClientIsBusy(t *testing.T) {
 // some steps on; TestBatchCancelOneRowLeavesTheOthers gates that path.
 func TestCancelReportsWhetherAGenerateWasRunning(t *testing.T) {
 	path := modelPath(t, smallModel)
-	e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", MaxBatchRows: 1}))
 	t.Cleanup(e.Close)
 	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"}); err != nil {
 		t.Fatal(err)
@@ -1286,9 +1286,9 @@ func TestDevicesAreTheProbesAnswer(t *testing.T) {
 // TestAProbeFailureIsReportedNotHidden: a probe that cannot enumerate the
 // hardware is an error on every device surface, never an empty machine.
 func TestAProbeFailureIsReportedNotHidden(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: func() ([]DeviceInfo, error) {
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: func() ([]DeviceInfo, error) {
 		return nil, errors.New("the driver is wedged")
-	}})
+	}}))
 	defer e.Close()
 	c := serveEngine(t, e)
 	ctx := context.Background()
@@ -1347,7 +1347,7 @@ func TestConvertStreamsItsPhasesAndTheResultLoads(t *testing.T) {
 		t.Fatalf("a scratch directory in the model directory: %v", err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	e := New(Config{ModelDir: dir, Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: dir, Probe: noProbe}))
 	defer e.Close()
 	c := serveEngine(t, e)
 	ctx := context.Background()

@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -116,7 +117,7 @@ func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
 // against a HostReserved that reports the pool's ceiling (a quarter of the
 // host budget) instead of what the device holds.
 func TestPageBudgetFollowsARealIntegratedGPU(t *testing.T) {
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Skipf("NO VULKAN (%v): there is no integrated device to reach, and this gate proved nothing", err)
 	}

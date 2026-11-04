@@ -37,7 +37,7 @@ func ratioMedian(r []float64) (med, q1, q3 float64) {
 // queue at once (2.00x both ways), so on Vulkan the bar is that queues cost
 // nothing over taking turns.
 func TestQueuesOverlapOnTheDevice(t *testing.T) {
-	for _, d := range backend.Open() {
+	for _, d := range backend.OpenWith(backend.Opts{Admit: testdevices.Admit()}) {
 		defer d.Close()
 		qd, ok := d.(backend.Queued)
 		if !ok {
@@ -163,7 +163,7 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := gpu.OpenWith(gpu.WithAdmit(testdevices.Admit()), gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		t.Skipf("NO CUDA DEVICE (%v): this floor proved nothing", err)
 	}

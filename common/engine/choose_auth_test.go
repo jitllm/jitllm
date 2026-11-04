@@ -8,13 +8,14 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 )
 
 // jitllmdAt serves a real engine behind the guard, wanting key when set.
 func jitllmdAt(t *testing.T, key string) string {
 	t.Helper()
-	e := server.New(server.Config{ModelDir: t.TempDir(), Version: "9.8.7",
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir(), Version: "9.8.7",
 		Probe: func() ([]server.DeviceInfo, error) { return nil, nil }})
 	t.Cleanup(e.Close)
 	s := httptest.NewServer(nil)

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -132,7 +133,7 @@ func TestDeviceMatchesHostOnABiasedModel(t *testing.T) {
 			t.Logf("%s: host-vs-host NMSE %.3e at position %d of %d, max|d| %.4f",
 				c.name, base, baseAt, len(toks), baseWorst)
 
-			g, err := gpu.Open(0)
+			g, err := gpu.OpenWith(gpu.WithAdmit(testdevices.Admit()))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}

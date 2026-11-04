@@ -74,7 +74,7 @@ func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, 
 		path := modelPath(t, smallModel)
 		c := cfg
 		c.ModelDir, c.Probe, c.Version = filepath.Dir(path), oneCardProbe, "test"
-		e := New(c)
+		e := New(admitConfig(c))
 		defer e.Close()
 		lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"})
 		if err != nil {

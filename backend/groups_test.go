@@ -46,7 +46,7 @@ func groupDevices(t *testing.T, forced uint32) []groupDevice {
 		}
 		out = append(out, groupDevice{d.API(), d, 0})
 	}
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Logf("no Vulkan: %v", err)
 	}
@@ -55,8 +55,7 @@ func groupDevices(t *testing.T, forced uint32) []groupDevice {
 			continue
 		}
 		for _, lim := range []uint32{0, forced} {
-			d, err := backend.OpenVulkanWith(strconv.Itoa(in.Index),
-				backend.Opts{Vulkan: vulkan.Config{MaxGroups: lim}})
+			d, err := backend.OpenVulkanWith(strconv.Itoa(in.Index), backend.Opts{Admit: testdevices.Admit(), Vulkan: vulkan.Config{MaxGroups: lim}})
 			if err != nil {
 				t.Fatalf("vulkan:%d %s: %v", in.Index, in.Name, err)
 			}

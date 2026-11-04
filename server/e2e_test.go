@@ -51,7 +51,7 @@ func TestEndToEndAgainstARealContainer(t *testing.T) {
 			"format and a GGUF must be converted first", path, model.Ext)
 	}
 
-	e := New(Config{ModelDir: filepath.Dir(path), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: noProbe}))
 	defer e.Close()
 
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "e2e"})

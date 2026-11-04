@@ -17,7 +17,7 @@ func TestADeviceCallFromInsideASessionCompletes(t *testing.T) {
 	if n, err := backend.CUDACount(); err != nil || n < 1 {
 		t.Skip("no CUDA device here:", err)
 	}
-	d, err := backend.OpenCUDA(testdevices.Ordinal(t, "cuda", 0))
+	d, err := backend.OpenCUDAWith(testdevices.Ordinal(t, "cuda", 0), backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Fatalf("OpenCUDA: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestCUDASessionRunsOnTheCallersThread(t *testing.T) {
 	if n, err := backend.CUDACount(); err != nil || n < 1 {
 		t.Skip("no CUDA device here:", err)
 	}
-	d, err := backend.OpenCUDA(testdevices.Ordinal(t, "cuda", 0))
+	d, err := backend.OpenCUDAWith(testdevices.Ordinal(t, "cuda", 0), backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Fatalf("OpenCUDA: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestCUDAPostingIsPerDevice(t *testing.T) {
 	}
 	for _, postedFirst := range []bool{true, false} {
 		open := func(posted bool) backend.Device {
-			d, err := backend.OpenCUDAWith(testdevices.Ordinal(t, "cuda", 0), backend.Opts{CUDAPosted: posted})
+			d, err := backend.OpenCUDAWith(testdevices.Ordinal(t, "cuda", 0), backend.Opts{Admit: testdevices.Admit(), CUDAPosted: posted})
 			if err != nil {
 				t.Fatalf("OpenCUDAWith(0): %v", err)
 			}

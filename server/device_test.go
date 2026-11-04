@@ -25,7 +25,7 @@ const deviceModel = "stories15M-q8_0.jlm"
 func deviceEngine(t *testing.T) (*Engine, clients) {
 	t.Helper()
 	path := modelPath(t, deviceModel)
-	e := New(Config{Probe: oneCardProbe, Version: "test"})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test"}))
 	t.Cleanup(e.Close)
 	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: []string{"gpu:0"}}); err != nil {
 		t.Skipf("NO DEVICE: loading onto -devices gpu:0 failed (%v) -- this gate proved nothing", err)
@@ -178,7 +178,7 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 // once returned before stepping the tuner: with those steps removed this
 // fails with "the tuner did not settle".
 func TestTuneSeamReadsTheSessionsSnapshot(t *testing.T) {
-	e := New(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1}))
 	t.Cleanup(e.Close)
 	// The tuner's seams leave blocks on the CPU, so the CPU is listed: a list
 	// of cards alone keeps every block on them and leaves no seam to tune.

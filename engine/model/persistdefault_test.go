@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // openGPU is gpu.OpenWith for a model gate. With JITLLM_TEST_PERSIST set the
@@ -23,7 +24,7 @@ func openGPU(t testing.TB, opts ...gpu.Option) (*gpu.GPU, error) {
 	default:
 		opts = append([]gpu.Option{gpu.WithPersist(true, 0)}, opts...)
 	}
-	g, err := gpu.OpenWith(opts...)
+	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithAdmit(testdevices.Admit())}, opts...)...)
 	if err != nil || g == nil || mode == "" {
 		return g, err
 	}

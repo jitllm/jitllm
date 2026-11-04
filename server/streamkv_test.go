@@ -94,7 +94,7 @@ func sixtyFour(t *testing.T, waves int, admitAll bool, level ...int) []waveCount
 	if len(level) > 0 {
 		cfg.Fairness = &level[0]
 	}
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: []string{"gpu:0"},
 		tierConfig: func(c *gpu.Config) { c.KVPage = 64 }})

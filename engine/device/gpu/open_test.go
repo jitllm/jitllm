@@ -7,6 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // The spec grammar, the budget defaults, the pool arithmetic and the rule that
@@ -443,7 +444,7 @@ func TestHostLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
 // devices, so passing both is refused.
 func TestOpenWithRefusesTwoAnswers(t *testing.T) {
 	d := &fakeDev{}
-	_, err := OpenWith(WithSlots(Slot{Dev: d, Bytes: 1 << 30}), WithDevices("cuda:0"))
+	_, err := OpenWith(WithAdmit(testdevices.Admit()), WithSlots(Slot{Dev: d, Bytes: 1 << 30}), WithDevices("cuda:0"))
 	if err == nil {
 		t.Fatal("OpenWith accepted both WithSlots and WithDevices")
 	}
@@ -462,7 +463,7 @@ func TestOpenWithRefusesTwoAnswers(t *testing.T) {
 // device and budget, no spec string, no environment.
 func TestOpenWithSlotsTakesTheCallersDevices(t *testing.T) {
 	d := &fakeDev{name: "embedder's device"}
-	g, err := OpenWith(WithSlots(Slot{Dev: d, Bytes: 1 << 30, Why: "the embedder said so"}))
+	g, err := OpenWith(WithAdmit(testdevices.Admit()), WithSlots(Slot{Dev: d, Bytes: 1 << 30, Why: "the embedder said so"}))
 	if err != nil {
 		t.Fatalf("OpenWith: %v", err)
 	}
@@ -482,7 +483,7 @@ func gib(n uint64) float64 { return float64(n) / (1 << 30) }
 // arithmetic; this proves two drivers open together. It skips only when the
 // hardware is absent, and says which half.
 func TestRealThreeWayPlacement(t *testing.T) {
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Skipf("no Vulkan on this host (%v), so there is no integrated device to reach", err)
 	}
@@ -512,9 +513,9 @@ func TestRealThreeWayPlacement(t *testing.T) {
 	two := twoBlockBytesOn(t, &fakeDev{page: 64 << 10}, p, noPrompt)
 
 	spec := fmt.Sprintf("cuda:0=%d,vulkan:%d=%d", two, sel, two)
-	g, err := OpenWith(WithDevices(spec), WithHostBudget(boxHost), noPrompt)
+	g, err := OpenWith(WithAdmit(testdevices.Admit()), WithDevices(spec), WithHostBudget(boxHost), noPrompt)
 	if err != nil {
-		t.Fatalf("OpenWith(%q): %v", spec, err)
+		t.Fatalf("OpenWith(WithAdmit(testdevices.Admit()), %q): %v", spec, err)
 	}
 	defer g.Close()
 	if g.Devices() != 2 {

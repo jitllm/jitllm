@@ -23,7 +23,7 @@ import (
 func TestConcurrentEncoderKeepsTheChain(t *testing.T) {
 	testdevices.Require(t, "metal")
 	gpuLock(t)
-	d, err := backend.OpenMetalWith(backend.Opts{Metal: metal.Opts{Concurrent: true}})
+	d, err := backend.OpenMetalWith(backend.Opts{Admit: testdevices.Admit(), Metal: metal.Opts{Concurrent: true}})
 	if err != nil {
 		t.Skipf("no Metal: %v", err)
 	}

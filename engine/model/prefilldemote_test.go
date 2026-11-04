@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -43,7 +44,7 @@ func TestDemotedDevicePrefillFinishesOnTheCPU(t *testing.T) {
 	want = append([]float32(nil), want...)
 
 	t.Setenv("JITLLM_DEVICE_FAIL_AT", "1,3")
-	g, err := gpu.Open(0)
+	g, err := gpu.OpenWith(gpu.WithAdmit(testdevices.Admit()))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

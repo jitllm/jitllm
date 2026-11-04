@@ -1,12 +1,11 @@
 package testdevices_test
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -71,48 +70,129 @@ func TestNoProductionCodeImportsTestDevices(t *testing.T) {
 	}
 }
 
-// opensADevice() is a call that reaches a device.
-func opensADevice() *regexp.Regexp {
-	return regexp.MustCompile(`\b(backend\.(Open|OpenWith|OpenCUDA|OpenCUDAWith|OpenVulkan|OpenVulkanWith|OpenHIPWith|OpenMetalWith)|tier\.(Open|OpenWith|New)|LoadModel)\(`)
+// opens is every call that reaches a device, as package.name: a backend open
+// or listing, a tier open, a server engine and its probe.
+func opens() map[string]bool {
+	m := map[string]bool{"gpu.OpenWith": true, "server.New": true, "server.probeDevices": true}
+	for _, n := range []string{"OpenWith", "OpenCUDAWith", "OpenVulkanWith", "OpenHIPWith", "OpenMetalWith",
+		"VulkanDevicesWith", "NewVulkanDriver"} {
+		m["backend."+n] = true
+	}
+	return m
 }
 
-// TestEveryPackageThatOpensADeviceInstallsTheSelection: the selection holds
-// only in a test binary that installed it (testdevices.Install), so a package
-// whose tests reach a device and never did would be the card a shared box
-// loses. A package with no device in its tests is not asked.
-func TestEveryPackageThatOpensADeviceInstallsTheSelection(t *testing.T) {
-	opens := map[string]string{}
-	installs := map[string]bool{}
+// TestEveryDeviceOpenCarriesTheSelection: the selection holds only for an open
+// that carries it (Admit: backend.Opts.Admit, gpu.WithAdmit, server's
+// Config.Admit), so a test whose open does not is the card a shared box
+// loses. Every device open in a test is in a function that names
+// testdevices.Admit or calls one of its package's test functions that does,
+// and the opens that take no options (backend.Open, OpenCUDA, OpenVulkan,
+// VulkanDevices, vulkan.NewDriver) are not called from a test at all.
+func TestEveryDeviceOpenCarriesTheSelection(t *testing.T) {
+	type fn struct {
+		name   string
+		admits bool
+		calls  map[string]bool
+		opens  []string
+	}
+	byDir := map[string][]*fn{}
+	bare := map[string]bool{"backend.Open": true, "backend.OpenCUDA": true, "backend.OpenVulkan": true,
+		"backend.VulkanDevices": true, "vulkan.NewDriver": true}
+	opener := opens()
+	fset := token.NewFileSet()
+	count := 0
 	walkGo(t, func(p string) {
 		if !strings.HasSuffix(p, "_test.go") {
 			return
 		}
-		b, err := os.ReadFile(p)
+		f, err := parser.ParseFile(fset, p, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		dir := filepath.Dir(p)
-		var code []string
-		for _, l := range strings.Split(string(b), "\n") {
-			if !strings.HasPrefix(strings.TrimSpace(l), "//") {
-				code = append(code, l)
+		rel, err := filepath.Rel(filepath.Join("..", ".."), filepath.Dir(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "backend/vulkan" {
+			return // the driver's own tests, below every open
+		}
+		pkg := f.Name.Name
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
 			}
-		}
-		src := strings.Join(code, "\n")
-		if strings.Contains(src, "testdevices.Install(") {
-			installs[dir] = true
-		}
-		if opensADevice().MatchString(src) {
-			opens[dir] = p
+			e := &fn{name: fd.Name.Name, calls: map[string]bool{}}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				c, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				q, name := "", ""
+				switch f := c.Fun.(type) {
+				case *ast.Ident:
+					name = f.Name
+					switch {
+					case rel == "backend" && pkg == "backend":
+						q = "backend"
+					case rel == "engine/device/gpu" && pkg == "gpu":
+						q = "gpu"
+					case rel == "server" && pkg == "server" && opener["server."+name]:
+						q = "server"
+					}
+				case *ast.SelectorExpr:
+					if x, ok := f.X.(*ast.Ident); ok {
+						q, name = x.Name, f.Sel.Name
+					}
+				}
+				e.calls[name] = true
+				if q == "testdevices" && name == "Admit" {
+					e.admits = true
+				}
+				at := fset.Position(c.Pos()).String()
+				switch {
+				case bare[q+"."+name]:
+					t.Errorf("%s: %s.%s takes no options, so it cannot carry the selection: "+
+						"call its With form with Admit: testdevices.Admit()", at, q, name)
+				case opener[q+"."+name]:
+					e.opens = append(e.opens, at+": "+q+"."+name)
+				}
+				return true
+			})
+			byDir[rel] = append(byDir[rel], e)
 		}
 	})
-	if len(installs) == 0 {
-		t.Fatal("no package installs the selection: the guard looked at nothing")
-	}
-	for dir, first := range opens {
-		if !installs[dir] {
-			t.Errorf("%s opens a device (%s) and no test file there calls testdevices.Install: "+
-				"add a TestMain, as engine/model/devskip_test.go has", dir, first)
+	for dir, fns := range byDir {
+		carries := map[string]bool{}
+		for grew := true; grew; {
+			grew = false
+			for _, e := range fns {
+				if carries[e.name] {
+					continue
+				}
+				ok := e.admits
+				for c := range e.calls {
+					ok = ok || carries[c]
+				}
+				if ok {
+					carries[e.name], grew = true, true
+				}
+			}
 		}
+		for _, e := range fns {
+			count += len(e.opens)
+			if carries[e.name] {
+				continue
+			}
+			for _, o := range e.opens {
+				t.Errorf("%s (in %s, %s): the open carries no selection: pass testdevices.Admit() "+
+					"(backend.Opts.Admit, gpu.WithAdmit, Config.Admit), or call a helper of the package's tests that does",
+					o, e.name, dir)
+			}
+		}
+	}
+	if count < 50 {
+		t.Fatalf("found %d device opens in the tests: the guard looked at nothing", count)
 	}
 }

@@ -12,11 +12,13 @@
 // Unset, nothing changes: every test opens what it always opened. Set, no test
 // in the binary opens any other device. Two things make that true.
 //
-// The refusal: Install hands the selection to the backend, which asks it before
-// every device open (backend.Restrict). A device outside the selection is not
-// opened; a search for devices (the default pick, a loop over ordinals) is
-// narrowed to the selection, and a test that NAMES a device outside it is
-// a violation: the binary fails.
+// The refusal: Admit is the selection as the backend's restriction, which
+// every device open a test makes carries (backend.Opts.Admit, gpu.WithAdmit)
+// and the backend asks before each device it reaches. A device outside the
+// selection is not opened; a search for devices (the default pick, a loop over
+// ordinals) is narrowed to the selection, and a test that NAMES a device
+// outside it is a violation: the binary fails. guard_test.go holds every test
+// that opens a device to passing it.
 //
 // The helpers: Specs, One, Spec and Take give a test the device list it would
 // have hardcoded, replaced by the selection when there is one, so a gate that
@@ -311,16 +313,14 @@ func Refusing(t testing.TB, spec string) {
 	t.Setenv(refusingVar, prev+ds[0].String())
 }
 
-// Install puts the selection in force in this process through set, the
-// backend's Restrict. It is generic over the restriction's named type so this
-// package imports nothing from the engine (the backend's own tests import it).
-// With nothing selected it installs nothing. A test that names a device outside
-// the selection ends the binary at once, failed: the open returns the refusal,
-// but a test may swallow that.
-func Install[R ~func(string, int, bool) (int, error)](set func(R)) {
-	if isSelected() {
-		set(R(restriction(exitOutside, func(string) {})))
-	}
+// Admit is the selection as a backend.Restriction, for a test's device open to
+// carry. It is the restriction's underlying type so this package imports
+// nothing from the engine (the backend's own tests import it). With nothing
+// selected it admits every device. A test that names a device outside the
+// selection ends the binary at once, failed: the open returns the refusal, but
+// a test may swallow that.
+func Admit() func(api string, ord int, enumerated bool) (int, error) {
+	return restriction(exitOutside, func(string) {})
 }
 
 func exitOutside(name string) {

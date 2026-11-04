@@ -5,7 +5,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
@@ -18,7 +17,7 @@ import (
 // block's shape -- and holds every output to the oracle.
 func TestComposedGPUSlicedConcat(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}
@@ -110,7 +109,7 @@ func TestComposedGPUSlicedConcat(t *testing.T) {
 // still hold its own values when the slices read it.
 func TestComposedGPUSlicedConcatTwoReaders(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}
@@ -208,7 +207,7 @@ func TestComposedGPUSlicedConcatTwoReaders(t *testing.T) {
 // concatenation's values, whatever the convolution's window and state.
 func TestComposedGPUSlicedConcatThroughAStateConv(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

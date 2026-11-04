@@ -145,7 +145,7 @@ func TestHIPDeviceRunsTheIR(t *testing.T) {
 // device; neither falls back to another backend for the request.
 func TestExplicitHIPWithoutROCmIsAnError(t *testing.T) {
 	testdevices.SkipSelected(t, "it names hip:0 on a box that has none")
-	o := Opts{HIP: hip.Config{Path: t.TempDir()}}
+	o := Opts{HIP: hip.Config{Path: t.TempDir()}, Admit: testdevices.Admit()}
 	_, err := OpenHIPWith(0, o)
 	if err == nil || !strings.Contains(err.Error(), "hip:0 requested but ROCm was not found (searched "+o.HIP.Path) {
 		t.Errorf("err = %v", err)

@@ -28,7 +28,7 @@ import (
 // the composer must not join either into the pass.
 func TestComposedGPUAttendInPasses(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	defer func() {
 		for _, d := range devs {
 			d.Close()

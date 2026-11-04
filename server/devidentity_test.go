@@ -3,6 +3,8 @@ package server
 import (
 	"os"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // One physical device enumerated by two backends is one budget: a card seen
@@ -142,7 +144,7 @@ func TestADeviceWithNoIdentityIsNotMerged(t *testing.T) {
 // only the real probe shows whether the backends agree on a UUID and whether
 // probeDevices fills PhysicalID at all.
 func TestTheRealProbeCountsEachCardOnce(t *testing.T) {
-	devs, err := probeDevices(os.Getenv("JITLLM_ROCM"))
+	devs, err := probeDevices(os.Getenv("JITLLM_ROCM"), testdevices.Admit())
 	if err != nil {
 		t.Fatalf("probeDevices: %v", err)
 	}

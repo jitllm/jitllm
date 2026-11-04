@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/server"
 )
@@ -24,7 +25,7 @@ func TestModelsSetsAliasesAndDisables(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "stories260K.jlm"), b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e := server.New(server.Config{ModelDir: dir, Version: "test", Probe: func() ([]server.DeviceInfo, error) {
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: dir, Version: "test", Probe: func() ([]server.DeviceInfo, error) {
 		return []server.DeviceInfo{{ID: "cpu", Backend: "cpu", Kind: server.KindHost, Available: true}}, nil
 	}})
 	defer e.Close()

@@ -170,7 +170,7 @@ func TestAChatPromptCarriesItsSystemFieldSeparately(t *testing.T) {
 // Open checks the extension first. Without the NotConvertedError arm in
 // connectErr it fails with "code is internal, want failed_precondition".
 func TestHandingAGGUFToLoadReturnsTheConvertCommand(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
 	url := connectServer(t, func(mux *http.ServeMux) {
 		p, h := jitllmv1connect.NewModelServiceHandler(&ModelService{E: e})
@@ -200,7 +200,7 @@ func TestHandingAGGUFToLoadReturnsTheConvertCommand(t *testing.T) {
 
 // TestAnUnknownModelIsNotFoundRatherThanInternal.
 func TestAnUnknownModelIsNotFoundRatherThanInternal(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
 	url := connectServer(t, func(mux *http.ServeMux) {
 		p, h := jitllmv1connect.NewModelServiceHandler(&ModelService{E: e})
@@ -217,7 +217,7 @@ func TestAnUnknownModelIsNotFoundRatherThanInternal(t *testing.T) {
 // TestGenerateRefusesBothSessionAndModel: one continues a sequence, the other
 // makes a throwaway, so neither is silently picked.
 func TestGenerateRefusesBothSessionAndModel(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
 	err := e.Generate(context.Background(), GenerateOptions{
 		SessionID: "s", ModelID: "m",
@@ -231,7 +231,7 @@ func TestGenerateRefusesBothSessionAndModel(t *testing.T) {
 // TestTheDeviceQueueReportsItsReason: the queue says how sessions share the
 // device, so a caller reading it knows nothing waits for the device as a whole.
 func TestTheDeviceQueueReportsItsReason(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
 	url := connectServer(t, func(mux *http.ServeMux) {
 		p, h := jitllmv1connect.NewSessionServiceHandler(&SessionService{E: e})

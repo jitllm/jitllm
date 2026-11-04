@@ -72,7 +72,7 @@ func batchEngine(t *testing.T, name string, cfg Config, sessions int, tc func(*g
 		// which takes them out of the joint step.
 		cfg.DefaultMaxSeq = 512
 	}
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: []string{"gpu:0"},
 		Sessions: sessions, tierConfig: tc})
@@ -824,7 +824,7 @@ func notWhollyOnTheDevice(t *testing.T, name string) {
 func batchEngineNoLoop(t *testing.T, name string) (*Engine, *LoadedModel, clients) {
 	t.Helper()
 	path := modelPath(t, name)
-	e := New(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1}))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: []string{"gpu:0"}})
 	if err != nil {

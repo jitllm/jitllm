@@ -101,7 +101,7 @@ func TestAPIManifestCoversEveryField(t *testing.T) {
 // rather than falling to the not-found handler, and that an unlisted path
 // does not -- so the table and the mux cannot part.
 func TestRouteTableIsWhatIsServed(t *testing.T) {
-	e := New(Config{Probe: oneCardProbe})
+	e := New(admitConfig(Config{Probe: oneCardProbe}))
 	defer e.Close()
 	h := e.Handler()
 	for _, ep := range API().Endpoints {
@@ -126,7 +126,7 @@ func TestRouteTableIsWhatIsServed(t *testing.T) {
 // TestCapabilitiesEndpoint serves the manifest with the build's identity and
 // the route table it is serving.
 func TestCapabilitiesEndpoint(t *testing.T) {
-	e := New(Config{Probe: oneCardProbe, Version: "v1.2.3"})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "v1.2.3"}))
 	defer e.Close()
 	rec := httptest.NewRecorder()
 	e.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/capabilities", nil))

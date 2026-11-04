@@ -14,7 +14,7 @@ import (
 // four rotary positions from its sequence's marks, held to the oracle.
 func TestComposedGPURopePos(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

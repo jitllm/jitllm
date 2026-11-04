@@ -149,7 +149,7 @@ func sampleOnGPU(t *testing.T, d backend.Device, dv composer.Device, g *graph.Gr
 // (composer.SampleWindow) parts on every case with a window.
 func TestComposedGPUSampleTopK(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
@@ -196,7 +196,7 @@ func TestComposedGPUSampleTopK(t *testing.T) {
 // output; the equality one id off must part.
 func TestComposedGPUEqual(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
@@ -272,7 +272,7 @@ func TestComposedGPUEqual(t *testing.T) {
 // the logits negated must part.
 func TestComposedGPUSampleGreedy(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}

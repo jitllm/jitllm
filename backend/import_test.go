@@ -45,7 +45,7 @@ func importDevices(t *testing.T) []backend.Device {
 		out = append(out, d)
 		seen[d.API()+"/"+d.Name()] = true
 	}
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Logf("no Vulkan enumeration: %v", err)
 		return out
@@ -54,7 +54,7 @@ func importDevices(t *testing.T) []backend.Device {
 		if !testdevices.Has(t, "vulkan", i) {
 			continue
 		}
-		d, err := backend.OpenVulkan(strconv.Itoa(i))
+		d, err := backend.OpenVulkanWith(strconv.Itoa(i), backend.Opts{Admit: testdevices.Admit()})
 		if err != nil {
 			t.Logf("vulkan device %d: %v", i, err)
 			continue

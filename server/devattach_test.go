@@ -24,7 +24,7 @@ import (
 func TestAHostLoadedModelRelocatesToADeviceAndBack(t *testing.T) {
 	devs := testdevices.Take(t, 1, "cuda:0")
 	dev := devs[0]
-	e := New(Config{Version: "test", NoMemCache: true})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 	t.Cleanup(e.Close)
 	// The device gates' small model when it is on the box, else a Qwen3
 	// container the model directory holds.
@@ -120,7 +120,7 @@ func TestADeviceOutsideTheTierJoinsIt(t *testing.T) {
 	if _, err := os.Stat(testmodels.Path(name)); err != nil {
 		name = "Qwen3-0.6B-Q8_0.jlm"
 	}
-	e := New(Config{Version: "test", NoMemCache: true})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: modelPath(t, name), ModelID: "one", DeviceIDs: devs[:1]})
 	if err != nil {
@@ -182,7 +182,7 @@ func TestAMiddleRangeMovesUpAndASubRangeMovesToTheCPU(t *testing.T) {
 	if _, err := os.Stat(testmodels.Path(name)); err != nil {
 		name = "Qwen3-0.6B-Q8_0.jlm"
 	}
-	e := New(Config{Version: "test", NoMemCache: true})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: modelPath(t, name), ModelID: "host", DeviceIDs: []string{"cpu"}})
 	if err != nil {

@@ -197,12 +197,12 @@ func OpenCUDA(ord int) (Device, error) { return OpenCUDAWith(ord, Opts{}) }
 
 // OpenCUDAWith is OpenCUDA with this device's open choices.
 //
-// An enumerating open of an ordinal below zero is the default pick: device 0, or the first device an
-// installed Restriction allows.
+// An enumerating open of an ordinal below zero is the default pick: device 0, or the first device
+// opts.Admit allows.
 func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 	if ord >= 0 || opts.Enumerating {
 		var err error
-		if ord, err = admit("ptx", ord, opts.Enumerating); err != nil {
+		if ord, err = opts.admit("ptx", ord); err != nil {
 			return nil, err
 		}
 	}

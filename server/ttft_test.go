@@ -34,7 +34,7 @@ func ttftEngine(t *testing.T, name string, cfg Config, o LoadOptions) (*Engine, 
 	if cfg.DefaultMaxSeq == 0 {
 		cfg.DefaultMaxSeq = 512
 	}
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	o.Path, o.ModelID = path, "m"
 	lm, err := e.LoadModel(o)

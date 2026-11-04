@@ -5,6 +5,8 @@ package gpu
 import (
 	"testing"
 	"time"
+
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // TestDoubleCloseReturns: closing a tier twice must return, not wedge. Each
@@ -13,7 +15,7 @@ import (
 // A `defer g.Close()` beside an explicit Close is all it takes. The gate is
 // time-bounded because the violation is a hang, not a failure.
 func TestDoubleCloseReturns(t *testing.T) {
-	g, err := OpenWith(WithDevices("auto"), WithDeviceTune(TuneOff))
+	g, err := OpenWith(WithAdmit(testdevices.Admit()), WithDevices("auto"), WithDeviceTune(TuneOff))
 	if err != nil || g == nil {
 		t.Skipf("no device: %v", err)
 	}

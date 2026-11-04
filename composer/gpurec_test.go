@@ -229,7 +229,7 @@ func recSteps() []struct {
 // row to row -- the forms must part.
 func TestComposedGPURecurrentRuns(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}
@@ -602,7 +602,7 @@ func runConv(fr *recRun, g *graph.Graph, T, C, n int, runs recRuns, chained bool
 // the channels -- and holds each to the oracle's compensated dot.
 func TestComposedGPUScanWidths(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}

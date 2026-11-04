@@ -6,13 +6,14 @@ import (
 
 	"github.com/jitllm/jitllm/common/api"
 	core "github.com/jitllm/jitllm/common/engine"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 )
 
 // The window's badge follows the API it actually serves, not the setting.
 func TestTheBadgeFollowsTheAPI(t *testing.T) {
 	sh := NewShell(nil, DefaultConfig(Env{}))
-	e := server.New(server.Config{ModelDir: t.TempDir()})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir()})
 	defer e.Close()
 	badge := sh.Badge()
 	if got := badge.Get(); got != "Embedded · API off" {
@@ -38,7 +39,7 @@ func TestTheBadgeFollowsTheAPI(t *testing.T) {
 // Turning the API on where a jitllmd answers is refused: nothing listens, the
 // setting goes back off, and the window offers to connect to the service.
 func TestTheAPIToggleIsRefusedOnAHeldAddress(t *testing.T) {
-	svc := server.New(server.Config{ModelDir: t.TempDir(), Version: "7.7.7"})
+	svc := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir(), Version: "7.7.7"})
 	defer svc.Close()
 	held, err := api.Start("127.0.0.1:0", svc)
 	if err != nil {
@@ -49,7 +50,7 @@ func TestTheAPIToggleIsRefusedOnAHeldAddress(t *testing.T) {
 	sh := NewShell(nil, DefaultConfig(Env{}))
 	var connected string
 	sh.ConnectTo = func(addr string) { connected = addr }
-	e := server.New(server.Config{ModelDir: t.TempDir()})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir()})
 	defer e.Close()
 	sh.Store.APIAddr.Set(held.Addr())
 	stop := sh.ServeAPI(e)

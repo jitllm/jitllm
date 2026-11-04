@@ -24,7 +24,7 @@ import (
 // widths and several rows, with the words past the result untouched.
 func TestComposedGPUStatedReduce(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate proved nothing")
 	}

@@ -32,7 +32,7 @@ import (
 // must fail too.
 func TestComposedGPUAttendBidirRows(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	defer func() {
 		for _, d := range devs {
 			d.Close()

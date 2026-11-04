@@ -53,6 +53,8 @@ type openOpts struct {
 	cfg        []func(*Config)
 	// counters is what the devices count into (WithCounters).
 	counters *backend.Counters
+	// admit is asked before every device the tier reaches (WithAdmit).
+	admit backend.Restriction
 	// pools is the registry the tier's discrete cards take their pools from
 	// (WithPoolRegistry); nil, each tier its own.
 	pools *PoolRegistry
@@ -535,7 +537,7 @@ func ordinalOf(d backend.Device) int {
 type hostBackends struct {
 	cudaCount     func() (int, error)
 	openCUDA      func(int, backend.Opts) (backend.Device, error)
-	vulkanDevices func() ([]vulkan.Info, error)
+	vulkanDevices func(backend.Opts) ([]vulkan.Info, error)
 	openVulkan    func(string, backend.Opts) (backend.Device, error)
 	openMetal     func(backend.Opts) (backend.Device, error)
 	hipCount      func(backend.HIPConfig) int
@@ -546,7 +548,7 @@ func realBackends() hostBackends {
 	return hostBackends{
 		cudaCount:     backend.CUDACount,
 		openCUDA:      backend.OpenCUDAWith,
-		vulkanDevices: backend.VulkanDevices,
+		vulkanDevices: backend.VulkanDevicesWith,
 		openVulkan:    backend.OpenVulkanWith,
 		openMetal:     backend.OpenMetalWith,
 		hipCount:      backend.HIPCount,
@@ -619,7 +621,7 @@ func (b hostBackends) everyHIP(do backend.Opts) ([]backend.Device, error) {
 func (b hostBackends) vulkanGPUs(do backend.Opts) []backend.Device {
 	do.Enumerating = true
 	var out []backend.Device
-	if infos, err := b.vulkanDevices(); err == nil {
+	if infos, err := b.vulkanDevices(do); err == nil {
 		for _, in := range infos {
 			if !in.Compute || in.Software {
 				continue

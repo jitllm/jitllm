@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/layout"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // The packed arena, at the tier's level: a block uploaded, released and
@@ -279,7 +280,7 @@ func TestArenaOffRepacksEveryPageIn(t *testing.T) {
 // arena is an anonymous mapping rather than Go heap memory, and only a real
 // device upload can show a pointer the driver cannot take.
 func TestArenaPagesInOnRealHardware(t *testing.T) {
-	devs := backend.Open()
+	devs := backend.OpenWith(backend.Opts{Admit: testdevices.Admit()})
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

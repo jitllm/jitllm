@@ -19,7 +19,7 @@ import (
 // GPU device present: they must run as one launch at one width, each row held
 // to its dot in float64.
 func TestComposedGPUSiblingWidths(t *testing.T) {
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
