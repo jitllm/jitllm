@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -189,9 +190,9 @@ type kvPages struct {
 	sh       *SharedStore
 	cowFault bool
 	// arena, where set, is where every page this layer grows lives
-	// (kvArena): a composed CPU block's pool, the model's. reserved is the
+	// (cpudev.Arena): a composed CPU block's pool, the model's. reserved is the
 	// pages the instance's context spans, and tab its page table (table).
-	arena    *kvArena
+	arena    *cpudev.Arena
 	reserved int
 	tab      []uint32
 }
@@ -1860,7 +1861,7 @@ func (kc *kvCache) fault(li, n int) error {
 	// The length is checked here, where the geometry is: a short page would
 	// leave zeros read back as keys the model never wrote. A layer with an
 	// arena reads the page back into its slot, where a composed CPU block
-	// addresses it (kvArena); a failed read hands the slot back zeroed.
+	// addresses it (cpudev.Arena); a failed read hands the slot back zeroed.
 	var k, v []float32
 	if !s.latent {
 		k, v = s.takeSlot()

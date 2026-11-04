@@ -23,7 +23,7 @@ import (
 // composer forms for it from the block's graph (Model.Composing), through
 // the one keyed cache, on the instance's own buffers -- the residual, the
 // block's weights and vectors by role, its rotary table and its history in
-// the host's KV pages (kvArena) -- each kernel mapped once for the model and
+// the host's KV pages (cpudev.Arena) -- each kernel mapped once for the model and
 // called through the trampoline, the calls of a kernel over heads spread
 // over the instance's pool. Every block step on the CPU is counted served or
 // declined by name (CPUBlockSteps), as the tier counts a card's.
@@ -1107,7 +1107,7 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 	a[cpudev.SrcSide] = addr(b.side)
 	a[cpudev.SrcRopeRows], a[cpudev.SrcRopeMarks] = addr(b.ropeRows), addr(b.ropeMarks)
 	if b.kv != nil && b.kv.arena != nil {
-		a[cpudev.SrcKeys], a[cpudev.SrcValues] = addr(b.kv.arena.k), addr(b.kv.arena.v)
+		a[cpudev.SrcKeys], a[cpudev.SrcValues] = addr(b.kv.arena.Keys()), addr(b.kv.arena.Values())
 	}
 	a[cpudev.SrcPages], a[cpudev.SrcRows], a[cpudev.SrcCall] = addr(b.pages), addr(b.rows), addr(s.cpu.call[:])
 	if r := b.recOf; r != nil && b.recLi >= 0 && b.recLi < len(r.rstate) && b.recLi < len(r.rconv) {
@@ -1184,9 +1184,6 @@ func (s *Instance) cpuPlace() {
 		if !s.devAt(li) {
 			s.cpuCompose(li)
 		}
-	}
-	if s.nc() != nil {
-		return
 	}
 	s.cpuPlaceHead()
 	s.cpuPlaceStreams()
@@ -1269,11 +1266,8 @@ func (s *Instance) cpuWhy(li int) composer.Decline {
 	g := s.m.Composing().BlockGraph(li)
 	// A block sharing another's history reads its source's pages.
 	pg := &s.kv.layers[c.KVSource(li)]
-	if s.nc() != nil {
-		return s.cpuTowerWhy(g)
-	}
 	switch {
-	case !composer.LowersCPU(uint64(cpu.CPU().ISA())):
+	case !composer.LowersCPU(uint64(s.m.cpuISA())):
 		return composer.DeclineISA
 	case g == nil:
 		return composer.DeclineNoGraph
@@ -1350,24 +1344,6 @@ func (s *Instance) cpuSideOff(li int) int {
 	return 0
 }
 
-// cpuTowerWhy is cpuWhy for a block of a non-causal segment (a tower's or an
-// encoder's): its history is the block's run's own, written and read inside
-// the one call over the segment's rows, so no other path reads its
-// format, and its page is the instance's arena.
-func (s *Instance) cpuTowerWhy(g *graph.Graph) composer.Decline {
-	switch {
-	case !composer.LowersCPU(uint64(cpu.CPU().ISA())):
-		return composer.DeclineISA
-	case g == nil:
-		return composer.DeclineNoGraph
-	case len(g.Out) != 1 || len(g.In) != 1:
-		return composer.DeclineFeeds
-	case s.nc().arena == nil:
-		return composer.DeclinePageOut
-	}
-	return composer.DeclineServes
-}
-
 // formCPUBlock is block li's form on the CPU at rows rows through the
 // model's keyed cache: its history the session's sequences' pages
 // (cpuPages), each a history of the instance's context.
@@ -1404,9 +1380,6 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpud
 	}
 	pg := &s.kv.layers[li]
 	page := max(pg.p, 1)
-	if a := s.nc(); a != nil {
-		page = a.page
-	}
 	req := composer.Request{Graph: &gr, Formats: formats, Strides: m.cpuStrides(li, g),
 		Step:    composer.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.m.actWindow, Seqs: max(s.nseq, 1)},
 		History: composer.History{ValuesInKeys: pg.latent},
@@ -1711,5 +1684,5 @@ func (s *kvPages) arenaSlots() int {
 	case s.reserved > 0:
 		return s.reserved
 	}
-	return s.arena.slots
+	return s.arena.Slots()
 }

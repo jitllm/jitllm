@@ -80,30 +80,3 @@ func (s *Instance) bidirTell(p0, n int) bool {
 	}
 	return ok && kd.SetKeyRuns(s.bidir, nil)
 }
-
-// ncArena is a non-causal segment's history on the CPU device
-// (cpuserve.go), a tower's or an encoder's: its keys live one block
-// deep, so every block borrows the one page in turn, the pool its form
-// addresses (kvArena).
-type ncArena struct {
-	arena *kvArena
-	// page is the arena's page, the segment's rows rounded up to a power of
-	// two: the composer's page arithmetic is shifts on the CPU (AVX2 has no
-	// packed integer division).
-	page int
-	// run is the one run of a composed CPU block's rows; causalFault, a
-	// gate's violation, leaves the rows causal.
-	run         [1]nn.KeyRun
-	causalFault bool
-}
-
-// nc is the instance's non-causal segment's arena, nil for an instance of none.
-func (s *Instance) nc() *ncArena { return nil }
-
-// unmapNC releases the segment's arena.
-func (s *Instance) unmapNC() {
-	if a := s.nc(); a != nil && a.arena != nil {
-		a.arena.unmap()
-		a.arena = nil
-	}
-}
