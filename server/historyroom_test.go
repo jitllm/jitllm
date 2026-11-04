@@ -25,8 +25,8 @@ func TestLongPromptHasHistoryRoom(t *testing.T) {
 		}
 	}
 	eachBatchModel(t, func(t *testing.T, name string) {
-		e := New(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: 4608, JointSteps: JointAlways,
-			MaxBatchRows: 4, NoOrchestrate: true})
+		e := New(admitConfig(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: 4608, JointSteps: JointAlways,
+			MaxBatchRows: 4, NoOrchestrate: true}))
 		t.Cleanup(e.Close)
 		lm, err := e.LoadModel(LoadOptions{Path: modelPath(t, name), ModelID: "dev", DeviceIDs: devs, Sessions: 4})
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -33,9 +34,9 @@ func openBallast(t *testing.T, spec string) *ballast {
 		if aerr != nil {
 			t.Fatalf("spec %q: %v", spec, aerr)
 		}
-		d, err = backend.OpenCUDA(ord)
+		d, err = backend.OpenCUDAWith(ord, backend.Opts{Admit: testdevices.Admit()})
 	case "vulkan":
-		d, err = backend.OpenVulkan(sel)
+		d, err = backend.OpenVulkanWith(sel, backend.Opts{Admit: testdevices.Admit()})
 	default:
 		t.Skipf("%s: a unified-memory device has no card to fill -- this gate proved nothing here", spec)
 	}

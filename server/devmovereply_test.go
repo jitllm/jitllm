@@ -34,7 +34,7 @@ func TestAMoveLandsBetweenTwoTokensOfAReply(t *testing.T) {
 	// restore the control's prompt from it -- a restore these gates do not
 	// test, and one that on a V100 answers a second session differently from
 	// the first with no move at all (origin/main, cuda:0 alone).
-	e := New(Config{Version: "test", NoMemCache: true})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 	t.Cleanup(e.Close)
 	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: devs}); err != nil {
 		t.Skipf("NO DEVICE: loading onto -devices %s failed (%v) -- this gate proved nothing", spec, err)

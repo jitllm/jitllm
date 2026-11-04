@@ -20,7 +20,7 @@ import (
 // whose element takes both rows, its value held to float64, and to the
 // float64 of the operands swapped to show the gate tells them apart.
 func TestComposedGPUContractPairs(t *testing.T) {
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}

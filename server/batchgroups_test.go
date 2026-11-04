@@ -134,7 +134,7 @@ type groupedResult struct {
 func loadGrouped(t *testing.T, name string, devs []string, n int) *groupedLoad {
 	t.Helper()
 	path := modelPath(t, name)
-	probe := New(Config{Version: "test", NoMemCache: true})
+	probe := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 	lm, err := probe.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: devs})
 	if err != nil {
 		probe.Close()
@@ -143,7 +143,7 @@ func loadGrouped(t *testing.T, name string, devs []string, n int) *groupedLoad {
 	nb := lm.m.Cfg.NLayer
 	probe.Close()
 	place := fmt.Sprintf("0-%d=%s,%d-%d=%s", nb/2-1, devs[0], nb/2, nb-1, devs[1])
-	e := New(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: 256, JointSteps: JointAlways})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: 256, JointSteps: JointAlways}))
 	t.Cleanup(e.Close)
 	lm, err = e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: devs, Sessions: n + 1,
 		Placement: place, PlacementStrict: true})
@@ -393,7 +393,7 @@ func loadUnderLoad(t *testing.T, name string, devs []string, conc, maxSeq int) *
 	switch p := os.Getenv("JITLLM_SERVER_GROUP_PLACEMENT"); p {
 	case "auto":
 	case "":
-		probe := New(Config{Version: "test", NoMemCache: true})
+		probe := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 		lm, err := probe.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: devs})
 		if err != nil {
 			probe.Close()
@@ -406,8 +406,8 @@ func loadUnderLoad(t *testing.T, name string, devs []string, conc, maxSeq int) *
 	default:
 		o.Placement, o.PlacementStrict = p, true
 	}
-	e := New(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: maxSeq, JointSteps: JointAlways,
-		MaxBatchRows: conc, NoOrchestrate: true, MaxQueue: -1})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: maxSeq, JointSteps: JointAlways,
+		MaxBatchRows: conc, NoOrchestrate: true, MaxQueue: -1}))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(o)
 	if err != nil {

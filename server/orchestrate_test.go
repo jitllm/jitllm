@@ -21,7 +21,7 @@ type orchFixture struct {
 func newOrchFixture(t *testing.T, cfg Config) *orchFixture {
 	devs := testdevices.Take(t, 1, "cuda:0")
 	cfg.Version, cfg.NoMemCache = "test", true
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	// 1200 MiB of one card: the first model fits, the second does not beside it.
 	// The CPU is listed: it is where the orchestrator moves a victim's blocks.
@@ -211,7 +211,7 @@ func (f *orchFixture) declines(id string) []any {
 // holds every block on the card from its first token to its last.
 func deviceControls(t *testing.T) (a, b [][]int32) {
 	devs := testdevices.Take(t, 1, "cuda:0")
-	e := New(Config{Version: "test", NoMemCache: true, NoOrchestrate: true})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true, NoOrchestrate: true}))
 	defer e.Close()
 	f := &orchFixture{e: e, c: serveEngine(t, e), ctx: context.Background(), t: t}
 	for _, m := range []struct {

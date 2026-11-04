@@ -5,13 +5,14 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/cost"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // TestGPUMeasures probes every device the backends open and holds what it
 // measures to the order physics allows: the last cache faster than memory
 // and nearer, a launch and a kernel's floor under a millisecond, a float chain slower than the float rate of one thread.
 func TestGPUMeasures(t *testing.T) {
-	devs := backend.Open()
+	devs := backend.OpenWith(backend.Opts{Admit: testdevices.Admit()})
 	defer func() {
 		for _, d := range devs {
 			d.Close()

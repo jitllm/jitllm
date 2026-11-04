@@ -16,6 +16,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testlock"
 )
 
@@ -30,7 +31,7 @@ func matrixTile() backend.TileShape {
 func matrixDevices(t *testing.T) (map[string]backend.Device, func()) {
 	out := map[string]backend.Device{}
 	var all []backend.Device
-	for _, d := range backend.Open() {
+	for _, d := range openDevices() {
 		all = append(all, d)
 		if ok, why := backend.LowersTile(d, matrixTile()); ok {
 			out[d.API()] = d
@@ -38,7 +39,7 @@ func matrixDevices(t *testing.T) (map[string]backend.Device, func()) {
 			t.Logf("%s: no binary16 tile: %s", d.API(), why)
 		}
 	}
-	if d, err := backend.OpenCUDAWith(0, backend.Opts{CUDATarget: "sm_70"}); err == nil {
+	if d, err := backend.OpenCUDAWith(0, backend.Opts{Admit: testdevices.Admit(), CUDATarget: "sm_70"}); err == nil {
 		all = append(all, d)
 		if ok, _ := backend.LowersTile(d, matrixTile()); ok {
 			out["ptx-sm_70"] = d

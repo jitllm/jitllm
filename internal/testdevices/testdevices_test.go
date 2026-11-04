@@ -23,16 +23,13 @@ func (l *ledger) list(m map[string]int) []string {
 	return out
 }
 
-// install puts the selection in force at the backend for the test with a
-// ledger of its own, and takes it out again.
-func install(t *testing.T) *ledger {
-	t.Helper()
+// install is the backend's open choices under the selection, with a ledger of
+// the test's own.
+func install() (*ledger, backend.Opts) {
 	l := &ledger{violated: map[string]int{}, narrowed: map[string]int{}}
-	backend.Restrict(testdevices.RestrictionForTest(
+	return l, backend.Opts{Admit: testdevices.RestrictionForTest(
 		func(name string) { l.violated[name]++ },
-		func(name string) { l.narrowed[name]++ }))
-	t.Cleanup(func() { backend.Restrict(nil) })
-	return l
+		func(name string) { l.narrowed[name]++ })}
 }
 
 func TestSelectionIsParsed(t *testing.T) {
@@ -80,20 +77,20 @@ func TestNothingSelectedChangesNothing(t *testing.T) {
 // TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice is the gate's own
 // violation run, at the backend and on any host: the selection names a Vulkan
 // device no box has, so every other open is outside it. A device a test names
-// is refused and recorded, and Install makes a violation end the binary; a
+// is refused and recorded, and Admit makes a violation end the binary; a
 // search for devices is narrowed without a record; and with the selection
 // withdrawn the ledger is not consulted at all.
 func TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice(t *testing.T) {
 	testdevices.SetForTest(t, "vulkan:99")
-	l := install(t)
+	l, o := install()
 
-	if d, err := backend.OpenCUDA(0); err == nil || !strings.Contains(err.Error(), "outside JITLLM_TEST_DEVICES") {
+	if d, err := backend.OpenCUDAWith(0, o); err == nil || !strings.Contains(err.Error(), "outside JITLLM_TEST_DEVICES") {
 		if d != nil {
 			d.Close()
 		}
 		t.Fatalf("OpenCUDA(0) under vulkan:99 = %v, want a refusal", err)
 	}
-	if d, err := backend.OpenVulkan("0"); err == nil || !strings.Contains(err.Error(), "outside JITLLM_TEST_DEVICES") {
+	if d, err := backend.OpenVulkanWith("0", o); err == nil || !strings.Contains(err.Error(), "outside JITLLM_TEST_DEVICES") {
 		if d != nil {
 			d.Close()
 		}
@@ -104,7 +101,7 @@ func TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice(t *testing.T) {
 	}
 
 	l.violated, l.narrowed = map[string]int{}, map[string]int{}
-	for _, d := range backend.Open() {
+	for _, d := range backend.OpenWith(o) {
 		name := d.Name()
 		d.Close()
 		t.Errorf("backend.Open under vulkan:99 returned %s", name)
@@ -122,9 +119,9 @@ func TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice(t *testing.T) {
 // selection still is, and the declaration ends with its test.
 func TestADeliberateRefusalIsNotAViolation(t *testing.T) {
 	testdevices.SetForTest(t, "vulkan:99")
-	l := install(t)
+	l, o := install()
 	open := func(ord int) error {
-		d, err := backend.OpenCUDA(ord)
+		d, err := backend.OpenCUDAWith(ord, o)
 		if d != nil {
 			d.Close()
 		}
@@ -164,7 +161,7 @@ func TestOnlyTheSelectedDevicesOpen(t *testing.T) {
 	if !testdevices.Selected() {
 		t.Skip("JITLLM_TEST_DEVICES is unset: this gate holds a selection and has none")
 	}
-	l := install(t)
+	l, o := install()
 	opened := map[string]bool{}
 	try := func(spec string, open func() (backend.Device, error)) {
 		d, err := open()
@@ -176,13 +173,13 @@ func TestOnlyTheSelectedDevicesOpen(t *testing.T) {
 	}
 	if n, err := backend.CUDACount(); err == nil {
 		for i := 0; i < n; i++ {
-			try("cuda:"+strconv.Itoa(i), func() (backend.Device, error) { return backend.OpenCUDA(i) })
+			try("cuda:"+strconv.Itoa(i), func() (backend.Device, error) { return backend.OpenCUDAWith(i, o) })
 		}
 	}
-	if infos, err := backend.VulkanDevices(); err == nil {
+	if infos, err := backend.VulkanDevicesWith(o); err == nil {
 		for _, in := range infos {
 			try("vulkan:"+strconv.Itoa(in.Index), func() (backend.Device, error) {
-				return backend.OpenVulkan(strconv.Itoa(in.Index))
+				return backend.OpenVulkanWith(strconv.Itoa(in.Index), o)
 			})
 		}
 	}

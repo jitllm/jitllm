@@ -20,7 +20,7 @@ import (
 // computing the gate where it is read must give both the dots it stores.
 func TestComposedGPUGateFromAReduction(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

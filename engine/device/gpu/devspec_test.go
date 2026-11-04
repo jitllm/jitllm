@@ -7,6 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/vulkan"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // fakeHost stands three CUDA cards and a Vulkan list behind the backend
@@ -36,7 +37,7 @@ func fakeHost(t *testing.T) (*[]*fakeDev, *hostBackends) {
 		{Index: 3, Name: "llvmpipe", Compute: true, Software: true},
 	}
 	vkUUID := []string{cards[0], cards[1], "aaaabbbbccccddddeeeeffff00001111", ""}
-	b.vulkanDevices = func() ([]vulkan.Info, error) { return infos, nil }
+	b.vulkanDevices = func(backend.Opts) ([]vulkan.Info, error) { return infos, nil }
 	b.openVulkan = func(sel string, _ backend.Opts) (backend.Device, error) {
 		i := 0 // "" picks the first, as the backend picks its best
 		if sel != "" {
@@ -149,7 +150,7 @@ func TestHardwareIsOneKeyPerPhysicalDevice(t *testing.T) {
 	keys := func(spec string) []Hardware {
 		t.Helper()
 		_, b := fakeHost(t)
-		g, err := OpenWith(WithDevices(spec), WithHostBudget(boxHost), WithDeviceTune(TuneOff), withBackends(b))
+		g, err := OpenWith(WithAdmit(testdevices.Admit()), WithDevices(spec), WithHostBudget(boxHost), WithDeviceTune(TuneOff), withBackends(b))
 		if err != nil {
 			t.Fatalf("-devices %s: %v", spec, err)
 		}

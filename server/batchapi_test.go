@@ -76,7 +76,7 @@ func waitBatch(t *testing.T, url, id string, done func(oaBatch) bool) oaBatch {
 func TestBatchAPIRunsEachLineThroughTheLiveRoute(t *testing.T) {
 	path := modelPath(t, smallModel)
 	dir := t.TempDir()
-	e := New(Config{ModelDir: filepath.Dir(path), BatchDir: dir, Probe: oneCardProbe, Version: "test"})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), BatchDir: dir, Probe: oneCardProbe, Version: "test"}))
 	t.Cleanup(e.Close)
 	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"}); err != nil {
 		t.Fatal(err)

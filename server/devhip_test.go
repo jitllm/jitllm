@@ -1,6 +1,10 @@
 package server
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jitllm/jitllm/internal/testdevices"
+)
 
 // TestAnAMDCardUnderHIPAndVulkanCountsAsHIP: one AMD card listed as vulkan:0
 // and hip:0 (the PCI location both report) is one device, and the entry that
@@ -26,7 +30,7 @@ func TestAnAMDCardUnderHIPAndVulkanCountsAsHIP(t *testing.T) {
 // TestNoROCmListsNoHIPDevice: a ROCm directory with nothing in it lists no
 // hip:N entry and is not an error.
 func TestNoROCmListsNoHIPDevice(t *testing.T) {
-	devs, err := probeDevices(t.TempDir())
+	devs, err := probeDevices(t.TempDir(), testdevices.Admit())
 	if err != nil {
 		t.Fatal(err)
 	}

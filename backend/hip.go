@@ -78,7 +78,7 @@ func HIPMissing(c hip.Config) string {
 func OpenHIPWith(ord int, o Opts) (Device, error) {
 	if ord >= 0 || o.Enumerating {
 		var err error
-		if ord, err = admit("amdgcn", ord, o.Enumerating); err != nil {
+		if ord, err = o.admit("amdgcn", ord); err != nil {
 			return nil, err
 		}
 	}

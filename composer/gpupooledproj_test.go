@@ -28,7 +28,7 @@ import (
 // weight scaled must fail.
 func TestComposedGPUPooledProjection(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}

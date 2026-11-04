@@ -224,7 +224,7 @@ func runGraphRowsWith(d backend.Device, codes []composer.Code, kerns []backend.K
 // than the row, and the reference rounding the row's codes half to even.
 func TestComposedGPUTernaryPerToken(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
@@ -344,7 +344,7 @@ func TestComposedGPUTernaryPerToken(t *testing.T) {
 // and result in the normal range.
 func TestComposedGPUQuantMaps(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
@@ -433,7 +433,7 @@ func subnormal(v float32) bool { return v != 0 && math.Abs(float64(v)) < 0x1p-12
 // quotient on a device that is not exact (TestComposedGPUDivisionViolation).
 func TestComposedGPUDivision(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
@@ -461,7 +461,7 @@ func TestComposedGPUDivision(t *testing.T) {
 // device's division is exact there is nothing to violate.
 func TestComposedGPUDivisionViolation(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}

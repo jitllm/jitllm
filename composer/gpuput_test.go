@@ -6,7 +6,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -19,7 +18,7 @@ import (
 // unput, which the comparison must tell apart.
 func TestComposedGPUPut(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate proved nothing")
 	}

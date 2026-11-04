@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -254,7 +255,7 @@ func fairRequests(n, maxTokens int) []*v1.GenerateRequest {
 // their alone runs.
 func TestTimeSlicedRowsAnswerAsAlone(t *testing.T) {
 	arms := []struct{ name, dev string }{{"host", ""}, {"cuda", "cuda:0"}}
-	if infos, err := backend.VulkanDevices(); err == nil {
+	if infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()}); err == nil {
 		for _, in := range infos {
 			if in.Compute && !in.Software && !in.Unified {
 				arms = append(arms, struct{ name, dev string }{"vulkan", "vulkan:" + strconv.Itoa(in.Index)})
@@ -294,7 +295,7 @@ func fairEngine(t *testing.T, dev string, cfg Config) (*Engine, *LoadedModel, cl
 	if cfg.DefaultMaxSeq == 0 {
 		cfg.DefaultMaxSeq = 512
 	}
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: []string{dev}, Sessions: 8})
 	if err != nil {

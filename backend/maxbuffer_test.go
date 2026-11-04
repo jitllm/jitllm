@@ -15,7 +15,7 @@ import (
 // pool sized from it would be refused, or worse, bound past the real limit.
 // Without vulkaninfo it holds the spec's floor (2^27).
 func TestVulkanMaxBufferIsTheStorageRange(t *testing.T) {
-	infos, err := VulkanDevices()
+	infos, err := VulkanDevicesWith(Opts{Admit: testdevices.Admit()})
 	if err != nil || len(infos) == 0 {
 		t.Skipf("no Vulkan device: %v -- this gate proved nothing", err)
 	}
@@ -40,7 +40,7 @@ func TestVulkanMaxBufferIsTheStorageRange(t *testing.T) {
 		if !testdevices.Has(t, "vulkan", in.Index) {
 			continue
 		}
-		d, err := OpenVulkan(strconv.Itoa(in.Index))
+		d, err := OpenVulkanWith(strconv.Itoa(in.Index), Opts{Admit: testdevices.Admit()})
 		if err != nil {
 			t.Logf("vulkan:%d would not open: %v", in.Index, err)
 			continue
@@ -68,7 +68,7 @@ func TestVulkanMaxBufferIsTheStorageRange(t *testing.T) {
 // GPU allows, and no more than the working set the driver recommends.
 func TestMetalMaxBufferIsRead(t *testing.T) {
 	testdevices.Require(t, "metal")
-	d, err := OpenMetalWith(Opts{})
+	d, err := OpenMetalWith(Opts{Admit: testdevices.Admit()})
 	if err != nil || d == nil {
 		t.Skipf("no Metal device: %v -- this gate proved nothing", err)
 	}

@@ -14,8 +14,8 @@ import (
 type Forms struct {
 	// Target is the CPU the forms are mapped onto.
 	Target *cpu.Target
-	mu   sync.Mutex
-	reg  *composer.Registry
+	mu     sync.Mutex
+	reg    *composer.Registry
 	// reg32 is reg with histories kept at f32 (composer.Registry.WithoutHalves).
 	reg32 *composer.Registry
 	m     map[composer.Key]*Form

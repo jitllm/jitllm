@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -39,7 +40,7 @@ func TestBindingBeyondLoopbackWithoutAKeyWarns(t *testing.T) {
 
 func guardedServer(t *testing.T, key string) string {
 	t.Helper()
-	e := server.New(server.Config{ModelDir: t.TempDir(), Probe: func() ([]server.DeviceInfo, error) { return nil, nil }})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir(), Probe: func() ([]server.DeviceInfo, error) { return nil, nil }})
 	t.Cleanup(e.Close)
 	s := httptest.NewServer(nil)
 	s.Config.Handler = server.Guard{APIKey: key, Addr: s.Listener.Addr().String()}.Wrap(e.Handler())

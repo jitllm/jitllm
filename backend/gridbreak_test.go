@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // TestGridBarrierProbeSeesAnEarlyCrossing is the grid barrier gate's violation
@@ -16,7 +17,9 @@ import (
 // early crossing and TestGridBarrierHoldsEveryWorkgroup certifies nothing.
 func TestGridBarrierProbeSeesAnEarlyCrossing(t *testing.T) {
 	ran := 0
-	broken := func() []backend.Device { return backend.OpenWith(backend.Opts{BreakGridBarrier: true}) }
+	broken := func() []backend.Device {
+		return backend.OpenWith(backend.Opts{Admit: testdevices.Admit(), BreakGridBarrier: true})
+	}
 	eachGridDeviceWith(t, broken, func(d backend.Device, width, limit int) {
 		for _, groups := range dedupe(2, limit/2, limit) {
 			t.Run(fmt.Sprintf("%s/w%d/g%d", d.API(), width, groups), func(t *testing.T) {

@@ -34,7 +34,7 @@ func TestBatchKeepsBatchingRoundAfterRound(t *testing.T) {
 	}
 	devs := testdevices.Take(t, 2, "cuda:0,vulkan:1")
 	eachBatchModel(t, func(t *testing.T, name string) {
-		e := New(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: 4608, MaxBatchRows: conc, NoOrchestrate: true, MaxQueue: -1})
+		e := New(admitConfig(Config{Version: "test", NoMemCache: true, DefaultMaxSeq: 4608, MaxBatchRows: conc, NoOrchestrate: true, MaxQueue: -1}))
 		t.Cleanup(e.Close)
 		lm, err := e.LoadModel(LoadOptions{Path: modelPath(t, name), ModelID: "dev", DeviceIDs: devs, Sessions: conc})
 		if err != nil {

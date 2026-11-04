@@ -308,7 +308,7 @@ func sameReply(t *testing.T, what string, native, openai preply) {
 func parityEngine(t *testing.T) (clients, *Engine) {
 	t.Helper()
 	small, chatPath := modelPath(t, smallModel), modelPath(t, parityChatModel)
-	e := New(Config{ModelDir: filepath.Dir(small), Probe: noProbe, Version: "test", NoOnDemand: true})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(small), Probe: noProbe, Version: "test", NoOnDemand: true}))
 	t.Cleanup(e.Close)
 	for id, p := range map[string]string{"s": small, "q": chatPath} {
 		if _, err := e.LoadModel(LoadOptions{Path: p, ModelID: id}); err != nil {

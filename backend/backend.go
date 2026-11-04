@@ -440,10 +440,13 @@ type Opts struct {
 	Verbose bool
 	// Enumerating marks an open that is part of finding devices (a default
 	// pick, a loop over a backend's ordinals) rather than a caller naming one.
-	// It changes nothing about the open; an installed Restriction treats a
-	// refused enumerating open as the restriction narrowing the search, and a
-	// refused named open as a violation.
+	// It changes nothing about the open; a Restriction treats a refused
+	// enumerating open as the restriction narrowing the search, and a refused
+	// named open as a violation.
 	Enumerating bool
+	// Admit, where set, is asked before every device the open reaches, and a
+	// device it refuses is not opened (see Restriction).
+	Admit Restriction
 }
 
 // OpenWith is Open with the devices' open choices.

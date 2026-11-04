@@ -204,18 +204,25 @@ index is the loader's. Vulkan ignores `CUDA_VISIBLE_DEVICES`, which is why
 the selection exists: on an eight-card box a gate runs on the card it locked
 (`flock ~/gpu<N>.lock`), and the selection is what keeps its Vulkan opens there.
 
-How it holds (`internal/testdevices`, `backend.Restrict`):
+How it holds (`internal/testdevices`, `backend.Restriction`):
 
-- Every test binary that opens a device installs the selection
-  (`testdevices.Install`, in a `TestMain`; `TestEveryPackageThatOpensADeviceInstallsTheSelection`
-  fails for a package that does not). The backend then asks it before every
-  device open, so a device outside it is not opened at all.
+- Every device open a test makes carries the selection, `testdevices.Admit()`:
+  as `backend.Opts.Admit` for a backend open or listing, `gpu.WithAdmit` for
+  a tier, `Config.Admit` for a server engine. The backend asks it before
+  every device the open reaches, so a device outside it is not opened at all.
+  Nothing is installed process-wide: `TestEveryDeviceOpenCarriesTheSelection`
+  fails for an open in a function that neither names `testdevices.Admit` nor
+  calls a test helper of its package that does, and for any call to an open
+  that takes no options (`backend.Open`, `OpenCUDA`, `OpenVulkan`,
+  `VulkanDevices`, `vulkan.NewDriver`). The Vulkan driver a `TestMain` holds
+  is `backend.NewVulkanDriver` under the selection, made only when it admits
+  a Vulkan device.
 - A search for devices (`backend.Open`, a bare `gpu`, `auto`, `all`, `cuda`,
   `vulkan`, a loop over ordinals marked `Opts.Enumerating`) is narrowed to the
   selection and the default pick of a backend is its first selected device.
 - A test that NAMES a device outside the selection (`vulkan:0` against
-  `cuda:2`) is refused and recorded, and the binary's `TestMain` fails
-  (`testdevices.Fail`). `TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice`
+  `cuda:2`) is refused, and the binary exits failed at once even if the test
+  swallows the error. `TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice`
   is the violation run, and `TestOnlyTheSelectedDevicesOpen` asks every ordinal
   the host has to open and demands that only the selected ones did.
 - A gate that needs more devices than are selected (blocks moved between two

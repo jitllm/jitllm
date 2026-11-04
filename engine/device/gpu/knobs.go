@@ -86,6 +86,10 @@ func WithVerbose(on bool) Option { return func(o *openOpts) { o.kb.verbose = on 
 // (GPU.Counters).
 func WithCounters(c *backend.Counters) Option { return func(o *openOpts) { o.counters = c } }
 
+// WithAdmit has every device the tier opens or lists asked of r first
+// (backend.Opts.Admit): a test binary's way to stay on the cards it was given.
+func WithAdmit(r backend.Restriction) Option { return func(o *openOpts) { o.admit = r } }
+
 // WithROCm names the ROCm library directory (the one holding
 // libamdhip64.so) the AMD backend loads from, in place of the default search;
 // only that directory is tried. A directory with no ROCm is no HIP device, and
@@ -250,7 +254,8 @@ func WithConfig(f func(*Config)) Option { return func(o *openOpts) { o.cfg = app
 // devOpts is what every device this option set opens is opened with.
 func (o *openOpts) devOpts() backend.Opts {
 	return backend.Opts{Vulkan: o.vk, CUDAPosted: o.cudaPosted, CUDAMaxRegs: o.cudaRegs, BreakGridBarrier: o.breakGrid,
-		BreakDepWait: o.breakDep, Metal: o.metal, HIP: o.hip, Counters: o.counters, Verbose: o.kb.verbose}
+		BreakDepWait: o.breakDep, Metal: o.metal, HIP: o.hip, Counters: o.counters, Verbose: o.kb.verbose,
+		Admit: o.admit}
 }
 
 // WithPersist sets whether each decode block's launches are composed into

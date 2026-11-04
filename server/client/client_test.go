@@ -11,6 +11,7 @@ import (
 
 	"github.com/jitllm/jitllm/internal/capabilities"
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 	"github.com/jitllm/jitllm/server/client"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -22,7 +23,7 @@ import (
 // the root module's probe agrees with it over /v1/capabilities.
 func TestDiscoverReadsServerInfo(t *testing.T) {
 	dir := t.TempDir()
-	e := server.New(server.Config{ModelDir: dir, Version: "v9.9.9"})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: dir, Version: "v9.9.9"})
 	defer e.Close()
 	s := httptest.NewServer(e.Handler())
 	defer s.Close()

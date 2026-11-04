@@ -304,7 +304,7 @@ func fourDevices(t *testing.T) ([]string, string) {
 		n = 0
 	}
 	for i := 0; i < n && len(specs) < 4; i++ {
-		d, err := backend.OpenCUDA(i)
+		d, err := backend.OpenCUDAWith(i, backend.Opts{Admit: testdevices.Admit()})
 		if err != nil {
 			continue
 		}
@@ -312,7 +312,7 @@ func fourDevices(t *testing.T) ([]string, string) {
 		d.Close()
 		specs = append(specs, "cuda:"+strconv.Itoa(i))
 	}
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		infos = nil
 	}

@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 	"github.com/jitllm/jitllm/server/client"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -17,7 +18,7 @@ import (
 
 func guarded(t *testing.T, key string) *httptest.Server {
 	t.Helper()
-	e := server.New(server.Config{ModelDir: t.TempDir(), Version: "v3", Probe: func() ([]server.DeviceInfo, error) { return nil, nil }})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir(), Version: "v3", Probe: func() ([]server.DeviceInfo, error) { return nil, nil }})
 	t.Cleanup(e.Close)
 	s := httptest.NewServer(nil)
 	s.Config.Handler = server.Guard{APIKey: key, Addr: s.Listener.Addr().String()}.Wrap(e.Handler())

@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"sync"
 	"testing"
-
 )
 
 // serveModel is the 1B model jitllmd served when four of them on one NUMA
@@ -61,8 +60,8 @@ func TestAServerUnderLoadStaysUnderItsBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	const avail = 512 << 20
-	e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test",
-		HostBudget: 190 << 30, MaxBatchRows: 64, WarmLoads: true})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test",
+		HostBudget: 190 << 30, MaxBatchRows: 64, WarmLoads: true}))
 	e.hostAvail = func() uint64 { return avail }
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "m"})

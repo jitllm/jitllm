@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/server"
 )
@@ -31,7 +32,7 @@ func TestJitllmRunGoesThroughTheService(t *testing.T) {
 	if ok, err := localserver.AddAlias(dir, "stories260K.jlm", "story"); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	e := server.New(server.Config{ModelDir: dir, Version: "test", Probe: func() ([]server.DeviceInfo, error) {
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: dir, Version: "test", Probe: func() ([]server.DeviceInfo, error) {
 		return []server.DeviceInfo{{ID: "cpu", Backend: "cpu", Kind: server.KindHost, Available: true}}, nil
 	}, OnDemand: server.LoadOptions{DeviceIDs: []string{"cpu"}}})
 	defer e.Close()

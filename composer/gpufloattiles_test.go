@@ -14,6 +14,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testlock"
 )
 
@@ -27,11 +28,11 @@ import (
 func TestComposedGPUFloatTiles(t *testing.T) {
 	testlock.GPU(t)
 	devs := map[string]backend.Device{}
-	for _, d := range backend.Open() {
+	for _, d := range openDevices() {
 		defer d.Close()
 		devs[d.API()] = d
 	}
-	if d, err := backend.OpenCUDAWith(0, backend.Opts{CUDATarget: "sm_70"}); err == nil {
+	if d, err := backend.OpenCUDAWith(0, backend.Opts{Admit: testdevices.Admit(), CUDATarget: "sm_70"}); err == nil {
 		defer d.Close()
 		devs["ptx-sm_70"] = d
 	}

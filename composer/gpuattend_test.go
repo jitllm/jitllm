@@ -60,7 +60,7 @@ type attendInputs struct {
 // attended position moved by one, and the sinks zeroed.
 func TestComposedGPUAttendRows(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	defer func() {
 		for _, d := range devs {
 			d.Close()

@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // A gate records the sessions running on a device and never holds one back:
 // a second session on the same card is recorded beside the first, and leaving
 // takes it off the record.
 func TestAGateRecordsAndNeverBlocks(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
 	a := e.gatesFor([]string{"cuda:0", HostGateID})
 	b := e.gatesFor([]string{"cuda:0", HostGateID, "cuda:0"})
@@ -61,7 +62,7 @@ func TestTwoSessionsGenerateAtOnce(t *testing.T) {
 			t.Skip("NO DEVICE: the device arm did not run")
 		}
 		path := modelPath(t, deviceModel)
-		e := New(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+		e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1}))
 		t.Cleanup(e.Close)
 		lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "m", DeviceIDs: []string{"auto"}})
 		if err != nil {
@@ -75,7 +76,7 @@ func TestTwoSessionsGenerateAtOnce(t *testing.T) {
 }
 
 func hasVulkan() bool {
-	ds, err := backend.VulkanDevices()
+	ds, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	return err == nil && len(ds) > 0
 }
 

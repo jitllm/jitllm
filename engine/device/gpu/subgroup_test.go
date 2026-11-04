@@ -26,12 +26,12 @@ func realDevices(t *testing.T) []backend.Device {
 			if !testdevices.Has(t, "cuda", i) {
 				continue
 			}
-			if d, err := backend.OpenCUDA(i); err == nil {
+			if d, err := backend.OpenCUDAWith(i, backend.Opts{Admit: testdevices.Admit()}); err == nil {
 				out = append(out, d)
 			}
 		}
 	}
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Logf("no Vulkan here: %v", err)
 	}
@@ -48,14 +48,16 @@ func realDevices(t *testing.T) []backend.Device {
 	}
 	// Metal is a real device too: without it every gate below skipped on
 	// Apple Silicon as "no GPU on this host".
-	if d, err := backend.OpenMetalWith(backend.Opts{Enumerating: true}); err == nil {
+	if d, err := backend.OpenMetalWith(backend.Opts{Admit: testdevices.Admit(), Enumerating: true}); err == nil {
 		out = append(out, d)
 	}
 	return out
 }
 
 // unpinned opens a Vulkan device with the required-subgroup-size path off.
-func unpinned() backend.Opts { return backend.Opts{Vulkan: vulkan.Config{Subgroup: "off"}} }
+func unpinned() backend.Opts {
+	return backend.Opts{Vulkan: vulkan.Config{Subgroup: "off"}, Admit: testdevices.Admit()}
+}
 
 // qkPlan is a block with the per-head q/k norm, the second kernel in the
 // subgroup-width class.
@@ -133,7 +135,7 @@ func TestSubgroupSelectionIsByGuarantee(t *testing.T) {
 func TestSelectionFollowsTheGuaranteeWhenPinningIsOff(t *testing.T) {
 	// The subgroup answer is baked into a device at open, so it is opened
 	// unpinned rather than configured afterwards.
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Skipf("no Vulkan here: %v", err)
 	}

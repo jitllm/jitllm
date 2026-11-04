@@ -6,11 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 )
 
 func TestStartServesAndCloses(t *testing.T) {
-	e := server.New(server.Config{ModelDir: t.TempDir()})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir()})
 	defer e.Close()
 	s, err := Start("127.0.0.1:0", e)
 	if err != nil {
@@ -35,7 +36,7 @@ func TestStartServesAndCloses(t *testing.T) {
 }
 
 func TestToggle(t *testing.T) {
-	e := server.New(server.Config{ModelDir: t.TempDir()})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir()})
 	defer e.Close()
 	s, msg, _ := Toggle(nil, true, "127.0.0.1:0", e)
 	if s == nil {
@@ -53,7 +54,7 @@ func TestToggle(t *testing.T) {
 // answers is refused, naming the service, rather than failing on the bind or
 // -- where both could bind -- becoming a second engine nobody asked for.
 func TestToggleRefusesAHeldAddress(t *testing.T) {
-	svc := server.New(server.Config{ModelDir: t.TempDir(), Version: "9.9.9"})
+	svc := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir(), Version: "9.9.9"})
 	defer svc.Close()
 	held, err := Start("127.0.0.1:0", svc)
 	if err != nil {
@@ -61,7 +62,7 @@ func TestToggleRefusesAHeldAddress(t *testing.T) {
 	}
 	defer held.Close()
 
-	e := server.New(server.Config{ModelDir: t.TempDir()})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir()})
 	defer e.Close()
 	s, msg, in := Toggle(nil, true, held.Addr(), e)
 	if s != nil {

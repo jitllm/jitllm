@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -47,7 +46,7 @@ func residentKB() int {
 func TestComposedGPUCompilesSideBySide(t *testing.T) {
 	testlock.GPU(t)
 	ran := 0
-	for _, d := range backend.Open() {
+	for _, d := range openDevices() {
 		defer d.Close()
 		if d.API() != "spirv" {
 			continue

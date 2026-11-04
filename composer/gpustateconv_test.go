@@ -5,7 +5,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
@@ -18,7 +17,7 @@ import (
 // slot written holds to the oracle.
 func TestComposedGPUStateWindowConv(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}
@@ -141,7 +140,7 @@ func runStateConv(fr *recRun, g *graph.Graph, T, D, C, off, span, R, n int, runs
 // reads the new window in place of the old.
 func TestComposedGPUStateConvReadByStreams(t *testing.T) {
 	testlock.GPU(t)
-	devs := backend.Open()
+	devs := openDevices()
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}

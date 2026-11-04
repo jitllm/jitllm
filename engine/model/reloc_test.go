@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -18,7 +19,7 @@ import (
 func TestSeamMovesWhileServing(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 
-	g, err := gpu.Open(0)
+	g, err := gpu.OpenWith(gpu.WithAdmit(testdevices.Admit()))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -134,7 +135,7 @@ func TestSeamMovesWhileServing(t *testing.T) {
 func TestPagesMoveWhileADeviceHoldsBlocks(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 
-	g, err := gpu.Open(0)
+	g, err := gpu.OpenWith(gpu.WithAdmit(testdevices.Admit()))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

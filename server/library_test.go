@@ -35,7 +35,7 @@ func modelsFolder(t *testing.T, names ...string) string {
 
 func folderEngine(t *testing.T, dir string) (*Engine, clients) {
 	t.Helper()
-	e := New(Config{ModelDir: dir, Probe: oneCardProbe, Version: "test"})
+	e := New(admitConfig(Config{ModelDir: dir, Probe: oneCardProbe, Version: "test"}))
 	t.Cleanup(e.Close)
 	return e, serveEngine(t, e)
 }

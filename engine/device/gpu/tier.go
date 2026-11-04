@@ -1592,20 +1592,6 @@ type Slot struct {
 // conservative, because overshooting VRAM does not degrade, it fails.
 const defaultBudget = 2 << 30
 
-// Open picks one device (choose times a real matvec on each backend) and
-// returns the tier. limitBytes caps weight residency; zero asks the device how
-// much it has free (budgetFor).
-//
-// It is OpenWith(WithDevices("auto"), WithBudget(limitBytes)) with the parsing
-// skipped.
-func Open(limitBytes uint64) (*GPU, error) {
-	devs := backend.Open()
-	if len(devs) == 0 {
-		return nil, fmt.Errorf("tier: no GPU backend on this host")
-	}
-	return New(planSlots([]backend.Device{choose(devs, knobs{})}, nil, openOpts{budget: limitBytes}))
-}
-
 // poolsFor turns a device list into slots with a fixed per-device budget,
 // mapping every device whose memory is the host's onto one shared pool: it is
 // planSlots with the budget already decided, no probing of free memory.

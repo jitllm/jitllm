@@ -127,7 +127,7 @@ func TestIgnoreEOSRunsToMaxTokens(t *testing.T) {
 // test: the instruct model on the first GPU.
 func TestIgnoreEOSRunsToMaxTokensBatched(t *testing.T) {
 	path := modelPath(t, instructModel)
-	e := New(Config{Probe: oneCardProbe, Version: "test", DefaultMaxSeq: 512})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test", DefaultMaxSeq: 512}))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "inst", DeviceIDs: []string{"gpu:0"}, Sessions: 1})
 	if err != nil {

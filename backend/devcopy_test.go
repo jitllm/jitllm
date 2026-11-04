@@ -168,13 +168,13 @@ func everyDevice(t *testing.T) []backend.Device {
 			opened[o.Ordinal()] = true
 		}
 	}
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err == nil {
 		for _, in := range infos {
 			if opened[in.Index] || !testdevices.Has(t, "vulkan", in.Index) {
 				continue
 			}
-			d, err := backend.OpenVulkan(strconv.Itoa(in.Index))
+			d, err := backend.OpenVulkanWith(strconv.Itoa(in.Index), backend.Opts{Admit: testdevices.Admit()})
 			if err != nil {
 				t.Logf("vulkan:%d would not open: %v", in.Index, err)
 				continue

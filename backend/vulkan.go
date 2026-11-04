@@ -69,7 +69,7 @@ func OpenVulkanWith(sel string, o Opts) (Device, error) {
 			ord = n
 		}
 	}
-	got, err := admit("spirv", ord, o.Enumerating)
+	got, err := o.admit("spirv", ord)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func OpenVulkanWith(sel string, o Opts) (Device, error) {
 	if ord == -2 {
 		// A name: the index it matched is known only now, so a refusal here
 		// has opened the device for the length of the check.
-		if _, err := admit("spirv", c.Index(), o.Enumerating); err != nil {
+		if _, err := o.admit("spirv", c.Index()); err != nil {
 			c.Close()
 			return nil, err
 		}
@@ -106,15 +106,39 @@ func OpenVulkanWith(sel string, o Opts) (Device, error) {
 // VulkanDevices enumerates the Vulkan devices on this host without opening one,
 // which is what a caller choosing where to put blocks needs before it pays for
 // a logical device per candidate. It is the counterpart of CUDACount.
-//
-// Under a Restriction that holds no Vulkan device it enumerates nothing: the
-// NVIDIA driver attaches a graphics context to card 0 for the length of an
-// enumeration, which a process confined to another card must not make.
-func VulkanDevices() ([]vulkan.Info, error) {
-	if _, err := admit("spirv", -1, true); err != nil {
+func VulkanDevices() ([]vulkan.Info, error) { return VulkanDevicesWith(Opts{}) }
+
+// NewVulkanDriver is a Vulkan driver for the caller to hold (vulkan.Driver),
+// made only where o's restriction admits an enumeration: a held instance
+// enumerates the devices, which a process confined to cards other than
+// Vulkan's must not do.
+func NewVulkanDriver(o Opts) (*vulkan.Driver, error) {
+	if _, err := enumerating(o).admit("spirv", -1); err != nil {
 		return nil, err
 	}
-	return vulkan.List()
+	return vulkan.NewDriver()
+}
+
+// VulkanDevicesWith is VulkanDevices under o's restriction: the devices it
+// admits. Under one that holds no Vulkan device it enumerates nothing: the
+// NVIDIA driver attaches a graphics context to card 0 for the length of an
+// enumeration, which a process confined to another card must not make.
+func VulkanDevicesWith(o Opts) ([]vulkan.Info, error) {
+	e := enumerating(o)
+	if _, err := e.admit("spirv", -1); err != nil {
+		return nil, err
+	}
+	infos, err := vulkan.List()
+	if err != nil || o.Admit == nil {
+		return infos, err
+	}
+	kept := infos[:0]
+	for _, in := range infos {
+		if _, err := e.admit("spirv", in.Index); err == nil {
+			kept = append(kept, in)
+		}
+	}
+	return kept, nil
 }
 
 func (v *vkDev) Name() string { return v.c.Name() }

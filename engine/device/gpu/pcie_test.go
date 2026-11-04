@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // TestPCIeBandwidth measures the number that decides where weights should live.
@@ -19,7 +20,7 @@ import (
 // spilling whole blocks to the CPU (PrepLayer's decline) is better there, and
 // overlapping upload with compute still runs at the upload rate.
 func TestPCIeBandwidth(t *testing.T) {
-	devs := backend.Open()
+	devs := backend.OpenWith(backend.Opts{Admit: testdevices.Admit()})
 	if len(devs) == 0 {
 		t.Skip("no device")
 	}
