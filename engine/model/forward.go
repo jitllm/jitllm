@@ -49,7 +49,7 @@ func (s *Instance) tick() int64 {
 
 func (s *Instance) tock(op opID, t0 int64) {
 	if s.prof {
-		s.m.opNanos[op].Add(time.Now().UnixNano() - t0)
+		s.m.eng.opNanos[op].Add(time.Now().UnixNano() - t0)
 	}
 }
 
@@ -58,7 +58,7 @@ func (s *Instance) tock(op opID, t0 int64) {
 func (m *Model) OpProfile() ([]string, []int64) {
 	out := make([]int64, nOps)
 	for i := range out {
-		out[i] = m.opNanos[i].Load()
+		out[i] = m.eng.opNanos[i].Load()
 	}
 	return opNames(), out
 }
@@ -68,8 +68,8 @@ func (m *Model) OpProfile() ([]string, []int64) {
 // The counters accumulate across both phases, and a long prompt's prefill
 // swamps decode; reset between the two and each phase answers for itself.
 func (m *Model) ResetProfile() {
-	for i := range m.opNanos {
-		m.opNanos[i].Store(0)
+	for i := range m.eng.opNanos {
+		m.eng.opNanos[i].Store(0)
 	}
 }
 
@@ -469,7 +469,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 		residFold: m.opt.residFold}
 	s.own = s.Session
 	s.holdCPURuns()
-	m.live.add(s)
+	m.eng.live.add(s)
 	// An instance over a prediction block projects through that block's head.
 	if lo < len(m.layers) {
 		if w := m.layers[lo].mtp; w != nil {
@@ -550,7 +550,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	s.allocQ4E()
 	// kvl.fmt sizes every page.
 	s.kv = newKVCacheRange(c, s.m.nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
-	s.kv.usePool(&m.kvPool)
+	s.kv.usePool(&m.eng.kvPool)
 	s.kv.reserve(s.maxSeq)
 	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor); err != nil {
 		s.cpu.formErr = err
@@ -632,7 +632,7 @@ func (s *Instance) Close() error {
 	if s.own != nil {
 		s.Session = s.own
 	}
-	s.m.live.remove(s)
+	s.m.eng.live.remove(s)
 	// A move prepared and never committed gives its target's copies back.
 	if s.pending != nil {
 		s.pending.Cancel()
@@ -645,7 +645,7 @@ func (s *Instance) Close() error {
 	// The history the device gave back was host memory on an integrated GPU,
 	// and the model's pages get it back once no instance holds the device.
 	s.holdHost(nil)
-	s.m.kvPool.put(s.kv)
+	s.m.eng.kvPool.put(s.kv)
 	s.unmapNC()
 	s.unmapOwn()
 	// The blocks this instance ran on the host no longer need their pages for
@@ -1688,7 +1688,7 @@ func (s *Instance) releasePlacedPage(ld nn.LayerDevice, li int) {
 		// faults the block in once and then reads its spans unlocked
 		// through every matvec of the block.
 		s.m.bind.Lock()
-		if s.m.cpuUse[li] == 0 {
+		if s.m.eng.cpuUse[li] == 0 {
 			keep := false
 			if eh, ok := ld.(nn.ExpertHolder); ok {
 				keep = !eh.HoldsExperts(li)
@@ -2857,7 +2857,7 @@ func (s *Instance) setKVFmt(f cpu.KVFmt) {
 	// budget); a forgotten one is silently lost.
 	old := s.kv
 	s.kv = newKVCacheRange(s.c, old.id, s.nseq, s.kvl, old.store, s.m.opt.kvPage, s.lo, s.hi)
-	s.kv.usePool(&s.m.kvPool)
+	s.kv.usePool(&s.m.eng.kvPool)
 	s.kv.reserve(s.maxSeq)
 	s.kv.ns, s.kv.budget = old.ns, old.budget
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.

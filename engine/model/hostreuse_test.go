@@ -63,30 +63,30 @@ func reusedScratchGate(t *testing.T, path string) {
 	run(long)          // a different, longer history fills the scratch
 
 	// Poison everything a closed instance handed back.
-	m.spareMu.Lock()
-	if m.spare == nil || m.spare.host.bh == nil {
-		m.spareMu.Unlock()
+	m.eng.spareMu.Lock()
+	if m.eng.spare == nil || m.eng.spare.host.bh == nil {
+		m.eng.spareMu.Unlock()
 		t.Fatal("no prompt scratch was handed back to the model")
 	}
-	h := &m.spare.host
+	h := &m.eng.spare.host
 	for _, b := range [][]float32{h.bh, h.battf, h.qgate, h.ogate, h.bqf, h.bxbf, h.bmW, h.bmX, h.bmY, h.bmG, h.bmU,
-		m.spare.bx, m.spare.bcs, m.spare.bcsSWA} {
+		m.eng.spare.bx, m.eng.spare.bcs, m.eng.spare.bcsSWA} {
 		for i := range b {
 			b[i] = float32(math.NaN())
 		}
 	}
 	poisoned := unsafe.SliceData(h.bh)
-	m.spareMu.Unlock()
-	m.kvPool.mu.Lock()
-	pooled := m.kvPool.bytes
-	for _, l := range m.kvPool.free {
+	m.eng.spareMu.Unlock()
+	m.eng.kvPool.mu.Lock()
+	pooled := m.eng.kvPool.bytes
+	for _, l := range m.eng.kvPool.free {
 		for _, b := range l {
 			for i := range b {
 				b[i] = float32(math.NaN())
 			}
 		}
 	}
-	m.kvPool.mu.Unlock()
+	m.eng.kvPool.mu.Unlock()
 
 	s := m.NewInstance(ctx)
 	lg, err := s.Prefill(short)
@@ -105,8 +105,8 @@ func reusedScratchGate(t *testing.T, path string) {
 				t.Fatalf("block %d's history is in pages, and no page was handed back to the model", li)
 			}
 		}
-	} else if m.kvPool.bytes >= pooled {
-		t.Fatalf("the pool still holds %d of %d bytes: the new history did not come from it", m.kvPool.bytes, pooled)
+	} else if m.eng.kvPool.bytes >= pooled {
+		t.Fatalf("the pool still holds %d of %d bytes: the new history did not come from it", m.eng.kvPool.bytes, pooled)
 	}
 	got := [][]float32{append([]float32(nil), lg...)}
 	for i := 0; i < steps; i++ {

@@ -62,7 +62,7 @@ func (s *Instance) decoding() bool {
 // othersDecoding reports whether an instance of this model other than s is
 // decoding.
 func (s *Instance) othersDecoding() bool {
-	l := &s.m.live
+	l := &s.m.eng.live
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, o := range l.s {

@@ -671,7 +671,7 @@ func (s *kvPages) scatter(l kvLayout, slot, n int, k, v []float32) bool {
 // a bare counter restarts in every process, and a second process would address
 // the first one's pages in a shared store.
 func (m *Model) nextCacheID() string {
-	return "session-" + strconv.FormatUint(m.id, 16) + "-" + strconv.FormatInt(m.cacheSeq.Add(1), 10)
+	return "session-" + strconv.FormatUint(m.id, 16) + "-" + strconv.FormatInt(m.eng.cacheSeq.Add(1), 10)
 }
 
 // migrateKV moves block li's history between the host's pages and the tier.
@@ -1480,8 +1480,8 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 		s.kv.recAt, s.kv.endsAt = s.recFns()
 	}
 	s.kv.mark = s.recMark
-	if s.m.staleKeyFault != nil {
-		tokens = s.m.staleKeyFault(key)
+	if s.m.eng.staleKeyFault != nil {
+		tokens = s.m.eng.staleKeyFault(key)
 	}
 	// The tokens come first: restore() names the pages by H(tokens[0:boundary]).
 	s.kv.seq = append(s.kv.seq[:0], tokens...)

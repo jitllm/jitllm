@@ -182,8 +182,8 @@ func (w *fuseWatch) done() {
 	}
 	var n, asked int64
 	for _, m := range w.ms {
-		n += m.fusedRuns.Load()
-		asked += m.fuseTries.Load()
+		n += m.eng.fusedRuns.Load()
+		asked += m.eng.fuseTries.Load()
 	}
 	t.Logf("fused runs opened: %d of %d asked for", n, asked)
 	if must && asked == 0 {

@@ -82,10 +82,10 @@ func (b *stepBuf) bytes() uint64 {
 // instance's does, so an instance that prefilled alone does not keep a second set.
 func (s *Instance) borrowStep() {
 	m := s.m
-	m.spareMu.Lock()
-	b := m.step
-	m.step = nil
-	m.spareMu.Unlock()
+	m.eng.spareMu.Lock()
+	b := m.eng.step
+	m.eng.step = nil
+	m.eng.spareMu.Unlock()
 	s.keepSpare()
 	h := s.takeHostBatch()
 	if b == nil {
@@ -110,9 +110,9 @@ func (s *Instance) returnStep() {
 		bsel: s.bsel, bw: s.bw, host: s.takeHostBatch()}
 	s.bx, s.bcs, s.bcsSWA, s.bathf, s.blogits, s.bsel, s.bw = nil, nil, nil, nil, nil, nil, nil
 	m := s.m
-	m.spareMu.Lock()
-	m.step = b
-	m.spareMu.Unlock()
+	m.eng.spareMu.Lock()
+	m.eng.step = b
+	m.eng.spareMu.Unlock()
 }
 
 // restoreHostBatch puts h back as s's host scratch (takeHostBatch's inverse).
@@ -135,13 +135,13 @@ func (s *Instance) ScratchBytes() uint64 {
 // StepScratchBytes is the scratch the model holds for host steps across
 // sessions and for the next session's prompt (stepBuf, promptBuf).
 func (m *Model) StepScratchBytes() uint64 {
-	m.spareMu.Lock()
-	defer m.spareMu.Unlock()
+	m.eng.spareMu.Lock()
+	defer m.eng.spareMu.Unlock()
 	var n uint64
-	if m.step != nil {
-		n += m.step.bytes()
+	if m.eng.step != nil {
+		n += m.eng.step.bytes()
 	}
-	if p := m.spare; p != nil {
+	if p := m.eng.spare; p != nil {
 		n += 4*uint64(cap(p.bx)+cap(p.bcs)+cap(p.bcsSWA)) + p.host.bytes()
 	}
 	return n

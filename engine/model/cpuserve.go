@@ -79,7 +79,7 @@ type CPUKernel struct {
 // forms hold, by name.
 func (m *Model) CPUKernels() []CPUKernel {
 	by := map[string]*CPUKernel{}
-	for _, f := range m.cpuForms.All() {
+	for _, f := range m.eng.cpuForms.All() {
 		for i := range f.Codes {
 			cc := &f.Codes[i]
 			r := cc.Regs()
@@ -1456,14 +1456,14 @@ func readsPlanes(g *graph.Graph) bool {
 // cpuFormOf is req's form on the CPU, mapped once for the model by its Key;
 // whole is cpudev.BuildForm's.
 func (m *Model) cpuFormOf(req composer.Request, gr *graph.Graph, rows int, apart, whole, f32 bool) (*cpudev.Form, error) {
-	m.cpuComposes.Add(1)
-	return m.cpuForms.Of(req, gr, rows, apart, whole, f32, m.opt.cpuFloat)
+	m.eng.cpuComposes.Add(1)
+	return m.eng.cpuForms.Of(req, gr, rows, apart, whole, f32, m.opt.cpuFloat)
 }
 
 // CPUComposes is how many times the composer was asked for a CPU form, a
 // form the model's cache held among them: what an instance's creation,
 // relocation or tuning moves, and a prefill or a generated token must not.
-func (m *Model) CPUComposes() int64 { return m.cpuComposes.Load() }
+func (m *Model) CPUComposes() int64 { return m.eng.cpuComposes.Load() }
 
 // dropRows hands back the table's rows form f's call read in.
 func (s *Instance) dropRows(f *cpudev.Form) {

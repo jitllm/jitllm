@@ -236,18 +236,18 @@ func (m *Model) Serve(in *Instance, width int, phases ...Phase) error {
 	if in.m != m {
 		return fmt.Errorf("model: the instance is another model's")
 	}
-	return m.insts.Serve(in, width, phases...)
+	return m.eng.insts.Serve(in, width, phases...)
 }
 
 // Unserve takes in back from the model's pool; see Pool.Unserve.
-func (m *Model) Unserve(in *Instance) error { return m.insts.Unserve(in) }
+func (m *Model) Unserve(in *Instance) error { return m.eng.insts.Unserve(in) }
 
 // scheduler is the model's: WithScheduler's, or its pool.
 func (m *Model) scheduler() Scheduler {
 	if m.opt.sched != nil {
 		return m.opt.sched
 	}
-	return &m.insts
+	return &m.eng.insts
 }
 
 // holds says s's history fits instance s0: the same blocks, the same KV
@@ -259,7 +259,7 @@ func (s0 *Instance) holds(s *Session) bool {
 // NewSession opens a conversation of up to maxSeq positions on the model's
 // served instances, leased by the model's scheduler. It composes nothing.
 func (m *Model) NewSession(maxSeq int) (*Session, error) {
-	in := m.insts.first()
+	in := m.eng.insts.first()
 	if in == nil {
 		return nil, fmt.Errorf("model: no instance serves this model (Model.Serve)")
 	}
@@ -291,7 +291,7 @@ func (s *Instance) newHistory(maxSeq int) (*Session, error) {
 	l := s.kvl
 	l.maxSeq = maxSeq
 	sess.kv = newKVCacheRange(s.c, s.m.nextCacheID(), 1, l, nil, s.m.opt.kvPage, s.lo, s.hi)
-	sess.kv.usePool(&s.m.kvPool)
+	sess.kv.usePool(&s.m.eng.kvPool)
 	sess.kv.reserve(maxSeq)
 	if err := sess.kv.useArenas(maxSeq, s.m.kvArenaFor); err != nil {
 		return nil, err
@@ -399,7 +399,7 @@ func (s *Session) Close() {
 	}
 	s.ld, s.tier, s.held = nil, nil, nil
 	if s.kv != nil {
-		s.model.kvPool.put(s.kv)
+		s.model.eng.kvPool.put(s.kv)
 		s.kv = nil
 	}
 }

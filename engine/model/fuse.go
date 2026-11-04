@@ -19,11 +19,11 @@ func (s *Instance) fuseRun() {
 	if s.fused || s.fuseOff {
 		return
 	}
-	s.m.fuseTries.Add(1)
+	s.m.eng.fuseTries.Add(1)
 	if s.cpu.workers.Fuse() {
 		s.fused = true
 		s.FusedRuns++
-		s.m.fusedRuns.Add(1)
+		s.m.eng.fusedRuns.Add(1)
 	}
 }
 

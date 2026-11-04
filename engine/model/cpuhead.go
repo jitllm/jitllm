@@ -608,4 +608,4 @@ func (s *Instance) cpuStageSample(smp *Sampler) unsafe.Pointer {
 
 // cpuFormCount is how many forms the model's CPU cache holds, refused ones
 // among them: a step that forms nothing leaves it as it was.
-func (m *Model) cpuFormCount() int { return m.cpuForms.Count() }
+func (m *Model) cpuFormCount() int { return m.eng.cpuForms.Count() }
