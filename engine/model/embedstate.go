@@ -28,6 +28,9 @@ type embedMode struct {
 	out  []float32
 	raw  bool
 	wins []nn.KeyRun
+	// rows keeps every row of the last block's, unnormed, in out (a tower's
+	// run: its head reads them), in place of a pooled readout.
+	rows bool
 }
 
 // collect reads the readout from a chunk's n final rows from position base
@@ -36,6 +39,11 @@ type embedMode struct {
 // mean-pooled run is (Prefill). A chunk holding no row it reads is passed
 // over.
 func (e *embedMode) collect(s *Instance, base, n int) error {
+	if e.rows {
+		w := s.c.NEmbd
+		copy(e.out[base*w:(base+n)*w], s.bx[:n*w])
+		return nil
+	}
 	switch e.pool {
 	case jlm.PoolLast:
 		if base+n != e.total {

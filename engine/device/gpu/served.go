@@ -2201,19 +2201,19 @@ func (f *partForm) inPlace(in, out int) bool {
 // the tier does not hold.
 func (l *layer) roleWeight(r jlm.Role) *resident {
 	switch r {
-	case jlm.RoleAttnQ:
+	case jlm.RoleAttnQ, jlm.RoleVAttnQ:
 		return l.wq
-	case jlm.RoleAttnK:
+	case jlm.RoleAttnK, jlm.RoleVAttnK:
 		return l.wk
-	case jlm.RoleAttnV:
+	case jlm.RoleAttnV, jlm.RoleVAttnV:
 		return l.wv
-	case jlm.RoleAttnOut:
+	case jlm.RoleAttnOut, jlm.RoleVAttnOut:
 		return l.wo
-	case jlm.RoleFFNGate:
+	case jlm.RoleFFNGate, jlm.RoleVFFNGate:
 		return l.gate
-	case jlm.RoleFFNUp:
+	case jlm.RoleFFNUp, jlm.RoleVFC1:
 		return l.up
-	case jlm.RoleFFNDown:
+	case jlm.RoleFFNDown, jlm.RoleVFC2:
 		return l.down
 	case jlm.RoleAttnQA:
 		return l.wqa

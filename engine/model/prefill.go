@@ -109,6 +109,11 @@ func (s *Instance) PrefillMixed(spans ...Span) ([]float32, error) {
 // prefillMixedAt is PrefillMixed into one sequence slot.
 func (s *Instance) prefillMixedAt(slot int, spans ...Span) ([]float32, error) {
 	defer s.m.enterPager()()
+	return s.prefillSpans(slot, spans...)
+}
+
+// prefillSpans is prefillMixedAt under the pager the caller holds.
+func (s *Instance) prefillSpans(slot int, spans ...Span) ([]float32, error) {
 	spans, err := s.encodePictures(spans, 0)
 	if err != nil {
 		return nil, err

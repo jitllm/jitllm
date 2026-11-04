@@ -95,9 +95,38 @@ func (m *Model) bindTower(c *jlm.File) error {
 		if err != nil {
 			return err
 		}
-		l.mats = append(l.mats, roleTensor{e.Role, &t})
+		dst := l.towerSlot(e.Role)
+		if dst == nil {
+			dst = &t
+		}
+		*dst = t
+		l.mats = append(l.mats, roleTensor{e.Role, dst})
 	}
 	return bindPacked(c, m.Cfg, &m.towerDense)
+}
+
+// towerSlot is the field of a tower block's layer matrix r is held in: the
+// one a text block's matrix of the same place in the block is, which a card
+// reads a block's weights from (Instance.layerWeightsAt); nil for a matrix
+// bound by its role alone.
+func (l *layer) towerSlot(r jlm.Role) *tensor {
+	switch r {
+	case jlm.RoleVAttnQ:
+		return &l.wq
+	case jlm.RoleVAttnK:
+		return &l.wk
+	case jlm.RoleVAttnV:
+		return &l.wv
+	case jlm.RoleVAttnOut:
+		return &l.wo
+	case jlm.RoleVFFNGate:
+		return &l.gate
+	case jlm.RoleVFC1:
+		return &l.up
+	case jlm.RoleVFC2:
+		return &l.down
+	}
+	return nil
 }
 
 // towerFacts is the shapes of the tower's tensors in its block b (the
@@ -400,13 +429,16 @@ type towerRun struct {
 	s     *Instance
 	entry map[uint8]*cpudev.Form
 	head  *cpudev.Form
-	// rows is the picture's patch rows at the tower's width, out the head's
-	// at the language model's; seq and pos the rows' sequence and positions,
-	// posTab the step's live rows and positions as the entry reads them.
-	rows, out []float32
-	seq, pos  []int
-	posTab    []uint32
-	req       []uint32
+	// rows is the picture's patch rows at the tower's width, as the entry
+	// writes them, and blk as the last block leaves them; out the head's at
+	// the language model's; seq and pos the rows' sequence and positions,
+	// posTab the step's live rows and positions as the entry reads them, mode
+	// the blocks' run on a card (embedMode.rows).
+	rows, blk, out []float32
+	seq, pos       []int
+	posTab         []uint32
+	mode           embedMode
+	req            []uint32
 	// pad holds a picture's planes where they are not read in place, ent a
 	// palette's entries.
 	pad []uint32
@@ -432,7 +464,8 @@ func (m *Model) newTowerRun() (*towerRun, error) {
 		return nil, ts.cpu.formErr
 	}
 	tr := &towerRun{s: ts, entry: map[uint8]*cpudev.Form{}, rows: make([]float32, n*c.NEmbd),
-		out: make([]float32, tg.out*int(v.ProjDim)), seq: make([]int, n), pos: make([]int, n),
+		blk: make([]float32, n*c.NEmbd), out: make([]float32, tg.out*int(v.ProjDim)),
+		seq: make([]int, n), pos: make([]int, n),
 		posTab: make([]uint32, 1+n), req: make([]uint32, composer.RequestPicSub+1)}
 	tr.posTab[0] = uint32(n)
 	for i := range n {
@@ -670,20 +703,8 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 	*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab, pic: words}
 	b.io[0] = unsafe.Pointer(&tr.rows[0])
 	ts.cpuRunForm(b, f)
-	// The blocks: one run over every row, each row's keys every row's.
-	ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: tg.rows})
-	defer func() { ts.bidir = ts.bidir[:0] }()
-	for li := ts.lo; li < ts.hi; li++ {
-		if err := m.pageIn(li); err != nil {
-			return nil, err
-		}
-		why, err := ts.cpuRows(li, &m.layers[li], tr.rows, nil, nil, tr.seq, tr.pos, nil)
-		if err != nil {
-			return nil, err
-		}
-		if why != composer.DeclineServes {
-			return nil, fmt.Errorf("model: the tower's block %d: %v", li-m.towerBase, why)
-		}
+	if err := ts.towerBlocks(tr); err != nil {
+		return nil, fmt.Errorf("model: the tower's blocks: %w", err)
 	}
 	f = tr.head
 	if why := ts.cpuWeights(f, -1, &m.towerDense); why != composer.DeclineServes {
@@ -694,9 +715,42 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 			m.container.Vision().ProjDim)
 	}
 	*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab}
-	b.io[0], b.io[1] = unsafe.Pointer(&tr.rows[0]), unsafe.Pointer(&dst[0])
+	b.io[0], b.io[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&dst[0])
 	ts.cpuRunForm(b, f)
 	return dst, nil
+}
+
+// towerBlocks runs the tower's blocks over the patch rows, one run in which
+// every row's keys are every row's, leaving the last block's rows in blk: on
+// the CPU device, the runner's CPU rows over the run, block by block; with
+// blocks on a card, the tower instance's prefill (embedMode.rows), each block
+// on the device that holds it.
+func (ts *Instance) towerBlocks(tr *towerRun) error {
+	n := len(tr.pos)
+	ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: n})
+	defer func() { ts.bidir = ts.bidir[:0] }()
+	if ts.devCount() > 0 {
+		ts.Reset()
+		tr.mode = embedMode{bidir: true, rows: true, total: n, out: tr.blk}
+		ts.emb = &tr.mode
+		defer func() { ts.emb = nil }()
+		_, err := ts.prefillSpans(0, Span{Embd: tr.rows})
+		return err
+	}
+	copy(tr.blk, tr.rows)
+	for li := ts.lo; li < ts.hi; li++ {
+		if err := ts.m.pageIn(li); err != nil {
+			return err
+		}
+		why, err := ts.cpuRows(li, &ts.m.layers[li], tr.blk, nil, nil, tr.seq, tr.pos, nil)
+		if err != nil {
+			return err
+		}
+		if why != composer.DeclineServes {
+			return fmt.Errorf("block %d: %v", li-ts.m.towerBase, why)
+		}
+	}
+	return nil
 }
 
 // encodePictures is spans with every picture span's rows in place: encoded
